@@ -61,6 +61,14 @@ export const Config = {
     gateConfidenceThreshold: parseFloat(optional("DEBATE_GATE_CONFIDENCE_THRESHOLD", "0.80")),
   },
 
+  search: {
+    tavilyApiKey: process.env.TAVILY_API_KEY ?? "",
+  },
+
+  persistence: {
+    tasksFile: optional("TASKS_FILE", ".tasks.json"),
+  },
+
   logging: {
     level: optional("LOG_LEVEL", "info"),
   },

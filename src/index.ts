@@ -21,7 +21,7 @@ async function main(): Promise<void> {
   if (!process.stdin.isTTY) {
     await startMcpServer(orchestrator);
   } else {
-    logger.info("Interactive terminal detected — MCP stdio server skipped. Use REST API on port " + process.env.API_PORT ?? "3101");
+    logger.info(`Interactive terminal detected — MCP stdio server skipped. Use REST API on port ${process.env.API_PORT ?? "3101"}`);
   }
 }
 

@@ -10,6 +10,9 @@ import { v4 as uuidv4 } from "uuid";
 import { Config } from "../config.js";
 import { logger } from "../logger.js";
 import { selectModel, estimateComplexity, ModelLabels } from "../routing/model.js";
+import type { ToolRegistry, ToolContext } from "../tools/index.js";
+import type { KnowledgeStore } from "../knowledge/index.js";
+import type { InterRoundMemoryStore } from "../memory/index.js";
 import type {
   AgentDefinition,
   AgentMessage,
@@ -31,6 +34,14 @@ export interface AgentContext {
   memoryEntries: MemoryEntry[];
   /** Task description for grounding */
   taskDescription: string;
+  /** Task ID — required for tool context */
+  taskId?: string;
+  /** Tool registry — when provided, agent runs the full tool_use agentic loop */
+  toolRegistry?: ToolRegistry;
+  /** Knowledge store reference forwarded to tool context */
+  knowledge?: KnowledgeStore;
+  /** Memory store reference forwarded to tool context */
+  memory?: InterRoundMemoryStore;
 }
 
 export class Agent {
@@ -59,7 +70,9 @@ export class Agent {
 
   /**
    * Process round context and produce findings.
-   * Model selected based on tier + task type + estimated complexity.
+   * When toolRegistry + knowledge + memory are present, runs the full Anthropic
+   * tool_use agentic loop — calling tools as needed until stop_reason === "end_turn".
+   * Falls back to a single-shot call when tools are not wired up.
    */
   async process(ctx: AgentContext): Promise<Finding[]> {
     const taskType = inferTaskType(this.definition);
@@ -80,10 +93,114 @@ export class Agent {
       model: ModelLabels[model] ?? model,
       taskType,
       complexity,
+      tools: this.definition.allowedTools.length,
     });
 
-    const response = await this.callClaude(prompt, maxTokens, model);
-    return parseFindings(response, this.definition);
+    const hasTools =
+      ctx.toolRegistry !== undefined &&
+      ctx.knowledge !== undefined &&
+      ctx.memory !== undefined &&
+      ctx.taskId !== undefined &&
+      this.definition.allowedTools.length > 0;
+
+    const text = hasTools
+      ? await this.runAgenticLoop(prompt, maxTokens, model, {
+          toolRegistry: ctx.toolRegistry!,
+          knowledge: ctx.knowledge!,
+          memory: ctx.memory!,
+          taskId: ctx.taskId!,
+        })
+      : await this.callClaude(prompt, maxTokens, model);
+
+    return parseFindings(text, this.definition);
+  }
+
+  /**
+   * Anthropic tool_use agentic loop.
+   * Loops until stop_reason === "end_turn" or the 10-iteration safety cap is hit.
+   */
+  private async runAgenticLoop(
+    initialPrompt: string,
+    maxTokens: number,
+    model: string,
+    refs: {
+      toolRegistry: ToolRegistry;
+      knowledge: KnowledgeStore;
+      memory: InterRoundMemoryStore;
+      taskId: string;
+    },
+  ): Promise<string> {
+    const toolSchemas = refs.toolRegistry.schemasFor(this.definition.allowedTools);
+    const toolCtx: ToolContext = {
+      knowledge: refs.knowledge,
+      memory: refs.memory,
+      taskId: refs.taskId,
+    };
+
+    const messages: Anthropic.MessageParam[] = [{ role: "user", content: initialPrompt }];
+    let finalText = "";
+
+    for (let iteration = 0; iteration < 10; iteration++) {
+      const response = await anthropic.messages.create({
+        model,
+        max_tokens: maxTokens,
+        system: this.definition.systemPrompt,
+        tools: toolSchemas,
+        messages,
+      });
+
+      // Capture the latest text block as the candidate final response
+      for (const block of response.content) {
+        if (block.type === "text") finalText = block.text;
+      }
+
+      if (response.stop_reason === "end_turn") break;
+
+      if (response.stop_reason === "tool_use") {
+        // Append the full assistant turn (may contain text + tool_use blocks)
+        messages.push({ role: "assistant", content: response.content });
+
+        // Execute every tool_use block and collect results
+        const toolResults: Anthropic.ToolResultBlockParam[] = [];
+        for (const block of response.content) {
+          if (block.type !== "tool_use") continue;
+
+          logger.debug("Agent tool call", {
+            agent: this.definition.name,
+            tool: block.name,
+          });
+
+          let result: unknown;
+          try {
+            result = await refs.toolRegistry.execute(
+              block.name,
+              block.input as Record<string, unknown>,
+              toolCtx,
+            );
+          } catch (err) {
+            result = { error: (err as Error).message };
+          }
+
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: block.id,
+            content: JSON.stringify(result),
+          });
+        }
+
+        messages.push({ role: "user", content: toolResults });
+        continue;
+      }
+
+      logger.warn("Agentic loop unexpected stop_reason", {
+        agent: this.definition.name,
+        stop_reason: response.stop_reason,
+        iteration,
+      });
+      break;
+    }
+
+    return finalText;
   }
 
   private async callClaude(

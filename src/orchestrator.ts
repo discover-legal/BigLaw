@@ -18,6 +18,7 @@
  */
 
 import Anthropic from "@anthropic-ai/sdk";
+import { EventEmitter } from "events";
 import { v4 as uuidv4 } from "uuid";
 import { Config } from "./config.js";
 import { logger } from "./logger.js";
@@ -60,6 +61,7 @@ export class Orchestrator {
   readonly knowledge: KnowledgeStore;
 
   private readonly tasks: Map<string, Task> = new Map();
+  private readonly gateEmitter = new EventEmitter();
   private engine!: DyTopoEngine;
   private rootAgent!: Agent;
 
@@ -87,6 +89,7 @@ export class Orchestrator {
     this.engine = new DyTopoEngine({
       registry: this.registry,
       memory: this.memory,
+      knowledge: this.knowledge,
       pinnedAgents: [ROOT_ORCHESTRATOR],
     });
 
@@ -152,11 +155,7 @@ export class Orchestrator {
     gate.reviewerNote = note;
     gate.reviewedAt = new Date();
     task.updatedAt = new Date();
-
-    // If all gates resolved, resume task
-    if (task.pendingGates.every((g) => g.status !== "pending")) {
-      task.status = "running";
-    }
+    this.gateEmitter.emit(`gates:${taskId}`);
   }
 
   rejectGate(taskId: string, gateId: string, reason: string): void {
@@ -167,14 +166,9 @@ export class Orchestrator {
     gate.status = "rejected";
     gate.reviewerNote = reason;
     gate.reviewedAt = new Date();
-
-    // Remove the rejected finding from task findings
     task.findings = task.findings.filter((f) => f.id !== gate.findingId);
     task.updatedAt = new Date();
-
-    if (task.pendingGates.every((g) => g.status !== "pending")) {
-      task.status = "running";
-    }
+    this.gateEmitter.emit(`gates:${taskId}`);
   }
 
   // ─── Internal task runner ─────────────────────────────────────────────────
@@ -320,16 +314,19 @@ Every claim must trace to a specific finding number from the list above.`;
     return map;
   }
 
-  private async waitForGates(task: Task): Promise<void> {
+  private waitForGates(task: Task): Promise<void> {
     return new Promise((resolve) => {
-      const check = () => {
+      if (task.pendingGates.every((g) => g.status !== "pending")) {
+        resolve();
+        return;
+      }
+      const handler = () => {
         if (task.pendingGates.every((g) => g.status !== "pending")) {
+          this.gateEmitter.off(`gates:${task.id}`, handler);
           resolve();
-        } else {
-          setTimeout(check, 2000);
         }
       };
-      check();
+      this.gateEmitter.on(`gates:${task.id}`, handler);
     });
   }
 }

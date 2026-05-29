@@ -6,7 +6,7 @@
 // See <https://www.gnu.org/licenses/gpl-3.0.html>
 
 import { QdrantClient } from "@qdrant/js-client-rest";
-import { v4 as uuidv4 } from "uuid";
+import { v4 as uuidv4, v5 as uuidv5 } from "uuid";
 import { Config } from "../config.js";
 import { embed, embedBatch } from "../embeddings.js";
 import { logger } from "../logger.js";
@@ -17,6 +17,10 @@ import type { AgentDefinition, AgentTier, AgentDomain } from "../types.js";
 
 const COLLECTION = Config.vectorDb.collections.agents;
 const DIMS = Config.embeddings.dimensions;
+
+// Stable namespace for agent string-ID → UUID v5 mapping.
+// Same agent ID always maps to the same Qdrant point ID across restarts.
+const AGENT_NS = "6ba7b810-9dad-11d1-80b4-00c04fd430c8"; // UUID namespace (DNS)
 
 export class AgentRegistry {
   private readonly qdrant: QdrantClient;
@@ -129,17 +133,23 @@ export class AgentRegistry {
     return result.points.map((p) => this.toDefinition(p.payload as Record<string, unknown>));
   }
 
-  // Qdrant requires numeric or UUID point IDs — map string IDs to consistent UUIDs
+  // Deterministic UUID v5: same agentId always → same Qdrant point ID.
   private toPointId(agentId: string): string {
-    // For predefined agents use a stable hash-based UUID v5 approach via deterministic mapping
-    return uuidv4(); // TODO: replace with uuidv5(agentId, NAMESPACE) for stability
+    return uuidv5(agentId, AGENT_NS);
   }
 
   private toDefinition(payload: Record<string, unknown>): AgentDefinition {
     return {
-      ...(payload as AgentDefinition),
-      allowedTools: JSON.parse((payload.allowedToolsJson as string) ?? "[]"),
+      id: payload.id as string,
+      name: payload.name as string,
+      tier: payload.tier as AgentDefinition["tier"],
+      type: payload.type as AgentDefinition["type"],
+      domain: payload.domain as AgentDefinition["domain"],
+      description: payload.description as string,
+      systemPrompt: payload.systemPrompt as string,
       skills: JSON.parse((payload.skillsJson as string) ?? "[]"),
+      allowedTools: JSON.parse((payload.allowedToolsJson as string) ?? "[]"),
+      metadata: (payload.metadata as Record<string, unknown>) ?? undefined,
     };
   }
 

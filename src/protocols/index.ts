@@ -20,6 +20,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { Config } from "../config.js";
 import { logger } from "../logger.js";
+import { selectModel } from "../routing/model.js";
 import type {
   Finding,
   Citation,
@@ -99,11 +100,14 @@ MODIFIED_CONTENT: <if MODIFIED, the corrected finding content; otherwise leave b
 export async function runDebate(finding: Finding, challengerAgentId: string): Promise<Finding> {
   if (!Config.debate.adversarialEnabled) return finding;
 
-  // Generate challenge
+  const debateModel = selectModel({ taskType: "debate" });
+
+  // Generate challenge — Opus (debate routing)
   const challengeText = await callClaude(
     CHALLENGER_SYSTEM,
     `FINDING:\n${finding.content}\n\nCITATIONS:\n${finding.citations.map((c) => `SOURCE=${c.source} | QUOTE=${c.quote}`).join("\n")}`,
     600,
+    debateModel,
   );
 
   if (challengeText.includes("NO_CHALLENGE")) {
@@ -115,11 +119,12 @@ export async function runDebate(finding: Finding, challengerAgentId: string): Pr
   finding.challenged = true;
   finding.challenge = challenge;
 
-  // Resolve debate
+  // Resolve debate — Opus
   const resolutionText = await callClaude(
     RESOLVER_SYSTEM,
     `FINDING:\n${finding.content}\n\nCHALLENGE:\n${challenge.content}\nChallenge citations: ${challenge.citations.map((c) => c.quote).join("; ")}`,
     800,
+    debateModel,
   );
 
   const resolution = parseResolution(resolutionText);
@@ -160,12 +165,15 @@ export async function runVerificationPipeline(finding: Finding): Promise<Verific
   const passes = Config.debate.verificationPasses;
   const checksToRun = VERIFICATION_CHECKS.slice(0, passes);
 
+  const verifyModel = selectModel({ taskType: "extraction" }); // Haiku — fast, many parallel calls
+
   const checks: VerificationCheck[] = await Promise.all(
     checksToRun.map(async (checkDesc) => {
       const response = await callClaude(
         `You are a legal verification specialist. Assess the following finding against this criterion: ${checkDesc}\nRespond with: PASS or FAIL followed by a one-line note.`,
         `FINDING:\n${finding.content}\n\nCITATIONS:\n${finding.citations.map((c) => `${c.source}: "${c.quote}"`).join("\n")}`,
         150,
+        verifyModel,
       );
       const passed = response.toUpperCase().includes("PASS");
       const notes = response.replace(/^(PASS|FAIL)\s*/i, "").trim();
@@ -230,9 +238,9 @@ export function identifyGateRequests(taskId: string, findings: Finding[]): GateR
 
 // ─── Utility ──────────────────────────────────────────────────────────────────
 
-async function callClaude(system: string, user: string, maxTokens: number): Promise<string> {
+async function callClaude(system: string, user: string, maxTokens: number, model?: string): Promise<string> {
   const msg = await anthropic.messages.create({
-    model: Config.anthropic.model,
+    model: model ?? Config.anthropic.model,
     max_tokens: maxTokens,
     system,
     messages: [{ role: "user", content: user }],

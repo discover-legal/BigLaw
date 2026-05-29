@@ -49,12 +49,12 @@ const HAIKU  = "claude-haiku-4-5-20251001";
  *   drafting (long-form)      → Sonnet (quality prose without Opus cost)
  */
 export function selectModel(params: {
-  tier: AgentTier;
-  type: AgentType;
+  tier?: AgentTier;
+  type?: AgentType;
   taskType: TaskType;
   complexity?: Complexity;
 }): string {
-  const { tier, type, taskType, complexity } = params;
+  const { tier, taskType, complexity } = params;
 
   // Always Haiku for lightweight tasks regardless of tier
   if (taskType === "descriptor") return HAIKU;

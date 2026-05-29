@@ -1439,10 +1439,5 @@ export const ALL_AGENT_DEFINITIONS: AgentDefinition[] = [
   ...TIER3_TOOL_AGENTS,
 ];
 
-export {
-  TIER1_MANAGERS,
-  TIER2_EPISTEMIC,
-  TIER2_CONCEPTUAL,
-  TIER2_WRITING,
-  TIER3_TOOL_AGENTS,
-};
+// Note: TIER1_MANAGERS, TIER2_EPISTEMIC, TIER2_CONCEPTUAL, TIER2_WRITING,
+// TIER3_TOOL_AGENTS are already exported where they are declared above.

@@ -28,7 +28,9 @@ import { embed, embedBatch, cosineSimilarity } from "../embeddings.js";
 import { logger } from "../logger.js";
 import { Agent } from "../agents/base.js";
 import { AgentRegistry } from "../agents/registry.js";
+import { globalToolRegistry } from "../tools/index.js";
 import { IntraRoundMemoryStore, InterRoundMemoryStore } from "../memory/index.js";
+import type { KnowledgeStore } from "../knowledge/index.js";
 import type {
   AgentDefinition,
   AgentMessage,
@@ -44,6 +46,7 @@ import type {
 export interface DyTopoOptions {
   registry: AgentRegistry;
   memory: InterRoundMemoryStore;
+  knowledge: KnowledgeStore;
   /** Agents pre-selected for this round (e.g. tier-0 root is always included) */
   pinnedAgents?: AgentDefinition[];
 }
@@ -51,11 +54,13 @@ export interface DyTopoOptions {
 export class DyTopoEngine {
   private readonly registry: AgentRegistry;
   private readonly memory: InterRoundMemoryStore;
+  private readonly knowledge: KnowledgeStore;
   private readonly pinnedAgents: AgentDefinition[];
 
   constructor(opts: DyTopoOptions) {
     this.registry = opts.registry;
     this.memory = opts.memory;
+    this.knowledge = opts.knowledge;
     this.pinnedAgents = opts.pinnedAgents ?? [];
   }
 
@@ -275,6 +280,10 @@ export class DyTopoEngine {
           incomingMessages,
           memoryEntries,
           taskDescription: task.description,
+          taskId: task.id,
+          toolRegistry: globalToolRegistry,
+          knowledge: this.knowledge,
+          memory: this.memory,
         });
         return findings;
       }),
