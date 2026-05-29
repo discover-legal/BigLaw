@@ -37,9 +37,14 @@ const OPUS   = "claude-opus-4-8";
 const SONNET = "claude-sonnet-4-6";
 const HAIKU  = "claude-haiku-4-5-20251001";
 
-/** Returns the "ollama:<model>" model ID for local routing. */
+/** Returns the "ollama:<model>" model ID for Ollama routing. */
 function ollamaModel(): string {
   return `ollama:${Config.local.ollamaModel}`;
+}
+
+/** Returns the "local:<model>" model ID for generic local inference routing. */
+function localModel(): string {
+  return `local:${Config.local.localInferenceModel}`;
 }
 
 /** Parsed set of tiers that should route to Ollama when OLLAMA_ENABLED=true. */
@@ -49,6 +54,19 @@ function ollamaTierSet(): Set<number> {
       .split(",")
       .map((s) => parseInt(s.trim()))
       .filter((n) => !isNaN(n)),
+  );
+}
+
+/**
+ * Parsed tier set for the generic local inference server.
+ * Returns "all" when LOCAL_INFERENCE_TIERS=all (route everything locally).
+ */
+function localInferenceTierSet(): Set<number> | "all" {
+  const val = Config.local.localInferenceTiers.trim().toLowerCase();
+  if (!val) return new Set();
+  if (val === "all") return "all";
+  return new Set(
+    val.split(",").map((s) => parseInt(s.trim())).filter((n) => !isNaN(n)),
   );
 }
 
@@ -72,7 +90,16 @@ export function selectModel(params: {
 }): string {
   const { tier, taskType, complexity } = params;
 
-  // ── Local Ollama routing ──────────────────────────────────────────────────
+  // ── Generic local inference routing (LM Studio, Jan, vLLM, llama.cpp) ────
+  // LOCAL_INFERENCE_URL must be set. LOCAL_INFERENCE_TIERS=all routes everything;
+  // a comma list routes specific tiers only.
+  if (Config.local.localInferenceUrl) {
+    const localTiers = localInferenceTierSet();
+    if (localTiers === "all") return localModel();
+    if (tier !== undefined && (localTiers as Set<number>).has(tier)) return localModel();
+  }
+
+  // ── Ollama routing ────────────────────────────────────────────────────────
   // When OLLAMA_ENABLED=true, lightweight tasks for configured tiers go local.
   // Debate, synthesis, and T0 always stay on cloud (correctness-critical).
   if (Config.local.ollamaEnabled && taskType !== "debate" && taskType !== "synthesis" && tier !== 0) {

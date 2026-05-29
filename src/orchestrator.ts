@@ -17,13 +17,15 @@
  * Findings flow through the debate + verification protocols before final output.
  */
 
-import Anthropic from "@anthropic-ai/sdk";
 import { EventEmitter } from "events";
 import { readdir, readFile, writeFile } from "fs/promises";
 import { join, extname } from "path";
 import { v4 as uuidv4 } from "uuid";
 import { Config } from "./config.js";
 import { logger } from "./logger.js";
+import { getProvider, resolveModelId } from "./providers/index.js";
+import { selectModel } from "./routing/model.js";
+import { auditLogger } from "./audit/index.js";
 import { AgentRegistry } from "./agents/registry.js";
 import { Agent } from "./agents/base.js";
 import { ROOT_ORCHESTRATOR, ALL_AGENT_DEFINITIONS } from "./agents/definitions.js";
@@ -48,8 +50,6 @@ import type {
   Finding,
   GateRequest,
 } from "./types.js";
-
-const anthropic = new Anthropic({ apiKey: Config.anthropic.apiKey });
 
 const PHASE_SEQUENCES: Record<WorkflowType, TaskPhase[]> = {
   counsel:     ["intake", "research", "drafting", "delivery"],
@@ -138,6 +138,7 @@ export class Orchestrator {
 
     this.tasks.set(task.id, task);
     logger.info("Task submitted", { taskId: task.id, workflow: params.workflowType });
+    auditLogger.write({ event: "task.created", taskId: task.id, data: { description: params.description, workflowType: params.workflowType } });
 
     // Run asynchronously — callers poll getTask() for status
     this.runTask(task).catch((err) => {
@@ -145,6 +146,7 @@ export class Orchestrator {
       task.status = "failed";
       task.error = err.message;
       this.emit(task.id, "failed", { error: err.message });
+      auditLogger.write({ event: "task.failed", taskId: task.id, data: { error: err.message } });
     });
 
     return task;
@@ -186,6 +188,7 @@ export class Orchestrator {
     gate.reviewerNote = note;
     gate.reviewedAt = new Date();
     task.updatedAt = new Date();
+    auditLogger.write({ event: "gate.approved", taskId, data: { gateId, note } });
     this.gateEmitter.emit(`gates:${taskId}`);
     this.persistTasks().catch((err) => logger.warn("Failed to persist tasks", { error: err.message }));
   }
@@ -200,6 +203,7 @@ export class Orchestrator {
     gate.reviewedAt = new Date();
     task.findings = task.findings.filter((f) => f.id !== gate.findingId);
     task.updatedAt = new Date();
+    auditLogger.write({ event: "gate.rejected", taskId, data: { gateId, reason } });
     this.gateEmitter.emit(`gates:${taskId}`);
     this.persistTasks().catch((err) => logger.warn("Failed to persist tasks", { error: err.message }));
   }
@@ -255,6 +259,7 @@ export class Orchestrator {
   private async runTask(task: Task): Promise<void> {
     task.status = "running";
     this.emit(task.id, "started", { taskId: task.id, workflowType: task.workflowType });
+    auditLogger.write({ event: "task.started", taskId: task.id, data: { workflowType: task.workflowType } });
     const phases = PHASE_SEQUENCES[task.workflowType];
 
     for (const phase of phases) {
@@ -277,6 +282,7 @@ export class Orchestrator {
     task.completedAt = new Date();
     task.updatedAt = new Date();
     this.emit(task.id, "complete", { findings: task.findings.length, output: task.output?.slice(0, 200) });
+    auditLogger.write({ event: "task.complete", taskId: task.id, data: { findings: task.findings.length } });
     this.persistTasks().catch((err) => logger.warn("Failed to persist tasks", { error: err.message }));
 
     logger.info("Task complete", { taskId: task.id, findings: task.findings.length });
@@ -284,6 +290,7 @@ export class Orchestrator {
 
   private async runPhase(task: Task, phase: TaskPhase): Promise<void> {
     logger.info("Phase starting", { taskId: task.id, phase });
+    auditLogger.write({ event: "phase.start", taskId: task.id, data: { phase } });
 
     // Root orchestrator generates the round goal for this phase
     const goal = await this.generateRoundGoal(task, phase);
@@ -324,6 +331,7 @@ export class Orchestrator {
       findings: debated.length,
       gates: gates.length,
     });
+    auditLogger.write({ event: "phase.complete", taskId: task.id, data: { phase, findings: debated.length, gates: gates.length } });
     logger.info("Phase complete", {
       taskId: task.id,
       phase,
@@ -348,14 +356,17 @@ EXPECTED_OUTPUT_1: <first expected output>
 EXPECTED_OUTPUT_2: <second expected output>
 EXPECTED_OUTPUT_3: <third expected output>`;
 
-    const msg = await anthropic.messages.create({
-      model: Config.anthropic.model,
-      max_tokens: 600,
+    const model = selectModel({ tier: 0, taskType: "synthesis" });
+    const provider = getProvider(model);
+    const response = await provider.chat({
+      model: resolveModelId(model),
+      maxTokens: 600,
       system: ROOT_ORCHESTRATOR.systemPrompt,
       messages: [{ role: "user", content: prompt }],
     });
 
-    const text = msg.content[0].type === "text" ? msg.content[0].text : "";
+    const textBlock = response.content.find((b) => b.type === "text");
+    const text = textBlock?.type === "text" ? textBlock.text : "";
     const descMatch = text.match(/DESCRIPTION:\s*([\s\S]+?)(?=EXPECTED_OUTPUT|$)/i);
     const outputMatches = [...text.matchAll(/EXPECTED_OUTPUT_\d+:\s*(.+)/gi)];
 
@@ -382,14 +393,17 @@ ${findingsSummary}
 Produce the final legal output for this task. Structure appropriately for the workflow type: ${task.workflowType}.
 Every claim must trace to a specific finding number from the list above.`;
 
-    const msg = await anthropic.messages.create({
-      model: Config.anthropic.model,
-      max_tokens: 4000,
+    const model = selectModel({ tier: 0, taskType: "synthesis" });
+    const provider = getProvider(model);
+    const response = await provider.chat({
+      model: resolveModelId(model),
+      maxTokens: 4000,
       system: ROOT_ORCHESTRATOR.systemPrompt,
       messages: [{ role: "user", content: prompt }],
     });
 
-    return msg.content[0].type === "text" ? msg.content[0].text : "";
+    const textBlock = response.content.find((b) => b.type === "text");
+    return textBlock?.type === "text" ? textBlock.text : "";
   }
 
   private async buildSourceTextMap(docIds: string[]): Promise<Map<string, string>> {

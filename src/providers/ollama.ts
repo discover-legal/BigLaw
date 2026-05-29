@@ -31,11 +31,15 @@ import type {
 export class OllamaProvider implements ModelProvider {
   private readonly client: OpenAI;
 
-  constructor() {
+  /**
+   * @param baseUrl Full base URL including /v1 suffix, e.g. "http://localhost:11434/v1".
+   *                Defaults to OLLAMA_URL config.
+   * @param apiKey  API key string. Defaults to "ollama" (Ollama ignores this; LM Studio may use it).
+   */
+  constructor(baseUrl?: string, apiKey?: string) {
     this.client = new OpenAI({
-      baseURL: `${Config.local.ollamaUrl}/v1`,
-      // Ollama doesn't require an API key but the SDK needs a non-empty string
-      apiKey: "ollama",
+      baseURL: baseUrl ?? `${Config.local.ollamaUrl}/v1`,
+      apiKey: apiKey ?? "ollama",
     });
   }
 

@@ -17,10 +17,13 @@
  * can access shared services (KnowledgeStore, InterRoundMemoryStore).
  */
 
-import Anthropic from "@anthropic-ai/sdk";
 import { tavily } from "@tavily/core";
 import { Config } from "../config.js";
 import { logger } from "../logger.js";
+import { getProvider, resolveModelId } from "../providers/index.js";
+import type { ProviderTool } from "../providers/index.js";
+import { selectModel } from "../routing/model.js";
+import { auditLogger } from "../audit/index.js";
 import type { KnowledgeStore } from "../knowledge/index.js";
 import type { InterRoundMemoryStore } from "../memory/index.js";
 import { pdfExtractTextTool, pdfExtractTablesTool, pdfGenerateTool, pdfOcrTool } from "./pdf.js";
@@ -36,9 +39,9 @@ export interface ToolContext {
 export interface ToolImpl {
   /** Name must match agent.allowedTools entries */
   name: string;
-  /** Anthropic tool schema — passed verbatim to the messages API */
-  schema: Anthropic.Tool;
-  /** Execute the tool given parsed input from Claude */
+  /** Tool schema — passed to the provider's chat() call as a ProviderTool */
+  schema: ProviderTool;
+  /** Execute the tool given parsed input from the model */
   execute(input: Record<string, unknown>, ctx: ToolContext): Promise<unknown>;
 }
 
@@ -213,14 +216,16 @@ const translateTool: ToolImpl = {
     },
   },
   async execute(input, _ctx) {
-    const anthropic = new Anthropic({ apiKey: Config.anthropic.apiKey });
     const source = (input.source_language as string | undefined) ?? "auto-detect";
     const target = input.target_language as string;
     const text = input.text as string;
 
-    const msg = await anthropic.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 2000,
+    const model = selectModel({ taskType: "translation" });
+    const provider = getProvider(model);
+    const response = await provider.chat({
+      model: resolveModelId(model),
+      maxTokens: 2000,
+      system: "You are a legal translation specialist. Preserve all legal terms of art.",
       messages: [
         {
           role: "user",
@@ -234,8 +239,8 @@ ${text}`,
       ],
     });
 
-    const block = msg.content[0];
-    return { translation: block.type === "text" ? block.text : "", sourceLang: source, targetLang: target };
+    const block = response.content.find((b) => b.type === "text");
+    return { translation: block?.type === "text" ? block.text : "", sourceLang: source, targetLang: target };
   },
 };
 
@@ -316,10 +321,10 @@ export class ToolRegistry {
   }
 
   /** Return tool schemas for a given set of allowed tool names */
-  schemasFor(allowedTools: string[]): Anthropic.Tool[] {
+  schemasFor(allowedTools: string[]): ProviderTool[] {
     return allowedTools
       .map((name) => this.tools.get(name)?.schema)
-      .filter((s): s is Anthropic.Tool => s !== undefined);
+      .filter((s): s is ProviderTool => s !== undefined);
   }
 
   /** Execute a tool by name, returning the result as a serialisable object */
@@ -330,8 +335,27 @@ export class ToolRegistry {
   ): Promise<unknown> {
     const tool = this.tools.get(name);
     if (!tool) throw new Error(`Unknown tool: ${name}`);
+    const start = Date.now();
+    auditLogger.write({ event: "tool.call", taskId: ctx.taskId, data: { tool: name, input } });
     logger.debug("Tool executing", { tool: name });
-    return tool.execute(input, ctx);
+    try {
+      const result = await tool.execute(input, ctx);
+      auditLogger.write({
+        event: "tool.result",
+        taskId: ctx.taskId,
+        durationMs: Date.now() - start,
+        data: { tool: name, ok: true },
+      });
+      return result;
+    } catch (err) {
+      auditLogger.write({
+        event: "tool.result",
+        taskId: ctx.taskId,
+        durationMs: Date.now() - start,
+        data: { tool: name, ok: false, error: (err as Error).message },
+      });
+      throw err;
+    }
   }
 
   has(name: string): boolean {

@@ -17,10 +17,11 @@
  *             are held pending human approval before entering final output.
  */
 
-import Anthropic from "@anthropic-ai/sdk";
 import { Config } from "../config.js";
 import { logger } from "../logger.js";
 import { selectModel } from "../routing/model.js";
+import { getProvider, resolveModelId } from "../providers/index.js";
+import { auditLogger } from "../audit/index.js";
 import type {
   Finding,
   Citation,
@@ -29,8 +30,6 @@ import type {
   VerificationCheck,
   VerificationResult,
 } from "../types.js";
-
-const anthropic = new Anthropic({ apiKey: Config.anthropic.apiKey });
 
 // ─── 1. Citation gate ─────────────────────────────────────────────────────────
 
@@ -101,9 +100,10 @@ export async function runDebate(finding: Finding, challengerAgentId: string): Pr
   if (!Config.debate.adversarialEnabled) return finding;
 
   const debateModel = selectModel({ taskType: "debate" });
+  auditLogger.write({ event: "debate.start", data: { findingId: finding.id, model: debateModel } });
 
   // Generate challenge — Opus (debate routing)
-  const challengeText = await callClaude(
+  const challengeText = await callModel(
     CHALLENGER_SYSTEM,
     `FINDING:\n${finding.content}\n\nCITATIONS:\n${finding.citations.map((c) => `SOURCE=${c.source} | QUOTE=${c.quote}`).join("\n")}`,
     600,
@@ -112,6 +112,7 @@ export async function runDebate(finding: Finding, challengerAgentId: string): Pr
 
   if (challengeText.includes("NO_CHALLENGE")) {
     logger.debug("Finding unchallenged", { findingId: finding.id });
+    auditLogger.write({ event: "debate.resolved", data: { findingId: finding.id, verdict: "NO_CHALLENGE" } });
     return finding;
   }
 
@@ -120,7 +121,7 @@ export async function runDebate(finding: Finding, challengerAgentId: string): Pr
   finding.challenge = challenge;
 
   // Resolve debate — Opus
-  const resolutionText = await callClaude(
+  const resolutionText = await callModel(
     RESOLVER_SYSTEM,
     `FINDING:\n${finding.content}\n\nCHALLENGE:\n${challenge.content}\nChallenge citations: ${challenge.citations.map((c) => c.quote).join("; ")}`,
     800,
@@ -138,10 +139,8 @@ export async function runDebate(finding: Finding, challengerAgentId: string): Pr
   }
 
   finding.resolved = true;
-  logger.info("Debate resolved", {
-    findingId: finding.id,
-    verdict: resolution.verdict,
-  });
+  logger.info("Debate resolved", { findingId: finding.id, verdict: resolution.verdict });
+  auditLogger.write({ event: "debate.resolved", data: { findingId: finding.id, verdict: resolution.verdict } });
 
   return finding;
 }
@@ -166,10 +165,11 @@ export async function runVerificationPipeline(finding: Finding): Promise<Verific
   const checksToRun = VERIFICATION_CHECKS.slice(0, passes);
 
   const verifyModel = selectModel({ taskType: "extraction" }); // Haiku — fast, many parallel calls
+  auditLogger.write({ event: "verification.start", data: { findingId: finding.id, checks: checksToRun.length, model: verifyModel } });
 
   const checks: VerificationCheck[] = await Promise.all(
     checksToRun.map(async (checkDesc) => {
-      const response = await callClaude(
+      const response = await callModel(
         `You are a legal verification specialist. Assess the following finding against this criterion: ${checkDesc}\nRespond with: PASS or FAIL followed by a one-line note.`,
         `FINDING:\n${finding.content}\n\nCITATIONS:\n${finding.citations.map((c) => `${c.source}: "${c.quote}"`).join("\n")}`,
         150,
@@ -192,11 +192,9 @@ export async function runVerificationPipeline(finding: Finding): Promise<Verific
   finding.verificationResult = result;
   finding.resolved = passed;
 
-  logger.info("Verification complete", {
-    findingId: finding.id,
-    passed,
-    failedChecks: checks.filter((c) => !c.passed).map((c) => c.name),
-  });
+  const failedChecks = checks.filter((c) => !c.passed).map((c) => c.name);
+  logger.info("Verification complete", { findingId: finding.id, passed, failedChecks });
+  auditLogger.write({ event: "verification.complete", data: { findingId: finding.id, passed, failedChecks } });
 
   return result;
 }
@@ -238,15 +236,17 @@ export function identifyGateRequests(taskId: string, findings: Finding[]): GateR
 
 // ─── Utility ──────────────────────────────────────────────────────────────────
 
-async function callClaude(system: string, user: string, maxTokens: number, model?: string): Promise<string> {
-  const msg = await anthropic.messages.create({
-    model: model ?? Config.anthropic.model,
-    max_tokens: maxTokens,
+async function callModel(system: string, user: string, maxTokens: number, model?: string): Promise<string> {
+  const m = model ?? Config.anthropic.model;
+  const provider = getProvider(m);
+  const response = await provider.chat({
+    model: resolveModelId(m),
+    maxTokens,
     system,
     messages: [{ role: "user", content: user }],
   });
-  const block = msg.content[0];
-  if (block.type !== "text") throw new Error("Unexpected content type");
+  const block = response.content.find((b) => b.type === "text");
+  if (!block || block.type !== "text") throw new Error("Unexpected content type from model");
   return block.text;
 }
 

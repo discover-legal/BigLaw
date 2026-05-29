@@ -76,6 +76,12 @@ export const Config = {
     localEmbeddings: optional("LOCAL_EMBEDDINGS", "false") === "true",
     // Embedding model served via Ollama — e.g. nomic-embed-text, all-minilm
     localEmbeddingModel: optional("LOCAL_EMBEDDING_MODEL", "nomic-embed-text"),
+    // Generic OpenAI-compat server: LM Studio (http://localhost:1234/v1), Jan, vLLM, llama.cpp
+    localInferenceUrl: process.env.LOCAL_INFERENCE_URL ?? "",
+    localInferenceKey: optional("LOCAL_INFERENCE_KEY", "local"),
+    localInferenceModel: optional("LOCAL_INFERENCE_MODEL", "local-model"),
+    // "all" routes every tier locally; "1,2,3" routes only those tiers; "" = disabled
+    localInferenceTiers: optional("LOCAL_INFERENCE_TIERS", ""),
   },
 
   // PDF tools — PyMuPDF (generation + extraction) + Camelot (table extraction)
@@ -90,5 +96,11 @@ export const Config = {
 
   logging: {
     level: optional("LOG_LEVEL", "info"),
+  },
+
+  // Audit log — append-only JSONL of every inference call, tool call, gate, debate
+  audit: {
+    enabled: optional("AUDIT_ENABLED", "true") === "true",
+    logFile: optional("AUDIT_LOG_FILE", "./audit.jsonl"),
   },
 } as const;

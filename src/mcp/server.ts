@@ -22,9 +22,9 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import Fastify from "fastify";
-import { z } from "zod";
 import { Config } from "../config.js";
 import { logger } from "../logger.js";
+import { auditLogger } from "../audit/index.js";
 import { Orchestrator } from "../orchestrator.js";
 import type { WorkflowType } from "../types.js";
 
@@ -179,6 +179,17 @@ const TOOLS = [
       required: ["taskId", "round"],
     },
   },
+  {
+    name: "get_audit",
+    description: "Retrieve recent audit log entries. Filter by taskId and/or limit results.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        taskId: { type: "string", description: "Optional: filter to a specific task" },
+        limit: { type: "number", description: "Maximum entries to return (default 200)" },
+      },
+    },
+  },
 ] as const;
 
 // ─── MCP server ───────────────────────────────────────────────────────────────
@@ -326,6 +337,32 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
     return roundState;
   });
 
+  // Audit REST routes
+  app.get("/audit", async (req) => {
+    const { taskId, limit } = req.query as Record<string, string>;
+    return auditLogger.readRecent(taskId, limit ? parseInt(limit) : undefined);
+  });
+
+  // Live audit SSE stream
+  app.get("/audit/stream", async (req, reply) => {
+    reply.raw.setHeader("Content-Type", "text/event-stream");
+    reply.raw.setHeader("Cache-Control", "no-cache");
+    reply.raw.setHeader("Connection", "keep-alive");
+    reply.raw.flushHeaders();
+
+    const send = (entry: unknown) => {
+      reply.raw.write(`data: ${JSON.stringify(entry)}\n\n`);
+    };
+
+    // Replay recent entries so a new subscriber catches up
+    const recent = auditLogger.readRecent(undefined, 100);
+    for (const e of recent) send(e);
+
+    const unsub = auditLogger.subscribe(send);
+    req.raw.on("close", unsub);
+    return reply;
+  });
+
   await app.listen({ port: Config.api.port, host: "0.0.0.0" });
   logger.info("REST API started", { port: Config.api.port });
 }
@@ -402,6 +439,12 @@ async function handleTool(
       if (!roundState) throw new Error(`Round ${args.round} not found`);
       return roundState;
     }
+
+    case "get_audit":
+      return auditLogger.readRecent(
+        args.taskId as string | undefined,
+        args.limit as number | undefined,
+      );
 
     default:
       throw new Error(`Unknown tool: ${name}`);
