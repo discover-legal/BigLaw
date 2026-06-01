@@ -36,7 +36,7 @@ const ALLOWED_READ_ROOTS = (
     : [process.cwd(), tmpdir(), Config.pdf.outputDir]
 ).map((d) => resolve(d));
 
-function assertSafeReadPath(p: unknown): string {
+export function assertSafeReadPath(p: unknown): string {
   if (typeof p !== "string" || !p.trim()) {
     throw new Error("A file path is required.");
   }

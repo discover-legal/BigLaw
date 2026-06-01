@@ -132,6 +132,7 @@ pip install -r requirements.txt        # PyMuPDF, Camelot, Tesseract
 
 # Verify everything wires up (config, tools, agents, templates, routing, PDF round-trip)
 npm run smoke-test
+npm test                                # fast unit tests (routing, adapters, path-safety)
 
 npm run dev                             # tsx watch  →  REST API on :3101
 ```
