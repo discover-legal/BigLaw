@@ -24,12 +24,14 @@ import {
 import Fastify from "fastify";
 import type { FastifyRequest } from "fastify";
 import cors from "@fastify/cors";
+import cookie from "@fastify/cookie";
 import { Config } from "../config.js";
 import { logger } from "../logger.js";
 import { auditLogger } from "../audit/index.js";
 import { Orchestrator } from "../orchestrator.js";
 import type { WorkflowType, SessionUser } from "../types.js";
 import { LOCAL_PARTNER, filterVisible, canViewTask, isPartner } from "../auth/index.js";
+import { registerAuthRoutes, readSessionCookie } from "../auth/oauth.js";
 
 // ─── Tool schemas ─────────────────────────────────────────────────────────────
 
@@ -240,12 +242,14 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
   // proxies same-origin so this mainly governs cross-origin/deployed UIs.
   // credentials:true so session cookies ride along once OAuth is live.
   await app.register(cors, { origin: Config.auth.allowedOrigins, credentials: true });
+  await app.register(cookie, { secret: Config.auth.sessionSecret });
+  registerAuthRoutes(app, orchestrator);
 
   // Resolve the principal for a request. Auth OFF (local) → the LOCAL_PARTNER
-  // who sees everything. Auth ON → the session user set by the OAuth callback.
+  // who sees everything. Auth ON → the signed session cookie from OAuth login.
   const getUser = (req: FastifyRequest): SessionUser | null => {
     if (!Config.auth.enabled) return LOCAL_PARTNER;
-    return ((req as unknown as { session?: { user?: SessionUser } }).session?.user) ?? null;
+    return readSessionCookie(req);
   };
 
   // Optional shared-secret auth. When API_KEY is set, every request except the

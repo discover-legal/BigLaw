@@ -67,6 +67,11 @@ export const Config = {
       .split(",").map((s) => s.trim()).filter(Boolean),
     // Public base URL of THIS API (for OAuth redirect URIs).
     baseUrl: optional("PUBLIC_BASE_URL", "http://localhost:3101"),
+    // Where to send the browser back after a successful login.
+    uiUrl: optional("PUBLIC_UI_URL", "http://localhost:5173"),
+    // Emails that become `partner` (admin) on first OAuth login; everyone else
+    // is provisioned as `lawyer`. Comma-separated.
+    adminEmails: optional("ADMIN_EMAILS", "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean),
     // OAuth app credentials — register apps with each provider and set these.
     providers: {
       google:    { clientId: optional("GOOGLE_CLIENT_ID", ""),    clientSecret: optional("GOOGLE_CLIENT_SECRET", "") },

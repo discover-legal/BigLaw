@@ -8,6 +8,7 @@ import { SubmitModal } from "./SubmitModal";
 import { Library } from "./Library";
 import { AuditRail } from "./AuditRail";
 import { AdminPanel } from "./AdminPanel";
+import { Login } from "./Login";
 
 export default function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -92,6 +93,9 @@ export default function App() {
     setSelectedId(t.id);
   }
 
+  // Production with auth on, but no session → show the login screen.
+  if (me?.authEnabled && !me.user) return <Login />;
+
   return (
     <div className="app">
       <aside className="sidebar">
@@ -151,6 +155,12 @@ export default function App() {
               <span style={{ color: "var(--amber)" }}>{health.tasks.awaiting_gate} gated</span>
               <span style={{ color: "var(--green)" }}>{health.tasks.complete} done</span>
             </>}
+            {me?.user && (
+              <span className="whoami" title={`${me.user.email} · ${me.user.role}`}>
+                {me.user.name}{me.user.role === "partner" && <span className="pill sm gold">partner</span>}
+                {me.authEnabled && <button className="logout" onClick={() => api.logout().then(() => location.reload())}>sign out</button>}
+              </span>
+            )}
           </div>
         </div>
 

@@ -44,6 +44,8 @@ export const api = {
     fetch(`/tasks/${taskId}/assign`, POST({ lawyerIds })).then(json<Task>),
 
   me: () => fetch("/me").then(json<Me>),
+  authProviders: () => fetch("/auth/providers").then(json<{ google: boolean; microsoft: boolean; linkedin: boolean }>),
+  logout: () => fetch("/auth/logout", { method: "POST" }).then((r) => json<{ ok: true }>(r)),
   listProfiles: () => fetch("/profiles").then(json<LawyerProfile[]>),
   createProfile: (body: { name: string; email: string; role?: string; title?: string }) =>
     fetch("/profiles", POST(body)).then(json<LawyerProfile>),
