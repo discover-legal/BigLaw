@@ -243,9 +243,13 @@ export const pdfOcrTool: ToolImpl = {
     },
   },
   async execute(input, _ctx) {
+    const rawLang = String(input.lang ?? "eng");
+    // Tesseract lang codes are lowercase alpha + optional "+"-joined codes (e.g. "eng+fra").
+    // Reject anything that doesn't match to prevent unexpected values reaching the binary.
+    const lang = /^[a-z]{2,8}(\+[a-z]{2,8})*$/.test(rawLang) ? rawLang : "eng";
     return runPython("ocr", {
       path: assertSafeReadPath(input.path),
-      lang: input.lang ?? "eng",
+      lang,
       pages: input.pages,
       dpi: input.dpi ?? 300,
     });

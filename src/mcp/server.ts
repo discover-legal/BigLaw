@@ -506,8 +506,15 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
   });
 
   // ── Admin settings (presentation mode, DyTopo depth, debate, DocuSeal) ──────
-  app.get("/settings", async () => orchestrator.settings.get());
+  // Both GET and PUT are partner-only: GET exposes the DocuSeal URL and
+  // enabled state; PUT can redirect DocuSeal requests (SSRF) or weaken
+  // debate/gate settings.
+  app.get("/settings", async (req, reply) => {
+    if (!isPartner(getUser(req))) return reply.status(403).send({ error: "Partner role required" });
+    return orchestrator.settings.get();
+  });
   app.put("/settings", async (req, reply) => {
+    if (!isPartner(getUser(req))) return reply.status(403).send({ error: "Partner role required" });
     try {
       const updated = await orchestrator.settings.update(req.body as Record<string, unknown>);
       return updated;

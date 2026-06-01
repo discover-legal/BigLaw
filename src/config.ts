@@ -61,7 +61,13 @@ export const Config = {
     // OFF by default → local dev runs with no login as a single partner who
     // sees everything. Turn ON (with OAuth creds below) for shared deployments.
     enabled: optional("AUTH_ENABLED", "false") === "true",
-    sessionSecret: optional("SESSION_SECRET", "dev-insecure-change-me-in-production-please"),
+    sessionSecret: (() => {
+      const secret = optional("SESSION_SECRET", "dev-insecure-change-me-in-production-please");
+      if (optional("AUTH_ENABLED", "false") === "true" && secret === "dev-insecure-change-me-in-production-please") {
+        throw new Error("SESSION_SECRET must be set to a strong random value when AUTH_ENABLED=true");
+      }
+      return secret;
+    })(),
     // The browser origin(s) allowed by CORS. Defaults to local Vite ports.
     allowedOrigins: optional("CORS_ORIGINS", "http://localhost:5173,http://localhost:5174")
       .split(",").map((s) => s.trim()).filter(Boolean),

@@ -21,13 +21,18 @@
  */
 
 import { readFile, writeFile, mkdir, access } from "fs/promises";
-import { isAbsolute, join, dirname, basename, extname } from "path";
+import { isAbsolute, join, dirname, basename, extname, resolve, sep } from "path";
 import { Config } from "../config.js";
 import { logger } from "../logger.js";
 import { applyTrackedEdits, type EditInput } from "./docx-tracked-changes.js";
 import type { ToolImpl, ToolContext } from "./index.js";
 
 // ─── .docx path resolution ──────────────────────────────────────────────────
+
+// Docx tools are confined to the configured output directory so that a
+// prompt-injected agent cannot read or overwrite arbitrary .docx files
+// elsewhere on the filesystem.
+const DOCX_ROOT = resolve(Config.pdf.outputDir);
 
 async function exists(p: string): Promise<boolean> {
   try {
@@ -38,15 +43,19 @@ async function exists(p: string): Promise<boolean> {
   }
 }
 
-/** Resolve a user-supplied path to a .docx: absolute as-is, else under the output dir. */
+/** Resolve a user-supplied path to a .docx, confined to the output directory. */
 async function resolveDocxPath(p: string): Promise<string | null> {
   if (!p) return null;
-  const candidates = isAbsolute(p)
-    ? [p]
-    : [join(Config.pdf.outputDir, p), join(process.cwd(), p)];
+  // Always resolve relative to the output dir; absolute paths are re-anchored
+  // there too so agents cannot escape to arbitrary filesystem locations.
+  const base = isAbsolute(p) ? basename(p) : p;
+  const candidates = [join(DOCX_ROOT, base)];
   for (const c of candidates) {
-    if (await exists(c)) return c;
+    const abs = resolve(c);
+    if (!abs.startsWith(DOCX_ROOT + sep) && abs !== DOCX_ROOT) continue;
+    if (await exists(abs)) return abs;
   }
+  logger.warn("Blocked docx path outside output dir", { requested: p });
   return null;
 }
 
