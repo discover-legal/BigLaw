@@ -284,6 +284,7 @@ export class DyTopoEngine {
           toolRegistry: globalToolRegistry,
           knowledge: this.knowledge,
           memory: this.memory,
+          ownerId: task.createdByProfileId,
         });
         return findings;
       }),

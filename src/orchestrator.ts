@@ -152,6 +152,7 @@ export class Orchestrator {
     documentIds?: string[];
     clientNumber?: string;
     matterNumber?: string;
+    createdByProfileId?: string;
   }): Promise<Task> {
     if (params.description.length > Orchestrator.MAX_DESCRIPTION_CHARS) {
       throw new Error(
@@ -170,6 +171,7 @@ export class Orchestrator {
       clientNumber: params.clientNumber?.trim() || undefined,
       matterNumber: params.matterNumber?.trim() || undefined,
       documentIds: params.documentIds ?? [],
+      createdByProfileId: params.createdByProfileId,
       workflowType: params.workflowType,
       status: "pending",
       currentPhase: phases[0],
@@ -243,7 +245,7 @@ export class Orchestrator {
     templateId: string,
     substitutions: Record<string, string> = {},
     documentIds?: string[],
-    refs?: { clientNumber?: string; matterNumber?: string },
+    refs?: { clientNumber?: string; matterNumber?: string; createdByProfileId?: string },
   ): Promise<Task> {
     const template = this.templates.get(templateId);
     if (!template) throw new Error(`Template not found: ${templateId}`);

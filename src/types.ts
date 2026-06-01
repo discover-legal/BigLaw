@@ -230,6 +230,12 @@ export interface Task {
   assignedLawyerIds?: string[];
   /** Document IDs ingested into the knowledge store for this task */
   documentIds: string[];
+  /**
+   * ProfileId of the user who submitted this task — used to scope agent tool
+   * access so lawyers' agents cannot discover or read documents owned by other users.
+   * Undefined for partner-submitted tasks (partners see the full knowledge store).
+   */
+  createdByProfileId?: string;
   workflowType: WorkflowType;
   status: TaskStatus;
   currentPhase: TaskPhase;

@@ -46,6 +46,9 @@ export interface ToolContext {
   knowledge: KnowledgeStore;
   memory: InterRoundMemoryStore;
   taskId: string;
+  /** ProfileId of the task creator — used to scope document searches to the owner's
+   *  documents only. Undefined for partner-submitted tasks (see all documents). */
+  ownerId?: string;
 }
 
 export interface ToolImpl {
@@ -130,6 +133,7 @@ const searchKnowledgeTool: ToolImpl = {
       topK: (input.top_k as number | undefined) ?? 6,
       jurisdiction: input.jurisdiction as string | undefined,
       documentType: input.document_type as string | undefined,
+      ownerId: ctx.ownerId,
     });
   },
 };
@@ -189,13 +193,13 @@ const extractFromDocumentTool: ToolImpl = {
     const extractType = input.extract_type as string;
 
     if (extractType === "full_text") {
-      const text = await ctx.knowledge.getFullText(docId);
+      const text = await ctx.knowledge.getFullText(docId, ctx.ownerId);
       return { docId, extractType, text: text ?? "Document not found" };
     }
 
     // For structured extraction, retrieve full text and return relevant chunks
     const query = (input.context_query as string | undefined) ?? extractType;
-    const results = await ctx.knowledge.search(query, { topK: 10 });
+    const results = await ctx.knowledge.search(query, { topK: 10, ownerId: ctx.ownerId });
     const docResults = results.filter((r) => r.document.id === docId);
 
     return {

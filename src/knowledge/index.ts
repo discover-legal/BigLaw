@@ -132,11 +132,15 @@ export class KnowledgeStore {
 
   /**
    * Retrieve full document text by docId — concatenates all chunks in order.
+   * When ownerId is provided, returns null if the document belongs to a different owner
+   * so agent tools cannot read documents outside the submitting user's scope.
    */
-  async getFullText(docId: string): Promise<string | null> {
+  async getFullText(docId: string, ownerId?: string): Promise<string | null> {
     this.assertReady();
+    const must: unknown[] = [{ key: "docId", match: { value: docId } }];
+    if (ownerId) must.push({ key: "ownerId", match: { value: ownerId } });
     const result = await this.qdrant.scroll(COLLECTION, {
-      filter: { must: [{ key: "docId", match: { value: docId } }] },
+      filter: { must },
       limit: 500,
       with_payload: true,
     });

@@ -42,6 +42,8 @@ export interface AgentContext {
   knowledge?: KnowledgeStore;
   /** Memory store reference forwarded to tool context */
   memory?: InterRoundMemoryStore;
+  /** Document owner scope — undefined means partner (see all), set for lawyer-submitted tasks */
+  ownerId?: string;
 }
 
 export class Agent {
@@ -109,6 +111,7 @@ export class Agent {
           knowledge: ctx.knowledge!,
           memory: ctx.memory!,
           taskId: ctx.taskId!,
+          ownerId: ctx.ownerId,
         })
       : await this.callModel(prompt, maxTokens, model);
 
@@ -129,6 +132,7 @@ export class Agent {
       knowledge: KnowledgeStore;
       memory: InterRoundMemoryStore;
       taskId: string;
+      ownerId?: string;
     },
   ): Promise<string> {
     const toolSchemas = refs.toolRegistry.schemasFor(this.definition.allowedTools);
@@ -136,6 +140,7 @@ export class Agent {
       knowledge: refs.knowledge,
       memory: refs.memory,
       taskId: refs.taskId,
+      ownerId: refs.ownerId,
     };
 
     const provider = getProvider(model);

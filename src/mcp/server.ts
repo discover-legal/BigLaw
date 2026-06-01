@@ -285,10 +285,12 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
       description: string; workflowType: WorkflowType; documentIds?: string[];
       clientNumber?: string; matterNumber?: string;
     };
-    const task = await orchestrator.submitTask(body);
+    const user = getUser(req);
+    // Partners see all documents; lawyers are scoped to their own documents in agent tools.
+    const createdByProfileId = isPartner(user) ? undefined : user?.profileId;
+    const task = await orchestrator.submitTask({ ...body, createdByProfileId });
     // The creator is assigned to their own matter so they can see it under the
     // access rule. Partners see everything regardless.
-    const user = getUser(req);
     if (user) orchestrator.assignLawyers(task.id, [user.profileId]);
     return reply.status(201).send(orchestrator.getTask(task.id) ?? task);
   });
@@ -351,6 +353,7 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
     const { taskId, gateId } = req.params as { taskId: string; gateId: string };
     const task = orchestrator.getTask(taskId);
     if (!task || !canViewTask(getUser(req), task)) return reply.status(404).send({ error: "Task not found" });
+    if (!isPartner(getUser(req))) return reply.status(403).send({ error: "Partner role required" });
     const { note } = (req.body ?? {}) as { note?: string };
     orchestrator.approveGate(taskId, gateId, note);
     return reply.status(200).send({ ok: true });
@@ -360,6 +363,7 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
     const { taskId, gateId } = req.params as { taskId: string; gateId: string };
     const task = orchestrator.getTask(taskId);
     if (!task || !canViewTask(getUser(req), task)) return reply.status(404).send({ error: "Task not found" });
+    if (!isPartner(getUser(req))) return reply.status(403).send({ error: "Partner role required" });
     const { reason } = (req.body ?? {}) as { reason: string };
     orchestrator.rejectGate(taskId, gateId, reason);
     return reply.status(200).send({ ok: true });
@@ -662,9 +666,10 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
       templateId: string; substitutions?: Record<string, string>; documentIds?: string[];
       clientNumber?: string; matterNumber?: string;
     };
-    const task = await orchestrator.submitFromTemplate(body.templateId, body.substitutions, body.documentIds,
-      { clientNumber: body.clientNumber, matterNumber: body.matterNumber });
     const user = getUser(req);
+    const createdByProfileId = isPartner(user) ? undefined : user?.profileId;
+    const task = await orchestrator.submitFromTemplate(body.templateId, body.substitutions, body.documentIds,
+      { clientNumber: body.clientNumber, matterNumber: body.matterNumber, createdByProfileId });
     if (user) orchestrator.assignLawyers(task.id, [user.profileId]);
     return reply.status(201).send(orchestrator.getTask(task.id) ?? task);
   });

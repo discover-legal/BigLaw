@@ -98,7 +98,7 @@ export const listDocumentsTool: ToolImpl = {
     input_schema: { type: "object" as const, properties: {} },
   },
   async execute(_input, ctx) {
-    const docs = await ctx.knowledge.listDocuments();
+    const docs = await ctx.knowledge.listDocuments(ctx.ownerId);
     return {
       count: docs.length,
       documents: docs.map((d) => ({
@@ -116,7 +116,7 @@ export const listDocumentsTool: ToolImpl = {
 const MAX_DOC_CHARS = 200_000;
 
 async function readDocText(docId: string, ctx: ToolContext): Promise<string | null> {
-  return ctx.knowledge.getFullText(docId);
+  return ctx.knowledge.getFullText(docId, ctx.ownerId);
 }
 
 export const readDocumentTool: ToolImpl = {
