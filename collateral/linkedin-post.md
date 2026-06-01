@@ -2,67 +2,44 @@
 
 ## Post (primary)
 
-I built something I call **Big Michael**, and it slightly broke my brain.
+I built **Big Michael**, and it slightly broke my brain.
 
-Most "legal AI" today is one model, one prompt, fingers crossed. Big Michael is a whole **bench** — 118 specialist agents that argue with each other, cite their sources, and try to prove each other wrong *before* a single word reaches a human.
+Most "legal AI" is one model, one prompt, fingers crossed. Big Michael is a **bench**: 118 specialist agents that self-organize each round, argue with each other, and have to cite their sources and survive an adversarial verification pass before anything reaches a human. Jurisdiction-neutral. Local or cloud. Open source.
 
-Here's what happens when you hand it a matter 👇
+🌉 By now you're thinking: *"118 AIs arguing case law — and an AI built it? I've got a bridge to sell you."* Fair. Except it literally *is* a bridge — Big Michael bridges separate legal AI systems (Mike's document tools, Lavern's agents, your own) into one bench that debates and verifies as a whole. Real, open source, walk across it yourself. No sale, no toll.
 
-🔹 **It convenes a team.** A root orchestrator plans the phases; domain managers — research, analysis, drafting, review — carve up the work.
+(And yes: **Claude** built most of it with me. An AI building a multi-agent AI that argues with itself about the law. Turtles all the way down. 🐢)
 
-🔹 **The agents self-organize.** Every round, each agent posts what it *needs* and what it can *offer*, and the engine cosine-matches them into a live communication graph so the right specialists actually talk to each other. It's called DyTopo (it sounds fancier than my Tuesday).
+Screenshots from a live matter 👇 What would a 100-agent bench do to *your* hardest question?
 
-🔹 **Nothing gets a free pass.** Every finding runs a gauntlet: a CitationGate (prove the quote exists), an adversarial challenger (try to break it), and a verification pass. Anything shaky or contested stops at a **human gate** before it makes the final cut.
-
-🔹 **It's jurisdiction-neutral.** Contract, corporate, M&A, data privacy, antitrust, employment, IP, tax, litigation, sanctions, ESG — it applies whatever governing law the matter names. Not bolted to one legal system.
-
-🔹 **It plays well with others.** Transactional document tools and legal-service-design agent rosters plug straight in as adapters and run on the same engine. One bench, many sources.
-
-🔹 **It's built for how firms actually work.** Client/matter numbers on everything, and a live admin panel to tune the bench — lawyer vs non-lawyer mode, review depth, verification, e-signature — no restart, no redeploy.
-
-🔹 **It runs on your terms.** Local models when privacy matters, or tiered cloud routing for quality. Open source.
-
-🌉 By now a reasonable person is thinking: *"118 AIs that argue case law and cite real cases — and an AI built the whole thing? Buddy, I've got a bridge to sell you."* Fair. But here's the twist — it literally *is* a bridge. Big Michael bridges separate legal AI systems (Mike's document tooling, Lavern's agent roster, your own) into one bench that debates and verifies as a whole. It's real, it's open source, and you can walk across it yourself — no sale, no toll. (And yes: **Claude**, Anthropic's coding agent, built most of it with me. An AI building a multi-agent AI that argues with itself about the law. Turtles all the way down — and Claude made them good. 🐢)
-
-The screenshots below are from a live matter: the bench deliberating, the communication graph, the human gates, and the cited synthesis at the end.
-
-Curious what a 100-agent bench does to *your* hardest legal question. The bridge's right there. 👀
-
-#LegalTech #LegalAI #MultiAgent #AI #LegalInnovation #Lawtech #OpenSource
+#LegalAI #LegalTech #MultiAgent #OpenSource
 
 ---
 
-## Post (short alternate)
+## Post (ultra-short)
 
-Most legal AI is one model, one prompt, fingers crossed.
+I built a legal AI that's a *bench*, not a chatbot: 118 agents that argue, cite, and verify each other before anything reaches a human.
 
-So I built **Big Michael** to be a *bench* instead — 118 specialist agents that self-organize each round (posting what they need and what they can offer), argue and cite every finding, and survive an adversarial verification pass before anything reaches a human.
+"An AI legal tool built by an AI? I've got a bridge to sell you." Except it *is* a bridge — it unifies separate legal AI systems (Mike, Lavern, your own) into one. Open source. Walk across it yourself. 🌉
 
-Jurisdiction-neutral. Runs on local or cloud models. Open source.
-
-Plot twist: I built most of it *with* Claude — so an AI helped me build a multi-agent AI that argues about the law with itself. 🐢🐢🐢
-
-Screenshots from a live matter below 👇
-
-#LegalTech #LegalAI #MultiAgent #OpenSource #Lawtech
+#LegalAI #MultiAgent #OpenSource
 
 ---
 
 ## Screenshot shot list
 
-Saved alongside this file in `collateral/screenshots/` (1600×1000 @2x):
+In `collateral/screenshots/` (1600×1000 @2x):
 
-1. **03-rounds.png** — the Rounds view expanded: active agents, the Need/Offer **communication graph**, per-round findings. *The hero — most novel/visual.*
-2. **04-synthesis.png** — the final synthesis, rendered (risk table, real citations).
-3. **06-admin.png** — the live **admin panel**: lawyer/non-lawyer mode, DyTopo depth, verification, DocuSeal — applied without a restart.
-4. **02-submit.png** — "Convene the bench": workflow types, jurisdiction-neutral templates, **client/matter numbering**.
-5. **05-findings.png** — the findings grid with confidence, citations, and verify/review state.
-6. **01-dashboard.png** — the matter list + a selected matter.
+1. **03-rounds.png** — Rounds view: active agents, the Need/Offer **communication graph**, per-round findings. *Hero shot.*
+2. **04-synthesis.png** — final synthesis, rendered (risk table, real citations).
+3. **06-admin.png** — live **admin panel**: lawyer/non-lawyer mode, DyTopo depth, verification, DocuSeal.
+4. **02-submit.png** — "Convene the bench": workflows, templates, **client/matter numbering**.
+5. **05-findings.png** — findings grid with confidence, citations, review state.
+6. **01-dashboard.png** — matter list + selected matter.
 
 ## Posting notes
 
-- Lead carousel image: **03-rounds** (the comm-graph is the most novel/visual), then synthesis, then admin.
-- The synthesis screenshot's text is a representative work-product example; the UI, communication graph, gates, and per-round routing are exactly as the running system produced them.
-- If LinkedIn compresses the wide shots, crop to 1200×627 (link-preview ratio) or post as a square carousel.
-- Tag relevant collaborators / the open-source projects you build on.
-- Best post times for B2B/legal: Tue–Thu, 8–10am local.
+- Carousel order: **03-rounds → 04-synthesis → 06-admin → 02-submit**.
+- Synthesis text is a representative example; the UI, communication graph, gates, and routing are exactly as the system produced them.
+- Crop wide shots to 1200×627 if LinkedIn compresses them.
+- Best B2B/legal post times: Tue–Thu, 8–10am local.
