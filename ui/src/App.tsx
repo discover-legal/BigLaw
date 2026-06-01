@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { api, streamTask } from "./api";
-import type { Task, Health } from "./types";
+import type { Task, Health, AgentSummary } from "./types";
 import { StatusDot, WorkflowPill, timeAgo } from "./primitives";
 import { TaskView } from "./TaskView";
 import { SubmitModal } from "./SubmitModal";
@@ -13,6 +13,7 @@ export default function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [task, setTask] = useState<Task | null>(null);
   const [health, setHealth] = useState<Health | null>(null);
+  const [agents, setAgents] = useState<AgentSummary[]>([]);
   const [submitOpen, setSubmitOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [auditOpen, setAuditOpen] = useState(false);
@@ -42,6 +43,16 @@ export default function App() {
     const iv = window.setInterval(load, 8000);
     return () => window.clearInterval(iv);
   }, []);
+
+  // The agent registry is effectively static for a session — fetch once and
+  // build an id→registered-name map so the Rounds view can label every agent
+  // (including those that activated but produced no finding).
+  useEffect(() => { api.listAgents().then(setAgents).catch(() => {}); }, []);
+  const agentNames = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const a of agents) m.set(a.id, a.name);
+    return m;
+  }, [agents]);
 
   // Live-track the selected task: snapshot + stream-triggered refetch.
   useEffect(() => {
@@ -129,7 +140,7 @@ export default function App() {
 
         <div className="detail-scroll">
           {task
-            ? <TaskView key={task.id} task={task} onChange={refetchSelected} notify={notify} />
+            ? <TaskView key={task.id} task={task} agentNames={agentNames} onChange={refetchSelected} notify={notify} />
             : <EmptyState onNew={() => setSubmitOpen(true)} offline={!health} />}
         </div>
       </main>

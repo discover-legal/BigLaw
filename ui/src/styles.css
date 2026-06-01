@@ -405,6 +405,90 @@ body::after {
   margin-bottom: 16px;
 }
 
+/* ─── Rendered markdown (synthesis) ──────────────────────────────────── */
+
+.prose.md { white-space: normal; }
+.prose.md > :first-child { margin-top: 0; }
+.prose.md > :last-child { margin-bottom: 0; }
+.md-p { margin: 0 0 14px; }
+.md-h { font-family: var(--font-display); color: var(--text); line-height: 1.3; margin: 26px 0 12px; font-weight: 600; }
+.md-h1 { font-size: 23px; }
+.md-h2 { font-size: 19px; color: var(--gold-bright); }
+.md-h3 { font-size: 16.5px; letter-spacing: 0.01em; }
+.md-h4, .md-h5, .md-h6 { font-size: 14px; font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.12em; color: var(--text-dim); }
+.prose.md strong { color: var(--text); font-weight: 600; }
+.prose.md em { color: #e7e1d2; }
+.md-code { font-family: var(--font-mono); font-size: 0.86em; background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 1px 6px; color: var(--gold-bright); }
+.md-list { margin: 0 0 14px; padding-left: 22px; }
+.md-list li { margin: 5px 0; padding-left: 4px; }
+.md-list li::marker { color: var(--gold); }
+.md-quote { margin: 0 0 14px; padding: 8px 16px; border-left: 2px solid var(--border-gold); color: var(--text-dim); font-style: italic; }
+.md-cite {
+  font-family: var(--font-mono); font-size: 9.5px; font-weight: 600;
+  color: var(--gold); background: var(--gold-soft);
+  border-radius: 4px; padding: 1px 5px; margin-left: 2px;
+  vertical-align: super; line-height: 1;
+}
+.md-table-wrap { margin: 0 0 18px; border: 1px solid var(--border); border-radius: var(--r); overflow: auto; }
+.md-table { width: 100%; border-collapse: collapse; font-family: var(--font-sans); font-size: 13px; }
+.md-table th {
+  text-align: left; font-family: var(--font-mono); font-size: 10px; font-weight: 600;
+  letter-spacing: 0.1em; text-transform: uppercase; color: var(--gold);
+  background: var(--bg-2); padding: 10px 14px; border-bottom: 1px solid var(--border-gold);
+  white-space: nowrap;
+}
+.md-table td { padding: 10px 14px; border-bottom: 1px solid var(--border); color: var(--text-dim); vertical-align: top; line-height: 1.5; }
+.md-table tr:last-child td { border-bottom: none; }
+.md-table tbody tr:hover td { background: rgba(236, 231, 218, 0.025); }
+
+/* ─── Rounds view (expandable) ───────────────────────────────────────── */
+
+.rounds { display: flex; flex-direction: column; gap: 12px; }
+.round-card {
+  border: 1px solid var(--border); border-radius: var(--r-lg);
+  background: var(--panel); overflow: hidden; transition: border-color 0.18s ease;
+}
+.round-card.open { border-color: var(--border-gold); }
+.round-head {
+  width: 100%; display: flex; align-items: center; gap: 10px;
+  padding: 14px 18px; background: none; border: none; cursor: pointer;
+  text-align: left; color: var(--text); font-family: var(--font-sans);
+}
+.round-head:hover { background: rgba(236, 231, 218, 0.02); }
+.round-chevron { color: var(--gold); font-size: 11px; transition: transform 0.2s ease; flex-shrink: 0; }
+.round-card.open .round-chevron { transform: rotate(90deg); }
+.round-desc { flex: 1; color: var(--text-dim); font-size: 13px; line-height: 1.45; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.round-card.open .round-desc { white-space: normal; }
+.round-counts { display: flex; gap: 12px; font-family: var(--font-mono); font-size: 10.5px; color: var(--text-faint); flex-shrink: 0; }
+.round-counts span { white-space: nowrap; }
+.round-body { overflow: hidden; }
+.round-body-inner { padding: 4px 18px 18px; display: flex; flex-direction: column; gap: 18px; }
+.rnd-section { border-top: 1px solid var(--border); padding-top: 14px; }
+.rnd-label { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--gold); margin-bottom: 10px; }
+.rnd-empty { color: var(--text-faint); font-size: 13px; font-style: italic; }
+
+.agent-chips { display: flex; flex-wrap: wrap; gap: 7px; }
+.agent-chip {
+  font-family: var(--font-mono); font-size: 11.5px; color: var(--text-dim);
+  background: var(--bg-2); border: 1px solid var(--border); border-radius: 999px;
+  padding: 4px 11px; white-space: nowrap;
+}
+
+.edge-list { display: flex; flex-direction: column; gap: 7px; }
+.edge-row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; flex-wrap: wrap; }
+.edge-node { font-family: var(--font-mono); font-size: 11.5px; color: var(--text); }
+.edge-arrow { color: var(--gold); }
+.edge-sim { font-family: var(--font-mono); font-size: 10px; color: var(--green); background: var(--green-soft); border-radius: 4px; padding: 1px 6px; }
+.edge-offer { color: var(--text-faint); font-style: italic; font-size: 12px; }
+
+.rnd-findings { display: flex; flex-direction: column; gap: 12px; }
+.rnd-finding { background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--r); padding: 12px 14px; }
+.rnd-finding-top { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+.rnd-finding-agent { font-family: var(--font-mono); font-size: 11.5px; color: var(--gold); }
+.rnd-finding-body { color: var(--text-dim); font-size: 13.5px; line-height: 1.55; margin-bottom: 8px; }
+.pill.sm { font-size: 9.5px; padding: 1px 6px; }
+
 /* ─── Data grid (findings + tabulate) ────────────────────────────────── */
 
 .grid-toolbar {

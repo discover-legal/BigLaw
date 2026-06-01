@@ -114,6 +114,15 @@ export interface Template {
   description: string;
 }
 
+export interface AgentSummary {
+  id: string;
+  name: string;
+  tier: number;
+  type: string;
+  domain: string;
+  description?: string;
+}
+
 export interface DocumentRef {
   id: string;
   title: string;

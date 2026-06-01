@@ -1,4 +1,4 @@
-import type { Task, Template, Health, WorkflowType, SearchResult, AuditEntry, DocumentRef } from "./types";
+import type { Task, Template, Health, WorkflowType, SearchResult, AuditEntry, DocumentRef, AgentSummary } from "./types";
 
 async function json<T>(res: Response): Promise<T> {
   if (!res.ok) {
@@ -19,6 +19,7 @@ export const api = {
   getTask: (id: string) => fetch(`/tasks/${id}`).then(json<Task>),
   health: () => fetch("/health").then(json<Health>),
   listTemplates: () => fetch("/templates").then(json<Template[]>),
+  listAgents: () => fetch("/agents").then(json<AgentSummary[]>),
 
   submitTask: (body: { description: string; workflowType: WorkflowType; documentIds?: string[] }) =>
     fetch("/tasks", POST(body)).then(json<Task>),
