@@ -372,6 +372,26 @@ export interface SessionUser {
 
 // ─── Knowledge store ─────────────────────────────────────────────────────────
 
+/**
+ * NOSLEGAL taxonomy tags — optional supplementary multi-faceted classification.
+ * See https://github.com/noslegal/taxonomy for the full controlled vocabulary.
+ *
+ * NOSLEGAL v4 uses eight orthogonal facets. We capture the four most useful:
+ *   areaOfLaw  — e.g. "Corporate Finance", "Employment" (NOSLEGAL Areas of law)
+ *   workType   — e.g. "Advisory", "Transactional", "Litigious" (Work types)
+ *   sector     — e.g. "Financial Services", "Technology" (Sectors)
+ *   assetType  — e.g. "Agreement", "Opinion", "Pleading" (Information assets)
+ *
+ * These complement (not replace) our canonical `practiceArea` and `documentType`
+ * fields and enable interoperability with NOSLEGAL-compatible platforms.
+ */
+export interface NosLegalTags {
+  areaOfLaw?: string;
+  workType?: string;
+  sector?: string;
+  assetType?: string;
+}
+
 export interface Document {
   id: string;
   title: string;
@@ -385,6 +405,11 @@ export interface Document {
   practiceArea?: string;
   /** Auto-detected client number. */
   detectedClientNumber?: string;
+  /**
+   * Optional NOSLEGAL v4 taxonomy tags for interoperability with
+   * NOSLEGAL-compatible legal platforms.
+   */
+  noslegal?: NosLegalTags;
   metadata?: Record<string, unknown>;
   ingestedAt: Date;
 }

@@ -1,0 +1,55 @@
+[
+  {
+    "id": "example-legal-tool",
+    "name": "Example Legal Tool",
+    "version": "1.0.0",
+    "description": "Template showing how to plug any legal agentic tool into Big Michael. Copy this file, rename it, and fill in your tool's details.",
+
+    "auth": {
+      "type": "api-key",
+      "apiKeyEnvVar": "EXAMPLE_TOOL_API_KEY",
+      "endpointEnvVar": "EXAMPLE_TOOL_MCP_URL"
+    },
+
+    "tools": [
+      {
+        "name": "example_search",
+        "description": "Search for legal documents in Example Legal Tool.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query":        { "type": "string",  "description": "Search query" },
+            "jurisdiction": { "type": "string",  "description": "Optional: jurisdiction filter (e.g. 'US', 'EU')" },
+            "max_results":  { "type": "number",  "description": "Maximum results to return (default 5)" }
+          },
+          "required": ["query"]
+        },
+        "remoteName": "search",
+        "requiresAuth": true
+      }
+    ],
+
+    "agents": [
+      {
+        "id": "example-tool-specialist",
+        "name": "Example Tool Specialist",
+        "tier": 2,
+        "domain": "research",
+        "description": "Specialises in using Example Legal Tool for legal research and document retrieval.",
+        "systemPrompt": "You are the Example Tool Specialist. Use the example_search tool to find relevant legal materials. Always cite your sources and note the jurisdiction each source covers.",
+        "allowedTools": ["example_search", "web_search", "search_knowledge"],
+        "skills": ["example-tool-research", "legal-research"]
+      }
+    ],
+
+    "workflows": [
+      {
+        "id": "example-research-workflow",
+        "name": "Example Research Workflow",
+        "description": "End-to-end legal research using Example Legal Tool.",
+        "workflowType": "roundtable",
+        "promptTemplate": "Research the following legal question using Example Legal Tool and other available sources.\n\nQuestion: {{description}}\n\nDocuments provided: {{document}}\n\nProvide a comprehensive analysis with citations."
+      }
+    ]
+  }
+]
