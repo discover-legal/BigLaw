@@ -313,16 +313,18 @@ export class DyTopoEngine {
   /**
    * Two-wave intra-round processing:
    *
-   * Wave 1 (parallel) — every agent runs its full agentic loop and produces findings.
-   * Broadcast build    — all Wave 1 findings are written to the shared context (the
-   *                      "intra-round whiteboard") and published to IntraRoundMemoryStore.
-   * Wave 2 (parallel) — every agent receives the full shared context and runs a
-   *                      lightweight Haiku review pass to challenge errors or add
-   *                      missing analysis. No tool loop, short token budget (400).
+   * Wave 1 (parallel) — every agent runs its full agentic loop independently,
+   *                      without seeing peer findings. Each agent develops its own
+   *                      view first to avoid anchoring bias.
+   * Broadcast build    — all Wave 1 findings are written to the shared context
+   *                      (the "intra-round whiteboard") and published to IntraRoundMemoryStore.
+   * Wave 2 (parallel) — every agent runs a second full agentic loop, now with the
+   *                      complete shared context injected. Agents can challenge peer
+   *                      findings, fill gaps, and cross-check jurisdiction-specific
+   *                      claims — all with full tool access and proper model routing.
    *
-   * Combined findings from both waves feed the citation gate, debate, and verification
-   * pipeline downstream. Wave 2 errors are swallowed — a bad model response never
-   * crashes the round.
+   * Both waves use the same model tier and token budget. Combined findings from both
+   * waves feed the citation gate, debate, and verification pipeline downstream.
    */
   private async processAgents(
     agents: Agent[],
@@ -331,7 +333,7 @@ export class DyTopoEngine {
     task: Task,
     goal: RoundGoal,
   ): Promise<Finding[]> {
-    // ── Wave 1: full agentic-loop processing ──────────────────────────────────
+    // ── Wave 1: full agentic-loop, no peer context ────────────────────────────
     const wave1Results = await Promise.all(
       agents.map(async (agent) => {
         const memoryEntries = agentMemories.get(agent.definition.id) ?? [];
@@ -351,43 +353,48 @@ export class DyTopoEngine {
     );
     const wave1Findings = wave1Results.flat();
 
-    // ── Build shared context from Wave 1 findings ─────────────────────────────
-    // Each finding is written as a single-line summary to the intra-round
-    // whiteboard. Cap at 200 chars per finding to keep the broadcast prompt tight.
+    // ── Build shared context (intra-round whiteboard) ─────────────────────────
+    // Each finding is written as a single-line summary, capped at 200 chars so the
+    // Wave 2 prompt stays within a workable token budget even with many agents.
     for (const f of wave1Findings) {
       const line = `[${f.agentName}] ${f.content.replace(/\s+/g, " ").slice(0, 200)}`;
       intraMemory.addSharedContext(line);
     }
     const sharedContext = intraMemory.getSharedContext();
 
-    if (sharedContext.length) {
-      logger.debug("Intra-round broadcast context built", {
-        round: goal.round,
-        entries: sharedContext.length,
-      });
-    }
+    logger.debug("Intra-round whiteboard built", {
+      round: goal.round,
+      wave1Findings: wave1Findings.length,
+      contextEntries: sharedContext.length,
+    });
 
-    // ── Wave 2: broadcast review (Haiku, lightweight) ─────────────────────────
+    // ── Wave 2: full agentic-loop, peer context broadcast in ─────────────────
+    // Agents see all Wave 1 findings via SHARED ROUND CONTEXT in the prompt and
+    // can use their full tool suite to challenge, cross-check, or extend them.
     const wave2Results = await Promise.all(
       agents.map((agent) => {
         const memoryEntries = agentMemories.get(agent.definition.id) ?? [];
-        return agent.reviewWithBroadcast({
+        const incomingMessages = intraMemory.getMessagesFor(agent.definition.id);
+        return agent.process({
           roundGoal: goal,
-          incomingMessages: [],
+          incomingMessages,
           memoryEntries,
           taskDescription: task.description,
+          taskId: task.id,
+          toolRegistry: globalToolRegistry,
+          knowledge: this.knowledge,
+          memory: this.memory,
+          ownerId: task.createdByProfileId,
           sharedContext,
         });
       }),
     );
     const wave2Findings = wave2Results.flat();
 
-    if (wave2Findings.length) {
-      logger.debug("Wave 2 broadcast review produced findings", {
-        round: goal.round,
-        count: wave2Findings.length,
-      });
-    }
+    logger.debug("Wave 2 findings produced", {
+      round: goal.round,
+      count: wave2Findings.length,
+    });
 
     return [...wave1Findings, ...wave2Findings];
   }
@@ -403,7 +410,7 @@ export class DyTopoEngine {
     findings: Finding[],
     intraMemory: IntraRoundMemoryStore,
   ): Promise<void> {
-    // Write individual finding memories (in parallel — Qdrant upserts are idempotent)
+    // Write individual finding memories in parallel
     await Promise.all(
       findings.map((f) =>
         this.memory.writeFindingMemory({

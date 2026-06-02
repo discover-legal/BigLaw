@@ -96,14 +96,16 @@ T3  Tool agents (6)           — web_search, doc retrieval, extraction,
                                 Descrybe, Ironclad, iManage, Definely
 ```
 
-Each DyTopo round:
+Each DyTopo round (two-wave processing):
 1. Every agent generates a Need/Offer descriptor (Haiku, ~10 tokens)
 2. Engine cosine-matches Needs → Offers to build a directed comm graph
 3. **Jurisdiction filter**: agents tagged `jurisdictions: ["US"]` are excluded from EU/UK/AU tasks
 4. Matched agents receive routed messages from their Need partners
-5. Agents process context + run their tool_use loops → produce Findings
-6. Findings pass through CitationGate → Debate (Opus) → Verification (Haiku ×10)
-7. Low-confidence or challenged Findings go to human gate before final output
+5. **Wave 1** — agents run full agentic loops independently (no peer context) → Findings written to intra-round whiteboard
+6. **Wave 2** — agents run a second full agentic loop with the whiteboard injected; challenge, cross-check, extend with full tool access
+7. Combined findings pass through CitationGate → Debate (Opus) → Verification (Haiku ×10)
+8. Low-confidence or challenged Findings go to human gate before final output
+9. Haiku synthesises round digest → written to inter-round memory store
 
 ## Key files
 

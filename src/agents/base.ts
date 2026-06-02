@@ -125,23 +125,6 @@ export class Agent {
   }
 
   /**
-   * Wave 2 broadcast review — lightweight Haiku pass where the agent sees all
-   * peer findings from Wave 1 and can emit challenge or supplement findings.
-   * No tool loop; short token budget (400). Returns [] on any error so a
-   * misbehaving model in Wave 2 never crashes the round.
-   */
-  async reviewWithBroadcast(ctx: AgentContext): Promise<Finding[]> {
-    const model = selectModel({ tier: this.definition.tier, type: this.definition.type, taskType: "descriptor" });
-    const prompt = buildBroadcastReviewPrompt(this.definition, ctx);
-    try {
-      const text = await this.callModel(prompt, 400, model);
-      return parseFindings(text, this.definition);
-    } catch {
-      return [];
-    }
-  }
-
-  /**
    * Provider-agnostic tool_use agentic loop.
    * Works with both Anthropic and Ollama (via the provider abstraction).
    * Loops until stop_reason === "end_turn" or the 10-iteration safety cap is hit.
@@ -308,7 +291,7 @@ function buildProcessingPrompt(def: AgentDefinition, ctx: AgentContext): string 
         .join("\n\n---\n\n")
     : "No messages routed to you this round.";
 
-  // Memory content originates from prior agent outputs stored in Qdrant.
+  // Memory content originates from prior agent outputs stored in the RuVector memory store.
   // An attacker who can influence task content could craft memory entries
   // containing fake FINDING markers. Sanitise before interpolation.
   const memory = ctx.memoryEntries.length
@@ -348,33 +331,6 @@ Rules:
 - Quote must be verbatim — not paraphrased.
 - Multiple Citations allowed per finding (repeat Citation: lines).
 - If you have no findings this round: NO_FINDINGS`;
-}
-
-function buildBroadcastReviewPrompt(def: AgentDefinition, ctx: AgentContext): string {
-  const taskDesc = sanitizePromptContent(ctx.taskDescription);
-  const shared = (ctx.sharedContext ?? []).map((s) => sanitizePromptContent(s)).join("\n");
-
-  return `TASK: ${taskDesc}
-
-ROUND GOAL (Round ${ctx.roundGoal.round} — Phase: ${ctx.roundGoal.phase}):
-${ctx.roundGoal.description}
-
-YOUR ROLE: ${def.name} — ${def.description}
-
-ALL FINDINGS PRODUCED THIS ROUND BY YOUR PEERS:
-${shared || "No findings yet."}
-
-────────────────────────────────────────────────────────────────
-Review the above findings from your specialist perspective.
-- If you spot a factual error, missing jurisdiction, or important omission, produce a challenge or supplement finding.
-- Do NOT repeat findings that are already correct.
-- If nothing to add or challenge: NO_FINDINGS
-
-FINDING:
-Content: <your challenge or supplement>
-Citation: SOURCE=<source> | QUOTE=<verbatim text>
-Confidence: <0.0–1.0>
-END_FINDING`;
 }
 
 // ─── Response parsers ─────────────────────────────────────────────────────────
