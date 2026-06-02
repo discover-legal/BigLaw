@@ -51,7 +51,7 @@ const TOOLS = [
         description: { type: "string", description: "Full description of the legal task" },
         workflowType: {
           type: "string",
-          enum: ["counsel", "roundtable", "adversarial", "review", "tabulate", "full_bench"],
+          enum: ["counsel", "roundtable", "adversarial", "review", "tabulate", "full_bench", "legal_design", "pre_engagement"],
           description: "Orchestration workflow to use",
         },
         documentIds: {
@@ -61,6 +61,10 @@ const TOOLS = [
         },
         clientNumber: { type: "string", description: "Optional law-firm client number" },
         matterNumber: { type: "string", description: "Optional law-firm matter number" },
+        jurisdiction: {
+          type: "string",
+          description: "Governing jurisdiction (e.g. 'US', 'US-NY', 'EU', 'UK', 'AU', 'SG'). Filters out jurisdiction-incompatible agents.",
+        },
       },
       required: ["description", "workflowType"],
     },
@@ -299,7 +303,7 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
   app.post("/tasks", async (req, reply) => {
     const body = req.body as {
       description: string; workflowType: WorkflowType; documentIds?: string[];
-      clientNumber?: string; matterNumber?: string;
+      clientNumber?: string; matterNumber?: string; jurisdiction?: string;
     };
     // Cap documentIds to 100 entries to prevent memory exhaustion from massive arrays.
     if (Array.isArray(body.documentIds) && body.documentIds.length > 100) {

@@ -37,6 +37,17 @@ export interface AgentDefinition {
   /** Tool names this agent is permitted to call — principle of least privilege */
   allowedTools: string[];
   skills: string[];
+  /**
+   * Jurisdictions this agent is optimised for, as BCP-47-like tags or common-law
+   * region codes: "US", "US-NY", "EU", "UK", "AU", "SG", "HK", "IN", "CA", etc.
+   *
+   * Undefined / empty = jurisdiction-neutral: the agent applies whatever governing
+   * law the matter specifies and is always eligible for any task.
+   *
+   * When set, DyTopo will only recruit this agent for tasks whose jurisdiction
+   * prefix-matches one of these values (e.g. agent ["US"] matches task "US-NY").
+   */
+  jurisdictions?: string[];
   metadata?: Record<string, unknown>;
 }
 
@@ -222,6 +233,13 @@ export type TaskStatus =
 export interface Task {
   id: string;
   description: string;
+  /**
+   * Governing jurisdiction of the matter — used to filter jurisdiction-specific
+   * agents. BCP-47-style codes or common-law region codes are accepted:
+   * "US", "US-NY", "US-CA", "EU", "UK", "AU", "SG", "HK", "IN", "CA", etc.
+   * Unset means no jurisdiction filter is applied.
+   */
+  jurisdiction?: string;
   /** Law-firm client number (the client this matter belongs to). Optional. */
   clientNumber?: string;
   /** Law-firm matter number (the file/matter reference). Optional. */

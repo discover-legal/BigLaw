@@ -164,9 +164,18 @@ Every compliance gap you flag must cite: instrument + provision + the specific o
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Connector tool names — added to agent allowedTools where relevant.
-// CourtListener is always available (public API); others require API keys but are safe to list.
+// CourtListener is always available (public API); others activate when their API key is set.
 const COURT_TOOLS = [
+  // US federal + PACER (public, optional key for rate limits)
   "court_listener_search", "court_listener_opinion", "court_listener_docket",
+  // Westlaw / Thomson Reuters CoCounsel (WESTLAW_API_KEY required)
+  "westlaw_research", "westlaw_check_citation",
+  // Everlaw e-discovery (EVERLAW_API_KEY required)
+  "everlaw_search_documents", "everlaw_get_review_set",
+  // Trellis state court dataset (TRELLIS_API_KEY required)
+  "trellis_search_cases", "trellis_get_docket", "trellis_judge_analytics",
+  // Descrybe case law research (DESCRYBE_API_KEY required)
+  "descrybe_search_cases", "descrybe_check_citation",
 ];
 const DMS_TOOLS = [
   "imanage_search", "imanage_get_document",

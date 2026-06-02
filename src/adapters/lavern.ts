@@ -106,11 +106,12 @@ export class LavernAdapter implements AgentHarness {
       systemPrompt: c.systemPrompt,
       allowedTools: this.mapTools(c.mcpTools),
       skills: extractSkills(c),
+      // Preserve jurisdiction tags so DyTopo can filter agents for non-matching matters.
+      jurisdictions: c.jurisdiction ? [c.jurisdiction] : undefined,
       metadata: {
         source: "lavern",
         lavernTier: c.tier,
         lavernWorkflow: c.workflow,
-        jurisdiction: c.jurisdiction,
       },
     };
   }
@@ -153,9 +154,20 @@ export class LavernAdapter implements AgentHarness {
       "mcp_memory":          "query_memory",
     };
     const PERMITTED_TOOLS = new Set([
+      // Core tools
       "web_search", "search_knowledge", "query_memory", "extract_from_document",
       "translate", "citation_check", "list_documents", "read_document",
       "fetch_documents", "find_in_document",
+      // Case law & court record connectors
+      "court_listener_search", "court_listener_opinion", "court_listener_docket",
+      "westlaw_research", "westlaw_check_citation",
+      "everlaw_search_documents", "everlaw_get_review_set",
+      "trellis_search_cases", "trellis_get_docket", "trellis_judge_analytics",
+      "descrybe_search_cases", "descrybe_check_citation",
+      // Contract & document management connectors
+      "ironclad_search_contracts", "ironclad_get_contract",
+      "imanage_search", "imanage_get_document",
+      "definely_analyze_structure", "definely_resolve_definition",
     ]);
     return mcpTools
       .map((t) => toolMap[t] ?? t)
@@ -239,7 +251,24 @@ export class LavernWorkflowAdapter {
   }
 
   fromConfigs(configs: LavernWorkflowConfig[]): TaskTemplate[] {
-    return configs.map((c) => this.convert(c));
+    return configs.map((c) => {
+      this.validate(c);
+      return this.convert(c);
+    });
+  }
+
+  private validate(c: LavernWorkflowConfig): void {
+    if (!c.id || typeof c.id !== "string") throw new Error("LavernWorkflowConfig: missing or invalid id");
+    if (!c.name || typeof c.name !== "string") throw new Error(`LavernWorkflowConfig '${c.id}': missing name`);
+    if (!c.description || typeof c.description !== "string") throw new Error(`LavernWorkflowConfig '${c.id}': missing description`);
+    const validTypes = ["adversarial","counsel","full-bench","legal-design","pre-engagement","review","roundtable","tabulate","verification"];
+    if (!validTypes.includes(c.type)) {
+      throw new Error(`LavernWorkflowConfig '${c.id}': invalid type '${c.type}' — must be one of ${validTypes.join(", ")}`);
+    }
+    if (c.promptTemplate !== undefined) {
+      if (typeof c.promptTemplate !== "string") throw new Error(`LavernWorkflowConfig '${c.id}': promptTemplate must be a string`);
+      if (c.promptTemplate.length > 10000) throw new Error(`LavernWorkflowConfig '${c.id}': promptTemplate exceeds 10000 chars`);
+    }
   }
 
   private convert(c: LavernWorkflowConfig): TaskTemplate {
@@ -369,6 +398,11 @@ export interface ExternalAgentConfig {
   allowedTools?: string[];
   skills?: string[];
   source?: string;
+  /**
+   * Jurisdictions this agent is optimised for (e.g. ["US"], ["EU", "UK"]).
+   * Undefined / empty = jurisdiction-neutral.
+   */
+  jurisdictions?: string[];
 }
 
 export function fromExternalConfig(c: ExternalAgentConfig): AgentDefinition {
@@ -385,6 +419,7 @@ export function fromExternalConfig(c: ExternalAgentConfig): AgentDefinition {
     systemPrompt: c.systemPrompt,
     allowedTools: c.allowedTools ?? [],
     skills: c.skills ?? [],
+    jurisdictions: c.jurisdictions?.length ? c.jurisdictions : undefined,
     metadata: { source: c.source ?? "external" },
   };
 }

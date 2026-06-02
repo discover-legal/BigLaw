@@ -209,6 +209,26 @@ export const Config = {
       endpoint: optional("DEFINELY_MCP_URL", "https://mcp.uk.definely.com/api/proxy/core-mcp"),
       enabled: Boolean(process.env.DEFINELY_API_KEY),
     },
+    westlaw: {
+      apiKey: process.env.WESTLAW_API_KEY ?? "",
+      endpoint: optional("WESTLAW_MCP_URL", "https://legal-mcp.thomsonreuters.com/mcp"),
+      enabled: Boolean(process.env.WESTLAW_API_KEY),
+    },
+    everlaw: {
+      apiKey: process.env.EVERLAW_API_KEY ?? "",
+      endpoint: optional("EVERLAW_MCP_URL", "https://api.everlaw.com/v1/mcp"),
+      enabled: Boolean(process.env.EVERLAW_API_KEY),
+    },
+    trellis: {
+      apiKey: process.env.TRELLIS_API_KEY ?? "",
+      endpoint: optional("TRELLIS_MCP_URL", "https://mcp.trellis.law/anthropic"),
+      enabled: Boolean(process.env.TRELLIS_API_KEY),
+    },
+    descrybe: {
+      apiKey: process.env.DESCRYBE_API_KEY ?? "",
+      endpoint: optional("DESCRYBE_MCP_URL", "https://mcp.descrybe.com/mcp"),
+      enabled: Boolean(process.env.DESCRYBE_API_KEY),
+    },
   },
 
   // Infisical — open-source secrets manager (https://infisical.com)

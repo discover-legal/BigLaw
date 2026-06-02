@@ -389,6 +389,13 @@ export class ToolRegistry {
     }
   }
 
+  /** Register additional tools (e.g. from external plugins). Duplicate names are ignored. */
+  register(tool: ToolImpl): void {
+    if (!this.tools.has(tool.name)) {
+      this.tools.set(tool.name, tool);
+    }
+  }
+
   has(name: string): boolean {
     return this.tools.has(name);
   }

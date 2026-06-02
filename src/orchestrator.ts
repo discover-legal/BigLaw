@@ -156,6 +156,7 @@ export class Orchestrator {
     documentIds?: string[];
     clientNumber?: string;
     matterNumber?: string;
+    jurisdiction?: string;
     createdByProfileId?: string;
   }): Promise<Task> {
     if (params.description.length > Orchestrator.MAX_DESCRIPTION_CHARS) {
@@ -175,6 +176,7 @@ export class Orchestrator {
     const task: Task = {
       id: uuidv4(),
       description: params.description,
+      jurisdiction: params.jurisdiction?.trim().toUpperCase().slice(0, 20) || undefined,
       clientNumber: params.clientNumber?.trim().slice(0, 100) || undefined,
       matterNumber: params.matterNumber?.trim().slice(0, 100) || undefined,
       documentIds: params.documentIds ?? [],

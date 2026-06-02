@@ -8,12 +8,16 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { resolve } from "node:path";
 
-import { estimateComplexity } from "../src/routing/model.js";
-import { LavernAdapter, fromMikeOSSWorkflow, fromExternalConfig, instantiateTemplate, sanitizePromptContent } from "../src/adapters/lavern.js";
+import { estimateComplexity, shouldUseThinking } from "../src/routing/model.js";
+import { LavernAdapter, LavernWorkflowAdapter, fromMikeOSSWorkflow, fromExternalConfig, instantiateTemplate, sanitizePromptContent } from "../src/adapters/lavern.js";
+import { jurisdictionMatch } from "../src/dytopo/jurisdiction.js";
 import { assertSafeReadPath } from "../src/tools/pdf.js";
 import { assertPublicHttpUrl } from "../src/settings/index.js";
 import { canViewTask, filterVisible, isPartner } from "../src/auth/index.js";
-import type { SessionUser } from "../src/types.js";
+import type { SessionUser, AgentDefinition } from "../src/types.js";
+
+// validatePlugin is not exported — test via the public PluginRegistry interface instead
+import { PluginRegistry } from "../src/adapters/plugin.js";
 
 // ─── Model routing: complexity heuristic ────────────────────────────────────
 
@@ -255,4 +259,221 @@ test("fromExternalConfig: rejects out-of-range tier", () => {
     () => fromExternalConfig({ id: "bad", name: "B", tier: 4 as never, domain: "research", description: "d", systemPrompt: "s" }),
     /Invalid tier/,
   );
+});
+
+test("fromExternalConfig: propagates jurisdictions when set", () => {
+  const a = fromExternalConfig({ id: "us-specialist", name: "A", tier: 2, domain: "research", description: "d", systemPrompt: "s", jurisdictions: ["US"] });
+  assert.deepEqual(a.jurisdictions, ["US"]);
+});
+
+test("fromExternalConfig: omits jurisdictions when not set", () => {
+  const a = fromExternalConfig({ id: "neutral", name: "A", tier: 2, domain: "research", description: "d", systemPrompt: "s" });
+  assert.equal(a.jurisdictions, undefined);
+});
+
+// ─── Lavern: jurisdiction preserved through adapter ──────────────────────────
+
+test("Lavern: jurisdiction → jurisdictions array in AgentDefinition", () => {
+  const [a] = adapter.fromConfigs([{ name: "EU Counsel", role: "advise on EU law", systemPrompt: "x", mcpTools: [], jurisdiction: "EU" }]);
+  assert.deepEqual(a.jurisdictions, ["EU"]);
+});
+
+test("Lavern: no jurisdiction → jurisdictions undefined in AgentDefinition", () => {
+  const [a] = adapter.fromConfigs([{ name: "Global Counsel", role: "advise globally", systemPrompt: "x", mcpTools: [] }]);
+  assert.equal(a.jurisdictions, undefined);
+});
+
+// ─── LavernWorkflowAdapter: type mapping + validation ────────────────────────
+
+const wfAdapter = new LavernWorkflowAdapter();
+
+test("LavernWorkflowAdapter: legal-design maps to legal_design workflowType", () => {
+  const [t] = wfAdapter.fromConfigs([{ id: "dpia", name: "DPIA", description: "d", type: "legal-design" }]);
+  assert.equal(t.workflowType, "legal_design");
+  assert.equal(t.source, "lavern");
+  assert.equal(t.id, "lavern:dpia");
+});
+
+test("LavernWorkflowAdapter: pre-engagement maps to pre_engagement workflowType", () => {
+  const [t] = wfAdapter.fromConfigs([{ id: "conflicts", name: "Conflicts", description: "d", type: "pre-engagement" }]);
+  assert.equal(t.workflowType, "pre_engagement");
+});
+
+test("LavernWorkflowAdapter: full-bench maps to full_bench workflowType", () => {
+  const [t] = wfAdapter.fromConfigs([{ id: "full", name: "Full", description: "d", type: "full-bench" }]);
+  assert.equal(t.workflowType, "full_bench");
+});
+
+test("LavernWorkflowAdapter: verification maps to adversarial (closest match)", () => {
+  const [t] = wfAdapter.fromConfigs([{ id: "verify", name: "Verify", description: "d", type: "verification" }]);
+  assert.equal(t.workflowType, "adversarial");
+});
+
+test("LavernWorkflowAdapter: validation rejects missing id", () => {
+  assert.throws(
+    () => wfAdapter.fromConfigs([{ id: "", name: "N", description: "d", type: "roundtable" }]),
+    /missing or invalid id/,
+  );
+});
+
+test("LavernWorkflowAdapter: validation rejects invalid type", () => {
+  assert.throws(
+    () => wfAdapter.fromConfigs([{ id: "bad", name: "N", description: "d", type: "invalid-type" as never }]),
+    /invalid type/,
+  );
+});
+
+test("LavernWorkflowAdapter: validation rejects promptTemplate over 10000 chars", () => {
+  assert.throws(
+    () => wfAdapter.fromConfigs([{ id: "big", name: "N", description: "d", type: "roundtable", promptTemplate: "x".repeat(10001) }]),
+    /promptTemplate exceeds 10000 chars/,
+  );
+});
+
+// ─── jurisdictionMatch: DyTopo agent filtering ───────────────────────────────
+
+function makeAgent(jurisdictions?: string[]): AgentDefinition {
+  return { id: "a", name: "A", tier: 2, type: "specialist", domain: "research", description: "d", systemPrompt: "s", allowedTools: [], skills: [], jurisdictions };
+}
+
+test("jurisdictionMatch: neutral agent (no jurisdictions) always matches any task", () => {
+  assert.equal(jurisdictionMatch(makeAgent(), "UK"), true);
+  assert.equal(jurisdictionMatch(makeAgent(), "US-NY"), true);
+  assert.equal(jurisdictionMatch(makeAgent(), undefined), true);
+});
+
+test("jurisdictionMatch: task without jurisdiction → all agents eligible", () => {
+  assert.equal(jurisdictionMatch(makeAgent(["US"]), undefined), true);
+  assert.equal(jurisdictionMatch(makeAgent(["EU"]), undefined), true);
+});
+
+test("jurisdictionMatch: exact match (US agent, US task)", () => {
+  assert.equal(jurisdictionMatch(makeAgent(["US"]), "US"), true);
+});
+
+test("jurisdictionMatch: prefix match (US agent, US-NY task)", () => {
+  assert.equal(jurisdictionMatch(makeAgent(["US"]), "US-NY"), true);
+  assert.equal(jurisdictionMatch(makeAgent(["US"]), "US-CA"), true);
+});
+
+test("jurisdictionMatch: no match (US agent, EU task)", () => {
+  assert.equal(jurisdictionMatch(makeAgent(["US"]), "EU"), false);
+  assert.equal(jurisdictionMatch(makeAgent(["US"]), "UK"), false);
+});
+
+test("jurisdictionMatch: multi-jurisdiction agent matches either (EU+UK agent, UK task)", () => {
+  assert.equal(jurisdictionMatch(makeAgent(["EU", "UK"]), "UK"), true);
+  assert.equal(jurisdictionMatch(makeAgent(["EU", "UK"]), "EU"), true);
+  assert.equal(jurisdictionMatch(makeAgent(["EU", "UK"]), "AU"), false);
+});
+
+test("jurisdictionMatch: case-insensitive comparison (lowercase tag, uppercase task)", () => {
+  assert.equal(jurisdictionMatch(makeAgent(["us"]), "US-NY"), true);
+  assert.equal(jurisdictionMatch(makeAgent(["eu"]), "EU"), true);
+});
+
+test("jurisdictionMatch: no false prefix match ('US' should not match 'USE' or 'USEU')", () => {
+  // "US" prefix-matches "US-..." but must not match "USE"
+  assert.equal(jurisdictionMatch(makeAgent(["US"]), "USE"), false);
+  assert.equal(jurisdictionMatch(makeAgent(["US"]), "USEU"), false);
+});
+
+// ─── shouldUseThinking: extended thinking gate ───────────────────────────────
+
+const OPUS_ID   = "claude-opus-4-8";
+const SONNET_ID = "claude-sonnet-4-6";
+const HAIKU_ID  = "claude-haiku-4-5-20251001";
+const OLLAMA_ID = "ollama:llama3.2";
+const LOCAL_ID  = "local:local-model";
+
+test("shouldUseThinking: synthesis on Opus → true", () => {
+  assert.equal(shouldUseThinking({ modelId: OPUS_ID, taskType: "synthesis" }), true);
+});
+
+test("shouldUseThinking: debate on Sonnet → true", () => {
+  assert.equal(shouldUseThinking({ modelId: SONNET_ID, taskType: "debate" }), true);
+});
+
+test("shouldUseThinking: tier 0 on Opus → true", () => {
+  assert.equal(shouldUseThinking({ modelId: OPUS_ID, taskType: "reasoning", tier: 0 }), true);
+});
+
+test("shouldUseThinking: high-complexity reasoning on Sonnet → true", () => {
+  assert.equal(shouldUseThinking({ modelId: SONNET_ID, taskType: "reasoning", complexity: "high" }), true);
+});
+
+test("shouldUseThinking: Haiku model → always false regardless of task", () => {
+  assert.equal(shouldUseThinking({ modelId: HAIKU_ID, taskType: "synthesis" }), false);
+  assert.equal(shouldUseThinking({ modelId: HAIKU_ID, taskType: "debate", tier: 0 }), false);
+});
+
+test("shouldUseThinking: Ollama model → always false", () => {
+  assert.equal(shouldUseThinking({ modelId: OLLAMA_ID, taskType: "synthesis" }), false);
+});
+
+test("shouldUseThinking: Local model → always false", () => {
+  assert.equal(shouldUseThinking({ modelId: LOCAL_ID, taskType: "debate" }), false);
+});
+
+test("shouldUseThinking: extraction task on Sonnet → false (not a thinking use case)", () => {
+  assert.equal(shouldUseThinking({ modelId: SONNET_ID, taskType: "extraction" }), false);
+});
+
+// ─── PluginRegistry: JSON plugin validation ──────────────────────────────────
+
+const validPlugin = {
+  id: "test-plugin",
+  name: "Test Plugin",
+  version: "1.0.0",
+  description: "A test plugin for unit tests",
+  auth: { type: "api-key", apiKeyEnvVar: "TEST_API_KEY", endpointEnvVar: "TEST_MCP_URL" },
+  tools: [
+    {
+      name: "test_search",
+      description: "Search for things",
+      inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+    },
+  ],
+  agents: [
+    { id: "test-agent", name: "Test Agent", tier: 2, domain: "research", description: "d", systemPrompt: "x" },
+  ],
+  workflows: [
+    { id: "test-wf", name: "Test Workflow", description: "d", workflowType: "roundtable", promptTemplate: "Do {{description}}" },
+  ],
+};
+
+test("PluginRegistry: valid plugin loads without error", async () => {
+  const reg = new PluginRegistry();
+  // Can't call loadDirectory (file I/O), but can verify register() with an adapter
+  // that was already validated. Use a TypeScript adapter stub instead.
+  reg.register({
+    id: "stub-adapter",
+    name: "Stub",
+    version: "1.0.0",
+    description: "test",
+    tools: () => [],
+    agents: () => [],
+    workflows: () => [],
+  });
+  assert.equal(reg.size, 1);
+  assert.equal(reg.allTools().length, 0);
+  assert.equal(reg.allAgents().length, 0);
+  assert.equal(reg.allWorkflows().length, 0);
+});
+
+test("PluginRegistry: duplicate id is silently skipped", () => {
+  const reg = new PluginRegistry();
+  const stub = { id: "dup", name: "Dup", version: "1", description: "d", tools: () => [], agents: () => [], workflows: () => [] };
+  reg.register(stub);
+  reg.register(stub);  // second registration skipped
+  assert.equal(reg.size, 1);
+});
+
+test("PluginRegistry: list() returns summary per plugin", () => {
+  const reg = new PluginRegistry();
+  reg.register({ id: "a1", name: "A1", version: "1", description: "d", tools: () => [], agents: () => [], workflows: () => [] });
+  const list = reg.list();
+  assert.equal(list.length, 1);
+  assert.equal(list[0].id, "a1");
+  assert.equal(typeof list[0].tools, "number");
 });

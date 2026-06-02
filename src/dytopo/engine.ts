@@ -42,6 +42,9 @@ import type {
   RoundState,
   Task,
 } from "../types.js";
+import { jurisdictionMatch } from "./jurisdiction.js";
+
+export { jurisdictionMatch } from "./jurisdiction.js";
 
 export interface DyTopoOptions {
   registry: AgentRegistry;
@@ -87,10 +90,12 @@ export class DyTopoEngine {
     for (const a of [...this.pinnedAgents, ...recruitedAgents]) {
       agentMap.set(a.id, a);
     }
-    const activeDefinitions = Array.from(agentMap.values()).slice(
-      0,
-      Config.dytopo.maxAgentsPerRound,
-    );
+
+    // Filter out jurisdiction-specific agents whose jurisdiction doesn't match the task.
+    // Agents with undefined/empty jurisdictions are always included (jurisdiction-neutral).
+    const activeDefinitions = Array.from(agentMap.values())
+      .filter((a) => jurisdictionMatch(a, task.jurisdiction))
+      .slice(0, Config.dytopo.maxAgentsPerRound);
     const activeAgents = activeDefinitions.map((d) => new Agent(d));
 
     logger.info("Agents recruited for round", {
