@@ -228,6 +228,48 @@ export const Config = {
       endpoint: optional("DESCRYBE_MCP_URL", "https://mcp.descrybe.com/mcp"),
       enabled: Boolean(process.env.DESCRYBE_API_KEY),
     },
+    // DocuSign CLM — contract lifecycle management + envelope tracking
+    docusign: {
+      apiKey: process.env.DOCUSIGN_API_KEY ?? "",
+      endpoint: optional("DOCUSIGN_MCP_URL", "https://mcp.docusign.com/mcp"),
+      enabled: Boolean(process.env.DOCUSIGN_API_KEY),
+    },
+    // Solve Intelligence — AI patent drafting and prosecution
+    solveIntelligence: {
+      apiKey: process.env.SOLVE_INTELLIGENCE_API_KEY ?? "",
+      endpoint: optional("SOLVE_INTELLIGENCE_MCP_URL", "https://mcp.solveintelligence.com/mcp"),
+      enabled: Boolean(process.env.SOLVE_INTELLIGENCE_API_KEY),
+    },
+    // Slack — channel search and messaging
+    slack: {
+      apiKey: process.env.SLACK_API_KEY ?? "",
+      endpoint: optional("SLACK_MCP_URL", "https://mcp.slack.com/mcp"),
+      enabled: Boolean(process.env.SLACK_API_KEY),
+    },
+    // Google Drive — VDR and matter document access
+    googleDrive: {
+      apiKey: process.env.GOOGLE_DRIVE_API_KEY ?? "",
+      endpoint: optional("GOOGLE_DRIVE_MCP_URL", "https://mcp.googleapis.com/drive/mcp"),
+      enabled: Boolean(process.env.GOOGLE_DRIVE_API_KEY),
+    },
+    // Box — VDR and matter room document access
+    box: {
+      apiKey: process.env.BOX_API_KEY ?? "",
+      endpoint: optional("BOX_MCP_URL", "https://api.box.com/mcp"),
+      enabled: Boolean(process.env.BOX_API_KEY),
+    },
+    // Lawve AI — contract review and clause library
+    lawve: {
+      apiKey: process.env.LAWVE_API_KEY ?? "",
+      endpoint: optional("LAWVE_MCP_URL", "https://api.lawve.ai/mcp"),
+      enabled: Boolean(process.env.LAWVE_API_KEY),
+    },
+    // TopCounsel — outside counsel panel routing and matter management
+    topCounsel: {
+      apiKey: process.env.TOPCOUNSEL_API_KEY ?? "",
+      endpoint: optional("TOPCOUNSEL_MCP_URL", "https://api.topcounsel.io/mcp"),
+      enabled: Boolean(process.env.TOPCOUNSEL_API_KEY),
+    },
   },
 
   // Infisical — open-source secrets manager (https://infisical.com)

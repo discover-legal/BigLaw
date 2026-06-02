@@ -1,0 +1,12 @@
+{
+  "id": "diligence-grid",
+  "name": "M&A Diligence Grid",
+  "description": "Tabular due diligence review over a virtual data room — produces a structured issues matrix with per-document rows and per-issue columns across corporate, contracts, IP, employment, regulatory, and financial categories.",
+  "workflowType": "roundtable",
+  "promptTemplate": "Conduct a tabular due diligence review for {{target}} in connection with {{transaction}}. Review all documents in the data room and produce a structured issues matrix covering: corporate structure, material contracts, intellectual property, employment, regulatory compliance, and financial matters. Flag all CRITICAL and MATERIAL issues with recommended actions. Jurisdiction: {{jurisdiction}}.",
+  "substitutions": {
+    "target": "Target Company Ltd",
+    "transaction": "the proposed acquisition",
+    "jurisdiction": "US"
+  }
+}

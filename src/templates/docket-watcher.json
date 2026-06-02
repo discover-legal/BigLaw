@@ -1,0 +1,12 @@
+{
+  "id": "docket-watcher",
+  "name": "Docket Watch & Litigation Monitor",
+  "description": "Monitors court dockets for a matter or portfolio of matters — pulls recent filings, flags upcoming deadlines, and summarises procedural developments. Uses CourtListener and Trellis.",
+  "workflowType": "roundtable",
+  "promptTemplate": "Monitor the litigation docket for {{party}} in {{court}}. Pull all filings from the last {{lookback_days}} days, identify any upcoming hearing dates, filing deadlines, or responsive pleading deadlines in the next 30 days, and summarise the current procedural posture. Flag anything requiring immediate action.",
+  "substitutions": {
+    "party": "Acme Corp",
+    "court": "US District Court for the Southern District of New York",
+    "lookback_days": "30"
+  }
+}

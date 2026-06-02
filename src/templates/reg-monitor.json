@@ -1,0 +1,13 @@
+{
+  "id": "reg-monitor",
+  "name": "Regulatory Monitor",
+  "description": "Scans regulatory feeds for new rules, proposed rules, guidance, and enforcement actions in a specified practice area and jurisdiction — applies a materiality filter and summarises what requires action.",
+  "workflowType": "roundtable",
+  "promptTemplate": "Monitor regulatory developments in {{practice_area}} for {{jurisdiction}} over the last {{lookback_days}} days. Identify: (1) new final rules or legislation in force, (2) proposed rules open for comment with deadlines, (3) significant enforcement actions or guidance. For each item, assess materiality to {{business_description}} and recommend whether to ACTION, MONITOR, or IGNORE.",
+  "substitutions": {
+    "practice_area": "data privacy and AI governance",
+    "jurisdiction": "EU",
+    "lookback_days": "30",
+    "business_description": "a B2B SaaS company processing EU personal data"
+  }
+}

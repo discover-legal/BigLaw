@@ -1,0 +1,11 @@
+{
+  "id": "renewal-watcher",
+  "name": "Contract Renewal & Deadline Watch",
+  "description": "Scans the contract register for cancel-by and renewal deadlines in the next 90 days — assesses each contract and recommends renew, renegotiate, or terminate before the window closes.",
+  "workflowType": "roundtable",
+  "promptTemplate": "Scan the contract register for {{company}} and identify all contracts with cancel-by dates, renewal deadlines, or auto-renewal triggers in the next {{horizon_days}} days. For each contract: identify the renewal mechanism and notice required, the financial value, the current performance, and recommend RENEW, RENEGOTIATE (with specific terms to address), or TERMINATE. Flag any contracts where the cancel-by date is within 14 days as URGENT.",
+  "substitutions": {
+    "company": "the company",
+    "horizon_days": "90"
+  }
+}

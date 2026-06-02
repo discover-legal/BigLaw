@@ -92,8 +92,10 @@ T2  Writing agents (13)       — produce a specific document type
 T3  Tool agents (6)           — web_search, doc retrieval, extraction,
                                 translation, citation check, e-signing
     +
-    18 connector tools        — CourtListener, Westlaw, Everlaw, Trellis,
-                                Descrybe, Ironclad, iManage, Definely
+    32 connector tools        — CourtListener, Westlaw, Everlaw, Trellis,
+                                Descrybe, Ironclad, iManage, Definely,
+                                DocuSign CLM, Solve Intelligence, Slack,
+                                Google Drive, Box, Lawve AI, TopCounsel
 ```
 
 Each DyTopo round:
@@ -116,7 +118,7 @@ Each DyTopo round:
 | `src/orchestrator.ts` | Task lifecycle, phase sequencing, synthesis |
 | `src/dytopo/engine.ts` | Need/Offer matching, comm graph, round execution |
 | `src/dytopo/jurisdiction.ts` | `jurisdictionMatch()` — agent/task jurisdiction filter |
-| `src/agents/definitions.ts` | All 58 agent definitions |
+| `src/agents/definitions.ts` | All 128 agent definitions (58 native + 70 Claude for Legal) |
 | `src/agents/registry.ts` | RuVector HNSW agent registry — semantic search, upsert, persist to `./data/agents.rvdb` |
 | `src/agents/base.ts` | Agent class — agentic loop, tool dispatch, prompt caching |
 | `src/protocols/index.ts` | CitationGate, DebateProtocol, VerificationPipeline |
@@ -124,7 +126,7 @@ Each DyTopo round:
 | `src/providers/anthropic.ts` | Anthropic provider: prompt caching, extended thinking, base URL |
 | `src/providers/` | Anthropic + Ollama/LM-Studio provider abstraction |
 | `src/tools/index.ts` | All tool implementations + ToolRegistry (extensible via register()) |
-| `src/tools/connectors.ts` | 18 legal connector tools across 8 providers |
+| `src/tools/connectors.ts` | 32 legal connector tools across 15 providers |
 | `src/tools/pdf.ts` | PyMuPDF/Camelot/Tesseract tools (via python subprocess) |
 | `src/tools/docuseal.ts` | DocuSeal e-signature tools |
 | `src/adapters/plugin.ts` | Generic `LegalToolPlugin` / `LegalToolAdapter` + PluginRegistry |
@@ -161,8 +163,9 @@ Each DyTopo round:
 
 ## Connectors
 
-Big Michael ships 18 connector tools across 8 legal data providers:
+Big Michael ships 32 connector tools across 15 providers:
 
+### Legal Research & Courts
 | Provider | Tools | Activation |
 |---|---|---|
 | CourtListener | `court_listener_search`, `_opinion`, `_docket` | Always on (optional `COURT_LISTENER_API_KEY` for higher rate limits) |
@@ -170,9 +173,28 @@ Big Michael ships 18 connector tools across 8 legal data providers:
 | Everlaw | `everlaw_search_documents`, `_get_review_set` | `EVERLAW_API_KEY` |
 | Trellis | `trellis_search_cases`, `_get_docket`, `_judge_analytics` | `TRELLIS_API_KEY` |
 | Descrybe | `descrybe_search_cases`, `_check_citation` | `DESCRYBE_API_KEY` |
+| Solve Intelligence | `solve_intelligence_search_patents`, `_draft_claims` | `SOLVE_INTELLIGENCE_API_KEY` |
+
+### Contract & Document Management
+| Provider | Tools | Activation |
+|---|---|---|
 | Ironclad | `ironclad_search_contracts`, `_get_contract` | `IRONCLAD_API_KEY` |
+| DocuSign CLM | `docusign_search_contracts`, `_get_envelope` | `DOCUSIGN_API_KEY` |
 | iManage | `imanage_search`, `_get_document` | `IMANAGE_API_KEY` |
 | Definely | `definely_analyze_structure`, `_resolve_definition` | `DEFINELY_API_KEY` |
+| Lawve AI | `lawve_review_contract`, `_search_clauses` | `LAWVE_API_KEY` |
+
+### VDR & Productivity
+| Provider | Tools | Activation |
+|---|---|---|
+| Google Drive | `google_drive_search`, `_get_file` | `GOOGLE_DRIVE_API_KEY` |
+| Box | `box_search`, `_get_file` | `BOX_API_KEY` |
+| Slack | `slack_search`, `_send_message` | `SLACK_API_KEY` |
+
+### Outside Counsel
+| Provider | Tools | Activation |
+|---|---|---|
+| TopCounsel | `topcounsel_route_matter`, `_get_panel` | `TOPCOUNSEL_API_KEY` |
 
 All connectors use Streamable HTTP MCP (JSON-RPC 2.0). Unconfigured connectors
 return a structured `{ error: "not configured" }` object — they never throw, so
