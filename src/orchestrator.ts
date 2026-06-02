@@ -239,6 +239,11 @@ export class Orchestrator {
       logger.error("Task execution failed", { taskId: task.id, error: err.message });
       task.status = "failed";
       task.error = err.message;
+      // Close the time entry even on failure.
+      if (task.activeTimeEntryId) {
+        this.time.close(task.activeTimeEntryId);
+        task.activeTimeEntryId = undefined;
+      }
       this.emit(task.id, "failed", { error: err.message });
       auditLogger.write({ event: "task.failed", taskId: task.id, data: { error: err.message } });
     });
@@ -302,7 +307,7 @@ export class Orchestrator {
    * Human approves or rejects a gate request.
    * Approved findings proceed to output; rejected are discarded.
    */
-  approveGate(taskId: string, gateId: string, note?: string): void {
+  approveGate(taskId: string, gateId: string, note?: string, reviewerProfileId?: string): void {
     const task = this.tasks.get(taskId);
     if (!task) throw new Error(`Task not found: ${taskId}`);
     const gate = task.pendingGates.find((g) => g.id === gateId);
@@ -312,11 +317,30 @@ export class Orchestrator {
     gate.reviewedAt = new Date();
     task.updatedAt = new Date();
     auditLogger.write({ event: "gate.approved", taskId, data: { gateId, note } });
+
+    // Record a gate_review time entry for the reviewing lawyer.
+    if (reviewerProfileId) {
+      const profile = this.profiles.get(reviewerProfileId);
+      if (profile) {
+        const entry = this.time.open({
+          profileId: profile.id,
+          profileName: profile.name,
+          taskId,
+          matterNumber: task.matterNumber,
+          clientNumber: task.clientNumber,
+          description: `Gate review: ${gate.finding.content.slice(0, 100)}`,
+          event: "gate_review",
+          startedAt: new Date(),
+        });
+        this.time.close(entry.id);
+      }
+    }
+
     this.gateEmitter.emit(`gates:${taskId}`);
     this.persistTasks().catch((err) => logger.warn("Failed to persist tasks", { error: err.message }));
   }
 
-  rejectGate(taskId: string, gateId: string, reason: string): void {
+  rejectGate(taskId: string, gateId: string, reason: string, reviewerProfileId?: string): void {
     const task = this.tasks.get(taskId);
     if (!task) throw new Error(`Task not found: ${taskId}`);
     const gate = task.pendingGates.find((g) => g.id === gateId);
@@ -327,6 +351,25 @@ export class Orchestrator {
     task.findings = task.findings.filter((f) => f.id !== gate.findingId);
     task.updatedAt = new Date();
     auditLogger.write({ event: "gate.rejected", taskId, data: { gateId, reason } });
+
+    // Record a gate_review time entry for the reviewing lawyer.
+    if (reviewerProfileId) {
+      const profile = this.profiles.get(reviewerProfileId);
+      if (profile) {
+        const entry = this.time.open({
+          profileId: profile.id,
+          profileName: profile.name,
+          taskId,
+          matterNumber: task.matterNumber,
+          clientNumber: task.clientNumber,
+          description: `Gate review: ${gate.finding.content.slice(0, 100)}`,
+          event: "gate_review",
+          startedAt: new Date(),
+        });
+        this.time.close(entry.id);
+      }
+    }
+
     this.gateEmitter.emit(`gates:${taskId}`);
     this.persistTasks().catch((err) => logger.warn("Failed to persist tasks", { error: err.message }));
   }
@@ -495,6 +538,13 @@ export class Orchestrator {
     task.status = "complete";
     task.completedAt = new Date();
     task.updatedAt = new Date();
+
+    // Close the time entry now that the task has finished.
+    if (task.activeTimeEntryId) {
+      this.time.close(task.activeTimeEntryId);
+      task.activeTimeEntryId = undefined;
+    }
+
     this.emit(task.id, "complete", { findings: task.findings.length, output: task.output?.slice(0, 200) });
     auditLogger.write({ event: "task.complete", taskId: task.id, data: { findings: task.findings.length } });
     this.persistTasks().catch((err) => logger.warn("Failed to persist tasks", { error: err.message }));

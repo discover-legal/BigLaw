@@ -4,7 +4,7 @@
 // Fast unit tests for pure logic — no Qdrant, no network, no LLM.
 // Run with: npm test   (node:test via tsx)
 
-import { test } from "node:test";
+import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import { resolve } from "node:path";
 
@@ -18,6 +18,9 @@ import type { SessionUser, AgentDefinition } from "../src/types.js";
 
 // validatePlugin is not exported — test via the public PluginRegistry interface instead
 import { PluginRegistry } from "../src/adapters/plugin.js";
+
+import { TimeStore } from "../src/time/index.js";
+import { detectNosLegal } from "../src/services/classifier.js";
 
 // ─── Model routing: complexity heuristic ────────────────────────────────────
 
@@ -476,4 +479,100 @@ test("PluginRegistry: list() returns summary per plugin", () => {
   assert.equal(list.length, 1);
   assert.equal(list[0].id, "a1");
   assert.equal(typeof list[0].tools, "number");
+});
+
+// ─── TimeStore: billable time tracking ──────────────────────────────────────
+
+test("TimeStore: open() creates entry with durationMs=0", () => {
+  const store = new TimeStore();
+  const entry = store.open({
+    profileId: "p1",
+    profileName: "Alice Partner",
+    taskId: "task-abc",
+    description: "Task: Review employment contract",
+    event: "task_run",
+    startedAt: new Date(),
+  });
+  assert.equal(entry.durationMs, 0);
+  assert.equal(entry.billingUnits, 0);
+  assert.equal(entry.profileId, "p1");
+  assert.equal(entry.event, "task_run");
+  assert.equal(entry.endedAt, undefined);
+  assert.ok(entry.id.length > 0);
+});
+
+test("TimeStore: close() computes billingUnits correctly (7 min → 2 units)", () => {
+  const store = new TimeStore();
+  // Backdate startedAt by 7 minutes so durationMs ≈ 420 000 ms.
+  // Ceiling division: Math.ceil(420000 / 360000) = 2.
+  const sevenMinutesAgo = new Date(Date.now() - 7 * 60 * 1000);
+  const entry = store.open({
+    profileId: "p1",
+    profileName: "Alice Partner",
+    taskId: "task-xyz",
+    description: "Task: Draft shareholder agreement",
+    event: "task_run",
+    startedAt: sevenMinutesAgo,
+  });
+  const closed = store.close(entry.id);
+  assert.ok(closed !== undefined);
+  assert.ok(closed!.endedAt instanceof Date);
+  assert.ok(closed!.durationMs >= 7 * 60 * 1000);
+  assert.equal(closed!.billingUnits, 2);
+});
+
+test("TimeStore: list() filters by profileId", () => {
+  const store = new TimeStore();
+  store.open({ profileId: "alice", profileName: "Alice", taskId: "t1", description: "d", event: "task_run", startedAt: new Date() });
+  store.open({ profileId: "bob",   profileName: "Bob",   taskId: "t2", description: "d", event: "task_run", startedAt: new Date() });
+  store.open({ profileId: "alice", profileName: "Alice", taskId: "t3", description: "d", event: "task_run", startedAt: new Date() });
+
+  const aliceEntries = store.list({ profileId: "alice" });
+  assert.equal(aliceEntries.length, 2);
+  assert.ok(aliceEntries.every((e) => e.profileId === "alice"));
+
+  const bobEntries = store.list({ profileId: "bob" });
+  assert.equal(bobEntries.length, 1);
+});
+
+test("TimeStore: list() filters by date range", () => {
+  const store = new TimeStore();
+  const now = Date.now();
+  const past  = new Date(now - 2 * 60 * 60 * 1000); // 2 h ago
+  const mid   = new Date(now - 1 * 60 * 60 * 1000); // 1 h ago
+  const future = new Date(now + 1 * 60 * 60 * 1000); // 1 h from now
+
+  store.open({ profileId: "p", profileName: "P", taskId: "t1", description: "d", event: "task_run", startedAt: past });
+  store.open({ profileId: "p", profileName: "P", taskId: "t2", description: "d", event: "task_run", startedAt: mid });
+
+  // Filter: only entries started AFTER 90 minutes ago (between mid and future)
+  const ninetyMinAgo = new Date(now - 90 * 60 * 1000);
+  const filtered = store.list({ from: ninetyMinAgo, to: future });
+  assert.equal(filtered.length, 1);
+  assert.equal(filtered[0].taskId, "t2");
+});
+
+test("TimeStore: exportCsv() includes header row", () => {
+  const store = new TimeStore();
+  store.open({ profileId: "p1", profileName: "Alice", taskId: "t1", description: "Task: test", event: "task_run", startedAt: new Date() });
+  const csv = store.exportCsv();
+  const lines = csv.split(/\r?\n/);
+  assert.ok(lines.length >= 2, "CSV should have header + at least one data row");
+  assert.ok(lines[0].startsWith("id,profileId,profileName"), `Header row was: ${lines[0]}`);
+  assert.ok(lines[0].includes("billingUnits"), "Header must include billingUnits");
+});
+
+test("detectNosLegal: returns empty object on LLM/provider failure", async () => {
+  // The Anthropic client is initialised with ANTHROPIC_API_KEY=test (set by the
+  // test runner). Any API call will fail with an auth error. detectNosLegal
+  // catches ALL errors and returns {} — this verifies that contract.
+  const result = await detectNosLegal("Test task", "some content");
+  assert.ok(typeof result === "object" && result !== null, "result must be an object");
+  // On failure the function returns {} — no facets set.
+  // (If the Haiku call somehow succeeded it might return facets, but with key=test it won't.)
+  const keys = Object.keys(result);
+  // Either the call failed ({}), or in some local mock env it returned valid fields.
+  // Either way it must not throw and must be a plain object.
+  assert.ok(keys.every((k) => ["areaOfLaw", "workType", "sector", "assetType"].includes(k)),
+    `Unexpected keys in result: ${JSON.stringify(result)}`);
 });

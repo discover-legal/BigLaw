@@ -214,6 +214,20 @@ const TOOLS = [
       },
     },
   },
+  {
+    name: "get_time_entries",
+    description: "Retrieve time entries for billing. Lawyers see their own; partners see all. Supports filtering by profileId, taskId, matterNumber.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        profileId: { type: "string" },
+        taskId: { type: "string" },
+        matterNumber: { type: "string" },
+        from: { type: "string", description: "ISO date string" },
+        to: { type: "string", description: "ISO date string" },
+      },
+    },
+  },
 ] as const;
 
 // ─── MCP server ───────────────────────────────────────────────────────────────
@@ -387,7 +401,7 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
     if (!task || !canViewTask(getUser(req), task)) return reply.status(404).send({ error: "Task not found" });
     if (!isPartner(getUser(req))) return reply.status(403).send({ error: "Partner role required" });
     const { note } = (req.body ?? {}) as { note?: string };
-    orchestrator.approveGate(taskId, gateId, note);
+    orchestrator.approveGate(taskId, gateId, note, getUser(req)?.profileId);
     return reply.status(200).send({ ok: true });
   });
 
@@ -397,7 +411,7 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
     if (!task || !canViewTask(getUser(req), task)) return reply.status(404).send({ error: "Task not found" });
     if (!isPartner(getUser(req))) return reply.status(403).send({ error: "Partner role required" });
     const { reason } = (req.body ?? {}) as { reason: string };
-    orchestrator.rejectGate(taskId, gateId, reason);
+    orchestrator.rejectGate(taskId, gateId, reason, getUser(req)?.profileId);
     return reply.status(200).send({ ok: true });
   });
 
@@ -798,6 +812,71 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
     return reply;
   });
 
+  // ── Time entries ─────────────────────────────────────────────────────────────
+  // Lawyers see only their own entries; partners see all.
+  app.get("/time-entries", async (req) => {
+    const user = getUser(req);
+    const { profileId, taskId, matterNumber, from, to } = req.query as Record<string, string>;
+    const filter = {
+      // Lawyers are restricted to their own entries; partners may filter by any profileId.
+      profileId: isPartner(user) ? (profileId || undefined) : user?.profileId,
+      taskId: taskId || undefined,
+      matterNumber: matterNumber || undefined,
+      from: from ? new Date(from) : undefined,
+      to: to ? new Date(to) : undefined,
+    };
+    return orchestrator.time.list(filter);
+  });
+
+  app.get("/time-entries/export.json", async (req, reply) => {
+    if (!isPartner(getUser(req))) return reply.status(403).send({ error: "Partner role required" });
+    const { profileId, taskId, matterNumber, from, to } = req.query as Record<string, string>;
+    const filter = {
+      profileId: profileId || undefined,
+      taskId: taskId || undefined,
+      matterNumber: matterNumber || undefined,
+      from: from ? new Date(from) : undefined,
+      to: to ? new Date(to) : undefined,
+    };
+    return orchestrator.time.exportJson(filter);
+  });
+
+  app.get("/time-entries/export.csv", async (req, reply) => {
+    if (!isPartner(getUser(req))) return reply.status(403).send({ error: "Partner role required" });
+    const { profileId, taskId, matterNumber, from, to } = req.query as Record<string, string>;
+    const filter = {
+      profileId: profileId || undefined,
+      taskId: taskId || undefined,
+      matterNumber: matterNumber || undefined,
+      from: from ? new Date(from) : undefined,
+      to: to ? new Date(to) : undefined,
+    };
+    reply.header("Content-Type", "text/csv; charset=utf-8");
+    reply.header("Content-Disposition", "attachment; filename=\"time-entries.csv\"");
+    return orchestrator.time.exportCsv(filter);
+  });
+
+  // ── NOSLEGAL analytics ────────────────────────────────────────────────────────
+  // Aggregates NOSLEGAL facet breakdown across all tasks the caller can see.
+  // Partner only — provides firm-wide matter analytics.
+  app.get("/analytics/noslegal", async (req, reply) => {
+    if (!isPartner(getUser(req))) return reply.status(403).send({ error: "Partner role required" });
+    const tasks = filterVisible(getUser(req), orchestrator.listTasks());
+    const byAreaOfLaw: Record<string, number> = {};
+    const byWorkType: Record<string, number> = {};
+    const bySector: Record<string, number> = {};
+    const byAssetType: Record<string, number> = {};
+    for (const task of tasks) {
+      if (!task.noslegal) continue;
+      const { areaOfLaw, workType, sector, assetType } = task.noslegal;
+      if (areaOfLaw) byAreaOfLaw[areaOfLaw] = (byAreaOfLaw[areaOfLaw] ?? 0) + 1;
+      if (workType)  byWorkType[workType]   = (byWorkType[workType]   ?? 0) + 1;
+      if (sector)    bySector[sector]       = (bySector[sector]       ?? 0) + 1;
+      if (assetType) byAssetType[assetType] = (byAssetType[assetType] ?? 0) + 1;
+    }
+    return { total: tasks.length, byAreaOfLaw, byWorkType, bySector, byAssetType };
+  });
+
   await app.listen({ port: Config.api.port, host: Config.api.host });
   logger.info("REST API started", { port: Config.api.port, host: Config.api.host, auth: Config.api.apiKey ? "x-api-key" : "none" });
 }
@@ -892,6 +971,18 @@ async function handleTool(
       // makes the access intent explicit and consistent with the REST audit route.
       const visibleIds = new Set(orch.listTasks().map((t) => t.id));
       return allEntries.filter((e) => !e.taskId || visibleIds.has(e.taskId));
+    }
+
+    case "get_time_entries": {
+      // MCP runs as LOCAL_PARTNER (full access). Partners see all time entries.
+      const filter = {
+        profileId: args.profileId as string | undefined,
+        taskId: args.taskId as string | undefined,
+        matterNumber: args.matterNumber as string | undefined,
+        from: args.from ? new Date(args.from as string) : undefined,
+        to: args.to ? new Date(args.to as string) : undefined,
+      };
+      return orch.time.list(filter);
     }
 
     default:

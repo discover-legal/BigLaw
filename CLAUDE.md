@@ -55,6 +55,7 @@ search_knowledge     — semantic search across documents
 list_agents          — browse the agent registry
 query_memory         — query inter-round memory
 get_audit            — retrieve the structured audit log
+get_time_entries     — retrieve billable time entries (lawyers see own; partners see all)
 ```
 
 Claude Code actuates Laverne agent configs (from `agents/laverne/*.json`),
@@ -126,10 +127,11 @@ Each DyTopo round:
 | `src/adapters/lavern.ts` | Lavern agent + workflow adapters; MikeOSS + external configs |
 | `src/adapters/index.ts` | Adapter re-exports (`AgentHarness`, `mergeAgents`, plugin types) |
 | `src/audit/index.ts` | Append-only JSONL audit log + SSE stream |
+| `src/time/index.ts` | Automatic billable time tracking — open/close entries, 6-min billing units, CSV export |
 | `src/secrets/index.ts` | Infisical REST API loader |
 | `src/auth/index.ts` | Lawyer profiles (practiceAreas, bio, role), RLS access control |
 | `src/clients/index.ts` | Client roster, matter sub-lists, conflict-of-interest checks |
-| `src/services/classifier.ts` | Haiku-based practice area detection + client identification on ingest |
+| `src/services/classifier.ts` | Haiku-based practice area, client, and NOSLEGAL tag detection on ingest/submit |
 | `src/mcp/server.ts` | MCP stdio server + Fastify REST API |
 | `src/templates/*.json` | Task templates (due-diligence, dispute-resolution, etc.) |
 | `src/types.ts` | All types: AgentDefinition (jurisdictions), Task (jurisdiction), NosLegalTags |
@@ -251,10 +253,12 @@ For TypeScript adapters (custom executors), implement `LegalToolAdapter` from
 
 ## NOSLEGAL taxonomy
 
-Documents optionally carry NOSLEGAL v4 multi-faceted taxonomy tags:
+Both documents and tasks carry NOSLEGAL v4 multi-faceted taxonomy tags.
+Tags on tasks are auto-detected from the task description at submission time
+(Haiku call in `detectNosLegal()`); tags on documents are set on ingest.
 
 ```typescript
-document.noslegal = {
+task.noslegal = {
   areaOfLaw: "Corporate Finance",      // NOSLEGAL Areas of law facet
   workType:  "Transactional",          // Work types facet
   sector:    "Financial Services",     // Sectors facet
@@ -265,6 +269,9 @@ document.noslegal = {
 These complement (not replace) the canonical `practiceArea` and `documentType`
 fields. Use them for interoperability with NOSLEGAL-compatible legal platforms.
 See https://github.com/noslegal/taxonomy for the controlled vocabulary.
+
+Aggregate NOSLEGAL breakdowns across all tasks are available via
+`GET /analytics/noslegal` (partner only).
 
 ## Adding a new agent
 
@@ -363,6 +370,11 @@ DELETE /clients/:id                 delete client             [partner only]
 POST   /clients/:id/matters         add matter to client      [partner only]
 DELETE /clients/:id/matters/:num    remove matter             [partner only]
 POST   /clients/check-conflict      check name against adversary lists  [partner only]
+GET    /time-entries                billable time entries (lawyers: own only; partners: all)
+                                    query: profileId, taskId, matterNumber, from, to
+GET    /time-entries/export.json    full time entry export as JSON  [partner only]
+GET    /time-entries/export.csv     full time entry export as CSV   [partner only]
+GET    /analytics/noslegal          NOSLEGAL facet breakdown across visible tasks  [partner only]
 GET    /auth/providers              which OAuth providers are configured
 GET    /auth/:provider/login        start OAuth login (google|microsoft|linkedin)
 GET    /auth/:provider/callback     OAuth callback → session cookie
