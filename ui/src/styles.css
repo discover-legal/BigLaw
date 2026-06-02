@@ -850,7 +850,7 @@ table.grid tbody tr:last-child td { border-bottom: none; }
   display: flex; align-items: center; gap: 10px;
 }
 
-/* ─── Mode chip (Marlboro UX badge) ─────────────────────────────────── */
+/* ─── Mode chip ──────────────────────────────────────────────────────── */
 .mode-chip {
   font-family: var(--font-mono);
   font-size: 9.5px; font-weight: 600;

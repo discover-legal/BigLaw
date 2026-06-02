@@ -322,30 +322,30 @@ export interface TaskTable {
 export type LawyerRole = "lawyer" | "partner";
 
 /**
- * User experience mode — Marlboro palette.
+ * User experience mode — three-tier access palette.
  *
- *   admin        — Partners only. Black #1A1A1A (Marlboro Black).
- *                  Full platform: user management, firm analytics, NOSLEGAL
- *                  dashboard, all settings, time reporting, every matter.
+ *   admin        — Partners only. Full platform: user management, firm
+ *                  analytics, NOSLEGAL dashboard, all settings, time
+ *                  reporting, every matter. Accent: gold #E6B450.
  *
- *   full_flavour — Full law firm experience. Scarlet #C8102E (Marlboro Red).
- *                  All legal workflows, connectors, conflict checks, time
- *                  tracking, client roster, matter management.
+ *   full_flavour — Full law firm experience. All legal workflows,
+ *                  connectors, conflict checks, time tracking, client
+ *                  roster, matter management. Accent: scarlet #C8102E.
  *
- *   lite         — Lighter experience. Gold #C4940F (Marlboro Gold).
- *                  Core features only: submit tasks, view results, upload
+ *   lite         — Core features only: submit tasks, view results, upload
  *                  documents, basic search. No billing, no conflict engine.
+ *                  Accent: amber-gold #C4940F.
  *
  * Partners are always admin (immutable). Lawyers default to full_flavour;
- * they may switch to lite. Admins can set mode for any lawyer profile.
+ * they may be set to lite. Admins can set mode for any lawyer profile.
  */
 export type UserMode = "admin" | "full_flavour" | "lite";
 
-/** Hex colour for each mode — applied as the UI accent. */
+/** Hex accent colour for each mode. */
 export const MODE_COLORS: Record<UserMode, string> = {
-  admin:        "#1A1A1A",   // Marlboro Black
-  full_flavour: "#C8102E",   // Marlboro Scarlet (Full Flavour Red)
-  lite:         "#C4940F",   // Marlboro Gold (Lights)
+  admin:        "#1A1A1A",   // near-black (UI overrides to gold for visibility)
+  full_flavour: "#C8102E",   // scarlet
+  lite:         "#C4940F",   // amber-gold
 };
 
 /** Feature flags carried with the session so UI can conditionally render. */

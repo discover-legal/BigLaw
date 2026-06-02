@@ -171,11 +171,11 @@ export interface ModeCapabilities {
   adminSettings: boolean;
 }
 
-/** Accent hex per mode — admin keeps the existing gold rather than near-black. */
+/** Accent hex per mode — admin keeps gold rather than near-black for readability. */
 export const MODE_ACCENT: Record<UserMode, string> = {
-  admin:        "#E6B450",   // gold — the full parchment-and-gold experience
-  full_flavour: "#C8102E",   // Marlboro Scarlet
-  lite:         "#C4940F",   // Marlboro Gold (Lights)
+  admin:        "#E6B450",   // gold — full parchment-and-gold experience
+  full_flavour: "#C8102E",   // scarlet
+  lite:         "#C4940F",   // amber-gold
 };
 
 export const MODE_LABEL: Record<UserMode, string> = {

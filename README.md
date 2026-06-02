@@ -328,7 +328,21 @@ Each profile stores:
 - **Practice areas** — one or more of the 15 canonical areas (Corporate & M&A, Competition & Antitrust, Employment & Labour, IP, Real Estate, Banking & Finance, Litigation, Tax, Regulatory & Compliance, Data Privacy, Immigration, Insolvency, Capital Markets, Insurance, Environmental & Climate)
 - **Bio** — short free-text description
 
-Lawyers can edit their own name, title, bio, and practice areas. Partners control role and can edit any profile.
+Lawyers can edit their own name, title, bio, and practice areas. Partners control role, mode, and can edit any profile.
+
+### UX modes
+
+Each lawyer profile carries a **mode** that controls both the UI accent colour and which features are accessible:
+
+| Mode | Accent | Who | Features |
+|---|---|---|---|
+| `admin` | gold | Partners (immutable) | Everything: user management, NOSLEGAL analytics, all settings, time reporting, every matter |
+| `full_flavour` | scarlet | Lawyers (default) | Full law firm stack: all workflows, 32 connectors, conflict checks, time tracking, client roster |
+| `lite` | amber-gold | Lawyers (partner-assigned) | Core only: submit tasks, view results, library, basic search — no billing or conflict engine |
+
+Partners are always `admin` regardless of profile setting. Lawyers default to `full_flavour`; a partner can downgrade them to `lite` in Admin › Users.
+
+The accent colour is injected as a CSS custom property (`--accent`) the moment the session loads — every interactive element (buttons, active states, stepper, selection highlight) responds automatically.
 
 ### Clients & matters
 
