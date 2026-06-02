@@ -702,6 +702,12 @@ Rules:
     try {
       const items = JSON.parse(raw) as Array<Record<string, unknown>>;
       for (const item of items) {
+        // Validate workflowType before restoring — a tampered or corrupted file
+        // could produce an invalid type that crashes phase execution at runTask().
+        if (!PHASE_SEQUENCES[item.workflowType as WorkflowType]) {
+          logger.warn("Skipping restored task with unknown workflowType", { id: item.id, workflowType: item.workflowType });
+          continue;
+        }
         const task = {
           ...item,
           createdAt: new Date(item.createdAt as string),

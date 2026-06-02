@@ -329,8 +329,8 @@ function parseNeedOffer(
   const needMatch = text.match(/NEED:\s*(.+)/i);
   const offerMatch = text.match(/OFFER:\s*(.+)/i);
   return {
-    need: { agentId, text: needMatch?.[1]?.trim() ?? "No specific need this round." },
-    offer: { agentId, text: offerMatch?.[1]?.trim() ?? "General domain expertise available." },
+    need: { agentId, text: (needMatch?.[1]?.trim() ?? "No specific need this round.").slice(0, 500) },
+    offer: { agentId, text: (offerMatch?.[1]?.trim() ?? "General domain expertise available.").slice(0, 500) },
   };
 }
 
