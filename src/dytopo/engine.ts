@@ -32,6 +32,7 @@ import { globalToolRegistry } from "../tools/index.js";
 import { IntraRoundMemoryStore, InterRoundMemoryStore } from "../memory/index.js";
 import { getProvider, resolveModelId } from "../providers/index.js";
 import { selectModel } from "../routing/model.js";
+import { extractFirstText } from "../utils.js";
 import { agentLearning } from "../learning/index.js";
 import type { KnowledgeStore } from "../knowledge/index.js";
 import type {
@@ -87,10 +88,9 @@ export class DyTopoEngine {
 
     // ── Step 1: Recruit agents ──────────────────────────────────────────────
     const recruitedAgents = await this.recruitAgents(goal, task);
-    const agentMap = new Map<string, AgentDefinition>();
-    for (const a of [...this.pinnedAgents, ...recruitedAgents]) agentMap.set(a.id, a);
+    const agentMap = new Map([...this.pinnedAgents, ...recruitedAgents].map((a) => [a.id, a]));
 
-    const activeDefinitions = Array.from(agentMap.values())
+    const activeDefinitions = [...agentMap.values()]
       .filter((a) => jurisdictionMatch(a, task.jurisdiction))
       .slice(0, Config.dytopo.maxAgentsPerRound);
     const activeAgents = activeDefinitions.map((d) => new Agent(d));
@@ -360,8 +360,7 @@ export class DyTopoEngine {
             content: `Round ${goal.round} (${goal.phase}) findings:\n${bulletList}\n\nSummarise the key legal conclusions from this round in 2-3 sentences. Be specific — name parties, statutes, or doctrines where present. This summary will be retrieved as memory by agents in the next round.`,
           }],
         });
-        const textBlock = response.content.find((b) => b.type === "text");
-        summaryContent = textBlock?.type === "text" ? textBlock.text.trim() : bulletList;
+        summaryContent = extractFirstText(response.content).trim() || bulletList;
       } catch {
         summaryContent = `Round ${goal.round} key findings: ${findings.slice(0, 3).map((f) => f.content.slice(0, 100)).join("; ")}`;
       }

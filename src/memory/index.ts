@@ -28,22 +28,10 @@ import type {
   TaskPhase,
 } from "../types.js";
 
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const { VectorDb } = require("ruvector") as { VectorDb: new (o: RvOptions) => RvDb };
-
-interface RvOptions { dimensions: number; storagePath?: string; distanceMetric?: string }
-interface RvEntry  { id?: string; vector: number[] | Float32Array; metadata?: Record<string, unknown> }
-interface RvHit    { id: string; score: number; metadata?: Record<string, unknown> }
-interface RvDb {
-  insert(e: RvEntry): Promise<string>;
-  search(q: { vector: number[] | Float32Array; k: number; filter?: Record<string, unknown> }): Promise<RvHit[]>;
-  delete(id: string): Promise<boolean>;
-}
+import { VectorDb, SMALL_VEC } from "../ruvector.js";
+import type { RvDb } from "../ruvector.js";
 
 const DIMS = Config.embeddings.dimensions;
-
-// Small non-zero vector used for "fetch by filter" queries without a semantic query.
-const SMALL_VEC: number[] = new Array(DIMS).fill(Number.EPSILON);
 
 // ─── Intra-round memory ───────────────────────────────────────────────────────
 

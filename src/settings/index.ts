@@ -15,9 +15,10 @@
  * without a restart. Env vars remain the defaults; the file overrides them.
  */
 
-import { readFile, writeFile, rename } from "fs/promises";
+import { readFile } from "fs/promises";
 import { Config as ConfigConst } from "../config.js";
 import { logger } from "../logger.js";
+import { atomicWriteJson } from "../utils.js";
 
 export interface AppSettings {
   presentation: {
@@ -165,11 +166,7 @@ export class SettingsStore {
   /** Apply a patch onto Config and persist the full settings to disk. */
   async update(patch: DeepPartial<AppSettings>): Promise<ReturnType<SettingsStore["get"]>> {
     applyToConfig(patch);
-    // Atomic write: write to .tmp then rename so a mid-write crash doesn't
-    // leave a partial JSON file that breaks init() on the next startup.
-    const tmp = `${this.path}.tmp`;
-    await writeFile(tmp, JSON.stringify(currentSettings(), null, 2), "utf8");
-    await rename(tmp, this.path);
+    await atomicWriteJson(this.path, currentSettings());
     logger.info("Settings updated", { path: this.path });
     return this.get();
   }

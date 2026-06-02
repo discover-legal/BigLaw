@@ -18,7 +18,7 @@
  */
 
 import { EventEmitter } from "events";
-import { readdir, readFile, writeFile, rename } from "fs/promises";
+import { readdir, readFile } from "fs/promises";
 import { join, extname } from "path";
 import { v4 as uuidv4 } from "uuid";
 import { Config } from "./config.js";
@@ -48,6 +48,7 @@ import {
   identifyGateRequests,
 } from "./protocols/index.js";
 import { detectNosLegal } from "./services/classifier.js";
+import { atomicWriteJson, extractFirstText, parseJsonObject } from "./utils.js";
 import type {
   Task,
   WorkflowType,
@@ -67,22 +68,6 @@ const PHASE_SEQUENCES: Record<WorkflowType, TaskPhase[]> = {
   legal_design:   ["intake", "research", "analysis", "drafting", "review", "delivery"],
   pre_engagement: ["intake", "research", "analysis", "delivery"],
 };
-
-/**
- * Best-effort extraction of a single JSON object from an LLM response.
- * Strips markdown fences and isolates the outermost {...} before parsing.
- */
-function parseJsonObject(text: string): unknown | undefined {
-  const stripped = text.replace(/```(?:json)?/gi, "").trim();
-  const start = stripped.indexOf("{");
-  const end = stripped.lastIndexOf("}");
-  if (start === -1 || end === -1 || end <= start) return undefined;
-  try {
-    return JSON.parse(stripped.slice(start, end + 1));
-  } catch {
-    return undefined;
-  }
-}
 
 export class Orchestrator {
   readonly registry: AgentRegistry;
@@ -265,7 +250,7 @@ export class Orchestrator {
   deleteTask(taskId: string): boolean {
     const existed = this.tasks.delete(taskId);
     if (existed) {
-      this.persistTasks().catch((err) => logger.warn("Failed to persist tasks", { error: err.message }));
+      this.persistTasksSafe();
       // Clean up orphaned inter-round memory vectors so deleted task data
       // cannot be surfaced by future semantic memory queries.
       this.memory.deleteByTaskId(taskId).catch((err) =>
@@ -284,7 +269,7 @@ export class Orchestrator {
     const valid = [...new Set(lawyerIds)].slice(0, 50).filter((id) => this.profiles.get(id));
     task.assignedLawyerIds = valid;
     task.updatedAt = new Date();
-    this.persistTasks().catch((err) => logger.warn("Failed to persist tasks", { error: err.message }));
+    this.persistTasksSafe();
     auditLogger.write({ event: "task.assigned", taskId, data: { lawyerIds: valid } });
     return task;
   }
@@ -319,27 +304,9 @@ export class Orchestrator {
     gate.reviewedAt = new Date();
     task.updatedAt = new Date();
     auditLogger.write({ event: "gate.approved", taskId, data: { gateId, note } });
-
-    // Record a gate_review time entry for the reviewing lawyer.
-    if (reviewerProfileId) {
-      const profile = this.profiles.get(reviewerProfileId);
-      if (profile) {
-        const entry = this.time.open({
-          profileId: profile.id,
-          profileName: profile.name,
-          taskId,
-          matterNumber: task.matterNumber,
-          clientNumber: task.clientNumber,
-          description: `Gate review: ${gate.finding.content.slice(0, 100)}`,
-          event: "gate_review",
-          startedAt: new Date(),
-        });
-        this.time.close(entry.id);
-      }
-    }
-
+    if (reviewerProfileId) this.recordGateReviewTime(reviewerProfileId, taskId, task, gate.finding.content);
     this.gateEmitter.emit(`gates:${taskId}`);
-    this.persistTasks().catch((err) => logger.warn("Failed to persist tasks", { error: err.message }));
+    this.persistTasksSafe();
   }
 
   rejectGate(taskId: string, gateId: string, reason: string, reviewerProfileId?: string): void {
@@ -353,27 +320,9 @@ export class Orchestrator {
     task.findings = task.findings.filter((f) => f.id !== gate.findingId);
     task.updatedAt = new Date();
     auditLogger.write({ event: "gate.rejected", taskId, data: { gateId, reason } });
-
-    // Record a gate_review time entry for the reviewing lawyer.
-    if (reviewerProfileId) {
-      const profile = this.profiles.get(reviewerProfileId);
-      if (profile) {
-        const entry = this.time.open({
-          profileId: profile.id,
-          profileName: profile.name,
-          taskId,
-          matterNumber: task.matterNumber,
-          clientNumber: task.clientNumber,
-          description: `Gate review: ${gate.finding.content.slice(0, 100)}`,
-          event: "gate_review",
-          startedAt: new Date(),
-        });
-        this.time.close(entry.id);
-      }
-    }
-
+    if (reviewerProfileId) this.recordGateReviewTime(reviewerProfileId, taskId, task, gate.finding.content);
     this.gateEmitter.emit(`gates:${taskId}`);
-    this.persistTasks().catch((err) => logger.warn("Failed to persist tasks", { error: err.message }));
+    this.persistTasksSafe();
   }
 
   // ─── External agent loader ────────────────────────────────────────────────
@@ -502,6 +451,36 @@ export class Orchestrator {
     this.progressEmitter.emit(`task:${taskId}`, { type, data });
   }
 
+  /** Fire-and-forget persist — logs a warning on failure so a disk error never kills a task. */
+  private persistTasksSafe(): void {
+    this.persistTasks().catch((err) => logger.warn("Failed to persist tasks", { error: err.message }));
+  }
+
+  /**
+   * Open and immediately close a gate_review time entry for a reviewing lawyer.
+   * Called by both approveGate and rejectGate.
+   */
+  private recordGateReviewTime(
+    reviewerProfileId: string,
+    taskId: string,
+    task: { matterNumber?: string; clientNumber?: string },
+    previewContent: string,
+  ): void {
+    const profile = this.profiles.get(reviewerProfileId);
+    if (!profile) return;
+    const entry = this.time.open({
+      profileId: profile.id,
+      profileName: profile.name,
+      taskId,
+      matterNumber: task.matterNumber,
+      clientNumber: task.clientNumber,
+      description: `Gate review: ${previewContent.slice(0, 100)}`,
+      event: "gate_review",
+      startedAt: new Date(),
+    });
+    this.time.close(entry.id);
+  }
+
   private async runTask(task: Task): Promise<void> {
     task.status = "running";
     this.emit(task.id, "started", { taskId: task.id, workflowType: task.workflowType });
@@ -556,7 +535,7 @@ export class Orchestrator {
 
     this.emit(task.id, "complete", { findings: task.findings.length, output: task.output?.slice(0, 200) });
     auditLogger.write({ event: "task.complete", taskId: task.id, data: { findings: task.findings.length } });
-    this.persistTasks().catch((err) => logger.warn("Failed to persist tasks", { error: err.message }));
+    this.persistTasksSafe();
 
     logger.info("Task complete", { taskId: task.id, findings: task.findings.length });
   }
@@ -688,8 +667,7 @@ EXPECTED_OUTPUT_3: <third expected output>`;
       cacheSystem: true,
     });
 
-    const textBlock = response.content.find((b) => b.type === "text");
-    const text = textBlock?.type === "text" ? textBlock.text : "";
+    const text = extractFirstText(response.content);
     const descMatch = text.match(/DESCRIPTION:\s*([\s\S]+?)(?=EXPECTED_OUTPUT|$)/i);
     const outputMatches = [...text.matchAll(/EXPECTED_OUTPUT_\d+:\s*(.+)/gi)];
 
@@ -732,8 +710,7 @@ Every claim must trace to a specific finding number from the list above.`;
       ...(useThinking && { thinking: { budgetTokens: Config.anthropic.thinkingBudgetTokens } }),
     });
 
-    const textBlock = response.content.find((b) => b.type === "text");
-    return textBlock?.type === "text" ? textBlock.text : "";
+    return extractFirstText(response.content);
   }
 
   /**
@@ -787,10 +764,7 @@ Rules:
       cacheSystem: true,
     });
 
-    const textBlock = response.content.find((b) => b.type === "text");
-    const text = textBlock?.type === "text" ? textBlock.text : "";
-
-    const parsed = parseJsonObject(text) as
+    const parsed = parseJsonObject(extractFirstText(response.content)) as
       | { columns?: unknown; rows?: unknown }
       | undefined;
     if (!parsed || !Array.isArray(parsed.columns) || !Array.isArray(parsed.rows)) {
@@ -875,15 +849,7 @@ Rules:
 
   async persistTasks(): Promise<void> {
     const path = Config.persistence.tasksFile;
-    const serialisable = Array.from(this.tasks.values()).map((t) => ({
-      ...t,
-      createdAt: t.createdAt.toISOString(),
-      updatedAt: t.updatedAt.toISOString(),
-      completedAt: t.completedAt?.toISOString(),
-    }));
-    const tmp = `${path}.tmp`;
-    await writeFile(tmp, JSON.stringify(serialisable, null, 2), "utf8");
-    await rename(tmp, path);
+    await atomicWriteJson(path, Array.from(this.tasks.values()));
     logger.debug("Tasks persisted", { count: this.tasks.size, path });
   }
 

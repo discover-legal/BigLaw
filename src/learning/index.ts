@@ -23,8 +23,9 @@
  * for episode storage + similarity-based episode retrieval.
  */
 
-import { readFile, writeFile, rename } from "fs/promises";
+import { readFile } from "fs/promises";
 import { logger } from "../logger.js";
+import { atomicWriteJson } from "../utils.js";
 import { Config } from "../config.js";
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -229,9 +230,7 @@ export class AgentLearningLayer {
   }
 
   private async persistQTable(): Promise<void> {
-    const tmp = `${this.persistPath}.tmp`;
-    await writeFile(tmp, JSON.stringify(this.engine.export()), "utf8");
-    await rename(tmp, this.persistPath);
+    await atomicWriteJson(this.persistPath, this.engine.export(), false);
   }
 
   private stateKey(phase: string, jurisdiction?: string, workflowType?: string): string {

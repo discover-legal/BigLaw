@@ -14,9 +14,10 @@
  */
 
 import { randomUUID } from "crypto";
-import { readFile, writeFile, rename } from "fs/promises";
+import { readFile } from "fs/promises";
 import { Config } from "../config.js";
 import { logger } from "../logger.js";
+import { atomicWriteJson } from "../utils.js";
 import type { TimeEntry, TimeEventType } from "../types.js";
 
 export type { TimeEntry, TimeEventType };
@@ -123,14 +124,7 @@ export class TimeStore {
 
   /** Atomic write — tmp file then rename. */
   async persist(): Promise<void> {
-    const tmp = `${this.path}.tmp`;
-    const serialisable = this.entries.map((e) => ({
-      ...e,
-      startedAt: e.startedAt.toISOString(),
-      endedAt: e.endedAt?.toISOString(),
-    }));
-    await writeFile(tmp, JSON.stringify(serialisable, null, 2), "utf8");
-    await rename(tmp, this.path);
+    await atomicWriteJson(this.path, this.entries);
   }
 }
 

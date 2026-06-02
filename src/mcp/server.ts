@@ -828,46 +828,36 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
 
   // ── Time entries ─────────────────────────────────────────────────────────────
   // Lawyers see only their own entries; partners see all.
-  app.get("/time-entries", async (req) => {
-    const user = getUser(req);
+
+  // Parse common time-entry query params into a filter object.
+  const parseTimeFilter = (req: FastifyRequest, overrideProfileId?: string) => {
     const { profileId, taskId, matterNumber, from, to } = req.query as Record<string, string>;
-    const filter = {
-      // Lawyers are restricted to their own entries; partners may filter by any profileId.
-      profileId: isPartner(user) ? (profileId || undefined) : user?.profileId,
+    return {
+      profileId: overrideProfileId ?? (profileId || undefined),
       taskId: taskId || undefined,
       matterNumber: matterNumber || undefined,
       from: from ? new Date(from) : undefined,
       to: to ? new Date(to) : undefined,
     };
-    return orchestrator.time.list(filter);
+  };
+
+  app.get("/time-entries", async (req) => {
+    const user = getUser(req);
+    // Lawyers are restricted to their own entries; partners may filter by any profileId.
+    const profileOverride = isPartner(user) ? undefined : user?.profileId;
+    return orchestrator.time.list(parseTimeFilter(req, profileOverride));
   });
 
   app.get("/time-entries/export.json", async (req, reply) => {
     if (!isPartner(getUser(req))) return reply.status(403).send({ error: "Partner role required" });
-    const { profileId, taskId, matterNumber, from, to } = req.query as Record<string, string>;
-    const filter = {
-      profileId: profileId || undefined,
-      taskId: taskId || undefined,
-      matterNumber: matterNumber || undefined,
-      from: from ? new Date(from) : undefined,
-      to: to ? new Date(to) : undefined,
-    };
-    return orchestrator.time.exportJson(filter);
+    return orchestrator.time.exportJson(parseTimeFilter(req));
   });
 
   app.get("/time-entries/export.csv", async (req, reply) => {
     if (!isPartner(getUser(req))) return reply.status(403).send({ error: "Partner role required" });
-    const { profileId, taskId, matterNumber, from, to } = req.query as Record<string, string>;
-    const filter = {
-      profileId: profileId || undefined,
-      taskId: taskId || undefined,
-      matterNumber: matterNumber || undefined,
-      from: from ? new Date(from) : undefined,
-      to: to ? new Date(to) : undefined,
-    };
     reply.header("Content-Type", "text/csv; charset=utf-8");
     reply.header("Content-Disposition", "attachment; filename=\"time-entries.csv\"");
-    return orchestrator.time.exportCsv(filter);
+    return orchestrator.time.exportCsv(parseTimeFilter(req));
   });
 
   // ── NOSLEGAL analytics ────────────────────────────────────────────────────────

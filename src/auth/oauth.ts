@@ -122,12 +122,10 @@ interface SessionCookiePayload extends SessionUser {
 
 /** Read the signed session cookie → SessionUser, or null if missing/invalid/revoked. */
 export function readSessionCookie(req: FastifyRequest): SessionUser | null {
-  const raw = (req.cookies as Record<string, string> | undefined)?.[SESSION_COOKIE];
-  if (!raw) return null;
-  const unsigned = (req as unknown as { unsignCookie: (v: string) => { valid: boolean; value: string | null } }).unsignCookie(raw);
-  if (!unsigned.valid || !unsigned.value) return null;
+  const value = readSignedCookie(req, SESSION_COOKIE);
+  if (!value) return null;
   try {
-    const payload = JSON.parse(unsigned.value) as SessionCookiePayload;
+    const payload = JSON.parse(value) as SessionCookiePayload;
     if (payload.jti && REVOKED_JTIS.has(payload.jti)) return null;
     // Return only the public SessionUser fields (strip jti from the caller view).
     const { jti: _, ...user } = payload;
@@ -215,21 +213,18 @@ export function registerAuthRoutes(app: FastifyInstance, orchestrator: Orchestra
 
   app.post("/auth/logout", async (req, reply) => {
     // Revoke the specific session token so replayed cookies are rejected.
-    const raw = (req.cookies as Record<string, string> | undefined)?.[SESSION_COOKIE];
-    if (raw) {
-      const unsigned = (req as unknown as { unsignCookie: (v: string) => { valid: boolean; value: string | null } }).unsignCookie(raw);
-      if (unsigned.valid && unsigned.value) {
-        try {
-          const payload = JSON.parse(unsigned.value) as Partial<SessionCookiePayload>;
-          if (payload.jti) {
-            if (REVOKED_JTIS.size >= MAX_REVOKED_JTIS) {
-              // Evict the oldest entry to keep memory bounded.
-              REVOKED_JTIS.delete(REVOKED_JTIS.values().next().value as string);
-            }
-            REVOKED_JTIS.add(payload.jti);
+    const value = readSignedCookie(req, SESSION_COOKIE);
+    if (value) {
+      try {
+        const payload = JSON.parse(value) as Partial<SessionCookiePayload>;
+        if (payload.jti) {
+          if (REVOKED_JTIS.size >= MAX_REVOKED_JTIS) {
+            // Evict the oldest entry to keep memory bounded.
+            REVOKED_JTIS.delete(REVOKED_JTIS.values().next().value as string);
           }
-        } catch { /* malformed cookie — clearing is sufficient */ }
-      }
+          REVOKED_JTIS.add(payload.jti);
+        }
+      } catch { /* malformed cookie — clearing is sufficient */ }
     }
     reply.clearCookie(SESSION_COOKIE, { path: "/" });
     return { ok: true };

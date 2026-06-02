@@ -14,31 +14,14 @@ import { embed, embedBatch } from "../embeddings.js";
 import { logger } from "../logger.js";
 import type { AgentDefinition, AgentTier, AgentDomain } from "../types.js";
 
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const { VectorDb } = require("ruvector") as { VectorDb: new (o: RvOptions) => RvDb };
-
-interface RvOptions { dimensions: number; storagePath?: string; distanceMetric?: string }
-interface RvEntry  { id?: string; vector: number[] | Float32Array; metadata?: Record<string, unknown> }
-interface RvHit    { id: string; score: number; metadata?: Record<string, unknown> }
-interface RvRecord { id?: string; vector: Float32Array; metadata?: Record<string, unknown> }
-interface RvDb {
-  insert(e: RvEntry): Promise<string>;
-  insertBatch(es: RvEntry[]): Promise<string[]>;
-  search(q: { vector: number[] | Float32Array; k: number; filter?: Record<string, unknown> }): Promise<RvHit[]>;
-  get(id: string): Promise<RvRecord | null>;
-  delete(id: string): Promise<boolean>;
-  len(): Promise<number>;
-}
+import { VectorDb, SMALL_VEC } from "../ruvector.js";
+import type { RvDb } from "../ruvector.js";
 
 const DIMS = Config.embeddings.dimensions;
 
 // Stable namespace for agent string-ID → UUID v5 mapping.
 // Same agent ID always maps to the same point ID across restarts.
 const AGENT_NS = "6ba7b810-9dad-11d1-80b4-00c04fd430c8";
-
-// Small non-zero vector used for "list all" style queries — avoids the
-// cosine-of-zero edge case in the native HNSW implementation.
-const SMALL_VEC: number[] = new Array(DIMS).fill(Number.EPSILON);
 
 export class AgentRegistry {
   private readonly db: RvDb;

@@ -14,6 +14,7 @@ import type { ProviderMessage, ProviderToolResultBlock } from "../providers/inde
 import type { ToolRegistry, ToolContext } from "../tools/index.js";
 import type { KnowledgeStore } from "../knowledge/index.js";
 import { sanitizePromptContent } from "../adapters/lavern.js";
+import { extractFirstText } from "../utils.js";
 import type { InterRoundMemoryStore } from "../memory/index.js";
 import type {
   AgentDefinition,
@@ -232,11 +233,9 @@ export class Agent {
       messages: [{ role: "user", content: userMessage }],
       cacheSystem: true,
     });
-    const textBlock = response.content.find((b) => b.type === "text");
-    if (!textBlock || textBlock.type !== "text") {
-      throw new Error(`No text in response from model ${model}`);
-    }
-    return textBlock.text;
+    const text = extractFirstText(response.content);
+    if (!text) throw new Error(`No text in response from model ${model}`);
+    return text;
   }
 }
 

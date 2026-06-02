@@ -22,9 +22,10 @@
  */
 
 import { randomUUID } from "crypto";
-import { readFile, writeFile, rename } from "fs/promises";
+import { readFile } from "fs/promises";
 import { Config } from "../config.js";
 import { logger } from "../logger.js";
+import { atomicWriteJson } from "../utils.js";
 import type { LawyerProfile, SessionUser, Task, UserMode } from "../types.js";
 
 /** Derive the effective mode from role + stored mode preference. */
@@ -154,11 +155,7 @@ export class ProfileStore {
   }
 
   private async persist(): Promise<void> {
-    // Write to a temp file then rename so a crash mid-write never leaves a
-    // partially-written profiles file (rename is atomic on POSIX filesystems).
-    const tmp = `${this.path}.tmp`;
-    await writeFile(tmp, JSON.stringify(this.profiles, null, 2), "utf8");
-    await rename(tmp, this.path);
+    await atomicWriteJson(this.path, this.profiles);
   }
 }
 

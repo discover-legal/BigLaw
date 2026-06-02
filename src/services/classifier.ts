@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Discover Legal
 
-import Anthropic from "@anthropic-ai/sdk";
-import { Config } from "../config.js";
 import { logger } from "../logger.js";
+import { getProvider, resolveModelId } from "../providers/index.js";
+import { selectModel } from "../routing/model.js";
+import { extractFirstText, parseJsonObject } from "../utils.js";
 import { PRACTICE_AREAS } from "../types.js";
 import type { Client, NosLegalTags } from "../types.js";
 
-const client = new Anthropic({ apiKey: Config.anthropic.apiKey });
+// Haiku is the right choice for all three classifiers: fast, cheap, single-call.
+const classifierModel = () => selectModel({ tier: 3, taskType: "extraction" });
 
 /** Detect the primary practice area from a document's title + first ~2000 chars. */
 export async function detectPracticeArea(title: string, content: string): Promise<string | null> {
@@ -24,12 +26,14 @@ Document excerpt:
 ${snippet}`;
 
   try {
-    const msg = await client.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 64,
+    const model = classifierModel();
+    const response = await getProvider(model).chat({
+      model: resolveModelId(model),
+      maxTokens: 64,
+      system: "",
       messages: [{ role: "user", content: prompt }],
     });
-    const text = (msg.content[0] as { type: string; text: string }).text?.trim();
+    const text = extractFirstText(response.content).trim();
     if (!text || text === "Unknown") return null;
     const match = PRACTICE_AREAS.find((pa) => pa.toLowerCase() === text.toLowerCase());
     return match ?? null;
@@ -59,12 +63,14 @@ Document excerpt:
 ${snippet}`;
 
   try {
-    const msg = await client.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 32,
+    const model = classifierModel();
+    const response = await getProvider(model).chat({
+      model: resolveModelId(model),
+      maxTokens: 32,
+      system: "",
       messages: [{ role: "user", content: prompt }],
     });
-    const text = (msg.content[0] as { type: string; text: string }).text?.trim();
+    const text = extractFirstText(response.content).trim();
     if (!text || text === "None") return null;
     const found = clients.find((c) => c.clientNumber.toLowerCase() === text.toLowerCase());
     return found ? { clientNumber: found.clientNumber, clientName: found.name } : null;
@@ -100,22 +106,19 @@ Task description:
 ${snippet}`;
 
   try {
-    const msg = await client.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 256,
+    const model = classifierModel();
+    const response = await getProvider(model).chat({
+      model: resolveModelId(model),
+      maxTokens: 256,
+      system: "",
       messages: [{ role: "user", content: prompt }],
     });
-    const text = (msg.content[0] as { type: string; text: string }).text?.trim() ?? "";
-    // Strip markdown fences and parse JSON
-    const stripped = text.replace(/```(?:json)?/gi, "").trim();
-    const start = stripped.indexOf("{");
-    const end = stripped.lastIndexOf("}");
-    if (start === -1 || end === -1 || end <= start) return {};
-    const parsed = JSON.parse(stripped.slice(start, end + 1)) as Record<string, unknown>;
+    const parsed = parseJsonObject(extractFirstText(response.content)) as Record<string, unknown> | undefined;
+    if (!parsed) return {};
     const result: NosLegalTags = {};
     if (typeof parsed.areaOfLaw === "string" && parsed.areaOfLaw) result.areaOfLaw = parsed.areaOfLaw.slice(0, 60);
-    if (typeof parsed.workType === "string" && parsed.workType) result.workType = parsed.workType.slice(0, 60);
-    if (typeof parsed.sector === "string" && parsed.sector) result.sector = parsed.sector.slice(0, 60);
+    if (typeof parsed.workType  === "string" && parsed.workType)  result.workType  = parsed.workType.slice(0, 60);
+    if (typeof parsed.sector    === "string" && parsed.sector)    result.sector    = parsed.sector.slice(0, 60);
     if (typeof parsed.assetType === "string" && parsed.assetType) result.assetType = parsed.assetType.slice(0, 60);
     return result;
   } catch (err) {

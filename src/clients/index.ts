@@ -2,9 +2,10 @@
 // Copyright (C) 2026 Discover Legal
 
 import { randomUUID } from "crypto";
-import { readFile, writeFile, rename } from "fs/promises";
+import { readFile } from "fs/promises";
 import { Config } from "../config.js";
 import { logger } from "../logger.js";
+import { atomicWriteJson } from "../utils.js";
 import type { Client, ClientMatter, ConflictCheckResult } from "../types.js";
 
 export class ClientStore {
@@ -136,8 +137,6 @@ export class ClientStore {
   }
 
   private async persist(): Promise<void> {
-    const tmp = `${this.path}.tmp`;
-    await writeFile(tmp, JSON.stringify(this.clients, null, 2), "utf8");
-    await rename(tmp, this.path);
+    await atomicWriteJson(this.path, this.clients);
   }
 }
