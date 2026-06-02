@@ -1,0 +1,13 @@
+{
+  "id": "dispute-resolution",
+  "name": "Dispute Assessment & Strategy",
+  "description": "Adversarial multi-agent analysis of a contentious matter — elements, evidence, defences, jurisdiction, and remedies. Produces a case-strength assessment with a recommended strategy and cost-benefit comparison of litigation, arbitration, and ADR options. Jurisdiction-neutral.",
+  "taskDescriptionTemplate": "Assess the following contentious matter and produce a dispute-strategy report.\n\nMatter: {{description}}\n\nDocuments provided: {{document}}\n\nThe assessment should:\n1. Identify each cause of action and defence available to both sides; break each into its required elements.\n2. Assess the evidence for and against each element — distinguish facts in dispute from pure-law questions.\n3. Evaluate jurisdiction, forum, and governing law (including any forum-selection or arbitration clauses).\n4. Give a reasoned case-strength rating (STRONG / ARGUABLE / WEAK) for each cause of action, with the decisive factors.\n5. Assess limitation/prescription exposure.\n6. Analyse available remedies and their quantification.\n7. Compare the cost-benefit of: (a) litigation in the identified forum, (b) arbitration if available, (c) mediation / negotiated settlement.\n8. Recommend a preferred strategy with the key near-term steps.",
+  "workflowType": "adversarial",
+  "preferredDomains": ["analysis", "review"],
+  "source": "custom",
+  "metadata": {
+    "jurisdiction": "any",
+    "practiceArea": "Litigation & Dispute Resolution"
+  }
+}

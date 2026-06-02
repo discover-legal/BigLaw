@@ -21,6 +21,11 @@ export const Config = {
   anthropic: {
     apiKey: require("ANTHROPIC_API_KEY"),
     model: optional("ANTHROPIC_MODEL", "claude-opus-4-8"),
+    // Optional: point at a custom Anthropic-compatible endpoint (enterprise routing, proxies).
+    baseUrl: process.env.ANTHROPIC_BASE_URL ?? "",
+    // Token budget for extended thinking on synthesis/debate Opus calls.
+    // Must be < maxTokens on those calls (synthesis uses 16 000 total).
+    thinkingBudgetTokens: parseInt(optional("THINKING_BUDGET_TOKENS", "10000")),
   },
 
   embeddings: {
@@ -30,15 +35,11 @@ export const Config = {
     dimensions: parseInt(optional("EMBEDDING_DIMENSIONS", "1536")),
   },
 
-  // Vector DB — Qdrant in dev; swap URL for RuVector (https://github.com/ruvnet/RuVector)
+  // Vector DB — RuVector native in-process HNSW (no external service required).
+  // Three persistent stores are written to dataDir on first run and reloaded on restart.
   vectorDb: {
-    url: optional("QDRANT_URL", "http://localhost:6333"),
-    apiKey: process.env.QDRANT_API_KEY,
-    collections: {
-      agents: "fac_agents",
-      documents: "fac_documents",
-      memory: "fac_memory",
-    },
+    /** Directory for the three on-disk RuVector stores (agents / memory / knowledge). */
+    dataDir: optional("RUVECTOR_DATA_DIR", "./data"),
   },
 
   mcp: {
@@ -149,6 +150,9 @@ export const Config = {
     settingsFile: optional("SETTINGS_FILE", ".settings.json"),
     profilesFile: optional("PROFILES_FILE", ".profiles.json"),
     clientsFile: optional("CLIENTS_FILE", ".clients.json"),
+    timeFile: optional("TIME_FILE", ".time-entries.json"),
+    /** Persisted Q-table for agent recruitment learning (RuVector LearningEngine). */
+    learningFile: optional("LEARNING_FILE", ".qtable.json"),
   },
 
   logging: {
@@ -177,6 +181,53 @@ export const Config = {
     // "lawyer" = full legal terminology + citations; "plain" = plain-language framing for non-lawyers.
     mode: optional("UI_MODE", "lawyer") as "lawyer" | "plain",
     firmName: optional("FIRM_NAME", ""),
+  },
+
+  // ─── Legal data connectors ─────────────────────────────────────────────────
+  // Each connector is enabled when its API key is set; endpoint defaults to the
+  // public vendor MCP URL. The connector tools return a "not configured" error
+  // when the key is absent, so they are always safe to register.
+  connectors: {
+    courtListener: {
+      // Public REST API — works without a key (key unlocks higher rate limits).
+      apiKey: process.env.COURT_LISTENER_API_KEY ?? "",
+      endpoint: optional("COURT_LISTENER_API_URL", "https://www.courtlistener.com/api/rest/v4"),
+    },
+    ironclad: {
+      apiKey: process.env.IRONCLAD_API_KEY ?? "",
+      endpoint: optional("IRONCLAD_MCP_URL", "https://mcp.na1.ironcladapp.com/mcp"),
+      enabled: Boolean(process.env.IRONCLAD_API_KEY),
+    },
+    imanage: {
+      apiKey: process.env.IMANAGE_API_KEY ?? "",
+      endpoint: optional("IMANAGE_MCP_URL", "https://cloudimanage.com/mcp/work"),
+      enabled: Boolean(process.env.IMANAGE_API_KEY),
+    },
+    definely: {
+      apiKey: process.env.DEFINELY_API_KEY ?? "",
+      endpoint: optional("DEFINELY_MCP_URL", "https://mcp.uk.definely.com/api/proxy/core-mcp"),
+      enabled: Boolean(process.env.DEFINELY_API_KEY),
+    },
+    westlaw: {
+      apiKey: process.env.WESTLAW_API_KEY ?? "",
+      endpoint: optional("WESTLAW_MCP_URL", "https://legal-mcp.thomsonreuters.com/mcp"),
+      enabled: Boolean(process.env.WESTLAW_API_KEY),
+    },
+    everlaw: {
+      apiKey: process.env.EVERLAW_API_KEY ?? "",
+      endpoint: optional("EVERLAW_MCP_URL", "https://api.everlaw.com/v1/mcp"),
+      enabled: Boolean(process.env.EVERLAW_API_KEY),
+    },
+    trellis: {
+      apiKey: process.env.TRELLIS_API_KEY ?? "",
+      endpoint: optional("TRELLIS_MCP_URL", "https://mcp.trellis.law/anthropic"),
+      enabled: Boolean(process.env.TRELLIS_API_KEY),
+    },
+    descrybe: {
+      apiKey: process.env.DESCRYBE_API_KEY ?? "",
+      endpoint: optional("DESCRYBE_MCP_URL", "https://mcp.descrybe.com/mcp"),
+      enabled: Boolean(process.env.DESCRYBE_API_KEY),
+    },
   },
 
   // Infisical — open-source secrets manager (https://infisical.com)

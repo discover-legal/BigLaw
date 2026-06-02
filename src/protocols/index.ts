@@ -242,7 +242,13 @@ export function identifyGateRequests(taskId: string, findings: Finding[]): GateR
 
 // ─── Utility ──────────────────────────────────────────────────────────────────
 
-async function callModel(system: string, user: string, maxTokens: number, model?: string): Promise<string> {
+async function callModel(
+  system: string,
+  user: string,
+  maxTokens: number,
+  model?: string,
+  opts?: { thinking?: { budgetTokens: number } },
+): Promise<string> {
   const m = model ?? Config.anthropic.model;
   const provider = getProvider(m);
   const response = await provider.chat({
@@ -250,6 +256,8 @@ async function callModel(system: string, user: string, maxTokens: number, model?
     maxTokens,
     system,
     messages: [{ role: "user", content: user }],
+    cacheSystem: true,
+    ...(opts?.thinking && { thinking: opts.thinking }),
   });
   const block = response.content.find((b) => b.type === "text");
   if (!block || block.type !== "text") throw new Error("Unexpected content type from model");

@@ -30,6 +30,9 @@ import { Agent } from "../agents/base.js";
 import { AgentRegistry } from "../agents/registry.js";
 import { globalToolRegistry } from "../tools/index.js";
 import { IntraRoundMemoryStore, InterRoundMemoryStore } from "../memory/index.js";
+import { getProvider, resolveModelId } from "../providers/index.js";
+import { selectModel } from "../routing/model.js";
+import { agentLearning } from "../learning/index.js";
 import type { KnowledgeStore } from "../knowledge/index.js";
 import type {
   AgentDefinition,
@@ -42,6 +45,9 @@ import type {
   RoundState,
   Task,
 } from "../types.js";
+import { jurisdictionMatch } from "./jurisdiction.js";
+
+export { jurisdictionMatch } from "./jurisdiction.js";
 
 export interface DyTopoOptions {
   registry: AgentRegistry;
@@ -79,18 +85,14 @@ export class DyTopoEngine {
       goal: goal.description.slice(0, 80),
     });
 
-    // ── Step 1: Recruit agents from registry via semantic search on the round goal ──
-    const recruitedAgents = await this.recruitAgents(goal, task.id);
-
-    // Merge pinned + recruited, deduplicate
+    // ── Step 1: Recruit agents ──────────────────────────────────────────────
+    const recruitedAgents = await this.recruitAgents(goal, task);
     const agentMap = new Map<string, AgentDefinition>();
-    for (const a of [...this.pinnedAgents, ...recruitedAgents]) {
-      agentMap.set(a.id, a);
-    }
-    const activeDefinitions = Array.from(agentMap.values()).slice(
-      0,
-      Config.dytopo.maxAgentsPerRound,
-    );
+    for (const a of [...this.pinnedAgents, ...recruitedAgents]) agentMap.set(a.id, a);
+
+    const activeDefinitions = Array.from(agentMap.values())
+      .filter((a) => jurisdictionMatch(a, task.jurisdiction))
+      .slice(0, Config.dytopo.maxAgentsPerRound);
     const activeAgents = activeDefinitions.map((d) => new Agent(d));
 
     logger.info("Agents recruited for round", {
@@ -98,50 +100,62 @@ export class DyTopoEngine {
       agents: activeDefinitions.map((a) => a.name),
     });
 
-    // ── Step 2: Retrieve inter-round memory for each agent ──
+    // ── Step 2: Retrieve inter-round memory for each agent ─────────────────
     const agentMemories = await this.fetchAgentMemories(activeDefinitions, task, goal);
 
-    // ── Step 3: Each agent generates Need + Offer descriptors ──
+    // ── Step 3: Need/Offer descriptors ─────────────────────────────────────
     const needsOffers = await Promise.all(
-      activeAgents.map(async (agent) => {
-        const memoryEntries = agentMemories.get(agent.definition.id) ?? [];
-        return agent.generateNeedOffer({
+      activeAgents.map((agent) =>
+        agent.generateNeedOffer({
           roundGoal: goal,
-          incomingMessages: [],  // empty at descriptor stage
-          memoryEntries,
+          incomingMessages: [],
+          memoryEntries: agentMemories.get(agent.definition.id) ?? [],
           taskDescription: task.description,
-        });
-      }),
+        }),
+      ),
     );
+    const needs  = needsOffers.map((no) => no.need);
+    const offers = needsOffers.map((no) => no.offer);
 
-    const needs: NeedDescriptor[] = needsOffers.map((no) => no.need);
-    const offers: OfferDescriptor[] = needsOffers.map((no) => no.offer);
-
-    // ── Step 4: Embed descriptors and build sparse communication graph ──
+    // ── Step 4: Build sparse directed comm graph ────────────────────────────
     const edges = await this.buildCommGraph(needs, offers, activeDefinitions);
-
     logger.info("Communication graph built", {
       round: goal.round,
       edges: edges.length,
       threshold: Config.dytopo.similarityThreshold,
     });
 
-    // ── Step 5: Route messages along edges ──
+    // ── Step 5: Route messages along edges ─────────────────────────────────
     const messages = this.routeMessages(edges, offers, goal.round);
-    for (const msg of messages) {
-      intraMemory.recordMessage(msg.to, msg);
-    }
+    for (const msg of messages) intraMemory.recordMessage(msg.to, msg);
 
-    // ── Step 6: Agents process their context and produce findings ──
-    const allFindings = await this.processAgents(activeAgents, agentMemories, intraMemory, task, goal);
+    // ── Step 6: Agents process — full agentic loops ─────────────────────────
+    const allFindings = (await Promise.all(
+      activeAgents.map((agent) =>
+        agent.process({
+          roundGoal: goal,
+          incomingMessages: intraMemory.getMessagesFor(agent.definition.id),
+          memoryEntries: agentMemories.get(agent.definition.id) ?? [],
+          taskDescription: task.description,
+          taskId: task.id,
+          toolRegistry: globalToolRegistry,
+          knowledge: this.knowledge,
+          memory: this.memory,
+          ownerId: task.createdByProfileId,
+        }),
+      ),
+    )).flat();
 
-    // Tag findings with round number and record to intra-round memory
     for (const finding of allFindings) {
       finding.round = goal.round;
       intraMemory.recordFinding(finding.agentId, finding);
+      // Write to the intra-round whiteboard so persistRoundMemory can roll it up
+      intraMemory.addSharedContext(
+        `[${finding.agentName}] ${finding.content.replace(/\s+/g, " ").slice(0, 200)}`,
+      );
     }
 
-    // ── Step 7: Write round memory ──
+    // ── Step 7: Haiku rollup → inter-round memory ───────────────────────────
     await this.persistRoundMemory(task, goal, allFindings, intraMemory);
 
     const state: RoundState = {
@@ -167,7 +181,7 @@ export class DyTopoEngine {
 
   // ─── Private helpers ────────────────────────────────────────────────────────
 
-  private async recruitAgents(goal: RoundGoal, taskId: string): Promise<AgentDefinition[]> {
+  private async recruitAgents(goal: RoundGoal, task: Task): Promise<AgentDefinition[]> {
     const phaseQueries: Record<string, { tier?: 1 | 2 | 3 }> = {
       intake: { tier: 1 },
       research: { tier: 2 },
@@ -177,11 +191,49 @@ export class DyTopoEngine {
       verification: { tier: 2 },
       delivery: { tier: 1 },
     };
-    const opts = phaseQueries[goal.phase] ?? {};
-    return this.registry.search(goal.description, {
-      ...opts,
-      topK: Config.dytopo.maxAgentsPerRound - 1,
-    });
+    const tierOpt = phaseQueries[goal.phase] ?? {};
+    const topK = Config.dytopo.maxAgentsPerRound - 1;
+
+    // From prior rounds in this task, collect agents whose findings were not
+    // challenged (positive) and agents whose findings were challenged (negative).
+    // Use these to bias recruitment toward historically effective agents.
+    const positive: string[] = [];
+    const negative: string[] = [];
+    for (const round of task.rounds) {
+      for (const f of round.findings) {
+        if (f.challenged) negative.push(f.agentId);
+        else positive.push(f.agentId);
+      }
+    }
+
+    // Deduplicate and cap to avoid blowing out the recommend() request.
+    const uniquePositive = [...new Set(positive)].slice(0, 8);
+    const uniqueNegative = [...new Set(negative)].slice(0, 4);
+
+    // Semantic search — always run to ensure broad, relevant candidate pool.
+    const candidates = uniquePositive.length
+      ? await this.registry.recommend(goal.description, {
+          positive: uniquePositive,
+          negative: uniqueNegative,
+          ...tierOpt,
+          topK,
+        })
+      : await this.registry.search(goal.description, { ...tierOpt, topK });
+
+    // Q-learning rerank — promotes agents with strong historical performance
+    // for this exact (phase, jurisdiction, workflowType) combination.
+    // The learning layer uses epsilon-greedy exploration so it keeps discovering
+    // new agents even as it exploits known good ones.
+    const rankedIds = agentLearning.rankCandidates(
+      goal.phase,
+      task.jurisdiction,
+      task.workflowType,
+      candidates.map((a) => a.id),
+    );
+
+    // Restore AgentDefinition objects in the new ranked order.
+    const byId = new Map(candidates.map((a) => [a.id, a]));
+    return rankedIds.map((id) => byId.get(id)!).filter(Boolean);
   }
 
   private async fetchAgentMemories(
@@ -264,41 +316,18 @@ export class DyTopoEngine {
     }));
   }
 
-  private async processAgents(
-    agents: Agent[],
-    agentMemories: Map<string, import("../types.js").MemoryEntry[]>,
-    intraMemory: IntraRoundMemoryStore,
-    task: Task,
-    goal: RoundGoal,
-  ): Promise<Finding[]> {
-    const results = await Promise.all(
-      agents.map(async (agent) => {
-        const memoryEntries = agentMemories.get(agent.definition.id) ?? [];
-        const incomingMessages = intraMemory.getMessagesFor(agent.definition.id);
-        const findings = await agent.process({
-          roundGoal: goal,
-          incomingMessages,
-          memoryEntries,
-          taskDescription: task.description,
-          taskId: task.id,
-          toolRegistry: globalToolRegistry,
-          knowledge: this.knowledge,
-          memory: this.memory,
-          ownerId: task.createdByProfileId,
-        });
-        return findings;
-      }),
-    );
-    return results.flat();
-  }
-
+  /**
+   * Persist intra-round findings as individual memory entries, then synthesize
+   * a round-level rollup via Haiku. The rollup is a 2-3 sentence digest of the
+   * round's key conclusions — much richer than a string truncation.
+   */
   private async persistRoundMemory(
     task: Task,
     goal: RoundGoal,
     findings: Finding[],
     intraMemory: IntraRoundMemoryStore,
   ): Promise<void> {
-    // Write individual finding memories
+    // Write individual finding memories in parallel
     await Promise.all(
       findings.map((f) =>
         this.memory.writeFindingMemory({
@@ -311,10 +340,34 @@ export class DyTopoEngine {
       ),
     );
 
-    // Write round-level summary
-    const summaryContent = findings.length
-      ? `Key outputs: ${findings.slice(0, 3).map((f) => f.content.slice(0, 80)).join("; ")}...`
-      : "No findings this round.";
+    // Build the round rollup — Haiku synthesis of all findings, falling back to
+    // the naive concatenation if the model call fails so memory always gets written.
+    let summaryContent: string;
+    if (findings.length) {
+      const bulletList = findings
+        .slice(0, 12)
+        .map((f) => `- [${f.agentName}] ${f.content.replace(/\s+/g, " ").slice(0, 150)}`)
+        .join("\n");
+      try {
+        const model = selectModel({ tier: 3, type: "tool", taskType: "descriptor" });
+        const provider = getProvider(model);
+        const response = await provider.chat({
+          model: resolveModelId(model),
+          maxTokens: 300,
+          system: "You are a legal analysis synthesizer. Produce a concise inter-round memory digest.",
+          messages: [{
+            role: "user",
+            content: `Round ${goal.round} (${goal.phase}) findings:\n${bulletList}\n\nSummarise the key legal conclusions from this round in 2-3 sentences. Be specific — name parties, statutes, or doctrines where present. This summary will be retrieved as memory by agents in the next round.`,
+          }],
+        });
+        const textBlock = response.content.find((b) => b.type === "text");
+        summaryContent = textBlock?.type === "text" ? textBlock.text.trim() : bulletList;
+      } catch {
+        summaryContent = `Round ${goal.round} key findings: ${findings.slice(0, 3).map((f) => f.content.slice(0, 100)).join("; ")}`;
+      }
+    } else {
+      summaryContent = `Round ${goal.round} (${goal.phase}): No findings produced.`;
+    }
 
     await this.memory.writeRoundSummary({
       taskId: task.id,

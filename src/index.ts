@@ -8,48 +8,55 @@
 /**
  * Application entry point — Big Michael.
  *
- * Startup order (strict — DO NOT reorder imports):
- *   1. dotenv           — loads .env into process.env
- *   2. Infisical        — overlays managed secrets on top of process.env
- *   3. Everything else  — Config reads process.env, which is now fully populated
+ * Startup order:
+ *   1. dotenv (static import) — loads optional .env into process.env for local dev.
+ *      In production, environment variables come from the host (container env,
+ *      Kubernetes secrets, etc.) — no .env file is required or expected.
+ *   2. Infisical loader (static import, awaited) — authenticates with Infisical
+ *      using INFISICAL_CLIENT_ID / CLIENT_SECRET / PROJECT_ID and overlays ALL
+ *      managed secrets into process.env BEFORE config.ts is ever evaluated.
+ *   3. Everything else via dynamic import() — config.ts's require() calls only
+ *      run after step 2 completes, so every secret (including ANTHROPIC_API_KEY)
+ *      can live exclusively in Infisical with no .env fallback needed.
  *
- * Infisical (https://infisical.com) is an open-source self-hostable secrets
- * manager. Only INFISICAL_* bootstrap vars need to be in .env; all other
- * secrets (API keys, passwords, tokens) live in Infisical.
- * If INFISICAL_CLIENT_ID is not set, Infisical is skipped and .env is used as-is.
+ * Infisical is open-source and self-hostable: https://infisical.com
+ * Self-host: docker compose -f docker-compose.prod.yml up -d (Infisical repo)
+ *
+ * Bootstrap: only INFISICAL_CLIENT_ID, INFISICAL_CLIENT_SECRET, and
+ * INFISICAL_PROJECT_ID need to reach the process (via host env or a minimal
+ * .env). Everything else — ANTHROPIC_API_KEY, connector keys, session secrets —
+ * comes from Infisical. If Infisical is not configured, dotenv/.env is used as-is.
  */
 
-// ─── Step 1: dotenv ─── must be the very first import ─────────────────────────
+// ─── Step 1: dotenv ─── static, runs first ────────────────────────────────────
+// Loads .env if present. A no-op in production where env vars come from the host.
 import "dotenv/config";
 
-// ─── Step 2: Infisical ─── injects managed secrets before Config is evaluated ──
+// ─── Step 2: Infisical ─── static import, awaited before anything else ────────
+// secrets/index.ts has no dependency on config.ts so it is safe to import
+// statically. The await ensures ALL secrets are in process.env before step 3.
 import { loadSecrets } from "./secrets/index.js";
 await loadSecrets();
 
-// ─── Step 3: Application ─── safe to import after secrets are loaded ───────────
-import { logger } from "./logger.js";
-import { Orchestrator } from "./orchestrator.js";
-import { startMcpServer, startRestApi } from "./mcp/server.js";
+// ─── Step 3: Application ─── dynamic imports so config.ts evaluates NOW ───────
+// config.ts calls require() at module evaluation time. By using dynamic import()
+// here, we guarantee config.ts is evaluated only after Infisical secrets are
+// loaded — so ANTHROPIC_API_KEY and every other secret can live in Infisical.
+const { logger }                    = await import("./logger.js");
+const { Orchestrator }              = await import("./orchestrator.js");
+const { startMcpServer, startRestApi } = await import("./mcp/server.js");
 
-async function main(): Promise<void> {
-  logger.info("Big Michael starting…");
+logger.info("Big Michael starting…");
 
-  const orchestrator = new Orchestrator();
-  await orchestrator.init();
+const orchestrator = new Orchestrator();
+await orchestrator.init();
 
-  // REST API always starts; MCP stdio only when invoked by an MCP client (non-TTY)
-  await startRestApi(orchestrator);
+await startRestApi(orchestrator);
 
-  if (!process.stdin.isTTY) {
-    await startMcpServer(orchestrator);
-  } else {
-    logger.info(
-      `Interactive terminal — MCP stdio skipped. REST API on port ${process.env.API_PORT ?? "3101"}`,
-    );
-  }
+if (!process.stdin.isTTY) {
+  await startMcpServer(orchestrator);
+} else {
+  logger.info(
+    `Interactive terminal — MCP stdio skipped. REST API on port ${process.env.API_PORT ?? "3101"}`,
+  );
 }
-
-main().catch((err) => {
-  logger.error("Fatal startup error", { error: err.message, stack: err.stack });
-  process.exit(1);
-});

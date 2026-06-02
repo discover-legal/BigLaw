@@ -33,7 +33,8 @@ export interface ProviderToolResultBlock {
 export type ProviderContentBlock =
   | ProviderTextBlock
   | ProviderToolUseBlock
-  | ProviderToolResultBlock;
+  | ProviderToolResultBlock
+  | ProviderThinkingBlock;
 
 // ─── Messages ─────────────────────────────────────────────────────────────────
 
@@ -64,6 +65,15 @@ export interface ChatParams {
   messages: ProviderMessage[];
   tools?: ProviderTool[];
   maxTokens: number;
+  /** Cache the system prompt block (Anthropic only; silently ignored by other providers). */
+  cacheSystem?: boolean;
+  /** Enable extended thinking (Anthropic Opus/Sonnet only; requires maxTokens > budgetTokens). */
+  thinking?: { budgetTokens: number };
+}
+
+export interface ProviderThinkingBlock {
+  type: "thinking";
+  thinking: string;
 }
 
 export interface ChatResponse {

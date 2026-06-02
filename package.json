@@ -1,6 +1,6 @@
 {
   "name": "big-michael",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "Big Michael — portable multi-agent legal AI orchestration. Sits atop and within Mike (AGPL-3.0), Lavern (Apache-2.0), and others. DyTopo rounds, RuVector registry, Anthropic + Ollama inference, PyMuPDF/Camelot/Tesseract document tools, MCP + REST.",
   "license": "AGPL-3.0-only",
   "type": "module",
@@ -21,7 +21,6 @@
     "@fastify/cors": "^11.2.0",
     "@fastify/multipart": "^10.0.0",
     "@modelcontextprotocol/sdk": "^1.0.0",
-    "@qdrant/js-client-rest": "^1.12.0",
     "@tavily/core": "^0.7.3",
     "docx": "^9.7.1",
     "dotenv": "^16.4.5",
@@ -29,6 +28,7 @@
     "fast-xml-parser": "^5.8.0",
     "fastify": "^5.8.5",
     "openai": "^4.67.0",
+    "ruvector": "^0.2.27",
     "uuid": "^11.1.1",
     "winston": "^3.13.0",
     "zod": "^3.23.8"

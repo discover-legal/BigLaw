@@ -48,3 +48,14 @@ export function mergeAgents(...sources: AgentDefinition[][]): AgentDefinition[] 
   }
   return Array.from(map.values());
 }
+
+// Re-export the generic plugin adapter types so consumers can import from one place.
+export type {
+  LegalToolPlugin,
+  LegalToolAdapter,
+  PluginAuth,
+  PluginToolDef,
+  PluginWorkflowDef,
+  ResolvedTool,
+} from "./plugin.js";
+export { PluginRegistry, pluginRegistry } from "./plugin.js";

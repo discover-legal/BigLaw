@@ -39,6 +39,7 @@ import {
   replicateDocumentTool,
   readTableCellsTool,
 } from "./documents.js";
+import { CONNECTOR_TOOLS } from "./connectors.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -339,6 +340,8 @@ const ALL_TOOLS: ToolImpl[] = [
   editDocumentTool,
   replicateDocumentTool,
   readTableCellsTool,
+  // Legal data connectors (CourtListener always on; others activate via API key)
+  ...CONNECTOR_TOOLS,
 ];
 
 export class ToolRegistry {
@@ -383,6 +386,13 @@ export class ToolRegistry {
         data: { tool: name, ok: false, error: (err as Error).message },
       });
       throw err;
+    }
+  }
+
+  /** Register additional tools (e.g. from external plugins). Duplicate names are ignored. */
+  register(tool: ToolImpl): void {
+    if (!this.tools.has(tool.name)) {
+      this.tools.set(tool.name, tool);
     }
   }
 

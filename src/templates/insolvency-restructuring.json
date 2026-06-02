@@ -1,0 +1,13 @@
+{
+  "id": "insolvency-restructuring",
+  "name": "Insolvency & Restructuring Analysis",
+  "description": "Comprehensive analysis of an insolvency or financial-distress situation — available processes, creditor ranking, restructuring options, avoidance risk, and director duties. Produces a structured options report for stakeholders. Jurisdiction-neutral.",
+  "taskDescriptionTemplate": "Analyse the following insolvency or financial-distress situation and produce a structured options report.\n\nMatter: {{description}}\n\nDocuments provided: {{document}}\n\nThe analysis should:\n1. Assess the insolvency position: cash-flow and balance-sheet tests under the applicable regime; likely date of insolvency.\n2. Map the creditor waterfall: secured (with perfection status), preferential, ordinary unsecured, subordinated, and equity.\n3. Identify the formal insolvency processes available (administration, liquidation, restructuring plan, scheme, Chapter 11, etc.) and the conditions and timeline for each.\n4. Assess out-of-court restructuring options: standstill, lock-up agreement, exchange offer, debt-for-equity swap.\n5. Identify avoidance exposure: transactions at undervalue, preferences, and unlawful-distribution risk for pre-insolvency transactions.\n6. Analyse director duties: when the duty shifts toward creditors and what actions are now required or prohibited.\n7. Address cross-border dimension if the group spans jurisdictions: COMI, centre-of-main-interests, and recognition risk.\n8. Recommend a preferred path with the key immediate steps for each major stakeholder group.",
+  "workflowType": "full_bench",
+  "preferredDomains": ["analysis", "review", "compliance", "drafting"],
+  "source": "custom",
+  "metadata": {
+    "jurisdiction": "any",
+    "practiceArea": "Insolvency & Restructuring"
+  }
+}

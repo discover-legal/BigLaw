@@ -5,7 +5,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { Config } from "../config.js";
 import { logger } from "../logger.js";
 import { PRACTICE_AREAS } from "../types.js";
-import type { Client } from "../types.js";
+import type { Client, NosLegalTags } from "../types.js";
 
 const client = new Anthropic({ apiKey: Config.anthropic.apiKey });
 
@@ -71,5 +71,55 @@ ${snippet}`;
   } catch (err) {
     logger.warn("Client detection failed", { error: (err as Error).message });
     return null;
+  }
+}
+
+/**
+ * Detect NOSLEGAL v4 taxonomy tags from a task title/description.
+ * Returns an empty object on any error (LLM unavailable, parse failure) — never throws.
+ */
+export async function detectNosLegal(title: string, content: string): Promise<NosLegalTags> {
+  const safeTitle = title.replace(/[\r\n]/g, " ").slice(0, 300);
+  const snippet = content.slice(0, 2000);
+  const prompt = `You are a legal taxonomy assistant. Given a task title and description, classify it into NOSLEGAL v4 taxonomy facets. Respond with ONLY valid JSON (no prose, no markdown fences) using exactly this shape:
+{
+  "areaOfLaw": "<string or omit>",
+  "workType": "<Advisory|Transactional|Litigious|Regulatory|Other or omit>",
+  "sector": "<string or omit>",
+  "assetType": "<string or omit>"
+}
+
+Common areaOfLaw values: "Corporate Finance", "Employment", "Intellectual Property", "Real Estate", "Competition", "Tax", "Banking & Finance", "Insolvency", "Data Privacy", "Immigration", "Insurance", "Environmental"
+Common sector values: "Financial Services", "Technology", "Healthcare", "Real Estate", "Energy", "Retail", "Media & Entertainment", "Transport", "Government", "Manufacturing"
+Common assetType values: "Agreement", "Opinion", "Pleading", "Memorandum", "Report", "Correspondence", "Regulation"
+
+Omit a field entirely if it does not clearly apply. Each value must be under 60 characters.
+
+Task title: ${safeTitle}
+Task description:
+${snippet}`;
+
+  try {
+    const msg = await client.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 256,
+      messages: [{ role: "user", content: prompt }],
+    });
+    const text = (msg.content[0] as { type: string; text: string }).text?.trim() ?? "";
+    // Strip markdown fences and parse JSON
+    const stripped = text.replace(/```(?:json)?/gi, "").trim();
+    const start = stripped.indexOf("{");
+    const end = stripped.lastIndexOf("}");
+    if (start === -1 || end === -1 || end <= start) return {};
+    const parsed = JSON.parse(stripped.slice(start, end + 1)) as Record<string, unknown>;
+    const result: NosLegalTags = {};
+    if (typeof parsed.areaOfLaw === "string" && parsed.areaOfLaw) result.areaOfLaw = parsed.areaOfLaw.slice(0, 60);
+    if (typeof parsed.workType === "string" && parsed.workType) result.workType = parsed.workType.slice(0, 60);
+    if (typeof parsed.sector === "string" && parsed.sector) result.sector = parsed.sector.slice(0, 60);
+    if (typeof parsed.assetType === "string" && parsed.assetType) result.assetType = parsed.assetType.slice(0, 60);
+    return result;
+  } catch (err) {
+    logger.warn("NOSLEGAL detection failed", { error: (err as Error).message });
+    return {};
   }
 }

@@ -106,11 +106,12 @@ export class LavernAdapter implements AgentHarness {
       systemPrompt: c.systemPrompt,
       allowedTools: this.mapTools(c.mcpTools),
       skills: extractSkills(c),
+      // Preserve jurisdiction tags so DyTopo can filter agents for non-matching matters.
+      jurisdictions: c.jurisdiction ? [c.jurisdiction] : undefined,
       metadata: {
         source: "lavern",
         lavernTier: c.tier,
         lavernWorkflow: c.workflow,
-        jurisdiction: c.jurisdiction,
       },
     };
   }
@@ -153,13 +154,142 @@ export class LavernAdapter implements AgentHarness {
       "mcp_memory":          "query_memory",
     };
     const PERMITTED_TOOLS = new Set([
+      // Core tools
       "web_search", "search_knowledge", "query_memory", "extract_from_document",
       "translate", "citation_check", "list_documents", "read_document",
       "fetch_documents", "find_in_document",
+      // Case law & court record connectors
+      "court_listener_search", "court_listener_opinion", "court_listener_docket",
+      "westlaw_research", "westlaw_check_citation",
+      "everlaw_search_documents", "everlaw_get_review_set",
+      "trellis_search_cases", "trellis_get_docket", "trellis_judge_analytics",
+      "descrybe_search_cases", "descrybe_check_citation",
+      // Contract & document management connectors
+      "ironclad_search_contracts", "ironclad_get_contract",
+      "imanage_search", "imanage_get_document",
+      "definely_analyze_structure", "definely_resolve_definition",
     ]);
     return mcpTools
       .map((t) => toolMap[t] ?? t)
       .filter((t) => PERMITTED_TOOLS.has(t));
+  }
+}
+
+// ─── Lavern workflow adapter ──────────────────────────────────────────────────
+
+/**
+ * Lavern defines 9 workflow types as step pipelines with gates and evaluators.
+ * We convert them to TaskTemplates so they appear in the template picker and
+ * can be submitted via /tasks/from-template.
+ *
+ * Drop Lavern workflow JSON files in workflows/laverne/ — each file may contain
+ * a single LavernWorkflowConfig or an array.
+ */
+export interface LavernWorkflowConfig {
+  id: string;
+  name: string;
+  description: string;
+  /** Lavern's own type name — mapped to our WorkflowType */
+  type:
+    | "adversarial"
+    | "counsel"
+    | "full-bench"
+    | "legal-design"
+    | "pre-engagement"
+    | "review"
+    | "roundtable"
+    | "tabulate"
+    | "verification";
+  /** Optional: prompt template with {{document}} / {{description}} placeholders */
+  promptTemplate?: string;
+  /** Which domains the workflow engages */
+  preferredDomains?: import("../types.js").AgentDomain[];
+  jurisdiction?: string;
+  specialty?: string;
+}
+
+const LAVERN_WORKFLOW_TYPE_MAP: Record<string, import("../types.js").WorkflowType> = {
+  "adversarial":   "adversarial",
+  "counsel":       "counsel",
+  "full-bench":    "full_bench",
+  "legal-design":  "legal_design",
+  "pre-engagement":"pre_engagement",
+  "review":        "review",
+  "roundtable":    "roundtable",
+  "tabulate":      "tabulate",
+  "verification":  "adversarial",  // closest: adversarial includes verification phases
+};
+
+export class LavernWorkflowAdapter {
+  /**
+   * Load Lavern workflow configs from a directory of JSON files.
+   * sourcePath must be within the project working directory.
+   */
+  async load(sourcePath: string): Promise<TaskTemplate[]> {
+    const cwd = process.cwd();
+    const resolved = resolve(sourcePath);
+    if (!resolved.startsWith(cwd + sep) && resolved !== cwd) {
+      throw new Error(`Workflow source path '${sourcePath}' must be within the project root`);
+    }
+    let entries: string[];
+    try {
+      entries = await readdir(resolved);
+    } catch {
+      return [];  // directory absent — not an error
+    }
+
+    const configs: LavernWorkflowConfig[] = [];
+    for (const entry of entries) {
+      if (extname(entry) !== ".json") continue;
+      const raw = await readFile(join(resolved, entry), "utf8");
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) configs.push(...parsed);
+      else configs.push(parsed);
+    }
+
+    return this.fromConfigs(configs);
+  }
+
+  fromConfigs(configs: LavernWorkflowConfig[]): TaskTemplate[] {
+    return configs.map((c) => {
+      this.validate(c);
+      return this.convert(c);
+    });
+  }
+
+  private validate(c: LavernWorkflowConfig): void {
+    if (!c.id || typeof c.id !== "string") throw new Error("LavernWorkflowConfig: missing or invalid id");
+    if (!c.name || typeof c.name !== "string") throw new Error(`LavernWorkflowConfig '${c.id}': missing name`);
+    if (!c.description || typeof c.description !== "string") throw new Error(`LavernWorkflowConfig '${c.id}': missing description`);
+    const validTypes = ["adversarial","counsel","full-bench","legal-design","pre-engagement","review","roundtable","tabulate","verification"];
+    if (!validTypes.includes(c.type)) {
+      throw new Error(`LavernWorkflowConfig '${c.id}': invalid type '${c.type}' — must be one of ${validTypes.join(", ")}`);
+    }
+    if (c.promptTemplate !== undefined) {
+      if (typeof c.promptTemplate !== "string") throw new Error(`LavernWorkflowConfig '${c.id}': promptTemplate must be a string`);
+      if (c.promptTemplate.length > 10000) throw new Error(`LavernWorkflowConfig '${c.id}': promptTemplate exceeds 10000 chars`);
+    }
+  }
+
+  private convert(c: LavernWorkflowConfig): TaskTemplate {
+    const workflowType = LAVERN_WORKFLOW_TYPE_MAP[c.type] ?? "roundtable";
+    const basePrompt = c.promptTemplate ??
+      `Complete the following legal task using the ${c.name} workflow.\n\nMatter: {{description}}\n\nDocuments provided: {{document}}`;
+
+    return {
+      id: `lavern:${c.id}`,
+      name: `[Lavern] ${c.name}`,
+      description: [c.description, c.specialty, c.jurisdiction].filter(Boolean).join(" — "),
+      taskDescriptionTemplate: basePrompt,
+      workflowType,
+      preferredDomains: c.preferredDomains,
+      source: "lavern",
+      metadata: {
+        lavernType: c.type,
+        jurisdiction: c.jurisdiction,
+        specialty: c.specialty,
+      },
+    };
   }
 }
 
@@ -268,6 +398,11 @@ export interface ExternalAgentConfig {
   allowedTools?: string[];
   skills?: string[];
   source?: string;
+  /**
+   * Jurisdictions this agent is optimised for (e.g. ["US"], ["EU", "UK"]).
+   * Undefined / empty = jurisdiction-neutral.
+   */
+  jurisdictions?: string[];
 }
 
 export function fromExternalConfig(c: ExternalAgentConfig): AgentDefinition {
@@ -284,6 +419,7 @@ export function fromExternalConfig(c: ExternalAgentConfig): AgentDefinition {
     systemPrompt: c.systemPrompt,
     allowedTools: c.allowedTools ?? [],
     skills: c.skills ?? [],
+    jurisdictions: c.jurisdictions?.length ? c.jurisdictions : undefined,
     metadata: { source: c.source ?? "external" },
   };
 }

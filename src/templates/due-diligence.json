@@ -1,0 +1,13 @@
+{
+  "id": "due-diligence",
+  "name": "Transaction Due Diligence",
+  "description": "Full legal due diligence for M&A, investment, or financing transactions. Covers corporate, contracts, employment, IP, litigation, regulatory, tax, real estate, and data-privacy workstreams. Produces a structured report with risk ratings and deal implications for each finding. Jurisdiction-neutral — applies the governing law of the target.",
+  "taskDescriptionTemplate": "Conduct legal due diligence on the following transaction and produce a structured due-diligence report.\n\nMatter: {{description}}\n\nDocuments provided: {{document}}\n\nScope:\n1. Corporate: entity structure, constitutional documents, share capital, board authority, and any corporate irregularities.\n2. Contracts: key commercial agreements — obligations, termination triggers, change-of-control provisions, assignment restrictions.\n3. Employment: workforce terms, senior management contracts, incentive schemes, collective agreements, and redundancy exposure.\n4. Intellectual property: IP ownership, registrations, licences, and any third-party IP dependencies.\n5. Litigation: current and threatened proceedings, regulatory investigations, and indemnity exposure.\n6. Regulatory & compliance: licences, permits, and regulatory status; data-privacy compliance.\n7. Tax: historical compliance, open assessments, transfer pricing, and any structured-tax positions.\n8. Real estate: title, leases, encumbrances, and planning or zoning issues (if applicable).\n\nFor each workstream: red-flag any HIGH or MEDIUM risk findings with a deal implication (condition, price, indemnity, or walk-away). Flag any missing documents as open items.",
+  "workflowType": "full_bench",
+  "preferredDomains": ["analysis", "review", "compliance", "drafting"],
+  "source": "custom",
+  "metadata": {
+    "jurisdiction": "any",
+    "practiceArea": "Corporate & M&A"
+  }
+}

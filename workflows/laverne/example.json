@@ -1,0 +1,21 @@
+[
+  {
+    "id": "gdpr-dpia",
+    "name": "GDPR Data Protection Impact Assessment",
+    "description": "Structured DPIA workflow for high-risk processing activities under GDPR Article 35. Maps processing, assesses necessity/proportionality, identifies risks, and produces the DPIA record.",
+    "type": "legal-design",
+    "promptTemplate": "Conduct a Data Protection Impact Assessment (DPIA) under GDPR Article 35 for the following processing activity.\n\nMatter: {{description}}\n\nDocuments provided: {{document}}\n\nThe DPIA must:\n1. Describe the processing: purposes, legal basis, data categories, retention, recipients.\n2. Assess necessity and proportionality: is the processing limited to what is necessary?\n3. Identify and assess risks to data subjects: likelihood and severity of each risk.\n4. Identify measures to address the risks and residual risk after mitigation.\n5. Determine whether prior consultation with the supervisory authority is required (Article 36).\n6. Produce the completed DPIA record in a format suitable for the DPO and board.",
+    "preferredDomains": ["analysis", "compliance", "drafting"],
+    "jurisdiction": "EU",
+    "specialty": "Data Privacy"
+  },
+  {
+    "id": "conflict-check",
+    "name": "Conflict of Interest & Engagement Scoping",
+    "description": "Pre-engagement workflow: conflict check, scope definition, engagement letter drafting, and regulatory classification of the proposed matter.",
+    "type": "pre-engagement",
+    "promptTemplate": "Conduct a pre-engagement review for the following proposed matter.\n\nMatter: {{description}}\n\nDocuments provided: {{document}}\n\n1. Conflict check: identify all parties and related entities; flag any conflict with existing clients or adverse party lists.\n2. Scope definition: characterise the legal work required and identify the relevant practice areas.\n3. Regulatory classification: identify any licensing, notification, or reporting obligations triggered by taking on this matter.\n4. Engagement terms: recommend scope, fee structure, and any special terms for the engagement letter.\n5. Produce a summary pre-engagement memo for the supervising partner.",
+    "preferredDomains": ["analysis", "compliance", "drafting"],
+    "specialty": "Practice Management"
+  }
+]

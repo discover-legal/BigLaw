@@ -19,6 +19,7 @@
 
 import { Config } from "../config.js";
 import type { AgentTier, AgentType } from "../types.js";
+import { isOllamaModel, isLocalModel } from "../providers/index.js";
 
 export type TaskType =
   | "synthesis"     // final output generation, root orchestrator reasoning
@@ -157,6 +158,29 @@ export function estimateComplexity(text: string): Complexity {
   if (highScore >= 2) return "high";
   if (lowScore >= 2)  return "low";
   return "medium";
+}
+
+/**
+ * Returns true when extended thinking should be requested for a call.
+ * Only Anthropic cloud models (Opus/Sonnet) support thinking; local models don't.
+ * Only synthesis, debate, and high-complexity reasoning benefit enough to justify
+ * the additional latency and cost.
+ */
+export function shouldUseThinking(params: {
+  modelId: string;
+  taskType: TaskType;
+  tier?: AgentTier;
+  complexity?: Complexity;
+}): boolean {
+  const { modelId, taskType, tier, complexity } = params;
+  if (isOllamaModel(modelId) || isLocalModel(modelId)) return false;
+  if (modelId.includes("haiku")) return false;
+  return (
+    taskType === "synthesis" ||
+    taskType === "debate" ||
+    tier === 0 ||
+    (taskType === "reasoning" && complexity === "high")
+  );
 }
 
 export const ModelLabels: Record<string, string> = {

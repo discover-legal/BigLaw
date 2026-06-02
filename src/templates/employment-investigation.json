@@ -1,0 +1,13 @@
+{
+  "id": "employment-investigation",
+  "name": "Employment Investigation & Advice",
+  "description": "Adversarial analysis of a workplace investigation matter — employee status, conduct, disciplinary or grievance process, discrimination exposure, and termination risk. Produces a structured advice note with recommended process steps and exposure quantification.",
+  "taskDescriptionTemplate": "Analyse the following employment matter and produce a structured advice note.\n\nMatter: {{description}}\n\nDocuments provided: {{document}}\n\nThe analysis should:\n1. Confirm the worker's employment status and the applicable statutory regime.\n2. Identify the source and content of the relevant terms (contract, policy, collective agreement, statute).\n3. Assess the employer's and employee's competing positions on the facts.\n4. Analyse: (a) whether the conduct or grievance alleged is established on the evidence; (b) what a fair process requires under the governing law; (c) what outcome options are open to the employer.\n5. Screen for discrimination, protected-characteristic, or whistleblowing dimensions.\n6. Quantify the termination exposure: notice, severance, unfair-dismissal cap, and any additional heads of claim.\n7. Recommend the process steps the employer should follow to minimise legal and reputational risk.",
+  "workflowType": "adversarial",
+  "preferredDomains": ["analysis", "review", "compliance"],
+  "source": "custom",
+  "metadata": {
+    "jurisdiction": "any",
+    "practiceArea": "Employment & Labour"
+  }
+}

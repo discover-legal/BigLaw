@@ -37,3 +37,11 @@ audit.jsonl
 .tasks.json
 .settings.json
 .profiles.json
+.clients.json
+.time-entries.json
+.qtable.json
+
+# RuVector persistent stores (created on first run)
+data/
+*.rvdb
+*.db

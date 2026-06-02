@@ -35,9 +35,11 @@ import { logger } from "../logger.js";
 import { auditLogger } from "../audit/index.js";
 import { Orchestrator } from "../orchestrator.js";
 import type { WorkflowType, SessionUser } from "../types.js";
-import { LOCAL_PARTNER, filterVisible, canViewTask, isPartner } from "../auth/index.js";
+import { MODE_COLORS, MODE_CAPABILITIES } from "../types.js";
+import { LOCAL_PARTNER, filterVisible, canViewTask, isPartner, resolveMode } from "../auth/index.js";
 import { registerAuthRoutes, readSessionCookie } from "../auth/oauth.js";
 import { detectPracticeArea, detectClient } from "../services/classifier.js";
+import { pluginRegistry } from "../adapters/plugin.js";
 
 // ─── Tool schemas ─────────────────────────────────────────────────────────────
 
@@ -51,7 +53,7 @@ const TOOLS = [
         description: { type: "string", description: "Full description of the legal task" },
         workflowType: {
           type: "string",
-          enum: ["counsel", "roundtable", "adversarial", "review", "tabulate", "full_bench"],
+          enum: ["counsel", "roundtable", "adversarial", "review", "tabulate", "full_bench", "legal_design", "pre_engagement"],
           description: "Orchestration workflow to use",
         },
         documentIds: {
@@ -61,6 +63,10 @@ const TOOLS = [
         },
         clientNumber: { type: "string", description: "Optional law-firm client number" },
         matterNumber: { type: "string", description: "Optional law-firm matter number" },
+        jurisdiction: {
+          type: "string",
+          description: "Governing jurisdiction (e.g. 'US', 'US-NY', 'EU', 'UK', 'AU', 'SG'). Filters out jurisdiction-incompatible agents.",
+        },
       },
       required: ["description", "workflowType"],
     },
@@ -165,6 +171,11 @@ const TOOLS = [
     inputSchema: { type: "object", properties: {} },
   },
   {
+    name: "list_plugins",
+    description: "List all loaded external plugins (JSON drop-ins and TypeScript adapters), including their contributed tools, agents, and workflow templates.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
     name: "submit_from_template",
     description: "Instantiate a TaskTemplate and submit it as a new task.",
     inputSchema: {
@@ -200,6 +211,20 @@ const TOOLS = [
       properties: {
         taskId: { type: "string", description: "Optional: filter to a specific task" },
         limit: { type: "number", description: "Maximum entries to return (default 200)" },
+      },
+    },
+  },
+  {
+    name: "get_time_entries",
+    description: "Retrieve time entries for billing. Lawyers see their own; partners see all. Supports filtering by profileId, taskId, matterNumber.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        profileId: { type: "string" },
+        taskId: { type: "string" },
+        matterNumber: { type: "string" },
+        from: { type: "string", description: "ISO date string" },
+        to: { type: "string", description: "ISO date string" },
       },
     },
   },
@@ -299,7 +324,7 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
   app.post("/tasks", async (req, reply) => {
     const body = req.body as {
       description: string; workflowType: WorkflowType; documentIds?: string[];
-      clientNumber?: string; matterNumber?: string;
+      clientNumber?: string; matterNumber?: string; jurisdiction?: string;
     };
     // Cap documentIds to 100 entries to prevent memory exhaustion from massive arrays.
     if (Array.isArray(body.documentIds) && body.documentIds.length > 100) {
@@ -376,7 +401,7 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
     if (!task || !canViewTask(getUser(req), task)) return reply.status(404).send({ error: "Task not found" });
     if (!isPartner(getUser(req))) return reply.status(403).send({ error: "Partner role required" });
     const { note } = (req.body ?? {}) as { note?: string };
-    orchestrator.approveGate(taskId, gateId, note);
+    orchestrator.approveGate(taskId, gateId, note, getUser(req)?.profileId);
     return reply.status(200).send({ ok: true });
   });
 
@@ -386,7 +411,7 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
     if (!task || !canViewTask(getUser(req), task)) return reply.status(404).send({ error: "Task not found" });
     if (!isPartner(getUser(req))) return reply.status(403).send({ error: "Partner role required" });
     const { reason } = (req.body ?? {}) as { reason: string };
-    orchestrator.rejectGate(taskId, gateId, reason);
+    orchestrator.rejectGate(taskId, gateId, reason, getUser(req)?.profileId);
     return reply.status(200).send({ ok: true });
   });
 
@@ -533,10 +558,24 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
   // T18: Template REST routes
   app.get("/templates", async () => orchestrator.listTemplates());
 
+  // Plugin registry — lists all loaded JSON/adapter plugins (partners only)
+  app.get("/plugins", async (req, reply) => {
+    if (!isPartner(getUser(req))) return reply.code(403).send({ error: "forbidden" });
+    return pluginRegistry.list();
+  });
+
   // ── Identity + lawyer profiles ──────────────────────────────────────────────
   app.get("/me", async (req) => {
     const user = getUser(req);
-    return { user, authEnabled: Config.auth.enabled };
+    const mode = user?.mode ?? "lite";
+    return {
+      user,
+      authEnabled: Config.auth.enabled,
+      // Mode metadata the UI needs to theme itself and gate features.
+      mode,
+      modeColor: MODE_COLORS[mode],
+      capabilities: MODE_CAPABILITIES[mode],
+    };
   });
 
   // Partners see full profiles (including email for contact/admin purposes).
@@ -574,9 +613,12 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
     if (!isPartner(user) && user?.profileId !== id) {
       return reply.status(403).send({ error: "You can only edit your own profile" });
     }
-    // Non-partners cannot change role.
+    // Non-partners cannot change role or mode — both are partner-assigned.
     if (!isPartner(user) && patch.role) {
       return reply.status(403).send({ error: "Partner role required to change role" });
+    }
+    if (!isPartner(user) && patch.mode !== undefined) {
+      return reply.status(403).send({ error: "Partner role required to set user mode" });
     }
     try {
       return await orchestrator.profiles.update(id, patch as Record<string, never>);
@@ -770,6 +812,71 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
     return reply;
   });
 
+  // ── Time entries ─────────────────────────────────────────────────────────────
+  // Lawyers see only their own entries; partners see all.
+  app.get("/time-entries", async (req) => {
+    const user = getUser(req);
+    const { profileId, taskId, matterNumber, from, to } = req.query as Record<string, string>;
+    const filter = {
+      // Lawyers are restricted to their own entries; partners may filter by any profileId.
+      profileId: isPartner(user) ? (profileId || undefined) : user?.profileId,
+      taskId: taskId || undefined,
+      matterNumber: matterNumber || undefined,
+      from: from ? new Date(from) : undefined,
+      to: to ? new Date(to) : undefined,
+    };
+    return orchestrator.time.list(filter);
+  });
+
+  app.get("/time-entries/export.json", async (req, reply) => {
+    if (!isPartner(getUser(req))) return reply.status(403).send({ error: "Partner role required" });
+    const { profileId, taskId, matterNumber, from, to } = req.query as Record<string, string>;
+    const filter = {
+      profileId: profileId || undefined,
+      taskId: taskId || undefined,
+      matterNumber: matterNumber || undefined,
+      from: from ? new Date(from) : undefined,
+      to: to ? new Date(to) : undefined,
+    };
+    return orchestrator.time.exportJson(filter);
+  });
+
+  app.get("/time-entries/export.csv", async (req, reply) => {
+    if (!isPartner(getUser(req))) return reply.status(403).send({ error: "Partner role required" });
+    const { profileId, taskId, matterNumber, from, to } = req.query as Record<string, string>;
+    const filter = {
+      profileId: profileId || undefined,
+      taskId: taskId || undefined,
+      matterNumber: matterNumber || undefined,
+      from: from ? new Date(from) : undefined,
+      to: to ? new Date(to) : undefined,
+    };
+    reply.header("Content-Type", "text/csv; charset=utf-8");
+    reply.header("Content-Disposition", "attachment; filename=\"time-entries.csv\"");
+    return orchestrator.time.exportCsv(filter);
+  });
+
+  // ── NOSLEGAL analytics ────────────────────────────────────────────────────────
+  // Aggregates NOSLEGAL facet breakdown across all tasks the caller can see.
+  // Partner only — provides firm-wide matter analytics.
+  app.get("/analytics/noslegal", async (req, reply) => {
+    if (!isPartner(getUser(req))) return reply.status(403).send({ error: "Partner role required" });
+    const tasks = filterVisible(getUser(req), orchestrator.listTasks());
+    const byAreaOfLaw: Record<string, number> = {};
+    const byWorkType: Record<string, number> = {};
+    const bySector: Record<string, number> = {};
+    const byAssetType: Record<string, number> = {};
+    for (const task of tasks) {
+      if (!task.noslegal) continue;
+      const { areaOfLaw, workType, sector, assetType } = task.noslegal;
+      if (areaOfLaw) byAreaOfLaw[areaOfLaw] = (byAreaOfLaw[areaOfLaw] ?? 0) + 1;
+      if (workType)  byWorkType[workType]   = (byWorkType[workType]   ?? 0) + 1;
+      if (sector)    bySector[sector]       = (bySector[sector]       ?? 0) + 1;
+      if (assetType) byAssetType[assetType] = (byAssetType[assetType] ?? 0) + 1;
+    }
+    return { total: tasks.length, byAreaOfLaw, byWorkType, bySector, byAssetType };
+  });
+
   await app.listen({ port: Config.api.port, host: Config.api.host });
   logger.info("REST API started", { port: Config.api.port, host: Config.api.host, auth: Config.api.apiKey ? "x-api-key" : "none" });
 }
@@ -834,6 +941,9 @@ async function handleTool(
     case "list_templates":
       return orch.listTemplates();
 
+    case "list_plugins":
+      return pluginRegistry.list();
+
     case "submit_from_template":
       return orch.submitFromTemplate(
         args.templateId as string,
@@ -861,6 +971,18 @@ async function handleTool(
       // makes the access intent explicit and consistent with the REST audit route.
       const visibleIds = new Set(orch.listTasks().map((t) => t.id));
       return allEntries.filter((e) => !e.taskId || visibleIds.has(e.taskId));
+    }
+
+    case "get_time_entries": {
+      // MCP runs as LOCAL_PARTNER (full access). Partners see all time entries.
+      const filter = {
+        profileId: args.profileId as string | undefined,
+        taskId: args.taskId as string | undefined,
+        matterNumber: args.matterNumber as string | undefined,
+        from: args.from ? new Date(args.from as string) : undefined,
+        to: args.to ? new Date(args.to as string) : undefined,
+      };
+      return orch.time.list(filter);
     }
 
     default:

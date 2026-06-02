@@ -24,7 +24,7 @@ import { v4 as uuidv4 } from "uuid";
 import { Config } from "./config.js";
 import { logger } from "./logger.js";
 import { getProvider, resolveModelId } from "./providers/index.js";
-import { selectModel } from "./routing/model.js";
+import { selectModel, shouldUseThinking } from "./routing/model.js";
 import { auditLogger } from "./audit/index.js";
 import { AgentRegistry } from "./agents/registry.js";
 import { Agent } from "./agents/base.js";
@@ -32,18 +32,22 @@ import { ROOT_ORCHESTRATOR, ALL_AGENT_DEFINITIONS } from "./agents/definitions.j
 import { SettingsStore } from "./settings/index.js";
 import { ProfileStore } from "./auth/index.js";
 import { ClientStore } from "./clients/index.js";
+import { TimeStore } from "./time/index.js";
+import { agentLearning } from "./learning/index.js";
 import { DyTopoEngine } from "./dytopo/engine.js";
 import { InterRoundMemoryStore } from "./memory/index.js";
 import { KnowledgeStore } from "./knowledge/index.js";
 import { TemplateStore } from "./templates/store.js";
-import { LavernAdapter, instantiateTemplate, fromExternalConfig, fromMikeOSSWorkflow } from "./adapters/lavern.js";
+import { LavernAdapter, LavernWorkflowAdapter, instantiateTemplate, fromExternalConfig, fromMikeOSSWorkflow } from "./adapters/lavern.js";
 import type { TaskTemplate, ExternalAgentConfig, MikeOSSWorkflow } from "./adapters/lavern.js";
+import { pluginRegistry } from "./adapters/plugin.js";
 import {
   applyCitationGate,
   runDebate,
   runVerificationPipeline,
   identifyGateRequests,
 } from "./protocols/index.js";
+import { detectNosLegal } from "./services/classifier.js";
 import type {
   Task,
   WorkflowType,
@@ -53,12 +57,15 @@ import type {
 } from "./types.js";
 
 const PHASE_SEQUENCES: Record<WorkflowType, TaskPhase[]> = {
-  counsel:     ["intake", "research", "drafting", "delivery"],
-  roundtable:  ["intake", "research", "analysis", "drafting", "review", "delivery"],
-  adversarial: ["intake", "research", "analysis", "review", "verification", "delivery"],
-  review:      ["intake", "analysis", "review", "verification", "delivery"],
-  tabulate:    ["intake", "analysis", "delivery"],
-  full_bench:  ["intake", "research", "analysis", "drafting", "review", "verification", "delivery"],
+  counsel:        ["intake", "research", "drafting", "delivery"],
+  roundtable:     ["intake", "research", "analysis", "drafting", "review", "delivery"],
+  adversarial:    ["intake", "research", "analysis", "review", "verification", "delivery"],
+  review:         ["intake", "analysis", "review", "verification", "delivery"],
+  tabulate:       ["intake", "analysis", "delivery"],
+  full_bench:     ["intake", "research", "analysis", "drafting", "review", "verification", "delivery"],
+  // Lavern workflow types
+  legal_design:   ["intake", "research", "analysis", "drafting", "review", "delivery"],
+  pre_engagement: ["intake", "research", "analysis", "delivery"],
 };
 
 /**
@@ -85,6 +92,7 @@ export class Orchestrator {
   readonly settings: SettingsStore;
   readonly profiles: ProfileStore;
   readonly clients: ClientStore;
+  readonly time: TimeStore;
 
   private readonly tasks: Map<string, Task> = new Map();
   private readonly gateEmitter = new EventEmitter();
@@ -100,6 +108,7 @@ export class Orchestrator {
     this.settings = new SettingsStore();
     this.profiles = new ProfileStore();
     this.clients = new ClientStore();
+    this.time = new TimeStore();
   }
 
   async init(): Promise<void> {
@@ -107,6 +116,8 @@ export class Orchestrator {
     await this.settings.init();
     await this.profiles.init();
     await this.clients.init();
+    await this.time.init();
+    await agentLearning.init();
     await Promise.all([
       this.registry.init(),
       this.memory.init(),
@@ -124,8 +135,13 @@ export class Orchestrator {
     // Load external and Lavern agents from filesystem
     await this.loadExternalAgents();
 
-    // Load MikeOSS workflow presets (native format) and register as templates
+    // Load workflow presets — MikeOSS (native format) and Lavern (9 workflow types)
     await this.loadMikeOSSWorkflows();
+    await this.loadLavernWorkflows();
+
+    // Load generic JSON plugins from adapters/external/ and register their
+    // agents, templates, and tools into the live stores.
+    await this.loadPlugins();
 
     // Restore persisted tasks
     await this.restoreTasks();
@@ -152,6 +168,7 @@ export class Orchestrator {
     documentIds?: string[];
     clientNumber?: string;
     matterNumber?: string;
+    jurisdiction?: string;
     createdByProfileId?: string;
   }): Promise<Task> {
     if (params.description.length > Orchestrator.MAX_DESCRIPTION_CHARS) {
@@ -171,6 +188,7 @@ export class Orchestrator {
     const task: Task = {
       id: uuidv4(),
       description: params.description,
+      jurisdiction: params.jurisdiction?.trim().toUpperCase().slice(0, 20) || undefined,
       clientNumber: params.clientNumber?.trim().slice(0, 100) || undefined,
       matterNumber: params.matterNumber?.trim().slice(0, 100) || undefined,
       documentIds: params.documentIds ?? [],
@@ -188,15 +206,46 @@ export class Orchestrator {
       updatedAt: new Date(),
     };
 
+    // Auto-detect NOSLEGAL taxonomy tags from the description (best-effort, never blocks).
+    try {
+      task.noslegal = await detectNosLegal(params.description, params.description);
+    } catch {
+      // detectNosLegal never throws, but guard defensively.
+    }
+
+    // Open a time entry when a profile is associated with this task.
+    if (params.createdByProfileId) {
+      const profile = this.profiles.get(params.createdByProfileId);
+      if (profile) {
+        const entry = this.time.open({
+          profileId: profile.id,
+          profileName: profile.name,
+          taskId: task.id,
+          matterNumber: task.matterNumber,
+          clientNumber: task.clientNumber,
+          description: `Task: ${task.description.slice(0, 200)}`,
+          event: "task_run",
+          startedAt: new Date(),
+        });
+        task.activeTimeEntryId = entry.id;
+      }
+    }
+
     this.tasks.set(task.id, task);
     logger.info("Task submitted", { taskId: task.id, workflow: params.workflowType });
     auditLogger.write({ event: "task.created", taskId: task.id, data: { description: params.description, workflowType: params.workflowType } });
+    await this.persistTasks();
 
     // Run asynchronously — callers poll getTask() for status
     this.runTask(task).catch((err) => {
       logger.error("Task execution failed", { taskId: task.id, error: err.message });
       task.status = "failed";
       task.error = err.message;
+      // Close the time entry even on failure.
+      if (task.activeTimeEntryId) {
+        this.time.close(task.activeTimeEntryId);
+        task.activeTimeEntryId = undefined;
+      }
       this.emit(task.id, "failed", { error: err.message });
       auditLogger.write({ event: "task.failed", taskId: task.id, data: { error: err.message } });
     });
@@ -260,7 +309,7 @@ export class Orchestrator {
    * Human approves or rejects a gate request.
    * Approved findings proceed to output; rejected are discarded.
    */
-  approveGate(taskId: string, gateId: string, note?: string): void {
+  approveGate(taskId: string, gateId: string, note?: string, reviewerProfileId?: string): void {
     const task = this.tasks.get(taskId);
     if (!task) throw new Error(`Task not found: ${taskId}`);
     const gate = task.pendingGates.find((g) => g.id === gateId);
@@ -270,11 +319,30 @@ export class Orchestrator {
     gate.reviewedAt = new Date();
     task.updatedAt = new Date();
     auditLogger.write({ event: "gate.approved", taskId, data: { gateId, note } });
+
+    // Record a gate_review time entry for the reviewing lawyer.
+    if (reviewerProfileId) {
+      const profile = this.profiles.get(reviewerProfileId);
+      if (profile) {
+        const entry = this.time.open({
+          profileId: profile.id,
+          profileName: profile.name,
+          taskId,
+          matterNumber: task.matterNumber,
+          clientNumber: task.clientNumber,
+          description: `Gate review: ${gate.finding.content.slice(0, 100)}`,
+          event: "gate_review",
+          startedAt: new Date(),
+        });
+        this.time.close(entry.id);
+      }
+    }
+
     this.gateEmitter.emit(`gates:${taskId}`);
     this.persistTasks().catch((err) => logger.warn("Failed to persist tasks", { error: err.message }));
   }
 
-  rejectGate(taskId: string, gateId: string, reason: string): void {
+  rejectGate(taskId: string, gateId: string, reason: string, reviewerProfileId?: string): void {
     const task = this.tasks.get(taskId);
     if (!task) throw new Error(`Task not found: ${taskId}`);
     const gate = task.pendingGates.find((g) => g.id === gateId);
@@ -285,6 +353,25 @@ export class Orchestrator {
     task.findings = task.findings.filter((f) => f.id !== gate.findingId);
     task.updatedAt = new Date();
     auditLogger.write({ event: "gate.rejected", taskId, data: { gateId, reason } });
+
+    // Record a gate_review time entry for the reviewing lawyer.
+    if (reviewerProfileId) {
+      const profile = this.profiles.get(reviewerProfileId);
+      if (profile) {
+        const entry = this.time.open({
+          profileId: profile.id,
+          profileName: profile.name,
+          taskId,
+          matterNumber: task.matterNumber,
+          clientNumber: task.clientNumber,
+          description: `Gate review: ${gate.finding.content.slice(0, 100)}`,
+          event: "gate_review",
+          startedAt: new Date(),
+        });
+        this.time.close(entry.id);
+      }
+    }
+
     this.gateEmitter.emit(`gates:${taskId}`);
     this.persistTasks().catch((err) => logger.warn("Failed to persist tasks", { error: err.message }));
   }
@@ -367,6 +454,48 @@ export class Orchestrator {
     if (loaded) logger.info("MikeOSS workflows registered as templates", { count: loaded });
   }
 
+  /**
+   * Load Lavern workflow definitions from workflows/laverne/ and register each
+   * as a TaskTemplate. Lavern workflows specify step pipelines and gate conditions;
+   * we map them to our WorkflowType phase sequences.
+   */
+  private async loadLavernWorkflows(): Promise<void> {
+    const dir = join(process.cwd(), "workflows", "laverne");
+    const adapter = new LavernWorkflowAdapter();
+    const templates = await adapter.load(dir);
+    for (const t of templates) this.templates.add(t);
+    if (templates.length) logger.info("Lavern workflows registered as templates", { count: templates.length });
+  }
+
+  // ─── Generic plugin loader ────────────────────────────────────────────────
+
+  /**
+   * Load JSON plugin packages from adapters/external/ via the PluginRegistry.
+   * Each package may contribute tools (registered into globalToolRegistry),
+   * agent definitions (registered into the AgentRegistry), and workflow
+   * templates (added to the TemplateStore).
+   */
+  private async loadPlugins(): Promise<void> {
+    const dir = join(process.cwd(), "adapters", "external");
+    await pluginRegistry.loadDirectory(dir);
+    if (!pluginRegistry.size) return;
+
+    const { globalToolRegistry } = await import("./tools/index.js");
+
+    const tools = pluginRegistry.allTools();
+    for (const tool of tools) globalToolRegistry.register(tool as Parameters<typeof globalToolRegistry.register>[0]);
+
+    const agents = pluginRegistry.allAgents();
+    if (agents.length) {
+      await this.registry.registerAll(agents);
+      logger.info("Plugin agents registered", { count: agents.length });
+    }
+
+    const workflows = pluginRegistry.allWorkflows();
+    for (const wf of workflows) this.templates.add(wf);
+    if (workflows.length) logger.info("Plugin templates registered", { count: workflows.length });
+  }
+
   // ─── Internal task runner ─────────────────────────────────────────────────
 
   private emit(taskId: string, type: string, data: unknown): void {
@@ -411,11 +540,73 @@ export class Orchestrator {
     task.status = "complete";
     task.completedAt = new Date();
     task.updatedAt = new Date();
+
+    // Close the time entry now that the task has finished.
+    if (task.activeTimeEntryId) {
+      this.time.close(task.activeTimeEntryId);
+      task.activeTimeEntryId = undefined;
+    }
+
+    // Feed agent performance back into the registry so recommend()-based
+    // recruitment improves over time. High-confidence verified findings → positive
+    // signal; challenged/low-confidence ones → negative signal.
+    this.recordAgentOutcomes(task).catch((err) =>
+      logger.warn("Agent outcome recording failed", { error: (err as Error).message }),
+    );
+
     this.emit(task.id, "complete", { findings: task.findings.length, output: task.output?.slice(0, 200) });
     auditLogger.write({ event: "task.complete", taskId: task.id, data: { findings: task.findings.length } });
     this.persistTasks().catch((err) => logger.warn("Failed to persist tasks", { error: err.message }));
 
     logger.info("Task complete", { taskId: task.id, findings: task.findings.length });
+  }
+
+  /**
+   * Feed task outcomes back into the agent registry's performance scores.
+   * Agents whose findings were verified and not challenged → high signal.
+   * Agents whose findings were challenged, rejected, or very low confidence → low signal.
+   * The registry writes these as `successScore` payload fields so future
+   * recommend()-based recruitment can blend semantic match with proven performance.
+   */
+  private async recordAgentOutcomes(task: Task): Promise<void> {
+    if (!task.findings.length) return;
+
+    // Group findings by (agentId, phase) so Q-learning gets per-phase rewards.
+    const agentPhaseScores = new Map<string, { phase: string; scores: number[] }>();
+    for (const f of task.findings) {
+      const key = `${f.agentId}::${f.round}`;
+      if (!agentPhaseScores.has(key)) {
+        // Find the phase for this round
+        const roundState = task.rounds.find((r) => r.findings.some((rf) => rf.id === f.id));
+        agentPhaseScores.set(key, { phase: roundState?.goal.phase ?? task.currentPhase, scores: [] });
+      }
+      const effective = f.challenged && !f.resolved ? f.confidence * 0.3 : f.confidence;
+      agentPhaseScores.get(key)!.scores.push(effective);
+    }
+
+    const phases = ["intake","research","analysis","drafting","review","verification","delivery"];
+    const done = true; // task is complete
+
+    for (const [key, { phase, scores }] of agentPhaseScores) {
+      const agentId = key.split("::")[0];
+      const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
+      const phaseIdx = phases.indexOf(phase);
+      const nextPhase = phases[phaseIdx + 1] ?? phase;
+
+      // Update Qdrant successScore (for recommend() in future tasks)
+      await this.registry.recordOutcome([agentId], avg);
+
+      // Update RuVector Q-table (for per-phase agent ranking in future tasks)
+      await agentLearning.recordEpisode({
+        phase,
+        nextPhase,
+        jurisdiction: task.jurisdiction,
+        workflowType: task.workflowType,
+        agentId,
+        reward: avg,
+        done,
+      });
+    }
   }
 
   private async runPhase(task: Task, phase: TaskPhase): Promise<void> {
@@ -494,6 +685,7 @@ EXPECTED_OUTPUT_3: <third expected output>`;
       maxTokens: 600,
       system: ROOT_ORCHESTRATOR.systemPrompt,
       messages: [{ role: "user", content: prompt }],
+      cacheSystem: true,
     });
 
     const textBlock = response.content.find((b) => b.type === "text");
@@ -528,12 +720,16 @@ Produce the final legal output for this task. Structure appropriately for the wo
 Every claim must trace to a specific finding number from the list above.`;
 
     const model = selectModel({ tier: 0, taskType: "synthesis" });
+    const useThinking = shouldUseThinking({ modelId: model, taskType: "synthesis", tier: 0 });
     const provider = getProvider(model);
     const response = await provider.chat({
       model: resolveModelId(model),
-      maxTokens: 4000,
+      // When thinking is on, budget_tokens + output tokens must fit within max_tokens.
+      maxTokens: useThinking ? 16_000 : 4000,
       system: ROOT_ORCHESTRATOR.systemPrompt,
       messages: [{ role: "user", content: prompt }],
+      cacheSystem: true,
+      ...(useThinking && { thinking: { budgetTokens: Config.anthropic.thinkingBudgetTokens } }),
     });
 
     const textBlock = response.content.find((b) => b.type === "text");
@@ -588,6 +784,7 @@ Rules:
       maxTokens: 4000,
       system: ROOT_ORCHESTRATOR.systemPrompt,
       messages: [{ role: "user", content: prompt }],
+      cacheSystem: true,
     });
 
     const textBlock = response.content.find((b) => b.type === "text");

@@ -5,63 +5,65 @@
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version. See <https://www.gnu.org/licenses/>.
 
-import { QdrantClient } from "@qdrant/js-client-rest";
-import { v4 as uuidv4, v5 as uuidv5 } from "uuid";
+// Agent registry backed by RuVector's native in-process HNSW store.
+// VectorDb persists to disk via storagePath; no external service required.
+
+import { v5 as uuidv5 } from "uuid";
 import { Config } from "../config.js";
 import { embed, embedBatch } from "../embeddings.js";
 import { logger } from "../logger.js";
 import type { AgentDefinition, AgentTier, AgentDomain } from "../types.js";
 
-// Backed by Qdrant in dev; drop in RuVector HTTP API for production.
-// RuVector: https://github.com/ruvnet/RuVector — compatible REST API, add GNN self-learning.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { VectorDb } = require("ruvector") as { VectorDb: new (o: RvOptions) => RvDb };
 
-const COLLECTION = Config.vectorDb.collections.agents;
+interface RvOptions { dimensions: number; storagePath?: string; distanceMetric?: string }
+interface RvEntry  { id?: string; vector: number[] | Float32Array; metadata?: Record<string, unknown> }
+interface RvHit    { id: string; score: number; metadata?: Record<string, unknown> }
+interface RvRecord { id?: string; vector: Float32Array; metadata?: Record<string, unknown> }
+interface RvDb {
+  insert(e: RvEntry): Promise<string>;
+  insertBatch(es: RvEntry[]): Promise<string[]>;
+  search(q: { vector: number[] | Float32Array; k: number; filter?: Record<string, unknown> }): Promise<RvHit[]>;
+  get(id: string): Promise<RvRecord | null>;
+  delete(id: string): Promise<boolean>;
+  len(): Promise<number>;
+}
+
 const DIMS = Config.embeddings.dimensions;
 
 // Stable namespace for agent string-ID → UUID v5 mapping.
-// Same agent ID always maps to the same Qdrant point ID across restarts.
-const AGENT_NS = "6ba7b810-9dad-11d1-80b4-00c04fd430c8"; // UUID namespace (DNS)
+// Same agent ID always maps to the same point ID across restarts.
+const AGENT_NS = "6ba7b810-9dad-11d1-80b4-00c04fd430c8";
+
+// Small non-zero vector used for "list all" style queries — avoids the
+// cosine-of-zero edge case in the native HNSW implementation.
+const SMALL_VEC: number[] = new Array(DIMS).fill(Number.EPSILON);
 
 export class AgentRegistry {
-  private readonly qdrant: QdrantClient;
+  private readonly db: RvDb;
   private ready = false;
 
   constructor() {
-    this.qdrant = new QdrantClient({
-      url: Config.vectorDb.url,
-      apiKey: Config.vectorDb.apiKey,
+    this.db = new VectorDb({
+      dimensions: DIMS,
+      distanceMetric: "Cosine",
+      storagePath: `${Config.vectorDb.dataDir}/agents.rvdb`,
     });
   }
 
   async init(): Promise<void> {
-    const { collections } = await this.qdrant.getCollections();
-    const exists = collections.some((c) => c.name === COLLECTION);
-    if (!exists) {
-      await this.qdrant.createCollection(COLLECTION, {
-        vectors: { size: DIMS, distance: "Cosine" },
-      });
-      logger.info("Agent registry collection created", { collection: COLLECTION });
-    }
     this.ready = true;
+    logger.info("Agent registry ready (RuVector native)");
   }
 
   async register(definition: AgentDefinition): Promise<void> {
     this.assertReady();
     const { embedding } = await embed(definition.description);
-    await this.qdrant.upsert(COLLECTION, {
-      wait: true,
-      points: [
-        {
-          id: this.toPointId(definition.id),
-          vector: embedding,
-          payload: {
-            ...definition,
-            // Store allowedTools as a JSON string for Qdrant compat
-            allowedToolsJson: JSON.stringify(definition.allowedTools),
-            skillsJson: JSON.stringify(definition.skills),
-          },
-        },
-      ],
+    await this.db.insert({
+      id: this.toPointId(definition.id),
+      vector: embedding,
+      metadata: this.toPayload(definition),
     });
     logger.debug("Agent registered", { id: definition.id, name: definition.name });
   }
@@ -70,16 +72,13 @@ export class AgentRegistry {
     this.assertReady();
     const texts = definitions.map((d) => d.description);
     const embeddings = await embedBatch(texts);
-    const points = definitions.map((def, i) => ({
-      id: this.toPointId(def.id),
-      vector: embeddings[i].embedding,
-      payload: {
-        ...def,
-        allowedToolsJson: JSON.stringify(def.allowedTools),
-        skillsJson: JSON.stringify(def.skills),
-      },
-    }));
-    await this.qdrant.upsert(COLLECTION, { wait: true, points });
+    await this.db.insertBatch(
+      definitions.map((def, i) => ({
+        id: this.toPointId(def.id),
+        vector: embeddings[i].embedding,
+        metadata: this.toPayload(def),
+      })),
+    );
     logger.info("Agent batch registered", { count: definitions.length });
   }
 
@@ -93,62 +92,100 @@ export class AgentRegistry {
   ): Promise<AgentDefinition[]> {
     this.assertReady();
     const { embedding } = await embed(query);
-
     const filter: Record<string, unknown> = {};
-    const must: unknown[] = [];
-    if (opts.tier !== undefined) {
-      must.push({ key: "tier", match: { value: opts.tier } });
-    }
-    if (opts.domain !== undefined) {
-      must.push({ key: "domain", match: { value: opts.domain } });
-    }
-    if (must.length) filter.must = must;
-
-    const results = await this.qdrant.search(COLLECTION, {
+    if (opts.tier !== undefined) filter.tier = opts.tier;
+    if (opts.domain !== undefined) filter.domain = opts.domain;
+    const results = await this.db.search({
       vector: embedding,
-      limit: opts.topK ?? 10,
-      filter: must.length ? filter : undefined,
-      with_payload: true,
+      k: opts.topK ?? 10,
+      ...(Object.keys(filter).length ? { filter } : {}),
     });
+    return results.map((r) => this.toDefinition(r.metadata ?? {}));
+  }
 
-    return results.map((r) => this.toDefinition(r.payload as Record<string, unknown>));
+  /**
+   * Recommendation-based recruitment: semantic search + Q-learning reranking
+   * (handled upstream by AgentLearningLayer). VectorDb HNSW doesn't support
+   * collaborative filtering natively so this is a semantic search alias.
+   */
+  async recommend(
+    query: string,
+    opts: { positive: string[]; negative?: string[]; tier?: AgentTier; topK?: number },
+  ): Promise<AgentDefinition[]> {
+    return this.search(query, { tier: opts.tier, topK: opts.topK });
+  }
+
+  /**
+   * Record agent task outcome (updates successScore on the stored vector).
+   * Called after task completion; high confidence → positive signal.
+   */
+  async recordOutcome(agentIds: string[], avgConfidence: number): Promise<void> {
+    this.assertReady();
+    const score = Math.max(0, Math.min(1, avgConfidence));
+    await Promise.allSettled(
+      agentIds.map(async (id) => {
+        const pointId = this.toPointId(id);
+        const existing = await this.db.get(pointId);
+        if (!existing) return;
+        await this.db.insert({
+          id: pointId,
+          vector: existing.vector,
+          metadata: { ...(existing.metadata ?? {}), successScore: score },
+        });
+      }),
+    );
+    logger.debug("Agent outcome recorded", { count: agentIds.length, avgConfidence });
   }
 
   async getById(id: string): Promise<AgentDefinition | null> {
     this.assertReady();
-    const results = await this.qdrant.retrieve(COLLECTION, {
-      ids: [this.toPointId(id)],
-      with_payload: true,
-    });
-    if (!results.length) return null;
-    return this.toDefinition(results[0].payload as Record<string, unknown>);
+    const entry = await this.db.get(this.toPointId(id));
+    if (!entry) return null;
+    return this.toDefinition(entry.metadata ?? {});
   }
 
   async listAll(): Promise<AgentDefinition[]> {
     this.assertReady();
-    const result = await this.qdrant.scroll(COLLECTION, {
-      limit: 500,
-      with_payload: true,
-    });
-    return result.points.map((p) => this.toDefinition(p.payload as Record<string, unknown>));
+    const results = await this.db.search({ vector: SMALL_VEC, k: 500 });
+    return results.map((r) => this.toDefinition(r.metadata ?? {}));
   }
 
-  // Deterministic UUID v5: same agentId always → same Qdrant point ID.
+  // Deterministic UUID v5: same agentId always → same point ID across restarts.
   private toPointId(agentId: string): string {
     return uuidv5(agentId, AGENT_NS);
   }
 
+  private toPayload(def: AgentDefinition): Record<string, unknown> {
+    return {
+      id:           def.id,
+      name:         def.name,
+      tier:         def.tier,
+      type:         def.type,
+      domain:       def.domain,
+      description:  def.description,
+      systemPrompt: def.systemPrompt,
+      skills:       def.skills,
+      allowedTools: def.allowedTools,
+      jurisdictions: def.jurisdictions ?? null,
+      metadata:     def.metadata ?? null,
+    };
+  }
+
   private toDefinition(payload: Record<string, unknown>): AgentDefinition {
     return {
-      id: payload.id as string,
-      name: payload.name as string,
-      tier: payload.tier as AgentDefinition["tier"],
-      type: payload.type as AgentDefinition["type"],
-      domain: payload.domain as AgentDefinition["domain"],
-      description: payload.description as string,
+      id:           payload.id as string,
+      name:         payload.name as string,
+      tier:         payload.tier as AgentDefinition["tier"],
+      type:         payload.type as AgentDefinition["type"],
+      domain:       payload.domain as AgentDefinition["domain"],
+      description:  payload.description as string,
       systemPrompt: payload.systemPrompt as string,
-      skills: JSON.parse((payload.skillsJson as string) ?? "[]"),
-      allowedTools: JSON.parse((payload.allowedToolsJson as string) ?? "[]"),
+      skills:       (payload.skills as string[]) ?? [],
+      allowedTools: (payload.allowedTools as string[]) ?? [],
+      // jurisdictions is stored as array or null; restore to undefined when null
+      jurisdictions: Array.isArray(payload.jurisdictions)
+        ? (payload.jurisdictions as string[])
+        : undefined,
       metadata: (payload.metadata as Record<string, unknown>) ?? undefined,
     };
   }

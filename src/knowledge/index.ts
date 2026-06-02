@@ -5,38 +5,55 @@
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version. See <https://www.gnu.org/licenses/>.
 
-import { QdrantClient } from "@qdrant/js-client-rest";
+// Knowledge store backed by RuVector's native in-process HNSW store.
+// Documents are chunked and each chunk stored as a separate vector.
+// No external service required — data persists to ./data/knowledge.rvdb.
+
 import { v4 as uuidv4 } from "uuid";
 import { Config } from "../config.js";
 import { embed, embedBatch } from "../embeddings.js";
 import { logger } from "../logger.js";
 import type { Document, SearchResult } from "../types.js";
 
-const COLLECTION = Config.vectorDb.collections.documents;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { VectorDb } = require("ruvector") as { VectorDb: new (o: RvOptions) => RvDb };
+
+interface RvOptions { dimensions: number; storagePath?: string; distanceMetric?: string }
+interface RvEntry  { id?: string; vector: number[] | Float32Array; metadata?: Record<string, unknown> }
+interface RvHit    { id: string; score: number; metadata?: Record<string, unknown> }
+interface RvDb {
+  insert(e: RvEntry): Promise<string>;
+  insertBatch(es: RvEntry[]): Promise<string[]>;
+  search(q: { vector: number[] | Float32Array; k: number; filter?: Record<string, unknown> }): Promise<RvHit[]>;
+  delete(id: string): Promise<boolean>;
+}
+
 const DIMS = Config.embeddings.dimensions;
 const CHUNK_SIZE = 1500;    // characters per chunk
 const CHUNK_OVERLAP = 200;
 
+// Small non-zero vector used for "fetch by filter" queries without a semantic query.
+const SMALL_VEC: number[] = new Array(DIMS).fill(Number.EPSILON);
+
+// Upper bound on chunks to retrieve when listing/fetching full docs.
+// 10 000 chunks ≈ 150 MB of raw text — well beyond a typical law firm knowledge base.
+const MAX_CHUNKS_FETCH = 10_000;
+
 export class KnowledgeStore {
-  private readonly qdrant: QdrantClient;
+  private readonly db: RvDb;
   private ready = false;
 
   constructor() {
-    this.qdrant = new QdrantClient({
-      url: Config.vectorDb.url,
-      apiKey: Config.vectorDb.apiKey,
+    this.db = new VectorDb({
+      dimensions: DIMS,
+      distanceMetric: "Cosine",
+      storagePath: `${Config.vectorDb.dataDir}/knowledge.rvdb`,
     });
   }
 
   async init(): Promise<void> {
-    const { collections } = await this.qdrant.getCollections();
-    if (!collections.some((c) => c.name === COLLECTION)) {
-      await this.qdrant.createCollection(COLLECTION, {
-        vectors: { size: DIMS, distance: "Cosine" },
-      });
-      logger.info("Knowledge store collection created", { collection: COLLECTION });
-    }
     this.ready = true;
+    logger.info("Knowledge store ready (RuVector native)");
   }
 
   // 2 MB cap — prevents a single ingest from fanning out thousands of
@@ -60,30 +77,30 @@ export class KnowledgeStore {
 
     logger.info("Ingesting document", { title: doc.title, chunks: chunks.length });
 
-    // Embed all chunks in a single batched API call instead of N concurrent
-    // calls — prevents rate-limit exhaustion and unbounded parallel requests.
     const embeddings = await embedBatch(chunks);
 
-    const points = chunks.map((chunk, i) => ({
-      id: uuidv4(),
-      vector: embeddings[i].embedding,
-      payload: {
-        docId,
-        title: doc.title,
-        source: doc.source ?? null,
-        jurisdiction: doc.jurisdiction ?? null,
-        documentType: doc.documentType ?? null,
-        ownerId: doc.ownerId ?? null,
-        practiceArea: doc.practiceArea ?? null,
-        detectedClientNumber: doc.detectedClientNumber ?? null,
-        chunkIndex: i,
-        totalChunks: chunks.length,
-        content: chunk,
-        ingestedAt: new Date().toISOString(),
-      },
-    }));
+    const ingestedAt = new Date().toISOString();
+    await this.db.insertBatch(
+      chunks.map((chunk, i) => ({
+        id: uuidv4(),
+        vector: embeddings[i].embedding,
+        metadata: {
+          docId,
+          title:                 doc.title,
+          source:                doc.source ?? null,
+          jurisdiction:          doc.jurisdiction ?? null,
+          documentType:          doc.documentType ?? null,
+          ownerId:               doc.ownerId ?? null,
+          practiceArea:          doc.practiceArea ?? null,
+          detectedClientNumber:  doc.detectedClientNumber ?? null,
+          chunkIndex:            i,
+          totalChunks:           chunks.length,
+          content:               chunk,
+          ingestedAt,
+        },
+      })),
+    );
 
-    await this.qdrant.upsert(COLLECTION, { wait: true, points });
     logger.info("Document ingested", { docId, chunks: chunks.length });
     return docId;
   }
@@ -98,65 +115,61 @@ export class KnowledgeStore {
     this.assertReady();
     const { embedding } = await embed(query);
 
-    const must: unknown[] = [];
-    if (opts.jurisdiction) must.push({ key: "jurisdiction", match: { value: opts.jurisdiction } });
-    if (opts.documentType) must.push({ key: "documentType", match: { value: opts.documentType } });
-    if (opts.ownerId) must.push({ key: "ownerId", match: { value: opts.ownerId } });
+    const filter: Record<string, unknown> = {};
+    if (opts.jurisdiction)  filter.jurisdiction  = opts.jurisdiction;
+    if (opts.documentType)  filter.documentType  = opts.documentType;
+    if (opts.ownerId)       filter.ownerId       = opts.ownerId;
 
-    const results = await this.qdrant.search(COLLECTION, {
+    const results = await this.db.search({
       vector: embedding,
-      limit: Math.min(opts.topK ?? 8, 50),
-      filter: must.length ? { must } : undefined,
-      with_payload: true,
+      k: Math.min(opts.topK ?? 8, 50),
+      ...(Object.keys(filter).length ? { filter } : {}),
     });
 
     return results.map((r) => {
-      const p = r.payload as Record<string, unknown>;
+      const p = r.metadata as Record<string, unknown>;
       return {
         document: {
-          id: p.docId as string,
-          title: p.title as string,
-          content: p.content as string,
-          source: p.source as string | undefined,
-          jurisdiction: p.jurisdiction as string | undefined,
-          documentType: p.documentType as string | undefined,
-          practiceArea: p.practiceArea as string | undefined,
-          detectedClientNumber: p.detectedClientNumber as string | undefined,
-          ingestedAt: new Date(p.ingestedAt as string),
+          id:                   p.docId as string,
+          title:                p.title as string,
+          content:              p.content as string,
+          source:               (p.source as string) ?? undefined,
+          jurisdiction:         (p.jurisdiction as string) ?? undefined,
+          documentType:         (p.documentType as string) ?? undefined,
+          practiceArea:         (p.practiceArea as string) ?? undefined,
+          detectedClientNumber: (p.detectedClientNumber as string) ?? undefined,
+          ingestedAt:           new Date(p.ingestedAt as string),
         },
-        score: r.score,
-        excerpt: (p.content as string).slice(0, 300) + "…",
+        score:   r.score,
+        excerpt: ((p.content as string) ?? "").slice(0, 300) + "…",
       };
     });
   }
 
   /**
    * Retrieve full document text by docId — concatenates all chunks in order.
-   * When ownerId is provided, returns null if the document belongs to a different owner
-   * so agent tools cannot read documents outside the submitting user's scope.
+   * When ownerId is provided, returns null if the document belongs to a different owner.
    */
   async getFullText(docId: string, ownerId?: string): Promise<string | null> {
     this.assertReady();
-    const must: unknown[] = [{ key: "docId", match: { value: docId } }];
-    if (ownerId) must.push({ key: "ownerId", match: { value: ownerId } });
-    const result = await this.qdrant.scroll(COLLECTION, {
-      filter: { must },
-      limit: 500,
-      with_payload: true,
-    });
+    const filter: Record<string, unknown> = { docId };
+    if (ownerId) filter.ownerId = ownerId;
 
-    if (!result.points.length) return null;
+    const results = await this.db.search({ vector: SMALL_VEC, k: MAX_CHUNKS_FETCH, filter });
+    if (!results.length) return null;
 
-    const sorted = result.points.sort(
-      (a, b) =>
-        ((a.payload as Record<string, unknown>).chunkIndex as number) -
-        ((b.payload as Record<string, unknown>).chunkIndex as number),
-    );
+    const sorted = results
+      .slice()
+      .sort(
+        (a, b) =>
+          ((a.metadata?.chunkIndex as number) ?? 0) -
+          ((b.metadata?.chunkIndex as number) ?? 0),
+      );
 
-    return sorted.map((p) => (p.payload as Record<string, unknown>).content as string).join("\n");
+    return sorted.map((r) => (r.metadata?.content as string) ?? "").join("\n");
   }
 
-  /** List every ingested document (one entry per docId), for pickers/browsing. */
+  /** List every ingested document (one entry per docId). */
   async listDocuments(ownerId?: string): Promise<Array<{
     id: string;
     title: string;
@@ -167,35 +180,36 @@ export class KnowledgeStore {
     ingestedAt?: string;
   }>> {
     this.assertReady();
+    const filter: Record<string, unknown> = {};
+    if (ownerId) filter.ownerId = ownerId;
+
+    const results = await this.db.search({
+      vector: SMALL_VEC,
+      k: MAX_CHUNKS_FETCH,
+      ...(Object.keys(filter).length ? { filter } : {}),
+    });
+
     const seen = new Map<string, {
       id: string; title: string; jurisdiction?: string; documentType?: string;
       practiceArea?: string; detectedClientNumber?: string; ingestedAt?: string;
     }>();
-    let offset: string | number | undefined | null = undefined;
-    do {
-      const res = await this.qdrant.scroll(COLLECTION, {
-        limit: 256,
-        with_payload: true,
-        offset: offset ?? undefined,
-        filter: ownerId ? { must: [{ key: "ownerId", match: { value: ownerId } }] } : undefined,
-      });
-      for (const pt of res.points) {
-        const p = pt.payload as Record<string, unknown>;
-        const id = p?.docId as string | undefined;
-        if (id && !seen.has(id)) {
-          seen.set(id, {
-            id,
-            title: (p.title as string) ?? "Untitled",
-            jurisdiction: (p.jurisdiction as string) ?? undefined,
-            documentType: (p.documentType as string) ?? undefined,
-            practiceArea: (p.practiceArea as string) ?? undefined,
-            detectedClientNumber: (p.detectedClientNumber as string) ?? undefined,
-            ingestedAt: (p.ingestedAt as string) ?? undefined,
-          });
-        }
+
+    for (const r of results) {
+      const p = r.metadata as Record<string, unknown>;
+      const id = p?.docId as string | undefined;
+      if (id && !seen.has(id)) {
+        seen.set(id, {
+          id,
+          title:                (p.title as string) ?? "Untitled",
+          jurisdiction:         (p.jurisdiction as string) ?? undefined,
+          documentType:         (p.documentType as string) ?? undefined,
+          practiceArea:         (p.practiceArea as string) ?? undefined,
+          detectedClientNumber: (p.detectedClientNumber as string) ?? undefined,
+          ingestedAt:           (p.ingestedAt as string) ?? undefined,
+        });
       }
-      offset = res.next_page_offset as string | number | null | undefined;
-    } while (offset != null);
+    }
+
     return [...seen.values()];
   }
 

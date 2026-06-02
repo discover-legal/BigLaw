@@ -9,16 +9,15 @@
  * Memory layer — intra-round and inter-round.
  *
  * Intra-round: IntraRoundMemoryStore (in-process, reset per round)
- * Inter-round: InterRoundMemoryStore (Qdrant/RuVector, persists across rounds and tasks)
+ * Inter-round: InterRoundMemoryStore (RuVector native HNSW, persists across rounds and tasks)
  *
  * Agents call query() to retrieve relevant memories before generating Need/Offer descriptors
  * or processing their round. The orchestrator writes new memories after each round completes.
  */
 
-import { QdrantClient } from "@qdrant/js-client-rest";
 import { v4 as uuidv4 } from "uuid";
 import { Config } from "../config.js";
-import { embed, embedBatch } from "../embeddings.js";
+import { embed } from "../embeddings.js";
 import { logger } from "../logger.js";
 import type {
   IntraRoundMemory,
@@ -29,8 +28,22 @@ import type {
   TaskPhase,
 } from "../types.js";
 
-const COLLECTION = Config.vectorDb.collections.memory;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { VectorDb } = require("ruvector") as { VectorDb: new (o: RvOptions) => RvDb };
+
+interface RvOptions { dimensions: number; storagePath?: string; distanceMetric?: string }
+interface RvEntry  { id?: string; vector: number[] | Float32Array; metadata?: Record<string, unknown> }
+interface RvHit    { id: string; score: number; metadata?: Record<string, unknown> }
+interface RvDb {
+  insert(e: RvEntry): Promise<string>;
+  search(q: { vector: number[] | Float32Array; k: number; filter?: Record<string, unknown> }): Promise<RvHit[]>;
+  delete(id: string): Promise<boolean>;
+}
+
 const DIMS = Config.embeddings.dimensions;
+
+// Small non-zero vector used for "fetch by filter" queries without a semantic query.
+const SMALL_VEC: number[] = new Array(DIMS).fill(Number.EPSILON);
 
 // ─── Intra-round memory ───────────────────────────────────────────────────────
 
@@ -88,25 +101,20 @@ export class IntraRoundMemoryStore {
 // ─── Inter-round memory ───────────────────────────────────────────────────────
 
 export class InterRoundMemoryStore {
-  private readonly qdrant: QdrantClient;
+  private readonly db: RvDb;
   private ready = false;
 
   constructor() {
-    this.qdrant = new QdrantClient({
-      url: Config.vectorDb.url,
-      apiKey: Config.vectorDb.apiKey,
+    this.db = new VectorDb({
+      dimensions: DIMS,
+      distanceMetric: "Cosine",
+      storagePath: `${Config.vectorDb.dataDir}/memory.rvdb`,
     });
   }
 
   async init(): Promise<void> {
-    const { collections } = await this.qdrant.getCollections();
-    if (!collections.some((c) => c.name === COLLECTION)) {
-      await this.qdrant.createCollection(COLLECTION, {
-        vectors: { size: DIMS, distance: "Cosine" },
-      });
-      logger.info("Memory collection created", { collection: COLLECTION });
-    }
     this.ready = true;
+    logger.info("Memory store ready (RuVector native)");
   }
 
   /**
@@ -117,23 +125,18 @@ export class InterRoundMemoryStore {
     const { embedding } = await embed(entry.content);
     const full: MemoryEntry = { ...entry, id: uuidv4(), embedding };
 
-    await this.qdrant.upsert(COLLECTION, {
-      wait: true,
-      points: [
-        {
-          id: full.id,
-          vector: embedding,
-          payload: {
-            taskId: full.taskId,
-            round: full.round,
-            phase: full.phase,
-            agentId: full.agentId ?? null,
-            content: full.content,
-            tags: full.tags,
-            createdAt: full.createdAt.toISOString(),
-          },
-        },
-      ],
+    await this.db.insert({
+      id: full.id,
+      vector: embedding,
+      metadata: {
+        taskId:    full.taskId,
+        round:     full.round,
+        phase:     full.phase,
+        agentId:   full.agentId ?? null,
+        content:   full.content,
+        tags:      full.tags,
+        createdAt: full.createdAt.toISOString(),
+      },
     });
 
     logger.debug("Memory entry written", { id: full.id, round: full.round, agentId: full.agentId });
@@ -143,6 +146,7 @@ export class InterRoundMemoryStore {
   /**
    * Semantic query: retrieve the most relevant memories for an agent given a query.
    * Scoped to the current task; can optionally filter by agentId.
+   * beforeRound is applied as a post-filter (range queries not supported natively).
    */
   async query(
     query: string,
@@ -156,32 +160,28 @@ export class InterRoundMemoryStore {
     this.assertReady();
     const { embedding } = await embed(query);
 
-    const must: unknown[] = [
-      { key: "taskId", match: { value: opts.taskId } },
-    ];
-    if (opts.agentId) must.push({ key: "agentId", match: { value: opts.agentId } });
-    if (opts.beforeRound !== undefined) {
-      must.push({ key: "round", range: { lt: opts.beforeRound } });
-    }
+    const filter: Record<string, unknown> = { taskId: opts.taskId };
+    if (opts.agentId) filter.agentId = opts.agentId;
 
-    const results = await this.qdrant.search(COLLECTION, {
-      vector: embedding,
-      limit: Math.min(opts.topK ?? 8, 100),
-      filter: { must },
-      with_payload: true,
-    });
+    // Fetch extra results so we can post-filter by round (native has no range filter).
+    const fetchK = opts.beforeRound !== undefined ? 500 : Math.min(opts.topK ?? 8, 100);
+    const results = await this.db.search({ vector: embedding, k: fetchK, filter });
 
-    return results.map((r) => {
-      const p = r.payload as Record<string, unknown>;
+    const filtered = opts.beforeRound !== undefined
+      ? results.filter((r) => ((r.metadata?.round as number) ?? 0) < opts.beforeRound!)
+      : results;
+
+    return filtered.slice(0, opts.topK ?? 8).map((r) => {
+      const m = r.metadata as Record<string, unknown>;
       return {
-        id: r.id as string,
-        taskId: p.taskId as string,
-        round: p.round as number,
-        phase: p.phase as TaskPhase,
-        agentId: p.agentId as string | undefined,
-        content: p.content as string,
-        tags: p.tags as string[],
-        createdAt: new Date(p.createdAt as string),
+        id:        r.id,
+        taskId:    m.taskId as string,
+        round:     m.round as number,
+        phase:     m.phase as TaskPhase,
+        agentId:   (m.agentId as string | null) ?? undefined,
+        content:   m.content as string,
+        tags:      (m.tags as string[]) ?? [],
+        createdAt: new Date(m.createdAt as string),
       };
     });
   }
@@ -198,10 +198,10 @@ export class InterRoundMemoryStore {
   }): Promise<void> {
     await this.write({
       taskId: params.taskId,
-      round: params.round,
-      phase: params.phase,
+      round:  params.round,
+      phase:  params.phase,
       content: `Round ${params.round} summary (${params.phase}): ${params.summary}. Findings produced: ${params.findingCount}.`,
-      tags: ["round-summary", `round-${params.round}`, params.phase],
+      tags:   ["round-summary", `round-${params.round}`, params.phase],
       createdAt: new Date(),
     });
   }
@@ -217,26 +217,25 @@ export class InterRoundMemoryStore {
     finding: Finding;
   }): Promise<void> {
     await this.write({
-      taskId: params.taskId,
-      round: params.round,
-      phase: params.phase,
+      taskId:  params.taskId,
+      round:   params.round,
+      phase:   params.phase,
       agentId: params.agentId,
       content: params.finding.content,
-      tags: ["finding", `round-${params.round}`, params.agentId, params.phase],
+      tags:    ["finding", `round-${params.round}`, params.agentId, params.phase],
       createdAt: new Date(),
     });
   }
 
   /**
-   * Delete all memory entries for a task. Called when a task is deleted so
-   * orphaned vectors don't remain queryable or leak into future tasks.
+   * Delete all memory entries for a task.
+   * Queries by taskId filter, then deletes each entry individually.
    */
   async deleteByTaskId(taskId: string): Promise<void> {
     this.assertReady();
-    await this.qdrant.delete(COLLECTION, {
-      filter: { must: [{ key: "taskId", match: { value: taskId } }] },
-    });
-    logger.debug("Memory entries deleted for task", { taskId });
+    const found = await this.db.search({ vector: SMALL_VEC, k: 5000, filter: { taskId } });
+    await Promise.allSettled(found.map((r) => this.db.delete(r.id)));
+    logger.debug("Memory entries deleted for task", { taskId, count: found.length });
   }
 
   private assertReady(): void {

@@ -13,21 +13,46 @@ import type {
   ChatResponse,
   ProviderContentBlock,
   ProviderMessage,
-  ProviderTool,
 } from "./types.js";
 
 export class AnthropicProvider implements ModelProvider {
   private readonly client: Anthropic;
 
   constructor() {
-    this.client = new Anthropic({ apiKey: Config.anthropic.apiKey });
+    this.client = new Anthropic({
+      apiKey: Config.anthropic.apiKey,
+      ...(Config.anthropic.baseUrl ? { baseURL: Config.anthropic.baseUrl } : {}),
+    });
   }
 
   async chat(params: ChatParams): Promise<ChatResponse> {
+    // System prompt — wrap in a cacheable block when requested.
+    // Anthropic caches blocks ≥ 1024 tokens; shorter prompts are silently uncached.
+    const system: string | Anthropic.TextBlockParam[] = params.cacheSystem
+      ? [{ type: "text", text: params.system, cache_control: { type: "ephemeral" } }]
+      : params.system;
+
+    if (params.thinking) {
+      // Extended thinking requires the beta client and budget_tokens < max_tokens.
+      const betaMsg = await this.client.beta.messages.create({
+        betas: ["interleaved-thinking-2025-05-14"],
+        model: params.model,
+        max_tokens: params.maxTokens,
+        system,
+        tools: params.tools as Anthropic.Tool[] | undefined,
+        messages: params.messages.map(toAnthropicMessage),
+        thinking: { type: "enabled", budget_tokens: params.thinking.budgetTokens },
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const content = (betaMsg.content as any[]).map(fromAnyBlock);
+      const stopReason = fromAnthropicStopReason(betaMsg.stop_reason);
+      return { stopReason, content };
+    }
+
     const msg = await this.client.messages.create({
       model: params.model,
       max_tokens: params.maxTokens,
-      system: params.system,
+      system,
       tools: params.tools as Anthropic.Tool[] | undefined,
       messages: params.messages.map(toAnthropicMessage),
     });
@@ -61,8 +86,14 @@ function fromAnthropicBlock(b: Anthropic.ContentBlock): ProviderContentBlock {
       input: b.input as Record<string, unknown>,
     };
   }
-  // Fallback — shouldn't happen in practice
   return { type: "text", text: JSON.stringify(b) };
+}
+
+// Handles beta response blocks which include thinking blocks alongside standard ones.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function fromAnyBlock(b: any): ProviderContentBlock {
+  if (b.type === "thinking") return { type: "thinking", thinking: b.thinking ?? "" };
+  return fromAnthropicBlock(b as Anthropic.ContentBlock);
 }
 
 function fromAnthropicStopReason(

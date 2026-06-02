@@ -155,6 +155,7 @@ export class Agent {
         system: this.definition.systemPrompt,
         tools: toolSchemas,
         messages,
+        cacheSystem: true,
       });
 
       // Capture the latest text block as the candidate final response
@@ -229,6 +230,7 @@ export class Agent {
       maxTokens,
       system: this.definition.systemPrompt,
       messages: [{ role: "user", content: userMessage }],
+      cacheSystem: true,
     });
     const textBlock = response.content.find((b) => b.type === "text");
     if (!textBlock || textBlock.type !== "text") {
@@ -283,7 +285,7 @@ function buildProcessingPrompt(def: AgentDefinition, ctx: AgentContext): string 
         .join("\n\n---\n\n")
     : "No messages routed to you this round.";
 
-  // Memory content originates from prior agent outputs stored in Qdrant.
+  // Memory content originates from prior agent outputs stored in the RuVector memory store.
   // An attacker who can influence task content could craft memory entries
   // containing fake FINDING markers. Sanitise before interpolation.
   const memory = ctx.memoryEntries.length
@@ -337,7 +339,7 @@ function parseNeedOffer(
 function parseFindings(text: string, def: AgentDefinition): Finding[] {
   if (/NO_FINDINGS/i.test(text)) return [];
 
-  const blocks = text.split(/FINDING:/gi).slice(1);
+  const blocks = text.split(/FINDING:/gi).slice(1, 4); // hard cap: 3 findings per agent
   const findings: Finding[] = [];
 
   for (const block of blocks) {
