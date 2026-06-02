@@ -30,6 +30,8 @@ import { Agent } from "../agents/base.js";
 import { AgentRegistry } from "../agents/registry.js";
 import { globalToolRegistry } from "../tools/index.js";
 import { IntraRoundMemoryStore, InterRoundMemoryStore } from "../memory/index.js";
+import { getProvider, resolveModelId } from "../providers/index.js";
+import { selectModel } from "../routing/model.js";
 import type { KnowledgeStore } from "../knowledge/index.js";
 import type {
   AgentDefinition,
@@ -269,6 +271,20 @@ export class DyTopoEngine {
     }));
   }
 
+  /**
+   * Two-wave intra-round processing:
+   *
+   * Wave 1 (parallel) — every agent runs its full agentic loop and produces findings.
+   * Broadcast build    — all Wave 1 findings are written to the shared context (the
+   *                      "intra-round whiteboard") and published to IntraRoundMemoryStore.
+   * Wave 2 (parallel) — every agent receives the full shared context and runs a
+   *                      lightweight Haiku review pass to challenge errors or add
+   *                      missing analysis. No tool loop, short token budget (400).
+   *
+   * Combined findings from both waves feed the citation gate, debate, and verification
+   * pipeline downstream. Wave 2 errors are swallowed — a bad model response never
+   * crashes the round.
+   */
   private async processAgents(
     agents: Agent[],
     agentMemories: Map<string, import("../types.js").MemoryEntry[]>,
@@ -276,11 +292,12 @@ export class DyTopoEngine {
     task: Task,
     goal: RoundGoal,
   ): Promise<Finding[]> {
-    const results = await Promise.all(
+    // ── Wave 1: full agentic-loop processing ──────────────────────────────────
+    const wave1Results = await Promise.all(
       agents.map(async (agent) => {
         const memoryEntries = agentMemories.get(agent.definition.id) ?? [];
         const incomingMessages = intraMemory.getMessagesFor(agent.definition.id);
-        const findings = await agent.process({
+        return agent.process({
           roundGoal: goal,
           incomingMessages,
           memoryEntries,
@@ -291,19 +308,63 @@ export class DyTopoEngine {
           memory: this.memory,
           ownerId: task.createdByProfileId,
         });
-        return findings;
       }),
     );
-    return results.flat();
+    const wave1Findings = wave1Results.flat();
+
+    // ── Build shared context from Wave 1 findings ─────────────────────────────
+    // Each finding is written as a single-line summary to the intra-round
+    // whiteboard. Cap at 200 chars per finding to keep the broadcast prompt tight.
+    for (const f of wave1Findings) {
+      const line = `[${f.agentName}] ${f.content.replace(/\s+/g, " ").slice(0, 200)}`;
+      intraMemory.addSharedContext(line);
+    }
+    const sharedContext = intraMemory.getSharedContext();
+
+    if (sharedContext.length) {
+      logger.debug("Intra-round broadcast context built", {
+        round: goal.round,
+        entries: sharedContext.length,
+      });
+    }
+
+    // ── Wave 2: broadcast review (Haiku, lightweight) ─────────────────────────
+    const wave2Results = await Promise.all(
+      agents.map((agent) => {
+        const memoryEntries = agentMemories.get(agent.definition.id) ?? [];
+        return agent.reviewWithBroadcast({
+          roundGoal: goal,
+          incomingMessages: [],
+          memoryEntries,
+          taskDescription: task.description,
+          sharedContext,
+        });
+      }),
+    );
+    const wave2Findings = wave2Results.flat();
+
+    if (wave2Findings.length) {
+      logger.debug("Wave 2 broadcast review produced findings", {
+        round: goal.round,
+        count: wave2Findings.length,
+      });
+    }
+
+    return [...wave1Findings, ...wave2Findings];
   }
 
+  /**
+   * Persist intra-round findings as individual memory entries, then synthesize
+   * a round-level rollup via Haiku. The rollup is a 2-3 sentence digest of the
+   * round's key conclusions — much richer than a string truncation.
+   */
   private async persistRoundMemory(
     task: Task,
     goal: RoundGoal,
     findings: Finding[],
     intraMemory: IntraRoundMemoryStore,
   ): Promise<void> {
-    // Write individual finding memories
+    // Write individual finding memories (in parallel — Qdrant upserts are idempotent)
     await Promise.all(
       findings.map((f) =>
         this.memory.writeFindingMemory({
@@ -316,10 +377,34 @@ export class DyTopoEngine {
       ),
     );
 
-    // Write round-level summary
-    const summaryContent = findings.length
-      ? `Key outputs: ${findings.slice(0, 3).map((f) => f.content.slice(0, 80)).join("; ")}...`
-      : "No findings this round.";
+    // Build the round rollup — Haiku synthesis of all findings, falling back to
+    // the naive concatenation if the model call fails so memory always gets written.
+    let summaryContent: string;
+    if (findings.length) {
+      const bulletList = findings
+        .slice(0, 12)
+        .map((f) => `- [${f.agentName}] ${f.content.replace(/\s+/g, " ").slice(0, 150)}`)
+        .join("\n");
+      try {
+        const model = selectModel({ tier: 3, type: "tool", taskType: "descriptor" });
+        const provider = getProvider(model);
+        const response = await provider.chat({
+          model: resolveModelId(model),
+          maxTokens: 300,
+          system: "You are a legal analysis synthesizer. Produce a concise inter-round memory digest.",
+          messages: [{
+            role: "user",
+            content: `Round ${goal.round} (${goal.phase}) findings:\n${bulletList}\n\nSummarise the key legal conclusions from this round in 2-3 sentences. Be specific — name parties, statutes, or doctrines where present. This summary will be retrieved as memory by agents in the next round.`,
+          }],
+        });
+        const textBlock = response.content.find((b) => b.type === "text");
+        summaryContent = textBlock?.type === "text" ? textBlock.text.trim() : bulletList;
+      } catch {
+        summaryContent = `Round ${goal.round} key findings: ${findings.slice(0, 3).map((f) => f.content.slice(0, 100)).join("; ")}`;
+      }
+    } else {
+      summaryContent = `Round ${goal.round} (${goal.phase}): No findings produced.`;
+    }
 
     await this.memory.writeRoundSummary({
       taskId: task.id,

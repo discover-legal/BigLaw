@@ -44,6 +44,12 @@ export interface AgentContext {
   memory?: InterRoundMemoryStore;
   /** Document owner scope — undefined means partner (see all), set for lawyer-submitted tasks */
   ownerId?: string;
+  /**
+   * Intra-round broadcast context — findings produced by all other agents in Wave 1,
+   * broadcast to every agent in Wave 2 so the whole round shares a single ground truth.
+   * Undefined in Wave 1 (agents haven't produced findings yet).
+   */
+  sharedContext?: string[];
 }
 
 export class Agent {
@@ -116,6 +122,23 @@ export class Agent {
       : await this.callModel(prompt, maxTokens, model);
 
     return parseFindings(text, this.definition);
+  }
+
+  /**
+   * Wave 2 broadcast review — lightweight Haiku pass where the agent sees all
+   * peer findings from Wave 1 and can emit challenge or supplement findings.
+   * No tool loop; short token budget (400). Returns [] on any error so a
+   * misbehaving model in Wave 2 never crashes the round.
+   */
+  async reviewWithBroadcast(ctx: AgentContext): Promise<Finding[]> {
+    const model = selectModel({ tier: this.definition.tier, type: this.definition.type, taskType: "descriptor" });
+    const prompt = buildBroadcastReviewPrompt(this.definition, ctx);
+    try {
+      const text = await this.callModel(prompt, 400, model);
+      return parseFindings(text, this.definition);
+    } catch {
+      return [];
+    }
   }
 
   /**
@@ -292,6 +315,11 @@ function buildProcessingPrompt(def: AgentDefinition, ctx: AgentContext): string 
     ? ctx.memoryEntries.map((e) => `[Round ${e.round} — ${e.phase}] ${sanitizePromptContent(e.content)}`).join("\n")
     : "No prior memory.";
 
+  // Shared context from prior rounds (populated from the previous round's broadcast).
+  const shared = ctx.sharedContext?.length
+    ? ctx.sharedContext.map((s) => sanitizePromptContent(s)).join("\n")
+    : null;
+
   return `TASK: ${taskDesc}
 
 ROUND GOAL (Round ${ctx.roundGoal.round} — Phase: ${ctx.roundGoal.phase}):
@@ -302,7 +330,7 @@ ${ctx.roundGoal.expectedOutputs.map((o, i) => `${i + 1}. ${o}`).join("\n")}
 
 INTER-ROUND MEMORY (what has been established in prior rounds):
 ${memory}
-
+${shared ? `\nSHARED ROUND CONTEXT (broadcast from all agents this round — build on these, do not duplicate):\n${shared}\n` : ""}
 MESSAGES ROUTED TO YOU THIS ROUND (from other agents whose offers matched your needs):
 ${incoming}
 
@@ -320,6 +348,33 @@ Rules:
 - Quote must be verbatim — not paraphrased.
 - Multiple Citations allowed per finding (repeat Citation: lines).
 - If you have no findings this round: NO_FINDINGS`;
+}
+
+function buildBroadcastReviewPrompt(def: AgentDefinition, ctx: AgentContext): string {
+  const taskDesc = sanitizePromptContent(ctx.taskDescription);
+  const shared = (ctx.sharedContext ?? []).map((s) => sanitizePromptContent(s)).join("\n");
+
+  return `TASK: ${taskDesc}
+
+ROUND GOAL (Round ${ctx.roundGoal.round} — Phase: ${ctx.roundGoal.phase}):
+${ctx.roundGoal.description}
+
+YOUR ROLE: ${def.name} — ${def.description}
+
+ALL FINDINGS PRODUCED THIS ROUND BY YOUR PEERS:
+${shared || "No findings yet."}
+
+────────────────────────────────────────────────────────────────
+Review the above findings from your specialist perspective.
+- If you spot a factual error, missing jurisdiction, or important omission, produce a challenge or supplement finding.
+- Do NOT repeat findings that are already correct.
+- If nothing to add or challenge: NO_FINDINGS
+
+FINDING:
+Content: <your challenge or supplement>
+Citation: SOURCE=<source> | QUOTE=<verbatim text>
+Confidence: <0.0–1.0>
+END_FINDING`;
 }
 
 // ─── Response parsers ─────────────────────────────────────────────────────────
