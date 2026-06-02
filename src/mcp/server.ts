@@ -35,7 +35,8 @@ import { logger } from "../logger.js";
 import { auditLogger } from "../audit/index.js";
 import { Orchestrator } from "../orchestrator.js";
 import type { WorkflowType, SessionUser } from "../types.js";
-import { LOCAL_PARTNER, filterVisible, canViewTask, isPartner } from "../auth/index.js";
+import { MODE_COLORS, MODE_CAPABILITIES } from "../types.js";
+import { LOCAL_PARTNER, filterVisible, canViewTask, isPartner, resolveMode } from "../auth/index.js";
 import { registerAuthRoutes, readSessionCookie } from "../auth/oauth.js";
 import { detectPracticeArea, detectClient } from "../services/classifier.js";
 
@@ -540,7 +541,15 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
   // ── Identity + lawyer profiles ──────────────────────────────────────────────
   app.get("/me", async (req) => {
     const user = getUser(req);
-    return { user, authEnabled: Config.auth.enabled };
+    const mode = user?.mode ?? "lite";
+    return {
+      user,
+      authEnabled: Config.auth.enabled,
+      // Mode metadata the UI needs to theme itself and gate features.
+      mode,
+      modeColor: MODE_COLORS[mode],
+      capabilities: MODE_CAPABILITIES[mode],
+    };
   });
 
   // Partners see full profiles (including email for contact/admin purposes).
@@ -578,9 +587,12 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
     if (!isPartner(user) && user?.profileId !== id) {
       return reply.status(403).send({ error: "You can only edit your own profile" });
     }
-    // Non-partners cannot change role.
+    // Non-partners cannot change role or mode — both are partner-assigned.
     if (!isPartner(user) && patch.role) {
       return reply.status(403).send({ error: "Partner role required to change role" });
+    }
+    if (!isPartner(user) && patch.mode !== undefined) {
+      return reply.status(403).send({ error: "Partner role required to set user mode" });
     }
     try {
       return await orchestrator.profiles.update(id, patch as Record<string, never>);

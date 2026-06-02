@@ -25,7 +25,15 @@ import { randomUUID } from "crypto";
 import { readFile, writeFile, rename } from "fs/promises";
 import { Config } from "../config.js";
 import { logger } from "../logger.js";
-import type { LawyerProfile, SessionUser, Task } from "../types.js";
+import type { LawyerProfile, SessionUser, Task, UserMode } from "../types.js";
+
+/** Derive the effective mode from role + stored mode preference. */
+export function resolveMode(role: "lawyer" | "partner", storedMode?: UserMode): UserMode {
+  if (role === "partner") return "admin";
+  // Lawyers can only be full_flavour or lite — never admin.
+  if (storedMode === "lite") return "lite";
+  return "full_flavour";
+}
 
 /** The principal used for every request when auth is disabled (local dev). */
 export const LOCAL_PARTNER: SessionUser = {
@@ -33,6 +41,7 @@ export const LOCAL_PARTNER: SessionUser = {
   name: "Local Partner",
   email: "local@bigmichael.dev",
   role: "partner",
+  mode: "admin",
 };
 
 export const isPartner = (user: SessionUser | null): boolean => user?.role === "partner";
@@ -83,17 +92,20 @@ export class ProfileStore {
 
   async create(input: {
     name: string; email: string; role?: string; title?: string; color?: string;
-    practiceAreas?: string[]; bio?: string;
+    practiceAreas?: string[]; bio?: string; mode?: string;
   }): Promise<LawyerProfile> {
     const name = (input.name || "").trim().slice(0, 200);
     const email = (input.email || "").trim().slice(0, 254);
     if (!name || !email) throw new Error("name and email are required");
     if (this.getByEmail(email)) throw new Error(`A profile with email ${email} already exists`);
+    const role: "lawyer" | "partner" = input.role === "partner" ? "partner" : "lawyer";
     const profile: LawyerProfile = {
       id: randomUUID(),
       name,
       email,
-      role: input.role === "partner" ? "partner" : "lawyer",
+      role,
+      // Partners are always admin; lawyers default to full_flavour unless explicitly set to lite.
+      mode: resolveMode(role, input.mode === "lite" ? "lite" : undefined),
       title: input.title?.trim().slice(0, 200) || undefined,
       color: (input.color || pickColor(name)).slice(0, 50),
       practiceAreas: Array.isArray(input.practiceAreas)
@@ -107,7 +119,12 @@ export class ProfileStore {
     return profile;
   }
 
-  async update(id: string, patch: Partial<Pick<LawyerProfile, "name" | "title" | "color" | "role" | "practiceAreas" | "bio">>): Promise<LawyerProfile> {
+  /**
+   * Update a profile. Mode may only be changed by a partner (enforced at the
+   * API layer); the store re-resolves mode on every update to ensure partners
+   * can never be demoted from admin regardless of what patch.mode contains.
+   */
+  async update(id: string, patch: Partial<Pick<LawyerProfile, "name" | "title" | "color" | "role" | "practiceAreas" | "bio" | "mode">>): Promise<LawyerProfile> {
     const p = this.get(id);
     if (!p) throw new Error("Profile not found");
     if (typeof patch.name === "string" && patch.name.trim()) p.name = patch.name.trim().slice(0, 200);
@@ -116,6 +133,13 @@ export class ProfileStore {
     if (patch.role === "partner" || patch.role === "lawyer") p.role = patch.role;
     if (Array.isArray(patch.practiceAreas)) p.practiceAreas = patch.practiceAreas.slice(0, 20).map((a) => String(a).trim().slice(0, 100)).filter(Boolean);
     if (typeof patch.bio === "string") p.bio = patch.bio.trim().slice(0, 2000) || undefined;
+    // Mode: always re-resolve so partners can't be demoted from admin by a patch.
+    if (patch.mode !== undefined) {
+      p.mode = resolveMode(p.role, patch.mode === "lite" ? "lite" : "full_flavour");
+    } else {
+      // Keep in sync if role changed.
+      p.mode = resolveMode(p.role, p.mode);
+    }
     await this.persist();
     return p;
   }

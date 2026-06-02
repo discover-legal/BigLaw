@@ -294,6 +294,71 @@ export interface TaskTable {
 /** partner = admin (sees all matters, controls assignment); lawyer = sees own matters. */
 export type LawyerRole = "lawyer" | "partner";
 
+/**
+ * User experience mode — Marlboro palette.
+ *
+ *   admin        — Partners only. Black #1A1A1A (Marlboro Black).
+ *                  Full platform: user management, firm analytics, NOSLEGAL
+ *                  dashboard, all settings, time reporting, every matter.
+ *
+ *   full_flavour — Full law firm experience. Scarlet #C8102E (Marlboro Red).
+ *                  All legal workflows, connectors, conflict checks, time
+ *                  tracking, client roster, matter management.
+ *
+ *   lite         — Lighter experience. Gold #C4940F (Marlboro Gold).
+ *                  Core features only: submit tasks, view results, upload
+ *                  documents, basic search. No billing, no conflict engine.
+ *
+ * Partners are always admin (immutable). Lawyers default to full_flavour;
+ * they may switch to lite. Admins can set mode for any lawyer profile.
+ */
+export type UserMode = "admin" | "full_flavour" | "lite";
+
+/** Hex colour for each mode — applied as the UI accent. */
+export const MODE_COLORS: Record<UserMode, string> = {
+  admin:        "#1A1A1A",   // Marlboro Black
+  full_flavour: "#C8102E",   // Marlboro Scarlet (Full Flavour Red)
+  lite:         "#C4940F",   // Marlboro Gold (Lights)
+};
+
+/** Feature flags carried with the session so UI can conditionally render. */
+export interface ModeCapabilities {
+  /** Can manage users, settings, and system-wide configuration. */
+  manageUsers: boolean;
+  /** Sees every matter regardless of assignment. */
+  seeAllMatters: boolean;
+  /** Assign lawyers to matters. */
+  assignMatters: boolean;
+  /** Client roster, matter sub-lists, conflict-of-interest checks. */
+  clientRoster: boolean;
+  /** Time tracking and billable-unit export. */
+  timeTracking: boolean;
+  /** NOSLEGAL matter analytics dashboard. */
+  matterAnalytics: boolean;
+  /** Full connector toolset (Westlaw, Everlaw, Trellis, etc.). */
+  fullConnectors: boolean;
+  /** Admin settings panel. */
+  adminSettings: boolean;
+}
+
+export const MODE_CAPABILITIES: Record<UserMode, ModeCapabilities> = {
+  admin: {
+    manageUsers: true, seeAllMatters: true, assignMatters: true,
+    clientRoster: true, timeTracking: true, matterAnalytics: true,
+    fullConnectors: true, adminSettings: true,
+  },
+  full_flavour: {
+    manageUsers: false, seeAllMatters: false, assignMatters: false,
+    clientRoster: true, timeTracking: true, matterAnalytics: false,
+    fullConnectors: true, adminSettings: false,
+  },
+  lite: {
+    manageUsers: false, seeAllMatters: false, assignMatters: false,
+    clientRoster: false, timeTracking: false, matterAnalytics: false,
+    fullConnectors: false, adminSettings: false,
+  },
+};
+
 export const PRACTICE_AREAS = [
   "Corporate & M&A",
   "Competition & Antitrust",
@@ -319,6 +384,13 @@ export interface LawyerProfile {
   name: string;
   email: string;
   role: LawyerRole;
+  /**
+   * UX mode — controls feature set and UI colour accent.
+   * Partners are always admin. Lawyers default to full_flavour.
+   * Admins can override any profile; lawyers can only toggle between
+   * full_flavour and lite for themselves.
+   */
+  mode?: UserMode;
   title?: string;
   /** Hex accent for the initials avatar. */
   color?: string;
@@ -368,6 +440,8 @@ export interface SessionUser {
   name: string;
   email: string;
   role: LawyerRole;
+  /** Resolved mode — partners always get admin; lawyers get their profile's mode. */
+  mode: UserMode;
 }
 
 // ─── Knowledge store ─────────────────────────────────────────────────────────

@@ -31,6 +31,7 @@ import { Config } from "../config.js";
 import { logger } from "../logger.js";
 import type { Orchestrator } from "../orchestrator.js";
 import type { SessionUser } from "../types.js";
+import { resolveMode } from "./index.js";
 
 const SESSION_COOKIE = "bm_session";
 const STATE_COOKIE = "bm_oauth_state";
@@ -188,7 +189,7 @@ export function registerAuthRoutes(app: FastifyInstance, orchestrator: Orchestra
 
       const payload: SessionCookiePayload = {
         profileId: profile.id, name: profile.name, email: profile.email,
-        role: profile.role, jti: randomUUID(),
+        role: profile.role, mode: resolveMode(profile.role, profile.mode), jti: randomUUID(),
       };
       reply.setCookie(SESSION_COOKIE, JSON.stringify(payload), cookieOpts(60 * 60 * 12));
       logger.info("OAuth login", { provider, email: identity.email, role: profile.role });
