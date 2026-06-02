@@ -284,7 +284,30 @@ Aggregate breakdowns across all tasks are available at `GET /analytics/noslegal`
 
 ---
 
-## Lawyers, roles & access control
+## Security hardening
+
+Big Michael handles legal work product, client PII, and privileged communications — so the
+attack surface is treated seriously.
+
+| Area | What's in place |
+|---|---|
+| **Profile data scoping** | `GET /profiles/:id` returns full PII only to partners and the profile owner; other lawyers receive display-only fields — consistent with the list endpoint |
+| **Constant-time auth** | API key comparison pads to expected length before `timingSafeEqual` so wrong-length keys don't short-circuit the comparison and leak key length |
+| **Auth rate limiting** | Auth endpoints (login + callback) are sliding-window rate-limited to 20 req/min per IP; the limiter map is periodically evicted to prevent memory exhaustion under waves of unique attacker IPs |
+| **Input caps** | `fetch_documents` capped at 20 IDs; `tabular_review` capped at 50 documents × 30 columns — prevents a prompt-injected agent from triggering thousands of LLM calls |
+| **CSV safety** | Time-entry and table CSV exports strip `\r\n` from field values to prevent row injection / spreadsheet formula attacks |
+| **Embedding guards** | `embed()` validates OpenAI returns a non-empty data array; `embedBatch()` validates Ollama returns exactly as many vectors as inputs; `cosineSimilarity()` rejects mismatched vector lengths rather than silently producing NaN |
+| **SSRF protection** | All admin-configurable endpoint URLs (DocuSeal, 8 legal connectors, MCP plugins) are validated against a private/loopback blocklist at startup and on every admin panel change |
+| **Path traversal** | PDF and docx tools enforce an allow-list of read roots (`PDF_ALLOWED_DIRS`); docx tools resolve symlinks before the boundary check; the plugin directory is pinned to the project root |
+| **Prompt injection** | Lavern agent system prompts are sanitised with `sanitizePromptContent()` to remove rogue `FINDING:/END_FINDING` markers; template substitutions are likewise sanitised |
+| **Ollama tool args** | Unparseable tool call arguments from local models now surface a structured `_parse_error` key so the agent loop sees a clear error rather than silently executing with an empty argument set |
+| **No secrets in logs** | API keys appear only in `Authorization` headers; connector error messages are capped at 200–400 chars and never echo raw server responses back to agents |
+| **Signed sessions** | Session cookies are signed (Fastify `@fastify/cookie`), httpOnly, sameSite:lax, secure on HTTPS; logout adds the session JTI to a bounded revocation set (max 100k, FIFO) |
+| **`tabular_review` reviewId** | reviewId is `null` when the result file could not be written, preventing a confusing "review not found" error from a subsequent `read_table_cells` call |
+
+---
+
+
 
 Big Michael is multi-user when deployed. Identity comes from **OAuth** (Google,
 Microsoft, or LinkedIn); each person is a **lawyer profile** with a role:

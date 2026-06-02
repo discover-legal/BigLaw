@@ -1,0 +1,12 @@
+{
+  "id": "deal-debrief",
+  "name": "Deal Debrief & Playbook Update",
+  "description": "Debrief executed deals against the standard playbook — identifies concession patterns, recurring losses, and provisions to incorporate into updated playbook positions.",
+  "workflowType": "roundtable",
+  "promptTemplate": "Conduct a deal debrief for {{deal_count}} recently executed {{contract_type}} agreements for {{company}}. For each agreement: compare the signed terms against the standard playbook position for each key clause and categorise deviations as PRO, NEUTRAL, or CON. Identify recurring concessions across the set, flag any novel clauses that should be incorporated into the playbook, and produce a 5-point playbook update recommendation.",
+  "substitutions": {
+    "deal_count": "the",
+    "contract_type": "commercial",
+    "company": "the company"
+  }
+}

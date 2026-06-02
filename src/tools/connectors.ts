@@ -41,13 +41,20 @@ function validateConnectorEndpoint(url: string, envVar: string): void {
   assertPublicHttpUrl(url, envVar);
 }
 
-validateConnectorEndpoint(Config.connectors.ironclad.endpoint,  "IRONCLAD_MCP_URL");
-validateConnectorEndpoint(Config.connectors.imanage.endpoint,   "IMANAGE_MCP_URL");
-validateConnectorEndpoint(Config.connectors.definely.endpoint,  "DEFINELY_MCP_URL");
-validateConnectorEndpoint(Config.connectors.westlaw.endpoint,   "WESTLAW_MCP_URL");
-validateConnectorEndpoint(Config.connectors.everlaw.endpoint,   "EVERLAW_MCP_URL");
-validateConnectorEndpoint(Config.connectors.trellis.endpoint,   "TRELLIS_MCP_URL");
-validateConnectorEndpoint(Config.connectors.descrybe.endpoint,  "DESCRYBE_MCP_URL");
+validateConnectorEndpoint(Config.connectors.ironclad.endpoint,          "IRONCLAD_MCP_URL");
+validateConnectorEndpoint(Config.connectors.imanage.endpoint,           "IMANAGE_MCP_URL");
+validateConnectorEndpoint(Config.connectors.definely.endpoint,          "DEFINELY_MCP_URL");
+validateConnectorEndpoint(Config.connectors.westlaw.endpoint,           "WESTLAW_MCP_URL");
+validateConnectorEndpoint(Config.connectors.everlaw.endpoint,           "EVERLAW_MCP_URL");
+validateConnectorEndpoint(Config.connectors.trellis.endpoint,           "TRELLIS_MCP_URL");
+validateConnectorEndpoint(Config.connectors.descrybe.endpoint,          "DESCRYBE_MCP_URL");
+validateConnectorEndpoint(Config.connectors.docusign.endpoint,          "DOCUSIGN_MCP_URL");
+validateConnectorEndpoint(Config.connectors.solveIntelligence.endpoint, "SOLVE_INTELLIGENCE_MCP_URL");
+validateConnectorEndpoint(Config.connectors.slack.endpoint,             "SLACK_MCP_URL");
+validateConnectorEndpoint(Config.connectors.googleDrive.endpoint,       "GOOGLE_DRIVE_MCP_URL");
+validateConnectorEndpoint(Config.connectors.box.endpoint,               "BOX_MCP_URL");
+validateConnectorEndpoint(Config.connectors.lawve.endpoint,             "LAWVE_MCP_URL");
+validateConnectorEndpoint(Config.connectors.topCounsel.endpoint,        "TOPCOUNSEL_MCP_URL");
 
 // ─── Generic MCP HTTP client ──────────────────────────────────────────────────
 
@@ -735,6 +742,456 @@ export const definelyResolveDefinitionTool: ToolImpl = {
   },
 };
 
+// ─── DocuSign CLM ─────────────────────────────────────────────────────────────
+
+const docusignNotConfigured = () => ({
+  error: "DocuSign not configured — set DOCUSIGN_API_KEY to enable CLM envelope tracking",
+});
+
+export const docusignGetEnvelopeTool: ToolImpl = {
+  name: "docusign_get_envelope",
+  schema: {
+    name: "docusign_get_envelope",
+    description:
+      "Fetch a DocuSign envelope by ID — returns status, signers, documents, and signing URLs. " +
+      "Requires DOCUSIGN_API_KEY.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        envelope_id: { type: "string", description: "DocuSign envelope ID (GUID)" },
+      },
+      required: ["envelope_id"],
+    },
+  },
+  async execute(input) {
+    if (!Config.connectors.docusign.enabled) return docusignNotConfigured();
+    logger.debug("docusign_get_envelope", { id: input.envelope_id });
+    return mcpCall(
+      Config.connectors.docusign.endpoint,
+      Config.connectors.docusign.apiKey,
+      "getEnvelope",
+      { envelopeId: (input.envelope_id as string).slice(0, 200) },
+    );
+  },
+};
+
+export const docusignSearchContractsTool: ToolImpl = {
+  name: "docusign_search_contracts",
+  schema: {
+    name: "docusign_search_contracts",
+    description:
+      "Search DocuSign CLM for executed contracts — returns metadata, parties, key dates, " +
+      "and renewal deadlines. Requires DOCUSIGN_API_KEY.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        query:         { type: "string",  description: "Search terms — contract name, party, or clause text" },
+        status:        { type: "string",  description: "Optional: 'completed', 'sent', 'voided'" },
+        date_from:     { type: "string",  description: "ISO date — envelopes created after this date" },
+        max_results:   { type: "number",  description: "Maximum results (default 10)" },
+      },
+      required: ["query"],
+    },
+  },
+  async execute(input) {
+    if (!Config.connectors.docusign.enabled) return docusignNotConfigured();
+    logger.debug("docusign_search_contracts", { query: (input.query as string).slice(0, 100) });
+    return mcpCall(
+      Config.connectors.docusign.endpoint,
+      Config.connectors.docusign.apiKey,
+      "searchContracts",
+      { ...input, query: (input.query as string).slice(0, 1000) },
+    );
+  },
+};
+
+// ─── Solve Intelligence (patent) ─────────────────────────────────────────────
+
+const solveIntelligenceNotConfigured = () => ({
+  error: "Solve Intelligence not configured — set SOLVE_INTELLIGENCE_API_KEY to enable patent tools",
+});
+
+export const solveIntelligenceSearchPatentsTool: ToolImpl = {
+  name: "solve_intelligence_search_patents",
+  schema: {
+    name: "solve_intelligence_search_patents",
+    description:
+      "Search patent databases via Solve Intelligence — returns patent numbers, claims, " +
+      "assignees, priority dates, and classification codes. Use for FTO, prior art, and " +
+      "patent landscape analysis. Requires SOLVE_INTELLIGENCE_API_KEY.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        query:        { type: "string",  description: "Technical concept, claim language, or keywords" },
+        jurisdiction: { type: "string",  description: "Patent office code: 'US', 'EP', 'PCT', 'CN', etc." },
+        date_from:    { type: "string",  description: "ISO date — patents filed after this date" },
+        max_results:  { type: "number",  description: "Maximum results (default 10)" },
+      },
+      required: ["query"],
+    },
+  },
+  async execute(input) {
+    if (!Config.connectors.solveIntelligence.enabled) return solveIntelligenceNotConfigured();
+    logger.debug("solve_intelligence_search_patents", { query: (input.query as string).slice(0, 100) });
+    return mcpCall(
+      Config.connectors.solveIntelligence.endpoint,
+      Config.connectors.solveIntelligence.apiKey,
+      "searchPatents",
+      { ...input, query: (input.query as string).slice(0, 1000) },
+    );
+  },
+};
+
+export const solveIntelligenceDraftClaimsTool: ToolImpl = {
+  name: "solve_intelligence_draft_claims",
+  schema: {
+    name: "solve_intelligence_draft_claims",
+    description:
+      "Draft patent claims for a technology disclosure using Solve Intelligence's AI-assisted " +
+      "prosecution tools. Returns independent and dependent claim sets. Requires SOLVE_INTELLIGENCE_API_KEY.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        disclosure: { type: "string", description: "Technical disclosure text (invention description)" },
+        claim_count: { type: "number", description: "Number of independent claims to draft (default 3)" },
+        jurisdiction: { type: "string", description: "Patent office standard: 'US', 'EP'" },
+      },
+      required: ["disclosure"],
+    },
+  },
+  async execute(input) {
+    if (!Config.connectors.solveIntelligence.enabled) return solveIntelligenceNotConfigured();
+    const text = (input.disclosure as string).slice(0, 50_000);
+    logger.debug("solve_intelligence_draft_claims", { chars: text.length });
+    return mcpCall(
+      Config.connectors.solveIntelligence.endpoint,
+      Config.connectors.solveIntelligence.apiKey,
+      "draftClaims",
+      { disclosure: text, claim_count: input.claim_count, jurisdiction: input.jurisdiction },
+    );
+  },
+};
+
+// ─── Slack ────────────────────────────────────────────────────────────────────
+
+const slackNotConfigured = () => ({
+  error: "Slack not configured — set SLACK_API_KEY to enable workspace search and messaging",
+});
+
+export const slackSearchTool: ToolImpl = {
+  name: "slack_search",
+  schema: {
+    name: "slack_search",
+    description:
+      "Search Slack workspace messages and files. Returns matching messages with channel, " +
+      "author, timestamp, and content. Useful for surfacing internal matter context and " +
+      "client communications. Requires SLACK_API_KEY.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        query:       { type: "string",  description: "Search query — supports Slack search modifiers" },
+        channel:     { type: "string",  description: "Optional: restrict search to a specific channel name" },
+        date_after:  { type: "string",  description: "ISO date — messages after this date" },
+        max_results: { type: "number",  description: "Maximum results (default 10)" },
+      },
+      required: ["query"],
+    },
+  },
+  async execute(input) {
+    if (!Config.connectors.slack.enabled) return slackNotConfigured();
+    logger.debug("slack_search", { query: (input.query as string).slice(0, 100) });
+    return mcpCall(
+      Config.connectors.slack.endpoint,
+      Config.connectors.slack.apiKey,
+      "search",
+      { ...input, query: (input.query as string).slice(0, 500) },
+    );
+  },
+};
+
+export const slackSendMessageTool: ToolImpl = {
+  name: "slack_send_message",
+  schema: {
+    name: "slack_send_message",
+    description:
+      "Send a message to a Slack channel. Use only for matter status updates and " +
+      "internal team notifications — not for external client communications. Requires SLACK_API_KEY.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        channel: { type: "string", description: "Channel name or ID (e.g. '#matter-123')" },
+        message: { type: "string", description: "Message text (max 3000 chars)" },
+      },
+      required: ["channel", "message"],
+    },
+  },
+  async execute(input) {
+    if (!Config.connectors.slack.enabled) return slackNotConfigured();
+    const msg = (input.message as string).slice(0, 3000);
+    logger.debug("slack_send_message", { channel: input.channel, chars: msg.length });
+    return mcpCall(
+      Config.connectors.slack.endpoint,
+      Config.connectors.slack.apiKey,
+      "sendMessage",
+      { channel: (input.channel as string).slice(0, 200), message: msg },
+    );
+  },
+};
+
+// ─── Google Drive ─────────────────────────────────────────────────────────────
+
+const googleDriveNotConfigured = () => ({
+  error: "Google Drive not configured — set GOOGLE_DRIVE_API_KEY to enable Drive access",
+});
+
+export const googleDriveSearchTool: ToolImpl = {
+  name: "google_drive_search",
+  schema: {
+    name: "google_drive_search",
+    description:
+      "Search Google Drive for documents, spreadsheets, and files in the connected workspace. " +
+      "Returns file names, types, owners, last-modified dates, and sharing status. Requires GOOGLE_DRIVE_API_KEY.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        query:       { type: "string",  description: "Search query — file name, content, or Drive search operators" },
+        mime_type:   { type: "string",  description: "Optional: filter by MIME type, e.g. 'application/pdf'" },
+        max_results: { type: "number",  description: "Maximum results (default 10)" },
+      },
+      required: ["query"],
+    },
+  },
+  async execute(input) {
+    if (!Config.connectors.googleDrive.enabled) return googleDriveNotConfigured();
+    logger.debug("google_drive_search", { query: (input.query as string).slice(0, 100) });
+    return mcpCall(
+      Config.connectors.googleDrive.endpoint,
+      Config.connectors.googleDrive.apiKey,
+      "searchFiles",
+      { ...input, query: (input.query as string).slice(0, 500) },
+    );
+  },
+};
+
+export const googleDriveGetFileTool: ToolImpl = {
+  name: "google_drive_get_file",
+  schema: {
+    name: "google_drive_get_file",
+    description:
+      "Fetch the text content or metadata of a Google Drive file by ID. " +
+      "For Docs and Sheets, returns extracted text. Requires GOOGLE_DRIVE_API_KEY.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        file_id:     { type: "string",  description: "Google Drive file ID" },
+        format:      { type: "string",  description: "Optional: 'text' (default) or 'metadata'" },
+      },
+      required: ["file_id"],
+    },
+  },
+  async execute(input) {
+    if (!Config.connectors.googleDrive.enabled) return googleDriveNotConfigured();
+    logger.debug("google_drive_get_file", { id: input.file_id });
+    return mcpCall(
+      Config.connectors.googleDrive.endpoint,
+      Config.connectors.googleDrive.apiKey,
+      "getFile",
+      { fileId: (input.file_id as string).slice(0, 200), format: input.format ?? "text" },
+    );
+  },
+};
+
+// ─── Box ──────────────────────────────────────────────────────────────────────
+
+const boxNotConfigured = () => ({
+  error: "Box not configured — set BOX_API_KEY to enable VDR and matter room access",
+});
+
+export const boxSearchTool: ToolImpl = {
+  name: "box_search",
+  schema: {
+    name: "box_search",
+    description:
+      "Search Box for documents in VDRs and matter rooms. Returns file names, folder paths, " +
+      "owners, and last-modified dates. Requires BOX_API_KEY.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        query:       { type: "string",  description: "Full-text search query" },
+        folder_id:   { type: "string",  description: "Optional: restrict to a specific folder/VDR" },
+        max_results: { type: "number",  description: "Maximum results (default 10)" },
+      },
+      required: ["query"],
+    },
+  },
+  async execute(input) {
+    if (!Config.connectors.box.enabled) return boxNotConfigured();
+    logger.debug("box_search", { query: (input.query as string).slice(0, 100) });
+    return mcpCall(
+      Config.connectors.box.endpoint,
+      Config.connectors.box.apiKey,
+      "searchFiles",
+      { ...input, query: (input.query as string).slice(0, 500) },
+    );
+  },
+};
+
+export const boxGetFileTool: ToolImpl = {
+  name: "box_get_file",
+  schema: {
+    name: "box_get_file",
+    description:
+      "Fetch a specific file from Box by ID — returns text content for documents or " +
+      "metadata and download link for binary files. Requires BOX_API_KEY.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        file_id: { type: "string", description: "Box file ID" },
+      },
+      required: ["file_id"],
+    },
+  },
+  async execute(input) {
+    if (!Config.connectors.box.enabled) return boxNotConfigured();
+    logger.debug("box_get_file", { id: input.file_id });
+    return mcpCall(
+      Config.connectors.box.endpoint,
+      Config.connectors.box.apiKey,
+      "getFile",
+      { fileId: (input.file_id as string).slice(0, 200) },
+    );
+  },
+};
+
+// ─── Lawve AI ─────────────────────────────────────────────────────────────────
+
+const lawveNotConfigured = () => ({
+  error: "Lawve not configured — set LAWVE_API_KEY to enable AI contract review",
+});
+
+export const lawveReviewContractTool: ToolImpl = {
+  name: "lawve_review_contract",
+  schema: {
+    name: "lawve_review_contract",
+    description:
+      "Run an AI contract review via Lawve — identifies risky clauses, missing standard " +
+      "provisions, and deviations from market standard. Returns clause-level commentary. Requires LAWVE_API_KEY.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        document_text: { type: "string", description: "Contract text to review (max 200 000 chars)" },
+        contract_type: { type: "string", description: "Optional: contract type for context, e.g. 'NDA', 'SaaS', 'employment'" },
+        party_role:    { type: "string", description: "Optional: 'buyer', 'seller', 'licensor', 'licensee', etc." },
+      },
+      required: ["document_text"],
+    },
+  },
+  async execute(input) {
+    if (!Config.connectors.lawve.enabled) return lawveNotConfigured();
+    const text = (input.document_text as string).slice(0, 200_000);
+    logger.debug("lawve_review_contract", { chars: text.length });
+    return mcpCall(
+      Config.connectors.lawve.endpoint,
+      Config.connectors.lawve.apiKey,
+      "reviewContract",
+      { document_text: text, contract_type: input.contract_type, party_role: input.party_role },
+    );
+  },
+};
+
+export const lawveSearchClausesTool: ToolImpl = {
+  name: "lawve_search_clauses",
+  schema: {
+    name: "lawve_search_clauses",
+    description:
+      "Search Lawve's clause library for standard, market, and fallback clause alternatives. " +
+      "Returns alternative clause versions with risk ratings. Requires LAWVE_API_KEY.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        clause_type:   { type: "string", description: "Clause category, e.g. 'limitation of liability', 'indemnity', 'termination'" },
+        contract_type: { type: "string", description: "Optional: contract type context" },
+        jurisdiction:  { type: "string", description: "Optional: jurisdiction for market standard comparison" },
+      },
+      required: ["clause_type"],
+    },
+  },
+  async execute(input) {
+    if (!Config.connectors.lawve.enabled) return lawveNotConfigured();
+    logger.debug("lawve_search_clauses", { clause: input.clause_type });
+    return mcpCall(
+      Config.connectors.lawve.endpoint,
+      Config.connectors.lawve.apiKey,
+      "searchClauses",
+      { clause_type: (input.clause_type as string).slice(0, 200), contract_type: input.contract_type, jurisdiction: input.jurisdiction },
+    );
+  },
+};
+
+// ─── TopCounsel ───────────────────────────────────────────────────────────────
+
+const topCounselNotConfigured = () => ({
+  error: "TopCounsel not configured — set TOPCOUNSEL_API_KEY to enable outside counsel routing",
+});
+
+export const topCounselRouteMatterTool: ToolImpl = {
+  name: "topcounsel_route_matter",
+  schema: {
+    name: "topcounsel_route_matter",
+    description:
+      "Route a legal matter to the outside counsel panel via TopCounsel — returns recommended " +
+      "firms based on practice area, jurisdiction, matter type, and historical performance. Requires TOPCOUNSEL_API_KEY.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        matter_description: { type: "string",  description: "Brief matter description" },
+        practice_area:      { type: "string",  description: "Practice area, e.g. 'IP litigation', 'M&A', 'employment'" },
+        jurisdiction:       { type: "string",  description: "Primary jurisdiction of the matter" },
+        urgency:            { type: "string",  description: "Optional: 'urgent', 'normal', 'low'" },
+      },
+      required: ["matter_description", "practice_area"],
+    },
+  },
+  async execute(input) {
+    if (!Config.connectors.topCounsel.enabled) return topCounselNotConfigured();
+    logger.debug("topcounsel_route_matter", { area: input.practice_area });
+    return mcpCall(
+      Config.connectors.topCounsel.endpoint,
+      Config.connectors.topCounsel.apiKey,
+      "routeMatter",
+      { ...input, matter_description: (input.matter_description as string).slice(0, 1000) },
+    );
+  },
+};
+
+export const topCounselGetPanelTool: ToolImpl = {
+  name: "topcounsel_get_panel",
+  schema: {
+    name: "topcounsel_get_panel",
+    description:
+      "Fetch the outside counsel panel roster from TopCounsel — returns firm names, practice " +
+      "area coverage, jurisdictions, rate cards, and engagement history. Requires TOPCOUNSEL_API_KEY.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        practice_area: { type: "string", description: "Optional: filter by practice area" },
+        jurisdiction:  { type: "string", description: "Optional: filter by jurisdiction capability" },
+      },
+      required: [],
+    },
+  },
+  async execute(input) {
+    if (!Config.connectors.topCounsel.enabled) return topCounselNotConfigured();
+    logger.debug("topcounsel_get_panel", {});
+    return mcpCall(
+      Config.connectors.topCounsel.endpoint,
+      Config.connectors.topCounsel.apiKey,
+      "getPanel",
+      { practice_area: input.practice_area, jurisdiction: input.jurisdiction },
+    );
+  },
+};
+
 // ─── Connector tool list ──────────────────────────────────────────────────────
 
 export const CONNECTOR_TOOLS: ToolImpl[] = [
@@ -764,4 +1221,25 @@ export const CONNECTOR_TOOLS: ToolImpl[] = [
   // Definely — DEFINELY_API_KEY required
   definelyAnalyzeStructureTool,
   definelyResolveDefinitionTool,
+  // DocuSign CLM — DOCUSIGN_API_KEY required
+  docusignGetEnvelopeTool,
+  docusignSearchContractsTool,
+  // Solve Intelligence (patent) — SOLVE_INTELLIGENCE_API_KEY required
+  solveIntelligenceSearchPatentsTool,
+  solveIntelligenceDraftClaimsTool,
+  // Slack — SLACK_API_KEY required
+  slackSearchTool,
+  slackSendMessageTool,
+  // Google Drive — GOOGLE_DRIVE_API_KEY required
+  googleDriveSearchTool,
+  googleDriveGetFileTool,
+  // Box — BOX_API_KEY required
+  boxSearchTool,
+  boxGetFileTool,
+  // Lawve AI — LAWVE_API_KEY required
+  lawveReviewContractTool,
+  lawveSearchClausesTool,
+  // TopCounsel — TOPCOUNSEL_API_KEY required
+  topCounselRouteMatterTool,
+  topCounselGetPanelTool,
 ];

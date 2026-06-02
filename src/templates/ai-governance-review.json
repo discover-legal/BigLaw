@@ -1,0 +1,12 @@
+{
+  "id": "ai-governance-review",
+  "name": "AI Governance & Compliance Review",
+  "description": "Comprehensive AI governance review — classifies AI use cases under the EU AI Act, identifies prohibited and high-risk systems, assesses vendor AI tools, and produces a gap register with remediation roadmap.",
+  "workflowType": "roundtable",
+  "promptTemplate": "Conduct an AI governance and compliance review for {{company}}. Scope: {{ai_description}}. Classify each AI use case under the EU AI Act (prohibited / high-risk / limited risk / minimal risk). For high-risk systems, identify conformity assessment requirements. Assess compliance with applicable regulations including {{regulations}}. Produce a gap register with severity ratings and a prioritised remediation roadmap.",
+  "substitutions": {
+    "company": "the company",
+    "ai_description": "all AI systems used internally and in customer-facing products",
+    "regulations": "EU AI Act, GDPR Article 22, and applicable sector guidance"
+  }
+}
