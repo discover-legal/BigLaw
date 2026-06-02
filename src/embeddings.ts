@@ -61,6 +61,9 @@ export async function embed(text: string): Promise<EmbeddingResult> {
     input: text,
     dimensions: Config.embeddings.dimensions,
   });
+  if (!response.data[0]) {
+    throw new Error("OpenAI embeddings API returned an empty data array");
+  }
   return { text, embedding: response.data[0].embedding, model: Config.embeddings.model };
 }
 
@@ -70,6 +73,9 @@ export async function embedBatch(texts: string[]): Promise<EmbeddingResult[]> {
   if (Config.local.localEmbeddings) {
     // Ollama's /api/embed accepts an array input
     const vectors = await ollamaEmbed(texts);
+    if (vectors.length !== texts.length) {
+      throw new Error(`Ollama embedding count mismatch: got ${vectors.length}, expected ${texts.length}`);
+    }
     const model = Config.local.localEmbeddingModel;
     return texts.map((text, i) => ({ text, embedding: vectors[i], model }));
   }
@@ -87,6 +93,9 @@ export async function embedBatch(texts: string[]): Promise<EmbeddingResult[]> {
 }
 
 export function cosineSimilarity(a: number[], b: number[]): number {
+  if (a.length !== b.length) {
+    throw new Error(`cosineSimilarity: vector length mismatch (${a.length} vs ${b.length})`);
+  }
   let dot = 0, magA = 0, magB = 0;
   for (let i = 0; i < a.length; i++) {
     dot += a[i] * b[i];

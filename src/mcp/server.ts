@@ -304,9 +304,16 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
     app.addHook("onRequest", async (req, reply) => {
       if (req.url === "/health") return;
       // Constant-time comparison prevents timing side-channel key enumeration.
-      const provided = Buffer.from(String(req.headers["x-api-key"] ?? ""));
+      // Pad the provided key to the expected length before comparing so that
+      // timingSafeEqual always runs (otherwise a wrong-length key short-circuits
+      // the comparison and leaks the expected key length via timing).
       const expected = Buffer.from(Config.api.apiKey);
-      if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
+      const raw = Buffer.from(String(req.headers["x-api-key"] ?? ""));
+      const padded = Buffer.alloc(expected.length);
+      raw.copy(padded, 0, 0, Math.min(raw.length, expected.length));
+      const validLength = raw.length === expected.length;
+      const validContent = timingSafeEqual(padded, expected);
+      if (!validLength || !validContent) {
         return reply.code(401).send({ error: "Unauthorized" });
       }
     });
@@ -590,6 +597,13 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
     const { id } = req.params as { id: string };
     const profile = orchestrator.profiles.get(id);
     if (!profile) return reply.status(404).send({ error: "Profile not found" });
+    // Partners see the full profile; lawyers see only their own full profile.
+    // Other lawyers get the same restricted view as the list endpoint.
+    const user = getUser(req);
+    if (!isPartner(user) && user?.profileId !== id) {
+      const { id: pid, name, title, color, role } = profile;
+      return { id: pid, name, title, color, role };
+    }
     return profile;
   });
 

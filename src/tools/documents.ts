@@ -164,14 +164,15 @@ export const fetchDocumentsTool: ToolImpl = {
         doc_ids: {
           type: "array",
           items: { type: "string" },
-          description: "Array of document IDs to read",
+          description: "Array of document IDs to read (capped at 20 per call)",
         },
       },
       required: ["doc_ids"],
     },
   },
   async execute(input, ctx) {
-    const docIds = (input.doc_ids as string[] | undefined) ?? [];
+    const MAX_FETCH_DOCS = 20;
+    const docIds = ((input.doc_ids as string[] | undefined) ?? []).slice(0, MAX_FETCH_DOCS);
     const documents = await Promise.all(
       docIds.map(async (docId) => {
         const text = await readDocText(docId, ctx);

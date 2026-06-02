@@ -48,11 +48,24 @@ const REVOKED_JTIS = new Set<string>();
 const AUTH_RATE_WINDOW_MS = 60_000;
 const AUTH_RATE_LIMIT = 20;
 const authRateMap = new Map<string, number[]>();
+
+// Periodically evict entries whose timestamps have all aged out of the window,
+// so the map doesn't grow unboundedly under a wave of unique attacker IPs.
+setInterval(() => {
+  const cutoff = Date.now() - AUTH_RATE_WINDOW_MS;
+  for (const [ip, hits] of authRateMap) {
+    if (!hits.some((t) => t > cutoff)) authRateMap.delete(ip);
+  }
+}, 5 * 60_000).unref();
+
 function checkAuthRate(ip: string): boolean {
   const now = Date.now();
   const cutoff = now - AUTH_RATE_WINDOW_MS;
   const hits = (authRateMap.get(ip) ?? []).filter((t) => t > cutoff);
-  if (hits.length >= AUTH_RATE_LIMIT) return false;
+  if (hits.length >= AUTH_RATE_LIMIT) {
+    authRateMap.set(ip, hits);
+    return false;
+  }
   hits.push(now);
   authRateMap.set(ip, hits);
   return true;

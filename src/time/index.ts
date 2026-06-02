@@ -46,7 +46,10 @@ export class TimeStore {
         endedAt: e.endedAt ? new Date(e.endedAt as string) : undefined,
       })) as TimeEntry[];
       logger.info("Time entries loaded", { count: this.entries.length });
-    } catch {
+    } catch (err) {
+      logger.warn("Time entries file could not be loaded — starting empty", {
+        error: err instanceof Error ? err.message : String(err),
+      });
       this.entries = [];
     }
   }
@@ -98,7 +101,7 @@ export class TimeStore {
   exportCsv(filter?: TimeFilter): string {
     const rows = this.list(filter);
     const header = "id,profileId,profileName,taskId,matterNumber,clientNumber,description,event,startedAt,endedAt,durationMs,billingUnits";
-    const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""').replace(/[\r\n]+/g, " ")}"`;  // also strip newlines to prevent CSV row injection
     const lines = rows.map((e) =>
       [
         esc(e.id),

@@ -160,8 +160,11 @@ function fromOpenAIChoice(
       let input: Record<string, unknown> = {};
       try {
         input = JSON.parse(tc.function.arguments) as Record<string, unknown>;
-      } catch {
-        logger.warn("Ollama returned unparseable tool arguments", { tool: tc.function.name });
+      } catch (err) {
+        logger.warn("Ollama returned unparseable tool arguments", { tool: tc.function.name, args: tc.function.arguments?.slice(0, 200) });
+        // Surface the parse error so the model sees a structured error rather
+        // than the tool silently executing with an empty argument set.
+        input = { _parse_error: (err as Error).message };
       }
       content.push({
         type: "tool_use",

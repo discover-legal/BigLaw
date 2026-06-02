@@ -233,7 +233,7 @@ export class DyTopoEngine {
 
     // Restore AgentDefinition objects in the new ranked order.
     const byId = new Map(candidates.map((a) => [a.id, a]));
-    return rankedIds.map((id) => byId.get(id)!).filter(Boolean);
+    return rankedIds.map((id) => byId.get(id)).filter((a): a is AgentDefinition => a != null);
   }
 
   private async fetchAgentMemories(

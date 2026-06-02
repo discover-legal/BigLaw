@@ -69,10 +69,10 @@ export const tabularReviewTool: ToolImpl = {
     input_schema: {
       type: "object" as const,
       properties: {
-        documentIds: { type: "array", items: { type: "string" }, description: "Knowledge-store document IDs to review (rows)" },
+        documentIds: { type: "array", items: { type: "string" }, description: "Knowledge-store document IDs to review (rows; capped at 50)" },
         columns: {
           type: "array",
-          description: "Columns (fields) to extract. Each has a name and an extraction prompt.",
+          description: "Columns (fields) to extract. Each has a name and an extraction prompt (capped at 30).",
           items: {
             type: "object",
             properties: {
@@ -87,8 +87,10 @@ export const tabularReviewTool: ToolImpl = {
     },
   },
   async execute(input, ctx) {
-    const documentIds = (input.documentIds as string[] | undefined) ?? [];
-    const columns = (input.columns as Column[] | undefined) ?? [];
+    const MAX_DOCS = 50;
+    const MAX_COLS = 30;
+    const documentIds = ((input.documentIds as string[] | undefined) ?? []).slice(0, MAX_DOCS);
+    const columns = ((input.columns as Column[] | undefined) ?? []).slice(0, MAX_COLS);
     if (!documentIds.length || !columns.length) {
       return { error: "tabular_review requires documentIds and columns", rows: [] };
     }
@@ -131,6 +133,7 @@ export const tabularReviewTool: ToolImpl = {
 
     // Persist the matrix so read_table_cells can read col/row subsets later in the run.
     const reviewId = randomUUID();
+    let persisted = false;
     try {
       await mkdir(Config.pdf.outputDir, { recursive: true });
       await writeFile(
@@ -138,12 +141,15 @@ export const tabularReviewTool: ToolImpl = {
         JSON.stringify({ reviewId, columns: columns.map((c) => c.name), rows }),
         "utf8",
       );
+      persisted = true;
     } catch (err) {
-      logger.warn("tabular_review: failed to persist result", { error: (err as Error).message });
+      logger.warn("tabular_review: failed to persist result — read_table_cells will not work", { error: (err as Error).message });
     }
 
     return {
-      reviewId,
+      // Only expose reviewId when the file was actually written; a null reviewId
+      // prevents a confusing "review not found" error from read_table_cells.
+      reviewId: persisted ? reviewId : null,
       columns: columns.map((c) => c.name),
       rows,
       flagTally,

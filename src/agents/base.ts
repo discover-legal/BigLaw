@@ -360,7 +360,7 @@ function parseFindings(text: string, def: AgentDefinition): Finding[] {
     const citations: Citation[] = citationMatches.slice(0, 50).map((m) => ({
       source: m[1].trim().slice(0, 200),
       quote: m[2].trim().slice(0, 500),
-      page: m[3] ? parseInt(m[3].trim()) : undefined,
+      page: m[3]?.trim() ? parseInt(m[3].trim(), 10) : undefined,
       mechanicallyVerified: false,
     }));
 
