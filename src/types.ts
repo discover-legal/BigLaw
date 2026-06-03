@@ -300,6 +300,8 @@ export interface TimeEntry {
   durationMs: number;        // 0 while running; populated on close
   /** 6-minute billing increments (0.1 hr each). Rounded UP. 0 while running. */
   billingUnits: number;
+  /** ISO timestamp set when this entry has been pushed to a Clio matter as an activity. */
+  clioSyncedAt?: string;
 }
 
 /** Structured spreadsheet-style output for the `tabulate` workflow. */

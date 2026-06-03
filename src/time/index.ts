@@ -92,6 +92,14 @@ export class TimeStore {
     return this.entries.filter((e) => matchesFilter(e, filter));
   }
 
+  /** Mark an entry as synced to a Clio matter activity (idempotency guard for sync-to-clio). */
+  markClioSynced(id: string): void {
+    const entry = this.entries.find((e) => e.id === id);
+    if (!entry) return;
+    entry.clioSyncedAt = new Date().toISOString();
+    this.persist().catch((err) => logger.warn("Failed to persist time entries", { error: (err as Error).message }));
+  }
+
   /** Explicit JSON export — same as list(), for the export endpoint. */
   exportJson(filter?: TimeFilter): TimeEntry[] {
     return this.list(filter);
@@ -100,7 +108,7 @@ export class TimeStore {
   /** CSV export with headers. */
   exportCsv(filter?: TimeFilter): string {
     const rows = this.list(filter);
-    const header = "id,profileId,profileName,taskId,matterNumber,clientNumber,description,event,startedAt,endedAt,durationMs,billingUnits";
+    const header = "id,profileId,profileName,taskId,matterNumber,clientNumber,description,event,startedAt,endedAt,durationMs,billingUnits,clioSyncedAt";
     const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""').replace(/[\r\n]+/g, " ")}"`;  // also strip newlines to prevent CSV row injection
     const lines = rows.map((e) =>
       [
@@ -116,6 +124,7 @@ export class TimeStore {
         esc(e.endedAt?.toISOString() ?? ""),
         esc(e.durationMs),
         esc(e.billingUnits),
+        esc(e.clioSyncedAt ?? ""),
       ].join(","),
     );
     return [header, ...lines].join("\r\n");

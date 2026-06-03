@@ -1183,11 +1183,13 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
     const { clioMatterId, from, to, matterNumber } = req.body as { clioMatterId: number; from?: string; to?: string; matterNumber?: string };
     if (!clioMatterId) return reply.code(400).send({ error: "clioMatterId is required" });
 
-    const entries = orchestrator.time.list({
+    const allEntries = orchestrator.time.list({
       matterNumber: matterNumber || undefined,
       from: from ? new Date(from) : undefined,
       to: to ? new Date(to) : undefined,
     }).filter((e) => e.durationMs > 0);
+    const entries = allEntries.filter((e) => !e.clioSyncedAt);
+    const skipped = allEntries.length - entries.length;
 
     let synced = 0;
     let errors = 0;
@@ -1200,13 +1202,14 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
           dateOn,
           durationHours: Math.round(durationHours * 100) / 100,
         });
+        orchestrator.time.markClioSynced(entry.id);
         synced++;
       } catch (err) {
         logger.warn("Clio sync activity failed", { entryId: entry.id, error: (err as Error).message });
         errors++;
       }
     }
-    return { synced, errors };
+    return { synced, skipped, errors };
   });
 
   await app.listen({ port: Config.api.port, host: Config.api.host });
