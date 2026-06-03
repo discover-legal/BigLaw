@@ -3,6 +3,7 @@ import { motion } from "framer-motion";
 import { api } from "./api";
 import type { AppSettings, LawyerProfile, UserMode } from "./types";
 import { PRACTICE_AREAS, MODE_LABEL } from "./types";
+import { CostDashboard } from "./CostDashboard";
 
 export function AdminPanel({ onClose, notify, isPartner, profiles, onProfilesChange, me }: {
   onClose: () => void; notify: (m: string) => void;
@@ -12,7 +13,7 @@ export function AdminPanel({ onClose, notify, isPartner, profiles, onProfilesCha
   const [s, setS] = useState<AppSettings | null>(null);
   const [apiKey, setApiKey] = useState("");
   const [busy, setBusy] = useState(false);
-  const [tab, setTab] = useState<"users" | "settings">(isPartner ? "users" : "settings");
+  const [tab, setTab] = useState<"users" | "settings" | "cost">(isPartner ? "users" : "settings");
   const [np, setNp] = useState({ name: "", email: "", role: "lawyer", title: "", practiceAreas: [] as string[], bio: "" });
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editPatch, setEditPatch] = useState<Partial<LawyerProfile>>({});
@@ -94,6 +95,11 @@ export function AdminPanel({ onClose, notify, isPartner, profiles, onProfilesCha
           <button className={`tab ${tab === "settings" ? "active" : ""}`} onClick={() => setTab("settings")}>
             Settings {tab === "settings" && <motion.span layoutId="adm-ul" className="tab-underline" />}
           </button>
+          {isPartner && (
+            <button className={`tab ${tab === "cost" ? "active" : ""}`} onClick={() => setTab("cost")}>
+              Cost {tab === "cost" && <motion.span layoutId="adm-ul" className="tab-underline" />}
+            </button>
+          )}
         </div>
 
         {tab === "users" && (
@@ -299,6 +305,12 @@ export function AdminPanel({ onClose, notify, isPartner, profiles, onProfilesCha
                   placeholder={s.docuseal.apiKeySet ? "•••••••• — leave blank to keep" : "X-Auth-Token"} />
               </div>
             </div>
+          </div>
+        )}
+
+        {tab === "cost" && isPartner && (
+          <div className="modal-body">
+            <CostDashboard notify={notify} />
           </div>
         )}
 

@@ -1,4 +1,4 @@
-import type { Task, Template, Health, WorkflowType, SearchResult, AuditEntry, DocumentRef, AgentSummary, AppSettings, LawyerProfile, Me, Client, ClientMatter, ConflictCheckResult, IngestResult } from "./types";
+import type { Task, Template, Health, WorkflowType, SearchResult, AuditEntry, DocumentRef, AgentSummary, AppSettings, LawyerProfile, Me, Client, ClientMatter, ConflictCheckResult, IngestResult, CostSummary, TaskCostResult } from "./types";
 
 type SettingsPatch = {
   presentation?: Partial<AppSettings["presentation"]>;
@@ -92,6 +92,10 @@ export const api = {
     fetch(`/documents/search?query=${encodeURIComponent(query)}`).then(json<SearchResult[]>),
 
   recentAudit: (limit = 60) => fetch(`/audit?limit=${limit}`).then(json<AuditEntry[]>),
+
+  getCostSummary: () => fetch("/cost/summary").then(json<CostSummary>),
+  getTaskCost: (id: string) => fetch(`/tasks/${id}/cost`).then(json<TaskCostResult>),
+  getProfileCost: (id: string) => fetch(`/profiles/${id}/cost`).then(json<{ profileId: string; summary: CostSummary; entries: unknown[] }>),
 };
 
 /**

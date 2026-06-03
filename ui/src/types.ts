@@ -281,6 +281,55 @@ export interface AuditEntry {
   data?: Record<string, unknown>;
 }
 
+export type CostContext =
+  | "task" | "descriptor" | "synthesis" | "tabulate" | "round_goal"
+  | "protocol_debate" | "protocol_verify" | "tone_analysis" | "classification";
+
+export interface CostEntry {
+  id: string;
+  ts: string;
+  model: string;
+  provider: "anthropic" | "ollama" | "local";
+  inputTokens: number;
+  outputTokens: number;
+  cacheWriteTokens?: number;
+  cacheReadTokens?: number;
+  costUsd: number | null;
+  estimatedWh: number | null;
+  estimatedWatts: number | null;
+  durationMs: number;
+  context: CostContext;
+  taskId?: string;
+  profileId?: string;
+  agentId?: string;
+}
+
+export interface CostSummary {
+  totalUsd: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalCacheWriteTokens: number;
+  totalCacheReadTokens: number;
+  totalWh: number;
+  byModel: Record<string, {
+    usd: number;
+    inputTokens: number;
+    outputTokens: number;
+    cacheWriteTokens: number;
+    cacheReadTokens: number;
+    wh: number;
+    calls: number;
+  }>;
+  byContext: Record<string, { usd: number; inputTokens: number; outputTokens: number; calls: number }>;
+  entryCount: number;
+}
+
+export interface TaskCostResult {
+  taskId: string;
+  summary: CostSummary;
+  entries: CostEntry[];
+}
+
 export interface Health {
   status: string;
   version: string;
