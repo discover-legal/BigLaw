@@ -48,10 +48,17 @@ export class AnthropicProvider implements ModelProvider {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const content = (betaMsg.content as any[]).map(fromAnyBlock);
       const stopReason = fromAnthropicStopReason(betaMsg.stop_reason);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const betaUsage = betaMsg.usage as any;
       return {
         stopReason,
         content,
-        usage: { inputTokens: betaMsg.usage.input_tokens, outputTokens: betaMsg.usage.output_tokens },
+        usage: {
+          inputTokens: betaMsg.usage.input_tokens,
+          outputTokens: betaMsg.usage.output_tokens,
+          cacheWriteTokens: betaUsage.cache_creation_input_tokens || undefined,
+          cacheReadTokens: betaUsage.cache_read_input_tokens || undefined,
+        },
         durationMs: Date.now() - t0,
       };
     }
@@ -66,10 +73,17 @@ export class AnthropicProvider implements ModelProvider {
 
     const content = msg.content.map(fromAnthropicBlock);
     const stopReason = fromAnthropicStopReason(msg.stop_reason);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const usage = msg.usage as any;
     return {
       stopReason,
       content,
-      usage: { inputTokens: msg.usage.input_tokens, outputTokens: msg.usage.output_tokens },
+      usage: {
+        inputTokens: msg.usage.input_tokens,
+        outputTokens: msg.usage.output_tokens,
+        cacheWriteTokens: usage.cache_creation_input_tokens || undefined,
+        cacheReadTokens: usage.cache_read_input_tokens || undefined,
+      },
       durationMs: Date.now() - t0,
     };
   }

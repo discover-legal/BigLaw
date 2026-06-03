@@ -82,12 +82,16 @@ function recordOrchestratorCost(
 ): void {
   const isLocal = isOllamaModel(modelId) || isLocalModel(modelId);
   const bare = resolveModelId(modelId);
+  const cw = response.usage.cacheWriteTokens ?? 0;
+  const cr = response.usage.cacheReadTokens ?? 0;
   costStore.record({
     model: bare,
     provider: isLocal ? (isOllamaModel(modelId) ? "ollama" : "local") : "anthropic",
     inputTokens: response.usage.inputTokens,
     outputTokens: response.usage.outputTokens,
-    costUsd: isLocal ? null : calcCostUsd(bare, response.usage.inputTokens, response.usage.outputTokens),
+    ...(cw ? { cacheWriteTokens: cw } : {}),
+    ...(cr ? { cacheReadTokens: cr } : {}),
+    costUsd: isLocal ? null : calcCostUsd(bare, response.usage.inputTokens, response.usage.outputTokens, cw, cr),
     estimatedWh: isLocal ? calcWattHours(Config.local.inferenceWatts, response.durationMs) : null,
     estimatedWatts: isLocal ? Config.local.inferenceWatts : null,
     durationMs: response.durationMs,

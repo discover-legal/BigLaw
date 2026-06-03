@@ -45,6 +45,10 @@ export interface CostEntry {
   provider: "anthropic" | "ollama" | "local";
   inputTokens: number;
   outputTokens: number;
+  /** Prompt-cache write tokens (Anthropic only). Priced at 1.25× input rate. */
+  cacheWriteTokens?: number;
+  /** Prompt-cache read tokens (Anthropic only). Priced at 0.10× input rate. */
+  cacheReadTokens?: number;
   /** USD cost, or null for local models with no API charge. */
   costUsd: number | null;
   /** Estimated power draw in watt-hours (local models only). */
@@ -62,8 +66,18 @@ export interface CostSummary {
   totalUsd: number;
   totalInputTokens: number;
   totalOutputTokens: number;
+  totalCacheWriteTokens: number;
+  totalCacheReadTokens: number;
   totalWh: number;
-  byModel: Record<string, { usd: number; inputTokens: number; outputTokens: number; wh: number; calls: number }>;
+  byModel: Record<string, {
+    usd: number;
+    inputTokens: number;
+    outputTokens: number;
+    cacheWriteTokens: number;
+    cacheReadTokens: number;
+    wh: number;
+    calls: number;
+  }>;
   byContext: Record<string, { usd: number; inputTokens: number; outputTokens: number; calls: number }>;
   entryCount: number;
 }
@@ -108,10 +122,32 @@ function loadPricing(): Record<string, ModelPrice> {
 
 const PRICING = loadPricing();
 
-export function calcCostUsd(model: string, inputTokens: number, outputTokens: number): number | null {
+/**
+ * Calculate USD cost for a model call.
+ *
+ * Anthropic uses three token buckets with different rates:
+ *   - inputTokens:      100% of input rate  (non-cached)
+ *   - cacheWriteTokens: 125% of input rate  (written to prompt cache)
+ *   - cacheReadTokens:   10% of input rate  (served from prompt cache)
+ *   - outputTokens:     output rate
+ *
+ * Returns null if the model is not in the pricing table (e.g. unknown local model).
+ */
+export function calcCostUsd(
+  model: string,
+  inputTokens: number,
+  outputTokens: number,
+  cacheWriteTokens = 0,
+  cacheReadTokens = 0,
+): number | null {
   const p = PRICING[model];
   if (!p) return null;
-  return (inputTokens * p.in + outputTokens * p.out) / 1_000_000;
+  return (
+    inputTokens      * p.in         +
+    outputTokens     * p.out        +
+    cacheWriteTokens * p.in * 1.25  +
+    cacheReadTokens  * p.in * 0.10
+  ) / 1_000_000;
 }
 
 export function calcWattHours(watts: number, durationMs: number): number {
@@ -164,22 +200,30 @@ export class CostStore {
     let totalUsd = 0;
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
+    let totalCacheWriteTokens = 0;
+    let totalCacheReadTokens = 0;
     let totalWh = 0;
 
     for (const e of entries) {
       const usd  = e.costUsd ?? 0;
       const wh   = e.estimatedWh ?? 0;
-      totalUsd          += usd;
-      totalInputTokens  += e.inputTokens;
-      totalOutputTokens += e.outputTokens;
-      totalWh           += wh;
+      const cw   = e.cacheWriteTokens ?? 0;
+      const cr   = e.cacheReadTokens ?? 0;
+      totalUsd               += usd;
+      totalInputTokens       += e.inputTokens;
+      totalOutputTokens      += e.outputTokens;
+      totalCacheWriteTokens  += cw;
+      totalCacheReadTokens   += cr;
+      totalWh                += wh;
 
-      const m = byModel[e.model] ?? { usd: 0, inputTokens: 0, outputTokens: 0, wh: 0, calls: 0 };
-      m.usd          += usd;
-      m.inputTokens  += e.inputTokens;
-      m.outputTokens += e.outputTokens;
-      m.wh           += wh;
-      m.calls        += 1;
+      const m = byModel[e.model] ?? { usd: 0, inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0, cacheReadTokens: 0, wh: 0, calls: 0 };
+      m.usd              += usd;
+      m.inputTokens      += e.inputTokens;
+      m.outputTokens     += e.outputTokens;
+      m.cacheWriteTokens += cw;
+      m.cacheReadTokens  += cr;
+      m.wh               += wh;
+      m.calls            += 1;
       byModel[e.model] = m;
 
       const c = byContext[e.context] ?? { usd: 0, inputTokens: 0, outputTokens: 0, calls: 0 };
@@ -190,7 +234,11 @@ export class CostStore {
       byContext[e.context] = c;
     }
 
-    return { totalUsd, totalInputTokens, totalOutputTokens, totalWh, byModel, byContext, entryCount: entries.length };
+    return {
+      totalUsd, totalInputTokens, totalOutputTokens,
+      totalCacheWriteTokens, totalCacheReadTokens,
+      totalWh, byModel, byContext, entryCount: entries.length,
+    };
   }
 }
 
