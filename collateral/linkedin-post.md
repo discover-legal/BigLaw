@@ -106,3 +106,15 @@ SSRF-safe region routing. Auto-refresh tokens. Gated on `CLIO_CLIENT_ID` — no 
 Open source, AGPL-3.0.
 
 #LegalAI #Clio #OpenSource
+
+---
+
+## Quick — Clio time sync idempotency
+
+Small one, but it matters in practice:
+
+Big Michael's Clio time-entry sync is now idempotent. Hit the endpoint twice — the second call is a no-op. Every entry gets stamped with a `clioSyncedAt` timestamp the moment it lands in Clio; subsequent syncs skip it. The response tells you `{ synced, skipped, errors }` so you always know the state.
+
+CSV exports now include the `clioSyncedAt` column. Audit trail in a spreadsheet, no guessing.
+
+#LegalTech #Clio #OpenSource
