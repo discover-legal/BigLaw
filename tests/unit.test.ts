@@ -21,6 +21,9 @@ import { PluginRegistry } from "../src/adapters/plugin.js";
 
 import { TimeStore } from "../src/time/index.js";
 import { detectNosLegal } from "../src/services/classifier.js";
+import { Config } from "../src/config.js";
+import { ClioClient, clioClient } from "../src/integrations/clio.js";
+import { CLIO_TOOLS, CLIO_TOOL_NAMES } from "../src/tools/clio.js";
 
 // ─── Model routing: complexity heuristic ────────────────────────────────────
 
@@ -575,4 +578,101 @@ test("detectNosLegal: returns empty object on LLM/provider failure", async () =>
   // Either way it must not throw and must be a plain object.
   assert.ok(keys.every((k) => ["areaOfLaw", "workType", "sector", "assetType"].includes(k)),
     `Unexpected keys in result: ${JSON.stringify(result)}`);
+});
+
+// ─── Clio integration ────────────────────────────────────────────────────────
+
+test("CLIO_TOOL_NAMES: has 7 entries covering all Clio tools", () => {
+  const expected = [
+    "clio_list_matters", "clio_get_matter", "clio_list_documents",
+    "clio_download_document", "clio_create_activity", "clio_create_note",
+    "clio_list_contacts",
+  ];
+  assert.equal(CLIO_TOOL_NAMES.length, 7);
+  for (const name of expected) {
+    assert.ok(CLIO_TOOL_NAMES.includes(name), `Missing tool: ${name}`);
+  }
+});
+
+test("ClioClient: isConnected() returns false on a fresh instance", () => {
+  const client = new ClioClient();
+  assert.equal(client.isConnected(), false);
+});
+
+test("ClioClient: status() returns { connected: false } on a fresh instance", () => {
+  const client = new ClioClient();
+  const s = client.status();
+  assert.equal(s.connected, false);
+  assert.equal(s.firmName, undefined);
+  assert.equal(s.firmId, undefined);
+});
+
+test("ClioClient: authUrl() targets correct us-region base and includes OAuth params", () => {
+  const client = new ClioClient(); // CLIO_REGION defaults to 'us'
+  const url = new URL(client.authUrl("csrf-state-xyz"));
+  assert.equal(url.origin, "https://app.clio.com");
+  assert.equal(url.pathname, "/oauth/authorize");
+  assert.equal(url.searchParams.get("response_type"), "code");
+  assert.equal(url.searchParams.get("state"), "csrf-state-xyz");
+  assert.ok(url.searchParams.has("client_id"), "authUrl must include client_id");
+  assert.ok(url.searchParams.has("redirect_uri"), "authUrl must include redirect_uri");
+});
+
+test("ClioClient: throws on invalid CLIO_REGION — SSRF guard", () => {
+  const saved = (Config.clio as Record<string, unknown>).region;
+  (Config.clio as Record<string, unknown>).region = "ru";
+  try {
+    assert.throws(
+      () => new ClioClient(),
+      (e: Error) => e.message.includes("Unknown CLIO_REGION"),
+    );
+  } finally {
+    (Config.clio as Record<string, unknown>).region = saved;
+  }
+});
+
+test("ClioClient: load() from missing file leaves instance disconnected", async () => {
+  const client = new ClioClient();
+  await client.load(); // ./data/clio-auth.json is absent in the test sandbox
+  assert.equal(client.isConnected(), false);
+});
+
+test("Clio tools: disconnected client causes tool to return { error } not throw", async () => {
+  const tool = CLIO_TOOLS.find((t) => t.name === "clio_list_matters")!;
+  assert.ok(tool, "clio_list_matters must exist in CLIO_TOOLS");
+  const result = await tool.execute({}) as Record<string, unknown>;
+  assert.ok("error" in result, `Expected { error } but got: ${JSON.stringify(result)}`);
+  assert.equal(typeof result.error, "string");
+});
+
+test("Clio tools: clio_get_matter returns { error } not throw when disconnected", async () => {
+  const tool = CLIO_TOOLS.find((t) => t.name === "clio_get_matter")!;
+  const result = await tool.execute({ matter_id: 42 }) as Record<string, unknown>;
+  assert.ok("error" in result);
+  assert.equal(typeof result.error, "string");
+});
+
+test("clio_list_matters: caps user-supplied limit at 200", async () => {
+  const tool = CLIO_TOOLS.find((t) => t.name === "clio_list_matters")!;
+  let capturedOpts: Record<string, unknown> | undefined;
+  const fn = mock.method(clioClient, "listMatters", async (opts: Record<string, unknown>) => {
+    capturedOpts = opts;
+    return { data: [] };
+  });
+  await tool.execute({ limit: 9999 });
+  fn.mock.restore();
+  assert.ok(capturedOpts !== undefined, "listMatters should have been called");
+  assert.equal(capturedOpts!.limit, 200, "limit must be capped at 200");
+});
+
+test("clio_list_matters: default limit is 50 when not specified", async () => {
+  const tool = CLIO_TOOLS.find((t) => t.name === "clio_list_matters")!;
+  let capturedOpts: Record<string, unknown> | undefined;
+  const fn = mock.method(clioClient, "listMatters", async (opts: Record<string, unknown>) => {
+    capturedOpts = opts;
+    return { data: [] };
+  });
+  await tool.execute({});
+  fn.mock.restore();
+  assert.equal(capturedOpts!.limit, 50, "default limit must be 50");
 });

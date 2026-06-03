@@ -73,3 +73,36 @@ Big Michael v0.4.0:
 Open source, AGPL-3.0.
 
 #LegalAI #OpenSource
+
+---
+
+## v0.4.x post — Clio integration
+
+Big Michael now connects to **Clio**.
+
+One OAuth flow. Four data regions (US, EU, Canada, Australia). Then:
+
+→ Import a matter and its documents in one call — Big Michael fetches the files, extracts text, classifies practice area, and kicks off a full 118-agent bench run automatically  
+→ 7 agent tools: list/get matters, list/download documents, create time entries, post notes, list contacts  
+→ Time-entry sync: push Big Michael's billable time back to Clio activities, rounded to 6-minute billing units
+
+The integration is gated: **nothing activates until you set `CLIO_CLIENT_ID`**. Unconfigured, the tools still register — they return a structured `{ error }` and never crash the server.
+
+Security notes worth saying out loud: the region base URLs are a hard-coded four-entry allowlist, not a user-configurable string — a malformed `CLIO_REGION` env var throws on startup rather than making a request to an arbitrary host. Tokens persist locally to `./data/clio-auth.json`, auto-refresh 60 s before expiry, and are wiped on disconnect.
+
+Still AGPL-3.0. Still turtles all the way down.
+
+#LegalAI #LegalTech #Clio #PracticeManagement #OpenSource
+
+---
+
+## v0.4.x post — Clio (ultra-short)
+
+Big Michael v0.4.x: **Clio integration** is live.
+
+One OAuth flow → import matters + docs → bench run → push time entries back.  
+SSRF-safe region routing. Auto-refresh tokens. Gated on `CLIO_CLIENT_ID` — no config, no activation.
+
+Open source, AGPL-3.0.
+
+#LegalAI #Clio #OpenSource
