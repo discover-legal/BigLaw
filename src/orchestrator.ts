@@ -38,7 +38,7 @@ import { DyTopoEngine } from "./dytopo/engine.js";
 import { InterRoundMemoryStore } from "./memory/index.js";
 import { KnowledgeStore } from "./knowledge/index.js";
 import { TemplateStore } from "./templates/store.js";
-import { LavernAdapter, LavernWorkflowAdapter, instantiateTemplate, fromExternalConfig, fromMikeOSSWorkflow } from "./adapters/lavern.js";
+import { LavernAdapter, LavernWorkflowAdapter, instantiateTemplate, fromExternalConfig, fromMikeOSSWorkflow, sanitizePromptContent } from "./adapters/lavern.js";
 import type { TaskTemplate, ExternalAgentConfig, MikeOSSWorkflow } from "./adapters/lavern.js";
 import { pluginRegistry } from "./adapters/plugin.js";
 import {
@@ -48,6 +48,8 @@ import {
   identifyGateRequests,
 } from "./protocols/index.js";
 import { detectNosLegal } from "./services/classifier.js";
+import { costStore, calcCostUsd, calcWattHours } from "./cost/index.js";
+import { isOllamaModel, isLocalModel } from "./providers/index.js";
 import type {
   Task,
   WorkflowType,
@@ -72,6 +74,32 @@ const PHASE_SEQUENCES: Record<WorkflowType, TaskPhase[]> = {
  * Best-effort extraction of a single JSON object from an LLM response.
  * Strips markdown fences and isolates the outermost {...} before parsing.
  */
+function recordOrchestratorCost(
+  response: import("./providers/index.js").ChatResponse,
+  modelId: string,
+  context: import("./cost/index.js").CostContext,
+  taskId?: string,
+): void {
+  const isLocal = isOllamaModel(modelId) || isLocalModel(modelId);
+  const bare = resolveModelId(modelId);
+  const cw = response.usage.cacheWriteTokens ?? 0;
+  const cr = response.usage.cacheReadTokens ?? 0;
+  costStore.record({
+    model: bare,
+    provider: isLocal ? (isOllamaModel(modelId) ? "ollama" : "local") : "anthropic",
+    inputTokens: response.usage.inputTokens,
+    outputTokens: response.usage.outputTokens,
+    ...(cw ? { cacheWriteTokens: cw } : {}),
+    ...(cr ? { cacheReadTokens: cr } : {}),
+    costUsd: isLocal ? null : calcCostUsd(bare, response.usage.inputTokens, response.usage.outputTokens, cw, cr),
+    estimatedWh: isLocal ? calcWattHours(Config.local.inferenceWatts, response.durationMs) : null,
+    estimatedWatts: isLocal ? Config.local.inferenceWatts : null,
+    durationMs: response.durationMs,
+    context,
+    taskId,
+  });
+}
+
 function parseJsonObject(text: string): unknown | undefined {
   const stripped = text.replace(/```(?:json)?/gi, "").trim();
   const start = stripped.indexOf("{");
@@ -617,8 +645,15 @@ export class Orchestrator {
     const goal = await this.generateRoundGoal(task, phase);
     goal.round = ++task.currentRound;
 
+    // Look up tone profile from the task's primary lawyer (creator first, then first assignee)
+    const lawyerTone = (() => {
+      const profileId = task.createdByProfileId ?? task.assignedLawyerIds?.[0];
+      if (!profileId) return undefined;
+      return this.profiles.get(profileId)?.toneProfile;
+    })();
+
     // Run DyTopo round
-    const roundState = await this.engine.runRound(task, goal);
+    const roundState = await this.engine.runRound(task, goal, lawyerTone);
     task.rounds.push(roundState);
 
     // Build source-text map for citation gate (from knowledge store)
@@ -630,13 +665,13 @@ export class Orchestrator {
 
     // Debate each passing finding
     const debated = await Promise.all(
-      passed.map((f) => runDebate(f, "adversarial-challenger")),
+      passed.map((f) => runDebate(f, "adversarial-challenger", task.id)),
     );
 
     // Verification pipeline — mutates each finding in place, attaching its
     // verificationResult (read downstream by identifyGateRequests).
     await Promise.all(
-      debated.map((f) => runVerificationPipeline(f)),
+      debated.map((f) => runVerificationPipeline(f, task.id)),
     );
 
     // Add findings to task
@@ -688,6 +723,7 @@ EXPECTED_OUTPUT_3: <third expected output>`;
       cacheSystem: true,
     });
 
+    recordOrchestratorCost(response, model, "round_goal", task.id);
     const textBlock = response.content.find((b) => b.type === "text");
     const text = textBlock?.type === "text" ? textBlock.text : "";
     const descMatch = text.match(/DESCRIPTION:\s*([\s\S]+?)(?=EXPECTED_OUTPUT|$)/i);
@@ -711,11 +747,21 @@ EXPECTED_OUTPUT_3: <third expected output>`;
       .join("\n\n")
       .slice(0, 200_000);
 
+    const lawyerTone = (() => {
+      const profileId = task.createdByProfileId ?? task.assignedLawyerIds?.[0];
+      if (!profileId) return undefined;
+      return this.profiles.get(profileId)?.toneProfile;
+    })();
+
+    const toneBlock = lawyerTone
+      ? `\nLAWYER TONE PROFILE — write the final output in this voice:\n${sanitizePromptContent(lawyerTone.injectionSnippet)}\n`
+      : "";
+
     const prompt = `TASK: ${task.description}
 
 ALL FINDINGS FROM ALL ROUNDS:
 ${findingsSummary}
-
+${toneBlock}
 Produce the final legal output for this task. Structure appropriately for the workflow type: ${task.workflowType}.
 Every claim must trace to a specific finding number from the list above.`;
 
@@ -732,6 +778,7 @@ Every claim must trace to a specific finding number from the list above.`;
       ...(useThinking && { thinking: { budgetTokens: Config.anthropic.thinkingBudgetTokens } }),
     });
 
+    recordOrchestratorCost(response, model, "synthesis", task.id);
     const textBlock = response.content.find((b) => b.type === "text");
     return textBlock?.type === "text" ? textBlock.text : "";
   }
@@ -787,6 +834,7 @@ Rules:
       cacheSystem: true,
     });
 
+    recordOrchestratorCost(response, model, "tabulate", task.id);
     const textBlock = response.content.find((b) => b.type === "text");
     const text = textBlock?.type === "text" ? textBlock.text : "";
 

@@ -32,6 +32,8 @@ export class AnthropicProvider implements ModelProvider {
       ? [{ type: "text", text: params.system, cache_control: { type: "ephemeral" } }]
       : params.system;
 
+    const t0 = Date.now();
+
     if (params.thinking) {
       // Extended thinking requires the beta client and budget_tokens < max_tokens.
       const betaMsg = await this.client.beta.messages.create({
@@ -46,7 +48,19 @@ export class AnthropicProvider implements ModelProvider {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const content = (betaMsg.content as any[]).map(fromAnyBlock);
       const stopReason = fromAnthropicStopReason(betaMsg.stop_reason);
-      return { stopReason, content };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const betaUsage = betaMsg.usage as any;
+      return {
+        stopReason,
+        content,
+        usage: {
+          inputTokens: betaMsg.usage.input_tokens,
+          outputTokens: betaMsg.usage.output_tokens,
+          cacheWriteTokens: betaUsage.cache_creation_input_tokens || undefined,
+          cacheReadTokens: betaUsage.cache_read_input_tokens || undefined,
+        },
+        durationMs: Date.now() - t0,
+      };
     }
 
     const msg = await this.client.messages.create({
@@ -59,7 +73,19 @@ export class AnthropicProvider implements ModelProvider {
 
     const content = msg.content.map(fromAnthropicBlock);
     const stopReason = fromAnthropicStopReason(msg.stop_reason);
-    return { stopReason, content };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const usage = msg.usage as any;
+    return {
+      stopReason,
+      content,
+      usage: {
+        inputTokens: msg.usage.input_tokens,
+        outputTokens: msg.usage.output_tokens,
+        cacheWriteTokens: usage.cache_creation_input_tokens || undefined,
+        cacheReadTokens: usage.cache_read_input_tokens || undefined,
+      },
+      durationMs: Date.now() - t0,
+    };
   }
 }
 

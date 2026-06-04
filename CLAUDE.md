@@ -4,10 +4,11 @@ Multi-agent legal AI orchestration platform. Runs DyTopo rounds of granular
 epistemic/conceptual/writing agents over a RuVector native HNSW registry, with a
 debate + verification protocol on every finding before final synthesis.
 
-**Version 0.3.0** — full RuVector migration: native in-process HNSW for all vector
-stores (no Qdrant), Q-learning agent recruitment, two-wave DyTopo processing with
-intra-round whiteboard + inter-round memory rollup, billable time tracking, and
-NOSLEGAL v4 taxonomy.
+**Version 0.4.0** — lawyer voice fingerprinting (LinkedIn tone import + drafting injection)
+and per-call cost tracking (cache-aware pricing, power metering, admin dashboard),
+on top of the 0.3.0 base: native in-process RuVector HNSW, Q-learning agent recruitment,
+two-wave DyTopo with intra-round whiteboard + inter-round memory rollup, billable time
+tracking, and NOSLEGAL v4 taxonomy.
 
 ## Quick start
 
@@ -32,10 +33,19 @@ npm run smoke-test
 # 5. Start server (MCP stdio + REST API)
 npm start               # production (requires npm run build first)
 npm run dev             # dev mode with tsx watch
+npm run serve           # dedicated backend: owns DB + REST, no MCP (for running the UI + MCP together)
 ```
 
 REST API at `http://localhost:3101`.
 MCP server on stdio (activated when stdin is not a TTY — i.e. from Claude Code).
+
+**Run modes** (`BIG_MICHAEL_MODE`): the vector DB takes an exclusive single-writer lock and the
+REST API binds one port, so only one process can own them. To run the web UI and the Claude
+Code MCP at once, one process owns the DB and the other attaches as a thin client over REST.
+- `auto` (default) — own the DB if free, else attach as an MCP client
+- `backend` — own DB + REST, never MCP (`npm run serve`)
+- `mcp` — pure MCP client, requires a reachable backend (`BIG_MICHAEL_API` sets the URL)
+- `standalone` — classic single process (own DB + REST + MCP on stdio)
 
 ## Using from Claude Code
 
@@ -138,7 +148,14 @@ Each DyTopo round:
 | `src/auth/index.ts` | Lawyer profiles (practiceAreas, bio, role), RLS access control |
 | `src/clients/index.ts` | Client roster, matter sub-lists, conflict-of-interest checks |
 | `src/services/classifier.ts` | Haiku-based practice area, client, and NOSLEGAL tag detection on ingest/submit |
+| `src/services/toneAnalyzer.ts` | Chunked recursive Haiku tone analysis (MapReduce, O(log n) depth) |
+| `src/linkedin/parser.ts` | RFC 4180 CSV + minimal ZIP parser for LinkedIn data exports |
+| `src/cost/index.ts` | CostStore: per-call cost + power tracking, JSONL persistence, cache-aware pricing |
+| `src/integrations/clio.ts` | ClioClient — OAuth 2.0, token persistence, auto-refresh, 7 API methods, 4-region routing |
+| `src/tools/clio.ts` | 7 Clio tool definitions (list/get matters, documents, activities, notes, contacts) |
 | `src/mcp/server.ts` | MCP stdio server + Fastify REST API |
+| `src/backend/index.ts` | `LegalBackend` seam — `LocalBackend` (owns DB) / `RemoteBackend` (thin HTTP client) so MCP can run as a client of a separate owner |
+| `src/index.ts` | Entry point — also resolves the run mode (`BIG_MICHAEL_MODE`: auto/backend/mcp/standalone) |
 | `src/templates/*.json` | Task templates (due-diligence, dispute-resolution, etc.) |
 | `src/types.ts` | All types: AgentDefinition (jurisdictions), Task (jurisdiction), NosLegalTags |
 | `src/learning/index.ts` | RuVector Q-learning layer — LearningEngine + FastAgentDB for agent recruitment |
@@ -300,6 +317,171 @@ See https://github.com/noslegal/taxonomy for the controlled vocabulary.
 Aggregate NOSLEGAL breakdowns across all tasks are available via
 `GET /analytics/noslegal` (partner only).
 
+## Lawyer tone profiles
+
+Every lawyer profile can carry an optional `ToneProfile` derived from their LinkedIn
+writing history. Drafting agents and the final Opus synthesis call use the profile to
+match the lawyer's voice.
+
+### Getting a LinkedIn export
+
+1. On LinkedIn: **Settings → Data privacy → Get a copy of your data** → select
+   "Posts" (and optionally "Messages"). LinkedIn emails a ZIP within 24 h.
+2. Upload via the REST endpoint or the Admin → Profiles → Tone tab in the UI:
+
+```bash
+curl -X POST /profiles/:id/tone/linkedin-import \
+  -F "file=@linkedin_export.zip"   # ZIP or raw CSV both accepted
+```
+
+The endpoint accepts multipart uploads of either the full LinkedIn ZIP or a bare
+`Shares.csv` / `Posts.csv` file. A 60-second per-profile rate limit prevents
+accidental double-submission.
+
+### ToneProfile shape
+
+```typescript
+interface ToneProfile {
+  generatedAt:      string;          // ISO timestamp
+  sourceType:       "linkedin";
+  sampleCount:      number;          // posts analysed (max MAX_POSTS=500)
+  formality:        string;          // e.g. "formal", "semi-formal"
+  sentenceStyle:    string;          // e.g. "concise declarative"
+  vocabulary:       string;          // e.g. "technical legal, avoids jargon"
+  rhetoricalStyle:  string;          // e.g. "Socratic, evidence-first"
+  signaturePatterns: string[];       // recurring phrases / structural habits
+  injectionSnippet: string;          // pre-built prompt fragment for injection
+}
+```
+
+Profile fields added: `toneProfile?: ToneProfile`, `linkedinProfileUrl?: string`.
+
+### How tone injection works
+
+| Site | Behaviour |
+|---|---|
+| `src/agents/base.ts` | All agents with `domain: "drafting"` receive an `ASSIGNED LAWYER TONE PROFILE` block prepended to their system prompt (uses sanitized `injectionSnippet`) |
+| `src/orchestrator.ts` synthesise() | The Opus synthesis call receives `injectionSnippet` injected into its system prompt |
+| `src/dytopo/engine.ts` runRound() | Accepts optional `lawyerTone?: ToneProfile`; threads it into every agent `process()` call |
+
+### Analysis pipeline (`src/services/toneAnalyzer.ts`)
+
+Chunked MapReduce with O(log n) Haiku call depth:
+
+| Constant | Value | Purpose |
+|---|---|---|
+| `POST_CHUNK_SIZE` | 8 | posts per `analyzeChunk` call |
+| `NOTE_CHUNK_SIZE` | 6 | notes per `rollupNotes` call |
+| `MAX_POSTS` | 500 | cap on posts consumed |
+
+Three Haiku call types: `analyzeChunk` (posts → prose note), `rollupNotes`
+(notes → merged note), `buildProfile` (final note → JSON `ToneProfile`).
+
+`sanitizeForHaiku()` strips `FINDING:`, `END_FINDING`, `NO_FINDINGS`,
+`NO_CHALLENGE` markers and control characters from user-supplied content before
+it enters any prompt. The same guard (`sanitizePromptContent`) is applied in
+`src/agents/base.ts` before the `injectionSnippet` is prepended.
+
+### Parser (`src/linkedin/parser.ts`)
+
+Pure Node.js — no new runtime dependencies. RFC 4180 CSV parser handles quoted
+fields and embedded newlines. ZIP reader uses Node's built-in `inflateRawSync`;
+zip-bomb guard rejects archives whose decompressed output exceeds **50 MB**.
+`parseLinkedInExport(buf)` is the single public API; it never throws — malformed
+input returns an empty post list.
+
+---
+
+## Cost tracking
+
+`src/cost/index.ts` records a `CostEntry` for every model call and exposes
+aggregated summaries via REST.
+
+### CostEntry fields
+
+```typescript
+interface CostEntry {
+  id:               string;
+  timestamp:        string;          // ISO
+  model:            string;          // e.g. "claude-haiku-4-5"
+  context:          CostContext;
+  taskId?:          string;
+  profileId?:       string;
+  inputTokens:      number;
+  outputTokens:     number;
+  cacheWriteTokens: number;
+  cacheReadTokens:  number;
+  costUsd:          number;
+  wattHours?:       number;          // local inference only
+}
+```
+
+Entries persist to `./data/costs.jsonl` (append-only) and reload on restart.
+
+### CostContext values
+
+| Context | Where recorded |
+|---|---|
+| `task` | Every `callModel()` / `runAgenticLoop()` iteration in `agents/base.ts` |
+| `descriptor` | Need/Offer descriptor Haiku calls in `agents/base.ts` |
+| `synthesis` | Opus synthesis call in `orchestrator.ts` |
+| `tabulate` | Tabulate call in `orchestrator.ts` |
+| `round_goal` | Round-goal generation in `orchestrator.ts` |
+| `protocol_debate` | DebateProtocol Opus call in `protocols/index.ts` |
+| `protocol_verify` | VerificationPipeline Haiku ×10 in `protocols/index.ts` |
+| `tone_analysis` | Every Haiku call in `services/toneAnalyzer.ts` (attributed to `profileId`) |
+| `classification` | `detectPracticeArea` / `detectClient` / `detectNosLegal` in `services/classifier.ts` |
+
+### Cache-aware pricing
+
+```
+cost = (inputTokens        × 1.00 × inputRate)
+     + (cacheWriteTokens   × 1.25 × inputRate)
+     + (cacheReadTokens    × 0.10 × inputRate)
+     + (outputTokens       × outputRate)
+```
+
+Built-in rates (per million tokens):
+
+| Model | Input | Output |
+|---|---|---|
+| Haiku | $1 | $5 |
+| Sonnet | $3 | $15 |
+| Opus | $15 | $75 |
+
+Override any rate at startup via env vars:
+
+```bash
+COST_HAIKU_IN=1.00    COST_HAIKU_OUT=5.00
+COST_SONNET_IN=3.00   COST_SONNET_OUT=15.00
+COST_OPUS_IN=15.00    COST_OPUS_OUT=75.00
+```
+
+### Local inference power metering
+
+`calcWattHours(watts, durationMs)` records estimated energy use for Ollama /
+LM-Studio calls. Default power draw:
+
+```bash
+LOCAL_INFERENCE_WATTS=250   # default; set to your GPU's TDP
+```
+
+`wattHours` is `null` for cloud Anthropic calls.
+
+### Querying costs
+
+```
+GET /cost/summary                   # CostSummary totals (partner only)
+GET /tasks/:id/cost                 # per-task { taskId, summary, entries }
+GET /profiles/:id/cost              # per-profile { profileId, summary, entries }
+```
+
+The **Admin → Cost** tab (partner only) shows stat cards, a stacked token
+breakdown bar, cost-by-model bar chart, cost-by-context bar chart, and a
+per-model detail table.
+
+---
+
 ## Adding a new agent
 
 1. Add an `AgentDefinition` object to `src/agents/definitions.ts`
@@ -390,6 +572,8 @@ GET    /profiles/:id                single profile
 POST   /profiles                    create lawyer             [partner only]
 PATCH  /profiles/:id                update profile            [partner, or profile owner (no role change)]
 DELETE /profiles/:id                remove lawyer             [partner only]
+POST   /profiles/:id/tone/linkedin-import  upload LinkedIn ZIP or CSV → build ToneProfile  [partner or self, 60s rate limit]
+DELETE /profiles/:id/tone           clear tone profile        [partner or self]
 GET    /clients                     client roster             [partner only]
 POST   /clients                     create client             [partner only]
 PATCH  /clients/:id                 update client             [partner only]
@@ -402,10 +586,19 @@ GET    /time-entries                billable time entries (lawyers: own only; pa
 GET    /time-entries/export.json    full time entry export as JSON  [partner only]
 GET    /time-entries/export.csv     full time entry export as CSV   [partner only]
 GET    /analytics/noslegal          NOSLEGAL facet breakdown across visible tasks  [partner only]
+GET    /cost/summary                aggregate CostSummary across all calls        [partner only]
+GET    /tasks/:id/cost              { taskId, summary, entries } (same access as task)
+GET    /profiles/:id/cost           { profileId, summary, entries }               [partner or self]
 GET    /auth/providers              which OAuth providers are configured
 GET    /auth/:provider/login        start OAuth login (google|microsoft|linkedin)
 GET    /auth/:provider/callback     OAuth callback → session cookie
 POST   /auth/logout                 clear session
+GET    /auth/clio/status            Clio connection status { connected, firmName, connectedAt }
+GET    /auth/clio/connect           begin Clio OAuth flow                         [partner only]
+GET    /auth/clio/callback          Clio OAuth callback → store tokens
+DELETE /auth/clio/disconnect        revoke stored Clio tokens                     [partner only]
+POST   /tasks/from-clio-matter      import Clio matter → ingest docs → submit task [partner only]
+POST   /time-entries/sync-to-clio   push Big Michael time entries to Clio activities [partner only]
 GET    /audit                       query audit log (access-filtered)
 GET    /audit/stream                SSE live audit stream (access-filtered)
 GET    /health                      health check

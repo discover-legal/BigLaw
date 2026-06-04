@@ -34,12 +34,18 @@ import { Config } from "../config.js";
 import { logger } from "../logger.js";
 import { auditLogger } from "../audit/index.js";
 import { Orchestrator } from "../orchestrator.js";
+import type { LegalBackend } from "../backend/index.js";
 import type { WorkflowType, SessionUser } from "../types.js";
 import { MODE_COLORS, MODE_CAPABILITIES } from "../types.js";
 import { LOCAL_PARTNER, filterVisible, canViewTask, isPartner, resolveMode } from "../auth/index.js";
 import { registerAuthRoutes, readSessionCookie } from "../auth/oauth.js";
 import { detectPracticeArea, detectClient } from "../services/classifier.js";
+import { analyzeTone } from "../services/toneAnalyzer.js";
+import { parseLinkedInExport } from "../linkedin/parser.js";
+import { extractWritingSamples } from "../services/writingSamples.js";
 import { pluginRegistry } from "../adapters/plugin.js";
+import { costStore } from "../cost/index.js";
+import { clioClient } from "../integrations/clio.js";
 
 // ─── Tool schemas ─────────────────────────────────────────────────────────────
 
@@ -232,7 +238,7 @@ const TOOLS = [
 
 // ─── MCP server ───────────────────────────────────────────────────────────────
 
-export async function startMcpServer(orchestrator: Orchestrator): Promise<void> {
+export async function startMcpServer(backend: LegalBackend): Promise<void> {
   const server = new Server(
     { name: "big-michael", version: "0.1.0" },
     { capabilities: { tools: {} } },
@@ -243,7 +249,7 @@ export async function startMcpServer(orchestrator: Orchestrator): Promise<void> 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
     try {
-      const result = await handleTool(name, args ?? {}, orchestrator);
+      const result = await handleTool(name, args ?? {}, backend);
       return {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
       };
@@ -287,6 +293,9 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
     }
     done();
   });
+
+  // Load persisted Clio tokens (no-op if file absent or not configured).
+  if (Config.clio.enabled) await clioClient.load();
 
   registerAuthRoutes(app, orchestrator);
 
@@ -522,6 +531,17 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
     return orchestrator.registry.listAll();
   });
 
+  // Inter-round memory query — mirrors the query_memory MCP tool so a thin
+  // RemoteBackend client (mcp mode) can reach memory without opening the DB.
+  app.post("/memory/query", async (req) => {
+    const body = (req.body ?? {}) as { query: string; taskId: string; agentId?: string; topK?: number };
+    return orchestrator.memory.query(body.query, {
+      taskId: body.taskId,
+      agentId: body.agentId,
+      topK: body.topK,
+    });
+  });
+
   // T17: SSE streaming endpoint
   const MAX_SSE_LISTENERS_PER_TASK = 50;
   app.get("/tasks/:id/stream", async (req, reply) => {
@@ -587,9 +607,13 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
 
   // Partners see full profiles (including email for contact/admin purposes).
   // Lawyers see only the display fields needed to render the roster UI.
+  // toneProfile (which contains injectionSnippet) is only returned to the
+  // profile owner and partners — it is stripped from all other responses.
   app.get("/profiles", async (req) => {
     const profiles = orchestrator.profiles.list();
-    if (isPartner(getUser(req))) return profiles;
+    const user = getUser(req);
+    if (isPartner(user)) return profiles;
+    // Lawyers: public roster fields only — no toneProfile
     return profiles.map(({ id, name, title, color, role }) => ({ id, name, title, color, role }));
   });
 
@@ -597,9 +621,8 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
     const { id } = req.params as { id: string };
     const profile = orchestrator.profiles.get(id);
     if (!profile) return reply.status(404).send({ error: "Profile not found" });
-    // Partners see the full profile; lawyers see only their own full profile.
-    // Other lawyers get the same restricted view as the list endpoint.
     const user = getUser(req);
+    // Another lawyer viewing a peer: public fields only
     if (!isPartner(user) && user?.profileId !== id) {
       const { id: pid, name, title, color, role } = profile;
       return { id: pid, name, title, color, role };
@@ -649,6 +672,134 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
       return ok ? reply.status(200).send({ ok: true }) : reply.status(404).send({ error: "Profile not found" });
     } catch (err) {
       return reply.status(400).send({ error: (err as Error).message });
+    }
+  });
+
+  /**
+   * POST /profiles/:id/tone/import
+   *
+   * Upload any writing sample source to build a tone profile:
+   *   - LinkedIn data export ZIP or CSV (Settings → Data privacy → Get a copy of your data)
+   *   - Generic CSV (one text-rich column, or all cells joined per row)
+   *   - DOCX / Word documents (prose extracted from word/document.xml)
+   *   - PDF (text extracted via PyMuPDF backend)
+   *   - Plain text / Markdown
+   *
+   * Format is auto-detected from the file extension and content.
+   * Partners can import for any profile; lawyers can only import for themselves.
+   */
+  app.post("/profiles/:id/tone/import", async (req, reply) => {
+    const user = getUser(req);
+    const { id } = req.params as { id: string };
+    if (!isPartner(user) && user?.profileId !== id) {
+      return reply.status(403).send({ error: "You can only import tone for your own profile" });
+    }
+    const profile = orchestrator.profiles.get(id);
+    if (!profile) return reply.status(404).send({ error: "Profile not found" });
+
+    let buf: Buffer;
+    let filename = "upload";
+    try {
+      const data = await req.file();
+      if (!data) return reply.status(400).send({ error: "No file uploaded" });
+      buf = await data.toBuffer();
+      filename = data.filename || "upload";
+    } catch {
+      return reply.status(400).send({ error: "File upload failed" });
+    }
+
+    // Rate limit: reject if a tone profile was generated in the last 60 seconds
+    if (profile.toneProfile?.generatedAt) {
+      const ageMs = Date.now() - new Date(profile.toneProfile.generatedAt).getTime();
+      if (ageMs < 60_000) {
+        return reply.status(429).send({ error: "Tone profile was just updated. Please wait before importing again." });
+      }
+    }
+
+    const { samples, sourceType } = await extractWritingSamples(buf, filename);
+    if (!samples.length) {
+      return reply.status(422).send({
+        error: "No writing samples found in the uploaded file. Accepted formats: LinkedIn export ZIP/CSV, Word (.docx), PDF, plain text, or any CSV with a text column.",
+        linkedInExportUrl: "https://www.linkedin.com/mypreferences/d/download-my-data",
+      });
+    }
+
+    try {
+      const tone = await analyzeTone(samples, profile.name, sourceType, id);
+      const updated = await orchestrator.profiles.updateTone(id, tone);
+      logger.info("Tone profile generated", { profileId: id, sampleCount: samples.length, sourceType });
+      auditLogger.write({ event: "profile.tone.imported", data: { profileId: id, sampleCount: samples.length, sourceType, importedBy: user?.profileId } });
+      return reply.status(200).send({ toneProfile: updated.toneProfile, samplesAnalysed: samples.length, sourceType });
+    } catch (err) {
+      logger.error("Tone analysis failed", { profileId: id, error: (err as Error).message });
+      return reply.status(500).send({ error: "Tone analysis failed. Please try again." });
+    }
+  });
+
+  /**
+   * POST /profiles/:id/tone/linkedin-import  (backwards-compatible alias)
+   *
+   * Accepts LinkedIn data export ZIP or CSV.
+   * Calls the same logic as /tone/import — kept for API backwards compatibility.
+   */
+  app.post("/profiles/:id/tone/linkedin-import", async (req, reply) => {
+    const user = getUser(req);
+    const { id } = req.params as { id: string };
+    if (!isPartner(user) && user?.profileId !== id) {
+      return reply.status(403).send({ error: "You can only import tone for your own profile" });
+    }
+    const profile = orchestrator.profiles.get(id);
+    if (!profile) return reply.status(404).send({ error: "Profile not found" });
+
+    let buf: Buffer;
+    try {
+      const data = await req.file();
+      if (!data) return reply.status(400).send({ error: "No file uploaded" });
+      buf = await data.toBuffer();
+    } catch {
+      return reply.status(400).send({ error: "File upload failed" });
+    }
+
+    if (profile.toneProfile?.generatedAt) {
+      const ageMs = Date.now() - new Date(profile.toneProfile.generatedAt).getTime();
+      if (ageMs < 60_000) {
+        return reply.status(429).send({ error: "Tone profile was just updated. Please wait before importing again." });
+      }
+    }
+
+    const posts = parseLinkedInExport(buf);
+    if (!posts.length) {
+      return reply.status(422).send({
+        error: "No posts found in export. Upload the ZIP from linkedin.com/mypreferences/d/download-my-data or the extracted Shares.csv / Posts and Articles.csv.",
+        exportUrl: "https://www.linkedin.com/mypreferences/d/download-my-data",
+      });
+    }
+
+    try {
+      const tone = await analyzeTone(posts, profile.name, "linkedin_export", id);
+      const updated = await orchestrator.profiles.updateTone(id, tone);
+      logger.info("Tone profile generated from LinkedIn export", { profileId: id, sampleCount: posts.length });
+      auditLogger.write({ event: "profile.tone.imported", data: { profileId: id, sampleCount: posts.length, sourceType: "linkedin_export", importedBy: user?.profileId } });
+      return reply.status(200).send({ toneProfile: updated.toneProfile, samplesAnalysed: posts.length, sourceType: "linkedin_export" });
+    } catch (err) {
+      logger.error("Tone analysis failed", { profileId: id, error: (err as Error).message });
+      return reply.status(500).send({ error: "Tone analysis failed. Please try again." });
+    }
+  });
+
+  /** DELETE /profiles/:id/tone — clear a lawyer's tone profile. */
+  app.delete("/profiles/:id/tone", async (req, reply) => {
+    const user = getUser(req);
+    const { id } = req.params as { id: string };
+    if (!isPartner(user) && user?.profileId !== id) {
+      return reply.status(403).send({ error: "You can only clear your own tone profile" });
+    }
+    try {
+      const updated = await orchestrator.profiles.clearTone(id);
+      auditLogger.write({ event: "profile.tone.cleared", data: { profileId: id, clearedBy: user?.profileId } });
+      return reply.status(200).send(updated);
+    } catch (err) {
+      return reply.status(404).send({ error: (err as Error).message });
     }
   });
 
@@ -891,6 +1042,188 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
     return { total: tasks.length, byAreaOfLaw, byWorkType, bySector, byAssetType };
   });
 
+  // ── Cost analytics ────────────────────────────────────────────────────────
+  // Aggregate cost summary across all recorded calls — partner only.
+  app.get("/cost/summary", async (req, reply) => {
+    if (!isPartner(getUser(req))) return reply.status(403).send({ error: "Partner role required" });
+    return costStore.summarise();
+  });
+
+  // Per-task cost breakdown. Access-controlled like the task itself.
+  app.get("/tasks/:id/cost", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const task = orchestrator.getTask(id);
+    if (!task || !canViewTask(getUser(req), task)) return reply.status(404).send({ error: "Task not found" });
+    const entries = costStore.forTask(id);
+    return { taskId: id, summary: costStore.summarise(entries), entries };
+  });
+
+  // Per-profile cost (tone analysis + any tasks created by this profile).
+  // Partners see any profile; lawyers see only their own.
+  app.get("/profiles/:id/cost", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const user = getUser(req);
+    if (!isPartner(user) && user?.profileId !== id) {
+      return reply.status(403).send({ error: "You can only view your own cost data" });
+    }
+    const profile = orchestrator.profiles.get(id);
+    if (!profile) return reply.status(404).send({ error: "Profile not found" });
+    const entries = costStore.forProfile(id);
+    return { profileId: id, summary: costStore.summarise(entries), entries };
+  });
+
+  // ── Clio OAuth + matter import ────────────────────────────────────────────────
+  const CLIO_STATE_COOKIE = "clio_oauth_state";
+  const clioStateCookieOpts = { httpOnly: true as const, signed: true, path: "/", maxAge: 600 };
+
+  app.get("/auth/clio/status", async () => clioClient.status());
+
+  app.get("/auth/clio/connect", async (req, reply) => {
+    if (!isPartner(getUser(req))) return reply.code(403).send({ error: "Partner role required" });
+    if (!Config.clio.enabled) return reply.code(503).send({ error: "Clio integration not configured — set CLIO_CLIENT_ID" });
+    const state = randomUUID();
+    reply.setCookie(CLIO_STATE_COOKIE, state, clioStateCookieOpts);
+    return reply.redirect(clioClient.authUrl(state));
+  });
+
+  app.get("/auth/clio/callback", async (req, reply) => {
+    const { code, state } = req.query as { code?: string; state?: string };
+    const raw = (req.cookies as Record<string, string> | undefined)?.[CLIO_STATE_COOKIE];
+    const unsigned = raw
+      ? (req as unknown as { unsignCookie: (v: string) => { valid: boolean; value: string | null } }).unsignCookie(raw)
+      : { valid: false, value: null };
+    reply.clearCookie(CLIO_STATE_COOKIE, { path: "/" });
+    if (!code || !state || !unsigned.valid || unsigned.value !== state) {
+      return reply.redirect(`${Config.auth.uiUrl}?clio=error`);
+    }
+    try {
+      await clioClient.exchangeCode(code);
+      logger.info("Clio connected", clioClient.status());
+      return reply.redirect(`${Config.auth.uiUrl}?clio=connected`);
+    } catch (err) {
+      logger.warn("Clio OAuth callback failed", { error: (err as Error).message });
+      return reply.redirect(`${Config.auth.uiUrl}?clio=error`);
+    }
+  });
+
+  app.delete("/auth/clio/disconnect", async (req, reply) => {
+    if (!isPartner(getUser(req))) return reply.code(403).send({ error: "Partner role required" });
+    await clioClient.disconnect();
+    return { ok: true };
+  });
+
+  app.post("/tasks/from-clio-matter", async (req, reply) => {
+    if (!isPartner(getUser(req))) return reply.code(403).send({ error: "Partner role required" });
+    if (!clioClient.isConnected()) return reply.code(503).send({ error: "Clio not connected — visit /auth/clio/connect" });
+    const { matterId, workflowType } = req.body as { matterId: number; workflowType?: string };
+    if (!matterId) return reply.code(400).send({ error: "matterId is required" });
+
+    let matterRaw: unknown;
+    try {
+      matterRaw = await clioClient.getMatter(matterId);
+    } catch (err) {
+      return reply.code(502).send({ error: `Clio getMatter failed: ${(err as Error).message}` });
+    }
+
+    const matter = (matterRaw as { data?: Record<string, unknown> }).data ?? {};
+    const displayNumber = String(matter["display_number"] ?? "");
+    const description = String(matter["description"] ?? `Clio matter ${displayNumber}`);
+    const clientData = matter["client"] as { id?: number; name?: string } | undefined;
+    const clientId = clientData?.id ? String(clientData.id) : undefined;
+    const practiceAreaData = matter["practice_area"] as { name?: string } | undefined;
+    const clioArea = practiceAreaData?.name ?? "";
+
+    // Best-effort map to Big Michael practice area
+    const PRACTICE_AREA_MAP: Record<string, string> = {
+      "Corporate": "Corporate", "Employment": "Employment", "Litigation": "Litigation",
+      "Real Estate": "Real Estate", "Intellectual Property": "Intellectual Property",
+      "Tax": "Tax", "Family": "Family", "Criminal": "Criminal", "Immigration": "Immigration",
+      "Bankruptcy": "Bankruptcy", "Estate Planning": "Estate Planning", "Environmental": "Environmental",
+      "Healthcare": "Healthcare", "Finance": "Finance", "Compliance": "Compliance",
+    };
+    const practiceArea = Object.keys(PRACTICE_AREA_MAP).find((k) =>
+      clioArea.toLowerCase().includes(k.toLowerCase()),
+    ) ?? "Litigation";
+
+    // Ingest documents from Clio (cap at 20)
+    let documentsIngested = 0;
+    const SUPPORTED_EXT = [".pdf", ".docx", ".doc", ".txt"];
+    try {
+      const docsRaw = await clioClient.listDocuments(matterId, 20);
+      const docs = ((docsRaw as { data?: unknown[] }).data ?? []) as Array<{ id: number; name: string; content_type?: string }>;
+      for (const doc of docs.slice(0, 20)) {
+        const ext = doc.name ? ("." + doc.name.split(".").pop()!.toLowerCase()) : "";
+        if (!SUPPORTED_EXT.includes(ext)) continue;
+        try {
+          const buf = await clioClient.downloadDocument(doc.id);
+          const { samples } = await extractWritingSamples(buf, doc.name);
+          const content = samples.join("\n\n").slice(0, 50_000);
+          if (content.trim()) {
+            await orchestrator.knowledge.ingest({
+              title: doc.name,
+              content,
+              source: "clio",
+              documentType: "matter_file",
+            });
+            documentsIngested++;
+          }
+        } catch (err) {
+          logger.warn("Clio document ingest failed", { docId: doc.id, name: doc.name, error: (err as Error).message });
+        }
+      }
+    } catch (err) {
+      logger.warn("Clio listDocuments failed", { matterId, error: (err as Error).message });
+    }
+
+    const taskDesc = `[Clio matter ${displayNumber}] ${description} (Practice area: ${practiceArea})`;
+    const task = await orchestrator.submitTask({
+      description: taskDesc,
+      workflowType: (workflowType ?? "roundtable") as WorkflowType,
+      // clientNumber deliberately omitted — Clio's internal client ID is not the
+      // firm's own client numbering scheme (e.g. "C-001"). Leave unset so Big
+      // Michael's classifier can derive the correct client from the description.
+      matterNumber: displayNumber || undefined,
+    });
+    const user = getUser(req);
+    if (user) orchestrator.assignLawyers(task.id, [user.profileId]);
+    return reply.code(201).send({ task: orchestrator.getTask(task.id) ?? task, documentsIngested });
+  });
+
+  app.post("/time-entries/sync-to-clio", async (req, reply) => {
+    if (!isPartner(getUser(req))) return reply.code(403).send({ error: "Partner role required" });
+    if (!clioClient.isConnected()) return reply.code(503).send({ error: "Clio not connected — visit /auth/clio/connect" });
+    const { clioMatterId, from, to, matterNumber } = req.body as { clioMatterId: number; from?: string; to?: string; matterNumber?: string };
+    if (!clioMatterId) return reply.code(400).send({ error: "clioMatterId is required" });
+
+    const allEntries = orchestrator.time.list({
+      matterNumber: matterNumber || undefined,
+      from: from ? new Date(from) : undefined,
+      to: to ? new Date(to) : undefined,
+    }).filter((e) => e.durationMs > 0);
+    const entries = allEntries.filter((e) => !e.clioSyncedAt);
+    const skipped = allEntries.length - entries.length;
+
+    let synced = 0;
+    let errors = 0;
+    for (const entry of entries) {
+      try {
+        const durationHours = Math.max(entry.billingUnits * 0.1, entry.durationMs / 3_600_000);
+        const dateOn = entry.startedAt.toISOString().slice(0, 10);
+        await clioClient.createActivity(clioMatterId, {
+          description: entry.description,
+          dateOn,
+          durationHours: Math.round(durationHours * 100) / 100,
+        });
+        orchestrator.time.markClioSynced(entry.id);
+        synced++;
+      } catch (err) {
+        logger.warn("Clio sync activity failed", { entryId: entry.id, error: (err as Error).message });
+        errors++;
+      }
+    }
+    return { synced, skipped, errors };
+  });
+
   await app.listen({ port: Config.api.port, host: Config.api.host });
   logger.info("REST API started", { port: Config.api.port, host: Config.api.host, auth: Config.api.apiKey ? "x-api-key" : "none" });
 }
@@ -900,104 +1233,97 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
 async function handleTool(
   name: string,
   args: Record<string, unknown>,
-  orch: Orchestrator,
+  backend: LegalBackend,
 ): Promise<unknown> {
   switch (name) {
     case "submit_task":
-      return orch.submitTask({
+      return backend.submitTask({
         description: args.description as string,
         workflowType: args.workflowType as WorkflowType,
         documentIds: args.documentIds as string[] | undefined,
         clientNumber: args.clientNumber as string | undefined,
         matterNumber: args.matterNumber as string | undefined,
+        jurisdiction: args.jurisdiction as string | undefined,
       });
 
     case "get_task": {
-      const task = orch.getTask(args.taskId as string);
+      const task = await backend.getTask(args.taskId as string);
       if (!task) throw new Error(`Task not found: ${args.taskId}`);
       return task;
     }
 
     case "list_tasks":
-      return orch.listTasks();
+      return backend.listTasks();
 
     case "approve_gate":
-      orch.approveGate(args.taskId as string, args.gateId as string, args.note as string | undefined);
+      await backend.approveGate(args.taskId as string, args.gateId as string, args.note as string | undefined);
       return { ok: true };
 
     case "reject_gate":
-      orch.rejectGate(args.taskId as string, args.gateId as string, args.reason as string);
+      await backend.rejectGate(args.taskId as string, args.gateId as string, args.reason as string);
       return { ok: true };
 
     case "ingest_document":
-      return { id: await orch.knowledge.ingest(args as Parameters<typeof orch.knowledge.ingest>[0]) };
+      return backend.ingestDocument(args);
 
     case "search_knowledge":
-      return orch.knowledge.search(args.query as string, {
+      return backend.searchKnowledge(args.query as string, {
         topK: args.topK as number | undefined,
         jurisdiction: args.jurisdiction as string | undefined,
         documentType: args.documentType as string | undefined,
       });
 
     case "list_agents":
-      return orch.registry.search("", {
+      return backend.listAgents({
         tier: args.tier as 0 | 1 | 2 | 3 | undefined,
         topK: 100,
       });
 
     case "query_memory":
-      return orch.memory.query(args.query as string, {
+      return backend.queryMemory(args.query as string, {
         taskId: args.taskId as string,
         agentId: args.agentId as string | undefined,
         topK: args.topK as number | undefined,
       });
 
     case "list_templates":
-      return orch.listTemplates();
+      return backend.listTemplates();
 
     case "list_plugins":
-      return pluginRegistry.list();
+      return backend.listPlugins();
 
     case "submit_from_template":
-      return orch.submitFromTemplate(
+      return backend.submitFromTemplate(
         args.templateId as string,
         args.substitutions as Record<string, string> | undefined,
         args.documentIds as string[] | undefined,
       );
 
     case "get_round": {
-      const task = orch.getTask(args.taskId as string);
+      const task = await backend.getTask(args.taskId as string);
       if (!task) throw new Error(`Task not found: ${args.taskId}`);
       const roundState = task.rounds[(args.round as number) - 1];
       if (!roundState) throw new Error(`Round ${args.round} not found`);
       return roundState;
     }
 
-    case "get_audit": {
-      // MCP runs over stdio as the LOCAL_PARTNER (full partner access).
-      // Apply the same visibility filter as the REST endpoint so the pattern
-      // is explicit and safe if the transport is ever changed.
-      const allEntries = auditLogger.readRecent(
+    case "get_audit":
+      // MCP runs over stdio as the LOCAL_PARTNER (full partner access). The
+      // backend applies the same visibility filter as the REST endpoint.
+      return backend.getAudit(
         args.taskId as string | undefined,
         args.limit as number | undefined,
       );
-      // LOCAL_PARTNER is a partner — sees every entry. Filter is a no-op but
-      // makes the access intent explicit and consistent with the REST audit route.
-      const visibleIds = new Set(orch.listTasks().map((t) => t.id));
-      return allEntries.filter((e) => !e.taskId || visibleIds.has(e.taskId));
-    }
 
-    case "get_time_entries": {
+    case "get_time_entries":
       // MCP runs as LOCAL_PARTNER (full access). Partners see all time entries.
-      const filter = {
+      return backend.listTimeEntries({
         profileId: args.profileId as string | undefined,
         taskId: args.taskId as string | undefined,
         matterNumber: args.matterNumber as string | undefined,
-        from: args.from ? new Date(args.from as string) : undefined,
-        to: args.to ? new Date(args.to as string) : undefined,
-      };
-      return orch.time.list(filter);
-    }
+        from: args.from as string | undefined,
+        to: args.to as string | undefined,
+      });
 
     default:
       throw new Error(`Unknown tool: ${name}`);

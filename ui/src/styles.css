@@ -861,3 +861,52 @@ table.grid tbody tr:last-child td { border-bottom: none; }
 .mode-chip[data-mode="admin"]        { color: #E6B450; border-color: rgba(230,180,80,0.35); background: rgba(230,180,80,0.08); }
 .mode-chip[data-mode="full_flavour"] { color: #C8102E; border-color: rgba(200,16,46,0.35);  background: rgba(200,16,46,0.08); }
 .mode-chip[data-mode="lite"]         { color: #C4940F; border-color: rgba(196,148,15,0.35); background: rgba(196,148,15,0.08); }
+
+/* ─── Tone voice fingerprint ──────────────────────────────────────── */
+
+.tone-drop {
+  border: 1.5px dashed var(--border-2);
+  border-radius: var(--r);
+  padding: 28px 20px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.16s ease, background 0.16s ease;
+  background: transparent;
+  min-height: 110px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.tone-drop:hover { border-color: var(--border-gold); }
+.tone-drop.over  { border-color: var(--gold); background: var(--gold-soft); }
+.tone-drop.has-file {
+  border-color: var(--border-gold);
+  border-style: solid;
+  background: var(--gold-soft);
+  cursor: default;
+}
+
+@keyframes tone-eq {
+  0%, 100% { height: 5px; }
+  50%       { height: 28px; }
+}
+
+.tone-bar {
+  width: 4px;
+  border-radius: 2px;
+  background: var(--gold);
+  animation: tone-eq 0.75s ease-in-out infinite alternate;
+}
+
+/* ─── Voice fingerprint button ────────────────────────────────────── */
+
+.voice-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 4px 9px 4px 7px; border-radius: 99px;
+  border: 1px solid var(--border-2); background: transparent;
+  font-family: var(--font-mono); font-size: 10px; font-weight: 600;
+  letter-spacing: 0.05em; color: var(--text-faint);
+  cursor: pointer; transition: all 0.15s; white-space: nowrap; flex-shrink: 0;
+}
+.voice-btn:hover { border-color: var(--border-gold); color: var(--gold); }
+.voice-btn.active { border-color: var(--border-gold); color: var(--gold); background: var(--gold-soft); }

@@ -131,6 +131,19 @@ export const Config = {
     localInferenceModel: optional("LOCAL_INFERENCE_MODEL", "local-model"),
     // "all" routes every tier locally; "1,2,3" routes only those tiers; "" = disabled
     localInferenceTiers: optional("LOCAL_INFERENCE_TIERS", ""),
+    // Estimated power draw for local inference in watts. Used to calculate
+    // watt-hour cost entries for Ollama / LM Studio / local models.
+    // 250 W = typical discrete GPU (RTX 3070–4090 range under inference load).
+    // 30 W  = Apple Silicon M-series (M2 Pro / M3 Max under LLM load).
+    // 65 W  = CPU-only inference (modern desktop).
+    inferenceWatts: parseInt(process.env.LOCAL_INFERENCE_WATTS ?? "250", 10),
+    // ISO 3166-1 alpha-2 or alpha-3 country code for electricity cost + CO₂
+    // calculations on local inference. Used to look up grid carbon intensity
+    // (CO2.js / Electricity Maps data) and average commercial electricity price.
+    // Defaults to "SEALAND" — the Principality of Sealand runs on diesel
+    // generators and has no national grid, so it gracefully falls back to the
+    // world average intensity (475 gCO₂/kWh). Set to your actual location.
+    inferenceRegion: optional("LOCAL_INFERENCE_REGION", "SEALAND"),
   },
 
   // PDF tools — PyMuPDF (generation + extraction) + Camelot (table extraction)
@@ -270,6 +283,23 @@ export const Config = {
       endpoint: optional("TOPCOUNSEL_MCP_URL", "https://api.topcounsel.io/mcp"),
       enabled: Boolean(process.env.TOPCOUNSEL_API_KEY),
     },
+  },
+
+  // Clio practice management integration — "bring your own app" OAuth
+  // Register an app at https://app.clio.com/settings/developer_applications
+  // then set CLIO_CLIENT_ID + CLIO_CLIENT_SECRET. Set CLIO_REGION to your
+  // firm's data region: us (default), eu, ca, or au.
+  clio: {
+    clientId: process.env.CLIO_CLIENT_ID ?? "",
+    clientSecret: process.env.CLIO_CLIENT_SECRET ?? "",
+    region: (process.env.CLIO_REGION ?? "us") as "us" | "eu" | "ca" | "au",
+    redirectUri: optional("CLIO_REDIRECT_URI", "http://localhost:3101/auth/clio/callback"),
+    tokensFile: optional("CLIO_TOKENS_FILE", "./data/clio-auth.json"),
+    // Space-separated OAuth scopes sent in the authorization URL.
+    // Clio v4 defaults to the app's configured permissions when omitted;
+    // set explicitly if your Clio developer app requires declared scopes.
+    scopes: optional("CLIO_SCOPES", ""),
+    enabled: Boolean(process.env.CLIO_CLIENT_ID),
   },
 
   // Infisical — open-source secrets manager (https://infisical.com)

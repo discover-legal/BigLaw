@@ -40,6 +40,7 @@ import {
   readTableCellsTool,
 } from "./documents.js";
 import { CONNECTOR_TOOLS } from "./connectors.js";
+import { CLIO_TOOLS } from "./clio.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -342,6 +343,8 @@ const ALL_TOOLS: ToolImpl[] = [
   readTableCellsTool,
   // Legal data connectors (CourtListener always on; others activate via API key)
   ...CONNECTOR_TOOLS,
+  // Clio practice management — enabled when CLIO_CLIENT_ID is configured
+  ...(Config.clio.enabled ? CLIO_TOOLS : []),
 ];
 
 export class ToolRegistry {

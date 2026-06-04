@@ -20,8 +20,9 @@
 import { Config } from "../config.js";
 import { logger } from "../logger.js";
 import { selectModel } from "../routing/model.js";
-import { getProvider, resolveModelId } from "../providers/index.js";
+import { getProvider, resolveModelId, isOllamaModel, isLocalModel } from "../providers/index.js";
 import { auditLogger } from "../audit/index.js";
+import { costStore, calcCostUsd, calcWattHours } from "../cost/index.js";
 import type {
   Finding,
   Citation,
@@ -96,7 +97,7 @@ RESOLUTION: <UPHELD | MODIFIED | OVERTURNED>
 REASONING: <one paragraph explaining your resolution, citing both sides>
 MODIFIED_CONTENT: <if MODIFIED, the corrected finding content; otherwise leave blank>`;
 
-export async function runDebate(finding: Finding, challengerAgentId: string): Promise<Finding> {
+export async function runDebate(finding: Finding, challengerAgentId: string, taskId?: string): Promise<Finding> {
   if (!Config.debate.adversarialEnabled) return finding;
 
   const debateModel = selectModel({ taskType: "debate" });
@@ -111,6 +112,7 @@ export async function runDebate(finding: Finding, challengerAgentId: string): Pr
     `FINDING:\n${findingSnippet}\n\nCITATIONS:\n${finding.citations.slice(0, 50).map((c) => `SOURCE=${c.source.slice(0, 200)} | QUOTE=${c.quote.slice(0, 500)}`).join("\n")}`,
     600,
     debateModel,
+    { taskId },
   );
 
   if (challengeText.includes("NO_CHALLENGE")) {
@@ -129,6 +131,7 @@ export async function runDebate(finding: Finding, challengerAgentId: string): Pr
     `FINDING:\n${findingSnippet}\n\nCHALLENGE:\n${challenge.content.slice(0, 10_000)}\nChallenge citations: ${challenge.citations.map((c) => c.quote).join("; ")}`,
     800,
     debateModel,
+    { taskId },
   );
 
   const resolution = parseResolution(resolutionText);
@@ -163,7 +166,7 @@ const VERIFICATION_CHECKS = [
   "Proportionality: Is the conclusion proportionate to the evidence cited?",
 ];
 
-export async function runVerificationPipeline(finding: Finding): Promise<VerificationResult> {
+export async function runVerificationPipeline(finding: Finding, taskId?: string): Promise<VerificationResult> {
   const passes = Config.debate.verificationPasses;
   const checksToRun = VERIFICATION_CHECKS.slice(0, passes);
 
@@ -180,6 +183,7 @@ export async function runVerificationPipeline(finding: Finding): Promise<Verific
         `FINDING:\n${verifySnippet}\n\nCITATIONS:\n${finding.citations.slice(0, 50).map((c) => `${c.source.slice(0, 200)}: "${c.quote.slice(0, 500)}"`).join("\n")}`,
         150,
         verifyModel,
+        { taskId },
       );
       const passed = response.toUpperCase().includes("PASS");
       const notes = response.replace(/^(PASS|FAIL)\s*/i, "").trim();
@@ -247,7 +251,7 @@ async function callModel(
   user: string,
   maxTokens: number,
   model?: string,
-  opts?: { thinking?: { budgetTokens: number } },
+  opts?: { thinking?: { budgetTokens: number }; taskId?: string },
 ): Promise<string> {
   const m = model ?? Config.anthropic.model;
   const provider = getProvider(m);
@@ -258,6 +262,24 @@ async function callModel(
     messages: [{ role: "user", content: user }],
     cacheSystem: true,
     ...(opts?.thinking && { thinking: opts.thinking }),
+  });
+  const isLocal = isOllamaModel(m) || isLocalModel(m);
+  const bare = resolveModelId(m);
+  const cw = response.usage.cacheWriteTokens ?? 0;
+  const cr = response.usage.cacheReadTokens ?? 0;
+  costStore.record({
+    model: bare,
+    provider: isLocal ? (isOllamaModel(m) ? "ollama" : "local") : "anthropic",
+    inputTokens: response.usage.inputTokens,
+    outputTokens: response.usage.outputTokens,
+    ...(cw ? { cacheWriteTokens: cw } : {}),
+    ...(cr ? { cacheReadTokens: cr } : {}),
+    costUsd: isLocal ? null : calcCostUsd(bare, response.usage.inputTokens, response.usage.outputTokens, cw, cr),
+    estimatedWh: isLocal ? calcWattHours(Config.local.inferenceWatts, response.durationMs) : null,
+    estimatedWatts: isLocal ? Config.local.inferenceWatts : null,
+    durationMs: response.durationMs,
+    context: maxTokens <= 600 && !opts?.thinking ? "protocol_verify" : "protocol_debate",
+    taskId: opts?.taskId,
   });
   const block = response.content.find((b) => b.type === "text");
   if (!block || block.type !== "text") throw new Error("Unexpected content type from model");

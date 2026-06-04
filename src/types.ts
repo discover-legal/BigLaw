@@ -300,6 +300,8 @@ export interface TimeEntry {
   durationMs: number;        // 0 while running; populated on close
   /** 6-minute billing increments (0.1 hr each). Rounded UP. 0 while running. */
   billingUnits: number;
+  /** ISO timestamp set when this entry has been pushed to a Clio matter as an activity. */
+  clioSyncedAt?: string;
 }
 
 /** Structured spreadsheet-style output for the `tabulate` workflow. */
@@ -406,6 +408,25 @@ export const PRACTICE_AREAS = [
 
 export type PracticeArea = typeof PRACTICE_AREAS[number];
 
+/**
+ * Writing tone fingerprint derived from a lawyer's LinkedIn posts or uploaded
+ * writing samples. Stored on the profile and injected into drafting-domain
+ * agent prompts so output matches the lawyer's natural voice.
+ */
+export interface ToneProfile {
+  generatedAt: string;
+  sourceType: "linkedin_export" | "writing_samples";
+  sampleCount: number;
+  formality: "formal" | "semi-formal" | "conversational";
+  sentenceStyle: "long-complex" | "mixed" | "short-punchy";
+  vocabulary: "technical-heavy" | "balanced" | "plain-language";
+  rhetoricalStyle: "assertive" | "collaborative" | "hedging" | "analytical";
+  /** Distinctive patterns observed in the samples, e.g. "opens with questions". */
+  signaturePatterns: string[];
+  /** Ready-to-inject prompt fragment — the verbatim block appended to drafting agents. */
+  injectionSnippet: string;
+}
+
 export interface LawyerProfile {
   id: string;
   name: string;
@@ -427,6 +448,10 @@ export interface LawyerProfile {
   practiceAreas?: string[];
   /** Short bio / description. */
   bio?: string;
+  /** LinkedIn public profile URL, populated on OAuth login or manual import. */
+  linkedinProfileUrl?: string;
+  /** Tone fingerprint derived from LinkedIn posts or uploaded writing samples. */
+  toneProfile?: ToneProfile;
   createdAt: Date;
 }
 

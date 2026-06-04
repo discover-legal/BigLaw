@@ -107,6 +107,18 @@ export const PRACTICE_AREAS = [
   "Environmental & Climate",
 ] as const;
 
+export interface ToneProfile {
+  generatedAt: string;
+  sourceType: "linkedin_export" | "writing_samples";
+  sampleCount: number;
+  formality: "formal" | "semi-formal" | "conversational";
+  sentenceStyle: "long-complex" | "mixed" | "short-punchy";
+  vocabulary: "technical-heavy" | "balanced" | "plain-language";
+  rhetoricalStyle: "assertive" | "collaborative" | "hedging" | "analytical";
+  signaturePatterns: string[];
+  injectionSnippet: string;
+}
+
 export interface LawyerProfile {
   id: string;
   name: string;
@@ -117,6 +129,8 @@ export interface LawyerProfile {
   practiceAreas?: string[];
   bio?: string;
   mode?: UserMode;
+  linkedinProfileUrl?: string;
+  toneProfile?: ToneProfile;
 }
 
 export interface ClientMatter {
@@ -265,6 +279,61 @@ export interface AuditEntry {
   model?: string;
   durationMs?: number;
   data?: Record<string, unknown>;
+}
+
+export type CostContext =
+  | "task" | "descriptor" | "synthesis" | "tabulate" | "round_goal"
+  | "protocol_debate" | "protocol_verify" | "tone_analysis" | "classification";
+
+export interface CostEntry {
+  id: string;
+  ts: string;
+  model: string;
+  provider: "anthropic" | "ollama" | "local";
+  inputTokens: number;
+  outputTokens: number;
+  cacheWriteTokens?: number;
+  cacheReadTokens?: number;
+  costUsd: number | null;
+  estimatedWh: number | null;
+  estimatedWatts: number | null;
+  co2Grams: number | null;
+  electricityCostUsd: number | null;
+  durationMs: number;
+  context: CostContext;
+  taskId?: string;
+  profileId?: string;
+  agentId?: string;
+}
+
+export interface CostSummary {
+  totalUsd: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalCacheWriteTokens: number;
+  totalCacheReadTokens: number;
+  totalWh: number;
+  totalCo2Grams: number;
+  totalElectricityCostUsd: number;
+  byModel: Record<string, {
+    usd: number;
+    inputTokens: number;
+    outputTokens: number;
+    cacheWriteTokens: number;
+    cacheReadTokens: number;
+    wh: number;
+    co2Grams: number;
+    electricityCostUsd: number;
+    calls: number;
+  }>;
+  byContext: Record<string, { usd: number; inputTokens: number; outputTokens: number; calls: number }>;
+  entryCount: number;
+}
+
+export interface TaskCostResult {
+  taskId: string;
+  summary: CostSummary;
+  entries: CostEntry[];
 }
 
 export interface Health {

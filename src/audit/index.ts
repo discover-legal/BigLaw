@@ -47,7 +47,9 @@ export type AuditEventType =
   | "gate.approved"
   | "gate.rejected"
   | "model.call"
-  | "model.response";
+  | "model.response"
+  | "profile.tone.imported"
+  | "profile.tone.cleared";
 
 export interface AuditEntry {
   id: string;

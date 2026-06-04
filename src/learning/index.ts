@@ -27,8 +27,9 @@ import { readFile, writeFile, rename } from "fs/promises";
 import { logger } from "../logger.js";
 import { Config } from "../config.js";
 
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const { LearningEngine, createFastAgentDB } = require("ruvector") as {
+import { createRequire } from "module";
+const nodeRequire = createRequire(import.meta.url);
+const { LearningEngine, createFastAgentDB } = nodeRequire("ruvector") as {
   LearningEngine: new () => RuLearningEngine;
   // createFastAgentDB(dimensions?, maxEpisodes?) — synchronous
   createFastAgentDB: (dimensions?: number, maxEpisodes?: number) => RuFastAgentDB;

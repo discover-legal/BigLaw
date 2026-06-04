@@ -4,10 +4,25 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { Config } from "../config.js";
 import { logger } from "../logger.js";
+import { costStore, calcCostUsd } from "../cost/index.js";
 import { PRACTICE_AREAS } from "../types.js";
 import type { Client, NosLegalTags } from "../types.js";
 
 const client = new Anthropic({ apiKey: Config.anthropic.apiKey });
+
+function recordClassifierCost(usage: { input_tokens: number; output_tokens: number }, durationMs: number): void {
+  costStore.record({
+    model: "claude-haiku-4-5-20251001",
+    provider: "anthropic",
+    inputTokens: usage.input_tokens,
+    outputTokens: usage.output_tokens,
+    costUsd: calcCostUsd("claude-haiku-4-5-20251001", usage.input_tokens, usage.output_tokens),
+    estimatedWh: null,
+    estimatedWatts: null,
+    durationMs,
+    context: "classification",
+  });
+}
 
 /** Detect the primary practice area from a document's title + first ~2000 chars. */
 export async function detectPracticeArea(title: string, content: string): Promise<string | null> {
@@ -24,11 +39,13 @@ Document excerpt:
 ${snippet}`;
 
   try {
+    const t0 = Date.now();
     const msg = await client.messages.create({
       model: "claude-haiku-4-5-20251001",
       max_tokens: 64,
       messages: [{ role: "user", content: prompt }],
     });
+    recordClassifierCost(msg.usage, Date.now() - t0);
     const text = (msg.content[0] as { type: string; text: string }).text?.trim();
     if (!text || text === "Unknown") return null;
     const match = PRACTICE_AREAS.find((pa) => pa.toLowerCase() === text.toLowerCase());
@@ -59,11 +76,13 @@ Document excerpt:
 ${snippet}`;
 
   try {
+    const t0 = Date.now();
     const msg = await client.messages.create({
       model: "claude-haiku-4-5-20251001",
       max_tokens: 32,
       messages: [{ role: "user", content: prompt }],
     });
+    recordClassifierCost(msg.usage, Date.now() - t0);
     const text = (msg.content[0] as { type: string; text: string }).text?.trim();
     if (!text || text === "None") return null;
     const found = clients.find((c) => c.clientNumber.toLowerCase() === text.toLowerCase());
@@ -100,11 +119,13 @@ Task description:
 ${snippet}`;
 
   try {
+    const t0 = Date.now();
     const msg = await client.messages.create({
       model: "claude-haiku-4-5-20251001",
       max_tokens: 256,
       messages: [{ role: "user", content: prompt }],
     });
+    recordClassifierCost(msg.usage, Date.now() - t0);
     const text = (msg.content[0] as { type: string; text: string }).text?.trim() ?? "";
     // Strip markdown fences and parse JSON
     const stripped = text.replace(/```(?:json)?/gi, "").trim();

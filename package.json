@@ -1,6 +1,6 @@
 {
   "name": "big-michael",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Big Michael — portable multi-agent legal AI orchestration. Sits atop and within Mike (AGPL-3.0), Lavern (Apache-2.0), and others. DyTopo rounds, RuVector registry, Anthropic + Ollama inference, PyMuPDF/Camelot/Tesseract document tools, MCP + REST.",
   "license": "AGPL-3.0-only",
   "type": "module",
@@ -9,6 +9,7 @@
     "build": "tsc && copyfiles -u 1 \"src/templates/*.json\" dist",
     "start": "node dist/index.js",
     "dev": "tsx watch --ignore \"**/.tasks.json\" --ignore \"**/audit.jsonl\" --ignore \"output/**\" --ignore \"data/**\" src/index.ts",
+    "serve": "cross-env BIG_MICHAEL_MODE=backend tsx watch --ignore \"**/.tasks.json\" --ignore \"**/audit.jsonl\" --ignore \"output/**\" --ignore \"data/**\" src/index.ts",
     "seed": "tsx src/scripts/seed.ts",
     "smoke-test": "cross-env ANTHROPIC_API_KEY=smoke-test OPENAI_API_KEY=smoke-test tsx src/scripts/smoke-test.ts",
     "test": "cross-env ANTHROPIC_API_KEY=test OPENAI_API_KEY=test tsx --test tests/unit.test.ts",
@@ -22,6 +23,7 @@
     "@fastify/multipart": "^10.0.0",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "@tavily/core": "^0.7.3",
+    "@tgwf/co2": "^0.18.0",
     "docx": "^9.7.1",
     "dotenv": "^16.4.5",
     "fast-diff": "^1.3.0",

@@ -9,7 +9,9 @@ import { v4 as uuidv4 } from "uuid";
 import { logger } from "../logger.js";
 import { Config } from "../config.js";
 import { selectModel, estimateComplexity, modelLabel } from "../routing/model.js";
-import { getProvider, resolveModelId } from "../providers/index.js";
+import { getProvider, resolveModelId, isOllamaModel, isLocalModel } from "../providers/index.js";
+import { costStore, calcCostUsd, calcWattHours } from "../cost/index.js";
+import type { CostContext } from "../cost/index.js";
 import type { ProviderMessage, ProviderToolResultBlock } from "../providers/index.js";
 import type { ToolRegistry, ToolContext } from "../tools/index.js";
 import type { KnowledgeStore } from "../knowledge/index.js";
@@ -24,6 +26,7 @@ import type {
   OfferDescriptor,
   RoundGoal,
   MemoryEntry,
+  ToneProfile,
 } from "../types.js";
 
 export interface AgentContext {
@@ -44,6 +47,8 @@ export interface AgentContext {
   memory?: InterRoundMemoryStore;
   /** Document owner scope — undefined means partner (see all), set for lawyer-submitted tasks */
   ownerId?: string;
+  /** Tone fingerprint of the assigned lawyer — injected into drafting-domain agent prompts. */
+  assignedLawyerTone?: ToneProfile;
 }
 
 export class Agent {
@@ -66,7 +71,7 @@ export class Agent {
       taskType: "descriptor",  // always Haiku
     });
     const prompt = buildNeedOfferPrompt(this.definition, ctx);
-    const response = await this.callModel(prompt, 200, model);
+    const response = await this.callModel(prompt, 200, model, { taskId: ctx.taskId, costContext: "descriptor" });
     return parseNeedOffer(response, this.definition.id);
   }
 
@@ -113,7 +118,7 @@ export class Agent {
           taskId: ctx.taskId!,
           ownerId: ctx.ownerId,
         })
-      : await this.callModel(prompt, maxTokens, model);
+      : await this.callModel(prompt, maxTokens, model, { taskId: ctx.taskId, costContext: "task" });
 
     return parseFindings(text, this.definition);
   }
@@ -157,6 +162,8 @@ export class Agent {
         messages,
         cacheSystem: true,
       });
+
+      recordCost(response, model, "task", { taskId: refs.taskId, agentId: this.definition.id });
 
       // Capture the latest text block as the candidate final response
       for (const block of response.content) {
@@ -223,6 +230,7 @@ export class Agent {
     userMessage: string,
     maxTokens: number,
     model: string,
+    meta?: { taskId?: string; costContext?: CostContext },
   ): Promise<string> {
     const provider = getProvider(model);
     const response = await provider.chat({
@@ -232,12 +240,41 @@ export class Agent {
       messages: [{ role: "user", content: userMessage }],
       cacheSystem: true,
     });
+    recordCost(response, model, meta?.costContext ?? "task", { taskId: meta?.taskId, agentId: this.definition.id });
     const textBlock = response.content.find((b) => b.type === "text");
     if (!textBlock || textBlock.type !== "text") {
       throw new Error(`No text in response from model ${model}`);
     }
     return textBlock.text;
   }
+}
+
+// ─── Cost recording helper ────────────────────────────────────────────────────
+
+function recordCost(
+  response: import("../providers/index.js").ChatResponse,
+  modelId: string,
+  context: CostContext,
+  meta: { taskId?: string; agentId?: string; profileId?: string },
+): void {
+  const isLocal = isOllamaModel(modelId) || isLocalModel(modelId);
+  const bareModel = resolveModelId(modelId);
+  const cw = response.usage.cacheWriteTokens ?? 0;
+  const cr = response.usage.cacheReadTokens ?? 0;
+  costStore.record({
+    model: bareModel,
+    provider: isLocal ? (isOllamaModel(modelId) ? "ollama" : "local") : "anthropic",
+    inputTokens: response.usage.inputTokens,
+    outputTokens: response.usage.outputTokens,
+    ...(cw ? { cacheWriteTokens: cw } : {}),
+    ...(cr ? { cacheReadTokens: cr } : {}),
+    costUsd: isLocal ? null : calcCostUsd(bareModel, response.usage.inputTokens, response.usage.outputTokens, cw, cr),
+    estimatedWh: isLocal ? calcWattHours(Config.local.inferenceWatts, response.durationMs) : null,
+    estimatedWatts: isLocal ? Config.local.inferenceWatts : null,
+    durationMs: response.durationMs,
+    context,
+    ...meta,
+  });
 }
 
 // ─── Task type inference ──────────────────────────────────────────────────────
@@ -292,6 +329,11 @@ function buildProcessingPrompt(def: AgentDefinition, ctx: AgentContext): string 
     ? ctx.memoryEntries.map((e) => `[Round ${e.round} — ${e.phase}] ${sanitizePromptContent(e.content)}`).join("\n")
     : "No prior memory.";
 
+  const toneBlock =
+    def.domain === "drafting" && ctx.assignedLawyerTone
+      ? `\n────────────────────────────────────────────────────────────────\nASSIGNED LAWYER TONE PROFILE — mirror this voice in all drafted output:\n${sanitizePromptContent(ctx.assignedLawyerTone.injectionSnippet)}\n`
+      : "";
+
   return `TASK: ${taskDesc}
 
 ROUND GOAL (Round ${ctx.roundGoal.round} — Phase: ${ctx.roundGoal.phase}):
@@ -305,7 +347,7 @@ ${memory}
 
 MESSAGES ROUTED TO YOU THIS ROUND (from other agents whose offers matched your needs):
 ${incoming}
-
+${toneBlock}
 ────────────────────────────────────────────────────────────────
 Produce your findings. For each distinct finding:
 

@@ -79,6 +79,17 @@ export interface ProviderThinkingBlock {
 export interface ChatResponse {
   stopReason: "end_turn" | "tool_use" | "max_tokens";
   content: ProviderContentBlock[];
+  /** Token counts reported by the provider. */
+  usage: {
+    inputTokens: number;
+    outputTokens: number;
+    /** Tokens written to prompt cache (Anthropic only). Priced at 1.25× input rate. */
+    cacheWriteTokens?: number;
+    /** Tokens served from prompt cache (Anthropic only). Priced at 0.10× input rate. */
+    cacheReadTokens?: number;
+  };
+  /** Wall-clock time for the API call in ms — used for local power estimates. */
+  durationMs: number;
 }
 
 // ─── Provider interface ───────────────────────────────────────────────────────

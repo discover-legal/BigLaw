@@ -25,7 +25,7 @@ import { randomUUID } from "crypto";
 import { readFile, writeFile, rename } from "fs/promises";
 import { Config } from "../config.js";
 import { logger } from "../logger.js";
-import type { LawyerProfile, SessionUser, Task, UserMode } from "../types.js";
+import type { LawyerProfile, SessionUser, Task, ToneProfile, UserMode } from "../types.js";
 
 /** Derive the effective mode from role + stored mode preference. */
 export function resolveMode(role: "lawyer" | "partner", storedMode?: UserMode): UserMode {
@@ -140,6 +140,22 @@ export class ProfileStore {
       // Keep in sync if role changed.
       p.mode = resolveMode(p.role, p.mode);
     }
+    await this.persist();
+    return p;
+  }
+
+  async updateTone(id: string, tone: ToneProfile): Promise<LawyerProfile> {
+    const p = this.get(id);
+    if (!p) throw new Error("Profile not found");
+    p.toneProfile = tone;
+    await this.persist();
+    return p;
+  }
+
+  async clearTone(id: string): Promise<LawyerProfile> {
+    const p = this.get(id);
+    if (!p) throw new Error("Profile not found");
+    delete p.toneProfile;
     await this.persist();
     return p;
   }

@@ -47,17 +47,24 @@ export class OllamaProvider implements ModelProvider {
     const messages = toOpenAIMessages(params.system, params.messages);
     const tools = params.tools?.length ? toOpenAITools(params.tools) : undefined;
 
+    const t0 = Date.now();
     const completion = await this.client.chat.completions.create({
       model: params.model,
       max_tokens: params.maxTokens,
       messages,
       ...(tools ? { tools, tool_choice: "auto" } : {}),
     });
+    const durationMs = Date.now() - t0;
 
     const choice = completion.choices[0];
     if (!choice) throw new Error("Ollama returned empty choices");
 
-    return fromOpenAIChoice(choice);
+    const usage = {
+      inputTokens:  completion.usage?.prompt_tokens     ?? 0,
+      outputTokens: completion.usage?.completion_tokens ?? 0,
+    };
+
+    return { ...fromOpenAIChoice(choice), usage, durationMs };
   }
 }
 

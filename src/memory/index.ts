@@ -28,8 +28,9 @@ import type {
   TaskPhase,
 } from "../types.js";
 
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const { VectorDb } = require("ruvector") as { VectorDb: new (o: RvOptions) => RvDb };
+import { createRequire } from "module";
+const nodeRequire = createRequire(import.meta.url);
+const { VectorDb } = nodeRequire("ruvector") as { VectorDb: new (o: RvOptions) => RvDb };
 
 interface RvOptions { dimensions: number; storagePath?: string; distanceMetric?: string }
 interface RvEntry  { id?: string; vector: number[] | Float32Array; metadata?: Record<string, unknown> }

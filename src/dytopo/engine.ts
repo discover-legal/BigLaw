@@ -44,6 +44,7 @@ import type {
   RoundGoal,
   RoundState,
   Task,
+  ToneProfile,
 } from "../types.js";
 import { jurisdictionMatch } from "./jurisdiction.js";
 
@@ -74,7 +75,7 @@ export class DyTopoEngine {
    * Execute one round of DyTopo orchestration.
    * Returns the completed RoundState including all messages, edges, and findings.
    */
-  async runRound(task: Task, goal: RoundGoal): Promise<RoundState> {
+  async runRound(task: Task, goal: RoundGoal, lawyerTone?: ToneProfile): Promise<RoundState> {
     const roundId = uuidv4();
     const intraMemory = new IntraRoundMemoryStore(roundId);
 
@@ -142,6 +143,7 @@ export class DyTopoEngine {
           knowledge: this.knowledge,
           memory: this.memory,
           ownerId: task.createdByProfileId,
+          assignedLawyerTone: lawyerTone,
         }),
       ),
     )).flat();
