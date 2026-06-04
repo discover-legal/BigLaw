@@ -140,8 +140,10 @@ export const Config = {
     // ISO 3166-1 alpha-2 or alpha-3 country code for electricity cost + CO₂
     // calculations on local inference. Used to look up grid carbon intensity
     // (CO2.js / Electricity Maps data) and average commercial electricity price.
-    // Defaults to "US". Set to your actual location for accurate estimates.
-    inferenceRegion: optional("LOCAL_INFERENCE_REGION", "US"),
+    // Defaults to "SEALAND" — the Principality of Sealand runs on diesel
+    // generators and has no national grid, so it gracefully falls back to the
+    // world average intensity (475 gCO₂/kWh). Set to your actual location.
+    inferenceRegion: optional("LOCAL_INFERENCE_REGION", "SEALAND"),
   },
 
   // PDF tools — PyMuPDF (generation + extraction) + Camelot (table extraction)
