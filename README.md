@@ -65,6 +65,8 @@ A real matter, mid-flight — the bench self-organising, then the cited result.
 | No billing integration | Automatic **6-minute billable time units** tracked per lawyer, per matter, exportable as CSV |
 | Generic output voice | Per-lawyer **voice fingerprinting** from LinkedIn posts, DOCX, PDF, or CSV — drafting agents mirror the assigned lawyer's style |
 | Black-box costs | **Per-call cost tracking** with prompt-cache-aware pricing, local power estimates, and an admin cost dashboard |
+| Manual setup | **Interactive setup wizard** — one curl, checks prereqs, checkbox connector picker, writes `.env`, done |
+| No deadline tracking | **Court deadline calculator** — FRCP, UK CPR, EU Competition rules; calendar vs business days, cited |
 
 ---
 
@@ -133,6 +135,7 @@ Agents act through a typed `ToolRegistry`. Highlights:
 | `docuseal_send_for_signing` | DocuSeal e-signature dispatch + status |
 | `web_search` · `translate` · `citation_check` | Tavily search, translation, source verification |
 | 32 connector tools | CourtListener · Westlaw · Everlaw · Trellis · Descrybe · Ironclad · iManage · Definely · DocuSign CLM · Lawve AI · Solve Intelligence · Google Drive · Box · Slack · TopCounsel |
+| `compute_deadlines` | Court deadline calculator — trigger date → all deadlines under FRCP / UK CPR / EU Competition rules, with citations |
 
 > Document generation, tabular review, and tracked-change redlining are ported from
 > [Mike](https://github.com/willchen96/mike) (AGPL-3.0) and adapted to Big Michael's tool
@@ -142,7 +145,21 @@ Agents act through a typed `ToolRegistry`. Highlights:
 
 ## Quick start
 
-### 1 · Backend (orchestrator + MCP + REST)
+### The easy way — one command
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/discover-legal/big-michael/main/setup.sh | bash
+```
+
+Handles everything: Node.js install (via nvm if needed), clone, `npm install`, then an interactive wizard that checks Python / Docker / Tesseract, walks you through every API key with inline instructions, shows a **checkbox picker for all 32 connectors**, writes `.env`, and optionally runs the smoke test. Re-run any time to add connectors.
+
+### Already have the repo cloned?
+
+```bash
+bash setup.sh       # or: npm run setup  (requires Node 18+ already installed)
+```
+
+### Manual setup
 
 ```bash
 # Infrastructure: DocuSeal only — vector DB is in-process (no Qdrant needed)
@@ -253,6 +270,40 @@ attached documents into the knowledge base, and submits a Big Michael task in on
 **Time sync:** `POST /time-entries/sync-to-clio` pushes Big Michael billable time entries back to a
 Clio matter as activity records, preserving 6-minute billing unit rounding. Idempotent — entries
 are stamped with `clioSyncedAt` on success and skipped on subsequent calls.
+
+---
+
+## Court deadline calculator
+
+`src/deadlines/engine.ts` — pure TypeScript, no external service required.
+
+Feed it a trigger event and date; it returns every downstream deadline under the applicable rule set, calendar vs business days computed correctly, jurisdiction holidays applied, with the procedural citation for each.
+
+```typescript
+import { DeadlineEngine } from "./src/deadlines/engine.js";
+
+const engine = new DeadlineEngine();
+await engine.loadRulesDir("./src/deadlines/rules");
+
+const result = engine.compute({
+  jurisdiction: "us-federal-frcp",
+  trigger: "complaint_served",
+  triggerDate: new Date("2025-09-01"),
+});
+// result.deadlines → [{ event: "answer_due", date: Date, cite: "FRCP 12(a)(1)(A)(i)", warning: Date }, …]
+```
+
+**Rule sets shipped** (marked `SAMPLE — AI-GENERATED — NOT VERIFIED BY COUNSEL` until a practitioner submits a verified PR):
+
+| File | Jurisdiction | Rules |
+|---|---|---|
+| `us-federal-frcp.yaml` | US Federal | FRCP answer, reply, MTD opposition, MSJ, FRAP appeal, service, Rule 26(f) |
+| `uk-cpr.yaml` | UK | CPR acknowledgment, defence, summary judgment response, appeal notice |
+| `eu-competition.yaml` | EU | Competition regulation response, appeal, leniency deadlines |
+
+Holiday tables are computed in-process (US federal, UK bank, EU institutions — Butcher/Meeus Easter). Adding a new jurisdiction is a YAML file drop in `src/deadlines/rules/`.
+
+> ⚠️ **These rule sets are illustrative examples only.** Deadlines vary by judge, local rules, and standing orders. ALWAYS verify with a licensed attorney before relying on any computed deadline. See `src/deadlines/rules/CONTRIBUTING.md` to submit a verified rule set.
 
 ---
 

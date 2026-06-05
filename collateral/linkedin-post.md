@@ -118,3 +118,43 @@ Big Michael's Clio time-entry sync is now idempotent. Hit the endpoint twice —
 CSV exports now include the `clioSyncedAt` column. Audit trail in a spreadsheet, no guessing.
 
 #LegalTech #Clio #OpenSource
+
+---
+
+## v0.4.x post — Setup wizard + connectors + deadline calculator
+
+Big Michael got a sling.
+
+Until today it needed Node, npm, a `.env` file you had to understand, and a manual repo checkout. Fine for engineers. Not fine for lawyers.
+
+Now:
+
+`curl -fsSL https://raw.githubusercontent.com/discover-legal/big-michael/main/setup.sh | bash`
+
+That's it. The rest is a wizard. It checks your Node version, installs it if you need it, walks you through every key with inline instructions — and, this part I'm pleased with — shows you a **checkbox picker** for the 32 connectors.
+
+Westlaw. Everlaw. iManage. DocuSign CLM. Ironclad. Trellis. CourtListener (free, always). Clio. Thirty-two tools across fifteen providers. Check the ones you have. The bench wires itself up. Ones you don't have yet sit quietly feature-flagged off — unconfigured connectors return a structured error and never crash anything.
+
+One more stone in the sling: a **court deadline calculator**. Feed it a trigger date, it returns every deadline under FRCP, UK CPR, or EU Competition rules — calendar vs business days, jurisdiction-aware, with the procedural citation for each. More rule sets coming as the community verifies them.
+
+(They ship marked SAMPLE — AI GENERATED, NEVER VERIFIED BY COUNSEL. Not a law firm. Not legal advice. A lawyer with standing removes the notice when they've verified the rules and submit a PR — the CONTRIBUTING.md has the process.)
+
+Still open source. Still AGPL-3.0. Still standing on Mike and Lavern's shoulders. 🐢
+
+Which connector do you most want the bench reasoning across?
+
+#LegalAI #LegalTech #OpenSource #MultiAgent
+
+---
+
+## v0.4.x post — Setup wizard + connectors + deadline calculator (ultra-short)
+
+Big Michael v0.4.x:
+
+→ One-liner setup: `curl ... | bash` — checks prereqs, walks you through keys, checkbox picker for all 32 connectors  
+→ Court deadline calculator — FRCP, UK CPR, EU Competition; calendar vs business days; cited  
+→ Unconfigured connectors feature-flag off cleanly, never crash
+
+Still turtles all the way down. 🐢
+
+#LegalAI #OpenSource
