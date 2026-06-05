@@ -37,7 +37,7 @@ function EntryItem({ entry, selected, onClick }: EntryItemProps) {
     <motion.button
       className={`task-card ${selected ? "active" : ""}`}
       style={{ textAlign: "left", position: "relative" }}
-      onClick={onClick}
+      onClick={(e) => { e.stopPropagation(); onClick(); }}
       layout
       initial={{ opacity: 0, x: -8 }}
       animate={{ opacity: 1, x: 0 }}
