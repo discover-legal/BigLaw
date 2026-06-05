@@ -125,7 +125,7 @@ CSV exports now include the `clioSyncedAt` column. Audit trail in a spreadsheet,
 
 Big Michael bills his own time, enforces your OCG, monitors your dockets, runs conflict checks, predicts your budgets, and keeps receipts. That's five separate vendor contracts he just made awkward.
 
-On the receipts: hash-chained, tamper-evident JSONL — OpenSearch, Splunk, or a webhook you control. Every message he sends. Every gate he holds. Every human call. The chain is verifiable. The record is yours, not ours.
+On the receipts: hash-chained, tamper-evident JSONL — OpenSearch, Splunk, or a webhook you control. Every agent that ran. Every Westlaw or Clio call, attributed to the lawyer who submitted the matter — not "system". Every gate decision, with the reviewer's name on it. Every document search. Every access denial. The chain is verifiable. A court can read it. The record is yours, not ours.
 
 On the billing: LEDES 1998B with UTBMS task codes, classified before it leaves his desk. A compliance pass against your Outside Counsel Guidelines — structured rule dictionary, deterministic, parameters he extracted himself — before the pre-bill, not after the client calls. Full cycle: draft, review, approve, invoice. Partners see everything. Associates see their part.
 

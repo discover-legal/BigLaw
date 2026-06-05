@@ -55,7 +55,7 @@ A real matter, mid-flight — the bench self-organising, then the cited result.
 | "Trust me" answers | Every finding survives **adversarial debate** + **verification passes** before output |
 | Hallucinated cites | **CitationGate** rejects any claim whose source isn't in the registry |
 | Locked to one jurisdiction | **Jurisdiction-neutral** native bench — applies the governing law each matter specifies |
-| Black box | Append-only **audit log** + live **SSE** of every round, message, and gate |
+| Black box | Court-ready **audit trail** — every agent invocation, tool call (with the lawyer's identity), finding, gate decision, document search, and access denial — hash-chained JSONL + live SSE |
 | Text in, text out | Cited briefs, **.docx** with tracked changes, e-signed via DocuSeal |
 | Cloud-only | 3-tier cloud routing **or** fully local (Ollama / LM Studio / vLLM) |
 | Static agent pool | **Q-learning recruitment** — agents that produce high-confidence findings are promoted; weak ones deprioritised over time |
@@ -486,6 +486,48 @@ Every matter-scoped route enforces access control — see below.
 
 See [`CLAUDE.md`](CLAUDE.md) for the full architecture guide, agent roster, and extension points
 (adding agents, templates, and Lavern configs).
+
+---
+
+## Audit trail
+
+Every significant event is recorded in an **append-only, SHA-256 hash-chained JSONL** file — tamper-evident by construction. The in-memory buffer is restored from disk on restart so the live panel always shows history, not just new events.
+
+### What gets logged
+
+| Event category | Events recorded |
+|---|---|
+| **Task lifecycle** | `task.created`, `task.started`, `task.complete`, `task.failed`, `task.deleted` |
+| **Lawyer assignment** | `task.assigned` — carries the assigning partner's profileId, plus added/removed lawyer delta |
+| **DyTopo rounds** | `round.start`, `round.complete` — includes agent roster, finding count, phase |
+| **Agent activity** | `agent.processing`, `agent.complete` — agentId, tier, domain, round, duration |
+| **Findings** | `finding.produced` — findingId, confidence, content preview, attributed to responsible lawyer |
+| **Tool calls** | `tool.call`, `tool.result` — **actorId = the responsible lawyer** (not "system"); category field distinguishes `external_connector` (Westlaw, CourtListener, Clio…) from `internal` tools |
+| **Protocol** | `citation.gate`, `debate.start`, `debate.resolved`, `verification.start`, `verification.complete` |
+| **Human gates** | `gate.created`, `gate.approved`, `gate.rejected` — with reviewer's profileId |
+| **Documents** | `document.ingested`, `document.uploaded`, `document.searched` — actor, query, result count |
+| **Access control** | `access.denied` on every 403 (method, URL, actor); `auth.session.expired` on every 401 |
+| **Authentication** | `auth.login`, `auth.logout`, `auth.failed` — provider, role |
+| **Billable time** | `time.opened`, `time.closed` — entryId, matter, billing units, attributed to lawyer or agent |
+| **Profiles & clients** | `profile.created/updated/deleted`, `client.created/updated/deleted`, `matter.added/removed` |
+| **OCG compliance** | `ocg.violation`, `ocg.outcome` |
+| **Security** | `security.ssrf_blocked`, `security.rate_limited` |
+
+### Key design for legal defensibility
+
+**External system access is attributed to the responsible lawyer**, not "system". When Big Michael calls Westlaw, CourtListener, Clio, or any of the 32 connectors on behalf of a task, the `actorId` on the `tool.call` entry is the lawyer who submitted (or was assigned to) that matter. A court question of the form *"did Sarah Chen access Westlaw on Thursday?"* can be answered directly from the JSONL.
+
+**Assignment changes are delta-logged**: `task.assigned` records both the final lawyer list and the `added`/`removed` diff, and carries the partner's profileId as actor so the audit trail shows *who* changed the assignment.
+
+### Querying
+
+```
+GET /audit                        all recent entries (access-filtered; partner sees all)
+GET /audit?taskId=<id>            entries for a specific matter
+GET /audit/stream                 live SSE stream of new events
+```
+
+Entries also forward to **OpenSearch**, **Splunk**, or a **custom webhook** — set `AUDIT_OPENSEARCH_URL`, `AUDIT_SPLUNK_HEC_URL`, or `AUDIT_WEBHOOK_URL` to activate.
 
 ---
 
