@@ -30,7 +30,6 @@ const IC = {
   warn: fg.yellow("⚡"),
   skip: fg.gray("○"),
   ask:  fg.cyan("?"),
-  arr:  fg.cyan("→"),
 };
 
 const printOk   = (s: string) => console.log(`  ${IC.ok}  ${s}`);
@@ -44,9 +43,7 @@ function printSection(title: string) {
   console.log(`  ${fg.gray("─".repeat(60))}`);
 }
 
-/** Strip ANSI codes to measure visual length. */
 function visLen(s: string) { return s.replace(/\x1b\[[0-9;]*m/g, "").length; }
-
 function padEnd(s: string, n: number) { return s + " ".repeat(Math.max(0, n - visLen(s))); }
 
 function printBox(lines: string[]) {
@@ -60,7 +57,7 @@ function printBox(lines: string[]) {
   console.log([top, ...lines.map(row), bot].join("\n"));
 }
 
-// ── Spinner ───────────────────────────────────────────────────────────────
+// ── Spinner ────────────────────────────────────────────────────────────────
 class Spinner {
   private frames = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"];
   private i = 0;
@@ -84,7 +81,7 @@ class Spinner {
   }
 }
 
-// ── Readline helpers ──────────────────────────────────────────────────────
+// ── Readline helpers ───────────────────────────────────────────────────────
 let _rl: readline.Interface;
 
 function initReadline() {
@@ -134,7 +131,102 @@ async function confirm(prompt: string, def = false): Promise<boolean> {
   return /^y/i.test(ans);
 }
 
-// ── System checks ─────────────────────────────────────────────────────────
+// ── Multi-select checkbox picker ───────────────────────────────────────────
+interface SelectRow {
+  id: string;
+  label: string;
+  hint: string;
+  header?: true;   // non-navigable section label
+}
+
+async function multiSelect(title: string, rows: SelectRow[], preSelected: string[] = []): Promise<string[]> {
+  const selected = new Set(preSelected);
+  const navigable = rows.filter(r => !r.header);
+  let cursor = 0;
+  let rendered = 0;
+
+  if (!process.stdin.isTTY) {
+    // Non-interactive: return preselected unchanged
+    return preSelected;
+  }
+
+  const buildLines = (): string[] => {
+    const out: string[] = [];
+    out.push(`  ${fg.bold(title)}`);
+    out.push(`  ${fg.gray("↑↓ move   space select   a all   enter confirm")}`);
+    out.push("");
+
+    let navIdx = 0;
+    for (const row of rows) {
+      if (row.header) {
+        out.push(`  ${fg.bold(fg.gray(row.label))}`);
+        continue;
+      }
+      const active  = navIdx === cursor;
+      const checked = selected.has(row.id);
+      const box  = checked ? fg.green("[✓]") : fg.gray("[ ]");
+      const name = active
+        ? fg.bold(fg.cyan(padEnd(row.label, 30)))
+        : padEnd(row.label, 30);
+      const hint = fg.gray(row.hint.length > 32 ? row.hint.slice(0, 31) + "…" : row.hint);
+      const pre  = active ? fg.cyan("  ▸ ") : "    ";
+      out.push(`${pre}${box} ${name} ${hint}`);
+      navIdx++;
+    }
+
+    out.push("");
+    const n = selected.size;
+    out.push(`  ${fg.gray(`${n} connector${n !== 1 ? "s" : ""} selected`)}`);
+    return out;
+  };
+
+  const render = () => {
+    const lines = buildLines();
+    if (rendered > 0) process.stdout.write(`\x1b[${rendered}A`);
+    for (const line of lines) process.stdout.write(`\x1b[2K${line}\n`);
+    rendered = lines.length;
+  };
+
+  render();
+
+  return new Promise(res => {
+    _rl.pause();
+    process.stdin.setRawMode(true);
+    process.stdin.resume();
+
+    const onData = (buf: Buffer) => {
+      const ch = buf.toString("utf8");
+
+      if (ch === "") { process.stdout.write("\n"); process.exit(0); }
+
+      if (ch === "\r" || ch === "\n") {
+        process.stdin.setRawMode(false);
+        process.stdin.removeListener("data", onData);
+        _rl.resume();
+        console.log(); // blank line after picker
+        res(Array.from(selected));
+        return;
+      }
+
+      if (ch === "\x1b[A") { cursor = Math.max(0, cursor - 1); }
+      else if (ch === "\x1b[B") { cursor = Math.min(navigable.length - 1, cursor + 1); }
+      else if (ch === " ") {
+        const id = navigable[cursor].id;
+        if (selected.has(id)) selected.delete(id); else selected.add(id);
+      }
+      else if (ch === "a" || ch === "A") {
+        if (selected.size === navigable.length) selected.clear();
+        else for (const r of navigable) selected.add(r.id);
+      }
+
+      render();
+    };
+
+    process.stdin.on("data", onData);
+  });
+}
+
+// ── System checks ──────────────────────────────────────────────────────────
 function checkNode() {
   const v = process.version.slice(1);
   return { ok: parseInt(v) >= 18, version: v };
@@ -165,147 +257,157 @@ function checkTesseract(): { ok: boolean; version: string } {
   } catch { return { ok: false, version: "" }; }
 }
 
-// ── Connector / feature definitions ──────────────────────────────────────
+// ── Connector definitions ──────────────────────────────────────────────────
 interface KeyDef {
   key: string;
   label: string;
   secret?: boolean;
   default?: string;
-  autoGen?: boolean; // crypto.randomBytes auto-fill
+  autoGen?: boolean;
 }
 
 interface ConnDef {
   id: string;
   name: string;
-  free?: boolean;          // no subscription needed
   blurb: string;
   keys: KeyDef[];
   howTo: string[];
 }
 
-const CONNECTORS: ConnDef[] = [
-  {
-    id: "tavily",
-    name: "Tavily Web Search",
-    blurb: "Real-time web search for research agents. Without it, agents reason from uploaded docs only.",
+// Rows for the checkbox picker
+const PICKER_ROWS: SelectRow[] = [
+  { id: "h-research",   label: "Legal Research",                 hint: "", header: true },
+  { id: "tavily",       label: "Tavily Web Search",              hint: "real-time search for research agents" },
+  { id: "courtlistener",label: "CourtListener  (free)",          hint: "US court opinions, dockets, filings" },
+  { id: "westlaw",      label: "Westlaw / CoCounsel",            hint: "full Westlaw research — enterprise" },
+  { id: "trellis",      label: "Trellis",                        hint: "state courts + judge analytics" },
+  { id: "everlaw",      label: "Everlaw",                        hint: "eDiscovery review sets" },
+  { id: "descrybe",     label: "Descrybe",                       hint: "UK · AU · CA case law" },
+  { id: "solve-intel",  label: "Solve Intelligence",             hint: "patent search & claims drafting" },
+
+  { id: "h-contract",   label: "Contract & Document Management", hint: "", header: true },
+  { id: "ironclad",     label: "Ironclad",                       hint: "contract workflow" },
+  { id: "docusign-clm", label: "DocuSign CLM",                   hint: "contract lifecycle management" },
+  { id: "imanage",      label: "iManage",                        hint: "DMS search & retrieval" },
+  { id: "definely",     label: "Definely",                       hint: "contract structure & definition AI" },
+  { id: "lawve",        label: "Lawve AI",                       hint: "automated contract review" },
+
+  { id: "h-productivity",label: "Productivity & Files",          hint: "", header: true },
+  { id: "gdrive",       label: "Google Drive",                   hint: "search & retrieve documents" },
+  { id: "box",          label: "Box",                            hint: "document vault" },
+  { id: "slack",        label: "Slack",                          hint: "messages & notifications" },
+  { id: "topcounsel",   label: "TopCounsel",                     hint: "outside counsel routing" },
+
+  { id: "h-practice",   label: "Practice Management & E-Sig",   hint: "", header: true },
+  { id: "clio",         label: "Clio",                           hint: "import matters, sync time entries" },
+  { id: "docuseal",     label: "DocuSeal",                       hint: "self-hosted e-signature (Docker)" },
+
+  { id: "h-advanced",   label: "Advanced",                       hint: "", header: true },
+  { id: "auth",         label: "Multi-user Auth  (OAuth)",       hint: "Google / Microsoft login for lawyers" },
+  { id: "typedb",       label: "TypeDB Conflict Graph",          hint: "n-ary conflict-of-interest detection" },
+  { id: "ollama",       label: "Ollama  (local AI)",             hint: "route T3 agents to a local model" },
+  { id: "infisical",    label: "Infisical",                      hint: "team secrets manager" },
+];
+
+const CONNECTORS: Record<string, ConnDef> = {
+  tavily: {
+    id: "tavily", name: "Tavily Web Search",
+    blurb: "Real-time web search for research agents.",
     keys: [{ key: "TAVILY_API_KEY", label: "API key", secret: true }],
     howTo: ["app.tavily.com  →  sign up  →  copy API key", "Free tier: 1,000 searches/month"],
   },
-  {
-    id: "courtlistener",
-    name: "CourtListener",
-    free: true,
-    blurb: "US federal & state court opinions, dockets, and filings. Works without a key — add one for higher rate limits.",
-    keys: [{ key: "COURT_LISTENER_API_KEY", label: "API key (optional — skip to use free limits)", secret: true }],
+  courtlistener: {
+    id: "courtlistener", name: "CourtListener",
+    blurb: "US court opinions, dockets, and filings. Free public API — key only needed for higher rate limits.",
+    keys: [{ key: "COURT_LISTENER_API_KEY", label: "API key (optional — skip for free limits)", secret: true }],
     howTo: ["courtlistener.com  →  Settings  →  API Token"],
   },
-  {
-    id: "westlaw",
-    name: "Westlaw / CoCounsel",
-    blurb: "Full Westlaw legal research and CoCounsel AI assistant. Enterprise subscription required.",
+  westlaw: {
+    id: "westlaw", name: "Westlaw / CoCounsel",
+    blurb: "Full Westlaw legal research and CoCounsel AI. Enterprise subscription required.",
     keys: [{ key: "WESTLAW_API_KEY", label: "API key", secret: true }],
     howTo: ["Contact your Westlaw account rep", "legal.thomsonreuters.com"],
   },
-  {
-    id: "trellis",
-    name: "Trellis  (state courts + judge analytics)",
+  trellis: {
+    id: "trellis", name: "Trellis",
     blurb: "State court cases across all 50 US states plus judge analytics.",
     keys: [{ key: "TRELLIS_API_KEY", label: "API key", secret: true }],
     howTo: ["trellis.law  →  contact sales for API access"],
   },
-  {
-    id: "everlaw",
-    name: "Everlaw  (eDiscovery)",
+  everlaw: {
+    id: "everlaw", name: "Everlaw",
     blurb: "Search and review documents from Everlaw review sets.",
     keys: [{ key: "EVERLAW_API_KEY", label: "API key", secret: true }],
     howTo: ["everlaw.com  →  Settings  →  Integrations  →  API"],
   },
-  {
-    id: "descrybe",
-    name: "Descrybe  (UK · AU · CA cases)",
+  descrybe: {
+    id: "descrybe", name: "Descrybe",
     blurb: "Legal research for UK, Australian, and Canadian case law.",
     keys: [{ key: "DESCRYBE_API_KEY", label: "API key", secret: true }],
     howTo: ["descrybe.ai  →  account dashboard  →  API access"],
   },
-  {
-    id: "solve-intel",
-    name: "Solve Intelligence  (patents)",
+  "solve-intel": {
+    id: "solve-intel", name: "Solve Intelligence",
     blurb: "Patent prior-art search and AI-assisted claims drafting.",
     keys: [{ key: "SOLVE_INTELLIGENCE_API_KEY", label: "API key", secret: true }],
     howTo: ["solveintelligence.com  →  account settings  →  API keys"],
   },
-  {
-    id: "ironclad",
-    name: "Ironclad  (contract workflow)",
+  ironclad: {
+    id: "ironclad", name: "Ironclad",
     blurb: "Search and retrieve contracts from your Ironclad repository.",
     keys: [{ key: "IRONCLAD_API_KEY", label: "API key", secret: true }],
     howTo: ["ironcladapp.com  →  Settings  →  API & Integrations"],
   },
-  {
-    id: "docusign-clm",
-    name: "DocuSign CLM  (contract management)",
+  "docusign-clm": {
+    id: "docusign-clm", name: "DocuSign CLM",
     blurb: "Search contracts and check envelope status in DocuSign.",
     keys: [{ key: "DOCUSIGN_API_KEY", label: "Integration key", secret: true }],
     howTo: ["developers.docusign.com  →  Create an Integration Key"],
   },
-  {
-    id: "imanage",
-    name: "iManage  (document management)",
+  imanage: {
+    id: "imanage", name: "iManage",
     blurb: "Search and retrieve documents from iManage Work.",
     keys: [{ key: "IMANAGE_API_KEY", label: "API key", secret: true }],
     howTo: ["imanage.com  →  Developer portal  →  API credentials"],
   },
-  {
-    id: "definely",
-    name: "Definely  (contract analysis)",
+  definely: {
+    id: "definely", name: "Definely",
     blurb: "AI-powered contract structure analysis and definition resolver.",
     keys: [{ key: "DEFINELY_API_KEY", label: "API key", secret: true }],
     howTo: ["definely.com  →  account settings  →  API"],
   },
-  {
-    id: "lawve",
-    name: "Lawve AI  (contract review)",
+  lawve: {
+    id: "lawve", name: "Lawve AI",
     blurb: "Automated contract review and clause search.",
     keys: [{ key: "LAWVE_API_KEY", label: "API key", secret: true }],
     howTo: ["lawve.ai  →  account dashboard  →  API key"],
   },
-  {
-    id: "gdrive",
-    name: "Google Drive",
+  gdrive: {
+    id: "gdrive", name: "Google Drive",
     blurb: "Search and retrieve documents from Google Drive.",
     keys: [{ key: "GOOGLE_DRIVE_API_KEY", label: "API key", secret: true }],
-    howTo: [
-      "console.cloud.google.com  →  New project  →  Enable Drive API",
-      "Credentials  →  Create API key",
-    ],
+    howTo: ["console.cloud.google.com  →  Enable Drive API  →  Credentials  →  Create API key"],
   },
-  {
-    id: "box",
-    name: "Box",
+  box: {
+    id: "box", name: "Box",
     blurb: "Search and retrieve documents from Box.",
     keys: [{ key: "BOX_API_KEY", label: "API key", secret: true }],
     howTo: ["developer.box.com  →  My Apps  →  Create  →  Server Authentication"],
   },
-  {
-    id: "slack",
-    name: "Slack",
+  slack: {
+    id: "slack", name: "Slack",
     blurb: "Search Slack messages and send notifications from drafting agents.",
     keys: [{ key: "SLACK_API_KEY", label: "Bot token (xoxb-...)", secret: true }],
-    howTo: [
-      "api.slack.com  →  Create App  →  OAuth & Permissions",
-      "Bot Scopes: channels:history, chat:write, search:read",
-    ],
+    howTo: ["api.slack.com  →  Create App  →  OAuth & Permissions", "Bot Scopes: channels:history, chat:write, search:read"],
   },
-  {
-    id: "topcounsel",
-    name: "TopCounsel  (outside counsel)",
+  topcounsel: {
+    id: "topcounsel", name: "TopCounsel",
     blurb: "Route matters to your outside counsel panel and receive fee quotes.",
     keys: [{ key: "TOPCOUNSEL_API_KEY", label: "API key", secret: true }],
     howTo: ["topcounsel.com  →  Settings  →  API Access"],
   },
-  {
-    id: "clio",
-    name: "Clio  (practice management)",
+  clio: {
+    id: "clio", name: "Clio",
     blurb: "Import matters and documents from Clio Manage; sync time entries back.",
     keys: [
       { key: "CLIO_CLIENT_ID",     label: "OAuth Client ID" },
@@ -319,23 +421,15 @@ const CONNECTORS: ConnDef[] = [
       "3. Copy Client ID and Client Secret",
     ],
   },
-  {
-    id: "docuseal",
-    name: "DocuSeal  (self-hosted e-signature)",
-    blurb: "Docker Compose starts DocuSeal automatically. Enter the API key after first-run setup.",
+  docuseal: {
+    id: "docuseal", name: "DocuSeal",
+    blurb: "Self-hosted e-signature. Docker Compose starts it automatically — enter the key after first-run setup.",
     keys: [{ key: "DOCUSEAL_API_KEY", label: "API key (get it after Docker launch)", secret: true }],
-    howTo: [
-      "After setup: open http://localhost:3000 and complete first-run",
-      "Settings  →  API  →  copy key  →  edit .env or re-run npm run setup",
-    ],
+    howTo: ["After setup: http://localhost:3000  →  complete first-run  →  Settings  →  API  →  copy key"],
   },
-];
-
-const ADVANCED: ConnDef[] = [
-  {
-    id: "auth",
-    name: "Multi-user Authentication  (OAuth)",
-    blurb: "Let multiple lawyers sign in with Google or Microsoft. Disabled = single local-partner mode.",
+  auth: {
+    id: "auth", name: "Multi-user Auth",
+    blurb: "OAuth login for multiple lawyers. Disabled = single local-partner mode.",
     keys: [
       { key: "AUTH_ENABLED",           label: "Enable auth", default: "true" },
       { key: "SESSION_SECRET",          label: "Session secret (auto-generated)", secret: true, autoGen: true },
@@ -347,13 +441,12 @@ const ADVANCED: ConnDef[] = [
     howTo: [
       "Google:    console.cloud.google.com  →  Credentials  →  OAuth 2.0 Client IDs",
       "  Redirect: http://localhost:3101/auth/google/callback",
-      "Microsoft: portal.azure.com  →  Azure AD  →  App registrations  →  New",
+      "Microsoft: portal.azure.com  →  Azure AD  →  App registrations",
       "  Redirect: http://localhost:3101/auth/microsoft/callback",
     ],
   },
-  {
-    id: "typedb",
-    name: "TypeDB Conflict Graph",
+  typedb: {
+    id: "typedb", name: "TypeDB Conflict Graph",
     blurb: "Polymorphic n-ary conflict-of-interest detection. Start with: docker compose --profile graph up -d",
     keys: [
       { key: "TYPEDB_URL",      label: "TypeDB host:port", default: "localhost:1729" },
@@ -361,10 +454,9 @@ const ADVANCED: ConnDef[] = [
     ],
     howTo: ["docker compose --profile graph up -d  — TypeDB starts on localhost:1729"],
   },
-  {
-    id: "ollama",
-    name: "Ollama  (local AI inference)",
-    blurb: "Route T3 tool agents to a local model — reduces cloud API costs on high-volume tasks.",
+  ollama: {
+    id: "ollama", name: "Ollama",
+    blurb: "Route T3 tool agents to a local model — cuts cloud API costs on high-volume tasks.",
     keys: [
       { key: "OLLAMA_ENABLED",  label: "Enable Ollama for T3 agents", default: "true" },
       { key: "OLLAMA_MODEL",    label: "Model name",                   default: "llama3.2" },
@@ -372,23 +464,19 @@ const ADVANCED: ConnDef[] = [
     ],
     howTo: ["ollama.com/download  →  install  →  ollama pull llama3.2"],
   },
-  {
-    id: "infisical",
-    name: "Infisical  (team secrets manager)",
+  infisical: {
+    id: "infisical", name: "Infisical",
     blurb: "Store all API keys in Infisical instead of .env — ideal for teams and CI/CD.",
     keys: [
       { key: "INFISICAL_CLIENT_ID",     label: "Machine Identity Client ID" },
       { key: "INFISICAL_CLIENT_SECRET", label: "Client Secret", secret: true },
       { key: "INFISICAL_PROJECT_ID",    label: "Project ID" },
     ],
-    howTo: [
-      "app.infisical.com  →  Project  →  Settings  →  Machine Identities  →  Create",
-      "Self-host (MIT): github.com/Infisical/infisical",
-    ],
+    howTo: ["app.infisical.com  →  Project  →  Settings  →  Machine Identities  →  Create"],
   },
-];
+};
 
-// ── .env load / write ─────────────────────────────────────────────────────
+// ── .env load / write ──────────────────────────────────────────────────────
 function loadEnv(): Record<string, string> {
   const p = path.join(ROOT, ".env");
   if (!fs.existsSync(p)) return {};
@@ -486,48 +574,42 @@ function writeEnv(env: Record<string, string>, pythonBin: string) {
   fs.writeFileSync(path.join(ROOT, ".env"), lines.join("\n") + "\n");
 }
 
-// ── Feature summary table ─────────────────────────────────────────────────
+// ── Feature summary ────────────────────────────────────────────────────────
 function printSummary(env: Record<string, string>, sys: { python: boolean; docker: boolean; tesseract: boolean }) {
   const has = (k: string) => !!env[k];
   const row = (name: string, status: string) => padEnd(`  ${fg.bold(name)}`, 36) + status;
-
   printBox([
     fg.bold("  Feature summary"),
     "",
-    row("AI agents (Claude)",    has("ANTHROPIC_API_KEY")  ? fg.green("✓ enabled")            : fg.red("✗ MISSING")),
-    row("Web search (Tavily)",   has("TAVILY_API_KEY")     ? fg.green("✓ enabled")            : fg.yellow("⚡ disabled — add TAVILY_API_KEY")),
-    row("PDF parsing",           sys.python               ? fg.green("✓ enabled")            : fg.yellow("⚡ install Python 3.11+")),
-    row("OCR (scanned PDFs)",    sys.tesseract            ? fg.green("✓ enabled")            : fg.yellow("⚡ install Tesseract")),
-    row("CourtListener",         fg.green("✓ always on (free public API)")),
-    row("Westlaw",               has("WESTLAW_API_KEY")    ? fg.green("✓ enabled")            : fg.gray("○ not configured")),
-    row("Trellis",               has("TRELLIS_API_KEY")    ? fg.green("✓ enabled")            : fg.gray("○ not configured")),
-    row("Everlaw",               has("EVERLAW_API_KEY")    ? fg.green("✓ enabled")            : fg.gray("○ not configured")),
-    row("Clio",                  has("CLIO_CLIENT_ID")     ? fg.green("✓ configured")         : fg.gray("○ not configured")),
-    row("DocuSeal (e-signature)", sys.docker
-                                  ? (has("DOCUSEAL_API_KEY") ? fg.green("✓ configured") : fg.yellow("⚡ running — enter key after launch"))
-                                  : fg.gray("○ Docker not found")),
-    row("TypeDB conflict graph", has("TYPEDB_URL")         ? fg.green("✓ enabled")            : fg.gray("○ not configured")),
-    row("Ollama (local AI)",     env.OLLAMA_ENABLED === "true" ? fg.green("✓ enabled")        : fg.gray("○ not configured")),
-    row("Multi-user auth",       env.AUTH_ENABLED === "true"   ? fg.green("✓ enabled")        : fg.yellow("⚡ single-user mode")),
+    row("AI agents (Claude)",     has("ANTHROPIC_API_KEY")      ? fg.green("✓ enabled")                             : fg.red("✗ MISSING")),
+    row("Web search (Tavily)",    has("TAVILY_API_KEY")          ? fg.green("✓ enabled")                             : fg.yellow("⚡ disabled")),
+    row("PDF parsing",            sys.python                     ? fg.green("✓ enabled")                             : fg.yellow("⚡ install Python 3.11+")),
+    row("OCR (scanned PDFs)",     sys.tesseract                  ? fg.green("✓ enabled")                             : fg.yellow("⚡ install Tesseract")),
+    row("CourtListener",          fg.green("✓ always on (free)")),
+    row("Westlaw",                has("WESTLAW_API_KEY")         ? fg.green("✓ enabled")                             : fg.gray("○ not configured")),
+    row("Trellis",                has("TRELLIS_API_KEY")         ? fg.green("✓ enabled")                             : fg.gray("○ not configured")),
+    row("Everlaw",                has("EVERLAW_API_KEY")         ? fg.green("✓ enabled")                             : fg.gray("○ not configured")),
+    row("Clio",                   has("CLIO_CLIENT_ID")          ? fg.green("✓ configured")                          : fg.gray("○ not configured")),
+    row("DocuSeal (e-signature)", sys.docker ? (has("DOCUSEAL_API_KEY") ? fg.green("✓ configured") : fg.yellow("⚡ running — enter key after launch")) : fg.gray("○ Docker not found")),
+    row("TypeDB conflicts",       has("TYPEDB_URL")              ? fg.green("✓ enabled")                             : fg.gray("○ not configured")),
+    row("Ollama (local AI)",      env.OLLAMA_ENABLED === "true"  ? fg.green("✓ enabled")                             : fg.gray("○ not configured")),
+    row("Multi-user auth",        env.AUTH_ENABLED === "true"    ? fg.green("✓ enabled")                             : fg.yellow("⚡ single-user mode")),
   ]);
 }
 
-// ── Collect connector keys ────────────────────────────────────────────────
-async function collectConnector(conn: ConnDef, env: Record<string, string>): Promise<void> {
+// ── Collect keys for a connector ──────────────────────────────────────────
+async function collectKeys(conn: ConnDef, env: Record<string, string>): Promise<void> {
   const hasKeys = conn.keys.some(k => !!env[k.key]);
 
-  console.log(`\n  ${fg.bold(fg.cyan("○"))} ${fg.bold(conn.name)}${conn.free ? fg.green("  (free)") : ""}`);
+  console.log(`\n  ${fg.bold(fg.cyan("▸"))} ${fg.bold(conn.name)}`);
   printNote(conn.blurb);
-
-  const enable = await confirm(`    Configure ${conn.name}?`, hasKeys);
-  if (!enable) { printSkip(conn.name); return; }
 
   if (!hasKeys && conn.howTo.length) {
     console.log();
     printNote("How to get access:");
     for (const line of conn.howTo) printNote(`  ${line}`);
     console.log();
-  }
+  } else { console.log(); }
 
   for (const k of conn.keys) {
     if (k.autoGen) {
@@ -541,13 +623,11 @@ async function collectConnector(conn: ConnDef, env: Record<string, string>): Pro
       : await ask(k.label, cur || undefined);
     env[k.key] = (val || cur).trim();
   }
-
-  printOk(`${conn.name} configured.`);
 }
 
-// ── Main ──────────────────────────────────────────────────────────────────
+// ── Main ───────────────────────────────────────────────────────────────────
 async function main() {
-  process.stdout.write("\x1b[2J\x1b[H"); // clear screen
+  process.stdout.write("\x1b[2J\x1b[H");
 
   console.log(`
 ${fg.cyan("  ┌──────────────────────────────────────────────────────────────┐")}
@@ -567,19 +647,17 @@ ${fg.cyan("  └─────────────────────�
     printWarn(`Found existing ${fg.bold(".env")} — will update it (existing keys preserved).`);
     const fresh = await confirm("  Start fresh instead?", false);
     if (fresh) for (const k of Object.keys(env)) delete env[k];
+    console.log();
   }
 
   const sys = { python: false, docker: false, tesseract: false };
 
-  // ── System requirements ──────────────────────────────────────────────
+  // ── System requirements ────────────────────────────────────────────────
   printSection("System Requirements");
 
   const nodeR = checkNode();
   if (nodeR.ok) printOk(`Node.js ${fg.dim(nodeR.version)}`);
-  else {
-    printFail("Node.js 18+ required. Install at nodejs.org");
-    process.exit(1);
-  }
+  else { printFail("Node.js 18+ required. Install at nodejs.org"); process.exit(1); }
 
   const pyR = checkPython();
   sys.python = pyR.ok;
@@ -605,7 +683,7 @@ ${fg.cyan("  └─────────────────────�
     printNote("macOS: brew install tesseract   Linux: apt install tesseract-ocr");
   }
 
-  // ── Anthropic API key (required) ──────────────────────────────────────
+  // ── Anthropic key (required) ───────────────────────────────────────────
   printSection("Anthropic API Key  (required)");
 
   printNote("Powers every AI agent — the only key you absolutely need.");
@@ -633,51 +711,37 @@ ${fg.cyan("  └─────────────────────�
     break;
   }
 
-  // ── Connectors ────────────────────────────────────────────────────────
+  // ── Connector checkbox picker ──────────────────────────────────────────
   printSection("Connectors & Integrations");
-
-  printNote("All connectors are optional. Big Michael works without them.");
-  printNote("Unconfigured connectors return structured errors — they never crash the server.");
+  printNote("Select the connectors you want to configure. You can add more later.");
   console.log();
 
-  const detailed = await confirm("Configure connectors now?", false);
+  // Pre-select any connector whose keys are already in the env
+  const navigableIds = PICKER_ROWS.filter(r => !r.header).map(r => r.id);
+  const preSelected = navigableIds.filter(id => {
+    const conn = CONNECTORS[id];
+    return conn?.keys.some(k => !!existing[k.key]);
+  });
 
-  if (detailed) {
-    for (const conn of CONNECTORS) {
-      await collectConnector(conn, env);
-    }
+  const chosen = await multiSelect("Choose connectors:", PICKER_ROWS, preSelected);
 
-    console.log();
-    const doAdvanced = await confirm("Configure advanced features? (auth, TypeDB, Ollama, Infisical)", false);
-    if (doAdvanced) {
-      for (const adv of ADVANCED) {
-        await collectConnector(adv, env);
-      }
-    }
-  } else {
-    // Quick mode — just ask for Tavily since it has the highest ROI
-    console.log(`\n  ${fg.bold("Tavily Web Search")}  ${fg.gray("(recommended — biggest ROI for research tasks)")}`);
-    printNote("Gives agents real-time web search. Free tier: 1,000 searches/month.");
-    printNote("Get key: app.tavily.com  →  sign up  →  copy API key");
-    console.log();
-
-    const cur = env.TAVILY_API_KEY ?? "";
-    const raw = await askSecret("TAVILY_API_KEY", !!cur);
-    const val = raw || cur;
-    if (val) { env.TAVILY_API_KEY = val; printOk("Tavily web search enabled."); }
-    else      { printSkip("Tavily — agents will reason from uploaded documents only."); }
-
-    console.log();
-    printNote(`Add more connectors any time: edit ${fg.bold(".env")} and restart, or re-run ${fg.bold("npm run setup")}.`);
+  // Collect keys for each selected connector
+  for (const id of chosen) {
+    const conn = CONNECTORS[id];
+    if (conn) await collectKeys(conn, env);
   }
 
-  // ── Write .env ────────────────────────────────────────────────────────
+  if (chosen.length === 0) {
+    printSkip("No connectors selected — you can add them any time by editing .env");
+  }
+
+  // ── Write .env ─────────────────────────────────────────────────────────
   printSection("Writing Configuration");
 
   writeEnv(env, pyR.bin);
   printOk(`.env written at ${fg.dim(path.join(ROOT, ".env"))}`);
 
-  // ── Install ───────────────────────────────────────────────────────────
+  // ── Install ────────────────────────────────────────────────────────────
   printSection("Installation");
 
   const doInstall = await confirm("Run npm install?", true);
@@ -704,7 +768,7 @@ ${fg.cyan("  └─────────────────────�
         execSync("docker compose up -d", { cwd: ROOT, stdio: "pipe", timeout: 90_000 });
         spin.done("DocuSeal running at http://localhost:3000");
         printNote("Visit http://localhost:3000 to complete first-run setup.");
-        printNote(`Copy the API key from Settings → API, then re-run ${fg.bold("npm run setup")}.`);
+        printNote(`Copy the API key, then re-run ${fg.bold("npm run setup")}.`);
       } catch {
         spin.fail("Docker Compose failed — is Docker Desktop running?");
       }
@@ -725,7 +789,7 @@ ${fg.cyan("  └─────────────────────�
     }
   }
 
-  // ── Summary ───────────────────────────────────────────────────────────
+  // ── Summary ────────────────────────────────────────────────────────────
   console.log("\n");
   printSummary(env, sys);
 
@@ -736,14 +800,13 @@ ${fg.cyan("  │")}  ${fg.bold("You're ready. Welcome to Big Michael.")}        
 ${fg.cyan("  │")}                                                              ${fg.cyan("│")}
 ${fg.cyan("  │")}  ${fg.bold("Start the server:")}                                            ${fg.cyan("│")}
 ${fg.cyan("  │")}    ${fg.green("npm run dev")}    ${fg.dim("development mode (hot reload)")}              ${fg.cyan("│")}
-${fg.cyan("  │")}    ${fg.green("npm start")}      ${fg.dim("production (run npm run build first)")}      ${fg.cyan("│")}
+${fg.cyan("  │")}    ${fg.green("npm start")}      ${fg.dim("production (npm run build first)")}          ${fg.cyan("│")}
 ${fg.cyan("  │")}                                                              ${fg.cyan("│")}
 ${fg.cyan("  │")}  REST API     →  http://localhost:3101                       ${fg.cyan("│")}
 ${fg.cyan("  │")}  Health       →  http://localhost:3101/health                ${fg.cyan("│")}
-${fg.cyan("  │")}  Agents list  →  http://localhost:3101/agents                ${fg.cyan("│")}
+${fg.cyan("  │")}  Agents       →  http://localhost:3101/agents                ${fg.cyan("│")}
 ${fg.cyan("  │")}                                                              ${fg.cyan("│")}
-${fg.cyan("  │")}  ${fg.dim("Add connectors: edit .env then npm run dev")}                   ${fg.cyan("│")}
-${fg.cyan("  │")}  ${fg.dim("Re-run wizard: npm run setup")}                                 ${fg.cyan("│")}
+${fg.cyan("  │")}  ${fg.dim("Add connectors: npm run setup")}                               ${fg.cyan("│")}
 ${fg.cyan("  └──────────────────────────────────────────────────────────────┘")}
 `);
 
