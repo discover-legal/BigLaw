@@ -125,32 +125,37 @@ CSV exports now include the `clioSyncedAt` column. Audit trail in a spreadsheet,
 
 Big Michael got a sling. The billing stack and the audit log landed together. That's what this is: v0.5.0.
 
-Your billing software doesn't enforce your OCG. This does:
+Big Michael enforces your OCG. Your billing software doesn't.
 
-→ LEDES 1998B + UTBMS task codes — Haiku classifies every entry before it leaves the agent. You edit. You submit. Real legal billing format, not a CSV with delusions.
-→ OCG compliance pass on every time entry. Structured rule dictionary, deterministic checks, Haiku-extracted parameters. Before the pre-bill, not after the client calls.
-→ Pre-bill review — draft, review, approve, invoice. Partners see the whole thing. Associates see their part.
-→ Matter budgets with live burn alerts over SSE. Set the number. Get warned before you have to explain it.
-→ Cost predictor from your own historical data. If this matter looks like those matters, here's the range. No vendor. No black box.
-→ AI work time accrues as billable entries automatically. The agents work. The clock runs. (An AI helped build the system that bills AI time. I find this more amusing than I probably should. — Claude)
+He classifies every time entry in LEDES 1998B with UTBMS task codes before it leaves his desk. You edit. You submit. He doesn't hand you a CSV and call it done.
 
-The audit log your compliance team has been asking for: hash-chained, tamper-evident JSONL with pluggable sinks — OpenSearch, Splunk, or a webhook you control. Every agent message, every gate, every human call. The chain makes the record verifiable. The sinks make it yours to keep, not ours.
+He runs a compliance pass on every entry against your Outside Counsel Guidelines — structured rule dictionary, deterministic checks, parameters he extracted himself. He catches it before the pre-bill. Not after the client calls.
 
-The rest of what landed:
+He runs the whole pre-bill review cycle: draft, review, approve, invoice. Partners see everything. Associates see their part. Big Michael sees all of it.
 
-→ CourtListener docket monitoring — new filings in, SSE alert out to counsel
-→ Regulatory pulse — new rules scanned against your open matters on a schedule
-→ Client status reports generated from actual round history, not from memory
-→ TypeDB multi-hop conflict graph — n-ary detection, not a list match
-→ Deadline calculator — FRCP / UK CPR / EU Competition; trigger date → every downstream date, cited
-→ Twenty CRM
-→ `curl -fsSL https://raw.githubusercontent.com/discover-legal/big-michael/main/setup.sh | bash`
+He watches your matter budget live and alerts you before you have to explain yourself.
 
-An AI, a lawyer, and open source walked into a GitHub repo. The audit log has the whole story. 🐢
+He predicts what a matter will cost from your own historical data. Not a vendor's model. Not a black box. Your matters. His maths.
 
-Still on Mike (Will Chen) and Lavern (Antti Innanen)'s shoulders. Still AGPL-3.0.
+He bills his own time. The agents work. The clock runs. He logs it. You review it like any other entry. (An AI helped build the system that bills AI time. I find this more amusing than I probably should. — Claude)
 
-Which matter do you run through it first?
+He keeps a diary, and you can subpoena it. Hash-chained, tamper-evident JSONL — OpenSearch, Splunk, or a webhook you control. Every message he sends. Every gate he holds. Every call a human makes. The chain is verifiable. The record is yours, not ours.
+
+He also:
+
+→ Watches your CourtListener dockets overnight — new filings in, SSE alert to counsel before morning
+→ Reads the regulatory updates so you don't have to — scans them against your open matters on a schedule
+→ Writes client status reports from what he actually did, not what anyone remembers
+→ Runs multi-hop conflict checks through TypeDB — n-ary, not a list
+→ Knows your deadlines — FRCP, UK CPR, EU Competition; trigger date in, every downstream date out, cited
+→ Connects to Twenty CRM
+→ Installs in one command: `curl -fsSL https://raw.githubusercontent.com/discover-legal/big-michael/main/setup.sh | bash`
+
+An AI, a lawyer, and open source walked into a GitHub repo. Big Michael kept the audit log. 🐢
+
+Still standing on Mike (Will Chen) and Lavern (Antti Innanen)'s shoulders. Still AGPL-3.0.
+
+Which of your matters does Big Michael take first?
 
 #LegalAI #LegalTech #OpenSource #LegalBilling #OCG
 
@@ -158,18 +163,18 @@ Which matter do you run through it first?
 
 ## v0.5.0 post — The billing + audit drop (ultra-short)
 
-Big Michael v0.5.0. Your billing software doesn't enforce your OCG. This does.
+Big Michael got a sling. He enforces your OCG, bills his own time, and keeps a diary you can subpoena. That's v0.5.0.
 
-→ LEDES 1998B + UTBMS auto-classification + OCG compliance pass before every pre-bill
-→ Pre-bill review cycle. Matter budgets. Statistical cost predictor from your own data.
-→ AI work time → billable entries automatically. (An AI built the thing that bills AI time. — Claude)
-→ Hash-chained audit log. OpenSearch / Splunk / webhook. Yours to keep.
-→ Docket monitoring, regulatory pulse, client status reports, TypeDB conflict graph, deadline calculator, Twenty CRM.
-→ `curl -fsSL .../setup.sh | bash`
+→ LEDES 1998B + UTBMS, classified before it leaves his desk. OCG compliance pass before every pre-bill.
+→ Pre-bill review cycle. Matter budgets with live burn alerts. Cost predictor from your own data.
+→ He bills his own time. (An AI built the thing that bills AI time. — Claude)
+→ Hash-chained audit log. OpenSearch / Splunk / webhook. His record. Yours to keep.
+→ He watches your dockets overnight. Reads the regulatory updates. Writes the status reports.
+→ TypeDB conflict graph. Deadline calculator. Twenty CRM. One-liner install.
 
-An AI, a lawyer, and open source walked into a GitHub repo. The audit log has the whole story. 🐢
+An AI, a lawyer, and open source walked into a GitHub repo. Big Michael kept the audit log. 🐢
 
-#LegalAI #LegalTech #OpenSource #LegalBilling
+#LegalAI #LegalTech #OpenSource #LegalBilling #OCG
 
 ---
 
