@@ -12,28 +12,28 @@ tracking, and NOSLEGAL v4 taxonomy.
 
 ## Quick start
 
+**Easiest — one command, handles everything (Node.js, clone, deps, wizard):**
+
 ```bash
-# 1. Start infrastructure
-docker compose up -d          # DocuSeal (e-signature) — vector DB is in-process, no service needed
+curl -fsSL https://raw.githubusercontent.com/discover-legal/big-michael/main/setup.sh | bash
+```
 
-# 2. Configure secrets
-cp .env.example .env
-# Edit .env — at minimum set ANTHROPIC_API_KEY
-# Optional: TAVILY_API_KEY (web search), DOCUSEAL_API_KEY (e-signature)
-# Optional: connector API keys (WESTLAW_API_KEY, COURT_LISTENER_API_KEY, etc.)
-# Optional: INFISICAL_* vars to load all secrets from Infisical instead
+**Already have the repo cloned:**
 
-# 3. Install deps
-npm install
-pip install -r requirements.txt   # PyMuPDF, Camelot, Tesseract
+```bash
+bash setup.sh       # or: npm run setup  (requires Node 18+ already installed)
+```
 
-# 4. Verify everything works
-npm run smoke-test
+The interactive wizard checks prerequisites, walks through every API key with
+inline instructions, shows a checkbox picker for connectors, writes `.env`,
+installs deps, and runs a smoke test. Re-run any time to add more connectors.
 
-# 5. Start server (MCP stdio + REST API)
-npm start               # production (requires npm run build first)
-npm run dev             # dev mode with tsx watch
-npm run serve           # dedicated backend: owns DB + REST, no MCP (for running the UI + MCP together)
+**Then start the server:**
+
+```bash
+npm run dev         # development (hot reload)
+npm start           # production (npm run build first)
+npm run serve       # backend-only mode (for running UI + MCP simultaneously)
 ```
 
 REST API at `http://localhost:3101`.
