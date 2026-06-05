@@ -50,6 +50,7 @@ import {
 } from "./protocols/index.js";
 import { detectNosLegal } from "./services/classifier.js";
 import { costStore, calcCostUsd, calcWattHours } from "./cost/index.js";
+import { jobQueue } from "./queue/index.js";
 import { isOllamaModel, isLocalModel } from "./providers/index.js";
 import type {
   Task,
@@ -275,8 +276,15 @@ export class Orchestrator {
       task.error = err.message;
       // Close the time entry even on failure.
       if (task.activeTimeEntryId) {
-        this.time.close(task.activeTimeEntryId);
+        const closedOnFail = this.time.close(task.activeTimeEntryId);
         task.activeTimeEntryId = undefined;
+        if (closedOnFail) {
+          jobQueue.enqueue("summarize_time_entry", {
+            entryId: closedOnFail.id,
+            taskId: task.id,
+            clientNumber: task.clientNumber,
+          }).catch((e) => logger.warn("Failed to enqueue summarize job", { error: (e as Error).message }));
+        }
       }
       this.emit(task.id, "failed", { error: err.message });
       auditLogger.write({ event: "task.failed", taskId: task.id, data: { error: err.message } });
@@ -366,7 +374,14 @@ export class Orchestrator {
           event: "gate_review",
           startedAt: new Date(),
         });
-        this.time.close(entry.id);
+        const closedApprove = this.time.close(entry.id);
+        if (closedApprove) {
+          jobQueue.enqueue("summarize_time_entry", {
+            entryId: closedApprove.id,
+            taskId,
+            clientNumber: task.clientNumber,
+          }).catch((e) => logger.warn("Failed to enqueue summarize job", { error: (e as Error).message }));
+        }
       }
     }
 
@@ -400,7 +415,14 @@ export class Orchestrator {
           event: "gate_review",
           startedAt: new Date(),
         });
-        this.time.close(entry.id);
+        const closedReject = this.time.close(entry.id);
+        if (closedReject) {
+          jobQueue.enqueue("summarize_time_entry", {
+            entryId: closedReject.id,
+            taskId,
+            clientNumber: task.clientNumber,
+          }).catch((e) => logger.warn("Failed to enqueue summarize job", { error: (e as Error).message }));
+        }
       }
     }
 
@@ -575,8 +597,15 @@ export class Orchestrator {
 
     // Close the time entry now that the task has finished.
     if (task.activeTimeEntryId) {
-      this.time.close(task.activeTimeEntryId);
+      const closedOnComplete = this.time.close(task.activeTimeEntryId);
       task.activeTimeEntryId = undefined;
+      if (closedOnComplete) {
+        jobQueue.enqueue("summarize_time_entry", {
+          entryId: closedOnComplete.id,
+          taskId: task.id,
+          clientNumber: task.clientNumber,
+        }).catch((e) => logger.warn("Failed to enqueue summarize job", { error: (e as Error).message }));
+      }
     }
 
     // Feed agent performance back into the registry so recommend()-based

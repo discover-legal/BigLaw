@@ -49,6 +49,8 @@ import { clioClient } from "../integrations/clio.js";
 import { twentyClient } from "../integrations/twenty.js";
 import { ocgStore } from "../ocg/index.js";
 import { analyzeClientVoice } from "../services/clientVoiceAnalyzer.js";
+import { jobQueue } from "../queue/index.js";
+import { startWorker } from "../queue/worker.js";
 
 // ─── Tool schemas ─────────────────────────────────────────────────────────────
 
@@ -1520,6 +1522,42 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
       return reply.code(502).send({ error: (err as Error).message });
     }
   });
+
+  // ─── Job queue monitoring routes (partner only) ──────────────────────────────
+
+  app.get("/jobs", async (req, reply) => {
+    if (!isPartner(getUser(req))) return reply.code(403).send({ error: "Partner role required" });
+    const { status, limit, offset } = req.query as {
+      status?: string;
+      limit?: string;
+      offset?: string;
+    };
+    return jobQueue.list({
+      status: status as Parameters<typeof jobQueue.list>[0] extends { status?: infer S } ? S : never,
+      limit: limit ? parseInt(limit) : 50,
+      offset: offset ? parseInt(offset) : 0,
+    });
+  });
+
+  app.get("/jobs/stats", async (req, reply) => {
+    if (!isPartner(getUser(req))) return reply.code(403).send({ error: "Partner role required" });
+    return jobQueue.stats();
+  });
+
+  app.post("/jobs/:id/retry", async (req, reply) => {
+    if (!isPartner(getUser(req))) return reply.code(403).send({ error: "Partner role required" });
+    const { id } = req.params as { id: string };
+    try {
+      const job = await jobQueue.retry(id);
+      return { ok: true, job };
+    } catch (err) {
+      return reply.code(404).send({ error: (err as Error).message });
+    }
+  });
+
+  // ─── Start background worker ──────────────────────────────────────────────────
+
+  startWorker(orchestrator);
 
   await app.listen({ port: Config.api.port, host: Config.api.host });
   logger.info("REST API started", { port: Config.api.port, host: Config.api.host, auth: Config.api.apiKey ? "x-api-key" : "none" });

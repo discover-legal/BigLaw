@@ -87,6 +87,19 @@ export class TimeStore {
     return entry;
   }
 
+  /** Get a single entry by ID. */
+  getById(id: string): TimeEntry | undefined {
+    return this.entries.find((e) => e.id === id);
+  }
+
+  /** Overwrite the description on an entry (used by the queue worker). */
+  updateDescription(id: string, description: string): void {
+    const entry = this.entries.find((e) => e.id === id);
+    if (!entry) return;
+    entry.description = description;
+    this.persist().catch((err) => logger.warn("Failed to persist time entries", { error: (err as Error).message }));
+  }
+
   /** List entries with optional filtering. */
   list(filter?: TimeFilter): TimeEntry[] {
     return this.entries.filter((e) => matchesFilter(e, filter));

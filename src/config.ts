@@ -167,6 +167,23 @@ export const Config = {
     /** Persisted Q-table for agent recruitment learning (RuVector LearningEngine). */
     learningFile: optional("LEARNING_FILE", ".qtable.json"),
     ocgFile: optional("OCG_FILE", ".ocg.json"),
+    jobsFile: optional("JOBS_FILE", ".jobs.json"),
+  },
+
+  // ─── Background job queue ──────────────────────────────────────────────────
+  // InMemoryQueue (default) persists jobs to JOBS_FILE and survives restarts.
+  // Switch adapter to "redis" (future) for horizontal K8s workers via Redis Streams.
+  queue: {
+    /** Max concurrent jobs processed per worker tick. */
+    concurrency: parseInt(optional("QUEUE_CONCURRENCY", "3")),
+    /** Milliseconds between queue poll cycles. */
+    pollIntervalMs: parseInt(optional("QUEUE_POLL_INTERVAL_MS", "2000")),
+    /** Max retries before a job is promoted to dead_letter. */
+    maxRetries: parseInt(optional("QUEUE_MAX_RETRIES", "3")),
+    /** Queue adapter: "memory" (default) or "redis" (future). */
+    adapter: optional("QUEUE_ADAPTER", "memory") as "memory" | "redis",
+    /** Redis connection URL — only used when QUEUE_ADAPTER=redis. */
+    redisUrl: optional("QUEUE_REDIS_URL", "redis://localhost:6379"),
   },
 
   logging: {

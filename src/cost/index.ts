@@ -41,7 +41,8 @@ export type CostContext =
   | "classification"   // practice area / client / NOSLEGAL detection
   | "ocg_extraction"   // OCG rule extraction from document
   | "ocg_check"        // OCG billing compliance check on time entries
-  | "voice_analysis";  // client voice/communication guide analysis
+  | "voice_analysis"   // client voice/communication guide analysis
+  | "entry_summarize"; // worker-generated OCG-compliant time entry description
 
 export interface CostEntry {
   id: string;
