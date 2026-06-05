@@ -641,11 +641,29 @@ export type OcgRuleCategory =
   | "timing"
   | "other";
 
+export type OcgMechCheckType =
+  | "min_duration_hours"      // entry duration must be >= value
+  | "max_duration_hours"      // entry duration must be <= value
+  | "max_age_days"            // entry must be submitted within value days of work
+  | "max_billing_rate_usd"    // billingRate must be <= value
+  | "min_description_chars"   // description.length must be >= value
+  | "no_block_billing"        // description must not combine 3+ distinct task types
+  | "no_vague_entries"        // description must not be a single generic verb phrase
+  | "require_matter_reference"; // matterNumber must be present on the entry
+
+export interface OcgMechCheck {
+  type: OcgMechCheckType;
+  value?: number;  // numeric threshold; omitted for boolean checks
+}
+
 export interface OcgRule {
   id: string;
   category: OcgRuleCategory;
-  text: string;       // plain-English rule, ≤ 200 chars
-  severity: "hard" | "soft";  // hard = will reject billing; soft = style pref
+  text: string;
+  severity: "hard" | "soft";
+  /** Structured parameters for deterministic evaluation. Set at ingest time by Haiku.
+   *  When present, checkMechanically() uses this directly — no runtime regex parsing. */
+  mechCheck?: OcgMechCheck;
 }
 
 export interface OcgRuleStat {

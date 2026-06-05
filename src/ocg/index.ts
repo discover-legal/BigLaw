@@ -52,56 +52,116 @@ function makeSuggestion(rule: OcgRule, entry: TimeEntry, issue: string): OcgSugg
   };
 }
 
+// Verbs that indicate a distinct billable task; 3+ in one description = block billing.
+const TASK_VERBS = [
+  "review", "draft", "research", "analyz", "prepar", "attend", "correspond",
+  "negotiate", "revise", "edit", "call", "confer", "meet", "discuss",
+  "investigat", "file", "respond", "communicat", "strateg",
+];
+
+// Generic single-verb descriptions with no specifics.
+const VAGUE_PATTERNS = [
+  /^(reviewed?|drafted?|researched?|analyzed?|prepared?|attended?|discussed?|met|called?|conferr?ed?)\s*\.?$/i,
+  /^(review|draft|research|analysis|preparation|call|meeting)\s*\.?$/i,
+];
+
 /**
- * Evaluate billing_increments and timing rules with pure arithmetic.
- * No AI call — violations are unambiguous if the rule has a parseable threshold.
+ * Evaluate rules deterministically — no AI, no network.
+ *
+ * For rules with a `mechCheck` field (set at ingest by Haiku): use the structured
+ * parameters directly.
+ * For legacy rules without `mechCheck` (billing_increments / timing categories):
+ * fall back to regex parsing for backward compatibility.
  */
 function checkMechanically(entry: TimeEntry, rules: OcgRule[]): OcgSuggestion[] {
   const violations: OcgSuggestion[] = [];
-  const entryMs = entry.durationMs;
-  const entryAgeMs =
-    entry.startedAt instanceof Date ? Date.now() - entry.startedAt.getTime() : 0;
+  const entryHours = entry.durationMs / 3_600_000;
+  const entryAgeMs = entry.startedAt instanceof Date
+    ? Date.now() - entry.startedAt.getTime() : 0;
+  const desc = (entry.description ?? "").trim();
 
   for (const rule of rules) {
+    // ── Structured mechCheck (preferred path) ──────────────────────────────
+    if (rule.mechCheck) {
+      const { type, value } = rule.mechCheck;
+
+      if (type === "min_duration_hours" && value !== undefined && entry.durationMs > 0) {
+        if (entryHours < value) {
+          violations.push(makeSuggestion(rule, entry,
+            `Duration ${entryHours.toFixed(2)}h is below required minimum ${value}h`));
+        }
+
+      } else if (type === "max_duration_hours" && value !== undefined && entry.durationMs > 0) {
+        if (entryHours > value) {
+          violations.push(makeSuggestion(rule, entry,
+            `Duration ${entryHours.toFixed(2)}h exceeds maximum ${value}h per entry`));
+        }
+
+      } else if (type === "max_age_days" && value !== undefined && entryAgeMs > 0) {
+        const ageDays = entryAgeMs / 86_400_000;
+        if (ageDays > value) {
+          violations.push(makeSuggestion(rule, entry,
+            `Entry is ${Math.floor(ageDays)} days old; must be submitted within ${value} days`));
+        }
+
+      } else if (type === "max_billing_rate_usd" && value !== undefined) {
+        if (entry.billingRate !== undefined && entry.billingRate > value) {
+          violations.push(makeSuggestion(rule, entry,
+            `Billing rate $${entry.billingRate}/hr exceeds client cap of $${value}/hr`));
+        }
+
+      } else if (type === "min_description_chars" && value !== undefined) {
+        if (desc.length < value) {
+          violations.push(makeSuggestion(rule, entry,
+            `Description is ${desc.length} characters; minimum required is ${value}`));
+        }
+
+      } else if (type === "no_block_billing") {
+        const matched = TASK_VERBS.filter((v) => desc.toLowerCase().includes(v));
+        if (matched.length >= 3) {
+          violations.push(makeSuggestion(rule, entry,
+            `Description appears to combine ${matched.length} distinct tasks — potential block billing`));
+        }
+
+      } else if (type === "no_vague_entries") {
+        if (VAGUE_PATTERNS.some((p) => p.test(desc))) {
+          violations.push(makeSuggestion(rule, entry,
+            `Description "${desc}" is too vague — must specify the subject matter`));
+        }
+
+      } else if (type === "require_matter_reference") {
+        if (!entry.matterNumber) {
+          violations.push(makeSuggestion(rule, entry,
+            `Entry is missing a matter number reference`));
+        }
+      }
+      continue;
+    }
+
+    // ── Legacy fallback — regex parsing for rules ingested before mechCheck ──
     const t = rule.text.toLowerCase();
 
-    if (rule.category === "billing_increments" && entryMs > 0) {
-      // Parse minimum: "0.1 hour", "6-minute minimum", "one-tenth hour", "1/10 hour"
+    if (rule.category === "billing_increments" && entry.durationMs > 0) {
       let minHours = 0;
       const hMatch = t.match(/(\d+(?:\.\d+)?)\s*-?\s*h(?:ou)?r/);
       const mMatch = t.match(/(\d+(?:\.\d+)?)\s*-?\s*min(?:ute)?/);
       if (hMatch) minHours = parseFloat(hMatch[1]);
       else if (mMatch) minHours = parseFloat(mMatch[1]) / 60;
       else if (t.includes("one-tenth") || t.includes("1/10")) minHours = 0.1;
-
-      if (minHours > 0) {
-        const actualHours = entryMs / 3_600_000;
-        if (actualHours < minHours) {
-          violations.push(
-            makeSuggestion(
-              rule,
-              entry,
-              `Duration ${actualHours.toFixed(2)}h below required minimum ${minHours}h`,
-            ),
-          );
-        }
+      if (minHours > 0 && entryHours < minHours) {
+        violations.push(makeSuggestion(rule, entry,
+          `Duration ${entryHours.toFixed(2)}h below required minimum ${minHours}h`));
       }
     }
 
     if (rule.category === "timing" && entryAgeMs > 0) {
-      // Parse max age: "within 30 days", "no older than 60 days"
       const dMatch = t.match(/(\d+)\s*days?/);
       if (dMatch) {
         const maxDays = parseInt(dMatch[1]);
         const ageDays = entryAgeMs / 86_400_000;
         if (ageDays > maxDays) {
-          violations.push(
-            makeSuggestion(
-              rule,
-              entry,
-              `Entry is ${Math.floor(ageDays)} days old; must be submitted within ${maxDays} days`,
-            ),
-          );
+          violations.push(makeSuggestion(rule, entry,
+            `Entry is ${Math.floor(ageDays)} days old; must be submitted within ${maxDays} days`));
         }
       }
     }
@@ -161,6 +221,16 @@ Return a JSON array of rules. Each rule must have:
   - category: one of billing_increments | entry_specificity | prohibited_tasks | rate_limits | staffing | description_format | timing | other
   - text: the rule in plain English, concise (max 200 chars)
   - severity: "hard" (billing violation, will be rejected) or "soft" (style preference)
+  - mechCheck: (optional) a structured object for rules that can be checked with pure math or string analysis:
+      {"type":"min_duration_hours","value":0.1}      bill in minimum 0.1-hour (6-min) increments
+      {"type":"max_duration_hours","value":8}        no single entry may exceed 8 hours
+      {"type":"max_age_days","value":30}             entries must be submitted within 30 days
+      {"type":"max_billing_rate_usd","value":750}    rate cap $750/hr
+      {"type":"min_description_chars","value":50}    description must be at least 50 characters
+      {"type":"no_block_billing"}                    no combining multiple tasks in one entry
+      {"type":"no_vague_entries"}                    description must be specific, not just "review" or "call"
+      {"type":"require_matter_reference"}            entry must reference a matter number
+    Omit mechCheck entirely for rules that require judgment or context to evaluate.
 
 Focus only on billing and time-entry rules. Ignore unrelated provisions.
 
@@ -211,16 +281,33 @@ Respond with ONLY a valid JSON array, no markdown, no prose:
       "rate_limits", "staffing", "description_format", "timing", "other",
     ]);
 
+    const validMechCheckTypes = new Set<import("../types.js").OcgMechCheckType>([
+      "min_duration_hours", "max_duration_hours", "max_age_days",
+      "max_billing_rate_usd", "min_description_chars",
+      "no_block_billing", "no_vague_entries", "require_matter_reference",
+    ]);
+
     const rules: OcgRule[] = rawRules
       .filter((r) => r && typeof r.text === "string" && r.text.trim())
-      .map((r) => ({
-        id: randomUUID(),
-        category: validCategories.has(r.category as OcgRuleCategory)
-          ? (r.category as OcgRuleCategory)
-          : "other",
-        text: String(r.text).trim().slice(0, 200),
-        severity: r.severity === "hard" ? "hard" : "soft",
-      }));
+      .map((r) => {
+        const raw = r as Record<string, unknown>;
+        const rule: OcgRule = {
+          id: randomUUID(),
+          category: validCategories.has(r.category as OcgRuleCategory)
+            ? (r.category as OcgRuleCategory)
+            : "other",
+          text: String(r.text).trim().slice(0, 200),
+          severity: r.severity === "hard" ? "hard" : "soft",
+        };
+        const mc = raw.mechCheck as { type?: string; value?: unknown } | undefined;
+        if (mc && typeof mc.type === "string" && validMechCheckTypes.has(mc.type as import("../types.js").OcgMechCheckType)) {
+          rule.mechCheck = {
+            type: mc.type as import("../types.js").OcgMechCheckType,
+            ...(typeof mc.value === "number" ? { value: mc.value } : {}),
+          };
+        }
+        return rule;
+      });
 
     const now = new Date();
     const existing = this.docs.get(clientId);
@@ -259,9 +346,13 @@ Respond with ONLY a valid JSON array, no markdown, no prose:
   async checkEntry(entry: TimeEntry, ocgDoc: OcgDocument): Promise<OcgSuggestion[]> {
     if (!ocgDoc.rules.length) return [];
 
-    const MECHANICAL: OcgRuleCategory[] = ["billing_increments", "timing"];
-    const mechanicalRules = ocgDoc.rules.filter((r) => MECHANICAL.includes(r.category));
-    const semanticRules = ocgDoc.rules.filter((r) => !MECHANICAL.includes(r.category));
+    // Mechanical: rules with an explicit mechCheck + legacy billing_increments/timing rules
+    const LEGACY_MECHANICAL: OcgRuleCategory[] = ["billing_increments", "timing"];
+    const mechanicalRules = ocgDoc.rules.filter(
+      (r) => r.mechCheck || LEGACY_MECHANICAL.includes(r.category),
+    );
+    const mechanicalIds = new Set(mechanicalRules.map((r) => r.id));
+    const semanticRules = ocgDoc.rules.filter((r) => !mechanicalIds.has(r.id));
 
     const mechanical = checkMechanically(entry, mechanicalRules);
     const semantic = await this.checkSemantically(entry, semanticRules);
