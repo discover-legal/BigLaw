@@ -22,21 +22,9 @@
 
 import type { AuditEntry, AuditSink } from "../index.js";
 import { logger } from "../../logger.js";
+import { validateSinkUrl } from "./utils.js";
 
 const MAX_RESPONSE_BYTES = 64 * 1024;
-
-function validateUrl(raw: string): URL {
-  let u: URL;
-  try {
-    u = new URL(raw);
-  } catch {
-    throw new Error(`WebhookSink: invalid URL: ${raw}`);
-  }
-  if (u.protocol !== "http:" && u.protocol !== "https:") {
-    throw new Error(`WebhookSink: only http/https allowed, got ${u.protocol}`);
-  }
-  return u;
-}
 
 export class WebhookSink implements AuditSink {
   readonly name = "webhook";
@@ -45,7 +33,7 @@ export class WebhookSink implements AuditSink {
   private readonly headers: Record<string, string>;
 
   constructor(url: string, token?: string) {
-    const validated = validateUrl(url);
+    const validated = validateSinkUrl(url, "WebhookSink");
     this.url = validated.href;
     this.headers = {
       "Content-Type": "application/json",

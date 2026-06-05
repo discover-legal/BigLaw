@@ -1082,6 +1082,12 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
     const { id, matterNumber } = req.params as { id: string; matterNumber: string };
     const { budgetUsd, thresholds } = req.body as { budgetUsd: number; thresholds?: number[] };
     if (!budgetUsd || budgetUsd <= 0) return reply.status(400).send({ error: "budgetUsd must be positive" });
+    if (thresholds !== undefined && (
+      !Array.isArray(thresholds) ||
+      !thresholds.every((t) => Number.isFinite(t) && t > 0 && t <= 1)
+    )) {
+      return reply.status(400).send({ error: "thresholds must be an array of numbers between 0 (exclusive) and 1 (inclusive)" });
+    }
     const matter = orchestrator.clients.setMatterBudget(id, matterNumber, budgetUsd, thresholds);
     if (!matter) return reply.status(404).send({ error: "Client or matter not found" });
     return matter;
@@ -1117,7 +1123,7 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
       reply.raw.write(`data: ${JSON.stringify(alert)}\n\n`);
     };
     orchestrator.budgetMonitor.on("alert", send);
-    req.socket.on("close", () => orchestrator.budgetMonitor.off("alert", send));
+    req.raw.on("close", () => orchestrator.budgetMonitor.off("alert", send));
   });
 
   // ── Admin settings (presentation mode, DyTopo depth, debate, DocuSeal) ──────
@@ -1316,9 +1322,10 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
       to: to ? new Date(to) : undefined,
     }).filter((e) => e.endedAt);
     const invoice = invoiceNumber || `${matterNumber ?? clientNumber}-${new Date().toISOString().slice(0, 10)}`;
-    const ledes = exportLedes1998B(entries, { invoiceNumber: invoice, lawFirmId: "Big Michael" });
+    const ledes = exportLedes1998B(entries, { invoiceNumber: invoice });
     reply.header("Content-Type", "application/edi-x12");
-    reply.header("Content-Disposition", `attachment; filename="${invoice}.ledes"`);
+    const safeFilename = invoice.replace(/[^\w\-\.]/g, "_");
+    reply.header("Content-Disposition", `attachment; filename="${safeFilename}.ledes"`);
     return ledes;
   });
 

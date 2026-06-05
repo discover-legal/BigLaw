@@ -62,14 +62,24 @@ const FALLBACK = { taskCode: "L190", activityCode: "A110" };
 const VALID_TASK = new Set(TASK_CODES.map((c) => c.slice(0, 4)));
 const VALID_ACTIVITY = new Set(ACTIVITY_CODES.map((c) => c.slice(0, 4)));
 
+const MAX_DESC_CHARS = 2_000;
+
+function sanitizeDesc(s: string): string {
+  return s
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "")
+    .slice(0, MAX_DESC_CHARS);
+}
+
 export async function classifyUtbms(
   description: string,
   event: string,
 ): Promise<{ taskCode: string; activityCode: string }> {
+  const safeDesc = sanitizeDesc(description);
+  const safeEvent = sanitizeDesc(event);
   const prompt =
     `Classify this legal time entry with exactly one UTBMS task code and one activity code. ` +
     `Reply with JSON only: {"taskCode": "LXXX", "activityCode": "AXXX"}.\n\n` +
-    `Description: ${description}\nEvent type: ${event}\n\n` +
+    `Description: ${safeDesc}\nEvent type: ${safeEvent}\n\n` +
     `Task codes:\n${TASK_CODES.join("\n")}\n\n` +
     `Activity codes:\n${ACTIVITY_CODES.join("\n")}`;
 

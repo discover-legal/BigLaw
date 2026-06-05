@@ -9,7 +9,6 @@ import type { TimeEntry } from "../types.js";
 
 export interface LedesOptions {
   invoiceNumber: string;
-  lawFirmId: string;
 }
 
 const CRLF = "\r\n";
@@ -26,8 +25,8 @@ function fmt2(n: number): string {
 }
 
 function sanitizeField(s: string): string {
-  // Pipe is the LEDES field delimiter; replace with space to prevent injection.
-  return s.replace(/\|/g, " ").slice(0, 200);
+  // Strip pipe (field delimiter) and CRLF/LF (row delimiter) to prevent injection.
+  return s.replace(/\|/g, " ").replace(/[\r\n]/g, " ").slice(0, 200);
 }
 
 export function exportLedes1998B(entries: TimeEntry[], opts: LedesOptions): string {
@@ -50,17 +49,19 @@ export function exportLedes1998B(entries: TimeEntry[], opts: LedesOptions): stri
     "TIMEKEEPER_NAME|LINE_ITEM_REVIEWED_BY_CODE|LINE_ITEM_BUDGET_CODE|" +
     "PEER_REVIEW_BY_CODE|TIMEKEEPER_CLASSIFICATION[]";
 
+  const invoiceNum = sanitizeField(opts.invoiceNumber);
+
   const rows = entries.map((e, i) => {
     const units = fmt2(e.billingUnits * 0.1);
     const rate  = fmt2(e.billingRate ?? 0);
     const billed = fmt2(e.billingAmountUsd ?? 0);
     const desc  = sanitizeField(e.description);
-    const tkId  = e.profileId ?? e.agentId ?? "";
+    const tkId  = sanitizeField(e.profileId ?? e.agentId ?? "");
     const tkName = sanitizeField(e.profileName ?? e.agentName ?? "");
     const tkClass = e.agentId ? "AI" : "TK";
 
     return (
-      `${today}|${opts.invoiceNumber}|${e.clientNumber ?? ""}|${e.matterNumber ?? ""}|` +
+      `${today}|${invoiceNum}|${e.clientNumber ?? ""}|${e.matterNumber ?? ""}|` +
       `${fmt2(invoiceTotal)}|${billingStart}|${billingEnd}||${i + 1}|F|` +
       `${units}|${rate}|${billed}|${desc}|${e.utbmsTaskCode ?? ""}||` +
       `${e.utbmsActivityCode ?? ""}|${tkId}|${tkName}|||` +

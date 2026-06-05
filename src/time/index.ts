@@ -39,6 +39,7 @@ const SIX_MIN_MS = 6 * 60 * 1000; // 360 000 ms
 export class TimeStore {
   private readonly path = Config.persistence.timeFile;
   private entries: TimeEntry[] = [];
+  private writeChain = Promise.resolve();
 
   async init(): Promise<void> {
     try {
@@ -206,8 +207,13 @@ export class TimeStore {
     return [header, ...lines].join("\r\n");
   }
 
-  /** Atomic write — tmp file then rename. */
-  async persist(): Promise<void> {
+  /** Atomic write — serialized through writeChain to prevent concurrent writes. */
+  persist(): Promise<void> {
+    this.writeChain = this.writeChain.then(() => this.doWrite()).catch(() => this.doWrite());
+    return this.writeChain;
+  }
+
+  private async doWrite(): Promise<void> {
     const tmp = `${this.path}.tmp`;
     const serialisable = this.entries.map((e) => ({
       ...e,

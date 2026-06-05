@@ -84,36 +84,37 @@ function checkMechanically(entry: TimeEntry, rules: OcgRule[]): OcgSuggestion[] 
     // ── Structured mechCheck (preferred path) ──────────────────────────────
     if (rule.mechCheck) {
       const { type, value } = rule.mechCheck;
+      const safeValue = value !== undefined && Number.isFinite(value) && value > 0 ? value : undefined;
 
-      if (type === "min_duration_hours" && value !== undefined && entry.durationMs > 0) {
-        if (entryHours < value) {
+      if (type === "min_duration_hours" && safeValue !== undefined && entry.durationMs > 0) {
+        if (entryHours < safeValue) {
           violations.push(makeSuggestion(rule, entry,
-            `Duration ${entryHours.toFixed(2)}h is below required minimum ${value}h`));
+            `Duration ${entryHours.toFixed(2)}h is below required minimum ${safeValue}h`));
         }
 
-      } else if (type === "max_duration_hours" && value !== undefined && entry.durationMs > 0) {
-        if (entryHours > value) {
+      } else if (type === "max_duration_hours" && safeValue !== undefined && entry.durationMs > 0) {
+        if (entryHours > safeValue) {
           violations.push(makeSuggestion(rule, entry,
-            `Duration ${entryHours.toFixed(2)}h exceeds maximum ${value}h per entry`));
+            `Duration ${entryHours.toFixed(2)}h exceeds maximum ${safeValue}h per entry`));
         }
 
-      } else if (type === "max_age_days" && value !== undefined && entryAgeMs > 0) {
+      } else if (type === "max_age_days" && safeValue !== undefined && entryAgeMs > 0) {
         const ageDays = entryAgeMs / 86_400_000;
-        if (ageDays > value) {
+        if (ageDays > safeValue) {
           violations.push(makeSuggestion(rule, entry,
-            `Entry is ${Math.floor(ageDays)} days old; must be submitted within ${value} days`));
+            `Entry is ${Math.floor(ageDays)} days old; must be submitted within ${safeValue} days`));
         }
 
-      } else if (type === "max_billing_rate_usd" && value !== undefined) {
-        if (entry.billingRate !== undefined && entry.billingRate > value) {
+      } else if (type === "max_billing_rate_usd" && safeValue !== undefined) {
+        if (entry.billingRate !== undefined && entry.billingRate > safeValue) {
           violations.push(makeSuggestion(rule, entry,
-            `Billing rate $${entry.billingRate}/hr exceeds client cap of $${value}/hr`));
+            `Billing rate $${entry.billingRate}/hr exceeds client cap of $${safeValue}/hr`));
         }
 
-      } else if (type === "min_description_chars" && value !== undefined) {
-        if (desc.length < value) {
+      } else if (type === "min_description_chars" && safeValue !== undefined) {
+        if (desc.length < safeValue) {
           violations.push(makeSuggestion(rule, entry,
-            `Description is ${desc.length} characters; minimum required is ${value}`));
+            `Description is ${desc.length} characters; minimum required is ${safeValue}`));
         }
 
       } else if (type === "no_block_billing") {

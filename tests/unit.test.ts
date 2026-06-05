@@ -24,6 +24,8 @@ import { detectNosLegal } from "../src/services/classifier.js";
 import { Config } from "../src/config.js";
 import { ClioClient, clioClient } from "../src/integrations/clio.js";
 import { CLIO_TOOLS, CLIO_TOOL_NAMES } from "../src/tools/clio.js";
+import { validateSinkUrl } from "../src/audit/sinks/utils.js";
+import { exportLedes1998B } from "../src/billing/ledes.js";
 
 // ─── Model routing: complexity heuristic ────────────────────────────────────
 
@@ -677,4 +679,72 @@ test("clio_list_matters: default limit is 50 when not specified", async () => {
   await tool.execute({});
   fn.mock.restore();
   assert.equal(capturedOpts!.limit, 50, "default limit must be 50");
+});
+
+// ─── Security: audit sink SSRF guard ────────────────────────────────────────
+
+test("validateSinkUrl: accepts a public https URL", () => {
+  const u = validateSinkUrl("https://logs.example.com:9200", "TestSink");
+  assert.equal(u.hostname, "logs.example.com");
+});
+
+test("validateSinkUrl: rejects file:// protocol", () => {
+  assert.throws(() => validateSinkUrl("file:///etc/passwd", "TestSink"), /only http\/https/);
+});
+
+test("validateSinkUrl: rejects loopback 127.0.0.1", () => {
+  assert.throws(() => validateSinkUrl("http://127.0.0.1:9200", "TestSink"), /private\/loopback/);
+});
+
+test("validateSinkUrl: rejects localhost hostname", () => {
+  assert.throws(() => validateSinkUrl("http://localhost:9200", "TestSink"), /private\/loopback/);
+});
+
+test("validateSinkUrl: rejects RFC-1918 10.x", () => {
+  assert.throws(() => validateSinkUrl("https://10.0.0.1/opensearch", "TestSink"), /private\/loopback/);
+});
+
+test("validateSinkUrl: rejects RFC-1918 172.16-31", () => {
+  assert.throws(() => validateSinkUrl("https://172.20.5.1/splunk", "TestSink"), /private\/loopback/);
+});
+
+test("validateSinkUrl: rejects link-local 169.254.x", () => {
+  assert.throws(() => validateSinkUrl("http://169.254.169.254/latest/meta-data/", "TestSink"), /private\/loopback/);
+});
+
+test("validateSinkUrl: rejects IPv6 loopback ::1", () => {
+  assert.throws(() => validateSinkUrl("http://[::1]:9200", "TestSink"), /private\/loopback/);
+});
+
+// ─── Security: LEDES 1998B field injection guard ─────────────────────────────
+
+test("exportLedes1998B: pipe in invoiceNumber cannot create extra LEDES fields", () => {
+  const entry = {
+    id: "e1", event: "task_execution" as const,
+    startedAt: new Date("2026-01-01T10:00:00Z"),
+    endedAt: new Date("2026-01-01T10:30:00Z"),
+    durationMs: 1_800_000, billingUnits: 5,
+    description: "Review contract",
+  } as import("../src/types.js").TimeEntry;
+  const output = exportLedes1998B([entry], { invoiceNumber: "INV-001|INJECTED" });
+  const rows = output.split("\r\n");
+  const dataRow = rows[2];
+  assert.ok(dataRow !== undefined, "should have a data row");
+  // After sanitisation the pipe is replaced with a space; "INJECTED" must not be
+  // an isolated column (i.e. no field should equal the injected token verbatim).
+  assert.ok(!dataRow.split("|").includes("INJECTED"), "pipe must not create an isolated LEDES field");
+});
+
+test("exportLedes1998B: CRLF in description does not create extra LEDES rows", () => {
+  const entry = {
+    id: "e2", event: "task_execution" as const,
+    startedAt: new Date("2026-01-01T10:00:00Z"),
+    endedAt: new Date("2026-01-01T11:00:00Z"),
+    durationMs: 3_600_000, billingUnits: 10,
+    description: "Draft motion\r\nExtra line",
+  } as import("../src/types.js").TimeEntry;
+  const output = exportLedes1998B([entry], { invoiceNumber: "INV-002" });
+  // LEDES1998B[] + header + 1 data row + trailing empty = 4 parts when split on CRLF
+  const nonEmptyLines = output.split("\r\n").filter(Boolean);
+  assert.equal(nonEmptyLines.length, 3, "CRLF in description must not produce extra rows");
 });

@@ -22,23 +22,12 @@
 
 import type { AuditEntry, AuditSink } from "../index.js";
 import { logger } from "../../logger.js";
+import { validateSinkUrl } from "./utils.js";
 
 const BATCH_SIZE = 100;
 const FLUSH_INTERVAL_MS = 1_000;
 const MAX_RESPONSE_BYTES = 64 * 1024;
-
-function validateUrl(raw: string): URL {
-  let u: URL;
-  try {
-    u = new URL(raw);
-  } catch {
-    throw new Error(`OpenSearchSink: invalid URL: ${raw}`);
-  }
-  if (u.protocol !== "http:" && u.protocol !== "https:") {
-    throw new Error(`OpenSearchSink: only http/https allowed, got ${u.protocol}`);
-  }
-  return u;
-}
+const MAX_BACKLOG = BATCH_SIZE * 10;
 
 function monthlyIndex(): string {
   const now = new Date();
@@ -57,7 +46,7 @@ export class OpenSearchSink implements AuditSink {
   private flushing = false;
 
   constructor(url: string, apiKey: string) {
-    const validated = validateUrl(url);
+    const validated = validateSinkUrl(url, "OpenSearchSink");
     this.baseUrl = validated.origin;
     this.headers = {
       "Content-Type": "application/x-ndjson",
@@ -99,9 +88,9 @@ export class OpenSearchSink implements AuditSink {
     if (this.batch.length === 0) return;
     this.flushing = true;
     const toFlush = this.batch.splice(0, this.batch.length);
+    let failed = false;
     try {
       const index = monthlyIndex();
-      // Build NDJSON bulk body: action + source pairs
       const lines: string[] = [];
       for (const entry of toFlush) {
         lines.push(JSON.stringify({ index: { _index: index, _id: entry.id } }));
@@ -120,15 +109,19 @@ export class OpenSearchSink implements AuditSink {
         });
         clearTimeout(timeout);
         if (!res.ok) {
-          // Read and cap response for diagnostics — never log the auth header
           const text = await readCapped(res, MAX_RESPONSE_BYTES);
           logger.warn("OpenSearchSink: bulk index error", { status: res.status, body: text.slice(0, 500) });
+          failed = true;
         }
       } catch (err) {
         clearTimeout(timeout);
         logger.warn("OpenSearchSink: fetch error", { error: (err as Error).message });
+        failed = true;
       }
     } finally {
+      if (failed && this.batch.length < MAX_BACKLOG) {
+        this.batch.unshift(...toFlush);
+      }
       this.flushing = false;
     }
   }

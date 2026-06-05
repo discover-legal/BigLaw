@@ -22,24 +22,13 @@
 
 import type { AuditEntry, AuditSink } from "../index.js";
 import { logger } from "../../logger.js";
+import { validateSinkUrl } from "./utils.js";
 
 const BATCH_SIZE = 100;
 const FLUSH_INTERVAL_MS = 1_000;
 const MAX_RESPONSE_BYTES = 64 * 1024;
+const MAX_BACKLOG = BATCH_SIZE * 10;
 const SOURCE_TYPE = "big_michael:audit";
-
-function validateUrl(raw: string): URL {
-  let u: URL;
-  try {
-    u = new URL(raw);
-  } catch {
-    throw new Error(`SplunkSink: invalid URL: ${raw}`);
-  }
-  if (u.protocol !== "http:" && u.protocol !== "https:") {
-    throw new Error(`SplunkSink: only http/https allowed, got ${u.protocol}`);
-  }
-  return u;
-}
 
 interface HecEvent {
   time: number;
@@ -57,7 +46,7 @@ export class SplunkSink implements AuditSink {
   private flushing = false;
 
   constructor(url: string, token: string, index?: string) {
-    const validated = validateUrl(url);
+    const validated = validateSinkUrl(url, "SplunkSink");
     // Splunk HEC endpoint
     this.hecUrl = `${validated.origin}/services/collector/event`;
     this.headers = {
@@ -100,6 +89,7 @@ export class SplunkSink implements AuditSink {
     if (this.batch.length === 0) return;
     this.flushing = true;
     const toFlush = this.batch.splice(0, this.batch.length);
+    let failed = false;
     try {
       // HEC accepts a sequence of concatenated JSON objects (not an array)
       const body = toFlush
@@ -124,12 +114,17 @@ export class SplunkSink implements AuditSink {
         if (!res.ok) {
           const text = await readCapped(res, MAX_RESPONSE_BYTES);
           logger.warn("SplunkSink: HEC error", { status: res.status, body: text.slice(0, 500) });
+          failed = true;
         }
       } catch (err) {
         clearTimeout(timeout);
         logger.warn("SplunkSink: fetch error", { error: (err as Error).message });
+        failed = true;
       }
     } finally {
+      if (failed && this.batch.length < MAX_BACKLOG) {
+        this.batch.unshift(...toFlush);
+      }
       this.flushing = false;
     }
   }

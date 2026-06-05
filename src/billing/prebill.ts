@@ -13,6 +13,7 @@ import type { PreBill, PreBillEntry, PreBillStatus, TimeEntry } from "../types.j
 export class PreBillStore {
   private readonly path: string;
   private bills: PreBill[] = [];
+  private writeChain = Promise.resolve();
 
   constructor(path: string) {
     this.path = path;
@@ -121,7 +122,12 @@ export class PreBillStore {
     return bill;
   }
 
-  private async persist(): Promise<void> {
+  private persist(): Promise<void> {
+    this.writeChain = this.writeChain.then(() => this.doWrite()).catch(() => this.doWrite());
+    return this.writeChain;
+  }
+
+  private async doWrite(): Promise<void> {
     const tmp = `${this.path}.tmp`;
     await writeFile(tmp, JSON.stringify(this.bills, null, 2), "utf8");
     await rename(tmp, this.path);
