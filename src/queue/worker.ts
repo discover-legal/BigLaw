@@ -38,7 +38,7 @@ import { jobQueue } from "./index.js";
 import type { SummarizeTimeEntryPayload, OcgBulkCheckPayload } from "./index.js";
 import { Config } from "../config.js";
 import { logger } from "../logger.js";
-import { auditLogger } from "../audit/index.js";
+import { auditLogger, ACTOR_SYSTEM } from "../audit/index.js";
 import { costStore, calcCostUsd } from "../cost/index.js";
 import type { Orchestrator } from "../orchestrator.js";
 import type { OcgDocument } from "../types.js";
@@ -249,6 +249,7 @@ export function startWorker(orch: Orchestrator): () => void {
             await jobQueue.ack(job.id);
             auditLogger.write({
               event: "job.completed",
+              actorId: ACTOR_SYSTEM,
               durationMs: Date.now() - jobStart,
               data: { jobId: job.id, type: job.type, retries: job.retries },
             });
@@ -259,6 +260,7 @@ export function startWorker(orch: Orchestrator): () => void {
             const isDead = job.retries + 1 >= job.maxRetries;
             auditLogger.write({
               event: isDead ? "job.dead_letter" : "job.failed",
+              actorId: ACTOR_SYSTEM,
               durationMs: Date.now() - jobStart,
               data: { jobId: job.id, type: job.type, retries: job.retries + 1, error: msg },
             });

@@ -21,7 +21,7 @@ import { Config } from "../config.js";
 import { logger } from "../logger.js";
 import { selectModel } from "../routing/model.js";
 import { getProvider, resolveModelId, isOllamaModel, isLocalModel } from "../providers/index.js";
-import { auditLogger } from "../audit/index.js";
+import { auditLogger, ACTOR_SYSTEM } from "../audit/index.js";
 import { costStore, calcCostUsd, calcWattHours } from "../cost/index.js";
 import type {
   Finding,
@@ -101,7 +101,7 @@ export async function runDebate(finding: Finding, challengerAgentId: string, tas
   if (!Config.debate.adversarialEnabled) return finding;
 
   const debateModel = selectModel({ taskType: "debate" });
-  auditLogger.write({ event: "debate.start", data: { findingId: finding.id, model: debateModel } });
+  auditLogger.write({ event: "debate.start", actorId: ACTOR_SYSTEM, data: { findingId: finding.id, model: debateModel } });
 
   // Cap finding content before LLM insertion to prevent oversized findings from
   // consuming entire context windows or being used as prompt injection payloads.
@@ -117,7 +117,7 @@ export async function runDebate(finding: Finding, challengerAgentId: string, tas
 
   if (challengeText.includes("NO_CHALLENGE")) {
     logger.debug("Finding unchallenged", { findingId: finding.id });
-    auditLogger.write({ event: "debate.resolved", data: { findingId: finding.id, verdict: "NO_CHALLENGE" } });
+    auditLogger.write({ event: "debate.resolved", actorId: ACTOR_SYSTEM, data: { findingId: finding.id, verdict: "NO_CHALLENGE" } });
     return finding;
   }
 
@@ -146,7 +146,7 @@ export async function runDebate(finding: Finding, challengerAgentId: string, tas
 
   finding.resolved = true;
   logger.info("Debate resolved", { findingId: finding.id, verdict: resolution.verdict });
-  auditLogger.write({ event: "debate.resolved", data: { findingId: finding.id, verdict: resolution.verdict } });
+  auditLogger.write({ event: "debate.resolved", actorId: ACTOR_SYSTEM, data: { findingId: finding.id, verdict: resolution.verdict } });
 
   return finding;
 }
@@ -171,7 +171,7 @@ export async function runVerificationPipeline(finding: Finding, taskId?: string)
   const checksToRun = VERIFICATION_CHECKS.slice(0, passes);
 
   const verifyModel = selectModel({ taskType: "extraction" }); // Haiku — fast, many parallel calls
-  auditLogger.write({ event: "verification.start", data: { findingId: finding.id, checks: checksToRun.length, model: verifyModel } });
+  auditLogger.write({ event: "verification.start", actorId: ACTOR_SYSTEM, data: { findingId: finding.id, checks: checksToRun.length, model: verifyModel } });
 
   // Same 20k cap as the debate path — prevents each of the N parallel
   // verification calls from receiving an unbounded finding payload.
@@ -204,7 +204,7 @@ export async function runVerificationPipeline(finding: Finding, taskId?: string)
 
   const failedChecks = checks.filter((c) => !c.passed).map((c) => c.name);
   logger.info("Verification complete", { findingId: finding.id, passed, failedChecks });
-  auditLogger.write({ event: "verification.complete", data: { findingId: finding.id, passed, failedChecks } });
+  auditLogger.write({ event: "verification.complete", actorId: ACTOR_SYSTEM, data: { findingId: finding.id, passed, failedChecks } });
 
   return result;
 }

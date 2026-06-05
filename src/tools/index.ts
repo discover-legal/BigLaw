@@ -23,7 +23,7 @@ import { logger } from "../logger.js";
 import { getProvider, resolveModelId } from "../providers/index.js";
 import type { ProviderTool } from "../providers/index.js";
 import { selectModel } from "../routing/model.js";
-import { auditLogger } from "../audit/index.js";
+import { auditLogger, ACTOR_SYSTEM } from "../audit/index.js";
 import type { KnowledgeStore } from "../knowledge/index.js";
 import type { InterRoundMemoryStore } from "../memory/index.js";
 import { pdfExtractTextTool, pdfExtractTablesTool, pdfGenerateTool, pdfOcrTool } from "./pdf.js";
@@ -373,12 +373,13 @@ export class ToolRegistry {
     const tool = this.tools.get(name);
     if (!tool) throw new Error(`Unknown tool: ${name}`);
     const start = Date.now();
-    auditLogger.write({ event: "tool.call", taskId: ctx.taskId, data: { tool: name, input } });
+    auditLogger.write({ event: "tool.call", actorId: ACTOR_SYSTEM, taskId: ctx.taskId, data: { tool: name, input } });
     logger.debug("Tool executing", { tool: name });
     try {
       const result = await tool.execute(input, ctx);
       auditLogger.write({
         event: "tool.result",
+        actorId: ACTOR_SYSTEM,
         taskId: ctx.taskId,
         durationMs: Date.now() - start,
         data: { tool: name, ok: true },
@@ -387,6 +388,7 @@ export class ToolRegistry {
     } catch (err) {
       auditLogger.write({
         event: "tool.result",
+        actorId: ACTOR_SYSTEM,
         taskId: ctx.taskId,
         durationMs: Date.now() - start,
         data: { tool: name, ok: false, error: (err as Error).message },

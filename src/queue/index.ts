@@ -26,7 +26,7 @@ import { readFile, writeFile, rename, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { Config } from "../config.js";
 import { logger } from "../logger.js";
-import { auditLogger } from "../audit/index.js";
+import { auditLogger, ACTOR_SYSTEM } from "../audit/index.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -127,7 +127,7 @@ export class InMemoryQueue implements QueueAdapter {
     this.jobs.push(job);
     this.persist();
     logger.debug("Job enqueued", { jobId: job.id, type });
-    auditLogger.write({ event: "job.enqueued", data: { jobId: job.id, type } });
+    auditLogger.write({ event: "job.enqueued", actorId: ACTOR_SYSTEM, data: { jobId: job.id, type } });
     return job;
   }
 

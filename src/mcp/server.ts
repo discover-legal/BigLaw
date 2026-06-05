@@ -311,6 +311,11 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
     return readSessionCookie(req);
   };
 
+  // Resolve the actor ID for audit events. LOCAL_PARTNER.profileId when auth
+  // is disabled; authenticated profileId when auth is enabled; "anonymous" if
+  // a request somehow arrives with no session (should not happen on protected routes).
+  const actorOf = (req: FastifyRequest): string => getUser(req)?.profileId ?? "anonymous";
+
   // Optional shared-secret auth. When API_KEY is set, every request except the
   // health check must present it as `x-api-key`. This is defence-in-depth for
   // anyone who runs the API off loopback; on 127.0.0.1 it can be left unset.
@@ -454,7 +459,7 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
       : [];
     auditLogger.write({
       event: "document.ingested",
-      actorId: getUser(req)?.profileId,
+      actorId: actorOf(req),
       data: { docId, title: body.title, practiceArea, detectedClientNumber: detectedClient?.clientNumber },
     });
     return reply.status(201).send({
@@ -511,7 +516,7 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
       : [];
     auditLogger.write({
       event: "document.uploaded",
-      actorId: getUser(req)?.profileId,
+      actorId: actorOf(req),
       data: { docId: id, title, filename, practiceArea, detectedClientNumber: detectedClient?.clientNumber },
     });
     return reply.status(201).send({
@@ -654,7 +659,7 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
       });
       auditLogger.write({
         event: "profile.created",
-        actorId: getUser(req)?.profileId,
+        actorId: actorOf(req),
         data: { profileId: profile.id, email: profile.email, role: profile.role },
       });
       return reply.status(201).send(profile);
@@ -682,7 +687,7 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
       const updated = await orchestrator.profiles.update(id, patch as Record<string, never>);
       auditLogger.write({
         event: "profile.updated",
-        actorId: user?.profileId,
+        actorId: actorOf(req),
         data: { profileId: id, fields: Object.keys(patch) },
       });
       return updated;
@@ -699,7 +704,7 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
       if (ok) {
         auditLogger.write({
           event: "profile.deleted",
-          actorId: getUser(req)?.profileId,
+          actorId: actorOf(req),
           data: { profileId: id },
         });
       }
@@ -762,7 +767,7 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
       const tone = await analyzeTone(samples, profile.name, sourceType, id);
       const updated = await orchestrator.profiles.updateTone(id, tone);
       logger.info("Tone profile generated", { profileId: id, sampleCount: samples.length, sourceType });
-      auditLogger.write({ event: "profile.tone.imported", data: { profileId: id, sampleCount: samples.length, sourceType, importedBy: user?.profileId } });
+      auditLogger.write({ event: "profile.tone.imported", actorId: actorOf(req), data: { profileId: id, sampleCount: samples.length, sourceType } });
       return reply.status(200).send({ toneProfile: updated.toneProfile, samplesAnalysed: samples.length, sourceType });
     } catch (err) {
       logger.error("Tone analysis failed", { profileId: id, error: (err as Error).message });
@@ -813,7 +818,7 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
       const tone = await analyzeTone(posts, profile.name, "linkedin_export", id);
       const updated = await orchestrator.profiles.updateTone(id, tone);
       logger.info("Tone profile generated from LinkedIn export", { profileId: id, sampleCount: posts.length });
-      auditLogger.write({ event: "profile.tone.imported", data: { profileId: id, sampleCount: posts.length, sourceType: "linkedin_export", importedBy: user?.profileId } });
+      auditLogger.write({ event: "profile.tone.imported", actorId: actorOf(req), data: { profileId: id, sampleCount: posts.length, sourceType: "linkedin_export" } });
       return reply.status(200).send({ toneProfile: updated.toneProfile, samplesAnalysed: posts.length, sourceType: "linkedin_export" });
     } catch (err) {
       logger.error("Tone analysis failed", { profileId: id, error: (err as Error).message });
@@ -830,7 +835,7 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
     }
     try {
       const updated = await orchestrator.profiles.clearTone(id);
-      auditLogger.write({ event: "profile.tone.cleared", data: { profileId: id, clearedBy: user?.profileId } });
+      auditLogger.write({ event: "profile.tone.cleared", actorId: actorOf(req), data: { profileId: id } });
       return reply.status(200).send(updated);
     } catch (err) {
       return reply.status(404).send({ error: (err as Error).message });
@@ -851,7 +856,7 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
       const client = await orchestrator.clients.create(body);
       auditLogger.write({
         event: "client.created",
-        actorId: getUser(req)?.profileId,
+        actorId: actorOf(req),
         data: { clientId: client.id, clientNumber: client.clientNumber, name: client.name },
       });
       return reply.status(201).send({ ...client, conflict });
@@ -867,7 +872,7 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
       const updated = await orchestrator.clients.update(id, req.body as Record<string, never>);
       auditLogger.write({
         event: "client.updated",
-        actorId: getUser(req)?.profileId,
+        actorId: actorOf(req),
         data: { clientId: id, fields: Object.keys(req.body as object) },
       });
       return updated;
@@ -884,7 +889,7 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
       if (ok) {
         auditLogger.write({
           event: "client.deleted",
-          actorId: getUser(req)?.profileId,
+          actorId: actorOf(req),
           data: { clientId: id },
         });
       }
@@ -902,7 +907,7 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
       const matter = await orchestrator.clients.addMatter(id, body);
       auditLogger.write({
         event: "matter.added",
-        actorId: getUser(req)?.profileId,
+        actorId: actorOf(req),
         data: { clientId: id, matterNumber: matter.matterNumber, practiceArea: matter.practiceArea },
       });
       return reply.status(201).send(matter);
@@ -919,7 +924,7 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
       if (ok) {
         auditLogger.write({
           event: "matter.removed",
-          actorId: getUser(req)?.profileId,
+          actorId: actorOf(req),
           data: { clientId: id, matterNumber },
         });
       }
@@ -984,7 +989,7 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
     try {
       const ocgDoc = await ocgStore.ingest(id, title, text);
       await orchestrator.clients.setOcg(id, ocgDoc.id);
-      auditLogger.write({ event: "client.ocg.ingested", data: { clientId: id, ruleCount: ocgDoc.rules.length, ingestedBy: getUser(req)?.profileId } });
+      auditLogger.write({ event: "client.ocg.ingested", actorId: actorOf(req), data: { clientId: id, ruleCount: ocgDoc.rules.length } });
       return reply.status(200).send({ ocg: ocgDoc, ruleCount: ocgDoc.rules.length });
     } catch (err) {
       logger.error("OCG ingestion failed", { clientId: id, error: (err as Error).message });
@@ -1008,7 +1013,7 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
     try {
       await ocgStore.remove(id);
       await orchestrator.clients.clearOcg(id);
-      auditLogger.write({ event: "client.ocg.deleted", data: { clientId: id, deletedBy: getUser(req)?.profileId } });
+      auditLogger.write({ event: "client.ocg.deleted", actorId: actorOf(req), data: { clientId: id } });
       return reply.status(200).send({ ok: true });
     } catch (err) {
       return reply.status(404).send({ error: (err as Error).message });
@@ -1048,7 +1053,7 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
       if (!samples.length) return reply.status(422).send({ error: "No text samples found in uploaded file" });
       const guide = await analyzeClientVoice(samples, id);
       await orchestrator.clients.setVoiceGuide(id, guide);
-      auditLogger.write({ event: "client.voiceguide.imported", data: { clientId: id, sampleCount: samples.length, importedBy: getUser(req)?.profileId } });
+      auditLogger.write({ event: "client.voiceguide.imported", actorId: actorOf(req), data: { clientId: id, sampleCount: samples.length } });
       return reply.status(200).send({ voiceGuide: guide, samplesAnalysed: samples.length });
     } catch (err) {
       logger.error("Client voice analysis failed", { clientId: id, error: (err as Error).message });
@@ -1062,7 +1067,7 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
     const { id } = req.params as { id: string };
     try {
       await orchestrator.clients.clearVoiceGuide(id);
-      auditLogger.write({ event: "client.voiceguide.cleared", data: { clientId: id, clearedBy: getUser(req)?.profileId } });
+      auditLogger.write({ event: "client.voiceguide.cleared", actorId: actorOf(req), data: { clientId: id } });
       return reply.status(200).send({ ok: true });
     } catch (err) {
       return reply.status(404).send({ error: (err as Error).message });
@@ -1083,7 +1088,7 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
       const updated = await orchestrator.settings.update(req.body as Record<string, unknown>);
       auditLogger.write({
         event: "settings.updated",
-        actorId: getUser(req)?.profileId,
+        actorId: actorOf(req),
         data: { fields: Object.keys(req.body as object) },
       });
       return updated;

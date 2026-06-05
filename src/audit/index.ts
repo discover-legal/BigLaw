@@ -25,6 +25,14 @@ import { createHash } from "crypto";
 import { appendFile } from "fs/promises";
 import { Config } from "../config.js";
 
+// ─── Actor constants ──────────────────────────────────────────────────────────
+
+/** Actor for events originating from internal orchestration (no human request). */
+export const ACTOR_SYSTEM = "system";
+
+/** Actor for unauthenticated inbound requests (auth failure before identity is known). */
+export const ACTOR_ANONYMOUS = "anonymous";
+
 // ─── Event types ─────────────────────────────────────────────────────────────
 
 export type AuditEventType =
@@ -112,8 +120,9 @@ export interface AuditEntry {
   event: AuditEventType;
   /** SHA-256 of the previous entry's JSON string. "genesis" for the first entry. */
   prevHash: string;
-  /** Profile ID (or "local" / "api-key") of the actor who triggered this event. */
-  actorId?: string;
+  /** Who triggered this event. ProfileId for humans; ACTOR_SYSTEM for internal events;
+   *  ACTOR_ANONYMOUS for requests that arrived before identity could be established. */
+  actorId: string;
   taskId?: string;
   agentId?: string;
   model?: string;
@@ -158,7 +167,7 @@ export class AuditLogger {
    * Record an audit event. Fire-and-forget — never throws; disk write errors
    * are silently swallowed so a log failure never kills a task.
    */
-  write(partial: Omit<AuditEntry, "id" | "ts" | "prevHash">): void {
+  write(partial: Omit<AuditEntry, "id" | "ts" | "prevHash"> & { actorId: string }): void {
     const entry: AuditEntry = {
       id: crypto.randomUUID(),
       ts: new Date().toISOString(),

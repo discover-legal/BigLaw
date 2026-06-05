@@ -25,7 +25,7 @@ import { Config } from "./config.js";
 import { logger } from "./logger.js";
 import { getProvider, resolveModelId } from "./providers/index.js";
 import { selectModel, shouldUseThinking } from "./routing/model.js";
-import { auditLogger } from "./audit/index.js";
+import { auditLogger, ACTOR_SYSTEM } from "./audit/index.js";
 import { AgentRegistry } from "./agents/registry.js";
 import { Agent } from "./agents/base.js";
 import { ROOT_ORCHESTRATOR, ALL_AGENT_DEFINITIONS } from "./agents/definitions.js";
@@ -266,7 +266,7 @@ export class Orchestrator {
 
     this.tasks.set(task.id, task);
     logger.info("Task submitted", { taskId: task.id, workflow: params.workflowType });
-    auditLogger.write({ event: "task.created", taskId: task.id, data: { description: params.description, workflowType: params.workflowType } });
+    auditLogger.write({ event: "task.created", actorId: task.createdByProfileId ?? ACTOR_SYSTEM, taskId: task.id, data: { description: params.description, workflowType: params.workflowType } });
     await this.persistTasks();
 
     // Run asynchronously — callers poll getTask() for status
@@ -287,7 +287,7 @@ export class Orchestrator {
         }
       }
       this.emit(task.id, "failed", { error: err.message });
-      auditLogger.write({ event: "task.failed", taskId: task.id, data: { error: err.message } });
+      auditLogger.write({ event: "task.failed", actorId: ACTOR_SYSTEM, taskId: task.id, data: { error: err.message } });
     });
 
     return task;
@@ -311,7 +311,7 @@ export class Orchestrator {
       this.memory.deleteByTaskId(taskId).catch((err) =>
         logger.warn("Failed to delete task memory from Qdrant", { taskId, error: (err as Error).message }),
       );
-      auditLogger.write({ event: "task.deleted", taskId, data: {} });
+      auditLogger.write({ event: "task.deleted", actorId: ACTOR_SYSTEM, taskId, data: {} });
       logger.info("Task deleted", { taskId });
     }
     return existed;
@@ -325,7 +325,7 @@ export class Orchestrator {
     task.assignedLawyerIds = valid;
     task.updatedAt = new Date();
     this.persistTasks().catch((err) => logger.warn("Failed to persist tasks", { error: err.message }));
-    auditLogger.write({ event: "task.assigned", taskId, data: { lawyerIds: valid } });
+    auditLogger.write({ event: "task.assigned", actorId: ACTOR_SYSTEM, taskId, data: { lawyerIds: valid } });
     return task;
   }
 
@@ -358,7 +358,7 @@ export class Orchestrator {
     gate.reviewerNote = note;
     gate.reviewedAt = new Date();
     task.updatedAt = new Date();
-    auditLogger.write({ event: "gate.approved", taskId, data: { gateId, note } });
+    auditLogger.write({ event: "gate.approved", actorId: reviewerProfileId ?? ACTOR_SYSTEM, taskId, data: { gateId, note } });
 
     // Record a gate_review time entry for the reviewing lawyer.
     if (reviewerProfileId) {
@@ -399,7 +399,7 @@ export class Orchestrator {
     gate.reviewedAt = new Date();
     task.findings = task.findings.filter((f) => f.id !== gate.findingId);
     task.updatedAt = new Date();
-    auditLogger.write({ event: "gate.rejected", taskId, data: { gateId, reason } });
+    auditLogger.write({ event: "gate.rejected", actorId: reviewerProfileId ?? ACTOR_SYSTEM, taskId, data: { gateId, reason } });
 
     // Record a gate_review time entry for the reviewing lawyer.
     if (reviewerProfileId) {
@@ -559,7 +559,7 @@ export class Orchestrator {
   private async runTask(task: Task): Promise<void> {
     task.status = "running";
     this.emit(task.id, "started", { taskId: task.id, workflowType: task.workflowType });
-    auditLogger.write({ event: "task.started", taskId: task.id, data: { workflowType: task.workflowType } });
+    auditLogger.write({ event: "task.started", actorId: ACTOR_SYSTEM, taskId: task.id, data: { workflowType: task.workflowType } });
     const phases = PHASE_SEQUENCES[task.workflowType];
 
     for (const phase of phases) {
@@ -616,7 +616,7 @@ export class Orchestrator {
     );
 
     this.emit(task.id, "complete", { findings: task.findings.length, output: task.output?.slice(0, 200) });
-    auditLogger.write({ event: "task.complete", taskId: task.id, data: { findings: task.findings.length } });
+    auditLogger.write({ event: "task.complete", actorId: ACTOR_SYSTEM, taskId: task.id, data: { findings: task.findings.length } });
     this.persistTasks().catch((err) => logger.warn("Failed to persist tasks", { error: err.message }));
 
     logger.info("Task complete", { taskId: task.id, findings: task.findings.length });
@@ -672,7 +672,7 @@ export class Orchestrator {
 
   private async runPhase(task: Task, phase: TaskPhase): Promise<void> {
     logger.info("Phase starting", { taskId: task.id, phase });
-    auditLogger.write({ event: "phase.start", taskId: task.id, data: { phase } });
+    auditLogger.write({ event: "phase.start", actorId: ACTOR_SYSTEM, taskId: task.id, data: { phase } });
 
     // Root orchestrator generates the round goal for this phase
     const goal = await this.generateRoundGoal(task, phase);
@@ -721,7 +721,7 @@ export class Orchestrator {
       findings: debated.length,
       gates: gates.length,
     });
-    auditLogger.write({ event: "phase.complete", taskId: task.id, data: { phase, findings: debated.length, gates: gates.length } });
+    auditLogger.write({ event: "phase.complete", actorId: ACTOR_SYSTEM, taskId: task.id, data: { phase, findings: debated.length, gates: gates.length } });
     logger.info("Phase complete", {
       taskId: task.id,
       phase,
