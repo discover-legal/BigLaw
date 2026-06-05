@@ -373,7 +373,7 @@ export const Config = {
   },
   regulatory: {
     enabled: optional("REG_PULSE_ENABLED", "false") === "true",
-    pollIntervalMs: parseInt(optional("REG_PULSE_INTERVAL_MS", String(60 * 60 * 1_000))),
+    pollIntervalMs: parseInt(optional("REG_PULSE_INTERVAL_MS", String(24 * 60 * 60 * 1_000))),
     tavilyApiKey: process.env.TAVILY_API_KEY ?? "",
   },
 } as const;
