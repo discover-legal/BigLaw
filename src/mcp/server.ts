@@ -35,7 +35,7 @@ import { logger } from "../logger.js";
 import { auditLogger } from "../audit/index.js";
 import { Orchestrator } from "../orchestrator.js";
 import type { LegalBackend } from "../backend/index.js";
-import type { WorkflowType, SessionUser } from "../types.js";
+import type { WorkflowType, SessionUser, DocketAlert } from "../types.js";
 import { MODE_COLORS, MODE_CAPABILITIES } from "../types.js";
 import { LOCAL_PARTNER, filterVisible, canViewTask, isPartner, resolveMode } from "../auth/index.js";
 import { registerAuthRoutes, readSessionCookie } from "../auth/oauth.js";
@@ -943,6 +943,57 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
     const trimmed = (typeof name === "string" ? name : "").trim().slice(0, 500);
     if (!trimmed) return reply.status(400).send({ error: "name is required" });
     return orchestrator.clients.checkConflict(trimmed);
+  });
+
+  // ── Docket monitoring ─────────────────────────────────────────────────────────
+
+  app.post("/dockets/watch", async (req, reply) => {
+    if (!isPartner(getUser(req))) return reply.status(403).send({ error: "Partner role required" });
+    const { matterNumber, docketNumber, court, caseName } = req.body as {
+      matterNumber: string; docketNumber: string; court: string; caseName?: string;
+    };
+    if (!matterNumber || !docketNumber || !court) return reply.status(400).send({ error: "matterNumber, docketNumber, court required" });
+    try {
+      const entry = orchestrator.docketMonitor.watch(matterNumber, docketNumber, court, caseName);
+      return reply.status(201).send(entry);
+    } catch (err) {
+      return reply.status(400).send({ error: (err as Error).message });
+    }
+  });
+
+  app.delete("/dockets/watch/:matterNumber", async (req, reply) => {
+    if (!isPartner(getUser(req))) return reply.status(403).send({ error: "Partner role required" });
+    const { matterNumber } = req.params as { matterNumber: string };
+    const removed = orchestrator.docketMonitor.unwatch(matterNumber);
+    if (!removed) return reply.status(404).send({ error: "No watched docket for this matter" });
+    return { ok: true };
+  });
+
+  app.get("/dockets", async (req, reply) => {
+    if (!isPartner(getUser(req))) return reply.status(403).send({ error: "Partner role required" });
+    return orchestrator.docketMonitor.list();
+  });
+
+  app.post("/dockets/check-now", async (req, reply) => {
+    if (!isPartner(getUser(req))) return reply.status(403).send({ error: "Partner role required" });
+    if (!orchestrator.docketMonitor.isEnabled()) return reply.status(503).send({ error: "Docket monitoring not enabled (set DOCKET_MONITOR_ENABLED=true)" });
+    await orchestrator.docketMonitor.checkAll();
+    return { ok: true, watching: orchestrator.docketMonitor.list().length };
+  });
+
+  const MAX_DOCKET_SSE_LISTENERS = 20;
+  app.get("/dockets/alerts/stream", async (req, reply) => {
+    if (!isPartner(getUser(req))) return reply.status(403).send({ error: "Partner role required" });
+    if (orchestrator.docketMonitor.listenerCount("alert") >= MAX_DOCKET_SSE_LISTENERS) {
+      return reply.status(429).send({ error: "Too many concurrent docket streams" });
+    }
+    reply.raw.setHeader("Content-Type", "text/event-stream");
+    reply.raw.setHeader("Cache-Control", "no-cache");
+    reply.raw.setHeader("Connection", "keep-alive");
+    reply.raw.flushHeaders();
+    const send = (alert: DocketAlert) => reply.raw.write(`data: ${JSON.stringify(alert)}\n\n`);
+    orchestrator.docketMonitor.on("alert", send);
+    req.raw.on("close", () => orchestrator.docketMonitor.off("alert", send));
   });
 
   // ── Outside Counsel Guidelines ────────────────────────────────────────────────

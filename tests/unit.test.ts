@@ -6,7 +6,8 @@
 
 import { test, mock } from "node:test";
 import assert from "node:assert/strict";
-import { resolve } from "node:path";
+import { resolve, join as pathJoin } from "node:path";
+import * as os from "node:os";
 
 import { estimateComplexity, shouldUseThinking } from "../src/routing/model.js";
 import { LavernAdapter, LavernWorkflowAdapter, fromMikeOSSWorkflow, fromExternalConfig, instantiateTemplate, sanitizePromptContent } from "../src/adapters/lavern.js";
@@ -28,6 +29,7 @@ import { CLIO_TOOLS, CLIO_TOOL_NAMES } from "../src/tools/clio.js";
 import { validateSinkUrl } from "../src/audit/sinks/utils.js";
 import { exportLedes1998B } from "../src/billing/ledes.js";
 import { markdownToHtml } from "../src/reports/status.js";
+import { DocketMonitor } from "../src/dockets/monitor.js";
 
 // ─── Model routing: complexity heuristic ────────────────────────────────────
 
@@ -1050,4 +1052,49 @@ test("markdownToHtml: HTML special chars are escaped", () => {
   assert.ok(!html.includes("<b>"), "Raw <b> must be escaped");
   assert.ok(html.includes("&lt;b&gt;"), "< and > must be escaped to &lt;&gt;");
   assert.ok(html.includes("&amp;"), "& must be escaped to &amp;");
+});
+
+// ─── DocketMonitor ────────────────────────────────────────────────────────────
+
+test("DocketMonitor: isEnabled() false by default", () => {
+  const orig = process.env["DOCKET_MONITOR_ENABLED"];
+  delete process.env["DOCKET_MONITOR_ENABLED"];
+  const monitor = new DocketMonitor(pathJoin(os.tmpdir(), `dockets-test-${Date.now()}.json`));
+  assert.equal(monitor.isEnabled(), false, "isEnabled() must be false when DOCKET_MONITOR_ENABLED is not set");
+  if (orig !== undefined) process.env["DOCKET_MONITOR_ENABLED"] = orig;
+});
+
+test("DocketMonitor: watch() validates docket number format", () => {
+  const monitor = new DocketMonitor(pathJoin(os.tmpdir(), `dockets-test-${Date.now()}.json`));
+  assert.throws(
+    () => monitor.watch("M-001", "bad docket number!", "nysd"),
+    /docketNumber/,
+    "must reject docket numbers containing invalid characters",
+  );
+});
+
+test("DocketMonitor: watch() rejects invalid court slug", () => {
+  const monitor = new DocketMonitor(pathJoin(os.tmpdir(), `dockets-test-${Date.now()}.json`));
+  assert.throws(
+    () => monitor.watch("M-001", "1:23-cv-01234", "INVALID-SLUG"),
+    /court/,
+    "must reject court slugs that contain uppercase or special characters",
+  );
+});
+
+test("DocketMonitor: unwatch() returns false for unknown matter", () => {
+  const monitor = new DocketMonitor(pathJoin(os.tmpdir(), `dockets-test-${Date.now()}.json`));
+  const result = monitor.unwatch("no-such-matter");
+  assert.equal(result, false, "unwatch() must return false for an unregistered matter");
+});
+
+test("DocketMonitor: list() returns all watched dockets", () => {
+  const monitor = new DocketMonitor(pathJoin(os.tmpdir(), `dockets-test-${Date.now()}.json`));
+  monitor.watch("M-101", "1:23-cv-01234", "nysd", "Acme v Beta");
+  monitor.watch("M-102", "2:24-cv-05678", "dcd");
+  const list = monitor.list();
+  assert.equal(list.length, 2, "list() must return both watched dockets");
+  const numbers = list.map((d) => d.matterNumber);
+  assert.ok(numbers.includes("M-101"), "must include M-101");
+  assert.ok(numbers.includes("M-102"), "must include M-102");
 });

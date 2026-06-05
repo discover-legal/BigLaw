@@ -376,4 +376,10 @@ export const Config = {
     pollIntervalMs: parseInt(optional("REG_PULSE_INTERVAL_MS", String(7 * 24 * 60 * 60 * 1_000))),
     tavilyApiKey: process.env.TAVILY_API_KEY ?? "",
   },
+
+  dockets: {
+    enabled: optional("DOCKET_MONITOR_ENABLED", "false") === "true",
+    pollIntervalMs: parseInt(optional("DOCKET_POLL_INTERVAL_MS", String(4 * 60 * 60 * 1_000))), // 4 hours
+    file: optional("DOCKETS_FILE", "./data/dockets.json"),
+  },
 } as const;

@@ -38,6 +38,7 @@ import { PreBillStore } from "./billing/prebill.js";
 import { agentLearning } from "./learning/index.js";
 import { DyTopoEngine } from "./dytopo/engine.js";
 import type { AgentBillingCtx } from "./dytopo/engine.js";
+import { DocketMonitor } from "./dockets/monitor.js";
 import { InterRoundMemoryStore } from "./memory/index.js";
 import { KnowledgeStore } from "./knowledge/index.js";
 import { TemplateStore } from "./templates/store.js";
@@ -135,6 +136,7 @@ export class Orchestrator {
   readonly preBills: PreBillStore;
   readonly conflictGraph: ConflictGraph;
   readonly regPulse = new RegPulseMonitor();
+  readonly docketMonitor: DocketMonitor;
 
   private readonly tasks: Map<string, Task> = new Map();
   private readonly gateEmitter = new EventEmitter();
@@ -156,6 +158,7 @@ export class Orchestrator {
     this.budgetPredictor = new BudgetPredictor();
     this.preBills = new PreBillStore(Config.persistence.preBillsFile);
     this.conflictGraph = new ConflictGraph();
+    this.docketMonitor = new DocketMonitor(Config.dockets.file);
   }
 
   async init(): Promise<void> {
@@ -208,6 +211,14 @@ export class Orchestrator {
     if (this.regPulse.isEnabled()) {
       this.regPulse.start(() => this.listTasks());
       logger.info("RegPulseMonitor started");
+    }
+
+    // Start docket monitoring if enabled
+    await this.docketMonitor.init();
+    this.docketMonitor.setKnowledgeStore(this.knowledge);
+    if (this.docketMonitor.isEnabled()) {
+      this.docketMonitor.start();
+      logger.info("DocketMonitor started");
     }
 
     logger.info("Orchestrator ready");

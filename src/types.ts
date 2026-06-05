@@ -760,3 +760,16 @@ export interface StatusReport {
   wordCount: number;
   costUsd: number;
 }
+
+// ── Docket monitoring ───────────────────────────────────────────────────────
+export interface DocketAlert {
+  id: string;
+  matterNumber: string;
+  docketNumber: string;
+  court: string;
+  caseName: string;
+  newFilingCount: number;
+  latestFilingDate: string;
+  courtListenerUrl: string;
+  detectedAt: string;
+}
