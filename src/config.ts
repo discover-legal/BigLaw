@@ -357,6 +357,49 @@ export const Config = {
     enabled: Boolean(process.env.TWENTY_API_KEY && process.env.TWENTY_API_URL),
   },
 
+  // ── Email intelligence ────────────────────────────────────────────────────
+  //
+  // Two email providers are supported for the briefing swarm spoke:
+  //
+  //  Microsoft Graph (Exchange / Office 365 — most law firms):
+  //    App-only auth (recommended for server-side): register an Azure AD
+  //    app with Mail.Read application permission, then:
+  //      GRAPH_TENANT_ID      — your Azure AD / Entra tenant ID
+  //      GRAPH_CLIENT_ID      — app (client) ID
+  //      GRAPH_CLIENT_SECRET  — client secret value
+  //      GRAPH_USER_EMAIL     — the mailbox to search (e.g. partner@firm.com)
+  //    Or supply a pre-obtained bearer token directly (dev / single-user):
+  //      GRAPH_ACCESS_TOKEN   — optional: used as-is if set (overrides app-only)
+  //
+  //  Gmail (Google Workspace — boutique / tech-forward firms):
+  //    Service-account auth (recommended):
+  //      GMAIL_SA_KEY_JSON    — contents of the service-account key.json (base-64 or raw JSON)
+  //      GMAIL_USER_EMAIL     — the mailbox to impersonate
+  //    Or supply a pre-obtained OAuth access token directly:
+  //      GMAIL_ACCESS_TOKEN   — optional: used as-is if set (overrides service-account)
+  //
+  // Both providers are optional. If neither is configured the email spoke
+  // returns empty intel silently — no errors, no noise.
+  email: {
+    graph: {
+      tenantId: process.env.GRAPH_TENANT_ID ?? "",
+      clientId: process.env.GRAPH_CLIENT_ID ?? "",
+      clientSecret: process.env.GRAPH_CLIENT_SECRET ?? "",
+      userEmail: process.env.GRAPH_USER_EMAIL ?? "",
+      accessToken: process.env.GRAPH_ACCESS_TOKEN ?? "",
+      enabled: Boolean(
+        process.env.GRAPH_ACCESS_TOKEN ||
+        (process.env.GRAPH_TENANT_ID && process.env.GRAPH_CLIENT_ID && process.env.GRAPH_CLIENT_SECRET),
+      ),
+    },
+    gmail: {
+      saKeyJson: process.env.GMAIL_SA_KEY_JSON ?? "",
+      userEmail: process.env.GMAIL_USER_EMAIL ?? "",
+      accessToken: process.env.GMAIL_ACCESS_TOKEN ?? "",
+      enabled: Boolean(process.env.GMAIL_ACCESS_TOKEN || process.env.GMAIL_SA_KEY_JSON),
+    },
+  },
+
   // Infisical — open-source secrets manager (https://infisical.com)
   // Self-host: docker compose up (see https://infisical.com/docs/self-hosting)
   // These values are bootstrap-only; all other secrets are fetched from Infisical at startup.

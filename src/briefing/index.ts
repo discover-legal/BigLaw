@@ -44,6 +44,7 @@ import { logger } from "../logger.js";
 import { costStore, calcCostUsd } from "../cost/index.js";
 import { resolveModelId } from "../providers/index.js";
 import { mcpCall } from "../tools/connectors.js";
+import { searchGraphMail, searchGmail } from "../email/client.js";
 import type { Client, ClientMatter, Task, TimeEntry } from "../types.js";
 import type { KnowledgeStore } from "../knowledge/index.js";
 
@@ -77,6 +78,8 @@ export type IntelSource =
   | "slack"
   | "google_drive"
   | "box"
+  | "email_graph"
+  | "email_gmail"
   | "knowledge_store"
   | "internal_tasks"
   | "internal_time"
@@ -87,6 +90,7 @@ export type IntelCategory =
   | "billing"
   | "activity"
   | "correspondence"
+  | "email"
   | "document"
   | "relationship"
   | "regulatory"
@@ -212,6 +216,7 @@ export class BriefingEngine {
       this.runIManageSpoke(clientRecord),
       this.runSlackSpoke(clientRecord),
       this.runDriveBoxSpoke(clientRecord),
+      this.runEmailSpoke(clientRecord),
       this.runInternalSpoke(clientRecord, allTasks, timeEntries),
     ];
     if (opts.knowledge) {
@@ -461,6 +466,75 @@ export class BriefingEngine {
     return { source: "google_drive", items, durationMs: Date.now() - start };
   }
 
+  // ─── Spoke: Email (Graph + Gmail) ────────────────────────────────────────
+
+  private async runEmailSpoke(client: Client): Promise<SpokeResult> {
+    const start = Date.now();
+    const items: IntelItem[] = [];
+
+    const graphEnabled = Config.email.graph.enabled;
+    const gmailEnabled = Config.email.gmail.enabled;
+
+    if (!graphEnabled && !gmailEnabled) {
+      return { source: "email_graph", items: [], durationMs: 0 };
+    }
+
+    // Both providers fire in parallel; partial failure is fine
+    const [graphResults, gmailResults] = await Promise.allSettled([
+      graphEnabled ? searchGraphMail(client.name, { maxResults: 20, daysBack: 90 }) : Promise.resolve([]),
+      gmailEnabled ? searchGmail(client.name, { maxResults: 20, daysBack: 90 }) : Promise.resolve([]),
+    ]);
+
+    const toItems = (msgs: import("../email/client.js").EmailMessage[], source: IntelSource): IntelItem[] =>
+      msgs.map((m): IntelItem => ({
+        source,
+        category: "email",
+        eventAt: m.receivedAt,
+        matterNumber: m.matterRef,
+        headline: `${m.subject} — from ${m.from}`,
+        data: {
+          id: m.id,
+          subject: m.subject,
+          from: m.from,
+          receivedAt: m.receivedAt,
+          snippet: m.snippet,
+          hasAttachments: m.hasAttachments,
+          matterRef: m.matterRef,
+        },
+      }));
+
+    if (graphResults.status === "fulfilled") {
+      items.push(...toItems(graphResults.value, "email_graph"));
+    } else {
+      logger.warn("Email Graph spoke failed", { error: String(graphResults.reason) });
+    }
+
+    if (gmailResults.status === "fulfilled") {
+      items.push(...toItems(gmailResults.value, "email_gmail"));
+    } else {
+      logger.warn("Email Gmail spoke failed", { error: String(gmailResults.reason) });
+    }
+
+    // Sort all email items by date descending
+    items.sort((a, b) => {
+      const ta = a.eventAt ? new Date(a.eventAt).getTime() : 0;
+      const tb = b.eventAt ? new Date(b.eventAt).getTime() : 0;
+      return tb - ta;
+    });
+
+    const error = [
+      graphResults.status === "rejected" ? `Graph: ${String(graphResults.reason)}` : "",
+      gmailResults.status === "rejected" ? `Gmail: ${String(gmailResults.reason)}` : "",
+    ].filter(Boolean).join("; ") || undefined;
+
+    return {
+      source: "email_graph",
+      items,
+      durationMs: Date.now() - start,
+      error,
+    };
+  }
+
   // ─── Spoke: Knowledge store ───────────────────────────────────────────────
 
   private async runKnowledgeSpoke(
@@ -627,7 +701,20 @@ export class BriefingEngine {
     const correspondenceItems = chalkboard.byCategory("correspondence").slice(0, 3);
     for (const i of correspondenceItems) items.push(`Correspondence: ${i.headline}`);
 
-    return items.slice(0, 12);
+    // Surface recent email threads — most recent 3, trimmed
+    const emailItems = [
+      ...chalkboard.bySource("email_graph"),
+      ...chalkboard.bySource("email_gmail"),
+    ].sort((a, b) => {
+      const ta = a.eventAt ? new Date(a.eventAt).getTime() : 0;
+      const tb = b.eventAt ? new Date(b.eventAt).getTime() : 0;
+      return tb - ta;
+    }).slice(0, 3);
+    for (const e of emailItems) {
+      items.push(`Email [${e.eventAt?.slice(0, 10) ?? "?"}]: ${e.headline.slice(0, 100)}`);
+    }
+
+    return items.slice(0, 15);
   }
 
   // ─── Hub synthesis ────────────────────────────────────────────────────────
@@ -645,8 +732,21 @@ export class BriefingEngine {
     // Organise chalkboard items for the prompt
     const bySource = (src: IntelSource, limit = 8) =>
       chalkboard.bySource(src).slice(0, limit)
-        .map((i) => `  - [${i.category}] ${i.headline}`)
+        .map((i) => `  - [${i.category}${i.eventAt ? ` ${i.eventAt.slice(0, 10)}` : ""}] ${i.headline}`)
         .join("\n") || "  (none)";
+
+    // Email is merged across Graph + Gmail, sorted by date
+    const emailItems = [
+      ...chalkboard.bySource("email_graph"),
+      ...chalkboard.bySource("email_gmail"),
+    ].sort((a, b) => {
+      const ta = a.eventAt ? new Date(a.eventAt).getTime() : 0;
+      const tb = b.eventAt ? new Date(b.eventAt).getTime() : 0;
+      return tb - ta;
+    }).slice(0, 12);
+    const emailBlock = emailItems.length > 0
+      ? emailItems.map((i) => `  - [${i.eventAt?.slice(0, 10) ?? "?"}] ${i.headline}`).join("\n")
+      : "  (not configured or no results)";
 
     const matterLines = matters
       .map((m) =>
@@ -679,6 +779,8 @@ Clio:
 ${bySource("clio")}
 iManage:
 ${bySource("imanage")}
+Email (most recent first):
+${emailBlock}
 Slack:
 ${bySource("slack")}
 Documents (Drive/Box):
@@ -696,7 +798,8 @@ Write:
    ### Executive Summary
    ### Matter Status
    ### Billing Posture
-   ### Recent Correspondence & Activity  ← synthesise Clio + iManage + Slack
+   ### Recent Email Threads              ← synthesise Graph + Gmail, highlight open threads
+   ### Correspondence & Activity         ← synthesise Clio + iManage + Slack
    ### Documents in Play                 ← synthesise Drive/Box/iManage docs
    ### Regulatory / Industry Context     ← from knowledge store
    ### Open Items & Actions Required
