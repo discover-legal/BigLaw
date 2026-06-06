@@ -67,6 +67,7 @@ import { InvoiceValidator } from "./billing/invoice-validator.js";
 import { RedlineEngine } from "./redline/engine.js";
 import { HeadnoteEngine } from "./headnotes/engine.js";
 import { BriefingEngine } from "./briefing/index.js";
+import { PrecedentGenerator } from "./precedent/generator.js";
 import type {
   Task,
   WorkflowType,
@@ -154,6 +155,7 @@ export class Orchestrator {
   readonly redline = new RedlineEngine();
   readonly headnotes = new HeadnoteEngine();
   readonly briefing = new BriefingEngine();
+  readonly precedents = new PrecedentGenerator();
 
   private readonly tasks: Map<string, Task> = new Map();
   private readonly gateEmitter = new EventEmitter();

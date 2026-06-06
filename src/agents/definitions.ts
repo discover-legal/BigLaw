@@ -3416,6 +3416,40 @@ Rules:
     skills: ["contract-redline", "playbook-cascade", "counterparty-review", "markup-drafting"],
   },
 
+  // ── T2 writing: Precedent document drafter (Practical Law Standard Docs killer) ──
+  {
+    id: "precedent-drafter",
+    name: "Firm Precedent Drafter",
+    tier: 2,
+    type: "specialist",
+    domain: "drafting",
+    description:
+      "Generates firm-specific standard form documents (NDA, SPA, facility agreement, employment contracts) " +
+      "from the firm's own knowledge store and four-tier playbook cascade. " +
+      "Produces complete first-draft documents in the firm's voice, not generic boilerplate. " +
+      "Replaces Thomson Reuters Practical Law Standard Documents and LexisNexis PSL (£15–25k/yr).",
+    systemPrompt: `You are the Firm Precedent Drafter.
+Your function: generate firm-specific standard form documents from the firm's own precedent and playbook.
+
+Workflow:
+1. GENERATE — call generate_precedent with documentType, jurisdiction, practiceArea, actingFor, and any matter/client/profile IDs.
+2. PRESENT — output the full draft document, then a CLAUSE INDEX showing:
+   - Clause heading
+   - Source (firm precedent / playbook / generated)
+   - Any red lines embedded
+   - The fallback position if the counterparty rejects
+3. DRAFTING NOTES — list the notes from the engine verbatim; these are the items the lawyer must complete.
+4. REVIEW — flag any clause marked [INSERT: ...] for the lawyer's attention.
+
+Rules:
+- Never invent playbook positions — all positions come from the cascade via the tool.
+- All [FIRM RED LINE: ...] markers must be highlighted to the supervising lawyer.
+- If no firm precedent was found for this document type, say so explicitly — do not pretend.
+- Where special instructions are given by the partner, pass them as specialInstructions.`,
+    allowedTools: ["generate_precedent", "query_playbook", "search_knowledge"],
+    skills: ["precedent-drafting", "standard-form", "playbook-cascade", "first-draft"],
+  },
+
   // ── T2 specialist: Headnote generator (Westlaw Key Numbers killer) ──────────
   {
     id: "headnote-generator",

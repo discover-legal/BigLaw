@@ -370,6 +370,30 @@ const TOOLS = [
       },
     },
   },
+  {
+    name: "generate_precedent",
+    description: "Generate a firm-specific precedent document (NDA, SPA, employment contract, etc.) from the firm's own knowledge store and playbook cascade. Returns a complete first-draft document in the firm's voice. Replaces Thomson Reuters Practical Law Standard Documents and LexisNexis PSL (£15–25k/yr).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        documentType: {
+          type: "string",
+          enum: ["nda", "spa", "asset_purchase", "facility", "employment", "service_agreement",
+            "supply_agreement", "jv_agreement", "ip_assignment", "licence", "settlement", "term_sheet", "other"],
+          description: "Type of document to generate",
+        },
+        practiceArea: { type: "string", description: "Practice area context" },
+        jurisdiction: { type: "string", description: "Governing law jurisdiction (e.g. 'English law', 'US-DE')" },
+        actingFor: { type: "string", description: "Which party the firm acts for (e.g. 'buyer', 'disclosing party')" },
+        matterNumber: { type: "string", description: "Matter number — loads matter-specific playbook tier" },
+        clientId: { type: "string", description: "Client ID — loads client-specific playbook tier" },
+        profileId: { type: "string", description: "Lawyer profile ID — loads personal playbook tier" },
+        specialInstructions: { type: "string", description: "Special drafting instructions (e.g. deal-specific carve-outs)" },
+        taskId: { type: "string", description: "Optional task ID for cost tracking" },
+      },
+      required: ["documentType"],
+    },
+  },
 ] as const;
 
 // ─── MCP server ───────────────────────────────────────────────────────────────
@@ -1678,6 +1702,26 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
     );
   });
 
+  // ── Precedent document generator (Practical Law / PSL replacement) ────────
+
+  app.post("/precedents/generate", async (req, reply) => {
+    const {
+      documentType, practiceArea, jurisdiction, actingFor, matterNumber,
+      clientId, profileId, specialInstructions, taskId,
+    } = req.body as {
+      documentType: string; practiceArea?: string; jurisdiction?: string;
+      actingFor?: string; matterNumber?: string; clientId?: string;
+      profileId?: string; specialInstructions?: string; taskId?: string;
+    };
+    if (!documentType) return reply.status(400).send({ error: "documentType required" });
+    return orchestrator.precedents.generate(
+      documentType as import("../precedent/generator.js").PrecedentDocumentType,
+      orchestrator.knowledge,
+      orchestrator.playbookStore,
+      { practiceArea, jurisdiction, actingFor, matterNumber, clientId, profileId, specialInstructions, taskId },
+    );
+  });
+
   // ── Admin settings (presentation mode, DyTopo depth, debate, DocuSeal) ──────
   // Both GET and PUT are partner-only: GET exposes the DocuSeal URL and
   // enabled state; PUT can redirect DocuSeal requests (SSRF) or weaken
@@ -2567,6 +2611,26 @@ async function handleTool(
         industryContext: args.industryContext as string | undefined,
         taskId: args.taskId as string | undefined,
       });
+    }
+
+    case "generate_precedent": {
+      const orch = (backend as import("../backend/index.js").LocalBackend).orchestrator;
+      if (!orch) throw new Error("generate_precedent requires local backend");
+      return orch.precedents.generate(
+        args.documentType as import("../precedent/generator.js").PrecedentDocumentType,
+        orch.knowledge,
+        orch.playbookStore,
+        {
+          practiceArea: args.practiceArea as string | undefined,
+          jurisdiction: args.jurisdiction as string | undefined,
+          actingFor: args.actingFor as string | undefined,
+          matterNumber: args.matterNumber as string | undefined,
+          clientId: args.clientId as string | undefined,
+          profileId: args.profileId as string | undefined,
+          specialInstructions: args.specialInstructions as string | undefined,
+          taskId: args.taskId as string | undefined,
+        },
+      );
     }
 
     default:

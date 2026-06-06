@@ -49,7 +49,9 @@ export type CostContext =
   | "redline"          // RedlineEngine — automated playbook-driven contract markup
   | "headnote_extract" // HeadnoteEngine — Sonnet extraction pass
   | "headnote_meta"    // HeadnoteEngine — Haiku synthesis/meta pass
-  | "client_briefing"; // BriefingEngine — Sonnet pre-call partner briefing
+  | "client_briefing"  // BriefingEngine — Sonnet pre-call partner briefing
+  | "precedent_structure" // PrecedentGenerator — Haiku clause structure
+  | "precedent_draft"; // PrecedentGenerator — Opus document drafting
 
 export interface CostEntry {
   id: string;
