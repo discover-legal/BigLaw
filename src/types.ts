@@ -1045,6 +1045,10 @@ export interface ClientBriefing {
   relationshipNotes?: string;
   industryContext?: string;
   document: string;
+  /** All intel items gathered from the swarm's spoke agents */
+  chalkboard?: unknown[];
+  /** Per-spoke status summary */
+  spokeSummary?: Record<string, { items: number; durationMs: number; error?: string }>;
 }
 
 // ── Deadline calculator ─────────────────────────────────────────────────────

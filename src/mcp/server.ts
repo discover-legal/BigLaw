@@ -1698,7 +1698,7 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
     const allEntries = await orchestrator.time.list({});
     return orchestrator.briefing.generate(
       clientRecord, allTasks, allEntries as import("../types.js").TimeEntry[],
-      { briefingDate, industryContext, taskId },
+      { knowledge: orchestrator.knowledge, briefingDate, industryContext, taskId },
     );
   });
 
@@ -2607,6 +2607,7 @@ async function handleTool(
       const allTasks = orch.listTasks();
       const allEntries = await orch.time.list({});
       return orch.briefing.generate(clientRecord, allTasks, allEntries as import("../types.js").TimeEntry[], {
+        knowledge: orch.knowledge,
         briefingDate: args.briefingDate as string | undefined,
         industryContext: args.industryContext as string | undefined,
         taskId: args.taskId as string | undefined,

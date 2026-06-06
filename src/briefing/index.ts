@@ -2,23 +2,40 @@
 // Copyright (C) 2026 Discover Legal
 
 /**
- * Client Intelligence Briefing — pre-call / pre-meeting partner briefing pack.
+ * Client Intelligence Briefing — hub-and-spoke multi-agent swarm.
  *
- * Replaces Clio Grow (CRM), Clio Insights client reports, and the
- * 30-minute manual assembly partners do before every client call:
- * pulling billing history, open matters, recent activity, and
- * relationship contacts from three different screens.
+ * The classic partner-prep problem: a client file is scattered across
+ * 10 mailboxes, 3 DMs, 2 call notes, a Clio matter, an iManage workspace,
+ * a Slack channel, and a shared Drive folder. Nobody has the whole picture.
+ * The partner gets on the call having read one of those sources.
  *
- * Given a clientId (or clientNumber), produces a single structured
- * briefing in under 10 seconds — matter status, billing posture,
- * open items, relationship summary, and any regulatory/industry
- * context the firm's knowledge store surfaces.
+ * This engine solves it with a hub-and-spoke swarm:
+ *
+ *   Hub (Sonnet manager)
+ *     ├─ Clio Spoke       → matter list, billing, activities, notes, contacts
+ *     ├─ iManage Spoke    → emails, file notes, draft documents, correspondence
+ *     ├─ Slack Spoke      → client/matter channel messages, DMs
+ *     ├─ Drive/Box Spoke  → recently touched files
+ *     ├─ Knowledge Spoke  → regulatory/industry context from the knowledge store
+ *     └─ Internal Spoke   → Big Michael tasks, time entries, matter health
+ *
+ * Each spoke runs in parallel against its connector. Slow connectors don't
+ * block the briefing — they time out at 12 s and the hub synthesises what
+ * it has. Results flow up to a shared Chalkboard as typed Intel Items.
+ *
+ * Each spoke is itself a mini-manager: it queries its connector, parses the
+ * response into structured IntelItems, and writes them to the chalkboard.
+ * If a connector isn't configured, that spoke returns empty intel silently.
+ *
+ * The hub synthesises the full chalkboard into a single Markdown briefing —
+ * one source of truth assembled from every place the file lives.
  *
  * WHAT IT KILLS:
  *   Clio Grow / CRM — relationship management + pre-call prep
  *   Clio Insights client reports — billing + activity summaries
  *   Manual partner prep (30 min before every call)
  *   Relationship intelligence tools (ContactsLaw, Nexl, Introhive)
+ *   The eternal "where is the file status?" Slack DM to the associate
  */
 
 import Anthropic from "@anthropic-ai/sdk";
@@ -26,37 +43,112 @@ import { Config } from "../config.js";
 import { logger } from "../logger.js";
 import { costStore, calcCostUsd } from "../cost/index.js";
 import { resolveModelId } from "../providers/index.js";
+import { mcpCall } from "../tools/connectors.js";
 import type { Client, ClientMatter, Task, TimeEntry } from "../types.js";
+import type { KnowledgeStore } from "../knowledge/index.js";
 
 const SONNET_MODEL = "claude-sonnet-4-6";
+const SPOKE_TIMEOUT_MS = 12_000;
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+// ─── Chalkboard ───────────────────────────────────────────────────────────────
+
+/**
+ * A single piece of intelligence written by a spoke agent.
+ * Source-attributed so the hub can weight confidence and cite provenance.
+ */
+export interface IntelItem {
+  /** Which spoke contributed this item */
+  source: IntelSource;
+  /** Semantic category of the intel */
+  category: IntelCategory;
+  /** ISO timestamp of the underlying event (not the extraction time) */
+  eventAt?: string;
+  /** Matter or case reference this relates to */
+  matterNumber?: string;
+  /** Short headline — one sentence */
+  headline: string;
+  /** Structured data (connector-specific; varies by spoke) */
+  data: Record<string, unknown>;
+}
+
+export type IntelSource =
+  | "clio"
+  | "imanage"
+  | "slack"
+  | "google_drive"
+  | "box"
+  | "knowledge_store"
+  | "internal_tasks"
+  | "internal_time"
+  | "internal_health";
+
+export type IntelCategory =
+  | "matter_status"
+  | "billing"
+  | "activity"
+  | "correspondence"
+  | "document"
+  | "relationship"
+  | "regulatory"
+  | "risk"
+  | "deadline"
+  | "note";
+
+export class Chalkboard {
+  private readonly items: IntelItem[] = [];
+
+  write(item: IntelItem): void {
+    this.items.push(item);
+  }
+
+  writeMany(items: IntelItem[]): void {
+    this.items.push(...items);
+  }
+
+  read(): readonly IntelItem[] {
+    return this.items;
+  }
+
+  bySource(source: IntelSource): IntelItem[] {
+    return this.items.filter((i) => i.source === source);
+  }
+
+  byCategory(category: IntelCategory): IntelItem[] {
+    return this.items.filter((i) => i.category === category);
+  }
+
+  get size(): number {
+    return this.items.length;
+  }
+}
+
+// ─── Spoke types ──────────────────────────────────────────────────────────────
+
+interface SpokeResult {
+  source: IntelSource;
+  items: IntelItem[];
+  durationMs: number;
+  error?: string;
+}
+
+// ─── Types exported for API surface ──────────────────────────────────────────
 
 export interface BriefingMatterSnapshot {
   matterNumber: string;
   description: string;
   practiceArea?: string;
   status: "active" | "idle" | "complete";
-  /** Days since last activity in the task/time store */
   daysSinceActivity: number;
-  /** Open billing amount (WIP — hours logged but not yet billed) */
   openBillingUsd: number;
-  /** Total billed to date for this matter */
   totalBilledUsd: number;
-  /** Number of pending human gates on this matter */
   pendingGates: number;
-  /** Most recent task output snippet */
   lastOutput?: string;
 }
 
 export interface BriefingBillingSnapshot {
-  /** Rolling 90-day billed total */
   last90DaysUsd: number;
-  /** Current WIP (open, unbilled time entries) */
   wipUsd: number;
-  /** Oldest unbilled entry in days */
   oldestWipDays: number;
-  /** Outstanding invoice count (from matters where status != completed) */
   openMatterCount: number;
 }
 
@@ -66,24 +158,22 @@ export interface ClientBriefing {
   clientName: string;
   clientNumber: string;
   generatedAt: string;
-  /** When the briefing is for (ISO date — used in the heading) */
   briefingDate: string;
-  /** Executive paragraph — 3 sentences for the opening of a partner's call */
   executiveSummary: string;
-  /** Active and recently active matters */
   matters: BriefingMatterSnapshot[];
   billing: BriefingBillingSnapshot;
-  /** Open items requiring partner attention */
   openItems: string[];
-  /** Relationship notes from the client record */
   relationshipNotes?: string;
-  /** Industry / regulatory context pulled from the knowledge store (if any) */
   industryContext?: string;
-  /** Full markdown briefing document */
+  /** The complete Markdown briefing document */
   document: string;
+  /** All intel items gathered by the swarm — chalkboard export */
+  chalkboard: IntelItem[];
+  /** Per-spoke status: how many items each source contributed */
+  spokeSummary: Record<IntelSource, { items: number; durationMs: number; error?: string }>;
 }
 
-// ─── BriefingEngine ───────────────────────────────────────────────────────────
+// ─── BriefingEngine (public façade) ──────────────────────────────────────────
 
 export class BriefingEngine {
   private readonly client: Anthropic;
@@ -96,49 +186,60 @@ export class BriefingEngine {
   }
 
   /**
-   * Generate a pre-call client briefing.
+   * Launch the hub-and-spoke swarm and synthesise a client briefing.
    *
-   * @param clientRecord  Client from the ClientStore.
-   * @param allTasks      All tasks — filtered to this client's matters internally.
-   * @param timeEntries   All time entries — filtered to this client internally.
-   * @param opts          Context for the briefing.
+   * All configured spokes run in parallel. Unconfigured connectors return
+   * empty intel silently — the hub works with whatever it gets.
    */
   async generate(
     clientRecord: Client,
     allTasks: Task[],
     timeEntries: TimeEntry[],
     opts: {
+      knowledge?: KnowledgeStore;
       taskId?: string;
-      /** ISO date string — defaults to today */
       briefingDate?: string;
-      /** Knowledge-store industry context (optional, caller supplies) */
       industryContext?: string;
     } = {},
   ): Promise<ClientBriefing> {
     const start = Date.now();
-    const now = new Date();
-    const briefingDate = opts.briefingDate ?? now.toISOString().slice(0, 10);
+    const briefingDate = opts.briefingDate ?? new Date().toISOString().slice(0, 10);
+    const chalkboard = new Chalkboard();
 
-    // Filter to this client's data
-    const clientTasks = allTasks.filter(
-      (t) => t.clientNumber === clientRecord.clientNumber || t.clientNumber === clientRecord.id,
-    );
-    const clientEntries = timeEntries.filter(
-      (e) => e.clientNumber === clientRecord.clientNumber,
-    );
+    // ── Launch all spokes in parallel ──────────────────────────────────────
+    const spokePromises: Array<Promise<SpokeResult>> = [
+      this.runClioSpoke(clientRecord),
+      this.runIManageSpoke(clientRecord),
+      this.runSlackSpoke(clientRecord),
+      this.runDriveBoxSpoke(clientRecord),
+      this.runInternalSpoke(clientRecord, allTasks, timeEntries),
+    ];
+    if (opts.knowledge) {
+      spokePromises.push(this.runKnowledgeSpoke(clientRecord, opts.knowledge, opts.industryContext));
+    }
 
-    // Build matter snapshots
-    const matters = this.buildMatterSnapshots(clientRecord.matters, clientTasks, clientEntries, now);
+    const spokeResults = await Promise.allSettled(spokePromises);
 
-    // Build billing snapshot
-    const billing = this.buildBillingSnapshot(clientEntries, matters, now);
+    const spokeSummary: Record<string, { items: number; durationMs: number; error?: string }> = {};
+    for (const result of spokeResults) {
+      if (result.status === "fulfilled") {
+        const { source, items, durationMs, error } = result.value;
+        chalkboard.writeMany(items);
+        spokeSummary[source] = { items: items.length, durationMs, error };
+        if (error) logger.warn(`Briefing spoke error: ${source}`, { error });
+      } else {
+        logger.warn("Briefing spoke rejected", { reason: String(result.reason) });
+      }
+    }
 
-    // Collect open items
-    const openItems = this.collectOpenItems(matters, clientTasks);
+    // ── Derive structured snapshots from the chalkboard ───────────────────
+    const matters = this.buildMatterSnapshots(clientRecord.matters, allTasks, timeEntries, chalkboard);
+    const billing = this.buildBillingSnapshot(timeEntries, clientRecord.clientNumber, matters);
+    const openItems = this.collectOpenItems(chalkboard, matters);
 
-    // Generate the briefing document (Sonnet)
-    const { executiveSummary, document } = await this.generateDocument(
-      clientRecord, matters, billing, openItems, opts,
+    // ── Hub synthesis: Sonnet reads the chalkboard and drafts the briefing ─
+    const { executiveSummary, document } = await this.synthesize(
+      clientRecord, chalkboard, matters, billing, openItems, opts,
     );
 
     const briefing: ClientBriefing = {
@@ -146,7 +247,7 @@ export class BriefingEngine {
       clientId: clientRecord.id,
       clientName: clientRecord.name,
       clientNumber: clientRecord.clientNumber,
-      generatedAt: now.toISOString(),
+      generatedAt: new Date().toISOString(),
       briefingDate,
       executiveSummary,
       matters,
@@ -155,31 +256,303 @@ export class BriefingEngine {
       relationshipNotes: clientRecord.notes,
       industryContext: opts.industryContext,
       document,
+      chalkboard: chalkboard.read() as IntelItem[],
+      spokeSummary: spokeSummary as ClientBriefing["spokeSummary"],
     };
 
-    logger.info("Client briefing generated", {
+    logger.info("Client briefing generated via swarm", {
       id: briefing.id,
       client: clientRecord.name,
-      matters: matters.length,
-      openItems: openItems.length,
+      chalkboardItems: chalkboard.size,
+      spokes: Object.keys(spokeSummary).length,
+      durationMs: Date.now() - start,
     });
 
     return briefing;
   }
 
-  // ─── Matter snapshot builder ──────────────────────────────────────────────
+  // ─── Spoke: Clio ──────────────────────────────────────────────────────────
+
+  private async runClioSpoke(client: Client): Promise<SpokeResult> {
+    const start = Date.now();
+    const items: IntelItem[] = [];
+
+    if (!Config.clio?.clientId) {
+      return { source: "clio", items: [], durationMs: 0 };
+    }
+
+    try {
+      const withTimeout = <T>(p: Promise<T>): Promise<T> =>
+        Promise.race([p, new Promise<never>((_, r) => setTimeout(() => r(new Error("timeout")), SPOKE_TIMEOUT_MS))]);
+
+      // Use the Clio API via mcpCall (Clio has a REST connector via the clio tools)
+      // Endpoint is the Clio API base URL per region
+      const clioBase = {
+        us: "https://app.clio.com", eu: "https://eu.app.clio.com",
+        ca: "https://ca.app.clio.com", au: "https://au.app.clio.com",
+      }[Config.clio.region] ?? "https://app.clio.com";
+
+      const matters = await withTimeout(
+        mcpCall(`${clioBase}/api/v4`, Config.clio.clientSecret,
+          "list_matters", { clientNumber: client.clientNumber }),
+      ) as Record<string, unknown>;
+      if (Array.isArray(matters?.data)) {
+        for (const m of (matters.data as Array<Record<string, unknown>>).slice(0, 10)) {
+          items.push({
+            source: "clio", category: "matter_status",
+            matterNumber: String(m["display_number"] ?? m["id"] ?? ""),
+            headline: `Clio matter: ${m["description"] ?? m["display_number"] ?? "—"}`,
+            data: m,
+          });
+        }
+      }
+
+      const activities = await withTimeout(
+        mcpCall(`${clioBase}/api/v4`, Config.clio.clientSecret,
+          "list_activities", { clientNumber: client.clientNumber, limit: 20 }),
+      ) as Record<string, unknown>;
+      if (Array.isArray(activities?.data)) {
+        for (const a of (activities.data as Array<Record<string, unknown>>).slice(0, 20)) {
+          items.push({
+            source: "clio", category: "activity",
+            eventAt: String(a["date"] ?? ""),
+            matterNumber: String((a["matter"] as Record<string, unknown>)?.["display_number"] ?? ""),
+            headline: String(a["note"] ?? a["description"] ?? "Clio activity"),
+            data: a,
+          });
+        }
+      }
+
+    } catch (err) {
+      return { source: "clio", items, durationMs: Date.now() - start, error: (err as Error).message };
+    }
+
+    return { source: "clio", items, durationMs: Date.now() - start };
+  }
+
+  // ─── Spoke: iManage ───────────────────────────────────────────────────────
+
+  private async runIManageSpoke(client: Client): Promise<SpokeResult> {
+    const start = Date.now();
+    const items: IntelItem[] = [];
+
+    if (!Config.connectors?.imanage?.apiKey) {
+      return { source: "imanage", items: [], durationMs: 0 };
+    }
+
+    try {
+      const withTimeout = <T>(p: Promise<T>): Promise<T> =>
+        Promise.race([p, new Promise<never>((_, r) => setTimeout(() => r(new Error("timeout")), SPOKE_TIMEOUT_MS))]);
+
+      // Search for documents related to this client
+      const docs = await withTimeout(
+        mcpCall(Config.connectors.imanage.endpoint, Config.connectors.imanage.apiKey,
+          "imanage_search", { query: client.name, limit: 20 }),
+      ) as Record<string, unknown>;
+
+      if (Array.isArray(docs?.results)) {
+        for (const d of (docs.results as Array<Record<string, unknown>>).slice(0, 15)) {
+          items.push({
+            source: "imanage", category: "document",
+            eventAt: String(d["edit_date"] ?? d["create_date"] ?? ""),
+            headline: String(d["name"] ?? d["doc_num"] ?? "iManage document"),
+            data: d,
+          });
+        }
+      }
+
+    } catch (err) {
+      return { source: "imanage", items, durationMs: Date.now() - start, error: (err as Error).message };
+    }
+
+    return { source: "imanage", items, durationMs: Date.now() - start };
+  }
+
+  // ─── Spoke: Slack ─────────────────────────────────────────────────────────
+
+  private async runSlackSpoke(client: Client): Promise<SpokeResult> {
+    const start = Date.now();
+    const items: IntelItem[] = [];
+
+    if (!Config.connectors?.slack?.apiKey) {
+      return { source: "slack", items: [], durationMs: 0 };
+    }
+
+    try {
+      const withTimeout = <T>(p: Promise<T>): Promise<T> =>
+        Promise.race([p, new Promise<never>((_, r) => setTimeout(() => r(new Error("timeout")), SPOKE_TIMEOUT_MS))]);
+
+      // Search Slack for client name
+      const messages = await withTimeout(
+        mcpCall(Config.connectors.slack.endpoint, Config.connectors.slack.apiKey,
+          "slack_search", { query: client.name, count: 15 }),
+      ) as Record<string, unknown>;
+
+      const matches = (messages as Record<string, unknown>)?.["messages"]
+        ?? (messages as Record<string, unknown>)?.["results"];
+      if (Array.isArray(matches)) {
+        for (const m of (matches as Array<Record<string, unknown>>).slice(0, 15)) {
+          items.push({
+            source: "slack", category: "correspondence",
+            eventAt: String(m["ts"] ?? ""),
+            headline: String(m["text"] ?? "Slack message").slice(0, 120),
+            data: { channel: m["channel"], user: m["user"], text: m["text"], ts: m["ts"] },
+          });
+        }
+      }
+
+    } catch (err) {
+      return { source: "slack", items, durationMs: Date.now() - start, error: (err as Error).message };
+    }
+
+    return { source: "slack", items, durationMs: Date.now() - start };
+  }
+
+  // ─── Spoke: Google Drive + Box ────────────────────────────────────────────
+
+  private async runDriveBoxSpoke(client: Client): Promise<SpokeResult> {
+    const start = Date.now();
+    const items: IntelItem[] = [];
+
+    const driveKey = Config.connectors?.googleDrive?.apiKey;
+    const boxKey = Config.connectors?.box?.apiKey;
+
+    if (!driveKey && !boxKey) return { source: "google_drive", items: [], durationMs: 0 };
+
+    try {
+      const withTimeout = <T>(p: Promise<T>): Promise<T> =>
+        Promise.race([p, new Promise<never>((_, r) => setTimeout(() => r(new Error("timeout")), SPOKE_TIMEOUT_MS))]);
+
+      if (driveKey) {
+        const driveRes = await withTimeout(
+          mcpCall(Config.connectors.googleDrive.endpoint, driveKey,
+            "google_drive_search", { query: client.name, pageSize: 10 }),
+        ) as Record<string, unknown>;
+        const files = (driveRes as Record<string, unknown>)?.["files"] ?? [];
+        for (const f of (Array.isArray(files) ? files as Array<Record<string, unknown>> : []).slice(0, 8)) {
+          items.push({
+            source: "google_drive", category: "document",
+            eventAt: String(f["modifiedTime"] ?? ""),
+            headline: String(f["name"] ?? "Drive file"),
+            data: { id: f["id"], name: f["name"], mimeType: f["mimeType"], modifiedTime: f["modifiedTime"] },
+          });
+        }
+      }
+
+      if (boxKey) {
+        const boxRes = await withTimeout(
+          mcpCall(Config.connectors.box.endpoint, boxKey,
+            "box_search", { query: client.name, limit: 10 }),
+        ) as Record<string, unknown>;
+        const entries = (boxRes as Record<string, unknown>)?.["entries"] ?? [];
+        for (const f of (Array.isArray(entries) ? entries as Array<Record<string, unknown>> : []).slice(0, 8)) {
+          items.push({
+            source: "box", category: "document",
+            headline: String(f["name"] ?? "Box file"),
+            data: { id: f["id"], name: f["name"], type: f["type"] },
+          });
+        }
+      }
+
+    } catch (err) {
+      return { source: "google_drive", items, durationMs: Date.now() - start, error: (err as Error).message };
+    }
+
+    return { source: "google_drive", items, durationMs: Date.now() - start };
+  }
+
+  // ─── Spoke: Knowledge store ───────────────────────────────────────────────
+
+  private async runKnowledgeSpoke(
+    client: Client,
+    knowledge: KnowledgeStore,
+    industryContext?: string,
+  ): Promise<SpokeResult> {
+    const start = Date.now();
+    const items: IntelItem[] = [];
+
+    try {
+      const query = industryContext
+        ? `${client.name} ${industryContext} regulatory`
+        : `${client.name} industry regulation compliance`;
+      const results = await knowledge.search(query, { topK: 5 });
+      const arr = Array.isArray(results)
+        ? results as unknown as Array<Record<string, unknown>>
+        : [];
+      for (const r of arr.slice(0, 5)) {
+        items.push({
+          source: "knowledge_store", category: "regulatory",
+          headline: String(r["title"] ?? r["documentTitle"] ?? "Knowledge item").slice(0, 100),
+          data: { title: r["title"], content: String(r["content"] ?? r["text"] ?? "").slice(0, 500) },
+        });
+      }
+    } catch (err) {
+      return { source: "knowledge_store", items, durationMs: Date.now() - start, error: (err as Error).message };
+    }
+
+    return { source: "knowledge_store", items, durationMs: Date.now() - start };
+  }
+
+  // ─── Spoke: Internal (tasks + time entries) ───────────────────────────────
+
+  private async runInternalSpoke(
+    client: Client,
+    allTasks: Task[],
+    timeEntries: TimeEntry[],
+  ): Promise<SpokeResult> {
+    const start = Date.now();
+    const items: IntelItem[] = [];
+    const now = new Date();
+
+    // Filter to client
+    const clientTasks = allTasks.filter(
+      (t) => t.clientNumber === client.clientNumber || t.clientNumber === client.id,
+    );
+    const clientEntries = timeEntries.filter((e) => e.clientNumber === client.clientNumber);
+
+    // Task status items
+    for (const t of clientTasks.slice(0, 20)) {
+      items.push({
+        source: "internal_tasks", category: "matter_status",
+        eventAt: t.updatedAt.toISOString(),
+        matterNumber: t.matterNumber,
+        headline: `Task ${t.status}: ${t.description.slice(0, 80)}`,
+        data: {
+          taskId: t.id, status: t.status, phase: t.currentPhase,
+          pendingGates: t.pendingGates?.length ?? 0,
+          outputSnippet: t.output?.slice(0, 300),
+        },
+      });
+    }
+
+    // Billing items (recent WIP)
+    const openEntries = clientEntries.filter((e) => !e.endedAt).slice(0, 10);
+    for (const e of openEntries) {
+      items.push({
+        source: "internal_time", category: "billing",
+        eventAt: e.startedAt.toISOString(),
+        matterNumber: e.matterNumber,
+        headline: `WIP: ${e.description.slice(0, 80)} ($${(e.billingAmountUsd ?? 0).toFixed(0)} unbilled)`,
+        data: { entryId: e.id, description: e.description, billingAmountUsd: e.billingAmountUsd },
+      });
+    }
+
+    return { source: "internal_tasks", items, durationMs: Date.now() - start };
+  }
+
+  // ─── Structured snapshots from chalkboard ────────────────────────────────
 
   private buildMatterSnapshots(
     clientMatters: ClientMatter[],
     tasks: Task[],
     entries: TimeEntry[],
-    now: Date,
+    chalkboard: Chalkboard,
   ): BriefingMatterSnapshot[] {
+    const now = new Date();
     return clientMatters.map((m): BriefingMatterSnapshot => {
       const matterTasks = tasks.filter((t) => t.matterNumber === m.matterNumber);
       const matterEntries = entries.filter((e) => e.matterNumber === m.matterNumber);
 
-      // Activity freshness
       const lastActivity = matterTasks
         .map((t) => t.updatedAt)
         .sort((a, b) => b.getTime() - a.getTime())[0];
@@ -187,30 +560,18 @@ export class BriefingEngine {
         ? Math.floor((now.getTime() - lastActivity.getTime()) / 86_400_000)
         : 999;
 
-      // Billing
-      const ninety = new Date(now.getTime() - 90 * 86_400_000);
-      const recent = matterEntries.filter(
-        (e) => e.endedAt && e.billingAmountUsd != null,
-      );
-      const openWip = matterEntries.filter((e) => !e.endedAt);
-      const openBillingUsd = openWip.reduce((s, e) => s + (e.billingAmountUsd ?? 0), 0);
-      const totalBilledUsd = recent.reduce((s, e) => s + (e.billingAmountUsd ?? 0), 0);
+      const closed = matterEntries.filter((e) => e.endedAt && e.billingAmountUsd != null);
+      const open = matterEntries.filter((e) => !e.endedAt);
+      const openBillingUsd = open.reduce((s, e) => s + (e.billingAmountUsd ?? 0), 0);
+      const totalBilledUsd = closed.reduce((s, e) => s + (e.billingAmountUsd ?? 0), 0);
+      const pendingGates = matterTasks.reduce((s, t) => s + (t.pendingGates?.length ?? 0), 0);
 
-      // Gates
-      const pendingGates = matterTasks.reduce(
-        (s, t) => s + (t.pendingGates?.length ?? 0), 0,
-      );
-
-      // Status
-      const latestTask = matterTasks.sort(
+      const latestTask = [...matterTasks].sort(
         (a, b) => b.updatedAt.getTime() - a.updatedAt.getTime(),
       )[0];
-      let status: BriefingMatterSnapshot["status"] = "idle";
-      if (latestTask?.status === "running") status = "active";
-      else if (latestTask?.status === "complete") status = "complete";
-
-      // Last output snippet
-      const lastOutput = latestTask?.output?.slice(0, 300);
+      const status: BriefingMatterSnapshot["status"] =
+        latestTask?.status === "running" ? "active" :
+        latestTask?.status === "complete" ? "complete" : "idle";
 
       return {
         matterNumber: m.matterNumber,
@@ -221,63 +582,59 @@ export class BriefingEngine {
         openBillingUsd,
         totalBilledUsd,
         pendingGates,
-        lastOutput,
+        lastOutput: latestTask?.output?.slice(0, 300),
       };
     });
   }
 
-  // ─── Billing snapshot ─────────────────────────────────────────────────────
-
   private buildBillingSnapshot(
     entries: TimeEntry[],
+    clientNumber: string,
     matters: BriefingMatterSnapshot[],
-    now: Date,
   ): BriefingBillingSnapshot {
+    const now = new Date();
     const ninety = new Date(now.getTime() - 90 * 86_400_000);
-    const closed = entries.filter(
+    const clientEntries = entries.filter((e) => e.clientNumber === clientNumber);
+    const closed = clientEntries.filter(
       (e) => e.endedAt && new Date(e.endedAt) >= ninety && e.billingAmountUsd != null,
     );
-    const open = entries.filter((e) => !e.endedAt);
-
+    const open = clientEntries.filter((e) => !e.endedAt);
     const last90DaysUsd = closed.reduce((s, e) => s + (e.billingAmountUsd ?? 0), 0);
     const wipUsd = matters.reduce((s, m) => s + m.openBillingUsd, 0);
-
-    const oldest = open
-      .map((e) => Math.floor((now.getTime() - e.startedAt.getTime()) / 86_400_000))
-      .sort((a, b) => b - a)[0] ?? 0;
-
-    const openMatterCount = matters.filter((m) => m.status !== "complete").length;
-
-    return { last90DaysUsd, wipUsd, oldestWipDays: oldest, openMatterCount };
+    const oldest = open.map((e) =>
+      Math.floor((now.getTime() - e.startedAt.getTime()) / 86_400_000)
+    ).sort((a, b) => b - a)[0] ?? 0;
+    return {
+      last90DaysUsd,
+      wipUsd,
+      oldestWipDays: oldest,
+      openMatterCount: matters.filter((m) => m.status !== "complete").length,
+    };
   }
 
-  // ─── Open items ───────────────────────────────────────────────────────────
-
-  private collectOpenItems(
-    matters: BriefingMatterSnapshot[],
-    tasks: Task[],
-  ): string[] {
+  private collectOpenItems(chalkboard: Chalkboard, matters: BriefingMatterSnapshot[]): string[] {
     const items: string[] = [];
 
     for (const m of matters) {
-      if (m.pendingGates > 0) {
-        items.push(`${m.matterNumber}: ${m.pendingGates} pending gate(s) require partner approval`);
-      }
-      if (m.openBillingUsd > 0) {
-        items.push(`${m.matterNumber}: $${m.openBillingUsd.toFixed(0)} WIP unbilled`);
-      }
+      if (m.pendingGates > 0) items.push(`${m.matterNumber}: ${m.pendingGates} gate(s) await partner approval`);
+      if (m.openBillingUsd > 0) items.push(`${m.matterNumber}: $${m.openBillingUsd.toFixed(0)} WIP unbilled`);
       if (m.status === "idle" && m.daysSinceActivity > 30) {
-        items.push(`${m.matterNumber}: idle for ${m.daysSinceActivity} days — confirm status with client`);
+        items.push(`${m.matterNumber}: no activity for ${m.daysSinceActivity} days — confirm status with client`);
       }
     }
 
-    return items.slice(0, 10);
+    // Surface high-signal items from the chalkboard
+    const correspondenceItems = chalkboard.byCategory("correspondence").slice(0, 3);
+    for (const i of correspondenceItems) items.push(`Correspondence: ${i.headline}`);
+
+    return items.slice(0, 12);
   }
 
-  // ─── Document generation ──────────────────────────────────────────────────
+  // ─── Hub synthesis ────────────────────────────────────────────────────────
 
-  private async generateDocument(
+  private async synthesize(
     client: Client,
+    chalkboard: Chalkboard,
     matters: BriefingMatterSnapshot[],
     billing: BriefingBillingSnapshot,
     openItems: string[],
@@ -285,55 +642,72 @@ export class BriefingEngine {
   ): Promise<{ executiveSummary: string; document: string }> {
     const start = Date.now();
 
+    // Organise chalkboard items for the prompt
+    const bySource = (src: IntelSource, limit = 8) =>
+      chalkboard.bySource(src).slice(0, limit)
+        .map((i) => `  - [${i.category}] ${i.headline}`)
+        .join("\n") || "  (none)";
+
     const matterLines = matters
       .map((m) =>
         `• ${m.matterNumber} [${m.status.toUpperCase()}] — ${m.description}` +
         (m.practiceArea ? ` (${m.practiceArea})` : "") +
-        ` | $${m.totalBilledUsd.toFixed(0)} billed | ${m.daysSinceActivity}d since activity` +
-        (m.pendingGates > 0 ? ` | ⚠ ${m.pendingGates} gate(s) pending` : ""),
+        ` | $${m.totalBilledUsd.toFixed(0)} billed | ${m.daysSinceActivity}d idle` +
+        (m.pendingGates > 0 ? ` | ⚠ ${m.pendingGates} gate(s)` : ""),
       )
-      .join("\n");
+      .join("\n") || "(no matters)";
 
-    const openItemLines = openItems.map((i) => `- ${i}`).join("\n") || "- None";
-
-    const prompt = `You are writing a pre-call partner briefing for a law firm.
+    const prompt = `You are writing a pre-call partner briefing synthesised from multiple connected systems.
 
 CLIENT: ${client.name} (${client.clientNumber})
 BRIEFING DATE: ${opts.briefingDate ?? new Date().toISOString().slice(0, 10)}
 
-MATTERS:
-${matterLines || "(no matters on record)"}
+MATTER STATUS (from internal systems):
+${matterLines}
 
 BILLING:
-  Last 90 days billed: $${billing.last90DaysUsd.toFixed(0)}
-  Current WIP (unbilled): $${billing.wipUsd.toFixed(0)}
-  Oldest open entry: ${billing.oldestWipDays} days
+  Last 90 days: $${billing.last90DaysUsd.toFixed(0)}
+  WIP unbilled: $${billing.wipUsd.toFixed(0)}
+  Oldest open entry: ${billing.oldestWipDays}d
   Open matters: ${billing.openMatterCount}
 
 OPEN ITEMS:
-${openItemLines}
+${openItems.map((i) => `- ${i}`).join("\n") || "- None"}
+
+INTELLIGENCE FROM CONNECTED SYSTEMS:
+Clio:
+${bySource("clio")}
+iManage:
+${bySource("imanage")}
+Slack:
+${bySource("slack")}
+Documents (Drive/Box):
+${bySource("google_drive", 5)}
+Knowledge Store:
+${bySource("knowledge_store")}
 
 ${client.notes ? `RELATIONSHIP NOTES:\n${client.notes}\n` : ""}
 ${opts.industryContext ? `INDUSTRY CONTEXT:\n${opts.industryContext}\n` : ""}
 
 Write:
-1. A 2-sentence EXECUTIVE SUMMARY — most important thing the partner needs to know right now.
-2. A full BRIEFING DOCUMENT in Markdown with sections:
+1. A 2-sentence EXECUTIVE SUMMARY — the single most important thing the partner needs to know.
+2. A full BRIEFING DOCUMENT in Markdown:
    ## ${client.name} — Partner Briefing (${opts.briefingDate ?? "today"})
    ### Executive Summary
    ### Matter Status
    ### Billing Posture
-   ### Open Items
-   ### Relationship Notes (if any)
-   ### Industry Context (if any)
-   ### Recommended Actions
+   ### Recent Correspondence & Activity  ← synthesise Clio + iManage + Slack
+   ### Documents in Play                 ← synthesise Drive/Box/iManage docs
+   ### Regulatory / Industry Context     ← from knowledge store
+   ### Open Items & Actions Required
+   ### Relationship Notes
 
 Return JSON:
 {"executiveSummary":"...","document":"..."}`;
 
     try {
       const response = await this.client.messages.create({
-        model: SONNET_MODEL, max_tokens: 1500,
+        model: SONNET_MODEL, max_tokens: 2000,
         messages: [{ role: "user", content: prompt }],
       });
 
@@ -350,14 +724,14 @@ Return JSON:
 
       const raw = response.content[0]?.type === "text" ? response.content[0].text : "{}";
       const s = raw.indexOf("{"), e = raw.lastIndexOf("}");
-      if (s === -1 || e <= s) return this.fallbackDocument(client, matters, billing, openItems);
-      return JSON.parse(raw.slice(s, e + 1));
+      if (s === -1 || e <= s) return this.fallback(client, matters, billing, openItems);
+      return JSON.parse(raw.slice(s, e + 1)) as { executiveSummary: string; document: string };
     } catch {
-      return this.fallbackDocument(client, matters, billing, openItems);
+      return this.fallback(client, matters, billing, openItems);
     }
   }
 
-  private fallbackDocument(
+  private fallback(
     client: Client,
     matters: BriefingMatterSnapshot[],
     billing: BriefingBillingSnapshot,
@@ -365,12 +739,12 @@ Return JSON:
   ): { executiveSummary: string; document: string } {
     const summary = `${client.name} has ${matters.length} matter(s) on record. ` +
       `$${billing.wipUsd.toFixed(0)} WIP outstanding; ${openItems.length} open item(s) require attention.`;
-
-    const doc = `## ${client.name} — Partner Briefing\n\n` +
-      `**Matters:** ${matters.length} | **WIP:** $${billing.wipUsd.toFixed(0)} | **Open items:** ${openItems.length}\n\n` +
-      openItems.map((i) => `- ${i}`).join("\n");
-
-    return { executiveSummary: summary, document: doc };
+    return {
+      executiveSummary: summary,
+      document: `## ${client.name} — Partner Briefing\n\n` +
+        `**Matters:** ${matters.length} | **WIP:** $${billing.wipUsd.toFixed(0)} | **Open:** ${openItems.length}\n\n` +
+        openItems.map((i) => `- ${i}`).join("\n"),
+    };
   }
 }
 
