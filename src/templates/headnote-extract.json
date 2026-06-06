@@ -1,0 +1,11 @@
+{
+  "id": "headnote-extract",
+  "name": "Headnote Extraction (Westlaw Key Numbers Replacement)",
+  "description": "Automated headnote and holding extraction from a court opinion. Separates ratio decidendi from obiter, identifies distinguishing factors, applies NOSLEGAL tags, and builds a searchable proposition index. Replaces Westlaw Key Numbers, LexisNexis headnotes, and manual law clerk annotation.",
+  "workflowType": "tabulate",
+  "promptTemplate": "Extract structured headnotes from the following court opinion. Jurisdiction: {{jurisdiction}}. For each headnote: the legal proposition in one sentence, the verbatim source passage, whether it is ratio or obiter, any distinguishing facts, and the NOSLEGAL area of law.\n\n{{description}}",
+  "substitutions": {
+    "jurisdiction": "UK",
+    "description": "Paste or reference the full court opinion text here."
+  }
+}

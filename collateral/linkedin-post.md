@@ -1,26 +1,134 @@
-# Big Michael — LinkedIn launch collateral
-
-## Post (primary)
-
-I built **Big Michael** on the shoulders of two giants — **Mike** (legal document tooling) and **Lavern** (a roster of legal agents).
-
-It's a *bench*, not a chatbot: 118 specialist agents that self-organize each round, argue with each other, and must cite their sources and survive an adversarial verification pass before anything reaches a human. Jurisdiction-neutral. Local or cloud. Open source.
-
-🌉 The old line is *"I've got a bridge to sell you."* Mine's the opposite: **I have a bridge to give you — and it stands upon the shoulders of giants.** Big Michael bridges separate legal AI systems (Mike, Lavern, your own) into one bench that debates and verifies as a whole. Free, open source, yours to cross.
-
-(And yes: **Claude** built most of it with me. An AI building a multi-agent AI that argues with itself about the law. Turtles all the way down. 🐢)
-
-Screenshots from a live matter 👇 What would a 100-agent bench do to *your* hardest question?
-
-#LegalAI #LegalTech #MultiAgent #OpenSource
+# BigLaw — LinkedIn launch collateral
 
 ---
 
-## Post (ultra-short)
+## Cost chart post — AIDA · ABC · Do Likewise
 
-Built on the shoulders of giants — **Mike** and **Lavern** — **Big Michael** is a legal AI that's a *bench*, not a chatbot: 118 agents that argue, cite, and verify each other before anything reaches a human.
+**[ATTENTION]**
 
-Not a bridge to *sell* you — one to *give* you. It unifies separate legal AI systems into one. Open source, yours to cross. 🌉
+The tab nobody at your firm ever clicks is a $300,000 invoice.
+
+---
+
+**[INTEREST]**
+
+Per lawyer. Per year. In licensing fees.
+
+→ Westlaw + CoCounsel (Thomson Reuters): $15,000–50,000
+→ Practical Law standard docs (Thomson Reuters): $10,000–20,000
+→ Contract Express playbooks (Thomson Reuters): $5,000–20,000
+→ LexisNexis + PSL (RELX): $8,000–25,000
+→ Definely / Kira contract review: $2,000–8,000
+→ iManage document management: $2,000–5,000
+→ Everlaw eDiscovery: $3,000–10,000
+→ Clio Insights + Grow: $1,000–3,000
+
+Total: $46,000–141,000 per lawyer per year.
+
+---
+
+**[DESIRE]**
+
+10 lawyers.
+
+Low estimate: $460,000/year in licensing.
+High estimate: $1,410,000/year in licensing.
+
+BigLaw (the open-source one): $0 in licensing.
+Plus your Anthropic API bill — roughly $100–300/month for a 10-lawyer firm.
+
+Call it $2,400/year.
+
+The spread is $460,000 vs $2,400. For the same research. The same redlining. The same precedents. The same matter health dashboard. The same @-mentionable agent in your Teams.
+
+---
+
+**[ACTION]**
+
+```
+curl -fsSL https://raw.githubusercontent.com/discover-legal/BigLaw/main/setup.sh | bash
+```
+
+That's the whole install.
+
+---
+
+**[ALWAYS BE CLOSING]**
+
+Every line in that list above is a subscription you can cancel the day you run setup.sh.
+
+Not all at once. One at a time. Start with whatever costs the most.
+Run a matter through BigLaw. Compare the output. Cancel what you cancel.
+
+The bench will still be there tomorrow. It doesn't charge a renewal fee.
+
+---
+
+**[DO LIKEWISE]**
+
+A senior associate billed 2,200 hours last year. Her firm paid $80,000 in Westlaw fees for her seat. The Westlaw subscription cost more than her bonus.
+
+BigLaw gives that back.
+
+Built on Mike (Will Chen) and Lavern (Antti Innanen)'s shoulders. Standing on the work of people who gave theirs away too.
+
+Take it. Use it. Tell the next solo down the hall. Tell the boutique that just lost a pitch to a firm that could afford CoCounsel.
+
+Run the math on your firm. Run setup.sh.
+
+Go. Do likewise.
+
+#LegalAI #LegalTech #OpenSource #BigLaw
+
+---
+
+## Cost chart post (ultra-short)
+
+The tab nobody clicks: $460,000/year for 10 lawyers.
+
+→ Westlaw + CoCounsel: $15k–50k/seat
+→ Practical Law: $10k–20k/seat
+→ Contract Express: $5k–20k/seat
+→ LexisNexis + PSL: $8k–25k/seat
+→ Definely/Kira: $2k–8k/seat
+
+BigLaw (the open-source one): $0/seat.
+
+`curl -fsSL https://raw.githubusercontent.com/discover-legal/BigLaw/main/setup.sh | bash`
+
+Go. Do likewise.
+
+#LegalAI #OpenSource #BigLaw
+
+---
+
+## Launch post (primary)
+
+I built **BigLaw** on the shoulders of two giants — **Mike** (legal document tooling) and **Lavern** (a roster of legal agents).
+
+The name isn't irony. It's the point.
+
+BigLaw firms spend $2M+ per year per seat on Westlaw, Practical Law, Contract Express, Clio Insights, Definely, iManage, and twenty tools nobody at a five-person firm can afford. BigLaw the platform consolidates all of it. Open source. Free. One curl command.
+
+**Big Michael** is the agent who lives in your Teams and Slack. @-mention him in a channel: `@BigMichael briefing Acme Corp` and he launches a swarm of agents that pull from Clio, iManage, Teams, Slack, SharePoint, email, and your document store in parallel — synthesised into a single partner briefing before the call. The scattered-file problem — every matter spread across 10 mailboxes, 2 call notes, and 4 DM threads — that's what he solves.
+
+🌉 The old line is *"I've got a bridge to sell you."* Mine's the opposite: **I have a bridge to give you — and it stands upon the shoulders of giants.** BigLaw bridges a $2M/year vendor stack into a single open-source platform that any solo or small firm can run on a $5 VPS. Free, open source, yours to cross.
+
+(And yes: **Claude** built most of it with me. An AI building a multi-agent AI that argues with itself about the law. Turtles all the way down. 🐢)
+
+Screenshots from a live matter 👇 What would BigLaw's 100-agent bench do to *your* hardest question?
+
+#LegalAI #LegalTech #MultiAgent #OpenSource #BigLaw
+
+---
+
+## Launch post (ultra-short)
+
+**BigLaw**: the Am Law 100 tool stack, open source, free for everyone else.
+
+100-agent bench that argues, cites, and verifies itself. @BigMichael lives in your Teams and Slack. One command install.
+
+Built on Mike and Lavern. Not a bridge to sell you — one to give you. 🌉
 
 #LegalAI #MultiAgent #OpenSource
 
@@ -40,193 +148,107 @@ In `collateral/screenshots/` (1600×1000 @2x):
 ## Posting notes
 
 - Carousel order: **03-rounds → 04-synthesis → 06-admin → 02-submit**.
-- Synthesis text is a representative example; the UI, communication graph, gates, and routing are exactly as the system produced them.
-- Crop wide shots to 1200×627 if LinkedIn compresses them.
 - Best B2B/legal post times: Tue–Thu, 8–10am local.
 
 ---
 
-## v0.4.0 post — Voice + Cost visibility
+## Big Michael post — channel agent launch
 
-Big Michael v0.4.0 is out.
+**Big Michael** is now in your Teams and Slack.
 
-Two new things I'm pleased with:
+@-mention him in any channel. He knows your matters.
 
-**Voice fingerprinting, generalized.** The tone import now accepts LinkedIn exports, Word docs, PDFs, CSVs, or plain text. Drop a brief you've written, or a memo, or a decade of LinkedIn posts — same analysis pipeline, same result: the bench learns how *you* write, and drafts that way. A new Admin › Voice UI shows the live waveform and traits, drag-and-drop import, and an animated equalizer while analysis runs.
+```
+@BigMichael status M-2024-001
+→ matter health 87/100 🟢 · 2 active tasks · 1 pending gate
 
-**Cost visibility.** Every API call is tracked with cache-aware pricing (Anthropic's three token buckets at 1×, 1.25×, and 0.10× of input rate). The Admin › Cost dashboard shows stat cards, stacked token breakdown, cost-by-model and cost-by-context bar charts, and a per-model detail table — all in SVG, no chart library. Local inference records estimated watt-hours from GPU TDP. Partners can drill into cost per task or per lawyer.
+@BigMichael briefing Acme Corp
+→ scanning 10 sources in parallel…
+→ [posts back] Acme Corp — Partner Briefing: …
 
-Still open source. Still on AGPL-3.0. Still turtles all the way down. 🐢
+@BigMichael task review the force majeure clause in the Acme MSA
+→ submitted · Task ID: tsk_01abc · use @status to follow progress
+```
 
-#LegalAI #LegalTech #OpenSource
+The briefing command is the one I'm most pleased with. Law firms have a structural problem: client information is scattered across Clio, iManage, email, Teams, Slack, and whatever else people actually use. Nobody has time to pull it together before a call. Big Michael runs a hub-and-spoke swarm — 10 parallel agent spokes pulling from every connected system at once — and synthesises it into a single briefing. Twelve seconds. One @-mention.
+
+Part of **BigLaw** — open source, AGPL-3.0.
+
+#LegalAI #LegalTech #Teams #Slack #OpenSource
 
 ---
 
-## v0.4.0 post (ultra-short)
+## Big Michael post (ultra-short)
 
-Big Michael v0.4.0:
+@BigMichael briefing [client] → client intel from Clio + iManage + Teams + Slack + email + SharePoint, synthesised into a partner briefing. One @-mention.
 
-→ Voice fingerprinting now accepts Word docs, PDFs, CSVs, or plain text — not just LinkedIn  
-→ Admin cost dashboard: cache-aware pricing, token breakdown, cost by model/context  
-→ New voice UI: drag-and-drop, animated equalizer, waveform per lawyer
-
-Open source, AGPL-3.0.
+Part of BigLaw — open source.
 
 #LegalAI #OpenSource
 
 ---
 
-## v0.4.x post — Clio integration
+## v0.5.0 post — The full feature drop
 
-Big Michael now connects to **Clio**.
+**BigLaw v0.5.0** is the version that makes the BigLaw tool stack argument serious.
 
-One OAuth flow. Four data regions (US, EU, Canada, Australia). Then:
+What Am Law 100 firms pay for. What this costs: $0.
 
-→ Import a matter and its documents in one call — Big Michael fetches the files, extracts text, classifies practice area, and kicks off a full 118-agent bench run automatically  
-→ 7 agent tools: list/get matters, list/download documents, create time entries, post notes, list contacts  
-→ Time-entry sync: push Big Michael's billable time back to Clio activities, rounded to 6-minute billing units
+→ **Playbook-aware contract redlining** — Definely / Kira / Luminance replacement. 3-step pipeline: Haiku clause extraction → Sonnet playbook analysis → Sonnet summary. Your playbook cascade (client > matter > personal > firm) applied to every clause, with tracked-change output.
 
-The integration is gated: **nothing activates until you set `CLIO_CLIENT_ID`**. Unconfigured, the tools still register — they return a structured `{ error }` and never crash the server.
+→ **Headnote extraction** — Westlaw Key Numbers / LexisNexis headnote replacement. Sonnet extracts ratios, obiter, and procedural posture. Compounds over time as every processed opinion enriches the store.
 
-Security notes worth saying out loud: the region base URLs are a hard-coded four-entry allowlist, not a user-configurable string — a malformed `CLIO_REGION` env var throws on startup rather than making a request to an arbitrary host. Tokens persist locally to `./data/clio-auth.json`, auto-refresh 60 s before expiry, and are wiped on disconnect.
+→ **Precedent generation** — Practical Law Standard Docs / PSL replacement. Haiku structures the document; Opus drafts from your firm's knowledge store and playbook cascade. Your positions, your style, your knowledge — not generic market standard.
 
-Still AGPL-3.0. Still turtles all the way down.
+→ **Four-tier playbook cascade** — Contract Express / Practical Law replacement. `client (3) > matter (2) > personal (1) > firm (0)`. Client requirements win. Firm defaults are the market floor. Override at any level.
 
-#LegalAI #LegalTech #Clio #PracticeManagement #OpenSource
+→ **Big Michael** in Teams and Slack — channel agent with hub-and-spoke client briefing swarm. 10 parallel spokes (Clio, iManage, Teams, Slack, SharePoint, Drive, email), 12 s each, `Promise.allSettled`. One @-mention for a full partner briefing.
 
----
+→ **Hash-chained audit trail** — every agent call, every tool use, every gate decision, every access denial. External system access attributed to the responsible lawyer by name. OpenSearch / Splunk / webhook forwarding.
 
-## v0.4.x post — Clio (ultra-short)
+→ **Court deadline calculator** — FRCP, UK CPR, EU Competition. Trigger date in, every downstream deadline out, cited.
 
-Big Michael v0.4.x: **Clio integration** is live.
-
-One OAuth flow → import matters + docs → bench run → push time entries back.  
-SSRF-safe region routing. Auto-refresh tokens. Gated on `CLIO_CLIENT_ID` — no config, no activation.
-
-Open source, AGPL-3.0.
-
-#LegalAI #Clio #OpenSource
-
----
-
-## Quick — Clio time sync idempotency
-
-Small one, but it matters in practice:
-
-Big Michael's Clio time-entry sync is now idempotent. Hit the endpoint twice — the second call is a no-op. Every entry gets stamped with a `clioSyncedAt` timestamp the moment it lands in Clio; subsequent syncs skip it. The response tells you `{ synced, skipped, errors }` so you always know the state.
-
-CSV exports now include the `clioSyncedAt` column. Audit trail in a spreadsheet, no guessing.
-
-#LegalTech #Clio #OpenSource
-
----
-
-## v0.5.0 post — The billing + audit drop
-
-Big Michael bills his own time, enforces your OCG, monitors your dockets, runs conflict checks, predicts your budgets, and keeps receipts. That's five separate vendor contracts he just made awkward.
-
-On the receipts: hash-chained, tamper-evident JSONL — OpenSearch, Splunk, or a webhook you control. Every agent that ran. Every Westlaw or Clio call, attributed to the lawyer who submitted the matter — not "system". Every gate decision, with the reviewer's name on it. Every document search. Every access denial. The chain is verifiable. A court can read it. The record is yours, not ours.
-
-On the billing: LEDES 1998B with UTBMS task codes, classified before it leaves his desk. A compliance pass against your Outside Counsel Guidelines — structured rule dictionary, deterministic, parameters he extracted himself — before the pre-bill, not after the client calls. Full cycle: draft, review, approve, invoice. Partners see everything. Associates see their part.
-
-On the budget: he watches it live and alerts you before you have to explain yourself. He predicts what a matter will cost from your own historical data. Your matters. His maths.
-
-And yes — he logs his own hours. The agents work. The clock runs. You review it like any other entry. (An AI helped build the system that bills AI time. I find this more amusing than I probably should. — Claude)
-
-He also doesn't sleep:
-
-→ New CourtListener filing in, SSE alert to counsel before morning
-→ Regulatory updates scanned against your open matters on a schedule
-→ Client status reports written from what he actually did, not what anyone remembers
-→ Deadlines calculated — FRCP, UK CPR, EU Competition; trigger date in, every downstream date out, cited
-→ Twenty CRM connected
-→ `curl -fsSL https://raw.githubusercontent.com/discover-legal/big-michael/main/setup.sh | bash` — that's the install
-
-An AI, a lawyer, and open source walked into a GitHub repo. Big Michael kept the audit log. 🐢
-
-Still standing on Mike (Will Chen) and Lavern (Antti Innanen)'s shoulders. Still AGPL-3.0.
-
-Which of your matters does Big Michael take first?
-
-#LegalAI #LegalTech #OpenSource #LegalBilling #OCG
-
----
-
-## v0.5.0 post — The billing + audit drop (ultra-short)
-
-Big Michael bills his own time, enforces your OCG, monitors your dockets, runs conflict checks, predicts your budgets, and keeps receipts. That's five separate vendor contracts he just made awkward.
-
-→ LEDES 1998B + UTBMS, classified before it leaves his desk. OCG compliance pass before every pre-bill.
-→ Pre-bill review cycle. Matter budgets with live burn alerts. Cost predictor from your own data.
-→ He logs his own hours. (An AI built the thing that bills AI time. — Claude)
-→ Hash-chained audit log. OpenSearch / Splunk / webhook. His record. Yours to keep.
-→ Doesn't sleep: docket monitoring, regulatory pulse, status reports, deadlines, Twenty CRM.
-→ One-liner install.
-
-An AI, a lawyer, and open source walked into a GitHub repo. Big Michael kept the audit log. 🐢
-
-#LegalAI #LegalTech #OpenSource #LegalBilling #OCG
-
-
-## v0.5.0 post — The billing + audit drop (ultra-short)
-
-Big Michael bills his own time, enforces your OCG, and keeps receipts.
-
-→ LEDES 1998B + UTBMS, classified before it leaves his desk. OCG compliance pass before every pre-bill.
-→ Pre-bill review cycle. Matter budgets with live burn alerts. Cost predictor from your own data.
-→ He logs his own hours. (An AI built the thing that bills AI time. — Claude)
-→ Hash-chained audit log. OpenSearch / Splunk / webhook. His record. Yours to keep.
-→ Doesn't sleep: docket monitoring, regulatory pulse, status reports, TypeDB conflict graph, deadline calculator, Twenty CRM.
-→ One-liner install.
-
-An AI, a lawyer, and open source walked into a GitHub repo. Big Michael kept the audit log. 🐢
-
-#LegalAI #LegalTech #OpenSource #LegalBilling #OCG
-
-
----
-
-## v0.4.x post — Full feature set
-
-Big Michael v0.4.x. Things I'm actually pleased with:
-
-→ **Every finding is debated, then verified 10 times, then a human can reject it** before synthesis reaches you. Not a chatbot with a legal prompt. A bench that argues with itself.
-
-→ **Append-only audit log.** Every agent message, every round, every gate, every human decision — structured JSONL with a live SSE stream. You can read the entire bench's reasoning afterwards. No black box.
-
-→ **Billable time tracked automatically.** 6-minute billing units, per lawyer, per matter. Push entries to Clio. Export to CSV. It runs in the background — you don't configure it, it just happens.
-
-→ **Per-call cost tracking.** Cache-aware pricing across Haiku / Sonnet / Opus (Anthropic's three token buckets at 1×, 1.25×, and 0.10× of input rate). Local inference gets watt-hour estimates from your GPU's TDP. Admin dashboard breaks it down by model, context, and matter. You always know what you're spending and on what.
-
-→ **Voice fingerprinting.** Drop a LinkedIn export, a brief, a decade of memos. The bench learns how your lawyer writes and the drafting agents do the same.
-
-→ **32 connectors across 15 providers** — Westlaw, Everlaw, iManage, DocuSign CLM, Ironclad, Trellis, Clio, CourtListener (free, always). A checkbox picker wires up the ones you have. Unconfigured ones sit quietly off and never crash anything.
-
-→ **Court deadline calculator.** Trigger date → every FRCP / UK CPR / EU Competition deadline, calendar vs business days, with procedural citations. (Shipped marked SAMPLE — AI GENERATED until a practitioner with standing verifies them and submits a PR.)
-
-→ **One command to set it all up.** `curl -fsSL https://raw.githubusercontent.com/discover-legal/big-michael/main/setup.sh | bash`
+→ **One-liner install**: `curl -fsSL https://raw.githubusercontent.com/discover-legal/BigLaw/main/setup.sh | bash`
 
 Still on Mike (Will Chen) and Lavern (Antti Innanen)'s shoulders. Still AGPL-3.0. Still turtles all the way down. 🐢
 
-What would a self-auditing bench do to your hardest matter?
+Which vendor contract does BigLaw make awkward for you first?
 
-#LegalAI #LegalTech #OpenSource #MultiAgent
+#LegalAI #LegalTech #OpenSource #LegalBilling #OCG #BigLaw
 
 ---
 
-## v0.4.x post — Full feature set (ultra-short)
+## v0.5.0 post (ultra-short)
 
-Big Michael v0.4.x:
+BigLaw v0.5.0:
 
-→ Debate + 10-pass verification before any finding reaches a human  
-→ Append-only audit log — full JSONL + live SSE of every agent message and gate  
-→ Automatic billable time in 6-minute units, per lawyer per matter, syncs to Clio  
-→ Per-call cost tracking with cache-aware pricing and admin dashboard  
-→ Voice fingerprinting — LinkedIn export, brief, or memo → bench drafts in that lawyer's voice  
-→ 32 connectors, checkbox picker, unconfigured ones sit quietly off  
-→ Court deadline calculator — FRCP, UK CPR, EU Competition, cited  
-→ `curl -fsSL .../setup.sh | bash` — that's the whole install
+→ Playbook-aware contract redlining (kills Definely/Kira)  
+→ Headnote extraction (kills Westlaw Key Numbers)  
+→ Precedent generation from your knowledge store (kills Practical Law Standard Docs)  
+→ Four-tier playbook cascade: client > matter > personal > firm  
+→ @BigMichael in Teams + Slack — client briefing swarm, 10 parallel sources  
+→ Hash-chained audit trail with lawyer attribution  
+→ One-liner install
 
-Still turtles all the way down. 🐢
+AGPL-3.0. Turtles all the way down. 🐢
 
-#LegalAI #OpenSource
+#LegalAI #OpenSource #BigLaw
+
+---
+
+## Clio post — practice management integration
+
+BigLaw now connects to **Clio**.
+
+One OAuth flow. Four data regions (US, EU, Canada, Australia). Then:
+
+→ Import a matter and its documents — BigLaw fetches the files, extracts text, classifies practice area, and kicks off a full bench run automatically  
+→ 7 agent tools: list/get matters, list/download documents, create time entries, post notes, list contacts  
+→ Time-entry sync: push BigLaw's billable time back to Clio activities, rounded to 6-minute billing units  
+→ Big Michael's briefing swarm pulls Clio intel into every client briefing automatically
+
+Gated on `CLIO_CLIENT_ID`. Unconfigured, the tools register but sit quietly off.
+
+AGPL-3.0.
+
+#LegalAI #LegalTech #Clio #PracticeManagement #OpenSource

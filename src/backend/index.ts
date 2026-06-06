@@ -90,6 +90,9 @@ export interface LegalBackend {
 export class LocalBackend implements LegalBackend {
   constructor(private readonly orch: Orchestrator) {}
 
+  /** Exposed for MCP tool handlers that need direct orchestrator access. */
+  get orchestrator(): Orchestrator { return this.orch; }
+
   async submitTask(p: SubmitTaskParams): Promise<Task> {
     return this.orch.submitTask(p);
   }

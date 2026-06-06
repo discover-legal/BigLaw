@@ -1,0 +1,14 @@
+{
+  "id": "precedent-generate",
+  "name": "Firm Precedent Generator (Practical Law Replacement)",
+  "description": "Generate a firm-specific standard form document from the firm's own knowledge store and playbook cascade. Produces a complete first-draft in the firm's voice. Replaces Thomson Reuters Practical Law Standard Documents, LexisNexis PSL (£15–25k/yr), and HighQ precedent vaults.",
+  "workflowType": "review",
+  "promptTemplate": "Generate a {{documentType}} precedent for our client. Acting for: {{actingFor}}. Jurisdiction: {{jurisdiction}}. Practice area: {{practiceArea}}. Apply the full playbook cascade and embed firm red lines. {{description}}",
+  "substitutions": {
+    "documentType": "nda",
+    "actingFor": "disclosing party",
+    "jurisdiction": "English law",
+    "practiceArea": "M&A / Corporate",
+    "description": "Include any deal-specific special instructions here."
+  }
+}

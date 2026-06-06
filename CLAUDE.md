@@ -1,21 +1,26 @@
-# Big Michael
+# BigLaw
 
-Multi-agent legal AI orchestration platform. Runs DyTopo rounds of granular
-epistemic/conceptual/writing agents over a RuVector native HNSW registry, with a
-debate + verification protocol on every finding before final synthesis.
+Multi-agent legal AI orchestration platform — the BigLaw tool stack, open and free for
+solos, boutiques, and small firms. Runs DyTopo rounds of granular epistemic/conceptual/writing
+agents over a RuVector native HNSW registry, with a debate + verification protocol on every
+finding before final synthesis.
 
-**Version 0.4.0** — lawyer voice fingerprinting (LinkedIn tone import + drafting injection)
-and per-call cost tracking (cache-aware pricing, power metering, admin dashboard),
-on top of the 0.3.0 base: native in-process RuVector HNSW, Q-learning agent recruitment,
-two-wave DyTopo with intra-round whiteboard + inter-round memory rollup, billable time
-tracking, and NOSLEGAL v4 taxonomy.
+**Big Michael** is the channel agent: lives in Teams and Slack, @-mentionable in any channel,
+dispatches tasks to BigLaw's bench, and posts results back. See `src/bots/` for the implementation.
+
+**Version 0.5.0** — Teams/Slack channel bots (Big Michael), hub-and-spoke client briefing swarm
+(Chalkboard pattern, 10 parallel spokes), SharePoint + Teams search, email search (Graph + Gmail),
+playbook-aware contract redlining, headnote generator, precedent generator, four-tier playbook
+cascade, on top of the 0.4.0 base: lawyer voice fingerprinting, per-call cost tracking,
+native in-process RuVector HNSW, Q-learning agent recruitment, two-wave DyTopo with
+intra-round whiteboard + inter-round memory rollup, billable time tracking, and NOSLEGAL v4 taxonomy.
 
 ## Quick start
 
 **Easiest — one command, handles everything (Node.js, clone, deps, wizard):**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/discover-legal/big-michael/main/setup.sh | bash
+curl -fsSL https://raw.githubusercontent.com/discover-legal/BigLaw/main/setup.sh | bash
 ```
 
 **Already have the repo cloned:**
@@ -49,7 +54,7 @@ Code MCP at once, one process owns the DB and the other attaches as a thin clien
 
 ## Using from Claude Code
 
-`.mcp.json` at the project root registers Big Michael as an MCP server.
+`.mcp.json` at the project root registers BigLaw as an MCP server.
 When Claude Code opens this directory, it can call all tools directly:
 
 ```
@@ -77,7 +82,7 @@ plugin adapters (from `adapters/external/*.json`).
 
 ```
 # US federal antitrust matter
-Use big-michael to research whether our planned acquisition of Acme Inc
+Use BigLaw to research whether our planned acquisition of Acme Inc
 triggers HSR pre-merger notification. Jurisdiction: US. Run a full_bench workflow.
 
 # UK employment matter
@@ -156,6 +161,17 @@ Each DyTopo round:
 | `src/mcp/server.ts` | MCP stdio server + Fastify REST API |
 | `src/backend/index.ts` | `LegalBackend` seam — `LocalBackend` (owns DB) / `RemoteBackend` (thin HTTP client) so MCP can run as a client of a separate owner |
 | `src/index.ts` | Entry point — also resolves the run mode (`BIG_MICHAEL_MODE`: auto/backend/mcp/standalone) |
+| `src/bots/teams.ts` | Big Michael — Teams Outgoing Webhook receiver + Incoming Webhook sender + matter-link management |
+| `src/bots/slack.ts` | Big Michael — Slack Events API receiver + Web API sender + matter-link management |
+| `src/bots/dispatcher.ts` | Shared @BigMichael command parser (status/briefing/search/task/run/help) |
+| `src/integrations/graph.ts` | Microsoft Graph client — SharePoint search, Teams message search, posting |
+| `src/email/client.ts` | Email search — Microsoft Graph (O365/Exchange) + Gmail service-account |
+| `src/briefing/index.ts` | Hub-and-spoke client briefing swarm (Chalkboard pattern, 10 parallel spokes) |
+| `src/playbook/index.ts` | Four-tier playbook cascade: `client (3) > matter (2) > personal (1) > firm (0)` |
+| `src/citations/engine.ts` | Citation engine — CourtListener-backed KeyCite/Shepard's replacement |
+| `src/redline/engine.ts` | Playbook-aware contract redlining — Definely / Kira replacement |
+| `src/headnotes/engine.ts` | Headnote extraction — Westlaw Key Numbers / LexisNexis headnote replacement |
+| `src/precedent/generator.ts` | Precedent document generation — Practical Law Standard Docs / PSL replacement |
 | `src/templates/*.json` | Task templates (due-diligence, dispute-resolution, etc.) |
 | `src/types.ts` | All types: AgentDefinition (jurisdictions), Task (jurisdiction), NosLegalTags |
 | `src/learning/index.ts` | RuVector Q-learning layer — LearningEngine + FastAgentDB for agent recruitment |
@@ -180,7 +196,7 @@ Each DyTopo round:
 
 ## Connectors
 
-Big Michael ships 32 connector tools across 15 providers:
+BigLaw ships 32 connector tools across 15 providers:
 
 ### Legal Research & Courts
 | Provider | Tools | Activation |
@@ -511,7 +527,7 @@ per-model detail table.
 - **Workflows**: Place Lavern workflow JSON files in `workflows/laverne/`. Auto-loaded via `LavernWorkflowAdapter`.
 
 Lavern workflow types (`adversarial`, `counsel`, `full-bench`, `legal-design`, `pre-engagement`,
-`review`, `roundtable`, `tabulate`, `verification`) are mapped to Big Michael's WorkflowType.
+`review`, `roundtable`, `tabulate`, `verification`) are mapped to BigLaw's WorkflowType.
 
 ## Adding MikeOSS workflows
 
@@ -598,11 +614,74 @@ GET    /auth/clio/connect           begin Clio OAuth flow                       
 GET    /auth/clio/callback          Clio OAuth callback → store tokens
 DELETE /auth/clio/disconnect        revoke stored Clio tokens                     [partner only]
 POST   /tasks/from-clio-matter      import Clio matter → ingest docs → submit task [partner only]
-POST   /time-entries/sync-to-clio   push Big Michael time entries to Clio activities [partner only]
+POST   /time-entries/sync-to-clio   push BigLaw time entries to Clio activities [partner only]
 GET    /audit                       query audit log (access-filtered)
 GET    /audit/stream                SSE live audit stream (access-filtered)
 GET    /health                      health check
+POST   /bots/teams/webhook          Big Michael Teams Outgoing Webhook receiver
+POST   /bots/teams/notify           Internal: post message to a Teams channel
+POST   /bots/teams/matter-link      Link a matter to a Teams Incoming Webhook URL
+GET    /bots/teams/matter-link/:mn  Get the Teams webhook URL for a matter
+DELETE /bots/teams/matter-link/:mn  Remove a matter→channel link
+POST   /bots/slack/events           Big Michael Slack Events API receiver
+POST   /bots/slack/notify           Internal: post message to a Slack channel
+POST   /bots/slack/matter-link      Link a matter to a Slack channel ID
+GET    /bots/slack/matter-link/:mn  Get the Slack channel for a matter
+DELETE /bots/slack/matter-link/:mn  Remove a matter→channel link
+POST   /redline                     Playbook-aware contract redline
+POST   /headnotes/generate          Headnote extraction from case opinions
+POST   /precedents/generate         Precedent document generation
 ```
+
+## Big Michael — channel agent
+
+Big Michael is the name of the agent embedded in Teams and Slack. He is a thin command
+dispatcher on top of BigLaw's orchestrator — not a separate system.
+
+**Commands** (all prefixed `@BigMichael`):
+- `status [matter]` — matter health score + active tasks + top risks
+- `briefing [client]` — full hub-and-spoke client intelligence briefing (all systems)
+- `search [query]` — semantic search across the knowledge store
+- `task [description]` — submit a new roundtable task
+- `run [template-id]` — run a named workflow template
+- `help` — list available commands
+
+**Environment variables:**
+```bash
+# Teams
+TEAMS_WEBHOOK_SECRET=…           # HMAC-SHA256 signing token from Outgoing Webhook setup
+TEAMS_INCOMING_WEBHOOK_URL=…     # default channel to post async results + proactive notifications
+TEAMS_MATTER_WEBHOOKS='{"M-001":"https://…","M-002":"https://…"}'  # per-matter overrides
+
+# Slack
+SLACK_BOT_TOKEN=…                # Bot User OAuth Token (xoxb-…)
+SLACK_SIGNING_SECRET=…           # App signing secret for HMAC verification
+SLACK_DEFAULT_CHANNEL=…          # fallback channel ID for notifications
+SLACK_MATTER_CHANNELS='{"M-001":"C0123ABCD"}'  # per-matter channel map
+```
+
+**Proactive notifications** — when any matter task completes, Big Michael automatically posts
+to the linked channel (Teams Incoming Webhook or Slack channel). Wire up at startup with
+`attachTeamsTaskNotifier(orch)` and `attachSlackTaskNotifier(orch)` — already done in
+`src/mcp/server.ts`.
+
+**Client intelligence briefing** — launched by `@BigMichael briefing [client]`. Spawns
+10 parallel spokes (12 s timeout each via `Promise.allSettled`):
+
+| Spoke | Source |
+|---|---|
+| `clio` | Matter list, contacts, notes from Clio |
+| `imanage` | Document search from iManage |
+| `slack` | Channel mentions via Slack search API |
+| `teams_chat` | Chat message search via Microsoft Graph |
+| `sharepoint` | File search via Microsoft Graph (entityTypes: driveItem) |
+| `google_drive` | File search via Google Drive API |
+| `box` | File search via Box API |
+| `email_graph` | Exchange/O365 mail search via Microsoft Graph |
+| `email_gmail` | Gmail search via Gmail API (service-account) |
+| `knowledge_store` | Semantic search across ingested documents |
+| `internal_tasks` | BigLaw task list, matter health scores |
+| `internal_time` | Billable time entries per matter |
 
 ### Access control
 

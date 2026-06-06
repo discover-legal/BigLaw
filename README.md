@@ -1,10 +1,10 @@
 <div align="center">
 
-# Big Michael
+# BigLaw
 
-### Legal Intelligence Bench
+### The BigLaw tool stack. Open. Free.
 
-**A multi-agent legal AI orchestrator that convenes a bench of 100+ specialist agents — jurisdiction-neutral by design — has them debate and verify every finding, and returns cited, signature-ready work product.**
+**What Am Law 100 firms spend $2M/year on — consolidated into one open-source platform, free for solos, boutiques, and small firms.**
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-2563eb.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6.svg)](tsconfig.json)
@@ -15,17 +15,82 @@
 
 ---
 
-Big Michael isn't a chatbot with a legal prompt. It's an **orchestration engine** that runs
-*DyTopo rounds* of granular epistemic, conceptual, and writing agents over a **RuVector
-native HNSW registry** — and puts a **debate + verification protocol** between every finding
-and the page. Low-confidence or challenged findings stop at a **human gate** before they
-reach final synthesis.
+BigLaw isn't a chatbot with a legal prompt. It's an **orchestration engine** that replaces a stack
+of vendor contracts with a single open-source platform.
 
-It is a deliberate **gestalt**: the agent roster and prompts derive from **Lavern**, the document
-capabilities (tabular review, Word generation, tracked-change redlining) are ported from **Mike** —
-and neither upstream had the other's half. Big Michael runs Mike's document tools *through* Lavern's
-multi-agent debate, so a redline or a due-diligence matrix is produced by a bench that argues with
-itself and checks its own citations first.
+It runs *DyTopo rounds* of granular epistemic, conceptual, and writing agents over a **RuVector
+native HNSW registry** — and puts a **debate + verification protocol** between every finding
+and the page. Low-confidence or challenged findings stop at a **human gate** before they reach
+final synthesis.
+
+**Big Michael** is the agent that lives inside your firm's collaboration channels. @-mention him
+in Teams or Slack and he dispatches tasks to BigLaw's bench, surfaces matter status and client
+briefings, and posts back when work is done — turning the platform into a conversational layer
+on top of everything else the firm already uses.
+
+---
+
+## The cost chart
+
+> The tab in your browser you never click is a $300,000 invoice.
+
+Am Law 100 firms don't publish what they spend on legal tech. Let's do the math for them.
+
+### Per lawyer, per year
+
+| Vendor | What it does | Cost / lawyer / year | BigLaw |
+|---|---|---|---|
+| **Westlaw + CoCounsel** (Thomson Reuters) | Case law, statutes, AI research assist, citation checking | $15,000–50,000 | ✓ `citation_check`, `westlaw_research`, `court_listener_*` |
+| **Practical Law** (Thomson Reuters) | Standard documents, precedents, know-how notes | $10,000–20,000 | ✓ Precedent generator, playbook cascade |
+| **Contract Express** (Thomson Reuters) | Document automation, clause playbooks | $5,000–20,000 | ✓ Four-tier playbook cascade |
+| **LexisNexis + PSL** (RELX) | Headnotes, legal analysis, PSL standard docs | $8,000–25,000 | ✓ Headnote engine, `descrybe_*`, `trellis_*` |
+| **Definely / Kira / Luminance** | AI contract review, clause extraction, redlining | $2,000–8,000 | ✓ Playbook-aware redline engine |
+| **iManage / NetDocuments** | Document management, matter workspace | $2,000–5,000 | ✓ `imanage_search`, `imanage_get_document` |
+| **Everlaw / Relativity** | eDiscovery, document review | $3,000–10,000 | ✓ `everlaw_search_documents`, `_get_review_set` |
+| **Ironclad / DocuSign CLM** | Contract lifecycle management | $2,000–5,000 | ✓ `ironclad_*`, `docusign_*` |
+| **Clio Insights + Grow** | Matter health, client analytics, CRM | $1,000–3,000 | ✓ Matter health monitor, client briefing swarm |
+| **Solve Intelligence** | Patent drafting and claims | $2,000–6,000 | ✓ `solve_intelligence_*` |
+| **TOTAL** | | **$50,000–152,000 / lawyer / year** | **$0** |
+
+_Estimates based on publicly reported ranges and firm procurement disclosures. Enterprise deals vary; BigLaw firms negotiate volume pricing. Actual costs may be higher._
+
+### The math by firm size
+
+| Firm size | Annual tool stack (low) | Annual tool stack (high) | BigLaw cost | Year-1 savings |
+|---|---|---|---|---|
+| Solo | $50,000 | $152,000 | **$0** | $50k–152k |
+| 5 lawyers | $250,000 | $760,000 | **$0** | $250k–760k |
+| 10 lawyers | $500,000 | $1,520,000 | **$0** | $500k–1.5M |
+| 25 lawyers | $1,250,000 | $3,800,000 | **$0** | $1.25M–3.8M |
+| 50 lawyers | $2,500,000 | $7,600,000 | **$0** | $2.5M–7.6M |
+
+**What you actually pay to run BigLaw:** your Anthropic API bill.
+At typical usage (10 lawyers, moderate workload): ~$100–300/month — call it **$2,400/year**.
+
+That's the spread: $500,000/year vs $2,400/year for the same capability.
+
+### Always be closing
+
+Every tool in the table above is a subscription you can cancel the day you run setup.sh.
+
+Not all at once. One at a time. Start with whatever costs the most.
+Run the matter through BigLaw. Compare the output. Keep what you cancel.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/discover-legal/BigLaw/main/setup.sh | bash
+```
+
+### Do likewise
+
+A senior associate billed 2,200 hours last year. Her firm paid $80,000 in Westlaw fees
+for her seat. The Westlaw subscription cost more than her bonus.
+
+BigLaw gives it back.
+
+Take it. Use it. Tell the next solo down the hall.
+Run the math on your firm. Run setup.sh.
+
+**Go. Do likewise.**
 
 ---
 
@@ -49,7 +114,7 @@ A real matter, mid-flight — the bench self-organising, then the cited result.
 
 ## Why it's different
 
-| Most legal AI | Big Michael |
+| Most legal AI | BigLaw |
 |---|---|
 | One model, one pass | 100+ agents across 4 tiers, multiple DyTopo rounds |
 | "Trust me" answers | Every finding survives **adversarial debate** + **verification passes** before output |
@@ -67,6 +132,7 @@ A real matter, mid-flight — the bench self-organising, then the cited result.
 | Black-box costs | **Per-call cost tracking** with prompt-cache-aware pricing, local power estimates, and an admin cost dashboard |
 | Manual setup | **Interactive setup wizard** — one curl, checks prereqs, checkbox connector picker, writes `.env`, done |
 | No deadline tracking | **Court deadline calculator** — FRCP, UK CPR, EU Competition rules; calendar vs business days, cited |
+| Info scattered across systems | **Big Michael hub-and-spoke briefing swarm** — pulls from Clio, iManage, Slack, Teams, Drive, SharePoint, email in parallel |
 
 ---
 
@@ -99,7 +165,7 @@ T3  Tool agents (6)                  web search · retrieval · extraction · tr
 5. Findings written to the **intra-round whiteboard**
 6. Findings pass **CitationGate → Debate (Opus) → Verification (Haiku ×10)**
 7. Haiku synthesises the whiteboard into a round digest → written to **inter-round memory** for the next round
-7. Low-confidence / challenged findings escalate to a **human gate** before synthesis
+8. Low-confidence / challenged findings escalate to a **human gate** before synthesis
 
 **Q-learning agent recruitment** (`src/learning/index.ts`):
 
@@ -115,6 +181,66 @@ T3  Tool agents (6)                  web search · retrieval · extraction · tr
 | Agent registry | `./data/agents.rvdb` | Semantic agent recruitment + outcome tracking |
 | Inter-round memory | `./data/memory.rvdb` | Cross-round context retrieval |
 | Knowledge base | `./data/knowledge.rvdb` | Document chunks + semantic search |
+
+---
+
+## Big Michael — the channel agent
+
+**Big Michael** is BigLaw's conversational face in your collaboration tools. Add him to Teams or
+Slack and he responds to @-mentions in any channel, dispatching work to BigLaw's bench and
+posting results back.
+
+```
+@BigMichael status M-2024-001        → matter health score + active tasks + risks
+@BigMichael briefing Acme Corp       → full hub-and-spoke client intelligence briefing
+@BigMichael search force majeure     → semantic search across the knowledge store
+@BigMichael task review this NDA     → submit a roundtable AI task
+@BigMichael run due-diligence        → run a named workflow template
+@BigMichael help                     → list available commands
+```
+
+**Teams setup** (`TEAMS_WEBHOOK_SECRET` + `TEAMS_INCOMING_WEBHOOK_URL`):
+1. Teams admin → Apps → Outgoing Webhooks → Create
+2. Set callback URL to `https://<host>/bots/teams/webhook`
+3. Copy the security token → `TEAMS_WEBHOOK_SECRET`
+4. Channel → … → Connectors → Incoming Webhook → copy URL → `TEAMS_INCOMING_WEBHOOK_URL`
+
+**Slack setup** (`SLACK_BOT_TOKEN` + `SLACK_SIGNING_SECRET`):
+1. [api.slack.com/apps](https://api.slack.com/apps) → Create App → From scratch
+2. Bot Token Scopes: `chat:write`, `channels:history`, `search:read`
+3. Event Subscriptions → Request URL: `https://<host>/bots/slack/events`
+4. Subscribe to: `app_mention`
+5. Install to workspace → copy Bot Token + Signing Secret
+
+**Proactive notifications** — when any task completes, Big Michael posts to the matter's linked
+channel automatically:
+
+```bash
+# Link a matter to a Teams channel
+POST /bots/teams/matter-link  { "matterNumber": "M-001", "webhookUrl": "https://..." }
+
+# Link a matter to a Slack channel
+POST /bots/slack/matter-link  { "matterNumber": "M-001", "channelId": "C0123ABCD" }
+```
+
+**Client intelligence briefing** — Big Michael's briefing command launches a hub-and-spoke
+swarm that pulls from all connected systems in parallel (12 s per spoke, `Promise.allSettled`):
+
+| Spoke | What it pulls |
+|---|---|
+| Clio | Matters, contacts, time entries, notes |
+| iManage | Documents, matters |
+| Slack | Mentions of the client across all channels |
+| Microsoft Teams | Chat messages mentioning the client |
+| SharePoint | Files related to the client |
+| Google Drive / Box | Files and folders |
+| Graph Mail (O365) | Email threads |
+| Gmail | Email threads |
+| Knowledge store | Ingested documents + semantic search |
+| Internal | BigLaw tasks, health scores, time entries |
+
+The hub Sonnet synthesises all spokes into a single Markdown briefing. The scattergun problem —
+client info spread across 10 mailboxes, 2 call notes, and 4 DM threads — solved in one command.
 
 ---
 
@@ -136,9 +262,12 @@ Agents act through a typed `ToolRegistry`. Highlights:
 | `web_search` · `translate` · `citation_check` | Tavily search, translation, source verification |
 | 32 connector tools | CourtListener · Westlaw · Everlaw · Trellis · Descrybe · Ironclad · iManage · Definely · DocuSign CLM · Lawve AI · Solve Intelligence · Google Drive · Box · Slack · TopCounsel |
 | `compute_deadlines` | Court deadline calculator — trigger date → all deadlines under FRCP / UK CPR / EU Competition rules, with citations |
+| `redline_contract` | Playbook-aware contract redlining — clause extraction → Sonnet analysis → tracked-change report |
+| `generate_headnotes` | Westlaw Key Number / LexisNexis headnote replacement — Sonnet extraction + Haiku meta |
+| `generate_precedent` | Practical Law / PSL replacement — Haiku structure + Opus drafting from firm knowledge + playbook cascade |
 
 > Document generation, tabular review, and tracked-change redlining are ported from
-> [Mike](https://github.com/willchen96/mike) (AGPL-3.0) and adapted to Big Michael's tool
+> [Mike](https://github.com/willchen96/mike) (AGPL-3.0) and adapted to BigLaw's tool
 > registry and provider abstraction. See [`NOTICE`](NOTICE).
 
 ---
@@ -148,7 +277,7 @@ Agents act through a typed `ToolRegistry`. Highlights:
 ### The easy way — one command
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/discover-legal/big-michael/main/setup.sh | bash
+curl -fsSL https://raw.githubusercontent.com/discover-legal/BigLaw/main/setup.sh | bash
 ```
 
 Handles everything: Node.js install (via nvm if needed), clone, `npm install`, then an interactive wizard that checks Python / Docker / Tesseract, walks you through every API key with inline instructions, shows a **checkbox picker for all 32 connectors**, writes `.env`, and optionally runs the smoke test. Re-run any time to add connectors.
@@ -216,7 +345,7 @@ client automatically. Set `BIG_MICHAEL_API` to point a client at a non-default o
 
 ## Legal data connectors
 
-Big Michael ships 32 connector tools across 15 providers, all using Streamable HTTP MCP (JSON-RPC 2.0).
+BigLaw ships 32 connector tools across 15 providers, all using Streamable HTTP MCP (JSON-RPC 2.0).
 Unconfigured connectors return a structured `{ error: "not configured" }` — they never crash the server.
 
 **Legal research & courts**
@@ -265,9 +394,9 @@ Clio uses OAuth 2.0 rather than a static API key. After setting credentials, a p
 `./data/clio-auth.json` and auto-refreshed. All four Clio data regions are supported (`CLIO_REGION=us|eu|ca|au`).
 
 **Matter import:** `POST /tasks/from-clio-matter` fetches a Clio matter's details, ingests its
-attached documents into the knowledge base, and submits a Big Michael task in one call.
+attached documents into the knowledge base, and submits a BigLaw task in one call.
 
-**Time sync:** `POST /time-entries/sync-to-clio` pushes Big Michael billable time entries back to a
+**Time sync:** `POST /time-entries/sync-to-clio` pushes BigLaw billable time entries back to a
 Clio matter as activity records, preserving 6-minute billing unit rounding. Idempotent — entries
 are stamped with `clioSyncedAt` on success and skipped on subsequent calls.
 
@@ -315,17 +444,17 @@ Clio uses OAuth 2.0 rather than a static API key. Setup takes about five minutes
 
 1. Log in to Clio as a firm admin.
 2. Go to **Settings → Developer Applications → New Application**.
-3. Fill in a name (e.g. "Big Michael") and set the **Redirect URI** to:
+3. Fill in a name (e.g. "BigLaw") and set the **Redirect URI** to:
    ```
    http://localhost:3101/auth/clio/callback
    ```
    For production, replace with your actual `PUBLIC_BASE_URL`, e.g.:
    ```
-   https://bigmichael.yourfirm.com/auth/clio/callback
+   https://biglaw.yourfirm.com/auth/clio/callback
    ```
    Clio performs an exact-string match — the URI must be identical to `CLIO_REDIRECT_URI` in your `.env`.
 
-4. In the app's **API Access** panel, enable permissions for each resource Big Michael uses:
+4. In the app's **API Access** panel, enable permissions for each resource BigLaw uses:
 
    | Resource | Why |
    |---|---|
@@ -349,7 +478,7 @@ CLIO_CLIENT_SECRET=your-client-secret
 CLIO_REGION=us
 
 # Only needed if your app deployment URL differs from the default
-# CLIO_REDIRECT_URI=https://bigmichael.yourfirm.com/auth/clio/callback
+# CLIO_REDIRECT_URI=https://biglaw.yourfirm.com/auth/clio/callback
 ```
 
 ### 3. Connect
@@ -390,33 +519,16 @@ curl -X POST http://localhost:3101/time-entries/sync-to-clio \
 ```
 Returns `{ synced, skipped, errors }`. Already-synced entries are skipped automatically.
 
-**Disconnect:**
-```bash
-curl -X DELETE http://localhost:3101/auth/clio/disconnect
-```
-
-### Notes
-
-- **Private app, no marketplace review needed.** This is a firm-internal OAuth app — Clio's
-  marketplace approval process only applies to apps distributed to multiple firms.
-- **Redirect URI is case-sensitive and must be an exact match.** If you get a redirect_uri
-  mismatch error during OAuth, compare the value in your Clio app settings with `CLIO_REDIRECT_URI`.
-- **Region mismatch** (e.g. `CLIO_REGION=us` for a firm on EU data) causes 401 errors on every
-  API call. Check the region in Clio under **Settings → Billing → Data Region**.
-- **`CLIO_SCOPES`** is optional. Clio v4 defaults to the app's portal-configured permissions when
-  the scope parameter is absent. Set it if your app requires explicit scope declaration in the
-  authorization URL.
-
 ---
 
 ## Using from Claude Code
 
-`.mcp.json` registers Big Michael as an MCP server. Opening this directory in Claude Code exposes
+`.mcp.json` registers BigLaw as an MCP server. Opening this directory in Claude Code exposes
 the full toolset (`submit_task`, `get_task`, `approve_gate`, `submit_from_template`,
 `ingest_document`, `search_knowledge`, `get_audit`, …):
 
 ```
-Use big-michael to review this SaaS master services agreement under New York law —
+Use BigLaw to review this SaaS master services agreement under New York law —
 flag the uncapped indemnity and unlimited-liability exposure, and recommend fallback
 positions for the customer. Run a roundtable workflow.
 ```
@@ -475,6 +587,14 @@ DELETE /auth/clio/disconnect
 POST   /tasks/from-clio-matter                                             (partner only)
 POST   /time-entries/sync-to-clio                                         (partner only)
 GET    /audit · /audit/stream (SSE)        GET /health
+POST   /bots/teams/webhook                 Teams Outgoing Webhook receiver
+POST   /bots/teams/notify                  Internal: post to a Teams channel
+POST   /bots/slack/events                  Slack Events API receiver
+POST   /bots/slack/notify                  Internal: post to a Slack channel
+POST   /bots/{teams,slack}/matter-link     Link a matter to a channel
+GET    /redline                            Contract redline (playbook-aware)
+POST   /headnotes/generate                 Headnote extraction from case opinions
+POST   /precedents/generate                Precedent document generation
 ```
 
 Document ingestion (`POST /documents`, `POST /documents/upload`) returns enriched metadata:
@@ -515,7 +635,7 @@ Every significant event is recorded in an **append-only, SHA-256 hash-chained JS
 
 ### Key design for legal defensibility
 
-**External system access is attributed to the responsible lawyer**, not "system". When Big Michael calls Westlaw, CourtListener, Clio, or any of the 32 connectors on behalf of a task, the `actorId` on the `tool.call` entry is the lawyer who submitted (or was assigned to) that matter. A court question of the form *"did Sarah Chen access Westlaw on Thursday?"* can be answered directly from the JSONL.
+**External system access is attributed to the responsible lawyer**, not "system". When BigLaw calls Westlaw, CourtListener, Clio, or any of the 32 connectors on behalf of a task, the `actorId` on the `tool.call` entry is the lawyer who submitted (or was assigned to) that matter. A court question of the form *"did Sarah Chen access Westlaw on Thursday?"* can be answered directly from the JSONL.
 
 **Assignment changes are delta-logged**: `task.assigned` records both the final lawyer list and the `added`/`removed` diff, and carries the partner's profileId as actor so the audit trail shows *who* changed the assignment.
 
@@ -580,20 +700,6 @@ so work product reads as if the lawyer wrote it themselves, not as generic AI ou
 5. The `ToneProfile` is stored on the lawyer's profile and injected into all drafting-domain agent
    system prompts and the final Opus synthesis call
 
-**ToneProfile fields:**
-
-| Field | Values |
-|---|---|
-| `formality` | `formal` · `semi-formal` · `conversational` |
-| `sentenceStyle` | description of typical sentence length and structure |
-| `vocabulary` | characterisation of preferred word register |
-| `rhetoricalStyle` | e.g. Socratic, declarative, narrative |
-| `signaturePatterns` | 2–5 concrete observations (specific phrases, habits, tics) |
-| `injectionSnippet` | 3–5 sentence LLM drafter instruction — injected verbatim into agent prompts |
-
-The `injectionSnippet` is sanitised before injection. `DELETE /profiles/:id/tone` clears the profile.
-The API also accepts `POST /profiles/:id/tone/linkedin-import` as a backwards-compatible alias.
-
 **Getting a LinkedIn export:**
 
 1. Go to <https://www.linkedin.com/mypreferences/d/download-my-data>
@@ -606,14 +712,6 @@ The API also accepts `POST /profiles/:id/tone/linkedin-import` as a backwards-co
 ## Cost visibility
 
 Every Anthropic and Ollama API call is recorded and persisted to `./data/costs.jsonl`.
-
-**Tracked per call:**
-
-- Model, provider, `inputTokens`, `outputTokens`
-- `cacheWriteTokens` (billed at 1.25× base input rate) and `cacheReadTokens` (billed at 0.10× base input rate)
-- `costUsd` — computed from the pricing table below
-- `estimatedWh` — local inference only; estimated from `LOCAL_INFERENCE_WATTS` × `durationMs`
-- `durationMs`, `context` (label), `taskId`, `profileId`
 
 **Pricing table (per million tokens, input / output):**
 
@@ -636,42 +734,32 @@ GET  /tasks/:id/cost        cost breakdown for a single task
 GET  /profiles/:id/cost     cost attributed to a lawyer's tasks
 ```
 
-**Admin dashboard — Cost tab (partner only):**
-
-- Stat cards: total cost, total tokens, cache hit rate, estimated kWh
-- Stacked token breakdown bar: input / cache-write / cache-read / output
-- Cost by model — SVG bar chart
-- Cost by context — SVG bar chart (synthesis, debate, tool-agent, etc.)
-- Per-model detail table: calls, tokens, cache rates, total cost
-
 ---
 
 ## Security hardening
 
-Big Michael handles legal work product, client PII, and privileged communications — so the
+BigLaw handles legal work product, client PII, and privileged communications — so the
 attack surface is treated seriously.
 
 | Area | What's in place |
 |---|---|
-| **Profile data scoping** | `GET /profiles/:id` returns full PII only to partners and the profile owner; other lawyers receive display-only fields — consistent with the list endpoint |
+| **Profile data scoping** | `GET /profiles/:id` returns full PII only to partners and the profile owner; other lawyers receive display-only fields |
 | **Constant-time auth** | API key comparison pads to expected length before `timingSafeEqual` so wrong-length keys don't short-circuit the comparison and leak key length |
-| **Auth rate limiting** | Auth endpoints (login + callback) are sliding-window rate-limited to 20 req/min per IP; the limiter map is periodically evicted to prevent memory exhaustion under waves of unique attacker IPs |
-| **Input caps** | `fetch_documents` capped at 20 IDs; `tabular_review` capped at 50 documents × 30 columns — prevents a prompt-injected agent from triggering thousands of LLM calls |
-| **CSV safety** | Time-entry and table CSV exports strip `\r\n` from field values to prevent row injection / spreadsheet formula attacks |
-| **Embedding guards** | `embed()` validates OpenAI returns a non-empty data array; `embedBatch()` validates Ollama returns exactly as many vectors as inputs; `cosineSimilarity()` rejects mismatched vector lengths rather than silently producing NaN |
-| **SSRF protection** | All admin-configurable endpoint URLs (DocuSeal, 8 legal connectors, MCP plugins) are validated against a private/loopback blocklist at startup and on every admin panel change |
-| **Path traversal** | PDF and docx tools enforce an allow-list of read roots (`PDF_ALLOWED_DIRS`); docx tools resolve symlinks before the boundary check; the plugin directory is pinned to the project root |
-| **Prompt injection** | Lavern agent system prompts are sanitised with `sanitizePromptContent()` to remove rogue `FINDING:/END_FINDING` markers; template substitutions are likewise sanitised |
-| **Ollama tool args** | Unparseable tool call arguments from local models now surface a structured `_parse_error` key so the agent loop sees a clear error rather than silently executing with an empty argument set |
-| **No secrets in logs** | API keys appear only in `Authorization` headers; connector error messages are capped at 200–400 chars and never echo raw server responses back to agents |
-| **Signed sessions** | Session cookies are signed (Fastify `@fastify/cookie`), httpOnly, sameSite:lax, secure on HTTPS; logout adds the session JTI to a bounded revocation set (max 100k, FIFO) |
-| **`tabular_review` reviewId** | reviewId is `null` when the result file could not be written, preventing a confusing "review not found" error from a subsequent `read_table_cells` call |
+| **Auth rate limiting** | Auth endpoints are sliding-window rate-limited to 20 req/min per IP |
+| **Input caps** | `fetch_documents` capped at 20 IDs; `tabular_review` capped at 50 documents × 30 columns |
+| **CSV safety** | Time-entry and table CSV exports strip `\r\n` from field values to prevent row injection |
+| **SSRF protection** | All admin-configurable endpoint URLs are validated against a private/loopback blocklist at startup |
+| **Path traversal** | PDF and docx tools enforce an allow-list of read roots; the plugin directory is pinned to the project root |
+| **Prompt injection** | Lavern agent system prompts are sanitised with `sanitizePromptContent()` to remove rogue markers |
+| **Bot signature verification** | Teams Outgoing Webhook: HMAC-SHA256 (`Authorization: HMAC <base64>`). Slack Events API: signing-secret + 5-min replay window |
+| **No secrets in logs** | API keys appear only in `Authorization` headers; connector error messages are capped at 200–400 chars |
+| **Signed sessions** | Session cookies are signed, httpOnly, sameSite:lax, secure on HTTPS |
 
 ---
 
+## Lawyers, roles & access control
 
-
-Big Michael is multi-user when deployed. Identity comes from **OAuth** (Google,
+BigLaw is multi-user when deployed. Identity comes from **OAuth** (Google,
 Microsoft, or LinkedIn); each person is a **lawyer profile** with a role:
 
 - **partner** (admin) — sees every matter, manages the lawyer roster, assigns
@@ -679,68 +767,61 @@ Microsoft, or LinkedIn); each person is a **lawyer profile** with a role:
 - **lawyer** — sees **only** the matters they're assigned to. There is no
   inter-lawyer visibility unless a partner shares a case.
 
-This is enforced at every matter-scoped endpoint (list, detail, SSE stream, gates,
-CSV, rounds, audit) and documents are scoped to their uploader. The `partner`/
-`lawyer` rules are covered by unit tests (`npm test`).
+This is enforced at every matter-scoped endpoint and documented in unit tests (`npm test`).
 
 ### Lawyer profiles
 
-Each profile stores:
-- **Name, email, title, role** — managed by partners in the Admin › Users tab
-- **Practice areas** — one or more of the 15 canonical areas (Corporate & M&A, Competition & Antitrust, Employment & Labour, IP, Real Estate, Banking & Finance, Litigation, Tax, Regulatory & Compliance, Data Privacy, Immigration, Insolvency, Capital Markets, Insurance, Environmental & Climate)
-- **Bio** — short free-text description
-
-Lawyers can edit their own name, title, bio, and practice areas. Partners control role, mode, and can edit any profile.
+Each profile stores name, email, title, role, practice areas (one or more of 15 canonical areas),
+bio, and optionally a `ToneProfile` for voice fingerprinting.
 
 ### UX modes
 
-Each lawyer profile carries a **mode** that controls both the UI accent colour and which features are accessible:
-
 | Mode | Accent | Who | Features |
 |---|---|---|---|
-| `admin` | gold | Partners (immutable) | Everything: user management, NOSLEGAL analytics, all settings, time reporting, every matter |
-| `full_flavour` | scarlet | Lawyers (default) | Full law firm stack: all workflows, 32 connectors, conflict checks, time tracking, client roster |
-| `lite` | amber-gold | Lawyers (partner-assigned) | Core only: submit tasks, view results, library, basic search — no billing or conflict engine |
+| `admin` | gold | Partners (immutable) | Everything: user management, analytics, all settings, time reporting |
+| `full_flavour` | scarlet | Lawyers (default) | Full law firm stack: all workflows, 32 connectors, conflict checks, time tracking |
+| `lite` | amber-gold | Lawyers (partner-assigned) | Core only: submit tasks, view results, library, basic search |
 
-Partners are always `admin` regardless of profile setting. Lawyers default to `full_flavour`; a partner can downgrade them to `lite` in Admin › Users.
-
-The accent colour is injected as a CSS custom property (`--accent`) the moment the session loads — every interactive element (buttons, active states, stepper, selection highlight) responds automatically.
-
-### Clients & matters
-
-Partners maintain a client roster (`GET/POST/PATCH/DELETE /clients`). Each client has:
-- **Client number** — unique firm reference (e.g. `C-001`)
-- **Matters** — sub-list of matter numbers with descriptions and practice areas
-- **Adverse parties** — names of opposing parties; used for automatic conflict-of-interest checks
-
-When a new client is added the system immediately checks their name against all existing clients' adverse-party lists and surfaces a conflict alert if there is a match. Clicking a client number in the matters sidebar filters the list to that client's matters.
-
-### Practice area auto-detection
-
-Every document ingested through the Library (pasted or uploaded) is automatically classified into one of the 15 practice areas by a lightweight Claude Haiku call. The system also tries to identify which existing client the document relates to. Both the detected area and any matching client are returned in the API response alongside a list of suggested lawyers whose practice areas align.
-
-**Local dev runs with auth OFF** — a single "local partner" who sees everything,
-so you don't need OAuth to develop. Turn it on for shared deployments:
+### Auth setup (production)
 
 ```bash
 AUTH_ENABLED=true
 SESSION_SECRET=<random 32+ char secret>
-PUBLIC_BASE_URL=https://api.your-host        # this API (OAuth redirect base)
-PUBLIC_UI_URL=https://app.your-host          # where to land after login
-CORS_ORIGINS=https://app.your-host           # allow-listed browser origin(s)
-ADMIN_EMAILS=you@firm.com                    # emails provisioned as partner
+PUBLIC_BASE_URL=https://api.your-host
+PUBLIC_UI_URL=https://app.your-host
+CORS_ORIGINS=https://app.your-host
+ADMIN_EMAILS=you@firm.com
 
-# Register an OAuth app with each provider you want; redirect URI is
-#   <PUBLIC_BASE_URL>/auth/<provider>/callback   (provider ∈ google|microsoft|linkedin)
 GOOGLE_CLIENT_ID=…       GOOGLE_CLIENT_SECRET=…
 MICROSOFT_CLIENT_ID=…    MICROSOFT_CLIENT_SECRET=…
 LINKEDIN_CLIENT_ID=…     LINKEDIN_CLIENT_SECRET=…
 ```
 
-Profiles are auto-provisioned on first login (partner if the email is in
-`ADMIN_EMAILS`, otherwise lawyer).
+**Local dev** runs with auth OFF — a single "local partner" who sees everything. No OAuth required to develop.
 
 📖 Full step-by-step provider registration: [`docs/AUTH_SETUP.md`](docs/AUTH_SETUP.md).
+
+---
+
+## Playbook cascade
+
+BigLaw ships a four-tier playbook system that replaces Contract Express, Practical Law Standard Docs,
+and any precedent library that charges per user:
+
+```
+client (3) > matter (2) > personal (1) > firm (0)
+```
+
+Client requirements win; firm defaults are the market-standard baseline. A playbook at a higher
+priority level overrides the corresponding clause or preference from any lower level.
+
+```bash
+# Create a firm-level fallback playbook
+POST /playbooks { "scope": "firm", "name": "Standard NDA positions", "clauses": [...] }
+
+# Override at matter level (e.g. bespoke retention terms for M&A)
+POST /playbooks { "scope": "matter", "matterNumber": "M-001", "clauses": [...] }
+```
 
 ---
 
@@ -762,10 +843,17 @@ Profiles are auto-provisioned on first login (partner if the email is in
 | `src/auth/` | Lawyer profiles, roles, RLS access control + OAuth login |
 | `src/clients/` | Client roster, matter sub-lists, conflict-of-interest checks |
 | `src/time/index.ts` | Billable time tracking — 6-min units, open/close lifecycle, CSV export |
+| `src/playbook/index.ts` | Four-tier playbook cascade — firm/personal/matter/client |
+| `src/citations/engine.ts` | Citation engine — CourtListener-backed KeyCite replacement |
+| `src/redline/engine.ts` | Playbook-aware contract redlining |
+| `src/headnotes/engine.ts` | Headnote extraction from case opinions |
+| `src/precedent/generator.ts` | Precedent document generation from knowledge store + playbooks |
+| `src/briefing/index.ts` | Hub-and-spoke client briefing swarm (Chalkboard pattern) |
+| `src/bots/teams.ts` · `src/bots/slack.ts` | Big Michael — Teams + Slack channel agent |
+| `src/integrations/graph.ts` | Microsoft Graph API — SharePoint, Teams, Exchange |
+| `src/email/client.ts` | Email search — Microsoft Graph (O365) + Gmail |
 | `src/services/classifier.ts` | Haiku-based practice area + client + NOSLEGAL detection |
-| `src/services/toneAnalyzer.ts` | Chunked recursive Haiku tone analysis (MapReduce) for voice fingerprinting |
-| `src/linkedin/parser.ts` | RFC 4180 CSV + minimal ZIP parser for LinkedIn data exports |
-| `src/services/writingSamples.ts` | Multi-format writing sample extractor — LinkedIn ZIP/CSV, DOCX, PDF, generic CSV, plain text |
+| `src/services/toneAnalyzer.ts` | Chunked recursive Haiku tone analysis (MapReduce) |
 | `src/cost/index.ts` | `CostStore`, pricing table, `calcCostUsd`, `calcWattHours` |
 | `src/settings/` | Live admin settings (DyTopo depth, debate, DocuSeal, modes) |
 | `src/mcp/server.ts` | MCP stdio server + Fastify REST API |
@@ -779,7 +867,7 @@ Profiles are auto-provisioned on first login (partner if the email is in
 
 ## License & attribution
 
-Big Michael is distributed under the **GNU Affero General Public License v3.0** ([`LICENSE`](LICENSE)).
+BigLaw is distributed under the **GNU Affero General Public License v3.0** ([`LICENSE`](LICENSE)).
 Because it bundles an AGPL-3.0 component, AGPL §13 applies: running a modified version as a network
 service obliges you to offer the complete corresponding source to its users.
 

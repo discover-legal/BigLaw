@@ -1,0 +1,12 @@
+{
+  "id": "contract-redline",
+  "name": "Contract Redline (Playbook-Driven)",
+  "description": "Automated playbook-driven redline of a counterparty draft. Extracts clauses, resolves the four-tier cascade (firm / client / matter / personal), and returns clause-by-clause accept/redline/escalate/delete with proposed replacement language and an executive summary. Replaces Definely, Kira/Luminance, and 4–8 hrs of associate markup.",
+  "workflowType": "review",
+  "promptTemplate": "Run a full playbook-driven redline of the following counterparty draft. Practice area: {{practiceArea}}. Jurisdiction: {{jurisdiction}}. Identify all clauses that deviate from the firm's playbook, propose specific replacement language, and flag any red lines crossed.\n\n{{description}}",
+  "substitutions": {
+    "practiceArea": "M&A / Commercial",
+    "jurisdiction": "English law",
+    "description": "Paste or reference the counterparty draft text here."
+  }
+}

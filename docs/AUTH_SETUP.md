@@ -1,6 +1,6 @@
 # Deploying with login (OAuth + access control)
 
-Big Michael is **single-user with no login locally** (`AUTH_ENABLED=false` → one
+BigLaw is **single-user with no login locally** (`AUTH_ENABLED=false` → one
 "local partner" who sees everything). For a shared/firm deployment, turn auth on
 and wire one or more OAuth providers. This guide takes ~10 minutes.
 

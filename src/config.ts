@@ -169,6 +169,7 @@ export const Config = {
     ocgFile: optional("OCG_FILE", ".ocg.json"),
     jobsFile: optional("JOBS_FILE", ".jobs.json"),
     preBillsFile: optional("PREBILLS_FILE", "./data/prebills.json"),
+    playbooksFile: optional("PLAYBOOKS_FILE", "./data/playbooks.json"),
   },
 
   // ─── Background job queue ──────────────────────────────────────────────────
@@ -354,6 +355,95 @@ export const Config = {
     apiKey: process.env.TWENTY_API_KEY ?? "",
     apiUrl: optional("TWENTY_API_URL", ""),
     enabled: Boolean(process.env.TWENTY_API_KEY && process.env.TWENTY_API_URL),
+  },
+
+  // ── Email intelligence ────────────────────────────────────────────────────
+  //
+  // Two email providers are supported for the briefing swarm spoke:
+  //
+  //  Microsoft Graph (Exchange / Office 365 — most law firms):
+  //    App-only auth (recommended for server-side): register an Azure AD
+  //    app with Mail.Read application permission, then:
+  //      GRAPH_TENANT_ID      — your Azure AD / Entra tenant ID
+  //      GRAPH_CLIENT_ID      — app (client) ID
+  //      GRAPH_CLIENT_SECRET  — client secret value
+  //      GRAPH_USER_EMAIL     — the mailbox to search (e.g. partner@firm.com)
+  //    Or supply a pre-obtained bearer token directly (dev / single-user):
+  //      GRAPH_ACCESS_TOKEN   — optional: used as-is if set (overrides app-only)
+  //
+  //  Gmail (Google Workspace — boutique / tech-forward firms):
+  //    Service-account auth (recommended):
+  //      GMAIL_SA_KEY_JSON    — contents of the service-account key.json (base-64 or raw JSON)
+  //      GMAIL_USER_EMAIL     — the mailbox to impersonate
+  //    Or supply a pre-obtained OAuth access token directly:
+  //      GMAIL_ACCESS_TOKEN   — optional: used as-is if set (overrides service-account)
+  //
+  // Both providers are optional. If neither is configured the email spoke
+  // returns empty intel silently — no errors, no noise.
+  email: {
+    graph: {
+      tenantId: process.env.GRAPH_TENANT_ID ?? "",
+      clientId: process.env.GRAPH_CLIENT_ID ?? "",
+      clientSecret: process.env.GRAPH_CLIENT_SECRET ?? "",
+      userEmail: process.env.GRAPH_USER_EMAIL ?? "",
+      accessToken: process.env.GRAPH_ACCESS_TOKEN ?? "",
+      enabled: Boolean(
+        process.env.GRAPH_ACCESS_TOKEN ||
+        (process.env.GRAPH_TENANT_ID && process.env.GRAPH_CLIENT_ID && process.env.GRAPH_CLIENT_SECRET),
+      ),
+    },
+    gmail: {
+      saKeyJson: process.env.GMAIL_SA_KEY_JSON ?? "",
+      userEmail: process.env.GMAIL_USER_EMAIL ?? "",
+      accessToken: process.env.GMAIL_ACCESS_TOKEN ?? "",
+      enabled: Boolean(process.env.GMAIL_ACCESS_TOKEN || process.env.GMAIL_SA_KEY_JSON),
+    },
+  },
+
+  // ── Teams + SharePoint bot ────────────────────────────────────────────────
+  //
+  //  Teams Outgoing Webhook (receive @-mentions):
+  //    TEAMS_WEBHOOK_SECRET       — security token shown when creating the webhook
+  //
+  //  Teams Incoming Webhook (post to channels):
+  //    TEAMS_INCOMING_WEBHOOK_URL — global fallback channel URL
+  //    TEAMS_MATTER_WEBHOOKS      — JSON map {"M-001":"https://..."}
+  //
+  //  SharePoint search uses the same GRAPH_* app credentials.
+  //  The Azure AD app needs Sites.Read.All + ChannelMessage.Read.All.
+  //
+  //  Slack bot:
+  //    SLACK_BOT_TOKEN            — xoxb-... Bot User OAuth Token
+  //    SLACK_SIGNING_SECRET       — App signing secret (for request verification)
+  //    SLACK_DEFAULT_CHANNEL      — fallback channel ID for notifications
+  //    SLACK_MATTER_CHANNELS      — JSON map {"M-001":"C0123ABCD"}
+  bots: {
+    teams: {
+      webhookSecret: process.env.TEAMS_WEBHOOK_SECRET ?? "",
+      incomingWebhookUrl: process.env.TEAMS_INCOMING_WEBHOOK_URL ?? "",
+      enabled: Boolean(process.env.TEAMS_WEBHOOK_SECRET || process.env.TEAMS_INCOMING_WEBHOOK_URL),
+    },
+    slack: {
+      botToken: process.env.SLACK_BOT_TOKEN ?? "",
+      signingSecret: process.env.SLACK_SIGNING_SECRET ?? "",
+      defaultChannel: process.env.SLACK_DEFAULT_CHANNEL ?? "",
+      enabled: Boolean(process.env.SLACK_BOT_TOKEN && process.env.SLACK_SIGNING_SECRET),
+    },
+    sharePoint: {
+      // SharePoint search uses Graph credentials — no additional config needed
+      // unless you want to scope to a specific site collection.
+      siteUrl: process.env.SHAREPOINT_SITE_URL ?? "",
+      enabled: Boolean(
+        process.env.GRAPH_ACCESS_TOKEN ||
+        (process.env.GRAPH_TENANT_ID && process.env.GRAPH_CLIENT_ID && process.env.GRAPH_CLIENT_SECRET),
+      ),
+    },
+    teamsSearch: {
+      enabled: Boolean(
+        process.env.GRAPH_ACCESS_TOKEN ||
+        (process.env.GRAPH_TENANT_ID && process.env.GRAPH_CLIENT_ID && process.env.GRAPH_CLIENT_SECRET),
+      ),
+    },
   },
 
   // Infisical — open-source secrets manager (https://infisical.com)

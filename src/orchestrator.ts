@@ -60,6 +60,14 @@ import { BudgetPredictor } from "./budget/predictor.js";
 import { ConflictGraph } from "./graph/conflict.js";
 import { RegPulseMonitor } from "./regulatory/pulse.js";
 import { DeadlineEngine } from "./deadlines/engine.js";
+import { CitationEngine } from "./citations/engine.js";
+import { MatterHealthMonitor } from "./matters/health.js";
+import { PlaybookStore, PlaybookBuilder } from "./playbook/index.js";
+import { InvoiceValidator } from "./billing/invoice-validator.js";
+import { RedlineEngine } from "./redline/engine.js";
+import { HeadnoteEngine } from "./headnotes/engine.js";
+import { BriefingEngine } from "./briefing/index.js";
+import { PrecedentGenerator } from "./precedent/generator.js";
 import type {
   Task,
   WorkflowType,
@@ -139,6 +147,15 @@ export class Orchestrator {
   readonly regPulse = new RegPulseMonitor();
   readonly docketMonitor: DocketMonitor;
   readonly deadlines = new DeadlineEngine();
+  readonly citations = new CitationEngine();
+  readonly matterHealth = new MatterHealthMonitor();
+  readonly playbookStore: PlaybookStore;
+  readonly playbookBuilder = new PlaybookBuilder();
+  readonly invoiceValidator = new InvoiceValidator();
+  readonly redline = new RedlineEngine();
+  readonly headnotes = new HeadnoteEngine();
+  readonly briefing = new BriefingEngine();
+  readonly precedents = new PrecedentGenerator();
 
   private readonly tasks: Map<string, Task> = new Map();
   private readonly gateEmitter = new EventEmitter();
@@ -161,6 +178,7 @@ export class Orchestrator {
     this.preBills = new PreBillStore(Config.persistence.preBillsFile);
     this.conflictGraph = new ConflictGraph();
     this.docketMonitor = new DocketMonitor(Config.dockets.file);
+    this.playbookStore = new PlaybookStore(Config.persistence.playbooksFile ?? "./data/playbooks.json");
   }
 
   async init(): Promise<void> {
@@ -172,6 +190,7 @@ export class Orchestrator {
     await this.ocg.init();
     await this.preBills.init();
     await this.conflictGraph.connect();
+    await this.playbookStore.init();
     await agentLearning.init();
     await Promise.all([
       this.registry.init(),

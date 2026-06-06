@@ -54,6 +54,8 @@ import { startWorker } from "../queue/worker.js";
 import { exportLedes1998B } from "../billing/ledes.js";
 import { generateStatusReport } from "../reports/status.js";
 import type { StatusReportOptions } from "../reports/status.js";
+import { registerTeamsBotRoutes, attachTeamsTaskNotifier } from "../bots/teams.js";
+import { registerSlackBotRoutes, attachSlackTaskNotifier } from "../bots/slack.js";
 
 // ─── Tool schemas ─────────────────────────────────────────────────────────────
 
@@ -242,6 +244,158 @@ const TOOLS = [
       },
     },
   },
+  // ── Goliath killer tools ──────────────────────────────────────────────────
+  {
+    name: "check_citation",
+    description: "Check whether a case citation is still good law. Returns a KeyCite-equivalent green/yellow/red signal. Replaces Westlaw KeyCite and LexisNexis Shepard's.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Case citation or case name, e.g. '410 U.S. 113', 'Roe v. Wade', '[2024] EWHC 123 (Comm)'" },
+        taskId: { type: "string", description: "Optional task ID for cost tracking" },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "get_matter_health",
+    description: "Compute the health score (0–100) for a matter. Returns signal (green/amber/red), dimension scores, risk factors, and trend. Replaces Clio Insights.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        matterNumber: { type: "string", description: "The matter number to score" },
+      },
+      required: ["matterNumber"],
+    },
+  },
+  {
+    name: "get_portfolio_health",
+    description: "Compute health scores for all matters and return a portfolio summary sorted by risk. Partner only. Replaces Clio Insights portfolio view.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "build_playbook",
+    description: "Build a scoped clause playbook from the firm's precedent library (firm / client / matter / personal). Replaces Contract Express and Practical Law market standards.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        scope: { type: "string", enum: ["firm", "client", "matter", "personal"], description: "Playbook scope in the four-tier cascade" },
+        ownerId: { type: "string", description: "clientNumber, matterNumber, or profileId — depends on scope. Omit for firm scope." },
+        ownerName: { type: "string", description: "Human-readable name for the owner" },
+        practiceArea: { type: "string", description: "Practice area (e.g. 'Corporate & M&A', 'Banking & Finance')" },
+        jurisdiction: { type: "string", description: "Governing jurisdiction (optional)" },
+        name: { type: "string", description: "Name for this playbook" },
+        clauseTypes: { type: "array", items: { type: "string" }, description: "Specific clause types to extract (optional — uses practice-area defaults if omitted)" },
+        taskId: { type: "string", description: "Optional task ID for cost tracking" },
+      },
+      required: ["scope", "practiceArea", "name"],
+    },
+  },
+  {
+    name: "query_playbook",
+    description: "Resolve the four-tier playbook cascade (firm → client → matter → personal) for a clause type. Returns the most specific position available plus personal notes.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        clauseType: { type: "string", description: "The clause type to look up, or '*' for all clause types" },
+        practiceArea: { type: "string", description: "Filter to a specific practice area" },
+        matterNumber: { type: "string", description: "Include the matter-tier playbook" },
+        clientId: { type: "string", description: "Include the client-tier playbook" },
+        profileId: { type: "string", description: "Include the personal-tier playbook" },
+      },
+      required: ["clauseType"],
+    },
+  },
+  {
+    name: "validate_invoice",
+    description: "Validate an outside-counsel invoice against the client's OCG. Returns violations, suggested reductions, and an optional dispute letter. Replaces BillBlast / TyMetrix / Apperio.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        invoiceText: { type: "string", description: "LEDES 1998B invoice text (pipe or comma delimited). Leave empty to use lineItems." },
+        clientId: { type: "string", description: "Client ID — used to load the client's OCG" },
+        submittedByFirm: { type: "string", description: "Name of the outside counsel firm" },
+        matterNumber: { type: "string", description: "Matter reference" },
+        generateDisputeLetter: { type: "boolean", description: "Generate an AI-drafted dispute letter if hard violations are found (default false)" },
+        taskId: { type: "string", description: "Optional task ID for cost tracking" },
+      },
+      required: ["invoiceText"],
+    },
+  },
+  {
+    name: "redline_contract",
+    description: "Run automated playbook-driven contract redlining on a counterparty draft. Returns a structured redline report — clause-by-clause accept/redline/escalate/delete dispositions, proposed replacement language, and an executive summary. Replaces Definely, Kira/Luminance, and 4–8 hrs of manual associate markup per draft.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        documentText: { type: "string", description: "Full text of the counterparty draft to redline" },
+        practiceArea: { type: "string", description: "Practice area context (e.g. M&A, finance, employment)" },
+        jurisdiction: { type: "string", description: "Governing law jurisdiction (e.g. UK, US-DE)" },
+        matterNumber: { type: "string", description: "Matter number — loads matter-specific playbook tier" },
+        clientId: { type: "string", description: "Client ID — loads client-specific playbook tier" },
+        profileId: { type: "string", description: "Lawyer profile ID — loads personal playbook tier" },
+        documentId: { type: "string", description: "Document ID for cross-referencing (optional)" },
+        documentTitle: { type: "string", description: "Document title for the report (optional)" },
+        taskId: { type: "string", description: "Optional task ID for cost tracking" },
+      },
+      required: ["documentText"],
+    },
+  },
+  {
+    name: "generate_headnotes",
+    description: "Extract structured headnotes and key holdings from a court opinion. Returns numbered propositions (ratio/obiter), distinguishing factors, NOSLEGAL tags, and the core ratio decidendi. Replaces Westlaw Key Numbers, LexisNexis headnotes, and 2–4 hrs of manual law clerk annotation per opinion.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        opinionText: { type: "string", description: "Full text of the court opinion" },
+        caseName: { type: "string", description: "Case name (optional — extracted from text if omitted)" },
+        citation: { type: "string", description: "Neutral or report citation (optional)" },
+        court: { type: "string", description: "Court name (optional)" },
+        dateFiled: { type: "string", description: "ISO date the decision was filed (optional)" },
+        jurisdiction: { type: "string", description: "Jurisdiction (e.g. UK, US, AU) — optional" },
+        taskId: { type: "string", description: "Optional task ID for cost tracking" },
+      },
+      required: ["opinionText"],
+    },
+  },
+  {
+    name: "get_client_briefing",
+    description: "Generate a pre-call partner briefing for a client. Returns matter status, billing posture, open items, relationship notes, and a drafted Markdown briefing document. Replaces Clio Grow / CRM, Clio Insights client reports, and 30 min of manual partner prep.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        clientId: { type: "string", description: "Client ID (UUID) from the client roster" },
+        clientNumber: { type: "string", description: "Client number — used if clientId is not provided" },
+        briefingDate: { type: "string", description: "ISO date for the briefing (defaults to today)" },
+        industryContext: { type: "string", description: "Optional industry or regulatory context to include" },
+        taskId: { type: "string", description: "Optional task ID for cost tracking" },
+      },
+    },
+  },
+  {
+    name: "generate_precedent",
+    description: "Generate a firm-specific precedent document (NDA, SPA, employment contract, etc.) from the firm's own knowledge store and playbook cascade. Returns a complete first-draft document in the firm's voice. Replaces Thomson Reuters Practical Law Standard Documents and LexisNexis PSL (£15–25k/yr).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        documentType: {
+          type: "string",
+          enum: ["nda", "spa", "asset_purchase", "facility", "employment", "service_agreement",
+            "supply_agreement", "jv_agreement", "ip_assignment", "licence", "settlement", "term_sheet", "other"],
+          description: "Type of document to generate",
+        },
+        practiceArea: { type: "string", description: "Practice area context" },
+        jurisdiction: { type: "string", description: "Governing law jurisdiction (e.g. 'English law', 'US-DE')" },
+        actingFor: { type: "string", description: "Which party the firm acts for (e.g. 'buyer', 'disclosing party')" },
+        matterNumber: { type: "string", description: "Matter number — loads matter-specific playbook tier" },
+        clientId: { type: "string", description: "Client ID — loads client-specific playbook tier" },
+        profileId: { type: "string", description: "Lawyer profile ID — loads personal playbook tier" },
+        specialInstructions: { type: "string", description: "Special drafting instructions (e.g. deal-specific carve-outs)" },
+        taskId: { type: "string", description: "Optional task ID for cost tracking" },
+      },
+      required: ["documentType"],
+    },
+  },
 ] as const;
 
 // ─── MCP server ───────────────────────────────────────────────────────────────
@@ -306,6 +460,16 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
   if (Config.clio.enabled) await clioClient.load();
 
   registerAuthRoutes(app, orchestrator);
+
+  // ── Channel bots (Teams Outgoing Webhook + Slack Events API) ─────────────
+  // These routes verify HMAC signatures before touching the orchestrator.
+  // No auth middleware applied — the bots have their own signature checks.
+  registerTeamsBotRoutes(app, orchestrator);
+  registerSlackBotRoutes(app, orchestrator);
+
+  // Attach proactive task-complete notifiers to the orchestrator event stream
+  attachTeamsTaskNotifier(orchestrator, Config.bots.teams.incomingWebhookUrl);
+  attachSlackTaskNotifier(orchestrator, Config.bots.slack.defaultChannel);
 
   // Resolve the principal for a request. Auth OFF (local) → the LOCAL_PARTNER
   // who sees everything. Auth ON → the signed session cookie from OAuth login.
@@ -1360,6 +1524,216 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
     }
   });
 
+  // ── Citation validity (KeyCite / Shepard's replacement) ─────────────────────
+
+  app.get("/citations/check", async (req, reply) => {
+    const { q, taskId } = req.query as { q?: string; taskId?: string };
+    if (!q) return reply.status(400).send({ error: "q (citation string) required" });
+    return orchestrator.citations.check(q, taskId);
+  });
+
+  app.post("/citations/check", async (req, reply) => {
+    const { query, taskId } = req.body as { query?: string; taskId?: string };
+    if (!query) return reply.status(400).send({ error: "query required" });
+    return orchestrator.citations.check(query, taskId);
+  });
+
+  // ── Matter health (Clio Insights replacement) ─────────────────────────────
+
+  app.get("/matters/:matterNumber/health", async (req, reply) => {
+    const { matterNumber } = req.params as { matterNumber: string };
+    const tasks = orchestrator.listTasks().filter((t) => t.matterNumber === matterNumber);
+    return orchestrator.matterHealth.compute(
+      matterNumber, tasks, orchestrator.time, orchestrator.budgetMonitor,
+    );
+  });
+
+  app.get("/analytics/portfolio-health", async (req, reply) => {
+    if (!isPartner(getUser(req))) return reply.status(403).send({ error: "Partner role required" });
+    const tasks = orchestrator.listTasks();
+    const allMatters = Array.from(
+      new Set(tasks.map((t) => t.matterNumber).filter(Boolean) as string[]),
+    );
+    if (allMatters.length === 0) return { totalMatters: 0, green: 0, amber: 0, red: 0, matters: [], computedAt: new Date().toISOString() };
+    return orchestrator.matterHealth.portfolio(
+      allMatters, tasks, orchestrator.time, orchestrator.budgetMonitor,
+    );
+  });
+
+  // ── Playbook (Contract Express / Practical Law replacement) ──────────────
+
+  app.get("/playbooks", async (req) => {
+    const { scope, ownerId, practiceArea } = req.query as { scope?: string; ownerId?: string; practiceArea?: string };
+    return orchestrator.playbookStore.list({
+      scope: scope as import("../playbook/index.js").PlaybookScope | undefined,
+      ownerId,
+      practiceArea,
+    });
+  });
+
+  app.get("/playbooks/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const pb = orchestrator.playbookStore.getById(id);
+    if (!pb) return reply.status(404).send({ error: "Playbook not found" });
+    return pb;
+  });
+
+  app.post("/playbooks/build", async (req, reply) => {
+    const {
+      scope, ownerId, ownerName, practiceArea, jurisdiction, name, description, clauseTypes, taskId,
+    } = req.body as {
+      scope?: string; ownerId?: string; ownerName?: string; practiceArea?: string;
+      jurisdiction?: string; name?: string; description?: string;
+      clauseTypes?: string[]; taskId?: string;
+    };
+    if (!practiceArea || !name) return reply.status(400).send({ error: "practiceArea and name required" });
+    const validScopes = ["firm", "client", "matter", "personal"];
+    const resolvedScope = (scope && validScopes.includes(scope) ? scope : "firm") as import("../playbook/index.js").PlaybookScope;
+    const pb = await orchestrator.playbookBuilder.build(
+      orchestrator.knowledge,
+      orchestrator.playbookStore,
+      { scope: resolvedScope, ownerId, ownerName, practiceArea, jurisdiction, name, description, clauseTypes, taskId },
+    );
+    return reply.status(201).send(pb);
+  });
+
+  app.get("/playbooks/resolve/:clauseType", async (req) => {
+    const { clauseType } = req.params as { clauseType: string };
+    const { practiceArea, matterNumber, clientId, profileId } = req.query as {
+      practiceArea?: string; matterNumber?: string; clientId?: string; profileId?: string;
+    };
+    if (clauseType === "*") {
+      return orchestrator.playbookStore.resolveAll({ practiceArea, matterNumber, clientId, profileId });
+    }
+    const resolved = orchestrator.playbookStore.resolve(clauseType, { practiceArea, matterNumber, clientId, profileId });
+    if (!resolved) return { clauseType, resolved: null, message: "No playbook entry found for this clause type" };
+    return resolved;
+  });
+
+  app.delete("/playbooks/:id", async (req, reply) => {
+    if (!isPartner(getUser(req))) return reply.status(403).send({ error: "Partner role required" });
+    const { id } = req.params as { id: string };
+    const deleted = orchestrator.playbookStore.delete(id);
+    if (!deleted) return reply.status(404).send({ error: "Playbook not found" });
+    return { deleted: true };
+  });
+
+  // ── Invoice validation (reverse-OCG; in-house billing killer) ────────────
+
+  app.post("/invoices/validate", async (req, reply) => {
+    const {
+      invoiceText, clientId, submittedByFirm, matterNumber, generateDisputeLetter, taskId,
+    } = req.body as {
+      invoiceText?: string; clientId?: string; submittedByFirm?: string;
+      matterNumber?: string; generateDisputeLetter?: boolean; taskId?: string;
+    };
+    if (!invoiceText && !clientId) {
+      return reply.status(400).send({ error: "invoiceText required" });
+    }
+    const ocgDoc = clientId ? orchestrator.ocg.getByClient(clientId) : null;
+    return orchestrator.invoiceValidator.validate(
+      invoiceText ?? "",
+      undefined,
+      ocgDoc ?? null,
+      { clientId, submittedByFirm, matterNumber, generateDisputeLetter: generateDisputeLetter ?? false, taskId },
+    );
+  });
+
+  app.post("/invoices/upload", async (req, reply) => {
+    const user = getUser(req);
+    const parts: Array<import("@fastify/multipart").MultipartFile | import("@fastify/multipart").MultipartValue> = [];
+    const data = await req.file();
+    if (!data) return reply.status(400).send({ error: "No file uploaded" });
+    const buf = await data.toBuffer();
+    const invoiceText = buf.toString("utf8");
+
+    const { clientId, submittedByFirm, matterNumber, generateDisputeLetter, taskId } = req.query as {
+      clientId?: string; submittedByFirm?: string; matterNumber?: string;
+      generateDisputeLetter?: string; taskId?: string;
+    };
+    const ocgDoc = clientId ? orchestrator.ocg.getByClient(clientId) : null;
+    return orchestrator.invoiceValidator.validate(
+      invoiceText,
+      undefined,
+      ocgDoc ?? null,
+      {
+        clientId, submittedByFirm, matterNumber,
+        generateDisputeLetter: generateDisputeLetter === "true",
+        taskId,
+      },
+    );
+  });
+
+  // ── Contract redline (Definely / Kira / manual markup replacement) ──────────
+
+  app.post("/redline", async (req, reply) => {
+    const {
+      documentText, practiceArea, jurisdiction, matterNumber, clientId,
+      profileId, documentId, documentTitle, taskId,
+    } = req.body as {
+      documentText: string; practiceArea?: string; jurisdiction?: string;
+      matterNumber?: string; clientId?: string; profileId?: string;
+      documentId?: string; documentTitle?: string; taskId?: string;
+    };
+    if (!documentText) return reply.status(400).send({ error: "documentText required" });
+    return orchestrator.redline.redline(documentText, orchestrator.playbookStore, {
+      practiceArea, jurisdiction, matterNumber, clientId, profileId,
+      documentId, documentTitle, taskId,
+    });
+  });
+
+  // ── Headnote generator (Westlaw Key Numbers replacement) ─────────────────────
+
+  app.post("/headnotes/generate", async (req, reply) => {
+    const {
+      opinionText, caseName, citation, court, dateFiled, jurisdiction, taskId,
+    } = req.body as {
+      opinionText: string; caseName?: string; citation?: string; court?: string;
+      dateFiled?: string; jurisdiction?: string; taskId?: string;
+    };
+    if (!opinionText) return reply.status(400).send({ error: "opinionText required" });
+    return orchestrator.headnotes.generate(opinionText, {
+      caseName, citation, court, dateFiled, jurisdiction, taskId,
+    });
+  });
+
+  // ── Client intelligence briefing (Clio Grow / CRM replacement) ────────────
+
+  app.get("/clients/:id/briefing", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const { briefingDate, industryContext, taskId } = req.query as {
+      briefingDate?: string; industryContext?: string; taskId?: string;
+    };
+    const clientRecord = orchestrator.clients.get(id) ?? orchestrator.clients.getByClientNumber(id);
+    if (!clientRecord) return reply.status(404).send({ error: "Client not found" });
+    const allTasks = orchestrator.listTasks();
+    const allEntries = await orchestrator.time.list({});
+    return orchestrator.briefing.generate(
+      clientRecord, allTasks, allEntries as import("../types.js").TimeEntry[],
+      { knowledge: orchestrator.knowledge, briefingDate, industryContext, taskId },
+    );
+  });
+
+  // ── Precedent document generator (Practical Law / PSL replacement) ────────
+
+  app.post("/precedents/generate", async (req, reply) => {
+    const {
+      documentType, practiceArea, jurisdiction, actingFor, matterNumber,
+      clientId, profileId, specialInstructions, taskId,
+    } = req.body as {
+      documentType: string; practiceArea?: string; jurisdiction?: string;
+      actingFor?: string; matterNumber?: string; clientId?: string;
+      profileId?: string; specialInstructions?: string; taskId?: string;
+    };
+    if (!documentType) return reply.status(400).send({ error: "documentType required" });
+    return orchestrator.precedents.generate(
+      documentType as import("../precedent/generator.js").PrecedentDocumentType,
+      orchestrator.knowledge,
+      orchestrator.playbookStore,
+      { practiceArea, jurisdiction, actingFor, matterNumber, clientId, profileId, specialInstructions, taskId },
+    );
+  });
+
   // ── Admin settings (presentation mode, DyTopo depth, debate, DocuSeal) ──────
   // Both GET and PUT are partner-only: GET exposes the DocuSeal URL and
   // enabled state; PUT can redirect DocuSeal requests (SSRF) or weaken
@@ -2126,6 +2500,151 @@ async function handleTool(
         from: args.from as string | undefined,
         to: args.to as string | undefined,
       });
+
+    // ── Goliath killer tools ──────────────────────────────────────────────────
+    case "check_citation": {
+      const orch = (backend as import("../backend/index.js").LocalBackend).orchestrator;
+      if (!orch) throw new Error("check_citation requires local backend");
+      return orch.citations.check(args.query as string, args.taskId as string | undefined);
+    }
+
+    case "get_matter_health": {
+      const orch = (backend as import("../backend/index.js").LocalBackend).orchestrator;
+      if (!orch) throw new Error("get_matter_health requires local backend");
+      const mn = args.matterNumber as string;
+      const tasks = orch.listTasks().filter((t) => t.matterNumber === mn);
+      return orch.matterHealth.compute(mn, tasks, orch.time, orch.budgetMonitor);
+    }
+
+    case "get_portfolio_health": {
+      const orch = (backend as import("../backend/index.js").LocalBackend).orchestrator;
+      if (!orch) throw new Error("get_portfolio_health requires local backend");
+      const tasks = orch.listTasks();
+      const matters = Array.from(new Set(tasks.map((t) => t.matterNumber).filter(Boolean) as string[]));
+      if (matters.length === 0) return { totalMatters: 0, green: 0, amber: 0, red: 0, matters: [], computedAt: new Date().toISOString() };
+      return orch.matterHealth.portfolio(matters, tasks, orch.time, orch.budgetMonitor);
+    }
+
+    case "build_playbook": {
+      const orch = (backend as import("../backend/index.js").LocalBackend).orchestrator;
+      if (!orch) throw new Error("build_playbook requires local backend");
+      const validScopes = ["firm", "client", "matter", "personal"];
+      const scope = (validScopes.includes(args.scope as string) ? args.scope : "firm") as import("../playbook/index.js").PlaybookScope;
+      return orch.playbookBuilder.build(orch.knowledge, orch.playbookStore, {
+        scope,
+        ownerId: args.ownerId as string | undefined,
+        ownerName: args.ownerName as string | undefined,
+        practiceArea: args.practiceArea as string,
+        jurisdiction: args.jurisdiction as string | undefined,
+        name: args.name as string,
+        clauseTypes: args.clauseTypes as string[] | undefined,
+        taskId: args.taskId as string | undefined,
+      });
+    }
+
+    case "query_playbook": {
+      const orch = (backend as import("../backend/index.js").LocalBackend).orchestrator;
+      if (!orch) throw new Error("query_playbook requires local backend");
+      const clauseType = args.clauseType as string;
+      const opts = {
+        practiceArea: args.practiceArea as string | undefined,
+        matterNumber: args.matterNumber as string | undefined,
+        clientId: args.clientId as string | undefined,
+        profileId: args.profileId as string | undefined,
+      };
+      if (clauseType === "*") return orch.playbookStore.resolveAll(opts);
+      return orch.playbookStore.resolve(clauseType, opts) ?? { clauseType, resolved: null };
+    }
+
+    case "validate_invoice": {
+      const orch = (backend as import("../backend/index.js").LocalBackend).orchestrator;
+      if (!orch) throw new Error("validate_invoice requires local backend");
+      const clientId = args.clientId as string | undefined;
+      const ocgDoc = clientId ? orch.ocg.getByClient(clientId) : null;
+      return orch.invoiceValidator.validate(
+        args.invoiceText as string ?? "",
+        undefined,
+        ocgDoc ?? null,
+        {
+          clientId,
+          submittedByFirm: args.submittedByFirm as string | undefined,
+          matterNumber: args.matterNumber as string | undefined,
+          generateDisputeLetter: args.generateDisputeLetter as boolean | undefined,
+          taskId: args.taskId as string | undefined,
+        },
+      );
+    }
+
+    case "redline_contract": {
+      const orch = (backend as import("../backend/index.js").LocalBackend).orchestrator;
+      if (!orch) throw new Error("redline_contract requires local backend");
+      return orch.redline.redline(
+        args.documentText as string,
+        orch.playbookStore,
+        {
+          practiceArea: args.practiceArea as string | undefined,
+          jurisdiction: args.jurisdiction as string | undefined,
+          matterNumber: args.matterNumber as string | undefined,
+          clientId: args.clientId as string | undefined,
+          profileId: args.profileId as string | undefined,
+          documentId: args.documentId as string | undefined,
+          documentTitle: args.documentTitle as string | undefined,
+          taskId: args.taskId as string | undefined,
+        },
+      );
+    }
+
+    case "generate_headnotes": {
+      const orch = (backend as import("../backend/index.js").LocalBackend).orchestrator;
+      if (!orch) throw new Error("generate_headnotes requires local backend");
+      return orch.headnotes.generate(args.opinionText as string, {
+        caseName: args.caseName as string | undefined,
+        citation: args.citation as string | undefined,
+        court: args.court as string | undefined,
+        dateFiled: args.dateFiled as string | undefined,
+        jurisdiction: args.jurisdiction as string | undefined,
+        taskId: args.taskId as string | undefined,
+      });
+    }
+
+    case "get_client_briefing": {
+      const orch = (backend as import("../backend/index.js").LocalBackend).orchestrator;
+      if (!orch) throw new Error("get_client_briefing requires local backend");
+      const clientId = args.clientId as string | undefined;
+      const clientNumber = args.clientNumber as string | undefined;
+      const clientRecord = clientId
+        ? orch.clients.get(clientId)
+        : clientNumber ? orch.clients.getByClientNumber(clientNumber) : undefined;
+      if (!clientRecord) throw new Error("Client not found — provide a valid clientId or clientNumber");
+      const allTasks = orch.listTasks();
+      const allEntries = await orch.time.list({});
+      return orch.briefing.generate(clientRecord, allTasks, allEntries as import("../types.js").TimeEntry[], {
+        knowledge: orch.knowledge,
+        briefingDate: args.briefingDate as string | undefined,
+        industryContext: args.industryContext as string | undefined,
+        taskId: args.taskId as string | undefined,
+      });
+    }
+
+    case "generate_precedent": {
+      const orch = (backend as import("../backend/index.js").LocalBackend).orchestrator;
+      if (!orch) throw new Error("generate_precedent requires local backend");
+      return orch.precedents.generate(
+        args.documentType as import("../precedent/generator.js").PrecedentDocumentType,
+        orch.knowledge,
+        orch.playbookStore,
+        {
+          practiceArea: args.practiceArea as string | undefined,
+          jurisdiction: args.jurisdiction as string | undefined,
+          actingFor: args.actingFor as string | undefined,
+          matterNumber: args.matterNumber as string | undefined,
+          clientId: args.clientId as string | undefined,
+          profileId: args.profileId as string | undefined,
+          specialInstructions: args.specialInstructions as string | undefined,
+          taskId: args.taskId as string | undefined,
+        },
+      );
+    }
 
     default:
       throw new Error(`Unknown tool: ${name}`);

@@ -1,0 +1,12 @@
+{
+  "id": "client-briefing",
+  "name": "Client Intelligence Briefing (Pre-Call Partner Pack)",
+  "description": "Pre-call partner briefing pack: matter status, billing posture, open items, relationship notes, and any industry/regulatory context. Assembled in under 10 seconds. Replaces Clio Grow / CRM, Clio Insights client reports, and manual partner prep.",
+  "workflowType": "pre_engagement",
+  "promptTemplate": "Generate a pre-call partner briefing for client {{clientNumber}}. Briefing date: {{briefingDate}}. Include matter status, billing posture, open items, and relationship notes. {{description}}",
+  "substitutions": {
+    "clientNumber": "C-001",
+    "briefingDate": "today",
+    "description": "Include any specific topics for the call agenda here."
+  }
+}
