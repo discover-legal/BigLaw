@@ -22,6 +22,7 @@ import { Config } from "../config.js";
 import { logger } from "../logger.js";
 import { costStore, calcCostUsd } from "../cost/index.js";
 import { resolveModelId } from "../providers/index.js";
+import { sanitizePromptContent } from "../adapters/lavern.js";
 import type { KnowledgeStore } from "../knowledge/index.js";
 import type { PlaybookStore } from "../playbook/index.js";
 import type { PlaybookEntry } from "../types.js";
@@ -229,8 +230,8 @@ Focus on ${practiceArea ?? "transactional"} clauses. Include up to 40 clauses. S
     const clauseBlocks = clauses.map((c, idx) => {
       const p = positions[idx];
       const entry = p.entry;
-      return `--- CLAUSE ${idx + 1}: ${c.clauseType} ---
-COUNTERPARTY TEXT: ${c.text.slice(0, 600)}
+      return `--- CLAUSE ${idx + 1}: ${sanitizePromptContent(c.clauseType)} ---
+COUNTERPARTY TEXT: ${sanitizePromptContent(c.text.slice(0, 600))}
 FIRM POSITION (${p.source}): ${entry?.standardPosition ?? "No playbook position — use judgment"}
 FALLBACK: ${entry?.fallbackPosition ?? "N/A"}
 RED LINES: ${entry?.redLines?.join("; ") ?? "None recorded"}`;
@@ -304,17 +305,18 @@ Return a JSON array — one object per clause in input order:
     const redlines = issues.filter((i) => i.action === "redline");
     const accepts = issues.filter((i) => i.action === "accept");
 
+    const safeDocTitle = sanitizePromptContent(opts.documentTitle ?? "counterparty draft");
     const prompt = `Write a 3-paragraph executive summary of a contract redline review.
 
-Document: ${opts.documentTitle ?? "counterparty draft"}
+Document: ${safeDocTitle}
 Practice area: ${opts.practiceArea ?? "transactional"}
 Total clauses: ${issues.length}
 Accepted: ${accepts.length} | Redlined: ${redlines.length} | Escalate: ${issues.filter((i) => i.action === "escalate").length}
-Critical issues (${criticals.length}): ${criticals.map((i) => i.clauseType).join(", ") || "none"}
+Critical issues (${criticals.length}): ${criticals.map((i) => sanitizePromptContent(i.clauseType)).join(", ") || "none"}
 
-Red lines crossed: ${issues.filter((i) => i.isRedLine).map((i) => i.clauseType).join(", ") || "none"}
+Red lines crossed: ${issues.filter((i) => i.isRedLine).map((i) => sanitizePromptContent(i.clauseType)).join(", ") || "none"}
 
-Key redlines: ${redlines.slice(0, 5).map((i) => `${i.clauseType}: ${i.rationale}`).join(" | ")}
+Key redlines: ${redlines.slice(0, 5).map((i) => `${sanitizePromptContent(i.clauseType)}: ${sanitizePromptContent(i.rationale)}`).join(" | ")}
 
 Write as if briefing a senior partner before a negotiation call. Concise, specific, commercial.`;
 

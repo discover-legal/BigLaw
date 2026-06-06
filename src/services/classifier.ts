@@ -7,6 +7,7 @@ import { logger } from "../logger.js";
 import { costStore, calcCostUsd } from "../cost/index.js";
 import { PRACTICE_AREAS } from "../types.js";
 import type { Client, NosLegalTags } from "../types.js";
+import { sanitizePromptContent } from "../adapters/lavern.js";
 
 const client = new Anthropic({ apiKey: Config.anthropic.apiKey });
 
@@ -28,7 +29,7 @@ function recordClassifierCost(usage: { input_tokens: number; output_tokens: numb
 export async function detectPracticeArea(title: string, content: string): Promise<string | null> {
   // Strip newlines from title to prevent prompt structure injection.
   const safeTitle = title.replace(/[\r\n]/g, " ").slice(0, 300);
-  const snippet = content.slice(0, 2000);
+  const snippet = sanitizePromptContent(content.slice(0, 2000));
   const prompt = `You are a legal categorisation assistant. Given a document title and excerpt, identify the single most relevant practice area from the list below. Reply with ONLY the exact practice area name, or "Unknown" if none fits.
 
 Practice areas:
@@ -64,8 +65,10 @@ export async function detectClient(
 ): Promise<{ clientNumber: string; clientName: string } | null> {
   if (!clients.length) return null;
   const safeTitle = title.replace(/[\r\n]/g, " ").slice(0, 300);
-  const snippet = content.slice(0, 3000);
-  const clientList = clients.map((c) => `- ${c.clientNumber}: ${c.name}`).join("\n");
+  const snippet = sanitizePromptContent(content.slice(0, 3000));
+  const clientList = clients.map((c) =>
+    `- ${c.clientNumber.replace(/[\r\n]/g, " ")}: ${c.name.replace(/[\r\n]/g, " ")}`
+  ).join("\n");
   const prompt = `You are a legal matter assistant. Given a document and a list of clients, identify which client the document most likely relates to. Reply with ONLY the client number (e.g. "C-001"), or "None" if no clear match.
 
 Clients:
@@ -99,7 +102,7 @@ ${snippet}`;
  */
 export async function detectNosLegal(title: string, content: string): Promise<NosLegalTags> {
   const safeTitle = title.replace(/[\r\n]/g, " ").slice(0, 300);
-  const snippet = content.slice(0, 2000);
+  const snippet = sanitizePromptContent(content.slice(0, 2000));
   const prompt = `You are a legal taxonomy assistant. Given a task title and description, classify it into NOSLEGAL v4 taxonomy facets. Respond with ONLY valid JSON (no prose, no markdown fences) using exactly this shape:
 {
   "areaOfLaw": "<string or omit>",

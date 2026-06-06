@@ -527,7 +527,12 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
   // except health + the OAuth login/callback routes. (OAuth routes land next.)
   if (Config.auth.enabled) {
     app.addHook("onRequest", async (req, reply) => {
-      if (req.url === "/health" || req.url.startsWith("/auth/")) return;
+      if (
+        req.url === "/health" ||
+        req.url.startsWith("/auth/") ||
+        req.url === "/bots/teams/webhook" ||
+        req.url === "/bots/slack/events"
+      ) return;
       if (!getUser(req)) return reply.code(401).send({ error: "Authentication required" });
     });
   }
@@ -570,7 +575,7 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
     const task = orchestrator.getTask(id);
     if (!task || !canViewTask(getUser(req), task)) return reply.status(404).send({ error: "Task not found" });
     orchestrator.deleteTask(id);
-    return reply.status(200).send({ ok: true });
+    return reply.status(204).send();
   });
 
   // Assign lawyer(s) to a matter — partner only (controls cross-lawyer sharing).
@@ -684,7 +689,7 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
       return reply.status(422).send({ error: `No extractable text found in ${filename} (a scanned image PDF needs OCR, which isn't wired to upload yet).` });
     }
 
-    const title = basename(filename, ext);
+    const title = basename(filename, ext).slice(0, 255);
     const clients = orchestrator.clients.list();
     const [practiceArea, detectedClient] = await Promise.all([
       detectPracticeArea(title, content),
@@ -744,8 +749,15 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
 
   // Inter-round memory query — mirrors the query_memory MCP tool so a thin
   // RemoteBackend client (mcp mode) can reach memory without opening the DB.
-  app.post("/memory/query", async (req) => {
-    const body = (req.body ?? {}) as { query: string; taskId: string; agentId?: string; topK?: number };
+  app.post("/memory/query", async (req, reply) => {
+    const body = (req.body ?? {}) as { query: string; taskId?: string; agentId?: string; topK?: number };
+    // If taskId is provided, verify the caller can view that task
+    if (body.taskId) {
+      const task = orchestrator.getTask(body.taskId);
+      if (!task || !canViewTask(getUser(req), task)) {
+        return reply.status(403).send({ error: "Forbidden" });
+      }
+    }
     return orchestrator.memory.query(body.query, {
       taskId: body.taskId,
       agentId: body.agentId,
@@ -1542,9 +1554,13 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
 
   app.get("/matters/:matterNumber/health", async (req, reply) => {
     const { matterNumber } = req.params as { matterNumber: string };
-    const tasks = orchestrator.listTasks().filter((t) => t.matterNumber === matterNumber);
+    const user = getUser(req);
+    const visibleTasks = orchestrator.listTasks().filter((t) =>
+      t.matterNumber === matterNumber && canViewTask(user, t),
+    );
+    if (visibleTasks.length === 0) return reply.status(404).send({ error: "Matter not found" });
     return orchestrator.matterHealth.compute(
-      matterNumber, tasks, orchestrator.time, orchestrator.budgetMonitor,
+      matterNumber, visibleTasks, orchestrator.time, orchestrator.budgetMonitor,
     );
   });
 
@@ -1579,6 +1595,7 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
   });
 
   app.post("/playbooks/build", async (req, reply) => {
+    if (!isPartner(getUser(req))) return reply.status(403).send({ error: "Partner role required" });
     const {
       scope, ownerId, ownerName, practiceArea, jurisdiction, name, description, clauseTypes, taskId,
     } = req.body as {
@@ -1621,6 +1638,7 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
   // ── Invoice validation (reverse-OCG; in-house billing killer) ────────────
 
   app.post("/invoices/validate", async (req, reply) => {
+    if (!isPartner(getUser(req))) return reply.status(403).send({ error: "Partner role required" });
     const {
       invoiceText, clientId, submittedByFirm, matterNumber, generateDisputeLetter, taskId,
     } = req.body as {
@@ -1640,6 +1658,7 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
   });
 
   app.post("/invoices/upload", async (req, reply) => {
+    if (!isPartner(getUser(req))) return reply.status(403).send({ error: "Partner role required" });
     const user = getUser(req);
     const parts: Array<import("@fastify/multipart").MultipartFile | import("@fastify/multipart").MultipartValue> = [];
     const data = await req.file();
@@ -1667,6 +1686,7 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
   // ── Contract redline (Definely / Kira / manual markup replacement) ──────────
 
   app.post("/redline", async (req, reply) => {
+    if (!isPartner(getUser(req))) return reply.status(403).send({ error: "Partner role required" });
     const {
       documentText, practiceArea, jurisdiction, matterNumber, clientId,
       profileId, documentId, documentTitle, taskId,
@@ -1685,6 +1705,7 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
   // ── Headnote generator (Westlaw Key Numbers replacement) ─────────────────────
 
   app.post("/headnotes/generate", async (req, reply) => {
+    if (!isPartner(getUser(req))) return reply.status(403).send({ error: "Partner role required" });
     const {
       opinionText, caseName, citation, court, dateFiled, jurisdiction, taskId,
     } = req.body as {
@@ -1700,6 +1721,7 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
   // ── Client intelligence briefing (Clio Grow / CRM replacement) ────────────
 
   app.get("/clients/:id/briefing", async (req, reply) => {
+    if (!isPartner(getUser(req))) return reply.status(403).send({ error: "Partner role required" });
     const { id } = req.params as { id: string };
     const { briefingDate, industryContext, taskId } = req.query as {
       briefingDate?: string; industryContext?: string; taskId?: string;
@@ -1717,6 +1739,7 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
   // ── Precedent document generator (Practical Law / PSL replacement) ────────
 
   app.post("/precedents/generate", async (req, reply) => {
+    if (!isPartner(getUser(req))) return reply.status(403).send({ error: "Partner role required" });
     const {
       documentType, practiceArea, jurisdiction, actingFor, matterNumber,
       clientId, profileId, specialInstructions, taskId,
@@ -2476,9 +2499,13 @@ async function handleTool(
       );
 
     case "get_round": {
+      const roundNum = Number(args.round);
+      if (!Number.isInteger(roundNum) || roundNum < 1) {
+        throw new Error("round must be a positive integer");
+      }
       const task = await backend.getTask(args.taskId as string);
       if (!task) throw new Error(`Task not found: ${args.taskId}`);
-      const roundState = task.rounds[(args.round as number) - 1];
+      const roundState = task.rounds[roundNum - 1];
       if (!roundState) throw new Error(`Round ${args.round} not found`);
       return roundState;
     }

@@ -26,6 +26,12 @@
 import { Config } from "../config.js";
 import { logger } from "../logger.js";
 
+const b64url = (obj: unknown): string =>
+  btoa(JSON.stringify(obj)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+
+const sigB64url = (buf: ArrayBuffer): string =>
+  btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+
 function b64ToStr(b64: string): string {
   return atob(b64.replace(/-/g, "+").replace(/_/g, "/"));
 }
@@ -56,6 +62,7 @@ export interface EmailMessage {
 // ─── Token management ─────────────────────────────────────────────────────────
 
 let cachedGraphToken: { token: string; expiresAt: number } | null = null;
+let _graphTokenPromise: Promise<string> | null = null;
 
 async function getGraphToken(): Promise<string> {
   const cfg = Config.email.graph;
@@ -68,33 +75,38 @@ async function getGraphToken(): Promise<string> {
     return cachedGraphToken.token;
   }
 
-  // Client credentials (app-only) flow
-  const body = new URLSearchParams({
-    client_id: cfg.clientId,
-    client_secret: cfg.clientSecret,
-    scope: "https://graph.microsoft.com/.default",
-    grant_type: "client_credentials",
-  });
+  // In-flight deduplication: only one token request at a time
+  _graphTokenPromise ??= (async () => {
+    // Client credentials (app-only) flow
+    const body = new URLSearchParams({
+      client_id: cfg.clientId,
+      client_secret: cfg.clientSecret,
+      scope: "https://graph.microsoft.com/.default",
+      grant_type: "client_credentials",
+    });
 
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
-  try {
-    const res = await fetch(
-      `https://login.microsoftonline.com/${cfg.tenantId}/oauth2/v2.0/token`,
-      { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body, signal: ctrl.signal },
-    );
-    clearTimeout(timer);
-    if (!res.ok) throw new Error(`Graph token exchange failed: ${res.status}`);
-    const data = (await res.json()) as { access_token: string; expires_in: number };
-    cachedGraphToken = { token: data.access_token, expiresAt: Date.now() + data.expires_in * 1000 };
-    return data.access_token;
-  } catch (err) {
-    clearTimeout(timer);
-    throw err;
-  }
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+    try {
+      const res = await fetch(
+        `https://login.microsoftonline.com/${cfg.tenantId}/oauth2/v2.0/token`,
+        { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body, signal: ctrl.signal },
+      );
+      clearTimeout(timer);
+      if (!res.ok) throw new Error(`Graph token exchange failed: ${res.status}`);
+      const data = (await res.json()) as { access_token: string; expires_in: number };
+      cachedGraphToken = { token: data.access_token, expiresAt: Date.now() + data.expires_in * 1000 };
+      return data.access_token;
+    } catch (err) {
+      clearTimeout(timer);
+      throw err;
+    }
+  })().finally(() => { _graphTokenPromise = null; });
+  return _graphTokenPromise;
 }
 
 let cachedGmailToken: { token: string; expiresAt: number } | null = null;
+let _gmailTokenPromise: Promise<string> | null = null;
 
 async function getGmailToken(): Promise<string> {
   const cfg = Config.email.gmail;
@@ -107,67 +119,71 @@ async function getGmailToken(): Promise<string> {
     return cachedGmailToken.token;
   }
 
-  // Service-account JWT auth (RFC 7523)
-  const rawKey = cfg.saKeyJson.startsWith("{")
-    ? cfg.saKeyJson
-    : b64ToStr(cfg.saKeyJson);
-  const sa = JSON.parse(rawKey) as {
-    client_email: string; private_key: string; token_uri?: string;
-  };
+  // In-flight deduplication: only one token request at a time
+  _gmailTokenPromise ??= (async () => {
+    // Service-account JWT auth (RFC 7523)
+    const rawKey = cfg.saKeyJson.startsWith("{")
+      ? cfg.saKeyJson
+      : b64ToStr(cfg.saKeyJson);
+    const sa = JSON.parse(rawKey) as {
+      client_email: string; private_key: string; token_uri?: string;
+    };
 
-  const now = Math.floor(Date.now() / 1000);
-  const header = btoa(JSON.stringify({ alg: "RS256", typ: "JWT" }));
-  const payload = btoa(JSON.stringify({
-    iss: sa.client_email,
-    sub: cfg.userEmail,
-    scope: "https://www.googleapis.com/auth/gmail.readonly",
-    aud: sa.token_uri ?? "https://oauth2.googleapis.com/token",
-    iat: now,
-    exp: now + 3600,
-  }));
-
-  // Sign with RS256 — requires Node 18+ WebCrypto
-  const pemKey = sa.private_key;
-  const keyData = pemKey
-    .replace(/-----BEGIN PRIVATE KEY-----/, "")
-    .replace(/-----END PRIVATE KEY-----/, "")
-    .replace(/\s+/g, "");
-
-  const keyBytes = b64ToBytes(keyData);
-  const cryptoKey = await crypto.subtle.importKey(
-    "pkcs8",
-    keyBytes.buffer as ArrayBuffer,
-    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const signData = new TextEncoder().encode(`${header}.${payload}`);
-  const sig = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", cryptoKey, signData);
-  const jwt = `${header}.${payload}.${btoa(String.fromCharCode(...new Uint8Array(sig)))}`;
-
-  const tokenBody = new URLSearchParams({
-    grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
-    assertion: jwt,
-  });
-
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
-  try {
-    const res = await fetch("https://oauth2.googleapis.com/token", {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: tokenBody,
-      signal: ctrl.signal,
+    const now = Math.floor(Date.now() / 1000);
+    const header = b64url({ alg: "RS256", typ: "JWT" });
+    const payload = b64url({
+      iss: sa.client_email,
+      sub: cfg.userEmail,
+      scope: "https://www.googleapis.com/auth/gmail.readonly",
+      aud: sa.token_uri ?? "https://oauth2.googleapis.com/token",
+      iat: now,
+      exp: now + 3600,
     });
-    clearTimeout(timer);
-    if (!res.ok) throw new Error(`Gmail token exchange failed: ${res.status}`);
-    const data = (await res.json()) as { access_token: string; expires_in: number };
-    cachedGmailToken = { token: data.access_token, expiresAt: Date.now() + data.expires_in * 1000 };
-    return data.access_token;
-  } catch (err) {
-    clearTimeout(timer);
-    throw err;
-  }
+
+    // Sign with RS256 — requires Node 18+ WebCrypto
+    const pemKey = sa.private_key;
+    const keyData = pemKey
+      .replace(/-----BEGIN PRIVATE KEY-----/, "")
+      .replace(/-----END PRIVATE KEY-----/, "")
+      .replace(/\s+/g, "");
+
+    const keyBytes = b64ToBytes(keyData);
+    const cryptoKey = await crypto.subtle.importKey(
+      "pkcs8",
+      keyBytes.buffer as ArrayBuffer,
+      { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+      false,
+      ["sign"],
+    );
+    const signData = new TextEncoder().encode(`${header}.${payload}`);
+    const sig = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", cryptoKey, signData);
+    const jwt = `${header}.${payload}.${sigB64url(sig)}`;
+
+    const tokenBody = new URLSearchParams({
+      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+      assertion: jwt,
+    });
+
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+    try {
+      const res = await fetch("https://oauth2.googleapis.com/token", {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: tokenBody,
+        signal: ctrl.signal,
+      });
+      clearTimeout(timer);
+      if (!res.ok) throw new Error(`Gmail token exchange failed: ${res.status}`);
+      const data = (await res.json()) as { access_token: string; expires_in: number };
+      cachedGmailToken = { token: data.access_token, expiresAt: Date.now() + data.expires_in * 1000 };
+      return data.access_token;
+    } catch (err) {
+      clearTimeout(timer);
+      throw err;
+    }
+  })().finally(() => { _gmailTokenPromise = null; });
+  return _gmailTokenPromise;
 }
 
 // ─── Shared HTTP helper ───────────────────────────────────────────────────────
@@ -215,15 +231,16 @@ export async function searchGraphMail(
   if (!cfg.enabled) return [];
 
   const max = opts.maxResults ?? 20;
-  const since = new Date(Date.now() - (opts.daysBack ?? 90) * 86_400_000).toISOString();
 
   const token = await getGraphToken();
   const userEmail = cfg.userEmail;
 
-  // Microsoft Graph Mail search — $search uses OData KQL
+  // Microsoft Graph Mail search — $search uses OData KQL.
+  // NOTE: $search and $filter cannot be combined on the messages endpoint.
+  // Sanitize query to prevent KQL injection.
+  const safeQuery = query.replace(/["\\]/g, " ").slice(0, 200);
   const qs = new URLSearchParams({
-    "$search": `"${query}"`,
-    "$filter": `receivedDateTime ge ${since}`,
+    "$search": `"${safeQuery}"`,
     "$top": String(max),
     "$select": "id,subject,from,receivedDateTime,bodyPreview,hasAttachments",
     "$orderby": "receivedDateTime desc",

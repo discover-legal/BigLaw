@@ -52,11 +52,17 @@ export interface BotResponse {
 
 const BOT_NAME_RE = /^@?big[-_]?michael[\s:,]*/i;
 
+/** Strip ASCII control characters (0x00–0x1F, 0x7F) from a string. */
+function stripControls(s: string): string {
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/[\x00-\x1F\x7F]/g, "");
+}
+
 export function parseCommand(raw: string): { command: string; args: string } {
   const text = raw.replace(BOT_NAME_RE, "").trim();
   const space = text.indexOf(" ");
   if (space === -1) return { command: text.toLowerCase(), args: "" };
-  return { command: text.slice(0, space).toLowerCase(), args: text.slice(space + 1).trim() };
+  return { command: text.slice(0, space).toLowerCase(), args: text.slice(space + 1).trim().slice(0, 2000) };
 }
 
 export async function dispatch(
@@ -68,7 +74,7 @@ export async function dispatch(
   switch (command) {
 
     case "status": {
-      const matterNumber = args.trim();
+      const matterNumber = stripControls(args.trim()).toUpperCase();
       if (!matterNumber) {
         return { immediate: "Usage: `@BigMichael status [matter-number]`" };
       }
@@ -99,12 +105,12 @@ export async function dispatch(
     }
 
     case "briefing": {
-      const clientRef = args.trim();
+      const clientRef = stripControls(args.trim()).toUpperCase();
       if (!clientRef) {
         return { immediate: "Usage: `@BigMichael briefing [client-name-or-number]`" };
       }
       const clientRecord = orch.clients.getByClientNumber(clientRef)
-        ?? orch.clients.list().find((c) => c.name.toLowerCase().includes(clientRef.toLowerCase()));
+        ?? orch.clients.list().find((c) => c.name.toUpperCase().includes(clientRef));
       if (!clientRecord) {
         return { immediate: `Client not found: **${clientRef}**. Check the client number or name.` };
       }

@@ -80,7 +80,7 @@ interface ProviderSpec {
   userInfoUrl: string;
   scope: string;
   /** Map the provider's userinfo payload to a normalized identity. */
-  mapUser: (info: Record<string, unknown>) => { sub: string; email: string; name: string };
+  mapUser: (info: Record<string, unknown>) => { sub: string; email: string; name: string; emailVerified: boolean };
 }
 
 const PROVIDERS: Record<ProviderKey, ProviderSpec> = {
@@ -89,21 +89,21 @@ const PROVIDERS: Record<ProviderKey, ProviderSpec> = {
     tokenUrl: "https://oauth2.googleapis.com/token",
     userInfoUrl: "https://openidconnect.googleapis.com/v1/userinfo",
     scope: "openid email profile",
-    mapUser: (i) => ({ sub: String(i.sub), email: String(i.email ?? ""), name: String(i.name ?? i.email ?? "User") }),
+    mapUser: (i) => ({ sub: String(i.sub), email: String(i.email ?? ""), name: String(i.name ?? i.email ?? "User"), emailVerified: i.email_verified !== false }),
   },
   microsoft: {
     authUrl: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
     tokenUrl: "https://login.microsoftonline.com/common/oauth2/v2.0/token",
     userInfoUrl: "https://graph.microsoft.com/oidc/userinfo",
     scope: "openid email profile",
-    mapUser: (i) => ({ sub: String(i.sub), email: String(i.email ?? i.preferred_username ?? ""), name: String(i.name ?? i.email ?? "User") }),
+    mapUser: (i) => ({ sub: String(i.sub), email: String(i.email ?? i.preferred_username ?? ""), name: String(i.name ?? i.email ?? "User"), emailVerified: i.email_verified !== false }),
   },
   linkedin: {
     authUrl: "https://www.linkedin.com/oauth/v2/authorization",
     tokenUrl: "https://www.linkedin.com/oauth/v2/accessToken",
     userInfoUrl: "https://api.linkedin.com/v2/userinfo",
     scope: "openid email profile",
-    mapUser: (i) => ({ sub: String(i.sub), email: String(i.email ?? ""), name: String(i.name ?? i.email ?? "User") }),
+    mapUser: (i) => ({ sub: String(i.sub), email: String(i.email ?? ""), name: String(i.name ?? i.email ?? "User"), emailVerified: i.email_verified !== false }),
   },
 };
 
@@ -119,7 +119,11 @@ const cookieOpts = (maxAgeSec: number) => ({
 interface SessionCookiePayload extends SessionUser {
   /** Per-session token ID — used for revocation on logout. */
   jti: string;
+  /** Issued-at Unix timestamp — used to enforce maximum session age. */
+  iat: number;
 }
+
+const SESSION_MAX_AGE_SEC = 43200; // 12 hours
 
 /** Read the signed session cookie → SessionUser, or null if missing/invalid/revoked. */
 export function readSessionCookie(req: FastifyRequest): SessionUser | null {
@@ -130,8 +134,11 @@ export function readSessionCookie(req: FastifyRequest): SessionUser | null {
   try {
     const payload = JSON.parse(unsigned.value) as SessionCookiePayload;
     if (payload.jti && REVOKED_JTIS.has(payload.jti)) return null;
-    // Return only the public SessionUser fields (strip jti from the caller view).
-    const { jti: _, ...user } = payload;
+    if (payload.iat && Date.now() / 1000 - payload.iat > SESSION_MAX_AGE_SEC) {
+      return null; // expired
+    }
+    // Return only the public SessionUser fields (strip jti and iat from the caller view).
+    const { jti: _, iat: _iat, ...user } = payload;
     return user as SessionUser;
   } catch { return null; }
 }
@@ -145,7 +152,12 @@ export function registerAuthRoutes(app: FastifyInstance, orchestrator: Orchestra
 
   app.get("/auth/:provider/login", async (req, reply) => {
     if (!checkAuthRate(req.ip)) return reply.code(429).send({ error: "Too many requests" });
-    const provider = (req.params as { provider: string }).provider as ProviderKey;
+    const VALID_PROVIDERS = ["google", "microsoft", "linkedin"] as const;
+    const rawProvider = (req.params as { provider: string }).provider;
+    if (!VALID_PROVIDERS.includes(rawProvider as typeof VALID_PROVIDERS[number])) {
+      return reply.code(404).send({ error: "Unknown OAuth provider" });
+    }
+    const provider = rawProvider as ProviderKey;
     const spec = PROVIDERS[provider];
     if (!spec || !isConfigured(provider)) return reply.code(404).send({ error: "Provider not configured" });
 
@@ -162,7 +174,12 @@ export function registerAuthRoutes(app: FastifyInstance, orchestrator: Orchestra
 
   app.get("/auth/:provider/callback", async (req, reply) => {
     if (!checkAuthRate(req.ip)) return reply.code(429).send({ error: "Too many requests" });
-    const provider = (req.params as { provider: string }).provider as ProviderKey;
+    const VALID_PROVIDERS = ["google", "microsoft", "linkedin"] as const;
+    const rawProvider = (req.params as { provider: string }).provider;
+    if (!VALID_PROVIDERS.includes(rawProvider as typeof VALID_PROVIDERS[number])) {
+      return reply.code(404).send({ error: "Unknown OAuth provider" });
+    }
+    const provider = rawProvider as ProviderKey;
     const spec = PROVIDERS[provider];
     if (!spec || !isConfigured(provider)) return reply.code(404).send({ error: "Provider not configured" });
 
@@ -194,6 +211,11 @@ export function registerAuthRoutes(app: FastifyInstance, orchestrator: Orchestra
       const identity = spec.mapUser((await infoRes.json()) as Record<string, unknown>);
       if (!identity.email) throw new Error("provider returned no email");
 
+      if (identity.emailVerified === false) {
+        await auditLogger.write({ event: "auth.failed", actorId: ACTOR_ANONYMOUS, data: { reason: "unverified_email", provider, email: identity.email } });
+        throw new Error("Provider returned an unverified email address. Login rejected.");
+      }
+
       // Map to a lawyer profile (auto-provision on first login).
       let profile = orchestrator.profiles.getByEmail(identity.email);
       if (!profile) {
@@ -203,7 +225,8 @@ export function registerAuthRoutes(app: FastifyInstance, orchestrator: Orchestra
 
       const payload: SessionCookiePayload = {
         profileId: profile.id, name: profile.name, email: profile.email,
-        role: profile.role, mode: resolveMode(profile.role, profile.mode), jti: randomUUID(),
+        role: profile.role, mode: resolveMode(profile.role, profile.mode),
+        jti: randomUUID(), iat: Math.floor(Date.now() / 1000),
       };
       reply.setCookie(SESSION_COOKIE, JSON.stringify(payload), cookieOpts(60 * 60 * 12));
       logger.info("OAuth login", { provider, email: identity.email, role: profile.role });

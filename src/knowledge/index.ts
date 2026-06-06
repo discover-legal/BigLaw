@@ -10,6 +10,7 @@
 // No external service required — data persists to ./data/knowledge.rvdb.
 
 import { v4 as uuidv4 } from "uuid";
+import { resolve } from "path";
 import { Config } from "../config.js";
 import { embed, embedBatch } from "../embeddings.js";
 import { logger } from "../logger.js";
@@ -45,10 +46,12 @@ export class KnowledgeStore {
   private ready = false;
 
   constructor() {
+    const dataDir = resolve(Config.vectorDb.dataDir ?? "./data");
+    logger.info("Vector DB data directory", { dataDir });
     this.db = new VectorDb({
       dimensions: DIMS,
       distanceMetric: "Cosine",
-      storagePath: `${Config.vectorDb.dataDir}/knowledge.rvdb`,
+      storagePath: `${dataDir}/knowledge.rvdb`,
     });
   }
 
@@ -171,7 +174,7 @@ export class KnowledgeStore {
   }
 
   /** List every ingested document (one entry per docId). */
-  async listDocuments(ownerId?: string): Promise<Array<{
+  async listDocuments(ownerId?: string, limit = 200): Promise<Array<{
     id: string;
     title: string;
     jurisdiction?: string;
@@ -211,7 +214,7 @@ export class KnowledgeStore {
       }
     }
 
-    return [...seen.values()];
+    return Array.from(seen.values()).slice(0, limit);
   }
 
   private assertReady(): void {

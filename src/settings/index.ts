@@ -93,12 +93,15 @@ export function assertPublicHttpUrl(raw: string, label: string): string {
   const h = u.hostname.toLowerCase().replace(/^\[|\]$/g, "");
   const isPrivate =
     h === "localhost" ||
-    h === "::1" ||
+    h === "::1" ||               // IPv6 loopback
+    h === "0.0.0.0" ||           // unspecified address
     /^127\./.test(h) ||          // 127.0.0.0/8  loopback
     /^169\.254\./.test(h) ||     // 169.254.0.0/16  link-local
     /^10\./.test(h) ||           // 10.0.0.0/8  RFC-1918
     /^172\.(1[6-9]|2\d|3[01])\./.test(h) ||  // 172.16-31.x  RFC-1918
     /^192\.168\./.test(h) ||     // 192.168.0.0/16  RFC-1918
+    /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(h) || // 100.64.0.0/10  IANA shared address space
+    /^::ffff:/i.test(h) ||       // IPv4-mapped IPv6
     /^fc00:/i.test(h) ||         // fc00::/7  IPv6 ULA
     /^fe80:/i.test(h);           // fe80::/10  IPv6 link-local
   if (isPrivate) {

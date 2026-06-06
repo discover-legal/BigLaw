@@ -20,6 +20,7 @@ import { Config } from "../config.js";
 import { logger } from "../logger.js";
 import { costStore, calcCostUsd } from "../cost/index.js";
 import { resolveModelId } from "../providers/index.js";
+import { assertPublicHttpUrl } from "../settings/index.js";
 import type {
   CitationCheckResult,
   CitationTreatment,
@@ -29,7 +30,15 @@ import type {
 } from "../types.js";
 
 const HAIKU_MODEL = "claude-haiku-4-5-20251001";
-const CL_BASE = (process.env.COURT_LISTENER_BASE_URL ?? "https://www.courtlistener.com").replace(/\/$/, "");
+let CL_BASE = "https://www.courtlistener.com";
+if (process.env.COURT_LISTENER_BASE_URL) {
+  try {
+    assertPublicHttpUrl(process.env.COURT_LISTENER_BASE_URL, "COURT_LISTENER_BASE_URL");
+    CL_BASE = process.env.COURT_LISTENER_BASE_URL.replace(/\/$/, "");
+  } catch {
+    logger.warn("COURT_LISTENER_BASE_URL failed SSRF validation — using default");
+  }
+}
 const CL_API_KEY = process.env.COURT_LISTENER_API_KEY;
 const REQUEST_TIMEOUT_MS = 20_000;
 const MAX_RESPONSE_BYTES = 512 * 1024; // 512 KB

@@ -87,6 +87,8 @@ export interface QueueAdapter {
 
 // ─── InMemoryQueue ────────────────────────────────────────────────────────────
 
+const QUEUE_MAX_PENDING = 1_000;
+
 export class InMemoryQueue implements QueueAdapter {
   private jobs: Job[] = [];
   private readonly path = Config.persistence.jobsFile;
@@ -95,9 +97,22 @@ export class InMemoryQueue implements QueueAdapter {
     try {
       await mkdir(dirname(this.path), { recursive: true }).catch(() => {});
       const raw = await readFile(this.path, "utf8");
-      const parsed = JSON.parse(raw) as Job[];
+      const parsed = JSON.parse(raw) as unknown[];
+      const VALID_JOB_TYPES = new Set(["summarize_time_entry", "ocg_bulk_check"]);
+      const VALID_STATUSES = new Set(["pending", "running", "done", "failed", "dead_letter"]);
+      const validJobs = parsed.filter((j: unknown) => {
+        if (!j || typeof j !== "object") return false;
+        const job = j as Record<string, unknown>;
+        return (
+          typeof job.id === "string" &&
+          VALID_JOB_TYPES.has(String(job.type)) &&
+          VALID_STATUSES.has(String(job.status)) &&
+          typeof job.retries === "number" && job.retries >= 0 &&
+          typeof job.maxRetries === "number" && job.maxRetries >= 0
+        );
+      });
       // On restart: any job that was "running" crashed mid-flight → reset to pending
-      this.jobs = parsed.map((j) =>
+      this.jobs = (validJobs as Job[]).map((j) =>
         j.status === "running" ? { ...j, status: "pending" as JobStatus } : j,
       );
       // Prune done jobs older than 7 days to keep file manageable
@@ -115,6 +130,10 @@ export class InMemoryQueue implements QueueAdapter {
   }
 
   async enqueue(type: JobType, payload: Record<string, unknown>, maxRetries = Config.queue.maxRetries): Promise<Job> {
+    const pendingCount = this.jobs.filter(j => j.status === "pending").length;
+    if (pendingCount >= QUEUE_MAX_PENDING) {
+      throw new Error(`Queue is full (${QUEUE_MAX_PENDING} pending jobs). Try again later.`);
+    }
     const job: Job = {
       id: randomUUID(),
       type,

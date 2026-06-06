@@ -25,12 +25,22 @@
  *   3. docuseal_submission_status(id)  → check status / get signed PDF URL
  */
 
-import { readFile } from "fs/promises";
+import { readFile, stat } from "fs/promises";
 import { basename, resolve, sep } from "path";
 import { Config } from "../config.js";
 import { logger } from "../logger.js";
+import { assertPublicHttpUrl } from "../settings/index.js";
 import type { ToolImpl } from "./index.js";
 import { assertSafeReadPath } from "./pdf.js";
+
+// ─── SSRF validation at startup ───────────────────────────────────────────────
+if (Config.docuseal.url && Config.docuseal.url !== "http://localhost:3000") {
+  try {
+    assertPublicHttpUrl(Config.docuseal.url, "DOCUSEAL_URL");
+  } catch (err) {
+    logger.warn("DocuSeal URL validation failed — DocuSeal disabled", { error: (err as Error).message });
+  }
+}
 
 // ─── Shared HTTP helper ───────────────────────────────────────────────────────
 
@@ -82,7 +92,7 @@ export const docusealListTemplatesTool: ToolImpl = {
     if (!Config.docuseal.enabled || !Config.docuseal.apiKey) {
       return { warning: "DOCUSEAL_API_KEY not configured — DocuSeal unavailable", templates: [] };
     }
-    const limit = (input.limit as number | undefined) ?? 20;
+    const limit = Math.max(1, Math.min(100, Math.floor((input.limit as number | undefined) ?? 20)));
     const data = await docusealFetch("GET", `/api/templates?limit=${limit}`) as { data: unknown[] };
     return { templates: data.data ?? data };
   },
@@ -147,7 +157,7 @@ export const docusealSendForSigningTool: ToolImpl = {
     }
 
     let templateId = input.templateId as number | undefined;
-    const signers = input.signers as Array<{ role: string; name: string; email: string }>;
+    const signers = (input.signers as Array<unknown>).slice(0, 50) as Array<{ role: string; name: string; email: string }>;
     const sendEmail = (input.sendEmail as boolean | undefined) ?? false;
     const documentName = (input.documentName as string | undefined) ?? "Legal Document";
 
@@ -160,6 +170,12 @@ export const docusealSendForSigningTool: ToolImpl = {
 
       const safePath = assertSafeReadPath(pdfPath);
       logger.debug("Uploading PDF to DocuSeal", { pdfPath: safePath });
+
+      const MAX_FILE_BYTES = 100 * 1024 * 1024; // 100 MB
+      const fileStats = await stat(safePath);
+      if (fileStats.size > MAX_FILE_BYTES) {
+        throw new Error(`File too large: ${fileStats.size} bytes (max ${MAX_FILE_BYTES})`);
+      }
 
       const bytes = await readFile(safePath);
       const form = new FormData();
@@ -246,6 +262,7 @@ export const docusealSubmissionStatusTool: ToolImpl = {
     }
 
     const id = input.submissionId as number;
+    if (!Number.isInteger(id) || id <= 0) throw new Error("submissionId must be a positive integer");
     const data = await docusealFetch("GET", `/api/submissions/${id}`) as {
       id: number;
       status: string;

@@ -379,7 +379,12 @@ export function sanitizePromptContent(s: string): string {
     .replace(/\bFINDING:/gi, "[FINDING:]")
     .replace(/\bEND_FINDING\b/gi, "[END_FINDING]")
     .replace(/\bNO_FINDINGS\b/gi, "[NO_FINDINGS]")
-    .replace(/\bNO_CHALLENGE\b/gi, "[NO_CHALLENGE]");
+    .replace(/\bNO_CHALLENGE\b/gi, "[NO_CHALLENGE]")
+    .replace(/\bCHALLENGE:/gi, "[CHALLENGE:]")
+    .replace(/\bEND_CHALLENGE\b/gi, "[END_CHALLENGE]")
+    .replace(/\bRESOLUTION:/gi, "[RESOLUTION:]")
+    .replace(/\bDESCRIPTION:/gi, "[DESCRIPTION:]")
+    .replace(/\bEXPECTED_OUTPUT_\d+:/gi, "[EXPECTED_OUTPUT:]");
 }
 
 // ─── Generic external agent format ───────────────────────────────────────────

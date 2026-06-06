@@ -9,6 +9,8 @@ import { AnthropicProvider } from "./anthropic.js";
 import { OllamaProvider } from "./ollama.js";
 import { Config } from "../config.js";
 import type { ModelProvider } from "./types.js";
+import { assertPublicHttpUrl } from "../settings/index.js";
+import { logger } from "../logger.js";
 
 export * from "./types.js";
 
@@ -44,15 +46,32 @@ let _local: OllamaProvider | undefined;
 /** Return the correct provider for a model ID. */
 export function getProvider(modelId: string): ModelProvider {
   if (isOllamaModel(modelId)) {
-    _ollama ??= new OllamaProvider(`${Config.local.ollamaUrl}/v1`, "ollama");
+    if (!_ollama) {
+      const ollamaUrl = `${Config.local.ollamaUrl}/v1`;
+      if (!ollamaUrl.startsWith("http://localhost") && !ollamaUrl.startsWith("http://127.")) {
+        try {
+          assertPublicHttpUrl(ollamaUrl, "OLLAMA_URL");
+        } catch (err) {
+          logger.warn("OLLAMA_URL validation warning", { error: (err as Error).message });
+        }
+      }
+      _ollama = new OllamaProvider(ollamaUrl, "ollama");
+    }
     return _ollama;
   }
   if (isLocalModel(modelId)) {
-    // Generic OpenAI-compat server — falls back to Ollama URL if LOCAL_INFERENCE_URL not set
-    _local ??= new OllamaProvider(
-      Config.local.localInferenceUrl || `${Config.local.ollamaUrl}/v1`,
-      Config.local.localInferenceKey,
-    );
+    if (!_local) {
+      // Generic OpenAI-compat server — falls back to Ollama URL if LOCAL_INFERENCE_URL not set
+      const localUrl = Config.local.localInferenceUrl || `${Config.local.ollamaUrl}/v1`;
+      if (!localUrl.startsWith("http://localhost") && !localUrl.startsWith("http://127.")) {
+        try {
+          assertPublicHttpUrl(localUrl, "LOCAL_INFERENCE_URL");
+        } catch (err) {
+          logger.warn("LOCAL_INFERENCE_URL validation warning", { error: (err as Error).message });
+        }
+      }
+      _local = new OllamaProvider(localUrl, Config.local.localInferenceKey);
+    }
     return _local;
   }
   _anthropic ??= new AnthropicProvider();

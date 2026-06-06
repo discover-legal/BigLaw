@@ -47,6 +47,7 @@ export interface ClioTokens {
 export class ClioClient {
   private tokens: ClioTokens | null = null;
   private readonly base: string;
+  private _refreshPromise: Promise<void> | null = null;
 
   constructor() {
     const region = Config.clio.region;
@@ -94,15 +95,17 @@ export class ClioClient {
       tokenType: body.token_type,
       connectedAt: new Date().toISOString(),
     };
+    // Persist tokens immediately so they are not lost if firm-info fetch fails
+    await this.save();
     // Fetch firm info to store firmName
     try {
       const me = await this.get("/api/v4/users/who_am_i.json", { fields: "id,name,account{id,name}" }) as { data?: { id?: number; name?: string; account?: { id?: number; name?: string } } };
       if (me?.data?.account) {
         this.tokens.firmId = String(me.data.account.id ?? "");
         this.tokens.firmName = me.data.account.name ?? "";
+        await this.save();
       }
     } catch { /* non-fatal */ }
-    await this.save();
   }
 
   /** Refresh the access token using the refresh token. */
@@ -138,8 +141,11 @@ export class ClioClient {
   /** Return a valid access token, refreshing if within 60s of expiry. */
   private async ensureValid(): Promise<string> {
     if (!this.tokens) throw new Error("Clio not connected — visit /auth/clio/connect");
-    if (Date.now() >= this.tokens.expiresAt - 60_000) await this.refresh();
-    return this.tokens.accessToken;
+    if (Date.now() >= this.tokens.expiresAt - 60_000) {
+      this._refreshPromise ??= this.refresh().finally(() => { this._refreshPromise = null; });
+      await this._refreshPromise;
+    }
+    return this.tokens!.accessToken;
   }
 
   // ── Persistence ──────────────────────────────────────────────────────────
@@ -155,7 +161,7 @@ export class ClioClient {
 
   private async save(): Promise<void> {
     await mkdir(dirname(Config.clio.tokensFile), { recursive: true });
-    await writeFile(Config.clio.tokensFile, JSON.stringify(this.tokens ?? null, null, 2), "utf8");
+    await writeFile(Config.clio.tokensFile, JSON.stringify(this.tokens ?? null, null, 2), { encoding: "utf8", mode: 0o600 });
   }
 
   async disconnect(): Promise<void> {

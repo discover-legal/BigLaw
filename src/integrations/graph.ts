@@ -33,6 +33,7 @@ const MAX_RESPONSE_BYTES = 512 * 1024;
 // ─── Token cache (shared with email/client.ts via re-export) ─────────────────
 
 let _cachedToken: { token: string; expiresAt: number } | null = null;
+let _graphTokenPromise: Promise<string> | null = null;
 
 export async function getGraphToken(): Promise<string> {
   const cfg = Config.email.graph;
@@ -41,30 +42,50 @@ export async function getGraphToken(): Promise<string> {
   if (cfg.accessToken) return cfg.accessToken;
   if (_cachedToken && Date.now() < _cachedToken.expiresAt - 60_000) return _cachedToken.token;
 
-  const body = new URLSearchParams({
-    client_id: cfg.clientId, client_secret: cfg.clientSecret,
-    scope: "https://graph.microsoft.com/.default",
-    grant_type: "client_credentials",
-  });
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
-  try {
-    const res = await fetch(
-      `https://login.microsoftonline.com/${cfg.tenantId}/oauth2/v2.0/token`,
-      { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body, signal: ctrl.signal },
-    );
-    clearTimeout(timer);
-    if (!res.ok) throw new Error(`Graph token failed: ${res.status}`);
-    const data = (await res.json()) as { access_token: string; expires_in: number };
-    _cachedToken = { token: data.access_token, expiresAt: Date.now() + data.expires_in * 1000 };
-    return data.access_token;
-  } catch (err) { clearTimeout(timer); throw err; }
+  // In-flight deduplication: only one token request at a time
+  _graphTokenPromise ??= (async () => {
+    const body = new URLSearchParams({
+      client_id: cfg.clientId, client_secret: cfg.clientSecret,
+      scope: "https://graph.microsoft.com/.default",
+      grant_type: "client_credentials",
+    });
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+    try {
+      const res = await fetch(
+        `https://login.microsoftonline.com/${cfg.tenantId}/oauth2/v2.0/token`,
+        { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body, signal: ctrl.signal },
+      );
+      clearTimeout(timer);
+      if (!res.ok) throw new Error(`Graph token failed: ${res.status}`);
+      const data = (await res.json()) as { access_token: string; expires_in: number };
+      _cachedToken = { token: data.access_token, expiresAt: Date.now() + data.expires_in * 1000 };
+      return data.access_token;
+    } catch (err) { clearTimeout(timer); throw err; }
+  })().finally(() => { _graphTokenPromise = null; });
+  return _graphTokenPromise;
+}
+
+// ─── URL validation ───────────────────────────────────────────────────────────
+
+/**
+ * Validate that an absolute URL returned from a Graph @odata.nextLink is
+ * actually a Graph URL. Prevents SSRF if a malicious response forges the link.
+ */
+export function validateGraphUrl(url: string): string {
+  const parsed = new URL(url);
+  if (parsed.hostname !== "graph.microsoft.com") {
+    throw new Error(`Blocked non-Graph URL: ${parsed.hostname}`);
+  }
+  return url;
 }
 
 // ─── Shared fetch ─────────────────────────────────────────────────────────────
 
 export async function graphFetch(path: string, token: string): Promise<unknown> {
-  const url = path.startsWith("http") ? path : `${GRAPH_BASE}${path}`;
+  // Always build relative to GRAPH_BASE. For @odata.nextLink pagination, callers
+  // must pass the result of validateGraphUrl() to prevent SSRF.
+  const url = `${GRAPH_BASE}${path}`;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
   try {
@@ -90,7 +111,7 @@ export async function graphFetch(path: string, token: string): Promise<unknown> 
 }
 
 export async function graphPost(path: string, token: string, body: unknown): Promise<unknown> {
-  const url = path.startsWith("http") ? path : `${GRAPH_BASE}${path}`;
+  const url = `${GRAPH_BASE}${path}`;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
   try {
@@ -271,11 +292,25 @@ export async function postToTeamsWebhook(
   text: string,
   facts?: Array<{ name: string; value: string }>,
 ): Promise<void> {
+  // Validate URL is a genuine Teams webhook before sending any data
+  try {
+    const u = new URL(webhookUrl);
+    if (!["outlook.office.com", "outlook.office365.com"].some(
+      (host) => u.hostname === host || u.hostname.endsWith(".webhook.office.com"),
+    )) {
+      throw new Error(`Not a valid Teams webhook hostname: ${u.hostname}`);
+    }
+    if (u.protocol !== "https:") throw new Error("Teams webhook URL must use HTTPS");
+  } catch (err) {
+    logger.warn("Blocked invalid Teams webhook URL", { error: (err as Error).message });
+    throw new Error(`Invalid Teams webhook URL: ${(err as Error).message}`);
+  }
+
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
   const card = {
     "@type": "MessageCard",
-    "@context": "http://schema.org/extensions",
+    "@context": "https://schema.org/extensions",
     themeColor: "0076D7",
     summary: title,
     sections: [{
