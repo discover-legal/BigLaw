@@ -4,18 +4,20 @@
 /**
  * Playbook system — hierarchical clause-position repository.
  *
- * FOUR-TIER CASCADE (most-specific wins, like CSS specificity):
+ * FOUR-TIER AUTHORITY CASCADE (mirrors Anthropic's operator/user/assistant stack):
  *
- *   personal  — individual lawyer's personal position and style preferences
- *   matter    — positions actually agreed / negotiated in this specific deal
- *   client    — positions preferred / required by a specific client
- *   firm      — firm-wide market-standard defaults
+ *   firm      — firm policy: non-negotiable, always wins (system prompt / operator)
+ *   client    — client requirements: override matter and personal (user turn)
+ *   matter    — deal-specific context: overrides personal (latest instruction)
+ *   personal  — lawyer's default style: the baseline that everything else shapes
  *
- * When you query a clause type, the system resolves the most specific position
- * available and annotates which tier it came from. Lower tiers can override
- * higher tiers for specific clauses, letting you express:
- *   "Firm standard is X, but Client ABC always wants Y, but in Matter 1234 we
- *    agreed to Z, and I personally note W when drafting."
+ * Direction: firm overwrites client overwrites matter overwrites personal.
+ *
+ * The mental model: a lawyer starts with their personal defaults ("I always open
+ * at 3 months"). Those defaults get adapted upward by how they were retained —
+ * the client may require 6 months, the firm may cap at 4, so the effective
+ * position is 4. Personal preferences are never discarded; they surface as
+ * advisory notes alongside the authoritative position.
  *
  * WHAT IT KILLS:
  *   Contract Express ($2k+/seat) — no more questionnaire-driven document assembly
@@ -36,11 +38,13 @@ import type { Playbook, PlaybookEntry } from "../types.js";
 
 export type PlaybookScope = "firm" | "client" | "matter" | "personal";
 
+// Authority order: firm (supreme) > client > matter > personal (baseline).
+// The highest number wins when resolving conflicts.
 const SCOPE_PRIORITY: Record<PlaybookScope, number> = {
-  firm: 0,
-  client: 1,
-  matter: 2,
-  personal: 3, // highest specificity for personal preferences
+  personal: 0, // baseline — adapts to everything above it
+  matter:   1, // deal-specific context
+  client:   2, // client requirements
+  firm:     3, // firm policy — always wins
 };
 
 // ─── Extended types (local to this module) ────────────────────────────────────
@@ -178,8 +182,10 @@ export class PlaybookStore {
 
     if (byScope.size === 0) return null;
 
-    // Winner = highest priority scope with an entry
-    let winner: PlaybookScope = "firm";
+    // Winner = highest-authority scope with an entry.
+    // Authority: firm (3) > client (2) > matter (1) > personal (0).
+    // Personal is always surfaced as an advisory note but never overrides firm/client/matter.
+    let winner: PlaybookScope = "personal";
     for (const scope of scopeFilter) {
       if (byScope.has(scope)) {
         if (SCOPE_PRIORITY[scope] > SCOPE_PRIORITY[winner]) winner = scope;
@@ -187,6 +193,8 @@ export class PlaybookStore {
     }
 
     const effectiveEntry = byScope.get(winner)!;
+    // Personal note: always surface the personal-tier position as an advisory
+    // alongside the authoritative answer, unless personal IS the winning tier.
     const personalEntry = byScope.get("personal");
     const personalNote = personalEntry && winner !== "personal"
       ? personalEntry.standardPosition
@@ -243,9 +251,10 @@ export class PlaybookStore {
       if (r) resolved.push(r);
     }
 
-    const tierLabels = scopeFilter.join(" → ");
-    const overrides = resolved.filter((r) => r.resolvedFrom !== "firm").length;
-    const cascadeSummary = `Resolved ${resolved.length} clause types across cascade [${tierLabels}]. ${overrides} firm-default(s) overridden by a more specific tier.`;
+    // Cascade reads most-authoritative-first (firm wins, personal is baseline).
+    const tierLabels = [...scopeFilter].reverse().join(" → "); // firm → client → matter → personal
+    const firmWins = resolved.filter((r) => r.resolvedFrom === "firm").length;
+    const cascadeSummary = `Resolved ${resolved.length} clause types. Authority cascade [${tierLabels}]. Firm position applied in ${firmWins}/${resolved.length} clauses.`;
 
     return {
       clauseType: "*",

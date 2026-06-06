@@ -868,16 +868,19 @@ export interface PortfolioHealthSummary {
 // ── Playbook (Contract Express / Practical Law replacement) ──────────────────
 
 /**
- * Four-tier playbook cascade — most-specific scope wins (like CSS specificity):
+ * Four-tier authority cascade — mirrors Anthropic's operator/user/assistant stack:
  *
- *   firm     — firm-wide market-standard defaults (applies to all matters)
- *   client   — client-specific positions (overrides firm for this client's matters)
- *   matter   — deal-specific negotiated outcomes (overrides client for this matter)
- *   personal — individual lawyer's preferences and style notes (always surfaced)
+ *   firm     — firm policy: non-negotiable, always wins (system-prompt authority)
+ *   client   — client requirements: override matter and personal
+ *   matter   — deal-specific context: overrides personal
+ *   personal — individual lawyer's baseline defaults (starting point; shaped upward)
  *
- * At query time, Big Michael resolves the single most-specific position available
- * for each clause type, and surfaces personal-tier notes as an advisory layer
- * regardless of which tier wins the resolution.
+ * Authority order: firm > client > matter > personal.
+ *
+ * A lawyer's personal preferences are their default starting point. Those defaults
+ * are adapted upward by how they were retained — client requirements shape them,
+ * firm policy is supreme. Personal notes are always surfaced as advisory annotations
+ * alongside the authoritative position, never discarded.
  */
 export type PlaybookScope = "firm" | "client" | "matter" | "personal";
 
