@@ -1,0 +1,13 @@
+# TopoFlow dependencies.
+#
+# Core + all offline milestone tests (M1–M8) need ONLY the Python 3.11 stdlib.
+# Install pytest to run the suite:
+pytest>=8
+
+# ── Live run (M9) extras — only needed for real LLM/encoder/search calls ─────
+# pydantic>=2
+# instructor>=1
+# openai>=1
+# sentence-transformers>=2.2
+# exa-py>=1
+# tavily-python>=0.3
