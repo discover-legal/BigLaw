@@ -724,6 +724,7 @@ type JobType string
 const (
 	JobTypeSummarizeTimeEntry JobType = "summarize_time_entry"
 	JobTypeOcgBulkCheck       JobType = "ocg_bulk_check"
+	JobTypeLPMStatusReport    JobType = "lpm_status_report"
 )
 
 type JobStatus string
@@ -871,6 +872,63 @@ type StatusReport struct {
 	Content      string  `json:"content"`
 	WordCount    int     `json:"wordCount"`
 	CostUsd      float64 `json:"costUsd"`
+}
+
+// ─── LPM: daily matter status reports ──────────────────────────────────────────
+//
+// MatterStatusReport is the structured, machine-readable daily status report for
+// a single matter — the single source of truth that the JSON, Markdown and DOCX
+// renderers all consume. Reports accumulate, one per matter per day, into an
+// append-only corpus that becomes a mineable time-series over the life of a deal.
+
+type LPMWorkstream struct {
+	Name     string `json:"name"`
+	Status   string `json:"status"`             // e.g. "on track", "blocked", "at risk"
+	Owner    string `json:"owner,omitempty"`
+	NextStep string `json:"nextStep,omitempty"`
+	DueDate  string `json:"dueDate,omitempty"`
+}
+
+type LPMRisk struct {
+	Severity          string `json:"severity"` // "low" | "medium" | "high"
+	Description       string `json:"description"`
+	RecommendedAction string `json:"recommendedAction,omitempty"`
+}
+
+// LPMDeltas are the deterministic, machine-computed changes since the previous
+// report (or the trailing 24h when this is the first report for the matter).
+type LPMDeltas struct {
+	Since             string   `json:"since"` // RFC3339 cutoff the deltas are measured from
+	NewTasks          int      `json:"newTasks"`
+	ClosedTasks       int      `json:"closedTasks"`
+	NewFindings       int      `json:"newFindings"`
+	EmailsRouted      int      `json:"emailsRouted"` // populated by the Phase 2 email router
+	DeadlinesUpcoming []string `json:"deadlinesUpcoming,omitempty"`
+	BudgetBurnPct     float64  `json:"budgetBurnPct"`
+	HoursLogged       float64  `json:"hoursLogged"`
+	BilledUsd         float64  `json:"billedUsd"`
+}
+
+type MatterStatusReport struct {
+	ReportID      string          `json:"reportId"`
+	MatterNumber  string          `json:"matterNumber"`
+	ClientNumber  string          `json:"clientNumber,omitempty"`
+	Date          string          `json:"date"`        // YYYY-MM-DD — the report's logical day
+	GeneratedAt   string          `json:"generatedAt"` // RFC3339
+	GeneratedBy   string          `json:"generatedBy"` // model id
+	PrevReportID  string          `json:"prevReportId,omitempty"`
+	HealthScore   float64         `json:"healthScore"`
+	HealthSignal  string          `json:"healthSignal"`
+	HealthTrend   string          `json:"healthTrend,omitempty"`
+	BLUF          string          `json:"bluf"` // bottom-line-up-front, partner-digestible in seconds
+	Summary       string          `json:"summary"`
+	Workstreams   []LPMWorkstream `json:"workstreams,omitempty"`
+	Risks         []LPMRisk       `json:"risks,omitempty"`
+	OpenQuestions []string        `json:"openQuestions,omitempty"`
+	Deltas        LPMDeltas       `json:"deltas"`
+	Sources       []string        `json:"sources,omitempty"`
+	Confidence    float64         `json:"confidence"`
+	CostUsd       float64         `json:"costUsd"`
 }
 
 // ─── Deadlines ────────────────────────────────────────────────────────────────

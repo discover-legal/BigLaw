@@ -216,6 +216,33 @@ type PlaybooksConfig struct {
 	File string
 }
 
+// LPMConfig governs the Legal Project Management subsystem: the daily
+// status-report spine plus the (Phase 2) email intake/routing knobs.
+//
+//	EmailWriteMode — how much email-writing power the agent has:
+//	  "off"       insights only; never composes outbound mail
+//	  "channel"   posts drafts into the matter's Teams/Slack channel for comment
+//	  "draft"     writes an unsent draft into the mailbox for a human to send
+//	  "send_gate" may send, but only after an explicit human approval gate
+//
+//	IntakeMode — how new email reaches the classifier (Phase 2):
+//	  "shared_inbox" scope polling to one project inbox CC'd on everything
+//	  "polling"      poll the configured mailbox(es) directly
+//	  "both"         shared inbox first, falling back to direct polling
+type LPMConfig struct {
+	Enabled        bool
+	DailyHour      int      // local-time hour (0–23) the daily run fires; 6 == 0600
+	Formats        []string // any of: json, docx, markdown
+	CorpusFile     string   // append-only JSONL corpus of MatterStatusReports
+	ReportDir      string   // rendered DOCX/MD/JSON artifacts land here
+	Model          string   // override; empty = low-power routing (Haiku/Ollama/local)
+	ChannelPost    bool     // post a short summary + DOCX link to the matter channel
+	EmailWriteMode string   // off | channel | draft | send_gate
+	IntakeMode     string   // shared_inbox | polling | both
+	SharedInbox    string   // mailbox address for shared-inbox intake
+	PollIntervalM  int      // email poll interval in minutes
+}
+
 type ConnectorsConfig struct {
 	CourtListener  ConnectorConfig
 	Ironclad       ConnectorConfig
@@ -255,6 +282,18 @@ type Config struct {
 	Email         EmailConfig
 	Bots          BotsConfig
 	Playbooks     PlaybooksConfig
+	LPM           LPMConfig
+}
+
+// normalizeEnum returns v lowercased if it is in allowed, else fallback.
+func normalizeEnum(v, fallback string, allowed ...string) string {
+	v = strings.ToLower(strings.TrimSpace(v))
+	for _, a := range allowed {
+		if v == a {
+			return v
+		}
+	}
+	return fallback
 }
 
 func Load() *Config {
@@ -411,6 +450,19 @@ func Load() *Config {
 				Endpoint: env("TRELLIS_MCP_URL", "https://mcp.trellis.law/anthropic"),
 				Enabled:  os.Getenv("TRELLIS_API_KEY") != "",
 			},
+		},
+		LPM: LPMConfig{
+			Enabled:        envBool("LPM_ENABLED", false),
+			DailyHour:      envInt("LPM_DAILY_HOUR", 6),
+			Formats:        envList("LPM_REPORT_FORMATS", "json,docx,markdown"),
+			CorpusFile:     env("LPM_CORPUS_FILE", "./data/status-reports.jsonl"),
+			ReportDir:      env("LPM_REPORT_DIR", "./data/reports"),
+			Model:          env("LPM_MODEL", ""),
+			ChannelPost:    envBool("LPM_CHANNEL_POST", false),
+			EmailWriteMode: normalizeEnum(env("LPM_EMAIL_WRITE_MODE", "off"), "off", "off", "channel", "draft", "send_gate"),
+			IntakeMode:     normalizeEnum(env("LPM_INTAKE_MODE", "polling"), "polling", "shared_inbox", "polling", "both"),
+			SharedInbox:    env("LPM_SHARED_INBOX", ""),
+			PollIntervalM:  envInt("LPM_POLL_INTERVAL_MIN", 15),
 		},
 	}
 	return c
