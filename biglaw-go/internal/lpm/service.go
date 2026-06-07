@@ -9,6 +9,7 @@
 package lpm
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -62,6 +63,16 @@ type Service struct {
 	allowedDomains []string
 	transport      MailTransport
 	channelPoster  ChannelPoster
+
+	// Optional Phase 3 portfolio briefing.
+	briefer *PortfolioBriefer
+}
+
+// WithPortfolio attaches the 0600 portfolio briefer. When set, the daily sweep
+// also enqueues a portfolio job (processed after the per-matter reports).
+func (s *Service) WithPortfolio(briefer *PortfolioBriefer) *Service {
+	s.briefer = briefer
+	return s
 }
 
 // WithDrafting configures the outbound drafter. A fresh confidentiality guard is
@@ -124,6 +135,9 @@ func NewService(cfg config.LPMConfig, gen *Generator, corpus *Corpus, data DataP
 // Corpus exposes the underlying report corpus (for REST reads).
 func (s *Service) Corpus() *Corpus { return s.corpus }
 
+// ActiveMatters exposes the live matter roster (for the on-demand portfolio).
+func (s *Service) ActiveMatters() []MatterRef { return s.data.ActiveMatters() }
+
 // Start launches the daily scheduler and the queue worker.
 func (s *Service) Start() {
 	s.sched = NewScheduler(s.cfg.DailyHour, s.enqueueDaily)
@@ -153,14 +167,20 @@ func (s *Service) Stop() {
 // active matter so the worker processes them durably and at low priority.
 func (s *Service) enqueueDaily(now time.Time) {
 	matters := s.data.ActiveMatters()
+	date := now.UTC().Format("2006-01-02")
 	for _, m := range matters {
 		s.queue.Enqueue(types.JobTypeLPMStatusReport, map[string]interface{}{
 			"matterNumber": m.MatterNumber,
 			"clientNumber": m.ClientNumber,
-			"date":         now.UTC().Format("2006-01-02"),
-		}, s.cfg.PollIntervalM /*unused as retries; kept for parity*/)
+			"date":         date,
+		}, 3)
 	}
-	slog.Info("LPM daily sweep enqueued", "matters", len(matters))
+	// Enqueue the portfolio briefing last so the worker runs it after the
+	// per-matter reports it summarises are in the corpus.
+	if s.briefer != nil {
+		s.queue.Enqueue(types.JobTypeLPMPortfolio, map[string]interface{}{"date": date}, 3)
+	}
+	slog.Info("LPM daily sweep enqueued", "matters", len(matters), "portfolio", s.briefer != nil)
 }
 
 // worker drains LPM status-report jobs from the shared queue.
@@ -171,7 +191,7 @@ func (s *Service) worker() {
 			return
 		default:
 		}
-		job := s.queue.Dequeue([]types.JobType{types.JobTypeLPMStatusReport})
+		job := s.queue.Dequeue([]types.JobType{types.JobTypeLPMStatusReport, types.JobTypeLPMPortfolio})
 		if job == nil {
 			select {
 			case <-s.stop:
@@ -185,19 +205,77 @@ func (s *Service) worker() {
 }
 
 func (s *Service) processJob(job *types.Job) {
-	ref := MatterRef{
-		MatterNumber: stringField(job.Payload, "matterNumber"),
-		ClientNumber: stringField(job.Payload, "clientNumber"),
+	switch job.Type {
+	case types.JobTypeLPMPortfolio:
+		if _, err := s.GeneratePortfolio(s.data.ActiveMatters(), stringField(job.Payload, "date")); err != nil {
+			s.queue.Fail(job.ID, err.Error())
+			return
+		}
+		s.queue.Ack(job.ID)
+	default:
+		ref := MatterRef{
+			MatterNumber: stringField(job.Payload, "matterNumber"),
+			ClientNumber: stringField(job.Payload, "clientNumber"),
+		}
+		if ref.MatterNumber == "" {
+			s.queue.Fail(job.ID, "missing matterNumber in payload")
+			return
+		}
+		if _, err := s.GenerateForMatter(ref, stringField(job.Payload, "date")); err != nil {
+			s.queue.Fail(job.ID, err.Error())
+			return
+		}
+		s.queue.Ack(job.ID)
 	}
-	if ref.MatterNumber == "" {
-		s.queue.Fail(job.ID, "missing matterNumber in payload")
-		return
+}
+
+// GeneratePortfolio builds, persists and renders the portfolio briefing for the
+// given matters. Used by the worker and the on-demand REST path.
+func (s *Service) GeneratePortfolio(matters []MatterRef, date string) (*PortfolioBriefing, error) {
+	if s.briefer == nil {
+		return nil, fmt.Errorf("portfolio briefing not configured")
 	}
-	if _, err := s.GenerateForMatter(ref, stringField(job.Payload, "date")); err != nil {
-		s.queue.Fail(job.ID, err.Error())
-		return
+	br, err := s.briefer.Generate(matters, s.corpus, date)
+	if err != nil {
+		return nil, err
 	}
-	s.queue.Ack(job.ID)
+	if err := s.writePortfolioArtifacts(br); err != nil {
+		slog.Warn("LPM portfolio artifact write failed", "error", err)
+	}
+	return br, nil
+}
+
+func (s *Service) writePortfolioArtifacts(br *PortfolioBriefing) error {
+	dir := filepath.Join(s.cfg.ReportDir, "_portfolio")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	base := filepath.Join(dir, br.Date)
+	for _, f := range s.cfg.Formats {
+		switch f {
+		case "json":
+			b, err := json.MarshalIndent(br, "", "  ")
+			if err != nil {
+				return err
+			}
+			if err := os.WriteFile(base+".json", b, 0o644); err != nil {
+				return err
+			}
+		case "markdown", "md":
+			if err := os.WriteFile(base+".md", []byte(RenderPortfolioMarkdown(br)), 0o644); err != nil {
+				return err
+			}
+		case "docx":
+			b, err := RenderPortfolioDOCX(br)
+			if err != nil {
+				return err
+			}
+			if err := os.WriteFile(base+".docx", b, 0o644); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // GenerateForMatter produces, persists and renders a report for one matter. It

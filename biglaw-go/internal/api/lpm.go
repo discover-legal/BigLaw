@@ -97,6 +97,16 @@ func (s *Server) AttachLPM(svc *lpm.Service) {
 		c.JSON(http.StatusOK, out)
 	})
 
+	// Generate the portfolio BLUF briefing across all active matters on demand.
+	g.POST("/portfolio/generate", func(c *gin.Context) {
+		br, err := svc.GeneratePortfolio(svc.ActiveMatters(), c.Query("date"))
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, br)
+	})
+
 	// Download a single report rendered as DOCX.
 	g.GET("/reports/:id/docx", func(c *gin.Context) {
 		rep, err := svc.Corpus().Get(c.Param("id"))

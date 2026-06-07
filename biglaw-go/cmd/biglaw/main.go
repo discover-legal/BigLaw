@@ -167,6 +167,9 @@ func main() {
 			)
 			lpmSvc.WithDrafting(cfg.LPM.EmailWriteMode, cfg.LPM.AllowedDomains, transport, nil)
 
+			// Phase 3: 0600 portfolio briefing.
+			lpmSvc.WithPortfolio(lpm.NewPortfolioBriefer(prov, model))
+
 			lpmSvc.Start()
 			defer lpmSvc.Stop()
 		}

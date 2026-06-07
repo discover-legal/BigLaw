@@ -725,6 +725,8 @@ const (
 	JobTypeSummarizeTimeEntry JobType = "summarize_time_entry"
 	JobTypeOcgBulkCheck       JobType = "ocg_bulk_check"
 	JobTypeLPMStatusReport    JobType = "lpm_status_report"
+	JobTypeLPMPortfolio       JobType = "lpm_portfolio_briefing"
+	JobTypeLPMBackfill        JobType = "lpm_email_backfill"
 )
 
 type JobStatus string
