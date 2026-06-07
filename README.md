@@ -36,6 +36,134 @@ This notice does not diminish what BigLaw is — it is the most capable open leg
 
 ---
 
+## What BigLaw Is
+
+BigLaw is a cross between a **platform**, an **experiment**, and an **art project**.
+
+As a platform, it is the most comprehensive open legal AI stack that exists — spanning research,
+drafting, redlining, e-signatures, briefing, docketing, billing, and collaboration across a bench
+of 100+ agents in a structured multi-round debate architecture.
+
+As an experiment, it is an ongoing attempt to answer a genuine engineering question: how much of
+the $50,000–150,000 per-lawyer-per-year legal tech stack can be replicated with open models, open
+protocols, and open code? The answer so far is: most of it.
+
+As an art project, it is a provocation. The cost chart below is not a sales pitch. It is a
+statement about who gets access to tools and who doesn't, and what happens when that changes.
+It is deliberately maximalist, deliberately opinionated, and deliberately not finished.
+
+You are not buying a product. You are picking up a thing that is still being built and deciding
+what to do with it.
+
+---
+
+## Legal Notices and Disclaimers
+
+*Read these. They are not boilerplate. They describe real risks that apply to you.*
+
+### No Legal Advice
+
+**BigLaw does not provide legal advice. Nothing produced by this software — no output, finding,
+draft, analysis, summary, headnote, redline, briefing, or synthesis — constitutes legal advice,
+and none of it should be relied upon as such.**
+
+BigLaw is a software tool that uses large language models to assist with legal research and
+document tasks. LLMs hallucinate. They misstate case holdings. They miss recent developments.
+They confuse jurisdictions. They produce authoritative-sounding text that is factually wrong.
+The debate and verification protocols in this system reduce these errors but do not eliminate them.
+
+**Every output of this system requires review by a licensed attorney before it is used in any
+legal matter.** Relying on unreviewed AI output in client matters may constitute malpractice,
+regardless of how capable the underlying system appears.
+
+If you are not a licensed attorney and you are using this software to answer legal questions
+about your own situation: please consult a lawyer. This software is not a substitute.
+
+### No Attorney-Client Relationship
+
+Use of BigLaw does not create an attorney-client relationship of any kind — between you and
+Discover Legal, between you and any contributor to this project, or between you and any AI
+system operated through this software. No communication through or about this software is
+privileged.
+
+### Unauthorised Practice of Law
+
+Depending on your jurisdiction, using AI tools to perform certain legal tasks — drafting court
+documents, providing legal advice to third parties, representing parties in legal proceedings —
+may constitute the unauthorised practice of law if performed by a non-attorney. The fact that
+the work is AI-assisted does not change this analysis. Know your jurisdiction's rules.
+
+If you are a law firm deploying BigLaw, you remain responsible for supervising all AI-assisted
+work product under your professional responsibility obligations, including the duty of competence
+(understanding the technology), the duty of confidentiality (securing client data), and the duty
+of supervision (reviewing outputs before they leave the firm).
+
+### Confidentiality and Data Security
+
+**BigLaw processes whatever data you give it.** If you feed it client communications, privileged
+documents, personally identifiable information, health records, financial data, or anything else
+that is sensitive or regulated, that data will be:
+
+- Sent to the Anthropic API (subject to Anthropic's data processing terms)
+- Potentially stored in the local vector database (which persists to disk)
+- Potentially logged to the audit log
+- Potentially included in prompts that are cached by the API provider
+
+**You are responsible for ensuring that your use of this software complies with your
+confidentiality obligations to clients, your firm's data handling policies, applicable
+data protection law (GDPR, CCPA, HIPAA, and equivalents), and any bar association ethics
+rules governing the use of cloud-based legal technology.**
+
+Before deploying BigLaw with real client data, you must conduct a vendor assessment of
+Anthropic's data processing terms, determine whether a Data Processing Agreement is required,
+and implement appropriate access controls to prevent unauthorised access to stored matter data.
+
+### Deployment Liability
+
+**You deploy this software at your own risk.** Discover Legal and the contributors to this
+project provide it under the AGPL-3.0 licence, which explicitly disclaims all warranties,
+including fitness for a particular purpose and non-infringement.
+
+Specific risks that arise from misconfigured or insecure deployment include:
+
+- **Client data breach.** If the API is exposed without authentication (`AUTH_ENABLED=false`
+  on a network-accessible host), any client matter data ingested into the system is potentially
+  accessible to anyone who can reach the endpoint. This would constitute a data breach under
+  most applicable law and a serious professional responsibility violation.
+- **Credential exposure.** API keys, OAuth tokens, and session secrets stored in `.env` files
+  or accessible via a misconfigured server can be extracted and used to incur costs, access
+  third-party systems, or impersonate your firm.
+- **Prompt injection.** Malicious content in documents you ingest or queries you run through
+  the system could potentially manipulate agent outputs. The system includes defences against
+  this but they are not complete.
+- **Malpractice exposure.** Using AI-generated output without adequate review in a client matter
+  creates professional liability risk. This risk is yours, not ours.
+- **Regulatory exposure.** Depending on your jurisdiction and practice area, use of AI tools
+  in legal matters may trigger disclosure obligations to clients, adverse parties, or courts.
+  Some courts require disclosure of AI use in filings. Check your local rules.
+
+### Jurisdiction
+
+This software is designed to support legal work across multiple jurisdictions. It is not
+certified, approved, or validated for use in any jurisdiction. The agents, workflows, and
+outputs are not a substitute for jurisdiction-specific legal expertise.
+
+### Third-Party Services
+
+BigLaw integrates with numerous third-party services — Anthropic, Microsoft Graph, Google
+Workspace, Slack, Clio, CourtListener, Westlaw, Everlaw, Ironclad, DocuSign, and others.
+Your use of those services through this software is governed by their own terms. BigLaw is
+not affiliated with, endorsed by, or a certified partner of any of these services.
+
+### Summary
+
+You are using experimental software in one of the highest-stakes professional contexts that
+exists. The software is capable and the engineering is serious. It is also unaudited,
+incompletely tested, and built for comprehensiveness first. Use it with appropriate scepticism,
+appropriate oversight, and appropriate professional responsibility.
+
+---
+
 BigLaw isn't a chatbot with a legal prompt. It's an **orchestration engine** that replaces a stack
 of vendor contracts with a single open-source platform.
 
