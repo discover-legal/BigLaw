@@ -4,11 +4,11 @@
 /**
  * TypeDB conflict-graph sidecar.
  *
- * Exposes the TypeDBConflictGraph over a minimal HTTP API so the Go core
- * binary can call it without a Go TypeDB driver.
+ * Communicates with the Go core via a Unix domain socket — no TCP port,
+ * no accidental network exposure, lower latency than loopback.
  *
- * Port: TYPEDB_SIDECAR_PORT (default 3102)
- * TypeDB address: TYPEDB_URL (required, host:port format e.g. 0.0.0.0:1729)
+ * Socket path: TYPEDB_SOCKET (default /run/biglaw/typedb.sock)
+ * TypeDB address: TYPEDB_URL  (required, host:port e.g. 0.0.0.0:1729)
  *
  * API:
  *   GET  /health                    → { ok, connected }
@@ -17,16 +17,22 @@
  *   POST /check-new-matter          → { clientId, adversaryIds } → ConflictReport[]
  */
 
+import { existsSync, mkdirSync, unlinkSync } from "fs";
+import { dirname } from "path";
 import Fastify from "fastify";
 import { TypeDBConflictGraph, type ConflictReport } from "./typedb.js";
 
-const port = parseInt(process.env.TYPEDB_SIDECAR_PORT ?? "3102", 10);
-const typedbUrl = process.env.TYPEDB_URL ?? "";
+const socketPath = process.env.TYPEDB_SOCKET ?? "/run/biglaw/typedb.sock";
+const typedbUrl  = process.env.TYPEDB_URL ?? "";
 
 if (!typedbUrl) {
   console.error(JSON.stringify({ level: "error", msg: "TYPEDB_URL is required" }));
   process.exit(1);
 }
+
+// Ensure socket directory exists and remove stale socket from previous run.
+mkdirSync(dirname(socketPath), { recursive: true });
+if (existsSync(socketPath)) unlinkSync(socketPath);
 
 const graph = new TypeDBConflictGraph();
 let connected = false;
@@ -37,7 +43,7 @@ const app = Fastify({ logger: false });
 
 app.get("/health", async () => ({ ok: true, connected }));
 
-// ─── Sync ────────────────────────────────────────────────────────────────────
+// ─── Sync ─────────────────────────────────────────────────────────────────────
 
 interface SyncBody {
   clients: Array<{
@@ -55,9 +61,7 @@ interface SyncBody {
 }
 
 app.post<{ Body: SyncBody }>("/sync", async (req, reply) => {
-  if (!connected) {
-    return reply.status(503).send({ error: "TypeDB not connected" });
-  }
+  if (!connected) return reply.status(503).send({ error: "TypeDB not connected" });
   try {
     await graph.syncFromClients(req.body.clients, req.body.matters);
     return { ok: true };
@@ -69,12 +73,9 @@ app.post<{ Body: SyncBody }>("/sync", async (req, reply) => {
 // ─── Query conflicts ──────────────────────────────────────────────────────────
 
 app.get<{ Querystring: { clientId?: string } }>("/conflicts", async (req, reply) => {
-  if (!connected) {
-    return reply.status(503).send({ error: "TypeDB not connected" });
-  }
+  if (!connected) return reply.status(503).send({ error: "TypeDB not connected" });
   try {
-    const result: ConflictReport[] = await graph.queryConflicts(req.query.clientId);
-    return result;
+    return await graph.queryConflicts(req.query.clientId) as ConflictReport[];
   } catch (err) {
     return reply.status(500).send({ error: (err as Error).message });
   }
@@ -82,27 +83,19 @@ app.get<{ Querystring: { clientId?: string } }>("/conflicts", async (req, reply)
 
 // ─── Check new matter ─────────────────────────────────────────────────────────
 
-interface CheckBody {
-  clientId: string;
-  adversaryIds: string[];
-}
+interface CheckBody { clientId: string; adversaryIds: string[] }
 
 app.post<{ Body: CheckBody }>("/check-new-matter", async (req, reply) => {
-  if (!connected) {
-    return reply.status(503).send({ error: "TypeDB not connected" });
-  }
+  if (!connected) return reply.status(503).send({ error: "TypeDB not connected" });
   try {
     const { clientId, adversaryIds } = req.body;
     const out: ConflictReport[] = [];
     for (const advId of adversaryIds) {
-      const conflicts = await graph.queryConflicts(advId);
-      for (const c of conflicts) {
+      for (const c of await graph.queryConflicts(advId)) {
         if (
           (c.clientAId === clientId && c.clientBId === advId) ||
           (c.clientBId === clientId && c.clientAId === advId)
-        ) {
-          out.push(c);
-        }
+        ) out.push(c);
       }
     }
     return out;
@@ -119,21 +112,21 @@ async function start(): Promise<void> {
     connected = true;
     console.log(JSON.stringify({ level: "info", msg: "TypeDB connected", url: typedbUrl }));
   } catch (err) {
-    // Server still starts — Go core gets 503 until TypeDB is reachable
     console.log(JSON.stringify({
       level: "warn",
-      msg: "TypeDB connect failed — will retry on next request",
+      msg: "TypeDB connect failed — will retry on next call",
       err: (err as Error).message,
     }));
   }
 
-  await app.listen({ port, host: "127.0.0.1" });
-  console.log(JSON.stringify({ level: "info", msg: "TypeDB sidecar listening", port }));
+  await app.listen({ path: socketPath });
+  console.log(JSON.stringify({ level: "info", msg: "TypeDB sidecar listening", socket: socketPath }));
 }
 
 process.on("SIGTERM", async () => {
   await graph.close();
   await app.close();
+  if (existsSync(socketPath)) unlinkSync(socketPath);
   process.exit(0);
 });
 

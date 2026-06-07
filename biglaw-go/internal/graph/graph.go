@@ -1,24 +1,28 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Discover Legal
 
-// ConflictGraph — HTTP client to the TypeDB sidecar (sidecar/typedb/).
+// ConflictGraph — Unix-socket client to the TypeDB sidecar (sidecar/typedb/).
 //
-// The TypeDB Go driver does not exist; instead the sidecar process owns the
-// TypeDB connection and exposes a minimal HTTP API on TYPEDB_SIDECAR_URL
-// (default http://127.0.0.1:3102). This package is a thin HTTP client over
-// that API — no in-memory fallback, no approximation.
+// The TypeDB Go driver does not exist; the sidecar process owns the TypeDB
+// connection and exposes a minimal HTTP API over a Unix domain socket at
+// TYPEDB_SOCKET (default /run/biglaw/typedb.sock).
 //
-// If the sidecar is unreachable, all methods return an error. The caller
-// (clients package, orchestrator) decides whether to surface or swallow it.
+// Unix socket avoids TCP overhead, port allocation, and any risk of the
+// sidecar being accidentally exposed to the network.
+//
+// If the sidecar is unreachable all methods return an error; the caller
+// decides whether to surface or swallow it.
 
 package graph
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"time"
@@ -26,29 +30,39 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
 
-const defaultSidecarURL = "http://127.0.0.1:3102"
+const defaultSocket = "/run/biglaw/typedb.sock"
 
-// Client calls the TypeDB sidecar over HTTP.
+// Client calls the TypeDB sidecar over a Unix domain socket.
 type Client struct {
-	base   string
-	http   *http.Client
+	http *http.Client
 }
 
-// New creates a Client. The sidecar URL is read from TYPEDB_SIDECAR_URL.
+// New creates a Client. Socket path is read from TYPEDB_SOCKET.
 func New() *Client {
-	base := os.Getenv("TYPEDB_SIDECAR_URL")
-	if base == "" {
-		base = defaultSidecarURL
+	sock := os.Getenv("TYPEDB_SOCKET")
+	if sock == "" {
+		sock = defaultSocket
+	}
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "unix", sock)
+		},
 	}
 	return &Client{
-		base: base,
-		http: &http.Client{Timeout: 30 * time.Second},
+		http: &http.Client{
+			Transport: transport,
+			Timeout:   30 * time.Second,
+		},
 	}
 }
+
+// url builds a request URL. The host is a placeholder — the transport
+// ignores it and dials the Unix socket instead.
+func url(path string) string { return "http://biglaw-typedb" + path }
 
 // Ping checks the sidecar health endpoint.
 func (c *Client) Ping() error {
-	resp, err := c.http.Get(c.base + "/health")
+	resp, err := c.http.Get(url("/health"))
 	if err != nil {
 		return fmt.Errorf("typedb sidecar unreachable: %w", err)
 	}
@@ -101,7 +115,7 @@ func (c *Client) Sync(input SyncInput) error {
 
 // CheckClient returns all conflicts touching clientId.
 func (c *Client) CheckClient(clientId string) ([]types.ConflictReport, error) {
-	resp, err := c.http.Get(c.base + "/conflicts?clientId=" + clientId)
+	resp, err := c.http.Get(url("/conflicts?clientId=" + clientId))
 	if err != nil {
 		return nil, fmt.Errorf("graph: CheckClient request failed: %w", err)
 	}
@@ -140,7 +154,7 @@ func (c *Client) post(path string, payload any, out any) error {
 	if err != nil {
 		return err
 	}
-	resp, err := c.http.Post(c.base+path, "application/json", bytes.NewReader(b))
+	resp, err := c.http.Post(url(path), "application/json", bytes.NewReader(b))
 	if err != nil {
 		return fmt.Errorf("graph: POST %s failed: %w", path, err)
 	}
