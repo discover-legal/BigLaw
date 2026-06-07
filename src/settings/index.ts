@@ -94,7 +94,10 @@ export function assertPublicHttpUrl(raw: string, label: string): string {
   const isPrivate =
     h === "localhost" ||
     h === "::1" ||               // IPv6 loopback
+    h === "::" ||                // IPv6 unspecified
     h === "0.0.0.0" ||           // unspecified address
+    /^0x[0-9a-f]+$/i.test(h) ||  // hex-encoded IPv4 (e.g. 0x7f000001)
+    /^\d+$/.test(h) ||           // decimal-encoded IPv4 (e.g. 2130706433); no public host is all-digits
     /^127\./.test(h) ||          // 127.0.0.0/8  loopback
     /^169\.254\./.test(h) ||     // 169.254.0.0/16  link-local
     /^10\./.test(h) ||           // 10.0.0.0/8  RFC-1918

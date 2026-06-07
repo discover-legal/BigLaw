@@ -149,9 +149,23 @@ export class DyTopoEngine {
     for (const msg of messages) intraMemory.recordMessage(msg.to, msg);
 
     // ── Step 6: Agents process — full agentic loops ─────────────────────────
-    const allFindings = (await Promise.all(
+    // allSettled, not all: one agent throwing (e.g. a transient provider error)
+    // must not discard every other agent's findings and fail the whole round.
+    // Per-agent wall-clock cap so one hung agent can't stall the whole round.
+    const withTimeout = <T>(p: Promise<T>, agentId: string): Promise<T> =>
+      Promise.race([
+        p,
+        new Promise<T>((_, rej) =>
+          setTimeout(
+            () => rej(new Error(`Agent ${agentId} exceeded round timeout`)),
+            Config.agents.roundTimeoutMs,
+          ).unref?.(),
+        ),
+      ]);
+
+    const settled = await Promise.allSettled(
       activeAgents.map((agent) =>
-        agent.process({
+        withTimeout(agent.process({
           roundGoal: goal,
           incomingMessages: intraMemory.getMessagesFor(agent.definition.id),
           memoryEntries: agentMemories.get(agent.definition.id) ?? [],
@@ -168,9 +182,18 @@ export class DyTopoEngine {
           responsibleLawyerName: billingCtx?.responsibleLawyerName,
           matterNumber: billingCtx?.matterNumber,
           clientNumber: billingCtx?.clientNumber,
-        }),
+        }), agent.definition.id),
       ),
-    )).flat();
+    );
+    const allFindings = settled.flatMap((r, i) => {
+      if (r.status === "fulfilled") return r.value;
+      logger.warn("Agent failed during round — skipping its findings", {
+        agentId: activeAgents[i].definition.id,
+        round: goal.round,
+        error: (r.reason as Error)?.message,
+      });
+      return [];
+    });
 
     for (const finding of allFindings) {
       finding.round = goal.round;

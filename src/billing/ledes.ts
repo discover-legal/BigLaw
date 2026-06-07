@@ -14,9 +14,11 @@ export interface LedesOptions {
 const CRLF = "\r\n";
 
 function toLedesDate(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
+  // Use UTC components — invoice dates are derived from UTC timestamps elsewhere,
+  // so a non-UTC server must not shift INVOICE_DATE / line dates by a day.
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
   return `${y}${m}${day}`;
 }
 

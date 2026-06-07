@@ -101,10 +101,16 @@ function readZip(buf: Buffer): Map<string, Buffer> {
     // Bounds-check compressed data before reading
     if (dataStart + compressedSize > buf.length) break;
 
+    // Cap each entry by the *smaller* of the per-entry limit and the remaining
+    // aggregate budget, so a series of just-under-50 MB entries cannot transiently
+    // allocate far past the 100 MB aggregate cap before the post-hoc check trips.
+    const remainingBudget = Math.max(0, MAX_TOTAL_INFLATED_BYTES - totalInflated);
+    const entryCap = Math.min(MAX_INFLATED_BYTES, remainingBudget);
+
     let fileData: Buffer;
     if (compression === 0) {
       // STORED — no decompression needed; cap size to prevent oversized stored entries
-      if (compressedSize > MAX_INFLATED_BYTES) {
+      if (compressedSize > entryCap) {
         // Skip oversized stored entry
         fileData = Buffer.alloc(0);
       } else {
@@ -114,13 +120,13 @@ function readZip(buf: Buffer): Map<string, Buffer> {
       // DEFLATE — reject if uncompressed size header exceeds cap.
       // When the data-descriptor flag (bit 3) is set the header size fields are 0;
       // in that case rely solely on maxOutputLength to enforce the cap.
-      if (!(flags & 0x8) && uncompressedSize > MAX_INFLATED_BYTES) {
+      if (!(flags & 0x8) && uncompressedSize > entryCap) {
         fileData = Buffer.alloc(0); // entry too large — skip
       } else {
         try {
           fileData = inflateRawSync(
             buf.subarray(dataStart, dataStart + compressedSize),
-            { maxOutputLength: MAX_INFLATED_BYTES },
+            { maxOutputLength: entryCap },
           );
         } catch (err) {
           logger.warn("ZIP: failed to inflate entry, skipping", { filename: rawFilename });

@@ -108,6 +108,9 @@ export const Config = {
   // before it must return a final answer.
   agents: {
     maxToolIterations: parseInt(optional("AGENT_MAX_TOOL_ITERATIONS", "6")),
+    // Wall-clock cap on a single agent's processing within a round. Prevents one
+    // hung provider/tool call from stalling the whole round indefinitely.
+    roundTimeoutMs: parseInt(optional("AGENT_ROUND_TIMEOUT_MS", "300000")),
   },
 
   dytopo: {

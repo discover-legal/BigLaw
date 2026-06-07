@@ -43,6 +43,12 @@ const ALLOWED_READ_ROOTS = (
     : [process.cwd(), tmpdir(), Config.pdf.outputDir]
 ).map((d) => resolve(d));
 
+// Even within an allowed root, never expose secret-bearing files. The default
+// allow-list includes the project root (cwd), which also holds .env, the
+// persisted OAuth-token / vector-store data dir, and source — a prompt-injected
+// agent must not be able to read those and surface them in findings.
+const DENIED_READ_ROOTS = [resolve(Config.vectorDb.dataDir), resolve(process.cwd(), ".git")];
+
 export function assertSafeReadPath(p: unknown): string {
   if (typeof p !== "string" || !p.trim()) {
     throw new Error("A file path is required.");
@@ -55,6 +61,16 @@ export function assertSafeReadPath(p: unknown): string {
       `Refusing to read '${p}': path is outside the allowed directories ` +
       `(${ALLOWED_READ_ROOTS.join(", ")}). Set PDF_ALLOWED_DIRS to widen.`,
     );
+  }
+  // Block dotfiles (.env, .clients.json, etc.) and the data/.git directories
+  // regardless of allow-list, unless an operator explicitly widened the roots.
+  const denied =
+    !Config.pdf.allowedDirs.length &&
+    (basename(abs).startsWith(".") ||
+      DENIED_READ_ROOTS.some((root) => abs === root || abs.startsWith(root + sep)));
+  if (denied) {
+    logger.warn("Blocked PDF tool read of a sensitive path", { requested: p });
+    throw new Error(`Refusing to read '${p}': sensitive (dotfile or data) path.`);
   }
   return abs;
 }

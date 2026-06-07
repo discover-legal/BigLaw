@@ -705,14 +705,20 @@ export class Orchestrator {
   private async recordAgentOutcomes(task: Task): Promise<void> {
     if (!task.findings.length) return;
 
+    // Resolve each finding's phase via a round→phase map (each round runs exactly
+    // one phase) instead of an O(findings²) reverse-search through task.rounds.
+    // The previous fallback to task.currentPhase always attributed unmatched
+    // findings to the final ("delivery") phase, poisoning the per-phase Q-table.
+    const phaseByRound = new Map<number, string>();
+    for (const r of task.rounds) phaseByRound.set(r.goal.round, r.goal.phase);
+
     // Group findings by (agentId, phase) so Q-learning gets per-phase rewards.
     const agentPhaseScores = new Map<string, { phase: string; scores: number[] }>();
     for (const f of task.findings) {
-      const key = `${f.agentId}::${f.round}`;
+      const phase = phaseByRound.get(f.round) ?? task.currentPhase;
+      const key = `${f.agentId}::${phase}`;
       if (!agentPhaseScores.has(key)) {
-        // Find the phase for this round
-        const roundState = task.rounds.find((r) => r.findings.some((rf) => rf.id === f.id));
-        agentPhaseScores.set(key, { phase: roundState?.goal.phase ?? task.currentPhase, scores: [] });
+        agentPhaseScores.set(key, { phase, scores: [] });
       }
       const effective = f.challenged && !f.resolved ? f.confidence * 0.3 : f.confidence;
       agentPhaseScores.get(key)!.scores.push(effective);
@@ -778,16 +784,31 @@ export class Orchestrator {
     const rawFindings = roundState.findings;
     const { passed } = applyCitationGate(rawFindings, sourceTexts);
 
-    // Debate each passing finding
-    const debated = await Promise.all(
+    // Debate each passing finding. allSettled so a single model error (429/500)
+    // on one finding does not reject the whole phase and fail the entire task,
+    // discarding every other finding. A failed debate leaves the finding as-is.
+    const debateResults = await Promise.allSettled(
       passed.map((f) => runDebate(f, "adversarial-challenger", task.id)),
     );
+    const debated = debateResults.map((r, i) => {
+      if (r.status === "fulfilled") return r.value;
+      logger.warn("Debate failed for finding — keeping it unchanged", { findingId: passed[i].id, error: (r.reason as Error)?.message });
+      return passed[i];
+    });
 
     // Verification pipeline — mutates each finding in place, attaching its
-    // verificationResult (read downstream by identifyGateRequests).
-    await Promise.all(
+    // verificationResult (read downstream by identifyGateRequests). allSettled
+    // for the same resilience reason; a failed verification simply leaves the
+    // finding without a verificationResult.
+    const verifyResults = await Promise.allSettled(
       debated.map((f) => runVerificationPipeline(f, task.id)),
     );
+    for (let i = 0; i < verifyResults.length; i++) {
+      const r = verifyResults[i];
+      if (r.status === "rejected") {
+        logger.warn("Verification failed for finding", { findingId: debated[i].id, error: (r.reason as Error)?.message });
+      }
+    }
 
     // Add findings to task
     task.findings.push(...debated);

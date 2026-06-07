@@ -444,6 +444,25 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
   await app.register(cookie, { secret: Config.auth.sessionSecret });
   await app.register(multipart, { limits: { fileSize: 25 * 1024 * 1024, files: 1 } });
 
+  // Preserve the raw request body for routes that must verify an HMAC over the
+  // exact bytes the client sent (Teams / Slack webhook signatures). Fastify's
+  // default JSON parser discards the raw body; re-serializing req.body with
+  // JSON.stringify does NOT reproduce the original bytes (key order, spacing,
+  // unicode escaping all differ), which both breaks legitimate signatures and
+  // anchors verification to server-canonicalized content. This parser keeps the
+  // raw string on req.rawBody while still producing the parsed object as req.body.
+  app.addContentTypeParser("application/json", { parseAs: "string" }, (req, body, done) => {
+    (req as unknown as { rawBody?: string }).rawBody = body as string;
+    const s = body as string;
+    if (!s || s.length === 0) { done(null, {}); return; }
+    try {
+      done(null, JSON.parse(s));
+    } catch (err) {
+      (err as { statusCode?: number }).statusCode = 400;
+      done(err as Error, undefined);
+    }
+  });
+
   // Security headers on every response — API only (no HTML), so CSP is strict.
   app.addHook("onSend", (_req, reply, _payload, done) => {
     reply.header("X-Content-Type-Options", "nosniff");
@@ -595,7 +614,13 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
     if (!task || !canViewTask(getUser(req), task)) return reply.status(404).send({ error: "Task not found" });
     if (!task.table) return reply.status(404).send({ error: "No table available for this task" });
 
-    const esc = (v: string) => `"${String(v).replace(/"/g, '""')}"`;
+    // Neutralize spreadsheet formula injection (see time/index.ts exportCsv):
+    // a field starting with = + - @ or a control char is executed as a formula.
+    const esc = (v: string) => {
+      let s = String(v);
+      if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+      return `"${s.replace(/"/g, '""')}"`;
+    };
     const { columns, rows } = task.table;
     const hasConf = rows.some((r) => r._confidence);
     const outCols = hasConf ? [...columns, "Confidence", "Sources"] : columns;
@@ -1055,7 +1080,7 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
     if (!isPartner(getUser(req))) return reply.status(403).send({ error: "Partner role required" });
     try {
       const body = req.body as { name: string; clientNumber: string; adversaries?: string[]; notes?: string };
-      const conflict = orchestrator.clients.checkConflict(body.name);
+      const conflict = orchestrator.clients.checkConflict(body.name, body.adversaries ?? []);
       const client = await orchestrator.clients.create(body);
       auditLogger.write({
         event: "client.created",
@@ -1139,10 +1164,11 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
 
   app.post("/clients/check-conflict", async (req, reply) => {
     if (!isPartner(getUser(req))) return reply.status(403).send({ error: "Partner role required" });
-    const { name } = req.body as { name?: string };
+    const { name, adversaries } = req.body as { name?: string; adversaries?: string[] };
     const trimmed = (typeof name === "string" ? name : "").trim().slice(0, 500);
     if (!trimmed) return reply.status(400).send({ error: "name is required" });
-    return orchestrator.clients.checkConflict(trimmed);
+    const advs = Array.isArray(adversaries) ? adversaries.slice(0, 200).map((a) => String(a)) : [];
+    return orchestrator.clients.checkConflict(trimmed, advs);
   });
 
   // ── Docket monitoring ─────────────────────────────────────────────────────────
@@ -1578,7 +1604,11 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
 
   // ── Playbook (Contract Express / Practical Law replacement) ──────────────
 
-  app.get("/playbooks", async (req) => {
+  // Playbooks hold confidential negotiation positions and absolute red lines
+  // (client, matter, and per-lawyer tiers). Restrict reads to partners, matching
+  // the partner-only guard already on /playbooks/build and DELETE /playbooks/:id.
+  app.get("/playbooks", async (req, reply) => {
+    if (!isPartner(getUser(req))) return reply.status(403).send({ error: "Partner role required" });
     const { scope, ownerId, practiceArea } = req.query as { scope?: string; ownerId?: string; practiceArea?: string };
     return orchestrator.playbookStore.list({
       scope: scope as import("../playbook/index.js").PlaybookScope | undefined,
@@ -1588,6 +1618,7 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
   });
 
   app.get("/playbooks/:id", async (req, reply) => {
+    if (!isPartner(getUser(req))) return reply.status(403).send({ error: "Partner role required" });
     const { id } = req.params as { id: string };
     const pb = orchestrator.playbookStore.getById(id);
     if (!pb) return reply.status(404).send({ error: "Playbook not found" });
@@ -1614,7 +1645,8 @@ export async function startRestApi(orchestrator: Orchestrator): Promise<void> {
     return reply.status(201).send(pb);
   });
 
-  app.get("/playbooks/resolve/:clauseType", async (req) => {
+  app.get("/playbooks/resolve/:clauseType", async (req, reply) => {
+    if (!isPartner(getUser(req))) return reply.status(403).send({ error: "Partner role required" });
     const { clauseType } = req.params as { clauseType: string };
     const { practiceArea, matterNumber, clientId, profileId } = req.query as {
       practiceArea?: string; matterNumber?: string; clientId?: string; profileId?: string;

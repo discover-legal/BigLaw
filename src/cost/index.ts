@@ -190,12 +190,16 @@ export class CostStore {
     try {
       await mkdir(dirname(COST_FILE), { recursive: true });
       const raw = await readFile(COST_FILE, "utf8");
-      this.entries = raw
-        .trim()
-        .split("\n")
-        .filter(Boolean)
-        .map((line: string) => JSON.parse(line) as CostEntry);
-      logger.info("Cost log loaded", { entries: this.entries.length, file: COST_FILE });
+      // Parse per line and skip malformed ones — a single truncated tail line
+      // (e.g. from a crash mid-append) must not discard the entire cost history.
+      const lines = raw.trim().split("\n").filter(Boolean);
+      let skipped = 0;
+      this.entries = [];
+      for (const line of lines) {
+        try { this.entries.push(JSON.parse(line) as CostEntry); }
+        catch { skipped++; }
+      }
+      logger.info("Cost log loaded", { entries: this.entries.length, skipped, file: COST_FILE });
     } catch {
       this.entries = [];
     }
@@ -206,11 +210,13 @@ export class CostStore {
       ? calcEmissions(entry.estimatedWh, Config.local.inferenceRegion)
       : null;
     const full: CostEntry = {
+      ...entry,
+      // Authoritative computed fields last so a caller-supplied object cannot
+      // override the id/timestamp/emissions (the Omit type is erased at runtime).
       id: randomUUID(),
       ts: new Date().toISOString(),
       co2Grams: emissions?.co2Grams ?? null,
       electricityCostUsd: emissions?.electricityCostUsd ?? null,
-      ...entry,
     };
     this.entries.push(full);
     this.writeChain = this.writeChain

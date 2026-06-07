@@ -64,6 +64,33 @@ const MCP_RESPONSE_LIMIT      = 1_000_000;  // 1 MB — largest response we'll p
 const MCP_TIMEOUT_MS          = 30_000;     // 30 s — generous for slow MCP servers
 
 /**
+ * Read a response body, aborting once `limit` bytes have been received. Returns
+ * the body string, or an `{ error }` object if the cap is exceeded. This guards
+ * against responses that omit (or lie about) Content-Length.
+ */
+async function readCapped(resp: Response, limit: number): Promise<string | { error: string }> {
+  const reader = resp.body?.getReader();
+  if (!reader) {
+    const text = await resp.text();
+    if (text.length > limit) return { error: `response exceeded ${limit / 1_000_000} MB size limit` };
+    return text;
+  }
+  let received = 0;
+  const chunks: Uint8Array[] = [];
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    received += value.length;
+    if (received > limit) {
+      await reader.cancel().catch(() => {});
+      return { error: `response exceeded ${limit / 1_000_000} MB size limit` };
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+/**
  * Calls a tool on a Streamable HTTP MCP server using JSON-RPC 2.0.
  * Returns structured data or an error object — never throws.
  */
@@ -104,10 +131,16 @@ export async function mcpCall(
       method: "POST",
       headers,
       body,
+      redirect: "manual",   // never follow redirects — they bypass the SSRF check
       signal: AbortSignal.timeout(MCP_TIMEOUT_MS),
     });
   } catch (err) {
     return { error: `MCP request failed: ${(err as Error).message}` };
+  }
+
+  // A redirect could point at an internal/metadata host that was not SSRF-validated.
+  if (resp.status >= 300 && resp.status < 400) {
+    return { error: "MCP endpoint attempted a redirect (blocked for SSRF safety)" };
   }
 
   if (!resp.ok) {
@@ -122,10 +155,11 @@ export async function mcpCall(
     return { error: `MCP response Content-Length (${cl}) exceeds ${MCP_RESPONSE_LIMIT / 1_000_000} MB limit` };
   }
 
-  const raw = await resp.text();
-  if (raw.length > MCP_RESPONSE_LIMIT) {
-    return { error: `MCP response exceeded ${MCP_RESPONSE_LIMIT / 1_000_000} MB size limit` };
-  }
+  // Enforce the cap while streaming — a missing/lying Content-Length must not let
+  // an unbounded body buffer into memory before the post-read length check.
+  const capped = await readCapped(resp, MCP_RESPONSE_LIMIT);
+  if (typeof capped !== "string") return capped;
+  const raw = capped;
 
   // Handle Streamable HTTP / SSE transport: the last `data:` line with a result wins.
   const lines = raw.split("\n");
@@ -177,15 +211,20 @@ async function courtListenerGet(path: string, params: Record<string, string>): P
   try {
     resp = await fetch(fullUrl, {
       headers,
+      redirect: "manual",   // never follow redirects — they bypass the SSRF check
       signal: AbortSignal.timeout(MCP_TIMEOUT_MS),
     });
   } catch (err) {
     return { error: `CourtListener request failed: ${(err as Error).message}` };
   }
+  if (resp.status >= 300 && resp.status < 400) {
+    return { error: "CourtListener attempted a redirect (blocked for SSRF safety)" };
+  }
   if (!resp.ok) return { error: `CourtListener returned HTTP ${resp.status}` };
 
-  const raw = await resp.text();
-  if (raw.length > MCP_RESPONSE_LIMIT) return { error: "CourtListener response exceeded size limit" };
+  const capped = await readCapped(resp, MCP_RESPONSE_LIMIT);
+  if (typeof capped !== "string") return { error: "CourtListener response exceeded size limit" };
+  const raw = capped;
   try {
     return JSON.parse(raw);
   } catch {

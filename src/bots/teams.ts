@@ -110,8 +110,10 @@ export function registerTeamsBotRoutes(app: FastifyInstance, orch: Orchestrator)
       return reply.status(503).send({ error: "Teams bot not configured" });
     }
 
-    // Teams sends the raw body + Authorization header for HMAC verification
-    const rawBody = JSON.stringify(req.body);
+    // Teams signs the exact raw request bytes — verify against those, not a
+    // re-serialization of the parsed body (which would never match). The raw
+    // body is captured by the application/json content-type parser in server.ts.
+    const rawBody = (req as unknown as { rawBody?: string }).rawBody ?? JSON.stringify(req.body);
     const auth = (req.headers["authorization"] as string) ?? "";
     if (!verifyTeamsSignature(rawBody, auth, secret)) {
       logger.warn("Teams webhook: invalid HMAC signature");

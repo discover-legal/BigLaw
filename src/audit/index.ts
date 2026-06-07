@@ -274,6 +274,20 @@ export class AuditLogger {
     if (this.buffer.length > this.maxBuffer) {
       this.buffer.splice(0, this.buffer.length - this.maxBuffer);
     }
+    // Verify the hash chain across the restored window — the documented
+    // tamper-evidence is only meaningful if it is actually checked. We can only
+    // validate links within the loaded window (the entry before the first one is
+    // not in memory), so start at index 1. A mismatch means the log was edited.
+    for (let i = 1; i < this.buffer.length; i++) {
+      const expected = createHash("sha256").update(JSON.stringify(this.buffer[i - 1])).digest("hex");
+      if (this.buffer[i].prevHash !== expected) {
+        logger.error("Audit hash-chain break detected on restore — log may have been tampered with", {
+          atEntryId: this.buffer[i].id,
+          index: i,
+        });
+        break;
+      }
+    }
     // Advance hash chain from the last restored entry so new events chain correctly
     const last = this.buffer[this.buffer.length - 1];
     if (last) {

@@ -237,9 +237,19 @@ export class InterRoundMemoryStore {
    */
   async deleteByTaskId(taskId: string): Promise<void> {
     this.assertReady();
-    const found = await this.db.search({ vector: SMALL_VEC, k: 5000, filter: { taskId } });
-    await Promise.allSettled(found.map((r) => this.db.delete(r.id)));
-    logger.debug("Memory entries deleted for task", { taskId, count: found.length });
+    // Page until exhausted: a single capped search would silently orphan entries
+    // for a task with more than the page size, leaving residual data after a
+    // "delete a matter" request (a data-retention/GDPR gap).
+    const PAGE = 5000;
+    let total = 0;
+    for (;;) {
+      const found = await this.db.search({ vector: SMALL_VEC, k: PAGE, filter: { taskId } });
+      if (found.length === 0) break;
+      await Promise.allSettled(found.map((r) => this.db.delete(r.id)));
+      total += found.length;
+      if (found.length < PAGE) break;
+    }
+    logger.debug("Memory entries deleted for task", { taskId, count: total });
   }
 
   private assertReady(): void {

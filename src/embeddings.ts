@@ -85,11 +85,20 @@ export async function embedBatch(texts: string[]): Promise<EmbeddingResult[]> {
     input: texts,
     dimensions: Config.embeddings.dimensions,
   });
-  return response.data.map((item, i) => ({
-    text: texts[i],
-    embedding: item.embedding,
-    model: Config.embeddings.model,
-  }));
+  // Do not assume the API returns embeddings in request order or in full: map by
+  // the response `index` field. A count/index mismatch would otherwise silently
+  // pair each text with the wrong vector and corrupt the comm graph downstream.
+  if (response.data.length !== texts.length) {
+    throw new Error(`OpenAI embedding count mismatch: got ${response.data.length}, expected ${texts.length}`);
+  }
+  const ordered: EmbeddingResult[] = new Array(texts.length);
+  for (const item of response.data) {
+    if (item.index < 0 || item.index >= texts.length) {
+      throw new Error(`OpenAI embedding index out of range: ${item.index}`);
+    }
+    ordered[item.index] = { text: texts[item.index], embedding: item.embedding, model: Config.embeddings.model };
+  }
+  return ordered;
 }
 
 export function cosineSimilarity(a: number[], b: number[]): number {

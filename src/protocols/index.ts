@@ -206,7 +206,12 @@ export async function runVerificationPipeline(finding: Finding, taskId?: string)
   };
 
   finding.verificationResult = result;
-  finding.resolved = passed;
+  // NOTE: do not write `finding.resolved` here. `resolved` is owned by the debate
+  // protocol (runDebate) and signals whether a *challenge* was settled. Verification
+  // is an independent gate; identifyGateRequests already inspects
+  // `verificationResult.passed` separately. Overwriting `resolved` with the
+  // verification verdict previously let a passing verification mask an unresolved
+  // debate (e.g. a parse error) and skip the human gate.
 
   const failedChecks = checks.filter((c) => !c.passed).map((c) => c.name);
   logger.info("Verification complete", { findingId: finding.id, passed, failedChecks });

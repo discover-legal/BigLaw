@@ -246,8 +246,9 @@ For each clause, determine:
 - rationale: 1-2 sentences explaining the decision
 - isRedLine: true if the counterparty text crosses a firm red line
 
-Return a JSON array — one object per clause in input order:
-[{"clauseType":"...","action":"...","severity":"...","proposedText":"...","rationale":"...","isRedLine":false}]`;
+Return a JSON array — one object per clause. ALWAYS include "clauseIndex" set to the
+CLAUSE number shown in the input header (1-based) so each verdict is bound to its clause:
+[{"clauseIndex":1,"clauseType":"...","action":"...","severity":"...","proposedText":"...","rationale":"...","isRedLine":false}]`;
 
     try {
       const response = await this.client.messages.create({
@@ -273,19 +274,29 @@ Return a JSON array — one object per clause in input order:
       if (s === -1 || e <= s) return this.fallbackIssues(clauses, positions);
 
       const parsed = JSON.parse(raw.slice(s, e + 1)) as Array<Record<string, unknown>>;
-      return parsed.map((p, idx): RedlineIssue => {
-        const clause = clauses[idx] ?? clauses[0];
-        const pos = positions[idx] ?? positions[0];
+      // Join verdicts to clauses by the model-echoed 1-based clauseIndex, not by
+      // array position — the model may drop, merge, or reorder clauses, and a
+      // positional zip would then bind the wrong "accept"/"redline" to a clause
+      // (e.g. mark a red-line-crossing clause as acceptable). Any clause with no
+      // matching verdict is escalated rather than silently mispaired.
+      const byIndex = new Map<number, Record<string, unknown>>();
+      for (const p of parsed) {
+        const ci = Number(p["clauseIndex"]);
+        if (Number.isInteger(ci) && ci >= 1 && ci <= clauses.length) byIndex.set(ci, p);
+      }
+      return clauses.map((clause, idx): RedlineIssue => {
+        const pos = positions[idx];
+        const p = byIndex.get(idx + 1);
         return {
           clauseType: clause.clauseType,
           counterpartyText: clause.text.slice(0, 500),
           firmPosition: pos.entry?.standardPosition ?? "No position recorded",
           positionSource: (pos.source as RedlineIssue["positionSource"]) ?? "none",
-          action: (p["action"] as RedlineAction) ?? "escalate",
-          proposedText: typeof p["proposedText"] === "string" ? p["proposedText"] : undefined,
-          rationale: String(p["rationale"] ?? ""),
-          isRedLine: Boolean(p["isRedLine"]),
-          severity: (p["severity"] as RedlineIssue["severity"]) ?? "medium",
+          action: p ? ((p["action"] as RedlineAction) ?? "escalate") : "escalate",
+          proposedText: p && typeof p["proposedText"] === "string" ? (p["proposedText"] as string) : undefined,
+          rationale: p ? String(p["rationale"] ?? "") : "No verdict returned for this clause — escalated for manual review.",
+          isRedLine: p ? Boolean(p["isRedLine"]) : false,
+          severity: p ? ((p["severity"] as RedlineIssue["severity"]) ?? "medium") : "high",
         };
       });
     } catch (err) {

@@ -112,6 +112,14 @@ test("assertSafeReadPath: rejects empty / non-string input", () => {
   assert.throws(() => assertSafeReadPath(undefined), /file path is required/);
 });
 
+test("assertSafeReadPath: denies a dotfile inside an allowed root (.env)", () => {
+  assert.throws(() => assertSafeReadPath(resolve(process.cwd(), ".env")), /sensitive/);
+});
+
+test("assertSafeReadPath: denies the persisted data directory", () => {
+  assert.throws(() => assertSafeReadPath(resolve(process.cwd(), "data", "clio-auth.json")), /sensitive/);
+});
+
 // ─── Access control: no inter-lawyer view unless partner-shared ──────────────
 
 const partner: SessionUser = { profileId: "p1", name: "P", email: "p@x", role: "partner" };
@@ -207,6 +215,18 @@ test("assertPublicHttpUrl: rejects non-http protocol", () => {
 
 test("assertPublicHttpUrl: rejects unparseable input", () => {
   assert.throws(() => assertPublicHttpUrl("not a url", "DocuSeal URL"), /must be a public http or https URL/);
+});
+
+test("assertPublicHttpUrl: rejects decimal-encoded loopback (2130706433 == 127.0.0.1)", () => {
+  assert.throws(() => assertPublicHttpUrl("http://2130706433/meta", "DocuSeal URL"), /private or loopback/);
+});
+
+test("assertPublicHttpUrl: rejects hex-encoded loopback (0x7f000001)", () => {
+  assert.throws(() => assertPublicHttpUrl("http://0x7f000001/meta", "DocuSeal URL"), /private or loopback/);
+});
+
+test("assertPublicHttpUrl: rejects IPv6 unspecified [::]", () => {
+  assert.throws(() => assertPublicHttpUrl("http://[::]/api", "DocuSeal URL"), /private or loopback/);
 });
 
 // ─── Security: prompt-injection marker sanitization ─────────────────────────

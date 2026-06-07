@@ -160,7 +160,10 @@ export function registerSlackBotRoutes(app: FastifyInstance, orch: Orchestrator)
       return reply.status(503).send({ error: "Slack bot not configured" });
     }
 
-    const rawBody = JSON.stringify(req.body);
+    // Slack signs the exact raw request bytes — verify against those, not a
+    // re-serialization of the parsed body (which would never match). The raw
+    // body is captured by the application/json content-type parser in server.ts.
+    const rawBody = (req as unknown as { rawBody?: string }).rawBody ?? JSON.stringify(req.body);
     const timestamp = String(req.headers["x-slack-request-timestamp"] ?? "");
     const signature = String(req.headers["x-slack-signature"] ?? "");
 

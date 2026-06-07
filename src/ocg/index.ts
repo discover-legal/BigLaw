@@ -180,6 +180,9 @@ export class OcgStore {
   private readonly path = Config.persistence.ocgFile;
   /** Map<clientId, OcgDocument> */
   private docs: Map<string, OcgDocument> = new Map();
+  // Serialise writes so concurrent recordViolations()/recordOutcome() calls (the
+  // queue worker runs jobs in parallel) can't interleave on the shared temp file.
+  private writeChain: Promise<void> = Promise.resolve();
 
   async init(): Promise<void> {
     try {
@@ -563,8 +566,9 @@ Return a JSON array. Use [] if no violations. ONLY the array — no markdown, no
     };
   }
 
-  /** Atomic write — tmp file then rename. */
-  async persist(): Promise<void> {
+  /** Atomic, serialised write — tmp file then rename, chained to avoid races. */
+  persist(): Promise<void> {
+    // Snapshot synchronously so the serialised write captures state at call time.
     const obj: Record<string, unknown> = {};
     for (const [clientId, doc] of this.docs) {
       obj[clientId] = {
@@ -573,10 +577,13 @@ Return a JSON array. Use [] if no violations. ONLY the array — no markdown, no
         updatedAt: doc.updatedAt.toISOString(),
       };
     }
-    const tmp = `${this.path}.tmp`;
-    await mkdir(dirname(this.path), { recursive: true }).catch(() => {});
-    await writeFile(tmp, JSON.stringify(obj, null, 2), "utf8");
-    await rename(tmp, this.path);
+    this.writeChain = this.writeChain.then(async () => {
+      const tmp = `${this.path}.tmp`;
+      await mkdir(dirname(this.path), { recursive: true }).catch(() => {});
+      await writeFile(tmp, JSON.stringify(obj, null, 2), "utf8");
+      await rename(tmp, this.path);
+    });
+    return this.writeChain;
   }
 }
 

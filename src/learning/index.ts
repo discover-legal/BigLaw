@@ -90,6 +90,9 @@ export class AgentLearningLayer {
   private db!: RuFastAgentDB;
   private readonly persistPath: string;
   private ready = false;
+  // Serialise writes so concurrent recordEpisode() calls can't interleave on the
+  // shared temp file and corrupt the persisted Q-table.
+  private writeChain: Promise<void> = Promise.resolve();
 
   constructor() {
     this.engine = new LearningEngine();
@@ -229,10 +232,13 @@ export class AgentLearningLayer {
     }
   }
 
-  private async persistQTable(): Promise<void> {
-    const tmp = `${this.persistPath}.tmp`;
-    await writeFile(tmp, JSON.stringify(this.engine.export()), "utf8");
-    await rename(tmp, this.persistPath);
+  private persistQTable(): Promise<void> {
+    this.writeChain = this.writeChain.then(async () => {
+      const tmp = `${this.persistPath}.tmp`;
+      await writeFile(tmp, JSON.stringify(this.engine.export()), "utf8");
+      await rename(tmp, this.persistPath);
+    });
+    return this.writeChain;
   }
 
   private stateKey(phase: string, jurisdiction?: string, workflowType?: string): string {

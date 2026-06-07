@@ -201,7 +201,15 @@ export class TimeStore {
   exportCsv(filter?: TimeFilter): string {
     const rows = this.list(filter);
     const header = "id,event,profileId,profileName,agentId,agentName,taskId,matterNumber,clientNumber,description,startedAt,endedAt,durationMs,billingUnits,billingRate,billingAmountUsd,utbmsTaskCode,utbmsActivityCode,clioSyncedAt";
-    const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""').replace(/[\r\n]+/g, " ")}"`;
+    // Neutralize spreadsheet formula injection: a field beginning with = + - @
+    // (or a leading control char) is executed as a formula by Excel/Sheets when
+    // the CSV is opened. Prefix such values with a single quote. Several fields
+    // (description, names) carry LLM- or user-supplied content.
+    const esc = (v: unknown) => {
+      let s = String(v ?? "").replace(/[\r\n]+/g, " ");
+      if (/^[=+\-@\t]/.test(s)) s = `'${s}`;
+      return `"${s.replace(/"/g, '""')}"`;
+    };
     const lines = rows.map((e) =>
       [
         esc(e.id),

@@ -25,6 +25,12 @@ function recordClassifierCost(usage: { input_tokens: number; output_tokens: numb
   });
 }
 
+/** First text block of a model response — robust to leading thinking/empty blocks. */
+function firstText(content: Array<{ type: string; text?: string }>): string {
+  const block = content.find((b) => b.type === "text");
+  return (block?.text ?? "").trim();
+}
+
 /** Detect the primary practice area from a document's title + first ~2000 chars. */
 export async function detectPracticeArea(title: string, content: string): Promise<string | null> {
   // Strip newlines from title to prevent prompt structure injection.
@@ -47,7 +53,7 @@ ${snippet}`;
       messages: [{ role: "user", content: prompt }],
     });
     recordClassifierCost(msg.usage, Date.now() - t0);
-    const text = (msg.content[0] as { type: string; text: string }).text?.trim();
+    const text = firstText(msg.content);
     if (!text || text === "Unknown") return null;
     const match = PRACTICE_AREAS.find((pa) => pa.toLowerCase() === text.toLowerCase());
     return match ?? null;
@@ -86,7 +92,7 @@ ${snippet}`;
       messages: [{ role: "user", content: prompt }],
     });
     recordClassifierCost(msg.usage, Date.now() - t0);
-    const text = (msg.content[0] as { type: string; text: string }).text?.trim();
+    const text = firstText(msg.content);
     if (!text || text === "None") return null;
     const found = clients.find((c) => c.clientNumber.toLowerCase() === text.toLowerCase());
     return found ? { clientNumber: found.clientNumber, clientName: found.name } : null;
@@ -129,7 +135,7 @@ ${snippet}`;
       messages: [{ role: "user", content: prompt }],
     });
     recordClassifierCost(msg.usage, Date.now() - t0);
-    const text = (msg.content[0] as { type: string; text: string }).text?.trim() ?? "";
+    const text = firstText(msg.content);
     // Strip markdown fences and parse JSON
     const stripped = text.replace(/```(?:json)?/gi, "").trim();
     const start = stripped.indexOf("{");

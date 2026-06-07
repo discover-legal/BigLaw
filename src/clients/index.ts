@@ -168,24 +168,58 @@ export class ClientStore {
     return matter;
   }
 
-  /** Check whether onboarding `newClientName` conflicts with existing clients. */
-  checkConflict(newClientName: string): ConflictCheckResult {
-    const name = newClientName.toLowerCase().trim();
+  /**
+   * Normalize an entity name for conflict matching: lowercase, strip punctuation
+   * and common corporate suffixes (Inc/LLC/Ltd/…), collapse whitespace. This lets
+   * "Acme Inc." match "Acme Corporation". Conflict checks should err toward
+   * flagging, so over-matching here is acceptable (it just triggers human review).
+   */
+  private static norm(s: string): string {
+    return s
+      .toLowerCase()
+      .replace(/[.,&]/g, " ")
+      .replace(/\b(inc|llc|llp|ltd|limited|corp|corporation|co|company|plc|gmbh|sa|nv|lp|group|holdings)\b/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  /**
+   * Check whether onboarding `newClientName` (optionally with the new client's
+   * own `newAdversaries`) conflicts with the existing roster. Checks both
+   * directions:
+   *   1. the new client appears on an existing client's adversary list, and
+   *   2. an adversary of the new client is itself an existing client (taking the
+   *      matter would put us adverse to a current client).
+   */
+  checkConflict(newClientName: string, newAdversaries: string[] = []): ConflictCheckResult {
+    const name = ClientStore.norm(newClientName);
     if (!name) return { hasConflict: false };
+
+    // 1. New client name vs existing clients' adversary lists.
     for (const c of this.clients) {
       for (const adv of c.adversaries) {
-        const advLower = adv.toLowerCase();
-        if (!advLower || advLower.length < 3) continue;
-        if (advLower.includes(name) || name.includes(advLower)) {
-          return {
-            hasConflict: true,
-            conflictingClientId: c.id,
-            conflictingClientName: c.name,
-            matchedAdversary: adv,
-          };
+        const a = ClientStore.norm(adv);
+        if (!a || a.length < 3) continue;
+        if (a.includes(name) || name.includes(a)) {
+          return { hasConflict: true, conflictingClientId: c.id, conflictingClientName: c.name, matchedAdversary: adv };
         }
       }
     }
+
+    // 2. New client's adversaries vs existing client names.
+    const advNorms = newAdversaries
+      .map((a) => ({ raw: a, norm: ClientStore.norm(a) }))
+      .filter((a) => a.norm.length >= 3);
+    for (const c of this.clients) {
+      const cn = ClientStore.norm(c.name);
+      if (!cn || cn.length < 3) continue;
+      for (const adv of advNorms) {
+        if (adv.norm.includes(cn) || cn.includes(adv.norm)) {
+          return { hasConflict: true, conflictingClientId: c.id, conflictingClientName: c.name, matchedAdversary: adv.raw };
+        }
+      }
+    }
+
     return { hasConflict: false };
   }
 

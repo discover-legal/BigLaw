@@ -421,17 +421,32 @@ export class DeadlineEngine {
       (r) => r.trigger.trim().toLowerCase() === trigger,
     );
 
-    // Parse trigger date as UTC midnight
+    // Parse trigger date as UTC midnight. Accept either a bare YYYY-MM-DD or a
+    // full ISO timestamp — slice to the date component so a datetime input does
+    // not produce an Invalid Date (which would silently make every deadline NaN).
     const tDate =
       typeof triggerDate === "string"
-        ? new Date(triggerDate + "T00:00:00Z")
+        ? new Date(triggerDate.slice(0, 10) + "T00:00:00Z")
         : new Date(Date.UTC(triggerDate.getUTCFullYear(), triggerDate.getUTCMonth(), triggerDate.getUTCDate()));
+    if (isNaN(tDate.getTime())) {
+      throw new Error(`Invalid triggerDate: '${String(triggerDate)}' — expected YYYY-MM-DD`);
+    }
 
     const deadlines: ComputedDeadline[] = matching.map((rule) => {
-      const dueDate =
+      let dueDate =
         rule.dayType === "calendar"
           ? addCalendarDays(tDate, rule.days)
           : addBusinessDays(tDate, rule.days, ruleset.holidays);
+
+      // When a calendar-day period lands on a weekend or holiday, roll forward to
+      // the next business day (FRCP 6(a)(1)(C), UK CPR 2.8(5), EU equivalents).
+      // The business-day path already lands on a business day by construction.
+      // A rule may opt out via `rollForward: false` for the rare non-rolling statute.
+      if (rule.dayType === "calendar" && (rule as { rollForward?: boolean }).rollForward !== false) {
+        while (!isBusinessDay(dueDate, ruleset.holidays)) {
+          dueDate = addCalendarDays(dueDate, 1);
+        }
+      }
 
       const dueDateStr = isoDate(dueDate);
 

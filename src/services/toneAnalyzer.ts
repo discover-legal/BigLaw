@@ -5,6 +5,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { Config } from "../config.js";
 import { logger } from "../logger.js";
 import { costStore, calcCostUsd } from "../cost/index.js";
+import { sanitizePromptContent } from "../adapters/lavern.js";
 import type { ToneProfile } from "../types.js";
 
 const client = new Anthropic({ apiKey: Config.anthropic.apiKey });
@@ -25,15 +26,13 @@ const MAX_POSTS = 500;
 /**
  * Strip structural prompt markers and control characters from user-supplied
  * text before embedding in any model prompt. Prevents crafted posts from
- * injecting fake FINDING blocks or overriding prompt instructions.
+ * injecting fake FINDING/CHALLENGE/RESOLUTION blocks or overriding prompt
+ * instructions. Delegates to the canonical sanitizer so the marker list stays
+ * in one place — LinkedIn posts are fully attacker-controlled and feed the
+ * injectionSnippet that is prepended to every drafting agent's system prompt.
  */
 function sanitizeForHaiku(s: string): string {
-  return s
-    .replace(/\bFINDING:/gi, "[FINDING:]")
-    .replace(/\bEND_FINDING\b/gi, "[END_FINDING]")
-    .replace(/\bNO_FINDINGS\b/gi, "[NO_FINDINGS]")
-    .replace(/\bNO_CHALLENGE\b/gi, "[NO_CHALLENGE]")
-    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, ""); // ASCII control chars except tab/newline
+  return sanitizePromptContent(s);
 }
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
@@ -63,7 +62,10 @@ async function haiku(content: string, maxTokens: number, profileId?: string): Pr
     context: "tone_analysis",
     profileId,
   });
-  return ((r.content[0] as { type: string; text: string }).text ?? "").trim();
+  // Find the first text block rather than assuming content[0] is text — a
+  // leading thinking block or empty content would otherwise throw/return undefined.
+  const textBlock = r.content.find((b) => b.type === "text");
+  return (textBlock && textBlock.type === "text" ? textBlock.text : "").trim();
 }
 
 // ─── Leaf: analyse a single chunk of raw posts ────────────────────────────────

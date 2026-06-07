@@ -384,7 +384,10 @@ export function sanitizePromptContent(s: string): string {
     .replace(/\bEND_CHALLENGE\b/gi, "[END_CHALLENGE]")
     .replace(/\bRESOLUTION:/gi, "[RESOLUTION:]")
     .replace(/\bDESCRIPTION:/gi, "[DESCRIPTION:]")
-    .replace(/\bEXPECTED_OUTPUT_\d+:/gi, "[EXPECTED_OUTPUT:]");
+    .replace(/\bEXPECTED_OUTPUT_\d+:/gi, "[EXPECTED_OUTPUT:]")
+    // Strip ASCII control characters (except tab/newline) — these can carry
+    // ANSI escapes or NULs through into prompts, logs, and the memory store.
+    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "");
 }
 
 // ─── Generic external agent format ───────────────────────────────────────────
