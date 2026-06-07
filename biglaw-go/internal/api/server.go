@@ -33,15 +33,15 @@ const ctxUserKey = "user"
 
 // Server holds all subsystem references and owns the Gin engine.
 type Server struct {
-	cfg      *config.Config
-	orch     *orchestrator.Orchestrator
-	profiles *auth.ProfileStore
-	clients  *clients.ClientStore
-	time     *timekeeping.TimeStore
+	cfg       *config.Config
+	orch      *orchestrator.Orchestrator
+	profiles  *auth.ProfileStore
+	clients   *clients.ClientStore
+	time      *timekeeping.TimeStore
 	knowledge *knowledge.Store
 	registry  *agents.Registry
 	costs     *cost.Store
-	router   *gin.Engine
+	router    *gin.Engine
 }
 
 // New creates a Server, registers all routes, and returns it.

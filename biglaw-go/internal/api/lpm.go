@@ -53,6 +53,50 @@ func (s *Server) AttachLPM(svc *lpm.Service) {
 		c.JSON(http.StatusOK, gin.H{"reports": reports, "count": len(reports)})
 	})
 
+	// Process an outbound draft through the configured email-write-mode + guard.
+	g.POST("/draft", func(c *gin.Context) {
+		var body struct {
+			MatterNumber string   `json:"matterNumber"`
+			To           []string `json:"to"`
+			Subject      string   `json:"subject"`
+			Body         string   `json:"body"`
+		}
+		if err := c.ShouldBindJSON(&body); err != nil || body.MatterNumber == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "matterNumber required"})
+			return
+		}
+		out, err := svc.ProcessDraft(lpm.Draft{
+			MatterNumber: body.MatterNumber, To: body.To, Subject: body.Subject, Body: body.Body,
+		}, actorID(c))
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, out)
+	})
+
+	// Approve and send a pending draft (explicit human action).
+	g.POST("/draft/send", func(c *gin.Context) {
+		var body struct {
+			MatterNumber string   `json:"matterNumber"`
+			To           []string `json:"to"`
+			Subject      string   `json:"subject"`
+			Body         string   `json:"body"`
+		}
+		if err := c.ShouldBindJSON(&body); err != nil || body.MatterNumber == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "matterNumber required"})
+			return
+		}
+		out, err := svc.ApproveSend(lpm.Draft{
+			MatterNumber: body.MatterNumber, To: body.To, Subject: body.Subject, Body: body.Body,
+		}, actorID(c))
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, out)
+	})
+
 	// Download a single report rendered as DOCX.
 	g.GET("/reports/:id/docx", func(c *gin.Context) {
 		rep, err := svc.Corpus().Get(c.Param("id"))
@@ -68,6 +112,14 @@ func (s *Server) AttachLPM(svc *lpm.Service) {
 		c.Header("Content-Disposition", "attachment; filename=\"status-"+safeFilename(rep.MatterNumber)+"-"+rep.Date+".docx\"")
 		c.Data(http.StatusOK, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", b)
 	})
+}
+
+// actorID returns the current principal's profile ID for audit attribution.
+func actorID(c *gin.Context) string {
+	if u := getUser(c); u != nil {
+		return u.ProfileID
+	}
+	return "local"
 }
 
 func safeFilename(s string) string {

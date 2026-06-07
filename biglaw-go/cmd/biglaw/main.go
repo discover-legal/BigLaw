@@ -160,6 +160,13 @@ func main() {
 				lpmSvc.WithEmailIntake(intake, routed)
 			}
 
+			// Outbound drafting (email-write-mode), guard-enforced. Default "off".
+			transport := lpm.NewTransport(
+				cfg.Email.Graph.Enabled, cfg.Email.Gmail.Enabled,
+				cfg.Email.Graph.UserEmail, cfg.Email.Gmail.UserEmail,
+			)
+			lpmSvc.WithDrafting(cfg.LPM.EmailWriteMode, cfg.LPM.AllowedDomains, transport, nil)
+
 			lpmSvc.Start()
 			defer lpmSvc.Stop()
 		}

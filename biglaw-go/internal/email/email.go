@@ -120,6 +120,10 @@ func getGmailToken() (string, error) {
 	return tok.AccessToken, nil
 }
 
+// GmailToken returns a Gmail bearer token (service-account JWT or dev token).
+// Exported for outbound transports; never logs credentials.
+func GmailToken() (string, error) { return getGmailToken() }
+
 // ─── Graph email search ───────────────────────────────────────────────────────
 
 // SearchGraphMail searches Exchange/O365 mail via Microsoft Graph.
@@ -171,9 +175,9 @@ func SearchGraphMail(query string, maxResults, daysBack int) ([]Message, error) 
 	}
 	var result struct {
 		Value []struct {
-			ID          string `json:"id"`
-			Subject     string `json:"subject"`
-			From        struct {
+			ID      string `json:"id"`
+			Subject string `json:"subject"`
+			From    struct {
 				EmailAddress struct {
 					Address string `json:"address"`
 				} `json:"emailAddress"`

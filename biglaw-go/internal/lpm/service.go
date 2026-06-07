@@ -56,6 +56,47 @@ type Service struct {
 	// Optional Phase 2 email intake; nil disables routing-aware deltas.
 	intake *Intake
 	routed *RoutedStore
+
+	// Optional outbound drafting (email-write-mode). Defaults to "off".
+	draftMode      string
+	allowedDomains []string
+	transport      MailTransport
+	channelPoster  ChannelPoster
+}
+
+// WithDrafting configures the outbound drafter. A fresh confidentiality guard is
+// built per request from the live matter roster, so cross-matter detection always
+// reflects the current set of matters.
+func (s *Service) WithDrafting(mode string, allowedDomains []string, transport MailTransport, channel ChannelPoster) *Service {
+	s.draftMode = mode
+	s.allowedDomains = allowedDomains
+	s.transport = transport
+	s.channelPoster = channel
+	return s
+}
+
+func (s *Service) knownMatters() []string {
+	refs := s.data.ActiveMatters()
+	out := make([]string, 0, len(refs))
+	for _, m := range refs {
+		out = append(out, m.MatterNumber)
+	}
+	return out
+}
+
+func (s *Service) drafter() *Drafter {
+	g := NewGuard(GuardConfig{AllowedDomains: s.allowedDomains, KnownMatterNumbers: s.knownMatters()})
+	return NewDrafter(s.draftMode, g, s.transport, s.channelPoster)
+}
+
+// ProcessDraft applies the configured email-write-mode policy to a draft.
+func (s *Service) ProcessDraft(d Draft, actorID string) (DraftOutcome, error) {
+	return s.drafter().Process(d, actorID)
+}
+
+// ApproveSend sends a draft after explicit human approval (re-running the guard).
+func (s *Service) ApproveSend(d Draft, approverID string) (DraftOutcome, error) {
+	return s.drafter().ApproveSend(d, approverID)
 }
 
 // WithEmailIntake attaches the email router/intake so daily reports include the

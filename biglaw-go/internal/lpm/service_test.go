@@ -115,4 +115,7 @@ func TestEnqueueDailyEnqueuesPerMatter(t *testing.T) {
 	if reports, _ := svc.Corpus().Query("M-001", "", ""); len(reports) != 1 {
 		t.Errorf("worker should have produced 1 report, got %d", len(reports))
 	}
+	// The queue persists asynchronously (go q.persist()); let writes settle before
+	// t.TempDir cleanup runs, otherwise RemoveAll races the persist goroutine.
+	time.Sleep(100 * time.Millisecond)
 }
