@@ -144,6 +144,22 @@ func main() {
 			corpus := lpm.NewCorpus(cfg.LPM.CorpusFile)
 			data := newLPMDataProvider(orch, timeStore)
 			lpmSvc = lpm.NewService(cfg.LPM, gen, corpus, data, lpmQueue, nil)
+
+			// Phase 2: email intake + matter routing when a mail provider is set.
+			if cfg.Email.Graph.Enabled || cfg.Email.Gmail.Enabled {
+				routed := lpm.NewRoutedStore(cfg.LPM.RoutedFile)
+				if err := routed.Init(); err != nil {
+					fmt.Fprintf(os.Stderr, "lpm routed store init: %v\n", err)
+				}
+				router := lpm.NewRouter(prov, model, cfg.LPM.RouteMinConf)
+				intake := lpm.NewIntake(lpm.IntakeConfig{
+					IntakeMode:  cfg.LPM.IntakeMode,
+					SharedInbox: cfg.LPM.SharedInbox,
+					IntervalMin: cfg.LPM.PollIntervalM,
+				}, nil, router, routed, data.MatterOptions)
+				lpmSvc.WithEmailIntake(intake, routed)
+			}
+
 			lpmSvc.Start()
 			defer lpmSvc.Stop()
 		}

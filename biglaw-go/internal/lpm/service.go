@@ -52,6 +52,18 @@ type Service struct {
 	sched     *Scheduler
 	stop      chan struct{}
 	pollEvery time.Duration
+
+	// Optional Phase 2 email intake; nil disables routing-aware deltas.
+	intake *Intake
+	routed *RoutedStore
+}
+
+// WithEmailIntake attaches the email router/intake so daily reports include the
+// EmailsRouted delta and the poll loop runs alongside the scheduler.
+func (s *Service) WithEmailIntake(intake *Intake, routed *RoutedStore) *Service {
+	s.intake = intake
+	s.routed = routed
+	return s
 }
 
 // NewService builds the LPM service. queue may be shared with other subsystems.
@@ -76,15 +88,22 @@ func (s *Service) Start() {
 	s.sched = NewScheduler(s.cfg.DailyHour, s.enqueueDaily)
 	s.sched.Start()
 	go s.worker()
+	if s.intake != nil {
+		s.intake.Start()
+	}
 	slog.Info("LPM service started",
 		"dailyHour", s.cfg.DailyHour, "formats", s.cfg.Formats,
-		"emailWriteMode", s.cfg.EmailWriteMode, "intakeMode", s.cfg.IntakeMode)
+		"emailWriteMode", s.cfg.EmailWriteMode, "intakeMode", s.cfg.IntakeMode,
+		"intake", s.intake != nil)
 }
 
 // Stop halts the scheduler and worker.
 func (s *Service) Stop() {
 	if s.sched != nil {
 		s.sched.Stop()
+	}
+	if s.intake != nil {
+		s.intake.Stop()
 	}
 	close(s.stop)
 }
@@ -152,6 +171,7 @@ func (s *Service) GenerateForMatter(ref MatterRef, date string) (*types.MatterSt
 		Tasks:        s.data.TasksForMatter(ref.MatterNumber),
 		TimeEntries:  s.data.TimeEntriesForMatter(ref.MatterNumber),
 		Prev:         prev,
+		EmailsRouted: s.emailsRoutedSince(ref.MatterNumber, prev),
 	}
 	report, err := s.gen.Generate(in, GenOpts{Verify: true})
 	if err != nil {
@@ -206,6 +226,21 @@ func (s *Service) writeArtifacts(r *types.MatterStatusReport) (string, error) {
 		}
 	}
 	return docxPath, nil
+}
+
+// emailsRoutedSince counts emails routed to the matter since the previous
+// report (or the trailing 24h when there is none).
+func (s *Service) emailsRoutedSince(matter string, prev *types.MatterStatusReport) int {
+	if s.routed == nil {
+		return 0
+	}
+	cutoff := time.Now().Add(-24 * time.Hour)
+	if prev != nil {
+		if t, err := time.Parse(time.RFC3339, prev.GeneratedAt); err == nil {
+			cutoff = t
+		}
+	}
+	return s.routed.CountForMatter(matter, cutoff)
 }
 
 func stringField(m map[string]interface{}, key string) string {

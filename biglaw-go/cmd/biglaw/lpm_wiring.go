@@ -86,3 +86,25 @@ func (p *lpmDataProvider) TimeEntriesForMatter(matter string) []types.TimeEntry 
 func (p *lpmDataProvider) HealthForMatter(matter string) types.MatterHealthScore {
 	return p.health.Compute(matter, p.allTasks(), lpmTimeReader{p.ts}, lpmNilBudget{})
 }
+
+// MatterOptions returns the active matters as routing candidates for the email
+// router, using the most recent task description as the matter's label.
+func (p *lpmDataProvider) MatterOptions() []lpm.MatterOption {
+	seen := map[string]bool{}
+	var out []lpm.MatterOption
+	for _, t := range p.orch.ListTasks() {
+		if t == nil || t.MatterNumber == "" || seen[t.MatterNumber] {
+			continue
+		}
+		if t.Status == types.TaskStatusComplete || t.Status == types.TaskStatusFailed {
+			continue
+		}
+		seen[t.MatterNumber] = true
+		out = append(out, lpm.MatterOption{
+			MatterNumber: t.MatterNumber,
+			ClientNumber: t.ClientNumber,
+			Description:  t.Description,
+		})
+	}
+	return out
+}
