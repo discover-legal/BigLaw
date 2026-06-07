@@ -26,7 +26,7 @@ The goal of this project is to build the **most comprehensive open legal AI plat
 
 - The platform handles credentials, client matter data, and privileged legal communications. Firms deploying it are responsible for their own threat model.
 - The codebase receives ongoing security sweeps and bug fixes, but has **not undergone a formal independent security audit**.
-- **Before deploying in any environment where real client data is involved, you must engage an independent security professional (pen tester, security engineer, or FDE — Formal Design/Deployment Expert) to review the deployment configuration and code.**
+- **Before deploying in any environment where real client data is involved, you must engage an independent security professional (pen tester, security engineer, or FDE — Forward Deployed Engineer / Formal Deployment Expert) to review the deployment configuration and code.**
 - `AUTH_ENABLED=false` is the default for local development. **Never expose the API on a public or shared network without enabling authentication.**
 - API keys, session secrets, and OAuth credentials must be treated as production secrets regardless of environment.
 
@@ -97,7 +97,7 @@ system operated through this software.
 >
 > To structure a deployment that maximises privilege protection for your jurisdiction
 > — including network isolation, access controls, data residency, and workflow design —
-> **engage an independent forward deployed engineer before handling any privileged matter.**
+> **engage an independent FDE (Forward Deployed Engineer / Formal Deployment Expert) before handling any privileged matter.**
 
 ### Unauthorised Practice of Law
 
