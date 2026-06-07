@@ -120,6 +120,21 @@ may be stored locally. Where that data goes depends entirely on how you have dep
 
 **BigLaw supports multiple inference backends — the data handling implications differ for each:**
 
+```mermaid
+flowchart LR
+    BL["BigLaw"]
+
+    BL -->|"default<br/>ANTHROPIC_API_KEY"| ANT["Anthropic API<br/><i>Haiku / Sonnet / Opus</i><br/>─────────────<br/>Data leaves infrastructure<br/>BAA: enterprise tier only<br/>Review DPA before use"]
+
+    BL -->|"OPENAI_API_KEY or<br/>AZURE_OPENAI_*"| OAI["OpenAI / Azure OpenAI<br/><i>GPT-4o etc.</i><br/>─────────────<br/>Data leaves infrastructure<br/>BAA: ChatGPT Ent / Azure only<br/>Azure has stronger DPA terms"]
+
+    BL -->|"OLLAMA_ENABLED=true<br/>LOCAL_INFERENCE_URL"| LOC["Local inference<br/><i>Ollama · LM Studio · vLLM</i><br/>─────────────<br/>Data stays on your hardware<br/>No BAA needed<br/>Air-gap capable"]
+
+    style LOC fill:#166534,color:#fff
+    style ANT fill:#1e3a5f,color:#fff
+    style OAI fill:#1e3a5f,color:#fff
+```
+
 - **Anthropic API (default)** — data is sent to Anthropic's servers subject to their data
   processing terms and usage policies. Review these before using with client data.
 - **OpenAI / Azure OpenAI** — data is sent to OpenAI or Microsoft's servers subject to their
@@ -322,25 +337,56 @@ A real matter, mid-flight — the bench self-organising, then the cited result.
 
 ## Architecture
 
-```
-T0  Root Orchestrator (1)            issues RoundGoals each phase
-     │
-T1  Domain Managers (4)              research · analysis · drafting · review
-     │   ↓ DyTopo: Need/Offer cosine-match → directed communication graph
-T2  Epistemic agents (18)            reason within a practice area, in any jurisdiction
-                                     (contract · corporate · M&A · privacy · antitrust ·
-                                      employment · IP · tax · litigation · sanctions · ESG…)
-T2  Conceptual agents (8)            own a cross-system legal concept (materiality,
-                                     liability, enforceability, causation, good faith…)
-T2  Writing agents (13)              produce a specific document type
-     │   ↓ tool_use agentic loop (Wave 1: full loop; Wave 2: Haiku broadcast review)
-T3  Tool agents (6)                  web search · retrieval · extraction · translation
-                                     · citation check · e-signature
+```mermaid
+graph TD
+    T0["T0 · Root Orchestrator<br/><i>Opus — issues RoundGoals each phase</i>"]
+    T1R["Research Manager"]
+    T1A["Analysis Manager"]
+    T1D["Drafting Manager"]
+    T1C["Compliance Manager"]
+    T2E["Epistemic agents ×18<br/><i>contract · M&A · privacy · antitrust<br/>employment · IP · tax · litigation…</i>"]
+    T2C["Conceptual agents ×8<br/><i>materiality · liability · causation<br/>enforceability · good faith…</i>"]
+    T2W["Writing agents ×13<br/><i>brief · memo · redline · headnote<br/>precedent · NDA · opinion…</i>"]
+    T3["Tool agents ×6<br/><i>web search · retrieval · extraction<br/>translation · citation · e-sign</i>"]
+    WB[("Intra-round<br/>whiteboard")]
+    MEM[("Inter-round<br/>memory store")]
+    GATE["Human gate<br/><i>low-confidence findings</i>"]
+    SYN["Opus synthesis<br/><i>final output</i>"]
 
-50 jurisdiction-neutral native agents — plus an imported Lavern roster (118 in all).
+    T0 -->|RoundGoal| T1R & T1A & T1D & T1C
+    T1R & T1A & T1D & T1C -->|DyTopo Need/Offer match| T2E & T2C & T2W
+    T2E & T2C & T2W -->|tool_use agentic loop| T3
+    T2E & T2C & T2W -->|findings| WB
+    WB -->|CitationGate → Debate → Verify ×10| GATE
+    GATE -->|approved findings| MEM
+    MEM -->|context for next round| T1R & T1A & T1D & T1C
+    MEM --> SYN
 ```
 
 **Each DyTopo round:**
+
+```mermaid
+sequenceDiagram
+    participant O as Orchestrator
+    participant E as DyTopo Engine
+    participant A as Agents (T2)
+    participant P as Protocols
+    participant G as Human Gate
+    participant M as Memory
+
+    O->>E: RoundGoal
+    E->>A: Need/Offer descriptors (Haiku ~10 tokens each)
+    E->>E: cosine-match Needs → Offers<br/>build directed comm graph
+    E->>A: route messages along graph edges
+    A->>A: agentic loops with tools + memory context
+    A->>P: findings → CitationGate
+    P->>P: Debate (Opus)
+    P->>P: Verification (Haiku ×10)
+    P-->>G: low-confidence / challenged findings
+    G-->>P: approved / rejected
+    P->>M: round digest (Haiku synthesis)
+    M-->>O: inter-round context for next phase
+```
 
 1. Every agent emits a Need/Offer descriptor (Haiku, ~10 tokens)
 2. The engine cosine-matches Needs → Offers to build a sparse directed comm graph
@@ -410,18 +456,27 @@ POST /bots/slack/matter-link  { "matterNumber": "M-001", "channelId": "C0123ABCD
 **Client intelligence briefing** — Big Michael's briefing command launches a hub-and-spoke
 swarm that pulls from all connected systems in parallel (12 s per spoke, `Promise.allSettled`):
 
-| Spoke | What it pulls |
-|---|---|
-| Clio | Matters, contacts, time entries, notes |
-| iManage | Documents, matters |
-| Slack | Mentions of the client across all channels |
-| Microsoft Teams | Chat messages mentioning the client |
-| SharePoint | Files related to the client |
-| Google Drive / Box | Files and folders |
-| Graph Mail (O365) | Email threads |
-| Gmail | Email threads |
-| Knowledge store | Ingested documents + semantic search |
-| Internal | BigLaw tasks, health scores, time entries |
+```mermaid
+graph LR
+    CMD["@BigMichael briefing Acme Corp"]
+    HUB["Hub<br/><i>Sonnet synthesis</i>"]
+    OUT["Client briefing<br/><i>single Markdown doc</i>"]
+
+    CMD --> HUB
+
+    HUB <-->|parallel, 12s timeout| S1["Clio<br/><i>matters · contacts · notes</i>"]
+    HUB <-->|parallel, 12s timeout| S2["iManage<br/><i>documents · matters</i>"]
+    HUB <-->|parallel, 12s timeout| S3["Slack<br/><i>channel mentions</i>"]
+    HUB <-->|parallel, 12s timeout| S4["Teams chat<br/><i>message search</i>"]
+    HUB <-->|parallel, 12s timeout| S5["SharePoint<br/><i>file search</i>"]
+    HUB <-->|parallel, 12s timeout| S6["Google Drive / Box<br/><i>files · folders</i>"]
+    HUB <-->|parallel, 12s timeout| S7["Graph Mail<br/><i>O365 email threads</i>"]
+    HUB <-->|parallel, 12s timeout| S8["Gmail<br/><i>email threads</i>"]
+    HUB <-->|parallel, 12s timeout| S9["Knowledge store<br/><i>ingested docs · semantic search</i>"]
+    HUB <-->|parallel, 12s timeout| S10["Internal<br/><i>tasks · health · time entries</i>"]
+
+    HUB --> OUT
+```
 
 The hub Sonnet synthesises all spokes into a single Markdown briefing. The scattergun problem —
 client info spread across 10 mailboxes, 2 call notes, and 4 DM threads — solved in one command.
