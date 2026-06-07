@@ -292,9 +292,10 @@ type TimeEntry struct {
 	BillingUnits      int           `json:"billingUnits"`
 	BillingRate       *float64      `json:"billingRate,omitempty"`
 	BillingAmountUsd  *float64      `json:"billingAmountUsd,omitempty"`
-	ClioSyncedAt      string        `json:"clioSyncedAt,omitempty"`
-	UTBMSTaskCode     string        `json:"utbmsTaskCode,omitempty"`
-	UTBMSActivityCode string        `json:"utbmsActivityCode,omitempty"`
+	ClioSyncedAt      string          `json:"clioSyncedAt,omitempty"`
+	UTBMSTaskCode     string          `json:"utbmsTaskCode,omitempty"`
+	UTBMSActivityCode string          `json:"utbmsActivityCode,omitempty"`
+	OcgSuggestions   []OcgSuggestion `json:"ocgSuggestions,omitempty"`
 }
 
 // ─── Lawyer profiles ──────────────────────────────────────────────────────────
@@ -353,11 +354,13 @@ type SessionUser struct {
 // ─── Clients ─────────────────────────────────────────────────────────────────
 
 type ClientMatter struct {
-	MatterNumber string    `json:"matterNumber"`
-	Description  string    `json:"description"`
-	PracticeArea string    `json:"practiceArea,omitempty"`
-	OpenedAt     time.Time `json:"openedAt"`
-	BudgetUsd    *float64  `json:"budgetUsd,omitempty"`
+	MatterNumber            string    `json:"matterNumber"`
+	Description             string    `json:"description"`
+	PracticeArea            string    `json:"practiceArea,omitempty"`
+	OpenedAt                time.Time `json:"openedAt"`
+	BudgetUsd               *float64  `json:"budgetUsd,omitempty"`
+	BudgetAlertThresholds   []float64 `json:"budgetAlertThresholds,omitempty"`
+	BudgetAlertsTriggered   []float64 `json:"budgetAlertsTriggered,omitempty"`
 }
 
 type Client struct {
@@ -634,6 +637,145 @@ type HeadnoteReport struct {
 	GeneratedAt      string     `json:"generatedAt"`
 }
 
+// ─── OCG (Outside Counsel Guidelines) ────────────────────────────────────────
+
+type OcgRuleCategory string
+
+const (
+	OcgCategoryBillingIncrements OcgRuleCategory = "billing_increments"
+	OcgCategoryEntrySpecificity  OcgRuleCategory = "entry_specificity"
+	OcgCategoryProhibitedTasks   OcgRuleCategory = "prohibited_tasks"
+	OcgCategoryRateLimits        OcgRuleCategory = "rate_limits"
+	OcgCategoryStaffing          OcgRuleCategory = "staffing"
+	OcgCategoryDescriptionFormat OcgRuleCategory = "description_format"
+	OcgCategoryTiming            OcgRuleCategory = "timing"
+	OcgCategoryOther             OcgRuleCategory = "other"
+)
+
+type OcgMechCheckType string
+
+const (
+	OcgMechMinDurationHours    OcgMechCheckType = "min_duration_hours"
+	OcgMechMaxDurationHours    OcgMechCheckType = "max_duration_hours"
+	OcgMechMaxAgeDays          OcgMechCheckType = "max_age_days"
+	OcgMechMaxBillingRateUSD   OcgMechCheckType = "max_billing_rate_usd"
+	OcgMechMinDescriptionChars OcgMechCheckType = "min_description_chars"
+	OcgMechNoBlockBilling      OcgMechCheckType = "no_block_billing"
+	OcgMechNoVagueEntries      OcgMechCheckType = "no_vague_entries"
+	OcgMechRequireMatterRef    OcgMechCheckType = "require_matter_reference"
+)
+
+type OcgMechCheck struct {
+	Type  OcgMechCheckType `json:"type"`
+	Value *float64         `json:"value,omitempty"`
+}
+
+type OcgRuleStat struct {
+	Violations int `json:"violations"`
+	Accepted   int `json:"accepted"`
+	Dismissed  int `json:"dismissed"`
+}
+
+type OcgRule struct {
+	ID        string          `json:"id"`
+	Category  OcgRuleCategory `json:"category"`
+	Text      string          `json:"text"`
+	Severity  string          `json:"severity"`
+	MechCheck *OcgMechCheck   `json:"mechCheck,omitempty"`
+}
+
+type OcgDocument struct {
+	ID        string                  `json:"id"`
+	ClientID  string                  `json:"clientId"`
+	Title     string                  `json:"title"`
+	Rules     []OcgRule               `json:"rules"`
+	Excerpt   string                  `json:"excerpt,omitempty"`
+	RuleStats map[string]*OcgRuleStat `json:"ruleStats,omitempty"`
+	CreatedAt time.Time               `json:"createdAt"`
+	UpdatedAt time.Time               `json:"updatedAt"`
+}
+
+type OcgSuggestion struct {
+	RuleID               string          `json:"ruleId"`
+	RuleText             string          `json:"ruleText"`
+	Category             OcgRuleCategory `json:"category"`
+	Severity             string          `json:"severity"`
+	Issue                string          `json:"issue"`
+	SuggestedDescription string          `json:"suggestedDescription,omitempty"`
+	Status               string          `json:"status"`
+}
+
+// ─── Job queue ────────────────────────────────────────────────────────────────
+
+type JobType string
+
+const (
+	JobTypeSummarizeTimeEntry JobType = "summarize_time_entry"
+	JobTypeOcgBulkCheck       JobType = "ocg_bulk_check"
+)
+
+type JobStatus string
+
+const (
+	JobStatusPending    JobStatus = "pending"
+	JobStatusRunning    JobStatus = "running"
+	JobStatusDone       JobStatus = "done"
+	JobStatusFailed     JobStatus = "failed"
+	JobStatusDeadLetter JobStatus = "dead_letter"
+)
+
+type Job struct {
+	ID          string                 `json:"id"`
+	Type        JobType                `json:"type"`
+	Payload     map[string]interface{} `json:"payload"`
+	Status      JobStatus              `json:"status"`
+	CreatedAt   string                 `json:"createdAt"`
+	StartedAt   string                 `json:"startedAt,omitempty"`
+	CompletedAt string                 `json:"completedAt,omitempty"`
+	Retries     int                    `json:"retries"`
+	MaxRetries  int                    `json:"maxRetries"`
+	Error       string                 `json:"error,omitempty"`
+}
+
+// ─── Dockets ──────────────────────────────────────────────────────────────────
+
+type WatchedDocket struct {
+	MatterNumber     string `json:"matterNumber"`
+	DocketNumber     string `json:"docketNumber"`
+	Court            string `json:"court"`
+	CaseName         string `json:"caseName,omitempty"`
+	AddedAt          string `json:"addedAt"`
+	LastCheckedAt    string `json:"lastCheckedAt,omitempty"`
+	LastFilingDate   string `json:"lastFilingDate,omitempty"`
+	TotalFilingsSeen int    `json:"totalFilingsSeen"`
+}
+
+type DocketAlert struct {
+	ID               string `json:"id"`
+	MatterNumber     string `json:"matterNumber"`
+	DocketNumber     string `json:"docketNumber"`
+	Court            string `json:"court"`
+	CaseName         string `json:"caseName"`
+	NewFilingCount   int    `json:"newFilingCount"`
+	LatestFilingDate string `json:"latestFilingDate"`
+	CourtListenerURL string `json:"courtListenerUrl"`
+	DetectedAt       string `json:"detectedAt"`
+}
+
+// ─── Regulatory pulse ─────────────────────────────────────────────────────────
+
+type RegulationAlert struct {
+	ID           string `json:"id"`
+	MatterNumber string `json:"matterNumber,omitempty"`
+	PracticeArea string `json:"practiceArea"`
+	Jurisdiction string `json:"jurisdiction"`
+	Headline     string `json:"headline"`
+	URL          string `json:"url"`
+	Summary      string `json:"summary"`
+	DetectedAt   string `json:"detectedAt"`
+	Source       string `json:"source"`
+}
+
 // ─── Client briefing ─────────────────────────────────────────────────────────
 
 type BriefingMatterSnapshot struct {
@@ -669,4 +811,111 @@ type ClientBriefing struct {
 	RelationshipNotes string                  `json:"relationshipNotes,omitempty"`
 	IndustryContext  string                   `json:"industryContext,omitempty"`
 	Document         string                   `json:"document"`
+}
+
+// ─── Budget ───────────────────────────────────────────────────────────────────
+
+type BudgetAlert struct {
+	MatterNumber  string  `json:"matterNumber"`
+	ClientNumber  string  `json:"clientNumber"`
+	BudgetUsd     float64 `json:"budgetUsd"`
+	BurnUsd       float64 `json:"burnUsd"`
+	BurnPct       float64 `json:"burnPct"`
+	Threshold     float64 `json:"threshold"`
+	TriggeredAt   string  `json:"triggeredAt"`
+}
+
+type BudgetBurn struct {
+	BudgetUsd float64 `json:"budgetUsd"`
+	BurnUsd   float64 `json:"burnUsd"`
+	BurnPct   float64 `json:"burnPct"`
+	Remaining float64 `json:"remaining"`
+}
+
+type BudgetPrediction struct {
+	MatterNumber            string  `json:"matterNumber"`
+	PracticeArea            string  `json:"practiceArea"`
+	SpentUsd                float64 `json:"spentUsd"`
+	SpentBillingUnits       int     `json:"spentBillingUnits"`
+	EstimatedTotalUsd       float64 `json:"estimatedTotalUsd"`
+	EstimatedRemainingUsd   float64 `json:"estimatedRemainingUsd"`
+	CompletionPct           float64 `json:"completionPct"`
+	Confidence              string  `json:"confidence"`
+	ComparableMatterCount   int     `json:"comparableMatterCount"`
+	MedianFinalCost         float64 `json:"medianFinalCost"`
+	P25FinalCost            float64 `json:"p25FinalCost"`
+	P75FinalCost            float64 `json:"p75FinalCost"`
+	BasedOn                 string  `json:"basedOn"`
+}
+
+// ─── Status reports ───────────────────────────────────────────────────────────
+
+type StatusReport struct {
+	TaskID       string  `json:"taskId"`
+	MatterNumber string  `json:"matterNumber,omitempty"`
+	ClientNumber string  `json:"clientNumber,omitempty"`
+	GeneratedAt  string  `json:"generatedAt"`
+	Format       string  `json:"format"`
+	Content      string  `json:"content"`
+	WordCount    int     `json:"wordCount"`
+	CostUsd      float64 `json:"costUsd"`
+}
+
+// ─── Deadlines ────────────────────────────────────────────────────────────────
+
+type DayType string
+
+const (
+	DayTypeCalendar DayType = "calendar"
+	DayTypeBusiness DayType = "business"
+)
+
+type DeadlineRule struct {
+	ID          string  `yaml:"id"`
+	Trigger     string  `yaml:"trigger"`
+	Event       string  `yaml:"event"`
+	Days        int     `yaml:"days"`
+	DayType     DayType `yaml:"dayType"`
+	Cite        string  `yaml:"cite"`
+	Note        string  `yaml:"note,omitempty"`
+	WarningDays int     `yaml:"warningDays,omitempty"`
+}
+
+type HolidayCalendar string
+
+const (
+	HolidaysUSFederal       HolidayCalendar = "us_federal"
+	HolidaysUKBank          HolidayCalendar = "uk_bank"
+	HolidaysEUInstitutions  HolidayCalendar = "eu_institutions"
+	HolidaysNone            HolidayCalendar = "none"
+)
+
+type JurisdictionRules struct {
+	ID           string          `yaml:"id"`
+	Jurisdiction string          `yaml:"jurisdiction"`
+	Name         string          `yaml:"name"`
+	Version      string          `yaml:"version"`
+	Source       string          `yaml:"source,omitempty"`
+	Holidays     HolidayCalendar `yaml:"holidays"`
+	Rules        []DeadlineRule  `yaml:"rules"`
+}
+
+type ComputedDeadline struct {
+	RuleID      string  `json:"ruleId"`
+	Event       string  `json:"event"`
+	DueDate     string  `json:"dueDate"`
+	WarningDate string  `json:"warningDate,omitempty"`
+	Days        int     `json:"days"`
+	DayType     DayType `json:"dayType"`
+	Cite        string  `json:"cite"`
+	Note        string  `json:"note,omitempty"`
+}
+
+type DeadlineResult struct {
+	Jurisdiction     string             `json:"jurisdiction"`
+	JurisdictionName string             `json:"jurisdictionName"`
+	TriggerEvent     string             `json:"triggerEvent"`
+	TriggerDate      string             `json:"triggerDate"`
+	ComputedAt       string             `json:"computedAt"`
+	Deadlines        []ComputedDeadline `json:"deadlines"`
 }
