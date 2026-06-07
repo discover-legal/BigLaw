@@ -244,6 +244,7 @@ type LPMConfig struct {
 	RoutedFile     string   // append-only JSONL of email→matter routing decisions
 	RouteMinConf   float64  // confidence floor below which a routing is "unrouted"
 	AllowedDomains []string // recipient-domain allowlist for outbound drafts
+	PendingFile    string   // send_gate pending-drafts store
 
 	// Phase 4 historical backfill (grinds old mail on cheap compute).
 	BackfillEnabled    bool
@@ -477,6 +478,7 @@ func Load() *Config {
 			RoutedFile:     env("LPM_ROUTED_FILE", "./data/routed-emails.jsonl"),
 			RouteMinConf:   envFloat("LPM_ROUTE_MIN_CONFIDENCE", 0.6),
 			AllowedDomains: envList("LPM_ALLOWED_DOMAINS", ""),
+			PendingFile:    env("LPM_PENDING_FILE", "./data/pending-drafts.json"),
 
 			BackfillEnabled:    envBool("LPM_BACKFILL_ENABLED", false),
 			BackfillWindowDays: envInt("LPM_BACKFILL_WINDOW_DAYS", 365),

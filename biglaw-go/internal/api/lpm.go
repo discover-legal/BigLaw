@@ -83,26 +83,28 @@ func (s *Server) AttachLPM(svc *lpm.Service) {
 		c.JSON(http.StatusOK, out)
 	})
 
-	// Approve and send a pending draft (explicit human action).
-	g.POST("/draft/send", func(c *gin.Context) {
-		var body struct {
-			MatterNumber string   `json:"matterNumber"`
-			To           []string `json:"to"`
-			Subject      string   `json:"subject"`
-			Body         string   `json:"body"`
-		}
-		if err := c.ShouldBindJSON(&body); err != nil || body.MatterNumber == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "matterNumber required"})
-			return
-		}
-		out, err := svc.ApproveSend(lpm.Draft{
-			MatterNumber: body.MatterNumber, To: body.To, Subject: body.Subject, Body: body.Body,
-		}, actorID(c))
+	// List drafts awaiting approval (send_gate mode).
+	g.GET("/drafts/pending", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"pending": svc.PendingDrafts()})
+	})
+
+	// Approve and send a parked draft by ID (explicit human action, re-guarded).
+	g.POST("/drafts/:id/approve", func(c *gin.Context) {
+		out, err := svc.ApprovePending(c.Param("id"), actorID(c))
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
 		c.JSON(http.StatusOK, out)
+	})
+
+	// Cancel a parked draft without sending it.
+	g.POST("/drafts/:id/cancel", func(c *gin.Context) {
+		if err := svc.CancelPending(c.Param("id"), actorID(c)); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "cancelled"})
 	})
 
 	// Generate the portfolio BLUF briefing across all active matters on demand.

@@ -43,9 +43,10 @@ const (
 
 // DraftOutcome reports what happened to a draft.
 type DraftOutcome struct {
-	Status   DraftStatus   `json:"status"`
-	Decision GuardDecision `json:"decision"`
-	Detail   string        `json:"detail,omitempty"`
+	Status    DraftStatus   `json:"status"`
+	Decision  GuardDecision `json:"decision"`
+	Detail    string        `json:"detail,omitempty"`
+	PendingID string        `json:"pendingId,omitempty"` // set when a draft is parked for approval
 }
 
 // MailTransport creates/sends mail. Implementations live in transport.go.

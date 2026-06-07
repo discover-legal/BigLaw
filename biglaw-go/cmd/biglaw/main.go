@@ -180,6 +180,13 @@ func main() {
 			)
 			lpmSvc.WithDrafting(cfg.LPM.EmailWriteMode, cfg.LPM.AllowedDomains, transport, channelPoster)
 
+			// send_gate pending-drafts store (queryable + approvable by ID).
+			pending := lpm.NewPendingStore(cfg.LPM.PendingFile)
+			if err := pending.Init(); err != nil {
+				fmt.Fprintf(os.Stderr, "lpm pending store init: %v\n", err)
+			}
+			lpmSvc.WithPendingDrafts(pending)
+
 			// Phase 3: 0600 portfolio briefing.
 			lpmSvc.WithPortfolio(lpm.NewPortfolioBriefer(prov, model))
 

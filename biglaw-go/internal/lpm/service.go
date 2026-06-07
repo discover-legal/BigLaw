@@ -72,6 +72,16 @@ type Service struct {
 
 	// Optional Phase 4 historical backfill.
 	backfill *Backfill
+
+	// Optional send_gate pending-drafts store.
+	pending *PendingStore
+}
+
+// WithPendingDrafts attaches the pending-drafts store so send_gate drafts are
+// queryable and approvable by ID.
+func (s *Service) WithPendingDrafts(p *PendingStore) *Service {
+	s.pending = p
+	return s
 }
 
 // WithBackfill attaches the historical email backfill, started alongside the
@@ -144,14 +154,66 @@ func (s *Service) postReportToChannel(r *types.MatterStatusReport) {
 	}()
 }
 
-// ProcessDraft applies the configured email-write-mode policy to a draft.
+// ProcessDraft applies the configured email-write-mode policy to a draft. When a
+// draft is parked for approval (send_gate) and a pending store is configured, it
+// is persisted and its ID returned on the outcome.
 func (s *Service) ProcessDraft(d Draft, actorID string) (DraftOutcome, error) {
-	return s.drafter().Process(d, actorID)
+	out, err := s.drafter().Process(d, actorID)
+	if err != nil {
+		return out, err
+	}
+	if out.Status == DraftPendingGate && s.pending != nil {
+		id, perr := s.pending.Add(d, actorID)
+		if perr != nil {
+			return out, perr
+		}
+		out.PendingID = id
+	}
+	return out, nil
 }
 
-// ApproveSend sends a draft after explicit human approval (re-running the guard).
-func (s *Service) ApproveSend(d Draft, approverID string) (DraftOutcome, error) {
-	return s.drafter().ApproveSend(d, approverID)
+// PendingDrafts lists drafts awaiting approval.
+func (s *Service) PendingDrafts() []PendingDraft {
+	if s.pending == nil {
+		return nil
+	}
+	return s.pending.ListOpen()
+}
+
+// ApprovePending sends a parked draft by ID after explicit human approval
+// (re-running the guard at send time). Marks the pending record sent on success.
+func (s *Service) ApprovePending(id, approverID string) (DraftOutcome, error) {
+	if s.pending == nil {
+		return DraftOutcome{}, fmt.Errorf("pending drafts not configured")
+	}
+	pd, ok := s.pending.Get(id)
+	if !ok {
+		return DraftOutcome{}, fmt.Errorf("pending draft %s not found", id)
+	}
+	if pd.Status != PendingOpen {
+		return DraftOutcome{}, fmt.Errorf("pending draft %s already %s", id, pd.Status)
+	}
+	out, err := s.drafter().ApproveSend(Draft{
+		MatterNumber: pd.MatterNumber, To: pd.To, Subject: pd.Subject, Body: pd.Body,
+	}, approverID)
+	if err != nil {
+		return out, err
+	}
+	if out.Status == DraftSent {
+		s.pending.Resolve(id, PendingSent, approverID)
+	}
+	return out, nil
+}
+
+// CancelPending marks a parked draft cancelled without sending it.
+func (s *Service) CancelPending(id, by string) error {
+	if s.pending == nil {
+		return fmt.Errorf("pending drafts not configured")
+	}
+	if !s.pending.Resolve(id, PendingCancelled, by) {
+		return fmt.Errorf("pending draft %s not found or already resolved", id)
+	}
+	return nil
 }
 
 // WithEmailIntake attaches the email router/intake so daily reports include the
