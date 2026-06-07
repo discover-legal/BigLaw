@@ -126,8 +126,15 @@ func GmailToken() (string, error) { return getGmailToken() }
 
 // ─── Graph email search ───────────────────────────────────────────────────────
 
-// SearchGraphMail searches Exchange/O365 mail via Microsoft Graph.
+// SearchGraphMail searches Exchange/O365 mail via Microsoft Graph (last daysBack).
 func SearchGraphMail(query string, maxResults, daysBack int) ([]Message, error) {
+	return SearchGraphMailWindow(query, maxResults, daysBack, 0)
+}
+
+// SearchGraphMailWindow searches mail received in the window between newerDays and
+// olderDays ago (olderDays == 0 means no upper bound). Used by the historical
+// backfill to page through older mail without re-fetching the recent window.
+func SearchGraphMailWindow(query string, maxResults, newerDays, olderDays int) ([]Message, error) {
 	if os.Getenv("GRAPH_ACCESS_TOKEN") == "" &&
 		(os.Getenv("GRAPH_TENANT_ID") == "" || os.Getenv("GRAPH_CLIENT_ID") == "") {
 		return nil, nil
@@ -139,17 +146,22 @@ func SearchGraphMail(query string, maxResults, daysBack int) ([]Message, error) 
 	if maxResults <= 0 {
 		maxResults = 20
 	}
-	if daysBack <= 0 {
-		daysBack = 90
+	if newerDays <= 0 {
+		newerDays = 90
 	}
 	userEmail := os.Getenv("GRAPH_USER_EMAIL")
 	if userEmail == "" {
 		return nil, nil
 	}
-	since := time.Now().AddDate(0, 0, -daysBack).UTC().Format(time.RFC3339)
+	since := time.Now().AddDate(0, 0, -newerDays).UTC().Format(time.RFC3339)
+	filter := "receivedDateTime ge " + since
+	if olderDays > 0 {
+		until := time.Now().AddDate(0, 0, -olderDays).UTC().Format(time.RFC3339)
+		filter += " and receivedDateTime lt " + until
+	}
 	qs := url.Values{
 		"$search":  {`"` + query + `"`},
-		"$filter":  {"receivedDateTime ge " + since},
+		"$filter":  {filter},
 		"$top":     {fmt.Sprintf("%d", maxResults)},
 		"$select":  {"id,subject,from,receivedDateTime,bodyPreview,hasAttachments"},
 		"$orderby": {"receivedDateTime desc"},
@@ -218,6 +230,12 @@ func SearchGraphMail(query string, maxResults, daysBack int) ([]Message, error) 
 
 // SearchGmail searches Gmail via the Gmail API (service-account or dev token).
 func SearchGmail(query string, maxResults, daysBack int) ([]Message, error) {
+	return SearchGmailWindow(query, maxResults, daysBack, 0)
+}
+
+// SearchGmailWindow searches Gmail in the window between newerDays and olderDays
+// ago (olderDays == 0 means no upper bound). Used by the historical backfill.
+func SearchGmailWindow(query string, maxResults, newerDays, olderDays int) ([]Message, error) {
 	if os.Getenv("GMAIL_ACCESS_TOKEN") == "" && os.Getenv("GMAIL_SA_KEY_JSON") == "" {
 		return nil, nil
 	}
@@ -228,15 +246,18 @@ func SearchGmail(query string, maxResults, daysBack int) ([]Message, error) {
 	if maxResults <= 0 {
 		maxResults = 20
 	}
-	if daysBack <= 0 {
-		daysBack = 90
+	if newerDays <= 0 {
+		newerDays = 90
 	}
 	userEmail := os.Getenv("GMAIL_USER_EMAIL")
 	if userEmail == "" {
 		userEmail = "me"
 	}
 
-	gmailQuery := fmt.Sprintf("%s newer_than:%dd", query, daysBack)
+	gmailQuery := fmt.Sprintf("%s newer_than:%dd", query, newerDays)
+	if olderDays > 0 {
+		gmailQuery += fmt.Sprintf(" older_than:%dd", olderDays)
+	}
 	listURL := fmt.Sprintf("https://gmail.googleapis.com/gmail/v1/users/%s/messages?%s",
 		url.PathEscape(userEmail),
 		url.Values{"q": {gmailQuery}, "maxResults": {fmt.Sprintf("%d", maxResults)}}.Encode())

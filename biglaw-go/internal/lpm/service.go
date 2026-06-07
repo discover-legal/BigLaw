@@ -66,6 +66,16 @@ type Service struct {
 
 	// Optional Phase 3 portfolio briefing.
 	briefer *PortfolioBriefer
+
+	// Optional Phase 4 historical backfill.
+	backfill *Backfill
+}
+
+// WithBackfill attaches the historical email backfill, started alongside the
+// service in its own goroutine (it never blocks the daily report worker).
+func (s *Service) WithBackfill(b *Backfill) *Service {
+	s.backfill = b
+	return s
 }
 
 // WithPortfolio attaches the 0600 portfolio briefer. When set, the daily sweep
@@ -146,6 +156,9 @@ func (s *Service) Start() {
 	if s.intake != nil {
 		s.intake.Start()
 	}
+	if s.backfill != nil {
+		s.backfill.Start()
+	}
 	slog.Info("LPM service started",
 		"dailyHour", s.cfg.DailyHour, "formats", s.cfg.Formats,
 		"emailWriteMode", s.cfg.EmailWriteMode, "intakeMode", s.cfg.IntakeMode,
@@ -159,6 +172,9 @@ func (s *Service) Stop() {
 	}
 	if s.intake != nil {
 		s.intake.Stop()
+	}
+	if s.backfill != nil {
+		s.backfill.Stop()
 	}
 	close(s.stop)
 }

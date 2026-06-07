@@ -158,6 +158,18 @@ func main() {
 					IntervalMin: cfg.LPM.PollIntervalM,
 				}, nil, router, routed, data.MatterOptions)
 				lpmSvc.WithEmailIntake(intake, routed)
+
+				// Phase 4: historical backfill grinds older mail on cheap compute.
+				if cfg.LPM.BackfillEnabled {
+					backfill := lpm.NewBackfill(lpm.BackfillConfig{
+						WindowDays: cfg.LPM.BackfillWindowDays,
+						StepDays:   cfg.LPM.BackfillStepDays,
+						MaxPerStep: cfg.LPM.BackfillMaxPerStep,
+						PauseMs:    cfg.LPM.BackfillPauseMs,
+						CursorFile: cfg.LPM.BackfillCursorFile,
+					}, nil, router, routed, data.MatterOptions)
+					lpmSvc.WithBackfill(backfill)
+				}
 			}
 
 			// Outbound drafting (email-write-mode), guard-enforced. Default "off".

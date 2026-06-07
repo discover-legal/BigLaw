@@ -93,22 +93,46 @@ The data backbone everything else feeds on.
   once-per-day idempotency; end-to-end service artifact + corpus writes and the
   queue worker path.
 
-## Later phases (layer on the spine)
+## Phase 2 — Per-email classifier + matter routing ✅
 
-- **Phase 2 — Per-email classifier + matter routing.** Shared-inbox + polling
-  intake → a small `lpm-email-router` agent (recursive self-checks) tags each
-  message and routes it to a matter → routed emails flow into the status-report
-  deltas (`LPMDeltas.EmailsRouted`) and corpus. Activates the email-write-mode and
-  confidentiality-guard cross-cutting design.
-- **Phase 3 — 0600 BLUF portfolio briefing.** Roll the status-report corpus +
-  matter-health across a partner's active matters into a five-minute digest;
-  `@BigMichael portfolio`; scheduled 0600 delivery per write-mode.
-- **Phase 4 — Historical email backfill.** A queue-driven, resumable,
-  rate-limited worker on a low-end/local model grinding the old email corpus into
-  routed/tagged + retro status-deltas — the "run it for ages on the box" piece.
+Inbound mail is polled on an interval (`intake.go`; mode shapes the query only) and
+routed to a matter by a low-power model (`router.go`) with safeguards that keep a
+cheap model honest: a deterministic fast path (a recognised matter ref in the
+subject wins with no model call), a recursive self-check (a second pass must
+confirm), a hallucination guard (matters outside the roster are rejected), and a
+confidence floor. Decisions persist to a metadata-only, dedup'd store
+(`routedstore.go`) that feeds `LPMDeltas.EmailsRouted`. Untrusted email content is
+sanitised before entering any prompt.
+
+## Cross-cutting — Confidentiality guard + configurable drafter ✅
+
+`guard.go` gates every outbound message: recipient-domain allowlist + a leakage
+scan for cross-matter contamination (boundary-aware) and obvious PII (SSN, UK NI,
+payment card, IBAN). Fails closed; every decision is audit-logged. `draft.go`
+turns `LPM_EMAIL_WRITE_MODE` into behaviour (off / channel / draft / send_gate);
+send_gate never auto-sends — an explicit human `ApproveSend` re-runs the guard
+first. `transport.go` carries Graph + Gmail create-draft/send behind the guard.
+
+## Phase 3 — 0600 BLUF portfolio briefing ✅
+
+`portfolio.go` rolls the latest per-matter reports out of the corpus into one
+worst-first, partner-facing five-minute digest with a model-written BLUF over
+deterministic health counts. The daily scheduler enqueues it after the per-matter
+sweep; also on demand via `POST /lpm/portfolio/generate`.
+
+## Phase 4 — Historical email backfill ✅
+
+`backfill.go` pages backwards through the mail archive one date window at a time,
+routing old mail through the same router/store as the live intake. Resumable (a
+cursor file records how far back it has reached), rate-limited (a pause between
+windows so it can grind for days on cheap hardware without disrupting the daily
+reports), and idempotent (dedup by message ID). Runs in its own goroutine, never
+blocking the report worker.
 
 ## Status
 
-Phase 1 is implemented, builds clean (`go build ./...`), and is fully unit-tested
-(`go test ./internal/lpm/`). Everything is gated behind `LPM_ENABLED=false` by
-default, so it is inert until switched on.
+All four phases plus the cross-cutting guard/drafter are implemented, build clean
+(`go build ./...`), pass `go vet`, and are fully unit-tested — including under the
+race detector (`go test -race ./internal/lpm/`). Everything is gated behind
+`LPM_ENABLED=false` (and per-feature flags) by default, so it is inert until
+switched on.

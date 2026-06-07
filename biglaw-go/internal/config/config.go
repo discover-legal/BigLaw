@@ -244,6 +244,14 @@ type LPMConfig struct {
 	RoutedFile     string   // append-only JSONL of email→matter routing decisions
 	RouteMinConf   float64  // confidence floor below which a routing is "unrouted"
 	AllowedDomains []string // recipient-domain allowlist for outbound drafts
+
+	// Phase 4 historical backfill (grinds old mail on cheap compute).
+	BackfillEnabled    bool
+	BackfillWindowDays int    // total history to cover
+	BackfillStepDays   int    // window size per step
+	BackfillMaxPerStep int    // page size per step
+	BackfillPauseMs    int    // rate-limit pause between steps
+	BackfillCursorFile string // resumable progress cursor
 }
 
 type ConnectorsConfig struct {
@@ -469,6 +477,13 @@ func Load() *Config {
 			RoutedFile:     env("LPM_ROUTED_FILE", "./data/routed-emails.jsonl"),
 			RouteMinConf:   envFloat("LPM_ROUTE_MIN_CONFIDENCE", 0.6),
 			AllowedDomains: envList("LPM_ALLOWED_DOMAINS", ""),
+
+			BackfillEnabled:    envBool("LPM_BACKFILL_ENABLED", false),
+			BackfillWindowDays: envInt("LPM_BACKFILL_WINDOW_DAYS", 365),
+			BackfillStepDays:   envInt("LPM_BACKFILL_STEP_DAYS", 7),
+			BackfillMaxPerStep: envInt("LPM_BACKFILL_MAX_PER_STEP", 100),
+			BackfillPauseMs:    envInt("LPM_BACKFILL_PAUSE_MS", 1000),
+			BackfillCursorFile: env("LPM_BACKFILL_CURSOR_FILE", "./data/backfill-cursor.json"),
 		},
 	}
 	return c
