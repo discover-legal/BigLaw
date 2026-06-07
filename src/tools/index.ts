@@ -137,7 +137,7 @@ const searchKnowledgeTool: ToolImpl = {
   },
   async execute(input, ctx) {
     return ctx.knowledge.search(input.query as string, {
-      topK: (input.top_k as number | undefined) ?? 6,
+      topK: Math.min((input.top_k as number | undefined) ?? 6, 50),
       jurisdiction: input.jurisdiction as string | undefined,
       documentType: input.document_type as string | undefined,
       ownerId: ctx.ownerId,
@@ -166,7 +166,7 @@ const queryMemoryTool: ToolImpl = {
     return ctx.memory.query(input.query as string, {
       taskId: ctx.taskId,
       agentId: input.agent_id as string | undefined,
-      topK: (input.top_k as number | undefined) ?? 6,
+      topK: Math.min((input.top_k as number | undefined) ?? 6, 50),
     });
   },
 };
@@ -197,7 +197,9 @@ const extractFromDocumentTool: ToolImpl = {
   },
   async execute(input, ctx) {
     const docId = input.doc_id as string;
-    const extractType = input.extract_type as string;
+    const ALLOWED_EXTRACT_TYPES = ["clauses", "parties", "dates", "obligations", "defined_terms", "amounts", "full_text"];
+    const extractType = String(input.extract_type ?? "full_text");
+    if (!ALLOWED_EXTRACT_TYPES.includes(extractType)) throw new Error(`Invalid extract_type: ${extractType}`);
 
     if (extractType === "full_text") {
       const text = await ctx.knowledge.getFullText(docId, ctx.ownerId);
@@ -241,7 +243,7 @@ const translateTool: ToolImpl = {
   async execute(input, _ctx) {
     const source = (input.source_language as string | undefined) ?? "auto-detect";
     const target = input.target_language as string;
-    const text = input.text as string;
+    const text = ((input.text as string) ?? "").slice(0, 50_000);
 
     const model = selectModel({ taskType: "translation" });
     const provider = getProvider(model);
@@ -288,7 +290,7 @@ const citationCheckTool: ToolImpl = {
     const quote = input.quote as string;
 
     // Try knowledge store first (doc ID)
-    const fullText = await ctx.knowledge.getFullText(source);
+    const fullText = await ctx.knowledge.getFullText(source, ctx.ownerId);
     if (fullText) {
       const verified = fullText.includes(quote);
       return {

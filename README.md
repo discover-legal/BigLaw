@@ -10,8 +10,207 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6.svg)](tsconfig.json)
 [![MCP](https://img.shields.io/badge/MCP-stdio%20server-E6B450.svg)](#using-from-claude-code)
 [![Vector DB](https://img.shields.io/badge/RuVector-native%20HNSW-7c3aed.svg)](src/agents/registry.ts)
+[![Status: Experimental](https://img.shields.io/badge/Status-Experimental-red.svg)](#-experimental--security-notice)
 
 </div>
+
+---
+
+## ⚠ Experimental — Security Notice
+
+**BigLaw is an experimental research project. It is not production-hardened software.**
+
+The goal of this project is to build the **most comprehensive open legal AI platform possible** — covering the widest breadth of legal workflows, integrations, agent types, and jurisdictions. Comprehensiveness of capability is the primary objective. Test coverage and security hardening, while taken seriously and continuously improved, are secondary to that goal.
+
+**What this means in practice:**
+
+- The platform handles credentials, client matter data, and privileged legal communications. Firms deploying it are responsible for their own threat model.
+- The codebase receives ongoing security sweeps and bug fixes, but has **not undergone a formal independent security audit**.
+- **Before deploying in any environment where real client data is involved, you must engage an independent security professional (pen tester, security engineer, or FDE — Formal Design/Deployment Expert) to review the deployment configuration and code.**
+- `AUTH_ENABLED=false` is the default for local development. **Never expose the API on a public or shared network without enabling authentication.**
+- API keys, session secrets, and OAuth credentials must be treated as production secrets regardless of environment.
+
+**Independent security review is not optional for production deployments. It is a prerequisite.**
+
+This notice does not diminish what BigLaw is — it is the most capable open legal AI stack available. It does mean you should not deploy it like a SaaS product without the due diligence that any complex, credential-holding, client-data-processing system requires.
+
+---
+
+## What BigLaw Is
+
+BigLaw is a cross between a **platform**, an **experiment**, and an **art project**.
+
+As a platform, it is the most comprehensive open legal AI stack that exists — spanning research,
+drafting, redlining, e-signatures, briefing, docketing, billing, and collaboration across a bench
+of 100+ agents in a structured multi-round debate architecture.
+
+As an experiment, it is an ongoing attempt to answer a genuine engineering question: how much of
+the $50,000–150,000 per-lawyer-per-year legal tech stack can be replicated with open models, open
+protocols, and open code? The answer so far is: most of it.
+
+As an art project, it is a provocation. The cost chart below is not a sales pitch. It is a
+statement about who gets access to tools and who doesn't, and what happens when that changes.
+It is deliberately maximalist, deliberately opinionated, and deliberately not finished.
+
+You are not buying a product. You are picking up a thing that is still being built and deciding
+what to do with it.
+
+---
+
+## Legal Notices and Disclaimers
+
+*Read these. They are not boilerplate. They describe real risks that apply to you.*
+
+### No Legal Advice
+
+**BigLaw does not provide legal advice. Nothing produced by this software — no output, finding,
+draft, analysis, summary, headnote, redline, briefing, or synthesis — constitutes legal advice,
+and none of it should be relied upon as such.**
+
+BigLaw is a software tool that uses large language models to assist with legal research and
+document tasks. LLMs hallucinate. They misstate case holdings. They miss recent developments.
+They confuse jurisdictions. They produce authoritative-sounding text that is factually wrong.
+The debate and verification protocols in this system reduce these errors but do not eliminate them.
+
+**Every output of this system requires review by a licensed attorney before it is used in any
+legal matter.** Relying on unreviewed AI output in client matters may constitute malpractice,
+regardless of how capable the underlying system appears.
+
+If you are not a licensed attorney and you are using this software to answer legal questions
+about your own situation: please consult a lawyer. This software is not a substitute.
+
+### No Attorney-Client Relationship
+
+Use of BigLaw does not create an attorney-client relationship of any kind — between you and
+Discover Legal, between you and any contributor to this project, or between you and any AI
+system operated through this software.
+
+> # ⚠ PRIVILEGE IS NOT GUARANTEED
+>
+> **Whether communications, outputs, or data processed through this system attract
+> legal professional privilege (attorney-client privilege, legal advice privilege,
+> litigation privilege, or equivalent) depends entirely on your jurisdiction, the
+> specific facts of your deployment, how the system is configured, who has access
+> to it, and how outputs are used.**
+>
+> **Do not assume privilege applies. It may not.**
+>
+> To structure a deployment that maximises privilege protection for your jurisdiction
+> — including network isolation, access controls, data residency, and workflow design —
+> **engage an independent forward deployed engineer before handling any privileged matter.**
+
+### Unauthorised Practice of Law
+
+Depending on your jurisdiction, using AI tools to perform certain legal tasks — drafting court
+documents, providing legal advice to third parties, representing parties in legal proceedings —
+may constitute the unauthorised practice of law if performed by a non-attorney. The fact that
+the work is AI-assisted does not change this analysis. Know your jurisdiction's rules.
+
+If you are a law firm deploying BigLaw, you remain responsible for supervising all AI-assisted
+work product under your professional responsibility obligations, including the duty of competence
+(understanding the technology), the duty of confidentiality (securing client data), and the duty
+of supervision (reviewing outputs before they leave the firm).
+
+### Confidentiality and Data Security
+
+**BigLaw processes whatever data you give it.** If you feed it client communications, privileged
+documents, personally identifiable information, health records, financial data, or anything else
+that is sensitive or regulated, that data will flow through your configured model provider and
+may be stored locally. Where that data goes depends entirely on how you have deployed the system.
+
+**BigLaw supports multiple inference backends — the data handling implications differ for each:**
+
+```mermaid
+flowchart LR
+    BL["BigLaw"]
+
+    BL -->|"default<br/>ANTHROPIC_API_KEY"| ANT["Anthropic API<br/><i>Haiku / Sonnet / Opus</i><br/>─────────────<br/>Data leaves infrastructure<br/>BAA: enterprise tier only<br/>Review DPA before use"]
+
+    BL -->|"OPENAI_API_KEY or<br/>AZURE_OPENAI_*"| OAI["OpenAI / Azure OpenAI<br/><i>GPT-4o etc.</i><br/>─────────────<br/>Data leaves infrastructure<br/>BAA: ChatGPT Ent / Azure only<br/>Azure has stronger DPA terms"]
+
+    BL -->|"OLLAMA_ENABLED=true<br/>LOCAL_INFERENCE_URL"| LOC["Local inference<br/><i>Ollama · LM Studio · vLLM</i><br/>─────────────<br/>Data stays on your hardware<br/>No BAA needed<br/>Air-gap capable"]
+
+    style LOC fill:#166534,color:#fff
+    style ANT fill:#1e3a5f,color:#fff
+    style OAI fill:#1e3a5f,color:#fff
+```
+
+- **Anthropic API (default)** — data is sent to Anthropic's servers subject to their data
+  processing terms and usage policies. Review these before using with client data.
+- **OpenAI / Azure OpenAI** — data is sent to OpenAI or Microsoft's servers subject to their
+  respective terms. Azure OpenAI offers enterprise data handling commitments that the standard
+  OpenAI API does not.
+- **Ollama / LM Studio / local inference** (`OLLAMA_ENABLED=true` or `LOCAL_INFERENCE_URL`) —
+  data never leaves your infrastructure. For air-gapped or maximally confidential deployments,
+  local inference is the only option that gives you complete data control.
+
+**Regardless of backend, data may also be:**
+- Stored in the local vector database (persists to disk at `./data/`)
+- Written to the audit log (JSONL, also on disk)
+- Included in prompts that are cached by a cloud API provider
+
+**Regulatory obligations depend on your jurisdiction and the nature of the data:**
+
+- **HIPAA (US)** — if you process protected health information, you need a Business Associate
+  Agreement (BAA) with your model provider. Anthropic offers BAAs on certain enterprise tiers
+  only. OpenAI offers BAAs on ChatGPT Enterprise and Azure OpenAI. Standard API tiers typically
+  do not include BAA coverage. If you cannot get a BAA, use local inference.
+- **GDPR (EU/EEA)** — processing personal data of EU residents requires a lawful basis and,
+  for cloud providers, appropriate Standard Contractual Clauses or equivalent transfer mechanisms.
+  Data residency matters. Check where your provider processes and stores data.
+- **CCPA / US state privacy laws** — obligations vary by state and the nature of the data.
+- **Bar association ethics rules** — most jurisdictions now have guidance on cloud-based legal
+  technology. Many require a reasonable investigation of the provider's security and privacy
+  practices before using the service with client data.
+
+**The bottom line: your data handling obligations depend on your jurisdiction, your client base,
+the sensitivity of the data, and which inference backend you use. There is no universal answer.
+Engage qualified legal counsel and an independent FDE to map your specific obligations before
+deploying with real client data.**
+
+### Deployment Liability
+
+**You deploy this software at your own risk.** Discover Legal and the contributors to this
+project provide it under the AGPL-3.0 licence, which explicitly disclaims all warranties,
+including fitness for a particular purpose and non-infringement.
+
+Specific risks that arise from misconfigured or insecure deployment include:
+
+- **Client data breach.** If the API is exposed without authentication (`AUTH_ENABLED=false`
+  on a network-accessible host), any client matter data ingested into the system is potentially
+  accessible to anyone who can reach the endpoint. This would constitute a data breach under
+  most applicable law and a serious professional responsibility violation.
+- **Credential exposure.** API keys, OAuth tokens, and session secrets stored in `.env` files
+  or accessible via a misconfigured server can be extracted and used to incur costs, access
+  third-party systems, or impersonate your firm.
+- **Prompt injection.** Malicious content in documents you ingest or queries you run through
+  the system could potentially manipulate agent outputs. The system includes defences against
+  this but they are not complete.
+- **Malpractice exposure.** Using AI-generated output without adequate review in a client matter
+  creates professional liability risk. This risk is yours, not ours.
+- **Regulatory exposure.** Depending on your jurisdiction and practice area, use of AI tools
+  in legal matters may trigger disclosure obligations to clients, adverse parties, or courts.
+  Some courts require disclosure of AI use in filings. Check your local rules.
+
+### Jurisdiction
+
+This software is designed to support legal work across multiple jurisdictions. It is not
+certified, approved, or validated for use in any jurisdiction. The agents, workflows, and
+outputs are not a substitute for jurisdiction-specific legal expertise.
+
+### Third-Party Services
+
+BigLaw integrates with numerous third-party services — Anthropic, Microsoft Graph, Google
+Workspace, Slack, Clio, CourtListener, Westlaw, Everlaw, Ironclad, DocuSign, and others.
+Your use of those services through this software is governed by their own terms. BigLaw is
+not affiliated with, endorsed by, or a certified partner of any of these services.
+
+### Summary
+
+You are using experimental software in one of the highest-stakes professional contexts that
+exists. The software is capable and the engineering is serious. It is also unaudited,
+incompletely tested, and built for comprehensiveness first. Use it with appropriate scepticism,
+appropriate oversight, and appropriate professional responsibility.
 
 ---
 
@@ -138,25 +337,56 @@ A real matter, mid-flight — the bench self-organising, then the cited result.
 
 ## Architecture
 
-```
-T0  Root Orchestrator (1)            issues RoundGoals each phase
-     │
-T1  Domain Managers (4)              research · analysis · drafting · review
-     │   ↓ DyTopo: Need/Offer cosine-match → directed communication graph
-T2  Epistemic agents (18)            reason within a practice area, in any jurisdiction
-                                     (contract · corporate · M&A · privacy · antitrust ·
-                                      employment · IP · tax · litigation · sanctions · ESG…)
-T2  Conceptual agents (8)            own a cross-system legal concept (materiality,
-                                     liability, enforceability, causation, good faith…)
-T2  Writing agents (13)              produce a specific document type
-     │   ↓ tool_use agentic loop (Wave 1: full loop; Wave 2: Haiku broadcast review)
-T3  Tool agents (6)                  web search · retrieval · extraction · translation
-                                     · citation check · e-signature
+```mermaid
+graph TD
+    T0["T0 · Root Orchestrator<br/><i>Opus — issues RoundGoals each phase</i>"]
+    T1R["Research Manager"]
+    T1A["Analysis Manager"]
+    T1D["Drafting Manager"]
+    T1C["Compliance Manager"]
+    T2E["Epistemic agents ×18<br/><i>contract · M&A · privacy · antitrust<br/>employment · IP · tax · litigation…</i>"]
+    T2C["Conceptual agents ×8<br/><i>materiality · liability · causation<br/>enforceability · good faith…</i>"]
+    T2W["Writing agents ×13<br/><i>brief · memo · redline · headnote<br/>precedent · NDA · opinion…</i>"]
+    T3["Tool agents ×6<br/><i>web search · retrieval · extraction<br/>translation · citation · e-sign</i>"]
+    WB[("Intra-round<br/>whiteboard")]
+    MEM[("Inter-round<br/>memory store")]
+    GATE["Human gate<br/><i>low-confidence findings</i>"]
+    SYN["Opus synthesis<br/><i>final output</i>"]
 
-50 jurisdiction-neutral native agents — plus an imported Lavern roster (118 in all).
+    T0 -->|RoundGoal| T1R & T1A & T1D & T1C
+    T1R & T1A & T1D & T1C -->|DyTopo Need/Offer match| T2E & T2C & T2W
+    T2E & T2C & T2W -->|tool_use agentic loop| T3
+    T2E & T2C & T2W -->|findings| WB
+    WB -->|CitationGate → Debate → Verify ×10| GATE
+    GATE -->|approved findings| MEM
+    MEM -->|context for next round| T1R & T1A & T1D & T1C
+    MEM --> SYN
 ```
 
 **Each DyTopo round:**
+
+```mermaid
+sequenceDiagram
+    participant O as Orchestrator
+    participant E as DyTopo Engine
+    participant A as Agents (T2)
+    participant P as Protocols
+    participant G as Human Gate
+    participant M as Memory
+
+    O->>E: RoundGoal
+    E->>A: Need/Offer descriptors (Haiku ~10 tokens each)
+    E->>E: cosine-match Needs → Offers<br/>build directed comm graph
+    E->>A: route messages along graph edges
+    A->>A: agentic loops with tools + memory context
+    A->>P: findings → CitationGate
+    P->>P: Debate (Opus)
+    P->>P: Verification (Haiku ×10)
+    P-->>G: low-confidence / challenged findings
+    G-->>P: approved / rejected
+    P->>M: round digest (Haiku synthesis)
+    M-->>O: inter-round context for next phase
+```
 
 1. Every agent emits a Need/Offer descriptor (Haiku, ~10 tokens)
 2. The engine cosine-matches Needs → Offers to build a sparse directed comm graph
@@ -226,18 +456,27 @@ POST /bots/slack/matter-link  { "matterNumber": "M-001", "channelId": "C0123ABCD
 **Client intelligence briefing** — Big Michael's briefing command launches a hub-and-spoke
 swarm that pulls from all connected systems in parallel (12 s per spoke, `Promise.allSettled`):
 
-| Spoke | What it pulls |
-|---|---|
-| Clio | Matters, contacts, time entries, notes |
-| iManage | Documents, matters |
-| Slack | Mentions of the client across all channels |
-| Microsoft Teams | Chat messages mentioning the client |
-| SharePoint | Files related to the client |
-| Google Drive / Box | Files and folders |
-| Graph Mail (O365) | Email threads |
-| Gmail | Email threads |
-| Knowledge store | Ingested documents + semantic search |
-| Internal | BigLaw tasks, health scores, time entries |
+```mermaid
+graph LR
+    CMD["@BigMichael briefing Acme Corp"]
+    HUB["Hub<br/><i>Sonnet synthesis</i>"]
+    OUT["Client briefing<br/><i>single Markdown doc</i>"]
+
+    CMD --> HUB
+
+    HUB <-->|parallel, 12s timeout| S1["Clio<br/><i>matters · contacts · notes</i>"]
+    HUB <-->|parallel, 12s timeout| S2["iManage<br/><i>documents · matters</i>"]
+    HUB <-->|parallel, 12s timeout| S3["Slack<br/><i>channel mentions</i>"]
+    HUB <-->|parallel, 12s timeout| S4["Teams chat<br/><i>message search</i>"]
+    HUB <-->|parallel, 12s timeout| S5["SharePoint<br/><i>file search</i>"]
+    HUB <-->|parallel, 12s timeout| S6["Google Drive / Box<br/><i>files · folders</i>"]
+    HUB <-->|parallel, 12s timeout| S7["Graph Mail<br/><i>O365 email threads</i>"]
+    HUB <-->|parallel, 12s timeout| S8["Gmail<br/><i>email threads</i>"]
+    HUB <-->|parallel, 12s timeout| S9["Knowledge store<br/><i>ingested docs · semantic search</i>"]
+    HUB <-->|parallel, 12s timeout| S10["Internal<br/><i>tasks · health · time entries</i>"]
+
+    HUB --> OUT
+```
 
 The hub Sonnet synthesises all spokes into a single Markdown briefing. The scattergun problem —
 client info spread across 10 mailboxes, 2 call notes, and 4 DM threads — solved in one command.

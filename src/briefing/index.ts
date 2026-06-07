@@ -46,6 +46,7 @@ import { resolveModelId } from "../providers/index.js";
 import { mcpCall } from "../tools/connectors.js";
 import { searchGraphMail, searchGmail } from "../email/client.js";
 import { searchSharePoint, searchTeamsMessages } from "../integrations/graph.js";
+import { sanitizePromptContent } from "../adapters/lavern.js";
 import type { Client, ClientMatter, Task, TimeEntry } from "../types.js";
 import type { KnowledgeStore } from "../knowledge/index.js";
 
@@ -302,8 +303,14 @@ export class BriefingEngine {
         ca: "https://ca.app.clio.com", au: "https://au.app.clio.com",
       }[Config.clio.region] ?? "https://app.clio.com";
 
+      // Use a dedicated MCP API key for Clio — never use the OAuth client secret as a bearer token.
+      const clioApiKey = process.env.CLIO_MCP_API_KEY ?? "";
+      if (!clioApiKey) {
+        logger.warn("BriefingEngine: CLIO_MCP_API_KEY is not set — Clio spoke will not authenticate. Set CLIO_MCP_API_KEY to a dedicated API key.");
+      }
+
       const matters = await withTimeout(
-        mcpCall(`${clioBase}/api/v4`, Config.clio.clientSecret,
+        mcpCall(`${clioBase}/api/v4`, clioApiKey,
           "list_matters", { clientNumber: client.clientNumber }),
       ) as Record<string, unknown>;
       if (Array.isArray(matters?.data)) {
@@ -318,7 +325,7 @@ export class BriefingEngine {
       }
 
       const activities = await withTimeout(
-        mcpCall(`${clioBase}/api/v4`, Config.clio.clientSecret,
+        mcpCall(`${clioBase}/api/v4`, clioApiKey,
           "list_activities", { clientNumber: client.clientNumber, limit: 20 }),
       ) as Record<string, unknown>;
       if (Array.isArray(activities?.data)) {
@@ -484,10 +491,13 @@ export class BriefingEngine {
       return { source: "email_graph", items: [], durationMs: 0 };
     }
 
+    const emailTimeout = <T>(p: Promise<T>): Promise<T> =>
+      Promise.race([p, new Promise<never>((_, r) => setTimeout(() => r(new Error("Email spoke timeout")), SPOKE_TIMEOUT_MS))]);
+
     // Both providers fire in parallel; partial failure is fine
     const [graphResults, gmailResults] = await Promise.allSettled([
-      graphEnabled ? searchGraphMail(client.name, { maxResults: 20, daysBack: 90 }) : Promise.resolve([]),
-      gmailEnabled ? searchGmail(client.name, { maxResults: 20, daysBack: 90 }) : Promise.resolve([]),
+      graphEnabled ? emailTimeout(searchGraphMail(client.name, { maxResults: 20, daysBack: 90 })) : Promise.resolve([]),
+      gmailEnabled ? emailTimeout(searchGmail(client.name, { maxResults: 20, daysBack: 90 })) : Promise.resolve([]),
     ]);
 
     const toItems = (msgs: import("../email/client.js").EmailMessage[], source: IntelSource): IntelItem[] =>
@@ -548,7 +558,10 @@ export class BriefingEngine {
     if (!Config.email.graph.enabled) return { source: "sharepoint", items: [], durationMs: 0 };
 
     try {
-      const files = await searchSharePoint(client.name, { maxResults: 15, daysBack: 90 });
+      const files = await Promise.race([
+        searchSharePoint(client.name, { maxResults: 15, daysBack: 90 }),
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error("SharePoint spoke timeout")), SPOKE_TIMEOUT_MS)),
+      ]);
       for (const f of files) {
         items.push({
           source: "sharepoint", category: "document",
@@ -572,7 +585,10 @@ export class BriefingEngine {
     if (!Config.email.graph.enabled) return { source: "teams_chat", items: [], durationMs: 0 };
 
     try {
-      const messages = await searchTeamsMessages(client.name, { maxResults: 15, daysBack: 60 });
+      const messages = await Promise.race([
+        searchTeamsMessages(client.name, { maxResults: 15, daysBack: 60 }),
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error("Teams chat spoke timeout")), SPOKE_TIMEOUT_MS)),
+      ]);
       for (const m of messages) {
         items.push({
           source: "teams_chat", category: "correspondence",
@@ -782,10 +798,14 @@ export class BriefingEngine {
   ): Promise<{ executiveSummary: string; document: string }> {
     const start = Date.now();
 
+    // Sanitize user-supplied fields before interpolating into the prompt
+    const safeNotes = sanitizePromptContent(client.notes ?? "").slice(0, 2000);
+    const safeIndustry = sanitizePromptContent(opts.industryContext ?? "");
+
     // Organise chalkboard items for the prompt
     const bySource = (src: IntelSource, limit = 8) =>
       chalkboard.bySource(src).slice(0, limit)
-        .map((i) => `  - [${i.category}${i.eventAt ? ` ${i.eventAt.slice(0, 10)}` : ""}] ${i.headline}`)
+        .map((i) => `  - [${i.category}${i.eventAt ? ` ${i.eventAt.slice(0, 10)}` : ""}] ${sanitizePromptContent(i.headline)}`)
         .join("\n") || "  (none)";
 
     // Email is merged across Graph + Gmail, sorted by date
@@ -798,7 +818,7 @@ export class BriefingEngine {
       return tb - ta;
     }).slice(0, 12);
     const emailBlock = emailItems.length > 0
-      ? emailItems.map((i) => `  - [${i.eventAt?.slice(0, 10) ?? "?"}] ${i.headline}`).join("\n")
+      ? emailItems.map((i) => `  - [${i.eventAt?.slice(0, 10) ?? "?"}] ${sanitizePromptContent(i.headline)}`).join("\n")
       : "  (not configured or no results)";
 
     const matterLines = matters
@@ -845,8 +865,8 @@ ${bySource("teams_chat", 5)}
 Knowledge Store:
 ${bySource("knowledge_store")}
 
-${client.notes ? `RELATIONSHIP NOTES:\n${client.notes}\n` : ""}
-${opts.industryContext ? `INDUSTRY CONTEXT:\n${opts.industryContext}\n` : ""}
+${safeNotes ? `RELATIONSHIP NOTES:\n${safeNotes}\n` : ""}
+${safeIndustry ? `INDUSTRY CONTEXT:\n${safeIndustry}\n` : ""}
 
 Write:
 1. A 2-sentence EXECUTIVE SUMMARY — the single most important thing the partner needs to know.

@@ -11,6 +11,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { Config } from "../config.js";
 import { logger } from "../logger.js";
 import { costStore, calcCostUsd } from "../cost/index.js";
+import { assertPublicHttpUrl } from "../settings/index.js";
 import type { Task, RegulationAlert } from "../types.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -147,10 +148,14 @@ export class RegPulseMonitor extends EventEmitter {
     //    invocations don't both slip through the cooldown check)
     this.lastChecked.set(cooldownKey, Date.now());
 
-    // 4. Search → filter → emit
-    const query = this.buildQuery(practiceArea, jurisdiction);
+    // 4. Sanitize practiceArea and jurisdiction before using in queries and prompts
+    const safePracticeArea = practiceArea.replace(/[^A-Za-z0-9 ,./()-]/g, " ").slice(0, 100);
+    const safeJurisdiction = jurisdiction.replace(/[^A-Za-z0-9 ,./()-]/g, " ").slice(0, 50);
+
+    // 5. Search → filter → emit
+    const query = this.buildQuery(safePracticeArea, safeJurisdiction);
     const results = await this.searchTavily(query);
-    const alerts = await this.filterRelevant(results, practiceArea, jurisdiction, task.matterNumber);
+    const alerts = await this.filterRelevant(results, safePracticeArea, safeJurisdiction, task.matterNumber);
 
     for (const alert of alerts) {
       this.emit("alert", alert);
@@ -234,6 +239,14 @@ export class RegPulseMonitor extends EventEmitter {
     const alerts: RegulationAlert[] = [];
 
     for (const result of results) {
+      // Validate URL from Tavily to prevent SSRF via stored/forwarded URLs
+      let safeUrl = result.url ?? "";
+      try {
+        assertPublicHttpUrl(safeUrl, "Tavily result URL");
+      } catch {
+        safeUrl = ""; // discard unsafe URLs
+      }
+
       // Sanitize external content before prompt injection
       const safeTitle = sanitizeForHaiku(result.title).slice(0, 200);
       const safeContent = sanitizeForHaiku(result.content).slice(0, 800);
@@ -294,7 +307,7 @@ export class RegPulseMonitor extends EventEmitter {
           practiceArea,
           jurisdiction,
           headline: safeTitle,
-          url: result.url,
+          url: safeUrl,
           summary: parsed.reason ?? "Relevant regulatory development detected.",
           detectedAt: new Date().toISOString(),
           source: "tavily",

@@ -25,6 +25,13 @@ import type { ToolImpl } from "./index.js";
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), "../../scripts/pdf_tools.py");
 
+// ─── Operation allowlist ──────────────────────────────────────────────────────
+const ALLOWED_OPERATIONS = new Set(["extract_text", "extract_tables", "generate", "ocr"]);
+
+// ─── Subprocess limits ────────────────────────────────────────────────────────
+const PYTHON_TIMEOUT_MS = 120_000;       // 2 minutes
+const MAX_STDOUT_BYTES  = 50 * 1024 * 1024; // 50 MB
+
 // ─── Path safety ──────────────────────────────────────────────────────────────
 // The read tools accept a caller-supplied file path. Without a guard, an agent
 // induced via prompt injection could read arbitrary files (.env, key material,
@@ -55,16 +62,39 @@ export function assertSafeReadPath(p: unknown): string {
 // ─── Shared python runner ─────────────────────────────────────────────────────
 
 async function runPython(operation: string, args: unknown): Promise<unknown> {
+  if (!ALLOWED_OPERATIONS.has(operation)) {
+    throw new Error(`Disallowed PDF operation: ${operation}`);
+  }
   return new Promise((resolve, reject) => {
     const python = Config.pdf.pythonBin;
     const child = spawn(python, [SCRIPT, operation, JSON.stringify(args)]);
 
     let stdout = "";
     let stderr = "";
-    child.stdout.on("data", (d) => { stdout += d; });
-    child.stderr.on("data", (d) => { stderr += d; });
+    let stdoutBytes = 0;
+    let killed = false;
+
+    const timer = setTimeout(() => {
+      killed = true;
+      child.kill("SIGKILL");
+      reject(new Error(`pdf_tools.py timed out after ${PYTHON_TIMEOUT_MS / 1000}s`));
+    }, PYTHON_TIMEOUT_MS);
+
+    child.stdout.on("data", (d: Buffer) => {
+      stdoutBytes += d.length;
+      if (stdoutBytes > MAX_STDOUT_BYTES) {
+        killed = true;
+        child.kill("SIGKILL");
+        reject(new Error("pdf_tools.py stdout exceeded maximum size"));
+        return;
+      }
+      stdout += d;
+    });
+    child.stderr.on("data", (d: Buffer) => { stderr += String(d).slice(0, 2000); });
 
     child.on("close", (code) => {
+      clearTimeout(timer);
+      if (killed) return; // already rejected
       if (code !== 0) {
         logger.error("pdf_tools.py exited with error", { operation, code, stderr: stderr.slice(0, 500) });
         try {
@@ -82,6 +112,7 @@ async function runPython(operation: string, args: unknown): Promise<unknown> {
     });
 
     child.on("error", (err) => {
+      clearTimeout(timer);
       reject(new Error(`Failed to spawn ${python}: ${err.message}. Is Python 3 installed?`));
     });
   });
@@ -115,9 +146,13 @@ export const pdfExtractTextTool: ToolImpl = {
     },
   },
   async execute(input, _ctx) {
+    const pages = input.pages ? String(input.pages) : undefined;
+    if (pages && !/^(\d+(-\d+)?|all)$/.test(pages)) {
+      throw new Error(`Invalid pages format: ${pages}. Use format like '1', '1-5', or 'all'.`);
+    }
     return runPython("extract_text", {
       path: assertSafeReadPath(input.path),
-      pages: input.pages,
+      pages,
     });
   },
 };
@@ -152,10 +187,17 @@ export const pdfExtractTablesTool: ToolImpl = {
     },
   },
   async execute(input, _ctx) {
+    const pages = input.pages ? String(input.pages) : "all";
+    if (pages !== "all" && !/^(\d+(-\d+)?|all)$/.test(pages)) {
+      throw new Error(`Invalid pages format: ${pages}. Use format like '1', '1-5', or 'all'.`);
+    }
+    const flavor = ["lattice", "stream"].includes(String(input.flavor ?? "lattice"))
+      ? String(input.flavor ?? "lattice")
+      : "lattice";
     return runPython("extract_tables", {
       path: assertSafeReadPath(input.path),
-      pages: input.pages ?? "all",
-      flavor: input.flavor ?? "lattice",
+      pages,
+      flavor,
     });
   },
 };
@@ -247,11 +289,16 @@ export const pdfOcrTool: ToolImpl = {
     // Tesseract lang codes are lowercase alpha + optional "+"-joined codes (e.g. "eng+fra").
     // Reject anything that doesn't match to prevent unexpected values reaching the binary.
     const lang = /^[a-z]{2,8}(\+[a-z]{2,8})*$/.test(rawLang) ? rawLang : "eng";
+    const pages = input.pages ? String(input.pages) : undefined;
+    if (pages && !/^(\d+(-\d+)?|all)$/.test(pages)) {
+      throw new Error(`Invalid pages format: ${pages}. Use format like '1', '1-5', or 'all'.`);
+    }
+    const dpi = Math.min(600, Math.max(72, Number(input.dpi ?? 300)));
     return runPython("ocr", {
       path: assertSafeReadPath(input.path),
       lang,
-      pages: input.pages,
-      dpi: input.dpi ?? 300,
+      pages,
+      dpi,
     });
   },
 };

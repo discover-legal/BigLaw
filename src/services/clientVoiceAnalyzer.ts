@@ -16,6 +16,18 @@ import type { ClientVoiceGuide } from "../types.js";
 
 const HAIKU_MODEL = "claude-haiku-4-5-20251001";
 
+function sanitizeForLLM(s: string): string {
+  return s
+    .replace(/\bFINDING:/gi, "[FINDING:]")
+    .replace(/\bEND_FINDING\b/gi, "[END_FINDING]")
+    .replace(/\bNO_FINDINGS\b/gi, "[NO_FINDINGS]")
+    .replace(/\bNO_CHALLENGE\b/gi, "[NO_CHALLENGE]")
+    .replace(/\bCHALLENGE:/gi, "[CHALLENGE:]")
+    .replace(/\bRESOLUTION:/gi, "[RESOLUTION:]")
+    .replace(/\x00/g, "")
+    .trim();
+}
+
 export async function analyzeClientVoice(
   samples: string[],
   clientId?: string,
@@ -26,7 +38,7 @@ export async function analyzeClientVoice(
 and what they expect from their law firm.
 
 Samples:
-${sliced.map((s, i) => `--- Sample ${i + 1} ---\n${s.slice(0, 800)}`).join("\n\n")}
+${sliced.map((s, i) => `--- Sample ${i + 1} ---\n${sanitizeForLLM(s.slice(0, 800))}`).join("\n\n")}
 
 Respond as JSON only:
 {
@@ -79,14 +91,14 @@ Respond as JSON only:
   const guide: ClientVoiceGuide = {
     generatedAt: new Date().toISOString(),
     sampleCount: sliced.length,
-    preferredFormality: String(parsed.preferredFormality ?? "formal").trim(),
-    communicationStyle: String(parsed.communicationStyle ?? "").trim(),
-    terminologyPreferences: String(parsed.terminologyPreferences ?? "").trim(),
-    reportingPreferences: String(parsed.reportingPreferences ?? "").trim(),
+    preferredFormality: String(parsed.preferredFormality ?? "formal").trim().slice(0, 200),
+    communicationStyle: String(parsed.communicationStyle ?? "").trim().slice(0, 500),
+    terminologyPreferences: String(parsed.terminologyPreferences ?? "").trim().slice(0, 300),
+    reportingPreferences: String(parsed.reportingPreferences ?? "").trim().slice(0, 300),
     signaturePatterns: Array.isArray(parsed.signaturePatterns)
-      ? (parsed.signaturePatterns as unknown[]).map(String).filter(Boolean)
+      ? (parsed.signaturePatterns as unknown[]).map(String).filter(Boolean).map(s => s.slice(0, 200)).slice(0, 5)
       : [],
-    injectionSnippet: String(parsed.injectionSnippet ?? "").trim(),
+    injectionSnippet: String(parsed.injectionSnippet ?? "").trim().slice(0, 1000),
   };
 
   logger.info("Client voice guide generated", { clientId, sampleCount: sliced.length });

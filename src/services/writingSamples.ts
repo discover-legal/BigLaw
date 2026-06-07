@@ -56,8 +56,8 @@ function splitIntoParagraphs(text: string): string[] {
 function extractFromDocx(buf: Buffer): string[] {
   try {
     const files = readZip(buf);
-    // Try full path then basename fallback
-    const xmlBuf = files.get("document.xml") ?? files.get("word/document.xml");
+    // readZip stores entries by basename only, so look up by basename
+    const xmlBuf = files.get("document.xml");
     if (!xmlBuf || !xmlBuf.length) return [];
     const xml = xmlBuf.toString("utf8");
     // Insert newlines at paragraph boundaries before stripping tags

@@ -23,6 +23,7 @@ import { selectModel } from "../routing/model.js";
 import { getProvider, resolveModelId, isOllamaModel, isLocalModel } from "../providers/index.js";
 import { auditLogger, ACTOR_SYSTEM } from "../audit/index.js";
 import { costStore, calcCostUsd, calcWattHours } from "../cost/index.js";
+import { sanitizePromptContent } from "../adapters/lavern.js";
 import type {
   Finding,
   Citation,
@@ -138,13 +139,18 @@ export async function runDebate(finding: Finding, challengerAgentId: string, tas
   challenge.resolution = resolution.reasoning;
   challenge.resolvedAt = new Date();
 
-  if (resolution.verdict === "MODIFIED" && resolution.modifiedContent) {
-    finding.content = resolution.modifiedContent;
+  if (resolution.parseError) {
+    logger.warn("Debate resolution parse error — leaving finding unresolved", { findingId: finding.id });
+    finding.resolved = false;
+  } else if (resolution.verdict === "MODIFIED" && resolution.modifiedContent) {
+    finding.content = sanitizePromptContent(resolution.modifiedContent);
+    finding.resolved = true;
   } else if (resolution.verdict === "OVERTURNED") {
     finding.confidence = Math.max(0, finding.confidence - 0.3);
+    finding.resolved = true;
+  } else {
+    finding.resolved = true;
   }
-
-  finding.resolved = true;
   logger.info("Debate resolved", { findingId: finding.id, verdict: resolution.verdict });
   auditLogger.write({ event: "debate.resolved", actorId: ACTOR_SYSTEM, data: { findingId: finding.id, verdict: resolution.verdict } });
 
@@ -167,7 +173,7 @@ const VERIFICATION_CHECKS = [
 ];
 
 export async function runVerificationPipeline(finding: Finding, taskId?: string): Promise<VerificationResult> {
-  const passes = Config.debate.verificationPasses;
+  const passes = Math.max(1, Config.debate.verificationPasses);
   const checksToRun = VERIFICATION_CHECKS.slice(0, passes);
 
   const verifyModel = selectModel({ taskType: "extraction" }); // Haiku — fast, many parallel calls
@@ -278,7 +284,7 @@ async function callModel(
     estimatedWh: isLocal ? calcWattHours(Config.local.inferenceWatts, response.durationMs) : null,
     estimatedWatts: isLocal ? Config.local.inferenceWatts : null,
     durationMs: response.durationMs,
-    context: maxTokens <= 600 && !opts?.thinking ? "protocol_verify" : "protocol_debate",
+    context: maxTokens < 600 && !opts?.thinking ? "protocol_verify" : "protocol_debate",
     taskId: opts?.taskId,
   });
   const block = response.content.find((b) => b.type === "text");
@@ -307,13 +313,19 @@ function parseResolution(text: string): {
   verdict: "UPHELD" | "MODIFIED" | "OVERTURNED";
   reasoning: string;
   modifiedContent?: string;
+  parseError?: boolean;
 } {
   const verdictMatch = text.match(/RESOLUTION:\s*(UPHELD|MODIFIED|OVERTURNED)/i);
   const reasoningMatch = text.match(/REASONING:\s*([\s\S]+?)(?=MODIFIED_CONTENT:|$)/i);
   const modifiedMatch = text.match(/MODIFIED_CONTENT:\s*([\s\S]+)/i);
 
+  if (!verdictMatch) {
+    logger.warn("parseResolution: no RESOLUTION keyword found in resolver output");
+    return { verdict: "UPHELD" as const, reasoning: "Parse error - no verdict found", parseError: true };
+  }
+
   return {
-    verdict: (verdictMatch?.[1]?.toUpperCase() as "UPHELD" | "MODIFIED" | "OVERTURNED") ?? "UPHELD",
+    verdict: verdictMatch[1].toUpperCase() as "UPHELD" | "MODIFIED" | "OVERTURNED",
     reasoning: reasoningMatch?.[1]?.trim() ?? "",
     modifiedContent: modifiedMatch?.[1]?.trim() || undefined,
   };

@@ -24,6 +24,7 @@ import { EventEmitter } from "events";
 import { createHash } from "crypto";
 import { appendFile, readFile } from "fs/promises";
 import { Config } from "../config.js";
+import { logger } from "../logger.js";
 
 // ─── Actor constants ──────────────────────────────────────────────────────────
 
@@ -149,6 +150,20 @@ export interface AuditSink {
   flush(): Promise<void>;
 }
 
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function sanitizeAuditData(data: Record<string, unknown>): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(data)) {
+    if (typeof v === "string" && v.length > 500) {
+      result[k] = v.slice(0, 500) + "...[truncated]";
+    } else {
+      result[k] = v;
+    }
+  }
+  return result;
+}
+
 // ─── AuditLogger ─────────────────────────────────────────────────────────────
 
 export class AuditLogger {
@@ -157,6 +172,7 @@ export class AuditLogger {
   private readonly emitter = new EventEmitter();
   private readonly sinks: AuditSink[] = [];
   private lastHash = "genesis";
+  private writeChain: Promise<void> = Promise.resolve();
 
   /** Register an external sink. Call before first write(). */
   registerSink(sink: AuditSink): void {
@@ -173,6 +189,7 @@ export class AuditLogger {
       ts: new Date().toISOString(),
       prevHash: this.lastHash,
       ...partial,
+      data: sanitizeAuditData(partial.data ?? {}),
     };
 
     // Advance the hash chain
@@ -185,9 +202,14 @@ export class AuditLogger {
     // Live event stream
     this.emitter.emit("entry", entry);
 
-    // Async JSONL disk write — errors swallowed intentionally
+    // Serialized JSONL disk write — chained to preserve hash-chain ordering
     if (Config.audit.enabled) {
-      appendFile(Config.audit.logFile, JSON.stringify(entry) + "\n").catch(() => undefined);
+      this.writeChain = this.writeChain.then(async () => {
+        const line = JSON.stringify(entry) + "\n";
+        await appendFile(Config.audit.logFile, line, "utf8");
+      }).catch((err) => {
+        logger.error("Audit log write failed", { error: (err as Error).message });
+      });
     }
 
     // Forward to registered sinks (fire-and-forget; each sink handles its own errors)

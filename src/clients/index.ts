@@ -152,6 +152,9 @@ export class ClientStore {
     budgetUsd: number,
     thresholds?: number[],
   ): ClientMatter | undefined {
+    if (!Number.isFinite(budgetUsd) || budgetUsd <= 0) {
+      throw new Error(`Invalid budget: ${budgetUsd} — must be a positive finite number`);
+    }
     const client = this.clients.find((c) => c.id === clientId);
     if (!client) return undefined;
     const matter = client.matters.find((m) => m.matterNumber === matterNumber);
@@ -172,7 +175,7 @@ export class ClientStore {
     for (const c of this.clients) {
       for (const adv of c.adversaries) {
         const advLower = adv.toLowerCase();
-        if (!advLower) continue;
+        if (!advLower || advLower.length < 3) continue;
         if (advLower.includes(name) || name.includes(advLower)) {
           return {
             hasConflict: true,
@@ -181,10 +184,6 @@ export class ClientStore {
             matchedAdversary: adv,
           };
         }
-      }
-      // Also check if an existing client's name matches a known adversary the new client might have
-      if (c.name.toLowerCase().includes(name) || name.includes(c.name.toLowerCase())) {
-        // Same client — no conflict
       }
     }
     return { hasConflict: false };

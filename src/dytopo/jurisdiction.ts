@@ -22,7 +22,7 @@ export function jurisdictionMatch(agent: AgentDefinition, taskJurisdiction?: str
   if (!taskJurisdiction) return true;
   const tj = taskJurisdiction.toUpperCase();
   return agent.jurisdictions.some((j) => {
-    const aj = j.toUpperCase();
+    const aj = j.trim().toUpperCase();
     return tj === aj || tj.startsWith(aj + "-");
   });
 }

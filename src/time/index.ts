@@ -67,6 +67,11 @@ export class TimeStore {
   open(
     entry: Omit<TimeEntry, "id" | "endedAt" | "durationMs" | "billingUnits">,
   ): TimeEntry {
+    if (entry.billingRate !== undefined) {
+      if (!Number.isFinite(entry.billingRate) || entry.billingRate < 0) {
+        throw new Error(`Invalid billingRate: ${entry.billingRate} — must be a non-negative finite number`);
+      }
+    }
     const newEntry: TimeEntry = {
       ...entry,
       id: randomUUID(),
@@ -94,7 +99,7 @@ export class TimeStore {
     if (!entry) return undefined;
     const endedAt = new Date();
     entry.endedAt = endedAt;
-    entry.durationMs = endedAt.getTime() - entry.startedAt.getTime();
+    entry.durationMs = Math.max(0, endedAt.getTime() - entry.startedAt.getTime());
     entry.billingUnits = Math.ceil(entry.durationMs / SIX_MIN_MS);
     if (entry.billingRate) {
       entry.billingAmountUsd = parseFloat((entry.billingUnits * 0.1 * entry.billingRate).toFixed(4));
@@ -251,7 +256,13 @@ function matchesFilter(entry: TimeEntry, filter?: TimeFilter): boolean {
   if (filter.taskId && entry.taskId !== filter.taskId) return false;
   if (filter.matterNumber && entry.matterNumber !== filter.matterNumber) return false;
   if (filter.clientNumber && entry.clientNumber !== filter.clientNumber) return false;
-  if (filter.from && entry.startedAt < filter.from) return false;
-  if (filter.to && entry.startedAt > filter.to) return false;
+  if (filter.from) {
+    if (isNaN(filter.from.getTime())) return false; // skip entries if filter date is invalid
+    if (entry.startedAt < filter.from) return false;
+  }
+  if (filter.to) {
+    if (isNaN(filter.to.getTime())) return false;
+    if (entry.startedAt > filter.to) return false;
+  }
   return true;
 }

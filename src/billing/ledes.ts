@@ -25,16 +25,21 @@ function fmt2(n: number): string {
 }
 
 function sanitizeField(s: string): string {
-  // Strip pipe (field delimiter) and CRLF/LF (row delimiter) to prevent injection.
-  return s.replace(/\|/g, " ").replace(/[\r\n]/g, " ").slice(0, 200);
+  // Strip all control characters and pipe (field delimiter) to prevent injection.
+  return String(s ?? "")
+    .replace(/[\x00-\x1F\x7F]/g, " ")
+    .replace(/\|/g, " ")
+    .trim();
 }
 
 export function exportLedes1998B(entries: TimeEntry[], opts: LedesOptions): string {
   const today = toLedesDate(new Date());
 
-  const invoiceTotal = entries.reduce((sum, e) => sum + (e.billingAmountUsd ?? 0), 0);
+  const validEntries = entries.filter(e => e.billingUnits && e.billingUnits > 0 && e.endedAt);
 
-  const dates = entries
+  const invoiceTotal = fmt2(validEntries.reduce((s, e) => s + (e.billingAmountUsd ?? 0), 0));
+
+  const dates = validEntries
     .flatMap((e) => [e.startedAt, e.endedAt])
     .filter((d): d is Date => d != null);
   const billingStart = dates.length > 0 ? toLedesDate(new Date(Math.min(...dates.map((d) => d.getTime())))) : today;
@@ -51,7 +56,7 @@ export function exportLedes1998B(entries: TimeEntry[], opts: LedesOptions): stri
 
   const invoiceNum = sanitizeField(opts.invoiceNumber);
 
-  const rows = entries.map((e, i) => {
+  const rows = validEntries.map((e, i) => {
     const units = fmt2(e.billingUnits * 0.1);
     const rate  = fmt2(e.billingRate ?? 0);
     const billed = fmt2(e.billingAmountUsd ?? 0);
@@ -62,7 +67,7 @@ export function exportLedes1998B(entries: TimeEntry[], opts: LedesOptions): stri
 
     return (
       `${today}|${invoiceNum}|${e.clientNumber ?? ""}|${e.matterNumber ?? ""}|` +
-      `${fmt2(invoiceTotal)}|${billingStart}|${billingEnd}||${i + 1}|F|` +
+      `${invoiceTotal}|${billingStart}|${billingEnd}||${i + 1}|F|` +
       `${units}|${rate}|${billed}|${desc}|${e.utbmsTaskCode ?? ""}||` +
       `${e.utbmsActivityCode ?? ""}|${tkId}|${tkName}|||` +
       `|${tkClass}[]`

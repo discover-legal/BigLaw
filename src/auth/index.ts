@@ -26,6 +26,7 @@ import { readFile, writeFile, rename } from "fs/promises";
 import { Config } from "../config.js";
 import { logger } from "../logger.js";
 import type { LawyerProfile, SessionUser, Task, ToneProfile, UserMode } from "../types.js";
+import type { FastifyRequest } from "fastify";
 
 /** Derive the effective mode from role + stored mode preference. */
 export function resolveMode(role: "lawyer" | "partner", storedMode?: UserMode): UserMode {
@@ -46,6 +47,20 @@ export const LOCAL_PARTNER: SessionUser = {
 
 export const isPartner = (user: SessionUser | null): boolean => user?.role === "partner";
 
+/**
+ * Resolve the principal for a Fastify request.
+ * Auth disabled (local dev) → LOCAL_PARTNER who sees everything.
+ * Auth enabled → read the signed session cookie via readSessionCookie.
+ * Uses a dynamic import to avoid a circular dependency with oauth.ts.
+ */
+export async function getUser(req: FastifyRequest): Promise<SessionUser | null> {
+  if (!Config.auth.enabled) return LOCAL_PARTNER;
+  // Dynamic import to break the potential circular-dep chain (oauth.ts imports
+  // resolveMode from this file; this file imports readSessionCookie from oauth.ts).
+  const { readSessionCookie } = await import("./oauth.js");
+  return readSessionCookie(req);
+}
+
 /** Can this principal view this matter? */
 export function canViewTask(user: SessionUser | null, task: Pick<Task, "assignedLawyerIds">): boolean {
   if (!user) return false;
@@ -65,6 +80,7 @@ export function filterVisible<T extends Pick<Task, "assignedLawyerIds">>(user: S
 export class ProfileStore {
   private readonly path = Config.persistence.profilesFile;
   private profiles: LawyerProfile[] = [];
+  private writeChain: Promise<void> = Promise.resolve();
 
   async init(): Promise<void> {
     try {
@@ -97,6 +113,9 @@ export class ProfileStore {
     const name = (input.name || "").trim().slice(0, 200);
     const email = (input.email || "").trim().slice(0, 254);
     if (!name || !email) throw new Error("name and email are required");
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) {
+      throw new Error("Invalid email address format");
+    }
     if (this.getByEmail(email)) throw new Error(`A profile with email ${email} already exists`);
     const role: "lawyer" | "partner" = input.role === "partner" ? "partner" : "lawyer";
     const profile: LawyerProfile = {
@@ -169,7 +188,14 @@ export class ProfileStore {
     return true;
   }
 
-  private async persist(): Promise<void> {
+  private persist(): Promise<void> {
+    this.writeChain = this.writeChain
+      .then(() => this.doPersist())
+      .catch((err) => { logger.warn("Profile persist failed", { error: (err as Error).message }); });
+    return this.writeChain;
+  }
+
+  private async doPersist(): Promise<void> {
     // Write to a temp file then rename so a crash mid-write never leaves a
     // partially-written profiles file (rename is atomic on POSIX filesystems).
     const tmp = `${this.path}.tmp`;

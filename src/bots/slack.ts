@@ -33,6 +33,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { Config } from "../config.js";
 import { logger } from "../logger.js";
 import { dispatch } from "./dispatcher.js";
+import { isPartner, getUser } from "../auth/index.js";
 import type { Orchestrator } from "../orchestrator.js";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 
@@ -201,6 +202,7 @@ export function registerSlackBotRoutes(app: FastifyInstance, orch: Orchestrator)
     reply.status(200).send({ ok: true });
 
     // Dispatch in background
+    const ASYNC_TIMEOUT_MS = 300_000;
     setImmediate(async () => {
       try {
         const response = await dispatch(
@@ -211,10 +213,14 @@ export function registerSlackBotRoutes(app: FastifyInstance, orch: Orchestrator)
 
         if (response.asyncWork) {
           try {
-            const result = await response.asyncWork();
+            const result = await Promise.race([
+              response.asyncWork(),
+              new Promise<never>((_, rej) => setTimeout(() => rej(new Error("Async work timeout")), ASYNC_TIMEOUT_MS)),
+            ]);
             await postToSlackChannel(channelId, result, { threadTs });
           } catch (err) {
-            await postToSlackChannel(channelId, `Error: ${(err as Error).message}`, { threadTs });
+            logger.error("Slack async work failed", { error: (err as Error).message });
+            await postToSlackChannel(channelId, "Task processing failed — please retry or contact support.", { threadTs });
           }
         }
       } catch (err) {
@@ -225,6 +231,9 @@ export function registerSlackBotRoutes(app: FastifyInstance, orch: Orchestrator)
 
   // ── Internal: post to a channel ───────────────────────────────────────────
   app.post("/bots/slack/notify", async (req: FastifyRequest, reply) => {
+    const user = await getUser(req);
+    if (!isPartner(user)) return reply.status(403).send({ error: "Partner role required" });
+
     const { matterNumber, channelId, text, threadTs } = req.body as {
       matterNumber?: string; channelId?: string; text: string; threadTs?: string;
     };
@@ -241,6 +250,9 @@ export function registerSlackBotRoutes(app: FastifyInstance, orch: Orchestrator)
 
   // ── Matter → channel link management ─────────────────────────────────────
   app.post("/bots/slack/matter-link", async (req: FastifyRequest, reply) => {
+    const user = await getUser(req);
+    if (!isPartner(user)) return reply.status(403).send({ error: "Partner role required" });
+
     const { matterNumber, channelId, channelName } = req.body as SlackMatterLink;
     if (!matterNumber || !channelId) {
       return reply.status(400).send({ error: "matterNumber and channelId required" });
@@ -251,6 +263,9 @@ export function registerSlackBotRoutes(app: FastifyInstance, orch: Orchestrator)
   });
 
   app.get("/bots/slack/matter-link/:matterNumber", async (req: FastifyRequest, reply) => {
+    const user = await getUser(req);
+    if (!isPartner(user)) return reply.status(403).send({ error: "Partner role required" });
+
     const { matterNumber } = req.params as { matterNumber: string };
     const link = matterLinks.get(matterNumber);
     if (!link) return reply.status(404).send({ error: "No Slack channel linked to this matter" });
@@ -258,7 +273,11 @@ export function registerSlackBotRoutes(app: FastifyInstance, orch: Orchestrator)
   });
 
   app.delete("/bots/slack/matter-link/:matterNumber", async (req: FastifyRequest, reply) => {
+    const user = await getUser(req);
+    if (!isPartner(user)) return reply.status(403).send({ error: "Partner role required" });
+
     const { matterNumber } = req.params as { matterNumber: string };
+    if (!matterLinks.has(matterNumber)) return reply.status(404).send({ error: "No Slack channel linked to this matter" });
     matterLinks.delete(matterNumber);
     return { ok: true };
   });

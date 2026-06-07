@@ -29,11 +29,13 @@ export class BudgetMonitor extends EventEmitter {
     const burnPct = burnUsd / matter.budgetUsd;
 
     const thresholds = matter.budgetAlertThresholds ?? [0.5, 0.8, 1.0];
-    const alreadyTriggered = new Set(matter.budgetAlertsTriggered ?? []);
+    const normalize = (n: number) => Math.round(n * 1e6) / 1e6;
+    const alreadyTriggered = new Set((matter.budgetAlertsTriggered ?? []).map(normalize));
 
     for (const threshold of thresholds) {
-      if (burnPct >= threshold && !alreadyTriggered.has(threshold)) {
-        alreadyTriggered.add(threshold);
+      const tNorm = normalize(threshold);
+      if (burnPct >= threshold && !alreadyTriggered.has(tNorm)) {
+        alreadyTriggered.add(tNorm);
         const alert: BudgetAlert = {
           matterNumber,
           clientNumber: client.clientNumber,

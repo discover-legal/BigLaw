@@ -30,7 +30,8 @@ export interface BudgetPrediction {
   spentBillingUnits: number;
   estimatedTotalUsd: number;
   estimatedRemainingUsd: number;
-  completionPct: number;       // 0–100, current spend / predicted total
+  completionPct: number;       // 0–200, current spend / predicted total (>100 = over budget)
+  overBudget: boolean;         // true when spentUsd exceeds estimatedTotalUsd
   confidence: "high" | "medium" | "low" | "insufficient_data";
   comparableMatterCount: number;
   medianFinalCost: number;
@@ -132,14 +133,16 @@ export class BudgetPredictor {
     // 7–8. completionPct and remaining
     let completionPct: number;
     let estimatedRemainingUsd: number;
+    let overBudget = false;
     if (estimatedTotalUsd === 0) {
       // Division by zero guard — return a low-confidence prediction with zeroed estimates
       logger.warn("BudgetPredictor: estimatedTotalUsd is zero, insufficient comparable data", { matterNumber });
       completionPct = 0;
       estimatedRemainingUsd = 0;
     } else {
-      completionPct = Math.min(99, (spentUsd / estimatedTotalUsd) * 100);
+      completionPct = Math.min(200, (spentUsd / estimatedTotalUsd) * 100);
       estimatedRemainingUsd = Math.max(0, estimatedTotalUsd - spentUsd);
+      overBudget = spentUsd > estimatedTotalUsd;
     }
 
     return {
@@ -150,6 +153,7 @@ export class BudgetPredictor {
       estimatedTotalUsd: parseFloat(estimatedTotalUsd.toFixed(2)),
       estimatedRemainingUsd: parseFloat(estimatedRemainingUsd.toFixed(2)),
       completionPct: parseFloat(completionPct.toFixed(2)),
+      overBudget,
       confidence,
       comparableMatterCount: count,
       medianFinalCost: parseFloat(medianFinalCost.toFixed(2)),

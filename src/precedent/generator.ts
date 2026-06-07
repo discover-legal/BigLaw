@@ -32,6 +32,7 @@ import { Config } from "../config.js";
 import { logger } from "../logger.js";
 import { costStore, calcCostUsd } from "../cost/index.js";
 import { resolveModelId } from "../providers/index.js";
+import { sanitizePromptContent } from "../adapters/lavern.js";
 import type { PlaybookStore } from "../playbook/index.js";
 import type { KnowledgeStore } from "../knowledge/index.js";
 
@@ -276,7 +277,7 @@ Include 8–20 clauses appropriate for this document type. No other text.`;
 
     const precedentBlock = precedents.length > 0
       ? `FIRM PRECEDENT EXTRACTS (${precedents.length} documents):\n` +
-        precedents.map((p, i) => `--- Precedent ${i + 1}${p.title ? `: ${p.title}` : ""} ---\n${p.content}`).join("\n\n")
+        precedents.map((p, i) => `--- Precedent ${i + 1}${p.title ? `: ${sanitizePromptContent(p.title)}` : ""} ---\n${sanitizePromptContent(p.content)}`).join("\n\n")
       : "FIRM PRECEDENT: None found in knowledge store — draft from market standard.";
 
     const playbookBlock = playbookPositions
@@ -290,6 +291,9 @@ Include 8–20 clauses appropriate for this document type. No other text.`;
       })
       .join("\n\n");
 
+    const safeInstructions = opts.specialInstructions
+      ? sanitizePromptContent(opts.specialInstructions).slice(0, 500)
+      : "";
     const systemPrompt = `You are a senior transactional lawyer at a major law firm drafting a ${documentType} agreement.
 
 Your task: produce a complete, clause-ready ${documentType} from the firm's own precedent and playbook positions.
@@ -297,7 +301,7 @@ Your task: produce a complete, clause-ready ${documentType} from the firm's own 
 ACTING FOR: ${opts.actingFor ?? "our client (party position TBC)"}
 JURISDICTION: ${opts.jurisdiction ?? "English law"}
 PRACTICE AREA: ${opts.practiceArea ?? "transactional"}
-${opts.specialInstructions ? `SPECIAL INSTRUCTIONS: ${opts.specialInstructions}` : ""}
+${safeInstructions ? `SPECIAL INSTRUCTIONS: ${safeInstructions}` : ""}
 
 DRAFTING RULES:
 1. Prefer firm precedent language — extract verbatim where the passage is appropriate

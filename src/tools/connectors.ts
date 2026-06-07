@@ -41,6 +41,7 @@ function validateConnectorEndpoint(url: string, envVar: string): void {
   assertPublicHttpUrl(url, envVar);
 }
 
+validateConnectorEndpoint(Config.connectors.courtListener.endpoint,     "COURT_LISTENER_API_URL");
 validateConnectorEndpoint(Config.connectors.ironclad.endpoint,          "IRONCLAD_MCP_URL");
 validateConnectorEndpoint(Config.connectors.imanage.endpoint,           "IMANAGE_MCP_URL");
 validateConnectorEndpoint(Config.connectors.definely.endpoint,          "DEFINELY_MCP_URL");
@@ -158,6 +159,15 @@ async function courtListenerGet(path: string, params: Record<string, string>): P
   const url = new URL(`${Config.connectors.courtListener.endpoint}${path}`);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
 
+  // Defence-in-depth: validate the final URL before fetching (prevents SSRF if
+  // Config.connectors.courtListener.endpoint is overridden at runtime).
+  const fullUrl = url.toString();
+  try {
+    assertPublicHttpUrl(fullUrl, "CourtListener URL");
+  } catch (err) {
+    return { error: (err as Error).message };
+  }
+
   const headers: Record<string, string> = { "Accept": "application/json" };
   if (Config.connectors.courtListener.apiKey) {
     headers["Authorization"] = `Token ${Config.connectors.courtListener.apiKey}`;
@@ -165,7 +175,7 @@ async function courtListenerGet(path: string, params: Record<string, string>): P
 
   let resp: Response;
   try {
-    resp = await fetch(url.toString(), {
+    resp = await fetch(fullUrl, {
       headers,
       signal: AbortSignal.timeout(MCP_TIMEOUT_MS),
     });

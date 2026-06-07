@@ -19,6 +19,7 @@
 import OpenAI from "openai";
 import { Config } from "../config.js";
 import { logger } from "../logger.js";
+import { assertPublicHttpUrl } from "../settings/index.js";
 import type {
   ModelProvider,
   ChatParams,
@@ -37,8 +38,23 @@ export class OllamaProvider implements ModelProvider {
    * @param apiKey  API key string. Defaults to "ollama" (Ollama ignores this; LM Studio may use it).
    */
   constructor(baseUrl?: string, apiKey?: string) {
+    const resolvedBaseUrl = baseUrl ?? `${Config.local.ollamaUrl}/v1`;
+    if (resolvedBaseUrl &&
+        !resolvedBaseUrl.startsWith("http://localhost") &&
+        !resolvedBaseUrl.startsWith("http://127.")) {
+      try {
+        assertPublicHttpUrl(resolvedBaseUrl, "OLLAMA_URL/LOCAL_INFERENCE_URL");
+      } catch (err) {
+        logger.warn("Local inference URL may be unsafe", { error: (err as Error).message });
+      }
+    }
+    if (resolvedBaseUrl?.startsWith("http://") &&
+        !resolvedBaseUrl.startsWith("http://localhost") &&
+        !resolvedBaseUrl.startsWith("http://127.")) {
+      logger.warn("Local inference URL uses HTTP on non-loopback — traffic is not encrypted", { baseUrl: resolvedBaseUrl });
+    }
     this.client = new OpenAI({
-      baseURL: baseUrl ?? `${Config.local.ollamaUrl}/v1`,
+      baseURL: resolvedBaseUrl,
       apiKey: apiKey ?? "ollama",
     });
   }

@@ -34,6 +34,8 @@ import { Config } from "../config.js";
 import { logger } from "../logger.js";
 import { postToTeamsWebhook } from "../integrations/graph.js";
 import { dispatch } from "./dispatcher.js";
+import { isPartner, getUser } from "../auth/index.js";
+import { assertPublicHttpUrl } from "../settings/index.js";
 import type { Orchestrator } from "../orchestrator.js";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 
@@ -58,7 +60,16 @@ try {
   if (raw) {
     const parsed = JSON.parse(raw) as Record<string, string>;
     for (const [mn, url] of Object.entries(parsed)) {
-      matterLinks.set(mn, { matterNumber: mn, webhookUrl: url });
+      try {
+        const validatedUrl = assertPublicHttpUrl(url, `TEAMS_MATTER_WEBHOOKS[${mn}]`);
+        if (!validatedUrl.startsWith("https://")) {
+          logger.warn("Teams matter webhook URL must use https — skipping", { matterNumber: mn });
+          continue;
+        }
+        matterLinks.set(mn, { matterNumber: mn, webhookUrl: validatedUrl });
+      } catch (err) {
+        logger.warn("Invalid Teams matter webhook URL — skipping", { matterNumber: mn, error: (err as Error).message });
+      }
     }
   }
 } catch { /* ignore — no matter webhooks configured */ }
@@ -131,16 +142,20 @@ export function registerTeamsBotRoutes(app: FastifyInstance, orch: Orchestrator)
     // If async work is queued, post the deferred result back via webhook
     if (response.asyncWork) {
       const targetUrl = matterLinks.get(channelId)?.webhookUrl ?? defaultWebhookUrl;
+      const ASYNC_TIMEOUT_MS = 300_000;
       setImmediate(async () => {
         try {
-          const result = await response.asyncWork!();
+          const result = await Promise.race([
+            response.asyncWork!(),
+            new Promise<never>((_, rej) => setTimeout(() => rej(new Error("Async work timeout")), ASYNC_TIMEOUT_MS)),
+          ]);
           if (targetUrl) {
             await postToTeamsWebhook(targetUrl, "Big Michael", result);
           }
         } catch (err) {
           logger.error("Teams async work failed", { error: (err as Error).message });
           if (targetUrl) {
-            await postToTeamsWebhook(targetUrl, "Big Michael", `Error: ${(err as Error).message}`).catch(() => {});
+            await postToTeamsWebhook(targetUrl, "Big Michael", "Task processing failed — please retry or contact support.").catch(() => {});
           }
         }
       });
@@ -152,16 +167,30 @@ export function registerTeamsBotRoutes(app: FastifyInstance, orch: Orchestrator)
 
   // ── Internal: post a message to a channel ────────────────────────────────
   app.post("/bots/teams/notify", async (req: FastifyRequest, reply) => {
+    const user = await getUser(req);
+    if (!isPartner(user)) return reply.status(403).send({ error: "Partner role required" });
+
     const { matterNumber, title, text, webhookUrl, facts } = req.body as {
       matterNumber?: string; title: string; text: string;
       webhookUrl?: string; facts?: Array<{ name: string; value: string }>;
     };
 
-    const url = webhookUrl
+    let url = webhookUrl
       ?? (matterNumber ? matterLinks.get(matterNumber)?.webhookUrl : undefined)
       ?? defaultWebhookUrl;
 
     if (!url) return reply.status(400).send({ error: "No webhook URL configured for this matter" });
+
+    if (webhookUrl) {
+      try {
+        url = assertPublicHttpUrl(webhookUrl, "webhookUrl");
+        if (!url.startsWith("https://")) {
+          return reply.status(400).send({ error: "webhookUrl must use https" });
+        }
+      } catch (err) {
+        return reply.status(400).send({ error: (err as Error).message });
+      }
+    }
 
     await postToTeamsWebhook(url, title, text, facts);
     return { ok: true };
@@ -169,16 +198,33 @@ export function registerTeamsBotRoutes(app: FastifyInstance, orch: Orchestrator)
 
   // ── Matter → channel link management ─────────────────────────────────────
   app.post("/bots/teams/matter-link", async (req: FastifyRequest, reply) => {
+    const user = await getUser(req);
+    if (!isPartner(user)) return reply.status(403).send({ error: "Partner role required" });
+
     const { matterNumber, webhookUrl, teamId, channelId } = req.body as TeamsMatterLink;
     if (!matterNumber || !webhookUrl) {
       return reply.status(400).send({ error: "matterNumber and webhookUrl required" });
     }
-    matterLinks.set(matterNumber, { matterNumber, webhookUrl, teamId, channelId });
+
+    let validatedUrl: string;
+    try {
+      validatedUrl = assertPublicHttpUrl(webhookUrl, "webhookUrl");
+      if (!validatedUrl.startsWith("https://")) {
+        return reply.status(400).send({ error: "webhookUrl must use https" });
+      }
+    } catch (err) {
+      return reply.status(400).send({ error: (err as Error).message });
+    }
+
+    matterLinks.set(matterNumber, { matterNumber, webhookUrl: validatedUrl, teamId, channelId });
     logger.info("Teams matter link set", { matterNumber });
     return { ok: true, matterNumber };
   });
 
   app.get("/bots/teams/matter-link/:matterNumber", async (req: FastifyRequest, reply) => {
+    const user = await getUser(req);
+    if (!isPartner(user)) return reply.status(403).send({ error: "Partner role required" });
+
     const { matterNumber } = req.params as { matterNumber: string };
     const link = matterLinks.get(matterNumber);
     if (!link) return reply.status(404).send({ error: "No Teams link for this matter" });
@@ -186,7 +232,11 @@ export function registerTeamsBotRoutes(app: FastifyInstance, orch: Orchestrator)
   });
 
   app.delete("/bots/teams/matter-link/:matterNumber", async (req: FastifyRequest, reply) => {
+    const user = await getUser(req);
+    if (!isPartner(user)) return reply.status(403).send({ error: "Partner role required" });
+
     const { matterNumber } = req.params as { matterNumber: string };
+    if (!matterLinks.has(matterNumber)) return reply.status(404).send({ error: "No Teams link for this matter" });
     matterLinks.delete(matterNumber);
     return { ok: true };
   });

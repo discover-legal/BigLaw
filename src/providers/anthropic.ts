@@ -7,6 +7,7 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import { Config } from "../config.js";
+import { assertPublicHttpUrl } from "../settings/index.js";
 import type {
   ModelProvider,
   ChatParams,
@@ -19,6 +20,13 @@ export class AnthropicProvider implements ModelProvider {
   private readonly client: Anthropic;
 
   constructor() {
+    if (Config.anthropic.baseUrl) {
+      try {
+        assertPublicHttpUrl(Config.anthropic.baseUrl, "ANTHROPIC_BASE_URL");
+      } catch (err) {
+        throw new Error(`Invalid ANTHROPIC_BASE_URL: ${(err as Error).message}`);
+      }
+    }
     this.client = new Anthropic({
       apiKey: Config.anthropic.apiKey,
       ...(Config.anthropic.baseUrl ? { baseURL: Config.anthropic.baseUrl } : {}),
@@ -43,7 +51,7 @@ export class AnthropicProvider implements ModelProvider {
         system,
         tools: params.tools as Anthropic.Tool[] | undefined,
         messages: params.messages.map(toAnthropicMessage),
-        thinking: { type: "enabled", budget_tokens: params.thinking.budgetTokens },
+        thinking: { type: "enabled", budget_tokens: Math.min(params.thinking.budgetTokens, params.maxTokens - 1) },
       });
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const content = (betaMsg.content as any[]).map(fromAnyBlock);

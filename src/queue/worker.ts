@@ -42,6 +42,7 @@ import { auditLogger, ACTOR_SYSTEM } from "../audit/index.js";
 import { costStore, calcCostUsd } from "../cost/index.js";
 import type { Orchestrator } from "../orchestrator.js";
 import type { OcgDocument } from "../types.js";
+import { sanitizePromptContent } from "../adapters/lavern.js";
 
 const HAIKU_MODEL = "claude-haiku-4-5-20251001";
 
@@ -64,7 +65,7 @@ async function handleSummarizeTimeEntry(
   const findingsSummary = task?.findings?.length
     ? task.findings
         .slice(0, 20)
-        .map((f) => `- ${f.content.slice(0, 300)}`)
+        .map((f) => `- ${sanitizePromptContent(f.content.slice(0, 300))}`)
         .join("\n")
     : "(no task findings available)";
 
@@ -91,18 +92,24 @@ async function handleSummarizeTimeEntry(
       }`
     : "";
 
+  // Sanitize all user-controlled strings before embedding in the prompt.
+  const safeDescription = sanitizePromptContent(entry.description ?? "");
+  const safeEvent = sanitizePromptContent(entry.event ?? "");
+  const safeProfileName = sanitizePromptContent(entry.profileName ?? "");
+  const safeOcgHint = sanitizePromptContent(ocgHint ?? "");
+
   // ── Pass 1: Description generation ───────────────────────────────────────
   const descriptionPrompt = `You are a legal billing specialist. Write a precise billable time entry description.
 
-TIMEKEEPER: ${entry.profileName}
-EVENT TYPE: ${entry.event}
+TIMEKEEPER: ${safeProfileName}
+EVENT TYPE: ${safeEvent}
 DURATION: ${durationHours} hours
 MATTER: ${entry.matterNumber ?? "unknown"}
-ORIGINAL NOTE: ${entry.description || "(none)"}
+ORIGINAL NOTE: ${safeDescription || "(none)"}
 
 WORK PERFORMED (task findings):
 ${findingsSummary}
-${ocgHint}
+${safeOcgHint}
 
 INSTRUCTIONS:
 1. Write one concise description (1–3 sentences, max 200 characters) of the work performed.
@@ -134,7 +141,10 @@ INSTRUCTIONS:
     });
     generated = response.content[0].type === "text" ? response.content[0].text.trim() : "";
   } catch (err) {
-    throw new Error(`Haiku describe call failed: ${(err as Error).message}`);
+    const safeMsg = (err as Error).message
+      .replace(/\bsk-ant-[A-Za-z0-9_-]+/g, "[REDACTED]")
+      .replace(/\bBearer\s+[A-Za-z0-9._-]+/g, "Bearer [REDACTED]");
+    throw new Error(`Haiku describe call failed: ${safeMsg}`);
   }
 
   if (!generated) {

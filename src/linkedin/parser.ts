@@ -17,6 +17,7 @@
 
 import { inflateRawSync } from "node:zlib";
 import { basename } from "node:path";
+import { logger } from "../logger.js";
 
 // ─── CSV parser (RFC 4180) ────────────────────────────────────────────────────
 
@@ -68,10 +69,12 @@ function extractPostsFromCSV(csv: string): string[] {
 
 // Hard cap on inflated output per entry — protects against zip bombs.
 const MAX_INFLATED_BYTES = 50 * 1024 * 1024; // 50 MB
+const MAX_TOTAL_INFLATED_BYTES = 100 * 1024 * 1024; // 100 MB aggregate
 
 function readZip(buf: Buffer): Map<string, Buffer> {
   const files = new Map<string, Buffer>();
   let offset = 0;
+  let totalInflated = 0;
 
   while (offset + 30 < buf.length) {
     const sig = buf.readUInt32LE(offset);
@@ -89,9 +92,9 @@ function readZip(buf: Buffer): Map<string, Buffer> {
     // Bounds-check filename + extra before computing dataStart
     if (filenameStart + filenameLen + extraLen > buf.length) break;
 
-    // Strip directory components and null bytes from filename to prevent path traversal
+    // Strip directory components, null bytes, and backslashes from filename to prevent path traversal
     const rawFilename = buf.subarray(filenameStart, filenameStart + filenameLen).toString("utf8");
-    const filename = basename(rawFilename.replace(/\x00/g, ""));
+    const filename = basename(rawFilename.replace(/[\x00\\/]/g, "_"));
 
     const dataStart = filenameStart + filenameLen + extraLen;
 
@@ -100,8 +103,13 @@ function readZip(buf: Buffer): Map<string, Buffer> {
 
     let fileData: Buffer;
     if (compression === 0) {
-      // STORED — no decompression needed
-      fileData = buf.subarray(dataStart, dataStart + compressedSize);
+      // STORED — no decompression needed; cap size to prevent oversized stored entries
+      if (compressedSize > MAX_INFLATED_BYTES) {
+        // Skip oversized stored entry
+        fileData = Buffer.alloc(0);
+      } else {
+        fileData = buf.subarray(dataStart, dataStart + compressedSize);
+      }
     } else if (compression === 8) {
       // DEFLATE — reject if uncompressed size header exceeds cap.
       // When the data-descriptor flag (bit 3) is set the header size fields are 0;
@@ -109,14 +117,25 @@ function readZip(buf: Buffer): Map<string, Buffer> {
       if (!(flags & 0x8) && uncompressedSize > MAX_INFLATED_BYTES) {
         fileData = Buffer.alloc(0); // entry too large — skip
       } else {
-        fileData = inflateRawSync(
-          buf.subarray(dataStart, dataStart + compressedSize),
-          { maxOutputLength: MAX_INFLATED_BYTES },
-        );
+        try {
+          fileData = inflateRawSync(
+            buf.subarray(dataStart, dataStart + compressedSize),
+            { maxOutputLength: MAX_INFLATED_BYTES },
+          );
+        } catch (err) {
+          logger.warn("ZIP: failed to inflate entry, skipping", { filename: rawFilename });
+          fileData = Buffer.alloc(0);
+        }
       }
     } else {
       // Unsupported compression — skip
       fileData = Buffer.alloc(0);
+    }
+
+    totalInflated += fileData.length;
+    if (totalInflated > MAX_TOTAL_INFLATED_BYTES) {
+      logger.warn("ZIP aggregate inflation cap exceeded — stopping extraction");
+      break;
     }
 
     files.set(filename, fileData);
@@ -150,7 +169,7 @@ export function parseLinkedInExport(buf: Buffer): string[] {
       for (const [name, data] of files) {
         const lower = name.toLowerCase();
         if (lower.includes("shares") || lower.includes("posts")) {
-          const csv = data.toString("utf8");
+          const csv = data.toString("utf8").replace(/^﻿/, "");
           const posts = extractPostsFromCSV(csv);
           if (posts.length) return posts;
         }
@@ -163,7 +182,7 @@ export function parseLinkedInExport(buf: Buffer): string[] {
 
   // Treat as raw CSV
   try {
-    return extractPostsFromCSV(buf.toString("utf8"));
+    return extractPostsFromCSV(buf.toString("utf8").replace(/^﻿/, ""));
   } catch {
     return [];
   }

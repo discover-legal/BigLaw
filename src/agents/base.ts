@@ -382,7 +382,7 @@ function buildNeedOfferPrompt(def: AgentDefinition, ctx: AgentContext): string {
   return `TASK: ${taskDesc}
 
 CURRENT ROUND GOAL (Round ${ctx.roundGoal.round}, Phase: ${ctx.roundGoal.phase}):
-${ctx.roundGoal.description}
+${sanitizePromptContent(ctx.roundGoal.description)}
 
 YOUR ROLE: ${def.name} — ${def.description}
 
@@ -418,10 +418,10 @@ function buildProcessingPrompt(def: AgentDefinition, ctx: AgentContext): string 
   return `TASK: ${taskDesc}
 
 ROUND GOAL (Round ${ctx.roundGoal.round} — Phase: ${ctx.roundGoal.phase}):
-${ctx.roundGoal.description}
+${sanitizePromptContent(ctx.roundGoal.description)}
 
 EXPECTED OUTPUTS THIS ROUND:
-${ctx.roundGoal.expectedOutputs.map((o, i) => `${i + 1}. ${o}`).join("\n")}
+${ctx.roundGoal.expectedOutputs.map((o, i) => `${i + 1}. ${sanitizePromptContent(o)}`).join("\n")}
 
 INTER-ROUND MEMORY (what has been established in prior rounds):
 ${memory}
@@ -493,7 +493,7 @@ function parseFindings(text: string, def: AgentDefinition): Finding[] {
       agentName: def.name,
       content,
       citations,
-      confidence: parseFloat(confidenceMatch?.[1] ?? "0.7"),
+      confidence: (() => { const rawConf = parseFloat(confidenceMatch?.[1] ?? "0.7"); return Number.isFinite(rawConf) ? Math.min(1, Math.max(0, rawConf)) : 0.7; })(),
       challenged: false,
       resolved: false,
       round: 0, // caller sets this

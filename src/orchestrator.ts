@@ -269,7 +269,8 @@ export class Orchestrator {
         `(${params.description.length.toLocaleString()} received). Please shorten the description.`,
       );
     }
-    const running = Array.from(this.tasks.values()).filter((t) => t.status === "running").length;
+    const running = Array.from(this.tasks.values())
+      .filter((t) => t.status === "running" || t.status === "pending").length;
     if (running >= Orchestrator.MAX_CONCURRENT_TASKS) {
       throw new Error(`Server at capacity: ${running} tasks already running. Please wait for one to complete.`);
     }
@@ -362,6 +363,12 @@ export class Orchestrator {
 
   /** Delete a matter and its Qdrant memory entries. Returns false if it didn't exist. */
   deleteTask(taskId: string): boolean {
+    const task = this.tasks.get(taskId);
+    if (task) {
+      if (task.status === "running" || task.status === "pending" || task.status === "awaiting_gate") {
+        throw new Error(`Cannot delete a task in status '${task.status}'; wait for completion or cancel first`);
+      }
+    }
     const existed = this.tasks.delete(taskId);
     if (existed) {
       this.persistTasks().catch((err) => logger.warn("Failed to persist tasks", { error: err.message }));
@@ -625,6 +632,10 @@ export class Orchestrator {
     const phases = PHASE_SEQUENCES[task.workflowType];
 
     for (const phase of phases) {
+      if (task.currentRound >= task.maxRounds) {
+        logger.warn("Task hit maxRounds cap", { taskId: task.id, maxRounds: task.maxRounds });
+        break;
+      }
       task.currentPhase = phase;
       task.updatedAt = new Date();
       this.emit(task.id, "phase", { phase });
@@ -802,8 +813,9 @@ export class Orchestrator {
   }
 
   private async generateRoundGoal(task: Task, phase: TaskPhase): Promise<RoundGoal> {
+    const safeDesc = sanitizePromptContent(task.description);
     const priorPhases = task.rounds.map((r) => r.goal.phase);
-    const prompt = `TASK: ${task.description}
+    const prompt = `TASK: ${safeDesc}
 
 WORKFLOW: ${task.workflowType}
 CURRENT PHASE: ${phase}
@@ -837,12 +849,13 @@ EXPECTED_OUTPUT_3: <third expected output>`;
       id: uuidv4(),
       round: task.currentRound,
       phase,
-      description: descMatch?.[1]?.trim() ?? `Execute the ${phase} phase for: ${task.description}`,
+      description: descMatch?.[1]?.trim() ?? `Execute the ${phase} phase for: ${safeDesc}`,
       expectedOutputs: outputMatches.map((m) => m[1].trim()),
     };
   }
 
   private async synthesise(task: Task): Promise<string> {
+    const safeDesc = sanitizePromptContent(task.description);
     // Cap each finding and the total to prevent synthesis prompts from exceeding
     // practical context-window limits when many rounds produce large findings.
     const findingsSummary = task.findings
@@ -861,7 +874,7 @@ EXPECTED_OUTPUT_3: <third expected output>`;
       ? `\nLAWYER TONE PROFILE — write the final output in this voice:\n${sanitizePromptContent(lawyerTone.injectionSnippet)}\n`
       : "";
 
-    const prompt = `TASK: ${task.description}
+    const prompt = `TASK: ${safeDesc}
 
 ALL FINDINGS FROM ALL ROUNDS:
 ${findingsSummary}
@@ -893,6 +906,7 @@ Every claim must trace to a specific finding number from the list above.`;
    * matter and maps each row back to a source finding via `_findingId`.
    */
   private async tabulate(task: Task): Promise<TaskTable | undefined> {
+    const safeDesc = sanitizePromptContent(task.description);
     const findings = task.findings.filter(
       (f) => !task.pendingGates.some((g) => g.findingId === f.id && g.status === "rejected"),
     );
@@ -902,7 +916,7 @@ Every claim must trace to a specific finding number from the list above.`;
       .map((f) => `id=${f.id} | ${f.agentName} (R${f.round}, conf ${f.confidence.toFixed(2)}): ${f.content}`)
       .join("\n\n");
 
-    const prompt = `TASK: ${task.description}
+    const prompt = `TASK: ${safeDesc}
 
 FINDINGS:
 ${findingsSummary}
@@ -1065,6 +1079,12 @@ Rules:
         } as Task;
         this.tasks.set(task.id, task);
       }
+      for (const task of this.tasks.values()) {
+        if (task.status === "running" || task.status === "pending" || task.status === "awaiting_gate") {
+          task.status = "failed";
+          task.error = "Server restarted during execution";
+        }
+      }
       logger.info("Tasks restored from disk", { count: this.tasks.size, path });
     } catch (err) {
       logger.warn("Failed to restore tasks", { error: (err as Error).message });
@@ -1077,8 +1097,15 @@ Rules:
         resolve();
         return;
       }
+      const GATE_TIMEOUT_MS = 72 * 60 * 60 * 1000;
+      const timer = setTimeout(() => {
+        this.gateEmitter.off(`gates:${task.id}`, handler);
+        logger.warn("Gate timeout — auto-resolving", { taskId: task.id });
+        resolve();
+      }, GATE_TIMEOUT_MS);
       const handler = () => {
         if (task.pendingGates.every((g) => g.status !== "pending")) {
+          clearTimeout(timer);
           this.gateEmitter.off(`gates:${task.id}`, handler);
           resolve();
         }

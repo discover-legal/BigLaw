@@ -63,13 +63,25 @@ export const Config = {
     // sees everything. Turn ON (with OAuth creds below) for shared deployments.
     enabled: optional("AUTH_ENABLED", "false") === "true",
     sessionSecret: (() => {
+      const authEnabled = optional("AUTH_ENABLED", "false") === "true";
+      const apiHost = optional("API_HOST", "127.0.0.1");
       const secret = optional("SESSION_SECRET", "dev-insecure-change-me-in-production-please");
-      if (optional("AUTH_ENABLED", "false") === "true") {
+      if (!authEnabled && (apiHost === "0.0.0.0" || apiHost === "::")) {
+        console.warn(
+          "[SECURITY WARNING] AUTH_ENABLED=false with API_HOST=" + apiHost +
+          " — the API is publicly accessible without authentication. Set AUTH_ENABLED=true for production.",
+        );
+      }
+      if (authEnabled) {
         if (secret === "dev-insecure-change-me-in-production-please") {
           throw new Error("SESSION_SECRET must be set to a strong random value when AUTH_ENABLED=true");
         }
         if (secret.length < 32) {
           throw new Error("SESSION_SECRET must be at least 32 characters when AUTH_ENABLED=true");
+        }
+        const uniqueChars = new Set(secret).size;
+        if (uniqueChars < 8) {
+          console.warn("[SECURITY WARNING] SESSION_SECRET appears to have low entropy — use a cryptographically random value.");
         }
       }
       return secret;

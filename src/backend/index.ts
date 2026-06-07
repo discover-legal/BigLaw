@@ -29,6 +29,7 @@ import type { Task, WorkflowType } from "../types.js";
 import type { TaskTemplate } from "../adapters/lavern.js";
 import { auditLogger } from "../audit/index.js";
 import { pluginRegistry } from "../adapters/plugin.js";
+import { assertPublicHttpUrl } from "../settings/index.js";
 
 export interface SubmitTaskParams {
   description: string;
@@ -163,7 +164,11 @@ export class RemoteBackend implements LegalBackend {
   constructor(
     private readonly baseUrl: string,
     private readonly apiKey?: string,
-  ) {}
+  ) {
+    if (baseUrl) {
+      assertPublicHttpUrl(baseUrl, "BIG_MICHAEL_API");
+    }
+  }
 
   private async req(method: string, path: string, body?: unknown): Promise<unknown> {
     const headers: Record<string, string> = { "content-type": "application/json" };

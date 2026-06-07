@@ -19,6 +19,7 @@ import { v4 as uuidv4 } from "uuid";
 import { Config } from "../config.js";
 import { embed } from "../embeddings.js";
 import { logger } from "../logger.js";
+import { sanitizePromptContent } from "../adapters/lavern.js";
 import type {
   IntraRoundMemory,
   InterRoundMemory,
@@ -123,8 +124,9 @@ export class InterRoundMemoryStore {
    */
   async write(entry: Omit<MemoryEntry, "id" | "embedding">): Promise<MemoryEntry> {
     this.assertReady();
-    const { embedding } = await embed(entry.content);
-    const full: MemoryEntry = { ...entry, id: uuidv4(), embedding };
+    const safeContent = sanitizePromptContent(entry.content);
+    const { embedding } = await embed(safeContent);
+    const full: MemoryEntry = { ...entry, id: uuidv4(), embedding, content: safeContent };
 
     await this.db.insert({
       id: full.id,
@@ -134,7 +136,7 @@ export class InterRoundMemoryStore {
         round:     full.round,
         phase:     full.phase,
         agentId:   full.agentId ?? null,
-        content:   full.content,
+        content:   safeContent,
         tags:      full.tags,
         createdAt: full.createdAt.toISOString(),
       },
@@ -159,7 +161,8 @@ export class InterRoundMemoryStore {
     },
   ): Promise<MemoryEntry[]> {
     this.assertReady();
-    const { embedding } = await embed(query);
+    const safeQuery = query.slice(0, 8_000);
+    const { embedding } = await embed(safeQuery);
 
     const filter: Record<string, unknown> = { taskId: opts.taskId };
     if (opts.agentId) filter.agentId = opts.agentId;
@@ -180,7 +183,7 @@ export class InterRoundMemoryStore {
         round:     m.round as number,
         phase:     m.phase as TaskPhase,
         agentId:   (m.agentId as string | null) ?? undefined,
-        content:   m.content as string,
+        content:   sanitizePromptContent(m.content as string),
         tags:      (m.tags as string[]) ?? [],
         createdAt: new Date(m.createdAt as string),
       };

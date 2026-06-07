@@ -344,10 +344,12 @@ export class InvoiceValidator {
     const BATCH = 15;
     const allViolations: InvoiceViolation[] = [];
 
+    const sanitize = (s: string) => String(s ?? "").replace(/[\x00-\x1F"\\]/g, " ").slice(0, 300);
+
     for (let i = 0; i < items.length; i += BATCH) {
       const batch = items.slice(i, i + BATCH);
-      const itemsText = batch.map((item, idx) =>
-        `[LINE-${item.lineId}] Date:${item.date ?? "?"} Timekeeper:${item.timekeeperName ?? "?"} (${item.timekeeperClass ?? "?"}) | TaskCode:${item.taskCode ?? "?"} ActivityCode:${item.activityCode ?? "?"} | Hours:${item.hours ?? "?"} Rate:${item.rate ?? "?"} Amt:${item.amount ?? "?"} | Desc:"${item.description}"`
+      const itemsText = batch.map((item) =>
+        `[LINE-${item.lineId}] ${sanitize(item.timekeeperName ?? "")} | ${item.hours ?? "?"}h @ $${item.rate ?? "?"} | Desc:"${sanitize(item.description)}"`
       ).join("\n");
 
       const systemPrompt = `You are an in-house legal billing auditor reviewing outside counsel invoices against OCG (Outside Counsel Guidelines).
@@ -399,8 +401,25 @@ Return a JSON array of violations. Return [] if none found.`;
         const jsonEnd = raw.lastIndexOf("]");
         if (jsonStart === -1 || jsonEnd <= jsonStart) continue;
 
-        const parsed = JSON.parse(raw.slice(jsonStart, jsonEnd + 1)) as Array<Record<string, unknown>>;
-        for (const v of parsed) {
+        const VALID_VIOLATION_TYPES = ["block_billing", "excessive_hours", "rate_cap", "vague_description", "duplicate", "other"];
+        const VALID_SEVERITIES = ["hard", "soft"];
+
+        const rawViolations = JSON.parse(raw.slice(jsonStart, jsonEnd + 1)) as Array<Record<string, unknown>>;
+        const validViolations = rawViolations.filter((v) => {
+          if (!VALID_VIOLATION_TYPES.includes(String(v["type"] ?? ""))) return false;
+          if (!VALID_SEVERITIES.includes(String(v["severity"] ?? ""))) return false;
+          if (v["suggestedReduction"] !== undefined && v["suggestedReduction"] !== null) {
+            if (!Number.isFinite(v["suggestedReduction"]) || (v["suggestedReduction"] as number) < 0) return false;
+            const lineId = String(v["lineId"] ?? "").replace("LINE-", "");
+            const item = items.find((i) => i.lineId === lineId);
+            if (item?.amount) {
+              v["suggestedReduction"] = Math.min(v["suggestedReduction"] as number, Math.abs(item.amount));
+            }
+          }
+          return true;
+        });
+
+        for (const v of validViolations) {
           const lineId = String(v["lineId"] ?? "").replace("LINE-", "");
           if (!lineId) continue;
           allViolations.push({
