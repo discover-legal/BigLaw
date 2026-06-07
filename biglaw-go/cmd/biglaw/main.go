@@ -142,8 +142,9 @@ func main() {
 		} else {
 			gen := lpm.NewGenerator(prov, model)
 			corpus := lpm.NewCorpus(cfg.LPM.CorpusFile)
-			data := newLPMDataProvider(orch, timeStore)
-			lpmSvc = lpm.NewService(cfg.LPM, gen, corpus, data, lpmQueue, nil)
+			data := newLPMDataProvider(orch, timeStore, clientStore)
+			channelPoster := newMatterChannelPoster(cfg)
+			lpmSvc = lpm.NewService(cfg.LPM, gen, corpus, data, lpmQueue, newReportNotifier(cfg, channelPoster))
 
 			// Phase 2: email intake + matter routing when a mail provider is set.
 			if cfg.Email.Graph.Enabled || cfg.Email.Gmail.Enabled {
@@ -177,7 +178,7 @@ func main() {
 				cfg.Email.Graph.Enabled, cfg.Email.Gmail.Enabled,
 				cfg.Email.Graph.UserEmail, cfg.Email.Gmail.UserEmail,
 			)
-			lpmSvc.WithDrafting(cfg.LPM.EmailWriteMode, cfg.LPM.AllowedDomains, transport, nil)
+			lpmSvc.WithDrafting(cfg.LPM.EmailWriteMode, cfg.LPM.AllowedDomains, transport, channelPoster)
 
 			// Phase 3: 0600 portfolio briefing.
 			lpmSvc.WithPortfolio(lpm.NewPortfolioBriefer(prov, model))

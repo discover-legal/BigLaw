@@ -144,6 +144,19 @@ func TestGenerateUsesPrevReportCutoff(t *testing.T) {
 	}
 }
 
+func TestGenerateThreadsBudgetBurn(t *testing.T) {
+	in := sampleInput()
+	in.Budget = &types.BudgetBurn{BudgetUsd: 10000, BurnUsd: 6500, BurnPct: 0.65, Remaining: 3500}
+	prov := &fakeProvider{replies: []string{`{"bluf":"b","summary":"s","confidence":0.7}`}}
+	rep, err := NewGenerator(prov, "m").Generate(in, GenOpts{Verify: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Deltas.BudgetBurnPct != 0.65 {
+		t.Errorf("budget burn pct should be threaded into deltas, got %.2f", rep.Deltas.BudgetBurnPct)
+	}
+}
+
 func TestExtractJSON(t *testing.T) {
 	cases := map[string]string{
 		`prefix {"a":1} suffix`: `{"a":1}`,

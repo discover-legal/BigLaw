@@ -23,6 +23,7 @@ func (f fakeData) ActiveMatters() []MatterRef {
 func (f fakeData) TasksForMatter(string) []types.Task             { return f.in.Tasks }
 func (f fakeData) TimeEntriesForMatter(string) []types.TimeEntry  { return f.in.TimeEntries }
 func (f fakeData) HealthForMatter(string) types.MatterHealthScore { return f.in.Health }
+func (f fakeData) BudgetForMatter(string) *types.BudgetBurn       { return f.in.Budget }
 
 func newTestService(t *testing.T, prov *fakeProvider) (*Service, string) {
 	t.Helper()

@@ -36,6 +36,7 @@ type DataProvider interface {
 	TasksForMatter(matter string) []types.Task
 	TimeEntriesForMatter(matter string) []types.TimeEntry
 	HealthForMatter(matter string) types.MatterHealthScore
+	BudgetForMatter(matter string) *types.BudgetBurn
 }
 
 // Notifier, when set, is called after each report is produced (e.g. to post a
@@ -309,6 +310,7 @@ func (s *Service) GenerateForMatter(ref MatterRef, date string) (*types.MatterSt
 		Health:       s.data.HealthForMatter(ref.MatterNumber),
 		Tasks:        s.data.TasksForMatter(ref.MatterNumber),
 		TimeEntries:  s.data.TimeEntriesForMatter(ref.MatterNumber),
+		Budget:       s.data.BudgetForMatter(ref.MatterNumber),
 		Prev:         prev,
 		EmailsRouted: s.emailsRoutedSince(ref.MatterNumber, prev),
 	}

@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Discover Legal
 
-// LPM wiring — adapts the live orchestrator + time store to the lpm.DataProvider
-// interface the status-report spine consumes. Budget burn is left nil for now
-// (the matter-health monitor degrades gracefully without it); the budget
-// dimension wires in with a later phase.
+// LPM wiring — adapts the live orchestrator, time store and client roster to the
+// lpm.DataProvider interface the status-report spine consumes, including real
+// budget burn (matter budget vs. billed time) feeding both the EmailsRouted-style
+// deltas and the matter-health budget dimension.
 package main
 
 import (
+	"github.com/discover-legal/biglaw-go/internal/budget"
+	"github.com/discover-legal/biglaw-go/internal/clients"
 	"github.com/discover-legal/biglaw-go/internal/lpm"
 	"github.com/discover-legal/biglaw-go/internal/matters"
 	"github.com/discover-legal/biglaw-go/internal/orchestrator"
@@ -15,27 +17,51 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
 
-// lpmTimeReader adapts the time store to the matter-health TimeReader interface.
-type lpmTimeReader struct{ ts *timekeeping.TimeStore }
+// tsAdapter adapts the time store to both the matter-health TimeReader
+// (List(matter)) and the budget TimeStore (List(matter) + ListAll()) interfaces.
+type tsAdapter struct{ ts *timekeeping.TimeStore }
 
-func (r lpmTimeReader) List(matter string) []types.TimeEntry {
-	return r.ts.List(timekeeping.TimeFilter{MatterNumber: matter})
+func (a tsAdapter) List(matter string) []types.TimeEntry {
+	return a.ts.List(timekeeping.TimeFilter{MatterNumber: matter})
 }
 
-// lpmNilBudget satisfies the matter-health BudgetBurner interface with no burn.
-type lpmNilBudget struct{}
+func (a tsAdapter) ListAll() []types.TimeEntry {
+	return a.ts.List(timekeeping.TimeFilter{})
+}
 
-func (lpmNilBudget) GetBurn(matter string) *types.BudgetBurn { return nil }
+// budgetClientStore adapts the client roster to the budget ClientStore interface.
+// LPM only reads budget burn (GetBurn), so Persist is a no-op — the threshold
+// alerting path (CheckMatter, which mutates + persists) is not driven from here.
+type budgetClientStore struct{ cs *clients.ClientStore }
 
-// lpmDataProvider implements lpm.DataProvider over the orchestrator + time store.
+func (b budgetClientStore) List() []*types.Client {
+	src := b.cs.List()
+	out := make([]*types.Client, len(src))
+	for i := range src {
+		c := src[i]
+		out[i] = &c
+	}
+	return out
+}
+
+func (b budgetClientStore) Persist() error { return nil }
+
+// lpmDataProvider implements lpm.DataProvider over the orchestrator, time store
+// and client roster.
 type lpmDataProvider struct {
 	orch   *orchestrator.Orchestrator
 	ts     *timekeeping.TimeStore
 	health *matters.Monitor
+	budget *budget.Monitor
 }
 
-func newLPMDataProvider(orch *orchestrator.Orchestrator, ts *timekeeping.TimeStore) *lpmDataProvider {
-	return &lpmDataProvider{orch: orch, ts: ts, health: matters.New()}
+func newLPMDataProvider(orch *orchestrator.Orchestrator, ts *timekeeping.TimeStore, cs *clients.ClientStore) *lpmDataProvider {
+	return &lpmDataProvider{
+		orch:   orch,
+		ts:     ts,
+		health: matters.New(),
+		budget: budget.NewMonitor(tsAdapter{ts}, budgetClientStore{cs}, nil),
+	}
 }
 
 func (p *lpmDataProvider) allTasks() []types.Task {
@@ -83,8 +109,12 @@ func (p *lpmDataProvider) TimeEntriesForMatter(matter string) []types.TimeEntry 
 	return p.ts.List(timekeeping.TimeFilter{MatterNumber: matter})
 }
 
+func (p *lpmDataProvider) BudgetForMatter(matter string) *types.BudgetBurn {
+	return p.budget.GetBurn(matter)
+}
+
 func (p *lpmDataProvider) HealthForMatter(matter string) types.MatterHealthScore {
-	return p.health.Compute(matter, p.allTasks(), lpmTimeReader{p.ts}, lpmNilBudget{})
+	return p.health.Compute(matter, p.allTasks(), tsAdapter{p.ts}, p.budget)
 }
 
 // MatterOptions returns the active matters as routing candidates for the email

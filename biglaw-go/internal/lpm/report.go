@@ -58,6 +58,7 @@ type ReportInput struct {
 	Health       types.MatterHealthScore
 	Tasks        []types.Task
 	TimeEntries  []types.TimeEntry
+	Budget       *types.BudgetBurn         // matter budget vs. billed time (nil if no budget set)
 	EmailsRouted int                       // Phase 2 email router populates this
 	Prev         *types.MatterStatusReport // previous report, for delta + trend
 	Lawyer       *types.LawyerProfile      // optional tone injection
@@ -144,8 +145,9 @@ func computeDeltas(in ReportInput, cutoff time.Time) types.LPMDeltas {
 	d := types.LPMDeltas{
 		Since:        cutoff.UTC().Format(time.RFC3339),
 		EmailsRouted: in.EmailsRouted,
-		// BudgetBurnPct is intentionally left zero until a real budget burn is
-		// wired in (a later phase) — better empty than a misleading proxy.
+	}
+	if in.Budget != nil {
+		d.BudgetBurnPct = in.Budget.BurnPct
 	}
 	for _, t := range in.Tasks {
 		if t.CreatedAt.After(cutoff) {
@@ -183,6 +185,10 @@ func buildFactSheet(in ReportInput, d types.LPMDeltas) string {
 	fmt.Fprintf(&b, "SINCE: %s\n", d.Since)
 	fmt.Fprintf(&b, "DELTAS: %d new tasks, %d closed, %d new findings, %d emails routed; %.1fh logged ($%.2f)\n",
 		d.NewTasks, d.ClosedTasks, d.NewFindings, d.EmailsRouted, d.HoursLogged, d.BilledUsd)
+	if in.Budget != nil {
+		fmt.Fprintf(&b, "BUDGET: %.0f%% burned ($%.0f of $%.0f, $%.0f remaining)\n",
+			in.Budget.BurnPct*100, in.Budget.BurnUsd, in.Budget.BudgetUsd, in.Budget.Remaining)
+	}
 
 	if len(in.Health.RiskFactors) > 0 {
 		b.WriteString("RISK FACTORS:\n")
