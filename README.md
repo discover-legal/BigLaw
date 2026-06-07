@@ -10,8 +10,29 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6.svg)](tsconfig.json)
 [![MCP](https://img.shields.io/badge/MCP-stdio%20server-E6B450.svg)](#using-from-claude-code)
 [![Vector DB](https://img.shields.io/badge/RuVector-native%20HNSW-7c3aed.svg)](src/agents/registry.ts)
+[![Status: Experimental](https://img.shields.io/badge/Status-Experimental-red.svg)](#-experimental--security-notice)
 
 </div>
+
+---
+
+## ⚠ Experimental — Security Notice
+
+**BigLaw is an experimental research project. It is not production-hardened software.**
+
+The goal of this project is to build the **most comprehensive open legal AI platform possible** — covering the widest breadth of legal workflows, integrations, agent types, and jurisdictions. Comprehensiveness of capability is the primary objective. Test coverage and security hardening, while taken seriously and continuously improved, are secondary to that goal.
+
+**What this means in practice:**
+
+- The platform handles credentials, client matter data, and privileged legal communications. Firms deploying it are responsible for their own threat model.
+- The codebase receives ongoing security sweeps and bug fixes, but has **not undergone a formal independent security audit**.
+- **Before deploying in any environment where real client data is involved, you must engage an independent security professional (pen tester, security engineer, or FDE — Formal Design/Deployment Expert) to review the deployment configuration and code.**
+- `AUTH_ENABLED=false` is the default for local development. **Never expose the API on a public or shared network without enabling authentication.**
+- API keys, session secrets, and OAuth credentials must be treated as production secrets regardless of environment.
+
+**Independent security review is not optional for production deployments. It is a prerequisite.**
+
+This notice does not diminish what BigLaw is — it is the most capable open legal AI stack available. It does mean you should not deploy it like a SaaS product without the due diligence that any complex, credential-holding, client-data-processing system requires.
 
 ---
 
