@@ -173,7 +173,7 @@ func topologyModes(traj *Trajectory) []string {
 	return out
 }
 
-func runArm(a arm, tasks []TaskContext, base Config, tx Transport, liveRJ *RelativeJudge, epochs int, warm *PolicyGraph) ArmResult {
+func runArm(a arm, tasks []TaskContext, base Config, opts SuiteOptions, liveRJ *RelativeJudge, warm *PolicyGraph) ArmResult {
 	cfg := base
 	cfg.TopoModes = a.topoModes
 	var g *PolicyGraph
@@ -182,10 +182,16 @@ func runArm(a arm, tasks []TaskContext, base Config, tx Transport, liveRJ *Relat
 	} else {
 		g = NewPolicyGraph(cfg)
 	}
-	emb := NewMockEmbedder()
+	emb := opts.Embedder
+	if emb == nil {
+		emb = NewMockEmbedder()
+	}
 	nEpochs := 1
 	if a.learning {
-		nEpochs = epochs
+		nEpochs = opts.Epochs
+		if nEpochs <= 0 {
+			nEpochs = 1
+		}
 	}
 	var tokensPerEpoch []int
 	var final []*Trajectory
@@ -198,7 +204,7 @@ func runArm(a arm, tasks []TaskContext, base Config, tx Transport, liveRJ *Relat
 		for _, task := range tasks {
 			var q QualitySignal
 			if task.GroundTruth != nil {
-				q = GroundTruthQ{}
+				q = GroundTruthQ{Runner: opts.CodeRunner}
 			} else {
 				q = JudgedQ{Judge: liveRJ}
 			}
@@ -206,7 +212,15 @@ func runArm(a arm, tasks []TaskContext, base Config, tx Transport, liveRJ *Relat
 			if a.selector != nil {
 				sel = a.selector()
 			}
-			traj, _ := RunTask(task, cfg, g, RunOptions{Transport: tx, Embedder: emb, Quality: q, SelectFn: sel})
+			traj, err := RunTask(task, cfg, g, RunOptions{
+				Transport: opts.Transport, Embedder: emb, Quality: q,
+				SearchProvider: opts.SearchProvider, SelectFn: sel,
+			})
+			if err != nil || traj == nil {
+				// Real transports can fail (rate limit, bad key); record a
+				// zero-quality failed trajectory rather than panic.
+				traj = &Trajectory{Trace: NewTrace(task.TaskID)}
+			}
 			epochTokens += traj.Trace.Tokens
 			snap = append(snap, traj)
 			snapTasks = append(snapTasks, task)
@@ -221,7 +235,7 @@ func runArm(a arm, tasks []TaskContext, base Config, tx Transport, liveRJ *Relat
 		task := finalTasks[i]
 		auditQ := traj.Quality
 		if task.GroundTruth == nil {
-			auditQ = AuditRescore(task, []*Trace{traj.Trace}, tx, cfg)[0].Q
+			auditQ = AuditRescore(task, []*Trace{traj.Trace}, opts.Transport, cfg)[0].Q
 		}
 		res.Trajectories = append(res.Trajectories, TrajRecord{
 			TaskID: task.TaskID, ScenarioClass: task.ScenarioClass, Domain: task.Domain,
@@ -248,15 +262,33 @@ type SuiteReport struct {
 	Epochs  int                  `json:"epochs"`
 }
 
+// SuiteOptions wires the (real, by default) components into the harness. Leave a
+// field nil to fall back to an offline test double: Transport -> MockTransport,
+// Embedder -> MockEmbedder, CodeRunner -> nil (code Q returns 0), Tasks ->
+// MockSuite.
+type SuiteOptions struct {
+	Transport      Transport
+	Embedder       Embedder
+	CodeRunner     CodeRunner
+	SearchProvider SearchProvider
+	Tasks          []TaskContext
+	Epochs         int
+	OutPath        string
+}
+
 // RunSuite runs all 7 arms and computes metrics H1–H5 (spec §14).
-func RunSuite(cfg Config, tx Transport, tasks []TaskContext, epochs int, outPath string) (*SuiteReport, error) {
-	if tx == nil {
-		tx = &MockTransport{Responder: HarnessResponder}
+func RunSuite(cfg Config, opts SuiteOptions) (*SuiteReport, error) {
+	if opts.Transport == nil {
+		opts.Transport = &MockTransport{Responder: HarnessResponder}
 	}
+	tasks := opts.Tasks
 	if tasks == nil {
 		tasks = MockSuite()
 	}
-	liveRJ := NewRelativeJudge(tx, []string{cfg.LiveJudge}, cfg)
+	if opts.Epochs <= 0 {
+		opts.Epochs = 1
+	}
+	liveRJ := NewRelativeJudge(opts.Transport, []string{cfg.LiveJudge}, cfg)
 
 	results := map[string]ArmResult{}
 	for _, a := range arms() {
@@ -266,21 +298,21 @@ func RunSuite(cfg Config, tx Transport, tasks []TaskContext, epochs int, outPath
 				warm = prev.graph
 			}
 		}
-		results[a.name] = runArm(a, tasks, cfg, tx, liveRJ, epochs, warm)
+		results[a.name] = runArm(a, tasks, cfg, opts, liveRJ, warm)
 	}
 
 	report := &SuiteReport{
 		Arms:    results,
 		Metrics: computeMetrics(results),
 		NTasks:  len(tasks),
-		Epochs:  epochs,
+		Epochs:  opts.Epochs,
 	}
-	if outPath != "" {
+	if opts.OutPath != "" {
 		data, err := json.MarshalIndent(report, "", "  ")
 		if err != nil {
 			return nil, err
 		}
-		if err := os.WriteFile(outPath, data, 0o644); err != nil {
+		if err := os.WriteFile(opts.OutPath, data, 0o644); err != nil {
 			return nil, err
 		}
 	}

@@ -98,8 +98,6 @@ func dot(a, b []float64) float64 {
 	return s
 }
 
-func cosine(a, b []float64) float64 { return dot(normalize(a), normalize(b)) }
-
 // relevanceMatrix R[i][j] = cos(Q_i, K_j); edge j->i (j provides to i) keys on R[i][j].
 func relevanceMatrix(qVecs, kVecs [][]float64) [][]float64 {
 	n := len(qVecs)

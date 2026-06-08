@@ -11,6 +11,34 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/providers"
 )
 
+// erroringTransport always fails — simulates a live transport hitting a bad key
+// or rate limit. The harness must degrade gracefully, not panic.
+type erroringTransport struct{}
+
+func (erroringTransport) Complete(LLMRequest) (map[string]any, int, error) {
+	return nil, 0, errString("simulated transport failure")
+}
+
+type errString string
+
+func (e errString) Error() string { return string(e) }
+
+func TestHarnessSurvivesTransportErrors(t *testing.T) {
+	rep, err := RunSuite(DefaultConfig(), SuiteOptions{Transport: erroringTransport{}, Epochs: 1})
+	if err != nil {
+		t.Fatalf("RunSuite should not error on transport failures: %v", err)
+	}
+	if len(rep.Arms) != 7 {
+		t.Fatalf("expected 7 arms even under transport failure, got %d", len(rep.Arms))
+	}
+	// failed trajectories => zero quality, no panic
+	for name, a := range rep.Arms {
+		if a.MeanQuality != 0 {
+			t.Errorf("arm %s should be zero-quality under total transport failure, got %v", name, a.MeanQuality)
+		}
+	}
+}
+
 // fakeProvider returns a canned JSON text block (no network).
 type fakeProvider struct{ text string }
 

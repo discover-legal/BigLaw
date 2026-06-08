@@ -95,11 +95,21 @@ func (m *MockTransport) deflt(req LLMRequest) map[string]any {
 	return out
 }
 
+// defaultModelAliases maps TopoFlow's abstract model bindings to concrete
+// provider model IDs. Override via AnthropicTransport.Aliases.
+var defaultModelAliases = map[string]string{
+	"haiku": "claude-haiku-4-5",
+	"fast":  "claude-haiku-4-5",
+	"mini":  "claude-sonnet-4-6",
+}
+
 // AnthropicTransport adapts a providers.Provider into a structured Transport by
 // instructing JSON output and parsing the first JSON object from the response.
 type AnthropicTransport struct {
 	prov      providers.Provider
 	maxTokens int
+	// Aliases resolves abstract model names (e.g. "haiku") to real provider IDs.
+	Aliases map[string]string
 }
 
 // NewAnthropicTransport wraps a provider (live path).
@@ -107,7 +117,16 @@ func NewAnthropicTransport(prov providers.Provider, maxTokens int) *AnthropicTra
 	if maxTokens <= 0 {
 		maxTokens = 2000
 	}
-	return &AnthropicTransport{prov: prov, maxTokens: maxTokens}
+	return &AnthropicTransport{prov: prov, maxTokens: maxTokens, Aliases: defaultModelAliases}
+}
+
+func (a *AnthropicTransport) resolveModel(m string) string {
+	if a.Aliases != nil {
+		if real, ok := a.Aliases[m]; ok {
+			return real
+		}
+	}
+	return m
 }
 
 // Complete implements Transport over an Anthropic-style provider.
@@ -115,7 +134,7 @@ func (a *AnthropicTransport) Complete(req LLMRequest) (map[string]any, int, erro
 	sys := req.System + "\nRespond with ONE JSON object containing the fields: " +
 		strings.Join(req.Schema, ", ") + ". No prose outside the JSON."
 	resp, err := a.prov.Chat(providers.ChatParams{
-		Model:       req.Model,
+		Model:       a.resolveModel(req.Model),
 		MaxTokens:   a.maxTokens,
 		System:      sys,
 		CacheSystem: true,

@@ -78,7 +78,7 @@ func TestDytopoOneEntryOneRewardAllTokens(t *testing.T) {
 		t.Fatalf("decision path = %+v", dp)
 	}
 	for _, d := range dp {
-		e := g.edges[edgeKey{d.Sig, d.Act}]
+		e := g.edges[edgeKey(d)]
 		if e == nil || e.Visits != 1.0 {
 			t.Errorf("edge %v visits=%v want 1", d.Act, e)
 		}

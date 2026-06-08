@@ -14,7 +14,7 @@ import (
 
 func TestAllSevenArmsAndMetrics(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "report.json")
-	rep, err := RunSuite(DefaultConfig(), nil, nil, 2, out)
+	rep, err := RunSuite(DefaultConfig(), SuiteOptions{Epochs: 2, OutPath: out})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func TestAllSevenArmsAndMetrics(t *testing.T) {
 }
 
 func TestArm4RecoversArm3AndArm5RecoversArm2(t *testing.T) {
-	rep, err := RunSuite(DefaultConfig(), nil, nil, 2, "")
+	rep, err := RunSuite(DefaultConfig(), SuiteOptions{Epochs: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestArm4RecoversArm3AndArm5RecoversArm2(t *testing.T) {
 }
 
 func TestH5AuditReportedSeparately(t *testing.T) {
-	rep, err := RunSuite(DefaultConfig(), nil, nil, 1, "")
+	rep, err := RunSuite(DefaultConfig(), SuiteOptions{Epochs: 1})
 	if err != nil {
 		t.Fatal(err)
 	}

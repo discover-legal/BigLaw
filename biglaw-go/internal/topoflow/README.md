@@ -34,27 +34,52 @@ TopoFlow spec (AgensFlow `[AF]` + DyTopo `[DT]` with `[NEW]` integration glue),
 | harness (7 arms) + datasets + metrics (§14) | `eval.go` |
 | acceptance tests M1–M9 | `*_test.go` |
 
+## Components are real, not faked
+
+| Component | Real implementation | Offline test double |
+|---|---|---|
+| LLM transport | `AnthropicTransport` over `providers.Provider` (JSON-structured) | `MockTransport` |
+| encoder | `EmbeddingsAdapter` over the project `embeddings.Client` | `MockEmbedder` (bag-of-words) |
+| code Q | `SubprocessCodeRunner` — runs candidate code in a real `python3` subprocess against the HumanEval `check()` harness / APPS asserts, with a per-call timeout | (none; returns 0 if no runner) |
+| web search | `SearchProvider` seam | `MockSearchProvider` |
+| datasets | `LoadJSONL` + baked-in real HumanEval/MATH samples | — |
+
+The mocks exist only as offline test doubles; pass real components for a live run.
+
 ## Running
 
-Offline (no network) — all milestones M1–M9 via `MockTransport`/`MockEmbedder`:
+Offline tests (no network) — all milestones M1–M9, plus the **real** Python
+code-execution tests:
 
 ```bash
 go test ./internal/topoflow/        # add -race for the concurrency-clean check
 ```
 
-Live run — wire the project's provider + embeddings client:
+Real evaluation CLI (`cmd/topoflow-eval`):
+
+```bash
+# offline: real subprocess CodeRunner + mock transport (no API key needed)
+go run ./cmd/topoflow-eval -offline -dataset humaneval -epochs 1 -out report.json
+
+# live: real Anthropic transport + embeddings + code runner (needs ANTHROPIC_API_KEY)
+go run ./cmd/topoflow-eval -dataset humaneval -epochs 8 -out report.json
+go run ./cmd/topoflow-eval -dataset path/to/dataset.jsonl -epochs 8
+```
+
+Embedding it directly:
 
 ```go
-prov := provReg.MustGet(routing.ModelHaiku)
-tx := topoflow.NewAnthropicTransport(prov, 4000)
+tx := topoflow.NewAnthropicTransport(provReg.MustGet(routing.ModelHaiku), 4000)
 emb := topoflow.NewEmbeddingsAdapter(embeddings.NewClient(cfg))
-g := topoflow.NewPolicyGraph(topoflow.DefaultConfig())
-traj, _ := topoflow.RunTask(ctx, topoflow.DefaultConfig(), g,
-    topoflow.RunOptions{Transport: tx, Embedder: emb})
-
-// or the full evaluation harness:
-report, _ := topoflow.RunSuite(topoflow.DefaultConfig(), tx, nil, 8, "topoflow_report.json")
+report, _ := topoflow.RunSuite(topoflow.DefaultConfig(), topoflow.SuiteOptions{
+    Transport: tx, Embedder: emb, CodeRunner: topoflow.NewSubprocessCodeRunner(),
+    Tasks: topoflow.RealHumanEvalSample(), Epochs: 8, OutPath: "report.json",
+})
 ```
+
+> **Security:** `SubprocessCodeRunner` executes model-generated code. It enforces
+> a timeout but has no namespace/seccomp isolation — sandbox it (container) in
+> production. Tests pass trusted fixtures only.
 
 ## Design notes (degrees of freedom live in `[NEW]`)
 
