@@ -20,9 +20,9 @@ export function Login() {
     <div className="login-scrim">
       <motion.div className="login-card" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}>
         <div className="brand-mark login-brand">
-          <span className="big">Big</span>&nbsp;<span className="michael">Michael</span><span className="dot">.</span>
+          <span className="big">Big</span><span className="michael">Law</span><span className="dot">.</span>
         </div>
-        <div className="login-sub">Legal Intelligence Bench</div>
+        <div className="login-sub" style={{ letterSpacing: "0.14em" }}>the biglaw tool stack · open &amp; free</div>
 
         {error && <div className="login-error">Sign-in failed. Please try again.</div>}
 

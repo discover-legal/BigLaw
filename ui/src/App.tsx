@@ -3,17 +3,38 @@ import { motion, AnimatePresence } from "framer-motion";
 import { api, streamTask } from "./api";
 import type { Task, Health, AgentSummary, LawyerProfile, Me } from "./types";
 import { MODE_ACCENT, MODE_LABEL } from "./types";
-import { StatusDot, WorkflowPill, timeAgo } from "./primitives";
-import { TaskView } from "./TaskView";
 import { SubmitModal } from "./SubmitModal";
-import { Library } from "./Library";
 import { AuditRail } from "./AuditRail";
-import { AdminPanel } from "./AdminPanel";
-import { ClientsPanel } from "./ClientsPanel";
-import { TimeEntryPane } from "./TimeEntryPane";
 import { Login } from "./Login";
+import { ErrorBoundary } from "./pages/ErrorBoundary";
+import { MattersPage } from "./pages/MattersPage";
+import { LibraryPage } from "./Library";
+import { ClientsPanel } from "./ClientsPanel";
+import { BillingPage } from "./pages/BillingPage";
+import { BudgetsPage } from "./pages/BudgetsPage";
+import { WatchtowerPage } from "./pages/WatchtowerPage";
+import { DraftingPage } from "./pages/DraftingPage";
+import { AnalyticsPage } from "./pages/AnalyticsPage";
+import { AdminPanel } from "./AdminPanel";
+
+type Section =
+  | "matters" | "library" | "clients" | "billing" | "budgets"
+  | "watchtower" | "drafting" | "analytics" | "admin";
+
+const NAV: Array<{ id: Section; glyph: string; label: string }> = [
+  { id: "matters",    glyph: "⚖", label: "Matters" },
+  { id: "library",    glyph: "⊞", label: "Library" },
+  { id: "clients",    glyph: "☷", label: "Clients" },
+  { id: "billing",    glyph: "⏱", label: "Billing & Time" },
+  { id: "budgets",    glyph: "◔", label: "Budgets & Deadlines" },
+  { id: "watchtower", glyph: "◉", label: "Watchtower" },
+  { id: "drafting",   glyph: "✎", label: "Drafting" },
+  { id: "analytics",  glyph: "∿", label: "Analytics" },
+  { id: "admin",      glyph: "⚙", label: "Admin" },
+];
 
 export default function App() {
+  const [section, setSection] = useState<Section>("matters");
   const [tasks, setTasks] = useState<Task[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [task, setTask] = useState<Task | null>(null);
@@ -23,12 +44,7 @@ export default function App() {
   const [profiles, setProfiles] = useState<LawyerProfile[]>([]);
   const loadProfiles = useCallback(() => { api.listProfiles().then(setProfiles).catch(() => {}); }, []);
   const [submitOpen, setSubmitOpen] = useState(false);
-  const [libraryOpen, setLibraryOpen] = useState(false);
-  const [adminOpen, setAdminOpen] = useState(false);
-  const [clientsOpen, setClientsOpen] = useState(false);
-  const [timeEntriesOpen, setTimeEntriesOpen] = useState(false);
   const [auditOpen, setAuditOpen] = useState(false);
-  const [clientFilter, setClientFilter] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<number | undefined>(undefined);
 
@@ -80,6 +96,7 @@ export default function App() {
     setSelectedId((cur) => (cur === id ? null : cur));
     api.listTasks().then(setTasks).catch(() => {});
   }, []);
+
   const agentNames = useMemo(() => {
     const m = new Map<string, string>();
     for (const a of agents) m.set(a.id, a.name);
@@ -108,7 +125,26 @@ export default function App() {
     setSubmitOpen(false);
     setTasks((prev) => [t, ...prev.filter((p) => p.id !== t.id)]);
     setSelectedId(t.id);
+    setSection("matters");
   }
+
+  // Which sections this principal can see. Partner-only workspaces are hidden
+  // rather than rendered as a wall of 403s.
+  const caps = me?.capabilities;
+  const visible = useMemo(() => {
+    const out = new Set<Section>(["matters", "library", "drafting", "budgets"]);
+    if (isPartner && caps?.clientRoster !== false) out.add("clients");
+    if (caps?.timeTracking !== false) out.add("billing");
+    if (isPartner) out.add("watchtower");
+    if (isPartner && caps?.matterAnalytics !== false) out.add("analytics");
+    if (caps?.adminSettings !== false) out.add("admin");
+    return out;
+  }, [isPartner, caps]);
+
+  // If capabilities shrink (e.g. logout/login as lawyer), fall back to Matters.
+  useEffect(() => {
+    if (!visible.has(section)) setSection("matters");
+  }, [visible, section]);
 
   // Production with auth on, but no session → show the login screen.
   if (me?.authEnabled && !me.user) return <Login />;
@@ -118,59 +154,33 @@ export default function App() {
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark">
-            <span className="big">Big</span>&nbsp;<span className="michael">Michael</span><span className="dot">.</span>
+            <span className="big">Big</span><span className="michael">Law</span><span className="dot">.</span>
           </div>
-          <div className="brand-sub">Legal Intelligence Bench</div>
+          <div className="brand-sub">the biglaw tool stack · open &amp; free</div>
         </div>
 
-        <div className="rail-actions" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <div className="rail-actions">
           <button className="btn primary full" onClick={() => setSubmitOpen(true)}>＋ New matter</button>
-          <button className="btn full ghost" onClick={() => setLibraryOpen(true)}>⊕ Library · ingest &amp; search</button>
-          {(me?.capabilities?.clientRoster !== false) && isPartner && <button className="btn full ghost" onClick={() => setClientsOpen(true)}>⚖ Clients &amp; matters</button>}
-          {(me?.capabilities?.timeTracking !== false) && <button className="btn full ghost" onClick={() => setTimeEntriesOpen(true)}>⏱ Time entries &amp; OCG</button>}
-          {(me?.capabilities?.adminSettings !== false) && <button className="btn full ghost" onClick={() => setAdminOpen(true)}>⚙ Admin · settings</button>}
         </div>
 
-        <div className="rail-scroll">
-          {clientFilter && (
-            <div style={{ padding: "6px 8px", display: "flex", alignItems: "center", gap: 6 }}>
-              <span className="pill sm gold">{clientFilter}</span>
-              <button className="btn ghost sm" style={{ padding: "2px 6px" }} onClick={() => setClientFilter(null)}>✕</button>
-            </div>
-          )}
-          <div className="rail-label">Matters · {tasks.filter((t) => !clientFilter || t.clientNumber === clientFilter).length}</div>
-          {tasks.filter((t) => !clientFilter || t.clientNumber === clientFilter).length === 0 && (
-            <div style={{ padding: "10px 8px", color: "var(--text-faint)", fontSize: 13 }}>
-              {clientFilter ? "No matters for this client." : "No matters yet. Convene the bench to begin."}
-            </div>
-          )}
-          {tasks.filter((t) => !clientFilter || t.clientNumber === clientFilter).map((t, i) => (
-            <motion.button
-              key={t.id}
-              className={`task-card ${t.id === selectedId ? "active" : ""}`}
-              onClick={() => setSelectedId(t.id)}
-              initial={{ opacity: 0, x: -8 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ delay: Math.min(i * 0.03, 0.4) }}
+        <nav className="nav">
+          {NAV.filter((n) => visible.has(n.id)).map((n) => (
+            <button
+              key={n.id}
+              className={`nav-item ${section === n.id ? "active" : ""}`}
+              onClick={() => setSection(n.id)}
             >
-              <div className="task-card-top">
-                <StatusDot status={t.status} />
-                <span className="task-card-title">{t.description}</span>
-              </div>
-              <div className="task-card-meta">
-                <WorkflowPill workflow={t.workflowType} />
-                {t.clientNumber && (
-                  <span className="card-matter" style={{ cursor: "pointer", color: "var(--gold-soft)" }}
-                    onClick={(e) => { e.stopPropagation(); setClientFilter(t.clientNumber!); }}>
-                    · {t.clientNumber}
-                  </span>
-                )}
-                {t.matterNumber && <span className="card-matter">· {t.matterNumber}</span>}
-                <span>· {timeAgo(t.updatedAt)}</span>
-                {t.pendingGates?.some((g) => g.status === "pending") && <span style={{ color: "var(--amber)" }}>· ⚖ review</span>}
-              </div>
-            </motion.button>
+              <span className="nav-glyph">{n.glyph}</span>
+              <span className="nav-label">{n.label}</span>
+              {n.id === "matters" && tasks.some((t) => t.pendingGates?.some((g) => g.status === "pending")) && (
+                <span className="nav-badge" title="Findings awaiting review">⚖</span>
+              )}
+            </button>
           ))}
+        </nav>
+
+        <div className="sidebar-foot">
+          <span className="sidebar-foot-line">Big Michael convenes the bench</span>
         </div>
       </aside>
 
@@ -197,11 +207,30 @@ export default function App() {
           </div>
         </div>
 
-        <div className="detail-scroll">
-          {task
-            ? <TaskView key={task.id} task={task} agentNames={agentNames} profiles={profiles}
-                isPartner={isPartner} onChange={refetchSelected} onDeleted={onDeleted} notify={notify} />
-            : <EmptyState onNew={() => setSubmitOpen(true)} offline={!health} />}
+        <div className="workspace">
+          <ErrorBoundary key={section}>
+            {section === "matters" && (
+              <MattersPage
+                tasks={tasks} selectedId={selectedId} onSelect={setSelectedId}
+                task={task} agentNames={agentNames} profiles={profiles}
+                isPartner={isPartner} onChange={refetchSelected} onDeleted={onDeleted}
+                notify={notify} onNew={() => setSubmitOpen(true)} offline={!health}
+              />
+            )}
+            {section === "library" && <LibraryPage notify={notify} />}
+            {section === "clients" && <ClientsPanel notify={notify} />}
+            {section === "billing" && <BillingPage notify={notify} isPartner={isPartner} />}
+            {section === "budgets" && <BudgetsPage notify={notify} isPartner={isPartner} />}
+            {section === "watchtower" && <WatchtowerPage notify={notify} />}
+            {section === "drafting" && <DraftingPage notify={notify} isPartner={isPartner} />}
+            {section === "analytics" && <AnalyticsPage notify={notify} />}
+            {section === "admin" && (
+              <AdminPanel
+                notify={notify} isPartner={isPartner} profiles={profiles}
+                onProfilesChange={loadProfiles} me={me?.user}
+              />
+            )}
+          </ErrorBoundary>
         </div>
       </main>
 
@@ -209,10 +238,6 @@ export default function App() {
 
       <AnimatePresence>
         {submitOpen && <SubmitModal onClose={() => setSubmitOpen(false)} onCreated={onCreated} notify={notify} />}
-        {libraryOpen && <Library onClose={() => setLibraryOpen(false)} notify={notify} />}
-        {clientsOpen && <ClientsPanel onClose={() => setClientsOpen(false)} notify={notify} />}
-        {timeEntriesOpen && <TimeEntryPane onClose={() => setTimeEntriesOpen(false)} notify={notify} isPartner={isPartner} />}
-        {adminOpen && <AdminPanel onClose={() => setAdminOpen(false)} notify={notify} isPartner={isPartner} profiles={profiles} onProfilesChange={loadProfiles} me={me?.user} />}
       </AnimatePresence>
 
       <AnimatePresence>
@@ -223,21 +248,6 @@ export default function App() {
           </motion.div>
         )}
       </AnimatePresence>
-    </div>
-  );
-}
-
-function EmptyState({ onNew, offline }: { onNew: () => void; offline: boolean }) {
-  return (
-    <div className="empty">
-      <div className="glyph">§</div>
-      <h2>The bench is in session</h2>
-      <p>
-        {offline
-          ? "Can't reach the API on :3101. Start Big Michael with npm run dev, then convene a matter."
-          : "Brief the orchestrator and watch granular epistemic, conceptual, and writing agents debate, cite, and verify every finding before synthesis."}
-      </p>
-      <button className="btn primary" onClick={onNew}>⚖ Convene the bench</button>
     </div>
   );
 }

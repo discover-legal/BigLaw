@@ -1,20 +1,21 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { api } from "./api";
-import type { AppSettings, LawyerProfile, UserMode } from "./types";
+import type { AppSettings, Job, JobStatus, LawyerProfile, QueueStats, UserMode } from "./types";
 import { PRACTICE_AREAS, MODE_LABEL } from "./types";
-import { CostDashboard } from "./CostDashboard";
 import { ToneImportModal } from "./ToneImportModal";
+import { ErrorState } from "./Library";
+import { timeAgo } from "./primitives";
 
-export function AdminPanel({ onClose, notify, isPartner, profiles, onProfilesChange, me }: {
-  onClose: () => void; notify: (m: string) => void;
+export function AdminPanel({ notify, isPartner, profiles, onProfilesChange, me }: {
+  notify: (m: string) => void;
   isPartner: boolean; profiles: LawyerProfile[]; onProfilesChange: () => void;
   me?: { profileId: string } | null;
 }) {
   const [s, setS] = useState<AppSettings | null>(null);
   const [apiKey, setApiKey] = useState("");
   const [busy, setBusy] = useState(false);
-  const [tab, setTab] = useState<"users" | "settings" | "cost">(isPartner ? "users" : "settings");
+  const [tab, setTab] = useState<"users" | "settings" | "jobs">(isPartner ? "users" : "settings");
   const [np, setNp] = useState({ name: "", email: "", role: "lawyer", title: "", practiceAreas: [] as string[], bio: "" });
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editPatch, setEditPatch] = useState<Partial<LawyerProfile>>({});
@@ -82,16 +83,14 @@ export function AdminPanel({ onClose, notify, isPartner, profiles, onProfilesCha
 
   return (
     <>
-    <div className="modal-scrim" onClick={onClose}>
-      <motion.div className="modal admin" onClick={(e) => e.stopPropagation()}
-        initial={{ opacity: 0, y: 18, scale: 0.98 }} animate={{ opacity: 1, y: 0, scale: 1 }}
-        transition={{ type: "spring", stiffness: 320, damping: 28 }}>
-        <div className="modal-head">
-          <h3>Admin</h3>
-          <p>Manage users, practice areas, and system settings.</p>
+    <div className="page-scroll">
+      <div className="page" style={{ maxWidth: 880 }}>
+        <div className="page-head">
+          <h1 className="page-title">Admin</h1>
+          <p className="page-sub">Manage users, practice areas, system settings, and the background job queue.</p>
         </div>
 
-        <div className="tabs" style={{ margin: "0 26px" }}>
+        <div className="tabs">
           <button className={`tab ${tab === "users" ? "active" : ""}`} onClick={() => setTab("users")}>
             Users {tab === "users" && <motion.span layoutId="adm-ul" className="tab-underline" />}
           </button>
@@ -99,14 +98,14 @@ export function AdminPanel({ onClose, notify, isPartner, profiles, onProfilesCha
             Settings {tab === "settings" && <motion.span layoutId="adm-ul" className="tab-underline" />}
           </button>
           {isPartner && (
-            <button className={`tab ${tab === "cost" ? "active" : ""}`} onClick={() => setTab("cost")}>
-              Cost {tab === "cost" && <motion.span layoutId="adm-ul" className="tab-underline" />}
+            <button className={`tab ${tab === "jobs" ? "active" : ""}`} onClick={() => setTab("jobs")}>
+              Jobs {tab === "jobs" && <motion.span layoutId="adm-ul" className="tab-underline" />}
             </button>
           )}
         </div>
 
         {tab === "users" && (
-          <div className="modal-body">
+          <div className="panel-body">
             <div className="admin-section">
               <div className="admin-section-title">Users &amp; roles</div>
               <div className="lawyer-list">
@@ -261,10 +260,10 @@ export function AdminPanel({ onClose, notify, isPartner, profiles, onProfilesCha
         )}
 
         {tab === "settings" && !s && (
-          <div className="modal-body"><div className="placeholder">Loading settings…</div></div>
+          <div className="panel-body"><div className="placeholder">Loading settings…</div></div>
         )}
         {tab === "settings" && s && (
-          <div className="modal-body">
+          <div className="panel-body">
             {/* ── Practice mode ───────────────────────────────────────────── */}
             <div className="admin-section">
               <div className="admin-section-title">Presentation</div>
@@ -322,22 +321,19 @@ export function AdminPanel({ onClose, notify, isPartner, profiles, onProfilesCha
                   placeholder={s.docuseal.apiKeySet ? "•••••••• — leave blank to keep" : "X-Auth-Token"} />
               </div>
             </div>
+
+            <div style={{ marginTop: 16 }}>
+              <button className="btn primary" disabled={busy} onClick={save}>{busy ? "Saving…" : "Save settings"}</button>
+            </div>
           </div>
         )}
 
-        {tab === "cost" && isPartner && (
-          <div className="modal-body">
-            <CostDashboard notify={notify} />
+        {tab === "jobs" && isPartner && (
+          <div className="panel-body">
+            <JobsPanel notify={notify} />
           </div>
         )}
-
-        <div className="modal-foot">
-          <button className="btn ghost" onClick={onClose}>Close</button>
-          {tab === "settings" && (
-            <button className="btn primary" disabled={busy || !s} onClick={save}>{busy ? "Saving…" : "Save settings"}</button>
-          )}
-        </div>
-      </motion.div>
+      </div>
     </div>
     {toneModalProfile && (
       <ToneImportModal
@@ -351,6 +347,102 @@ export function AdminPanel({ onClose, notify, isPartner, profiles, onProfilesCha
       />
     )}
     </>
+  );
+}
+
+// ─── Background job queue ─────────────────────────────────────────────────────
+
+const JOB_STATUSES: JobStatus[] = ["pending", "running", "done", "failed", "dead_letter"];
+
+const JOB_STATUS_PILL: Record<JobStatus, string> = {
+  pending: "", running: "gold", done: "green", failed: "red", dead_letter: "red",
+};
+
+function JobsPanel({ notify }: { notify: (m: string) => void }) {
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [stats, setStats] = useState<QueueStats | null>(null);
+  const [statusFilter, setStatusFilter] = useState<JobStatus | "">("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    setLoading(true);
+    setError(null);
+    Promise.all([
+      api.listJobs({ status: statusFilter || undefined, limit: 100 }),
+      api.jobStats(),
+    ])
+      .then(([j, st]) => { setJobs(j); setStats(st); })
+      .catch((e) => setError((e as Error).message))
+      .finally(() => setLoading(false));
+  }, [statusFilter]);
+
+  useEffect(() => { load(); }, [load]);
+
+  async function retry(id: string) {
+    setRetrying(id);
+    try {
+      await api.retryJob(id);
+      notify("Job re-queued");
+      load();
+    } catch (e) { notify((e as Error).message); }
+    finally { setRetrying(null); }
+  }
+
+  return (
+    <div>
+      {stats && (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+          {JOB_STATUSES.map((st) => (
+            <button key={st} className={`pill ${statusFilter === st ? "gold" : ""}`}
+              style={{ cursor: "pointer", background: statusFilter === st ? undefined : "transparent" }}
+              onClick={() => setStatusFilter((cur) => (cur === st ? "" : st))}>
+              {st.replace("_", " ")} · {stats[st]}
+            </button>
+          ))}
+          <button className="btn ghost sm" onClick={load}>↻ Refresh</button>
+        </div>
+      )}
+
+      {loading && <div className="placeholder">Loading job queue…</div>}
+      {error && <ErrorState message={error} onRetry={load} />}
+      {!loading && !error && jobs.length === 0 && (
+        <div className="placeholder">No jobs{statusFilter ? ` with status "${statusFilter}"` : " in the queue"}.</div>
+      )}
+      {!loading && !error && jobs.length > 0 && (
+        <div className="grid-wrap">
+          <div className="grid-scroll">
+            <table className="grid">
+              <thead>
+                <tr><th>Type</th><th>Status</th><th>Created</th><th>Retries</th><th>Error</th><th></th></tr>
+              </thead>
+              <tbody>
+                {jobs.map((j) => (
+                  <tr key={j.id}>
+                    <td>
+                      <div style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>{j.type}</div>
+                      <div className="grid-meta" style={{ marginTop: 3 }}>{j.id}</div>
+                    </td>
+                    <td><span className={`pill sm ${JOB_STATUS_PILL[j.status]}`}>{j.status.replace("_", " ")}</span></td>
+                    <td style={{ whiteSpace: "nowrap", color: "var(--text-dim)" }}>{timeAgo(j.createdAt)}</td>
+                    <td style={{ fontFamily: "var(--font-mono)" }}>{j.retries}/{j.maxRetries}</td>
+                    <td style={{ maxWidth: 280, color: "var(--red)", fontSize: 12, wordBreak: "break-word" }}>{j.error ?? "—"}</td>
+                    <td>
+                      {(j.status === "failed" || j.status === "dead_letter") && (
+                        <button className="btn ghost sm" disabled={retrying === j.id} onClick={() => retry(j.id)}>
+                          {retrying === j.id ? "…" : "↻ Retry"}
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 

@@ -35,7 +35,6 @@
     "typedb-driver": "^2.29.7",
     "uuid": "^11.1.1",
     "winston": "^3.13.0",
-    "typedb-driver": "^2.28.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
