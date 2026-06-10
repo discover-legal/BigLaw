@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"sync"
@@ -56,10 +57,11 @@ func CanViewTask(u *types.SessionUser, assignedIDs []string) bool {
 // ─── ProfileStore ─────────────────────────────────────────────────────────────
 
 type ProfileStore struct {
-	mu       sync.RWMutex
-	profiles []types.LawyerProfile
-	path     string
-	cfg      *config.Config
+	mu        sync.RWMutex
+	persistMu sync.Mutex // serialises concurrent fire-and-forget persists
+	profiles  []types.LawyerProfile
+	path      string
+	cfg       *config.Config
 }
 
 func NewProfileStore(cfg *config.Config) *ProfileStore {
@@ -255,13 +257,22 @@ func (s *ProfileStore) Remove(id string) (bool, error) {
 	return true, nil
 }
 
+// persist writes the roster atomically. 0600: profiles carry emails, bios,
+// and tone fingerprints.
 func (s *ProfileStore) persist() {
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
 	s.mu.RLock()
 	data, _ := json.MarshalIndent(s.profiles, "", "  ")
 	s.mu.RUnlock()
 	tmp := s.path + ".tmp"
-	os.WriteFile(tmp, data, 0644)
-	os.Rename(tmp, s.path)
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
+		slog.Error("profiles: persist write failed", "path", tmp, "err", err)
+		return
+	}
+	if err := os.Rename(tmp, s.path); err != nil {
+		slog.Error("profiles: persist rename failed", "path", s.path, "err", err)
+	}
 }
 
 // ─── Utilities ────────────────────────────────────────────────────────────────

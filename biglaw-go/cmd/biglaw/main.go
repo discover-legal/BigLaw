@@ -21,6 +21,7 @@ import (
 
 	"github.com/joho/godotenv"
 
+	"github.com/discover-legal/biglaw-go/internal/adapters"
 	"github.com/discover-legal/biglaw-go/internal/agents"
 	"github.com/discover-legal/biglaw-go/internal/api"
 	"github.com/discover-legal/biglaw-go/internal/audit"
@@ -39,6 +40,7 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/templates"
 	"github.com/discover-legal/biglaw-go/internal/timekeeping"
 	"github.com/discover-legal/biglaw-go/internal/tools"
+	"github.com/discover-legal/biglaw-go/internal/types"
 )
 
 func main() {
@@ -46,6 +48,13 @@ func main() {
 	_ = godotenv.Load()
 
 	cfg := config.Load()
+
+	// With auth enabled, the REST API is gated by a bearer token; a profile
+	// header alone is a claim, not a credential.
+	if cfg.Auth.Enabled && cfg.API.APIKey == "" {
+		fmt.Fprintln(os.Stderr, "config: AUTH_ENABLED=true requires API_KEY (REST bearer token) to be set")
+		os.Exit(1)
+	}
 
 	// Initialise audit logger.
 	audit.Init(cfg.Audit.LogFile, cfg.Audit.Enabled)
@@ -72,9 +81,35 @@ func main() {
 	// Build knowledge store.
 	knowledgeStore := knowledge.NewStore(embedC)
 
-	// Build template store and load from filesystem.
+	// Build template store and load from filesystem. Lavern and MikeOSS
+	// workflow files have their own shapes — use the adapter loaders rather
+	// than parsing them as raw TaskTemplates.
 	templatesStore := templates.NewStore()
-	_ = templatesStore.Load("templates", "workflows/mikeoss", "workflows/laverne")
+	_ = templatesStore.Load("templates")
+	if ts, err := adapters.LoadLavernWorkflows("workflows/laverne"); err == nil {
+		for _, t := range ts {
+			templatesStore.Add(t)
+		}
+	}
+	if ts, err := adapters.LoadMikeOSSWorkflows("workflows/mikeoss"); err == nil {
+		for _, t := range ts {
+			templatesStore.Add(t)
+		}
+	}
+
+	// Load external JSON plugin adapters and Lavern agent configs.
+	pluginReg := adapters.New()
+	if err := pluginReg.LoadDirectory("adapters/external"); err != nil {
+		fmt.Fprintf(os.Stderr, "plugin adapters: %v\n", err)
+	}
+	for _, t := range pluginReg.TaskTemplates() {
+		templatesStore.Add(t)
+	}
+	allAgents := append([]types.AgentDefinition{}, agents.ALL_AGENT_DEFINITIONS...)
+	allAgents = append(allAgents, pluginReg.AgentDefinitions()...)
+	if lavernAgents, err := adapters.LoadLavernAgents("agents/lavern"); err == nil {
+		allAgents = append(allAgents, lavernAgents...)
+	}
 
 	// Build settings, profiles, clients, time stores.
 	settingsStore := settings.NewSettingsStore(cfg.Persistence.SettingsFile)
@@ -87,16 +122,6 @@ func main() {
 
 	// Build tool registry.
 	toolReg := tools.NewRegistry(cfg, provReg, costStore)
-
-	// Build knowledge and memory adapters (bridge to agents.KnowledgeStore / agents.MemoryStore).
-	knowledgeAdapter := knowledge.NewAdapter(knowledgeStore)
-	memAdapter := memory.NewAdapter(memStore)
-
-	// Wire the tool registry's knowledge/memory dependencies via the agents package interface.
-	// (The tool registry uses these indirectly via agent tool calls.)
-	_ = knowledgeAdapter
-	_ = memAdapter
-	_ = toolReg
 
 	// Build orchestrator.
 	orch := orchestrator.New(
@@ -113,10 +138,11 @@ func main() {
 		clientStore,
 		timeStore,
 		learningEngine,
+		toolReg,
 		agents.ROOT_ORCHESTRATOR,
 	)
 
-	if err := orch.Init(agents.ALL_AGENT_DEFINITIONS); err != nil {
+	if err := orch.Init(allAgents); err != nil {
 		fmt.Fprintf(os.Stderr, "orchestrator init: %v\n", err)
 		os.Exit(1)
 	}

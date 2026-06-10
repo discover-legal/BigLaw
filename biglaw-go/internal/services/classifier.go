@@ -31,10 +31,7 @@ func New(provider providers.Provider, haikuModel string) *Classifier {
 // DetectPracticeArea classifies a document into a canonical practice area.
 func (c *Classifier) DetectPracticeArea(title, content string) string {
 	safeTitle := sanitizeClassifier(title, 300)
-	snippet := content
-	if len(snippet) > 2000 {
-		snippet = snippet[:2000]
-	}
+	snippet := sanitizeSnippet(content, 2000)
 	prompt := fmt.Sprintf(`You are a legal categorisation assistant. Given a document title and excerpt, identify the single most relevant practice area from the list below. Reply with ONLY the exact practice area name, or "Unknown" if none fits.
 
 Practice areas:
@@ -63,10 +60,7 @@ func (c *Classifier) DetectClient(title, content string, clients []*types.Client
 		return nil
 	}
 	safeTitle := sanitizeClassifier(title, 300)
-	snippet := content
-	if len(snippet) > 3000 {
-		snippet = snippet[:3000]
-	}
+	snippet := sanitizeSnippet(content, 3000)
 	lines := make([]string, len(clients))
 	for i, cl := range clients {
 		lines[i] = fmt.Sprintf("- %s: %s", cl.ClientNumber, cl.Name)
@@ -96,10 +90,7 @@ Document excerpt:
 // Never panics — returns empty NosLegalTags on any error.
 func (c *Classifier) DetectNosLegal(title, content string) types.NosLegalTags {
 	safeTitle := sanitizeClassifier(title, 300)
-	snippet := content
-	if len(snippet) > 2000 {
-		snippet = snippet[:2000]
-	}
+	snippet := sanitizeSnippet(content, 2000)
 	prompt := fmt.Sprintf(`You are a legal taxonomy assistant. Given a task title and description, classify it into NOSLEGAL v4 taxonomy facets. Respond with ONLY valid JSON (no prose, no markdown fences) using exactly this shape:
 {
   "areaOfLaw": "<string or omit>",
@@ -191,6 +182,21 @@ func (c *Classifier) callHaiku(prompt string, maxTokens int, profileID string) s
 func sanitizeClassifier(s string, max int) string {
 	s = strings.ReplaceAll(s, "\r", " ")
 	s = strings.ReplaceAll(s, "\n", " ")
+	for _, marker := range []string{"FINDING:", "END_FINDING", "NO_FINDINGS", "NO_CHALLENGE"} {
+		s = strings.ReplaceAll(s, marker, "[redacted]")
+	}
+	if len(s) > max {
+		s = s[:max]
+	}
+	return s
+}
+
+// sanitizeSnippet strips protocol markers from a document excerpt while
+// preserving newlines, then truncates to max bytes.
+func sanitizeSnippet(s string, max int) string {
+	for _, marker := range []string{"FINDING:", "END_FINDING", "NO_FINDINGS", "NO_CHALLENGE"} {
+		s = strings.ReplaceAll(s, marker, "[redacted]")
+	}
 	if len(s) > max {
 		s = s[:max]
 	}

@@ -8,11 +8,14 @@
 package api
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -23,6 +26,7 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/clients"
 	"github.com/discover-legal/biglaw-go/internal/config"
 	"github.com/discover-legal/biglaw-go/internal/cost"
+	"github.com/discover-legal/biglaw-go/internal/graph"
 	"github.com/discover-legal/biglaw-go/internal/knowledge"
 	"github.com/discover-legal/biglaw-go/internal/orchestrator"
 	"github.com/discover-legal/biglaw-go/internal/timekeeping"
@@ -33,15 +37,16 @@ const ctxUserKey = "user"
 
 // Server holds all subsystem references and owns the Gin engine.
 type Server struct {
-	cfg      *config.Config
-	orch     *orchestrator.Orchestrator
-	profiles *auth.ProfileStore
-	clients  *clients.ClientStore
-	time     *timekeeping.TimeStore
+	cfg       *config.Config
+	orch      *orchestrator.Orchestrator
+	profiles  *auth.ProfileStore
+	clients   *clients.ClientStore
+	time      *timekeeping.TimeStore
 	knowledge *knowledge.Store
 	registry  *agents.Registry
 	costs     *cost.Store
-	router   *gin.Engine
+	graph     *graph.Client
+	router    *gin.Engine
 }
 
 // New creates a Server, registers all routes, and returns it.
@@ -65,7 +70,12 @@ func New(
 		knowledge: knowledgeStore,
 		registry:  registry,
 		costs:     costStore,
+		graph:     graph.New(),
 	}
+
+	// Push the current roster into the TypeDB conflict graph if the sidecar
+	// is up. Best-effort: the substring conflict check works without it.
+	go s.syncGraph()
 
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
@@ -87,9 +97,11 @@ func New(
 		tasks.POST("/:id/assign", s.handleAssignTask)
 		tasks.GET("/:id/stream", s.handleTaskStream)
 		tasks.GET("/:id/cost", s.handleTaskCost)
-		tasks.GET("/:taskId/rounds/:round", s.handleGetRound)
-		tasks.POST("/:taskId/gates/:gateId/approve", s.handleApproveGate)
-		tasks.POST("/:taskId/gates/:gateId/reject", s.handleRejectGate)
+		// Gin requires one param name per path position: this group already
+		// uses ":id" for the task segment.
+		tasks.GET("/:id/rounds/:round", s.handleGetRound)
+		tasks.POST("/:id/gates/:gateId/approve", s.handleApproveGate)
+		tasks.POST("/:id/gates/:gateId/reject", s.handleRejectGate)
 	}
 
 	// ── Documents ─────────────────────────────────────────────────────────
@@ -121,6 +133,7 @@ func New(
 		cls.GET("", s.handleListClients)
 		cls.POST("", s.handleCreateClient)
 		cls.POST("/check-conflict", s.handleCheckConflict)
+		cls.GET("/:id/conflicts", s.handleClientGraphConflicts)
 		cls.PATCH("/:id", s.handleUpdateClient)
 		cls.DELETE("/:id", s.handleDeleteClient)
 		cls.POST("/:id/matters", s.handleAddMatter)
@@ -154,6 +167,17 @@ func (s *Server) authMiddleware() gin.HandlerFunc {
 			u := auth.LocalPartner
 			c.Set(ctxUserKey, &u)
 			c.Next()
+			return
+		}
+
+		// The bearer token is the credential; X-Profile-ID alone is just a
+		// claim and would let anyone impersonate any profile.
+		authz := c.GetHeader("Authorization")
+		token, ok := strings.CutPrefix(authz, "Bearer ")
+		if !ok || s.cfg.API.APIKey == "" ||
+			subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.API.APIKey)) != 1 {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "valid bearer token required"})
+			c.Abort()
 			return
 		}
 
@@ -426,7 +450,7 @@ func (s *Server) handleSubmitFromTemplate(c *gin.Context) {
 
 func (s *Server) handleGetRound(c *gin.Context) {
 	u := getUser(c)
-	taskID := c.Param("taskId")
+	taskID := c.Param("id")
 	task := s.orch.GetTask(taskID)
 	if task == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "task not found"})
@@ -463,7 +487,7 @@ func (s *Server) handleApproveGate(c *gin.Context) {
 	// Note is optional — ignore bind error.
 	c.ShouldBindJSON(&body)
 
-	taskID := c.Param("taskId")
+	taskID := c.Param("id")
 	gateID := c.Param("gateId")
 
 	if err := s.orch.ApproveGate(taskID, gateID, body.Note, u.ProfileID); err != nil {
@@ -489,7 +513,7 @@ func (s *Server) handleRejectGate(c *gin.Context) {
 		return
 	}
 
-	taskID := c.Param("taskId")
+	taskID := c.Param("id")
 	gateID := c.Param("gateId")
 
 	if err := s.orch.RejectGate(taskID, gateID, body.Reason, u.ProfileID); err != nil {
@@ -769,6 +793,7 @@ func (s *Server) handleCreateClient(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	go s.syncGraph()
 	c.JSON(http.StatusCreated, client)
 }
 
@@ -787,6 +812,7 @@ func (s *Server) handleUpdateClient(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 		return
 	}
+	go s.syncGraph()
 	c.JSON(http.StatusOK, client)
 }
 
@@ -803,6 +829,7 @@ func (s *Server) handleDeleteClient(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "client not found"})
 		return
 	}
+	go s.syncGraph()
 	c.JSON(http.StatusOK, gin.H{"deleted": true})
 }
 
@@ -835,6 +862,7 @@ func (s *Server) handleAddMatter(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	go s.syncGraph()
 	c.JSON(http.StatusCreated, matter)
 }
 
@@ -851,6 +879,7 @@ func (s *Server) handleRemoveMatter(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "matter not found"})
 		return
 	}
+	go s.syncGraph()
 	c.JSON(http.StatusOK, gin.H{"deleted": true})
 }
 
@@ -873,6 +902,64 @@ func (s *Server) handleCheckConflict(c *gin.Context) {
 	}
 	result := s.clients.CheckConflict(body.Name)
 	c.JSON(http.StatusOK, result)
+}
+
+// handleClientGraphConflicts returns inference-derived conflicts for an
+// existing client from the TypeDB sidecar (direct adversity, subsidiary
+// chains). 503 if the sidecar or TypeDB is down — never silently empty.
+func (s *Server) handleClientGraphConflicts(c *gin.Context) {
+	if !requirePartner(c) {
+		return
+	}
+	client := s.clients.Get(c.Param("id"))
+	if client == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "client not found"})
+		return
+	}
+	reports, err := s.graph.CheckClient(client.ID)
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "conflict graph unavailable: " + err.Error()})
+		return
+	}
+	if reports == nil {
+		reports = []types.ConflictReport{}
+	}
+	c.JSON(http.StatusOK, gin.H{"clientId": client.ID, "conflicts": reports})
+}
+
+// syncGraph pushes the full client/matter roster to the TypeDB sidecar.
+// Best-effort: failure is logged, the substring conflict check still works.
+func (s *Server) syncGraph() {
+	if err := s.graph.Ping(); err != nil {
+		slog.Warn("conflict graph: sidecar unreachable, graph conflicts disabled", "err", err)
+		return
+	}
+	roster := s.clients.List()
+	input := graph.SyncInput{}
+	for _, cl := range roster {
+		sc := graph.SyncClient{
+			ID:          cl.ID,
+			Name:        cl.Name,
+			Adversaries: cl.Adversaries,
+		}
+		for _, m := range cl.Matters {
+			sc.Matters = append(sc.Matters, graph.MatterRef{
+				MatterNumber: m.MatterNumber,
+				PracticeArea: m.PracticeArea,
+			})
+			input.Matters = append(input.Matters, graph.SyncMatter{
+				MatterNumber: m.MatterNumber,
+				PracticeArea: m.PracticeArea,
+				Status:       "active",
+			})
+		}
+		input.Clients = append(input.Clients, sc)
+	}
+	if err := s.graph.Sync(input); err != nil {
+		slog.Warn("conflict graph: sync failed", "err", err)
+		return
+	}
+	slog.Info("conflict graph: roster synced", "clients", len(input.Clients), "matters", len(input.Matters))
 }
 
 // ─── Time entries ─────────────────────────────────────────────────────────────

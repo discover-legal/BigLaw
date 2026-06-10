@@ -31,9 +31,10 @@ type QueueStats struct {
 
 // Queue is an in-memory job queue backed by JSON persistence.
 type Queue struct {
-	mu   sync.Mutex
-	jobs []*types.Job
-	path string
+	mu        sync.Mutex
+	persistMu sync.Mutex // serialises concurrent fire-and-forget persists
+	jobs      []*types.Job
+	path      string
 }
 
 // New creates a Queue backed by path.
@@ -228,6 +229,8 @@ func (q *Queue) countStatus(s types.JobStatus) int {
 }
 
 func (q *Queue) persist() {
+	q.persistMu.Lock()
+	defer q.persistMu.Unlock()
 	q.mu.Lock()
 	data, err := json.MarshalIndent(q.jobs, "", "  ")
 	q.mu.Unlock()

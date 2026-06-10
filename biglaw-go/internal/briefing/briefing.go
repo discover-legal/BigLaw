@@ -48,11 +48,26 @@ type Chalkboard struct {
 	items []IntelItem
 }
 
-func (c *Chalkboard) Write(item IntelItem)      { c.mu.Lock(); c.items = append(c.items, item); c.mu.Unlock() }
-func (c *Chalkboard) WriteMany(items []IntelItem) { c.mu.Lock(); c.items = append(c.items, items...); c.mu.Unlock() }
-func (c *Chalkboard) All() []IntelItem           { c.mu.Lock(); defer c.mu.Unlock(); cp := make([]IntelItem, len(c.items)); copy(cp, c.items); return cp }
+func (c *Chalkboard) Write(item IntelItem) {
+	c.mu.Lock()
+	c.items = append(c.items, item)
+	c.mu.Unlock()
+}
+func (c *Chalkboard) WriteMany(items []IntelItem) {
+	c.mu.Lock()
+	c.items = append(c.items, items...)
+	c.mu.Unlock()
+}
+func (c *Chalkboard) All() []IntelItem {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	cp := make([]IntelItem, len(c.items))
+	copy(cp, c.items)
+	return cp
+}
 func (c *Chalkboard) BySource(src string) []IntelItem {
-	c.mu.Lock(); defer c.mu.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	var out []IntelItem
 	for _, i := range c.items {
 		if i.Source == src {
@@ -62,7 +77,8 @@ func (c *Chalkboard) BySource(src string) []IntelItem {
 	return out
 }
 func (c *Chalkboard) ByCategory(cat string) []IntelItem {
-	c.mu.Lock(); defer c.mu.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	var out []IntelItem
 	for _, i := range c.items {
 		if i.Category == cat {
@@ -174,19 +190,19 @@ func (e *Engine) Generate(client *types.Client, allTasks []*types.Task, timeEntr
 	execSummary, document := e.synthesise(client, cb, matters, billing, openItems, opts)
 
 	return &types.ClientBriefing{
-		ID:               uuid.New().String(),
-		ClientID:         client.ID,
-		ClientName:       client.Name,
-		ClientNumber:     client.ClientNumber,
-		GeneratedAt:      time.Now().UTC().Format(time.RFC3339),
-		BriefingDate:     briefingDate,
-		ExecutiveSummary: execSummary,
-		Matters:          matters,
-		Billing:          billing,
-		OpenItems:        openItems,
+		ID:                uuid.New().String(),
+		ClientID:          client.ID,
+		ClientName:        client.Name,
+		ClientNumber:      client.ClientNumber,
+		GeneratedAt:       time.Now().UTC().Format(time.RFC3339),
+		BriefingDate:      briefingDate,
+		ExecutiveSummary:  execSummary,
+		Matters:           matters,
+		Billing:           billing,
+		OpenItems:         openItems,
 		RelationshipNotes: client.Notes,
-		IndustryContext:  opts.IndustryContext,
-		Document:         document,
+		IndustryContext:   opts.IndustryContext,
+		Document:          document,
 	}, nil
 }
 
@@ -201,22 +217,22 @@ func (e *Engine) runEmailSpoke(client *types.Client) spokeResult {
 
 	for _, m := range graphMsgs {
 		items = append(items, IntelItem{
-			Source:   "email_graph",
-			Category: "email",
-			EventAt:  m.ReceivedAt,
+			Source:       "email_graph",
+			Category:     "email",
+			EventAt:      m.ReceivedAt,
 			MatterNumber: m.MatterRef,
-			Headline: fmt.Sprintf("%s — from %s", m.Subject, m.From),
-			Data:     map[string]interface{}{"id": m.ID, "subject": m.Subject, "from": m.From, "receivedAt": m.ReceivedAt, "snippet": m.Snippet, "hasAttachments": m.HasAttachments},
+			Headline:     fmt.Sprintf("%s — from %s", m.Subject, m.From),
+			Data:         map[string]interface{}{"id": m.ID, "subject": m.Subject, "from": m.From, "receivedAt": m.ReceivedAt, "snippet": m.Snippet, "hasAttachments": m.HasAttachments},
 		})
 	}
 	for _, m := range gmailMsgs {
 		items = append(items, IntelItem{
-			Source:   "email_gmail",
-			Category: "email",
-			EventAt:  m.ReceivedAt,
+			Source:       "email_gmail",
+			Category:     "email",
+			EventAt:      m.ReceivedAt,
 			MatterNumber: m.MatterRef,
-			Headline: fmt.Sprintf("%s — from %s", m.Subject, m.From),
-			Data:     map[string]interface{}{"id": m.ID, "subject": m.Subject, "from": m.From, "receivedAt": m.ReceivedAt, "snippet": m.Snippet},
+			Headline:     fmt.Sprintf("%s — from %s", m.Subject, m.From),
+			Data:         map[string]interface{}{"id": m.ID, "subject": m.Subject, "from": m.From, "receivedAt": m.ReceivedAt, "snippet": m.Snippet},
 		})
 	}
 
@@ -243,12 +259,12 @@ func (e *Engine) runSharePointSpoke(client *types.Client) spokeResult {
 	var items []IntelItem
 	for _, f := range files {
 		items = append(items, IntelItem{
-			Source:   "sharepoint",
-			Category: "document",
-			EventAt:  f.LastModified,
+			Source:       "sharepoint",
+			Category:     "document",
+			EventAt:      f.LastModified,
 			MatterNumber: f.MatterRef,
-			Headline: f.Name,
-			Data:     map[string]interface{}{"id": f.ID, "name": f.Name, "webUrl": f.WebURL, "lastModified": f.LastModified},
+			Headline:     f.Name,
+			Data:         map[string]interface{}{"id": f.ID, "name": f.Name, "webUrl": f.WebURL, "lastModified": f.LastModified},
 		})
 	}
 	errMsg := ""
@@ -268,12 +284,12 @@ func (e *Engine) runTeamsChatSpoke(client *types.Client) spokeResult {
 			body = body[:100]
 		}
 		items = append(items, IntelItem{
-			Source:   "teams_chat",
-			Category: "correspondence",
-			EventAt:  m.CreatedAt,
+			Source:       "teams_chat",
+			Category:     "correspondence",
+			EventAt:      m.CreatedAt,
 			MatterNumber: m.MatterRef,
-			Headline: fmt.Sprintf("%s: %s", m.From, body),
-			Data:     map[string]interface{}{"id": m.ID, "from": m.From, "body": m.Body, "createdAt": m.CreatedAt, "webUrl": m.WebURL},
+			Headline:     fmt.Sprintf("%s: %s", m.From, body),
+			Data:         map[string]interface{}{"id": m.ID, "from": m.From, "body": m.Body, "createdAt": m.CreatedAt, "webUrl": m.WebURL},
 		})
 	}
 	errMsg := ""
@@ -318,12 +334,12 @@ func (e *Engine) runInternalSpoke(client *types.Client, allTasks []*types.Task, 
 			output = t.Output
 		}
 		items = append(items, IntelItem{
-			Source:   "internal_tasks",
-			Category: "matter_status",
-			EventAt:  t.UpdatedAt.Format(time.RFC3339),
+			Source:       "internal_tasks",
+			Category:     "matter_status",
+			EventAt:      t.UpdatedAt.Format(time.RFC3339),
 			MatterNumber: t.MatterNumber,
-			Headline: fmt.Sprintf("Task %s: %s", t.Status, truncate(t.Description, 80)),
-			Data:     map[string]interface{}{"taskId": t.ID, "status": t.Status, "outputSnippet": output},
+			Headline:     fmt.Sprintf("Task %s: %s", t.Status, truncate(t.Description, 80)),
+			Data:         map[string]interface{}{"taskId": t.ID, "status": t.Status, "outputSnippet": output},
 		})
 	}
 
@@ -334,19 +350,18 @@ func (e *Engine) runInternalSpoke(client *types.Client, allTasks []*types.Task, 
 		if e.EndedAt != nil {
 			continue
 		}
-		wipAge := math.Floor(float64(now.Sub(e.StartedAt)) / float64(24*time.Hour))
-		_ = wipAge
+		wipAgeDays := int(math.Floor(float64(now.Sub(e.StartedAt)) / float64(24*time.Hour)))
 		billUsd := 0.0
 		if e.BillingAmountUsd != nil {
 			billUsd = *e.BillingAmountUsd
 		}
 		items = append(items, IntelItem{
-			Source:   "internal_time",
-			Category: "billing",
-			EventAt:  e.StartedAt.Format(time.RFC3339),
+			Source:       "internal_time",
+			Category:     "billing",
+			EventAt:      e.StartedAt.Format(time.RFC3339),
 			MatterNumber: e.MatterNumber,
-			Headline: fmt.Sprintf("WIP: %s ($%.0f unbilled)", truncate(e.Description, 80), billUsd),
-			Data:     map[string]interface{}{"entryId": e.ID, "description": e.Description, "billingAmountUsd": billUsd},
+			Headline:     fmt.Sprintf("WIP: %s ($%.0f unbilled, open %dd)", truncate(e.Description, 80), billUsd, wipAgeDays),
+			Data:         map[string]interface{}{"entryId": e.ID, "description": e.Description, "billingAmountUsd": billUsd, "wipAgeDays": wipAgeDays},
 		})
 	}
 	return spokeResult{source: "internal_tasks", items: items, durationMs: time.Since(start).Milliseconds()}

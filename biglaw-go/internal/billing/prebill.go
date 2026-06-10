@@ -30,42 +30,43 @@ const (
 
 // PreBillEntry is a single line item in a pre-bill.
 type PreBillEntry struct {
-	EntryID           string   `json:"entryId"`
-	Description       string   `json:"description"`
-	BillingUnits      int      `json:"billingUnits"`
-	BillingRate       *float64 `json:"billingRate,omitempty"`
-	BillingAmountUsd  *float64 `json:"billingAmountUsd,omitempty"`
-	UTBMSTaskCode     string   `json:"utbmsTaskCode,omitempty"`
-	UTBMSActivityCode string   `json:"utbmsActivityCode,omitempty"`
-	ProfileName       string   `json:"profileName,omitempty"`
-	AgentName         string   `json:"agentName,omitempty"`
-	StartedAt         string   `json:"startedAt"`
-	EndedAt           string   `json:"endedAt,omitempty"`
-	OcgSuggestionCount int     `json:"ocgSuggestionCount"`
+	EntryID            string   `json:"entryId"`
+	Description        string   `json:"description"`
+	BillingUnits       int      `json:"billingUnits"`
+	BillingRate        *float64 `json:"billingRate,omitempty"`
+	BillingAmountUsd   *float64 `json:"billingAmountUsd,omitempty"`
+	UTBMSTaskCode      string   `json:"utbmsTaskCode,omitempty"`
+	UTBMSActivityCode  string   `json:"utbmsActivityCode,omitempty"`
+	ProfileName        string   `json:"profileName,omitempty"`
+	AgentName          string   `json:"agentName,omitempty"`
+	StartedAt          string   `json:"startedAt"`
+	EndedAt            string   `json:"endedAt,omitempty"`
+	OcgSuggestionCount int      `json:"ocgSuggestionCount"`
 }
 
 // PreBill is a draft invoice grouping time entries for a matter.
 type PreBill struct {
-	ID                 string        `json:"id"`
-	MatterNumber       string        `json:"matterNumber"`
-	ClientNumber       string        `json:"clientNumber,omitempty"`
-	Status             PreBillStatus `json:"status"`
-	CreatedByProfileID string        `json:"createdByProfileId"`
-	CreatedAt          string        `json:"createdAt"`
-	ReviewedAt         string        `json:"reviewedAt,omitempty"`
-	ApprovedAt         string        `json:"approvedAt,omitempty"`
-	InvoicedAt         string        `json:"invoicedAt,omitempty"`
+	ID                 string         `json:"id"`
+	MatterNumber       string         `json:"matterNumber"`
+	ClientNumber       string         `json:"clientNumber,omitempty"`
+	Status             PreBillStatus  `json:"status"`
+	CreatedByProfileID string         `json:"createdByProfileId"`
+	CreatedAt          string         `json:"createdAt"`
+	ReviewedAt         string         `json:"reviewedAt,omitempty"`
+	ApprovedAt         string         `json:"approvedAt,omitempty"`
+	InvoicedAt         string         `json:"invoicedAt,omitempty"`
 	Entries            []PreBillEntry `json:"entries"`
-	TotalBillingUnits  int           `json:"totalBillingUnits"`
-	TotalAmountUsd     float64       `json:"totalAmountUsd"`
-	Notes              string        `json:"notes,omitempty"`
+	TotalBillingUnits  int            `json:"totalBillingUnits"`
+	TotalAmountUsd     float64        `json:"totalAmountUsd"`
+	Notes              string         `json:"notes,omitempty"`
 }
 
 // PreBillStore persists pre-bills to a JSON file.
 type PreBillStore struct {
-	mu    sync.RWMutex
-	bills []PreBill
-	path  string
+	mu        sync.RWMutex
+	persistMu sync.Mutex // serialises concurrent fire-and-forget persists
+	bills     []PreBill
+	path      string
 }
 
 // NewPreBillStore creates a PreBillStore backed by path.
@@ -253,6 +254,8 @@ func (s *PreBillStore) SetNotes(billID, notes string) *PreBill {
 }
 
 func (s *PreBillStore) persist() {
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
 	s.mu.RLock()
 	data, err := json.MarshalIndent(s.bills, "", "  ")
 	s.mu.RUnlock()
@@ -264,10 +267,13 @@ func (s *PreBillStore) persist() {
 		return
 	}
 	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		slog.Warn("PreBillStore persist write failed", "error", err)
 		return
 	}
-	_ = os.Rename(tmp, s.path)
+	if err := os.Rename(tmp, s.path); err != nil {
+		slog.Warn("PreBillStore persist rename failed", "error", err)
+	}
 }
 
 func roundCents(f float64) float64 {

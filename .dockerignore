@@ -1,0 +1,14 @@
+.git
+node_modules
+**/node_modules
+dist
+ui
+output
+tmp
+data
+collateral
+docs
+tests
+*.jsonl
+.env
+.env.*

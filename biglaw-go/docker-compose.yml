@@ -1,0 +1,54 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# BigLaw Go stack: TypeDB server → conflict-graph sidecar → Go core.
+#
+#   cd biglaw-go && docker compose up -d --build
+#
+# Reads API keys (ANTHROPIC_API_KEY, OPENAI_API_KEY, …) from ../.env.
+# REST API: http://localhost:3102  (3101 is left to the host TS backend)
+
+name: biglaw
+
+services:
+  typedb:
+    image: vaticle/typedb:2.29.1
+    volumes:
+      - typedb-data:/opt/typedb-all-linux-x86_64/server/data
+    restart: unless-stopped
+
+  typedb-sidecar:
+    build:
+      context: ../sidecar/typedb
+    environment:
+      TYPEDB_URL: typedb:1729
+      TYPEDB_SOCKET: /run/biglaw/typedb.sock
+    volumes:
+      - biglaw-sock:/run/biglaw
+    depends_on:
+      - typedb
+    restart: unless-stopped
+
+  biglaw:
+    build:
+      context: ..
+      dockerfile: biglaw-go/Dockerfile
+    env_file:
+      - ../.env
+    environment:
+      API_HOST: 0.0.0.0
+      API_PORT: "3101"
+      BIG_MICHAEL_MODE: backend
+      RUVECTOR_DATA_DIR: /app/data
+      TYPEDB_SOCKET: /run/biglaw/typedb.sock
+    ports:
+      - "3102:3101"
+    volumes:
+      - biglaw-data:/app/data
+      - biglaw-sock:/run/biglaw
+    depends_on:
+      - typedb-sidecar
+    restart: unless-stopped
+
+volumes:
+  typedb-data:
+  biglaw-data:
+  biglaw-sock:

@@ -9,6 +9,7 @@ package learning
 
 import (
 	"encoding/json"
+	"log/slog"
 	"math"
 	"math/rand"
 	"os"
@@ -49,13 +50,16 @@ func (e *Engine) Init(file string) error {
 	return json.Unmarshal(data, &e.qtable)
 }
 
+// persist marshals the Q-table. Callers must hold e.mu.
 func (e *Engine) persist() {
 	if e.file == "" {
 		return
 	}
 	data, err := json.Marshal(e.qtable)
 	if err == nil {
-		os.WriteFile(e.file, data, 0644)
+		if werr := os.WriteFile(e.file, data, 0600); werr != nil {
+			slog.Warn("learning: persist failed", "path", e.file, "err", werr)
+		}
 	}
 }
 
@@ -141,6 +145,7 @@ func (e *Engine) RecordEpisode(opts EpisodeOpts) error {
 	updated := current + learningRate*(opts.Reward+discount*maxNext-current)
 	e.qtable[key][opts.AgentID] = updated
 
-	go e.persist()
+	// Synchronous, under e.mu: a goroutine here would read qtable unlocked.
+	e.persist()
 	return nil
 }

@@ -17,7 +17,7 @@
  *   POST /check-new-matter          → { clientId, adversaryIds } → ConflictReport[]
  */
 
-import { existsSync, mkdirSync, unlinkSync } from "fs";
+import { chmodSync, existsSync, mkdirSync, unlinkSync } from "fs";
 import { dirname } from "path";
 import Fastify from "fastify";
 import { TypeDBConflictGraph, type ConflictReport } from "./typedb.js";
@@ -36,12 +36,35 @@ if (existsSync(socketPath)) unlinkSync(socketPath);
 
 const graph = new TypeDBConflictGraph();
 let connected = false;
+let connecting: Promise<void> | null = null;
+
+/**
+ * Lazily (re)connect to TypeDB. Concurrent callers share one attempt.
+ * Returns the current connection state.
+ */
+async function ensureConnected(): Promise<boolean> {
+  if (connected) return true;
+  connecting ??= graph
+    .connect(typedbUrl)
+    .then(() => {
+      connected = true;
+      console.log(JSON.stringify({ level: "info", msg: "TypeDB connected", url: typedbUrl }));
+    })
+    .catch((err: Error) => {
+      console.log(JSON.stringify({ level: "warn", msg: "TypeDB reconnect failed", err: err.message }));
+    })
+    .finally(() => {
+      connecting = null;
+    });
+  await connecting;
+  return connected;
+}
 
 const app = Fastify({ logger: false });
 
 // ─── Health ───────────────────────────────────────────────────────────────────
 
-app.get("/health", async () => ({ ok: true, connected }));
+app.get("/health", async () => ({ ok: true, connected: await ensureConnected() }));
 
 // ─── Sync ─────────────────────────────────────────────────────────────────────
 
@@ -61,7 +84,7 @@ interface SyncBody {
 }
 
 app.post<{ Body: SyncBody }>("/sync", async (req, reply) => {
-  if (!connected) return reply.status(503).send({ error: "TypeDB not connected" });
+  if (!(await ensureConnected())) return reply.status(503).send({ error: "TypeDB not connected" });
   try {
     await graph.syncFromClients(req.body.clients, req.body.matters);
     return { ok: true };
@@ -73,7 +96,7 @@ app.post<{ Body: SyncBody }>("/sync", async (req, reply) => {
 // ─── Query conflicts ──────────────────────────────────────────────────────────
 
 app.get<{ Querystring: { clientId?: string } }>("/conflicts", async (req, reply) => {
-  if (!connected) return reply.status(503).send({ error: "TypeDB not connected" });
+  if (!(await ensureConnected())) return reply.status(503).send({ error: "TypeDB not connected" });
   try {
     return await graph.queryConflicts(req.query.clientId) as ConflictReport[];
   } catch (err) {
@@ -86,7 +109,7 @@ app.get<{ Querystring: { clientId?: string } }>("/conflicts", async (req, reply)
 interface CheckBody { clientId: string; adversaryIds: string[] }
 
 app.post<{ Body: CheckBody }>("/check-new-matter", async (req, reply) => {
-  if (!connected) return reply.status(503).send({ error: "TypeDB not connected" });
+  if (!(await ensureConnected())) return reply.status(503).send({ error: "TypeDB not connected" });
   try {
     const { clientId, adversaryIds } = req.body;
     const out: ConflictReport[] = [];
@@ -107,19 +130,13 @@ app.post<{ Body: CheckBody }>("/check-new-matter", async (req, reply) => {
 // ─── Startup ──────────────────────────────────────────────────────────────────
 
 async function start(): Promise<void> {
-  try {
-    await graph.connect(typedbUrl);
-    connected = true;
-    console.log(JSON.stringify({ level: "info", msg: "TypeDB connected", url: typedbUrl }));
-  } catch (err) {
-    console.log(JSON.stringify({
-      level: "warn",
-      msg: "TypeDB connect failed — will retry on next call",
-      err: (err as Error).message,
-    }));
-  }
+  // First attempt up-front; ensureConnected() retries on every later call.
+  await ensureConnected();
 
   await app.listen({ path: socketPath });
+  // The Go core may run as a different uid (separate container, shared
+  // volume); connecting to a unix socket requires write permission on it.
+  chmodSync(socketPath, 0o666);
   console.log(JSON.stringify({ level: "info", msg: "TypeDB sidecar listening", socket: socketPath }));
 }
 

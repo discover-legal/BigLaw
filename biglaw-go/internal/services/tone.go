@@ -151,12 +151,12 @@ func (a *ToneAnalyzer) buildProfile(note, name string, sampleCount int, sourceTy
 	}
 
 	profile := &types.ToneProfile{
-		GeneratedAt:  time.Now().UTC().Format(time.RFC3339),
-		SourceType:   sourceType,
-		SampleCount:  sampleCount,
-		Formality:    pickStr(p["formality"], []string{"formal", "semi-formal", "conversational"}, "semi-formal"),
-		SentenceStyle: pickStr(p["sentenceStyle"], []string{"long-complex", "mixed", "short-punchy"}, "mixed"),
-		Vocabulary:   pickStr(p["vocabulary"], []string{"technical-heavy", "balanced", "plain-language"}, "balanced"),
+		GeneratedAt:     time.Now().UTC().Format(time.RFC3339),
+		SourceType:      sourceType,
+		SampleCount:     sampleCount,
+		Formality:       pickStr(p["formality"], []string{"formal", "semi-formal", "conversational"}, "semi-formal"),
+		SentenceStyle:   pickStr(p["sentenceStyle"], []string{"long-complex", "mixed", "short-punchy"}, "mixed"),
+		Vocabulary:      pickStr(p["vocabulary"], []string{"technical-heavy", "balanced", "plain-language"}, "balanced"),
 		RhetoricalStyle: pickStr(p["rhetoricalStyle"], []string{"assertive", "collaborative", "hedging", "analytical"}, "analytical"),
 	}
 
@@ -215,15 +215,15 @@ func (a *ToneAnalyzer) haiku3(prompt string, maxTokens int, profileID string) st
 
 func fallbackProfile(name string, sampleCount int, sourceType string) *types.ToneProfile {
 	return &types.ToneProfile{
-		GeneratedAt:      time.Now().UTC().Format(time.RFC3339),
-		SourceType:       sourceType,
-		SampleCount:      sampleCount,
-		Formality:        "semi-formal",
-		SentenceStyle:    "mixed",
-		Vocabulary:       "balanced",
-		RhetoricalStyle:  "analytical",
+		GeneratedAt:       time.Now().UTC().Format(time.RFC3339),
+		SourceType:        sourceType,
+		SampleCount:       sampleCount,
+		Formality:         "semi-formal",
+		SentenceStyle:     "mixed",
+		Vocabulary:        "balanced",
+		RhetoricalStyle:   "analytical",
 		SignaturePatterns: []string{},
-		InjectionSnippet: fmt.Sprintf("%s — no distinctive style detected. Write in clear, professional legal English.", name),
+		InjectionSnippet:  fmt.Sprintf("%s — no distinctive style detected. Write in clear, professional legal English.", name),
 	}
 }
 
@@ -256,15 +256,10 @@ func pickStr(v interface{}, allowed []string, fallback string) string {
 }
 
 func sanitizeTone(s string, max int) string {
-	// Strip markers that could confuse agent prompts
-	replacers := []string{
-		"FINDING:", "[FINDING:]",
-		"END_FINDING", "[END_FINDING]",
-		"NO_FINDINGS", "[NO_FINDINGS]",
-		"NO_CHALLENGE", "[NO_CHALLENGE]",
-	}
-	for i := 0; i < len(replacers); i += 2 {
-		s = strings.ReplaceAll(s, replacers[i], replacers[i+1])
+	// Strip protocol markers entirely — wrapping them (e.g. "[FINDING:]")
+	// still leaves the literal marker substring for the finding parser to match.
+	for _, marker := range []string{"FINDING:", "END_FINDING", "NO_FINDINGS", "NO_CHALLENGE"} {
+		s = strings.ReplaceAll(s, marker, "[redacted]")
 	}
 	// Strip control chars except tab and newline
 	var b strings.Builder

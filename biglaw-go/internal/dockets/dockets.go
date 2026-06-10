@@ -45,6 +45,7 @@ type AlertHandler func(alert types.DocketAlert)
 // Monitor polls CourtListener for new filings on watched dockets.
 type Monitor struct {
 	mu         sync.Mutex
+	persistMu  sync.Mutex                      // serialises concurrent fire-and-forget persists
 	watched    map[string]*types.WatchedDocket // key: matterNumber
 	path       string
 	knowledge  KnowledgeIngester
@@ -214,11 +215,11 @@ func (m *Monitor) CheckAll() {
 }
 
 type clDocket struct {
-	ID                  int    `json:"id"`
-	CaseName            string `json:"case_name"`
-	DateFiled           string `json:"date_filed"`
-	DateLastFiling      string `json:"date_last_filing"`
-	DocketEntriesCount  int    `json:"docket_entries_count"`
+	ID                 int    `json:"id"`
+	CaseName           string `json:"case_name"`
+	DateFiled          string `json:"date_filed"`
+	DateLastFiling     string `json:"date_last_filing"`
+	DocketEntriesCount int    `json:"docket_entries_count"`
 }
 
 type clResponse struct {
@@ -358,6 +359,8 @@ func (m *Monitor) CheckDocket(w *types.WatchedDocket) (*types.DocketAlert, error
 }
 
 func (m *Monitor) persist() {
+	m.persistMu.Lock()
+	defer m.persistMu.Unlock()
 	m.mu.Lock()
 	entries := make([]*types.WatchedDocket, 0, len(m.watched))
 	for _, w := range m.watched {

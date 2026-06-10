@@ -8,6 +8,7 @@ package orchestrator
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"regexp"
 	"strings"
@@ -61,21 +62,22 @@ type Orchestrator struct {
 	tasks     map[string]*types.Task
 	gateChans map[string]chan struct{} // taskID → signal channel for gate resolution
 
-	cfg        *config.Config
-	provReg    *providers.Registry
-	costs      *cost.Store
-	embedC     *embeddings.Client
-	engine     *dytopo.Engine
-	protocols  *protocols.Runner
-	registry   *agents.Registry
-	memStore   *memory.InterRoundStore
-	knowledge  *knowledge.Store
-	templates  *templates.Store
-	settings   *settings.SettingsStore
-	profiles   *auth.ProfileStore
-	clients    *clients.ClientStore
-	time       *timekeeping.TimeStore
-	learning   *learning.Engine
+	cfg       *config.Config
+	provReg   *providers.Registry
+	costs     *cost.Store
+	embedC    *embeddings.Client
+	engine    *dytopo.Engine
+	protocols *protocols.Runner
+	registry  *agents.Registry
+	memStore  *memory.InterRoundStore
+	knowledge *knowledge.Store
+	templates *templates.Store
+	settings  *settings.SettingsStore
+	profiles  *auth.ProfileStore
+	clients   *clients.ClientStore
+	time      *timekeeping.TimeStore
+	learning  *learning.Engine
+	tools     agents.ToolRegistry
 
 	// rootAgent is used for round goal generation and synthesis.
 	rootAgentDef types.AgentDefinition
@@ -88,7 +90,7 @@ type ProgressEvent struct {
 	Data   interface{}
 }
 
-var progressSubs   []chan ProgressEvent
+var progressSubs []chan ProgressEvent
 var progressSubsMu sync.Mutex
 
 func SubscribeProgress() chan ProgressEvent {
@@ -138,6 +140,7 @@ func New(
 	clientStore *clients.ClientStore,
 	timeStore *timekeeping.TimeStore,
 	learningEngine *learning.Engine,
+	toolReg agents.ToolRegistry,
 	rootDef types.AgentDefinition,
 ) *Orchestrator {
 	o := &Orchestrator{
@@ -156,6 +159,7 @@ func New(
 		clients:      clientStore,
 		time:         timeStore,
 		learning:     learningEngine,
+		tools:        toolReg,
 		rootAgentDef: rootDef,
 	}
 	o.protocols = protocols.New(cfg, provReg, costs)
@@ -168,6 +172,7 @@ func (o *Orchestrator) buildEngine() *dytopo.Engine {
 		Memory:    o.memStore,
 		Knowledge: knowledge.NewAdapter(o.knowledge),
 		Pinned:    []types.AgentDefinition{o.rootAgentDef},
+		Tools:     o.tools,
 		Learning:  o.learning,
 	})
 }
@@ -213,12 +218,12 @@ func (o *Orchestrator) Init(allAgents []types.AgentDefinition) error {
 // ─── Task management ──────────────────────────────────────────────────────────
 
 type SubmitParams struct {
-	Description       string
-	WorkflowType      types.WorkflowType
-	DocumentIDs       []string
-	ClientNumber      string
-	MatterNumber      string
-	Jurisdiction      string
+	Description        string
+	WorkflowType       types.WorkflowType
+	DocumentIDs        []string
+	ClientNumber       string
+	MatterNumber       string
+	Jurisdiction       string
 	CreatedByProfileID string
 }
 
@@ -512,9 +517,80 @@ func (o *Orchestrator) runTask(task *types.Task) {
 		task.ActiveTimeEntryID = ""
 	}
 
+	o.recordAgentOutcomes(task)
+
 	emitProgress(task.ID, "complete", map[string]interface{}{"findings": len(task.Findings), "output": task.Output[:min(200, len(task.Output))]})
 	audit.Default.Write(audit.WriteRequest{Event: "task.complete", ActorID: audit.ActorSystem, TaskID: task.ID, Data: map[string]interface{}{"findings": len(task.Findings)}})
 	o.persistTasks()
+}
+
+// recordAgentOutcomes feeds completed-task results back into the registry
+// success scores and the Q-learning table, grouped per (agent, phase).
+// Challenged-but-unresolved findings earn 30% of their stated confidence.
+func (o *Orchestrator) recordAgentOutcomes(task *types.Task) {
+	if len(task.Findings) == 0 {
+		return
+	}
+	phaseByFinding := map[string]types.TaskPhase{}
+	for _, r := range task.Rounds {
+		for _, f := range r.Findings {
+			phaseByFinding[f.ID] = r.Goal.Phase
+		}
+	}
+
+	type bucket struct {
+		phase  types.TaskPhase
+		scores []float64
+	}
+	buckets := map[string]*bucket{}
+	for _, f := range task.Findings {
+		phase, ok := phaseByFinding[f.ID]
+		if !ok {
+			phase = task.CurrentPhase
+		}
+		key := f.AgentID + "::" + string(phase)
+		b := buckets[key]
+		if b == nil {
+			b = &bucket{phase: phase}
+			buckets[key] = b
+		}
+		effective := f.Confidence
+		if f.Challenged && !f.Resolved {
+			effective *= 0.3
+		}
+		b.scores = append(b.scores, effective)
+	}
+
+	phases := phaseSequences[task.WorkflowType]
+	for key, b := range buckets {
+		agentID := strings.SplitN(key, "::", 2)[0]
+		sum := 0.0
+		for _, s := range b.scores {
+			sum += s
+		}
+		avg := sum / float64(len(b.scores))
+
+		nextPhase := b.phase
+		for i, p := range phases {
+			if p == b.phase && i+1 < len(phases) {
+				nextPhase = phases[i+1]
+				break
+			}
+		}
+
+		o.registry.RecordOutcome([]string{agentID}, avg)
+		if err := o.learning.RecordEpisode(learning.EpisodeOpts{
+			Phase:        b.phase,
+			NextPhase:    nextPhase,
+			Jurisdiction: task.Jurisdiction,
+			WorkflowType: task.WorkflowType,
+			AgentID:      agentID,
+			Reward:       avg,
+			Done:         true,
+		}); err != nil {
+			slog.Warn("learning: record episode failed", "agent", agentID, "err", err)
+		}
+	}
 }
 
 func (o *Orchestrator) runPhase(task *types.Task, phase types.TaskPhase) error {
@@ -541,9 +617,9 @@ func (o *Orchestrator) runPhase(task *types.Task, phase types.TaskPhase) error {
 	var billingCtx *dytopo.AgentBillingCtx
 	if o.cfg.AgentBilling.Enabled && primaryProfileID != "" {
 		billingCtx = &dytopo.AgentBillingCtx{
-			ResponsibleLawyerID:   primaryProfileID,
-			MatterNumber:          task.MatterNumber,
-			ClientNumber:          task.ClientNumber,
+			ResponsibleLawyerID: primaryProfileID,
+			MatterNumber:        task.MatterNumber,
+			ClientNumber:        task.ClientNumber,
 		}
 		if p := o.profiles.Get(primaryProfileID); p != nil {
 			billingCtx.ResponsibleLawyerName = p.Name

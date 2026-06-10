@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"sync"
@@ -17,9 +18,10 @@ import (
 
 // ClientStore holds the client roster in memory and persists it to a JSON file.
 type ClientStore struct {
-	mu      sync.RWMutex
-	clients []types.Client
-	path    string
+	mu        sync.RWMutex
+	persistMu sync.Mutex // serialises concurrent persists
+	clients   []types.Client
+	path      string
 }
 
 // NewClientStore creates an uninitialised ClientStore. Call Init before use.
@@ -119,7 +121,7 @@ func (s *ClientStore) Create(name, clientNumber string, adversaries []string, no
 // Recognised patch keys: "name", "adversaries", "notes".
 func (s *ClientStore) Update(id string, patch map[string]interface{}) (*types.Client, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	var updated *types.Client
 	for i := range s.clients {
 		if s.clients[i].ID != id {
 			continue
@@ -144,10 +146,15 @@ func (s *ClientStore) Update(id string, patch map[string]interface{}) (*types.Cl
 		}
 		c.UpdatedAt = time.Now()
 		cp := *c
-		go s.persist()
-		return &cp, nil
+		updated = &cp
+		break
 	}
-	return nil, fmt.Errorf("client not found")
+	s.mu.Unlock()
+	if updated == nil {
+		return nil, fmt.Errorf("client not found")
+	}
+	s.persist()
+	return updated, nil
 }
 
 // AddMatter appends a new matter to the client with the given ID.
@@ -155,16 +162,23 @@ func (s *ClientStore) Update(id string, patch map[string]interface{}) (*types.Cl
 func (s *ClientStore) AddMatter(clientID string, matterNumber, description, practiceArea string) (*types.ClientMatter, error) {
 	matterNumber = strings.TrimSpace(matterNumber)
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	var added *types.ClientMatter
+	var addErr error
+	found := false
 	for i := range s.clients {
 		if s.clients[i].ID != clientID {
 			continue
 		}
+		found = true
 		c := &s.clients[i]
 		for _, m := range c.Matters {
 			if strings.EqualFold(m.MatterNumber, matterNumber) {
-				return nil, fmt.Errorf("matter number %s already exists on this client", matterNumber)
+				addErr = fmt.Errorf("matter number %s already exists on this client", matterNumber)
+				break
 			}
+		}
+		if addErr != nil {
+			break
 		}
 		matter := types.ClientMatter{
 			MatterNumber: matterNumber,
@@ -175,10 +189,18 @@ func (s *ClientStore) AddMatter(clientID string, matterNumber, description, prac
 		c.Matters = append(c.Matters, matter)
 		c.UpdatedAt = time.Now()
 		cp := matter
-		go s.persist()
-		return &cp, nil
+		added = &cp
+		break
 	}
-	return nil, fmt.Errorf("client not found")
+	s.mu.Unlock()
+	if addErr != nil {
+		return nil, addErr
+	}
+	if !found {
+		return nil, fmt.Errorf("client not found")
+	}
+	s.persist()
+	return added, nil
 }
 
 // RemoveMatter removes the matter with the given matterNumber from the client.
@@ -186,11 +208,13 @@ func (s *ClientStore) AddMatter(clientID string, matterNumber, description, prac
 // or an error if the client was not found.
 func (s *ClientStore) RemoveMatter(clientID, matterNumber string) (bool, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	found := false
+	removed := false
 	for i := range s.clients {
 		if s.clients[i].ID != clientID {
 			continue
 		}
+		found = true
 		c := &s.clients[i]
 		before := len(c.Matters)
 		filtered := c.Matters[:0]
@@ -200,21 +224,26 @@ func (s *ClientStore) RemoveMatter(clientID, matterNumber string) (bool, error) 
 			}
 		}
 		c.Matters = filtered
-		if len(c.Matters) == before {
-			return false, nil
+		if len(c.Matters) < before {
+			c.UpdatedAt = time.Now()
+			removed = true
 		}
-		c.UpdatedAt = time.Now()
-		go s.persist()
-		return true, nil
+		break
 	}
-	return false, fmt.Errorf("client not found")
+	s.mu.Unlock()
+	if !found {
+		return false, fmt.Errorf("client not found")
+	}
+	if removed {
+		s.persist()
+	}
+	return removed, nil
 }
 
 // Remove deletes the client with the given ID.
 // Returns (true, nil) if deleted, (false, nil) if the ID was not found.
 func (s *ClientStore) Remove(id string) (bool, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	before := len(s.clients)
 	filtered := s.clients[:0]
 	for _, c := range s.clients {
@@ -223,11 +252,12 @@ func (s *ClientStore) Remove(id string) (bool, error) {
 		}
 	}
 	s.clients = filtered
-	if len(s.clients) == before {
-		return false, nil
+	removed := len(s.clients) < before
+	s.mu.Unlock()
+	if removed {
+		s.persist()
 	}
-	go s.persist()
-	return true, nil
+	return removed, nil
 }
 
 // CheckConflict performs a case-insensitive substring match between newClientName
@@ -255,13 +285,21 @@ func (s *ClientStore) CheckConflict(newClientName string) types.ConflictCheckRes
 // ─── internal helpers ─────────────────────────────────────────────────────────
 
 // persist writes the client list atomically: write to <path>.tmp then rename.
+// 0600: the roster carries adversary lists and matter data.
 func (s *ClientStore) persist() {
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
 	s.mu.RLock()
 	data, _ := json.MarshalIndent(s.clients, "", "  ")
 	s.mu.RUnlock()
 	tmp := s.path + ".tmp"
-	os.WriteFile(tmp, data, 0644)
-	os.Rename(tmp, s.path)
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
+		slog.Error("clients: persist write failed", "path", tmp, "err", err)
+		return
+	}
+	if err := os.Rename(tmp, s.path); err != nil {
+		slog.Error("clients: persist rename failed", "path", s.path, "err", err)
+	}
 }
 
 func generateID() string {

@@ -24,6 +24,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"time"
 
@@ -115,7 +116,9 @@ func (c *Client) Sync(input SyncInput) error {
 
 // CheckClient returns all conflicts touching clientId.
 func (c *Client) CheckClient(clientId string) ([]types.ConflictReport, error) {
-	resp, err := c.http.Get(url("/conflicts?clientId=" + clientId))
+	q := neturl.Values{}
+	q.Set("clientId", clientId)
+	resp, err := c.http.Get(url("/conflicts?" + q.Encode()))
 	if err != nil {
 		return nil, fmt.Errorf("graph: CheckClient request failed: %w", err)
 	}

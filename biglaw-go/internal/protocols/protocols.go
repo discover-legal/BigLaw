@@ -7,6 +7,7 @@ package protocols
 
 import (
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strings"
 	"time"
@@ -108,8 +109,12 @@ func (r *Runner) RunDebate(finding types.Finding, taskID string) (types.Finding,
 
 	challengeText, err := r.callModel(challengerSystem,
 		fmt.Sprintf("FINDING:\n%s\n\nCITATIONS:\n%s", snippet, strings.Join(citLines, "\n")),
-		600, model, taskID)
+		600, model, taskID, cost.ContextDebate)
 	if err != nil {
+		// Fail-open by design: an unavailable challenger must not block the
+		// round, but it must be visible in the logs.
+		slog.Warn("debate: challenger call failed, finding passes unchallenged",
+			"findingId", finding.ID, "taskId", taskID, "err", err)
 		return finding, nil
 	}
 
@@ -129,8 +134,11 @@ func (r *Runner) RunDebate(finding types.Finding, taskID string) (types.Finding,
 
 	resolutionText, err := r.callModel(resolverSystem,
 		fmt.Sprintf("FINDING:\n%s\n\nCHALLENGE:\n%s", snippet, challenge.Content),
-		800, model, taskID)
+		800, model, taskID, cost.ContextDebate)
 	if err != nil {
+		// Challenged but unresolved — IdentifyGates routes this to a human.
+		slog.Warn("debate: resolver call failed, finding left challenged/unresolved",
+			"findingId", finding.ID, "taskId", taskID, "err", err)
 		return finding, nil
 	}
 
@@ -214,9 +222,11 @@ func (r *Runner) RunVerification(finding types.Finding, taskID string) (types.Ve
 		g.Go(func() error {
 			resp, err := r.callModel(
 				fmt.Sprintf("You are a legal verification specialist. Assess the following finding against this criterion: %s\nRespond with: PASS or FAIL followed by a one-line note.", checkDesc),
-				userMsg, 150, model, taskID)
+				userMsg, 150, model, taskID, cost.ContextVerify)
 			if err != nil {
-				verChecks[i] = types.VerificationCheck{Name: strings.Split(checkDesc, ":")[0], Passed: false, Notes: "error"}
+				slog.Warn("verification: check call failed, recorded as FAIL",
+					"check", strings.Split(checkDesc, ":")[0], "findingId", finding.ID, "taskId", taskID, "err", err)
+				verChecks[i] = types.VerificationCheck{Name: strings.Split(checkDesc, ":")[0], Passed: false, Notes: "verification call failed: " + err.Error()}
 				return nil
 			}
 			passed := strings.Contains(strings.ToUpper(resp), "PASS")
@@ -279,7 +289,7 @@ func (r *Runner) IdentifyGates(taskID string, findings []types.Finding) []types.
 
 // ─── callModel helper ─────────────────────────────────────────────────────────
 
-func (r *Runner) callModel(system, user string, maxTokens int, model, taskID string) (string, error) {
+func (r *Runner) callModel(system, user string, maxTokens int, model, taskID string, cctx cost.CostContext) (string, error) {
 	if model == "" {
 		model = r.cfg.Anthropic.Model
 	}
@@ -317,10 +327,6 @@ func (r *Runner) callModel(system, user string, maxTokens int, model, taskID str
 		wh = &w
 		watts = &r.cfg.Local.InferenceWatts
 	}
-	ctx := cost.ContextDebate
-	if maxTokens <= 150 {
-		ctx = cost.ContextVerify
-	}
 	provider := "anthropic"
 	if routing.IsOllamaModel(model) {
 		provider = "ollama"
@@ -328,16 +334,16 @@ func (r *Runner) callModel(system, user string, maxTokens int, model, taskID str
 		provider = "local"
 	}
 	r.costs.Record(cost.RecordRequest{
-		Model:         bare,
-		Provider:      provider,
-		InputTokens:   resp.Usage.InputTokens,
-		OutputTokens:  resp.Usage.OutputTokens,
-		CostUSD:       costUSD,
-		EstimatedWh:   wh,
+		Model:          bare,
+		Provider:       provider,
+		InputTokens:    resp.Usage.InputTokens,
+		OutputTokens:   resp.Usage.OutputTokens,
+		CostUSD:        costUSD,
+		EstimatedWh:    wh,
 		EstimatedWatts: watts,
-		DurationMs:    resp.DurationMs,
-		Context:       ctx,
-		TaskID:        taskID,
+		DurationMs:     resp.DurationMs,
+		Context:        cctx,
+		TaskID:         taskID,
 	})
 
 	for _, b := range resp.Content {

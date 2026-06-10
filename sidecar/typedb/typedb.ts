@@ -274,32 +274,40 @@ export class TypeDBConflictGraph {
     if (!this.driver) return;
     logger.info("TypeDB: syncing conflict graph", { clients: clients.length, matters: matters.length });
 
+    // Per-item isolation: one malformed id (assertSafeId throws before the
+    // inner try/catch in the upsert helpers) must not abort the whole sync.
+    const safely = async (label: string, fn: () => Promise<void>): Promise<void> => {
+      try {
+        await fn();
+      } catch (err) {
+        logger.warn(`TypeDB sync: skipped ${label}`, { err: (err as Error).message });
+      }
+    };
+
     // Upsert all matters first
     for (const m of matters) {
-      await this.upsertMatter(
-        m.matterNumber,
-        m.practiceArea ?? "",
-        m.jurisdiction ?? "",
-        m.status ?? "active",
-      );
+      await safely(`matter ${m.matterNumber}`, () =>
+        this.upsertMatter(m.matterNumber, m.practiceArea ?? "", m.jurisdiction ?? "", m.status ?? "active"));
     }
 
     // Upsert all clients as companies
     for (const c of clients) {
-      await this.upsertCompany(c.id, c.name);
+      await safely(`client ${c.id}`, () => this.upsertCompany(c.id, c.name));
     }
 
     // Build represents + adverse-to relations
     for (const c of clients) {
       for (const m of c.matters) {
-        await this.setRepresents(c.id, m.matterNumber);
+        await safely(`represents ${c.id}/${m.matterNumber}`, () => this.setRepresents(c.id, m.matterNumber));
       }
       // Adversaries: upsert as natural-person if not already in graph, then setAdverseTo
       for (const adversaryName of c.adversaries) {
         // Use a deterministic id: slug the name to a safe id
         const adversaryId = slugId(adversaryName);
-        await this.upsertPerson(adversaryId, adversaryName);
-        await this.setAdverseTo(c.id, adversaryId);
+        await safely(`adversary ${adversaryId}`, async () => {
+          await this.upsertPerson(adversaryId, adversaryName);
+          await this.setAdverseTo(c.id, adversaryId);
+        });
       }
     }
 

@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math"
 	"os"
 	"strings"
@@ -31,9 +32,10 @@ type TimeFilter struct {
 
 // TimeStore holds all time entries in memory and persists them to a JSON file.
 type TimeStore struct {
-	mu      sync.Mutex
-	entries []types.TimeEntry
-	path    string
+	mu        sync.Mutex
+	persistMu sync.Mutex // serialises concurrent fire-and-forget persists
+	entries   []types.TimeEntry
+	path      string
 }
 
 // NewTimeStore creates an uninitialised TimeStore. Call Init before use.
@@ -250,13 +252,21 @@ func matchesFilter(e types.TimeEntry, f TimeFilter) bool {
 }
 
 // persist writes the entry list atomically: write to <path>.tmp then rename.
+// persist writes time entries atomically. 0600: billable time is client data.
 func (s *TimeStore) persist() {
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
 	s.mu.Lock()
 	data, _ := json.MarshalIndent(s.entries, "", "  ")
 	s.mu.Unlock()
 	tmp := s.path + ".tmp"
-	os.WriteFile(tmp, data, 0644)
-	os.Rename(tmp, s.path)
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
+		slog.Error("timekeeping: persist write failed", "path", tmp, "err", err)
+		return
+	}
+	if err := os.Rename(tmp, s.path); err != nil {
+		slog.Error("timekeeping: persist rename failed", "path", s.path, "err", err)
+	}
 }
 
 func generateID() string {

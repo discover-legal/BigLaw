@@ -60,11 +60,12 @@ var validCategories = map[string]types.OcgRuleCategory{
 
 // Store persists OCG documents and runs compliance checks.
 type Store struct {
-	mu       sync.RWMutex
-	docs     map[string]*types.OcgDocument // clientID → doc
-	path     string
-	provider providers.Provider
-	haiku    string
+	mu        sync.RWMutex
+	persistMu sync.Mutex                    // serialises concurrent fire-and-forget persists
+	docs      map[string]*types.OcgDocument // clientID → doc
+	path      string
+	provider  providers.Provider
+	haiku     string
 }
 
 // NewStore creates an OcgStore backed by the given JSON file path.
@@ -461,10 +462,10 @@ func (s *Store) checkSemantically(entry types.TimeEntry, rules []types.OcgRule) 
 		batch := rules[i:end]
 
 		type entryData struct {
-			Description  string `json:"description"`
+			Description   string `json:"description"`
 			DurationHours string `json:"durationHours"`
-			Event        string `json:"event"`
-			BillingUnits int    `json:"billingUnits"`
+			Event         string `json:"event"`
+			BillingUnits  int    `json:"billingUnits"`
 		}
 		type ruleItem struct {
 			ID       string                `json:"id"`
@@ -474,10 +475,10 @@ func (s *Store) checkSemantically(entry types.TimeEntry, rules []types.OcgRule) 
 		}
 
 		ed := entryData{
-			Description:  entry.Description,
+			Description:   entry.Description,
 			DurationHours: fmt.Sprintf("%.2f", float64(entry.DurationMs)/3_600_000.0),
-			Event:        string(entry.Event),
-			BillingUnits: entry.BillingUnits,
+			Event:         string(entry.Event),
+			BillingUnits:  entry.BillingUnits,
 		}
 		edJSON, _ := json.Marshal(ed)
 
@@ -577,6 +578,8 @@ func (s *Store) callHaiku(prompt string, maxTokens int, profileID string) string
 }
 
 func (s *Store) persist() error {
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
 	s.mu.RLock()
 	out := make(map[string]*types.OcgDocument, len(s.docs))
 	for k, v := range s.docs {
