@@ -8,6 +8,8 @@ import (
 	"math"
 	"regexp"
 	"strings"
+
+	"github.com/discover-legal/biglaw-go/internal/strutil"
 )
 
 // hybridReward implements eq (6): r = w_q*Q - w_c*(tokens/cap) - w_rho*retries.
@@ -166,7 +168,7 @@ func (j *RelativeJudge) ScoreGroup(ctx TaskContext, group []*Trace) []judgeScore
 	for i, t := range group {
 		ans := t.FinalAnswer
 		if len(ans) > 2000 {
-			ans = ans[:2000]
+			ans = strutil.Truncate(ans, 2000)
 		}
 		cands[i] = map[string]any{"id": i, "answer": ans}
 	}

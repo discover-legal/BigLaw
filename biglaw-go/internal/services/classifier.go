@@ -14,6 +14,7 @@ import (
 
 	"github.com/discover-legal/biglaw-go/internal/cost"
 	"github.com/discover-legal/biglaw-go/internal/providers"
+	"github.com/discover-legal/biglaw-go/internal/strutil"
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
 
@@ -127,25 +128,25 @@ Task description:
 	result := types.NosLegalTags{}
 	if v := parsed["areaOfLaw"]; v != "" {
 		if len(v) > 60 {
-			v = v[:60]
+			v = strutil.Truncate(v, 60)
 		}
 		result.AreaOfLaw = &v
 	}
 	if v := parsed["workType"]; v != "" {
 		if len(v) > 60 {
-			v = v[:60]
+			v = strutil.Truncate(v, 60)
 		}
 		result.WorkType = &v
 	}
 	if v := parsed["sector"]; v != "" {
 		if len(v) > 60 {
-			v = v[:60]
+			v = strutil.Truncate(v, 60)
 		}
 		result.Sector = &v
 	}
 	if v := parsed["assetType"]; v != "" {
 		if len(v) > 60 {
-			v = v[:60]
+			v = strutil.Truncate(v, 60)
 		}
 		result.AssetType = &v
 	}

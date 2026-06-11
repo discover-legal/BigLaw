@@ -18,6 +18,8 @@ import (
 	"regexp"
 	"sync"
 	"time"
+
+	"github.com/discover-legal/biglaw-go/internal/strutil"
 )
 
 const (
@@ -275,7 +277,7 @@ func SearchTeamsMessages(query string, maxResults int) ([]TeamsMessage, error) {
 				bodyObj, _ := r["body"].(map[string]interface{})
 				bodyText := stripHTML(str(bodyObj["content"]))
 				if len(bodyText) > 400 {
-					bodyText = bodyText[:400]
+					bodyText = strutil.Truncate(bodyText, 400)
 				}
 				m := TeamsMessage{
 					ID:        str(r["id"]),

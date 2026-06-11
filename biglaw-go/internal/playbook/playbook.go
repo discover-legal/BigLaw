@@ -22,6 +22,7 @@ import (
 
 	"github.com/discover-legal/biglaw-go/internal/cost"
 	"github.com/discover-legal/biglaw-go/internal/providers"
+	"github.com/discover-legal/biglaw-go/internal/strutil"
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
 
@@ -652,8 +653,5 @@ func strSlice(v interface{}) []string {
 }
 
 func truncate(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max]
+	return strutil.Truncate(s, max)
 }

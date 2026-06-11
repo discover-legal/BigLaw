@@ -25,6 +25,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/discover-legal/biglaw-go/internal/strutil"
 )
 
 const (
@@ -281,7 +283,7 @@ func NotifySlackTaskComplete(taskID, matterNumber, workflowType, output string, 
 	}
 	body := output
 	if len(body) > 500 {
-		body = body[:500]
+		body = strutil.Truncate(body, 500)
 	}
 	text := fmt.Sprintf("*Matter %s — Task Complete* ✓\n\n%s\n\n_Task ID: `%s` | Workflow: %s | Findings: %d_",
 		matterNumber, body, taskID, workflowType, findingCount)

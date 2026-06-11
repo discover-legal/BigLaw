@@ -801,7 +801,7 @@ GET    /me · /profiles        POST /profiles                 (partner only)
 GET    /clients               POST /clients · PATCH/DELETE /clients/:id   (partner only)
 POST   /clients/:id/matters   DELETE /clients/:id/matters/:num            (partner only)
 POST   /clients/check-conflict             POST /clients/check-conflict-graph
-GET    /clients/:id/briefing               hub-and-spoke client briefing
+GET    /clients/:id/briefing               hub-and-spoke client briefing         (partner only)
 POST   /clients/:id/ocg                    GET/DELETE /clients/:id/ocg · GET …/ocg/stats
 GET    /time-entries          GET /time-entries/export.{json,csv,ledes}    (partner: all; lawyer: own)
 GET    /time-entries/{agent-summary,suggestions}
@@ -813,9 +813,9 @@ GET    /cost/summary                                                       (part
 GET    /tasks/:id/cost        GET /profiles/:id/cost
 GET    /playbooks · /playbooks/:id · /playbooks/resolve/:clauseType
 POST   /playbooks/build       DELETE /playbooks/:id                       (partner only)
-POST   /redline               Contract redline (playbook-aware)
-POST   /headnotes/generate    Headnote extraction from case opinions
-POST   /precedents/generate   Precedent document generation
+POST   /redline               Contract redline (playbook-aware)               (partner only)
+POST   /headnotes/generate    Headnote extraction from case opinions          (partner only)
+POST   /precedents/generate   Precedent document generation                   (partner only)
 GET/POST /citations/check     Citation engine (CourtListener-backed)
 GET    /deadlines/rules       POST /deadlines/compute
 PUT/GET /clients/:id/matters/:num/budget   POST …/budget/check

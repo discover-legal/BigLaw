@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/discover-legal/biglaw-go/internal/strutil"
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
 
@@ -191,7 +192,7 @@ func Dispatch(msg BotMessage, orch OrchestratorFacade) BotResponse {
 			}
 			snippet := r.Excerpt
 			if len(snippet) > 150 {
-				snippet = snippet[:150]
+				snippet = strutil.Truncate(snippet, 150)
 			}
 			lines = append(lines, fmt.Sprintf("**%s**", title), snippet, "")
 		}
@@ -298,10 +299,7 @@ func immediateResult(msg string, err error) string {
 }
 
 func truncate80(s string) string {
-	if len(s) <= 80 {
-		return s
-	}
-	return s[:80]
+	return strutil.Truncate(s, 80)
 }
 
 const helpText = `**Big Michael** — multi-agent legal AI

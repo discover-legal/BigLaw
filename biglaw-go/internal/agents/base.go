@@ -20,6 +20,7 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/cost"
 	"github.com/discover-legal/biglaw-go/internal/providers"
 	"github.com/discover-legal/biglaw-go/internal/routing"
+	"github.com/discover-legal/biglaw-go/internal/strutil"
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
 
@@ -163,7 +164,7 @@ func (a *Agent) Process(ctx AgentContext) ([]types.Finding, error) {
 					"agentName":      a.Def.Name,
 					"confidence":     f.Confidence,
 					"round":          ctx.RoundGoal.Round,
-					"contentPreview": f.Content[:min(150, len(f.Content))],
+					"contentPreview": strutil.Truncate(f.Content, 150),
 				},
 			})
 		}
@@ -249,7 +250,7 @@ func (a *Agent) runAgenticLoop(initialPrompt string, maxTokens int, model string
 				raw, _ := json.Marshal(result)
 				content := string(raw)
 				if len(content) > 100_000 {
-					content = content[:100_000] + "…[truncated]"
+					content = strutil.Truncate(content, 100_000) + "…[truncated]"
 				}
 				toolResults = append(toolResults, providers.ContentBlock{
 					Type:      providers.BlockToolResult,
@@ -467,7 +468,9 @@ func parseFindings(text string, def types.AgentDefinition) []types.Finding {
 		}
 		content := strings.TrimSpace(contentMatch[1])
 
-		var citations []types.Citation
+		// Non-nil even when the agent cites nothing — citations are part of
+		// the serialized JSON contract, and nil marshals to null.
+		citations := []types.Citation{}
 		for _, cm := range reCitation.FindAllStringSubmatch(body, 50) {
 			cit := types.Citation{
 				Source:               truncate(strings.TrimSpace(cm[1]), 200),
@@ -544,10 +547,7 @@ func extractLine(text, prefix string) string {
 }
 
 func truncate(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max]
+	return strutil.Truncate(s, max)
 }
 
 func contains(slice []string, s string) bool {
@@ -567,10 +567,3 @@ func orSystem(id string) string {
 }
 
 func ptr[T any](v T) *T { return &v }
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}

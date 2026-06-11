@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/discover-legal/biglaw-go/internal/embeddings"
+	"github.com/discover-legal/biglaw-go/internal/strutil"
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
 
@@ -168,7 +169,7 @@ type WriteFindingOpts struct {
 func (s *InterRoundStore) WriteFindingMemory(opts WriteFindingOpts) error {
 	content := opts.Finding.Content
 	if len(content) > 500 {
-		content = content[:500]
+		content = strutil.Truncate(content, 500)
 	}
 	result, _ := s.embedC.Embed(content)
 	entry := types.MemoryEntry{

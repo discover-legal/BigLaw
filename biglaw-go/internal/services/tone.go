@@ -17,6 +17,7 @@ import (
 
 	"github.com/discover-legal/biglaw-go/internal/cost"
 	"github.com/discover-legal/biglaw-go/internal/providers"
+	"github.com/discover-legal/biglaw-go/internal/strutil"
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
 
@@ -167,7 +168,7 @@ func (a *ToneAnalyzer) buildProfile(note, name string, sampleCount int, sourceTy
 			}
 			if s, ok := item.(string); ok && s != "" {
 				if len(s) > 200 {
-					s = s[:200]
+					s = strutil.Truncate(s, 200)
 				}
 				profile.SignaturePatterns = append(profile.SignaturePatterns, s)
 			}
@@ -176,7 +177,7 @@ func (a *ToneAnalyzer) buildProfile(note, name string, sampleCount int, sourceTy
 
 	if inj, ok := p["injectionSnippet"].(string); ok && inj != "" {
 		if len(inj) > 1000 {
-			inj = inj[:1000]
+			inj = strutil.Truncate(inj, 1000)
 		}
 		profile.InjectionSnippet = inj
 	} else {

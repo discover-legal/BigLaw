@@ -34,6 +34,7 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/providers"
 	"github.com/discover-legal/biglaw-go/internal/routing"
 	"github.com/discover-legal/biglaw-go/internal/settings"
+	"github.com/discover-legal/biglaw-go/internal/strutil"
 	"github.com/discover-legal/biglaw-go/internal/templates"
 	"github.com/discover-legal/biglaw-go/internal/timekeeping"
 	"github.com/discover-legal/biglaw-go/internal/types"
@@ -283,7 +284,7 @@ func (o *Orchestrator) SubmitTask(params SubmitParams) (*types.Task, error) {
 				TaskID:       task.ID,
 				MatterNumber: task.MatterNumber,
 				ClientNumber: task.ClientNumber,
-				Description:  "Task: " + task.Description[:min(200, len(task.Description))],
+				Description:  "Task: " + strutil.Truncate(task.Description, 200),
 				Event:        "task_run",
 				StartedAt:    time.Now(),
 			})
@@ -300,7 +301,7 @@ func (o *Orchestrator) SubmitTask(params SubmitParams) (*types.Task, error) {
 		Event:   "task.created",
 		ActorID: orSystem(task.CreatedByProfileID),
 		TaskID:  task.ID,
-		Data:    map[string]interface{}{"description": params.Description[:min(200, len(params.Description))], "workflowType": params.WorkflowType},
+		Data:    map[string]interface{}{"description": strutil.Truncate(params.Description, 200), "workflowType": params.WorkflowType},
 	})
 	o.persistTasks()
 
@@ -356,6 +357,27 @@ func (o *Orchestrator) GetTask(id string) *types.Task {
 	return &cp
 }
 
+// update applies fn to a live task under the write lock. Every write to a
+// task after it has been handed to runTask must go through here (or hold
+// o.mu directly): GetTask/ListTasks/persistTasks hand out shallow copies
+// that are marshaled outside the lock, so unsynchronized writes would race
+// with those reads. Slice-typed fields that handlers rewrite (Findings,
+// PendingGates) must be replaced copy-on-write, never mutated in place.
+func (o *Orchestrator) update(task *types.Task, fn func(t *types.Task)) {
+	o.mu.Lock()
+	fn(task)
+	o.mu.Unlock()
+}
+
+// snapshot returns a consistent shallow copy of a live task for use by
+// long-running readers (synthesis, tabulation) that must not hold the lock.
+func (o *Orchestrator) snapshot(task *types.Task) *types.Task {
+	o.mu.RLock()
+	cp := *task
+	o.mu.RUnlock()
+	return &cp
+}
+
 func (o *Orchestrator) ListTasks() []*types.Task {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
@@ -405,16 +427,22 @@ func (o *Orchestrator) ApproveGate(taskID, gateID string, note, reviewerProfileI
 		o.mu.Unlock()
 		return fmt.Errorf("task not found: %s", taskID)
 	}
-	for i := range task.PendingGates {
-		if task.PendingGates[i].ID == gateID {
-			task.PendingGates[i].Status = "approved"
-			task.PendingGates[i].ReviewerNote = note
+	// Copy-on-write: shallow task copies returned by GetTask/persistTasks
+	// are marshaled outside the lock, so the shared backing array must not
+	// be written in place.
+	gates := make([]types.GateRequest, len(task.PendingGates))
+	copy(gates, task.PendingGates)
+	for i := range gates {
+		if gates[i].ID == gateID {
+			gates[i].Status = "approved"
+			gates[i].ReviewerNote = note
 			now := time.Now()
-			task.PendingGates[i].ReviewedAt = &now
+			gates[i].ReviewedAt = &now
 			task.UpdatedAt = time.Now()
 			break
 		}
 	}
+	task.PendingGates = gates
 	ch := o.gateChans[taskID]
 	o.mu.Unlock()
 	audit.Default.Write(audit.WriteRequest{Event: "gate.approved", ActorID: orSystem(reviewerProfileID), TaskID: taskID, Data: map[string]interface{}{"gateId": gateID, "note": note}})
@@ -435,20 +463,26 @@ func (o *Orchestrator) RejectGate(taskID, gateID, reason, reviewerProfileID stri
 		o.mu.Unlock()
 		return fmt.Errorf("task not found: %s", taskID)
 	}
+	// Copy-on-write for both slices — see ApproveGate. The previous
+	// in-place [:0] compaction corrupted shallow copies being marshaled
+	// concurrently on other goroutines.
 	var findingID string
-	for i := range task.PendingGates {
-		if task.PendingGates[i].ID == gateID {
-			task.PendingGates[i].Status = "rejected"
-			task.PendingGates[i].ReviewerNote = reason
+	gates := make([]types.GateRequest, len(task.PendingGates))
+	copy(gates, task.PendingGates)
+	for i := range gates {
+		if gates[i].ID == gateID {
+			gates[i].Status = "rejected"
+			gates[i].ReviewerNote = reason
 			now := time.Now()
-			task.PendingGates[i].ReviewedAt = &now
-			findingID = task.PendingGates[i].FindingID
+			gates[i].ReviewedAt = &now
+			findingID = gates[i].FindingID
 			task.UpdatedAt = time.Now()
 			break
 		}
 	}
+	task.PendingGates = gates
 	if findingID != "" {
-		filtered := task.Findings[:0]
+		filtered := make([]types.Finding, 0, len(task.Findings))
 		for _, f := range task.Findings {
 			if f.ID != findingID {
 				filtered = append(filtered, f)
@@ -490,7 +524,7 @@ func (o *Orchestrator) SubmitFromTemplate(templateID string, subs map[string]str
 // ─── Internal task runner ─────────────────────────────────────────────────────
 
 func (o *Orchestrator) runTask(task *types.Task) {
-	task.Status = "running"
+	o.update(task, func(t *types.Task) { t.Status = "running" })
 	emitProgress(task.ID, "started", map[string]interface{}{"taskId": task.ID, "workflowType": task.WorkflowType})
 	audit.Default.Write(audit.WriteRequest{Event: "task.started", ActorID: audit.ActorSystem, TaskID: task.ID, Data: map[string]interface{}{"workflowType": task.WorkflowType}})
 
@@ -498,12 +532,16 @@ func (o *Orchestrator) runTask(task *types.Task) {
 	var runErr error
 
 	for _, phase := range phases {
+		// CurrentRound is written only by this goroutine (under the lock,
+		// for readers' sake), so reading it here is safe.
 		if task.CurrentRound >= task.MaxRounds {
 			slog.Warn("task hit maxRounds cap", "taskId", task.ID, "maxRounds", task.MaxRounds)
 			break
 		}
-		task.CurrentPhase = phase
-		task.UpdatedAt = time.Now()
+		o.update(task, func(t *types.Task) {
+			t.CurrentPhase = phase
+			t.UpdatedAt = time.Now()
+		})
 		emitProgress(task.ID, "phase", map[string]interface{}{"phase": phase})
 
 		if err := o.runPhase(task, phase); err != nil {
@@ -511,27 +549,32 @@ func (o *Orchestrator) runTask(task *types.Task) {
 			break
 		}
 
-		// Wait for any pending gates.
+		// Wait for any pending gates. PendingGates is rewritten by the
+		// gate handlers, so read it under the lock.
 		hasPending := false
+		o.mu.RLock()
 		for _, g := range task.PendingGates {
 			if g.Status == "pending" {
 				hasPending = true
 				break
 			}
 		}
+		o.mu.RUnlock()
 		if hasPending {
-			task.Status = "awaiting_gate"
+			o.update(task, func(t *types.Task) { t.Status = "awaiting_gate" })
 			o.waitForGates(task)
-			task.Status = "running"
+			o.update(task, func(t *types.Task) { t.Status = "running" })
 		}
 	}
 
 	if runErr != nil {
-		task.Status = "failed"
-		task.Error = runErr.Error()
+		o.update(task, func(t *types.Task) {
+			t.Status = "failed"
+			t.Error = runErr.Error()
+		})
 		if task.ActiveTimeEntryID != "" {
 			o.time.Close(task.ActiveTimeEntryID)
-			task.ActiveTimeEntryID = ""
+			o.update(task, func(t *types.Task) { t.ActiveTimeEntryID = "" })
 		}
 		emitProgress(task.ID, "failed", map[string]interface{}{"error": runErr.Error()})
 		audit.Default.Write(audit.WriteRequest{Event: "task.failed", ActorID: audit.ActorSystem, TaskID: task.ID, Data: map[string]interface{}{"error": runErr.Error()}})
@@ -539,34 +582,38 @@ func (o *Orchestrator) runTask(task *types.Task) {
 		return
 	}
 
-	// Final synthesis.
-	output, err := o.synthesise(task)
+	// Final synthesis. Reads Findings/PendingGates, which gate handlers
+	// rewrite concurrently — work from a locked snapshot.
+	output, err := o.synthesise(o.snapshot(task))
 	if err != nil {
 		output = fmt.Sprintf("Synthesis error: %v", err)
 	}
-	task.Output = output
+	o.update(task, func(t *types.Task) { t.Output = output })
 
 	// Tabulation for tabulate workflow.
 	if task.WorkflowType == types.WorkflowTabulate {
-		if table, err := o.tabulate(task); err == nil && table != nil {
-			task.Table = table
+		if table, err := o.tabulate(o.snapshot(task)); err == nil && table != nil {
+			o.update(task, func(t *types.Task) { t.Table = table })
 		}
 	}
 
-	task.Status = "complete"
-	now := time.Now()
-	task.CompletedAt = &now
-	task.UpdatedAt = now
+	o.update(task, func(t *types.Task) {
+		t.Status = "complete"
+		now := time.Now()
+		t.CompletedAt = &now
+		t.UpdatedAt = now
+	})
 
 	if task.ActiveTimeEntryID != "" {
 		o.time.Close(task.ActiveTimeEntryID)
-		task.ActiveTimeEntryID = ""
+		o.update(task, func(t *types.Task) { t.ActiveTimeEntryID = "" })
 	}
 
-	o.recordAgentOutcomes(task)
+	final := o.snapshot(task)
+	o.recordAgentOutcomes(final)
 
-	emitProgress(task.ID, "complete", map[string]interface{}{"findings": len(task.Findings), "output": task.Output[:min(200, len(task.Output))]})
-	audit.Default.Write(audit.WriteRequest{Event: "task.complete", ActorID: audit.ActorSystem, TaskID: task.ID, Data: map[string]interface{}{"findings": len(task.Findings)}})
+	emitProgress(task.ID, "complete", map[string]interface{}{"findings": len(final.Findings), "output": strutil.Truncate(final.Output, 200)})
+	audit.Default.Write(audit.WriteRequest{Event: "task.complete", ActorID: audit.ActorSystem, TaskID: task.ID, Data: map[string]interface{}{"findings": len(final.Findings)}})
 	o.persistTasks()
 }
 
@@ -646,7 +693,7 @@ func (o *Orchestrator) runPhase(task *types.Task, phase types.TaskPhase) error {
 	if err != nil {
 		return fmt.Errorf("generate round goal: %w", err)
 	}
-	task.CurrentRound++
+	o.update(task, func(t *types.Task) { t.CurrentRound++ })
 	goal.Round = task.CurrentRound
 
 	primaryProfileID := task.CreatedByProfileID
@@ -676,8 +723,6 @@ func (o *Orchestrator) runPhase(task *types.Task, phase types.TaskPhase) error {
 	if err != nil {
 		return fmt.Errorf("run round: %w", err)
 	}
-	task.Rounds = append(task.Rounds, *roundState)
-
 	// Build source-text map for citation gate.
 	sourceTexts := map[string]string{}
 	for _, docID := range task.DocumentIDs {
@@ -702,13 +747,29 @@ func (o *Orchestrator) runPhase(task *types.Task, phase types.TaskPhase) error {
 		}
 	}
 
-	task.Findings = append(task.Findings, debated...)
-
 	gates := o.protocols.IdentifyGates(task.ID, debated)
 	o.annotateGatesWithClientVoice(task, gates)
-	task.PendingGates = append(task.PendingGates, gates...)
 
-	task.UpdatedAt = time.Now()
+	// Fold debate/verification outcomes back into the round record, then
+	// publish everything in one locked write. The round is appended only
+	// now: the citation gate mutates findings in place, which must not
+	// happen on data already visible to marshaling readers.
+	byID := map[string]types.Finding{}
+	for _, f := range debated {
+		byID[f.ID] = f
+	}
+	for i := range roundState.Findings {
+		if f, ok := byID[roundState.Findings[i].ID]; ok {
+			roundState.Findings[i] = f
+		}
+	}
+
+	o.update(task, func(t *types.Task) {
+		t.Rounds = append(t.Rounds, *roundState)
+		t.Findings = append(t.Findings, debated...)
+		t.PendingGates = append(t.PendingGates, gates...)
+		t.UpdatedAt = time.Now()
+	})
 	emitProgress(task.ID, "round", map[string]interface{}{"round": task.CurrentRound, "phase": phase, "findings": len(debated), "gates": len(gates)})
 	audit.Default.Write(audit.WriteRequest{Event: "phase.complete", ActorID: audit.ActorSystem, TaskID: task.ID, Data: map[string]interface{}{"phase": phase, "findings": len(debated), "gates": len(gates)}})
 	return nil
@@ -835,7 +896,7 @@ EXPECTED_OUTPUT_3: <third expected output>`,
 			ID:          uuid.New().String(),
 			Round:       task.CurrentRound,
 			Phase:       phase,
-			Description: fmt.Sprintf("Execute the %s phase for: %s", phase, safeDesc[:min(200, len(safeDesc))]),
+			Description: fmt.Sprintf("Execute the %s phase for: %s", phase, strutil.Truncate(safeDesc, 200)),
 		}, nil
 	}
 	o.recordCost(resp, routing.ResolveModelID(model), cost.ContextRoundGoal, task.ID)
@@ -852,7 +913,7 @@ EXPECTED_OUTPUT_3: <third expected output>`,
 	if m := regexpFindSubmatch(`(?i)DESCRIPTION:\s*([\s\S]+?)(?:EXPECTED_OUTPUT|$)`, text); len(m) > 1 {
 		description = strings.TrimSpace(m[1])
 	}
-	var expectedOutputs []string
+	expectedOutputs := []string{}
 	for _, m := range regexpFindAllSubmatch(`(?i)EXPECTED_OUTPUT_\d+:\s*(.+)`, text, 5) {
 		if len(m) > 1 {
 			expectedOutputs = append(expectedOutputs, strings.TrimSpace(m[1]))
@@ -887,13 +948,13 @@ func (o *Orchestrator) synthesise(task *types.Task) (string, error) {
 	for i, f := range filteredFindings {
 		content := f.Content
 		if len(content) > 5000 {
-			content = content[:5000]
+			content = strutil.Truncate(content, 5000)
 		}
 		lines = append(lines, fmt.Sprintf("[%d] (%s, Round %d) %s", i+1, f.AgentName, f.Round, content))
 	}
 	findingsSummary := strings.Join(lines, "\n\n")
 	if len(findingsSummary) > 200_000 {
-		findingsSummary = findingsSummary[:200_000]
+		findingsSummary = strutil.Truncate(findingsSummary, 200_000)
 	}
 
 	toneBlock := ""
@@ -905,7 +966,7 @@ func (o *Orchestrator) synthesise(task *types.Task) (string, error) {
 		if p := o.profiles.Get(primaryProfileID); p != nil && p.ToneProfile != nil {
 			snippet := adapters.SanitizePromptContent(p.ToneProfile.InjectionSnippet)
 			if len(snippet) > 2000 {
-				snippet = snippet[:2000]
+				snippet = strutil.Truncate(snippet, 2000)
 			}
 			toneBlock = "\nLAWYER TONE PROFILE — write the final output in this voice:\n" + snippet + "\n"
 		}
@@ -982,7 +1043,7 @@ func (o *Orchestrator) tabulate(task *types.Task) (*types.TaskTable, error) {
 	for _, f := range filteredFindings {
 		c := f.Content
 		if len(c) > 500 {
-			c = c[:500]
+			c = strutil.Truncate(c, 500)
 		}
 		sb.WriteString(fmt.Sprintf("id=%s | %s (R%d, conf %.2f): %s\n\n", f.ID, f.AgentName, f.Round, f.Confidence, c))
 	}
@@ -1077,13 +1138,16 @@ func (o *Orchestrator) waitForGates(task *types.Task) {
 		return
 	}
 	for {
+		// Gate handlers rewrite PendingGates under the lock.
 		allResolved := true
+		o.mu.RLock()
 		for _, g := range task.PendingGates {
 			if g.Status == "pending" {
 				allResolved = false
 				break
 			}
 		}
+		o.mu.RUnlock()
 		if allResolved {
 			return
 		}
@@ -1130,10 +1194,61 @@ func (o *Orchestrator) restoreTasks() {
 		if _, ok := phaseSequences[t.WorkflowType]; !ok {
 			continue
 		}
+		normalizeTask(t)
 		o.tasks[t.ID] = t
 		o.gateChans[t.ID] = make(chan struct{}, 8)
 	}
 	o.mu.Unlock()
+}
+
+// normalizeTask repairs nil slices on tasks restored from disk. Earlier
+// builds persisted rounds whose Edges/Findings (and findings' Citations)
+// could be nil; nil marshals to JSON null, which breaks the UI's contract
+// that these fields are always arrays.
+func normalizeTask(t *types.Task) {
+	if t.DocumentIDs == nil {
+		t.DocumentIDs = []string{}
+	}
+	if t.ActiveAgentIDs == nil {
+		t.ActiveAgentIDs = []string{}
+	}
+	if t.Rounds == nil {
+		t.Rounds = []types.RoundState{}
+	}
+	if t.Findings == nil {
+		t.Findings = []types.Finding{}
+	}
+	if t.PendingGates == nil {
+		t.PendingGates = []types.GateRequest{}
+	}
+	for i := range t.Findings {
+		if t.Findings[i].Citations == nil {
+			t.Findings[i].Citations = []types.Citation{}
+		}
+	}
+	for i := range t.Rounds {
+		r := &t.Rounds[i]
+		if r.Goal.ExpectedOutputs == nil {
+			r.Goal.ExpectedOutputs = []string{}
+		}
+		if r.ActiveAgentIDs == nil {
+			r.ActiveAgentIDs = []string{}
+		}
+		if r.Edges == nil {
+			r.Edges = []types.CommunicationEdge{}
+		}
+		if r.Messages == nil {
+			r.Messages = []types.AgentMessage{}
+		}
+		if r.Findings == nil {
+			r.Findings = []types.Finding{}
+		}
+		for j := range r.Findings {
+			if r.Findings[j].Citations == nil {
+				r.Findings[j].Citations = []types.Citation{}
+			}
+		}
+	}
 }
 
 // ─── Cost recording ───────────────────────────────────────────────────────────

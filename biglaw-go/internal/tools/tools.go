@@ -19,6 +19,7 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/cost"
 	"github.com/discover-legal/biglaw-go/internal/providers"
 	"github.com/discover-legal/biglaw-go/internal/routing"
+	"github.com/discover-legal/biglaw-go/internal/strutil"
 )
 
 // ToolImpl holds the schema and executor for a single tool.
@@ -622,7 +623,7 @@ func tavilySearch(apiKey, query string, maxResults int) (interface{}, error) {
 	for _, r := range tr.Results {
 		content := r.Content
 		if len(content) > 800 {
-			content = content[:800]
+			content = strutil.Truncate(content, 800)
 		}
 		results = append(results, map[string]interface{}{
 			"url":           r.URL,

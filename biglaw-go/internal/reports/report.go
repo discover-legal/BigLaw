@@ -17,6 +17,7 @@ import (
 
 	"github.com/discover-legal/biglaw-go/internal/cost"
 	"github.com/discover-legal/biglaw-go/internal/providers"
+	"github.com/discover-legal/biglaw-go/internal/strutil"
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
 
@@ -65,7 +66,7 @@ func (g *Generator) Generate(
 	for i, f := range topFindings {
 		content := f.Content
 		if len(content) > 400 {
-			content = content[:400]
+			content = strutil.Truncate(content, 400)
 		}
 		findingsLines = append(findingsLines, fmt.Sprintf("[%d] (%s, conf %.2f) %s", i+1, f.AgentName, f.Confidence, content))
 	}
@@ -98,7 +99,7 @@ func (g *Generator) Generate(
 		synthesis = "(analysis in progress)"
 	}
 	if len(synthesis) > 3000 {
-		synthesis = synthesis[:3000]
+		synthesis = strutil.Truncate(synthesis, 3000)
 	}
 
 	matterNum := task.MatterNumber
@@ -141,7 +142,7 @@ func (g *Generator) Generate(
 	if opts.CustomNote != "" {
 		note := sanitizePromptContent(opts.CustomNote)
 		if len(note) > 1000 {
-			note = note[:1000]
+			note = strutil.Truncate(note, 1000)
 		}
 		noteBlock = "PARTNER NOTE (include this verbatim near the top of the report):\n" + note + "\n\n"
 	}

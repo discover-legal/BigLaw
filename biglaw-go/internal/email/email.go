@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/discover-legal/biglaw-go/internal/integrations"
+	"github.com/discover-legal/biglaw-go/internal/strutil"
 )
 
 const (
@@ -210,7 +211,7 @@ func SearchGraphMailWindow(query string, maxResults, newerDays, olderDays int) (
 		}
 		snippet := m.BodyPreview
 		if len(snippet) > 400 {
-			snippet = snippet[:400]
+			snippet = strutil.Truncate(snippet, 400)
 		}
 		msgs = append(msgs, Message{
 			ID:             m.ID,
@@ -323,7 +324,7 @@ func SearchGmailWindow(query string, maxResults, newerDays, olderDays int) ([]Me
 			}
 			snippet := raw.Snippet
 			if len(snippet) > 400 {
-				snippet = snippet[:400]
+				snippet = strutil.Truncate(snippet, 400)
 			}
 			mu.Lock()
 			msgs = append(msgs, Message{

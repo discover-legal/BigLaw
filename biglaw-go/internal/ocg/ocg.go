@@ -22,6 +22,7 @@ import (
 
 	"github.com/discover-legal/biglaw-go/internal/cost"
 	"github.com/discover-legal/biglaw-go/internal/providers"
+	"github.com/discover-legal/biglaw-go/internal/strutil"
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
 
@@ -123,11 +124,11 @@ func (s *Store) Remove(clientID string) error {
 func (s *Store) Ingest(clientID, title, text string) (*types.OcgDocument, error) {
 	sanitized := sanitizeOCG(text)
 	if len(sanitized) > 60000 {
-		sanitized = sanitized[:60000]
+		sanitized = strutil.Truncate(sanitized, 60000)
 	}
 	excerpt := sanitized
 	if len(excerpt) > 500 {
-		excerpt = excerpt[:500]
+		excerpt = strutil.Truncate(excerpt, 500)
 	}
 
 	prompt := fmt.Sprintf(`You are extracting billing rules from an Outside Counsel Guidelines document.
@@ -172,7 +173,7 @@ Respond with ONLY a valid JSON array, no markdown, no prose:
 				}
 				rText = strings.TrimSpace(rText)
 				if len(rText) > 200 {
-					rText = rText[:200]
+					rText = strutil.Truncate(rText, 200)
 				}
 				catStr, _ := r["category"].(string)
 				cat, ok := validCategories[catStr]
@@ -530,11 +531,11 @@ Return a JSON array. Use [] if no violations. ONLY the array — no markdown, no
 				continue
 			}
 			if len(issue) > 120 {
-				issue = issue[:120]
+				issue = strutil.Truncate(issue, 120)
 			}
 			suggested, _ := v["suggestedDescription"].(string)
 			if len(suggested) > 300 {
-				suggested = suggested[:300]
+				suggested = strutil.Truncate(suggested, 300)
 			}
 			all = append(all, types.OcgSuggestion{
 				RuleID:               rule.ID,

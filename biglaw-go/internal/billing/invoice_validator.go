@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/discover-legal/biglaw-go/internal/cost"
 	"github.com/discover-legal/biglaw-go/internal/providers"
+	"github.com/discover-legal/biglaw-go/internal/strutil"
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
 
@@ -323,7 +325,7 @@ func checkBlockBilling(item types.InvoiceLineItem, ruleID, ruleText string) *typ
 	}
 	desc := item.Description
 	if len(desc) > 120 {
-		desc = desc[:120] + "..."
+		desc = strutil.Truncate(desc, 120) + "..."
 	}
 	return &types.InvoiceViolation{
 		LineID:             item.LineID,
@@ -619,5 +621,7 @@ func parseFloat(s string) (float64, error) {
 }
 
 func round2(f float64) float64 {
-	return float64(int(f*100+0.5)) / 100
+	// math.Round, not int(f*100+0.5): truncation flips the sign of rounding
+	// for negative amounts (credit line items) and overflows on large f.
+	return math.Round(f*100) / 100
 }

@@ -35,6 +35,7 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/providers"
 	"github.com/discover-legal/biglaw-go/internal/regulatory"
 	"github.com/discover-legal/biglaw-go/internal/settings"
+	"github.com/discover-legal/biglaw-go/internal/strutil"
 	"github.com/discover-legal/biglaw-go/internal/timekeeping"
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
@@ -1034,7 +1035,7 @@ func (s *Server) handleCheckConflict(c *gin.Context) {
 	}
 	name := strings.TrimSpace(body.Name)
 	if len(name) > 500 {
-		name = name[:500]
+		name = strutil.Truncate(name, 500)
 	}
 	if name == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "name is required"})

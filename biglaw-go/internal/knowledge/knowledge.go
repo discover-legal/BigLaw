@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/discover-legal/biglaw-go/internal/embeddings"
+	"github.com/discover-legal/biglaw-go/internal/strutil"
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
 
@@ -35,7 +36,7 @@ func (s *Store) Ingest(doc types.Document) (*types.Document, error) {
 	// Embed a representative chunk (title + first 2000 chars)
 	text := doc.Title + " " + doc.Content
 	if len(text) > 2000 {
-		text = text[:2000]
+		text = strutil.Truncate(text, 2000)
 	}
 	if result, err := s.embedC.Embed(text); err == nil && result != nil {
 		doc.Embedding = result.Embedding
@@ -95,7 +96,7 @@ func (s *Store) Search(query string, opts SearchOpts) ([]types.SearchResult, err
 	for i, c := range candidates[:k] {
 		excerpt := c.doc.Content
 		if len(excerpt) > 300 {
-			excerpt = excerpt[:300] + "…"
+			excerpt = strutil.Truncate(excerpt, 300) + "…"
 		}
 		out[i] = types.SearchResult{Document: c.doc, Score: c.score, Excerpt: excerpt}
 	}
@@ -147,7 +148,7 @@ func (s *Store) fallback(query string, opts SearchOpts) []types.SearchResult {
 		}
 		excerpt := d.Content
 		if len(excerpt) > 300 {
-			excerpt = excerpt[:300] + "…"
+			excerpt = strutil.Truncate(excerpt, 300) + "…"
 		}
 		out = append(out, types.SearchResult{Document: d, Score: 0.5, Excerpt: excerpt})
 		if len(out) >= k {

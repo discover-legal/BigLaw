@@ -25,6 +25,7 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/email"
 	"github.com/discover-legal/biglaw-go/internal/integrations"
 	"github.com/discover-legal/biglaw-go/internal/providers"
+	"github.com/discover-legal/biglaw-go/internal/strutil"
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
 
@@ -281,7 +282,7 @@ func (e *Engine) runTeamsChatSpoke(client *types.Client) spokeResult {
 	for _, m := range messages {
 		body := m.Body
 		if len(body) > 100 {
-			body = body[:100]
+			body = strutil.Truncate(body, 100)
 		}
 		items = append(items, IntelItem{
 			Source:       "teams_chat",
@@ -329,7 +330,7 @@ func (e *Engine) runInternalSpoke(client *types.Client, allTasks []*types.Task, 
 		}
 		output := ""
 		if len(t.Output) > 300 {
-			output = t.Output[:300]
+			output = strutil.Truncate(t.Output, 300)
 		} else {
 			output = t.Output
 		}
@@ -736,8 +737,5 @@ func filterEntries(entries []types.TimeEntry, matterNumber string) []types.TimeE
 }
 
 func truncate(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max]
+	return strutil.Truncate(s, max)
 }

@@ -295,6 +295,9 @@ type redlineBody struct {
 }
 
 func (s *Server) handleRedline(c *gin.Context) {
+	if !requirePartner(c) {
+		return
+	}
 	eng := s.enginesRequire(c)
 	if eng == nil {
 		return
@@ -341,6 +344,9 @@ type headnotesBody struct {
 }
 
 func (s *Server) handleGenerateHeadnotes(c *gin.Context) {
+	if !requirePartner(c) {
+		return
+	}
 	eng := s.enginesRequire(c)
 	if eng == nil {
 		return
@@ -385,6 +391,9 @@ type precedentBody struct {
 }
 
 func (s *Server) handleGeneratePrecedent(c *gin.Context) {
+	if !requirePartner(c) {
+		return
+	}
 	eng := s.enginesRequire(c)
 	if eng == nil {
 		return
@@ -461,9 +470,12 @@ func (s *Server) handleCitationCheckPost(c *gin.Context) {
 // ─── Client briefing ──────────────────────────────────────────────────────────
 
 // handleClientBriefing generates a hub-and-spoke client intelligence briefing.
-// Like the TS handler this route is not partner-gated and passes the full
-// time-entry ledger to the engine (the engine filters by client number).
+// Partner-only, like the TS handler (and like every other /clients route): it
+// aggregates the full client relationship — matters, mail, time entries.
 func (s *Server) handleClientBriefing(c *gin.Context) {
+	if !requirePartner(c) {
+		return
+	}
 	eng := s.enginesRequire(c)
 	if eng == nil {
 		return

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/discover-legal/biglaw-go/internal/strutil"
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
 
@@ -127,7 +128,7 @@ func sanitizeField(s string) string {
 	s = strings.ReplaceAll(s, "\r", " ")
 	s = strings.ReplaceAll(s, "\n", " ")
 	if len(s) > 200 {
-		s = s[:200]
+		s = strutil.Truncate(s, 200)
 	}
 	return s
 }

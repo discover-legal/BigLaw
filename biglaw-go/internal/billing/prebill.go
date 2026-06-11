@@ -8,6 +8,7 @@ package billing
 import (
 	"encoding/json"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"sync"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/discover-legal/biglaw-go/internal/strutil"
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
 
@@ -179,7 +181,7 @@ func (s *PreBillStore) UpdateEntryDescription(billID, entryID, description strin
 		for j := range b.Entries {
 			if b.Entries[j].EntryID == entryID {
 				if len(description) > 500 {
-					description = description[:500]
+					description = strutil.Truncate(description, 500)
 				}
 				b.Entries[j].Description = description
 				go s.persist()
@@ -243,7 +245,7 @@ func (s *PreBillStore) SetNotes(billID, notes string) *PreBill {
 			continue
 		}
 		if len(notes) > 2000 {
-			notes = notes[:2000]
+			notes = strutil.Truncate(notes, 2000)
 		}
 		s.bills[i].Notes = notes
 		go s.persist()
@@ -277,5 +279,7 @@ func (s *PreBillStore) persist() {
 }
 
 func roundCents(f float64) float64 {
-	return float64(int(f*100+0.5)) / 100
+	// math.Round, not int(f*100+0.5): truncation flips the sign of rounding
+	// for negative amounts (credits/write-offs) and overflows on large f.
+	return math.Round(f*100) / 100
 }

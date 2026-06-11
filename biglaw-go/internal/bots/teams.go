@@ -21,6 +21,7 @@ import (
 	"sync"
 
 	"github.com/discover-legal/biglaw-go/internal/integrations"
+	"github.com/discover-legal/biglaw-go/internal/strutil"
 )
 
 // ─── Matter link store ────────────────────────────────────────────────────────
@@ -196,7 +197,7 @@ func NotifyTeamsTaskComplete(taskID, matterNumber, workflowType, output string, 
 	}
 	body := output
 	if len(body) > 800 {
-		body = body[:800]
+		body = strutil.Truncate(body, 800)
 	}
 	facts := []integrations.WebhookFact{
 		{Name: "Task ID", Value: taskID},

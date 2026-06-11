@@ -39,6 +39,7 @@ import (
 
 	"github.com/discover-legal/biglaw-go/internal/agents"
 	"github.com/discover-legal/biglaw-go/internal/providers"
+	"github.com/discover-legal/biglaw-go/internal/strutil"
 )
 
 const docusealMaxFileBytes = 100 * 1024 * 1024 // 100 MB
@@ -87,7 +88,7 @@ func (r *Registry) docusealFetch(method, path, contentType string, body io.Reade
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		text := string(data)
 		if len(text) > 400 {
-			text = text[:400]
+			text = strutil.Truncate(text, 400)
 		}
 		return nil, fmt.Errorf("DocuSeal %s %s failed (%d): %s", method, path, resp.StatusCode, text)
 	}

@@ -23,6 +23,7 @@ import (
 
 	"github.com/discover-legal/biglaw-go/internal/cost"
 	"github.com/discover-legal/biglaw-go/internal/providers"
+	"github.com/discover-legal/biglaw-go/internal/strutil"
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
 
@@ -256,11 +257,11 @@ func (m *Monitor) filterRelevant(results []tavilyResult, practiceArea, jurisdict
 	for _, result := range results {
 		safeTitle := sanitize(result.Title)
 		if len(safeTitle) > 200 {
-			safeTitle = safeTitle[:200]
+			safeTitle = strutil.Truncate(safeTitle, 200)
 		}
 		safeContent := sanitize(result.Content)
 		if len(safeContent) > 800 {
-			safeContent = safeContent[:800]
+			safeContent = strutil.Truncate(safeContent, 800)
 		}
 
 		systemPrompt := `You are a legal relevance filter. Reply with JSON only: {"relevant": true/false, "reason": "..."}.`

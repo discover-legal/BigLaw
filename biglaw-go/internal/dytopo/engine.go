@@ -25,6 +25,7 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/memory"
 	"github.com/discover-legal/biglaw-go/internal/providers"
 	"github.com/discover-legal/biglaw-go/internal/routing"
+	"github.com/discover-legal/biglaw-go/internal/strutil"
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
 
@@ -223,7 +224,9 @@ func (e *Engine) RunRound(task *types.Task, goal types.RoundGoal, lawyerTone *ty
 	}
 	g2.Wait()
 
-	var allFindings []types.Finding
+	// Non-nil even when empty: these slices are part of the REST/MCP JSON
+	// contract (the UI iterates them), and nil marshals to null.
+	allFindings := []types.Finding{}
 	for _, findings := range findingsCh {
 		for _, f := range findings {
 			f.Round = goal.Round
@@ -372,7 +375,9 @@ func (e *Engine) buildCommGraph(needs []types.NeedDescriptor, offers []types.Off
 	}
 
 	threshold := e.cfg.DyTopo.SimilarityThreshold
-	var edges []types.CommunicationEdge
+	// Non-nil even when no pair clears the threshold — see RunRound: this
+	// slice is serialized to the UI, and nil marshals to null.
+	edges := []types.CommunicationEdge{}
 	for i, need := range needs {
 		for j, offer := range offers {
 			if need.AgentID == offer.AgentID {
@@ -402,7 +407,7 @@ func (e *Engine) routeMessages(edges []types.CommunicationEdge, offers []types.O
 	for i, edge := range edges {
 		text := offerMap[edge.From]
 		if len(text) > 500 {
-			text = text[:500]
+			text = strutil.Truncate(text, 500)
 		}
 		msgs[i] = types.AgentMessage{
 			ID:        uuid.New().String(),
@@ -438,7 +443,7 @@ func (e *Engine) persistRoundMemory(task *types.Task, goal types.RoundGoal, find
 		for _, f := range findings[:max] {
 			c := f.Content
 			if len(c) > 150 {
-				c = c[:150]
+				c = strutil.Truncate(c, 150)
 			}
 			bullets += fmt.Sprintf("- [%s] %s\n", f.AgentName, c)
 		}
@@ -506,8 +511,5 @@ func min(a, b int) int {
 }
 
 func truncate(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max]
+	return strutil.Truncate(s, max)
 }

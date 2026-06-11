@@ -19,7 +19,18 @@ const SCOPE_PILL: Record<PlaybookScope, string> = {
 };
 
 export function DraftingPage({ notify, isPartner }: { notify: (m: string) => void; isPartner: boolean }) {
-  const [tab, setTab] = useState<Tab>("review");
+  const [tab, setTab] = useState<Tab>(isPartner ? "review" : "citations");
+
+  // All engine routes except citation checking are partner-gated server-side
+  // (they consume the confidential playbook tiers). Hide those tabs rather
+  // than render a wall of 403s — same convention as App's section list.
+  const tabs = ([
+    ["review", "Playbook review"],
+    ["draft", "Draft"],
+    ["playbooks", "Playbooks"],
+    ["headnotes", "Headnotes"],
+    ["citations", "Citation check"],
+  ] as Array<[Tab, string]>).filter(([t]) => isPartner || t === "citations");
 
   return (
     <div className="page-scroll">
@@ -30,13 +41,7 @@ export function DraftingPage({ notify, isPartner }: { notify: (m: string) => voi
         </div>
 
         <div className="tabs">
-          {([
-            ["review", "Playbook review"],
-            ["draft", "Draft"],
-            ["playbooks", "Playbooks"],
-            ["headnotes", "Headnotes"],
-            ["citations", "Citation check"],
-          ] as Array<[Tab, string]>).map(([t, label]) => (
+          {tabs.map(([t, label]) => (
             <button key={t} className={`tab ${tab === t ? "active" : ""}`} onClick={() => setTab(t)}>
               {label}{tab === t && <motion.span layoutId="draft-underline" className="tab-underline" />}
             </button>
@@ -201,8 +206,8 @@ function PlaybooksTab({ notify, isPartner }: { notify: (m: string) => void; isPa
                   </div>
                   {isPartner && <button className="btn reject sm" onClick={() => remove(selected.id)}>✕ Delete</button>}
                 </div>
-                {selected.entries.length === 0 && <div className="placeholder">No clause entries in this playbook.</div>}
-                {selected.entries.map((en) => (
+                {(selected.entries ?? []).length === 0 && <div className="placeholder">No clause entries in this playbook.</div>}
+                {(selected.entries ?? []).map((en) => (
                   <div key={en.clauseType} className="alert-card">
                     <div style={{ fontFamily: "var(--font-mono)", fontSize: 12.5, color: "var(--gold)", marginBottom: 6 }}>{en.clauseType}</div>
                     <PlaybookEntryView entry={en} />

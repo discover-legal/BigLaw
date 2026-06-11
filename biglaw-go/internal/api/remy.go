@@ -17,6 +17,7 @@ import (
 
 	"github.com/discover-legal/biglaw-go/internal/audit"
 	"github.com/discover-legal/biglaw-go/internal/bots"
+	"github.com/discover-legal/biglaw-go/internal/strutil"
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
 
@@ -54,7 +55,7 @@ func (s *Server) handleSetClientVoice(c *gin.Context) {
 			continue
 		}
 		if len(note) > 2000 {
-			note = note[:2000]
+			note = strutil.Truncate(note, 2000)
 		}
 		cat := strings.TrimSpace(e.Category)
 		switch cat {
@@ -125,7 +126,7 @@ func (s *Server) handleNotifyMatter(c *gin.Context) {
 		return
 	}
 	if len(msg) > 4000 {
-		msg = msg[:4000]
+		msg = strutil.Truncate(msg, 4000)
 	}
 	source := strings.TrimSpace(body.Source)
 	if source == "" {

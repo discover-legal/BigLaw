@@ -14,6 +14,7 @@ import (
 
 	"github.com/discover-legal/biglaw-go/internal/cost"
 	"github.com/discover-legal/biglaw-go/internal/providers"
+	"github.com/discover-legal/biglaw-go/internal/strutil"
 )
 
 var taskCodes = []string{
@@ -162,7 +163,7 @@ func sanitizeDesc(s string) string {
 	}
 	result := b.String()
 	if len(result) > 2000 {
-		return result[:2000]
+		return strutil.Truncate(result, 2000)
 	}
 	return result
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/cost"
 	"github.com/discover-legal/biglaw-go/internal/email"
 	"github.com/discover-legal/biglaw-go/internal/providers"
+	"github.com/discover-legal/biglaw-go/internal/strutil"
 )
 
 // MatterOption is one candidate matter the router may assign a message to.
@@ -155,7 +156,7 @@ func sanitizeEmailField(s string) string {
 	}
 	out := b.String()
 	if len(out) > 1000 {
-		out = out[:1000]
+		out = strutil.Truncate(out, 1000)
 	}
 	return out
 }

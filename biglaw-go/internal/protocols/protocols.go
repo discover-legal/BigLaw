@@ -20,6 +20,7 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/cost"
 	"github.com/discover-legal/biglaw-go/internal/providers"
 	"github.com/discover-legal/biglaw-go/internal/routing"
+	"github.com/discover-legal/biglaw-go/internal/strutil"
 	"github.com/discover-legal/biglaw-go/internal/types"
 	"golang.org/x/sync/errgroup"
 )
@@ -93,17 +94,17 @@ func (r *Runner) RunDebate(finding types.Finding, taskID string) (types.Finding,
 
 	snippet := finding.Content
 	if len(snippet) > 20_000 {
-		snippet = snippet[:20_000]
+		snippet = strutil.Truncate(snippet, 20_000)
 	}
 	citLines := make([]string, 0, len(finding.Citations))
 	for _, c := range finding.Citations {
 		src := c.Source
 		if len(src) > 200 {
-			src = src[:200]
+			src = strutil.Truncate(src, 200)
 		}
 		q := c.Quote
 		if len(q) > 500 {
-			q = q[:500]
+			q = strutil.Truncate(q, 500)
 		}
 		citLines = append(citLines, fmt.Sprintf("SOURCE=%s | QUOTE=%s", src, q))
 	}
@@ -214,13 +215,13 @@ func (r *Runner) RunVerification(finding types.Finding, taskID string) (types.Ve
 
 	snippet := finding.Content
 	if len(snippet) > 20_000 {
-		snippet = snippet[:20_000]
+		snippet = strutil.Truncate(snippet, 20_000)
 	}
 	citLines := make([]string, 0, len(finding.Citations))
 	for _, c := range finding.Citations {
 		q := c.Quote
 		if len(q) > 500 {
-			q = q[:500]
+			q = strutil.Truncate(q, 500)
 		}
 		citLines = append(citLines, fmt.Sprintf("%s: \"%s\"", c.Source, q))
 	}

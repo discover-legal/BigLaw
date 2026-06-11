@@ -75,8 +75,10 @@ type Tab = "findings" | "tabulate" | "synthesis" | "rounds";
 function useAgentNames(task: Task, registry: Map<string, string>): (id: string) => string {
   return useMemo(() => {
     const byId = new Map<string, string>();
-    for (const f of task.findings) byId.set(f.agentId, f.agentName);
-    for (const r of task.rounds) for (const f of r.findings) byId.set(f.agentId, f.agentName);
+    // ?? [] — a backend predating the nil-slice fix serializes empty
+    // round fields as null.
+    for (const f of task.findings ?? []) byId.set(f.agentId, f.agentName);
+    for (const r of task.rounds ?? []) for (const f of r.findings ?? []) byId.set(f.agentId, f.agentName);
     return (id: string) => registry.get(id) ?? byId.get(id) ?? prettifyId(id);
   }, [task, registry]);
 }
@@ -116,7 +118,12 @@ function RoundCard({ round, defaultOpen, nameOf }: {
   nameOf: (id: string) => string;
 }) {
   const [open, setOpen] = useState(defaultOpen);
-  const r = round;
+  const r = {
+    ...round,
+    activeAgentIds: round.activeAgentIds ?? [],
+    edges: round.edges ?? [],
+    findings: round.findings ?? [],
+  };
   return (
     <div className={`round-card ${open ? "open" : ""}`}>
       <button className="round-head" onClick={() => setOpen((o) => !o)} aria-expanded={open}>

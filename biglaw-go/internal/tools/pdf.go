@@ -31,6 +31,7 @@ import (
 
 	"github.com/discover-legal/biglaw-go/internal/agents"
 	"github.com/discover-legal/biglaw-go/internal/providers"
+	"github.com/discover-legal/biglaw-go/internal/strutil"
 )
 
 // ─── Subprocess limits ────────────────────────────────────────────────────────
@@ -190,7 +191,7 @@ func (r *Registry) runPDFPython(operation string, args map[string]interface{}) (
 	if runErr != nil {
 		errText := strings.TrimSpace(stderr.String())
 		if len(errText) > 200 {
-			errText = errText[:200]
+			errText = strutil.Truncate(errText, 200)
 		}
 		if _, isExit := runErr.(*exec.ExitError); !isExit {
 			return map[string]interface{}{
@@ -204,7 +205,7 @@ func (r *Registry) runPDFPython(operation string, args map[string]interface{}) (
 	}
 	out := stdout.String()
 	if len(out) > 200 {
-		out = out[:200]
+		out = strutil.Truncate(out, 200)
 	}
 	return map[string]interface{}{
 		"error": fmt.Sprintf("failed to parse pdf_tools.py output: %s", out),

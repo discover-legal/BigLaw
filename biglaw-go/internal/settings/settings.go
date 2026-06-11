@@ -25,6 +25,7 @@ import (
 	"sync"
 
 	"github.com/discover-legal/biglaw-go/internal/config"
+	"github.com/discover-legal/biglaw-go/internal/strutil"
 )
 
 // ─── Wire types — must match ui/src/types.ts AppSettings ─────────────────────
@@ -369,8 +370,5 @@ func clampFloat(v, lo, hi, dflt float64) float64 {
 }
 
 func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n]
+	return strutil.Truncate(s, n)
 }

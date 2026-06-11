@@ -26,6 +26,7 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/audit"
 	"github.com/discover-legal/biglaw-go/internal/integrations"
 	"github.com/discover-legal/biglaw-go/internal/orchestrator"
+	"github.com/discover-legal/biglaw-go/internal/strutil"
 	"github.com/discover-legal/biglaw-go/internal/timekeeping"
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
@@ -480,7 +481,7 @@ func clioDocText(buf []byte, filename string) (string, bool) {
 	}
 	text := string(buf)
 	if len(text) > 50_000 {
-		text = text[:50_000]
+		text = strutil.Truncate(text, 50_000)
 	}
 	return text, true
 }

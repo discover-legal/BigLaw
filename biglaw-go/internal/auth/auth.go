@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/discover-legal/biglaw-go/internal/config"
+	"github.com/discover-legal/biglaw-go/internal/strutil"
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
 
@@ -166,8 +167,8 @@ func (s *ProfileStore) Create(input CreateProfileInput) (*types.LawyerProfile, e
 	id, _ := generateID()
 	p := types.LawyerProfile{
 		ID:            id,
-		Name:          name[:min(200, len(name))],
-		Email:         email[:min(254, len(email))],
+		Name:          strutil.Truncate(name, 200),
+		Email:         strutil.Truncate(email, 254),
 		Role:          role,
 		Mode:          mode,
 		Title:         trunc(input.Title, 200),
@@ -296,16 +297,9 @@ func colorOrPick(color, seed string) string {
 func trunc(s string, max int) string {
 	s = strings.TrimSpace(s)
 	if len(s) > max {
-		return s[:max]
+		return strutil.Truncate(s, max)
 	}
 	return s
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 func generateID() (string, error) {
