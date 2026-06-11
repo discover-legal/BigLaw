@@ -15,10 +15,16 @@ House rules:
 
 ---
 
-## [Unreleased] — Go port, workbench UI, Remy integration
+## [Unreleased]
 
-Everything on the `claude/low-end-hardware-port` branch. This is the scope of the
-next post.
+_Nothing yet — next drop accumulates here._
+
+---
+
+## 📣 POST / 🏷 v1.0.0 — The Go platform *(2026-06-11)*
+
+The Go implementation replaces TypeScript on `main` (tag `v1.0.0`; TS preserved at
+`typescript-final`). The release post is `collateral/linkedin-post.md` §"BigLaw BigUpdate".
 
 ### Security-fix parity (TS PR #17/#18 → Go)
 Audited `internal/` against the TS security sweeps (`3428a26`, `6ccd9a5`,
