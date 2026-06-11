@@ -70,8 +70,11 @@ function Test-Backend {
 if (Test-Backend) {
     Step "BigLaw backend already running at $Api"
 } else {
-    if (-not $env:ANTHROPIC_API_KEY -and -not (Test-Path (Join-Path $repoRoot ".env"))) {
-        Write-Warning "No ANTHROPIC_API_KEY in the environment and no .env at the repo root — the backend will start but every model call will fail."
+    # The backend loads .env from the repo root itself (godotenv). Either an
+    # ANTHROPIC_API_KEY or the OpenAI pair (OPENAI_API_KEY + OPENAI_MODEL)
+    # must reach it one way or the other.
+    if (-not $env:ANTHROPIC_API_KEY -and -not $env:OPENAI_API_KEY -and -not (Test-Path (Join-Path $repoRoot ".env"))) {
+        Write-Warning "No ANTHROPIC_API_KEY or OPENAI_API_KEY in the environment and no .env at the repo root — the backend will start but every model call will fail. Copy .env.example to .env and fill in a key."
     }
     Step "no backend at $Api — starting native backend (go run ./biglaw-go/cmd/biglaw)"
     $logDir = Join-Path $repoRoot "data"

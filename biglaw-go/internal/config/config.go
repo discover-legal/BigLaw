@@ -573,6 +573,21 @@ func Load() *Config {
 			RegulatoryIntervalMin: envInt("MONITOR_REGULATORY_INTERVAL_MIN", 360),
 		},
 	}
+
+	// OpenAI chat shortcut: OPENAI_MODEL + OPENAI_API_KEY routes chat through
+	// api.openai.com via the existing OpenAI-compatible provider, without the
+	// LOCAL_INFERENCE_* incantation. Setting OPENAI_MODEL is the explicit
+	// opt-in — OPENAI_API_KEY alone keeps powering only embeddings (many
+	// deployments hold an OpenAI key for embeddings and Anthropic for chat).
+	// An explicit LOCAL_INFERENCE_URL always wins over the shortcut.
+	if c.Local.LocalInferenceURL == "" && os.Getenv("OPENAI_MODEL") != "" && os.Getenv("OPENAI_API_KEY") != "" {
+		c.Local.LocalInferenceURL = "https://api.openai.com/v1"
+		c.Local.LocalInferenceKey = os.Getenv("OPENAI_API_KEY")
+		c.Local.LocalInferenceModel = os.Getenv("OPENAI_MODEL")
+		if strings.TrimSpace(c.Local.LocalInferenceTiers) == "" {
+			c.Local.LocalInferenceTiers = env("OPENAI_TIERS", "all")
+		}
+	}
 	return c
 }
 

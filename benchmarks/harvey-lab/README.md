@@ -36,6 +36,12 @@ cd benchmarks\harvey-lab
 ```
 
 Extra flags (`--workflow`, `--split-mode`, …) pass through to `run.py` verbatim.
+
+The backend reads `.env` at the repo root. To benchmark BigLaw on **OpenAI** instead
+of Anthropic, set `OPENAI_API_KEY` and `OPENAI_MODEL` there (see `.env.example`) —
+chat and embeddings then both run on the OpenAI key, and `--model-dir biglaw-gpt`
+keeps those runs separate in `compare.py`. (Harvey's eval judge is always Claude,
+so scoring still needs an `ANTHROPIC_API_KEY` for the `run_eval` step.)
 When the run finishes the driver prints the exact `evaluation.run_eval` command for
 scoring. The auto-started backend keeps running between runs (stop it with
 `Stop-Process -Name biglaw`).
