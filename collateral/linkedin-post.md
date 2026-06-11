@@ -9,45 +9,29 @@
 
 **BigLaw BigUpdate**
 
-→ **BigLaw is Now Cheaper:**
+→ **BigLaw is Now Cheaper:** the whole platform — orchestrator, DyTopo engine, 131 agents, billing, playbooks, redlining, all of it — is one Go binary that runs on a 4 GB Raspberry Pi. The hardware floor for a firm's back office is now less than a billable hour.
 
-The whole platform is ported to Go. Orchestrator, DyTopo engine, all 131 agents, billing, OCG, budgets, deadlines, dockets, regulatory watch, playbooks, redlining, headnotes, precedents — one static binary that runs on a Raspberry Pi with 4 GB of RAM.
+→ **BigLaw is Now Faster:** same routes, same data, head-to-head with the old TypeScript — **6.9× on the heavy endpoint**. 125 → 864 requests/sec. 389 ms → 53 ms. And Go was handicapped in a VM while Node ran bare metal.
 
-→ **BigLaw is Now Faster:**
+→ **BigLaw is Now Safer:** the conflict-of-interest graph moved behind a Unix socket — off the network entirely. Then every security fix from the old codebase was audited line-by-line and ported: prompt-injection scrubbing, SSRF lockdown, tamper-evident audit logs, signed webhooks. Parity — with tests to prove it.
 
-Benchmarked against the TypeScript original (same routes, same data, 50 connections): 1.25× on tiny JSON, 3.8× on a 33 KB payload, 6.9× on the 850 KB agent registry — 864 vs 125 req/s, p50 latency 389 ms → 53 ms. The Go side ran inside a Docker VM; Node ran native.
+→ **BigLaw is Now Smarter:** one console became a nine-room workbench — matters, library, clients, billing, budgets & deadlines, a watchtower for docket and regulatory alerts, a drafting studio, analytics, admin.
 
-→ **BigLaw is Now Safer:**
+→ **BigLaw is Now Sharper:** drop in a counterparty draft and your playbook sweeps it — client > matter > personal > firm. Every clause graded against your position, deviations redlined with replacement text, and the protections that *should be there but aren't* flagged with language to paste in. Accept, dismiss, export.
 
-The conflict-of-interest graph moved to a TypeDB sidecar speaking over a Unix domain socket — no TCP, no accidental network exposure. And every security fix from the TypeScript line was audited fix-by-fix and ported: prompt-injection sanitization across every agent prompt, an expanded SSRF blocklist, audit-log hash-chain verification on restore, webhook HMAC over raw bodies, partner-gated playbook access, redirect-refusing outbound fetches. Parity, verified, with tests.
+→ **BigLaw is Now More Private:** audit split into a personal feed and a partner-only firm view. And the whole bench runs on your own local models — Ollama, LM Studio — on command. Flip the tiers to local and not one token leaves the building.
 
-→ **BigLaw is Now Smarter:**
-
-The web UI grew from a single console into a nine-workspace workbench: matters, document library, clients, billing & pre-bills, budgets & deadlines, a watchtower for docket and regulatory alerts, a drafting studio, analytics, and admin.
-
-→ **BigLaw is Now Sharper:**
-
-The drafting studio reviews contracts the way the expensive tools do. Paste a counterparty draft and your whole playbook cascade — client > matter > personal > firm — sweeps the document: every clause checked against the firm position, deviations marked up with replacement language, and the protections that *should* be there but aren't flagged with suggested inserts. Accept or dismiss each finding, export the markup.
-
-→ **BigLaw is Now More Private:**
-
-Audit got split: a personal activity rail for every user, a filterable firm-wide browser for partners. And the entire bench — review, drafting, headnotes, all of it — now runs against your own local models (Ollama, LM Studio) when you tell it to. Set the tiers to local and not a single token leaves the building.
-
-→ **BigLaw Now Learns:**
-
-TopoFlow landed: a two-level coordination substrate over the DyTopo engine. The fast level induces the agent communication graph within a matter; the slow level — AgensFlow, a UCB1 contextual bandit — learns *across* matters which skills, model bindings, and topologies actually pay off. No neural training, no fine-tuning bills: everything learned is tabular bandit statistics. Built in Python against the spec, then reimplemented natively in Go. 41 tests under the race detector.
+→ **BigLaw Now Learns:** TopoFlow rides on top of DyTopo. The fast loop wires the agents for a matter; the slow loop — AgensFlow, a contextual bandit — learns *across* matters which formations actually pay off. No training runs, no fine-tuning bill. Pure bandit math, 41 tests under the race detector.
 
 Oh, and by the way, one more thing:
 
-→ **Meet Remy — the client-advocate agent**
-
-She comes from the CNTXT hackathon project and integrates with BigLaw. Her advocacy brief travels with the matter, and when a finding hits human review, the gate shows her note: does this align with what the client actually said they wanted? Toggleable firm-wide and per-lawyer, because not everyone wants hints at every step.
+→ **Meet Remy.** The client-advocate agent from the CNTXT hackathon, now wired into BigLaw. Her brief rides along with the matter, and at every human-review gate she asks the one question nobody else does: *is this actually what the client said they wanted?* Toggle her on or off — firm-wide or per lawyer.
 
 ——
 
-The short version: BigLaw now runs end-to-end on hardware that costs less than a billable hour — or entirely on your own local models — measurably faster than before, with the TypeScript line's security hardening carried over fix-for-fix, reviewing contracts against your own playbook, learning which agent formations work, with the client's own voice reaching the review loop.
+The short version: a whole firm's tooling, on hardware cheaper than a billable hour — or entirely on your own models — faster than before, hardened fix-for-fix, reviewing contracts against your own playbook, learning as it goes, with the client's voice in the room.
 
-Tagged v1.0.0 and on main. The previous TypeScript implementation is preserved at the `typescript-final` tag. Benchmark methodology and repro steps are in the repo (docs/benchmarks-go-vs-ts.md) — run it yourself.
+Tagged v1.0.0, live on main. The TypeScript original is kept at the `typescript-final` tag. Benchmarks + repro in the repo (docs/benchmarks-go-vs-ts.md) — run them yourself.
 
 AGPL-3.0, as always. Link in comments.
 
