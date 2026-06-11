@@ -79,6 +79,9 @@ go run ./cmd/topoflow-eval -offline -dataset humaneval -epochs 1 -out report.jso
 # live: real Anthropic transport + embeddings + code runner (needs ANTHROPIC_API_KEY)
 go run ./cmd/topoflow-eval -dataset humaneval -epochs 8 -out report.json
 go run ./cmd/topoflow-eval -dataset path/to/dataset.jsonl -epochs 8
+
+# no-skip ablation: force skip:X off across all arms (§6.2); H6 reports the delta
+go run ./cmd/topoflow-eval -offline -dataset mixed -epochs 8 -no-skip
 ```
 
 Embedding it directly:

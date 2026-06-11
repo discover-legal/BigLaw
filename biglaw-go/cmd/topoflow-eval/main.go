@@ -31,10 +31,12 @@ func main() {
 	epochs := flag.Int("epochs", 1, "epochs for learning arms")
 	out := flag.String("out", "", "write the JSON report to this path")
 	offline := flag.Bool("offline", false, "use the offline mock transport/embedder (no network)")
+	noSkip := flag.Bool("no-skip", false, "AgensFlow no-skip ablation: force skip:X off across all arms (§6.2)")
 	flag.Parse()
 
 	cfg := config.Load()
 	tfcfg := topoflow.DefaultConfig()
+	tfcfg.SkipEnabled = !*noSkip
 
 	tasks, err := loadTasks(*dataset)
 	if err != nil {
@@ -65,7 +67,7 @@ func main() {
 	fmt.Println("Per-arm (meanQuality / auditQuality / meanTokens):")
 	for _, name := range []string{
 		"1_fixed_linear", "2_pure_dytopo", "3_pure_agensflow", "4_topoflow_linear",
-		"5_topoflow_dytopo", "6_topoflow_free_cold", "7_topoflow_free_warm",
+		"5_topoflow_dytopo", "6_topoflow_free_cold", "7_topoflow_free_warm", "8_no_skip_ablation",
 	} {
 		a := report.Arms[name]
 		fmt.Printf("  %-24s  Q=%.3f  audit=%.3f  tok=%.0f\n", name, a.MeanQuality, a.AuditMeanQuality, a.MeanTokens)
@@ -75,6 +77,10 @@ func main() {
 		fmt.Printf("  %s\n", h1)
 	}
 	fmt.Printf("\nH1 separates by regime: %v\n", report.Metrics["H1_separates"])
+	fmt.Println("\nH6 no-skip ablation (arm 3 skip-on vs arm 8 skip-off):")
+	if h6, err := json.MarshalIndent(report.Metrics["H6_skip_ablation"], "  ", "  "); err == nil {
+		fmt.Printf("  %s\n", h6)
+	}
 	if *out != "" {
 		fmt.Printf("Full report written to %s\n", *out)
 	}
