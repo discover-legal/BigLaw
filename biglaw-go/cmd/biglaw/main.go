@@ -13,6 +13,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/signal"
@@ -76,6 +77,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "cost init: %v\n", err)
 		os.Exit(1)
 	}
+	defer costStore.Close() // flush the queued cost ledger on shutdown
 
 	// Build embeddings client.
 	embedC := embeddings.NewClient(cfg)
@@ -251,13 +253,39 @@ func main() {
 		mode = "auto"
 	}
 
+	// ctx is cancelled on Ctrl+C / SIGTERM. The API server shuts down
+	// gracefully via api.Server.Serve; wg tracks it so main can wait for
+	// in-flight requests before the deferred cleanups (monitors.Stop,
+	// costStore.Close) run. The MCP stdio server is deliberately NOT in
+	// wg: it blocks reading stdin and cannot be interrupted — it ends when
+	// the parent process closes the pipe or this process exits.
 	var wg sync.WaitGroup
-	shutdown := make(chan os.Signal, 1)
-	signal.Notify(shutdown, os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	serveAPI := func() {
+		addr := fmt.Sprintf("%s:%d", cfg.API.Host, cfg.API.Port)
+		apiSrv := makeAPI()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := apiSrv.Serve(ctx, addr); err != nil {
+				fmt.Fprintf(os.Stderr, "api serve: %v\n", err)
+			}
+		}()
+	}
+	serveMCP := func() {
+		mcpSrv := mcp.New(orch, knowledgeStore, agentReg, pluginReg, timeStore)
+		go func() {
+			if err := mcpSrv.Serve(); err != nil {
+				fmt.Fprintf(os.Stderr, "mcp serve: %v\n", err)
+			}
+		}()
+	}
 
 	switch mode {
 	case "mcp":
-		// Pure MCP mode — serve stdio only.
+		// Pure MCP mode — serve stdio only, in the foreground.
 		mcpSrv := mcp.New(orch, knowledgeStore, agentReg, pluginReg, timeStore)
 		if err := mcpSrv.Serve(); err != nil {
 			fmt.Fprintf(os.Stderr, "mcp serve: %v\n", err)
@@ -266,62 +294,24 @@ func main() {
 
 	case "backend":
 		// REST API only.
-		addr := fmt.Sprintf("%s:%d", cfg.API.Host, cfg.API.Port)
-		apiSrv := makeAPI()
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err := apiSrv.Run(addr); err != nil {
-				fmt.Fprintf(os.Stderr, "api run: %v\n", err)
-			}
-		}()
-		<-shutdown
+		serveAPI()
+		<-ctx.Done()
 
 	case "standalone":
 		// REST API + MCP stdio.
-		addr := fmt.Sprintf("%s:%d", cfg.API.Host, cfg.API.Port)
-		apiSrv := makeAPI()
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err := apiSrv.Run(addr); err != nil {
-				fmt.Fprintf(os.Stderr, "api run: %v\n", err)
-			}
-		}()
-		mcpSrv := mcp.New(orch, knowledgeStore, agentReg, pluginReg, timeStore)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err := mcpSrv.Serve(); err != nil {
-				fmt.Fprintf(os.Stderr, "mcp serve: %v\n", err)
-			}
-		}()
-		<-shutdown
+		serveAPI()
+		serveMCP()
+		<-ctx.Done()
 
 	default: // "auto"
 		// Default: run REST API (ARM devices are always "backend").
-		addr := fmt.Sprintf("%s:%d", cfg.API.Host, cfg.API.Port)
-		apiSrv := makeAPI()
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err := apiSrv.Run(addr); err != nil {
-				fmt.Fprintf(os.Stderr, "api run: %v\n", err)
-			}
-		}()
+		serveAPI()
 		// If stdin is not a TTY, also serve MCP on stdio.
 		fi, _ := os.Stdin.Stat()
 		if fi.Mode()&os.ModeCharDevice == 0 {
-			mcpSrv := mcp.New(orch, knowledgeStore, agentReg, pluginReg, timeStore)
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				if err := mcpSrv.Serve(); err != nil {
-					fmt.Fprintf(os.Stderr, "mcp serve: %v\n", err)
-				}
-			}()
+			serveMCP()
 		}
-		<-shutdown
+		<-ctx.Done()
 	}
 
 	wg.Wait()

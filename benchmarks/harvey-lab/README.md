@@ -20,6 +20,26 @@ instructions, rubric,  →   convert docs → ingest →         evaluation.run_
                            results/<run-id>/output/
 ```
 
+## One command (Windows)
+
+`bench.ps1` does the whole Prerequisites section for you — clones harvey-labs to
+`~\harvey-labs` if missing, installs the Python dependencies if missing, starts a
+native backend if none is reachable (logs to `data\bench-backend*.log`), and runs
+the driver:
+
+```powershell
+cd benchmarks\harvey-lab
+.\bench.ps1 -List                                            # browse the dataset
+.\bench.ps1 -Task corporate-ma/review-data-room-red-flag-review
+.\bench.ps1 -Task <task> -GatePolicy reject -ModelDir biglaw-reject
+.\bench.ps1 -Task <task> -Api http://localhost:3102          # use the Docker stack
+```
+
+Extra flags (`--workflow`, `--split-mode`, …) pass through to `run.py` verbatim.
+When the run finishes the driver prints the exact `evaluation.run_eval` command for
+scoring. The auto-started backend keeps running between runs (stop it with
+`Stop-Process -Name biglaw`).
+
 ## Prerequisites
 
 - A [harvey-labs](https://github.com/harveyai/harvey-labs) checkout (the task dataset + eval

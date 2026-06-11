@@ -180,10 +180,17 @@ type Store struct {
 	entries []CostEntry
 	file    string
 	writeCh chan CostEntry
+
+	stopCh    chan struct{} // signals writeLoop to drain and exit
+	doneCh    chan struct{} // closed when writeLoop has exited
+	started   bool          // writeLoop running (set by Init)
+	closeOnce sync.Once
 }
 
 var Default = &Store{
 	writeCh: make(chan CostEntry, 256),
+	stopCh:  make(chan struct{}),
+	doneCh:  make(chan struct{}),
 }
 
 func (s *Store) Init(file string) error {
@@ -211,19 +218,53 @@ func (s *Store) Init(file string) error {
 			s.entries = append(s.entries, e)
 		}
 	}
+	s.started = true
 	go s.writeLoop()
 	return nil
 }
 
 func (s *Store) writeLoop() {
-	for entry := range s.writeCh {
-		raw, _ := json.Marshal(entry)
-		f, err := os.OpenFile(s.file, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if err == nil {
-			fmt.Fprintln(f, string(raw))
-			f.Close()
+	defer close(s.doneCh)
+	for {
+		select {
+		case entry := <-s.writeCh:
+			s.appendEntry(entry)
+		case <-s.stopCh:
+			// Drain whatever Record queued before exiting so a graceful
+			// shutdown doesn't drop the tail of the cost ledger.
+			for {
+				select {
+				case entry := <-s.writeCh:
+					s.appendEntry(entry)
+				default:
+					return
+				}
+			}
 		}
 	}
+}
+
+func (s *Store) appendEntry(entry CostEntry) {
+	raw, _ := json.Marshal(entry)
+	f, err := os.OpenFile(s.file, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err == nil {
+		fmt.Fprintln(f, string(raw))
+		f.Close()
+	}
+}
+
+// Close flushes queued cost entries to disk and stops the writer. Safe to
+// call more than once; a no-op if Init never ran. Record stays safe to call
+// afterwards (its channel send is non-blocking), but entries recorded after
+// Close are only kept in memory.
+func (s *Store) Close() {
+	s.closeOnce.Do(func() {
+		if !s.started {
+			return
+		}
+		close(s.stopCh)
+		<-s.doneCh
+	})
 }
 
 func (s *Store) Record(req RecordRequest) {

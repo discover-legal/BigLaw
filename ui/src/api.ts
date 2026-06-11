@@ -289,7 +289,10 @@ export function streamAlerts<T>(
 ): () => void {
   const es = new EventSource(url);
   es.onmessage = (e) => {
-    try { onEvent(JSON.parse(e.data) as T); } catch { /* ignore */ }
+    // A malformed event is dropped, not fatal — but log it so a server-side
+    // serialization bug shows up in the console instead of vanishing.
+    try { onEvent(JSON.parse(e.data) as T); }
+    catch (err) { console.error(`SSE ${url}: unparseable event`, err, e.data); }
   };
   es.onerror = () => {
     if (es.readyState === EventSource.CLOSED) onDown?.();
@@ -311,7 +314,8 @@ export function streamAudit(
   const qs = q.toString();
   const es = new EventSource(`/audit/stream${qs ? `?${qs}` : ""}`);
   es.onmessage = (e) => {
-    try { onEntry(JSON.parse(e.data) as AuditEntry); } catch { /* ignore */ }
+    try { onEntry(JSON.parse(e.data) as AuditEntry); }
+    catch (err) { console.error("SSE /audit/stream: unparseable event", err, e.data); }
   };
   return () => es.close();
 }
@@ -328,7 +332,8 @@ export function streamTask(
   const es = new EventSource(`/tasks/${id}/stream`);
 
   es.addEventListener("snapshot", (e) => {
-    try { handlers.onSnapshot(JSON.parse((e as MessageEvent).data) as Task); } catch { /* ignore */ }
+    try { handlers.onSnapshot(JSON.parse((e as MessageEvent).data) as Task); }
+    catch (err) { console.error(`SSE /tasks/${id}/stream: unparseable snapshot`, err); }
   });
 
   for (const evt of ["started", "phase", "round", "complete", "failed"]) {
