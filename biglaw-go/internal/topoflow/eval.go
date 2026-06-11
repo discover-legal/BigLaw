@@ -125,17 +125,21 @@ type arm struct {
 	learning  bool
 	selector  func() func(Signature, []Action) Action
 	warmFrom  string
+	skipOff   bool // SkipEnabled=false: the paper's no-skip ablation arm (§6.2)
 }
 
 func arms() []arm {
 	return []arm{
-		{"1_fixed_linear", []string{"linear"}, false, fixedLinearSelector, ""},
-		{"2_pure_dytopo", []string{"dytopo"}, false, fixedDytopoSelector, ""},
-		{"3_pure_agensflow", []string{"linear"}, true, nil, ""},
-		{"4_topoflow_linear", []string{"linear"}, true, nil, ""},
-		{"5_topoflow_dytopo", []string{"dytopo"}, true, nil, ""},
-		{"6_topoflow_free_cold", []string{"linear", "dytopo"}, true, nil, ""},
-		{"7_topoflow_free_warm", []string{"linear", "dytopo"}, true, nil, "6_topoflow_free_cold"},
+		{"1_fixed_linear", []string{"linear"}, false, fixedLinearSelector, "", false},
+		{"2_pure_dytopo", []string{"dytopo"}, false, fixedDytopoSelector, "", false},
+		{"3_pure_agensflow", []string{"linear"}, true, nil, "", false},
+		{"4_topoflow_linear", []string{"linear"}, true, nil, "", false},
+		{"5_topoflow_dytopo", []string{"dytopo"}, true, nil, "", false},
+		{"6_topoflow_free_cold", []string{"linear", "dytopo"}, true, nil, "", false},
+		{"7_topoflow_free_warm", []string{"linear", "dytopo"}, true, nil, "6_topoflow_free_cold", false},
+		// AgensFlow no-skip ablation: same as arm 3 (linear, learning, skip-on)
+		// but with skip:X forced off, isolating topology compression (§6.2).
+		{"8_no_skip_ablation", []string{"linear"}, true, nil, "", true},
 	}
 }
 
@@ -176,6 +180,7 @@ func topologyModes(traj *Trajectory) []string {
 func runArm(a arm, tasks []TaskContext, base Config, opts SuiteOptions, liveRJ *RelativeJudge, warm *PolicyGraph) ArmResult {
 	cfg := base
 	cfg.TopoModes = a.topoModes
+	cfg.SkipEnabled = base.SkipEnabled && !a.skipOff
 	var g *PolicyGraph
 	if warm != nil {
 		g = warm.Clone()
@@ -276,7 +281,7 @@ type SuiteOptions struct {
 	OutPath        string
 }
 
-// RunSuite runs all 7 arms and computes metrics H1–H5 (spec §14).
+// RunSuite runs all 8 arms and computes metrics H1–H6 (spec §14).
 func RunSuite(cfg Config, opts SuiteOptions) (*SuiteReport, error) {
 	if opts.Transport == nil {
 		opts.Transport = &MockTransport{Responder: HarnessResponder}
@@ -319,7 +324,7 @@ func RunSuite(cfg Config, opts SuiteOptions) (*SuiteReport, error) {
 	return report, nil
 }
 
-// ── metrics H1–H5 ───────────────────────────────────────────────────────────
+// ── metrics H1–H6 ───────────────────────────────────────────────────────────
 func computeMetrics(results map[string]ArmResult) map[string]any {
 	free := results["6_topoflow_free_cold"]
 	h1 := h1Selection(free)
@@ -330,6 +335,29 @@ func computeMetrics(results map[string]ArmResult) map[string]any {
 		"H3_learned_vs_swept": h3(results),
 		"H4_cold_start":       h4(results),
 		"H5_reward_fragility": h5(results),
+		"H6_skip_ablation":    h6(results),
+	}
+}
+
+// h6 reproduces the paper's no-skip ablation comparison (§6.2): skip-on
+// learning (arm 3) vs the same arm with skip:X forced off (arm 8). The paper's
+// claim is that skip:X isolates topology compression, so the skip-on arm should
+// spend no more tokens at matched-or-better quality. skip_compresses reports
+// whether skip-on reached its operating point at <= the no-skip token cost.
+func h6(results map[string]ArmResult) map[string]any {
+	on, okOn := results["3_pure_agensflow"]
+	off, okOff := results["8_no_skip_ablation"]
+	if !okOn || !okOff {
+		return map[string]any{}
+	}
+	return map[string]any{
+		"skip_on_quality":  on.MeanQuality,
+		"skip_off_quality": off.MeanQuality,
+		"skip_on_tokens":   on.MeanTokens,
+		"skip_off_tokens":  off.MeanTokens,
+		"quality_delta":    on.MeanQuality - off.MeanQuality,
+		"token_delta":      on.MeanTokens - off.MeanTokens,
+		"skip_compresses":  on.MeanTokens <= off.MeanTokens+1e-9,
 	}
 }
 

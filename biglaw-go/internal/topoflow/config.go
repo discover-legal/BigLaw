@@ -28,6 +28,11 @@ type Config struct {
 	DefaultSolver  string
 	DefaultModel   string
 
+	// skip:X topology learning [AF]. When false, skip:X is removed from A(s) —
+	// the paper's "no-skip ablation" arm (skip forced off) that isolates
+	// topology compression as a distinct part of the substrate (§6.2).
+	SkipEnabled bool
+
 	// topology [NEW]
 	TopoModes    []string
 	TauBuckets   []float64
@@ -71,6 +76,7 @@ func DefaultConfig() Config {
 		OptionalAux:     []string{"planner", "memory", "web_search_exa", "web_search_tavily", "verifier_a", "verifier_b"},
 		DefaultSolver:   "solver_cot",
 		DefaultModel:    "haiku",
+		SkipEnabled:     true,
 		TopoModes:       []string{"linear", "dytopo"},
 		TauBuckets:      []float64{0.2, 0.3, 0.4, 0.5},
 		RoundBuckets:    []int{3, 6, 10},

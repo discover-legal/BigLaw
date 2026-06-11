@@ -28,8 +28,8 @@ func TestHarnessSurvivesTransportErrors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunSuite should not error on transport failures: %v", err)
 	}
-	if len(rep.Arms) != 7 {
-		t.Fatalf("expected 7 arms even under transport failure, got %d", len(rep.Arms))
+	if len(rep.Arms) != 8 {
+		t.Fatalf("expected 8 arms even under transport failure, got %d", len(rep.Arms))
 	}
 	// failed trajectories => zero quality, no panic
 	for name, a := range rep.Arms {

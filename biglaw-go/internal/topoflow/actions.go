@@ -55,8 +55,9 @@ func legalActions(plan *Plan, cfg Config) []Action {
 			}
 		}
 	}
-	// skip:X only if >=1 other legal action remains
-	if len(A) > 0 {
+	// skip:X only if >=1 other legal action remains, and only when skip learning
+	// is enabled (SkipEnabled=false is the paper's no-skip ablation, §6.2).
+	if cfg.SkipEnabled && len(A) > 0 {
 		for _, X := range plan.stillScheduled() {
 			A = append(A, SkipAction(X))
 		}
