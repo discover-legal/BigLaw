@@ -19,6 +19,17 @@ export function FindingsTable({ task, onChange, notify }: {
   const [filter, setFilter] = useState("");
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState<string | null>(null);
+  // Per-lawyer display preference: some reviewers don't want client-voice
+  // hints on every gate. Persisted locally, not a firm-wide setting.
+  const [showClientVoice, setShowClientVoice] = useState(
+    () => localStorage.getItem("biglaw.showClientVoice") !== "0",
+  );
+  function toggleClientVoice() {
+    setShowClientVoice((v) => {
+      localStorage.setItem("biglaw.showClientVoice", v ? "0" : "1");
+      return !v;
+    });
+  }
 
   const gateByFinding = useMemo(() => {
     const m = new Map<string, GateRequest>();
@@ -103,6 +114,22 @@ export function FindingsTable({ task, onChange, notify }: {
         if (gate) {
           return (
             <div className="gate-actions">
+              {gate.clientVoiceNote && showClientVoice && (
+                <div className="client-voice-note" title="From the client's advocacy brief (Remy / CNTXT)">
+                  <div className="label" style={{ color: "var(--gold)", fontSize: 11, marginBottom: 3, display: "flex", justifyContent: "space-between", gap: 8 }}>
+                    <span>⚖ Remy — client advocate</span>
+                    <button className="expand-btn" style={{ margin: 0 }} onClick={toggleClientVoice} title="Hide Remy's notes (just for you)">hide</button>
+                  </div>
+                  <div style={{ fontSize: 12, color: "var(--text-dim)", whiteSpace: "pre-wrap", marginBottom: 6, maxWidth: 260 }}>
+                    {gate.clientVoiceNote}
+                  </div>
+                </div>
+              )}
+              {gate.clientVoiceNote && !showClientVoice && (
+                <button className="expand-btn" style={{ marginBottom: 4 }} onClick={toggleClientVoice} title="Show Remy's client-advocate note">
+                  ⚖ remy
+                </button>
+              )}
               <button className="btn approve sm" disabled={busy === gate.id} onClick={() => act(gate, "approve")}>
                 {busy === gate.id ? "…" : "✓ Approve"}
               </button>

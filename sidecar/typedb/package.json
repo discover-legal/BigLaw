@@ -1,0 +1,20 @@
+{
+  "name": "@biglaw/typedb-sidecar",
+  "version": "1.0.0",
+  "description": "TypeDB conflict-graph sidecar for the BigLaw Go core",
+  "type": "module",
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev": "node --loader ts-node/esm server.ts"
+  },
+  "dependencies": {
+    "fastify": "^5.8.5",
+    "typedb-driver": "^2.29.7"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.8.0"
+  }
+}

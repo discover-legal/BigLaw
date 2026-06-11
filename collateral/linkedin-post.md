@@ -1,5 +1,60 @@
 # BigLaw — LinkedIn launch collateral
 
+> Post scope is tracked in `/CHANGELOG.md` — everything above the most recent
+> `📣 POST` marker there is the next post's material.
+
+---
+
+## BigLaw BigUpdate post
+
+**BigLaw BigUpdate**
+
+→ **BigLaw is Now Cheaper:**
+
+The whole platform is ported to Go. Orchestrator, DyTopo engine, all 131 agents, billing, OCG, budgets, deadlines, dockets, regulatory watch, playbooks, redlining, headnotes, precedents — one static binary that runs on a Raspberry Pi with 4 GB of RAM.
+
+→ **BigLaw is Now Faster:**
+
+Benchmarked against the TypeScript original (same routes, same data, 50 connections): 1.25× on tiny JSON, 3.8× on a 33 KB payload, 6.9× on the 850 KB agent registry — 864 vs 125 req/s, p50 latency 389 ms → 53 ms. The Go side ran inside a Docker VM; Node ran native.
+
+→ **BigLaw is Now Safer:**
+
+The conflict-of-interest graph moved to a TypeDB sidecar speaking over a Unix domain socket — no TCP, no accidental network exposure.
+
+→ **BigLaw is Now Smarter:**
+
+The web UI grew from a single console into a nine-workspace workbench: matters, document library, clients, billing & pre-bills, budgets & deadlines, a watchtower for docket and regulatory alerts, a drafting studio, analytics, and admin.
+
+→ **BigLaw is Now Sharper:**
+
+The drafting studio reviews contracts the way the expensive tools do. Paste a counterparty draft and your whole playbook cascade — client > matter > personal > firm — sweeps the document: every clause checked against the firm position, deviations marked up with replacement language, and the protections that *should* be there but aren't flagged with suggested inserts. Accept or dismiss each finding, export the markup.
+
+→ **BigLaw is Now More Private:**
+
+Audit got split: a personal activity rail for every user, a filterable firm-wide browser for partners. And the entire bench — review, drafting, headnotes, all of it — now runs against your own local models (Ollama, LM Studio) when you tell it to. Set the tiers to local and not a single token leaves the building.
+
+→ **BigLaw Now Learns:**
+
+TopoFlow landed: a two-level coordination substrate over the DyTopo engine. The fast level induces the agent communication graph within a matter; the slow level — AgensFlow, a UCB1 contextual bandit — learns *across* matters which skills, model bindings, and topologies actually pay off. No neural training, no fine-tuning bills: everything learned is tabular bandit statistics. Built in Python against the spec, then reimplemented natively in Go. 41 tests under the race detector.
+
+Oh, and by the way, one more thing:
+
+→ **Meet Remy — the client-advocate agent**
+
+She comes from the CNTXT hackathon project and integrates with BigLaw. Her advocacy brief travels with the matter, and when a finding hits human review, the gate shows her note: does this align with what the client actually said they wanted? Toggleable firm-wide and per-lawyer, because not everyone wants hints at every step.
+
+——
+
+The short version: BigLaw now runs end-to-end on hardware that costs less than a billable hour — or entirely on your own local models — measurably faster than before, reviewing contracts against your own playbook, learning which agent formations work, with the client's own voice reaching the review loop.
+
+Benchmark methodology and repro steps are in the repo (docs/benchmarks-go-vs-ts.md) — run it yourself.
+
+AGPL-3.0, as always. Link in comments.
+
+#LegalAI #LegalTech #OpenSource #Golang #BigLaw
+
+**Carousel:** go-port-00-benchmark-chart → go-port-06-drafting → go-port-07-remy-audit-trail → go-port-04-budgets-deadlines → go-port-09-remy-portal
+
 ---
 
 ## Cost chart post — AIDA · ABC · Do Likewise

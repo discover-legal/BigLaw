@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { api, streamAudit } from "./api";
 import type { AuditEntry } from "./types";
 
-function tone(event: string): string {
+export function tone(event: string): string {
   if (event.startsWith("gate")) return "var(--amber)";
   if (event.includes("complete") || event.includes("resolved") || event.includes("response")) return "var(--green)";
   if (event.includes("fail") || event.includes("reject") || event.includes("denied") || event.includes("expired")) return "var(--red)";
@@ -20,7 +20,7 @@ function actorLabel(actorId: string | undefined): string {
   return actorId;
 }
 
-function summary(e: AuditEntry): string {
+export function auditSummary(e: AuditEntry): string {
   const d = e.data ?? {};
   const bits: string[] = [];
 
@@ -122,15 +122,21 @@ function hhmmss(iso: string): string {
   return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
-export function AuditRail({ open, onToggle }: { open: boolean; onToggle: () => void }) {
+export function AuditRail({ open, onToggle, profileId }: { open: boolean; onToggle: () => void; profileId?: string }) {
   const [entries, setEntries] = useState<AuditEntry[]>([]);
   const [paused, setPaused] = useState(false);
   const pausedRef = useRef(paused);
   pausedRef.current = paused;
+  const openRef = useRef(open);
+  openRef.current = open;
+
+  // The rail is personal: it shows the current user's own actions. The full
+  // firm-wide log lives in Admin → Audit (partner only, server-enforced).
+  const scope = profileId ? { actorId: profileId } : undefined;
 
   // Load recent history on mount so the panel isn't empty
   useEffect(() => {
-    api.recentAudit(80).then((hist) => {
+    api.recentAudit(80, scope).then((hist) => {
       setEntries((prev) => {
         // Merge: history oldest-first, then deduplicate by id
         const seen = new Set(prev.map((e) => e.id));
@@ -139,15 +145,38 @@ export function AuditRail({ open, onToggle }: { open: boolean; onToggle: () => v
         return [...prev, ...fresh.reverse()].slice(0, 200);
       });
     }).catch(() => { /* server may not have entries yet */ });
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profileId]);
 
   useEffect(() => {
     const stop = streamAudit((entry) => {
       if (pausedRef.current) return;
       setEntries((prev) => [entry, ...prev].slice(0, 200));
-    });
+    }, scope);
     return stop;
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profileId]);
+
+  // Close on Escape and on any pointer-down outside the rail (and not on the
+  // toggle FAB, which manages its own state).
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && openRef.current) onToggle();
+    };
+    const onPointer = (e: PointerEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (!t) return;
+      if (t.closest(".audit-rail") || t.closest(".audit-fab")) return;
+      if (openRef.current) onToggle();
+    };
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("pointerdown", onPointer);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("pointerdown", onPointer);
+    };
+  }, [open, onToggle]);
 
   const seenIds = new Set<string>();
   const dedupedEntries = entries.filter((e) => {
@@ -158,8 +187,8 @@ export function AuditRail({ open, onToggle }: { open: boolean; onToggle: () => v
 
   return (
     <>
-      <button className={`audit-fab ${open ? "on" : ""}`} onClick={onToggle} title="Live audit stream">
-        <span className="audit-fab-dot" /> {open ? "▸" : "◂"} Audit
+      <button className={`audit-fab ${open ? "on" : ""}`} onClick={onToggle} title="Your activity log">
+        <span className="audit-fab-dot" /> {open ? "▸" : "◂"} Activity
       </button>
 
       <AnimatePresence>
@@ -169,12 +198,15 @@ export function AuditRail({ open, onToggle }: { open: boolean; onToggle: () => v
             transition={{ type: "spring", stiffness: 320, damping: 34 }}>
             <div className="audit-head">
               <div>
-                <div className="audit-title">Live audit</div>
-                <div className="audit-sub">{dedupedEntries.length} events · append-only · hash-chained</div>
+                <div className="audit-title">My activity</div>
+                <div className="audit-sub">{dedupedEntries.length} events · your actions only</div>
               </div>
-              <button className="btn ghost sm" onClick={() => setPaused((p) => !p)}>
-                {paused ? "▶ Resume" : "⏸ Pause"}
-              </button>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button className="btn ghost sm" onClick={() => setPaused((p) => !p)}>
+                  {paused ? "▶ Resume" : "⏸ Pause"}
+                </button>
+                <button className="btn ghost sm" onClick={onToggle} title="Close (Esc)">✕</button>
+              </div>
             </div>
             <div className="audit-feed">
               {dedupedEntries.length === 0 && <div className="placeholder" style={{ fontSize: 13 }}>Waiting for activity…</div>}
@@ -188,7 +220,7 @@ export function AuditRail({ open, onToggle }: { open: boolean; onToggle: () => v
                       <span className="audit-dot" style={{ background: tone(e.event) }} />
                       {e.event}
                     </span>
-                    {summary(e) && <span className="audit-detail">{summary(e)}</span>}
+                    {auditSummary(e) && <span className="audit-detail">{auditSummary(e)}</span>}
                   </motion.div>
                 ))}
               </AnimatePresence>

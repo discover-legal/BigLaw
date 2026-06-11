@@ -17,7 +17,11 @@ intra-round whiteboard + inter-round memory rollup, billable time tracking, and 
 
 ## Quick start
 
-**Easiest — one command, handles everything (Node.js, clone, deps, wizard):**
+**The platform is Go** (`biglaw-go/` — single static binary, runs on a Raspberry Pi 4GB or
+fully on local models). The retired TypeScript implementation is preserved at the git tag
+`typescript-final`; `src/*.ts` paths in older docs map to `biglaw-go/internal/*`.
+
+**Easiest — one command (needs git + Docker):**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/discover-legal/BigLaw/main/setup.sh | bash
@@ -26,29 +30,24 @@ curl -fsSL https://raw.githubusercontent.com/discover-legal/BigLaw/main/setup.sh
 **Already have the repo cloned:**
 
 ```bash
-bash setup.sh       # or: npm run setup  (requires Node 18+ already installed)
+bash setup.sh                                        # docker compose stack → :3102
+# or natively (Go 1.25+, run from the repo root so templates/ + deadlines/rules/ resolve):
+go run ./biglaw-go/cmd/biglaw                        # REST API on :3101
+# tests:
+cd biglaw-go && go test ./...
 ```
 
-The interactive wizard checks prerequisites, walks through every API key with
-inline instructions, shows a checkbox picker for connectors, writes `.env`,
-installs deps, and runs a smoke test. Re-run any time to add more connectors.
-
-**Then start the server:**
-
-```bash
-npm run dev         # development (hot reload)
-npm start           # production (npm run build first)
-npm run serve       # backend-only mode (for running UI + MCP simultaneously)
-```
-
-REST API at `http://localhost:3101`.
+The Docker stack is three containers: TypeDB → conflict-graph sidecar (Unix-socket IPC) →
+BigLaw core. REST API at `http://localhost:3102` (Docker) or `:3101` (native).
 MCP server on stdio (activated when stdin is not a TTY — i.e. from Claude Code).
+
+**Web workbench:** `cd ui && BIG_MICHAEL_API=http://localhost:3102 npm run dev` → :5173.
 
 **Run modes** (`BIG_MICHAEL_MODE`): the vector DB takes an exclusive single-writer lock and the
 REST API binds one port, so only one process can own them. To run the web UI and the Claude
 Code MCP at once, one process owns the DB and the other attaches as a thin client over REST.
 - `auto` (default) — own the DB if free, else attach as an MCP client
-- `backend` — own DB + REST, never MCP (`npm run serve`)
+- `backend` — own DB + REST, never MCP (what the Docker stack runs)
 - `mcp` — pure MCP client, requires a reachable backend (`BIG_MICHAEL_API` sets the URL)
 - `standalone` — classic single process (own DB + REST + MCP on stdio)
 
@@ -125,6 +124,13 @@ Each DyTopo round:
 9. Haiku synthesises whiteboard into round digest → written to inter-round memory store
 
 ## Key files
+
+> The table below predates the Go port: `src/foo.ts` paths describe the architecture and
+> map to `biglaw-go/internal/foo/` (e.g. `src/dytopo/engine.ts` → `internal/dytopo/engine.go`,
+> `src/mcp/server.ts` → `internal/api/server.go` + `internal/mcp/server.go`). The TS sources
+> live at the `typescript-final` tag. Go-only additions: `internal/topoflow/` (AgensFlow
+> bandit over DyTopo), `internal/lpm/` (daily status-report spine), `internal/clientvoice/`
+> (Remy advocacy briefs), `cmd/biglaw/monitors.go` (firm-wide budget/docket/regulatory monitors).
 
 | Path | What it does |
 |---|---|

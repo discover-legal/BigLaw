@@ -1,9 +1,9 @@
 {
-  "name": "big-michael-ui",
+  "name": "biglaw-ui",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
-  "description": "Big Michael — legal intelligence bench. Web console for the multi-agent orchestrator.",
+  "description": "BigLaw — the BigLaw tool stack, open and free. Workbench UI for the multi-agent orchestrator; Big Michael convenes the bench.",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",

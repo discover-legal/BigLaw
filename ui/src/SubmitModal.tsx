@@ -57,7 +57,7 @@ export function SubmitModal({ onClose, onCreated, notify }: {
       const task = templateId
         ? await api.fromTemplate({ templateId, documentIds, ...refs })
         : await api.submitTask({ description, workflowType: workflow, documentIds, ...refs });
-      notify("Task submitted — agents convening");
+      notify("Matter submitted — Big Michael is convening the bench");
       onCreated(task);
     } catch (e) {
       notify((e as Error).message);
@@ -73,8 +73,8 @@ export function SubmitModal({ onClose, onCreated, notify }: {
         initial={{ opacity: 0, y: 18, scale: 0.98 }} animate={{ opacity: 1, y: 0, scale: 1 }}
         transition={{ type: "spring", stiffness: 320, damping: 28 }}>
         <div className="modal-head">
-          <h3>Convene the bench</h3>
-          <p>Brief the orchestrator. It assembles the agent graph and runs the protocol.</p>
+          <h3>Big Michael convenes the bench</h3>
+          <p>Brief him on the matter. He assembles the agent graph and runs the protocol.</p>
         </div>
 
         <div className="modal-body">

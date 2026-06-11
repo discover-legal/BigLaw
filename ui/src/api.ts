@@ -1,10 +1,22 @@
-import type { Task, Template, Health, WorkflowType, SearchResult, AuditEntry, DocumentRef, AgentSummary, AppSettings, LawyerProfile, ToneProfile, Me, Client, ClientMatter, ConflictCheckResult, IngestResult, CostSummary, TaskCostResult, TimeEntry, OcgDocument, ClientVoiceGuide } from "./types";
+import type {
+  Task, Template, Health, WorkflowType, SearchResult, AuditEntry, DocumentRef, AgentSummary,
+  AppSettings, LawyerProfile, ToneProfile, Me, Client, ClientMatter, ConflictCheckResult,
+  IngestResult, CostSummary, TaskCostResult, TimeEntry, OcgDocument, ClientVoiceGuide,
+  PreBill, PreBillStatus, AgentBillingSummary, InvoiceValidationResult,
+  BudgetBurn, BudgetPrediction, DeadlineJurisdiction, DeadlineResult,
+  MatterHealthScore, PortfolioHealthSummary,
+  WatchedDocket, RegulationAlert,
+  Playbook, PlaybookScope, PlaybookQueryResult, RedlineReport, HeadnoteReport,
+  PrecedentDocument, CitationCheckResult,
+  NosLegalBreakdown, Job, JobStatus, QueueStats,
+} from "./types";
 
 type SettingsPatch = {
   presentation?: Partial<AppSettings["presentation"]>;
   dytopo?: Partial<AppSettings["dytopo"]>;
   debate?: Partial<AppSettings["debate"]>;
   docuseal?: Partial<{ enabled: boolean; url: string; apiKey: string }>;
+  clientVoice?: Partial<AppSettings["clientVoice"]>;
 };
 
 async function json<T>(res: Response): Promise<T> {
@@ -91,7 +103,13 @@ export const api = {
   searchDocuments: (query: string) =>
     fetch(`/documents/search?query=${encodeURIComponent(query)}`).then(json<SearchResult[]>),
 
-  recentAudit: (limit = 60) => fetch(`/audit?limit=${limit}`).then(json<AuditEntry[]>),
+  recentAudit: (limit = 60, opts?: { actorId?: string; event?: string; taskId?: string }) => {
+    const q = new URLSearchParams({ limit: String(limit) });
+    if (opts?.actorId) q.set("actorId", opts.actorId);
+    if (opts?.event) q.set("event", opts.event);
+    if (opts?.taskId) q.set("taskId", opts.taskId);
+    return fetch(`/audit?${q.toString()}`).then(json<AuditEntry[]>);
+  },
 
   toneImport: (profileId: string, file: File) => {
     const fd = new FormData();
@@ -146,14 +164,152 @@ export const api = {
     fetch(`/time-entries/${entryId}/suggestions/accept`, POST({ ruleId })).then(json<TimeEntry>),
   dismissSuggestion: (entryId: string, ruleId: string) =>
     fetch(`/time-entries/${entryId}/suggestions/dismiss`, POST({ ruleId })).then(json<TimeEntry>),
+
+  // ── Billing: pre-bills, invoice validation, exports ────────────────────────
+  listPreBills: (matterNumber?: string) =>
+    fetch(`/pre-bills${matterNumber ? `?matterNumber=${encodeURIComponent(matterNumber)}` : ""}`).then(json<PreBill[]>),
+  createPreBill: (body: { matterNumber: string; clientNumber?: string; from?: string; to?: string }) =>
+    fetch("/pre-bills", POST(body)).then(json<PreBill>),
+  getPreBill: (id: string) => fetch(`/pre-bills/${id}`).then(json<PreBill>),
+  patchPreBill: (id: string, body: { status?: PreBillStatus; notes?: string; entryEdit?: { entryId: string; description: string } }) =>
+    fetch(`/pre-bills/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then(json<PreBill>),
+
+  validateInvoice: (body: {
+    invoiceText: string; clientId?: string; submittedByFirm?: string;
+    matterNumber?: string; generateDisputeLetter?: boolean;
+  }) => fetch("/invoices/validate", POST(body)).then(json<InvoiceValidationResult>),
+
+  agentBillingSummary: (params?: { taskId?: string; matterNumber?: string; clientNumber?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.taskId) qs.set("taskId", params.taskId);
+    if (params?.matterNumber) qs.set("matterNumber", params.matterNumber);
+    if (params?.clientNumber) qs.set("clientNumber", params.clientNumber);
+    return fetch(`/time-entries/agent-summary?${qs}`).then(json<AgentBillingSummary[]>);
+  },
+
+  timeExportCsvUrl: () => "/time-entries/export.csv",
+  timeExportJsonUrl: () => "/time-entries/export.json",
+  timeExportLedesUrl: (matterNumber: string) =>
+    `/time-entries/export.ledes?matterNumber=${encodeURIComponent(matterNumber)}`,
+
+  // ── Budgets, deadlines & matter health ─────────────────────────────────────
+  setMatterBudget: (clientId: string, matterNumber: string, body: { budgetUsd: number; thresholds?: number[] }) =>
+    fetch(`/clients/${clientId}/matters/${encodeURIComponent(matterNumber)}/budget`,
+      { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then(json<ClientMatter>),
+  getMatterBudget: (clientId: string, matterNumber: string) =>
+    fetch(`/clients/${clientId}/matters/${encodeURIComponent(matterNumber)}/budget`).then(json<BudgetBurn>),
+  checkMatterBudget: (clientId: string, matterNumber: string) =>
+    fetch(`/clients/${clientId}/matters/${encodeURIComponent(matterNumber)}/budget/check`, POST({})).then(json<{ ok: true }>),
+  budgetPrediction: (matterNumber: string) =>
+    fetch(`/matters/${encodeURIComponent(matterNumber)}/budget-prediction`).then(json<BudgetPrediction>),
+
+  deadlineRules: () => fetch("/deadlines/rules").then(json<DeadlineJurisdiction[]>),
+  computeDeadlines: (body: { jurisdiction: string; triggerEvent: string; triggerDate: string }) =>
+    fetch("/deadlines/compute", POST(body)).then(json<DeadlineResult>),
+
+  matterHealth: (matterNumber: string) =>
+    fetch(`/matters/${encodeURIComponent(matterNumber)}/health`).then(json<MatterHealthScore>),
+  portfolioHealth: () => fetch("/analytics/portfolio-health").then(json<PortfolioHealthSummary>),
+
+  // ── Watchtower: dockets & regulatory ───────────────────────────────────────
+  listDockets: () => fetch("/dockets").then(json<WatchedDocket[]>),
+  watchDocket: (body: { matterNumber: string; docketNumber: string; court: string; caseName?: string }) =>
+    fetch("/dockets/watch", POST(body)).then(json<WatchedDocket>),
+  unwatchDocket: (matterNumber: string) =>
+    fetch(`/dockets/watch/${encodeURIComponent(matterNumber)}`, { method: "DELETE" }).then((r) => json<{ ok: true }>(r)),
+  docketCheckNow: () => fetch("/dockets/check-now", POST({})).then(json<{ ok: true; watching: number }>),
+  regulatoryCheckNow: () =>
+    fetch("/regulatory/check-now", POST({})).then(json<{ checked: number; alerts: RegulationAlert[] }>),
+
+  // ── Drafting: playbooks, redline, headnotes, precedents, citations ─────────
+  listPlaybooks: (params?: { scope?: PlaybookScope; practiceArea?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.scope) qs.set("scope", params.scope);
+    if (params?.practiceArea) qs.set("practiceArea", params.practiceArea);
+    return fetch(`/playbooks?${qs}`).then(json<Playbook[]>);
+  },
+  getPlaybook: (id: string) => fetch(`/playbooks/${id}`).then(json<Playbook>),
+  buildPlaybook: (body: {
+    scope?: PlaybookScope; ownerId?: string; ownerName?: string; practiceArea: string;
+    jurisdiction?: string; name: string; description?: string; clauseTypes?: string[];
+  }) => fetch("/playbooks/build", POST(body)).then(json<Playbook>),
+  resolvePlaybook: (clauseType: string, params?: { practiceArea?: string; matterNumber?: string; clientId?: string; profileId?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.practiceArea) qs.set("practiceArea", params.practiceArea);
+    if (params?.matterNumber) qs.set("matterNumber", params.matterNumber);
+    if (params?.clientId) qs.set("clientId", params.clientId);
+    if (params?.profileId) qs.set("profileId", params.profileId);
+    return fetch(`/playbooks/resolve/${encodeURIComponent(clauseType)}?${qs}`).then(json<PlaybookQueryResult>);
+  },
+  deletePlaybook: (id: string) =>
+    fetch(`/playbooks/${id}`, { method: "DELETE" }).then((r) => json<{ deleted: true }>(r)),
+
+  redline: (body: {
+    documentText: string; practiceArea?: string; jurisdiction?: string;
+    matterNumber?: string; clientId?: string; documentTitle?: string;
+  }) => fetch("/redline", POST(body)).then(json<RedlineReport>),
+
+  generateHeadnotes: (body: {
+    opinionText: string; caseName?: string; citation?: string; court?: string;
+    dateFiled?: string; jurisdiction?: string;
+  }) => fetch("/headnotes/generate", POST(body)).then(json<HeadnoteReport>),
+
+  generatePrecedent: (body: {
+    documentType: string; practiceArea?: string; jurisdiction?: string; actingFor?: string;
+    matterNumber?: string; clientId?: string; specialInstructions?: string;
+  }) => fetch("/precedents/generate", POST(body)).then(json<PrecedentDocument>),
+
+  checkCitation: (q: string) =>
+    fetch(`/citations/check?q=${encodeURIComponent(q)}`).then(json<CitationCheckResult>),
+
+  // ── Analytics ───────────────────────────────────────────────────────────────
+  noslegalAnalytics: () => fetch("/analytics/noslegal").then(json<NosLegalBreakdown>),
+
+  // ── Jobs queue ──────────────────────────────────────────────────────────────
+  listJobs: (params?: { status?: JobStatus; limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.status) qs.set("status", params.status);
+    if (params?.limit != null) qs.set("limit", String(params.limit));
+    if (params?.offset != null) qs.set("offset", String(params.offset));
+    return fetch(`/jobs?${qs}`).then(json<Job[]>);
+  },
+  jobStats: () => fetch("/jobs/stats").then(json<QueueStats>),
+  retryJob: (id: string) => fetch(`/jobs/${id}/retry`, POST({})).then(json<{ ok: true; job: Job }>),
 };
+
+/**
+ * Generic SSE subscription for alert streams (`data:`-only events).
+ * `onDown` fires if the stream closes for good (e.g. 403/503 from the server) —
+ * EventSource does not retry after a non-200 response.
+ */
+export function streamAlerts<T>(
+  url: string,
+  onEvent: (event: T) => void,
+  onDown?: () => void,
+): () => void {
+  const es = new EventSource(url);
+  es.onmessage = (e) => {
+    try { onEvent(JSON.parse(e.data) as T); } catch { /* ignore */ }
+  };
+  es.onerror = () => {
+    if (es.readyState === EventSource.CLOSED) onDown?.();
+  };
+  return () => es.close();
+}
 
 /**
  * Subscribe to the global live audit stream. The server replays recent
  * entries on connect, then pushes new ones as they happen.
  */
-export function streamAudit(onEntry: (entry: AuditEntry) => void): () => void {
-  const es = new EventSource("/audit/stream");
+export function streamAudit(
+  onEntry: (entry: AuditEntry) => void,
+  opts?: { actorId?: string; taskId?: string },
+): () => void {
+  const q = new URLSearchParams();
+  if (opts?.actorId) q.set("actorId", opts.actorId);
+  if (opts?.taskId) q.set("taskId", opts.taskId);
+  const qs = q.toString();
+  const es = new EventSource(`/audit/stream${qs ? `?${qs}` : ""}`);
   es.onmessage = (e) => {
     try { onEntry(JSON.parse(e.data) as AuditEntry); } catch { /* ignore */ }
   };

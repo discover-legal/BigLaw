@@ -119,11 +119,9 @@ function SuggestionCard({ suggestion, onAccept, onDismiss, busy }: SuggestionCar
 }
 
 export function TimeEntryPane({
-  onClose,
   notify,
   isPartner,
 }: {
-  onClose: () => void;
   notify: (m: string) => void;
   isPartner: boolean;
 }) {
@@ -237,21 +235,8 @@ export function TimeEntryPane({
   }
 
   return (
-    <div className="modal-scrim" onClick={onClose}>
-      <motion.div
-        className="modal admin"
-        style={{ maxWidth: 860 }}
-        onClick={(e) => e.stopPropagation()}
-        initial={{ opacity: 0, y: 18, scale: 0.98 }}
-        animate={{ opacity: 1, y: 0, scale: 1 }}
-        transition={{ type: "spring", stiffness: 320, damping: 28 }}
-      >
-        <div className="modal-head">
-          <h3>Time entries &amp; OCG review</h3>
-          <p>Review billing entries for Outside Counsel Guidelines compliance.</p>
-        </div>
-
-        <div className="tabs" style={{ margin: "0 26px" }}>
+    <div>
+        <div className="tabs" style={{ marginTop: 0 }}>
           <button className={`tab ${tab === "pending" ? "active" : ""}`} onClick={() => setTab("pending")}>
             Pending review {tab === "pending" && <motion.span layoutId="tep-ul" className="tab-underline" />}
           </button>
@@ -260,7 +245,7 @@ export function TimeEntryPane({
           </button>
         </div>
 
-        <div className="modal-body">
+        <div className="panel-body">
           {/* Filter row */}
           <div style={{ display: "flex", gap: 10, marginBottom: 14, alignItems: "center" }}>
             <input
@@ -340,21 +325,17 @@ export function TimeEntryPane({
                       />
                     ))}
                   </AnimatePresence>
+
+                  {isPartner && selected.clientNumber && (
+                    <button className="btn ghost sm" style={{ marginTop: 12 }} disabled={checkBusy} onClick={runCheckForSelected}>
+                      {checkBusy ? "Checking…" : "Run OCG check for this client"}
+                    </button>
+                  )}
                 </div>
               )}
             </div>
           </div>
         </div>
-
-        <div className="modal-foot">
-          <button className="btn ghost" onClick={onClose}>Close</button>
-          {isPartner && selected?.clientNumber && (
-            <button className="btn primary sm" disabled={checkBusy} onClick={runCheckForSelected}>
-              {checkBusy ? "Checking…" : "Run OCG check for this client"}
-            </button>
-          )}
-        </div>
-      </motion.div>
     </div>
   );
 }

@@ -4,7 +4,7 @@ import { api } from "./api";
 import type { Client, ClientMatter, ConflictCheckResult, OcgDocument, OcgRule } from "./types";
 import { PRACTICE_AREAS } from "./types";
 
-export function ClientsPanel({ onClose, notify }: { onClose: () => void; notify: (m: string) => void }) {
+export function ClientsPanel({ notify }: { notify: (m: string) => void }) {
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -148,16 +148,14 @@ export function ClientsPanel({ onClose, notify }: { onClose: () => void; notify:
   }
 
   return (
-    <div className="modal-scrim" onClick={onClose}>
-      <motion.div className="modal admin" style={{ maxWidth: 760 }} onClick={(e) => e.stopPropagation()}
-        initial={{ opacity: 0, y: 18, scale: 0.98 }} animate={{ opacity: 1, y: 0, scale: 1 }}
-        transition={{ type: "spring", stiffness: 320, damping: 28 }}>
-        <div className="modal-head">
-          <h3>Clients &amp; matters</h3>
-          <p>Manage client roster, matters, and conflicts of interest.</p>
+    <div className="page-scroll">
+      <div className="page" style={{ maxWidth: 960 }}>
+        <div className="page-head">
+          <h1 className="page-title">Clients &amp; matters</h1>
+          <p className="page-sub">Manage client roster, matters, conflicts of interest, OCG rules, and voice guides.</p>
         </div>
 
-        <div className="tabs" style={{ margin: "0 26px" }}>
+        <div className="tabs">
           <button className={`tab ${tab === "clients" ? "active" : ""}`} onClick={() => setTab("clients")}>
             Clients {tab === "clients" && <motion.span layoutId="cp-ul" className="tab-underline" />}
           </button>
@@ -171,15 +169,20 @@ export function ClientsPanel({ onClose, notify }: { onClose: () => void; notify:
           )}
         </div>
 
-        <div className="modal-body">
+        <div className="panel-body">
           <AnimatePresence mode="wait">
             {tab === "clients" && (
               <motion.div key="clients" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
                 {loading && <div className="placeholder">Loading…</div>}
                 {!loading && !clients.length && (
-                  <div className="placeholder">No clients yet. Add one above.</div>
+                  <div className="empty" style={{ height: "auto", padding: "60px 20px" }}>
+                    <div className="glyph">☷</div>
+                    <h2>No clients yet</h2>
+                    <p>Add your first client to start tracking matters, conflicts, and outside-counsel guidelines.</p>
+                    <button className="btn primary" onClick={() => setTab("new-client")}>＋ Add client</button>
+                  </div>
                 )}
-                <div style={{ display: "flex", gap: 16, height: 420 }}>
+                <div style={{ display: clients.length ? "flex" : "none", gap: 16, height: "min(560px, calc(100vh - 340px))", minHeight: 360 }}>
                   {/* Client list */}
                   <div style={{ width: 240, flexShrink: 0, display: "flex", flexDirection: "column", gap: 6, overflowY: "auto" }}>
                     {clients.map((c) => (
@@ -397,22 +400,25 @@ export function ClientsPanel({ onClose, notify }: { onClose: () => void; notify:
               </motion.div>
             )}
           </AnimatePresence>
-        </div>
 
-        <div className="modal-foot">
-          <button className="btn ghost" onClick={onClose}>Close</button>
           {tab === "new-client" && (
-            <button className="btn primary" disabled={busy || !nc.name.trim() || !nc.clientNumber.trim()} onClick={addClient}>
-              {busy ? "Adding…" : "＋ Add client"}
-            </button>
+            <div style={{ marginTop: 18, display: "flex", gap: 10 }}>
+              <button className="btn primary" disabled={busy || !nc.name.trim() || !nc.clientNumber.trim()} onClick={addClient}>
+                {busy ? "Adding…" : "＋ Add client"}
+              </button>
+              <button className="btn ghost" onClick={() => setTab("clients")}>Cancel</button>
+            </div>
           )}
           {tab === "new-matter" && selected && (
-            <button className="btn primary" disabled={busy || !nm.matterNumber.trim() || !nm.description.trim()} onClick={addMatter}>
-              {busy ? "Adding…" : "＋ Add matter"}
-            </button>
+            <div style={{ marginTop: 18, display: "flex", gap: 10 }}>
+              <button className="btn primary" disabled={busy || !nm.matterNumber.trim() || !nm.description.trim()} onClick={addMatter}>
+                {busy ? "Adding…" : "＋ Add matter"}
+              </button>
+              <button className="btn ghost" onClick={() => setTab("clients")}>Cancel</button>
+            </div>
           )}
         </div>
-      </motion.div>
+      </div>
     </div>
   );
 }

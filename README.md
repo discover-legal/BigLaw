@@ -7,10 +7,17 @@
 **What Am Law 100 firms spend $2M/year on — consolidated into one open-source platform, free for solos, boutiques, and small firms.**
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-2563eb.svg)](LICENSE)
-[![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6.svg)](tsconfig.json)
+[![Go](https://img.shields.io/badge/Go-1.25-00ADD8.svg)](biglaw-go/go.mod)
 [![MCP](https://img.shields.io/badge/MCP-stdio%20server-E6B450.svg)](#using-from-claude-code)
-[![Vector DB](https://img.shields.io/badge/RuVector-native%20HNSW-7c3aed.svg)](src/agents/registry.ts)
+[![Vector DB](https://img.shields.io/badge/RuVector-native%20HNSW-7c3aed.svg)](biglaw-go/internal/agents/registry.go)
 [![Status: Experimental](https://img.shields.io/badge/Status-Experimental-red.svg)](#-experimental--security-notice)
+
+**The platform is a single static Go binary** — it runs end-to-end on a Raspberry Pi with
+4 GB of RAM, or entirely on local models (Ollama / LM Studio). Benchmarks vs the original
+TypeScript implementation: 1.25×–6.9× ([methodology](docs/benchmarks-go-vs-ts.md)). Sections
+below that reference `src/*.ts` paths describe the architecture as originally implemented —
+the code now lives in [`biglaw-go/internal/`](biglaw-go/internal/), and the TypeScript
+original is preserved at the tag `typescript-final`.
 
 </div>
 
@@ -527,58 +534,57 @@ Handles everything: Node.js install (via nvm if needed), clone, `npm install`, t
 bash setup.sh       # or: npm run setup  (requires Node 18+ already installed)
 ```
 
-### Manual setup
+### Manual setup (Go platform)
+
+The platform is a single Go binary plus a TypeDB conflict-graph sidecar, packaged as a
+three-container Docker stack. The retired TypeScript implementation is preserved at the
+git tag **`typescript-final`**.
 
 ```bash
-# Infrastructure: DocuSeal only — vector DB is in-process (no Qdrant needed)
-docker compose up -d
-
-# Secrets — at minimum ANTHROPIC_API_KEY
+# Secrets — at minimum ANTHROPIC_API_KEY, or LOCAL_INFERENCE_* for Ollama/LM Studio
 cp .env.example .env
 
-# Dependencies
-npm install
-pip install -r requirements.txt        # PyMuPDF, Camelot, Tesseract
+# The whole stack: TypeDB → conflict-graph sidecar → BigLaw core
+docker compose -f biglaw-go/docker-compose.yml up -d --build
+# REST API → http://localhost:3102
 
-# Verify everything wires up (config, tools, agents, templates, routing, PDF round-trip)
-npm run smoke-test
-npm test                                # fast unit tests (routing, adapters, path-safety)
+# Or run the core natively (Go 1.25+, from the repo root so templates/ and
+# deadlines/rules/ resolve):
+go run ./biglaw-go/cmd/biglaw           # REST API on :3101
 
-npm run dev                             # tsx watch  →  REST API on :3101
+# Tests
+cd biglaw-go && go test ./...
 ```
 
-### 2 · Web console (Vite + React)
+### 2 · Web workbench (Vite + React)
 
 ```bash
 cd ui
 npm install
-npm run dev                             # console on :5173, proxies the API on :3101
+BIG_MICHAEL_API=http://localhost:3102 npm run dev   # workbench on :5173
 ```
 
 Open **http://localhost:5173** — convene a matter, watch rounds stream live, approve gates,
-and pull cited findings, tracked-change `.docx`, and tabular-review CSVs.
+review contracts against your playbook, and pull cited findings and tabular-review CSVs.
 
 ### Run modes — browsing **and** the Claude Code MCP at the same time
 
 The vector DB under `./data` takes an exclusive single-writer lock and the REST API binds
-one port, so only **one** process can own them. To run the web console and the Claude Code
+one port, so only **one** process can own them. To run the web workbench and the Claude Code
 MCP together, one process owns the DB and the other attaches as a thin client over the REST
 API. `BIG_MICHAEL_MODE` selects the role:
 
 | Mode | Behaviour | Use |
 |---|---|---|
-| `auto` *(default)* | Own the DB if the port is free; otherwise attach as an MCP client | Just works — the MCP coexists with a running console |
-| `backend` | Own DB + REST, never start MCP | The persistent console service — `npm run serve` |
+| `auto` *(default)* | Own the DB if the port is free; otherwise attach as an MCP client | Just works — the MCP coexists with a running workbench |
+| `backend` | Own DB + REST, never start MCP | The persistent service (the Docker stack runs this) |
 | `mcp` | Pure MCP client — errors if no backend is reachable | Force Claude Code's MCP to be a client |
 | `standalone` | Classic single process: own DB + REST + MCP on stdio | The original behaviour, on demand |
 
-```bash
-npm run serve                           # dedicated backend (owns DB + REST), no MCP
-```
-
-With a backend running, the console (`:5173 → :3101`) and Claude Code's MCP both connect to
-it — Claude Code's `.mcp.json` runs in `auto` mode, so it detects the owner and attaches as a
-client automatically. Set `BIG_MICHAEL_API` to point a client at a non-default owner URL.
+With a backend running, the workbench and Claude Code's MCP both connect to it — Claude
+Code's `.mcp.json` runs `go run ./biglaw-go/cmd/biglaw` in `auto` mode, so it detects the
+owner and attaches as a client automatically. Set `BIG_MICHAEL_API` to point a client at a
+non-default owner URL.
 
 ---
 

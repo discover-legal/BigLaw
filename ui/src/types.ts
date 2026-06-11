@@ -56,6 +56,8 @@ export interface GateRequest {
   finding: Finding;
   status: "pending" | "approved" | "rejected";
   reviewerNote?: string;
+  /** Remy's client-advocate read on this finding (from the CNTXT advocacy brief). */
+  clientVoiceNote?: string;
   createdAt: string;
   reviewedAt?: string;
 }
@@ -285,6 +287,7 @@ export interface AppSettings {
   dytopo: { maxRounds: number; maxAgentsPerRound: number; similarityThreshold: number };
   debate: { verificationPasses: number; gateConfidenceThreshold: number; adversarialEnabled: boolean; citationRequired: boolean };
   docuseal: { enabled: boolean; url: string; apiKeySet: boolean };
+  clientVoice: { gateNotes: boolean; matterNotifications: boolean };
 }
 
 export interface AgentSummary {
@@ -340,6 +343,10 @@ export interface TimeEntry {
   endedAt?: string;
   durationMs: number;
   billingUnits: number;
+  agentId?: string;
+  agentName?: string;
+  billingRate?: number;
+  billingAmountUsd?: number;
   clioSyncedAt?: string;
   ocgSuggestions?: OcgSuggestion[];
   ocgCheckedAt?: string;
@@ -416,6 +423,444 @@ export const WORKFLOWS: { id: WorkflowType; name: string; desc: string }[] = [
   { id: "tabulate",    name: "Tabulate",    desc: "Bulk → spreadsheet" },
   { id: "full_bench",  name: "Full Bench",  desc: "Comprehensive all-tier" },
 ];
+
+// ─── Billing: pre-bills, invoice validation, agent billing ──────────────────
+
+export type PreBillStatus = "draft" | "reviewed" | "approved" | "invoiced";
+
+export interface PreBillEntry {
+  entryId: string;
+  description: string;
+  billingUnits: number;
+  billingRate?: number;
+  billingAmountUsd?: number;
+  utbmsTaskCode?: string;
+  utbmsActivityCode?: string;
+  profileName?: string;
+  agentName?: string;
+  startedAt: string;
+  endedAt?: string;
+  ocgSuggestionCount: number;
+}
+
+export interface PreBill {
+  id: string;
+  matterNumber: string;
+  clientNumber?: string;
+  status: PreBillStatus;
+  createdByProfileId: string;
+  createdAt: string;
+  reviewedAt?: string;
+  approvedAt?: string;
+  invoicedAt?: string;
+  entries: PreBillEntry[];
+  totalBillingUnits: number;
+  totalAmountUsd: number;
+  notes?: string;
+}
+
+export interface AgentBillingSummary {
+  agentId: string;
+  agentName: string;
+  entries: number;
+  billingUnits: number;
+  billingAmountUsd: number;
+}
+
+export type InvoiceViolationType =
+  | "block_billing" | "vague_description" | "rate_exceeded" | "unauthorized_task"
+  | "timing_violation" | "staffing_violation" | "excessive_hours" | "other";
+
+export interface InvoiceViolation {
+  lineId: string;
+  ruleId?: string;
+  ruleText?: string;
+  type: InvoiceViolationType;
+  severity: "hard" | "soft";
+  message: string;
+  suggestedAction: "reject" | "reduce" | "request_detail";
+  suggestedReduction?: number;
+}
+
+export interface InvoiceValidationResult {
+  id: string;
+  clientId?: string;
+  submittedByFirm?: string;
+  matterNumber?: string;
+  totalOriginalAmount: number;
+  totalSuggestedReduction: number;
+  totalApprovedAmount: number;
+  lineCount: number;
+  violationCount: number;
+  hardViolationCount: number;
+  violations: InvoiceViolation[];
+  disputeLetter?: string;
+  validatedAt: string;
+}
+
+// ─── Budgets, deadlines & matter health ──────────────────────────────────────
+
+export interface BudgetBurn {
+  matterNumber: string;
+  budgetUsd: number;
+  burnUsd: number;
+  burnPct: number;
+  remaining: number;
+}
+
+export interface BudgetAlert {
+  matterNumber: string;
+  clientNumber: string;
+  budgetUsd: number;
+  burnUsd: number;
+  burnPct: number;
+  threshold: number;
+  triggeredAt: string;
+}
+
+export interface BudgetPrediction {
+  matterNumber: string;
+  practiceArea: string;
+  spentUsd: number;
+  spentBillingUnits: number;
+  estimatedTotalUsd: number;
+  estimatedRemainingUsd: number;
+  completionPct: number;
+  confidence: "high" | "medium" | "low" | "insufficient_data";
+  comparableMatterCount: number;
+  medianFinalCost: number;
+  p25FinalCost: number;
+  p75FinalCost: number;
+  basedOn: string;
+}
+
+export interface DeadlineJurisdiction {
+  jurisdiction: string;
+  name: string;
+  id: string;
+  ruleCount: number;
+}
+
+export interface ComputedDeadline {
+  ruleId: string;
+  event: string;
+  dueDate: string;
+  warningDate?: string;
+  days: number;
+  dayType: "calendar" | "business";
+  cite: string;
+  note?: string;
+}
+
+export interface DeadlineResult {
+  jurisdiction: string;
+  jurisdictionName: string;
+  triggerEvent: string;
+  triggerDate: string;
+  computedAt: string;
+  deadlines: ComputedDeadline[];
+}
+
+export type HealthSignal = "green" | "amber" | "red";
+
+export interface MatterRiskFactor {
+  type: string;
+  severity: "high" | "medium" | "low";
+  message: string;
+  suggestedAction?: string;
+}
+
+export interface MatterHealthScore {
+  matterNumber: string;
+  score: number;
+  signal: HealthSignal;
+  signalLabel: string;
+  dimensions: {
+    budgetHealth: number;
+    deadlineHealth: number;
+    activityFreshness: number;
+    gateBacklog: number;
+    ocgCompliance: number;
+  };
+  riskFactors: MatterRiskFactor[];
+  trend: "improving" | "stable" | "deteriorating";
+  computedAt: string;
+}
+
+export interface PortfolioHealthSummary {
+  totalMatters: number;
+  green: number;
+  amber: number;
+  red: number;
+  matters: MatterHealthScore[];
+  computedAt: string;
+}
+
+// ─── Watchtower: dockets & regulatory pulse ──────────────────────────────────
+
+export interface WatchedDocket {
+  matterNumber: string;
+  docketNumber: string;
+  court: string;
+  caseName?: string;
+  addedAt: string;
+  lastCheckedAt?: string;
+  lastFilingDate?: string;
+  totalFilingsSeen: number;
+}
+
+export interface DocketAlert {
+  id: string;
+  matterNumber: string;
+  docketNumber: string;
+  court: string;
+  caseName: string;
+  newFilingCount: number;
+  latestFilingDate: string;
+  courtListenerUrl: string;
+  detectedAt: string;
+}
+
+export interface RegulationAlert {
+  id: string;
+  matterNumber?: string;
+  practiceArea: string;
+  jurisdiction: string;
+  headline: string;
+  url: string;
+  summary: string;
+  detectedAt: string;
+  source: string;
+}
+
+// ─── Drafting: playbooks, redline, headnotes, precedents, citations ──────────
+
+export type PlaybookScope = "firm" | "client" | "matter" | "personal";
+
+export interface PlaybookEntry {
+  clauseType: string;
+  practiceArea: string;
+  standardPosition: string;
+  fallbackPosition?: string;
+  redLines: string[];
+  dealPoints: string[];
+  sourceDocumentCount: number;
+  exampleLanguage?: string[];
+  lastUpdated: string;
+}
+
+export interface Playbook {
+  id: string;
+  scope: PlaybookScope;
+  ownerId?: string;
+  ownerName?: string;
+  name: string;
+  description?: string;
+  practiceArea: string;
+  jurisdiction?: string;
+  clauseTypes: string[];
+  entries: PlaybookEntry[];
+  documentCount: number;
+  createdAt: string;
+  updatedAt: string;
+  generatedByTaskId?: string;
+}
+
+export interface ResolvedClause {
+  clauseType: string;
+  practiceArea: string;
+  effectiveEntry: PlaybookEntry;
+  resolvedFrom: PlaybookScope;
+  availableTiers: PlaybookScope[];
+  personalNote?: string;
+}
+
+export interface PlaybookQueryResult {
+  clauseType: string;
+  practiceArea?: string;
+  resolved: ResolvedClause[] | null;
+  cascadeSummary?: string;
+  message?: string;
+  queriedAt?: string;
+}
+
+export type RedlineAction = "accept" | "redline" | "escalate" | "delete" | "no_position";
+
+export interface RedlineIssue {
+  clauseType: string;
+  counterpartyText: string;
+  firmPosition: string;
+  positionSource: "client" | "matter" | "personal" | "firm" | "none";
+  action: RedlineAction;
+  proposedText?: string;
+  rationale: string;
+  isRedLine: boolean;
+  severity: "critical" | "high" | "medium" | "low";
+}
+
+/** A playbook position absent from the counterparty draft. */
+export interface MissingClause {
+  clauseType: string;
+  firmPosition: string;
+  positionSource: string;
+  severity: "critical" | "high" | "medium" | "low";
+  isRedLine: boolean;
+  suggestedText?: string;
+  rationale: string;
+}
+
+export interface RedlineReport {
+  id: string;
+  documentId?: string;
+  documentTitle?: string;
+  practiceArea?: string;
+  jurisdiction?: string;
+  totalClauses: number;
+  acceptCount: number;
+  redlineCount: number;
+  escalateCount: number;
+  deleteCount: number;
+  criticalCount: number;
+  missingCount?: number;
+  issues: RedlineIssue[];
+  missingClauses?: MissingClause[];
+  executiveSummary: string;
+  generatedAt: string;
+}
+
+export interface Headnote {
+  number: number;
+  proposition: string;
+  sourceText: string;
+  location?: string;
+  holdingType: "ratio" | "obiter" | "procedural" | "statutory";
+  distinguishingFactors: string[];
+  areaOfLaw?: string;
+  confidence: number;
+}
+
+export interface HeadnoteReport {
+  id: string;
+  caseName: string;
+  citation?: string;
+  court?: string;
+  dateFiled?: string;
+  jurisdiction?: string;
+  keyHolding: string;
+  headnotes: Headnote[];
+  relatedPrinciples: string[];
+  practiceAreas: string[];
+  noslegalArea?: string;
+  totalHeadnotes: number;
+  ratioCount: number;
+  obiterCount: number;
+  generatedAt: string;
+}
+
+export interface PrecedentClause {
+  heading: string;
+  draftText: string;
+  source: "client" | "matter" | "personal" | "firm" | "knowledge_store" | "generated";
+  hasRedLine: boolean;
+  notes?: string;
+  fallback?: string;
+}
+
+export interface PrecedentDocument {
+  id: string;
+  documentType: string;
+  title: string;
+  practiceArea?: string;
+  jurisdiction?: string;
+  actingFor?: string;
+  sourcePrecedentCount: number;
+  playbookPositionCount: number;
+  clauses: PrecedentClause[];
+  document: string;
+  draftingNotes: string[];
+  generatedAt: string;
+}
+
+export const PRECEDENT_TYPES: { id: string; name: string }[] = [
+  { id: "nda",               name: "NDA / Confidentiality" },
+  { id: "spa",               name: "Share purchase agreement" },
+  { id: "asset_purchase",    name: "Asset purchase agreement" },
+  { id: "facility",          name: "Loan / facility agreement" },
+  { id: "employment",        name: "Employment contract" },
+  { id: "service_agreement", name: "Services agreement / MSA" },
+  { id: "supply_agreement",  name: "Supply / distribution agreement" },
+  { id: "jv_agreement",      name: "Joint venture agreement" },
+  { id: "ip_assignment",     name: "IP assignment" },
+  { id: "licence",           name: "IP / technology licence" },
+  { id: "settlement",        name: "Settlement agreement" },
+  { id: "term_sheet",        name: "Term sheet / heads of terms" },
+  { id: "other",             name: "Other (describe)" },
+];
+
+export type CitationSignal = "green" | "yellow" | "red" | "blue";
+
+export interface CitationTreatment {
+  caseName: string;
+  citation?: string;
+  treatmentType: string;
+  court?: string;
+  year?: number;
+  url?: string;
+}
+
+export interface CitationCheckResult {
+  query: string;
+  resolvedCitation?: string;
+  clusterId?: string;
+  caseName?: string;
+  court?: string;
+  year?: number;
+  status: "good_law" | "limited" | "overruled" | "superseded" | "unclear";
+  signal: CitationSignal;
+  signalLabel: string;
+  confidence: number;
+  positiveTreatmentCount: number;
+  negativeTreatmentCount: number;
+  topNegativeTreatments: CitationTreatment[];
+  reasoning: string;
+  courtListenerUrl?: string;
+  checkedAt: string;
+}
+
+// ─── Analytics ────────────────────────────────────────────────────────────────
+
+export interface NosLegalBreakdown {
+  total: number;
+  byAreaOfLaw: Record<string, number>;
+  byWorkType: Record<string, number>;
+  bySector: Record<string, number>;
+  byAssetType: Record<string, number>;
+}
+
+// ─── Jobs queue ───────────────────────────────────────────────────────────────
+
+export type JobStatus = "pending" | "running" | "done" | "failed" | "dead_letter";
+
+export interface Job {
+  id: string;
+  type: string;
+  payload: Record<string, unknown>;
+  status: JobStatus;
+  createdAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  retries: number;
+  maxRetries: number;
+  error?: string;
+}
+
+export interface QueueStats {
+  pending: number;
+  running: number;
+  done: number;
+  failed: number;
+  dead_letter: number;
+}
 
 // Mirror of PHASE_SEQUENCES in src/orchestrator.ts — drives the phase stepper.
 export const PHASE_SEQUENCES: Record<WorkflowType, TaskPhase[]> = {

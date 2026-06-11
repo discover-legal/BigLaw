@@ -1,9 +1,11 @@
 {
   "mcpServers": {
-    "big-michael": {
-      "command": "npx",
-      "args": ["tsx", "src/index.ts"],
-      "env": {}
+    "biglaw": {
+      "command": "go",
+      "args": ["run", "./biglaw-go/cmd/biglaw"],
+      "env": {
+        "BIG_MICHAEL_MODE": "auto"
+      }
     }
   }
 }
