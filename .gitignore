@@ -62,3 +62,5 @@ SECURITY_AUDIT.json
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
 .claude/worktrees/
+__pycache__/
+*.pyc

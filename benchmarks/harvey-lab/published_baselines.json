@@ -1,0 +1,12 @@
+{
+  "source": "https://www.harvey.ai/blog/legal-agent-benchmark-initial-results",
+  "retrieved": "2026-06-11",
+  "notes": "Harvey's published LAB initial results (all-pass scoring standard, full 1,251-task set, agents run inside Harvey's sandboxed six-tool harness). Update this file when Harvey publishes new numbers.",
+  "baselines": [
+    {"agent": "claude-opus-4-7 (Harvey harness)", "all_pass_rate": 0.071, "cost_per_task_usd": 50.90, "minutes_per_task": 22},
+    {"agent": "claude-sonnet-4-6 (Harvey harness)", "all_pass_rate": 0.054},
+    {"agent": "claude-opus-4-6 (Harvey harness)", "all_pass_rate": 0.042},
+    {"agent": "gpt-5.5 (Harvey harness)", "all_pass_rate": 0.021},
+    {"agent": "gemini-3.5-flash (Harvey harness)", "all_pass_rate": 0.008}
+  ]
+}
