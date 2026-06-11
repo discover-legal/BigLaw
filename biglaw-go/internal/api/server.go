@@ -1001,7 +1001,8 @@ func (s *Server) handleRemoveMatter(c *gin.Context) {
 }
 
 type checkConflictBody struct {
-	Name string `json:"name"`
+	Name        string   `json:"name"`
+	Adversaries []string `json:"adversaries"`
 }
 
 func (s *Server) handleCheckConflict(c *gin.Context) {
@@ -1013,11 +1014,19 @@ func (s *Server) handleCheckConflict(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body: " + err.Error()})
 		return
 	}
-	if body.Name == "" {
+	name := strings.TrimSpace(body.Name)
+	if len(name) > 500 {
+		name = name[:500]
+	}
+	if name == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "name is required"})
 		return
 	}
-	result := s.clients.CheckConflict(body.Name)
+	advs := body.Adversaries
+	if len(advs) > 200 {
+		advs = advs[:200]
+	}
+	result := s.clients.CheckConflict(name, advs)
 	c.JSON(http.StatusOK, result)
 }
 

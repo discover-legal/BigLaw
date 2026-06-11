@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/discover-legal/biglaw-go/internal/adapters"
 	"github.com/discover-legal/biglaw-go/internal/audit"
 	"github.com/discover-legal/biglaw-go/internal/config"
 	"github.com/discover-legal/biglaw-go/internal/cost"
@@ -142,25 +143,35 @@ func (r *Runner) RunDebate(finding types.Finding, taskID string) (types.Finding,
 		return finding, nil
 	}
 
-	verdict, reasoning, modified := parseResolution(resolutionText)
+	verdict, reasoning, modified, parseErr := parseResolution(resolutionText)
 	challenge.Resolution = reasoning
 	now := time.Now()
 	challenge.ResolvedAt = &now
 	finding.Challenge = &challenge
 
-	switch verdict {
-	case "MODIFIED":
-		if modified != "" {
-			finding.Content = modified
+	if parseErr {
+		// Malformed resolver output — leave the finding challenged/unresolved
+		// so IdentifyGates routes it to a human instead of silently upholding.
+		slog.Warn("debate: resolution parse error, finding left unresolved",
+			"findingId", finding.ID, "taskId", taskID)
+		finding.Resolved = false
+	} else {
+		switch verdict {
+		case "MODIFIED":
+			if modified != "" {
+				// The resolver's rewrite re-enters prompts downstream
+				// (synthesis, verification) — neutralise protocol markers.
+				finding.Content = adapters.SanitizePromptContent(modified)
+			}
+		case "OVERTURNED":
+			if finding.Confidence > 0.3 {
+				finding.Confidence -= 0.3
+			} else {
+				finding.Confidence = 0
+			}
 		}
-	case "OVERTURNED":
-		if finding.Confidence > 0.3 {
-			finding.Confidence -= 0.3
-		} else {
-			finding.Confidence = 0
-		}
+		finding.Resolved = true
 	}
-	finding.Resolved = true
 
 	audit.Default.Write(audit.WriteRequest{
 		Event:   "debate.resolved",
@@ -379,11 +390,12 @@ func parseChallenge(text, challengerID string) types.Challenge {
 	}
 }
 
-func parseResolution(text string) (verdict, reasoning, modified string) {
+func parseResolution(text string) (verdict, reasoning, modified string, parseErr bool) {
 	if m := regexp.MustCompile(`(?i)RESOLUTION:\s*(UPHELD|MODIFIED|OVERTURNED)`).FindStringSubmatch(text); len(m) > 1 {
 		verdict = strings.ToUpper(m[1])
 	} else {
-		verdict = "UPHELD"
+		slog.Warn("parseResolution: no RESOLUTION verdict found in resolver output")
+		return "UPHELD", "Parse error - no verdict found", "", true
 	}
 	if m := regexp.MustCompile(`(?si)REASONING:\s*(.*?)(?:MODIFIED_CONTENT:|$)`).FindStringSubmatch(text); len(m) > 1 {
 		reasoning = strings.TrimSpace(m[1])

@@ -7,7 +7,9 @@
 package dytopo
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"sort"
 	"time"
 
@@ -122,7 +124,7 @@ func (e *Engine) RunRound(task *types.Task, goal types.RoundGoal, lawyerTone *ty
 		offer types.OfferDescriptor
 	}
 	noResults := make([]noResult, len(activeAgents))
-	g1, _ := errgroup.WithContext(nil)
+	var g1 errgroup.Group
 	for i, ag := range activeAgents {
 		i, ag := i, ag
 		g1.Go(func() error {
@@ -164,7 +166,8 @@ func (e *Engine) RunRound(task *types.Task, goal types.RoundGoal, lawyerTone *ty
 
 	// Step 6: Process agents (parallel).
 	findingsCh := make([][]types.Finding, len(activeAgents))
-	g2, _ := errgroup.WithContext(nil)
+	roundTimeout := time.Duration(e.cfg.Agents.RoundTimeoutMs) * time.Millisecond
+	var g2 errgroup.Group
 	for i, ag := range activeAgents {
 		i, ag := i, ag
 		g2.Go(func() error {
@@ -186,11 +189,35 @@ func (e *Engine) RunRound(task *types.Task, goal types.RoundGoal, lawyerTone *ty
 				ctx.MatterNumber = billing.MatterNumber
 				ctx.ClientNumber = billing.ClientNumber
 			}
-			findings, err := ag.Process(ctx)
-			if err != nil {
-				return nil
+			// Per-agent wall-clock cap (AGENT_ROUND_TIMEOUT_MS) so one hung
+			// provider/tool call can't stall the whole round. Process takes
+			// an AgentContext, not a context.Context, so the deadline cannot
+			// be propagated into the call; the call is raced against it
+			// instead (mirroring the TS Promise.race) and its findings are
+			// discarded on timeout while the abandoned goroutine drains into
+			// the buffered channel.
+			tctx, cancel := context.WithTimeout(context.Background(), roundTimeout)
+			defer cancel()
+			type procResult struct {
+				findings []types.Finding
+				err      error
 			}
-			findingsCh[i] = findings
+			done := make(chan procResult, 1)
+			go func() {
+				findings, err := ag.Process(ctx)
+				done <- procResult{findings: findings, err: err}
+			}()
+			select {
+			case r := <-done:
+				if r.err != nil {
+					return nil
+				}
+				findingsCh[i] = r.findings
+			case <-tctx.Done():
+				slog.Warn("agent exceeded round timeout; recording no findings for it this round",
+					"agentId", ag.Def.ID, "round", goal.Round, "phase", goal.Phase,
+					"timeoutMs", e.cfg.Agents.RoundTimeoutMs)
+			}
 			return nil
 		})
 	}

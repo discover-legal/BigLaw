@@ -21,6 +21,7 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/audit"
 	"github.com/discover-legal/biglaw-go/internal/auth"
 	"github.com/discover-legal/biglaw-go/internal/cost"
+	"github.com/discover-legal/biglaw-go/internal/csvutil"
 	"github.com/discover-legal/biglaw-go/internal/linkedin"
 	"github.com/discover-legal/biglaw-go/internal/routing"
 	"github.com/discover-legal/biglaw-go/internal/services"
@@ -476,9 +477,11 @@ func contentReadFile(fh *multipart.FileHeader) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(f, contentMaxUploadBytes+1))
 }
 
-// contentCSVEscape quotes a CSV cell, doubling embedded quotes (RFC 4180).
+// contentCSVEscape quotes a CSV cell, doubling embedded quotes (RFC 4180)
+// and neutralizing spreadsheet formula injection (shared helper) — tabulate
+// cells carry LLM-generated content.
 func contentCSVEscape(v string) string {
-	return `"` + strings.ReplaceAll(v, `"`, `""`) + `"`
+	return csvutil.Escape(v)
 }
 
 // contentNullableStr returns nil for the empty string so JSON renders null

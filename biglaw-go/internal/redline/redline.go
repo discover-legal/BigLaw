@@ -12,7 +12,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -430,8 +432,9 @@ For each clause, determine:
 - rationale: 1-2 sentences
 - isRedLine: true if a firm red line is crossed
 
-Return a JSON array — one object per clause in input order:
-[{"clauseType":"...","action":"...","severity":"...","proposedText":"...","rationale":"...","isRedLine":false}]`
+Return a JSON array — one object per clause. ALWAYS include "clauseIndex" set to the
+CLAUSE number shown in the input header (1-based) so each verdict is bound to its clause:
+[{"clauseIndex":1,"clauseType":"...","action":"...","severity":"...","proposedText":"...","rationale":"...","isRedLine":false}]`
 
 	resp, err := e.provider.Chat(providers.ChatParams{
 		Model:       e.sonnet,
@@ -455,17 +458,38 @@ Return a JSON array — one object per clause in input order:
 		return fallbackIssues(clauses, positions)
 	}
 
-	issues := make([]Issue, 0, len(parsed))
-	for idx, p := range parsed {
-		clause := clauses[0]
-		pos := positions[0]
-		if idx < len(clauses) {
-			clause = clauses[idx]
-			pos = positions[idx]
+	// Join verdicts to clauses by the model-echoed 1-based clauseIndex, not by
+	// array position — the model may drop, merge, or reorder clauses, and a
+	// positional zip would then bind the wrong "accept"/"redline" to a clause
+	// (e.g. mark a red-line-crossing clause as acceptable). Any clause with no
+	// matching verdict is escalated rather than silently mispaired.
+	byIndex := make(map[int]map[string]interface{}, len(parsed))
+	for _, p := range parsed {
+		if ci, ok := clauseIndexOf(p["clauseIndex"]); ok && ci >= 1 && ci <= len(clauses) {
+			byIndex[ci] = p
 		}
+	}
+
+	issues := make([]Issue, 0, len(clauses))
+	for idx, clause := range clauses {
+		pos := positions[idx]
 		firmPosition := "No position recorded"
 		if pos.entry != nil {
 			firmPosition = pos.entry.StandardPosition
+		}
+		p, matched := byIndex[idx+1]
+		if !matched {
+			issues = append(issues, Issue{
+				ClauseType:       clause.ClauseType,
+				CounterpartyText: truncate(clause.Text, 500),
+				FirmPosition:     firmPosition,
+				PositionSource:   pos.source,
+				Action:           ActionEscalate,
+				Rationale:        "No verdict returned for this clause — escalated for manual review.",
+				IsRedLine:        false,
+				Severity:         SeverityHigh,
+			})
+			continue
 		}
 		proposedText := ""
 		if v, ok := p["proposedText"].(string); ok {
@@ -484,6 +508,30 @@ Return a JSON array — one object per clause in input order:
 		})
 	}
 	return issues
+}
+
+// clauseIndexOf coerces a model-echoed clauseIndex into an int. JSON numbers
+// arrive as float64; lenient like the TS Number() coercion, it also accepts
+// integral numeric strings ("3"). Non-integral or non-numeric values are
+// rejected so the clause falls through to escalation.
+func clauseIndexOf(v interface{}) (int, bool) {
+	switch n := v.(type) {
+	case float64:
+		if n == math.Trunc(n) && !math.IsInf(n, 0) {
+			return int(n), true
+		}
+	case json.Number:
+		if i, err := n.Int64(); err == nil {
+			return int(i), true
+		}
+	case string:
+		if i, err := strconv.Atoi(strings.TrimSpace(n)); err == nil {
+			return i, true
+		}
+	case int:
+		return n, true
+	}
+	return 0, false
 }
 
 // ─── Step 3: executive summary ────────────────────────────────────────────────

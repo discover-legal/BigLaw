@@ -139,7 +139,14 @@ func (k enginesKnowledgeSearcher) Search(query string, topK int) []types.SearchR
 
 // ─── Playbooks ────────────────────────────────────────────────────────────────
 
+// Playbooks hold confidential negotiation positions and absolute red lines
+// (client, matter, and per-lawyer tiers). All playbook endpoints are restricted
+// to partners, matching the TS handlers (typescript-final src/mcp/server.ts).
+
 func (s *Server) handleListPlaybooks(c *gin.Context) {
+	if !requirePartner(c) {
+		return
+	}
 	eng := s.enginesRequire(c)
 	if eng == nil {
 		return
@@ -156,6 +163,9 @@ func (s *Server) handleListPlaybooks(c *gin.Context) {
 }
 
 func (s *Server) handleGetPlaybook(c *gin.Context) {
+	if !requirePartner(c) {
+		return
+	}
 	eng := s.enginesRequire(c)
 	if eng == nil {
 		return
@@ -181,6 +191,9 @@ type buildPlaybookBody struct {
 }
 
 func (s *Server) handleBuildPlaybook(c *gin.Context) {
+	if !requirePartner(c) {
+		return
+	}
 	eng := s.enginesRequire(c)
 	if eng == nil {
 		return
@@ -222,6 +235,9 @@ func (s *Server) handleBuildPlaybook(c *gin.Context) {
 }
 
 func (s *Server) handleResolvePlaybook(c *gin.Context) {
+	if !requirePartner(c) {
+		return
+	}
 	eng := s.enginesRequire(c)
 	if eng == nil {
 		return

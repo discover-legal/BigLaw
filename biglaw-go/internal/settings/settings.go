@@ -311,7 +311,15 @@ func (s *SettingsStore) persist() error {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-var rfc1918_172 = regexp.MustCompile(`^172\.(1[6-9]|2\d|3[01])\.`)
+var (
+	rfc1918_172 = regexp.MustCompile(`^172\.(1[6-9]|2\d|3[01])\.`)
+	// 100.64.0.0/10 — IANA shared address space (carrier-grade NAT)
+	cgnat100_64 = regexp.MustCompile(`^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.`)
+	// Hex-encoded IPv4 host, e.g. 0x7f000001
+	hexIPv4 = regexp.MustCompile(`^0x[0-9a-f]+$`)
+	// Bare-decimal-integer IPv4 host, e.g. 2130706433; no public host is all-digits
+	decimalIPv4 = regexp.MustCompile(`^\d+$`)
+)
 
 // assertPublicHTTPURL validates that raw is a public http/https URL (no SSRF
 // via private/loopback addresses). Port of assertPublicHttpUrl in
@@ -323,12 +331,20 @@ func assertPublicHTTPURL(raw, label string) (string, error) {
 		return "", fmt.Errorf("invalid %s '%s': must be a public http or https URL", label, trimmed)
 	}
 	h := strings.ToLower(u.Hostname())
-	private := h == "localhost" || h == "::1" ||
+	private := h == "localhost" ||
+		h == "::1" || // IPv6 loopback
+		h == "::" || // IPv6 unspecified
+		h == "0.0.0.0" || // IPv4 unspecified
+		strings.HasPrefix(h, "0.") || // 0.0.0.0/8  "this network"
+		hexIPv4.MatchString(h) || // hex-encoded IPv4 (e.g. 0x7f000001)
+		decimalIPv4.MatchString(h) || // decimal-encoded IPv4 (e.g. 2130706433)
 		strings.HasPrefix(h, "127.") ||
 		strings.HasPrefix(h, "169.254.") ||
 		strings.HasPrefix(h, "10.") ||
 		rfc1918_172.MatchString(h) ||
 		strings.HasPrefix(h, "192.168.") ||
+		cgnat100_64.MatchString(h) || // 100.64.0.0/10  IANA shared address space
+		strings.HasPrefix(h, "::ffff:") || // IPv4-mapped IPv6
 		strings.HasPrefix(h, "fc00:") ||
 		strings.HasPrefix(h, "fe80:")
 	if private {

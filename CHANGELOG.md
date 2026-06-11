@@ -20,15 +20,33 @@ House rules:
 Everything on the `claude/low-end-hardware-port` branch. This is the scope of the
 next post.
 
-> ⚠ **Open follow-up — security-fix parity audit.** Main's PR #17/#18 security
-> sweeps (prompt-injection guards, SSRF, webhook HMAC raw-body verification,
-> zip-bomb budget, audit-chain verify, LEDES fixes, per-agent round timeout,
-> O(n) Q-learning attribution) were applied to the TypeScript code *after* the
-> Go port forked. The Go branch had its own review pass (auth hardening,
-> persist races) but has **not** been line-audited against those specific TS
-> fixes. The fixed TS is preserved at the `typescript-final` tag — audit
-> `internal/` against commits `3428a26`, `6ccd9a5`, `f9f5bad`, `bfc0473`
-> before calling the Go side production-grade.
+### Security-fix parity (TS PR #17/#18 → Go)
+Audited `internal/` against the TS security sweeps (`3428a26`, `6ccd9a5`,
+`f9f5bad`, `bfc0473`) that landed after the Go port forked, and ported the gaps:
+- **Prompt injection**: extended `SanitizePromptContent` marker set
+  (CHALLENGE/RESOLUTION/DESCRIPTION/EXPECTED_OUTPUT, case-insensitive) + control
+  strip; sanitized round-goal/task-description interpolations across agents,
+  orchestrator (round-goal/synthesise/tabulate), and the debate resolver;
+  confidence clamp; malformed-resolution now routes to a human gate
+- **SSRF**: blocklist now also rejects `::`, `0.0.0.0`/`0.x`, CGNAT 100.64/10,
+  IPv4-mapped IPv6 `::ffff:`, hex and bare-decimal IP hosts (+ unit tests)
+- **Audit**: hash-chain verified on restore (tamper warning) (+ tests)
+- **Webhooks**: confirmed Teams/Slack HMAC verifies the raw body before parse
+  (already correct — no change)
+- **Access control**: partner gate added to playbook read/build/resolve endpoints
+- **SSRF egress**: CourtListener client refuses redirects
+- **Billing**: LEDES skips zero-unit rows + UTC dates; header-aliased column
+  parsing; CSV formula-injection neutralization on time + tabulate exports
+- **Embeddings**: batch response length + index validation
+- **DyTopo**: per-agent round timeout (`AGENT_ROUND_TIMEOUT_MS`); fixed an
+  `errgroup.WithContext(nil)` panic that would crash every round
+- **Conflict checks**: entity-name normalization + bidirectional matching (+ tests)
+- **Redline**: verdicts bound by echoed clauseIndex (unmatched → escalate),
+  not array position
+- N/A (no ported defect): memory delete (single-pass, no page cap), invoice
+  violation allow-list (Go filters nothing to begin with)
+- Deferred (would change response contracts, not parity): conflict check on
+  POST /clients create; invoice-type allow-list as new hardening
 
 ### Go port (low-end hardware)
 - Full platform port to Go targeting ARM64 / Raspberry Pi (4 GB): orchestrator,

@@ -6,6 +6,7 @@ package agents
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/discover-legal/biglaw-go/internal/adapters"
 	"github.com/discover-legal/biglaw-go/internal/audit"
 	"github.com/discover-legal/biglaw-go/internal/config"
 	"github.com/discover-legal/biglaw-go/internal/cost"
@@ -364,7 +366,7 @@ Output exactly:
 NEED: <one sentence — what information or expertise you currently need from other agents>
 OFFER: <one sentence — what you can contribute this round given your role>`,
 		taskDesc, ctx.RoundGoal.Round, ctx.RoundGoal.Phase,
-		ctx.RoundGoal.Description, def.Name, def.Description, mem)
+		sanitize(ctx.RoundGoal.Description), def.Name, def.Description, mem)
 }
 
 func buildProcessingPrompt(def types.AgentDefinition, ctx AgentContext) string {
@@ -390,7 +392,7 @@ func buildProcessingPrompt(def types.AgentDefinition, ctx AgentContext) string {
 
 	expectedOutputs := ""
 	for i, o := range ctx.RoundGoal.ExpectedOutputs {
-		expectedOutputs += fmt.Sprintf("%d. %s\n", i+1, o)
+		expectedOutputs += fmt.Sprintf("%d. %s\n", i+1, sanitize(o))
 	}
 
 	toneBlock := ""
@@ -428,7 +430,7 @@ Rules:
 - Multiple Citations allowed per finding (repeat Citation: lines).
 - If you have no findings this round: NO_FINDINGS`,
 		taskDesc, ctx.RoundGoal.Round, ctx.RoundGoal.Phase,
-		ctx.RoundGoal.Description, expectedOutputs, memory, incoming, toneBlock)
+		sanitize(ctx.RoundGoal.Description), expectedOutputs, memory, incoming, toneBlock)
 }
 
 // ─── Response parsers ─────────────────────────────────────────────────────────
@@ -483,7 +485,9 @@ func parseFindings(text string, def types.AgentDefinition) []types.Finding {
 		confidence := 0.7
 		if m := reConfidence.FindStringSubmatch(body); len(m) > 1 {
 			if f, err := strconv.ParseFloat(m[1], 64); err == nil {
-				confidence = f
+				// Clamp to [0,1] — an agent (or injected text echoed by one)
+				// must not be able to claim out-of-range confidence.
+				confidence = math.Min(1, math.Max(0, f))
 			}
 		}
 
@@ -523,10 +527,12 @@ func inferTaskType(def types.AgentDefinition) routing.TaskType {
 
 // ─── Utility ──────────────────────────────────────────────────────────────────
 
-var reSanitize = regexp.MustCompile(`(?i)FINDING:|END_FINDING|NO_FINDINGS|NO_CHALLENGE`)
-
+// sanitize neutralises protocol markers and control characters in untrusted
+// content before prompt interpolation. Delegates to the shared sanitizer so
+// the marker set stays in one place (mirrors TS base.ts importing
+// sanitizePromptContent from adapters/lavern.ts).
 func sanitize(s string) string {
-	return reSanitize.ReplaceAllString(s, "[redacted]")
+	return adapters.SanitizePromptContent(s)
 }
 
 func extractLine(text, prefix string) string {

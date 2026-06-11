@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 
@@ -499,20 +500,39 @@ func mapWorkflowType(s string) types.WorkflowType {
 	}
 }
 
-// SanitizePromptContent strips prompt injection markers from user content.
+// rePromptMarker matches the structural markers used by the agent-output
+// parsers (findings, debate challenges/resolutions, round-goal sections).
+// Case-insensitive to mirror the (?i) parsers that consume them.
+var rePromptMarker = regexp.MustCompile(
+	`(?i)\b(?:FINDING:|END_FINDING\b|NO_FINDINGS\b|NO_CHALLENGE\b|CHALLENGE:|END_CHALLENGE\b|RESOLUTION:|DESCRIPTION:|EXPECTED_OUTPUT_\d+:)`)
+
+// SanitizePromptContent strips prompt injection markers and ASCII control
+// characters (except tab/newline) from user content before it is interpolated
+// into a model prompt. Markers are neutralised by bracket-wrapping, matching
+// the TypeScript sanitizePromptContent in adapters/lavern.ts.
 func SanitizePromptContent(s string) string {
-	s = strings.ReplaceAll(s, "FINDING:", "[FINDING:]")
-	s = strings.ReplaceAll(s, "END_FINDING", "[END_FINDING]")
-	s = strings.ReplaceAll(s, "NO_FINDINGS", "[NO_FINDINGS]")
-	s = strings.ReplaceAll(s, "NO_CHALLENGE", "[NO_CHALLENGE]")
+	s = rePromptMarker.ReplaceAllStringFunc(s, func(m string) string {
+		return "[" + m + "]"
+	})
+	if strings.IndexFunc(s, isPromptControlRune) < 0 {
+		return s
+	}
 	var b strings.Builder
+	b.Grow(len(s))
 	for _, r := range s {
-		if r < 0x08 || (r >= 0x0b && r <= 0x1f && r != '\n' && r != '\t') || r == 0x7f {
+		if isPromptControlRune(r) {
 			continue
 		}
 		b.WriteRune(r)
 	}
 	return b.String()
+}
+
+// isPromptControlRune reports whether r is an ASCII control character that
+// must not survive into prompts: 0x00–0x08, 0x0b–0x1f, 0x7f (tab and newline
+// are kept).
+func isPromptControlRune(r rune) bool {
+	return r <= 0x08 || (r >= 0x0b && r <= 0x1f) || r == 0x7f
 }
 
 // InstantiateTemplate substitutes {{key}} placeholders in a prompt template.

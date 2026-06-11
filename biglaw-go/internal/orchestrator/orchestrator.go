@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/discover-legal/biglaw-go/internal/adapters"
 	"github.com/discover-legal/biglaw-go/internal/agents"
 	"github.com/discover-legal/biglaw-go/internal/audit"
 	"github.com/discover-legal/biglaw-go/internal/auth"
@@ -497,6 +498,10 @@ func (o *Orchestrator) runTask(task *types.Task) {
 	var runErr error
 
 	for _, phase := range phases {
+		if task.CurrentRound >= task.MaxRounds {
+			slog.Warn("task hit maxRounds cap", "taskId", task.ID, "maxRounds", task.MaxRounds)
+			break
+		}
 		task.CurrentPhase = phase
 		task.UpdatedAt = time.Now()
 		emitProgress(task.ID, "phase", map[string]interface{}{"phase": phase})
@@ -787,6 +792,7 @@ client's own words where useful. Do not restate the finding.`, brief, f.Content)
 }
 
 func (o *Orchestrator) generateRoundGoal(task *types.Task, phase types.TaskPhase) (types.RoundGoal, error) {
+	safeDesc := adapters.SanitizePromptContent(task.Description)
 	priorPhases := make([]string, 0, len(task.Rounds))
 	for _, r := range task.Rounds {
 		priorPhases = append(priorPhases, string(r.Goal.Phase))
@@ -804,7 +810,7 @@ DESCRIPTION: <one paragraph describing what agents should do this round>
 EXPECTED_OUTPUT_1: <first expected output>
 EXPECTED_OUTPUT_2: <second expected output>
 EXPECTED_OUTPUT_3: <third expected output>`,
-		task.Description, task.WorkflowType, phase,
+		safeDesc, task.WorkflowType, phase,
 		strings.Join(priorPhases, ", "), len(task.Findings), phase)
 
 	tier := types.TierRoot
@@ -829,7 +835,7 @@ EXPECTED_OUTPUT_3: <third expected output>`,
 			ID:          uuid.New().String(),
 			Round:       task.CurrentRound,
 			Phase:       phase,
-			Description: fmt.Sprintf("Execute the %s phase for: %s", phase, task.Description[:min(200, len(task.Description))]),
+			Description: fmt.Sprintf("Execute the %s phase for: %s", phase, safeDesc[:min(200, len(safeDesc))]),
 		}, nil
 	}
 	o.recordCost(resp, routing.ResolveModelID(model), cost.ContextRoundGoal, task.ID)
@@ -863,6 +869,7 @@ EXPECTED_OUTPUT_3: <third expected output>`,
 }
 
 func (o *Orchestrator) synthesise(task *types.Task) (string, error) {
+	safeDesc := adapters.SanitizePromptContent(task.Description)
 	var filteredFindings []types.Finding
 	rejectedIDs := map[string]bool{}
 	for _, g := range task.PendingGates {
@@ -896,7 +903,7 @@ func (o *Orchestrator) synthesise(task *types.Task) (string, error) {
 	}
 	if primaryProfileID != "" {
 		if p := o.profiles.Get(primaryProfileID); p != nil && p.ToneProfile != nil {
-			snippet := p.ToneProfile.InjectionSnippet
+			snippet := adapters.SanitizePromptContent(p.ToneProfile.InjectionSnippet)
 			if len(snippet) > 2000 {
 				snippet = snippet[:2000]
 			}
@@ -911,7 +918,7 @@ ALL FINDINGS FROM ALL ROUNDS:
 %s
 Produce the final legal output for this task. Structure appropriately for the workflow type: %s.
 Every claim must trace to a specific finding number from the list above.`,
-		task.Description, findingsSummary, toneBlock, task.WorkflowType)
+		safeDesc, findingsSummary, toneBlock, task.WorkflowType)
 
 	tier := types.TierRoot
 	model := routing.SelectModel(o.cfg, routing.SelectParams{
@@ -954,6 +961,7 @@ Every claim must trace to a specific finding number from the list above.`,
 }
 
 func (o *Orchestrator) tabulate(task *types.Task) (*types.TaskTable, error) {
+	safeDesc := adapters.SanitizePromptContent(task.Description)
 	filteredFindings := make([]types.Finding, 0, len(task.Findings))
 	rejectedIDs := map[string]bool{}
 	for _, g := range task.PendingGates {
@@ -991,7 +999,7 @@ Respond with ONLY valid JSON (no prose, no markdown fences):
   "rows": [
     { "Column A": "value", "Column B": "value", "_findingIds": ["<finding id>"] }
   ]
-}`, task.Description, sb.String())
+}`, safeDesc, sb.String())
 
 	tier := types.TierRoot
 	model := routing.SelectModel(o.cfg, routing.SelectParams{Tier: &tier, TaskType: routing.TaskSynthesis})

@@ -151,65 +151,97 @@ func (v *InvoiceValidator) Validate(
 	}
 }
 
+// ledesHeaderNormRE mirrors the TS header normalizer: uppercase, then any
+// character outside [A-Z0-9_/] becomes "_".
+var ledesHeaderNormRE = regexp.MustCompile(`[^A-Z0-9_/]`)
+
 // ParseLEDES parses LEDES 1998B pipe-delimited invoice text into line items.
 func ParseLEDES(text string) []types.InvoiceLineItem {
 	var items []types.InvoiceLineItem
-	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
 
-	// Skip LEDES header line and column header if present
-	startIdx := 0
-	for i, l := range lines {
+	var lines []string
+	for _, l := range strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n") {
 		l = strings.TrimSpace(l)
 		if l == "" || strings.HasPrefix(strings.ToUpper(l), "LEDES") {
-			startIdx = i + 1
 			continue
 		}
-		lower := strings.ToLower(l)
-		if strings.Contains(lower, "line_item") || strings.Contains(lower, "timekeeper") || strings.Contains(lower, "invoice") {
-			startIdx = i + 1
-			break
+		lines = append(lines, l)
+	}
+	if len(lines) == 0 {
+		return items
+	}
+
+	// Column map: lineNum, date, tkName, tkClass, taskCode, actCode, desc,
+	// qty, rate, total. Default to the standard LEDES column order; if the
+	// first line is a column header, resolve indices by name instead of
+	// trusting position. Accept the LEDES1998B aliases
+	// LINE_ITEM_NUMBER_OF_UNITS / LINE_ITEM_AM_BILLED so a file produced by
+	// ExportLedes1998B round-trips without silently losing units and amount.
+	colMap := []int{8, 10, 15, 16, 11, 13, 17, 19, 18, 21}
+	startIdx := 0
+	firstLower := strings.ToLower(lines[0])
+	if strings.Contains(firstLower, "line_item") || strings.Contains(firstLower, "timekeeper") || strings.Contains(firstLower, "invoice") {
+		rawHeaders := splitPipe(lines[0])
+		headers := make([]string, len(rawHeaders))
+		for i, h := range rawHeaders {
+			headers[i] = ledesHeaderNormRE.ReplaceAllString(strings.ToUpper(h), "_")
 		}
-		break
+		col := func(names ...string) int {
+			for _, n := range names {
+				for i, h := range headers {
+					if h == n {
+						return i
+					}
+				}
+			}
+			return -1
+		}
+		colMap = []int{
+			col("LINE_ITEM_NUMBER"),
+			col("LINE_ITEM_DATE"),
+			col("TIMEKEEPER_NAME"),
+			col("TIMEKEEPER_CLASSIFICATION"),
+			col("LINE_ITEM_TASK_CODE"),
+			col("LINE_ITEM_ACTIVITY_CODE"),
+			col("LINE_ITEM_DESCRIPTION"),
+			col("LINE_ITEM_QUANTITY", "LINE_ITEM_NUMBER_OF_UNITS"),
+			col("LINE_ITEM_UNIT_COST"),
+			col("LINE_ITEM_TOTAL", "LINE_ITEM_AM_BILLED"),
+		}
+		startIdx = 1
 	}
 
 	for _, line := range lines[startIdx:] {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
 		fields := splitPipe(line)
 		if len(fields) < 3 {
 			continue
 		}
 		g := func(idx int) string {
-			if idx < len(fields) {
+			if idx >= 0 && idx < len(fields) {
 				return strings.TrimSpace(fields[idx])
 			}
 			return ""
 		}
-		// LEDES column order (0-indexed): see LEDES_COLS in TS source
-		// Indices: lineNum=8, date=10, tkName=15, tkClass=16, taskCode=11,
-		// actCode=13, desc=17, qty=19, rate=18, total=21
-		lineID := g(8)
+		lineID := g(colMap[0])
 		if lineID == "" {
 			lineID = uuid.New().String()
 		}
 		item := types.InvoiceLineItem{
 			LineID:          lineID,
-			Date:            g(10),
-			TimekeeperName:  g(15),
-			TimekeeperClass: g(16),
-			TaskCode:        g(11),
-			ActivityCode:    g(13),
-			Description:     g(17),
+			Date:            g(colMap[1]),
+			TimekeeperName:  g(colMap[2]),
+			TimekeeperClass: g(colMap[3]),
+			TaskCode:        g(colMap[4]),
+			ActivityCode:    g(colMap[5]),
+			Description:     g(colMap[6]),
 		}
-		if h, err := parseFloat(g(19)); err == nil {
+		if h, err := parseFloat(g(colMap[7])); err == nil {
 			item.Hours = &h
 		}
-		if r, err := parseFloat(g(18)); err == nil {
+		if r, err := parseFloat(g(colMap[8])); err == nil {
 			item.Rate = &r
 		}
-		if a, err := parseFloat(g(21)); err == nil {
+		if a, err := parseFloat(g(colMap[9])); err == nil {
 			item.Amount = &a
 		}
 		if item.Description != "" || item.Hours != nil {

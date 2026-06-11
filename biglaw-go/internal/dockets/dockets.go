@@ -258,7 +258,14 @@ func (m *Monitor) CheckDocket(w *types.WatchedDocket) (*types.DocketAlert, error
 		req.Header.Set("Authorization", "Token "+apiKey)
 	}
 
-	client := &http.Client{Timeout: time.Duration(requestTimeoutMs) * time.Millisecond}
+	client := &http.Client{
+		Timeout: time.Duration(requestTimeoutMs) * time.Millisecond,
+		// SSRF redirect-bounce defense: never follow redirects (TS used
+		// redirect: "manual"). A 3xx surfaces below as a non-200 error.
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("CourtListener fetch: %w", err)

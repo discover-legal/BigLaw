@@ -87,14 +87,22 @@ func (c *Client) embedOpenAI(texts []string) ([]EmbeddingResult, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
 		return nil, fmt.Errorf("openai embed decode: %w", err)
 	}
+	// Do not assume the API returns embeddings in request order or in full:
+	// place each result by its `index` field and validate the count. A short
+	// or reordered response would otherwise silently pair texts with the
+	// wrong (or zero-valued) vectors and corrupt the comm graph downstream.
+	if len(r.Data) != len(texts) {
+		return nil, fmt.Errorf("openai embed count mismatch: got %d, expected %d", len(r.Data), len(texts))
+	}
 	results := make([]EmbeddingResult, len(texts))
 	for _, d := range r.Data {
-		if d.Index < len(texts) {
-			results[d.Index] = EmbeddingResult{
-				Text:      texts[d.Index],
-				Embedding: d.Embedding,
-				Model:     c.cfg.Embeddings.Model,
-			}
+		if d.Index < 0 || d.Index >= len(texts) {
+			return nil, fmt.Errorf("openai embed index out of range: %d", d.Index)
+		}
+		results[d.Index] = EmbeddingResult{
+			Text:      texts[d.Index],
+			Embedding: d.Embedding,
+			Model:     c.cfg.Embeddings.Model,
 		}
 	}
 	return results, nil

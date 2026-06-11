@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"sync"
@@ -258,12 +259,31 @@ func (l *Logger) RestoreFromFile() error {
 			l.buffer = append(l.buffer, e)
 		}
 	}
+	// Verify the hash chain across the restored window — the documented
+	// tamper-evidence is only meaningful if it is actually checked. We can only
+	// validate links within the loaded window (the entry before the first one is
+	// not in memory), so start at index 1. A mismatch means the log was edited.
+	for i := 1; i < len(l.buffer); i++ {
+		if l.buffer[i].PrevHash != hashEntry(l.buffer[i-1]) {
+			slog.Warn("Audit hash-chain break detected on restore — log may have been tampered with",
+				"atEntryId", l.buffer[i].ID,
+				"index", i,
+			)
+			break
+		}
+	}
 	if last := len(l.buffer); last > 0 {
-		raw, _ := json.Marshal(l.buffer[last-1])
-		h := sha256.Sum256(raw)
-		l.lastHash = hex.EncodeToString(h[:])
+		l.lastHash = hashEntry(l.buffer[last-1])
 	}
 	return nil
+}
+
+// hashEntry computes the SHA-256 chain hash of an entry's JSON encoding —
+// the same scheme used in Write when advancing lastHash.
+func hashEntry(e AuditEntry) string {
+	raw, _ := json.Marshal(e)
+	h := sha256.Sum256(raw)
+	return hex.EncodeToString(h[:])
 }
 
 func (l *Logger) FlushSinks() error {

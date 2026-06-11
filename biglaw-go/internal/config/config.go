@@ -95,6 +95,10 @@ type AuthConfig struct {
 
 type AgentsConfig struct {
 	MaxToolIterations int
+	// RoundTimeoutMs is the wall-clock cap on a single agent's processing
+	// within a round. Prevents one hung provider/tool call from stalling the
+	// whole round indefinitely.
+	RoundTimeoutMs int
 }
 
 type DyTopoConfig struct {
@@ -379,6 +383,7 @@ func Load() *Config {
 		},
 		Agents: AgentsConfig{
 			MaxToolIterations: envInt("AGENT_MAX_TOOL_ITERATIONS", 6),
+			RoundTimeoutMs:    envInt("AGENT_ROUND_TIMEOUT_MS", 300000),
 		},
 		DyTopo: DyTopoConfig{
 			SimilarityThreshold: envFloat("DYTOPO_SIMILARITY_THRESHOLD", 0.68),

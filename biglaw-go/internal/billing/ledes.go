@@ -19,8 +19,18 @@ const crlf = "\r\n"
 func ExportLedes1998B(entries []types.TimeEntry, invoiceNumber string) string {
 	today := ledesDate(time.Now())
 
-	invoiceTotal := 0.0
+	// Only closed entries with billable units produce invoice lines; the
+	// invoice total and billing period must be computed from those same
+	// entries, or the stated total would not match the sum of the lines.
+	var validEntries []types.TimeEntry
 	for _, e := range entries {
+		if e.BillingUnits > 0 && e.EndedAt != nil {
+			validEntries = append(validEntries, e)
+		}
+	}
+
+	invoiceTotal := 0.0
+	for _, e := range validEntries {
 		if e.BillingAmountUsd != nil {
 			invoiceTotal += *e.BillingAmountUsd
 		}
@@ -28,7 +38,7 @@ func ExportLedes1998B(entries []types.TimeEntry, invoiceNumber string) string {
 
 	// Date range
 	var allDates []time.Time
-	for _, e := range entries {
+	for _, e := range validEntries {
 		allDates = append(allDates, e.StartedAt)
 		if e.EndedAt != nil {
 			allDates = append(allDates, *e.EndedAt)
@@ -59,7 +69,7 @@ func ExportLedes1998B(entries []types.TimeEntry, invoiceNumber string) string {
 
 	invNum := sanitizeField(invoiceNumber)
 	var rows []string
-	for i, e := range entries {
+	for i, e := range validEntries {
 		units := fmt2(float64(e.BillingUnits) * 0.1)
 		rate := "0.00"
 		if e.BillingRate != nil {
@@ -102,7 +112,10 @@ func ExportLedes1998B(entries []types.TimeEntry, invoiceNumber string) string {
 }
 
 func ledesDate(t time.Time) string {
-	return t.Format("20060102")
+	// Use UTC components — invoice dates are derived from UTC timestamps
+	// elsewhere, so a non-UTC server must not shift INVOICE_DATE / line
+	// dates by a day.
+	return t.UTC().Format("20060102")
 }
 
 func fmt2(f float64) string {

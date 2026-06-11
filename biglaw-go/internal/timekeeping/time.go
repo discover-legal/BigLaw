@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/discover-legal/biglaw-go/internal/csvutil"
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
 
@@ -344,11 +345,9 @@ func generateID() string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
 }
 
-// csvEscape wraps a field in double-quotes if it contains a comma, double-quote,
-// or newline, escaping any embedded double-quotes by doubling them.
+// csvEscape quotes a field (RFC 4180, embedded quotes doubled) and
+// neutralizes spreadsheet formula injection via the shared helper — string
+// fields like description and names carry LLM-/user-supplied content.
 func csvEscape(s string) string {
-	if strings.ContainsAny(s, ",\"\n\r") {
-		return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
-	}
-	return s
+	return csvutil.Escape(s)
 }

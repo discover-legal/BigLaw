@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -260,16 +261,49 @@ func (s *ClientStore) Remove(id string) (bool, error) {
 	return removed, nil
 }
 
-// CheckConflict performs a case-insensitive substring match between newClientName
-// and every adversary string listed on every existing client.
-func (s *ClientStore) CheckConflict(newClientName string) types.ConflictCheckResult {
-	lower := strings.ToLower(strings.TrimSpace(newClientName))
+var (
+	normPunctRe  = regexp.MustCompile(`[.,&]`)
+	normSuffixRe = regexp.MustCompile(`\b(inc|llc|llp|ltd|limited|corp|corporation|co|company|plc|gmbh|sa|nv|lp|group|holdings)\b`)
+	normSpaceRe  = regexp.MustCompile(`\s+`)
+)
+
+// normName normalizes an entity name for conflict matching: lowercase, strip
+// punctuation and common corporate suffixes (Inc/LLC/Ltd/…), collapse
+// whitespace. This lets "Acme Inc." match "Acme Corporation". Conflict checks
+// should err toward flagging, so over-matching here is acceptable (it just
+// triggers human review).
+func normName(s string) string {
+	out := strings.ToLower(s)
+	out = normPunctRe.ReplaceAllString(out, " ")
+	out = normSuffixRe.ReplaceAllString(out, " ")
+	out = normSpaceRe.ReplaceAllString(out, " ")
+	return strings.TrimSpace(out)
+}
+
+// CheckConflict checks whether onboarding newClientName (optionally with the
+// new client's own newAdversaries) conflicts with the existing roster.
+// Names are normalized (lowercase, punctuation and entity suffixes stripped)
+// before substring matching. Checks both directions:
+//  1. the new client appears on an existing client's adversary list, and
+//  2. an adversary of the new client is itself an existing client (taking the
+//     matter would put us adverse to a current client).
+func (s *ClientStore) CheckConflict(newClientName string, newAdversaries []string) types.ConflictCheckResult {
+	name := normName(newClientName)
+	if name == "" {
+		return types.ConflictCheckResult{HasConflict: false}
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
+	// 1. New client name vs existing clients' adversary lists.
 	for _, c := range s.clients {
 		for _, adv := range c.Adversaries {
-			if strings.Contains(lower, strings.ToLower(adv)) ||
-				strings.Contains(strings.ToLower(adv), lower) {
+			a := normName(adv)
+			if len(a) < 3 {
+				continue
+			}
+			if strings.Contains(a, name) || strings.Contains(name, a) {
 				return types.ConflictCheckResult{
 					HasConflict:           true,
 					ConflictingClientID:   c.ID,
@@ -279,6 +313,33 @@ func (s *ClientStore) CheckConflict(newClientName string) types.ConflictCheckRes
 			}
 		}
 	}
+
+	// 2. New client's adversaries vs existing client names.
+	type advNorm struct{ raw, norm string }
+	advNorms := make([]advNorm, 0, len(newAdversaries))
+	for _, a := range newAdversaries {
+		n := normName(a)
+		if len(n) >= 3 {
+			advNorms = append(advNorms, advNorm{raw: a, norm: n})
+		}
+	}
+	for _, c := range s.clients {
+		cn := normName(c.Name)
+		if len(cn) < 3 {
+			continue
+		}
+		for _, adv := range advNorms {
+			if strings.Contains(adv.norm, cn) || strings.Contains(cn, adv.norm) {
+				return types.ConflictCheckResult{
+					HasConflict:           true,
+					ConflictingClientID:   c.ID,
+					ConflictingClientName: c.Name,
+					MatchedAdversary:      adv.raw,
+				}
+			}
+		}
+	}
+
 	return types.ConflictCheckResult{HasConflict: false}
 }
 
