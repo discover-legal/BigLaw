@@ -228,7 +228,9 @@ func (r *Runner) RunVerification(finding types.Finding, taskID string) (types.Ve
 	userMsg := fmt.Sprintf("FINDING:\n%s\n\nCITATIONS:\n%s", snippet, strings.Join(citLines, "\n"))
 
 	verChecks := make([]types.VerificationCheck, len(checks))
-	g, _ := errgroup.WithContext(nil)
+	// Zero-value Group: we only need fan-out + Wait, not the derived context
+	// (it was discarded, and passing a nil parent to WithContext panics).
+	var g errgroup.Group
 	for i, checkDesc := range checks {
 		i, checkDesc := i, checkDesc
 		g.Go(func() error {
