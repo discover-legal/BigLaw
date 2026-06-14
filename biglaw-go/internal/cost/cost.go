@@ -80,8 +80,18 @@ type ContextSummary struct {
 	Calls        int     `json:"calls"`
 }
 
-// USD per million tokens — Anthropic list pricing mid-2026.
+// basePricing is the exact-match rate table: model ID → [input, output] USD per
+// million tokens. These are public list prices as of early 2026 and are a
+// starting point, not gospel — override any of them to your negotiated/contract
+// rate with the COST_<FAMILY>_IN/_OUT env vars (see modelClasses below).
+//
+// Rates we can't stand behind are left at {0, 0} (recorded as $0.00, i.e.
+// "recognised but unpriced") rather than fabricated into a billing ledger —
+// set them explicitly via the env overrides. This currently applies to the
+// gpt-5.x flagship tier and to host-variable open-weight models (Llama, Kimi,
+// GLM), whose price depends entirely on which host serves them.
 var basePricing = map[string][2]float64{
+	// Anthropic
 	"claude-haiku-4-5-20251001":  {1.00, 5.00},
 	"claude-haiku-4-5":           {1.00, 5.00},
 	"claude-sonnet-4-6":          {3.00, 15.00},
@@ -91,53 +101,171 @@ var basePricing = map[string][2]float64{
 	"claude-3-5-sonnet-20241022": {3.00, 15.00},
 	"claude-3-haiku-20240307":    {0.25, 1.25},
 	"claude-3-opus-20240229":     {15.00, 75.00},
-	// OpenAI-hosted models routed via the OPENAI_MODEL chat shortcut. Defaults
-	// are 0 (untracked) so we never present a fabricated rate — set the real
-	// list price with COST_GPT_IN / COST_GPT_OUT (USD per million tokens) in
-	// .env, e.g. COST_GPT_IN=1.25 COST_GPT_OUT=10.00. The model IDs must be
-	// present here for the "gpt"/"embed" family overrides below to find them.
-	"gpt-5.5":                 {0, 0},
-	"gpt-5":                   {0, 0},
-	"text-embedding-3-small":  {0, 0},
-	"text-embedding-3-large":  {0, 0},
+
+	// OpenAI — chat (routed via the OPENAI_MODEL shortcut or LOCAL_INFERENCE_*).
+	// gpt-5.5 has no public list price we can cite, so it stays untracked until
+	// COST_GPT_IN/_OUT (or a specific entry) is set.
+	"gpt-5.5":      {0, 0},
+	"gpt-5":        {1.25, 10.00},
+	"gpt-5-mini":   {0.25, 2.00},
+	"gpt-5-nano":   {0.05, 0.40},
+	"gpt-4.1":      {2.00, 8.00},
+	"gpt-4.1-mini": {0.40, 1.60},
+	"gpt-4.1-nano": {0.10, 0.40},
+	"gpt-4o":       {2.50, 10.00},
+	"gpt-4o-mini":  {0.15, 0.60},
+	"o3":           {2.00, 8.00},
+	"o3-mini":      {1.10, 4.40},
+	"o4-mini":      {1.10, 4.40},
+
+	// OpenAI — embeddings (input-only; output rate is 0).
+	"text-embedding-3-small": {0.02, 0},
+	"text-embedding-3-large": {0.13, 0},
+
+	// Google Gemini
+	"gemini-2.5-pro":        {1.25, 10.00},
+	"gemini-2.5-flash":      {0.30, 2.50},
+	"gemini-2.5-flash-lite": {0.10, 0.40},
+	"gemini-2.0-flash":      {0.10, 0.40},
+	"gemini-2.0-flash-lite": {0.075, 0.30},
+	"gemini-1.5-pro":        {1.25, 5.00},
+	"gemini-1.5-flash":      {0.075, 0.30},
+
+	// DeepSeek (first-party API; cache-miss input rate)
+	"deepseek-chat":     {0.27, 1.10},
+	"deepseek-reasoner": {0.55, 2.19},
+
+	// xAI Grok
+	"grok-4":      {3.00, 15.00},
+	"grok-3":      {3.00, 15.00},
+	"grok-3-mini": {0.30, 0.50},
+	"grok-2":      {2.00, 10.00},
+
+	// Alibaba Qwen (DashScope international list prices)
+	"qwen-max":      {1.60, 6.40},
+	"qwen-plus":     {0.40, 1.20},
+	"qwen-turbo":    {0.05, 0.20},
+	"qwen-vl-max":   {1.60, 6.40},
+	"qwen-vl-plus":  {0.21, 0.63},
+
+	// Mistral
+	"mistral-large-latest": {2.00, 6.00},
+	"mistral-large":        {2.00, 6.00},
+	"mistral-medium":       {0.40, 2.00},
+	"mistral-small-latest": {0.10, 0.30},
+	"mistral-small":        {0.10, 0.30},
+	"open-mistral-nemo":    {0.15, 0.15},
+
+	// Cohere
+	"command-a":      {2.50, 10.00},
+	"command-r-plus": {2.50, 10.00},
+	"command-r":      {0.15, 0.60},
+
+	// Amazon Nova
+	"nova-pro":   {0.80, 3.20},
+	"nova-lite":  {0.06, 0.24},
+	"nova-micro": {0.035, 0.14},
+
+	// Moonshot (Kimi) and Zhipu (GLM) — host/plan-variable, untracked by default.
+	"kimi-k2":          {0, 0},
+	"moonshot-v1-128k": {0, 0},
+	"glm-4.6":          {0, 0},
+	"glm-4.5":          {0, 0},
 }
 
-// pricingFamilies are the model families whose pricing can be overridden at
-// startup via COST_<FAMILY>_IN / COST_<FAMILY>_OUT env vars (USD per million
-// tokens), e.g. COST_HAIKU_IN=1.00 COST_HAIKU_OUT=5.00. An override applies
-// to every model in basePricing whose ID contains the family substring.
-// "gpt" matches gpt-5.5 / gpt-5; "text-embedding" matches the OpenAI embedding
-// models. Override their (zero) defaults with COST_GPT_IN/_OUT and
-// COST_TEXT-EMBEDDING_IN/_OUT — though the env key is awkward for the latter,
-// so "embed" is also accepted as an alias for the embedding family.
-var pricingFamilies = []string{"haiku", "sonnet", "opus", "gpt", "embed"}
+// modelClass groups model IDs into a provider family for two jobs:
+//
+//  1. Fallback pricing — when an exact model ID isn't in basePricing (a version
+//     suffix like "deepseek-v3.1" or "gemini-2.5-flash-preview-09"), the first
+//     class whose match substring is contained in the (lowercased) ID supplies
+//     the rate. Order matters: cheaper variants (…-mini/-nano/-lite/-turbo) are
+//     listed before the broad family so a small model isn't priced as a
+//     flagship.
+//
+//  2. Env overrides — COST_<FAMILY>_IN/_OUT (USD per million tokens) retargets
+//     every model in the family at once, e.g. COST_DEEPSEEK_IN=0.27. The same
+//     keys also override matching exact entries in basePricing. A family may
+//     appear on multiple lines (different tiers); one COST_<FAMILY>_* pair
+//     overrides them all.
+//
+// A class with a {0, 0} rate still counts as a recognised model (recorded as
+// $0.00), so its spend appears in the ledger the moment a rate is configured.
+type modelClass struct {
+	family string     // COST_<FAMILY>_IN/_OUT selector (case-insensitive)
+	match  []string   // lowercase model-ID substrings in this family
+	rate   [2]float64 // default [input, output] USD per million tokens
+}
 
-// familyMatch maps a pricing family to the model-ID substring it applies to.
-// Most families are their own substring; "embed" is an alias that targets the
-// text-embedding-* model IDs.
-var familyMatch = map[string]string{"embed": "text-embedding"}
+var modelClasses = []modelClass{
+	// OpenAI
+	{"gpt", []string{"gpt-5-nano", "gpt-4.1-nano"}, [2]float64{0.05, 0.40}},
+	{"gpt", []string{"gpt-5-mini", "gpt-4.1-mini", "gpt-4o-mini"}, [2]float64{0.25, 2.00}},
+	{"gpt", []string{"gpt"}, [2]float64{0, 0}}, // gpt-5.x flagship: set COST_GPT_*
+	{"embed", []string{"text-embedding"}, [2]float64{0.02, 0}},
+	// Google Gemini ("flash-lite" before "flash" before the family)
+	{"gemini", []string{"flash-lite"}, [2]float64{0.075, 0.30}},
+	{"gemini", []string{"flash"}, [2]float64{0.30, 2.50}},
+	{"gemini", []string{"gemini"}, [2]float64{1.25, 10.00}},
+	// DeepSeek (reasoner before the base chat model)
+	{"deepseek", []string{"deepseek-reason", "deepseek-r1"}, [2]float64{0.55, 2.19}},
+	{"deepseek", []string{"deepseek"}, [2]float64{0.27, 1.10}},
+	// xAI Grok
+	{"grok", []string{"grok-3-mini", "grok-4-mini"}, [2]float64{0.30, 0.50}},
+	{"grok", []string{"grok"}, [2]float64{3.00, 15.00}},
+	// Alibaba Qwen
+	{"qwen", []string{"qwen-turbo"}, [2]float64{0.05, 0.20}},
+	{"qwen", []string{"qwen-plus"}, [2]float64{0.40, 1.20}},
+	{"qwen", []string{"qwen"}, [2]float64{1.60, 6.40}},
+	// Mistral (small/edge tier before the large tier)
+	{"mistral", []string{"mistral-small", "ministral", "nemo"}, [2]float64{0.10, 0.30}},
+	{"mistral", []string{"mistral", "mixtral", "codestral", "magistral", "pixtral"}, [2]float64{2.00, 6.00}},
+	// Cohere
+	{"cohere", []string{"command-r-plus", "command-a"}, [2]float64{2.50, 10.00}},
+	{"cohere", []string{"command"}, [2]float64{0.15, 0.60}},
+	// Amazon Nova
+	{"nova", []string{"nova-micro"}, [2]float64{0.035, 0.14}},
+	{"nova", []string{"nova-lite"}, [2]float64{0.06, 0.24}},
+	{"nova", []string{"nova"}, [2]float64{0.80, 3.20}},
+	// Host-variable open-weight / less-public families: recognised, untracked
+	// until COST_<FAMILY>_* is set.
+	{"kimi", []string{"kimi", "moonshot"}, [2]float64{0, 0}},
+	{"glm", []string{"glm"}, [2]float64{0, 0}},
+	{"llama", []string{"llama"}, [2]float64{0, 0}},
+	// Anthropic (exact entries already cover the dated IDs; these catch drift)
+	{"haiku", []string{"haiku"}, [2]float64{1.00, 5.00}},
+	{"sonnet", []string{"sonnet"}, [2]float64{3.00, 15.00}},
+	{"opus", []string{"opus"}, [2]float64{15.00, 75.00}},
+}
 
 func init() {
 	applyPricingEnvOverrides(basePricing)
+	applyClassPricingOverrides()
+}
+
+// familySubstrings returns each override family mapped to the union of its
+// match substrings, derived from modelClasses so the family list never drifts
+// from the price table.
+func familySubstrings() map[string][]string {
+	out := map[string][]string{}
+	for _, c := range modelClasses {
+		out[c.family] = append(out[c.family], c.match...)
+	}
+	return out
 }
 
 // applyPricingEnvOverrides applies the COST_<FAMILY>_IN/_OUT env vars to the
-// given pricing table in place. Unset, non-numeric, or negative values are
-// ignored (the built-in rate stands).
+// given exact-match pricing table in place. An override hits every entry whose
+// (lowercased) ID contains any of the family's match substrings. Unset,
+// non-numeric, or negative values are ignored (the built-in rate stands).
 func applyPricingEnvOverrides(pricing map[string][2]float64) {
-	for _, family := range pricingFamilies {
-		key := strings.ToUpper(family)
-		in, inOK := parsePriceEnv("COST_" + key + "_IN")
-		out, outOK := parsePriceEnv("COST_" + key + "_OUT")
+	for family, subs := range familySubstrings() {
+		in, inOK := parsePriceEnv("COST_" + strings.ToUpper(family) + "_IN")
+		out, outOK := parsePriceEnv("COST_" + strings.ToUpper(family) + "_OUT")
 		if !inOK && !outOK {
 			continue
 		}
-		match := family
-		if m, ok := familyMatch[family]; ok {
-			match = m
-		}
 		for model, p := range pricing {
-			if !strings.Contains(model, match) {
+			if !containsAny(strings.ToLower(model), subs) {
 				continue
 			}
 			if inOK {
@@ -149,6 +277,30 @@ func applyPricingEnvOverrides(pricing map[string][2]float64) {
 			pricing[model] = p
 		}
 	}
+}
+
+// applyClassPricingOverrides applies the COST_<FAMILY>_IN/_OUT env vars to the
+// modelClasses fallback table in place, so an override reaches version-drift
+// IDs that only resolve through the substring fallback.
+func applyClassPricingOverrides() {
+	for i := range modelClasses {
+		fam := strings.ToUpper(modelClasses[i].family)
+		if in, ok := parsePriceEnv("COST_" + fam + "_IN"); ok {
+			modelClasses[i].rate[0] = in
+		}
+		if out, ok := parsePriceEnv("COST_" + fam + "_OUT"); ok {
+			modelClasses[i].rate[1] = out
+		}
+	}
+}
+
+func containsAny(s string, subs []string) bool {
+	for _, sub := range subs {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
 }
 
 // parsePriceEnv reads an env var as a non-negative USD-per-million-tokens rate.
@@ -164,8 +316,25 @@ func parsePriceEnv(name string) (float64, bool) {
 	return f, true
 }
 
+// lookupPricing resolves a model ID to its [input, output] rate: an exact
+// basePricing hit first, then the first modelClasses substring match. The bool
+// is false only for a genuinely unrecognised model, which records no cost
+// (nil) rather than a misleading $0.00.
+func lookupPricing(model string) ([2]float64, bool) {
+	if p, ok := basePricing[model]; ok {
+		return p, true
+	}
+	lm := strings.ToLower(model)
+	for _, c := range modelClasses {
+		if containsAny(lm, c.match) {
+			return c.rate, true
+		}
+	}
+	return [2]float64{}, false
+}
+
 func CalcCostUSD(model string, input, output, cacheWrite, cacheRead int) *float64 {
-	p, ok := basePricing[model]
+	p, ok := lookupPricing(model)
 	if !ok {
 		return nil
 	}
@@ -220,6 +389,7 @@ func (s *Store) Init(file string) error {
 	// Infisical, so env vars sourced there are only visible now. Assigning
 	// absolute rates is idempotent.
 	applyPricingEnvOverrides(basePricing)
+	applyClassPricingOverrides()
 	s.file = file
 	if err := os.MkdirAll(filepath.Dir(file), 0755); err != nil {
 		return err

@@ -61,11 +61,26 @@ func envList(key, fallback string) []string {
 	return result
 }
 
-type AnthropicConfig struct {
-	APIKey               string
-	Model                string
-	BaseURL              string
-	ThinkingBudgetTokens int
+// ModelConfig selects the platform's model stack — always an OpenAI-compatible
+// endpoint. The default is Qwen (Alibaba) over its DashScope endpoint. No
+// Anthropic/Claude path ships in this build by choice. The four tiers map onto
+// the historical heavy/mid/light roles plus a vision tier for omnimodal
+// document extraction:
+//
+//	Heavy  — synthesis, debate, the root orchestrator, high-complexity reasoning
+//	Mid    — domain managers, T2 specialists, drafting (the default tier)
+//	Light  — descriptors, extraction, routing, translation, T3 tool agents
+//	Vision — image / scanned-document understanding (Qwen-VL etc.)
+//
+// PrimaryURL/PrimaryKey point the OpenAI-compatible provider at the stack's host.
+type ModelConfig struct {
+	Stack      string // "qwen" (default) | "glm" | "kimi" | "custom"
+	PrimaryURL string // OpenAI-compatible base URL
+	PrimaryKey string // API key for PrimaryURL
+	Heavy      string
+	Mid        string
+	Light      string
+	Vision     string
 }
 
 type EmbeddingsConfig struct {
@@ -322,8 +337,43 @@ type ConnectorsConfig struct {
 	TopCounsel    ConnectorConfig
 }
 
+// BlobConfig selects the attachment blob backend (see internal/blob). The
+// bundled backends are all open / vendor-neutral: local disk (default), WebDAV
+// (RFC 4918), Supabase Storage's native REST API, and an OCI registry via ORAS
+// ("the open container thing"). AWS S3 is deliberately not offered.
+type BlobConfig struct {
+	Backend string // "disk" (default) | "webdav" | "supabase" | "oci"
+	Dir     string // disk root
+
+	// WebDAV
+	WebDAVURL  string
+	WebDAVUser string
+	WebDAVPass string
+
+	// Supabase Storage (native REST API, not S3)
+	SupabaseURL    string // project URL, e.g. https://<ref>.supabase.co
+	SupabaseBucket string
+	SupabaseKey    string // service-role or storage key
+
+	// OCI registry (ORAS)
+	OCIRef       string // registry/repository, e.g. ghcr.io/acme/biglaw-attachments
+	OCIUser      string
+	OCIPass      string
+	OCIPlainHTTP bool // for local/insecure registries
+}
+
+// DatabaseConfig selects the durable persistence backend (see internal/store).
+// Default is a local pure-Go SQLite file; set DATABASE_URL to a postgres:// DSN
+// for the cloud backend (Supabase/Neon/RDS) with database-level RLS.
+type DatabaseConfig struct {
+	Backend    string // "sqlite" (default) | "postgres" | "memory"
+	SQLitePath string
+	URL        string // postgres DSN, when Backend=postgres
+}
+
 type Config struct {
-	Anthropic    AnthropicConfig
+	Model        ModelConfig
+	Database     DatabaseConfig
 	Embeddings   EmbeddingsConfig
 	VectorDB     VectorDBConfig
 	API          APIConfig
@@ -343,6 +393,11 @@ type Config struct {
 	Connectors   ConnectorsConfig
 	SearchTavily string
 	LogLevel     string
+	Blob         BlobConfig
+	// ReasoningEffort, when set ("low"/"medium"/"high"), is forwarded as the
+	// OpenAI-standard reasoning_effort on heavy "thinking" calls for endpoints
+	// that support it (o-series, OpenRouter, DeepSeek-R1, …). Empty = omit it.
+	ReasoningEffort string
 	Email        EmailConfig
 	Bots         BotsConfig
 	Playbooks    PlaybooksConfig
@@ -363,11 +418,10 @@ func normalizeEnum(v, fallback string, allowed ...string) string {
 
 func Load() *Config {
 	c := &Config{
-		Anthropic: AnthropicConfig{
-			APIKey:               os.Getenv("ANTHROPIC_API_KEY"),
-			Model:                env("ANTHROPIC_MODEL", "claude-opus-4-8"),
-			BaseURL:              os.Getenv("ANTHROPIC_BASE_URL"),
-			ThinkingBudgetTokens: envInt("THINKING_BUDGET_TOKENS", 10000),
+		Database: DatabaseConfig{
+			Backend:    normalizeEnum(os.Getenv("DB_BACKEND"), "sqlite", "sqlite", "postgres", "memory"),
+			SQLitePath: env("SQLITE_PATH", "./data/biglaw.db"),
+			URL:        os.Getenv("DATABASE_URL"),
 		},
 		Embeddings: EmbeddingsConfig{
 			APIKey:     env("OPENAI_API_KEY", ""),
@@ -480,6 +534,21 @@ func Load() *Config {
 		},
 		SearchTavily: os.Getenv("TAVILY_API_KEY"),
 		LogLevel:     env("LOG_LEVEL", "info"),
+		Blob: BlobConfig{
+			Backend:        normalizeEnum(os.Getenv("BLOB_BACKEND"), "disk", "disk", "webdav", "supabase", "oci"),
+			Dir:            env("BLOB_DIR", "./data/attachments"),
+			WebDAVURL:      os.Getenv("BLOB_WEBDAV_URL"),
+			WebDAVUser:     os.Getenv("BLOB_WEBDAV_USER"),
+			WebDAVPass:     os.Getenv("BLOB_WEBDAV_PASS"),
+			SupabaseURL:    os.Getenv("BLOB_SUPABASE_URL"),
+			SupabaseBucket: env("BLOB_SUPABASE_BUCKET", "attachments"),
+			SupabaseKey:    os.Getenv("BLOB_SUPABASE_KEY"),
+			OCIRef:         os.Getenv("BLOB_OCI_REF"),
+			OCIUser:        os.Getenv("BLOB_OCI_USER"),
+			OCIPass:        os.Getenv("BLOB_OCI_PASS"),
+			OCIPlainHTTP:   envBool("BLOB_OCI_PLAIN_HTTP", false),
+		},
+		ReasoningEffort: normalizeEnum(os.Getenv("REASONING_EFFORT"), "", "low", "medium", "high"),
 		Playbooks: PlaybooksConfig{
 			File: env("PLAYBOOKS_FILE", "./data/playbooks.json"),
 		},
@@ -588,7 +657,62 @@ func Load() *Config {
 			c.Local.LocalInferenceTiers = env("OPENAI_TIERS", "all")
 		}
 	}
+
+	c.Model = loadModelStack()
 	return c
+}
+
+// loadModelStack resolves the primary model stack from MODEL_STACK plus optional
+// per-tier and endpoint overrides. The default is Qwen over DashScope's
+// international OpenAI-compatible endpoint. Generic MODEL_HEAVY/MID/LIGHT/VISION
+// overrides win over any preset, and PRIMARY_MODEL_URL/KEY override the endpoint
+// — together they make "custom" (or any stack) point anywhere without code.
+func loadModelStack() ModelConfig {
+	stack := normalizeEnum(os.Getenv("MODEL_STACK"), "qwen", "qwen", "glm", "kimi", "custom")
+	m := ModelConfig{Stack: stack}
+
+	switch stack {
+	case "glm":
+		m.PrimaryURL = env("GLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4")
+		m.PrimaryKey = env("GLM_API_KEY", os.Getenv("PRIMARY_MODEL_KEY"))
+		m.Heavy = "glm-4.6"
+		m.Mid = "glm-4.5-air"
+		m.Light = "glm-4-flash"
+		m.Vision = "glm-4v"
+	case "kimi":
+		m.PrimaryURL = env("KIMI_BASE_URL", env("MOONSHOT_BASE_URL", "https://api.moonshot.ai/v1"))
+		m.PrimaryKey = env("KIMI_API_KEY", env("MOONSHOT_API_KEY", os.Getenv("PRIMARY_MODEL_KEY")))
+		m.Heavy = "kimi-k2-0905-preview"
+		m.Mid = "moonshot-v1-32k"
+		m.Light = "moonshot-v1-8k"
+		m.Vision = "moonshot-v1-128k-vision-preview"
+	case "custom":
+		m.PrimaryURL = os.Getenv("PRIMARY_MODEL_URL")
+		m.PrimaryKey = os.Getenv("PRIMARY_MODEL_KEY")
+		// All tier IDs come from the MODEL_* overrides below.
+	default: // qwen
+		m.PrimaryURL = env("QWEN_BASE_URL", env("DASHSCOPE_BASE_URL",
+			"https://dashscope-intl.aliyuncs.com/compatible-mode/v1"))
+		m.PrimaryKey = env("QWEN_API_KEY", env("DASHSCOPE_API_KEY", os.Getenv("PRIMARY_MODEL_KEY")))
+		m.Heavy = "qwen-max"
+		m.Mid = "qwen-plus"
+		m.Light = "qwen-turbo"
+		m.Vision = "qwen-vl-max"
+	}
+
+	// Endpoint override applies to any non-Claude stack.
+	if v := os.Getenv("PRIMARY_MODEL_URL"); v != "" {
+		m.PrimaryURL = v
+	}
+	if v := os.Getenv("PRIMARY_MODEL_KEY"); v != "" {
+		m.PrimaryKey = v
+	}
+	// Per-tier overrides win over the preset (e.g. mix a Claude tier into Qwen).
+	m.Heavy = env("MODEL_HEAVY", m.Heavy)
+	m.Mid = env("MODEL_MID", m.Mid)
+	m.Light = env("MODEL_LIGHT", m.Light)
+	m.Vision = env("MODEL_VISION", m.Vision)
+	return m
 }
 
 // Has returns true if the named environment variable is set and non-empty.

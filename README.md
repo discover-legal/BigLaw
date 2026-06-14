@@ -130,37 +130,42 @@ may be stored locally. Where that data goes depends entirely on how you have dep
 flowchart LR
     BL["BigLaw"]
 
-    BL -->|"default<br/>ANTHROPIC_API_KEY"| ANT["Anthropic API<br/><i>Haiku / Sonnet / Opus</i><br/>─────────────<br/>Data leaves infrastructure<br/>BAA: enterprise tier only<br/>Review DPA before use"]
-
-    BL -->|"OPENAI_API_KEY or<br/>AZURE_OPENAI_*"| OAI["OpenAI / Azure OpenAI<br/><i>GPT-4o etc.</i><br/>─────────────<br/>Data leaves infrastructure<br/>BAA: ChatGPT Ent / Azure only<br/>Azure has stronger DPA terms"]
+    BL -->|"default<br/>MODEL_STACK=qwen<br/>QWEN_API_KEY"| QWEN["Qwen via DashScope<br/><i>Max / Plus / Turbo / VL</i><br/>─────────────<br/>OpenAI-compatible API<br/>Data leaves infrastructure<br/>Review DPA before use"]
 
     BL -->|"OLLAMA_ENABLED=true<br/>LOCAL_INFERENCE_URL"| LOC["Local inference<br/><i>Ollama · LM Studio · vLLM</i><br/>─────────────<br/>Data stays on your hardware<br/>No BAA needed<br/>Air-gap capable"]
 
     style LOC fill:#166534,color:#fff
-    style ANT fill:#1e3a5f,color:#fff
-    style OAI fill:#1e3a5f,color:#fff
+    style QWEN fill:#1e3a5f,color:#fff
 ```
 
-- **Anthropic API (default)** — data is sent to Anthropic's servers subject to their data
-  processing terms and usage policies. Review these before using with client data.
-- **OpenAI / Azure OpenAI** — data is sent to OpenAI or Microsoft's servers subject to their
-  respective terms. Azure OpenAI offers enterprise data handling commitments that the standard
-  OpenAI API does not.
+> **Open, free, secure, private — and opinionated about it.** BigLaw concentrates its support and
+> compatibility on the projects and vendors that share those values. High-risk, closed vendors that
+> make ecosystem-harming moves are actively deprioritized, gated, or hidden — regardless of how
+> popular they are. A startup breaker enforces this: the platform will not run against a gated
+> vendor's service unless an operator deliberately overrides it.
+
+- **Qwen via DashScope (default)** — the platform default stack (`MODEL_STACK=qwen`). Four tiers
+  (`qwen-max`/`qwen-plus`/`qwen-turbo` + vision `qwen-vl-max`) over Alibaba's OpenAI-compatible
+  endpoint. Data is sent to DashScope subject to their terms; review before using with client data.
+- **Other clouds (GLM, Kimi, OpenAI, DeepSeek …)** — any OpenAI-compatible endpoint via
+  `MODEL_STACK`/`PRIMARY_MODEL_URL` (or the `OPENAI_MODEL` shortcut). Data leaves your infrastructure.
 - **Ollama / LM Studio / local inference** (`OLLAMA_ENABLED=true` or `LOCAL_INFERENCE_URL`) —
   data never leaves your infrastructure. For air-gapped or maximally confidential deployments,
   local inference is the only option that gives you complete data control.
 
 **Regardless of backend, data may also be:**
-- Stored in the local vector database (persists to disk at `./data/`)
+- Stored in the durable document store — local **SQLite** at `./data/biglaw.db` by default, or
+  **Postgres** (`DATABASE_URL`) with database-level row-level security. Vector indexes and
+  retained attachment blobs also persist under `./data/`
 - Written to the audit log (JSONL, also on disk)
 - Included in prompts that are cached by a cloud API provider
 
 **Regulatory obligations depend on your jurisdiction and the nature of the data:**
 
 - **HIPAA (US)** — if you process protected health information, you need a Business Associate
-  Agreement (BAA) with your model provider. Anthropic offers BAAs on certain enterprise tiers
-  only. OpenAI offers BAAs on ChatGPT Enterprise and Azure OpenAI. Standard API tiers typically
-  do not include BAA coverage. If you cannot get a BAA, use local inference.
+  Agreement (BAA) with your model provider. BAA availability and terms vary by provider and tier,
+  and standard API tiers typically do not include BAA coverage. Confirm with your provider before
+  processing PHI. If you cannot get a BAA, use local inference.
 - **GDPR (EU/EEA)** — processing personal data of EU residents requires a lawful basis and,
   for cloud providers, appropriate Standard Contractual Clauses or equivalent transfer mechanisms.
   Data residency matters. Check where your provider processes and stores data.
@@ -206,8 +211,8 @@ outputs are not a substitute for jurisdiction-specific legal expertise.
 
 ### Third-Party Services
 
-BigLaw integrates with numerous third-party services — Anthropic, Microsoft Graph, Google
-Workspace, Slack, Clio, CourtListener, Westlaw, Everlaw, Ironclad, DocuSign, and others.
+BigLaw integrates with numerous third-party services — your chosen model provider, Microsoft
+Graph, Google Workspace, Slack, Clio, CourtListener, Westlaw, Everlaw, Ironclad, DocuSign, and others.
 Your use of those services through this software is governed by their own terms. BigLaw is
 not affiliated with, endorsed by, or a certified partner of any of these services.
 
@@ -269,7 +274,7 @@ _Estimates based on publicly reported ranges and firm procurement disclosures. E
 | 25 lawyers | $1,250,000 | $3,800,000 | **$0** | $1.25M–3.8M |
 | 50 lawyers | $2,500,000 | $7,600,000 | **$0** | $2.5M–7.6M |
 
-**What you actually pay to run BigLaw:** your Anthropic API bill.
+**What you actually pay to run BigLaw:** your model-provider API bill (Qwen/DashScope by default).
 At typical usage (10 lawyers, moderate workload): ~$100–300/month — call it **$2,400/year**.
 
 That's the spread: $500,000/year vs $2,400/year for the same capability.
@@ -353,7 +358,7 @@ graph TD
     T2E["Epistemic agents ×26<br/><i>contract · M&A · privacy · antitrust<br/>employment · IP · tax · litigation…</i>"]
     T2C["Conceptual agents ×8<br/><i>materiality · liability · causation<br/>enforceability · good faith…</i>"]
     T2W["Writing agents ×13<br/><i>brief · memo · redline · headnote<br/>precedent · NDA · opinion…</i>"]
-    T2S["Specialist bench ×72<br/><i>Claude for Legal practice-area specialists<br/>+ goliath-killer agents</i>"]
+    T2S["Specialist bench ×72<br/><i>practice-area specialists<br/>+ goliath-killer agents</i>"]
     T3["Tool agents ×7<br/><i>web search · retrieval · extraction<br/>translation · citation check…</i>"]
     WB[("Intra-round<br/>whiteboard")]
     MEM[("Inter-round<br/>memory store")]
@@ -542,7 +547,7 @@ curl -fsSL https://raw.githubusercontent.com/discover-legal/BigLaw/main/setup.sh
 Needs git + Docker. Handles everything: clones the repo if needed, seeds `.env` from
 `.env.example`, builds and starts the three-container stack (TypeDB → conflict-graph sidecar →
 BigLaw core), and waits for the REST API at **http://localhost:3102**. Add your
-`ANTHROPIC_API_KEY` (or local-inference settings) to `.env` — unconfigured connectors degrade
+`QWEN_API_KEY` (or local-inference settings) to `.env` — unconfigured connectors degrade
 gracefully. Re-run any time.
 
 ### Already have the repo cloned?
@@ -558,7 +563,8 @@ three-container Docker stack. The retired TypeScript implementation is preserved
 git tag **`typescript-final`**.
 
 ```bash
-# Secrets — at minimum ANTHROPIC_API_KEY, or LOCAL_INFERENCE_* for Ollama/LM Studio
+# Secrets — by default the model stack is Qwen, so set QWEN_API_KEY (DashScope).
+# Or LOCAL_INFERENCE_* for Ollama/LM Studio, or another MODEL_STACK (glm/kimi/custom).
 cp .env.example .env
 
 # The whole stack: TypeDB → conflict-graph sidecar → BigLaw core
@@ -583,6 +589,48 @@ BIG_MICHAEL_API=http://localhost:3102 npm run dev   # workbench on :5173
 
 Open **http://localhost:5173** — convene a matter, watch rounds stream live, approve gates,
 review contracts against your playbook, and pull cited findings and tabular-review CSVs.
+
+### Model stack, persistence & documents
+
+**Model stack.** The default is **Qwen** over DashScope's OpenAI-compatible API. Four tiers plus a
+vision tier for omnimodal document extraction:
+
+| Tier | Role | Default (qwen) |
+|---|---|---|
+| Heavy | synthesis · debate · root orchestrator · high-complexity | `qwen-max` |
+| Mid | managers · specialists · drafting · extraction reconcile | `qwen-plus` |
+| Light | descriptors · extraction · routing · translation · tool agents · classification | `qwen-turbo` |
+| Vision | images · scanned / handwritten documents | `qwen-vl-max` |
+
+`MODEL_STACK` selects the family — `qwen` (default) · `glm` · `kimi` · `custom` — and you can point
+any stack at an arbitrary OpenAI-compatible endpoint with `PRIMARY_MODEL_URL`/`PRIMARY_MODEL_KEY`.
+BigLaw is open, free, secure, and private, and it prioritizes vendors that share those values;
+high-risk, closed vendors that make ecosystem-harming moves are gated by a startup breaker
+regardless of their popularity, and running against one takes a deliberate operator override.
+
+**Persistence & row-level security.** Documents persist through a storage seam:
+- **SQLite** (default, pure-Go, no cgo) at `./data/biglaw.db` — ideal for local/Pi installs.
+- **Postgres** (`DATABASE_URL`, e.g. Supabase, Neon, self-hosted) with **`FORCE` row-level
+  security**, **default-deny** policies keyed on the request's lawyer/partner identity (set
+  per-transaction), layered *under* the existing application-layer access checks (defense in depth).
+  ⚠ RLS only binds **non-superuser** roles — connect as a plain app role (on Supabase, not `service_role`).
+
+**Omnimodal documents.** `/documents/upload` accepts PDF (digital + scanned), Word (`.docx`),
+images, and text. Extraction is hybrid: the embedded text layer is verbatim ground truth and the
+vision model (Qwen-VL) reconciles scans/tables/figures; standalone images go straight to the VLM.
+Original images/PDFs are **retained** as attachments (metadata RLS-scoped; bytes in the blob store)
+and can be **placed** into generated PDFs. The blob store is pluggable across open, vendor-neutral
+backends — local **disk** (default), **WebDAV**, **Supabase Storage** (native API), or an **OCI
+registry** via ORAS (`BLOB_BACKEND`); AWS S3 is deliberately not offered. New endpoints:
+
+```
+GET  /documents/attachments/:docId           list a document's retained attachments
+GET  /documents/attachments/:docId/:attId    stream an attachment's bytes (RLS-scoped)
+GET  /documents/export/:docId                render the document (text + images) to PDF
+```
+
+Full configuration lives in `.env.example` (`MODEL_STACK`/`QWEN_*`, `DB_BACKEND`/`DATABASE_URL`,
+`BLOB_DIR`, `EXTRACT_VISION_*`).
 
 ### Run modes — browsing **and** the Claude Code MCP at the same time
 
@@ -967,12 +1015,12 @@ reads at 0.10×.
 
 | Model | Input | Output |
 |---|---|---|
-| Claude Haiku 4.5 | $1 | $5 |
-| Claude Sonnet 4.6 | $3 | $15 |
-| Claude Opus 4.8 | $15 | $75 |
+| Qwen-Turbo (light) | $0.05 | $0.20 |
+| Qwen-Plus (mid) | $0.40 | $1.20 |
+| Qwen-Max (heavy) | $1.60 | $6.40 |
 
-Override per model family via env: `COST_HAIKU_IN/OUT`, `COST_SONNET_IN/OUT`,
-`COST_OPUS_IN/OUT` (USD per MTok).
+Override per model family via env: `COST_QWEN_IN/OUT`, `COST_DEEPSEEK_IN/OUT`,
+`COST_GLM_IN/OUT` (USD per MTok). The built-in table prices the major global families.
 
 **Local power estimate:** set `LOCAL_INFERENCE_WATTS` to your GPU's TDP (default 250 W) —
 local-inference calls record estimated watt-hours instead of USD.

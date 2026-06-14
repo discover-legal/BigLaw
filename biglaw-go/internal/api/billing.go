@@ -48,12 +48,13 @@ func (s *Server) billingInit() {
 		if err := billingPreBills.Init(); err != nil {
 			slog.Warn("billing: pre-bill store load failed", "path", s.cfg.Persistence.PreBillsFile, "err", err)
 		}
-		provider := s.orch.Providers().MustGet(routing.ModelHaiku)
-		billingOcg = ocg.NewStore(s.cfg.Persistence.OcgFile, provider, routing.ModelHaiku)
+		lightID, midID := routing.Light(s.cfg), routing.Mid(s.cfg)
+		provider := s.orch.Providers().MustGet(lightID)
+		billingOcg = ocg.NewStore(s.cfg.Persistence.OcgFile, provider, lightID)
 		if err := billingOcg.Init(); err != nil {
 			slog.Warn("billing: OCG store load failed", "path", s.cfg.Persistence.OcgFile, "err", err)
 		}
-		billingValidator = billing.NewInvoiceValidator(provider, routing.ModelHaiku, routing.ModelSonnet)
+		billingValidator = billing.NewInvoiceValidator(provider, lightID, midID)
 	})
 }
 

@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { api } from "./api";
-import type { DocumentRef, IngestResult, SearchResult } from "./types";
+import type { DocumentRef, IngestResult, SearchResult, Attachment } from "./types";
 import { PRACTICE_AREAS } from "./types";
 import { timeAgo } from "./primitives";
 
@@ -34,6 +34,20 @@ export function LibraryPage({ notify }: { notify: (m: string) => void }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [searching, setSearching] = useState(false);
+
+  // per-document attachment preview (expand-on-click)
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [attachments, setAttachments] = useState<Record<string, Attachment[]>>({});
+
+  function toggleRow(id: string) {
+    const next = expandedId === id ? null : id;
+    setExpandedId(next);
+    if (next && !attachments[next]) {
+      api.listAttachments(next)
+        .then((a) => setAttachments((prev) => ({ ...prev, [next]: a })))
+        .catch(() => setAttachments((prev) => ({ ...prev, [next]: [] })));
+    }
+  }
 
   function loadDocs() {
     setDocsLoading(true);
@@ -120,7 +134,7 @@ export function LibraryPage({ notify }: { notify: (m: string) => void }) {
               <div className="empty" style={{ height: "auto", padding: "60px 20px" }}>
                 <div className="glyph">⊞</div>
                 <h2>The library is empty</h2>
-                <p>Ingest a document by pasting text or uploading a PDF — every document becomes searchable and attachable to matters.</p>
+                <p>Ingest a document by pasting text or uploading a PDF, Word file, or image — every document becomes searchable and attachable to matters.</p>
                 <div style={{ display: "flex", gap: 10 }}>
                   <button className="btn primary" onClick={() => setMode("upload")}>⬆ Upload a file</button>
                   <button className="btn" onClick={() => setMode("ingest")}>Paste text</button>
@@ -133,22 +147,37 @@ export function LibraryPage({ notify }: { notify: (m: string) => void }) {
                   <table className="grid">
                     <thead>
                       <tr>
-                        <th>Title</th><th>Type</th><th>Practice area</th><th>Jurisdiction</th><th>Client</th><th>Ingested</th>
+                        <th>Title</th><th>Type</th><th>Practice area</th><th>Jurisdiction</th><th>Client</th><th>Ingested</th><th>Export</th>
                       </tr>
                     </thead>
                     <tbody>
                       {filteredDocs.map((d) => (
-                        <tr key={d.id}>
-                          <td>
-                            <div style={{ fontWeight: 500, color: "var(--text)" }}>{d.title}</div>
-                            <div className="grid-meta" style={{ marginTop: 3 }}>{d.id}</div>
-                          </td>
-                          <td>{d.documentType ? <span className="doc-type">{d.documentType}</span> : "—"}</td>
-                          <td>{d.practiceArea ? <span className="pill sm blue">{d.practiceArea}</span> : "—"}</td>
-                          <td style={{ whiteSpace: "nowrap" }}>{d.jurisdiction || "—"}</td>
-                          <td>{d.detectedClientNumber ? <span className="pill sm gold">{d.detectedClientNumber}</span> : "—"}</td>
-                          <td style={{ whiteSpace: "nowrap", color: "var(--text-dim)" }}>{d.ingestedAt ? timeAgo(d.ingestedAt) : "—"}</td>
-                        </tr>
+                        <Fragment key={d.id}>
+                          <tr style={{ cursor: "pointer" }} onClick={() => toggleRow(d.id)}>
+                            <td>
+                              <div style={{ fontWeight: 500, color: "var(--text)" }}>
+                                <span style={{ color: "var(--text-faint)", marginRight: 6 }}>{expandedId === d.id ? "▾" : "▸"}</span>
+                                {d.title}
+                              </div>
+                              <div className="grid-meta" style={{ marginTop: 3 }}>{d.id}</div>
+                            </td>
+                            <td>{d.documentType ? <span className="doc-type">{d.documentType}</span> : "—"}</td>
+                            <td>{d.practiceArea ? <span className="pill sm blue">{d.practiceArea}</span> : "—"}</td>
+                            <td style={{ whiteSpace: "nowrap" }}>{d.jurisdiction || "—"}</td>
+                            <td>{d.detectedClientNumber ? <span className="pill sm gold">{d.detectedClientNumber}</span> : "—"}</td>
+                            <td style={{ whiteSpace: "nowrap", color: "var(--text-dim)" }}>{d.ingestedAt ? timeAgo(d.ingestedAt) : "—"}</td>
+                            <td onClick={(e) => e.stopPropagation()}>
+                              <a className="btn sm" href={api.exportDocumentUrl(d.id)} target="_blank" rel="noreferrer" title="Download as PDF (text + images)">⤓ PDF</a>
+                            </td>
+                          </tr>
+                          {expandedId === d.id && (
+                            <tr>
+                              <td colSpan={7} style={{ background: "var(--bg-soft, rgba(0,0,0,0.02))" }}>
+                                <AttachmentStrip docId={d.id} attachments={attachments[d.id]} />
+                              </td>
+                            </tr>
+                          )}
+                        </Fragment>
                       ))}
                     </tbody>
                   </table>
@@ -197,7 +226,7 @@ export function LibraryPage({ notify }: { notify: (m: string) => void }) {
 
         {mode === "upload" && (
           <div className="panel-body" style={{ maxWidth: 760 }}>
-            <input ref={fileRef} type="file" accept=".pdf,.txt,.md,.csv,.json,.log,.rtf" style={{ display: "none" }}
+            <input ref={fileRef} type="file" accept=".pdf,.docx,.txt,.md,.markdown,.csv,.json,.log,.rtf,.png,.jpg,.jpeg,.gif,.webp,.bmp,.tif,.tiff,image/*" style={{ display: "none" }}
               onChange={(e) => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ""; }} />
             <div
               style={{
@@ -213,7 +242,7 @@ export function LibraryPage({ notify }: { notify: (m: string) => void }) {
                 <>
                   <div style={{ fontSize: 32, marginBottom: 10 }}>⊕</div>
                   <div>Click to select or drag &amp; drop a file</div>
-                  <div style={{ fontSize: 12, marginTop: 6, color: "var(--text-faint)" }}>PDF, TXT, MD, CSV, JSON up to 25 MB</div>
+                  <div style={{ fontSize: 12, marginTop: 6, color: "var(--text-faint)" }}>PDF, Word, images (PNG/JPG), or text — up to 25 MB. Scans &amp; photos are read by the vision model.</div>
                 </>
               )}
             </div>
@@ -251,6 +280,42 @@ export function LibraryPage({ notify }: { notify: (m: string) => void }) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// AttachmentStrip shows a document's retained attachments — image thumbnails
+// (clickable to the full image) and file chips for non-images (e.g. the
+// original PDF). Bytes are served RLS-scoped by the backend.
+function AttachmentStrip({ docId, attachments }: { docId: string; attachments?: Attachment[] }) {
+  if (attachments === undefined) {
+    return <div style={{ padding: "10px 4px", color: "var(--text-faint)", fontSize: 12 }}>Loading attachments…</div>;
+  }
+  if (attachments.length === 0) {
+    return <div style={{ padding: "10px 4px", color: "var(--text-faint)", fontSize: 12 }}>No retained attachments for this document.</div>;
+  }
+  return (
+    <div style={{ display: "flex", gap: 12, flexWrap: "wrap", padding: "10px 4px" }}>
+      {attachments.map((a) => {
+        const url = api.attachmentUrl(docId, a.id);
+        const isImage = a.mediaType?.startsWith("image/");
+        return (
+          <a key={a.id} href={url} target="_blank" rel="noreferrer"
+            style={{ display: "block", textDecoration: "none", color: "var(--text-dim)" }}
+            title={`${a.filename} · ${a.mediaType} · ${Math.max(1, Math.round((a.size || 0) / 1024))} KB`}>
+            {isImage ? (
+              <img src={url} alt={a.filename}
+                style={{ width: 96, height: 96, objectFit: "cover", borderRadius: 6, border: "1px solid var(--border)", display: "block" }} />
+            ) : (
+              <div style={{ width: 96, height: 96, borderRadius: 6, border: "1px solid var(--border)",
+                display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>
+                {a.mediaType === "application/pdf" ? "📄" : "📎"}
+              </div>
+            )}
+            <div style={{ fontSize: 11, marginTop: 4, maxWidth: 96, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.filename}</div>
+          </a>
+        );
+      })}
     </div>
   );
 }

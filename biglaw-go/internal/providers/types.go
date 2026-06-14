@@ -12,6 +12,7 @@ const (
 	BlockToolUse    ContentBlockType = "tool_use"
 	BlockToolResult ContentBlockType = "tool_result"
 	BlockThinking   ContentBlockType = "thinking"
+	BlockImage      ContentBlockType = "image"
 )
 
 type ContentBlock struct {
@@ -23,6 +24,18 @@ type ContentBlock struct {
 	Input     map[string]interface{} `json:"input,omitempty"`       // tool_use
 	ToolUseID string                 `json:"tool_use_id,omitempty"` // tool_result
 	Content   string                 `json:"content,omitempty"`     // tool_result
+	// Image blocks (vision). MediaType is an IANA image type
+	// ("image/png", "image/jpeg", "image/webp", "image/gif"); Data is the
+	// raw bytes base64-encoded (no data: prefix). Honored by the Anthropic
+	// provider (image source block) and the OpenAI-compatible provider
+	// (image_url data URL) so Qwen-VL and Claude both receive vision input.
+	MediaType string `json:"media_type,omitempty"`
+	Data      string `json:"data,omitempty"`
+}
+
+// ImageBlock builds a vision content block from base64-encoded image bytes.
+func ImageBlock(mediaType, base64Data string) ContentBlock {
+	return ContentBlock{Type: BlockImage, MediaType: mediaType, Data: base64Data}
 }
 
 type Message struct {
@@ -36,23 +49,24 @@ type ToolParam struct {
 	InputSchema map[string]interface{} `json:"input_schema"`
 }
 
-type ThinkingConfig struct {
-	BudgetTokens int `json:"budget_tokens"`
-}
-
 type ChatParams struct {
-	Model       string
-	MaxTokens   int
-	System      string
-	Messages    []Message
-	Tools       []ToolParam
+	Model     string
+	MaxTokens int
+	System    string
+	Messages  []Message
+	Tools     []ToolParam
+	// CacheSystem hints that the system prompt is cacheable. Provider-agnostic;
+	// the OpenAI-compatible backend ignores it.
 	CacheSystem bool
-	Thinking    *ThinkingConfig
+	// ReasoningEffort, when non-empty ("low"/"medium"/"high"), asks a
+	// reasoning-capable model to think harder. Sent as the OpenAI-standard
+	// reasoning_effort field (honored by o-series, OpenRouter, DeepSeek-R1, and
+	// many compatible servers); endpoints that don't support it ignore it.
+	ReasoningEffort string
 	// JSONMode constrains the decoder to emit a single valid JSON value — no
-	// prose preamble, no markdown fences. Honored by the local OpenAI-compatible
-	// provider (Ollama/LM Studio) via response_format; the Anthropic provider
-	// ignores it (Claude already emits clean JSON on request, and prefill-style
-	// forcing 400s on current models). Set it on structured-extraction calls.
+	// prose preamble, no markdown fences. Honored by the OpenAI-compatible
+	// provider (Ollama/LM Studio/DashScope) via response_format. Set it on
+	// structured-extraction calls.
 	JSONMode bool
 }
 

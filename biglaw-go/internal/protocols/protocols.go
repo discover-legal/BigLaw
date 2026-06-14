@@ -305,7 +305,7 @@ func (r *Runner) IdentifyGates(taskID string, findings []types.Finding) []types.
 
 func (r *Runner) callModel(system, user string, maxTokens int, model, taskID string, cctx cost.CostContext) (string, error) {
 	if model == "" {
-		model = r.cfg.Anthropic.Model
+		model = routing.Heavy(r.cfg)
 	}
 	prov, err := r.provReg.Get(model)
 	if err != nil {

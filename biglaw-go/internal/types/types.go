@@ -485,6 +485,34 @@ type Document struct {
 	Metadata             map[string]interface{} `json:"metadata,omitempty"`
 	Embedding            []float32              `json:"-"`
 	IngestedAt           time.Time              `json:"ingestedAt"`
+	// Attachments are the document's retained binary artifacts (the original
+	// uploaded image/PDF, rendered pages, embedded figures). Bytes live in the
+	// blob store; this carries only metadata, populated on read for the API.
+	Attachments []Attachment `json:"attachments,omitempty"`
+}
+
+// AttachmentKind classifies a stored binary artifact.
+type AttachmentKind string
+
+const (
+	AttachmentOriginal AttachmentKind = "original" // the file as uploaded
+	AttachmentEmbedded AttachmentKind = "embedded" // an image to place into output
+)
+
+// Attachment is a binary artifact retained alongside a document. Metadata
+// persists in the durable store (RLS-scoped by OwnerID); the bytes live in the
+// blob store keyed by BlobKey.
+type Attachment struct {
+	ID        string         `json:"id"`
+	DocID     string         `json:"docId"`
+	OwnerID   string         `json:"ownerId,omitempty"`
+	Filename  string         `json:"filename"`
+	MediaType string         `json:"mediaType"`
+	Kind      AttachmentKind `json:"kind"`
+	Size      int64          `json:"size"`
+	BlobKey   string         `json:"-"` // storage key; not exposed in the API
+	Page      int            `json:"page,omitempty"`
+	CreatedAt time.Time      `json:"createdAt"`
 }
 
 type SearchResult struct {

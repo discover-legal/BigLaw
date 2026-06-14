@@ -22,6 +22,7 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/audit"
 	"github.com/discover-legal/biglaw-go/internal/knowledge"
 	"github.com/discover-legal/biglaw-go/internal/orchestrator"
+	"github.com/discover-legal/biglaw-go/internal/store"
 	"github.com/discover-legal/biglaw-go/internal/strutil"
 	"github.com/discover-legal/biglaw-go/internal/timekeeping"
 	"github.com/discover-legal/biglaw-go/internal/types"
@@ -513,7 +514,8 @@ func (s *MCPServer) handleIngestDocument(_ context.Context, req mcplib.CallToolR
 		IngestedAt: time.Now(),
 	}
 
-	saved, err := s.knowledge.Ingest(doc)
+	// MCP runs as the trusted local operator (Claude Code) → system identity.
+	saved, err := s.knowledge.Ingest(store.WithSystem(context.Background()), doc)
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("ingest_document failed: %v", err)), nil
 	}

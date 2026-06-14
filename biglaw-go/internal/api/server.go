@@ -24,6 +24,8 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/agents"
 	"github.com/discover-legal/biglaw-go/internal/audit"
 	"github.com/discover-legal/biglaw-go/internal/auth"
+	"github.com/discover-legal/biglaw-go/internal/blob"
+	"github.com/discover-legal/biglaw-go/internal/store"
 	"github.com/discover-legal/biglaw-go/internal/budget"
 	"github.com/discover-legal/biglaw-go/internal/clients"
 	"github.com/discover-legal/biglaw-go/internal/config"
@@ -54,6 +56,7 @@ type Server struct {
 	knowledge  *knowledge.Store
 	registry   *agents.Registry
 	costs      *cost.Store
+	blobs      blob.Store // attachment bytes (disk now, object-store later); nil if unavailable
 	graph      *graph.Client
 	budget     *budget.Monitor     // read-only burn for bot commands
 	dockets    *dockets.Monitor    // set by AttachDockets; nil when disabled
@@ -86,6 +89,7 @@ func New(
 		knowledge: knowledgeStore,
 		registry:  registry,
 		costs:     costStore,
+		blobs:     newBlobStore(cfg),
 		graph:     graph.New(),
 		started:   time.Now(),
 	}
@@ -290,6 +294,31 @@ func getUser(c *gin.Context) *types.SessionUser {
 		}
 	}
 	return nil
+}
+
+// newBlobStore builds the attachment blob store (disk or S3-compatible per
+// config). A failure is logged and returns nil — attachment retention then
+// degrades gracefully (extraction/ingest still work; originals just aren't kept).
+func newBlobStore(cfg *config.Config) blob.Store {
+	bs, err := blob.Open(cfg.Blob)
+	if err != nil {
+		slog.Warn("attachment blob store unavailable; originals will not be retained",
+			"backend", cfg.Blob.Backend, "err", err)
+		return nil
+	}
+	slog.Info("attachment blob store ready", "backend", bs.Backend())
+	return bs
+}
+
+// reqIdentity derives the durable-store identity (drives database RLS) from the
+// request's session user. A request with no user is anonymous and, under the
+// default-deny policy, sees/writes nothing.
+func reqIdentity(c *gin.Context) context.Context {
+	u := getUser(c)
+	if u == nil {
+		return c.Request.Context() // no identity → default-deny
+	}
+	return store.WithIdentity(c.Request.Context(), u.ProfileID, auth.IsPartner(u))
 }
 
 // requirePartner writes 403 and returns false if the caller is not a partner.
@@ -742,7 +771,7 @@ func (s *Server) handleIngestDocument(c *gin.Context) {
 		IngestedAt: time.Now(),
 	}
 
-	result, err := s.knowledge.Ingest(doc)
+	result, err := s.knowledge.Ingest(reqIdentity(c), doc)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "ingest failed: " + err.Error()})
 		return

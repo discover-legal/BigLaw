@@ -36,9 +36,19 @@ func NewOllamaProvider(cfg *config.Config) *OllamaProvider {
 		baseURL = cfg.Local.LocalInferenceURL
 		apiKey = cfg.Local.LocalInferenceKey
 	}
+	return NewOpenAICompatProvider(baseURL, apiKey)
+}
+
+// NewOpenAICompatProvider builds a provider against any OpenAI-compatible chat
+// completions endpoint — local (Ollama, LM Studio, vLLM, llama.cpp) or hosted
+// (DashScope/Qwen, Moonshot/Kimi, Zhipu/GLM, OpenAI, DeepSeek). baseURL may or
+// may not include a trailing /v1; Chat() always appends /v1/chat/completions.
+func NewOpenAICompatProvider(baseURL, apiKey string) *OllamaProvider {
 	// The OpenAI convention (and our .env examples) is a base URL that already
 	// ends in /v1 — e.g. http://localhost:11434/v1. Chat() appends the full
 	// /v1/chat/completions path, so strip a trailing /v1 to avoid /v1/v1/.
+	// DashScope's compatible-mode path ends in /compatible-mode/v1 — the same
+	// /v1 strip applies.
 	baseURL = strings.TrimRight(baseURL, "/")
 	baseURL = strings.TrimSuffix(baseURL, "/v1")
 	return &OllamaProvider{
@@ -64,6 +74,7 @@ type openAIChatRequest struct {
 	MaxCompletionTokens int                `json:"max_completion_tokens,omitempty"`
 	Stream              bool               `json:"stream"`
 	ResponseFormat      *openAIResponseFmt `json:"response_format,omitempty"`
+	ReasoningEffort     string             `json:"reasoning_effort,omitempty"`
 }
 
 // openAIResponseFmt requests JSON-constrained decoding. Ollama and LM Studio
@@ -73,9 +84,24 @@ type openAIResponseFmt struct {
 	Type string `json:"type"`
 }
 
+// openAIMessage carries either a plain string in Content (the common case) or
+// a multimodal parts array (text + image_url) for vision requests. Content is
+// typed as interface{} so a single struct serves both shapes — Qwen-VL, GPT-4o,
+// and llama-vision all accept the OpenAI multimodal content array.
 type openAIMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role    string      `json:"role"`
+	Content interface{} `json:"content"`
+}
+
+// openAIContentPart is one element of a multimodal content array.
+type openAIContentPart struct {
+	Type     string             `json:"type"` // "text" | "image_url"
+	Text     string             `json:"text,omitempty"`
+	ImageURL *openAIImageURLRef `json:"image_url,omitempty"`
+}
+
+type openAIImageURLRef struct {
+	URL string `json:"url"` // data:<media-type>;base64,<data> or an https URL
 }
 
 type openAITool struct {
@@ -117,7 +143,45 @@ func (p *OllamaProvider) Chat(params ChatParams) (*ChatResponse, error) {
 		case string:
 			msgs = append(msgs, openAIMessage{Role: m.Role, Content: v})
 		case []ContentBlock:
-			// Flatten to text for Ollama (no tool_use support in all models).
+			// If the block list carries any image, emit an OpenAI multimodal
+			// parts array (text + image_url); otherwise flatten to a plain
+			// string (not all text-only models accept the array form).
+			hasImage := false
+			for _, b := range v {
+				if b.Type == BlockImage && b.Data != "" {
+					hasImage = true
+					break
+				}
+			}
+			if hasImage {
+				var parts []openAIContentPart
+				for _, b := range v {
+					switch b.Type {
+					case BlockText:
+						if b.Text != "" {
+							parts = append(parts, openAIContentPart{Type: "text", Text: b.Text})
+						}
+					case BlockToolResult:
+						if b.Content != "" {
+							parts = append(parts, openAIContentPart{Type: "text", Text: b.Content})
+						}
+					case BlockImage:
+						if b.Data != "" {
+							mt := b.MediaType
+							if mt == "" {
+								mt = "image/png"
+							}
+							parts = append(parts, openAIContentPart{
+								Type:     "image_url",
+								ImageURL: &openAIImageURLRef{URL: "data:" + mt + ";base64," + b.Data},
+							})
+						}
+					}
+				}
+				msgs = append(msgs, openAIMessage{Role: m.Role, Content: parts})
+				continue
+			}
+			// Flatten to text (no tool_use support in all models).
 			var sb strings.Builder
 			for _, b := range v {
 				if b.Type == BlockText {
@@ -143,6 +207,9 @@ func (p *OllamaProvider) Chat(params ChatParams) (*ChatResponse, error) {
 	}
 	if params.JSONMode {
 		reqBody.ResponseFormat = &openAIResponseFmt{Type: "json_object"}
+	}
+	if params.ReasoningEffort != "" {
+		reqBody.ReasoningEffort = params.ReasoningEffort
 	}
 
 	body, _ := json.Marshal(reqBody)

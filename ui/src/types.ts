@@ -216,6 +216,20 @@ export interface IngestResult {
   practiceArea?: string | null;
   detectedClient?: { clientNumber: string; clientName: string } | null;
   suggestedLawyers: SuggestedLawyer[];
+  extractionMethod?: string;
+  extractionNotes?: string[];
+  attachments?: Attachment[];
+}
+
+export interface Attachment {
+  id: string;
+  docId: string;
+  filename: string;
+  mediaType: string;
+  kind: string;
+  size: number;
+  page?: number;
+  createdAt?: string;
 }
 
 export type UserMode = "admin" | "full_flavour" | "lite";

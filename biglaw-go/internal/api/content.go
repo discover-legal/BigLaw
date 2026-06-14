@@ -10,19 +10,23 @@ package api
 import (
 	"fmt"
 	"io"
+	"log/slog"
 	"mime/multipart"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 
 	"github.com/discover-legal/biglaw-go/internal/audit"
 	"github.com/discover-legal/biglaw-go/internal/auth"
 	"github.com/discover-legal/biglaw-go/internal/cost"
 	"github.com/discover-legal/biglaw-go/internal/csvutil"
 	"github.com/discover-legal/biglaw-go/internal/linkedin"
+	"github.com/discover-legal/biglaw-go/internal/pdfgen"
 	"github.com/discover-legal/biglaw-go/internal/routing"
 	"github.com/discover-legal/biglaw-go/internal/services"
 	"github.com/discover-legal/biglaw-go/internal/types"
@@ -32,13 +36,6 @@ import (
 // (25 MB per file).
 const contentMaxUploadBytes = 25 << 20
 
-// contentTextExts are the extensions read as plain text on upload, matching
-// the TEXT_EXT list in the TS /documents/upload handler.
-var contentTextExts = map[string]bool{
-	".txt": true, ".md": true, ".markdown": true, ".csv": true,
-	".json": true, ".log": true, ".text": true, ".rtf": true,
-}
-
 // registerContentRoutes adds the document library, upload, CSV export,
 // profile cost, and tone profile routes. Param names reuse the existing
 // trees (/tasks/:id, /profiles/:id) to satisfy Gin's one-name-per-position
@@ -46,6 +43,9 @@ var contentTextExts = map[string]bool{
 func (s *Server) registerContentRoutes(r *gin.Engine) {
 	r.GET("/documents", s.handleListDocuments)
 	r.POST("/documents/upload", s.handleUploadDocument)
+	r.GET("/documents/attachments/:docId", s.handleListAttachments)
+	r.GET("/documents/attachments/:docId/:attId", s.handleGetAttachment)
+	r.GET("/documents/export/:docId", s.handleExportDocument)
 	r.GET("/tasks/:id/table.csv", s.handleTaskTableCSV)
 	r.GET("/profiles/:id/cost", s.handleProfileCost)
 	r.POST("/profiles/:id/tone/import", s.handleToneImport)
@@ -75,8 +75,17 @@ func (s *Server) handleListDocuments(c *gin.Context) {
 	u := getUser(c)
 	partner := auth.IsPartner(u)
 
+	// Source from the durable repository under the caller's identity so the
+	// database RLS layer applies (default-deny on Postgres); the app-layer
+	// owner filter below is the second layer and the sole filter on SQLite.
+	docs, err := s.knowledge.ListVisible(reqIdentity(c))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "list failed: " + err.Error()})
+		return
+	}
+
 	out := []contentDocSummary{}
-	for _, d := range s.knowledge.ListAll() {
+	for _, d := range docs {
 		if !partner && d.OwnerID != u.ProfileID {
 			continue
 		}
@@ -103,13 +112,12 @@ func (s *Server) handleListDocuments(c *gin.Context) {
 
 // ─── Document upload ──────────────────────────────────────────────────────────
 
-// handleUploadDocument accepts a multipart file upload, extracts its text,
-// classifies it (practice area + client), and ingests it into the knowledge
-// store. Mirrors POST /documents/upload in the TS backend.
-//
-// PDF gap: the Go port has no PDF text extraction (the TS backend shells out
-// to the Python PyMuPDF pipeline, which is absent here), so .pdf uploads
-// return 422 instead of being extracted.
+// handleUploadDocument accepts a multipart file upload, extracts its text via
+// the hybrid omnimodal pipeline (text layer as ground truth + Qwen-VL vision
+// reconcile), classifies it (practice area + client), and ingests it into the
+// knowledge store. Accepts PDF (digital + scanned), Word (.docx), images, and
+// plain text; only a genuinely unreadable file returns 422, with a specific
+// reason in the body.
 func (s *Server) handleUploadDocument(c *gin.Context) {
 	u := getUser(c)
 
@@ -128,40 +136,38 @@ func (s *Server) handleUploadDocument(c *gin.Context) {
 		filename = "document"
 	}
 	ext := strings.ToLower(filepath.Ext(filename))
-	mimetype := fh.Header.Get("Content-Type")
 
-	var content string
-	switch {
-	case ext == ".pdf":
+	buf, err := contentReadFile(fh)
+	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{
-			"error": "PDF extraction not available in the Go backend; upload text",
-		})
-		return
-	case contentTextExts[ext] || strings.HasPrefix(mimetype, "text/"):
-		buf, err := contentReadFile(fh)
-		if err != nil {
-			c.JSON(http.StatusUnprocessableEntity, gin.H{
-				"error": fmt.Sprintf("Could not read %s: %s", filename, err.Error()),
-			})
-			return
-		}
-		content = string(buf)
-	default:
-		typeLabel := ext
-		if typeLabel == "" {
-			typeLabel = mimetype
-		}
-		c.JSON(http.StatusUnsupportedMediaType, gin.H{
-			"error": fmt.Sprintf("Unsupported file type '%s'. Upload a PDF or text file (or paste the text in the Library).", typeLabel),
+			"error": fmt.Sprintf("Could not read %s: %s", filename, err.Error()),
 		})
 		return
 	}
 
+	// Hybrid omnimodal extraction: text layer as ground truth, vision model
+	// (Qwen-VL) reconciles scans/tables/images. PDFs, Word docs, images, and
+	// plain text are all accepted — no more blanket PDF/415 rejection.
+	res := s.contentExtractor().Extract(filename, buf)
+	content := res.Text
 	if strings.TrimSpace(content) == "" {
-		c.JSON(http.StatusUnprocessableEntity, gin.H{
-			"error": fmt.Sprintf("No extractable text found in %s (a scanned image PDF needs OCR, which isn't wired to upload yet).", filename),
-		})
-		return
+		// No text — but if it's a visual file we can retain (image/PDF) and a
+		// blob store is available, keep it as an image-only document rather than
+		// rejecting it. This is the "place images / mainly text but not only"
+		// path: an uploaded exhibit/photo lives on even with no vision model.
+		if contentRetainOriginal(ext, fh.Header.Get("Content-Type")) && s.blobs != nil {
+			content = fmt.Sprintf("[Image document: %s]", filename)
+		} else {
+			msg := fmt.Sprintf("No extractable text found in %s.", filename)
+			if len(res.Notes) > 0 {
+				msg = strings.Join(res.Notes, " ")
+			}
+			c.JSON(http.StatusUnprocessableEntity, gin.H{
+				"error":            msg,
+				"extractionMethod": res.Method,
+			})
+			return
+		}
 	}
 
 	title := strings.TrimSuffix(filepath.Base(filename), ext)
@@ -188,7 +194,7 @@ func (s *Server) handleUploadDocument(c *gin.Context) {
 		doc.DetectedClientNumber = detectedClient.ClientNumber
 	}
 
-	result, err := s.knowledge.Ingest(doc)
+	result, err := s.knowledge.Ingest(reqIdentity(c), doc)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "ingest failed: " + err.Error()})
 		return
@@ -212,12 +218,40 @@ func (s *Server) handleUploadDocument(c *gin.Context) {
 	if detectedClient != nil {
 		detectedClientNumber = detectedClient.ClientNumber
 	}
+
+	// Retain the original bytes of visual uploads (images, PDFs) as an
+	// attachment so the source can be viewed and placed into outputs later —
+	// not just its transcribed text. Bytes go to the blob store; metadata to
+	// the RLS-scoped repository under the uploader's identity.
+	attachments := []types.Attachment{}
+	if s.blobs != nil && contentRetainOriginal(ext, fh.Header.Get("Content-Type")) {
+		attID := uuid.New().String()
+		key := result.ID + "/" + attID
+		if perr := s.blobs.Put(key, buf); perr != nil {
+			slog.Warn("attachment blob write failed", "docId", result.ID, "err", perr)
+		} else {
+			att := types.Attachment{
+				ID: attID, DocID: result.ID, OwnerID: u.ProfileID,
+				Filename: filename, MediaType: contentUploadMIME(ext, fh.Header.Get("Content-Type")),
+				Kind: types.AttachmentOriginal, Size: int64(len(buf)), BlobKey: key,
+				CreatedAt: time.Now(),
+			}
+			if aerr := s.knowledge.AddAttachment(reqIdentity(c), att); aerr != nil {
+				slog.Warn("attachment metadata write failed", "docId", result.ID, "err", aerr)
+				_ = s.blobs.Delete(key) // don't orphan bytes with no metadata
+			} else {
+				attachments = append(attachments, att)
+			}
+		}
+	}
+
 	audit.Default.Write(audit.WriteRequest{
 		Event:   "document.uploaded",
 		ActorID: u.ProfileID,
 		Data: map[string]interface{}{
 			"docId": result.ID, "title": title, "filename": filename,
 			"practiceArea": practiceArea, "detectedClientNumber": detectedClientNumber,
+			"attachments": len(attachments),
 		},
 	})
 
@@ -227,7 +261,129 @@ func (s *Server) handleUploadDocument(c *gin.Context) {
 		"practiceArea":     contentNullableStr(practiceArea),
 		"detectedClient":   detectedClient,
 		"suggestedLawyers": suggestedLawyers,
+		"extractionMethod": res.Method,
+		"extractionNotes":  res.Notes,
+		"attachments":      attachments,
 	})
+}
+
+// ─── Attachments ───────────────────────────────────────────────────────────────
+
+// handleListAttachments lists a document's attachments, RLS-scoped to the
+// caller (default-deny on Postgres; app-layer elsewhere).
+func (s *Server) handleListAttachments(c *gin.Context) {
+	atts, err := s.knowledge.ListAttachments(reqIdentity(c), c.Param("docId"))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if atts == nil {
+		atts = []types.Attachment{}
+	}
+	c.JSON(http.StatusOK, atts)
+}
+
+// handleGetAttachment streams an attachment's bytes. Visibility is enforced by
+// resolving the metadata through the RLS-scoped repository first; only on a hit
+// are the bytes fetched from the blob store. 404 (never 403) so a hidden
+// attachment is indistinguishable from a missing one.
+func (s *Server) handleGetAttachment(c *gin.Context) {
+	att, found, err := s.knowledge.GetAttachment(reqIdentity(c), c.Param("attId"))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if !found || att.DocID != c.Param("docId") {
+		c.JSON(http.StatusNotFound, gin.H{"error": "attachment not found"})
+		return
+	}
+	if s.blobs == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "attachment storage unavailable"})
+		return
+	}
+	data, berr := s.blobs.Get(att.BlobKey)
+	if berr != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "attachment bytes not found"})
+		return
+	}
+	mt := att.MediaType
+	if mt == "" {
+		mt = "application/octet-stream"
+	}
+	c.Header("Content-Disposition", fmt.Sprintf("inline; filename=%q", att.Filename))
+	c.Data(http.StatusOK, mt, data)
+}
+
+// handleExportDocument renders a document — its text plus its image
+// attachments, placed inline — to a downloadable PDF using the pure-Go
+// generator. RLS-scoped: the document and its attachments are resolved under
+// the caller's identity.
+func (s *Server) handleExportDocument(c *gin.Context) {
+	ctx := reqIdentity(c)
+	doc, found, err := s.knowledge.GetVisible(ctx, c.Param("docId"))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if !found || doc == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "document not found"})
+		return
+	}
+
+	var images []pdfgen.Image
+	if s.blobs != nil {
+		atts, _ := s.knowledge.ListAttachments(ctx, doc.ID)
+		for _, a := range atts {
+			if !strings.HasPrefix(a.MediaType, "image/") {
+				continue // only images are placed; a PDF original isn't rasterized here
+			}
+			data, berr := s.blobs.Get(a.BlobKey)
+			if berr != nil {
+				continue
+			}
+			images = append(images, pdfgen.Image{MediaType: a.MediaType, Data: data, Caption: a.Filename})
+		}
+	}
+
+	out, gerr := pdfgen.Generate(doc.Title, doc.Content, images)
+	if gerr != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "pdf generation failed: " + gerr.Error()})
+		return
+	}
+	name := doc.Title
+	if name == "" {
+		name = "document"
+	}
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", name+".pdf"))
+	c.Data(http.StatusOK, "application/pdf", out)
+}
+
+// contentRetainOriginal reports whether an upload's original bytes are worth
+// keeping as an attachment — visual formats (images, PDFs) whose source matters
+// beyond the extracted text.
+func contentRetainOriginal(ext, mimetype string) bool {
+	switch ext {
+	case ".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff":
+		return true
+	}
+	return strings.HasPrefix(mimetype, "image/") || mimetype == "application/pdf"
+}
+
+// contentUploadMIME resolves an upload's media type from its extension, falling
+// back to the request Content-Type then a generic binary type.
+func contentUploadMIME(ext, headerType string) string {
+	byExt := map[string]string{
+		".pdf": "application/pdf", ".png": "image/png", ".jpg": "image/jpeg",
+		".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp",
+		".bmp": "image/bmp", ".tif": "image/tiff", ".tiff": "image/tiff",
+	}
+	if mt := byExt[ext]; mt != "" {
+		return mt
+	}
+	if headerType != "" {
+		return headerType
+	}
+	return "application/octet-stream"
 }
 
 // ─── Tabulate CSV export ──────────────────────────────────────────────────────
@@ -469,20 +625,45 @@ func (s *Server) handleClearToneProfile(c *gin.Context) {
 // contentClassifier builds a Haiku classifier from the provider registry.
 // Returns nil only when no provider can serve the Haiku model.
 func (s *Server) contentClassifier() *services.Classifier {
-	p, err := s.orch.Providers().Get(routing.ModelHaiku)
+	model := routing.Light(s.cfg)
+	p, err := s.orch.Providers().Get(model)
 	if err != nil || p == nil {
 		return nil
 	}
-	return services.New(p, routing.ModelHaiku)
+	return services.New(p, model)
 }
 
 // contentToneAnalyzer builds a Haiku tone analyzer from the provider registry.
 func (s *Server) contentToneAnalyzer() *services.ToneAnalyzer {
-	p, err := s.orch.Providers().Get(routing.ModelHaiku)
+	model := routing.Light(s.cfg)
+	p, err := s.orch.Providers().Get(model)
 	if err != nil || p == nil {
 		return nil
 	}
-	return services.NewToneAnalyzer(p, routing.ModelHaiku)
+	return services.NewToneAnalyzer(p, model)
+}
+
+// contentExtractor builds the hybrid document extractor: the Mid-tier model
+// reconciles, the Vision-tier model (Qwen-VL by default) reads images and
+// scanned pages, and the bundled PyMuPDF script rasterizes PDF pages when
+// present. Providers that can't be resolved are passed as nil and the extractor
+// degrades gracefully (text-layer only, with a note).
+func (s *Server) contentExtractor() *services.DocumentExtractor {
+	textModel := routing.Mid(s.cfg)
+	textProvider, err := s.orch.Providers().Get(textModel)
+	if err != nil {
+		textProvider = nil
+	}
+	visionModel := routing.Vision(s.cfg)
+	visionProvider, verr := s.orch.Providers().Get(visionModel)
+	if verr != nil {
+		visionProvider = nil
+	}
+	script := os.Getenv("PDF_TOOLS_SCRIPT")
+	if script == "" {
+		script = filepath.Join("scripts", "pdf_tools.py")
+	}
+	return services.NewDocumentExtractor(textProvider, textModel, visionProvider, visionModel, s.cfg.PDF.PythonBin, script)
 }
 
 // contentFirstFile returns the first uploaded file in the multipart form,

@@ -12,6 +12,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -35,6 +36,7 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/regulatory"
 	"github.com/discover-legal/biglaw-go/internal/reports"
 	"github.com/discover-legal/biglaw-go/internal/routing"
+	"github.com/discover-legal/biglaw-go/internal/store"
 	"github.com/discover-legal/biglaw-go/internal/timekeeping"
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
@@ -194,7 +196,8 @@ func (b *opsBroadcaster[T]) Count() int {
 type opsKnowledgeIngester struct{ store *knowledge.Store }
 
 func (k *opsKnowledgeIngester) IngestDoc(title, content, source, docType string) error {
-	_, err := k.store.Ingest(types.Document{
+	// Docket/regulatory monitors are trusted internal callers → system identity.
+	_, err := k.store.Ingest(store.WithSystem(context.Background()), types.Document{
 		Title:        title,
 		Content:      content,
 		Source:       source,
@@ -250,12 +253,13 @@ func (s *Server) opsRegulatory() (*regulatory.Monitor, *opsBroadcaster[types.Reg
 			return
 		}
 		// Standalone fallback: no firm monitor running — own the instance.
-		provider, err := s.orch.Providers().Get(routing.ModelHaiku)
+		lightID := routing.Light(s.cfg)
+		provider, err := s.orch.Providers().Get(lightID)
 		if err != nil {
 			st.regErr = err
 			return
 		}
-		m := regulatory.New(provider, routing.ModelHaiku)
+		m := regulatory.New(provider, lightID)
 		b := newOpsBroadcaster[types.RegulationAlert]()
 		m.SetAlertHandler(func(a types.RegulationAlert) { b.Publish(a) })
 		if opsEnvBool("REG_PULSE_ENABLED") && m.IsEnabled() {
@@ -278,12 +282,13 @@ func opsRegPulseEnabled(m *regulatory.Monitor) bool {
 func (s *Server) opsReports() (*reports.Generator, error) {
 	st := s.ops()
 	st.reportsOnce.Do(func() {
-		provider, err := s.orch.Providers().Get(routing.ModelOpus)
+		heavyID := routing.Heavy(s.cfg)
+		provider, err := s.orch.Providers().Get(heavyID)
 		if err != nil {
 			st.reportsErr = err
 			return
 		}
-		st.reportsGen = reports.New(provider, routing.ModelOpus)
+		st.reportsGen = reports.New(provider, heavyID)
 	})
 	return st.reportsGen, st.reportsErr
 }

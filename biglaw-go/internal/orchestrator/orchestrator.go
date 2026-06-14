@@ -986,7 +986,10 @@ Every claim must trace to a specific finding number from the list above.`,
 		Tier:     &tier,
 		TaskType: routing.TaskSynthesis,
 	})
-	useThinking := routing.ShouldUseThinking(model, routing.TaskSynthesis, &tier, routing.ComplexityHigh)
+	// Extended thinking is model-agnostic now: a larger output budget for
+	// reasoning, plus an optional reasoning_effort hint for endpoints that
+	// support it. Any reasoning-capable model can use it.
+	useThinking := routing.ShouldUseThinking(routing.TaskSynthesis, &tier, routing.ComplexityHigh)
 
 	maxTokens := 4000
 	if useThinking {
@@ -1005,7 +1008,7 @@ Every claim must trace to a specific finding number from the list above.`,
 		CacheSystem: true,
 	}
 	if useThinking {
-		chatParams.Thinking = &providers.ThinkingConfig{BudgetTokens: o.cfg.Anthropic.ThinkingBudgetTokens}
+		chatParams.ReasoningEffort = o.cfg.ReasoningEffort
 	}
 	resp, err := prov.Chat(chatParams)
 	if err != nil {

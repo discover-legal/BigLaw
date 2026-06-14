@@ -8,6 +8,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"time"
@@ -23,6 +24,7 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/providers"
 	"github.com/discover-legal/biglaw-go/internal/regulatory"
 	"github.com/discover-legal/biglaw-go/internal/routing"
+	"github.com/discover-legal/biglaw-go/internal/store"
 	"github.com/discover-legal/biglaw-go/internal/timekeeping"
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
@@ -86,7 +88,8 @@ func startMonitors(
 	}
 
 	var regMon *regulatory.Monitor
-	rm := regulatory.New(provReg.MustGet(routing.ModelHaiku), routing.ModelHaiku)
+	regModel := routing.Light(cfg)
+	rm := regulatory.New(provReg.MustGet(regModel), regModel)
 	if rm.IsEnabled() {
 		regMon = rm
 		rm.SetAlertHandler(func(a types.RegulationAlert) {
@@ -131,7 +134,9 @@ func postAlert(poster lpm.ChannelPoster, event, matter, subject, body string, da
 type docketKnowledge struct{ ks *knowledge.Store }
 
 func (d docketKnowledge) IngestDoc(title, content, source, docType string) error {
-	_, err := d.ks.Ingest(types.Document{Title: title, Content: content, Source: source, DocumentType: docType})
+	// Docket monitor is a trusted internal caller → system identity.
+	_, err := d.ks.Ingest(store.WithSystem(context.Background()),
+		types.Document{Title: title, Content: content, Source: source, DocumentType: docType})
 	return err
 }
 

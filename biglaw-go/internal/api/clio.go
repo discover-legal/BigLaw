@@ -255,7 +255,7 @@ func (s *Server) handleTaskFromClioMatter(c *gin.Context) {
 			if !ok || strings.TrimSpace(content) == "" {
 				continue
 			}
-			if _, ingErr := s.knowledge.Ingest(types.Document{
+			if _, ingErr := s.knowledge.Ingest(reqIdentity(c), types.Document{
 				Title:        name,
 				Content:      content,
 				Source:       "clio",

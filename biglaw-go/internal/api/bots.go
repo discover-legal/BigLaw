@@ -35,7 +35,8 @@ import (
 // task-completion notifier. Webhook receivers verify their own HMAC signatures,
 // so they are public; matter-link management is partner-gated.
 func (s *Server) mountBots(r *gin.Engine) {
-	facade := &botFacade{s: s, briefing: briefing.New(s.provReg.MustGet(routing.ModelSonnet), routing.ModelSonnet)}
+	midID := routing.Mid(s.cfg)
+	facade := &botFacade{s: s, briefing: briefing.New(s.provReg.MustGet(midID), midID)}
 
 	r.POST("/bots/teams/webhook", func(c *gin.Context) {
 		body, _ := io.ReadAll(c.Request.Body)

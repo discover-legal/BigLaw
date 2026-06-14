@@ -313,6 +313,52 @@ def ocr(args: dict) -> dict:
         }
 
 
+def render_pages(args: dict) -> dict:
+    """
+    Rasterise PDF pages to PNG and return them base64-encoded, for feeding to a
+    vision model (the hybrid extraction pipeline's reconcile pass). No OCR or
+    text heuristics here — this is pure rasterisation; the LLM does the reading.
+
+    Args: path (str), maxPages (int, default 8), dpi (int, default 150).
+    Returns: { total_pages, rendered, capped, pages: [{page, png_base64, ...}] }.
+    """
+    import base64 as _b64
+    import fitz  # PyMuPDF
+
+    path = args["path"]
+    max_pages = int(args.get("maxPages", 8))
+    dpi = int(args.get("dpi", 150))
+
+    doc = fitz.open(path)
+    total = len(doc)
+    limit = total if max_pages <= 0 else min(total, max_pages)
+
+    scale = dpi / 72.0
+    mat = fitz.Matrix(scale, scale)
+
+    pages_out = []
+    for i in range(limit):
+        page = doc[i]
+        pix = page.get_pixmap(matrix=mat, colorspace=fitz.csRGB)
+        png = pix.tobytes("png")
+        pages_out.append({
+            "page": i + 1,
+            "png_base64": _b64.b64encode(png).decode("ascii"),
+            "width_px": pix.width,
+            "height_px": pix.height,
+        })
+
+    doc.close()
+    return {
+        "path": path,
+        "total_pages": total,
+        "rendered": len(pages_out),
+        "capped": limit < total,
+        "dpi": dpi,
+        "pages": pages_out,
+    }
+
+
 # ─── Entry point ──────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -330,6 +376,8 @@ if __name__ == "__main__":
             result = generate(args)
         elif operation == "ocr":
             result = ocr(args)
+        elif operation == "render_pages":
+            result = render_pages(args)
         else:
             result = {"error": f"Unknown operation: {operation}"}
 

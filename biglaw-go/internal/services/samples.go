@@ -159,6 +159,47 @@ func extractFromDocx(data []byte) []string {
 	return nil
 }
 
+// docxFullText returns the complete prose text of a DOCX (every paragraph,
+// no minimum-length filter), used for document ingest where short headings and
+// single-line clauses matter. Paragraph boundaries become blank lines so the
+// downstream classifier and search see real structure. Returns "" on a
+// malformed archive.
+func docxFullText(data []byte) string {
+	r, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return ""
+	}
+	for _, f := range r.File {
+		if filepath.Base(f.Name) != "document.xml" {
+			continue
+		}
+		if f.UncompressedSize64 > maxDocxXMLBytes {
+			return ""
+		}
+		rc, err := f.Open()
+		if err != nil {
+			return ""
+		}
+		raw, err := io.ReadAll(io.LimitReader(rc, maxDocxXMLBytes))
+		rc.Close()
+		if err != nil {
+			return ""
+		}
+		xml := string(raw)
+		xml = docxParaRe.ReplaceAllString(xml, "\n\n<w:p ")
+		xml = docxBrRe.ReplaceAllString(xml, "\n")
+		plain := xmlTagRe.ReplaceAllString(xml, "")
+		// Collapse runs of blank lines but keep paragraph separation.
+		plain = strings.ReplaceAll(plain, "\r\n", "\n")
+		var out []string
+		for _, line := range strings.Split(plain, "\n") {
+			out = append(out, strings.TrimRight(line, " \t"))
+		}
+		return strings.TrimSpace(strings.Join(out, "\n"))
+	}
+	return ""
+}
+
 // ─── Generic CSV extraction ───────────────────────────────────────────────────
 
 // extractFromGenericCSV pulls samples from a non-LinkedIn CSV: it scores each

@@ -52,7 +52,8 @@ func main() {
 	}
 	if !*offline {
 		provReg := providers.NewRegistry(cfg)
-		opts.Transport = topoflow.NewAnthropicTransport(provReg.MustGet(routing.ModelHaiku), tfcfg.DytopoMaxTok)
+		lightID := routing.Light(cfg)
+		opts.Transport = topoflow.NewAnthropicTransport(provReg.MustGet(lightID), tfcfg.DytopoMaxTok)
 		opts.Embedder = topoflow.NewEmbeddingsAdapter(embeddings.NewClient(cfg))
 	}
 

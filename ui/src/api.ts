@@ -8,7 +8,7 @@ import type {
   WatchedDocket, RegulationAlert,
   Playbook, PlaybookScope, PlaybookQueryResult, RedlineReport, HeadnoteReport,
   PrecedentDocument, CitationCheckResult,
-  NosLegalBreakdown, Job, JobStatus, QueueStats,
+  NosLegalBreakdown, Job, JobStatus, QueueStats, Attachment,
 } from "./types";
 
 type SettingsPatch = {
@@ -102,6 +102,11 @@ export const api = {
 
   searchDocuments: (query: string) =>
     fetch(`/documents/search?query=${encodeURIComponent(query)}`).then(json<SearchResult[]>),
+
+  listAttachments: (docId: string) =>
+    fetch(`/documents/attachments/${docId}`).then(json<Attachment[]>),
+  attachmentUrl: (docId: string, attId: string) => `/documents/attachments/${docId}/${attId}`,
+  exportDocumentUrl: (docId: string) => `/documents/export/${docId}`,
 
   recentAudit: (limit = 60, opts?: { actorId?: string; event?: string; taskId?: string }) => {
     const q = new URLSearchParams({ limit: String(limit) });

@@ -11,11 +11,30 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
 
+// Default tier model IDs (Qwen), used when the active stack leaves a tier unset.
 const (
-	ModelOpus   = "claude-opus-4-8"
-	ModelSonnet = "claude-sonnet-4-6"
-	ModelHaiku  = "claude-haiku-4-5-20251001"
+	defaultHeavy  = "qwen-max"
+	defaultMid    = "qwen-plus"
+	defaultLight  = "qwen-turbo"
+	defaultVision = "qwen-vl-max"
 )
+
+// Tier accessors return the active model stack's ID for each role (Qwen by
+// default; see config.ModelConfig). Every call site routes through these so the
+// whole platform follows MODEL_STACK. No Claude/Anthropic path exists.
+func Heavy(cfg *config.Config) string  { return firstNonEmpty(cfg.Model.Heavy, defaultHeavy) }
+func Mid(cfg *config.Config) string    { return firstNonEmpty(cfg.Model.Mid, defaultMid) }
+func Light(cfg *config.Config) string  { return firstNonEmpty(cfg.Model.Light, defaultLight) }
+func Vision(cfg *config.Config) string { return firstNonEmpty(cfg.Model.Vision, cfg.Model.Mid, defaultVision) }
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
 
 type TaskType string
 
@@ -113,21 +132,22 @@ func SelectModel(cfg *config.Config, p SelectParams) string {
 		}
 	}
 
-	// Cloud model selection
+	// Cloud model selection — resolved against the active stack (Qwen by
+	// default, Claude when MODEL_STACK=claude, or per-tier overrides).
 	if p.TaskType == TaskDescriptor || p.TaskType == TaskExtraction ||
 		p.TaskType == TaskRouting || p.TaskType == TaskTranslation {
-		return ModelHaiku
+		return Light(cfg)
 	}
 	if p.Tier != nil && *p.Tier == types.TierTool {
-		return ModelHaiku
+		return Light(cfg)
 	}
 	if p.Tier != nil && *p.Tier == types.TierRoot {
-		return ModelOpus
+		return Heavy(cfg)
 	}
 	if p.TaskType == TaskSynthesis || p.TaskType == TaskDebate || p.Complexity == ComplexityHigh {
-		return ModelOpus
+		return Heavy(cfg)
 	}
-	return ModelSonnet
+	return Mid(cfg)
 }
 
 // EstimateComplexity uses simple keyword heuristics on a prompt.
@@ -158,14 +178,11 @@ func EstimateComplexity(text string) Complexity {
 	return ComplexityMedium
 }
 
-// ShouldUseThinking returns true when extended thinking should be requested.
-func ShouldUseThinking(modelID string, taskType TaskType, tier *types.AgentTier, complexity Complexity) bool {
-	if IsOllamaModel(modelID) || IsLocalModel(modelID) {
-		return false
-	}
-	if strings.Contains(modelID, "haiku") {
-		return false
-	}
+// ShouldUseThinking reports whether a heavy reasoning task warrants extended
+// "thinking" — a larger output budget and, where the endpoint supports it, a
+// reasoning_effort hint. Model-agnostic: any reasoning-capable model (Qwen3,
+// DeepSeek-R1, GLM, or a Claude served through a wrapper) can use it.
+func ShouldUseThinking(taskType TaskType, tier *types.AgentTier, complexity Complexity) bool {
 	if taskType == TaskSynthesis || taskType == TaskDebate {
 		return true
 	}

@@ -15,6 +15,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"sync"
@@ -43,6 +44,7 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/routing"
 	"github.com/discover-legal/biglaw-go/internal/secrets"
 	"github.com/discover-legal/biglaw-go/internal/settings"
+	"github.com/discover-legal/biglaw-go/internal/store"
 	"github.com/discover-legal/biglaw-go/internal/templates"
 	"github.com/discover-legal/biglaw-go/internal/timekeeping"
 	"github.com/discover-legal/biglaw-go/internal/tools"
@@ -57,6 +59,18 @@ func main() {
 	secrets.Load()
 
 	cfg := config.Load()
+
+	// Self-imposed vendor breaker: refuse to start if the config couples the
+	// system to Anthropic or AWS without an explicit opt-in (ALLOW_ANTHROPIC /
+	// ALLOW_AWS). Using those services must be a deliberate, active effort.
+	if err := config.GuardVendors(cfg); err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		os.Exit(1)
+	}
+	if disarmed := config.DisarmedVendorBreakers(); len(disarmed) > 0 {
+		slog.Warn("vendor breaker DISARMED by operator — this build otherwise ships free of these vendors",
+			"overrides", disarmed)
+	}
 
 	// With auth enabled, the REST API is gated by a bearer token; a profile
 	// header alone is a claim, not a credential.
@@ -88,8 +102,19 @@ func main() {
 	// Build inter-round memory store.
 	memStore := memory.NewInterRound(embedC)
 
-	// Build knowledge store.
-	knowledgeStore := knowledge.NewStore(embedC)
+	// Build the durable document repository (SQLite by default; Postgres when
+	// DATABASE_URL is set) and wire it into the knowledge store, then hydrate
+	// the in-memory vector index from persisted documents.
+	docRepo, err := store.Open(cfg)
+	if err != nil {
+		slog.Error("failed to open document store", "err", err)
+		os.Exit(1)
+	}
+	defer docRepo.Close()
+	knowledgeStore := knowledge.NewStoreWithRepo(embedC, docRepo)
+	if err := knowledgeStore.Load(); err != nil {
+		slog.Warn("knowledge store load failed; continuing empty", "err", err)
+	}
 
 	// Build template store and load from filesystem. Lavern and MikeOSS
 	// workflow files have their own shapes — use the adapter loaders rather

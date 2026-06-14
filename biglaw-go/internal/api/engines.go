@@ -77,7 +77,9 @@ var (
 func (s *Server) engines() (*enginesBundle, error) {
 	enginesOnce.Do(func() {
 		primary := routing.SelectModel(s.cfg, routing.SelectParams{TaskType: routing.TaskReasoning})
-		sonnetID, haikuID, opusID := routing.ModelSonnet, routing.ModelHaiku, routing.ModelOpus
+		// sonnet/haiku/opus here name the mid/light/heavy roles — resolved
+		// against the active stack (Qwen by default), not pinned to Claude.
+		sonnetID, haikuID, opusID := routing.Mid(s.cfg), routing.Light(s.cfg), routing.Heavy(s.cfg)
 		if routing.IsLocalModel(primary) || routing.IsOllamaModel(primary) {
 			resolved := routing.ResolveModelID(primary)
 			sonnetID, haikuID, opusID = resolved, resolved, resolved
