@@ -291,3 +291,29 @@ Gated on `CLIO_CLIENT_ID`. Unconfigured, the tools register but sit quietly off.
 AGPL-3.0.
 
 #LegalAI #LegalTech #Clio #PracticeManagement #OpenSource
+
+---
+
+## Open & private post — security/privacy + multimodal (open-stack drop)
+
+Most legal AI asks you to trust a promise: *"we won't look at your client data."*
+
+BigLaw enforces it in the database.
+
+**Privacy that a bug can't leak**
+→ **Row-level security at the database, default-deny** — a lawyer who isn't on a matter sees *zero rows*, enforced by Postgres itself (`FORCE` RLS), not just by app code. Two independent layers between a user and another client's file. A single app-layer bug can't open the door.
+→ **Runs fully local / air-gapped** — pure-Go SQLite + local inference (Ollama / LM Studio). Privileged client data never has to leave your hardware. Single static binary, runs on a Raspberry Pi.
+→ **No forced cloud, no vendor lock-in.** Open model stack (Qwen / GLM / Kimi / any OpenAI-compatible endpoint). Open storage (disk / WebDAV / Supabase / OCI registry). Open standards top to bottom. AGPL-3.0.
+
+**Data sovereignty, written into the build**
+→ A **self-imposed vendor breaker**: the platform *refuses to start* if it's wired directly to a gated, high-risk closed vendor's API — and the **build fails** if a gated SDK is ever quietly re-added. Your supply chain can't drift back to a vendor you've sworn off. No Amazon. No forced Anthropic.
+
+**Omnimodal — because legal work is mainly text, but not only**
+→ Drop in a **PDF, a Word doc, a scan, or a photo**. Hybrid extraction keeps the embedded text **verbatim** (no LLM silently paraphrasing a clause) and uses a vision model to reconcile scans, tables, stamps, and signatures.
+→ **Place images, not just read them** — uploaded exhibits are retained and embedded into generated PDFs.
+
+Open. Free. Secure. Private. Opinionated about all four.
+
+It concentrates on the projects and vendors that share those values — and actively penalises the closed ones that make ecosystem-harming moves, however popular they are. 🐢
+
+#LegalAI #LegalTech #Privacy #Security #OpenSource #DataSovereignty #RLS #SelfHosted #BigLaw

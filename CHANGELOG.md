@@ -17,6 +17,47 @@ House rules:
 
 ## [Unreleased]
 
+### Open, private, multimodal — Qwen stack, row-level security, self-imposed vendor breaker
+A reorientation of the platform around openness, data sovereignty, and omnimodal
+document handling — with privacy enforced at the database, not just the app.
+
+- **Model stack is open by default.** The default bench runs on **Qwen** over an
+  OpenAI-compatible endpoint; `MODEL_STACK` selects `qwen | glm | kimi | custom`,
+  and any OpenAI-compatible endpoint works (`PRIMARY_MODEL_URL`). The four tiers
+  (heavy/mid/light + a **vision** tier) resolve from the active stack. Extended
+  thinking is model-agnostic (token budget + optional `reasoning_effort`).
+- **Self-imposed vendor breaker.** The platform concentrates support on open,
+  privacy-respecting vendors and **refuses to start** if its config is coupled
+  directly to a gated closed vendor's service. A dependency-level guard fails the
+  build if a gated SDK is ever re-introduced. The Anthropic provider/SDK and the
+  AWS SDK were removed outright; a model wrapped behind a neutral OpenAI-compatible
+  gateway is still allowed — the gate keys on the *endpoint*, not the model name.
+- **Omnimodal ingest.** `/documents/upload` accepts PDF (digital **and** scanned),
+  Word, images, and text. Hybrid extraction keeps the embedded text layer as
+  verbatim ground truth and uses a vision model to reconcile scans, tables, and
+  figures; standalone images go straight to the VLM. No more 422 on a PDF.
+- **Place images, not just ingest them.** Uploaded images/PDFs are **retained** as
+  attachments and can be **embedded into generated PDFs** via a pure-Go engine.
+- **Persistence + database row-level security.** Documents and attachments persist
+  through a storage seam: pure-Go **SQLite** by default, or **Postgres** with
+  **`FORCE` row-level security**, **default-deny** policies keyed on the requesting
+  lawyer/partner identity — enforced *beneath* the existing app-layer checks
+  (defense in depth), and proven against a live Postgres for both documents and
+  attachments.
+- **Open, vendor-neutral blob storage.** Attachment bytes live in a pluggable
+  store: local **disk** (default), **WebDAV**, **Supabase Storage** (native API),
+  or an **OCI registry** via ORAS. AWS S3 is deliberately not offered.
+- **Hardened, open packaging.** OCI image-spec labels, reproducible build flags,
+  fixed non-root UID, SBOM/provenance documented.
+
+New endpoints: `GET /documents/attachments/:docId`, `/:docId/:attId`, and
+`GET /documents/export/:docId`. New config: `MODEL_STACK`/`QWEN_*`,
+`DB_BACKEND`/`DATABASE_URL`, `BLOB_BACKEND`/`BLOB_*`, `EXTRACT_VISION_*`,
+`REASONING_EFFORT`.
+
+_Collateral: `collateral/linkedin-post.md` (security & privacy post), end-to-end
+demo video, screenshots `open-stack-*`._
+
 ### TS→Go porting complete — feature parity with `typescript-final`
 Everything previously marked "TS-only, not yet ported" is now on the Go platform:
 - **Browser OAuth login** (Google / Microsoft / LinkedIn OIDC): static
