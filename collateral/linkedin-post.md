@@ -5,6 +5,38 @@
 
 ---
 
+## BigLaw BigUpdate — open, private, multimodal *(2026-06-15)*
+
+**BigLaw BigUpdate**
+
+A legal AI platform answers two questions the moment you switch it on: *where does my data live, and who is allowed to see it?* Most can't answer either without pointing at someone else's cloud. This release answers both ourselves.
+
+→ **Open model by default.** The bench ships on an open-weight model out of the box, and runs entirely on your own local models (Ollama, LM Studio) the moment you flip the tiers. Sovereign by default, not as a paid upgrade. Support and compatibility concentrate on models and vendors that share the open posture — your matters won't be quietly routed through a closed one.
+
+→ **Storage that's actually yours.** A real persistence layer behind one seam — SQLite on a laptop, Postgres for a firm — with **row-level security, default-deny**. A lawyer sees a row because a rule *grants* access, never because nobody remembered to hide it. Enforced at the database *and* the app: defense in depth.
+
+→ **Open standards all the way down.** Files and artifacts live wherever *you* point them — plain disk, **WebDAV**, an **OCI container registry**, Supabase. Open protocols, your infrastructure, no proprietary object-store lock-in. Move a firm's documents and you need nobody's permission.
+
+→ **Law isn't only text — and now intake isn't either.** Drop in a PDF, a Word file, a photo, a scan. The embedded text layer is treated as ground truth — a clause is never silently paraphrased — and a vision model reconciles the rest: scans, tables, stamps, signatures, figures, image-only pages. Originals are retained.
+
+→ **Images go in *and* come out.** Retained images are embedded inline in the documents the platform generates — a pure-Go PDF engine, no native dependencies, runs on a Raspberry Pi. Sometimes the exhibit *is* the point; it stays in the file.
+
+→ **A breaker, because law is a regulated profession.** There's a protective mechanism in the source. A vendor that behaves in a manner inconsistent with the open sharing of knowledge and information — the kind that can revoke access, geofence, or pull a service out from under you without warning — gets placed behind it, and the platform refuses to couple to them silently. For tooling a regulated profession leans on, software that can be switched off without notice isn't an inconvenience; it's a liability with a client on the other end. The breaker is undocumented on purpose. If you're technical enough to find it in the code and disarm it, you're technical enough to have motivated that vendor's reach in the first place — and presumed able to adapt in the moment if the worst comes round again. The door is there. It just isn't signposted.
+
+→ **A surface that meets you where you sit.** Same platform, reshaped to the person in the chair: a partner opens to a firm-wide review queue, an associate to their own desk, an occasional user to three plain doors. The result leads; the machinery folds away.
+
+——
+
+The short version: an open model by default, your data on your own storage over open standards, locked down with row-level security, reading documents however they arrive and placing the images back into what it produces — guarded by a breaker that keeps a regulated profession off vendors who'd pull the rug — behind an interface that opens at *your* altitude. Open. Free. Secure. Private. Built that way on purpose.
+
+Live on main. AGPL-3.0, as always. Link in comments.
+
+#LegalAI #LegalTech #OpenSource #SelfHosted #Privacy #BigLaw
+
+**Carousel:** partner Home (review strip) → Lite three-tile intake → Drafting result with collapsed run-bar → open-stack storage seam
+
+---
+
 ## BigLaw BigUpdate post (v1.0 release)
 
 **BigLaw BigUpdate**
