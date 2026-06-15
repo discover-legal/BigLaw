@@ -1139,3 +1139,71 @@ table.grid tbody tr:last-child td { border-bottom: none; }
 .request-accordion[open] > summary::before { content: "▾ "; }
 .request-accordion[open] > summary { border-bottom: 1px solid var(--border); color: var(--text); }
 .request-body { padding: 14px 16px; font-size: 13px; line-height: 1.55; color: var(--text-dim); max-height: 320px; overflow: auto; }
+
+/* ── Role/mode-aware Home landing ─────────────────────────────────────────── */
+.home { max-width: 1000px; }
+.home-head { margin-bottom: 18px; }
+.home-sub { color: var(--text-dim); font-size: 14px; margin-top: 4px; }
+
+.home-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 18px; }
+.stat-tile {
+  display: flex; flex-direction: column; gap: 4px; align-items: flex-start;
+  padding: 14px 16px; background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: var(--r); cursor: pointer; transition: border-color .15s, background .15s;
+}
+.stat-tile:hover { border-color: var(--accent-border); background: var(--panel-3); }
+.stat-n { font-family: var(--font-display); font-size: 26px; font-weight: 600; color: var(--text); }
+.stat-label { font-size: 11.5px; letter-spacing: .04em; text-transform: uppercase; color: var(--text-faint); }
+.stat-tile.blue .stat-n { color: var(--blue); }
+.stat-tile.amber .stat-n { color: var(--amber); }
+.stat-tile.green .stat-n { color: var(--green); }
+
+.home-card { margin-bottom: 16px; padding: 14px 16px; background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--r); }
+.home-card.amber-card { background: var(--amber-soft); border-color: var(--amber); }
+.home-card-head { font-family: var(--font-display); font-size: 12.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--accent-bright); margin-bottom: 10px; }
+.amber-card .home-card-head { color: var(--amber); }
+.home-empty { color: var(--text-dim); font-size: 13px; display: flex; align-items: center; }
+.home-more { color: var(--text-faint); font-size: 12px; margin-top: 8px; }
+
+.review-matter { background: none; border: none; padding: 0; cursor: pointer; color: var(--accent-bright); font-size: 12px; font-weight: 600; text-align: left; margin-bottom: 4px; }
+.review-matter:hover { text-decoration: underline; }
+
+.home-matter-row { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; padding: 9px 0; border: none; border-top: 1px solid var(--border); background: none; cursor: pointer; }
+.home-matter-row:first-of-type { border-top: none; }
+.home-matter-row:hover .home-matter-desc { color: var(--text); }
+.home-matter-desc { flex: 1; font-size: 13px; color: var(--text-dim); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.home-matter-meta { font-size: 11.5px; color: var(--text-faint); flex-shrink: 0; }
+
+/* Lite: large, guided targets */
+.guided-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 20px; }
+.guided-tile {
+  display: flex; flex-direction: column; gap: 8px; text-align: left;
+  padding: 22px 20px; background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: var(--r-lg); cursor: pointer; transition: border-color .15s, transform .12s, background .15s;
+}
+.guided-tile:hover { border-color: var(--accent-border); background: var(--panel-3); transform: translateY(-2px); }
+.guided-glyph { font-size: 30px; color: var(--accent-bright); }
+.guided-title { font-family: var(--font-display); font-size: 16px; font-weight: 600; color: var(--text); }
+.guided-sub { font-size: 12.5px; line-height: 1.5; color: var(--text-dim); }
+
+.home-jumps { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 16px; }
+.home-jump { display: inline-flex; align-items: center; gap: 7px; padding: 8px 13px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 999px; cursor: pointer; font-size: 12.5px; color: var(--text-dim); transition: border-color .15s, color .15s; }
+.home-jump:hover { border-color: var(--accent-border); color: var(--text); }
+.home-jump-glyph { color: var(--accent-bright); }
+
+.home-sysline { margin-top: 14px; font-size: 11.5px; color: var(--text-faint); font-family: var(--font-mono); }
+
+@media (max-width: 720px) { .home-stats { grid-template-columns: repeat(2,1fr); } .guided-grid { grid-template-columns: 1fr; } }
+
+/* Answer-first: once a tool has produced a result, its input form collapses
+   into a thin re-run bar so the result is the focus. */
+.run-inputs { border: 1px solid var(--border); border-radius: var(--r-md); background: var(--panel-2); margin-bottom: 6px; }
+.run-inputs > summary {
+  cursor: pointer; list-style: none; padding: 10px 14px; font-size: 12.5px; color: var(--text-dim);
+  display: flex; align-items: center; gap: 8px; user-select: none; transition: color .15s;
+}
+.run-inputs > summary::-webkit-details-marker { display: none; }
+.run-inputs > summary::before { content: "▸"; color: var(--accent-bright); transition: transform .15s; }
+.run-inputs[open] > summary::before { transform: rotate(90deg); }
+.run-inputs > summary:hover { color: var(--text); }
+.run-inputs-body { padding: 4px 14px 16px; border-top: 1px solid var(--border); }

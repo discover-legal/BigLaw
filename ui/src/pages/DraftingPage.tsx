@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import type { ReactNode } from "react";
 import { motion } from "framer-motion";
 import { api } from "../api";
 import type {
@@ -11,6 +12,19 @@ import { timeAgo } from "../primitives";
 import { Markdown } from "../Markdown";
 
 type Tab = "review" | "draft" | "playbooks" | "headnotes" | "citations";
+
+// RunInputs keeps drafting tools answer-first: before a result exists the input
+// form is shown open; once there's a result, the form collapses into a thin bar
+// so the result — not the form — is the focus (the matter-view pattern).
+function RunInputs({ done, label, children }: { done: boolean; label: string; children: ReactNode }) {
+  if (!done) return <>{children}</>;
+  return (
+    <details className="run-inputs">
+      <summary>{label}</summary>
+      <div className="run-inputs-body">{children}</div>
+    </details>
+  );
+}
 
 const SCOPES: PlaybookScope[] = ["firm", "personal", "matter", "client"];
 
@@ -401,28 +415,30 @@ function PlaybookReviewTab({ notify }: { notify: (m: string) => void }) {
         protections that are <em>absent</em> flagged with suggested inserts. Disposition each
         finding, then export the markup.
       </p>
-      <div className="field">
-        <label>Counterparty draft</label>
-        <textarea style={{ minHeight: 220, fontFamily: "var(--font-mono)", fontSize: 12 }}
-          value={text} onChange={(e) => setText(e.target.value)}
-          placeholder="Paste the counterparty's draft…" />
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 0.7fr 0.8fr 1fr", gap: 14, margin: "14px 0" }}>
-        <div className="field"><label>Practice area</label>
-          <select value={practiceArea} onChange={(e) => setPracticeArea(e.target.value)}>
-            <option value="">— auto —</option>
-            {PRACTICE_AREAS.map((pa) => <option key={pa} value={pa}>{pa}</option>)}
-          </select></div>
-        <div className="field"><label>Jurisdiction</label>
-          <input value={jurisdiction} onChange={(e) => setJurisdiction(e.target.value)} placeholder="UK" /></div>
-        <div className="field"><label>Matter <span style={{ fontWeight: 400, color: "var(--text-faint)" }}>(pulls matter/client playbooks)</span></label>
-          <input value={matterNumber} onChange={(e) => setMatterNumber(e.target.value)} placeholder="M-2026-001" /></div>
-        <div className="field"><label>Document title</label>
-          <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="MSA — Beta draft v3" /></div>
-      </div>
-      <button className="btn primary" disabled={busy || text.trim().length < 50} onClick={run}>
-        {busy ? "Reviewing against playbook…" : "⚖ Review against playbook"}
-      </button>
+      <RunInputs done={!!report} label="↻ Start a new review — edit inputs">
+        <div className="field">
+          <label>Counterparty draft</label>
+          <textarea style={{ minHeight: 220, fontFamily: "var(--font-mono)", fontSize: 12 }}
+            value={text} onChange={(e) => setText(e.target.value)}
+            placeholder="Paste the counterparty's draft…" />
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 0.7fr 0.8fr 1fr", gap: 14, margin: "14px 0" }}>
+          <div className="field"><label>Practice area</label>
+            <select value={practiceArea} onChange={(e) => setPracticeArea(e.target.value)}>
+              <option value="">— auto —</option>
+              {PRACTICE_AREAS.map((pa) => <option key={pa} value={pa}>{pa}</option>)}
+            </select></div>
+          <div className="field"><label>Jurisdiction</label>
+            <input value={jurisdiction} onChange={(e) => setJurisdiction(e.target.value)} placeholder="UK" /></div>
+          <div className="field"><label>Matter <span style={{ fontWeight: 400, color: "var(--text-faint)" }}>(pulls matter/client playbooks)</span></label>
+            <input value={matterNumber} onChange={(e) => setMatterNumber(e.target.value)} placeholder="M-2026-001" /></div>
+          <div className="field"><label>Document title</label>
+            <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="MSA — Beta draft v3" /></div>
+        </div>
+        <button className="btn primary" disabled={busy || text.trim().length < 50} onClick={run}>
+          {busy ? "Reviewing against playbook…" : "⚖ Review against playbook"}
+        </button>
+      </RunInputs>
 
       {report && (
         <div style={{ marginTop: 24 }}>
@@ -545,25 +561,27 @@ function HeadnotesTab({ notify }: { notify: (m: string) => void }) {
 
   return (
     <div className="panel-body" style={{ maxWidth: 920 }}>
-      <div className="field">
-        <label>Case opinion text</label>
-        <textarea style={{ minHeight: 220, fontFamily: "var(--font-mono)", fontSize: 12 }}
-          value={opinionText} onChange={(e) => setOpinionText(e.target.value)}
-          placeholder="Paste the full text of the judgment / opinion…" />
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr 0.8fr 0.6fr", gap: 14, margin: "14px 0" }}>
-        <div className="field"><label>Case name</label>
-          <input value={meta.caseName} onChange={(e) => setMeta({ ...meta, caseName: e.target.value })} placeholder="Acme v. Beta" /></div>
-        <div className="field"><label>Citation</label>
-          <input value={meta.citation} onChange={(e) => setMeta({ ...meta, citation: e.target.value })} placeholder="123 F.3d 456" /></div>
-        <div className="field"><label>Court</label>
-          <input value={meta.court} onChange={(e) => setMeta({ ...meta, court: e.target.value })} placeholder="2d Cir." /></div>
-        <div className="field"><label>Jurisdiction</label>
-          <input value={meta.jurisdiction} onChange={(e) => setMeta({ ...meta, jurisdiction: e.target.value })} placeholder="US" /></div>
-      </div>
-      <button className="btn primary" disabled={busy || opinionText.trim().length < 100} onClick={run}>
-        {busy ? "Extracting…" : "§ Generate headnotes"}
-      </button>
+      <RunInputs done={!!report} label="↻ Generate from another opinion">
+        <div className="field">
+          <label>Case opinion text</label>
+          <textarea style={{ minHeight: 220, fontFamily: "var(--font-mono)", fontSize: 12 }}
+            value={opinionText} onChange={(e) => setOpinionText(e.target.value)}
+            placeholder="Paste the full text of the judgment / opinion…" />
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr 0.8fr 0.6fr", gap: 14, margin: "14px 0" }}>
+          <div className="field"><label>Case name</label>
+            <input value={meta.caseName} onChange={(e) => setMeta({ ...meta, caseName: e.target.value })} placeholder="Acme v. Beta" /></div>
+          <div className="field"><label>Citation</label>
+            <input value={meta.citation} onChange={(e) => setMeta({ ...meta, citation: e.target.value })} placeholder="123 F.3d 456" /></div>
+          <div className="field"><label>Court</label>
+            <input value={meta.court} onChange={(e) => setMeta({ ...meta, court: e.target.value })} placeholder="2d Cir." /></div>
+          <div className="field"><label>Jurisdiction</label>
+            <input value={meta.jurisdiction} onChange={(e) => setMeta({ ...meta, jurisdiction: e.target.value })} placeholder="US" /></div>
+        </div>
+        <button className="btn primary" disabled={busy || opinionText.trim().length < 100} onClick={run}>
+          {busy ? "Extracting…" : "§ Generate headnotes"}
+        </button>
+      </RunInputs>
 
       {report && (
         <div style={{ marginTop: 24 }}>
@@ -648,29 +666,31 @@ function PrecedentsTab({ notify }: { notify: (m: string) => void }) {
         cascade applied — your standard positions baked into every clause, red lines embedded,
         provenance per clause.
       </p>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 0.7fr 0.9fr", gap: 14, marginBottom: 14 }}>
-        <div className="field"><label>Document type</label>
-          <select value={docType} onChange={(e) => setDocType(e.target.value)}>
-            {PRECEDENT_TYPES.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-          </select></div>
-        <div className="field"><label>Practice area</label>
-          <select value={practiceArea} onChange={(e) => setPracticeArea(e.target.value)}>
-            <option value="">— auto —</option>
-            {PRACTICE_AREAS.map((pa) => <option key={pa} value={pa}>{pa}</option>)}
-          </select></div>
-        <div className="field"><label>Jurisdiction</label>
-          <input value={jurisdiction} onChange={(e) => setJurisdiction(e.target.value)} placeholder="England & Wales" /></div>
-        <div className="field"><label>Acting for</label>
-          <input value={actingFor} onChange={(e) => setActingFor(e.target.value)} placeholder="buyer / disclosing party" /></div>
-      </div>
-      <div className="field">
-        <label>Special instructions</label>
-        <textarea style={{ minHeight: 72 }} value={instructions} onChange={(e) => setInstructions(e.target.value)}
-          placeholder="e.g. mutual NDA, 3-year confidentiality term, carve-out for residuals…" />
-      </div>
-      <button className="btn primary" style={{ marginTop: 12 }} disabled={busy} onClick={run}>
-        {busy ? "Drafting from precedents…" : "⚒ Generate precedent"}
-      </button>
+      <RunInputs done={!!doc} label="↻ Draft another precedent — edit inputs">
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 0.7fr 0.9fr", gap: 14, marginBottom: 14 }}>
+          <div className="field"><label>Document type</label>
+            <select value={docType} onChange={(e) => setDocType(e.target.value)}>
+              {PRECEDENT_TYPES.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select></div>
+          <div className="field"><label>Practice area</label>
+            <select value={practiceArea} onChange={(e) => setPracticeArea(e.target.value)}>
+              <option value="">— auto —</option>
+              {PRACTICE_AREAS.map((pa) => <option key={pa} value={pa}>{pa}</option>)}
+            </select></div>
+          <div className="field"><label>Jurisdiction</label>
+            <input value={jurisdiction} onChange={(e) => setJurisdiction(e.target.value)} placeholder="England & Wales" /></div>
+          <div className="field"><label>Acting for</label>
+            <input value={actingFor} onChange={(e) => setActingFor(e.target.value)} placeholder="buyer / disclosing party" /></div>
+        </div>
+        <div className="field">
+          <label>Special instructions</label>
+          <textarea style={{ minHeight: 72 }} value={instructions} onChange={(e) => setInstructions(e.target.value)}
+            placeholder="e.g. mutual NDA, 3-year confidentiality term, carve-out for residuals…" />
+        </div>
+        <button className="btn primary" style={{ marginTop: 12 }} disabled={busy} onClick={run}>
+          {busy ? "Drafting from precedents…" : "⚒ Generate precedent"}
+        </button>
+      </RunInputs>
 
       {doc && (
         <div style={{ marginTop: 24 }}>

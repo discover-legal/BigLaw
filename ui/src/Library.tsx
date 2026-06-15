@@ -7,8 +7,8 @@ import { timeAgo } from "./primitives";
 
 type Mode = "documents" | "ingest" | "upload" | "search";
 
-export function LibraryPage({ notify }: { notify: (m: string) => void }) {
-  const [mode, setMode] = useState<Mode>("documents");
+export function LibraryPage({ notify, initialMode }: { notify: (m: string) => void; initialMode?: Mode }) {
+  const [mode, setMode] = useState<Mode>(initialMode ?? "documents");
 
   // document list
   const [docs, setDocs] = useState<DocumentRef[]>([]);

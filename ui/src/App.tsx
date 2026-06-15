@@ -7,6 +7,7 @@ import { SubmitModal } from "./SubmitModal";
 import { AuditRail } from "./AuditRail";
 import { Login } from "./Login";
 import { ErrorBoundary } from "./pages/ErrorBoundary";
+import { HomePage } from "./pages/HomePage";
 import { MattersPage } from "./pages/MattersPage";
 import { LibraryPage } from "./Library";
 import { ClientsPanel } from "./ClientsPanel";
@@ -18,10 +19,11 @@ import { AnalyticsPage } from "./pages/AnalyticsPage";
 import { AdminPanel } from "./AdminPanel";
 
 type Section =
-  | "matters" | "library" | "clients" | "billing" | "budgets"
+  | "home" | "matters" | "library" | "clients" | "billing" | "budgets"
   | "watchtower" | "drafting" | "analytics" | "admin";
 
 const NAV: Array<{ id: Section; glyph: string; label: string }> = [
+  { id: "home",       glyph: "⌂", label: "Home" },
   { id: "matters",    glyph: "⚖", label: "Matters" },
   { id: "library",    glyph: "⊞", label: "Library" },
   { id: "clients",    glyph: "☷", label: "Clients" },
@@ -34,7 +36,7 @@ const NAV: Array<{ id: Section; glyph: string; label: string }> = [
 ];
 
 export default function App() {
-  const [section, setSection] = useState<Section>("matters");
+  const [section, setSection] = useState<Section>("home");
   const [tasks, setTasks] = useState<Task[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [task, setTask] = useState<Task | null>(null);
@@ -43,6 +45,7 @@ export default function App() {
   const [me, setMe] = useState<Me | null>(null);
   const [profiles, setProfiles] = useState<LawyerProfile[]>([]);
   const loadProfiles = useCallback(() => { api.listProfiles().then(setProfiles).catch(() => {}); }, []);
+  const [libraryTab, setLibraryTab] = useState<"documents" | "upload" | "search" | undefined>(undefined);
   const [submitOpen, setSubmitOpen] = useState(false);
   const [auditOpen, setAuditOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -132,7 +135,7 @@ export default function App() {
   // rather than rendered as a wall of 403s.
   const caps = me?.capabilities;
   const visible = useMemo(() => {
-    const out = new Set<Section>(["matters", "library", "drafting", "budgets"]);
+    const out = new Set<Section>(["home", "matters", "library", "drafting", "budgets"]);
     if (isPartner && caps?.clientRoster !== false) out.add("clients");
     if (caps?.timeTracking !== false) out.add("billing");
     if (isPartner) out.add("watchtower");
@@ -145,6 +148,13 @@ export default function App() {
   useEffect(() => {
     if (!visible.has(section)) setSection("matters");
   }, [visible, section]);
+
+  // A Home deep-link can preselect a Library tab; once consumed (Library has
+  // mounted and read it as its initial tab), clear it so a later direct visit
+  // opens on Documents rather than re-forcing the deep-linked tab.
+  useEffect(() => {
+    if (section === "library" && libraryTab) setLibraryTab(undefined);
+  }, [section, libraryTab]);
 
   // Production with auth on, but no session → show the login screen.
   if (me?.authEnabled && !me.user) return <Login />;
@@ -209,6 +219,15 @@ export default function App() {
 
         <div className="workspace">
           <ErrorBoundary key={section}>
+            {section === "home" && (
+              <HomePage
+                tasks={tasks} health={health} me={me} isPartner={isPartner}
+                onOpenMatter={(id) => { setSelectedId(id); setSection("matters"); }}
+                onGo={(s) => setSection(s as Section)}
+                onGoLibrary={(tab) => { setLibraryTab(tab); setSection("library"); }}
+                onNew={() => setSubmitOpen(true)} notify={notify}
+              />
+            )}
             {section === "matters" && (
               <MattersPage
                 tasks={tasks} selectedId={selectedId} onSelect={setSelectedId}
@@ -217,7 +236,7 @@ export default function App() {
                 notify={notify} onNew={() => setSubmitOpen(true)} offline={!health}
               />
             )}
-            {section === "library" && <LibraryPage notify={notify} />}
+            {section === "library" && <LibraryPage notify={notify} initialMode={libraryTab} />}
             {section === "clients" && <ClientsPanel notify={notify} />}
             {section === "billing" && <BillingPage notify={notify} isPartner={isPartner} />}
             {section === "budgets" && <BudgetsPage notify={notify} isPartner={isPartner} />}
