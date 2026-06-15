@@ -149,10 +149,11 @@ def _write_pdf(text: str, dest: Path) -> None:
 def _pandoc_render(text: str, dest: Path) -> None:
     if not shutil.which("pandoc"):
         raise RuntimeError(f"cannot render {dest.suffix}: renderer library missing and pandoc not on PATH")
-    with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as tmp:
+    with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False, encoding="utf-8") as tmp:
         tmp.write(text)
         src = tmp.name
-    proc = subprocess.run(["pandoc", src, "-o", str(dest)], capture_output=True, text=True, timeout=120)
+    proc = subprocess.run(["pandoc", src, "-o", str(dest)], capture_output=True, text=True, timeout=120,
+                          encoding="utf-8", errors="replace")
     Path(src).unlink(missing_ok=True)
     if proc.returncode != 0:
         raise RuntimeError(f"pandoc failed: {proc.stderr.strip()[:200]}")

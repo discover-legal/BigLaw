@@ -83,6 +83,9 @@ def _pandoc_to_text(path: Path) -> str:
     proc = subprocess.run(
         ["pandoc", "--to=plain", str(path)],
         capture_output=True, text=True, timeout=120,
+        # Force UTF-8: pandoc emits UTF-8, but text=True otherwise decodes with
+        # the locale default (cp1252 on Windows), which dies on smart quotes etc.
+        encoding="utf-8", errors="replace",
     )
     if proc.returncode != 0:
         raise ConversionError(f"pandoc failed on {path.name}: {proc.stderr.strip()[:200]}")
@@ -124,7 +127,7 @@ def convert_documents(documents_dir: Path) -> tuple[list[tuple[str, str]], list[
         except Exception as e:  # noqa: BLE001 — skip the file, never abort the run
             skipped.append(f"{rel} ({e})")
             continue
-        if text.strip():
+        if text and text.strip():
             converted.append((rel, text))
         else:
             skipped.append(f"{rel} (no extractable text)")
