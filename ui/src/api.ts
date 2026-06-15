@@ -101,7 +101,7 @@ export const api = {
   },
 
   searchDocuments: (query: string) =>
-    fetch(`/documents/search?query=${encodeURIComponent(query)}`).then(json<SearchResult[]>),
+    fetch(`/documents/search?q=${encodeURIComponent(query)}`).then(json<SearchResult[]>),
 
   listAttachments: (docId: string) =>
     fetch(`/documents/attachments/${docId}`).then(json<Attachment[]>),

@@ -1081,3 +1081,61 @@ table.grid tbody tr:last-child td { border-bottom: none; }
 }
 .voice-btn:hover { border-color: var(--border-gold); color: var(--gold); }
 .voice-btn.active { border-color: var(--border-gold); color: var(--gold); background: var(--gold-soft); }
+
+/* ── Answer-first matter view (lawyer-POV redesign) ───────────────────────── */
+.bottom-line {
+  margin: 18px 0 14px;
+  padding: 16px 18px;
+  background: linear-gradient(180deg, var(--gold-soft), var(--panel-2));
+  border: 1px solid var(--border-gold);
+  border-left: 3px solid var(--gold);
+  border-radius: var(--r);
+}
+.bottom-line-head {
+  display: flex; align-items: baseline; gap: 10px;
+  font-family: var(--font-display); font-size: 13px; font-weight: 600;
+  letter-spacing: 0.08em; text-transform: uppercase; color: var(--gold-bright);
+  margin-bottom: 8px;
+}
+.bl-caveat { font-family: var(--font-sans); font-size: 11px; font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--text-faint); }
+.bottom-line-body { font-size: 14.5px; line-height: 1.6; color: var(--text); }
+
+.needs-review {
+  margin: 14px 0;
+  padding: 14px 16px;
+  background: var(--amber-soft);
+  border: 1px solid var(--amber);
+  border-radius: var(--r);
+}
+.needs-review-head {
+  font-family: var(--font-display); font-size: 12.5px; font-weight: 600;
+  letter-spacing: 0.06em; text-transform: uppercase; color: var(--amber);
+  margin-bottom: 10px;
+}
+.review-item {
+  display: flex; align-items: center; gap: 14px;
+  padding: 10px 0; border-top: 1px solid var(--border);
+}
+.review-item:first-of-type { border-top: none; }
+.review-main { flex: 1; min-width: 0; }
+.review-claim { font-size: 13.5px; line-height: 1.45; color: var(--text); margin-bottom: 6px; }
+.review-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.review-agent { font-size: 11.5px; color: var(--text-dim); }
+.review-actions { display: flex; gap: 6px; flex-shrink: 0; }
+
+.request-accordion {
+  margin: 14px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background: var(--panel-2);
+}
+.request-accordion > summary {
+  cursor: pointer; list-style: none;
+  padding: 11px 16px;
+  font-size: 12.5px; font-weight: 500; color: var(--text-dim);
+}
+.request-accordion > summary::-webkit-details-marker { display: none; }
+.request-accordion > summary::before { content: "▸ "; color: var(--text-faint); }
+.request-accordion[open] > summary::before { content: "▾ "; }
+.request-accordion[open] > summary { border-bottom: 1px solid var(--border); color: var(--text); }
+.request-body { padding: 14px 16px; font-size: 13px; line-height: 1.55; color: var(--text-dim); max-height: 320px; overflow: auto; }

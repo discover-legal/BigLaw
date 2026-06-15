@@ -12,6 +12,55 @@ function initials(name: string): string {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]?.toUpperCase()).join("");
 }
 
+// conciseTitle keeps the matter header to one legible line — the full brief
+// (often a multi-paragraph prompt that even embeds the document list) lives in
+// the collapsible "The request" accordion instead of dominating the view.
+function conciseTitle(desc: string): string {
+  const firstLine = (desc.split(/\n/)[0] || desc).trim();
+  return firstLine.length > 150 ? firstLine.slice(0, 150).trimEnd() + "…" : firstLine;
+}
+
+// NeedsReview surfaces pending human gates as the first, actionable thing a
+// lawyer sees — approve/reject inline rather than hunting through Findings.
+function NeedsReview({ task, onChange, notify }: {
+  task: Task; onChange: () => void; notify: (m: string) => void;
+}) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const pending = task.pendingGates.filter((g) => g.status === "pending");
+  if (!pending.length) return null;
+
+  async function act(gate: typeof pending[number], kind: "approve" | "reject") {
+    setBusy(gate.id);
+    try {
+      if (kind === "approve") { await api.approveGate(task.id, gate.id); notify("Finding approved"); }
+      else { const r = window.prompt("Reason for rejecting this finding?") || "rejected by reviewer"; await api.rejectGate(task.id, gate.id, r); notify("Finding rejected"); }
+      onChange();
+    } catch (e) { notify((e as Error).message); } finally { setBusy(null); }
+  }
+
+  return (
+    <div className="needs-review">
+      <div className="needs-review-head">⚖ Needs your review · {pending.length}</div>
+      {pending.map((g) => (
+        <div key={g.id} className="review-item">
+          <div className="review-main">
+            <div className="review-claim">{g.finding.content}</div>
+            <div className="review-meta">
+              <span className="review-agent">{g.finding.agentName}</span>
+              <ConfidenceBar value={g.finding.confidence} />
+              {g.finding.challenged && <span className="pill red sm">⚔ challenged</span>}
+            </div>
+          </div>
+          <div className="review-actions">
+            <button className="btn approve sm" disabled={busy === g.id} onClick={() => act(g, "approve")}>Approve</button>
+            <button className="btn reject sm" disabled={busy === g.id} onClick={() => act(g, "reject")}>Reject</button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function MatterActions({ task, profiles, isPartner, onChange, onDeleted, notify }: {
   task: Task; profiles: LawyerProfile[]; isPartner: boolean;
   onChange: () => void; onDeleted: (id: string) => void; notify: (m: string) => void;
@@ -259,11 +308,27 @@ export function TaskView({ task, agentNames, profiles, isPartner, onChange, onDe
           {pendingGates > 0 && <span className="pill amber">⚖ {pendingGates} awaiting review</span>}
           {task.error && <span className="pill red">{task.error}</span>}
         </div>
-        <h1 className="task-title">{task.description}</h1>
+        <h1 className="task-title">{conciseTitle(task.description)}</h1>
         <div className="task-id">{task.id} · round {task.currentRound}/{task.maxRounds} · {task.findings.length} findings</div>
         <MatterActions task={task} profiles={profiles} isPartner={isPartner} onChange={onChange} onDeleted={onDeleted} notify={notify} />
         <PhaseStepper task={task} />
       </div>
+
+      {/* Answer-first: the bottom line, then what needs the lawyer, then detail. */}
+      {task.output && (
+        <div className="bottom-line">
+          <div className="bottom-line-head">Bottom line<span className="bl-caveat">draft — verify against the cited sources</span></div>
+          <div className="prose md bottom-line-body"><Markdown source={task.output} /></div>
+        </div>
+      )}
+
+      <NeedsReview task={task} onChange={onChange} notify={notify} />
+
+      {/* The brief is an input, not the answer — collapsed by default. */}
+      <details className="request-accordion">
+        <summary>The request{task.documentIds?.length ? ` · ${task.documentIds.length} documents` : ""}</summary>
+        <div className="prose md request-body"><Markdown source={task.description} /></div>
+      </details>
 
       <div className="tabs">
         {tabs.filter((t) => t.show).map((t) => (
