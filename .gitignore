@@ -68,3 +68,6 @@ __pycache__/
 
 # Harvey LAB sweep progress logs (run output)
 benchmarks/harvey-lab/sweep-*.jsonl
+
+# Isolated qwen-fix benchmark working dir
+data-qwenfix/

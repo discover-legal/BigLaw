@@ -75,6 +75,7 @@ type openAIChatRequest struct {
 	Stream              bool               `json:"stream"`
 	ResponseFormat      *openAIResponseFmt `json:"response_format,omitempty"`
 	ReasoningEffort     string             `json:"reasoning_effort,omitempty"`
+	Temperature         *float64           `json:"temperature,omitempty"`
 }
 
 // openAIResponseFmt requests JSON-constrained decoding. Ollama and LM Studio
@@ -87,10 +88,25 @@ type openAIResponseFmt struct {
 // openAIMessage carries either a plain string in Content (the common case) or
 // a multimodal parts array (text + image_url) for vision requests. Content is
 // typed as interface{} so a single struct serves both shapes — Qwen-VL, GPT-4o,
-// and llama-vision all accept the OpenAI multimodal content array.
+// and llama-vision all accept the OpenAI multimodal content array. For tool
+// calling it also carries an assistant turn's tool_calls and links a tool
+// result back to its call via tool_call_id.
 type openAIMessage struct {
-	Role    string      `json:"role"`
-	Content interface{} `json:"content"`
+	Role       string           `json:"role"`
+	Content    interface{}      `json:"content"`
+	ToolCalls  []openAIToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string           `json:"tool_call_id,omitempty"`
+}
+
+// openAIToolCall is the OpenAI/Ollama function-call shape. Arguments is a JSON
+// string (the model's serialized arguments), not a nested object.
+type openAIToolCall struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"` // "function"
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
 }
 
 // openAIContentPart is one element of a multimodal content array.
@@ -118,8 +134,9 @@ type openAIFunction struct {
 type openAIChatResponse struct {
 	Choices []struct {
 		Message struct {
-			Role    string `json:"role"`
-			Content string `json:"content"`
+			Role      string           `json:"role"`
+			Content   string           `json:"content"`
+			ToolCalls []openAIToolCall `json:"tool_calls"`
 		} `json:"message"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
@@ -181,16 +198,44 @@ func (p *OllamaProvider) Chat(params ChatParams) (*ChatResponse, error) {
 				msgs = append(msgs, openAIMessage{Role: m.Role, Content: parts})
 				continue
 			}
-			// Flatten to text (no tool_use support in all models).
+			// Tool-calling flow. An assistant turn carries text + tool_use
+			// blocks → one message with tool_calls; a user turn carries
+			// tool_result blocks → one OpenAI "tool" message per result (linked
+			// by tool_call_id). This is what makes multi-turn agentic tool use
+			// work on the OpenAI-compatible path (Ollama/qwen, DashScope, …).
 			var sb strings.Builder
+			var toolCalls []openAIToolCall
 			for _, b := range v {
-				if b.Type == BlockText {
+				switch b.Type {
+				case BlockText:
 					sb.WriteString(b.Text)
-				} else if b.Type == BlockToolResult {
-					sb.WriteString(b.Content)
+				case BlockToolUse:
+					args, _ := json.Marshal(b.Input)
+					if len(args) == 0 || string(args) == "null" {
+						args = []byte("{}")
+					}
+					tc := openAIToolCall{ID: b.ID, Type: "function"}
+					tc.Function.Name = b.Name
+					tc.Function.Arguments = string(args)
+					toolCalls = append(toolCalls, tc)
+				case BlockToolResult:
+					msgs = append(msgs, openAIMessage{
+						Role:       "tool",
+						ToolCallID: b.ToolUseID,
+						Content:    b.Content,
+					})
 				}
 			}
-			msgs = append(msgs, openAIMessage{Role: m.Role, Content: sb.String()})
+			if len(toolCalls) > 0 {
+				// content may be null on an assistant tool-call turn.
+				var content interface{}
+				if sb.Len() > 0 {
+					content = sb.String()
+				}
+				msgs = append(msgs, openAIMessage{Role: m.Role, Content: content, ToolCalls: toolCalls})
+			} else if sb.Len() > 0 {
+				msgs = append(msgs, openAIMessage{Role: m.Role, Content: sb.String()})
+			}
 		}
 	}
 
@@ -205,11 +250,24 @@ func (p *OllamaProvider) Chat(params ChatParams) (*ChatResponse, error) {
 	} else {
 		reqBody.MaxTokens = params.MaxTokens
 	}
+	for _, t := range params.Tools {
+		reqBody.Tools = append(reqBody.Tools, openAITool{
+			Type: "function",
+			Function: openAIFunction{
+				Name:        t.Name,
+				Description: t.Description,
+				Parameters:  t.InputSchema,
+			},
+		})
+	}
 	if params.JSONMode {
 		reqBody.ResponseFormat = &openAIResponseFmt{Type: "json_object"}
 	}
 	if params.ReasoningEffort != "" {
 		reqBody.ReasoningEffort = params.ReasoningEffort
+	}
+	if params.Temperature != nil {
+		reqBody.Temperature = params.Temperature
 	}
 
 	body, _ := json.Marshal(reqBody)
@@ -239,14 +297,47 @@ func (p *OllamaProvider) Chat(params ChatParams) (*ChatResponse, error) {
 		return nil, fmt.Errorf("ollama: decode response: %w", err)
 	}
 
-	text := ""
+	stop := StopEndTurn
+	var content []ContentBlock
 	if len(chatResp.Choices) > 0 {
-		text = chatResp.Choices[0].Message.Content
+		ch := chatResp.Choices[0]
+		if ch.Message.Content != "" {
+			content = append(content, ContentBlock{Type: BlockText, Text: ch.Message.Content})
+		}
+		if len(ch.Message.ToolCalls) > 0 {
+			// The model asked to call tools — surface them as tool_use blocks so
+			// the agentic loop executes them and feeds results back next turn.
+			stop = StopToolUse
+			for i, tc := range ch.Message.ToolCalls {
+				var input map[string]interface{}
+				if tc.Function.Arguments != "" {
+					_ = json.Unmarshal([]byte(tc.Function.Arguments), &input)
+				}
+				if input == nil {
+					input = map[string]interface{}{}
+				}
+				id := tc.ID
+				if id == "" { // some local servers omit the id; synthesize a stable one
+					id = fmt.Sprintf("call_%d", i)
+				}
+				content = append(content, ContentBlock{
+					Type:  BlockToolUse,
+					ID:    id,
+					Name:  tc.Function.Name,
+					Input: input,
+				})
+			}
+		} else if ch.FinishReason == "length" {
+			stop = StopMaxTokens
+		}
+	}
+	if len(content) == 0 {
+		content = []ContentBlock{{Type: BlockText, Text: ""}}
 	}
 
 	return &ChatResponse{
-		StopReason: StopEndTurn,
-		Content:    []ContentBlock{{Type: BlockText, Text: text}},
+		StopReason: stop,
+		Content:    content,
 		Usage: Usage{
 			InputTokens:  chatResp.Usage.PromptTokens,
 			OutputTokens: chatResp.Usage.CompletionTokens,

@@ -213,6 +213,7 @@ func (a *Agent) runAgenticLoop(initialPrompt string, maxTokens int, model string
 			Tools:       toolSchemas,
 			Messages:    msgs,
 			CacheSystem: true,
+			Temperature: a.cfg.LLMTemperature,
 		})
 		if err != nil {
 			return finalText, err
@@ -279,6 +280,7 @@ func (a *Agent) callModel(userMsg string, maxTokens int, model string, taskID st
 		System:      a.Def.SystemPrompt,
 		Messages:    []providers.Message{{Role: "user", Content: userMsg}},
 		CacheSystem: true,
+		Temperature: a.cfg.LLMTemperature,
 	})
 	if err != nil {
 		return "", err
@@ -417,19 +419,28 @@ MESSAGES ROUTED TO YOU THIS ROUND (from other agents whose offers matched your n
 %s
 %s
 ────────────────────────────────────────────────────────────────
-Produce your findings. For each distinct finding:
+Produce your findings. Use this EXACT format for each distinct finding — copy
+the labels (FINDING:, Content:, Citation:, Confidence:, END_FINDING) verbatim:
 
 FINDING:
-Content: <finding — state your conclusion or analysis clearly>
-Citation: SOURCE=<document ID or URL or case ECLI> | QUOTE=<verbatim text> | PAGE=<page/para if known>
+Content: <state your conclusion or analysis clearly>
+Citation: SOURCE=<document ID or URL or case ECLI> | QUOTE=<verbatim text copied from the source> | PAGE=<page/para if known>
 Confidence: <0.0–1.0>
 END_FINDING
 
+Worked example:
+FINDING:
+Content: The non-compete clause is unenforceable in California under Bus. & Prof. Code §16600, which voids contracts restraining lawful trade.
+Citation: SOURCE=employment-agreement-2024 | QUOTE=Employee shall not engage in any competing business for two years | PAGE=7
+Confidence: 0.9
+END_FINDING
+
 Rules:
+- Always close every finding with END_FINDING on its own line.
 - Each finding must have at least one Citation.
-- Quote must be verbatim — not paraphrased.
-- Multiple Citations allowed per finding (repeat Citation: lines).
-- If you have no findings this round: NO_FINDINGS`,
+- CRITICAL: QUOTE must be copied character-for-character from the source text — an exact substring. Do NOT summarise, reword, shorten, paraphrase, or fix typos in the QUOTE. It is mechanically checked against the source and a reworded quote will be rejected. Pick a short exact phrase you can copy precisely rather than a long one you must paraphrase.
+- Multiple Citations allowed per finding (repeat the Citation: line).
+- If you genuinely have no findings this round, reply with exactly: NO_FINDINGS`,
 		taskDesc, ctx.RoundGoal.Round, ctx.RoundGoal.Phase,
 		sanitize(ctx.RoundGoal.Description), expectedOutputs, memory, incoming, toneBlock)
 }
@@ -449,62 +460,218 @@ func parseNeedOffer(text, agentID string) (types.NeedDescriptor, types.OfferDesc
 		types.OfferDescriptor{AgentID: agentID, Text: truncate(offerText, 500)}
 }
 
-var reFindingBlock = regexp.MustCompile(`(?si)FINDING:(.*?)END_FINDING`)
-var reContent = regexp.MustCompile(`(?si)Content:\s*(.*?)(?:Citation:|Confidence:|END_FINDING|$)`)
-var reCitation = regexp.MustCompile(`(?si)Citation:\s*SOURCE=(.+?)\s*\|\s*QUOTE=(.+?)(?:\s*\|\s*PAGE=(.+?))?(?:\nCitation:|\nConfidence:|END_FINDING|$)`)
-var reConfidence = regexp.MustCompile(`(?i)Confidence:\s*([\d.]+)`)
+// maxFindingsPerAgentRound caps how many findings one agent contributes per
+// round, matching the original strict-parser bound.
+const maxFindingsPerAgentRound = 3
+
+// The finding grammar is forgiving by design: BigLaw must run on cheap/local
+// models (qwen2.5:14b and the like) whose instruction-following is looser than
+// a frontier model's. Such models routinely drop the END_FINDING terminator,
+// omit the "Content:" label and write the finding as prose, decorate markers
+// with markdown (**FINDING:**, ### FINDING, "FINDING 1:"), and emit citations
+// in natural language instead of the SOURCE=/QUOTE= micro-format. None of that
+// is a reasoning failure — it is formatting drift — so the parser recovers the
+// work instead of discarding it on the floor.
+var (
+	// reFindingStart matches a finding header, decoration and ordinal allowed.
+	reFindingStart = regexp.MustCompile(`(?im)^[\s>*#_-]*FINDING\b[ \t]*#?\d*[ \t]*:?`)
+	reEndFinding   = regexp.MustCompile(`(?i)END_FINDING`)
+	reNoFindings   = regexp.MustCompile(`(?i)\bNO_FINDINGS\b`)
+	// reContent prefers an explicit "Content:" label when the model emits one.
+	reContent = regexp.MustCompile(`(?si)\bContent\s*:\s*(.*?)(?:\n\s*Citation\s*:|\n\s*Confidence\s*:|END_FINDING|$)`)
+	// reCitationStrict is the verifiable gold form: SOURCE=/QUOTE= give the gate
+	// a verbatim quote to check against the source text.
+	reCitationStrict = regexp.MustCompile(`(?si)Citation\s*:\s*SOURCE\s*=\s*(.+?)\s*\|\s*QUOTE\s*=\s*(.+?)(?:\s*\|\s*PAGE\s*=\s*([^\n|]+))?(?:\n\s*Citation\s*:|\n\s*Confidence\s*:|END_FINDING|$)`)
+	// reCitationLoose is the fallback for natural citations ("Citation: the LCA,
+	// p.3"). It yields a source but no verbatim quote, so the gate will flag it
+	// as unverifiable rather than trust it.
+	reCitationLoose = regexp.MustCompile(`(?im)^[\s>*#_-]*(?:Citation|Source|Cite)\s*:\s*(.+)$`)
+	reConfidence    = regexp.MustCompile(`(?i)Confidence\s*:\s*([01]?(?:\.\d+)?)`)
+	rePageLoose     = regexp.MustCompile(`(?i)\b(?:pp?\.?|page|para\.?|¶|§)\s*(\d{1,5})`)
+	reQuoted        = regexp.MustCompile(`["“]([^"”]{3,})["”]`)
+)
 
 func parseFindings(text string, def types.AgentDefinition) []types.Finding {
-	if regexp.MustCompile(`(?i)NO_FINDINGS`).MatchString(text) {
+	if reNoFindings.MatchString(text) {
 		return nil
 	}
-	blocks := reFindingBlock.FindAllStringSubmatch(text, 3)
 	var findings []types.Finding
-	for _, block := range blocks {
-		body := block[1]
-		contentMatch := reContent.FindStringSubmatch(body)
-		if len(contentMatch) < 2 || strings.TrimSpace(contentMatch[1]) == "" {
+	for _, body := range splitFindingBlocks(text) {
+		content := extractFindingContent(body)
+		if content == "" {
 			continue
 		}
-		content := strings.TrimSpace(contentMatch[1])
-
-		// Non-nil even when the agent cites nothing — citations are part of
-		// the serialized JSON contract, and nil marshals to null.
-		citations := []types.Citation{}
-		for _, cm := range reCitation.FindAllStringSubmatch(body, 50) {
-			cit := types.Citation{
-				Source:               truncate(strings.TrimSpace(cm[1]), 200),
-				Quote:                truncate(strings.TrimSpace(cm[2]), 500),
-				MechanicallyVerified: false,
-			}
-			if len(cm) > 3 && strings.TrimSpace(cm[3]) != "" {
-				if n, err := strconv.Atoi(strings.TrimSpace(cm[3])); err == nil {
-					cit.Page = &n
-				}
-			}
-			citations = append(citations, cit)
-		}
-
 		confidence := 0.7
-		if m := reConfidence.FindStringSubmatch(body); len(m) > 1 {
+		if m := reConfidence.FindStringSubmatch(body); len(m) > 1 && m[1] != "" {
 			if f, err := strconv.ParseFloat(m[1], 64); err == nil {
 				// Clamp to [0,1] — an agent (or injected text echoed by one)
 				// must not be able to claim out-of-range confidence.
 				confidence = math.Min(1, math.Max(0, f))
 			}
 		}
-
 		findings = append(findings, types.Finding{
 			ID:         uuid.New().String(),
 			AgentID:    def.ID,
 			AgentName:  def.Name,
 			Content:    content,
-			Citations:  citations,
+			Citations:  extractCitations(body),
 			Confidence: confidence,
 			Timestamp:  time.Now(),
 		})
+		if len(findings) >= maxFindingsPerAgentRound {
+			break
+		}
 	}
 	return findings
+}
+
+// splitFindingBlocks segments the response into per-finding bodies. It anchors
+// on each FINDING header and runs to the next header or end of text; when an
+// explicit END_FINDING terminator is present within a segment it trims to that
+// (the frontier-model path), otherwise it keeps the whole segment (the cheap-
+// model path that forgot to close the block).
+func splitFindingBlocks(text string) []string {
+	locs := reFindingStart.FindAllStringIndex(text, -1)
+	if len(locs) == 0 {
+		return nil
+	}
+	blocks := make([]string, 0, len(locs))
+	for i, loc := range locs {
+		end := len(text)
+		if i+1 < len(locs) {
+			end = locs[i+1][0]
+		}
+		body := text[loc[1]:end]
+		if m := reEndFinding.FindStringIndex(body); m != nil {
+			body = body[:m[0]]
+		}
+		blocks = append(blocks, body)
+	}
+	return blocks
+}
+
+// extractFindingContent returns the finding's prose. It prefers an explicit
+// "Content:" label, and falls back to the block body with the trailing
+// Citation/Confidence/marker lines stripped — which is how small models that
+// skip the label still yield usable content.
+func extractFindingContent(body string) string {
+	if m := reContent.FindStringSubmatch(body); len(m) > 1 && strings.TrimSpace(m[1]) != "" {
+		return strings.TrimSpace(m[1])
+	}
+	var keep []string
+	for _, ln := range strings.Split(body, "\n") {
+		t := strings.TrimSpace(ln)
+		if t == "" {
+			if len(keep) > 0 && keep[len(keep)-1] != "" {
+				keep = append(keep, "")
+			}
+			continue
+		}
+		switch low := strings.ToLower(stripMarkerDecoration(t)); {
+		case strings.HasPrefix(low, "citation:"),
+			strings.HasPrefix(low, "source:"),
+			strings.HasPrefix(low, "cite:"),
+			strings.HasPrefix(low, "confidence:"),
+			strings.HasPrefix(low, "content:"):
+			continue
+		default:
+			keep = append(keep, t)
+		}
+	}
+	return strings.TrimSpace(strings.Join(keep, "\n"))
+}
+
+// extractCitations pulls the strict, verifiable SOURCE=/QUOTE= form first; only
+// if none are present does it fall back to natural-language citation lines. The
+// returned slice is non-nil even when empty — citations are part of the
+// serialized JSON contract and nil marshals to null.
+func extractCitations(body string) []types.Citation {
+	citations := []types.Citation{}
+	seen := map[string]bool{}
+	for _, cm := range reCitationStrict.FindAllStringSubmatch(body, 50) {
+		source := truncate(strings.TrimSpace(cm[1]), 200)
+		var page *int
+		if len(cm) > 3 {
+			if p := digitsOf(cm[3]); p != "" {
+				if n, err := strconv.Atoi(p); err == nil {
+					page = &n
+				}
+			}
+		}
+		// Small models commonly wrap the quote in "…" and sometimes repeat
+		// "QUOTE=" on one line instead of starting a new Citation. Split those
+		// out and strip wrapping quote marks so the verbatim text matches the
+		// source on the gate's substring check (otherwise a faithful quote is
+		// falsely flagged as unverified).
+		for _, qpart := range strings.Split(cm[2], "QUOTE=") {
+			q := trimWrappingQuotes(strings.TrimRight(strings.TrimSpace(qpart), " |"))
+			if q == "" {
+				continue
+			}
+			c := types.Citation{Source: source, Quote: truncate(q, 500), Page: page}
+			if key := c.Source + "\x00" + c.Quote; !seen[key] {
+				seen[key] = true
+				citations = append(citations, c)
+			}
+		}
+	}
+	if len(citations) > 0 {
+		return citations
+	}
+	for _, cm := range reCitationLoose.FindAllStringSubmatch(body, 50) {
+		raw := strings.TrimSpace(cm[1])
+		// Skip a SOURCE=… line the strict pass already considered.
+		if raw == "" || strings.HasPrefix(strings.ToUpper(raw), "SOURCE=") {
+			continue
+		}
+		c := types.Citation{Source: truncate(raw, 200)}
+		if q := reQuoted.FindStringSubmatch(raw); len(q) > 1 {
+			c.Quote = truncate(strings.TrimSpace(q[1]), 500)
+		}
+		if pm := rePageLoose.FindStringSubmatch(raw); len(pm) > 1 {
+			if n, err := strconv.Atoi(pm[1]); err == nil {
+				c.Page = &n
+			}
+		}
+		if key := c.Source; !seen[key] {
+			seen[key] = true
+			citations = append(citations, c)
+		}
+	}
+	return citations
+}
+
+func stripMarkerDecoration(s string) string {
+	return strings.TrimLeft(s, " \t>*#_-")
+}
+
+func digitsOf(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// trimWrappingQuotes removes matching leading/trailing quote marks (straight or
+// typographic) that small models like to wrap verbatim quotes in. Repeats to
+// peel nested pairs.
+func trimWrappingQuotes(s string) string {
+	s = strings.TrimSpace(s)
+	pairs := map[rune]rune{'"': '"', '\'': '\'', '“': '”', '‘': '’', '«': '»'}
+	for {
+		r := []rune(s)
+		if len(r) < 2 {
+			return s
+		}
+		if closer, ok := pairs[r[0]]; ok && r[len(r)-1] == closer {
+			s = strings.TrimSpace(string(r[1 : len(r)-1]))
+			continue
+		}
+		return s
+	}
 }
 
 // ─── Task type inference ──────────────────────────────────────────────────────

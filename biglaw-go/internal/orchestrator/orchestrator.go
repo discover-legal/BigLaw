@@ -723,11 +723,23 @@ func (o *Orchestrator) runPhase(task *types.Task, phase types.TaskPhase) error {
 	if err != nil {
 		return fmt.Errorf("run round: %w", err)
 	}
-	// Build source-text map for citation gate.
+	// Build source-text map for the citation gate, keyed by every identifier a
+	// model might cite: the internal UUID, the document title/filename, and the
+	// normalised title. Models cite by title ("sec-referral-notice.docx"), not
+	// UUID, so without the title keys mechanical verification never matches and
+	// every finding is falsely flagged as unverified.
 	sourceTexts := map[string]string{}
 	for _, docID := range task.DocumentIDs {
-		if text, err := o.knowledge.GetFullText(docID); err == nil && text != "" {
-			sourceTexts[docID] = text
+		text, err := o.knowledge.GetFullText(docID)
+		if err != nil || text == "" {
+			continue
+		}
+		sourceTexts[docID] = text
+		if doc := o.knowledge.GetByID(docID); doc != nil && strings.TrimSpace(doc.Title) != "" {
+			sourceTexts[doc.Title] = text
+			if k := protocols.NormalizeSourceKey(doc.Title); k != "" {
+				sourceTexts[k] = text
+			}
 		}
 	}
 
@@ -945,12 +957,22 @@ func (o *Orchestrator) synthesise(task *types.Task) (string, error) {
 	}
 
 	var lines []string
+	anyFlagged := false
 	for i, f := range filteredFindings {
 		content := f.Content
 		if len(content) > 5000 {
 			content = strutil.Truncate(content, 5000)
 		}
-		lines = append(lines, fmt.Sprintf("[%d] (%s, Round %d) %s", i+1, f.AgentName, f.Round, content))
+		marker := ""
+		if f.HallucinationRisk {
+			anyFlagged = true
+			warning := f.CitationWarning
+			if warning == "" {
+				warning = "support could not be mechanically verified"
+			}
+			marker = fmt.Sprintf("⚠️ UNVERIFIED — %s. Do NOT present this as established fact; if you rely on it, flag it as unverified in the output.\n", warning)
+		}
+		lines = append(lines, fmt.Sprintf("[%d] (%s, Round %d) %s%s", i+1, f.AgentName, f.Round, marker, content))
 	}
 	findingsSummary := strings.Join(lines, "\n\n")
 	if len(findingsSummary) > 200_000 {
@@ -972,14 +994,19 @@ func (o *Orchestrator) synthesise(task *types.Task) (string, error) {
 		}
 	}
 
+	unverifiedDirective := ""
+	if anyFlagged {
+		unverifiedDirective = "\nSome findings are marked \"⚠️ UNVERIFIED\": their citations could not be mechanically verified against the source documents. You MUST NOT state these as established fact — either omit them or surface them with an explicit caveat (e.g. \"unverified — requires confirmation\") so the reader is warned."
+	}
+
 	prompt := fmt.Sprintf(`TASK: %s
 
 ALL FINDINGS FROM ALL ROUNDS:
 %s
 %s
 Produce the final legal output for this task. Structure appropriately for the workflow type: %s.
-Every claim must trace to a specific finding number from the list above.`,
-		safeDesc, findingsSummary, toneBlock, task.WorkflowType)
+Ground every statement in the findings above — do not introduce facts, figures, or citations they do not support. Write a clean, client-ready deliverable: do NOT print internal finding numbers or IDs, bracketed references (e.g. [3] or "Finding 12"), agent names, tool names, or unfilled placeholder tokens (e.g. [Current Date], [Email Address]) — fill them in or omit them.%s`,
+		safeDesc, findingsSummary, toneBlock, task.WorkflowType, unverifiedDirective)
 
 	tier := types.TierRoot
 	model := routing.SelectModel(o.cfg, routing.SelectParams{
@@ -1006,6 +1033,7 @@ Every claim must trace to a specific finding number from the list above.`,
 		System:      o.rootAgentDef.SystemPrompt,
 		Messages:    []providers.Message{{Role: "user", Content: prompt}},
 		CacheSystem: true,
+		Temperature: o.cfg.LLMTemperature,
 	}
 	if useThinking {
 		chatParams.ReasoningEffort = o.cfg.ReasoningEffort

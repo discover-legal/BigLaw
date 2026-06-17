@@ -1,0 +1,5 @@
+FINDING:
+Content: The referral notice indicates that Daniel Hargrove's actions may violate Section 10(b) of the Securities Exchange Act of 1934 and Rule 10b-5, due to alleged insider trading activities.
+Citation: SOURCE=referral-notice-1 | QUOTE="The Commission alleges that on March 3, 2024, Daniel Hargrove purchased 12,000 shares of Veltrix Corp two days before the public announcement of its acquisition by Orona Holdings. The staff further alleges that Hargrove tipped his brother-in-law, who purchased 4,000 shares the same afternoon." | QUOTE="The referral cites Section 10(b) and Rule 10b-5." 
+Confidence: 1.0
+END_FINDING

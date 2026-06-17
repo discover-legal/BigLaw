@@ -183,6 +183,17 @@ type Finding struct {
 	VerificationResult *VerificationResult `json:"verificationResult,omitempty"`
 	Round              int                 `json:"round"`
 	Timestamp          time.Time           `json:"timestamp"`
+
+	// HallucinationRisk is set by the citation gate when a finding's support
+	// could not be mechanically verified — either it carried no citation, or
+	// none of its citation quotes were found verbatim in the cited source.
+	// It rides through debate, verification, and synthesis so the risk is
+	// surfaced stridently in the final deliverable (and flagged in the UI)
+	// rather than being silently trusted or silently dropped. This is what lets
+	// cheap/local models contribute work without their looser citations either
+	// vanishing at the gate or being passed off as established fact.
+	HallucinationRisk bool   `json:"hallucinationRisk,omitempty"`
+	CitationWarning   string `json:"citationWarning,omitempty"`
 }
 
 // ─── Human gates ─────────────────────────────────────────────────────────────

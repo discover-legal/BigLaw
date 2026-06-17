@@ -68,6 +68,12 @@ type ChatParams struct {
 	// provider (Ollama/LM Studio/DashScope) via response_format. Set it on
 	// structured-extraction calls.
 	JSONMode bool
+	// Temperature, when non-nil, overrides the model's sampling temperature.
+	// Lower values make the model more deterministic and far more likely to
+	// copy source text verbatim instead of paraphrasing — important for
+	// citation quotes, which must match the source to be machine-verifiable.
+	// nil leaves the server default (Ollama defaults qwen to ~0.8).
+	Temperature *float64
 }
 
 type Usage struct {

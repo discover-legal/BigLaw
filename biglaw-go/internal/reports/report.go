@@ -153,6 +153,7 @@ func (g *Generator) Generate(
 		"Address the client directly. Summarise progress, key findings, next steps.",
 		"Use clear headings. Keep it under 500 words unless the matter is complex.",
 		"Do NOT reveal internal agent names, tool names, or system architecture details.",
+		"Do NOT print internal finding numbers or IDs, bracketed references (e.g. [3] or \"Finding 12\"), or unfilled placeholder tokens like [Date] — fill them in or omit them.",
 		toneInjection,
 	}, "\n")
 

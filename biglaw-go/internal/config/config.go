@@ -133,6 +133,7 @@ type DyTopoConfig struct {
 
 type DebateConfig struct {
 	CitationRequired        bool
+	CitationDropUnsupported bool
 	AdversarialEnabled      bool
 	VerificationPasses      int
 	GateConfidenceThreshold float64
@@ -398,6 +399,12 @@ type Config struct {
 	// OpenAI-standard reasoning_effort on heavy "thinking" calls for endpoints
 	// that support it (o-series, OpenRouter, DeepSeek-R1, …). Empty = omit it.
 	ReasoningEffort string
+	// LLMTemperature, when non-nil, overrides the sampling temperature on agent
+	// reasoning and synthesis calls. Defaults low (0.2) so the model copies
+	// source text verbatim for citations instead of paraphrasing — high
+	// temperature is the main cause of unverifiable, reworded quotes. Set
+	// LLM_TEMPERATURE to override; LLM_TEMPERATURE=default leaves it to the server.
+	LLMTemperature *float64
 	Email        EmailConfig
 	Bots         BotsConfig
 	Playbooks    PlaybooksConfig
@@ -462,6 +469,7 @@ func Load() *Config {
 		},
 		Debate: DebateConfig{
 			CitationRequired:        envBool("DEBATE_CITATION_REQUIRED", true),
+			CitationDropUnsupported: envBool("DEBATE_CITATION_DROP_UNSUPPORTED", false),
 			AdversarialEnabled:      envBool("DEBATE_ADVERSARIAL_ENABLED", true),
 			VerificationPasses:      envInt("DEBATE_VERIFICATION_PASSES", 10),
 			GateConfidenceThreshold: envFloat("DEBATE_GATE_CONFIDENCE_THRESHOLD", 0.80),
@@ -549,6 +557,7 @@ func Load() *Config {
 			OCIPlainHTTP:   envBool("BLOB_OCI_PLAIN_HTTP", false),
 		},
 		ReasoningEffort: normalizeEnum(os.Getenv("REASONING_EFFORT"), "", "low", "medium", "high"),
+		LLMTemperature:  loadLLMTemperature(),
 		Playbooks: PlaybooksConfig{
 			File: env("PLAYBOOKS_FILE", "./data/playbooks.json"),
 		},
@@ -660,6 +669,24 @@ func Load() *Config {
 
 	c.Model = loadModelStack()
 	return c
+}
+
+// loadLLMTemperature resolves the sampling temperature for reasoning/synthesis
+// calls. Default 0.2 (low — favours verbatim copying and determinism for legal
+// work); LLM_TEMPERATURE=<float> overrides; LLM_TEMPERATURE=default returns nil
+// to leave the server's own default in place.
+func loadLLMTemperature() *float64 {
+	v := strings.TrimSpace(strings.ToLower(os.Getenv("LLM_TEMPERATURE")))
+	if v == "default" || v == "server" {
+		return nil
+	}
+	t := 0.2
+	if v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 0 && f <= 2 {
+			t = f
+		}
+	}
+	return &t
 }
 
 // loadModelStack resolves the primary model stack from MODEL_STACK plus optional
