@@ -18,6 +18,11 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
 
+// maxQueryK caps how large a result slice a caller-supplied TopK can allocate,
+// independent of candidate count — a hard upper bound against a crafted request
+// driving an excessive allocation.
+const maxQueryK = 1000
+
 // ─── Intra-round whiteboard (cleared each round) ──────────────────────────────
 
 type IntraRoundStore struct {
@@ -124,6 +129,9 @@ func (s *InterRoundStore) Query(query string, opts QueryOpts) ([]types.MemoryEnt
 	k := opts.TopK
 	if k <= 0 {
 		k = 6
+	}
+	if k > maxQueryK { // explicit upper bound on a caller-supplied size (anti-DoS)
+		k = maxQueryK
 	}
 	if k > len(candidates) {
 		k = len(candidates)

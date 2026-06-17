@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/discover-legal/biglaw-go/internal/strutil"
+	"github.com/discover-legal/biglaw-go/internal/urlguard"
 )
 
 const (
@@ -306,7 +307,13 @@ type WebhookFact struct {
 }
 
 // PostToTeamsWebhook posts a MessageCard to a Teams Incoming Webhook URL.
+// The URL is SSRF-validated at egress (defense in depth) so that even an
+// env- or API-supplied webhook can never drive a request at a private,
+// loopback, or link-local host.
 func PostToTeamsWebhook(webhookURL, title, text string, facts []WebhookFact) error {
+	if _, err := urlguard.AssertPublicHTTPS(webhookURL, "Teams webhook URL"); err != nil {
+		return err
+	}
 	card := map[string]interface{}{
 		"@type":      "MessageCard",
 		"@context":   "http://schema.org/extensions",

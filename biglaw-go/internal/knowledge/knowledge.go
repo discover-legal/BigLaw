@@ -112,6 +112,11 @@ type SearchOpts struct {
 	TopK    int
 }
 
+// maxTopK caps how large a result slice a caller-supplied TopK can allocate,
+// independent of how many candidates exist — a hard upper bound against a
+// crafted request driving an excessive allocation.
+const maxTopK = 1000
+
 func (s *Store) Search(query string, opts SearchOpts) ([]types.SearchResult, error) {
 	qResult, err := s.embedC.Embed(query)
 	if err != nil || qResult == nil {
@@ -141,6 +146,9 @@ func (s *Store) Search(query string, opts SearchOpts) ([]types.SearchResult, err
 	k := opts.TopK
 	if k <= 0 {
 		k = 5
+	}
+	if k > maxTopK { // explicit upper bound on a caller-supplied size (anti-DoS)
+		k = maxTopK
 	}
 	if k > len(candidates) {
 		k = len(candidates)

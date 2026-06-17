@@ -12,8 +12,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
 
@@ -29,6 +27,7 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/routing"
 	"github.com/discover-legal/biglaw-go/internal/timekeeping"
 	"github.com/discover-legal/biglaw-go/internal/types"
+	"github.com/discover-legal/biglaw-go/internal/urlguard"
 )
 
 // mountBots registers the bot webhook + matter-link routes and starts the
@@ -208,44 +207,11 @@ func (s *Server) handleSlackNotify(c *gin.Context) {
 
 // ─── URL validation ──────────────────────────────────────────────────────────
 
-var (
-	botsRfc1918_172 = regexp.MustCompile(`^172\.(1[6-9]|2\d|3[01])\.`)
-	botsCgnat100_64 = regexp.MustCompile(`^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.`)
-	botsHexIPv4     = regexp.MustCompile(`^0x[0-9a-f]+$`)
-	botsDecimalIPv4 = regexp.MustCompile(`^\d+$`)
-)
-
 // botsAssertPublicHTTPSURL validates a caller-supplied webhook override: it
 // must be a public https URL (no SSRF via loopback/private/link-local hosts).
-// Port of assertPublicHttpUrl + the https check in src/bots/teams.ts.
+// Delegates to the shared urlguard validator.
 func botsAssertPublicHTTPSURL(raw, label string) (string, error) {
-	trimmed := strings.TrimSpace(raw)
-	u, err := url.Parse(trimmed)
-	if err != nil || u.Hostname() == "" {
-		return "", fmt.Errorf("invalid %s '%s': must be a public https URL", label, trimmed)
-	}
-	if u.Scheme != "https" {
-		return "", fmt.Errorf("%s must use https", label)
-	}
-	h := strings.ToLower(u.Hostname())
-	private := h == "localhost" ||
-		h == "::1" || h == "::" || h == "0.0.0.0" ||
-		strings.HasPrefix(h, "0.") ||
-		botsHexIPv4.MatchString(h) ||
-		botsDecimalIPv4.MatchString(h) ||
-		strings.HasPrefix(h, "127.") ||
-		strings.HasPrefix(h, "169.254.") ||
-		strings.HasPrefix(h, "10.") ||
-		botsRfc1918_172.MatchString(h) ||
-		strings.HasPrefix(h, "192.168.") ||
-		botsCgnat100_64.MatchString(h) ||
-		strings.HasPrefix(h, "::ffff:") ||
-		strings.HasPrefix(h, "fc00:") ||
-		strings.HasPrefix(h, "fe80:")
-	if private {
-		return "", fmt.Errorf("%s '%s' resolves to a private or loopback address", label, trimmed)
-	}
-	return trimmed, nil
+	return urlguard.AssertPublicHTTPS(raw, label)
 }
 
 // startTaskNotifier posts a chat notification when a task completes. No-op if

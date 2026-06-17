@@ -405,8 +405,9 @@ export class TypeDBConflictGraph {
 /** Slugify a name into a safe external-id (alphanumeric + hyphens, max 100 chars). */
 function slugId(name: string): string {
   return name
+    .slice(0, 200) // bound input before any regex — ReDoS guard on uncontrolled names
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
+    .replace(/[^a-z0-9]+/g, "-") // collapses runs, so no consecutive hyphens remain
+    .replace(/^-|-$/g, "") // single-char trim (no quantifier) — can't backtrack
     .slice(0, 100) || "unknown";
 }
