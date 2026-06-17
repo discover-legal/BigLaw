@@ -184,17 +184,37 @@ type Finding struct {
 	Round              int                 `json:"round"`
 	Timestamp          time.Time           `json:"timestamp"`
 
-	// HallucinationRisk is set by the citation gate when a finding's support
-	// could not be mechanically verified — either it carried no citation, or
-	// none of its citation quotes were found verbatim in the cited source.
-	// It rides through debate, verification, and synthesis so the risk is
-	// surfaced stridently in the final deliverable (and flagged in the UI)
-	// rather than being silently trusted or silently dropped. This is what lets
-	// cheap/local models contribute work without their looser citations either
-	// vanishing at the gate or being passed off as established fact.
-	HallucinationRisk bool   `json:"hallucinationRisk,omitempty"`
-	CitationWarning   string `json:"citationWarning,omitempty"`
+	// A finding is a CONCLUSION (the agent's analysis, in Content — never
+	// expected to match source wording) plus zero or more EVIDENCE items (its
+	// Citations — each a verbatim quote that can be mechanically verified
+	// against the cited source). The two are judged differently: a conclusion
+	// is the model's reasoning; evidence is checkable fact. EvidenceStatus
+	// records how well the conclusion is backed, set by the citation gate:
+	//
+	//   EvidenceGrounded    — at least one evidence quote verified verbatim
+	//   EvidenceUnverified  — cites evidence but no quote matched the source
+	//                         (paraphrase or fabrication risk)
+	//   EvidenceUnsupported — no evidence cited at all
+	//
+	// It rides through debate, verification, and synthesis so unverified/
+	// unsupported conclusions are caveated in the deliverable instead of being
+	// stated as established fact — and so a grounded conclusion is NOT flagged
+	// merely because its prose differs from the source. This lets cheap/local
+	// models contribute analysis without their evidence either vanishing at the
+	// gate or being passed off as verified.
+	EvidenceStatus EvidenceStatus `json:"evidenceStatus,omitempty"`
+	EvidenceNote   string         `json:"evidenceNote,omitempty"`
 }
+
+// EvidenceStatus classifies how well a finding's conclusion is backed by
+// mechanically-verified source evidence.
+type EvidenceStatus string
+
+const (
+	EvidenceGrounded    EvidenceStatus = "grounded"
+	EvidenceUnverified  EvidenceStatus = "unverified"
+	EvidenceUnsupported EvidenceStatus = "unsupported"
+)
 
 // ─── Human gates ─────────────────────────────────────────────────────────────
 

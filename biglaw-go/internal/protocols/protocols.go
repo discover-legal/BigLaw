@@ -145,9 +145,9 @@ func repairQuote(src, quote string) (string, bool) {
 
 // ─── 1. Citation gate ─────────────────────────────────────────────────────────
 
-// ApplyCitationGate mechanically verifies each finding's citations against the
-// source texts and, when support is missing or unverifiable, marks the finding
-// with HallucinationRisk + a warning rather than silently discarding it.
+// ApplyCitationGate mechanically verifies each finding's evidence quotes against
+// the source texts and classifies the finding's EvidenceStatus (grounded /
+// unverified / unsupported) rather than silently discarding it.
 //
 // Silently dropping uncited findings is itself a failure mode: a cheap/local
 // model produces real legal analysis but in looser citation form, and a hard
@@ -182,14 +182,16 @@ func (r *Runner) ApplyCitationGate(findings []types.Finding, sourceTexts map[str
 
 		switch {
 		case len(f.Citations) == 0:
-			f.HallucinationRisk = true
-			f.CitationWarning = "no supporting citation was provided for this finding"
+			f.EvidenceStatus = types.EvidenceUnsupported
+			f.EvidenceNote = "no supporting evidence was cited for this conclusion"
 		case !anyVerified:
-			f.HallucinationRisk = true
-			f.CitationWarning = "citation provided but its quoted text was not found verbatim in the cited source (possible fabrication or paraphrase)"
+			f.EvidenceStatus = types.EvidenceUnverified
+			f.EvidenceNote = "evidence cited but no quote matched the source verbatim (possible paraphrase or fabrication)"
+		default:
+			f.EvidenceStatus = types.EvidenceGrounded
 		}
 
-		if f.HallucinationRisk && r.cfg.Debate.CitationDropUnsupported {
+		if f.EvidenceStatus != types.EvidenceGrounded && r.cfg.Debate.CitationDropUnsupported {
 			rejected = append(rejected, *f)
 			continue
 		}

@@ -419,27 +419,30 @@ MESSAGES ROUTED TO YOU THIS ROUND (from other agents whose offers matched your n
 %s
 %s
 ────────────────────────────────────────────────────────────────
-Produce your findings. Use this EXACT format for each distinct finding — copy
-the labels (FINDING:, Content:, Citation:, Confidence:, END_FINDING) verbatim:
+Produce your findings. Each finding has two DISTINCT parts — a Conclusion (your
+analysis) and one or more Evidence lines (verbatim quotes that back it). Use this
+EXACT format, copying the labels verbatim:
 
 FINDING:
-Content: <state your conclusion or analysis clearly>
-Citation: SOURCE=<document ID or URL or case ECLI> | QUOTE=<verbatim text copied from the source> | PAGE=<page/para if known>
+Conclusion: <your legal analysis or conclusion, in your own words>
+Evidence: SOURCE=<document ID or URL or case ECLI> | QUOTE=<exact text copied character-for-character from the source> | PAGE=<page/para if known>
 Confidence: <0.0–1.0>
 END_FINDING
 
+The Conclusion and the Evidence are different and are judged differently:
+- Conclusion is YOUR reasoning — write it in your own words; it need not match the source wording.
+- Evidence QUOTE must be copied character-for-character from the source — an exact substring. Do NOT summarise, reword, shorten, paraphrase, or fix typos. It is mechanically verified against the source; a reworded quote will not verify. Pick a short phrase you can copy exactly rather than a long one you must paraphrase. NEVER put your own analysis in a QUOTE.
+
 Worked example:
 FINDING:
-Content: The non-compete clause is unenforceable in California under Bus. & Prof. Code §16600, which voids contracts restraining lawful trade.
-Citation: SOURCE=employment-agreement-2024 | QUOTE=Employee shall not engage in any competing business for two years | PAGE=7
+Conclusion: The non-compete clause is unenforceable in California under Bus. & Prof. Code §16600, which voids contracts restraining lawful trade.
+Evidence: SOURCE=employment-agreement-2024 | QUOTE=Employee shall not engage in any competing business for two years | PAGE=7
 Confidence: 0.9
 END_FINDING
 
 Rules:
 - Always close every finding with END_FINDING on its own line.
-- Each finding must have at least one Citation.
-- CRITICAL: QUOTE must be copied character-for-character from the source text — an exact substring. Do NOT summarise, reword, shorten, paraphrase, or fix typos in the QUOTE. It is mechanically checked against the source and a reworded quote will be rejected. Pick a short exact phrase you can copy precisely rather than a long one you must paraphrase.
-- Multiple Citations allowed per finding (repeat the Citation: line).
+- Provide at least one Evidence line whose QUOTE you can copy exactly; add more Evidence lines for additional support.
 - If you genuinely have no findings this round, reply with exactly: NO_FINDINGS`,
 		taskDesc, ctx.RoundGoal.Round, ctx.RoundGoal.Phase,
 		sanitize(ctx.RoundGoal.Description), expectedOutputs, memory, incoming, toneBlock)
@@ -477,15 +480,17 @@ var (
 	reFindingStart = regexp.MustCompile(`(?im)^[\s>*#_-]*FINDING\b[ \t]*#?\d*[ \t]*:?`)
 	reEndFinding   = regexp.MustCompile(`(?i)END_FINDING`)
 	reNoFindings   = regexp.MustCompile(`(?i)\bNO_FINDINGS\b`)
-	// reContent prefers an explicit "Content:" label when the model emits one.
-	reContent = regexp.MustCompile(`(?si)\bContent\s*:\s*(.*?)(?:\n\s*Citation\s*:|\n\s*Confidence\s*:|END_FINDING|$)`)
+	// reContent captures the conclusion. "Conclusion:" is the current label;
+	// "Content:" is accepted for back-compat with older output.
+	reContent = regexp.MustCompile(`(?si)\b(?:Conclusion|Content)\s*:\s*(.*?)(?:\n\s*(?:Evidence|Citation)\s*:|\n\s*Confidence\s*:|END_FINDING|$)`)
 	// reCitationStrict is the verifiable gold form: SOURCE=/QUOTE= give the gate
-	// a verbatim quote to check against the source text.
-	reCitationStrict = regexp.MustCompile(`(?si)Citation\s*:\s*SOURCE\s*=\s*(.+?)\s*\|\s*QUOTE\s*=\s*(.+?)(?:\s*\|\s*PAGE\s*=\s*([^\n|]+))?(?:\n\s*Citation\s*:|\n\s*Confidence\s*:|END_FINDING|$)`)
-	// reCitationLoose is the fallback for natural citations ("Citation: the LCA,
-	// p.3"). It yields a source but no verbatim quote, so the gate will flag it
-	// as unverifiable rather than trust it.
-	reCitationLoose = regexp.MustCompile(`(?im)^[\s>*#_-]*(?:Citation|Source|Cite)\s*:\s*(.+)$`)
+	// a verbatim quote to check. "Evidence:" is the current label; "Citation:"
+	// is accepted for back-compat.
+	reCitationStrict = regexp.MustCompile(`(?si)(?:Evidence|Citation)\s*:\s*SOURCE\s*=\s*(.+?)\s*\|\s*QUOTE\s*=\s*(.+?)(?:\s*\|\s*PAGE\s*=\s*([^\n|]+))?(?:\n\s*(?:Evidence|Citation)\s*:|\n\s*Confidence\s*:|END_FINDING|$)`)
+	// reCitationLoose is the fallback for natural evidence lines ("Evidence: the
+	// LCA, p.3"). It yields a source but no verbatim quote, so the gate marks it
+	// unverified rather than trusting it.
+	reCitationLoose = regexp.MustCompile(`(?im)^[\s>*#_-]*(?:Evidence|Citation|Source|Cite)\s*:\s*(.+)$`)
 	reConfidence    = regexp.MustCompile(`(?i)Confidence\s*:\s*([01]?(?:\.\d+)?)`)
 	rePageLoose     = regexp.MustCompile(`(?i)\b(?:pp?\.?|page|para\.?|¶|§)\s*(\d{1,5})`)
 	reQuoted        = regexp.MustCompile(`["“]([^"”]{3,})["”]`)
@@ -568,10 +573,12 @@ func extractFindingContent(body string) string {
 			continue
 		}
 		switch low := strings.ToLower(stripMarkerDecoration(t)); {
-		case strings.HasPrefix(low, "citation:"),
+		case strings.HasPrefix(low, "evidence:"),
+			strings.HasPrefix(low, "citation:"),
 			strings.HasPrefix(low, "source:"),
 			strings.HasPrefix(low, "cite:"),
 			strings.HasPrefix(low, "confidence:"),
+			strings.HasPrefix(low, "conclusion:"),
 			strings.HasPrefix(low, "content:"):
 			continue
 		default:

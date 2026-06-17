@@ -31,8 +31,8 @@ func TestCitationGate_VerifiedPasses(t *testing.T) {
 	if len(passed) != 1 || len(rejected) != 0 {
 		t.Fatalf("passed=%d rejected=%d", len(passed), len(rejected))
 	}
-	if passed[0].HallucinationRisk {
-		t.Errorf("verified finding should not be flagged")
+	if passed[0].EvidenceStatus != types.EvidenceGrounded {
+		t.Errorf("verified finding should be grounded, got %q", passed[0].EvidenceStatus)
 	}
 	if !passed[0].Citations[0].MechanicallyVerified {
 		t.Errorf("citation should be mechanically verified")
@@ -47,8 +47,8 @@ func TestCitationGate_NoCitationFlagged(t *testing.T) {
 	if len(passed) != 1 || len(rejected) != 0 {
 		t.Fatalf("want retained+flagged, passed=%d rejected=%d", len(passed), len(rejected))
 	}
-	if !passed[0].HallucinationRisk || passed[0].CitationWarning == "" {
-		t.Errorf("expected HallucinationRisk + warning, got %+v", passed[0])
+	if passed[0].EvidenceStatus != types.EvidenceUnsupported || passed[0].EvidenceNote == "" {
+		t.Errorf("expected unsupported + note, got %+v", passed[0])
 	}
 }
 
@@ -62,8 +62,8 @@ func TestCitationGate_UnverifiedFlagged(t *testing.T) {
 		Citations: []types.Citation{{Source: "doc-1", Quote: "a quote that does not appear"}},
 	}}
 	passed, _ := r.ApplyCitationGate(in, src)
-	if len(passed) != 1 || !passed[0].HallucinationRisk {
-		t.Fatalf("expected flagged finding, got %+v", passed)
+	if len(passed) != 1 || passed[0].EvidenceStatus != types.EvidenceUnverified {
+		t.Fatalf("expected unverified finding, got %+v", passed)
 	}
 }
 
@@ -93,8 +93,8 @@ func TestCitationGate_ResolvesByTitle(t *testing.T) {
 		Citations: []types.Citation{{Source: "sec-referral-notice.docx", Quote: "substantial unauthorized trading"}},
 	}}
 	passed, _ := r.ApplyCitationGate(in, src)
-	if passed[0].HallucinationRisk {
-		t.Fatalf("title-resolved verified quote should not be flagged: %+v", passed[0])
+	if passed[0].EvidenceStatus != types.EvidenceGrounded {
+		t.Fatalf("title-resolved verified quote should be grounded: %+v", passed[0])
 	}
 }
 
@@ -128,7 +128,7 @@ func TestCitationGate_NotRequired(t *testing.T) {
 	r := gateRunner(false, false)
 	in := []types.Finding{{ID: "f1", Content: "no cite"}}
 	passed, rejected := r.ApplyCitationGate(in, map[string]string{})
-	if len(passed) != 1 || len(rejected) != 0 || passed[0].HallucinationRisk {
+	if len(passed) != 1 || len(rejected) != 0 || passed[0].EvidenceStatus != "" {
 		t.Fatalf("not-required path altered findings: %+v", passed)
 	}
 }

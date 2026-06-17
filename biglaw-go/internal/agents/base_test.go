@@ -134,6 +134,26 @@ Citation: SOURCE=d | QUOTE=delta`
 	}
 }
 
+// The current Conclusion/Evidence labels parse, and the conclusion is kept
+// separate from the verbatim evidence quote.
+func TestParseFindings_ConclusionEvidence(t *testing.T) {
+	in := `FINDING:
+Conclusion: The wage level is inconsistent with the offer letter.
+Evidence: SOURCE=lca-1 | QUOTE=Level II wage $95,000 | PAGE=3
+Confidence: 0.8
+END_FINDING`
+	fs := parseFindings(in, testDef)
+	if len(fs) != 1 {
+		t.Fatalf("want 1 finding, got %d", len(fs))
+	}
+	if fs[0].Content != "The wage level is inconsistent with the offer letter." {
+		t.Errorf("conclusion: %q", fs[0].Content)
+	}
+	if len(fs[0].Citations) != 1 || fs[0].Citations[0].Source != "lca-1" || fs[0].Citations[0].Quote != "Level II wage $95,000" {
+		t.Errorf("evidence not parsed: %+v", fs[0].Citations)
+	}
+}
+
 func TestParseFindings_NoFindings(t *testing.T) {
 	if fs := parseFindings("I considered the documents. NO_FINDINGS", testDef); fs != nil {
 		t.Errorf("want nil for NO_FINDINGS, got %+v", fs)

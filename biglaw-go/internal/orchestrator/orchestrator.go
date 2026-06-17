@@ -964,13 +964,14 @@ func (o *Orchestrator) synthesise(task *types.Task) (string, error) {
 			content = strutil.Truncate(content, 5000)
 		}
 		marker := ""
-		if f.HallucinationRisk {
+		switch f.EvidenceStatus {
+		case types.EvidenceUnverified, types.EvidenceUnsupported:
 			anyFlagged = true
-			warning := f.CitationWarning
-			if warning == "" {
-				warning = "support could not be mechanically verified"
+			note := f.EvidenceNote
+			if note == "" {
+				note = "support could not be mechanically verified"
 			}
-			marker = fmt.Sprintf("⚠️ UNVERIFIED — %s. Do NOT present this as established fact; if you rely on it, flag it as unverified in the output.\n", warning)
+			marker = fmt.Sprintf("⚠️ UNVERIFIED — %s. Do NOT present this as established fact; if you rely on it, caveat it as unverified in the output.\n", note)
 		}
 		lines = append(lines, fmt.Sprintf("[%d] (%s, Round %d) %s%s", i+1, f.AgentName, f.Round, marker, content))
 	}
