@@ -419,31 +419,32 @@ MESSAGES ROUTED TO YOU THIS ROUND (from other agents whose offers matched your n
 %s
 %s
 ────────────────────────────────────────────────────────────────
-Produce your findings. Each finding has two DISTINCT parts — a Conclusion (your
-analysis) and one or more Evidence lines (verbatim quotes that back it). Use this
+Produce your findings. For each finding, FIRST copy the exact supporting sentence
+from a source into the Evidence line, THEN state your Conclusion about it. Copying
+the quote BEFORE you reason is required — it keeps the quote verbatim. Use this
 EXACT format, copying the labels verbatim:
 
 FINDING:
-Conclusion: <your legal analysis or conclusion, in your own words>
-Evidence: SOURCE=<document ID or URL or case ECLI> | QUOTE=<exact text copied character-for-character from the source> | PAGE=<page/para if known>
+Evidence: SOURCE=<document ID or URL or case ECLI> | QUOTE=<a sentence copied character-for-character from that source> | PAGE=<page/para if known>
+Conclusion: <what that evidence shows — your analysis, in your own words>
 Confidence: <0.0–1.0>
 END_FINDING
 
-The Conclusion and the Evidence are different and are judged differently:
-- Conclusion is YOUR reasoning — write it in your own words; it need not match the source wording.
-- Evidence QUOTE must be copied character-for-character from the source — an exact substring. Do NOT summarise, reword, shorten, paraphrase, or fix typos. It is mechanically verified against the source; a reworded quote will not verify. Pick a short phrase you can copy exactly rather than a long one you must paraphrase. NEVER put your own analysis in a QUOTE.
+The Evidence and the Conclusion are different and are judged differently:
+- Evidence QUOTE must appear verbatim in the source — copy it character-for-character. Do NOT summarise, reword, shorten, paraphrase, or fix typos; it is mechanically verified against the source and a reworded quote will not verify. Write the Evidence first so you copy real text before reasoning about it.
+- Conclusion is YOUR analysis — write it in your own words; it need not match the source wording. NEVER put your analysis in a QUOTE.
 
 Worked example:
 FINDING:
-Conclusion: The non-compete clause is unenforceable in California under Bus. & Prof. Code §16600, which voids contracts restraining lawful trade.
 Evidence: SOURCE=employment-agreement-2024 | QUOTE=Employee shall not engage in any competing business for two years | PAGE=7
+Conclusion: The non-compete clause is unenforceable in California under Bus. & Prof. Code §16600, which voids contracts restraining lawful trade.
 Confidence: 0.9
 END_FINDING
 
 Rules:
 - Always close every finding with END_FINDING on its own line.
-- Provide at least one Evidence line whose QUOTE you can copy exactly; add more Evidence lines for additional support.
-- If you genuinely have no findings this round, reply with exactly: NO_FINDINGS`,
+- Provide at least one Evidence line; add more Evidence lines for additional support.
+- Reply with exactly NO_FINDINGS only if you genuinely have no findings this round.`,
 		taskDesc, ctx.RoundGoal.Round, ctx.RoundGoal.Phase,
 		sanitize(ctx.RoundGoal.Description), expectedOutputs, memory, incoming, toneBlock)
 }

@@ -71,3 +71,6 @@ benchmarks/harvey-lab/sweep-*.jsonl
 
 # Isolated qwen-fix benchmark working dir
 data-qwenfix/
+
+# prompt-grounding harness fixture (derived from the harvey-labs dataset; regenerate locally)
+benchmarks/prompt-grounding/source.txt
