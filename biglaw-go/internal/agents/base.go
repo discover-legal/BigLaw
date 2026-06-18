@@ -268,6 +268,17 @@ func (a *Agent) runAgenticLoop(initialPrompt string, maxTokens int, model string
 					Content:   content,
 				})
 			}
+			// Co-locate the quote-first instruction with the freshly retrieved
+			// passages. A small local model copies a verbatim QUOTE reliably only
+			// when the copy instruction sits right next to the source; the FINDING
+			// format lives in the initial prompt, several turns back by now, so
+			// without this reminder the model paraphrases at emission time (it
+			// copies verbatim with it). Serialized as a user turn after the tool
+			// results by the OpenAI-compatible provider.
+			toolResults = append(toolResults, providers.ContentBlock{
+				Type: providers.BlockText,
+				Text: "\nWhen you have enough evidence, produce your findings now in the required FINDING format. For each Evidence line, copy the QUOTE character-for-character from one of the passages above — do not summarise or reword it.",
+			})
 			msgs = append(msgs, providers.Message{Role: "user", Content: toolResults})
 			continue
 		}
