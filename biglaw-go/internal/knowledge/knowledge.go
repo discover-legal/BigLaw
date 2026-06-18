@@ -291,3 +291,7 @@ func (a *Adapter) Search(query, ownerID string, topK int) ([]types.SearchResult,
 func (a *Adapter) GetFullText(docID string) (string, error) {
 	return a.store.GetFullText(docID)
 }
+
+func (a *Adapter) GetByID(docID string) *types.Document {
+	return a.store.GetByID(docID)
+}

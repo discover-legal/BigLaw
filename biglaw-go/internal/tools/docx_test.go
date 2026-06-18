@@ -216,6 +216,13 @@ func (f *fakeKnowledge) Search(string, string, int) ([]types.SearchResult, error
 func (f *fakeKnowledge) GetFullText(docID string) (string, error) {
 	return f.docs[docID], nil
 }
+func (f *fakeKnowledge) GetByID(docID string) *types.Document {
+	text, ok := f.docs[docID]
+	if !ok {
+		return nil
+	}
+	return &types.Document{ID: docID, Content: text}
+}
 
 func TestFetchDocuments(t *testing.T) {
 	reg := newTestRegistry(t)

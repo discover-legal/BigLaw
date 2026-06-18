@@ -31,6 +31,11 @@ type AgentContext struct {
 	MemoryEntries         []types.MemoryEntry
 	TaskDescription       string
 	TaskID                string
+	// SourceExcerpts is a bounded, verbatim block of the task's source documents,
+	// co-located with the finding instructions so agents copy evidence quotes
+	// from real text in front of them instead of narrating tool-retrieved
+	// snippets. Empty when the task has no documents.
+	SourceExcerpts string
 	ToolRegistry          ToolRegistry
 	KnowledgeStore        KnowledgeStore
 	MemoryStore           MemoryStore
@@ -52,6 +57,7 @@ type ToolRegistry interface {
 type KnowledgeStore interface {
 	Search(query string, ownerID string, topK int) ([]types.SearchResult, error)
 	GetFullText(docID string) (string, error)
+	GetByID(docID string) *types.Document
 }
 
 // MemoryStore is the interface agents use to query inter-round memory.
@@ -405,6 +411,17 @@ func buildProcessingPrompt(def types.AgentDefinition, ctx AgentContext) string {
 			sanitize(ctx.AssignedLawyerTone.InjectionSnippet) + "\n"
 	}
 
+	// Source documents are injected verbatim (NOT sanitized) so an evidence quote
+	// copied from here is a byte-for-byte substring of the same text the citation
+	// gate verifies against. The agentic loop already exposes raw document content
+	// via the search_knowledge tool, so this is the same trust boundary.
+	sourceBlock := ""
+	if strings.TrimSpace(ctx.SourceExcerpts) != "" {
+		sourceBlock = "\n────────────────────────────────────────────────────────────────\n" +
+			"SOURCE DOCUMENTS — copy your Evidence QUOTEs verbatim from these, and set SOURCE= to the document name shown in [doc: …]:\n" +
+			ctx.SourceExcerpts + "\n"
+	}
+
 	return fmt.Sprintf(`TASK: %s
 
 ROUND GOAL (Round %d — Phase: %s):
@@ -417,10 +434,10 @@ INTER-ROUND MEMORY (what has been established in prior rounds):
 
 MESSAGES ROUTED TO YOU THIS ROUND (from other agents whose offers matched your needs):
 %s
-%s
+%s%s
 ────────────────────────────────────────────────────────────────
 Produce your findings. For each finding, FIRST copy the exact supporting sentence
-from a source into the Evidence line, THEN state your Conclusion about it. Copying
+from the SOURCE DOCUMENTS above into the Evidence line, THEN state your Conclusion about it. Copying
 the quote BEFORE you reason is required — it keeps the quote verbatim. Use this
 EXACT format, copying the labels verbatim:
 
@@ -446,7 +463,7 @@ Rules:
 - Provide at least one Evidence line; add more Evidence lines for additional support.
 - Reply with exactly NO_FINDINGS only if you genuinely have no findings this round.`,
 		taskDesc, ctx.RoundGoal.Round, ctx.RoundGoal.Phase,
-		sanitize(ctx.RoundGoal.Description), expectedOutputs, memory, incoming, toneBlock)
+		sanitize(ctx.RoundGoal.Description), expectedOutputs, memory, incoming, toneBlock, sourceBlock)
 }
 
 // ─── Response parsers ─────────────────────────────────────────────────────────

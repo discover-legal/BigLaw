@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -165,6 +166,11 @@ func (e *Engine) RunRound(task *types.Task, goal types.RoundGoal, lawyerTone *ty
 		intra.RecordMessage(msg.To, msg)
 	}
 
+	// Co-locate the task's source documents with the finding instructions so
+	// agents copy verbatim evidence from text in front of them rather than
+	// narrating tool-retrieved snippets (which yields unverifiable paraphrase).
+	sourceExcerpts := e.buildSourceExcerpts(task)
+
 	// Step 6: Process agents (parallel).
 	findingsCh := make([][]types.Finding, len(activeAgents))
 	roundTimeout := time.Duration(e.cfg.Agents.RoundTimeoutMs) * time.Millisecond
@@ -178,6 +184,7 @@ func (e *Engine) RunRound(task *types.Task, goal types.RoundGoal, lawyerTone *ty
 				MemoryEntries:      agentMemories[ag.Def.ID],
 				TaskDescription:    task.Description,
 				TaskID:             task.ID,
+				SourceExcerpts:     sourceExcerpts,
 				ToolRegistry:       e.tools,
 				KnowledgeStore:     e.knowledge,
 				MemoryStore:        e.memAdapter,
@@ -281,6 +288,52 @@ var phaseToTier = map[types.TaskPhase]*types.AgentTier{
 }
 
 func tierPtr(t types.AgentTier) *types.AgentTier { return &t }
+
+// buildSourceExcerpts assembles a bounded, verbatim block of the task's source
+// documents for injection into agent prompts. Agents copy evidence quotes from
+// this co-located text instead of narrating tool-retrieved snippets, which is
+// what makes the quotes mechanically verifiable. Budgeted to stay within a
+// small model's context window; the search_knowledge tool still covers anything
+// not shown here.
+func (e *Engine) buildSourceExcerpts(task *types.Task) string {
+	if len(task.DocumentIDs) == 0 || e.knowledge == nil {
+		return ""
+	}
+	const totalBudget = 8000
+	perDoc := totalBudget / len(task.DocumentIDs)
+	if perDoc < 800 {
+		perDoc = 800
+	}
+	if perDoc > 3000 {
+		perDoc = 3000
+	}
+	var b strings.Builder
+	used := 0
+	for _, id := range task.DocumentIDs {
+		if used >= totalBudget {
+			break
+		}
+		doc := e.knowledge.GetByID(id)
+		if doc == nil || strings.TrimSpace(doc.Content) == "" {
+			continue
+		}
+		title := strings.TrimSpace(doc.Title)
+		if title == "" {
+			title = id
+		}
+		excerpt := doc.Content
+		if len(excerpt) > perDoc {
+			excerpt = strutil.Truncate(excerpt, perDoc)
+		}
+		b.WriteString("[doc: ")
+		b.WriteString(title)
+		b.WriteString("]\n")
+		b.WriteString(excerpt)
+		b.WriteString("\n\n")
+		used += len(excerpt)
+	}
+	return strings.TrimSpace(b.String())
+}
 
 func (e *Engine) recruitAgents(goal types.RoundGoal, task *types.Task) ([]types.AgentDefinition, error) {
 	topK := e.cfg.DyTopo.MaxAgentsPerRound - 1
