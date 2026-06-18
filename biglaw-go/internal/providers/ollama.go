@@ -57,7 +57,7 @@ func NewOpenAICompatProvider(baseURL, apiKey string) *OllamaProvider {
 		// See openAIChatRequest: OpenAI-hosted models take a different
 		// token-cap parameter than local OpenAI-compatible servers.
 		useMaxCompletionTokens: strings.Contains(baseURL, "api.openai.com"),
-		client:                 &http.Client{Timeout: 120 * time.Second},
+		client:                 &http.Client{Timeout: 300 * time.Second},
 	}
 }
 
