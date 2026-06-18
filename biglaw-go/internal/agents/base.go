@@ -26,16 +26,17 @@ import (
 
 // AgentContext carries round context into each agent's processing loop.
 type AgentContext struct {
-	RoundGoal             types.RoundGoal
-	IncomingMessages      []types.AgentMessage
-	MemoryEntries         []types.MemoryEntry
-	TaskDescription       string
-	TaskID                string
-	// SourceExcerpts is a bounded, verbatim block of the task's source documents,
-	// co-located with the finding instructions so agents copy evidence quotes
-	// from real text in front of them instead of narrating tool-retrieved
-	// snippets. Empty when the task has no documents.
-	SourceExcerpts string
+	RoundGoal        types.RoundGoal
+	IncomingMessages []types.AgentMessage
+	MemoryEntries    []types.MemoryEntry
+	TaskDescription  string
+	TaskID           string
+	// DocumentIndex is a short, sanitized list of the task's documents (title + ID)
+	// — the MAP of what is on the matter, not the territory. Agents pull verbatim
+	// passages on demand via the search_knowledge tool, which keeps a small model's
+	// context window lean and keeps quoting on the tool-calling path where the
+	// citation gate verifies it. Empty when the task has no documents.
+	DocumentIndex         string
 	ToolRegistry          ToolRegistry
 	KnowledgeStore        KnowledgeStore
 	MemoryStore           MemoryStore
@@ -256,8 +257,10 @@ func (a *Agent) runAgenticLoop(initialPrompt string, maxTokens int, model string
 				}
 				raw, _ := json.Marshal(result)
 				content := string(raw)
-				if len(content) > 100_000 {
-					content = strutil.Truncate(content, 100_000) + "…[truncated]"
+				if maxTok := a.cfg.Agents.MaxToolResultTokens; maxTok > 0 {
+					if trimmed := strutil.TruncateToTokens(content, maxTok); len(trimmed) < len(content) {
+						content = trimmed + "…[truncated]"
+					}
 				}
 				toolResults = append(toolResults, providers.ContentBlock{
 					Type:      providers.BlockToolResult,
@@ -411,15 +414,15 @@ func buildProcessingPrompt(def types.AgentDefinition, ctx AgentContext) string {
 			sanitize(ctx.AssignedLawyerTone.InjectionSnippet) + "\n"
 	}
 
-	// Source documents are injected verbatim (NOT sanitized) so an evidence quote
-	// copied from here is a byte-for-byte substring of the same text the citation
-	// gate verifies against. The agentic loop already exposes raw document content
-	// via the search_knowledge tool, so this is the same trust boundary.
-	sourceBlock := ""
-	if strings.TrimSpace(ctx.SourceExcerpts) != "" {
-		sourceBlock = "\n────────────────────────────────────────────────────────────────\n" +
-			"SOURCE DOCUMENTS — copy your Evidence QUOTEs verbatim from these, and set SOURCE= to the document name shown in [doc: …]:\n" +
-			ctx.SourceExcerpts + "\n"
+	// The matter's documents are listed by title + ID only — the map, not the
+	// territory. Agents pull verbatim passages from them via search_knowledge,
+	// which keeps the context lean for a small local model and keeps quoting on
+	// the tool-calling path the citation gate already verifies against.
+	docIndexBlock := ""
+	if strings.TrimSpace(ctx.DocumentIndex) != "" {
+		docIndexBlock = "\n────────────────────────────────────────────────────────────────\n" +
+			"DOCUMENTS ON THIS MATTER — call search_knowledge to retrieve verbatim passages from these, then copy your Evidence QUOTEs from what it returns and set SOURCE= to the document id shown:\n" +
+			sanitize(ctx.DocumentIndex) + "\n"
 	}
 
 	return fmt.Sprintf(`TASK: %s
@@ -436,10 +439,12 @@ MESSAGES ROUTED TO YOU THIS ROUND (from other agents whose offers matched your n
 %s
 %s%s
 ────────────────────────────────────────────────────────────────
-Produce your findings. For each finding, FIRST copy the exact supporting sentence
-from the SOURCE DOCUMENTS above into the Evidence line, THEN state your Conclusion about it. Copying
-the quote BEFORE you reason is required — it keeps the quote verbatim. Use this
-EXACT format, copying the labels verbatim:
+Produce your findings. Call the search_knowledge tool to retrieve verbatim
+passages from the matter's documents (listed under DOCUMENTS ON THIS MATTER above
+when present). For each finding, FIRST copy the exact supporting sentence from a
+retrieved passage into the Evidence line, THEN state your Conclusion about it.
+Copying the quote BEFORE you reason is required — it keeps the quote verbatim. Use
+this EXACT format, copying the labels verbatim:
 
 FINDING:
 Evidence: SOURCE=<document ID or URL or case ECLI> | QUOTE=<a sentence copied character-for-character from that source> | PAGE=<page/para if known>
@@ -463,7 +468,7 @@ Rules:
 - Provide at least one Evidence line; add more Evidence lines for additional support.
 - Reply with exactly NO_FINDINGS only if you genuinely have no findings this round.`,
 		taskDesc, ctx.RoundGoal.Round, ctx.RoundGoal.Phase,
-		sanitize(ctx.RoundGoal.Description), expectedOutputs, memory, incoming, toneBlock, sourceBlock)
+		sanitize(ctx.RoundGoal.Description), expectedOutputs, memory, incoming, toneBlock, docIndexBlock)
 }
 
 // ─── Response parsers ─────────────────────────────────────────────────────────

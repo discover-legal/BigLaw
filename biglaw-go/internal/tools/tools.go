@@ -12,6 +12,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/discover-legal/biglaw-go/internal/agents"
 	"github.com/discover-legal/biglaw-go/internal/audit"
@@ -167,6 +169,11 @@ func (r *Registry) webSearchTool() *ToolImpl {
 
 // ─── search_knowledge ─────────────────────────────────────────────────────────
 
+// passagePreviewTokens bounds each search_knowledge snippet — a small,
+// query-relevant verbatim window an agent can quote, kept well under a local
+// model's context window (~180 tokens ≈ a long paragraph).
+const passagePreviewTokens = 180
+
 func (r *Registry) searchKnowledgeTool() *ToolImpl {
 	return &ToolImpl{
 		Name: "search_knowledge",
@@ -186,13 +193,119 @@ func (r *Registry) searchKnowledgeTool() *ToolImpl {
 			if ctx.KnowledgeStore == nil {
 				return map[string]interface{}{"results": []interface{}{}}, nil
 			}
-			return ctx.KnowledgeStore.Search(
-				strInput(input, "query"),
-				ctx.OwnerID,
-				intInput(input, "top_k", 6),
-			)
+			query := strInput(input, "query")
+			results, err := ctx.KnowledgeStore.Search(query, ctx.OwnerID, intInput(input, "top_k", 6))
+			if err != nil {
+				return nil, err
+			}
+			// Return small, query-relevant VERBATIM passages — not whole
+			// documents. Tool calling is meant to pull only what's needed; a
+			// full-document dump (tens of KB) blows a small model's context
+			// window and forces it to paraphrase. A focused passage keeps the
+			// context lean and gives the agent exact text it can quote.
+			out := make([]map[string]interface{}, 0, len(results))
+			for _, r := range results {
+				out = append(out, map[string]interface{}{
+					"id":      r.Document.ID,
+					"title":   r.Document.Title,
+					"score":   r.Score,
+					"snippet": relevantPassage(r.Document.Content, query, passagePreviewTokens),
+				})
+			}
+			return map[string]interface{}{"results": out}, nil
 		},
 	}
+}
+
+// relevantPassage returns a verbatim, query-relevant excerpt of content within a
+// maxTokens token budget, snapped to rune and word boundaries. It anchors on the
+// densest cluster of query-term matches and returns the surrounding window. The
+// result is ALWAYS a contiguous, byte-exact substring of content, so an agent can
+// copy a sentence from it and have the citation gate verify the quote against the
+// source. Falls back to the head of content when no query term matches.
+func relevantPassage(content, query string, maxTokens int) string {
+	content = strings.TrimSpace(content)
+	maxLen := strutil.TokenBudgetToChars(maxTokens)
+	if maxLen <= 0 || len(content) <= maxLen {
+		return content
+	}
+
+	start := 0
+	if positions := termPositions(content, query); len(positions) > 0 {
+		bestCount := -1
+		for _, p := range positions {
+			s := p - maxLen/4
+			if s < 0 {
+				s = 0
+			}
+			end := s + maxLen
+			count := 0
+			for _, q := range positions {
+				if q >= s && q < end {
+					count++
+				}
+			}
+			if count > bestCount {
+				bestCount, start = count, s
+			}
+		}
+	}
+
+	end := start + maxLen
+	if end > len(content) {
+		end = len(content)
+		if start = end - maxLen; start < 0 {
+			start = 0
+		}
+	}
+	// Snap to rune boundaries so the slice never splits a multibyte character.
+	for start > 0 && !utf8.RuneStart(content[start]) {
+		start++
+	}
+	for end < len(content) && !utf8.RuneStart(content[end]) {
+		end--
+	}
+	excerpt := content[start:end]
+	// Drop a partial leading/trailing word so the excerpt reads as clean prose.
+	// These are sub-slices, so the result stays a contiguous verbatim substring.
+	if start > 0 {
+		if i := strings.IndexAny(excerpt, " \n\t"); i >= 0 && i < len(excerpt)-1 {
+			excerpt = excerpt[i+1:]
+		}
+	}
+	if end < len(content) {
+		if i := strings.LastIndexAny(excerpt, " \n\t"); i > 0 {
+			excerpt = excerpt[:i]
+		}
+	}
+	return strings.TrimSpace(excerpt)
+}
+
+// termPositions returns the byte offsets in content (case-insensitive) of every
+// occurrence of each distinct query term of 3+ characters. Offsets index into
+// content; they only steer windowing, so the rare ToLower length shift on exotic
+// Unicode cannot affect the verbatim bytes relevantPassage returns.
+func termPositions(content, query string) []int {
+	lc := strings.ToLower(content)
+	seen := map[string]bool{}
+	var positions []int
+	for _, t := range strings.FieldsFunc(strings.ToLower(query), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsNumber(r)
+	}) {
+		if len(t) < 3 || seen[t] {
+			continue
+		}
+		seen[t] = true
+		for i := 0; ; {
+			j := strings.Index(lc[i:], t)
+			if j < 0 {
+				break
+			}
+			positions = append(positions, i+j)
+			i += j + len(t)
+		}
+	}
+	return positions
 }
 
 // ─── query_memory ─────────────────────────────────────────────────────────────

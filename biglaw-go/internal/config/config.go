@@ -119,6 +119,13 @@ type AuthConfig struct {
 
 type AgentsConfig struct {
 	MaxToolIterations int
+	// MaxToolResultTokens caps a single tool result (estimated tokens) fed back
+	// into the agentic loop. Small/local models run a tiny context window (Ollama
+	// defaults qwen to ~4K tokens), so an unbounded retrieval can evict the finding
+	// instructions and the model's own output. Bounded reads keep the loop on the
+	// tool-calling path without overflowing the window; the cut lands on a word
+	// boundary. 0 disables the cap.
+	MaxToolResultTokens int
 	// RoundTimeoutMs is the wall-clock cap on a single agent's processing
 	// within a round. Prevents one hung provider/tool call from stalling the
 	// whole round indefinitely.
@@ -405,11 +412,11 @@ type Config struct {
 	// temperature is the main cause of unverifiable, reworded quotes. Set
 	// LLM_TEMPERATURE to override; LLM_TEMPERATURE=default leaves it to the server.
 	LLMTemperature *float64
-	Email        EmailConfig
-	Bots         BotsConfig
-	Playbooks    PlaybooksConfig
-	LPM          LPMConfig
-	Monitors     MonitorsConfig
+	Email          EmailConfig
+	Bots           BotsConfig
+	Playbooks      PlaybooksConfig
+	LPM            LPMConfig
+	Monitors       MonitorsConfig
 }
 
 // normalizeEnum returns v lowercased if it is in allowed, else fallback.
@@ -459,8 +466,9 @@ func Load() *Config {
 			LinkedInClientSecret:  env("LINKEDIN_CLIENT_SECRET", ""),
 		},
 		Agents: AgentsConfig{
-			MaxToolIterations: envInt("AGENT_MAX_TOOL_ITERATIONS", 6),
-			RoundTimeoutMs:    envInt("AGENT_ROUND_TIMEOUT_MS", 300000),
+			MaxToolIterations:   envInt("AGENT_MAX_TOOL_ITERATIONS", 6),
+			MaxToolResultTokens: envInt("AGENT_MAX_TOOL_RESULT_TOKENS", 1500),
+			RoundTimeoutMs:      envInt("AGENT_ROUND_TIMEOUT_MS", 300000),
 		},
 		DyTopo: DyTopoConfig{
 			SimilarityThreshold: envFloat("DYTOPO_SIMILARITY_THRESHOLD", 0.68),

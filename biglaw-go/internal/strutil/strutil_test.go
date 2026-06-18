@@ -59,3 +59,54 @@ func TestTruncate(t *testing.T) {
 		}
 	}
 }
+
+func TestEstimateTokens(t *testing.T) {
+	if got := EstimateTokens(""); got != 0 {
+		t.Errorf("EstimateTokens(\"\") = %d, want 0", got)
+	}
+	// Conservative: never under-counts vs a ~4-chars/token English baseline.
+	if got := EstimateTokens(strings.Repeat("a", 700)); got < 700/4 {
+		t.Errorf("EstimateTokens(700 chars) = %d, want >= %d (conservative)", got, 700/4)
+	}
+	// Counts runes, not bytes: a 2-byte rune weighs the same as a 1-byte one.
+	if EstimateTokens(strings.Repeat("§", 70)) != EstimateTokens(strings.Repeat("a", 70)) {
+		t.Error("EstimateTokens must count runes, not bytes")
+	}
+}
+
+func TestTruncateToTokens(t *testing.T) {
+	const src = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu"
+
+	if got := TruncateToTokens(src, 0); got != src {
+		t.Errorf("non-positive budget should return unchanged, got %q", got)
+	}
+	if got := TruncateToTokens("short", 100); got != "short" {
+		t.Errorf("fitting string should return unchanged, got %q", got)
+	}
+
+	for _, budget := range []int{2, 3, 5, 8} {
+		got := TruncateToTokens(src, budget)
+		if !strings.HasPrefix(src, got) {
+			t.Fatalf("budget %d: %q is not a verbatim prefix of src", budget, got)
+		}
+		if !utf8.ValidString(got) {
+			t.Fatalf("budget %d: %q is not valid UTF-8", budget, got)
+		}
+		if EstimateTokens(got) > budget {
+			t.Fatalf("budget %d: %q estimates %d tokens (over budget)", budget, got, EstimateTokens(got))
+		}
+		// Never mid-word: when shortened, the next source char is whitespace.
+		if got != src && got != "" {
+			if next := src[len(got):]; !strings.ContainsAny(next[:1], " \t\n\r") {
+				t.Fatalf("budget %d: %q cut mid-word (next %q)", budget, got, next[:1])
+			}
+		}
+	}
+
+	// Multibyte content stays valid UTF-8, a verbatim prefix, and within budget.
+	const multi = "a—b a—b a—b a—b a—b a—b a—b a—b a—b a—b"
+	got := TruncateToTokens(multi, 5)
+	if !utf8.ValidString(got) || !strings.HasPrefix(multi, got) || EstimateTokens(got) > 5 {
+		t.Fatalf("multibyte truncation: %q valid=%v est=%d", got, utf8.ValidString(got), EstimateTokens(got))
+	}
+}
