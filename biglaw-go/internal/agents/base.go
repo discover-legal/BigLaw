@@ -140,13 +140,22 @@ func (a *Agent) Process(ctx AgentContext) ([]types.Finding, error) {
 		maxTokens = 4000
 	}
 
+	// Grant the document-retrieval tools to every finding-producing agent when
+	// the matter has documents, so grounding never depends on the agent
+	// definition's own tool list (many ship none, and a no-tool agent can only
+	// paraphrase from the document titles).
+	allowed := a.Def.AllowedTools
+	if a.cfg.Agents.GrantRetrievalTools && strings.TrimSpace(ctx.DocumentIndex) != "" {
+		allowed = mergeTools(allowed, retrievalTools)
+	}
+
 	hasTools := ctx.ToolRegistry != nil && ctx.KnowledgeStore != nil &&
-		ctx.MemoryStore != nil && ctx.TaskID != "" && len(a.Def.AllowedTools) > 0
+		ctx.MemoryStore != nil && ctx.TaskID != "" && len(allowed) > 0
 
 	var text string
 	var err error
 	if hasTools {
-		text, err = a.runAgenticLoop(prompt, maxTokens, model, ctx)
+		text, err = a.runAgenticLoop(prompt, maxTokens, model, ctx, allowed)
 	} else {
 		text, err = a.callModel(prompt, maxTokens, model, ctx.TaskID, cost.ContextTask)
 	}
@@ -193,8 +202,8 @@ func (a *Agent) Process(ctx AgentContext) ([]types.Finding, error) {
 
 // ─── Agentic loop ─────────────────────────────────────────────────────────────
 
-func (a *Agent) runAgenticLoop(initialPrompt string, maxTokens int, model string, ctx AgentContext) (string, error) {
-	toolSchemas := ctx.ToolRegistry.SchemasFor(a.Def.AllowedTools)
+func (a *Agent) runAgenticLoop(initialPrompt string, maxTokens int, model string, ctx AgentContext, allowed []string) (string, error) {
+	toolSchemas := ctx.ToolRegistry.SchemasFor(allowed)
 	toolCtx := ToolContext{
 		KnowledgeStore:      ctx.KnowledgeStore,
 		MemoryStore:         ctx.MemoryStore,
@@ -211,6 +220,11 @@ func (a *Agent) runAgenticLoop(initialPrompt string, maxTokens int, model string
 
 	msgs := []providers.Message{{Role: "user", Content: initialPrompt}}
 	var finalText string
+	// Whether the agent has actually retrieved from the matter's documents.
+	// RequireRetrieval nudges it back to the tools if it tries to answer from the
+	// document index alone — the difference between a verbatim quote and a paraphrase.
+	retrieved := false
+	hasDocs := strings.TrimSpace(ctx.DocumentIndex) != ""
 
 	for iteration := 0; iteration < a.cfg.Agents.MaxToolIterations; iteration++ {
 		resp, err := prov.Chat(providers.ChatParams{
@@ -235,6 +249,14 @@ func (a *Agent) runAgenticLoop(initialPrompt string, maxTokens int, model string
 		}
 
 		if resp.StopReason == providers.StopEndTurn {
+			// Require at least one retrieval before accepting findings: a weaker
+			// model otherwise answers from the document titles and paraphrases.
+			if a.cfg.Agents.RequireRetrieval && hasDocs && !retrieved &&
+				iteration < a.cfg.Agents.MaxToolIterations-1 {
+				msgs = append(msgs, providers.Message{Role: "assistant", Content: resp.Content})
+				msgs = append(msgs, providers.Message{Role: "user", Content: "Before producing findings you MUST call search_knowledge to retrieve verbatim passages from the matter's documents, then copy each Evidence QUOTE from what it returns. Do that now."})
+				continue
+			}
 			break
 		}
 
@@ -247,12 +269,15 @@ func (a *Agent) runAgenticLoop(initialPrompt string, maxTokens int, model string
 					continue
 				}
 				var result interface{}
-				if !contains(a.Def.AllowedTools, block.Name) {
+				if !contains(allowed, block.Name) {
 					result = map[string]string{"error": fmt.Sprintf("tool '%s' not permitted", block.Name)}
 				} else {
 					result, err = ctx.ToolRegistry.Execute(block.Name, block.Input, toolCtx)
 					if err != nil {
 						result = map[string]string{"error": err.Error()}
+					}
+					if isRetrievalTool(block.Name) {
+						retrieved = true
 					}
 				}
 				raw, _ := json.Marshal(result)
@@ -765,6 +790,32 @@ func contains(slice []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// retrievalTools are the document-retrieval tools every finding-producing agent
+// is granted when the matter has documents (config AGENT_GRANT_RETRIEVAL_TOOLS),
+// so grounding never depends on a heterogeneous agent definition's own tool list.
+var retrievalTools = []string{"search_knowledge", "read_document", "find_in_document", "list_documents"}
+
+func isRetrievalTool(name string) bool { return contains(retrievalTools, name) }
+
+// mergeTools unions two tool lists, preserving order and dropping duplicates.
+func mergeTools(base, extra []string) []string {
+	seen := make(map[string]bool, len(base)+len(extra))
+	out := make([]string, 0, len(base)+len(extra))
+	for _, t := range base {
+		if t != "" && !seen[t] {
+			seen[t] = true
+			out = append(out, t)
+		}
+	}
+	for _, t := range extra {
+		if t != "" && !seen[t] {
+			seen[t] = true
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 func orSystem(id string) string {

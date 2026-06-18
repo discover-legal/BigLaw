@@ -130,6 +130,17 @@ type AgentsConfig struct {
 	// within a round. Prevents one hung provider/tool call from stalling the
 	// whole round indefinitely.
 	RoundTimeoutMs int
+	// GrantRetrievalTools gives every finding-producing agent the document
+	// retrieval tools (search_knowledge, read_document, …) when the matter has
+	// documents, regardless of its own AllowedTools — so grounding never depends
+	// on a heterogeneous agent definition shipping the right tools.
+	GrantRetrievalTools bool
+	// RequireRetrieval makes an agent call a retrieval tool before its findings
+	// are accepted (it is nudged back to the tools if it tries to answer from the
+	// document index/titles alone). A capable model that retrieves on its own is
+	// unaffected; this backstops weaker local models that otherwise paraphrase.
+	// Both knobs keep tool calling as the mechanism while making it reliable.
+	RequireRetrieval bool
 }
 
 type DyTopoConfig struct {
@@ -469,6 +480,8 @@ func Load() *Config {
 			MaxToolIterations:   envInt("AGENT_MAX_TOOL_ITERATIONS", 6),
 			MaxToolResultTokens: envInt("AGENT_MAX_TOOL_RESULT_TOKENS", 1500),
 			RoundTimeoutMs:      envInt("AGENT_ROUND_TIMEOUT_MS", 300000),
+			GrantRetrievalTools: envBool("AGENT_GRANT_RETRIEVAL_TOOLS", true),
+			RequireRetrieval:    envBool("AGENT_REQUIRE_RETRIEVAL", true),
 		},
 		DyTopo: DyTopoConfig{
 			SimilarityThreshold: envFloat("DYTOPO_SIMILARITY_THRESHOLD", 0.68),
