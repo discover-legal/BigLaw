@@ -13,7 +13,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
-TEXT_EXTS = {".txt", ".md", ".markdown", ".csv", ".json", ".log", ".text", ".rtf", ".html", ".xml"}
+TEXT_EXTS = {".txt", ".md", ".markdown", ".csv", ".json", ".log", ".text", ".rtf", ".html", ".xml",
+             ".eml", ".tsv", ".yaml", ".yml"}
 
 
 class ConversionError(RuntimeError):
