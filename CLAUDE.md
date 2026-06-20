@@ -135,6 +135,16 @@ Each DyTopo round:
 > live at the `typescript-final` tag. Go-only additions: `internal/topoflow/` (AgensFlow
 > bandit over DyTopo), `internal/lpm/` (daily status-report spine), `internal/clientvoice/`
 > (Remy advocacy briefs), `cmd/biglaw/monitors.go` (firm-wide budget/docket/regulatory monitors).
+>
+> **Grounding stack (Go-only):** `internal/rag/` (section-chunk hybrid retrieval — dense + doc2query
+> + BM25 fused by RRF; `search_chunks`/`get_outline`/`read_section`), `internal/bm25/` (pure-Go Okapi
+> BM25), `internal/pageindex/` (legal section-tree parser), `internal/tokenizer/` (pure-Go Qwen BPE),
+> and `internal/writer/` (scoped multi-pass synthesis: findings → cluster → tight agentic drafters via
+> `search_findings` → hierarchical stitch). Staged extraction lives in `internal/agents/base.go`
+> (`runAgenticLoop` retrieves; `extractEvidenceBatch` transcribes verbatim under a substring-lock;
+> `analyseEvidence` writes conclusions per locked quote). Synthesis routes through
+> `internal/orchestrator/orchestrator.go` `synthesise()` → `writeDeliverable()` when findings exceed
+> a single call's budget. These took local-model verbatim citation grounding from ~0% to ~94%.
 
 | Path | What it does |
 |---|---|
