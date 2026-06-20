@@ -38,6 +38,7 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/templates"
 	"github.com/discover-legal/biglaw-go/internal/timekeeping"
 	"github.com/discover-legal/biglaw-go/internal/types"
+	"github.com/discover-legal/biglaw-go/internal/writer"
 )
 
 // Ensure interface is satisfied at compile time.
@@ -956,6 +957,24 @@ func (o *Orchestrator) synthesise(task *types.Task) (string, error) {
 		}
 	}
 
+	// When the findings won't fit a single synthesis call's input budget, write the
+	// deliverable via the scoped multi-pass writer (cluster → tight agentic drafters
+	// that pull their own findings via search_findings → stitch) instead of dumping
+	// every finding into one prompt — which truncates to the window and yields an
+	// empty result on small-context local models. The monolith path below still
+	// handles small tasks / large-context models in one clean call.
+	estTokens := 0
+	for _, f := range filteredFindings {
+		estTokens += strutil.EstimateTokens(f.Content) + 40
+	}
+	if estTokens > synthesisWriterBudgetTokens {
+		if out, err := o.writeDeliverable(task, filteredFindings); err == nil && strings.TrimSpace(out) != "" {
+			return out, nil
+		} else if err != nil {
+			slog.Warn("multi-pass writer failed; falling back to single-call synthesis", "task", task.ID, "err", err)
+		}
+	}
+
 	var lines []string
 	anyFlagged := false
 	for i, f := range filteredFindings {
@@ -1051,6 +1070,67 @@ Ground every statement in the findings above — do not introduce facts, figures
 		}
 	}
 	return "", nil
+}
+
+// synthesisWriterBudgetTokens is the per-call input budget for synthesis: when the
+// findings exceed it, the multi-pass writer is used instead of one monolithic call.
+// Sized to sit comfortably inside a small local window (e.g. 8K) alongside the
+// system prompt and output budget.
+const synthesisWriterBudgetTokens = 5000
+
+// writeDeliverable produces the final output via the scoped multi-pass writer: it
+// maps findings into the writer's view, builds a Writer over the synthesis model,
+// and lets it cluster → draft (tight agentic sub-agents, search_findings scoped per
+// section) → stitch. Used when findings overflow a single synthesis call.
+func (o *Orchestrator) writeDeliverable(task *types.Task, findings []types.Finding) (string, error) {
+	tier := types.TierRoot
+	model := routing.SelectModel(o.cfg, routing.SelectParams{Tier: &tier, TaskType: routing.TaskSynthesis})
+	prov, err := o.provReg.Get(model)
+	if err != nil {
+		return "", err
+	}
+	bare := routing.ResolveModelID(model)
+
+	wf := make([]writer.Finding, 0, len(findings))
+	for _, f := range findings {
+		item := writer.Finding{
+			ID:       f.ID,
+			Content:  f.Content,
+			Agent:    f.AgentName,
+			Round:    f.Round,
+			Grounded: f.EvidenceStatus == types.EvidenceGrounded,
+			Note:     f.EvidenceNote,
+		}
+		if len(f.Citations) > 0 {
+			item.Evidence = f.Citations[0].Quote
+			item.Source = f.Citations[0].Source
+		}
+		wf = append(wf, item)
+	}
+
+	// Lawyer tone → writer persona (same source as the monolith path).
+	persona := ""
+	primaryProfileID := task.CreatedByProfileID
+	if primaryProfileID == "" && len(task.AssignedLawyerIDs) > 0 {
+		primaryProfileID = task.AssignedLawyerIDs[0]
+	}
+	if primaryProfileID != "" {
+		if p := o.profiles.Get(primaryProfileID); p != nil && p.ToneProfile != nil {
+			snippet := adapters.SanitizePromptContent(p.ToneProfile.InjectionSnippet)
+			if len(snippet) > 2000 {
+				snippet = strutil.Truncate(snippet, 2000)
+			}
+			persona = "Write in this lawyer's voice:\n" + snippet
+		}
+	}
+
+	w := writer.New(o.embedC, prov, bare, writer.Options{
+		Temperature:       o.cfg.LLMTemperature,
+		InputBudgetTokens: synthesisWriterBudgetTokens,
+		Persona:           persona,
+		RecordCost:        func(resp *providers.ChatResponse) { o.recordCost(resp, bare, cost.ContextSynthesis, task.ID) },
+	})
+	return w.Write(adapters.SanitizePromptContent(task.Description), string(task.WorkflowType), wf)
 }
 
 func (o *Orchestrator) tabulate(task *types.Task) (*types.TaskTable, error) {
