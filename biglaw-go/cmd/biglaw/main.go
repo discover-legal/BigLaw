@@ -41,6 +41,7 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/orchestrator"
 	"github.com/discover-legal/biglaw-go/internal/providers"
 	"github.com/discover-legal/biglaw-go/internal/queue"
+	"github.com/discover-legal/biglaw-go/internal/rag"
 	"github.com/discover-legal/biglaw-go/internal/routing"
 	"github.com/discover-legal/biglaw-go/internal/secrets"
 	"github.com/discover-legal/biglaw-go/internal/settings"
@@ -155,8 +156,42 @@ func main() {
 	// Build learning engine.
 	learningEngine := learning.Default
 
+	// Build the hybrid RAG retriever (section chunking + dense/question/BM25 +
+	// HyDE + RRF) over an in-process chunk store, and index every ingested
+	// document into it. doc2query/HyDE use the light local tier.
+	ragModel := routing.SelectModel(cfg, routing.SelectParams{TaskType: routing.TaskExtraction})
+	var ragGen rag.Generator
+	if prov, perr := provReg.Get(ragModel); perr == nil {
+		bare := routing.ResolveModelID(ragModel)
+		temp := cfg.LLMTemperature
+		ragGen = rag.GeneratorFunc(func(system, user string, maxTokens int) (string, error) {
+			resp, err := prov.Chat(providers.ChatParams{
+				Model:       bare,
+				MaxTokens:   maxTokens,
+				System:      system,
+				Messages:    []providers.Message{{Role: "user", Content: user}},
+				Temperature: temp,
+			})
+			if err != nil {
+				return "", err
+			}
+			for _, b := range resp.Content {
+				if b.Type == providers.BlockText {
+					return b.Text, nil
+				}
+			}
+			return "", nil
+		})
+	}
+	ragSvc := rag.New(rag.NewMemStore(), embedC, ragGen)
+	// Ingest synchronously: chunking + dense embeds + BM25 are fast and finish
+	// within an upload's timeout, so retrieval is ready the moment a doc lands
+	// (pre-indexed). IngestDoc spawns the slow doc2query enrichment in the
+	// background itself, so it still doesn't block the upload.
+	knowledgeStore.SetOnIngest(ragSvc.IngestDoc)
+
 	// Build tool registry.
-	toolReg := tools.NewRegistry(cfg, provReg, costStore)
+	toolReg := tools.NewRegistry(cfg, provReg, costStore, ragSvc)
 
 	// Build orchestrator.
 	orch := orchestrator.New(

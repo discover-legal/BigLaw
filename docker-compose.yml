@@ -10,7 +10,7 @@ version: "3.9"
 #   opensearch-dashboards — visualise audit logs (http://localhost:5601)
 #
 # Optional conflict graph (opt-in via --profile graph):
-#   typedb        — multi-hop conflict-of-interest graph (port 1729)
+#   typedb        — multi-hop conflict-of-interest graph (TypeDB 3.x HTTP, port 8000)
 #
 # Vector storage is handled by RuVector's native in-process HNSW — no Docker
 # service needed. Data persists to the ./data/ directory on the host.
@@ -24,7 +24,7 @@ version: "3.9"
 #
 # Quick start (with conflict graph):
 #   docker compose --profile graph up -d
-#   Then set TYPEDB_URL=0.0.0.0:1729 in .env
+#   Then set TYPEDB_URL=http://localhost:8000 in .env (3.x also needs TYPEDB_USERNAME/PASSWORD)
 
 services:
   docuseal:
@@ -87,25 +87,23 @@ services:
     restart: unless-stopped
 
   # ── Conflict graph (opt-in: docker compose --profile graph up -d) ─────────────
-  # TypeDB stores the multi-hop conflict-of-interest graph. Inference rules
-  # detect conflicts that flat substring matching cannot: if Client A is adverse
-  # to B, B is a subsidiary of C, and we represent C — TypeDB infers the conflict.
-  # No auth by default — suitable for local dev only.
+  # TypeDB 3.x stores the multi-hop conflict-of-interest graph. Recursive
+  # FUNCTIONS detect conflicts flat substring matching cannot: if we act for a
+  # company several hops up a corporate-control tree from a proposed adversary,
+  # TypeDB infers the conflict (see sidecar/typedb/schema.tql). 3.x serves an
+  # HTTP API on :8000 and requires credentials (default admin/password — local
+  # dev only). No healthcheck: the minimal 3.x image ships no curl/CLI, and the
+  # sidecar already retries the connection on every call.
   typedb:
-    image: vaticle/typedb:2.28.0
+    image: typedb/typedb:3.11.5
     container_name: big-michael-typedb
     profiles: [graph]
     ports:
+      - "8000:8000"
       - "1729:1729"
     volumes:
-      - typedb_data:/opt/typedb-all-linux-x86_64/server/data
+      - typedb_data:/var/lib/typedb/data
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "typedb server status || exit 1"]
-      interval: 20s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
 
 volumes:
   docuseal_data:

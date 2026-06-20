@@ -26,7 +26,13 @@ type Store struct {
 	// repo is the durable backend (SQLite/Postgres). nil keeps the legacy
 	// in-memory-only behaviour (used by tests and DB_BACKEND=memory).
 	repo store.DocRepository
+	// onIngest, when set, runs after each successful Ingest (outside the lock) so
+	// a downstream index — the hybrid RAG chunk store — can re-index the document.
+	onIngest func(docID, title, content string)
 }
+
+// SetOnIngest registers a post-ingest callback (e.g. the RAG chunk indexer).
+func (s *Store) SetOnIngest(f func(docID, title, content string)) { s.onIngest = f }
 
 func NewStore(embedC *embeddings.Client) *Store {
 	return &Store{embedC: embedC}
@@ -96,14 +102,24 @@ func (s *Store) Ingest(ctx context.Context, doc types.Document) (*types.Document
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	replaced := false
 	for i, d := range s.docs {
 		if d.ID == doc.ID {
 			s.docs[i] = doc
-			return &doc, nil
+			replaced = true
+			break
 		}
 	}
-	s.docs = append(s.docs, doc)
+	if !replaced {
+		s.docs = append(s.docs, doc)
+	}
+	s.mu.Unlock()
+
+	// Re-index into the hybrid RAG chunk store outside the lock — it makes
+	// embedding/LLM calls (doc2query) and must not hold the document lock.
+	if s.onIngest != nil {
+		s.onIngest(doc.ID, doc.Title, doc.Content)
+	}
 	return &doc, nil
 }
 

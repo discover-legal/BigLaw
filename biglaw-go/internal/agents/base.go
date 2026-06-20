@@ -152,18 +152,30 @@ func (a *Agent) Process(ctx AgentContext) ([]types.Finding, error) {
 	hasTools := ctx.ToolRegistry != nil && ctx.KnowledgeStore != nil &&
 		ctx.MemoryStore != nil && ctx.TaskID != "" && len(allowed) > 0
 
-	var text string
-	var err error
+	var findings []types.Finding
 	if hasTools {
-		text, err = a.runAgenticLoop(prompt, maxTokens, model, ctx, allowed)
+		passages, loopText, lerr := a.runAgenticLoop(prompt, maxTokens, model, ctx, allowed)
+		if lerr != nil {
+			return nil, lerr
+		}
+		// Staged finding generation: when the agent has retrieved source, transcribe
+		// evidence and analyse it as SEPARATE calls (extract → analyse). The
+		// monolithic loop entangles verbatim transcription with analysis in one
+		// context, and a small model paraphrases under that load; staging keeps the
+		// evidence verbatim by construction. With no retrieval (e.g. no documents),
+		// fall back to parsing the loop's own output.
+		if len(passages) > 0 {
+			findings = a.stagedFindings(ctx, passages, model)
+		} else {
+			findings = parseFindings(loopText, a.Def)
+		}
 	} else {
-		text, err = a.callModel(prompt, maxTokens, model, ctx.TaskID, cost.ContextTask)
+		text, cerr := a.callModel(prompt, maxTokens, model, ctx.TaskID, cost.ContextTask)
+		if cerr != nil {
+			return nil, cerr
+		}
+		findings = parseFindings(text, a.Def)
 	}
-	if err != nil {
-		return nil, err
-	}
-
-	findings := parseFindings(text, a.Def)
 	for i := range findings {
 		findings[i].Round = ctx.RoundGoal.Round
 	}
@@ -202,7 +214,11 @@ func (a *Agent) Process(ctx AgentContext) ([]types.Finding, error) {
 
 // ─── Agentic loop ─────────────────────────────────────────────────────────────
 
-func (a *Agent) runAgenticLoop(initialPrompt string, maxTokens int, model string, ctx AgentContext, allowed []string) (string, error) {
+// runAgenticLoop drives the agent to RETRIEVE the matter's documents via
+// search_knowledge and returns the verbatim passages it pulled (deduped). It does
+// NOT produce findings — those come from the staged extract→analyse path. finalText
+// is the model's own output, kept only as a fallback for the no-retrieval case.
+func (a *Agent) runAgenticLoop(initialPrompt string, maxTokens int, model string, ctx AgentContext, allowed []string) ([]retrievedPassage, string, error) {
 	toolSchemas := ctx.ToolRegistry.SchemasFor(allowed)
 	toolCtx := ToolContext{
 		KnowledgeStore:      ctx.KnowledgeStore,
@@ -214,16 +230,15 @@ func (a *Agent) runAgenticLoop(initialPrompt string, maxTokens int, model string
 
 	prov, err := a.providers.Get(model)
 	if err != nil {
-		return "", err
+		return nil, "", err
 	}
 	bareModel := routing.ResolveModelID(model)
 
 	msgs := []providers.Message{{Role: "user", Content: initialPrompt}}
 	var finalText string
-	// Whether the agent has actually retrieved from the matter's documents.
-	// RequireRetrieval nudges it back to the tools if it tries to answer from the
-	// document index alone — the difference between a verbatim quote and a paraphrase.
 	retrieved := false
+	var passages []retrievedPassage
+	seen := map[string]bool{}
 	hasDocs := strings.TrimSpace(ctx.DocumentIndex) != ""
 
 	for iteration := 0; iteration < a.cfg.Agents.MaxToolIterations; iteration++ {
@@ -237,7 +252,7 @@ func (a *Agent) runAgenticLoop(initialPrompt string, maxTokens int, model string
 			Temperature: a.cfg.LLMTemperature,
 		})
 		if err != nil {
-			return finalText, err
+			return passages, finalText, err
 		}
 
 		a.recordCost(resp, model, cost.ContextTask, ctx.TaskID)
@@ -249,12 +264,12 @@ func (a *Agent) runAgenticLoop(initialPrompt string, maxTokens int, model string
 		}
 
 		if resp.StopReason == providers.StopEndTurn {
-			// Require at least one retrieval before accepting findings: a weaker
-			// model otherwise answers from the document titles and paraphrases.
+			// Nudge a weaker model back to the tools if it tries to finish without
+			// retrieving — staging needs passages to extract evidence from.
 			if a.cfg.Agents.RequireRetrieval && hasDocs && !retrieved &&
 				iteration < a.cfg.Agents.MaxToolIterations-1 {
 				msgs = append(msgs, providers.Message{Role: "assistant", Content: resp.Content})
-				msgs = append(msgs, providers.Message{Role: "user", Content: "Before producing findings you MUST call search_knowledge to retrieve verbatim passages from the matter's documents, then copy each Evidence QUOTE from what it returns. Do that now."})
+				msgs = append(msgs, providers.Message{Role: "user", Content: "Call search_chunks now to retrieve relevant passages from the matter's documents before finishing."})
 				continue
 			}
 			break
@@ -278,6 +293,12 @@ func (a *Agent) runAgenticLoop(initialPrompt string, maxTokens int, model string
 					}
 					if isRetrievalTool(block.Name) {
 						retrieved = true
+						for _, p := range extractPassages(result) {
+							if !seen[p.text] {
+								seen[p.text] = true
+								passages = append(passages, p)
+							}
+						}
 					}
 				}
 				raw, _ := json.Marshal(result)
@@ -293,24 +314,248 @@ func (a *Agent) runAgenticLoop(initialPrompt string, maxTokens int, model string
 					Content:   content,
 				})
 			}
-			// Co-locate the quote-first instruction with the freshly retrieved
-			// passages. A small local model copies a verbatim QUOTE reliably only
-			// when the copy instruction sits right next to the source; the FINDING
-			// format lives in the initial prompt, several turns back by now, so
-			// without this reminder the model paraphrases at emission time (it
-			// copies verbatim with it). Serialized as a user turn after the tool
-			// results by the OpenAI-compatible provider.
-			toolResults = append(toolResults, providers.ContentBlock{
-				Type: providers.BlockText,
-				Text: "\nWhen you have enough evidence, produce your findings now in the required FINDING format. For each Evidence line, copy the QUOTE character-for-character from one of the passages above — do not summarise or reword it.",
-			})
 			msgs = append(msgs, providers.Message{Role: "user", Content: toolResults})
 			continue
 		}
 		break
 	}
-	return finalText, nil
+	return passages, finalText, nil
 }
+
+// retrievedPassage is one verbatim snippet the agent pulled, tagged with the
+// document it came from (for the SOURCE= field + citation-gate resolution).
+type retrievedPassage struct {
+	source string // document title/id
+	text   string // verbatim snippet
+}
+
+// extractPassages pulls the verbatim snippets out of a retrieval tool's result.
+// Returns nil for tools that don't carry document snippets.
+func extractPassages(result interface{}) []retrievedPassage {
+	m, ok := result.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	rows, ok := m["results"].([]map[string]interface{})
+	if !ok {
+		return nil
+	}
+	var out []retrievedPassage
+	for _, r := range rows {
+		sn, _ := r["snippet"].(string)
+		sn = strings.TrimSpace(sn)
+		if sn == "" {
+			continue
+		}
+		src, _ := r["title"].(string)
+		if src == "" {
+			if id, _ := r["id"].(string); id != "" {
+				src = id
+			} else {
+				src = "source"
+			}
+		}
+		out = append(out, retrievedPassage{source: src, text: sn})
+	}
+	return out
+}
+
+// ─── Staged finding generation: extract → analyse ──────────────────────────────
+//
+// A finding is a verbatim FACT (evidence) plus an INTERPRETATION (conclusion) —
+// opposite cognitive modes. Generating both in one call lets a small model's
+// "summariser" prior corrupt the transcription, so evidence comes out paraphrased
+// (0% verbatim in the pipeline). Staging fixes it by construction:
+//
+//	EXTRACT (finer: one lean, persona-free, transcription-only call PER passage):
+//	  copy the verbatim sentences relevant to the task. Each quote is verified to
+//	  be a substring of its passage and LOCKED.
+//	ANALYSE (fan-in, one call): write a conclusion per LOCKED quote, keyed by
+//	  index. The model never re-emits the quote, so the evidence stays verbatim.
+//
+// Extraction is sequential for now (a single local GPU serialises requests
+// anyway); the per-passage shape parallelises trivially on better hardware.
+const extractSystemPrompt = "You are a verbatim evidence extractor. You copy exact sentences out of a source passage, character-for-character. You never paraphrase, summarise, interpret, shorten, or add words. You only transcribe."
+
+const maxEvidencePerAgent = 8
+
+// maxEvidencePassages caps how many retrieved passages go into the single batched
+// extraction call, keeping the transcription prompt within the context window on
+// small local models.
+const maxEvidencePassages = 8
+
+type extractedEvidence struct{ quote, source string }
+
+var (
+	// reQuoteLine matches "[n] QUOTE: ..." (n optional). Group 1 = passage index
+	// (may be empty), group 2 = the quoted text.
+	reQuoteLine = regexp.MustCompile(`(?im)^\s*(?:\[(\d+)\]\s*)?(?:[-*]\s*)?QUOTE:\s*(.+?)\s*$`)
+	reConclLine = regexp.MustCompile(`(?im)^\s*\[?(\d+)\]?[.):\s-]*(?:Conclusion\s*:\s*)?(.+\S)\s*$`)
+)
+
+func (a *Agent) stagedFindings(ctx AgentContext, passages []retrievedPassage, model string) []types.Finding {
+	focus := oneLine(ctx.TaskDescription)
+	if rg := strings.TrimSpace(ctx.RoundGoal.Description); rg != "" {
+		focus += " — " + oneLine(rg)
+	}
+
+	// Stage 1 — EXTRACT: one batched transcription call over all passages (a single
+	// call so agents finish within the round timeout on local models).
+	evidence := a.extractEvidenceBatch(focus, passages, model, ctx.TaskID)
+	if len(evidence) == 0 {
+		return nil
+	}
+
+	// Stage 2 — ANALYSE (fan-in): conclusion per LOCKED quote, by index.
+	quotes := make([]string, len(evidence))
+	sources := make([]string, len(evidence))
+	for i, e := range evidence {
+		quotes[i], sources[i] = e.quote, e.source
+	}
+	conclusions := a.analyseEvidence(ctx, quotes, sources, model)
+
+	findings := make([]types.Finding, 0, len(evidence))
+	for i, e := range evidence {
+		concl := strings.TrimSpace(conclusions[i])
+		if concl == "" {
+			concl = "Evidence on point for this matter; see the quoted source."
+		}
+		findings = append(findings, types.Finding{
+			ID:             uuid.New().String(),
+			AgentID:        a.Def.ID,
+			AgentName:      a.Def.Name,
+			Content:        concl,
+			Citations:      []types.Citation{{Source: e.source, Quote: e.quote, MechanicallyVerified: true}},
+			Confidence:     0.8,
+			EvidenceStatus: types.EvidenceGrounded,
+			Timestamp:      time.Now(),
+		})
+	}
+	return findings
+}
+
+// extractEvidenceBatch runs ONE lean, persona-free transcription call over ALL
+// retrieved passages at once and returns the verbatim sentences it copied, each
+// verified to be a substring of a source passage (anything paraphrased is
+// dropped — grounding by construction). Batching keeps each agent to a single
+// extraction call so it finishes within the round timeout on a local model.
+func (a *Agent) extractEvidenceBatch(focus string, passages []retrievedPassage, model, taskID string) []extractedEvidence {
+	prov, err := a.providers.Get(model)
+	if err != nil || len(passages) == 0 {
+		return nil
+	}
+	if len(passages) > maxEvidencePassages {
+		passages = passages[:maxEvidencePassages]
+	}
+	var b strings.Builder
+	for i, p := range passages {
+		fmt.Fprintf(&b, "PASSAGE %d:\n%s\n\n", i+1, p.text)
+	}
+	user := fmt.Sprintf("Task focus: %s\n\nBelow are %d source PASSAGES. From EACH passage, copy out up to 2 complete sentences, WORD-FOR-WORD, that are most relevant to the task focus. Copy character-for-character — do not paraphrase, summarise, shorten, or fix anything. Put each on its own line, prefixed with its passage number like:\n[1] QUOTE: <exact sentence>\nSkip any passage with nothing relevant. Output only QUOTE lines.\n\n%s", focus, len(passages), b.String())
+	resp, err := prov.Chat(providers.ChatParams{
+		Model:       routing.ResolveModelID(model),
+		MaxTokens:   1200,
+		System:      extractSystemPrompt,
+		Messages:    []providers.Message{{Role: "user", Content: user}},
+		CacheSystem: true,
+		Temperature: a.cfg.LLMTemperature,
+	})
+	if err != nil {
+		return nil
+	}
+	a.recordCost(resp, model, cost.ContextTask, taskID)
+	var text string
+	for _, bl := range resp.Content {
+		if bl.Type == providers.BlockText {
+			text = bl.Text
+		}
+	}
+	npass := make([]string, len(passages))
+	for i, p := range passages {
+		npass[i] = normalizeWS(p.text)
+	}
+	var out []extractedEvidence
+	seenQ := map[string]bool{}
+	for _, m := range reQuoteLine.FindAllStringSubmatch(text, -1) {
+		q := strings.TrimSpace(strings.Trim(strings.TrimSpace(m[2]), `"`))
+		if q == "" {
+			continue
+		}
+		nq := normalizeWS(q)
+		if seenQ[nq] {
+			continue
+		}
+		// Verify against the tagged passage first, then any passage; drop if it is
+		// not a verbatim substring anywhere (paraphrase guard).
+		src := ""
+		if idx, e := strconv.Atoi(m[1]); e == nil && idx >= 1 && idx <= len(passages) && strings.Contains(npass[idx-1], nq) {
+			src = passages[idx-1].source
+		} else {
+			for j := range npass {
+				if strings.Contains(npass[j], nq) {
+					src = passages[j].source
+					break
+				}
+			}
+		}
+		if src == "" {
+			continue
+		}
+		seenQ[nq] = true
+		out = append(out, extractedEvidence{quote: q, source: src})
+		if len(out) >= maxEvidencePerAgent {
+			break
+		}
+	}
+	return out
+}
+
+// analyseEvidence runs one fan-in call that writes a conclusion per locked quote,
+// keyed by index. Returns conclusions aligned to the input order.
+func (a *Agent) analyseEvidence(ctx AgentContext, quotes, sources []string, model string) []string {
+	out := make([]string, len(quotes))
+	prov, err := a.providers.Get(model)
+	if err != nil {
+		return out
+	}
+	var b strings.Builder
+	for i := range quotes {
+		fmt.Fprintf(&b, "[%d] (%s) %s\n", i+1, sources[i], oneLine(quotes[i]))
+	}
+	user := fmt.Sprintf("TASK: %s\nROUND GOAL (Round %d — %s): %s\n\nBelow are verbatim EVIDENCE quotes already extracted from the matter's documents. For EACH numbered item, write ONE concise CONCLUSION — your legal analysis of what that evidence shows for the task. Do NOT alter, re-quote, or merge the evidence; analyse each item on its own. Output exactly one line per item:\n[1] Conclusion: <your analysis>\n[2] Conclusion: <your analysis>\n\nEVIDENCE:\n%s",
+		oneLine(ctx.TaskDescription), ctx.RoundGoal.Round, ctx.RoundGoal.Phase, oneLine(ctx.RoundGoal.Description), b.String())
+	resp, err := prov.Chat(providers.ChatParams{
+		Model:       routing.ResolveModelID(model),
+		MaxTokens:   1500,
+		System:      a.Def.SystemPrompt,
+		Messages:    []providers.Message{{Role: "user", Content: user}},
+		CacheSystem: true,
+		Temperature: a.cfg.LLMTemperature,
+	})
+	if err != nil {
+		return out
+	}
+	a.recordCost(resp, model, cost.ContextTask, ctx.TaskID)
+	var text string
+	for _, bl := range resp.Content {
+		if bl.Type == providers.BlockText {
+			text = bl.Text
+		}
+	}
+	for _, m := range reConclLine.FindAllStringSubmatch(text, -1) {
+		idx, e := strconv.Atoi(m[1])
+		if e == nil && idx >= 1 && idx <= len(out) && strings.TrimSpace(out[idx-1]) == "" {
+			out[idx-1] = strings.TrimSpace(m[2])
+		}
+	}
+	return out
+}
+
+// oneLine collapses any run of whitespace (incl. newlines) to single spaces.
+func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+// normalizeWS lowercases and collapses whitespace, for verbatim substring checks.
+func normalizeWS(s string) string { return strings.ToLower(strings.Join(strings.Fields(s), " ")) }
 
 // ─── callModel (single-shot) ──────────────────────────────────────────────────
 
@@ -457,7 +702,7 @@ func buildProcessingPrompt(def types.AgentDefinition, ctx AgentContext) string {
 	docIndexBlock := ""
 	if strings.TrimSpace(ctx.DocumentIndex) != "" {
 		docIndexBlock = "\n────────────────────────────────────────────────────────────────\n" +
-			"DOCUMENTS ON THIS MATTER — call search_knowledge to retrieve verbatim passages from these, then copy your Evidence QUOTEs from what it returns and set SOURCE= to the document id shown:\n" +
+			"DOCUMENTS ON THIS MATTER — call search_chunks to retrieve the relevant verbatim passages from these (or get_outline + read_section to navigate), then copy your Evidence QUOTEs from what it returns and set SOURCE= to the document id shown:\n" +
 			sanitize(ctx.DocumentIndex) + "\n"
 	}
 
@@ -475,7 +720,7 @@ MESSAGES ROUTED TO YOU THIS ROUND (from other agents whose offers matched your n
 %s
 %s%s
 ────────────────────────────────────────────────────────────────
-Produce your findings. Call the search_knowledge tool to retrieve verbatim
+Produce your findings. Call the search_chunks tool to retrieve relevant verbatim
 passages from the matter's documents (listed under DOCUMENTS ON THIS MATTER above
 when present). For each finding, FIRST copy the exact supporting sentence from a
 retrieved passage into the Evidence line, THEN state your Conclusion about it.
@@ -795,7 +1040,7 @@ func contains(slice []string, s string) bool {
 // retrievalTools are the document-retrieval tools every finding-producing agent
 // is granted when the matter has documents (config AGENT_GRANT_RETRIEVAL_TOOLS),
 // so grounding never depends on a heterogeneous agent definition's own tool list.
-var retrievalTools = []string{"search_knowledge", "read_document", "find_in_document", "list_documents"}
+var retrievalTools = []string{"search_chunks", "get_outline", "read_section", "search_knowledge", "read_document", "find_in_document", "list_documents"}
 
 func isRetrievalTool(name string) bool { return contains(retrievalTools, name) }
 

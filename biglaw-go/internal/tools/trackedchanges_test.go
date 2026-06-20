@@ -412,7 +412,7 @@ func TestEditDocumentTool(t *testing.T) {
 	outDir := t.TempDir()
 	cfg := &config.Config{}
 	cfg.PDF.OutputDir = outDir
-	reg := NewRegistry(cfg, nil, nil)
+	reg := NewRegistry(cfg, nil, nil, nil)
 	// registerAll does not yet wire the docx tool groups; register explicitly.
 	reg.registerTrackedChangesTools()
 

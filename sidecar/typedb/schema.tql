@@ -1,90 +1,109 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Discover Legal
+#
+# TypeDB 3.0 schema — conflict-of-interest graph (BigLaw "Big Michael" sidecar).
+#
+# Migrated from TypeQL 2.x. The 3.0 differences baked in here (each validated
+# against a live typedb/typedb:3.11.5 server before committing):
+#   - 3.0 REMOVED inference rules. Conflict detection lives in queryConflicts()
+#     (typedb.ts) as inlined match patterns, and multi-hop corporate-family
+#     reasoning uses the recursive FUNCTION defined at the bottom of this file.
+#   - `define` uses comma syntax: `attribute x, value t;` / `entity e, owns x;`.
+#   - Relation roles default to @card(0..1). A role played by more than one
+#     player in a single relation instance MUST declare its cardinality
+#     (adverse-decl / cross-adverse / common-interest / affiliation below) or the
+#     commit fails with CNT5.
+#   - `role` is a RESERVED keyword in 3.0 — the matter-role attribute is named
+#     `party-role`.
+#
+# ── The conflicts model (enriched per the conflicts-committee review) ─────────
+# A party's involvement in a matter is a `participation` carrying party-role,
+# side, and acts-for-firm. Adversity and co-litigation are NOT stored as edges:
+# they are DERIVED per matter from `side` — different side ⇒ adverse, same side ⇒
+# co-litigant. The old global adverse-to becomes the derived "ever-adverse"
+# rollup (∃ matter where the parties sit on opposing sides) rather than a stored
+# primitive, so it always carries matter provenance.
+#
+# The three things `side` cannot express are explicit relations:
+#   common-interest — JDA / common-interest group; confidentiality-bearing, which
+#                     is what turns "adverse to a co-litigant" from awkward into
+#                     disqualifying.
+#   cross-adverse   — same-side parties who are actually adverse (cross-claim).
+#   adverse-decl    — standing/blanket declared adversity with no specific matter
+#                     (e.g. a client's "never act against X" instruction).
+#
+# Corporate family is `control` (parent → child, walked transitively by the
+# descendants() function) plus `affiliation` (sister / common ownership).
+
 define
 
-# ── Attributes ─────────────────────────────────────────────────────────────────
-external-id   sub attribute, value string;
-entity-name   sub attribute, value string;
-matter-number sub attribute, value string;
-practice-area sub attribute, value string;
-jurisdiction  sub attribute, value string;
-matter-status sub attribute, value string;
-conflict-path sub attribute, value string;
+# ── Attributes ────────────────────────────────────────────────────────────────
+attribute external-id, value string;
+attribute entity-name, value string;
+attribute matter-number, value string;
+attribute matter-status, value string;     # active | closed  (Rule 1.9 temporal)
+attribute practice-area, value string;
+attribute party-role, value string;        # plaintiff|defendant|insurer|guarantor|… (`role` is reserved)
+attribute side, value string;              # per-matter alignment label
+attribute acts-for-firm, value boolean;    # does the firm represent this participant?
 
-# ── Entities ───────────────────────────────────────────────────────────────────
-legal-party sub entity, abstract,
+# ── Entities ──────────────────────────────────────────────────────────────────
+# legal-party is abstract; rules over it apply polymorphically to both subtypes.
+entity legal-party @abstract,
   owns external-id @key,
   owns entity-name,
-  plays represents:client,
-  plays adverse-to:party,
-  plays subsidiary-of:child,
-  plays subsidiary-of:parent,
-  plays conflict:client-a,
-  plays conflict:client-b;
+  plays participation:participant,
+  plays control:parent,
+  plays control:child,
+  plays affiliation:affiliate,
+  plays common-interest:member,
+  plays cross-adverse:party,
+  plays adverse-decl:party;
+entity company sub legal-party;
+entity natural-person sub legal-party;
 
-company sub legal-party;
-natural-person sub legal-party;
-
-matter sub entity,
+entity matter,
   owns matter-number @key,
-  owns practice-area,
-  owns jurisdiction,
   owns matter-status,
-  plays represents:matter,
-  plays conflict:matter-a,
-  plays conflict:matter-b;
+  owns practice-area,
+  plays participation:in-matter,
+  plays common-interest:in-matter,
+  plays cross-adverse:in-matter;
 
-# ── Relations ──────────────────────────────────────────────────────────────────
-# TERNARY: captures the three-way (client ↔ matter) representation fact.
-# TypeDB's native n-ary relations mean we don't need two binary joins.
-represents sub relation,
-  relates client,
-  relates matter;
+# ── Relations ─────────────────────────────────────────────────────────────────
+# Participation replaces the old binary represents/adverse-to: every party's role
+# in every matter, its alignment side, and whether the firm acts for it.
+relation participation,
+  relates participant,
+  relates in-matter,
+  owns party-role,
+  owns side,
+  owns acts-for-firm;
 
-adverse-to sub relation,    # symmetric — both players fill "party"
-  relates party;
+# Corporate family. `control` is directional (parent owns/controls child) and is
+# walked transitively by descendants(); `affiliation` is symmetric (sister cos /
+# common ownership), so its single role carries two players.
+relation control, relates parent, relates child;
+relation affiliation, relates affiliate @card(0..2);
 
-subsidiary-of sub relation,
-  relates child,
-  relates parent;
+# Explicit overrides that `side` cannot express:
+relation common-interest,                   # JDA / common-interest group (per matter)
+  relates member @card(0..),
+  relates in-matter;
+relation cross-adverse,                      # same-side parties actually adverse (cross-claim)
+  relates party @card(0..2),
+  relates in-matter;
+relation adverse-decl,                       # standing/blanket adversity, no specific matter
+  relates party @card(0..2);
 
-conflict sub relation,      # NEVER inserted — always inferred by rules
-  owns conflict-path,
-  relates client-a,
-  relates client-b,
-  relates matter-a,
-  relates matter-b;
-
-# ── Inference rules ────────────────────────────────────────────────────────────
-rule direct-conflict:
-when {
-  $m1 isa matter; $m2 isa matter; not { $m1 is $m2; };
-  (client: $c1, matter: $m1) isa represents;
-  (client: $c2, matter: $m2) isa represents;
-  not { $c1 is $c2; };
-  (party: $c1, party: $c2) isa adverse-to;
-} then {
-  (client-a: $c1, client-b: $c2, matter-a: $m1, matter-b: $m2) isa conflict;
-};
-
-rule subsidiary-conflict:
-when {
-  $m1 isa matter; $m2 isa matter; not { $m1 is $m2; };
-  (client: $c1, matter: $m1) isa represents;
-  (client: $c2, matter: $m2) isa represents;
-  not { $c1 is $c2; };
-  (party: $c1, party: $sub) isa adverse-to;
-  (child: $c2, parent: $sub) isa subsidiary-of;
-} then {
-  (client-a: $c1, client-b: $c2, matter-a: $m1, matter-b: $m2) isa conflict;
-};
-
-rule subsidiary-conflict-inverse:
-when {
-  $m1 isa matter; $m2 isa matter; not { $m1 is $m2; };
-  (client: $c1, matter: $m1) isa represents;
-  (client: $c2, matter: $m2) isa represents;
-  not { $c1 is $c2; };
-  (party: $sub, party: $c2) isa adverse-to;
-  (child: $c1, parent: $sub) isa subsidiary-of;
-} then {
-  (client-a: $c1, client-b: $c2, matter-a: $m1, matter-b: $m2) isa conflict;
-};
+# ── Functions (the 3.0 replacement for recursive inference rules) ─────────────
+# descendants(p) = every party transitively controlled by p — the corporate
+# family beneath p. This is what lets a conflict surface several hops up a
+# corporate tree (e.g. suing a sub-subsidiary of a client's parent), the
+# capability a flat adversary list or substring match structurally cannot match.
+fun descendants($ancestor: legal-party) -> { legal-party }:
+  match
+    { (parent: $ancestor, child: $child) isa control; } or
+    { (parent: $ancestor, child: $mid) isa control;
+      let $child in descendants($mid); };
+  return { $child };

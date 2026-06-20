@@ -1,0 +1,13 @@
+#version: 0.2 (synthetic fixture — NOT real Qwen2.5; see doc.go)
+o w
+Ġ l
+e r
+e s
+n e
+l o
+es t
+ne w
+Ġl ow
+lo w
+Ġlow er
+new est

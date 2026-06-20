@@ -10,16 +10,18 @@ name: biglaw
 
 services:
   typedb:
-    image: vaticle/typedb:2.29.1
+    image: typedb/typedb:3.11.5
     volumes:
-      - typedb-data:/opt/typedb-all-linux-x86_64/server/data
+      - typedb-data:/var/lib/typedb/data
     restart: unless-stopped
 
   typedb-sidecar:
     build:
       context: ../sidecar/typedb
     environment:
-      TYPEDB_URL: typedb:1729
+      TYPEDB_URL: http://typedb:8000
+      TYPEDB_USERNAME: admin
+      TYPEDB_PASSWORD: password
       TYPEDB_SOCKET: /run/biglaw/typedb.sock
     volumes:
       - biglaw-sock:/run/biglaw

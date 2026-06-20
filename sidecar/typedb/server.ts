@@ -45,7 +45,7 @@ let connecting: Promise<void> | null = null;
 async function ensureConnected(): Promise<boolean> {
   if (connected) return true;
   connecting ??= graph
-    .connect(typedbUrl)
+    .connect(typedbUrl, process.env.TYPEDB_USERNAME ?? "admin", process.env.TYPEDB_PASSWORD ?? "password")
     .then(() => {
       connected = true;
       console.log(JSON.stringify({ level: "info", msg: "TypeDB connected", url: typedbUrl }));
@@ -117,15 +117,13 @@ interface CheckBody { clientId: string; adversaryIds: string[] }
 app.post<{ Body: CheckBody }>("/check-new-matter", async (req, reply) => {
   if (!(await ensureConnected())) return reply.status(503).send({ error: "TypeDB not connected" });
   try {
-    const { clientId, adversaryIds } = req.body;
+    // For each proposed adversary, surface any existing client it collides with —
+    // directly or transitively through the corporate-control tree (the reach a
+    // flat adversary list cannot see). Read-only; writes nothing to the graph.
+    const { adversaryIds } = req.body;
     const out: ConflictReport[] = [];
-    for (const advId of adversaryIds) {
-      for (const c of await graph.queryConflicts(advId)) {
-        if (
-          (c.clientAId === clientId && c.clientBId === advId) ||
-          (c.clientBId === clientId && c.clientAId === advId)
-        ) out.push(c);
-      }
+    for (const advId of adversaryIds ?? []) {
+      out.push(...(await graph.checkProposedAdverse(advId)));
     }
     return out;
   } catch (err) {

@@ -20,6 +20,7 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/config"
 	"github.com/discover-legal/biglaw-go/internal/cost"
 	"github.com/discover-legal/biglaw-go/internal/providers"
+	"github.com/discover-legal/biglaw-go/internal/rag"
 	"github.com/discover-legal/biglaw-go/internal/routing"
 	"github.com/discover-legal/biglaw-go/internal/strutil"
 )
@@ -37,14 +38,16 @@ type Registry struct {
 	cfg     *config.Config
 	provReg *providers.Registry
 	costs   *cost.Store
+	rag     *rag.Service
 }
 
-func NewRegistry(cfg *config.Config, provReg *providers.Registry, costs *cost.Store) *Registry {
+func NewRegistry(cfg *config.Config, provReg *providers.Registry, costs *cost.Store, ragSvc *rag.Service) *Registry {
 	r := &Registry{
 		tools:   map[string]*ToolImpl{},
 		cfg:     cfg,
 		provReg: provReg,
 		costs:   costs,
+		rag:     ragSvc,
 	}
 	r.registerAll()
 	return r
@@ -117,6 +120,9 @@ func intInput(input map[string]interface{}, key string, def int) int {
 func (r *Registry) registerAll() {
 	r.Register(r.webSearchTool())
 	r.Register(r.searchKnowledgeTool())
+	r.Register(r.searchChunksTool())
+	r.Register(r.getOutlineTool())
+	r.Register(r.readSectionTool())
 	r.Register(r.queryMemoryTool())
 	r.Register(r.extractFromDocumentTool())
 	r.Register(r.translateTool())
@@ -172,7 +178,7 @@ func (r *Registry) webSearchTool() *ToolImpl {
 // passagePreviewTokens bounds each search_knowledge snippet — a small,
 // query-relevant verbatim window an agent can quote, kept well under a local
 // model's context window (~180 tokens ≈ a long paragraph).
-const passagePreviewTokens = 180
+const passagePreviewTokens = 400
 
 func (r *Registry) searchKnowledgeTool() *ToolImpl {
 	return &ToolImpl{
@@ -213,6 +219,97 @@ func (r *Registry) searchKnowledgeTool() *ToolImpl {
 				})
 			}
 			return map[string]interface{}{"results": out}, nil
+		},
+	}
+}
+
+// ─── search_chunks / get_outline / read_section (hybrid RAG) ───────────────────
+
+func (r *Registry) searchChunksTool() *ToolImpl {
+	return &ToolImpl{
+		Name: "search_chunks",
+		Schema: providers.ToolParam{
+			Name:        "search_chunks",
+			Description: "Hybrid semantic + keyword search over the matter's documents. Returns the most relevant VERBATIM passages, each with its document title and section locator — quote from these.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"query": map[string]interface{}{"type": "string", "description": "What to find"},
+					"top_k": map[string]interface{}{"type": "number", "description": "Number of passages (default 6)"},
+				},
+				"required": []string{"query"},
+			},
+		},
+		Exec: func(input map[string]interface{}, _ agents.ToolContext) (interface{}, error) {
+			if r.rag == nil {
+				return map[string]interface{}{"results": []interface{}{}}, nil
+			}
+			chunks := r.rag.Search(strInput(input, "query"), intInput(input, "top_k", 6))
+			out := make([]map[string]interface{}, 0, len(chunks))
+			for _, c := range chunks {
+				out = append(out, map[string]interface{}{
+					"id": c.ID, "title": c.DocTitle, "locator": c.Locator, "snippet": c.Text,
+				})
+			}
+			return map[string]interface{}{"results": out}, nil
+		},
+	}
+}
+
+func (r *Registry) getOutlineTool() *ToolImpl {
+	return &ToolImpl{
+		Name: "get_outline",
+		Schema: providers.ToolParam{
+			Name:        "get_outline",
+			Description: "List the section outline (section locators) of a document so you can navigate to a specific part.",
+			InputSchema: map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{"doc_id": map[string]interface{}{"type": "string", "description": "Document id"}},
+				"required":   []string{"doc_id"},
+			},
+		},
+		Exec: func(input map[string]interface{}, _ agents.ToolContext) (interface{}, error) {
+			if r.rag == nil {
+				return map[string]interface{}{"sections": []interface{}{}}, nil
+			}
+			seen := map[string]bool{}
+			secs := []string{}
+			for _, c := range r.rag.Outline(strInput(input, "doc_id")) {
+				if c.Locator != "" && !seen[c.Locator] {
+					seen[c.Locator] = true
+					secs = append(secs, c.Locator)
+				}
+			}
+			return map[string]interface{}{"sections": secs}, nil
+		},
+	}
+}
+
+func (r *Registry) readSectionTool() *ToolImpl {
+	return &ToolImpl{
+		Name: "read_section",
+		Schema: providers.ToolParam{
+			Name:        "read_section",
+			Description: "Read the verbatim text of a specific section of a document, by the locator from get_outline.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"doc_id":  map[string]interface{}{"type": "string", "description": "Document id"},
+					"locator": map[string]interface{}{"type": "string", "description": "Section locator from get_outline"},
+				},
+				"required": []string{"doc_id", "locator"},
+			},
+		},
+		Exec: func(input map[string]interface{}, _ agents.ToolContext) (interface{}, error) {
+			if r.rag == nil {
+				return map[string]interface{}{"text": ""}, nil
+			}
+			var b strings.Builder
+			for _, c := range r.rag.Section(strInput(input, "doc_id"), strInput(input, "locator")) {
+				b.WriteString(c.Text)
+				b.WriteString("\n")
+			}
+			return map[string]interface{}{"text": strings.TrimSpace(b.String()), "locator": strInput(input, "locator")}, nil
 		},
 	}
 }
@@ -266,15 +363,22 @@ func relevantPassage(content, query string, maxTokens int) string {
 		end--
 	}
 	excerpt := content[start:end]
-	// Drop a partial leading/trailing word so the excerpt reads as clean prose.
-	// These are sub-slices, so the result stays a contiguous verbatim substring.
+	// Snap to SENTENCE boundaries so the passage is whole sentences. A passage that
+	// cut a sentence yields a quote the downstream extractor must complete (breaking
+	// verbatim) or that fails the substring check and is dropped. Start after the
+	// first sentence terminator; end at the last one. Fall back to word boundaries
+	// when no terminator is present. Still a contiguous verbatim substring.
 	if start > 0 {
-		if i := strings.IndexAny(excerpt, " \n\t"); i >= 0 && i < len(excerpt)-1 {
+		if i := strings.IndexAny(excerpt, ".!?"); i >= 0 && i < len(excerpt)-1 {
+			excerpt = strings.TrimLeft(excerpt[i+1:], " \n\t")
+		} else if i := strings.IndexAny(excerpt, " \n\t"); i >= 0 && i < len(excerpt)-1 {
 			excerpt = excerpt[i+1:]
 		}
 	}
 	if end < len(content) {
-		if i := strings.LastIndexAny(excerpt, " \n\t"); i > 0 {
+		if i := strings.LastIndexAny(excerpt, ".!?"); i > 0 {
+			excerpt = excerpt[:i+1]
+		} else if i := strings.LastIndexAny(excerpt, " \n\t"); i > 0 {
 			excerpt = excerpt[:i]
 		}
 	}

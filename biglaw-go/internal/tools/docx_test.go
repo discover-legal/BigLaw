@@ -21,7 +21,7 @@ func newTestRegistry(t *testing.T) *Registry {
 	t.Helper()
 	cfg := &config.Config{}
 	cfg.PDF.OutputDir = t.TempDir()
-	reg := NewRegistry(cfg, nil, nil)
+	reg := NewRegistry(cfg, nil, nil, nil)
 	// registerAll does not yet wire the document-production groups.
 	reg.registerDocxTools()
 	reg.registerTabularTools()
