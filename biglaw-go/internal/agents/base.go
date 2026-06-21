@@ -325,8 +325,9 @@ func (a *Agent) runAgenticLoop(initialPrompt string, maxTokens int, model string
 // retrievedPassage is one verbatim snippet the agent pulled, tagged with the
 // document it came from (for the SOURCE= field + citation-gate resolution).
 type retrievedPassage struct {
-	source string // document title/id
-	text   string // verbatim snippet
+	source  string // document title/id
+	text    string // verbatim snippet (what may be quoted — gate-safe)
+	context string // optional: a table row's sheet + column headers, for understanding only
 }
 
 // extractPassages pulls the verbatim snippets out of a retrieval tool's result.
@@ -355,7 +356,8 @@ func extractPassages(result interface{}) []retrievedPassage {
 				src = "source"
 			}
 		}
-		out = append(out, retrievedPassage{source: src, text: sn})
+		ctx, _ := r["context"].(string)
+		out = append(out, retrievedPassage{source: src, text: sn, context: strings.TrimSpace(ctx)})
 	}
 	return out
 }
@@ -449,9 +451,16 @@ func (a *Agent) extractEvidenceBatch(focus string, passages []retrievedPassage, 
 	}
 	var b strings.Builder
 	for i, p := range passages {
-		fmt.Fprintf(&b, "PASSAGE %d:\n%s\n\n", i+1, p.text)
+		if p.context != "" {
+			// Table row: show the column context so the model understands a cryptic
+			// row, but it copies only the row text (the substring check below verifies
+			// the quote against p.text, not the context).
+			fmt.Fprintf(&b, "PASSAGE %d (table — %s):\n%s\n\n", i+1, p.context, p.text)
+		} else {
+			fmt.Fprintf(&b, "PASSAGE %d:\n%s\n\n", i+1, p.text)
+		}
 	}
-	user := fmt.Sprintf("Task focus: %s\n\nBelow are %d source PASSAGES. From EACH passage, copy out up to 2 complete sentences, WORD-FOR-WORD, that are most relevant to the task focus. Copy character-for-character — do not paraphrase, summarise, shorten, or fix anything. Put each on its own line, prefixed with its passage number like:\n[1] QUOTE: <exact sentence>\nSkip any passage with nothing relevant. Output only QUOTE lines.\n\n%s", focus, len(passages), b.String())
+	user := fmt.Sprintf("Task focus: %s\n\nBelow are %d source PASSAGES. From EACH passage, copy out up to 2 complete sentences OR table/data rows, WORD-FOR-WORD, that are most relevant to the task focus — INCLUDE specific figures, amounts, dates, percentages, account numbers, and citations exactly as written. Copy character-for-character — do not paraphrase, summarise, shorten, or fix anything. For a table row, copy the row text itself (not the parenthetical column context). Put each on its own line, prefixed with its passage number like:\n[1] QUOTE: <exact text>\nSkip any passage with nothing relevant. Output only QUOTE lines.\n\n%s", focus, len(passages), b.String())
 	resp, err := prov.Chat(providers.ChatParams{
 		Model:       routing.ResolveModelID(model),
 		MaxTokens:   1200,

@@ -60,17 +60,26 @@ func (s *Service) IngestDoc(docID, title, content string) {
 	}
 	texts := make([]string, len(chunks))
 	for i, c := range chunks {
-		texts[i] = c.Text
+		texts[i] = c.indexText() // EmbedText for table rows, else verbatim Text
 	}
 	dense := s.embedBatch(texts)
 	for i, c := range chunks {
 		s.store.Upsert(ChunkRecord{Chunk: c, Dense: dense[i]})
 	}
 	// doc2query enrichment runs in the BACKGROUND: it makes an LLM call per chunk
-	// and must not block the upload. Dense + BM25 retrieval already works the moment
-	// this returns; the anticipated-question vectors attach as they complete.
+	// and must not block the upload. Skip it for table-row chunks (a bank statement
+	// has hundreds of rows — that would flood the model, and EmbedText already makes
+	// each row findable). Dense + BM25 retrieval works the moment this returns.
 	if s.gen != nil {
-		go s.enrichQuestions(chunks)
+		var prose []Chunk
+		for _, c := range chunks {
+			if strings.TrimSpace(c.EmbedText) == "" {
+				prose = append(prose, c)
+			}
+		}
+		if len(prose) > 0 {
+			go s.enrichQuestions(prose)
+		}
 	}
 }
 

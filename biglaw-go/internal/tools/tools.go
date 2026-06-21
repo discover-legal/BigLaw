@@ -247,9 +247,13 @@ func (r *Registry) searchChunksTool() *ToolImpl {
 			chunks := r.rag.Search(strInput(input, "query"), intInput(input, "top_k", 6))
 			out := make([]map[string]interface{}, 0, len(chunks))
 			for _, c := range chunks {
-				out = append(out, map[string]interface{}{
+				m := map[string]interface{}{
 					"id": c.ID, "title": c.DocTitle, "locator": c.Locator, "snippet": c.Text,
-				})
+				}
+				if c.Context != "" { // table rows: the sheet + column headers, so a cryptic row reads clearly
+					m["context"] = c.Context
+				}
+				out = append(out, m)
 			}
 			return map[string]interface{}{"results": out}, nil
 		},

@@ -70,7 +70,7 @@ func (m *memStore) Upsert(rec ChunkRecord) {
 		m.byDoc[rec.DocID] = append(m.byDoc[rec.DocID], rec.ID)
 	}
 	m.recs[rec.ID] = &record{Chunk: rec.Chunk, dense: rec.Dense, questions: rec.Questions}
-	m.bm.Add(rec.ID, rec.Text)
+	m.bm.Add(rec.ID, rec.indexText()) // BM25 over EmbedText for table rows, else Text
 }
 
 func (m *memStore) AddQuestions(chunkID string, qs [][]float32) {
