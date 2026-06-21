@@ -711,7 +711,7 @@ func buildProcessingPrompt(def types.AgentDefinition, ctx AgentContext) string {
 	docIndexBlock := ""
 	if strings.TrimSpace(ctx.DocumentIndex) != "" {
 		docIndexBlock = "\n────────────────────────────────────────────────────────────────\n" +
-			"DOCUMENTS ON THIS MATTER — call search_chunks to retrieve the relevant verbatim passages from these (or get_outline + read_section to navigate), then copy your Evidence QUOTEs from what it returns and set SOURCE= to the document id shown:\n" +
+			"DOCUMENTS ON THIS MATTER — call search_chunks to retrieve the relevant verbatim passages from these (or get_outline + read_section to navigate); when your point needs hard numbers or precise references (amounts, percentages, dates, counts, account numbers, statute cites) ALSO call extract_specifics to pull the exact figures from the exhibits. Copy your Evidence QUOTEs from what they return and set SOURCE= to the document id shown:\n" +
 			sanitize(ctx.DocumentIndex) + "\n"
 	}
 
@@ -1049,7 +1049,7 @@ func contains(slice []string, s string) bool {
 // retrievalTools are the document-retrieval tools every finding-producing agent
 // is granted when the matter has documents (config AGENT_GRANT_RETRIEVAL_TOOLS),
 // so grounding never depends on a heterogeneous agent definition's own tool list.
-var retrievalTools = []string{"search_chunks", "get_outline", "read_section", "search_knowledge", "read_document", "find_in_document", "list_documents"}
+var retrievalTools = []string{"search_chunks", "extract_specifics", "get_outline", "read_section", "search_knowledge", "read_document", "find_in_document", "list_documents"}
 
 func isRetrievalTool(name string) bool { return contains(retrievalTools, name) }
 

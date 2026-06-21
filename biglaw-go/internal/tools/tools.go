@@ -121,6 +121,7 @@ func (r *Registry) registerAll() {
 	r.Register(r.webSearchTool())
 	r.Register(r.searchKnowledgeTool())
 	r.Register(r.searchChunksTool())
+	r.Register(r.extractSpecificsTool())
 	r.Register(r.getOutlineTool())
 	r.Register(r.readSectionTool())
 	r.Register(r.queryMemoryTool())
@@ -258,6 +259,65 @@ func (r *Registry) searchChunksTool() *ToolImpl {
 			return map[string]interface{}{"results": out}, nil
 		},
 	}
+}
+
+// extractSpecificsTool is the on-demand "specifics hunter": a figure-targeted
+// retrieval that surfaces the exact data points a conceptual query misses — dollar
+// amounts, percentages, dates, counts, account numbers, statutory citations. It
+// augments the topic with quantitative terms and keeps only passages that actually
+// contain figures, so the table rows (now findable via table-aware chunking) come
+// back ready for the staged extractor to copy verbatim. Same result shape as
+// search_chunks, so its passages flow straight into finding extraction.
+func (r *Registry) extractSpecificsTool() *ToolImpl {
+	return &ToolImpl{
+		Name: "extract_specifics",
+		Schema: providers.ToolParam{
+			Name:        "extract_specifics",
+			Description: "Retrieve the SPECIFIC FIGURES for a topic — exact dollar amounts, percentages, dates, counts, account numbers, and statutory citations — that a general search misses. Use this whenever the task needs hard numbers or precise references. Returns verbatim passages (mostly exhibit/table rows); quote the figures from them exactly.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"topic": map[string]interface{}{"type": "string", "description": "The subject whose specific figures/references you need"},
+					"top_k": map[string]interface{}{"type": "number", "description": "Number of passages (default 12)"},
+				},
+				"required": []string{"topic"},
+			},
+		},
+		Exec: func(input map[string]interface{}, _ agents.ToolContext) (interface{}, error) {
+			if r.rag == nil {
+				return map[string]interface{}{"results": []interface{}{}}, nil
+			}
+			topic := strInput(input, "topic")
+			// Augment with quantitative cues so figure-bearing rows rank up.
+			aug := topic + " amount total dollars percent rate ratio number count date account figure $ %"
+			chunks := r.rag.Search(aug, intInput(input, "top_k", 12))
+			out := make([]map[string]interface{}, 0, len(chunks))
+			for _, c := range chunks {
+				if !containsFigure(c.Text) && !containsFigure(c.EmbedText) {
+					continue // keep only passages that actually carry specifics
+				}
+				m := map[string]interface{}{
+					"id": c.ID, "title": c.DocTitle, "locator": c.Locator, "snippet": c.Text,
+				}
+				if c.Context != "" {
+					m["context"] = c.Context
+				}
+				out = append(out, m)
+			}
+			return map[string]interface{}{"results": out}, nil
+		},
+	}
+}
+
+// containsFigure reports whether text carries a specific data point worth hunting:
+// a digit (covers amounts, %, dates, counts, account numbers, statute subsections).
+func containsFigure(s string) bool {
+	for _, r := range s {
+		if unicode.IsDigit(r) {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Registry) getOutlineTool() *ToolImpl {
