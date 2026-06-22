@@ -288,11 +288,19 @@ func (r *Registry) extractSpecificsTool() *ToolImpl {
 				return map[string]interface{}{"results": []interface{}{}}, nil
 			}
 			topic := strInput(input, "topic")
-			// Augment with quantitative cues so figure-bearing rows rank up.
-			aug := topic + " amount total dollars percent rate ratio number count date account figure $ %"
-			chunks := r.rag.Search(aug, intInput(input, "top_k", 12))
-			out := make([]map[string]interface{}, 0, len(chunks))
+			topK := intInput(input, "top_k", 12)
+			// Search the TOPIC directly, then keep only the figure-bearing rows. An
+			// earlier version blended the topic with a soup of quantitative keywords
+			// ("amount percent date account …"), which matched figure-rows in EVERY
+			// exhibit and BURIED the topic's own rows (e.g. the cherry-picking $7.8M row
+			// under generic bank-statement amounts). Pure-topic + figure filter keeps
+			// the topic signal and still returns only specifics. Over-fetch, then trim.
+			chunks := r.rag.Search(topic, topK*3)
+			out := make([]map[string]interface{}, 0, topK)
 			for _, c := range chunks {
+				if len(out) >= topK {
+					break
+				}
 				if !containsFigure(c.Text) && !containsFigure(c.EmbedText) {
 					continue // keep only passages that actually carry specifics
 				}
