@@ -351,13 +351,28 @@ func (w *Writer) draftSection(taskDesc, workflowType string, s section, ix *Find
 		system += "\n\n" + w.opt.Persona
 	}
 
-	// Seed the section's figures at synthesis time (per-section, targeted) so the
-	// exact numbers are available even if a weak model never calls the tool — the
-	// reliable half of on-demand figure handling. Pulled from the source exhibits,
-	// not the finding pile, so findings stay un-flooded.
+	// Gather the section's figures at synthesis. A single title query is an
+	// inadequate retrieval key — a category's specific facts are phrased in their own
+	// vocabulary ("Chao profitable allocation rate", "account ending -7823", "omnibus
+	// % of volume"), not the category name, so one query leaves them at rank 17+ or
+	// off the list entirely. So the critic (planSectionFacts) enumerates the specific
+	// facts this category must contain and we run a PRECISE query for each, unioning
+	// the figure hits. Pulled from the exhibits, not the finding pile.
 	var figHits []SpecificHit
 	if w.opt.Specifics != nil {
-		figHits = w.opt.Specifics(s.Title+" "+s.Brief, w.opt.MaxFindingsPerSec)
+		seen := map[string]bool{}
+		for _, q := range w.planSectionFacts(s, ix) {
+			for _, h := range w.opt.Specifics(q, 4) {
+				if h.Text == "" || seen[h.Text] {
+					continue
+				}
+				seen[h.Text] = true
+				figHits = append(figHits, h)
+			}
+			if len(figHits) >= 16 { // bounded union across sub-queries
+				break
+			}
+		}
 	}
 	figuresBlock := ""
 	if len(figHits) > 0 {
@@ -450,6 +465,62 @@ If a finding is marked UNVERIFIED, either omit it or caveat it explicitly. Clean
 	// construction, every run — as a Key figures list. This is the figure analogue
 	// of locking evidence before analysis in the extraction stage.
 	return attachKeyFigures(result, figHits)
+}
+
+// planSectionFacts is the critique/planner pass: given a category and a few of its
+// findings, it enumerates the SPECIFIC facts the category must contain and returns a
+// PRECISE search query for each — a dollar amount, a rate, an account number, a
+// count, a date, a statutory cite, a named entity — phrased the way the exhibit
+// states them, not as the category name. This replaces the one blunt title query
+// (which leaves a category's own figures at rank 17+ or off the list) with several
+// targeted ones. Always includes the title; falls back to it alone on failure.
+func (w *Writer) planSectionFacts(s section, ix *FindingIndex) []string {
+	out := []string{s.Title}
+	seen := map[string]bool{strings.ToLower(s.Title): true}
+	var ctx strings.Builder
+	n := 0
+	for _, id := range s.FindingIDs {
+		if n >= 4 {
+			break
+		}
+		if f, ok := ix.Get(id); ok && strings.TrimSpace(f.Content) != "" {
+			fmt.Fprintf(&ctx, "- %s\n", oneLine(strutil.TruncateToTokens(f.Content, 30)))
+			n++
+		}
+	}
+	prompt := fmt.Sprintf(`Category: %s
+
+Findings so far:
+%s
+Does this category have SPECIFIC figures or references to find in the source exhibits (dollar amounts, percentages/rates, account numbers, trade/record counts, dates, statutory citations, named entities)?
+- If NO (it is narrative — e.g. an executive summary or a purely qualitative point), output exactly: NONE
+- If YES, list ONLY the queries genuinely needed (usually 2-4), one per line, each targeting ONE such fact and phrased the way an exhibit would state it (NOT the category name). No numbering.`, s.Title, ctx.String())
+	text, err := w.complete(plannerSystem, prompt, 300, nil)
+	if err != nil || strings.Contains(strings.ToUpper(text), "NONE") {
+		return out // necessity-driven: narrative sections get just the one title query
+	}
+	for _, q := range planLines(text, 6) {
+		if key := strings.ToLower(strings.TrimSpace(q)); key != "" && !seen[key] {
+			seen[key] = true
+			out = append(out, q)
+		}
+	}
+	return out
+}
+
+// planLines extracts up to max non-empty lines, stripping bullets/numbering.
+func planLines(s string, max int) []string {
+	var out []string
+	for _, ln := range strings.Split(s, "\n") {
+		ln = strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(ln), "-*•0123456789.) \t"))
+		if ln != "" && !strings.EqualFold(ln, "none") {
+			out = append(out, ln)
+			if len(out) >= max {
+				break
+			}
+		}
+	}
+	return out
 }
 
 var reLeadFigure = regexp.MustCompile(`\$?\d[\d,]*(?:\.\d+)?%?`)
