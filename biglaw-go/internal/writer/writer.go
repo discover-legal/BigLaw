@@ -375,7 +375,11 @@ WORKFLOW: %s
 
 Write the section "%s" of the final deliverable. Brief: %s
 
-Call search_findings to retrieve the findings for this section, then write the section grounded ONLY in what they say — do not invent facts, figures, or citations. INCLUDE the exact figures, amounts, percentages, dates, counts, account numbers, and statutory citations relevant to this section, copied verbatim from the figures below or from extract_specifics. If a finding is marked UNVERIFIED, either omit it or caveat it explicitly. Write clean client-ready prose: no finding numbers, agent names, or placeholder tokens. Output only the section text (no heading).%s`,
+Call search_findings to retrieve the findings for this section, then write it grounded ONLY in what the findings and figures say — never invent facts, figures, or citations.
+Be COMPREHENSIVE for this category: cover the specific allegations, the parties implicated, the harm, and the defense points.
+Include EVERY exact figure relevant to this section — amounts, percentages, dates, counts, account numbers, and statutory citations — copied VERBATIM from the figures below or from extract_specifics. List them ALL; do not reduce to a subset or round them.
+NEVER write a placeholder token (e.g. [X], [Date], [Section N], [Amount]): fill it from the figures/findings, or omit that clause entirely.
+If a finding is marked UNVERIFIED, either omit it or caveat it explicitly. Clean client-ready prose: no finding numbers or agent names. Output only the section text (no heading).%s`,
 		oneLine(taskDesc), workflowType, s.Title, s.Brief, figuresBlock)
 
 	msgs := []providers.Message{{Role: "user", Content: user}}
