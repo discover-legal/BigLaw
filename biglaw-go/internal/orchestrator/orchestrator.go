@@ -1124,13 +1124,12 @@ func (o *Orchestrator) writeDeliverable(task *types.Task, findings []types.Findi
 		}
 	}
 
-	// Deterministic synthesis: temperature 0 so the writer reliably realizes the
-	// full set of sections + figures in a single run, rather than sampling a
-	// different (often narrower) subset each time — the high run-to-run variance
-	// that capped single runs well below the architecture's true coverage.
-	synthTemp := 0.0
+	// Temperature 0 was tried and backfired: greedy decoding favours generic
+	// high-probability legal prose and STRIPS specific figures (lower-probability
+	// tokens). Keep the configured sampling temperature for figure-rich narrative;
+	// figure landing is guaranteed mechanically in the writer instead (Key figures).
 	w := writer.New(o.embedC, prov, bare, writer.Options{
-		Temperature:       &synthTemp,
+		Temperature:       o.cfg.LLMTemperature,
 		InputBudgetTokens: synthesisWriterBudgetTokens,
 		Persona:           persona,
 		// Coverage spine: the matter's own enumerated topics become guaranteed
@@ -1203,14 +1202,13 @@ func (o *Orchestrator) extractCoverageSpine(task *types.Task, prov providers.Pro
 	passages := strutil.TruncateToTokens(b.String(), 2500)
 	prompt := fmt.Sprintf("TASK: %s\n\nFrom the passages below, list the DISTINCT allegation categories / required topics this matter addresses, as short section headings (e.g. \"Cherry-Picking Trade Allocations\", \"Misleading Form ADV Disclosures\"). One heading per line, no numbering, no preamble. Only categories actually present in the passages.\n\nPASSAGES:\n%s",
 		strings.Join(strings.Fields(task.Description), " "), passages)
-	spineTemp := 0.0 // deterministic spine: same categories every run
 	resp, err := prov.Chat(providers.ChatParams{
 		Model:       model,
 		MaxTokens:   500,
 		System:      "You extract a legal document's enumerated structure as a clean list of section headings, nothing else.",
 		Messages:    []providers.Message{{Role: "user", Content: prompt}},
 		CacheSystem: true,
-		Temperature: &spineTemp,
+		Temperature: o.cfg.LLMTemperature,
 	})
 	if err != nil {
 		return nil

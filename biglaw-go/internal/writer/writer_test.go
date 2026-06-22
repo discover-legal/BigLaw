@@ -127,6 +127,30 @@ func TestWriterPullsSpecificsAtSynthesis(t *testing.T) {
 	}
 }
 
+func TestAttachKeyFigures(t *testing.T) {
+	hits := []SpecificHit{
+		{Text: "Excess profits allocated to Oceanic Fund I LP\t$7,800,000", Source: "exhibit.xlsx"},
+		{Text: "Chao personal account profitable allocation rate\t81.6%", Source: "exhibit.xlsx"},
+	}
+	// Narrative already states $7,800,000 → that figure is NOT re-listed; the
+	// un-stated 81.6% IS appended, so the figure lands by construction.
+	text := "The cherry-picking scheme produced $7,800,000 in excess profits to Oceanic Fund."
+	out := attachKeyFigures(text, hits)
+	if !strings.Contains(out, "Key figures") {
+		t.Fatal("expected a Key figures block")
+	}
+	if !strings.Contains(out, "81.6%") {
+		t.Error("the un-stated 81.6% figure was not attached")
+	}
+	if strings.Count(out, "$7,800,000") != 1 {
+		t.Error("the already-stated $7,800,000 should not be duplicated")
+	}
+	// No hits → text unchanged.
+	if attachKeyFigures("x", nil) != "x" {
+		t.Error("no hits should leave text unchanged")
+	}
+}
+
 // capturingProv records each user message and returns a fixed draft (no tool use),
 // so a test can assert what the drafter was shown.
 type capturingProv struct{ onUser func(string) }

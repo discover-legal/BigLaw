@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"regexp"
 	"strings"
 
 	"github.com/discover-legal/biglaw-go/internal/embeddings"
@@ -354,20 +355,22 @@ func (w *Writer) draftSection(taskDesc, workflowType string, s section, ix *Find
 	// exact numbers are available even if a weak model never calls the tool — the
 	// reliable half of on-demand figure handling. Pulled from the source exhibits,
 	// not the finding pile, so findings stay un-flooded.
-	figuresBlock := ""
+	var figHits []SpecificHit
 	if w.opt.Specifics != nil {
-		if hits := w.opt.Specifics(s.Title+" "+s.Brief, w.opt.MaxFindingsPerSec); len(hits) > 0 {
-			var fb strings.Builder
-			fb.WriteString("\n\nEXACT FIGURES available for this section (state any you use VERBATIM, with the source in parentheses; call extract_specifics for more):\n")
-			for _, h := range hits {
-				if h.Context != "" {
-					fmt.Fprintf(&fb, "- %s  [%s] (%s)\n", oneLine(h.Text), h.Context, h.Source)
-				} else {
-					fmt.Fprintf(&fb, "- %s (%s)\n", oneLine(h.Text), h.Source)
-				}
+		figHits = w.opt.Specifics(s.Title+" "+s.Brief, w.opt.MaxFindingsPerSec)
+	}
+	figuresBlock := ""
+	if len(figHits) > 0 {
+		var fb strings.Builder
+		fb.WriteString("\n\nEXACT FIGURES available for this section (state any you use VERBATIM, with the source in parentheses; call extract_specifics for more):\n")
+		for _, h := range figHits {
+			if h.Context != "" {
+				fmt.Fprintf(&fb, "- %s  [%s] (%s)\n", oneLine(h.Text), h.Context, h.Source)
+			} else {
+				fmt.Fprintf(&fb, "- %s (%s)\n", oneLine(h.Text), h.Source)
 			}
-			figuresBlock = fb.String()
 		}
+		figuresBlock = fb.String()
 	}
 
 	user := fmt.Sprintf(`TASK: %s
@@ -437,10 +440,45 @@ If a finding is marked UNVERIFIED, either omit it or caveat it explicitly. Clean
 		}
 		break
 	}
-	if strings.TrimSpace(final) == "" {
-		return w.fallbackSection(s, ix) // never blank
+	result := strings.TrimSpace(final)
+	if result == "" {
+		result = w.fallbackSection(s, ix) // never blank
 	}
-	return strings.TrimSpace(final)
+	// Mechanically attach the section's grounded figures the drafter didn't already
+	// state. The 7B inconsistently transcribes specific numbers into prose; the
+	// figures are already retrieved verbatim, so guarantee they land — by
+	// construction, every run — as a Key figures list. This is the figure analogue
+	// of locking evidence before analysis in the extraction stage.
+	return attachKeyFigures(result, figHits)
+}
+
+var reLeadFigure = regexp.MustCompile(`\$?\d[\d,]*(?:\.\d+)?%?`)
+
+// attachKeyFigures appends a "Key figures" list of the section's retrieved figure
+// rows that the narrative did NOT already state (deduped by the row's lead number),
+// so every grounded figure appears even when the drafter omitted it.
+func attachKeyFigures(text string, hits []SpecificHit) string {
+	if len(hits) == 0 {
+		return text
+	}
+	var lines []string
+	seen := map[string]bool{}
+	for _, h := range hits {
+		row := oneLine(h.Text)
+		if row == "" || seen[row] {
+			continue
+		}
+		seen[row] = true
+		// Skip if the narrative already states this figure's lead number.
+		if num := reLeadFigure.FindString(row); len(num) >= 2 && strings.Contains(text, num) {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("- %s (%s)", row, h.Source))
+	}
+	if len(lines) == 0 {
+		return text
+	}
+	return text + "\n\n**Key figures:**\n" + strings.Join(lines, "\n")
 }
 
 // specificsToJSON shapes figure hits for an extract_specifics tool result.
