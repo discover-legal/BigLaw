@@ -6,6 +6,7 @@ package writer
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/discover-legal/biglaw-go/internal/embeddings"
@@ -30,6 +31,11 @@ type Options struct {
 	// exact numbers (amounts, %, dates, counts, account #s, statute cites) without
 	// pre-stuffing every figure into findings. Returns verbatim row hits.
 	Specifics func(topic string, topK int) []SpecificHit
+	// RequiredSections, when non-empty, is the TOP-DOWN coverage spine: the matter's
+	// own enumerated topics (e.g. the referral's allegation categories). Each becomes
+	// a GUARANTEED section with findings mapped into it — so no required category can
+	// silently vanish through clustering variance. Empty → fall back to clustering.
+	RequiredSections []string
 }
 
 // SpecificHit is one figure-bearing source passage: the verbatim row (to state
@@ -91,21 +97,138 @@ func (w *Writer) Write(taskDesc, workflowType string, findings []Finding) (strin
 	}
 	ix := NewFindingIndex(w.embed, findings)
 
-	// 1. Partition into tight sections (clustering = exactly-once coverage; oversized
-	//    clusters sub-fan-out so every drafter stays small).
-	secs := w.partition(ix)
+	// 1. Build the section set. With a coverage spine (the matter's enumerated topics)
+	//    every required category is GUARANTEED a section, findings mapped in top-down;
+	//    otherwise fall back to bottom-up clustering + planner naming.
+	var secs []section
+	if len(w.opt.RequiredSections) > 0 {
+		secs = w.spineSections(ix, w.opt.RequiredSections)
+	} else {
+		secs = w.partition(ix)
+		secs = w.planOutline(taskDesc, workflowType, ix, secs)
+	}
 
-	// 2. Planner names + orders the sections from compact labels (no finding dump).
-	secs = w.planOutline(taskDesc, workflowType, ix, secs)
-
-	// 3. One tight agentic drafter per section, search_findings scoped to its set.
+	// 2. One tight agentic drafter per section, search_findings scoped to its set,
+	//    figures pulled per section at synthesis.
 	drafts := make([]string, len(secs))
 	for i, s := range secs {
 		drafts[i] = w.draftSection(taskDesc, workflowType, s, ix)
 	}
 
+	// 3. Coverage critic: re-draft any required section that came out thin/empty so a
+	//    guaranteed category is never left blank.
+	w.repairCoverage(taskDesc, workflowType, secs, drafts, ix)
+
 	// 4. Stitch sections into one coherent document.
 	return w.stitch(taskDesc, workflowType, secs, drafts), nil
+}
+
+// spineSections builds one section per required topic (guaranteed coverage) and
+// maps each finding to its nearest topic — by embedding cosine when available, else
+// keyword overlap. Findings that match no topic well are dropped into a trailing
+// "Other findings" section so nothing is lost.
+func (w *Writer) spineSections(ix *FindingIndex, required []string) []section {
+	secs := make([]section, len(required))
+	for i, t := range required {
+		secs[i] = section{Title: t, Brief: t}
+	}
+	// Precompute topic vectors when an embedder is present.
+	var topicVecs [][]float32
+	if w.embed != nil {
+		topicVecs = make([][]float32, len(required))
+		if res, err := w.embed.EmbedBatch(required); err == nil && len(res) == len(required) {
+			for i := range res {
+				topicVecs[i] = res[i].Embedding
+			}
+		}
+	}
+	var other []string
+	for _, f := range ix.All() {
+		best, bestScore := -1, 0.0
+		if fv := ix.vec(f.ID); len(fv) > 0 && topicVecs != nil {
+			for i, tv := range topicVecs {
+				if len(tv) == 0 {
+					continue
+				}
+				if s := cosine(fv, tv); s > bestScore {
+					best, bestScore = i, s
+				}
+			}
+			if bestScore < 0.25 { // too far from every topic
+				best = -1
+			}
+		} else {
+			best = bestKeywordSection(f, required)
+		}
+		if best < 0 {
+			other = append(other, f.ID)
+			continue
+		}
+		secs[best].FindingIDs = append(secs[best].FindingIDs, f.ID)
+	}
+	if len(other) > 0 {
+		secs = append(secs, section{Title: "Other Findings", Brief: "findings not specific to a named category", FindingIDs: other})
+	}
+	return secs
+}
+
+// repairCoverage re-drafts any required (non-"Other") section whose draft came out
+// thin or empty — a coverage critic ensuring no guaranteed category is left blank.
+// Bounded to one repair pass per section.
+func (w *Writer) repairCoverage(taskDesc, workflowType string, secs []section, drafts []string, ix *FindingIndex) {
+	const thin = 200 // chars; below this a section isn't meaningfully covered
+	for i, s := range secs {
+		if s.Title == "Other Findings" {
+			continue
+		}
+		if len(strings.TrimSpace(drafts[i])) >= thin {
+			continue
+		}
+		// Re-draft with an explicit mandate + a fresh figure pull for the topic.
+		repaired := w.draftSection(taskDesc, workflowType, section{
+			Title: s.Title, Brief: s.Brief + " — this category MUST be covered; state its specific allegations and exact figures", FindingIDs: s.FindingIDs,
+		}, ix)
+		if len(strings.TrimSpace(repaired)) > len(strings.TrimSpace(drafts[i])) {
+			drafts[i] = repaired
+		}
+	}
+}
+
+// cosine is the cosine similarity of two equal-length vectors (0 if degenerate).
+func cosine(a, b []float32) float64 {
+	var dot, na, nb float64
+	n := len(a)
+	if len(b) < n {
+		n = len(b)
+	}
+	for i := 0; i < n; i++ {
+		dot += float64(a[i]) * float64(b[i])
+		na += float64(a[i]) * float64(a[i])
+		nb += float64(b[i]) * float64(b[i])
+	}
+	if na == 0 || nb == 0 {
+		return 0
+	}
+	return dot / (math.Sqrt(na) * math.Sqrt(nb))
+}
+
+// bestKeywordSection assigns a finding to the required section sharing the most
+// content words (the no-embedder fallback). Returns -1 if no overlap.
+func bestKeywordSection(f Finding, required []string) int {
+	best, bestN := -1, 0
+	fl := strings.ToLower(f.Content + " " + f.Evidence)
+	for i, t := range required {
+		n := 0
+		for _, w := range strings.Fields(strings.ToLower(t)) {
+			if len(w) >= 4 && strings.Contains(fl, w) {
+				n++
+			}
+		}
+		if n > bestN {
+			best, bestN = i, n
+		}
+	}
+	return best
 }
 
 // partition turns the finding set into tight sections: cluster, then split any

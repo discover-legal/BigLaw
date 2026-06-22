@@ -1128,7 +1128,10 @@ func (o *Orchestrator) writeDeliverable(task *types.Task, findings []types.Findi
 		Temperature:       o.cfg.LLMTemperature,
 		InputBudgetTokens: synthesisWriterBudgetTokens,
 		Persona:           persona,
-		RecordCost:        func(resp *providers.ChatResponse) { o.recordCost(resp, bare, cost.ContextSynthesis, task.ID) },
+		// Coverage spine: the matter's own enumerated topics become guaranteed
+		// sections, so no required allegation category vanishes through clustering.
+		RequiredSections: o.extractCoverageSpine(task, prov, bare),
+		RecordCost:       func(resp *providers.ChatResponse) { o.recordCost(resp, bare, cost.ContextSynthesis, task.ID) },
 		// Synthesis-time figure handling: drafters pull exact figures for their
 		// section from the source exhibits on demand (document-backed
 		// extract_specifics), rather than every agent pre-stuffing figures into
@@ -1160,6 +1163,83 @@ func (o *Orchestrator) writeDeliverable(task *types.Task, findings []types.Findi
 		},
 	})
 	return w.Write(adapters.SanitizePromptContent(task.Description), string(task.WorkflowType), wf)
+}
+
+// extractCoverageSpine derives the matter's required sections from the documents'
+// own enumerated structure (e.g. a referral's "six categories of potential
+// violations"). It retrieves the enumerating passages and asks the model to list
+// the distinct categories as section headings — document-grounded, general to legal
+// docs, not rubric-derived. Returns nil when nothing enumerable is found (the writer
+// then falls back to clustering).
+func (o *Orchestrator) extractCoverageSpine(task *types.Task, prov providers.Provider, model string) []string {
+	res, err := o.tools.Execute("search_chunks", map[string]interface{}{
+		"query": "allegation categories of potential violations enumerated; the referral identifies the following categories; counts of alleged violations; issues presented",
+		"top_k": 8,
+	}, agents.ToolContext{TaskID: task.ID})
+	if err != nil {
+		return nil
+	}
+	m, ok := res.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	rows, _ := m["results"].([]map[string]interface{})
+	if len(rows) == 0 {
+		return nil
+	}
+	var b strings.Builder
+	for _, r := range rows {
+		if sn, _ := r["snippet"].(string); strings.TrimSpace(sn) != "" {
+			b.WriteString("- ")
+			b.WriteString(strings.Join(strings.Fields(sn), " "))
+			b.WriteString("\n")
+		}
+	}
+	passages := strutil.TruncateToTokens(b.String(), 2500)
+	prompt := fmt.Sprintf("TASK: %s\n\nFrom the passages below, list the DISTINCT allegation categories / required topics this matter addresses, as short section headings (e.g. \"Cherry-Picking Trade Allocations\", \"Misleading Form ADV Disclosures\"). One heading per line, no numbering, no preamble. Only categories actually present in the passages.\n\nPASSAGES:\n%s",
+		strings.Join(strings.Fields(task.Description), " "), passages)
+	resp, err := prov.Chat(providers.ChatParams{
+		Model:       model,
+		MaxTokens:   500,
+		System:      "You extract a legal document's enumerated structure as a clean list of section headings, nothing else.",
+		Messages:    []providers.Message{{Role: "user", Content: prompt}},
+		CacheSystem: true,
+		Temperature: o.cfg.LLMTemperature,
+	})
+	if err != nil {
+		return nil
+	}
+	o.recordCost(resp, model, cost.ContextSynthesis, task.ID)
+	var text string
+	for _, bl := range resp.Content {
+		if bl.Type == providers.BlockText {
+			text = bl.Text
+		}
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, ln := range strings.Split(text, "\n") {
+		ln = strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(ln), "-*•0123456789.) \t"))
+		ln = strings.Trim(ln, "*_#:")
+		ln = strings.TrimSpace(ln)
+		if n := len(ln); n < 4 || n > 90 {
+			continue
+		}
+		key := strings.ToLower(ln)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, ln)
+		if len(out) >= 12 { // safety cap
+			break
+		}
+	}
+	if len(out) < 2 {
+		return nil // not a usable spine; writer falls back to clustering
+	}
+	slog.Info("coverage spine extracted", "task", task.ID, "sections", len(out))
+	return out
 }
 
 func (o *Orchestrator) tabulate(task *types.Task) (*types.TaskTable, error) {
