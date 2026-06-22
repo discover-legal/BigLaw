@@ -145,9 +145,35 @@ func TestAttachKeyFigures(t *testing.T) {
 	if strings.Count(out, "$7,800,000") != 1 {
 		t.Error("the already-stated $7,800,000 should not be duplicated")
 	}
-	// No hits → text unchanged.
 	if attachKeyFigures("x", nil) != "x" {
 		t.Error("no hits should leave text unchanged")
+	}
+}
+
+func TestAttachKeyFiguresYearLeadTrap(t *testing.T) {
+	// THE BUG: rows lead with a year. A narrative mentioning the review-period year
+	// must NOT suppress the row — the salient $ figure isn't stated, so it must land.
+	hits := []SpecificHit{
+		{Text: "Excess profits from cherry-picking allocated to Oceanic Fund I LP (2021-2023)\t$7,800,000", Source: "x.xlsx"},
+	}
+	narrative := "The Review Period spans January 1, 2021 to December 31, 2023." // mentions 2021/2023
+	out := attachKeyFigures(narrative, hits)
+	if !strings.Contains(out, "$7,800,000") {
+		t.Errorf("year-lead row was wrongly suppressed; $7,800,000 must be attached:\n%s", out)
+	}
+}
+
+func TestSalientFigure(t *testing.T) {
+	cases := map[string]string{
+		"Oceanic Fund I LP (2021-2023) $7,800,000": "$7,800,000",
+		"profitable allocation rate 81.6%":         "81.6%",
+		"4,217 equity trades analyzed in 2023":     "4,217", // longest non-year number, not 2023
+		"filed on March 28, 2023":                  "28",    // no $/%, "2023" is a year → "28"
+	}
+	for in, want := range cases {
+		if got := salientFigure(in); got != want {
+			t.Errorf("salientFigure(%q)=%q want %q", in, got, want)
+		}
 	}
 }
 

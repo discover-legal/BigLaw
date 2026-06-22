@@ -523,11 +523,34 @@ func planLines(s string, max int) []string {
 	return out
 }
 
-var reLeadFigure = regexp.MustCompile(`\$?\d[\d,]*(?:\.\d+)?%?`)
+var reAllFigures = regexp.MustCompile(`\$?\d[\d,]*(?:\.\d+)?%?`)
+
+// salientFigure picks the most meaningful figure in a row for dedup: a $-amount or
+// percentage first, else the longest number that ISN'T a bare 4-digit year. Using
+// the row's FIRST number was a bug — most exhibit rows lead with a year (e.g.
+// "…Oceanic Fund I LP (2021–2023) $7,800,000"), so a narrative mentioning "2021"
+// wrongly suppressed the whole row and the $ figure never landed.
+func salientFigure(s string) string {
+	best := ""
+	for _, n := range reAllFigures.FindAllString(s, -1) {
+		n = strings.TrimRight(n, ",.")    // drop a trailing comma/period the regex caught
+		if strings.ContainsAny(n, "$%") { // $ amount or percentage is most salient
+			return n
+		}
+		if len(n) == 4 && !strings.Contains(n, ",") { // bare 4-digit year — ignore
+			continue
+		}
+		if len(n) > len(best) {
+			best = n
+		}
+	}
+	return best
+}
 
 // attachKeyFigures appends a "Key figures" list of the section's retrieved figure
-// rows that the narrative did NOT already state (deduped by the row's lead number),
-// so every grounded figure appears even when the drafter omitted it.
+// rows whose SALIENT figure the narrative did NOT already state — so every grounded
+// figure lands even when the drafter omitted it. Biased toward inclusion: a row is
+// skipped only when its salient $/%/number is already present.
 func attachKeyFigures(text string, hits []SpecificHit) string {
 	if len(hits) == 0 {
 		return text
@@ -540,9 +563,8 @@ func attachKeyFigures(text string, hits []SpecificHit) string {
 			continue
 		}
 		seen[row] = true
-		// Skip if the narrative already states this figure's lead number.
-		if num := reLeadFigure.FindString(row); len(num) >= 2 && strings.Contains(text, num) {
-			continue
+		if sal := salientFigure(row); sal != "" && strings.Contains(text, sal) {
+			continue // the row's key figure is already stated in the prose
 		}
 		lines = append(lines, fmt.Sprintf("- %s (%s)", row, h.Source))
 	}
