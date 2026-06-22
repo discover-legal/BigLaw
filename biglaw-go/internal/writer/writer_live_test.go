@@ -17,6 +17,35 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
 
+// TestLivePlanner prints the sub-queries the 7B critic generates for a category — to
+// see whether the planner is the weak link (weak/empty queries → figHits stays thin).
+//
+//	WRITER_LIVE=1 LOCAL_INFERENCE_* go test ./internal/writer -run TestLivePlanner -v
+func TestLivePlanner(t *testing.T) {
+	if os.Getenv("WRITER_LIVE") == "" {
+		t.Skip("set WRITER_LIVE=1 (+ LOCAL_INFERENCE_*) to run")
+	}
+	cfg := config.Load()
+	provReg := providers.NewRegistry(cfg)
+	tier := types.TierRoot
+	model := routing.SelectModel(cfg, routing.SelectParams{Tier: &tier, TaskType: routing.TaskSynthesis})
+	prov, err := provReg.Get(model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := New(embeddings.NewClient(cfg), prov, routing.ResolveModelID(model), Options{})
+	ix := NewFindingIndex(nil, []Finding{
+		{ID: "f1", Content: "Diana L. Chao as Head of Trading allocated profitable trades to her personal account and Oceanic Fund I LP"},
+		{ID: "f2", Content: "The cherry-picking pattern favored Oceanic Fund with disproportionate same-day profitable allocations"},
+	})
+	s := section{Title: "Cherry-Picking Trade Allocations", Brief: "Cherry-Picking Trade Allocations", FindingIDs: []string{"f1", "f2"}}
+	qs := w.planSectionFacts(s, ix)
+	t.Logf("planner produced %d queries:", len(qs))
+	for i, q := range qs {
+		t.Logf("  [%d] %q", i, q)
+	}
+}
+
 // TestLiveWrite runs the real multi-pass writer over a completed task's findings on
 // the configured (local) model, proving the synthesis is no longer empty. Skipped
 // unless WRITER_LIVE=1; needs a backend at API (default :3101) and TASK_ID set, plus

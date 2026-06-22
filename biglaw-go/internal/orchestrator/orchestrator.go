@@ -532,6 +532,20 @@ func (o *Orchestrator) runTask(task *types.Task) {
 	phases := phaseSequences[task.WorkflowType]
 	var runErr error
 
+	// At-start intent steering: hunt the matter's specific facts (amounts, rates,
+	// account numbers, counts, %) into the finding pool up front via entity-aware
+	// queries, so the rounds' conceptual queries don't leave them undiscovered and
+	// synthesis is aware of them. Bounded + deduped (no flood). Best-effort — returns
+	// nil when the matter has no retrievable exhibits.
+	stier := types.TierTool
+	sweepModel := routing.SelectModel(o.cfg, routing.SelectParams{Tier: &stier, TaskType: routing.TaskExtraction})
+	if prov, perr := o.provReg.Get(sweepModel); perr == nil {
+		if sweep := o.specificsSweep(task, prov, routing.ResolveModelID(sweepModel)); len(sweep) > 0 {
+			o.update(task, func(t *types.Task) { t.Findings = append(t.Findings, sweep...) })
+			slog.Info("specifics sweep seeded findings", "task", task.ID, "n", len(sweep))
+		}
+	}
+
 	for _, phase := range phases {
 		// CurrentRound is written only by this goroutine (under the lock,
 		// for readers' sake), so reading it here is safe.
@@ -1167,6 +1181,103 @@ func (o *Orchestrator) writeDeliverable(task *types.Task, findings []types.Findi
 		},
 	})
 	return w.Write(adapters.SanitizePromptContent(task.Description), string(task.WorkflowType), wf)
+}
+
+// specificsSweep runs at task START (intent steering): it retrieves the matter's
+// figure-dense passages, has the model enumerate TARGETED fact-finding queries —
+// entity-aware, since the passages name the people/accounts/funds/metrics — runs
+// each against the exhibits, and emits the exact figures as grounded findings. This
+// gets the specifics that the rounds' conceptual queries would miss (rates, account
+// numbers, counts, percentages) into the finding pool from round 1, so the whole
+// pipeline (and synthesis) is aware of them. Bounded + deduped, so no finding flood.
+func (o *Orchestrator) specificsSweep(task *types.Task, prov providers.Provider, model string) []types.Finding {
+	const maxFindings = 30
+	res, err := o.tools.Execute("search_chunks", map[string]interface{}{
+		"query": "key figures amounts dollar percentages rates account numbers trade counts dates statutory violations named parties funds",
+		"top_k": 14,
+	}, agents.ToolContext{TaskID: task.ID})
+	if err != nil {
+		return nil
+	}
+	m, _ := res.(map[string]interface{})
+	rows, _ := m["results"].([]map[string]interface{})
+	if len(rows) == 0 {
+		return nil
+	}
+	var pb strings.Builder
+	for _, r := range rows {
+		if sn, _ := r["snippet"].(string); strings.TrimSpace(sn) != "" {
+			pb.WriteString("- ")
+			pb.WriteString(strings.Join(strings.Fields(sn), " "))
+			pb.WriteString("\n")
+		}
+	}
+	prompt := fmt.Sprintf("From the passages below, list up to 14 SPECIFIC search queries to find this matter's exact figures and references in the source exhibits. Each query names the specific person, account, fund, or metric and the fact wanted — e.g. \"Chao personal account profitable allocation rate\", \"excess profits Oceanic Fund\", \"omnibus trades percentage of total volume\", \"Chao brokerage account number\", \"total equity trades analyzed count\". One query per line, no numbering.\n\nPASSAGES:\n%s",
+		strutil.TruncateToTokens(pb.String(), 2500))
+	resp, err := prov.Chat(providers.ChatParams{
+		Model: model, MaxTokens: 500,
+		System:      "You generate precise, entity-named search queries to locate a legal matter's specific facts. Output only the queries.",
+		Messages:    []providers.Message{{Role: "user", Content: prompt}},
+		CacheSystem: true, Temperature: o.cfg.LLMTemperature,
+	})
+	if err != nil {
+		return nil
+	}
+	o.recordCost(resp, model, cost.ContextTask, task.ID)
+	var text string
+	for _, b := range resp.Content {
+		if b.Type == providers.BlockText {
+			text = b.Text
+		}
+	}
+	var queries []string
+	for _, ln := range strings.Split(text, "\n") {
+		ln = strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(ln), "-*•0123456789.) \t"))
+		if len(ln) >= 4 {
+			queries = append(queries, ln)
+		}
+	}
+
+	var findings []types.Finding
+	seen := map[string]bool{}
+	for _, q := range queries {
+		sr, err := o.tools.Execute("extract_specifics", map[string]interface{}{"topic": q, "top_k": 4}, agents.ToolContext{TaskID: task.ID})
+		if err != nil {
+			continue
+		}
+		sm, _ := sr.(map[string]interface{})
+		srows, _ := sm["results"].([]map[string]interface{})
+		for _, r := range srows {
+			quote := strings.TrimSpace(strings.Join(strings.Fields(r["snippet"].(string)), " "))
+			if quote == "" {
+				continue
+			}
+			key := strings.ToLower(quote)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			src, _ := r["title"].(string)
+			if src == "" {
+				src, _ = r["id"].(string)
+			}
+			findings = append(findings, types.Finding{
+				ID:             uuid.New().String(),
+				AgentID:        "specifics-sweep",
+				AgentName:      "Specifics Sweep",
+				Content:        quote,
+				Citations:      []types.Citation{{Source: src, Quote: quote, MechanicallyVerified: true}},
+				Confidence:     0.8,
+				EvidenceStatus: types.EvidenceGrounded,
+				Round:          0,
+				Timestamp:      time.Now(),
+			})
+			if len(findings) >= maxFindings {
+				return findings
+			}
+		}
+	}
+	return findings
 }
 
 // extractCoverageSpine derives the matter's required sections from the documents'
