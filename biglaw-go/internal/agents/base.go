@@ -404,24 +404,6 @@ func (a *Agent) stagedFindings(ctx AgentContext, passages []retrievedPassage, mo
 	// Stage 1 — EXTRACT: one batched transcription call over all passages (a single
 	// call so agents finish within the round timeout on local models).
 	evidence := a.extractEvidenceBatch(focus, passages, model, ctx.TaskID)
-
-	// Specifics hunter (auto): weak local models won't call extract_specifics
-	// themselves (~1% of tool calls), so the pipeline pulls figure-dense exhibit
-	// rows for this agent's focus directly and extracts them in their OWN batch —
-	// otherwise the per-call passage cap would crowd the figures out. Capable models
-	// can still invoke the tool on-demand during the loop.
-	if spec := a.specificsPassages(ctx, focus); len(spec) > 0 {
-		seen := make(map[string]bool, len(evidence))
-		for _, e := range evidence {
-			seen[normalizeWS(e.quote)] = true
-		}
-		for _, e := range a.extractEvidenceBatch(focus, spec, model, ctx.TaskID) {
-			if nq := normalizeWS(e.quote); !seen[nq] {
-				seen[nq] = true
-				evidence = append(evidence, e)
-			}
-		}
-	}
 	if len(evidence) == 0 {
 		return nil
 	}
@@ -452,29 +434,6 @@ func (a *Agent) stagedFindings(ctx AgentContext, passages []retrievedPassage, mo
 		})
 	}
 	return findings
-}
-
-// specificsPassages directly executes the extract_specifics tool for the agent's
-// focus and returns the figure-dense passages it surfaces (exhibit/table rows with
-// exact amounts, percentages, dates, counts, account numbers, statutory cites).
-// Run unconditionally per finding-agent because a 7B won't request the tool itself;
-// returns nil when retrieval tools aren't wired or the matter has no documents.
-func (a *Agent) specificsPassages(ctx AgentContext, focus string) []retrievedPassage {
-	if ctx.ToolRegistry == nil || strings.TrimSpace(ctx.DocumentIndex) == "" {
-		return nil
-	}
-	toolCtx := ToolContext{
-		KnowledgeStore:      ctx.KnowledgeStore,
-		MemoryStore:         ctx.MemoryStore,
-		TaskID:              ctx.TaskID,
-		OwnerID:             ctx.OwnerID,
-		ResponsibleLawyerID: ctx.ResponsibleLawyerID,
-	}
-	res, err := ctx.ToolRegistry.Execute("extract_specifics", map[string]interface{}{"topic": focus}, toolCtx)
-	if err != nil {
-		return nil
-	}
-	return extractPassages(res)
 }
 
 // extractEvidenceBatch runs ONE lean, persona-free transcription call over ALL
