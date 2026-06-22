@@ -100,6 +100,48 @@ func TestWriteEmptyFindings(t *testing.T) {
 	}
 }
 
+func TestWriterPullsSpecificsAtSynthesis(t *testing.T) {
+	// The drafter must pull figures for its section at synthesis time (seeded), so a
+	// Specifics func is invoked and its figure reaches the drafter — proving the
+	// on-demand-at-synthesis path fires without findings pre-stuffing.
+	var calls int
+	var sawFigure bool
+	prov := &capturingProv{onUser: func(s string) {
+		if strings.Contains(s, "$7,800,000") {
+			sawFigure = true
+		}
+	}}
+	opt := Options{MaxFindingsPerSec: 2, Specifics: func(topic string, topK int) []SpecificHit {
+		calls++
+		return []SpecificHit{{Text: "Excess profits allocated to Oceanic Fund I LP\t$7,800,000", Source: "exhibit.xlsx", Context: "Sheet: Summary"}}
+	}}
+	w := New(nil, prov, "m", opt)
+	if _, err := w.Write("Summarize the matter", "roundtable", sampleFindings(3)); err != nil {
+		t.Fatal(err)
+	}
+	if calls == 0 {
+		t.Error("Specifics was never called at synthesis")
+	}
+	if !sawFigure {
+		t.Error("the seeded figure ($7,800,000) was not injected into a drafter prompt")
+	}
+}
+
+// capturingProv records each user message and returns a fixed draft (no tool use),
+// so a test can assert what the drafter was shown.
+type capturingProv struct{ onUser func(string) }
+
+func (p *capturingProv) Chat(params providers.ChatParams) (*providers.ChatResponse, error) {
+	for _, m := range params.Messages {
+		if m.Role == "user" {
+			if s, ok := m.Content.(string); ok && p.onUser != nil {
+				p.onUser(s)
+			}
+		}
+	}
+	return &providers.ChatResponse{StopReason: providers.StopEndTurn, Content: []providers.ContentBlock{{Type: providers.BlockText, Text: "Section prose."}}}, nil
+}
+
 func TestSearchScopedCoverage(t *testing.T) {
 	ix := NewFindingIndex(nil, sampleFindings(5))
 	allow := map[string]bool{"a": true, "c": true}

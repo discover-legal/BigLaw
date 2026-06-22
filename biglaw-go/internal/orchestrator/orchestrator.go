@@ -1129,6 +1129,35 @@ func (o *Orchestrator) writeDeliverable(task *types.Task, findings []types.Findi
 		InputBudgetTokens: synthesisWriterBudgetTokens,
 		Persona:           persona,
 		RecordCost:        func(resp *providers.ChatResponse) { o.recordCost(resp, bare, cost.ContextSynthesis, task.ID) },
+		// Synthesis-time figure handling: drafters pull exact figures for their
+		// section from the source exhibits on demand (document-backed
+		// extract_specifics), rather than every agent pre-stuffing figures into
+		// findings (which floods the writer). Backed by the tool registry's RAG.
+		Specifics: func(topic string, topK int) []writer.SpecificHit {
+			res, err := o.tools.Execute("extract_specifics", map[string]interface{}{"topic": topic, "top_k": topK}, agents.ToolContext{TaskID: task.ID})
+			if err != nil {
+				return nil
+			}
+			m, ok := res.(map[string]interface{})
+			if !ok {
+				return nil
+			}
+			rows, _ := m["results"].([]map[string]interface{})
+			hits := make([]writer.SpecificHit, 0, len(rows))
+			for _, r := range rows {
+				sn, _ := r["snippet"].(string)
+				if strings.TrimSpace(sn) == "" {
+					continue
+				}
+				src, _ := r["title"].(string)
+				if src == "" {
+					src, _ = r["id"].(string)
+				}
+				ctx, _ := r["context"].(string)
+				hits = append(hits, writer.SpecificHit{Text: sn, Source: src, Context: ctx})
+			}
+			return hits
+		},
 	})
 	return w.Write(adapters.SanitizePromptContent(task.Description), string(task.WorkflowType), wf)
 }

@@ -24,6 +24,20 @@ type Options struct {
 	ClusterThreshold  float64                            // cosine threshold for a finding to join a cluster
 	Persona           string                             // optional tone/voice block appended to drafter system prompts
 	RecordCost        func(resp *providers.ChatResponse) // optional cost hook
+	// Specifics, when set, pulls figure-dense source passages (the document-backed
+	// extract_specifics) for a topic. Section drafters call it AT SYNTHESIS — both
+	// seeded into the opening prompt and available as a tool — to ground a section's
+	// exact numbers (amounts, %, dates, counts, account #s, statute cites) without
+	// pre-stuffing every figure into findings. Returns verbatim row hits.
+	Specifics func(topic string, topK int) []SpecificHit
+}
+
+// SpecificHit is one figure-bearing source passage: the verbatim row (to state
+// exactly), its document source, and optional table column context.
+type SpecificHit struct {
+	Text    string
+	Source  string
+	Context string
 }
 
 // Writer turns a task's findings into the final deliverable via scoped, multi-pass
@@ -184,7 +198,7 @@ func (w *Writer) draftSection(taskDesc, workflowType string, s section, ix *Find
 	for _, id := range s.FindingIDs {
 		allow[id] = true
 	}
-	tool := providers.ToolParam{
+	tools := []providers.ToolParam{{
 		Name:        "search_findings",
 		Description: "Search the findings assigned to YOUR section. Returns each finding's conclusion plus its verbatim evidence and citation source. Only your section's findings are visible.",
 		InputSchema: map[string]interface{}{
@@ -194,18 +208,52 @@ func (w *Writer) draftSection(taskDesc, workflowType string, s section, ix *Find
 			},
 			"required": []string{"query"},
 		},
+	}}
+	if w.opt.Specifics != nil {
+		tools = append(tools, providers.ToolParam{
+			Name:        "extract_specifics",
+			Description: "Pull the EXACT figures for this section from the source exhibits — dollar amounts, percentages, dates, counts, account numbers, statutory citations. Call it whenever your section states a number or precise reference. State the figures exactly as returned, with their source.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"topic": map[string]interface{}{"type": "string", "description": "The specific figures/references this section needs"},
+				},
+				"required": []string{"topic"},
+			},
+		})
 	}
 	system := drafterSystem
 	if w.opt.Persona != "" {
 		system += "\n\n" + w.opt.Persona
 	}
+
+	// Seed the section's figures at synthesis time (per-section, targeted) so the
+	// exact numbers are available even if a weak model never calls the tool — the
+	// reliable half of on-demand figure handling. Pulled from the source exhibits,
+	// not the finding pile, so findings stay un-flooded.
+	figuresBlock := ""
+	if w.opt.Specifics != nil {
+		if hits := w.opt.Specifics(s.Title+" "+s.Brief, w.opt.MaxFindingsPerSec); len(hits) > 0 {
+			var fb strings.Builder
+			fb.WriteString("\n\nEXACT FIGURES available for this section (state any you use VERBATIM, with the source in parentheses; call extract_specifics for more):\n")
+			for _, h := range hits {
+				if h.Context != "" {
+					fmt.Fprintf(&fb, "- %s  [%s] (%s)\n", oneLine(h.Text), h.Context, h.Source)
+				} else {
+					fmt.Fprintf(&fb, "- %s (%s)\n", oneLine(h.Text), h.Source)
+				}
+			}
+			figuresBlock = fb.String()
+		}
+	}
+
 	user := fmt.Sprintf(`TASK: %s
 WORKFLOW: %s
 
 Write the section "%s" of the final deliverable. Brief: %s
 
-Call search_findings to retrieve the findings for this section, then write the section grounded ONLY in what they say — do not invent facts, figures, or citations. If a finding is marked UNVERIFIED, either omit it or caveat it explicitly. Write clean client-ready prose: no finding numbers, agent names, or placeholder tokens. Output only the section text (no heading).`,
-		oneLine(taskDesc), workflowType, s.Title, s.Brief)
+Call search_findings to retrieve the findings for this section, then write the section grounded ONLY in what they say — do not invent facts, figures, or citations. INCLUDE the exact figures, amounts, percentages, dates, counts, account numbers, and statutory citations relevant to this section, copied verbatim from the figures below or from extract_specifics. If a finding is marked UNVERIFIED, either omit it or caveat it explicitly. Write clean client-ready prose: no finding numbers, agent names, or placeholder tokens. Output only the section text (no heading).%s`,
+		oneLine(taskDesc), workflowType, s.Title, s.Brief, figuresBlock)
 
 	msgs := []providers.Message{{Role: "user", Content: user}}
 	final := ""
@@ -215,7 +263,7 @@ Call search_findings to retrieve the findings for this section, then write the s
 			Model:       w.model,
 			MaxTokens:   w.opt.DraftMaxTokens,
 			System:      system,
-			Tools:       []providers.ToolParam{tool},
+			Tools:       tools,
 			Messages:    msgs,
 			CacheSystem: true,
 			Temperature: w.opt.Temperature,
@@ -238,10 +286,17 @@ Call search_findings to retrieve the findings for this section, then write the s
 				if b.Type != providers.BlockToolUse {
 					continue
 				}
-				searched = true
-				q, _ := b.Input["query"].(string)
-				hits := ix.SearchScoped(q, w.opt.MaxFindingsPerSec, allow)
-				raw, _ := json.Marshal(map[string]interface{}{"findings": findingsToJSON(hits)})
+				var payload interface{}
+				switch b.Name {
+				case "extract_specifics":
+					topic, _ := b.Input["topic"].(string)
+					payload = map[string]interface{}{"figures": specificsToJSON(w.opt.Specifics(topic, w.opt.MaxFindingsPerSec))}
+				default: // search_findings
+					searched = true
+					q, _ := b.Input["query"].(string)
+					payload = map[string]interface{}{"findings": findingsToJSON(ix.SearchScoped(q, w.opt.MaxFindingsPerSec, allow))}
+				}
+				raw, _ := json.Marshal(payload)
 				results = append(results, providers.ContentBlock{Type: providers.BlockToolResult, ToolUseID: b.ID, Content: string(raw)})
 			}
 			msgs = append(msgs, providers.Message{Role: "user", Content: results})
@@ -259,6 +314,19 @@ Call search_findings to retrieve the findings for this section, then write the s
 		return w.fallbackSection(s, ix) // never blank
 	}
 	return strings.TrimSpace(final)
+}
+
+// specificsToJSON shapes figure hits for an extract_specifics tool result.
+func specificsToJSON(hits []SpecificHit) []map[string]interface{} {
+	out := make([]map[string]interface{}, 0, len(hits))
+	for _, h := range hits {
+		m := map[string]interface{}{"figure": h.Text, "source": h.Source}
+		if h.Context != "" {
+			m["context"] = h.Context
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 // stitch assembles the section drafts under their headings and merges them into one
