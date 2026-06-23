@@ -530,6 +530,19 @@ func (o *Orchestrator) runTask(task *types.Task) {
 	audit.Default.Write(audit.WriteRequest{Event: "task.started", ActorID: audit.ActorSystem, TaskID: task.ID, Data: map[string]interface{}{"workflowType": task.WorkflowType}})
 
 	phases := phaseSequences[task.WorkflowType]
+	// Reconciliation is opt-in (RECONCILIATION_ENABLED=true). Its detection still has
+	// poor precision (false-positive controversies) and the extra round bloats findings,
+	// so by default the pipeline skips it; the code + graph types remain for when it
+	// earns its place (and for the TypeDB contradiction graph).
+	if os.Getenv("RECONCILIATION_ENABLED") != "true" {
+		filtered := make([]types.TaskPhase, 0, len(phases))
+		for _, p := range phases {
+			if p != types.PhaseReconciliation {
+				filtered = append(filtered, p)
+			}
+		}
+		phases = filtered
+	}
 	var runErr error
 
 	// At-start intent steering: hunt the matter's specific facts (amounts, rates,
