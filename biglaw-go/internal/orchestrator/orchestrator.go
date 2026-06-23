@@ -1522,8 +1522,37 @@ func (o *Orchestrator) synthesizeAgents(area, sector, workType, key string, prov
 	if workType != "" {
 		ctx += ", " + workType + " work"
 	}
-	prompt := fmt.Sprintf("Design 5 to 6 FINE-GRAINED specialist legal analyst agents for the practice area \"%s\"%s. Each must be a DISTINCT sub-specialty of that area (not generic). Respond with ONLY a JSON array; each element: {\"name\":\"<sub-specialty> Analyst\",\"description\":\"<one sentence describing what this agent analyses>\",\"framework\":\"<a numbered analytical framework of 4-6 steps the agent follows>\",\"skills\":[\"<kebab-skill>\"]}",
-		area, ctx)
+	// Ground generation in THIS matter's actual issues, not the area's generic sub-areas.
+	// Keying off the area name alone produced off-topic specialists (an Insider-Trading
+	// analyst on a cherry-picking matter) that diluted the pool; tailoring to the matter's
+	// real allegations makes every generated specialist on-point.
+	issues := ""
+	if res, err := o.tools.Execute("search_chunks", map[string]interface{}{
+		"query": "the specific allegations, claims, charges, violations, and courses of conduct at issue in this matter",
+		"top_k": 8,
+	}, agents.ToolContext{TaskID: taskID}); err == nil {
+		if m, ok := res.(map[string]interface{}); ok {
+			if rows, ok := m["results"].([]map[string]interface{}); ok {
+				var b strings.Builder
+				for _, r := range rows {
+					if sn, _ := r["snippet"].(string); strings.TrimSpace(sn) != "" {
+						b.WriteString("- ")
+						b.WriteString(strings.Join(strings.Fields(sn), " "))
+						b.WriteString("\n")
+					}
+				}
+				issues = strutil.TruncateToTokens(b.String(), 1800)
+			}
+		}
+	}
+	var prompt string
+	if strings.TrimSpace(issues) != "" {
+		prompt = fmt.Sprintf("A legal matter in %s%s raises the SPECIFIC issues and allegations below. Design 5 to 6 specialist legal analyst agents, EACH tailored to a SPECIFIC issue, allegation, or course of conduct IN THIS MATTER — NOT generic sub-areas of the practice area. Name each for the conduct it analyses (e.g. a 'Trade-Allocation Analyst' for an allocation issue, a 'Directed-Brokerage Analyst' for a brokerage-kickback issue). Respond with ONLY a JSON array; each element: {\"name\":\"<issue-specific> Analyst\",\"description\":\"<the specific issue in THIS matter it analyses>\",\"framework\":\"<a numbered analytical framework of 4-6 steps>\",\"skills\":[\"<kebab-skill>\"]}\n\nMATTER ISSUES:\n%s",
+			area, ctx, issues)
+	} else {
+		prompt = fmt.Sprintf("Design 5 to 6 FINE-GRAINED specialist legal analyst agents for the practice area \"%s\"%s. Each must be a DISTINCT sub-specialty of that area. Respond with ONLY a JSON array; each element: {\"name\":\"<sub-specialty> Analyst\",\"description\":\"<one sentence>\",\"framework\":\"<a numbered analytical framework of 4-6 steps>\",\"skills\":[\"<kebab-skill>\"]}",
+			area, ctx)
+	}
 	resp, err := prov.Chat(providers.ChatParams{
 		Model: model, MaxTokens: 4000,
 		System:   "You design rigorous, specialised legal AI analyst agents. Output only the JSON array, no prose.",
