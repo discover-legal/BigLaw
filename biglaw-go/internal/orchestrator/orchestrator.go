@@ -1531,7 +1531,8 @@ func (o *Orchestrator) synthesizeAgents(area, sector, workType, key string, prov
 	var defs []types.AgentDefinition
 	for i, a := range arr {
 		name := strings.TrimSpace(a.Name)
-		if name == "" || strings.TrimSpace(a.Framework) == "" {
+		framework := strings.TrimSpace(string(a.Framework))
+		if name == "" || framework == "" {
 			continue
 		}
 		defs = append(defs, types.AgentDefinition{
@@ -1541,7 +1542,7 @@ func (o *Orchestrator) synthesizeAgents(area, sector, workType, key string, prov
 			Type:         types.AgentTypeSpecialist,
 			Domain:       dom,
 			Description:  strings.TrimSpace(a.Description) + " Specialist in " + area + ".",
-			SystemPrompt: "You are the " + name + ", a specialist in " + area + ".\n" + strings.TrimSpace(a.Framework) + "\nGround every finding in the matter's documents: quote verbatim evidence and cite its source.",
+			SystemPrompt: "You are the " + name + ", a specialist in " + area + ".\n" + framework + "\nGround every finding in the matter's documents: quote verbatim evidence and cite its source.",
 			AllowedTools: []string{"search_chunks", "extract_specifics", "search_knowledge", "read_document", "find_in_document", "list_documents"},
 			Skills:       a.Skills,
 			Metadata:     map[string]interface{}{"genArea": key, "practiceArea": area},
@@ -1553,8 +1554,43 @@ func (o *Orchestrator) synthesizeAgents(area, sector, workType, key string, prov
 type agentSpec struct {
 	Name        string
 	Description string
-	Framework   string
+	Framework   flexText
 	Skills      []string
+}
+
+// flexText accepts a JSON string OR an array of strings (a model designing a "numbered
+// framework" naturally emits the steps as an array) — joining an array into a numbered
+// block. Without this the whole agent object failed to unmarshal and was dropped, which
+// is exactly why on-demand synthesis silently produced 0 agents.
+type flexText string
+
+func (f *flexText) UnmarshalJSON(b []byte) error {
+	t := strings.TrimSpace(string(b))
+	if t == "" || t == "null" {
+		return nil
+	}
+	switch t[0] {
+	case '"':
+		var s string
+		if err := json.Unmarshal(b, &s); err != nil {
+			return err
+		}
+		*f = flexText(s)
+	case '[':
+		var arr []string
+		if json.Unmarshal(b, &arr) == nil {
+			var sb strings.Builder
+			for i, s := range arr {
+				fmt.Fprintf(&sb, "%d. %s\n", i+1, strings.TrimSpace(s))
+			}
+			*f = flexText(strings.TrimSpace(sb.String()))
+		} else {
+			*f = flexText(strings.Trim(t, "[]"))
+		}
+	default:
+		*f = flexText(t)
+	}
+	return nil
 }
 
 // parseAgentSpecs extracts agent specs from possibly-truncated model JSON: it tries the
