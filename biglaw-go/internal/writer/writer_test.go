@@ -163,6 +163,34 @@ func TestAttachKeyFiguresYearLeadTrap(t *testing.T) {
 	}
 }
 
+func TestResolveFigurePlaceholders(t *testing.T) {
+	figs := []SpecificHit{
+		{Text: "Chao personal account profitable allocation rate\t81.6%", Source: "x.xlsx"},
+		{Text: "Excess profits allocated to Oceanic Fund I LP\t$7,800,000", Source: "x.xlsx"},
+	}
+	text := "Chao's account showed a rate of {{FIG: Chao personal account profitable allocation rate}}, and {{FIG: Oceanic Fund excess profits}} in excess profits."
+	out := resolveFigurePlaceholders(text, figs)
+	if !strings.Contains(out, "81.6%") {
+		t.Errorf("rate placeholder not resolved to grounded figure: %s", out)
+	}
+	if !strings.Contains(out, "$7,800,000") {
+		t.Errorf("amount placeholder not resolved: %s", out)
+	}
+	if strings.Contains(out, "{{FIG") {
+		t.Errorf("placeholders left unresolved: %s", out)
+	}
+	// The model can never inject a hallucinated value (68.6%) — only grounded figures
+	// appear, because the number comes from figs, not the model.
+	if strings.Contains(out, "68.6") {
+		t.Error("a non-grounded value appeared — impossible via placeholders")
+	}
+	// Unmatched placeholder is DROPPED (never guessed), leaving clean prose.
+	un := resolveFigurePlaceholders("a value of {{FIG: something not in the figures}} here", figs)
+	if strings.Contains(un, "{{FIG") || strings.Contains(un, "81.6") {
+		t.Errorf("unmatched placeholder mishandled: %q", un)
+	}
+}
+
 func TestSalientFigure(t *testing.T) {
 	cases := map[string]string{
 		"Oceanic Fund I LP (2021-2023) $7,800,000": "$7,800,000",
