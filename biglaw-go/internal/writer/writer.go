@@ -393,10 +393,9 @@ WORKFLOW: %s
 
 Write the section "%s" of the final deliverable. Brief: %s
 
-Call search_findings to retrieve the findings for this section, then write it grounded ONLY in what the findings and figures say — never invent facts, figures, or citations.
+Call search_findings to retrieve the findings for this section, then write it grounded ONLY in what the findings and figures say — never invent facts.
 Be COMPREHENSIVE for this category: cover the specific allegations, the parties implicated, the harm, and the defense points.
-Include EVERY exact figure relevant to this section — amounts, percentages, dates, counts, account numbers, and statutory citations — copied VERBATIM from the figures below or from extract_specifics. List them ALL; do not reduce to a subset or round them.
-NEVER write a placeholder token (e.g. [X], [Date], [Section N], [Amount]): fill it from the figures/findings, or omit that clause entirely.
+CRITICAL — for ANY specific figure or precise reference (a dollar amount, a percentage or rate, a count, a date, an account number, or a statutory/section citation), DO NOT write the number or citation yourself. Write a placeholder of the form {{FIG: brief description}} instead — e.g. "excess profits of {{FIG: Oceanic Fund excess profits}}", "a profitable-allocation rate of {{FIG: Chao personal account profitable allocation rate}}", "in violation of {{FIG: cherry-picking statutory provisions}}". The exact grounded value is injected automatically, so you never recall a digit — this is how we keep every figure correct. Use a placeholder for EVERY specific you reference.
 If a finding is marked UNVERIFIED, either omit it or caveat it explicitly. Clean client-ready prose: no finding numbers or agent names. Output only the section text (no heading).%s`,
 		oneLine(taskDesc), workflowType, s.Title, s.Brief, figuresBlock)
 
@@ -479,7 +478,58 @@ If a finding is marked UNVERIFIED, either omit it or caveat it explicitly. Clean
 			figs = append(figs, SpecificHit{Text: text, Source: f.Source})
 		}
 	}
+	// Neurosymbolic: resolve the drafter's {{FIG: …}} placeholders by injecting the
+	// matching grounded figure verbatim — the model never types (and so can't garble,
+	// e.g. 68.6% for 81.6%) a number. Unmatched placeholders are dropped, never guessed.
+	result = resolveFigurePlaceholders(result, figs)
 	return attachKeyFigures(result, figs)
+}
+
+var rePlaceholder = regexp.MustCompile(`\{\{\s*FIG:\s*([^}]+?)\s*\}\}`)
+
+// resolveFigurePlaceholders replaces each {{FIG: description}} with the salient
+// figure of the grounded row that best matches the description (by content-word
+// overlap). No confident match → the placeholder is removed (never guessed), so the
+// prose can omit a figure but can never state a wrong one.
+func resolveFigurePlaceholders(text string, figs []SpecificHit) string {
+	out := rePlaceholder.ReplaceAllStringFunc(text, func(m string) string {
+		desc := rePlaceholder.FindStringSubmatch(m)[1]
+		best, bestScore := "", 0
+		for _, f := range figs {
+			if sc := tokenOverlap(desc, f.Text); sc > bestScore {
+				bestScore, best = sc, f.Text
+			}
+		}
+		if bestScore >= 2 { // require real overlap before injecting
+			if sal := salientFigure(best); sal != "" {
+				return sal
+			}
+		}
+		return "" // unmatched → drop, never guess a number
+	})
+	// Tidy any spacing/punctuation left by a dropped placeholder.
+	out = regexp.MustCompile(`\s{2,}`).ReplaceAllString(out, " ")
+	return regexp.MustCompile(`\s+([.,;)])`).ReplaceAllString(out, "$1")
+}
+
+// tokenOverlap counts shared content words (≥3 chars) between a placeholder
+// description and a figure row — a cheap, dependency-free relevance signal.
+func tokenOverlap(a, b string) int {
+	bw := map[string]bool{}
+	for _, w := range strings.Fields(strings.ToLower(b)) {
+		if len(w) >= 3 {
+			bw[w] = true
+		}
+	}
+	n := 0
+	seen := map[string]bool{}
+	for _, w := range strings.Fields(strings.ToLower(a)) {
+		if len(w) >= 3 && bw[w] && !seen[w] {
+			seen[w] = true
+			n++
+		}
+	}
+	return n
 }
 
 // planSectionFacts is the critique/planner pass: given a category and a few of its
