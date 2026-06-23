@@ -540,7 +540,17 @@ func (o *Orchestrator) runTask(task *types.Task) {
 	stier := types.TierTool
 	sweepModel := routing.SelectModel(o.cfg, routing.SelectParams{Tier: &stier, TaskType: routing.TaskExtraction})
 	if prov, perr := o.provReg.Get(sweepModel); perr == nil {
-		if sweep := o.specificsSweep(task, prov, routing.ResolveModelID(sweepModel)); len(sweep) > 0 {
+		bare := routing.ResolveModelID(sweepModel)
+		// Classify the matter (practice area / sector / work type) from its DOCUMENTS,
+		// so recruitment seats the right specialists. The task description is too thin
+		// (the practice area lives in the exhibits, not "review and summarize"), so we
+		// classify from sampled passages and populate NosLegal — which recruitment then
+		// uses as a signal alongside the (kept-specific) round goal.
+		if tags := o.classifyMatter(task, prov, bare); tags.AreaOfLaw != nil || tags.Sector != nil {
+			o.update(task, func(t *types.Task) { t.NosLegal = &tags })
+			slog.Info("matter classified", "task", task.ID, "area", strDeref(tags.AreaOfLaw), "sector", strDeref(tags.Sector))
+		}
+		if sweep := o.specificsSweep(task, prov, bare); len(sweep) > 0 {
 			o.update(task, func(t *types.Task) { t.Findings = append(t.Findings, sweep...) })
 			slog.Info("specifics sweep seeded findings", "task", task.ID, "n", len(sweep))
 		}
@@ -1275,6 +1285,75 @@ func (o *Orchestrator) specificsSweep(task *types.Task, prov providers.Provider,
 		}
 	}
 	return findings
+}
+
+func strDeref(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
+}
+
+// classifyMatter classifies the matter into NOSLEGAL facets (practice area, sector,
+// work type) from its DOCUMENTS — sampled passages, not the thin task description —
+// so recruitment can seat the right practice specialists. Best-effort; returns empty
+// tags on any failure.
+func (o *Orchestrator) classifyMatter(task *types.Task, prov providers.Provider, model string) types.NosLegalTags {
+	res, err := o.tools.Execute("search_chunks", map[string]interface{}{
+		"query": "subject matter, parties, the legal claims and allegations, the practice area and legal doctrines at issue",
+		"top_k": 6,
+	}, agents.ToolContext{TaskID: task.ID})
+	passages := ""
+	if err == nil {
+		if m, ok := res.(map[string]interface{}); ok {
+			if rows, ok := m["results"].([]map[string]interface{}); ok {
+				var b strings.Builder
+				for _, r := range rows {
+					if sn, _ := r["snippet"].(string); strings.TrimSpace(sn) != "" {
+						b.WriteString(strings.Join(strings.Fields(sn), " "))
+						b.WriteString("\n")
+					}
+				}
+				passages = strutil.TruncateToTokens(b.String(), 1500)
+			}
+		}
+	}
+	prompt := fmt.Sprintf("Classify this legal matter for routing to specialist agents. Respond with ONLY valid JSON: {\"areaOfLaw\":\"<the specific practice area, e.g. Securities Regulation, Employment, M&A, Real Estate>\",\"workType\":\"<Advisory|Transactional|Litigious|Regulatory|Other>\",\"sector\":\"<the industry sector>\"}. Base it on the CONTENT, not the instruction.\n\nTASK: %s\n\nCONTENT:\n%s",
+		strings.Join(strings.Fields(task.Description), " "), passages)
+	resp, err := prov.Chat(providers.ChatParams{
+		Model: model, MaxTokens: 200,
+		System:   "You are a legal taxonomy classifier. Output only the requested JSON.",
+		Messages: []providers.Message{{Role: "user", Content: prompt}}, CacheSystem: true,
+	})
+	if err != nil {
+		return types.NosLegalTags{}
+	}
+	o.recordCost(resp, model, cost.ContextClassification, task.ID)
+	var text string
+	for _, b := range resp.Content {
+		if b.Type == providers.BlockText {
+			text = b.Text
+		}
+	}
+	s, e := strings.Index(text, "{"), strings.LastIndex(text, "}")
+	if s < 0 || e <= s {
+		return types.NosLegalTags{}
+	}
+	var raw struct{ AreaOfLaw, WorkType, Sector string }
+	if json.Unmarshal([]byte(text[s:e+1]), &raw) != nil {
+		return types.NosLegalTags{}
+	}
+	tags := types.NosLegalTags{}
+	if raw.AreaOfLaw != "" {
+		tags.AreaOfLaw = &raw.AreaOfLaw
+	}
+	if raw.WorkType != "" {
+		tags.WorkType = &raw.WorkType
+	}
+	if raw.Sector != "" {
+		tags.Sector = &raw.Sector
+	}
+	return tags
 }
 
 // sweepQueries runs one query-generation call over the matter's passages with the
