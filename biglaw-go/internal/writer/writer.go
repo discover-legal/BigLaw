@@ -96,6 +96,11 @@ func (w *Writer) Write(taskDesc, workflowType string, findings []Finding) (strin
 	if len(findings) == 0 {
 		return "", nil
 	}
+	// Collapse near-duplicate findings first. The rounds + sweep + reconciliation can
+	// surface the same passage many times; left in, the duplicates both bloat the
+	// writer (the merge then compresses the whole document to a stub — a real
+	// regression at high finding counts) and litter the deliverable with repetition.
+	findings = dedupeFindings(findings)
 	ix := NewFindingIndex(w.embed, findings)
 
 	// 1. Build the section set. With a coverage spine (the matter's enumerated topics)
@@ -122,6 +127,36 @@ func (w *Writer) Write(taskDesc, workflowType string, findings []Finding) (strin
 
 	// 4. Stitch sections into one coherent document.
 	return w.stitch(taskDesc, workflowType, secs, drafts), nil
+}
+
+// dedupeFindings collapses near-duplicate findings (same normalized leading ~90
+// alphanumerics) to the first occurrence, preserving order. Cheap and order-stable —
+// enough to kill the repeated-paragraph problem without an embedding pass.
+func dedupeFindings(fs []Finding) []Finding {
+	seen := map[string]bool{}
+	out := make([]Finding, 0, len(fs))
+	for _, f := range fs {
+		key := dedupKey(f.Content)
+		if key != "" && seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, f)
+	}
+	return out
+}
+
+func dedupKey(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			if b.Len() >= 90 {
+				break
+			}
+		}
+	}
+	return b.String()
 }
 
 // spineSections builds one section per required topic (guaranteed coverage) and
@@ -395,7 +430,7 @@ Write the section "%s" of the final deliverable. Brief: %s
 
 Call search_findings to retrieve the findings for this section, then write it grounded ONLY in what the findings and figures say — never invent facts.
 Be COMPREHENSIVE for this category: cover the specific allegations, the parties implicated, the harm, and the defense points.
-CRITICAL — for ANY specific figure or precise reference (a dollar amount, a percentage or rate, a count, a date, an account number, or a statutory/section/clause citation), DO NOT write the number or citation yourself. Write a placeholder of the form {{FIG: brief description of which figure you mean}} instead — e.g. "a loss of {{FIG: total alleged loss amount}}", "a rate of {{FIG: the relevant rate or percentage}}", "in violation of {{FIG: the cited statutory provision}}". The exact grounded value is injected automatically, so you never recall a digit — this is how we keep every figure correct. Use a placeholder for EVERY specific you reference.
+CRITICAL — for ANY specific figure or precise reference (a dollar amount, a percentage or rate, a count, a date, an account number, or a statutory/section/clause citation), DO NOT write the number or citation yourself. Write a placeholder of the form {{FIG: brief description of which figure you mean}} instead — e.g. "a loss of {{FIG: total alleged loss amount}}", "a rate of {{FIG: the relevant rate or percentage}}", "in violation of {{FIG: the cited statutory provision}}". The exact grounded value is injected automatically, so you never recall a digit — this is how we keep every figure correct. Use a placeholder for EVERY specific you reference. NEVER compute, add, sum, total, or otherwise derive a number yourself — state only figures that appear verbatim in the data; if a total is not given, do not invent one.
 If a finding is marked UNVERIFIED, either omit it or caveat it explicitly. Clean client-ready prose: no finding numbers or agent names. Output only the section text (no heading).%s`,
 		oneLine(taskDesc), workflowType, s.Title, s.Brief, figuresBlock)
 
@@ -507,7 +542,10 @@ func resolveFigurePlaceholders(text string, figs []SpecificHit) string {
 		}
 		return "" // unmatched → drop, never guess a number
 	})
-	// Tidy any spacing/punctuation left by a dropped placeholder.
+	// Tidy artefacts a dropped placeholder leaves behind: empty/whitespace-only parens
+	// (e.g. a citation "()" the drafter emitted with no source), doubled spaces, and a
+	// space before punctuation.
+	out = regexp.MustCompile(`\(\s*\)`).ReplaceAllString(out, "")
 	out = regexp.MustCompile(`\s{2,}`).ReplaceAllString(out, " ")
 	return regexp.MustCompile(`\s+([.,;)])`).ReplaceAllString(out, "$1")
 }
@@ -595,15 +633,33 @@ var reAllFigures = regexp.MustCompile(`\$?\d[\d,]*(?:\.\d+)?%?`)
 // the row's FIRST number was a bug — most exhibit rows lead with a year (e.g.
 // "…Oceanic Fund I LP (2021–2023) $7,800,000"), so a narrative mentioning "2021"
 // wrongly suppressed the whole row and the $ figure never landed.
+var reCiteWord = regexp.MustCompile(`(?i)(section|sections|rule|item|part|subsection|paragraph|no\.|§|§§)\s*$`)
+
 func salientFigure(s string) string {
 	best := ""
-	for _, n := range reAllFigures.FindAllString(s, -1) {
-		n = strings.TrimRight(n, ",.")    // drop a trailing comma/period the regex caught
+	for _, loc := range reAllFigures.FindAllStringIndex(s, -1) {
+		n := strings.TrimRight(s[loc[0]:loc[1]], ",.")
 		if strings.ContainsAny(n, "$%") { // $ amount or percentage is most salient
 			return n
 		}
 		if len(n) == 4 && !strings.Contains(n, ",") { // bare 4-digit year — ignore
 			continue
+		}
+		// Skip numbers that are part of a CITATION, not a figure: "Section 206",
+		// "Rule 204-2", "206(1)" — otherwise a statutory ref masquerades as a figure
+		// (the "(206)" bug) and pollutes the figure list / placeholder resolution.
+		lo := loc[0] - 12
+		if lo < 0 {
+			lo = 0
+		}
+		if reCiteWord.MatchString(s[lo:loc[0]]) {
+			continue
+		}
+		if loc[1] < len(s) && (s[loc[1]] == '(' || s[loc[1]] == '-') {
+			continue // "206(1)", "204-2" — leading part of a citation
+		}
+		if loc[0] > 0 && (s[loc[0]-1] == '(' || s[loc[0]-1] == '-') {
+			continue // "(1)", "-2" — a subsection/suffix inside a citation
 		}
 		if len(n) > len(best) {
 			best = n
@@ -623,20 +679,44 @@ func attachKeyFigures(text string, hits []SpecificHit) string {
 	var lines []string
 	seen := map[string]bool{}
 	for _, h := range hits {
-		row := oneLine(h.Text)
-		if row == "" || seen[row] {
+		sal := salientFigure(h.Text)
+		if sal == "" { // only rows carrying a real figure — never raw narrative dumps
 			continue
 		}
-		seen[row] = true
-		if sal := salientFigure(row); sal != "" && strings.Contains(text, sal) {
-			continue // the row's key figure is already stated in the prose
+		if seen[sal] { // dedup BY the figure, not by exact row text
+			continue
 		}
-		lines = append(lines, fmt.Sprintf("- %s (%s)", row, h.Source))
+		seen[sal] = true
+		if strings.Contains(text, sal) {
+			continue // already stated in the prose
+		}
+		lines = append(lines, fmt.Sprintf("- %s: %s (%s)", figureLabel(h.Text, sal), sal, h.Source))
+		if len(lines) >= 12 { // bounded — a curated list, not a data dump
+			break
+		}
 	}
 	if len(lines) == 0 {
 		return text
 	}
 	return text + "\n\n**Key figures:**\n" + strings.Join(lines, "\n")
+}
+
+// figureLabel renders a short human label for a figure row: the row text with the
+// figure value removed and trimmed to a phrase — so the Key-figures list reads
+// "Excess profits to Oceanic Fund: $7,800,000 (src)", not a pasted exhibit row.
+func figureLabel(row, sal string) string {
+	label := oneLine(row)
+	if i := strings.Index(label, sal); i >= 0 {
+		label = label[:i] + label[i+len(sal):]
+	}
+	label = strings.Trim(strings.Join(strings.Fields(label), " "), " -—:|·\t")
+	if len(label) > 80 {
+		label = strings.TrimSpace(label[:80])
+	}
+	if label == "" {
+		label = "figure"
+	}
+	return label
 }
 
 // specificsToJSON shapes figure hits for an extract_specifics tool result.
@@ -715,7 +795,14 @@ func (w *Writer) coherenceMerge(taskDesc, workflowType, draft string, final bool
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(out)
+	out = strings.TrimSpace(out)
+	// Collapse guard: a merge that returns a small fraction of its input has compressed
+	// the document to a stub (the failure mode at high finding counts — repeated passes
+	// each shrinking it). Reject it so the caller keeps the fuller assembly.
+	if len(out) < len(strings.TrimSpace(draft))*2/5 {
+		return ""
+	}
+	return out
 }
 
 // batchByTokens greedily packs blocks into groups each within budget (a block
