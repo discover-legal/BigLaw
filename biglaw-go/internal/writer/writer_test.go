@@ -163,6 +163,50 @@ func TestAttachKeyFiguresYearLeadTrap(t *testing.T) {
 	}
 }
 
+func TestDedupeFindings(t *testing.T) {
+	in := []Finding{
+		{ID: "a", Content: "The Division of Examinations commenced its examination of WCA on March 11, 2024, and concluded on August 2, 2024."},
+		{ID: "b", Content: "The Division of Examinations commenced its examination of WCA on March 11, 2024, and concluded on August 2, 2024 (restated)."},
+		{ID: "c", Content: "Excess profits allocated to Oceanic Fund I LP: $7,800,000."},
+	}
+	if out := dedupeFindings(in); len(out) != 2 {
+		t.Fatalf("expected 2 after dedup (near-identical timeline paras collapse), got %d", len(out))
+	}
+}
+
+func TestSalientFigureCitationAware(t *testing.T) {
+	cases := map[string]string{
+		"Excess profits to Oceanic Fund I LP (2021-2023) $7,800,000": "$7,800,000",
+		"Chao personal account profitable allocation rate 81.6%":     "81.6%",
+		"312 Microsoft Excel spreadsheets with backdated metadata":   "312",
+		"in violation of Sections 206(1) and 206(2) of the Act":      "", // citation, not a figure
+		"as required by Rule 204-2 under the Advisers Act":           "", // citation
+	}
+	for in, want := range cases {
+		if got := salientFigure(in); got != want {
+			t.Errorf("salientFigure(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestAttachKeyFiguresSelective(t *testing.T) {
+	hits := []SpecificHit{
+		{Text: "Excess profits to Oceanic Fund I LP (2021-2023) $7,800,000", Source: "x.xlsx"},
+		{Text: "Excess profits to Oceanic Fund I LP duplicate row $7,800,000", Source: "x.xlsx"},
+		{Text: "in violation of Sections 206(1) and 206(2)", Source: "y.docx"},
+	}
+	out := attachKeyFigures("Some prose with no figures.", hits)
+	if strings.Count(out, "$7,800,000") != 1 {
+		t.Errorf("expected the $ figure once (deduped by figure):\n%s", out)
+	}
+	if strings.Contains(out, "206") {
+		t.Errorf("citation row should not appear in Key figures:\n%s", out)
+	}
+	if strings.Contains(out, "duplicate row") {
+		t.Errorf("raw duplicate row leaked into output:\n%s", out)
+	}
+}
+
 func TestResolveFigurePlaceholders(t *testing.T) {
 	figs := []SpecificHit{
 		{Text: "Chao personal account profitable allocation rate\t81.6%", Source: "x.xlsx"},
