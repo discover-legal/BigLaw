@@ -432,6 +432,36 @@ confirmed by both the citation gate and independent re-extraction of the sources
 **Local-model note:** the agent model must *fit in VRAM* — a 14B that spills to CPU runs ~10× slower
 and trips round timeouts; prefer a model whose weights + KV cache fit your GPU.
 
+**Coverage & figure handling — completeness by construction** (`internal/rag`, `internal/orchestrator`,
+`internal/writer`):
+
+Grounding makes what the agent *says* faithful; coverage makes sure it *says everything required* —
+a different axis a weak model fails at by omission (it never thinks to look for an account number or a
+trade count). Four mechanisms make completeness structural rather than emergent:
+
+- **Table/exhibit-aware chunking** — spreadsheet rows (`## Sheet:` + tab-delimited) are chunked one row
+  per fact, the row kept verbatim (gate-safe) with a header-enriched embedding so a bare `$7,800,000`
+  becomes findable. (`internal/rag/chunk.go`)
+- **At-start specifics sweep** (`internal/orchestrator`) — before the rounds, the model reads the
+  matter's figure-dense passages and enumerates *entity-aware* queries (it sees the people/accounts/funds,
+  so it asks for "Chao's profitable-allocation rate", "the omnibus % of volume", "the brokerage account
+  number"), runs each against the exhibits, and seeds the exact figures as grounded findings — bounded and
+  deduped. The whole pipeline is then *aware* the facts exist, instead of synthesis trying to query for
+  facts no finding ever noticed.
+- **Top-down coverage spine** — the matter's own enumerated categories (e.g. a referral's "six categories
+  of violations") become *guaranteed* sections; findings map into each, so no required category vanishes
+  through clustering variance. (`internal/writer`)
+- **Mechanical figure attachment** — each section's grounded figures are surfaced from its mapped findings
+  as a *Key figures* list, by construction — so a specific number lands even when the 7B drafter omits it
+  from prose. (Transcribing numbers is exactly where a small model is unreliable; so it's not left to the
+  model.)
+
+Benchmarked on Harvey **LAB** (Legal Agent Benchmark, all-pass 60-criterion rubric, white-collar
+SEC-referral task): criterion pass rate climbed from 10 → **22/60** as these mechanisms landed — the
+architecture extracting hard, grounded, figure-rich legal substance (exact amounts, rates, account
+numbers, trade counts, statutory cites) on a local 7B. LAB scores a *task* 1.0 only on a perfect 60/60,
+so the criterion pass rate — not the binary task score — is the meaningful signal.
+
 **Q-learning agent recruitment** (`biglaw-go/internal/learning/`):
 
 - A `LearningEngine` maintains a Q-table across `"phase:jurisdiction:workflowType"` states
