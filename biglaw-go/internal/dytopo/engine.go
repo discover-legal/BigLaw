@@ -318,6 +318,22 @@ func (e *Engine) buildDocumentIndex(task *types.Task) string {
 	return strings.TrimSpace(b.String())
 }
 
+// matterRecruitContext is the matter's practice classification (area; sector; work
+// type) as a recruitment signal, from the NosLegal tags set at task start. Empty
+// until the matter is classified.
+func matterRecruitContext(task *types.Task) string {
+	if task.NosLegal == nil {
+		return ""
+	}
+	var parts []string
+	for _, p := range []*string{task.NosLegal.AreaOfLaw, task.NosLegal.Sector, task.NosLegal.WorkType} {
+		if p != nil && strings.TrimSpace(*p) != "" {
+			parts = append(parts, strings.TrimSpace(*p))
+		}
+	}
+	return strings.Join(parts, "; ")
+}
+
 func (e *Engine) recruitAgents(goal types.RoundGoal, task *types.Task) ([]types.AgentDefinition, error) {
 	topK := e.cfg.DyTopo.MaxAgentsPerRound - 1
 	opts := agents.SearchOpts{Tier: phaseToTier[goal.Phase], TopK: topK}
@@ -335,12 +351,21 @@ func (e *Engine) recruitAgents(goal types.RoundGoal, task *types.Task) ([]types.
 	positive = unique(positive)[:min(8, len(unique(positive)))]
 	negative = unique(negative)[:min(4, len(unique(negative)))]
 
+	// Recruit on TWO signals: the matter's practice classification (so the right
+	// specialists are seated — the round goal alone pulls the wrong ones, e.g. a
+	// Patent analyst onto a securities matter) AND the specific round goal (what this
+	// round needs). The classification is the matter dimension; the goal stays sharp.
+	query := goal.Description
+	if mc := matterRecruitContext(task); mc != "" {
+		query = mc + " — " + goal.Description
+	}
+
 	var candidates []types.AgentDefinition
 	var err error
 	if len(positive) > 0 {
-		candidates, err = e.registry.Recommend(goal.Description, positive, negative, opts)
+		candidates, err = e.registry.Recommend(query, positive, negative, opts)
 	} else {
-		candidates, err = e.registry.Search(goal.Description, opts)
+		candidates, err = e.registry.Search(query, opts)
 	}
 	if err != nil {
 		return nil, err
