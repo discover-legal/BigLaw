@@ -549,6 +549,10 @@ func (o *Orchestrator) runTask(task *types.Task) {
 		if tags := o.classifyMatter(task, prov, bare); tags.AreaOfLaw != nil || tags.Sector != nil {
 			o.update(task, func(t *types.Task) { t.NosLegal = &tags })
 			slog.Info("matter classified", "task", task.ID, "area", strDeref(tags.AreaOfLaw), "sector", strDeref(tags.Sector))
+			// On-demand specialist synthesis: generate fine-grained sub-specialty agents
+			// for this area (cached in the agentdb), so the matter is staffed by tailored
+			// specialists rather than only the generic registry.
+			o.ensureSpecialists(strDeref(tags.AreaOfLaw), strDeref(tags.Sector), strDeref(tags.WorkType), prov, bare, task.ID)
 		}
 		if sweep := o.specificsSweep(task, prov, bare); len(sweep) > 0 {
 			o.update(task, func(t *types.Task) { t.Findings = append(t.Findings, sweep...) })
@@ -1354,6 +1358,120 @@ func (o *Orchestrator) classifyMatter(task *types.Task, prov providers.Provider,
 		tags.Sector = &raw.Sector
 	}
 	return tags
+}
+
+// ensureSpecialists synthesises fine-grained specialist agents for the matter's
+// classified practice area ON DEMAND, caching them in the agent registry (agentdb)
+// for reuse. A matter is then handled by specialists tailored to its sub-specialties
+// rather than whatever generic agents the registry happened to contain. First time an
+// area is seen → generate + persist; thereafter → reuse. Best-effort.
+func (o *Orchestrator) ensureSpecialists(area, sector, workType string, prov providers.Provider, model, taskID string) {
+	area = strings.TrimSpace(area)
+	if area == "" {
+		return
+	}
+	key := slugify(area)
+	for _, a := range o.registry.ListAll() { // cache: already generated for this area?
+		if a.Metadata != nil {
+			if g, _ := a.Metadata["genArea"].(string); g == key {
+				return
+			}
+		}
+	}
+	defs := o.synthesizeAgents(area, sector, workType, key, prov, model, taskID)
+	if len(defs) == 0 {
+		return
+	}
+	if err := o.registry.RegisterAll(defs); err == nil {
+		_ = o.registry.Persist()
+		slog.Info("synthesised specialist agents on demand", "area", area, "n", len(defs))
+	}
+}
+
+// synthesizeAgents asks the model to design fine-grained sub-specialty analyst agents
+// for a practice area (taxonomy-driven, on-demand), returning ready AgentDefinitions.
+func (o *Orchestrator) synthesizeAgents(area, sector, workType, key string, prov providers.Provider, model, taskID string) []types.AgentDefinition {
+	ctx := ""
+	if sector != "" {
+		ctx += " in the " + sector + " sector"
+	}
+	if workType != "" {
+		ctx += ", " + workType + " work"
+	}
+	prompt := fmt.Sprintf("Design 6 to 8 FINE-GRAINED specialist legal analyst agents for the practice area \"%s\"%s. Each must be a DISTINCT sub-specialty of that area (not generic). Respond with ONLY a JSON array; each element: {\"name\":\"<sub-specialty> Analyst\",\"description\":\"<one sentence describing what this agent analyses>\",\"framework\":\"<a numbered analytical framework of 4-6 steps the agent follows>\",\"skills\":[\"<kebab-skill>\"]}",
+		area, ctx)
+	resp, err := prov.Chat(providers.ChatParams{
+		Model: model, MaxTokens: 2200,
+		System:   "You design rigorous, specialised legal AI analyst agents. Output only the JSON array, no prose.",
+		Messages: []providers.Message{{Role: "user", Content: prompt}}, CacheSystem: true, Temperature: o.cfg.LLMTemperature,
+	})
+	if err != nil {
+		return nil
+	}
+	o.recordCost(resp, model, cost.ContextTask, taskID)
+	var text string
+	for _, b := range resp.Content {
+		if b.Type == providers.BlockText {
+			text = b.Text
+		}
+	}
+	s, e := strings.Index(text, "["), strings.LastIndex(text, "]")
+	if s < 0 || e <= s {
+		return nil
+	}
+	var arr []struct {
+		Name, Description, Framework string
+		Skills                       []string
+	}
+	if json.Unmarshal([]byte(text[s:e+1]), &arr) != nil {
+		return nil
+	}
+	dom := domainForWorkType(workType)
+	var defs []types.AgentDefinition
+	for i, a := range arr {
+		name := strings.TrimSpace(a.Name)
+		if name == "" || strings.TrimSpace(a.Framework) == "" {
+			continue
+		}
+		defs = append(defs, types.AgentDefinition{
+			ID:           fmt.Sprintf("gen-%s-%d", key, i),
+			Name:         name,
+			Tier:         2,
+			Type:         types.AgentTypeSpecialist,
+			Domain:       dom,
+			Description:  strings.TrimSpace(a.Description) + " Specialist in " + area + ".",
+			SystemPrompt: "You are the " + name + ", a specialist in " + area + ".\n" + strings.TrimSpace(a.Framework) + "\nGround every finding in the matter's documents: quote verbatim evidence and cite its source.",
+			AllowedTools: []string{"search_chunks", "extract_specifics", "search_knowledge", "read_document", "find_in_document", "list_documents"},
+			Skills:       a.Skills,
+			Metadata:     map[string]interface{}{"genArea": key, "practiceArea": area},
+		})
+	}
+	return defs
+}
+
+func slugify(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		} else if b.Len() > 0 && b.String()[b.Len()-1] != '-' {
+			b.WriteByte('-')
+		}
+	}
+	return strings.Trim(b.String(), "-")
+}
+
+func domainForWorkType(wt string) types.AgentDomain {
+	switch strings.ToLower(strings.TrimSpace(wt)) {
+	case "litigious":
+		return types.DomainInvestigation
+	case "regulatory":
+		return types.DomainCompliance
+	case "transactional":
+		return types.DomainDrafting
+	default:
+		return types.DomainResearch
+	}
 }
 
 // sweepQueries runs one query-generation call over the matter's passages with the
