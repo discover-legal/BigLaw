@@ -278,13 +278,14 @@ func (e *Engine) RunRound(task *types.Task, goal types.RoundGoal, lawyerTone *ty
 // ─── Private helpers ──────────────────────────────────────────────────────────
 
 var phaseToTier = map[types.TaskPhase]*types.AgentTier{
-	types.PhaseIntake:       tierPtr(types.TierManager),
-	types.PhaseResearch:     tierPtr(types.TierSpecialist),
-	types.PhaseAnalysis:     tierPtr(types.TierSpecialist),
-	types.PhaseDrafting:     tierPtr(types.TierSpecialist),
-	types.PhaseReview:       tierPtr(types.TierSpecialist),
-	types.PhaseVerification: tierPtr(types.TierSpecialist),
-	types.PhaseDelivery:     tierPtr(types.TierManager),
+	types.PhaseIntake:         tierPtr(types.TierManager),
+	types.PhaseResearch:       tierPtr(types.TierSpecialist),
+	types.PhaseAnalysis:       tierPtr(types.TierSpecialist),
+	types.PhaseReconciliation: tierPtr(types.TierSpecialist),
+	types.PhaseDrafting:       tierPtr(types.TierSpecialist),
+	types.PhaseReview:         tierPtr(types.TierSpecialist),
+	types.PhaseVerification:   tierPtr(types.TierSpecialist),
+	types.PhaseDelivery:       tierPtr(types.TierManager),
 }
 
 func tierPtr(t types.AgentTier) *types.AgentTier { return &t }

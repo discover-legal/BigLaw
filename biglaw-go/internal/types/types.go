@@ -61,14 +61,42 @@ type AgentDefinition struct {
 type TaskPhase string
 
 const (
-	PhaseIntake       TaskPhase = "intake"
-	PhaseResearch     TaskPhase = "research"
-	PhaseAnalysis     TaskPhase = "analysis"
-	PhaseDrafting     TaskPhase = "drafting"
-	PhaseReview       TaskPhase = "review"
-	PhaseVerification TaskPhase = "verification"
-	PhaseDelivery     TaskPhase = "delivery"
+	PhaseIntake         TaskPhase = "intake"
+	PhaseResearch       TaskPhase = "research"
+	PhaseAnalysis       TaskPhase = "analysis"
+	PhaseReconciliation TaskPhase = "reconciliation"
+	PhaseDrafting       TaskPhase = "drafting"
+	PhaseReview         TaskPhase = "review"
+	PhaseVerification   TaskPhase = "verification"
+	PhaseDelivery       TaskPhase = "delivery"
 )
+
+// ─── Evidence graph (controversies) ─────────────────────────────────────────────
+//
+// Claim and Controversy are deliberately graph-shaped so the future TypeDB migration
+// is a projection, not a redesign. Mapping (per the evidence-graph / conflicts seam):
+//   Claim       → a polymorphic `claim` entity (sub-typed by Kind: monetary/temporal/
+//                 count/categorical), linked `about` a subject and `asserted-by` a source.
+//   Controversy → a `contradiction` relation relating ≥2 conflicting claims on one
+//                 subject — exactly the typed-inference target TypeDB will own.
+// Until then the same shapes are detected in-process by the reconciliation analyst.
+
+// Claim is a single asserted value about a subject, attributed to a source document.
+type Claim struct {
+	Subject string `json:"subject"`        // what is asserted about (e.g. "omnibus equity trade count")
+	Value   string `json:"value"`          // the asserted value (e.g. "4,217")
+	Source  string `json:"source"`         // the document the assertion comes from
+	Kind    string `json:"kind,omitempty"` // monetary | temporal | count | categorical
+}
+
+// Controversy is a cross-document conflict: ≥2 claims about the same subject whose
+// values disagree. The reconciliation round recruits a specialist to analyse each.
+type Controversy struct {
+	Subject      string  `json:"subject"`
+	Kind         string  `json:"kind,omitempty"`
+	Claims       []Claim `json:"claims"`
+	Significance string  `json:"significance,omitempty"` // why the discrepancy matters
+}
 
 type RoundGoal struct {
 	ID              string    `json:"id"`
@@ -328,7 +356,10 @@ type Task struct {
 	CompletedAt        *time.Time    `json:"completedAt,omitempty"`
 	Table              *TaskTable    `json:"table,omitempty"`
 	NosLegal           *NosLegalTags `json:"noslegal,omitempty"`
-	ActiveTimeEntryID  string        `json:"activeTimeEntryId,omitempty"`
+	// Controversies are the cross-document conflicts surfaced by the reconciliation
+	// analyst — graph-shaped, the seed for the future TypeDB contradiction graph.
+	Controversies     []Controversy `json:"controversies,omitempty"`
+	ActiveTimeEntryID string        `json:"activeTimeEntryId,omitempty"`
 }
 
 // ─── Time tracking ───────────────────────────────────────────────────────────
