@@ -1509,10 +1509,10 @@ func (o *Orchestrator) synthesizeAgents(area, sector, workType, key string, prov
 	if workType != "" {
 		ctx += ", " + workType + " work"
 	}
-	prompt := fmt.Sprintf("Design 6 to 8 FINE-GRAINED specialist legal analyst agents for the practice area \"%s\"%s. Each must be a DISTINCT sub-specialty of that area (not generic). Respond with ONLY a JSON array; each element: {\"name\":\"<sub-specialty> Analyst\",\"description\":\"<one sentence describing what this agent analyses>\",\"framework\":\"<a numbered analytical framework of 4-6 steps the agent follows>\",\"skills\":[\"<kebab-skill>\"]}",
+	prompt := fmt.Sprintf("Design 5 to 6 FINE-GRAINED specialist legal analyst agents for the practice area \"%s\"%s. Each must be a DISTINCT sub-specialty of that area (not generic). Respond with ONLY a JSON array; each element: {\"name\":\"<sub-specialty> Analyst\",\"description\":\"<one sentence describing what this agent analyses>\",\"framework\":\"<a numbered analytical framework of 4-6 steps the agent follows>\",\"skills\":[\"<kebab-skill>\"]}",
 		area, ctx)
 	resp, err := prov.Chat(providers.ChatParams{
-		Model: model, MaxTokens: 2200,
+		Model: model, MaxTokens: 4000,
 		System:   "You design rigorous, specialised legal AI analyst agents. Output only the JSON array, no prose.",
 		Messages: []providers.Message{{Role: "user", Content: prompt}}, CacheSystem: true, Temperature: o.cfg.LLMTemperature,
 	})
@@ -1526,17 +1526,7 @@ func (o *Orchestrator) synthesizeAgents(area, sector, workType, key string, prov
 			text = b.Text
 		}
 	}
-	s, e := strings.Index(text, "["), strings.LastIndex(text, "]")
-	if s < 0 || e <= s {
-		return nil
-	}
-	var arr []struct {
-		Name, Description, Framework string
-		Skills                       []string
-	}
-	if json.Unmarshal([]byte(text[s:e+1]), &arr) != nil {
-		return nil
-	}
+	arr := parseAgentSpecs(text)
 	dom := domainForWorkType(workType)
 	var defs []types.AgentDefinition
 	for i, a := range arr {
@@ -1558,6 +1548,50 @@ func (o *Orchestrator) synthesizeAgents(area, sector, workType, key string, prov
 		})
 	}
 	return defs
+}
+
+type agentSpec struct {
+	Name        string
+	Description string
+	Framework   string
+	Skills      []string
+}
+
+// parseAgentSpecs extracts agent specs from possibly-truncated model JSON: it tries the
+// whole array first, then falls back to scanning complete top-level {...} objects — so a
+// truncated final element (the 7B running out of tokens mid-array) still yields every
+// complete earlier agent instead of dropping the whole batch.
+func parseAgentSpecs(text string) []agentSpec {
+	s := strings.Index(text, "[")
+	if s < 0 {
+		return nil
+	}
+	if e := strings.LastIndex(text, "]"); e > s {
+		var arr []agentSpec
+		if json.Unmarshal([]byte(text[s:e+1]), &arr) == nil && len(arr) > 0 {
+			return arr
+		}
+	}
+	var out []agentSpec
+	depth, start := 0, -1
+	for i := s; i < len(text); i++ {
+		switch text[i] {
+		case '{':
+			if depth == 0 {
+				start = i
+			}
+			depth++
+		case '}':
+			if depth--; depth == 0 && start >= 0 {
+				var sp agentSpec
+				if json.Unmarshal([]byte(text[start:i+1]), &sp) == nil && strings.TrimSpace(sp.Name) != "" {
+					out = append(out, sp)
+				}
+				start = -1
+			}
+		}
+	}
+	return out
 }
 
 func slugify(s string) string {
