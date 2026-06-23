@@ -1191,7 +1191,7 @@ func (o *Orchestrator) writeDeliverable(task *types.Task, findings []types.Findi
 // numbers, counts, percentages) into the finding pool from round 1, so the whole
 // pipeline (and synthesis) is aware of them. Bounded + deduped, so no finding flood.
 func (o *Orchestrator) specificsSweep(task *types.Task, prov providers.Provider, model string) []types.Finding {
-	const maxFindings = 30
+	const maxFindings = 40 // figures + citations
 	res, err := o.tools.Execute("search_chunks", map[string]interface{}{
 		"query": "key figures amounts dollar percentages rates account numbers trade counts dates statutory violations named parties funds",
 		"top_k": 14,
@@ -1212,29 +1212,25 @@ func (o *Orchestrator) specificsSweep(task *types.Task, prov providers.Provider,
 			pb.WriteString("\n")
 		}
 	}
-	prompt := fmt.Sprintf("From the passages below, list up to 14 SPECIFIC search queries to find this matter's exact figures and references in the source exhibits. Each query names the specific person, account, fund, or metric and the fact wanted — e.g. \"Chao personal account profitable allocation rate\", \"excess profits Oceanic Fund\", \"omnibus trades percentage of total volume\", \"Chao brokerage account number\", \"total equity trades analyzed count\". One query per line, no numbering.\n\nPASSAGES:\n%s",
-		strutil.TruncateToTokens(pb.String(), 2500))
-	resp, err := prov.Chat(providers.ChatParams{
-		Model: model, MaxTokens: 500,
-		System:      "You generate precise, entity-named search queries to locate a legal matter's specific facts. Output only the queries.",
-		Messages:    []providers.Message{{Role: "user", Content: prompt}},
-		CacheSystem: true, Temperature: o.cfg.LLMTemperature,
-	})
-	if err != nil {
-		return nil
-	}
-	o.recordCost(resp, model, cost.ContextTask, task.ID)
-	var text string
-	for _, b := range resp.Content {
-		if b.Type == providers.BlockText {
-			text = b.Text
-		}
-	}
+	passages := strutil.TruncateToTokens(pb.String(), 2500)
+
+	// Two parallel hunts: FIGURES and statutory/section CITATIONS. Citations (206(1),
+	// Item 6, Section 7.3, §1519) are a different class of "specific" than $/%/counts —
+	// the figure-only sweep never asked for them, which left ~20 criteria unmet — so
+	// they get their own entity-aware queries, generated concurrently and merged.
+	figInstr := "list up to 12 SPECIFIC search queries to find this matter's exact FIGURES — dollar amounts, percentages/rates, counts, dates, account numbers — each naming the specific person, account, fund, or metric (e.g. \"Chao personal account profitable allocation rate\", \"excess profits Oceanic Fund\", \"omnibus trades percentage of total volume\", \"total equity trades analyzed count\")."
+	citeInstr := "list up to 12 SPECIFIC search queries to find this matter's exact LEGAL CITATIONS — statutory provisions, rule numbers, Form ADV item numbers, compliance-manual section numbers, U.S. Code sections — each tied to its context (e.g. \"Advisers Act Section 206(1) 206(2) cherry-picking\", \"Form ADV Part 2A Item 6 pro rata allocation\", \"Compliance Manual Section 7.3 allocation procedures\", \"18 U.S.C. obstruction file deletion\", \"Rule 204-2 books and records\")."
+	figCh := make(chan []string, 1)
+	citeCh := make(chan []string, 1)
+	go func() { figCh <- o.sweepQueries(prov, model, task.ID, passages, figInstr) }()
+	go func() { citeCh <- o.sweepQueries(prov, model, task.ID, passages, citeInstr) }()
+	merged := append(<-figCh, <-citeCh...)
 	var queries []string
-	for _, ln := range strings.Split(text, "\n") {
-		ln = strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(ln), "-*•0123456789.) \t"))
-		if len(ln) >= 4 {
-			queries = append(queries, ln)
+	qseen := map[string]bool{}
+	for _, q := range merged {
+		if k := strings.ToLower(q); !qseen[k] {
+			qseen[k] = true
+			queries = append(queries, q)
 		}
 	}
 
@@ -1278,6 +1274,37 @@ func (o *Orchestrator) specificsSweep(task *types.Task, prov providers.Provider,
 		}
 	}
 	return findings
+}
+
+// sweepQueries runs one query-generation call over the matter's passages with the
+// given instruction (figures or citations) and returns the parsed query lines. Used
+// by specificsSweep to run the figure and citation hunts concurrently.
+func (o *Orchestrator) sweepQueries(prov providers.Provider, model, taskID, passages, instruction string) []string {
+	prompt := fmt.Sprintf("From the passages below, %s One query per line, no numbering.\n\nPASSAGES:\n%s", instruction, passages)
+	resp, err := prov.Chat(providers.ChatParams{
+		Model: model, MaxTokens: 500,
+		System:      "You generate precise, entity-named search queries to locate a legal matter's specific facts and citations. Output only the queries.",
+		Messages:    []providers.Message{{Role: "user", Content: prompt}},
+		CacheSystem: true, Temperature: o.cfg.LLMTemperature,
+	})
+	if err != nil {
+		return nil
+	}
+	o.recordCost(resp, model, cost.ContextTask, taskID)
+	var text string
+	for _, b := range resp.Content {
+		if b.Type == providers.BlockText {
+			text = b.Text
+		}
+	}
+	var out []string
+	for _, ln := range strings.Split(text, "\n") {
+		ln = strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(ln), "-*•0123456789.) \t"))
+		if len(ln) >= 4 {
+			out = append(out, ln)
+		}
+	}
+	return out
 }
 
 // extractCoverageSpine derives the matter's required sections from the documents'
