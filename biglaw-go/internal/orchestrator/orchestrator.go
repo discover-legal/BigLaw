@@ -1214,12 +1214,13 @@ func (o *Orchestrator) specificsSweep(task *types.Task, prov providers.Provider,
 	}
 	passages := strutil.TruncateToTokens(pb.String(), 2500)
 
-	// Two parallel hunts: FIGURES and statutory/section CITATIONS. Citations (206(1),
-	// Item 6, Section 7.3, §1519) are a different class of "specific" than $/%/counts —
-	// the figure-only sweep never asked for them, which left ~20 criteria unmet — so
-	// they get their own entity-aware queries, generated concurrently and merged.
-	figInstr := "list up to 12 SPECIFIC search queries to find this matter's exact FIGURES — dollar amounts, percentages/rates, counts, dates, account numbers — each naming the specific person, account, fund, or metric (e.g. \"Chao personal account profitable allocation rate\", \"excess profits Oceanic Fund\", \"omnibus trades percentage of total volume\", \"total equity trades analyzed count\")."
-	citeInstr := "list up to 12 SPECIFIC search queries to find this matter's exact LEGAL CITATIONS — statutory provisions, rule numbers, Form ADV item numbers, compliance-manual section numbers, U.S. Code sections — each tied to its context (e.g. \"Advisers Act Section 206(1) 206(2) cherry-picking\", \"Form ADV Part 2A Item 6 pro rata allocation\", \"Compliance Manual Section 7.3 allocation procedures\", \"18 U.S.C. obstruction file deletion\", \"Rule 204-2 books and records\")."
+	// Two parallel hunts: FIGURES and legal CITATIONS — distinct classes of "specific"
+	// (numbers vs references) that each need their own queries, generated concurrently
+	// and merged. The instructions name fact TYPES only; the actual entities and
+	// citations must come from the passages at runtime, never from this prompt (so the
+	// agent generalises to any matter rather than being told a particular answer).
+	figInstr := "list up to 12 SPECIFIC search queries to find this matter's exact FIGURES — dollar amounts, percentages and rates, counts, dates, and account numbers. Tie each query to the specific named party, account, entity, or metric it concerns, using the actual names and terms you see in the passages. Prioritise the figures that quantify each allegation, claim, or loss."
+	citeInstr := "list up to 12 SPECIFIC search queries to find this matter's exact LEGAL CITATIONS — statutory provisions and subsections, rule numbers, regulatory-form item numbers, internal policy or manual section numbers, contract clause numbers, and code sections. Tie each query to the conduct, allegation, or obligation it concerns, using the actual provisions and references you see in the passages."
 	figCh := make(chan []string, 1)
 	citeCh := make(chan []string, 1)
 	go func() { figCh <- o.sweepQueries(prov, model, task.ID, passages, figInstr) }()
@@ -1338,7 +1339,7 @@ func (o *Orchestrator) extractCoverageSpine(task *types.Task, prov providers.Pro
 		}
 	}
 	passages := strutil.TruncateToTokens(b.String(), 2500)
-	prompt := fmt.Sprintf("TASK: %s\n\nFrom the passages below, list the DISTINCT allegation categories / required topics this matter addresses, as short section headings (e.g. \"Cherry-Picking Trade Allocations\", \"Misleading Form ADV Disclosures\"). One heading per line, no numbering, no preamble. Only categories actually present in the passages.\n\nPASSAGES:\n%s",
+	prompt := fmt.Sprintf("TASK: %s\n\nFrom the passages below, list the DISTINCT allegations, claims, issues, or required topics this matter enumerates, as short section headings — prefer the document's own enumeration where it numbers or names them (e.g. a numbered allegation category, a count, a claim, a deal issue). One heading per line, no numbering, no preamble. Use the matter's own terms; list only topics actually present in the passages.\n\nPASSAGES:\n%s",
 		strings.Join(strings.Fields(task.Description), " "), passages)
 	resp, err := prov.Chat(providers.ChatParams{
 		Model:       model,
