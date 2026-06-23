@@ -460,11 +460,26 @@ If a finding is marked UNVERIFIED, either omit it or caveat it explicitly. Clean
 		result = w.fallbackSection(s, ix) // never blank
 	}
 	// Mechanically attach the section's grounded figures the drafter didn't already
-	// state. The 7B inconsistently transcribes specific numbers into prose; the
-	// figures are already retrieved verbatim, so guarantee they land — by
-	// construction, every run — as a Key figures list. This is the figure analogue
-	// of locking evidence before analysis in the extraction stage.
-	return attachKeyFigures(result, figHits)
+	// state — from BOTH the per-section figure queries AND this section's mapped
+	// findings (which include the at-start swept specifics: $7.8M, 81.6%, account #s,
+	// counts). The 7B inconsistently transcribes numbers into prose; the figures are
+	// already in hand verbatim, so guarantee they land by construction. This is the
+	// figure analogue of locking evidence before analysis in the extraction stage.
+	figs := figHits
+	for _, id := range s.FindingIDs {
+		f, ok := ix.Get(id)
+		if !ok {
+			continue
+		}
+		text := f.Evidence
+		if salientFigure(text) == "" {
+			text = f.Content
+		}
+		if salientFigure(text) != "" {
+			figs = append(figs, SpecificHit{Text: text, Source: f.Source})
+		}
+	}
+	return attachKeyFigures(result, figs)
 }
 
 // planSectionFacts is the critique/planner pass: given a category and a few of its
