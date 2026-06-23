@@ -1541,7 +1541,7 @@ func (o *Orchestrator) synthesizeAgents(area, sector, workType, key string, prov
 						b.WriteString("\n")
 					}
 				}
-				issues = strutil.TruncateToTokens(b.String(), 1800)
+				issues = strutil.TruncateToTokens(b.String(), 1000)
 			}
 		}
 	}
@@ -1554,11 +1554,12 @@ func (o *Orchestrator) synthesizeAgents(area, sector, workType, key string, prov
 			area, ctx)
 	}
 	resp, err := prov.Chat(providers.ChatParams{
-		Model: model, MaxTokens: 4000,
-		System:   "You design rigorous, specialised legal AI analyst agents. Output only the JSON array, no prose.",
+		Model: model, MaxTokens: 2800,
+		System:   "You design rigorous, specialised legal AI analyst agents. Output ONLY a JSON array, no prose before or after.",
 		Messages: []providers.Message{{Role: "user", Content: prompt}}, CacheSystem: true, Temperature: o.cfg.LLMTemperature,
 	})
 	if err != nil {
+		slog.Warn("synthesizeAgents: chat error", "area", area, "err", err)
 		return nil
 	}
 	o.recordCost(resp, model, cost.ContextTask, taskID)
@@ -1569,6 +1570,9 @@ func (o *Orchestrator) synthesizeAgents(area, sector, workType, key string, prov
 		}
 	}
 	arr := parseAgentSpecs(text)
+	if len(arr) == 0 {
+		slog.Warn("synthesizeAgents: 0 specs parsed", "area", area, "respLen", len(text), "head", strutil.Truncate(strings.Join(strings.Fields(text), " "), 240))
+	}
 	dom := domainForWorkType(workType)
 	var defs []types.AgentDefinition
 	for i, a := range arr {
