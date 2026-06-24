@@ -37,6 +37,18 @@ type Options struct {
 	// a GUARANTEED section with findings mapped into it — so no required category can
 	// silently vanish through clustering variance. Empty → fall back to clustering.
 	RequiredSections []string
+	// WriterSystem, when set, is the system prompt of the DyTopo writing agent chosen
+	// for this deliverable (e.g. the Due-Diligence Report Drafter). The section authors
+	// then write AS that agent — its drafting expertise composing from the evidence
+	// blackboard — instead of a generic drafter. Empty → the built-in drafterSystem.
+	WriterSystem string
+	// Paged enables context-paging synthesis: each section is authored in order, then
+	// COMPACTED to a handle so it stops consuming the model's context; later section
+	// authors see the compacted handles and can call expand_section to UNCOMPACT any
+	// finished section on demand if they need its detail. Final assembly uncompacts
+	// everything — lossless. This lets a small-context model produce a deliverable that
+	// far exceeds its window. Requires RequiredSections (the section spine).
+	Paged bool
 }
 
 // SpecificHit is one figure-bearing source passage: the verbatim row (to state
@@ -114,11 +126,19 @@ func (w *Writer) Write(taskDesc, workflowType string, findings []Finding) (strin
 		secs = w.planOutline(taskDesc, workflowType, ix, secs)
 	}
 
+	// Paged synthesis: the DyTopo writing agent authors each section from the evidence
+	// blackboard, compacting finished sections out of working context (uncompactable on
+	// demand) and assembling losslessly — no compressing stitch. Lets a small-context
+	// model produce a deliverable larger than its window without dropping allegations.
+	if w.opt.Paged && len(secs) > 0 {
+		return w.writePaged(taskDesc, workflowType, secs, ix), nil
+	}
+
 	// 2. One tight agentic drafter per section, search_findings scoped to its set,
 	//    figures pulled per section at synthesis.
 	drafts := make([]string, len(secs))
 	for i, s := range secs {
-		drafts[i] = w.draftSection(taskDesc, workflowType, s, ix)
+		drafts[i] = w.draftSection(taskDesc, workflowType, s, ix, draftExtra{})
 	}
 
 	// 3. Coverage critic: re-draft any required section that came out thin/empty so a
@@ -161,8 +181,11 @@ func dedupKey(s string) string {
 
 // spineSections builds one section per required topic (guaranteed coverage) and
 // maps each finding to its nearest topic — by embedding cosine when available, else
-// keyword overlap. Findings that match no topic well are dropped into a trailing
-// "Other findings" section so nothing is lost.
+// keyword overlap. Findings that match no topic are NOT dumped into a flat catch-all:
+// they are clustered bottom-up into their own labeled sections (the spine ∪ clustering
+// union). So even when the spine under-enumerates an allegation, the findings produced
+// for it surface as a real, named section rather than vanishing or being buried in an
+// unstructured "Other Findings" bucket.
 func (w *Writer) spineSections(ix *FindingIndex, required []string) []section {
 	secs := make([]section, len(required))
 	for i, t := range required {
@@ -178,7 +201,7 @@ func (w *Writer) spineSections(ix *FindingIndex, required []string) []section {
 			}
 		}
 	}
-	var other []string
+	var orphans []Finding
 	for _, f := range ix.All() {
 		best, bestScore := -1, 0.0
 		if fv := ix.vec(f.ID); len(fv) > 0 && topicVecs != nil {
@@ -197,13 +220,31 @@ func (w *Writer) spineSections(ix *FindingIndex, required []string) []section {
 			best = bestKeywordSection(f, required)
 		}
 		if best < 0 {
-			other = append(other, f.ID)
+			orphans = append(orphans, f)
 			continue
 		}
 		secs[best].FindingIDs = append(secs[best].FindingIDs, f.ID)
 	}
-	if len(other) > 0 {
-		secs = append(secs, section{Title: "Other Findings", Brief: "findings not specific to a named category", FindingIDs: other})
+	// Union with bottom-up clustering: cluster the off-spine findings into their own
+	// labeled sections so nothing extracted is lost and no allegation the spine missed
+	// gets dumped unlabelled.
+	if len(orphans) > 0 {
+		sub := NewFindingIndex(w.embed, orphans)
+		clusters := cluster(sub, w.opt.ClusterThreshold, w.opt.MaxClusters)
+		if len(clusters) == 0 { // no embeddings: keep everything as one labelled section
+			ids := make([]string, 0, len(orphans))
+			for _, f := range orphans {
+				ids = append(ids, f.ID)
+			}
+			secs = append(secs, section{Title: "Additional Findings", Brief: "findings not specific to a named category", FindingIDs: ids})
+		}
+		for _, c := range clusters {
+			ids := make([]string, 0, len(c.Items))
+			for _, f := range c.Items {
+				ids = append(ids, f.ID)
+			}
+			secs = append(secs, section{Title: c.Label, Brief: "off-spine findings: " + c.Label, FindingIDs: ids})
+		}
 	}
 	return secs
 }
@@ -223,7 +264,7 @@ func (w *Writer) repairCoverage(taskDesc, workflowType string, secs []section, d
 		// Re-draft with an explicit mandate + a fresh figure pull for the topic.
 		repaired := w.draftSection(taskDesc, workflowType, section{
 			Title: s.Title, Brief: s.Brief + " — this category MUST be covered; state its specific allegations and exact figures", FindingIDs: s.FindingIDs,
-		}, ix)
+		}, ix, draftExtra{})
 		if len(strings.TrimSpace(repaired)) > len(strings.TrimSpace(drafts[i])) {
 			drafts[i] = repaired
 		}
@@ -352,7 +393,7 @@ GROUPS:
 // model calls search_findings (scoped to this section's findings) to pull its
 // evidence, then writes the section. Falls back to a grounded bullet list of the
 // section's findings if the model returns nothing.
-func (w *Writer) draftSection(taskDesc, workflowType string, s section, ix *FindingIndex) string {
+func (w *Writer) draftSection(taskDesc, workflowType string, s section, ix *FindingIndex, extra draftExtra) string {
 	allow := make(map[string]bool, len(s.FindingIDs))
 	for _, id := range s.FindingIDs {
 		allow[id] = true
@@ -368,6 +409,19 @@ func (w *Writer) draftSection(taskDesc, workflowType string, s section, ix *Find
 			"required": []string{"query"},
 		},
 	}}
+	if extra.board != nil {
+		tools = append(tools, providers.ToolParam{
+			Name:        "expand_section",
+			Description: "Uncompact an already-written section to read its FULL text. The other sections you can see are COMPACTED summaries; call this when you need a finished section's exact wording, figures, or citations — e.g. to avoid repeating it or to stay consistent with it.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"title": map[string]interface{}{"type": "string", "description": "The exact title of the finished section to expand"},
+				},
+				"required": []string{"title"},
+			},
+		})
+	}
 	if w.opt.Specifics != nil {
 		tools = append(tools, providers.ToolParam{
 			Name:        "extract_specifics",
@@ -382,6 +436,9 @@ func (w *Writer) draftSection(taskDesc, workflowType string, s section, ix *Find
 		})
 	}
 	system := drafterSystem
+	if extra.system != "" { // author AS the chosen DyTopo writing agent
+		system = extra.system
+	}
 	if w.opt.Persona != "" {
 		system += "\n\n" + w.opt.Persona
 	}
@@ -431,8 +488,8 @@ Write the section "%s" of the final deliverable. Brief: %s
 Call search_findings to retrieve the findings for this section, then write it grounded ONLY in what the findings and figures say — never invent facts.
 Be COMPREHENSIVE for this category: cover the specific allegations, the parties implicated, the harm, and the defense points.
 CRITICAL — for ANY specific figure or precise reference (a dollar amount, a percentage or rate, a count, a date, an account number, or a statutory/section/clause citation), DO NOT write the number or citation yourself. Write a placeholder of the form {{FIG: brief description of which figure you mean}} instead — e.g. "a loss of {{FIG: total alleged loss amount}}", "a rate of {{FIG: the relevant rate or percentage}}", "in violation of {{FIG: the cited statutory provision}}". The exact grounded value is injected automatically, so you never recall a digit — this is how we keep every figure correct. Use a placeholder for EVERY specific you reference. NEVER compute, add, sum, total, or otherwise derive a number yourself — state only figures that appear verbatim in the data; if a total is not given, do not invent one.
-If a finding is marked UNVERIFIED, either omit it or caveat it explicitly. Clean client-ready prose: no finding numbers or agent names. Output only the section text (no heading).%s`,
-		oneLine(taskDesc), workflowType, s.Title, s.Brief, figuresBlock)
+If a finding is marked UNVERIFIED, either omit it or caveat it explicitly. Clean client-ready prose: no finding numbers or agent names. Output only the section text (no heading).%s%s`,
+		oneLine(taskDesc), workflowType, s.Title, s.Brief, figuresBlock, extra.priorCompacted)
 
 	msgs := []providers.Message{{Role: "user", Content: user}}
 	final := ""
@@ -470,6 +527,15 @@ If a finding is marked UNVERIFIED, either omit it or caveat it explicitly. Clean
 				case "extract_specifics":
 					topic, _ := b.Input["topic"].(string)
 					payload = map[string]interface{}{"figures": specificsToJSON(w.opt.Specifics(topic, w.opt.MaxFindingsPerSec))}
+				case "expand_section":
+					title, _ := b.Input["title"].(string)
+					full := "(no finished section by that title)"
+					if extra.board != nil {
+						if f := extra.board.expand(title); f != "" {
+							full = f
+						}
+					}
+					payload = map[string]interface{}{"section": full}
 				default: // search_findings
 					searched = true
 					q, _ := b.Input["query"].(string)

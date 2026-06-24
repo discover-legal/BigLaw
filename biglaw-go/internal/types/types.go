@@ -358,8 +358,13 @@ type Task struct {
 	NosLegal           *NosLegalTags `json:"noslegal,omitempty"`
 	// Controversies are the cross-document conflicts surfaced by the reconciliation
 	// analyst — graph-shaped, the seed for the future TypeDB contradiction graph.
-	Controversies     []Controversy `json:"controversies,omitempty"`
-	ActiveTimeEntryID string        `json:"activeTimeEntryId,omitempty"`
+	Controversies []Controversy `json:"controversies,omitempty"`
+	// Allegations is the matter's distinct allegations/issues, enumerated ONCE (multi-
+	// query, deduped) and shared by recruitment and the writer's coverage spine — so the
+	// specialists recruited and the sections written cover the SAME set (a divergence
+	// otherwise drops allegations from the deliverable that were found in the rounds).
+	Allegations       []string `json:"allegations,omitempty"`
+	ActiveTimeEntryID string   `json:"activeTimeEntryId,omitempty"`
 }
 
 // ─── Time tracking ───────────────────────────────────────────────────────────
