@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -565,7 +566,7 @@ func (o *Orchestrator) runTask(task *types.Task) {
 			// On-demand specialist synthesis: generate fine-grained sub-specialty agents
 			// for this area (cached in the agentdb), so the matter is staffed by tailored
 			// specialists rather than only the generic registry.
-			o.ensureSpecialists(strDeref(tags.AreaOfLaw), strDeref(tags.Sector), strDeref(tags.WorkType), prov, bare, task.ID)
+			o.ensureSpecialists(strDeref(tags.AreaOfLaw), strDeref(tags.Sector), strDeref(tags.WorkType), prov, bare, task)
 		}
 		if sweep := o.specificsSweep(task, prov, bare); len(sweep) > 0 {
 			o.update(task, func(t *types.Task) { t.Findings = append(t.Findings, sweep...) })
@@ -1287,6 +1288,12 @@ func (o *Orchestrator) writeDeliverable(task *types.Task, findings []types.Findi
 		// Coverage spine: the matter's own enumerated topics become guaranteed
 		// sections, so no required allegation category vanishes through clustering.
 		RequiredSections: o.extractCoverageSpine(task, prov, bare),
+		// Paged synthesis: the chosen DyTopo writing agent authors each section from the
+		// evidence blackboard, compacting finished sections out of context (uncompactable
+		// on demand) and assembling losslessly — replacing the compressing stitch that
+		// dropped whole allegations.
+		WriterSystem: o.writingAgentSystem(task),
+		Paged:        true,
 		RecordCost:       func(resp *providers.ChatResponse) { o.recordCost(resp, bare, cost.ContextSynthesis, task.ID) },
 		// Synthesis-time figure handling: drafters pull exact figures for their
 		// section from the source exhibits on demand (document-backed
@@ -1330,27 +1337,14 @@ func (o *Orchestrator) writeDeliverable(task *types.Task, findings []types.Findi
 // pipeline (and synthesis) is aware of them. Bounded + deduped, so no finding flood.
 func (o *Orchestrator) specificsSweep(task *types.Task, prov providers.Provider, model string) []types.Finding {
 	const maxFindings = 40 // figures + citations
-	res, err := o.tools.Execute("search_chunks", map[string]interface{}{
-		"query": "key figures amounts dollar percentages rates account numbers trade counts dates statutory violations named parties funds",
-		"top_k": 14,
-	}, agents.ToolContext{TaskID: task.ID})
-	if err != nil {
+	// Seed from the multi-query allegation merge (not one top-k query): a single query
+	// under-retrieved an entire allegation, so its figures were never hunted. The merged
+	// passages span every allegation — primary and secondary — and the figures live in
+	// those same allegation passages.
+	passages := o.allegationPassages(task, 2500)
+	if strings.TrimSpace(passages) == "" {
 		return nil
 	}
-	m, _ := res.(map[string]interface{})
-	rows, _ := m["results"].([]map[string]interface{})
-	if len(rows) == 0 {
-		return nil
-	}
-	var pb strings.Builder
-	for _, r := range rows {
-		if sn, _ := r["snippet"].(string); strings.TrimSpace(sn) != "" {
-			pb.WriteString("- ")
-			pb.WriteString(strings.Join(strings.Fields(sn), " "))
-			pb.WriteString("\n")
-		}
-	}
-	passages := strutil.TruncateToTokens(pb.String(), 2500)
 
 	// Two parallel hunts: FIGURES and legal CITATIONS — distinct classes of "specific"
 	// (numbers vs references) that each need their own queries, generated concurrently
@@ -1489,7 +1483,7 @@ func (o *Orchestrator) classifyMatter(task *types.Task, prov providers.Provider,
 // for reuse. A matter is then handled by specialists tailored to its sub-specialties
 // rather than whatever generic agents the registry happened to contain. First time an
 // area is seen → generate + persist; thereafter → reuse. Best-effort.
-func (o *Orchestrator) ensureSpecialists(area, sector, workType string, prov providers.Provider, model, taskID string) {
+func (o *Orchestrator) ensureSpecialists(area, sector, workType string, prov providers.Provider, model string, task *types.Task) {
 	area = strings.TrimSpace(area)
 	if area == "" {
 		return
@@ -1502,7 +1496,7 @@ func (o *Orchestrator) ensureSpecialists(area, sector, workType string, prov pro
 			}
 		}
 	}
-	defs := o.synthesizeAgents(area, sector, workType, key, prov, model, taskID)
+	defs := o.synthesizeAgents(area, sector, workType, key, prov, model, task)
 	if len(defs) == 0 {
 		return
 	}
@@ -1514,7 +1508,7 @@ func (o *Orchestrator) ensureSpecialists(area, sector, workType string, prov pro
 
 // synthesizeAgents asks the model to design fine-grained sub-specialty analyst agents
 // for a practice area (taxonomy-driven, on-demand), returning ready AgentDefinitions.
-func (o *Orchestrator) synthesizeAgents(area, sector, workType, key string, prov providers.Provider, model, taskID string) []types.AgentDefinition {
+func (o *Orchestrator) synthesizeAgents(area, sector, workType, key string, prov providers.Provider, model string, task *types.Task) []types.AgentDefinition {
 	ctx := ""
 	if sector != "" {
 		ctx += " in the " + sector + " sector"
@@ -1522,33 +1516,30 @@ func (o *Orchestrator) synthesizeAgents(area, sector, workType, key string, prov
 	if workType != "" {
 		ctx += ", " + workType + " work"
 	}
-	// Ground generation in THIS matter's actual issues, not the area's generic sub-areas.
-	// Keying off the area name alone produced off-topic specialists (an Insider-Trading
-	// analyst on a cherry-picking matter) that diluted the pool; tailoring to the matter's
-	// real allegations makes every generated specialist on-point.
+	// Ground generation in THIS matter's actual allegations, not the area's generic
+	// sub-areas. Keying off the area name alone produced off-topic specialists (an
+	// Insider-Trading analyst on a cherry-picking matter) that diluted the pool; the
+	// EXHAUSTIVE multi-query enumeration (vs one top-k query) makes every distinct
+	// allegation — primary or secondary — visible, so each gets its own specialist
+	// rather than an arbitrary 5-6 collapsing onto the dominant theme.
+	allegations := o.ensureAllegations(task, prov, model)
 	issues := ""
-	if res, err := o.tools.Execute("search_chunks", map[string]interface{}{
-		"query": "the specific allegations, claims, charges, violations, and courses of conduct at issue in this matter",
-		"top_k": 8,
-	}, agents.ToolContext{TaskID: taskID}); err == nil {
-		if m, ok := res.(map[string]interface{}); ok {
-			if rows, ok := m["results"].([]map[string]interface{}); ok {
-				var b strings.Builder
-				for _, r := range rows {
-					if sn, _ := r["snippet"].(string); strings.TrimSpace(sn) != "" {
-						b.WriteString("- ")
-						b.WriteString(strings.Join(strings.Fields(sn), " "))
-						b.WriteString("\n")
-					}
-				}
-				issues = strutil.TruncateToTokens(b.String(), 1000)
-			}
-		}
+	if len(allegations) > 0 {
+		issues = "- " + strings.Join(allegations, "\n- ")
 	}
 	var prompt string
 	if strings.TrimSpace(issues) != "" {
-		prompt = fmt.Sprintf("A legal matter in %s%s raises the SPECIFIC issues and allegations below. Design 5 to 6 specialist legal analyst agents, EACH tailored to a SPECIFIC issue, allegation, or course of conduct IN THIS MATTER — NOT generic sub-areas of the practice area. Name each for the conduct it analyses (e.g. a 'Trade-Allocation Analyst' for an allocation issue, a 'Directed-Brokerage Analyst' for a brokerage-kickback issue). Respond with ONLY a JSON array; each element: {\"name\":\"<issue-specific> Analyst\",\"description\":\"<the specific issue in THIS matter it analyses>\",\"framework\":\"<a numbered analytical framework of 4-6 steps>\",\"skills\":[\"<kebab-skill>\"]}\n\nMATTER ISSUES:\n%s",
-			area, ctx, issues)
+		// One specialist per distinct allegation (merging only near-duplicates), so a
+		// secondary allegation is never left unstaffed. Clamp to a sane pool size.
+		n := len(allegations)
+		if n < 5 {
+			n = 5
+		}
+		if n > 8 {
+			n = 8
+		}
+		prompt = fmt.Sprintf("A legal matter in %s%s raises the SPECIFIC allegations below. Design %d specialist legal analyst agents: design ONE per distinct allegation listed (merge only near-duplicates), EACH tailored to a SPECIFIC issue, allegation, or course of conduct IN THIS MATTER — NOT generic sub-areas of the practice area, and DO NOT collapse several allegations into one analyst. Name each for the conduct it analyses (e.g. a 'Trade-Allocation Analyst' for an allocation issue, a 'Directed-Brokerage Analyst' for a brokerage-kickback issue). Respond with ONLY a JSON array; each element: {\"name\":\"<issue-specific> Analyst\",\"description\":\"<the specific issue in THIS matter it analyses>\",\"framework\":\"<a numbered analytical framework of 4-6 steps>\",\"skills\":[\"<kebab-skill>\"]}\n\nMATTER ALLEGATIONS:\n%s",
+			area, ctx, n, issues)
 	} else {
 		prompt = fmt.Sprintf("Design 5 to 6 FINE-GRAINED specialist legal analyst agents for the practice area \"%s\"%s. Each must be a DISTINCT sub-specialty of that area. Respond with ONLY a JSON array; each element: {\"name\":\"<sub-specialty> Analyst\",\"description\":\"<one sentence>\",\"framework\":\"<a numbered analytical framework of 4-6 steps>\",\"skills\":[\"<kebab-skill>\"]}",
 			area, ctx)
@@ -1562,7 +1553,7 @@ func (o *Orchestrator) synthesizeAgents(area, sector, workType, key string, prov
 		slog.Warn("synthesizeAgents: chat error", "area", area, "err", err)
 		return nil
 	}
-	o.recordCost(resp, model, cost.ContextTask, taskID)
+	o.recordCost(resp, model, cost.ContextTask, task.ID)
 	var text string
 	for _, b := range resp.Content {
 		if b.Type == providers.BlockText {
@@ -1732,49 +1723,88 @@ func (o *Orchestrator) sweepQueries(prov providers.Provider, model, taskID, pass
 	return out
 }
 
-// extractCoverageSpine derives the matter's required sections from the documents'
-// own enumerated structure (e.g. a referral's "six categories of potential
-// violations"). It retrieves the enumerating passages and asks the model to list
-// the distinct categories as section headings — document-grounded, general to legal
-// docs, not rubric-derived. Returns nil when nothing enumerable is found (the writer
-// then falls back to clustering).
-func (o *Orchestrator) extractCoverageSpine(task *types.Task, prov providers.Provider, model string) []string {
-	res, err := o.tools.Execute("search_chunks", map[string]interface{}{
-		"query": "allegation categories of potential violations enumerated; the referral identifies the following categories; counts of alleged violations; issues presented",
-		"top_k": 8,
-	}, agents.ToolContext{TaskID: task.ID})
-	if err != nil {
-		return nil
-	}
-	m, ok := res.(map[string]interface{})
-	if !ok {
-		return nil
-	}
-	rows, _ := m["results"].([]map[string]interface{})
-	if len(rows) == 0 {
-		return nil
+// allegationPassages gathers the matter's allegation-bearing passages using MULTIPLE
+// complementary retrieval queries, merged and deduped. A single top-k query was the
+// root cause of an entire allegation (a directed-brokerage scheme) being dropped from a
+// securities matter: its passages never ranked in one query's top-k, so no specialist
+// was recruited for it, no figures were swept, and no section was written. Several
+// generic angles on "what is alleged" — phrasings only, never matter-specific terms —
+// surface primary AND secondary allegations across every party. Returns the merged
+// passages truncated to tokenBudget (empty when nothing is found).
+func (o *Orchestrator) allegationPassages(task *types.Task, tokenBudget int) string {
+	queries := []string{
+		"allegation categories of potential violations enumerated; the referral identifies the following categories; counts of alleged violations; issues presented",
+		"each distinct scheme, course of conduct, claim, or violation alleged against every named party, individual, entity, fund, or account",
+		"secondary and additional allegations, separate counts, further charges, other misconduct beyond the principal claim",
+		"every named individual, entity, account, fund, or third party and the specific wrongdoing, exposure, or liability attributed to it",
 	}
 	var b strings.Builder
-	for _, r := range rows {
-		if sn, _ := r["snippet"].(string); strings.TrimSpace(sn) != "" {
+	seen := map[string]bool{}
+	for _, q := range queries {
+		res, err := o.tools.Execute("search_chunks", map[string]interface{}{"query": q, "top_k": 8}, agents.ToolContext{TaskID: task.ID})
+		if err != nil {
+			continue
+		}
+		m, ok := res.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		rows, _ := m["results"].([]map[string]interface{})
+		for _, r := range rows {
+			sn, _ := r["snippet"].(string)
+			sn = strings.Join(strings.Fields(sn), " ")
+			if sn == "" {
+				continue
+			}
+			key := chunkKey(sn)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
 			b.WriteString("- ")
-			b.WriteString(strings.Join(strings.Fields(sn), " "))
+			b.WriteString(sn)
 			b.WriteString("\n")
 		}
 	}
-	passages := strutil.TruncateToTokens(b.String(), 2500)
-	prompt := fmt.Sprintf("TASK: %s\n\nFrom the passages below, list the DISTINCT allegations, claims, issues, or required topics this matter enumerates, as short section headings — prefer the document's own enumeration where it numbers or names them (e.g. a numbered allegation category, a count, a claim, a deal issue). One heading per line, no numbering, no preamble. Use the matter's own terms; list only topics actually present in the passages.\n\nPASSAGES:\n%s",
+	return strutil.TruncateToTokens(b.String(), tokenBudget)
+}
+
+// chunkKey normalizes a passage to its leading ~120 alphanumerics for dedup across the
+// overlapping retrieval queries (different queries surface the same chunk).
+func chunkKey(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			if b.Len() >= 120 {
+				break
+			}
+		}
+	}
+	return b.String()
+}
+
+// allegationContext returns the merged allegation passages (for downstream figure
+// hunting) and the matter's full set of DISTINCT allegations as section headings —
+// document-grounded, general to legal docs, never rubric-derived. allegations is nil
+// when nothing enumerable is found.
+func (o *Orchestrator) allegationContext(task *types.Task, prov providers.Provider, model string) (string, []string) {
+	passages := o.allegationPassages(task, 5000)
+	if strings.TrimSpace(passages) == "" {
+		return "", nil
+	}
+	prompt := fmt.Sprintf("TASK: %s\n\nFrom the passages below, list EVERY DISTINCT allegation, claim, charge, scheme, or required topic this matter raises, as short section headings — be EXHAUSTIVE: include secondary and party-specific allegations, not only the most prominent. Prefer the document's own enumeration where it numbers or names them (e.g. a numbered allegation category, a count, a claim). One heading per line, no numbering, no preamble. Use the matter's own terms; list only topics actually present in the passages.\n\nPASSAGES:\n%s",
 		strings.Join(strings.Fields(task.Description), " "), passages)
 	resp, err := prov.Chat(providers.ChatParams{
 		Model:       model,
-		MaxTokens:   500,
-		System:      "You extract a legal document's enumerated structure as a clean list of section headings, nothing else.",
+		MaxTokens:   800,
+		System:      "You extract a legal matter's full set of distinct allegations as a clean, exhaustive list of section headings, nothing else.",
 		Messages:    []providers.Message{{Role: "user", Content: prompt}},
 		CacheSystem: true,
 		Temperature: o.cfg.LLMTemperature,
 	})
 	if err != nil {
-		return nil
+		return passages, nil
 	}
 	o.recordCost(resp, model, cost.ContextSynthesis, task.ID)
 	var text string
@@ -1798,15 +1828,102 @@ func (o *Orchestrator) extractCoverageSpine(task *types.Task, prov providers.Pro
 		}
 		seen[key] = true
 		out = append(out, ln)
-		if len(out) >= 12 { // safety cap
+		if len(out) >= 16 { // safety cap (matters can enumerate many distinct allegations)
 			break
 		}
 	}
-	if len(out) < 2 {
+	return passages, out
+}
+
+// ensureAllegations enumerates the matter's distinct allegations ONCE and caches them on
+// the task, so recruitment (synthesizeAgents) and the writer's coverage spine
+// (extractCoverageSpine) staff and write the SAME set. Rolling two independent
+// enumerations at temperature>0 let them diverge — recruitment recruited a Bellini
+// specialist while the spine missed Bellini and duplicated cherry-picking 4× — so the
+// allegation was found in the rounds but had no section to land in. The result is
+// theme-deduped to collapse near-duplicate headings.
+func (o *Orchestrator) ensureAllegations(task *types.Task, prov providers.Provider, model string) []string {
+	if len(task.Allegations) > 0 {
+		return task.Allegations
+	}
+	_, allegations := o.allegationContext(task, prov, model)
+	allegations = dedupAllegations(allegations)
+	if len(allegations) > 0 {
+		o.update(task, func(t *types.Task) { t.Allegations = allegations })
+	}
+	return allegations
+}
+
+// dedupAllegations collapses headings that name the same allegation under different
+// category numbers/prefixes (e.g. "Allegation Category 1 — Cherry-Picking" and
+// "Category 5 — Cherry-Picking"): it strips leading category/number/roman prefixes and
+// keys on the remaining content words, keeping the first (richest-ordered) occurrence.
+func dedupAllegations(in []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(in))
+	for _, h := range in {
+		if themeKey(h) == "" || seen[themeKey(h)] {
+			continue
+		}
+		seen[themeKey(h)] = true
+		out = append(out, h)
+	}
+	return out
+}
+
+var reAllegPrefix = regexp.MustCompile(`(?i)^\s*(allegation\s+)?(category|count|claim|issue|item|no\.?|number|section|part)\s*[ivxlcdm0-9]+\s*[-–—:.)]*\s*`)
+
+// themeKey reduces a heading to its content-word signature for dedup: drop category/
+// number prefixes, lowercase, keep alphanumerics, sort the words (so order/phrasing
+// differences collapse).
+func themeKey(h string) string {
+	h = reAllegPrefix.ReplaceAllString(strings.TrimSpace(h), "")
+	var words []string
+	for _, w := range strings.Fields(strings.ToLower(h)) {
+		var b strings.Builder
+		for _, r := range w {
+			if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+				b.WriteRune(r)
+			}
+		}
+		if s := b.String(); len(s) >= 4 { // skip short connectives (and, the, of)
+			words = append(words, s)
+		}
+	}
+	sort.Strings(words)
+	return strings.Join(words, " ")
+}
+
+// writingAgentSystem returns the system prompt of the DyTopo writing agent best suited to
+// the deliverable, so the paged synthesis authors AS that agent (its drafting expertise
+// composing from the evidence blackboard) rather than a generic drafter. Maps the workflow
+// type to a drafting specialist; falls back to the general research-memo drafter, then to
+// "" (the writer's built-in drafterSystem).
+func (o *Orchestrator) writingAgentSystem(task *types.Task) string {
+	id := "legal-research-memo-drafter"
+	switch task.WorkflowType {
+	case types.WorkflowReview, types.WorkflowTabulate:
+		id = "due-diligence-report-drafter"
+	case types.WorkflowAdversarial, types.WorkflowCounsel:
+		id = "litigation-brief-drafter"
+	}
+	if a := o.registry.GetByID(id); a != nil && strings.TrimSpace(a.SystemPrompt) != "" {
+		return a.SystemPrompt
+	}
+	return ""
+}
+
+// extractCoverageSpine returns the matter's enumerated allegations as the writer's
+// required sections — the SAME shared set recruitment staffed — so every allegation a
+// specialist analysed has a guaranteed section. Returns nil when nothing enumerable is
+// found (the writer then falls back to clustering).
+func (o *Orchestrator) extractCoverageSpine(task *types.Task, prov providers.Provider, model string) []string {
+	allegations := o.ensureAllegations(task, prov, model)
+	if len(allegations) < 2 {
 		return nil // not a usable spine; writer falls back to clustering
 	}
-	slog.Info("coverage spine extracted", "task", task.ID, "sections", len(out))
-	return out
+	slog.Info("coverage spine extracted", "task", task.ID, "sections", len(allegations))
+	return allegations
 }
 
 func (o *Orchestrator) tabulate(task *types.Task) (*types.TaskTable, error) {
