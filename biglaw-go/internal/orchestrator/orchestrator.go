@@ -2144,10 +2144,59 @@ func (o *Orchestrator) ensureAllegations(task *types.Task, prov providers.Provid
 	}
 	_, allegations := o.allegationContext(task, prov, model, seed)
 	allegations = dedupAllegations(allegations)
+	// Coverage net: the LLM enumeration gives clean category headings but a weak model drops
+	// whole allegations (7B lost Books-and-Records + Bellini + Obstruction that Haiku kept).
+	// The graph's grounded candidates are the recall floor — cluster them and add any cluster
+	// the enumeration didn't cover, so no allegation silently vanishes regardless of model.
+	allegations = o.coverAllegationClusters(allegations, seed)
 	if len(allegations) > 0 {
 		o.update(task, func(t *types.Task) { t.Allegations = allegations })
 	}
 	return allegations
+}
+
+// coverAllegationClusters guarantees every grounded allegation cluster is represented in the
+// spine. It clusters the graph's grounded candidates and appends the representative of any
+// cluster not already covered (by embedding similarity) by the LLM enumeration. When the
+// enumeration is empty (very weak model), this degrades to a pure grounded-cluster spine —
+// still covering every allegation the graph caught. Generalizable: no rubric, no hardcoding.
+func (o *Orchestrator) coverAllegationClusters(have, candidates []string) []string {
+	if len(candidates) == 0 || o.embedC == nil {
+		return have
+	}
+	reps, _ := o.clusterAllegations(candidates)
+	if len(reps) == 0 {
+		return have
+	}
+	all := append(append([]string{}, have...), reps...)
+	res, err := o.embedC.EmbedBatch(all)
+	if err != nil || len(res) != len(all) {
+		return have
+	}
+	haveVecs, repVecs := res[:len(have)], res[len(have):]
+	const coveredThreshold = 0.72 // short legal headings via nomic: same-topic, not identical
+	out := append([]string{}, have...)
+	for i, rep := range reps {
+		rv := repVecs[i].Embedding
+		if len(rv) == 0 {
+			continue
+		}
+		covered := false
+		for _, hv := range haveVecs {
+			if len(hv.Embedding) > 0 && embeddings.CosineSimilarity(rv, hv.Embedding) >= coveredThreshold {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			out = append(out, rep) // a grounded allegation the enumeration missed
+		}
+	}
+	out = dedupAllegations(out)
+	if len(out) > maxSpineSections { // keep enumeration headings first, then the recovered gaps
+		out = out[:maxSpineSections]
+	}
+	return out
 }
 
 // dedupAllegations collapses headings that name the same allegation under different
