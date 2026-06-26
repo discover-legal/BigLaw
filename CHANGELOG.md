@@ -17,6 +17,50 @@ House rules:
 
 ## [Unreleased]
 
+### Local-model accuracy: grounding → synthesis → evidence graph (0 → 30/60 on a Harvey-style benchmark)
+Took a single local open-weight model from **0 to 30 of 60 rubric criteria** on a
+Harvey-style LAB task (white-collar SEC enforcement-referral extraction) through a chain
+of orchestration techniques — no model swap, no stuffing the corpus into one context. The
+LAB rubric is task-level all-or-nothing (the 0–1 score stays 0.00 until ~every criterion
+passes), so the tracked metric is **criteria-passed count**; the task is not "passed" yet,
+this is the climb. Techniques, in the order they landed:
+- **Verbatim grounding (≈0% → 94%)** — staged extract→analyse under a substring-lock plus
+  hybrid RAG (dense + doc2query + BM25 fused by RRF). Evidence is transcribed verbatim and
+  locked; conclusions are written only over the locked quotes, never paraphrased.
+- **Table/exhibit-aware chunking** — one chunk per spreadsheet data row with header-paired
+  embed text, so figures buried in `.xlsx` exhibits (dollar amounts, %, account numbers)
+  become retrievable and extractable instead of invisible to semantic search.
+- **Targeted multi-query retrieval** — a single section-title query left specific facts at
+  rank 17+; per-fact queries land them in the top 8. One blunt query is the wrong key.
+- **At-start specifics sweep** — entity-aware figure/citation queries hunt specifics into
+  findings *before* the debate rounds, not only at synthesis (the jump to 22/60).
+- **Neurosymbolic figure landing** — drafters write `{{FIG: …}}` placeholders; the exact
+  grounded value is injected mechanically, so the model never types (and so can't garble,
+  e.g. 81.6%→68.6%) a digit; figures left unstated are appended by construction.
+- **Top-down coverage spine** — the matter's own enumerated allegations become guaranteed
+  sections, so no category silently vanishes through bottom-up clustering variance.
+- **Matter classification + precise recruitment** — the matter is classified from its
+  documents and specialists are recruited on it (a securities matter had been staffed with
+  patent analysts); one specialist per distinct allegation, off a shared, deduped
+  enumeration that recruitment and the coverage spine both consume.
+- **Paged writing-agent synthesis** — the deliverable is authored by the DyTopo writing
+  agents over the evidence blackboard: each finished section is compacted out of working
+  context and uncompacted on demand, then assembled losslessly. Replaces a compressing
+  stitch that silently dropped whole allegations, and lets the deliverable exceed the
+  model's context window.
+- **Lite evidence graph** — grounded two-pass entity/relation extraction (entity-anchored,
+  parenthetical/omission-aware) builds a per-matter graph of typed facts; facts route
+  per-section so relations land with correct attribution (a "victim-of → directed-brokerage"
+  edge cannot render under cherry-picking). Ungrounded edges (quote not verbatim in source)
+  are dropped, never kept.
+
+New areas: `internal/evidencegraph/` (grounded graph + two-pass extractor),
+`internal/writer/paged.go` (context-paging synthesis), orchestrator shared-enumeration +
+task-start graph build. Measured on a local 14B model.
+
+Collateral: post copy in `collateral/linkedin-post.md`; technique-by-technique writeup with
+the run trajectory in `docs/local-accuracy-journey.md`.
+
 ### TS→Go porting complete — feature parity with `typescript-final`
 Everything previously marked "TS-only, not yet ported" is now on the Go platform:
 - **Browser OAuth login** (Google / Microsoft / LinkedIn OIDC): static

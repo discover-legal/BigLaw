@@ -53,3 +53,13 @@ func TestDedupAllegations_CollapsesThemeDuplicates(t *testing.T) {
 		}
 	}
 }
+
+// medoid picks the most central member (here the two near-identical vecs over the outlier).
+func TestMedoid_PicksCentral(t *testing.T) {
+	labels := []string{"Cherry-Picking Allocations", "Improper Trade Allocation", "Obstruction"}
+	vecs := [][]float32{{1, 0, 0}, {0.98, 0.2, 0}, {0, 0, 1}}
+	got := medoid([]int{0, 1, 2}, vecs, labels)
+	if got != labels[0] && got != labels[1] {
+		t.Errorf("medoid=%q, want one of the two allocation headings (central), not the obstruction outlier", got)
+	}
+}
