@@ -93,6 +93,39 @@ func (b *pagedBoard) priorBlock() string {
 // its window without dropping content (the failure mode of the compressing stitch).
 func (w *Writer) writePaged(taskDesc, workflowType string, secs []section, ix *FindingIndex) string {
 	board := newPagedBoard()
+
+	// DyTopo drafting: Phase 1 — concurrent writing huddles (independent per section);
+	// Phase 2 — sequential paged compose (compact + lossless assemble). Generation is
+	// parallel; coherence is the sequential paged pass over the results.
+	if w.opt.DyTopoDrafting && len(w.opt.DraftingAgents) > 0 {
+		drafts := make([]string, len(secs))
+		var wg sync.WaitGroup
+		conc := draftingConcurrency
+		if conc > len(secs) {
+			conc = len(secs)
+		}
+		sem := make(chan struct{}, conc)
+		for i, s := range secs {
+			wg.Add(1)
+			go func(i int, s section) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				d := w.huddleSection(taskDesc, workflowType, s, ix)
+				if strings.TrimSpace(d) == "" {
+					d = w.fallbackSection(s, ix)
+				}
+				drafts[i] = d
+			}(i, s)
+		}
+		wg.Wait()
+		for i, s := range secs { // Phase 2: compact, then lossless assemble
+			board.put(s.Title, drafts[i], w.compactSection(s.Title, drafts[i]))
+		}
+		return w.assemblePaged(secs, board)
+	}
+
+	// Single-drafter paging: author in order, each aware of prior compacted sections.
 	for _, s := range secs {
 		full := w.draftSection(taskDesc, workflowType, s, ix, draftExtra{
 			system:         w.opt.WriterSystem,
@@ -105,6 +138,126 @@ func (w *Writer) writePaged(taskDesc, workflowType string, secs []section, ix *F
 		board.put(s.Title, full, w.compactSection(s.Title, full))
 	}
 	return w.assemblePaged(secs, board)
+}
+
+// draftingConcurrency bounds Phase-1 huddle parallelism. Sections are independent, so this
+// is safe; the cap keeps a local model server from being swamped.
+const draftingConcurrency = 4
+
+// huddleSection produces one section via a bounded writing huddle: the lead drafts, then
+// each contributor critiques against the section's findings and offers grounded additions,
+// and the lead revises — DyTopo's draft→offer→revise collaboration, bounded by DraftingRounds.
+func (w *Writer) huddleSection(taskDesc, workflowType string, s section, ix *FindingIndex) string {
+	lead := ""
+	if len(w.opt.DraftingAgents) > 0 {
+		lead = w.opt.DraftingAgents[0]
+	}
+	contributors := w.opt.DraftingAgents[min(1, len(w.opt.DraftingAgents)):]
+
+	draft := w.draftSection(taskDesc, workflowType, s, ix, draftExtra{system: lead})
+	rounds := w.opt.DraftingRounds
+	if rounds < 1 {
+		rounds = 1
+	}
+	for r := 1; r < rounds && len(contributors) > 0; r++ {
+		var notes []string
+		for _, c := range contributors {
+			if n := w.critiqueSection(s, draft, ix, c); strings.TrimSpace(n) != "" && !strings.Contains(strings.ToUpper(n), "COMPLETE") {
+				notes = append(notes, n)
+			}
+		}
+		if len(notes) == 0 {
+			break // huddle converged
+		}
+		draft = w.reviseSection(taskDesc, workflowType, s, draft, strings.Join(notes, "\n"), lead)
+	}
+	return draft
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// critiqueSection is a contributor's offer in the huddle: it reads the lead's draft against
+// the section's own findings and returns ONLY concrete grounded gaps (missing/wrong facts,
+// figures, parties, citations), or "COMPLETE". No tools — a single focused pass.
+func (w *Writer) critiqueSection(s section, draft string, ix *FindingIndex, voice string) string {
+	var ev strings.Builder
+	for i, id := range s.FindingIDs {
+		if i >= 20 {
+			break
+		}
+		if f, ok := ix.Get(id); ok {
+			ev.WriteString("- ")
+			ev.WriteString(oneLine(f.Content))
+			ev.WriteString("\n")
+		}
+	}
+	if strings.TrimSpace(ev.String()) == "" {
+		return ""
+	}
+	system := "You review a draft section against its source findings and list ONLY concrete, grounded specifics the findings support but the draft OMITS or states WRONGLY — missing dollar amounts, percentages, dates, parties, account numbers, or citations. Quote the exact value from the findings. Be brief; one bullet each. If the draft already covers the findings, reply exactly: COMPLETE."
+	if voice != "" {
+		system += "\n\n" + voice
+	}
+	user := fmt.Sprintf("SECTION: %s\n\nDRAFT:\n%s\n\nSOURCE FINDINGS:\n%s\n\nMissing/incorrect grounded specifics (bullets), or COMPLETE:", s.Title, oneLine(draft), ev.String())
+	resp, err := w.prov.Chat(providers.ChatParams{
+		Model:       w.model,
+		MaxTokens:   400,
+		System:      system,
+		Messages:    []providers.Message{{Role: "user", Content: user}},
+		CacheSystem: true,
+		Temperature: w.opt.Temperature,
+	})
+	if err != nil {
+		return ""
+	}
+	if w.opt.RecordCost != nil {
+		w.opt.RecordCost(resp)
+	}
+	for _, b := range resp.Content {
+		if b.Type == providers.BlockText {
+			return strings.TrimSpace(b.Text)
+		}
+	}
+	return ""
+}
+
+// reviseSection has the lead integrate the contributors' grounded additions into the draft,
+// keeping flowing prose and adding only what the findings support.
+func (w *Writer) reviseSection(taskDesc, workflowType string, s section, draft, notes string, lead string) string {
+	system := drafterSystem
+	if lead != "" {
+		system += "\n\n" + lead
+	}
+	if w.opt.Persona != "" {
+		system += "\n\n" + w.opt.Persona
+	}
+	user := fmt.Sprintf("Revise the section \"%s\" to incorporate the grounded additions/corrections below. Keep it flowing prose; ADD only what the additions state (they are grounded in the source); do not remove correct content; state any figure exactly as given. Output only the revised section prose.\n\nCURRENT DRAFT:\n%s\n\nGROUNDED ADDITIONS/CORRECTIONS:\n%s",
+		s.Title, draft, notes)
+	resp, err := w.prov.Chat(providers.ChatParams{
+		Model:       w.model,
+		MaxTokens:   w.opt.DraftMaxTokens,
+		System:      system,
+		Messages:    []providers.Message{{Role: "user", Content: user}},
+		CacheSystem: true,
+		Temperature: w.opt.Temperature,
+	})
+	if err != nil {
+		return draft // keep the lead's draft on failure
+	}
+	if w.opt.RecordCost != nil {
+		w.opt.RecordCost(resp)
+	}
+	for _, b := range resp.Content {
+		if b.Type == providers.BlockText && strings.TrimSpace(b.Text) != "" {
+			return sanitizeDraft(b.Text)
+		}
+	}
+	return draft
 }
 
 // compactSection shrinks a finished section to a fact-preserving handle: a section already

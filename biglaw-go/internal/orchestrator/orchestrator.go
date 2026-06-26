@@ -28,6 +28,7 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/cost"
 	"github.com/discover-legal/biglaw-go/internal/dytopo"
 	"github.com/discover-legal/biglaw-go/internal/embeddings"
+	"github.com/discover-legal/biglaw-go/internal/evidencegraph"
 	"github.com/discover-legal/biglaw-go/internal/knowledge"
 	"github.com/discover-legal/biglaw-go/internal/learning"
 	"github.com/discover-legal/biglaw-go/internal/memory"
@@ -86,6 +87,13 @@ type Orchestrator struct {
 	// clientVoice is optional (set via SetClientVoiceStore): the per-matter
 	// advocacy brief pushed by the client-facing agent (Remy / CNTXT).
 	clientVoice *clientvoice.Store
+
+	// egraphs holds the per-task Lite evidence graph (grounded entity/relation facts),
+	// built at task-start and read at synthesis so the writer states relations with
+	// correct attribution. Keyed by task ID; transient (rebuilt each run).
+	egraphs       map[string]*evidencegraph.Graph
+	egraphAliases map[string]map[string][]string // taskID → canonical allegation → surface-form aliases
+	egraphsMu     sync.Mutex
 
 	// rootAgent is used for round goal generation and synthesis.
 	rootAgentDef types.AgentDefinition
@@ -152,23 +160,25 @@ func New(
 	rootDef types.AgentDefinition,
 ) *Orchestrator {
 	o := &Orchestrator{
-		tasks:        map[string]*types.Task{},
-		gateChans:    map[string]chan struct{}{},
-		cfg:          cfg,
-		provReg:      provReg,
-		costs:        costs,
-		embedC:       embedC,
-		registry:     registry,
-		memStore:     memStore,
-		knowledge:    knowledgeStore,
-		templates:    templatesStore,
-		settings:     settingsStore,
-		profiles:     profileStore,
-		clients:      clientStore,
-		time:         timeStore,
-		learning:     learningEngine,
-		tools:        toolReg,
-		rootAgentDef: rootDef,
+		tasks:         map[string]*types.Task{},
+		gateChans:     map[string]chan struct{}{},
+		cfg:           cfg,
+		provReg:       provReg,
+		costs:         costs,
+		embedC:        embedC,
+		registry:      registry,
+		memStore:      memStore,
+		knowledge:     knowledgeStore,
+		templates:     templatesStore,
+		settings:      settingsStore,
+		profiles:      profileStore,
+		clients:       clientStore,
+		time:          timeStore,
+		learning:      learningEngine,
+		tools:         toolReg,
+		egraphs:       map[string]*evidencegraph.Graph{},
+		egraphAliases: map[string]map[string][]string{},
+		rootAgentDef:  rootDef,
 	}
 	o.protocols = protocols.New(cfg, provReg, costs)
 	return o
@@ -555,6 +565,12 @@ func (o *Orchestrator) runTask(task *types.Task) {
 	sweepModel := routing.SelectModel(o.cfg, routing.SelectParams{Tier: &stier, TaskType: routing.TaskExtraction})
 	if prov, perr := o.provReg.Get(sweepModel); perr == nil {
 		bare := routing.ResolveModelID(sweepModel)
+		// Evidence graph FIRST: one grounded extraction (entities + relations + the matter's
+		// distinct allegations) that everything downstream reads — so recruitment and the
+		// coverage spine derive the SAME allegation set from the graph, instead of separate
+		// LLM enumerations that vary run-to-run (the 12↔16-section swing that dominated
+		// scores). buildEvidenceGraph populates task.Allegations via ensureAllegations.
+		o.buildEvidenceGraph(task, prov, bare)
 		// Classify the matter (practice area / sector / work type) from its DOCUMENTS,
 		// so recruitment seats the right specialists. The task description is too thin
 		// (the practice area lives in the exhibits, not "review and summarize"), so we
@@ -1288,13 +1304,24 @@ func (o *Orchestrator) writeDeliverable(task *types.Task, findings []types.Findi
 		// Coverage spine: the matter's own enumerated topics become guaranteed
 		// sections, so no required allegation category vanishes through clustering.
 		RequiredSections: o.extractCoverageSpine(task, prov, bare),
-		// Paged synthesis: the chosen DyTopo writing agent authors each section from the
-		// evidence blackboard, compacting finished sections out of context (uncompactable
-		// on demand) and assembling losslessly — replacing the compressing stitch that
-		// dropped whole allegations.
-		WriterSystem: o.writingAgentSystem(task),
-		Paged:        true,
-		RecordCost:       func(resp *providers.ChatResponse) { o.recordCost(resp, bare, cost.ContextSynthesis, task.ID) },
+		// Alias map per spine section (the merged allegation's alternate surface forms), so
+		// fact routing matches a fact phrased like ANY variant, not just the canonical heading.
+		SectionAliases: o.allegationAliases(task.ID),
+		// Paged synthesis: sections composed with compact-when-done / uncompact-on-demand,
+		// assembled losslessly. With DyTopoDrafting on, each section is written by a bounded
+		// writing huddle (lead + contributors, draft→critique→revise) run concurrently, then
+		// composed by this paged pass.
+		WriterSystem:   o.writingAgentSystem(task),
+		Paged:          true,
+		DyTopoDrafting: o.cfg.Drafting.DyTopo,
+		DraftingAgents: o.draftingAgentVoices(task),
+		DraftingRounds: o.cfg.Drafting.Rounds,
+		// Evidence-graph facts: routed per-section (by entity/allegation overlap) so each
+		// author states its relations with correct attribution — no whole-ledger crowding.
+		// Gate BIGLAW_FACTS_GLOBAL=1 reverts to whole-ledger injection for A/B.
+		Facts:       o.groundedFacts(task.ID),
+		FactsGlobal: os.Getenv("BIGLAW_FACTS_GLOBAL") == "1" || os.Getenv("BIGLAW_FACTS_GLOBAL") == "true",
+		RecordCost:  func(resp *providers.ChatResponse) { o.recordCost(resp, bare, cost.ContextSynthesis, task.ID) },
 		// Synthesis-time figure handling: drafters pull exact figures for their
 		// section from the source exhibits on demand (document-backed
 		// extract_specifics), rather than every agent pre-stuffing figures into
@@ -1769,6 +1796,225 @@ func (o *Orchestrator) allegationPassages(task *types.Task, tokenBudget int) str
 	return strutil.TruncateToTokens(b.String(), tokenBudget)
 }
 
+// buildEvidenceGraph extracts grounded entity/relation facts from the matter's relational
+// passages into a per-task Lite evidence graph, so synthesis can state relations with
+// correct attribution (a "victim-of → directed-brokerage" edge can't render under cherry-
+// picking) and render each party's full exposure. Two-pass, entity-anchored extraction
+// (the probe showed single-pass drops parenthetical/omission facts like an ownership %);
+// every fact is grounded (quote must be verbatim in its chunk) or dropped. Bounded to the
+// retrieved allegation passages for now; true ingestion/per-chunk extraction is the
+// follow-on once the lift is confirmed.
+func (o *Orchestrator) buildEvidenceGraph(task *types.Task, prov providers.Provider, model string) {
+	passages := o.allegationPassages(task, 6000)
+	if strings.TrimSpace(passages) == "" {
+		return
+	}
+	g := evidencegraph.New()
+	kept, rej := 0, 0
+	for _, chunk := range chunkByTokens(passages, 1500) {
+		k, r := evidencegraph.ExtractInto(g, prov, model, o.cfg.LLMTemperature, chunk, "")
+		kept += k
+		rej += r
+	}
+	if g.Len() == 0 {
+		return
+	}
+	o.egraphsMu.Lock()
+	o.egraphs[task.ID] = g
+	o.egraphsMu.Unlock()
+	// Deterministic figure floor: harvest every $/%/date/account#/citation from the docs and
+	// BIND each to the graph nodes it co-occurs with, then seed the figure-bearing sentences
+	// as grounded findings. Removes the run-to-run figure variance (LLM-query-driven sweep
+	// missed $7.8M/$438K some runs) and makes figures ride their node into synthesis.
+	// Figure-extraction model: the user-picked small model (settings/env), falling back to
+	// the tool model. A 7B-class model at temp 0 is enough for deterministic copy-out
+	// extraction — keeps the pipeline efficient (the heavy model is not needed here).
+	figModel := strings.TrimSpace(o.cfg.Models.FigureModel)
+	if figModel == "" {
+		figModel = model
+	}
+	if figs := o.harvestAndBindFigures(task, g, prov, figModel); len(figs) > 0 {
+		o.update(task, func(t *types.Task) { t.Findings = append(t.Findings, figs...) })
+		slog.Info("figure harvest seeded findings", "task", task.ID, "n", len(figs), "model", figModel, "graph_facts_after", g.Len())
+	}
+	// The graph's per-chunk allegation extraction (g.Allegations()) is a grounded RECALL
+	// floor — fine-grained sub-issues, the wrong altitude for section headings on their own.
+	// We deliberately do NOT make the spine from them directly (medoid-of-cluster headings
+	// scored 20: fragmented, lost whole rubric categories). Instead ensureAllegations feeds
+	// them as a SEED into the holistic, category-level synthesis (which scored 26), getting
+	// graph recall at the right altitude. So nothing to set here beyond the graph itself.
+	slog.Info("evidence graph built", "task", task.ID, "facts", g.Len(), "kept", kept, "grounding_rejected", rej, "allegation_candidates", len(g.Allegations()))
+}
+
+// clusterAllegations merges near-duplicate candidate allegation headings into nodes by
+// embedding cosine: each cluster keeps ALL its surface forms (aliases — alternate phrasings
+// the docs use, which are routing/retrieval keys) and a canonical heading (the medoid). The
+// number of semantically-distinct clusters is the natural section count; a safety cap still
+// applies. Deterministic given the embeddings (no LLM variance). Returns (canonicals,
+// canonical→aliases). Degrades to a hard cap when no embedder is available.
+func (o *Orchestrator) clusterAllegations(raw []string) ([]string, map[string][]string) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	hardCap := func() ([]string, map[string][]string) {
+		c := raw
+		if len(c) > maxSpineSections {
+			c = c[:maxSpineSections]
+		}
+		al := make(map[string][]string, len(c))
+		for _, s := range c {
+			al[s] = []string{s}
+		}
+		return c, al
+	}
+	if o.embedC == nil || len(raw) <= 2 {
+		return hardCap()
+	}
+	res, err := o.embedC.EmbedBatch(raw)
+	if err != nil || len(res) != len(raw) {
+		return hardCap()
+	}
+	vecs := make([][]float32, len(raw))
+	for i := range res {
+		vecs[i] = res[i].Embedding
+	}
+	const mergeThreshold = 0.80 // short headings: high enough to keep distinct allegations apart
+	type cluster struct {
+		idxs     []int
+		centroid []float32
+	}
+	var clusters []*cluster
+	for i, v := range vecs {
+		if len(v) == 0 {
+			clusters = append(clusters, &cluster{idxs: []int{i}})
+			continue
+		}
+		best, bestSim := -1, mergeThreshold
+		for ci, c := range clusters {
+			if len(c.centroid) == 0 {
+				continue
+			}
+			if s := embeddings.CosineSimilarity(v, c.centroid); s >= bestSim {
+				best, bestSim = ci, s
+			}
+		}
+		if best < 0 {
+			clusters = append(clusters, &cluster{idxs: []int{i}, centroid: append([]float32(nil), v...)})
+			continue
+		}
+		c := clusters[best]
+		c.idxs = append(c.idxs, i)
+		n := float32(len(c.idxs))
+		for k := range c.centroid {
+			if k < len(v) {
+				c.centroid[k] += (v[k] - c.centroid[k]) / n
+			}
+		}
+	}
+	canon := make([]string, 0, len(clusters))
+	aliases := make(map[string][]string, len(clusters))
+	for _, c := range clusters {
+		members := make([]string, 0, len(c.idxs))
+		for _, idx := range c.idxs {
+			members = append(members, raw[idx])
+		}
+		rep := medoid(c.idxs, vecs, raw)
+		canon = append(canon, rep)
+		aliases[rep] = members
+	}
+	if len(canon) > maxSpineSections { // largest-first so the cap keeps the best-attested
+		sort.SliceStable(canon, func(i, j int) bool { return len(aliases[canon[i]]) > len(aliases[canon[j]]) })
+		for _, c := range canon[maxSpineSections:] {
+			delete(aliases, c)
+		}
+		canon = canon[:maxSpineSections]
+	}
+	return canon, aliases
+}
+
+// medoid returns the cluster member whose embedding is most central (highest summed cosine
+// to the others) — the most representative heading. Falls back to the first member.
+func medoid(idxs []int, vecs [][]float32, labels []string) string {
+	if len(idxs) == 1 {
+		return labels[idxs[0]]
+	}
+	best, bestScore := idxs[0], -1.0
+	for _, a := range idxs {
+		if len(vecs[a]) == 0 {
+			continue
+		}
+		sum := 0.0
+		for _, b := range idxs {
+			if a != b && len(vecs[b]) > 0 {
+				sum += embeddings.CosineSimilarity(vecs[a], vecs[b])
+			}
+		}
+		if sum > bestScore {
+			best, bestScore = a, sum
+		}
+	}
+	return labels[best]
+}
+
+// maxSpineSections caps the coverage spine: more than this and synthesis (one paged
+// drafter per section on a local model) runs too long; the matter's real distinct
+// allegations comfortably fit.
+const maxSpineSections = 12
+
+// evidenceGraph returns the task's evidence graph, or nil if none was built.
+func (o *Orchestrator) evidenceGraph(taskID string) *evidencegraph.Graph {
+	o.egraphsMu.Lock()
+	defer o.egraphsMu.Unlock()
+	return o.egraphs[taskID]
+}
+
+// allegationAliases returns the canonical→surface-form alias map for the task's spine
+// sections, so the writer can route facts using every phrasing the docs use, not just the
+// canonical heading.
+func (o *Orchestrator) allegationAliases(taskID string) map[string][]string {
+	o.egraphsMu.Lock()
+	defer o.egraphsMu.Unlock()
+	return o.egraphAliases[taskID]
+}
+
+// groundedFacts converts the task's evidence-graph facts into the writer's per-section
+// routable form: each fact carries its display Line and a lowercased Key (subject +
+// relation + object + value + quote) the writer overlap-matches against each section.
+func (o *Orchestrator) groundedFacts(taskID string) []writer.Fact {
+	g := o.evidenceGraph(taskID)
+	if g == nil || g.Len() == 0 {
+		return nil
+	}
+	all := g.All()
+	out := make([]writer.Fact, 0, len(all))
+	for _, f := range all {
+		line := strings.TrimSpace(evidencegraph.Render([]evidencegraph.Fact{f}))
+		key := strings.ToLower(strings.Join([]string{f.Subject, f.Relation, f.Object, f.Value, f.Quote}, " "))
+		out = append(out, writer.Fact{Line: line, Key: key})
+	}
+	return out
+}
+
+// chunkByTokens splits line-oriented text into windows of at most maxTok estimated tokens,
+// never splitting a line (snippets stay intact for grounded extraction).
+func chunkByTokens(text string, maxTok int) []string {
+	var chunks, cur []string
+	tok := 0
+	for _, ln := range strings.Split(text, "\n") {
+		lt := strutil.EstimateTokens(ln)
+		if tok+lt > maxTok && len(cur) > 0 {
+			chunks = append(chunks, strings.Join(cur, "\n"))
+			cur, tok = nil, 0
+		}
+		cur = append(cur, ln)
+		tok += lt
+	}
+	if len(cur) > 0 {
+		chunks = append(chunks, strings.Join(cur, "\n"))
+	}
+	return chunks
+}
+
 // chunkKey normalizes a passage to its leading ~120 alphanumerics for dedup across the
 // overlapping retrieval queries (different queries surface the same chunk).
 func chunkKey(s string) string {
@@ -1785,16 +2031,27 @@ func chunkKey(s string) string {
 }
 
 // allegationContext returns the merged allegation passages (for downstream figure
-// hunting) and the matter's full set of DISTINCT allegations as section headings —
-// document-grounded, general to legal docs, never rubric-derived. allegations is nil
-// when nothing enumerable is found.
-func (o *Orchestrator) allegationContext(task *types.Task, prov providers.Provider, model string) (string, []string) {
+// hunting) and the matter's distinct allegations as CATEGORY-LEVEL section headings —
+// a holistic synthesis over the passages, recall-checked against the evidence graph's
+// grounded candidates (seed) so no secondary allegation is missed. Category altitude is
+// explicit: the per-chunk graph extraction produces fine-grained sub-issues/per-person
+// questions, which made bad section headings ("Whether Chao was responsible…") and lost
+// whole rubric categories; the holistic synthesis at category altitude is what scored 26.
+// Document-grounded, never rubric-derived. allegations is nil when nothing is found.
+func (o *Orchestrator) allegationContext(task *types.Task, prov providers.Provider, model string, seed []string) (string, []string) {
 	passages := o.allegationPassages(task, 5000)
 	if strings.TrimSpace(passages) == "" {
 		return "", nil
 	}
-	prompt := fmt.Sprintf("TASK: %s\n\nFrom the passages below, list EVERY DISTINCT allegation, claim, charge, scheme, or required topic this matter raises, as short section headings — be EXHAUSTIVE: include secondary and party-specific allegations, not only the most prominent. Prefer the document's own enumeration where it numbers or names them (e.g. a numbered allegation category, a count, a claim). One heading per line, no numbering, no preamble. Use the matter's own terms; list only topics actually present in the passages.\n\nPASSAGES:\n%s",
-		strings.Join(strings.Fields(task.Description), " "), passages)
+	seedBlock := ""
+	if len(seed) > 0 {
+		// Recall floor: the graph already extracted these grounded candidates; ensure each
+		// distinct one is represented so the synthesis doesn't drop a secondary allegation the
+		// graph caught — without collapsing distinct allegations together.
+		seedBlock = "\n\nThese grounded allegation candidates were extracted from the same documents — make sure each genuinely distinct one is represented among the headings (do not omit a secondary allegation):\n- " + strings.Join(seed, "\n- ")
+	}
+	prompt := fmt.Sprintf("TASK: %s\n\nFrom the passages below, list EVERY DISTINCT allegation, claim, charge, scheme, or required topic this matter raises, as short section headings — be EXHAUSTIVE: include secondary and party-specific allegations, not only the most prominent. Prefer the document's own enumeration where it numbers or names them (e.g. a numbered allegation category, a count, a claim). Name the allegation or topic itself, not a procedural sub-question (write \"Cherry-Picking Trade Allocations\", not \"Whether X was responsible\"). One heading per line, no numbering, no preamble. Use the matter's own terms; only topics actually present.%s\n\nPASSAGES:\n%s",
+		strings.Join(strings.Fields(task.Description), " "), seedBlock, passages)
 	resp, err := prov.Chat(providers.ChatParams{
 		Model:       model,
 		MaxTokens:   800,
@@ -1846,7 +2103,14 @@ func (o *Orchestrator) ensureAllegations(task *types.Task, prov providers.Provid
 	if len(task.Allegations) > 0 {
 		return task.Allegations
 	}
-	_, allegations := o.allegationContext(task, prov, model)
+	// Seed the holistic synthesis with the evidence graph's grounded allegation candidates
+	// (recall floor), so the category-level spine never misses a secondary allegation the
+	// graph caught — without inheriting the graph's fine-grained altitude.
+	var seed []string
+	if g := o.evidenceGraph(task.ID); g != nil {
+		seed = g.Allegations()
+	}
+	_, allegations := o.allegationContext(task, prov, model, seed)
 	allegations = dedupAllegations(allegations)
 	if len(allegations) > 0 {
 		o.update(task, func(t *types.Task) { t.Allegations = allegations })
@@ -1894,21 +2158,57 @@ func themeKey(h string) string {
 	return strings.Join(words, " ")
 }
 
-// writingAgentSystem returns the system prompt of the DyTopo writing agent best suited to
-// the deliverable, so the paged synthesis authors AS that agent (its drafting expertise
-// composing from the evidence blackboard) rather than a generic drafter. Maps the workflow
-// type to a drafting specialist; falls back to the general research-memo drafter, then to
-// "" (the writer's built-in drafterSystem).
-func (o *Orchestrator) writingAgentSystem(task *types.Task) string {
-	id := "legal-research-memo-drafter"
-	switch task.WorkflowType {
-	case types.WorkflowReview, types.WorkflowTabulate:
-		id = "due-diligence-report-drafter"
-	case types.WorkflowAdversarial, types.WorkflowCounsel:
-		id = "litigation-brief-drafter"
+// draftingAgentVoices selects the writing-agent bench for synthesis and returns each as an
+// EXPERTISE/voice line (name + description) — NOT the agent's whole-document template, which
+// crammed IRAC / "exec-summary→findings→recommendations" into every section. The lead is
+// index 0; contributors follow. Selected by semantic fit to the deliverable so the right
+// agents (report/summary/exec, not a fixed memo agent) are seated; the writer appends these
+// over its clean section-part base.
+func (o *Orchestrator) draftingAgentVoices(task *types.Task) []string {
+	n := o.cfg.Drafting.AgentsPerSection
+	if n < 1 {
+		n = 2
 	}
-	if a := o.registry.GetByID(id); a != nil && strings.TrimSpace(a.SystemPrompt) != "" {
-		return a.SystemPrompt
+	voice := func(a *types.AgentDefinition) string {
+		return "Bring the perspective of the " + a.Name + ": " + strings.Join(strings.Fields(a.Description), " ")
+	}
+	var voices []string
+	seen := map[string]bool{}
+	query := strings.Join(strings.Fields(task.Description), " ")
+	if cands, err := o.registry.Search(query, agents.SearchOpts{TopK: 50}); err == nil {
+		for i := range cands {
+			a := cands[i]
+			if a.Domain != types.DomainDrafting || seen[a.ID] || strings.TrimSpace(a.Description) == "" {
+				continue
+			}
+			seen[a.ID] = true
+			voices = append(voices, voice(&a))
+			if len(voices) >= n {
+				break
+			}
+		}
+	}
+	// Ensure a lead + at least one contributor from known general drafters.
+	for _, id := range []string{"due-diligence-report-drafter", "executive-summary-drafter", "legal-research-memo-drafter"} {
+		if len(voices) >= n || len(voices) >= 2 && len(voices) >= n {
+			break
+		}
+		if seen[id] {
+			continue
+		}
+		if a := o.registry.GetByID(id); a != nil && strings.TrimSpace(a.Description) != "" {
+			seen[id] = true
+			voices = append(voices, voice(a))
+		}
+	}
+	return voices
+}
+
+// writingAgentSystem is the single-drafter (non-DyTopo) path's voice: the lead drafting
+// agent's expertise line, appended over the writer's clean section base.
+func (o *Orchestrator) writingAgentSystem(task *types.Task) string {
+	if v := o.draftingAgentVoices(task); len(v) > 0 {
+		return v[0]
 	}
 	return ""
 }

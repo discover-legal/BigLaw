@@ -38,6 +38,8 @@ export function AdminPanel({ notify, isPartner, profiles, onProfilesChange, me }
         debate: s.debate,
         docuseal: { enabled: s.docuseal.enabled, url: s.docuseal.url, ...(apiKey ? { apiKey } : {}) },
         clientVoice: s.clientVoice,
+        models: s.models,
+        drafting: s.drafting,
       });
       setS(next); setApiKey("");
       notify("Settings saved — applied live");
@@ -331,6 +333,74 @@ export function AdminPanel({ notify, isPartner, profiles, onProfilesChange, me }
                 Firm-wide switches. Notifications are always stored and audited — these only control alerts and gate hints.
                 Each lawyer can also hide Remy&apos;s notes for themselves from the gate card.
               </p>
+            </div>
+
+            {/* ── Drafting ────────────────────────────────────────────────── */}
+            <div className="admin-section">
+              <div className="admin-section-title">Drafting</div>
+              <label className="check">
+                <input type="checkbox" checked={s.drafting?.dytopo ?? false}
+                  onChange={(e) => patch("drafting", "dytopo", e.target.checked)} />
+                Collaborative DyTopo drafting (writing huddles per section)
+              </label>
+              <p style={{ fontSize: 12, color: "var(--text-faint)", margin: "4px 0 8px" }}>
+                On: each section is written by a small huddle (a lead drafter plus contributor
+                agents that critique and add grounded specifics), run concurrently, then composed
+                by the paged pass. Off: a single drafter per section.
+              </p>
+              <div className="grid2">
+                <NumField label="Agents / section (huddle size)" value={s.drafting?.agentsPerSection ?? 2} min={1} max={5} onChange={(v) => patch("drafting", "agentsPerSection", v)} />
+                <NumField label="Huddle rounds (draft → critique → revise)" value={s.drafting?.rounds ?? 2} min={1} max={4} onChange={(v) => patch("drafting", "rounds", v)} />
+              </div>
+            </div>
+
+            {/* ── Models ──────────────────────────────────────────────────── */}
+            <div className="admin-section">
+              <div className="admin-section-title">Models</div>
+              <div className="field">
+                <label>Figure-extraction model</label>
+                <select
+                  value={s.models?.figureModel ?? ""}
+                  onChange={(e) => patch("models", "figureModel", e.target.value)}
+                >
+                  <option value="">(default — tool model)</option>
+                  {(s.models?.available ?? []).map((m) => (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                </select>
+              </div>
+              <p style={{ fontSize: 12, color: "var(--text-faint)", margin: "4px 0 8px" }}>
+                A small model at temperature 0 runs the deterministic figure-extraction pass —
+                a 7B-class model is plenty and keeps the pipeline efficient.
+              </p>
+              <div className="field">
+                <label>Available models (the picker list)</label>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 6 }}>
+                  {(s.models?.available ?? []).map((m) => (
+                    <span key={m} className="wf-chip" style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                      {m}
+                      <button
+                        type="button"
+                        title="Remove"
+                        style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-faint)" }}
+                        onClick={() => patch("models", "available", (s.models?.available ?? []).filter((x) => x !== m))}
+                      >×</button>
+                    </span>
+                  ))}
+                </div>
+                <input
+                  placeholder="Add a model id (e.g. qwen2.5:7b) and press Enter"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      const v = (e.target as HTMLInputElement).value.trim();
+                      const cur = s.models?.available ?? [];
+                      if (v && !cur.includes(v)) patch("models", "available", [...cur, v]);
+                      (e.target as HTMLInputElement).value = "";
+                      e.preventDefault();
+                    }
+                  }}
+                />
+              </div>
             </div>
 
             {/* ── DocuSeal ────────────────────────────────────────────────── */}

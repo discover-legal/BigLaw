@@ -390,7 +390,28 @@ type DatabaseConfig struct {
 	URL        string // postgres DSN, when Backend=postgres
 }
 
+// ModelsConfig holds user-selectable model assignments for specific roles, plus the list
+// of models offered in the UI picker. FigureModel is the small, temp-0 model used for the
+// deterministic figure-extraction pass (a cheap 7B-class model is enough and keeps the
+// pipeline efficient — the heavy model is not needed for copy-out extraction).
+type ModelsConfig struct {
+	FigureModel string   // model id for figure extraction (empty → fall back to the tool/local model)
+	Available   []string // model ids offered in the GUI picker (user-extendable)
+}
+
+// DraftingConfig governs the synthesis writing style. When DyTopo is on, each section is
+// produced by a bounded writing huddle (lead drafter + contributor agents that critique and
+// add grounded specifics over a few rounds), run concurrently across sections, then composed
+// by the paged pass. Off → a single drafter per section.
+type DraftingConfig struct {
+	DyTopo           bool // collaborative DyTopo drafting on/off
+	AgentsPerSection int  // huddle size (lead + contributors), default 2
+	Rounds           int  // huddle rounds: 1 = draft only; 2-3 = draft→critique→revise
+}
+
 type Config struct {
+	Models       ModelsConfig
+	Drafting     DraftingConfig
 	Model        ModelConfig
 	Database     DatabaseConfig
 	Embeddings   EmbeddingsConfig
@@ -443,6 +464,15 @@ func normalizeEnum(v, fallback string, allowed ...string) string {
 
 func Load() *Config {
 	c := &Config{
+		Models: ModelsConfig{
+			FigureModel: env("FIGURE_MODEL", ""), // empty → fall back to the tool/local model
+			Available:   envList("AVAILABLE_MODELS", "qwen2.5:1.5b,qwen2.5:3b,qwen2.5:7b,qwen2.5:14b"),
+		},
+		Drafting: DraftingConfig{
+			DyTopo:           envBool("DYTOPO_DRAFTING", false),
+			AgentsPerSection: envInt("DRAFTING_AGENTS_PER_SECTION", 2),
+			Rounds:           envInt("DRAFTING_ROUNDS", 2),
+		},
 		Database: DatabaseConfig{
 			Backend:    normalizeEnum(os.Getenv("DB_BACKEND"), "sqlite", "sqlite", "postgres", "memory"),
 			SQLitePath: env("SQLITE_PATH", "./data/biglaw.db"),
