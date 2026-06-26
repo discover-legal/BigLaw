@@ -75,3 +75,4 @@ data-qwenfix/
 # prompt-grounding harness fixture (derived from the harvey-labs dataset; regenerate locally)
 benchmarks/prompt-grounding/source.txt
 data-haiku/
+data-qwen7b/

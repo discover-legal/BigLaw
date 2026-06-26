@@ -1138,7 +1138,7 @@ func (o *Orchestrator) synthesise(task *types.Task) (string, error) {
 	}
 	if estTokens > synthesisWriterBudgetTokens {
 		if out, err := o.writeDeliverable(task, filteredFindings); err == nil && strings.TrimSpace(out) != "" {
-			return out, nil
+			return o.appendDiscrepancies(task, out), nil
 		} else if err != nil {
 			slog.Warn("multi-pass writer failed; falling back to single-call synthesis", "task", task.ID, "err", err)
 		}
@@ -1235,10 +1235,42 @@ Ground every statement in the findings above — do not introduce facts, figures
 
 	for _, b := range resp.Content {
 		if b.Type == providers.BlockText {
-			return b.Text, nil
+			return o.appendDiscrepancies(task, b.Text), nil
 		}
 	}
 	return "", nil
+}
+
+// appendDiscrepancies guarantees the detected cross-source contradictions land in the
+// deliverable. Detection is model-agnostic, but a weak drafter drops most of them when left
+// to weave them into prose (7B surfaced 2 of 14; Haiku 24). So we render them mechanically as
+// a dedicated section rather than trusting the writer — surfacing the conflicts is the whole
+// point (defense issues), and they must not depend on synthesis quality.
+func (o *Orchestrator) appendDiscrepancies(task *types.Task, body string) string {
+	var items []string
+	seen := map[string]bool{}
+	for _, f := range task.Findings {
+		if f.AgentID != "contradiction-detector" {
+			continue
+		}
+		c := strings.TrimSpace(f.Content)
+		c = strings.TrimPrefix(c, "DISCREPANCY (defense issue) — ")
+		if i := strings.Index(c, ". These figures conflict"); i > 0 {
+			c = strings.TrimSpace(c[:i])
+		}
+		if c == "" || seen[strings.ToLower(c)] {
+			continue
+		}
+		seen[strings.ToLower(c)] = true
+		items = append(items, "- "+c+".")
+	}
+	if len(items) == 0 {
+		return body
+	}
+	return strings.TrimRight(body, "\n") +
+		"\n\n## Discrepancies and Defense Issues\n\n" +
+		"The following figures conflict across the record. Each is a potential defense point — the inconsistency should be raised and its significance assessed, not silently reconciled.\n\n" +
+		strings.Join(items, "\n") + "\n"
 }
 
 // synthesisWriterBudgetTokens is the per-call input budget for synthesis: when the
