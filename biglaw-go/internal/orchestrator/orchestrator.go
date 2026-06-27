@@ -2022,7 +2022,7 @@ func (o *Orchestrator) groundedFacts(taskID string) []writer.Fact {
 	for _, f := range all {
 		line := strings.TrimSpace(evidencegraph.Render([]evidencegraph.Fact{f}))
 		key := strings.ToLower(strings.Join([]string{f.Subject, f.Relation, f.Object, f.Value, f.Quote}, " "))
-		out = append(out, writer.Fact{Line: line, Key: key})
+		out = append(out, writer.Fact{Line: line, Key: key, Entity: f.Subject})
 	}
 	return out
 }
