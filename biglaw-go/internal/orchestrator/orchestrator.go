@@ -2144,11 +2144,11 @@ func (o *Orchestrator) ensureAllegations(task *types.Task, prov providers.Provid
 	}
 	_, allegations := o.allegationContext(task, prov, model, seed)
 	allegations = dedupAllegations(allegations)
-	// Coverage net: the LLM enumeration gives clean category headings but a weak model drops
-	// whole allegations (7B lost Books-and-Records + Bellini + Obstruction that Haiku kept).
-	// The graph's grounded candidates are the recall floor — cluster them and add any cluster
-	// the enumeration didn't cover, so no allegation silently vanishes regardless of model.
-	allegations = o.coverAllegationClusters(allegations, seed)
+	// NOTE: a grounded coverage-net (coverAllegationClusters) was tried here — it recovered
+	// dropped allegations but REGRESSED a weak model (7B 23→17): more sections spread the
+	// fixed synthesis budget thinner and diluted every section. The 7B wall is synthesis
+	// CAPACITY, not coverage. Re-enable only behind a capacity gate, or pair it with MECHANICAL
+	// per-section fact rendering that doesn't draw on the writer's budget. Helper kept below.
 	if len(allegations) > 0 {
 		o.update(task, func(t *types.Task) { t.Allegations = allegations })
 	}
