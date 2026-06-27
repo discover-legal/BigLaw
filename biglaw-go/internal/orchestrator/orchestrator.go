@@ -2144,11 +2144,11 @@ func (o *Orchestrator) ensureAllegations(task *types.Task, prov providers.Provid
 	}
 	_, allegations := o.allegationContext(task, prov, model, seed)
 	allegations = dedupAllegations(allegations)
-	// NOTE: a grounded coverage-net (coverAllegationClusters) was tried here — it recovered
-	// dropped allegations but REGRESSED a weak model (7B 23→17): more sections spread the
-	// fixed synthesis budget thinner and diluted every section. The 7B wall is synthesis
-	// CAPACITY, not coverage. Re-enable only behind a capacity gate, or pair it with MECHANICAL
-	// per-section fact rendering that doesn't draw on the writer's budget. Helper kept below.
+	// Coverage-net (coverAllegationClusters) is DISABLED — it regressed the weak model twice
+	// (7B 23→17 under FACTS_GLOBAL, 27→20 under paged facts). The mechanism is fact-routing
+	// fragmentation: its extra granular sections out-score the broad category sections on
+	// cosine and STEAL facts into thin, poorly-drafted fragments. More sections is the wrong
+	// lever for a weak writer; mechanical per-section/party rendering is the way. Helper kept.
 	if len(allegations) > 0 {
 		o.update(task, func(t *types.Task) { t.Allegations = allegations })
 	}
