@@ -12,8 +12,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/discover-legal/biglaw-go/internal/cost"
 	"github.com/discover-legal/biglaw-go/internal/evidencegraph"
 	"github.com/discover-legal/biglaw-go/internal/providers"
+	"github.com/discover-legal/biglaw-go/internal/routing"
+	"github.com/discover-legal/biglaw-go/internal/strutil"
 	"github.com/discover-legal/biglaw-go/internal/types"
 	"github.com/google/uuid"
 )
@@ -39,6 +42,7 @@ type figureHit struct {
 	Source   string // document title
 	Entity   string // party/thing the figure concerns
 	Measures string // normalized label for the QUANTITY (groups same-quantity figures)
+	Context  string // a wider window around the figure (so an adjudicator can tell WHAT it is)
 }
 
 // figureExtractSystem: a small model (7B-class) at temp 0 reliably copies out figures WITH a
@@ -91,9 +95,45 @@ func extractFiguresLLM(prov providers.Provider, model, chunk string) []figureHit
 			Quote:    q,
 			Entity:   strings.TrimSpace(r.Entity),
 			Measures: strings.TrimSpace(r.Measures),
+			Context:  contextWindow(chunk, q, 160),
 		})
 	}
 	return hits
+}
+
+// contextWindow returns the text around a figure's quote (± pad chars, trimmed to word
+// boundaries) so a downstream adjudicator can see WHAT the number is — a bare "4,312" vs
+// "4,217" is uninterpretable; "Total Omnibus Equity Trades Analyzed | 4,312" vs "referral
+// alleges 4,217 cherry-picked trades" is decidable. Falls back to the quote if not located.
+func contextWindow(chunk, quote string, pad int) string {
+	i := strings.Index(chunk, quote)
+	if i < 0 { // whitespace/case drift — try a loose locate on the first token of the quote
+		if fields := strings.Fields(quote); len(fields) > 0 {
+			i = strings.Index(chunk, fields[0])
+		}
+	}
+	if i < 0 {
+		return quote
+	}
+	lo, hi := i-pad, i+len(quote)+pad
+	if lo < 0 {
+		lo = 0
+	}
+	if hi > len(chunk) {
+		hi = len(chunk)
+	}
+	w := chunk[lo:hi]
+	if lo > 0 { // trim partial leading word
+		if k := strings.IndexAny(w, " \n\t|"); k >= 0 {
+			w = w[k+1:]
+		}
+	}
+	if hi < len(chunk) { // trim partial trailing word
+		if k := strings.LastIndexAny(w, " \n\t|"); k >= 0 {
+			w = w[:k]
+		}
+	}
+	return strings.TrimSpace(strings.Join(strings.Fields(w), " "))
 }
 
 // harvestAndBindFigures sweeps EVERY chunk of EVERY ingested document for figures, BINDS each
@@ -163,8 +203,8 @@ func (o *Orchestrator) harvestAndBindFigures(task *types.Task, g *evidencegraph.
 	}
 
 	// FIX 2 — contradiction detection FIRST, so discrepancies lead the floor (uncapped, never
-	// crowded out by ordinary figures).
-	out := o.detectContradictions(task, raw)
+	// crowded out by ordinary figures). Adjudicated by the figure model (with context windows).
+	out := o.detectContradictions(task, raw, prov, figModel)
 
 	// FIX 1 — ordinary figure findings, balanced per source so exhibit figures get a fair share
 	// of the budget rather than being buried under the narrative's figures.
@@ -218,7 +258,7 @@ func (o *Orchestrator) harvestAndBindFigures(task *types.Task, g *evidencegraph.
 // values exist, emits a high-priority DISCREPANCY finding the writer must foreground. This is
 // the Bucket-B defense-analysis machinery: contradictions are inherent in legal work — the
 // system SURFACES the conflict, it does not reconcile or paper over it.
-func (o *Orchestrator) detectContradictions(task *types.Task, raw []figureHit) []types.Finding {
+func (o *Orchestrator) detectContradictions(task *types.Task, raw []figureHit, prov providers.Provider, model string) []types.Finding {
 	type group struct {
 		entity, measures string
 		byVal            map[string]figureHit // distinct value → exemplar (first seen)
@@ -241,7 +281,6 @@ func (o *Orchestrator) detectContradictions(task *types.Task, raw []figureHit) [
 			gp.order = append(gp.order, vk)
 		}
 	}
-	// Stable iteration order (maps are random) — sort group keys.
 	var keys []string
 	for k := range groups {
 		keys = append(keys, k)
@@ -249,33 +288,51 @@ func (o *Orchestrator) detectContradictions(task *types.Task, raw []figureHit) [
 	sort.Strings(keys)
 
 	var out []types.Finding
-	n := 0
+	n, judged := 0, 0
 	for _, k := range keys {
 		gp := groups[k]
-		if len(gp.order) < 2 { // no conflict
+		// CANDIDATE pre-filter only (cheap, recall-safe): 2–6 distinct values. This bounds LLM
+		// calls and drops the obvious ledger columns (a 30-row balance column has >6 values), but
+		// it is NOT the determination — heuristics (cross-source, cardinality) necessarily over/
+		// under-select. The actual call is an LLM adjudication below, which decides whether the
+		// values are a genuine inconsistency (same quantity reported differently — a defense issue)
+		// or legitimately different (separate transactions, line items, tiers, periods), AND
+		// produces the defense significance the ISSUE criteria want.
+		if len(gp.order) < 2 || len(gp.order) > 6 {
 			continue
 		}
-		// Build "v1 (src1); v2 (src2)" and collect distinct sources + citations.
+		if judged >= 30 { // bound adjudication calls
+			break
+		}
+		judged++
+		vals := make([]figureHit, 0, len(gp.order))
+		for _, vk := range gp.order {
+			vals = append(vals, gp.byVal[vk])
+		}
+		real, significance := o.adjudicateContradiction(prov, model, gp.entity, gp.measures, vals)
+		if !real {
+			continue
+		}
 		var parts []string
 		var cites []types.Citation
-		srcSeen := map[string]bool{}
-		for _, vk := range gp.order {
-			h := gp.byVal[vk]
+		for _, h := range vals {
 			src := h.Source
 			if src == "" {
 				src = "source"
 			}
 			parts = append(parts, fmt.Sprintf("%s (%s)", h.Value, src))
 			cites = append(cites, types.Citation{Source: h.Source, Quote: h.Quote, MechanicallyVerified: true})
-			srcSeen[figNorm(h.Source)] = true
 		}
 		ent := strings.TrimSpace(gp.entity)
 		if ent == "" {
 			ent = "the matter"
 		}
-		content := fmt.Sprintf(
-			"DISCREPANCY (defense issue) — %s, %s: %s. These figures conflict across the record; SURFACE the discrepancy and its defense significance — do not reconcile or silently pick one.",
-			ent, strings.TrimSpace(gp.measures), strings.Join(parts, "; "))
+		sig := strings.TrimSpace(significance)
+		if sig == "" {
+			sig = "Surface the inconsistency and assess its significance; do not silently reconcile it."
+		}
+		content := fmt.Sprintf("DISCREPANCY (defense issue) — %s, %s: %s. %s",
+			ent, strings.TrimSpace(gp.measures), strings.Join(parts, "; "), sig)
 		out = append(out, types.Finding{
 			ID:             uuid.New().String(),
 			AgentID:        "contradiction-detector",
@@ -288,14 +345,64 @@ func (o *Orchestrator) detectContradictions(task *types.Task, raw []figureHit) [
 			Timestamp:      time.Now(),
 		})
 		n++
-		if n >= 25 { // bound noise
-			break
-		}
 	}
-	if n > 0 {
-		slog.Info("contradictions detected", "task", task.ID, "n", n)
+	if judged > 0 {
+		slog.Info("contradictions adjudicated", "task", task.ID, "candidates", judged, "confirmed", n)
 	}
 	return out
+}
+
+const contradictionJudgeSystem = "You decide whether a set of figures recorded for the SAME quantity represent a GENUINE INCONSISTENCY — the same fact reported differently across the record, a real defense issue (e.g. the referral alleges 4,217 trades but the analysis shows 4,312; a compensation total stated two different ways) — OR are LEGITIMATELY DIFFERENT values that only share a label: separate transactions or rows in a ledger, different time periods, tiered/marginal rates, distinct accounts, or sub-totals vs totals. Use the context shown for each figure. Output ONLY a JSON object: {\"contradiction\": true|false, \"significance\": \"one sentence on why the inconsistency matters for the defense (statute of limitations, scienter, exposure, credibility), or empty string if not a contradiction\"}."
+
+// adjudicateContradiction asks the model whether a candidate group is a real inconsistency,
+// using each figure's context window so it can tell what the numbers actually are. Neurosymbolic
+// (grounded candidates) + LLM (judgment) — not a brittle heuristic. On parse failure it keeps
+// the candidate (recall) without a significance line.
+func (o *Orchestrator) adjudicateContradiction(prov providers.Provider, model, entity, measures string, vals []figureHit) (bool, string) {
+	if prov == nil || model == "" {
+		return true, "" // no judge available — keep, let synthesis weigh it
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "Quantity: %s (concerning %s).\nFigures recorded for it:\n", strings.TrimSpace(measures), strings.TrimSpace(entity))
+	for _, h := range vals {
+		ctx := h.Context
+		if ctx == "" {
+			ctx = h.Quote
+		}
+		fmt.Fprintf(&b, "- %s  — context: \"%s\"  [%s]\n", h.Value, strutil.Truncate(ctx, 240), h.Source)
+	}
+	b.WriteString("\nIs this a genuine inconsistency or legitimately-different values?")
+	zero := 0.0
+	resp, err := prov.Chat(providers.ChatParams{
+		Model:       model,
+		MaxTokens:   220,
+		System:      contradictionJudgeSystem,
+		Messages:    []providers.Message{{Role: "user", Content: b.String()}},
+		CacheSystem: true,
+		Temperature: &zero,
+	})
+	if err != nil {
+		return true, ""
+	}
+	o.recordCost(resp, routing.ResolveModelID(model), cost.ContextSynthesis, "")
+	var text string
+	for _, blk := range resp.Content {
+		if blk.Type == providers.BlockText {
+			text = blk.Text
+		}
+	}
+	lo, hi := strings.Index(text, "{"), strings.LastIndex(text, "}")
+	if lo >= 0 && hi > lo {
+		var v struct {
+			Contradiction bool   `json:"contradiction"`
+			Significance  string `json:"significance"`
+		}
+		if json.Unmarshal([]byte(text[lo:hi+1]), &v) == nil {
+			return v.Contradiction, v.Significance
+		}
+	}
+	// Parse miss — fall back to a keyword read so a flaky JSON doesn't drop a real one.
+	return strings.Contains(strings.ToLower(text), "true"), ""
 }
 
 type figRow struct{ Value, Entity, Measures, Quote string }
