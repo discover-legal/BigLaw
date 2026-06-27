@@ -44,7 +44,7 @@ type figureHit struct {
 // figureExtractSystem: a small model (7B-class) at temp 0 reliably copies out figures WITH a
 // verbatim quote, an attribution, and a normalized "measures" label so the same quantity from
 // different sources can be matched and contradictions surfaced.
-const figureExtractSystem = "List every figure stated in the passage — dollar amount, percentage, count, date, account number, or statute/rule citation. INCLUDE figures inside parentheses or after 'did not disclose' / 'failed to'. For EACH figure output one JSON object with exactly: \"value\" (the figure as written), \"entity\" (the party or thing it concerns), \"measures\" (a SHORT normalized label for WHAT QUANTITY this is — e.g. 'omnibus trade percentage', 'total excess commissions', 'trade count', 'ownership percentage', 'obstruction date', 'deleted file count'; use the SAME label every time for the same quantity so values can be compared across passages), and \"quote\" (copy the EXACT words from the passage around the figure — REQUIRED, must appear verbatim). Ignore paragraph/list numbers. Output ONLY a JSON array."
+const figureExtractSystem = "List every figure stated in the passage — dollar amount, percentage, count, date, account number, or statute/rule citation. INCLUDE figures inside parentheses or after 'did not disclose' / 'failed to', and INCLUDE figures stated in tables / pipe-delimited rows (e.g. 'Total Omnibus Equity Trades Analyzed | 4,312'). For EACH figure output one JSON object with exactly: \"value\" (the figure as written), \"entity\" (the party or thing it concerns), \"measures\" (a SHORT normalized label for WHAT QUANTITY this is — e.g. 'omnibus trade percentage', 'total excess commissions', 'trade count', 'ownership percentage', 'obstruction date', 'deleted file count'; use the SAME label every time for the same quantity so values can be compared across passages), and \"quote\" (copy the EXACT words from the passage around the figure — REQUIRED, must appear verbatim). EVERY field value MUST be a JSON string in double quotes — even pure numbers and ids (\"4,312\", \"78%\", \"801-74892\"). Ignore paragraph/list numbers. Output ONLY a JSON array."
 
 // extractFiguresLLM runs the small figure model at temperature 0 (deterministic) over one
 // chunk and returns grounded figure hits (quote verbatim in the chunk; ungrounded rows
@@ -75,8 +75,8 @@ func extractFiguresLLM(prov providers.Provider, model, chunk string) []figureHit
 	if i < 0 || j <= i {
 		return nil
 	}
-	var rows []struct{ Value, Entity, Measures, Quote string }
-	if json.Unmarshal([]byte(t[i:j+1]), &rows) != nil {
+	rows := parseFigureRows(t[i : j+1])
+	if len(rows) == 0 {
 		return nil
 	}
 	cn := figNorm(chunk)
@@ -294,6 +294,35 @@ func (o *Orchestrator) detectContradictions(task *types.Task, raw []figureHit) [
 	}
 	if n > 0 {
 		slog.Info("contradictions detected", "task", task.ID, "n", n)
+	}
+	return out
+}
+
+type figRow struct{ Value, Entity, Measures, Quote string }
+
+// reBareFieldVal quotes an UNQUOTED value for value/entity/measures/quote. The figure model
+// routinely emits values as bare numbers (4312) or invalid tokens (801-74892, account ids),
+// which makes a strict array unmarshal fail on the WHOLE chunk and silently drop every figure
+// — worst on the dense numeric tables (the quantitative summary) we most need. First char
+// excludes already-quoted / array / object / whitespace so we only touch bare tokens.
+var reBareFieldVal = regexp.MustCompile(`("(?:value|entity|measures|quote)"\s*:\s*)([^"\s\[\]{}][^,}\n]*?)(\s*[,}])`)
+var reFigObj = regexp.MustCompile(`\{[^{}]*\}`)
+
+// parseFigureRows parses the figure JSON array, tolerating the model's bare/numeric/invalid
+// value tokens: sanitize unquoted values to strings, parse the array; if that still fails,
+// salvage object-by-object so one malformed row can't drop the rest.
+func parseFigureRows(arr string) []figRow {
+	arr = reBareFieldVal.ReplaceAllString(arr, `${1}"${2}"${3}`)
+	var rows []figRow
+	if json.Unmarshal([]byte(arr), &rows) == nil {
+		return rows
+	}
+	var out []figRow
+	for _, m := range reFigObj.FindAllString(arr, -1) {
+		var one figRow
+		if json.Unmarshal([]byte(m), &one) == nil && one.Quote != "" {
+			out = append(out, one)
+		}
 	}
 	return out
 }
