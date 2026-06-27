@@ -58,14 +58,14 @@ func TestFactsFor_RoutesByAllegation(t *testing.T) {
 		{ID: "d1", Content: "The directed brokerage kickback scheme routed Crescent Bay pension trades through Lakeshore."},
 		{ID: "c1", Content: "Cherry-picking allocation gave Oceanic Fund excess profits via Whitmore."},
 	})
-	db := w.factsFor(section{Title: "Directed-Brokerage Kickback Scheme", FindingIDs: []string{"d1"}}, ix)
+	db := w.factsFor(section{Title: "Directed-Brokerage Kickback Scheme", FindingIDs: []string{"d1"}}, ix, nil)
 	if !strings.Contains(db, "Crescent Bay") || !strings.Contains(db, "Ostrowski") {
 		t.Errorf("directed-brokerage section missing its facts:\n%s", db)
 	}
 	if strings.Contains(db, "Whitmore holds 12%") {
 		t.Errorf("cherry-picking fact wrongly routed into directed-brokerage:\n%s", db)
 	}
-	cp := w.factsFor(section{Title: "Cherry-Picking Allocation", FindingIDs: []string{"c1"}}, ix)
+	cp := w.factsFor(section{Title: "Cherry-Picking Allocation", FindingIDs: []string{"c1"}}, ix, nil)
 	if !strings.Contains(cp, "Whitmore holds 12%") {
 		t.Errorf("cherry-picking section missing the Whitmore fact:\n%s", cp)
 	}

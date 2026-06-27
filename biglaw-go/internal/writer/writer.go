@@ -145,11 +145,11 @@ type Fact struct {
 // brief + its findings' content). Routes entity facts to the sections that discuss those
 // entities, and keeps each author's fact load small (no whole-ledger crowding). Returns
 // the rendered block (empty if none match).
-func (w *Writer) factsFor(s section, ix *FindingIndex) string {
+func (w *Writer) factsFor(s section, ix *FindingIndex, plan []string) string {
 	if len(w.opt.Facts) == 0 {
 		return ""
 	}
-	if w.opt.FactsGlobal { // gate: whole ledger to every author (pre-routing behaviour)
+	if w.opt.FactsGlobal { // gate: whole ledger to every author (A/B override)
 		lines := make([]string, 0, len(w.opt.Facts))
 		for _, f := range w.opt.Facts {
 			lines = append(lines, f.Line)
@@ -171,15 +171,63 @@ func (w *Writer) factsFor(s section, ix *FindingIndex) string {
 		}
 	}
 	secText := sb.String()
+	secLower := strings.ToLower(secText)
 
-	const maxPerSection = 14
+	const maxPerSection = 20 // paged own-set: deliberate (party + planned + cosine), still << ledger
 	var lines []string
-	selected := map[int]bool{} // facts routed to THIS section (kept uncompacted)
+	selected := map[int]bool{}
+	add := func(i int) {
+		if selected[i] || len(lines) >= maxPerSection {
+			return
+		}
+		selected[i] = true
+		lines = append(lines, w.opt.Facts[i].Line)
+	}
 
-	// Preferred: semantic routing — cosine of each fact's embedding to the section vector,
-	// top-K above a floor. Catches facts phrased unlike the heading (the alias problem),
-	// and top-K guarantees a section is never starved of its most-relevant facts.
-	if len(w.factVecs) == len(w.opt.Facts) && w.embed != nil {
+	// (#1 + #4) Entity-aware / proactive party: seat every fact whose party is central to this
+	// section (its name appears in the section text) UNCOMPACTED — a weak writer won't pull them
+	// via lookup_fact, and routing party facts to a party's own section was starving the
+	// allegation sections (Cherry-Picking read "no specific instances cited" while Chao's
+	// numbers sat in the floor). Skip ubiquitous entities (the firm) that would drag the whole
+	// ledger in. This runs FIRST so the section's parties' facts always make the own-set.
+	entFreq := map[string]int{}
+	for _, f := range w.opt.Facts {
+		entFreq[strings.ToLower(strings.TrimSpace(f.Entity))]++
+	}
+	ubiqMax := len(w.opt.Facts) * 40 / 100 // an entity in >40% of facts isn't discriminating
+	for i, f := range w.opt.Facts {
+		e := strings.ToLower(strings.TrimSpace(f.Entity))
+		if len(e) >= 4 && entFreq[e] <= ubiqMax && strings.Contains(secLower, e) {
+			add(i)
+		}
+	}
+
+	// (#2) Plan-driven: the per-section critic enumerated the specific facts this section needs
+	// (planSectionFacts, computed once by the caller). Pull facts matching those queries into
+	// the own-set by keyword overlap — guaranteeing the planned facts aren't left at rank 17+.
+	for _, q := range plan {
+		qt := salientTokens(q)
+		if len(qt) == 0 {
+			continue
+		}
+		for i := range w.opt.Facts {
+			if selected[i] {
+				continue
+			}
+			ov := 0
+			for tok := range salientTokens(w.opt.Facts[i].Key) {
+				if qt[tok] {
+					ov++
+				}
+			}
+			if ov >= 2 {
+				add(i)
+			}
+		}
+	}
+
+	// Cosine top-K fills any remaining slots with topically-relevant facts (the alias-catcher).
+	if len(lines) < maxPerSection && len(w.factVecs) == len(w.opt.Facts) && w.embed != nil {
 		if res, err := w.embed.EmbedBatch([]string{secText}); err == nil && len(res) == 1 && len(res[0].Embedding) > 0 {
 			sv := res[0].Embedding
 			type sc struct {
@@ -188,17 +236,16 @@ func (w *Writer) factsFor(s section, ix *FindingIndex) string {
 			}
 			var scored []sc
 			for i, fv := range w.factVecs {
-				if len(fv) == 0 {
+				if selected[i] || len(fv) == 0 {
 					continue
 				}
-				if s := cosine(fv, sv); s >= 0.25 { // floor: clearly-unrelated facts excluded
+				if s := cosine(fv, sv); s >= 0.25 {
 					scored = append(scored, sc{i, s})
 				}
 			}
 			sort.SliceStable(scored, func(a, b int) bool { return scored[a].s > scored[b].s })
 			for _, x := range scored {
-				lines = append(lines, w.opt.Facts[x.i].Line)
-				selected[x.i] = true
+				add(x.i)
 				if len(lines) >= maxPerSection {
 					break
 				}
@@ -206,19 +253,18 @@ func (w *Writer) factsFor(s section, ix *FindingIndex) string {
 		}
 	}
 
-	// Fallback: keyword overlap (no embedder).
+	// Keyword fallback (no embedder) if nothing matched.
 	if len(lines) == 0 {
 		secTokens := salientTokens(secText)
-		for i, f := range w.opt.Facts {
-			overlap := 0
-			for tok := range salientTokens(f.Key) {
+		for i := range w.opt.Facts {
+			ov := 0
+			for tok := range salientTokens(w.opt.Facts[i].Key) {
 				if secTokens[tok] {
-					overlap++
+					ov++
 				}
 			}
-			if overlap >= 2 {
-				lines = append(lines, f.Line)
-				selected[i] = true
+			if ov >= 2 {
+				add(i)
 			}
 			if len(lines) >= maxPerSection {
 				break
@@ -227,10 +273,7 @@ func (w *Writer) factsFor(s section, ix *FindingIndex) string {
 	}
 
 	// Paged facts: this section's own facts UNCOMPACTED, every other fact COMPACTED to a
-	// per-entity handle and expandable on demand (extract_specifics). This is the middle
-	// ground between FactsGlobal (drowns a weak model in the whole ~300-fact ledger) and
-	// routed-only (hides every other fact so the drafter can't even know to pull it). Mirrors
-	// the section paging: own in full, the rest as compact handles you expand if needed.
+	// per-entity handle and expandable on demand. Mirrors the section paging.
 	var out strings.Builder
 	if len(lines) > 0 {
 		out.WriteString(factsHeader)
@@ -729,10 +772,11 @@ func (w *Writer) draftSection(taskDesc, workflowType string, s section, ix *Find
 	// off the list entirely. So the critic (planSectionFacts) enumerates the specific
 	// facts this category must contain and we run a PRECISE query for each, unioning
 	// the figure hits. Pulled from the exhibits, not the finding pile.
+	plan := w.planSectionFacts(s, ix) // computed once: drives both the figures pull and fact routing
 	var figHits []SpecificHit
 	if w.opt.Specifics != nil {
 		seen := map[string]bool{}
-		for _, q := range w.planSectionFacts(s, ix) {
+		for _, q := range plan {
 			for _, h := range w.opt.Specifics(q, 4) {
 				if h.Text == "" || seen[h.Text] {
 					continue
@@ -761,7 +805,7 @@ func (w *Writer) draftSection(taskDesc, workflowType string, s section, ix *Find
 
 	// Grounded relation facts from the evidence graph — only those relevant to THIS
 	// section, routed by entity/allegation overlap (no whole-ledger crowding).
-	factsBlock := w.factsFor(s, ix)
+	factsBlock := w.factsFor(s, ix, plan)
 
 	user := fmt.Sprintf(`TASK: %s
 WORKFLOW: %s
