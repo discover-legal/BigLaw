@@ -135,8 +135,9 @@ type section struct {
 // to the author; Key is its lowercased matchable text (subject+relation+object+value+quote)
 // used to route the fact to the section(s) it concerns.
 type Fact struct {
-	Line string
-	Key  string
+	Line   string
+	Key    string
+	Entity string // subject/party — groups the compacted "rest" in paged-facts mode
 }
 
 // factsFor selects the evidence-graph facts relevant to a section: a fact is included when
@@ -173,6 +174,7 @@ func (w *Writer) factsFor(s section, ix *FindingIndex) string {
 
 	const maxPerSection = 14
 	var lines []string
+	selected := map[int]bool{} // facts routed to THIS section (kept uncompacted)
 
 	// Preferred: semantic routing — cosine of each fact's embedding to the section vector,
 	// top-K above a floor. Catches facts phrased unlike the heading (the alias problem),
@@ -196,6 +198,7 @@ func (w *Writer) factsFor(s section, ix *FindingIndex) string {
 			sort.SliceStable(scored, func(a, b int) bool { return scored[a].s > scored[b].s })
 			for _, x := range scored {
 				lines = append(lines, w.opt.Facts[x.i].Line)
+				selected[x.i] = true
 				if len(lines) >= maxPerSection {
 					break
 				}
@@ -206,7 +209,7 @@ func (w *Writer) factsFor(s section, ix *FindingIndex) string {
 	// Fallback: keyword overlap (no embedder).
 	if len(lines) == 0 {
 		secTokens := salientTokens(secText)
-		for _, f := range w.opt.Facts {
+		for i, f := range w.opt.Facts {
 			overlap := 0
 			for tok := range salientTokens(f.Key) {
 				if secTokens[tok] {
@@ -215,6 +218,7 @@ func (w *Writer) factsFor(s section, ix *FindingIndex) string {
 			}
 			if overlap >= 2 {
 				lines = append(lines, f.Line)
+				selected[i] = true
 			}
 			if len(lines) >= maxPerSection {
 				break
@@ -222,10 +226,54 @@ func (w *Writer) factsFor(s section, ix *FindingIndex) string {
 		}
 	}
 
-	if len(lines) == 0 {
+	// Paged facts: this section's own facts UNCOMPACTED, every other fact COMPACTED to a
+	// per-entity handle and expandable on demand (extract_specifics). This is the middle
+	// ground between FactsGlobal (drowns a weak model in the whole ~300-fact ledger) and
+	// routed-only (hides every other fact so the drafter can't even know to pull it). Mirrors
+	// the section paging: own in full, the rest as compact handles you expand if needed.
+	var out strings.Builder
+	if len(lines) > 0 {
+		out.WriteString(factsHeader)
+		out.WriteString(strings.Join(lines, "\n"))
+	}
+	if rest := w.compactRestFacts(selected); rest != "" {
+		out.WriteString(rest)
+	}
+	return out.String()
+}
+
+// compactRestFacts compresses every fact NOT routed to this section into per-entity handles
+// (party + count) instead of dumping them all — so the drafter isn't drowned, yet still knows
+// what else is on file and can pull any of it in full via extract_specifics.
+func (w *Writer) compactRestFacts(selected map[int]bool) string {
+	counts := map[string]int{}
+	var order []string
+	for i, f := range w.opt.Facts {
+		if selected[i] {
+			continue
+		}
+		e := strings.TrimSpace(f.Entity)
+		if e == "" {
+			e = "(unattributed)"
+		}
+		if counts[e] == 0 {
+			order = append(order, e)
+		}
+		counts[e]++
+	}
+	if len(order) == 0 {
 		return ""
 	}
-	return factsHeader + strings.Join(lines, "\n")
+	sort.SliceStable(order, func(a, b int) bool { return counts[order[a]] > counts[order[b]] })
+	var hs []string
+	for i, e := range order {
+		if i >= 20 { // cap the handle list itself so it can't become its own flood
+			hs = append(hs, fmt.Sprintf("- …and %d more parties/topics", len(order)-20))
+			break
+		}
+		hs = append(hs, fmt.Sprintf("- %s: %d more figure(s) on file", e, counts[e]))
+	}
+	return "\n\nOTHER FIGURES ON FILE (compacted — these belong to OTHER sections; pull one in full only if this section genuinely needs it, via extract_specifics with the party/topic):\n" + strings.Join(hs, "\n")
 }
 
 const factsHeader = "\n\nGROUNDED FACTS relevant to this section (each is verbatim-sourced). State the ones that belong HERE exactly, with correct attribution — do NOT attach a fact to the wrong allegation:\n"
