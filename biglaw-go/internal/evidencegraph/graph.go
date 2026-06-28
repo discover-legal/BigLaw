@@ -17,6 +17,8 @@ package evidencegraph
 import (
 	"strings"
 	"sync"
+
+	"github.com/discover-legal/biglaw-go/internal/ontology"
 )
 
 // Fact is one grounded triple. Entity attributes (e.g. "Ostrowski — 40% owner of —
@@ -39,6 +41,7 @@ type Fact struct {
 type Graph struct {
 	mu        sync.Mutex
 	facts     []Fact
+	claims    []ontology.Claim // each kept Fact, mapped onto BLEO (canonical predicate, classes, status)
 	seen      map[string]bool
 	allegs    []string
 	allegSeen map[string]bool
@@ -93,7 +96,48 @@ func (g *Graph) Add(f Fact, sourceText string) bool {
 	}
 	g.seen[k] = true
 	g.facts = append(g.facts, f)
+	// Map the grounded fact onto BLEO: classify the nodes, canonicalize the predicate, and
+	// re-orient if stated in reverse (domain/range). Unrecognized relations are kept raw — a
+	// grounded fact is still evidence even if it isn't a controlled domain predicate.
+	sc := ontology.ClassifyLiteral(f.Subject)
+	oc := ontology.ClassifyLiteral(f.Object)
+	s, scl, p, o, ocl, _ := ontology.Normalize(f.Subject, sc, f.Relation, f.Object, oc)
+	g.claims = append(g.claims, ontology.Claim{
+		S: s, SClass: scl, P: p, O: o, OClass: ocl, Value: f.Value,
+		Quote: f.Quote, Source: f.Source, Status: ontology.Grounded,
+	})
 	return true
+}
+
+// Claims returns the BLEO-mapped claims (a copy).
+func (g *Graph) Claims() []ontology.Claim {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return append([]ontology.Claim(nil), g.claims...)
+}
+
+// Conducts returns the distinct Conduct nodes — the subjects of conduct-domain predicates
+// (committedBy / violates / harmed / occurredDuring). These ARE the allegations, discovered
+// from the typed graph rather than enumerated; each is the spine anchor for its evidence.
+func (g *Graph) Conducts() []string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	seen := map[string]bool{}
+	var out []string
+	for _, c := range g.claims {
+		switch c.P {
+		case "committedBy", "violates", "harmed", "occurredDuring":
+			s := strings.TrimSpace(c.S)
+			if s == "" {
+				continue
+			}
+			if k := strings.ToLower(s); !seen[k] {
+				seen[k] = true
+				out = append(out, s)
+			}
+		}
+	}
+	return out
 }
 
 // All returns a copy of the stored facts.
