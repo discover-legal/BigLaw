@@ -412,7 +412,7 @@ type DraftingConfig struct {
 type Config struct {
 	Models       ModelsConfig
 	Drafting     DraftingConfig
-	BLEOSpine    bool // derive the spine from typed Conduct nodes instead of LLM enumeration
+	BELOSpine    bool // derive the spine from typed Conduct nodes instead of LLM enumeration
 	Model        ModelConfig
 	Database     DatabaseConfig
 	Embeddings   EmbeddingsConfig
@@ -474,7 +474,7 @@ func Load() *Config {
 			AgentsPerSection: envInt("DRAFTING_AGENTS_PER_SECTION", 2),
 			Rounds:           envInt("DRAFTING_ROUNDS", 2),
 		},
-		BLEOSpine: envBool("BLEO_SPINE", false), // spine from typed Conduct nodes vs LLM enumeration
+		BELOSpine: envBool("BELO_SPINE", false), // spine from typed Conduct nodes vs LLM enumeration
 		Database: DatabaseConfig{
 			Backend:    normalizeEnum(os.Getenv("DB_BACKEND"), "sqlite", "sqlite", "postgres", "memory"),
 			SQLitePath: env("SQLITE_PATH", "./data/biglaw.db"),

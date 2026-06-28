@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Discover Legal
 
-// Package ontology is the Go encoding of the BigLaw Legal Epistemic Ontology
-// (BLEO — see bleo.ttl). It provides the controlled class + predicate vocabulary,
+// Package ontology is the Go encoding of the BigLaw Epistemic Legal Ontology
+// (BELO — see belo.ttl). It provides the controlled class + predicate vocabulary,
 // domain/range validation (which rejects and re-orients the extractor's noise), and
 // the reified Claim type that the evidence graph stores and every agent reads/writes.
 package ontology
@@ -13,7 +13,7 @@ import (
 	"strings"
 )
 
-//go:embed bleo.ttl
+//go:embed belo.ttl
 var Spec string // the canonical Turtle spec, embedded for provenance/serving
 
 // ─── Classes (Layer 1) ───────────────────────────────────────────────────────
@@ -80,9 +80,9 @@ var knownClass = func() map[Class]bool {
 }()
 
 // ParseClass maps an extractor-supplied class string to a Class, returning Unknown if it
-// isn't a recognized BLEO class (case-insensitive; tolerates the "bleo:" prefix).
+// isn't a recognized BELO class (case-insensitive; tolerates the "belo:" prefix).
 func ParseClass(s string) Class {
-	s = strings.TrimSpace(strings.TrimPrefix(strings.ToLower(strings.TrimSpace(s)), "bleo:"))
+	s = strings.TrimSpace(strings.TrimPrefix(strings.ToLower(strings.TrimSpace(s)), "belo:"))
 	for c := range knownClass {
 		if strings.ToLower(string(c)) == s {
 			return c

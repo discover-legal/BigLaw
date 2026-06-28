@@ -2135,17 +2135,17 @@ func (o *Orchestrator) ensureAllegations(task *types.Task, prov providers.Provid
 	if len(task.Allegations) > 0 {
 		return task.Allegations
 	}
-	// BLEO spine: derive the allegations from the evidence graph's typed Conduct nodes
+	// BELO spine: derive the allegations from the evidence graph's typed Conduct nodes
 	// (DISCOVERED via conduct-domain predicates), consolidated into distinct categories. This
 	// replaces the noisy, run-varying LLM enumeration over all-docs retrieval (which grabbed
 	// Form-ADV review-triggers and dropped real allegations — the ±10 spine wobble). Falls back
 	// to the enumeration if disabled or the graph is too sparse.
-	if o.cfg.BLEOSpine {
+	if o.cfg.BELOSpine {
 		if g := o.evidenceGraph(task.ID); g != nil {
 			if conducts := g.Conducts(); len(conducts) >= 2 {
 				if cats := o.consolidateConducts(task, prov, model, conducts); len(cats) >= 2 {
 					o.update(task, func(t *types.Task) { t.Allegations = cats })
-					slog.Info("BLEO spine from conduct nodes", "task", task.ID, "conducts", len(conducts), "categories", len(cats))
+					slog.Info("BELO spine from conduct nodes", "task", task.ID, "conducts", len(conducts), "categories", len(cats))
 					return cats
 				}
 			}
