@@ -203,7 +203,10 @@ func (o *Orchestrator) harvestAndBindFigures(task *types.Task, g *evidencegraph.
 	}
 
 	// FIX 2 — contradiction detection FIRST, so discrepancies lead the floor (uncapped, never
-	// crowded out by ordinary figures). Adjudicated by the figure model (with context windows).
+	// crowded out by ordinary figures). Normalize each figure to a CANONICAL quantity label so
+	// same-quantity figures group across docs (the per-chunk measures labels are inconsistent;
+	// embeddings cluster by topic not quantity), then adjudicate each clean group.
+	o.normalizeFigures(prov, figModel, raw)
 	out := o.detectContradictions(task, raw, prov, figModel)
 
 	// FIX 1 — ordinary figure findings, balanced per source so exhibit figures get a fair share
@@ -259,57 +262,46 @@ func (o *Orchestrator) harvestAndBindFigures(task *types.Task, g *evidencegraph.
 // the Bucket-B defense-analysis machinery: contradictions are inherent in legal work — the
 // system SURFACES the conflict, it does not reconcile or paper over it.
 func (o *Orchestrator) detectContradictions(task *types.Task, raw []figureHit, prov providers.Provider, model string) []types.Finding {
-	type group struct {
-		entity, measures string
-		byVal            map[string]figureHit // distinct value → exemplar (first seen)
-		order            []string
-	}
-	groups := map[string]*group{}
-	for _, h := range raw {
-		if h.Measures == "" || h.Value == "" {
-			continue
-		}
-		key := figNorm(h.Entity) + "|" + figNorm(h.Measures)
-		gp := groups[key]
-		if gp == nil {
-			gp = &group{entity: h.Entity, measures: h.Measures, byVal: map[string]figureHit{}}
-			groups[key] = gp
-		}
-		vk := figNorm(h.Value)
-		if _, ok := gp.byVal[vk]; !ok {
-			gp.byVal[vk] = h
-			gp.order = append(gp.order, vk)
-		}
-	}
-	var keys []string
-	for k := range groups {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
+	// Candidates = clusters of figures describing the SAME quantity, found by EMBEDDING each
+	// figure's context (what the number actually is). The figure model's free-text "measures"
+	// labels are inconsistent across docs, so string-key grouping both over-selected (unrelated
+	// figures sharing a generic "amount" label) and under-selected (the real cross-doc pair
+	// "alleged 4,217 trades" vs "4,312 trades analyzed" never shared a key, so was never judged).
+	// Semantic grouping surfaces the right candidates; the LLM then adjudicates conflict + sig.
+	clusters := o.clusterFiguresByContext(raw)
 
 	var out []types.Finding
 	n, judged := 0, 0
-	for _, k := range keys {
-		gp := groups[k]
-		// CANDIDATE pre-filter only (cheap, recall-safe): 2–6 distinct values. This bounds LLM
-		// calls and drops the obvious ledger columns (a 30-row balance column has >6 values), but
-		// it is NOT the determination — heuristics (cross-source, cardinality) necessarily over/
-		// under-select. The actual call is an LLM adjudication below, which decides whether the
-		// values are a genuine inconsistency (same quantity reported differently — a defense issue)
-		// or legitimately different (separate transactions, line items, tiers, periods), AND
-		// produces the defense significance the ISSUE criteria want.
-		if len(gp.order) < 2 || len(gp.order) > 6 {
+	for _, idxs := range clusters {
+		// Distinct values within the cluster (one exemplar per value).
+		byVal := map[string]figureHit{}
+		var vorder []string
+		for _, i := range idxs {
+			h := raw[i]
+			if strings.TrimSpace(h.Value) == "" {
+				continue
+			}
+			vk := figNorm(h.Value)
+			if _, ok := byVal[vk]; !ok {
+				byVal[vk] = h
+				vorder = append(vorder, vk)
+			}
+		}
+		// Cheap recall-safe bound only (NOT the determination): 2–8 distinct values. A long
+		// ledger column clusters together and is excluded here; the LLM judges the rest.
+		if len(vorder) < 2 || len(vorder) > 8 {
 			continue
 		}
 		if judged >= 30 { // bound adjudication calls
 			break
 		}
 		judged++
-		vals := make([]figureHit, 0, len(gp.order))
-		for _, vk := range gp.order {
-			vals = append(vals, gp.byVal[vk])
+		vals := make([]figureHit, 0, len(vorder))
+		for _, vk := range vorder {
+			vals = append(vals, byVal[vk])
 		}
-		real, significance := o.adjudicateContradiction(prov, model, gp.entity, gp.measures, vals)
+		ent, meas := clusterLabel(vals)
+		real, significance := o.adjudicateContradiction(prov, model, ent, meas, vals)
 		if !real {
 			continue
 		}
@@ -323,7 +315,7 @@ func (o *Orchestrator) detectContradictions(task *types.Task, raw []figureHit, p
 			parts = append(parts, fmt.Sprintf("%s (%s)", h.Value, src))
 			cites = append(cites, types.Citation{Source: h.Source, Quote: h.Quote, MechanicallyVerified: true})
 		}
-		ent := strings.TrimSpace(gp.entity)
+		ent = strings.TrimSpace(ent)
 		if ent == "" {
 			ent = "the matter"
 		}
@@ -332,7 +324,7 @@ func (o *Orchestrator) detectContradictions(task *types.Task, raw []figureHit, p
 			sig = "Surface the inconsistency and assess its significance; do not silently reconcile it."
 		}
 		content := fmt.Sprintf("DISCREPANCY (defense issue) — %s, %s: %s. %s",
-			ent, strings.TrimSpace(gp.measures), strings.Join(parts, "; "), sig)
+			ent, strings.TrimSpace(meas), strings.Join(parts, "; "), sig)
 		out = append(out, types.Finding{
 			ID:             uuid.New().String(),
 			AgentID:        "contradiction-detector",
@@ -432,6 +424,121 @@ func parseFigureRows(arr string) []figRow {
 		}
 	}
 	return out
+}
+
+const figureNormSystem = "For each figure, output a CANONICAL quantity label — the underlying thing being measured, normalized so the SAME quantity gets the SAME label regardless of wording, and DIFFERENT quantities (a count vs a percentage of the same topic; the same metric for different parties) get DIFFERENT labels. Prefer a short '<thing> <quantity-type>' form (e.g. 'omnibus trade count', 'undisclosed compensation total', 'profitable allocation rate', 'review period start date'). Output ONLY a JSON array of strings — exactly one label per figure, in the SAME order."
+
+// normalizeFigures replaces each figure's inconsistent per-chunk Measures label with a CANONICAL
+// quantity label assigned by one model pass over all figures together — so the same quantity
+// reported differently across documents ("alleged 4,217 trades" / "4,312 trades analyzed") gets
+// the SAME label and groups, while a count and a percentage of the same topic stay distinct.
+// This is the grouping fix: string-key on raw labels under-grouped, embeddings cluster by topic.
+func (o *Orchestrator) normalizeFigures(prov providers.Provider, model string, raw []figureHit) {
+	if prov == nil || model == "" || len(raw) == 0 {
+		return
+	}
+	const batch = 25
+	for start := 0; start < len(raw); start += batch {
+		end := start + batch
+		if end > len(raw) {
+			end = len(raw)
+		}
+		var b strings.Builder
+		b.WriteString("Figures:\n")
+		for i := start; i < end; i++ {
+			ctx := raw[i].Context
+			if ctx == "" {
+				ctx = raw[i].Quote
+			}
+			fmt.Fprintf(&b, "%d. \"%s\" — %s\n", i-start+1, raw[i].Value, strutil.Truncate(ctx, 180))
+		}
+		zero := 0.0
+		resp, err := prov.Chat(providers.ChatParams{
+			Model: model, MaxTokens: 700, System: figureNormSystem,
+			Messages: []providers.Message{{Role: "user", Content: b.String()}}, CacheSystem: true, Temperature: &zero,
+		})
+		if err != nil {
+			continue
+		}
+		o.recordCost(resp, routing.ResolveModelID(model), cost.ContextSynthesis, "")
+		var text string
+		for _, blk := range resp.Content {
+			if blk.Type == providers.BlockText {
+				text = blk.Text
+			}
+		}
+		labels := parseStringArray(text)
+		for k := 0; k < end-start && k < len(labels); k++ {
+			if l := strings.TrimSpace(labels[k]); l != "" {
+				raw[start+k].Measures = l
+			}
+		}
+	}
+}
+
+func parseStringArray(t string) []string {
+	t = strings.TrimSpace(t)
+	t = strings.TrimPrefix(strings.TrimPrefix(t, "```json"), "```")
+	t = strings.TrimSuffix(t, "```")
+	i, j := strings.Index(t, "["), strings.LastIndex(t, "]")
+	if i < 0 || j <= i {
+		return nil
+	}
+	var out []string
+	if json.Unmarshal([]byte(t[i:j+1]), &out) == nil {
+		return out
+	}
+	return nil
+}
+
+// clusterFiguresByContext groups figures by their (now canonical) quantity label — after
+// normalizeFigures, the same quantity shares a label across documents, so a string group is
+// clean and precise (no embedding threshold to mis-tune).
+func (o *Orchestrator) clusterFiguresByContext(raw []figureHit) [][]int {
+	byKey := map[string][]int{}
+	var order []string
+	for i, h := range raw {
+		k := figNorm(h.Measures)
+		if k == "" {
+			continue
+		}
+		if _, ok := byKey[k]; !ok {
+			order = append(order, k)
+		}
+		byKey[k] = append(byKey[k], i)
+	}
+	out := make([][]int, 0, len(order))
+	for _, k := range order {
+		out = append(out, byKey[k])
+	}
+	return out
+}
+
+// clusterLabel picks a representative entity + measures (most common) for a cluster's heading.
+func clusterLabel(vals []figureHit) (string, string) {
+	mc := map[string]int{}
+	for _, h := range vals {
+		if m := strings.TrimSpace(h.Measures); m != "" {
+			mc[m]++
+		}
+	}
+	best, bestN := "", 0
+	for m, c := range mc {
+		if c > bestN {
+			best, bestN = m, c
+		}
+	}
+	if best == "" {
+		best = "the same quantity"
+	}
+	ent := ""
+	for _, h := range vals {
+		if e := strings.TrimSpace(h.Entity); e != "" {
+			ent = e
+			break
+		}
+	}
+	return ent, best
 }
 
 func score(bound, cite bool) int {
