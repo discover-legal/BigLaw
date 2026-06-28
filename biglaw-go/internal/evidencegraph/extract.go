@@ -27,7 +27,7 @@ const relationSystem = "You extract relationships for an evidence graph from leg
 
 const allegationSystem = "You identify the DISTINCT allegations, claims, charges, schemes, or required topics this passage raises, as short section headings — be exhaustive, include secondary and party-specific ones, and prefer the document's own enumeration where it numbers or names them. Respond with ONLY a JSON array; each element: {\"label\":\"<short heading, max ~8 words, the matter's own terms>\",\"quote\":\"<verbatim span from the passage evidencing this allegation>\"}."
 
-// tripleSystem extracts typed BLEO triples (controlled predicates + node classes). The
+// tripleSystem extracts typed BELO triples (controlled predicates + node classes). The
 // Conduct-centric predicates (committedBy/violates/harmed/quantifiedAs) make each wrongful
 // scheme a Conduct node — the spine is then DISCOVERED from these, not enumerated. Neutral/
 // policy/review text is skipped (no controlled predicate fits), which is what keeps Form-ADV
@@ -94,7 +94,7 @@ func ExtractInto(g *Graph, chat Chatter, model string, temperature *float64, chu
 		}
 	}
 
-	// Pass 4 — typed BLEO triples (controlled predicates + classes). These populate the Claim
+	// Pass 4 — typed BELO triples (controlled predicates + classes). These populate the Claim
 	// graph's Conduct nodes, from which the spine is DISCOVERED (g.Conducts()). AddTriple keeps
 	// only ontology-recognized, domain/range-valid triples (re-orienting reversed ones).
 	if text, ok := chatJSON(chat, model, temperature, tripleSystem, chunk); ok {

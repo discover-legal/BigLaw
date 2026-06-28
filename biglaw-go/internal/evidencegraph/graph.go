@@ -41,7 +41,7 @@ type Fact struct {
 type Graph struct {
 	mu        sync.Mutex
 	facts     []Fact
-	claims    []ontology.Claim // each kept Fact, mapped onto BLEO (canonical predicate, classes, status)
+	claims    []ontology.Claim // each kept Fact, mapped onto BELO (canonical predicate, classes, status)
 	seen      map[string]bool
 	allegs    []string
 	allegSeen map[string]bool
@@ -96,7 +96,7 @@ func (g *Graph) Add(f Fact, sourceText string) bool {
 	}
 	g.seen[k] = true
 	g.facts = append(g.facts, f)
-	// Map the grounded fact onto BLEO: classify the nodes, canonicalize the predicate, and
+	// Map the grounded fact onto BELO: classify the nodes, canonicalize the predicate, and
 	// re-orient if stated in reverse (domain/range). Unrecognized relations are kept raw — a
 	// grounded fact is still evidence even if it isn't a controlled domain predicate.
 	sc := ontology.ClassifyLiteral(f.Subject)
@@ -111,7 +111,7 @@ func (g *Graph) Add(f Fact, sourceText string) bool {
 
 // AddTriple stores a typed, ontology-recognized triple (the controlled-vocabulary extraction
 // path). Unlike Add (which keeps any grounded fact, mapping it best-effort), AddTriple keeps
-// ONLY triples whose predicate is a controlled BLEO predicate that validates against
+// ONLY triples whose predicate is a controlled BELO predicate that validates against
 // domain/range (re-orienting reversed ones) — so the Conduct graph the spine derives from
 // stays clean. Classes come from the extractor; an unrecognized class falls back to literal
 // classification. Grounded (quote must be verbatim in sourceText) and deduped.
@@ -150,7 +150,7 @@ func classOf(declared, surface string) ontology.Class {
 	return ontology.ClassifyLiteral(surface)
 }
 
-// Claims returns the BLEO-mapped claims (a copy).
+// Claims returns the BELO-mapped claims (a copy).
 func (g *Graph) Claims() []ontology.Claim {
 	g.mu.Lock()
 	defer g.mu.Unlock()
