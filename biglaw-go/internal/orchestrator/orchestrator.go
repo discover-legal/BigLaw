@@ -2135,6 +2135,22 @@ func (o *Orchestrator) ensureAllegations(task *types.Task, prov providers.Provid
 	if len(task.Allegations) > 0 {
 		return task.Allegations
 	}
+	// BLEO spine: derive the allegations from the evidence graph's typed Conduct nodes
+	// (DISCOVERED via conduct-domain predicates), consolidated into distinct categories. This
+	// replaces the noisy, run-varying LLM enumeration over all-docs retrieval (which grabbed
+	// Form-ADV review-triggers and dropped real allegations — the ±10 spine wobble). Falls back
+	// to the enumeration if disabled or the graph is too sparse.
+	if o.cfg.BLEOSpine {
+		if g := o.evidenceGraph(task.ID); g != nil {
+			if conducts := g.Conducts(); len(conducts) >= 2 {
+				if cats := o.consolidateConducts(task, prov, model, conducts); len(cats) >= 2 {
+					o.update(task, func(t *types.Task) { t.Allegations = cats })
+					slog.Info("BLEO spine from conduct nodes", "task", task.ID, "conducts", len(conducts), "categories", len(cats))
+					return cats
+				}
+			}
+		}
+	}
 	// Seed the holistic synthesis with the evidence graph's grounded allegation candidates
 	// (recall floor), so the category-level spine never misses a secondary allegation the
 	// graph caught — without inheriting the graph's fine-grained altitude.
@@ -2153,6 +2169,53 @@ func (o *Orchestrator) ensureAllegations(task *types.Task, prov providers.Provid
 		o.update(task, func(t *types.Task) { t.Allegations = allegations })
 	}
 	return allegations
+}
+
+// consolidateConducts turns the evidence graph's typed Conduct nodes into the matter's distinct
+// allegation-category headings: it merges restatements of the same charge (e.g. "Obstruction of
+// Examination" / "Obstructive Conduct During Examination") and drops non-allegation conducts.
+// Robust because it consolidates a small, already-grounded set — unlike enumerating from noisy
+// all-docs retrieval. Falls back to the deduped raw conducts on any model/parse failure.
+func (o *Orchestrator) consolidateConducts(task *types.Task, prov providers.Provider, model string, conducts []string) []string {
+	prompt := "These are wrongful-conduct / scheme nodes extracted from a legal matter's evidence graph. Merge restatements of the SAME allegation into one heading, drop anything that is not an alleged violation, and output the DISTINCT allegation categories in the matter's own terms — one heading per line, no numbering, no preamble.\n\nCONDUCT NODES:\n- " + strings.Join(conducts, "\n- ")
+	resp, err := prov.Chat(providers.ChatParams{
+		Model:       model,
+		MaxTokens:   600,
+		System:      "You consolidate extracted conduct nodes into a legal matter's distinct allegation categories — clean section headings, nothing else.",
+		Messages:    []providers.Message{{Role: "user", Content: prompt}},
+		CacheSystem: true,
+		Temperature: o.cfg.LLMTemperature,
+	})
+	if err != nil {
+		return dedupAllegations(conducts)
+	}
+	o.recordCost(resp, model, cost.ContextSynthesis, task.ID)
+	var text string
+	for _, bl := range resp.Content {
+		if bl.Type == providers.BlockText {
+			text = bl.Text
+		}
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, ln := range strings.Split(text, "\n") {
+		ln = strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(ln), "-*•0123456789.) \t"))
+		ln = strings.TrimSpace(strings.Trim(ln, "*_#:"))
+		if n := len(ln); n < 4 || n > 90 {
+			continue
+		}
+		if k := strings.ToLower(ln); !seen[k] {
+			seen[k] = true
+			out = append(out, ln)
+		}
+		if len(out) >= maxSpineSections {
+			break
+		}
+	}
+	if len(out) < 2 {
+		return dedupAllegations(conducts)
+	}
+	return out
 }
 
 // coverAllegationClusters guarantees every grounded allegation cluster is represented in the

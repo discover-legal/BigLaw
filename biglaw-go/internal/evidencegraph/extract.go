@@ -27,6 +27,17 @@ const relationSystem = "You extract relationships for an evidence graph from leg
 
 const allegationSystem = "You identify the DISTINCT allegations, claims, charges, schemes, or required topics this passage raises, as short section headings — be exhaustive, include secondary and party-specific ones, and prefer the document's own enumeration where it numbers or names them. Respond with ONLY a JSON array; each element: {\"label\":\"<short heading, max ~8 words, the matter's own terms>\",\"quote\":\"<verbatim span from the passage evidencing this allegation>\"}."
 
+// tripleSystem extracts typed BLEO triples (controlled predicates + node classes). The
+// Conduct-centric predicates (committedBy/violates/harmed/quantifiedAs) make each wrongful
+// scheme a Conduct node — the spine is then DISCOVERED from these, not enumerated. Neutral/
+// policy/review text is skipped (no controlled predicate fits), which is what keeps Form-ADV
+// triggers and compliance-review activities out of the allegation graph.
+const tripleSystem = "Extract RDF triples for a legal evidence graph using ONLY these predicates: committedBy (Conduct->Party), violates (Conduct->Authority/Rule/Statute), harmed (Conduct->Party), quantifiedAs (Conduct or Party -> Quantity), ownsStakeIn (Party->Party), receivedFrom (Party->Party), failedToDisclose (Party->thing), directedTradesTo (Party->Broker), heldAccountAt (Party->Broker), alteredRecords (Party->Instrument), occurredDuring (Conduct->Event). A Conduct is a NAMED wrongful scheme or violation — use the matter's own name (e.g. 'Cherry-Picking Trade Allocations', 'Misleading Form ADV Disclosures', 'Failure to Maintain Required Books and Records', 'Breach of Fiduciary Duty / Directed Brokerage', 'Obstruction of Examination'). For EACH triple output {\"s\",\"sClass\",\"p\",\"o\",\"oClass\",\"value\" (a figure if attached, else \"\"),\"quote\" (verbatim span from the passage)}. sClass/oClass MUST be one of: Party, Person, Firm, Fund, Account, Broker, Client, Conduct, Authority, Instrument, Quantity, Event. Use ONLY the listed predicates; SKIP neutral facts, firm descriptions, compliance policies, and audit/review activities. Output ONLY a JSON array."
+
+type tripleRow struct {
+	S, SClass, P, O, OClass, Value, Quote string
+}
+
 type entityRow struct {
 	Entity, Attribute, Value, Quote string
 }
@@ -73,13 +84,28 @@ func ExtractInto(g *Graph, chat Chatter, model string, temperature *float64, chu
 		}
 	}
 
-	// Pass 3 — distinct allegations (grounded), so the coverage spine derives from the
-	// same extraction as the facts rather than a separate, run-varying enumeration.
+	// Pass 3 — distinct allegations (grounded), legacy label set kept for the enumeration spine.
 	if text, ok := chatJSON(chat, model, temperature, allegationSystem, chunk); ok {
 		var rows []allegationRow
 		if parseJSONArray(text, &rows) {
 			for _, r := range rows {
 				g.AddAllegation(r.Label, r.Quote, chunk)
+			}
+		}
+	}
+
+	// Pass 4 — typed BLEO triples (controlled predicates + classes). These populate the Claim
+	// graph's Conduct nodes, from which the spine is DISCOVERED (g.Conducts()). AddTriple keeps
+	// only ontology-recognized, domain/range-valid triples (re-orienting reversed ones).
+	if text, ok := chatJSON(chat, model, temperature, tripleSystem, chunk); ok {
+		var rows []tripleRow
+		if parseJSONArray(text, &rows) {
+			for _, r := range rows {
+				if g.AddTriple(r.S, r.SClass, r.P, r.O, r.OClass, r.Value, r.Quote, source, chunk) {
+					kept++
+				} else {
+					rej++
+				}
 			}
 		}
 	}

@@ -70,6 +70,27 @@ var parent = map[Class]Class{
 	Money: Quantity, Percentage: Quantity, Count: Quantity, DateQ: Quantity, Identifier: Quantity,
 }
 
+// knownClass is the set of valid class identifiers (for parsing extractor output).
+var knownClass = func() map[Class]bool {
+	m := map[Class]bool{Party: true, Conduct: true, Authority: true, Instrument: true, Quantity: true, Event: true, Jurisdiction: true, Matter: true}
+	for sub := range parent {
+		m[sub] = true
+	}
+	return m
+}()
+
+// ParseClass maps an extractor-supplied class string to a Class, returning Unknown if it
+// isn't a recognized BLEO class (case-insensitive; tolerates the "bleo:" prefix).
+func ParseClass(s string) Class {
+	s = strings.TrimSpace(strings.TrimPrefix(strings.ToLower(strings.TrimSpace(s)), "bleo:"))
+	for c := range knownClass {
+		if strings.ToLower(string(c)) == s {
+			return c
+		}
+	}
+	return Unknown
+}
+
 // IsA reports whether c is super or a subclass of super. Unknown matches anything
 // (the extractor often leaves a node untyped; we don't reject on missing type).
 func (c Class) IsA(super Class) bool {

@@ -34,8 +34,11 @@ type mockChat struct{ entityJSON, relationJSON string }
 
 func (m mockChat) Chat(p providers.ChatParams) (*providers.ChatResponse, error) {
 	body := m.entityJSON
-	if strings.Contains(p.System, "extract relationships") {
+	switch {
+	case strings.Contains(p.System, "extract relationships"):
 		body = m.relationJSON
+	case strings.Contains(p.System, "RDF triples"), strings.Contains(p.System, "distinct allegations"):
+		body = "[]" // this test exercises passes 1-2 (entities/relations) only
 	}
 	return &providers.ChatResponse{Content: []providers.ContentBlock{{Type: providers.BlockText, Text: body}}}, nil
 }

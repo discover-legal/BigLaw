@@ -109,6 +109,47 @@ func (g *Graph) Add(f Fact, sourceText string) bool {
 	return true
 }
 
+// AddTriple stores a typed, ontology-recognized triple (the controlled-vocabulary extraction
+// path). Unlike Add (which keeps any grounded fact, mapping it best-effort), AddTriple keeps
+// ONLY triples whose predicate is a controlled BLEO predicate that validates against
+// domain/range (re-orienting reversed ones) — so the Conduct graph the spine derives from
+// stays clean. Classes come from the extractor; an unrecognized class falls back to literal
+// classification. Grounded (quote must be verbatim in sourceText) and deduped.
+func (g *Graph) AddTriple(s, sClass, rel, o, oClass, value, quote, source, sourceText string) bool {
+	if strings.TrimSpace(s) == "" || strings.TrimSpace(quote) == "" {
+		return false
+	}
+	if !grounded(quote, sourceText) {
+		return false
+	}
+	sc := classOf(sClass, s)
+	oc := classOf(oClass, o)
+	ss, scl, pp, oo, ocl, ok := ontology.Normalize(s, sc, rel, o, oc)
+	if !ok {
+		return false // not a recognized controlled domain relation
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	k := norm(ss + "|" + pp + "|" + oo + "|" + value)
+	if g.seen[k] {
+		return false
+	}
+	g.seen[k] = true
+	g.claims = append(g.claims, ontology.Claim{
+		S: ss, SClass: scl, P: pp, O: oo, OClass: ocl, Value: value,
+		Quote: quote, Source: source, Status: ontology.Grounded,
+	})
+	g.facts = append(g.facts, Fact{Subject: ss, Relation: pp, Object: oo, Value: value, Quote: quote, Source: source})
+	return true
+}
+
+func classOf(declared, surface string) ontology.Class {
+	if c := ontology.ParseClass(declared); c != ontology.Unknown {
+		return c
+	}
+	return ontology.ClassifyLiteral(surface)
+}
+
 // Claims returns the BLEO-mapped claims (a copy).
 func (g *Graph) Claims() []ontology.Claim {
 	g.mu.Lock()
