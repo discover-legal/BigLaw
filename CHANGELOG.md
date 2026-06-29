@@ -17,6 +17,36 @@ House rules:
 
 ## [Unreleased]
 
+### BELO — an epistemic ontology, a graph-discovered spine, and What3Words figure handles
+The next stretch of the local-accuracy climb — still a single local open-weight model for the
+bulk (a 14B handles the small, high-leverage spine pass), no cloud model, no corpus stuffing.
+- **BELO — BigLaw Epistemic Legal Ontology** (`internal/ontology/`): a three-layer RDF/OWL
+  ontology every agent reads and writes — domain classes + controlled predicates with
+  domain/range; a reified `Claim` carrying provenance, grounding, epistemic status, and
+  Claim→Claim stance edges; analytic concepts (`requiresElement`) and derived defense issues.
+  `Normalize()` canonicalises a weak model's free-text relations and **re-orients reversed
+  triples via domain/range** ("Section 206 violates <conduct>" → "<conduct> violates Section
+  206"), turning noisy extraction into typed facts. ("As above, so BELO.")
+- **Spine discovered, not enumerated** — the deliverable's section set is now derived from the
+  evidence graph's typed `Conduct` nodes (paged over the charging document, deterministic at
+  temperature 0), replacing a run-to-run-varying LLM enumeration that grabbed policy
+  boilerplate (Form ADV review triggers) as "allegations" and dropped real ones. Result: a
+  **complete, stable spine** — all six allegation categories every run — instead of a 4↔6
+  wobble that had been confounding every comparison.
+- **What3Words figure handles** — drafters reference each figure by a neutral codename (the
+  digit masked even in the prompt), and the exact grounded value is substituted by key. Names
+  are LLM-native where the prior `{{FIG: …}}` meta-placeholder was resisted (a weak drafter
+  abstracted figures into vague prose), inert for attention, and an exact key (no fuzzy
+  desc-matching). Figures now land verbatim in most sections, never garbled.
+
+Honest status: the spine is complete and figures flow into most sections; a flagship section
+still under-states its figures when its handle list is noise-heavy (salient figures buried) —
+the next drop ranks handles by salience. The benchmark remains a climb, not a pass.
+
+New areas: `internal/ontology/` (BELO spec `belo.ttl` + Go schema), the evidence-graph `Claim`
+store + `Conducts()`, writer figure-handle substitution, and the orchestrator's
+allegation-density-ranked charging-document conduct sweep.
+
 ### Local-model accuracy: grounding → synthesis → evidence graph (0 → 30/60 on a Harvey-style benchmark)
 Took a single local open-weight model from **0 to 30 of 60 rubric criteria** on a
 Harvey-style LAB task (white-collar SEC enforcement-referral extraction) through a chain
