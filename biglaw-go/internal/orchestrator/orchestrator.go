@@ -1866,9 +1866,40 @@ func (o *Orchestrator) buildEvidenceGraph(task *types.Task, prov providers.Provi
 			slog.Warn("BELO spine model provider unavailable; using bulk model", "spine_model", sm, "err", err)
 		}
 	}
+	// FIX 1 — the conduct/spine pass sweeps the FULL text of every charging document, NOT the
+	// allegationPassages semantic subset Phase 1 uses. That subset (4 queries × top_k 8, truncated
+	// to 6000 tokens) structurally misses any category whose chunk doesn't rank (e.g. Books-&-
+	// Records), so the spine silently dropped it. Reading every doc's full text guarantees every
+	// category is seen; AddTriple dedups inside the graph, so overlapping sweeps are safe. Mirrors
+	// the harvestAndBindFigures full-doc idiom (GetFullText, title via GetByID, 40k-token cap,
+	// chunkByTokens). Falls back to the Phase-1 `chunks` if no document yields usable full text.
+	// FIX 2 — run the conduct pass at temperature 0 (deterministic copy-out): the prior 0.2 caused
+	// run-to-run wobble on what is fundamentally a transcribe-and-classify task.
+	const spinePerDocTokenCap = 40000 // ~4 chars/token; bound a pathological raw log, generous for real docs
+	zero := 0.0
+	var spineChunks []string
+	for _, docID := range task.DocumentIDs {
+		txt, err := o.knowledge.GetFullText(docID)
+		if err != nil || strings.TrimSpace(txt) == "" {
+			continue
+		}
+		title := docID
+		if d := o.knowledge.GetByID(docID); d != nil && strings.TrimSpace(d.Title) != "" {
+			title = d.Title
+		}
+		swept := txt
+		if len(swept) > spinePerDocTokenCap*4 {
+			swept = swept[:spinePerDocTokenCap*4]
+			slog.Info("conduct sweep truncated oversized doc", "task", task.ID, "doc", title)
+		}
+		spineChunks = append(spineChunks, chunkByTokens(swept, 1500)...)
+	}
+	if len(spineChunks) == 0 { // no usable full text → degrade gracefully to the allegation passages
+		spineChunks = chunks
+	}
 	ckept, crej := 0, 0
-	for _, chunk := range chunks {
-		k, r := evidencegraph.ExtractTriplesInto(g, spineProv, spineModel, o.cfg.LLMTemperature, chunk, "")
+	for _, chunk := range spineChunks {
+		k, r := evidencegraph.ExtractTriplesInto(g, spineProv, spineModel, &zero, chunk, "")
 		ckept += k
 		crej += r
 	}
@@ -2208,13 +2239,17 @@ func (o *Orchestrator) ensureAllegations(task *types.Task, prov providers.Provid
 // all-docs retrieval. Falls back to the deduped raw conducts on any model/parse failure.
 func (o *Orchestrator) consolidateConducts(task *types.Task, prov providers.Provider, model string, conducts []string) []string {
 	prompt := "These are wrongful-conduct / scheme nodes extracted from a legal matter's evidence graph. Merge restatements of the SAME allegation into one heading, drop anything that is not an alleged violation, and output the DISTINCT allegation categories in the matter's own terms — one heading per line, no numbering, no preamble.\n\nCONDUCT NODES:\n- " + strings.Join(conducts, "\n- ")
+	// FIX 3 — deterministic merging: temperature 0 (not LLMTemperature 0.2). Consolidating the
+	// conduct nodes into spine categories is a stable, set-merge task; any wobble here reshuffles
+	// the matter's section spine run-to-run, which is the variance we're driving out.
+	zero := 0.0
 	resp, err := prov.Chat(providers.ChatParams{
 		Model:       model,
 		MaxTokens:   600,
 		System:      "You consolidate extracted conduct nodes into a legal matter's distinct allegation categories — clean section headings, nothing else.",
 		Messages:    []providers.Message{{Role: "user", Content: prompt}},
 		CacheSystem: true,
-		Temperature: o.cfg.LLMTemperature,
+		Temperature: &zero,
 	})
 	if err != nil {
 		return dedupAllegations(conducts)
