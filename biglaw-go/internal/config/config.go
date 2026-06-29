@@ -396,6 +396,7 @@ type DatabaseConfig struct {
 // pipeline efficient — the heavy model is not needed for copy-out extraction).
 type ModelsConfig struct {
 	FigureModel string   // model id for figure extraction (empty → fall back to the tool/local model)
+	SpineModel  string   // model id for the BELO conduct/spine pass (empty → fall back to the bulk model)
 	Available   []string // model ids offered in the GUI picker (user-extendable)
 }
 
@@ -466,7 +467,8 @@ func normalizeEnum(v, fallback string, allowed ...string) string {
 func Load() *Config {
 	c := &Config{
 		Models: ModelsConfig{
-			FigureModel: env("FIGURE_MODEL", ""), // empty → fall back to the tool/local model
+			FigureModel: env("FIGURE_MODEL", ""),     // empty → fall back to the tool/local model
+			SpineModel:  env("BELO_SPINE_MODEL", ""), // empty → fall back to the bulk model
 			Available:   envList("AVAILABLE_MODELS", "qwen2.5:1.5b,qwen2.5:3b,qwen2.5:7b,qwen2.5:14b"),
 		},
 		Drafting: DraftingConfig{

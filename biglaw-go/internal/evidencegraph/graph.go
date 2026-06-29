@@ -15,6 +15,7 @@
 package evidencegraph
 
 import (
+	"regexp"
 	"strings"
 	"sync"
 
@@ -116,10 +117,7 @@ func (g *Graph) Add(f Fact, sourceText string) bool {
 // stays clean. Classes come from the extractor; an unrecognized class falls back to literal
 // classification. Grounded (quote must be verbatim in sourceText) and deduped.
 func (g *Graph) AddTriple(s, sClass, rel, o, oClass, value, quote, source, sourceText string) bool {
-	if strings.TrimSpace(s) == "" || strings.TrimSpace(quote) == "" {
-		return false
-	}
-	if !grounded(quote, sourceText) {
+	if strings.TrimSpace(s) == "" {
 		return false
 	}
 	sc := classOf(sClass, s)
@@ -127,6 +125,15 @@ func (g *Graph) AddTriple(s, sClass, rel, o, oClass, value, quote, source, sourc
 	ss, scl, pp, oo, ocl, ok := ontology.Normalize(s, sc, rel, o, oc)
 	if !ok {
 		return false // not a recognized controlled domain relation
+	}
+	// Grounding with span-snapping: prefer the model's verbatim quote; if it paraphrased, snap
+	// to the nearest real span. The stored quote is always verbatim (invariant preserved); if
+	// nothing clears the coverage threshold, drop the triple rather than mis-attach.
+	gq := strings.TrimSpace(quote)
+	if gq == "" || !grounded(gq, sourceText) {
+		if gq = snapToSpan(quote, sourceText); gq == "" {
+			return false
+		}
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -137,9 +144,9 @@ func (g *Graph) AddTriple(s, sClass, rel, o, oClass, value, quote, source, sourc
 	g.seen[k] = true
 	g.claims = append(g.claims, ontology.Claim{
 		S: ss, SClass: scl, P: pp, O: oo, OClass: ocl, Value: value,
-		Quote: quote, Source: source, Status: ontology.Grounded,
+		Quote: gq, Source: source, Status: ontology.Grounded,
 	})
-	g.facts = append(g.facts, Fact{Subject: ss, Relation: pp, Object: oo, Value: value, Quote: quote, Source: source})
+	g.facts = append(g.facts, Fact{Subject: ss, Relation: pp, Object: oo, Value: value, Quote: gq, Source: source})
 	return true
 }
 
@@ -168,6 +175,12 @@ func (g *Graph) Conducts() []string {
 	for _, c := range g.claims {
 		switch c.P {
 		case "committedBy", "violates", "harmed", "occurredDuring":
+			// The subject of a conduct-domain predicate must BE a Conduct — drop noise where a
+			// Party or Authority slipped in as the subject (e.g. an un-swapped "Section 7.3
+			// violates …" or "WCA committedBy …"). Unknown is allowed (untyped, not rejected).
+			if !c.SClass.IsA(ontology.Conduct) {
+				continue
+			}
 			s := strings.TrimSpace(c.S)
 			if s == "" {
 				continue
@@ -276,6 +289,62 @@ func grounded(quote, sourceText string) bool {
 }
 
 func norm(s string) string { return strings.ToLower(strings.Join(strings.Fields(s), " ")) }
+
+// Span-snapping: a weak model identifies WHAT a triple is but paraphrases the verbatim quote,
+// so the grounding gate drops ~80% of real triples. snapToSpan recovers grounding by finding
+// the actual span in sourceText whose content tokens best COVER the paraphrase, returning that
+// real (verbatim) span. If no span clears the coverage threshold it returns "" — a paraphrase
+// matching nothing is dropped, never mis-attached. This keeps the verbatim grounding INVARIANT
+// (the stored quote is always a real span) while tolerating the model's loose transcription.
+const snapMinCoverage = 0.6 // fraction of the quote's content tokens that must appear in the span
+const snapMinTokens = 3     // need enough signal to snap safely (avoid matching on a word or two)
+
+var sentenceSplit = regexp.MustCompile(`[.;\n\r|]+`)
+
+func snapToSpan(quote, sourceText string) string {
+	qt := contentTokens(quote)
+	if len(qt) < snapMinTokens {
+		return ""
+	}
+	best, bestCov := "", snapMinCoverage
+	for _, raw := range sentenceSplit.Split(sourceText, -1) {
+		span := strings.TrimSpace(raw)
+		if len(span) < 12 {
+			continue
+		}
+		st := contentTokens(span)
+		if len(st) == 0 {
+			continue
+		}
+		covered := 0
+		for t := range qt {
+			if st[t] {
+				covered++
+			}
+		}
+		if cov := float64(covered) / float64(len(qt)); cov >= bestCov {
+			best, bestCov = span, cov
+		}
+	}
+	return best
+}
+
+var snapStop = map[string]bool{
+	"the": true, "and": true, "for": true, "that": true, "with": true, "this": true, "was": true,
+	"are": true, "its": true, "had": true, "has": true, "not": true, "did": true, "any": true,
+	"all": true, "from": true, "into": true, "such": true, "which": true, "were": true, "their": true,
+}
+
+func contentTokens(s string) map[string]bool {
+	out := map[string]bool{}
+	for _, t := range strings.Fields(strings.ToLower(s)) {
+		t = strings.Trim(t, ".,;:()[]{}\"'`")
+		if len(t) >= 3 && !snapStop[t] {
+			out[t] = true
+		}
+	}
+	return out
+}
 
 func dedupKey(f Fact) string {
 	return norm(f.Subject + "|" + f.Relation + "|" + f.Object + "|" + f.Value)

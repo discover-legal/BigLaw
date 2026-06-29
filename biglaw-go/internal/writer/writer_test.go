@@ -105,10 +105,16 @@ func TestWriterPullsSpecificsAtSynthesis(t *testing.T) {
 	// Specifics func is invoked and its figure reaches the drafter — proving the
 	// on-demand-at-synthesis path fires without findings pre-stuffing.
 	var calls int
-	var sawFigure bool
+	var sawHandle, sawRawDigit bool
 	prov := &capturingProv{onUser: func(s string) {
+		// The figure reaches the drafter as a MASKED HANDLE: its context is shown with the
+		// digit replaced by a neutral name (Zephyr = figureHandles[0]), so the model never
+		// reads "$7,800,000" but knows the name refers to the Oceanic excess-profits figure.
+		if strings.Contains(s, "Oceanic Fund I LP") && strings.Contains(s, "Zephyr") {
+			sawHandle = true
+		}
 		if strings.Contains(s, "$7,800,000") {
-			sawFigure = true
+			sawRawDigit = true
 		}
 	}}
 	opt := Options{MaxFindingsPerSec: 2, Specifics: func(topic string, topK int) []SpecificHit {
@@ -122,8 +128,11 @@ func TestWriterPullsSpecificsAtSynthesis(t *testing.T) {
 	if calls == 0 {
 		t.Error("Specifics was never called at synthesis")
 	}
-	if !sawFigure {
-		t.Error("the seeded figure ($7,800,000) was not injected into a drafter prompt")
+	if !sawHandle {
+		t.Error("the seeded figure was not presented to a drafter as a masked handle")
+	}
+	if sawRawDigit {
+		t.Error("the raw digit ($7,800,000) leaked into the drafter prompt — masking failed")
 	}
 }
 
