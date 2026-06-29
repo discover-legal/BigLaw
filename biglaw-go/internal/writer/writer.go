@@ -6,6 +6,7 @@ package writer
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math"
 	"regexp"
 	"sort"
@@ -807,6 +808,16 @@ func (w *Writer) draftSection(taskDesc, workflowType string, s section, ix *Find
 		}
 	}
 	handled := assignHandles(pool)
+	// Diagnostic: which figures actually reached THIS section's handle list. Lets us tell a
+	// routing-into-handles gap (a key figure never enters the list) from a drafter-skip (it's
+	// listed but the prose ignores it).
+	if len(handled) > 0 {
+		vals := make([]string, 0, len(handled))
+		for _, h := range handled {
+			vals = append(vals, h.Value)
+		}
+		slog.Info("section handled figures", "section", s.Title, "n", len(handled), "values", strings.Join(vals, " | "))
+	}
 	figuresBlock := ""
 	if len(handled) > 0 {
 		var fb strings.Builder
