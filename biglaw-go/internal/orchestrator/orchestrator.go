@@ -1843,10 +1843,34 @@ func (o *Orchestrator) buildEvidenceGraph(task *types.Task, prov providers.Provi
 	}
 	g := evidencegraph.New()
 	kept, rej := 0, 0
-	for _, chunk := range chunkByTokens(passages, 1500) {
+	chunks := chunkByTokens(passages, 1500)
+	// Phase 1 — entity/relation/allegation extraction on the bulk model (7B) over all chunks.
+	for _, chunk := range chunks {
 		k, r := evidencegraph.ExtractInto(g, prov, model, o.cfg.LLMTemperature, chunk, "")
 		kept += k
 		rej += r
+	}
+	// Phase 2 — the typed conduct/spine pass, optionally on a STRONGER model (BELO_SPINE_MODEL,
+	// e.g. qwen2.5:14b). Conducts are document-level abstractions the 7B mislabels; a capable
+	// model populates the Conduct nodes cleanly. Run as a separate phase so the GPU swaps models
+	// once (not per chunk). Falls back to the bulk model/provider when SpineModel is unset.
+	spineModel, spineProv := model, prov
+	if sm := strings.TrimSpace(o.cfg.Models.SpineModel); sm != "" {
+		// sm is a routing model ID (e.g. "local:qwen2.5:14b"); Get() routes by its prefix, but
+		// the PROVIDER call needs the bare model name (the prefix is stripped) — otherwise the
+		// endpoint gets "local:qwen2.5:14b" and fails. Resolve to bare for the call; only switch
+		// providers if Get succeeds (else keep the bulk provider).
+		if p, err := o.provReg.Get(sm); err == nil {
+			spineModel, spineProv = routing.ResolveModelID(sm), p
+		} else {
+			slog.Warn("BELO spine model provider unavailable; using bulk model", "spine_model", sm, "err", err)
+		}
+	}
+	ckept, crej := 0, 0
+	for _, chunk := range chunks {
+		k, r := evidencegraph.ExtractTriplesInto(g, spineProv, spineModel, o.cfg.LLMTemperature, chunk, "")
+		ckept += k
+		crej += r
 	}
 	if g.Len() == 0 {
 		return
@@ -1875,7 +1899,9 @@ func (o *Orchestrator) buildEvidenceGraph(task *types.Task, prov providers.Provi
 	// scored 20: fragmented, lost whole rubric categories). Instead ensureAllegations feeds
 	// them as a SEED into the holistic, category-level synthesis (which scored 26), getting
 	// graph recall at the right altitude. So nothing to set here beyond the graph itself.
-	slog.Info("evidence graph built", "task", task.ID, "facts", g.Len(), "kept", kept, "grounding_rejected", rej, "allegation_candidates", len(g.Allegations()))
+	slog.Info("evidence graph built", "task", task.ID, "facts", g.Len(), "kept", kept, "grounding_rejected", rej,
+		"allegation_candidates", len(g.Allegations()), "conducts", len(g.Conducts()),
+		"spine_model", spineModel, "conduct_triples_kept", ckept, "conduct_triples_rejected", crej)
 }
 
 // clusterAllegations merges near-duplicate candidate allegation headings into nodes by
@@ -2142,8 +2168,12 @@ func (o *Orchestrator) ensureAllegations(task *types.Task, prov providers.Provid
 	// to the enumeration if disabled or the graph is too sparse.
 	if o.cfg.BELOSpine {
 		if g := o.evidenceGraph(task.ID); g != nil {
-			if conducts := g.Conducts(); len(conducts) >= 2 {
-				if cats := o.consolidateConducts(task, prov, model, conducts); len(cats) >= 2 {
+			conducts := g.Conducts()
+			slog.Info("BELO spine decision", "task", task.ID, "flag", o.cfg.BELOSpine, "conducts", len(conducts))
+			if len(conducts) >= 2 {
+				cats := o.consolidateConducts(task, prov, model, conducts)
+				slog.Info("BELO spine consolidate", "task", task.ID, "conducts", len(conducts), "categories", len(cats))
+				if len(cats) >= 2 {
 					o.update(task, func(t *types.Task) { t.Allegations = cats })
 					slog.Info("BELO spine from conduct nodes", "task", task.ID, "conducts", len(conducts), "categories", len(cats))
 					return cats

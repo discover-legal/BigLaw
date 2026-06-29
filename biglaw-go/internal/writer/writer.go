@@ -789,16 +789,31 @@ func (w *Writer) draftSection(taskDesc, workflowType string, s section, ix *Find
 			}
 		}
 	}
-	figuresBlock := ""
-	if len(figHits) > 0 {
-		var fb strings.Builder
-		fb.WriteString("\n\nEXACT FIGURES available for this section (state any you use VERBATIM, with the source in parentheses; call extract_specifics for more):\n")
-		for _, h := range figHits {
-			if h.Context != "" {
-				fmt.Fprintf(&fb, "- %s  [%s] (%s)\n", oneLine(h.Text), h.Context, h.Source)
-			} else {
-				fmt.Fprintf(&fb, "- %s (%s)\n", oneLine(h.Text), h.Source)
+	// What3Words for figures: unify the planned section figures with the section's own
+	// findings' salient figures, assign each a neutral handle, and show the drafter the figure
+	// IN CONTEXT with its digit MASKED by the handle — so it learns what each name means without
+	// ever reading the number (can't garble it, no attention skew). The exact value is
+	// substituted by handle after drafting.
+	pool := figHits
+	for _, id := range s.FindingIDs {
+		if f, ok := ix.Get(id); ok {
+			t := f.Evidence
+			if salientFigure(t) == "" {
+				t = f.Content
 			}
+			if salientFigure(t) != "" {
+				pool = append(pool, SpecificHit{Text: t, Source: f.Source})
+			}
+		}
+	}
+	handled := assignHandles(pool)
+	figuresBlock := ""
+	if len(handled) > 0 {
+		var fb strings.Builder
+		fb.WriteString("\n\nFIGURES for this section — each has a NAME. To state a figure, write its NAME (capitalised, exactly as shown) where the figure belongs; the precise value is substituted automatically. NEVER write the number/percentage/date/citation yourself:\n")
+		for _, h := range handled {
+			masked := strings.ReplaceAll(oneLine(h.Context), h.Value, h.Handle)
+			fmt.Fprintf(&fb, "  %s — \"%s\" (%s)\n", h.Handle, masked, h.Source)
 		}
 		figuresBlock = fb.String()
 	}
@@ -814,7 +829,7 @@ Write the section "%s" of the final deliverable. Brief: %s
 
 Call search_findings to retrieve the findings for this section, then write it grounded ONLY in what the findings and figures say — never invent facts.
 Be COMPREHENSIVE for this category: cover the specific allegations, the parties implicated, the harm, and the defense points.
-CRITICAL — for ANY specific figure or precise reference (a dollar amount, a percentage or rate, a count, a date, an account number, or a statutory/section/clause citation), DO NOT write the number or citation yourself. Write a placeholder of the form {{FIG: brief description of which figure you mean}} instead — e.g. "a loss of {{FIG: total alleged loss amount}}", "a rate of {{FIG: the relevant rate or percentage}}", "in violation of {{FIG: the cited statutory provision}}". The exact grounded value is injected automatically, so you never recall a digit — this is how we keep every figure correct. Use a placeholder for EVERY specific you reference. NEVER compute, add, sum, total, or otherwise derive a number yourself — state only figures that appear verbatim in the data; if a total is not given, do not invent one.
+CRITICAL — for ANY specific figure or precise reference (a dollar amount, a percentage or rate, a count, a date, an account number, or a statutory/section/clause citation), DO NOT write the number or citation yourself. Instead write the NAME of the matching figure from the FIGURES list above (e.g. "the scheme generated Zephyr in excess profits across Quasar trades") — write the name exactly, capitalised. The exact grounded value is substituted for the name automatically, so you never recall a digit — this is how we keep every figure correct. Use a name for EVERY specific you reference, and use ONLY names from the list (if you need a figure that isn't listed, call extract_specifics). NEVER compute, add, sum, total, or otherwise derive a number yourself.
 If a finding is marked UNVERIFIED, either omit it or caveat it explicitly.
 Write FLOWING, professional client-ready prose — connected paragraphs, not an outline. Do NOT emit internal labels or scaffolding such as "Issue:", "Brief Answer:", "Stronger View", "Counter-Argument", "Open Questions", "Recommendations:", "Analysis:". Do NOT write any commentary about your own process or about the findings/inputs — never write things like "Since there are no findings…", "I will write…", "Based on the provided grounded facts…", "As an AI". No finding numbers or agent names. Output only the section's prose (no heading).%s%s%s`,
 		oneLine(taskDesc), workflowType, s.Title, s.Brief, figuresBlock, factsBlock, extra.priorCompacted)
@@ -896,25 +911,12 @@ Write FLOWING, professional client-ready prose — connected paragraphs, not an 
 	// counts). The 7B inconsistently transcribes numbers into prose; the figures are
 	// already in hand verbatim, so guarantee they land by construction. This is the
 	// figure analogue of locking evidence before analysis in the extraction stage.
-	figs := figHits
-	for _, id := range s.FindingIDs {
-		f, ok := ix.Get(id)
-		if !ok {
-			continue
-		}
-		text := f.Evidence
-		if salientFigure(text) == "" {
-			text = f.Content
-		}
-		if salientFigure(text) != "" {
-			figs = append(figs, SpecificHit{Text: text, Source: f.Source})
-		}
-	}
-	// Neurosymbolic: resolve the drafter's {{FIG: …}} placeholders by injecting the
-	// matching grounded figure verbatim — the model never types (and so can't garble,
-	// e.g. 68.6% for 81.6%) a number. Unmatched placeholders are dropped, never guessed.
-	result = resolveFigurePlaceholders(result, figs)
-	return sanitizeDraft(result) // figures land in prose via {{FIG}}; no appended dump
+	// Substitute each figure handle with its exact grounded value — deterministic (exact key,
+	// no fuzzy desc-matching). The model never typed a digit, so it can't garble one; a handle
+	// it mangled or skipped simply doesn't substitute, so a figure can be omitted but never
+	// stated wrong.
+	result = resolveFigureHandles(result, handled)
+	return sanitizeDraft(result)
 }
 
 var (
@@ -945,6 +947,56 @@ func sanitizeDraft(s string) string {
 		keep = append(keep, stripped)
 	}
 	return strings.TrimSpace(reBlankRun.ReplaceAllString(strings.Join(keep, "\n"), "\n\n"))
+}
+
+// figureHandles is the pool of neutral, inert codenames — "What3Words for figures". Each
+// section figure is assigned one; the drafter drops the NAME into prose where the figure goes
+// and the exact grounded value is substituted by exact key. Names are LLM-native (unlike the
+// {{FIG:…}} meta-placeholder the model resisted, producing vague figureless prose) and
+// semantically inert (a descriptive placeholder skews attention; an arbitrary name does not).
+// Chosen distinctive and absent from legal prose so a word-boundary substitution can't collide.
+var figureHandles = []string{
+	"Zephyr", "Quasar", "Nimbus", "Cobalt", "Halcyon", "Obsidian", "Peregrine", "Calliope",
+	"Verdigris", "Marlowe", "Thessaly", "Caspian", "Larkspur", "Onyx", "Sable", "Indigo",
+	"Cinnabar", "Perdita", "Aurelian", "Bramble", "Citrine", "Dovetail", "Ravenna", "Tindal",
+}
+
+type handledFig struct {
+	Handle, Value, Context, Source string
+}
+
+// assignHandles maps a neutral handle to each DISTINCT salient figure (deduped by value,
+// capped to the pool size). The mapping is shown to the drafter (digit masked) and substituted
+// by the resolver.
+func assignHandles(hits []SpecificHit) []handledFig {
+	var out []handledFig
+	seen := map[string]bool{}
+	for _, h := range hits {
+		sal := salientFigure(h.Text)
+		if sal == "" || seen[strings.ToLower(sal)] {
+			continue
+		}
+		seen[strings.ToLower(sal)] = true
+		out = append(out, handledFig{Handle: figureHandles[len(out)], Value: sal, Context: h.Text, Source: h.Source})
+		if len(out) >= len(figureHandles) {
+			break
+		}
+	}
+	return out
+}
+
+// resolveFigureHandles substitutes each handle (case-insensitive, word-boundary) with its exact
+// grounded value, then strips any stray {{FIG:…}} the drafter emitted out of habit and tidies
+// the artefacts a substitution can leave (empty parens, doubled spaces, space-before-punct).
+func resolveFigureHandles(text string, handled []handledFig) string {
+	for _, h := range handled {
+		re := regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(h.Handle) + `\b`)
+		text = re.ReplaceAllString(text, h.Value)
+	}
+	text = rePlaceholder.ReplaceAllString(text, "")
+	text = regexp.MustCompile(`\(\s*\)`).ReplaceAllString(text, "")
+	text = regexp.MustCompile(`\s{2,}`).ReplaceAllString(text, " ")
+	return regexp.MustCompile(`\s+([.,;)])`).ReplaceAllString(text, "$1")
 }
 
 var rePlaceholder = regexp.MustCompile(`\{\{\s*FIG:\s*([^}]+?)\s*\}\}`)

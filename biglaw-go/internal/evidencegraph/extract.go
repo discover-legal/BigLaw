@@ -94,9 +94,17 @@ func ExtractInto(g *Graph, chat Chatter, model string, temperature *float64, chu
 		}
 	}
 
-	// Pass 4 — typed BELO triples (controlled predicates + classes). These populate the Claim
-	// graph's Conduct nodes, from which the spine is DISCOVERED (g.Conducts()). AddTriple keeps
-	// only ontology-recognized, domain/range-valid triples (re-orienting reversed ones).
+	return kept, rej
+}
+
+// ExtractTriplesInto runs ONLY the typed BELO-triple pass (controlled predicates + node
+// classes) over one chunk, populating the Claim graph's Conduct nodes — from which the spine is
+// DISCOVERED (g.Conducts()). Split from ExtractInto so it can run on a STRONGER model than the
+// 7B bulk: conducts are document-level abstractions the 7B mislabels (firm-as-Conduct, empty
+// quotes), so the spine pass is routed to a capable model. AddTriple keeps only
+// ontology-recognized, domain/range-valid triples (re-orienting reversed ones).
+func ExtractTriplesInto(g *Graph, chat Chatter, model string, temperature *float64, chunk, source string) (int, int) {
+	kept, rej := 0, 0
 	if text, ok := chatJSON(chat, model, temperature, tripleSystem, chunk); ok {
 		var rows []tripleRow
 		if parseJSONArray(text, &rows) {
