@@ -10,6 +10,7 @@ import (
 	"math"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/discover-legal/biglaw-go/internal/embeddings"
@@ -979,8 +980,18 @@ type handledFig struct {
 // assignHandles maps a neutral handle to each DISTINCT salient figure (deduped by value,
 // capped to the pool size). The mapping is shown to the drafter (digit masked) and substituted
 // by the resolver.
+// maxSectionFigures caps the handle list. Exhibit tables flood a section with small numbers
+// (sample sizes, per-account rates); a noise-heavy list buries the headline figures so the
+// drafter uses none. Ranking by salience + a cap keeps the harm figures at the top.
+const maxSectionFigures = 14
+
 func assignHandles(hits []SpecificHit) []handledFig {
-	var out []handledFig
+	type cand struct {
+		sal   string
+		hit   SpecificHit
+		score int
+	}
+	var cands []cand
 	seen := map[string]bool{}
 	for _, h := range hits {
 		sal := salientFigure(h.Text)
@@ -988,12 +999,54 @@ func assignHandles(hits []SpecificHit) []handledFig {
 			continue
 		}
 		seen[strings.ToLower(sal)] = true
-		out = append(out, handledFig{Handle: figureHandles[len(out)], Value: sal, Context: h.Text, Source: h.Source})
-		if len(out) >= len(figureHandles) {
+		cands = append(cands, cand{sal, h, figureSalience(sal)})
+	}
+	// Rank by salience so headline figures ($8.2M, 4,217, 81.6%) lead the list and the noise
+	// tail (small bare numbers from exhibit rows) falls off the cap, not the salient ones.
+	sort.SliceStable(cands, func(i, j int) bool { return cands[i].score > cands[j].score })
+	var out []handledFig
+	for _, c := range cands {
+		if len(out) >= maxSectionFigures || len(out) >= len(figureHandles) {
 			break
 		}
+		out = append(out, handledFig{Handle: figureHandles[len(out)], Value: c.sal, Context: c.hit.Text, Source: c.hit.Source})
 	}
 	return out
+}
+
+// figureSalience scores how "headline" a figure is. Big money and large counts rank highest
+// (the quantified harm a legal memo turns on); rates next; the small bare numbers exhibit tables
+// are full of rank lowest, so they fall off the cap before a salient figure does.
+func figureSalience(v string) int {
+	lv := strings.ToLower(v)
+	clean := strings.Map(func(r rune) rune {
+		if (r >= '0' && r <= '9') || r == '.' {
+			return r
+		}
+		return -1
+	}, strings.ReplaceAll(v, ",", ""))
+	x, _ := strconv.ParseFloat(clean, 64)
+	dollar := strings.Contains(v, "$")
+	pct := strings.Contains(v, "%")
+	bigWord := strings.Contains(lv, "million") || strings.Contains(lv, "billion")
+	switch {
+	case dollar && (bigWord || x >= 100000):
+		return 100 // big money — the headline loss/profit/penalty
+	case strings.Contains(v, ",") && !dollar && x >= 1000:
+		return 95 // large count, e.g. 4,217 trades
+	case dollar && x >= 10000:
+		return 90
+	case dollar && x >= 1000:
+		return 70
+	case pct:
+		return 50 // a rate/percentage
+	case x >= 1000:
+		return 40
+	case dollar:
+		return 30 // small dollar amount
+	default:
+		return 10 // bare small number (likely exhibit noise)
+	}
 }
 
 // resolveFigureHandles substitutes each handle (case-insensitive, word-boundary) with its exact

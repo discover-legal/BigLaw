@@ -366,3 +366,36 @@ func TestBatchByTokens(t *testing.T) {
 		t.Errorf("expected blocks split across batches, got %d batch(es)", len(batches))
 	}
 }
+
+func TestFigureSalienceRanking(t *testing.T) {
+	// Headline harm figures must outrank exhibit noise.
+	gt := [][2]string{{"$8,238,000", "$185"}, {"4,217", "3"}, {"$438,000", "12%"}, {"81.6%", "3"}, {"$92,290.00", "$40"}}
+	for _, c := range gt {
+		if figureSalience(c[0]) <= figureSalience(c[1]) {
+			t.Errorf("salience(%q)=%d should exceed salience(%q)=%d", c[0], figureSalience(c[0]), c[1], figureSalience(c[1]))
+		}
+	}
+}
+
+func TestAssignHandlesSurfacesSalient(t *testing.T) {
+	// cherry-picking's real list: 6 salient figures buried among 16 noise values. After ranking
+	// + the cap, the salient harm figures must survive; the noise tail falls off.
+	raw := []string{"3", "62%", "2", "1.5%", "81.6%", "$2.3", "$185", "$92", "$40", "20%", "6%",
+		"15%", "5%", "$87,655.90", "$8,238,000", "$3.1", "$438,000", "12%", "1", "4,217"}
+	var hits []SpecificHit
+	for _, v := range raw {
+		hits = append(hits, SpecificHit{Text: "the OQR found " + v + " in the analysis", Source: "exhibit.xlsx"})
+	}
+	got := map[string]bool{}
+	for _, h := range assignHandles(hits) {
+		got[h.Value] = true
+	}
+	for _, want := range []string{"$8,238,000", "$438,000", "4,217"} {
+		if !got[want] {
+			t.Errorf("salient figure %q dropped from the handle list", want)
+		}
+	}
+	if got["3"] || got["1"] || got["2"] {
+		t.Error("bare-noise figures survived the cap ahead of salient ones")
+	}
+}
