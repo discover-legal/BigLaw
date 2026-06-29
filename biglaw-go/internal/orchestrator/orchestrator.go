@@ -1836,6 +1836,47 @@ func (o *Orchestrator) allegationPassages(task *types.Task, tokenBudget int) str
 // every fact is grounded (quote must be verbatim in its chunk) or dropped. Bounded to the
 // retrieved allegation passages for now; true ingestion/per-chunk extraction is the
 // follow-on once the lift is confirmed.
+// reAllegationTerm scores how charging-document-like a text is — accusation/charge language.
+var reAllegationTerm = regexp.MustCompile(`(?i)\balleg|\bviolat|\bthe division\b|\bsection\s+\d|\brule\s+\d|\bcount\s|\bfraud|\bbreach|\bscheme|\bfailed to`)
+
+// chargingDocChunks pages through the matter's CHARGING document(s) — those densest in
+// allegation language — up to a token budget, chunked. The conducts live in the charging doc;
+// exhibits/policy docs are left to the cheaper figure sweep. This keeps the expensive spine
+// pass bounded (paging the charging doc, not dumping every document). Returns nil if no doc
+// yields usable text, so the caller can fall back.
+func (o *Orchestrator) chargingDocChunks(task *types.Task, tokenBudget int) []string {
+	type scored struct {
+		text  string
+		score int
+	}
+	var docs []scored
+	for _, docID := range task.DocumentIDs {
+		txt, err := o.knowledge.GetFullText(docID)
+		if err != nil || strings.TrimSpace(txt) == "" {
+			continue
+		}
+		docs = append(docs, scored{txt, len(reAllegationTerm.FindAllStringIndex(txt, -1))})
+	}
+	if len(docs) == 0 {
+		return nil
+	}
+	sort.SliceStable(docs, func(i, j int) bool { return docs[i].score > docs[j].score })
+	var out []string
+	used := 0
+	for _, d := range docs {
+		if d.score == 0 || used >= tokenBudget {
+			break // only allegation-bearing docs, only up to the budget
+		}
+		swept := d.text
+		if maxChars := (tokenBudget - used) * 4; len(swept) > maxChars { // ~4 chars/token
+			swept = swept[:maxChars]
+		}
+		out = append(out, chunkByTokens(swept, 1500)...)
+		used += len(swept) / 4
+	}
+	return out
+}
+
 func (o *Orchestrator) buildEvidenceGraph(task *types.Task, prov providers.Provider, model string) {
 	passages := o.allegationPassages(task, 6000)
 	if strings.TrimSpace(passages) == "" {
@@ -1875,26 +1916,15 @@ func (o *Orchestrator) buildEvidenceGraph(task *types.Task, prov providers.Provi
 	// chunkByTokens). Falls back to the Phase-1 `chunks` if no document yields usable full text.
 	// FIX 2 — run the conduct pass at temperature 0 (deterministic copy-out): the prior 0.2 caused
 	// run-to-run wobble on what is fundamentally a transcribe-and-classify task.
-	const spinePerDocTokenCap = 40000 // ~4 chars/token; bound a pathological raw log, generous for real docs
+	// Allegations live in the CHARGING document, not the exhibits. Sweeping all docs' full text
+	// on the (stronger, slower) spine model is both wasteful and slow enough to stall the run, so
+	// PAGE through the charging doc(s) — ranked by allegation-language density — up to a token
+	// budget, the same bounded-paging discipline used elsewhere. The 7B figure sweep already
+	// covers the exhibits. Falls back to the Phase-1 chunks if no document yields usable text.
+	const spineTokenBudget = 20000 // ~ the charging doc; bounds the expensive spine pass to a few calls
 	zero := 0.0
-	var spineChunks []string
-	for _, docID := range task.DocumentIDs {
-		txt, err := o.knowledge.GetFullText(docID)
-		if err != nil || strings.TrimSpace(txt) == "" {
-			continue
-		}
-		title := docID
-		if d := o.knowledge.GetByID(docID); d != nil && strings.TrimSpace(d.Title) != "" {
-			title = d.Title
-		}
-		swept := txt
-		if len(swept) > spinePerDocTokenCap*4 {
-			swept = swept[:spinePerDocTokenCap*4]
-			slog.Info("conduct sweep truncated oversized doc", "task", task.ID, "doc", title)
-		}
-		spineChunks = append(spineChunks, chunkByTokens(swept, 1500)...)
-	}
-	if len(spineChunks) == 0 { // no usable full text → degrade gracefully to the allegation passages
+	spineChunks := o.chargingDocChunks(task, spineTokenBudget)
+	if len(spineChunks) == 0 { // no usable doc text → degrade gracefully to the allegation passages
 		spineChunks = chunks
 	}
 	ckept, crej := 0, 0
