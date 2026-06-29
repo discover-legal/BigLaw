@@ -5,6 +5,34 @@
 
 ---
 
+## Discovering the spine, not guessing it — an epistemic ontology for legal extraction *(2026-06-29)*
+
+**As above, so BELO**
+
+A subtle failure mode in multi-agent extraction: the *section spine* — the set of allegations a memo is built around — was being **enumerated** by a model over retrieved text. Enumeration is stochastic, so it would grab a compliance manual's boilerplate as an "allegation" one run and drop a real charge the next, swinging an all-or-nothing benchmark by ±10 and drowning every other signal.
+
+The reframe: a spine isn't a list to generate — it's a **latent structure to recover** from the evidence. That became BELO, the BigLaw Epistemic Legal Ontology.
+
+→ **An ontology every agent reads and writes.** Typed legal classes and a controlled set of predicates (committed-by, violates, harmed…), each wrapped as a *claim* that carries who asserts it, the verbatim span that grounds it, its epistemic status (alleged → contested → verified), and how it bears on other claims. A weak model's loose phrasing is normalised onto it — and a triple stated backwards ("Section 206 violates the scheme") is re-oriented by the ontology's own domain and range.
+
+→ **The spine, discovered.** Sections are now the graph's typed *conduct* nodes — read off the structure, deterministically, from the charging document — not guessed. Six of six allegation categories, every run. The variance is gone.
+
+→ **What3Words for figures.** A weak drafter would write "an outsized share" instead of "$7,800,000" — it resisted the bracketed placeholder it was asked to use. So each figure gets a neutral codename the model drops into prose like any word (the digit hidden even from the prompt, so it can't be garbled); the exact value is substituted by key afterward. Figures land verbatim.
+
+——
+
+The throughline of the whole climb: lean into what a language model is good at — writing words, reading structure — and take away what it's bad at — recalling digits, generating exhaustive lists. Encode the rigour in the architecture, not the prompt.
+
+Still a climb, not a pass — in the open, on hardware you control.
+
+Full writeup and the run trajectory: `docs/local-accuracy-journey.md`. AGPL-3.0.
+
+#LegalAI #LegalTech #OpenSource #LocalLLM #KnowledgeGraph #Ontology #BigLaw
+
+**Carousel:** enumeration vs discovery (spine wobble → stable 6/6) → the BELO three layers (domain / epistemic / analytic) → domain/range re-orienting a reversed triple → What3Words handle → masked figure → exact substitution
+
+---
+
 ## Local accuracy — 0 → 30/60 on a Harvey-style benchmark *(2026-06-25)*
 
 **Getting a local model to do real legal extraction**

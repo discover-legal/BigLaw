@@ -118,6 +118,34 @@ Facts route **per-section** by entity/allegation overlap, so a "victim-of → di
 edge cannot render under cherry-picking. This recovered the Whitmore 12%/$22.2M attribution
 criteria that had been dead in every prior run.
 
+### 10. BELO — an epistemic ontology, and a spine *discovered* not enumerated
+Run-to-run variance turned out to have a single dominant cause: the **section spine** was an LLM
+*enumeration* over retrieved passages, which non-deterministically grabbed policy boilerplate
+(Form ADV "review of accounts" triggers) as "allegations" and dropped real ones (a whole
+category would vanish), swinging the score ±10 and confounding every comparison. Enumeration is
+the wrong primitive — the spine is a *latent structure to recover*, not a list to generate.
+
+The fix is the **BigLaw Epistemic Legal Ontology (BELO)** (`internal/ontology/`): a three-layer
+RDF/OWL ontology — typed domain classes + controlled predicates with domain/range; a reified
+`Claim` carrying provenance, grounding, epistemic status, and Claim→Claim stance edges; analytic
+concepts and derived defense issues. Extraction maps onto it: `Normalize()` canonicalises the
+model's free-text relations and **re-orients reversed triples via domain/range** ("Section 206
+violates <conduct>" → "<conduct> violates Section 206"). The spine is then the graph's typed
+`Conduct` nodes — **discovered, not enumerated** — consolidated into categories. Run at
+temperature 0 over the charging document (selected by allegation-language density, paged to a
+token budget — allegations live in the charging doc, not the exhibits), it yields the **complete
+six-category spine every run**. The ±10 wobble is gone.
+
+### 11. What3Words figure handles
+Even with figures extracted and routed to the right section, a weak drafter *abstracted them
+away* — it wrote "an outsized share" instead of "$7,800,000", refusing the `{{FIG: description}}`
+meta-placeholder (a construct it resists) and so emitting figureless prose. The fix borrows
+What3Words: give each figure a **neutral codename** (Zephyr, Quasar…) the model drops into prose
+like any word — LLM-native, and *inert* so it doesn't skew attention the way a descriptive
+placeholder would. The figure is shown to the drafter **with its digit masked by the handle**, so
+it never reads (and cannot garble) the number; the exact grounded value is substituted by exact
+key afterward (no fuzzy matching). Figures now land verbatim across most sections.
+
 ## Two principles that fell out of it
 
 **Retrieval floor, then intelligence.** The 28/60 "peak" was reachable by brute context-stuffing
@@ -133,9 +161,13 @@ rubric hidden from the agents (judge-only) — gains have to be real, not taught
 
 ## Honest status
 
-30/60 is criteria recovered across the latest architecture, not a passed task; the best single
-run is 26–28 and run-to-run variance is ±4–5. The grounded evidence graph is built at task-start
-over the retrieved passages today; moving it to true ingestion-time, per-chunk extraction (with
-per-source attribution) is the next step, and is expected to both add coverage and *reduce*
-variance — facts that land deterministically from a grounded ledger no longer depend on a
-stochastic drafting pass.
+This is criteria recovered across the architecture, not a passed task. A large share of the
+run-to-run variance was traced to the section spine (technique 10) and removed: the spine is now
+**discovered from the typed evidence graph, complete (six of six categories) and deterministic**,
+rather than a stochastic enumeration. Figures land verbatim across most sections via the handle
+mechanism (technique 11). The remaining known gap is narrow and located: a flagship section can
+still under-state its figures when its handle list is **noise-heavy** — the salient harm figures
+($8.2M, $438K, 4,217) buried among many small numbers from a statistical exhibit — so the drafter
+fails to surface them. The next step ranks handles by salience (and guarantees the top ones land),
+which is expected to close that gap without re-introducing variance. The benchmark is a climb, not
+a pass; gains are measured with the rubric hidden from the agents.
