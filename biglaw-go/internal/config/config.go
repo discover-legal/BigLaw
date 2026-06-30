@@ -395,9 +395,10 @@ type DatabaseConfig struct {
 // deterministic figure-extraction pass (a cheap 7B-class model is enough and keeps the
 // pipeline efficient — the heavy model is not needed for copy-out extraction).
 type ModelsConfig struct {
-	FigureModel string   // model id for figure extraction (empty → fall back to the tool/local model)
-	SpineModel  string   // model id for the BELO conduct/spine pass (empty → fall back to the bulk model)
-	Available   []string // model ids offered in the GUI picker (user-extendable)
+	FigureModel    string   // model id for figure extraction (empty → fall back to the tool/local model)
+	SpineModel     string   // model id for the BELO conduct/spine pass (empty → fall back to the bulk model)
+	SynthesisModel string   // model id for synthesis/drafting the deliverable (empty → routed default)
+	Available      []string // model ids offered in the GUI picker (user-extendable)
 }
 
 // DraftingConfig governs the synthesis writing style. When DyTopo is on, each section is
@@ -467,9 +468,10 @@ func normalizeEnum(v, fallback string, allowed ...string) string {
 func Load() *Config {
 	c := &Config{
 		Models: ModelsConfig{
-			FigureModel: env("FIGURE_MODEL", ""),     // empty → fall back to the tool/local model
-			SpineModel:  env("BELO_SPINE_MODEL", ""), // empty → fall back to the bulk model
-			Available:   envList("AVAILABLE_MODELS", "qwen2.5:1.5b,qwen2.5:3b,qwen2.5:7b,qwen2.5:14b"),
+			FigureModel:    env("FIGURE_MODEL", ""),     // empty → fall back to the tool/local model
+			SpineModel:     env("BELO_SPINE_MODEL", ""), // empty → fall back to the bulk model
+			SynthesisModel: env("SYNTHESIS_MODEL", ""),  // empty → routed default (spend 14B on the judged memo)
+			Available:      envList("AVAILABLE_MODELS", "qwen2.5:1.5b,qwen2.5:3b,qwen2.5:7b,qwen2.5:14b"),
 		},
 		Drafting: DraftingConfig{
 			DyTopo:           envBool("DYTOPO_DRAFTING", false),

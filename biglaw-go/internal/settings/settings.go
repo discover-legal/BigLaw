@@ -63,8 +63,10 @@ type ClientVoiceSettings struct {
 // Models is the user-facing model picker: which model performs figure extraction, plus the
 // list of model ids offered in the GUI (user-extendable via Available).
 type Models struct {
-	FigureModel string   `json:"figureModel"`
-	Available   []string `json:"available"`
+	FigureModel    string   `json:"figureModel"`
+	SpineModel     string   `json:"spineModel"`     // BELO conduct/spine pass (e.g. local:qwen2.5:14b)
+	SynthesisModel string   `json:"synthesisModel"` // synthesis/drafting the deliverable (the judged memo)
+	Available      []string `json:"available"`
 }
 
 // Drafting toggles collaborative DyTopo section writing and its huddle size/rounds.
@@ -128,8 +130,10 @@ type Patch struct {
 		MatterNotifications *bool `json:"matterNotifications"`
 	} `json:"clientVoice"`
 	Models *struct {
-		FigureModel *string  `json:"figureModel"`
-		Available   []string `json:"available"`
+		FigureModel    *string  `json:"figureModel"`
+		SpineModel     *string  `json:"spineModel"`
+		SynthesisModel *string  `json:"synthesisModel"`
+		Available      []string `json:"available"`
 	} `json:"models"`
 	Drafting *struct {
 		DyTopo           *bool    `json:"dytopo"`
@@ -224,7 +228,7 @@ func (s *SettingsStore) public() PublicSettings {
 			GateNotes:           c.ClientVoice.GateNotes,
 			MatterNotifications: c.ClientVoice.MatterNotifications,
 		},
-		Models:   Models{FigureModel: c.Models.FigureModel, Available: c.Models.Available},
+		Models:   Models{FigureModel: c.Models.FigureModel, SpineModel: c.Models.SpineModel, SynthesisModel: c.Models.SynthesisModel, Available: c.Models.Available},
 		Drafting: Drafting{DyTopo: c.Drafting.DyTopo, AgentsPerSection: c.Drafting.AgentsPerSection, Rounds: c.Drafting.Rounds},
 	}
 }
@@ -303,6 +307,12 @@ func (s *SettingsStore) apply(p Patch, validateURL bool) {
 	if p.Models != nil {
 		if v := p.Models.FigureModel; v != nil {
 			c.Models.FigureModel = strings.TrimSpace(*v)
+		}
+		if v := p.Models.SpineModel; v != nil {
+			c.Models.SpineModel = strings.TrimSpace(*v)
+		}
+		if v := p.Models.SynthesisModel; v != nil {
+			c.Models.SynthesisModel = strings.TrimSpace(*v)
 		}
 		if p.Models.Available != nil { // full replace: the GUI sends the edited list
 			cleaned := make([]string, 0, len(p.Models.Available))

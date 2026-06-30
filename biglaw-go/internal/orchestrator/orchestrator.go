@@ -1212,12 +1212,12 @@ Ground every statement in the findings above — do not introduce facts, figures
 		maxTokens = 16000
 	}
 
-	prov, err := o.provReg.Get(model)
+	prov, bare, err := o.synthesisModel(model)
 	if err != nil {
 		return "", err
 	}
 	chatParams := providers.ChatParams{
-		Model:       routing.ResolveModelID(model),
+		Model:       bare,
 		MaxTokens:   maxTokens,
 		System:      o.rootAgentDef.SystemPrompt,
 		Messages:    []providers.Message{{Role: "user", Content: prompt}},
@@ -1231,7 +1231,7 @@ Ground every statement in the findings above — do not introduce facts, figures
 	if err != nil {
 		return "", err
 	}
-	o.recordCost(resp, routing.ResolveModelID(model), cost.ContextSynthesis, task.ID)
+	o.recordCost(resp, bare, cost.ContextSynthesis, task.ID)
 
 	for _, b := range resp.Content {
 		if b.Type == providers.BlockText {
@@ -1283,14 +1283,47 @@ const synthesisWriterBudgetTokens = 5000
 // maps findings into the writer's view, builds a Writer over the synthesis model,
 // and lets it cluster → draft (tight agentic sub-agents, search_findings scoped per
 // section) → stitch. Used when findings overflow a single synthesis call.
+// localize prepends the local-inference prefix to a bare model id when the registry serves
+// local models, so an admin can pick "qwen2.5:14b" in the panel and it routes to the LOCAL
+// provider (not the cloud stack, which Get() would otherwise select). A value already prefixed
+// (local:/ollama:) is left as-is, so env knobs may pass either form.
+func (o *Orchestrator) localize(m string) string {
+	m = strings.TrimSpace(m)
+	if m == "" || routing.IsOllamaModel(m) || routing.IsLocalModel(m) {
+		return m
+	}
+	if o.cfg.Local.LocalInferenceURL != "" {
+		return "local:" + m
+	}
+	if o.cfg.Local.OllamaEnabled {
+		return "ollama:" + m
+	}
+	return m
+}
+
+// synthesisModel resolves the provider + bare model for synthesis/drafting, honouring the
+// SYNTHESIS_MODEL knob (route ONLY the judged-memo step to a stronger local model, e.g. 14B,
+// while the high-volume bulk stays on the fast 7B) and falling back to the routed default.
+func (o *Orchestrator) synthesisModel(routed string) (providers.Provider, string, error) {
+	use := routed
+	if sm := o.localize(o.cfg.Models.SynthesisModel); sm != "" {
+		if _, err := o.provReg.Get(sm); err == nil {
+			use = sm
+		} else {
+			slog.Warn("SYNTHESIS_MODEL provider unavailable; using routed default", "synthesis_model", sm, "err", err)
+		}
+	}
+	prov, err := o.provReg.Get(use)
+	return prov, routing.ResolveModelID(use), err
+}
+
 func (o *Orchestrator) writeDeliverable(task *types.Task, findings []types.Finding) (string, error) {
 	tier := types.TierRoot
 	model := routing.SelectModel(o.cfg, routing.SelectParams{Tier: &tier, TaskType: routing.TaskSynthesis})
-	prov, err := o.provReg.Get(model)
+	prov, bare, err := o.synthesisModel(model)
 	if err != nil {
 		return "", err
 	}
-	bare := routing.ResolveModelID(model)
 
 	wf := make([]writer.Finding, 0, len(findings))
 	for _, f := range findings {
@@ -1896,7 +1929,7 @@ func (o *Orchestrator) buildEvidenceGraph(task *types.Task, prov providers.Provi
 	// model populates the Conduct nodes cleanly. Run as a separate phase so the GPU swaps models
 	// once (not per chunk). Falls back to the bulk model/provider when SpineModel is unset.
 	spineModel, spineProv := model, prov
-	if sm := strings.TrimSpace(o.cfg.Models.SpineModel); sm != "" {
+	if sm := o.localize(o.cfg.Models.SpineModel); sm != "" {
 		// sm is a routing model ID (e.g. "local:qwen2.5:14b"); Get() routes by its prefix, but
 		// the PROVIDER call needs the bare model name (the prefix is stripped) — otherwise the
 		// endpoint gets "local:qwen2.5:14b" and fails. Resolve to bare for the call; only switch
