@@ -1276,14 +1276,21 @@ func attachKeyFigures(text string, hits []SpecificHit) string {
 // figureLabel renders a short human label for a figure row: the row text with the
 // figure value removed and trimmed to a phrase — so the Key-figures list reads
 // "Excess profits to Oceanic Fund: $7,800,000 (src)", not a pasted exhibit row.
+var reLeadEnum = regexp.MustCompile(`^\s*[\(\[]?\d+[.)\]]\s*`) // "24. " / "25) " / "(3) " paragraph numbers
+
 func figureLabel(row, sal string) string {
 	label := oneLine(row)
 	if i := strings.Index(label, sal); i >= 0 {
 		label = label[:i] + label[i+len(sal):]
 	}
-	label = strings.Trim(strings.Join(strings.Fields(label), " "), " -—:|·\t")
-	if len(label) > 80 {
-		label = strings.TrimSpace(label[:80])
+	label = reLeadEnum.ReplaceAllString(label, "") // drop a leading paragraph/list number
+	label = strings.Trim(strings.Join(strings.Fields(label), " "), " -—:|·,\t")
+	if len(label) > 64 { // cut on a word boundary, not mid-phrase
+		cut := label[:64]
+		if k := strings.LastIndex(cut, " "); k > 20 {
+			cut = cut[:k]
+		}
+		label = strings.TrimRight(cut, " -—:|·,")
 	}
 	if label == "" {
 		label = "figure"
