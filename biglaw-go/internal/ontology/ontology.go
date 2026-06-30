@@ -31,10 +31,18 @@ const (
 	Broker  Class = "Broker"
 	Client  Class = "Client"
 
-	Conduct   Class = "Conduct"
-	Scheme    Class = "Scheme"
-	Violation Class = "Violation"
-	Omission  Class = "Omission"
+	// Issue is the GENERAL spine node — a distinct proposition the deliverable must assess. The
+	// "E" in BELO is epistemic, not enforcement-specific: Conduct (an alleged wrongful scheme) is
+	// just the enforcement INSTANTIATION of an Issue. Other practice areas instantiate it as a
+	// Requirement (compliance/compare), a Clause (transactional), or a RedFlag (diligence).
+	Issue       Class = "Issue"
+	Conduct     Class = "Conduct" // enforcement: an alleged wrongful scheme/violation/omission
+	Scheme      Class = "Scheme"
+	Violation   Class = "Violation"
+	Omission    Class = "Omission"
+	Requirement Class = "Requirement" // compliance/compare: a client instruction or standard to meet
+	Clause      Class = "Clause"      // transactional: a contract clause or obligation
+	RedFlag     Class = "RedFlag"     // diligence: a flagged finding
 
 	Authority  Class = "Authority"
 	Statute    Class = "Statute"
@@ -64,6 +72,7 @@ const (
 // parent maps each class to its superclass (for subclass-aware domain/range checks).
 var parent = map[Class]Class{
 	Person: Party, Firm: Party, Fund: Party, Account: Party, Broker: Party, Client: Party,
+	Conduct: Issue, Requirement: Issue, Clause: Issue, RedFlag: Issue, // all are kinds of Issue
 	Scheme: Conduct, Violation: Conduct, Omission: Conduct,
 	Statute: Authority, Rule: Authority, Provision: Authority, Obligation: Authority, Standard: Authority,
 	Filing: Instrument, Exhibit: Instrument, Agreement: Instrument, Communication: Instrument,
@@ -72,7 +81,7 @@ var parent = map[Class]Class{
 
 // knownClass is the set of valid class identifiers (for parsing extractor output).
 var knownClass = func() map[Class]bool {
-	m := map[Class]bool{Party: true, Conduct: true, Authority: true, Instrument: true, Quantity: true, Event: true, Jurisdiction: true, Matter: true}
+	m := map[Class]bool{Party: true, Issue: true, Conduct: true, Authority: true, Instrument: true, Quantity: true, Event: true, Jurisdiction: true, Matter: true}
 	for sub := range parent {
 		m[sub] = true
 	}
@@ -139,6 +148,17 @@ var predicates = []Predicate{
 		Aliases: []string{"violates", "violation of", "in violation of", "breaches", "contravenes"}},
 	{Name: "harmed", Domain: []Class{Conduct}, Range: []Class{Party},
 		Aliases: []string{"harmed", "caused harm to", "injured", "damaged", "victimized"}},
+	// Compliance / comparison / transactional issue predicates (subject is the Issue node — a
+	// Requirement, Clause, etc.). These let the epistemic spine fire on non-enforcement matters:
+	// a client instruction (Requirement) becomes a spine node via `requires`/`satisfiedBy`.
+	{Name: "requires", Domain: []Class{Issue},
+		Aliases: []string{"requires", "mandates", "instructs that", "directs that", "calls for", "specifies that", "must provide", "shall provide", "stipulates"}},
+	{Name: "satisfiedBy", Domain: []Class{Issue}, Range: []Class{Instrument},
+		Aliases: []string{"satisfied by", "met by", "conforms via", "provided in", "addressed in", "implemented in", "reflected in"}},
+	{Name: "deviatesFrom", Domain: []Class{Issue},
+		Aliases: []string{"deviates from", "departs from", "conflicts with", "inconsistent with", "not met in", "omitted from", "absent from", "missing from"}},
+	{Name: "prohibits", Domain: []Class{Issue},
+		Aliases: []string{"prohibits", "forbids", "bars", "restricts", "precludes"}},
 	{Name: "quantifiedAs", Domain: []Class{Conduct, Party}, Range: []Class{Quantity},
 		Aliases: []string{"quantified as", "amounts to", "estimated at", "totaling", "valued at", "has figure"}},
 	{Name: "ownsStakeIn", Domain: []Class{Party}, Range: []Class{Party},
