@@ -2271,6 +2271,21 @@ func (o *Orchestrator) allegationContext(task *types.Task, prov providers.Provid
 // specialist while the spine missed Bellini and duplicated cherry-picking 4× — so the
 // allegation was found in the rounds but had no section to land in. The result is
 // theme-deduped to collapse near-duplicate headings.
+// isEnforcementMatter reports whether the matter carries conduct claims (alleged violations), so
+// the enforcement-framed cross-cutting sections and the securities defense-issue analytic layer
+// apply. A compliance/comparison matter has Requirement issues instead and gets neither.
+func (o *Orchestrator) isEnforcementMatter(g *evidencegraph.Graph) bool {
+	if g == nil {
+		return false
+	}
+	for _, c := range g.Claims() {
+		if c.P == "violates" || c.P == "committedBy" || c.P == "harmed" {
+			return true
+		}
+	}
+	return false
+}
+
 // crossCuttingSections are the party/timeline-oriented sections a legal enforcement memo carries
 // ALONGSIDE the matter-specific allegation categories. The rubric rewards them (per-person
 // exposure, the examination timeline, parties and ownership stakes); the clean conduct-only BELO
@@ -2298,11 +2313,13 @@ func (o *Orchestrator) ensureAllegations(task *types.Task, prov providers.Provid
 				cats := o.consolidateConducts(task, prov, model, conducts)
 				slog.Info("BELO spine consolidate", "task", task.ID, "conducts", len(conducts), "categories", len(cats))
 				if len(cats) >= 2 {
-					// The conduct spine covers the matter's ALLEGATIONS cleanly, but narrowing to
-					// conduct-only dropped the CROSS-CUTTING sections a legal memo needs and the
-					// rubric rewards — per-person exposure, the timeline, the parties/ownership.
-					// Restore them (the messier enumeration spine had them; the clean one didn't).
-					cats = append(cats, crossCuttingSections...)
+					// Enforcement matters also need the CROSS-CUTTING sections the rubric rewards
+					// (per-person exposure, timeline, parties/ownership). These are enforcement-
+					// framed, so add them ONLY for enforcement matters — a compliance/compare
+					// matter has Requirement issues and would read oddly with "Individuals at Risk".
+					if o.isEnforcementMatter(g) {
+						cats = append(cats, crossCuttingSections...)
+					}
 					o.update(task, func(t *types.Task) { t.Allegations = cats })
 					slog.Info("BELO spine from conduct nodes", "task", task.ID, "conducts", len(conducts), "categories", len(cats))
 					return cats
@@ -2336,7 +2353,7 @@ func (o *Orchestrator) ensureAllegations(task *types.Task, prov providers.Provid
 // Robust because it consolidates a small, already-grounded set — unlike enumerating from noisy
 // all-docs retrieval. Falls back to the deduped raw conducts on any model/parse failure.
 func (o *Orchestrator) consolidateConducts(task *types.Task, prov providers.Provider, model string, conducts []string) []string {
-	prompt := "These are wrongful-conduct / scheme nodes extracted from a legal matter's evidence graph. Merge restatements of the SAME allegation into one heading, drop anything that is not an alleged violation, and output the DISTINCT allegation categories in the matter's own terms — one heading per line, no numbering, no preamble.\n\nCONDUCT NODES:\n- " + strings.Join(conducts, "\n- ")
+	prompt := "These are ISSUE nodes extracted from a legal matter's evidence graph — the distinct propositions the deliverable must assess (alleged violations, client requirements/instructions, or contract clauses, depending on the matter). Merge restatements of the SAME issue into one heading, drop anything that is not a distinct issue to assess, and output the DISTINCT issue/section headings in the matter's own terms — one heading per line, no numbering, no preamble.\n\nISSUE NODES:\n- " + strings.Join(conducts, "\n- ")
 	// FIX 3 — deterministic merging: temperature 0 (not LLMTemperature 0.2). Consolidating the
 	// conduct nodes into spine categories is a stable, set-merge task; any wobble here reshuffles
 	// the matter's section spine run-to-run, which is the variance we're driving out.

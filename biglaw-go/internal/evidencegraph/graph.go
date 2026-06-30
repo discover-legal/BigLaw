@@ -164,21 +164,24 @@ func (g *Graph) Claims() []ontology.Claim {
 	return append([]ontology.Claim(nil), g.claims...)
 }
 
-// Conducts returns the distinct Conduct nodes — the subjects of conduct-domain predicates
-// (committedBy / violates / harmed / occurredDuring). These ARE the allegations, discovered
-// from the typed graph rather than enumerated; each is the spine anchor for its evidence.
-func (g *Graph) Conducts() []string {
+// Issues returns the distinct ISSUE nodes — the subjects of issue-domain predicates. These are
+// the matter's organizing propositions, discovered from the typed graph rather than enumerated;
+// each is a spine anchor. The "E" in BELO is epistemic: an Issue is whatever the deliverable
+// must assess — an alleged Conduct (enforcement: committedBy/violates/harmed) OR a Requirement
+// (compliance/compare: requires/satisfiedBy/deviatesFrom) OR a Clause — so the spine fires
+// across practice areas, not just enforcement.
+func (g *Graph) Issues() []string {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	seen := map[string]bool{}
 	var out []string
 	for _, c := range g.claims {
 		switch c.P {
-		case "committedBy", "violates", "harmed", "occurredDuring":
-			// The subject of a conduct-domain predicate must BE a Conduct — drop noise where a
-			// Party or Authority slipped in as the subject (e.g. an un-swapped "Section 7.3
-			// violates …" or "WCA committedBy …"). Unknown is allowed (untyped, not rejected).
-			if !c.SClass.IsA(ontology.Conduct) {
+		case "committedBy", "violates", "harmed", "occurredDuring", // enforcement (Conduct)
+			"requires", "satisfiedBy", "deviatesFrom", "prohibits": // compliance/compare (Requirement/Clause)
+			// The subject must BE an Issue — drop noise where a Party/Authority slipped in as the
+			// subject (an un-swapped "Section 7.3 violates …"). Unknown is allowed (untyped).
+			if !c.SClass.IsA(ontology.Issue) {
 				continue
 			}
 			s := strings.TrimSpace(c.S)
@@ -193,6 +196,10 @@ func (g *Graph) Conducts() []string {
 	}
 	return out
 }
+
+// Conducts is the enforcement-named alias for Issues (Issue-type = Allegation). Kept so existing
+// callers and tests read naturally; the canonical, practice-area-general accessor is Issues.
+func (g *Graph) Conducts() []string { return g.Issues() }
 
 // All returns a copy of the stored facts.
 func (g *Graph) All() []Fact {

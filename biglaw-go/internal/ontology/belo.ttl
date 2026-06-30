@@ -35,11 +35,19 @@ belo:Account    a owl:Class ; rdfs:subClassOf belo:Party .
 belo:Broker     a owl:Class ; rdfs:subClassOf belo:Party .
 belo:Client     a owl:Class ; rdfs:subClassOf belo:Party .
 
-belo:Conduct    a owl:Class ; rdfs:label "Conduct" ;
-    rdfs:comment "A named wrongful scheme, violation, or omission — the unit an allegation is built around." .
+belo:Issue      a owl:Class ; rdfs:label "Issue" ;
+    rdfs:comment "The GENERAL spine node — a distinct proposition the deliverable must assess. Epistemic, not enforcement-specific: Conduct is the enforcement instantiation; Requirement / Clause / RedFlag instantiate it for other practice areas." .
+belo:Conduct    a owl:Class ; rdfs:subClassOf belo:Issue ; rdfs:label "Conduct" ;
+    rdfs:comment "Enforcement: a named alleged wrongful scheme, violation, or omission." .
 belo:Scheme     a owl:Class ; rdfs:subClassOf belo:Conduct .
 belo:Violation  a owl:Class ; rdfs:subClassOf belo:Conduct .
 belo:Omission   a owl:Class ; rdfs:subClassOf belo:Conduct .
+belo:Requirement a owl:Class ; rdfs:subClassOf belo:Issue ;
+    rdfs:comment "Compliance / comparison: a client instruction or standard to be met." .
+belo:Clause     a owl:Class ; rdfs:subClassOf belo:Issue ;
+    rdfs:comment "Transactional: a contract clause or obligation." .
+belo:RedFlag    a owl:Class ; rdfs:subClassOf belo:Issue ;
+    rdfs:comment "Diligence: a flagged finding to assess." .
 
 belo:Authority  a owl:Class ; rdfs:label "Legal Authority" .
 belo:Statute    a owl:Class ; rdfs:subClassOf belo:Authority .
@@ -72,6 +80,12 @@ belo:committedBy a owl:ObjectProperty ;
     rdfs:domain belo:Conduct ; rdfs:range belo:Party .
 belo:violates a owl:ObjectProperty ;
     rdfs:domain belo:Conduct ; rdfs:range belo:Authority .
+# Compliance / comparison / transactional issue predicates (subject is an Issue — a Requirement
+# or Clause), so the epistemic spine fires beyond enforcement.
+belo:requires a owl:ObjectProperty ; rdfs:domain belo:Issue .
+belo:satisfiedBy a owl:ObjectProperty ; rdfs:domain belo:Issue ; rdfs:range belo:Instrument .
+belo:deviatesFrom a owl:ObjectProperty ; rdfs:domain belo:Issue .
+belo:prohibits a owl:ObjectProperty ; rdfs:domain belo:Issue .
 belo:harmed a owl:ObjectProperty ;
     rdfs:domain belo:Conduct ; rdfs:range belo:Party .
 belo:quantifiedAs a owl:ObjectProperty ;
