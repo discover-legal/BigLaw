@@ -1247,7 +1247,12 @@ Ground every statement in the findings above — do not introduce facts, figures
 // a dedicated section rather than trusting the writer — surfacing the conflicts is the whole
 // point (defense issues), and they must not depend on synthesis quality.
 func (o *Orchestrator) appendDiscrepancies(task *types.Task, body string) string {
-	var items []string
+	// BELO analytic layer: the defense issues derived from the charges (scienter element,
+	// criminal exposure, statute of limitations) — the analytic reasoning the rubric asks for.
+	derived := o.deriveDefenseIssues(task)
+
+	// Figure discrepancies: cross-source value conflicts surfaced by the contradiction detector.
+	var discrepancies []string
 	seen := map[string]bool{}
 	for _, f := range task.Findings {
 		if f.AgentID != "contradiction-detector" {
@@ -1262,15 +1267,30 @@ func (o *Orchestrator) appendDiscrepancies(task *types.Task, body string) string
 			continue
 		}
 		seen[strings.ToLower(c)] = true
-		items = append(items, "- "+c+".")
+		discrepancies = append(discrepancies, "- "+c+".")
 	}
-	if len(items) == 0 {
+
+	if len(derived) == 0 && len(discrepancies) == 0 {
 		return body
 	}
-	return strings.TrimRight(body, "\n") +
-		"\n\n## Discrepancies and Defense Issues\n\n" +
-		"The following figures conflict across the record. Each is a potential defense point — the inconsistency should be raised and its significance assessed, not silently reconciled.\n\n" +
-		strings.Join(items, "\n") + "\n"
+	var b strings.Builder
+	b.WriteString(strings.TrimRight(body, "\n"))
+	b.WriteString("\n\n## Discrepancies and Defense Issues\n\n")
+	if len(derived) > 0 {
+		b.WriteString("Defense issues raised by the charges and the record — elements that must be proven, exposure beyond the civil counts, and timing defenses:\n\n")
+		for _, d := range derived {
+			b.WriteString("- ")
+			b.WriteString(d)
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+	}
+	if len(discrepancies) > 0 {
+		b.WriteString("The following figures conflict across the record. Each is a potential defense point — the inconsistency should be raised and its significance assessed, not silently reconciled:\n\n")
+		b.WriteString(strings.Join(discrepancies, "\n"))
+		b.WriteString("\n")
+	}
+	return b.String()
 }
 
 // synthesisWriterBudgetTokens is the per-call input budget for synthesis: when the
