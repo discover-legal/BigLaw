@@ -2251,6 +2251,16 @@ func (o *Orchestrator) allegationContext(task *types.Task, prov providers.Provid
 // specialist while the spine missed Bellini and duplicated cherry-picking 4× — so the
 // allegation was found in the rounds but had no section to land in. The result is
 // theme-deduped to collapse near-duplicate headings.
+// crossCuttingSections are the party/timeline-oriented sections a legal enforcement memo carries
+// ALONGSIDE the matter-specific allegation categories. The rubric rewards them (per-person
+// exposure, the examination timeline, parties and ownership stakes); the clean conduct-only BELO
+// spine dropped them, costing cross-cutting criteria the messier enumeration spine had captured.
+var crossCuttingSections = []string{
+	"Parties, Entities, and Ownership Interests",
+	"Individuals at Risk and Personal Exposure",
+	"Key Dates and Examination Timeline",
+}
+
 func (o *Orchestrator) ensureAllegations(task *types.Task, prov providers.Provider, model string) []string {
 	if len(task.Allegations) > 0 {
 		return task.Allegations
@@ -2268,6 +2278,11 @@ func (o *Orchestrator) ensureAllegations(task *types.Task, prov providers.Provid
 				cats := o.consolidateConducts(task, prov, model, conducts)
 				slog.Info("BELO spine consolidate", "task", task.ID, "conducts", len(conducts), "categories", len(cats))
 				if len(cats) >= 2 {
+					// The conduct spine covers the matter's ALLEGATIONS cleanly, but narrowing to
+					// conduct-only dropped the CROSS-CUTTING sections a legal memo needs and the
+					// rubric rewards — per-person exposure, the timeline, the parties/ownership.
+					// Restore them (the messier enumeration spine had them; the clean one didn't).
+					cats = append(cats, crossCuttingSections...)
 					o.update(task, func(t *types.Task) { t.Allegations = cats })
 					slog.Info("BELO spine from conduct nodes", "task", task.ID, "conducts", len(conducts), "categories", len(cats))
 					return cats
