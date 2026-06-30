@@ -195,6 +195,10 @@ type LocalConfig struct {
 	LocalInferenceTiers string
 	InferenceWatts      int
 	InferenceRegion     string
+	// RequestTimeoutSec bounds a single local HTTP call. The default (300s) suits a model
+	// that fits in VRAM; a larger model spilling to CPU (e.g. 14B on an 8GB GPU) can need much
+	// longer for a long-form generation, so raise it for those runs.
+	RequestTimeoutSec int
 }
 
 type PDFConfig struct {
@@ -559,6 +563,7 @@ func Load() *Config {
 			LocalInferenceTiers: env("LOCAL_INFERENCE_TIERS", ""),
 			InferenceWatts:      envInt("LOCAL_INFERENCE_WATTS", 250),
 			InferenceRegion:     env("LOCAL_INFERENCE_REGION", "SEALAND"),
+			RequestTimeoutSec:   envInt("LOCAL_REQUEST_TIMEOUT", 300),
 		},
 		PDF: PDFConfig{
 			PythonBin: env("PDF_PYTHON_BIN", "python3"),
