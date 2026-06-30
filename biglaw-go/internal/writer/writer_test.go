@@ -113,7 +113,10 @@ func TestWriterPullsSpecificsAtSynthesis(t *testing.T) {
 		if strings.Contains(s, "Oceanic Fund I LP") && strings.Contains(s, "Zephyr") {
 			sawHandle = true
 		}
-		if strings.Contains(s, "$7,800,000") {
+		// Only the DRAFTER prompt must be digit-free (masking). The stitch call legitimately
+		// sees the finished sections' real figures (incl. the salient-guarantee tail), so scope
+		// the leak check to drafter prompts.
+		if strings.Contains(s, "Write the section") && strings.Contains(s, "$7,800,000") {
 			sawRawDigit = true
 		}
 	}}
