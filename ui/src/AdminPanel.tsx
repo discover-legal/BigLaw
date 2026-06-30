@@ -374,6 +374,38 @@ export function AdminPanel({ notify, isPartner, profiles, onProfilesChange, me }
                 a 7B-class model is plenty and keeps the pipeline efficient.
               </p>
               <div className="field">
+                <label>Spine model (BELO conduct/allegation pass)</label>
+                <select
+                  value={s.models?.spineModel ?? ""}
+                  onChange={(e) => patch("models", "spineModel", e.target.value)}
+                >
+                  <option value="">(default — bulk model)</option>
+                  {(s.models?.available ?? []).map((m) => (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                </select>
+              </div>
+              <p style={{ fontSize: 12, color: "var(--text-faint)", margin: "4px 0 8px" }}>
+                A few high-leverage calls discover the deliverable's section spine. Worth a
+                stronger model (e.g. 14B) even on a small GPU — it's only ~7 calls.
+              </p>
+              <div className="field">
+                <label>Synthesis model (drafting the deliverable)</label>
+                <select
+                  value={s.models?.synthesisModel ?? ""}
+                  onChange={(e) => patch("models", "synthesisModel", e.target.value)}
+                >
+                  <option value="">(default — routed)</option>
+                  {(s.models?.available ?? []).map((m) => (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                </select>
+              </div>
+              <p style={{ fontSize: 12, color: "var(--text-faint)", margin: "4px 0 8px" }}>
+                The judged memo. Spending a stronger model here (e.g. 14B) buys the most quality
+                per call; the high-volume research/extraction stays on the fast bulk model.
+              </p>
+              <div className="field">
                 <label>Available models (the picker list)</label>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 6 }}>
                   {(s.models?.available ?? []).map((m) => (
