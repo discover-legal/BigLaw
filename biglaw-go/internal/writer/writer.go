@@ -928,7 +928,19 @@ Write FLOWING, professional client-ready prose — connected paragraphs, not an 
 	// it mangled or skipped simply doesn't substitute, so a figure can be omitted but never
 	// stated wrong.
 	result = resolveFigureHandles(result, handled)
-	return sanitizeDraft(result)
+	result = sanitizeDraft(result)
+	// Guarantee the SALIENT figures land. Ranking gets most figures inline, but a weak drafter
+	// still drops some of the headline ones (it used the top figure and reverted to qualitative
+	// prose). attachKeyFigures appends ONLY salient figures (big money / large counts / major
+	// rates) that the prose did NOT already state — a tight factual tail, not a data dump, and
+	// model-independent so figure coverage no longer rides on drafter mood.
+	var salient []SpecificHit
+	for _, h := range handled {
+		if figureSalience(h.Value) >= salienceGuaranteeFloor {
+			salient = append(salient, SpecificHit{Text: h.Context, Source: h.Source})
+		}
+	}
+	return attachKeyFigures(result, salient)
 }
 
 var (
@@ -1038,8 +1050,10 @@ func figureSalience(v string) int {
 		return 90
 	case dollar && x >= 1000:
 		return 70
+	case pct && x >= 40:
+		return 60 // a major rate (81.6%, 62%) — the kind a memo turns on
 	case pct:
-		return 50 // a rate/percentage
+		return 45 // a minor percentage (1.5%, 5%) — usually exhibit detail
 	case x >= 1000:
 		return 40
 	case dollar:
@@ -1048,6 +1062,11 @@ func figureSalience(v string) int {
 		return 10 // bare small number (likely exhibit noise)
 	}
 }
+
+// salienceGuaranteeFloor is the cutoff above which a figure is guaranteed to land — big money,
+// large counts, and major rates — so the mechanical key-figures tail catches the salient
+// stragglers a weak drafter dropped without dragging in minor percentages or small numbers.
+const salienceGuaranteeFloor = 55
 
 // resolveFigureHandles substitutes each handle (case-insensitive, word-boundary) with its exact
 // grounded value, then strips any stray {{FIG:…}} the drafter emitted out of habit and tidies
