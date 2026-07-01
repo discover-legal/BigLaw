@@ -6,6 +6,7 @@ package orchestrator
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -31,13 +32,13 @@ import (
 // a deviation. The Go side then verifies both quotes appear in the retrieved passages (substring
 // lock) and drops any deviation whose quotes don't verify — a model that must copy "Twenty-Five
 // Percent (25%)" from the instruction cannot then claim the instruction says 30%.
-const deviationSystem = "You compare a client's INSTRUCTIONS against a DRAFT legal document for ONE requirement, using ONLY the passages given (each tagged with its SOURCE). Do NOT rely on memory. A deviation is either a CONFLICT (the draft implements the requirement but with a wrong value/name/term) or an OMISSION (the client requires something the draft does NOT contain at all). Output ONLY JSON: {\"type\": \"conflict|omission|none\", \"instructionQuote\": \"<the EXACT verbatim words from the client-instruction source stating the requirement>\", \"draftQuote\": \"<for a CONFLICT, the EXACT verbatim words from the DRAFT source; empty for an omission>\", \"requiredProvision\": \"<for an OMISSION, a short name for the missing provision, e.g. 'separate education trust for the grandchildren'>\", \"summary\": \"<one sentence>\", \"severity\": \"critical|high|medium|low\", \"recommendation\": \"<the specific correction>\"}. Quotes MUST be copied word-for-word from the passages — never invent. type=conflict ONLY if instructionQuote and draftQuote actually conflict; type=omission ONLY if the requirement is instructed but the draft passages do not implement it; otherwise type=none."
+const deviationSystem = "You check ONE requirement from a CONTROLLING source (client instructions, a playbook, a regulation, a term sheet, or a prior agreement) against the DOCUMENT under review (a draft, a contract, a filing, a policy), using ONLY the passages given (each tagged with its SOURCE). Do NOT rely on memory. A deviation is either a CONFLICT (the document addresses the requirement but with a wrong value, name, or term) or an OMISSION (the requirement is imposed but the document does not implement it at all). Output ONLY JSON: {\"type\": \"conflict|omission|none\", \"instructionQuote\": \"<the EXACT verbatim words from the CONTROLLING source stating the requirement>\", \"draftQuote\": \"<for a CONFLICT, the EXACT verbatim words from the DOCUMENT under review; empty for an omission>\", \"requiredProvision\": \"<for an OMISSION, a short name for the missing provision>\", \"summary\": \"<one sentence>\", \"severity\": \"critical|high|medium|low\", \"recommendation\": \"<the specific correction>\"}. Quotes MUST be copied word-for-word from the passages — never invent. type=conflict ONLY if instructionQuote and draftQuote actually conflict; type=omission ONLY if the requirement is imposed but the reviewed document does not implement it; otherwise type=none."
 
 // extractRequirementsSystem drives the COMPREHENSIVE requirement enumeration — the retrieval
 // floor for compare/review. Every distinct instruction the client states must become a check,
 // or the deviation the rubric scores (a wrong residuary split, a missing trust) is never looked
 // for. This reads the controlling document's OWN enumeration, exhaustively.
-const extractRequirementsSystem = "List every DISPOSITIVE instruction that the DRAFT documents must IMPLEMENT — the things you would check the draft against: specific shares/percentages, distributions and their conditions, named trustees / guardians / beneficiaries, ages and dates that govern the plan, provisions to INCLUDE or EXCLUDE (spendthrift, no-contest/in terrorem, an education trust), powers, and terminations. Do NOT list background family descriptions, meeting dates, asset values, or drafting logistics UNLESS the client instructs a specific treatment of them. Write each as a short heading in the client's own terms (e.g. 'Residuary estate split 40/35/25', 'Trust terminates at a specified age', 'Establish a separate education trust for the grandchildren', 'Name a specific successor trustee', 'Two licensed physicians certify incapacity'). One heading per line, no numbering, no preamble."
+const extractRequirementsSystem = "List every OPERATIVE requirement the controlling document imposes that the document(s) under review must satisfy — the concrete things you would check the reviewed document against. Cover: amounts, percentages, and figures; named parties, roles, and appointments; dates, deadlines, and durations; conditions and triggers; and provisions that must be INCLUDED or EXCLUDED. This spans every practice area — e.g. a residuary share split or successor appointment (estates), an indemnity cap or governing-law or termination clause (contracts), a vesting schedule or liquidation preference (equity/transactions), a notice period or non-compete (employment), a required disclosure or filing deadline (regulatory). SKIP pure descriptive facts — asset values, account balances, valuations, inventories, biographical details, and dates of meetings — UNLESS the controlling document attaches a specific requirement to them (an instruction to EXCLUDE an asset IS a requirement; a bare valuation is not). Write each as a short, concrete heading in the source's own terms. One heading per line, no numbering, no preamble."
 
 // enumerateRequirements reads the CONTROLLING document (the client instruction memo — the doc
 // densest in instruction language, via chargingDocChunks) and extracts every distinct
@@ -76,11 +77,46 @@ func (o *Orchestrator) enumerateRequirements(task *types.Task, prov providers.Pr
 				out = append(out, ln)
 			}
 		}
-		if len(out) >= 30 {
-			break
+		if len(out) >= 150 {
+			break // safety bound; process all chunks so late dispositive provisions are reached
 		}
 	}
+	// Prioritize operative requirements over descriptive background before the adjudication cap:
+	// controlling documents state parties/assets/dates first and dispositive terms last, so raw
+	// document order buries the very requirements the rubric scores. Stable sort keeps document
+	// order within an equal score.
+	sort.SliceStable(out, func(i, j int) bool { return dispositiveScore(out[i]) > dispositiveScore(out[j]) })
 	return out
+}
+
+// dispositiveScore ranks how operative a requirement heading is — how much it reads like a term
+// the reviewed document must implement (shall/appoint/exclude/vest/indemnify/govern…) versus
+// descriptive background (a valuation, a balance, a biography). Practice-area-agnostic.
+func dispositiveScore(req string) int {
+	r := strings.ToLower(req)
+	s := 0
+	for _, m := range dispositiveMarkers {
+		if strings.Contains(r, m) {
+			s++
+		}
+	}
+	for _, m := range descriptiveMarkers {
+		if strings.Contains(r, m) {
+			s--
+		}
+	}
+	return s
+}
+
+var dispositiveMarkers = []string{
+	"shall", "must", "split", "percent", "%", "terminat", "appoint", "exclude", "include",
+	"prohibit", "distribut", "provision", "clause", "trustee", "guardian", "spendthrift",
+	"contest", "terrorem", "vest", "indemnif", "govern", "notice", "deadline", "condition",
+	"successor", "beneficiar", "power", "share", "require", "covenant", "warrant", "obligation",
+}
+var descriptiveMarkers = []string{
+	"fair market value", "market value", "current balance", "death benefit", "estimated gross",
+	"resides", "retired", "biograph", "date of birth",
 }
 
 // detectDeviations adjudicates each requirement for a draft-vs-instruction deviation and returns
@@ -297,7 +333,7 @@ func jaccard(a, b map[string]bool) float64 {
 
 // omissionCheckSystem verifies whether a DRAFT actually establishes a required provision, told
 // explicitly that a related word in another context (HEMS) is not the provision. One word out.
-const omissionCheckSystem = "You verify whether a DRAFT legal document establishes a REQUIRED provision. You are given the required provision and the draft's own sections most relevant to it. Answer with ONLY one word: PRESENT if the draft actually establishes or contains that provision, or ABSENT if it does not. IMPORTANT: a mere mention of a related word does NOT count — e.g. the word 'education' inside a 'health, education, maintenance, and support' distribution standard is NOT a separate education trust. Only a genuine, structural implementation of the required provision counts as PRESENT."
+const omissionCheckSystem = "You verify whether a DOCUMENT under review actually implements a REQUIRED provision. You are given the required provision and the document's own sections most relevant to it. Answer with ONLY one word: PRESENT if the document genuinely establishes or implements that provision, or ABSENT if it does not. IMPORTANT: a passing mention of a related term does NOT count — a word appearing inside a boilerplate list, a different defined standard, or unrelated context is not the required standalone provision (e.g. 'education' inside a 'health, education, maintenance, and support' standard is not a separate education trust; the word 'indemnify' in a recital is not an indemnification clause). Only a genuine, structural implementation of the required provision counts as PRESENT."
 
 // confirmOmission grounds an OMISSION claim: it retrieves the DRAFT's own sections on the
 // provision and asks the model whether the provision is genuinely established, guarding against
