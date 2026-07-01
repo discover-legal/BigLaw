@@ -30,7 +30,7 @@ Everything previously marked "TS-only, not yet ported" is now on the Go platform
   `POST /tasks/from-clio-matter` (fetch → ingest docs → submit task),
   `POST /time-entries/sync-to-clio` (6-min units, `clioSyncedAt` idempotency);
   new ClioClient methods (GetMatter, DownloadDocument, CreateNote, ListContacts)
-- **Document-production tools** (Mike port): `docx_generate`,
+- **Document-production tools**: `docx_generate`,
   tracked-changes `edit_document` (order-preserving OOXML round-trip,
   4-stage anchor matching, multi-run reconstruction), `replicate_document`,
   `pdf_extract_text/_tables/_ocr/_generate` (via `scripts/pdf_tools.py`,
@@ -70,7 +70,7 @@ Everything previously marked "TS-only, not yet ported" is now on the Go platform
 - TS-only features now explicitly marked as preserved at `typescript-final`
   and not yet ported: browser OAuth login (banner added to
   `docs/AUTH_SETUP.md`), Clio connect flow / matter import / time sync,
-  Mike document-production tools (docx/tabular/PDF/DocuSeal), generic tone
+  document-production tools (docx/tabular/PDF/DocuSeal), generic tone
   import (Go is LinkedIn-only), audit forwarding (OpenSearch/Splunk/webhook)
 - CLAUDE.md: version block updated to 1.0.0/Go, MCP tool list matched to the
   Go server, route-list caveat added, `agents/lavern/` path fixed

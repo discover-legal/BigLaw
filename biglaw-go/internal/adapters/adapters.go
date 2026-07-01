@@ -366,67 +366,6 @@ func LoadLavernWorkflows(dir string) ([]types.TaskTemplate, error) {
 	return templates, nil
 }
 
-// ─── MikeOSS adapter ──────────────────────────────────────────────────────────
-
-// MikeOSSWorkflow is the JSON format of a MikeOSS workflow.
-type MikeOSSWorkflow struct {
-	ID             string            `json:"id"`
-	Name           string            `json:"name"`
-	Description    string            `json:"description"`
-	WorkflowType   string            `json:"workflowType"`
-	PromptTemplate string            `json:"promptTemplate"`
-	Substitutions  map[string]string `json:"substitutions,omitempty"`
-}
-
-// LoadMikeOSSWorkflows reads all MikeOSS workflow JSON files from dir.
-func LoadMikeOSSWorkflows(dir string) ([]types.TaskTemplate, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	var templates []types.TaskTemplate
-	for _, entry := range entries {
-		if entry.IsDir() || strings.ToLower(filepath.Ext(entry.Name())) != ".json" {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
-		if err != nil {
-			slog.Warn("MikeOSSAdapter: failed to read", "file", entry.Name(), "error", err)
-			continue
-		}
-		var wfs []MikeOSSWorkflow
-		if err := json.Unmarshal(data, &wfs); err != nil {
-			var single MikeOSSWorkflow
-			if err2 := json.Unmarshal(data, &single); err2 != nil {
-				slog.Warn("MikeOSSAdapter: failed to parse", "file", entry.Name(), "error", err)
-				continue
-			}
-			wfs = []MikeOSSWorkflow{single}
-		}
-		for _, w := range wfs {
-			if w.ID == "" || w.PromptTemplate == "" {
-				continue
-			}
-			wt := mapWorkflowType(w.WorkflowType)
-			templates = append(templates, types.TaskTemplate{
-				ID:             w.ID,
-				Name:           w.Name,
-				Description:    w.Description,
-				WorkflowType:   wt,
-				PromptTemplate: w.PromptTemplate,
-				Substitutions:  w.Substitutions,
-			})
-		}
-	}
-	if len(templates) > 0 {
-		slog.Info("MikeOSS workflows loaded", "count", len(templates), "dir", dir)
-	}
-	return templates, nil
-}
-
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 func lavernToAgentDef(a LavernAgent) types.AgentDefinition {
@@ -508,8 +447,8 @@ var rePromptMarker = regexp.MustCompile(
 
 // SanitizePromptContent strips prompt injection markers and ASCII control
 // characters (except tab/newline) from user content before it is interpolated
-// into a model prompt. Markers are neutralised by bracket-wrapping, matching
-// the TypeScript sanitizePromptContent in adapters/lavern.ts.
+// into a model prompt. Markers are neutralised by bracket-wrapping so the
+// downstream output parsers treat them as inert text.
 func SanitizePromptContent(s string) string {
 	s = rePromptMarker.ReplaceAllStringFunc(s, func(m string) string {
 		return "[" + m + "]"

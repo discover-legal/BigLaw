@@ -4,10 +4,9 @@ Copyright (C) 2026 Discover Legal
 This distribution is licensed under the GNU Affero General Public License,
 version 3 (AGPL-3.0-only). See the LICENSE file for the full text.
 
-Because this work bundles and builds upon an AGPL-3.0 component (Mike, below),
-the combined work is distributed under the AGPL-3.0. If you run a modified
-version of this software to provide a network service, AGPL-3.0 section 13
-requires you to offer the complete corresponding source to its users.
+This work is distributed under the AGPL-3.0. If you run a modified version of
+this software to provide a network service, AGPL-3.0 section 13 requires you
+to offer the complete corresponding source to its users.
 
 ================================================================================
 Third-party components
@@ -25,24 +24,5 @@ Third-party components
             Apache-2.0 is included in this combined AGPL-3.0 work as permitted
             by Apache-2.0; the Lavern portions retain their Apache-2.0 grant.
 
-2. Mike (mikeoss.com)
-   Source:  https://github.com/willchen96/mike
-   License: GNU Affero General Public License, version 3.0
-   Used in: workflows/mikeoss/  (built-in workflow prompts) and ported
-            capabilities (tabular review, Word document generation,
-            tracked-change redlining) in src/.
-   Notice:  Mike's workflow prompts and capability logic have been MODIFIED —
-            built-in workflows converted to MikeOSSWorkflow JSON, and selected
-            backend capabilities ported to Big Michael's tool/orchestration
-            layer. These portions remain (C) the Mike authors under AGPL-3.0.
-   Synced:  Reviewed against upstream commit d39f580 (2026-05-18). The three
-            built-in workflow prompts (CP checklist, credit-agreement summary,
-            shareholder-agreement summary) are byte-for-byte in sync with
-            upstream, aside from Big Michael's appended {{description}} /
-            {{document}} template placeholders. Mike's later changes are
-            specific to its Next.js + Supabase application (storage caching,
-            download-token signing, project sharing) and do not apply to Big
-            Michael's tool/orchestration architecture.
-
-Trademarks: "Lavern", "The Shem", and "Mike" are the marks of their respective
+Trademarks: "Lavern" and "The Shem" are the marks of their respective
 authors and are used here only for attribution; no endorsement is implied.

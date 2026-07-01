@@ -583,9 +583,8 @@ The heavier engines are exposed over REST rather than as agent tools:
 | Tabular review output (tabulate workflow) | `GET /tasks/:id/table.csv` |
 | Daily status reports as DOCX (LPM spine) | `GET /reports/:id/docx` |
 
-> Document generation, tabular review, and tracked-change redlining are ported from
-> [Mike](https://github.com/willchen96/mike) (AGPL-3.0) and adapted to BigLaw's tool
-> registry and provider abstraction. See [`NOTICE`](NOTICE).
+> Document generation, tabular review, and tracked-change redlining are native
+> BigLaw implementations built on its tool registry and provider abstraction.
 
 ---
 
@@ -1239,21 +1238,20 @@ All platform code lives under `biglaw-go/` (module `biglaw-go`, entry point
 | `internal/secrets/` | Infisical secrets manager (bootstrap from `.env`, rest from vault) |
 | `sidecar/` | TypeDB conflict-graph sidecar (Unix-socket IPC) |
 | `ui/` | Vite + React console |
-| `templates/` · `workflows/` · `agents/lavern/` | Task templates, MikeOSS/Lavern workflow + agent configs |
+| `templates/` · `workflows/` · `agents/lavern/` | Task templates, Lavern workflow + agent configs |
 
 ---
 
 ## License & attribution
 
 BigLaw is distributed under the **GNU Affero General Public License v3.0** ([`LICENSE`](LICENSE)).
-Because it bundles an AGPL-3.0 component, AGPL §13 applies: running a modified version as a network
-service obliges you to offer the complete corresponding source to its users.
+Under AGPL §13, running a modified version as a network service obliges you to offer the
+complete corresponding source to its users.
 
-It builds on two upstreams, fully attributed in [`NOTICE`](NOTICE):
+It builds on one upstream, fully attributed in [`NOTICE`](NOTICE):
 
 - **Lavern** ("The Shem") — agent definitions & prompts (Apache-2.0)
-- **Mike** ([mikeoss.com](https://github.com/willchen96/mike)) — document generation, tabular review, tracked-change redlining (AGPL-3.0)
 
-*"Lavern", "The Shem", and "Mike" are the marks of their respective authors, used here only for attribution.*
+*"Lavern" and "The Shem" are the marks of their respective authors, used here only for attribution.*
 
 <div align="center"><sub>Copyright © 2026 Discover Legal</sub></div>

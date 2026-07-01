@@ -1018,9 +1018,8 @@ func inferTaskType(def types.AgentDefinition) routing.TaskType {
 // ─── Utility ──────────────────────────────────────────────────────────────────
 
 // sanitize neutralises protocol markers and control characters in untrusted
-// content before prompt interpolation. Delegates to the shared sanitizer so
-// the marker set stays in one place (mirrors TS base.ts importing
-// sanitizePromptContent from adapters/lavern.ts).
+// content before prompt interpolation. Delegates to the shared sanitizer in
+// the adapters package so the marker set stays defined in one place.
 func sanitize(s string) string {
 	return adapters.SanitizePromptContent(s)
 }

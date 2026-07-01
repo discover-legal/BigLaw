@@ -117,17 +117,12 @@ func main() {
 		slog.Warn("knowledge store load failed; continuing empty", "err", err)
 	}
 
-	// Build template store and load from filesystem. Lavern and MikeOSS
-	// workflow files have their own shapes — use the adapter loaders rather
-	// than parsing them as raw TaskTemplates.
+	// Build template store and load from filesystem. Lavern workflow files
+	// have their own shape — use the adapter loader rather than parsing them
+	// as raw TaskTemplates.
 	templatesStore := templates.NewStore()
 	_ = templatesStore.Load("templates")
 	if ts, err := adapters.LoadLavernWorkflows("workflows/laverne"); err == nil {
-		for _, t := range ts {
-			templatesStore.Add(t)
-		}
-	}
-	if ts, err := adapters.LoadMikeOSSWorkflows("workflows/mikeoss"); err == nil {
 		for _, t := range ts {
 			templatesStore.Add(t)
 		}

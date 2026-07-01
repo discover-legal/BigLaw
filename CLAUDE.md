@@ -77,9 +77,8 @@ list_plugins         — list loaded external plugins
 get_time_entries     — billable time entries (profileId/taskId/matterNumber/from/to filters)
 ```
 
-Claude Code actuates Lavern agent configs (from `agents/lavern/*.json`),
-MikeOSS workflow templates (from `workflows/mikeoss/*.json`), and any JSON
-plugin adapters (from `adapters/external/*.json`).
+Claude Code actuates Lavern agent configs (from `agents/lavern/*.json`)
+and any JSON plugin adapters (from `adapters/external/*.json`).
 
 ### Example Claude Code sessions
 
@@ -165,7 +164,7 @@ Each DyTopo round:
 | `src/tools/pdf.ts` | PyMuPDF/Camelot/Tesseract tools (via python subprocess) |
 | `src/tools/docuseal.ts` | DocuSeal e-signature tools |
 | `src/adapters/plugin.ts` | Generic `LegalToolPlugin` / `LegalToolAdapter` + PluginRegistry |
-| `src/adapters/lavern.ts` | Lavern agent + workflow adapters; MikeOSS + external configs |
+| `src/adapters/lavern.ts` | Lavern agent + workflow adapters; external configs |
 | `src/adapters/index.ts` | Adapter re-exports (`AgentHarness`, `mergeAgents`, plugin types) |
 | `src/audit/index.ts` | Append-only JSONL audit log + SSE stream |
 | `src/time/index.ts` | Automatic billable time tracking — open/close entries, 6-min billing units, CSV export |
@@ -548,11 +547,6 @@ per-model detail table.
 
 Lavern workflow types (`adversarial`, `counsel`, `full-bench`, `legal-design`, `pre-engagement`,
 `review`, `roundtable`, `tabulate`, `verification`) are mapped to BigLaw's WorkflowType.
-
-## Adding MikeOSS workflows
-
-Place MikeOSS workflow JSON files in `workflows/mikeoss/`. Each file may contain a single
-`MikeOSSWorkflow` or an array. They are auto-loaded as TaskTemplates at startup.
 
 ## Local inference (LM Studio / Jan / Ollama)
 
