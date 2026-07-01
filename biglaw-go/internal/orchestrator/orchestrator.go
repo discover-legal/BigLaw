@@ -1913,8 +1913,11 @@ func (o *Orchestrator) allegationPassages(task *types.Task, tokenBudget int) str
 // every fact is grounded (quote must be verbatim in its chunk) or dropped. Bounded to the
 // retrieved allegation passages for now; true ingestion/per-chunk extraction is the
 // follow-on once the lift is confirmed.
-// reAllegationTerm scores how charging-document-like a text is — accusation/charge language.
-var reAllegationTerm = regexp.MustCompile(`(?i)\balleg|\bviolat|\bthe division\b|\bsection\s+\d|\brule\s+\d|\bcount\s|\bfraud|\bbreach|\bscheme|\bfailed to`)
+// reAllegationTerm scores how CONTROLLING-document-like a text is — the doc that STATES what
+// must be assessed. Enforcement: accusation/charge language. Compliance/compare: instruction/
+// requirement language. The controlling doc (referral, or client instruction memo) is where the
+// issues are enumerated, so both vocabularies count.
+var reAllegationTerm = regexp.MustCompile(`(?i)\balleg|\bviolat|\bthe division\b|\bsection\s+\d|\brule\s+\d|\bcount\s|\bfraud|\bbreach|\bscheme|\bfailed to|\brequire|\binstruct|\bshall\b|\bmust\b|\bshould\b|\bwants?\b|\bdirect`)
 
 // chargingDocChunks pages through the matter's CHARGING document(s) — those densest in
 // allegation language — up to a token budget, chunked. The conducts live in the charging doc;
