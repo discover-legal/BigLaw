@@ -14,7 +14,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/discover-legal/biglaw-go/internal/agents"
 	"github.com/discover-legal/biglaw-go/internal/ooxml"
@@ -42,17 +41,6 @@ func strSlice(v interface{}) []string {
 		out = append(out, s)
 	}
 	return out
-}
-
-// truncateUTF8 caps s at max bytes without splitting a multi-byte rune.
-func truncateUTF8(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	for max > 0 && !utf8.RuneStart(s[max]) {
-		max--
-	}
-	return s[:max]
 }
 
 // ─── Path safety ──────────────────────────────────────────────────────────────
