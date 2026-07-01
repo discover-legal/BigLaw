@@ -33,17 +33,71 @@ import (
 // Percent (25%)" from the instruction cannot then claim the instruction says 30%.
 const deviationSystem = "You compare a client's INSTRUCTIONS against a DRAFT legal document for ONE requirement, using ONLY the passages given (each tagged with its SOURCE). Do NOT rely on memory. Output ONLY JSON with these fields: {\"instructionQuote\": \"<the EXACT words from the client-instruction source stating what is required — copied verbatim>\", \"draftQuote\": \"<the EXACT words from the DRAFT source implementing it — copied verbatim>\", \"deviation\": true|false, \"summary\": \"<one sentence: the draft says <draft value> but the client instructed <instruction value>>\", \"severity\": \"critical|high|medium|low\", \"recommendation\": \"<the specific correction>\"}. BOTH quotes MUST be copied word-for-word from the passages above — do not paraphrase or invent. Set deviation=true ONLY if the two verbatim quotes actually conflict. If the draft conforms, or you cannot find BOTH verbatim quotes, set deviation=false."
 
-// detectDeviations adjudicates each requirement issue for a draft-vs-instruction deviation and
-// returns the confirmed ones as findings (routed to their section at synthesis + summarised).
+// extractRequirementsSystem drives the COMPREHENSIVE requirement enumeration — the retrieval
+// floor for compare/review. Every distinct instruction the client states must become a check,
+// or the deviation the rubric scores (a wrong residuary split, a missing trust) is never looked
+// for. This reads the controlling document's OWN enumeration, exhaustively.
+const extractRequirementsSystem = "List every DISPOSITIVE instruction that the DRAFT documents must IMPLEMENT — the things you would check the draft against: specific shares/percentages, distributions and their conditions, named trustees / guardians / beneficiaries, ages and dates that govern the plan, provisions to INCLUDE or EXCLUDE (spendthrift, no-contest/in terrorem, an education trust), powers, and terminations. Do NOT list background family descriptions, meeting dates, asset values, or drafting logistics UNLESS the client instructs a specific treatment of them. Write each as a short heading in the client's own terms (e.g. 'Residuary estate split 40/35/25', 'Trust terminates at a specified age', 'Establish a separate education trust for the grandchildren', 'Name a specific successor trustee', 'Two licensed physicians certify incapacity'). One heading per line, no numbering, no preamble."
+
+// enumerateRequirements reads the CONTROLLING document (the client instruction memo — the doc
+// densest in instruction language, via chargingDocChunks) and extracts every distinct
+// requirement, so the deviation pass checks all of them, not just the subset the graph caught.
+func (o *Orchestrator) enumerateRequirements(task *types.Task, prov providers.Provider, model string) []string {
+	chunks := o.chargingDocChunks(task, 12000)
+	if len(chunks) == 0 {
+		return nil
+	}
+	var out []string
+	seen := map[string]bool{}
+	zero := 0.0
+	for _, ch := range chunks {
+		resp, err := prov.Chat(providers.ChatParams{
+			Model: model, MaxTokens: 700, System: extractRequirementsSystem,
+			Messages: []providers.Message{{Role: "user", Content: "PASSAGE:\n" + ch}}, CacheSystem: true, Temperature: &zero,
+		})
+		if err != nil {
+			continue
+		}
+		o.recordCost(resp, model, cost.ContextSynthesis, task.ID)
+		var text string
+		for _, b := range resp.Content {
+			if b.Type == providers.BlockText {
+				text = b.Text
+			}
+		}
+		for _, ln := range strings.Split(text, "\n") {
+			ln = strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(ln), "-*•0123456789.) \t"))
+			ln = strings.TrimSpace(strings.Trim(ln, "*_#:"))
+			if n := len(ln); n < 6 || n > 110 {
+				continue
+			}
+			if k := strings.ToLower(ln); !seen[k] {
+				seen[k] = true
+				out = append(out, ln)
+			}
+		}
+		if len(out) >= 30 {
+			break
+		}
+	}
+	return out
+}
+
+// detectDeviations adjudicates each requirement for a draft-vs-instruction deviation and returns
+// the confirmed ones as findings (routed to their section at synthesis + summarised).
 func (o *Orchestrator) detectDeviations(task *types.Task, g *evidencegraph.Graph, prov providers.Provider, model string) []types.Finding {
 	if prov == nil || model == "" || g == nil {
 		return nil
 	}
-	reqs := g.Issues()
+	// Comprehensive requirement list from the controlling doc; fall back to the graph's issues.
+	reqs := o.enumerateRequirements(task, prov, model)
+	if len(reqs) == 0 {
+		reqs = g.Issues()
+	}
 	if len(reqs) == 0 {
 		return nil
 	}
-	const maxReqs = 18 // bound the (slow) spine-model adjudications; dedup near-identical labels
+	const maxReqs = 32 // bound the (slow) spine-model adjudications; dedup near-identical labels
 	var out []types.Finding
 	seenReq := map[string]bool{}
 	seenDev := map[string]bool{}
