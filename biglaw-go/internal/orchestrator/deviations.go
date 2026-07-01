@@ -31,7 +31,7 @@ import (
 // a deviation. The Go side then verifies both quotes appear in the retrieved passages (substring
 // lock) and drops any deviation whose quotes don't verify — a model that must copy "Twenty-Five
 // Percent (25%)" from the instruction cannot then claim the instruction says 30%.
-const deviationSystem = "You compare a client's INSTRUCTIONS against a DRAFT legal document for ONE requirement, using ONLY the passages given (each tagged with its SOURCE). Do NOT rely on memory. Output ONLY JSON with these fields: {\"instructionQuote\": \"<the EXACT words from the client-instruction source stating what is required — copied verbatim>\", \"draftQuote\": \"<the EXACT words from the DRAFT source implementing it — copied verbatim>\", \"deviation\": true|false, \"summary\": \"<one sentence: the draft says <draft value> but the client instructed <instruction value>>\", \"severity\": \"critical|high|medium|low\", \"recommendation\": \"<the specific correction>\"}. BOTH quotes MUST be copied word-for-word from the passages above — do not paraphrase or invent. Set deviation=true ONLY if the two verbatim quotes actually conflict. If the draft conforms, or you cannot find BOTH verbatim quotes, set deviation=false."
+const deviationSystem = "You compare a client's INSTRUCTIONS against a DRAFT legal document for ONE requirement, using ONLY the passages given (each tagged with its SOURCE). Do NOT rely on memory. A deviation is either a CONFLICT (the draft implements the requirement but with a wrong value/name/term) or an OMISSION (the client requires something the draft does NOT contain at all). Output ONLY JSON: {\"type\": \"conflict|omission|none\", \"instructionQuote\": \"<the EXACT verbatim words from the client-instruction source stating the requirement>\", \"draftQuote\": \"<for a CONFLICT, the EXACT verbatim words from the DRAFT source; empty for an omission>\", \"requiredProvision\": \"<for an OMISSION, a short name for the missing provision, e.g. 'separate education trust for the grandchildren'>\", \"summary\": \"<one sentence>\", \"severity\": \"critical|high|medium|low\", \"recommendation\": \"<the specific correction>\"}. Quotes MUST be copied word-for-word from the passages — never invent. type=conflict ONLY if instructionQuote and draftQuote actually conflict; type=omission ONLY if the requirement is instructed but the draft passages do not implement it; otherwise type=none."
 
 // extractRequirementsSystem drives the COMPREHENSIVE requirement enumeration — the retrieval
 // floor for compare/review. Every distinct instruction the client states must become a check,
@@ -97,7 +97,8 @@ func (o *Orchestrator) detectDeviations(task *types.Task, g *evidencegraph.Graph
 	if len(reqs) == 0 {
 		return nil
 	}
-	const maxReqs = 32 // bound the (slow) spine-model adjudications; dedup near-identical labels
+	const maxReqs = 32                 // bound the (slow) spine-model adjudications; dedup near-identical labels
+	draftText := o.draftFullText(task) // for OMISSION grounding: verify a required provision is absent
 	var out []types.Finding
 	seenReq := map[string]bool{}
 	seenDev := map[string]bool{}
@@ -116,7 +117,7 @@ func (o *Orchestrator) detectDeviations(task *types.Task, g *evidencegraph.Graph
 			continue
 		}
 		adjudicated++
-		dev := o.adjudicateDeviation(prov, model, req, ctx, task.ID)
+		dev := o.adjudicateDeviation(prov, model, req, ctx, draftText, task.ID)
 		if dev == "" {
 			continue
 		}
@@ -172,7 +173,7 @@ func (o *Orchestrator) retrieveForDeviation(task *types.Task, req string) string
 	return strutil.TruncateToTokens(b.String(), 3200)
 }
 
-func (o *Orchestrator) adjudicateDeviation(prov providers.Provider, model, req, ctx, taskID string) string {
+func (o *Orchestrator) adjudicateDeviation(prov providers.Provider, model, req, ctx, draftText, taskID string) string {
 	zero := 0.0
 	resp, err := prov.Chat(providers.ChatParams{
 		Model:       model,
@@ -198,30 +199,50 @@ func (o *Orchestrator) adjudicateDeviation(prov providers.Provider, model, req, 
 		return ""
 	}
 	var d struct {
-		InstructionQuote string `json:"instructionQuote"`
-		DraftQuote       string `json:"draftQuote"`
-		Deviation        bool   `json:"deviation"`
-		Summary          string `json:"summary"`
-		Severity         string `json:"severity"`
-		Recommendation   string `json:"recommendation"`
+		Type              string `json:"type"`
+		InstructionQuote  string `json:"instructionQuote"`
+		DraftQuote        string `json:"draftQuote"`
+		RequiredProvision string `json:"requiredProvision"`
+		Summary           string `json:"summary"`
+		Severity          string `json:"severity"`
+		Recommendation    string `json:"recommendation"`
 	}
-	if json.Unmarshal([]byte(t[i:j+1]), &d) != nil || !d.Deviation || strings.TrimSpace(d.Summary) == "" {
+	if json.Unmarshal([]byte(t[i:j+1]), &d) != nil || strings.TrimSpace(d.Summary) == "" {
 		return ""
 	}
-	// GROUNDING LOCK — the same discipline as the rest of the pipeline: both the instruction
-	// value and the draft value must be VERBATIM in the retrieved passages, or the "deviation"
-	// is a fabrication (the 25%→30% hallucination) and is dropped. This is what turns a
-	// confident-but-wrong comparison into a grounded one.
-	iq, dq := strings.TrimSpace(d.InstructionQuote), strings.TrimSpace(d.DraftQuote)
+	typ := strings.ToLower(strings.TrimSpace(d.Type))
+	// The instruction quote must be VERBATIM in the retrieved passages for BOTH types — the
+	// requirement must genuinely be instructed (no fabricated "the client wanted …").
+	iq := strings.TrimSpace(d.InstructionQuote)
 	nctx := devNorm(ctx)
-	if len(iq) < 4 || len(dq) < 4 || !strings.Contains(nctx, devNorm(iq)) || !strings.Contains(nctx, devNorm(dq)) {
+	if len(iq) < 4 || !strings.Contains(nctx, devNorm(iq)) {
 		return ""
+	}
+	label := "DEVIATION"
+	switch typ {
+	case "conflict":
+		// CONFLICT — the draft value must ALSO be verbatim, or it's a fabricated conflict.
+		dq := strings.TrimSpace(d.DraftQuote)
+		if len(dq) < 4 || !strings.Contains(nctx, devNorm(dq)) {
+			return ""
+		}
+	case "omission":
+		// OMISSION — there is no draft quote (the provision is absent); ground it by verifying
+		// the required provision is genuinely ABSENT from the DRAFT's full text (not just this
+		// retrieval window). A model that must find the provision missing in the whole draft
+		// cannot hallucinate an omission that is actually present.
+		if !absentFromDraft(strings.TrimSpace(d.RequiredProvision), draftText) {
+			return ""
+		}
+		label = "OMISSION"
+	default:
+		return "" // type=none / unknown
 	}
 	sev := strings.ToLower(strings.TrimSpace(d.Severity))
 	if sev == "" {
 		sev = "medium"
 	}
-	out := fmt.Sprintf("DEVIATION (%s severity) — %s", sev, strings.TrimSpace(d.Summary))
+	out := fmt.Sprintf("%s (%s severity) — %s", label, sev, strings.TrimSpace(d.Summary))
 	if r := strings.TrimSpace(d.Recommendation); r != "" {
 		out += " Recommended correction: " + r
 	}
@@ -231,3 +252,52 @@ func (o *Orchestrator) adjudicateDeviation(prov providers.Provider, model, req, 
 // devNorm normalizes for the substring lock (collapse whitespace, lowercase) so a verbatim quote
 // verifies despite spacing/case drift, but a fabricated value still fails.
 func devNorm(s string) string { return strings.ToLower(strings.Join(strings.Fields(s), " ")) }
+
+// draftFullText concatenates the full text of the DRAFT documents under review — everything
+// except the controlling instruction memo / background summary — so an omission can be verified
+// against the WHOLE draft, not a retrieval window.
+func (o *Orchestrator) draftFullText(task *types.Task) string {
+	var b strings.Builder
+	for _, docID := range task.DocumentIDs {
+		title := strings.ToLower(docID)
+		if dd := o.knowledge.GetByID(docID); dd != nil && strings.TrimSpace(dd.Title) != "" {
+			title = strings.ToLower(dd.Title)
+		}
+		if strings.Contains(title, "instruction") || strings.Contains(title, "memo") || strings.Contains(title, "background") {
+			continue // the controlling docs, not the drafts under review
+		}
+		if txt, err := o.knowledge.GetFullText(docID); err == nil && strings.TrimSpace(txt) != "" {
+			b.WriteString(txt)
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
+}
+
+// absentFromDraft reports whether a required provision is genuinely missing from the draft: fewer
+// than 40% of its DISTINCTIVE terms (≥5 chars) appear in the draft's full text. Conservative —
+// with no draft text it returns false (can't confirm an absence), so an omission is never
+// asserted blindly.
+func absentFromDraft(provision, draftText string) bool {
+	if strings.TrimSpace(provision) == "" || strings.TrimSpace(draftText) == "" {
+		return false
+	}
+	dt := devNorm(draftText)
+	toks := map[string]bool{}
+	for _, w := range strings.Fields(strings.ToLower(provision)) {
+		w = strings.Trim(w, ".,;:()[]{}\"'`-")
+		if len(w) >= 5 {
+			toks[w] = true
+		}
+	}
+	if len(toks) == 0 {
+		return false
+	}
+	present := 0
+	for w := range toks {
+		if strings.Contains(dt, w) {
+			present++
+		}
+	}
+	return float64(present)/float64(len(toks)) < 0.4
+}
