@@ -32,7 +32,7 @@ import (
 // a deviation. The Go side then verifies both quotes appear in the retrieved passages (substring
 // lock) and drops any deviation whose quotes don't verify — a model that must copy "Twenty-Five
 // Percent (25%)" from the instruction cannot then claim the instruction says 30%.
-const deviationSystem = "You check ONE requirement from a CONTROLLING source (client instructions, a playbook, a regulation, a term sheet, or a prior agreement) against the DOCUMENT under review (a draft, a contract, a filing, a policy), using ONLY the passages given (each tagged with its SOURCE). Do NOT rely on memory. A deviation is either a CONFLICT (the document addresses the requirement but with a wrong value, name, or term) or an OMISSION (the requirement is imposed but the document does not implement it at all). Output ONLY JSON: {\"type\": \"conflict|omission|none\", \"instructionQuote\": \"<the EXACT verbatim words from the CONTROLLING source stating the requirement>\", \"draftQuote\": \"<for a CONFLICT, the EXACT verbatim words from the DOCUMENT under review; empty for an omission>\", \"requiredProvision\": \"<for an OMISSION, a short name for the missing provision>\", \"summary\": \"<one sentence>\", \"severity\": \"critical|high|medium|low\", \"recommendation\": \"<the specific correction>\"}. Quotes MUST be copied word-for-word from the passages — never invent. type=conflict ONLY if instructionQuote and draftQuote actually conflict; type=omission ONLY if the requirement is imposed but the reviewed document does not implement it; otherwise type=none."
+const deviationSystem = "You check ONE requirement against a document. The passages are grouped into two labeled sections: 'CONTROLLING SOURCE — what is required' (client instructions, a playbook, a regulation, a term sheet, or a prior agreement) and 'DOCUMENT UNDER REVIEW — what it actually says' (a draft, a contract, a filing, a policy). Use ONLY these passages; do NOT rely on memory. A deviation is either a CONFLICT (the DOCUMENT UNDER REVIEW addresses the requirement but with a wrong value, name, or term) or an OMISSION (the CONTROLLING SOURCE requires it but the DOCUMENT UNDER REVIEW does not implement it — including when its section shows no matching provision). Output ONLY JSON: {\"type\": \"conflict|omission|none\", \"instructionQuote\": \"<the EXACT verbatim words from the CONTROLLING SOURCE section stating the requirement, including any specific value it names>\", \"draftQuote\": \"<for a CONFLICT, the EXACT verbatim words from the DOCUMENT UNDER REVIEW section; empty for an omission>\", \"requiredProvision\": \"<for an OMISSION, a short name for the missing provision>\", \"summary\": \"<one sentence naming the required value and the document's value>\", \"severity\": \"critical|high|medium|low\", \"recommendation\": \"<the specific correction, stating the required value>\"}. Quotes MUST be copied word-for-word from the passages — never invent. type=conflict ONLY if the two quotes actually conflict; type=omission ONLY if the requirement is imposed but the DOCUMENT UNDER REVIEW does not implement it; otherwise type=none."
 
 // extractRequirementsSystem drives the COMPREHENSIVE requirement enumeration — the retrieval
 // floor for compare/review. Every distinct instruction the client states must become a check,
@@ -183,23 +183,18 @@ func (o *Orchestrator) detectDeviations(task *types.Task, g *evidencegraph.Graph
 	return out
 }
 
-// retrieveForDeviation pulls passages addressing one requirement across ALL documents (so the
-// instruction memo and the draft both appear), each tagged with its source so the adjudicator
-// can tell instruction from draft.
-func (o *Orchestrator) retrieveForDeviation(task *types.Task, req string) string {
-	// Retrieval floor: pull generously so BOTH the instruction memo's statement AND the draft's
-	// implementation of the requirement land in context — the grounded comparison needs both
-	// verbatim, and a thin retrieval starves it (a missed side reads as "conforms").
-	res, err := o.tools.Execute("search_chunks", map[string]interface{}{"query": req, "top_k": 12}, agents.ToolContext{TaskID: task.ID})
+// deviationSearch runs the chunk retrieval for one query and returns (source, snippet) pairs.
+func (o *Orchestrator) deviationSearch(task *types.Task, query string, k int) [][2]string {
+	res, err := o.tools.Execute("search_chunks", map[string]interface{}{"query": query, "top_k": k}, agents.ToolContext{TaskID: task.ID})
 	if err != nil {
-		return ""
+		return nil
 	}
 	m, ok := res.(map[string]interface{})
 	if !ok {
-		return ""
+		return nil
 	}
 	rows, _ := m["results"].([]map[string]interface{})
-	var b strings.Builder
+	var out [][2]string
 	for _, r := range rows {
 		sn, _ := r["snippet"].(string)
 		if strings.TrimSpace(sn) == "" {
@@ -214,7 +209,45 @@ func (o *Orchestrator) retrieveForDeviation(task *types.Task, req string) string
 		if src == "" {
 			src = "document"
 		}
-		fmt.Fprintf(&b, "[%s] %s\n", src, strings.Join(strings.Fields(sn), " "))
+		out = append(out, [2]string{src, strings.Join(strings.Fields(sn), " ")})
+	}
+	return out
+}
+
+// retrieveForDeviation retrieves the requirement's passages and presents them PAIRED — what the
+// CONTROLLING source requires beside what the DOCUMENT under review actually says — so the model
+// compares "should be" against "is" directly, rather than sifting a blended dump where a missing
+// side silently reads as "conforms". An empty reviewed side is a clean OMISSION signal. General
+// across matter types (instructions↔draft, playbook↔contract, regulation↔filing).
+func (o *Orchestrator) retrieveForDeviation(task *types.Task, req string) string {
+	rows := o.deviationSearch(task, req, 18)
+	var ctrl, rev []string
+	for _, rc := range rows {
+		if isDraftSource(rc[0]) {
+			if len(rev) < 6 {
+				rev = append(rev, rc[1])
+			}
+		} else if len(ctrl) < 6 {
+			ctrl = append(ctrl, rc[1])
+		}
+	}
+	if len(ctrl) == 0 && len(rev) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("CONTROLLING SOURCE — what is required:\n")
+	if len(ctrl) == 0 {
+		b.WriteString("(No matching passage found in the controlling source.)\n")
+	}
+	for _, s := range ctrl {
+		fmt.Fprintf(&b, "- %s\n", s)
+	}
+	b.WriteString("\nDOCUMENT UNDER REVIEW — what it actually says:\n")
+	if len(rev) == 0 {
+		b.WriteString("(No provision addressing this was found in the document under review.)\n")
+	}
+	for _, s := range rev {
+		fmt.Fprintf(&b, "- %s\n", s)
 	}
 	return strutil.TruncateToTokens(b.String(), 3200)
 }
@@ -369,31 +402,11 @@ func (o *Orchestrator) confirmOmission(task *types.Task, prov providers.Provider
 // retrieveDraftContext pulls passages on a topic from the DRAFT documents only (excluding the
 // controlling instruction memo), so an omission is judged against what the draft actually says.
 func (o *Orchestrator) retrieveDraftContext(task *types.Task, query string) string {
-	res, err := o.tools.Execute("search_chunks", map[string]interface{}{"query": query, "top_k": 14}, agents.ToolContext{TaskID: task.ID})
-	if err != nil {
-		return ""
-	}
-	m, ok := res.(map[string]interface{})
-	if !ok {
-		return ""
-	}
-	rows, _ := m["results"].([]map[string]interface{})
 	var b strings.Builder
-	for _, r := range rows {
-		sn, _ := r["snippet"].(string)
-		if strings.TrimSpace(sn) == "" {
-			continue
+	for _, rc := range o.deviationSearch(task, query, 14) {
+		if isDraftSource(rc[0]) { // draft sections only
+			fmt.Fprintf(&b, "%s\n", rc[1])
 		}
-		src, _ := r["source"].(string)
-		if src == "" {
-			if v, ok := r["document"].(string); ok {
-				src = v
-			}
-		}
-		if !isDraftSource(src) {
-			continue // draft sections only
-		}
-		fmt.Fprintf(&b, "%s\n", strings.Join(strings.Fields(sn), " "))
 	}
 	return strutil.TruncateToTokens(b.String(), 2400)
 }
