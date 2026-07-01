@@ -134,7 +134,7 @@ func (r *Registry) registerAll() {
 	// Connector stubs — return structured errors when unconfigured.
 	r.registerConnectors()
 	r.registerClioTools()
-	// Document production (ported from the Mike-derived TS tool set).
+	// Document production: docx generation, replication, tracked-change redlining.
 	r.registerDocxTools()
 	r.registerTrackedChangesTools()
 	r.registerPdfTools()
