@@ -1270,6 +1270,30 @@ func (o *Orchestrator) appendDiscrepancies(task *types.Task, body string) string
 		discrepancies = append(discrepancies, "- "+c+".")
 	}
 
+	// Deviations: draft-vs-instruction conflicts from the deviation detector (compliance/compare
+	// matters). These are the finding such tasks are scored on.
+	var deviations []string
+	seenDev := map[string]bool{}
+	for _, f := range task.Findings {
+		if f.AgentID != "deviation-detector" {
+			continue
+		}
+		c := strings.TrimSpace(f.Content)
+		if c == "" || seenDev[strings.ToLower(c)] {
+			continue
+		}
+		seenDev[strings.ToLower(c)] = true
+		deviations = append(deviations, "- "+c)
+	}
+
+	if len(derived) == 0 && len(discrepancies) == 0 && len(deviations) == 0 {
+		return body
+	}
+	if len(deviations) > 0 {
+		body = strings.TrimRight(body, "\n") +
+			"\n\n## Deviations Identified\n\nWhere the draft documents deviate from the client's instructions — each should be corrected:\n\n" +
+			strings.Join(deviations, "\n") + "\n"
+	}
 	if len(derived) == 0 && len(discrepancies) == 0 {
 		return body
 	}
@@ -2006,6 +2030,16 @@ func (o *Orchestrator) buildEvidenceGraph(task *types.Task, prov providers.Provi
 	if figs := o.harvestAndBindFigures(task, g, prov, figModel); len(figs) > 0 {
 		o.update(task, func(t *types.Task) { t.Findings = append(t.Findings, figs...) })
 		slog.Info("figure harvest seeded findings", "task", task.ID, "n", len(figs), "model", figModel, "graph_facts_after", g.Len())
+	}
+	// Stage 2 — for a non-enforcement (compare/review) matter, DETECT where the draft DEVIATES
+	// from the client's instructions per requirement. This is the finding such tasks are scored
+	// on ("residuary should be 40/35/25, draft has …"), not a description of each requirement.
+	// Runs on the spine model. Enforcement matters use the figure-discrepancy path instead.
+	if !o.isEnforcementMatter(g) {
+		if devs := o.detectDeviations(task, g, spineProv, spineModel); len(devs) > 0 {
+			o.update(task, func(t *types.Task) { t.Findings = append(t.Findings, devs...) })
+			slog.Info("deviations detected", "task", task.ID, "n", len(devs))
+		}
 	}
 	// The graph's per-chunk allegation extraction (g.Allegations()) is a grounded RECALL
 	// floor — fine-grained sub-issues, the wrong altitude for section headings on their own.
