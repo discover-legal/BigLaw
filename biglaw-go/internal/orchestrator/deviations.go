@@ -97,11 +97,10 @@ func (o *Orchestrator) detectDeviations(task *types.Task, g *evidencegraph.Graph
 	if len(reqs) == 0 {
 		return nil
 	}
-	const maxReqs = 32                 // bound the (slow) spine-model adjudications; dedup near-identical labels
-	draftText := o.draftFullText(task) // for OMISSION grounding: verify a required provision is absent
+	const maxReqs = 32 // bound the (slow) spine-model adjudications; dedup near-identical labels
 	var out []types.Finding
 	seenReq := map[string]bool{}
-	seenDev := map[string]bool{}
+	var keptSigs []map[string]bool
 	adjudicated := 0
 	for _, req := range reqs {
 		if adjudicated >= maxReqs {
@@ -117,14 +116,25 @@ func (o *Orchestrator) detectDeviations(task *types.Task, g *evidencegraph.Graph
 			continue
 		}
 		adjudicated++
-		dev := o.adjudicateDeviation(prov, model, req, ctx, draftText, task.ID)
+		dev := o.adjudicateDeviation(task, prov, model, req, ctx)
 		if dev == "" {
 			continue
 		}
-		if seenDev[strings.ToLower(dev)] {
+		// Dedup by content overlap — two requirements can surface the SAME deviation (e.g. both
+		// "first successor trustee" and "exclude Sophia" flag Sophia-as-trustee). Skip if a kept
+		// finding shares >60% of its distinctive terms.
+		sig := devSignature(dev)
+		dup := false
+		for _, prev := range keptSigs {
+			if jaccard(sig, prev) > 0.6 {
+				dup = true
+				break
+			}
+		}
+		if dup {
 			continue
 		}
-		seenDev[strings.ToLower(dev)] = true
+		keptSigs = append(keptSigs, sig)
 		out = append(out, types.Finding{
 			ID:         uuid.NewString(),
 			AgentID:    "deviation-detector",
@@ -173,7 +183,7 @@ func (o *Orchestrator) retrieveForDeviation(task *types.Task, req string) string
 	return strutil.TruncateToTokens(b.String(), 3200)
 }
 
-func (o *Orchestrator) adjudicateDeviation(prov providers.Provider, model, req, ctx, draftText, taskID string) string {
+func (o *Orchestrator) adjudicateDeviation(task *types.Task, prov providers.Provider, model, req, ctx string) string {
 	zero := 0.0
 	resp, err := prov.Chat(providers.ChatParams{
 		Model:       model,
@@ -186,7 +196,7 @@ func (o *Orchestrator) adjudicateDeviation(prov providers.Provider, model, req, 
 	if err != nil {
 		return ""
 	}
-	o.recordCost(resp, model, cost.ContextSynthesis, taskID)
+	o.recordCost(resp, model, cost.ContextSynthesis, task.ID)
 	var text string
 	for _, blk := range resp.Content {
 		if blk.Type == providers.BlockText {
@@ -227,11 +237,12 @@ func (o *Orchestrator) adjudicateDeviation(prov providers.Provider, model, req, 
 			return ""
 		}
 	case "omission":
-		// OMISSION — there is no draft quote (the provision is absent); ground it by verifying
-		// the required provision is genuinely ABSENT from the DRAFT's full text (not just this
-		// retrieval window). A model that must find the provision missing in the whole draft
-		// cannot hallucinate an omission that is actually present.
-		if !absentFromDraft(strings.TrimSpace(d.RequiredProvision), draftText) {
+		// OMISSION — there is no draft quote (the provision is absent). Ground it with a focused
+		// second look: retrieve the DRAFT's own sections on this provision and have the model
+		// judge PRESENT vs ABSENT, told explicitly that a HEMS-style mention ("health, education,
+		// maintenance, support") is NOT the provision. A keyword check can't make that call — the
+		// word "education" is in every trust; a separate education trust may still be missing.
+		if !o.confirmOmission(task, prov, model, strings.TrimSpace(d.RequiredProvision)) {
 			return ""
 		}
 		label = "OMISSION"
@@ -253,51 +264,107 @@ func (o *Orchestrator) adjudicateDeviation(prov providers.Provider, model, req, 
 // verifies despite spacing/case drift, but a fabricated value still fails.
 func devNorm(s string) string { return strings.ToLower(strings.Join(strings.Fields(s), " ")) }
 
-// draftFullText concatenates the full text of the DRAFT documents under review — everything
-// except the controlling instruction memo / background summary — so an omission can be verified
-// against the WHOLE draft, not a retrieval window.
-func (o *Orchestrator) draftFullText(task *types.Task) string {
-	var b strings.Builder
-	for _, docID := range task.DocumentIDs {
-		title := strings.ToLower(docID)
-		if dd := o.knowledge.GetByID(docID); dd != nil && strings.TrimSpace(dd.Title) != "" {
-			title = strings.ToLower(dd.Title)
-		}
-		if strings.Contains(title, "instruction") || strings.Contains(title, "memo") || strings.Contains(title, "background") {
-			continue // the controlling docs, not the drafts under review
-		}
-		if txt, err := o.knowledge.GetFullText(docID); err == nil && strings.TrimSpace(txt) != "" {
-			b.WriteString(txt)
-			b.WriteString("\n")
+// devSignature is the set of distinctive terms (≥5 chars) in a deviation string — used to dedup
+// two requirements that surfaced the same underlying deviation.
+func devSignature(s string) map[string]bool {
+	sig := map[string]bool{}
+	for _, w := range strings.Fields(strings.ToLower(s)) {
+		w = strings.Trim(w, ".,;:()[]{}\"'`-—")
+		if len(w) >= 5 {
+			sig[w] = true
 		}
 	}
-	return b.String()
+	return sig
 }
 
-// absentFromDraft reports whether a required provision is genuinely missing from the draft: fewer
-// than 40% of its DISTINCTIVE terms (≥5 chars) appear in the draft's full text. Conservative —
-// with no draft text it returns false (can't confirm an absence), so an omission is never
-// asserted blindly.
-func absentFromDraft(provision, draftText string) bool {
-	if strings.TrimSpace(provision) == "" || strings.TrimSpace(draftText) == "" {
-		return false
+// jaccard is the overlap ratio between two term sets (|A∩B| / |A∪B|).
+func jaccard(a, b map[string]bool) float64 {
+	if len(a) == 0 || len(b) == 0 {
+		return 0
 	}
-	dt := devNorm(draftText)
-	toks := map[string]bool{}
-	for _, w := range strings.Fields(strings.ToLower(provision)) {
-		w = strings.Trim(w, ".,;:()[]{}\"'`-")
-		if len(w) >= 5 {
-			toks[w] = true
+	inter := 0
+	for w := range a {
+		if b[w] {
+			inter++
 		}
 	}
-	if len(toks) == 0 {
+	union := len(a) + len(b) - inter
+	if union == 0 {
+		return 0
+	}
+	return float64(inter) / float64(union)
+}
+
+// omissionCheckSystem verifies whether a DRAFT actually establishes a required provision, told
+// explicitly that a related word in another context (HEMS) is not the provision. One word out.
+const omissionCheckSystem = "You verify whether a DRAFT legal document establishes a REQUIRED provision. You are given the required provision and the draft's own sections most relevant to it. Answer with ONLY one word: PRESENT if the draft actually establishes or contains that provision, or ABSENT if it does not. IMPORTANT: a mere mention of a related word does NOT count — e.g. the word 'education' inside a 'health, education, maintenance, and support' distribution standard is NOT a separate education trust. Only a genuine, structural implementation of the required provision counts as PRESENT."
+
+// confirmOmission grounds an OMISSION claim: it retrieves the DRAFT's own sections on the
+// provision and asks the model whether the provision is genuinely established, guarding against
+// the keyword false-friend (the word is present, the provision is not). No draft sections at all
+// → omitted; the model's ABSENT verdict → confirmed.
+func (o *Orchestrator) confirmOmission(task *types.Task, prov providers.Provider, model, provision string) bool {
+	if strings.TrimSpace(provision) == "" {
 		return false
 	}
-	present := 0
-	for w := range toks {
-		if strings.Contains(dt, w) {
-			present++
+	draftCtx := o.retrieveDraftContext(task, provision)
+	if strings.TrimSpace(draftCtx) == "" {
+		return true // the draft says nothing on this provision → omitted
+	}
+	zero := 0.0
+	resp, err := prov.Chat(providers.ChatParams{
+		Model: model, MaxTokens: 8, System: omissionCheckSystem,
+		Messages:    []providers.Message{{Role: "user", Content: "REQUIRED PROVISION: " + provision + "\n\nDRAFT SECTIONS:\n" + draftCtx}},
+		CacheSystem: true, Temperature: &zero,
+	})
+	if err != nil {
+		return false
+	}
+	o.recordCost(resp, model, cost.ContextSynthesis, task.ID)
+	var txt string
+	for _, b := range resp.Content {
+		if b.Type == providers.BlockText {
+			txt += b.Text
 		}
 	}
-	return float64(present)/float64(len(toks)) < 0.4
+	return strings.Contains(strings.ToUpper(txt), "ABSENT")
+}
+
+// retrieveDraftContext pulls passages on a topic from the DRAFT documents only (excluding the
+// controlling instruction memo), so an omission is judged against what the draft actually says.
+func (o *Orchestrator) retrieveDraftContext(task *types.Task, query string) string {
+	res, err := o.tools.Execute("search_chunks", map[string]interface{}{"query": query, "top_k": 14}, agents.ToolContext{TaskID: task.ID})
+	if err != nil {
+		return ""
+	}
+	m, ok := res.(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	rows, _ := m["results"].([]map[string]interface{})
+	var b strings.Builder
+	for _, r := range rows {
+		sn, _ := r["snippet"].(string)
+		if strings.TrimSpace(sn) == "" {
+			continue
+		}
+		src, _ := r["source"].(string)
+		if src == "" {
+			if v, ok := r["document"].(string); ok {
+				src = v
+			}
+		}
+		if !isDraftSource(src) {
+			continue // draft sections only
+		}
+		fmt.Fprintf(&b, "%s\n", strings.Join(strings.Fields(sn), " "))
+	}
+	return strutil.TruncateToTokens(b.String(), 2400)
+}
+
+// isDraftSource reports whether a retrieval source is a draft under review (not the controlling
+// instruction memo / background summary).
+func isDraftSource(src string) bool {
+	s := strings.ToLower(src)
+	return s != "" && !strings.Contains(s, "instruction") && !strings.Contains(s, "memo") && !strings.Contains(s, "background")
 }
