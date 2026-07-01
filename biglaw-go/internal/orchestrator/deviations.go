@@ -26,7 +26,12 @@ import (
 // Requirement issue, retrieve the passages addressing it across the instruction memo AND the
 // drafts, then adjudicate: conform, or deviate (with severity + the specific correction)?
 
-const deviationSystem = "You compare a client's INSTRUCTIONS against a DRAFT legal document. You are given passages — each tagged with its SOURCE document — that all address ONE requirement. Decide whether the DRAFT DEVIATES from what the client INSTRUCTED (a wrong value, a wrong name, an omitted provision, a conflicting term). Output ONLY JSON: {\"deviation\": true|false, \"summary\": \"<one sentence naming the requirement, the draft's value, and the instructed value>\", \"severity\": \"critical|high|medium|low\", \"recommendation\": \"<the specific correction>\"}. State EXACT values — percentages, ages, dates, dollar amounts, names. Set deviation=false if the draft conforms or the passages don't show a conflict. Never invent a conflict."
+// deviationSystem applies the SAME grounding discipline as the rest of the pipeline: the model
+// must COPY the exact instruction text and the exact draft text (verbatim) before it may assert
+// a deviation. The Go side then verifies both quotes appear in the retrieved passages (substring
+// lock) and drops any deviation whose quotes don't verify — a model that must copy "Twenty-Five
+// Percent (25%)" from the instruction cannot then claim the instruction says 30%.
+const deviationSystem = "You compare a client's INSTRUCTIONS against a DRAFT legal document for ONE requirement, using ONLY the passages given (each tagged with its SOURCE). Do NOT rely on memory. Output ONLY JSON with these fields: {\"instructionQuote\": \"<the EXACT words from the client-instruction source stating what is required — copied verbatim>\", \"draftQuote\": \"<the EXACT words from the DRAFT source implementing it — copied verbatim>\", \"deviation\": true|false, \"summary\": \"<one sentence: the draft says <draft value> but the client instructed <instruction value>>\", \"severity\": \"critical|high|medium|low\", \"recommendation\": \"<the specific correction>\"}. BOTH quotes MUST be copied word-for-word from the passages above — do not paraphrase or invent. Set deviation=true ONLY if the two verbatim quotes actually conflict. If the draft conforms, or you cannot find BOTH verbatim quotes, set deviation=false."
 
 // detectDeviations adjudicates each requirement issue for a draft-vs-instruction deviation and
 // returns the confirmed ones as findings (routed to their section at synthesis + summarised).
@@ -81,7 +86,10 @@ func (o *Orchestrator) detectDeviations(task *types.Task, g *evidencegraph.Graph
 // instruction memo and the draft both appear), each tagged with its source so the adjudicator
 // can tell instruction from draft.
 func (o *Orchestrator) retrieveForDeviation(task *types.Task, req string) string {
-	res, err := o.tools.Execute("search_chunks", map[string]interface{}{"query": req, "top_k": 8}, agents.ToolContext{TaskID: task.ID})
+	// Retrieval floor: pull generously so BOTH the instruction memo's statement AND the draft's
+	// implementation of the requirement land in context — the grounded comparison needs both
+	// verbatim, and a thin retrieval starves it (a missed side reads as "conforms").
+	res, err := o.tools.Execute("search_chunks", map[string]interface{}{"query": req, "top_k": 12}, agents.ToolContext{TaskID: task.ID})
 	if err != nil {
 		return ""
 	}
@@ -107,7 +115,7 @@ func (o *Orchestrator) retrieveForDeviation(task *types.Task, req string) string
 		}
 		fmt.Fprintf(&b, "[%s] %s\n", src, strings.Join(strings.Fields(sn), " "))
 	}
-	return strutil.TruncateToTokens(b.String(), 2200)
+	return strutil.TruncateToTokens(b.String(), 3200)
 }
 
 func (o *Orchestrator) adjudicateDeviation(prov providers.Provider, model, req, ctx, taskID string) string {
@@ -136,12 +144,23 @@ func (o *Orchestrator) adjudicateDeviation(prov providers.Provider, model, req, 
 		return ""
 	}
 	var d struct {
-		Deviation      bool   `json:"deviation"`
-		Summary        string `json:"summary"`
-		Severity       string `json:"severity"`
-		Recommendation string `json:"recommendation"`
+		InstructionQuote string `json:"instructionQuote"`
+		DraftQuote       string `json:"draftQuote"`
+		Deviation        bool   `json:"deviation"`
+		Summary          string `json:"summary"`
+		Severity         string `json:"severity"`
+		Recommendation   string `json:"recommendation"`
 	}
 	if json.Unmarshal([]byte(t[i:j+1]), &d) != nil || !d.Deviation || strings.TrimSpace(d.Summary) == "" {
+		return ""
+	}
+	// GROUNDING LOCK — the same discipline as the rest of the pipeline: both the instruction
+	// value and the draft value must be VERBATIM in the retrieved passages, or the "deviation"
+	// is a fabrication (the 25%→30% hallucination) and is dropped. This is what turns a
+	// confident-but-wrong comparison into a grounded one.
+	iq, dq := strings.TrimSpace(d.InstructionQuote), strings.TrimSpace(d.DraftQuote)
+	nctx := devNorm(ctx)
+	if len(iq) < 4 || len(dq) < 4 || !strings.Contains(nctx, devNorm(iq)) || !strings.Contains(nctx, devNorm(dq)) {
 		return ""
 	}
 	sev := strings.ToLower(strings.TrimSpace(d.Severity))
@@ -154,3 +173,7 @@ func (o *Orchestrator) adjudicateDeviation(prov providers.Provider, model, req, 
 	}
 	return out
 }
+
+// devNorm normalizes for the substring lock (collapse whitespace, lowercase) so a verbatim quote
+// verifies despite spacing/case drift, but a fabricated value still fails.
+func devNorm(s string) string { return strings.ToLower(strings.Join(strings.Fields(s), " ")) }
