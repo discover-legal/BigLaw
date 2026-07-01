@@ -17,6 +17,8 @@ type SettingsPatch = {
   debate?: Partial<AppSettings["debate"]>;
   docuseal?: Partial<{ enabled: boolean; url: string; apiKey: string }>;
   clientVoice?: Partial<AppSettings["clientVoice"]>;
+  models?: Partial<AppSettings["models"]>;
+  drafting?: Partial<AppSettings["drafting"]>;
 };
 
 async function json<T>(res: Response): Promise<T> {

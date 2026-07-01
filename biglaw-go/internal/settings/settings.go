@@ -60,6 +60,22 @@ type ClientVoiceSettings struct {
 	MatterNotifications bool `json:"matterNotifications"`
 }
 
+// Models is the user-facing model picker: which model performs figure extraction, plus the
+// list of model ids offered in the GUI (user-extendable via Available).
+type Models struct {
+	FigureModel    string   `json:"figureModel"`
+	SpineModel     string   `json:"spineModel"`     // BELO conduct/spine pass (e.g. local:qwen2.5:14b)
+	SynthesisModel string   `json:"synthesisModel"` // synthesis/drafting the deliverable (the judged memo)
+	Available      []string `json:"available"`
+}
+
+// Drafting toggles collaborative DyTopo section writing and its huddle size/rounds.
+type Drafting struct {
+	DyTopo           bool `json:"dytopo"`
+	AgentsPerSection int  `json:"agentsPerSection"`
+	Rounds           int  `json:"rounds"`
+}
+
 // PublicSettings is the GET /settings (and PUT /settings) response.
 type PublicSettings struct {
 	Presentation Presentation        `json:"presentation"`
@@ -67,6 +83,8 @@ type PublicSettings struct {
 	Debate       Debate              `json:"debate"`
 	DocuSeal     DocuSealPublic      `json:"docuseal"`
 	ClientVoice  ClientVoiceSettings `json:"clientVoice"`
+	Models       Models              `json:"models"`
+	Drafting     Drafting            `json:"drafting"`
 }
 
 // persisted is the on-disk file shape: full settings including the API key.
@@ -80,6 +98,8 @@ type persisted struct {
 		APIKey  string `json:"apiKey"`
 	} `json:"docuseal"`
 	ClientVoice ClientVoiceSettings `json:"clientVoice"`
+	Models      Models              `json:"models"`
+	Drafting    Drafting            `json:"drafting"`
 }
 
 // Patch is a deep-partial update; nil fields are left unchanged. Numeric
@@ -109,6 +129,17 @@ type Patch struct {
 		GateNotes           *bool `json:"gateNotes"`
 		MatterNotifications *bool `json:"matterNotifications"`
 	} `json:"clientVoice"`
+	Models *struct {
+		FigureModel    *string  `json:"figureModel"`
+		SpineModel     *string  `json:"spineModel"`
+		SynthesisModel *string  `json:"synthesisModel"`
+		Available      []string `json:"available"`
+	} `json:"models"`
+	Drafting *struct {
+		DyTopo           *bool    `json:"dytopo"`
+		AgentsPerSection *float64 `json:"agentsPerSection"`
+		Rounds           *float64 `json:"rounds"`
+	} `json:"drafting"`
 }
 
 // ─── Store ────────────────────────────────────────────────────────────────────
@@ -197,6 +228,8 @@ func (s *SettingsStore) public() PublicSettings {
 			GateNotes:           c.ClientVoice.GateNotes,
 			MatterNotifications: c.ClientVoice.MatterNotifications,
 		},
+		Models:   Models{FigureModel: c.Models.FigureModel, SpineModel: c.Models.SpineModel, SynthesisModel: c.Models.SynthesisModel, Available: c.Models.Available},
+		Drafting: Drafting{DyTopo: c.Drafting.DyTopo, AgentsPerSection: c.Drafting.AgentsPerSection, Rounds: c.Drafting.Rounds},
 	}
 }
 
@@ -271,6 +304,40 @@ func (s *SettingsStore) apply(p Patch, validateURL bool) {
 			c.ClientVoice.MatterNotifications = *v
 		}
 	}
+	if p.Models != nil {
+		if v := p.Models.FigureModel; v != nil {
+			c.Models.FigureModel = strings.TrimSpace(*v)
+		}
+		if v := p.Models.SpineModel; v != nil {
+			c.Models.SpineModel = strings.TrimSpace(*v)
+		}
+		if v := p.Models.SynthesisModel; v != nil {
+			c.Models.SynthesisModel = strings.TrimSpace(*v)
+		}
+		if p.Models.Available != nil { // full replace: the GUI sends the edited list
+			cleaned := make([]string, 0, len(p.Models.Available))
+			seen := map[string]bool{}
+			for _, m := range p.Models.Available {
+				m = strings.TrimSpace(m)
+				if m != "" && !seen[m] {
+					seen[m] = true
+					cleaned = append(cleaned, m)
+				}
+			}
+			c.Models.Available = cleaned
+		}
+	}
+	if p.Drafting != nil {
+		if v := p.Drafting.DyTopo; v != nil {
+			c.Drafting.DyTopo = *v
+		}
+		if v := p.Drafting.AgentsPerSection; v != nil {
+			c.Drafting.AgentsPerSection = clampInt(*v, 1, 5, c.Drafting.AgentsPerSection)
+		}
+		if v := p.Drafting.Rounds; v != nil {
+			c.Drafting.Rounds = clampInt(*v, 1, 4, c.Drafting.Rounds)
+		}
+	}
 }
 
 // persist writes the full current settings (including the API key) to disk
@@ -297,6 +364,8 @@ func (s *SettingsStore) persist() error {
 		GateNotes:           c.ClientVoice.GateNotes,
 		MatterNotifications: c.ClientVoice.MatterNotifications,
 	}
+	p.Models = Models{FigureModel: c.Models.FigureModel, Available: c.Models.Available}
+	p.Drafting = Drafting{DyTopo: c.Drafting.DyTopo, AgentsPerSection: c.Drafting.AgentsPerSection, Rounds: c.Drafting.Rounds}
 
 	data, err := json.MarshalIndent(p, "", "  ")
 	if err != nil {

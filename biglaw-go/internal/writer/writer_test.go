@@ -105,10 +105,19 @@ func TestWriterPullsSpecificsAtSynthesis(t *testing.T) {
 	// Specifics func is invoked and its figure reaches the drafter — proving the
 	// on-demand-at-synthesis path fires without findings pre-stuffing.
 	var calls int
-	var sawFigure bool
+	var sawHandle, sawRawDigit bool
 	prov := &capturingProv{onUser: func(s string) {
-		if strings.Contains(s, "$7,800,000") {
-			sawFigure = true
+		// The figure reaches the drafter as a MASKED HANDLE: its context is shown with the
+		// digit replaced by a neutral name (Zephyr = figureHandles[0]), so the model never
+		// reads "$7,800,000" but knows the name refers to the Oceanic excess-profits figure.
+		if strings.Contains(s, "Oceanic Fund I LP") && strings.Contains(s, "Zephyr") {
+			sawHandle = true
+		}
+		// Only the DRAFTER prompt must be digit-free (masking). The stitch call legitimately
+		// sees the finished sections' real figures (incl. the salient-guarantee tail), so scope
+		// the leak check to drafter prompts.
+		if strings.Contains(s, "Write the section") && strings.Contains(s, "$7,800,000") {
+			sawRawDigit = true
 		}
 	}}
 	opt := Options{MaxFindingsPerSec: 2, Specifics: func(topic string, topK int) []SpecificHit {
@@ -122,8 +131,11 @@ func TestWriterPullsSpecificsAtSynthesis(t *testing.T) {
 	if calls == 0 {
 		t.Error("Specifics was never called at synthesis")
 	}
-	if !sawFigure {
-		t.Error("the seeded figure ($7,800,000) was not injected into a drafter prompt")
+	if !sawHandle {
+		t.Error("the seeded figure was not presented to a drafter as a masked handle")
+	}
+	if sawRawDigit {
+		t.Error("the raw digit ($7,800,000) leaked into the drafter prompt — masking failed")
 	}
 }
 
@@ -160,6 +172,78 @@ func TestAttachKeyFiguresYearLeadTrap(t *testing.T) {
 	out := attachKeyFigures(narrative, hits)
 	if !strings.Contains(out, "$7,800,000") {
 		t.Errorf("year-lead row was wrongly suppressed; $7,800,000 must be attached:\n%s", out)
+	}
+}
+
+func TestDedupeFindings(t *testing.T) {
+	in := []Finding{
+		{ID: "a", Content: "The Division of Examinations commenced its examination of WCA on March 11, 2024, and concluded on August 2, 2024."},
+		{ID: "b", Content: "The Division of Examinations commenced its examination of WCA on March 11, 2024, and concluded on August 2, 2024 (restated)."},
+		{ID: "c", Content: "Excess profits allocated to Oceanic Fund I LP: $7,800,000."},
+	}
+	if out := dedupeFindings(in); len(out) != 2 {
+		t.Fatalf("expected 2 after dedup (near-identical timeline paras collapse), got %d", len(out))
+	}
+}
+
+func TestSalientFigureCitationAware(t *testing.T) {
+	cases := map[string]string{
+		"Excess profits to Oceanic Fund I LP (2021-2023) $7,800,000": "$7,800,000",
+		"Chao personal account profitable allocation rate 81.6%":     "81.6%",
+		"312 Microsoft Excel spreadsheets with backdated metadata":   "312",
+		"in violation of Sections 206(1) and 206(2) of the Act":      "", // citation, not a figure
+		"as required by Rule 204-2 under the Advisers Act":           "", // citation
+	}
+	for in, want := range cases {
+		if got := salientFigure(in); got != want {
+			t.Errorf("salientFigure(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestAttachKeyFiguresSelective(t *testing.T) {
+	hits := []SpecificHit{
+		{Text: "Excess profits to Oceanic Fund I LP (2021-2023) $7,800,000", Source: "x.xlsx"},
+		{Text: "Excess profits to Oceanic Fund I LP duplicate row $7,800,000", Source: "x.xlsx"},
+		{Text: "in violation of Sections 206(1) and 206(2)", Source: "y.docx"},
+	}
+	out := attachKeyFigures("Some prose with no figures.", hits)
+	if strings.Count(out, "$7,800,000") != 1 {
+		t.Errorf("expected the $ figure once (deduped by figure):\n%s", out)
+	}
+	if strings.Contains(out, "206") {
+		t.Errorf("citation row should not appear in Key figures:\n%s", out)
+	}
+	if strings.Contains(out, "duplicate row") {
+		t.Errorf("raw duplicate row leaked into output:\n%s", out)
+	}
+}
+
+func TestResolveFigurePlaceholders(t *testing.T) {
+	figs := []SpecificHit{
+		{Text: "Chao personal account profitable allocation rate\t81.6%", Source: "x.xlsx"},
+		{Text: "Excess profits allocated to Oceanic Fund I LP\t$7,800,000", Source: "x.xlsx"},
+	}
+	text := "Chao's account showed a rate of {{FIG: Chao personal account profitable allocation rate}}, and {{FIG: Oceanic Fund excess profits}} in excess profits."
+	out := resolveFigurePlaceholders(text, figs)
+	if !strings.Contains(out, "81.6%") {
+		t.Errorf("rate placeholder not resolved to grounded figure: %s", out)
+	}
+	if !strings.Contains(out, "$7,800,000") {
+		t.Errorf("amount placeholder not resolved: %s", out)
+	}
+	if strings.Contains(out, "{{FIG") {
+		t.Errorf("placeholders left unresolved: %s", out)
+	}
+	// The model can never inject a hallucinated value (68.6%) — only grounded figures
+	// appear, because the number comes from figs, not the model.
+	if strings.Contains(out, "68.6") {
+		t.Error("a non-grounded value appeared — impossible via placeholders")
+	}
+	// Unmatched placeholder is DROPPED (never guessed), leaving clean prose.
+	un := resolveFigurePlaceholders("a value of {{FIG: something not in the figures}} here", figs)
+	if strings.Contains(un, "{{FIG") || strings.Contains(un, "81.6") {
+		t.Errorf("unmatched placeholder mishandled: %q", un)
 	}
 }
 
@@ -283,5 +367,38 @@ func TestBatchByTokens(t *testing.T) {
 	}
 	if len(batches) < 2 {
 		t.Errorf("expected blocks split across batches, got %d batch(es)", len(batches))
+	}
+}
+
+func TestFigureSalienceRanking(t *testing.T) {
+	// Headline harm figures must outrank exhibit noise.
+	gt := [][2]string{{"$8,238,000", "$185"}, {"4,217", "3"}, {"$438,000", "12%"}, {"81.6%", "3"}, {"$92,290.00", "$40"}}
+	for _, c := range gt {
+		if figureSalience(c[0]) <= figureSalience(c[1]) {
+			t.Errorf("salience(%q)=%d should exceed salience(%q)=%d", c[0], figureSalience(c[0]), c[1], figureSalience(c[1]))
+		}
+	}
+}
+
+func TestAssignHandlesSurfacesSalient(t *testing.T) {
+	// cherry-picking's real list: 6 salient figures buried among 16 noise values. After ranking
+	// + the cap, the salient harm figures must survive; the noise tail falls off.
+	raw := []string{"3", "62%", "2", "1.5%", "81.6%", "$2.3", "$185", "$92", "$40", "20%", "6%",
+		"15%", "5%", "$87,655.90", "$8,238,000", "$3.1", "$438,000", "12%", "1", "4,217"}
+	var hits []SpecificHit
+	for _, v := range raw {
+		hits = append(hits, SpecificHit{Text: "the OQR found " + v + " in the analysis", Source: "exhibit.xlsx"})
+	}
+	got := map[string]bool{}
+	for _, h := range assignHandles(hits) {
+		got[h.Value] = true
+	}
+	for _, want := range []string{"$8,238,000", "$438,000", "4,217"} {
+		if !got[want] {
+			t.Errorf("salient figure %q dropped from the handle list", want)
+		}
+	}
+	if got["3"] || got["1"] || got["2"] {
+		t.Error("bare-noise figures survived the cap ahead of salient ones")
 	}
 }

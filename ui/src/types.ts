@@ -302,6 +302,8 @@ export interface AppSettings {
   debate: { verificationPasses: number; gateConfidenceThreshold: number; adversarialEnabled: boolean; citationRequired: boolean };
   docuseal: { enabled: boolean; url: string; apiKeySet: boolean };
   clientVoice: { gateNotes: boolean; matterNotifications: boolean };
+  models: { figureModel: string; spineModel: string; synthesisModel: string; available: string[] };
+  drafting: { dytopo: boolean; agentsPerSection: number; rounds: number };
 }
 
 export interface AgentSummary {

@@ -195,6 +195,10 @@ type LocalConfig struct {
 	LocalInferenceTiers string
 	InferenceWatts      int
 	InferenceRegion     string
+	// RequestTimeoutSec bounds a single local HTTP call. The default (300s) suits a model
+	// that fits in VRAM; a larger model spilling to CPU (e.g. 14B on an 8GB GPU) can need much
+	// longer for a long-form generation, so raise it for those runs.
+	RequestTimeoutSec int
 }
 
 type PDFConfig struct {
@@ -390,7 +394,31 @@ type DatabaseConfig struct {
 	URL        string // postgres DSN, when Backend=postgres
 }
 
+// ModelsConfig holds user-selectable model assignments for specific roles, plus the list
+// of models offered in the UI picker. FigureModel is the small, temp-0 model used for the
+// deterministic figure-extraction pass (a cheap 7B-class model is enough and keeps the
+// pipeline efficient — the heavy model is not needed for copy-out extraction).
+type ModelsConfig struct {
+	FigureModel    string   // model id for figure extraction (empty → fall back to the tool/local model)
+	SpineModel     string   // model id for the BELO conduct/spine pass (empty → fall back to the bulk model)
+	SynthesisModel string   // model id for synthesis/drafting the deliverable (empty → routed default)
+	Available      []string // model ids offered in the GUI picker (user-extendable)
+}
+
+// DraftingConfig governs the synthesis writing style. When DyTopo is on, each section is
+// produced by a bounded writing huddle (lead drafter + contributor agents that critique and
+// add grounded specifics over a few rounds), run concurrently across sections, then composed
+// by the paged pass. Off → a single drafter per section.
+type DraftingConfig struct {
+	DyTopo           bool // collaborative DyTopo drafting on/off
+	AgentsPerSection int  // huddle size (lead + contributors), default 2
+	Rounds           int  // huddle rounds: 1 = draft only; 2-3 = draft→critique→revise
+}
+
 type Config struct {
+	Models       ModelsConfig
+	Drafting     DraftingConfig
+	BELOSpine    bool // derive the spine from typed Conduct nodes instead of LLM enumeration
 	Model        ModelConfig
 	Database     DatabaseConfig
 	Embeddings   EmbeddingsConfig
@@ -443,6 +471,18 @@ func normalizeEnum(v, fallback string, allowed ...string) string {
 
 func Load() *Config {
 	c := &Config{
+		Models: ModelsConfig{
+			FigureModel:    env("FIGURE_MODEL", ""),     // empty → fall back to the tool/local model
+			SpineModel:     env("BELO_SPINE_MODEL", ""), // empty → fall back to the bulk model
+			SynthesisModel: env("SYNTHESIS_MODEL", ""),  // empty → routed default (spend 14B on the judged memo)
+			Available:      envList("AVAILABLE_MODELS", "qwen2.5:1.5b,qwen2.5:3b,qwen2.5:7b,qwen2.5:14b"),
+		},
+		Drafting: DraftingConfig{
+			DyTopo:           envBool("DYTOPO_DRAFTING", false),
+			AgentsPerSection: envInt("DRAFTING_AGENTS_PER_SECTION", 2),
+			Rounds:           envInt("DRAFTING_ROUNDS", 2),
+		},
+		BELOSpine: envBool("BELO_SPINE", false), // spine from typed Conduct nodes vs LLM enumeration
 		Database: DatabaseConfig{
 			Backend:    normalizeEnum(os.Getenv("DB_BACKEND"), "sqlite", "sqlite", "postgres", "memory"),
 			SQLitePath: env("SQLITE_PATH", "./data/biglaw.db"),
@@ -523,6 +563,7 @@ func Load() *Config {
 			LocalInferenceTiers: env("LOCAL_INFERENCE_TIERS", ""),
 			InferenceWatts:      envInt("LOCAL_INFERENCE_WATTS", 250),
 			InferenceRegion:     env("LOCAL_INFERENCE_REGION", "SEALAND"),
+			RequestTimeoutSec:   envInt("LOCAL_REQUEST_TIMEOUT", 300),
 		},
 		PDF: PDFConfig{
 			PythonBin: env("PDF_PYTHON_BIN", "python3"),

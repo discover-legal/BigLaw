@@ -36,7 +36,13 @@ func NewOllamaProvider(cfg *config.Config) *OllamaProvider {
 		baseURL = cfg.Local.LocalInferenceURL
 		apiKey = cfg.Local.LocalInferenceKey
 	}
-	return NewOpenAICompatProvider(baseURL, apiKey)
+	p := NewOpenAICompatProvider(baseURL, apiKey)
+	// A model spilling to CPU (e.g. 14B on an 8GB GPU) can take longer than the default 300s
+	// for a long-form generation; raise the per-call timeout for local inference when set.
+	if cfg.Local.RequestTimeoutSec > 0 {
+		p.client.Timeout = time.Duration(cfg.Local.RequestTimeoutSec) * time.Second
+	}
+	return p
 }
 
 // NewOpenAICompatProvider builds a provider against any OpenAI-compatible chat

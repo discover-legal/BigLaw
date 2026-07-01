@@ -6,8 +6,11 @@ package writer
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/discover-legal/biglaw-go/internal/embeddings"
@@ -37,6 +40,43 @@ type Options struct {
 	// a GUARANTEED section with findings mapped into it — so no required category can
 	// silently vanish through clustering variance. Empty → fall back to clustering.
 	RequiredSections []string
+	// WriterSystem, when set, is the system prompt of the DyTopo writing agent chosen
+	// for this deliverable (e.g. the Due-Diligence Report Drafter). The section authors
+	// then write AS that agent — its drafting expertise composing from the evidence
+	// blackboard — instead of a generic drafter. Empty → the built-in drafterSystem.
+	WriterSystem string
+	// Facts is the matter's evidence-graph ledger: grounded entity/relation facts
+	// (Whitmore holds 12% of Oceanic; Ostrowski is 40% owner of Lakeshore; Crescent Bay is
+	// victim of the directed-brokerage scheme). Each section author is given only the facts
+	// RELEVANT to its section (matched by overlap with the section's title + its findings),
+	// not the whole ledger — lighter context (no crowding on a small window) and sharper
+	// attribution. Fixes the mis-attribution and dropped-relation failures of flat findings.
+	Facts []Fact
+	// FactsGlobal feature-gates the routing: when true, every section author gets the WHOLE
+	// ledger (the earlier behaviour) instead of its routed subset. Default false = per-section.
+	FactsGlobal bool
+	// SectionAliases maps a RequiredSections heading to the alternate surface forms the
+	// documents use for that allegation (from the evidence-graph merge). Folded into the
+	// section's match text so per-section fact routing catches facts phrased like any variant.
+	SectionAliases map[string][]string
+	// DyTopoDrafting turns on collaborative section writing: each section is produced by a
+	// bounded writing "huddle" (a lead drafter + contributor agents that critique and feed
+	// grounded specifics, over a few rounds) instead of a single drafter — DyTopo's
+	// Need/Offer collaboration applied to writing. Phase 1 (huddles) runs CONCURRENTLY across
+	// sections; Phase 2 is the sequential paged compose/assemble. Off → single-drafter paging.
+	DyTopoDrafting bool
+	// DraftingAgents are the writing agents' expertise/voice prompts for a huddle: index 0 is
+	// the LEAD drafter, the rest are CONTRIBUTORS that critique and offer grounded additions.
+	DraftingAgents []string
+	// DraftingRounds bounds the huddle: 1 = lead drafts only; 2-3 = draft → critique → revise.
+	DraftingRounds int
+	// Paged enables context-paging synthesis: each section is authored in order, then
+	// COMPACTED to a handle so it stops consuming the model's context; later section
+	// authors see the compacted handles and can call expand_section to UNCOMPACT any
+	// finished section on demand if they need its detail. Final assembly uncompacts
+	// everything — lossless. This lets a small-context model produce a deliverable that
+	// far exceeds its window. Requires RequiredSections (the section spine).
+	Paged bool
 }
 
 // SpecificHit is one figure-bearing source passage: the verbatim row (to state
@@ -56,6 +96,10 @@ type Writer struct {
 	prov  providers.Provider
 	model string // bare model id (already resolved)
 	opt   Options
+	// factVecs parallels opt.Facts: the embedding of each fact's Key, precomputed once so
+	// per-section routing matches facts to sections by cosine (semantic) instead of keyword
+	// overlap — catching facts phrased unlike the section heading. nil → keyword fallback.
+	factVecs [][]float32
 }
 
 // New builds a Writer. prov/model is the (already-resolved) synthesis provider and
@@ -89,6 +133,246 @@ type section struct {
 	FindingIDs []string
 }
 
+// Fact is one grounded evidence-graph fact for synthesis: Line is the display form shown
+// to the author; Key is its lowercased matchable text (subject+relation+object+value+quote)
+// used to route the fact to the section(s) it concerns.
+type Fact struct {
+	Line   string
+	Key    string
+	Entity string // subject/party — groups the compacted "rest" in paged-facts mode
+}
+
+// factsFor selects the evidence-graph facts relevant to a section: a fact is included when
+// its Key shares enough salient tokens (len ≥ 4) with the section's match text (title +
+// brief + its findings' content). Routes entity facts to the sections that discuss those
+// entities, and keeps each author's fact load small (no whole-ledger crowding). Returns
+// the rendered block (empty if none match).
+func (w *Writer) factsFor(s section, ix *FindingIndex, plan []string) string {
+	if len(w.opt.Facts) == 0 {
+		return ""
+	}
+	if w.opt.FactsGlobal { // gate: whole ledger to every author (A/B override)
+		lines := make([]string, 0, len(w.opt.Facts))
+		for _, f := range w.opt.Facts {
+			lines = append(lines, f.Line)
+		}
+		return factsHeader + strings.Join(lines, "\n")
+	}
+	// Build the section's match text from title + brief + a sample of its findings.
+	var sb strings.Builder
+	sb.WriteString(s.Title)
+	sb.WriteString(" ")
+	sb.WriteString(s.Brief)
+	for i, id := range s.FindingIDs {
+		if i >= 12 { // bound the match text
+			break
+		}
+		if f, ok := ix.Get(id); ok {
+			sb.WriteString(" ")
+			sb.WriteString(f.Content)
+		}
+	}
+	secText := sb.String()
+	secLower := strings.ToLower(secText)
+
+	const maxPerSection = 20 // paged own-set: deliberate (party + planned + cosine), still << ledger
+	var lines []string
+	selected := map[int]bool{}
+	add := func(i int) {
+		if selected[i] || len(lines) >= maxPerSection {
+			return
+		}
+		selected[i] = true
+		lines = append(lines, w.opt.Facts[i].Line)
+	}
+
+	// (#1 + #4) Entity-aware / proactive party: seat every fact whose party is central to this
+	// section (its name appears in the section text) UNCOMPACTED — a weak writer won't pull them
+	// via lookup_fact, and routing party facts to a party's own section was starving the
+	// allegation sections (Cherry-Picking read "no specific instances cited" while Chao's
+	// numbers sat in the floor). Skip ubiquitous entities (the firm) that would drag the whole
+	// ledger in. This runs FIRST so the section's parties' facts always make the own-set.
+	entFreq := map[string]int{}
+	for _, f := range w.opt.Facts {
+		entFreq[strings.ToLower(strings.TrimSpace(f.Entity))]++
+	}
+	ubiqMax := len(w.opt.Facts) * 40 / 100 // an entity in >40% of facts isn't discriminating
+	for i, f := range w.opt.Facts {
+		e := strings.ToLower(strings.TrimSpace(f.Entity))
+		if len(e) >= 4 && entFreq[e] <= ubiqMax && strings.Contains(secLower, e) {
+			add(i)
+		}
+	}
+
+	// (#2) Plan-driven: the per-section critic enumerated the specific facts this section needs
+	// (planSectionFacts, computed once by the caller). Pull facts matching those queries into
+	// the own-set by keyword overlap — guaranteeing the planned facts aren't left at rank 17+.
+	for _, q := range plan {
+		qt := salientTokens(q)
+		if len(qt) == 0 {
+			continue
+		}
+		for i := range w.opt.Facts {
+			if selected[i] {
+				continue
+			}
+			ov := 0
+			for tok := range salientTokens(w.opt.Facts[i].Key) {
+				if qt[tok] {
+					ov++
+				}
+			}
+			if ov >= 2 {
+				add(i)
+			}
+		}
+	}
+
+	// Cosine top-K fills any remaining slots with topically-relevant facts (the alias-catcher).
+	if len(lines) < maxPerSection && len(w.factVecs) == len(w.opt.Facts) && w.embed != nil {
+		if res, err := w.embed.EmbedBatch([]string{secText}); err == nil && len(res) == 1 && len(res[0].Embedding) > 0 {
+			sv := res[0].Embedding
+			type sc struct {
+				i int
+				s float64
+			}
+			var scored []sc
+			for i, fv := range w.factVecs {
+				if selected[i] || len(fv) == 0 {
+					continue
+				}
+				if s := cosine(fv, sv); s >= 0.25 {
+					scored = append(scored, sc{i, s})
+				}
+			}
+			sort.SliceStable(scored, func(a, b int) bool { return scored[a].s > scored[b].s })
+			for _, x := range scored {
+				add(x.i)
+				if len(lines) >= maxPerSection {
+					break
+				}
+			}
+		}
+	}
+
+	// Keyword fallback (no embedder) if nothing matched.
+	if len(lines) == 0 {
+		secTokens := salientTokens(secText)
+		for i := range w.opt.Facts {
+			ov := 0
+			for tok := range salientTokens(w.opt.Facts[i].Key) {
+				if secTokens[tok] {
+					ov++
+				}
+			}
+			if ov >= 2 {
+				add(i)
+			}
+			if len(lines) >= maxPerSection {
+				break
+			}
+		}
+	}
+
+	// Paged facts: this section's own facts UNCOMPACTED, every other fact COMPACTED to a
+	// per-entity handle and expandable on demand. Mirrors the section paging.
+	var out strings.Builder
+	if len(lines) > 0 {
+		out.WriteString(factsHeader)
+		out.WriteString(strings.Join(lines, "\n"))
+	}
+	if rest := w.compactRestFacts(selected); rest != "" {
+		out.WriteString(rest)
+	}
+	return out.String()
+}
+
+// compactRestFacts compresses every fact NOT routed to this section into per-entity handles
+// (party + count) instead of dumping them all — so the drafter isn't drowned, yet still knows
+// what else is on file and can pull any of it in full via extract_specifics.
+func (w *Writer) compactRestFacts(selected map[int]bool) string {
+	counts := map[string]int{}
+	var order []string
+	for i, f := range w.opt.Facts {
+		if selected[i] {
+			continue
+		}
+		e := strings.TrimSpace(f.Entity)
+		if e == "" {
+			e = "(unattributed)"
+		}
+		if counts[e] == 0 {
+			order = append(order, e)
+		}
+		counts[e]++
+	}
+	if len(order) == 0 {
+		return ""
+	}
+	sort.SliceStable(order, func(a, b int) bool { return counts[order[a]] > counts[order[b]] })
+	var hs []string
+	for i, e := range order {
+		if i >= 20 { // cap the handle list itself so it can't become its own flood
+			hs = append(hs, fmt.Sprintf("- …and %d more parties/topics", len(order)-20))
+			break
+		}
+		hs = append(hs, fmt.Sprintf("- %s: %d more figure(s) on file", e, counts[e]))
+	}
+	return "\n\nOTHER FIGURES ON FILE (compacted — these belong to OTHER sections; pull one in full only if this section genuinely needs it, via extract_specifics with the party/topic):\n" + strings.Join(hs, "\n")
+}
+
+const factsHeader = "\n\nGROUNDED FACTS relevant to this section (each is verbatim-sourced). State the ones that belong HERE exactly, with correct attribution — do NOT attach a fact to the wrong allegation:\n"
+
+// lookupFacts answers the lookup_fact tool: ranks the WHOLE fact ledger by salient-token
+// overlap with the query and returns the top-k display lines. The recall escape hatch for
+// per-section routing — any author can pull any grounded fact on demand.
+func (w *Writer) lookupFacts(query string, k int) []string {
+	q := salientTokens(query)
+	if len(q) == 0 {
+		return nil
+	}
+	type sc struct {
+		line string
+		n    int
+	}
+	var scored []sc
+	for _, f := range w.opt.Facts {
+		n := 0
+		for tok := range salientTokens(f.Key) {
+			if q[tok] {
+				n++
+			}
+		}
+		if n > 0 {
+			scored = append(scored, sc{f.Line, n})
+		}
+	}
+	sort.SliceStable(scored, func(a, b int) bool { return scored[a].n > scored[b].n })
+	out := make([]string, 0, k)
+	for i := 0; i < len(scored) && i < k; i++ {
+		out = append(out, scored[i].line)
+	}
+	return out
+}
+
+// salientTokens returns the set of lowercased word tokens of length ≥ 4 (skips short
+// connectives), for cheap overlap matching.
+func salientTokens(s string) map[string]bool {
+	out := map[string]bool{}
+	for _, w := range strings.Fields(strings.ToLower(s)) {
+		var b strings.Builder
+		for _, r := range w {
+			if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+				b.WriteRune(r)
+			}
+		}
+		if t := b.String(); len(t) >= 4 {
+			out[t] = true
+		}
+	}
+	return out
+}
+
 // Write produces the final deliverable. It never returns empty when findings exist:
 // every model call has a deterministic fallback (the findings' own conclusions), so
 // a flaky local model degrades to a plain grounded summary rather than a blank.
@@ -96,7 +380,27 @@ func (w *Writer) Write(taskDesc, workflowType string, findings []Finding) (strin
 	if len(findings) == 0 {
 		return "", nil
 	}
+	// Collapse near-duplicate findings first. The rounds + sweep + reconciliation can
+	// surface the same passage many times; left in, the duplicates both bloat the
+	// writer (the merge then compresses the whole document to a stub — a real
+	// regression at high finding counts) and litter the deliverable with repetition.
+	findings = dedupeFindings(findings)
 	ix := NewFindingIndex(w.embed, findings)
+
+	// Precompute fact embeddings once for semantic per-section routing (the "fancier math":
+	// cosine dot-product, not keyword overlap). Only when routing per-section.
+	if !w.opt.FactsGlobal && w.embed != nil && len(w.opt.Facts) > 0 {
+		keys := make([]string, len(w.opt.Facts))
+		for i, f := range w.opt.Facts {
+			keys[i] = f.Key
+		}
+		if res, err := w.embed.EmbedBatch(keys); err == nil && len(res) == len(keys) {
+			w.factVecs = make([][]float32, len(res))
+			for i := range res {
+				w.factVecs[i] = res[i].Embedding
+			}
+		}
+	}
 
 	// 1. Build the section set. With a coverage spine (the matter's enumerated topics)
 	//    every required category is GUARANTEED a section, findings mapped in top-down;
@@ -109,11 +413,19 @@ func (w *Writer) Write(taskDesc, workflowType string, findings []Finding) (strin
 		secs = w.planOutline(taskDesc, workflowType, ix, secs)
 	}
 
+	// Paged synthesis: the DyTopo writing agent authors each section from the evidence
+	// blackboard, compacting finished sections out of working context (uncompactable on
+	// demand) and assembling losslessly — no compressing stitch. Lets a small-context
+	// model produce a deliverable larger than its window without dropping allegations.
+	if w.opt.Paged && len(secs) > 0 {
+		return w.writePaged(taskDesc, workflowType, secs, ix), nil
+	}
+
 	// 2. One tight agentic drafter per section, search_findings scoped to its set,
 	//    figures pulled per section at synthesis.
 	drafts := make([]string, len(secs))
 	for i, s := range secs {
-		drafts[i] = w.draftSection(taskDesc, workflowType, s, ix)
+		drafts[i] = w.draftSection(taskDesc, workflowType, s, ix, draftExtra{})
 	}
 
 	// 3. Coverage critic: re-draft any required section that came out thin/empty so a
@@ -124,14 +436,62 @@ func (w *Writer) Write(taskDesc, workflowType string, findings []Finding) (strin
 	return w.stitch(taskDesc, workflowType, secs, drafts), nil
 }
 
+// dedupeFindings collapses near-duplicate findings (same normalized leading ~90
+// alphanumerics) to the first occurrence, preserving order. Cheap and order-stable —
+// enough to kill the repeated-paragraph problem without an embedding pass.
+func dedupeFindings(fs []Finding) []Finding {
+	seen := map[string]bool{}
+	out := make([]Finding, 0, len(fs))
+	for _, f := range fs {
+		key := dedupKey(f.Content)
+		if key != "" && seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, f)
+	}
+	return out
+}
+
+func dedupKey(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			if b.Len() >= 90 {
+				break
+			}
+		}
+	}
+	return b.String()
+}
+
 // spineSections builds one section per required topic (guaranteed coverage) and
 // maps each finding to its nearest topic — by embedding cosine when available, else
-// keyword overlap. Findings that match no topic well are dropped into a trailing
-// "Other findings" section so nothing is lost.
+// keyword overlap. Findings that match no topic are NOT dumped into a flat catch-all:
+// they are clustered bottom-up into their own labeled sections (the spine ∪ clustering
+// union). So even when the spine under-enumerates an allegation, the findings produced
+// for it surface as a real, named section rather than vanishing or being buried in an
+// unstructured "Other Findings" bucket.
 func (w *Writer) spineSections(ix *FindingIndex, required []string) []section {
 	secs := make([]section, len(required))
 	for i, t := range required {
-		secs[i] = section{Title: t, Brief: t}
+		brief := t
+		// Fold the allegation's alternate surface forms into the brief so fact routing
+		// (factsFor) and the drafter both see every phrasing the docs use, while the
+		// heading (Title) stays the clean canonical.
+		if al := w.opt.SectionAliases[t]; len(al) > 0 {
+			var extra []string
+			for _, a := range al {
+				if !strings.EqualFold(strings.TrimSpace(a), strings.TrimSpace(t)) {
+					extra = append(extra, a)
+				}
+			}
+			if len(extra) > 0 {
+				brief = t + " — also referred to as: " + strings.Join(extra, "; ")
+			}
+		}
+		secs[i] = section{Title: t, Brief: brief}
 	}
 	// Precompute topic vectors when an embedder is present.
 	var topicVecs [][]float32
@@ -143,7 +503,7 @@ func (w *Writer) spineSections(ix *FindingIndex, required []string) []section {
 			}
 		}
 	}
-	var other []string
+	var orphans []Finding
 	for _, f := range ix.All() {
 		best, bestScore := -1, 0.0
 		if fv := ix.vec(f.ID); len(fv) > 0 && topicVecs != nil {
@@ -162,13 +522,31 @@ func (w *Writer) spineSections(ix *FindingIndex, required []string) []section {
 			best = bestKeywordSection(f, required)
 		}
 		if best < 0 {
-			other = append(other, f.ID)
+			orphans = append(orphans, f)
 			continue
 		}
 		secs[best].FindingIDs = append(secs[best].FindingIDs, f.ID)
 	}
-	if len(other) > 0 {
-		secs = append(secs, section{Title: "Other Findings", Brief: "findings not specific to a named category", FindingIDs: other})
+	// Union with bottom-up clustering: cluster the off-spine findings into their own
+	// labeled sections so nothing extracted is lost and no allegation the spine missed
+	// gets dumped unlabelled.
+	if len(orphans) > 0 {
+		sub := NewFindingIndex(w.embed, orphans)
+		clusters := cluster(sub, w.opt.ClusterThreshold, w.opt.MaxClusters)
+		if len(clusters) == 0 { // no embeddings: keep everything as one labelled section
+			ids := make([]string, 0, len(orphans))
+			for _, f := range orphans {
+				ids = append(ids, f.ID)
+			}
+			secs = append(secs, section{Title: "Additional Findings", Brief: "findings not specific to a named category", FindingIDs: ids})
+		}
+		for _, c := range clusters {
+			ids := make([]string, 0, len(c.Items))
+			for _, f := range c.Items {
+				ids = append(ids, f.ID)
+			}
+			secs = append(secs, section{Title: c.Label, Brief: "off-spine findings: " + c.Label, FindingIDs: ids})
+		}
 	}
 	return secs
 }
@@ -188,7 +566,7 @@ func (w *Writer) repairCoverage(taskDesc, workflowType string, secs []section, d
 		// Re-draft with an explicit mandate + a fresh figure pull for the topic.
 		repaired := w.draftSection(taskDesc, workflowType, section{
 			Title: s.Title, Brief: s.Brief + " — this category MUST be covered; state its specific allegations and exact figures", FindingIDs: s.FindingIDs,
-		}, ix)
+		}, ix, draftExtra{})
 		if len(strings.TrimSpace(repaired)) > len(strings.TrimSpace(drafts[i])) {
 			drafts[i] = repaired
 		}
@@ -317,7 +695,7 @@ GROUPS:
 // model calls search_findings (scoped to this section's findings) to pull its
 // evidence, then writes the section. Falls back to a grounded bullet list of the
 // section's findings if the model returns nothing.
-func (w *Writer) draftSection(taskDesc, workflowType string, s section, ix *FindingIndex) string {
+func (w *Writer) draftSection(taskDesc, workflowType string, s section, ix *FindingIndex, extra draftExtra) string {
 	allow := make(map[string]bool, len(s.FindingIDs))
 	for _, id := range s.FindingIDs {
 		allow[id] = true
@@ -333,6 +711,19 @@ func (w *Writer) draftSection(taskDesc, workflowType string, s section, ix *Find
 			"required": []string{"query"},
 		},
 	}}
+	if extra.board != nil {
+		tools = append(tools, providers.ToolParam{
+			Name:        "expand_section",
+			Description: "Uncompact an already-written section to read its FULL text. The other sections you can see are COMPACTED summaries; call this when you need a finished section's exact wording, figures, or citations — e.g. to avoid repeating it or to stay consistent with it.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"title": map[string]interface{}{"type": "string", "description": "The exact title of the finished section to expand"},
+				},
+				"required": []string{"title"},
+			},
+		})
+	}
 	if w.opt.Specifics != nil {
 		tools = append(tools, providers.ToolParam{
 			Name:        "extract_specifics",
@@ -346,7 +737,32 @@ func (w *Writer) draftSection(taskDesc, workflowType string, s section, ix *Find
 			},
 		})
 	}
+	// Inter-section pull: in per-section routing mode a section is given only its routed
+	// facts; lookup_fact lets the author REQUEST any grounded fact from the WHOLE matter on
+	// demand, so a fact relevant here but routed elsewhere is never starved (the recall fix
+	// for per-section routing). Not offered in global mode (the author already has all facts).
+	if len(w.opt.Facts) > 0 && !w.opt.FactsGlobal {
+		tools = append(tools, providers.ToolParam{
+			Name:        "lookup_fact",
+			Description: "Search ALL of the matter's grounded facts (every party, relationship, ownership %, amount, role across every allegation), not just this section's. Use it when you need a fact about a party or entity that wasn't handed to you — e.g. to state a person's exposure or a cross-allegation link.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"query": map[string]interface{}{"type": "string", "description": "The party, entity, or fact you need (e.g. 'Ostrowski ownership', 'Whitmore exposure')"},
+				},
+				"required": []string{"query"},
+			},
+		})
+	}
+	// The clean section-part drafter is ALWAYS the base. The chosen writing agent contributes
+	// its EXPERTISE/voice (extra.system), appended — NOT its whole-document template. (Using
+	// an agent's verbatim system prompt per section crammed its document structure — IRAC,
+	// "exec summary → findings → recommendations" — into every section, producing 16 stacked
+	// templates. The genre belongs at the document level, not the section level.)
 	system := drafterSystem
+	if extra.system != "" {
+		system += "\n\n" + extra.system
+	}
 	if w.opt.Persona != "" {
 		system += "\n\n" + w.opt.Persona
 	}
@@ -358,10 +774,11 @@ func (w *Writer) draftSection(taskDesc, workflowType string, s section, ix *Find
 	// off the list entirely. So the critic (planSectionFacts) enumerates the specific
 	// facts this category must contain and we run a PRECISE query for each, unioning
 	// the figure hits. Pulled from the exhibits, not the finding pile.
+	plan := w.planSectionFacts(s, ix) // computed once: drives both the figures pull and fact routing
 	var figHits []SpecificHit
 	if w.opt.Specifics != nil {
 		seen := map[string]bool{}
-		for _, q := range w.planSectionFacts(s, ix) {
+		for _, q := range plan {
 			for _, h := range w.opt.Specifics(q, 4) {
 				if h.Text == "" || seen[h.Text] {
 					continue
@@ -374,31 +791,60 @@ func (w *Writer) draftSection(taskDesc, workflowType string, s section, ix *Find
 			}
 		}
 	}
-	figuresBlock := ""
-	if len(figHits) > 0 {
-		var fb strings.Builder
-		fb.WriteString("\n\nEXACT FIGURES available for this section (state any you use VERBATIM, with the source in parentheses; call extract_specifics for more):\n")
-		for _, h := range figHits {
-			if h.Context != "" {
-				fmt.Fprintf(&fb, "- %s  [%s] (%s)\n", oneLine(h.Text), h.Context, h.Source)
-			} else {
-				fmt.Fprintf(&fb, "- %s (%s)\n", oneLine(h.Text), h.Source)
+	// What3Words for figures: unify the planned section figures with the section's own
+	// findings' salient figures, assign each a neutral handle, and show the drafter the figure
+	// IN CONTEXT with its digit MASKED by the handle — so it learns what each name means without
+	// ever reading the number (can't garble it, no attention skew). The exact value is
+	// substituted by handle after drafting.
+	pool := figHits
+	for _, id := range s.FindingIDs {
+		if f, ok := ix.Get(id); ok {
+			t := f.Evidence
+			if salientFigure(t) == "" {
+				t = f.Content
 			}
+			if salientFigure(t) != "" {
+				pool = append(pool, SpecificHit{Text: t, Source: f.Source})
+			}
+		}
+	}
+	handled := assignHandles(pool)
+	// Diagnostic: which figures actually reached THIS section's handle list. Lets us tell a
+	// routing-into-handles gap (a key figure never enters the list) from a drafter-skip (it's
+	// listed but the prose ignores it).
+	if len(handled) > 0 {
+		vals := make([]string, 0, len(handled))
+		for _, h := range handled {
+			vals = append(vals, h.Value)
+		}
+		slog.Info("section handled figures", "section", s.Title, "n", len(handled), "values", strings.Join(vals, " | "))
+	}
+	figuresBlock := ""
+	if len(handled) > 0 {
+		var fb strings.Builder
+		fb.WriteString("\n\nFIGURES for this section — each has a NAME. To state a figure, write its NAME (capitalised, exactly as shown) where the figure belongs; the precise value is substituted automatically. NEVER write the number/percentage/date/citation yourself:\n")
+		for _, h := range handled {
+			masked := strings.ReplaceAll(oneLine(h.Context), h.Value, h.Handle)
+			fmt.Fprintf(&fb, "  %s — \"%s\" (%s)\n", h.Handle, masked, h.Source)
 		}
 		figuresBlock = fb.String()
 	}
+
+	// Grounded relation facts from the evidence graph — only those relevant to THIS
+	// section, routed by entity/allegation overlap (no whole-ledger crowding).
+	factsBlock := w.factsFor(s, ix, plan)
 
 	user := fmt.Sprintf(`TASK: %s
 WORKFLOW: %s
 
 Write the section "%s" of the final deliverable. Brief: %s
 
-Call search_findings to retrieve the findings for this section, then write it grounded ONLY in what the findings and figures say — never invent facts, figures, or citations.
+Call search_findings to retrieve the findings for this section, then write it grounded ONLY in what the findings and figures say — never invent facts.
 Be COMPREHENSIVE for this category: cover the specific allegations, the parties implicated, the harm, and the defense points.
-Include EVERY exact figure relevant to this section — amounts, percentages, dates, counts, account numbers, and statutory citations — copied VERBATIM from the figures below or from extract_specifics. List them ALL; do not reduce to a subset or round them.
-NEVER write a placeholder token (e.g. [X], [Date], [Section N], [Amount]): fill it from the figures/findings, or omit that clause entirely.
-If a finding is marked UNVERIFIED, either omit it or caveat it explicitly. Clean client-ready prose: no finding numbers or agent names. Output only the section text (no heading).%s`,
-		oneLine(taskDesc), workflowType, s.Title, s.Brief, figuresBlock)
+CRITICAL — for ANY specific figure or precise reference (a dollar amount, a percentage or rate, a count, a date, an account number, or a statutory/section/clause citation), DO NOT write the number or citation yourself. Instead write the NAME of the matching figure from the FIGURES list above (e.g. "the scheme generated Zephyr in excess profits across Quasar trades") — write the name exactly, capitalised. The exact grounded value is substituted for the name automatically, so you never recall a digit — this is how we keep every figure correct. Use a name for EVERY specific you reference, and use ONLY names from the list (if you need a figure that isn't listed, call extract_specifics). NEVER compute, add, sum, total, or otherwise derive a number yourself.
+If a finding is marked UNVERIFIED, either omit it or caveat it explicitly.
+Write FLOWING, professional client-ready prose — connected paragraphs, not an outline. Do NOT emit internal labels or scaffolding such as "Issue:", "Brief Answer:", "Stronger View", "Counter-Argument", "Open Questions", "Recommendations:", "Analysis:". Do NOT write any commentary about your own process or about the findings/inputs — never write things like "Since there are no findings…", "I will write…", "Based on the provided grounded facts…", "As an AI". No finding numbers or agent names. Output only the section's prose (no heading).%s%s%s`,
+		oneLine(taskDesc), workflowType, s.Title, s.Brief, figuresBlock, factsBlock, extra.priorCompacted)
 
 	msgs := []providers.Message{{Role: "user", Content: user}}
 	final := ""
@@ -436,6 +882,18 @@ If a finding is marked UNVERIFIED, either omit it or caveat it explicitly. Clean
 				case "extract_specifics":
 					topic, _ := b.Input["topic"].(string)
 					payload = map[string]interface{}{"figures": specificsToJSON(w.opt.Specifics(topic, w.opt.MaxFindingsPerSec))}
+				case "expand_section":
+					title, _ := b.Input["title"].(string)
+					full := "(no finished section by that title)"
+					if extra.board != nil {
+						if f := extra.board.expand(title); f != "" {
+							full = f
+						}
+					}
+					payload = map[string]interface{}{"section": full}
+				case "lookup_fact":
+					q, _ := b.Input["query"].(string)
+					payload = map[string]interface{}{"facts": w.lookupFacts(q, 8)}
 				default: // search_findings
 					searched = true
 					q, _ := b.Input["query"].(string)
@@ -465,21 +923,213 @@ If a finding is marked UNVERIFIED, either omit it or caveat it explicitly. Clean
 	// counts). The 7B inconsistently transcribes numbers into prose; the figures are
 	// already in hand verbatim, so guarantee they land by construction. This is the
 	// figure analogue of locking evidence before analysis in the extraction stage.
-	figs := figHits
-	for _, id := range s.FindingIDs {
-		f, ok := ix.Get(id)
-		if !ok {
-			continue
-		}
-		text := f.Evidence
-		if salientFigure(text) == "" {
-			text = f.Content
-		}
-		if salientFigure(text) != "" {
-			figs = append(figs, SpecificHit{Text: text, Source: f.Source})
+	// Substitute each figure handle with its exact grounded value — deterministic (exact key,
+	// no fuzzy desc-matching). The model never typed a digit, so it can't garble one; a handle
+	// it mangled or skipped simply doesn't substitute, so a figure can be omitted but never
+	// stated wrong.
+	result = resolveFigureHandles(result, handled)
+	result = sanitizeDraft(result)
+	// Guarantee the SALIENT figures land. Ranking gets most figures inline, but a weak drafter
+	// still drops some of the headline ones (it used the top figure and reverted to qualitative
+	// prose). attachKeyFigures appends ONLY salient figures (big money / large counts / major
+	// rates) that the prose did NOT already state — a tight factual tail, not a data dump, and
+	// model-independent so figure coverage no longer rides on drafter mood.
+	var salient []SpecificHit
+	for _, h := range handled {
+		if figureSalience(h.Value) >= salienceGuaranteeFloor {
+			salient = append(salient, SpecificHit{Text: h.Context, Source: h.Source})
 		}
 	}
-	return attachKeyFigures(result, figs)
+	return attachKeyFigures(result, salient)
+}
+
+var (
+	reMetaLine  = regexp.MustCompile(`(?i)(since there (are|were) no\b|based on the provided grounded facts|as an ai\b|as requested\b|^\s*i'?ll?\s+write\b|^\s*i\s+will\s+(now\s+)?(write|draft|provide)\b|^\s*here is (the|my|a)\b|^\s*below is (the|my|a)\b|^\s*note:\s)`)
+	reLeadLabel = regexp.MustCompile(`(?i)^\s*#*\s*(stronger view|credible counter-?argument|counter-?argument|open questions?|brief answer|issue(\(s\))?(\s+\d+)?)\s*[:.\-]*\s*`)
+	reBlankRun  = regexp.MustCompile(`\n{3,}`)
+)
+
+// sanitizeDraft strips the machine tells a human immediately flags: leaked process
+// commentary ("Since there are no findings…", "I will write…") and internal deliberation
+// labels (Stronger View / Counter-Argument / Open Questions / Brief Answer / Issue) that
+// make the output read like a stitched template instead of a client deliverable. Conservative
+// — it drops meta lines and label prefixes, never substantive prose.
+func sanitizeDraft(s string) string {
+	var keep []string
+	for _, ln := range strings.Split(s, "\n") {
+		if strings.TrimSpace(ln) == "" {
+			keep = append(keep, ln)
+			continue
+		}
+		if reMetaLine.MatchString(ln) { // a whole meta-commentary line
+			continue
+		}
+		stripped := reLeadLabel.ReplaceAllString(ln, "") // remove a leading deliberation label
+		if strings.TrimSpace(stripped) == "" {           // line was only a label
+			continue
+		}
+		keep = append(keep, stripped)
+	}
+	return strings.TrimSpace(reBlankRun.ReplaceAllString(strings.Join(keep, "\n"), "\n\n"))
+}
+
+// figureHandles is the pool of neutral, inert codenames — "What3Words for figures". Each
+// section figure is assigned one; the drafter drops the NAME into prose where the figure goes
+// and the exact grounded value is substituted by exact key. Names are LLM-native (unlike the
+// {{FIG:…}} meta-placeholder the model resisted, producing vague figureless prose) and
+// semantically inert (a descriptive placeholder skews attention; an arbitrary name does not).
+// Chosen distinctive and absent from legal prose so a word-boundary substitution can't collide.
+var figureHandles = []string{
+	"Zephyr", "Quasar", "Nimbus", "Cobalt", "Halcyon", "Obsidian", "Peregrine", "Calliope",
+	"Verdigris", "Marlowe", "Thessaly", "Caspian", "Larkspur", "Onyx", "Sable", "Indigo",
+	"Cinnabar", "Perdita", "Aurelian", "Bramble", "Citrine", "Dovetail", "Ravenna", "Tindal",
+}
+
+type handledFig struct {
+	Handle, Value, Context, Source string
+}
+
+// assignHandles maps a neutral handle to each DISTINCT salient figure (deduped by value,
+// capped to the pool size). The mapping is shown to the drafter (digit masked) and substituted
+// by the resolver.
+// maxSectionFigures caps the handle list. Exhibit tables flood a section with small numbers
+// (sample sizes, per-account rates); a noise-heavy list buries the headline figures so the
+// drafter uses none. Ranking by salience + a cap keeps the harm figures at the top.
+const maxSectionFigures = 14
+
+func assignHandles(hits []SpecificHit) []handledFig {
+	type cand struct {
+		sal   string
+		hit   SpecificHit
+		score int
+	}
+	var cands []cand
+	seen := map[string]bool{}
+	for _, h := range hits {
+		sal := salientFigure(h.Text)
+		if sal == "" || seen[strings.ToLower(sal)] {
+			continue
+		}
+		seen[strings.ToLower(sal)] = true
+		cands = append(cands, cand{sal, h, figureSalience(sal)})
+	}
+	// Rank by salience so headline figures ($8.2M, 4,217, 81.6%) lead the list and the noise
+	// tail (small bare numbers from exhibit rows) falls off the cap, not the salient ones.
+	sort.SliceStable(cands, func(i, j int) bool { return cands[i].score > cands[j].score })
+	var out []handledFig
+	for _, c := range cands {
+		if len(out) >= maxSectionFigures || len(out) >= len(figureHandles) {
+			break
+		}
+		out = append(out, handledFig{Handle: figureHandles[len(out)], Value: c.sal, Context: c.hit.Text, Source: c.hit.Source})
+	}
+	return out
+}
+
+// figureSalience scores how "headline" a figure is. Big money and large counts rank highest
+// (the quantified harm a legal memo turns on); rates next; the small bare numbers exhibit tables
+// are full of rank lowest, so they fall off the cap before a salient figure does.
+func figureSalience(v string) int {
+	lv := strings.ToLower(v)
+	clean := strings.Map(func(r rune) rune {
+		if (r >= '0' && r <= '9') || r == '.' {
+			return r
+		}
+		return -1
+	}, strings.ReplaceAll(v, ",", ""))
+	x, _ := strconv.ParseFloat(clean, 64)
+	dollar := strings.Contains(v, "$")
+	pct := strings.Contains(v, "%")
+	bigWord := strings.Contains(lv, "million") || strings.Contains(lv, "billion")
+	switch {
+	case dollar && (bigWord || x >= 100000):
+		return 100 // big money — the headline loss/profit/penalty
+	case strings.Contains(v, ",") && !dollar && x >= 1000:
+		return 95 // large count, e.g. 4,217 trades
+	case dollar && x >= 10000:
+		return 90
+	case dollar && x >= 1000:
+		return 70
+	case pct && x >= 40:
+		return 60 // a major rate (81.6%, 62%) — the kind a memo turns on
+	case pct:
+		return 45 // a minor percentage (1.5%, 5%) — usually exhibit detail
+	case x >= 1000:
+		return 40
+	case dollar:
+		return 30 // small dollar amount
+	default:
+		return 10 // bare small number (likely exhibit noise)
+	}
+}
+
+// salienceGuaranteeFloor is the cutoff above which a figure is guaranteed to land — big money,
+// large counts, and major rates — so the mechanical key-figures tail catches the salient
+// stragglers a weak drafter dropped without dragging in minor percentages or small numbers.
+const salienceGuaranteeFloor = 55
+
+// resolveFigureHandles substitutes each handle (case-insensitive, word-boundary) with its exact
+// grounded value, then strips any stray {{FIG:…}} the drafter emitted out of habit and tidies
+// the artefacts a substitution can leave (empty parens, doubled spaces, space-before-punct).
+func resolveFigureHandles(text string, handled []handledFig) string {
+	for _, h := range handled {
+		re := regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(h.Handle) + `\b`)
+		text = re.ReplaceAllString(text, h.Value)
+	}
+	text = rePlaceholder.ReplaceAllString(text, "")
+	text = regexp.MustCompile(`\(\s*\)`).ReplaceAllString(text, "")
+	text = regexp.MustCompile(`\s{2,}`).ReplaceAllString(text, " ")
+	return regexp.MustCompile(`\s+([.,;)])`).ReplaceAllString(text, "$1")
+}
+
+var rePlaceholder = regexp.MustCompile(`\{\{\s*FIG:\s*([^}]+?)\s*\}\}`)
+
+// resolveFigurePlaceholders replaces each {{FIG: description}} with the salient
+// figure of the grounded row that best matches the description (by content-word
+// overlap). No confident match → the placeholder is removed (never guessed), so the
+// prose can omit a figure but can never state a wrong one.
+func resolveFigurePlaceholders(text string, figs []SpecificHit) string {
+	out := rePlaceholder.ReplaceAllStringFunc(text, func(m string) string {
+		desc := rePlaceholder.FindStringSubmatch(m)[1]
+		best, bestScore := "", 0
+		for _, f := range figs {
+			if sc := tokenOverlap(desc, f.Text); sc > bestScore {
+				bestScore, best = sc, f.Text
+			}
+		}
+		if bestScore >= 2 { // require real overlap before injecting
+			if sal := salientFigure(best); sal != "" {
+				return sal
+			}
+		}
+		return "" // unmatched → drop, never guess a number
+	})
+	// Tidy artefacts a dropped placeholder leaves behind: empty/whitespace-only parens
+	// (e.g. a citation "()" the drafter emitted with no source), doubled spaces, and a
+	// space before punctuation.
+	out = regexp.MustCompile(`\(\s*\)`).ReplaceAllString(out, "")
+	out = regexp.MustCompile(`\s{2,}`).ReplaceAllString(out, " ")
+	return regexp.MustCompile(`\s+([.,;)])`).ReplaceAllString(out, "$1")
+}
+
+// tokenOverlap counts shared content words (≥3 chars) between a placeholder
+// description and a figure row — a cheap, dependency-free relevance signal.
+func tokenOverlap(a, b string) int {
+	bw := map[string]bool{}
+	for _, w := range strings.Fields(strings.ToLower(b)) {
+		if len(w) >= 3 {
+			bw[w] = true
+		}
+	}
+	n := 0
+	seen := map[string]bool{}
+	for _, w := range strings.Fields(strings.ToLower(a)) {
+		if len(w) >= 3 && bw[w] && !seen[w] {
+			seen[w] = true
+			n++
+		}
+	}
+	return n
 }
 
 // planSectionFacts is the critique/planner pass: given a category and a few of its
@@ -545,15 +1195,43 @@ var reAllFigures = regexp.MustCompile(`\$?\d[\d,]*(?:\.\d+)?%?`)
 // the row's FIRST number was a bug — most exhibit rows lead with a year (e.g.
 // "…Oceanic Fund I LP (2021–2023) $7,800,000"), so a narrative mentioning "2021"
 // wrongly suppressed the whole row and the $ figure never landed.
+var reCiteWord = regexp.MustCompile(`(?i)(section|sections|rule|item|part|subsection|paragraph|no\.|§|§§)\s*$`)
+
 func salientFigure(s string) string {
 	best := ""
-	for _, n := range reAllFigures.FindAllString(s, -1) {
-		n = strings.TrimRight(n, ",.")    // drop a trailing comma/period the regex caught
+	for _, loc := range reAllFigures.FindAllStringIndex(s, -1) {
+		n := strings.TrimRight(s[loc[0]:loc[1]], ",.")
 		if strings.ContainsAny(n, "$%") { // $ amount or percentage is most salient
 			return n
 		}
 		if len(n) == 4 && !strings.Contains(n, ",") { // bare 4-digit year — ignore
 			continue
+		}
+		// Skip numbers that are part of a CITATION, not a figure: "Section 206",
+		// "Rule 204-2", "206(1)" — otherwise a statutory ref masquerades as a figure
+		// (the "(206)" bug) and pollutes the figure list / placeholder resolution.
+		lo := loc[0] - 12
+		if lo < 0 {
+			lo = 0
+		}
+		if reCiteWord.MatchString(s[lo:loc[0]]) {
+			continue
+		}
+		if loc[1] < len(s) && (s[loc[1]] == '(' || s[loc[1]] == '-') {
+			continue // "206(1)", "204-2" — leading part of a citation
+		}
+		if loc[0] > 0 && (s[loc[0]-1] == '(' || s[loc[0]-1] == '-') {
+			continue // "(1)", "-2" — a subsection/suffix inside a citation
+		}
+		// Skip a bare paragraph/list/sentence number — "22. The Division…", "14) " — where
+		// the number is immediately followed by a "." or ")" then whitespace/end. These are
+		// not figures; surfacing them as "Key figures" is the noise a human flags. (Amounts
+		// like "$7,800,000" return earlier via the $ check; decimals like "22.2" have a digit
+		// after the dot, so they are not caught here.)
+		if loc[1] < len(s) && (s[loc[1]] == '.' || s[loc[1]] == ')') {
+			if a := loc[1] + 1; a >= len(s) || s[a] == ' ' || s[a] == '\n' || s[a] == '\t' {
+				continue
+			}
 		}
 		if len(n) > len(best) {
 			best = n
@@ -573,20 +1251,51 @@ func attachKeyFigures(text string, hits []SpecificHit) string {
 	var lines []string
 	seen := map[string]bool{}
 	for _, h := range hits {
-		row := oneLine(h.Text)
-		if row == "" || seen[row] {
+		sal := salientFigure(h.Text)
+		if sal == "" { // only rows carrying a real figure — never raw narrative dumps
 			continue
 		}
-		seen[row] = true
-		if sal := salientFigure(row); sal != "" && strings.Contains(text, sal) {
-			continue // the row's key figure is already stated in the prose
+		if seen[sal] { // dedup BY the figure, not by exact row text
+			continue
 		}
-		lines = append(lines, fmt.Sprintf("- %s (%s)", row, h.Source))
+		seen[sal] = true
+		if strings.Contains(text, sal) {
+			continue // already stated in the prose
+		}
+		lines = append(lines, fmt.Sprintf("- %s: %s (%s)", figureLabel(h.Text, sal), sal, h.Source))
+		if len(lines) >= 12 { // bounded — a curated list, not a data dump
+			break
+		}
 	}
 	if len(lines) == 0 {
 		return text
 	}
 	return text + "\n\n**Key figures:**\n" + strings.Join(lines, "\n")
+}
+
+// figureLabel renders a short human label for a figure row: the row text with the
+// figure value removed and trimmed to a phrase — so the Key-figures list reads
+// "Excess profits to Oceanic Fund: $7,800,000 (src)", not a pasted exhibit row.
+var reLeadEnum = regexp.MustCompile(`^\s*[\(\[]?\d+[.)\]]\s*`) // "24. " / "25) " / "(3) " paragraph numbers
+
+func figureLabel(row, sal string) string {
+	label := oneLine(row)
+	if i := strings.Index(label, sal); i >= 0 {
+		label = label[:i] + label[i+len(sal):]
+	}
+	label = reLeadEnum.ReplaceAllString(label, "") // drop a leading paragraph/list number
+	label = strings.Trim(strings.Join(strings.Fields(label), " "), " -—:|·,\t")
+	if len(label) > 64 { // cut on a word boundary, not mid-phrase
+		cut := label[:64]
+		if k := strings.LastIndex(cut, " "); k > 20 {
+			cut = cut[:k]
+		}
+		label = strings.TrimRight(cut, " -—:|·,")
+	}
+	if label == "" {
+		label = "figure"
+	}
+	return label
 }
 
 // specificsToJSON shapes figure hits for an extract_specifics tool result.
@@ -665,7 +1374,14 @@ func (w *Writer) coherenceMerge(taskDesc, workflowType, draft string, final bool
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(out)
+	out = strings.TrimSpace(out)
+	// Collapse guard: a merge that returns a small fraction of its input has compressed
+	// the document to a stub (the failure mode at high finding counts — repeated passes
+	// each shrinking it). Reject it so the caller keeps the fuller assembly.
+	if len(out) < len(strings.TrimSpace(draft))*2/5 {
+		return ""
+	}
+	return out
 }
 
 // batchByTokens greedily packs blocks into groups each within budget (a block
@@ -733,7 +1449,7 @@ func (w *Writer) complete(system, user string, maxTokens int, _ any) (string, er
 
 const (
 	plannerSystem = "You organise legal findings into a clean document outline. You output only the requested headings and briefs, nothing else."
-	drafterSystem = "You are a legal writer drafting one section of a client deliverable. You ground every statement in the findings retrieved via search_findings and never invent facts, figures, or citations. You write clear, professional prose."
+	drafterSystem = "You draft ONE section of a client deliverable in flowing, professional prose. Ground every statement in the findings retrieved via search_findings; never invent facts, figures, or citations. Write only this section's substance as connected paragraphs — do NOT add document-level structure (no executive summary, no overall conclusion) and do NOT emit internal labels or scaffolding such as 'Issue:', 'Rule:', 'Brief Answer:', 'Applicable Law:', 'Analysis:', 'Stronger View', 'Counter-Argument', 'Open Questions', 'Conclusion:'. No meta-commentary about your process or the inputs."
 	stitchSystem  = "You are a senior legal editor assembling section drafts into one coherent client-ready deliverable. You never introduce facts the drafts do not contain."
 )
 
