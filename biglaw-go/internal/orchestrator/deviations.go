@@ -133,7 +133,7 @@ func (o *Orchestrator) detectDeviations(task *types.Task, g *evidencegraph.Graph
 	if len(reqs) == 0 {
 		return nil
 	}
-	const maxReqs = 32 // bound the (slow) spine-model adjudications; dedup near-identical labels
+	const maxReqs = 40 // bound the (slow) spine-model adjudications; wider so mid-ranked dispositive requirements (e.g. the piano bequest) still get checked
 	var out []types.Finding
 	seenReq := map[string]bool{}
 	var keptSigs []map[string]bool
