@@ -32,7 +32,7 @@ import (
 // a deviation. The Go side then verifies both quotes appear in the retrieved passages (substring
 // lock) and drops any deviation whose quotes don't verify — a model that must copy "Twenty-Five
 // Percent (25%)" from the instruction cannot then claim the instruction says 30%.
-const deviationSystem = "You check ONE requirement against a document. The passages are grouped into two labeled sections: 'CONTROLLING SOURCE — what is required' (client instructions, a playbook, a regulation, a term sheet, or a prior agreement) and 'DOCUMENT UNDER REVIEW — what it actually says' (a draft, a contract, a filing, a policy). Use ONLY these passages; do NOT rely on memory. A deviation is either a CONFLICT (the DOCUMENT UNDER REVIEW addresses the requirement but with a wrong value, name, or term) or an OMISSION (the CONTROLLING SOURCE requires it but the DOCUMENT UNDER REVIEW does not implement it — including when its section shows no matching provision). Output ONLY JSON: {\"type\": \"conflict|omission|none\", \"instructionQuote\": \"<the EXACT verbatim words from the CONTROLLING SOURCE section stating the requirement, including any specific value it names>\", \"draftQuote\": \"<for a CONFLICT, the EXACT verbatim words from the DOCUMENT UNDER REVIEW section; empty for an omission>\", \"requiredProvision\": \"<for an OMISSION, a short name for the missing provision>\", \"summary\": \"<one sentence naming the required value and the document's value>\", \"severity\": \"critical|high|medium|low\", \"recommendation\": \"<the specific correction, stating the required value>\"}. Quotes MUST be copied word-for-word from the passages — never invent. type=conflict ONLY if the two quotes actually conflict; type=omission ONLY if the requirement is imposed but the DOCUMENT UNDER REVIEW does not implement it; otherwise type=none."
+const deviationSystem = "You check ONE requirement against a document. The passages are grouped into two labeled sections: 'CONTROLLING SOURCE — what is required' (client instructions, a playbook, a regulation, a term sheet, or a prior agreement) and 'DOCUMENT UNDER REVIEW — what it actually says' (a draft, a contract, a filing, a policy). Use ONLY these passages; do NOT rely on memory. A deviation is either a CONFLICT (the DOCUMENT UNDER REVIEW addresses the requirement but with a wrong value, name, or term) or an OMISSION (the CONTROLLING SOURCE requires it but the DOCUMENT UNDER REVIEW does not implement it — including when its section shows no matching provision). Output ONLY JSON: {\"type\": \"conflict|omission|none\", \"instructionQuote\": \"<the EXACT verbatim words from the CONTROLLING SOURCE section stating the requirement, including any specific value it names>\", \"draftQuote\": \"<for a CONFLICT, the EXACT verbatim words from the DOCUMENT UNDER REVIEW section; empty for an omission>\", \"requiredProvision\": \"<for an OMISSION, a short name for the missing provision>\", \"summary\": \"<one sentence naming the required value and the document's value; if the deviation has a material practical CONSEQUENCE — it creates a risk given a known fact about a party, or it affects another provision's calculation — state that consequence too>\", \"severity\": \"critical|high|medium|low\", \"recommendation\": \"<the specific correction, stating the required value>\"}. Quotes MUST be copied word-for-word from the passages — never invent. type=conflict ONLY if the two quotes actually conflict; type=omission ONLY if the requirement is imposed but the DOCUMENT UNDER REVIEW does not implement it; otherwise type=none."
 
 // extractRequirementsSystem drives the COMPREHENSIVE requirement enumeration — the retrieval
 // floor for compare/review. Every distinct instruction the client states must become a check,
@@ -157,9 +157,10 @@ func (o *Orchestrator) detectDeviations(task *types.Task, g *evidencegraph.Graph
 			continue
 		}
 		// Dedup by content overlap — two requirements can surface the SAME deviation (e.g. both
-		// "first successor trustee" and "exclude Sophia" flag Sophia-as-trustee). Skip if a kept
-		// finding shares >60% of its distinctive terms.
-		sig := devSignature(dev)
+		// "first successor trustee" and "exclude Sophia" flag Sophia-as-trustee). Compare the CLAIM
+		// CORE (the summary), not the full string: divergent "Recommended correction:" tails dragged
+		// whole-string overlap below the threshold and let near-identical claims through.
+		sig := devSignature(devCore(dev))
 		dup := false
 		for _, prev := range keptSigs {
 			if jaccard(sig, prev) > 0.6 {
@@ -292,6 +293,15 @@ func (o *Orchestrator) adjudicateDeviation(task *types.Task, prov providers.Prov
 	if json.Unmarshal([]byte(t[i:j+1]), &d) != nil || strings.TrimSpace(d.Summary) == "" {
 		return ""
 	}
+	// Conform-leak guard: the model sometimes emits a "deviation" whose own summary says the
+	// document CONFORMS ("the document correctly states…", "already includes…"). Those are not
+	// deviations — drop them so they don't clutter the report and waste a slot.
+	lowSum := strings.ToLower(d.Summary)
+	for _, conform := range []string{"correctly ", "already includes", "already contains", "already provides", "conforms to", "is consistent with", "matches the requirement", "no deviation", "no conflict", "does not deviate"} {
+		if strings.Contains(lowSum, conform) {
+			return ""
+		}
+	}
 	typ := strings.ToLower(strings.TrimSpace(d.Type))
 	// The instruction quote must be VERBATIM in the retrieved passages for BOTH types — the
 	// requirement must genuinely be instructed (no fabricated "the client wanted …").
@@ -335,6 +345,20 @@ func (o *Orchestrator) adjudicateDeviation(task *types.Task, prov providers.Prov
 // devNorm normalizes for the substring lock (collapse whitespace, lowercase) so a verbatim quote
 // verifies despite spacing/case drift, but a fabricated value still fails.
 func devNorm(s string) string { return strings.ToLower(strings.Join(strings.Fields(s), " ")) }
+
+// devCore extracts the claim summary from a rendered deviation — the text between the severity
+// label and the "Recommended correction:" tail — so dedup compares the actual claim, not the
+// boilerplate around it.
+func devCore(dev string) string {
+	s := dev
+	if i := strings.Index(s, "— "); i >= 0 {
+		s = s[i+len("— "):]
+	}
+	if i := strings.Index(s, "Recommended correction:"); i >= 0 {
+		s = s[:i]
+	}
+	return s
+}
 
 // devSignature is the set of distinctive terms (≥5 chars) in a deviation string — used to dedup
 // two requirements that surfaced the same underlying deviation.
