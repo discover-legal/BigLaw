@@ -2315,12 +2315,22 @@ func (o *Orchestrator) isEnforcementMatter(g *evidencegraph.Graph) bool {
 	if g == nil {
 		return false
 	}
+	// Route by DOMINANCE, not presence. A single stray accusation predicate the model extracted
+	// from a compliance/comparison matter must not flip the whole routing (which would skip
+	// deviation detection entirely). Enforcement only when accusation predicates
+	// (violates/committedBy/harmed) genuinely outweigh compliance predicates
+	// (requires/satisfiedBy/deviatesFrom/prohibits).
+	enf, comp := 0, 0
 	for _, c := range g.Claims() {
-		if c.P == "violates" || c.P == "committedBy" || c.P == "harmed" {
-			return true
+		switch c.P {
+		case "violates", "committedBy", "harmed":
+			enf++
+		case "requires", "satisfiedBy", "deviatesFrom", "prohibits":
+			comp++
 		}
 	}
-	return false
+	slog.Info("matter routing", "enforcement_claims", enf, "compliance_claims", comp, "isEnforcement", enf > comp)
+	return enf > comp
 }
 
 // crossCuttingSections are the party/timeline-oriented sections a legal enforcement memo carries
