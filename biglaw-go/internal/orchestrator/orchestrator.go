@@ -2034,11 +2034,11 @@ func (o *Orchestrator) buildEvidenceGraph(task *types.Task, prov providers.Provi
 		o.update(task, func(t *types.Task) { t.Findings = append(t.Findings, figs...) })
 		slog.Info("figure harvest seeded findings", "task", task.ID, "n", len(figs), "model", figModel, "graph_facts_after", g.Len())
 	}
-	// Stage 2 — for a non-enforcement (compare/review) matter, DETECT where the draft DEVIATES
-	// from the client's instructions per requirement. This is the finding such tasks are scored
-	// on ("residuary should be 40/35/25, draft has …"), not a description of each requirement.
-	// Runs on the spine model. Enforcement matters use the figure-discrepancy path instead.
-	if !o.isEnforcementMatter(g) {
+	// Stage 2 — for a COMPLIANCE (compare/review) matter, DETECT where the document DEVIATES from
+	// the controlling standard per requirement. This is the finding such tasks are scored on
+	// ("residuary should be 40/35/25, draft has …"), not a description of each requirement. Runs
+	// on the spine model. Enforcement matters use the figure-discrepancy path instead.
+	if o.routeMatter(g) == modeCompliance {
 		if devs := o.detectDeviations(task, g, spineProv, spineModel); len(devs) > 0 {
 			o.update(task, func(t *types.Task) { t.Findings = append(t.Findings, devs...) })
 			slog.Info("deviations detected", "task", task.ID, "n", len(devs))
@@ -2308,18 +2308,28 @@ func (o *Orchestrator) allegationContext(task *types.Task, prov providers.Provid
 // specialist while the spine missed Bellini and duplicated cherry-picking 4× — so the
 // allegation was found in the rounds but had no section to land in. The result is
 // theme-deduped to collapse near-duplicate headings.
-// isEnforcementMatter reports whether the matter carries conduct claims (alleged violations), so
-// the enforcement-framed cross-cutting sections and the securities defense-issue analytic layer
-// apply. A compliance/comparison matter has Requirement issues instead and gets neither.
-func (o *Orchestrator) isEnforcementMatter(g *evidencegraph.Graph) bool {
+// matterMode is the analytic mode BELO dispatches on, derived from the dominant epistemic issue
+// type in the evidence graph. It decouples "what analysis to run" from any one practice area: a
+// matter is classified by the KIND of issues its documents actually raise, and each analytic pass
+// fires for the mode it serves. Extensible — transactional (clause review) and diligence
+// (red-flag triage) slot in as further modes as their issue classes and passes are added.
+type matterMode string
+
+const (
+	modeCompliance  matterMode = "compliance"  // Requirement issues → deviation detection (compare/review/compliance)
+	modeEnforcement matterMode = "enforcement" // Conduct issues → allegation spine + defense-issue analytics
+)
+
+// classifyMatter routes by predicate DOMINANCE over BELO's typed claims, not by the presence of
+// any single predicate — one stray accusation triple the model extracted from a comparison matter
+// must not flip the whole routing. It DEFAULTS to compliance: reviewing a document against a
+// standard is the general case; enforcement is the specialization that must earn its framing by
+// accusation predicates (violates/committedBy/harmed) outweighing requirement predicates
+// (requires/satisfiedBy/deviatesFrom/prohibits).
+func (o *Orchestrator) routeMatter(g *evidencegraph.Graph) matterMode {
 	if g == nil {
-		return false
+		return modeCompliance
 	}
-	// Route by DOMINANCE, not presence. A single stray accusation predicate the model extracted
-	// from a compliance/comparison matter must not flip the whole routing (which would skip
-	// deviation detection entirely). Enforcement only when accusation predicates
-	// (violates/committedBy/harmed) genuinely outweigh compliance predicates
-	// (requires/satisfiedBy/deviatesFrom/prohibits).
 	enf, comp := 0, 0
 	for _, c := range g.Claims() {
 		switch c.P {
@@ -2329,8 +2339,12 @@ func (o *Orchestrator) isEnforcementMatter(g *evidencegraph.Graph) bool {
 			comp++
 		}
 	}
-	slog.Info("matter routing", "enforcement_claims", enf, "compliance_claims", comp, "isEnforcement", enf > comp)
-	return enf > comp
+	mode := modeCompliance
+	if enf > comp {
+		mode = modeEnforcement
+	}
+	slog.Info("matter routing", "enforcement_claims", enf, "compliance_claims", comp, "mode", mode)
+	return mode
 }
 
 // crossCuttingSections are the party/timeline-oriented sections a legal enforcement memo carries
@@ -2364,7 +2378,7 @@ func (o *Orchestrator) ensureAllegations(task *types.Task, prov providers.Provid
 					// (per-person exposure, timeline, parties/ownership). These are enforcement-
 					// framed, so add them ONLY for enforcement matters — a compliance/compare
 					// matter has Requirement issues and would read oddly with "Individuals at Risk".
-					if o.isEnforcementMatter(g) {
+					if o.routeMatter(g) == modeEnforcement {
 						cats = append(cats, crossCuttingSections...)
 					}
 					o.update(task, func(t *types.Task) { t.Allegations = cats })
