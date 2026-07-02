@@ -163,7 +163,7 @@ func (o *Orchestrator) detectDeviations(task *types.Task, g *evidencegraph.Graph
 		sig := devSignature(devCore(dev))
 		dup := false
 		for _, prev := range keptSigs {
-			if jaccard(sig, prev) > 0.6 {
+			if jaccard(sig, prev) > 0.5 {
 				dup = true
 				break
 			}
@@ -346,9 +346,11 @@ func (o *Orchestrator) adjudicateDeviation(task *types.Task, prov providers.Prov
 // verifies despite spacing/case drift, but a fabricated value still fails.
 func devNorm(s string) string { return strings.ToLower(strings.Join(strings.Fields(s), " ")) }
 
-// devCore extracts the claim summary from a rendered deviation — the text between the severity
-// label and the "Recommended correction:" tail — so dedup compares the actual claim, not the
-// boilerplate around it.
+// devCore extracts the CLAIM HEAD from a rendered deviation — "who did what wrong" — for dedup.
+// It strips the severity label, the "Recommended correction:" tail, AND the impact/subordinate
+// clause (", which …", "… despite …"), because two findings of the SAME underlying issue share
+// the head but diverge in their impact wording — comparing the full summary let near-duplicates
+// through (jaccard fell to 0.43). The head is the stable dedup key; "why it matters" is variable.
 func devCore(dev string) string {
 	s := dev
 	if i := strings.Index(s, "— "); i >= 0 {
@@ -357,7 +359,14 @@ func devCore(dev string) string {
 	if i := strings.Index(s, "Recommended correction:"); i >= 0 {
 		s = s[:i]
 	}
-	return s
+	lo := strings.ToLower(s)
+	cut := len(s)
+	for _, mk := range []string{", which ", ", creating ", ", resulting ", ", posing ", ", risking ", ", so that ", ", potentially ", " despite ", " which conflicts", " which creates"} {
+		if i := strings.Index(lo, mk); i >= 0 && i < cut {
+			cut = i
+		}
+	}
+	return s[:cut]
 }
 
 // devSignature is the set of distinctive terms (≥5 chars) in a deviation string — used to dedup
