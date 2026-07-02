@@ -1,0 +1,179 @@
+# BigLaw Epistemic Legal Ontology (BELO)
+# Canonical spec. The Go package in this directory (ontology.go) encodes the
+# vocabulary below; evidencegraph stores Claims validated against it.
+#
+# Three layers:
+#   Domain    — what the matter is about (typed parties, conduct, authority, quantities)
+#   Epistemic — claims ABOUT the domain (provenance, grounding, status, dialectic) — the heart
+#   Analytic  — legal reasoning (concepts, elements, derived defense issues)
+#
+# The point: BigLaw's agents are epistemic actors. They PRODUCE, GROUND, CHALLENGE,
+# VERIFY, and CONSUME claims. Every agent reads/writes this one graph; epistemic
+# status drives synthesis. domain/range typing rejects the extractor's noise
+# (predicate-direction flips, mis-typed objects, sentence-nodes).
+
+@prefix belo: <https://discover.legal/ns/belo#> .
+@prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+
+belo: a owl:Ontology ;
+    rdfs:label "BigLaw Epistemic Legal Ontology" ;
+    owl:versionInfo "0.1.0" .
+
+############################################################
+# LAYER 1 — DOMAIN
+############################################################
+
+# --- Classes ---
+belo:Party      a owl:Class ; rdfs:label "Party" .
+belo:Person     a owl:Class ; rdfs:subClassOf belo:Party .
+belo:Firm       a owl:Class ; rdfs:subClassOf belo:Party .
+belo:Fund       a owl:Class ; rdfs:subClassOf belo:Party .
+belo:Account    a owl:Class ; rdfs:subClassOf belo:Party .
+belo:Broker     a owl:Class ; rdfs:subClassOf belo:Party .
+belo:Client     a owl:Class ; rdfs:subClassOf belo:Party .
+
+belo:Issue      a owl:Class ; rdfs:label "Issue" ;
+    rdfs:comment "The GENERAL spine node — a distinct proposition the deliverable must assess. Epistemic, not enforcement-specific: Conduct is the enforcement instantiation; Requirement / Clause / RedFlag instantiate it for other practice areas." .
+belo:Conduct    a owl:Class ; rdfs:subClassOf belo:Issue ; rdfs:label "Conduct" ;
+    rdfs:comment "Enforcement: a named alleged wrongful scheme, violation, or omission." .
+belo:Scheme     a owl:Class ; rdfs:subClassOf belo:Conduct .
+belo:Violation  a owl:Class ; rdfs:subClassOf belo:Conduct .
+belo:Omission   a owl:Class ; rdfs:subClassOf belo:Conduct .
+belo:Requirement a owl:Class ; rdfs:subClassOf belo:Issue ;
+    rdfs:comment "Compliance / comparison: a client instruction or standard to be met." .
+belo:Clause     a owl:Class ; rdfs:subClassOf belo:Issue ;
+    rdfs:comment "Transactional: a contract clause or obligation." .
+belo:RedFlag    a owl:Class ; rdfs:subClassOf belo:Issue ;
+    rdfs:comment "Diligence: a flagged finding to assess." .
+
+belo:Authority  a owl:Class ; rdfs:label "Legal Authority" .
+belo:Statute    a owl:Class ; rdfs:subClassOf belo:Authority .
+belo:Rule       a owl:Class ; rdfs:subClassOf belo:Authority .
+belo:Provision  a owl:Class ; rdfs:subClassOf belo:Authority .
+belo:Obligation a owl:Class ; rdfs:subClassOf belo:Authority .
+belo:Standard   a owl:Class ; rdfs:subClassOf belo:Authority .
+
+belo:Instrument a owl:Class ; rdfs:label "Instrument" .
+belo:Filing        a owl:Class ; rdfs:subClassOf belo:Instrument .
+belo:Exhibit       a owl:Class ; rdfs:subClassOf belo:Instrument .
+belo:Agreement     a owl:Class ; rdfs:subClassOf belo:Instrument .
+belo:Communication a owl:Class ; rdfs:subClassOf belo:Instrument .
+
+belo:Quantity   a owl:Class ; rdfs:label "Quantity" .
+belo:Money       a owl:Class ; rdfs:subClassOf belo:Quantity .
+belo:Percentage  a owl:Class ; rdfs:subClassOf belo:Quantity .
+belo:Count       a owl:Class ; rdfs:subClassOf belo:Quantity .
+belo:Date        a owl:Class ; rdfs:subClassOf belo:Quantity .
+belo:Identifier  a owl:Class ; rdfs:subClassOf belo:Quantity .
+
+belo:Event        a owl:Class ; rdfs:label "Event" .
+belo:Jurisdiction a owl:Class ; rdfs:label "Jurisdiction" .
+belo:Matter       a owl:Class ; rdfs:label "Matter" .
+
+# --- Domain object properties (controlled predicates, with domain/range) ---
+# Validation: a triple whose subject/object class is incompatible with the
+# predicate's domain/range is rejected or re-oriented (kills direction flips).
+belo:committedBy a owl:ObjectProperty ;
+    rdfs:domain belo:Conduct ; rdfs:range belo:Party .
+belo:violates a owl:ObjectProperty ;
+    rdfs:domain belo:Conduct ; rdfs:range belo:Authority .
+# Compliance / comparison / transactional issue predicates (subject is an Issue — a Requirement
+# or Clause), so the epistemic spine fires beyond enforcement.
+belo:requires a owl:ObjectProperty ; rdfs:domain belo:Issue .
+belo:satisfiedBy a owl:ObjectProperty ; rdfs:domain belo:Issue ; rdfs:range belo:Instrument .
+belo:deviatesFrom a owl:ObjectProperty ; rdfs:domain belo:Issue .
+belo:prohibits a owl:ObjectProperty ; rdfs:domain belo:Issue .
+belo:harmed a owl:ObjectProperty ;
+    rdfs:domain belo:Conduct ; rdfs:range belo:Party .
+belo:quantifiedAs a owl:ObjectProperty ;
+    rdfs:domain [ owl:unionOf ( belo:Conduct belo:Party ) ] ; rdfs:range belo:Quantity .
+belo:ownsStakeIn a owl:ObjectProperty ;
+    rdfs:domain belo:Party ; rdfs:range belo:Party .
+belo:receivedFrom a owl:ObjectProperty ;
+    rdfs:domain belo:Party ; rdfs:range belo:Party .
+belo:failedToDisclose a owl:ObjectProperty ;
+    rdfs:domain belo:Party .
+belo:directedTradesTo a owl:ObjectProperty ;
+    rdfs:domain belo:Party ; rdfs:range belo:Broker .
+belo:heldAccountAt a owl:ObjectProperty ;
+    rdfs:domain belo:Party ; rdfs:range belo:Broker .
+belo:alteredRecords a owl:ObjectProperty ;
+    rdfs:domain belo:Party ; rdfs:range belo:Instrument .
+belo:occurredDuring a owl:ObjectProperty ;
+    rdfs:domain belo:Conduct ; rdfs:range belo:Event .
+belo:citedIn a owl:ObjectProperty ;
+    rdfs:range belo:Instrument .
+belo:hasRole a owl:DatatypeProperty ;
+    rdfs:domain belo:Party ; rdfs:range xsd:string .
+
+############################################################
+# LAYER 2 — EPISTEMIC  (claims about the domain)
+############################################################
+
+belo:Claim a owl:Class ; rdfs:label "Claim" ;
+    rdfs:comment "A reified domain proposition with provenance, grounding, status, and dialectic." .
+
+# What it asserts (reification of a domain triple)
+belo:claimSubject   a owl:ObjectProperty ; rdfs:domain belo:Claim .
+belo:claimPredicate a owl:DatatypeProperty ; rdfs:domain belo:Claim ; rdfs:range xsd:string .
+belo:claimObject    a owl:ObjectProperty ; rdfs:domain belo:Claim .
+belo:about          a owl:ObjectProperty ; rdfs:domain belo:Claim ; rdfs:range belo:Conduct .
+
+# Provenance — WHO asserts it (legal actor) and which agent extracted it
+belo:LegalActor a owl:Class .
+belo:Accuser    a owl:Class ; rdfs:subClassOf belo:LegalActor .   # SEC / Division
+belo:Respondent a owl:Class ; rdfs:subClassOf belo:LegalActor .   # the defense
+belo:Court      a owl:Class ; rdfs:subClassOf belo:LegalActor .
+belo:ThirdParty a owl:Class ; rdfs:subClassOf belo:LegalActor .
+belo:assertedBy   a owl:ObjectProperty ; rdfs:domain belo:Claim ; rdfs:range belo:LegalActor .
+belo:extractedBy  a owl:DatatypeProperty ; rdfs:domain belo:Claim ; rdfs:range xsd:string . # BigLaw agent id
+belo:practiceArea a owl:DatatypeProperty ; rdfs:domain belo:Claim ; rdfs:range xsd:string .
+belo:inRound      a owl:DatatypeProperty ; rdfs:domain belo:Claim ; rdfs:range xsd:integer .
+
+# Grounding (CitationGate) — verbatim span in a source instrument
+belo:groundedIn   a owl:ObjectProperty ; rdfs:domain belo:Claim ; rdfs:range belo:Instrument .
+belo:quote        a owl:DatatypeProperty ; rdfs:domain belo:Claim ; rdfs:range xsd:string .
+belo:source       a owl:DatatypeProperty ; rdfs:domain belo:Claim ; rdfs:range xsd:string .
+
+# Epistemic status (the lifecycle) + modality + confidence
+belo:epistemicStatus a owl:DatatypeProperty ; rdfs:domain belo:Claim ; rdfs:range belo:Status .
+belo:Status a owl:Class .
+belo:Hypothesized a belo:Status . belo:Alleged a belo:Status . belo:Asserted a belo:Status .
+belo:Grounded a belo:Status . belo:Corroborated a belo:Status . belo:Contested a belo:Status .
+belo:Verified a belo:Status . belo:Refuted a belo:Status . belo:Unverified a belo:Status .
+belo:modality   a owl:DatatypeProperty ; rdfs:domain belo:Claim ; rdfs:range xsd:string . # alleged|established|disputed|inferred|admitted
+belo:confidence a owl:DatatypeProperty ; rdfs:domain belo:Claim ; rdfs:range xsd:decimal .
+belo:standardOfProof a owl:DatatypeProperty ; rdfs:domain belo:Claim ; rdfs:range xsd:string .
+
+# Dialectic — Claim → Claim stance edges (the debate graph; contradiction detector writes `contradicts`)
+belo:supports     a owl:ObjectProperty ; rdfs:domain belo:Claim ; rdfs:range belo:Claim .
+belo:corroborates a owl:ObjectProperty ; rdfs:domain belo:Claim ; rdfs:range belo:Claim .
+belo:contradicts  a owl:ObjectProperty ; rdfs:domain belo:Claim ; rdfs:range belo:Claim .
+belo:rebuts       a owl:ObjectProperty ; rdfs:domain belo:Claim ; rdfs:range belo:Claim .
+belo:qualifies    a owl:ObjectProperty ; rdfs:domain belo:Claim ; rdfs:range belo:Claim .
+belo:undercuts    a owl:ObjectProperty ; rdfs:domain belo:Claim ; rdfs:range belo:Claim .
+
+# Verification / challenge provenance
+belo:verifiedBy   a owl:DatatypeProperty ; rdfs:domain belo:Claim ; rdfs:range xsd:string .
+belo:challengedBy a owl:DatatypeProperty ; rdfs:domain belo:Claim ; rdfs:range xsd:string .
+
+############################################################
+# LAYER 3 — ANALYTIC  (legal reasoning)
+############################################################
+
+belo:LegalConcept a owl:Class ; rdfs:label "Legal Concept" ;
+    rdfs:comment "Cross-domain concept owned by a Conceptual agent (scienter, materiality, fiduciary duty, statute of limitations, respondeat superior, best execution)." .
+belo:implicates      a owl:ObjectProperty ; rdfs:domain [ owl:unionOf ( belo:Claim belo:Conduct ) ] ; rdfs:range belo:LegalConcept .
+belo:requiresElement a owl:ObjectProperty ; rdfs:domain belo:Authority ; rdfs:range belo:LegalConcept .
+belo:satisfiesElement a owl:ObjectProperty ; rdfs:domain belo:Claim ; rdfs:range belo:LegalConcept .
+
+belo:DefenseIssue a owl:Class ; rdfs:label "Defense Issue" ;
+    rdfs:comment "Derived: a discrepancy (contradicts-pair), an element gap (requiresElement with no satisfiesElement), or a time-bar (Event outside an SOL window)." .
+belo:DiscrepancyIssue a owl:Class ; rdfs:subClassOf belo:DefenseIssue .
+belo:ElementGapIssue  a owl:Class ; rdfs:subClassOf belo:DefenseIssue .
+belo:LimitationsIssue a owl:Class ; rdfs:subClassOf belo:DefenseIssue .
+belo:raisesIssue   a owl:ObjectProperty ; rdfs:range belo:DefenseIssue .
+belo:significance  a owl:DatatypeProperty ; rdfs:domain belo:DefenseIssue ; rdfs:range xsd:string .
