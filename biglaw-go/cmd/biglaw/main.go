@@ -53,6 +53,12 @@ import (
 )
 
 func main() {
+	// `biglaw demo` — self-contained 60-second showcase (see demo.go). Runs
+	// its own minimal wiring and exits; the normal server path is untouched.
+	if demoRequested(os.Args) {
+		os.Exit(runDemo())
+	}
+
 	// Load .env if present (silently ignore missing file), then overlay
 	// Infisical-managed secrets (mirrors the TS entry point: dotenv →
 	// Infisical → config). No-op when INFISICAL_* vars are absent.

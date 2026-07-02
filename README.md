@@ -626,6 +626,7 @@ docker compose -f biglaw-go/docker-compose.yml up -d --build
 # Or run the core natively (Go 1.25+, from the repo root so templates/ and
 # deadlines/rules/ resolve):
 go run ./biglaw-go/cmd/biglaw           # REST API on :3101
+go run ./biglaw-go/cmd/biglaw demo      # 60-second guided demo — seeds a sample matter, produces real Word artifacts
 
 # Tests
 cd biglaw-go && go test ./...
