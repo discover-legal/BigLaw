@@ -395,12 +395,11 @@ func (s *Store) Init(file string) error {
 		return err
 	}
 	data, err := os.ReadFile(file)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			return err
-		}
-		return nil
+	if err != nil && !os.IsNotExist(err) {
+		return err
 	}
+	// A missing ledger just means a fresh install — the write loop must
+	// still start, or no cost entry ever reaches disk.
 	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
 		if line == "" {
 			continue

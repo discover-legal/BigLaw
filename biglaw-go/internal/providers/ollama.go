@@ -61,6 +61,21 @@ func NewOpenAICompatProvider(baseURL, apiKey string) *OllamaProvider {
 	}
 }
 
+// rejectsTemperature reports whether the target model refuses a sampling
+// temperature override. OpenAI-hosted gpt-5.x and o-series reasoning models
+// return HTTP 400 for any temperature other than the default, so the
+// override is dropped rather than failing the call. Local OpenAI-compatible
+// servers accept temperature for every model.
+func rejectsTemperature(openAIHosted bool, model string) bool {
+	if !openAIHosted {
+		return false
+	}
+	return strings.HasPrefix(model, "gpt-5") ||
+		strings.HasPrefix(model, "o1") ||
+		strings.HasPrefix(model, "o3") ||
+		strings.HasPrefix(model, "o4")
+}
+
 // openAIChatRequest matches the OpenAI/Ollama chat completions format.
 // Exactly one of MaxTokens / MaxCompletionTokens is set per request:
 // OpenAI-hosted models (gpt-5.x, o-series) reject max_tokens outright and
@@ -266,7 +281,7 @@ func (p *OllamaProvider) Chat(params ChatParams) (*ChatResponse, error) {
 	if params.ReasoningEffort != "" {
 		reqBody.ReasoningEffort = params.ReasoningEffort
 	}
-	if params.Temperature != nil {
+	if params.Temperature != nil && !rejectsTemperature(p.useMaxCompletionTokens, bareModel) {
 		reqBody.Temperature = params.Temperature
 	}
 
