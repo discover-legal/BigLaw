@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Discover Legal
 
 // Email intake — polls the configured mailbox(es) on an interval, routes each new

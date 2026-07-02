@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Discover Legal
 
 // End-to-end test for respond_to_redline: an opposing-counsel marked-up docx

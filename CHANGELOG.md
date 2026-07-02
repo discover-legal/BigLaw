@@ -17,6 +17,47 @@ House rules:
 
 ## [Unreleased]
 
+### Relicensed: AGPL-3.0 → Apache-2.0
+A clean-room reimplementation (spec: `docs/clean-room-spec-document-tools.md`) replaced
+every Mike-derived component — the five document-production/tabular tools and the built-in
+workflow templates — with independently authored native Go, removing the last copyleft
+dependency. With all copyright held by Discover Legal, the project is now **Apache-2.0**:
+express patent grant, NOTICE-based attribution, no network-service source obligation.
+LICENSE, NOTICE, SPDX headers (271 files), badges, and image labels all updated.
+
+### Negotiation intelligence
+- **Counter-redline loop** — `respond_to_redline`: parses opposing counsel's tracked
+  changes (cross-run, substitution merging), judges each against the four-tier playbook
+  cascade, and writes a `.response.docx` with countered redlines + per-change rationale
+  cards; failed judgments degrade to `review`, never abort
+- **Redtime** — document lineage across negotiation rounds (`document_versions` on the
+  sqlite/postgres/memory store seam), tracked-change attribution + silent-edit detection
+  via in-house word-diff, per-clause timelines with playbook drift
+  (`get_redline_timeline`, `GET /documents/:id/timeline`)
+- **Judge memory** — the negotiate judge receives per-clause negotiation history
+  (token-budgeted, last 3 rounds) with standoff escalation to playbook fallback or
+  lawyer review (`escalation` on decision cards)
+- **Integrity Check** — Unicode obfuscation scan (homoglyphs, zero-width, bidi) +
+  unmarked-change detection on inbound documents (`check_document_integrity`, wired
+  into `respond_to_redline` and knowledge ingest)
+
+### Tabular review, industrialized
+- Reviews persist via the store seam (sqlite/postgres/memory; RLS on postgres) and
+  reload across restarts; landscape `.docx` matrix export; `GET /reviews/:id` +
+  `/reviews/:id/table.csv`; 10-call extraction concurrency cap
+- **Citation verification ladder** — every `[[page:N||quote]]` cell citation verified
+  at extraction time: exact → tolerant → paraphrase judge → 3-vote ensemble, with
+  method + confidence per citation and a matrix-level verified tally (docx stamp)
+
+### Workbench & demo
+- **Reviews UI** — RAG-colored due-diligence grid with verification-state citation
+  pills; pill click opens the source document with the quote highlighted; Redtime
+  timeline view (rounds × clauses, silent-edit warnings, decision + drift badges)
+- **`biglaw demo`** — one-command end-to-end tour: seed → tabular review → CP
+  checklist → counter-redline with rationale cards (verified live at ~$0.03)
+- Fixes: cost ledger now persists on fresh installs; temperature override dropped
+  for OpenAI gpt-5.x/o-series (was silently degrading tabular cells to grey)
+
 ### TS→Go porting complete — feature parity with `typescript-final`
 Everything previously marked "TS-only, not yet ported" is now on the Go platform:
 - **Browser OAuth login** (Google / Microsoft / LinkedIn OIDC): static

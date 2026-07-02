@@ -6,7 +6,7 @@
 
 **What Am Law 100 firms spend $2M/year on — consolidated into one open-source platform, free for solos, boutiques, and small firms.**
 
-[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-2563eb.svg)](LICENSE)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-2563eb.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.25-00ADD8.svg)](biglaw-go/go.mod)
 [![MCP](https://img.shields.io/badge/MCP-stdio%20server-E6B450.svg)](#using-from-claude-code)
 [![Vector search](https://img.shields.io/badge/Vector%20search-in--process-7c3aed.svg)](biglaw-go/internal/agents/registry.go)
@@ -182,7 +182,7 @@ deploying with real client data.**
 ### Deployment Liability
 
 **You deploy this software at your own risk.** Discover Legal and the contributors to this
-project provide it under the AGPL-3.0 licence, which explicitly disclaims all warranties,
+project provide it under the Apache-2.0 licence, which explicitly disclaims all warranties,
 including fitness for a particular purpose and non-infringement.
 
 Specific risks that arise from misconfigured or insecure deployment include:
@@ -1248,9 +1248,9 @@ All platform code lives under `biglaw-go/` (module `biglaw-go`, entry point
 
 ## License & attribution
 
-BigLaw is distributed under the **GNU Affero General Public License v3.0** ([`LICENSE`](LICENSE)).
-Under AGPL §13, running a modified version as a network service obliges you to offer the
-complete corresponding source to its users.
+BigLaw is distributed under the **Apache License, Version 2.0** ([`LICENSE`](LICENSE)),
+which includes an express patent grant from every contributor. Use it, modify it, embed it,
+run it as a service — attribution per the [`NOTICE`](NOTICE) file is all that is asked.
 
 It builds on one upstream, fully attributed in [`NOTICE`](NOTICE):
 

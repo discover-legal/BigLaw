@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 # TypeDB conflict-graph sidecar. Build context: sidecar/typedb/
 
 FROM node:22-alpine AS build

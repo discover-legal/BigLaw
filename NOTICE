@@ -1,12 +1,13 @@
 Big Michael
 Copyright (C) 2026 Discover Legal
 
-This distribution is licensed under the GNU Affero General Public License,
-version 3 (AGPL-3.0-only). See the LICENSE file for the full text.
+This distribution is licensed under the Apache License, Version 2.0
+(Apache-2.0). See the LICENSE file for the full text.
 
-This work is distributed under the AGPL-3.0. If you run a modified version of
-this software to provide a network service, AGPL-3.0 section 13 requires you
-to offer the complete corresponding source to its users.
+Formerly distributed under AGPL-3.0-only; relicensed to Apache-2.0 on
+2026-07-02 by the copyright holder after a clean-room reimplementation
+removed all third-party copyleft-licensed code
+(see docs/clean-room-spec-document-tools.md).
 
 ================================================================================
 Third-party components
@@ -21,8 +22,6 @@ Third-party components
             JSON LavernAgentConfig records, with tool permissions remapped to
             Big Michael's tool registry. The underlying prompt text remains
             (C) the Lavern authors under the Apache License, Version 2.0.
-            Apache-2.0 is included in this combined AGPL-3.0 work as permitted
-            by Apache-2.0; the Lavern portions retain their Apache-2.0 grant.
 
 Trademarks: "Lavern" and "The Shem" are the marks of their respective
 authors and are used here only for attribution; no endorsement is implied.

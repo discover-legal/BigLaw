@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 # BigLaw Go core. Build context must be the repository root:
 #   docker build -f biglaw-go/Dockerfile .
 #
@@ -58,7 +58,7 @@ ARG REVISION=unknown
 ARG CREATED=1970-01-01T00:00:00Z
 LABEL org.opencontainers.image.title="BigLaw" \
       org.opencontainers.image.description="Open, free, multi-agent legal AI orchestration platform" \
-      org.opencontainers.image.licenses="AGPL-3.0-only" \
+      org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.source="https://github.com/discover-legal/BigLaw" \
       org.opencontainers.image.documentation="https://github.com/discover-legal/BigLaw#readme" \
       org.opencontainers.image.vendor="Discover Legal" \

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Discover Legal
 
 // Sliding-window per-IP rate limiter for the auth endpoints (20 req/min in
