@@ -98,6 +98,46 @@ type ReviewRepository interface {
 	GetReview(ctx context.Context, id string) ([]byte, bool, error)
 }
 
+// DocumentVersion is one registered version of a negotiated document — a node
+// in a lineage (the same contract tracked across negotiation rounds, Redtime).
+// The extracted plain text is stored on the row because it is what diffs and
+// timelines consume; the document itself lives on disk at Path. Decisions is
+// an opaque JSON payload (the respond_to_redline decision summary for the
+// round that produced this version), stored like a review payload — only ever
+// read back whole.
+type DocumentVersion struct {
+	ID          string    `json:"id"`
+	LineageID   string    `json:"lineageId"`
+	ParentID    string    `json:"parentId,omitempty"`
+	Round       int       `json:"round"`
+	Source      string    `json:"source"` // "ours" | "theirs" | "upload"
+	Author      string    `json:"author,omitempty"`
+	CreatedAt   time.Time `json:"createdAt"`
+	Path        string    `json:"path,omitempty"`
+	ContentHash string    `json:"contentHash"`
+	Text        string    `json:"text,omitempty"`
+	Decisions   []byte    `json:"decisions,omitempty"`
+}
+
+// VersionRepository is durable storage for document-version lineages
+// (internal/redtime). Every backend returned by Open implements it alongside
+// DocRepository and ReviewRepository.
+type VersionRepository interface {
+	// PutVersion inserts or replaces a version by ID.
+	PutVersion(ctx context.Context, v DocumentVersion) error
+	// GetVersion returns one version and whether it was found.
+	GetVersion(ctx context.Context, id string) (*DocumentVersion, bool, error)
+	// ListLineage returns every version of a lineage ordered by round
+	// ascending (creation time breaks ties).
+	ListLineage(ctx context.Context, lineageID string) ([]DocumentVersion, error)
+	// FindVersionByHash returns the most recent version with the given
+	// content hash — the idempotent-registration lookup.
+	FindVersionByHash(ctx context.Context, contentHash string) (*DocumentVersion, bool, error)
+	// FindVersionByPath returns the most recent version registered from the
+	// given on-disk path.
+	FindVersionByPath(ctx context.Context, path string) (*DocumentVersion, bool, error)
+}
+
 // Open builds the repository selected by config. Resolution order:
 //
 //	DATABASE_URL set (postgres:// or postgresql://) → postgres   [Phase 1b]

@@ -141,6 +141,24 @@ func (e *Engine) Decide(revs []ooxml.Revision, store *playbook.Store, opts Opts)
 	return decisions
 }
 
+// ClassifyChange labels the clause one change touches — the same
+// classification step Decide runs per revision, exported for Redtime, which
+// builds synthetic Revisions from plain-text diff hunks and buckets timeline
+// events in the firm's own clause vocabulary.
+func (e *Engine) ClassifyChange(rv ooxml.Revision, vocab []string, taskID string) (string, error) {
+	return e.classifyClause(rv, vocab, taskID)
+}
+
+// Vocabulary exposes the playbook clause-type labels for external
+// classification callers (Redtime).
+func Vocabulary(store *playbook.Store) []string { return vocabulary(store) }
+
+// ParseJSONObject exposes the lenient JSON-object extractor for other
+// model-facing packages (Redtime's drift judgment) — small local models emit
+// fences and trailing commas everywhere, and there should be exactly one
+// repair implementation.
+func ParseJSONObject(raw string, v interface{}) error { return parseJSONObject(raw, v) }
+
 // vocabulary returns the clause-type labels known to any playbook so
 // classification can label changes in the firm's own vocabulary — without it,
 // "confidentiality" vs "Confidential Information" never match the cascade.

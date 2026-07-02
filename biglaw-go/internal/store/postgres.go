@@ -116,6 +116,42 @@ CREATE POLICY reviews_rls ON reviews
 	WITH CHECK (
 		current_setting('app.system', true) = 'on'
 	);
+
+-- Document-version lineages (internal/redtime). Same posture as reviews:
+-- rows carry no owner, any declared identity (system, partner, or a lawyer)
+-- may read, but only the system principal writes — versions are registered by
+-- the tool layer, never directly by a user request. Anonymous callers still
+-- see nothing.
+CREATE TABLE IF NOT EXISTS document_versions (
+	id             TEXT PRIMARY KEY,
+	lineage_id     TEXT NOT NULL DEFAULT '',
+	parent_id      TEXT NOT NULL DEFAULT '',
+	round          INTEGER NOT NULL DEFAULT 0,
+	source         TEXT NOT NULL DEFAULT '',
+	author         TEXT NOT NULL DEFAULT '',
+	created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+	path           TEXT NOT NULL DEFAULT '',
+	content_hash   TEXT NOT NULL DEFAULT '',
+	text           TEXT NOT NULL DEFAULT '',
+	decisions_json TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_document_versions_lineage ON document_versions(lineage_id, round);
+CREATE INDEX IF NOT EXISTS idx_document_versions_hash    ON document_versions(content_hash);
+CREATE INDEX IF NOT EXISTS idx_document_versions_path    ON document_versions(path);
+
+ALTER TABLE document_versions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE document_versions FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS document_versions_rls ON document_versions;
+CREATE POLICY document_versions_rls ON document_versions
+	USING (
+		current_setting('app.system', true) = 'on'
+		OR current_setting('app.is_partner', true) = 'true'
+		OR coalesce(current_setting('app.current_profile', true), '') <> ''
+	)
+	WITH CHECK (
+		current_setting('app.system', true) = 'on'
+	);
 `
 
 type pgRepo struct {
@@ -375,6 +411,108 @@ func (r *pgRepo) GetReview(ctx context.Context, id string) ([]byte, bool, error)
 		return nil, false, fmt.Errorf("store: postgres get review %s: %w", id, err)
 	}
 	return payload, payload != nil, nil
+}
+
+// ─── VersionRepository ───────────────────────────────────────────────────────────
+
+func (r *pgRepo) PutVersion(ctx context.Context, v DocumentVersion) error {
+	created := v.CreatedAt
+	if created.IsZero() {
+		created = time.Now()
+	}
+	return r.withTx(ctx, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `
+			INSERT INTO document_versions
+				(id, lineage_id, parent_id, round, source, author, created_at, path, content_hash, text, decisions_json)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+			ON CONFLICT(id) DO UPDATE SET
+				lineage_id=excluded.lineage_id, parent_id=excluded.parent_id, round=excluded.round,
+				source=excluded.source, author=excluded.author, created_at=excluded.created_at,
+				path=excluded.path, content_hash=excluded.content_hash, text=excluded.text,
+				decisions_json=excluded.decisions_json`,
+			v.ID, v.LineageID, v.ParentID, v.Round, v.Source, v.Author,
+			created.UTC(), v.Path, v.ContentHash, v.Text, string(v.Decisions))
+		if err != nil {
+			return fmt.Errorf("store: postgres put version %s: %w", v.ID, err)
+		}
+		return nil
+	})
+}
+
+func (r *pgRepo) GetVersion(ctx context.Context, id string) (*DocumentVersion, bool, error) {
+	return r.findVersionWhere(ctx, `id = $1`, id)
+}
+
+func (r *pgRepo) ListLineage(ctx context.Context, lineageID string) ([]DocumentVersion, error) {
+	var out []DocumentVersion
+	err := r.withTx(ctx, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT `+pgVerColumns+
+			` FROM document_versions WHERE lineage_id = $1 ORDER BY round ASC, created_at ASC`, lineageID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			v, serr := scanPGVersion(rows)
+			if serr != nil {
+				return serr
+			}
+			out = append(out, *v)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, fmt.Errorf("store: postgres list lineage: %w", err)
+	}
+	return out, nil
+}
+
+func (r *pgRepo) FindVersionByHash(ctx context.Context, contentHash string) (*DocumentVersion, bool, error) {
+	return r.findVersionWhere(ctx, `content_hash = $1 ORDER BY created_at DESC, round DESC`, contentHash)
+}
+
+func (r *pgRepo) FindVersionByPath(ctx context.Context, path string) (*DocumentVersion, bool, error) {
+	return r.findVersionWhere(ctx, `path = $1 ORDER BY created_at DESC, round DESC`, path)
+}
+
+func (r *pgRepo) findVersionWhere(ctx context.Context, where, value string) (*DocumentVersion, bool, error) {
+	var ver *DocumentVersion
+	err := r.withTx(ctx, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT `+pgVerColumns+` FROM document_versions WHERE `+where+` LIMIT 1`, value)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		if rows.Next() {
+			v, serr := scanPGVersion(rows)
+			if serr != nil {
+				return serr
+			}
+			ver = v
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, false, fmt.Errorf("store: postgres find version: %w", err)
+	}
+	return ver, ver != nil, nil
+}
+
+const pgVerColumns = `id, lineage_id, parent_id, round, source, author, created_at, path, content_hash, text, decisions_json`
+
+func scanPGVersion(rows pgx.Rows) (*DocumentVersion, error) {
+	var v DocumentVersion
+	var created time.Time
+	var decisions string
+	if err := rows.Scan(&v.ID, &v.LineageID, &v.ParentID, &v.Round, &v.Source, &v.Author,
+		&created, &v.Path, &v.ContentHash, &v.Text, &decisions); err != nil {
+		return nil, err
+	}
+	v.CreatedAt = created
+	if decisions != "" {
+		v.Decisions = []byte(decisions)
+	}
+	return &v, nil
 }
 
 const pgAttColumns = `id, doc_id, owner_id, filename, media_type, kind, size, blob_key, page, created_at`

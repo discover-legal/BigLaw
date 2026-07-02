@@ -895,6 +895,7 @@ GET    /reviews/:id/table.csv              (tabular_review matrix as CSV)
 POST   /tasks/:id/status-report            (LPM status-report spine)
 POST   /documents             POST /documents/upload (PDF/text)
 GET    /documents             GET /documents/search
+GET    /documents/:id/timeline             (Redtime per-clause redline timeline of a version lineage)
 GET    /agents · /templates · /settings   PUT /settings      (admin)
 GET    /plugins                                               (partner only)
 GET    /me · /profiles        POST /profiles                 (partner only)

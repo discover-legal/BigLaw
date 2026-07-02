@@ -185,6 +185,7 @@ func New(
 	s.registerOpsRoutes(r)     // dockets, regulatory, reports, jobs, plugins, memory
 	s.registerEnginesRoutes(r) // playbooks, redline, headnotes, precedents, citations, briefing
 	s.registerContentRoutes(r) // document library/upload, table.csv, profile cost, tone
+	s.registerRedtimeRoutes(r) // document version lineage timeline (Redtime)
 	s.registerRemyRoutes(r)    // client-voice briefs + matter notifications (Remy/CNTXT)
 	s.registerAuthRoutes(r)    // browser OAuth login + signed-cookie sessions
 	s.registerClioRoutes(r)    // Clio OAuth connect flow, matter import, time sync

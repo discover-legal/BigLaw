@@ -131,6 +131,13 @@ func (r *Registry) editDocumentTool() *ToolImpl {
 			if err := doc.SaveFile(outputPath); err != nil {
 				return fail(fmt.Sprintf("cannot write redlined document: %v", err)), nil
 			}
+
+			// Redtime — when the input already belongs to a version lineage,
+			// the redlined output accrues as the next "ours" version.
+			// One-off edits don't force-create lineages; null means the input
+			// was untracked (or version tracking is unavailable).
+			lineage := r.recordEditVersion(src, outputPath, author)
+
 			return map[string]interface{}{
 				"ok":           true,
 				"outputPath":   outputPath,
@@ -138,6 +145,7 @@ func (r *Registry) editDocumentTool() *ToolImpl {
 				"errorCount":   len(editErrors),
 				"annotations":  annotations,
 				"errors":       editErrors,
+				"lineage":      lineage,
 			}, nil
 		},
 	}

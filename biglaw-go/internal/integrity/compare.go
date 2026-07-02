@@ -46,6 +46,12 @@ func CompareVersions(sentText string, received *ooxml.Document) UnmarkedReport {
 	}
 }
 
+// NormalizeForCompare exposes the comparison normalisation for other
+// formatting-insensitive diffs — Redtime normalises successive document
+// versions with it so reflow and smart-quote churn never read as negotiation
+// moves.
+func NormalizeForCompare(s string) string { return normalizeForCompare(s) }
+
 // normalizeForCompare is applied IDENTICALLY to both sides before diffing so
 // formatting-only differences never read as silent edits:
 //   - curly quotes → straight quotes (Word's autocorrect rewrites these);

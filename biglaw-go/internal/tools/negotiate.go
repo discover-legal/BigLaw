@@ -151,12 +151,23 @@ func (r *Registry) respondToRedlineTool() *ToolImpl {
 					"count": unmarked.Count,
 				}
 			}
+
+			// Redtime — the round accrues into the document lineage: the
+			// inbound opposing draft ("theirs", chained onto the version we
+			// last sent when prior_version_path identifies it) and the
+			// response ("ours") carrying the decision summary. Best-effort:
+			// version tracking never fails the negotiation; null means
+			// tracking is unavailable.
+			lineage := r.recordNegotiationVersions(src, outputPath,
+				strInput(input, "prior_version_path"), author, revs, decisions)
+
 			return map[string]interface{}{
 				"ok":            true,
 				"outputPath":    outputPath,
 				"decisions":     decisions,
 				"counts":        counts,
 				"changesParsed": len(revs),
+				"lineage":       lineage,
 				"integrity": map[string]interface{}{
 					"obfuscation":     obfuscation,
 					"unmarkedChanges": unmarkedOut,
