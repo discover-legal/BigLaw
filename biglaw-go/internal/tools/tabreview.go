@@ -80,12 +80,17 @@ If the document does not contain the requested information, set "summary" to "No
 
 // ─── Review store (memory + disk) ───────────────────────────────────────────
 
-// ReviewCell is one document × column extraction result.
+// ReviewCell is one document × column extraction result. Citations are the
+// inline [[page:N||quote:...]] markers parsed from Summary in order, each
+// verified against the source document (see tabcite.go for the ladder).
 type ReviewCell struct {
-	Column    string `json:"column"`
-	Summary   string `json:"summary"`
-	Flag      string `json:"flag"`
-	Reasoning string `json:"reasoning"`
+	Column            string     `json:"column"`
+	Summary           string     `json:"summary"`
+	Flag              string     `json:"flag"`
+	Reasoning         string     `json:"reasoning"`
+	Citations         []Citation `json:"citations"`
+	CitationsVerified int        `json:"citationsVerified"`
+	CitationsTotal    int        `json:"citationsTotal"`
 }
 
 // ReviewRow is one document's cells, in column order.
@@ -99,12 +104,13 @@ type ReviewRow struct {
 // payload plus a creation timestamp. It is held in the in-memory store and
 // persisted verbatim as <reviewsDir>/<reviewId>.json.
 type ReviewRecord struct {
-	ReviewID  string            `json:"reviewId"`
-	CreatedAt string            `json:"createdAt"`
-	Columns   []string          `json:"columns"`
-	Rows      []ReviewRow       `json:"rows"`
-	FlagTally map[string]int    `json:"flagTally"`
-	Legend    map[string]string `json:"legend"`
+	ReviewID      string            `json:"reviewId"`
+	CreatedAt     string            `json:"createdAt"`
+	Columns       []string          `json:"columns"`
+	Rows          []ReviewRow       `json:"rows"`
+	FlagTally     map[string]int    `json:"flagTally"`
+	CitationTally *CitationTally    `json:"citationTally,omitempty"`
+	Legend        map[string]string `json:"legend"`
 }
 
 var (
@@ -254,6 +260,7 @@ func (r *Registry) tabularReviewTool() *ToolImpl {
 			for flag := range reviewFlagLegend {
 				tally[flag] = 0
 			}
+			citeTally := newCitationTally()
 
 			// Semaphore bounding in-flight extraction calls across the whole
 			// invocation (rows run sequentially; each row's cells concurrently).
@@ -271,6 +278,7 @@ func (r *Registry) tabularReviewTool() *ToolImpl {
 							Summary:   "Document not found",
 							Flag:      "grey",
 							Reasoning: fmt.Sprintf("document %q is not in the knowledge store", docID),
+							Citations: []Citation{}, // nothing to verify
 						})
 					}
 				} else {
@@ -285,7 +293,13 @@ func (r *Registry) tabularReviewTool() *ToolImpl {
 							defer wg.Done()
 							sem <- struct{}{}
 							defer func() { <-sem }()
-							cells[i] = r.extractReviewCell(prov, model, docID, text, c, ctx.TaskID)
+							cell := r.extractReviewCell(prov, model, docID, text, c, ctx.TaskID)
+							// Citation verification runs here, inside the held
+							// semaphore slot: the extraction call has returned,
+							// so any judge calls reuse this slot's budget and
+							// the invocation-wide cap still holds.
+							r.verifyCellCitations(prov, model, ctx.TaskID, text, &cell)
+							cells[i] = cell
 						}(i, c)
 					}
 					wg.Wait()
@@ -293,28 +307,31 @@ func (r *Registry) tabularReviewTool() *ToolImpl {
 				}
 				for _, cell := range row.Cells {
 					tally[cell.Flag]++
+					citeTally.add(cell.Citations)
 				}
 				rows = append(rows, row)
 			}
 
 			rec := &ReviewRecord{
-				ReviewID:  uuid.New().String(),
-				CreatedAt: time.Now().UTC().Format(time.RFC3339),
-				Columns:   colNames,
-				Rows:      rows,
-				FlagTally: tally,
-				Legend:    reviewFlagLegend,
+				ReviewID:      uuid.New().String(),
+				CreatedAt:     time.Now().UTC().Format(time.RFC3339),
+				Columns:       colNames,
+				Rows:          rows,
+				FlagTally:     tally,
+				CitationTally: citeTally,
+				Legend:        reviewFlagLegend,
 			}
 			reviewStoreMu.Lock()
 			reviewStore[rec.ReviewID] = rec
 			reviewStoreMu.Unlock()
 
 			out := map[string]interface{}{
-				"reviewId":  rec.ReviewID,
-				"columns":   colNames,
-				"rows":      rows,
-				"flagTally": tally,
-				"legend":    reviewFlagLegend,
+				"reviewId":      rec.ReviewID,
+				"columns":       colNames,
+				"rows":          rows,
+				"flagTally":     tally,
+				"citationTally": citeTally,
+				"legend":        reviewFlagLegend,
 			}
 			// Durable persistence — best-effort: a write failure is annotated,
 			// never fails the review (the matrix stays in the in-memory cache).
@@ -351,6 +368,9 @@ func (r *Registry) renderReviewDocx(rec *ReviewRecord) (path, filename string, e
 	b := ooxml.NewBuilder()
 	b.SetLandscape(true)
 	b.Heading(1, "Tabular Review "+rec.ReviewID)
+	if rec.CitationTally != nil {
+		b.Paragraph(fmt.Sprintf("Citations verified: %d/%d", rec.CitationTally.Verified, rec.CitationTally.Total))
+	}
 
 	headers := append([]string{"Document"}, rec.Columns...)
 	tableRows := make([][]string, 0, len(rec.Rows))

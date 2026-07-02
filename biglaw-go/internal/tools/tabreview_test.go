@@ -73,6 +73,9 @@ func newFakeModelServer(t *testing.T) *httptest.Server {
 
 		reply := `{"summary":"New York law [[page:2||quote:governed by the laws of the State of New York]]","flag":"green","reasoning":"Standard, unqualified choice-of-law clause."}`
 		switch {
+		case strings.Contains(user, "QUOTE (attributed to page"):
+			// Citation paraphrase-judge call (tabcite.go): confidently supported.
+			reply = `{"supported":true,"confidence":0.9}`
 		case strings.Contains(user, "termination"):
 			reply = `{"summary":"90-day convenience termination [[page:5||quote:either party may terminate on ninety days written notice]]","flag":"yellow","reasoning":"Notice period is longer than market standard."}`
 		case strings.Contains(user, "GARBLED"):
