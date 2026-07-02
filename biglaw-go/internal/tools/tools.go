@@ -22,6 +22,7 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/providers"
 	"github.com/discover-legal/biglaw-go/internal/rag"
 	"github.com/discover-legal/biglaw-go/internal/routing"
+	"github.com/discover-legal/biglaw-go/internal/store"
 	"github.com/discover-legal/biglaw-go/internal/strutil"
 )
 
@@ -39,15 +40,17 @@ type Registry struct {
 	provReg *providers.Registry
 	costs   *cost.Store
 	rag     *rag.Service
+	reviews store.ReviewRepository // durable tabular-review matrices; nil = in-memory only
 }
 
-func NewRegistry(cfg *config.Config, provReg *providers.Registry, costs *cost.Store, ragSvc *rag.Service) *Registry {
+func NewRegistry(cfg *config.Config, provReg *providers.Registry, costs *cost.Store, ragSvc *rag.Service, reviews store.ReviewRepository) *Registry {
 	r := &Registry{
 		tools:   map[string]*ToolImpl{},
 		cfg:     cfg,
 		provReg: provReg,
 		costs:   costs,
 		rag:     ragSvc,
+		reviews: reviews,
 	}
 	r.registerAll()
 	return r

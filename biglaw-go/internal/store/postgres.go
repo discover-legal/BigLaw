@@ -92,6 +92,30 @@ CREATE POLICY attachments_rls ON attachments
 		OR current_setting('app.is_partner', true) = 'true'
 		OR owner_id = current_setting('app.current_profile', true)
 	);
+
+-- Tabular-review matrices (internal/tools tabular_review). Rows carry no
+-- owner: any declared identity (system, partner, or a lawyer) may read, but
+-- only the system principal writes — reviews are produced by the tool layer,
+-- never directly by a user request. Anonymous callers still see nothing.
+CREATE TABLE IF NOT EXISTS reviews (
+	id         TEXT PRIMARY KEY,
+	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	payload    JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+ALTER TABLE reviews ENABLE ROW LEVEL SECURITY;
+ALTER TABLE reviews FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS reviews_rls ON reviews;
+CREATE POLICY reviews_rls ON reviews
+	USING (
+		current_setting('app.system', true) = 'on'
+		OR current_setting('app.is_partner', true) = 'true'
+		OR coalesce(current_setting('app.current_profile', true), '') <> ''
+	)
+	WITH CHECK (
+		current_setting('app.system', true) = 'on'
+	);
 `
 
 type pgRepo struct {
@@ -311,6 +335,46 @@ func (r *pgRepo) DeleteAttachment(ctx context.Context, id string) error {
 		_, err := tx.Exec(ctx, `DELETE FROM attachments WHERE id = $1`, id)
 		return err
 	})
+}
+
+// ─── ReviewRepository ────────────────────────────────────────────────────────────
+
+func (r *pgRepo) PutReview(ctx context.Context, id string, createdAt time.Time, payload []byte) error {
+	if createdAt.IsZero() {
+		createdAt = time.Now()
+	}
+	return r.withTx(ctx, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `
+			INSERT INTO reviews (id, created_at, payload) VALUES ($1,$2,$3)
+			ON CONFLICT(id) DO UPDATE SET
+				created_at=excluded.created_at, payload=excluded.payload`,
+			id, createdAt.UTC(), payload)
+		if err != nil {
+			return fmt.Errorf("store: postgres put review %s: %w", id, err)
+		}
+		return nil
+	})
+}
+
+func (r *pgRepo) GetReview(ctx context.Context, id string) ([]byte, bool, error) {
+	var payload []byte
+	err := r.withTx(ctx, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT payload FROM reviews WHERE id = $1`, id)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		if rows.Next() {
+			if serr := rows.Scan(&payload); serr != nil {
+				return serr
+			}
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, false, fmt.Errorf("store: postgres get review %s: %w", id, err)
+	}
+	return payload, payload != nil, nil
 }
 
 const pgAttColumns = `id, doc_id, owner_id, filename, media_type, kind, size, blob_key, page, created_at`

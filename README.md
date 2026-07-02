@@ -890,6 +890,7 @@ POST   /tasks                 GET /tasks · /tasks/:id · /tasks/:id/stream (SSE
 DELETE /tasks/:id             POST /tasks/:id/assign         (partner only)
 POST   /tasks/from-template   POST /tasks/:id/gates/:gateId/{approve,reject}
 GET    /tasks/:id/rounds/:round            GET /tasks/:id/table.csv
+GET    /reviews/:id/table.csv              (tabular_review matrix as CSV)
 POST   /tasks/:id/status-report            (LPM status-report spine)
 POST   /documents             POST /documents/upload (PDF/text)
 GET    /documents             GET /documents/search

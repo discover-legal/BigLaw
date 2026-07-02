@@ -29,6 +29,7 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/pdfgen"
 	"github.com/discover-legal/biglaw-go/internal/routing"
 	"github.com/discover-legal/biglaw-go/internal/services"
+	"github.com/discover-legal/biglaw-go/internal/tools"
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
 
@@ -47,6 +48,7 @@ func (s *Server) registerContentRoutes(r *gin.Engine) {
 	r.GET("/documents/attachments/:docId/:attId", s.handleGetAttachment)
 	r.GET("/documents/export/:docId", s.handleExportDocument)
 	r.GET("/tasks/:id/table.csv", s.handleTaskTableCSV)
+	r.GET("/reviews/:id/table.csv", s.handleReviewTableCSV)
 	r.GET("/profiles/:id/cost", s.handleProfileCost)
 	r.POST("/profiles/:id/tone/import", s.handleToneImport)
 	r.POST("/profiles/:id/tone/linkedin-import", s.handleToneLinkedInImport)
@@ -448,6 +450,49 @@ func (s *Server) handleTaskTableCSV(c *gin.Context) {
 	}
 
 	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", "big-michael-"+taskID+".csv"))
+	c.Data(http.StatusOK, "text/csv; charset=utf-8", []byte(strings.Join(lines, "\r\n")))
+}
+
+// ─── Tabular-review CSV export ────────────────────────────────────────────────
+
+// handleReviewTableCSV streams a completed tabular_review matrix as a
+// downloadable CSV: header row "Document,<col1>,<col2>,..." then one row per
+// document, each cell "[flag] summary". Resolution goes through the shared
+// lookup (in-process cache, then the review repository) under the caller's
+// identity, so Postgres RLS applies; unknown ids are a JSON 404.
+func (s *Server) handleReviewTableCSV(c *gin.Context) {
+	rev, found := tools.LookupReview(reqIdentity(c), s.reviews, c.Param("id"))
+	if !found {
+		c.JSON(http.StatusNotFound, gin.H{"error": "review not found"})
+		return
+	}
+
+	lines := make([]string, 0, len(rev.Rows)+1)
+	header := make([]string, 0, len(rev.Columns)+1)
+	header = append(header, contentCSVEscape("Document"))
+	for _, col := range rev.Columns {
+		header = append(header, contentCSVEscape(col))
+	}
+	lines = append(lines, strings.Join(header, ","))
+
+	for _, row := range rev.Rows {
+		name := row.Document
+		if strings.TrimSpace(name) == "" {
+			name = row.DocumentID
+		}
+		cells := make([]string, 0, len(rev.Columns)+1)
+		cells = append(cells, contentCSVEscape(name))
+		for i := range rev.Columns {
+			cell := ""
+			if i < len(row.Cells) {
+				cell = "[" + row.Cells[i].Flag + "] " + row.Cells[i].Summary
+			}
+			cells = append(cells, contentCSVEscape(cell))
+		}
+		lines = append(lines, strings.Join(cells, ","))
+	}
+
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", "tabular-review-"+rev.ReviewID+".csv"))
 	c.Data(http.StatusOK, "text/csv; charset=utf-8", []byte(strings.Join(lines, "\r\n")))
 }
 

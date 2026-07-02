@@ -53,6 +53,12 @@ CREATE TABLE IF NOT EXISTS attachments (
 	created_at TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_attachments_doc ON attachments(doc_id);
+
+CREATE TABLE IF NOT EXISTS reviews (
+	id         TEXT PRIMARY KEY,
+	created_at TEXT NOT NULL DEFAULT '',
+	payload    TEXT NOT NULL DEFAULT ''
+);
 `
 
 type sqliteRepo struct {
@@ -205,6 +211,35 @@ func (r *sqliteRepo) DeleteAttachment(_ context.Context, id string) error {
 		return fmt.Errorf("store: sqlite delete attachment %s: %w", id, err)
 	}
 	return nil
+}
+
+// ─── ReviewRepository ────────────────────────────────────────────────────────────
+
+func (r *sqliteRepo) PutReview(_ context.Context, id string, createdAt time.Time, payload []byte) error {
+	if createdAt.IsZero() {
+		createdAt = time.Now()
+	}
+	_, err := r.db.Exec(`
+		INSERT INTO reviews (id, created_at, payload) VALUES (?,?,?)
+		ON CONFLICT(id) DO UPDATE SET
+			created_at=excluded.created_at, payload=excluded.payload`,
+		id, createdAt.UTC().Format(time.RFC3339Nano), string(payload))
+	if err != nil {
+		return fmt.Errorf("store: sqlite put review %s: %w", id, err)
+	}
+	return nil
+}
+
+func (r *sqliteRepo) GetReview(_ context.Context, id string) ([]byte, bool, error) {
+	var payload string
+	err := r.db.QueryRow(`SELECT payload FROM reviews WHERE id = ?`, id).Scan(&payload)
+	if err == sql.ErrNoRows {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("store: sqlite get review %s: %w", id, err)
+	}
+	return []byte(payload), true, nil
 }
 
 // ─── shared row helpers (also used by the Postgres impl) ────────────────────────

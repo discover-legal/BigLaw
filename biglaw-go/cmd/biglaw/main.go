@@ -185,8 +185,11 @@ func main() {
 	// background itself, so it still doesn't block the upload.
 	knowledgeStore.SetOnIngest(ragSvc.IngestDoc)
 
-	// Build tool registry.
-	toolReg := tools.NewRegistry(cfg, provReg, costStore, ragSvc)
+	// Build tool registry. Every built-in DocRepository backend also
+	// implements ReviewRepository, so the same handle persists tabular-review
+	// matrices.
+	reviewRepo, _ := docRepo.(store.ReviewRepository)
+	toolReg := tools.NewRegistry(cfg, provReg, costStore, ragSvc, reviewRepo)
 
 	// Build orchestrator.
 	orch := orchestrator.New(
@@ -296,7 +299,7 @@ func main() {
 
 	// makeAPI builds the REST server and attaches optional LPM + docket routes.
 	makeAPI := func() *api.Server {
-		srv := api.New(cfg, orch, provReg, profileStore, clientStore, timeStore, knowledgeStore, agentReg, costStore)
+		srv := api.New(cfg, orch, provReg, profileStore, clientStore, timeStore, knowledgeStore, agentReg, costStore, reviewRepo)
 		srv.AttachLPM(lpmSvc)
 		srv.AttachDockets(monitors.Dockets)
 		srv.AttachRegulatory(monitors.Regulatory)

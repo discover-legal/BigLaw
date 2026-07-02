@@ -25,7 +25,6 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/audit"
 	"github.com/discover-legal/biglaw-go/internal/auth"
 	"github.com/discover-legal/biglaw-go/internal/blob"
-	"github.com/discover-legal/biglaw-go/internal/store"
 	"github.com/discover-legal/biglaw-go/internal/budget"
 	"github.com/discover-legal/biglaw-go/internal/clients"
 	"github.com/discover-legal/biglaw-go/internal/config"
@@ -38,6 +37,7 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/providers"
 	"github.com/discover-legal/biglaw-go/internal/regulatory"
 	"github.com/discover-legal/biglaw-go/internal/settings"
+	"github.com/discover-legal/biglaw-go/internal/store"
 	"github.com/discover-legal/biglaw-go/internal/strutil"
 	"github.com/discover-legal/biglaw-go/internal/timekeeping"
 	"github.com/discover-legal/biglaw-go/internal/types"
@@ -56,7 +56,8 @@ type Server struct {
 	knowledge  *knowledge.Store
 	registry   *agents.Registry
 	costs      *cost.Store
-	blobs      blob.Store // attachment bytes (disk now, object-store later); nil if unavailable
+	reviews    store.ReviewRepository // durable tabular-review matrices; nil if unavailable
+	blobs      blob.Store             // attachment bytes (disk now, object-store later); nil if unavailable
 	graph      *graph.Client
 	budget     *budget.Monitor     // read-only burn for bot commands
 	dockets    *dockets.Monitor    // set by AttachDockets; nil when disabled
@@ -78,6 +79,7 @@ func New(
 	knowledgeStore *knowledge.Store,
 	registry *agents.Registry,
 	costStore *cost.Store,
+	reviewRepo store.ReviewRepository,
 ) *Server {
 	s := &Server{
 		cfg:       cfg,
@@ -89,6 +91,7 @@ func New(
 		knowledge: knowledgeStore,
 		registry:  registry,
 		costs:     costStore,
+		reviews:   reviewRepo,
 		blobs:     newBlobStore(cfg),
 		graph:     graph.New(),
 		started:   time.Now(),

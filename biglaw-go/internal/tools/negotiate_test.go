@@ -86,7 +86,7 @@ func newNegotiateTestRegistry(t *testing.T, serverURL string) *Registry {
 	cfg.Model.PrimaryKey = "test-key"
 	cfg.PDF.OutputDir = t.TempDir()
 	cfg.Persistence.PlaybooksFile = filepath.Join(t.TempDir(), "playbooks.json")
-	return NewRegistry(cfg, providers.NewRegistry(cfg), nil, nil)
+	return NewRegistry(cfg, providers.NewRegistry(cfg), nil, nil, nil)
 }
 
 // buildOpposingDocx writes a two-paragraph agreement into the output dir and

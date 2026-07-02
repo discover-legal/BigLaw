@@ -4,23 +4,32 @@
 // Tabular review — a document × column extraction matrix. Each column poses a
 // question/field; every document × column cell is answered by one extraction-tier
 // model call that returns a cited value, a RAG flag (green/grey/yellow/red), and
-// reasoning. Completed matrices persist in an in-memory store keyed by reviewId
-// so read_table_cells can slice them later in the same run.
+// reasoning. Completed matrices live in an in-memory cache keyed by reviewId and
+// are persisted through the store.ReviewRepository seam (SQLite/Postgres/memory
+// per DB_BACKEND) so read_table_cells and the REST CSV export can resolve them
+// after a restart. Each review is additionally rendered as a landscape .docx in
+// the document output directory.
 
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/discover-legal/biglaw-go/internal/agents"
 	"github.com/discover-legal/biglaw-go/internal/cost"
+	"github.com/discover-legal/biglaw-go/internal/ooxml"
 	"github.com/discover-legal/biglaw-go/internal/providers"
 	"github.com/discover-legal/biglaw-go/internal/routing"
+	"github.com/discover-legal/biglaw-go/internal/store"
 	"github.com/discover-legal/biglaw-go/internal/strutil"
 )
 
@@ -33,6 +42,12 @@ const (
 	maxReviewDocChars = 120_000
 	// reviewCellMaxTokens bounds each cell's model response (summary + reasoning).
 	reviewCellMaxTokens = 1200
+	// maxConcurrentCellCalls caps in-flight extraction model calls per
+	// tabular_review invocation — without it a 50×30 review could issue
+	// 1,500 concurrent calls.
+	maxConcurrentCellCalls = 10
+	// reviewDocxCellChars caps each matrix cell's summary in the .docx render.
+	reviewDocxCellChars = 300
 )
 
 // reviewFlagLegend defines the four RAG flags. It doubles as the validity set
@@ -63,30 +78,95 @@ All explanation, caveats, and the justification for your flag belong in "reasoni
 
 If the document does not contain the requested information, set "summary" to "Not Found" and "flag" to "grey".`
 
-// ─── In-memory review store ─────────────────────────────────────────────────
+// ─── Review store (memory + disk) ───────────────────────────────────────────
 
-type reviewCell struct {
+// ReviewCell is one document × column extraction result.
+type ReviewCell struct {
 	Column    string `json:"column"`
 	Summary   string `json:"summary"`
 	Flag      string `json:"flag"`
 	Reasoning string `json:"reasoning"`
 }
 
-type reviewRow struct {
+// ReviewRow is one document's cells, in column order.
+type ReviewRow struct {
 	DocumentID string       `json:"documentId"`
 	Document   string       `json:"document"`
-	Cells      []reviewCell `json:"cells"`
+	Cells      []ReviewCell `json:"cells"`
 }
 
-type storedReview struct {
-	Columns []string
-	Rows    []reviewRow
+// ReviewRecord is a completed review matrix — the tabular_review return
+// payload plus a creation timestamp. It is held in the in-memory store and
+// persisted verbatim as <reviewsDir>/<reviewId>.json.
+type ReviewRecord struct {
+	ReviewID  string            `json:"reviewId"`
+	CreatedAt string            `json:"createdAt"`
+	Columns   []string          `json:"columns"`
+	Rows      []ReviewRow       `json:"rows"`
+	FlagTally map[string]int    `json:"flagTally"`
+	Legend    map[string]string `json:"legend"`
 }
 
 var (
 	reviewStoreMu sync.Mutex
-	reviewStore   = map[string]*storedReview{}
+	reviewStore   = map[string]*ReviewRecord{}
 )
+
+// persistReview writes a completed review through the review repository.
+// The error is returned for annotation only — a persist failure must never
+// fail the review; the matrix still lives in the in-memory cache for the run.
+func (r *Registry) persistReview(rec *ReviewRecord) error {
+	if r.reviews == nil {
+		return nil // no durable backend wired (ephemeral run)
+	}
+	payload, err := json.Marshal(rec)
+	if err != nil {
+		return err
+	}
+	created, _ := time.Parse(time.RFC3339, rec.CreatedAt)
+	// Reviews are produced by the tool layer, not a user request path, so
+	// the write runs as the system principal (matches the Postgres RLS
+	// policy: system-only writes).
+	return r.reviews.PutReview(store.WithSystem(context.Background()), rec.ReviewID, created, payload)
+}
+
+// LookupReview resolves a review by id: the in-process cache first, then the
+// review repository (lazily re-caching a hit). A nil repository, a miss, or a
+// corrupt payload all report not-found.
+func LookupReview(ctx context.Context, repo store.ReviewRepository, id string) (*ReviewRecord, bool) {
+	reviewStoreMu.Lock()
+	rec := reviewStore[id]
+	reviewStoreMu.Unlock()
+	if rec != nil {
+		return rec, true
+	}
+	if repo == nil || strings.TrimSpace(id) == "" {
+		return nil, false
+	}
+	payload, found, err := repo.GetReview(ctx, id)
+	if err != nil {
+		slog.Warn("tabular review: repository lookup failed", "reviewId", id, "err", err)
+		return nil, false
+	}
+	if !found {
+		return nil, false
+	}
+	var loaded ReviewRecord
+	if err := json.Unmarshal(payload, &loaded); err != nil {
+		slog.Warn("tabular review: corrupt review payload ignored", "reviewId", id, "err", err)
+		return nil, false
+	}
+	reviewStoreMu.Lock()
+	reviewStore[id] = &loaded
+	reviewStoreMu.Unlock()
+	return &loaded, true
+}
+
+// lookupReview is the registry-side lookup (tool calls run as the system
+// principal; user-facing access control happens at the API layer).
+func (r *Registry) lookupReview(id string) (*ReviewRecord, bool) {
+	return LookupReview(store.WithSystem(context.Background()), r.reviews, id)
+}
 
 // ─── Registration ───────────────────────────────────────────────────────────
 
@@ -175,14 +255,18 @@ func (r *Registry) tabularReviewTool() *ToolImpl {
 				tally[flag] = 0
 			}
 
-			rows := make([]reviewRow, 0, len(docIDs))
+			// Semaphore bounding in-flight extraction calls across the whole
+			// invocation (rows run sequentially; each row's cells concurrently).
+			sem := make(chan struct{}, maxConcurrentCellCalls)
+
+			rows := make([]ReviewRow, 0, len(docIDs))
 			for _, docID := range docIDs {
-				row := reviewRow{DocumentID: docID, Document: reviewDocTitle(ctx.KnowledgeStore, docID)}
+				row := ReviewRow{DocumentID: docID, Document: reviewDocTitle(ctx.KnowledgeStore, docID)}
 				text, terr := ctx.KnowledgeStore.GetFullText(docID)
 				if terr != nil || strings.TrimSpace(text) == "" {
 					// Missing document: a full grey row, never an abort.
 					for _, c := range cols {
-						row.Cells = append(row.Cells, reviewCell{
+						row.Cells = append(row.Cells, ReviewCell{
 							Column:    c.Name,
 							Summary:   "Document not found",
 							Flag:      "grey",
@@ -191,13 +275,16 @@ func (r *Registry) tabularReviewTool() *ToolImpl {
 					}
 				} else {
 					text = truncateAtWord(text, maxReviewDocChars)
-					// One model call per cell; a row's cells run concurrently.
-					cells := make([]reviewCell, len(cols))
+					// One model call per cell; a row's cells run concurrently,
+					// bounded by the invocation-wide semaphore.
+					cells := make([]ReviewCell, len(cols))
 					var wg sync.WaitGroup
 					for i, c := range cols {
 						wg.Add(1)
 						go func(i int, c reviewColumn) {
 							defer wg.Done()
+							sem <- struct{}{}
+							defer func() { <-sem }()
 							cells[i] = r.extractReviewCell(prov, model, docID, text, c, ctx.TaskID)
 						}(i, c)
 					}
@@ -210,28 +297,108 @@ func (r *Registry) tabularReviewTool() *ToolImpl {
 				rows = append(rows, row)
 			}
 
-			reviewID := uuid.New().String()
+			rec := &ReviewRecord{
+				ReviewID:  uuid.New().String(),
+				CreatedAt: time.Now().UTC().Format(time.RFC3339),
+				Columns:   colNames,
+				Rows:      rows,
+				FlagTally: tally,
+				Legend:    reviewFlagLegend,
+			}
 			reviewStoreMu.Lock()
-			reviewStore[reviewID] = &storedReview{Columns: colNames, Rows: rows}
+			reviewStore[rec.ReviewID] = rec
 			reviewStoreMu.Unlock()
 
-			return map[string]interface{}{
-				"reviewId":  reviewID,
+			out := map[string]interface{}{
+				"reviewId":  rec.ReviewID,
 				"columns":   colNames,
 				"rows":      rows,
 				"flagTally": tally,
 				"legend":    reviewFlagLegend,
-			}, nil
+			}
+			// Durable persistence — best-effort: a write failure is annotated,
+			// never fails the review (the matrix stays in the in-memory cache).
+			if perr := r.persistReview(rec); perr != nil {
+				slog.Warn("tabular review: persist failed", "reviewId", rec.ReviewID, "err", perr)
+				out["persistError"] = perr.Error()
+			}
+			// Landscape .docx render of the matrix — best-effort: a render
+			// failure is annotated, never fails the review.
+			if path, filename, derr := r.renderReviewDocx(rec); derr != nil {
+				slog.Warn("tabular review: docx export failed", "reviewId", rec.ReviewID, "err", derr)
+				out["docxError"] = derr.Error()
+			} else {
+				out["outputPath"] = path
+				out["outputFilename"] = filename
+			}
+			return out, nil
 		},
 	}
+}
+
+// renderReviewDocx writes the review matrix as a landscape Word document in
+// the configured document output directory (same path-safety as docx_generate).
+// Layout: an H1 title, then one table — a header row (Document + column names)
+// and one row per document, each cell "[flag] summary" with the summary
+// truncated at a word boundary.
+func (r *Registry) renderReviewDocx(rec *ReviewRecord) (path, filename string, err error) {
+	filename = slugStem("tabular-review-"+rec.ReviewID) + ".docx"
+	path, err = r.resolveDocxPath(filename)
+	if err != nil {
+		return "", "", err
+	}
+
+	b := ooxml.NewBuilder()
+	b.SetLandscape(true)
+	b.Heading(1, "Tabular Review "+rec.ReviewID)
+
+	headers := append([]string{"Document"}, rec.Columns...)
+	tableRows := make([][]string, 0, len(rec.Rows))
+	for _, row := range rec.Rows {
+		name := row.Document
+		if strings.TrimSpace(name) == "" {
+			name = row.DocumentID
+		}
+		cells := make([]string, 0, len(headers))
+		cells = append(cells, name)
+		for i := range rec.Columns {
+			cells = append(cells, reviewDocxCell(row.Cells, i))
+		}
+		tableRows = append(tableRows, cells)
+	}
+	b.Table(headers, tableRows)
+	b.Spacer()
+
+	data, err := b.Bytes()
+	if err != nil {
+		return "", "", err
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return "", "", err
+	}
+	return path, filename, nil
+}
+
+// reviewDocxCell renders one matrix cell as "[flag] summary", the summary
+// truncated at a word boundary so a long extraction never blows up the table.
+func reviewDocxCell(cells []ReviewCell, i int) string {
+	if i >= len(cells) {
+		return ""
+	}
+	c := cells[i]
+	summary := c.Summary
+	if len(summary) > reviewDocxCellChars {
+		summary = truncateAtWord(summary, reviewDocxCellChars) + "…"
+	}
+	return "[" + c.Flag + "] " + summary
 }
 
 // extractReviewCell runs the single model call for one document × column cell.
 // Any failure — transport, garbled output, missing payload — degrades to a grey
 // "Extraction failed" cell so one bad cell never aborts the matrix.
-func (r *Registry) extractReviewCell(prov providers.Provider, modelID, docID, docText string, col reviewColumn, taskID string) reviewCell {
-	failed := func(cause string) reviewCell {
-		return reviewCell{Column: col.Name, Summary: "Extraction failed", Flag: "grey", Reasoning: cause}
+func (r *Registry) extractReviewCell(prov providers.Provider, modelID, docID, docText string, col reviewColumn, taskID string) ReviewCell {
+	failed := func(cause string) ReviewCell {
+		return ReviewCell{Column: col.Name, Summary: "Extraction failed", Flag: "grey", Reasoning: cause}
 	}
 	user := fmt.Sprintf("FIELD: %s\nQUESTION: %s\n\nDOCUMENT (id %s):\n%s", col.Name, col.Prompt, docID, docText)
 	temp := 0.0 // deterministic decoding keeps citation quotes verbatim
@@ -265,7 +432,7 @@ func (r *Registry) extractReviewCell(prov providers.Provider, modelID, docID, do
 			fmt.Sprintf(" [flag %q is not one of green/grey/yellow/red; recorded as grey]", payload.Flag))
 		flag = "grey"
 	}
-	return reviewCell{Column: col.Name, Summary: payload.Summary, Flag: flag, Reasoning: payload.Reasoning}
+	return ReviewCell{Column: col.Name, Summary: payload.Summary, Flag: flag, Reasoning: payload.Reasoning}
 }
 
 // reviewCellPayload is the JSON object each cell call must return.
@@ -379,10 +546,8 @@ func (r *Registry) readTableCellsTool() *ToolImpl {
 			if id == "" {
 				return map[string]interface{}{"ok": false, "error": "review_id is required"}, nil
 			}
-			reviewStoreMu.Lock()
-			rev := reviewStore[id]
-			reviewStoreMu.Unlock()
-			if rev == nil {
+			rev, found := r.lookupReview(id)
+			if !found {
 				return map[string]interface{}{
 					"ok":    false,
 					"error": fmt.Sprintf("no tabular review with id %q — run tabular_review first", id),
@@ -396,10 +561,10 @@ func (r *Registry) readTableCellsTool() *ToolImpl {
 			for _, ci := range colIdx {
 				cols = append(cols, rev.Columns[ci])
 			}
-			rows := make([]reviewRow, 0, len(rowIdx))
+			rows := make([]ReviewRow, 0, len(rowIdx))
 			for _, ri := range rowIdx {
 				src := rev.Rows[ri]
-				nr := reviewRow{DocumentID: src.DocumentID, Document: src.Document, Cells: make([]reviewCell, 0, len(colIdx))}
+				nr := ReviewRow{DocumentID: src.DocumentID, Document: src.Document, Cells: make([]ReviewCell, 0, len(colIdx))}
 				for _, ci := range colIdx {
 					if ci < len(src.Cells) {
 						nr.Cells = append(nr.Cells, src.Cells[ci])

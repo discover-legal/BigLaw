@@ -19,6 +19,7 @@ package store
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/discover-legal/biglaw-go/internal/config"
 	"github.com/discover-legal/biglaw-go/internal/types"
@@ -83,6 +84,18 @@ type DocRepository interface {
 	Backend() string
 	// Close releases the underlying handle.
 	Close() error
+}
+
+// ReviewRepository is durable storage for completed tabular-review matrices
+// (internal/tools tabular_review). The payload is the review's full JSON
+// return object, stored opaquely — a matrix is only ever read back whole, so
+// cells are not normalised into columns. Every backend returned by Open
+// implements it alongside DocRepository.
+type ReviewRepository interface {
+	// PutReview inserts or replaces a review payload by ID.
+	PutReview(ctx context.Context, id string, createdAt time.Time, payload []byte) error
+	// GetReview returns the stored payload and whether it was found.
+	GetReview(ctx context.Context, id string) ([]byte, bool, error)
 }
 
 // Open builds the repository selected by config. Resolution order:

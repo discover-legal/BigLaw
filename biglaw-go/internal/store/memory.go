@@ -6,6 +6,7 @@ package store
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
@@ -17,10 +18,21 @@ type MemoryRepo struct {
 	docs        map[string]types.Document
 	order       []string
 	attachments map[string]types.Attachment
+	reviews     map[string]memReview
+}
+
+// memReview is one stored tabular-review payload.
+type memReview struct {
+	createdAt time.Time
+	payload   []byte
 }
 
 func NewMemoryRepo() *MemoryRepo {
-	return &MemoryRepo{docs: map[string]types.Document{}, attachments: map[string]types.Attachment{}}
+	return &MemoryRepo{
+		docs:        map[string]types.Document{},
+		attachments: map[string]types.Attachment{},
+		reviews:     map[string]memReview{},
+	}
 }
 
 func (m *MemoryRepo) Backend() string { return "memory" }
@@ -110,4 +122,30 @@ func (m *MemoryRepo) DeleteAttachment(_ context.Context, id string) error {
 	defer m.mu.Unlock()
 	delete(m.attachments, id)
 	return nil
+}
+
+// ─── ReviewRepository ────────────────────────────────────────────────────────────
+
+func (m *MemoryRepo) PutReview(_ context.Context, id string, createdAt time.Time, payload []byte) error {
+	if createdAt.IsZero() {
+		createdAt = time.Now()
+	}
+	cp := make([]byte, len(payload))
+	copy(cp, payload)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.reviews[id] = memReview{createdAt: createdAt, payload: cp}
+	return nil
+}
+
+func (m *MemoryRepo) GetReview(_ context.Context, id string) ([]byte, bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	rev, ok := m.reviews[id]
+	if !ok {
+		return nil, false, nil
+	}
+	cp := make([]byte, len(rev.payload))
+	copy(cp, rev.payload)
+	return cp, true, nil
 }
