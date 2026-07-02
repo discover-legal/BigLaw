@@ -200,9 +200,12 @@ func (o *Orchestrator) deviationSearch(task *types.Task, query string, k int) []
 		if strings.TrimSpace(sn) == "" {
 			continue
 		}
-		src, _ := r["source"].(string)
+		// search_chunks returns the document under "title" (DocTitle) — there is no "source" key.
+		// This label is what splits controlling-source from document-under-review, so it must be
+		// the real document identity, not a literal fallback.
+		src, _ := r["title"].(string)
 		if src == "" {
-			if v, ok := r["document"].(string); ok {
+			if v, ok := r["id"].(string); ok {
 				src = v
 			}
 		}
