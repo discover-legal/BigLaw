@@ -54,6 +54,14 @@ type Decision struct {
 	Rationale    string      `json:"rationale"`
 	CounterText  string      `json:"counterText,omitempty"`
 	PlaybookTier string      `json:"playbookTier,omitempty"`
+	// HistoryRounds is the number of prior negotiation rounds of clause
+	// history the judge saw for this change; 0 means it was judged without
+	// memory (no lineage, or no prior decisions on this clause type).
+	HistoryRounds int `json:"historyRounds,omitempty"`
+	// Escalation is the judge's own record of a memory-driven escalation —
+	// set when, prompted by the history, it moved to the playbook fallback
+	// position or flagged a standoff for the negotiating lawyer.
+	Escalation string `json:"escalation,omitempty"`
 }
 
 // Opts parameterises a negotiation run. The playbook scoping fields thread
@@ -67,6 +75,10 @@ type Opts struct {
 	// lawyer ("hold firm on liability, flexible on notice periods").
 	Instructions string
 	TaskID       string
+	// History is the per-clause negotiation memory of the document's Redtime
+	// lineage: prior moves and decisions keyed by clause type. Nil judges
+	// amnesiac — the pre-memory behaviour. See history.go.
+	History History
 }
 
 // ─── Engine ───────────────────────────────────────────────────────────────────
@@ -119,7 +131,10 @@ func (e *Engine) Decide(revs []ooxml.Revision, store *playbook.Store, opts Opts)
 			d.PlaybookTier = string(resolved.ResolvedFrom)
 		}
 
-		verdict, err := e.judgeRevision(rv, clauseType, resolved, opts)
+		hist := opts.History.For(clauseType)
+		d.HistoryRounds = distinctRounds(hist)
+
+		verdict, err := e.judgeRevision(rv, clauseType, resolved, hist, opts)
 		if err != nil {
 			d.Disposition = DispositionReview
 			d.Rationale = "Judgment failed — manual review required: " + err.Error()
@@ -129,6 +144,7 @@ func (e *Engine) Decide(revs []ooxml.Revision, store *playbook.Store, opts Opts)
 		d.Disposition = verdict.disposition
 		d.Rationale = verdict.rationale
 		d.CounterText = verdict.counterText
+		d.Escalation = verdict.escalation
 		if d.Disposition == DispositionCounter && strings.TrimSpace(d.CounterText) == "" {
 			// A counter with no replacement text cannot be applied.
 			d.Disposition = DispositionReview
@@ -226,9 +242,10 @@ type verdict struct {
 	disposition Disposition
 	rationale   string
 	counterText string
+	escalation  string
 }
 
-func (e *Engine) judgeRevision(rv ooxml.Revision, clauseType string, resolved *playbook.ResolvedClause, opts Opts) (verdict, error) {
+func (e *Engine) judgeRevision(rv ooxml.Revision, clauseType string, resolved *playbook.ResolvedClause, hist []HistoryEntry, opts Opts) (verdict, error) {
 	system := `You are a senior transactional lawyer reviewing ONE tracked change proposed by opposing counsel, deciding how the firm responds.
 
 Decide exactly one disposition:
@@ -264,6 +281,11 @@ Return a JSON object:
 	} else {
 		b.WriteString("\nPLAYBOOK POSITION: none resolved for this clause type — judge on market-standard reasonableness.\n")
 	}
+	if block := formatHistory(hist); block != "" {
+		b.WriteString("\nNEGOTIATION HISTORY for this clause (prior rounds of this same negotiation, oldest first):\n")
+		b.WriteString(block + "\n")
+		b.WriteString(historyGuidance + "\n")
+	}
 	if strings.TrimSpace(opts.Instructions) != "" {
 		b.WriteString("\nNEGOTIATION INSTRUCTIONS FROM THE RESPONSIBLE LAWYER:\n" + strutil.Truncate(opts.Instructions, 1200) + "\n")
 	}
@@ -286,17 +308,25 @@ Return a JSON object:
 		Disposition string `json:"disposition"`
 		Rationale   string `json:"rationale"`
 		CounterText string `json:"counterText"`
+		// Escalation is optional — licensed by historyGuidance when the
+		// judge moves to the fallback or flags a standoff. Absent otherwise.
+		Escalation string `json:"escalation"`
 	}
 	if err := parseJSONObject(textFrom(resp), &parsed); err != nil {
 		return verdict{}, fmt.Errorf("judgment returned no usable JSON: %w", err)
 	}
+	escalation := strings.TrimSpace(parsed.Escalation)
 	switch Disposition(strings.ToLower(strings.TrimSpace(parsed.Disposition))) {
 	case DispositionAccept:
-		return verdict{DispositionAccept, parsed.Rationale, ""}, nil
+		return verdict{DispositionAccept, parsed.Rationale, "", escalation}, nil
 	case DispositionReject:
-		return verdict{DispositionReject, parsed.Rationale, ""}, nil
+		return verdict{DispositionReject, parsed.Rationale, "", escalation}, nil
 	case DispositionCounter:
-		return verdict{DispositionCounter, parsed.Rationale, parsed.CounterText}, nil
+		return verdict{DispositionCounter, parsed.Rationale, parsed.CounterText, escalation}, nil
+	case DispositionReview:
+		// A legitimate verdict when history shows a standoff — the guidance
+		// instructs the judge to flag rather than re-issue a rejected counter.
+		return verdict{DispositionReview, parsed.Rationale, "", escalation}, nil
 	}
 	return verdict{}, fmt.Errorf("judgment returned unrecognised disposition %q", parsed.Disposition)
 }

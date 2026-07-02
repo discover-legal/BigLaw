@@ -43,7 +43,7 @@ func (r *Registry) respondToRedlineTool() *ToolImpl {
 		Name: "respond_to_redline",
 		Schema: providers.ToolParam{
 			Name:        "respond_to_redline",
-			Description: "Respond to opposing counsel's marked-up .docx. Parses every tracked change, judges each against the firm's four-tier playbook cascade (client > matter > personal > firm), and writes a response document next to the input: accepted opposing changes are left standing; rejected or countered changes get new tracked changes (BigLaw as author) restoring or replacing the opposing language. Returns a per-change decision card with clause type, disposition, and rationale.",
+			Description: "Respond to opposing counsel's marked-up .docx. Parses every tracked change, judges each against the firm's four-tier playbook cascade (client > matter > personal > firm), and writes a response document next to the input: accepted opposing changes are left standing; rejected or countered changes get new tracked changes (BigLaw as author) restoring or replacing the opposing language. Returns a per-change decision card with clause type, disposition, and rationale. When the document belongs to a Redtime lineage, each judgment also sees that clause's negotiation history from prior rounds (decision cards gain historyRounds, and escalation when a standoff pushed the judge to the playbook fallback or to lawyer review).",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -103,6 +103,13 @@ func (r *Registry) respondToRedlineTool() *ToolImpl {
 				}
 			}
 
+			// Judge memory — when this document belongs to a Redtime lineage
+			// (found via the prior version we sent, or the inbound file
+			// itself), each change's judge call sees that clause's prior
+			// moves and decisions with escalation guidance. Best-effort: no
+			// lineage means amnesiac judging, exactly as before.
+			history := r.negotiationHistory(src, strInput(input, "prior_version_path"))
+
 			judgeModel := routing.SelectModel(r.cfg, routing.SelectParams{TaskType: routing.TaskDrafting})
 			classifyModel := routing.SelectModel(r.cfg, routing.SelectParams{TaskType: routing.TaskExtraction})
 			prov, err := r.provReg.Get(judgeModel)
@@ -116,6 +123,7 @@ func (r *Registry) respondToRedlineTool() *ToolImpl {
 				ProfileID:    strInput(input, "owner_id"),
 				Instructions: instructions,
 				TaskID:       ctx.TaskID,
+				History:      history,
 			})
 
 			author := strings.TrimSpace(strInput(input, "author"))

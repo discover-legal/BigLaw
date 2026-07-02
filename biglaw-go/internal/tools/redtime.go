@@ -201,6 +201,64 @@ func (r *Registry) resolveLineageID(ctx context.Context, vrepo store.VersionRepo
 
 // ─── Hooks — versions accrue automatically ────────────────────────────────────
 
+// findVersionByPathOrHash resolves an on-disk file to its registered version:
+// by path first, then by content hash (the same file may have been registered
+// from another path). Returns nil, false when the file is not in any lineage.
+func findVersionByPathOrHash(ctx context.Context, vrepo store.VersionRepository, path string) (*store.DocumentVersion, bool) {
+	if path == "" {
+		return nil, false
+	}
+	if v, found, err := vrepo.FindVersionByPath(ctx, path); err == nil && found {
+		return v, true
+	}
+	if data, err := os.ReadFile(path); err == nil {
+		if v, found, herr := vrepo.FindVersionByHash(ctx, redtime.HashBytes(data)); herr == nil && found {
+			return v, true
+		}
+	}
+	return nil, false
+}
+
+// negotiationHistory is the judge-memory hook for respond_to_redline: when
+// the prior version we sent (or the inbound document itself) belongs to a
+// Redtime lineage, the lineage's stored decisions come back as per-clause
+// negotiation history for the judge. Best-effort — no version store, no
+// lineage, or a store failure returns nil and the judge runs amnesiac,
+// exactly as before.
+func (r *Registry) negotiationHistory(inboundPath, priorPath string) negotiate.History {
+	vrepo := r.versions()
+	if vrepo == nil {
+		return nil
+	}
+	ctx := redtimeCtx()
+	lineageID := ""
+	if p := strings.TrimSpace(priorPath); p != "" {
+		if abs, err := r.resolveDocxPath(p); err == nil {
+			if v, found := findVersionByPathOrHash(ctx, vrepo, abs); found {
+				lineageID = v.LineageID
+			}
+		}
+	}
+	if lineageID == "" {
+		if v, found := findVersionByPathOrHash(ctx, vrepo, inboundPath); found {
+			lineageID = v.LineageID
+		}
+	}
+	if lineageID == "" {
+		return nil
+	}
+	h, err := redtime.NegotiationHistory(ctx, vrepo, lineageID)
+	if err != nil {
+		slog.Warn("redtime: negotiation history unavailable — judging without memory",
+			"lineage", lineageID, "error", err)
+		return nil
+	}
+	if len(h) == 0 {
+		return nil
+	}
+	return h
+}
+
 // recordNegotiationVersions is the respond_to_redline hook: it registers the
 // inbound opposing draft ("theirs", parented on the version we last sent when
 // prior_version_path identifies one) and the produced response ("ours") with
@@ -273,13 +331,8 @@ func (r *Registry) recordEditVersion(srcPath, outputPath, author string) interfa
 		return nil
 	}
 	ctx := redtimeCtx()
-	parent, found, err := vrepo.FindVersionByPath(ctx, srcPath)
-	if (err != nil || !found) && srcPath != "" {
-		if data, rerr := os.ReadFile(srcPath); rerr == nil {
-			parent, found, _ = vrepo.FindVersionByHash(ctx, redtime.HashBytes(data))
-		}
-	}
-	if !found || parent == nil {
+	parent, found := findVersionByPathOrHash(ctx, vrepo, srcPath)
+	if !found {
 		return nil
 	}
 	v, err := redtime.RegisterVersion(ctx, vrepo, redtime.RegisterOpts{
