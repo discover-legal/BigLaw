@@ -13,7 +13,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/discover-legal/biglaw-go/internal/audit"
 	"github.com/discover-legal/biglaw-go/internal/embeddings"
+	"github.com/discover-legal/biglaw-go/internal/integrity"
 	"github.com/discover-legal/biglaw-go/internal/store"
 	"github.com/discover-legal/biglaw-go/internal/strutil"
 	"github.com/discover-legal/biglaw-go/internal/types"
@@ -84,6 +86,32 @@ func (s *Store) Ingest(ctx context.Context, doc types.Document) (*types.Document
 	if doc.ID == "" {
 		doc.ID = uuid.New().String()
 	}
+
+	// Integrity gate (advisory, never fatal): scan inbound content for Unicode
+	// obfuscation — homoglyphs, invisible characters, bidi controls — that can
+	// make extraction or review misread the document. Findings at warning
+	// severity or above are logged, audited, and ride on the document's
+	// metadata so every downstream reader sees the caveat.
+	if findings := integrity.ScanText(doc.Content); !integrity.Clean(findings) {
+		summary := integrity.Summarize(findings)
+		slog.Warn("knowledge: integrity findings on ingested document",
+			"documentId", doc.ID, "title", doc.Title, "summary", summary)
+		audit.Default.Write(audit.WriteRequest{
+			Event:   "document.integrity_warning",
+			ActorID: audit.ActorSystem,
+			Data: map[string]interface{}{
+				"documentId": doc.ID,
+				"title":      doc.Title,
+				"summary":    summary,
+				"worst":      string(integrity.WorstSeverity(findings)),
+			},
+		})
+		if doc.Metadata == nil {
+			doc.Metadata = map[string]interface{}{}
+		}
+		doc.Metadata["integrityWarning"] = summary
+	}
+
 	// Embed a representative chunk (title + first 2000 chars)
 	text := doc.Title + " " + doc.Content
 	if len(text) > 2000 {

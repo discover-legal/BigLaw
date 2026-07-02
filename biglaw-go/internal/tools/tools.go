@@ -146,6 +146,8 @@ func (r *Registry) registerAll() {
 	r.registerDocusealTools()
 	r.registerTabularTools()
 	r.registerDocumentExtraTools()
+	// Integrity — unmarked-change detection + Unicode obfuscation scan.
+	r.registerIntegrityTools()
 }
 
 // ─── web_search ──────────────────────────────────────────────────────────────

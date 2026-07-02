@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/discover-legal/biglaw-go/internal/agents"
+	"github.com/discover-legal/biglaw-go/internal/integrity"
 	"github.com/discover-legal/biglaw-go/internal/negotiate"
 	"github.com/discover-legal/biglaw-go/internal/ooxml"
 	"github.com/discover-legal/biglaw-go/internal/playbook"
@@ -46,12 +47,13 @@ func (r *Registry) respondToRedlineTool() *ToolImpl {
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
-					"path":          map[string]interface{}{"type": "string", "description": "Opposing counsel's marked-up .docx (absolute, or relative to the document output directory)"},
-					"author":        map[string]interface{}{"type": "string", "description": "Author name for BigLaw's counter tracked changes (default \"Big Michael\")"},
-					"matter_number": map[string]interface{}{"type": "string", "description": "Matter number for playbook cascade scoping"},
-					"client_number": map[string]interface{}{"type": "string", "description": "Client number for playbook cascade scoping"},
-					"owner_id":      map[string]interface{}{"type": "string", "description": "Lawyer profile ID for personal-playbook cascade scoping"},
-					"instructions":  map[string]interface{}{"type": "string", "description": "Optional free-text negotiation guidance passed to the judgment step"},
+					"path":               map[string]interface{}{"type": "string", "description": "Opposing counsel's marked-up .docx (absolute, or relative to the document output directory)"},
+					"author":             map[string]interface{}{"type": "string", "description": "Author name for BigLaw's counter tracked changes (default \"Big Michael\")"},
+					"matter_number":      map[string]interface{}{"type": "string", "description": "Matter number for playbook cascade scoping"},
+					"client_number":      map[string]interface{}{"type": "string", "description": "Client number for playbook cascade scoping"},
+					"owner_id":           map[string]interface{}{"type": "string", "description": "Lawyer profile ID for personal-playbook cascade scoping"},
+					"instructions":       map[string]interface{}{"type": "string", "description": "Optional free-text negotiation guidance passed to the judgment step"},
+					"prior_version_path": map[string]interface{}{"type": "string", "description": "Optional: the version we last sent (.docx or .txt). Enables unmarked-change detection — differences not accounted for by the opposing document's tracked changes."},
 				},
 				"required": []string{"path"},
 			},
@@ -69,6 +71,29 @@ func (r *Registry) respondToRedlineTool() *ToolImpl {
 				return fail(fmt.Sprintf("cannot open document: %v", err)), nil
 			}
 			revs := doc.ParseRevisions()
+
+			// Integrity check — trust-but-verify on the inbound paper. The
+			// obfuscation scan always runs; with a prior version supplied,
+			// silent (untracked) edits are detected too. Integrity problems
+			// never abort the negotiation — they inform it: the findings ride
+			// on the result and a one-line warning reaches the judge below.
+			obfuscation := integrity.ScanText(doc.Text())
+			var unmarked *integrity.UnmarkedReport
+			if p := strings.TrimSpace(strInput(input, "prior_version_path")); p != "" {
+				sentText, perr := r.readPriorVersion(p)
+				if perr != nil {
+					return fail(perr.Error()), nil
+				}
+				rep := integrity.CompareVersions(sentText, doc)
+				unmarked = &rep
+			}
+			clean := integrityClean(obfuscation, unmarked)
+			instructions := strInput(input, "instructions")
+			if !clean {
+				instructions = strings.TrimSpace(instructions +
+					"\nINTEGRITY WARNING: " + integritySummary(obfuscation, unmarked) +
+					" Treat unmarked or obfuscated language with suspicion.")
+			}
 
 			// Playbook cascade — read-only, loaded from the shared store file.
 			pbStore := playbook.New(r.cfg.Persistence.PlaybooksFile)
@@ -89,7 +114,7 @@ func (r *Registry) respondToRedlineTool() *ToolImpl {
 				MatterNumber: strInput(input, "matter_number"),
 				ClientID:     strInput(input, "client_number"),
 				ProfileID:    strInput(input, "owner_id"),
-				Instructions: strInput(input, "instructions"),
+				Instructions: instructions,
 				TaskID:       ctx.TaskID,
 			})
 
@@ -119,12 +144,24 @@ func (r *Registry) respondToRedlineTool() *ToolImpl {
 					counts["review"]++
 				}
 			}
+			var unmarkedOut interface{}
+			if unmarked != nil {
+				unmarkedOut = map[string]interface{}{
+					"hunks": unmarked.Hunks,
+					"count": unmarked.Count,
+				}
+			}
 			return map[string]interface{}{
 				"ok":            true,
 				"outputPath":    outputPath,
 				"decisions":     decisions,
 				"counts":        counts,
 				"changesParsed": len(revs),
+				"integrity": map[string]interface{}{
+					"obfuscation":     obfuscation,
+					"unmarkedChanges": unmarkedOut,
+					"clean":           clean,
+				},
 			}, nil
 		},
 	}
