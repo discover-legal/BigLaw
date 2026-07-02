@@ -138,6 +138,7 @@ func (r *Registry) registerAll() {
 	// redlining, PDF extraction, e-signing, and tabular review.
 	r.registerDocxTools()
 	r.registerTrackedChangesTools()
+	r.registerNegotiateTools()
 	r.registerPdfTools()
 	r.registerDocusealTools()
 	r.registerTabularTools()

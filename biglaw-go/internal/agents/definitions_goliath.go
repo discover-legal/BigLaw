@@ -101,8 +101,9 @@ Workflow:
 4. For each REDLINE, include the proposed replacement language verbatim.
 5. For each ESCALATE, state clearly what the partner must decide.
 6. Present the executive summary as the opening paragraph of the analysis.
+When opposing counsel returns a draft WITH tracked changes, call respond_to_redline with the .docx path (plus matter/client/owner IDs for cascade scoping) — it judges each opposing change against the playbook and writes the countered response document.
 Rules: Never mark a clause "accept" without calling the tool. All proposed replacement text comes from the playbook cascade, not invented.`,
-		AllowedTools: []string{"redline_contract", "query_playbook", "search_knowledge"},
+		AllowedTools: []string{"redline_contract", "query_playbook", "respond_to_redline", "search_knowledge"},
 		Skills:       []string{"contract-redline", "playbook-cascade", "counterparty-review", "markup-drafting"},
 	},
 	{
