@@ -113,6 +113,9 @@ var dispositiveMarkers = []string{
 	"prohibit", "distribut", "provision", "clause", "trustee", "guardian", "spendthrift",
 	"contest", "terrorem", "vest", "indemnif", "govern", "notice", "deadline", "condition",
 	"successor", "beneficiar", "power", "share", "require", "covenant", "warrant", "obligation",
+	// disposition/instrument nouns — carry dispositive weight across estate/tax/transactional
+	"trust", "fund", "bequest", "gift", "devise", "protector", "disinherit", "scholarship",
+	"election", "grantor", "remainder", "annuity", "election authority",
 }
 var descriptiveMarkers = []string{
 	"fair market value", "market value", "current balance", "death benefit", "estimated gross",
@@ -133,7 +136,11 @@ func (o *Orchestrator) detectDeviations(task *types.Task, g *evidencegraph.Graph
 	if len(reqs) == 0 {
 		return nil
 	}
-	const maxReqs = 40 // bound the (slow) spine-model adjudications; wider so mid-ranked dispositive requirements (e.g. the piano bequest) still get checked
+	// Comprehensive: adjudicate ALL dispositive requirements, not a small top-N — the arbitrary
+	// cap was the biggest source of run-to-run variance (a different subset each run, so different
+	// issues caught → the score bounced 8↔12). The dispositive sort still puts real requirements
+	// first, so the high bound only trims a long background tail. Slower, but reproducible coverage.
+	const maxReqs = 80
 	var out []types.Finding
 	seenReq := map[string]bool{}
 	var keptSigs []map[string]bool
@@ -297,7 +304,9 @@ func (o *Orchestrator) adjudicateDeviation(task *types.Task, prov providers.Prov
 	// document CONFORMS ("the document correctly states…", "already includes…"). Those are not
 	// deviations — drop them so they don't clutter the report and waste a slot.
 	lowSum := strings.ToLower(d.Summary)
-	for _, conform := range []string{"correctly ", "already includes", "already contains", "already provides", "conforms to", "is consistent with", "matches the requirement", "no deviation", "no conflict", "does not deviate"} {
+	// Precise conformance phrases only — must not false-positive on a real deviation that says
+	// "does not correctly apply …" (bare "correctly" would). These affirm the document conforms.
+	for _, conform := range []string{"the document correctly", "already includes", "already contains", "already provides", "already reflects", "conforms to the", "is consistent with the", "matches the requirement", "matches the instruction", "no deviation", "no conflict", "does not deviate from"} {
 		if strings.Contains(lowSum, conform) {
 			return ""
 		}
