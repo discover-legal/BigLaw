@@ -465,7 +465,7 @@ SEC-referral task): the criterion pass rate has climbed 0 → 30 → **34/60** a
 techniques landed — the architecture extracting hard, grounded, figure-rich legal substance (exact
 amounts, rates, account numbers, trade counts, statutory cites). The 34 is claude-haiku-4-5 on the
 BigLaw pipeline (18.5 min); a local qwen2.5:14b scores 27/60 on the same build; a Sonnet-tier run
-lands at {{SONNET_SCORE}}/60 (judge: claude-sonnet-4-6 throughout, rubric hidden from the agents).
+lands at 34/60 (judge: claude-sonnet-4-6 throughout, rubric hidden from the agents).
 LAB scores a *task* 1.0 only on a perfect 60/60 — the task is **not yet passed**; the criterion
 count, not the binary score, is the meaningful signal. Technique-by-technique account:
 [`docs/local-accuracy-journey.md`](docs/local-accuracy-journey.md).

@@ -181,14 +181,14 @@ claude-sonnet-4-6 throughout, rubric hidden from the agents):
 |---|---|
 | qwen2.5:14b (local) | **27** |
 | claude-haiku-4-5 | **34** (18.5 min wall time) |
-| claude-sonnet-4-6 tier | **{{SONNET_SCORE}}** |
+| claude-sonnet-4-6 tier | **34** |
 
 Two readings, honestly framed. First, the "optimise on the weak model" bet pays out upward: a
 light cloud tier reaches 34/60 on orchestration built and debugged entirely against a 14B's
 failure modes — the headline climb is now **0 → 30 → 34**. Second, the remaining criteria
 concentrate in granular-fact extraction (the salience-ranking gap described in *Honest status*
 above), which a model swap alone does not clear — the architecture, not the model, is the next
-lever. The task is still not passed; the climb continues.
-
-*(`{{SONNET_SCORE}}` is a literal placeholder — a Sonnet-tier run is in progress and the number
-is patched in when it lands.)*
+lever. The Sonnet run makes that second reading measurable: at roughly five times Haiku's cost
+(3.8M tokens, ~$14 vs ~$2) it passes exactly the same 34 criteria — the pipeline saturates
+above the Haiku tier, so every remaining criterion is architecture work, not model budget.
+The task is still not passed; the climb continues.

@@ -160,7 +160,7 @@ Each DyTopo round:
 > `internal/orchestrator/orchestrator.go` `synthesise()` → `writeDeliverable()` when findings exceed
 > a single call's budget. These took local-model verbatim citation grounding from ~0% to ~94%.
 > Harvey LAB criteria: 0 → 30 → 34/60 (claude-haiku-4-5 on the pipeline; local qwen2.5:14b 27/60
-> on the same build; Sonnet-tier {{SONNET_SCORE}}/60) — a climb, not a pass.
+> on the same build; Sonnet-tier 34/60) — a climb, not a pass.
 >
 > **Negotiation stack (Go-only):** `internal/tools/negotiate.go` (`respond_to_redline` —
 > counter-redlining with playbook judgment, judge memory + standoff escalation, rationale cards),

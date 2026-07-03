@@ -58,6 +58,12 @@ LICENSE, NOTICE, SPDX headers (271 files), badges, and image labels all updated.
 - Fixes: cost ledger now persists on fresh installs; temperature override dropped
   for OpenAI gpt-5.x/o-series (was silently degrading tabular cells to grey)
 
+### Benchmark: cross-tier runs on the release build
+Same pipeline, three models, same claude-sonnet-4-6 judge: qwen2.5:14b **27/60**,
+claude-haiku-4-5 **34/60** (new high, 18.5 min), claude-sonnet-4-6 **34/60** (~5× Haiku's
+cost, identical criteria) — the pipeline saturates above the Haiku tier, so the remaining
+criteria are architecture work, not model budget. Task still not passed; climb continues.
+
 ### BELO — an epistemic ontology, a graph-discovered spine, and What3Words figure handles
 The next stretch of the local-accuracy climb — still a single local open-weight model for the
 bulk (a 14B handles the small, high-leverage spine pass), no cloud model, no corpus stuffing.
