@@ -32,6 +32,7 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/knowledge"
 	"github.com/discover-legal/biglaw-go/internal/learning"
 	"github.com/discover-legal/biglaw-go/internal/memory"
+	"github.com/discover-legal/biglaw-go/internal/ontology"
 	"github.com/discover-legal/biglaw-go/internal/protocols"
 	"github.com/discover-legal/biglaw-go/internal/providers"
 	"github.com/discover-legal/biglaw-go/internal/routing"
@@ -839,6 +840,11 @@ func (o *Orchestrator) runPhase(task *types.Task, phase types.TaskPhase) error {
 		t.Rounds = append(t.Rounds, *roundState)
 		t.Findings = append(t.Findings, debated...)
 		t.PendingGates = append(t.PendingGates, gates...)
+		if roundState.Starved {
+			// Ride the degradation into the final task record — consumers
+			// (UI, benchmark drivers) must see the run was starved.
+			t.StarvedRounds = append(t.StarvedRounds, types.StarvedRound{Round: roundState.Goal.Round, Phase: phase})
+		}
 		t.UpdatedAt = time.Now()
 	})
 	emitProgress(task.ID, "round", map[string]interface{}{"round": task.CurrentRound, "phase": phase, "findings": len(debated), "gates": len(gates)})
@@ -1430,6 +1436,9 @@ func (o *Orchestrator) writeDeliverable(task *types.Task, findings []types.Findi
 		// Gate BIGLAW_FACTS_GLOBAL=1 reverts to whole-ledger injection for A/B.
 		Facts:       o.groundedFacts(task.ID),
 		FactsGlobal: os.Getenv("BIGLAW_FACTS_GLOBAL") == "1" || os.Getenv("BIGLAW_FACTS_GLOBAL") == "true",
+		// Named individual respondents (committedBy → Person claims): the writer enforces
+		// one exposure entry per respondent — consolidated record or explicit gap note.
+		Respondents: o.respondentRoster(task.ID),
 		RecordCost:  func(resp *providers.ChatResponse) { o.recordCost(resp, bare, cost.ContextSynthesis, task.ID) },
 		// Synthesis-time figure handling: drafters pull exact figures for their
 		// section from the source exhibits on demand (document-backed
@@ -2210,6 +2219,49 @@ func (o *Orchestrator) allegationAliases(taskID string) map[string][]string {
 	return o.egraphAliases[taskID]
 }
 
+// respondentRoster returns the matter's named individual respondents — the Person-class
+// parties the typed evidence graph records as having committed conduct (committedBy →
+// Person). Name variants sharing a surname collapse to the fullest form, so "Whitmore"
+// and "Gerald R. Whitmore" yield one roster entry. The writer enforces one exposure
+// entry per name returned here.
+func (o *Orchestrator) respondentRoster(taskID string) []string {
+	g := o.evidenceGraph(taskID)
+	if g == nil {
+		return nil
+	}
+	bySurname := map[string]string{}
+	var order []string
+	for _, c := range g.Claims() {
+		if c.P != "committedBy" || c.OClass != ontology.Person {
+			continue
+		}
+		n := strings.TrimSpace(c.O)
+		if n == "" || len(n) > 60 {
+			continue
+		}
+		fields := strings.Fields(n)
+		surname := strings.ToLower(strings.Trim(fields[len(fields)-1], ".,"))
+		if surname == "" {
+			continue
+		}
+		if have, ok := bySurname[surname]; !ok {
+			bySurname[surname] = n
+			order = append(order, surname)
+		} else if len(n) > len(have) {
+			bySurname[surname] = n // keep the fullest name variant
+		}
+	}
+	const maxRespondents = 8
+	out := make([]string, 0, len(order))
+	for _, s := range order {
+		out = append(out, bySurname[s])
+		if len(out) >= maxRespondents {
+			break
+		}
+	}
+	return out
+}
+
 // groundedFacts converts the task's evidence-graph facts into the writer's per-section
 // routable form: each fact carries its display Line and a lowercased Key (subject +
 // relation + object + value + quote) the writer overlap-matches against each section.
@@ -2804,15 +2856,22 @@ func (o *Orchestrator) restoreTasks() {
 		return
 	}
 	o.mu.Lock()
+	quarantined := 0
 	for _, t := range items {
 		if _, ok := phaseSequences[t.WorkflowType]; !ok {
 			continue
 		}
 		normalizeTask(t)
+		if o.quarantineStaleTask(t) { // see restore.go — no runner survives a restart
+			quarantined++
+		}
 		o.tasks[t.ID] = t
 		o.gateChans[t.ID] = make(chan struct{}, 8)
 	}
 	o.mu.Unlock()
+	if quarantined > 0 {
+		o.persistTasks()
+	}
 }
 
 // normalizeTask repairs nil slices on tasks restored from disk. Earlier

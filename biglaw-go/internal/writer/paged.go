@@ -50,6 +50,20 @@ func (b *pagedBoard) put(title, full, compact string) {
 	b.compact[title] = compact
 }
 
+// get returns a finished section's full text by exact title ("" when absent).
+func (b *pagedBoard) get(title string) string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.full[title]
+}
+
+// compactOf returns a finished section's compact handle by exact title ("" when absent).
+func (b *pagedBoard) compactOf(title string) string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.compact[title]
+}
+
 // expand returns a finished section's full text by title — exact match first, then a
 // loose contains-match (a weak model may paraphrase the title in its tool call).
 func (b *pagedBoard) expand(title string) string {
@@ -122,7 +136,7 @@ func (w *Writer) writePaged(taskDesc, workflowType string, secs []section, ix *F
 		for i, s := range secs { // Phase 2: compact, then lossless assemble
 			board.put(s.Title, drafts[i], w.compactSection(s.Title, drafts[i]))
 		}
-		return w.assemblePaged(secs, board)
+		return w.finalizePaged(taskDesc, secs, board)
 	}
 
 	// Single-drafter paging: author in order, each aware of prior compacted sections.
@@ -137,7 +151,93 @@ func (w *Writer) writePaged(taskDesc, workflowType string, secs []section, ix *F
 		}
 		board.put(s.Title, full, w.compactSection(s.Title, full))
 	}
-	return w.assemblePaged(secs, board)
+	return w.finalizePaged(taskDesc, secs, board)
+}
+
+// finalizePaged is the memo-frame pass over the finished sections: enforce the
+// per-respondent exposure roster, assemble losslessly, suppress duplicate blocks, then
+// wrap the body in memo structure — an executive summary up top (with the mechanical
+// figure roll-ups) and a conclusions/posture close. The frame passes are best-effort
+// model calls; the body, roster, and roll-ups are deterministic.
+func (w *Writer) finalizePaged(taskDesc string, secs []section, board *pagedBoard) string {
+	secs = w.enforceRoster(secs, board)
+	doc := dedupeDocBlocks(w.assemblePaged(secs, board))
+	if strings.TrimSpace(doc) == "" {
+		return doc
+	}
+	rollups := computeRollups(w.opt.Facts)
+	exec := w.frameSection(taskDesc, board,
+		"Write the EXECUTIVE SUMMARY of the deliverable whose sections are summarized below: 2-3 short paragraphs stating what the matter is, the principal allegations or issues, the headline grounded figures, the parties implicated, and the overall posture. Use ONLY facts stated below — no new facts, figures, or citations. No headings, no bullets, no process commentary.")
+	concl := w.frameSection(taskDesc, board,
+		"Write the closing CONCLUSION AND POSTURE section for the deliverable whose sections are summarized below: 1-2 paragraphs assessing the overall position and the recommended next steps, grounded ONLY in what the sections state. No new facts, figures, or citations. No headings, no bullets, no process commentary.")
+
+	var b strings.Builder
+	if exec != "" || len(rollups) > 0 {
+		b.WriteString("## Executive Summary\n\n")
+		if exec != "" {
+			b.WriteString(exec)
+			b.WriteString("\n\n")
+		}
+		if len(rollups) > 0 {
+			b.WriteString("**Figure roll-up (computed from the grounded record):**\n")
+			b.WriteString(strings.Join(rollups, "\n"))
+			b.WriteString("\n\n")
+		}
+	}
+	b.WriteString(doc)
+	if concl != "" {
+		b.WriteString("\n\n## Conclusion and Posture\n\n")
+		b.WriteString(concl)
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// frameSection writes one document-level frame passage (executive summary / closing
+// posture) from the compacted section handles — bounded input, sanitized and polished
+// like any section. Returns "" on any failure: the frame is omitted, never placeholder.
+func (w *Writer) frameSection(taskDesc string, board *pagedBoard, instr string) string {
+	handles := board.priorBlock()
+	if strings.TrimSpace(handles) == "" {
+		return ""
+	}
+	prompt := fmt.Sprintf("TASK: %s\n\n%s\n%s", strings.Join(strings.Fields(taskDesc), " "), instr,
+		strutil.TruncateToTokens(handles, w.opt.InputBudgetTokens))
+	out, err := w.complete(stitchSystem, prompt, w.opt.DraftMaxTokens, nil)
+	if err != nil {
+		return ""
+	}
+	return polishSection("", sanitizeDraft(out))
+}
+
+// enforceRoster guarantees the per-respondent exposure entries: it locates the exposure
+// section (creating one when the spine lacks it) and appends the consolidated roster
+// block — one entry per named individual respondent, each either a consolidated grounded
+// record or an explicit gap note. A respondent the extraction missed becomes a visible
+// hole for review, never a silent omission.
+func (w *Writer) enforceRoster(secs []section, board *pagedBoard) []section {
+	rb := w.rosterBlock()
+	if rb == "" {
+		return secs
+	}
+	idx := -1
+	for i, s := range secs {
+		lt := strings.ToLower(s.Title)
+		if strings.Contains(lt, "exposure") || strings.Contains(lt, "individuals at risk") {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		secs = append(secs, section{Title: "Individual Exposure"})
+		idx = len(secs) - 1
+	}
+	full := board.get(secs[idx].Title)
+	if strings.Contains(full, rosterHeader) {
+		return secs
+	}
+	nf := strings.TrimSpace(strings.TrimSpace(full) + "\n\n" + rb)
+	board.put(secs[idx].Title, nf, board.compactOf(secs[idx].Title))
+	return secs
 }
 
 // draftingConcurrency bounds Phase-1 huddle parallelism. Sections are independent, so this
@@ -254,7 +354,9 @@ func (w *Writer) reviseSection(taskDesc, workflowType string, s section, draft, 
 	}
 	for _, b := range resp.Content {
 		if b.Type == providers.BlockText && strings.TrimSpace(b.Text) != "" {
-			return sanitizeDraft(b.Text)
+			if out := polishSection(s.Title, sanitizeDraft(b.Text)); out != "" {
+				return out
+			}
 		}
 	}
 	return draft

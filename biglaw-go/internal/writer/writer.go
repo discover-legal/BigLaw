@@ -70,6 +70,12 @@ type Options struct {
 	DraftingAgents []string
 	// DraftingRounds bounds the huddle: 1 = lead drafts only; 2-3 = draft → critique → revise.
 	DraftingRounds int
+	// Respondents is the matter's named individual respondents (from the evidence
+	// graph's committedBy → Person claims). When set, the writer ENFORCES one exposure
+	// entry per respondent: each gets a consolidated grounded record in the exposure
+	// section, and a respondent with nothing extracted gets an explicit gap note —
+	// a structural hole is surfaced, never silent (the omitted-CEO defect).
+	Respondents []string
 	// Paged enables context-paging synthesis: each section is authored in order, then
 	// COMPACTED to a handle so it stops consuming the model's context; later section
 	// authors see the compacted handles and can call expand_section to UNCOMPACT any
@@ -380,6 +386,18 @@ func (w *Writer) Write(taskDesc, workflowType string, findings []Finding) (strin
 	if len(findings) == 0 {
 		return "", nil
 	}
+	// Structurally exclude process-language conclusions BEFORE anything can render them:
+	// a finding whose Content is a placeholder or extraction to-do ("Evidence on point for
+	// this matter; see the quoted source.", "These must be extracted from…") is replaced by
+	// its verbatim evidence — substance, not stage direction — so no path (drafter tool
+	// result, fallback, figure list) can emit the tell.
+	for i := range findings {
+		if isProcessConclusion(findings[i].Content) {
+			if e := strings.TrimSpace(findings[i].Evidence); e != "" && !isProcessConclusion(e) {
+				findings[i].Content = e
+			}
+		}
+	}
 	// Collapse near-duplicate findings first. The rounds + sweep + reconciliation can
 	// surface the same passage many times; left in, the duplicates both bloat the
 	// writer (the merge then compresses the whole document to a stub — a real
@@ -432,8 +450,43 @@ func (w *Writer) Write(taskDesc, workflowType string, findings []Finding) (strin
 	//    guaranteed category is never left blank.
 	w.repairCoverage(taskDesc, workflowType, secs, drafts, ix)
 
-	// 4. Stitch sections into one coherent document.
-	return w.stitch(taskDesc, workflowType, secs, drafts), nil
+	// 4. Stitch sections into one coherent document, then the document-level QA:
+	//    duplicate-block suppression and the per-respondent exposure guarantee.
+	out := dedupeDocBlocks(w.stitch(taskDesc, workflowType, secs, drafts))
+	if rb := w.rosterBlock(); rb != "" && !strings.Contains(out, rosterHeader) {
+		out = strings.TrimRight(out, "\n") + "\n\n## Individual Exposure\n\n" + rb
+	}
+	if strings.TrimSpace(out) == "" {
+		out = w.emergencyDoc(findings) // never empty when findings exist
+	}
+	return out, nil
+}
+
+// emergencyDoc is the last-resort floor: every substantive path failed, so render the
+// findings' verbatim evidence (or substantive conclusions) as grounded paragraphs.
+// It exists so the never-empty guarantee survives the process-language filters.
+func (w *Writer) emergencyDoc(findings []Finding) string {
+	var sents []string
+	seen := map[string]bool{}
+	for _, f := range findings {
+		c := oneLine(f.Content)
+		if c == "" || isProcessConclusion(c) {
+			c = oneLine(f.Evidence)
+		}
+		if c == "" || isProcessConclusion(c) {
+			continue
+		}
+		if k := dedupKey(c); k == "" || seen[k] {
+			continue
+		} else {
+			seen[k] = true
+		}
+		if !endsSentence(c) {
+			c += "."
+		}
+		sents = append(sents, c)
+	}
+	return strings.TrimSpace(strings.Join(sents, " "))
 }
 
 // dedupeFindings collapses near-duplicate findings (same normalized leading ~90
@@ -842,8 +895,9 @@ Write the section "%s" of the final deliverable. Brief: %s
 Call search_findings to retrieve the findings for this section, then write it grounded ONLY in what the findings and figures say — never invent facts.
 Be COMPREHENSIVE for this category: cover the specific allegations, the parties implicated, the harm, and the defense points.
 CRITICAL — for ANY specific figure or precise reference (a dollar amount, a percentage or rate, a count, a date, an account number, or a statutory/section/clause citation), DO NOT write the number or citation yourself. Instead write the NAME of the matching figure from the FIGURES list above (e.g. "the scheme generated Zephyr in excess profits across Quasar trades") — write the name exactly, capitalised. The exact grounded value is substituted for the name automatically, so you never recall a digit — this is how we keep every figure correct. Use a name for EVERY specific you reference, and use ONLY names from the list (if you need a figure that isn't listed, call extract_specifics). NEVER compute, add, sum, total, or otherwise derive a number yourself.
+Where the findings support it, develop the section's prose in this order: the governing statute, rule, or standard; the alleged conduct; the quantities and amounts involved; the parties implicated; and the resulting exposure. Carry statutory and internal-section identifiers exactly as given — via their FIGURES names where listed — never shortened or paraphrased (write "Section 9.1", never "Section 9").
 If a finding is marked UNVERIFIED, either omit it or caveat it explicitly.
-Write FLOWING, professional client-ready prose — connected paragraphs, not an outline. Do NOT emit internal labels or scaffolding such as "Issue:", "Brief Answer:", "Stronger View", "Counter-Argument", "Open Questions", "Recommendations:", "Analysis:". Do NOT write any commentary about your own process or about the findings/inputs — never write things like "Since there are no findings…", "I will write…", "Based on the provided grounded facts…", "As an AI". No finding numbers or agent names. Output only the section's prose (no heading).%s%s%s`,
+Write FLOWING, professional client-ready prose — connected paragraphs, not an outline. Every sentence must be complete; never end mid-phrase. Do NOT emit internal labels or scaffolding such as "Issue:", "Brief Answer:", "Stronger View", "Counter-Argument", "Open Questions", "Recommendations:", "Analysis:". Do NOT write any commentary about your own process or about the findings/inputs — never write things like "Since there are no findings…", "I will write…", "Based on the provided grounded facts…", "As an AI". No finding numbers or agent names. Output only the section's prose (no heading).%s%s%s`,
 		oneLine(taskDesc), workflowType, s.Title, s.Brief, figuresBlock, factsBlock, extra.priorCompacted)
 
 	msgs := []providers.Message{{Role: "user", Content: user}}
@@ -929,6 +983,12 @@ Write FLOWING, professional client-ready prose — connected paragraphs, not an 
 	// stated wrong.
 	result = resolveFigureHandles(result, handled)
 	result = sanitizeDraft(result)
+	// Authorship QA: no orphan fragments, no pasted ledger runs (tables instead), no
+	// process-tell sentences, no duplicate leading heading, never ends mid-sentence.
+	result = polishSection(s.Title, result)
+	if result == "" {
+		result = w.fallbackSection(s, ix)
+	}
 	// Guarantee the SALIENT figures land. Ranking gets most figures inline, but a weak drafter
 	// still drops some of the headline ones (it used the top figure and reverted to qualitative
 	// prose). attachKeyFigures appends ONLY salient figures (big money / large counts / major
@@ -944,7 +1004,7 @@ Write FLOWING, professional client-ready prose — connected paragraphs, not an 
 }
 
 var (
-	reMetaLine  = regexp.MustCompile(`(?i)(since there (are|were) no\b|based on the provided grounded facts|as an ai\b|as requested\b|^\s*i'?ll?\s+write\b|^\s*i\s+will\s+(now\s+)?(write|draft|provide)\b|^\s*here is (the|my|a)\b|^\s*below is (the|my|a)\b|^\s*note:\s)`)
+	reMetaLine  = regexp.MustCompile(`(?i)(since there (are|were) no\b|based on the (provided|extracted|grounded)\b|as an ai\b|as requested\b|^\s*i'?ll?\s+write\b|^\s*i\s+will\s+(now\s+)?(write|draft|provide)\b|^\s*here is (the|my|a)\b|^\s*below is (the|my|a)\b|^\s*\[?note:\s|let me (now\s+)?(write|draft|search)\b|now i have (comprehensive|sufficient)\b|i now have (comprehensive|sufficient)\b)`)
 	reLeadLabel = regexp.MustCompile(`(?i)^\s*#*\s*(stronger view|credible counter-?argument|counter-?argument|open questions?|brief answer|issue(\(s\))?(\s+\d+)?)\s*[:.\-]*\s*`)
 	reBlankRun  = regexp.MustCompile(`\n{3,}`)
 )
@@ -1007,11 +1067,22 @@ func assignHandles(hits []SpecificHit) []handledFig {
 	seen := map[string]bool{}
 	for _, h := range hits {
 		sal := salientFigure(h.Text)
+		score := 0
+		if sal != "" {
+			score = figureSalience(sal)
+		} else if c := salientCite(h.Text); c != "" {
+			// Section-number carriage: the harvest surfaces "Section 9.1"/"Item 6"/
+			// "Rule 204A-1"-style identifiers as first-class values. Give them handles
+			// too, so the drafter carries them into prose INTACT (it is forbidden from
+			// typing citations itself — without a handle it would paraphrase to
+			// "Section 9" or drop the reference).
+			sal, score = c, citeSalience
+		}
 		if sal == "" || seen[strings.ToLower(sal)] {
 			continue
 		}
 		seen[strings.ToLower(sal)] = true
-		cands = append(cands, cand{sal, h, figureSalience(sal)})
+		cands = append(cands, cand{sal, h, score})
 	}
 	// Rank by salience so headline figures ($8.2M, 4,217, 81.6%) lead the list and the noise
 	// tail (small bare numbers from exhibit rows) falls off the cap, not the salient ones.
@@ -1068,18 +1139,51 @@ func figureSalience(v string) int {
 // stragglers a weak drafter dropped without dragging in minor percentages or small numbers.
 const salienceGuaranteeFloor = 55
 
+// citeSalience ranks a citation identifier in the handle list: above minor percentages
+// (an operative "Rule 204A-1" outranks a 1.5% exhibit detail) but below the headline
+// money/counts/rates. Note assignHandles scores cites with this constant, while the
+// Key-figures guarantee tail keys on figureSalience(Value) — which stays low for a cite,
+// so citations never leak into the "Key figures" block (TestAttachKeyFiguresSelective).
+const citeSalience = 58
+
+// reSalientCite extracts a FULL citation identifier — the keyword and its complete
+// number, subsections included: "Section 9.1", "Item 6", "Rule 204A-1", "Rule 206(4)-7",
+// "§ 275.204A-1". Used to hand citations to the drafter as handles carried verbatim.
+var reSalientCite = regexp.MustCompile(`(?i)\b(?:Sections?|Rule|Item|Part|Article|Clause|Paragraph|Exhibit|§§?)\s*[0-9](?:[0-9A-Za-z.\-]|\([0-9a-zA-Z]+\))*`)
+
+// salientCite returns the first full citation identifier in a row (trailing sentence
+// punctuation trimmed), or "" when the row carries none.
+func salientCite(s string) string {
+	m := reSalientCite.FindString(s)
+	return strings.TrimRight(m, ".-")
+}
+
+// Substitution-tidy patterns, hoisted (and scoped): cleanup must never eat paragraph
+// breaks, so runs collapse within a line only ([ \t], not \s — \s{2,} matched "\n\n"
+// and flattened the whole section into one wall of text).
+var (
+	reEmptyParens   = regexp.MustCompile(`\(\s*\)`)
+	reSpaceRun      = regexp.MustCompile(`[ \t]{2,}`)
+	reSpaceBefPunct = regexp.MustCompile(`[ \t]+([.,;)])`)
+)
+
 // resolveFigureHandles substitutes each handle (case-insensitive, word-boundary) with its exact
 // grounded value, then strips any stray {{FIG:…}} the drafter emitted out of habit and tidies
 // the artefacts a substitution can leave (empty parens, doubled spaces, space-before-punct).
+//
+// The substitution is LITERAL (ReplaceAllLiteralString): a grounded value like "$7,800,000"
+// contains "$7", which ReplaceAllString would expand as a (nonexistent) capture-group
+// reference — eating the "$7" and corrupting the figure to ",800,000" (the
+// "approximately,800,000" bug). Values are data, never replacement templates.
 func resolveFigureHandles(text string, handled []handledFig) string {
 	for _, h := range handled {
 		re := regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(h.Handle) + `\b`)
-		text = re.ReplaceAllString(text, h.Value)
+		text = re.ReplaceAllLiteralString(text, h.Value)
 	}
 	text = rePlaceholder.ReplaceAllString(text, "")
-	text = regexp.MustCompile(`\(\s*\)`).ReplaceAllString(text, "")
-	text = regexp.MustCompile(`\s{2,}`).ReplaceAllString(text, " ")
-	return regexp.MustCompile(`\s+([.,;)])`).ReplaceAllString(text, "$1")
+	text = reEmptyParens.ReplaceAllString(text, "")
+	text = reSpaceRun.ReplaceAllString(text, " ")
+	return reSpaceBefPunct.ReplaceAllString(text, "$1")
 }
 
 var rePlaceholder = regexp.MustCompile(`\{\{\s*FIG:\s*([^}]+?)\s*\}\}`)
@@ -1106,10 +1210,10 @@ func resolveFigurePlaceholders(text string, figs []SpecificHit) string {
 	})
 	// Tidy artefacts a dropped placeholder leaves behind: empty/whitespace-only parens
 	// (e.g. a citation "()" the drafter emitted with no source), doubled spaces, and a
-	// space before punctuation.
-	out = regexp.MustCompile(`\(\s*\)`).ReplaceAllString(out, "")
-	out = regexp.MustCompile(`\s{2,}`).ReplaceAllString(out, " ")
-	return regexp.MustCompile(`\s+([.,;)])`).ReplaceAllString(out, "$1")
+	// space before punctuation. Within-line only — paragraph breaks are sacred.
+	out = reEmptyParens.ReplaceAllString(out, "")
+	out = reSpaceRun.ReplaceAllString(out, " ")
+	return reSpaceBefPunct.ReplaceAllString(out, "$1")
 }
 
 // tokenOverlap counts shared content words (≥3 chars) between a placeholder
@@ -1405,22 +1509,65 @@ func batchByTokens(blocks []string, budget int) [][]string {
 	return out
 }
 
-// fallbackSection renders a section as a grounded bullet list of its findings'
-// conclusions — used when the drafter model returns nothing, so output is never blank.
+// fallbackSection renders a section from its findings when the drafter model returns
+// nothing — as AUTHORED content, not a case-file dump: substantive conclusions become
+// flowing sentences grouped into paragraphs, ledger/exhibit rows become a table, and
+// process-language conclusions ("must be extracted from…", "Evidence on point…") are
+// structurally excluded — they can never reach the client. Returns "" when nothing
+// substantive remains (the section is then omitted, never placeholder-filled).
 func (w *Writer) fallbackSection(s section, ix *FindingIndex) string {
-	var b strings.Builder
+	var sents []string
+	var ledger []string
+	seen := map[string]bool{}
 	for _, id := range s.FindingIDs {
 		f, ok := ix.Get(id)
 		if !ok {
 			continue
 		}
 		c := oneLine(f.Content)
-		if !f.Grounded {
-			c += " (unverified — requires confirmation)"
+		if c == "" || isProcessConclusion(c) {
+			// The conclusion is a placeholder/process line — fall back to the finding's
+			// verbatim evidence, which is always substantive, or skip entirely.
+			if e := oneLine(f.Evidence); e != "" && !isProcessConclusion(e) {
+				c = e
+			} else {
+				continue
+			}
 		}
-		fmt.Fprintf(&b, "- %s\n", c)
+		if k := dedupKey(c); k == "" || seen[k] {
+			continue
+		} else {
+			seen[k] = true
+		}
+		if isLedgerLine(c) {
+			ledger = append(ledger, c)
+			continue
+		}
+		if !endsSentence(c) {
+			c += "."
+		}
+		if !f.Grounded {
+			c = strings.TrimSuffix(c, ".") + " (unverified — requires confirmation)."
+		}
+		sents = append(sents, c)
 	}
-	return strings.TrimSpace(b.String())
+	var blocks []string
+	// Compose the sentences into paragraphs of a few sentences each — prose, not bullets.
+	const perPara = 4
+	for i := 0; i < len(sents); i += perPara {
+		end := i + perPara
+		if end > len(sents) {
+			end = len(sents)
+		}
+		blocks = append(blocks, strings.Join(sents[i:end], " "))
+	}
+	if len(ledger) >= 3 {
+		blocks = append(blocks, strings.Join(collapseLedgerRuns(ledger), "\n"))
+	} else if len(ledger) > 0 {
+		// Too few rows for a table — summarize in prose instead of pasting fragments.
+		blocks = append(blocks, "The grounded record also shows: "+strings.Join(ledger, "; ")+".")
+	}
+	return strings.TrimSpace(strings.Join(blocks, "\n\n"))
 }
 
 // complete is a single, tool-less model call (planner / stitch passes).
