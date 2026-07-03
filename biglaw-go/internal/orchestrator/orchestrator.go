@@ -1255,7 +1255,7 @@ func (o *Orchestrator) appendDiscrepancies(task *types.Task, body string) string
 	var discrepancies []string
 	seen := map[string]bool{}
 	for _, f := range task.Findings {
-		if f.AgentID != "contradiction-detector" {
+		if f.AgentID != "contradiction-detector" && f.AgentID != crossDocAgentID {
 			continue
 		}
 		c := strings.TrimSpace(f.Content)
@@ -2013,6 +2013,23 @@ func (o *Orchestrator) buildEvidenceGraph(task *types.Task, prov providers.Provi
 		ckept += k
 		crej += r
 	}
+	// Zero-yield guard (the July-3 Haiku trigger regression): a spine pass that produces NOTHING
+	// — not even rejected rows — means every call failed or returned unparseable output (chatJSON
+	// swallows provider errors; on that run BELO_SPINE_MODEL resolved through localize() to a
+	// "local:" ID whose endpoint was a dead placeholder). Without typed triples the graph carries
+	// no subsection-level `violates` edges and the analytic defense layer starves. Retry once on
+	// the bulk provider/model, which Phase 1 just used successfully.
+	if ckept+crej == 0 && len(spineChunks) > 0 && (spineProv != prov || spineModel != model) {
+		slog.Warn("BELO spine pass yielded zero triples; retrying on the bulk provider", "task", task.ID, "spine_model", spineModel)
+		for _, chunk := range spineChunks {
+			k, r := evidencegraph.ExtractTriplesInto(g, prov, model, &zero, chunk, "")
+			ckept += k
+			crej += r
+		}
+	}
+	if ckept+crej == 0 {
+		slog.Warn("BELO spine pass produced no typed triples — spine falls back to enumeration; defense issues derive from the charging documents directly", "task", task.ID, "spine_model", spineModel)
+	}
 	if g.Len() == 0 {
 		return
 	}
@@ -2033,6 +2050,13 @@ func (o *Orchestrator) buildEvidenceGraph(task *types.Task, prov providers.Provi
 	if figs := o.harvestAndBindFigures(task, g, prov, figModel); len(figs) > 0 {
 		o.update(task, func(t *types.Task) { t.Findings = append(t.Findings, figs...) })
 		slog.Info("figure harvest seeded findings", "task", task.ID, "n", len(figs), "model", figModel, "graph_facts_after", g.Len())
+	}
+	// Cross-document discrepancy pass (crossdoc.go): same metric identity (entity +
+	// quantity-kind + referent) reported with different values in different documents,
+	// plus event-date conflicts (metadata vs narrative). Augments the intra-harvest
+	// contradiction dimension above.
+	if xd := o.detectCrossDocDiscrepancies(task, g, prov, figModel); len(xd) > 0 {
+		o.update(task, func(t *types.Task) { t.Findings = append(t.Findings, xd...) })
 	}
 	// Stage 2 — for a COMPLIANCE (compare/review) matter, DETECT where the document DEVIATES from
 	// the controlling standard per requirement. This is the finding such tasks are scored on
