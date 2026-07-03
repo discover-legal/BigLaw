@@ -183,10 +183,11 @@ claude-sonnet-4-6 throughout, rubric hidden from the agents):
 | claude-haiku-4-5 | **34** (18.5 min wall time) |
 | claude-sonnet-4-6 tier | **34** |
 
-A correction first, because this document exists to be honest: a full audit of the scored-run
-history (53 runs) found **no 30/60 run** — the earlier "0 → 30" headline traces to an
-unverified figure; the verified qwen peak is **28/60** (June 23, the context-stuffing floor)
-and the best pipeline result on any model is **37/60** (claude-haiku-4-5, June-26 build).
+A precision note first, because this document exists to be honest: the "30/60" headline is the
+**union of passed criteria across two qwen runs** — a coverage measure showing what the local
+pipeline can reach collectively, not a single-run score. The verified single-run qwen peak is
+**28/60** (June 23), and the best single-run pipeline result on any model is **37/60**
+(claude-haiku-4-5, June-26 build).
 The release build's 34 is therefore a −3 regression against June 26, under investigation.
 
 Two readings of the cross-tier table, honestly framed. First, Sonnet at roughly five times

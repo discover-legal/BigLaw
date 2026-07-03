@@ -66,8 +66,9 @@ Harvey's own harness **41/60** (5 min, and it skipped a document); prior best pi
 result **37/60** (Haiku, June-26 build) — the release build carries a −3 regression under
 investigation. The local qwen2.5:14b release run (27/60) was invalidated by forensics:
 every DyTopo round timed out under three-way task contention, so the score reflects the
-BELO deviation layer alone. Verified against the full scores.json history: no 30/60 run
-exists; earlier "0 → 30" claims trace to an unverified changelog figure. Root cause of
+BELO deviation layer alone. Verified against the full scores.json history: the earlier "30/60"
+was the union of passed criteria across two qwen runs (a coverage measure, not a
+single-run score); best single-run qwen result is 28. Root cause of
 the raw-vs-pipeline gap (criterion-level autopsy): the extraction transcription funnel —
 1500-token tool-result caps, 2-sentence passage limits, and read_document results
 bypassing the evidence pool. Task still not passed; climb continues, honestly.

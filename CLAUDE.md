@@ -163,7 +163,8 @@ Each DyTopo round:
 > build); release build 34/60 on Haiku AND Sonnet (−3 regression, under investigation); raw Haiku
 > in Harvey's own harness 41/60. Identified bottleneck: the extraction transcription funnel
 > (1500-token tool-result cap, 2-sentence passages, read_document bypassing the evidence pool).
-> A climb, not a pass. No 30/60 run exists in the scored history.
+> A climb, not a pass. (The earlier "30/60" was the union of passed criteria across two qwen
+> runs — a coverage measure; best single-run qwen score is 28.)
 >
 > **Negotiation stack (Go-only):** `internal/tools/negotiate.go` (`respond_to_redline` —
 > counter-redlining with playbook judgment, judge memory + standoff escalation, rationale cards),
