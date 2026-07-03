@@ -159,8 +159,11 @@ Each DyTopo round:
 > `analyseEvidence` writes conclusions per locked quote). Synthesis routes through
 > `internal/orchestrator/orchestrator.go` `synthesise()` → `writeDeliverable()` when findings exceed
 > a single call's budget. These took local-model verbatim citation grounding from ~0% to ~94%.
-> Harvey LAB criteria: 0 → 30 → 34/60 (claude-haiku-4-5 on the pipeline; local qwen2.5:14b 27/60
-> on the same build; Sonnet-tier 34/60) — a climb, not a pass.
+> Harvey LAB criteria (verified vs scores.json history): best pipeline 37/60 (Haiku, June-26
+> build); release build 34/60 on Haiku AND Sonnet (−3 regression, under investigation); raw Haiku
+> in Harvey's own harness 41/60. Identified bottleneck: the extraction transcription funnel
+> (1500-token tool-result cap, 2-sentence passages, read_document bypassing the evidence pool).
+> A climb, not a pass. No 30/60 run exists in the scored history.
 >
 > **Negotiation stack (Go-only):** `internal/tools/negotiate.go` (`respond_to_redline` —
 > counter-redlining with playbook judgment, judge memory + standoff escalation, rationale cards),

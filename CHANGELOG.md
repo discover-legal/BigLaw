@@ -58,11 +58,19 @@ LICENSE, NOTICE, SPDX headers (271 files), badges, and image labels all updated.
 - Fixes: cost ledger now persists on fresh installs; temperature override dropped
   for OpenAI gpt-5.x/o-series (was silently degrading tabular cells to grey)
 
-### Benchmark: cross-tier runs on the release build
-Same pipeline, three models, same claude-sonnet-4-6 judge: qwen2.5:14b **27/60**,
-claude-haiku-4-5 **34/60** (new high, 18.5 min), claude-sonnet-4-6 **34/60** (~5× Haiku's
-cost, identical criteria) — the pipeline saturates above the Haiku tier, so the remaining
-criteria are architecture work, not model budget. Task still not passed; climb continues.
+### Benchmark: cross-tier + raw-baseline runs on the release build (forensics-corrected)
+Same task, same claude-sonnet-4-6 judge. Release pipeline: claude-haiku-4-5 **34/60**
+(18.5 min), claude-sonnet-4-6 **34/60** (~5× the cost, identical criteria — the pipeline,
+not the model tier, is the binding constraint). Controls: raw claude-haiku-4-5 in
+Harvey's own harness **41/60** (5 min, and it skipped a document); prior best pipeline
+result **37/60** (Haiku, June-26 build) — the release build carries a −3 regression under
+investigation. The local qwen2.5:14b release run (27/60) was invalidated by forensics:
+every DyTopo round timed out under three-way task contention, so the score reflects the
+BELO deviation layer alone. Verified against the full scores.json history: no 30/60 run
+exists; earlier "0 → 30" claims trace to an unverified changelog figure. Root cause of
+the raw-vs-pipeline gap (criterion-level autopsy): the extraction transcription funnel —
+1500-token tool-result caps, 2-sentence passage limits, and read_document results
+bypassing the evidence pool. Task still not passed; climb continues, honestly.
 
 ### BELO — an epistemic ontology, a graph-discovered spine, and What3Words figure handles
 The next stretch of the local-accuracy climb — still a single local open-weight model for the

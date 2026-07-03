@@ -183,12 +183,18 @@ claude-sonnet-4-6 throughout, rubric hidden from the agents):
 | claude-haiku-4-5 | **34** (18.5 min wall time) |
 | claude-sonnet-4-6 tier | **34** |
 
-Two readings, honestly framed. First, the "optimise on the weak model" bet pays out upward: a
-light cloud tier reaches 34/60 on orchestration built and debugged entirely against a 14B's
-failure modes — the headline climb is now **0 → 30 → 34**. Second, the remaining criteria
-concentrate in granular-fact extraction (the salience-ranking gap described in *Honest status*
-above), which a model swap alone does not clear — the architecture, not the model, is the next
-lever. The Sonnet run makes that second reading measurable: at roughly five times Haiku's cost
-(3.8M tokens, ~$14 vs ~$2) it passes exactly the same 34 criteria — the pipeline saturates
-above the Haiku tier, so every remaining criterion is architecture work, not model budget.
-The task is still not passed; the climb continues.
+A correction first, because this document exists to be honest: a full audit of the scored-run
+history (53 runs) found **no 30/60 run** — the earlier "0 → 30" headline traces to an
+unverified figure; the verified qwen peak is **28/60** (June 23, the context-stuffing floor)
+and the best pipeline result on any model is **37/60** (claude-haiku-4-5, June-26 build).
+The release build's 34 is therefore a −3 regression against June 26, under investigation.
+
+Two readings of the cross-tier table, honestly framed. First, Sonnet at roughly five times
+Haiku's cost (3.8M tokens, ~$14 vs ~$2) passes exactly the same 34 criteria — the pipeline,
+not the model tier, is the binding constraint. Second — the harder truth — raw claude-haiku-4-5
+in Harvey's own harness scores **41/60** in five minutes: the criterion-level autopsy attributes
+the entire gap to the extraction transcription funnel (1500-token tool-result caps, two-sentence
+passage limits, `read_document` results bypassing the evidence pool — local-model-era throttles
+never relaxed for a 200K-context model). The pipeline's verified wins are citation integrity
+(spot-checks verbatim 6/6; the raw run fabricated penalty math) and four analytic criteria raw
+missed. The task is still not passed; the climb continues.
