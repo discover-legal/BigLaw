@@ -6,6 +6,7 @@ package orchestrator
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -32,7 +33,7 @@ import (
 // a deviation. The Go side then verifies both quotes appear in the retrieved passages (substring
 // lock) and drops any deviation whose quotes don't verify — a model that must copy "Twenty-Five
 // Percent (25%)" from the instruction cannot then claim the instruction says 30%.
-const deviationSystem = "You check ONE requirement against a document. The passages are grouped into two labeled sections: 'CONTROLLING SOURCE — what is required' (client instructions, a playbook, a regulation, a term sheet, or a prior agreement) and 'DOCUMENT UNDER REVIEW — what it actually says' (a draft, a contract, a filing, a policy). Use ONLY these passages; do NOT rely on memory. A deviation is either a CONFLICT (the DOCUMENT UNDER REVIEW addresses the requirement but with a wrong value, name, or term) or an OMISSION (the CONTROLLING SOURCE requires it but the DOCUMENT UNDER REVIEW does not implement it — including when its section shows no matching provision). Output ONLY JSON: {\"type\": \"conflict|omission|none\", \"instructionQuote\": \"<the EXACT verbatim words from the CONTROLLING SOURCE section stating the requirement, including any specific value it names>\", \"draftQuote\": \"<for a CONFLICT, the EXACT verbatim words from the DOCUMENT UNDER REVIEW section; empty for an omission>\", \"requiredProvision\": \"<for an OMISSION, a short name for the missing provision>\", \"summary\": \"<one sentence naming the required value and the document's value; if the deviation has a material practical CONSEQUENCE — it creates a risk given a known fact about a party, or it affects another provision's calculation — state that consequence too>\", \"severity\": \"critical|high|medium|low\", \"recommendation\": \"<the specific correction, stating the required value>\"}. Quotes MUST be copied word-for-word from the passages — never invent. type=conflict ONLY if the two quotes actually conflict; type=omission ONLY if the requirement is imposed but the DOCUMENT UNDER REVIEW does not implement it; otherwise type=none."
+const deviationSystem = "You check ONE requirement against a document. The passages are grouped into two labeled sections: 'CONTROLLING SOURCE — what is required' (client instructions, a playbook, a regulation, a term sheet, or a prior agreement) and 'DOCUMENT UNDER REVIEW — what it actually says' (a draft, a contract, a filing, a policy). Use ONLY these passages; do NOT rely on memory. A deviation is either a CONFLICT (the DOCUMENT UNDER REVIEW addresses the requirement but with a wrong value, name, or term) or an OMISSION (the CONTROLLING SOURCE requires it but the DOCUMENT UNDER REVIEW does not implement it — including when its section shows no matching provision). Output ONLY a JSON ARRAY — ONE object per DISTINCT conflict or omission (a multi-part requirement, e.g. a three-way split with two wrong shares, has SEVERAL objects; check each part), or an empty array [] if the document conforms. Each object: {\"type\": \"conflict|omission|none\", \"instructionQuote\": \"<the EXACT verbatim words from the CONTROLLING SOURCE section stating the requirement, including any specific value it names>\", \"draftQuote\": \"<for a CONFLICT, the EXACT verbatim words from the DOCUMENT UNDER REVIEW section; empty for an omission>\", \"requiredProvision\": \"<for an OMISSION, a short name for the missing provision>\", \"summary\": \"<one sentence naming the required value and the document's value; if the deviation has a material practical CONSEQUENCE — it creates a risk given a known fact about a party, or it affects another provision's calculation — state that consequence too>\", \"severity\": \"critical|high|medium|low\", \"recommendation\": \"<the specific correction, stating the required value>\"}. Quotes MUST be copied word-for-word from the passages — never invent. type=conflict ONLY if the two quotes actually conflict; type=omission ONLY if the requirement is imposed but the DOCUMENT UNDER REVIEW does not implement it; otherwise type=none."
 
 // extractRequirementsSystem drives the COMPREHENSIVE requirement enumeration — the retrieval
 // floor for compare/review. Every distinct instruction the client states must become a check,
@@ -159,34 +160,36 @@ func (o *Orchestrator) detectDeviations(task *types.Task, g *evidencegraph.Graph
 			continue
 		}
 		adjudicated++
-		dev := o.adjudicateDeviation(task, prov, model, req, ctx)
-		if dev == "" {
-			continue
-		}
-		// Dedup by content overlap — two requirements can surface the SAME deviation (e.g. both
-		// "first successor trustee" and "exclude Sophia" flag Sophia-as-trustee). Compare the CLAIM
-		// CORE (the summary), not the full string: divergent "Recommended correction:" tails dragged
-		// whole-string overlap below the threshold and let near-identical claims through.
-		sig := devSignature(devCore(dev))
-		dup := false
-		for _, prev := range keptSigs {
-			if jaccard(sig, prev) > 0.5 {
-				dup = true
-				break
+		// A requirement can yield SEVERAL grounded deviations (each part of a multi-part term).
+		for _, dev := range o.adjudicateDeviation(task, prov, model, req, ctx) {
+			if dev == "" {
+				continue
 			}
+			// Dedup by content overlap — two requirements can surface the SAME deviation (e.g. both
+			// "first successor trustee" and "exclude Sophia" flag Sophia-as-trustee). Compare the
+			// CLAIM CORE (the summary head), not the full string: divergent "Recommended correction:"
+			// tails dragged whole-string overlap below the threshold and let near-dups through.
+			sig := devSignature(devCore(dev))
+			dup := false
+			for _, prev := range keptSigs {
+				if jaccard(sig, prev) > 0.5 {
+					dup = true
+					break
+				}
+			}
+			if dup {
+				continue
+			}
+			keptSigs = append(keptSigs, sig)
+			out = append(out, types.Finding{
+				ID:         uuid.NewString(),
+				AgentID:    "deviation-detector",
+				AgentName:  "Deviation Detector",
+				Content:    dev,
+				Confidence: 0.8,
+				Timestamp:  time.Now(),
+			})
 		}
-		if dup {
-			continue
-		}
-		keptSigs = append(keptSigs, sig)
-		out = append(out, types.Finding{
-			ID:         uuid.NewString(),
-			AgentID:    "deviation-detector",
-			AgentName:  "Deviation Detector",
-			Content:    dev,
-			Confidence: 0.8,
-			Timestamp:  time.Now(),
-		})
 	}
 	return out
 }
@@ -263,18 +266,32 @@ func (o *Orchestrator) retrieveForDeviation(task *types.Task, req string) string
 	return strutil.TruncateToTokens(b.String(), 3200)
 }
 
-func (o *Orchestrator) adjudicateDeviation(task *types.Task, prov providers.Provider, model, req, ctx string) string {
+type deviationRow struct {
+	Type              string `json:"type"`
+	InstructionQuote  string `json:"instructionQuote"`
+	DraftQuote        string `json:"draftQuote"`
+	RequiredProvision string `json:"requiredProvision"`
+	Summary           string `json:"summary"`
+	Severity          string `json:"severity"`
+	Recommendation    string `json:"recommendation"`
+}
+
+// adjudicateDeviation asks the model for EVERY distinct deviation on this requirement and returns
+// the grounded, rendered ones. Returning MANY, not one, is what catches a multi-part requirement
+// with several errors (a three-way split where two shares are wrong) — one-per-requirement missed
+// the second error entirely.
+func (o *Orchestrator) adjudicateDeviation(task *types.Task, prov providers.Provider, model, req, ctx string) []string {
 	zero := 0.0
 	resp, err := prov.Chat(providers.ChatParams{
 		Model:       model,
-		MaxTokens:   400,
+		MaxTokens:   900,
 		System:      deviationSystem,
 		Messages:    []providers.Message{{Role: "user", Content: "REQUIREMENT: " + req + "\n\nPASSAGES:\n" + ctx}},
 		CacheSystem: true,
 		Temperature: &zero,
 	})
 	if err != nil {
-		return ""
+		return nil
 	}
 	o.recordCost(resp, model, cost.ContextSynthesis, task.ID)
 	var text string
@@ -284,20 +301,27 @@ func (o *Orchestrator) adjudicateDeviation(task *types.Task, prov providers.Prov
 		}
 	}
 	t := strings.TrimSpace(text)
-	i, j := strings.Index(t, "{"), strings.LastIndex(t, "}")
+	i, j := strings.Index(t, "["), strings.LastIndex(t, "]")
 	if i < 0 || j <= i {
-		return ""
+		return nil
 	}
-	var d struct {
-		Type              string `json:"type"`
-		InstructionQuote  string `json:"instructionQuote"`
-		DraftQuote        string `json:"draftQuote"`
-		RequiredProvision string `json:"requiredProvision"`
-		Summary           string `json:"summary"`
-		Severity          string `json:"severity"`
-		Recommendation    string `json:"recommendation"`
+	var rows []deviationRow
+	if json.Unmarshal([]byte(t[i:j+1]), &rows) != nil {
+		return nil
 	}
-	if json.Unmarshal([]byte(t[i:j+1]), &d) != nil || strings.TrimSpace(d.Summary) == "" {
+	nctx := devNorm(ctx)
+	var out []string
+	for _, d := range rows {
+		if s := o.renderDeviation(task, prov, model, d, nctx); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// renderDeviation grounds ONE deviation object and renders it, or returns "" to drop it.
+func (o *Orchestrator) renderDeviation(task *types.Task, prov providers.Provider, model string, d deviationRow, nctx string) string {
+	if strings.TrimSpace(d.Summary) == "" {
 		return ""
 	}
 	// Conform-leak guard: the model sometimes emits a "deviation" whose own summary says the
@@ -315,7 +339,6 @@ func (o *Orchestrator) adjudicateDeviation(task *types.Task, prov providers.Prov
 	// The instruction quote must be VERBATIM in the retrieved passages for BOTH types — the
 	// requirement must genuinely be instructed (no fabricated "the client wanted …").
 	iq := strings.TrimSpace(d.InstructionQuote)
-	nctx := devNorm(ctx)
 	if len(iq) < 4 || !strings.Contains(nctx, devNorm(iq)) {
 		return ""
 	}
@@ -340,6 +363,16 @@ func (o *Orchestrator) adjudicateDeviation(task *types.Task, prov providers.Prov
 	default:
 		return "" // type=none / unknown
 	}
+	// GROUND THE SUMMARY (#1) — every value (%, $ amount) stated in the summary MUST appear in the
+	// verbatim quotes. The quote lock protects the quotes, but the summary is free text: the model
+	// quoted "forty percent (40%)" yet wrote "David 50%" — "50%" is nowhere in the draft. Drop any
+	// deviation whose summary names a value the quotes don't support (a fabricated discrepancy).
+	quotes := devNorm(iq + " " + strings.TrimSpace(d.DraftQuote))
+	for _, v := range valueTokens(d.Summary) {
+		if !strings.Contains(quotes, v) {
+			return ""
+		}
+	}
 	sev := strings.ToLower(strings.TrimSpace(d.Severity))
 	if sev == "" {
 		sev = "medium"
@@ -354,6 +387,20 @@ func (o *Orchestrator) adjudicateDeviation(task *types.Task, prov providers.Prov
 // devNorm normalizes for the substring lock (collapse whitespace, lowercase) so a verbatim quote
 // verifies despite spacing/case drift, but a fabricated value still fails.
 func devNorm(s string) string { return strings.ToLower(strings.Join(strings.Fields(s), " ")) }
+
+// reValueToken matches the value tokens that a deviation must not fabricate — dollar amounts and
+// percentages (the discrepancy currencies: residuary %, a scholarship $). Left deliberately narrow
+// (not every bare integer) so a legitimate section/count reference isn't treated as a value.
+var reValueToken = regexp.MustCompile(`\$[\d,]+(?:\.\d+)?|\d+(?:\.\d+)?\s*%`)
+
+// valueTokens extracts the normalized $/% values stated in a summary, for grounding against quotes.
+func valueTokens(s string) []string {
+	var out []string
+	for _, v := range reValueToken.FindAllString(s, -1) {
+		out = append(out, devNorm(v))
+	}
+	return out
+}
 
 // devCore extracts the CLAIM HEAD from a rendered deviation — "who did what wrong" — for dedup.
 // It strips the severity label, the "Recommended correction:" tail, AND the impact/subordinate
