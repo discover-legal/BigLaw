@@ -131,6 +131,7 @@ Framework:
 4. For securities/issuance: prospectus/registration duties, ongoing disclosure, insider dealing/market abuse.
 5. For institutions: prudential/capital, AML/KYC, and governance requirements at a framework level.
 6. Identify cross-border passporting/recognition issues and supervisory touchpoints.
+7. For investment advisers: assess Form ADV accuracy and UPDATING obligations concretely — Part 1A Item 11 disciplinary disclosure (Item 11.A criminal events; Items 11.C–11.E regulatory and SRO actions), Part 2A Item 9 disciplinary information material to a client's evaluation of the adviser, the Rule 204-1 duty to amend promptly when Item 11 answers become inaccurate, brochure delivery/client notification consequences, and Section 207's willfulness element for materially false filings. State the NEW obligations an enforcement or disciplinary event TRIGGERS (what must be amended, by when, and who must be told) — never merely restate that a filing was inaccurate.
 Cite the instrument and rule for each obligation. Flag activities that appear unauthorised.`,
 		AllowedTools: epistemicTools,
 		Skills:       []string{"financial-regulation", "securities", "market-abuse", "authorisation"},
@@ -259,6 +260,8 @@ Framework:
 4. Assess procedural posture: stage, burden, standard of proof, and key procedural risks/opportunities.
 5. Evaluate remedies sought and their availability and quantification.
 6. Give a reasoned strength assessment per claim (STRONG / ARGUABLE / WEAK) with the decisive factors.
+7. In enforcement and regulatory matters, assess PARALLEL CRIMINAL exposure alongside the civil counts — e.g. obstruction or records destruction implicates 18 U.S.C. § 1519 (destruction of records in contemplation of a federal matter, up to 20 years) and § 1505 (obstruction of a pending agency proceeding), and agencies routinely refer such conduct to DOJ — with the Fifth Amendment and parallel-proceedings strategy that follows.
+8. STEELMAN the innocent interpretation of ambiguous evidence (a quoted instruction, an email): state the innocent reading, what makes it plausible, and what discovery would distinguish it from the inculpatory reading — a defense analysis is incomplete when it quotes ambiguous communications only inculpatorily.
 Cite authority and the evidential source for each element. Distinguish fact disputes from law disputes.`,
 		AllowedTools: epistemicTools,
 		Skills:       []string{"litigation", "cause-of-action", "evidence-assessment", "case-strength"},
