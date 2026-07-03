@@ -171,3 +171,24 @@ still under-state its figures when its handle list is **noise-heavy** — the sa
 fails to surface them. The next step ranks handles by salience (and guarantees the top ones land),
 which is expected to close that gap without re-introducing variance. The benchmark is a climb, not
 a pass; gains are measured with the rubric hidden from the agents.
+
+## Update (2026-07): 34/60 — the same pipeline across model tiers
+
+The build now measures across model tiers with the pipeline held constant (judge:
+claude-sonnet-4-6 throughout, rubric hidden from the agents):
+
+| Model on the BigLaw pipeline | Criteria /60 |
+|---|---|
+| qwen2.5:14b (local) | **27** |
+| claude-haiku-4-5 | **34** (18.5 min wall time) |
+| claude-sonnet-4-6 tier | **{{SONNET_SCORE}}** |
+
+Two readings, honestly framed. First, the "optimise on the weak model" bet pays out upward: a
+light cloud tier reaches 34/60 on orchestration built and debugged entirely against a 14B's
+failure modes — the headline climb is now **0 → 30 → 34**. Second, the remaining criteria
+concentrate in granular-fact extraction (the salience-ranking gap described in *Honest status*
+above), which a model swap alone does not clear — the architecture, not the model, is the next
+lever. The task is still not passed; the climb continues.
+
+*(`{{SONNET_SCORE}}` is a literal placeholder — a Sonnet-tier run is in progress and the number
+is patched in when it lands.)*

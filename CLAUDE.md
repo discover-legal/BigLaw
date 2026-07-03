@@ -19,6 +19,21 @@ spine, billing (pre-bills, LEDES, invoice validation, OCG checks), docket/regula
 monitors, two-wave DyTopo with intra-round whiteboard + inter-round memory rollup, billable
 time tracking, and NOSLEGAL v4 taxonomy.
 
+**License: Apache-2.0** — a clean-room reimplementation of the document-production/tabular
+tools (spec: `docs/clean-room-spec-document-tools.md`) removed the last copyleft dependency;
+LICENSE/NOTICE/SPDX headers all swapped.
+
+**Negotiation intelligence + reviews (latest release):** counter-redline loop
+(`respond_to_redline` — parse opposing tracked changes, judge vs the playbook cascade, emit
+countered redlines + rationale cards), judge memory across rounds with standoff escalation,
+Redtime (`register_document_version`/`get_redline_timeline`, `GET /documents/:id/timeline` —
+per-clause negotiation timelines, silent-edit detection, playbook drift), Integrity Check
+(`check_document_integrity` — Unicode obfuscation + unmarked changes), persisted tabular
+reviews with a citation-verification ladder (exact → tolerant → paraphrase judge → ensemble;
+`GET /reviews/:id` + `/reviews/:id/table.csv`, landscape docx export), reviews + Redtime
+workbench views, `biglaw demo` (one-command end-to-end tour, ~$0.03), and BELO
+(`internal/ontology/` — epistemic ontology, graph-discovered section spine).
+
 ## Quick start
 
 **The platform is Go** (`biglaw-go/` — single static binary, runs on a Raspberry Pi 4GB or
@@ -144,6 +159,17 @@ Each DyTopo round:
 > `analyseEvidence` writes conclusions per locked quote). Synthesis routes through
 > `internal/orchestrator/orchestrator.go` `synthesise()` → `writeDeliverable()` when findings exceed
 > a single call's budget. These took local-model verbatim citation grounding from ~0% to ~94%.
+> Harvey LAB criteria: 0 → 30 → 34/60 (claude-haiku-4-5 on the pipeline; local qwen2.5:14b 27/60
+> on the same build; Sonnet-tier {{SONNET_SCORE}}/60) — a climb, not a pass.
+>
+> **Negotiation stack (Go-only):** `internal/tools/negotiate.go` (`respond_to_redline` —
+> counter-redlining with playbook judgment, judge memory + standoff escalation, rationale cards),
+> `internal/redtime/` + `internal/tools/redtime.go` (document version lineage, per-clause
+> timelines, silent-edit detection, playbook drift), `internal/tools/integrity.go`
+> (`check_document_integrity` — Unicode obfuscation + unmarked-change detection), and the
+> tabular-review citation-verification ladder (exact → tolerant → paraphrase judge → ensemble,
+> method + confidence per citation). Reviews persist through the store seam (sqlite/postgres);
+> `internal/ontology/` is BELO, the epistemic ontology behind the graph-discovered spine.
 
 | Path | What it does |
 |---|---|

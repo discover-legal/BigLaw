@@ -343,6 +343,10 @@ A real matter, mid-flight — the bench self-organising, then the cited result.
 | Manual setup | **One-command setup** — one curl, checks prereqs, seeds `.env`, brings up the Docker stack, done |
 | No deadline tracking | **Court deadline calculator** — FRCP, UK CPR, EU Competition rules; calendar vs business days, cited |
 | Info scattered across systems | **Big Michael hub-and-spoke briefing swarm** — pulls from Clio, iManage, Slack, Teams, Drive, SharePoint, email in parallel |
+| Redline ping-pong by hand | **Counter-redline loop** — opposing counsel's tracked changes parsed, judged clause-by-clause against the playbook cascade, answered with countered redlines + per-change rationale cards |
+| No negotiation memory | **Redtime** — per-clause timelines across negotiation rounds with silent-edit detection and playbook drift; the judge remembers prior rounds and escalates standoffs |
+| Inbound documents taken at face value | **Integrity Check** — Unicode-obfuscation scan (homoglyphs, zero-width, bidi) + unmarked-change detection on every ingest |
+| Unverifiable extraction grids | **Citation verification ladder** — every tabular-review citation checked exact → tolerant → paraphrase judge → ensemble, with method + confidence per citation and a verified tally on the export |
 
 ---
 
@@ -457,10 +461,14 @@ trade count). Four mechanisms make completeness structural rather than emergent:
   model.)
 
 Benchmarked on Harvey **LAB** (Legal Agent Benchmark, all-pass 60-criterion rubric, white-collar
-SEC-referral task): criterion pass rate climbed from 10 → **22/60** as these mechanisms landed — the
-architecture extracting hard, grounded, figure-rich legal substance (exact amounts, rates, account
-numbers, trade counts, statutory cites) on a local 7B. LAB scores a *task* 1.0 only on a perfect 60/60,
-so the criterion pass rate — not the binary task score — is the meaningful signal.
+SEC-referral task): the criterion pass rate has climbed 0 → 30 → **34/60** as the orchestration
+techniques landed — the architecture extracting hard, grounded, figure-rich legal substance (exact
+amounts, rates, account numbers, trade counts, statutory cites). The 34 is claude-haiku-4-5 on the
+BigLaw pipeline (18.5 min); a local qwen2.5:14b scores 27/60 on the same build; a Sonnet-tier run
+lands at {{SONNET_SCORE}}/60 (judge: claude-sonnet-4-6 throughout, rubric hidden from the agents).
+LAB scores a *task* 1.0 only on a perfect 60/60 — the task is **not yet passed**; the criterion
+count, not the binary score, is the meaningful signal. Technique-by-technique account:
+[`docs/local-accuracy-journey.md`](docs/local-accuracy-journey.md).
 
 **Q-learning agent recruitment** (`biglaw-go/internal/learning/`):
 
@@ -560,8 +568,11 @@ Agents act through a typed tool registry (`biglaw-go/internal/tools/`). Highligh
 | `extract_from_document` | Structured extraction — parties, dates, amounts, obligations, defined terms |
 | `fetch_documents` | Fetch up to 20 documents by ID in one call |
 | `query_memory` | Query the inter-round memory store |
-| `tabular_review` | Multi-doc × multi-column extraction matrix with RAG flags + pinpoint citations (50 docs × 30 columns) |
+| `tabular_review` | Multi-doc × multi-column extraction matrix with RAG flags + **verified** pinpoint citations (exact → tolerant → paraphrase judge → ensemble ladder; 50 docs × 30 columns), persisted via SQLite/Postgres with landscape `.docx` + CSV export |
 | `read_table_cells` | Read any column/row slice of a persisted review |
+| `respond_to_redline` | **Counter-redline loop** — parse opposing counsel's tracked changes, judge each against the playbook cascade, emit a `.response.docx` with countered redlines + rationale cards |
+| `register_document_version` · `get_redline_timeline` | **Redtime** — document lineage across negotiation rounds; per-clause timelines, silent-edit detection, playbook drift |
+| `check_document_integrity` | **Integrity Check** — Unicode-obfuscation scan (homoglyphs · zero-width · bidi) + unmarked-change detection |
 | `docx_generate` | Build a Word document (headings, prose, bullets, tables, landscape, page breaks) |
 | `edit_document` | **Tracked-changes redlining** of a `.docx` — minimal `<w:ins>`/`<w:del>` substitutions with smart-quote/whitespace-tolerant anchoring |
 | `replicate_document` | Byte-for-byte `.docx` copies to adapt as templates |
@@ -626,7 +637,8 @@ docker compose -f biglaw-go/docker-compose.yml up -d --build
 # Or run the core natively (Go 1.25+, from the repo root so templates/ and
 # deadlines/rules/ resolve):
 go run ./biglaw-go/cmd/biglaw           # REST API on :3101
-go run ./biglaw-go/cmd/biglaw demo      # 60-second guided demo — seeds a sample matter, produces real Word artifacts
+go run ./biglaw-go/cmd/biglaw demo      # one-command end-to-end tour: seed → tabular review →
+                                        # CP checklist → counter-redline (~$0.03 in live model calls)
 
 # Tests
 cd biglaw-go && go test ./...
@@ -641,7 +653,9 @@ BIG_MICHAEL_API=http://localhost:3102 npm run dev   # workbench on :5173
 ```
 
 Open **http://localhost:5173** — convene a matter, watch rounds stream live, approve gates,
-review contracts against your playbook, and pull cited findings and tabular-review CSVs.
+review contracts against your playbook, walk due-diligence grids with verification-state
+citation pills (click through to the highlighted source quote), follow Redtime negotiation
+timelines, and pull cited findings and tabular-review CSVs.
 
 ### Model stack, persistence & documents
 
@@ -1257,5 +1271,12 @@ It builds on one upstream, fully attributed in [`NOTICE`](NOTICE):
 - **Lavern** ("The Shem") — agent definitions & prompts (Apache-2.0)
 
 *"Lavern" and "The Shem" are the marks of their respective authors, used here only for attribution.*
+
+The document-production and tabular-review tools are a **clean-room reimplementation**: the
+previous copyleft-derived implementations were deleted from the tree *before* independent
+reimplementation from a published functional specification
+([`docs/clean-room-spec-document-tools.md`](docs/clean-room-spec-document-tools.md)), with signed
+non-exposure attestations from the implementers. That process removed the last copyleft dependency
+and is what made the Apache-2.0 relicense possible.
 
 <div align="center"><sub>Copyright © 2026 Discover Legal</sub></div>
