@@ -1,3 +1,5 @@
+[Docs](index.md) › Benchmarks & provenance › **Local accuracy journey**
+
 # From 0 to 30/60: getting a local model to do real legal extraction
 
 This is the technique-by-technique account of how BigLaw went from **0 to 30 of 60 rubric

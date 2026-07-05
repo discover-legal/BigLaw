@@ -615,8 +615,8 @@ Self-host: `docker compose -f docker-compose.prod.yml up -d` from the Infisical 
 > params). The Go API also adds routes the list below predates: playbooks, citations,
 > deadlines, matters (health/budget), dockets, regulatory, pre-bills/invoices/OCG, LPM
 > reports, client-voice, and `GET /time-entries/export.ledes`. The authoritative Go route
-> map is `biglaw-go/internal/api/` (one file per domain group); the README's REST API
-> section reflects it.
+> map is `biglaw-go/internal/api/` (one file per domain group); the people-facing reference
+> is `docs/integration/rest-api.md` and reflects it.
 
 ```
 POST   /tasks                       submit task (accepts jurisdiction, clientNumber, matterNumber)
@@ -745,8 +745,8 @@ When `AUTH_ENABLED=true`, identity comes from OAuth (Google/Microsoft/LinkedIn)
 and every request carries a `SessionUser` from the signed session cookie. A
 **partner** sees all matters and manages assignment; a **lawyer** sees only
 matters assigned to them. Locally (`AUTH_ENABLED=false`) every request is a
-single local partner. See `src/auth/` and the README "Lawyers, roles & access
-control" section. Access rules are unit-tested (`npm test`).
+single local partner. See `src/auth/` and `docs/operations/access-control.md`.
+Access rules are unit-tested (`npm test`).
 
 ### Practice area classification
 
