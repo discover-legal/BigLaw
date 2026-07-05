@@ -2056,7 +2056,10 @@ func (o *Orchestrator) buildEvidenceGraph(task *types.Task, prov providers.Provi
 	if figModel == "" {
 		figModel = model
 	}
-	if figs := o.harvestAndBindFigures(task, g, prov, figModel); len(figs) > 0 {
+	// The harvest's second return value is its raw normalized figureHit records —
+	// the seam detectCrossDocDiscrepancies notes: feed them to crossDocFindings and
+	// crossdoc's own duplicate full-corpus sweep can be dropped (follow-up wiring).
+	if figs, _ := o.harvestAndBindFigures(task, g, prov, figModel); len(figs) > 0 {
 		o.update(task, func(t *types.Task) { t.Findings = append(t.Findings, figs...) })
 		slog.Info("figure harvest seeded findings", "task", task.ID, "n", len(figs), "model", figModel, "graph_facts_after", g.Len())
 	}

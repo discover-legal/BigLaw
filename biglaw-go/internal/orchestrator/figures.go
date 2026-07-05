@@ -14,6 +14,7 @@ import (
 
 	"github.com/discover-legal/biglaw-go/internal/cost"
 	"github.com/discover-legal/biglaw-go/internal/evidencegraph"
+	"github.com/discover-legal/biglaw-go/internal/pageindex"
 	"github.com/discover-legal/biglaw-go/internal/providers"
 	"github.com/discover-legal/biglaw-go/internal/routing"
 	"github.com/discover-legal/biglaw-go/internal/strutil"
@@ -32,6 +33,12 @@ import (
 // queries, so a semantic sweep never sees them. Reading every chunk is the only way to
 // guarantee the floor, and it's the precondition for contradiction detection (you can't flag
 // "referral says 4,217 but the log says 4,312" unless you've read both sides).
+//
+// Chunking rides the document's PageIndex section tree (sectionChunks): every section visited
+// exactly once, in document order, windows never straddling a section boundary — so the same
+// corpus in yields the same evidence pool out, and a section's total is never separated from
+// its components by a blind fixed-size cut. Section/rule/item identifiers are additionally
+// harvested mechanically as first-class handles (harvestSectionHandles).
 
 // figureHit is one model-extracted figure: the value, the verbatim span that grounds it, the
 // party/thing it concerns, what quantity it MEASURES (for contradiction grouping), and the
@@ -136,17 +143,208 @@ func contextWindow(chunk, quote string, pad int) string {
 	return strings.TrimSpace(strings.Join(strings.Fields(w), " "))
 }
 
+// ─── Saturation walk: deterministic, section-aligned document cover ───────────
+
+// sectionChunks coalesces a document's PageIndex section bodies, in pre-order, into
+// windows of at most maxTok estimated tokens. Pre-order Body concatenation reproduces
+// the source byte-for-byte (the pageindex invariant), so every section is visited
+// exactly once and the windows cover the whole document deterministically — the same
+// text in yields the same chunks out, killing the run-to-run harvest lottery. A window
+// never straddles a section boundary unless a single section's own body exceeds the
+// budget (then that body alone is split on line boundaries), so a section's figure
+// list is not cut mid-table and a total stays in the same window as its components.
+//
+// Invariant: strings.Join(sectionChunks(text, n), "") == text — no byte dropped,
+// none duplicated. Consumers skip whitespace-only windows themselves.
+func sectionChunks(text string, maxTok int) []string {
+	var bodies []string
+	var walk func(secs []pageindex.Section)
+	walk = func(secs []pageindex.Section) {
+		for i := range secs {
+			if secs[i].Body != "" {
+				bodies = append(bodies, secs[i].Body)
+			}
+			walk(secs[i].Children)
+		}
+	}
+	walk(pageindex.Parse(text))
+	var chunks []string
+	var cur strings.Builder
+	tok := 0
+	flush := func() {
+		if cur.Len() > 0 {
+			chunks = append(chunks, cur.String())
+		}
+		cur.Reset()
+		tok = 0
+	}
+	for _, body := range bodies {
+		bt := strutil.EstimateTokens(body)
+		if bt > maxTok {
+			flush()
+			chunks = append(chunks, splitBodyByTokens(body, maxTok)...)
+			continue
+		}
+		if tok+bt > maxTok {
+			flush()
+		}
+		cur.WriteString(body)
+		tok += bt
+	}
+	flush()
+	return chunks
+}
+
+// splitBodyByTokens splits ONE oversized section body into ≤maxTok windows on
+// line boundaries, preserving every byte (terminators included) so window
+// concatenation reproduces the body exactly. A single line larger than the
+// whole budget stays whole — the line is the atom (a table row must not split).
+func splitBodyByTokens(body string, maxTok int) []string {
+	var chunks []string
+	start, cur, tok := 0, 0, 0
+	for cur < len(body) {
+		lineEnd := len(body)
+		if nl := strings.IndexByte(body[cur:], '\n'); nl >= 0 {
+			lineEnd = cur + nl + 1
+		}
+		lt := strutil.EstimateTokens(body[cur:lineEnd])
+		if tok > 0 && tok+lt > maxTok {
+			chunks = append(chunks, body[start:cur])
+			start, tok = cur, 0
+		}
+		tok += lt
+		cur = lineEnd
+	}
+	if start < len(body) {
+		chunks = append(chunks, body[start:])
+	}
+	return chunks
+}
+
+// sectionHandle is a document-structure or statutory identifier recorded as a
+// first-class figure handle — "Section 9.1", "Item 6", "Rule 204A-1", "§ 2462".
+// Criteria chronically fail when the identifier itself never lands in the
+// evidence pool; the LLM figure pass catches them only when the sampling gods
+// smile, so these are harvested MECHANICALLY (deterministic, grounded by
+// construction: every quote is a verbatim slice of the source).
+type sectionHandle struct {
+	Handle string // the identifier, normalized for dedup ("Section 9.1", "Rule 204A-1")
+	Quote  string // verbatim grounding: the heading line or the containing sentence
+}
+
+// reInlineCite matches statutory/rule/item identifiers cited inline in running
+// text: "Section 206(4)", "Rule 204A-1", "Item 6", "§ 2462", "Exhibit 3". Kept
+// consistent with the writer's reSalientCite (the handle path citations ride
+// into): same keyword set, digit-led identifiers only — roman-numbered
+// headings ("Article IV") are caught by the section-tree walk, not this scan.
+var reInlineCite = regexp.MustCompile(`(?:§+\s*|\b(?i:Section|Rule|Item|Part|Article|Clause|Paragraph|Exhibit|Form)s?\s+)\d[\dA-Za-z]*(?:[.\-][\dA-Za-z]+)*(?:\([0-9a-zA-Z]+\))*`)
+
+// harvestSectionHandles walks one document's PageIndex tree (numbered headings,
+// each visited once, pre-order) and regex-scans its text (inline citations),
+// deterministically. Deduped by normalized handle; quote = first occurrence.
+func harvestSectionHandles(text string) []sectionHandle {
+	var out []sectionHandle
+	seen := map[string]bool{}
+	add := func(handle, quote string) {
+		h, q := strings.TrimSpace(handle), strings.TrimSpace(quote)
+		if h == "" || q == "" {
+			return
+		}
+		k := figNorm(h)
+		if seen[k] {
+			return
+		}
+		seen[k] = true
+		out = append(out, sectionHandle{Handle: h, Quote: q})
+	}
+	// 1) Section-tree headings. Alpha/roman sub-items get their parent's number
+	// prepended so "(a)" under "Section 9.1" lands as "Section 9.1(a)".
+	var walk func(secs []pageindex.Section, parentNum string)
+	walk = func(secs []pageindex.Section, parentNum string) {
+		for i := range secs {
+			s := &secs[i]
+			handle := s.Number
+			if (s.Scheme == pageindex.SchemeAlpha || s.Scheme == pageindex.SchemeRoman) && parentNum != "" {
+				handle = parentNum + s.Number
+			}
+			if s.Number != "" && s.Scheme != pageindex.SchemeRecital {
+				add(handle, firstLine(s.Body))
+			}
+			next := parentNum
+			if s.Number != "" {
+				next = handle
+			}
+			walk(s.Children, next)
+		}
+	}
+	walk(pageindex.Parse(text), "")
+	// 2) Inline statutory citations, grounded by their containing sentence.
+	for _, loc := range reInlineCite.FindAllStringIndex(text, -1) {
+		add(text[loc[0]:loc[1]], containingSentence(text, loc[0], loc[1]))
+	}
+	return out
+}
+
+// firstLine returns the first non-empty line of s, trimmed — for a section this
+// is its verbatim heading line.
+func firstLine(s string) string {
+	for _, ln := range strings.Split(s, "\n") {
+		if t := strings.TrimSpace(ln); t != "" {
+			return t
+		}
+	}
+	return ""
+}
+
+// containingSentence expands [start,end) to the surrounding sentence (bounded to
+// ±240 bytes and cut at sentence/line breaks), returning a verbatim slice.
+func containingSentence(text string, start, end int) string {
+	lo := start - 240
+	if lo < 0 {
+		lo = 0
+	}
+	hi := end + 240
+	if hi > len(text) {
+		hi = len(text)
+	}
+	// Back up to just after the previous sentence terminator / line break.
+	for i := start - 1; i >= lo; i-- {
+		if text[i] == '\n' || text[i] == '.' || text[i] == ';' {
+			lo = i + 1
+			break
+		}
+	}
+	// Run forward to the next terminator (inclusive for a period).
+	for i := end; i < hi; i++ {
+		if text[i] == '\n' || text[i] == ';' {
+			hi = i
+			break
+		}
+		if text[i] == '.' && (i+1 == len(text) || text[i+1] == ' ' || text[i+1] == '\n') {
+			hi = i + 1
+			break
+		}
+	}
+	return strings.TrimSpace(text[lo:hi])
+}
+
 // harvestAndBindFigures sweeps EVERY chunk of EVERY ingested document for figures, BINDS each
 // to the evidence-graph nodes it co-occurs with (so a figure rides along whenever its node is
 // rendered), surfaces cross-source CONTRADICTIONS as high-priority findings, and returns the
 // figure-bearing sentences as grounded findings for the floor. Deterministic and run-stable.
-func (o *Orchestrator) harvestAndBindFigures(task *types.Task, g *evidencegraph.Graph, prov providers.Provider, figModel string) []types.Finding {
+//
+// The second return value is the raw harvest: every grounded figureHit, already normalized to
+// canonical quantity labels (normalizeFigures), tagged with its source title. This is the seam
+// detectCrossDocDiscrepancies documents — feed these to crossDocFindings (skipping its own
+// sweep AND its normalizeFigures call) and crossdoc drops a duplicate full-corpus LLM sweep.
+func (o *Orchestrator) harvestAndBindFigures(task *types.Task, g *evidencegraph.Graph, prov providers.Provider, figModel string) ([]types.Finding, []figureHit) {
 	if prov == nil || figModel == "" {
-		return nil
+		return nil, nil
 	}
 	const (
-		perDocTokenCap  = 40000 // bound a pathological raw log; generous for real exhibits
-		perSourceFigCap = 30    // keep each doc represented (exhibits not crowded out by narrative)
+		perDocTokenCap     = 40000 // bound a pathological raw log; generous for real exhibits
+		perSourceFigCap    = 30    // keep each doc represented (exhibits not crowded out by narrative)
+		perSourceHandleCap = 20    // distinct section/statute handles seeded per document
 	)
 	var entities []string
 	if g != nil {
@@ -154,9 +352,12 @@ func (o *Orchestrator) harvestAndBindFigures(task *types.Task, g *evidencegraph.
 	}
 	lc := func(s string) string { return strings.ToLower(s) }
 
-	// FULL SWEEP: every document, every chunk — tagging each hit with its source doc so a
-	// discrepancy can name "[referral] vs [trading log]". No semantic retrieval gate.
-	var raw []figureHit
+	// FULL SWEEP: every document, walked over its PageIndex section tree — every section
+	// visited exactly once, deterministically (see sectionChunks) — tagging each hit with
+	// its source doc so a discrepancy can name "[referral] vs [trading log]". No semantic
+	// retrieval gate. Section/statute handles are harvested mechanically alongside, kept
+	// in their own pool so they never enter the contradiction machinery.
+	var raw, handles []figureHit
 	for _, docID := range task.DocumentIDs {
 		txt, err := o.knowledge.GetFullText(docID)
 		if err != nil || strings.TrimSpace(txt) == "" {
@@ -171,32 +372,41 @@ func (o *Orchestrator) harvestAndBindFigures(task *types.Task, g *evidencegraph.
 			swept = swept[:perDocTokenCap*4]
 			slog.Info("figure sweep truncated oversized doc", "task", task.ID, "doc", title)
 		}
-		for _, chunk := range chunkByTokens(swept, 1500) {
+		for _, chunk := range sectionChunks(swept, 1500) {
+			if strings.TrimSpace(chunk) == "" {
+				continue
+			}
 			for _, h := range extractFiguresLLM(prov, figModel, chunk) {
 				h.Source = title
 				raw = append(raw, h)
 			}
 		}
+		for _, sh := range harvestSectionHandles(swept) {
+			handles = append(handles, figureHit{Value: sh.Handle, Quote: sh.Quote, Source: title})
+		}
 	}
-	if len(raw) == 0 {
-		return nil
+	if len(raw) == 0 && len(handles) == 0 {
+		return nil, nil
 	}
 
-	// Bind every grounded figure to graph nodes (uncapped — the graph dedups). Binding lets a
-	// figure ride its node into synthesis; the graph also feeds contradiction detection.
-	for _, h := range raw {
-		ql := lc(h.Quote)
-		for _, e := range entities {
-			if e == "" {
-				continue
-			}
-			if strings.Contains(ql, lc(e)) || (h.Entity != "" && strings.Contains(lc(h.Entity), lc(e))) {
-				if g != nil {
-					rel := "has associated figure"
-					if h.Measures != "" {
-						rel = "measures " + h.Measures
+	// Bind every grounded figure AND handle to graph nodes (uncapped — the graph dedups).
+	// Binding lets a figure ride its node into synthesis; the graph also feeds
+	// contradiction detection (handles stay out of that — see below).
+	for _, pool := range [][]figureHit{raw, handles} {
+		for _, h := range pool {
+			ql := lc(h.Quote)
+			for _, e := range entities {
+				if e == "" {
+					continue
+				}
+				if strings.Contains(ql, lc(e)) || (h.Entity != "" && strings.Contains(lc(h.Entity), lc(e))) {
+					if g != nil {
+						rel := "has associated figure"
+						if h.Measures != "" {
+							rel = "measures " + h.Measures
+						}
+						g.Add(evidencegraph.Fact{Subject: e, Relation: rel, Value: h.Value, Quote: h.Quote, Source: h.Source}, h.Quote)
 					}
-					g.Add(evidencegraph.Fact{Subject: e, Relation: rel, Value: h.Value, Quote: h.Quote, Source: h.Source}, h.Quote)
 				}
 			}
 		}
@@ -254,7 +464,48 @@ func (o *Orchestrator) harvestAndBindFigures(task *types.Task, g *evidencegraph.
 			Timestamp:      time.Now(),
 		})
 	}
-	return out
+
+	// Section/statute HANDLE findings — the identifiers themselves ("Section 9.1",
+	// "Rule 204A-1", "§ 2462") as first-class, mechanically-grounded findings, so a
+	// criterion keyed on the identifier can't miss just because the LLM pass didn't
+	// happen to copy it this run. Deduped against ordinary figure findings that
+	// already carry the identifier verbatim; bounded per source so structure never
+	// floods the floor (the old regex-figure failure mode).
+	emittedNorm := make([]string, 0, len(out))
+	for _, f := range out {
+		emittedNorm = append(emittedNorm, figNorm(f.Content))
+	}
+	perSrcHandles := map[string]int{}
+	for _, h := range handles {
+		if perSrcHandles[h.Source] >= perSourceHandleCap {
+			continue
+		}
+		nv := figNorm(h.Value)
+		dup := false
+		for _, e := range emittedNorm {
+			if strings.Contains(e, nv) {
+				dup = true
+				break
+			}
+		}
+		if dup {
+			continue
+		}
+		perSrcHandles[h.Source]++
+		emittedNorm = append(emittedNorm, figNorm(h.Quote))
+		out = append(out, types.Finding{
+			ID:             uuid.New().String(),
+			AgentID:        "section-handle-harvest",
+			AgentName:      "Section Handle Harvest",
+			Content:        h.Quote,
+			Citations:      []types.Citation{{Source: h.Source, Quote: h.Quote, MechanicallyVerified: true}},
+			Confidence:     0.9,
+			EvidenceStatus: types.EvidenceGrounded,
+			Round:          0,
+			Timestamp:      time.Now(),
+		})
+	}
+	return out, raw
 }
 
 // detectContradictions groups grounded figures by (entity, measures) and, where ≥2 distinct

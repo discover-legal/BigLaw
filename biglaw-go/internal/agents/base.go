@@ -75,15 +75,21 @@ type ToolContext struct {
 	ResponsibleLawyerID string
 }
 
+// ProviderRegistry resolves a model ID to its provider. *providers.Registry
+// satisfies it; tests substitute a scripted fake.
+type ProviderRegistry interface {
+	Get(modelID string) (providers.Provider, error)
+}
+
 // Agent wraps an AgentDefinition and runs the agentic loop.
 type Agent struct {
 	Def       types.AgentDefinition
 	cfg       *config.Config
-	providers *providers.Registry
+	providers ProviderRegistry
 	costs     *cost.Store
 }
 
-func NewAgent(def types.AgentDefinition, cfg *config.Config, prov *providers.Registry, costs *cost.Store) *Agent {
+func NewAgent(def types.AgentDefinition, cfg *config.Config, prov ProviderRegistry, costs *cost.Store) *Agent {
 	return &Agent{Def: def, cfg: cfg, providers: prov, costs: costs}
 }
 
@@ -152,9 +158,11 @@ func (a *Agent) Process(ctx AgentContext) ([]types.Finding, error) {
 	hasTools := ctx.ToolRegistry != nil && ctx.KnowledgeStore != nil &&
 		ctx.MemoryStore != nil && ctx.TaskID != "" && len(allowed) > 0
 
+	caps := capsFor(a.cfg, model)
+
 	var findings []types.Finding
 	if hasTools {
-		passages, loopText, lerr := a.runAgenticLoop(prompt, maxTokens, model, ctx, allowed)
+		passages, loopText, lerr := a.runAgenticLoop(prompt, maxTokens, model, ctx, allowed, caps)
 		if lerr != nil {
 			return nil, lerr
 		}
@@ -165,7 +173,7 @@ func (a *Agent) Process(ctx AgentContext) ([]types.Finding, error) {
 		// evidence verbatim by construction. With no retrieval (e.g. no documents),
 		// fall back to parsing the loop's own output.
 		if len(passages) > 0 {
-			findings = a.stagedFindings(ctx, passages, model)
+			findings = a.stagedFindings(ctx, passages, model, caps)
 		} else {
 			findings = parseFindings(loopText, a.Def)
 		}
@@ -212,13 +220,75 @@ func (a *Agent) Process(ctx AgentContext) ([]types.Finding, error) {
 	return findings, nil
 }
 
+// ─── Context-aware extraction caps ────────────────────────────────────────────
+
+// evidenceCaps are the transcription-funnel limits, sized to the model's context
+// window. The conservative values were tuned for the 8K local-model era and are
+// PRESERVED there (they are why a 14B on an 8GB GPU stays inside its window);
+// a 128K-class cloud model gets proportionally more so a 15K-token primary
+// document is no longer squeezed through a 1500-token keyhole. Explicit
+// AGENT_* env knobs win over the derived values (see config.AgentsConfig).
+type evidenceCaps struct {
+	// toolResultTokens bounds a single tool result fed back into the loop
+	// context (0 = uncapped). Evidence extraction always sees the full result.
+	toolResultTokens int
+	// passagesPerCall is how many passages one staged extraction call carries;
+	// extra passages roll into further batched calls rather than being dropped.
+	passagesPerCall int
+	// maxEvidence caps total locked verbatim quotes per agent per round.
+	maxEvidence int
+	// quoteTokens is the per-passage verbatim-quote budget (replaces the old
+	// "up to 2 complete sentences" rule — the cap is tokens, not sentences).
+	quoteTokens int
+	// passageTokens is the chunk size when a text-shaped tool result
+	// (read_document / read_section) is split into extraction passages.
+	passageTokens int
+}
+
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
+// capsFor derives the extraction caps from the model's context window, then
+// applies explicit env overrides. At the small floor (8K) every value equals
+// the historical constant, so the local 14B path is byte-for-byte unchanged.
+func capsFor(cfg *config.Config, model string) evidenceCaps {
+	ctx := cfg.ContextTokensFor(model)
+	caps := evidenceCaps{
+		toolResultTokens: clampInt(ctx/8, 1500, 24000),
+		passagesPerCall:  clampInt(ctx/4096, 8, 24),
+		maxEvidence:      clampInt(ctx/1024, 8, 48),
+		quoteTokens:      clampInt(ctx/64, 130, 600),
+		passageTokens:    clampInt(ctx/16, 450, 1500),
+	}
+	if v := cfg.Agents.MaxToolResultTokens; v >= 0 {
+		caps.toolResultTokens = v // 0 keeps its documented "uncapped" meaning
+	}
+	if v := cfg.Agents.MaxEvidencePassages; v > 0 {
+		caps.passagesPerCall = v
+	}
+	if v := cfg.Agents.MaxEvidencePerAgent; v > 0 {
+		caps.maxEvidence = v
+	}
+	if v := cfg.Agents.EvidenceQuoteTokens; v > 0 {
+		caps.quoteTokens = v
+	}
+	return caps
+}
+
 // ─── Agentic loop ─────────────────────────────────────────────────────────────
 
 // runAgenticLoop drives the agent to RETRIEVE the matter's documents via
 // search_knowledge and returns the verbatim passages it pulled (deduped). It does
 // NOT produce findings — those come from the staged extract→analyse path. finalText
 // is the model's own output, kept only as a fallback for the no-retrieval case.
-func (a *Agent) runAgenticLoop(initialPrompt string, maxTokens int, model string, ctx AgentContext, allowed []string) ([]retrievedPassage, string, error) {
+func (a *Agent) runAgenticLoop(initialPrompt string, maxTokens int, model string, ctx AgentContext, allowed []string, caps evidenceCaps) ([]retrievedPassage, string, error) {
 	toolSchemas := ctx.ToolRegistry.SchemasFor(allowed)
 	toolCtx := ToolContext{
 		KnowledgeStore:      ctx.KnowledgeStore,
@@ -293,7 +363,10 @@ func (a *Agent) runAgenticLoop(initialPrompt string, maxTokens int, model string
 					}
 					if isRetrievalTool(block.Name) {
 						retrieved = true
-						for _, p := range extractPassages(result) {
+						// Harvest BEFORE the loop-context truncation below: the
+						// evidence pool always sees the full result, even when the
+						// model's own context only gets a bounded view of it.
+						for _, p := range extractPassages(block.Name, block.Input, result, caps.passageTokens) {
 							if !seen[p.text] {
 								seen[p.text] = true
 								passages = append(passages, p)
@@ -303,7 +376,7 @@ func (a *Agent) runAgenticLoop(initialPrompt string, maxTokens int, model string
 				}
 				raw, _ := json.Marshal(result)
 				content := string(raw)
-				if maxTok := a.cfg.Agents.MaxToolResultTokens; maxTok > 0 {
+				if maxTok := caps.toolResultTokens; maxTok > 0 {
 					if trimmed := strutil.TruncateToTokens(content, maxTok); len(trimmed) < len(content) {
 						content = trimmed + "…[truncated]"
 					}
@@ -330,36 +403,127 @@ type retrievedPassage struct {
 	context string // optional: a table row's sheet + column headers, for understanding only
 }
 
-// extractPassages pulls the verbatim snippets out of a retrieval tool's result.
-// Returns nil for tools that don't carry document snippets.
-func extractPassages(result interface{}) []retrievedPassage {
+// extractPassages pulls the verbatim source text out of a retrieval tool's
+// result, whatever its shape:
+//
+//	{"results": [{snippet,…}]}  — search_chunks / extract_specifics / search_knowledge
+//	{"text": "…"}               — read_document / read_section (chunked to passages)
+//	{"matches": [{excerpt,…}]}  — find_in_document
+//
+// The text shape matters most: before it was handled, every read_document /
+// read_section call contributed ZERO evidence — agents opened the primary
+// document and none of it entered the pool. Long texts are chunked on line/word
+// boundaries into passageTokens-sized verbatim passages so the staged extractor
+// walks all of them instead of truncating the tail away.
+// Returns nil for tools that don't carry document text.
+func extractPassages(toolName string, input map[string]interface{}, result interface{}, passageTokens int) []retrievedPassage {
 	m, ok := result.(map[string]interface{})
 	if !ok {
 		return nil
 	}
-	rows, ok := m["results"].([]map[string]interface{})
-	if !ok {
-		return nil
-	}
-	var out []retrievedPassage
-	for _, r := range rows {
-		sn, _ := r["snippet"].(string)
-		sn = strings.TrimSpace(sn)
-		if sn == "" {
-			continue
+	if rows, ok := m["results"].([]map[string]interface{}); ok {
+		var out []retrievedPassage
+		for _, r := range rows {
+			sn, _ := r["snippet"].(string)
+			sn = strings.TrimSpace(sn)
+			if sn == "" {
+				continue
+			}
+			src, _ := r["title"].(string)
+			if src == "" {
+				if id, _ := r["id"].(string); id != "" {
+					src = id
+				} else {
+					src = "source"
+				}
+			}
+			ctx, _ := r["context"].(string)
+			out = append(out, retrievedPassage{source: src, text: sn, context: strings.TrimSpace(ctx)})
 		}
-		src, _ := r["title"].(string)
-		if src == "" {
-			if id, _ := r["id"].(string); id != "" {
-				src = id
-			} else {
-				src = "source"
+		return out
+	}
+	if text, ok := m["text"].(string); ok && strings.TrimSpace(text) != "" {
+		src := passageSource(m, input, toolName)
+		var out []retrievedPassage
+		for _, chunk := range chunkTextByTokens(text, passageTokens) {
+			if strings.TrimSpace(chunk) == "" {
+				continue
+			}
+			out = append(out, retrievedPassage{source: src, text: chunk})
+		}
+		return out
+	}
+	if rows, ok := m["matches"].([]map[string]interface{}); ok {
+		src := passageSource(m, input, toolName)
+		var out []retrievedPassage
+		for _, r := range rows {
+			if ex, _ := r["excerpt"].(string); strings.TrimSpace(ex) != "" {
+				out = append(out, retrievedPassage{source: src, text: strings.TrimSpace(ex)})
 			}
 		}
-		ctx, _ := r["context"].(string)
-		out = append(out, retrievedPassage{source: src, text: sn, context: strings.TrimSpace(ctx)})
+		return out
 	}
-	return out
+	return nil
+}
+
+// passageSource attributes a text-shaped tool result to its document: the
+// docId echoed in the result, else the doc_id the agent asked for, else the
+// tool name as a last resort.
+func passageSource(result, input map[string]interface{}, toolName string) string {
+	for _, m := range []map[string]interface{}{result, input} {
+		for _, k := range []string{"docId", "doc_id"} {
+			if v, _ := m[k].(string); strings.TrimSpace(v) != "" {
+				return strings.TrimSpace(v)
+			}
+		}
+	}
+	return toolName
+}
+
+// chunkTextByTokens splits text into windows of at most maxTok estimated
+// tokens, cutting on line boundaries (falling back to word boundaries inside a
+// single oversized line), so every chunk is verbatim source text an extracted
+// quote can be substring-verified against.
+func chunkTextByTokens(text string, maxTok int) []string {
+	if maxTok <= 0 {
+		maxTok = 450
+	}
+	var chunks, cur []string
+	tok := 0
+	flush := func() {
+		if len(cur) > 0 {
+			chunks = append(chunks, strings.Join(cur, "\n"))
+			cur, tok = nil, 0
+		}
+	}
+	for _, ln := range strings.Split(text, "\n") {
+		lt := strutil.EstimateTokens(ln)
+		if lt > maxTok {
+			// One line larger than the whole budget (a wall of unbroken prose):
+			// split it at word boundaries; each piece stays a verbatim slice.
+			flush()
+			rest := ln
+			for strutil.EstimateTokens(rest) > maxTok {
+				head := strutil.TruncateToTokens(rest, maxTok)
+				if head == "" || len(head) >= len(rest) {
+					break
+				}
+				chunks = append(chunks, head)
+				rest = strings.TrimLeft(rest[len(head):], " \t")
+			}
+			if strings.TrimSpace(rest) != "" {
+				chunks = append(chunks, rest)
+			}
+			continue
+		}
+		if tok+lt > maxTok {
+			flush()
+		}
+		cur = append(cur, ln)
+		tok += lt
+	}
+	flush()
+	return chunks
 }
 
 // ─── Staged finding generation: extract → analyse ──────────────────────────────
@@ -379,12 +543,11 @@ func extractPassages(result interface{}) []retrievedPassage {
 // anyway); the per-passage shape parallelises trivially on better hardware.
 const extractSystemPrompt = "You are a verbatim evidence extractor. You copy exact sentences out of a source passage, character-for-character. You never paraphrase, summarise, interpret, shorten, or add words. You only transcribe."
 
-const maxEvidencePerAgent = 8
-
-// maxEvidencePassages caps how many retrieved passages go into the single batched
-// extraction call, keeping the transcription prompt within the context window on
-// small local models.
-const maxEvidencePassages = 8
+// maxExtractCalls bounds the batched extraction fan-out per agent per round
+// (passages beyond passagesPerCall roll into further calls up to this many, so
+// a full read_document is walked rather than truncated — but a pathological
+// retrieval can't stall the round).
+const maxExtractCalls = 8
 
 type extractedEvidence struct{ quote, source string }
 
@@ -395,15 +558,15 @@ var (
 	reConclLine = regexp.MustCompile(`(?im)^\s*\[?(\d+)\]?[.):\s-]*(?:Conclusion\s*:\s*)?(.+\S)\s*$`)
 )
 
-func (a *Agent) stagedFindings(ctx AgentContext, passages []retrievedPassage, model string) []types.Finding {
+func (a *Agent) stagedFindings(ctx AgentContext, passages []retrievedPassage, model string, caps evidenceCaps) []types.Finding {
 	focus := oneLine(ctx.TaskDescription)
 	if rg := strings.TrimSpace(ctx.RoundGoal.Description); rg != "" {
 		focus += " — " + oneLine(rg)
 	}
 
-	// Stage 1 — EXTRACT: one batched transcription call over all passages (a single
-	// call so agents finish within the round timeout on local models).
-	evidence := a.extractEvidenceBatch(focus, passages, model, ctx.TaskID)
+	// Stage 1 — EXTRACT: batched transcription calls over all passages
+	// (passagesPerCall per call, up to maxExtractCalls).
+	evidence := a.extractEvidenceBatch(focus, passages, model, ctx.TaskID, caps)
 	if len(evidence) == 0 {
 		return nil
 	}
@@ -436,21 +599,44 @@ func (a *Agent) stagedFindings(ctx AgentContext, passages []retrievedPassage, mo
 	return findings
 }
 
-// extractEvidenceBatch runs ONE lean, persona-free transcription call over ALL
-// retrieved passages at once and returns the verbatim sentences it copied, each
+// extractEvidenceBatch runs lean, persona-free transcription calls over the
+// retrieved passages — passagesPerCall passages per call, further calls (up to
+// maxExtractCalls) for the rest, so a long read_document is walked instead of
+// truncated — and returns the verbatim sentences the model copied, each
 // verified to be a substring of a source passage (anything paraphrased is
-// dropped — grounding by construction). Batching keeps each agent to a single
-// extraction call so it finishes within the round timeout on a local model.
-func (a *Agent) extractEvidenceBatch(focus string, passages []retrievedPassage, model, taskID string) []extractedEvidence {
+// dropped — grounding by construction).
+func (a *Agent) extractEvidenceBatch(focus string, passages []retrievedPassage, model, taskID string, caps evidenceCaps) []extractedEvidence {
 	prov, err := a.providers.Get(model)
 	if err != nil || len(passages) == 0 {
 		return nil
 	}
-	if len(passages) > maxEvidencePassages {
-		passages = passages[:maxEvidencePassages]
+	var out []extractedEvidence
+	seenQ := map[string]bool{}
+	for call := 0; call < maxExtractCalls && len(passages) > 0 && len(out) < caps.maxEvidence; call++ {
+		batch := passages
+		if len(batch) > caps.passagesPerCall {
+			batch = batch[:caps.passagesPerCall]
+		}
+		passages = passages[len(batch):]
+		out = a.extractEvidenceCall(prov, focus, batch, model, taskID, caps, out, seenQ)
 	}
+	return out
+}
+
+// extractEvidenceCall is one transcription call over one batch of passages. New
+// verified evidence is appended to acc (deduped via seenQ) up to caps.maxEvidence.
+//
+// The extraction rule is fact-bearing-sentence, not sentence-count: every
+// sentence carrying a figure, date, dollar amount, percentage, count, account
+// number, statutory/section/rule citation, or named party is copied, and
+// CONTIGUOUS fact-bearing sentences stay together in one quote — so a total
+// introduced by a colon carries through its component list (the $92,600 case),
+// and a number-bearing sentence is not skipped in favour of its elaboration
+// (the "forty-seven (47) deleted files" case). The per-passage cap is a token
+// budget (caps.quoteTokens), not a sentence count.
+func (a *Agent) extractEvidenceCall(prov providers.Provider, focus string, batch []retrievedPassage, model, taskID string, caps evidenceCaps, acc []extractedEvidence, seenQ map[string]bool) []extractedEvidence {
 	var b strings.Builder
-	for i, p := range passages {
+	for i, p := range batch {
 		if p.context != "" {
 			// Table row: show the column context so the model understands a cryptic
 			// row, but it copies only the row text (the substring check below verifies
@@ -460,17 +646,17 @@ func (a *Agent) extractEvidenceBatch(focus string, passages []retrievedPassage, 
 			fmt.Fprintf(&b, "PASSAGE %d:\n%s\n\n", i+1, p.text)
 		}
 	}
-	user := fmt.Sprintf("Task focus: %s\n\nBelow are %d source PASSAGES. From EACH passage, copy out up to 2 complete sentences OR table/data rows, WORD-FOR-WORD, that are most relevant to the task focus — INCLUDE specific figures, amounts, dates, percentages, account numbers, and citations exactly as written. Copy character-for-character — do not paraphrase, summarise, shorten, or fix anything. For a table row, copy the row text itself (not the parenthetical column context). Put each on its own line, prefixed with its passage number like:\n[1] QUOTE: <exact text>\nSkip any passage with nothing relevant. Output only QUOTE lines.\n\n%s", focus, len(passages), b.String())
+	user := fmt.Sprintf("Task focus: %s\n\nBelow are %d source PASSAGES. From EACH passage, copy out, WORD-FOR-WORD, every sentence that carries a specific fact relevant to the task focus — a figure, count, date, dollar amount, percentage, account number, statutory/section/rule citation (e.g. \"Section 9.1\", \"Rule 204A-1\", \"§ 2462\", \"Item 6\"), or named person or entity. Copy character-for-character — do not paraphrase, summarise, shorten, or fix anything. Keep CONTIGUOUS fact-bearing sentences together in ONE quote, in source order: when a sentence introduces components or a list with a colon, carry the quote THROUGH the list to its total — never stop at a colon. A passage may yield several QUOTE lines (one per contiguous group). Write each quote on a single line (replace the source's line breaks with spaces) and keep it under about %d words — if a passage holds more fact-bearing text than fits, prefer the sentences most relevant to the task focus. For a table row, copy the row text itself (not the parenthetical column context). Prefix each with its passage number like:\n[1] QUOTE: <exact text>\nSkip any passage with nothing relevant. Output only QUOTE lines.\n\n%s", focus, len(batch), caps.quoteTokens, b.String())
 	resp, err := prov.Chat(providers.ChatParams{
 		Model:       routing.ResolveModelID(model),
-		MaxTokens:   1200,
+		MaxTokens:   clampInt(len(batch)*caps.quoteTokens+200, 1200, 8000),
 		System:      extractSystemPrompt,
 		Messages:    []providers.Message{{Role: "user", Content: user}},
 		CacheSystem: true,
 		Temperature: a.cfg.LLMTemperature,
 	})
 	if err != nil {
-		return nil
+		return acc
 	}
 	a.recordCost(resp, model, cost.ContextTask, taskID)
 	var text string
@@ -479,16 +665,19 @@ func (a *Agent) extractEvidenceBatch(focus string, passages []retrievedPassage, 
 			text = bl.Text
 		}
 	}
-	npass := make([]string, len(passages))
-	for i, p := range passages {
+	npass := make([]string, len(batch))
+	for i, p := range batch {
 		npass[i] = normalizeWS(p.text)
 	}
-	var out []extractedEvidence
-	seenQ := map[string]bool{}
 	for _, m := range reQuoteLine.FindAllStringSubmatch(text, -1) {
 		q := strings.TrimSpace(strings.Trim(strings.TrimSpace(m[2]), `"`))
 		if q == "" {
 			continue
+		}
+		// Runaway guard: a quote far past the budget is cut on a word boundary.
+		// TruncateToTokens returns a verbatim prefix, so it still substring-verifies.
+		if strutil.EstimateTokens(q) > 2*caps.quoteTokens {
+			q = strutil.TruncateToTokens(q, 2*caps.quoteTokens)
 		}
 		nq := normalizeWS(q)
 		if seenQ[nq] {
@@ -497,12 +686,12 @@ func (a *Agent) extractEvidenceBatch(focus string, passages []retrievedPassage, 
 		// Verify against the tagged passage first, then any passage; drop if it is
 		// not a verbatim substring anywhere (paraphrase guard).
 		src := ""
-		if idx, e := strconv.Atoi(m[1]); e == nil && idx >= 1 && idx <= len(passages) && strings.Contains(npass[idx-1], nq) {
-			src = passages[idx-1].source
+		if idx, e := strconv.Atoi(m[1]); e == nil && idx >= 1 && idx <= len(batch) && strings.Contains(npass[idx-1], nq) {
+			src = batch[idx-1].source
 		} else {
 			for j := range npass {
 				if strings.Contains(npass[j], nq) {
-					src = passages[j].source
+					src = batch[j].source
 					break
 				}
 			}
@@ -511,12 +700,12 @@ func (a *Agent) extractEvidenceBatch(focus string, passages []retrievedPassage, 
 			continue
 		}
 		seenQ[nq] = true
-		out = append(out, extractedEvidence{quote: q, source: src})
-		if len(out) >= maxEvidencePerAgent {
+		acc = append(acc, extractedEvidence{quote: q, source: src})
+		if len(acc) >= caps.maxEvidence {
 			break
 		}
 	}
-	return out
+	return acc
 }
 
 // analyseEvidence runs one fan-in call that writes a conclusion per locked quote,
@@ -534,8 +723,10 @@ func (a *Agent) analyseEvidence(ctx AgentContext, quotes, sources []string, mode
 	user := fmt.Sprintf("TASK: %s\nROUND GOAL (Round %d — %s): %s\n\nBelow are verbatim EVIDENCE quotes already extracted from the matter's documents. For EACH numbered item, write ONE concise CONCLUSION — your legal analysis of what that evidence shows for the task. Do NOT alter, re-quote, or merge the evidence; analyse each item on its own. Output exactly one line per item:\n[1] Conclusion: <your analysis>\n[2] Conclusion: <your analysis>\n\nEVIDENCE:\n%s",
 		oneLine(ctx.TaskDescription), ctx.RoundGoal.Round, ctx.RoundGoal.Phase, oneLine(ctx.RoundGoal.Description), b.String())
 	resp, err := prov.Chat(providers.ChatParams{
-		Model:       routing.ResolveModelID(model),
-		MaxTokens:   1500,
+		Model: routing.ResolveModelID(model),
+		// One conclusion line per quote; scale the output budget with the
+		// evidence count now that large-context models lock more than 8 quotes.
+		MaxTokens:   clampInt(len(quotes)*90+300, 1500, 6000),
 		System:      a.Def.SystemPrompt,
 		Messages:    []providers.Message{{Role: "user", Content: user}},
 		CacheSystem: true,

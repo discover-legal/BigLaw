@@ -4,6 +4,8 @@
 package config
 
 import (
+	"net"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -81,6 +83,12 @@ type ModelConfig struct {
 	Mid        string
 	Light      string
 	Vision     string
+	// ContextTokens, when > 0, declares the context window (in tokens) of the
+	// models in play, overriding the heuristic in ContextTokensFor. Set it when
+	// the heuristic guesses wrong — e.g. a self-hosted vLLM on the LAN serving a
+	// 128K model (heuristic says small), or a cloud endpoint fronting a small
+	// model. Env: MODEL_CONTEXT_TOKENS (default 0 = auto).
+	ContextTokens int
 }
 
 type EmbeddingsConfig struct {
@@ -124,8 +132,30 @@ type AgentsConfig struct {
 	// defaults qwen to ~4K tokens), so an unbounded retrieval can evict the finding
 	// instructions and the model's own output. Bounded reads keep the loop on the
 	// tool-calling path without overflowing the window; the cut lands on a word
-	// boundary. 0 disables the cap.
+	// boundary. Note the cap bounds only what re-enters the LOOP context — the
+	// staged evidence extractor consumes the full, untruncated result, so a long
+	// read_document never loses facts to this cap. -1 (the default) sizes the cap
+	// to the model's context window (see ContextTokensFor: 1500 for small/local
+	// models, larger for 128K-class models); 0 disables the cap; > 0 is a fixed
+	// override. Env: AGENT_MAX_TOOL_RESULT_TOKENS.
 	MaxToolResultTokens int
+	// MaxEvidencePassages caps how many retrieved passages go into ONE staged
+	// evidence-extraction call (passages beyond it roll into further batched
+	// calls, they are not dropped). 0 (default) = auto by model context window:
+	// 8 on small/local models, more on 128K-class models.
+	// Env: AGENT_MAX_EVIDENCE_PASSAGES.
+	MaxEvidencePassages int
+	// MaxEvidencePerAgent caps the total verbatim evidence quotes one agent locks
+	// per round across all extraction batches. 0 (default) = auto by model context
+	// window: 8 on small/local models, up to 48 on 128K-class models.
+	// Env: AGENT_MAX_EVIDENCE_PER_AGENT.
+	MaxEvidencePerAgent int
+	// EvidenceQuoteTokens is the per-passage token budget for one verbatim quote
+	// (the extractor copies every fact-bearing sentence up to this budget —
+	// sentence count is no longer the limit, so a colon-introduced list stays
+	// attached to its total). 0 (default) = auto by model context window.
+	// Env: AGENT_EVIDENCE_QUOTE_TOKENS.
+	EvidenceQuoteTokens int
 	// RoundTimeoutMs is the wall-clock cap on a single agent's processing
 	// within a round. Prevents one hung provider/tool call from stalling the
 	// whole round indefinitely.
@@ -542,7 +572,10 @@ func Load() *Config {
 		},
 		Agents: AgentsConfig{
 			MaxToolIterations:   envInt("AGENT_MAX_TOOL_ITERATIONS", 6),
-			MaxToolResultTokens: envInt("AGENT_MAX_TOOL_RESULT_TOKENS", 1500),
+			MaxToolResultTokens: envInt("AGENT_MAX_TOOL_RESULT_TOKENS", -1),
+			MaxEvidencePassages: envInt("AGENT_MAX_EVIDENCE_PASSAGES", 0),
+			MaxEvidencePerAgent: envInt("AGENT_MAX_EVIDENCE_PER_AGENT", 0),
+			EvidenceQuoteTokens: envInt("AGENT_EVIDENCE_QUOTE_TOKENS", 0),
 			RoundTimeoutMs:      envInt("AGENT_ROUND_TIMEOUT_MS", 300000),
 			GrantRetrievalTools: envBool("AGENT_GRANT_RETRIEVAL_TOOLS", true),
 			RequireRetrieval:    envBool("AGENT_REQUIRE_RETRIEVAL", true),
@@ -833,7 +866,68 @@ func loadModelStack() ModelConfig {
 	m.Mid = env("MODEL_MID", m.Mid)
 	m.Light = env("MODEL_LIGHT", m.Light)
 	m.Vision = env("MODEL_VISION", m.Vision)
+	m.ContextTokens = envInt("MODEL_CONTEXT_TOKENS", 0)
 	return m
+}
+
+// ─── Model context-window heuristic ──────────────────────────────────────────
+
+// Context-window classes for ContextTokensFor. The small class is the local /
+// Ollama era the original extraction caps were tuned for (Ollama's default
+// num_ctx); the large class is the 128K-class window every current cloud stack
+// (Qwen/GLM/Kimi/OpenAI/Claude tiers) ships.
+const (
+	SmallContextTokens = 8192
+	LargeContextTokens = 131072
+)
+
+// ContextTokensFor estimates the context window (in tokens) of the model behind
+// a routing model ID, so evidence/tool-result caps can scale with what the
+// model can actually hold instead of assuming the 4K local floor everywhere.
+//
+//	MODEL_CONTEXT_TOKENS set        → that value, always (the explicit override)
+//	"ollama:…"                      → small (Ollama's default num_ctx is 4–8K)
+//	"local:…" at a LAN/loopback URL → small (LM Studio / vLLM on local hardware)
+//	"local:…" at a cloud URL        → large (the OPENAI_MODEL shortcut and other
+//	                                  hosted endpoints route through "local:")
+//	bare stack IDs (qwen-max, …)    → large (every supported stack is 128K-class)
+//
+// Deliberately conservative: an unrecognisable case degrades to small, which
+// only costs recall throughput, never a blown context window.
+func (c *Config) ContextTokensFor(model string) int {
+	if c.Model.ContextTokens > 0 {
+		return c.Model.ContextTokens
+	}
+	switch {
+	case strings.HasPrefix(model, "ollama:"):
+		return SmallContextTokens
+	case strings.HasPrefix(model, "local:"):
+		if isCloudEndpoint(c.Local.LocalInferenceURL) {
+			return LargeContextTokens
+		}
+		return SmallContextTokens
+	}
+	return LargeContextTokens
+}
+
+// isCloudEndpoint reports whether a base URL points at a hosted endpoint rather
+// than local/LAN hardware. Loopback, private, link-local, and *.local/*.lan/
+// *.internal (incl. host.docker.internal) hosts are local; a resolvable public
+// hostname is cloud.
+func isCloudEndpoint(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Hostname() == "" {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "localhost" || strings.HasSuffix(host, ".local") ||
+		strings.HasSuffix(host, ".lan") || strings.HasSuffix(host, ".internal") {
+		return false
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return !(ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified())
+	}
+	return strings.Contains(host, ".")
 }
 
 // Has returns true if the named environment variable is set and non-empty.
