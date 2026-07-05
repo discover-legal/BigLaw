@@ -2059,7 +2059,10 @@ func (o *Orchestrator) buildEvidenceGraph(task *types.Task, prov providers.Provi
 	// The harvest's second return value is its raw normalized figureHit records —
 	// the seam detectCrossDocDiscrepancies notes: feed them to crossDocFindings and
 	// crossdoc's own duplicate full-corpus sweep can be dropped (follow-up wiring).
-	if figs, _ := o.harvestAndBindFigures(task, g, prov, figModel); len(figs) > 0 {
+	// On compliance matters the raw records feed the deviation pass's mechanical
+	// numeric join (deviationNumericJoin) below.
+	figs, rawFigs := o.harvestAndBindFigures(task, g, prov, figModel)
+	if len(figs) > 0 {
 		o.update(task, func(t *types.Task) { t.Findings = append(t.Findings, figs...) })
 		slog.Info("figure harvest seeded findings", "task", task.ID, "n", len(figs), "model", figModel, "graph_facts_after", g.Len())
 	}
@@ -2075,7 +2078,7 @@ func (o *Orchestrator) buildEvidenceGraph(task *types.Task, prov providers.Provi
 	// ("residuary should be 40/35/25, draft has …"), not a description of each requirement. Runs
 	// on the spine model. Enforcement matters use the figure-discrepancy path instead.
 	if o.routeMatter(g) == modeCompliance {
-		if devs := o.detectDeviations(task, g, spineProv, spineModel); len(devs) > 0 {
+		if devs := o.detectDeviations(task, g, spineProv, spineModel, rawFigs, prov, figModel); len(devs) > 0 {
 			o.update(task, func(t *types.Task) { t.Findings = append(t.Findings, devs...) })
 			slog.Info("deviations detected", "task", task.ID, "n", len(devs))
 		}
