@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -48,13 +49,15 @@ func NewOllamaProvider(cfg *config.Config) *OllamaProvider {
 // NewOpenAICompatProvider builds a provider against any OpenAI-compatible chat
 // completions endpoint — local (Ollama, LM Studio, vLLM, llama.cpp) or hosted
 // (DashScope/Qwen, Moonshot/Kimi, Zhipu/GLM, OpenAI, DeepSeek). baseURL may or
-// may not include a trailing /v1; Chat() always appends /v1/chat/completions.
+// may not include a version suffix; Chat() appends the completions path.
 func NewOpenAICompatProvider(baseURL, apiKey string) *OllamaProvider {
 	// The OpenAI convention (and our .env examples) is a base URL that already
 	// ends in /v1 — e.g. http://localhost:11434/v1. Chat() appends the full
 	// /v1/chat/completions path, so strip a trailing /v1 to avoid /v1/v1/.
 	// DashScope's compatible-mode path ends in /compatible-mode/v1 — the same
-	// /v1 strip applies.
+	// /v1 strip applies. Zhipu/Z.ai bases end in /v4 (api.z.ai/api/paas/v4):
+	// a non-/v1 version suffix is KEPT and Chat() appends only
+	// /chat/completions — appending /v1 there 404s every call.
 	baseURL = strings.TrimRight(baseURL, "/")
 	baseURL = strings.TrimSuffix(baseURL, "/v1")
 	return &OllamaProvider{
@@ -66,6 +69,10 @@ func NewOpenAICompatProvider(baseURL, apiKey string) *OllamaProvider {
 		client:                 &http.Client{Timeout: 300 * time.Second},
 	}
 }
+
+// reVersionedBase matches a base URL whose last path segment is already an
+// API version other than v1 (e.g. Zhipu/Z.ai's .../api/paas/v4).
+var reVersionedBase = regexp.MustCompile(`/v[2-9][0-9]*$`)
 
 // rejectsTemperature reports whether the target model refuses a sampling
 // temperature override. OpenAI-hosted gpt-5.x and o-series reasoning models
@@ -293,6 +300,11 @@ func (p *OllamaProvider) Chat(params ChatParams) (*ChatResponse, error) {
 
 	body, _ := json.Marshal(reqBody)
 	url := p.baseURL + "/v1/chat/completions"
+	// A base that already carries a non-/v1 version segment (Zhipu/Z.ai's
+	// /api/paas/v4) gets only the completions path — /v4/v1/... 404s.
+	if reVersionedBase.MatchString(p.baseURL) {
+		url = p.baseURL + "/chat/completions"
+	}
 	req, err := http.NewRequest("POST", url, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("ollama: build request: %w", err)
