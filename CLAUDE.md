@@ -165,9 +165,9 @@ Each DyTopo round:
 > record; prior verified peak 28). The fix wave closed the extraction transcription funnel
 > (full-text evidence ingest, context-aware caps, saturation section-walk), added cross-doc
 > numeric/date discrepancy joins, defense-lens analytics, and memo-grade authorship. Trust-
-> compare task (compare mode): Haiku 6→9/23 pre/post wave; local qwen record 12/23 — deviation-
-> path port in progress. A climb, not a pass. (The earlier "30/60" was a two-run union
-> coverage measure; single-run history is as above.)
+> compare task (compare mode): Haiku 6 → 9 → **14/23** (pre-wave → fix-wave → deviation-path
+> port e9b95f9), beating the deviation-tuned local qwen record of 12/23. A climb, not a pass.
+> (The earlier "30/60" was a two-run union coverage measure; single-run history is as above.)
 >
 > **Negotiation stack (Go-only):** `internal/tools/negotiate.go` (`respond_to_redline` —
 > counter-redlining with playbook judgment, judge memory + standoff escalation, rationale cards),

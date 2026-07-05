@@ -30,6 +30,19 @@ TypeScript implementation (autocannon, 50 concurrent connections; the Go numbers
 virtualization overhead the TS numbers don't). Full methodology and per-endpoint results:
 [`benchmarks-go-vs-ts.md`](benchmarks-go-vs-ts.md).
 
+## Compare mode — the trust-instruction task
+
+The second scored LAB task (`compare-trust-documents-against-client-instructions`, 23 criteria,
+same judge) exercises the deviation-detection path — compliance review rather than extraction.
+Its ledger, one build at a time: claude-haiku-4-5 scored **6/23** pre-fix-wave, **9/23** on the
+fix-wave build (the wave transfers without task-specific tuning), and **14/23** after the
+deviation-path port — passing the prior record of **12/23** held by a *local qwen2.5:14b* on the
+deviation-tuned arc. The port was evidence-led: the criterion diff showed the pipeline quoting
+requirements without adjudicating them, and one document masking another in blended retrieval —
+both fixed mechanically (per-document saturation retrieval, per-part verdicts, a grounded
+numeric join). Deviation summaries now withhold any value that cannot be substring-verified
+against source.
+
 ## Provenance of the numbers
 
 Benchmark claims in this repo have been through a forensics pass — corrected claims and their
