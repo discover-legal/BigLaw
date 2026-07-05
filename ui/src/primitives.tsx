@@ -9,6 +9,7 @@ const STATUS_PILL: Record<TaskStatus, string> = {
   awaiting_gate: "amber",
   complete: "green",
   failed: "red",
+  interrupted: "amber",
   pending: "",
 };
 

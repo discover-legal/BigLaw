@@ -4,7 +4,7 @@ export type WorkflowType =
   | "counsel" | "roundtable" | "adversarial" | "review" | "tabulate" | "full_bench";
 
 export type TaskStatus =
-  | "pending" | "running" | "awaiting_gate" | "complete" | "failed";
+  | "pending" | "running" | "awaiting_gate" | "complete" | "failed" | "interrupted";
 
 export type TaskPhase =
   | "intake" | "research" | "analysis" | "drafting" | "review" | "verification" | "delivery";
@@ -87,6 +87,14 @@ export interface RoundState {
   status: string;
   startedAt: string;
   completedAt?: string;
+  /** True when the round ended with zero findings from every active agent. */
+  starved?: boolean;
+}
+
+/** A round that completed with zero findings from all of its agents. */
+export interface StarvedRound {
+  round: number;
+  phase: TaskPhase;
 }
 
 export type LawyerRole = "lawyer" | "partner";
@@ -288,6 +296,8 @@ export interface Task {
   updatedAt: string;
   completedAt?: string;
   table?: TaskTable;
+  /** Non-empty means the run was degraded — rounds that produced zero findings. */
+  starvedRounds?: StarvedRound[];
 }
 
 export interface Template {

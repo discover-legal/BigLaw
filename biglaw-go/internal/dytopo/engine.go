@@ -7,7 +7,6 @@
 package dytopo
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -201,31 +200,14 @@ func (e *Engine) RunRound(task *types.Task, goal types.RoundGoal, lawyerTone *ty
 			// provider/tool call can't stall the whole round. Process takes
 			// an AgentContext, not a context.Context, so the deadline cannot
 			// be propagated into the call; the call is raced against it
-			// instead (mirroring the TS Promise.race) and its findings are
-			// discarded on timeout while the abandoned goroutine drains into
-			// the buffered channel.
-			tctx, cancel := context.WithTimeout(context.Background(), roundTimeout)
-			defer cancel()
-			type procResult struct {
-				findings []types.Finding
-				err      error
-			}
-			done := make(chan procResult, 1)
-			go func() {
-				findings, err := ag.Process(ctx)
-				done <- procResult{findings: findings, err: err}
-			}()
-			select {
-			case r := <-done:
-				if r.err != nil {
-					return nil
-				}
-				findingsCh[i] = r.findings
-			case <-tctx.Done():
-				slog.Warn("agent exceeded round timeout; recording no findings for it this round",
-					"agentId", ag.Def.ID, "round", goal.Round, "phase", goal.Phase,
-					"timeoutMs", e.cfg.Agents.RoundTimeoutMs)
-			}
+			// instead (mirroring the TS Promise.race). An agent that blows
+			// the budget gets ONE retry with an extended budget
+			// (× ROUND_TIMEOUT_RETRY_FACTOR) before the engine records no
+			// findings for it — under model contention the base budget alone
+			// silently zeroed entire rounds.
+			findingsCh[i] = processWithRetry(ag.Def.ID, goal.Round, goal.Phase,
+				roundTimeout, e.cfg.Resilience.RoundTimeoutRetryFactor,
+				func() ([]types.Finding, error) { return ag.Process(ctx) })
 			return nil
 		})
 	}
@@ -243,6 +225,11 @@ func (e *Engine) RunRound(task *types.Task, goal types.RoundGoal, lawyerTone *ty
 		}
 	}
 
+	// A round in which EVERY agent came back empty (timeout after retry, or
+	// error) is a degraded round, not a quiet one — surface it loudly so no
+	// downstream consumer mistakes a starved run for a completed one.
+	starved := e.surfaceStarvation(task.ID, roundID, goal, len(activeAgents), len(allFindings))
+
 	// Step 7: Persist round memory.
 	e.persistRoundMemory(task, goal, allFindings, intra)
 
@@ -257,6 +244,7 @@ func (e *Engine) RunRound(task *types.Task, goal types.RoundGoal, lawyerTone *ty
 		Status:         "complete",
 		StartedAt:      now,
 		CompletedAt:    &now,
+		Starved:        starved,
 	}
 
 	audit.Default.Write(audit.WriteRequest{
@@ -269,10 +257,111 @@ func (e *Engine) RunRound(task *types.Task, goal types.RoundGoal, lawyerTone *ty
 			"roundId":  roundID,
 			"findings": len(allFindings),
 			"edges":    len(edges),
+			"starved":  starved,
 		},
 	})
 
 	return state, nil
+}
+
+// processWithRetry races process against the per-agent round budget and, when
+// the budget is exceeded, retries once with an extended budget
+// (timeout × retryFactor, ROUND_TIMEOUT_RETRY_FACTOR) before giving up. The
+// call cannot be cancelled (Process takes an AgentContext, not a
+// context.Context), so the first attempt keeps running through the retry
+// window and whichever attempt lands first wins; abandoned goroutines drain
+// into their buffered channels. Returns nil when both attempts time out or
+// error — the caller's round-starvation check surfaces the aggregate.
+func processWithRetry(agentID string, round int, phase types.TaskPhase, timeout time.Duration, retryFactor float64, process func() ([]types.Finding, error)) []types.Finding {
+	type procResult struct {
+		findings []types.Finding
+		err      error
+	}
+	run := func() chan procResult {
+		ch := make(chan procResult, 1)
+		go func() {
+			findings, err := process()
+			ch <- procResult{findings: findings, err: err}
+		}()
+		return ch
+	}
+
+	first := run()
+	t1 := time.NewTimer(timeout)
+	defer t1.Stop()
+	select {
+	case r := <-first:
+		if r.err != nil {
+			return nil
+		}
+		return r.findings
+	case <-t1.C:
+	}
+
+	if retryFactor < 1 {
+		retryFactor = 1
+	}
+	retryBudget := time.Duration(float64(timeout) * retryFactor)
+	slog.Warn("agent exceeded round timeout; retrying once with extended budget",
+		"agentId", agentID, "round", round, "phase", phase,
+		"timeoutMs", timeout.Milliseconds(), "retryBudgetMs", retryBudget.Milliseconds())
+
+	second := run()
+	t2 := time.NewTimer(retryBudget)
+	defer t2.Stop()
+	// Receiving from a nil channel blocks forever, which disables that case —
+	// so each attempt is consumed at most once and an errored attempt drops
+	// out of the race without ending it.
+	for first != nil || second != nil {
+		select {
+		case r := <-first:
+			first = nil
+			if r.err == nil {
+				return r.findings
+			}
+		case r := <-second:
+			second = nil
+			if r.err == nil {
+				return r.findings
+			}
+		case <-t2.C:
+			slog.Warn("agent exceeded extended round timeout after retry; recording no findings for it this round",
+				"agentId", agentID, "round", round, "phase", phase,
+				"timeoutMs", timeout.Milliseconds(), "retryBudgetMs", retryBudget.Milliseconds())
+			return nil
+		}
+	}
+	return nil
+}
+
+// surfaceStarvation flags a round that ended with zero findings from every
+// active agent — the silent-zero failure that let a fully timed-out benchmark
+// run "complete" with all its epistemic rounds empty. It logs at error level
+// and emits a structured round.starved audit event; the returned flag rides
+// into RoundState.Starved (and, via the orchestrator, Task.StarvedRounds) so
+// any consumer can see the run was degraded.
+func (e *Engine) surfaceStarvation(taskID, roundID string, goal types.RoundGoal, agentCount, findingCount int) bool {
+	if agentCount == 0 || findingCount > 0 {
+		return false
+	}
+	slog.Error("round starved: zero findings from every agent this round",
+		"taskId", taskID, "round", goal.Round, "phase", goal.Phase, "agents", agentCount,
+		"timeoutMs", e.cfg.Agents.RoundTimeoutMs,
+		"retryFactor", e.cfg.Resilience.RoundTimeoutRetryFactor)
+	audit.Default.Write(audit.WriteRequest{
+		Event:   "round.starved",
+		ActorID: audit.ActorSystem,
+		TaskID:  taskID,
+		Data: map[string]interface{}{
+			"round":       goal.Round,
+			"phase":       goal.Phase,
+			"roundId":     roundID,
+			"agents":      agentCount,
+			"timeoutMs":   e.cfg.Agents.RoundTimeoutMs,
+			"retryFactor": e.cfg.Resilience.RoundTimeoutRetryFactor,
+		},
+	})
+	return true
 }
 
 // ─── Private helpers ──────────────────────────────────────────────────────────

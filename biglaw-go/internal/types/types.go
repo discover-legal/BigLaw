@@ -144,6 +144,18 @@ type RoundState struct {
 	Status         string              `json:"status"`
 	StartedAt      time.Time           `json:"startedAt"`
 	CompletedAt    *time.Time          `json:"completedAt,omitempty"`
+	// Starved is true when the round ended with zero findings from every
+	// active agent (each attempt — including the one extended-budget retry —
+	// timed out or errored). A starved round means the pipeline ran degraded;
+	// see the round.starved audit event and Task.StarvedRounds.
+	Starved bool `json:"starved,omitempty"`
+}
+
+// StarvedRound identifies a round that completed with zero findings from all
+// of its agents — the task-level annotation counterpart of RoundState.Starved.
+type StarvedRound struct {
+	Round int       `json:"round"`
+	Phase TaskPhase `json:"phase"`
 }
 
 // ─── Memory ──────────────────────────────────────────────────────────────────
@@ -315,6 +327,13 @@ const (
 	TaskStatusAwaitingGate TaskStatus = "awaiting_gate"
 	TaskStatusComplete     TaskStatus = "complete"
 	TaskStatusFailed       TaskStatus = "failed"
+	// TaskStatusInterrupted marks a task that was persisted mid-run ("running"
+	// or "awaiting_gate") and restored after a backend restart. Its runner
+	// goroutine died with the previous process, so the task cannot make
+	// progress: the boot-time quarantine sets this status (instead of silently
+	// leaving it "running" forever) and the task must be explicitly
+	// resubmitted. RESUME_RUNNING_TASKS=true restores the old behaviour.
+	TaskStatusInterrupted TaskStatus = "interrupted"
 )
 
 type NosLegalTags struct {
@@ -365,6 +384,12 @@ type Task struct {
 	// otherwise drops allegations from the deliverable that were found in the rounds).
 	Allegations       []string `json:"allegations,omitempty"`
 	ActiveTimeEntryID string   `json:"activeTimeEntryId,omitempty"`
+	// StarvedRounds records every round that completed with zero findings from
+	// all of its agents (see the round.starved audit event) — the signature of
+	// model contention or round timeouts. Non-empty means the run was degraded:
+	// consumers (UI, benchmark drivers) must not treat this task's output as a
+	// full-pipeline result.
+	StarvedRounds []StarvedRound `json:"starvedRounds,omitempty"`
 }
 
 // ─── Time tracking ───────────────────────────────────────────────────────────

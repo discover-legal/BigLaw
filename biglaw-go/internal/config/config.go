@@ -456,6 +456,30 @@ type Config struct {
 	Playbooks      PlaybooksConfig
 	LPM            LPMConfig
 	Monitors       MonitorsConfig
+	Resilience     ResilienceConfig
+}
+
+// ─── Run-hygiene resilience (round-timeout retry + boot task quarantine) ─────
+// Self-contained additive block. Consumers: internal/dytopo/engine.go (timeout
+// retry + round-starvation surfacing) and internal/orchestrator/restore.go
+// (stale-task quarantine at boot).
+
+// ResilienceConfig governs how the runtime degrades when agents blow their
+// round budget, and how tasks persisted mid-run are treated at boot.
+type ResilienceConfig struct {
+	// RoundTimeoutRetryFactor multiplies Agents.RoundTimeoutMs
+	// (AGENT_ROUND_TIMEOUT_MS) for the single retry granted to an agent that
+	// exceeds the round timeout, before the engine records no findings for it.
+	// 2.0 = the retry may take twice the base budget; values < 1 clamp to 1.
+	// Env: ROUND_TIMEOUT_RETRY_FACTOR (default 2.0).
+	RoundTimeoutRetryFactor float64
+	// ResumeRunningTasks restores the pre-quarantine boot behaviour: tasks
+	// restored from TASKS_FILE in a mid-run status ("running"/"awaiting_gate")
+	// keep that status even though no runner goroutine survives a restart.
+	// Default false: such tasks are marked "interrupted" (with a
+	// task.interrupted audit event) and must be explicitly resubmitted.
+	// Env: RESUME_RUNNING_TASKS (default false).
+	ResumeRunningTasks bool
 }
 
 // normalizeEnum returns v lowercased if it is in allowed, else fallback.
@@ -730,6 +754,14 @@ func Load() *Config {
 	}
 
 	c.Model = loadModelStack()
+
+	// Run-hygiene resilience knobs — kept in one additive block (see
+	// ResilienceConfig for semantics).
+	c.Resilience = ResilienceConfig{
+		RoundTimeoutRetryFactor: envFloat("ROUND_TIMEOUT_RETRY_FACTOR", 2.0),
+		ResumeRunningTasks:      envBool("RESUME_RUNNING_TASKS", false),
+	}
+
 	return c
 }
 
