@@ -199,3 +199,22 @@ passage limits, `read_document` results bypassing the evidence pool — local-mo
 never relaxed for a 200K-context model). The pipeline's verified wins are citation integrity
 (spot-checks verbatim 6/6; the raw run fabricated penalty math) and four analytic criteria raw
 missed. The task is still not passed; the climb continues.
+
+## The fix wave pays out (July 5, 2026)
+
+The autopsy became five fixes — full-text evidence ingest with context-aware caps, a
+deterministic per-section saturation harvest, mechanical cross-document numeric/date
+discrepancy joins, defense-lens analytic templates, and a memo-authorship layer — and the
+proof runs settle the table (same task, same judge, clean exclusive backends):
+
+| Model on the BigLaw pipeline | Criteria /60 |
+|---|---|
+| claude-haiku-4-5 + fix wave | **49** — beats the raw-harness baseline (41) by eight |
+| **qwen2.5:14b (local) + fix wave** | **36** — new local single-run record (prior peak 28) |
+
+The two sentences this whole document was building toward: the orchestration now lifts the
+cheapest cloud tier **past** what the same model achieves in Harvey's own agent harness — and
+it lifts a free, on-prem 14B to within five criteria of that cloud model's raw score. The
+architecture was the constraint; fixed, it is the advantage. Generalization held on an unseen
+compare-mode task (+3 criteria, no overfit). Eleven criteria remain on the SEC task, most in
+the deepest cross-document joins and defense analytics. Not passed. Still climbing.

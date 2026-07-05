@@ -73,6 +73,16 @@ the raw-vs-pipeline gap (criterion-level autopsy): the extraction transcription 
 1500-token tool-result caps, 2-sentence passage limits, and read_document results
 bypassing the evidence pool. Task still not passed; climb continues, honestly.
 
+### Benchmark: the fix wave, proven (July 5)
+Five fixes landed from the autopsy (extraction floor ca0a035, crossdoc dbce03e, defense
+lenses 44c8121, writer authorship 9731d78, runtime hygiene fa2a13a). Proof runs, same
+task/judge: claude-haiku-4-5 **34 → 49/60** — the pipeline now beats the raw-harness
+baseline (41) by eight; local qwen2.5:14b **→ 36/60** on a clean exclusive run (new local
+single-run record; prior verified peak 28). Generalization check on the compare-mode
+trust task: Haiku 6 → 9/23 pre/post wave (real transfer; the deviation-tuned local record
+of 12/23 stands — deviation-path port queued). Costs: Haiku proof ~$11.6 (7M tokens);
+qwen proof local-only. Task still not passed; 11 criteria remain on the SEC task.
+
 ### BELO — an epistemic ontology, a graph-discovered spine, and What3Words figure handles
 The next stretch of the local-accuracy climb — still a single local open-weight model for the
 bulk (a 14B handles the small, high-leverage spine pass), no cloud model, no corpus stuffing.

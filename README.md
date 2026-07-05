@@ -461,13 +461,15 @@ trade count). Four mechanisms make completeness structural rather than emergent:
   model.)
 
 Benchmarked on Harvey **LAB** (Legal Agent Benchmark, all-pass 60-criterion rubric, white-collar
-SEC-referral task; judge claude-sonnet-4-6 throughout, rubric hidden from the agents). Verified
-run history: best pipeline result **37/60** (claude-haiku-4-5, June 2026 build); the current
-release build scores 34/60 on both Haiku and Sonnet (a 3-point regression under investigation);
-the same model raw in Harvey's own harness scores 41/60 — the criterion-by-criterion forensics
-on that gap are part of the repo's record. Where the pipeline wins today is *integrity*:
-spot-checked citations verbatim 6/6 against source, while the raw run fabricated statutory
-penalty figures — the numbers a firm actually gets sanctioned over.
+SEC-referral task; judge claude-sonnet-4-6 throughout, rubric hidden from the agents). The
+verified ladder: claude-haiku-4-5 raw in Harvey's own harness scores 41/60; **on the BigLaw
+pipeline the same model scores 49/60** — the pipeline beats the raw agent by eight criteria
+after a criterion-level forensics pass rebuilt the extraction floor (the full autopsy and fix
+history are part of the repo's record). A **local qwen2.5:14b scores 36/60** on the identical
+build — a free, on-prem model within five criteria of a cloud model's raw performance. And the
+pipeline's standing edge is *integrity*: spot-checked citations verbatim 6/6 against source,
+while the raw run fabricated statutory penalty figures — the numbers a firm actually gets
+sanctioned over.
 LAB scores a *task* 1.0 only on a perfect 60/60 — the task is **not yet passed**; the criterion
 count, not the binary score, is the meaningful signal. Technique-by-technique account:
 [`docs/local-accuracy-journey.md`](docs/local-accuracy-journey.md).

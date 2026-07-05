@@ -159,12 +159,15 @@ Each DyTopo round:
 > `analyseEvidence` writes conclusions per locked quote). Synthesis routes through
 > `internal/orchestrator/orchestrator.go` `synthesise()` → `writeDeliverable()` when findings exceed
 > a single call's budget. These took local-model verbatim citation grounding from ~0% to ~94%.
-> Harvey LAB criteria (verified vs scores.json history): best pipeline 37/60 (Haiku, June-26
-> build); release build 34/60 on Haiku AND Sonnet (−3 regression, under investigation); raw Haiku
-> in Harvey's own harness 41/60. Identified bottleneck: the extraction transcription funnel
-> (1500-token tool-result cap, 2-sentence passages, read_document bypassing the evidence pool).
-> A climb, not a pass. (The earlier "30/60" was the union of passed criteria across two qwen
-> runs — a coverage measure; best single-run qwen score is 28.)
+> Harvey LAB criteria (verified vs scores.json history, post fix-wave July 5 2026): Haiku +
+> fix-wave pipeline **49/60** (all-time high; raw Haiku in Harvey's own harness 41; June-26
+> pipeline 37; dead-spine release build 34); **local qwen2.5:14b + fix-wave 36/60** (local
+> record; prior verified peak 28). The fix wave closed the extraction transcription funnel
+> (full-text evidence ingest, context-aware caps, saturation section-walk), added cross-doc
+> numeric/date discrepancy joins, defense-lens analytics, and memo-grade authorship. Trust-
+> compare task (compare mode): Haiku 6→9/23 pre/post wave; local qwen record 12/23 — deviation-
+> path port in progress. A climb, not a pass. (The earlier "30/60" was a two-run union
+> coverage measure; single-run history is as above.)
 >
 > **Negotiation stack (Go-only):** `internal/tools/negotiate.go` (`respond_to_redline` —
 > counter-redlining with playbook judgment, judge memory + standoff escalation, rationale cards),
