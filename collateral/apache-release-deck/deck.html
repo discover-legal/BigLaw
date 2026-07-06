@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>BigLaw — Apache-2.0 release deck</title>
+<style>
+/* ============================================================
+   THE EXHIBIT — court-filing editorial system
+   paper · ink · oxblood stamp · hairline rules · mono data
+   Self-contained: system fonts only, zero external fetches.
+   Page: 1080 × 1350 (LinkedIn portrait carousel).
+   ============================================================ */
+:root{
+  --paper:#F5EFE2;
+  --ink:#221B11;
+  --ox:#93271A;
+  --muted:#6F6352;
+  --hair:#C9BEA6;
+  --faint:rgba(34,27,17,.07);
+  --dark:#1B150C;
+  --dark-ink:#EFE6D2;
+  --dark-muted:#9C8F76;
+  --dark-hair:rgba(239,230,210,.22);
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{background:#888}
+body{font-family:Georgia,'Times New Roman',serif;color:var(--ink);
+     -webkit-print-color-adjust:exact;print-color-adjust:exact}
+@page{size:1080px 1350px;margin:0}
+@media print{html,body{background:none}}
+
+.slide{width:1080px;height:1350px;position:relative;overflow:hidden;
+       background:var(--paper);page-break-after:always;break-after:page}
+.slide.dark{background:var(--dark);color:var(--dark-ink)}
+
+/* paper grain + vignette */
+.slide::before{content:"";position:absolute;inset:0;pointer-events:none;
+  background:
+    radial-gradient(120% 90% at 50% 8%, rgba(255,252,240,.5), rgba(0,0,0,0) 55%),
+    radial-gradient(140% 120% at 50% 108%, rgba(87,66,37,.10), rgba(0,0,0,0) 60%);}
+.slide.dark::before{background:
+    radial-gradient(120% 90% at 50% 0%, rgba(255,240,200,.05), rgba(0,0,0,0) 55%),
+    radial-gradient(150% 130% at 50% 112%, rgba(0,0,0,.55), rgba(0,0,0,0) 62%);}
+.slide::after{content:"";position:absolute;inset:0;pointer-events:none;opacity:.55;
+  background-image:url("data:image/svg+xml;utf8,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='260'%20height='260'%3E%3Cfilter%20id='n'%3E%3CfeTurbulence%20type='fractalNoise'%20baseFrequency='0.85'%20numOctaves='2'%20stitchTiles='stitch'/%3E%3CfeColorMatrix%20type='saturate'%20values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA%20type='linear'%20slope='0.05'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect%20width='260'%20height='260'%20filter='url(%23n)'/%3E%3C/svg%3E")}
+
+/* certificate double frame */
+.frame{position:absolute;inset:34px;border:1.5px solid rgba(34,27,17,.6);pointer-events:none;z-index:2}
+.frame::after{content:"";position:absolute;inset:7px;border:1px solid rgba(34,27,17,.25)}
+.dark .frame{border-color:var(--dark-hair)}
+.dark .frame::after{border-color:rgba(239,230,210,.12)}
+
+.content{position:absolute;inset:34px;z-index:3;padding:50px 62px 42px;
+         display:flex;flex-direction:column}
+
+/* header furniture */
+.hdr{display:flex;justify-content:space-between;align-items:center;
+     font-family:Consolas,'Courier New',monospace;font-size:18px;
+     letter-spacing:.2em;text-transform:uppercase;color:var(--muted);
+     padding-bottom:20px;border-bottom:1px solid var(--hair)}
+.dark .hdr{color:var(--dark-muted);border-bottom-color:var(--dark-hair)}
+.exh{border:2px solid var(--ox);color:var(--ox);padding:6px 15px 5px;
+     letter-spacing:.28em;font-weight:bold;transform:rotate(-1.6deg);white-space:nowrap}
+.dark .exh{border-color:#C0533F;color:#C0533F}
+
+/* footer furniture */
+.ftr{margin-top:auto;padding-top:16px;border-top:1px solid var(--hair);
+     display:flex;justify-content:space-between;align-items:baseline;gap:30px;
+     font-family:Consolas,'Courier New',monospace;font-size:16.5px;
+     color:var(--muted);letter-spacing:.05em}
+.dark .ftr{color:var(--dark-muted);border-top-color:var(--dark-hair)}
+.ftr .pg{white-space:nowrap;letter-spacing:.2em}
+
+/* type scale */
+.kick{font-family:Consolas,'Courier New',monospace;font-size:20px;font-weight:bold;
+      letter-spacing:.34em;text-transform:uppercase;color:var(--ox);margin:36px 0 18px}
+.dark .kick{color:#C0533F}
+h1{font-size:88px;line-height:1.02;letter-spacing:-.016em;font-weight:bold;margin-bottom:34px}
+h1 .ox{color:var(--ox)}
+.dark h1 .ox{color:#D06A54}
+.lede{font-size:31px;line-height:1.5;max-width:880px}
+.lede b{color:var(--ox)} .dark .lede b{color:#D06A54}
+.muted{color:var(--muted)} .dark .muted{color:var(--dark-muted)}
+.mono{font-family:Consolas,'Courier New',monospace}
+
+/* rubber stamp */
+.stamp{display:inline-block;border:5px double var(--ox);color:var(--ox);
+       font-family:Consolas,'Courier New',monospace;font-weight:bold;
+       letter-spacing:.3em;text-transform:uppercase;text-align:center;
+       transform:rotate(-4deg);opacity:.92}
+.dark .stamp{border-color:#C0533F;color:#C0533F}
+
+/* ruled list */
+.rlist{margin-top:10px}
+.rlist .row{display:flex;gap:26px;padding:19px 0;border-bottom:1px solid var(--hair);align-items:baseline}
+.rlist .row:first-child{border-top:1px solid var(--hair)}
+.rlist .n{font-family:Consolas,'Courier New',monospace;font-size:20px;color:var(--ox);
+          font-weight:bold;min-width:44px;letter-spacing:.1em}
+.rlist .t{font-size:30px;font-weight:bold;min-width:295px}
+.rlist .d{font-size:25px;line-height:1.42;color:var(--muted)}
+
+/* numbered flow (process) */
+.flow{margin-top:14px}
+.flow .step{display:flex;gap:30px;padding:22px 0;border-bottom:1px solid var(--hair)}
+.flow .step:first-child{border-top:1px solid var(--hair)}
+.flow .fn{font-size:64px;line-height:.9;color:var(--ox);font-weight:bold;
+          font-family:Georgia,serif;min-width:74px}
+.flow .ft{font-size:31px;font-weight:bold;margin-bottom:8px}
+.flow .fd{font-size:26px;line-height:1.45;color:var(--muted)}
+.flow .fd b{color:var(--ink);font-weight:bold}
+
+/* chart primitives */
+.cwrap{position:relative;margin-top:26px}
+.crow{position:relative;z-index:2;margin-bottom:24px}
+.clabel{font-family:Consolas,'Courier New',monospace;font-size:20px;color:var(--muted);
+        margin-bottom:7px;letter-spacing:.03em}
+.ctrack{height:42px;background:var(--faint);position:relative}
+.cbar{height:100%;background:var(--ink);position:relative}
+.cbar.ox{background:var(--ox)}
+.cbar.hatch{background:repeating-linear-gradient(-45deg,#453A2A 0 7px,#5E5240 7px 14px)}
+.cval{position:absolute;right:12px;top:50%;transform:translateY(-50%);
+      font-family:Consolas,'Courier New',monospace;font-weight:bold;font-size:23px;color:var(--paper)}
+.refline{position:absolute;top:0;bottom:0;border-left:2.5px dashed var(--ox);z-index:1;opacity:.85}
+.refline.inkref{border-left-color:rgba(34,27,17,.5)}
+.reftag{position:absolute;top:-34px;transform:translateX(-50%);white-space:nowrap;
+        font-family:Consolas,'Courier New',monospace;font-size:18px;font-weight:bold;
+        letter-spacing:.08em;color:var(--ox)}
+.reftag.inkref{color:var(--muted)}
+
+/* callout rule-box */
+.callout{border-top:3px solid var(--ox);border-bottom:1px solid var(--hair);
+         padding:24px 4px 22px;margin-top:8px}
+.callout .big{font-size:34px;font-weight:bold;line-height:1.3}
+.callout .big .ox{color:var(--ox)}
+.callout .sub{font-size:24px;color:var(--muted);margin-top:10px;line-height:1.45}
+
+/* data table */
+table.data{width:100%;border-collapse:collapse;margin-top:26px}
+table.data th{font-family:Consolas,'Courier New',monospace;font-size:18.5px;font-weight:bold;
+              letter-spacing:.12em;text-transform:uppercase;color:var(--muted);
+              text-align:left;padding:0 14px 13px 0;border-bottom:2.5px solid var(--ink)}
+table.data td{padding:15px 14px 15px 0;border-bottom:1px solid var(--hair);
+              font-size:26px;vertical-align:baseline}
+table.data td.num{font-family:Consolas,'Courier New',monospace;font-size:25px;white-space:nowrap}
+table.data th.r,table.data td.r{text-align:right;padding-left:30px;padding-right:0}
+table.data .runname{font-weight:bold;font-size:24px;white-space:nowrap}
+table.data .runsub{font-family:Consolas,'Courier New',monospace;font-size:18px;color:var(--muted);
+                   display:block;margin-top:4px;letter-spacing:.03em}
+table.data tr.hero td{background:rgba(147,39,26,.07)}
+table.data tr.hero td:first-child{box-shadow:inset 5px 0 0 var(--ox)}
+table.data tr.hero td{padding-left:14px}
+table.data td .score{font-weight:bold;font-size:30px}
+table.data tr.hero .score{color:var(--ox)}
+
+/* footnote block above footer */
+.fnotes{font-family:Consolas,'Courier New',monospace;font-size:17px;line-height:1.55;
+        color:var(--muted);margin-top:26px}
+
+/* big-number display */
+.bignum{font-family:Georgia,serif;font-weight:bold;letter-spacing:-.02em}
+</style>
+</head>
+<body>
+
+<!-- ============ 01 · EXHIBIT A — HOOK (dark) ============ -->
+<section class="slide dark">
+  <div class="frame"></div>
+  <div class="content">
+    <div class="hdr"><span>In re: BigLaw · Release of July 2026</span><span class="exh">Exhibit A</span></div>
+    <div style="flex:1;display:flex;flex-direction:column;justify-content:center">
+      <div class="stamp" style="font-size:52px;padding:24px 46px 20px;align-self:flex-start;margin-bottom:70px">Apache-2.0</div>
+      <h1 style="font-size:118px;margin-bottom:44px">BigLaw is now<br><span class="ox">Apache-2.0.</span></h1>
+      <p class="lede" style="font-size:34px;max-width:900px">A multi-agent legal-AI platform — the BigLaw
+      tool stack, open and free for solos, boutiques, and small firms.</p>
+      <p class="lede muted" style="font-size:26px;margin-top:46px">The license, the clean room,
+      and the benchmark ladder — a release brief in fifteen exhibits.&nbsp;&nbsp;&#8594;</p>
+    </div>
+    <div class="ftr"><span>apache-2.0 &#183; github.com/discover-legal/BigLaw</span><span class="pg">01 / 15</span></div>
+  </div>
+</section>
+
+<!-- ============ 02 · EXHIBIT B — WHY THE LICENSE ============ -->
+<section class="slide">
+  <div class="frame"></div>
+  <div class="content">
+    <div class="hdr"><span>The license</span><span class="exh">Exhibit B</span></div>
+    <div class="kick">AGPL &#8594; Apache-2.0</div>
+    <h1 style="font-size:62px;margin-bottom:26px">The most-requested change was never a feature.</h1>
+    <p class="lede" style="font-size:27px;margin-bottom:8px">Network copyleft is a hard conversation for a
+    firm&#8217;s IT and legal review — AGPL kept capable teams from even piloting. Now: express patent grant,
+    NOTICE attribution, no network-service source obligation. <b>Getting there honestly took a clean room,
+    not a paraphrase.</b></p>
+    <div class="flow">
+      <div class="step"><div class="fn">1</div><div>
+        <div class="ft">Deleted before reimplemented</div>
+        <div class="fd">The derived code came <b>out of the tree first</b> — no &#8220;rewrite&#8221; with
+        the original open in the next tab.</div></div></div>
+      <div class="step"><div class="fn">2</div><div>
+        <div class="ft">A spec, not the source</div>
+        <div class="fd">A written functional specification — interfaces, behavior, acceptance criteria;
+        no code excerpts — published in-repo: <b class="mono" style="font-size:22px">docs/clean-room-spec-document-tools.md</b></div></div></div>
+      <div class="step"><div class="fn">3</div><div>
+        <div class="ft">Independent implementers, attested</div>
+        <div class="fd">Clean parties built from the spec and the public OOXML standard alone,
+        each signing a <b>non-exposure attestation</b>. Dated paper trail.</div></div></div>
+    </div>
+    <div class="callout" style="margin-top:20px">
+      <div class="big">SPDX headers on <span class="ox">271 files</span>. Audit it yourself.</div>
+    </div>
+    <div class="ftr"><span>apache-2.0 &#183; github.com/discover-legal/BigLaw</span><span class="pg">02 / 15</span></div>
+  </div>
+</section>
+
+<!-- ============ 03 · EXHIBIT C — WHAT SHIPPED ============ -->
+<section class="slide">
+  <div class="frame"></div>
+  <div class="content">
+    <div class="hdr"><span>The release</span><span class="exh">Exhibit C</span></div>
+    <div class="kick">Riding on the relicense</div>
+    <h1 style="font-size:76px">One release, seven fronts.</h1>
+    <div class="rlist">
+      <div class="row"><span class="n">i</span><span class="t">Counter-redlining</span>
+        <span class="d">answers opposing counsel&#8217;s markup, clause by clause, with rationale cards</span></div>
+      <div class="row"><span class="n">ii</span><span class="t">Redtime</span>
+        <span class="d">document lineage across negotiation rounds, with silent-edit detection</span></div>
+      <div class="row"><span class="n">iii</span><span class="t">Integrity Check</span>
+        <span class="d">Unicode-obfuscation + unmarked-change scan on every inbound document</span></div>
+      <div class="row"><span class="n">iv</span><span class="t">Verified citations</span>
+        <span class="d">every review-grid citation checked at extraction, tally stamped on export</span></div>
+      <div class="row"><span class="n">v</span><span class="t">Reviews UI</span>
+        <span class="d">due-diligence grid with citation pills that open the source, quote highlighted</span></div>
+      <div class="row"><span class="n">vi</span><span class="t mono" style="font-size:27px">biglaw demo</span>
+        <span class="d">one command, end to end — real Word artifacts, live calls, ~$0.03</span></div>
+      <div class="row"><span class="n">vii</span><span class="t">BELO</span>
+        <span class="d">a three-layer legal ontology under the orchestration — the memo&#8217;s spine is
+        discovered from the evidence, not guessed</span></div>
+    </div>
+    <div class="ftr"><span>apache-2.0 &#183; github.com/discover-legal/BigLaw</span><span class="pg">03 / 15</span></div>
+  </div>
+</section>
+
+<!-- ============ 04 · EXHIBIT D — COUNTER-REDLINING ============ -->
+<section class="slide">
+  <div class="frame"></div>
+  <div class="content">
+    <div class="hdr"><span>Negotiation</span><span class="exh">Exhibit D</span></div>
+    <div class="kick">The flagship</div>
+    <h1 style="font-size:72px">The bench reads the other side&#8217;s redline.</h1>
+    <div class="flow" style="margin-top:6px">
+      <div class="step"><div class="fn">1</div><div>
+        <div class="ft">Parse the markup</div>
+        <div class="fd"><b class="mono" style="font-size:23px">respond_to_redline</b> reads opposing
+        counsel&#8217;s tracked changes from the returned draft.</div></div></div>
+      <div class="step"><div class="fn">2</div><div>
+        <div class="ft">Judge every change against the playbook</div>
+        <div class="fd">Each change is weighed against the four-tier cascade —
+        <b>client &gt; matter &gt; personal &gt; firm</b>.</div></div></div>
+      <div class="step"><div class="fn">3</div><div>
+        <div class="ft">Answer with countered redlines</div>
+        <div class="fd">A response <b>.docx</b> with counter-redlines and a
+        <b>rationale card per change</b> — why it was accepted, countered, or held.</div></div></div>
+    </div>
+    <div class="callout" style="margin-top:34px">
+      <div class="big">The judge <span class="ox">remembers the negotiation</span> — per-clause history
+      across recent rounds; a standoff escalates to the playbook fallback or lawyer review.</div>
+      <div class="sub">A failed judgment degrades to review. Never a silent accept.</div>
+    </div>
+    <div class="ftr"><span>apache-2.0 &#183; github.com/discover-legal/BigLaw</span><span class="pg">04 / 15</span></div>
+  </div>
+</section>
+
+<!-- ============ 05 · EXHIBIT E — VERIFIED CITATIONS ============ -->
+<section class="slide">
+  <div class="frame"></div>
+  <div class="content">
+    <div class="hdr"><span>Integrity</span><span class="exh">Exhibit E</span></div>
+    <div class="kick">Verified citations</div>
+    <h1 style="font-size:66px">Every citation is checked before a lawyer sees it.</h1>
+    <div class="rlist" style="margin-top:2px">
+      <div class="row"><span class="n">1</span><span class="t">Exact match</span>
+        <span class="d">the quote is a literal substring of the source page</span></div>
+      <div class="row"><span class="n">2</span><span class="t">Tolerant match</span>
+        <span class="d">whitespace / punctuation normalized, still anchored to the page</span></div>
+      <div class="row"><span class="n">3</span><span class="t">Paraphrase judge</span>
+        <span class="d">a model judges faithfulness when no literal anchor exists</span></div>
+      <div class="row"><span class="n">4</span><span class="t">3-vote ensemble</span>
+        <span class="d">the contested residue goes to a vote — method + confidence recorded per citation</span></div>
+    </div>
+    <div class="stamp" style="font-size:27px;padding:14px 26px 12px;margin-top:38px;align-self:flex-start">Citations verified: N&#8202;/&#8202;M</div>
+    <p class="lede muted" style="font-size:23px;margin-top:14px">— stamped on every matrix export.</p>
+    <div class="callout" style="margin-top:26px">
+      <div class="big">Spot-checked pipeline citations: <span class="ox">verbatim, 6&#8202;/&#8202;6</span>.
+      The same model in a generic harness fabricated statutory penalty figures.</div>
+      <div class="sub">The numbers a firm actually gets sanctioned over.</div>
+    </div>
+    <div class="fnotes">judge: claude-sonnet-4-6 &#183; rubric hidden from agents &#183; all runs published in-repo</div>
+    <div class="ftr"><span>apache-2.0 &#183; github.com/discover-legal/BigLaw</span><span class="pg">05 / 15</span></div>
+  </div>
+</section>
+
+<!-- ============ 06 · EXHIBIT F — THE LADDER ============ -->
+<section class="slide">
+  <div class="frame"></div>
+  <div class="content">
+    <div class="hdr"><span>Benchmark &#183; SEC task &#183; 60 criteria</span><span class="exh">Exhibit F</span></div>
+    <div class="kick">Harvey LAB &#183; extract-key-allegations</div>
+    <h1 style="font-size:62px">Same model. Same judge.<br>Different harness.</h1>
+    <div class="cwrap" style="margin-top:56px">
+      <div class="refline inkref" style="left:68.33%"><span class="reftag inkref">their harness &#183; 41</span></div>
+      <div class="refline" style="left:100%"><span class="reftag" style="transform:translateX(-100%)">pass &#183; 60</span></div>
+      <div class="crow"><div class="clabel">qwen2.5:14b &#183; local &#183; context-stuff era</div>
+        <div class="ctrack"><div class="cbar" style="width:46.67%"><span class="cval">28</span></div></div></div>
+      <div class="crow"><div class="clabel">release build &#183; claude-haiku-4-5</div>
+        <div class="ctrack"><div class="cbar" style="width:56.67%"><span class="cval">34</span></div></div></div>
+      <div class="crow"><div class="clabel">fix-wave build &#183; qwen2.5:14b &#183; local</div>
+        <div class="ctrack"><div class="cbar" style="width:60%"><span class="cval">36</span></div></div></div>
+      <div class="crow"><div class="clabel">june-26 build &#183; claude-haiku-4-5</div>
+        <div class="ctrack"><div class="cbar" style="width:61.67%"><span class="cval">37</span></div></div></div>
+      <div class="crow"><div class="clabel">claude-haiku-4-5 &#183; harvey&#8217;s own harness</div>
+        <div class="ctrack"><div class="cbar hatch" style="width:68.33%"><span class="cval">41</span></div></div></div>
+      <div class="crow"><div class="clabel">fix-wave build &#183; claude-haiku-4-5 &#183; 6 rounds</div>
+        <div class="ctrack"><div class="cbar" style="width:81.67%"><span class="cval">49</span></div></div></div>
+      <div class="crow" style="margin-bottom:0"><div class="clabel" style="color:var(--ox);font-weight:bold">fix-wave build &#183; claude-haiku-4-5 &#183; 3 rounds</div>
+        <div class="ctrack"><div class="cbar ox" style="width:83.33%"><span class="cval">50</span></div></div></div>
+    </div>
+    <div class="callout" style="margin-top:38px">
+      <div class="big">34 &#8594; 49 &#8594; <span class="ox">50</span>. Same model — the pipeline beats
+      Harvey&#8217;s own harness by <span class="ox">nine criteria</span>.</div>
+    </div>
+    <div class="fnotes">judge: claude-sonnet-4-6 &#183; rubric hidden from agents &#183; all runs published in-repo</div>
+    <div class="ftr"><span>apache-2.0 &#183; github.com/discover-legal/BigLaw</span><span class="pg">06 / 15</span></div>
+  </div>
+</section>
+
+<!-- ============ 07 · EXHIBIT G — COST TABLE ============ -->
+<section class="slide">
+  <div class="frame"></div>
+  <div class="content">
+    <div class="hdr"><span>Benchmark &#183; SEC task &#183; economics</span><span class="exh">Exhibit G</span></div>
+    <div class="kick">The honest ledger</div>
+    <h1 style="font-size:60px;margin-bottom:22px">What the nine extra criteria cost.</h1>
+    <table class="data">
+      <tr><th>Run</th><th class="r">Criteria /60</th><th class="r">Wall time</th><th class="r">Cost&#8202;*</th></tr>
+      <tr><td><span class="runname">haiku &#183; harvey&#8217;s harness</span><span class="runsub">their own agent loop</span></td>
+          <td class="num r"><span class="score">41</span></td><td class="num r">5.2 min</td><td class="num r">~$1.40 est.&#8202;&#8224;</td></tr>
+      <tr class="hero"><td><span class="runname">pipeline &#183; haiku</span><span class="runsub">fix-wave build &#183; 3 rounds</span></td>
+          <td class="num r"><span class="score">50</span></td><td class="num r">75.2 min</td><td class="num r">$7.92</td></tr>
+      <tr><td><span class="runname">pipeline &#183; haiku</span><span class="runsub">fix-wave build &#183; 6 rounds</span></td>
+          <td class="num r"><span class="score">49</span></td><td class="num r">92.0 min</td><td class="num r">$11.48</td></tr>
+      <tr><td><span class="runname">pipeline &#183; sonnet</span><span class="runsub">release build</span></td>
+          <td class="num r"><span class="score">34</span></td><td class="num r">49.9 min</td><td class="num r">$13.70</td></tr>
+      <tr><td><span class="runname">pipeline &#183; qwen2.5:14b</span><span class="runsub">local &#183; fix-wave build</span></td>
+          <td class="num r"><span class="score">36</span></td><td class="num r">4 h 22 min</td><td class="num r">~$0 electricity</td></tr>
+    </table>
+    <div class="callout" style="margin-top:24px">
+      <div class="big" style="font-size:31px"><span class="ox">+9 criteria</span> for <span class="ox">~5.7&#215;</span> the cost —
+      about <span class="ox">$0.72 per marginal criterion</span>.</div>
+      <div class="sub">The rounds curve saturates early — 1 round &#8594; 41 ($3.74) &#183; 3 &#8594; 50 &#183;
+      6 &#8594; 49 — three rounds matches-or-beats six at ~70% of the cost; 50 vs 49 is within judge noise.</div>
+    </div>
+    <div class="fnotes">* run only — the judging pass and harness overhead are excluded everywhere &#183;
+    &#8224; no recorded ledger figure; computed from the run&#8217;s tokens at list rates<br>
+    judge: claude-sonnet-4-6 &#183; rubric hidden from agents &#183; all runs published in-repo</div>
+    <div class="ftr"><span>apache-2.0 &#183; github.com/discover-legal/BigLaw</span><span class="pg">07 / 15</span></div>
+  </div>
+</section>
+
+<!-- ============ 08 · EXHIBIT H — LOCAL MODEL ============ -->
+<section class="slide">
+  <div class="frame"></div>
+  <div class="content">
+    <div class="hdr"><span>Benchmark &#183; local inference</span><span class="exh">Exhibit H</span></div>
+    <div class="kick">The local-model story</div>
+    <h1 style="font-size:66px">Same quantized 14B, start to finish.</h1>
+    <p class="lede" style="font-size:27px">Every point of the climb is architecture — the weights never
+    changed. The platform is one static Go binary that runs on a Raspberry Pi; the bench can run entirely
+    on local models.</p>
+    <div class="cwrap" style="margin-top:64px">
+      <div class="refline inkref" style="left:68.33%"><span class="reftag inkref">cloud model, harvey&#8217;s harness &#183; 41</span></div>
+      <div class="crow"><div class="clabel">qwen2.5:14b &#183; pre-wave verified peak</div>
+        <div class="ctrack" style="height:54px"><div class="cbar" style="width:46.67%"><span class="cval" style="font-size:26px">28</span></div></div></div>
+      <div class="crow" style="margin-bottom:0"><div class="clabel" style="color:var(--ox);font-weight:bold">qwen2.5:14b &#183; fix-wave build</div>
+        <div class="ctrack" style="height:54px"><div class="cbar ox" style="width:60%"><span class="cval" style="font-size:26px">36</span></div></div></div>
+    </div>
+    <div class="callout" style="margin-top:52px">
+      <div class="big">A free, on-prem model within <span class="ox">five criteria</span> of the cloud
+      model in Harvey&#8217;s own harness — <span class="ox">for electricity</span>.</div>
+      <div class="sub">28 &#8594; 36 of 60 on the identical build that took Haiku to 49. And on the
+      compare-mode task, the same local model now beats the cloud tier outright — 15 vs 14
+      (Exhibit I). Build for the weak model and the gains carry up.</div>
+    </div>
+    <div class="fnotes">judge: claude-sonnet-4-6 &#183; rubric hidden from agents &#183; all runs published in-repo</div>
+    <div class="ftr"><span>apache-2.0 &#183; github.com/discover-legal/BigLaw</span><span class="pg">08 / 15</span></div>
+  </div>
+</section>
+
+<!-- ============ 09 · EXHIBIT I — COMPARE MODE ============ -->
+<section class="slide">
+  <div class="frame"></div>
+  <div class="content">
+    <div class="hdr"><span>Benchmark &#183; trust task &#183; 23 criteria</span><span class="exh">Exhibit I</span></div>
+    <div class="kick">Compare mode</div>
+    <h1 style="font-size:56px">Second task: trust documents vs client instructions.</h1>
+    <div class="cwrap" style="margin-top:50px">
+      <div class="refline inkref" style="left:52.17%"><span class="reftag inkref">prior record &#183; 12</span></div>
+      <div class="refline" style="left:100%"><span class="reftag" style="transform:translateX(-100%)">pass &#183; 23</span></div>
+      <div class="crow"><div class="clabel">claude-haiku-4-5 &#183; before the fix wave</div>
+        <div class="ctrack" style="height:36px"><div class="cbar" style="width:26.09%"><span class="cval">6</span></div></div></div>
+      <div class="crow"><div class="clabel">claude-haiku-4-5 &#183; fix-wave build, no task tuning</div>
+        <div class="ctrack" style="height:36px"><div class="cbar" style="width:39.13%"><span class="cval">9</span></div></div></div>
+      <div class="crow"><div class="clabel">qwen2.5:14b &#183; local &#183; deviation-tuned arc (old record)</div>
+        <div class="ctrack" style="height:36px"><div class="cbar hatch" style="width:52.17%"><span class="cval">12</span></div></div></div>
+      <div class="crow"><div class="clabel">claude-haiku-4-5 &#183; deviation-path port</div>
+        <div class="ctrack" style="height:36px"><div class="cbar" style="width:60.87%"><span class="cval">14</span></div></div></div>
+      <div class="crow" style="margin-bottom:0"><div class="clabel" style="color:var(--ox);font-weight:bold">qwen2.5:14b &#183; local &#183; deviation-path port — new record</div>
+        <div class="ctrack" style="height:36px"><div class="cbar ox" style="width:65.22%"><span class="cval">15</span></div></div></div>
+    </div>
+    <div class="callout" style="margin-top:32px">
+      <div class="big">The <span class="ox">free local model</span> now holds the record —
+      <span class="ox">15/23</span>, above the cloud tier&#8217;s 14 on the same build.</div>
+    </div>
+    <p class="lede" style="font-size:25px;margin-top:24px">The port was <b>evidence-led</b> — the criterion
+    diff named the failures, and each fix is mechanical: saturation retrieval on <b>every</b> document
+    (a trust can no longer mask the pour-over will) &#183; <b>per-part verdicts</b> (partial coverage is
+    never conformance) &#183; values that can&#8217;t be <b>substring-verified</b> are withheld — the
+    verbatim quotes speak instead.</p>
+    <div class="fnotes">judge: claude-sonnet-4-6 &#183; rubric hidden from agents &#183; all runs published in-repo</div>
+    <div class="ftr"><span>apache-2.0 &#183; github.com/discover-legal/BigLaw</span><span class="pg">09 / 15</span></div>
+  </div>
+</section>
+
+<!-- ============ 10 · EXHIBIT J — HOW 1: GROUNDING ============ -->
+<section class="slide">
+  <div class="frame"></div>
+  <div class="content">
+    <div class="hdr"><span>How &#183; technique 1 of 3</span><span class="exh">Exhibit J</span></div>
+    <div class="kick">Grounding</div>
+    <h1 style="font-size:76px">The model never types a digit.</h1>
+    <div class="flow" style="margin-top:10px">
+      <div class="step"><div class="fn">&#182;</div><div>
+        <div class="ft">The substring-lock</div>
+        <div class="fd">Evidence is transcribed <b>verbatim</b>, verified as a literal substring of the
+        source, and locked. Conclusions are written only over locked quotes — anything paraphrased is
+        dropped before it can become a citation.</div></div></div>
+      <div class="step"><div class="fn">&#182;</div><div>
+        <div class="ft">Figure handles</div>
+        <div class="fd">Drafters drop a <b>neutral codename</b> into prose — the digit masked even from
+        the prompt — and the exact grounded value is substituted afterward, by key. A model that never
+        types a number can never garble one.</div></div></div>
+    </div>
+    <div style="margin-top:70px;display:flex;align-items:baseline;gap:30px">
+      <span class="bignum" style="font-size:120px;color:var(--muted)">&#8776;0%</span>
+      <span class="bignum" style="font-size:100px;color:var(--muted)">&#8594;</span>
+      <span class="bignum" style="font-size:170px;color:var(--ox)">94%</span>
+    </div>
+    <p class="lede" style="font-size:28px;max-width:760px;margin-top:6px">verbatim-grounded citations
+    on a local model — from roughly zero.</p>
+    <div class="ftr"><span>apache-2.0 &#183; github.com/discover-legal/BigLaw</span><span class="pg">10 / 15</span></div>
+  </div>
+</section>
+
+<!-- ============ 11 · EXHIBIT K — HOW 2: THE FUNNEL ============ -->
+<section class="slide">
+  <div class="frame"></div>
+  <div class="content">
+    <div class="hdr"><span>How &#183; technique 2 of 3</span><span class="exh">Exhibit K</span></div>
+    <div class="kick">Extraction floor</div>
+    <h1 style="font-size:76px">The funnel was the ceiling.</h1>
+    <p class="lede" style="font-size:28px">The pipeline was feeding a 200K-context model through a straw
+    sized for a 4K local one — evidence caps, passage limits, and truncation all wearing local-model-era
+    defaults. The criterion-level autopsy attributed the <b>entire gap to Harvey&#8217;s own harness</b> to that funnel.</p>
+    <div class="rlist" style="margin-top:34px">
+      <div class="row"><span class="n">&#167;1</span><span class="t" style="min-width:340px">Saturation harvest</span>
+        <span class="d">a deterministic walk of every section of every document — nothing left to retrieval luck</span></div>
+      <div class="row"><span class="n">&#167;2</span><span class="t" style="min-width:340px">Full-text ingest</span>
+        <span class="d">document reads flow into the evidence pool untruncated</span></div>
+      <div class="row"><span class="n">&#167;3</span><span class="t" style="min-width:340px">Context-aware caps</span>
+        <span class="d">evidence and tool-result budgets auto-scale with the model&#8217;s window instead of hard-coded limits</span></div>
+    </div>
+    <div style="margin-top:64px;display:flex;align-items:baseline;gap:30px">
+      <span class="bignum" style="font-size:130px">34</span>
+      <span class="bignum" style="font-size:100px;color:var(--muted)">&#8594;</span>
+      <span class="bignum" style="font-size:130px;color:var(--ox)">49</span>
+      <span class="lede" style="font-size:27px;max-width:400px">of 60 — the extraction floor
+      behind the fix wave.</span>
+    </div>
+    <div class="fnotes">judge: claude-sonnet-4-6 &#183; rubric hidden from agents &#183; all runs published in-repo</div>
+    <div class="ftr"><span>apache-2.0 &#183; github.com/discover-legal/BigLaw</span><span class="pg">11 / 15</span></div>
+  </div>
+</section>
+
+<!-- ============ 12 · EXHIBIT L — HOW 3: MECHANICAL CHECKS ============ -->
+<section class="slide">
+  <div class="frame"></div>
+  <div class="content">
+    <div class="hdr"><span>How &#183; technique 3 of 3</span><span class="exh">Exhibit L</span></div>
+    <div class="kick">Mechanical honesty</div>
+    <h1 style="font-size:68px">The system voids its own bad runs.</h1>
+    <div class="flow" style="margin-top:12px">
+      <div class="step"><div class="fn">&#167;</div><div>
+        <div class="ft">Cross-document joins</div>
+        <div class="fd">Figures are joined across the corpus <b>mechanically</b> — two documents that
+        disagree on a number or a date surface together, both verbatim quotes attached.</div></div></div>
+      <div class="step"><div class="fn">&#167;</div><div>
+        <div class="ft">Defense lenses</div>
+        <div class="fd">An extraction memo for the defense also says what the defense can <b>do</b> about
+        each allegation — exposure, mitigants, procedural posture — on a deterministic trigger.</div></div></div>
+      <div class="step"><div class="fn">&#167;</div><div>
+        <div class="ft">Starvation guards</div>
+        <div class="fd">A round where every agent came back empty marks the run <b>starved</b> — a dead
+        run can no longer silently score. Timed-out agents get one retry at an extended budget.</div></div></div>
+    </div>
+    <div class="callout" style="margin-top:22px">
+      <div class="big">The run history holds a voided <span class="ox">27/60</span> — forensics showed
+      every round had timed out under contention.</div>
+      <div class="sub">The guards exist so the next one voids itself, before it can enter the record.</div>
+    </div>
+    <div class="fnotes">judge: claude-sonnet-4-6 &#183; rubric hidden from agents &#183; all runs published in-repo</div>
+    <div class="ftr"><span>apache-2.0 &#183; github.com/discover-legal/BigLaw</span><span class="pg">12 / 15</span></div>
+  </div>
+</section>
+
+<!-- ============ 13 · EXHIBIT M — KNOBS ============ -->
+<section class="slide">
+  <div class="frame"></div>
+  <div class="content">
+    <div class="hdr"><span>Operator surface</span><span class="exh">Exhibit M</span></div>
+    <div class="kick">The knobs</div>
+    <h1 style="font-size:66px">Tuned for a Pi by default.<br>Unlocked for the cloud.</h1>
+    <div class="flow" style="margin-top:14px">
+      <div class="step"><div class="fn">&#8853;</div><div>
+        <div class="ft">Context-aware caps</div>
+        <div class="fd">Evidence and tool-result budgets size themselves to the model&#8217;s context
+        window — small for a local 4K model, wide for a 128K cloud one. Override:
+        <b class="mono" style="font-size:21px">MODEL_CONTEXT_TOKENS</b>, the
+        <b class="mono" style="font-size:21px">AGENT_MAX_*</b> family.</div></div></div>
+      <div class="step"><div class="fn">&#8635;</div><div>
+        <div class="ft">Timeout retry</div>
+        <div class="fd">An agent that blows the round budget gets <b>one retry</b> at an extended
+        budget — slow local models stop tripping the round clock.
+        <b class="mono" style="font-size:21px">ROUND_TIMEOUT_RETRY_FACTOR</b></div></div></div>
+      <div class="step"><div class="fn">&#8856;</div><div>
+        <div class="ft">Task quarantine</div>
+        <div class="fd">Tasks caught mid-run at boot are quarantined as <b>interrupted</b> — audited,
+        closed out, never resumed as phantoms contending for the model.
+        <b class="mono" style="font-size:21px">RESUME_RUNNING_TASKS</b></div></div></div>
+    </div>
+    <p class="lede muted" style="font-size:25px;margin-top:40px">Every default answers to the smallest
+    machine the platform ships for; every ceiling opens with one variable.</p>
+    <div class="ftr"><span>apache-2.0 &#183; github.com/discover-legal/BigLaw</span><span class="pg">13 / 15</span></div>
+  </div>
+</section>
+
+<!-- ============ 14 · EXHIBIT N — HONEST STATUS ============ -->
+<section class="slide">
+  <div class="frame"></div>
+  <div class="content">
+    <div class="hdr"><span>Disclosure</span><span class="exh">Exhibit N</span></div>
+    <div class="kick">Honest status</div>
+    <h1 style="font-size:80px">The task is not passed.</h1>
+    <div style="display:flex;align-items:baseline;gap:36px;margin-top:26px">
+      <span class="bignum" style="font-size:160px;color:var(--ox)">50<span style="font-size:80px;color:var(--muted)">/60</span></span>
+      <span class="mono" style="font-size:26px;color:var(--muted);line-height:1.5">score: 0.0<br>&#8212; the rubric is all-or-nothing;<br>a task passes only at 60/60.</span>
+    </div>
+    <div class="rlist" style="margin-top:44px">
+      <div class="row"><span class="n">a.</span><span class="d" style="color:var(--ink)">The criterion count is the tracked metric — and <b>every scored run is published in-repo</b>, the weak ones included.</span></div>
+      <div class="row"><span class="n">b.</span><span class="d" style="color:var(--ink)">Corrections stay in the record: a once-quoted 30/60 was a <b>two-run union</b>, not a single-run score — the verified single-run peak of that era was 28, and the docs say so.</span></div>
+      <div class="row"><span class="n">c.</span><span class="d" style="color:var(--ink)">The judge is <b>named</b> — claude-sonnet-4-6 — and the rubric was hidden from the agents.</span></div>
+    </div>
+    <p class="lede" style="font-size:29px;margin-top:44px">Still a climb, in the open, corrections
+    included. <b>That is the differentiator.</b></p>
+    <div class="fnotes">judge: claude-sonnet-4-6 &#183; rubric hidden from agents &#183; all runs published in-repo</div>
+    <div class="ftr"><span>apache-2.0 &#183; github.com/discover-legal/BigLaw</span><span class="pg">14 / 15</span></div>
+  </div>
+</section>
+
+<!-- ============ 15 · EXHIBIT O — CTA (dark) ============ -->
+<section class="slide dark">
+  <div class="frame"></div>
+  <div class="content">
+    <div class="hdr"><span>In re: BigLaw · Release of July 2026</span><span class="exh">Exhibit O</span></div>
+    <div style="flex:1;display:flex;flex-direction:column;justify-content:center">
+      <div class="kick" style="margin-top:0">Try the whole bench in one command</div>
+      <h1 class="mono" style="font-size:104px;letter-spacing:-.01em;margin-bottom:40px">$ biglaw demo</h1>
+      <p class="lede" style="font-size:29px;max-width:900px">Seeds a matter &#8594; tabular review &#8594;
+      conditions-precedent checklist &#8594; counter-redlines opposing counsel&#8217;s markup, rationale
+      cards and all. Real Word artifacts, live model calls, <b>~$0.03</b>.</p>
+      <div style="margin-top:74px;display:flex;align-items:center;gap:44px">
+        <div class="stamp" style="font-size:40px;padding:20px 36px 16px">Apache-2.0</div>
+        <p class="lede" style="font-size:28px">Open. Free.<br>Audit it yourself.</p>
+      </div>
+      <p class="mono" style="font-size:30px;margin-top:70px;letter-spacing:.04em">github.com/discover-legal/BigLaw</p>
+    </div>
+    <div class="ftr"><span>apache-2.0 &#183; github.com/discover-legal/BigLaw</span><span class="pg">15 / 15</span></div>
+  </div>
+</section>
+
+</body>
+</html>
