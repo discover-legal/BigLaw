@@ -446,31 +446,38 @@ type DraftingConfig struct {
 }
 
 type Config struct {
-	Models       ModelsConfig
-	Drafting     DraftingConfig
-	BELOSpine    bool // derive the spine from typed Conduct nodes instead of LLM enumeration
-	Model        ModelConfig
-	Database     DatabaseConfig
-	Embeddings   EmbeddingsConfig
-	VectorDB     VectorDBConfig
-	API          APIConfig
-	Auth         AuthConfig
-	Agents       AgentsConfig
-	DyTopo       DyTopoConfig
-	Debate       DebateConfig
-	Presentation PresentationConfig
-	DocuSeal     DocuSealConfig
-	ClientVoice  ClientVoiceConfig
-	Local        LocalConfig
-	PDF          PDFConfig
-	Persistence  PersistenceConfig
-	Queue        QueueConfig
-	AgentBilling AgentBillingConfig
-	Audit        AuditConfig
-	Connectors   ConnectorsConfig
-	SearchTavily string
-	LogLevel     string
-	Blob         BlobConfig
+	Models    ModelsConfig
+	Drafting  DraftingConfig
+	BELOSpine bool // derive the spine from typed Conduct nodes instead of LLM enumeration
+	// ReentrantMachinery re-fires the task-start selective machinery at every DyTopo
+	// round boundary, targeted at the round's DELTA: the round's findings are absorbed
+	// into the evidence graph, and any NEW entities/claims trigger a targeted specifics
+	// re-sweep, a cross-document discrepancy re-join (with the grown alias knowledge),
+	// and a defense-lens re-derivation — all deduped against what round 0 already
+	// emitted. REENTRANT_MACHINERY=false restores the old one-shot round-0 behavior.
+	ReentrantMachinery bool
+	Model              ModelConfig
+	Database           DatabaseConfig
+	Embeddings         EmbeddingsConfig
+	VectorDB           VectorDBConfig
+	API                APIConfig
+	Auth               AuthConfig
+	Agents             AgentsConfig
+	DyTopo             DyTopoConfig
+	Debate             DebateConfig
+	Presentation       PresentationConfig
+	DocuSeal           DocuSealConfig
+	ClientVoice        ClientVoiceConfig
+	Local              LocalConfig
+	PDF                PDFConfig
+	Persistence        PersistenceConfig
+	Queue              QueueConfig
+	AgentBilling       AgentBillingConfig
+	Audit              AuditConfig
+	Connectors         ConnectorsConfig
+	SearchTavily       string
+	LogLevel           string
+	Blob               BlobConfig
 	// ReasoningEffort, when set ("low"/"medium"/"high"), is forwarded as the
 	// OpenAI-standard reasoning_effort on heavy "thinking" calls for endpoints
 	// that support it (o-series, OpenRouter, DeepSeek-R1, …). Empty = omit it.
@@ -536,7 +543,8 @@ func Load() *Config {
 			AgentsPerSection: envInt("DRAFTING_AGENTS_PER_SECTION", 2),
 			Rounds:           envInt("DRAFTING_ROUNDS", 2),
 		},
-		BELOSpine: envBool("BELO_SPINE", false), // spine from typed Conduct nodes vs LLM enumeration
+		BELOSpine:          envBool("BELO_SPINE", false),         // spine from typed Conduct nodes vs LLM enumeration
+		ReentrantMachinery: envBool("REENTRANT_MACHINERY", true), // round-boundary re-entry of the selective machinery (false → one-shot round 0)
 		Database: DatabaseConfig{
 			Backend:    normalizeEnum(os.Getenv("DB_BACKEND"), "sqlite", "sqlite", "postgres", "memory"),
 			SQLitePath: env("SQLITE_PATH", "./data/biglaw.db"),

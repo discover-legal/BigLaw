@@ -96,6 +96,13 @@ type Orchestrator struct {
 	egraphAliases map[string]map[string][]string // taskID → canonical allegation → surface-form aliases
 	egraphsMu     sync.Mutex
 
+	// reentry holds the per-task re-entrant-machinery state (reentry.go): the graph
+	// snapshot the round-boundary delta is computed against, the dedup keys for
+	// everything the machinery already emitted, and the round-0 figure harvest the
+	// cross-document re-join reuses. Keyed by task ID; transient, like egraphs.
+	reentry   map[string]*reentryState
+	reentryMu sync.Mutex
+
 	// rootAgent is used for round goal generation and synthesis.
 	rootAgentDef types.AgentDefinition
 }
@@ -179,6 +186,7 @@ func New(
 		tools:         toolReg,
 		egraphs:       map[string]*evidencegraph.Graph{},
 		egraphAliases: map[string]map[string][]string{},
+		reentry:       map[string]*reentryState{},
 		rootAgentDef:  rootDef,
 	}
 	o.protocols = protocols.New(cfg, provReg, costs)
@@ -591,6 +599,11 @@ func (o *Orchestrator) runTask(task *types.Task) {
 		}
 	}
 
+	// Re-entrant machinery baseline (reentry.go): snapshot what the exhaustive round-0
+	// passes produced, so each round boundary can compute its DELTA and re-fire the
+	// targeted machinery on only what the round actually discovered.
+	o.initReentryState(task)
+
 	for _, phase := range phases {
 		// CurrentRound is written only by this goroutine (under the lock,
 		// for readers' sake), so reading it here is safe.
@@ -604,10 +617,23 @@ func (o *Orchestrator) runTask(task *types.Task) {
 		})
 		emitProgress(task.ID, "phase", map[string]interface{}{"phase": phase})
 
+		// Count the pool before the round so the re-entry hook below sees exactly
+		// the round's own contribution (its previous outputs are already counted).
+		o.mu.RLock()
+		preRoundFindings := len(task.Findings)
+		o.mu.RUnlock()
+
 		if err := o.runPhase(task, phase); err != nil {
 			runErr = err
 			break
 		}
+
+		// Round-boundary re-entry (reentry.go): absorb the round's findings into the
+		// evidence graph, compute the delta, and re-fire the targeted machinery on it
+		// BEFORE the next round's Need/Offer descriptors are generated — so the next
+		// round's agents (and synthesis) see what the machinery made of this round's
+		// discoveries. No-op when the round added nothing or REENTRANT_MACHINERY=false.
+		o.machineryReentry(task, preRoundFindings)
 
 		// Wait for any pending gates. PendingGates is rewritten by the
 		// gate handlers, so read it under the lock.
@@ -1512,8 +1538,16 @@ func (o *Orchestrator) specificsSweep(task *types.Task, prov providers.Provider,
 		}
 	}
 
+	return o.runSpecificsQueries(task, queries, map[string]bool{}, maxFindings, "specifics-sweep", "Specifics Sweep", 0)
+}
+
+// runSpecificsQueries executes fact-finding queries against the exhibits (extract_specifics)
+// and emits each grounded, deduped snippet as a mechanically-verified finding. seen is the
+// dedup set (lowercased, whitespace-collapsed snippet); callers seed it to dedupe against an
+// existing pool. Shared by the round-0 specifics sweep and the round-boundary re-sweep
+// (reentry.go), which targets it at newly-discovered entities.
+func (o *Orchestrator) runSpecificsQueries(task *types.Task, queries []string, seen map[string]bool, maxFindings int, agentID, agentName string, round int) []types.Finding {
 	var findings []types.Finding
-	seen := map[string]bool{}
 	for _, q := range queries {
 		sr, err := o.tools.Execute("extract_specifics", map[string]interface{}{"topic": q, "top_k": 4}, agents.ToolContext{TaskID: task.ID})
 		if err != nil {
@@ -1522,7 +1556,8 @@ func (o *Orchestrator) specificsSweep(task *types.Task, prov providers.Provider,
 		sm, _ := sr.(map[string]interface{})
 		srows, _ := sm["results"].([]map[string]interface{})
 		for _, r := range srows {
-			quote := strings.TrimSpace(strings.Join(strings.Fields(r["snippet"].(string)), " "))
+			snippet, _ := r["snippet"].(string)
+			quote := strings.TrimSpace(strings.Join(strings.Fields(snippet), " "))
 			if quote == "" {
 				continue
 			}
@@ -1537,13 +1572,13 @@ func (o *Orchestrator) specificsSweep(task *types.Task, prov providers.Provider,
 			}
 			findings = append(findings, types.Finding{
 				ID:             uuid.New().String(),
-				AgentID:        "specifics-sweep",
-				AgentName:      "Specifics Sweep",
+				AgentID:        agentID,
+				AgentName:      agentName,
 				Content:        quote,
 				Citations:      []types.Citation{{Source: src, Quote: quote, MechanicallyVerified: true}},
 				Confidence:     0.8,
 				EvidenceStatus: types.EvidenceGrounded,
-				Round:          0,
+				Round:          round,
 				Timestamp:      time.Now(),
 			})
 			if len(findings) >= maxFindings {
@@ -2065,6 +2100,13 @@ func (o *Orchestrator) buildEvidenceGraph(task *types.Task, prov providers.Provi
 	if len(figs) > 0 {
 		o.update(task, func(t *types.Task) { t.Findings = append(t.Findings, figs...) })
 		slog.Info("figure harvest seeded findings", "task", task.ID, "n", len(figs), "model", figModel, "graph_facts_after", g.Len())
+	}
+	// Stash the raw harvest (canonical quantity labels already assigned) for the
+	// round-boundary cross-document RE-JOIN (reentry.go): when a round grows the graph's
+	// alias/entity knowledge, the discrepancy pass re-runs over these records without
+	// repeating the full-corpus LLM sweep.
+	if o.cfg.ReentrantMachinery && len(rawFigs) > 0 {
+		o.reentryStateFor(task.ID).rawFigs = rawFigs
 	}
 	// Cross-document discrepancy pass (crossdoc.go): same metric identity (entity +
 	// quantity-kind + referent) reported with different values in different documents,
