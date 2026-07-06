@@ -48,7 +48,7 @@ import (
 const (
 	// reentryMaxEntities bounds the targeted re-sweep: at most this many NEW entities
 	// are swept per round boundary (first-discovered first).
-	reentryMaxEntities = 6
+	reentryMaxEntities = 7
 	// reentryMaxSweepFindings bounds what one boundary's re-sweep may add to the pool.
 	reentryMaxSweepFindings = 12
 	// reentryMaxAbsorbChunks bounds the absorption extraction calls per boundary
