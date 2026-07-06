@@ -31,7 +31,7 @@ And the release riding on it teaches the bench to *negotiate*:
 
 → **Verified citations.** Tabular review is industrialized: grids persist (SQLite/Postgres), export to landscape Word and CSV, and every cell citation is verified at extraction — exact match → tolerant → paraphrase judge → 3-vote ensemble — with method + confidence per citation and a "Citations verified: N/M" stamp on the export. In the workbench, citation pills click through to the source with the quote highlighted.
 
-On the benchmark, the honest numbers (all verified against the scored-run history, same claude-sonnet-4-6 judge): claude-haiku-4-5 run *raw* in Harvey's own harness scores **41 of 60 criteria**. The same model on the BigLaw pipeline scored 34 — so the gap got the partner-committee treatment, criterion by criterion, the diagnosis landed on one stage (an extraction funnel still wearing local-model-era caps), and a five-fix wave rebuilt it. Rerun: **49/60 — the pipeline now beats the raw agent by eight**. The same wave took a local qwen2.5:14b — free, on-prem, Raspberry-Pi-class deployment — from a verified 28 to **36/60**, within five criteria of the cloud model's raw score. And the part a firm can't compromise either way: every spot-checked pipeline citation is verbatim against source, while the raw run invented statutory penalty figures out of thin air. The rubric is all-or-nothing — the task is not passed yet. Still a climb, in the open, corrections included.
+On the benchmark, the honest numbers (all verified against the scored-run history, same claude-sonnet-4-6 judge): claude-haiku-4-5 in Harvey's own minimal agent harness scores **41 of 60 criteria**. The same model on the BigLaw pipeline scored 34 — so the gap got the partner-committee treatment, criterion by criterion, the diagnosis landed on one stage (an extraction funnel still wearing local-model-era caps), and a five-fix wave rebuilt it. Rerun: **50/60 — harness vs harness, same model, +9** (and a rounds ablation showed 3 DyTopo rounds beat 6, at ~70% of the cost). The same wave took a local qwen2.5:14b — free, on-prem, Raspberry-Pi-class deployment — from a verified 28 to **36/60**; on the compare-mode task the local model now holds the outright record (**15/23**, above the cloud tier's 14). And the part a firm can't compromise either way: every spot-checked pipeline citation is verbatim against source, while the minimal-harness run invented statutory penalty figures out of thin air. The rubric is all-or-nothing — the task is not passed yet. Still a climb, in the open, corrections included.
 
 Try all of it in one command, for about three cents:
 
@@ -51,7 +51,8 @@ Live on main. Apache-2.0 now. Link in comments. Turtles all the way down. 🐢
 
 **Carousel:** LICENSE/SPDX swap diff → clean-room process (delete → spec → attested reimplement) → counter-redline rationale cards → Redtime timeline (silent-edit warning) → verified-citation pills → `biglaw demo` closing cost line
 
-**Asset TODO (`apache-release-*`, not yet captured):**
+**Asset TODO (`apache-release-*`):**
+- `apache-release-deck.pdf` — 15-slide carousel PDF (collateral/apache-release-deck/, re-render: node render.mjs) — CAPTURED ✅
 - `apache-release-01-license-diff.png` — LICENSE/NOTICE swap + SPDX header diff
 - `apache-release-02-rationale-cards.png` — counter-redline decision cards on a clause
 - `apache-release-03-redtime-timeline.png` — Redtime rounds × clauses view with a silent-edit warning
