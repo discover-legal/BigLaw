@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -104,6 +105,15 @@ type openAIChatRequest struct {
 	ResponseFormat      *openAIResponseFmt `json:"response_format,omitempty"`
 	ReasoningEffort     string             `json:"reasoning_effort,omitempty"`
 	Temperature         *float64           `json:"temperature,omitempty"`
+	Thinking            *openAIThinking    `json:"thinking,omitempty"`
+}
+
+// openAIThinking is Zhipu/Z.ai's hybrid-reasoning toggle on the OpenAI-compat
+// endpoint: {"thinking":{"type":"enabled"|"disabled"}}. GLM 4.5+ / 5.x default
+// to enabled; disabling trades reasoning depth for large speed/cost wins.
+// Driven by MODEL_THINKING (empty = omit the field, provider default applies).
+type openAIThinking struct {
+	Type string `json:"type"`
 }
 
 // openAIResponseFmt requests JSON-constrained decoding. Ollama and LM Studio
@@ -296,6 +306,9 @@ func (p *OllamaProvider) Chat(params ChatParams) (*ChatResponse, error) {
 	}
 	if params.Temperature != nil && !rejectsTemperature(p.useMaxCompletionTokens, bareModel) {
 		reqBody.Temperature = params.Temperature
+	}
+	if v := os.Getenv("MODEL_THINKING"); v == "enabled" || v == "disabled" {
+		reqBody.Thinking = &openAIThinking{Type: v}
 	}
 
 	body, _ := json.Marshal(reqBody)

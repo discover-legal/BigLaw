@@ -6,6 +6,7 @@ package providers
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -34,5 +35,34 @@ func TestVersionedBaseGetsBareCompletionsPath(t *testing.T) {
 		if gotPath != want {
 			t.Fatalf("base %q: got path %q, want %q", base, gotPath, want)
 		}
+	}
+}
+
+// MODEL_THINKING drives Zhipu/Z.ai's hybrid-reasoning toggle; empty omits it.
+func TestModelThinkingToggle(t *testing.T) {
+	var gotBody string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b := make([]byte, r.ContentLength)
+		r.Body.Read(b)
+		gotBody = string(b)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`))
+	}))
+	defer ts.Close()
+	p := NewOpenAICompatProvider(ts.URL+"/api/paas/v4", "k")
+	call := func() {
+		if _, err := p.Chat(ChatParams{Model: "glm-5.2", MaxTokens: 8, Messages: []Message{{Role: "user", Content: "hi"}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("MODEL_THINKING", "disabled")
+	call()
+	if !strings.Contains(gotBody, `"thinking":{"type":"disabled"}`) {
+		t.Fatalf("thinking field missing: %s", gotBody)
+	}
+	t.Setenv("MODEL_THINKING", "")
+	call()
+	if strings.Contains(gotBody, `"thinking"`) {
+		t.Fatalf("thinking field should be omitted when unset: %s", gotBody)
 	}
 }
