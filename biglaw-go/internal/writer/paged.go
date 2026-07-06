@@ -166,21 +166,38 @@ func (w *Writer) finalizePaged(taskDesc string, secs []section, board *pagedBoar
 		return doc
 	}
 	rollups := computeRollups(w.opt.Facts)
-	exec := w.frameSection(taskDesc, board,
-		"Write the EXECUTIVE SUMMARY of the deliverable whose sections are summarized below: 2-3 short paragraphs stating what the matter is, the principal allegations or issues, the headline grounded figures, the parties implicated, and the overall posture. Use ONLY facts stated below — no new facts, figures, or citations. No headings, no bullets, no process commentary.")
-	concl := w.frameSection(taskDesc, board,
-		"Write the closing CONCLUSION AND POSTURE section for the deliverable whose sections are summarized below: 1-2 paragraphs assessing the overall position and the recommended next steps, grounded ONLY in what the sections state. No new facts, figures, or citations. No headings, no bullets, no process commentary.")
+	var itemized []string
+	if len(rollups) == 0 {
+		// No grounded decomposition on the record → never assert arithmetic; present the
+		// headline amounts as an itemization, explicitly not totaled.
+		itemized = computeItemization(w.opt.Facts)
+	}
+	// Nesting guard: a section spine (or an earlier compose) may already carry these
+	// document-level frames — never wrap a composed doc in a second frame.
+	exec, concl := "", ""
+	if !hasHeading(doc, "executive summary") {
+		exec = w.frameSection(taskDesc, board,
+			"Write the EXECUTIVE SUMMARY of the deliverable whose sections are summarized below: 2-3 short paragraphs stating what the matter is, the principal allegations or issues, the headline grounded figures, the parties implicated, and the overall posture. Use ONLY facts stated below — no new facts, figures, or citations. No headings, no bullets, no process commentary.")
+	}
+	if !hasHeading(doc, "conclusion and posture") && !hasHeading(doc, "conclusion") {
+		concl = w.frameSection(taskDesc, board,
+			"Write the closing CONCLUSION AND POSTURE section for the deliverable whose sections are summarized below: 1-2 paragraphs assessing the overall position and the recommended next steps, grounded ONLY in what the sections state. No new facts, figures, or citations. No headings, no bullets, no process commentary.")
+	}
 
 	var b strings.Builder
-	if exec != "" || len(rollups) > 0 {
+	if exec != "" || len(rollups) > 0 || len(itemized) > 0 {
 		b.WriteString("## Executive Summary\n\n")
 		if exec != "" {
 			b.WriteString(exec)
 			b.WriteString("\n\n")
 		}
 		if len(rollups) > 0 {
-			b.WriteString("**Figure roll-up (computed from the grounded record):**\n")
+			b.WriteString("**Figure roll-up (computed from the grounded record — the source states each aggregate and its components):**\n")
 			b.WriteString(strings.Join(rollups, "\n"))
+			b.WriteString("\n\n")
+		} else if len(itemized) > 1 {
+			b.WriteString("**Principal grounded amounts (itemized — distinct figures on the record; the record does not state that they sum to any single total, so they are not totaled):**\n")
+			b.WriteString(strings.Join(itemized, "\n"))
 			b.WriteString("\n\n")
 		}
 	}
@@ -190,6 +207,21 @@ func (w *Writer) finalizePaged(taskDesc string, secs []section, board *pagedBoar
 		b.WriteString(concl)
 	}
 	return strings.TrimSpace(b.String())
+}
+
+// hasHeading reports whether the document already carries a markdown heading with the
+// given (case-insensitive) title — the double-frame guard.
+func hasHeading(doc, title string) bool {
+	for _, ln := range strings.Split(doc, "\n") {
+		t := strings.TrimSpace(ln)
+		if !strings.HasPrefix(t, "#") {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(strings.TrimLeft(t, "# ")), title) {
+			return true
+		}
+	}
+	return false
 }
 
 // frameSection writes one document-level frame passage (executive summary / closing
@@ -203,10 +235,60 @@ func (w *Writer) frameSection(taskDesc string, board *pagedBoard, instr string) 
 	prompt := fmt.Sprintf("TASK: %s\n\n%s\n%s", strings.Join(strings.Fields(taskDesc), " "), instr,
 		strutil.TruncateToTokens(handles, w.opt.InputBudgetTokens))
 	out, err := w.complete(stitchSystem, prompt, w.opt.DraftMaxTokens, nil)
-	if err != nil {
+	if err != nil || isRefusalDraft(out) {
 		return ""
 	}
-	return polishSection("", sanitizeDraft(out))
+	// Despite the "no headings" instruction, a weak model wraps its frame passage in a
+	// document skeleton of its own (a title line, an "EXECUTIVE SUMMARY" heading, "---"
+	// rules). finalizePaged supplies the frame headings; scaffolding inside the passage
+	// is what produced the NESTED document (two title blocks, two exec summaries) — strip
+	// it mechanically.
+	return polishSection("", stripFrameScaffolding(sanitizeDraft(out)))
+}
+
+// stripFrameScaffolding removes document-skeleton lines from a frame passage: markdown
+// headings, horizontal rules, short ALL-CAPS title lines, and bare frame-title lines.
+func stripFrameScaffolding(s string) string {
+	var keep []string
+	for _, ln := range strings.Split(s, "\n") {
+		t := strings.TrimSpace(ln)
+		switch {
+		case strings.HasPrefix(t, "#"):
+			continue
+		case reHrLine.MatchString(t) && t != "":
+			continue
+		case isTitleCapsLine(t):
+			continue
+		case strings.EqualFold(t, "executive summary"),
+			strings.EqualFold(t, "conclusion"),
+			strings.EqualFold(t, "conclusion and posture"):
+			continue
+		}
+		if t == "" && len(keep) > 0 && strings.TrimSpace(keep[len(keep)-1]) == "" {
+			continue
+		}
+		keep = append(keep, ln)
+	}
+	return strings.TrimSpace(strings.Join(keep, "\n"))
+}
+
+// isTitleCapsLine reports whether a line is a short ALL-CAPS title ("ALLEGATION
+// EXTRACTION SUMMARY", "ALLEGATION-EXTRACTION-SUMMARY.DOCX") — letters present, none
+// lowercase, at most ten words.
+func isTitleCapsLine(t string) bool {
+	if t == "" || len(strings.Fields(t)) > 10 {
+		return false
+	}
+	hasLetter := false
+	for _, r := range t {
+		if r >= 'a' && r <= 'z' {
+			return false
+		}
+		if r >= 'A' && r <= 'Z' {
+			hasLetter = true
+		}
+	}
+	return hasLetter
 }
 
 // enforceRoster guarantees the per-respondent exposure entries: it locates the exposure
@@ -320,7 +402,10 @@ func (w *Writer) critiqueSection(s section, draft string, ix *FindingIndex, voic
 	}
 	for _, b := range resp.Content {
 		if b.Type == providers.BlockText {
-			return strings.TrimSpace(b.Text)
+			if n := strings.TrimSpace(b.Text); !isRefusalDraft(n) {
+				return n
+			}
+			return "" // a refusal is not a critique — treat as no note
 		}
 	}
 	return ""
@@ -354,6 +439,12 @@ func (w *Writer) reviseSection(taskDesc, workflowType string, s section, draft, 
 	}
 	for _, b := range resp.Content {
 		if b.Type == providers.BlockText && strings.TrimSpace(b.Text) != "" {
+			// A reviser that argues with the critique ("I appreciate the detailed
+			// correction, but I need to clarify my role…") produced dialogue, not a
+			// revision — keep the lead's draft.
+			if isRefusalDraft(b.Text) {
+				return draft
+			}
 			if out := polishSection(s.Title, sanitizeDraft(b.Text)); out != "" {
 				return out
 			}

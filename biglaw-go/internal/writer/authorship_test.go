@@ -298,15 +298,18 @@ func TestNameCovered_FirmMentionDoesNotCoverPerson(t *testing.T) {
 // ─── Roll-up arithmetic: components sum to a grounded aggregate, computed in Go ──
 
 func TestComputeRollups_ComponentsSumToAggregate(t *testing.T) {
+	// The aggregate's OWN fact (its Key embeds the source quote) states the decomposition —
+	// only then is the sum asserted. Components scattered across other facts don't count.
 	facts := []Fact{
 		{Line: "- excess profits to Oceanic Fund I LP $7,800,000", Entity: "Oceanic Fund I LP"},
 		{Line: "- excess profits in Chao's personal account $438,000", Entity: "Diana L. Chao"},
-		{Line: "- total excess profits from cherry-picking $8,238,000", Entity: "WCA"},
+		{Line: "- total excess profits from cherry-picking $8,238,000", Entity: "WCA",
+			Key: "wca totals excess profits $8,238,000 the total excess profits are estimated at $8,238,000 ($7,800,000 allocated to oceanic fund i lp + $438,000 in chao's personal account)"},
 		{Line: "- unrelated management fee 1.50% per annum", Entity: "WCA"},
 	}
 	rollups := computeRollups(facts)
 	if len(rollups) == 0 {
-		t.Fatal("no roll-up found for an exact component sum")
+		t.Fatal("no roll-up found for a source-stated decomposition")
 	}
 	joined := strings.Join(rollups, "\n")
 	for _, must := range []string{"$7,800,000", "$438,000", "$8,238,000", "="} {
@@ -351,7 +354,7 @@ func TestFinalizePaged_MemoFrame(t *testing.T) {
 		Facts: []Fact{
 			{Line: "- excess profits to Oceanic Fund I LP $7,800,000"},
 			{Line: "- excess profits to Chao $438,000"},
-			{Line: "- total cherry-picking excess profits $8,238,000"},
+			{Line: "- total cherry-picking excess profits $8,238,000 ($7,800,000 to Oceanic Fund I LP + $438,000 to Chao)"},
 		},
 	})
 	board := newPagedBoard()

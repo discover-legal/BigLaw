@@ -186,6 +186,56 @@ This referral notice is dated June 5, 2026.`
 	}
 }
 
+// Partner-review regression: the § 2462 window must join ONLY to conduct dates. An exam
+// start date, a referral date, or a compliance-review year-end must never yield a
+// time-bar paragraph, and one conduct label is capped at maxJoinsPerConduct joins.
+func TestLimitationsJoin_ConductDatesOnly(t *testing.T) {
+	doc := `The Division alleges the trade allocation scheme violated Section 206(1) of the Advisers Act.
+The Division of Examinations commenced its examination of the trade allocation scheme on March 11, 2024.
+Following the formal referral to Enforcement on October 18, 2024, the trade allocation scheme was described in the notice.
+The trade allocation scheme operated from June 2022 through November 2023, when Bellini directed the block trades.
+This referral notice is dated June 5, 2026.`
+	ctx := defenseContext{DocText: doc, Allegations: []string{"Trade Allocation Scheme"}}
+	ctx.Auth = authorityText(ctx)
+	var joins []ontology.DerivedIssue
+	for _, is := range analyseDefense(ctx) {
+		if is.Kind == ontology.LimitationsKind && is.About != "" {
+			joins = append(joins, is)
+		}
+	}
+	if len(joins) == 0 {
+		t.Fatal("genuine conduct dates present — expected at least one limitations join")
+	}
+	if len(joins) > maxJoinsPerConduct {
+		t.Errorf("per-conduct cap breached: %d joins for one label", len(joins))
+	}
+	blob := strings.ToLower(joins[0].Text)
+	for _, is := range joins {
+		lt := strings.ToLower(is.Text)
+		if strings.Contains(lt, "march 11, 2024") || strings.Contains(lt, "october 18, 2024") {
+			t.Errorf("procedural date joined to the limitations window:\n%s", is.Text)
+		}
+	}
+	if !strings.Contains(blob, "june 2022") && !strings.Contains(blob, "november 2023") {
+		t.Errorf("conduct dates not joined:\n%s", blob)
+	}
+	// Graph path: only the conduct-dating predicate (occurredDuring) supplies dates — a
+	// date buried in an unrelated claim's quote must not join.
+	g := evidencegraph.New()
+	src := `The referral describing the trade allocation scheme was issued on October 18, 2024.`
+	if !g.AddTriple("Trade Allocation Scheme", "Conduct", "violates", "Section 206(1)", "Authority", "",
+		"The referral describing the trade allocation scheme was issued on October 18, 2024", "referral", src) {
+		t.Fatal("fixture triple rejected")
+	}
+	ctx2 := defenseContext{Claims: g.Claims(), DocText: "The Division alleges violations of Section 206(1)."}
+	ctx2.Auth = authorityText(ctx2)
+	for _, is := range analyseDefense(ctx2) {
+		if is.Kind == ontology.LimitationsKind && is.About != "" {
+			t.Errorf("non-conduct-dated claim produced a limitations join:\n%s", is.Text)
+		}
+	}
+}
+
 // ─── Template D — steelman the innocent reading (C-060) ────────────────────────
 
 func TestSteelman_QuotedInstruction(t *testing.T) {
@@ -219,6 +269,36 @@ On March 3, 2024, Whitmore instructed Delgado to "clean up the shared drive".`
 		if is.Kind == ontology.InnocentReadingKind {
 			t.Errorf("steelman fired without any quoted communication:\n%s", is.Text)
 		}
+	}
+}
+
+// Partner-review regression: a quoted PROPER NOUN in a directive sentence is not an
+// instruction — no steelman for "Lakeshore Trading" or "Delgado". Genuine imperative
+// spans still fire, and near-duplicate spans sharing the lead verb collapse to one.
+func TestSteelman_ProperNounNotDirective(t *testing.T) {
+	doc := `The Division alleges violations of Section 206(1).
+Bellini directed twenty-three block trades to "Lakeshore Trading" during the period.
+Whitmore instructed "Delgado" regarding the servers.
+Whitmore instructed Delgado to "clean up the shared drive" that week.
+The email references the instruction to "clean up of legacy files on the shared drive" as well.`
+	ctx := defenseContext{DocText: doc}
+	ctx.Auth = authorityText(ctx)
+	var spans []string
+	for _, is := range analyseDefense(ctx) {
+		if is.Kind == ontology.InnocentReadingKind {
+			spans = append(spans, is.Quote)
+		}
+	}
+	for _, s := range spans {
+		if strings.EqualFold(s, "Lakeshore Trading") || strings.EqualFold(s, "Delgado") {
+			t.Errorf("steelman fired on a quoted proper noun: %q", s)
+		}
+	}
+	if len(spans) != 1 {
+		t.Errorf("want exactly 1 steelman (imperative spans share the lead verb), got %d: %v", len(spans), spans)
+	}
+	if len(spans) == 1 && !strings.Contains(spans[0], "clean up") {
+		t.Errorf("the genuine directive was not steelmanned: %v", spans)
 	}
 }
 

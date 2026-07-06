@@ -582,7 +582,10 @@ func (a *Agent) stagedFindings(ctx AgentContext, passages []retrievedPassage, mo
 	findings := make([]types.Finding, 0, len(evidence))
 	for i, e := range evidence {
 		concl := strings.TrimSpace(conclusions[i])
-		if concl == "" {
+		// A meta-dialogue "conclusion" (the model narrating its process instead of
+		// analysing the quote) is as useless as an empty one — fall back to the
+		// placeholder, which the writer structurally swaps for the verbatim evidence.
+		if concl == "" || isMetaDialogueConclusion(concl) {
 			concl = "Evidence on point for this matter; see the quoted source."
 		}
 		findings = append(findings, types.Finding{
@@ -1000,6 +1003,19 @@ var (
 	reQuoted        = regexp.MustCompile(`["“]([^"”]{3,})["”]`)
 )
 
+// reMetaConclusion flags a "conclusion" that is pure meta-dialogue — the agent talking
+// about its process or role ("Let me extract the specific figures…", "I appreciate the
+// detailed correction, but I need to clarify my role…") instead of stating an analytical
+// conclusion. Start-anchored: genuine conclusions are third-person statements about the
+// evidence and never open in the first person, while substantive prose that merely QUOTES
+// first-person source text mid-sentence is untouched. Such a finding must never enter the
+// pool — every downstream renderer (writer sections, fallbacks, rosters) trusts it.
+var reMetaConclusion = regexp.MustCompile(`(?i)(^\s*(let me\b|now (that\s+)?i have\b|i (will|'ll|am|'m|can(not)?|need to|want to|appreciate|must decline)\b|here (is|are)\b|please confirm\b|you'?ve asked me\b|as an ai\b)|\bclarify my role\b)`)
+
+func isMetaDialogueConclusion(s string) bool {
+	return reMetaConclusion.MatchString(s)
+}
+
 func parseFindings(text string, def types.AgentDefinition) []types.Finding {
 	if reNoFindings.MatchString(text) {
 		return nil
@@ -1007,7 +1023,7 @@ func parseFindings(text string, def types.AgentDefinition) []types.Finding {
 	var findings []types.Finding
 	for _, body := range splitFindingBlocks(text) {
 		content := extractFindingContent(body)
-		if content == "" {
+		if content == "" || isMetaDialogueConclusion(content) {
 			continue
 		}
 		confidence := 0.7

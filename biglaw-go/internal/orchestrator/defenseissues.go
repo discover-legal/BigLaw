@@ -277,17 +277,32 @@ func mentalStateIssues(ctx defenseContext) []ontology.DerivedIssue {
 
 const maxLimitationsJoins = 6
 
+// maxJoinsPerConduct caps the § 2462 joins emitted for ONE conduct label — the anti-spray
+// bound: a label the doc scan dates six ways must not yield six near-identical paragraphs.
+const maxJoinsPerConduct = 2
+
 // limitationsIssues always states the § 2462 rule (the standing enforcement angle) and, when
 // the record carries DATED conduct, joins the five-year window to each dated conduct — the
-// inference the pipeline used to state as a rule but never apply.
+// inference the pipeline used to state as a rule but never apply. Emissions are capped per
+// authority (maxLimitationsJoins) AND per conduct label, and near-identical joins (same
+// label, same window month) are deduped.
 func limitationsIssues(ctx defenseContext) []ontology.DerivedIssue {
 	out := []ontology.DerivedIssue{{Kind: ontology.LimitationsKind, Text: solIssue}}
 	anchor, anchorRaw := filingAnchor(ctx.DocText)
 	joins := 0
+	perLabel := map[string]int{}
+	seenWindow := map[string]bool{}
 	for _, dc := range datedConducts(ctx) {
 		if joins >= maxLimitationsJoins {
 			break
 		}
+		lk := strings.ToLower(dc.label)
+		wk := lk + "|" + dc.date.plusYears(5).display()
+		if perLabel[lk] >= maxJoinsPerConduct || seenWindow[wk] {
+			continue
+		}
+		perLabel[lk]++
+		seenWindow[wk] = true
 		joins++
 		windowClose := dc.date.plusYears(5)
 		txt := fmt.Sprintf("%s — the record dates this conduct to %s; under 28 U.S.C. § 2462 the five-year civil-penalty window for it closes around %s.", dc.label, dc.raw, windowClose.display())
@@ -308,12 +323,44 @@ func limitationsIssues(ctx defenseContext) []ontology.DerivedIssue {
 
 const maxSteelmanIssues = 3
 
-// steelmanIssues fires on conduct resting on ambiguous quoted communications: a sentence with
-// a directive verb carrying an embedded quoted span. A defense memo must state the innocent
-// interpretation alongside the inculpatory one, and what discovery would distinguish them.
+// imperativeLeads is the lexicon of verbs a quoted housekeeping/records directive leads
+// with. A quoted span is a DIRECTIVE only when it reads as an instruction — not merely any
+// quoted string in a sentence with a directive verb ("directed trades to \"Lakeshore
+// Trading\"" quotes an entity name; "instructed \"Delgado\"" quotes a recipient; neither
+// is an instruction to steelman).
+var imperativeLeads = map[string]bool{
+	"clean": true, "remove": true, "delete": true, "destroy": true, "wipe": true,
+	"shred": true, "purge": true, "erase": true, "clear": true, "dispose": true,
+	"get": true, "move": true, "take": true, "send": true, "keep": true, "stop": true,
+	"make": true, "put": true, "throw": true, "archive": true, "scrub": true,
+	"drop": true, "cancel": true, "hold": true,
+}
+
+// isImperativeDirective reports whether a quoted span is a genuine instruction: at least
+// three words, leading with an imperative verb (optionally after "please"). Quoted proper
+// nouns ("Lakeshore Trading", "Delgado") fail both tests.
+func isImperativeDirective(span string) bool {
+	fs := strings.Fields(span)
+	if len(fs) < 3 {
+		return false
+	}
+	first := strings.ToLower(strings.Trim(fs[0], `"'.,;:`))
+	if first == "please" {
+		first = strings.ToLower(strings.Trim(fs[1], `"'.,;:`))
+	}
+	return imperativeLeads[first]
+}
+
+// steelmanIssues fires on conduct resting on ambiguous quoted DIRECTIVES: a sentence with a
+// directive verb (the human-recipient context) carrying an embedded quoted span that itself
+// reads as an instruction. A defense memo must state the innocent interpretation alongside
+// the inculpatory one, and what discovery would distinguish them. One issue per distinct
+// imperative verb — "clean up the shared drive" and "clean up of legacy files…" are the
+// same instruction quoted twice, not two defense points.
 func steelmanIssues(ctx defenseContext) []ontology.DerivedIssue {
 	var out []ontology.DerivedIssue
 	seen := map[string]bool{}
+	seenVerb := map[string]bool{}
 	scan := func(text string) {
 		for _, frag := range fragments(text) {
 			if len(out) >= maxSteelmanIssues {
@@ -324,11 +371,16 @@ func steelmanIssues(ctx defenseContext) []ontology.DerivedIssue {
 			}
 			for _, m := range reQuotedSpan.FindAllStringSubmatch(frag, -1) {
 				span := strings.TrimSpace(m[1])
+				if !isImperativeDirective(span) {
+					continue
+				}
+				verb := strings.ToLower(strings.Trim(strings.Fields(span)[0], `"'.,;:`))
 				k := strings.ToLower(span)
-				if seen[k] {
+				if seen[k] || seenVerb[verb] {
 					continue
 				}
 				seen[k] = true
+				seenVerb[verb] = true
 				out = append(out, ontology.DerivedIssue{
 					Kind:  ontology.InnocentReadingKind,
 					About: span,
@@ -472,9 +524,40 @@ type datedConduct struct {
 	date              recDate
 }
 
-// datedConducts joins each conduct label to the dates the record attaches to it: graph claims
-// about the conduct (occurredDuring objects, values, quotes) first, then charging-document
-// sentences that mention the conduct. Deduped by (label, raw date).
+// reProceduralDateCtx marks a date as PROCEDURAL — an examination/referral/filing/response
+// milestone, not a date the conduct occurred on. Joining the § 2462 window to such dates
+// produced the template spray the partner review flagged (a five-year "window" computed
+// from the EXAM START date, the referral date, a compliance-review year-end). Note
+// "Review Period" is deliberately absent: the review period IS the conduct window.
+var reProceduralDateCtx = regexp.MustCompile(`(?i)\b(examination|deficiency\s+letter|referral|enforcement\s+notice|compliance\s+review|annual\s+review|engagement|deadline|service\s+of|written\s+response|response\s+period|filed|filing|notice\s+is\s+dated|letter\s+dated)\b`)
+
+// proceduralDate reports whether a specific date token in a fragment sits in procedural
+// context — procedural wording within a window around the token.
+func proceduralDate(frag, raw string) bool {
+	i := strings.Index(frag, raw)
+	if i < 0 {
+		return reProceduralDateCtx.MatchString(frag)
+	}
+	lo := i - 80
+	if lo < 0 {
+		lo = 0
+	}
+	hi := i + len(raw) + 40
+	if hi > len(frag) {
+		hi = len(frag)
+	}
+	return reProceduralDateCtx.MatchString(frag[lo:hi])
+}
+
+// datedConducts joins each conduct label to the dates the record attaches to THE CONDUCT
+// ITSELF — never to procedural milestones:
+//   - graph claims: ONLY the conduct-dating predicate (occurredDuring) supplies dates; the
+//     graph knows which dates are conduct dates, so no other claim field is mined;
+//   - charging-document sentences mentioning the conduct: a date is joined only when its
+//     local context is not procedural (exam start / referral / filing / response dates are
+//     excluded).
+//
+// Deduped by (label, raw date).
 func datedConducts(ctx defenseContext) []datedConduct {
 	var out []datedConduct
 	seen := map[string]bool{}
@@ -489,10 +572,10 @@ func datedConducts(ctx defenseContext) []datedConduct {
 	labels := conductLabels(ctx)
 	for _, l := range labels {
 		for _, c := range ctx.Claims {
-			if !strings.EqualFold(strings.TrimSpace(c.S), l) {
+			if c.P != "occurredDuring" || !strings.EqualFold(strings.TrimSpace(c.S), l) {
 				continue
 			}
-			for _, field := range []string{c.O, c.Value, c.Quote} {
+			for _, field := range []string{c.O, c.Value} {
 				for _, dt := range parseRecDates(field) {
 					add(l, dt.raw, c.Quote, dt.d)
 				}
@@ -506,6 +589,9 @@ func datedConducts(ctx defenseContext) []datedConduct {
 				continue
 			}
 			for _, dt := range parseRecDates(frag) {
+				if proceduralDate(frag, dt.raw) {
+					continue
+				}
 				add(l, dt.raw, strings.TrimSpace(frag), dt.d)
 			}
 		}

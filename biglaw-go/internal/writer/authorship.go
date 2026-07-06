@@ -32,6 +32,16 @@ var reProcessTell = regexp.MustCompile(`(?i)(` +
 	`|\bevidence on point for this matter\b` +
 	`|\bnot provided in (your|the|this) (message|prompt|input)\b` +
 	`|\bcurrent draft section was not provided\b` +
+	// Meta-dialogue conclusions: first-person planning ("Let me extract the specific
+	// figures…", "Now I have the necessary information…") and role-clarification. Anchored
+	// at the start of the sentence/conclusion so a substantive sentence that merely QUOTES
+	// first-person source text mid-sentence is never stripped.
+	`|^\s*let me\b` +
+	`|^\s*now (that\s+)?i have\b` +
+	`|^\s*i (will|'ll|can(not)?|need to|want to|am going to|appreciate)\b` +
+	`|^\s*please confirm\b` +
+	`|^\s*you'?ve asked me\b` +
+	`|\bclarify my role\b` +
 	`)`)
 
 // isProcessConclusion reports whether a finding's conclusion is process language rather
@@ -280,7 +290,26 @@ func polishSection(title, s string) string {
 	}
 	out := strings.TrimSpace(strings.Join(keep, "\n"))
 	// (5) sentence-boundary tail
-	return strings.TrimSpace(trimTruncatedTail(out))
+	out = strings.TrimSpace(trimTruncatedTail(out))
+	// (6) a trailing lead-in with nothing after it ("Let me extract the figures:" as the
+	// whole body, or "The following should be noted:" as the last line) introduces
+	// nothing — drop it. A lead-in followed by content is untouched.
+	return strings.TrimSpace(trimTrailingLeadIn(out))
+}
+
+// trimTrailingLeadIn drops final lines that end with a colon — lead-ins whose content
+// never arrived.
+func trimTrailingLeadIn(s string) string {
+	lines := strings.Split(strings.TrimRight(s, " \t\n"), "\n")
+	for len(lines) > 0 {
+		t := strings.TrimSpace(lines[len(lines)-1])
+		if t == "" || strings.HasSuffix(t, ":") {
+			lines = lines[:len(lines)-1]
+			continue
+		}
+		break
+	}
+	return strings.Join(lines, "\n")
 }
 
 // ─── Document-level duplicate suppression ───────────────────────────────────────
@@ -399,23 +428,67 @@ func collectMoney(facts []Fact) []moneyFig {
 	return out
 }
 
-// computeRollups finds grounded aggregates that are EXACT sums of other grounded
-// amounts and renders each with its components — "$7,800,000 + $438,000 = $8,238,000"
-// — computed in Go, presented with the canonical values verbatim. Never model-typed
-// arithmetic: a total is only asserted when the grounded components actually sum to a
-// grounded aggregate.
+// computeRollups finds grounded aggregates whose decomposition the SOURCE ITSELF states,
+// and renders each with its components — "$7,800,000 + $438,000 = $8,238,000" — computed
+// in Go, presented with the canonical values verbatim.
+//
+// Sibling discipline (the partner-review fix): candidate components come ONLY from the
+// aggregate's OWN fact text (its display line plus its Key, which embeds the source
+// quote) — i.e. the source states the total together with its parts, so the figures share
+// a metric identity by construction. The earlier rule required only that the AGGREGATE be
+// grounded; components were drawn from the whole ledger, and with dozens of round
+// million-denominated amounts on file, subset-sum coincidences were inevitable ("2021
+// firm AUM + one client's AUM + one fund's NAV = current RAUM"). Cross-fact sums are
+// never asserted, no matter how exactly they add up.
 func computeRollups(facts []Fact) []string {
-	figs := collectMoney(facts)
 	var out []string
-	for i, t := range figs {
-		if t.cents < 1_000_000 { // totals below $10,000 aren't memo roll-ups
+	seenTotal := map[int64]bool{}
+	for _, f := range facts {
+		text := f.Line + " " + f.Key
+		seen := map[int64]bool{}
+		var vals []moneyFig
+		for _, m := range reMoney.FindAllString(text, -1) {
+			c, ok := parseMoneyCents(m)
+			if !ok || c < 100_000 || seen[c] { // ignore sub-$1,000 noise
+				continue
+			}
+			seen[c] = true
+			vals = append(vals, moneyFig{cents: c, canon: m, entity: f.Entity})
+		}
+		if len(vals) < 3 { // a stated decomposition needs a total and ≥2 components
 			continue
 		}
-		comps := figs[i+1:]
-		if expr, ok := findSum(t, comps); ok {
+		sort.SliceStable(vals, func(i, j int) bool { return vals[i].cents > vals[j].cents })
+		total := vals[0]
+		if total.cents < 1_000_000 || seenTotal[total.cents] { // totals below $10,000 aren't memo roll-ups
+			continue
+		}
+		if expr, ok := findSum(total, vals[1:]); ok {
+			seenTotal[total.cents] = true
 			out = append(out, expr)
 		}
 		if len(out) >= 4 {
+			break
+		}
+	}
+	return out
+}
+
+// computeItemization renders the record's headline amounts as an itemized list when no
+// grounded decomposition exists — figures presented side by side, explicitly NOT summed.
+func computeItemization(facts []Fact) []string {
+	const maxItems = 6
+	var out []string
+	for _, f := range collectMoney(facts) {
+		if f.cents < 100_000_000 { // itemize only headline amounts (≥ $1M)
+			continue
+		}
+		line := "- " + f.canon
+		if e := strings.TrimSpace(f.entity); e != "" {
+			line += " (" + e + ")"
+		}
+		out = append(out, line)
+		if len(out) >= maxItems {
 			break
 		}
 	}
@@ -453,6 +526,49 @@ func findSum(total moneyFig, comps []moneyFig) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// ─── Prose total audit: no model-computed aggregates ────────────────────────────
+
+// reTotalWord marks a sentence that ASSERTS an aggregate ("the total undisclosed
+// compensation was approximately $47,800").
+var reTotalWord = regexp.MustCompile(`(?i)\b(total(s|ing|ed|ling)?|aggregate[sd]?|combined|sum of|in sum|altogether|collectively)\b`)
+
+// stripUngroundedTotals removes prose sentences that assert a "total"/aggregate with a
+// dollar figure NOT on the grounded record — the enforcement backstop for the prompt rule
+// "never compute, add, sum, or total a number yourself", which a weak drafter ignores
+// (summing a PARTIAL evidence set — $45,000 + $2,800 — and shipping "$47,800 total
+// undisclosed compensation" against a grounded $92,600). Bullets, tables, and headings
+// pass through untouched; a totals sentence whose figures are all grounded is kept.
+func stripUngroundedTotals(doc string, groundedCents map[int64]bool) string {
+	ungroundedMoney := func(s string) bool {
+		for _, m := range reMoney.FindAllString(s, -1) {
+			if c, ok := parseMoneyCents(m); ok && c >= 100_000 && !groundedCents[c] {
+				return true
+			}
+		}
+		return false
+	}
+	lines := strings.Split(doc, "\n")
+	for i, ln := range lines {
+		t := strings.TrimSpace(ln)
+		if t == "" || strings.HasPrefix(t, "-") || strings.HasPrefix(t, "*") ||
+			strings.HasPrefix(t, "#") || strings.HasPrefix(t, "|") {
+			continue
+		}
+		if !reTotalWord.MatchString(ln) || !ungroundedMoney(ln) {
+			continue
+		}
+		var keep []string
+		for _, s := range splitSentences(ln) {
+			if reTotalWord.MatchString(s) && ungroundedMoney(s) {
+				continue // an asserted aggregate the record does not state
+			}
+			keep = append(keep, s)
+		}
+		lines[i] = strings.TrimSpace(strings.Join(keep, " "))
+	}
+	return strings.Join(lines, "\n")
 }
 
 // ─── Respondent roster enforcement ──────────────────────────────────────────────
@@ -531,8 +647,15 @@ func (w *Writer) rosterBlock() string {
 // respondentEntry consolidates one respondent's grounded record: fact lines mentioning
 // the person plus the distinct figures ($ amounts and rates) those facts carry. With no
 // facts on record, it emits the explicit gap note the reviewer can act on.
+//
+// Rendering discipline (the partner-review fix): the graph facts arrive in predicate form
+// ("Directed Brokerage to Lakeshore Trading committedBy Marcus T. Bellini") — internal
+// representation, not client prose. Each clause is humanized (camelCase predicates become
+// spaced words), near-identical restatements are collapsed, and the entry reads as
+// sentences, not a semicolon chain of triples.
 func (w *Writer) respondentEntry(name string) string {
-	var parts []string
+	var sents []string
+	partSeen := map[string]bool{}
 	figSeen := map[string]bool{}
 	var figures []string
 	for _, f := range w.opt.Facts {
@@ -543,8 +666,17 @@ func (w *Writer) respondentEntry(name string) string {
 		if line == "" || isProcessConclusion(line) {
 			continue
 		}
-		if len(parts) < 6 {
-			parts = append(parts, strings.TrimRight(line, "."))
+		line = humanizePredicates(line)
+		if k := clauseKey(line); k == "" || partSeen[k] {
+			continue // a restatement of a clause already rendered
+		} else {
+			partSeen[k] = true
+		}
+		if len(sents) < 6 {
+			line = strings.TrimRight(line, ".")
+			if line != "" {
+				sents = append(sents, strings.ToUpper(line[:1])+line[1:]+".")
+			}
 		}
 		for _, m := range append(reMoney.FindAllString(f.Line, -1), rePct.FindAllString(f.Line, -1)...) {
 			if k := strings.ToLower(m); !figSeen[k] && len(figures) < 8 {
@@ -553,12 +685,62 @@ func (w *Writer) respondentEntry(name string) string {
 			}
 		}
 	}
-	if len(parts) == 0 {
+	if len(sents) == 0 {
 		return fmt.Sprintf("**%s** — No individual-exposure findings were extracted for %s — review the source directly.", name, name)
 	}
-	entry := fmt.Sprintf("**%s** — %s.", name, strings.Join(parts, "; "))
+	entry := fmt.Sprintf("**%s** — %s", name, strings.Join(sents, " "))
 	if len(figures) > 0 {
-		entry += " Grounded figures on record: " + strings.Join(figures, "; ") + "."
+		entry += fmt.Sprintf(" The grounded record ties the following amounts and rates to %s: %s.", lastNameToken(name), joinNaturally(figures))
 	}
 	return entry
+}
+
+// humanizePredicates rewrites camelCase relation tokens as spaced words ("committedBy" →
+// "committed by", "ownsStakeIn" → "owns stake in"). Only words that START lowercase and
+// carry an interior capital are predicates; proper names ("McDonald") start uppercase and
+// are untouched.
+var reCamelPredicate = regexp.MustCompile(`\b[a-z][a-z0-9]*(?:[A-Z][a-z0-9]*)+\b`)
+
+func humanizePredicates(s string) string {
+	return reCamelPredicate.ReplaceAllStringFunc(s, func(w string) string {
+		var b strings.Builder
+		for i := 0; i < len(w); i++ {
+			c := w[i]
+			if c >= 'A' && c <= 'Z' {
+				b.WriteByte(' ')
+				b.WriteByte(c - 'A' + 'a')
+			} else {
+				b.WriteByte(c)
+			}
+		}
+		return b.String()
+	})
+}
+
+// clauseKey normalizes a clause for restatement-dedup: copulas and articles dropped, then
+// the leading alphanumerics — so "X is Vice President at WCA" and "X Vice President at
+// WCA" collapse.
+func clauseKey(s string) string {
+	var kept []string
+	for _, w := range strings.Fields(strings.ToLower(s)) {
+		switch strings.Trim(w, ".,;:()") {
+		case "is", "was", "are", "were", "the", "a", "an", "of", "and", "at", "as":
+			continue
+		}
+		kept = append(kept, w)
+	}
+	return dedupKey(strings.Join(kept, ""))
+}
+
+// joinNaturally joins values as prose: "a", "a and b", "a, b, and c".
+func joinNaturally(vals []string) string {
+	switch len(vals) {
+	case 0:
+		return ""
+	case 1:
+		return vals[0]
+	case 2:
+		return vals[0] + " and " + vals[1]
+	}
+	return strings.Join(vals[:len(vals)-1], ", ") + ", and " + vals[len(vals)-1]
 }

@@ -43,6 +43,37 @@ END_FINDING`
 	}
 }
 
+// Partner-review regression: a "conclusion" that is pure meta-dialogue — the agent
+// narrating its process or arguing about its role — must never enter the finding pool.
+// Every downstream renderer (writer sections, fallbacks, rosters) trusts finding content.
+func TestParseFindings_MetaDialogueFiltered(t *testing.T) {
+	in := `FINDING:
+Conclusion: Let me extract the specific figures and details from the source documents:
+Confidence: 0.8
+END_FINDING
+FINDING:
+Conclusion: I appreciate the detailed correction, but I need to clarify my role here before drafting the section.
+Confidence: 0.7
+END_FINDING
+FINDING:
+Evidence: SOURCE=referral-1 | QUOTE=excess profits of $7,800,000 were allocated to Oceanic Fund I LP
+Conclusion: The Division quantifies the cherry-picking harm at $7,800,000 allocated to Oceanic Fund I LP.
+Confidence: 0.9
+END_FINDING`
+	fs := parseFindings(in, testDef)
+	if len(fs) != 1 {
+		t.Fatalf("want 1 substantive finding after meta filtering, got %d: %+v", len(fs), fs)
+	}
+	if !strings.Contains(fs[0].Content, "$7,800,000") {
+		t.Errorf("the substantive finding was dropped: %q", fs[0].Content)
+	}
+	// A substantive conclusion that merely QUOTES first-person source text mid-sentence
+	// is NOT meta-dialogue.
+	if isMetaDialogueConclusion(`Whitmore's email stating "I will handle the cleanup" evidences the instruction.`) {
+		t.Error("mid-sentence quoted first person misflagged as meta-dialogue")
+	}
+}
+
 // Cheap-model path #1: the model drops the END_FINDING terminator entirely.
 // Pre-fix this yielded zero findings; now the block runs to end of text.
 func TestParseFindings_MissingEndMarker(t *testing.T) {
