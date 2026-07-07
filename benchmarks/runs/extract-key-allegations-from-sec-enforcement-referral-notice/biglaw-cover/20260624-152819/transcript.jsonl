@@ -1,0 +1,14 @@
+{"ts": "2026-06-24T15:29:07.121234+00:00", "event": "documents_ingested", "count": 8, "skipped": 0}
+{"ts": "2026-06-24T15:29:07.126393+00:00", "event": "task_submitted", "taskId": "06ad11ca-4cd2-4f8c-9f54-42bc493b3576", "workflow": "roundtable", "gatePolicy": "approve"}
+{"ts": "2026-06-24T15:29:07.127548+00:00", "event": "status", "status": "running", "round": 0}
+{"ts": "2026-06-24T15:38:27.259918+00:00", "event": "status", "status": "awaiting_gate", "round": 1}
+{"ts": "2026-06-24T15:38:27.264102+00:00", "event": "gate_resolved", "gateId": "f0b921b3-f306-4640-8a2f-c0f300b9d230", "findingId": "5b00b277-34b4-4839-af0b-7025c53db4d4", "action": "approve"}
+{"ts": "2026-06-24T15:38:27.270675+00:00", "event": "gate_resolved", "gateId": "2be149c8-f911-459d-9cb0-7ac67d47736f", "findingId": "43137942-c22d-42f3-8a16-f8dd4a74dbc4", "action": "approve"}
+{"ts": "2026-06-24T15:38:37.273695+00:00", "event": "status", "status": "running", "round": 1}
+{"ts": "2026-06-24T15:44:57.380437+00:00", "event": "status", "status": "awaiting_gate", "round": 2}
+{"ts": "2026-06-24T15:44:57.384770+00:00", "event": "gate_resolved", "gateId": "8525e853-b33d-45a7-a3d7-d7794046acf5", "findingId": "dc79cf5b-cebc-4144-8f4b-6e31ebde1c2a", "action": "approve"}
+{"ts": "2026-06-24T15:44:57.388363+00:00", "event": "gate_resolved", "gateId": "d1681f7c-ec66-41ff-9ca6-b1bcfe2d8b2a", "findingId": "0cb81ac8-4fc1-4013-957a-f13375c55dfe", "action": "approve"}
+{"ts": "2026-06-24T15:45:07.391404+00:00", "event": "status", "status": "running", "round": 2}
+{"ts": "2026-06-24T15:52:47.521892+00:00", "event": "status", "status": "awaiting_gate", "round": 3}
+{"ts": "2026-06-24T15:52:47.526328+00:00", "event": "gate_resolved", "gateId": "b01f6d5b-e797-4b8a-9b5c-9204b5d99857", "findingId": "648e4c90-7c57-44b1-84db-d4bd3929e339", "action": "approve"}
+{"ts": "2026-06-24T15:52:57.529782+00:00", "event": "status", "status": "running", "round": 3}

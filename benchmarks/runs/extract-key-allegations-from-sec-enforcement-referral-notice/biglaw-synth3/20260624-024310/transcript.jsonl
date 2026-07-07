@@ -1,0 +1,40 @@
+{"ts": "2026-06-24T02:43:44.314140+00:00", "event": "documents_ingested", "count": 8, "skipped": 0}
+{"ts": "2026-06-24T02:43:44.573630+00:00", "event": "task_submitted", "taskId": "8d1ebc21-00a7-4811-8a5b-caa5a326f072", "workflow": "roundtable", "gatePolicy": "approve"}
+{"ts": "2026-06-24T02:43:44.575175+00:00", "event": "status", "status": "running", "round": 0}
+{"ts": "2026-06-24T02:46:14.624985+00:00", "event": "status", "status": "awaiting_gate", "round": 1}
+{"ts": "2026-06-24T02:46:14.876679+00:00", "event": "gate_resolved", "gateId": "671139bf-b26a-44c1-b8b7-3c2e70dc53f7", "findingId": "71fab0a8-5d0a-4654-aaf0-a986a7053cf6", "action": "approve"}
+{"ts": "2026-06-24T02:46:15.135082+00:00", "event": "gate_resolved", "gateId": "7e07d883-46c4-441a-8092-6ac187be2177", "findingId": "a9c69c7c-76b4-4350-9d84-0e4f2d148ee3", "action": "approve"}
+{"ts": "2026-06-24T02:46:15.387461+00:00", "event": "gate_resolved", "gateId": "1c598d80-8670-4680-96e3-98bb563de24b", "findingId": "b5a7ae63-0994-44c8-bb1b-875db41b95a5", "action": "approve"}
+{"ts": "2026-06-24T02:46:25.392532+00:00", "event": "status", "status": "running", "round": 2}
+{"ts": "2026-06-24T02:48:55.462268+00:00", "event": "status", "status": "awaiting_gate", "round": 2}
+{"ts": "2026-06-24T02:48:55.732078+00:00", "event": "gate_resolved", "gateId": "8013bb5a-1125-40d4-bad9-d651b16a5de9", "findingId": "7f1f7d22-c792-4c3e-99ad-79e8708cd858", "action": "approve"}
+{"ts": "2026-06-24T02:48:55.980650+00:00", "event": "gate_resolved", "gateId": "ca7a9920-d1c2-4143-b188-98addf77bfea", "findingId": "b21104a1-5e50-404a-b58c-00ea18d94448", "action": "approve"}
+{"ts": "2026-06-24T02:48:56.217774+00:00", "event": "gate_resolved", "gateId": "56f1b07b-c745-4259-8413-362e028250f7", "findingId": "9066e9e0-e6e5-48f9-a326-68c57ae10ea5", "action": "approve"}
+{"ts": "2026-06-24T02:48:56.463540+00:00", "event": "gate_resolved", "gateId": "4af8c222-7f47-4123-aea2-4739f7bbd9d5", "findingId": "96e0b308-cda6-4af2-9ff2-7c1eeb6b69ea", "action": "approve"}
+{"ts": "2026-06-24T02:48:56.719542+00:00", "event": "gate_resolved", "gateId": "5a48ef86-e886-4755-8957-a4fa996c3856", "findingId": "4c2d788b-0325-40e2-8417-d46eab71a11a", "action": "approve"}
+{"ts": "2026-06-24T02:49:06.729940+00:00", "event": "status", "status": "running", "round": 3}
+{"ts": "2026-06-24T02:50:46.797731+00:00", "event": "status", "status": "awaiting_gate", "round": 3}
+{"ts": "2026-06-24T02:50:47.036507+00:00", "event": "gate_resolved", "gateId": "d59a6175-91bc-4b4b-9a05-3c9aaeb28c14", "findingId": "9d034503-fe71-4399-b317-d4d78e9005d1", "action": "approve"}
+{"ts": "2026-06-24T02:50:47.254937+00:00", "event": "gate_resolved", "gateId": "c4eee5e4-4725-43d6-969f-64edfcd4697e", "findingId": "bd1767b1-fa2e-4a12-8f14-2d07c1299e07", "action": "approve"}
+{"ts": "2026-06-24T02:50:47.501875+00:00", "event": "gate_resolved", "gateId": "4a9afc44-4d67-4404-b535-75b370bdf1a2", "findingId": "e13cb069-b88b-4039-a193-d7cd764bbd3b", "action": "approve"}
+{"ts": "2026-06-24T02:50:57.509136+00:00", "event": "status", "status": "running", "round": 4}
+{"ts": "2026-06-24T02:52:27.575565+00:00", "event": "status", "status": "awaiting_gate", "round": 4}
+{"ts": "2026-06-24T02:52:27.838688+00:00", "event": "gate_resolved", "gateId": "4e2cc19a-6468-463b-8950-1924f2613fbf", "findingId": "5cb544d7-452a-43da-bedb-2d378ff24031", "action": "approve"}
+{"ts": "2026-06-24T02:52:28.072836+00:00", "event": "gate_resolved", "gateId": "89d7ae44-b492-453e-83c7-302807c42d85", "findingId": "f9141ccd-ddbc-4582-a5a5-f2ea08f162c3", "action": "approve"}
+{"ts": "2026-06-24T02:52:28.334016+00:00", "event": "gate_resolved", "gateId": "efb039a5-5adf-4b95-8966-b07e5b1545cf", "findingId": "107288fe-96ab-4300-9402-5cca69222c49", "action": "approve"}
+{"ts": "2026-06-24T02:52:28.595625+00:00", "event": "gate_resolved", "gateId": "93e97548-7a69-408a-98f2-4116fed7c76e", "findingId": "81672e8a-13e3-4445-a918-1aeaa7f27cb0", "action": "approve"}
+{"ts": "2026-06-24T02:52:38.605305+00:00", "event": "status", "status": "running", "round": 5}
+{"ts": "2026-06-24T02:54:28.700989+00:00", "event": "status", "status": "awaiting_gate", "round": 5}
+{"ts": "2026-06-24T02:54:28.954923+00:00", "event": "gate_resolved", "gateId": "6e251f3a-d471-4bb1-a5d6-a2df3c5bf46f", "findingId": "687cd100-6381-495a-8f26-59e558a0f582", "action": "approve"}
+{"ts": "2026-06-24T02:54:29.222543+00:00", "event": "gate_resolved", "gateId": "119939ed-79a3-4cc4-ba23-33b47b3978bd", "findingId": "cdd5006a-ba10-4cee-bc0b-416cb8807d46", "action": "approve"}
+{"ts": "2026-06-24T02:54:29.452872+00:00", "event": "gate_resolved", "gateId": "212841f9-0e16-4906-82ba-1671afbc1bc5", "findingId": "ba2e845c-a91d-4241-90a2-52dbe7fa340d", "action": "approve"}
+{"ts": "2026-06-24T02:54:29.694744+00:00", "event": "gate_resolved", "gateId": "9429f6f2-7212-4dc2-978f-0ae57ad9831d", "findingId": "a89c0d95-42e9-4043-8e9f-7e42abd1ba11", "action": "approve"}
+{"ts": "2026-06-24T02:54:29.950781+00:00", "event": "gate_resolved", "gateId": "a7be5f2b-ba9f-489c-918f-989a2f6613aa", "findingId": "bd2196cb-6504-4bde-a28d-74df4e7a1c35", "action": "approve"}
+{"ts": "2026-06-24T02:54:30.205016+00:00", "event": "gate_resolved", "gateId": "b044b9e8-0ccd-4a9e-a51d-6c37cdd517f3", "findingId": "63f539f6-37a9-47e1-bf28-09852c851be7", "action": "approve"}
+{"ts": "2026-06-24T02:54:40.218389+00:00", "event": "status", "status": "running", "round": 6}
+{"ts": "2026-06-24T02:55:50.301640+00:00", "event": "status", "status": "awaiting_gate", "round": 6}
+{"ts": "2026-06-24T02:55:50.543247+00:00", "event": "gate_resolved", "gateId": "badf6f44-8ec7-4cf1-a8e6-70db9999636e", "findingId": "6f739304-ec00-4964-9d97-65fb7c9bbe94", "action": "approve"}
+{"ts": "2026-06-24T02:55:50.783867+00:00", "event": "gate_resolved", "gateId": "33c1b220-71f2-461f-8f68-076a5dd912b7", "findingId": "c398499a-d871-4e40-8558-ffebe598b41d", "action": "approve"}
+{"ts": "2026-06-24T02:56:00.795744+00:00", "event": "status", "status": "running", "round": 6}
+{"ts": "2026-06-24T02:59:11.027803+00:00", "event": "status", "status": "complete", "round": 6}
+{"ts": "2026-06-24T02:59:11.078584+00:00", "event": "deliverable_written", "file": "output\\allegation-extraction-summary.docx"}

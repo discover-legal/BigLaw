@@ -1,0 +1,164 @@
+{
+  "score": 0.0,
+  "max_score": 1.0,
+  "summary": "8/23 criteria passed.  Missed 15 \u2014 task FAIL.",
+  "all_pass": false,
+  "n_criteria": 23,
+  "n_passed": 8,
+  "criteria_results": [
+    {
+      "id": "C-001",
+      "title": "Identifies incorrect residuary share percentages (ISSUE_001)",
+      "verdict": "fail",
+      "reasoning": "The criterion requires the report to specifically identify that the drafted trust assigns residuary shares as David 40%, Sophia 30%, Tommy 30%, whereas the instruction memo specifies David 40%, Sophia 35%, Tommy 25%, with both Sophia's and Tommy's discrepancies noted. The agent's report identifies Tommy's share discrepancy (30% vs. 25%) and David's share discrepancy (50% vs. 40%), but does not specifically identify Sophia's share discrepancy (30% in draft vs. 35% in instructions). The report mentions various percentage discrepancies but never clearly states that Sophia's share is 30% in the draft versus 35% in the instructions. Without explicitly noting Sophia's incorrect share, the criterion is not satisfied."
+    },
+    {
+      "id": "C-002",
+      "title": "Classifies residuary percentage error as critical or high severity",
+      "verdict": "pass",
+      "reasoning": "The report classifies the residuary percentage deviations as high severity. Specifically, the 'Tommy's Share' section identifies the 30% vs. 25% discrepancy as a 'DEVIATION (high severity)' and the 'Deviations Identified' section explicitly lists it as 'DEVIATION (high severity).' Similarly, David's 50% vs. 40% share is also classified as 'DEVIATION (high severity).' The report uses three severity tiers (critical, high, medium), and the residuary percentage errors are placed in the second-highest tier (high), which satisfies the criterion requiring classification as 'critical or high severity.'"
+    },
+    {
+      "id": "C-003",
+      "title": "Recommends correcting residuary shares to 40/35/25 split",
+      "verdict": "pass",
+      "reasoning": "The agent's output explicitly recommends correcting the residuary shares. In the 'Deviations Identified' section, it states: 'DEVIATION (high severity) --- The document specifies a 30% distribution to Tommy instead of the required 25%' with recommended correction to change to 25%, and 'DEVIATION (high severity) --- The document states that Dr. David Chen receives one-half (50%) of the residuary estate instead of forty percent (40%)' with recommended correction to change to 40%. The Tommy's Share section also notes the 30% vs 25% discrepancy. Combined, these corrections imply the 40/35/25 split (David 40%, Sophia 35%, Tommy 25%), which matches the criterion requirement."
+    },
+    {
+      "id": "C-004",
+      "title": "Identifies spendthrift trust termination age error (ISSUE_002)",
+      "verdict": "pass",
+      "reasoning": "The agent's output clearly identifies the trust termination age discrepancy in the 'Termination of the Sophia Trust' section, noting that the draft documents specify age 55 while Peggy's instructions require age 60. This is also listed in the 'Deviations Identified' section as a high severity deviation, with a recommended correction to change the termination clause to October 8, 2040 (when Sophia reaches age 60)."
+    },
+    {
+      "id": "C-005",
+      "title": "Notes impact of termination age error on dates (2035 vs 2040)",
+      "verdict": "pass",
+      "reasoning": "The report explicitly states in the 'Termination of the Sophia Trust' section that Sophia was born on October 8, 1980, and that the trust terminating at age 55 means it would terminate 'on or about October 8, 2035,' while Peggy's instructions require termination at age 60, which would be October 8, 2040. The report directly notes both dates and explains the practical significance: 'This discrepancy significantly affects when Sophia will receive her full share of the estate and undermines Peggy's intent for financial protection until age 60.' This satisfies the criterion of noting the impact of the termination age error on dates (2035 vs 2040)."
+    },
+    {
+      "id": "C-006",
+      "title": "Identifies missing grandchildren's education trust (ISSUE_003)",
+      "verdict": "fail",
+      "reasoning": "The agent's output does not identify the omission of a $200,000-per-grandchild supplemental education trust that should be funded from the residuary estate before the three-way split. While the report mentions a $200,000 figure in the context of grandchildren reaching age 35 without completing education, it frames this as a client instruction rather than identifying it as an omission from the drafted trust documents. The report never flags that the draft trust completely fails to include this grandchildren's education trust provision, nor does it appear in the 'Deviations Identified' section. The criterion requires the report to identify that the drafted trust omits this specific trust structure, which the agent's output fails to do."
+    },
+    {
+      "id": "C-007",
+      "title": "Classifies missing education trust as critical or high severity",
+      "verdict": "fail",
+      "reasoning": "The agent's output does not classify the omission of a grandchildren's education trust as a critical or high severity deviation. While the report briefly mentions an education trust provision in the 'Tommy's Share' section (referencing a sub-trust to fund education until age 25 with $200,000), it does not identify the missing grandchildren's education trust as a deviation at all in the 'Deviations Identified' section. The structured deviations list contains no entry for a missing or improperly drafted grandchildren's education trust. Therefore, the criterion requiring classification of this omission as critical or high severity is not met."
+    },
+    {
+      "id": "C-008",
+      "title": "Identifies Sophia erroneously listed as successor trustee (ISSUE_004)",
+      "verdict": "pass",
+      "reasoning": "The agent's output explicitly identifies the omission/deviation that Sophia Davenport-Chen is not excluded from serving as a successor trustee despite the client's explicit instruction to do so. This appears in both the 'Section 10.3 --- Successor Trust Protector' section ('the draft revocable trust does not explicitly exclude Sophia from serving as a successor trustee despite the client's explicit instruction to do so') and in the 'Deviations Identified' section as a critical severity omission ('The document does not exclude Sophia Davenport-Chen from serving as a successor trustee, despite the client's explicit instruction to do so'). This satisfies the criterion of identifying that the drafted trust names Sophia as a successor trustee while the instruction memo deliberately excludes her due to her bankruptcy history."
+    },
+    {
+      "id": "C-009",
+      "title": "Notes reason Sophia was excluded from trustee line",
+      "verdict": "pass",
+      "reasoning": "The report explicitly mentions Sophia's financial history as the reason for her exclusion. In Section 10.3, the report states: 'it has been noted that Sophia failed to disclose her history of financial difficulties, including a Chapter 7 bankruptcy discharge in 2018. Given these circumstances, appointing Sophia or someone closely related by blood or marriage would be highly problematic and could compromise the integrity of the trust's administration.' This directly connects her exclusion from the trustee/fiduciary role to her bankruptcy history."
+    },
+    {
+      "id": "C-010",
+      "title": "Identifies incorrect scholarship fund name (ISSUE_005)",
+      "verdict": "fail",
+      "reasoning": "The agent's output does not identify the scholarship fund name discrepancy. The report never mentions 'The Raymond Chen Memorial Scholarship at Stanford University' or 'Raymond and Margaret Chen Scholarship Fund at Stanford University,' nor does it flag the omission of Margaret's name from the fund name. This specific issue (ISSUE_005) is entirely absent from the deviation report."
+    },
+    {
+      "id": "C-011",
+      "title": "Identifies missing Fund ID for Stanford scholarship (ISSUE_005)",
+      "verdict": "fail",
+      "reasoning": "The agent's output does not mention the missing Fund ID #SU-RMCSF-2022 for the Stanford scholarship fund anywhere in the deviation report. The report covers many other deviations and discrepancies but completely omits this specific issue regarding the Stanford scholarship fund identifier."
+    },
+    {
+      "id": "C-012",
+      "title": "Identifies missing Trust Protector limitation (ISSUE_006)",
+      "verdict": "pass",
+      "reasoning": "The agent's output explicitly identifies the omission of a provision limiting the Trust Protector's ability to accelerate distributions. In the 'Section 10.2 --- Powers of Trust Protector' section, it states: 'there is an omission regarding a provision limiting the Trust Protector's ability to accelerate distributions beyond what is permitted by the trust terms.' This is also listed in the 'Deviations Identified' section as an 'OMISSION (high severity)' with the recommended correction to 'Include a clear and prominent clause stating that the Trust Protector may not direct or authorize the Trustee to make distributions earlier than, or in greater amounts than, the trust's distribution provisions authorize.' This satisfies the criterion of identifying that the drafted trust omits the restriction that the Trust Protector may not modify beneficial interests or accelerate distributions."
+    },
+    {
+      "id": "C-013",
+      "title": "Identifies incapacity determination standard discrepancy (ISSUE_007)",
+      "verdict": "fail",
+      "reasoning": "The agent's output does not identify the specific discrepancy that the drafted trust specifies incapacity determination by one licensed physician and one licensed clinical psychologist, whereas the instruction memo requires determination by two licensed physicians. While the report mentions physician certification requirements in the 'Certification by Licensed Physician' and 'HIPAA Authorization' sections, it conflates and contradicts itself (mentioning both 'one licensed physician' and 'two licensed physicians' without clearly identifying the specific discrepancy between the draft document's standard and the client instruction memo's requirement). The report never clearly states that the draft uses 'one physician + one clinical psychologist' versus the instruction memo's requirement of 'two licensed physicians.' The criterion requires explicit identification of this specific discrepancy (ISSUE_007), which the agent fails to do."
+    },
+    {
+      "id": "C-014",
+      "title": "Identifies piano bequest missing details (ISSUE_008)",
+      "verdict": "fail",
+      "reasoning": "The agent's output mentions the Steinway grand piano bequest (noting it goes to Lily Chen upon reaching age 18, with Dr. David Chen holding it until then), but never identifies that the draft trust omits specific identifying details such as the model (Model B), serial number (612847), or year (2019) of the piano. None of these omitted details are mentioned anywhere in the report."
+    },
+    {
+      "id": "C-015",
+      "title": "Identifies piano bequest missing custodial/holding instruction",
+      "verdict": "fail",
+      "reasoning": "The agent's output mentions the piano bequest and custodial arrangement in the 'In Terrorem Provision' section, stating 'the trust includes provisions for the Steinway grand piano to be distributed to Lily Chen upon reaching age 18, with Dr. David Chen holding and safeguarding it until then.' However, the criterion requires the report to flag that the drafted trust OMITS this custodial/holding instruction. The agent's output treats this as if it IS present in the draft documents, rather than identifying it as a missing provision that deviates from client instructions. The agent does not flag this as a deviation or omission anywhere in the report, including in the 'Deviations Identified' section. Therefore, the criterion is not satisfied."
+    },
+    {
+      "id": "C-016",
+      "title": "Identifies pour-over will missing disinheritance clause (ISSUE_009)",
+      "verdict": "fail",
+      "reasoning": "The agent's output does not identify the omission of a specific disinheritance clause in the pour-over will. The report covers many deviations and omissions across various sections, but nowhere does it mention that the pour-over will is missing a clause that disinherits any persons not named as beneficiaries, which the instruction memo allegedly requires. The closest the report comes is discussing the revocation of prior instruments and pour-over provisions, but it never flags the absence of a disinheritance clause as a specific issue."
+    },
+    {
+      "id": "C-017",
+      "title": "Identifies missing contingent guardian Eleanor Davenport (ISSUE_010)",
+      "verdict": "fail",
+      "reasoning": "The agent's output does not mention Eleanor Davenport anywhere in the deviation report. The criterion requires identifying that the pour-over will nominates Jennifer Chen as guardian but omits Eleanor Davenport as the second-choice/contingent guardian. This specific omission (ISSUE_010) is not identified anywhere in the report."
+    },
+    {
+      "id": "C-018",
+      "title": "Identifies no-contest clause California enforceability concern (ISSUE_011)",
+      "verdict": "fail",
+      "reasoning": "The agent's output mentions California Probate Code \u00a721315 and \u00a721132 in passing within the Section 10.2 discussion, but does not flag any concern about the no-contest clause's enforceability under California law. The report does not discuss the probable cause exception, the restriction to direct contests, or any other California-specific enforceability concern. The client's instruction that the clause be 'strong but enforceable under California law' is not addressed, and no analysis of \u00a7\u00a721310-21315 is provided in the context of enforceability concerns."
+    },
+    {
+      "id": "C-019",
+      "title": "Identifies missing IRC \u00c2\u00a7643(e)(3) election authority (ISSUE_012)",
+      "verdict": "fail",
+      "reasoning": "The agent's output does not mention IRC \u00a7643(e)(3) elections or the omission of specific authority for elections to recognize gain on in-kind distributions anywhere in the deviation report. The report covers many other deviations and omissions but completely fails to flag the missing IRC \u00a7643(e)(3) election authority that the criterion requires."
+    },
+    {
+      "id": "C-020",
+      "title": "Report correctly identifies both trust and will as containing deviations",
+      "verdict": "fail",
+      "reasoning": "The report identifies deviations primarily in the draft revocable trust. While the pour-over will is mentioned in several sections (e.g., 'Termination of the Sophia Trust,' 'Instrument of Revocation,' 'Instrument of Amendment'), the references to the pour-over will are largely incidental or confirmatory (e.g., noting it aligns with instructions, or that it lacks certain provisions). The formal 'Deviations Identified' section lists eight specific deviations, none of which are explicitly attributed to the draft pour-over will as the document containing the deviation. The deviations listed (trust termination age, distribution percentages, exclusion of Sophia as trustee, etc.) all pertain to the revocable trust. The report does not clearly identify at least one concrete deviation specifically located in the draft pour-over will document."
+    },
+    {
+      "id": "C-021",
+      "title": "Notes practical impact of Sophia's erroneous trustee role given bankruptcy history",
+      "verdict": "fail",
+      "reasoning": "The report identifies the omission of Sophia's exclusion as successor trustee and notes her Chapter 7 bankruptcy history, but it does not explain the practical impact of naming her as trustee. It states that appointing Sophia 'would be highly problematic and could compromise the integrity of the trust's administration,' but this is vague and does not connect her bankruptcy history to specific concerns such as undermining asset protection goals, creditor access to trust assets, or the spendthrift provision's purpose. The report fails to analyze how her financial difficulties would practically affect trust administration or beneficiary protection."
+    },
+    {
+      "id": "C-022",
+      "title": "Notes that missing education trust affects residuary estate calculation",
+      "verdict": "fail",
+      "reasoning": "The agent's output mentions a $200,000 distribution related to grandchildren reaching age 35 without completing education or securing stable employment, but it does not identify this as an education trust that should be funded from the residuary estate before the three-way percentage split. The report never connects the omission of the grandchildren's education trust to its effect on the residuary estate calculation or the percentage split among David, Tommy, and Sophia. The criterion requires the report to note that the omitted education trust was to be funded from the residuary estate prior to the percentage distribution, and that its omission therefore affects the residuary distribution calculation. This specific relationship is absent from the agent's output."
+    },
+    {
+      "id": "C-023",
+      "title": "Recommends adding Trust Protector limitations on beneficial interests and distributions",
+      "verdict": "pass",
+      "reasoning": "The agent's output explicitly identifies the omission of a provision limiting the Trust Protector's ability to accelerate distributions and recommends adding restrictive language. In the 'Section 10.2 --- Powers of Trust Protector' section, it states: 'there is an omission regarding a provision limiting the Trust Protector's ability to accelerate distributions beyond what is permitted by the trust terms. This high-severity omission recommends including a clear and prominent clause stating that the Trust Protector may not direct or authorize the Trustee to make distributions earlier than, or in greater amounts than, the trust's distribution provisions authorize.' This recommendation is also repeated in the 'Deviations Identified' section as an OMISSION (high severity) with the same recommended correction. This satisfies the criterion of recommending that the trust document be revised to include language restricting the Trust Protector from accelerating distributions."
+    }
+  ],
+  "run_id": "trusts-estates-private-client/compare-trust-documents-against-client-instructions/biglaw-consist2/20260702-162409",
+  "task": "trusts-estates-private-client/compare-trust-documents-against-client-instructions",
+  "judge_model": "claude-sonnet-4-6",
+  "scored_at": "2026-07-02T18:30:02.339858+00:00",
+  "cost": {
+    "input_tokens": 1039557,
+    "output_tokens": 178825,
+    "wall_clock_seconds": 0
+  },
+  "doc_coverage": {
+    "documents_read": 4,
+    "total_vdr_files": 0,
+    "documents_skipped": 0,
+    "documents_read_list": [],
+    "documents_skipped_list": []
+  }
+}

@@ -1,0 +1,164 @@
+{
+  "score": 0.0,
+  "max_score": 1.0,
+  "summary": "15/23 criteria passed.  Missed 8 \u2014 task FAIL.",
+  "all_pass": false,
+  "n_criteria": 23,
+  "n_passed": 15,
+  "criteria_results": [
+    {
+      "id": "C-001",
+      "title": "Identifies incorrect residuary share percentages (ISSUE_001)",
+      "verdict": "pass",
+      "reasoning": "The agent's output identifies the residuary share percentage discrepancy for Sophia Davenport-Chen in the 'Deviations Identified' section: 'DEVIATION (partial implementation --- high severity) --- Spendthrift provision for Sophia Davenport-Chen Protected Trust' notes that the controlling source states 35% while the draft states 30%. Additionally, in the 'Discrepancies and Defense Issues' section, Tommy's share is flagged as 25% (client-instruction-memo) vs. 40% (client-instruction-memo), though this is somewhat confused. The key deviation for Sophia's share (35% vs 30%) is clearly identified, which is the core of ISSUE_001 regarding the percentage discrepancy between the drafted trust and the instruction memo."
+    },
+    {
+      "id": "C-002",
+      "title": "Classifies residuary percentage error as critical or high severity",
+      "verdict": "pass",
+      "reasoning": "The report classifies the residuary percentage error as 'high severity' in the Deviations Identified section: 'DEVIATION (partial implementation --- high severity) --- Spendthrift provision for Sophia Davenport-Chen Protected Trust' notes the conflict between the controlling source's 35% and the document's 30% for Sophia's share. Additionally, in the Discrepancies and Defense Issues section, the David's Share discrepancy (40% vs 30%) is flagged. 'High severity' is the highest severity tier used in this report (the report uses 'high severity,' 'medium severity,' and 'low severity'), so classifying the residuary percentage error as high severity satisfies the criterion."
+    },
+    {
+      "id": "C-003",
+      "title": "Recommends correcting residuary shares to 40/35/25 split",
+      "verdict": "pass",
+      "reasoning": "The report identifies a deviation regarding Sophia's share percentage, noting that the controlling source states 35% while the draft says 30%, and recommends changing it to 35%. The report also notes David's share at 40% (which matches the controlling source). While the report doesn't always present all three percentages together in one clean statement, it does recommend correcting Sophia's share to 35%, David's share is confirmed at 40%, and Tommy's share discrepancy (25% vs 40%) is flagged in the discrepancies section. The 40/35/25 split is effectively recommended through these individual corrections."
+    },
+    {
+      "id": "C-004",
+      "title": "Identifies spendthrift trust termination age error (ISSUE_002)",
+      "verdict": "pass",
+      "reasoning": "The agent's output clearly identifies the spendthrift trust termination age error in multiple places. In the 'Deviations Identified' section, there is an explicit deviation entry stating: 'DEVIATION (partial implementation --- high severity) --- Distribution standard for Sophia Davenport-Chen Protected Trust: draft-revocable-trust.docx implements this requirement only in part. Deviating sub-parts: (1) termination age --- CONFLICT: the CONTROLLING SOURCE states \"The trust should terminate when Sophia reaches age 60 (i.e., October 8, 2040)\" but the document states \"The Sophia Trust shall terminate when Sophia Davenport-Chen reaches the age of fifty-five (55) years.\"' The report also flags this in the Discrepancies section noting the termination age discrepancy between 60 (client-background-summary.docx) and 55 (draft-revocable-trust.docx)."
+    },
+    {
+      "id": "C-005",
+      "title": "Notes impact of termination age error on dates (2035 vs 2040)",
+      "verdict": "pass",
+      "reasoning": "The report explicitly identifies the termination age discrepancy (55 in the draft vs. 60 per client instructions) and notes the resulting incorrect termination date: 'the Sophia Trust is anticipated to terminate on or about October 8, 2035' (from the draft) versus the correct date of October 8, 2040. This appears in the 'Distribution standard for Sophia Davenport-Chen Protected Trust' deviation entry, which quotes both the incorrect age (55) and the resulting incorrect date (2035), and contrasts it with the correct age (60) and correct date (2040). The practical significance of the five-year difference is thus clearly documented."
+    },
+    {
+      "id": "C-006",
+      "title": "Identifies missing grandchildren's education trust (ISSUE_003)",
+      "verdict": "pass",
+      "reasoning": "The agent's output clearly identifies the missing grandchildren's education trust in multiple places. In the 'Deviations Identified' section, there is an explicit 'DEVIATION (partial implementation --- high severity)' entry stating that the draft revocable trust omits the provision to set aside $200,000 per qualifying grandchild (including future-born or legally adopted grandchildren) from the residuary estate to create supplemental education trusts. The controlling source language is quoted verbatim, and the recommended correction specifies including this $200,000-per-qualifying-grandchild provision. Additionally, there is a separate 'OMISSION (high severity)' entry about comprehensive educational expenses for grandchildren. The report clearly identifies this omission."
+    },
+    {
+      "id": "C-007",
+      "title": "Classifies missing education trust as critical or high severity",
+      "verdict": "pass",
+      "reasoning": "The agent's output classifies the missing grandchildren's education trust as high severity in multiple places. Specifically, under 'right to amend' it discusses the omission as critical, and in the 'Deviations Identified' section there are two explicit high-severity findings: one labeled 'DEVIATION (partial implementation --- high severity)' regarding setting aside $200,000 per qualifying grandchild for education trusts, and one labeled 'OMISSION (high severity)' regarding comprehensive educational expenses for grandchildren. Both are clearly classified as high severity, not minor."
+    },
+    {
+      "id": "C-008",
+      "title": "Identifies Sophia erroneously listed as successor trustee (ISSUE_004)",
+      "verdict": "pass",
+      "reasoning": "The agent's output clearly identifies that Sophia Davenport-Chen is erroneously listed as a successor trustee in the draft revocable trust. Multiple sections address this deviation: the 'Deviations Identified' section contains explicit entries noting that the draft names 'Sophia Davenport-Chen, the Settlor's daughter, shall serve as successor Trustee' as the second successor trustee, while the controlling source states 'CRITICAL NOTE --- Do NOT name Sophia Davenport-Chen as a successor trustee in any capacity.' The report also notes that Broadleaf Fiduciary Services, Inc. should be the second successor trustee instead of Sophia, and recommends removing Sophia from the successor trustee list. The deviation is flagged as high severity and appears in multiple deviation entries."
+    },
+    {
+      "id": "C-009",
+      "title": "Notes reason Sophia was excluded from trustee line",
+      "verdict": "fail",
+      "reasoning": "The report identifies that Sophia Davenport-Chen was incorrectly included as a successor trustee and recommends her removal, but it never explains why she was deliberately excluded. The criterion requires the report to mention that Sophia was intentionally excluded due to her financial history or bankruptcy. While the report does note her 2018 bankruptcy discharge in the Section 8.2 discussion, it never connects this financial history to the reason for her exclusion from the trustee succession line. The deviations section simply states she should be removed per Peggy's instructions without providing the underlying rationale related to her financial background."
+    },
+    {
+      "id": "C-010",
+      "title": "Identifies incorrect scholarship fund name (ISSUE_005)",
+      "verdict": "pass",
+      "reasoning": "The agent's output explicitly identifies the scholarship fund name discrepancy in the 'Deviations Identified' section. It states: 'DEVIATION (partial implementation --- high severity) --- Charitable Bequest to Stanford Scholarship Fund: draft-revocable-trust.docx implements this requirement only in part. Deviating sub-parts: (1) scholarship fund name --- CONFLICT: the CONTROLLING SOURCE states \"the Raymond and Margaret Chen Scholarship Fund at Stanford University, Fund ID #SU-RMCSF-2022.\" but the document states \"The Raymond Chen Memorial Scholarship at Stanford University.\" (incorrect scholarship fund designation).' This directly identifies the omission of Margaret's name from the fund name, satisfying the criterion."
+    },
+    {
+      "id": "C-011",
+      "title": "Identifies missing Fund ID for Stanford scholarship (ISSUE_005)",
+      "verdict": "pass",
+      "reasoning": "The agent's output explicitly identifies the missing Fund ID in the 'Deviations Identified' section. It notes a 'DEVIATION (partial implementation --- medium severity)' regarding the scholarship fund, stating that the controlling source requires 'the Raymond and Margaret Chen Scholarship Fund at Stanford University, Fund ID #SU-RMCSF-2022' but the document states 'The Raymond Chen Memorial Scholarship at Stanford University' with the recommended correction to 'Change the scholarship fund name to The Raymond and Margaret Chen Scholarship Fund at Stanford University, Fund ID #SU-RMCSF-2022.' Additionally, there is another deviation entry noting that the draft does not address what happens if the scholarship fund ceases to exist, and the controlling source specifies using 'this exact name and include the Fund ID number in the trust document.' The Fund ID #SU-RMCSF-2022 is clearly identified as missing/incorrect in the report."
+    },
+    {
+      "id": "C-012",
+      "title": "Identifies missing Trust Protector limitation (ISSUE_006)",
+      "verdict": "pass",
+      "reasoning": "The agent's output explicitly identifies the missing Trust Protector limitation in multiple places. In the 'Deviations Identified' section, there are two entries addressing this issue: one flagged as 'partial implementation - high severity' noting that the appointment of Martin Fairchild lacks explicit limitations, and another 'high severity' deviation stating that 'The draft revocable trust does not specify that Martin Fairchild's role as Trust Protector is limited and cannot control distributions or alter beneficial interests.' The recommended corrections specifically call for adding language that the Trust Protector cannot control distributions or alter beneficial interests, which directly addresses the missing restriction required by the client instruction memo."
+    },
+    {
+      "id": "C-013",
+      "title": "Identifies incapacity determination standard discrepancy (ISSUE_007)",
+      "verdict": "pass",
+      "reasoning": "The agent's output clearly identifies the incapacity determination discrepancy in the 'determine incapacitation' section and in the 'Deviations Identified' list. It explicitly states that the draft revocable trust requires 'one (1) licensed physician' (plus a licensed clinical psychologist per Section 5.1) whereas the client instruction memo requires 'two (2) licensed physicians independently examine her.' The deviation is flagged as high severity with a recommended correction to amend the provision to require two licensed physicians."
+    },
+    {
+      "id": "C-014",
+      "title": "Identifies piano bequest missing details (ISSUE_008)",
+      "verdict": "fail",
+      "reasoning": "The agent's output does not identify any issue related to the piano bequest missing details. There is no mention of the Steinway piano, its model (Model B), serial number (612847), or year (2019) anywhere in the deviation report. The report covers many other deviations but completely omits this specific issue."
+    },
+    {
+      "id": "C-015",
+      "title": "Identifies piano bequest missing custodial/holding instruction",
+      "verdict": "fail",
+      "reasoning": "The agent's output does not identify the missing custodial/holding instruction regarding the piano bequest. Nowhere in the deviation report does the agent flag that the draft trust omits the instruction that David Chen is to hold the piano for Lily Chen until she reaches age 18. The report covers many other deviations but completely omits this specific issue."
+    },
+    {
+      "id": "C-016",
+      "title": "Identifies pour-over will missing disinheritance clause (ISSUE_009)",
+      "verdict": "fail",
+      "reasoning": "The agent's output does not identify the omission of a disinheritance clause in the pour-over will. The report covers numerous deviations and omissions across both documents, but nowhere does it mention that the pour-over will is missing a provision disinheriting any persons not named as beneficiaries, which the instruction memo requires. This specific issue (ISSUE_009) is absent from the deviations list, the discrepancies section, and all narrative sections of the report."
+    },
+    {
+      "id": "C-017",
+      "title": "Identifies missing contingent guardian Eleanor Davenport (ISSUE_010)",
+      "verdict": "pass",
+      "reasoning": "The agent's output explicitly identifies the missing contingent guardian Eleanor Davenport in the 'Deviations Identified' section. It notes: 'DEVIATION (partial implementation --- high severity) --- Contingent Guardian for Minor Grandchildren: Eleanor Davenport (if Jennifer Chen Unable or Unwilling): draft-pour-over-will.docx implements this requirement only in part. Deviating sub-parts: (1) contingent guardian nomination --- OMITTED: the CONTROLLING SOURCE states \"Contingent Guardian: Eleanor Davenport, Peggy's sister, currently residing in Scottsdale, Arizona.\" but no implementing provision was found. (The draft pour over will does not include a contingent guardian nomination.)' This directly identifies that Jennifer Chen is nominated as primary guardian but Eleanor Davenport as contingent guardian is omitted from the pour-over will."
+    },
+    {
+      "id": "C-018",
+      "title": "Identifies no-contest clause California enforceability concern (ISSUE_011)",
+      "verdict": "fail",
+      "reasoning": "The agent's output does not flag any concern about the no-contest clause's enforceability under California law. While the report briefly mentions an 'in terrorem provision that penalizes beneficiaries who contest or attack the trust agreement' in the 'right to amend' section, it does not raise any California-specific enforceability concern, does not reference California Probate Code \u00a721311 or \u00a7\u00a721310-21315, does not mention the probable cause exception, and does not note that the drafted clause fails to address the California statutory framework for no-contest clauses. The client's instruction that the clause be 'strong but enforceable under California law' is not addressed anywhere in the report."
+    },
+    {
+      "id": "C-019",
+      "title": "Identifies missing IRC \u00c2\u00a7643(e)(3) election authority (ISSUE_012)",
+      "verdict": "fail",
+      "reasoning": "The agent's output does not identify the missing IRC \u00a7643(e)(3) election authority anywhere in the deviation report. The report covers many deviations including tax-related provisions, but never flags the omission of a specific IRC \u00a7643(e)(3) election (elections to recognize gain on in-kind distributions) that the instruction memo requires. This specific issue (ISSUE_012) is entirely absent from the report."
+    },
+    {
+      "id": "C-020",
+      "title": "Report correctly identifies both trust and will as containing deviations",
+      "verdict": "pass",
+      "reasoning": "The report identifies deviations in both the draft revocable trust (draft-revocable-trust.docx) and the draft pour-over will (draft-pour-over-will.docx). For the revocable trust, numerous deviations are identified including the incapacity determination requiring only one physician instead of two, incorrect successor trustee listings, wrong scholarship fund name, missing education trust provisions, etc. For the pour-over will, deviations are identified including the contingent guardian nomination being omitted, the pour-over will not explicitly revoking prior trusts, the primary guardian not being explicitly stated as first choice, and the execution date issues. The report clearly addresses both documents."
+    },
+    {
+      "id": "C-021",
+      "title": "Notes practical impact of Sophia's erroneous trustee role given bankruptcy history",
+      "verdict": "fail",
+      "reasoning": "The report identifies Sophia Davenport-Chen's erroneous inclusion as a successor trustee and recommends her removal, but it does not explain the practical impact of this error in connection with her bankruptcy history or financial difficulties. The report mentions her 2018 bankruptcy discharge in the Section 8.2 discussion, but only in passing context about her age and termination date \u2014 not as a reason why naming her as trustee is problematic. The deviations section simply states she should be removed because the client instructed it, without connecting her inclusion to the asset protection concerns or financial vulnerability risks that her bankruptcy history creates. There is no analysis of how naming a bankrupt individual as trustee could undermine the trust's asset protection goals or expose trust assets to creditor claims."
+    },
+    {
+      "id": "C-022",
+      "title": "Notes that missing education trust affects residuary estate calculation",
+      "verdict": "fail",
+      "reasoning": "The agent's output identifies the omission of the grandchildren's education trust ($200,000 per qualifying grandchild) in multiple places, but it never explicitly notes that this set-aside was to be funded from the residuary estate *before* the three-way percentage split among David, Sophia, and Tommy. The report treats the education trust omission as a standalone issue without connecting it to the downstream effect on the residuary distribution calculation. The criterion requires the report to note that the omission affects the residuary distribution calculation (i.e., that the $200,000 per grandchild was to come off the top of the residuary before the percentage split), which the agent's output does not do."
+    },
+    {
+      "id": "C-023",
+      "title": "Recommends adding Trust Protector limitations on beneficial interests and distributions",
+      "verdict": "pass",
+      "reasoning": "The agent's output explicitly recommends adding restrictive language to limit the Trust Protector's role. In the 'Deviations Identified' section, there are two entries addressing this issue. The first states: 'Recommended correction: Amend the draft revocable trust to include explicit limitations on Martin Fairchild's role as Trust Protector, ensuring he does not have control over distributions or the ability to alter beneficial interests.' The second states: 'Recommended correction: Specify in the document that Martin Fairchild's role as Trust Protector is limited to oversight without control over distributions or alteration of beneficial interests.' Both recommendations explicitly call for adding language restricting the Trust Protector from controlling distributions and altering beneficial interests, satisfying the criterion."
+    }
+  ],
+  "run_id": "trusts-estates-private-client/compare-trust-documents-against-client-instructions/qwen-devport/20260705-213725",
+  "task": "trusts-estates-private-client/compare-trust-documents-against-client-instructions",
+  "judge_model": "claude-sonnet-4-6",
+  "scored_at": "2026-07-06T02:05:27.675656+00:00",
+  "cost": {
+    "input_tokens": 741086,
+    "output_tokens": 89233,
+    "wall_clock_seconds": 0
+  },
+  "doc_coverage": {
+    "documents_read": 4,
+    "total_vdr_files": 0,
+    "documents_skipped": 0,
+    "documents_read_list": [],
+    "documents_skipped_list": []
+  }
+}

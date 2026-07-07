@@ -1,0 +1,11 @@
+{
+  "model": "haiku-before-fixwave",
+  "agent": "biglaw",
+  "task": "trusts-estates-private-client/compare-trust-documents-against-client-instructions",
+  "workflow_type": "review",
+  "jurisdiction": "US",
+  "split_mode": "markers",
+  "gate_policy": "approve",
+  "api": "http://localhost:3203",
+  "started_at": "2026-07-05T05:36:24.123792+00:00"
+}

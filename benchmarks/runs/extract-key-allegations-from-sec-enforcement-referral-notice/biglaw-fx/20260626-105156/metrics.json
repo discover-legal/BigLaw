@@ -1,0 +1,37 @@
+{
+  "input_tokens": 183169,
+  "output_tokens": 35007,
+  "total_tokens": 218176,
+  "turns": 6,
+  "duration_seconds": 5947.2,
+  "num_documents": 8,
+  "documents_read": 8,
+  "completed": true,
+  "ended_at": "2026-06-26T12:31:05.483132+00:00",
+  "biglaw": {
+    "task_ids": [
+      "485bd25e-5b60-4fac-b683-2147252dcfe3"
+    ],
+    "workflow_type": "roundtable",
+    "split_mode": "single",
+    "cost_usd": 0.4202,
+    "gate_policy": "approve",
+    "gates": [
+      {
+        "taskId": "485bd25e-5b60-4fac-b683-2147252dcfe3",
+        "gateId": "ecc2ceae-fdda-44f9-aa11-6974198b0b5b",
+        "findingId": "62e6dce1-9715-450e-941e-360426b9fa3f",
+        "action": "approve"
+      },
+      {
+        "taskId": "485bd25e-5b60-4fac-b683-2147252dcfe3",
+        "gateId": "7b7aa3f2-82ff-4de8-b1b6-9ad6ea527bf5",
+        "findingId": "8ac6e145-f8a3-4037-ad55-53043aedb535",
+        "action": "approve"
+      }
+    ],
+    "gates_resolved": 2,
+    "findings": 92,
+    "documents_skipped": []
+  }
+}

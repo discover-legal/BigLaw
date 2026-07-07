@@ -1,0 +1,49 @@
+{
+  "input_tokens": 156752,
+  "output_tokens": 28270,
+  "total_tokens": 185022,
+  "turns": 6,
+  "duration_seconds": 5445.9,
+  "num_documents": 8,
+  "documents_read": 8,
+  "completed": true,
+  "ended_at": "2026-06-25T13:53:45.660588+00:00",
+  "biglaw": {
+    "task_ids": [
+      "6511391a-8978-4fba-a1c3-32e90d2b9053"
+    ],
+    "workflow_type": "roundtable",
+    "split_mode": "single",
+    "cost_usd": 0.3298,
+    "gate_policy": "approve",
+    "gates": [
+      {
+        "taskId": "6511391a-8978-4fba-a1c3-32e90d2b9053",
+        "gateId": "d4329755-4014-4a2e-aad3-d2b9d7cfa237",
+        "findingId": "516d3c31-959a-452a-a565-9b52107e3620",
+        "action": "approve"
+      },
+      {
+        "taskId": "6511391a-8978-4fba-a1c3-32e90d2b9053",
+        "gateId": "1465d928-c7e8-42a6-a37c-501f066c0015",
+        "findingId": "ab38fcea-75d4-4f54-a9f1-95fef2f1175d",
+        "action": "approve"
+      },
+      {
+        "taskId": "6511391a-8978-4fba-a1c3-32e90d2b9053",
+        "gateId": "963c44c9-9b3e-4c44-9f63-3b8d7ef0d096",
+        "findingId": "160b3ad9-7a13-4f1c-a477-ba6bf00ac9e3",
+        "action": "approve"
+      },
+      {
+        "taskId": "6511391a-8978-4fba-a1c3-32e90d2b9053",
+        "gateId": "dc770f74-3582-4e2d-8e44-3d11200bdf67",
+        "findingId": "6c7910e8-4221-487f-990c-04741445e258",
+        "action": "approve"
+      }
+    ],
+    "gates_resolved": 4,
+    "findings": 48,
+    "documents_skipped": []
+  }
+}

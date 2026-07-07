@@ -1,0 +1,32 @@
+{
+  "model": "claude-haiku-4-5",
+  "task": "white-collar-defense-investigations/extract-key-allegations-from-sec-enforcement-referral-notice",
+  "run_id": "white-collar-defense-investigations/extract-key-allegations-from-sec-enforcement-referral-notice/haiku-raw/manual-001",
+  "turn_count": 13,
+  "input_tokens": 1236509,
+  "output_tokens": 32185,
+  "total_tokens": 1268694,
+  "wall_clock_seconds": 310.4,
+  "finished_cleanly": true,
+  "completed_at": "2026-07-03T15:59:40.562678+00:00",
+  "documents_read": 7,
+  "documents_read_list": [
+    "sec-enforcement-referral-notice.docx",
+    "hargrove-tilton-compliance-review-2023.docx",
+    "wca-compliance-manual-excerpts.docx",
+    "wca-form-adv-part2a-march2023.docx",
+    "ostrowski-bank-records-exhibit.xlsx",
+    "wca-employee-trading-log.xlsx",
+    "sec-quantitative-analysis-summary.xlsx"
+  ],
+  "documents_skipped": 1,
+  "documents_skipped_list": [
+    "whitmore-delgado-email.eml"
+  ],
+  "total_documents": 8,
+  "bash_commands": 10,
+  "files_written": 1,
+  "files_edited": 0,
+  "glob_searches": 0,
+  "grep_searches": 0
+}

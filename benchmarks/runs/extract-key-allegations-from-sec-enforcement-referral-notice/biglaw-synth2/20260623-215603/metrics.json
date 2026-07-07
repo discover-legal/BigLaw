@@ -1,0 +1,133 @@
+{
+  "input_tokens": 150548,
+  "output_tokens": 39790,
+  "total_tokens": 190338,
+  "turns": 6,
+  "duration_seconds": 988.6,
+  "num_documents": 8,
+  "documents_read": 8,
+  "completed": true,
+  "ended_at": "2026-06-23T22:12:34.152069+00:00",
+  "biglaw": {
+    "task_ids": [
+      "4fa4df30-45c6-4940-a58c-b878eae9f34a"
+    ],
+    "workflow_type": "roundtable",
+    "split_mode": "single",
+    "cost_usd": 0.17,
+    "gate_policy": "approve",
+    "gates": [
+      {
+        "taskId": "4fa4df30-45c6-4940-a58c-b878eae9f34a",
+        "gateId": "6960da0d-2e9c-46f3-b51b-cca54f4e20c3",
+        "findingId": "2709cf77-270b-468e-850f-2f7ea182a4c9",
+        "action": "approve"
+      },
+      {
+        "taskId": "4fa4df30-45c6-4940-a58c-b878eae9f34a",
+        "gateId": "12a480b5-347c-41e6-a604-393856bcb2d0",
+        "findingId": "b7cd4489-a3e9-4e03-ab1c-dab56957067a",
+        "action": "approve"
+      },
+      {
+        "taskId": "4fa4df30-45c6-4940-a58c-b878eae9f34a",
+        "gateId": "7a43fd37-7381-44ff-a466-715eb75fcd4d",
+        "findingId": "b708aff6-b99c-46cd-a5f1-6c2b921543f0",
+        "action": "approve"
+      },
+      {
+        "taskId": "4fa4df30-45c6-4940-a58c-b878eae9f34a",
+        "gateId": "544dca90-1584-4ade-b46b-d48707ca1afb",
+        "findingId": "d35526e2-57b6-4aa0-a6b8-9939e7a9550f",
+        "action": "approve"
+      },
+      {
+        "taskId": "4fa4df30-45c6-4940-a58c-b878eae9f34a",
+        "gateId": "917ba8b3-306d-498e-93f5-2d7657039229",
+        "findingId": "d43cba53-05b4-476d-b4c0-e02dcff6ce32",
+        "action": "approve"
+      },
+      {
+        "taskId": "4fa4df30-45c6-4940-a58c-b878eae9f34a",
+        "gateId": "bbd4d9c5-8e96-41bc-879e-2a1dd917ad5b",
+        "findingId": "730cc5c2-5a89-466c-98ac-12d939d2bea6",
+        "action": "approve"
+      },
+      {
+        "taskId": "4fa4df30-45c6-4940-a58c-b878eae9f34a",
+        "gateId": "7e2c8960-c4fd-4058-bfc9-9d69b4c37da8",
+        "findingId": "2a04b839-1391-405d-b513-e58af3b9c38a",
+        "action": "approve"
+      },
+      {
+        "taskId": "4fa4df30-45c6-4940-a58c-b878eae9f34a",
+        "gateId": "66407c69-97e3-4435-a477-f3d4d3e1c6c0",
+        "findingId": "7934dcb3-aef7-4880-a91a-76a22503b8f9",
+        "action": "approve"
+      },
+      {
+        "taskId": "4fa4df30-45c6-4940-a58c-b878eae9f34a",
+        "gateId": "01dacfbe-1516-4813-9979-39280a1336e5",
+        "findingId": "666d93d4-85ad-4ea1-9d16-2c9ddde75c23",
+        "action": "approve"
+      },
+      {
+        "taskId": "4fa4df30-45c6-4940-a58c-b878eae9f34a",
+        "gateId": "25596a1d-b0f6-4a62-942d-b7d20c5cfe6c",
+        "findingId": "15f04483-b38f-4586-b245-5290ffa989e1",
+        "action": "approve"
+      },
+      {
+        "taskId": "4fa4df30-45c6-4940-a58c-b878eae9f34a",
+        "gateId": "710ed935-c0bb-494d-a24d-444946f84377",
+        "findingId": "a34b5998-e2f4-41c5-96dc-98e9ca527abe",
+        "action": "approve"
+      },
+      {
+        "taskId": "4fa4df30-45c6-4940-a58c-b878eae9f34a",
+        "gateId": "5abdd916-cbef-4b6b-8c97-3ed63314a378",
+        "findingId": "ebf8db2b-f92b-42f7-934f-d482aaf50d6a",
+        "action": "approve"
+      },
+      {
+        "taskId": "4fa4df30-45c6-4940-a58c-b878eae9f34a",
+        "gateId": "58473666-9167-4b30-a559-7e4b538131ba",
+        "findingId": "fdfce4b4-e11c-4f68-8928-92dce8c8826a",
+        "action": "approve"
+      },
+      {
+        "taskId": "4fa4df30-45c6-4940-a58c-b878eae9f34a",
+        "gateId": "dd0fdf25-f855-4dac-a92a-c7913f7d5bbe",
+        "findingId": "f84ee606-7a05-4798-9fb3-686685184ce6",
+        "action": "approve"
+      },
+      {
+        "taskId": "4fa4df30-45c6-4940-a58c-b878eae9f34a",
+        "gateId": "f5dff55c-4d06-4000-a4b0-6c43d7845283",
+        "findingId": "c8066e48-971f-46b8-ada4-f3cda98bcb7e",
+        "action": "approve"
+      },
+      {
+        "taskId": "4fa4df30-45c6-4940-a58c-b878eae9f34a",
+        "gateId": "1fa3f0cf-5612-4847-9525-28b84b799a73",
+        "findingId": "76f31280-a833-4c55-ab6e-9fe18d6c2f02",
+        "action": "approve"
+      },
+      {
+        "taskId": "4fa4df30-45c6-4940-a58c-b878eae9f34a",
+        "gateId": "2d1f5d88-0685-4190-859a-c5b0f42e88f0",
+        "findingId": "5a2dcb30-501c-484f-8a83-d14604194293",
+        "action": "approve"
+      },
+      {
+        "taskId": "4fa4df30-45c6-4940-a58c-b878eae9f34a",
+        "gateId": "4b551328-5cac-4ffe-934e-ce1c16a88f6d",
+        "findingId": "6432db84-8752-41a3-a7dc-85363fb2d4ff",
+        "action": "approve"
+      }
+    ],
+    "gates_resolved": 18,
+    "findings": 61,
+    "documents_skipped": []
+  }
+}

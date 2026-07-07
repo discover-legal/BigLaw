@@ -1,0 +1,16 @@
+{
+  "model": "claude-haiku-4-5",
+  "task": "white-collar-defense-investigations/extract-key-allegations-from-sec-enforcement-referral-notice",
+  "run_id": "white-collar-defense-investigations/extract-key-allegations-from-sec-enforcement-referral-notice/haiku-raw/manual-001",
+  "max_turns": 200,
+  "temperature": 0.0,
+  "shell_timeout": 60,
+  "reasoning_effort": null,
+  "skills": [
+    "docx",
+    "pptx",
+    "xlsx"
+  ],
+  "sandbox_image": "lab-sandbox:latest",
+  "started_at": "2026-07-03T15:54:29.907261+00:00"
+}
