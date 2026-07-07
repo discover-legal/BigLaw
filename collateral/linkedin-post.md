@@ -9,49 +9,35 @@
 
 **As above 🜁, so BELO 🜃.**
 
-A few weeks, one stubborn question: how far can a **single local open-weight model** get on a real BigLaw-grade task — with **no cloud model, no stuffing the whole corpus into one context**? Just orchestration. The task: **one** problem from Harvey's LAB benchmark — a white-collar SEC enforcement-referral extraction, scored against a *hidden* 60-criterion, all-or-nothing rubric (judge: claude-sonnet-4-6). One task, not the whole suite — I'll say so every time. Here's the whole climb, corrections and all.
+A few weeks, one stubborn question: how far can a single local open-weight model get on a real BigLaw-grade task — no cloud model, no stuffing the corpus into one context, just orchestration?
 
-**It started at zero.** Literally. A weak local model asked to extract and cite a securities matter grounded roughly **0%** of its quotes verbatim — it paraphrased figures, invented spans, garbled digits. That's the floor we climbed from.
+The task: **one** problem from Harvey's LAB benchmark — a white-collar SEC enforcement-referral extraction, scored against a hidden 60-criterion, all-or-nothing rubric (judge: claude-sonnet-4-6). One task, not the whole suite — I'll say so every time.
 
-→ **Grounding first (≈0% → 94%).** Staged *extract → analyse* under a substring-lock: evidence is transcribed verbatim and frozen, and conclusions are written only over the frozen quotes — never re-typed, never paraphrased. Retrieval went hybrid (dense + doc2query + BM25, fused by RRF), with one chunk per spreadsheet row so the dollar amounts and account numbers buried in `.xlsx` exhibits stop being invisible to search.
+It started at zero: a weak local model grounded ~0% of its quotes verbatim. The climb, corrections and all:
 
-→ **Then coverage.** Per-fact queries instead of one blunt section-title query (specifics that sat at rank 17 landed in the top 8). A top-down spine so no allegation category silently vanished through bottom-up clustering. Matter classification + precise recruitment (a securities matter had literally been staffed with patent analysts). And **paged writing-agent synthesis** — each finished section compacted out of working context and uncompacted on demand — so the deliverable can exceed the model's context window without a compressing stitch dropping whole allegations.
+→ **Grounding (0→94%):** staged extract→analyse under a substring-lock — evidence transcribed verbatim and frozen, conclusions written only over the frozen quotes. Hybrid retrieval, one chunk per spreadsheet row so figures buried in .xlsx exhibits stay findable.
 
-That chain took it off the floor. And here's the first honest correction: I reported it as **30/60**. It wasn't — 30 was the *union* of two runs, a coverage measure, not a single-run score. The honest single-run figure was **28**. The number came down before it went up.
+→ **Coverage:** per-fact queries, a top-down spine, matter-aware recruitment (a securities matter had been staffed with patent analysts), paged synthesis past the context window.
 
-**Then the benchmark got adversarial with itself.** Running the pipeline against claude-haiku-4-5 in *Harvey's own minimal harness* was humbling: the raw harness scored **41/60**, the BigLaw pipeline **34** — the release build was actually a −3 regression on an earlier 37. The pipeline was *losing to the bare model.* No spin on that; it went straight into the changelog.
+Then the benchmark turned on itself: claude-haiku-4-5 raw in Harvey's own harness scored **41/60**; the pipeline scored 34 — losing to the bare model. An extraction-funnel autopsy plus five fixes rebuilt it to 49. Then re-entrant machinery — each round re-sweeps entities, re-joins figures, re-derives defenses from the growing conduct graph — took it to 50. Harness vs harness, same model, +9.
 
-→ So the gap got the partner-committee treatment — criterion by criterion — and the diagnosis landed on one stage: an **extraction funnel** still wearing local-model-era caps (1,500-token tool results, two-sentence passage limits, read-results bypassing the evidence pool). A five-fix wave rebuilt it: **49/60**. The pipeline passed the bare model.
+Where it stands on that one task, every number verified, same judge:
+• haiku-4-5 pipeline: **50/60**
+• cross-vendor GLM-5.2: **52/60** (tops the board)
+• free, on-prem qwen2.5:14b: **39/60** (a local record)
+• spot-checked citations came back verbatim — where the raw harness invented statutory penalty figures
 
-→ Then one more question: why does all the *selective* machinery — which entities to chase, which figures matter, which defenses apply — run **once, at round 0**, before any agent has understood the matter, with no way for a later round's discoveries to feed back? **Re-entrant machinery** answers that: each round boundary now re-sweeps for entities the last round surfaced, re-joins figures across documents with aliases it just learned, and re-derives defense issues from the conduct graph as it grows. Paired with a provider-resilience pass (call backoff, durable recruitment across restarts, loud round-error signaling), it made a genuinely healthy full-length 3-round measurement possible for the first time — which caught one last thing: the writer's own anti-fabrication guards were discarding a handful of *true* figures alongside the false ones. A precise fix (trust a stated total only when it's the exact sum of **three** independently-grounded components; allocate limitations joins round-robin across distinct conduct windows) recovered them.
+And it's one task of several: on an estate/trust compare task (23 criteria), the local qwen holds the outright record — **15/23**, above the cloud tier's 14.
 
-**Where it stands on that one task — every number verified against the published scored-run history, same claude-sonnet-4-6 judge, rubric hidden from the agents throughout:**
+What made the comparisons trustworthy: BELO, the BigLaw Epistemic Legal Ontology. The section spine had been enumerated by a model — stochastic, swinging an all-or-nothing score by ±10. The reframe: a spine isn't a list to generate, it's a latent structure to recover. Sections are now typed conduct nodes read off the evidence graph — 6/6 categories every run, variance gone. Figures get neutral codenames a weak drafter can't garble.
 
-- claude-haiku-4-5 raw, in Harvey's own harness: **41/60**
-- the same model on the BigLaw pipeline: **50/60** — harness vs harness, same model, **+9**
-- a cross-vendor **GLM-5.2 run: 52/60** — tops the board (thinking-off, 3-round, on the newest and cheapest model in the comparison)
-- free, on-prem **qwen2.5:14b: 39/60** — a new local record, up from a verified 28 (the platform binary runs down to a Raspberry-Pi-class box; the 14B wants a real GPU)
-- the pipeline runs came in **clean — zero starved rounds**, and spot-checked citations came back **verbatim**, on the exact runs where the raw harness *invented* statutory penalty figures out of thin air
+The throughline: lean into what a model is good at — writing words, reading structure — and take away what it's bad at — recalling digits, generating exhaustive lists. Encode the rigour in the architecture, not the prompt.
 
-**And this is one task of several.** On a second Harvey LAB problem — an estate/trust compare task, 23 criteria — the free local qwen model holds the *outright* record at **15/23**, a notch above the cloud tier's 14. Different shape of problem, same finding: the orchestration, not the model tier, is what moves the number. The full ladder — including the confounded runs that were caught and fixed along the way — is in the repo.
+Honest status: all-or-nothing rubric, and the task is **not passed** — ~10 criteria still stand. A climb, not a summit — but one you can watch, every walked-back number in the repo.
 
-**And the piece that made the comparisons trustworthy at all — BELO.** The *section spine* (the set of allegations a memo is built around) had been **enumerated** by a model over retrieved text. Enumeration is stochastic: it grabbed a compliance manual's boilerplate as an "allegation" one run and dropped a real charge the next, swinging an all-or-nothing benchmark by **±10** and drowning every other signal. The reframe: a spine isn't a list to generate — it's a **latent structure to recover.** That became the **BigLaw Epistemic Legal Ontology**:
+Apache-2.0. Live on main. Turtles all the way down. 🐢
 
-→ **An ontology every agent reads and writes.** Typed legal classes and controlled predicates (committed-by, violates, harmed…), each wrapped as a *claim* carrying who asserts it, the verbatim span that grounds it, its epistemic status (alleged → contested → verified), and how it bears on other claims. A weak model's loose phrasing is normalised onto it — and a triple stated backwards ("Section 206 violates the scheme") is re-oriented by the ontology's own domain and range.
-
-→ **The spine, discovered.** Sections are the graph's typed *conduct* nodes now — read off the structure, deterministically, from the charging document — not guessed. **Six of six categories, every run.** The ±10 variance that had been confounding every A/B comparison is gone.
-
-→ **What3Words for figures.** A weak drafter would write "an outsized share" instead of "$7,800,000." So each figure gets a neutral codename the model drops into prose like any word (the digit hidden even from the prompt, so it *can't* be garbled); the exact value is substituted by key afterward. Figures land verbatim.
-
-——
-
-The throughline of the whole climb: **lean into what a language model is good at — writing words, reading structure — and take away what it's bad at — recalling digits, generating exhaustive lists.** Encode the rigour in the architecture, not the prompt. As above 🜁, so below 🜃; as the evidence is structured, so BELO.
-
-Honest status, unchanged: the rubric is all-or-nothing and **the task is not passed** — about ten criteria still stand. One flagship section still under-states its figures when its handle list is noise-heavy. This is a climb, not a summit. But it's a climb you can watch: every run, every correction, every walked-back number is in the repo.
-
-Live on main. Apache-2.0. Link in comments. Turtles all the way down. 🐢
-
-#LegalAI #LegalTech #OpenSource #LocalLLM #RAG #Ontology #BigLaw
+#LegalAI #LegalTech #OpenSource #LocalLLM #RAG #BigLaw
 
 **Carousel:** the 0→52 climb line chart (with the 41 bare-harness baseline + the 28 honesty correction marked) → grounding staged extract→analyse diagram → extraction-funnel autopsy → re-entrant round-boundary loop → BELO claim graph (typed conduct spine, 6/6) → What3Words figure handle → verbatim spot-check receipts → "not passed / ~10 remain" honest closer
 
