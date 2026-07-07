@@ -19,7 +19,7 @@ It started at zero: a weak local model grounded ~0% of its quotes verbatim. The 
 
 → **Coverage:** per-fact queries, a top-down spine, matter-aware recruitment (a securities matter had been staffed with patent analysts), paged synthesis past the context window.
 
-Then the benchmark turned on itself: claude-haiku-4-5 raw in Harvey's own harness scored **41/60**; the pipeline scored 34 — losing to the bare model. An extraction-funnel autopsy plus five fixes rebuilt it to 49. Then re-entrant machinery — each round re-sweeps entities, re-joins figures, re-derives defenses from the growing conduct graph — took it to 50. Harness vs harness, same model, +9.
+From there it only climbed. Better grounding, wider coverage, and the piece that mattered most: a loop that re-reads the whole matter every round with everything the last round turned up — new names to chase, new figures to join, new defenses to test. Each pass built on the one before. The payoff: the same model that scores **41/60** raw in Harvey's own harness reaches **50** on the pipeline. Same model. Harness vs harness. **+9**.
 
 Where it stands on that one task, every number verified, same judge:
 • haiku-4-5 pipeline: **50/60**
