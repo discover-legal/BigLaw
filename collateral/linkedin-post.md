@@ -9,7 +9,7 @@
 
 **As above 🜁, so BELO 🜃.**
 
-A few weeks, one stubborn question: how far can a **single local open-weight model** get on a real BigLaw-grade task — a Harvey-style white-collar SEC enforcement-referral extraction, scored against a 60-criterion rubric — with **no cloud model, no stuffing the whole corpus into one context**? Just orchestration. Here's the whole climb, corrections and all.
+A few weeks, one stubborn question: how far can a **single local open-weight model** get on a real BigLaw-grade task — with **no cloud model, no stuffing the whole corpus into one context**? Just orchestration. The task: **one** problem from Harvey's LAB benchmark — a white-collar SEC enforcement-referral extraction, scored against a *hidden* 60-criterion, all-or-nothing rubric (judge: claude-sonnet-4-6). One task, not the whole suite — I'll say so every time. Here's the whole climb, corrections and all.
 
 **It started at zero.** Literally. A weak local model asked to extract and cite a securities matter grounded roughly **0%** of its quotes verbatim — it paraphrased figures, invented spans, garbled digits. That's the floor we climbed from.
 
@@ -25,12 +25,15 @@ That chain took it off the floor. And here's the first honest correction: I repo
 
 → Then one more question: why does all the *selective* machinery — which entities to chase, which figures matter, which defenses apply — run **once, at round 0**, before any agent has understood the matter, with no way for a later round's discoveries to feed back? **Re-entrant machinery** answers that: each round boundary now re-sweeps for entities the last round surfaced, re-joins figures across documents with aliases it just learned, and re-derives defense issues from the conduct graph as it grows. Paired with a provider-resilience pass (call backoff, durable recruitment across restarts, loud round-error signaling), it made a genuinely healthy full-length 3-round measurement possible for the first time — which caught one last thing: the writer's own anti-fabrication guards were discarding a handful of *true* figures alongside the false ones. A precise fix (trust a stated total only when it's the exact sum of **three** independently-grounded components; allocate limitations joins round-robin across distinct conduct windows) recovered them.
 
-**Where it stands, every number verified against the published scored-run history, same claude-sonnet-4-6 judge:**
+**Where it stands on that one task — every number verified against the published scored-run history, same claude-sonnet-4-6 judge, rubric hidden from the agents throughout:**
 
-- claude-haiku-4-5 on the pipeline: **50/60** — harness vs harness, same model, **+9 over the bare-harness 41**
-- a cross-vendor **GLM-5.2 run: 52/60** — the board high (thinking-off, 3-round, on the newest and cheapest model in the comparison)
-- local **qwen2.5:14b: 39/60** — a new local record, up from a verified 28 (the platform binary runs down to a Raspberry-Pi-class box; the 14B wants a real GPU)
-- the part a firm can't compromise: spot-checks came back **verbatim** — 6/6 on the release run, 11/12 on the 50-run with the one truncation disclosed — while the bare minimal-harness run *invented* statutory penalty figures out of thin air
+- claude-haiku-4-5 raw, in Harvey's own harness: **41/60**
+- the same model on the BigLaw pipeline: **50/60** — harness vs harness, same model, **+9**
+- a cross-vendor **GLM-5.2 run: 52/60** — tops the board (thinking-off, 3-round, on the newest and cheapest model in the comparison)
+- free, on-prem **qwen2.5:14b: 39/60** — a new local record, up from a verified 28 (the platform binary runs down to a Raspberry-Pi-class box; the 14B wants a real GPU)
+- the pipeline runs came in **clean — zero starved rounds**, and spot-checked citations came back **verbatim**, on the exact runs where the raw harness *invented* statutory penalty figures out of thin air
+
+**And this is one task of several.** On a second Harvey LAB problem — an estate/trust compare task, 23 criteria — the free local qwen model holds the *outright* record at **15/23**, a notch above the cloud tier's 14. Different shape of problem, same finding: the orchestration, not the model tier, is what moves the number. The full ladder — including the confounded runs that were caught and fixed along the way — is in the repo.
 
 **And the piece that made the comparisons trustworthy at all — BELO.** The *section spine* (the set of allegations a memo is built around) had been **enumerated** by a model over retrieved text. Enumeration is stochastic: it grabbed a compliance manual's boilerplate as an "allegation" one run and dropped a real charge the next, swinging an all-or-nothing benchmark by **±10** and drowning every other signal. The reframe: a spine isn't a list to generate — it's a **latent structure to recover.** That became the **BigLaw Epistemic Legal Ontology**:
 
