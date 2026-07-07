@@ -6,12 +6,30 @@
 
 Benchmarked on Harvey **LAB** (Legal Agent Benchmark, all-pass 60-criterion rubric, white-collar
 SEC-referral task; judge claude-sonnet-4-6 throughout, rubric hidden from the agents). The
-verified ladder: claude-haiku-4-5 raw in Harvey's own harness scores 41/60; **on the BigLaw
-pipeline the same model scores 49/60** — the pipeline beats the raw agent by eight criteria
-after a criterion-level forensics pass rebuilt the extraction floor (the full autopsy and fix
-history are part of the repo's record). A **local qwen2.5:14b scores 36/60** on the identical
-build — a free, on-prem model within five criteria of a cloud model's raw performance. And the
-pipeline's standing edge is *integrity*: spot-checked citations verbatim 6/6 against source,
+verified fix-wave ladder (every scored run is published under
+[`benchmarks/runs/`](../benchmarks/runs/README.md)):
+
+| Run | Criteria /60 |
+|---|---|
+| claude-haiku-4-5 — Harvey's own raw harness | 41 |
+| release build — claude-haiku-4-5 / claude-sonnet-4-6 | 34 / 34 |
+| fix-wave — qwen2.5:14b (local) | 36 |
+| fix-wave — claude-haiku-4-5, healthy 6 rounds | **49** |
+| fix-wave — claude-haiku-4-5, 3 rounds | **50†** |
+| fix-wave — GLM-5.2 (cross-vendor), fast, 3 rounds | **51\*** |
+
+Read this as harness-vs-harness on the same model: the pipeline beats claude-haiku-4-5's raw
+agent by **+9** (50† vs 41), after a criterion-level forensics pass rebuilt the extraction floor
+(the full autopsy and fix history are part of the repo's record). Two disclosures ride on the
+top numbers. **†** — the 3-round run of 50 **starved its analysis round** on a credit outage
+(HTTP 400s); its healthy 6-round sibling scores 49, within judge noise, so a *fully-healthy*
+3-round run has not yet been scored. A rounds ablation (1→41, 3→50†, 6→49) therefore reads
+"three matches six at ~70% of the cost" but is **confounded** — the 3-round runs starved a round;
+remeasure pending. **\*** — the GLM-5.2 51 is a best-of-two (repeat: 47) with one of three rounds
+inactive in both runs; a GLM/analysis-phase incompatibility under investigation. The **local
+qwen2.5:14b at 36** is a free, on-prem model on the identical build. And the pipeline's standing
+edge is *integrity*: spot-checked citations verbatim 6/6 on the release run (11/12 on the 50†-run,
+the one truncation disclosed — record: [`benchmarks-citation-spotcheck.md`](benchmarks-citation-spotcheck.md)),
 while the raw run fabricated statutory penalty figures — the numbers a firm actually gets
 sanctioned over.
 

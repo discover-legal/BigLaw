@@ -182,7 +182,7 @@ claude-sonnet-4-6 throughout, rubric hidden from the agents):
 | Model on the BigLaw pipeline | Criteria /60 |
 |---|---|
 | qwen2.5:14b (local) | **27** |
-| claude-haiku-4-5 | **34** (18.5 min wall time) |
+| claude-haiku-4-5 | **34** (18.4 min wall time) |
 | claude-sonnet-4-6 tier | **34** |
 
 A precision note first, because this document exists to be honest: the "30/60" headline is the
@@ -192,9 +192,9 @@ pipeline can reach collectively, not a single-run score. The verified single-run
 (claude-haiku-4-5, June-26 build).
 The release build's 34 is therefore a −3 regression against June 26, under investigation.
 
-Two readings of the cross-tier table, honestly framed. First, Sonnet at roughly five times
-Haiku's cost (3.8M tokens, ~$14 vs ~$2) passes exactly the same 34 criteria — the pipeline,
-not the model tier, is the binding constraint. Second — the harder truth — raw claude-haiku-4-5
+Two readings of the cross-tier table, honestly framed. First, Sonnet at roughly ten times
+Haiku's cost (3.8M tokens, $13.70 vs $1.34) passes the same *number* of criteria — 34, 31 of
+them the same ones — the pipeline, not the model tier, is the binding constraint. Second — the harder truth — raw claude-haiku-4-5
 in Harvey's own harness scores **41/60** in five minutes: the criterion-level autopsy attributes
 the entire gap to the extraction transcription funnel (1500-token tool-result caps, two-sentence
 passage limits, `read_document` results bypassing the evidence pool — local-model-era throttles

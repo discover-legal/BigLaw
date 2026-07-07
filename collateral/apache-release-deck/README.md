@@ -35,8 +35,8 @@ The script asserts no slide overflows 1080 × 1350 and verifies the PDF's page c
 | 3 | C | **What shipped** — counter-redlining, Redtime, Integrity Check, verified citations, reviews UI, `biglaw demo`, BELO |
 | 4 | D | **Counter-redlining** — parse markup → judge vs four-tier playbook → countered redlines + rationale cards; judge memory, standoff escalation |
 | 5 | E | **Verified citations** — the ladder (exact → tolerant → judge → 3-vote ensemble); "Citations verified: N/M" stamp; 6/6 verbatim vs fabricated penalty figures |
-| 6 | F | **The ladder chart** (SEC task, /60) — 28 → 34 → 36 → 37 → 41 (Harvey's harness) → 49 → 50 → **51\* GLM-5.2 fast** (best of 2, repeat 47, one round inactive in both); +9 same-model harness-vs-harness; three vendors, one pipeline |
-| 7 | G | **Cost table** — 41/$1.40 est. vs **51\*/$5.47 est./2 h 20** vs 50/$7.92 vs 49/$11.48 vs 34/$13.70 vs 36/~$0; the new top score is also the cheapest 50+ run; Haiku config curve 41/$3.74/40 min → 48/$5.42/40 min → 50/$7.92/75 min → 49/$11.48 |
+| 6 | F | **The ladder chart** (SEC task, /60) — 28 → 34 → 36 → 37 → 41 (Harvey's harness) → 49 → 50† → **51\* GLM-5.2 fast** (best of 2, repeat 47, one round inactive in both); †the 3-round 50 also starved its analysis round (credit outage), healthy 6-round = 49; +9 same-model harness-vs-harness; three vendors, one pipeline |
+| 7 | G | **Cost table** — 41/$1.40 est. vs **51\*/$5.47 est./2 h 20** vs 50 (round starved)/$7.92 vs 49/$11.48 vs 34/$13.70 vs 36/~$0; the new top score is also the cheapest 50+ run; Haiku config curve 41/$3.74/40 min → 48/$5.42/40 min → 50/$7.92/75 min → 49/$11.48 — three matches six, confounded by the 3-round starve |
 | 8 | H | **Local-model story** — same quantized 14B, 28 → 36; within 5 of the cloud model in Harvey's harness, for electricity |
 | 9 | I | **Compare mode** (trust task, /23) — 6 → 9 → 12 (old record) → 14 → **15, local qwen, new record**; the evidence-led port |
 | 10 | J | **How 1: grounding** — substring-lock + figure handles; ≈0% → 94% verbatim citations |

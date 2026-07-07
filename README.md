@@ -148,10 +148,13 @@ Opening this repo in Claude Code registers BigLaw as an MCP server: **[MCP guide
 
 ## The benchmark
 
-On Harvey **LAB** (60-criterion all-pass rubric, judge hidden from the agents):
-claude-haiku-4-5 raw scores **41/60**; the same model on the BigLaw pipeline scores **49/60** —
-and a free, on-prem qwen2.5:14b scores **36/60** on the identical build. Spot-checked citations
-came back verbatim 6/6 where the raw run fabricated statutory penalty figures. The full ladder,
+On Harvey **LAB** (60-criterion all-pass rubric, rubric hidden from the agents; judge
+claude-sonnet-4-6): claude-haiku-4-5 raw scores **41/60**; the same model on the fix-wave
+BigLaw pipeline scores **49/60** on a healthy 6-round run (a 3-round run scored 50† but starved
+its analysis round on a credit outage — within judge noise of the 49, remeasure pending), and a
+cross-vendor GLM-5.2 run reached **51\*** (best of two, one round inactive). A free, on-prem
+qwen2.5:14b scores **36/60** on the identical build. Spot-checked citations came back verbatim
+6/6 on the release run where the raw run fabricated statutory penalty figures. The full ladder,
 caveats, and the technique-by-technique account: **[Benchmarks](docs/benchmarks.md)**.
 
 ---
@@ -175,7 +178,8 @@ Everything lives in **[docs/](docs/index.md)**, one page per topic:
 
 Apache-2.0 ([`LICENSE`](LICENSE)) with an express patent grant — use it, modify it, embed it,
 run it as a service; attribution per [`NOTICE`](NOTICE) is all that is asked. The document tools
-are a clean-room reimplementation with a published spec and signed attestations — the full
+are a clean-room reimplementation with a published spec and an executed attestation record
+([docs/clean-room-attestations.md](docs/clean-room-attestations.md)) — the full
 story: **[Provenance & licensing](docs/provenance.md)**.
 
 <div align="center"><sub>Copyright © 2026 Discover Legal</sub></div>

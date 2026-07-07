@@ -17,11 +17,12 @@ It builds on one upstream, fully attributed in [`NOTICE`](../NOTICE):
 The document-production and tabular-review tools are a **clean-room reimplementation**: the
 previous copyleft-derived implementations were deleted from the tree *before* independent
 reimplementation from a published functional specification
-([`clean-room-spec-document-tools.md`](clean-room-spec-document-tools.md)), with signed
-non-exposure attestations from the implementers. That process removed the last copyleft dependency
-and is what made the Apache-2.0 relicense possible.
+([`clean-room-spec-document-tools.md`](clean-room-spec-document-tools.md)). The implementers'
+executed non-exposure attestations — with two incidental exposures disclosed and reviewed — are
+recorded in [`clean-room-attestations.md`](clean-room-attestations.md). That process removed the
+last copyleft dependency and is what made the Apache-2.0 relicense possible.
 
-The spec is a dated paper trail — it is kept verbatim and is not edited.
+The spec and the attestation record are a dated paper trail — kept verbatim, not edited.
 
 ## The TypeScript original
 
