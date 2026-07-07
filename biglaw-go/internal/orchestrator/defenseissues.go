@@ -289,21 +289,26 @@ const maxJoinsPerConduct = 2
 func limitationsIssues(ctx defenseContext) []ontology.DerivedIssue {
 	out := []ontology.DerivedIssue{{Kind: ontology.LimitationsKind, Text: solIssue}}
 	anchor, anchorRaw := filingAnchor(ctx.DocText)
+
+	// Group by conduct label, preserving discovery order, then allocate join slots
+	// ROUND-ROBIN across labels — one pass per label before any label gets its second —
+	// so a conduct window mentioned only once (e.g. a single 2021 date) is never crowded
+	// out of the global budget by a busier, earlier-discovered label's later mentions.
+	var labelOrder []string
+	byLabel := map[string][]datedConduct{}
+	for _, dc := range datedConducts(ctx) {
+		lk := strings.ToLower(dc.label)
+		if _, ok := byLabel[lk]; !ok {
+			labelOrder = append(labelOrder, lk)
+		}
+		byLabel[lk] = append(byLabel[lk], dc)
+	}
+
 	joins := 0
 	perLabel := map[string]int{}
 	seenWindow := map[string]bool{}
-	for _, dc := range datedConducts(ctx) {
-		if joins >= maxLimitationsJoins {
-			break
-		}
-		lk := strings.ToLower(dc.label)
-		wk := lk + "|" + dc.date.plusYears(5).display()
-		if perLabel[lk] >= maxJoinsPerConduct || seenWindow[wk] {
-			continue
-		}
-		perLabel[lk]++
-		seenWindow[wk] = true
-		joins++
+	next := map[string]int{}
+	emit := func(dc datedConduct) {
 		windowClose := dc.date.plusYears(5)
 		txt := fmt.Sprintf("%s — the record dates this conduct to %s; under 28 U.S.C. § 2462 the five-year civil-penalty window for it closes around %s.", dc.label, dc.raw, windowClose.display())
 		if anchorRaw != "" {
@@ -315,6 +320,27 @@ func limitationsIssues(ctx defenseContext) []ontology.DerivedIssue {
 		}
 		txt += " " + disgorgementCaveat
 		out = append(out, ontology.DerivedIssue{Kind: ontology.LimitationsKind, About: dc.label, Text: txt, Quote: dc.quote})
+	}
+	for round := 0; round < maxJoinsPerConduct && joins < maxLimitationsJoins; round++ {
+		for _, lk := range labelOrder {
+			if joins >= maxLimitationsJoins || perLabel[lk] >= maxJoinsPerConduct {
+				continue
+			}
+			entries := byLabel[lk]
+			for next[lk] < len(entries) {
+				dc := entries[next[lk]]
+				next[lk]++
+				wk := lk + "|" + dc.date.plusYears(5).display()
+				if seenWindow[wk] {
+					continue
+				}
+				seenWindow[wk] = true
+				perLabel[lk]++
+				joins++
+				emit(dc)
+				break
+			}
+		}
 	}
 	return out
 }

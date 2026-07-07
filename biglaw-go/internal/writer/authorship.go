@@ -534,16 +534,65 @@ func findSum(total moneyFig, comps []moneyFig) (string, bool) {
 // compensation was approximately $47,800").
 var reTotalWord = regexp.MustCompile(`(?i)\b(total(s|ing|ed|ling)?|aggregate[sd]?|combined|sum of|in sum|altogether|collectively)\b`)
 
+// explainableAsSum reports whether target is the EXACT sum of THREE (never two) distinct
+// values already present in the grounded-money set — a legitimate roll-up the model wrote
+// in prose rather than a computed (and possibly wrong) total. Two guards, each aimed at a
+// distinct known fabrication pattern:
+//   - three components, never two: the original "$47,800 total" bug was a naive two-term
+//     sum ($45,000 initiation fee + one visible $2,800 monthly payment) standing in for the
+//     true $92,600 aggregate (17 payments) — a partial evidence set, not the real total.
+//     Two-of-N coincidences are common across a large grounded-figure pool; requiring three
+//     distinct components makes an accidental match far less likely while still admitting
+//     genuine multi-category aggregates (e.g. $8,622,000 = $8,238,000 + $291,400 + $92,600).
+//   - never a round multiple of $1,000,000: guards the OTHER known false-rollup pattern
+//     (coincidental round-number arithmetic, e.g. "$1.95B + $310M + $40M = $2.3B" summing
+//     across unrelated entities/metrics) — genuine stated totals in this corpus are never
+//     round to the nearest million.
+func explainableAsSum(target int64, grounded map[int64]bool) bool {
+	const oneMillionCents = 100_000_000
+	if target <= 0 || target%oneMillionCents == 0 {
+		return false
+	}
+	vals := make([]int64, 0, len(grounded))
+	for c := range grounded {
+		if c > 0 && c < target {
+			vals = append(vals, c)
+		}
+	}
+	sort.Slice(vals, func(i, j int) bool { return vals[i] < vals[j] })
+	for i := range vals {
+		remaining := target - vals[i]
+		if remaining <= vals[i] {
+			continue
+		}
+		lo, hi := i+1, len(vals)-1
+		for lo < hi {
+			s := vals[lo] + vals[hi]
+			switch {
+			case s == remaining:
+				return true
+			case s < remaining:
+				lo++
+			default:
+				hi--
+			}
+		}
+	}
+	return false
+}
+
 // stripUngroundedTotals removes prose sentences that assert a "total"/aggregate with a
 // dollar figure NOT on the grounded record — the enforcement backstop for the prompt rule
 // "never compute, add, sum, or total a number yourself", which a weak drafter ignores
 // (summing a PARTIAL evidence set — $45,000 + $2,800 — and shipping "$47,800 total
 // undisclosed compensation" against a grounded $92,600). Bullets, tables, and headings
-// pass through untouched; a totals sentence whose figures are all grounded is kept.
+// pass through untouched; a totals sentence whose figures are all grounded, or whose
+// stated total is an exact sum of grounded components (explainableAsSum), is kept.
 func stripUngroundedTotals(doc string, groundedCents map[int64]bool) string {
 	ungroundedMoney := func(s string) bool {
 		for _, m := range reMoney.FindAllString(s, -1) {
-			if c, ok := parseMoneyCents(m); ok && c >= 100_000 && !groundedCents[c] {
+			if c, ok := parseMoneyCents(m); ok && c >= 100_000 &&
+				!groundedCents[c] && !explainableAsSum(c, groundedCents) {
 				return true
 			}
 		}

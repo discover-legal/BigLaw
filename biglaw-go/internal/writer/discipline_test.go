@@ -227,6 +227,47 @@ func TestStripUngroundedTotals(t *testing.T) {
 	}
 }
 
+// TestStripUngroundedTotals_ExplainableSumKept regression-guards the writer-v2-over-
+// suppression bug (haiku-v4 44/60 vs the prior 50/60): a stated total that is NOT itself
+// a grounded figure, but IS the exact sum of grounded components, must survive.
+func TestStripUngroundedTotals_ExplainableSumKept(t *testing.T) {
+	grounded := map[int64]bool{}
+	for _, m := range []string{"$8,238,000", "$291,400", "$92,600"} {
+		c, ok := parseMoneyCents(m)
+		if !ok {
+			t.Fatalf("fixture money %q unparsable", m)
+		}
+		grounded[c] = true
+	}
+	doc := "Total alleged ill-gotten gains and client harm across all categories is $8,622,000, " +
+		"reflecting the aggregate of the cherry-picking, unauthorized-trading, and kickback figures stated above."
+	out := stripUngroundedTotals(doc, grounded)
+	if !strings.Contains(out, "$8,622,000") {
+		t.Errorf("an exact grounded subset-sum total was wrongly stripped:\n%s", out)
+	}
+}
+
+// TestStripUngroundedTotals_RoundCoincidenceStillStripped regression-guards the ORIGINAL
+// false-rollup bug: a round-number total that coincidentally sums exactly must still be
+// stripped from prose, even though explainableAsSum would otherwise find the match — the
+// $1M-multiple guard is what tells the two cases apart.
+func TestStripUngroundedTotals_RoundCoincidenceStillStripped(t *testing.T) {
+	grounded := map[int64]bool{}
+	for _, m := range []string{"$1.95 billion", "$310 million", "$40 million"} {
+		c, ok := parseMoneyCents(m)
+		if !ok {
+			t.Fatalf("fixture money %q unparsable", m)
+		}
+		grounded[c] = true
+	}
+	doc := "The firm's total regulatory assets under management are $2.3 billion, " +
+		"combining the 2021 baseline, the client account, and the fund's net asset value."
+	out := stripUngroundedTotals(doc, grounded)
+	if strings.Contains(out, "$2.3 billion") {
+		t.Errorf("a coincidental round-number sum was wrongly kept as a legitimate total:\n%s", out)
+	}
+}
+
 // ─── Nested-structure defect — frames never wrap a frame ────────────────────────
 
 func TestFrameScaffoldingStripped(t *testing.T) {

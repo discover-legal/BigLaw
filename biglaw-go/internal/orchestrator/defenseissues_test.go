@@ -186,6 +186,58 @@ This referral notice is dated June 5, 2026.`
 	}
 }
 
+// Writer-v2-regression guard (haiku-v4 44/60 vs the prior 50/60): three "busy" conduct
+// labels each with two dated mentions would, under a first-come allocation, exhaust the
+// global maxLimitationsJoins budget (3*2=6) before a fourth label discovered LATER — with
+// only a single dated mention — ever gets a turn. Round-robin allocation guarantees every
+// distinct conduct window at least one join before any label gets its second.
+func TestLimitationsJoin_RoundRobinAcrossLabels(t *testing.T) {
+	g := evidencegraph.New()
+	busy := []struct{ label, d1, d2 string }{
+		{"Directed Brokerage Kickback", "Q2 2022", "Q3 2022"},
+		{"Unauthorized Margin Trading", "Q1 2023", "Q2 2023"},
+		{"Excessive Commission Churning", "Q3 2023", "Q4 2023"},
+	}
+	for _, b := range busy {
+		src := "The " + b.label + " occurred during " + b.d1 + " and continued into " + b.d2 + "."
+		if !g.AddTriple(b.label, "Conduct", "occurredDuring", b.d1, "Event", "", "occurred during "+b.d1, "referral", src) {
+			t.Fatalf("fixture triple rejected for %s/%s", b.label, b.d1)
+		}
+		if !g.AddTriple(b.label, "Conduct", "occurredDuring", b.d2, "Event", "", "occurred during "+b.d2, "referral", src) {
+			t.Fatalf("fixture triple rejected for %s/%s", b.label, b.d2)
+		}
+	}
+	// Discovered LAST — a single dated mention, must still get its join.
+	src := "The Cherry-Picking Trade Allocations occurred during Q1 2021."
+	if !g.AddTriple("Cherry-Picking Trade Allocations", "Conduct", "occurredDuring", "Q1 2021", "Event", "",
+		"occurred during Q1 2021", src, src) {
+		t.Fatal("fixture triple rejected")
+	}
+	doc := "The Division alleges violations of Section 206(1) of the Advisers Act. This referral notice is dated June 5, 2026."
+	ctx := defenseContext{Claims: g.Claims(), DocText: doc}
+	ctx.Auth = authorityText(ctx)
+
+	var gotCP bool
+	byLabel := map[string]int{}
+	for _, is := range analyseDefense(ctx) {
+		if is.Kind != ontology.LimitationsKind || is.About == "" {
+			continue
+		}
+		byLabel[is.About]++
+		if is.About == "Cherry-Picking Trade Allocations" {
+			gotCP = true
+		}
+	}
+	if !gotCP {
+		t.Errorf("a distinct conduct window with a single dated mention was crowded out by busier labels; got joins per label: %v", byLabel)
+	}
+	for _, b := range busy {
+		if byLabel[b.label] == 0 {
+			t.Errorf("busy label %q got zero joins under round-robin allocation", b.label)
+		}
+	}
+}
+
 // Partner-review regression: the § 2462 window must join ONLY to conduct dates. An exam
 // start date, a referral date, or a compliance-review year-end must never yield a
 // time-bar paragraph, and one conduct label is capped at maxJoinsPerConduct joins.
