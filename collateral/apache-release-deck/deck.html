@@ -151,6 +151,8 @@ table.data tr.hero td:first-child{box-shadow:inset 5px 0 0 var(--ox)}
 table.data tr.hero td{padding-left:14px}
 table.data td .score{font-weight:bold;font-size:30px}
 table.data tr.hero .score{color:var(--ox)}
+table.data.compact td{padding-top:10px;padding-bottom:10px}
+table.data.compact .runsub{margin-top:2px}
 
 /* footnote block above footer */
 .fnotes{font-family:Consolas,'Courier New',monospace;font-size:17px;line-height:1.55;
@@ -303,31 +305,36 @@ table.data tr.hero .score{color:var(--ox)}
   <div class="frame"></div>
   <div class="content">
     <div class="hdr"><span>Benchmark &#183; SEC task &#183; 60 criteria</span><span class="exh">Exhibit F</span></div>
-    <div class="kick">Harvey LAB &#183; extract-key-allegations</div>
-    <h1 style="font-size:62px">Same model. Same judge.<br>Different harness.</h1>
-    <div class="cwrap" style="margin-top:56px">
+    <div class="kick" style="margin:26px 0 14px">Harvey LAB &#183; extract-key-allegations</div>
+    <h1 style="font-size:46px;margin-bottom:16px">Three vendors. One judge. One pipeline.</h1>
+    <div class="cwrap" style="margin-top:40px">
       <div class="refline inkref" style="left:68.33%"><span class="reftag inkref">their harness &#183; 41</span></div>
       <div class="refline" style="left:100%"><span class="reftag" style="transform:translateX(-100%)">pass &#183; 60</span></div>
-      <div class="crow"><div class="clabel">qwen2.5:14b &#183; local &#183; context-stuff era</div>
-        <div class="ctrack"><div class="cbar" style="width:46.67%"><span class="cval">28</span></div></div></div>
-      <div class="crow"><div class="clabel">release build &#183; claude-haiku-4-5</div>
-        <div class="ctrack"><div class="cbar" style="width:56.67%"><span class="cval">34</span></div></div></div>
-      <div class="crow"><div class="clabel">fix-wave build &#183; qwen2.5:14b &#183; local</div>
-        <div class="ctrack"><div class="cbar" style="width:60%"><span class="cval">36</span></div></div></div>
-      <div class="crow"><div class="clabel">june-26 build &#183; claude-haiku-4-5</div>
-        <div class="ctrack"><div class="cbar" style="width:61.67%"><span class="cval">37</span></div></div></div>
-      <div class="crow"><div class="clabel">claude-haiku-4-5 &#183; harvey&#8217;s own harness</div>
-        <div class="ctrack"><div class="cbar hatch" style="width:68.33%"><span class="cval">41</span></div></div></div>
-      <div class="crow"><div class="clabel">fix-wave build &#183; claude-haiku-4-5 &#183; 6 rounds</div>
-        <div class="ctrack"><div class="cbar" style="width:81.67%"><span class="cval">49</span></div></div></div>
-      <div class="crow" style="margin-bottom:0"><div class="clabel" style="color:var(--ox);font-weight:bold">fix-wave build &#183; claude-haiku-4-5 &#183; 3 rounds</div>
-        <div class="ctrack"><div class="cbar ox" style="width:83.33%"><span class="cval">50</span></div></div></div>
+      <div class="crow" style="margin-bottom:14px"><div class="clabel">qwen2.5:14b &#183; local &#183; context-stuff era</div>
+        <div class="ctrack" style="height:36px"><div class="cbar" style="width:46.67%"><span class="cval">28</span></div></div></div>
+      <div class="crow" style="margin-bottom:14px"><div class="clabel">release build &#183; claude-haiku-4-5</div>
+        <div class="ctrack" style="height:36px"><div class="cbar" style="width:56.67%"><span class="cval">34</span></div></div></div>
+      <div class="crow" style="margin-bottom:14px"><div class="clabel">fix-wave build &#183; qwen2.5:14b &#183; local</div>
+        <div class="ctrack" style="height:36px"><div class="cbar" style="width:60%"><span class="cval">36</span></div></div></div>
+      <div class="crow" style="margin-bottom:14px"><div class="clabel">june-26 build &#183; claude-haiku-4-5</div>
+        <div class="ctrack" style="height:36px"><div class="cbar" style="width:61.67%"><span class="cval">37</span></div></div></div>
+      <div class="crow" style="margin-bottom:14px"><div class="clabel">claude-haiku-4-5 &#183; harvey&#8217;s own harness</div>
+        <div class="ctrack" style="height:36px"><div class="cbar hatch" style="width:68.33%"><span class="cval">41</span></div></div></div>
+      <div class="crow" style="margin-bottom:14px"><div class="clabel">fix-wave build &#183; claude-haiku-4-5 &#183; 6 rounds</div>
+        <div class="ctrack" style="height:36px"><div class="cbar" style="width:81.67%"><span class="cval">49</span></div></div></div>
+      <div class="crow" style="margin-bottom:14px"><div class="clabel">fix-wave build &#183; claude-haiku-4-5 &#183; 3 rounds</div>
+        <div class="ctrack" style="height:36px"><div class="cbar" style="width:83.33%"><span class="cval">50</span></div></div></div>
+      <div class="crow" style="margin-bottom:0"><div class="clabel" style="color:var(--ox);font-weight:bold">fix-wave build &#183; glm-5.2 &#183; fast mode &#183; 3 rounds</div>
+        <div class="ctrack" style="height:36px"><div class="cbar ox" style="width:85%"><span class="cval">51*</span></div></div></div>
     </div>
-    <div class="callout" style="margin-top:38px">
-      <div class="big">34 &#8594; 49 &#8594; <span class="ox">50</span>. Same model — the pipeline beats
-      Harvey&#8217;s own harness by <span class="ox">nine criteria</span>.</div>
+    <div class="callout" style="margin-top:18px;padding:16px 4px 14px">
+      <div class="big" style="font-size:29px"><span class="ox">51*</span> — GLM-5.2, a new high. And the same-model margin
+      stands: pipeline Haiku 50 vs Harvey&#8217;s-harness Haiku 41 — <span class="ox">+9</span>.</div>
+      <div class="sub" style="margin-top:8px">Anthropic cloud &#183; local qwen &#183; Zhipu — three vendors, one pipeline. The harness transfers.</div>
     </div>
-    <div class="fnotes">judge: claude-sonnet-4-6 &#183; rubric hidden from agents &#183; all runs published in-repo</div>
+    <div class="fnotes" style="margin-top:14px;font-size:16px;line-height:1.45">* best of 2 (repeat: 47) — in both runs one of three rounds, analysis, returned zero findings:
+    a GLM/analysis-phase incompatibility under investigation; headroom above 51 once fixed<br>
+    judge: claude-sonnet-4-6 &#183; rubric hidden from agents &#183; all runs published in-repo</div>
     <div class="ftr"><span>apache-2.0 &#183; github.com/discover-legal/BigLaw</span><span class="pg">06 / 15</span></div>
   </div>
 </section>
@@ -337,13 +344,15 @@ table.data tr.hero .score{color:var(--ox)}
   <div class="frame"></div>
   <div class="content">
     <div class="hdr"><span>Benchmark &#183; SEC task &#183; economics</span><span class="exh">Exhibit G</span></div>
-    <div class="kick">The honest ledger</div>
-    <h1 style="font-size:60px;margin-bottom:22px">What the nine extra criteria cost.</h1>
-    <table class="data">
-      <tr><th>Run</th><th class="r">Criteria /60</th><th class="r">Wall time</th><th class="r">Cost&#8202;*</th></tr>
+    <div class="kick" style="margin:26px 0 14px">The honest ledger</div>
+    <h1 style="font-size:54px;margin-bottom:14px">What the climb costs.</h1>
+    <table class="data compact" style="margin-top:14px">
+      <tr><th>Run</th><th class="r">Criteria /60</th><th class="r">Wall time</th><th class="r">Cost&#8202;&#167;</th></tr>
       <tr><td><span class="runname">haiku &#183; harvey&#8217;s harness</span><span class="runsub">their own agent loop</span></td>
           <td class="num r"><span class="score">41</span></td><td class="num r">5.2 min</td><td class="num r">~$1.40 est.&#8202;&#8224;</td></tr>
-      <tr class="hero"><td><span class="runname">pipeline &#183; haiku</span><span class="runsub">fix-wave build &#183; 3 rounds</span></td>
+      <tr class="hero"><td><span class="runname">pipeline &#183; glm-5.2</span><span class="runsub">fix-wave &#183; fast &#183; 3 rounds</span></td>
+          <td class="num r"><span class="score">51*</span></td><td class="num r">2 h 20 min</td><td class="num r">~$5.47 est.&#8202;&#8225;</td></tr>
+      <tr><td><span class="runname">pipeline &#183; haiku</span><span class="runsub">fix-wave build &#183; 3 rounds</span></td>
           <td class="num r"><span class="score">50</span></td><td class="num r">75.2 min</td><td class="num r">$7.92</td></tr>
       <tr><td><span class="runname">pipeline &#183; haiku</span><span class="runsub">fix-wave build &#183; 6 rounds</span></td>
           <td class="num r"><span class="score">49</span></td><td class="num r">92.0 min</td><td class="num r">$11.48</td></tr>
@@ -352,14 +361,17 @@ table.data tr.hero .score{color:var(--ox)}
       <tr><td><span class="runname">pipeline &#183; qwen2.5:14b</span><span class="runsub">local &#183; fix-wave build</span></td>
           <td class="num r"><span class="score">36</span></td><td class="num r">4 h 22 min</td><td class="num r">~$0 electricity</td></tr>
     </table>
-    <div class="callout" style="margin-top:24px">
-      <div class="big" style="font-size:31px"><span class="ox">+9 criteria</span> for <span class="ox">~5.7&#215;</span> the cost —
-      about <span class="ox">$0.72 per marginal criterion</span>.</div>
-      <div class="sub">The rounds curve saturates early — 1 round &#8594; 41 ($3.74) &#183; 3 &#8594; 50 &#183;
-      6 &#8594; 49 — three rounds matches-or-beats six at ~70% of the cost; 50 vs 49 is within judge noise.</div>
+    <div class="callout" style="margin-top:14px;padding:16px 4px 14px">
+      <div class="big" style="font-size:28px">The new top score is also the <span class="ox">cheapest 50+ run</span> on the
+      board — and same-model, <span class="ox">+9</span> costs ~5.7&#215;: <span class="ox">$0.72 per marginal criterion</span>.</div>
+      <div class="sub" style="margin-top:8px;font-size:22px">Haiku rounds curve, saturating early: 1 &#8594; 41 &#183; $3.74 &#183; 40 min &nbsp;/&nbsp;
+      3 unshackled &#8594; 48 &#183; $5.42 &#183; 40 min &nbsp;/&nbsp; 3 &#8594; 50 &#183; $7.92 &#183; 75 min &nbsp;/&nbsp;
+      6 &#8594; 49 &#183; $11.48 — three beats six; 50 vs 49 is within judge noise.</div>
     </div>
-    <div class="fnotes">* run only — the judging pass and harness overhead are excluded everywhere &#183;
-    &#8224; no recorded ledger figure; computed from the run&#8217;s tokens at list rates<br>
+    <div class="fnotes" style="margin-top:14px;font-size:15.5px;line-height:1.45">&#167; run only — judging pass and harness overhead excluded everywhere &#183;
+    &#8224; no ledger figure; computed from the run&#8217;s tokens at list rates &#183; * best of 2 (repeat: 47) — see Exhibit F<br>
+    &#8225; Z.ai plan-billed, no per-run invoice — computed from the run&#8217;s tokens (2.82M in / 0.35M out) at GLM-5.2
+    list rates ($1.40&#8202;/&#8202;$4.40 per M), uncached: an upper bound<br>
     judge: claude-sonnet-4-6 &#183; rubric hidden from agents &#183; all runs published in-repo</div>
     <div class="ftr"><span>apache-2.0 &#183; github.com/discover-legal/BigLaw</span><span class="pg">07 / 15</span></div>
   </div>
@@ -494,9 +506,9 @@ table.data tr.hero .score{color:var(--ox)}
   <div class="frame"></div>
   <div class="content">
     <div class="hdr"><span>How &#183; technique 3 of 3</span><span class="exh">Exhibit L</span></div>
-    <div class="kick">Mechanical honesty</div>
-    <h1 style="font-size:68px">The system voids its own bad runs.</h1>
-    <div class="flow" style="margin-top:12px">
+    <div class="kick" style="margin:28px 0 14px">Mechanical honesty</div>
+    <h1 style="font-size:60px;margin-bottom:24px">The system voids its own bad runs.</h1>
+    <div class="flow" style="margin-top:8px">
       <div class="step"><div class="fn">&#167;</div><div>
         <div class="ft">Cross-document joins</div>
         <div class="fd">Figures are joined across the corpus <b>mechanically</b> — two documents that
@@ -510,10 +522,12 @@ table.data tr.hero .score{color:var(--ox)}
         <div class="fd">A round where every agent came back empty marks the run <b>starved</b> — a dead
         run can no longer silently score. Timed-out agents get one retry at an extended budget.</div></div></div>
     </div>
-    <div class="callout" style="margin-top:22px">
-      <div class="big">The run history holds a voided <span class="ox">27/60</span> — forensics showed
-      every round had timed out under contention.</div>
-      <div class="sub">The guards exist so the next one voids itself, before it can enter the record.</div>
+    <div class="callout" style="margin-top:16px;padding:16px 4px 14px">
+      <div class="big" style="font-size:28px">The record keeps its dead runs: a voided <span class="ox">27/60</span> —
+      every round timed out under contention — and an invalidated <span class="ox">7/60</span> — a 14-hour
+      GLM-5.2 thinking run, operator-interrupted at 24.7M tokens, malformed deliverable.</div>
+      <div class="sub" style="margin-top:8px">Neither is a capability number. The guards exist so the next one
+      voids itself, before it can enter the record.</div>
     </div>
     <div class="fnotes">judge: claude-sonnet-4-6 &#183; rubric hidden from agents &#183; all runs published in-repo</div>
     <div class="ftr"><span>apache-2.0 &#183; github.com/discover-legal/BigLaw</span><span class="pg">12 / 15</span></div>
@@ -556,20 +570,22 @@ table.data tr.hero .score{color:var(--ox)}
   <div class="frame"></div>
   <div class="content">
     <div class="hdr"><span>Disclosure</span><span class="exh">Exhibit N</span></div>
-    <div class="kick">Honest status</div>
-    <h1 style="font-size:80px">The task is not passed.</h1>
-    <div style="display:flex;align-items:baseline;gap:36px;margin-top:26px">
-      <span class="bignum" style="font-size:160px;color:var(--ox)">50<span style="font-size:80px;color:var(--muted)">/60</span></span>
-      <span class="mono" style="font-size:26px;color:var(--muted);line-height:1.5">score: 0.0<br>&#8212; the rubric is all-or-nothing;<br>a task passes only at 60/60.</span>
+    <div class="kick" style="margin:28px 0 14px">Honest status</div>
+    <h1 style="font-size:70px;margin-bottom:20px">The task is not passed.</h1>
+    <div style="display:flex;align-items:baseline;gap:36px;margin-top:8px">
+      <span class="bignum" style="font-size:132px;color:var(--ox)">51<span style="font-size:70px;color:var(--muted)">*/60</span></span>
+      <span class="mono" style="font-size:25px;color:var(--muted);line-height:1.5">score: 0.0<br>&#8212; the rubric is all-or-nothing;<br>a task passes only at 60/60.</span>
     </div>
-    <div class="rlist" style="margin-top:44px">
-      <div class="row"><span class="n">a.</span><span class="d" style="color:var(--ink)">The criterion count is the tracked metric — and <b>every scored run is published in-repo</b>, the weak ones included.</span></div>
-      <div class="row"><span class="n">b.</span><span class="d" style="color:var(--ink)">Corrections stay in the record: a once-quoted 30/60 was a <b>two-run union</b>, not a single-run score — the verified single-run peak of that era was 28, and the docs say so.</span></div>
-      <div class="row"><span class="n">c.</span><span class="d" style="color:var(--ink)">The judge is <b>named</b> — claude-sonnet-4-6 — and the rubric was hidden from the agents.</span></div>
+    <div class="rlist" style="margin-top:18px">
+      <div class="row"><span class="n">a.</span><span class="d" style="color:var(--ink)">The high carries its caveat on its face: <b>51 is a best-of-2</b> (repeat: 47), and in both runs one of three rounds sat inactive — disclosed with the score, never behind it.</span></div>
+      <div class="row"><span class="n">b.</span><span class="d" style="color:var(--ink)">The criterion count is the tracked metric — and <b>every scored run is published in-repo</b>, the weak ones included.</span></div>
+      <div class="row"><span class="n">c.</span><span class="d" style="color:var(--ink)">Corrections stay in the record: a once-quoted 30/60 was a <b>two-run union</b>, not a single-run score — the verified single-run peak of that era was 28, and the docs say so.</span></div>
+      <div class="row"><span class="n">d.</span><span class="d" style="color:var(--ink)">The judge is <b>named</b> — claude-sonnet-4-6 — and the rubric was hidden from the agents.</span></div>
     </div>
-    <p class="lede" style="font-size:29px;margin-top:44px">Still a climb, in the open, corrections
+    <p class="lede" style="font-size:28px;margin-top:22px">Still a climb, in the open, corrections
     included. <b>That is the differentiator.</b></p>
-    <div class="fnotes">judge: claude-sonnet-4-6 &#183; rubric hidden from agents &#183; all runs published in-repo</div>
+    <div class="fnotes" style="margin-top:14px;font-size:16px;line-height:1.45">* best of 2 (repeat: 47) — one of three rounds inactive in both runs; see Exhibit F<br>
+    judge: claude-sonnet-4-6 &#183; rubric hidden from agents &#183; all runs published in-repo</div>
     <div class="ftr"><span>apache-2.0 &#183; github.com/discover-legal/BigLaw</span><span class="pg">14 / 15</span></div>
   </div>
 </section>
