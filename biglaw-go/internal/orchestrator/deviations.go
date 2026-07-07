@@ -397,40 +397,44 @@ func (o *Orchestrator) deviationFindings(task *types.Task, corpus *devCorpus, re
 			continue
 		}
 		adjudicated++
-		dev, cites := o.adjudicateDeviation(task, corpus, prov, model, req, ctx)
-		if dev == "" {
-			continue
-		}
-		// Dedup by content overlap — two requirements can surface the SAME deviation (e.g. both
-		// "first successor trustee" and "exclude Sophia" flag Sophia-as-trustee). Compare the CLAIM
-		// CORE (the summary), not the full string: divergent "Recommended correction:" tails dragged
-		// whole-string overlap below the threshold and let near-identical claims through.
-		sig := devSignature(devCore(dev))
-		dup := false
-		for _, prev := range keptSigs {
-			if jaccard(sig, prev) > 0.5 {
-				dup = true
-				break
+		// A requirement can carry MULTIPLE independent deviations (e.g. a three-way split with
+		// two wrong shares) — adjudicateDeviation returns every one it can ground, not just one.
+		for _, gd := range o.adjudicateDeviation(task, corpus, prov, model, req, ctx) {
+			if gd.text == "" {
+				continue
 			}
+			// Dedup by content overlap — two requirements (or two rows on the same requirement)
+			// can surface the SAME deviation (e.g. both "first successor trustee" and "exclude
+			// Sophia" flag Sophia-as-trustee). Compare the CLAIM CORE (the summary), not the full
+			// string: divergent "Recommended correction:" tails dragged whole-string overlap below
+			// the threshold and let near-identical claims through.
+			sig := devSignature(devCore(gd.text))
+			dup := false
+			for _, prev := range keptSigs {
+				if jaccard(sig, prev) > 0.5 {
+					dup = true
+					break
+				}
+			}
+			if dup {
+				continue
+			}
+			keptSigs = append(keptSigs, sig)
+			status := types.EvidenceStatus("")
+			if len(gd.cites) > 0 {
+				status = types.EvidenceGrounded
+			}
+			out = append(out, types.Finding{
+				ID:             uuid.NewString(),
+				AgentID:        "deviation-detector",
+				AgentName:      "Deviation Detector",
+				Content:        gd.text,
+				Citations:      gd.cites,
+				Confidence:     0.8,
+				EvidenceStatus: status,
+				Timestamp:      time.Now(),
+			})
 		}
-		if dup {
-			continue
-		}
-		keptSigs = append(keptSigs, sig)
-		status := types.EvidenceStatus("")
-		if len(cites) > 0 {
-			status = types.EvidenceGrounded
-		}
-		out = append(out, types.Finding{
-			ID:             uuid.NewString(),
-			AgentID:        "deviation-detector",
-			AgentName:      "Deviation Detector",
-			Content:        dev,
-			Citations:      cites,
-			Confidence:     0.8,
-			EvidenceStatus: status,
-			Timestamp:      time.Now(),
-		})
 	}
 	return out
 }
@@ -581,7 +585,7 @@ func (o *Orchestrator) retrieveForDeviation(task *types.Task, corpus *devCorpus,
 // a deviation. The Go side then verifies both quotes appear in the retrieved passages (substring
 // lock) and drops any deviation whose quotes don't verify — a model that must copy "Twenty-Five
 // Percent (25%)" from the instruction cannot then claim the instruction says 30%.
-const deviationSystem = "You check ONE requirement against the document(s) under review. The passages are grouped into labeled sections: 'CONTROLLING SOURCE — <document> — what is required' (client instructions, a playbook, a regulation, a term sheet, or a prior agreement) and one 'DOCUMENT UNDER REVIEW — <document> — what it actually says' section PER reviewed document (a draft, a contract, a filing, a policy). Use ONLY these passages; do NOT rely on memory. A deviation is either a CONFLICT (a reviewed document addresses the requirement but with a wrong value, name, or term) or an OMISSION (the CONTROLLING SOURCE requires it but a reviewed document does not implement it — including when that document's section shows no matching provision). If the CONTROLLING SOURCE attaches TWO OR MORE enumerable sub-details to this requirement (e.g. an amount AND an identifier AND a condition; a named item AND its serial number AND a holding instruction), assess EACH sub-detail separately in \"parts\" — a requirement implemented only IN PART is a deviation; NEVER report it as conforming. Output ONLY JSON: {\"type\": \"conflict|omission|none\", \"document\": \"<the reviewed document the deviation is in, copied from its section label; empty if none>\", \"instructionQuote\": \"<the EXACT verbatim words from the CONTROLLING SOURCE section stating the requirement, including any specific value it names>\", \"draftQuote\": \"<for a CONFLICT, the EXACT verbatim words from that reviewed document's section; empty for an omission>\", \"requiredProvision\": \"<for an OMISSION, a short name for the missing provision>\", \"summary\": \"<one sentence naming the required value and the document's value; if the deviation has a material practical CONSEQUENCE — it creates a risk given a known fact about a party, or it affects another provision's calculation — state that consequence too>\", \"severity\": \"critical|high|medium|low\", \"recommendation\": \"<the specific correction, stating the required value>\", \"parts\": [{\"part\": \"<short name of the sub-detail>\", \"status\": \"conforms|conflict|omission\", \"instructionQuote\": \"<EXACT verbatim words from the CONTROLLING SOURCE for this sub-detail>\", \"draftQuote\": \"<for a conflict, EXACT verbatim words from the reviewed document; empty otherwise>\", \"note\": \"<one short clause>\"}]} — include \"parts\" ONLY when the requirement has 2+ enumerable sub-details; otherwise use []. Quotes MUST be copied word-for-word from the passages — never invent. type=conflict ONLY if the two quotes actually conflict; type=omission ONLY if the requirement is imposed but not implemented; otherwise type=none."
+const deviationSystem = "You check ONE requirement against the document(s) under review. The passages are grouped into labeled sections: 'CONTROLLING SOURCE — <document> — what is required' (client instructions, a playbook, a regulation, a term sheet, or a prior agreement) and one 'DOCUMENT UNDER REVIEW — <document> — what it actually says' section PER reviewed document (a draft, a contract, a filing, a policy). Use ONLY these passages; do NOT rely on memory. A deviation is either a CONFLICT (a reviewed document addresses the requirement but with a wrong value, name, or term) or an OMISSION (the CONTROLLING SOURCE requires it but a reviewed document does not implement it — including when that document's section shows no matching provision). If the CONTROLLING SOURCE attaches TWO OR MORE enumerable sub-details to a SINGLE deviation (e.g. an amount AND an identifier AND a condition; a named item AND its serial number AND a holding instruction), assess EACH sub-detail separately in that deviation's \"parts\" — a requirement implemented only IN PART is a deviation; NEVER report it as conforming. Separately, if the requirement itself covers MULTIPLE INDEPENDENT items (e.g. a three-way split among named parties where two shares are wrong), each independent item is its OWN deviation object — do not merge unrelated conflicts into one. Output ONLY a JSON ARRAY — one object per DISTINCT conflict or omission, or an empty array [] if every reviewed document conforms. Each object: {\"type\": \"conflict|omission|none\", \"document\": \"<the reviewed document the deviation is in, copied from its section label; empty if none>\", \"instructionQuote\": \"<the EXACT verbatim words from the CONTROLLING SOURCE section stating the requirement, including any specific value it names>\", \"draftQuote\": \"<for a CONFLICT, the EXACT verbatim words from that reviewed document's section; empty for an omission>\", \"requiredProvision\": \"<for an OMISSION, a short name for the missing provision>\", \"summary\": \"<one sentence naming the required value and the document's value; if the deviation has a material practical CONSEQUENCE — it creates a risk given a known fact about a party, or it affects another provision's calculation — state that consequence too>\", \"severity\": \"critical|high|medium|low\", \"recommendation\": \"<the specific correction, stating the required value>\", \"parts\": [{\"part\": \"<short name of the sub-detail>\", \"status\": \"conforms|conflict|omission\", \"instructionQuote\": \"<EXACT verbatim words from the CONTROLLING SOURCE for this sub-detail>\", \"draftQuote\": \"<for a conflict, EXACT verbatim words from the reviewed document; empty otherwise>\", \"note\": \"<one short clause>\"}]} — include \"parts\" ONLY when ONE deviation has 2+ enumerable sub-details; otherwise use []. Quotes MUST be copied word-for-word from the passages — never invent. type=conflict ONLY if the two quotes actually conflict; type=omission ONLY if the requirement is imposed but not implemented; otherwise omit that object entirely."
 
 type devPart struct {
 	Part             string `json:"part"`
@@ -603,22 +607,30 @@ type devVerdict struct {
 	Parts             []devPart `json:"parts"`
 }
 
-// adjudicateDeviation runs the model verdict for one requirement and grounds it: substring
-// locks on every quote, per-part verdicts, value verification on the summary/recommendation,
-// and mechanically-verified citations for every quote the finding carries. Returns ("", nil)
-// when the requirement conforms or the verdict fails grounding.
-func (o *Orchestrator) adjudicateDeviation(task *types.Task, corpus *devCorpus, prov providers.Provider, model, req, ctx string) (string, []types.Citation) {
+// groundedDev is one grounded, rendered deviation finding awaiting dedup + emission.
+type groundedDev struct {
+	text  string
+	cites []types.Citation
+}
+
+// adjudicateDeviation asks the model for EVERY distinct deviation on this requirement — not
+// just one. A multi-part requirement (e.g. a three-way residuary split with two wrong shares)
+// can carry SEVERAL independent conflicts/omissions; a single-verdict response caught only one
+// (often the first or the most fabricated-sounding), silently dropping the rest. Each returned
+// verdict is independently grounded: substring locks on every quote, per-part sub-verdicts,
+// value verification on the summary/recommendation, and mechanically-verified citations.
+func (o *Orchestrator) adjudicateDeviation(task *types.Task, corpus *devCorpus, prov providers.Provider, model, req, ctx string) []groundedDev {
 	zero := 0.0
 	resp, err := prov.Chat(providers.ChatParams{
 		Model:       model,
-		MaxTokens:   700,
+		MaxTokens:   1400,
 		System:      deviationSystem,
 		Messages:    []providers.Message{{Role: "user", Content: "REQUIREMENT: " + req + "\n\nPASSAGES:\n" + ctx}},
 		CacheSystem: true,
 		Temperature: &zero,
 	})
 	if err != nil {
-		return "", nil
+		return nil
 	}
 	o.recordCost(resp, model, cost.ContextSynthesis, task.ID)
 	var text string
@@ -628,15 +640,25 @@ func (o *Orchestrator) adjudicateDeviation(task *types.Task, corpus *devCorpus, 
 		}
 	}
 	t := strings.TrimSpace(text)
-	i, j := strings.Index(t, "{"), strings.LastIndex(t, "}")
+	i, j := strings.Index(t, "["), strings.LastIndex(t, "]")
 	if i < 0 || j <= i {
-		return "", nil
+		return nil
 	}
-	var d devVerdict
-	if json.Unmarshal([]byte(t[i:j+1]), &d) != nil {
-		return "", nil
+	var rows []devVerdict
+	if json.Unmarshal([]byte(t[i:j+1]), &rows) != nil {
+		return nil
 	}
-	return o.groundDeviation(task, corpus, prov, model, req, ctx, d)
+	const maxRowsPerReq = 6 // bound a pathological over-generation; a real multi-part split is small
+	var out []groundedDev
+	for ri, d := range rows {
+		if ri >= maxRowsPerReq {
+			break
+		}
+		if s, c := o.groundDeviation(task, corpus, prov, model, req, ctx, d); s != "" {
+			out = append(out, groundedDev{text: s, cites: c})
+		}
+	}
+	return out
 }
 
 // groundDeviation applies the grounding discipline to a parsed verdict and renders the

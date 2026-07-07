@@ -179,7 +179,7 @@ func devConflictReply(summary, recommendation string) string {
 		"severity":         "high",
 		"recommendation":   recommendation,
 	}
-	b, _ := json.Marshal(v)
+	b, _ := json.Marshal([]map[string]interface{}{v}) // adjudicateDeviation now parses a JSON array
 	return string(b)
 }
 
@@ -338,7 +338,7 @@ func TestDevFabricatedInstructionQuoteDropped(t *testing.T) {
 				"severity":         "high",
 				"recommendation":   "Fix it.",
 			}
-			b, _ := json.Marshal(v)
+			b, _ := json.Marshal([]map[string]interface{}{v}) // adjudicateDeviation now parses a JSON array
 			return string(b)
 		}
 		return "{}"
@@ -391,7 +391,7 @@ func TestDevMultiPartPerPartVerdicts(t *testing.T) {
 					{"part": "held until age 30", "status": "omission", "instructionQuote": "shall be held by the trustee until Tommy reaches age 30"},
 				},
 			}
-			b, _ := json.Marshal(v)
+			b, _ := json.Marshal([]map[string]interface{}{v}) // adjudicateDeviation now parses a JSON array
 			return string(b)
 		}
 		return "{}"
@@ -439,7 +439,7 @@ func TestDevMultiPartUngroundedPartDropped(t *testing.T) {
 					{"part": "insurance rider", "status": "omission", "instructionQuote": "a $50,000 insurance rider"}, // fabricated
 				},
 			}
-			b, _ := json.Marshal(v)
+			b, _ := json.Marshal([]map[string]interface{}{v}) // adjudicateDeviation now parses a JSON array
 			return string(b)
 		}
 		return "{}"
@@ -457,6 +457,79 @@ func TestDevMultiPartUngroundedPartDropped(t *testing.T) {
 	}
 	if !strings.Contains(fs[0].Content, "Serial #612847") {
 		t.Errorf("grounded part must survive: %s", fs[0].Content)
+	}
+}
+
+// ─── Multiple independent deviations on ONE requirement ────────────────────────
+
+// The residuary split names three parties; the draft gets TWO of the three shares wrong
+// (Sophia 35%→30%, Tommy 25%→30%) — two genuinely independent conflicts, not sub-parts of
+// one. A single-verdict response would catch only one; adjudicateDeviation must return both.
+func TestDevMultipleIndependentDeviationsOnOneRequirement(t *testing.T) {
+	srv := newDevFakeServer(t, func(user string) string {
+		if strings.HasPrefix(user, "REQUIREMENT:") {
+			rows := []map[string]interface{}{
+				{
+					"type":             "conflict",
+					"document":         devTrustTitle,
+					"instructionQuote": "Sophia shall receive Thirty-Five Percent (35%)",
+					"draftQuote":       "thirty percent (30%) to Sophia",
+					"summary":          "Sophia's residuary interest is understated: entitled to 35%, allocated only 30%.",
+					"severity":         "high",
+					"recommendation":   "Change Sophia's share to Thirty-Five Percent (35%).",
+				},
+				{
+					"type":             "conflict",
+					"document":         devTrustTitle,
+					"instructionQuote": "Tommy shall receive Twenty-Five Percent (25%)",
+					"draftQuote":       "thirty percent (30%) to Tommy",
+					"summary":          "Tommy's allocation overstates his residuary bequest by five points, 30% versus the 25% instructed.",
+					"severity":         "high",
+					"recommendation":   "Change Tommy's share to Twenty-Five Percent (25%).",
+				},
+			}
+			b, _ := json.Marshal(rows)
+			return string(b)
+		}
+		return "{}"
+	})
+	defer srv.Close()
+	o := crossDocTestOrchestrator()
+	prov := crossDocTestProvider(t, srv.URL)
+
+	fs := o.deviationFindings(devTestTask(), devTestCorpus(), []string{"Residuary split: David 40%, Sophia 35%, Tommy 25%"}, nil, prov, "test-model", nil, "")
+	if len(fs) != 2 {
+		t.Fatalf("want 2 independent deviations from one requirement, got %d: %v", len(fs), fs)
+	}
+	var sawSophia, sawTommy bool
+	for _, f := range fs {
+		if strings.Contains(f.Content, "Sophia") {
+			sawSophia = true
+		}
+		if strings.Contains(f.Content, "Tommy") {
+			sawTommy = true
+		}
+	}
+	if !sawSophia || !sawTommy {
+		t.Errorf("both independent deviations must survive dedup (not merged as near-duplicates): %v", fs)
+	}
+}
+
+// An empty array (the model finds no deviations at all) must yield zero findings, not an error.
+func TestDevEmptyArrayYieldsNoFindings(t *testing.T) {
+	srv := newDevFakeServer(t, func(user string) string {
+		if strings.HasPrefix(user, "REQUIREMENT:") {
+			return "[]"
+		}
+		return "{}"
+	})
+	defer srv.Close()
+	o := crossDocTestOrchestrator()
+	prov := crossDocTestProvider(t, srv.URL)
+
+	fs := o.deviationFindings(devTestTask(), devTestCorpus(), []string{"Sophia's residuary share percentage"}, nil, prov, "test-model", nil, "")
+	if len(fs) != 0 {
+		t.Fatalf("empty array must yield zero findings, got %d: %v", len(fs), fs)
 	}
 }
 
@@ -480,7 +553,7 @@ func TestDevOmissionInSecondDocument(t *testing.T) {
 				"severity":          "high",
 				"recommendation":    "Add an express disinheritance clause to the pour-over will.",
 			}
-			b, _ := json.Marshal(v)
+			b, _ := json.Marshal([]map[string]interface{}{v}) // adjudicateDeviation now parses a JSON array
 			return string(b)
 		}
 		return "{}"
