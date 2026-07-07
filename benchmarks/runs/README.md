@@ -45,17 +45,17 @@ The record keeps its bad runs on purpose; these must **not** be quoted as capabi
   operator-interrupted at ~24.7M tokens with a malformed deliverable. Not a capability number.
 - **`biglaw-apache-release/20260703-130134` — 27/60, VOIDED.** The release-era local qwen run:
   every DyTopo round timed out under three-way task contention, so the 27 reflects the BELO
-  deviation layer alone, not a healthy pipeline. Superseded by the fix-wave qwen 36.
-- **`haiku-rounds3/20260706-003200` — 50/60, DEGRADED (50†).** Per the July-6 investigation, this
-  3-round run **starved its analysis round** on a credit outage (HTTP 400s). It is the top Haiku
-  number cited in collateral, always with the † caveat: a *fully-healthy* 3-round Haiku run has
-  not yet been scored; the healthy 6-round sibling (`biglaw-fixwave-haiku`) scores 49, within
-  judge noise. The "3 rounds match 6" ablation (1→41, 3→50†, 6→49) is therefore **confounded** —
-  remeasure pending.
-- **`glm52-fast/20260706-044640` (51) and `glm52-fast/20260706-120209` (47) — STARVED.** Both runs
-  of the GLM-5.2 "fast" pair had **one of three rounds (analysis) return zero findings** — a
-  GLM/analysis-phase incompatibility under investigation. The published **51\*** is the best of
-  this pair (repeat: 47); headroom above 51 is expected once the incompatibility is fixed.
+  deviation layer alone, not a healthy pipeline. Superseded by `qwen-v4` (39).
+- **`haiku-rounds3/20260706-003200` — 50/60, SUPERSEDED.** This 3-round run's analysis round
+  starved on a transient provider outage (HTTP 400s). A subsequent resilience pass (call
+  backoff, durable agent recruitment, loud round-error signaling) plus re-entrant machinery
+  made a genuinely healthy 3-round measurement possible: `haiku-v5b/20260707-144125` scores the
+  same **50/60** with every round intact — confirming this run's number, not correcting it.
+- **`glm52-fast/20260706-044640` (51) and `glm52-fast/20260706-120209` (47) — SUPERSEDED.** Both
+  runs of the original GLM-5.2 "fast" pair had one of three rounds (analysis) return zero
+  findings under provider rate-limiting. The resilience pass fixed the underlying call-rate
+  self-throttling; `glm52-v4b/20260707-113848` scores **52/60** with all rounds intact — the
+  current cross-vendor high, and the number now cited in collateral without qualification.
 
 For context on corrected claims: the once-quoted **"30/60"** was a two-run *union* of passed
 criteria (a coverage measure), not a single-run score; the verified single-run qwen peak of that
@@ -63,21 +63,24 @@ era was **28** (`biglaw-clean2/20260623-170105`). The docs say so.
 
 ## Inventory
 
-### SEC enforcement-referral extraction (60-criterion) — 61 scored runs
+### SEC enforcement-referral extraction (60-criterion) — 64 scored runs
 
 Task: `white-collar-defense-investigations/extract-key-allegations-from-sec-enforcement-referral-notice`
 
 | Score | Run (`modeldir/timestamp`) | Deliverables | Note |
 |---|---|---|---|
-| **51/60** | `glm52-fast/20260706-044640` | `output/` | starved analysis round (best of 2 → 51*) |
-| **50/60** | `haiku-rounds3/20260706-003200` | `output/` | analysis round starved (credit outage) → 50† |
+| **52/60** | `glm52-v4b/20260707-113848` | `output/` | GLM-5.2, resilience wave + re-entrant machinery, all 3 rounds intact — current cross-vendor high |
+| **51/60** | `glm52-fast/20260706-044640` | `output/` | superseded by `glm52-v4b` (52) |
+| **50/60** | `haiku-v5b/20260707-144125` | `output/` | claude-haiku-4-5, resilience wave + re-entrant machinery + writer-discipline fix, all 3 rounds intact |
+| **50/60** | `haiku-rounds3/20260706-003200` | `output/` | confirmed (not corrected) by `haiku-v5b` |
 | **49/60** | `biglaw-fixwave-haiku/20260705-033626` | `output/` | healthy 6-round fix-wave Haiku |
 | **48/60** | `haiku-unshackled/20260706-041439` | `output/` | 3-round unshackled Haiku |
-| **47/60** | `glm52-fast/20260706-120209` | `output/` | starved analysis round (repeat of the 51* pair) |
+| **47/60** | `glm52-fast/20260706-120209` | `output/` | superseded by `glm52-v4b` (52) |
 | **41/60** | `haiku-raw/manual-001` | `output/` | Harvey's own raw harness (read 7 of 8 documents) |
 | **41/60** | `haiku-rounds1/20260706-003158` | `output/` | 1-round fix-wave Haiku |
+| **39/60** | `qwen-v4/20260707-031344` | `output/` | local qwen2.5:14b, resilience wave + re-entrant machinery, new record (measured ahead of the writer-discipline fix) |
 | **37/60** | `biglaw-haiku-fix/20260626-204440` | `output/` | best single-run Haiku, June-26 build |
-| **36/60** | `biglaw-fixwave-qwen/20260705-033309` | `output/` | local qwen2.5:14b, fix-wave record |
+| **36/60** | `biglaw-fixwave-qwen/20260705-033309` | `output/` | local qwen2.5:14b, fix-wave, superseded by `qwen-v4` (39) |
 | **35/60** | `biglaw-haiku/20260626-183226` | — |  |
 | **34/60** | `biglaw-haiku-release/20260703-035054` | `output/` | release build, Haiku ($1.34) |
 | **34/60** | `biglaw-sonnet-release/20260703-141449` | `output/` | release build, Sonnet ($13.70; 31 of 34 the same criteria) |

@@ -84,6 +84,27 @@ trust task: Haiku 6 → 9/23 pre/post wave (real transfer; the deviation-tuned l
 of 12/23 stands — deviation-path port queued). Costs: Haiku proof ~$11.48 (7.9M tokens);
 qwen proof local-only. Task still not passed; 11 criteria remain on the SEC task.
 
+### Benchmark: re-entrant machinery + a writer-discipline fix, cross-vendor (July 7)
+Every technique in the fix wave ran once at round 0, before any DyTopo agent understood the
+matter — correct for the exhaustive passes (a full sweep needs no guidance), a real cost for
+the selective ones (which entity to chase, which figure matters, which defense applies).
+**Re-entrant machinery** (`internal/orchestrator/reentry.go`) makes the selective layer
+two-directional: each round boundary re-sweeps for entities the round just surfaced, re-joins
+figures with newly-learned aliases, and re-derives defense issues from the growing conduct
+graph. Paired with a provider-resilience pass (call backoff, durable agent recruitment across
+restarts, loud round-error signaling) this made a genuinely healthy, full-length 3-round
+measurement possible for the first time — which surfaced one more finding: two of the writer's
+own anti-fabrication guards (`1678ccc`) were wide enough to discard a few *true* figures along
+with the false ones they were built to catch. Fixed (`631e81a`) with two precise rules: a
+stated total is trusted only when it is the exact sum of **three** independently-grounded
+components (never two, closing the original naive-partial-sum hole); limitations joins
+allocate round-robin across distinct conduct windows instead of first-come, so a single-mention
+window is never crowded out. Proof runs, same task/judge, three vendors: claude-haiku-4-5
+**50/60** (+9 over the raw-harness baseline), a cross-vendor **GLM-5.2 run at 52/60** (the
+current high — a `MODEL_THINKING`-off, 3-round configuration on the newest and cheapest model
+in the comparison), and local **qwen2.5:14b at 39/60** (a new record, measured ahead of the
+writer fix). Task still not passed; 10 criteria remain on the SEC task.
+
 ### BELO — an epistemic ontology, a graph-discovered spine, and What3Words figure handles
 The next stretch of the local-accuracy climb — still a single local open-weight model for the
 bulk (a 14B handles the small, high-leverage spine pass), no cloud model, no corpus stuffing.

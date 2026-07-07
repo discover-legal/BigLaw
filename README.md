@@ -149,13 +149,13 @@ Opening this repo in Claude Code registers BigLaw as an MCP server: **[MCP guide
 ## The benchmark
 
 On Harvey **LAB** (60-criterion all-pass rubric, rubric hidden from the agents; judge
-claude-sonnet-4-6): claude-haiku-4-5 raw scores **41/60**; the same model on the fix-wave
-BigLaw pipeline scores **49/60** on a healthy 6-round run (a 3-round run scored 50† but starved
-its analysis round on a credit outage — within judge noise of the 49, remeasure pending), and a
-cross-vendor GLM-5.2 run reached **51\*** (best of two, one round inactive). A free, on-prem
-qwen2.5:14b scores **36/60** on the identical build. Spot-checked citations came back verbatim
-6/6 on the release run where the raw run fabricated statutory penalty figures. The full ladder,
-caveats, and the technique-by-technique account: **[Benchmarks](docs/benchmarks.md)**.
+claude-sonnet-4-6): claude-haiku-4-5 raw, in Harvey's own harness, scores **41/60**; the same
+model on the BigLaw pipeline scores **50/60**, and a cross-vendor GLM-5.2 run tops the board at
+**52/60** — all clean, zero starved rounds. A free, on-prem qwen2.5:14b scores **39/60** (a new
+local record) on the resilience-wave build. Spot-checked citations came back verbatim on the
+pipeline runs where the raw run fabricated statutory penalty figures. The full ladder,
+including the confounded runs that were found and fixed along the way, and the
+technique-by-technique account: **[Benchmarks](docs/benchmarks.md)**.
 
 ---
 

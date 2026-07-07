@@ -1,0 +1,18 @@
+{
+  "input_tokens": 9762076,
+  "output_tokens": 1305936,
+  "total_tokens": 11068012,
+  "turns": 3,
+  "num_documents": 8,
+  "documents_read": 8,
+  "completed": true,
+  "ended_at": "2026-07-07T11:38:48.601817+00:00",
+  "biglaw": {
+    "task_ids": [
+      "77f58f82-608a-4773-8f99-35fa20e2ddd8"
+    ],
+    "cost_usd": 0,
+    "attached_after_timeout": true,
+    "starved_rounds": []
+  }
+}

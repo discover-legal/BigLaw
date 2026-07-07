@@ -13,23 +13,28 @@ verified fix-wave ladder (every scored run is published under
 |---|---|
 | claude-haiku-4-5 — Harvey's own raw harness | 41 |
 | release build — claude-haiku-4-5 / claude-sonnet-4-6 | 34 / 34 |
-| fix-wave — qwen2.5:14b (local) | 36 |
-| fix-wave — claude-haiku-4-5, healthy 6 rounds | **49** |
-| fix-wave — claude-haiku-4-5, 3 rounds | **50†** |
-| fix-wave — GLM-5.2 (cross-vendor), fast, 3 rounds | **51\*** |
+| resilience-wave build — qwen2.5:14b (local) | **39** |
+| fix-wave build — claude-haiku-4-5, 6 rounds | 49 |
+| compounded build — claude-haiku-4-5, 3 rounds | **50** |
+| compounded build — GLM-5.2 (cross-vendor), fast, 3 rounds | **52** |
 
 Read this as harness-vs-harness on the same model: the pipeline beats claude-haiku-4-5's raw
-agent by **+9** (50† vs 41), after a criterion-level forensics pass rebuilt the extraction floor
-(the full autopsy and fix history are part of the repo's record). Two disclosures ride on the
-top numbers. **†** — the 3-round run of 50 **starved its analysis round** on a credit outage
-(HTTP 400s); its healthy 6-round sibling scores 49, within judge noise, so a *fully-healthy*
-3-round run has not yet been scored. A rounds ablation (1→41, 3→50†, 6→49) therefore reads
-"three matches six at ~70% of the cost" but is **confounded** — the 3-round runs starved a round;
-remeasure pending. **\*** — the GLM-5.2 51 is a best-of-two (repeat: 47) with one of three rounds
-inactive in both runs; a GLM/analysis-phase incompatibility under investigation. The **local
-qwen2.5:14b at 36** is a free, on-prem model on the identical build. And the pipeline's standing
-edge is *integrity*: spot-checked citations verbatim 6/6 on the release run (11/12 on the 50†-run,
-the one truncation disclosed — record: [`benchmarks-citation-spotcheck.md`](benchmarks-citation-spotcheck.md)),
+agent by **+9** (50 vs 41). Each rung is a technique, not a model swap: a criterion-level
+forensics pass first rebuilt the extraction floor (34→49; the autopsy is in the repo's
+record); a rounds ablation then showed that most of the debate rounds' value lands by round
+3; and **re-entrant machinery** — letting a later round act on the entities, aliases, and
+conducts an earlier round discovered, instead of every mechanical pass running once at round
+0 before any understanding exists — plus a provider-resilience wave (call backoff, durable
+agent recruitment across restarts, loud round-error signaling) unlocked a genuinely healthy
+3-round measurement for the first time. That measurement surfaced one more finding: the
+writer's own anti-fabrication guards (built to stop invented totals and template spray) were
+over-broad and cutting a few *true* figures alongside the false ones — a targeted fix
+(three-component-only subset sums, round-robin limitations joins) recovered them without
+reopening the original fabrication holes. GLM-5.2 at **52** and the local **qwen2.5:14b at 39**
+(a new record, on the resilience-wave build ahead of the writer fix — likely a floor, not a
+ceiling) round out the cross-vendor picture. The pipeline's standing edge is *integrity*:
+spot-checked citations verbatim 6/6 on the release run (11/12 on the 50-run, the one
+truncation disclosed — record: [`benchmarks-citation-spotcheck.md`](benchmarks-citation-spotcheck.md)),
 while the raw run fabricated statutory penalty figures — the numbers a firm actually gets
 sanctioned over.
 
