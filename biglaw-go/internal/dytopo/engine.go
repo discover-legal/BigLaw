@@ -292,19 +292,25 @@ func processWithRetry(agentID string, round int, phase types.TaskPhase, timeout 
 	select {
 	case r := <-first:
 		if r.err != nil {
-			return nil
+			// An error is no longer swallowed as a silent nil: it is logged loudly and
+			// treated exactly like a timeout — the agent gets one retry on the extended
+			// budget before the round records no findings for it.
+			slog.Warn("agent process errored; retrying once with extended budget",
+				"agentId", agentID, "round", round, "phase", phase, "err", r.err)
+			first = nil // the first attempt is spent — disable its channel in the race below
+			break
 		}
 		return r.findings
 	case <-t1.C:
+		slog.Warn("agent exceeded round timeout; retrying once with extended budget",
+			"agentId", agentID, "round", round, "phase", phase,
+			"timeoutMs", timeout.Milliseconds())
 	}
 
 	if retryFactor < 1 {
 		retryFactor = 1
 	}
 	retryBudget := time.Duration(float64(timeout) * retryFactor)
-	slog.Warn("agent exceeded round timeout; retrying once with extended budget",
-		"agentId", agentID, "round", round, "phase", phase,
-		"timeoutMs", timeout.Milliseconds(), "retryBudgetMs", retryBudget.Milliseconds())
 
 	second := run()
 	t2 := time.NewTimer(retryBudget)
@@ -319,11 +325,15 @@ func processWithRetry(agentID string, round int, phase types.TaskPhase, timeout 
 			if r.err == nil {
 				return r.findings
 			}
+			slog.Warn("agent process errored on first attempt (landed during retry window)",
+				"agentId", agentID, "round", round, "phase", phase, "err", r.err)
 		case r := <-second:
 			second = nil
 			if r.err == nil {
 				return r.findings
 			}
+			slog.Warn("agent process errored on retry attempt; recording no findings for it this round",
+				"agentId", agentID, "round", round, "phase", phase, "err", r.err)
 		case <-t2.C:
 			slog.Warn("agent exceeded extended round timeout after retry; recording no findings for it this round",
 				"agentId", agentID, "round", round, "phase", phase,

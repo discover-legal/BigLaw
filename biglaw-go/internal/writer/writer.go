@@ -474,6 +474,11 @@ func (w *Writer) Write(taskDesc, workflowType string, findings []Finding) (strin
 		secs = w.partition(ix)
 		secs = w.planOutline(taskDesc, workflowType, ix, secs)
 	}
+	// Degenerate-spine guard: when the coverage spine AND planOutline both fail and one
+	// giant cluster is chunked N ways, the outline degrades to dozens of sections all
+	// sharing a single TF-IDF cluster label ("Allocation Defense Trading Personal" ×88).
+	// Refuse it: collapse sections sharing a title into one distinctly-labeled section.
+	secs = guardDegenerateOutline(secs)
 
 	// Paged synthesis: the DyTopo writing agent authors each section from the evidence
 	// blackboard, compacting finished sections out of working context (uncompactable on
@@ -717,6 +722,73 @@ func bestKeywordSection(f Finding, required []string) int {
 		}
 	}
 	return best
+}
+
+// maxSectionsPerTitle bounds how many sections may share one title before the outline
+// is treated as degenerate. Legitimate spine ∪ clustering can produce a couple of
+// same-labelled off-spine sections; more than this means a single cluster was fanned
+// out under one label (the thinking-wreck failure: ~88 identical-titled sections).
+const maxSectionsPerTitle = 3
+
+// guardDegenerateOutline refuses an outline in which a single title dominates. When the
+// coverage spine and planOutline both fail, one giant cluster gets chunked N ways and
+// every chunk inherits the same TF-IDF cluster label — producing dozens of sections
+// that share one heading. It collapses each over-shared title into ONE section (union of
+// its findings, deduped), so the result carries DISTINCT labels, and logs loudly. A
+// healthy outline (no title shared more than the cap) is returned unchanged.
+func guardDegenerateOutline(secs []section) []section {
+	if len(secs) == 0 {
+		return secs
+	}
+	counts := map[string]int{}
+	for _, s := range secs {
+		counts[strings.ToLower(strings.TrimSpace(s.Title))]++
+	}
+	degenerate := false
+	for _, n := range counts {
+		if n > maxSectionsPerTitle {
+			degenerate = true
+			break
+		}
+	}
+	if !degenerate {
+		return secs
+	}
+	var order []string
+	merged := map[string]*section{}
+	for _, s := range secs {
+		key := strings.ToLower(strings.TrimSpace(s.Title))
+		if m, ok := merged[key]; ok {
+			m.FindingIDs = append(m.FindingIDs, s.FindingIDs...)
+			continue
+		}
+		cp := s
+		merged[key] = &cp
+		order = append(order, key)
+	}
+	out := make([]section, 0, len(order))
+	for _, key := range order {
+		m := merged[key]
+		m.FindingIDs = dedupIDs(m.FindingIDs)
+		out = append(out, *m)
+	}
+	slog.Warn("degenerate outline collapsed: sections shared a single cluster-label title",
+		"sectionsBefore", len(secs), "sectionsAfter", len(out), "distinctTitles", len(counts))
+	return out
+}
+
+// dedupIDs removes duplicate finding IDs, preserving first-seen order.
+func dedupIDs(ids []string) []string {
+	seen := make(map[string]bool, len(ids))
+	out := ids[:0:0]
+	for _, id := range ids {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
 }
 
 // partition turns the finding set into tight sections: cluster, then split any

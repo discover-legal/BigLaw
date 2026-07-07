@@ -40,8 +40,53 @@ func (r *Registry) Init() error {
 		return nil // first run — registry will be seeded
 	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	return json.Unmarshal(data, &r.agents)
+	if err := json.Unmarshal(data, &r.agents); err != nil {
+		r.mu.Unlock()
+		return err
+	}
+	r.mu.Unlock()
+	// Embeddings are not persisted (types.AgentDefinition.Embedding is json:"-", by
+	// design — vectors would bloat agents.json and the same tag is shared with
+	// descriptors/memory/documents that must stay lean). So a reloaded registry has
+	// zero vectors, which would make searchByEmbedding skip every agent and permanently
+	// return no recruits after a restart. Re-embed on load so a restarted backend
+	// recruits IDENTICALLY to a fresh one — embeds are local/cheap (nomic via Ollama),
+	// and this path degrades to name-matching on embedder failure, exactly like a fresh
+	// seed would.
+	r.ensureEmbeddings()
+	return nil
+}
+
+// ensureEmbeddings fills in the vector for any agent loaded without one (the
+// restart case: Embedding is not serialized). Agents that already carry a vector
+// are left untouched. A batch embed failure is non-fatal — search falls back to
+// name matching, matching fresh-seed behavior.
+func (r *Registry) ensureEmbeddings() {
+	if r.embedC == nil {
+		return
+	}
+	r.mu.Lock()
+	var idxs []int
+	var texts []string
+	for i := range r.agents {
+		if len(r.agents[i].Embedding) == 0 {
+			idxs = append(idxs, i)
+			texts = append(texts, r.agents[i].Description)
+		}
+	}
+	r.mu.Unlock()
+	if len(texts) == 0 {
+		return
+	}
+	results, err := r.embedC.EmbedBatch(texts)
+	if err != nil || len(results) != len(texts) {
+		return // degrade to name matching, as a fresh seed would on embedder failure
+	}
+	r.mu.Lock()
+	for k, i := range idxs {
+		r.agents[i].Embedding = results[k].Embedding
+	}
+	r.mu.Unlock()
 }
 
 func (r *Registry) Persist() error {

@@ -80,6 +80,43 @@ func TestProcessWithRetry_FirstAttemptLandsInRetryWindow(t *testing.T) {
 	}
 }
 
+// An error on the first attempt is no longer swallowed as a silent nil: it behaves
+// like a timeout — one retry on the extended budget. Here the retry succeeds.
+func TestProcessWithRetry_ErrorRetries(t *testing.T) {
+	var calls atomic.Int32
+	got := processWithRetry("agent-1", 5, types.PhaseAnalysis, 200*time.Millisecond, 2.0,
+		func() ([]types.Finding, error) {
+			if calls.Add(1) == 1 {
+				return nil, errors.New("provider blew up") // immediate error, not a timeout
+			}
+			return fakeFindings(4), nil
+		})
+	if len(got) != 4 {
+		t.Fatalf("findings = %d, want 4 from the retry after the first errored", len(got))
+	}
+	if calls.Load() != 2 {
+		t.Errorf("process called %d times, want 2 (error triggers one retry)", calls.Load())
+	}
+}
+
+// An error on BOTH attempts records no findings — but must not be silent (the fix:
+// errors are always logged, never a bare nil return). We assert the no-findings
+// contract; the loud logging is exercised by the WARN path in processWithRetry.
+func TestProcessWithRetry_BothError(t *testing.T) {
+	var calls atomic.Int32
+	got := processWithRetry("agent-1", 6, types.PhaseAnalysis, 200*time.Millisecond, 2.0,
+		func() ([]types.Finding, error) {
+			calls.Add(1)
+			return nil, errors.New("still broken")
+		})
+	if got != nil {
+		t.Fatalf("findings = %v, want nil when both attempts error", got)
+	}
+	if calls.Load() != 2 {
+		t.Errorf("process called %d times, want 2 (one retry after the first error)", calls.Load())
+	}
+}
+
 func TestProcessWithRetry_BothExceed(t *testing.T) {
 	start := time.Now()
 	got := processWithRetry("agent-1", 3, types.PhaseReview, 30*time.Millisecond, 2.0,

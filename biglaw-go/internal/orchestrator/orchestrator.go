@@ -2119,7 +2119,7 @@ func (o *Orchestrator) buildEvidenceGraph(task *types.Task, prov providers.Provi
 	// the controlling standard per requirement. This is the finding such tasks are scored on
 	// ("residuary should be 40/35/25, draft has …"), not a description of each requirement. Runs
 	// on the spine model. Enforcement matters use the figure-discrepancy path instead.
-	if o.routeMatter(g) == modeCompliance {
+	if o.shouldRunDeviationPass(g) {
 		if devs := o.detectDeviations(task, g, spineProv, spineModel, rawFigs, prov, figModel); len(devs) > 0 {
 			o.update(task, func(t *types.Task) { t.Findings = append(t.Findings, devs...) })
 			slog.Info("deviations detected", "task", task.ID, "n", len(devs))
@@ -2451,10 +2451,22 @@ const (
 // accusation predicates (violates/committedBy/harmed) outweighing requirement predicates
 // (requires/satisfiedBy/deviatesFrom/prohibits).
 func (o *Orchestrator) routeMatter(g *evidencegraph.Graph) matterMode {
-	if g == nil {
-		return modeCompliance
+	enf, comp := matterClaimCounts(g)
+	mode := modeCompliance
+	if enf > comp {
+		mode = modeEnforcement
 	}
-	enf, comp := 0, 0
+	slog.Info("matter routing", "enforcement_claims", enf, "compliance_claims", comp, "mode", mode)
+	return mode
+}
+
+// matterClaimCounts tallies the enforcement (accusation) vs compliance (requirement)
+// predicates over BELO's typed claims — the raw signal routeMatter and the deviation
+// gate both classify on.
+func matterClaimCounts(g *evidencegraph.Graph) (enf, comp int) {
+	if g == nil {
+		return 0, 0
+	}
 	for _, c := range g.Claims() {
 		switch c.P {
 		case "violates", "committedBy", "harmed":
@@ -2463,12 +2475,42 @@ func (o *Orchestrator) routeMatter(g *evidencegraph.Graph) matterMode {
 			comp++
 		}
 	}
-	mode := modeCompliance
-	if enf > comp {
-		mode = modeEnforcement
+	return enf, comp
+}
+
+const (
+	// deviationMarginPct / deviationMarginFloor define the margin band over which the
+	// deviation pass runs even when enforcement predicates lead. The band absorbs the
+	// run-to-run routing wobble (57-45 one run, 52-59 the next on the SAME submission)
+	// that silently added/removed the pass and swung 3-5 rubric criteria.
+	deviationMarginPct   = 25
+	deviationMarginFloor = 15
+)
+
+// shouldRunDeviationPass decides whether to run the draft-vs-controlling deviation
+// detection. It is NON-EXCLUSIVE: the pass is not gated to a decisive compliance
+// classification. It runs whenever the matter is compliance-leaning OR the routing is
+// merely borderline (enforcement's lead is within the margin band) — so a borderline
+// matter deterministically gets its deviations instead of flipping with claim counts.
+// A DECISIVELY enforcement matter (lead beyond the band) keeps pure enforcement
+// behavior and skips the pass.
+func (o *Orchestrator) shouldRunDeviationPass(g *evidencegraph.Graph) bool {
+	enf, comp := matterClaimCounts(g)
+	return deviationGateOpen(enf, comp)
+}
+
+// deviationGateOpen is the pure gate decision (testable without a graph): open when
+// compliance predicates are at least tied, or enforcement's lead falls within the
+// margin band where both modes' passes overlap.
+func deviationGateOpen(enf, comp int) bool {
+	if enf <= comp {
+		return true // compliance-leaning (or tied) — the default framing runs the pass
 	}
-	slog.Info("matter routing", "enforcement_claims", enf, "compliance_claims", comp, "mode", mode)
-	return mode
+	band := (enf + comp) * deviationMarginPct / 100
+	if band < deviationMarginFloor {
+		band = deviationMarginFloor
+	}
+	return enf-comp <= band
 }
 
 // crossCuttingSections are the party/timeline-oriented sections a legal enforcement memo carries
