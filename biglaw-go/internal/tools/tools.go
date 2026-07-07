@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Discover Legal
 
 // Tool system — all agent-callable capabilities.
@@ -22,6 +22,7 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/providers"
 	"github.com/discover-legal/biglaw-go/internal/rag"
 	"github.com/discover-legal/biglaw-go/internal/routing"
+	"github.com/discover-legal/biglaw-go/internal/store"
 	"github.com/discover-legal/biglaw-go/internal/strutil"
 )
 
@@ -39,15 +40,17 @@ type Registry struct {
 	provReg *providers.Registry
 	costs   *cost.Store
 	rag     *rag.Service
+	reviews store.ReviewRepository // durable tabular-review matrices; nil = in-memory only
 }
 
-func NewRegistry(cfg *config.Config, provReg *providers.Registry, costs *cost.Store, ragSvc *rag.Service) *Registry {
+func NewRegistry(cfg *config.Config, provReg *providers.Registry, costs *cost.Store, ragSvc *rag.Service, reviews store.ReviewRepository) *Registry {
 	r := &Registry{
 		tools:   map[string]*ToolImpl{},
 		cfg:     cfg,
 		provReg: provReg,
 		costs:   costs,
 		rag:     ragSvc,
+		reviews: reviews,
 	}
 	r.registerAll()
 	return r
@@ -134,13 +137,18 @@ func (r *Registry) registerAll() {
 	// Connector stubs — return structured errors when unconfigured.
 	r.registerConnectors()
 	r.registerClioTools()
-	// Document production (ported from the Mike-derived TS tool set).
+	// Document production — docx generation, replication, tracked-change
+	// redlining, PDF extraction, e-signing, and tabular review.
 	r.registerDocxTools()
 	r.registerTrackedChangesTools()
+	r.registerNegotiateTools()
 	r.registerPdfTools()
 	r.registerDocusealTools()
 	r.registerTabularTools()
 	r.registerDocumentExtraTools()
+	// Integrity — unmarked-change detection + Unicode obfuscation scan.
+	r.registerIntegrityTools()
+	r.registerRedtimeTools()
 }
 
 // ─── web_search ──────────────────────────────────────────────────────────────

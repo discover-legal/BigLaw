@@ -1,3 +1,5 @@
+[Docs](index.md) › Benchmarks & provenance › **Local accuracy journey**
+
 # From 0 to 30/60: getting a local model to do real legal extraction
 
 This is the technique-by-technique account of how BigLaw went from **0 to 30 of 60 rubric
@@ -171,3 +173,94 @@ still under-state its figures when its handle list is **noise-heavy** — the sa
 fails to surface them. The next step ranks handles by salience (and guarantees the top ones land),
 which is expected to close that gap without re-introducing variance. The benchmark is a climb, not
 a pass; gains are measured with the rubric hidden from the agents.
+
+## Update (2026-07): 34/60 — the same pipeline across model tiers
+
+The build now measures across model tiers with the pipeline held constant (judge:
+claude-sonnet-4-6 throughout, rubric hidden from the agents):
+
+| Model on the BigLaw pipeline | Criteria /60 |
+|---|---|
+| qwen2.5:14b (local) | **27** |
+| claude-haiku-4-5 | **34** (18.4 min wall time) |
+| claude-sonnet-4-6 tier | **34** |
+
+A precision note first, because this document exists to be honest: the "30/60" headline is the
+**union of passed criteria across two qwen runs** — a coverage measure showing what the local
+pipeline can reach collectively, not a single-run score. The verified single-run qwen peak is
+**28/60** (June 23), and the best single-run pipeline result on any model is **37/60**
+(claude-haiku-4-5, June-26 build).
+The release build's 34 is therefore a −3 regression against June 26, under investigation.
+
+Two readings of the cross-tier table, honestly framed. First, Sonnet at roughly ten times
+Haiku's cost (3.8M tokens, $13.70 vs $1.34) passes the same *number* of criteria — 34, 31 of
+them the same ones — the pipeline, not the model tier, is the binding constraint. Second — the harder truth — raw claude-haiku-4-5
+in Harvey's own harness scores **41/60** in five minutes: the criterion-level autopsy attributes
+the entire gap to the extraction transcription funnel (1500-token tool-result caps, two-sentence
+passage limits, `read_document` results bypassing the evidence pool — local-model-era throttles
+never relaxed for a 200K-context model). The pipeline's verified wins are citation integrity
+(spot-checks verbatim 6/6; the raw run fabricated penalty math) and four analytic criteria raw
+missed. The task is still not passed; the climb continues.
+
+## The fix wave pays out (July 5, 2026)
+
+The autopsy became five fixes — full-text evidence ingest with context-aware caps, a
+deterministic per-section saturation harvest, mechanical cross-document numeric/date
+discrepancy joins, defense-lens analytic templates, and a memo-authorship layer — and the
+proof runs settle the table (same task, same judge, clean exclusive backends):
+
+| Model on the BigLaw pipeline | Criteria /60 |
+|---|---|
+| claude-haiku-4-5 + fix wave | **49** — beats the raw-harness baseline (41) by eight |
+| **qwen2.5:14b (local) + fix wave** | **36** — new local single-run record (prior peak 28) |
+
+The two sentences this whole document was building toward: the orchestration now lifts the
+cheapest cloud tier **past** what the same model achieves in Harvey's own agent harness — and
+it lifts a free, on-prem 14B to within five criteria of that cloud model's raw score. The
+architecture was the constraint; fixed, it is the advantage. Generalization held on an unseen
+compare-mode task (+3 criteria, no overfit). Eleven criteria remain on the SEC task, most in
+the deepest cross-document joins and defense analytics. Not passed. Still climbing.
+
+## Round 0 knows nothing — re-entrant machinery (July 7, 2026)
+
+One more wall: every technique above — the saturation harvest, the cross-document joins, the
+defense-lens derivation — ran exactly once, at round 0, before a single DyTopo agent had read
+a word. That's correct for the *exhaustive* passes (a full-corpus sweep needs no guidance to
+be complete). It's a real cost for the *selective* ones: which entity to chase, which figure
+matters, which defense theory to derive all benefit from understanding the agents don't have
+yet at round 0 — and once a later round *does* discover something (a new alias, a named
+respondent, a conduct window), there was no way for that discovery to reach back into the
+mechanical passes. The pipe ran one direction.
+
+**Re-entrant machinery** makes it two-directional: at every round boundary, the evidence graph's
+delta since the last boundary — new entities, new alias ties, new conduct claims — re-triggers
+the same machinery, targeted at what just changed. A round that surfaces a new respondent gets
+that respondent's figures hunted. A round that learns two names refer to the same payer gets
+its cross-document join re-run with that alias, catching a discrepancy round 0 couldn't see.
+A round that establishes a new conduct gets its defense issues derived before the *next* round
+recruits agents. The exhaustive floor stays blind by design; the selective layer stopped being
+one-shot.
+
+That, plus a provider-resilience pass — call backoff and durable agent recruitment so a
+multi-hour run survives transient failures without silently losing whole rounds, and loud
+round-error signaling so a starved round is visible on the task record rather than hidden
+inside a passing score — made a genuinely healthy, full-length 3-round run possible for the
+first time. Running one turned up a sixth finding, in the layer that assembles the deliverable
+rather than the layers that gather evidence for it: the writer's own anti-fabrication guards
+(built after the partner-committee review, to stop invented totals and repetitive template
+spray) were wide enough to also discard a handful of **true** figures — a correctly-computed
+three-part total, a legitimate second limitations window. The fix keeps both guards' original
+targets caught (a naive two-term partial sum, a coincidental round-number "total") while
+letting the real ones through: totals now require *three* independently-grounded components,
+never two, and limitations joins allocate round-robin across distinct conduct windows instead
+of first-come.
+
+| Model on the compounded pipeline | Criteria /60 |
+|---|---|
+| claude-haiku-4-5, 3 rounds | **50** — beats the raw-harness baseline (41) by nine |
+| **GLM-5.2 (cross-vendor), fast, 3 rounds** | **52** — the current high, on the newest and cheapest model in the comparison |
+| qwen2.5:14b (local) | **39** — a new local record (measured ahead of the writer fix; likely a floor) |
+
+Same lesson as every rung before it: the gain came from teaching the architecture to use what
+it already knew, not from a bigger model. Ten criteria remain on the SEC task. Not passed.
+Still climbing.

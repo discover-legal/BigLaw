@@ -1,0 +1,7 @@
+{"ts": "2026-06-27T01:49:03.548116+00:00", "event": "documents_ingested", "count": 8, "skipped": 0}
+{"ts": "2026-06-27T01:49:03.552681+00:00", "event": "task_submitted", "taskId": "5e0ee315-d831-4427-9d48-6b51ebb6ea34", "workflow": "roundtable", "gatePolicy": "approve"}
+{"ts": "2026-06-27T01:49:03.554239+00:00", "event": "status", "status": "running", "round": 0}
+{"ts": "2026-06-27T03:16:14.733417+00:00", "event": "status", "status": "awaiting_gate", "round": 2}
+{"ts": "2026-06-27T03:16:14.737705+00:00", "event": "gate_resolved", "gateId": "909aaafc-8da3-46d7-87bf-86a3a0faf67e", "findingId": "ac0c5cec-8cd0-4a68-bdff-fdb2a59a3ad1", "action": "approve"}
+{"ts": "2026-06-27T03:16:14.741870+00:00", "event": "gate_resolved", "gateId": "a13949a5-1d7f-4895-9eab-5605d7aed5c0", "findingId": "0737968a-aec3-4ece-b498-96b06d199f0a", "action": "approve"}
+{"ts": "2026-06-27T03:16:24.745130+00:00", "event": "status", "status": "running", "round": 2}

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Discover Legal
 
 // Clio tool definitions — 7 tools exposing Clio practice management to agents.

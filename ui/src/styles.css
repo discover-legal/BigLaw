@@ -414,6 +414,7 @@ body::after {
 .dot.awaiting_gate { background: var(--amber); box-shadow: 0 0 0 0 rgba(224,145,60,0.6); animation: pulse 1.6s infinite; }
 .dot.complete { background: var(--green); }
 .dot.failed   { background: var(--red); }
+.dot.interrupted { background: var(--amber); }
 .dot.pending  { background: var(--text-faint); }
 @keyframes pulse {
   0%   { box-shadow: 0 0 0 0 currentColor; }

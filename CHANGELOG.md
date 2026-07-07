@@ -17,6 +17,94 @@ House rules:
 
 ## [Unreleased]
 
+### Relicensed: AGPL-3.0 → Apache-2.0
+A clean-room reimplementation (spec: `docs/clean-room-spec-document-tools.md`) replaced
+every Mike-derived component — the five document-production/tabular tools and the built-in
+workflow templates — with independently authored native Go, removing the last copyleft
+dependency. With all copyright held by Discover Legal, the project is now **Apache-2.0**:
+express patent grant, NOTICE-based attribution, no network-service source obligation.
+LICENSE, NOTICE, SPDX headers (271 files), badges, and image labels all updated.
+
+### Negotiation intelligence
+- **Counter-redline loop** — `respond_to_redline`: parses opposing counsel's tracked
+  changes (cross-run, substitution merging), judges each against the four-tier playbook
+  cascade, and writes a `.response.docx` with countered redlines + per-change rationale
+  cards; failed judgments degrade to `review`, never abort
+- **Redtime** — document lineage across negotiation rounds (`document_versions` on the
+  sqlite/postgres/memory store seam), tracked-change attribution + silent-edit detection
+  via in-house word-diff, per-clause timelines with playbook drift
+  (`get_redline_timeline`, `GET /documents/:id/timeline`)
+- **Judge memory** — the negotiate judge receives per-clause negotiation history
+  (token-budgeted, last 3 rounds) with standoff escalation to playbook fallback or
+  lawyer review (`escalation` on decision cards)
+- **Integrity Check** — Unicode obfuscation scan (homoglyphs, zero-width, bidi) +
+  unmarked-change detection on inbound documents (`check_document_integrity`, wired
+  into `respond_to_redline` and knowledge ingest)
+
+### Tabular review, industrialized
+- Reviews persist via the store seam (sqlite/postgres/memory; RLS on postgres) and
+  reload across restarts; landscape `.docx` matrix export; `GET /reviews/:id` +
+  `/reviews/:id/table.csv`; 10-call extraction concurrency cap
+- **Citation verification ladder** — every `[[page:N||quote]]` cell citation verified
+  at extraction time: exact → tolerant → paraphrase judge → 3-vote ensemble, with
+  method + confidence per citation and a matrix-level verified tally (docx stamp)
+
+### Workbench & demo
+- **Reviews UI** — RAG-colored due-diligence grid with verification-state citation
+  pills; pill click opens the source document with the quote highlighted; Redtime
+  timeline view (rounds × clauses, silent-edit warnings, decision + drift badges)
+- **`biglaw demo`** — one-command end-to-end tour: seed → tabular review → CP
+  checklist → counter-redline with rationale cards (verified live at ~$0.03)
+- Fixes: cost ledger now persists on fresh installs; temperature override dropped
+  for OpenAI gpt-5.x/o-series (was silently degrading tabular cells to grey)
+
+### Benchmark: cross-tier + raw-baseline runs on the release build (forensics-corrected)
+Same task, same claude-sonnet-4-6 judge. Release pipeline: claude-haiku-4-5 **34/60**
+(18.4 min), claude-sonnet-4-6 **34/60** (~10× the cost — $13.70 vs $1.34 — the same *number*
+of criteria, 34, 31 of them the same ones; the pipeline, not the model tier, is the binding
+constraint). Controls: raw claude-haiku-4-5 in
+Harvey's own harness **41/60** (5 min, and it skipped a document); prior best pipeline
+result **37/60** (Haiku, June-26 build) — the release build carries a −3 regression under
+investigation. The local qwen2.5:14b release run (27/60) was invalidated by forensics:
+every DyTopo round timed out under three-way task contention, so the score reflects the
+BELO deviation layer alone. Verified against the full scores.json history: the earlier "30/60"
+was the union of passed criteria across two qwen runs (a coverage measure, not a
+single-run score); best single-run qwen result is 28. Root cause of
+the raw-vs-pipeline gap (criterion-level autopsy): the extraction transcription funnel —
+1500-token tool-result caps, 2-sentence passage limits, and read_document results
+bypassing the evidence pool. Task still not passed; climb continues, honestly.
+
+### Benchmark: the fix wave, proven (July 5)
+Five fixes landed from the autopsy (extraction floor ca0a035, crossdoc dbce03e, defense
+lenses 44c8121, writer authorship 9731d78, runtime hygiene fa2a13a). Proof runs, same
+task/judge: claude-haiku-4-5 **34 → 49/60** — the pipeline now beats the raw-harness
+baseline (41) by eight; local qwen2.5:14b **→ 36/60** on a clean exclusive run (new local
+single-run record; prior verified peak 28). Generalization check on the compare-mode
+trust task: Haiku 6 → 9/23 pre/post wave (real transfer; the deviation-tuned local record
+of 12/23 stands — deviation-path port queued). Costs: Haiku proof ~$11.48 (7.9M tokens);
+qwen proof local-only. Task still not passed; 11 criteria remain on the SEC task.
+
+### Benchmark: re-entrant machinery + a writer-discipline fix, cross-vendor (July 7)
+Every technique in the fix wave ran once at round 0, before any DyTopo agent understood the
+matter — correct for the exhaustive passes (a full sweep needs no guidance), a real cost for
+the selective ones (which entity to chase, which figure matters, which defense applies).
+**Re-entrant machinery** (`internal/orchestrator/reentry.go`) makes the selective layer
+two-directional: each round boundary re-sweeps for entities the round just surfaced, re-joins
+figures with newly-learned aliases, and re-derives defense issues from the growing conduct
+graph. Paired with a provider-resilience pass (call backoff, durable agent recruitment across
+restarts, loud round-error signaling) this made a genuinely healthy, full-length 3-round
+measurement possible for the first time — which surfaced one more finding: two of the writer's
+own anti-fabrication guards (`1678ccc`) were wide enough to discard a few *true* figures along
+with the false ones they were built to catch. Fixed (`631e81a`) with two precise rules: a
+stated total is trusted only when it is the exact sum of **three** independently-grounded
+components (never two, closing the original naive-partial-sum hole); limitations joins
+allocate round-robin across distinct conduct windows instead of first-come, so a single-mention
+window is never crowded out. Proof runs, same task/judge, three vendors: claude-haiku-4-5
+**50/60** (+9 over the raw-harness baseline), a cross-vendor **GLM-5.2 run at 52/60** (the
+current high — a `MODEL_THINKING`-off, 3-round configuration on the newest and cheapest model
+in the comparison), and local **qwen2.5:14b at 39/60** (a new record, measured ahead of the
+writer fix). Task still not passed; 10 criteria remain on the SEC task.
+
 ### BELO — an epistemic ontology, a graph-discovered spine, and What3Words figure handles
 The next stretch of the local-accuracy climb — still a single local open-weight model for the
 bulk (a 14B handles the small, high-leverage spine pass), no cloud model, no corpus stuffing.
@@ -104,7 +192,7 @@ Everything previously marked "TS-only, not yet ported" is now on the Go platform
   `POST /tasks/from-clio-matter` (fetch → ingest docs → submit task),
   `POST /time-entries/sync-to-clio` (6-min units, `clioSyncedAt` idempotency);
   new ClioClient methods (GetMatter, DownloadDocument, CreateNote, ListContacts)
-- **Document-production tools** (Mike port): `docx_generate`,
+- **Document-production tools**: `docx_generate`,
   tracked-changes `edit_document` (order-preserving OOXML round-trip,
   4-stage anchor matching, multi-run reconstruction), `replicate_document`,
   `pdf_extract_text/_tables/_ocr/_generate` (via `scripts/pdf_tools.py`,
@@ -144,7 +232,7 @@ Everything previously marked "TS-only, not yet ported" is now on the Go platform
 - TS-only features now explicitly marked as preserved at `typescript-final`
   and not yet ported: browser OAuth login (banner added to
   `docs/AUTH_SETUP.md`), Clio connect flow / matter import / time sync,
-  Mike document-production tools (docx/tabular/PDF/DocuSeal), generic tone
+  document-production tools (docx/tabular/PDF/DocuSeal), generic tone
   import (Go is LinkedIn-only), audit forwarding (OpenSearch/Splunk/webhook)
 - CLAUDE.md: version block updated to 1.0.0/Go, MCP tool list matched to the
   Go server, route-list caveat added, `agents/lavern/` path fixed

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Discover Legal
 
 // biglaw — Go port of the Big Michael multi-agent legal AI platform.
@@ -53,6 +53,12 @@ import (
 )
 
 func main() {
+	// `biglaw demo` — self-contained 60-second showcase (see demo.go). Runs
+	// its own minimal wiring and exits; the normal server path is untouched.
+	if demoRequested(os.Args) {
+		os.Exit(runDemo())
+	}
+
 	// Load .env if present (silently ignore missing file), then overlay
 	// Infisical-managed secrets (mirrors the TS entry point: dotenv →
 	// Infisical → config). No-op when INFISICAL_* vars are absent.
@@ -117,17 +123,12 @@ func main() {
 		slog.Warn("knowledge store load failed; continuing empty", "err", err)
 	}
 
-	// Build template store and load from filesystem. Lavern and MikeOSS
-	// workflow files have their own shapes — use the adapter loaders rather
-	// than parsing them as raw TaskTemplates.
+	// Build template store and load from filesystem. Lavern workflow files
+	// have their own shape — use the adapter loader rather than parsing them
+	// as raw TaskTemplates.
 	templatesStore := templates.NewStore()
 	_ = templatesStore.Load("templates")
 	if ts, err := adapters.LoadLavernWorkflows("workflows/laverne"); err == nil {
-		for _, t := range ts {
-			templatesStore.Add(t)
-		}
-	}
-	if ts, err := adapters.LoadMikeOSSWorkflows("workflows/mikeoss"); err == nil {
 		for _, t := range ts {
 			templatesStore.Add(t)
 		}
@@ -190,8 +191,11 @@ func main() {
 	// background itself, so it still doesn't block the upload.
 	knowledgeStore.SetOnIngest(ragSvc.IngestDoc)
 
-	// Build tool registry.
-	toolReg := tools.NewRegistry(cfg, provReg, costStore, ragSvc)
+	// Build tool registry. Every built-in DocRepository backend also
+	// implements ReviewRepository, so the same handle persists tabular-review
+	// matrices.
+	reviewRepo, _ := docRepo.(store.ReviewRepository)
+	toolReg := tools.NewRegistry(cfg, provReg, costStore, ragSvc, reviewRepo)
 
 	// Build orchestrator.
 	orch := orchestrator.New(
@@ -301,7 +305,7 @@ func main() {
 
 	// makeAPI builds the REST server and attaches optional LPM + docket routes.
 	makeAPI := func() *api.Server {
-		srv := api.New(cfg, orch, provReg, profileStore, clientStore, timeStore, knowledgeStore, agentReg, costStore)
+		srv := api.New(cfg, orch, provReg, profileStore, clientStore, timeStore, knowledgeStore, agentReg, costStore, reviewRepo)
 		srv.AttachLPM(lpmSvc)
 		srv.AttachDockets(monitors.Dockets)
 		srv.AttachRegulatory(monitors.Regulatory)

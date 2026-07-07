@@ -1,0 +1,4903 @@
+{
+  "input_tokens": 6946460,
+  "output_tokens": 906979,
+  "total_tokens": 7853439,
+  "turns": 6,
+  "duration_seconds": 5521.2,
+  "num_documents": 8,
+  "documents_read": 8,
+  "completed": true,
+  "ended_at": "2026-07-05T05:08:30.136452+00:00",
+  "biglaw": {
+    "task_ids": [
+      "72d15866-eb83-43ed-aa5d-9cbb100e73ba"
+    ],
+    "workflow_type": "roundtable",
+    "split_mode": "single",
+    "cost_usd": 11.4814,
+    "gate_policy": "approve",
+    "gates": [
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "4b4fdf9e-e602-4079-8155-d7afe4985cf9",
+        "findingId": "c0e0269d-cfa6-4e2b-8b2a-d9d23f59968e",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "70b2c457-d404-4966-a9a5-a8fbad6f375e",
+        "findingId": "8df29a97-8751-402d-967f-a95411e0886e",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ecd0f92e-ed2d-4931-bab5-667a2d5999ab",
+        "findingId": "cb0d0ffb-b7d5-4016-9728-c5f1b782be9a",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "448e2dc6-a49b-4803-8c03-9aa27a1c4001",
+        "findingId": "25da4e69-162b-4bdd-aff6-c0ed1e7f4c1d",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "d32860fd-9571-4c60-a356-79afb9c79a7f",
+        "findingId": "e9322e45-37ff-49ba-9513-0748d7b735a6",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "0e02d9ff-579b-4147-a351-464423b94649",
+        "findingId": "dea17898-c1d5-4cb2-a4a4-e61e1bafca72",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ef04fd06-33f8-4597-a8a6-68a1d204a755",
+        "findingId": "cc0eb5a5-9d56-44a0-b007-bc904839c331",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "cb5f3b4b-1768-47d0-978e-34dd2c1dd864",
+        "findingId": "579c262c-f580-46fd-b7e1-9b5beb53d1d4",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "84a7b620-2939-4c2c-961b-7d49364dfc81",
+        "findingId": "77610aa2-6f7d-465f-87e4-d9e38ba3e74a",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "87147e77-866a-448e-ba0b-ee95a1ace364",
+        "findingId": "d79410d0-ab0c-4e48-9a50-4b0f2d9ab2c0",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "1263d555-e4b1-4751-9c8b-6ca2d4341031",
+        "findingId": "e426eda6-829d-40be-ab23-01a6d8e247e3",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "5ff9f605-e368-473a-85c4-53bab7f7f2d1",
+        "findingId": "a232d695-464a-4660-86b3-5f6f31f98226",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "e25158a8-0a3b-43e3-90bd-aa4fcae2f154",
+        "findingId": "d311a278-44f3-4a44-a304-0af15f09c47c",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "f32c7de1-7305-4f49-abdd-2cf52f4da7b7",
+        "findingId": "5510ed0b-c838-47c5-8e99-8b3ae8ffd827",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "7fa2b087-70ba-476b-9227-effb1ebb60c7",
+        "findingId": "171aa2e8-0446-469b-a490-8cf4acf99303",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "bbcb1f22-6267-461a-a326-923f66e13811",
+        "findingId": "5acc4c82-bf4c-4796-9e4c-4c27a4ab58d8",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "df06258c-df00-4ec8-bfc2-4ac253d147e2",
+        "findingId": "72a482cd-a841-46fd-aa58-6ade23709a54",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "11727040-03ba-4ebc-9c47-5d6bf2feee64",
+        "findingId": "f21d8ec2-f813-4451-9690-bf5c016bf114",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "2519c0cc-eae3-4488-a8ca-f574c88da5d1",
+        "findingId": "8bebcc9b-4e12-40b5-81d2-a36db9c9b73d",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "0343091c-7e1f-400e-ba59-535c5c7c03e1",
+        "findingId": "17feefd6-ce7b-40cb-9e78-930a63164eff",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "2200b999-14a6-4368-a2e6-66686961cc65",
+        "findingId": "df494a61-119b-404d-84e5-6af3073ac11b",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "eee89b66-edc3-4d20-8fdf-74a860a04ca0",
+        "findingId": "d71d470a-e4f7-454b-804c-123bea4b4fe9",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "16078973-7d89-483a-9ea2-d222053b6d56",
+        "findingId": "2da2f7c7-78f3-49d5-a513-fd6f10b7021a",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "7c9ce296-d2eb-4554-849d-4df80b944d42",
+        "findingId": "203d3673-cfcb-4740-a7bc-7881066a2b62",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "7aa0c9ab-9c26-4424-9bd9-e3fdf4f80351",
+        "findingId": "22d431b4-e0da-455d-b2b2-b64fc67d66dc",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "2b19a1ff-1024-400b-8b49-042993a60e5f",
+        "findingId": "f2271c58-be7c-4963-a46b-aaf4433dc11a",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ae7c903e-b8f6-447a-a16c-e9323c9bdc0c",
+        "findingId": "2014ecba-1fb2-4178-ba3b-04272a68a05c",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "59136de9-44bd-4b10-be55-c3e7c6dfca61",
+        "findingId": "c56b28f8-f000-4cb9-b7dc-7b12bf0c29fe",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ce30f85a-6c98-4d51-b09a-4eeb3d55e7e3",
+        "findingId": "62a2139c-5705-493f-8a83-88642340a843",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "05a62607-2ec5-4ff1-b68e-6be2fc7111e7",
+        "findingId": "03f787a1-15fc-4f60-b6a3-c618190ee0bc",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "4d1d7484-1789-4b61-9126-afc3c0b0056a",
+        "findingId": "56275e02-ec20-4325-af8c-ac098d48bd0e",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "16004573-6c95-4dc1-bd26-9d0a09f0af57",
+        "findingId": "9e709c99-39d2-4c94-a4eb-9897640fbc2c",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "de058f26-480b-41a8-adb6-6852ab651e85",
+        "findingId": "e61f8c22-7b9e-47a8-8ff3-d56139cb3ecb",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "3923be8e-ffab-4565-9eb9-040e6f946bfa",
+        "findingId": "d3139730-8d0e-4d6b-a0ce-87fde7dede26",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "87ade5cc-32b1-4aec-a458-355fee4d4e51",
+        "findingId": "3eb865c6-a291-4cec-9c12-76364711424f",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "31668fbd-e06a-4243-90d3-b2220c7836ba",
+        "findingId": "5eedd656-0305-4714-9acf-14dae01afd83",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "c84df9bb-8b9e-4032-937c-9adfc56cbcac",
+        "findingId": "af29b154-bda5-472c-a89a-b6b265356d17",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "6b4ab816-f11d-439f-bd29-6aac8be53811",
+        "findingId": "8da1e058-21d3-4fb5-886f-ad90f614232f",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "d7573ae9-74c4-46ff-8d0e-ddf52b398f7a",
+        "findingId": "3bde31ee-348f-4c4a-a452-e126d2e328f5",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "2f5a3e7b-796d-4d1f-a45c-a9f867c8455f",
+        "findingId": "eaefc5dd-3053-43c0-88ab-24d9071b35a2",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "5a844ecc-e61c-4e07-b55c-73aaf3fae798",
+        "findingId": "b7db7fe3-071c-4cd3-a9ce-a902bd28da25",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "3bcad3db-4955-4ed2-9096-27173633244a",
+        "findingId": "0445287d-4634-46a7-8f98-1dcaa02320ab",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "c4fb8212-823c-4d90-a34c-6547aa3c31f6",
+        "findingId": "f3e75e50-e03e-4c67-bfb8-686c4e2824d1",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "9c23430e-0477-440c-9fce-4cc44eaa8e39",
+        "findingId": "e1cc5ded-9a8f-41df-a93a-60c2f280e6aa",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "6a4fdcf3-7116-4eb0-9a4d-3dfa7c492209",
+        "findingId": "39f9d64a-ba63-420b-be9c-6674d3475b39",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "fe020d7c-316d-475c-a70b-ad245e08da5b",
+        "findingId": "4629200e-95ce-43a1-b70c-e3e0ab84a356",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "a9792ddb-890d-412c-ae26-28d5e82a2239",
+        "findingId": "fb1d4e96-d49c-4eb5-a1ef-6208a7688a13",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "f226d5a5-1efb-4bf4-b716-e2f2e9ee83e1",
+        "findingId": "4ddbedd1-8e81-4e69-b604-6d5416e09b70",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "a9ca427f-f990-4619-b30e-91c98b8d4f82",
+        "findingId": "576833b3-dbb9-4fc3-878a-f3c4be8001d3",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "bb963a55-3735-4b5a-86e7-a927c8fbe45b",
+        "findingId": "aae37b87-e6c3-48b9-b599-4c0ae4bacd4d",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "90c95fb0-5c92-4bf5-8540-0b4064c27df5",
+        "findingId": "b748ec24-59cf-4a06-9400-7918763ddf1f",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "54d4bc88-c455-457a-a5c8-90fefc13ea65",
+        "findingId": "f1a74fb3-7364-43ac-86b7-7818ea9cecf2",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "2a42a40a-cdef-491d-ac12-aaa1b925a1c2",
+        "findingId": "c473e4f3-2516-49ba-9685-70027d6d91d4",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "0fe57896-3a9b-4947-a03b-0da6a55deff8",
+        "findingId": "15f22b9e-f8de-437c-9f4a-0575b899d3d8",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "2ada3f4d-2489-427f-9dab-b88bf5aa7fe6",
+        "findingId": "ce389767-ff0d-4c98-95d0-f75a3e239b5d",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "634d8bd4-9f30-48fc-af03-089e511d3f00",
+        "findingId": "477159ca-d51e-4f20-9d79-67dec5e69e25",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "7dfee452-f3ec-41ec-85ad-dd7e1d14d63a",
+        "findingId": "aca28b3d-e663-4364-a683-ed768db77913",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "a72f8049-4946-4bca-8e30-ae57725f1093",
+        "findingId": "06098047-6d2a-4687-8120-cc02dbdbe8bf",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "b85a89cf-dd36-436b-b8b9-37f154573278",
+        "findingId": "8be48b95-700b-4398-9bfb-d4fe868f16b9",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "290bbf48-3555-4839-a0ec-cb23ec9afbf0",
+        "findingId": "f6640e03-4126-4d55-8650-74a897802d6d",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "f124757f-9138-46e7-b4d7-e022395b0371",
+        "findingId": "96401d5d-321a-42a6-be9c-47084d190f41",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "2d9ba1ea-a6ec-4acd-81d9-f53927eb754a",
+        "findingId": "26fc24ff-1962-4a3f-9d90-01aa5c64c533",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ddcd9a2b-27cc-41fa-b1fc-6d8ba9e096dd",
+        "findingId": "f2744c97-75b8-4c9a-8f6a-924e6127dfe8",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "81208ad7-b594-4153-ab6b-1564409b9b43",
+        "findingId": "a55885b6-f043-474f-9d8b-147ecc1f3124",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "8c5a9c63-0f83-42fa-9c96-fb2889e12675",
+        "findingId": "2958b0f8-abcf-4e66-9fa6-d55be030e398",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "e97c7cca-7f7c-4775-9e5a-45dc6e3402a7",
+        "findingId": "5bcaf4e0-55c6-404f-b2fb-cc599e15e917",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "a2dca64b-ee7c-4b0a-8ebb-0c2f5e69103e",
+        "findingId": "227929f8-8b6a-48b4-a222-0413058a7078",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "48ce0365-7011-4c7a-8b47-e1c5d1dec3e5",
+        "findingId": "99eb78f9-b1e3-4bd4-b02a-e6e4226f4717",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "6cc70d57-2076-4f47-8595-f7dfd354803d",
+        "findingId": "fb5af5dd-35e3-428c-8c98-0f4d699505e0",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "b7caf106-921c-4a64-bb3e-84ded4e3b30b",
+        "findingId": "f88117f1-2a05-4eee-b862-b5cb83dadeba",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "9e00e437-837e-4d11-9c10-e06552d32515",
+        "findingId": "70ab87bd-a775-4da2-ba24-9fb05d2bb5e5",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "7b75d3ef-d4d0-4918-9066-b23fb3e9f255",
+        "findingId": "06b93648-109e-449e-856e-e5532ee7fed4",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "829c5e24-5f9c-4325-aa18-24890ba03d2b",
+        "findingId": "eeb59ae8-7f8b-4ddd-b1a2-4c42ae57fa56",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "accfea2e-a84e-4b1e-8c7a-aabd22e8242e",
+        "findingId": "76b4d820-b25f-41ec-ba0c-3753bc04f88a",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "22b5c5bd-ee49-42e9-9105-d70e905fbb22",
+        "findingId": "94513958-3258-491d-aa98-c93d0b04f147",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "64c3ffcc-f0dc-4fbb-a82b-2ed0b1899d84",
+        "findingId": "f93b11c2-127f-4deb-8259-8a81cf4b8a05",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "cf9ff7ea-b273-41bf-9883-bab9e970a5ad",
+        "findingId": "a3005f0b-0ca1-484d-b369-aa974d7bd742",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "f6cba247-d319-4e4e-8f94-44fef79d3f01",
+        "findingId": "a2806d00-90e7-4e9a-84b4-6cf1628e072b",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "3746e638-8878-4f41-8e70-37e0b8a125f2",
+        "findingId": "320cd6ca-01e8-42e7-9fb6-77c974486cd7",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ee6af211-6e10-4ebc-846a-421e091a5056",
+        "findingId": "55e05274-cc25-4f6f-ba3e-fc09ca344d7a",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "d5efd2cb-ffa9-4b03-8e7e-9f6a96a14b78",
+        "findingId": "d4554dd2-58b3-4d69-90c6-1e7a45b4337c",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "5fe7ffe1-e426-4e34-b4b7-aca14666f6c7",
+        "findingId": "bdd502d2-0dba-40e5-9fbb-32142e0cd0fc",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "11d21fcb-a9b9-452b-9036-c9881440dcfb",
+        "findingId": "8c486ce7-b21d-46d9-a6d3-43ae2c0c3266",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "672bc10b-d909-43ee-9d6d-bf70ddf78b58",
+        "findingId": "b359c9a4-2719-4128-990a-29e4e3a8cdbc",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "815f06a6-ec40-4185-a2ea-639784bc97a9",
+        "findingId": "534e4299-39a7-4806-94f6-22d1de01bdff",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "c44ec9b8-ab45-4dbe-bed0-2179ef946f6a",
+        "findingId": "ae4ab12f-146a-45e5-8f2c-465130b0ae33",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "643c99f9-3b79-474e-86ed-8e9db70a777f",
+        "findingId": "26b1b2d1-a458-4389-9cf6-f0bf2765e3d6",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "556c68b6-51e7-48f1-869f-c85a030d0ce2",
+        "findingId": "e9bb6745-8b02-4d67-9aef-ed4111a46482",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "37e5ad49-879f-42b8-a842-c2927e836209",
+        "findingId": "2d033d19-edeb-41dd-b37c-1b6c975aacf9",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "a9837b1a-c8fa-4171-b25b-9285fd405f4a",
+        "findingId": "cef579df-39d0-4c9c-b77d-757325a271ca",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "48c96b3a-3672-4e07-b690-e5788d4260c2",
+        "findingId": "9a4cf38a-f7b8-4cbe-bdd9-eede0c5ec382",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "3fea4123-7035-4045-8a78-529575bb17e0",
+        "findingId": "9c732a73-8068-456e-bf4b-3d1a53269c5a",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ffada527-51cc-4233-9527-d76c46da9cd2",
+        "findingId": "3de262dc-faec-42ba-b92e-4eeffdc15a0f",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "9c89aa43-c3f2-4ff4-870d-2d36c431b98d",
+        "findingId": "f8234ac2-bec1-4a66-9a28-e311de79f3b6",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "f66b166c-48b4-443a-a372-d6ecb799ccf4",
+        "findingId": "f62a9deb-a147-4490-8a21-ea79c391e2eb",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "6a46a70c-74c6-4d03-978e-e97cb407b71c",
+        "findingId": "90770fa2-45ff-4f08-9ccf-462fe0b5b2c8",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "7c9c637b-e0e4-44f1-8de8-bf4be0de47b6",
+        "findingId": "5f100a04-310b-4104-8a1b-dc283b20850a",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "b2af3f5a-37b8-4588-bb05-73c97b338fb2",
+        "findingId": "ad59a556-dfff-4a7a-bed2-b333a2a68cfc",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "3a41fd52-c79a-4fb3-8996-f8359c8c3d27",
+        "findingId": "cac3a708-3d7f-433c-ac6f-bf72d52979c6",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "6ef9c161-1098-4768-9bc8-e540c12de19c",
+        "findingId": "6d75bd57-968e-494d-8dd1-b6df801d238d",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "2e8fdfa4-2945-447e-9a7d-8a0c874fa40e",
+        "findingId": "be296b2a-f84a-4367-86bf-91e5fd7a43f9",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "191cb197-bedd-4ca1-8d96-594bccd7585a",
+        "findingId": "224d6e42-347f-4e52-8ef9-aef1e3b0cbae",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "253b56c0-051a-401c-b799-34233bd7c087",
+        "findingId": "02bd357f-099b-4087-bea9-1cf5015aac64",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "d6ad066f-44f1-4868-9e6f-a23acf1ffe6c",
+        "findingId": "d0078a94-68f9-493a-8070-1dc0fdc8601b",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "b336d01f-a4af-4400-828b-537d6144387c",
+        "findingId": "181d2ef3-68e2-4048-a996-ce52d961c7ba",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "2aebca73-4fb4-4381-98b2-5a30981ba9cb",
+        "findingId": "d434d0d9-b155-4f85-96da-b43781e2f00a",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "446d4917-55ca-4f93-b382-73d7fef9353e",
+        "findingId": "bcd87b60-562c-439f-814a-3ffe215b1308",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "d0f6e7e2-a8a6-4a72-ae56-711f03962dd2",
+        "findingId": "a9e2c808-3daa-47b7-80b1-2757598b4acb",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "a190f853-729a-4d19-8d6b-c5a1b2e7014d",
+        "findingId": "aed70dbf-68bd-42f6-8746-bcd707c73b20",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "d4d44ec2-095f-4e92-ae68-6b48c9c78da9",
+        "findingId": "0c91a5d9-e9e2-465b-9cb3-269c793e0697",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "17cc076d-8caa-40cf-ac50-b2a1cf972395",
+        "findingId": "83df7ea4-9847-4df1-adf3-eb6b265a439b",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "8d8c3ef3-6d68-4316-8802-a90d617989ae",
+        "findingId": "5fbdb5f8-ee3c-4738-a4f9-b28145cc61e6",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "da0e2e30-fd1b-494c-9e01-0b96b6d04085",
+        "findingId": "cdaa2e24-e0c7-435d-ba6e-5317b268b5c4",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "b1c04311-fdb1-432c-b714-b33a2947174e",
+        "findingId": "58a0383c-c87a-4dd9-b1fb-bc0db16153a1",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "f7be8e4c-7b67-4bb6-8a60-19bcae28ad74",
+        "findingId": "712500af-8053-4b3d-b91d-848b5ad1d68d",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "84f52a27-301a-4de8-bf25-ed628b64781e",
+        "findingId": "27a2cb5c-43c8-472a-884d-cabf00ba4493",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "bf430041-3fcd-43f6-934a-2995dc4d1f0e",
+        "findingId": "dddf8148-1659-479e-9c1b-7bc2cb493d27",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "39adf2c5-ec88-4572-a102-81f3a6d4978c",
+        "findingId": "05aaee25-8f3d-4519-b662-646d025ad95a",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "cc085b50-7f72-42cd-8acd-dfc02717b0d6",
+        "findingId": "600969cf-3b27-4dce-9572-a7a2f82b4e29",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "796a4f63-78cf-45a4-a1e1-0aa6c089268b",
+        "findingId": "02a03212-b550-4287-9085-a8d7ff2bc936",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "6eb8d688-b489-4858-a9e1-382a191f1685",
+        "findingId": "8253b4f1-f165-4f9c-bef8-57f0d9306938",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "b5306ac2-b424-4ae3-b1e0-0dbb6bf27bb5",
+        "findingId": "b3a68571-9336-4f1b-a609-b2deabbb50b2",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "1e230782-7bd6-434b-beac-33030fd355d8",
+        "findingId": "f51815e4-3bbc-4210-8f9d-cf52658d83b6",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "e7685147-492c-4018-9fff-97dc066b1402",
+        "findingId": "d0a37de1-346d-492d-82fb-0502dbbfab75",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "e2262280-acc4-4559-aa93-c299838e1f60",
+        "findingId": "7e054c51-f078-4b7f-a87b-66ef9e036b6d",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "6f26d821-0242-4e09-b542-f9ab0247263f",
+        "findingId": "d2fc7e4e-d721-42b3-a46b-eb59dabf5ad3",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ceddba71-f7db-45f8-a2c9-a6facacd3250",
+        "findingId": "71ba343f-8ca2-4ee9-81b6-5dfcb7373676",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "a66cab10-8599-4d18-9d3c-23eae4d40818",
+        "findingId": "9a39acae-3ef7-49b9-aad2-82986f9a7be6",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "99827d18-c3dd-44d0-a5bc-b43a339d5231",
+        "findingId": "1046621f-abd2-4a59-b97e-15235b22f240",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "63c8b478-71c0-47bd-94ad-bc67ed0663a3",
+        "findingId": "a9f2fdd3-7dc7-4a93-b092-57cec4c20edd",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "be8c52d1-19f8-42a6-a604-a01c6fc95509",
+        "findingId": "53d3c186-2e0a-4f0a-b780-3b6efe5e6676",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "062729ba-65c2-4e01-8f60-0c6652e41f38",
+        "findingId": "dbcd681d-41dc-427d-936f-1552717f6822",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "b01ce4d7-26ed-4448-aa6a-4ee3d18af92b",
+        "findingId": "2d5e79ac-2ad2-431e-9aa1-29c3b0c9fd43",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "858c335f-6d5e-4f40-97ac-326c322f6f0a",
+        "findingId": "ba04b7bc-0bd8-4703-b64e-df4e28cb94bf",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "950fb3d9-dbbb-4fb7-b679-5b5ac1f7b165",
+        "findingId": "28607cb7-b48d-4263-bbe7-aa5a1359fc53",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "4850057b-7f07-4850-9a44-fd0a119a71e9",
+        "findingId": "5929042b-a3a5-43cc-8862-04c0f64df8f3",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "3ba03c88-101c-4527-a9be-864689adf6a0",
+        "findingId": "41ffeb41-4566-4ade-986b-d4ab76042a7f",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "2fdaa216-0731-434e-9cc1-39d4d9dd3da7",
+        "findingId": "4bd94a7b-bb67-4dc1-87b0-e923cf5a59eb",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "bb849c34-9040-48ad-b574-414a5e6f5c5a",
+        "findingId": "35e37cba-46ec-4ada-bc81-e6ab29a23a82",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "7dbc06ce-6a61-4e98-9370-9218833ec00d",
+        "findingId": "c32c6143-bd97-4e38-bc86-dddbc045722f",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "b82ab76f-0f2d-4ba3-80c9-e648690c1b6f",
+        "findingId": "ee553cbf-e418-45e0-9e1c-c3ea8a68c282",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "1b962231-1eab-4d84-9caa-dd864c3058bc",
+        "findingId": "b6e289a3-6834-46a8-9635-41ba70c08787",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "cebdb19b-d3f5-43f8-af1c-c3f34a5670f5",
+        "findingId": "57663bcc-02a7-45f3-9e32-997f9bec9d43",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "22b3dacc-715d-4fff-a849-e44c947c9da0",
+        "findingId": "d5d9b333-8cf2-427a-85f9-e8277a8bfabf",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "663ab995-4401-41d6-b0a8-765e28ce5c34",
+        "findingId": "af0e5035-b1fb-4341-a6dd-275a53a13860",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "dcb6255c-4a89-4446-b9b0-d72bf50f57d9",
+        "findingId": "b514d6a4-d1ba-4100-b141-a569087f86ff",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "c671df2a-557c-4439-a526-d6452c521016",
+        "findingId": "7fe30d7e-50da-436a-bf67-8c589a1b828a",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "23fa357f-dd3c-4aa9-a500-bd5aeea37928",
+        "findingId": "fde84ef1-6bfe-4a24-942c-94154e352908",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ee1b0f0c-fa29-4190-84d0-192709edf9b9",
+        "findingId": "10dd595b-9ed0-4cd9-9c28-8bae219b3b05",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "f4ead8e6-5235-42c2-bb4c-0eb2037d3ccf",
+        "findingId": "98d148ea-018c-4a68-9a8a-ff5ea1dd4f81",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "86151118-d6fb-4302-b28f-904e0b001e15",
+        "findingId": "bdd2aa0f-a1d5-41ba-b623-cf7d04e5dbb9",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "70dcfe27-b483-4975-8cfe-05190698e903",
+        "findingId": "575c135d-9550-4b53-9fb6-bcbc2c493feb",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "b223a5c2-9118-4888-8758-5854e9025f24",
+        "findingId": "913073be-8980-432a-a93e-43ff52a92db2",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "fb56557f-6520-4ebb-ba14-2c55b7a9467c",
+        "findingId": "30d20fd8-5009-4f27-b530-80bf4180c689",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "c0b2f33d-6b5e-4256-b543-51a95726cc20",
+        "findingId": "e11d5b97-a825-4475-8f89-9e411697001c",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "44271bf8-1281-4b1a-82f8-95c4a53013f2",
+        "findingId": "e6fd5a89-ced8-4e84-83a7-11ff699d8f6b",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "8ce71858-0e3d-4ac5-b209-52571e5a19a7",
+        "findingId": "24e99597-2dc5-4382-b4ed-1aa38fac90b5",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "95681487-54bd-4b0f-bca7-3879479279ac",
+        "findingId": "07cdbc7e-4425-4ffc-afc0-963c390ed937",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "959d9904-8543-496c-a2db-5d5241825927",
+        "findingId": "9c74c359-805a-4ec0-aa5c-2f1ba08cbb6a",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "39fed54c-cdb1-4b8b-a989-4ca5e1fa68d9",
+        "findingId": "f06e458e-10c9-445e-8c31-5770b19bbc00",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "fdfd4412-fe70-4764-ad1c-aa712a01c1b9",
+        "findingId": "cb8f0f0f-e621-48a3-af7c-dfb72c6f4b31",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "9a254abb-335a-4eaf-aa60-a06adcd7376b",
+        "findingId": "ee59e696-ed61-4cae-bbda-5bdf09077ad7",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "f63a3eba-801f-4470-818a-f7791dc33084",
+        "findingId": "f025f6aa-220e-4019-81f0-26721b35a940",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "2b308c05-e209-4a89-a60b-48b1d9a42a90",
+        "findingId": "7dd5a14b-529e-40ea-aca1-4e4b5b2d4b5e",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "b2c84e1c-8cae-4fbd-a458-6598f625f75e",
+        "findingId": "26f010b0-0d38-4a3b-9c15-86c4cd2a7d8d",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "61238c2e-215d-48b4-9711-366589e4627f",
+        "findingId": "c4cace94-97fc-480f-9dae-7bc0711d4a99",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "2d07558e-7648-403d-bd17-7a0a27401f23",
+        "findingId": "fa04bfe1-cfc9-451e-8135-0cfd94d0b60a",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "b8e5d909-d572-4221-aabf-e9e2a0fc5516",
+        "findingId": "69490895-6dfc-480c-aa3d-25b0a0309ca6",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "32e0c611-909c-401d-812e-a67aa9f7c04f",
+        "findingId": "f3879722-2a5d-48d4-bb0b-df09eac36838",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "91cda8de-7cee-495e-bb05-2151a274aeb0",
+        "findingId": "908ddd42-6375-4b27-8b2d-ffd3350605db",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "8e4cc97b-f372-4a5d-8b6b-c4fd1f4fffea",
+        "findingId": "9ab79329-9534-45c0-82e0-480bcafd6cce",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ee42b075-b2c8-4621-9a76-ba05d51c3440",
+        "findingId": "79bc1785-b283-47f0-9770-b349791dda6c",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "35d02fd0-3655-4d74-ba1f-46c6cc9f43da",
+        "findingId": "b2746d20-7094-4ae7-8215-9fc5f147f6b2",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "32d4a269-b535-40a7-8ce7-c58da425a65e",
+        "findingId": "0272bde3-7b58-4c45-a4b5-9050b153b5a8",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "116dbb88-adcc-43c7-8758-a0e40b5416f9",
+        "findingId": "c2aa70bf-2ea0-412c-bde1-621941b996d1",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "de06fd75-d221-4a5e-b9c9-de879cd37124",
+        "findingId": "6791e167-6837-4e6c-9469-32d4a270ee68",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "7bf2fe6f-a921-49e2-95ed-b66a87ed815a",
+        "findingId": "cb4fbc2b-bfe2-4af9-a702-d44c814df683",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "e667bad6-500e-46f9-9fc1-7d89ad73365c",
+        "findingId": "488b86d4-587d-4f8d-8ef7-7032bc719085",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "29e5715c-384f-4611-945e-eca797eb5246",
+        "findingId": "baac8b75-1522-4162-84d0-24e37d1ab497",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "62eb77cb-000f-47d5-a966-cdbefd735f81",
+        "findingId": "7330024e-7ec2-437c-85ad-b73ea56321ad",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "56bcdf3f-c5ee-488e-a01d-297e16186997",
+        "findingId": "d06a6fb6-fdf8-41ca-b834-7b80226d4581",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "5c381850-88fe-4c5c-8813-1818fba5eb91",
+        "findingId": "26a4d5bc-3fcd-48c7-b9df-c689890a3996",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "86f74526-ca4d-48cb-bdcb-1f78b2cc91c5",
+        "findingId": "1d3fa022-0781-44b0-bf23-69e124b5f429",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "9768cd6c-8f93-4b19-beb6-4d24874c15de",
+        "findingId": "fc24d7e3-ce0a-47bc-871c-a96202cf7749",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "66c9e2cd-50bd-48b0-b9c7-6bc18bdf00db",
+        "findingId": "fa4b626e-3d12-4328-8bdf-3b53aba7a477",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "c436bf14-689b-4479-a19e-088508e6dc52",
+        "findingId": "19c8c1f9-b2f3-4d9f-b84d-088f2cea2465",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "40b1e6e5-6c50-4921-9c65-0064bd03ab51",
+        "findingId": "82b1837f-e687-4807-9c0f-c0f642a9fd5f",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "2b50c6e4-3025-49c8-8da7-7fa1eeec3f14",
+        "findingId": "faa3cf95-810d-4e57-9f25-25279082aa72",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "d32d209b-9991-44e4-ae1e-ad0101b340ce",
+        "findingId": "0ec41b38-3aa8-44fe-80aa-81fbccac87f4",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ac3c3f68-d9b8-4dab-ba4d-c90159e1a487",
+        "findingId": "b827b80f-fd81-45f5-b413-09c8e3613301",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "1c797aa8-3f24-492a-ad96-f2f20a5e3dec",
+        "findingId": "5f06b7e7-521d-4bab-85df-4c40e16f97ca",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "5fef5a95-fa90-447c-b3a5-8f120988d421",
+        "findingId": "795cedc9-4e13-4178-9731-308a942d4782",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "70cf294c-1872-493d-943f-9273aaa5ad01",
+        "findingId": "a27842c0-3bbc-4db2-bee8-752749616fe1",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "4537c568-65df-41fa-a6ac-aa72313a6ba1",
+        "findingId": "7c8c1151-196b-47fe-914b-d98d50316879",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "375d538d-a9d5-4cdd-a372-971bee155070",
+        "findingId": "ccae6dbe-205c-472c-8841-8ccacf8233e5",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "27977d6b-69f5-41bf-b370-42f3e932b0ff",
+        "findingId": "693ba326-bf58-403c-9b1f-5faa655c0702",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "39577889-ab4f-48fd-9faf-de878b93a0f8",
+        "findingId": "97578eba-2712-48c2-b3f5-2b2b90cad84b",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "6b8b171d-e37f-4d94-8b01-1ec39a7e46e6",
+        "findingId": "f7359dc6-94c7-4483-ab5e-d68362f3ec34",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "b6edb6a0-10d6-47f5-b780-7e5a3345b4a9",
+        "findingId": "6ffd528b-560c-406e-8334-e18cfca95a1e",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "9a019682-ef4c-49e3-9fe7-73730e3a2a80",
+        "findingId": "66a0e474-7361-499d-be27-af842334dc03",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "e85c0fb2-3472-4938-b0e7-a169cbd8fcdd",
+        "findingId": "939ec518-11bf-43ac-8b5a-b59f68263207",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "2c91621a-0f8c-4604-bda3-1500f94ffe58",
+        "findingId": "c6cfd7e0-ce60-4523-a21c-6eb17154647f",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "65111eab-9d57-4353-a39f-f1b2334043c0",
+        "findingId": "f09b5aef-5248-4220-af44-28e5bc06b9fc",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "d537843f-597b-4f14-b2d9-659cfad9095b",
+        "findingId": "7bdead9b-2bd1-4bae-81d2-60eaeb609c65",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "34f6afe1-a04b-4006-98c3-e939200c34a3",
+        "findingId": "a4b53871-fdbc-4dce-80e2-8b4697c7f840",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "480edb00-61a2-4d1c-8407-4049b3aaf4ef",
+        "findingId": "99ecc2e8-f57d-46f8-8d60-7da95182f80b",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "db6790f8-719d-46f9-b6d4-ec68d012fcaf",
+        "findingId": "fe6e7339-5306-44e3-8807-4f596c0c7b87",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "3f6dfaa9-8fc2-4f1e-b5ae-63ba2e01af27",
+        "findingId": "5d8111c9-ad47-425d-9fda-9090f5ed3cda",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "208bfe1a-ef51-4753-ab8f-f44e1592fd2a",
+        "findingId": "6e2e28f6-dd97-455c-bd68-29ef06147bf6",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "7e5a5913-0c65-408c-b831-466380ce0efa",
+        "findingId": "35f2c3d2-e07a-4239-a95a-d8f6e75fd7d5",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "79aaf5c0-9d51-4eae-ba27-460ec8a33130",
+        "findingId": "040eda89-a446-4fff-885d-62d0f4da1387",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "bb5ed6ff-83f1-4bac-a09a-417b9c4e7dc5",
+        "findingId": "446471f5-aa4d-41f1-ae28-431a8aad2633",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "84f97b93-e5f1-44fc-82f2-cdf0a78ce164",
+        "findingId": "72671d46-5c07-4f19-ab19-179600fc2dfe",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "c502a18f-b414-46b9-9a3c-45a3c2270a57",
+        "findingId": "c16d48d0-e03d-4b71-805d-b6caa483a549",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "7f80ed01-48ef-49d4-b4e7-62911d0a757d",
+        "findingId": "b08940d3-d5a7-4dab-8125-0df94609d836",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "63113a29-c574-42db-b81d-419812f4d9c1",
+        "findingId": "d6ba2321-f320-40fd-acb7-0236fd004f62",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "e979e335-2665-4429-a4d7-8d827d6ede99",
+        "findingId": "5516f07c-dc18-469c-8429-9ff24c300650",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "5138bab8-fb89-4693-8e36-a4342dce6944",
+        "findingId": "cf2edae8-d22b-4704-8621-549d5edaa9fb",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "08ea023f-966b-4f6e-8098-b3921c0c96f3",
+        "findingId": "9f0a5068-ad2d-4766-9617-f89d39ad2cd5",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "fa16c8c3-dde4-4fae-bc15-48d0b383040c",
+        "findingId": "43870280-817a-4a2b-a5fa-cbb7a3b1899f",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "577469be-7ac9-4566-8f90-98eb9eabeb8e",
+        "findingId": "f7e84f47-3a09-4d36-8e8b-7597e4ae3902",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "29c9e46d-c205-42f9-a036-33abdcc2f35d",
+        "findingId": "1a314b0a-417d-42ab-870e-6fdfe3540bb3",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "61ce3bea-59b0-45f2-8324-d6ac18691653",
+        "findingId": "66005157-31e6-4299-9ff6-41e6549ba11e",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "74460ad0-a39e-47bb-b5b3-d1dfb0108392",
+        "findingId": "270e7a51-2364-415f-80c7-5325fa5b259f",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "0febb7b2-8d7c-473c-bbe3-485302d3af1d",
+        "findingId": "83df23e1-f6fd-4656-8dcb-a6076fb45cc1",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "09f26e68-ca7d-4f05-bcfe-355df0afb50a",
+        "findingId": "43cf2594-3312-4c12-90b2-48e0aec7d132",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "c6c77bda-f76b-49c3-9ac0-65d3b5a22ff1",
+        "findingId": "742b3e1e-ae31-4a3c-86ff-5dc9a1cc00e4",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "844c3f9f-f0bc-400a-a595-cf32d2f174e9",
+        "findingId": "5f840598-9dba-4d53-ac10-9532d9d201b3",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "0352f314-caa6-49c6-9dd8-31d60e6d5873",
+        "findingId": "a83921fe-c061-478f-8a20-d6199a754ad4",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "d60d9131-6123-4b9a-b75a-e00699a54a97",
+        "findingId": "5c59ecf3-4ea3-4feb-b363-0173125af0b2",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "58828f40-d5fe-4c39-8678-e48760ce68b9",
+        "findingId": "27fd9950-2a78-48bc-8335-2607f388e45c",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "6abd9167-6ffa-47ed-8d8e-a6a9e88778ab",
+        "findingId": "29d179c8-3d79-4502-8bf1-fc6c2be6d777",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "bb50f961-a8c6-4509-bcf4-8c996b057d93",
+        "findingId": "a1987d2e-de8d-4727-be64-723120fdb46e",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "6eda4f3b-c9aa-49ec-9d89-5fd977fe3ff6",
+        "findingId": "bfc58059-8b53-494c-9c3d-1239cbaf868f",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "a66027c2-f0a0-4338-9e2c-43b0c46bd5d2",
+        "findingId": "2cf1ffa8-e669-4425-8865-214b73517b27",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "0f231396-d560-4563-9344-c857cd28f1ac",
+        "findingId": "5f1f1033-7728-41a8-ba3f-a6b11b44b501",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ea48e13b-c264-46b7-8073-dc3ccc1ae7b8",
+        "findingId": "fc436afd-d7b9-4655-a018-945cb0c9a5fd",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "49da2476-3886-4c75-a5ac-d41336fadb71",
+        "findingId": "90450a1e-dba1-41b4-a970-4d31a4dd0c27",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "2b77258b-fb5b-4ccc-a8ee-7bce39086454",
+        "findingId": "5ee8cf95-1a15-4549-a145-f7ad707afaef",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "b562f9ca-86fb-4f88-9a51-7548abab789f",
+        "findingId": "9708e6ae-2e22-4a9c-bafe-92e4394de8aa",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "18a6ec0c-3102-4e80-bcc0-b6089f0b88af",
+        "findingId": "949bf745-abc0-40c6-94c1-7b5382d00adb",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "e481e4b7-2548-4e0e-a5a8-b056fb1a9cfe",
+        "findingId": "91941abf-45fa-4c0d-981d-9404539c5f90",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "372191db-6524-40c2-bc80-a42886b597e1",
+        "findingId": "5c42bd07-50ca-43cf-b77a-d1bec5cf5142",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "bfce3fb9-9fa5-4ffa-a769-da60d4ecdf40",
+        "findingId": "e38a0508-c360-416f-af07-83e842d217fe",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "1bcd9ff1-2ba7-4d2a-b066-fc82cc549b4b",
+        "findingId": "cff42cbf-c178-4105-bf9c-f664cc9c8a92",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "079c7e02-e38b-491b-b02a-64418d4bb0e8",
+        "findingId": "5d8c8c29-f6d9-48f3-a886-f3088116275b",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "4cc3b94e-4ca1-4efc-88c6-dcf5e69f4250",
+        "findingId": "70e8bb02-3ead-4d3f-94ed-31efe7416d16",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "0bfe52da-24d1-47db-a97c-f1102b8750b9",
+        "findingId": "828d4087-60cb-4a4b-bc69-d1171bec0c9d",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "a18e4d3d-2298-4f7f-8ad9-9c9c6bdf9707",
+        "findingId": "b0eba978-4bc4-494c-9b02-c0a8d88abc5b",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "92f959f7-93c3-4997-b3f3-c0231694c109",
+        "findingId": "d08d08f8-ebd3-46d1-b020-fd9ea84c4e6c",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "3c4ea4c1-4ae4-4a41-b4e5-db367490e72d",
+        "findingId": "deabd39f-467e-4b55-a5f8-b235330d3527",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "e6b8d94c-c8cb-4c15-bf2f-afedcee9dd5a",
+        "findingId": "c0c080fe-a084-40c1-b71b-c96e5f8cd0d0",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "9649548a-3ad6-4808-865d-5b7a95aeeda0",
+        "findingId": "edafd5b9-552b-4405-b13c-65c2aede5d97",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "1157735d-71b3-4bed-84e0-11b83a085d7e",
+        "findingId": "8f3a3edc-3a84-42b2-b9b1-dc617a86bf89",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "73cbb728-f6bc-4a23-8da2-a93a1e7de935",
+        "findingId": "1b66b468-9a24-4a5c-9f10-3aaa5fe775af",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "5b25c78f-fa1c-414c-a9d4-6a0769f5f338",
+        "findingId": "eb508e92-c0df-4e38-aefe-82e489ae5f8a",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "aa454a03-4b89-45f0-bd11-bdc61c0a14e3",
+        "findingId": "c87907f1-3aec-4725-8463-ff477832582f",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "5ff4a983-fdb5-4a2d-a22a-38eb462e5285",
+        "findingId": "ad4a213c-4115-4080-9c1f-9fb5fcfda1fb",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "2029bff8-aa0d-41fa-a191-d6f59b0b343f",
+        "findingId": "c4597d3b-d712-4d37-ad08-25d7769c542b",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ed61e487-aa89-46a6-a5cc-146838e0bf23",
+        "findingId": "b9dbc20e-491a-4ce8-824b-34b2ad17fe67",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "39514c1d-9b3f-4030-b731-152d3ed6adbf",
+        "findingId": "6d3fea67-c482-4b96-8ab1-5485d135bdb4",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "0129f9df-e760-4666-8aff-53c2e5ac9661",
+        "findingId": "01fb9138-c2bf-4a5e-9cd3-d1211d97d272",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "3466e529-9a79-47d5-864f-e00225fe3ed9",
+        "findingId": "d302348b-b070-43ca-ac5b-871424686771",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "bf0d549e-58d5-4f48-b5cf-8ecef9794c0c",
+        "findingId": "b7b0ae3a-1035-4383-aaa3-79e89e075456",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "df25e903-aed3-46ca-af05-3425bba20b45",
+        "findingId": "bdc2754d-a802-449c-870c-0699efe7a6a1",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "12e8baee-1c41-44c0-a516-fd8033fb0672",
+        "findingId": "370885d1-d433-4c3c-b0ad-143abf7d7182",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "3dad17b6-a73a-4f22-87dd-18e5a6a0bfdb",
+        "findingId": "c7bcfdc1-f6ec-4c05-b189-efdc53e2af32",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "77a4613a-dde4-4b20-b600-1e67cc906c13",
+        "findingId": "7cd1ce48-d969-464e-9a0e-417b3230e6d8",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "097b93a2-e3c3-4b3f-9669-5b8e28743d62",
+        "findingId": "7cd25cbb-33eb-4ebf-8e7f-d7aad890f5dd",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "a7aadaaf-e9e1-4726-880d-e6c0c1bcf483",
+        "findingId": "5d739bda-fb51-4042-84c8-d1a8dc8825c4",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "404e587c-8411-42bc-a64c-019c0cf1a6c5",
+        "findingId": "566c3476-6669-4ba6-a98e-d78041063250",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "6c64c318-91db-4f84-afad-5654c8e1618e",
+        "findingId": "8696ce00-47f2-4ff9-8609-aa2db1cbea87",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "47a6c5b5-6a70-45c0-9b40-98e561d9adad",
+        "findingId": "cdc1dd4a-ac6d-439b-9b4c-7bb0e1a73671",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "12417bc0-ed44-45ec-aa7f-7604677dab24",
+        "findingId": "33f4e958-b5c4-48e4-bcd0-86500cec3959",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "537f6022-f236-48b0-aca5-e3bb0e9a443b",
+        "findingId": "54ee34eb-7d64-4dd2-ad46-da7316ada880",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "00036f10-f04b-435c-bf4f-5b63b9376013",
+        "findingId": "7ec77bb7-2efe-4a5b-aab6-4980435cf3f5",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "19088fd6-4e50-410c-957b-1d9618f4b10a",
+        "findingId": "9f8606bd-467e-400e-b290-259b45616c17",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "09c5e47c-579f-4434-b7c5-846cff48b8d3",
+        "findingId": "08d82850-a0d9-4517-be4d-3b84c1fd9db9",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "f0c950eb-eb71-417f-8a32-c14fab65a2c1",
+        "findingId": "fa99a6b7-ccf9-463e-bd43-17c053530c6e",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "49e293fe-a985-4257-a046-e24c6b717e02",
+        "findingId": "b0bf3725-6912-43ca-8647-7ca1214255b9",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "390a4779-e9f7-4547-8c21-40a9c0766785",
+        "findingId": "3a8f397b-ca8f-488e-855a-5fe550dd9dbe",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "6b459ca1-20e7-4d00-8dd7-5db5d75c498d",
+        "findingId": "7302e110-5b92-4667-a0a7-b59247774fa2",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "a8497b37-dede-4a60-8168-5487b2dba4e4",
+        "findingId": "f0003cab-9f2d-494f-a94b-f9238399a90b",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "b7693aeb-2b2a-4a40-95c4-07adaf635c78",
+        "findingId": "8f9be1d6-d5d9-486d-ae8a-bba154d62f66",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "83a80665-0a47-4a07-8bef-6df94d3e1980",
+        "findingId": "e3142265-ac8b-480a-8f07-168af39fd237",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "11e655d7-e758-4e29-a39d-82b93b97b5d4",
+        "findingId": "f5078861-fbea-4331-8a79-1ec5f6870682",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "f95dbbc7-4ff0-4265-b3e3-aadf43b4049f",
+        "findingId": "6251e24c-57cf-4ddf-97a0-2e49844e329c",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "0be899c0-c3af-4c2e-8ef4-ec41b18e4513",
+        "findingId": "07407fde-8ef3-45ce-bb12-ce5444e67832",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "a58cd1be-e0fe-478b-8023-a678b2870984",
+        "findingId": "55904d8b-19ec-4ddc-aab8-c42ac174406f",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "945a502f-3d93-43e7-9434-d446e64cbddf",
+        "findingId": "447f8eca-cdcc-400e-81f7-2682af8209d3",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "52c4eed4-21b8-4c3a-97da-817d83e3c7fb",
+        "findingId": "f6ee79f4-964b-4d01-85a5-7fbffeb305fa",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "2ebac3ad-4a90-438f-9cfa-2949d2fe0b1a",
+        "findingId": "8dc57e60-fa71-48ab-9a4c-d00a99ea3892",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "f1af914a-94fa-4ec9-befa-5554d1afb702",
+        "findingId": "fc7cff9e-bc78-4ee9-b458-c6ff7ed4b4bb",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "eab14354-292e-46bc-801b-bb347ad5af29",
+        "findingId": "6be91eee-1b6c-4688-a6ac-b0d31e861dcd",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "42e2678d-3e56-4d85-91fd-aaec26bc4eec",
+        "findingId": "5ad22500-adea-4743-ad1b-051d1bd53ad9",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "bacad963-81b1-4319-a568-5c2e667185e1",
+        "findingId": "3937266c-f564-4ccf-a847-566c0caf395a",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "c8f60ee4-50b8-40f9-ae75-51fb1fa8282e",
+        "findingId": "ddfa8f3b-7bfc-48c2-8d10-43a72dd72edf",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "fe31d135-a7db-4df6-9776-26473b463d17",
+        "findingId": "bc719495-90f2-424b-9321-963cfdcfef06",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "bddac8bf-bd72-4fd8-98c4-92320f77d290",
+        "findingId": "4f05ac14-b374-47e1-9d89-b15f6b598da7",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "60d99195-b6be-47f7-9dc3-5fcd81d36d0a",
+        "findingId": "af65a92e-5be6-4f45-a5a2-ee9bbe14f7ae",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "6ccea399-68c5-4e4b-a99a-9a267739af57",
+        "findingId": "a0418304-6527-4593-b668-77943007e7e1",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "8f324b27-d2d5-4980-a736-7a0b9044c6d5",
+        "findingId": "9f4858eb-0585-460f-b21d-e49b71993a02",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "993ecf94-b682-4416-af58-84492604fc4c",
+        "findingId": "f82d4645-0698-4be3-9561-7e0767f8f7c9",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "f61e557e-30ff-4cb8-bddb-54ff21bf2f5f",
+        "findingId": "71d56797-307a-4fc9-b7fd-3a153e80a34d",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "99e1bb08-f1d8-4f0c-930d-077aafd6979d",
+        "findingId": "49f8c28e-9971-449e-8941-9d524f15661e",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "94f3171a-51f5-4a72-ac9a-c7e745f9952b",
+        "findingId": "74f640d0-5012-433a-8c4c-5afe498921cd",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ba8a81ac-01da-4b85-b640-bececb5c0b26",
+        "findingId": "08adb044-d3b6-4576-a400-bfbcd47a2e11",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "fd08d2b6-806d-4b35-9bb7-8e7a125289eb",
+        "findingId": "582aaafb-ca00-42ba-8d60-04560861d785",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "b22c0450-6769-44ac-ace0-5405a1ffe9d6",
+        "findingId": "d811a040-0d48-464d-a08b-85789faf965d",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "269084eb-833e-4a9f-9899-cc4d1ac6e667",
+        "findingId": "65258fb0-67e2-474e-94a7-0274747d5226",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "a94bffc8-3d52-4c79-94a9-35c56e204e5a",
+        "findingId": "a7454881-c70d-483f-9597-197075cece99",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "c4b89ca2-9ac8-4149-919f-74dff4781feb",
+        "findingId": "03d5c64e-be5f-4181-a7cd-55b9f0cb24b9",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "cf16642c-e5ed-42ef-b860-135a1838459c",
+        "findingId": "5594143c-b9df-4b71-a8b0-0159972512a6",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "314c0124-742a-4697-b18e-0d5e45449bbe",
+        "findingId": "a6c4b93b-7f2c-4263-ae53-75bb467bd9ec",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "356a0e51-def9-419b-af17-88597fcee23e",
+        "findingId": "5145e73d-8591-4e44-93a4-d0b7958b6d39",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "5e815083-a94a-4ec9-8b3a-0f27b7825aeb",
+        "findingId": "b229f6b8-8cd9-451a-9936-5acfb4f2cded",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "0a5bb777-f2ff-4a59-9ef6-8c40dc8117d7",
+        "findingId": "dab8bbfa-ea37-4006-86ff-670e18330385",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "d58309d3-4756-4b72-9397-3894196cce47",
+        "findingId": "e88a1dd5-f766-4013-b19e-48cab587969a",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "5b78df3f-2045-4fb4-a840-8ada63ca4bf8",
+        "findingId": "de9a4e45-1a52-40b0-a9b5-07e0945b2eb1",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "bb580c88-adf2-4236-83e9-a774a48ab59e",
+        "findingId": "ab28fcc8-0fb9-4b1a-8c17-bf900e14f0d8",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ab222aa8-02af-4a6a-927d-7f66e74be8ea",
+        "findingId": "3fdd3361-ccd9-476b-aed5-338d127593ea",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "064aab58-f8f7-47aa-8280-c8a769bbb10d",
+        "findingId": "33b6d312-e5a8-4915-894f-44df459f1279",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "566ec428-ad49-498d-a3e3-f51875ecb354",
+        "findingId": "bf9f4fa8-711e-45fd-8e86-93e1e5de9e03",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "1d3a0fb4-3b39-4a5d-813f-65ecda272805",
+        "findingId": "f4e2796a-1f4c-4d4f-b11c-7928031dd490",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "6218cf14-0ce8-4be5-99f7-074ddb987ccd",
+        "findingId": "eaf92ab3-f204-4cb9-96d3-713e539f79e5",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "c86185b6-bf0e-426c-bc71-33aafac90be7",
+        "findingId": "38493ad9-8b7a-4347-8746-3b219ed8b839",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "26400e1f-82ba-4942-ab2c-490268913a61",
+        "findingId": "fb52c815-af32-4473-a3e7-57667e17ef4c",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "1b8a1eea-2cb7-49af-9bd8-67222a7cd2c0",
+        "findingId": "f79782ab-c512-4746-9c42-5cb0497ecacd",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "48f5b4ec-2e04-4d7e-ba13-f38eb4f49dd7",
+        "findingId": "dec2e6f9-a446-48b4-b02a-7aaa3f0fb85d",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "8940a1b3-5871-4586-944f-28e228777060",
+        "findingId": "722de698-2460-4de7-8bd3-b539dd336498",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "7ecd85f3-b8b7-4085-951d-31cf2fcf2e7d",
+        "findingId": "94f98c57-f105-4286-8420-d65b30872ea3",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "3ed0a441-9dfc-4197-93fc-11b708a8f13e",
+        "findingId": "70e27681-48f3-4d37-8c51-4e3105b9bb19",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "30270328-17d4-45f8-ad6f-d3c9332454f9",
+        "findingId": "c0e2a01c-335a-44b6-802d-c2bd3ca3c000",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "aee55d98-cf33-42a3-b26b-267194a049f2",
+        "findingId": "9170d556-a4ff-431f-a648-5372ae7e2626",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "439d6c4c-3aed-427f-97fa-ea89c092c852",
+        "findingId": "f5b39c85-9488-4ec6-b6c7-5f0f0a218908",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ef8a5cc9-68f7-4000-be28-985b987d4bce",
+        "findingId": "3644d56d-e794-41a7-bb25-7c764d06181a",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "80577ebf-bb5a-4df7-b3f6-047d76f30a0e",
+        "findingId": "8d83162b-377e-4316-9d5f-fbf08a40b285",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "05a5412e-fe94-43d0-9179-d3daac50869d",
+        "findingId": "deffe0c1-3cda-4af1-b526-967e0ba850ce",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "335cf045-dad8-4af7-bdbc-608521c02ad7",
+        "findingId": "ad193efb-464e-4a50-bdcc-353639bb1d90",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "5ced3300-fd12-4b5a-903a-32238249a7bf",
+        "findingId": "fa784ca6-c2b8-4366-8594-5ad1b36d5c43",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "0218707d-2a04-4d1d-9513-2bfcede8970a",
+        "findingId": "a628241c-50ef-4d9b-96f5-982258bb6c06",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "43ce119b-f4ff-46d2-8e2a-dc113a7de13a",
+        "findingId": "55f141a8-7b61-4f1d-b157-f3aaff242143",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "dc9bab2a-38fb-46dc-8c72-41e0a19c5e84",
+        "findingId": "89f7705e-f399-49f8-8767-1e6bb2be5f18",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "32a287e9-3605-4b2a-8fc2-35b7fe34907f",
+        "findingId": "9c1de0c1-22ee-48bc-ab6e-172e36b4f99f",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "2fdc5b90-a291-4a34-a181-425f7200756b",
+        "findingId": "d2a7a5c7-7e78-498d-ab92-0d810103bbab",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ca35787f-8d14-4de4-bd5e-55622f4734c4",
+        "findingId": "8e99b3ec-d5a7-467e-9e9b-a3f199435a9f",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "63e0e613-86d8-40d7-a1eb-f8e0074009d0",
+        "findingId": "72e966c4-e134-41bd-976d-0a08e1b1c959",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "94b503b8-7fd2-48e5-8d93-ba0aaa140011",
+        "findingId": "f46635d7-bdb0-43c7-b8c8-0e1e838bc6cd",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "25633750-4f7c-438d-b49f-8c6bad31f5fc",
+        "findingId": "1f942c12-5340-4817-a8a0-7b83c7b2880d",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "565a398a-8bca-484d-90fc-12f436d0bf01",
+        "findingId": "0634ab92-6989-48d9-8127-9a24fee6b24d",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "22cb4ffc-5895-4d15-b735-5454beb5d2bb",
+        "findingId": "0e3ff9ff-16a6-4fa0-a6be-c3c1c2254930",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "52ddca46-d147-4b1c-9368-5433e46ec1c3",
+        "findingId": "8ca92227-a70b-4b66-beb3-a057ccef3d07",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "bec37945-faa2-400e-a471-ee5a20b4865f",
+        "findingId": "b192b0c9-73a2-4c1f-8de6-12a317a94f09",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "0b20c1d3-07da-4814-abb7-3359c7551b82",
+        "findingId": "66f44ab7-9915-4879-b5cb-7225e4ebb1ba",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "914fbba9-bd96-4efa-afd5-de31835be4f5",
+        "findingId": "8a8dd6df-59c5-45fb-bee6-d4b215a0cf0d",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "5b1fb735-060b-4df6-8afa-9ffc4f75a3a1",
+        "findingId": "7087f8fd-bf16-4c00-b08f-c967a13a1506",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ec4759c7-43c6-439f-9b0e-ee32befb313a",
+        "findingId": "e6b3bdc1-53b4-43a4-b6fa-5f0c4595e593",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "2b982c60-a491-43ea-8d51-1a407431a4f2",
+        "findingId": "a1ff0e1a-a406-45cc-abee-00b0bd61c5ba",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "c2ae2aa7-a634-487f-a8e1-b8ebdd299add",
+        "findingId": "021558a6-b97b-4a7f-9f1a-fbd25fb187b2",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "50f94611-cf71-4439-ae0d-0422662c79d4",
+        "findingId": "7e3fa468-95c2-4306-8a46-261a5cfa3564",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "14b38708-07ff-4175-a13e-e44c898c26aa",
+        "findingId": "3f6df3ae-4d21-4579-a92b-4328d325b10c",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "bf1e7ade-aeaf-4bbe-ac50-493cd62fb122",
+        "findingId": "92fd0bd1-70ea-4dbf-aa11-8ec36762f88f",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "3a642635-7a42-4c6d-a990-ecff60d55b09",
+        "findingId": "95c452ed-1e3e-48a1-bf9e-996144b518a1",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "51110b66-0fbd-4fa2-99d9-d22fb0e4ac14",
+        "findingId": "1be41485-646b-4dbe-88de-f06afe2ed329",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "513fbe15-384e-454c-8056-40404cbb5f54",
+        "findingId": "1539e0cc-a7a2-4279-83c0-451d6f0d8636",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "4510ea75-a9ce-44c6-bbf1-024e66971e20",
+        "findingId": "b6e0b953-08c1-4cb6-9a7f-1d47eff63bd9",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "2a991756-aad6-46bd-8a8f-ffc2574968ab",
+        "findingId": "6dacacdd-99ca-49e4-9508-9c820e83fb9a",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "1c93f73a-3f27-4c78-802f-e31bb7f384ee",
+        "findingId": "5f56f0ae-c3b3-49d3-95d5-ae69654be84b",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "29ba3a17-109a-4dd8-a8fe-f6f07264e79e",
+        "findingId": "82b4b314-3dbb-4b04-9aaa-882b7746afd2",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "6841323a-f2a3-4c1c-af06-d6eb044a818a",
+        "findingId": "00021a27-3107-4f07-ad38-b03066494c60",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "cb558226-dd18-4f7e-937f-7ffd22d00406",
+        "findingId": "617cca20-658e-4983-a1a1-1f05fc2c70bf",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "2bb5f4e7-b173-493a-aa49-ad9c1dc7e189",
+        "findingId": "444db616-216b-4085-b546-1136fd5940b9",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ddae2238-7d67-46ba-bd94-757ffd37ce1a",
+        "findingId": "fb49211c-8055-4de5-9948-a14c5e56d4ce",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "c21f3c73-223b-4810-a716-3215a56ef608",
+        "findingId": "9379240c-ace3-4f43-8260-5522d33fbb2f",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ecab2645-77ce-42d2-a3e2-2087c268f09d",
+        "findingId": "3d4c9346-16b2-44ca-b64c-9169e8b8c2e8",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "4b6bb588-c4a2-4c8c-a7aa-b717376a335c",
+        "findingId": "7eefc9ed-a856-407e-888c-59a6b33a3ab4",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "fdc6e9f0-1e10-4dd7-a516-5b511d3b707e",
+        "findingId": "554405bc-b08a-47e5-9060-ecdfe25f7697",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "564b3870-60a0-4c4a-9eb4-e885497a2441",
+        "findingId": "e82271fc-b41b-4fdb-85df-611d55e3985c",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "44bdf60e-8e07-4ac6-ad68-1cc61db1dcdd",
+        "findingId": "508e8b0a-2710-4735-8445-452b692b5a17",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ae19daea-5a7f-42fd-95c6-e9699a503529",
+        "findingId": "18b5f493-20d0-4b95-8877-02bd0b4e8b36",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "092a4c65-f590-4cd3-bc68-c5a0ce528af5",
+        "findingId": "409abbc8-4167-4a7e-889c-f3abd0512e83",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "6551e3a8-536d-4407-a0a0-5acae6ca1903",
+        "findingId": "2a1c4f2a-f1ed-4370-98e4-c09c493a994e",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "40bc8b1c-b22e-410a-b148-0d854c1b8059",
+        "findingId": "a195c047-80f9-49cd-92e0-29e3661a9985",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "7832c8a1-3dfa-42ba-922e-20363d6669e3",
+        "findingId": "7c47f4a3-912d-4a41-96a1-fa1c8b909d23",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "45033d04-32bc-4f34-adfd-a8a564df77c3",
+        "findingId": "fdf65f04-8df5-4846-a2fc-4dbab51850d3",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "c2a676a3-68c2-4de2-8eca-331903ec2be2",
+        "findingId": "8f77fc05-e933-4384-8da5-11f209ca34bc",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "e84f912b-d844-4f9d-af5b-fe8b0aa85d45",
+        "findingId": "3710206b-08de-4cb9-9570-3f1681229072",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "55f70c5d-4be1-403c-a04a-3af5f18cecbc",
+        "findingId": "b6155a20-0d1a-4804-8ef9-573152f81d52",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "43bf99f1-b14c-4974-815b-677aade17e56",
+        "findingId": "520053b7-4d55-4fcc-a8f0-902f10d8ba0e",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "47f61754-707c-40f5-8557-45210d6cf14c",
+        "findingId": "fe461f40-8c79-48f2-aadc-eb91c8bebd15",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "5ad77780-cf5c-4daf-8425-e3d5fc8f1d0d",
+        "findingId": "259ad817-4627-4a1f-aaeb-8d6f50a320ee",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "c63fe618-5134-488e-8770-f865331900b4",
+        "findingId": "9d984a11-245e-4538-82e6-be2fd62af1e1",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "8f079d2c-c7f1-421c-9d48-cd0ef98911b6",
+        "findingId": "015f5927-414b-474e-bbb2-59046217eaa1",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "4c48ffaa-1ebb-43ee-95c8-2aacc742c54b",
+        "findingId": "83237118-dc9a-4161-882b-772dfbfd8a5f",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "91a48f36-84fd-4465-aa54-6cd2091dc588",
+        "findingId": "33cec24e-d8dd-4faa-baa3-b8a7bc046e1d",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "6d457f9e-f9b3-458d-9510-25f857e5fefb",
+        "findingId": "cff22003-0f29-4218-aa30-6f4a91e083d8",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "5382c65d-a4ad-48c6-8063-2cfdfe26f5a6",
+        "findingId": "680fdc02-c168-4e29-8c31-f66555cea3bd",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "fa408761-de31-4134-b673-d0acaec607a0",
+        "findingId": "3a794964-7ee3-4537-9d79-538ca7bce71b",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "d42f4470-2796-4e4b-a672-6ba8d479a982",
+        "findingId": "b306c59f-10e9-4499-bb56-1018db736cda",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "d8990cf2-a53d-464a-93d5-f200172b3a2b",
+        "findingId": "01715318-727f-41cf-b316-e1fcfd5295b0",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "83f38892-2146-49ea-ac83-b32a4f307652",
+        "findingId": "9fdca019-9200-434a-a94d-d7a2fdd89b26",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "0a858fae-97c7-4504-a159-e06a0c36926e",
+        "findingId": "0dfccd14-3e78-4d29-a8ed-733ac5e22ec8",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ef4526f7-27b3-4dbc-9ab5-3ab08ec74353",
+        "findingId": "7b6f301f-777f-4a1f-aca8-82574f70b5ce",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "174f3a02-8af7-43e5-ae21-cb74de98dc55",
+        "findingId": "1898f614-d161-4289-8969-b13155ea304f",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ab6ab09e-9366-497b-a983-eb9d25fccdfe",
+        "findingId": "935d6b02-1962-46f4-8d17-ca401ef3b718",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "4a1e80b7-59f8-47d2-9481-17052ef9ae4f",
+        "findingId": "24f88caf-9e76-4bac-b4fc-43ae4ffb890b",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "faa37fce-849e-455e-8bd8-c18ca7172f4d",
+        "findingId": "592ca9b1-d0f8-4748-a848-9bf52745dc92",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "c9b47ea2-ac6d-4e2e-aabc-be1e7f8ff352",
+        "findingId": "edc45f8c-7746-4c78-b59a-b6ec032016d7",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "06d87b66-6588-4da3-995e-ff44b6cc63de",
+        "findingId": "817b3ff6-059d-4006-8c1f-204f515f973a",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ff194a80-0724-4293-9184-d630ac428280",
+        "findingId": "84888f73-2842-441c-9dba-0980cf8c3eb6",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "4759f4f5-1e5f-41d2-b6c2-5aec3fbad9f4",
+        "findingId": "33971388-a824-481e-b3fc-89d5ad40bf1a",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "04177b3b-8fc5-492d-bde0-48e5f2aa6001",
+        "findingId": "a62f1d04-1d25-42d2-ae72-3eca72bdbb02",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "9a1427c3-ab15-44a0-9ee0-195b2036196b",
+        "findingId": "3b5f7242-2542-4d1e-bcea-5fa58a0ffec0",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "58ec7cca-2a24-4b78-9417-82096a21e8b0",
+        "findingId": "72574e84-ed81-4a13-ae0f-fdaee456e3a7",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "8173b2f7-d250-4fed-8979-9bf3f66c95b4",
+        "findingId": "99ebe585-577b-4be4-bffe-7d431ee7ac57",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "bf2c1c10-7ece-4d91-9581-80fe6613edb5",
+        "findingId": "9d3dac1b-4889-4760-96fc-fb4cc526fb5f",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "da56e965-2061-47c4-a386-80d1fc8229c5",
+        "findingId": "14166042-184b-40a3-8033-95c95fae7415",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "7ee62e45-6318-4b52-937f-737778f748bf",
+        "findingId": "47b3c57a-c602-436a-a1a0-07d3c65c08b1",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "8704234a-8dc8-419f-85de-82e28c52b3a6",
+        "findingId": "18f3f94a-2d69-40f1-96e1-5d1b80966688",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "752470df-f9fb-4b23-b339-3576499c2855",
+        "findingId": "110b5104-9f0b-4a31-ac1c-088cb47e55d1",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "1a9b5201-c719-4eed-b24a-b9c8c34d2c1c",
+        "findingId": "cc00783a-6a5a-4f0d-9fe7-34e96e109da1",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "404d02d2-da62-4a42-955d-84eaae66341d",
+        "findingId": "2a7e367c-067d-42bb-9872-162822a1403e",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "cc21a59e-e4a1-4763-84f2-6bb5af85ffc0",
+        "findingId": "84241020-40d5-4fd4-abc6-988c25ac61f6",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "9008f73f-4131-422e-b88b-476a56c10a1c",
+        "findingId": "d3946d12-3ab1-403c-aa7a-6623c408f665",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "79f4ba33-08b7-4e74-b1ed-6b9f96d34613",
+        "findingId": "92802209-f894-4dcf-9e96-a8a95eaf2b52",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "3c77b166-63e5-44e3-b335-c0e6b4b5f576",
+        "findingId": "d3255d0f-af0b-42ff-a176-012472d084d7",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "19b890b4-19dd-470b-9037-0f6077a959a2",
+        "findingId": "de9ce854-8f2c-474e-a066-1c7892a16558",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "8c296eaf-da89-448f-a6a1-c7c8693f60ca",
+        "findingId": "f4242b6b-585c-4b20-b4e6-baf0e48e9429",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "d8b55174-1f15-4fae-bad7-1f96e301704a",
+        "findingId": "ce562501-bb49-477d-a042-310dec345c48",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "e126d519-6cda-4c10-a4f8-f43100caed6c",
+        "findingId": "b9c9dce7-6f22-4cec-aa63-a866dbef964b",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "172896db-b175-4119-a14b-b9dd6ac2496e",
+        "findingId": "da89ff64-a437-401b-befb-8466b9ed3e54",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "abb0846f-6f3c-49b6-996a-796259122838",
+        "findingId": "7c822855-7159-413a-a228-423446b0a9aa",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "01179a46-0bd8-4a91-81eb-66331a41c53f",
+        "findingId": "a6660a4c-1a8f-41f5-9156-bc8bf5425bd2",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "9286f040-44ab-495c-81fa-338f3cbe3951",
+        "findingId": "ce50d219-27fd-406c-bb98-4a28f2974ebb",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "5371148e-dd57-481f-b6af-3485aa27c89a",
+        "findingId": "9ede7a37-d727-4d6f-94fc-41c7e49c5221",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ac228d6e-01ec-4b12-8135-91bc5d88fe9a",
+        "findingId": "7c65bb78-e96d-45a2-abce-5bd6275a5c3b",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "4f3c328f-2da1-4898-941a-81a6ab75efb7",
+        "findingId": "53c03021-efc6-4f4d-9cf3-bc31ce883172",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "44e6383b-a27d-4fb0-bb47-a5cfdb947e1d",
+        "findingId": "0a73b28d-36dc-4543-9450-62e35921a3f1",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "0135fdac-aa54-45aa-8bb5-6fef3e8324d6",
+        "findingId": "8f499544-6941-44de-b870-5a4d131192dc",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "7d544a6e-799d-49c6-9a0a-7af8cba71154",
+        "findingId": "2b615d37-f206-4b09-8dda-ff4269bed245",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "8314caa8-5611-4e8b-a7ad-30b74273fee5",
+        "findingId": "501bd7bb-8650-4326-a52f-2b7876e27f2a",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "8e671807-51cc-41c2-951d-1eda55a1b025",
+        "findingId": "8b78926d-b4d2-42ed-aebd-c31259c44229",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "d99bc93d-aba7-4f51-b2f4-be036c033811",
+        "findingId": "f88d4de2-d49e-479f-a7d5-90a48a9f4227",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "0a56c044-6dfe-4f47-97fd-eaabc1898966",
+        "findingId": "b4f76ea3-366e-4f60-ae97-7cc54232094e",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "190ae831-a768-4dbc-9f92-4606c61c6183",
+        "findingId": "c19a1fce-73b4-460a-8f20-c34224925b81",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "b97c881a-c0a9-4424-91d8-43a04a0fb733",
+        "findingId": "4825519c-2379-45c0-95a2-3a6a1bd46f08",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "7312f0ad-d900-433a-b8a0-927c22069960",
+        "findingId": "4e3d6380-7714-46fa-8fbe-cd817df3a77c",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "aba3a028-e846-4064-876f-88fa7b243d8f",
+        "findingId": "6c6a86d0-7df9-4106-b5d8-c95a95949b22",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "45fb86a4-70bf-41cb-a5c6-fdbf6f2822c9",
+        "findingId": "2ffac31a-041c-4ddb-b4f0-dcda1be5d768",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "5ed80afe-2d0b-4443-b548-a3246f161078",
+        "findingId": "a8763839-7f03-4308-91bc-d2929bbbdee3",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "4994872f-4a63-48d0-a7e4-2c3a464d00b8",
+        "findingId": "b85df138-d471-4920-b6ac-7b2a4031d27b",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "8c485388-aae3-4dfc-ac0d-468b18f737d7",
+        "findingId": "f10ef535-ec38-4818-9b45-3d9e372a7f78",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "396b744b-db0d-49d3-82d9-9c4a28d9b91b",
+        "findingId": "7a213caf-a15a-4dee-aeba-003b21ba4ef9",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ab00b768-2c79-4f22-a9c5-9e40f1a01daa",
+        "findingId": "5cf4edfa-5298-4835-9a6a-d6a334b79e7e",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "924405e1-e1d5-4e7d-8285-ee6613d9fdeb",
+        "findingId": "15eff8cc-9bef-4f3c-80d9-fad74c31b39b",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "64b2035b-77be-41ef-8455-cd52873dc8bd",
+        "findingId": "f2ed3c3e-bf03-4fe3-9e25-e01f5a75abb7",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "b191c6ac-d9e1-4933-a3ef-0fe03be25eaf",
+        "findingId": "004e1746-4be2-48c4-8127-756dbbba9d9b",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "dc6381f5-ee73-483e-af22-ef4aa8dcbc37",
+        "findingId": "0b2cff64-4efb-408e-b0fc-ba8300b22cc3",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "932861e1-a643-40fa-97dc-14aca3785c84",
+        "findingId": "5f18f9dc-2d4a-4eac-9777-f885e2445dae",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "1c275bab-393d-4d52-94b7-75e9e0f165bc",
+        "findingId": "60da95b0-5de1-46a3-a369-93164b50e608",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "b8187360-7499-4a0e-a74d-8fff0492c72c",
+        "findingId": "28f0d51d-1cbd-4711-b5c7-6a569d46758c",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "fb19a472-508a-41be-b17c-d98039633641",
+        "findingId": "bd9cb75c-f8a6-4ec5-be9b-d9f700d5b80a",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "66de0201-2adc-4ebf-a044-4e262e009b9d",
+        "findingId": "73fd2555-bd02-4f79-a2c0-fdca0a96bb8f",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "b74e9db5-3179-431f-aba0-da025c66b171",
+        "findingId": "672ec662-a3ff-4bf3-9d57-d9698c471d64",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "be5f8584-0d25-4cde-965a-0bfc51b96edb",
+        "findingId": "a1c1062b-8eb1-4e3e-8c0f-d7cfa28ee46e",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "52e2e33b-0cea-47a7-8b04-cd85d3f0c02a",
+        "findingId": "0fa910eb-dc3e-453a-9e07-9712e19166d9",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "5c3ff745-d376-437a-b7f0-4007ea7a4890",
+        "findingId": "582f660a-50d6-4e25-8166-be412698e623",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "69db16c9-f2db-4c33-9b3c-149b8967062e",
+        "findingId": "082653ea-23d6-4234-b371-334830787800",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "e4d0a955-bb18-489e-b959-46ac9dca0e49",
+        "findingId": "d0bf3d76-debd-4c4c-92ee-13ede6a22e6b",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "9227556c-9796-4386-bf3c-f05956c781d9",
+        "findingId": "d6ee76e8-4825-4c7c-b1da-5b25220eb643",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "adc344e2-d9a5-403a-b30d-baa238957a7d",
+        "findingId": "8f32ae61-d8cb-4d31-9a19-fb74f7c31c3a",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "fa929af9-bf52-480c-8d83-06013ff099d8",
+        "findingId": "9ce78bd2-dbe6-4442-9579-535271f2af51",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "34ee2959-9257-49d5-ab31-62ef69579df7",
+        "findingId": "955d1bb9-a874-4277-847c-cee6f4c23ea0",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "3458b361-4622-4a6b-a3fd-125ce05271f6",
+        "findingId": "c01a5437-6b5d-4ecb-9633-493c5aaa4af6",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "584f86fb-df6c-4236-9277-24c2dd57e408",
+        "findingId": "95191a76-3ac8-49eb-bfcd-8818c7a1ee39",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "d3ca2c40-a1c8-4c7e-92e0-47a079e25529",
+        "findingId": "508ef754-5b1c-4c5b-9487-1c7588b9938b",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "92a184f3-10ea-49e7-ab3a-cb06fe175fb7",
+        "findingId": "57e8468a-9ccd-44f7-8e28-4d7acdb9c7a7",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "547ba104-1e18-4d22-9c58-eb33cdb04b2d",
+        "findingId": "257fe212-b288-4adc-b736-9aa13839acd4",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "377b0e87-e10a-436c-9825-8734cc2a3228",
+        "findingId": "e198f8a3-4b73-4bad-aa03-49b016e4b802",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "5468fde3-13a7-44d3-a0f9-6d003c6fd6aa",
+        "findingId": "7e9c2d1c-49c1-433e-952c-8b0d0218077b",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "67e2b3a2-3b6d-4aac-b0b8-c37527325128",
+        "findingId": "06ae2031-1809-450d-b433-d98d6e5a25dd",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "975c07fd-4e29-4e3f-8404-321bc816410b",
+        "findingId": "aa7866f4-2a3a-4c3b-b008-30ceb09b578f",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "2893e714-60e5-4c74-bc70-33428bfb8cfc",
+        "findingId": "079b780d-d330-4505-acfc-d06a19ec9cb5",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "c6bb098d-0c84-4ec6-955f-e879e922dbdd",
+        "findingId": "6605af27-37f6-4bac-b57d-91a33e5332f1",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "3e348414-c57e-4e84-b603-701e3a66b9d5",
+        "findingId": "2f5d5480-c035-46ac-8cf5-72220417dd3d",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "4919636f-a48e-4e71-aee3-006ca90061aa",
+        "findingId": "6c01cc42-76f2-449e-b4c5-a1647bbf7e45",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ece255e8-e1d7-4bbc-a405-a93f5b5f91bc",
+        "findingId": "6e291c0b-ae7a-4841-838f-3f56763206a5",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "8479c9a2-307f-4809-8adb-87e0e803b391",
+        "findingId": "1ca86322-3908-4082-82e6-57d3e857489c",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "5bd20772-1040-4ab1-8781-e3d763808798",
+        "findingId": "ce097881-05a0-43a7-8f23-ddcd75cdcb0f",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "abb72adc-ae72-4d09-b4a9-083d08420fbd",
+        "findingId": "a3d47116-8396-4313-bfe5-32744efd1c48",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "5f966afa-b84c-4e5e-bdd8-c049958760e3",
+        "findingId": "4a59174b-e25f-4f08-b9fe-d3fad254e224",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "a3615f27-c11f-4af8-8ea8-8ad9dda37f5c",
+        "findingId": "24768eb7-147b-4660-aced-92020e0b4f8f",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "4c365209-bb31-4b1b-b8db-369052089841",
+        "findingId": "b6bd54a2-4523-4da1-8934-c16fce5900fc",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "abb37337-d84a-4a08-8a32-9b324f622139",
+        "findingId": "38a1c83c-9698-4007-8111-b8db23344737",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "bfa3843d-b119-4989-bc1d-c2069b5f07c1",
+        "findingId": "6cb4fb83-938f-41c5-9ee8-3920f40afde0",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "d0de5b12-e797-470d-9bab-2c868ef52dd1",
+        "findingId": "df53e829-7d55-4ed9-9520-b0e28151d1a7",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "b8a4d113-fa91-46a4-8ca4-077efa4928ee",
+        "findingId": "57762f3c-999c-403e-8a37-37afe314c142",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "41290e2d-2670-4d80-bb55-66e48d13f8fa",
+        "findingId": "e9826494-43d9-4e2d-97d2-71781e873126",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "1c016fe0-0b5e-4fb5-a1e5-cdc254ac51b3",
+        "findingId": "93a7f5e8-bc29-410e-81ef-f8c5a3bc4281",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ff76da46-11c1-4eae-8a47-48b3c8779945",
+        "findingId": "d78e2a8d-5904-4df9-b155-a4443e2604d7",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "c27374cb-6d54-4787-8edd-6fd77a0a4306",
+        "findingId": "1340800f-a03b-49c9-9548-51ebb1baff8a",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "3ff81c30-7c59-4eda-ab51-1d43512a89db",
+        "findingId": "4cb8512d-be21-4047-9cd4-d944f1a8997a",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "1f4978fa-93e3-432b-bfaf-40b0b5295ae6",
+        "findingId": "985a48b9-7d20-4c17-9882-b27f081cbb64",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "f07df226-fbef-47c2-86d7-28e0d8aa8197",
+        "findingId": "9494e00e-5d56-4ac6-840e-b1e70c4dbab4",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "c0aded56-7483-4a54-926c-91e340583736",
+        "findingId": "d443cf8f-de6e-46be-b4bd-c09bbed97d8d",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "8074a825-510a-4d69-b051-4c655f32ad56",
+        "findingId": "a24c8d4e-3f7d-4dbf-aa21-68c12b98cec5",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "7c0aeb59-8dff-409f-b6dd-da2bc20a7b3b",
+        "findingId": "7abc591f-08c7-45ca-8fc1-372d1ddd89df",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "8e6f81ea-ae46-48ea-aa9a-eca41426ea3b",
+        "findingId": "54907f10-53aa-425c-966c-1068a8a5bcd5",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "a615c079-ec96-4b25-8998-bc13125ee258",
+        "findingId": "93e55c2e-5989-4ec7-9f32-c9f959144de1",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "19e8d879-f02e-460c-b47a-48730bf47ad6",
+        "findingId": "a1f388bc-2936-418a-b321-4c0de0106863",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "6d6d7f64-471b-41ec-a068-5a054bebde26",
+        "findingId": "54acff46-b586-4076-ab3b-cc89e2ee8a29",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "338b2184-fd81-4a14-a140-81420909b29e",
+        "findingId": "8f0f186a-e86f-4b34-8cf7-3214e2748058",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "d7cc5633-1cd6-441e-adbe-98f7952c5374",
+        "findingId": "da84504a-e7dc-464e-8098-1b167bed0f48",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "af228616-49f5-47b0-9ea5-95fedb7ec69e",
+        "findingId": "332057d4-e9ed-47f4-bcf5-9dfe6cdef84f",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "d8dba885-ad84-4ffd-b1b7-2a895d1b5b56",
+        "findingId": "cec83c5d-f281-4a1e-b28c-7ded273cc2f4",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "b6779b56-9cef-4813-9501-e9591aaafb2d",
+        "findingId": "173f850e-2b68-4068-8eb6-ec814e4aa83d",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "f980a481-1fe2-4645-a18b-828ff9008810",
+        "findingId": "6895ee5b-6904-42d7-aa32-c38c0c845a86",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "d45caa27-6448-4adc-ba3b-b30e2675b860",
+        "findingId": "239e489a-d549-48ba-8182-95452a85f350",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "9d8e71c1-b345-4228-b6a7-04b0d55f6005",
+        "findingId": "827e373f-0f0a-4513-ac42-544499d54b9a",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "6400a4d2-c450-4330-bcc8-f3a78305bfb7",
+        "findingId": "3f76634f-4b7f-41f5-84d9-2d581c80a8c6",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "8d1ac5c8-5933-41dc-aaa5-36f810ce3329",
+        "findingId": "734f0f10-d48d-4dba-b9dc-33b305ea3739",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "76e264b7-6000-4449-9b6d-8b740270ed65",
+        "findingId": "f0f66185-5645-4370-9c0b-1a8bc7da2e92",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "6885ebd2-d329-41d7-9d81-aa05e59805b2",
+        "findingId": "c71283db-3495-41f6-8e07-b0a483e64019",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ec3accde-fd6f-4256-b62f-a0529129669d",
+        "findingId": "37e345c7-e771-4b0a-a53f-fc9624ea8f2e",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "412749cb-a4bf-489f-a9b1-b5fc9b8e6c66",
+        "findingId": "7a8c7da5-9116-495d-8a69-590d7c2dc695",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "fab2335e-1639-4efe-a103-f3f846ba3be0",
+        "findingId": "f5f1b8a8-54c1-452d-8135-3ae13ad52e9f",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "0d6c877d-2e5b-4b34-be69-6723a2475c65",
+        "findingId": "aa07e62c-afbb-4664-9b77-309d0155df4b",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "615799cd-885c-414a-a0ad-efd9aead1a2c",
+        "findingId": "e18defe7-bc99-4db7-bd0f-1b9eaf0ae152",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "cb2442b3-e0a8-45c3-806d-25be791d1b63",
+        "findingId": "9234f177-5006-446d-a621-134bb3e595fe",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "40115a68-c23a-441f-8d12-67305e795bac",
+        "findingId": "75f69a60-7de0-4ffd-9d68-40e85cb85bbd",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "e13c8d82-7130-4625-a1e2-fc13b0400b1e",
+        "findingId": "4dd9ef2d-5e66-46e0-a004-cd852e48149c",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ad5bbcaf-1927-4ac5-bb62-41026f22f31b",
+        "findingId": "6d58a910-b8c7-457c-b73f-b0e7b2fce87e",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "606c04f4-fedb-42ad-9c0b-9c76584cc129",
+        "findingId": "344abbc1-7913-43eb-acee-e2a12a002f68",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "45cb704b-d07e-453c-9ff5-eace26ea38da",
+        "findingId": "532c071f-c91b-4694-9479-be55c650e944",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "c097e3ce-8307-4207-a001-0a461e758e55",
+        "findingId": "6933ee19-6945-4f68-8dfd-2796b028dbf3",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "5ba9148b-4d40-4f42-b57a-622d1f22925b",
+        "findingId": "e7007625-8cb0-4dd0-8bcf-fe14141eaa59",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ab8ce742-9c42-4bb8-bc4e-79ebebe1fe08",
+        "findingId": "633cfb3a-949d-497e-aec8-f34c5c87aaf0",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "b32fb1ff-ad88-4e72-aef2-236e4bf09411",
+        "findingId": "01485586-81b7-47b4-8bae-2b5c77839be3",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "efc86ebc-da72-4811-a506-0eec248b34c3",
+        "findingId": "a51c54a1-3ab8-4c03-b1d4-fdeb2172eb9d",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "b479fca8-aa45-4e4a-a2bf-8ab1e619cf5f",
+        "findingId": "8302e3cc-c981-4b13-a25b-c601aeaf760c",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "7edd4911-8f74-42a0-a933-87729602d59e",
+        "findingId": "67e84083-3103-4cb0-8dce-da8bad97d5d9",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ccdab783-f5c9-49db-af47-094a936b91cf",
+        "findingId": "d520ece7-f753-4e07-a6fb-b8bd9e413070",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "799cb2c0-c2c0-412c-b0c3-f3568cc9a888",
+        "findingId": "01f44fb0-e189-4712-88d0-3e3c3f58a7d4",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "6d891bf6-3985-4b33-8d45-dfb3c6704b81",
+        "findingId": "ac489a54-f8b7-417a-8507-e7026595aa40",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "2bef2912-6ba6-4c25-9cab-a60e3888ae48",
+        "findingId": "553235c2-6491-4ce3-9d24-501a4fefcf2a",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "10f2b481-45c1-4e9d-83d0-7666481cb5c4",
+        "findingId": "95ad883c-a598-48ec-bdc8-3393e2625e63",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "950d6722-3a61-473b-95fb-78c489b9dbc6",
+        "findingId": "346790f6-23f3-4ce4-9a76-a3d1d5913503",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "632c5678-6d91-48fd-b2e6-9d99b901bdf3",
+        "findingId": "6fbeaf79-0189-441d-80cb-765d6cfb245f",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "8e04897d-3980-4b22-8d79-8b9a5c8d2ee0",
+        "findingId": "491d23d0-bcd9-413c-a114-6bf20909bb87",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "e9f6cbeb-5d55-4a3a-89d2-c4dfaff068be",
+        "findingId": "caf817ac-005b-4721-beba-7faa36939ed5",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "a9b08c32-f0fd-4f62-b4ee-a23f780ea9ec",
+        "findingId": "779a219b-0c00-4fc9-9618-87368356c969",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "297b46a9-609a-4011-af61-b42c22a9abac",
+        "findingId": "a8da49a8-a38f-413a-b965-5249ce0e3668",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "1afcc284-aa27-4925-9936-4b9b9ec3b9b6",
+        "findingId": "847d460c-8c8f-4e64-b800-937221fb7c2b",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "90d04a78-72a9-492a-b77a-d16ed8401da4",
+        "findingId": "3c140b16-3058-4576-b79d-92f48d4a95f2",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "69b66e53-b47e-4da7-a167-b64d3470eaa9",
+        "findingId": "dc1deb91-2d85-4dda-88ec-15c8623a28e3",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "b7b30f1d-5210-4540-b2f8-04cd527f7572",
+        "findingId": "3d95c574-4ed9-4cb3-965e-5ec3f1af5fda",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ea1e98a7-5027-4c51-b08b-964a58012f93",
+        "findingId": "7bb3171c-6543-4bc2-940a-c12f5c9d3ebd",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "51358a15-e1de-46a2-89ac-5879f459b427",
+        "findingId": "ff659635-b2dd-4529-ac43-e0d59e1b4944",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "9dddb47d-3188-4b1f-86f3-51b3a2ca0c54",
+        "findingId": "7e1dda09-5ae5-4032-8636-7f8159c1c71f",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ed3ec80e-74dc-4ad5-927a-539f050b8d82",
+        "findingId": "ce8d283a-f5b8-4588-9ce8-c1fbfce7d31a",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "fe4c7b2e-3f70-461a-9bb5-214a94b723e8",
+        "findingId": "2cd45b45-f9f9-48c9-a1ee-7167041edbed",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "bb06150e-934e-4008-aa61-d5c91d3b0eb5",
+        "findingId": "8085bd56-84ea-44df-9a0b-6ed2211b477b",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "b3dba93b-0667-4459-aa34-a05bd003f6f1",
+        "findingId": "af120795-2953-4342-b52d-f542e70ee085",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "7808c26d-1634-4652-81e5-2a9c3806febf",
+        "findingId": "5374255b-cd63-4ce7-866f-e52d5f74c44a",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "e1df1939-bcc4-46db-abfa-e83543188d10",
+        "findingId": "0aec6a6a-08b5-4ce0-9af0-9a32df7900ab",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "577004d2-1945-4315-b32b-09ff11ff1146",
+        "findingId": "a7f97427-a53f-42fc-8c63-004e2a6e16af",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "3e8aee09-3203-4867-a292-ea29f7f9f097",
+        "findingId": "8084a3ef-c4ab-4dc3-a908-b1296f7d3b5e",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "6da50ce9-3c24-477d-8228-41f8b2b0d1d7",
+        "findingId": "ca12e742-87f8-4919-a106-01356865401a",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "b7223c41-d44e-4e88-8ac4-b83b78376511",
+        "findingId": "63b3a756-05a0-4db6-9457-c5597302f5f3",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "31a321fe-d791-4edc-b4c6-b7359fdacf99",
+        "findingId": "e474031a-8b84-468a-8513-b367d67582cd",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "242669eb-fee4-432a-993a-179bc1b28da2",
+        "findingId": "9f1eb4e8-f316-4d05-8120-314f8704fa11",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "286202e0-4e7e-46fc-b615-697f7de2550d",
+        "findingId": "b7b2a5c7-fc5f-45a4-a08e-a339177bd3ae",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "fa072b83-c2d6-45d9-b6ae-04bd4c91f2fb",
+        "findingId": "7c3b24c7-459c-4042-9b9a-2b9cc9e9ccd2",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "788ab875-730d-41f5-b852-5b50891dad38",
+        "findingId": "ae4362f3-e166-4307-bf0b-d015ee867783",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "164bda76-8ad1-423d-ab32-f69210562afe",
+        "findingId": "b184f53b-3e29-4522-b237-0482ad436cdf",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "0fdbff10-8c8a-4a3c-a959-652fa5bc2075",
+        "findingId": "4b874324-4649-467f-bec4-707e6c8d4d4d",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "65f42bd6-b91c-4784-94e1-15aac393d4a4",
+        "findingId": "acbc2528-0c87-4a6f-8178-eb015d087a69",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "37059b8f-3a4a-479a-bf89-1f66c6986893",
+        "findingId": "72feb2eb-0d23-42a4-8b8e-22691231d2aa",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "159e53a5-70e0-4e59-8434-f5d433352ae6",
+        "findingId": "dc73e309-f1b8-4c6d-a7e2-88b37c6f7cee",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "9f5b2a0f-83f8-4c64-aaae-225732e80bd5",
+        "findingId": "878599fe-8ed3-4dfb-8052-4a400025f0bc",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "95a8ed4a-54b8-4d58-b2f5-edd965ee50d1",
+        "findingId": "c0911f54-9fa6-4881-a354-439a326737cf",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "f5feb89e-1d8b-48d6-9c1e-3cd381a547d2",
+        "findingId": "708d1e02-1663-40f0-b958-9e940bf6dbc2",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "02e63b85-2673-4105-9aef-96c8d430f090",
+        "findingId": "0f152853-d1da-410b-a5a0-2011d25b6836",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "3fedb89d-d05e-439f-990f-5cb0613ab2da",
+        "findingId": "77ece9c0-d3ce-4917-84a0-4527c70119e2",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "7c18799d-ecc0-4ee6-a308-86936cfae310",
+        "findingId": "4aa70604-4807-4587-893d-517e6e91773b",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "cf6f74d9-4763-491b-aae5-c7602972c078",
+        "findingId": "4bb1182e-577e-4171-a060-9370eca0c360",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "d11e472a-489d-47cd-9b83-7db48b03ed46",
+        "findingId": "9d958f69-bca2-4afc-ab07-fafd8ad1d46b",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "becd1d4e-1902-4c76-aa51-4eb7fd113a36",
+        "findingId": "0869cf55-4d3e-42e5-9200-b2a0af334b89",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "67c87bb8-b883-45e5-981c-4c41957223a8",
+        "findingId": "c2ee6042-b36e-407b-aa15-20d2bd01524f",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "1ae333eb-0c7e-46b6-af3f-6d53bfdbc843",
+        "findingId": "0b54c435-be43-45eb-9f82-513a91ed33cf",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "641b22e6-68de-4af7-bf1e-3909ebfe4907",
+        "findingId": "81f81186-2353-4eac-b51c-84b58ddba41b",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ce85b18c-6418-4a12-bf42-3aeacb5ae929",
+        "findingId": "80423469-d9c7-4e37-aecd-cd13de703d7b",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "99728837-9c7d-4d90-a46a-b2439e969bd7",
+        "findingId": "aff2a75d-acec-429d-b672-9b7cbddbf889",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ee23e1c4-e767-4998-b2c1-c3cc6761b4ad",
+        "findingId": "dae23df8-d55e-4730-8721-7c17b651df22",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "8aa04286-1ab8-40e6-8532-65576a8da3e9",
+        "findingId": "0c6d5b7f-ddfa-4708-b234-8c9e31d8a3a2",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "4b1273d2-9839-45f9-ad1f-c157117cc717",
+        "findingId": "1686a814-ab26-4870-a8ec-bb4d29ecc5dd",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "68803f23-218f-4929-b7d9-e5bbd646f99b",
+        "findingId": "cadfa208-b65b-40b0-a7af-12aebc41d1cb",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "4aadea17-137e-42b1-b23a-54c41412c0b3",
+        "findingId": "9162ceef-051e-447d-b678-19f76c9c8cfa",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "37cafcb6-6c91-45bf-9e5e-f4c42b76233f",
+        "findingId": "bd42aae0-60cd-4910-bddf-569652630b49",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "605d6271-502c-437c-978e-69099d5707c3",
+        "findingId": "126e9463-1c67-4d9f-95ec-8dd4617bdb8b",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "8422e806-79c6-448e-ba13-d8ab0f0faa89",
+        "findingId": "1465ee4a-0c10-454b-8328-fa6f91144bb9",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "f971624c-606d-46b4-8637-f4a6f25a3592",
+        "findingId": "85c3e4f3-2ac7-41e3-a116-ea854d7c7cfa",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "4d5b5f07-0e04-48d6-936e-f620b6dc35fd",
+        "findingId": "70610103-c1c4-403c-8160-308a72703fe9",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "b0d0b23f-f5eb-4ec5-851a-438a59d1ee6d",
+        "findingId": "ace97449-121d-49f4-b9cb-b7a71687dfca",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "2a9ba907-6056-428f-9fdd-ecd420c33e8f",
+        "findingId": "f7b1ea41-000a-4c8f-82e5-35a78a8d4cbb",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "d9224f2b-b536-4b4d-ac3b-1cefc5f20058",
+        "findingId": "948d8cf0-36e2-461a-8869-73793e1fdd94",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "26e67030-2e0e-4c90-acfd-2ecf6ff5b00f",
+        "findingId": "1154b54b-7ad6-4828-9ddb-8d8fdfe4ddc5",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "daf8c715-c674-496e-ac9d-3b2947250214",
+        "findingId": "303b3df6-bde3-4512-bfd2-dfd8764f4668",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "57f8a1e1-ab8a-4bb2-8051-05ca3fcd3585",
+        "findingId": "d918b60b-3c86-4dbc-89c3-e1afa19a9019",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "6f69822d-aad4-4211-8273-3ee8240cd94d",
+        "findingId": "f5433a0d-f61f-49e8-8a68-b2723f7157af",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "8aeb8919-da45-45ab-a7ba-3eed6c4e0c00",
+        "findingId": "fbd38d38-2a25-4203-a1e6-2043aa5c2cfe",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "a98aba09-8ead-4ef4-b4f2-0d788074e9c6",
+        "findingId": "cf90d951-6e43-44cc-a829-f48e0b4c2296",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "a7f0aa93-a621-4d9a-ae82-0313b57f9db4",
+        "findingId": "41d6a028-0d54-4836-9e27-3a58f3732aba",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "38d0c896-387d-4197-89d0-7ebc921a6f04",
+        "findingId": "b589ea2e-612f-4ef2-98b4-d92b29a629a2",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "9eb9bef2-eb6a-416c-a7ec-525bc37378d8",
+        "findingId": "10949014-7c0e-4c14-b657-3599895155bb",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "9ac582ad-301c-47be-a772-320a416efc79",
+        "findingId": "1098f199-112a-474f-afff-d92694cd310b",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ef2e9a01-4ce4-41aa-b210-7312a8f4d8c4",
+        "findingId": "bdc82e64-b49d-4273-9338-33fcf3d722e4",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "1a8e9d92-05e8-4c08-bec4-4b5bf604e394",
+        "findingId": "a8c75b54-050a-44ad-8659-ce8a96381b22",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "1f857023-49fe-4e49-af8c-6fccdf81db66",
+        "findingId": "8fd64d5c-3c42-486f-8de2-2bfa87a21153",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "286eff09-5627-4089-9478-33924a8fb4d7",
+        "findingId": "8577c656-422f-4e0d-9a9b-8f7585d6b177",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "321cd959-953d-4df4-9006-c4cdd6d40a81",
+        "findingId": "fa6b6f01-eed6-41ad-a118-27b3ecd8efbc",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "61ff2eec-21c1-43cb-a40c-11dde4eeeef8",
+        "findingId": "1eb083ba-8efc-4748-9d14-1ddbbf0e5942",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "0a14ee3e-7399-4594-aaf1-8c529df9a3e0",
+        "findingId": "49488bc3-1257-4f3d-b7f2-711e98c796d6",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "79d6f1e9-6bfc-4171-bbff-1e50c5fac1c5",
+        "findingId": "503d852f-1b48-42e0-824e-b7af21d7d201",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "3ba14d17-5c0f-4b7d-b0dd-deeaed9dbcc5",
+        "findingId": "bdde77a0-2a6f-4dc9-9a9a-8b763d29ac27",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "a62a16e9-3e0a-4655-9c4b-bf1f5aacaf67",
+        "findingId": "94386b63-d504-4a7c-874c-ff7e6e85861e",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "c2cbced1-5b15-4cd7-9b68-dbdce8e02a84",
+        "findingId": "da48c6be-2c79-4c27-84e5-f194967fc445",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "33f782a5-13bc-44ac-8dd9-83b9969053fd",
+        "findingId": "fa897b7a-7ab3-42e8-9f1a-c12102ccc1ad",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "3393462a-a10f-4414-b3a4-3f75714279e3",
+        "findingId": "fffac6ea-b8fe-409e-9c3b-fa4f0396a075",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "44e13295-5c75-4af0-9719-067f7b92bdd2",
+        "findingId": "4cdc9f6a-d7d0-4be0-b647-fb6c6bf83784",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "4a9190b8-2e72-4e26-8461-7d5fac937a01",
+        "findingId": "c723e808-4bc0-40ee-94d0-a2b11509d387",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ce05750f-6113-48e6-84ef-29edbd2762ad",
+        "findingId": "1d7a52b6-a1f4-4cc1-8fbe-ba0ac97a8faf",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "2506f34e-4869-438e-9328-851320e38078",
+        "findingId": "e6020a2b-2c09-477d-8cbd-fb24ac184d1e",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "03a9b2bb-dc5f-4fdb-acb3-285189abd607",
+        "findingId": "8f80445f-61cb-47fe-9fcd-f6a9de8e7d42",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "de21906e-5cf5-481e-859f-0a20e0b13ae3",
+        "findingId": "4f3207f0-1146-4498-b936-7e1db5ecda72",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "deed1e92-af44-4812-b991-c50f1e20dd9b",
+        "findingId": "97e1b76b-b1af-4c41-b10d-9ece7157f2cb",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "e1f0a83b-6679-4c38-9153-ca1b5db085a3",
+        "findingId": "097bec44-6ec6-4efb-bb3f-09e9f4e32660",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "68117910-8e02-4ca9-a0d5-43f4c1064b06",
+        "findingId": "321086c5-9beb-44b6-a8b5-2c958c619a1c",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "2da8741f-26e5-4107-bec1-ff52189ad540",
+        "findingId": "ca762eb6-03cb-4f07-9774-c8e9aca1967c",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "89269432-c8b6-4f38-8561-32068cf159e5",
+        "findingId": "c4d53acf-3f63-49ad-8e59-8e65a169a739",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "26b61182-c078-41de-a6b5-5b1f612cc722",
+        "findingId": "e36d9aca-2e87-4a66-9078-df16b3fbe8e4",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "0865424c-db25-40a1-a47f-fcf6424d7c19",
+        "findingId": "a7221444-b99e-4ceb-8f31-bfbec32a4fb8",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "6d208fa2-7c24-474c-9b36-cfff0fc16fcc",
+        "findingId": "06fddf52-4b30-421f-92f4-8bee5724d59a",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "3a6aa5f8-3286-441f-ac8f-f3b39560b0e9",
+        "findingId": "a366283d-a763-48bd-a17f-940ce722b1d1",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "650756d0-61ab-4002-bc4e-3c600500873e",
+        "findingId": "d4e15d7c-4e88-460c-b19f-b9768945e337",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "0404e6a1-ca73-4470-b87c-5f8f96935642",
+        "findingId": "fb00d606-6bf4-4818-b1a5-e9d401c441bd",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "096bd766-f196-4b38-93f6-0d299695b02a",
+        "findingId": "4ec8c9b6-8e55-4008-8a4c-9f6d8fa740c0",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "f69deb27-b030-4aed-8a38-ecc57329c8bb",
+        "findingId": "51a7920c-8f76-4af6-8744-57c941ddf75e",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "12ac5715-ae20-4a41-b4ef-81f87ef787ae",
+        "findingId": "646fe2bd-3648-4aa6-a23d-89a794e3aea5",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "2bec97fb-eb65-4349-a3d4-f36ab6c0ae0f",
+        "findingId": "55222af1-52fc-485e-9fb0-88b3e044169a",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "4a06fa3d-9ff9-4d4a-adfa-288e010f9476",
+        "findingId": "6022b7cc-ff4d-48b6-a37b-678f3519f255",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "132d6815-c994-4644-94e8-424ebb7bbc97",
+        "findingId": "e3412acc-04fb-43ee-a6a0-430303fa9d5a",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "7be3f0c0-c604-487e-b9e5-41084890ab46",
+        "findingId": "ba67ebc6-1d37-486f-b6af-7b2341c8a8dd",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "92fbb51c-fc2d-4cea-a92c-9a810a128337",
+        "findingId": "f67d83f9-696d-4662-a660-4f99a20be960",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "29612245-1a65-4304-99a4-978d7c580802",
+        "findingId": "5003b1cc-3daa-4880-891d-8c70599c7936",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "cbf045db-b291-4e53-94eb-c34816788aaa",
+        "findingId": "6b0a1f43-1049-432a-8543-0613547ef9d9",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "9c1dfcdc-718b-438c-9dda-4ff9819fce59",
+        "findingId": "5b2f0390-113d-4de1-b749-9ef7f1b49d93",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ddb4e77a-9e91-44a2-8951-1622b2a80033",
+        "findingId": "f5c25ce7-26ce-4f5f-ad75-99ae745985ce",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "4a67e5b2-e5de-4568-bfe2-0f8bda5c3d02",
+        "findingId": "c774e36a-7332-4b26-b0c2-1d8c1ad30dfd",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "d66fb398-fa71-42f4-9bea-562707d50b68",
+        "findingId": "14a99185-7609-4d64-9106-dbbc439d7bc5",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "d5980b6c-3835-45b2-8137-77dd07b9b944",
+        "findingId": "e4ca6123-51da-45c7-94e6-53258ea440d9",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "f49f98cb-3da2-4884-84ac-5eeeddf9b0d5",
+        "findingId": "c6c05820-48a5-4348-9ffc-7bf6df16df5d",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "5a3500e1-a100-4883-ae7e-34fb4ffbd5cb",
+        "findingId": "3e9463f5-f874-4561-8e99-4735264c3d27",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "c7506199-4e19-4299-8fb9-f495818e82e5",
+        "findingId": "6044f7fd-3de7-49ce-be6b-ab745a7cd924",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "40134419-a7c0-4f88-87ff-c31246c26cf9",
+        "findingId": "ca5e572e-af56-4819-a876-2a46d530f938",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "6e3a8873-c4cd-408d-8eae-2987bcb4b28a",
+        "findingId": "1875075f-4190-4919-be8b-c01f90cf063c",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "f00240db-8170-447f-a2a1-4a4873eaba06",
+        "findingId": "ce44578e-2796-4eda-b145-952f4157d9b8",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "4e7aea83-8969-4168-8572-8ab6988db175",
+        "findingId": "0e6309d1-13f9-40a3-8741-15797123947e",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "cef4765c-2939-47f0-97f1-0f5ea16f9435",
+        "findingId": "5666347a-03a2-49cb-8125-28174e6dbf74",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "061b6b12-2ebb-490e-9c5e-f2d99a4b310b",
+        "findingId": "63cf3314-41c7-4af1-b673-baaea8ba8815",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "dd8abfaa-511f-47a0-b59f-b1b7a4e33586",
+        "findingId": "ae4c45a7-dbe6-497a-b37f-4e3c214c52e2",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "a5fdbd50-2fcf-401a-a991-f8de2d3e352c",
+        "findingId": "a4ade34f-13f8-478f-9448-2cd2a244a4e8",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "fba7ff84-8dd4-432b-b026-4071403d4842",
+        "findingId": "ad061004-4ac5-49be-bfac-c8dd9c2186d7",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "9d756702-81f8-4f78-9bbe-0fa3bdc02853",
+        "findingId": "e56975a7-db5e-4055-868c-3d0403c0683f",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "0ba3983e-445d-448a-b35e-217b3f577722",
+        "findingId": "36c20317-8a62-458b-be3a-27ac51155a11",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "af794246-f344-4d83-ae60-131d6ea8389c",
+        "findingId": "5a148c70-8876-4073-a822-c53bdef386a6",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "9602e639-14d0-4698-b9a9-0f32bfd8bac9",
+        "findingId": "94fce2e6-0bfc-49e3-92c1-3cd476ded3ed",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "a5e61a46-3899-4e40-8f09-23953bd23af2",
+        "findingId": "3d59eb14-23d2-4305-9358-deda00b2bfb3",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "5d8947a2-f237-4599-9488-1b71215658ef",
+        "findingId": "630d2243-b6ba-4384-9215-2ae6f06a8128",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "1ea35018-63d0-4849-93a8-f8a6fa32ef02",
+        "findingId": "3869813f-97a9-4e16-aef7-3a0d4699b186",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "d00a5baa-c892-44ba-8b29-fa192efd7da7",
+        "findingId": "d194971d-5840-4233-894a-ac01a22aca52",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "888bebb9-2d26-41aa-8680-40214c8e447b",
+        "findingId": "54171694-d8c1-4c45-8bf1-8226582e722d",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ce04a64c-ec8b-4198-9c40-ec5e5a42f112",
+        "findingId": "ee4cb15d-4770-4d3d-96da-798c9ffc7728",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "6785b762-681f-48ed-8ec1-74557087c880",
+        "findingId": "e04b3e00-9f4a-410b-9925-bb654254102b",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "a7b95ad7-89d2-460b-bcd3-4d2cfa97d886",
+        "findingId": "a6df7730-23cf-44eb-bd25-6656d01f4c89",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "2d6146d0-6ac3-47b2-99ae-f18d311a29ab",
+        "findingId": "06209835-b365-4e2b-afed-69572a80a64c",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "51346dfe-35f0-4cb6-8246-8b6d184fc88c",
+        "findingId": "d8ece6fb-fe17-4da9-8559-dc45775a1fed",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "088ac52b-1c1f-4d8b-9009-b9230e3c13b7",
+        "findingId": "0b2a9728-f248-4343-9890-024ba415ad5a",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "487c743a-a200-4aa4-b1e8-11b5b89179aa",
+        "findingId": "bd3efd4a-1d82-46c4-9782-86f1968b8c19",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "59f9c899-9256-43e6-acb0-fe6753540aab",
+        "findingId": "89d1ec3f-a00c-48c1-88f0-e4361d5e8e16",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "a00695b4-2f89-419b-ad86-aa397781c044",
+        "findingId": "be26b3cd-9a7f-44e3-b79c-7be7cdccea9a",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ae258729-81f4-4365-b342-1ea171053c24",
+        "findingId": "48a627fb-30ed-491e-a948-30afaa1dd1a1",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "fcc8a226-c099-4390-96f2-72e3ca3b508d",
+        "findingId": "051bee0d-e431-419e-b9b4-8039c0de115f",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "af355969-41d7-419c-82bb-daad68149296",
+        "findingId": "038e57a0-0f65-4f22-95b0-357002483d61",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "aaa1c16e-02b6-49e9-840d-c5c510a56546",
+        "findingId": "4d8814f3-cb60-4f78-ac45-fcca95b9206e",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "b1ba4c19-a411-4222-9bbb-c7733e683387",
+        "findingId": "ecc175ca-a49e-4cc7-85b5-66642920fb53",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "7ba3ddbf-2411-4a1d-ac13-e04dc1b95851",
+        "findingId": "c9d2f250-24d7-4f40-ad73-895ace09b483",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "bbea4fcc-f50a-4726-ae14-0b664346725a",
+        "findingId": "57b4a46e-cf3b-49db-80b5-73fc4d057e77",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "458b32d8-f3f3-4698-a44d-4c9e6a3b5164",
+        "findingId": "aee6f1ef-4308-4a5a-a410-d6fbb9edae96",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "b2fef495-fc33-49e9-9dee-465af5c2f7ac",
+        "findingId": "bcada8e8-bc65-42c8-a076-85a26d5e51d2",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ec770273-c153-4d3a-a873-f0f4ec2ae1d5",
+        "findingId": "026d0b3e-0c6d-487f-9eae-03cd389f3268",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "b57e3ff5-074d-4678-9cb8-501a471f880a",
+        "findingId": "1a9f3d65-198a-416e-ad00-c7e759e545bd",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ad08a1a2-ff87-4d44-add1-adca4132f283",
+        "findingId": "13124713-d9c0-4fde-a7a9-d9582e743992",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "5c78f70f-2594-4ba2-ba77-8370decd3f4c",
+        "findingId": "2a2f2502-6b1a-4a2b-ad36-224139f6b975",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "12002704-eabc-4722-ac35-f3983d014daa",
+        "findingId": "b8d3a925-900a-4171-85eb-dbc55ca182be",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "33ac64fa-f597-4dec-a1c2-db0f8a8c2542",
+        "findingId": "ffbc708b-f533-4a0f-b3a5-d656053e25bb",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "1f1d4c71-6e8b-4edd-b4bb-565d5996ce09",
+        "findingId": "892ea073-768e-4609-a98f-23e9927053d5",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "7d684572-8a98-44e8-ad36-ee4aa8a1aa14",
+        "findingId": "5c5e96f6-ded1-49b7-893d-0b9433acf501",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "e9e2413a-79bf-4f45-a59d-9a8854c7f100",
+        "findingId": "31d75126-4494-4ee6-a45d-31cda96d30fa",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "bdc2166b-05ea-4f91-8041-e865cedf27de",
+        "findingId": "81fa2194-9588-4286-95f6-b45591adf5d5",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "d2a57963-f83b-4264-9205-4f234456bb3b",
+        "findingId": "0171b6ef-5a69-4c4c-be05-1947d38b9fe7",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "d2cebaba-3eb1-4809-83b3-f2073eac1b1e",
+        "findingId": "e735923b-e2c8-404f-8b41-efaf493cd3f5",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "dbea1420-4fad-468f-be50-1dbb5d833717",
+        "findingId": "f9e59560-32e8-4cd3-8708-74ecbc0142f8",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "4cab3424-a381-4ff7-a858-14ab6cce122c",
+        "findingId": "5b1eea8a-3548-4f2c-8ec1-872803ba146d",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "f5c30d94-b3b5-4eac-83e4-bfe232da5fc7",
+        "findingId": "04ea8a5f-66dd-469b-9d2f-0c47c306a8fd",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "af4c0b0d-0b00-4794-97a8-66b94cfb7f77",
+        "findingId": "13ee008a-0502-4e68-b0e1-956a8a72aeb9",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "a5b64490-45fa-4abb-b986-8be489b0f1d4",
+        "findingId": "66cc854c-a128-4dbf-b98c-17b45811b800",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "7d0d81e8-8c91-48c6-8809-f99aca7f1644",
+        "findingId": "608b9a40-da26-46e6-b752-921309013881",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "1828ffaa-7cb5-4d78-a9ce-8c11d6c6abab",
+        "findingId": "c8de2f4c-2495-445e-9d1c-62fa74d5fd8f",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "fab7b5fe-8ad2-46a0-bce8-f5d583a0dbea",
+        "findingId": "6ddfa6e5-2651-44ff-9ab1-28d78f2c213c",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "83b21ac8-ce50-4521-87fd-702f46cc4847",
+        "findingId": "f2bca0ba-23d9-414d-a605-79f666f46cd9",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "2596b579-12f3-442e-bf22-e79df9195cee",
+        "findingId": "59282580-6652-4acb-a524-3a9cff8c4e10",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ad814041-e486-4c4b-9361-91e90b51bbf2",
+        "findingId": "4c1010e2-33a9-44d9-8579-647ba17affd5",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "b78548f0-2f89-4eb5-bc9d-d225a4382ed1",
+        "findingId": "b82cfb13-10cc-4c55-b0c1-f204a7fa0362",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "310eb474-3058-4674-b605-482541b12f76",
+        "findingId": "6ab2e7ed-82c4-4268-88e1-92a858afed56",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "af7b3eeb-3080-489c-92a5-da0dbd4ead7d",
+        "findingId": "4c2f0351-4a75-445d-a6fe-ece823c9c614",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "da5df977-aa7f-4b52-887e-049d065dd04e",
+        "findingId": "a4720728-9830-4697-9db7-1495ff108498",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "dd1f1faf-5556-48d3-be08-7c2e90c56a1c",
+        "findingId": "99b06b0e-0e35-402b-8fda-fa64a4747364",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "7233ab07-2417-4e34-96c8-d20fca9c187e",
+        "findingId": "b19a9a5f-bfa4-425e-896b-43c1ee4ab8ec",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "54438c20-2a87-4aef-93c0-bfcc94b4fd35",
+        "findingId": "edbce2e6-0741-4709-9d1b-ab5a39febc33",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "bccebf10-47ee-4139-9d47-bd9f69df960b",
+        "findingId": "9ca39f4d-1614-4580-9e04-d668d174d2da",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "dbdb6e12-63c9-4a58-83e4-228db8fd288a",
+        "findingId": "6491b46e-e066-49da-ac99-7cf127ab9334",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "659e0d28-a0cb-409e-a9e2-beb965c79368",
+        "findingId": "085921a7-f31e-457e-8773-212ef895fb5c",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "a356082c-80a7-47e1-b25b-44a489dfdb1d",
+        "findingId": "8f974eea-92c6-4e3e-92c7-a4d272d10670",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "9514fb6d-74ec-4786-b845-c67667b34335",
+        "findingId": "d2443d73-7e0e-499e-830a-3b5643188553",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "177fe9ce-812e-4509-b05c-f6ac0d4f4c0e",
+        "findingId": "8accdad6-ed03-4f42-8e21-9463d0b6d4bf",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "a94d606c-2304-476d-9ac5-751834f5c86f",
+        "findingId": "13b8c51b-1d37-4b3d-a850-12573bdb43b7",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "f3a247c7-201e-454c-8edd-33e648012ba6",
+        "findingId": "ff3a7e8a-bd75-44ee-8ae6-395e1b4de0bb",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "86f8ae1b-52d3-47b6-8a52-ec9e154aabe8",
+        "findingId": "4f1bfbed-fe4c-4c38-a1d5-e01fdfee47fb",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "46bee20f-97b0-4bf8-9b2f-703a2bfed382",
+        "findingId": "1cee29ee-f5d3-40c8-bffe-950ad37bd200",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "607b440f-bd80-459f-8573-ecb89e3f2dc5",
+        "findingId": "3d6a6bfd-1488-466b-b411-0d505fdc93c5",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "92bdcbe2-77b4-4763-b7a0-63c72758d7ea",
+        "findingId": "d9bb6a60-b73c-4cc0-a4c4-11357b1892c7",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "0812fcd7-d3e2-47dc-8a10-044edf27b26b",
+        "findingId": "6a70dadd-e865-4758-ac10-38f878316823",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "d4bba58f-809d-4a5d-b33b-bf517e9bfba2",
+        "findingId": "21a0b6c6-112a-41e3-92f6-a8519344219d",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "9332ed60-11b6-46bf-806f-d0cb014fe301",
+        "findingId": "7d942b2d-5922-4239-9628-a1a46d60db1e",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "99cdeee9-ec35-4dc0-a25a-f2368f998e8c",
+        "findingId": "b1eff054-e7ab-4d4e-b257-f9cc506f9963",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "38084f0f-44a2-4405-949f-3bf40ca31f1f",
+        "findingId": "d33a26f4-9235-4859-8d80-a2b1d70fc5bb",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "cd2ab12a-0300-4fab-919c-b5198505706a",
+        "findingId": "acf17267-232a-402c-969c-ce00dbf6fdd7",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "fa805d42-fcef-4e70-8ab1-c6c68ffe183d",
+        "findingId": "c6e2c4f4-bd63-4c41-8358-d06cda167dfe",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "6859f349-3bac-47b2-afe7-d634f9594d5b",
+        "findingId": "3c7b3228-134b-4195-b6b2-c05db42db68a",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "bb16cc56-6b42-4609-9b12-c692d385cc89",
+        "findingId": "c686ef8b-b887-4cdb-9c11-f217c6a43772",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "4c1eef4d-de8f-4b15-907f-50ced4345628",
+        "findingId": "c6f6e9c3-396f-4a93-9871-32c1a774afcd",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "00645108-4802-484b-a555-2fface5e318d",
+        "findingId": "07379033-eb76-4b61-8b3a-7304fa444d70",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "128c32fb-95ad-438c-8e7c-e7826fa2d5d6",
+        "findingId": "ec6b4aa9-1f01-4819-9dd2-691afb6af6e2",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "17bad3dd-9d3a-4e39-9ae5-7a6216b52359",
+        "findingId": "5381a32b-12d1-4299-ba93-4cc1a74efe83",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "29b076a8-9990-43b2-99aa-658fc109c38e",
+        "findingId": "21c50dc1-dc42-4270-89c3-a4014fc62e49",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "84f310a7-e2a5-4706-a43c-bb2d2ab6a458",
+        "findingId": "5c58c502-d8b9-4038-b56a-a5ed6a1f60bc",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "4e73ecc2-f94f-493d-b27b-5c99d78ee4d6",
+        "findingId": "de9a816e-53bc-48ab-aab9-c99ddba73a3d",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "c05c2312-7266-4a74-853f-14c2af287491",
+        "findingId": "fbbc2b26-443c-4674-aec8-f0aedf63b25d",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "d59b2eef-85aa-4e3c-8435-a2c2cc6b778b",
+        "findingId": "3cff0e93-cc1c-4299-9be0-679ef685bdd9",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "dd09399e-20f0-41d5-a876-8a4af4a89317",
+        "findingId": "25118abb-ec16-4cab-a8c8-ae01f702b0db",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "29ed8610-fe35-497c-8829-781b859b90d6",
+        "findingId": "4fa857d7-356b-468a-866e-3e7fa1e2764d",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "b222f841-4639-4982-9d02-b1c6042b91ec",
+        "findingId": "75550067-a81d-475f-97f6-1c2a3a655f4f",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "4d722a96-33cf-497b-bee2-648377718d53",
+        "findingId": "462f1c39-eafb-49c9-9ae5-2d9023980731",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "0f1b0574-895a-4b78-bfa5-44d531a35ea8",
+        "findingId": "af78dbbf-3496-4b76-a1cf-ea8b17c38e38",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "567cf410-2c30-41df-a199-7b3a4b4f01f9",
+        "findingId": "e76ec91b-777d-4164-998d-b02d919ad2fc",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "fcb366ae-1be3-4765-ba80-c2efba9fce96",
+        "findingId": "b4773304-4411-4bbf-8c27-7cc340b181c9",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ffe871fc-9ca6-4e86-b2e6-3644e6c4edac",
+        "findingId": "3a0f97d7-b771-4c9b-901d-1cbb8db0b2d4",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "1aa5f47f-fc97-4710-bdae-347fa77251cf",
+        "findingId": "bf4a402c-f3d7-4d25-9bd7-a3837b5a3506",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "43e85a41-0673-4f57-80bc-2f60ed55171c",
+        "findingId": "19561eb0-a0cc-4df3-a03d-dc254619834b",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "8ccf5bdc-4829-4614-af1e-41df9381f1c6",
+        "findingId": "6456e40f-3046-437b-99d8-5c9bbd4c124f",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "9d943ea4-27d4-4aa6-ba72-769a7f8aba3a",
+        "findingId": "0d14c5af-8bc3-40c8-b704-7636d575acd0",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "10831cc5-b2f5-4fd0-9059-12a027d80d96",
+        "findingId": "05336b3a-9bed-4d3d-91af-f9721d567d84",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "5a73731e-2149-44b4-ae6e-a721ffec0996",
+        "findingId": "2edaeb46-b775-47d8-b893-10b8a789e363",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "7c3f0f8a-467f-4d65-8680-41cb9b04754c",
+        "findingId": "cb4656d4-1ae3-4f0b-b8cc-ef3b8cb44459",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "7039471c-539e-43fd-9990-6f9bf9e6e491",
+        "findingId": "2e68760c-d775-42f4-b36f-0e0718b7fa64",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "2a9817e6-e8ce-4966-99cf-50341b7c87d5",
+        "findingId": "84b942fa-9422-49df-8ce5-3e2c3ba0c529",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "5befa100-3db4-4d4a-8156-6514c8016b3d",
+        "findingId": "112b6a30-6072-4b8a-a21d-226cc1cd63da",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "8b829ac8-899d-4e87-a48a-6c9f6ceb369e",
+        "findingId": "c44af8c2-b3bd-47ff-add0-a79cbbe8f677",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "2f99e830-0e2e-439e-b196-606082e035be",
+        "findingId": "8baddc2e-dc3f-4e17-a129-5581c0bf4f48",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "45f0c597-f141-411c-b6b1-f2b0cf5f8649",
+        "findingId": "2b0578b1-3053-4896-8c20-b3995ac975af",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "cc902bc3-5d95-4771-baf7-3fc8f09c71ad",
+        "findingId": "b4027ee1-6d25-4a6b-af34-fae3ef2d2e6a",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "64ad9e3f-fb9e-444f-8886-03167651f109",
+        "findingId": "01ea43c0-d984-44d8-8f3b-1fcb4047bed8",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "952f9642-06e1-4d99-aefa-4b66476df7f0",
+        "findingId": "9d9bd313-7fc2-4e92-bcac-0ef4845d8c85",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "b041c728-4b43-4c33-8ed6-a89987b4c199",
+        "findingId": "936ea836-fd7d-401e-a611-8861fd567601",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "0b364d3d-da4c-444d-94a8-619610b6d85a",
+        "findingId": "33ee6aad-3bab-44a6-9303-b63ae24481d1",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "2cf2f621-e965-413f-903d-02493eb32f95",
+        "findingId": "12aed39a-e927-4ae0-828c-de11d40f55f9",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "1ed43fad-5ce0-418f-a14d-a29079dba167",
+        "findingId": "6dfe5f04-f221-4030-86e2-0d4547d5458a",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "0c9d9b20-9c7f-4d6b-b7dc-f5afa077b193",
+        "findingId": "18faf3ba-22ed-49e5-9f44-7e587909c412",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "a3e7aa83-38f2-4a5a-b523-0f43849295a0",
+        "findingId": "b52e750f-27ac-44c6-b7ed-e3e770578983",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ca0b05d4-d16a-413d-bac4-53717ad58621",
+        "findingId": "cebd1ab8-de03-4053-90a4-931c87603828",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "91f40ec5-e5fe-42ad-b690-e8f4620fcfc6",
+        "findingId": "7cd590a6-870b-44a5-b0cc-d15bc0c83745",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "3f50f285-39f6-43b0-a24b-ac6a343c17c6",
+        "findingId": "742fb999-d684-4d99-82c0-0a3f3a173fbe",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "bf617641-ca85-4fbb-8bdf-ff947cf6376d",
+        "findingId": "b3057cbc-5f38-4ff9-8f04-4d5adcd6f02a",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "47b8ad4d-267f-457a-b399-e8650edc5aab",
+        "findingId": "34990e29-00bd-4420-9b93-b70ab31ec45e",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "da067337-cb3f-47e2-9263-6871315f52d8",
+        "findingId": "a662e6f7-7ccf-4ee4-bea7-d3865646d6b1",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "2729ed5c-adeb-41e9-8131-a712e87f4cdd",
+        "findingId": "33b9521c-cc60-4ac0-837a-a243a8aee3aa",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "5411c419-2baa-440c-ad95-c7d3a4888984",
+        "findingId": "123e54fd-79a6-45f9-add6-d1303e2baac8",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "87e6b401-0d70-479f-9cae-ee9905148a4d",
+        "findingId": "2338a884-b41c-4ad2-9ed1-7112b9f5ad53",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "ab45cac9-646c-4249-86f7-9b1a06c01353",
+        "findingId": "d83d0472-a18e-4763-80db-653c7954bf08",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "c5303d30-56ec-4c26-88b1-b64706a57e07",
+        "findingId": "4116cd6d-8b74-4097-9a93-8dc2385ce197",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "4b559ed4-17a8-4aef-a7be-fb1b20aa342e",
+        "findingId": "48efe83d-9282-47e1-bae8-166988e352a9",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "7e5024a6-596c-4a84-b3b5-b2202646b18b",
+        "findingId": "e8c551a7-5cc9-48c8-961a-2b7825a8461e",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "758ce6e1-21b0-4ef1-aa1b-f01d7247e763",
+        "findingId": "6e80ad24-d6e2-4a92-a58f-511955e50b61",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "c68eee84-d0d3-4c71-9c4b-73e75439b78c",
+        "findingId": "aab69dad-2e3b-4c3e-b765-7e313d59f6ba",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "f1139c27-fef2-4213-8f33-6eef0dc7d9ab",
+        "findingId": "6498e197-4166-462d-a72f-528100ee2f74",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "6b475927-79f6-4ef1-988a-3a9a705c6703",
+        "findingId": "cfe6c2f5-2260-4c94-afa9-9c10d60833b7",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "b1225470-e5a5-4ead-ab72-30f0894f6ad2",
+        "findingId": "6366e636-ceb1-4ed7-b215-be2a06f2345a",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "372777d8-7ff6-4a7e-9256-b0a1b9de873d",
+        "findingId": "d2d91850-bbbf-4288-b82c-5bee691676eb",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "8ea1a102-9a1c-427c-8041-81c762f0696d",
+        "findingId": "5140b0b1-3264-4d66-bd4e-1d15f07a7766",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "a3089080-cf2f-4526-80e5-ac4352778118",
+        "findingId": "6fa6eeda-aae7-4eca-b5f4-e29ec3b3a87c",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "2a11e909-15bc-440d-89c2-799219b83129",
+        "findingId": "00f38742-6266-4831-a660-56d507e92c99",
+        "action": "approve"
+      },
+      {
+        "taskId": "72d15866-eb83-43ed-aa5d-9cbb100e73ba",
+        "gateId": "cfae6a3b-0c46-4585-854d-3668628a20b6",
+        "findingId": "030ab6e2-41d4-4c9e-9a64-2db61a7ba084",
+        "action": "approve"
+      }
+    ],
+    "gates_resolved": 813,
+    "findings": 1073,
+    "documents_skipped": []
+  }
+}

@@ -5,6 +5,62 @@
 
 ---
 
+## DRAFT (unpublished) — Apache-2.0: relicensed the hard way
+
+**BigLaw is now Apache-2.0**
+
+The most-requested change was never a feature. It was the license. For a firm's IT and legal review, network copyleft is a hard conversation — AGPL kept capable teams from even piloting the platform. That blocker is gone: BigLaw is **Apache-2.0**. Express patent grant, NOTICE attribution, no network-service source obligation. The kind of license a firm's own counsel can approve.
+
+Getting there honestly meant more than editing a LICENSE file. The last copyleft in the tree was a set of document-production tools derived from an AGPL upstream — and the honest way out of derived code is not a paraphrase. It's a clean room:
+
+→ **Deleted before reimplemented.** The derived implementations came *out of the tree first* — no "rewrite" with the original open in the next tab.
+
+→ **A spec, not the source.** The contaminated author wrote a functional specification — interfaces, behavior, acceptance criteria; no code excerpts, no prompt wording — and then wrote no implementation code. The spec is published in the repo: `docs/clean-room-spec-document-tools.md`. Audit it yourself.
+
+→ **Independent implementers, attested.** Clean parties implemented from the spec and the public OOXML standard alone — isolated clean sessions — attesting non-exposure (never read the upstream, never read the old implementation), with two incidental exposures disclosed and reviewed. The executed record and the dated commit trail are in the repo: `docs/clean-room-attestations.md`.
+
+With no copyleft-derived line left in the tree, the whole platform relicensed: LICENSE, NOTICE, and SPDX headers across 271 files.
+
+And the release riding on it teaches the bench to *negotiate*:
+
+→ **Counter-redline loop.** Opposing counsel returns a marked-up draft; `respond_to_redline` parses their tracked changes, judges each against the four-tier playbook cascade (client > matter > personal > firm), and answers with countered redlines plus a rationale card per change. A failed judgment degrades to lawyer review — never a silent accept.
+
+→ **Redtime.** Per-clause timelines across negotiation rounds — who moved what, when, and how far it drifted from the playbook — with **silent-edit detection** for changes made without tracking. The judge remembers the last rounds and escalates a standoff instead of looping on it.
+
+→ **Integrity Check.** Every inbound document scanned for Unicode obfuscation — homoglyphs, zero-width characters, bidi tricks — and for unmarked changes. The redline you're shown is the redline you got.
+
+→ **Verified citations.** Tabular review is industrialized: grids persist (SQLite/Postgres), export to landscape Word and CSV, and every cell citation is verified at extraction — exact match → tolerant → paraphrase judge → 3-vote ensemble — with method + confidence per citation and a "Citations verified: N/M" stamp on the export. In the workbench, citation pills click through to the source with the quote highlighted.
+
+On the benchmark, the honest numbers (all verified against the published scored-run history, same claude-sonnet-4-6 judge): claude-haiku-4-5 in Harvey's own minimal agent harness scores **41 of 60 criteria**. The same model on the BigLaw pipeline scored 34 — so the gap got the partner-committee treatment, criterion by criterion, the diagnosis landed on one stage (an extraction funnel still wearing local-model-era caps), and a five-fix wave rebuilt it: **49/60**. Then one more question — why does all the selective machinery (which facts to chase, which figures matter, which defenses apply) run once, at round 0, before the agents have understood anything, with no way for a later round's discoveries to feed back in? **Re-entrant machinery** answers that: a round boundary now re-sweeps for entities the last round surfaced, re-joins figures across documents with the aliases it just learned, and re-derives defense issues from the conduct graph as it grows — paired with a provider-resilience pass (call backoff, durable agent recruitment, loud round-error signaling) so a real 3-round measurement was possible for the first time. That measurement found one more thing: the writer's own anti-fabrication guards were cutting a handful of *true* figures alongside the false ones they existed to stop — a precise fix (three-component-only subset sums, so a partial sum can't sneak past; round-robin limitations joins, so no single conduct window gets crowded out) recovered them. Rerun: **50/60 — harness vs harness, same model, +9**. The same techniques took a local qwen2.5:14b — free, on-prem (the platform binary itself runs down to a Raspberry-Pi-class box; the 14B wants a real GPU) — from a verified 28 to **39/60**, a new record; on the compare-mode task the local model now holds the outright record (**15/23**, above the cloud tier's 14). And a cross-vendor GLM-5.2 run tops the whole board at **52/60**. The part a firm can't compromise either way: spot-checks came back verbatim — 6/6 on the release run, 11/12 on the 50-run with the one truncation disclosed (record: `docs/benchmarks-citation-spotcheck.md`) — while the minimal-harness run invented statutory penalty figures out of thin air. The rubric is all-or-nothing — the task is not passed yet. Still a climb, in the open, corrections included.
+
+Try all of it in one command, for about three cents:
+
+```
+biglaw demo
+```
+
+Seeds a matter → tabular review → conditions-precedent checklist → counter-redlines opposing counsel's markup, rationale cards and all. Real Word artifacts, live model calls, ~$0.03.
+
+——
+
+The short version: the license a firm's counsel can say yes to, earned the clean-room way — carrying a bench that reads the other side's redline, remembers the negotiation, checks the document isn't lying, and proves its citations.
+
+Live on main. Apache-2.0 now. Link in comments. Turtles all the way down. 🐢
+
+#LegalAI #LegalTech #OpenSource #Apache2 #ContractNegotiation #BigLaw
+
+**Carousel:** LICENSE/SPDX swap diff → clean-room process (delete → spec → attested reimplement) → counter-redline rationale cards → Redtime timeline (silent-edit warning) → verified-citation pills → `biglaw demo` closing cost line
+
+**Asset TODO (`apache-release-*`):**
+- `apache-release-deck.pdf` — 15-slide carousel PDF (collateral/apache-release-deck/, re-render: node render.mjs) — CAPTURED ✅
+- `apache-release-01-license-diff.png` — LICENSE/NOTICE swap + SPDX header diff
+- `apache-release-02-rationale-cards.png` — counter-redline decision cards on a clause
+- `apache-release-03-redtime-timeline.png` — Redtime rounds × clauses view with a silent-edit warning
+- `apache-release-04-citation-pills.png` — reviews grid, verification-state pills + highlighted source quote
+- `apache-release-05-demo-run.png` — `biglaw demo` terminal output ending with the cost summary
+
+---
+
 ## Discovering the spine, not guessing it — an epistemic ontology for legal extraction *(2026-06-29)*
 
 **As above, so BELO**

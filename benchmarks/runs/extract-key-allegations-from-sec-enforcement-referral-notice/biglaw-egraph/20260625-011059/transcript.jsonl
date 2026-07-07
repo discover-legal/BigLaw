@@ -1,0 +1,11 @@
+{"ts": "2026-06-25T01:11:41.291996+00:00", "event": "documents_ingested", "count": 8, "skipped": 0}
+{"ts": "2026-06-25T01:11:41.299428+00:00", "event": "task_submitted", "taskId": "911f95e0-28f9-40dd-9dd3-3ca6e5fbe65a", "workflow": "roundtable", "gatePolicy": "approve"}
+{"ts": "2026-06-25T01:11:41.300794+00:00", "event": "status", "status": "running", "round": 0}
+{"ts": "2026-06-25T01:36:11.666164+00:00", "event": "status", "status": "awaiting_gate", "round": 2}
+{"ts": "2026-06-25T01:36:11.673526+00:00", "event": "gate_resolved", "gateId": "98427738-643a-4281-9524-6661c7673786", "findingId": "c7bda401-88f6-4f7b-a896-9eaddba1fc69", "action": "approve"}
+{"ts": "2026-06-25T01:36:11.680166+00:00", "event": "gate_resolved", "gateId": "2f4682f7-cc58-4e22-ab92-453a25e13734", "findingId": "323eecc9-c4d5-435a-b186-719805614866", "action": "approve"}
+{"ts": "2026-06-25T01:36:11.686217+00:00", "event": "gate_resolved", "gateId": "4922569f-7194-48f9-8884-78fc233306f7", "findingId": "437384d6-bb08-498c-a084-eb67f1c32239", "action": "approve"}
+{"ts": "2026-06-25T01:36:11.691910+00:00", "event": "gate_resolved", "gateId": "37db48e9-3823-44c1-9f54-5eb055951c7d", "findingId": "02a2c0cd-9723-4953-b1f9-0b472551ee27", "action": "approve"}
+{"ts": "2026-06-25T01:36:21.695346+00:00", "event": "status", "status": "running", "round": 2}
+{"ts": "2026-06-25T02:49:02.959626+00:00", "event": "status", "status": "complete", "round": 6}
+{"ts": "2026-06-25T02:49:03.059415+00:00", "event": "deliverable_written", "file": "output\\allegation-extraction-summary.docx"}

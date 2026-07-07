@@ -1,11 +1,13 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Discover Legal
 
 package store
 
 import (
 	"context"
+	"sort"
 	"sync"
+	"time"
 
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
@@ -17,10 +19,24 @@ type MemoryRepo struct {
 	docs        map[string]types.Document
 	order       []string
 	attachments map[string]types.Attachment
+	reviews     map[string]memReview
+	versions    map[string]DocumentVersion
+	verOrder    []string // insertion order — the tie-break FindVersionBy* recency needs
+}
+
+// memReview is one stored tabular-review payload.
+type memReview struct {
+	createdAt time.Time
+	payload   []byte
 }
 
 func NewMemoryRepo() *MemoryRepo {
-	return &MemoryRepo{docs: map[string]types.Document{}, attachments: map[string]types.Attachment{}}
+	return &MemoryRepo{
+		docs:        map[string]types.Document{},
+		attachments: map[string]types.Attachment{},
+		reviews:     map[string]memReview{},
+		versions:    map[string]DocumentVersion{},
+	}
 }
 
 func (m *MemoryRepo) Backend() string { return "memory" }
@@ -110,4 +126,94 @@ func (m *MemoryRepo) DeleteAttachment(_ context.Context, id string) error {
 	defer m.mu.Unlock()
 	delete(m.attachments, id)
 	return nil
+}
+
+// ─── ReviewRepository ────────────────────────────────────────────────────────────
+
+func (m *MemoryRepo) PutReview(_ context.Context, id string, createdAt time.Time, payload []byte) error {
+	if createdAt.IsZero() {
+		createdAt = time.Now()
+	}
+	cp := make([]byte, len(payload))
+	copy(cp, payload)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.reviews[id] = memReview{createdAt: createdAt, payload: cp}
+	return nil
+}
+
+func (m *MemoryRepo) GetReview(_ context.Context, id string) ([]byte, bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	rev, ok := m.reviews[id]
+	if !ok {
+		return nil, false, nil
+	}
+	cp := make([]byte, len(rev.payload))
+	copy(cp, rev.payload)
+	return cp, true, nil
+}
+
+// ─── VersionRepository ───────────────────────────────────────────────────────────
+
+func (m *MemoryRepo) PutVersion(_ context.Context, v DocumentVersion) error {
+	if v.CreatedAt.IsZero() {
+		v.CreatedAt = time.Now()
+	}
+	v.Decisions = append([]byte(nil), v.Decisions...)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.versions[v.ID]; !ok {
+		m.verOrder = append(m.verOrder, v.ID)
+	}
+	m.versions[v.ID] = v
+	return nil
+}
+
+func (m *MemoryRepo) GetVersion(_ context.Context, id string) (*DocumentVersion, bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	v, ok := m.versions[id]
+	if !ok {
+		return nil, false, nil
+	}
+	cp := v
+	cp.Decisions = append([]byte(nil), v.Decisions...)
+	return &cp, true, nil
+}
+
+func (m *MemoryRepo) ListLineage(_ context.Context, lineageID string) ([]DocumentVersion, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []DocumentVersion
+	for _, id := range m.verOrder { // insertion order breaks round ties
+		if v := m.versions[id]; v.LineageID == lineageID {
+			out = append(out, v)
+		}
+	}
+	sort.SliceStable(out, func(a, b int) bool { return out[a].Round < out[b].Round })
+	return out, nil
+}
+
+func (m *MemoryRepo) FindVersionByHash(_ context.Context, contentHash string) (*DocumentVersion, bool, error) {
+	return m.findVersion(func(v DocumentVersion) bool { return v.ContentHash == contentHash })
+}
+
+func (m *MemoryRepo) FindVersionByPath(_ context.Context, path string) (*DocumentVersion, bool, error) {
+	return m.findVersion(func(v DocumentVersion) bool { return v.Path == path })
+}
+
+// findVersion returns the most recently registered version matching the
+// predicate (walks the insertion order backwards).
+func (m *MemoryRepo) findVersion(match func(DocumentVersion) bool) (*DocumentVersion, bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for i := len(m.verOrder) - 1; i >= 0; i-- {
+		if v := m.versions[m.verOrder[i]]; match(v) {
+			cp := v
+			cp.Decisions = append([]byte(nil), v.Decisions...)
+			return &cp, true, nil
+		}
+	}
+	return nil, false, nil
 }

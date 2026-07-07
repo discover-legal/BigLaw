@@ -1,0 +1,11 @@
+{
+  "model": "biglaw-epistemic",
+  "agent": "biglaw",
+  "task": "trusts-estates-private-client/compare-trust-documents-against-client-instructions",
+  "workflow_type": "review",
+  "jurisdiction": "US",
+  "split_mode": "markers",
+  "gate_policy": "approve",
+  "api": "http://localhost:3101",
+  "started_at": "2026-06-30T21:09:53.424896+00:00"
+}

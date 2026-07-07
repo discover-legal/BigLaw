@@ -19,6 +19,21 @@ spine, billing (pre-bills, LEDES, invoice validation, OCG checks), docket/regula
 monitors, two-wave DyTopo with intra-round whiteboard + inter-round memory rollup, billable
 time tracking, and NOSLEGAL v4 taxonomy.
 
+**License: Apache-2.0** — a clean-room reimplementation of the document-production/tabular
+tools (spec: `docs/clean-room-spec-document-tools.md`) removed the last copyleft dependency;
+LICENSE/NOTICE/SPDX headers all swapped.
+
+**Negotiation intelligence + reviews (latest release):** counter-redline loop
+(`respond_to_redline` — parse opposing tracked changes, judge vs the playbook cascade, emit
+countered redlines + rationale cards), judge memory across rounds with standoff escalation,
+Redtime (`register_document_version`/`get_redline_timeline`, `GET /documents/:id/timeline` —
+per-clause negotiation timelines, silent-edit detection, playbook drift), Integrity Check
+(`check_document_integrity` — Unicode obfuscation + unmarked changes), persisted tabular
+reviews with a citation-verification ladder (exact → tolerant → paraphrase judge → ensemble;
+`GET /reviews/:id` + `/reviews/:id/table.csv`, landscape docx export), reviews + Redtime
+workbench views, `biglaw demo` (one-command end-to-end tour, ~$0.03), and BELO
+(`internal/ontology/` — epistemic ontology, graph-discovered section spine).
+
 ## Quick start
 
 **The platform is Go** (`biglaw-go/` — single static binary, runs on a Raspberry Pi 4GB or
@@ -77,9 +92,8 @@ list_plugins         — list loaded external plugins
 get_time_entries     — billable time entries (profileId/taskId/matterNumber/from/to filters)
 ```
 
-Claude Code actuates Lavern agent configs (from `agents/lavern/*.json`),
-MikeOSS workflow templates (from `workflows/mikeoss/*.json`), and any JSON
-plugin adapters (from `adapters/external/*.json`).
+Claude Code actuates Lavern agent configs (from `agents/lavern/*.json`)
+and any JSON plugin adapters (from `adapters/external/*.json`).
 
 ### Example Claude Code sessions
 
@@ -145,6 +159,24 @@ Each DyTopo round:
 > `analyseEvidence` writes conclusions per locked quote). Synthesis routes through
 > `internal/orchestrator/orchestrator.go` `synthesise()` → `writeDeliverable()` when findings exceed
 > a single call's budget. These took local-model verbatim citation grounding from ~0% to ~94%.
+> Harvey LAB criteria (verified vs scores.json history, post fix-wave July 5 2026): Haiku +
+> fix-wave pipeline **49/60** (all-time high; raw Haiku in Harvey's own harness 41; June-26
+> pipeline 37; dead-spine release build 34); **local qwen2.5:14b + fix-wave 36/60** (local
+> record; prior verified peak 28). The fix wave closed the extraction transcription funnel
+> (full-text evidence ingest, context-aware caps, saturation section-walk), added cross-doc
+> numeric/date discrepancy joins, defense-lens analytics, and memo-grade authorship. Trust-
+> compare task (compare mode): Haiku 6 → 9 → **14/23** (pre-wave → fix-wave → deviation-path
+> port e9b95f9), beating the deviation-tuned local qwen record of 12/23. A climb, not a pass.
+> (The earlier "30/60" was a two-run union coverage measure; single-run history is as above.)
+>
+> **Negotiation stack (Go-only):** `internal/tools/negotiate.go` (`respond_to_redline` —
+> counter-redlining with playbook judgment, judge memory + standoff escalation, rationale cards),
+> `internal/redtime/` + `internal/tools/redtime.go` (document version lineage, per-clause
+> timelines, silent-edit detection, playbook drift), `internal/tools/integrity.go`
+> (`check_document_integrity` — Unicode obfuscation + unmarked-change detection), and the
+> tabular-review citation-verification ladder (exact → tolerant → paraphrase judge → ensemble,
+> method + confidence per citation). Reviews persist through the store seam (sqlite/postgres);
+> `internal/ontology/` is BELO, the epistemic ontology behind the graph-discovered spine.
 
 | Path | What it does |
 |---|---|
@@ -165,7 +197,7 @@ Each DyTopo round:
 | `src/tools/pdf.ts` | PyMuPDF/Camelot/Tesseract tools (via python subprocess) |
 | `src/tools/docuseal.ts` | DocuSeal e-signature tools |
 | `src/adapters/plugin.ts` | Generic `LegalToolPlugin` / `LegalToolAdapter` + PluginRegistry |
-| `src/adapters/lavern.ts` | Lavern agent + workflow adapters; MikeOSS + external configs |
+| `src/adapters/lavern.ts` | Lavern agent + workflow adapters; external configs |
 | `src/adapters/index.ts` | Adapter re-exports (`AgentHarness`, `mergeAgents`, plugin types) |
 | `src/audit/index.ts` | Append-only JSONL audit log + SSE stream |
 | `src/time/index.ts` | Automatic billable time tracking — open/close entries, 6-min billing units, CSV export |
@@ -549,11 +581,6 @@ per-model detail table.
 Lavern workflow types (`adversarial`, `counsel`, `full-bench`, `legal-design`, `pre-engagement`,
 `review`, `roundtable`, `tabulate`, `verification`) are mapped to BigLaw's WorkflowType.
 
-## Adding MikeOSS workflows
-
-Place MikeOSS workflow JSON files in `workflows/mikeoss/`. Each file may contain a single
-`MikeOSSWorkflow` or an array. They are auto-loaded as TaskTemplates at startup.
-
 ## Local inference (LM Studio / Jan / Ollama)
 
 ```bash
@@ -588,8 +615,8 @@ Self-host: `docker compose -f docker-compose.prod.yml up -d` from the Infisical 
 > params). The Go API also adds routes the list below predates: playbooks, citations,
 > deadlines, matters (health/budget), dockets, regulatory, pre-bills/invoices/OCG, LPM
 > reports, client-voice, and `GET /time-entries/export.ledes`. The authoritative Go route
-> map is `biglaw-go/internal/api/` (one file per domain group); the README's REST API
-> section reflects it.
+> map is `biglaw-go/internal/api/` (one file per domain group); the people-facing reference
+> is `docs/integration/rest-api.md` and reflects it.
 
 ```
 POST   /tasks                       submit task (accepts jurisdiction, clientNumber, matterNumber)
@@ -718,8 +745,8 @@ When `AUTH_ENABLED=true`, identity comes from OAuth (Google/Microsoft/LinkedIn)
 and every request carries a `SessionUser` from the signed session cookie. A
 **partner** sees all matters and manages assignment; a **lawyer** sees only
 matters assigned to them. Locally (`AUTH_ENABLED=false`) every request is a
-single local partner. See `src/auth/` and the README "Lawyers, roles & access
-control" section. Access rules are unit-tested (`npm test`).
+single local partner. See `src/auth/` and `docs/operations/access-control.md`.
+Access rules are unit-tested (`npm test`).
 
 ### Practice area classification
 

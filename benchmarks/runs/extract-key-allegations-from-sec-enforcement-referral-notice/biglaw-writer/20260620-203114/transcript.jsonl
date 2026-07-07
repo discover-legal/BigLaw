@@ -1,0 +1,135 @@
+{"ts": "2026-06-20T20:31:31.779534+00:00", "event": "documents_ingested", "count": 8, "skipped": 0}
+{"ts": "2026-06-20T20:31:31.805603+00:00", "event": "task_submitted", "taskId": "87808492-64af-4f27-a625-4825b86f705a", "workflow": "roundtable", "gatePolicy": "approve"}
+{"ts": "2026-06-20T20:31:31.806875+00:00", "event": "status", "status": "running", "round": 0}
+{"ts": "2026-06-20T20:40:21.892246+00:00", "event": "status", "status": "awaiting_gate", "round": 1}
+{"ts": "2026-06-20T20:40:21.915734+00:00", "event": "gate_resolved", "gateId": "3096a6c0-8479-42da-8dd0-ef384ccf2750", "findingId": "87ee5c5e-0659-4503-8aa6-0aa7af54ce06", "action": "approve"}
+{"ts": "2026-06-20T20:40:21.936749+00:00", "event": "gate_resolved", "gateId": "7906e447-f042-4932-a85d-ded656f9d9f2", "findingId": "43262901-00ac-435b-904d-e34ce8e018d4", "action": "approve"}
+{"ts": "2026-06-20T20:40:21.958884+00:00", "event": "gate_resolved", "gateId": "7027686e-865c-4efd-bc19-e5140facdf6b", "findingId": "faca78dc-9842-4840-831a-30cb0e12901c", "action": "approve"}
+{"ts": "2026-06-20T20:40:21.978666+00:00", "event": "gate_resolved", "gateId": "9900409d-f2e0-40f3-8a2f-3862ea54f368", "findingId": "c899cf78-fd0f-44fc-b761-2ee9b126716f", "action": "approve"}
+{"ts": "2026-06-20T20:40:22.006084+00:00", "event": "gate_resolved", "gateId": "81cf5f10-0ed8-42ea-af2b-223264b3673b", "findingId": "3faddf29-c123-47e8-9584-70aab873ceca", "action": "approve"}
+{"ts": "2026-06-20T20:40:22.027143+00:00", "event": "gate_resolved", "gateId": "2c341927-66e7-4d60-9073-e43c9fd11d30", "findingId": "6ba2bb07-3105-4d38-9d67-09ea46bba6e0", "action": "approve"}
+{"ts": "2026-06-20T20:40:22.048878+00:00", "event": "gate_resolved", "gateId": "41d51331-9894-4372-8c0a-1a850b0de439", "findingId": "16f8eb78-07a7-457f-976f-3c5f906bbe73", "action": "approve"}
+{"ts": "2026-06-20T20:40:22.072191+00:00", "event": "gate_resolved", "gateId": "3bb352ca-7cfa-4251-be79-f7c288e59d06", "findingId": "09a6d02d-0704-45e4-9c40-0185665a4a8f", "action": "approve"}
+{"ts": "2026-06-20T20:40:22.093141+00:00", "event": "gate_resolved", "gateId": "e6ac4b88-ceff-4e89-b267-b810e35192a5", "findingId": "3c6f7da8-aa7c-472e-8760-b197993330e1", "action": "approve"}
+{"ts": "2026-06-20T20:40:22.112923+00:00", "event": "gate_resolved", "gateId": "91ec5d2b-60f0-4d85-85da-779a57271a9f", "findingId": "9960f4d0-92ae-4f06-b4bf-0ebcb42c568d", "action": "approve"}
+{"ts": "2026-06-20T20:40:22.134526+00:00", "event": "gate_resolved", "gateId": "d5b583e1-afa1-4d39-b988-2981d94dae5a", "findingId": "8ae5a8e7-81a3-4182-a955-9fb7fc4a2c94", "action": "approve"}
+{"ts": "2026-06-20T20:40:22.157445+00:00", "event": "gate_resolved", "gateId": "da61fe92-0ba3-41f8-871e-07d9cd00197b", "findingId": "e9b5182a-f42d-4645-adc1-faba40b5225f", "action": "approve"}
+{"ts": "2026-06-20T20:40:22.178802+00:00", "event": "gate_resolved", "gateId": "1a229e2f-ece8-4ecc-bee7-3269a5fc88fa", "findingId": "4b262a8d-94e0-422d-829b-70d4a36f2179", "action": "approve"}
+{"ts": "2026-06-20T20:40:22.201069+00:00", "event": "gate_resolved", "gateId": "224f2395-32af-4baa-b722-8aeb8e3b1d9a", "findingId": "7c42cbba-7209-4f70-bf8c-8041deb42d87", "action": "approve"}
+{"ts": "2026-06-20T20:40:22.224266+00:00", "event": "gate_resolved", "gateId": "7c71b308-66c5-4433-9b89-ab2315f1ed65", "findingId": "b1a6f721-11d2-4027-af7f-326c7a109c52", "action": "approve"}
+{"ts": "2026-06-20T20:40:32.232497+00:00", "event": "status", "status": "running", "round": 2}
+{"ts": "2026-06-20T20:50:52.688794+00:00", "event": "status", "status": "awaiting_gate", "round": 2}
+{"ts": "2026-06-20T20:50:52.719959+00:00", "event": "gate_resolved", "gateId": "e4c6c46c-7aac-45c3-9634-ed7c50fd817c", "findingId": "153918a7-aa38-44c4-a9a6-317fd83b68d0", "action": "approve"}
+{"ts": "2026-06-20T20:50:52.751211+00:00", "event": "gate_resolved", "gateId": "2a02342c-3792-49ea-b600-bedfb65e68c1", "findingId": "ff61892a-f1ce-4268-b7f0-80f9d035c7d8", "action": "approve"}
+{"ts": "2026-06-20T20:50:52.780153+00:00", "event": "gate_resolved", "gateId": "df6e1941-511f-449b-9935-02a7ec5f34c1", "findingId": "b78c8ef8-a972-4621-b901-5f2e7f64ba86", "action": "approve"}
+{"ts": "2026-06-20T20:50:52.810415+00:00", "event": "gate_resolved", "gateId": "55042a9e-faae-4d67-8e21-3f77e5caf5e1", "findingId": "399ea158-d9e0-4913-9c81-73495d11e328", "action": "approve"}
+{"ts": "2026-06-20T20:50:52.839851+00:00", "event": "gate_resolved", "gateId": "8f4e3bee-0c50-4bc8-9a77-98e6a35c4b33", "findingId": "11a759a5-0f0d-40ed-b0cb-62830deacc31", "action": "approve"}
+{"ts": "2026-06-20T20:50:52.862547+00:00", "event": "gate_resolved", "gateId": "338bd7c4-fb0a-4188-a0d1-ec2f8bd1a9b6", "findingId": "1ed2b59b-e3e5-47b4-9511-49367b3c3a15", "action": "approve"}
+{"ts": "2026-06-20T20:50:52.889375+00:00", "event": "gate_resolved", "gateId": "20a1cc09-52ac-4dac-b7a6-af02f6f7d33c", "findingId": "2147b85a-90d2-45e9-923c-56ff852b5149", "action": "approve"}
+{"ts": "2026-06-20T20:50:52.918398+00:00", "event": "gate_resolved", "gateId": "4fadd348-a222-45c3-85e9-2c91f2688ae1", "findingId": "42b11f01-eccc-4216-8307-5cb1f125901e", "action": "approve"}
+{"ts": "2026-06-20T20:50:52.944323+00:00", "event": "gate_resolved", "gateId": "c947cf6d-0dc7-435c-aa04-8a55d16afd5f", "findingId": "d605af05-0029-4589-9f6b-a94fa6652e77", "action": "approve"}
+{"ts": "2026-06-20T20:50:52.970373+00:00", "event": "gate_resolved", "gateId": "6213edb9-b073-49fa-96dd-3283ebb919ec", "findingId": "f6cda8d5-2e12-4734-9272-62aab8be87b8", "action": "approve"}
+{"ts": "2026-06-20T20:50:52.998080+00:00", "event": "gate_resolved", "gateId": "ad14b1ab-e933-4ff9-be8c-caec2c56dbd1", "findingId": "170d6f1b-32d2-4885-b855-4101b4840d08", "action": "approve"}
+{"ts": "2026-06-20T20:50:53.026479+00:00", "event": "gate_resolved", "gateId": "1608b63c-900c-4613-8fce-93e8a761774c", "findingId": "222ef952-e425-4d58-b57f-7a4351e25770", "action": "approve"}
+{"ts": "2026-06-20T20:50:53.049517+00:00", "event": "gate_resolved", "gateId": "14603da1-5af4-4b7f-9d12-2913a477667c", "findingId": "69fc2455-8d48-4e05-834d-65d0869d0e3e", "action": "approve"}
+{"ts": "2026-06-20T20:50:53.073742+00:00", "event": "gate_resolved", "gateId": "0c769ee7-26fb-454e-85e0-fa2d0c38703a", "findingId": "628a6df3-fea4-457a-b03d-9606127f0d6e", "action": "approve"}
+{"ts": "2026-06-20T20:50:53.098353+00:00", "event": "gate_resolved", "gateId": "f1c6818a-6f16-4620-9bd3-a657c01fc4c5", "findingId": "10b11b55-1ab0-446d-8da6-c98fce69cdfc", "action": "approve"}
+{"ts": "2026-06-20T20:50:53.126001+00:00", "event": "gate_resolved", "gateId": "bd1afb06-98ea-44ce-a7a0-a0fcf077cbd0", "findingId": "0c1b6810-0ad4-4172-bd4f-90645ba598cc", "action": "approve"}
+{"ts": "2026-06-20T20:50:53.151543+00:00", "event": "gate_resolved", "gateId": "3686b7fb-433e-4f94-b4b5-3bbff1b1778c", "findingId": "0ffd759c-6939-4e63-8470-9d3769a15ee6", "action": "approve"}
+{"ts": "2026-06-20T20:50:53.176737+00:00", "event": "gate_resolved", "gateId": "75986701-8bda-4574-a613-e038f48b3298", "findingId": "e3ba431f-d6cf-4b06-9d37-88922825adfe", "action": "approve"}
+{"ts": "2026-06-20T20:50:53.199834+00:00", "event": "gate_resolved", "gateId": "a0b5bfb0-74a9-4b79-af98-aa0aed09d121", "findingId": "6f2d8648-5073-4cb0-9614-9fc205a12190", "action": "approve"}
+{"ts": "2026-06-20T20:50:53.228109+00:00", "event": "gate_resolved", "gateId": "c4a7f712-7601-4833-b68d-d69890d879d3", "findingId": "845676b7-5731-4b81-91d7-0f146fbc4fb3", "action": "approve"}
+{"ts": "2026-06-20T20:50:53.251057+00:00", "event": "gate_resolved", "gateId": "292a5bf2-4dfd-4002-8958-f5836fb6e58f", "findingId": "d321ed3f-4498-4c72-bad4-96b047c80e80", "action": "approve"}
+{"ts": "2026-06-20T20:50:53.281047+00:00", "event": "gate_resolved", "gateId": "c980fdb8-5efe-4636-aac2-aa3375d5b5ff", "findingId": "8c930ee4-981e-439c-8203-d873dbd851c4", "action": "approve"}
+{"ts": "2026-06-20T20:50:53.307285+00:00", "event": "gate_resolved", "gateId": "5c378736-55a0-40e4-9a25-2fda804fd083", "findingId": "f2ceb1c1-0a7f-4552-b53f-cbb5bd1a2136", "action": "approve"}
+{"ts": "2026-06-20T20:50:53.333166+00:00", "event": "gate_resolved", "gateId": "76365494-92fc-4ebd-a16e-03c481b2d01f", "findingId": "022e0918-ec38-46a3-9b88-d3a6b93def57", "action": "approve"}
+{"ts": "2026-06-20T20:50:53.362334+00:00", "event": "gate_resolved", "gateId": "30763ef6-4482-4b97-a9c2-359c6c17a416", "findingId": "4c1b3ec9-6f25-47e5-b7ed-b70767b32b30", "action": "approve"}
+{"ts": "2026-06-20T20:50:53.387202+00:00", "event": "gate_resolved", "gateId": "984da1c5-3096-4037-a601-abc0861d4386", "findingId": "1534494a-5008-49d7-a263-59305aac1431", "action": "approve"}
+{"ts": "2026-06-20T20:50:53.416156+00:00", "event": "gate_resolved", "gateId": "d88ca8cd-2986-44a9-be48-84ad3bf78b98", "findingId": "ae34fb52-ac41-44bc-ab6d-18c1e79bba29", "action": "approve"}
+{"ts": "2026-06-20T20:50:53.444136+00:00", "event": "gate_resolved", "gateId": "ef32b274-74b6-4e7b-9824-61364726a71f", "findingId": "5a596865-3253-4234-b149-00339c928153", "action": "approve"}
+{"ts": "2026-06-20T20:50:53.468292+00:00", "event": "gate_resolved", "gateId": "a092ebd1-bef0-4b16-aa4d-cda88d2fc705", "findingId": "908c0838-063b-451d-b318-68f0d5760a9d", "action": "approve"}
+{"ts": "2026-06-20T20:51:03.488459+00:00", "event": "status", "status": "running", "round": 3}
+{"ts": "2026-06-20T20:59:44.513714+00:00", "event": "status", "status": "awaiting_gate", "round": 3}
+{"ts": "2026-06-20T20:59:44.543398+00:00", "event": "gate_resolved", "gateId": "a83772dd-51ea-4d94-9b5a-b310fef72453", "findingId": "ebe2e6b0-da3b-4a6b-bfec-affb6b5a3c8d", "action": "approve"}
+{"ts": "2026-06-20T20:59:44.573192+00:00", "event": "gate_resolved", "gateId": "c35d9d98-6412-4928-9a99-1f2dd6ab8cb7", "findingId": "22967902-b157-4c14-ae06-9c05c47c4d01", "action": "approve"}
+{"ts": "2026-06-20T20:59:44.600647+00:00", "event": "gate_resolved", "gateId": "d6ab4e6d-5295-41dc-b411-bed88d1a9a11", "findingId": "524118c5-f87b-4892-8f5c-b968df819da4", "action": "approve"}
+{"ts": "2026-06-20T20:59:44.629001+00:00", "event": "gate_resolved", "gateId": "4ded8679-65db-4e10-9c6a-745beb8ce3e3", "findingId": "a76bd72f-f237-484e-a057-6c3349e033bf", "action": "approve"}
+{"ts": "2026-06-20T20:59:44.655566+00:00", "event": "gate_resolved", "gateId": "1432f67e-8d9a-4482-aa6b-c8f931869194", "findingId": "ffc0ead7-7247-4d9e-b559-f94f4d0b361f", "action": "approve"}
+{"ts": "2026-06-20T20:59:44.680677+00:00", "event": "gate_resolved", "gateId": "187bc769-7d24-4544-9ee1-0da18b13ab44", "findingId": "30c2f79f-1c0a-48fc-a53c-55e43a356391", "action": "approve"}
+{"ts": "2026-06-20T20:59:44.705681+00:00", "event": "gate_resolved", "gateId": "8eb3f898-e3d4-46a7-a551-d422e27872df", "findingId": "be32162f-ee9d-494f-a3b2-4513cc8db7ba", "action": "approve"}
+{"ts": "2026-06-20T20:59:44.733243+00:00", "event": "gate_resolved", "gateId": "10da8c57-8cb4-48f7-b148-b441fe342abc", "findingId": "0063acfa-5b6a-4420-b859-84b567ec1c2a", "action": "approve"}
+{"ts": "2026-06-20T20:59:44.760177+00:00", "event": "gate_resolved", "gateId": "903ab6a5-f558-493a-ac4b-e5752794de2f", "findingId": "3474343a-fd16-4987-a2cb-f6879f319c74", "action": "approve"}
+{"ts": "2026-06-20T20:59:44.784675+00:00", "event": "gate_resolved", "gateId": "eeb8f87a-ce9d-466c-99be-5d49163c4136", "findingId": "3a62e8a5-f0b3-4f6d-ab75-ba00b50e9b37", "action": "approve"}
+{"ts": "2026-06-20T20:59:44.811004+00:00", "event": "gate_resolved", "gateId": "a52a3560-b335-4df5-8502-4b5886320432", "findingId": "948fa1a3-1fb5-4ac4-b1de-c853f00b26e5", "action": "approve"}
+{"ts": "2026-06-20T20:59:44.834393+00:00", "event": "gate_resolved", "gateId": "cafa0d66-c938-4189-86e6-9e6abb8a3f29", "findingId": "eea15c2f-d661-4164-82c5-ea03e8451a5c", "action": "approve"}
+{"ts": "2026-06-20T20:59:44.861227+00:00", "event": "gate_resolved", "gateId": "e5dafd8d-6f1e-46e3-8441-30eb75f1da74", "findingId": "c72b5fa1-4bc1-4d8b-a51b-9ef01c5d8dbe", "action": "approve"}
+{"ts": "2026-06-20T20:59:44.886503+00:00", "event": "gate_resolved", "gateId": "e78c4e0a-6969-4760-a9d7-7d792338d3a3", "findingId": "784259df-9cae-4925-adff-e05f19425922", "action": "approve"}
+{"ts": "2026-06-20T20:59:44.910525+00:00", "event": "gate_resolved", "gateId": "a1b6a6b4-c3af-439d-aa44-8f9677acbf8a", "findingId": "905afc83-816a-47d0-806a-83cdcc683456", "action": "approve"}
+{"ts": "2026-06-20T20:59:44.935657+00:00", "event": "gate_resolved", "gateId": "14abedf8-844f-4490-8450-8ae5b0cab6ea", "findingId": "003dd667-5b82-4f87-8f7f-4de8a0e827cb", "action": "approve"}
+{"ts": "2026-06-20T20:59:44.960558+00:00", "event": "gate_resolved", "gateId": "c0d1e72d-836c-4a63-a273-f144d51b330d", "findingId": "8f718982-e393-4a6f-8cc8-9e7abdb5878c", "action": "approve"}
+{"ts": "2026-06-20T20:59:44.987532+00:00", "event": "gate_resolved", "gateId": "6ee56360-4fbe-4ae9-bfdf-308adeea6fb8", "findingId": "63d33896-8a4e-4161-a8fe-607f7616fc99", "action": "approve"}
+{"ts": "2026-06-20T20:59:45.013493+00:00", "event": "gate_resolved", "gateId": "49f761a7-cba0-48c7-adf0-86055de059c9", "findingId": "fbfda81f-d2b8-430e-af72-fd6a872d57fc", "action": "approve"}
+{"ts": "2026-06-20T20:59:45.043899+00:00", "event": "gate_resolved", "gateId": "c3305c27-dc73-4ad4-a077-deb7e49019e6", "findingId": "72b7718b-e05e-4eb9-816f-434338a3017d", "action": "approve"}
+{"ts": "2026-06-20T20:59:45.071818+00:00", "event": "gate_resolved", "gateId": "4a5a6abc-5f9f-4504-aa80-3a88a13ffb0c", "findingId": "ab515df6-54b4-4a82-aba5-2c37220a1ee8", "action": "approve"}
+{"ts": "2026-06-20T20:59:45.098014+00:00", "event": "gate_resolved", "gateId": "80fee773-12e0-4a03-b3a2-f71ecf35039f", "findingId": "378eded1-3182-41c0-8439-b830db34bd26", "action": "approve"}
+{"ts": "2026-06-20T20:59:45.131074+00:00", "event": "gate_resolved", "gateId": "b59db740-11ad-4744-984d-6ff0a71199c3", "findingId": "1b7446d0-cad1-444a-a133-58890546228f", "action": "approve"}
+{"ts": "2026-06-20T20:59:45.158761+00:00", "event": "gate_resolved", "gateId": "9a3d9099-d621-4519-8020-234a45049cb0", "findingId": "3e89633a-5ccf-4cd1-8680-f10aa3699d15", "action": "approve"}
+{"ts": "2026-06-20T20:59:55.186410+00:00", "event": "status", "status": "running", "round": 4}
+{"ts": "2026-06-20T21:08:06.704726+00:00", "event": "status", "status": "awaiting_gate", "round": 4}
+{"ts": "2026-06-20T21:08:06.737321+00:00", "event": "gate_resolved", "gateId": "052e5db6-b5fd-4f91-bfb4-efea0aa7e940", "findingId": "30f43c3b-c4cb-4f49-8faf-781b7b6a9126", "action": "approve"}
+{"ts": "2026-06-20T21:08:06.766370+00:00", "event": "gate_resolved", "gateId": "0f8b6ffb-d5d6-4e6a-aa70-124b3dfc951d", "findingId": "079e0836-eca8-4ca0-8efa-734cf1d9a611", "action": "approve"}
+{"ts": "2026-06-20T21:08:06.798366+00:00", "event": "gate_resolved", "gateId": "ecca2bb7-4286-4f12-b2b5-83b424d42a67", "findingId": "9d52747e-08ec-47fb-814c-cff92937b1c4", "action": "approve"}
+{"ts": "2026-06-20T21:08:06.829142+00:00", "event": "gate_resolved", "gateId": "44b4205f-4504-49f0-ab9f-19abbb770097", "findingId": "e8269abc-6f90-4716-b75d-e276e6f0de93", "action": "approve"}
+{"ts": "2026-06-20T21:08:06.860338+00:00", "event": "gate_resolved", "gateId": "b64eb8e8-8801-41b8-8a01-f5c151bb5962", "findingId": "dd2f009a-3c9f-4240-988b-b85c1c6baf7b", "action": "approve"}
+{"ts": "2026-06-20T21:08:06.890869+00:00", "event": "gate_resolved", "gateId": "365b51f7-ea39-4edc-8903-9ca557d750b4", "findingId": "a5d6f845-d490-4304-a925-86972bf48499", "action": "approve"}
+{"ts": "2026-06-20T21:08:06.919083+00:00", "event": "gate_resolved", "gateId": "bf53ee5d-cd6d-4740-9b4f-932d420b8aad", "findingId": "4b2d5715-0f70-4404-b71d-2ead528c802e", "action": "approve"}
+{"ts": "2026-06-20T21:08:06.949360+00:00", "event": "gate_resolved", "gateId": "d2f5b19f-fbea-47e7-a77c-4d0c6da2a8cb", "findingId": "c8b955b8-f76e-4c25-a332-9de51b3686a8", "action": "approve"}
+{"ts": "2026-06-20T21:08:06.978696+00:00", "event": "gate_resolved", "gateId": "06a7794c-7ab6-49f1-8204-a0f3ae4bd9ce", "findingId": "6ac85782-f2dc-4c69-9914-621a9adef853", "action": "approve"}
+{"ts": "2026-06-20T21:08:07.008397+00:00", "event": "gate_resolved", "gateId": "48da952f-e1aa-48ae-9f85-446b1009146d", "findingId": "4c2aba85-b78b-447a-b08c-d538254a35c7", "action": "approve"}
+{"ts": "2026-06-20T21:08:07.037267+00:00", "event": "gate_resolved", "gateId": "216d753c-6312-48cf-8a97-3972560a5da9", "findingId": "61cf440a-7f3e-4183-96d9-3022f2995e54", "action": "approve"}
+{"ts": "2026-06-20T21:08:07.069252+00:00", "event": "gate_resolved", "gateId": "063835ee-dd9b-4406-aaa8-4facfe257ef6", "findingId": "53f3ca8d-d259-470f-ab5c-f19abda33103", "action": "approve"}
+{"ts": "2026-06-20T21:08:07.097872+00:00", "event": "gate_resolved", "gateId": "9d184bbe-5997-4f5c-a8dd-7b0344a60b50", "findingId": "fe18a136-11a3-4e83-8d68-eabc58536af9", "action": "approve"}
+{"ts": "2026-06-20T21:08:07.128874+00:00", "event": "gate_resolved", "gateId": "4cd38ad0-cd37-4e82-9997-8220900347e1", "findingId": "2fe7b244-38d3-4561-a7a9-1a0b22279588", "action": "approve"}
+{"ts": "2026-06-20T21:08:07.162002+00:00", "event": "gate_resolved", "gateId": "a61e35f5-a94f-4038-adbb-c2eea8bec061", "findingId": "720f061a-61fe-4073-91c1-8a7cb7255279", "action": "approve"}
+{"ts": "2026-06-20T21:08:07.192093+00:00", "event": "gate_resolved", "gateId": "14f0eed2-c9ad-4f34-ac9f-82bb922ee66d", "findingId": "4a6f0801-a7f1-463a-8bf3-23c3df2bbbdf", "action": "approve"}
+{"ts": "2026-06-20T21:08:07.218058+00:00", "event": "gate_resolved", "gateId": "2aa805dd-31f6-4662-9af5-a3ee1b6eee3d", "findingId": "05c1dfd7-dc9e-4446-9454-d38df0023e9d", "action": "approve"}
+{"ts": "2026-06-20T21:08:17.258564+00:00", "event": "status", "status": "running", "round": 5}
+{"ts": "2026-06-20T21:15:18.910355+00:00", "event": "status", "status": "awaiting_gate", "round": 5}
+{"ts": "2026-06-20T21:15:18.946797+00:00", "event": "gate_resolved", "gateId": "67fd86ca-dd1f-4b52-be4f-fd590dc84677", "findingId": "246f9527-4812-4e04-a256-596a1aa596bc", "action": "approve"}
+{"ts": "2026-06-20T21:15:18.983326+00:00", "event": "gate_resolved", "gateId": "2d6699f2-8306-44f5-a1ef-10b0dcc0dea7", "findingId": "0ab5a767-1dd1-45cb-a842-25631e7f928b", "action": "approve"}
+{"ts": "2026-06-20T21:15:19.012079+00:00", "event": "gate_resolved", "gateId": "42c7b6bb-81e0-4839-bdc0-9de87580610a", "findingId": "eaadaff2-c2b4-4d9e-ad7b-a1e4aa4f0f9b", "action": "approve"}
+{"ts": "2026-06-20T21:15:19.044820+00:00", "event": "gate_resolved", "gateId": "866b2e72-00b0-484e-ad77-d4c5436079b5", "findingId": "938a0330-f8e4-483f-a8c2-3d414c558eca", "action": "approve"}
+{"ts": "2026-06-20T21:15:19.072266+00:00", "event": "gate_resolved", "gateId": "0f1644a9-768c-467b-b47a-2800bb9fa0b1", "findingId": "1bd703f5-469d-4b1b-a8cd-aa54d70245cf", "action": "approve"}
+{"ts": "2026-06-20T21:15:19.103348+00:00", "event": "gate_resolved", "gateId": "003a887c-8bc2-4450-a847-cb0fed26dece", "findingId": "af7ddf5a-2e1f-4367-8bdc-5adb30a66df9", "action": "approve"}
+{"ts": "2026-06-20T21:15:19.134197+00:00", "event": "gate_resolved", "gateId": "91618d95-e70e-4910-a065-f8dc169bf5f4", "findingId": "8c47c568-6dc6-4ab4-bdea-9bf3529a5e91", "action": "approve"}
+{"ts": "2026-06-20T21:15:19.161356+00:00", "event": "gate_resolved", "gateId": "deba3663-6182-4dfc-b484-9568cc10798f", "findingId": "dd87afef-6d5a-4de3-9e7e-fecafcd9b1a0", "action": "approve"}
+{"ts": "2026-06-20T21:15:19.191203+00:00", "event": "gate_resolved", "gateId": "26a15c2e-cd54-464c-8a6c-0a787cd4af82", "findingId": "f16db61c-720c-481b-ab74-26f1c0efdf85", "action": "approve"}
+{"ts": "2026-06-20T21:15:19.221036+00:00", "event": "gate_resolved", "gateId": "5cd3900c-8995-40bb-8001-27e58a5378ec", "findingId": "f59ca464-21cf-4c36-b46b-ad30cb359b51", "action": "approve"}
+{"ts": "2026-06-20T21:15:19.259329+00:00", "event": "gate_resolved", "gateId": "6c702723-726e-4769-9977-26c33baece55", "findingId": "d070abfd-3bcc-4517-b84c-5bfae55864c2", "action": "approve"}
+{"ts": "2026-06-20T21:15:19.291846+00:00", "event": "gate_resolved", "gateId": "b1efeb04-0357-49fe-ae51-6d533e30b8c0", "findingId": "fa0f1036-a5e4-4731-bef0-37cf74dd07b8", "action": "approve"}
+{"ts": "2026-06-20T21:15:19.320450+00:00", "event": "gate_resolved", "gateId": "c8580d3f-81f2-4e6f-9d80-8c34513ba7c2", "findingId": "0219c6ce-e74d-4b7d-aadd-1b77f65aacd8", "action": "approve"}
+{"ts": "2026-06-20T21:15:19.350403+00:00", "event": "gate_resolved", "gateId": "cd968e92-b3c0-4a24-afa7-44e8e798596b", "findingId": "cb448b86-a767-4b4b-abc7-c684f1dce4ab", "action": "approve"}
+{"ts": "2026-06-20T21:15:19.379425+00:00", "event": "gate_resolved", "gateId": "b80a88cb-edc8-4dba-bc42-33e3eba18621", "findingId": "faaffa3b-e143-4979-b02e-506d6507250b", "action": "approve"}
+{"ts": "2026-06-20T21:15:19.407197+00:00", "event": "gate_resolved", "gateId": "07af51b0-71f2-41cc-85c5-a2860f1fb0d2", "findingId": "c9cb9bdd-9130-44fa-9cae-c504f0a27052", "action": "approve"}
+{"ts": "2026-06-20T21:15:19.438669+00:00", "event": "gate_resolved", "gateId": "a3b6e67b-a255-48f9-a355-fc34c3737d10", "findingId": "d3cece30-4158-4331-ad8e-1a2f609c4135", "action": "approve"}
+{"ts": "2026-06-20T21:15:19.468858+00:00", "event": "gate_resolved", "gateId": "007bf764-23a7-4785-964b-2c8d7e1cb6a8", "findingId": "8b65e6a4-75f7-4a43-aafb-87309d0db024", "action": "approve"}
+{"ts": "2026-06-20T21:15:19.499707+00:00", "event": "gate_resolved", "gateId": "bd5a23c4-d9ac-477a-9a47-3d1830c92bfa", "findingId": "90e18525-9ec5-42e1-86ca-1a8dbb1201c6", "action": "approve"}
+{"ts": "2026-06-20T21:15:29.540729+00:00", "event": "status", "status": "running", "round": 6}
+{"ts": "2026-06-20T21:21:41.190252+00:00", "event": "status", "status": "awaiting_gate", "round": 6}
+{"ts": "2026-06-20T21:21:41.222767+00:00", "event": "gate_resolved", "gateId": "691b4ec8-1809-487a-bfc6-e75b44a78c3d", "findingId": "dc9ee182-d64b-4342-9f3b-ba1f8140196d", "action": "approve"}
+{"ts": "2026-06-20T21:21:41.255906+00:00", "event": "gate_resolved", "gateId": "a74cf9a9-a5bb-4210-b62d-bd6a914c0fa4", "findingId": "eec8b183-9e3e-49a4-80ff-dedef624f0a4", "action": "approve"}
+{"ts": "2026-06-20T21:21:41.289256+00:00", "event": "gate_resolved", "gateId": "f196a6f8-8511-4697-9ec9-b3b983095280", "findingId": "cb623b7f-4826-4cf8-bd2d-2080b88cdb4e", "action": "approve"}
+{"ts": "2026-06-20T21:21:41.321744+00:00", "event": "gate_resolved", "gateId": "bf0fc818-0da2-4290-a872-02c33ffbaf61", "findingId": "20cd3236-547e-48fa-9183-1848a085af3c", "action": "approve"}
+{"ts": "2026-06-20T21:21:41.354862+00:00", "event": "gate_resolved", "gateId": "5ee2bb3e-a990-450d-87c0-0af6a6b226cd", "findingId": "6d6b94be-5279-4ed3-9727-de248c472a88", "action": "approve"}
+{"ts": "2026-06-20T21:21:41.387305+00:00", "event": "gate_resolved", "gateId": "1f29751a-ebe5-48e9-bc93-1bcb5a0cf38b", "findingId": "b3d95ea9-5b8a-41c5-8a7f-052d97b67064", "action": "approve"}
+{"ts": "2026-06-20T21:21:41.419175+00:00", "event": "gate_resolved", "gateId": "56d8f384-3d39-47eb-b580-84d9fa3195d4", "findingId": "94a6348e-e5d6-4a16-aac8-8785566fd54f", "action": "approve"}
+{"ts": "2026-06-20T21:21:41.453340+00:00", "event": "gate_resolved", "gateId": "7ec20947-a11e-41d0-a6d2-ca8d285d9262", "findingId": "75ac8642-6eb3-467a-ad21-92c35a3afeb1", "action": "approve"}
+{"ts": "2026-06-20T21:21:41.487629+00:00", "event": "gate_resolved", "gateId": "78be6458-a59a-4115-8a5f-2ac091a7d469", "findingId": "5a5751bb-aaee-4e3b-86d7-cee66cdeead9", "action": "approve"}
+{"ts": "2026-06-20T21:21:41.520473+00:00", "event": "gate_resolved", "gateId": "49beb031-3ef5-4d91-8794-15a114880549", "findingId": "f662b9f3-3652-4ea8-bc81-96df31e3af4f", "action": "approve"}
+{"ts": "2026-06-20T21:21:41.555032+00:00", "event": "gate_resolved", "gateId": "dc0606eb-85b0-41be-95be-a6d1d755f43f", "findingId": "c9beb961-dc9b-42e6-a4ab-5b48db838a6d", "action": "approve"}
+{"ts": "2026-06-20T21:21:41.587204+00:00", "event": "gate_resolved", "gateId": "7f6331bb-efd8-4d16-8601-e51872f8fdd7", "findingId": "70976055-d365-439f-9022-916640a7aa68", "action": "approve"}
+{"ts": "2026-06-20T21:21:41.620878+00:00", "event": "gate_resolved", "gateId": "8b2569be-35f2-419a-bc05-2d0437aaff2b", "findingId": "1f35fdfd-6267-4689-aed4-a7341baaf9e4", "action": "approve"}
+{"ts": "2026-06-20T21:21:41.654621+00:00", "event": "gate_resolved", "gateId": "1c2eab80-fd0c-42d2-b3f1-4a1fe5b0fb22", "findingId": "27e3ecbb-4317-4a66-a372-0c0420fa1c0a", "action": "approve"}
+{"ts": "2026-06-20T21:21:51.701269+00:00", "event": "status", "status": "running", "round": 6}
+{"ts": "2026-06-20T21:30:14.206040+00:00", "event": "status", "status": "complete", "round": 6}
+{"ts": "2026-06-20T21:30:14.275563+00:00", "event": "deliverable_written", "file": "output\\allegation-extraction-summary.docx"}

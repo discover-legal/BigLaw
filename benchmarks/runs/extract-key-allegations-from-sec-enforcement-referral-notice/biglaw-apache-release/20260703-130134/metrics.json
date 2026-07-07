@@ -1,0 +1,22 @@
+{
+  "input_tokens": 265117,
+  "output_tokens": 25268,
+  "total_tokens": 290385,
+  "turns": 6,
+  "duration_seconds": null,
+  "num_documents": 8,
+  "documents_read": 8,
+  "completed": true,
+  "ended_at": "2026-07-03T13:01:34.512254+00:00",
+  "biglaw": {
+    "task_ids": [
+      "be18343f-1352-4c64-9198-0c42067d8665"
+    ],
+    "workflow_type": "roundtable",
+    "split_mode": "single",
+    "cost_usd": 0.5351,
+    "gate_policy": "approve",
+    "gates": [],
+    "attached_after_timeout": true
+  }
+}

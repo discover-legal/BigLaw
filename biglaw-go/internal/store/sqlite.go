@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Discover Legal
 
 package store
@@ -53,6 +53,29 @@ CREATE TABLE IF NOT EXISTS attachments (
 	created_at TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_attachments_doc ON attachments(doc_id);
+
+CREATE TABLE IF NOT EXISTS reviews (
+	id         TEXT PRIMARY KEY,
+	created_at TEXT NOT NULL DEFAULT '',
+	payload    TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS document_versions (
+	id             TEXT PRIMARY KEY,
+	lineage_id     TEXT NOT NULL DEFAULT '',
+	parent_id      TEXT NOT NULL DEFAULT '',
+	round          INTEGER NOT NULL DEFAULT 0,
+	source         TEXT NOT NULL DEFAULT '',
+	author         TEXT NOT NULL DEFAULT '',
+	created_at     TEXT NOT NULL DEFAULT '',
+	path           TEXT NOT NULL DEFAULT '',
+	content_hash   TEXT NOT NULL DEFAULT '',
+	text           TEXT NOT NULL DEFAULT '',
+	decisions_json TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_document_versions_lineage ON document_versions(lineage_id, round);
+CREATE INDEX IF NOT EXISTS idx_document_versions_hash    ON document_versions(content_hash);
+CREATE INDEX IF NOT EXISTS idx_document_versions_path    ON document_versions(path);
 `
 
 type sqliteRepo struct {
@@ -205,6 +228,130 @@ func (r *sqliteRepo) DeleteAttachment(_ context.Context, id string) error {
 		return fmt.Errorf("store: sqlite delete attachment %s: %w", id, err)
 	}
 	return nil
+}
+
+// ─── ReviewRepository ────────────────────────────────────────────────────────────
+
+func (r *sqliteRepo) PutReview(_ context.Context, id string, createdAt time.Time, payload []byte) error {
+	if createdAt.IsZero() {
+		createdAt = time.Now()
+	}
+	_, err := r.db.Exec(`
+		INSERT INTO reviews (id, created_at, payload) VALUES (?,?,?)
+		ON CONFLICT(id) DO UPDATE SET
+			created_at=excluded.created_at, payload=excluded.payload`,
+		id, createdAt.UTC().Format(time.RFC3339Nano), string(payload))
+	if err != nil {
+		return fmt.Errorf("store: sqlite put review %s: %w", id, err)
+	}
+	return nil
+}
+
+func (r *sqliteRepo) GetReview(_ context.Context, id string) ([]byte, bool, error) {
+	var payload string
+	err := r.db.QueryRow(`SELECT payload FROM reviews WHERE id = ?`, id).Scan(&payload)
+	if err == sql.ErrNoRows {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("store: sqlite get review %s: %w", id, err)
+	}
+	return []byte(payload), true, nil
+}
+
+// ─── VersionRepository ───────────────────────────────────────────────────────────
+
+func (r *sqliteRepo) PutVersion(_ context.Context, v DocumentVersion) error {
+	created := v.CreatedAt
+	if created.IsZero() {
+		created = time.Now()
+	}
+	_, err := r.db.Exec(`
+		INSERT INTO document_versions
+			(id, lineage_id, parent_id, round, source, author, created_at, path, content_hash, text, decisions_json)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?)
+		ON CONFLICT(id) DO UPDATE SET
+			lineage_id=excluded.lineage_id, parent_id=excluded.parent_id, round=excluded.round,
+			source=excluded.source, author=excluded.author, created_at=excluded.created_at,
+			path=excluded.path, content_hash=excluded.content_hash, text=excluded.text,
+			decisions_json=excluded.decisions_json`,
+		v.ID, v.LineageID, v.ParentID, v.Round, v.Source, v.Author,
+		created.UTC().Format(time.RFC3339Nano), v.Path, v.ContentHash, v.Text, string(v.Decisions))
+	if err != nil {
+		return fmt.Errorf("store: sqlite put version %s: %w", v.ID, err)
+	}
+	return nil
+}
+
+func (r *sqliteRepo) GetVersion(_ context.Context, id string) (*DocumentVersion, bool, error) {
+	row := r.db.QueryRow(`SELECT `+verColumns+` FROM document_versions WHERE id = ?`, id)
+	v, err := scanVersion(row)
+	if err == sql.ErrNoRows {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("store: sqlite get version %s: %w", id, err)
+	}
+	return v, true, nil
+}
+
+func (r *sqliteRepo) ListLineage(_ context.Context, lineageID string) ([]DocumentVersion, error) {
+	rows, err := r.db.Query(`SELECT `+verColumns+
+		` FROM document_versions WHERE lineage_id = ? ORDER BY round ASC, created_at ASC`, lineageID)
+	if err != nil {
+		return nil, fmt.Errorf("store: sqlite list lineage: %w", err)
+	}
+	defer rows.Close()
+	var out []DocumentVersion
+	for rows.Next() {
+		v, err := scanVersion(rows)
+		if err != nil {
+			return nil, fmt.Errorf("store: sqlite scan version: %w", err)
+		}
+		out = append(out, *v)
+	}
+	return out, rows.Err()
+}
+
+func (r *sqliteRepo) FindVersionByHash(_ context.Context, contentHash string) (*DocumentVersion, bool, error) {
+	return r.findVersion(`content_hash`, contentHash)
+}
+
+func (r *sqliteRepo) FindVersionByPath(_ context.Context, path string) (*DocumentVersion, bool, error) {
+	return r.findVersion(`path`, path)
+}
+
+func (r *sqliteRepo) findVersion(column, value string) (*DocumentVersion, bool, error) {
+	row := r.db.QueryRow(`SELECT `+verColumns+` FROM document_versions WHERE `+column+
+		` = ? ORDER BY created_at DESC, round DESC LIMIT 1`, value)
+	v, err := scanVersion(row)
+	if err == sql.ErrNoRows {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("store: sqlite find version by %s: %w", column, err)
+	}
+	return v, true, nil
+}
+
+const verColumns = `id, lineage_id, parent_id, round, source, author, created_at, path, content_hash, text, decisions_json`
+
+func scanVersion(s rowScanner) (*DocumentVersion, error) {
+	var v DocumentVersion
+	var created, decisions string
+	if err := s.Scan(&v.ID, &v.LineageID, &v.ParentID, &v.Round, &v.Source, &v.Author,
+		&created, &v.Path, &v.ContentHash, &v.Text, &decisions); err != nil {
+		return nil, err
+	}
+	if created != "" {
+		if t, err := time.Parse(time.RFC3339Nano, created); err == nil {
+			v.CreatedAt = t
+		}
+	}
+	if decisions != "" {
+		v.Decisions = []byte(decisions)
+	}
+	return &v, nil
 }
 
 // ─── shared row helpers (also used by the Postgres impl) ────────────────────────

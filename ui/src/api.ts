@@ -9,6 +9,7 @@ import type {
   Playbook, PlaybookScope, PlaybookQueryResult, RedlineReport, HeadnoteReport,
   PrecedentDocument, CitationCheckResult,
   NosLegalBreakdown, Job, JobStatus, QueueStats, Attachment,
+  ReviewRecord, RedtimeTimeline,
 } from "./types";
 
 type SettingsPatch = {
@@ -102,8 +103,24 @@ export const api = {
     return fetch("/documents/upload", { method: "POST", body: fd }).then(json<IngestResult>);
   },
 
-  searchDocuments: (query: string) =>
-    fetch(`/documents/search?q=${encodeURIComponent(query)}`).then(json<SearchResult[]>),
+  searchDocuments: (query: string, topK?: number) =>
+    fetch(`/documents/search?q=${encodeURIComponent(query)}${topK ? `&topK=${topK}` : ""}`).then(json<SearchResult[]>),
+
+  // ── Tabular reviews (due-diligence grid) ────────────────────────────────────
+  getReview: (id: string) =>
+    fetch(`/reviews/${encodeURIComponent(id)}`).then(json<ReviewRecord>),
+  reviewCsvUrl: (id: string) => `/reviews/${encodeURIComponent(id)}/table.csv`,
+
+  // ── Redtime (document version lineage timeline) ─────────────────────────────
+  getTimeline: (id: string, params?: { matterNumber?: string; clientNumber?: string; profileId?: string; practiceArea?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.matterNumber) qs.set("matterNumber", params.matterNumber);
+    if (params?.clientNumber) qs.set("clientNumber", params.clientNumber);
+    if (params?.profileId) qs.set("profileId", params.profileId);
+    if (params?.practiceArea) qs.set("practiceArea", params.practiceArea);
+    const q = qs.toString();
+    return fetch(`/documents/${encodeURIComponent(id)}/timeline${q ? `?${q}` : ""}`).then(json<RedtimeTimeline>);
+  },
 
   listAttachments: (docId: string) =>
     fetch(`/documents/attachments/${docId}`).then(json<Attachment[]>),

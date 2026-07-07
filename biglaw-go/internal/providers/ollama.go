@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Discover Legal
 
 // Ollama / generic OpenAI-compatible provider.
@@ -11,7 +11,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
+	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -24,6 +27,9 @@ type OllamaProvider struct {
 	apiKey                 string
 	useMaxCompletionTokens bool
 	client                 *http.Client
+	// limiter throttles the model-call path to a configured per-minute ceiling
+	// (PROVIDER_MAX_CALLS_PER_MIN). nil = unlimited (the default). Shared globally.
+	limiter *rateLimiter
 }
 
 func NewOllamaProvider(cfg *config.Config) *OllamaProvider {
@@ -48,13 +54,15 @@ func NewOllamaProvider(cfg *config.Config) *OllamaProvider {
 // NewOpenAICompatProvider builds a provider against any OpenAI-compatible chat
 // completions endpoint — local (Ollama, LM Studio, vLLM, llama.cpp) or hosted
 // (DashScope/Qwen, Moonshot/Kimi, Zhipu/GLM, OpenAI, DeepSeek). baseURL may or
-// may not include a trailing /v1; Chat() always appends /v1/chat/completions.
+// may not include a version suffix; Chat() appends the completions path.
 func NewOpenAICompatProvider(baseURL, apiKey string) *OllamaProvider {
 	// The OpenAI convention (and our .env examples) is a base URL that already
 	// ends in /v1 — e.g. http://localhost:11434/v1. Chat() appends the full
 	// /v1/chat/completions path, so strip a trailing /v1 to avoid /v1/v1/.
 	// DashScope's compatible-mode path ends in /compatible-mode/v1 — the same
-	// /v1 strip applies.
+	// /v1 strip applies. Zhipu/Z.ai bases end in /v4 (api.z.ai/api/paas/v4):
+	// a non-/v1 version suffix is KEPT and Chat() appends only
+	// /chat/completions — appending /v1 there 404s every call.
 	baseURL = strings.TrimRight(baseURL, "/")
 	baseURL = strings.TrimSuffix(baseURL, "/v1")
 	return &OllamaProvider{
@@ -64,7 +72,27 @@ func NewOpenAICompatProvider(baseURL, apiKey string) *OllamaProvider {
 		// token-cap parameter than local OpenAI-compatible servers.
 		useMaxCompletionTokens: strings.Contains(baseURL, "api.openai.com"),
 		client:                 &http.Client{Timeout: 300 * time.Second},
+		limiter:                globalRateLimiter(),
 	}
+}
+
+// reVersionedBase matches a base URL whose last path segment is already an
+// API version other than v1 (e.g. Zhipu/Z.ai's .../api/paas/v4).
+var reVersionedBase = regexp.MustCompile(`/v[2-9][0-9]*$`)
+
+// rejectsTemperature reports whether the target model refuses a sampling
+// temperature override. OpenAI-hosted gpt-5.x and o-series reasoning models
+// return HTTP 400 for any temperature other than the default, so the
+// override is dropped rather than failing the call. Local OpenAI-compatible
+// servers accept temperature for every model.
+func rejectsTemperature(openAIHosted bool, model string) bool {
+	if !openAIHosted {
+		return false
+	}
+	return strings.HasPrefix(model, "gpt-5") ||
+		strings.HasPrefix(model, "o1") ||
+		strings.HasPrefix(model, "o3") ||
+		strings.HasPrefix(model, "o4")
 }
 
 // openAIChatRequest matches the OpenAI/Ollama chat completions format.
@@ -82,6 +110,15 @@ type openAIChatRequest struct {
 	ResponseFormat      *openAIResponseFmt `json:"response_format,omitempty"`
 	ReasoningEffort     string             `json:"reasoning_effort,omitempty"`
 	Temperature         *float64           `json:"temperature,omitempty"`
+	Thinking            *openAIThinking    `json:"thinking,omitempty"`
+}
+
+// openAIThinking is Zhipu/Z.ai's hybrid-reasoning toggle on the OpenAI-compat
+// endpoint: {"thinking":{"type":"enabled"|"disabled"}}. GLM 4.5+ / 5.x default
+// to enabled; disabling trades reasoning depth for large speed/cost wins.
+// Driven by MODEL_THINKING (empty = omit the field, provider default applies).
+type openAIThinking struct {
+	Type string `json:"type"`
 }
 
 // openAIResponseFmt requests JSON-constrained decoding. Ollama and LM Studio
@@ -143,6 +180,12 @@ type openAIChatResponse struct {
 			Role      string           `json:"role"`
 			Content   string           `json:"content"`
 			ToolCalls []openAIToolCall `json:"tool_calls"`
+			// ReasoningContent carries a reasoning-capable model's chain-of-thought
+			// when it is billed separately from the visible answer (Z.ai/GLM
+			// "reasoning_content", DeepSeek-R1 style). A response with empty Content
+			// but non-empty ReasoningContent means the model spent its whole
+			// completion budget thinking — the signal to retry with thinking off.
+			ReasoningContent string `json:"reasoning_content"`
 		} `json:"message"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
@@ -154,6 +197,10 @@ type openAIChatResponse struct {
 
 func (p *OllamaProvider) Chat(params ChatParams) (*ChatResponse, error) {
 	t0 := time.Now()
+
+	// Client-side throttle: block until the per-minute budget admits this call.
+	// No-op unless PROVIDER_MAX_CALLS_PER_MIN is set.
+	p.limiter.acquire()
 
 	// Build messages — Ollama uses a flat OpenAI-style format.
 	// Prepend system message if present.
@@ -251,10 +298,20 @@ func (p *OllamaProvider) Chat(params ChatParams) (*ChatResponse, error) {
 		Messages: msgs,
 		Stream:   false,
 	}
+	// Thinking-aware output budget: on a versioned Zhipu-style endpoint (…/v4) with
+	// thinking enabled-or-default, reasoning tokens are billed into the completion and
+	// emitted BEFORE the visible answer — so a structured output at its raw cap can be
+	// truncated to nothing. Inflate the cap by MODEL_THINKING_TOKENS_FACTOR so the
+	// answer survives. Only for Zhipu-style bases (reVersionedBase); local/OpenAI
+	// endpoints are untouched.
+	maxTok := params.MaxTokens
+	if maxTok > 0 && thinkingNotDisabled() && reVersionedBase.MatchString(p.baseURL) {
+		maxTok *= thinkingTokensFactor()
+	}
 	if p.useMaxCompletionTokens {
-		reqBody.MaxCompletionTokens = params.MaxTokens
+		reqBody.MaxCompletionTokens = maxTok
 	} else {
-		reqBody.MaxTokens = params.MaxTokens
+		reqBody.MaxTokens = maxTok
 	}
 	for _, t := range params.Tools {
 		reqBody.Tools = append(reqBody.Tools, openAITool{
@@ -272,35 +329,40 @@ func (p *OllamaProvider) Chat(params ChatParams) (*ChatResponse, error) {
 	if params.ReasoningEffort != "" {
 		reqBody.ReasoningEffort = params.ReasoningEffort
 	}
-	if params.Temperature != nil {
+	if params.Temperature != nil && !rejectsTemperature(p.useMaxCompletionTokens, bareModel) {
 		reqBody.Temperature = params.Temperature
+	}
+	if v := os.Getenv("MODEL_THINKING"); v == "enabled" || v == "disabled" {
+		reqBody.Thinking = &openAIThinking{Type: v}
+	}
+
+	url := p.baseURL + "/v1/chat/completions"
+	// A base that already carries a non-/v1 version segment (Zhipu/Z.ai's
+	// /api/paas/v4) gets only the completions path — /v4/v1/... 404s.
+	if reVersionedBase.MatchString(p.baseURL) {
+		url = p.baseURL + "/chat/completions"
 	}
 
 	body, _ := json.Marshal(reqBody)
-	url := p.baseURL + "/v1/chat/completions"
-	req, err := http.NewRequest("POST", url, bytes.NewReader(body))
+	chatResp, err := p.sendChat(body, url)
 	if err != nil {
-		return nil, fmt.Errorf("ollama: build request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if p.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+p.apiKey)
+		return nil, err
 	}
 
-	resp, err := p.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("ollama: do request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("ollama: HTTP %d: %s", resp.StatusCode, string(b))
-	}
-
-	var chatResp openAIChatResponse
-	if err := json.NewDecoder(resp.Body).Decode(&chatResp); err != nil {
-		return nil, fmt.Errorf("ollama: decode response: %w", err)
+	// Thinking-aware retry: a response that came back with EMPTY content but spent its
+	// budget on reasoning (reasoning_content present, or finish_reason=length) burned
+	// the whole cap thinking. When thinking is enabled-or-default, retry ONCE with
+	// thinking explicitly disabled so the model produces visible text.
+	if p.shouldRetryThinkingDisabled(reqBody, chatResp) {
+		slog.Warn("provider returned empty content with reasoning/length finish; retrying once with thinking disabled",
+			"model", bareModel, "finishReason", firstFinishReason(chatResp))
+		retryBody := reqBody
+		retryBody.Thinking = &openAIThinking{Type: "disabled"}
+		if b2, mErr := json.Marshal(retryBody); mErr == nil {
+			if r2, err2 := p.sendChat(b2, url); err2 == nil {
+				chatResp = r2
+			}
+		}
 	}
 
 	stop := StopEndTurn
@@ -350,4 +412,94 @@ func (p *OllamaProvider) Chat(params ChatParams) (*ChatResponse, error) {
 		},
 		DurationMs: time.Since(t0).Milliseconds(),
 	}, nil
+}
+
+// sendChat POSTs one chat request and decodes the reply, retrying transient HTTP
+// failures (429/5xx/529) with Retry-After honored when present, else exponential
+// backoff with jitter — bounded by maxProviderRetries and the client timeout budget.
+// Each retry is logged at WARN with the attempt count. A network error or a
+// non-retryable status returns immediately.
+func (p *OllamaProvider) sendChat(body []byte, url string) (*openAIChatResponse, error) {
+	start := time.Now()
+	var lastErr error
+	for attempt := 0; ; attempt++ {
+		req, err := http.NewRequest("POST", url, bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("ollama: build request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if p.apiKey != "" {
+			req.Header.Set("Authorization", "Bearer "+p.apiKey)
+		}
+
+		resp, err := p.client.Do(req)
+		if err != nil {
+			// Transport error (timeout, connection refused): not an HTTP status —
+			// surface it rather than spin (the client already applied its timeout).
+			return nil, fmt.Errorf("ollama: do request: %w", err)
+		}
+		if resp.StatusCode == http.StatusOK {
+			var chatResp openAIChatResponse
+			derr := json.NewDecoder(resp.Body).Decode(&chatResp)
+			resp.Body.Close()
+			if derr != nil {
+				return nil, fmt.Errorf("ollama: decode response: %w", derr)
+			}
+			return &chatResp, nil
+		}
+
+		b, _ := io.ReadAll(resp.Body)
+		retryAfter := resp.Header.Get("Retry-After")
+		resp.Body.Close()
+		lastErr = fmt.Errorf("ollama: HTTP %d: %s", resp.StatusCode, string(b))
+
+		if !retryableStatus(resp.StatusCode) || attempt >= maxProviderRetries {
+			return nil, lastErr
+		}
+
+		wait, honored := parseRetryAfter(retryAfter)
+		if !honored {
+			wait = backoffDuration(attempt)
+		}
+		if wait > maxBackoff {
+			wait = maxBackoff
+		}
+		// Respect the client timeout budget: don't sleep past what the caller allotted.
+		if p.client.Timeout > 0 && time.Since(start)+wait > p.client.Timeout {
+			return nil, lastErr
+		}
+		slog.Warn("provider call failed; backing off and retrying",
+			"status", resp.StatusCode, "attempt", attempt+1, "maxAttempts", maxProviderRetries+1,
+			"waitMs", wait.Milliseconds(), "retryAfterHonored", honored)
+		time.Sleep(wait)
+	}
+}
+
+// shouldRetryThinkingDisabled reports whether an empty-content response is the
+// thinking-burned-the-budget case worth one disabled-thinking retry: thinking is
+// enabled-or-default, the request didn't already disable it, and the first choice
+// has no content and no tool calls but carries reasoning or a length finish_reason.
+func (p *OllamaProvider) shouldRetryThinkingDisabled(req openAIChatRequest, resp *openAIChatResponse) bool {
+	if !thinkingNotDisabled() {
+		return false
+	}
+	if req.Thinking != nil && req.Thinking.Type == "disabled" {
+		return false // already disabled — nothing to fall back to
+	}
+	if resp == nil || len(resp.Choices) == 0 {
+		return false
+	}
+	ch := resp.Choices[0]
+	if strings.TrimSpace(ch.Message.Content) != "" || len(ch.Message.ToolCalls) > 0 {
+		return false // a real answer (text or a tool call) — leave it
+	}
+	return strings.TrimSpace(ch.Message.ReasoningContent) != "" || ch.FinishReason == "length"
+}
+
+// firstFinishReason is a small logging helper.
+func firstFinishReason(resp *openAIChatResponse) string {
+	if resp == nil || len(resp.Choices) == 0 {
+		return ""
+	}
+	return resp.Choices[0].FinishReason
 }

@@ -1,0 +1,11 @@
+{
+  "model": "biglaw-table",
+  "agent": "biglaw",
+  "task": "white-collar-defense-investigations/extract-key-allegations-from-sec-enforcement-referral-notice",
+  "workflow_type": "roundtable",
+  "jurisdiction": "US",
+  "split_mode": "markers",
+  "gate_policy": "approve",
+  "api": "http://localhost:3101",
+  "started_at": "2026-06-21T14:57:34.089957+00:00"
+}

@@ -1,0 +1,11 @@
+{
+  "model": "biglaw-paired3",
+  "agent": "biglaw",
+  "task": "trusts-estates-private-client/compare-trust-documents-against-client-instructions",
+  "workflow_type": "review",
+  "jurisdiction": "US",
+  "split_mode": "markers",
+  "gate_policy": "approve",
+  "api": "http://localhost:3101",
+  "started_at": "2026-07-02T12:42:20.925185+00:00"
+}

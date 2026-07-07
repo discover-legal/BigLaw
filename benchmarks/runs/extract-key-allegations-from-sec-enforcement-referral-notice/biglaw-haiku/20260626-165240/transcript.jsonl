@@ -1,0 +1,5 @@
+{"ts": "2026-06-26T16:52:41.498737+00:00", "event": "documents_ingested", "count": 8, "skipped": 0}
+{"ts": "2026-06-26T16:52:41.508638+00:00", "event": "task_submitted", "taskId": "48f0e037-1e6d-4f85-8c49-bd3b19ac6f32", "workflow": "roundtable", "gatePolicy": "approve"}
+{"ts": "2026-06-26T16:52:41.510669+00:00", "event": "status", "status": "running", "round": 0}
+{"ts": "2026-06-26T17:24:32.077458+00:00", "event": "status", "status": "complete", "round": 6}
+{"ts": "2026-06-26T17:24:32.098118+00:00", "event": "deliverable_written", "file": "output\\allegation-extraction-summary.docx"}

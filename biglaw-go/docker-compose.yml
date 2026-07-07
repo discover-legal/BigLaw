@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 # BigLaw Go stack: TypeDB server → conflict-graph sidecar → Go core.
 #
 #   cd biglaw-go && docker compose up -d --build

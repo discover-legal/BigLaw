@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Discover Legal
 
 // Top-level orchestrator — task lifecycle, phase sequencing, synthesis.
@@ -32,6 +32,7 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/knowledge"
 	"github.com/discover-legal/biglaw-go/internal/learning"
 	"github.com/discover-legal/biglaw-go/internal/memory"
+	"github.com/discover-legal/biglaw-go/internal/ontology"
 	"github.com/discover-legal/biglaw-go/internal/protocols"
 	"github.com/discover-legal/biglaw-go/internal/providers"
 	"github.com/discover-legal/biglaw-go/internal/routing"
@@ -94,6 +95,13 @@ type Orchestrator struct {
 	egraphs       map[string]*evidencegraph.Graph
 	egraphAliases map[string]map[string][]string // taskID → canonical allegation → surface-form aliases
 	egraphsMu     sync.Mutex
+
+	// reentry holds the per-task re-entrant-machinery state (reentry.go): the graph
+	// snapshot the round-boundary delta is computed against, the dedup keys for
+	// everything the machinery already emitted, and the round-0 figure harvest the
+	// cross-document re-join reuses. Keyed by task ID; transient, like egraphs.
+	reentry   map[string]*reentryState
+	reentryMu sync.Mutex
 
 	// rootAgent is used for round goal generation and synthesis.
 	rootAgentDef types.AgentDefinition
@@ -178,6 +186,7 @@ func New(
 		tools:         toolReg,
 		egraphs:       map[string]*evidencegraph.Graph{},
 		egraphAliases: map[string]map[string][]string{},
+		reentry:       map[string]*reentryState{},
 		rootAgentDef:  rootDef,
 	}
 	o.protocols = protocols.New(cfg, provReg, costs)
@@ -590,6 +599,11 @@ func (o *Orchestrator) runTask(task *types.Task) {
 		}
 	}
 
+	// Re-entrant machinery baseline (reentry.go): snapshot what the exhaustive round-0
+	// passes produced, so each round boundary can compute its DELTA and re-fire the
+	// targeted machinery on only what the round actually discovered.
+	o.initReentryState(task)
+
 	for _, phase := range phases {
 		// CurrentRound is written only by this goroutine (under the lock,
 		// for readers' sake), so reading it here is safe.
@@ -603,10 +617,23 @@ func (o *Orchestrator) runTask(task *types.Task) {
 		})
 		emitProgress(task.ID, "phase", map[string]interface{}{"phase": phase})
 
+		// Count the pool before the round so the re-entry hook below sees exactly
+		// the round's own contribution (its previous outputs are already counted).
+		o.mu.RLock()
+		preRoundFindings := len(task.Findings)
+		o.mu.RUnlock()
+
 		if err := o.runPhase(task, phase); err != nil {
 			runErr = err
 			break
 		}
+
+		// Round-boundary re-entry (reentry.go): absorb the round's findings into the
+		// evidence graph, compute the delta, and re-fire the targeted machinery on it
+		// BEFORE the next round's Need/Offer descriptors are generated — so the next
+		// round's agents (and synthesis) see what the machinery made of this round's
+		// discoveries. No-op when the round added nothing or REENTRANT_MACHINERY=false.
+		o.machineryReentry(task, preRoundFindings)
 
 		// Wait for any pending gates. PendingGates is rewritten by the
 		// gate handlers, so read it under the lock.
@@ -839,6 +866,11 @@ func (o *Orchestrator) runPhase(task *types.Task, phase types.TaskPhase) error {
 		t.Rounds = append(t.Rounds, *roundState)
 		t.Findings = append(t.Findings, debated...)
 		t.PendingGates = append(t.PendingGates, gates...)
+		if roundState.Starved {
+			// Ride the degradation into the final task record — consumers
+			// (UI, benchmark drivers) must see the run was starved.
+			t.StarvedRounds = append(t.StarvedRounds, types.StarvedRound{Round: roundState.Goal.Round, Phase: phase})
+		}
 		t.UpdatedAt = time.Now()
 	})
 	emitProgress(task.ID, "round", map[string]interface{}{"round": task.CurrentRound, "phase": phase, "findings": len(debated), "gates": len(gates)})
@@ -1255,7 +1287,7 @@ func (o *Orchestrator) appendDiscrepancies(task *types.Task, body string) string
 	var discrepancies []string
 	seen := map[string]bool{}
 	for _, f := range task.Findings {
-		if f.AgentID != "contradiction-detector" {
+		if f.AgentID != "contradiction-detector" && f.AgentID != crossDocAgentID {
 			continue
 		}
 		c := strings.TrimSpace(f.Content)
@@ -1430,6 +1462,9 @@ func (o *Orchestrator) writeDeliverable(task *types.Task, findings []types.Findi
 		// Gate BIGLAW_FACTS_GLOBAL=1 reverts to whole-ledger injection for A/B.
 		Facts:       o.groundedFacts(task.ID),
 		FactsGlobal: os.Getenv("BIGLAW_FACTS_GLOBAL") == "1" || os.Getenv("BIGLAW_FACTS_GLOBAL") == "true",
+		// Named individual respondents (committedBy → Person claims): the writer enforces
+		// one exposure entry per respondent — consolidated record or explicit gap note.
+		Respondents: o.respondentRoster(task.ID),
 		RecordCost:  func(resp *providers.ChatResponse) { o.recordCost(resp, bare, cost.ContextSynthesis, task.ID) },
 		// Synthesis-time figure handling: drafters pull exact figures for their
 		// section from the source exhibits on demand (document-backed
@@ -1503,8 +1538,16 @@ func (o *Orchestrator) specificsSweep(task *types.Task, prov providers.Provider,
 		}
 	}
 
+	return o.runSpecificsQueries(task, queries, map[string]bool{}, maxFindings, "specifics-sweep", "Specifics Sweep", 0)
+}
+
+// runSpecificsQueries executes fact-finding queries against the exhibits (extract_specifics)
+// and emits each grounded, deduped snippet as a mechanically-verified finding. seen is the
+// dedup set (lowercased, whitespace-collapsed snippet); callers seed it to dedupe against an
+// existing pool. Shared by the round-0 specifics sweep and the round-boundary re-sweep
+// (reentry.go), which targets it at newly-discovered entities.
+func (o *Orchestrator) runSpecificsQueries(task *types.Task, queries []string, seen map[string]bool, maxFindings int, agentID, agentName string, round int) []types.Finding {
 	var findings []types.Finding
-	seen := map[string]bool{}
 	for _, q := range queries {
 		sr, err := o.tools.Execute("extract_specifics", map[string]interface{}{"topic": q, "top_k": 4}, agents.ToolContext{TaskID: task.ID})
 		if err != nil {
@@ -1513,7 +1556,8 @@ func (o *Orchestrator) specificsSweep(task *types.Task, prov providers.Provider,
 		sm, _ := sr.(map[string]interface{})
 		srows, _ := sm["results"].([]map[string]interface{})
 		for _, r := range srows {
-			quote := strings.TrimSpace(strings.Join(strings.Fields(r["snippet"].(string)), " "))
+			snippet, _ := r["snippet"].(string)
+			quote := strings.TrimSpace(strings.Join(strings.Fields(snippet), " "))
 			if quote == "" {
 				continue
 			}
@@ -1528,13 +1572,13 @@ func (o *Orchestrator) specificsSweep(task *types.Task, prov providers.Provider,
 			}
 			findings = append(findings, types.Finding{
 				ID:             uuid.New().String(),
-				AgentID:        "specifics-sweep",
-				AgentName:      "Specifics Sweep",
+				AgentID:        agentID,
+				AgentName:      agentName,
 				Content:        quote,
 				Citations:      []types.Citation{{Source: src, Quote: quote, MechanicallyVerified: true}},
 				Confidence:     0.8,
 				EvidenceStatus: types.EvidenceGrounded,
-				Round:          0,
+				Round:          round,
 				Timestamp:      time.Now(),
 			})
 			if len(findings) >= maxFindings {
@@ -2013,6 +2057,23 @@ func (o *Orchestrator) buildEvidenceGraph(task *types.Task, prov providers.Provi
 		ckept += k
 		crej += r
 	}
+	// Zero-yield guard (the July-3 Haiku trigger regression): a spine pass that produces NOTHING
+	// — not even rejected rows — means every call failed or returned unparseable output (chatJSON
+	// swallows provider errors; on that run BELO_SPINE_MODEL resolved through localize() to a
+	// "local:" ID whose endpoint was a dead placeholder). Without typed triples the graph carries
+	// no subsection-level `violates` edges and the analytic defense layer starves. Retry once on
+	// the bulk provider/model, which Phase 1 just used successfully.
+	if ckept+crej == 0 && len(spineChunks) > 0 && (spineProv != prov || spineModel != model) {
+		slog.Warn("BELO spine pass yielded zero triples; retrying on the bulk provider", "task", task.ID, "spine_model", spineModel)
+		for _, chunk := range spineChunks {
+			k, r := evidencegraph.ExtractTriplesInto(g, prov, model, &zero, chunk, "")
+			ckept += k
+			crej += r
+		}
+	}
+	if ckept+crej == 0 {
+		slog.Warn("BELO spine pass produced no typed triples — spine falls back to enumeration; defense issues derive from the charging documents directly", "task", task.ID, "spine_model", spineModel)
+	}
 	if g.Len() == 0 {
 		return
 	}
@@ -2030,16 +2091,36 @@ func (o *Orchestrator) buildEvidenceGraph(task *types.Task, prov providers.Provi
 	if figModel == "" {
 		figModel = model
 	}
-	if figs := o.harvestAndBindFigures(task, g, prov, figModel); len(figs) > 0 {
+	// The harvest's second return value is its raw normalized figureHit records —
+	// the seam detectCrossDocDiscrepancies notes: feed them to crossDocFindings and
+	// crossdoc's own duplicate full-corpus sweep can be dropped (follow-up wiring).
+	// On compliance matters the raw records feed the deviation pass's mechanical
+	// numeric join (deviationNumericJoin) below.
+	figs, rawFigs := o.harvestAndBindFigures(task, g, prov, figModel)
+	if len(figs) > 0 {
 		o.update(task, func(t *types.Task) { t.Findings = append(t.Findings, figs...) })
 		slog.Info("figure harvest seeded findings", "task", task.ID, "n", len(figs), "model", figModel, "graph_facts_after", g.Len())
+	}
+	// Stash the raw harvest (canonical quantity labels already assigned) for the
+	// round-boundary cross-document RE-JOIN (reentry.go): when a round grows the graph's
+	// alias/entity knowledge, the discrepancy pass re-runs over these records without
+	// repeating the full-corpus LLM sweep.
+	if o.cfg.ReentrantMachinery && len(rawFigs) > 0 {
+		o.reentryStateFor(task.ID).rawFigs = rawFigs
+	}
+	// Cross-document discrepancy pass (crossdoc.go): same metric identity (entity +
+	// quantity-kind + referent) reported with different values in different documents,
+	// plus event-date conflicts (metadata vs narrative). Augments the intra-harvest
+	// contradiction dimension above.
+	if xd := o.detectCrossDocDiscrepancies(task, g, prov, figModel); len(xd) > 0 {
+		o.update(task, func(t *types.Task) { t.Findings = append(t.Findings, xd...) })
 	}
 	// Stage 2 — for a COMPLIANCE (compare/review) matter, DETECT where the document DEVIATES from
 	// the controlling standard per requirement. This is the finding such tasks are scored on
 	// ("residuary should be 40/35/25, draft has …"), not a description of each requirement. Runs
 	// on the spine model. Enforcement matters use the figure-discrepancy path instead.
-	if o.routeMatter(g) == modeCompliance {
-		if devs := o.detectDeviations(task, g, spineProv, spineModel); len(devs) > 0 {
+	if o.shouldRunDeviationPass(g) {
+		if devs := o.detectDeviations(task, g, spineProv, spineModel, rawFigs, prov, figModel); len(devs) > 0 {
 			o.update(task, func(t *types.Task) { t.Findings = append(t.Findings, devs...) })
 			slog.Info("deviations detected", "task", task.ID, "n", len(devs))
 		}
@@ -2186,6 +2267,49 @@ func (o *Orchestrator) allegationAliases(taskID string) map[string][]string {
 	return o.egraphAliases[taskID]
 }
 
+// respondentRoster returns the matter's named individual respondents — the Person-class
+// parties the typed evidence graph records as having committed conduct (committedBy →
+// Person). Name variants sharing a surname collapse to the fullest form, so "Whitmore"
+// and "Gerald R. Whitmore" yield one roster entry. The writer enforces one exposure
+// entry per name returned here.
+func (o *Orchestrator) respondentRoster(taskID string) []string {
+	g := o.evidenceGraph(taskID)
+	if g == nil {
+		return nil
+	}
+	bySurname := map[string]string{}
+	var order []string
+	for _, c := range g.Claims() {
+		if c.P != "committedBy" || c.OClass != ontology.Person {
+			continue
+		}
+		n := strings.TrimSpace(c.O)
+		if n == "" || len(n) > 60 {
+			continue
+		}
+		fields := strings.Fields(n)
+		surname := strings.ToLower(strings.Trim(fields[len(fields)-1], ".,"))
+		if surname == "" {
+			continue
+		}
+		if have, ok := bySurname[surname]; !ok {
+			bySurname[surname] = n
+			order = append(order, surname)
+		} else if len(n) > len(have) {
+			bySurname[surname] = n // keep the fullest name variant
+		}
+	}
+	const maxRespondents = 8
+	out := make([]string, 0, len(order))
+	for _, s := range order {
+		out = append(out, bySurname[s])
+		if len(out) >= maxRespondents {
+			break
+		}
+	}
+	return out
+}
+
 // groundedFacts converts the task's evidence-graph facts into the writer's per-section
 // routable form: each fact carries its display Line and a lowercased Key (subject +
 // relation + object + value + quote) the writer overlap-matches against each section.
@@ -2327,10 +2451,22 @@ const (
 // accusation predicates (violates/committedBy/harmed) outweighing requirement predicates
 // (requires/satisfiedBy/deviatesFrom/prohibits).
 func (o *Orchestrator) routeMatter(g *evidencegraph.Graph) matterMode {
-	if g == nil {
-		return modeCompliance
+	enf, comp := matterClaimCounts(g)
+	mode := modeCompliance
+	if enf > comp {
+		mode = modeEnforcement
 	}
-	enf, comp := 0, 0
+	slog.Info("matter routing", "enforcement_claims", enf, "compliance_claims", comp, "mode", mode)
+	return mode
+}
+
+// matterClaimCounts tallies the enforcement (accusation) vs compliance (requirement)
+// predicates over BELO's typed claims — the raw signal routeMatter and the deviation
+// gate both classify on.
+func matterClaimCounts(g *evidencegraph.Graph) (enf, comp int) {
+	if g == nil {
+		return 0, 0
+	}
 	for _, c := range g.Claims() {
 		switch c.P {
 		case "violates", "committedBy", "harmed":
@@ -2339,12 +2475,42 @@ func (o *Orchestrator) routeMatter(g *evidencegraph.Graph) matterMode {
 			comp++
 		}
 	}
-	mode := modeCompliance
-	if enf > comp {
-		mode = modeEnforcement
+	return enf, comp
+}
+
+const (
+	// deviationMarginPct / deviationMarginFloor define the margin band over which the
+	// deviation pass runs even when enforcement predicates lead. The band absorbs the
+	// run-to-run routing wobble (57-45 one run, 52-59 the next on the SAME submission)
+	// that silently added/removed the pass and swung 3-5 rubric criteria.
+	deviationMarginPct   = 25
+	deviationMarginFloor = 15
+)
+
+// shouldRunDeviationPass decides whether to run the draft-vs-controlling deviation
+// detection. It is NON-EXCLUSIVE: the pass is not gated to a decisive compliance
+// classification. It runs whenever the matter is compliance-leaning OR the routing is
+// merely borderline (enforcement's lead is within the margin band) — so a borderline
+// matter deterministically gets its deviations instead of flipping with claim counts.
+// A DECISIVELY enforcement matter (lead beyond the band) keeps pure enforcement
+// behavior and skips the pass.
+func (o *Orchestrator) shouldRunDeviationPass(g *evidencegraph.Graph) bool {
+	enf, comp := matterClaimCounts(g)
+	return deviationGateOpen(enf, comp)
+}
+
+// deviationGateOpen is the pure gate decision (testable without a graph): open when
+// compliance predicates are at least tied, or enforcement's lead falls within the
+// margin band where both modes' passes overlap.
+func deviationGateOpen(enf, comp int) bool {
+	if enf <= comp {
+		return true // compliance-leaning (or tied) — the default framing runs the pass
 	}
-	slog.Info("matter routing", "enforcement_claims", enf, "compliance_claims", comp, "mode", mode)
-	return mode
+	band := (enf + comp) * deviationMarginPct / 100
+	if band < deviationMarginFloor {
+		band = deviationMarginFloor
+	}
+	return enf-comp <= band
 }
 
 // crossCuttingSections are the party/timeline-oriented sections a legal enforcement memo carries
@@ -2780,15 +2946,22 @@ func (o *Orchestrator) restoreTasks() {
 		return
 	}
 	o.mu.Lock()
+	quarantined := 0
 	for _, t := range items {
 		if _, ok := phaseSequences[t.WorkflowType]; !ok {
 			continue
 		}
 		normalizeTask(t)
+		if o.quarantineStaleTask(t) { // see restore.go — no runner survives a restart
+			quarantined++
+		}
 		o.tasks[t.ID] = t
 		o.gateChans[t.ID] = make(chan struct{}, 8)
 	}
 	o.mu.Unlock()
+	if quarantined > 0 {
+		o.persistTasks()
+	}
 }
 
 // normalizeTask repairs nil slices on tasks restored from disk. Earlier

@@ -1,0 +1,386 @@
+{
+  "score": 0.0,
+  "max_score": 1.0,
+  "summary": "28/60 criteria passed.  Missed 32 \u2014 task FAIL.",
+  "all_pass": false,
+  "n_criteria": 60,
+  "n_passed": 28,
+  "criteria_results": [
+    {
+      "id": "C-001",
+      "title": "Allegation 1: Cherry-Picking Trade Allocations \u00e2\u20ac\u201d Identified",
+      "verdict": "pass",
+      "reasoning": "The agent's output clearly identifies cherry-picking trade allocations as a distinct allegation category. It describes the pattern of disproportionately allocating profitable trades to Oceanic Fund I LP ($7,800,000 in excess profits) and Chao's personal account ($438,000 in excess profits), totaling $8,238,000 in excess profits. The output details Diana L. Chao's direct participation, Whitmore's benefit through his 12% LP interest in Oceanic Fund I LP, and the harm caused to other advisory clients who received disproportionate shares of unprofitable trades."
+    },
+    {
+      "id": "C-002",
+      "title": "Cherry-Picking: Correct Statutory Provisions Cited",
+      "verdict": "fail",
+      "reasoning": "The agent's output does not cite Sections 206(1) and/or 206(2) of the Investment Advisers Act in connection with the cherry-picking allegation (Allegation Category 1). While Sections 206(1) and 206(2) are mentioned in the Bellini directed brokerage section (Allegation Category 5), they are not cited for the cherry-picking allegations. The cherry-picking section references no specific statutory provisions. The output does reference Section 207 of the Advisers Act for the Form ADV disclosures allegation, but fails to connect Sections 206(1) or 206(2) to the cherry-picking conduct."
+    },
+    {
+      "id": "C-003",
+      "title": "Cherry-Picking: WCA Identified as Implicated",
+      "verdict": "pass",
+      "reasoning": "The agent's output identifies WCA (Whitmore Capital Advisors LLC) as implicated in the cherry-picking allegation. The output explicitly states 'Whitmore Capital Advisors LLC --- WCA is implicated in all six allegation categories described in this notice' and discusses cherry-picking trade allocations as Allegation Category 1, with WCA bearing primary responsibility as the registered investment adviser. The output also references WCA's compliance failures that enabled the cherry-picking scheme."
+    },
+    {
+      "id": "C-004",
+      "title": "Cherry-Picking: Whitmore Identified as Implicated (12% LP Interest)",
+      "verdict": "pass",
+      "reasoning": "The agent's output explicitly identifies Gerald R. Whitmore as implicated in the cherry-picking allegation due to his 12% limited partnership interest in Oceanic Fund I LP. This is stated in the key figures section: 'Gerald R. Whitmore --- Whitmore is implicated in the following allegation categories: Allegation Category 1 (Cherry-Picking Trade Allocations, as the individual who benefited through his 12% limited partnership interest in Oceanic Fund I LP and who, as CEO and CIO, exercised oversight over allocation practices).' Additionally, the output notes that $7,800,000 in excess profits were allocated to Oceanic Fund I LP, and Whitmore's 12% LP interest (valued at approximately $22.2 million) is referenced multiple times throughout the document."
+    },
+    {
+      "id": "C-005",
+      "title": "Cherry-Picking: Chao Identified as Implicated (Personal Account)",
+      "verdict": "pass",
+      "reasoning": "The agent's output clearly identifies Diana L. Chao as implicated in the cherry-picking allegation with her personal account receiving favorable allocations. Specifically, the output states 'Excess profits from cherry-picking allocated to Chao's personal account (2021--2023) $438,000' and references her personal account (Acct ending -7823) with quantitative analysis showing 81.6% profitable trade rate vs 43.7% for other accounts, with $438,000 in estimated excess profits. The output also explicitly mentions Chao's direct participation in cherry-picking trade allocations and her personal account benefiting from the scheme."
+    },
+    {
+      "id": "C-006",
+      "title": "Cherry-Picking: Review Period January 1, 2021 \u00e2\u20ac\u201c December 31, 2023",
+      "verdict": "pass",
+      "reasoning": "The agent's output explicitly states the review period multiple times. In the Key Figures section, it states 'Excess profits from cherry-picking allocated to Oceanic Fund I LP (2021--2023) $7,800,000' and 'Excess profits from cherry-picking allocated to Chao's personal account (2021--2023) $438,000' and 'Total cherry-picking excess profits $8,238,000'. Additionally, the examination period is explicitly stated as 'January 1, 2021, through December 31, 2023 (the \"Review Period\")' multiple times throughout the document, and the cherry-picking allegations are tied to this review period."
+    },
+    {
+      "id": "C-007",
+      "title": "Cherry-Picking: Key Quantitative Facts \u00e2\u20ac\u201d Trade Counts and Rates",
+      "verdict": "fail",
+      "reasoning": "The agent's output does not include any of the 5 specific quantitative facts required by the criterion: (1) 4,217 equity trades analyzed, (2) 1,843 profitable same-day trades, (3) Oceanic Fund I LP profitable allocation rate of 68.4%, (4) other client accounts rate of 41.2%, or (5) t-statistic of 4.73 (p < 0.001). The output mentions total excess profits ($8,238,000), allocation to Oceanic Fund I LP ($7,800,000), and Chao's personal account ($438,000), but none of the trade count or rate statistics required by the criterion. The output does reference a t-statistic and p-value for Chao's personal account (5.21, p < 0.001) and a rate for 'Other Discretionary Accounts' of 41.2%, but these are not the specific data points required (the 41.2% appears in a different context - for other discretionary accounts composite, not the specific criterion item which refers to 'other client accounts rate of 41.2%' in the cherry-picking analysis). Even if the 41.2% counts, that is only 1 of the 5 required data points, which is fewer than the 3 needed to pass."
+    },
+    {
+      "id": "C-008",
+      "title": "Cherry-Picking: Chao's Personal Account Allocation Count and Profitable Count",
+      "verdict": "pass",
+      "reasoning": "The agent's output includes a table row showing Chao's personal account data: '87 71 16 81.6% 43.7% 37.9 pp $438,000 5.21 < 0.001' from the sec-quantitative-analysis-summary.xlsx, which corresponds to 87 total allocations and 71 profitable allocations. The criterion requires the output to state Chao's personal account received 87 allocations of which 71 were profitable, and these figures are present in the output."
+    },
+    {
+      "id": "C-009",
+      "title": "Cherry-Picking: Chao's Personal Account 81.6% Profitable Rate",
+      "verdict": "pass",
+      "reasoning": "The agent's output includes a table entry showing 'Diana L. Chao Personal Account (Acct ending -7823) Employee Personal Account N/A (Head of Trading) 87 71 16 81.6% 43.7% 37.9 pp $438,000 5.21 < 0.001' which explicitly states the 81.6% profitable allocation rate and the underlying ratio of 71/87 for Chao's personal account."
+    },
+    {
+      "id": "C-010",
+      "title": "Cherry-Picking: Oceanic Fund I LP Excess Profits ($7.8M)",
+      "verdict": "pass",
+      "reasoning": "The agent's output explicitly states '$7,800,000' was allocated to Oceanic Fund I LP from cherry-picking excess profits, matching the $7.8M criterion. This appears in multiple places in the output, including 'A significant portion of these excess profits, totaling $7,800,000, was allocated to Oceanic Fund I LP over the same period' and in the key figures section 'Excess profits from cherry-picking allocated to Oceanic Fund I LP (2021--2023) $7,800,000'."
+    },
+    {
+      "id": "C-011",
+      "title": "Cherry-Picking: Chao's Personal Account Excess Profits ($438K)",
+      "verdict": "pass",
+      "reasoning": "The agent's output explicitly states the excess profits from cherry-picking for Chao's personal account as $438,000, and also provides the year-by-year breakdown of $162K (2021) + $189K (2022) + $87K (2023) in the quantitative analysis section."
+    },
+    {
+      "id": "C-012",
+      "title": "Allegation 2: Misleading Form ADV Disclosures \u00e2\u20ac\u201d Identified",
+      "verdict": "fail",
+      "reasoning": "The agent's output identifies misleading Form ADV Part 2A disclosures as a distinct allegation category and references the March 28, 2023 filing and Section 207 of the Advisers Act. However, the criterion specifically requires referencing the materially false statements in Item 6 (pro rata allocation language) and/or the omissions in Item 11 (failure to disclose Whitmore's LP interest and Chao's personal account). The agent's output does not mention Item 6, Item 11, the pro rata allocation language, or the specific omissions regarding Whitmore's LP interest and Chao's personal account in the context of the Form ADV disclosures. The output only provides a general description of the allegation without the specific item-level details required by the criterion."
+    },
+    {
+      "id": "C-013",
+      "title": "Form ADV: Filing Date March 28, 2023 Identified",
+      "verdict": "pass",
+      "reasoning": "The agent's output explicitly mentions 'WCA's Form ADV Part 2A filed on March 28, 2023' in multiple places, including in the 'Misleading Form ADV Disclosures' section where it states 'WCA's Form ADV Part 2A, filed on March 28, 2023, contained materially misleading statements and omissions in violation of Section 207 of the Advisers Act.'"
+    },
+    {
+      "id": "C-014",
+      "title": "Form ADV: False Pro Rata Allocation Statement in Item 6 Identified",
+      "verdict": "fail",
+      "reasoning": "The agent's output discusses misleading Form ADV disclosures generally, referencing the March 28, 2023 filing and violations of Section 207 of the Advisers Act. However, it never specifically identifies the false statement in Item 6 of the Form ADV Part 2A claiming pro rata allocation with no preferential treatment. The output mentions materially misleading statements and omissions but does not pinpoint this specific misstatement about pro rata allocation in Item 6."
+    },
+    {
+      "id": "C-015",
+      "title": "Form ADV: Omission in Item 11 Identified",
+      "verdict": "fail",
+      "reasoning": "The agent's output discusses misleading Form ADV disclosures generally (referencing Section 207 violations and materially misleading statements in the March 28, 2023 filing), but never specifically identifies the omission in Item 11 of Form ADV Part 2A. The criterion requires identification of the failure to disclose Whitmore's 12% LP interest in Oceanic Fund I LP and/or Chao's personal trading account receiving omnibus allocations as an Item 11 omission. While the output mentions Whitmore's 12% LP interest in various contexts and Chao's personal account receiving allocations, it does not connect these to a specific Item 11 omission in the Form ADV Part 2A. The Form ADV disclosure section in the output only references general misleading statements without pinpointing Item 11 as the location of the omission."
+    },
+    {
+      "id": "C-016",
+      "title": "Allegation 3: Deficient Compliance Policies and Procedures \u00e2\u20ac\u201d Identified",
+      "verdict": "pass",
+      "reasoning": "The agent's output explicitly identifies 'Deficient Written Policies and Procedures' as a distinct allegation category (labeled 'Allegation Category 3') with its own dedicated section. The output describes the specific deficiencies alleged, references the relevant compliance manual gaps, discusses the Hargrove & Tilton review findings, and even outlines defense strategies specific to this allegation category."
+    },
+    {
+      "id": "C-017",
+      "title": "Deficient Compliance Policies: Rule 206(4)-7 Referenced",
+      "verdict": "pass",
+      "reasoning": "The agent's output explicitly references Rule 206(4)-7 in connection with the deficient compliance policies allegation. Specifically, in the 'Misleading Form ADV Disclosures' section under 'Defense Priorities,' it states: 'This suggests that WCA's reliance on the H&T review as its annual compliance review may not fully satisfy the Firm's independent obligation under Rule 206(4)-7 to maintain reasonably designed policies and procedures.' Additionally, in the 'Key Figures' section at the end, the regulatory framework lists 'Rule 206(4)-7 --- Compliance Policies and Procedures.' Both references connect Rule 206(4)-7 to the compliance policies deficiency allegation."
+    },
+    {
+      "id": "C-018",
+      "title": "Compliance Policies: Section 7.3 Deficiency Identified",
+      "verdict": "fail",
+      "reasoning": "The agent's output mentions Section 7.3 of the Compliance Manual and notes that it 'does not currently address allocation procedures for equity trades executed through omnibus accounts,' but it fails to identify the specific deficiency that Section 7.3 addressed only IPO/secondary allocation rotation. The criterion requires identifying that Section 7.3 covered IPO/secondary allocation rotation but lacked procedures for omnibus equity trade allocation. The agent only notes the absence of omnibus procedures without identifying what Section 7.3 actually did cover (IPO/secondary allocation rotation)."
+    },
+    {
+      "id": "C-019",
+      "title": "Compliance Policies: Section 9.1 Deficiency Identified",
+      "verdict": "pass",
+      "reasoning": "The agent's output explicitly identifies the Section 9.1 deficiency in the Compliance Manual. Under the 'Deficient Written Policies and Procedures' section, it quotes directly from the Hargrove & Tilton review: 'Section 9.1 of the Compliance Manual requires all access persons to pre-clear trades in individual equity and fixed-income securities... H&T notes that Section 9.1 does not specifically address the receipt of trade allocations from the Firm's omnibus trading account by employee personal accounts.' This directly identifies both the pre-clearance requirement and the gap regarding omnibus allocations by section number (9.1)."
+    },
+    {
+      "id": "C-020",
+      "title": "Compliance Policies: Omnibus Trading Volume Percentage Cited",
+      "verdict": "fail",
+      "reasoning": "The agent's output does not mention that omnibus trades constituted approximately 73% of total equity trading volume (5,776 of 7,912 trades). This specific percentage and underlying figures are not included anywhere in the allegation extraction summary."
+    },
+    {
+      "id": "C-021",
+      "title": "Allegation 4: Failure to Maintain Books and Records \u00e2\u20ac\u201d Identified",
+      "verdict": "pass",
+      "reasoning": "The agent's output includes a dedicated section titled 'Allegation Category 4: Failure to Maintain Required Books and Records' which explicitly identifies this as a distinct allegation and cites both Rule 204-2(a)(3) and Rule 204-2(a)(7) under the Advisers Act: 'WCA failed to create and maintain contemporaneous records of trade allocation decisions as required by Rule 204-2(a)(3) and Rule 204-2(a)(7) under the Advisers Act.'"
+    },
+    {
+      "id": "C-022",
+      "title": "Books and Records: Key Quantitative Facts",
+      "verdict": "fail",
+      "reasoning": "The agent's output includes only one of the three required data points: (2) 312 Excel spreadsheets with metadata showing creation dates post-dating trade dates, and (3) an average lag of 17 business days. However, data point (1) \u2014 that 2,614 of 5,776 omnibus trades (45.2%) lacked any written allocation rationale \u2014 is not mentioned anywhere in the output. Since only 2 of the 3 data points are needed to pass, I need to recheck: the output does mention '312 Microsoft Excel spreadsheets' and 'an average of seventeen (17) business days.' That is 2 of the 3 data points. Therefore the criterion is satisfied."
+    },
+    {
+      "id": "C-023",
+      "title": "Allegation 5: Bellini Directed Brokerage / Kickback Scheme \u00e2\u20ac\u201d Identified",
+      "verdict": "fail",
+      "reasoning": "The agent's output identifies Bellini's directed brokerage scheme as a distinct allegation and mentions Lakeshore Trading LLC and the undisclosed personal relationship with a 40% owner, but it does not include the specific details required by the criterion: the 23 block trades totaling approximately $48.7 million in notional value, nor does it identify Kevin Ostrowski as Bellini's college roommate. The criterion specifically requires these details to pass."
+    },
+    {
+      "id": "C-024",
+      "title": "Bellini Scheme: Commission Rate Disparity Stated",
+      "verdict": "fail",
+      "reasoning": "The agent's output discusses the Bellini directed brokerage arrangement and mentions excess commissions paid to Lakeshore Trading LLC ($291,400), but never states the specific commission rate disparity of 4.2 cents per share at Lakeshore Trading versus 1.1 cents per share at other brokers. This specific numerical comparison is absent from the output."
+    },
+    {
+      "id": "C-025",
+      "title": "Bellini Scheme: Excess Commissions Total Stated",
+      "verdict": "pass",
+      "reasoning": "The agent's output explicitly states 'Excess commissions paid to Lakeshore Trading LLC (June 2022 -- November 2023) $291,400' in the key figures section. The $291,400 figure is also mentioned in the Bellini section narrative ('the Crescent Bay Pension Fund bore approximately $187,000 of the $291,400 in excess commissions'). The criterion requires the output to state excess commissions of approximately $291,400, which it does. However, the output does not mention the 'approximately 9.4 million shares' component. The criterion states PASS if the output states excess commissions of approximately $291,400 (on approximately 9.4 million shares), and FAIL if the excess commission total is not included. Since the criterion's FAIL condition is specifically 'if the excess commission total is not included,' and the total IS included ($291,400), the verdict should be PASS."
+    },
+    {
+      "id": "C-026",
+      "title": "Bellini Scheme: Undisclosed Compensation from Ostrowski",
+      "verdict": "pass",
+      "reasoning": "The agent's output explicitly states: 'Undisclosed compensation received by Bellini from Ostrowski ($45,000 initiation fee + $47,600 in monthly dues for 17 months) $92,600' in the key figures section. This satisfies the criterion by identifying the total figure of $92,600 along with the breakdown of the $45,000 initiation fee and $47,600 in monthly dues."
+    },
+    {
+      "id": "C-027",
+      "title": "Bellini Scheme: Crescent Bay Municipal Pension Fund Identified as Victim",
+      "verdict": "pass",
+      "reasoning": "The agent's output explicitly identifies the Crescent Bay Municipal Pension Fund as a victim of Bellini's directed brokerage scheme. In the 'Breach of Fiduciary Duty / Fraud (Bellini's Directed Brokerage Arrangement)' section, the output quotes paragraph 55 of the enforcement referral, stating that 'The Crescent Bay Municipal Pension Fund, a public pension fund with approximately $310 million in AUM managed by WCA, bore a disproportionate share of the excess commissions because Bellini served as the portfolio manager for that account and directed a significant portion of the Lakeshore Trading block trades from the Crescent Bay Pension Fund account,' and further notes that the fund bore approximately $187,000 of the $291,400 in excess commissions (approximately 64% of the total)."
+    },
+    {
+      "id": "C-028",
+      "title": "Bellini Scheme: Time Period June 2022 \u00e2\u20ac\u201c November 2023",
+      "verdict": "pass",
+      "reasoning": "The agent's output explicitly states 'Excess commissions paid to Lakeshore Trading LLC (June 2022 -- November 2023) $291,400' in the Key figures section, clearly identifying the time period of Bellini's directed brokerage arrangement as June 2022 through November 2023."
+    },
+    {
+      "id": "C-029",
+      "title": "Allegation 6: Obstruction / File Deletion \u00e2\u20ac\u201d Identified",
+      "verdict": "fail",
+      "reasoning": "The agent's output does identify the obstruction allegation as a distinct category (Allegation Category 6 / 'Obstructive Conduct During Examination') and correctly attributes the file deletion instruction to Whitmore. However, the criterion specifically requires that the output describe Whitmore instructing IT administrator Tom\u00e1s Delgado to delete the files. The agent's output never mentions Tom\u00e1s Delgado by name or role anywhere in the document. This specific detail is required by the criterion for a PASS verdict."
+    },
+    {
+      "id": "C-030",
+      "title": "Obstruction: Section 209(e) Cited",
+      "verdict": "pass",
+      "reasoning": "The agent's output explicitly cites Section 209(e) of the Advisers Act in the 'Obstructive Conduct During Examination' section, stating: 'The Division further alleges that this conduct is in violation of Section 209(e) of the Advisers Act, which prohibits any person from obstructing or impeding the Commission in the conduct of any examination authorized under the Advisers Act.' It is also referenced in the Key Figures section regarding potential remedies."
+    },
+    {
+      "id": "C-031",
+      "title": "Obstruction: 47 Deleted Files Recovered",
+      "verdict": "fail",
+      "reasoning": "The agent's output does not mention the specific figure of 47 deleted files being recovered by forensic analysis. While the output discusses the obstruction allegation (Whitmore's instruction to delete trade allocation records) and references forensic metadata analysis, it never states that 47 deleted files were recovered from the relevant folders."
+    },
+    {
+      "id": "C-032",
+      "title": "ISSUE_001: Trade Count Discrepancy (4,217 vs. 4,312)",
+      "verdict": "fail",
+      "reasoning": "The agent's output does not identify or mention any discrepancy between the referral notice stating 4,217 omnibus equity trades and the statistical exhibit (sec-quantitative-analysis-summary.xlsx) referencing 4,312 trades. There is no mention of this 95-trade difference anywhere in the allegation extraction summary."
+    },
+    {
+      "id": "C-033",
+      "title": "ISSUE_001: Source Documents Correctly Attributed",
+      "verdict": "fail",
+      "reasoning": "The agent's output does not mention the figures 4,217 or 4,312 anywhere in the document, nor does it address any discrepancy between these two figures or attribute them to their respective source documents (sec-enforcement-referral-notice.docx and sec-quantitative-analysis-summary.xlsx). The criterion specifically requires that the 4,217 figure be attributed to the referral notice and the 4,312 figure be attributed to the statistical summary, but neither figure appears in the agent's output at all."
+    },
+    {
+      "id": "C-034",
+      "title": "ISSUE_002: Criminal Obstruction Exposure Flagged (18 U.S.C. \u00c2\u00a7\u00c2\u00a7 1505/1519)",
+      "verdict": "fail",
+      "reasoning": "The agent's output discusses the obstruction allegation under Section 209(e) of the Advisers Act and mentions civil sanctions such as civil monetary penalties and injunctive relief, but it never flags potential criminal exposure. There is no mention of 18 U.S.C. \u00a7 1519 (destruction of records in federal investigations), 18 U.S.C. \u00a7 1505 (obstruction of agency proceedings), the possibility of a DOJ criminal referral, or any general statement that SEC obstruction charges frequently trigger parallel criminal proceedings. The analysis remains entirely within the civil SEC enforcement framework."
+    },
+    {
+      "id": "C-035",
+      "title": "ISSUE_003: Bellini Compensation Calculation Gap ($92,600 vs. $103,800)",
+      "verdict": "fail",
+      "reasoning": "The agent's output mentions the Bellini compensation figures ($45,000 initiation fee + $47,600 in monthly dues for 17 months = $92,600) as stated in the referral notice, but does not identify the discrepancy between this calculation and the bank records exhibit (ostrowski-bank-records-exhibit.xlsx). The agent never analyzes the bank records to determine that payments span 21 months (May 2022 through January 2024), which would yield $58,800 in dues plus $45,000 = $103,800 total, creating an $11,200 discrepancy with the referral notice's figure. The criterion specifically requires identification of this gap between the bank records and the referral notice's calculation."
+    },
+    {
+      "id": "C-036",
+      "title": "ISSUE_003: Defense Significance of Compensation Gap Noted",
+      "verdict": "fail",
+      "reasoning": "The agent's output mentions the $92,600 figure for undisclosed compensation received by Bellini ($45,000 initiation fee + $47,600 in monthly dues for 17 months) but never identifies or discusses any discrepancy between $92,600 and $103,800. There is no mention of a $103,800 figure anywhere in the output, and consequently no discussion of any compensation gap or its implications for defense strategy, disgorgement calculations, or the reliability of the SEC's financial analysis."
+    },
+    {
+      "id": "C-037",
+      "title": "Scienter Distinction Between Section 206(1) and 206(2) Flagged",
+      "verdict": "fail",
+      "reasoning": "The agent's output does not identify or discuss the scienter distinction between Section 206(1) and Section 206(2) of the Investment Advisers Act. While the output mentions that the Division alleges violations under Sections 206(1) and 206(2), it never explains that 206(1) requires scienter (intent to defraud) while 206(2) requires only negligence, and it does not flag the referral notice's failure to delineate which specific conduct maps to which provision as a defense issue. The output simply references these provisions without any analysis of the differing mental state requirements or their strategic implications for the defense."
+    },
+    {
+      "id": "C-038",
+      "title": "ISSUE_005: Form ADV Disclosure Obligations for Whitmore's LP Interest Analyzed Beyond Restating Allegation",
+      "verdict": "fail",
+      "reasoning": "The agent's output merely restates the allegation that WCA's Form ADV Part 2A contained materially misleading statements and omissions, and notes that Whitmore holds a 12% LP interest in Oceanic Fund I LP creating a conflict of interest. However, the output does not identify any specific Form ADV disclosure obligation applicable to Whitmore's LP interest \u2014 it does not reference Item 11.A requiring disclosure of proprietary interests or conflicts, Item 6 requiring disclosure of conflicts from principal investing alongside clients in a pooled vehicle with allocation discretion, or any SEC Staff guidance or Risk Alerts identifying undisclosed principal investments in pooled vehicles as a high-priority enforcement area. The analysis goes no further than restating the allegation without connecting it to specific regulatory disclosure requirements."
+    },
+    {
+      "id": "C-039",
+      "title": "ISSUE_006: Statute of Limitations Concern Under 28 U.S.C. \u00c2\u00a7 2462",
+      "verdict": "fail",
+      "reasoning": "The agent's output does not mention the statute of limitations under 28 U.S.C. \u00a7 2462, the Kokesh v. SEC decision, or any concern that conduct from early 2021 may be approaching or past the five-year limitations period. The output discusses defense strategies and various allegations but never raises the issue that the Review Period beginning January 1, 2021, combined with the October 18, 2024 referral date, creates a potential statute of limitations problem for early 2021 conduct."
+    },
+    {
+      "id": "C-040",
+      "title": "ISSUE_006: Specific 2021 Conduct Identified as Potentially Time-Barred",
+      "verdict": "fail",
+      "reasoning": "The agent's output does not mention statute of limitations issues at all, neither in the abstract nor with specific reference to Q1 2021 or early 2021 cherry-picking conduct. There is no discussion of time-barred allegations anywhere in the output."
+    },
+    {
+      "id": "C-041",
+      "title": "ISSUE_007: Date Discrepancy in Obstruction Allegation (April 15 vs. April 22)",
+      "verdict": "fail",
+      "reasoning": "The agent's output does not identify the date discrepancy between the referral notice's claim that document requests were served by April 22, 2024 and the actual email exhibit (whitmore-delgado-email.eml) dated April 15, 2024. The agent mentions April 22, 2024 in the context of document requests but never references the whitmore-delgado-email.eml exhibit or flags the one-week discrepancy between these two dates."
+    },
+    {
+      "id": "C-042",
+      "title": "ISSUE_007: Defense Significance of Date Discrepancy Discussed",
+      "verdict": "fail",
+      "reasoning": "The agent's output does not discuss any April 15 vs. April 22 date discrepancy at all. The output mentions April 22, 2024 as the date by which examination staff had issued document requests, and discusses Whitmore's instruction to delete trade allocation records, but there is no mention of an April 15 date, no discussion of any date discrepancy between these two dates, and consequently no defense implication derived from such a discrepancy (e.g., that an earlier email date could support a routine IT maintenance interpretation, that the deletion instruction may have predated the specific document request, or that there may have been a second undocumented instruction). The criterion requires at least one concrete defense implication of this specific date discrepancy to be discussed, which is entirely absent from the output."
+    },
+    {
+      "id": "C-043",
+      "title": "ISSUE_008: Chao's Undisclosed Brokerage Account as Separate Violation",
+      "verdict": "fail",
+      "reasoning": "The agent's output does not identify that Chao's account ending -7823 (used for cherry-picking) is absent from the WCA employee trading log (wca-employee-trading-log.xlsx), which only lists a Hartleigh IRA ending -4401 for Chao. The output references both account numbers in passing (the -7823 account appears in quantitative analysis data and the -4401 IRA appears in the trading log data), but never connects these two facts to identify the discrepancy as a separate compliance failure \u2014 a potential violation of Rule 204A-1 requiring disclosure of personal brokerage accounts. The cherry-picking allegation involving Chao's personal account is discussed, but the undisclosed/unreported nature of that account as a distinct compliance issue independent of the cherry-picking scheme is never identified."
+    },
+    {
+      "id": "C-044",
+      "title": "ISSUE_008: Rule 204A-1 (Code of Ethics) Referenced",
+      "verdict": "fail",
+      "reasoning": "While the agent's output does reference Rule 204A-1 in multiple places (e.g., in the context of the H&T compliance review and personal trading policies), it does not connect the undisclosed employee brokerage account to Rule 204A-1 as a separate regulatory violation from the cherry-picking scheme. The references to Rule 204A-1 appear in the context of general compliance review findings and Code of Ethics requirements, but the output never specifically identifies that failing to disclose an employee brokerage account constitutes a distinct violation of Rule 204A-1. The criterion requires either an explicit connection between the undisclosed account and Rule 204A-1, or identification that the undisclosed account is a separate regulatory violation from cherry-picking. The output mentions Section 9.1 of the Compliance Manual not addressing omnibus allocations to employee accounts, but does not frame this as a Rule 204A-1 violation distinct from the cherry-picking allegations."
+    },
+    {
+      "id": "C-045",
+      "title": "ISSUE_009: Omnibus Trade Percentage Discrepancy (73% vs. 78%)",
+      "verdict": "fail",
+      "reasoning": "The agent's output does not identify the inconsistency between the referral notice stating omnibus trades were 73% of total equity volume (5,776/7,912) and the statistical exhibit (sec-quantitative-analysis-summary.xlsx) stating 'approximately 78%' of total equity trading volume. This specific discrepancy is never mentioned anywhere in the agent's allegation extraction summary."
+    },
+    {
+      "id": "C-046",
+      "title": "ISSUE_009: Explanation of Why Omnibus Percentage Discrepancy Matters",
+      "verdict": "fail",
+      "reasoning": "The agent's output does not mention the 73% vs. 78% omnibus percentage discrepancy at all. There is no discussion of any such discrepancy, its implications, potential explanations (different denominators, dataset differences), or how it might be used by the defense to challenge statistical methodology. The criterion requires at least one concrete explanation for why this discrepancy matters, but the output completely omits any reference to it."
+    },
+    {
+      "id": "C-047",
+      "title": "ISSUE_010: WCA's Respondeat Superior / Failure to Supervise Liability",
+      "verdict": "pass",
+      "reasoning": "The agent's output explicitly addresses WCA's entity-level liability for Bellini's directed brokerage conduct in multiple places. In the 'Breach of Fiduciary Duty / Fraud (Bellini's Directed Brokerage Arrangement)' section, the output states: 'The Division further alleges that WCA Investment Advisors LLC is liable for the violations described in this section based on Bellini's actions within the scope of his employment as a portfolio manager' (respondeat superior theory). It also specifically identifies failure to supervise exposure: 'The firm failed to implement adequate supervisory procedures to detect and prevent such directed brokerage arrangements, including conducting proper best execution reviews, requiring disclosure of personal relationships between employees and broker-dealer personnel, and monitoring the use of executing brokers outside its standard omnibus trading arrangement.' The quoted paragraph 59 from the source document further elaborates on WCA's failure to conduct adequate best execution reviews and failure to monitor use of executing brokers. This goes well beyond merely naming WCA as a respondent and specifically identifies the compliance and best execution review failures that support entity-level liability for Bellini's conduct."
+    },
+    {
+      "id": "C-048",
+      "title": "Whitmore's Exposure: Cherry-Picking Allegation (12% LP Interest)",
+      "verdict": "pass",
+      "reasoning": "The agent's output explicitly identifies Whitmore's 12% limited partnership interest in Oceanic Fund I LP, valued at approximately $22.2 million, and connects it to his personal exposure in the cherry-picking allegation. Specifically, the output states: 'Gerald R. Whitmore --- LP Interest in Oceanic Fund I LP 12% Approximately $22.2 million in value as of December 31, 2023 (12% \u00d7 $185M net assets)' and further notes that Whitmore 'holds a 12% limited partnership interest in Oceanic Fund I LP, representing approximately $22.2 million in value as of December 31, 2023... This personal investment... creates a significant financial interest for Whitmore in the performance of Oceanic Fund I LP.' The output also lists Whitmore as implicated in 'Allegation Category 1 (Cherry-Picking Trade Allocations, as the individual who benefited through his 12% limited partnership interest in Oceanic Fund I LP).' The criterion is clearly satisfied."
+    },
+    {
+      "id": "C-049",
+      "title": "Whitmore's Exposure: Form ADV Misrepresentation",
+      "verdict": "pass",
+      "reasoning": "The agent's output explicitly identifies Whitmore's personal exposure to the Form ADV misrepresentation allegation. In the 'Key figures' section near the end, the output quotes directly from the enforcement referral: 'Gerald R. Whitmore --- Whitmore is implicated in the following allegation categories: Allegation Category 1 (Cherry-Picking Trade Allocations...); Allegation Category 2 (Misleading Form ADV Disclosures, as the CEO and individual ultimately responsible for the accuracy of the Firm's regulatory filings)...' This clearly identifies Whitmore's personal exposure to the Form ADV misrepresentation allegation (Allegation Category 2) in his capacity as CEO."
+    },
+    {
+      "id": "C-050",
+      "title": "Whitmore's Exposure: Obstruction Allegation (File Deletion)",
+      "verdict": "pass",
+      "reasoning": "The agent's output clearly identifies Whitmore's personal exposure to the obstruction allegation. In the 'Obstructive Conduct During Examination' section, the output explicitly states that Whitmore instructed the deletion of trade allocation records from WCA's shared network drive during the pendency of an ongoing SEC examination. The output also references paragraph 83 from the enforcement referral which lists Whitmore as implicated in 'Allegation Category 6 (Obstructive Conduct During Examination, as the individual who directly instructed the deletion of trade allocation records)' and notes he may face individual sanctions including a bar from the securities industry, civil monetary penalties, disgorgement of ill-gotten gains, and injunctive relief."
+    },
+    {
+      "id": "C-051",
+      "title": "Individuals at Risk: Chao's Personal Exposure Summarized",
+      "verdict": "fail",
+      "reasoning": "The agent's output does mention Chao's personal account excess profits of $438,000 and references her 81.6% profitable allocation rate in a data table, but it does not clearly summarize these figures together as her personal exposure in a coherent way. The 81.6% figure appears only in a raw data excerpt from the quantitative analysis spreadsheet, not in a narrative summary of Chao's individual exposure. Additionally, the criterion specifically mentions the undisclosed brokerage account as a potential element, which is not addressed in the output. The output lacks a dedicated, clear summary of Chao's personal exposure that ties together the cherry-picking allegation, the 81.6% profitable allocation rate, and the ~$438K excess profits in her personal account as her individual risk profile."
+    },
+    {
+      "id": "C-052",
+      "title": "Individuals at Risk: Bellini's Personal Exposure Summarized",
+      "verdict": "pass",
+      "reasoning": "The agent's output addresses Bellini's personal exposure in the 'Breach of Fiduciary Duty / Fraud (Bellini's Directed Brokerage Arrangement)' section. It identifies his relationship with Ostrowski (through Lakeshore Trading LLC, where Ostrowski held a 40% ownership interest), the excess commissions of $291,400 paid to Lakeshore Trading LLC, and the undisclosed compensation of $92,600 ($45,000 initiation fee + $47,600 in monthly dues for 17 months) received by Bellini from Ostrowski. The output also notes potential individual sanctions including a bar from the securities industry, civil monetary penalties, disgorgement, and injunctive relief."
+    },
+    {
+      "id": "C-053",
+      "title": "Total Alleged Ill-Gotten Gains / Client Harm Stated",
+      "verdict": "fail",
+      "reasoning": "The agent's output lists individual monetary figures separately ($8,238,000 total cherry-picking excess profits, $291,400 excess commissions to Lakeshore Trading, $92,600 undisclosed compensation to Bellini) but never aggregates these into a total alleged ill-gotten gains figure of approximately $8.622 million across all allegation categories. The criterion requires that the output state or calculate this aggregate total, which the agent failed to do."
+    },
+    {
+      "id": "C-054",
+      "title": "Hargrove & Tilton Review: Failure to Test Trade Allocation Noted",
+      "verdict": "pass",
+      "reasoning": "The agent's output explicitly mentions that 'The Hargrove & Tilton review did not conduct any statistical testing of trade allocations or identify any of the allocation-related deficiencies described in this notice' and identifies this as relevant to WCA's compliance infrastructure, noting that 'WCA's reliance on the H&T review as its annual compliance review may not fully satisfy the Firm's independent obligation under Rule 206(4)-7 to maintain reasonably designed policies and procedures.' This satisfies the criterion of noting the H&T review's failure to test trade allocation patterns and identifying it as evidence of deficient compliance infrastructure."
+    },
+    {
+      "id": "C-055",
+      "title": "Key Dates: Examination Timeline Accurately Stated",
+      "verdict": "fail",
+      "reasoning": "The agent's output correctly states three dates: examination commenced March 11, 2024; deficiency letter issued August 2, 2024; referral to Enforcement on October 18, 2024. However, the output does not mention the referral notice date of November 6, 2024, or the service date of November 12, 2024. While three of the five dates are correctly stated (meeting the minimum threshold), I need to verify no stated dates are incorrect. The three dates mentioned are all accurate per the source material. Since exactly three of the five required dates are correctly stated and none of the stated dates are incorrect, this meets the minimum threshold of 'at least three of these five dates must be correctly stated.' Therefore the criterion is satisfied."
+    },
+    {
+      "id": "C-056",
+      "title": "Whitmore's 12% LP Interest Value Correctly Stated",
+      "verdict": "pass",
+      "reasoning": "The agent's output explicitly states 'Gerald R. Whitmore --- LP Interest in Oceanic Fund I LP 12% Approximately $22.2 million in value as of December 31, 2023 (12% \u00d7 $185M net assets)' and also references paragraph 11: 'Whitmore holds a 12% limited partnership interest in Oceanic Fund I LP, representing approximately $22.2 million in value as of December 31, 2023 (calculated as 12% of $185 million in net assets = $22.2 million).' This correctly states the value as approximately $22.2 million based on 12% \u00d7 $185M."
+    },
+    {
+      "id": "C-057",
+      "title": "Compliance Manual Last Updated November 15, 2022",
+      "verdict": "pass",
+      "reasoning": "The agent's output explicitly mentions 'Compliance Manual (last updated November 15, 2022)' in multiple places, including in the Deficient Written Policies and Procedures section and in the Key Figures section at the bottom of the document."
+    },
+    {
+      "id": "C-058",
+      "title": "Lakeshore Trading LLC: Ostrowski's 40% Ownership Stated",
+      "verdict": "pass",
+      "reasoning": "The agent's output explicitly states that Bellini directed client trades to Lakeshore Trading LLC 'based on his undisclosed personal relationship with a 40% owner of that firm' and the key figures section quotes paragraph 83 directly: 'the portfolio manager who directed client trades to Lakeshore Trading LLC based on his undisclosed personal relationship with a 40% owner of that firm.' While the output doesn't always name Ostrowski as the 40% owner in every mention, it does reference Ostrowski in connection with bank records and the arrangement, and the 40% ownership figure is correctly stated in multiple places."
+    },
+    {
+      "id": "C-059",
+      "title": "Lakeshore Trading LLC: Ostrowski-Bellini Personal Relationship and Undisclosed Nature",
+      "verdict": "fail",
+      "reasoning": "The agent's output mentions that Bellini directed trades to Lakeshore Trading LLC based on an 'undisclosed personal relationship with a 40% owner of that firm' and that the relationship was undisclosed, but it never identifies Ostrowski as Bellini's college roommate. The criterion specifically requires that the output identify Ostrowski as Bellini's college roommate. This specific detail about the nature of their personal relationship (college roommates) is absent from the output."
+    },
+    {
+      "id": "C-060",
+      "title": "Email Exhibit Language Quoted or Paraphrased",
+      "verdict": "fail",
+      "reasoning": "The agent's output does not reference the Whitmore-to-Delgado email (whitmore-delgado-email.eml) at all, nor does it mention the ambiguous language 'clean up the shared drive' or 'clean up of legacy files on the shared drive' that could support an innocent interpretation. The obstructive conduct section discusses the deletion of trade allocation records and Whitmore's instruction, but makes no reference to this specific email or its potentially exculpatory language."
+    }
+  ],
+  "run_id": "white-collar-defense-investigations/extract-key-allegations-from-sec-enforcement-referral-notice/biglaw-clean2/20260623-170105",
+  "task": "white-collar-defense-investigations/extract-key-allegations-from-sec-enforcement-referral-notice",
+  "judge_model": "claude-sonnet-4-6",
+  "scored_at": "2026-06-23T17:58:32.627859+00:00",
+  "cost": {
+    "input_tokens": 1449214,
+    "output_tokens": 167690,
+    "wall_clock_seconds": 0
+  },
+  "doc_coverage": {
+    "documents_read": 8,
+    "total_vdr_files": 0,
+    "documents_skipped": 0,
+    "documents_read_list": [],
+    "documents_skipped_list": []
+  }
+}

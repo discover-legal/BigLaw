@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Discover Legal
 
 package writer
@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/discover-legal/biglaw-go/internal/embeddings"
 	"github.com/discover-legal/biglaw-go/internal/providers"
@@ -70,6 +71,12 @@ type Options struct {
 	DraftingAgents []string
 	// DraftingRounds bounds the huddle: 1 = lead drafts only; 2-3 = draft → critique → revise.
 	DraftingRounds int
+	// Respondents is the matter's named individual respondents (from the evidence
+	// graph's committedBy → Person claims). When set, the writer ENFORCES one exposure
+	// entry per respondent: each gets a consolidated grounded record in the exposure
+	// section, and a respondent with nothing extracted gets an explicit gap note —
+	// a structural hole is surfaced, never silent (the omitted-CEO defect).
+	Respondents []string
 	// Paged enables context-paging synthesis: each section is authored in order, then
 	// COMPACTED to a handle so it stops consuming the model's context; later section
 	// authors see the compacted handles and can call expand_section to UNCOMPACT any
@@ -100,6 +107,13 @@ type Writer struct {
 	// per-section routing matches facts to sections by cosine (semantic) instead of keyword
 	// overlap — catching facts phrased unlike the section heading. nil → keyword fallback.
 	factVecs [][]float32
+	// groundedCents accumulates every grounded dollar amount (in cents) seen during the
+	// write — fact-ledger amounts, finding amounts, and each section's handled figure
+	// values. The final total-audit (stripUngroundedTotals) checks any prose "total"
+	// against this set, so a model-computed sum ($45,000 + $2,800 presented as a
+	// "$47,800 total") can never ship as an asserted aggregate.
+	groundedMu    sync.Mutex
+	groundedCents map[int64]bool
 }
 
 // New builds a Writer. prov/model is the (already-resolved) synthesis provider and
@@ -123,7 +137,42 @@ func New(embed *embeddings.Client, prov providers.Provider, model string, opt Op
 	if opt.ClusterThreshold == 0 {
 		opt.ClusterThreshold = 0.55
 	}
-	return &Writer{embed: embed, prov: prov, model: model, opt: opt}
+	return &Writer{embed: embed, prov: prov, model: model, opt: opt, groundedCents: map[int64]bool{}}
+}
+
+// recordGroundedMoney adds a section's handled figure values to the grounded-money set
+// (huddles draft concurrently, hence the lock).
+func (w *Writer) recordGroundedMoney(handled []handledFig) {
+	w.groundedMu.Lock()
+	defer w.groundedMu.Unlock()
+	for _, h := range handled {
+		for _, m := range reMoney.FindAllString(h.Value+" "+h.Context, -1) {
+			if c, ok := parseMoneyCents(m); ok {
+				w.groundedCents[c] = true
+			}
+		}
+	}
+}
+
+// groundedMoneySet seeds the grounded-money set from the finding pool and fact ledger.
+func (w *Writer) seedGroundedMoney(findings []Finding) {
+	w.groundedMu.Lock()
+	defer w.groundedMu.Unlock()
+	add := func(s string) {
+		for _, m := range reMoney.FindAllString(s, -1) {
+			if c, ok := parseMoneyCents(m); ok {
+				w.groundedCents[c] = true
+			}
+		}
+	}
+	for _, f := range findings {
+		add(f.Content)
+		add(f.Evidence)
+	}
+	for _, f := range w.opt.Facts {
+		add(f.Line)
+		add(f.Key)
+	}
 }
 
 // section is one tight, drafter-sized unit: a partition of findings with a title.
@@ -380,11 +429,24 @@ func (w *Writer) Write(taskDesc, workflowType string, findings []Finding) (strin
 	if len(findings) == 0 {
 		return "", nil
 	}
+	// Structurally exclude process-language conclusions BEFORE anything can render them:
+	// a finding whose Content is a placeholder or extraction to-do ("Evidence on point for
+	// this matter; see the quoted source.", "These must be extracted from…") is replaced by
+	// its verbatim evidence — substance, not stage direction — so no path (drafter tool
+	// result, fallback, figure list) can emit the tell.
+	for i := range findings {
+		if isProcessConclusion(findings[i].Content) {
+			if e := strings.TrimSpace(findings[i].Evidence); e != "" && !isProcessConclusion(e) {
+				findings[i].Content = e
+			}
+		}
+	}
 	// Collapse near-duplicate findings first. The rounds + sweep + reconciliation can
 	// surface the same passage many times; left in, the duplicates both bloat the
 	// writer (the merge then compresses the whole document to a stub — a real
 	// regression at high finding counts) and litter the deliverable with repetition.
 	findings = dedupeFindings(findings)
+	w.seedGroundedMoney(findings)
 	ix := NewFindingIndex(w.embed, findings)
 
 	// Precompute fact embeddings once for semantic per-section routing (the "fancier math":
@@ -412,13 +474,18 @@ func (w *Writer) Write(taskDesc, workflowType string, findings []Finding) (strin
 		secs = w.partition(ix)
 		secs = w.planOutline(taskDesc, workflowType, ix, secs)
 	}
+	// Degenerate-spine guard: when the coverage spine AND planOutline both fail and one
+	// giant cluster is chunked N ways, the outline degrades to dozens of sections all
+	// sharing a single TF-IDF cluster label ("Allocation Defense Trading Personal" ×88).
+	// Refuse it: collapse sections sharing a title into one distinctly-labeled section.
+	secs = guardDegenerateOutline(secs)
 
 	// Paged synthesis: the DyTopo writing agent authors each section from the evidence
 	// blackboard, compacting finished sections out of working context (uncompactable on
 	// demand) and assembling losslessly — no compressing stitch. Lets a small-context
 	// model produce a deliverable larger than its window without dropping allegations.
 	if w.opt.Paged && len(secs) > 0 {
-		return w.writePaged(taskDesc, workflowType, secs, ix), nil
+		return w.auditTotals(w.writePaged(taskDesc, workflowType, secs, ix)), nil
 	}
 
 	// 2. One tight agentic drafter per section, search_findings scoped to its set,
@@ -432,8 +499,55 @@ func (w *Writer) Write(taskDesc, workflowType string, findings []Finding) (strin
 	//    guaranteed category is never left blank.
 	w.repairCoverage(taskDesc, workflowType, secs, drafts, ix)
 
-	// 4. Stitch sections into one coherent document.
-	return w.stitch(taskDesc, workflowType, secs, drafts), nil
+	// 4. Stitch sections into one coherent document, then the document-level QA:
+	//    duplicate-block suppression and the per-respondent exposure guarantee.
+	out := dedupeDocBlocks(w.stitch(taskDesc, workflowType, secs, drafts))
+	if rb := w.rosterBlock(); rb != "" && !strings.Contains(out, rosterHeader) {
+		out = strings.TrimRight(out, "\n") + "\n\n## Individual Exposure\n\n" + rb
+	}
+	if strings.TrimSpace(out) == "" {
+		out = w.emergencyDoc(findings) // never empty when findings exist
+	}
+	return w.auditTotals(out), nil
+}
+
+// auditTotals runs the document-level total audit against the accumulated grounded-money
+// set (facts + findings + every section's handled figures).
+func (w *Writer) auditTotals(doc string) string {
+	w.groundedMu.Lock()
+	grounded := make(map[int64]bool, len(w.groundedCents))
+	for k := range w.groundedCents {
+		grounded[k] = true
+	}
+	w.groundedMu.Unlock()
+	return stripUngroundedTotals(doc, grounded)
+}
+
+// emergencyDoc is the last-resort floor: every substantive path failed, so render the
+// findings' verbatim evidence (or substantive conclusions) as grounded paragraphs.
+// It exists so the never-empty guarantee survives the process-language filters.
+func (w *Writer) emergencyDoc(findings []Finding) string {
+	var sents []string
+	seen := map[string]bool{}
+	for _, f := range findings {
+		c := oneLine(f.Content)
+		if c == "" || isProcessConclusion(c) {
+			c = oneLine(f.Evidence)
+		}
+		if c == "" || isProcessConclusion(c) {
+			continue
+		}
+		if k := dedupKey(c); k == "" || seen[k] {
+			continue
+		} else {
+			seen[k] = true
+		}
+		if !endsSentence(c) {
+			c += "."
+		}
+		sents = append(sents, c)
+	}
+	return strings.TrimSpace(strings.Join(sents, " "))
 }
 
 // dedupeFindings collapses near-duplicate findings (same normalized leading ~90
@@ -608,6 +722,73 @@ func bestKeywordSection(f Finding, required []string) int {
 		}
 	}
 	return best
+}
+
+// maxSectionsPerTitle bounds how many sections may share one title before the outline
+// is treated as degenerate. Legitimate spine ∪ clustering can produce a couple of
+// same-labelled off-spine sections; more than this means a single cluster was fanned
+// out under one label (the thinking-wreck failure: ~88 identical-titled sections).
+const maxSectionsPerTitle = 3
+
+// guardDegenerateOutline refuses an outline in which a single title dominates. When the
+// coverage spine and planOutline both fail, one giant cluster gets chunked N ways and
+// every chunk inherits the same TF-IDF cluster label — producing dozens of sections
+// that share one heading. It collapses each over-shared title into ONE section (union of
+// its findings, deduped), so the result carries DISTINCT labels, and logs loudly. A
+// healthy outline (no title shared more than the cap) is returned unchanged.
+func guardDegenerateOutline(secs []section) []section {
+	if len(secs) == 0 {
+		return secs
+	}
+	counts := map[string]int{}
+	for _, s := range secs {
+		counts[strings.ToLower(strings.TrimSpace(s.Title))]++
+	}
+	degenerate := false
+	for _, n := range counts {
+		if n > maxSectionsPerTitle {
+			degenerate = true
+			break
+		}
+	}
+	if !degenerate {
+		return secs
+	}
+	var order []string
+	merged := map[string]*section{}
+	for _, s := range secs {
+		key := strings.ToLower(strings.TrimSpace(s.Title))
+		if m, ok := merged[key]; ok {
+			m.FindingIDs = append(m.FindingIDs, s.FindingIDs...)
+			continue
+		}
+		cp := s
+		merged[key] = &cp
+		order = append(order, key)
+	}
+	out := make([]section, 0, len(order))
+	for _, key := range order {
+		m := merged[key]
+		m.FindingIDs = dedupIDs(m.FindingIDs)
+		out = append(out, *m)
+	}
+	slog.Warn("degenerate outline collapsed: sections shared a single cluster-label title",
+		"sectionsBefore", len(secs), "sectionsAfter", len(out), "distinctTitles", len(counts))
+	return out
+}
+
+// dedupIDs removes duplicate finding IDs, preserving first-seen order.
+func dedupIDs(ids []string) []string {
+	seen := make(map[string]bool, len(ids))
+	out := ids[:0:0]
+	for _, id := range ids {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
 }
 
 // partition turns the finding set into tight sections: cluster, then split any
@@ -824,7 +1005,7 @@ func (w *Writer) draftSection(taskDesc, workflowType string, s section, ix *Find
 		var fb strings.Builder
 		fb.WriteString("\n\nFIGURES for this section — each has a NAME. To state a figure, write its NAME (capitalised, exactly as shown) where the figure belongs; the precise value is substituted automatically. NEVER write the number/percentage/date/citation yourself:\n")
 		for _, h := range handled {
-			masked := strings.ReplaceAll(oneLine(h.Context), h.Value, h.Handle)
+			masked := maskValue(oneLine(h.Context), h.Value, h.Handle)
 			fmt.Fprintf(&fb, "  %s — \"%s\" (%s)\n", h.Handle, masked, h.Source)
 		}
 		figuresBlock = fb.String()
@@ -842,8 +1023,9 @@ Write the section "%s" of the final deliverable. Brief: %s
 Call search_findings to retrieve the findings for this section, then write it grounded ONLY in what the findings and figures say — never invent facts.
 Be COMPREHENSIVE for this category: cover the specific allegations, the parties implicated, the harm, and the defense points.
 CRITICAL — for ANY specific figure or precise reference (a dollar amount, a percentage or rate, a count, a date, an account number, or a statutory/section/clause citation), DO NOT write the number or citation yourself. Instead write the NAME of the matching figure from the FIGURES list above (e.g. "the scheme generated Zephyr in excess profits across Quasar trades") — write the name exactly, capitalised. The exact grounded value is substituted for the name automatically, so you never recall a digit — this is how we keep every figure correct. Use a name for EVERY specific you reference, and use ONLY names from the list (if you need a figure that isn't listed, call extract_specifics). NEVER compute, add, sum, total, or otherwise derive a number yourself.
+Where the findings support it, develop the section's prose in this order: the governing statute, rule, or standard; the alleged conduct; the quantities and amounts involved; the parties implicated; and the resulting exposure. Carry statutory and internal-section identifiers exactly as given — via their FIGURES names where listed — never shortened or paraphrased (write "Section 9.1", never "Section 9").
 If a finding is marked UNVERIFIED, either omit it or caveat it explicitly.
-Write FLOWING, professional client-ready prose — connected paragraphs, not an outline. Do NOT emit internal labels or scaffolding such as "Issue:", "Brief Answer:", "Stronger View", "Counter-Argument", "Open Questions", "Recommendations:", "Analysis:". Do NOT write any commentary about your own process or about the findings/inputs — never write things like "Since there are no findings…", "I will write…", "Based on the provided grounded facts…", "As an AI". No finding numbers or agent names. Output only the section's prose (no heading).%s%s%s`,
+Write FLOWING, professional client-ready prose — connected paragraphs, not an outline. Every sentence must be complete; never end mid-phrase. Do NOT emit internal labels or scaffolding such as "Issue:", "Brief Answer:", "Stronger View", "Counter-Argument", "Open Questions", "Recommendations:", "Analysis:". Do NOT write any commentary about your own process or about the findings/inputs — never write things like "Since there are no findings…", "I will write…", "Based on the provided grounded facts…", "As an AI". No finding numbers or agent names. Output only the section's prose (no heading).%s%s%s`,
 		oneLine(taskDesc), workflowType, s.Title, s.Brief, figuresBlock, factsBlock, extra.priorCompacted)
 
 	msgs := []providers.Message{{Role: "user", Content: user}}
@@ -914,7 +1096,10 @@ Write FLOWING, professional client-ready prose — connected paragraphs, not an 
 		break
 	}
 	result := strings.TrimSpace(final)
-	if result == "" {
+	// A refusal / role-clarification response is not a draft at all — a weak model
+	// arguing with its inputs ("I need to clarify my role here…") must never ship as
+	// section content. Discard it wholesale and render the grounded fallback instead.
+	if result == "" || isRefusalDraft(result) {
 		result = w.fallbackSection(s, ix) // never blank
 	}
 	// Mechanically attach the section's grounded figures the drafter didn't already
@@ -928,7 +1113,18 @@ Write FLOWING, professional client-ready prose — connected paragraphs, not an 
 	// it mangled or skipped simply doesn't substitute, so a figure can be omitted but never
 	// stated wrong.
 	result = resolveFigureHandles(result, handled)
+	// Assertion: handle names can never appear in output. Every HANDLED name was just
+	// substituted globally; scrub any UNMAPPED pool name the drafter hallucinated
+	// (outside quoted spans — quotes are never edited) and log what remains.
+	result = scrubUnresolvedHandles(result, handled)
+	w.recordGroundedMoney(handled)
 	result = sanitizeDraft(result)
+	// Authorship QA: no orphan fragments, no pasted ledger runs (tables instead), no
+	// process-tell sentences, no duplicate leading heading, never ends mid-sentence.
+	result = polishSection(s.Title, result)
+	if result == "" {
+		result = w.fallbackSection(s, ix)
+	}
 	// Guarantee the SALIENT figures land. Ranking gets most figures inline, but a weak drafter
 	// still drops some of the headline ones (it used the top figure and reverted to qualitative
 	// prose). attachKeyFigures appends ONLY salient figures (big money / large counts / major
@@ -944,10 +1140,28 @@ Write FLOWING, professional client-ready prose — connected paragraphs, not an 
 }
 
 var (
-	reMetaLine  = regexp.MustCompile(`(?i)(since there (are|were) no\b|based on the provided grounded facts|as an ai\b|as requested\b|^\s*i'?ll?\s+write\b|^\s*i\s+will\s+(now\s+)?(write|draft|provide)\b|^\s*here is (the|my|a)\b|^\s*below is (the|my|a)\b|^\s*note:\s)`)
+	// reMetaLine flags whole lines of agent process-chatter: planning monologue ("Let me
+	// extract the specific figures…", "Now I have the necessary information to write…"),
+	// role/meta commentary, and self-referential framing. First-person planning verbs are
+	// matched generically — the partner-review leaks were exactly the verbs ("extract",
+	// "compose") an enumerated list had missed.
+	reMetaLine  = regexp.MustCompile(`(?i)(since there (are|were) no\b|based on the (provided|extracted|grounded)\b|as an ai\b|as requested\b|^\s*i'?ll?\s+\w+\b|^\s*i\s+will\s+(now\s+)?\w+\b|^\s*here is (the|my|a)\b|^\s*below is (the|my|a)\b|^\s*\[?note:\s|^\s*let me\b|\blet me (now\s+)?(write|draft|search|extract|compose|pull|gather|retrieve)\b|^\s*now (that\s+)?i have\b|now i have (comprehensive|sufficient)\b|i now have (comprehensive|sufficient)\b|^\s*i appreciate\b|^\s*i need to clarify\b|\bclarify my role\b|^\s*i can(not| not)? (draft|write)\b|^\s*i can instead\b|^\s*please confirm which\b|^\s*you'?ve asked me\b|^\s*document prepared as\b)`)
 	reLeadLabel = regexp.MustCompile(`(?i)^\s*#*\s*(stronger view|credible counter-?argument|counter-?argument|open questions?|brief answer|issue(\(s\))?(\s+\d+)?)\s*[:.\-]*\s*`)
 	reBlankRun  = regexp.MustCompile(`\n{3,}`)
+	reHrLine    = regexp.MustCompile(`^\s*[-—_*]{3,}\s*$`)
 )
+
+// reRefusalTell marks a drafter response that is a REFUSAL or role-clarification rather
+// than a draft — the model arguing with its instructions. One hard marker condemns the
+// whole response: refusals are structured multi-paragraph dialogue (numbered options,
+// "please confirm…"), so line-level stripping cannot salvage them.
+var reRefusalTell = regexp.MustCompile(`(?i)(clarify my role|i cannot (draft|write) (a|the|this) section|i can instead draft|you'?ve asked me to|i must decline|i'?m unable to (help|draft|write)|i appreciate the [^.\n]{0,50}(correction|clarification|feedback)|please confirm which approach)`)
+
+// isRefusalDraft reports whether a drafter/reviser response is meta-dialogue about the
+// task (a refusal, a role clarification, a request for confirmation) instead of content.
+func isRefusalDraft(s string) bool {
+	return reRefusalTell.MatchString(s)
+}
 
 // sanitizeDraft strips the machine tells a human immediately flags: leaked process
 // commentary ("Since there are no findings…", "I will write…") and internal deliberation
@@ -962,6 +1176,9 @@ func sanitizeDraft(s string) string {
 			continue
 		}
 		if reMetaLine.MatchString(ln) { // a whole meta-commentary line
+			continue
+		}
+		if reHrLine.MatchString(ln) { // a bare "---" separator is scaffolding, not prose
 			continue
 		}
 		stripped := reLeadLabel.ReplaceAllString(ln, "") // remove a leading deliberation label
@@ -989,6 +1206,129 @@ type handledFig struct {
 	Handle, Value, Context, Source string
 }
 
+// ─── Quote-span protection: verbatim quotes are inviolable ──────────────────────
+
+// quotedSpans returns the [start,end) byte ranges of quoted text in s (straight and
+// curly quotes). An unclosed quote extends to the end of the string — protective:
+// when in doubt, treat text as quoted so machinery never edits inside a quote.
+func quotedSpans(s string) [][2]int {
+	var spans [][2]int
+	open := -1
+	for i, r := range s {
+		switch r {
+		case '"':
+			if open < 0 {
+				open = i
+			} else {
+				spans = append(spans, [2]int{open, i + 1})
+				open = -1
+			}
+		case '“': // “
+			if open < 0 {
+				open = i
+			}
+		case '”': // ”
+			if open >= 0 {
+				spans = append(spans, [2]int{open, i + len("”")})
+				open = -1
+			}
+		}
+	}
+	if open >= 0 {
+		spans = append(spans, [2]int{open, len(s)})
+	}
+	return spans
+}
+
+func inSpans(spans [][2]int, start, end int) bool {
+	for _, sp := range spans {
+		if start < sp[1] && end > sp[0] {
+			return true
+		}
+	}
+	return false
+}
+
+// maskValue replaces value with handle in a context row shown to the drafter — the
+// value→handle direction of the What3Words scheme. Two hard rules fix the partner-review
+// corruption ("Q1 2021" → "QCalliope 202Calliope"):
+//  1. word-boundary only: a value that is a substring of a larger token ("1" inside
+//     "Q1"/"2021") is never touched;
+//  2. quoted spans are inviolable: text inside quotation marks is source verbatim and is
+//     never masked, so a drafter copying the quote copies the original characters.
+func maskValue(text, value, handle string) string {
+	if value == "" {
+		return text
+	}
+	spans := quotedSpans(text)
+	var b strings.Builder
+	i := 0
+	for i < len(text) {
+		j := strings.Index(text[i:], value)
+		if j < 0 {
+			b.WriteString(text[i:])
+			break
+		}
+		j += i
+		end := j + len(value)
+		prevOK := j == 0 || !isWordByte(text[j-1])
+		nextOK := end >= len(text) || !isWordByte(text[end])
+		if prevOK && nextOK && !inSpans(spans, j, end) {
+			b.WriteString(text[i:j])
+			b.WriteString(handle)
+		} else {
+			b.WriteString(text[i:end])
+		}
+		i = end
+	}
+	return b.String()
+}
+
+// scrubUnresolvedHandles enforces the output-side assertion: no handle name may ship.
+// resolveFigureHandles already substituted every MAPPED handle globally; what can remain
+// is a pool name the drafter hallucinated without a mapping. Those are removed at word
+// boundaries — outside quoted spans only (quotes are never edited) — and anything left
+// is logged so a leak is visible in ops, never silent.
+func scrubUnresolvedHandles(text string, handled []handledFig) string {
+	mapped := make(map[string]bool, len(handled))
+	for _, h := range handled {
+		mapped[strings.ToLower(h.Handle)] = true
+	}
+	changed := false
+	for _, name := range figureHandles {
+		if mapped[strings.ToLower(name)] {
+			continue // mapped names were substituted by resolveFigureHandles
+		}
+		re := regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(name) + `\b`)
+		locs := re.FindAllStringIndex(text, -1)
+		if len(locs) == 0 {
+			continue
+		}
+		spans := quotedSpans(text)
+		var b strings.Builder
+		prev := 0
+		for _, loc := range locs {
+			b.WriteString(text[prev:loc[0]])
+			if inSpans(spans, loc[0], loc[1]) {
+				b.WriteString(text[loc[0]:loc[1]]) // quotes are inviolable — leave, but log
+				slog.Warn("unmapped figure handle inside a quoted span left untouched", "handle", name)
+			} else {
+				changed = true
+				slog.Warn("scrubbed unmapped figure handle from section output", "handle", name)
+			}
+			prev = loc[1]
+		}
+		b.WriteString(text[prev:])
+		text = b.String()
+	}
+	if changed {
+		text = reEmptyParens.ReplaceAllString(text, "")
+		text = reSpaceRun.ReplaceAllString(text, " ")
+		text = reSpaceBefPunct.ReplaceAllString(text, "$1")
+	}
+	return text
+}
+
 // assignHandles maps a neutral handle to each DISTINCT salient figure (deduped by value,
 // capped to the pool size). The mapping is shown to the drafter (digit masked) and substituted
 // by the resolver.
@@ -1007,11 +1347,36 @@ func assignHandles(hits []SpecificHit) []handledFig {
 	seen := map[string]bool{}
 	for _, h := range hits {
 		sal := salientFigure(h.Text)
+		score := 0
+		if sal != "" {
+			score = figureSalience(sal)
+		}
+		// A bare 1-2 digit number is a fragment, not a figure — a day-of-month ("18" out
+		// of "October 18, 2024"), a quarter digit, a footnote number. Handling one made
+		// the drafter treat the handle as the WHOLE date and drop the month ("On 18,
+		// 2024" / "commenced on 11, 2024"). Never a handle value.
+		if isBareShortNumber(sal) {
+			sal, score = "", 0
+		}
+		if sal == "" {
+			if c := salientCite(h.Text); c != "" {
+				// Section-number carriage: the harvest surfaces "Section 9.1"/"Item 6"/
+				// "Rule 204A-1"-style identifiers as first-class values. Give them handles
+				// too, so the drafter carries them into prose INTACT (it is forbidden from
+				// typing citations itself — without a handle it would paraphrase to
+				// "Section 9" or drop the reference).
+				sal, score = c, citeSalience
+			} else if d := salientDate(h.Text); d != "" {
+				// Date carriage: the FULL date ("October 18, 2024") is the value, so the
+				// substituted prose always carries the month — never a day fragment.
+				sal, score = d, dateSalience
+			}
+		}
 		if sal == "" || seen[strings.ToLower(sal)] {
 			continue
 		}
 		seen[strings.ToLower(sal)] = true
-		cands = append(cands, cand{sal, h, figureSalience(sal)})
+		cands = append(cands, cand{sal, h, score})
 	}
 	// Rank by salience so headline figures ($8.2M, 4,217, 81.6%) lead the list and the noise
 	// tail (small bare numbers from exhibit rows) falls off the cap, not the salient ones.
@@ -1026,10 +1391,41 @@ func assignHandles(hits []SpecificHit) []handledFig {
 	return out
 }
 
+// isBareShortNumber reports whether a candidate value is a bare 1-2 digit number with no
+// unit marker — the fragment class ("18", "1") that must never become a handle value.
+func isBareShortNumber(s string) bool {
+	if s == "" || len(s) > 2 || strings.ContainsAny(s, "$%,./") {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// dateSalience ranks a full-date handle value: above minor percentages but below the
+// salience-guarantee floor, so dates are carried via handles yet never appended to the
+// mechanical "Key figures" tail.
+const dateSalience = 50
+
+// reSalientDate extracts a FULL date — month-name day-year, month-name year, or a
+// numeric m/d/y form — so the handle value is the complete date, never a day fragment.
+var reSalientDate = regexp.MustCompile(`(?i)\b(?:january|february|march|april|may|june|july|august|september|october|november|december)\s+(?:\d{1,2},?\s+)?(?:19|20)\d\d\b|\b\d{1,2}/\d{1,2}/\d{2,4}\b`)
+
+// salientDate returns the first full date in a row, or "" when none.
+func salientDate(s string) string {
+	return reSalientDate.FindString(s)
+}
+
 // figureSalience scores how "headline" a figure is. Big money and large counts rank highest
 // (the quantified harm a legal memo turns on); rates next; the small bare numbers exhibit tables
 // are full of rank lowest, so they fall off the cap before a salient figure does.
 func figureSalience(v string) int {
+	if !strings.ContainsAny(v, "$%") && reSalientDate.MatchString(v) {
+		return dateSalience // a date value is carried, but is never a "Key figure"
+	}
 	lv := strings.ToLower(v)
 	clean := strings.Map(func(r rune) rune {
 		if (r >= '0' && r <= '9') || r == '.' {
@@ -1068,18 +1464,51 @@ func figureSalience(v string) int {
 // stragglers a weak drafter dropped without dragging in minor percentages or small numbers.
 const salienceGuaranteeFloor = 55
 
+// citeSalience ranks a citation identifier in the handle list: above minor percentages
+// (an operative "Rule 204A-1" outranks a 1.5% exhibit detail) but below the headline
+// money/counts/rates. Note assignHandles scores cites with this constant, while the
+// Key-figures guarantee tail keys on figureSalience(Value) — which stays low for a cite,
+// so citations never leak into the "Key figures" block (TestAttachKeyFiguresSelective).
+const citeSalience = 58
+
+// reSalientCite extracts a FULL citation identifier — the keyword and its complete
+// number, subsections included: "Section 9.1", "Item 6", "Rule 204A-1", "Rule 206(4)-7",
+// "§ 275.204A-1". Used to hand citations to the drafter as handles carried verbatim.
+var reSalientCite = regexp.MustCompile(`(?i)\b(?:Sections?|Rule|Item|Part|Article|Clause|Paragraph|Exhibit|§§?)\s*[0-9](?:[0-9A-Za-z.\-]|\([0-9a-zA-Z]+\))*`)
+
+// salientCite returns the first full citation identifier in a row (trailing sentence
+// punctuation trimmed), or "" when the row carries none.
+func salientCite(s string) string {
+	m := reSalientCite.FindString(s)
+	return strings.TrimRight(m, ".-")
+}
+
+// Substitution-tidy patterns, hoisted (and scoped): cleanup must never eat paragraph
+// breaks, so runs collapse within a line only ([ \t], not \s — \s{2,} matched "\n\n"
+// and flattened the whole section into one wall of text).
+var (
+	reEmptyParens   = regexp.MustCompile(`\(\s*\)`)
+	reSpaceRun      = regexp.MustCompile(`[ \t]{2,}`)
+	reSpaceBefPunct = regexp.MustCompile(`[ \t]+([.,;)])`)
+)
+
 // resolveFigureHandles substitutes each handle (case-insensitive, word-boundary) with its exact
 // grounded value, then strips any stray {{FIG:…}} the drafter emitted out of habit and tidies
 // the artefacts a substitution can leave (empty parens, doubled spaces, space-before-punct).
+//
+// The substitution is LITERAL (ReplaceAllLiteralString): a grounded value like "$7,800,000"
+// contains "$7", which ReplaceAllString would expand as a (nonexistent) capture-group
+// reference — eating the "$7" and corrupting the figure to ",800,000" (the
+// "approximately,800,000" bug). Values are data, never replacement templates.
 func resolveFigureHandles(text string, handled []handledFig) string {
 	for _, h := range handled {
 		re := regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(h.Handle) + `\b`)
-		text = re.ReplaceAllString(text, h.Value)
+		text = re.ReplaceAllLiteralString(text, h.Value)
 	}
 	text = rePlaceholder.ReplaceAllString(text, "")
-	text = regexp.MustCompile(`\(\s*\)`).ReplaceAllString(text, "")
-	text = regexp.MustCompile(`\s{2,}`).ReplaceAllString(text, " ")
-	return regexp.MustCompile(`\s+([.,;)])`).ReplaceAllString(text, "$1")
+	text = reEmptyParens.ReplaceAllString(text, "")
+	text = reSpaceRun.ReplaceAllString(text, " ")
+	return reSpaceBefPunct.ReplaceAllString(text, "$1")
 }
 
 var rePlaceholder = regexp.MustCompile(`\{\{\s*FIG:\s*([^}]+?)\s*\}\}`)
@@ -1106,10 +1535,10 @@ func resolveFigurePlaceholders(text string, figs []SpecificHit) string {
 	})
 	// Tidy artefacts a dropped placeholder leaves behind: empty/whitespace-only parens
 	// (e.g. a citation "()" the drafter emitted with no source), doubled spaces, and a
-	// space before punctuation.
-	out = regexp.MustCompile(`\(\s*\)`).ReplaceAllString(out, "")
-	out = regexp.MustCompile(`\s{2,}`).ReplaceAllString(out, " ")
-	return regexp.MustCompile(`\s+([.,;)])`).ReplaceAllString(out, "$1")
+	// space before punctuation. Within-line only — paragraph breaks are sacred.
+	out = reEmptyParens.ReplaceAllString(out, "")
+	out = reSpaceRun.ReplaceAllString(out, " ")
+	return reSpaceBefPunct.ReplaceAllString(out, "$1")
 }
 
 // tokenOverlap counts shared content words (≥3 chars) between a placeholder
@@ -1405,22 +1834,65 @@ func batchByTokens(blocks []string, budget int) [][]string {
 	return out
 }
 
-// fallbackSection renders a section as a grounded bullet list of its findings'
-// conclusions — used when the drafter model returns nothing, so output is never blank.
+// fallbackSection renders a section from its findings when the drafter model returns
+// nothing — as AUTHORED content, not a case-file dump: substantive conclusions become
+// flowing sentences grouped into paragraphs, ledger/exhibit rows become a table, and
+// process-language conclusions ("must be extracted from…", "Evidence on point…") are
+// structurally excluded — they can never reach the client. Returns "" when nothing
+// substantive remains (the section is then omitted, never placeholder-filled).
 func (w *Writer) fallbackSection(s section, ix *FindingIndex) string {
-	var b strings.Builder
+	var sents []string
+	var ledger []string
+	seen := map[string]bool{}
 	for _, id := range s.FindingIDs {
 		f, ok := ix.Get(id)
 		if !ok {
 			continue
 		}
 		c := oneLine(f.Content)
-		if !f.Grounded {
-			c += " (unverified — requires confirmation)"
+		if c == "" || isProcessConclusion(c) {
+			// The conclusion is a placeholder/process line — fall back to the finding's
+			// verbatim evidence, which is always substantive, or skip entirely.
+			if e := oneLine(f.Evidence); e != "" && !isProcessConclusion(e) {
+				c = e
+			} else {
+				continue
+			}
 		}
-		fmt.Fprintf(&b, "- %s\n", c)
+		if k := dedupKey(c); k == "" || seen[k] {
+			continue
+		} else {
+			seen[k] = true
+		}
+		if isLedgerLine(c) {
+			ledger = append(ledger, c)
+			continue
+		}
+		if !endsSentence(c) {
+			c += "."
+		}
+		if !f.Grounded {
+			c = strings.TrimSuffix(c, ".") + " (unverified — requires confirmation)."
+		}
+		sents = append(sents, c)
 	}
-	return strings.TrimSpace(b.String())
+	var blocks []string
+	// Compose the sentences into paragraphs of a few sentences each — prose, not bullets.
+	const perPara = 4
+	for i := 0; i < len(sents); i += perPara {
+		end := i + perPara
+		if end > len(sents) {
+			end = len(sents)
+		}
+		blocks = append(blocks, strings.Join(sents[i:end], " "))
+	}
+	if len(ledger) >= 3 {
+		blocks = append(blocks, strings.Join(collapseLedgerRuns(ledger), "\n"))
+	} else if len(ledger) > 0 {
+		// Too few rows for a table — summarize in prose instead of pasting fragments.
+		blocks = append(blocks, "The grounded record also shows: "+strings.Join(ledger, "; ")+".")
+	}
+	return strings.TrimSpace(strings.Join(blocks, "\n\n"))
 }
 
 // complete is a single, tool-less model call (planner / stitch passes).

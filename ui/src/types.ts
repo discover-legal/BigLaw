@@ -4,7 +4,7 @@ export type WorkflowType =
   | "counsel" | "roundtable" | "adversarial" | "review" | "tabulate" | "full_bench";
 
 export type TaskStatus =
-  | "pending" | "running" | "awaiting_gate" | "complete" | "failed";
+  | "pending" | "running" | "awaiting_gate" | "complete" | "failed" | "interrupted";
 
 export type TaskPhase =
   | "intake" | "research" | "analysis" | "drafting" | "review" | "verification" | "delivery";
@@ -87,6 +87,14 @@ export interface RoundState {
   status: string;
   startedAt: string;
   completedAt?: string;
+  /** True when the round ended with zero findings from every active agent. */
+  starved?: boolean;
+}
+
+/** A round that completed with zero findings from all of its agents. */
+export interface StarvedRound {
+  round: number;
+  phase: TaskPhase;
 }
 
 export type LawyerRole = "lawyer" | "partner";
@@ -288,6 +296,8 @@ export interface Task {
   updatedAt: string;
   completedAt?: string;
   table?: TaskTable;
+  /** Non-empty means the run was degraded — rounds that produced zero findings. */
+  starvedRounds?: StarvedRound[];
 }
 
 export interface Template {
@@ -841,6 +851,106 @@ export interface CitationCheckResult {
   reasoning: string;
   courtListenerUrl?: string;
   checkedAt: string;
+}
+
+// ─── Tabular review (due-diligence grid) ─────────────────────────────────────
+// Mirrors internal/tools/tabreview.go + tabcite.go JSON tags.
+
+export type ReviewFlag = "green" | "grey" | "yellow" | "red";
+
+export type ReviewCitationMethod =
+  | "exact_match" | "tolerant_match" | "paraphrase_judge" | "ensemble_majority" | "unverified";
+
+export interface ReviewCitation {
+  page: number;
+  quote: string;
+  verified: boolean;
+  method: ReviewCitationMethod;
+  confidence: number;
+  note?: string;
+}
+
+export interface ReviewCitationTally {
+  total: number;
+  verified: number;
+  byMethod: Record<string, number>;
+}
+
+export interface ReviewCell {
+  column: string;
+  summary: string;
+  flag: ReviewFlag;
+  reasoning: string;
+  citations: ReviewCitation[];
+  citationsVerified: number;
+  citationsTotal: number;
+}
+
+export interface ReviewRow {
+  documentId: string;
+  document: string;
+  cells: ReviewCell[];
+}
+
+export interface ReviewRecord {
+  reviewId: string;
+  createdAt: string;
+  columns: string[];
+  rows: ReviewRow[];
+  flagTally: Record<string, number>;
+  citationTally?: ReviewCitationTally;
+  legend: Record<string, string>;
+}
+
+// ─── Redtime (document version lineage timeline) ─────────────────────────────
+// Mirrors internal/redtime/timeline.go JSON tags.
+
+export type RedtimeSource = "ours" | "theirs" | "upload";
+
+export interface RedtimeVersion {
+  id: string;
+  round: number;
+  source: RedtimeSource;
+  author?: string;
+  createdAt?: string;
+  path?: string;
+  decisions?: unknown;
+}
+
+export type ClauseEventKind = "insertion" | "deletion" | "substitution";
+
+export interface ClauseEvent {
+  round: number;
+  actor: string;
+  kind: ClauseEventKind;
+  fromText?: string;
+  toText?: string;
+  viaTrackedChange: boolean;
+  decision?: string;
+  decisionNote?: string;
+}
+
+export type DriftStatus = "at_position" | "above" | "below" | "unknown";
+
+export interface ClauseDrift {
+  status: DriftStatus;
+  note: string;
+  playbookTier?: string;
+}
+
+export interface ClauseTimeline {
+  clause: string;
+  events: ClauseEvent[];
+  currentText?: string;
+  drift?: ClauseDrift;
+}
+
+export interface RedtimeTimeline {
+  lineageId: string;
+  rounds: number;
+  generatedAt: string;
+  versions: RedtimeVersion[];
+  clauses: ClauseTimeline[];
 }
 
 // ─── Analytics ────────────────────────────────────────────────────────────────

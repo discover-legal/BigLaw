@@ -1,9 +1,12 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Discover Legal
 
 package ontology
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestSubclass(t *testing.T) {
 	if !Person.IsA(Party) {
@@ -48,6 +51,27 @@ func TestNormalizeDirectionFix(t *testing.T) {
 	// Both classes known and incompatible with the predicate either way → dropped.
 	if _, _, _, _, _, ok3 := Normalize("$438,000", Money, "violates", "78%", Percentage); ok3 {
 		t.Error("incompatible domain/range should be dropped")
+	}
+}
+
+// The Layer-3 analytic vocabulary in Go must stay in lockstep with the canonical Turtle
+// spec: every IssueKind is a belo:DefenseIssue subclass declared in belo.ttl.
+func TestIssueKindsDeclaredInSpec(t *testing.T) {
+	kinds := []IssueKind{DiscrepancyKind, ElementGapKind, LimitationsKind, CriminalExposureKind, MentalStateKind, InnocentReadingKind}
+	seen := map[IssueKind]bool{}
+	for _, k := range kinds {
+		if seen[k] {
+			t.Errorf("duplicate IssueKind %q", k)
+		}
+		seen[k] = true
+		if !strings.Contains(Spec, "belo:"+string(k)) {
+			t.Errorf("IssueKind %q has no belo:%s class in belo.ttl", k, k)
+		}
+	}
+	for _, pred := range []string{"carriesParallelExposure", "requiresMentalState", "timeBarredBy", "admitsInnocentReading"} {
+		if !strings.Contains(Spec, "belo:"+pred) {
+			t.Errorf("analytic predicate belo:%s missing from belo.ttl", pred)
+		}
 	}
 }
 

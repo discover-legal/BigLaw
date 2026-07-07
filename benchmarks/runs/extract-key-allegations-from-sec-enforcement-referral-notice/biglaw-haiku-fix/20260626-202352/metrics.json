@@ -1,0 +1,24 @@
+{
+  "input_tokens": 80650,
+  "output_tokens": 46534,
+  "total_tokens": 127184,
+  "turns": 6,
+  "duration_seconds": 630.9,
+  "num_documents": 8,
+  "documents_read": 8,
+  "completed": true,
+  "ended_at": "2026-06-26T20:34:23.001077+00:00",
+  "biglaw": {
+    "task_ids": [
+      "2a8b7104-1665-4f51-83ca-bec4060d3e31"
+    ],
+    "workflow_type": "roundtable",
+    "split_mode": "single",
+    "cost_usd": 0.0,
+    "gate_policy": "approve",
+    "gates": [],
+    "gates_resolved": 0,
+    "findings": 0,
+    "documents_skipped": []
+  }
+}

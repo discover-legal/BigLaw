@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Discover Legal
 
 // Package ontology is the Go encoding of the BigLaw Epistemic Legal Ontology
@@ -320,6 +320,33 @@ func Normalize(s string, sClass Class, rel, o string, oClass Class) (subj string
 		return s, sClass, p.Name, o, oClass, true
 	}
 	return s, sClass, rel, o, oClass, false
+}
+
+// ─── Analytic layer (Layer 3) — derived defense issues ────────────────────────
+
+// IssueKind classifies a derived DefenseIssue (the belo:DefenseIssue subclasses in
+// belo.ttl). Each kind is one analytic template: authority/conduct patterns in the
+// grounded claim graph derive the defense angle a lawyer would raise.
+type IssueKind string
+
+const (
+	DiscrepancyKind      IssueKind = "DiscrepancyIssue"        // cross-source contradiction (contradicts-pair)
+	ElementGapKind       IssueKind = "ElementGapIssue"         // charged authority carries a contestable element
+	LimitationsKind      IssueKind = "LimitationsIssue"        // limitations window joined to dated conduct
+	CriminalExposureKind IssueKind = "CriminalExposureIssue"   // civil conduct with parallel criminal exposure
+	MentalStateKind      IssueKind = "MentalStateMappingIssue" // conduct → required mental state mapping / ambiguity
+	InnocentReadingKind  IssueKind = "InnocentReadingIssue"    // ambiguous communication admits an innocent reading
+)
+
+// DerivedIssue is a Layer-3 analytic conclusion. Unlike a Claim it is not itself
+// grounded by a verbatim span — it is DERIVED from grounded claims and the charging
+// documents' verbatim text by a curated template, so it carries the claim subject it
+// attaches to and, when the derivation rests on a specific span, that span.
+type DerivedIssue struct {
+	Kind  IssueKind
+	About string // the Conduct/Authority the issue attaches to ("" = matter-wide)
+	Text  string // the rendered defense analysis
+	Quote string // verbatim record span the derivation rests on, when there is one
 }
 
 // ─── Lightweight literal classification (fallback when extractor omits a type) ─

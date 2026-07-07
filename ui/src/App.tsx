@@ -15,12 +15,13 @@ import { BillingPage } from "./pages/BillingPage";
 import { BudgetsPage } from "./pages/BudgetsPage";
 import { WatchtowerPage } from "./pages/WatchtowerPage";
 import { DraftingPage } from "./pages/DraftingPage";
+import { ReviewsPage } from "./pages/ReviewsPage";
 import { AnalyticsPage } from "./pages/AnalyticsPage";
 import { AdminPanel } from "./AdminPanel";
 
 type Section =
   | "home" | "matters" | "library" | "clients" | "billing" | "budgets"
-  | "watchtower" | "drafting" | "analytics" | "admin";
+  | "watchtower" | "drafting" | "reviews" | "analytics" | "admin";
 
 const NAV: Array<{ id: Section; glyph: string; label: string }> = [
   { id: "home",       glyph: "⌂", label: "Home" },
@@ -31,6 +32,7 @@ const NAV: Array<{ id: Section; glyph: string; label: string }> = [
   { id: "budgets",    glyph: "◔", label: "Budgets & Deadlines" },
   { id: "watchtower", glyph: "◉", label: "Watchtower" },
   { id: "drafting",   glyph: "✎", label: "Drafting" },
+  { id: "reviews",    glyph: "▦", label: "Reviews" },
   { id: "analytics",  glyph: "∿", label: "Analytics" },
   { id: "admin",      glyph: "⚙", label: "Admin" },
 ];
@@ -135,7 +137,7 @@ export default function App() {
   // rather than rendered as a wall of 403s.
   const caps = me?.capabilities;
   const visible = useMemo(() => {
-    const out = new Set<Section>(["home", "matters", "library", "drafting", "budgets"]);
+    const out = new Set<Section>(["home", "matters", "library", "drafting", "reviews", "budgets"]);
     if (isPartner && caps?.clientRoster !== false) out.add("clients");
     if (caps?.timeTracking !== false) out.add("billing");
     if (isPartner) out.add("watchtower");
@@ -242,6 +244,7 @@ export default function App() {
             {section === "budgets" && <BudgetsPage notify={notify} isPartner={isPartner} />}
             {section === "watchtower" && <WatchtowerPage notify={notify} />}
             {section === "drafting" && <DraftingPage notify={notify} isPartner={isPartner} />}
+            {section === "reviews" && <ReviewsPage notify={notify} />}
             {section === "analytics" && <AnalyticsPage notify={notify} />}
             {section === "admin" && (
               <AdminPanel
