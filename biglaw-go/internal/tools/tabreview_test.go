@@ -426,7 +426,7 @@ func TestReadTableCellsCorruptPayloadIsNotFound(t *testing.T) {
 	repo := store.NewMemoryRepo()
 	reg := newTabularTestRegistryWithRepo(t, srv.URL, repo)
 
-	if err := repo.PutReview(context.Background(), "corrupt-rev-1", time.Now(), []byte("{not json")); err != nil {
+	if err := repo.PutReview(context.Background(), "corrupt-rev-1", "", "", time.Now(), []byte("{not json")); err != nil {
 		t.Fatal(err)
 	}
 	res, err := reg.Execute("read_table_cells", map[string]interface{}{"review_id": "corrupt-rev-1"}, agents.ToolContext{})

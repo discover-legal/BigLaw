@@ -203,8 +203,9 @@ export default function App() {
             {health ? <>API v{health.version} · up {Math.floor(health.uptime / 60)}m</> : "API offline"}
           </div>
           <div className="health">
-            {health && <>
-              <span>{health.tasks.running} running</span>
+			{health && <>
+			  <span>{health.tasks.queued} queued</span>
+			  <span>{health.tasks.running} running</span>
               <span style={{ color: "var(--amber)" }}>{health.tasks.awaiting_gate} gated</span>
               <span style={{ color: "var(--green)" }}>{health.tasks.complete} done</span>
             </>}

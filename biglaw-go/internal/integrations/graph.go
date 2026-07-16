@@ -104,7 +104,10 @@ func httpGet(urlStr, bearer string) ([]byte, error) {
 }
 
 func httpPost(urlStr, contentType string, body io.Reader, bearer string) ([]byte, error) {
-	client := &http.Client{Timeout: graphTimeout}
+	return httpPostClient(&http.Client{Timeout: graphTimeout}, urlStr, contentType, body, bearer)
+}
+
+func httpPostClient(client *http.Client, urlStr, contentType string, body io.Reader, bearer string) ([]byte, error) {
 	req, err := http.NewRequest("POST", urlStr, body)
 	if err != nil {
 		return nil, err
@@ -329,7 +332,7 @@ func PostToTeamsWebhook(webhookURL, title, text string, facts []WebhookFact) err
 	if err != nil {
 		return err
 	}
-	_, err = httpPost(webhookURL, "application/json", bytes.NewReader(b), "")
+	_, err = httpPostClient(urlguard.NewPublicClient(graphTimeout, true), webhookURL, "application/json", bytes.NewReader(b), "")
 	return err
 }
 

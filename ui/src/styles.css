@@ -416,6 +416,7 @@ body::after {
 .dot.failed   { background: var(--red); }
 .dot.interrupted { background: var(--amber); }
 .dot.pending  { background: var(--text-faint); }
+.dot.queued   { background: var(--text-faint); }
 @keyframes pulse {
   0%   { box-shadow: 0 0 0 0 currentColor; }
   70%  { box-shadow: 0 0 0 6px rgba(0,0,0,0); }

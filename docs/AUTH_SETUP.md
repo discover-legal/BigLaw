@@ -5,7 +5,7 @@ BigLaw is **single-user with no login locally** (`AUTH_ENABLED=false` → one
 and wire one or more OAuth providers. This guide takes ~10 minutes.
 
 > Non-browser clients (scripts, CI, MCP) can authenticate instead with a bearer
-> `API_KEY` plus an `X-Profile-ID` header identifying the acting lawyer — no OAuth
+> `API_KEY`, bound server-side to `API_PROFILE_ID` — no caller-selected identity or OAuth
 > needed. Both credentials enforce the same access model.
 
 ## Access model (recap)
@@ -54,6 +54,8 @@ You only need the providers you want — any one is enough.
 ```bash
 AUTH_ENABLED=true
 SESSION_SECRET=        # openssl rand -hex 32
+API_KEY=               # random bearer secret
+API_PROFILE_ID=        # existing profile bound to API_KEY
 PUBLIC_BASE_URL=http://localhost:5173     # OAuth redirect base (UI origin for local)
 PUBLIC_UI_URL=http://localhost:5173       # where to land after login
 CORS_ORIGINS=http://localhost:5173        # allow-listed browser origin(s)
@@ -83,5 +85,5 @@ roster and assign matters from **Admin · settings**.
 - For production behind a domain, set `PUBLIC_BASE_URL`/`PUBLIC_UI_URL`/
   `CORS_ORIGINS` to that origin and register the matching redirect URIs; cookies
   are marked `Secure` automatically when `PUBLIC_BASE_URL` is `https`.
-- An optional `API_KEY` (sent as `x-api-key`) can gate non-browser clients
+- `API_KEY` (as `Authorization: Bearer ...`) is bound to `API_PROFILE_ID` for non-browser clients
   independently of OAuth.

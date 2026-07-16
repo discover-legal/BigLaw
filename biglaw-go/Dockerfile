@@ -11,7 +11,7 @@
 #     time with:  docker buildx build --sbom=true --provenance=true ...
 #     (the binary also embeds its full module manifest: `go version -m biglaw`)
 
-FROM golang:1.25-alpine AS build
+FROM golang:1.25.12-alpine AS build
 WORKDIR /src
 COPY biglaw-go/go.mod biglaw-go/go.sum ./
 RUN go mod download

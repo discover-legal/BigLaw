@@ -305,7 +305,12 @@ export function TaskView({ task, agentNames, profiles, isPartner, onChange, onDe
               {task.matterNumber && <>MATTER {task.matterNumber}</>}
             </span>
           )}
-          {pendingGates > 0 && <span className="pill amber">⚖ {pendingGates} awaiting review</span>}
+		  {pendingGates > 0 && <span className="pill amber">⚖ {pendingGates} awaiting review</span>}
+		  {task.queue && (
+			<span className="pill" title={`${task.queue.confidence} confidence · range ${new Date(task.queue.estimatedCompletion.earliest).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}–${new Date(task.queue.estimatedCompletion.latest).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`}>
+			  {task.queue.position > 0 ? `#${task.queue.position} in queue · ` : ""}ETA {new Date(task.queue.estimatedCompletion.likely).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+			</span>
+		  )}
           {task.error && <span className="pill red">{task.error}</span>}
         </div>
         <h1 className="task-title">{conciseTitle(task.description)}</h1>

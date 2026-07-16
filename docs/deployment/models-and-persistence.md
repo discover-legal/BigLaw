@@ -33,6 +33,28 @@ Documents persist through a storage seam:
   per-transaction), layered *under* the existing application-layer access checks (defense in depth).
   ⚠ RLS only binds **non-superuser** roles — connect as a plain app role (on Supabase, not `service_role`).
 
+### Task queue and snapshots
+
+Task admission uses persisted task state as its durable queue. Submission returns only after
+the queued record is written; restored `queued`/legacy `pending` tasks are admitted in creation
+order. Configure execution independently from the generic operations-job queue:
+
+```bash
+QUEUE_CONCURRENCY=3   # active orchestrator tasks
+QUEUE_MAX_PENDING=1000
+TASKS_FILE=.tasks.json
+```
+
+Task snapshots are serialized by one writer directly to a temporary file and atomically
+renamed. The encoder holds a consistent read snapshot, so task slices cannot mutate while
+being serialized and no second full JSON buffer is required. This JSON persistence remains
+appropriate for a single BigLaw process; horizontally scaled deployments should move task
+state and queue claims to a transactional database before adding replicas.
+
+The queue is deliberately bounded. Reaching `QUEUE_MAX_PENDING` returns `503 Service
+Unavailable` with `Retry-After`; this is an emergency boundary rather than the normal load
+path. Normal saturation remains queued and visible through task position and ETA fields.
+
 ## Omnimodal documents
 
 `/documents/upload` accepts PDF (digital + scanned), Word (`.docx`),

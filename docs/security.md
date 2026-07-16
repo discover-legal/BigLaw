@@ -27,19 +27,20 @@ attack surface is treated seriously.
 
 | Area | What's in place |
 |---|---|
-| **Constant-time auth** | Bearer-token and session-signature comparison use `subtle.ConstantTimeCompare`; the token is the credential — `X-Profile-ID` alone is just a claim |
+| **Constant-time, bound auth** | Bearer-token and session-signature comparison use `subtle.ConstantTimeCompare`; bearer identity comes from `API_PROFILE_ID`, never a caller-selected header |
 | **Signed sessions** | Session cookies are HMAC-SHA256-signed, httpOnly, SameSite=Lax, Secure on HTTPS, 12 h expiry with jti revocation |
 | **Auth rate limiting** | `/auth/*` endpoints are sliding-window rate-limited to 20 req/min per IP |
 | **Path traversal** | PDF/docx tools enforce an allow-list of read roots and confine output to the output directory (symlinks resolved) |
 | **Prompt injection** | `SanitizePromptContent` strips rogue protocol markers (FINDING/CHALLENGE/RESOLUTION…, case-insensitive) and control characters from all user-supplied content before it reaches a model — task descriptions, round goals, tone imports, debate resolutions |
-| **SSRF protection** | Endpoint URLs are validated against a private/loopback blocklist (incl. `::`, `0.0.0.0`, CGNAT 100.64/10, IPv4-mapped IPv6, hex/decimal IP forms); the CourtListener client refuses redirects |
+| **SSRF protection** | Endpoint URLs are validated lexically and again after DNS resolution by a controlled dialer; private/loopback/link-local/reserved results are rejected, and every redirect is revalidated |
 | **CSV safety** | Time-entry and tabulate CSV exports neutralise formula injection and strip `\r\n` from field values |
 | **Audit integrity** | SHA-256 hash chain verified on restore — tampering logs a warning |
-| **Bot signature verification** | Teams Outgoing Webhook: HMAC-SHA256 over the raw body (`Authorization: HMAC <base64>`). Slack Events API: signing-secret + 5-min replay window |
-| **Access control** | Partner gates on playbook, roster, client, billing, and analytics endpoints; lawyers see only assigned matters |
+| **Bot signature verification** | Teams Outgoing Webhook: HMAC-SHA256 over the raw body (`Authorization: HMAC <base64>`). Slack Events API: signing-secret + 5-min replay window. These inbound routes are public only so provider verification can execute; bot administration remains authenticated |
+| **Access control** | Bearer credentials are bound server-side to one profile; reviews and document versions carry owner/matter identity; partner gates cover playbook, roster, client, billing, and analytics endpoints |
 | **Conflict checks** | Entity-name normalisation + bidirectional matching, with an optional TypeDB conflict-graph sidecar |
 | **Round resilience** | Per-agent round timeout (`AGENT_ROUND_TIMEOUT_MS`, default 300000); an agent that exceeds it gets one retry with an extended budget (`ROUND_TIMEOUT_RETRY_FACTOR`, default 2.0) before recording nothing. A round in which every agent came back empty emits a `round.starved` audit event and annotates the task (`starvedRounds`) so consumers see the run was degraded. Malformed debate resolutions route to a human gate instead of passing silently |
 | **Boot task quarantine** | Tasks restored from `TASKS_FILE` in a mid-run status (`running`/`awaiting_gate`) are marked `interrupted` with a `task.interrupted` audit event — their runner goroutine died with the previous process, so silently re-listing them as running left zombie tasks contending with live work. Resubmit to rerun; `RESUME_RUNNING_TASKS=true` restores the old behaviour |
+| **Bounded execution** | Durable FIFO admission and a fixed worker pool prevent one goroutine per submission; pending work is capped by `QUEUE_MAX_PENDING`, task snapshots are serialized by one streaming writer, and queued wait is not billed |
 | **No secrets in logs** | API keys appear only in `Authorization` headers; connector error messages are length-capped; response bodies capped (1–2 MB) with 30 s timeouts |
 
 Related: [Legal notices & disclaimers](legal-notices.md) · [Access control](operations/access-control.md) · [Audit trail](operations/audit-trail.md)

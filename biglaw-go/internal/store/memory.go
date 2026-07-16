@@ -26,8 +26,10 @@ type MemoryRepo struct {
 
 // memReview is one stored tabular-review payload.
 type memReview struct {
-	createdAt time.Time
-	payload   []byte
+	createdAt    time.Time
+	ownerID      string
+	matterNumber string
+	payload      []byte
 }
 
 func NewMemoryRepo() *MemoryRepo {
@@ -130,7 +132,7 @@ func (m *MemoryRepo) DeleteAttachment(_ context.Context, id string) error {
 
 // ─── ReviewRepository ────────────────────────────────────────────────────────────
 
-func (m *MemoryRepo) PutReview(_ context.Context, id string, createdAt time.Time, payload []byte) error {
+func (m *MemoryRepo) PutReview(_ context.Context, id, ownerID, matterNumber string, createdAt time.Time, payload []byte) error {
 	if createdAt.IsZero() {
 		createdAt = time.Now()
 	}
@@ -138,15 +140,15 @@ func (m *MemoryRepo) PutReview(_ context.Context, id string, createdAt time.Time
 	copy(cp, payload)
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.reviews[id] = memReview{createdAt: createdAt, payload: cp}
+	m.reviews[id] = memReview{createdAt: createdAt, ownerID: ownerID, matterNumber: matterNumber, payload: cp}
 	return nil
 }
 
-func (m *MemoryRepo) GetReview(_ context.Context, id string) ([]byte, bool, error) {
+func (m *MemoryRepo) GetReview(ctx context.Context, id string) ([]byte, bool, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	rev, ok := m.reviews[id]
-	if !ok {
+	if !ok || !CanAccessOwner(ctx, rev.ownerID) {
 		return nil, false, nil
 	}
 	cp := make([]byte, len(rev.payload))
@@ -170,11 +172,11 @@ func (m *MemoryRepo) PutVersion(_ context.Context, v DocumentVersion) error {
 	return nil
 }
 
-func (m *MemoryRepo) GetVersion(_ context.Context, id string) (*DocumentVersion, bool, error) {
+func (m *MemoryRepo) GetVersion(ctx context.Context, id string) (*DocumentVersion, bool, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	v, ok := m.versions[id]
-	if !ok {
+	if !ok || !CanAccessOwner(ctx, v.OwnerID) {
 		return nil, false, nil
 	}
 	cp := v
@@ -182,12 +184,12 @@ func (m *MemoryRepo) GetVersion(_ context.Context, id string) (*DocumentVersion,
 	return &cp, true, nil
 }
 
-func (m *MemoryRepo) ListLineage(_ context.Context, lineageID string) ([]DocumentVersion, error) {
+func (m *MemoryRepo) ListLineage(ctx context.Context, lineageID string) ([]DocumentVersion, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	var out []DocumentVersion
 	for _, id := range m.verOrder { // insertion order breaks round ties
-		if v := m.versions[id]; v.LineageID == lineageID {
+		if v := m.versions[id]; v.LineageID == lineageID && CanAccessOwner(ctx, v.OwnerID) {
 			out = append(out, v)
 		}
 	}
@@ -195,21 +197,21 @@ func (m *MemoryRepo) ListLineage(_ context.Context, lineageID string) ([]Documen
 	return out, nil
 }
 
-func (m *MemoryRepo) FindVersionByHash(_ context.Context, contentHash string) (*DocumentVersion, bool, error) {
-	return m.findVersion(func(v DocumentVersion) bool { return v.ContentHash == contentHash })
+func (m *MemoryRepo) FindVersionByHash(ctx context.Context, contentHash string) (*DocumentVersion, bool, error) {
+	return m.findVersion(ctx, func(v DocumentVersion) bool { return v.ContentHash == contentHash })
 }
 
-func (m *MemoryRepo) FindVersionByPath(_ context.Context, path string) (*DocumentVersion, bool, error) {
-	return m.findVersion(func(v DocumentVersion) bool { return v.Path == path })
+func (m *MemoryRepo) FindVersionByPath(ctx context.Context, path string) (*DocumentVersion, bool, error) {
+	return m.findVersion(ctx, func(v DocumentVersion) bool { return v.Path == path })
 }
 
 // findVersion returns the most recently registered version matching the
 // predicate (walks the insertion order backwards).
-func (m *MemoryRepo) findVersion(match func(DocumentVersion) bool) (*DocumentVersion, bool, error) {
+func (m *MemoryRepo) findVersion(ctx context.Context, match func(DocumentVersion) bool) (*DocumentVersion, bool, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	for i := len(m.verOrder) - 1; i >= 0; i-- {
-		if v := m.versions[m.verOrder[i]]; match(v) {
+		if v := m.versions[m.verOrder[i]]; match(v) && CanAccessOwner(ctx, v.OwnerID) {
 			cp := v
 			cp.Decisions = append([]byte(nil), v.Decisions...)
 			return &cp, true, nil

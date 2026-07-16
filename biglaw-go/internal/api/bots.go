@@ -8,6 +8,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -30,6 +31,8 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/urlguard"
 )
 
+const inboundWebhookMaxBytes = 1 << 20
+
 // mountBots registers the bot webhook + matter-link routes and starts the
 // task-completion notifier. Webhook receivers verify their own HMAC signatures,
 // so they are public; matter-link management is partner-gated.
@@ -38,7 +41,10 @@ func (s *Server) mountBots(r *gin.Engine) {
 	facade := &botFacade{s: s, briefing: briefing.New(s.provReg.MustGet(midID), midID)}
 
 	r.POST("/bots/teams/webhook", func(c *gin.Context) {
-		body, _ := io.ReadAll(c.Request.Body)
+		body, err := readWebhookBody(c)
+		if err != nil {
+			return
+		}
 		out, status, err := bots.HandleTeamsWebhook(string(body), c.GetHeader("Authorization"), facade)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -48,7 +54,10 @@ func (s *Server) mountBots(r *gin.Engine) {
 	})
 
 	r.POST("/bots/slack/events", func(c *gin.Context) {
-		body, _ := io.ReadAll(c.Request.Body)
+		body, err := readWebhookBody(c)
+		if err != nil {
+			return
+		}
 		out, status, err := bots.HandleSlackEvent(
 			string(body),
 			c.GetHeader("X-Slack-Request-Timestamp"),
@@ -113,6 +122,21 @@ func (s *Server) mountBots(r *gin.Engine) {
 	})
 
 	s.startTaskNotifier()
+}
+
+func readWebhookBody(c *gin.Context) ([]byte, error) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, inboundWebhookMaxBytes)
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "webhook body too large"})
+		} else {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid webhook body"})
+		}
+		return nil, err
+	}
+	return body, nil
 }
 
 // ─── Internal notify endpoints ───────────────────────────────────────────────

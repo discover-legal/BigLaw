@@ -64,7 +64,7 @@ func (r *Registry) editDocumentTool() *ToolImpl {
 				"required": []string{"path", "edits"},
 			},
 		},
-		Exec: func(input map[string]interface{}, _ agents.ToolContext) (interface{}, error) {
+		Exec: func(input map[string]interface{}, ctx agents.ToolContext) (interface{}, error) {
 			src, err := r.resolveDocxPath(strInput(input, "path"))
 			if err != nil {
 				return fail(err.Error()), nil
@@ -136,7 +136,7 @@ func (r *Registry) editDocumentTool() *ToolImpl {
 			// the redlined output accrues as the next "ours" version.
 			// One-off edits don't force-create lineages; null means the input
 			// was untracked (or version tracking is unavailable).
-			lineage := r.recordEditVersion(src, outputPath, author)
+			lineage := r.recordEditVersion(src, outputPath, author, ctx.OwnerID)
 
 			return map[string]interface{}{
 				"ok":           true,

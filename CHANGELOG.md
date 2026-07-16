@@ -17,6 +17,44 @@ House rules:
 
 ## [Unreleased]
 
+### Security and tenant isolation
+- Authentication now fails closed when `SESSION_SECRET` is the published default or
+  shorter than 32 characters. Bearer authentication also requires a strong `API_KEY`
+  bound to an existing `API_PROFILE_ID`; callers can no longer select a principal with
+  `X-Profile-ID`.
+- Reviews and document versions carry owner and matter identity through memory, SQLite,
+  Postgres, caches, and API reads. Postgres applies the same ownership boundary with RLS.
+- Outbound HTTP uses a DNS-aware guarded transport that rejects private, loopback,
+  link-local, reserved, and rebinding destinations after resolution and validates every
+  redirect. Response sizes and request deadlines remain bounded.
+- Slack and Teams inbound webhook routes bypass BigLaw bearer/session middleware so their
+  provider HMAC verification can run; internal bot administration routes remain protected.
+- Fixed concurrent shutdown in the budget monitor and concurrent map access in TopoFlow's
+  policy graph. Updated the Go image dependency and pinned a patched Go Docker toolchain.
+
+### Queued execution and runtime resilience
+- Task submission now durably records work and returns `202 Accepted`; a bounded FIFO
+  scheduler runs a configurable number of workers (`QUEUE_CONCURRENCY`, default 3) instead
+  of launching an unbounded goroutine per task. `QUEUE_MAX_PENDING` (default 1000) is the
+  final admission safety boundary.
+- Queued work survives restarts in creation order. Queue waiting is not billed, queued
+  tasks can be cancelled safely, and active deletion returns `409` rather than allowing
+  invisible work to continue.
+- Task responses and the workbench expose queue position plus earliest/likely/latest ETA
+  windows. Estimates use conservative workflow defaults, learn from completed durations,
+  and report low/medium/high confidence rather than false precision.
+- Task persistence is single-writer and streamed to an atomic temporary file under a
+  consistent read snapshot, avoiding the full indented JSON allocation that amplified a
+  malformed concurrency test into an OOM. The regression test is now strictly bounded.
+
+### Maintainability
+- Split the API composition root into lifecycle, routing, middleware, health, tasks,
+  documents, profiles, clients, and reporting modules.
+- Split the orchestrator into task admission, runner, rounds, planning, evidence queries,
+  evidence graph, specialists, allegations, synthesis, tabulation, lifecycle, and scheduler
+  modules. Configuration types/security checks, store identity/artifact contracts and
+  database migrations, and outbound transport policy now have dedicated files.
+
 ### Relicensed: AGPL-3.0 → Apache-2.0
 A clean-room reimplementation (spec: `docs/clean-room-spec-document-tools.md`) replaced
 every Mike-derived component — the five document-production/tabular tools and the built-in

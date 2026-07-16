@@ -64,6 +64,13 @@ POST   /bots/{teams,slack}/notify          Internal: post to a channel (partner 
 POST   /bots/{teams,slack}/matter-link     Link a matter to a channel (partner only)
 ```
 
+`POST /tasks` durably queues work and returns `202 Accepted`. Queued and running
+task responses include a `queue` object with position, estimated start time, an
+earliest/likely/latest completion window, and estimate confidence. Estimates
+learn from completed tasks of the same workflow. Worker concurrency and the
+bounded waiting capacity are configured with `QUEUE_CONCURRENCY` and
+`QUEUE_MAX_PENDING`.
+
 Document ingestion (`POST /documents`, `POST /documents/upload`) returns enriched metadata:
 ```json
 { "id": "…", "practiceArea": "Corporate & M&A", "detectedClient": { "clientNumber": "C-001", "clientName": "Acme Corp" }, "suggestedLawyers": [{ "id": "…", "name": "Jane Smith" }] }

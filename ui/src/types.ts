@@ -4,7 +4,7 @@ export type WorkflowType =
   | "counsel" | "roundtable" | "adversarial" | "review" | "tabulate" | "full_bench";
 
 export type TaskStatus =
-  | "pending" | "running" | "awaiting_gate" | "complete" | "failed" | "interrupted";
+	| "pending" | "queued" | "running" | "awaiting_gate" | "complete" | "failed" | "interrupted";
 
 export type TaskPhase =
   | "intake" | "research" | "analysis" | "drafting" | "review" | "verification" | "delivery";
@@ -292,12 +292,20 @@ export interface Task {
   pendingGates: GateRequest[];
   output?: string;
   error?: string;
-  createdAt: string;
-  updatedAt: string;
+	createdAt: string;
+	startedAt?: string;
+	updatedAt: string;
   completedAt?: string;
   table?: TaskTable;
   /** Non-empty means the run was degraded — rounds that produced zero findings. */
-  starvedRounds?: StarvedRound[];
+	starvedRounds?: StarvedRound[];
+	queue?: {
+		position: number;
+		estimatedStartAt: string;
+		estimatedCompletion: { earliest: string; likely: string; latest: string };
+		confidence: "low" | "medium" | "high";
+		calculatedAt: string;
+	};
 }
 
 export interface Template {
@@ -438,7 +446,7 @@ export interface Health {
   status: string;
   version: string;
   uptime: number;
-  tasks: { total: number; running: number; awaiting_gate: number; complete: number };
+	tasks: { total: number; queued: number; running: number; awaiting_gate: number; complete: number };
 }
 
 export const WORKFLOWS: { id: WorkflowType; name: string; desc: string }[] = [

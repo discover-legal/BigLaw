@@ -16,144 +16,6 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
 
-// pgSchema creates the table and enforces row-level security. FORCE ROW LEVEL
-// SECURITY makes the policies apply even to the table owner, so RLS protects
-// regardless of which role the app connects as (no separate non-owner role to
-// provision). The policy is DEFAULT-DENY: with no session GUCs set,
-// current_setting(..., true) is NULL and every branch is false → zero rows.
-//
-//	app.system          = 'on'    → full access (boot load, monitors, MCP)
-//	app.is_partner      = 'true'  → partner sees/manages all rows
-//	app.current_profile = <id>    → a lawyer sees/writes only rows they own
-//
-// Identity is set per-transaction via set_config(name, value, is_local=true),
-// so pooled connections never leak one request's identity into another.
-const pgSchema = `
-CREATE TABLE IF NOT EXISTS documents (
-	id                     TEXT PRIMARY KEY,
-	title                  TEXT NOT NULL DEFAULT '',
-	content                TEXT NOT NULL DEFAULT '',
-	source                 TEXT NOT NULL DEFAULT '',
-	jurisdiction           TEXT NOT NULL DEFAULT '',
-	document_type          TEXT NOT NULL DEFAULT '',
-	owner_id               TEXT NOT NULL DEFAULT '',
-	practice_area          TEXT NOT NULL DEFAULT '',
-	detected_client_number TEXT NOT NULL DEFAULT '',
-	noslegal_json          TEXT NOT NULL DEFAULT '',
-	metadata_json          TEXT NOT NULL DEFAULT '',
-	ingested_at            TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS idx_documents_owner    ON documents(owner_id);
-CREATE INDEX IF NOT EXISTS idx_documents_client   ON documents(detected_client_number);
-CREATE INDEX IF NOT EXISTS idx_documents_ingested ON documents(ingested_at);
-
-ALTER TABLE documents ENABLE ROW LEVEL SECURITY;
-ALTER TABLE documents FORCE ROW LEVEL SECURITY;
-
-DROP POLICY IF EXISTS documents_rls ON documents;
-CREATE POLICY documents_rls ON documents
-	USING (
-		current_setting('app.system', true) = 'on'
-		OR current_setting('app.is_partner', true) = 'true'
-		OR owner_id = current_setting('app.current_profile', true)
-	)
-	WITH CHECK (
-		current_setting('app.system', true) = 'on'
-		OR current_setting('app.is_partner', true) = 'true'
-		OR owner_id = current_setting('app.current_profile', true)
-	);
-
-CREATE TABLE IF NOT EXISTS attachments (
-	id         TEXT PRIMARY KEY,
-	doc_id     TEXT NOT NULL,
-	owner_id   TEXT NOT NULL DEFAULT '',
-	filename   TEXT NOT NULL DEFAULT '',
-	media_type TEXT NOT NULL DEFAULT '',
-	kind       TEXT NOT NULL DEFAULT '',
-	size       BIGINT NOT NULL DEFAULT 0,
-	blob_key   TEXT NOT NULL DEFAULT '',
-	page       INTEGER NOT NULL DEFAULT 0,
-	created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS idx_attachments_doc ON attachments(doc_id);
-
-ALTER TABLE attachments ENABLE ROW LEVEL SECURITY;
-ALTER TABLE attachments FORCE ROW LEVEL SECURITY;
-
-DROP POLICY IF EXISTS attachments_rls ON attachments;
-CREATE POLICY attachments_rls ON attachments
-	USING (
-		current_setting('app.system', true) = 'on'
-		OR current_setting('app.is_partner', true) = 'true'
-		OR owner_id = current_setting('app.current_profile', true)
-	)
-	WITH CHECK (
-		current_setting('app.system', true) = 'on'
-		OR current_setting('app.is_partner', true) = 'true'
-		OR owner_id = current_setting('app.current_profile', true)
-	);
-
--- Tabular-review matrices (internal/tools tabular_review). Rows carry no
--- owner: any declared identity (system, partner, or a lawyer) may read, but
--- only the system principal writes — reviews are produced by the tool layer,
--- never directly by a user request. Anonymous callers still see nothing.
-CREATE TABLE IF NOT EXISTS reviews (
-	id         TEXT PRIMARY KEY,
-	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-	payload    JSONB NOT NULL DEFAULT '{}'::jsonb
-);
-
-ALTER TABLE reviews ENABLE ROW LEVEL SECURITY;
-ALTER TABLE reviews FORCE ROW LEVEL SECURITY;
-
-DROP POLICY IF EXISTS reviews_rls ON reviews;
-CREATE POLICY reviews_rls ON reviews
-	USING (
-		current_setting('app.system', true) = 'on'
-		OR current_setting('app.is_partner', true) = 'true'
-		OR coalesce(current_setting('app.current_profile', true), '') <> ''
-	)
-	WITH CHECK (
-		current_setting('app.system', true) = 'on'
-	);
-
--- Document-version lineages (internal/redtime). Same posture as reviews:
--- rows carry no owner, any declared identity (system, partner, or a lawyer)
--- may read, but only the system principal writes — versions are registered by
--- the tool layer, never directly by a user request. Anonymous callers still
--- see nothing.
-CREATE TABLE IF NOT EXISTS document_versions (
-	id             TEXT PRIMARY KEY,
-	lineage_id     TEXT NOT NULL DEFAULT '',
-	parent_id      TEXT NOT NULL DEFAULT '',
-	round          INTEGER NOT NULL DEFAULT 0,
-	source         TEXT NOT NULL DEFAULT '',
-	author         TEXT NOT NULL DEFAULT '',
-	created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-	path           TEXT NOT NULL DEFAULT '',
-	content_hash   TEXT NOT NULL DEFAULT '',
-	text           TEXT NOT NULL DEFAULT '',
-	decisions_json TEXT NOT NULL DEFAULT ''
-);
-CREATE INDEX IF NOT EXISTS idx_document_versions_lineage ON document_versions(lineage_id, round);
-CREATE INDEX IF NOT EXISTS idx_document_versions_hash    ON document_versions(content_hash);
-CREATE INDEX IF NOT EXISTS idx_document_versions_path    ON document_versions(path);
-
-ALTER TABLE document_versions ENABLE ROW LEVEL SECURITY;
-ALTER TABLE document_versions FORCE ROW LEVEL SECURITY;
-
-DROP POLICY IF EXISTS document_versions_rls ON document_versions;
-CREATE POLICY document_versions_rls ON document_versions
-	USING (
-		current_setting('app.system', true) = 'on'
-		OR current_setting('app.is_partner', true) = 'true'
-		OR coalesce(current_setting('app.current_profile', true), '') <> ''
-	)
-	WITH CHECK (
-		current_setting('app.system', true) = 'on'
-	);
-`
-
 type pgRepo struct {
 	pool *pgxpool.Pool
 }
@@ -375,16 +237,17 @@ func (r *pgRepo) DeleteAttachment(ctx context.Context, id string) error {
 
 // ─── ReviewRepository ────────────────────────────────────────────────────────────
 
-func (r *pgRepo) PutReview(ctx context.Context, id string, createdAt time.Time, payload []byte) error {
+func (r *pgRepo) PutReview(ctx context.Context, id, ownerID, matterNumber string, createdAt time.Time, payload []byte) error {
 	if createdAt.IsZero() {
 		createdAt = time.Now()
 	}
 	return r.withTx(ctx, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
-			INSERT INTO reviews (id, created_at, payload) VALUES ($1,$2,$3)
+			INSERT INTO reviews (id, owner_id, matter_number, created_at, payload) VALUES ($1,$2,$3,$4,$5)
 			ON CONFLICT(id) DO UPDATE SET
+				owner_id=excluded.owner_id, matter_number=excluded.matter_number,
 				created_at=excluded.created_at, payload=excluded.payload`,
-			id, createdAt.UTC(), payload)
+			id, ownerID, matterNumber, createdAt.UTC(), payload)
 		if err != nil {
 			return fmt.Errorf("store: postgres put review %s: %w", id, err)
 		}
@@ -423,14 +286,15 @@ func (r *pgRepo) PutVersion(ctx context.Context, v DocumentVersion) error {
 	return r.withTx(ctx, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
 			INSERT INTO document_versions
-				(id, lineage_id, parent_id, round, source, author, created_at, path, content_hash, text, decisions_json)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+				(id, owner_id, matter_number, lineage_id, parent_id, round, source, author, created_at, path, content_hash, text, decisions_json)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
 			ON CONFLICT(id) DO UPDATE SET
+				owner_id=excluded.owner_id, matter_number=excluded.matter_number,
 				lineage_id=excluded.lineage_id, parent_id=excluded.parent_id, round=excluded.round,
 				source=excluded.source, author=excluded.author, created_at=excluded.created_at,
 				path=excluded.path, content_hash=excluded.content_hash, text=excluded.text,
 				decisions_json=excluded.decisions_json`,
-			v.ID, v.LineageID, v.ParentID, v.Round, v.Source, v.Author,
+			v.ID, v.OwnerID, v.MatterNumber, v.LineageID, v.ParentID, v.Round, v.Source, v.Author,
 			created.UTC(), v.Path, v.ContentHash, v.Text, string(v.Decisions))
 		if err != nil {
 			return fmt.Errorf("store: postgres put version %s: %w", v.ID, err)
@@ -498,13 +362,13 @@ func (r *pgRepo) findVersionWhere(ctx context.Context, where, value string) (*Do
 	return ver, ver != nil, nil
 }
 
-const pgVerColumns = `id, lineage_id, parent_id, round, source, author, created_at, path, content_hash, text, decisions_json`
+const pgVerColumns = `id, owner_id, matter_number, lineage_id, parent_id, round, source, author, created_at, path, content_hash, text, decisions_json`
 
 func scanPGVersion(rows pgx.Rows) (*DocumentVersion, error) {
 	var v DocumentVersion
 	var created time.Time
 	var decisions string
-	if err := rows.Scan(&v.ID, &v.LineageID, &v.ParentID, &v.Round, &v.Source, &v.Author,
+	if err := rows.Scan(&v.ID, &v.OwnerID, &v.MatterNumber, &v.LineageID, &v.ParentID, &v.Round, &v.Source, &v.Author,
 		&created, &v.Path, &v.ContentHash, &v.Text, &decisions); err != nil {
 		return nil, err
 	}

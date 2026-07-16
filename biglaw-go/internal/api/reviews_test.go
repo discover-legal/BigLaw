@@ -63,7 +63,7 @@ func TestGetReviewEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.PutReview(context.Background(), rec.ReviewID, time.Now(), payload); err != nil {
+	if err := repo.PutReview(context.Background(), rec.ReviewID, "", "", time.Now(), payload); err != nil {
 		t.Fatal(err)
 	}
 

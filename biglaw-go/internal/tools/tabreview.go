@@ -105,6 +105,8 @@ type ReviewRow struct {
 // persisted verbatim as <reviewsDir>/<reviewId>.json.
 type ReviewRecord struct {
 	ReviewID      string            `json:"reviewId"`
+	OwnerID       string            `json:"ownerId,omitempty"`
+	MatterNumber  string            `json:"matterNumber,omitempty"`
 	CreatedAt     string            `json:"createdAt"`
 	Columns       []string          `json:"columns"`
 	Rows          []ReviewRow       `json:"rows"`
@@ -133,7 +135,7 @@ func (r *Registry) persistReview(rec *ReviewRecord) error {
 	// Reviews are produced by the tool layer, not a user request path, so
 	// the write runs as the system principal (matches the Postgres RLS
 	// policy: system-only writes).
-	return r.reviews.PutReview(store.WithSystem(context.Background()), rec.ReviewID, created, payload)
+	return r.reviews.PutReview(store.WithSystem(context.Background()), rec.ReviewID, rec.OwnerID, rec.MatterNumber, created, payload)
 }
 
 // LookupReview resolves a review by id: the in-process cache first, then the
@@ -143,7 +145,7 @@ func LookupReview(ctx context.Context, repo store.ReviewRepository, id string) (
 	reviewStoreMu.Lock()
 	rec := reviewStore[id]
 	reviewStoreMu.Unlock()
-	if rec != nil {
+	if rec != nil && store.CanAccessOwner(ctx, rec.OwnerID) {
 		return rec, true
 	}
 	if repo == nil || strings.TrimSpace(id) == "" {
@@ -160,6 +162,9 @@ func LookupReview(ctx context.Context, repo store.ReviewRepository, id string) (
 	var loaded ReviewRecord
 	if err := json.Unmarshal(payload, &loaded); err != nil {
 		slog.Warn("tabular review: corrupt review payload ignored", "reviewId", id, "err", err)
+		return nil, false
+	}
+	if !store.CanAccessOwner(ctx, loaded.OwnerID) {
 		return nil, false
 	}
 	reviewStoreMu.Lock()
@@ -200,6 +205,9 @@ func (r *Registry) tabularReviewTool() *ToolImpl {
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
+					"matter_number": map[string]interface{}{
+						"type": "string", "description": "Optional matter number used to scope the persisted review",
+					},
 					"documentIds": map[string]interface{}{
 						"type":        "array",
 						"items":       map[string]interface{}{"type": "string"},
@@ -314,6 +322,8 @@ func (r *Registry) tabularReviewTool() *ToolImpl {
 
 			rec := &ReviewRecord{
 				ReviewID:      uuid.New().String(),
+				OwnerID:       ctx.OwnerID,
+				MatterNumber:  strings.TrimSpace(strInput(input, "matter_number")),
 				CreatedAt:     time.Now().UTC().Format(time.RFC3339),
 				Columns:       colNames,
 				Rows:          rows,

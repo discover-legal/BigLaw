@@ -72,6 +72,62 @@ func TestBudgetCheckMatterFiresThenDedups(t *testing.T) {
 	}
 }
 
+// TestMonitor_StartStop_Lifecycle covers the ticker lifecycle (budget.go:56-89)
+// which has zero coverage today: Start must run an immediate check plus
+// periodic ones, a second Start call must be a no-op (not replace the
+// ticker / leak a goroutine), and Stop must be safe to call without a prior
+// Start (nil-ticker guard).
+func TestMonitor_StartStop_Lifecycle(t *testing.T) {
+	budgetUsd := 1000.0
+	client := &types.Client{Matters: []types.ClientMatter{{MatterNumber: "M-001", BudgetUsd: &budgetUsd}}}
+	endedAt := time.Now()
+	ft := fakeTime{entries: []types.TimeEntry{{MatterNumber: "M-001", EndedAt: &endedAt, BillingAmountUsd: usd(900)}}}
+	fc := &fakeClients{clients: []*types.Client{client}}
+
+	checks := make(chan struct{}, 10)
+	m := NewMonitor(ft, fc, func(a types.BudgetAlert) { checks <- struct{}{} })
+
+	// Stop before Start must not panic (nil ticker/stop channel guard).
+	m.Stop()
+
+	m.Start(time.Hour, func() []string { return []string{"M-001"} })
+	defer m.Stop()
+
+	select {
+	case <-checks:
+		// Start must run an immediate check synchronously/soon, not wait a
+		// full interval — confirmed by at least one alert firing (0.5 and 0.8
+		// thresholds crossed at 90% burn).
+	case <-time.After(2 * time.Second):
+		t.Fatal("Start() did not perform an immediate check")
+	}
+
+	// A second Start call must be a no-op — assert the ticker field is
+	// unchanged (requires access to the unexported field from within the
+	// package, which this test file already has).
+	m.mu.Lock()
+	first := m.ticker
+	m.mu.Unlock()
+	m.Start(time.Hour, func() []string { return []string{"M-001"} })
+	m.mu.Lock()
+	second := m.ticker
+	m.mu.Unlock()
+	if first != second {
+		t.Error("Start() called twice replaced the ticker, want the first call to win")
+	}
+
+	// TODO: assert Stop() actually halts the ticker goroutine — e.g. by
+	// checking no further sends arrive on `checks` after Stop() plus a short
+	// grace period. Note: unlike a sync.Once, Stop()'s safety on a second call
+	// relies entirely on the `m.ticker != nil` guard resetting ticker to nil
+	// after the first Stop — confirm that guard can never race with a
+	// concurrent Start() (both take mu, so this should hold, but it's worth
+	// pinning with -race given Start/Stop can plausibly be called from
+	// different goroutines in the REST layer).
+	m.Stop()
+	m.Stop() // second call must not panic (ticker is nil after the first Stop)
+}
+
 func TestBudgetGetBurn(t *testing.T) {
 	budgetUsd := 1000.0
 	client := &types.Client{Matters: []types.ClientMatter{{MatterNumber: "M-001", BudgetUsd: &budgetUsd}}}

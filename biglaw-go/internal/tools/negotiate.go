@@ -167,7 +167,8 @@ func (r *Registry) respondToRedlineTool() *ToolImpl {
 			// version tracking never fails the negotiation; null means
 			// tracking is unavailable.
 			lineage := r.recordNegotiationVersions(src, outputPath,
-				strInput(input, "prior_version_path"), author, revs, decisions)
+				strInput(input, "prior_version_path"), author, ctx.OwnerID,
+				strInput(input, "matter_number"), revs, decisions)
 
 			return map[string]interface{}{
 				"ok":            true,

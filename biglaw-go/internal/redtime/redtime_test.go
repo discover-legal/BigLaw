@@ -13,6 +13,7 @@ package redtime
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -394,5 +395,127 @@ func TestBuildTimelineDriftWithProvider(t *testing.T) {
 	}
 	if c.Drift == nil || c.Drift.Status != DriftBelow || c.Drift.PlaybookTier != "firm" || c.Drift.Note == "" {
 		t.Errorf("drift = %+v, want below at the firm tier with a note", c.Drift)
+	}
+}
+
+// newDriftStatusFakeServer is newDriftFakeServer parameterised on the
+// drift-judgment status/note the drafting-tier model returns — the existing
+// suite only ever exercised "below"; "at_position" and "above" had zero
+// coverage despite being named right alongside it in the Drift status enum.
+func newDriftStatusFakeServer(t *testing.T, status, note string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		var body struct {
+			Model string `json:"model"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		reply := `{"clauseType":"Limitation of liability"}`
+		if body.Model == "qwen-plus" {
+			reply = fmt.Sprintf(`{"status":%q,"note":%q}`, status, note)
+		}
+		resp := map[string]interface{}{
+			"choices": []map[string]interface{}{{
+				"message":       map[string]interface{}{"role": "assistant", "content": reply},
+				"finish_reason": "stop",
+			}},
+			"usage": map[string]interface{}{"prompt_tokens": 120, "completion_tokens": 30},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+}
+
+// buildDriftLineage registers a two-version lineage with a firm playbook
+// position on Limitation of liability, wiring OptsFromConfig at the given
+// fake server exactly like TestBuildTimelineDriftWithProvider.
+func buildDriftLineage(t *testing.T, srv *httptest.Server) (*store.MemoryRepo, string, BuildOpts) {
+	t.Helper()
+	pbPath := filepath.Join(t.TempDir(), "playbooks.json")
+	pbs := []types.Playbook{{
+		ID: "pb-firm", Scope: types.PlaybookScopeFirm, Name: "Firm standard",
+		Entries: []types.PlaybookEntry{{
+			ClauseType:       "limitation_of_liability",
+			StandardPosition: "Liability capped at twelve (12) months of fees.",
+			RedLines:         []string{"No uncapped liability"},
+		}},
+	}}
+	raw, err := json.Marshal(pbs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pbPath, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	repo := store.NewMemoryRepo()
+	v1, err := RegisterVersion(ctx, repo, RegisterOpts{
+		Text: "The liability cap is twelve (12) months of fees.", Source: "ours",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RegisterVersion(ctx, repo, RegisterOpts{
+		Text: "The liability cap is thirty-six (36) months of fees.", Source: "theirs", ParentID: v1.ID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{}
+	cfg.Model.PrimaryURL = srv.URL
+	cfg.Model.PrimaryKey = "test-key"
+	cfg.Persistence.PlaybooksFile = pbPath
+	opts := OptsFromConfig(cfg, providers.NewRegistry(cfg), playbook.ResolveOpts{}, "task-drift")
+	if opts.Provider == nil {
+		t.Fatal("OptsFromConfig did not wire the fake provider")
+	}
+	return repo, v1.LineageID, opts
+}
+
+// TestBuildTimelineDriftAtPositionAndAbove fills the gap
+// TestBuildTimelineDriftWithProvider left: "at_position" and "above" are two
+// of the three Drift statuses the type declares, and neither had ever been
+// driven through BuildTimeline before this test — only "below" was exercised
+// end-to-end, so a regression silently mis-mapping the JSON status string (or
+// swallowing anything other than "below") would have passed the whole suite.
+func TestBuildTimelineDriftAtPositionAndAbove(t *testing.T) {
+	cases := []struct {
+		name       string
+		modelValue string
+		wantStatus string
+	}{
+		{"at_position", DriftAtPosition, DriftAtPosition},
+		{"above", DriftAbove, DriftAbove},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newDriftStatusFakeServer(t, tc.modelValue, "scripted note for "+tc.name)
+			defer srv.Close()
+			repo, lineageID, opts := buildDriftLineage(t, srv)
+
+			tl, err := BuildTimeline(context.Background(), repo, lineageID, opts)
+			if err != nil {
+				t.Fatalf("BuildTimeline: %v", err)
+			}
+			if len(tl.Clauses) != 1 {
+				t.Fatalf("clauses = %d, want 1: %+v", len(tl.Clauses), tl.Clauses)
+			}
+			c := tl.Clauses[0]
+			if c.Drift == nil {
+				t.Fatal("Drift is nil")
+			}
+			if c.Drift.Status != tc.wantStatus {
+				t.Errorf("Drift.Status = %q, want %q", c.Drift.Status, tc.wantStatus)
+			}
+			if c.Drift.PlaybookTier != "firm" {
+				t.Errorf("Drift.PlaybookTier = %q, want firm", c.Drift.PlaybookTier)
+			}
+			if !strings.Contains(c.Drift.Note, tc.name) {
+				t.Errorf("Drift.Note = %q, want it to carry the scripted note", c.Drift.Note)
+			}
+		})
 	}
 }

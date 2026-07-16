@@ -38,12 +38,14 @@ With `AUTH_ENABLED=true` the API accepts two credentials:
   `ADMIN_EMAILS` address is provisioned as a **partner**; everyone else as a **lawyer**.
   Auth endpoints are rate-limited to 20 req/min per IP.
 - **Bearer API key** (non-browser clients) — `Authorization: Bearer <API_KEY>` (compared in
-  constant time) plus `X-Profile-ID: <profile id>` identifying the acting lawyer.
+  constant time). Identity is bound server-side by `API_PROFILE_ID`; caller-supplied profile
+  headers are ignored.
 
 ```bash
 AUTH_ENABLED=true
 SESSION_SECRET=<random 32+ char secret>   # signs session cookies
 API_KEY=<random 32+ char secret>          # bearer credential for non-browser clients
+API_PROFILE_ID=<existing profile id>      # principal bound to that credential
 PUBLIC_BASE_URL=https://api.your-host
 PUBLIC_UI_URL=https://app.your-host
 CORS_ORIGINS=https://app.your-host

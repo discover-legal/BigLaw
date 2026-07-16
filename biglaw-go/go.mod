@@ -15,7 +15,7 @@ require (
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
 	github.com/mark3labs/mcp-go v0.18.0
 	github.com/opencontainers/image-spec v1.1.1
-	golang.org/x/image v0.42.0
+	golang.org/x/image v0.43.0
 	golang.org/x/sync v0.21.0
 	modernc.org/sqlite v1.52.0
 	oras.land/oras-go/v2 v2.6.1

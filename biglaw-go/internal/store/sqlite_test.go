@@ -92,11 +92,11 @@ func TestSQLiteReviewRoundTrip(t *testing.T) {
 	}
 
 	created := time.Now().UTC().Truncate(time.Second)
-	if err := reviews.PutReview(ctx, "rev-1", created, []byte(`{"reviewId":"rev-1","columns":["A"]}`)); err != nil {
+	if err := reviews.PutReview(ctx, "rev-1", "", "", created, []byte(`{"reviewId":"rev-1","columns":["A"]}`)); err != nil {
 		t.Fatalf("PutReview: %v", err)
 	}
 	// Replace in place.
-	if err := reviews.PutReview(ctx, "rev-1", created, []byte(`{"reviewId":"rev-1","columns":["A","B"]}`)); err != nil {
+	if err := reviews.PutReview(ctx, "rev-1", "", "", created, []byte(`{"reviewId":"rev-1","columns":["A","B"]}`)); err != nil {
 		t.Fatalf("PutReview replace: %v", err)
 	}
 
@@ -135,7 +135,7 @@ func TestMemoryReviewRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMemoryRepo()
 
-	if err := repo.PutReview(ctx, "rev-m", time.Now(), []byte(`{"reviewId":"rev-m"}`)); err != nil {
+	if err := repo.PutReview(ctx, "rev-m", "", "", time.Now(), []byte(`{"reviewId":"rev-m"}`)); err != nil {
 		t.Fatalf("PutReview: %v", err)
 	}
 	payload, found, err := repo.GetReview(ctx, "rev-m")

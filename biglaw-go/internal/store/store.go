@@ -19,43 +19,10 @@ package store
 import (
 	"context"
 	"strings"
-	"time"
 
 	"github.com/discover-legal/biglaw-go/internal/config"
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
-
-// ─── Request identity (drives database row-level security) ──────────────────────
-
-// Identity is the security principal a repository call runs as. It is carried
-// in context.Context and, on the Postgres backend, projected into per-transaction
-// session GUCs that RLS policies read. The default-deny posture: a call with NO
-// identity in its context sees and writes nothing — every legitimate caller must
-// declare itself either a user (WithIdentity) or the trusted system (WithSystem).
-type Identity struct {
-	ProfileID string // the acting lawyer's profile ID (empty for System)
-	IsPartner bool   // partners see/manage all rows
-	System    bool   // internal/system caller — full access (monitors, boot load, MCP)
-}
-
-type identityKey struct{}
-
-// WithIdentity tags ctx as a specific lawyer. Use in user-facing request paths.
-func WithIdentity(ctx context.Context, profileID string, isPartner bool) context.Context {
-	return context.WithValue(ctx, identityKey{}, Identity{ProfileID: profileID, IsPartner: isPartner})
-}
-
-// WithSystem tags ctx as the trusted system principal (full access). Use for
-// boot-time loads, background monitors, DyTopo, and other non-user callers.
-func WithSystem(ctx context.Context) context.Context {
-	return context.WithValue(ctx, identityKey{}, Identity{System: true})
-}
-
-// IdentityFrom extracts the principal; ok is false when none was set (deny).
-func IdentityFrom(ctx context.Context) (Identity, bool) {
-	id, ok := ctx.Value(identityKey{}).(Identity)
-	return id, ok
-}
 
 // DocRepository is durable CRUD for documents. Implementations must be safe for
 // concurrent use. Every method takes a context carrying the request Identity;
@@ -84,58 +51,6 @@ type DocRepository interface {
 	Backend() string
 	// Close releases the underlying handle.
 	Close() error
-}
-
-// ReviewRepository is durable storage for completed tabular-review matrices
-// (internal/tools tabular_review). The payload is the review's full JSON
-// return object, stored opaquely — a matrix is only ever read back whole, so
-// cells are not normalised into columns. Every backend returned by Open
-// implements it alongside DocRepository.
-type ReviewRepository interface {
-	// PutReview inserts or replaces a review payload by ID.
-	PutReview(ctx context.Context, id string, createdAt time.Time, payload []byte) error
-	// GetReview returns the stored payload and whether it was found.
-	GetReview(ctx context.Context, id string) ([]byte, bool, error)
-}
-
-// DocumentVersion is one registered version of a negotiated document — a node
-// in a lineage (the same contract tracked across negotiation rounds, Redtime).
-// The extracted plain text is stored on the row because it is what diffs and
-// timelines consume; the document itself lives on disk at Path. Decisions is
-// an opaque JSON payload (the respond_to_redline decision summary for the
-// round that produced this version), stored like a review payload — only ever
-// read back whole.
-type DocumentVersion struct {
-	ID          string    `json:"id"`
-	LineageID   string    `json:"lineageId"`
-	ParentID    string    `json:"parentId,omitempty"`
-	Round       int       `json:"round"`
-	Source      string    `json:"source"` // "ours" | "theirs" | "upload"
-	Author      string    `json:"author,omitempty"`
-	CreatedAt   time.Time `json:"createdAt"`
-	Path        string    `json:"path,omitempty"`
-	ContentHash string    `json:"contentHash"`
-	Text        string    `json:"text,omitempty"`
-	Decisions   []byte    `json:"decisions,omitempty"`
-}
-
-// VersionRepository is durable storage for document-version lineages
-// (internal/redtime). Every backend returned by Open implements it alongside
-// DocRepository and ReviewRepository.
-type VersionRepository interface {
-	// PutVersion inserts or replaces a version by ID.
-	PutVersion(ctx context.Context, v DocumentVersion) error
-	// GetVersion returns one version and whether it was found.
-	GetVersion(ctx context.Context, id string) (*DocumentVersion, bool, error)
-	// ListLineage returns every version of a lineage ordered by round
-	// ascending (creation time breaks ties).
-	ListLineage(ctx context.Context, lineageID string) ([]DocumentVersion, error)
-	// FindVersionByHash returns the most recent version with the given
-	// content hash — the idempotent-registration lookup.
-	FindVersionByHash(ctx context.Context, contentHash string) (*DocumentVersion, bool, error)
-	// FindVersionByPath returns the most recent version registered from the
-	// given on-disk path.
-	FindVersionByPath(ctx context.Context, path string) (*DocumentVersion, bool, error)
 }
 
 // Open builds the repository selected by config. Resolution order:

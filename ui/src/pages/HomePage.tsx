@@ -81,7 +81,7 @@ export function HomePage({ tasks, health, me, isPartner, onOpenMatter, onGo, onG
       {/* Admin/system footer line */}
       {(mode === "admin" || isPartner) && (
         <div className="home-sysline">
-          {health ? <>System healthy · API v{health.version} · up {Math.floor(health.uptime / 60)}m · {health.tasks.running} running, {health.tasks.awaiting_gate} gated</> : "API offline"}
+		  {health ? <>System healthy · API v{health.version} · up {Math.floor(health.uptime / 60)}m · {health.tasks.queued} queued, {health.tasks.running} running, {health.tasks.awaiting_gate} gated</> : "API offline"}
         </div>
       )}
     </div>

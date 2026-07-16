@@ -52,6 +52,9 @@ var (
 
 // RegisterOpts parameterises one version registration.
 type RegisterOpts struct {
+	// OwnerID and MatterNumber scope the lineage to its legal owner/matter.
+	OwnerID      string
+	MatterNumber string
 	// Path is the document on disk. Text is extracted from it when Text is
 	// empty (.docx → insertions-accepted visible text; .txt/.md → contents).
 	Path string
@@ -121,15 +124,26 @@ func RegisterVersion(ctx context.Context, repo store.VersionRepository, opts Reg
 	}
 
 	lineageID := opts.LineageID
+	ownerID := strings.TrimSpace(opts.OwnerID)
+	matterNumber := strings.TrimSpace(opts.MatterNumber)
 	if parent != nil {
 		lineageID = parent.LineageID
+		if ownerID != "" && parent.OwnerID != "" && ownerID != parent.OwnerID {
+			return nil, fmt.Errorf("redtime: owner does not match parent lineage")
+		}
+		if matterNumber != "" && parent.MatterNumber != "" && matterNumber != parent.MatterNumber {
+			return nil, fmt.Errorf("redtime: matter does not match parent lineage")
+		}
+		ownerID = parent.OwnerID
+		matterNumber = parent.MatterNumber
 	}
 
 	// Idempotency: identical content already in the target lineage (or in any
 	// lineage when none was requested) is the same version.
 	if existing, found, err := repo.FindVersionByHash(ctx, hash); err != nil {
 		return nil, err
-	} else if found && (lineageID == "" || existing.LineageID == lineageID) {
+	} else if found && existing.OwnerID == ownerID && existing.MatterNumber == matterNumber &&
+		(lineageID == "" || existing.LineageID == lineageID) {
 		if opts.Decisions != nil && len(existing.Decisions) == 0 {
 			if b, merr := json.Marshal(opts.Decisions); merr == nil {
 				existing.Decisions = b
@@ -158,17 +172,19 @@ func RegisterVersion(ctx context.Context, repo store.VersionRepository, opts Reg
 	}
 
 	v := store.DocumentVersion{
-		ID:          uuid.NewString(),
-		LineageID:   lineageID,
-		ParentID:    parentID,
-		Round:       round,
-		Source:      normalizeSource(opts.Source),
-		Author:      strings.TrimSpace(opts.Author),
-		CreatedAt:   created,
-		Path:        opts.Path,
-		ContentHash: hash,
-		Text:        text,
-		Decisions:   decisions,
+		ID:           uuid.NewString(),
+		OwnerID:      ownerID,
+		MatterNumber: matterNumber,
+		LineageID:    lineageID,
+		ParentID:     parentID,
+		Round:        round,
+		Source:       normalizeSource(opts.Source),
+		Author:       strings.TrimSpace(opts.Author),
+		CreatedAt:    created,
+		Path:         opts.Path,
+		ContentHash:  hash,
+		Text:         text,
+		Decisions:    decisions,
 	}
 	if err := repo.PutVersion(ctx, v); err != nil {
 		return nil, err

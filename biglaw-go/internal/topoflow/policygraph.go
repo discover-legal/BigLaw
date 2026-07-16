@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"sort"
+	"sync"
 )
 
 // Edge is one (signature, action) cell [AF].
@@ -42,6 +43,7 @@ type edgeKey struct {
 
 // PolicyGraph is a tabular contextual bandit over (signature, action) cells.
 type PolicyGraph struct {
+	mu        sync.RWMutex
 	edges     map[edgeKey]*Edge
 	sigVisits map[Signature]int
 	cfg       Config
@@ -58,6 +60,12 @@ func (g *PolicyGraph) cs(ns int) float64 {
 
 // Score implements eq (4)+(5). Unvisited actions return +Inf to force exploration.
 func (g *PolicyGraph) Score(sig Signature, a Action) float64 {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.scoreLocked(sig, a)
+}
+
+func (g *PolicyGraph) scoreLocked(sig Signature, a Action) float64 {
 	e := g.edges[edgeKey{sig, a}]
 	if e == nil || e.Visits == 0 {
 		return math.Inf(1)
@@ -69,10 +77,12 @@ func (g *PolicyGraph) Score(sig Signature, a Action) float64 {
 
 // Select returns the highest-scoring legal action (first on ties).
 func (g *PolicyGraph) Select(sig Signature, legal []Action) Action {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
 	best := legal[0]
-	bestScore := g.Score(sig, best)
+	bestScore := g.scoreLocked(sig, best)
 	for _, a := range legal[1:] {
-		if s := g.Score(sig, a); s > bestScore {
+		if s := g.scoreLocked(sig, a); s > bestScore {
 			best, bestScore = a, s
 		}
 	}
@@ -85,6 +95,8 @@ func (g *PolicyGraph) Backup(sig Signature, a Action, reward float64, tokens int
 	if weight <= 0 {
 		return
 	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	k := edgeKey{sig, a}
 	e := g.edges[k]
 	if e == nil {
@@ -122,6 +134,8 @@ type graphBlob struct {
 
 // Save writes the graph to a JSON file (the warm-start artifact).
 func (g *PolicyGraph) Save(path string) error {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
 	var blob graphBlob
 	for k, e := range g.edges {
 		blob.Edges = append(blob.Edges, edgeRecord{Sig: k.Sig, Act: k.Act, Edge: *e})
@@ -159,6 +173,8 @@ func LoadPolicyGraph(path string, cfg Config) (*PolicyGraph, error) {
 
 // Clone returns a deep copy (used for warm-start arms).
 func (g *PolicyGraph) Clone() *PolicyGraph {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
 	c := NewPolicyGraph(g.cfg)
 	for k, e := range g.edges {
 		ec := *e
@@ -172,6 +188,8 @@ func (g *PolicyGraph) Clone() *PolicyGraph {
 
 // Summary returns a human-inspectable per-signature view, best action first.
 func (g *PolicyGraph) Summary() map[string][]map[string]any {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
 	out := map[string][]map[string]any{}
 	for k, e := range g.edges {
 		label := sigLabel(k.Sig)

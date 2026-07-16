@@ -5,7 +5,8 @@ export function StatusDot({ status }: { status: TaskStatus }) {
 }
 
 const STATUS_PILL: Record<TaskStatus, string> = {
-  running: "gold",
+	running: "gold",
+	queued: "",
   awaiting_gate: "amber",
   complete: "green",
   failed: "red",

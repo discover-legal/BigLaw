@@ -59,21 +59,23 @@ func (m *Monitor) Start(interval time.Duration, matters func() []string) {
 		m.mu.Unlock()
 		return
 	}
-	m.ticker = time.NewTicker(interval)
-	m.stop = make(chan struct{})
+	ticker := time.NewTicker(interval)
+	stop := make(chan struct{})
+	m.ticker = ticker
+	m.stop = stop
 	m.mu.Unlock()
 
-	go func() {
+	go func(ticker *time.Ticker, stop <-chan struct{}) {
 		m.checkAll(matters())
 		for {
 			select {
-			case <-m.ticker.C:
+			case <-ticker.C:
 				m.checkAll(matters())
-			case <-m.stop:
+			case <-stop:
 				return
 			}
 		}
-	}()
+	}(ticker, stop)
 	slog.Info("BudgetMonitor: started", "interval", interval)
 }
 

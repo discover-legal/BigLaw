@@ -74,7 +74,7 @@ func (r *Registry) registerDocumentVersionTool() *ToolImpl {
 				"required": []string{"path"},
 			},
 		},
-		Exec: func(input map[string]interface{}, _ agents.ToolContext) (interface{}, error) {
+		Exec: func(input map[string]interface{}, toolCtx agents.ToolContext) (interface{}, error) {
 			vrepo := r.versions()
 			if vrepo == nil {
 				return fail(redtime.ErrUnavailable.Error()), nil
@@ -84,6 +84,7 @@ func (r *Registry) registerDocumentVersionTool() *ToolImpl {
 				return fail(err.Error()), nil
 			}
 			v, err := redtime.RegisterVersion(redtimeCtx(), vrepo, redtime.RegisterOpts{
+				OwnerID:   toolCtx.OwnerID,
 				Path:      abs,
 				LineageID: strInput(input, "lineage_id"),
 				ParentID:  strInput(input, "parent_version_id"),
@@ -265,7 +266,7 @@ func (r *Registry) negotiationHistory(inboundPath, priorPath string) negotiate.H
 // the decision summary attached. Best-effort — a failure is logged and the
 // negotiation result stands; returns nil when version tracking is
 // unavailable, else a small lineage card for the tool output.
-func (r *Registry) recordNegotiationVersions(inboundPath, responsePath, priorPath, responseAuthor string, revs []ooxml.Revision, decisions []negotiate.Decision) interface{} {
+func (r *Registry) recordNegotiationVersions(inboundPath, responsePath, priorPath, responseAuthor, ownerID, matterNumber string, revs []ooxml.Revision, decisions []negotiate.Decision) interface{} {
 	vrepo := r.versions()
 	if vrepo == nil {
 		return nil
@@ -278,7 +279,7 @@ func (r *Registry) recordNegotiationVersions(inboundPath, responsePath, priorPat
 	parentID := ""
 	if p := strings.TrimSpace(priorPath); p != "" {
 		if abs, err := r.resolveDocxPath(p); err == nil {
-			if prior, rerr := redtime.RegisterVersion(ctx, vrepo, redtime.RegisterOpts{Path: abs, Source: redtime.SourceOurs}); rerr == nil {
+			if prior, rerr := redtime.RegisterVersion(ctx, vrepo, redtime.RegisterOpts{Path: abs, Source: redtime.SourceOurs, OwnerID: ownerID, MatterNumber: matterNumber}); rerr == nil {
 				parentID = prior.ID
 			} else {
 				slog.Warn("redtime: could not register prior version", "path", abs, "error", rerr)
@@ -295,6 +296,7 @@ func (r *Registry) recordNegotiationVersions(inboundPath, responsePath, priorPat
 	}
 	inbound, err := redtime.RegisterVersion(ctx, vrepo, redtime.RegisterOpts{
 		Path: inboundPath, Source: redtime.SourceTheirs, Author: opposingAuthor, ParentID: parentID,
+		OwnerID: ownerID, MatterNumber: matterNumber,
 	})
 	if err != nil {
 		slog.Warn("redtime: could not register inbound version", "path", inboundPath, "error", err)
@@ -306,7 +308,7 @@ func (r *Registry) recordNegotiationVersions(inboundPath, responsePath, priorPat
 	}
 	response, err := redtime.RegisterVersion(ctx, vrepo, redtime.RegisterOpts{
 		Path: responsePath, Source: redtime.SourceOurs, Author: responseAuthor,
-		ParentID: inbound.ID, Decisions: attach,
+		ParentID: inbound.ID, Decisions: attach, OwnerID: ownerID, MatterNumber: matterNumber,
 	})
 	if err != nil {
 		slog.Warn("redtime: could not register response version", "path", responsePath, "error", err)
@@ -325,7 +327,7 @@ func (r *Registry) recordNegotiationVersions(inboundPath, responsePath, priorPat
 // registered under another path), the redlined output accrues as the next
 // "ours" version. One-off edits of untracked documents don't force-create
 // lineages. Best-effort; nil when nothing was recorded.
-func (r *Registry) recordEditVersion(srcPath, outputPath, author string) interface{} {
+func (r *Registry) recordEditVersion(srcPath, outputPath, author, ownerID string) interface{} {
 	vrepo := r.versions()
 	if vrepo == nil {
 		return nil
@@ -336,7 +338,7 @@ func (r *Registry) recordEditVersion(srcPath, outputPath, author string) interfa
 		return nil
 	}
 	v, err := redtime.RegisterVersion(ctx, vrepo, redtime.RegisterOpts{
-		Path: outputPath, Source: redtime.SourceOurs, Author: author, ParentID: parent.ID,
+		Path: outputPath, Source: redtime.SourceOurs, Author: author, ParentID: parent.ID, OwnerID: ownerID,
 	})
 	if err != nil {
 		slog.Warn("redtime: could not register edited version", "path", outputPath, "error", err)

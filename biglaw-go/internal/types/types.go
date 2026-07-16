@@ -323,6 +323,7 @@ type TaskStatus string
 
 const (
 	TaskStatusPending      TaskStatus = "pending"
+	TaskStatusQueued       TaskStatus = "queued"
 	TaskStatusRunning      TaskStatus = "running"
 	TaskStatusAwaitingGate TaskStatus = "awaiting_gate"
 	TaskStatusComplete     TaskStatus = "complete"
@@ -335,6 +336,24 @@ const (
 	// resubmitted. RESUME_RUNNING_TASKS=true restores the old behaviour.
 	TaskStatusInterrupted TaskStatus = "interrupted"
 )
+
+// EstimateWindow is deliberately a range: queue estimates should communicate
+// uncertainty instead of presenting a falsely precise completion timestamp.
+type EstimateWindow struct {
+	Earliest time.Time `json:"earliest"`
+	Likely   time.Time `json:"likely"`
+	Latest   time.Time `json:"latest"`
+}
+
+// TaskQueueInfo is transient scheduling metadata populated on task reads. It
+// is never stored in the task persistence file.
+type TaskQueueInfo struct {
+	Position         int            `json:"position"`
+	EstimatedStartAt time.Time      `json:"estimatedStartAt"`
+	Completion       EstimateWindow `json:"estimatedCompletion"`
+	Confidence       string         `json:"confidence"`
+	CalculatedAt     time.Time      `json:"calculatedAt"`
+}
 
 type NosLegalTags struct {
 	AreaOfLaw *string `json:"areaOfLaw,omitempty"`
@@ -371,6 +390,7 @@ type Task struct {
 	Output             string        `json:"output,omitempty"`
 	Error              string        `json:"error,omitempty"`
 	CreatedAt          time.Time     `json:"createdAt"`
+	StartedAt          *time.Time    `json:"startedAt,omitempty"`
 	UpdatedAt          time.Time     `json:"updatedAt"`
 	CompletedAt        *time.Time    `json:"completedAt,omitempty"`
 	Table              *TaskTable    `json:"table,omitempty"`
@@ -390,6 +410,9 @@ type Task struct {
 	// consumers (UI, benchmark drivers) must not treat this task's output as a
 	// full-pipeline result.
 	StarvedRounds []StarvedRound `json:"starvedRounds,omitempty"`
+	// Queue is calculated from live scheduler state for API/MCP reads. It is
+	// excluded from persistence so stale positions never survive a restart.
+	Queue *TaskQueueInfo `json:"queue,omitempty"`
 }
 
 // ─── Time tracking ───────────────────────────────────────────────────────────

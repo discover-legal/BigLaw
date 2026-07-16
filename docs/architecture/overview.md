@@ -69,6 +69,32 @@ sequenceDiagram
 7. Haiku synthesises the whiteboard into a round digest → written to **inter-round memory** for the next round
 8. Low-confidence / challenged findings escalate to a **human gate** before synthesis
 
+## Task admission and execution
+
+REST, MCP, bot, and template submissions enter the same bounded scheduler before any
+DyTopo work starts:
+
+```mermaid
+flowchart LR
+    S[Submit task] --> V[Validate and persist]
+    V --> Q[Bounded FIFO queue]
+    Q --> W[Fixed worker pool]
+    W --> D[DyTopo execution]
+    D --> H[Duration history]
+    H --> E[Queue ETA windows]
+    E --> Q
+```
+
+- `POST /tasks` returns `202 Accepted` after the queued task is durable.
+- `QUEUE_CONCURRENCY` controls active tasks; `QUEUE_MAX_PENDING` bounds waiting work.
+- Queued tasks restore in creation order after restart. Tasks that were already running
+  are quarantined as `interrupted`, because their goroutines and model calls cannot survive
+  a process restart.
+- Queue metadata is calculated on read. Position and earliest/likely/latest completion
+  estimates do not become stale persisted task state.
+- Workers recover task-level panics, mark the task failed, close billable time, and continue
+  serving the queue.
+
 ## Q-learning agent recruitment
 
 (`biglaw-go/internal/learning/`)
@@ -97,7 +123,7 @@ All platform code lives under `biglaw-go/` (module `biglaw-go`, entry point
 |---|---|
 | `biglaw-go/cmd/biglaw/` | Entry point — run modes, firm-wide budget/docket/regulatory monitors |
 | `biglaw-go/cmd/topoflow-eval/` | TopoFlow ablation harness (bandit-over-DyTopo evaluation) |
-| `internal/orchestrator/` | Task lifecycle, phase sequencing, synthesis, tabulate |
+| `internal/orchestrator/` | Queued task admission, phase sequencing, evidence, synthesis, tabulate |
 | `internal/dytopo/` | Need/Offer matching, comm graph, two-wave round execution |
 | `internal/topoflow/` | AgensFlow bandit over DyTopo topology selection |
 | `internal/agents/` | All 131 agent definitions + the agentic-loop base class |
