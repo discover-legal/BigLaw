@@ -18,6 +18,17 @@ House rules:
 ## [Unreleased]
 
 ### Security and tenant isolation
+- Updated ORAS from 2.6.1 to 2.6.2 to resolve GHSA-fxhp-mv3v-67qp
+  (CVE-2026-50163), a hardlink path-escape issue in archive extraction.
+- SQLite and memory repositories now enforce document and attachment ownership on
+  reads, writes, lists, and deletes; ownerless legacy documents are privileged-only,
+  and non-partners cannot assign document ownership at ingest.
+- Bot commands now require explicit Slack user and Teams user/team allowlists (the
+  public `help` command remains available). Bot and audit background work use bounded
+  queues instead of spawning an unbounded goroutine per event.
+- HTTP request bodies, model responses, and blob downloads now have absolute size
+  ceilings; profiling binds only to loopback on a dedicated mux; gate decisions verify
+  task access and pending state; profile colors accept only six-digit hex values.
 - Authentication now fails closed when `SESSION_SECRET` is the published default or
   shorter than 32 characters. Bearer authentication also requires a strong `API_KEY`
   bound to an existing `API_PROFILE_ID`; callers can no longer select a principal with
@@ -33,6 +44,8 @@ House rules:
   policy graph. Updated the Go image dependency and pinned a patched Go Docker toolchain.
 
 ### Queued execution and runtime resilience
+- Added body-read deadlines, fixed the docket/regulatory monitor stop race, and clamp
+  job pagination so negative offsets cannot panic the API.
 - Task submission now durably records work and returns `202 Accepted`; a bounded FIFO
   scheduler runs a configurable number of workers (`QUEUE_CONCURRENCY`, default 3) instead
   of launching an unbounded goroutine per task. `QUEUE_MAX_PENDING` (default 1000) is the
@@ -54,6 +67,9 @@ House rules:
   evidence graph, specialists, allegations, synthesis, tabulation, lifecycle, and scheduler
   modules. Configuration types/security checks, store identity/artifact contracts and
   database migrations, and outbound transport policy now have dedicated files.
+- The workbench now waits for `/me` before mounting protected polling, clears cached
+  matter data on session expiry, reports queued submissions accurately, hides partner-
+  only deletion controls, and improves dialog, tab, and confidence semantics.
 
 ### Relicensed: AGPL-3.0 → Apache-2.0
 A clean-room reimplementation (spec: `docs/clean-room-spec-document-tools.md`) replaced

@@ -55,13 +55,12 @@ var (
 	forwardClient = &http.Client{Timeout: forwardTimeout}
 )
 
-// forwardEntry dispatches an entry to every configured destination, each in
-// its own goroutine. Best-effort: failures are logged (without secrets) and
-// dropped; panics are swallowed.
+// forwardEntry dispatches from the logger's single bounded worker. Delivery is
+// best-effort: failures are logged without secrets and the event is dropped.
 func forwardEntry(entry AuditEntry) {
 	forwardOnce.Do(func() { forwarders = loadForwardersFromEnv(os.Getenv) })
 	for _, f := range forwarders {
-		go func(f forwarder) {
+		func(f forwarder) {
 			defer func() { _ = recover() }()
 			if err := f.send(entry); err != nil {
 				slog.Warn("audit forward failed", "sink", f.name, "error", sanitizeForwardErr(err))

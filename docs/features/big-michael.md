@@ -17,22 +17,26 @@ posting results back.
 
 ## Teams setup
 
-(`TEAMS_WEBHOOK_SECRET` + `TEAMS_INCOMING_WEBHOOK_URL`)
+(`TEAMS_WEBHOOK_SECRET` + `TEAMS_INCOMING_WEBHOOK_URL` + sender allowlists)
 
 1. Teams admin → Apps → Outgoing Webhooks → Create
 2. Set callback URL to `https://<host>/bots/teams/webhook`
 3. Copy the security token → `TEAMS_WEBHOOK_SECRET`
 4. Channel → … → Connectors → Incoming Webhook → copy URL → `TEAMS_INCOMING_WEBHOOK_URL`
+5. Set `TEAMS_ALLOWED_USER_IDS` and `TEAMS_ALLOWED_TEAM_IDS` to comma-separated
+   Teams IDs. Data-bearing commands fail closed when either allowlist is empty.
 
 ## Slack setup
 
-(`SLACK_BOT_TOKEN` + `SLACK_SIGNING_SECRET`)
+(`SLACK_BOT_TOKEN` + `SLACK_SIGNING_SECRET` + `SLACK_ALLOWED_USER_IDS`)
 
 1. [api.slack.com/apps](https://api.slack.com/apps) → Create App → From scratch
 2. Bot Token Scopes: `chat:write`, `channels:history`, `search:read`
 3. Event Subscriptions → Request URL: `https://<host>/bots/slack/events`
 4. Subscribe to: `app_mention`
 5. Install to workspace → copy Bot Token + Signing Secret
+6. Set `SLACK_ALLOWED_USER_IDS` to the comma-separated Slack member IDs permitted
+   to run commands. `@BigMichael help` is the only command available to others.
 
 ## Proactive notifications
 

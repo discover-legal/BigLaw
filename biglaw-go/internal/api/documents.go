@@ -40,7 +40,7 @@ func (s *Server) handleIngestDocument(c *gin.Context) {
 	}
 
 	ownerID := body.OwnerID
-	if ownerID == "" {
+	if !auth.IsPartner(u) || ownerID == "" {
 		ownerID = u.ProfileID
 	}
 

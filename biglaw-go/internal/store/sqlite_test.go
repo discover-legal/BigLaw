@@ -15,7 +15,7 @@ import (
 func TestSQLiteRoundTripAndPersistence(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.db")
-	ctx := context.Background()
+	ctx := WithSystem(context.Background())
 
 	repo, err := openSQLite(path)
 	if err != nil {
@@ -80,7 +80,7 @@ func TestSQLiteRoundTripAndPersistence(t *testing.T) {
 // survives a write, an in-place replace, and a full close/reopen cycle.
 func TestSQLiteReviewRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "reviews.db")
-	ctx := context.Background()
+	ctx := WithSystem(context.Background())
 
 	repo, err := openSQLite(path)
 	if err != nil {
@@ -132,7 +132,7 @@ func TestSQLiteReviewRoundTrip(t *testing.T) {
 
 // TestMemoryReviewRoundTrip covers the memory backend's ReviewRepository.
 func TestMemoryReviewRoundTrip(t *testing.T) {
-	ctx := context.Background()
+	ctx := WithSystem(context.Background())
 	repo := NewMemoryRepo()
 
 	if err := repo.PutReview(ctx, "rev-m", "", "", time.Now(), []byte(`{"reviewId":"rev-m"}`)); err != nil {

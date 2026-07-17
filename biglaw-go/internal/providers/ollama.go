@@ -32,6 +32,8 @@ type OllamaProvider struct {
 	limiter *rateLimiter
 }
 
+const maxProviderResponseBytes int64 = 32 << 20
+
 func NewOllamaProvider(cfg *config.Config) *OllamaProvider {
 	baseURL := cfg.Local.OllamaURL
 	apiKey := "ollama"
@@ -439,16 +441,23 @@ func (p *OllamaProvider) sendChat(body []byte, url string) (*openAIChatResponse,
 			return nil, fmt.Errorf("ollama: do request: %w", err)
 		}
 		if resp.StatusCode == http.StatusOK {
-			var chatResp openAIChatResponse
-			derr := json.NewDecoder(resp.Body).Decode(&chatResp)
+			responseBody, rerr := io.ReadAll(io.LimitReader(resp.Body, maxProviderResponseBytes+1))
 			resp.Body.Close()
+			if rerr != nil {
+				return nil, fmt.Errorf("ollama: read response: %w", rerr)
+			}
+			if int64(len(responseBody)) > maxProviderResponseBytes {
+				return nil, fmt.Errorf("ollama: response exceeds %d MiB limit", maxProviderResponseBytes>>20)
+			}
+			var chatResp openAIChatResponse
+			derr := json.Unmarshal(responseBody, &chatResp)
 			if derr != nil {
 				return nil, fmt.Errorf("ollama: decode response: %w", derr)
 			}
 			return &chatResp, nil
 		}
 
-		b, _ := io.ReadAll(resp.Body)
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 		retryAfter := resp.Header.Get("Retry-After")
 		resp.Body.Close()
 		lastErr = fmt.Errorf("ollama: HTTP %d: %s", resp.StatusCode, string(b))

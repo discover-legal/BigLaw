@@ -20,7 +20,7 @@ import (
 // sqlite test's shape directly against MemoryRepo.
 
 func TestMemoryRepo_DocCRUD(t *testing.T) {
-	ctx := context.Background()
+	ctx := WithSystem(context.Background())
 	repo := NewMemoryRepo()
 
 	doc := types.Document{
@@ -74,7 +74,7 @@ func TestMemoryRepo_DocCRUD(t *testing.T) {
 }
 
 func TestMemoryRepo_DeleteFromMiddleOfOrderSlice(t *testing.T) {
-	ctx := context.Background()
+	ctx := WithSystem(context.Background())
 	repo := NewMemoryRepo()
 	for _, id := range []string{"a", "b", "c"} {
 		if err := repo.Upsert(ctx, types.Document{ID: id, IngestedAt: time.Now()}); err != nil {
@@ -93,8 +93,11 @@ func TestMemoryRepo_DeleteFromMiddleOfOrderSlice(t *testing.T) {
 }
 
 func TestMemoryRepo_AttachmentCRUD(t *testing.T) {
-	ctx := context.Background()
+	ctx := WithSystem(context.Background())
 	repo := NewMemoryRepo()
+	if err := repo.Upsert(ctx, types.Document{ID: "doc-1", OwnerID: "lawyer-7"}); err != nil {
+		t.Fatalf("Upsert parent: %v", err)
+	}
 	att := types.Attachment{ID: "att-1", DocID: "doc-1", OwnerID: "lawyer-7",
 		Filename: "exhibit.pdf", MediaType: "application/pdf", CreatedAt: time.Now()}
 	if err := repo.AddAttachment(ctx, att); err != nil {

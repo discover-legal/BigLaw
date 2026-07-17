@@ -8,7 +8,7 @@ import "github.com/gin-gonic/gin"
 func (s *Server) newRouter() *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
-	r.Use(gin.Recovery(), s.authMiddleware())
+	r.Use(gin.Recovery(), requestBodyLimit(), s.authMiddleware())
 
 	r.GET("/health", s.handleHealth)
 	r.GET("/me", s.handleMe)

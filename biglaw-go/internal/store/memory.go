@@ -5,6 +5,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -44,11 +45,15 @@ func NewMemoryRepo() *MemoryRepo {
 func (m *MemoryRepo) Backend() string { return "memory" }
 func (m *MemoryRepo) Close() error    { return nil }
 
-// The memory backend is local single-tenant; it ignores Identity (the
-// application layer enforces access). Signatures match the interface.
-func (m *MemoryRepo) Upsert(_ context.Context, doc types.Document) error {
+func (m *MemoryRepo) Upsert(ctx context.Context, doc types.Document) error {
+	if err := RequireWriteOwner(ctx, doc.OwnerID); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if existing, ok := m.docs[doc.ID]; ok && !CanAccessOwner(ctx, existing.OwnerID) {
+		return fmt.Errorf("store: document is outside caller scope")
+	}
 	if _, ok := m.docs[doc.ID]; !ok {
 		m.order = append(m.order, doc.ID)
 	}
@@ -57,31 +62,33 @@ func (m *MemoryRepo) Upsert(_ context.Context, doc types.Document) error {
 	return nil
 }
 
-func (m *MemoryRepo) GetByID(_ context.Context, id string) (*types.Document, bool, error) {
+func (m *MemoryRepo) GetByID(ctx context.Context, id string) (*types.Document, bool, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	d, ok := m.docs[id]
-	if !ok {
+	if !ok || !CanAccessOwner(ctx, d.OwnerID) {
 		return nil, false, nil
 	}
 	cp := d
 	return &cp, true, nil
 }
 
-func (m *MemoryRepo) List(_ context.Context) ([]types.Document, error) {
+func (m *MemoryRepo) List(ctx context.Context) ([]types.Document, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	out := make([]types.Document, 0, len(m.order))
 	for _, id := range m.order {
-		out = append(out, m.docs[id])
+		if d := m.docs[id]; CanAccessOwner(ctx, d.OwnerID) {
+			out = append(out, d)
+		}
 	}
 	return out, nil
 }
 
-func (m *MemoryRepo) Delete(_ context.Context, id string) error {
+func (m *MemoryRepo) Delete(ctx context.Context, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.docs[id]; ok {
+	if d, ok := m.docs[id]; ok && CanAccessOwner(ctx, d.OwnerID) {
 		delete(m.docs, id)
 		for i, oid := range m.order {
 			if oid == id {
@@ -93,40 +100,56 @@ func (m *MemoryRepo) Delete(_ context.Context, id string) error {
 	return nil
 }
 
-func (m *MemoryRepo) AddAttachment(_ context.Context, att types.Attachment) error {
+func (m *MemoryRepo) AddAttachment(ctx context.Context, att types.Attachment) error {
+	if err := RequireWriteOwner(ctx, att.OwnerID); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	doc, ok := m.docs[att.DocID]
+	if !ok || !CanAccessOwner(ctx, doc.OwnerID) || doc.OwnerID != att.OwnerID {
+		return fmt.Errorf("store: attachment parent is outside caller scope")
+	}
 	m.attachments[att.ID] = att
 	return nil
 }
 
-func (m *MemoryRepo) ListAttachments(_ context.Context, docID string) ([]types.Attachment, error) {
+func (m *MemoryRepo) ListAttachments(ctx context.Context, docID string) ([]types.Attachment, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	doc, ok := m.docs[docID]
+	if !ok || !CanAccessOwner(ctx, doc.OwnerID) {
+		return nil, nil
+	}
 	var out []types.Attachment
 	for _, a := range m.attachments {
-		if a.DocID == docID {
+		if a.DocID == docID && CanAccessOwner(ctx, a.OwnerID) {
 			out = append(out, a)
 		}
 	}
 	return out, nil
 }
 
-func (m *MemoryRepo) GetAttachment(_ context.Context, id string) (*types.Attachment, bool, error) {
+func (m *MemoryRepo) GetAttachment(ctx context.Context, id string) (*types.Attachment, bool, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	a, ok := m.attachments[id]
-	if !ok {
+	doc, docOK := m.docs[a.DocID]
+	if !ok || !docOK || !CanAccessOwner(ctx, a.OwnerID) || !CanAccessOwner(ctx, doc.OwnerID) {
 		return nil, false, nil
 	}
 	cp := a
 	return &cp, true, nil
 }
 
-func (m *MemoryRepo) DeleteAttachment(_ context.Context, id string) error {
+func (m *MemoryRepo) DeleteAttachment(ctx context.Context, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	delete(m.attachments, id)
+	if a, ok := m.attachments[id]; ok && CanAccessOwner(ctx, a.OwnerID) {
+		if doc, docOK := m.docs[a.DocID]; docOK && CanAccessOwner(ctx, doc.OwnerID) {
+			delete(m.attachments, id)
+		}
+	}
 	return nil
 }
 

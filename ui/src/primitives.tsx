@@ -32,7 +32,7 @@ export function ConfidenceBar({ value }: { value: number }) {
   const pct = Math.round(value * 100);
   const color = value >= 0.75 ? "var(--green)" : value >= 0.5 ? "var(--gold)" : "var(--red)";
   return (
-    <div className="conf">
+    <div className="conf" role="progressbar" aria-label="Confidence" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
       <div className="conf-track">
         <div className="conf-fill" style={{ width: `${pct}%`, background: color }} />
       </div>

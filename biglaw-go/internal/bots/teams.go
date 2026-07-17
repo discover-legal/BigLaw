@@ -100,6 +100,7 @@ type TeamsWebhookRequest struct {
 		Content string `json:"content"`
 	} `json:"attachments"`
 	From struct {
+		ID   string `json:"id"`
 		Name string `json:"name"`
 	} `json:"from"`
 	ChannelData struct {
@@ -136,6 +137,11 @@ func HandleTeamsWebhook(rawBody, authHeader string, orch OrchestratorFacade) ([]
 	text = strings.TrimSpace(text)
 	channelID := req.ChannelData.Channel.ID
 	teamID := req.ChannelData.Team.ID
+	if !publicBotCommand(text) && (!idAllowed(os.Getenv("TEAMS_ALLOWED_USER_IDS"), req.From.ID) ||
+		!idAllowed(os.Getenv("TEAMS_ALLOWED_TEAM_IDS"), teamID)) {
+		slog.Warn("Teams webhook: sender not authorized", "teamId", teamID)
+		return jsonErr("Sender is not authorized for Big Michael"), 403, nil
+	}
 
 	response := Dispatch(BotMessage{
 		Text:       text,
@@ -153,7 +159,7 @@ func HandleTeamsWebhook(rawBody, authHeader string, orch OrchestratorFacade) ([]
 		if targetURL == "" {
 			targetURL = os.Getenv("TEAMS_INCOMING_WEBHOOK_URL")
 		}
-		go func() {
+		if !enqueueBotWork(func() {
 			result, err := response.AsyncWork()
 			if err != nil {
 				result = fmt.Sprintf("Error: %s", err.Error())
@@ -163,7 +169,9 @@ func HandleTeamsWebhook(rawBody, authHeader string, orch OrchestratorFacade) ([]
 					slog.Warn("Teams async post failed", "error", postErr)
 				}
 			}
-		}()
+		}) {
+			return jsonErr("Big Michael is busy; please retry shortly"), 503, nil
+		}
 	}
 
 	out, _ := json.Marshal(map[string]string{"type": "message", "text": response.Immediate})

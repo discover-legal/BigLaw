@@ -123,14 +123,16 @@ func (m *Monitor) Start(interval time.Duration) {
 	}
 	m.ticker = time.NewTicker(interval)
 	m.stop = make(chan struct{})
+	ticker := m.ticker
+	stop := m.stop
 	m.mu.Unlock()
 
 	go func() {
 		for {
 			select {
-			case <-m.ticker.C:
+			case <-ticker.C:
 				m.CheckAll()
-			case <-m.stop:
+			case <-stop:
 				return
 			}
 		}

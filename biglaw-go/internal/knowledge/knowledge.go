@@ -174,7 +174,7 @@ func (s *Store) Search(query string, opts SearchOpts) ([]types.SearchResult, err
 	}
 	var candidates []scored
 	for _, d := range s.docs {
-		if opts.OwnerID != "" && d.OwnerID != "" && d.OwnerID != opts.OwnerID {
+		if opts.OwnerID != "" && d.OwnerID != opts.OwnerID {
 			continue
 		}
 		if len(d.Embedding) == 0 {
@@ -303,7 +303,7 @@ func (s *Store) fallback(query string, opts SearchOpts) []types.SearchResult {
 	}
 	var out []types.SearchResult
 	for _, d := range s.docs {
-		if opts.OwnerID != "" && d.OwnerID != "" && d.OwnerID != opts.OwnerID {
+		if opts.OwnerID != "" && d.OwnerID != opts.OwnerID {
 			continue
 		}
 		excerpt := d.Content

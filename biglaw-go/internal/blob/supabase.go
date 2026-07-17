@@ -82,7 +82,7 @@ func (s *SupabaseStore) Get(key string) ([]byte, error) {
 	if resp.StatusCode/100 != 2 {
 		return nil, fmt.Errorf("blob: supabase get %s: HTTP %d", key, resp.StatusCode)
 	}
-	return io.ReadAll(resp.Body)
+	return readBlob(resp.Body)
 }
 
 func (s *SupabaseStore) Delete(key string) error {

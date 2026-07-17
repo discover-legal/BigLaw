@@ -14,8 +14,10 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -71,6 +73,58 @@ var Default = &Logger{
 	lastHash:  "genesis",
 }
 
+const auditDispatchCapacity = 2048
+
+type dispatchItem struct {
+	entry   AuditEntry
+	raw     []byte
+	sinks   []Sink
+	logFile string
+	enabled bool
+}
+
+var (
+	dispatchOnce sync.Once
+	dispatchCh   chan dispatchItem
+	droppedAudit atomic.Uint64
+)
+
+func enqueueDispatch(item dispatchItem) {
+	dispatchOnce.Do(func() {
+		dispatchCh = make(chan dispatchItem, auditDispatchCapacity)
+		go runDispatcher(dispatchCh)
+	})
+	select {
+	case dispatchCh <- item:
+	default:
+		n := droppedAudit.Add(1)
+		if n == 1 || n%100 == 0 {
+			slog.Warn("audit dispatch queue full; event dropped", "dropped", n)
+		}
+	}
+}
+
+func runDispatcher(ch <-chan dispatchItem) {
+	for item := range ch {
+		if item.enabled && item.logFile != "" {
+			if dir := filepath.Dir(item.logFile); dir != "." {
+				_ = os.MkdirAll(dir, 0o700)
+			}
+			if f, err := os.OpenFile(item.logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
+				_, _ = fmt.Fprintln(f, string(item.raw))
+				_ = f.Close()
+			}
+		}
+		forwardEntry(item.entry)
+		for _, sink := range item.sinks {
+			func() {
+				defer func() { _ = recover() }()
+				sink.Write(item.entry)
+			}()
+		}
+	}
+}
+
 func Init(logFile string, enabled bool) {
 	Default.logFile = logFile
 	Default.enabled = enabled
@@ -118,29 +172,10 @@ func (l *Logger) Write(req WriteRequest) {
 	enabled := l.enabled
 	l.mu.Unlock()
 
-	// Async disk write — never blocks the caller.
-	if enabled && logFile != "" {
-		go func() {
-			f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-			if err != nil {
-				return
-			}
-			defer f.Close()
-			fmt.Fprintln(f, string(raw))
-		}()
-	}
-
-	// Forward to env-configured external destinations (OpenSearch / Splunk HEC /
-	// webhook) — async, best-effort, never blocks or panics. See forward.go.
-	forwardEntry(entry)
-
-	// Notify sinks (fire-and-forget).
-	for _, s := range sinks {
-		go func(sink Sink) {
-			defer func() { recover() }()
-			sink.Write(entry)
-		}(s)
-	}
+	// Disk and external delivery are serialized through one bounded queue. This
+	// preserves hash-chain order and prevents slow sinks from creating an
+	// unbounded number of goroutines under load.
+	enqueueDispatch(dispatchItem{entry: entry, raw: raw, sinks: sinks, logFile: logFile, enabled: enabled})
 
 	// Notify SSE listeners (non-blocking).
 	for _, ch := range listeners {

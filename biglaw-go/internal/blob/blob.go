@@ -15,6 +15,7 @@ package blob
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,6 +34,19 @@ type Store interface {
 	Get(key string) ([]byte, error)
 	Delete(key string) error
 	Backend() string
+}
+
+const maxBlobBytes int64 = 64 << 20
+
+func readBlob(r io.Reader) ([]byte, error) {
+	b, err := io.ReadAll(io.LimitReader(r, maxBlobBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(b)) > maxBlobBytes {
+		return nil, fmt.Errorf("blob: object exceeds %d MiB limit", maxBlobBytes>>20)
+	}
+	return b, nil
 }
 
 // Compile-time guarantee every bundled backend satisfies the seam.
@@ -69,7 +83,7 @@ func NewDiskStore(dir string) (*DiskStore, error) {
 	if dir == "" {
 		dir = filepath.Join("data", "attachments")
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("blob: create root %s: %w", dir, err)
 	}
 	return &DiskStore{root: dir}, nil
@@ -106,7 +120,7 @@ func (d *DiskStore) Put(key string, data []byte) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
 		return err
 	}
 	return os.WriteFile(p, data, 0o600)
@@ -117,7 +131,12 @@ func (d *DiskStore) Get(key string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return os.ReadFile(p)
+	f, err := os.Open(p)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return readBlob(f)
 }
 
 func (d *DiskStore) Delete(key string) error {

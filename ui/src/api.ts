@@ -24,8 +24,17 @@ type SettingsPatch = {
 
 async function json<T>(res: Response): Promise<T> {
   if (!res.ok) {
-    const detail = await res.text().catch(() => "");
-    throw new Error(`${res.status} ${res.statusText}${detail ? ` — ${detail}` : ""}`);
+    if (res.status === 401) window.dispatchEvent(new Event("biglaw:unauthorized"));
+    const raw = await res.text().catch(() => "");
+    let detail = "";
+    if (res.status < 500 && raw) {
+      try {
+        const parsed = JSON.parse(raw) as { error?: unknown };
+        if (typeof parsed.error === "string") detail = parsed.error.slice(0, 240);
+      } catch { /* non-standard bodies are not shown to users */ }
+    }
+    const fallback = res.status >= 500 ? "The service could not complete that request." : res.statusText;
+    throw new Error(detail || fallback || `Request failed (${res.status})`);
   }
   return res.json() as Promise<T>;
 }

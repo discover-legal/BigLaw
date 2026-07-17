@@ -16,9 +16,9 @@ require (
 	github.com/mark3labs/mcp-go v0.18.0
 	github.com/opencontainers/image-spec v1.1.1
 	golang.org/x/image v0.43.0
-	golang.org/x/sync v0.21.0
+	golang.org/x/sync v0.22.0
 	modernc.org/sqlite v1.52.0
-	oras.land/oras-go/v2 v2.6.1
+	oras.land/oras-go/v2 v2.6.2
 )
 
 require (

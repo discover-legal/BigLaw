@@ -27,7 +27,7 @@ func openSQLite(path string) (DocRepository, error) {
 		path = filepath.Join("data", "biglaw.db")
 	}
 	if dir := filepath.Dir(path); dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return nil, fmt.Errorf("store: create sqlite dir %s: %w", dir, err)
 		}
 	}
@@ -42,15 +42,25 @@ func openSQLite(path string) (DocRepository, error) {
 		db.Close()
 		return nil, fmt.Errorf("store: sqlite migrate: %w", err)
 	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("store: secure sqlite file %s: %w", path, err)
+	}
 	return &sqliteRepo{db: db, path: path}, nil
 }
 
 func (r *sqliteRepo) Backend() string { return "sqlite" }
 func (r *sqliteRepo) Close() error    { return r.db.Close() }
 
-// SQLite is local single-tenant; it ignores Identity (the application layer
-// enforces access). Signatures match the interface.
-func (r *sqliteRepo) Upsert(_ context.Context, doc types.Document) error {
+func (r *sqliteRepo) Upsert(ctx context.Context, doc types.Document) error {
+	if err := RequireWriteOwner(ctx, doc.OwnerID); err != nil {
+		return err
+	}
+	if existing, found, err := r.GetByID(storeSystemContext(), doc.ID); err != nil {
+		return err
+	} else if found && !CanAccessOwner(ctx, existing.OwnerID) {
+		return fmt.Errorf("store: document is outside caller scope")
+	}
 	noslegal, metadata := marshalFacets(doc)
 	ingested := doc.IngestedAt
 	if ingested.IsZero() {
@@ -77,7 +87,7 @@ func (r *sqliteRepo) Upsert(_ context.Context, doc types.Document) error {
 	return nil
 }
 
-func (r *sqliteRepo) GetByID(_ context.Context, id string) (*types.Document, bool, error) {
+func (r *sqliteRepo) GetByID(ctx context.Context, id string) (*types.Document, bool, error) {
 	row := r.db.QueryRow(`SELECT `+docColumns+` FROM documents WHERE id = ?`, id)
 	doc, err := scanDoc(row)
 	if err == sql.ErrNoRows {
@@ -86,10 +96,13 @@ func (r *sqliteRepo) GetByID(_ context.Context, id string) (*types.Document, boo
 	if err != nil {
 		return nil, false, fmt.Errorf("store: sqlite get %s: %w", id, err)
 	}
+	if !CanAccessOwner(ctx, doc.OwnerID) {
+		return nil, false, nil
+	}
 	return doc, true, nil
 }
 
-func (r *sqliteRepo) List(_ context.Context) ([]types.Document, error) {
+func (r *sqliteRepo) List(ctx context.Context) ([]types.Document, error) {
 	rows, err := r.db.Query(`SELECT ` + docColumns + ` FROM documents ORDER BY ingested_at ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("store: sqlite list: %w", err)
@@ -101,24 +114,39 @@ func (r *sqliteRepo) List(_ context.Context) ([]types.Document, error) {
 		if err != nil {
 			return nil, fmt.Errorf("store: sqlite scan: %w", err)
 		}
-		out = append(out, *doc)
+		if CanAccessOwner(ctx, doc.OwnerID) {
+			out = append(out, *doc)
+		}
 	}
 	return out, rows.Err()
 }
 
-func (r *sqliteRepo) Delete(_ context.Context, id string) error {
+func (r *sqliteRepo) Delete(ctx context.Context, id string) error {
+	if _, found, err := r.GetByID(ctx, id); err != nil || !found {
+		return err
+	}
 	if _, err := r.db.Exec(`DELETE FROM documents WHERE id = ?`, id); err != nil {
 		return fmt.Errorf("store: sqlite delete %s: %w", id, err)
 	}
 	return nil
 }
 
-func (r *sqliteRepo) AddAttachment(_ context.Context, a types.Attachment) error {
+func (r *sqliteRepo) AddAttachment(ctx context.Context, a types.Attachment) error {
+	if err := RequireWriteOwner(ctx, a.OwnerID); err != nil {
+		return err
+	}
+	doc, found, err := r.GetByID(ctx, a.DocID)
+	if err != nil {
+		return err
+	}
+	if !found || doc.OwnerID != a.OwnerID {
+		return fmt.Errorf("store: attachment parent is outside caller scope")
+	}
 	created := a.CreatedAt
 	if created.IsZero() {
 		created = time.Now()
 	}
-	_, err := r.db.Exec(`
+	_, err = r.db.Exec(`
 		INSERT INTO attachments (id, doc_id, owner_id, filename, media_type, kind, size, blob_key, page, created_at)
 		VALUES (?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET
@@ -133,7 +161,10 @@ func (r *sqliteRepo) AddAttachment(_ context.Context, a types.Attachment) error 
 	return nil
 }
 
-func (r *sqliteRepo) ListAttachments(_ context.Context, docID string) ([]types.Attachment, error) {
+func (r *sqliteRepo) ListAttachments(ctx context.Context, docID string) ([]types.Attachment, error) {
+	if _, found, err := r.GetByID(ctx, docID); err != nil || !found {
+		return nil, err
+	}
 	rows, err := r.db.Query(`SELECT `+attColumns+` FROM attachments WHERE doc_id = ? ORDER BY created_at ASC`, docID)
 	if err != nil {
 		return nil, fmt.Errorf("store: sqlite list attachments: %w", err)
@@ -145,12 +176,14 @@ func (r *sqliteRepo) ListAttachments(_ context.Context, docID string) ([]types.A
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, *a)
+		if CanAccessOwner(ctx, a.OwnerID) {
+			out = append(out, *a)
+		}
 	}
 	return out, rows.Err()
 }
 
-func (r *sqliteRepo) GetAttachment(_ context.Context, id string) (*types.Attachment, bool, error) {
+func (r *sqliteRepo) GetAttachment(ctx context.Context, id string) (*types.Attachment, bool, error) {
 	row := r.db.QueryRow(`SELECT `+attColumns+` FROM attachments WHERE id = ?`, id)
 	a, err := scanAttachment(row)
 	if err == sql.ErrNoRows {
@@ -159,15 +192,26 @@ func (r *sqliteRepo) GetAttachment(_ context.Context, id string) (*types.Attachm
 	if err != nil {
 		return nil, false, fmt.Errorf("store: sqlite get attachment %s: %w", id, err)
 	}
+	if !CanAccessOwner(ctx, a.OwnerID) {
+		return nil, false, nil
+	}
+	if _, found, err := r.GetByID(ctx, a.DocID); err != nil || !found {
+		return nil, false, err
+	}
 	return a, true, nil
 }
 
-func (r *sqliteRepo) DeleteAttachment(_ context.Context, id string) error {
+func (r *sqliteRepo) DeleteAttachment(ctx context.Context, id string) error {
+	if _, found, err := r.GetAttachment(ctx, id); err != nil || !found {
+		return err
+	}
 	if _, err := r.db.Exec(`DELETE FROM attachments WHERE id = ?`, id); err != nil {
 		return fmt.Errorf("store: sqlite delete attachment %s: %w", id, err)
 	}
 	return nil
 }
+
+func storeSystemContext() context.Context { return WithSystem(context.Background()) }
 
 // ─── ReviewRepository ────────────────────────────────────────────────────────────
 

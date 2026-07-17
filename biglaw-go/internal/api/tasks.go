@@ -278,6 +278,10 @@ func (s *Server) handleApproveGate(c *gin.Context) {
 
 	taskID := c.Param("id")
 	gateID := c.Param("gateId")
+	if !s.canReviewGate(u, taskID, gateID) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "gate not found"})
+		return
+	}
 
 	if err := s.orch.ApproveGate(taskID, gateID, body.Note, u.ProfileID); err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
@@ -304,12 +308,29 @@ func (s *Server) handleRejectGate(c *gin.Context) {
 
 	taskID := c.Param("id")
 	gateID := c.Param("gateId")
+	if !s.canReviewGate(u, taskID, gateID) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "gate not found"})
+		return
+	}
 
 	if err := s.orch.RejectGate(taskID, gateID, body.Reason, u.ProfileID); err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func (s *Server) canReviewGate(u *types.SessionUser, taskID, gateID string) bool {
+	task := s.orch.GetTask(taskID)
+	if task == nil || (!auth.IsPartner(u) && task.CreatedByProfileID != u.ProfileID && !auth.CanViewTask(u, task.AssignedLawyerIDs)) {
+		return false
+	}
+	for _, gate := range task.PendingGates {
+		if gate.ID == gateID && gate.Status == "pending" {
+			return true
+		}
+	}
+	return false
 }
 
 // ─── Task cost ────────────────────────────────────────────────────────────────

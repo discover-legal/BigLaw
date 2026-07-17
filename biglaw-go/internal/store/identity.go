@@ -5,6 +5,8 @@ package store
 
 import "context"
 
+import "fmt"
+
 // Identity is the security principal a repository call runs as. Postgres
 // projects it into transaction-local GUCs; local stores enforce it directly.
 type Identity struct {
@@ -39,4 +41,20 @@ func CanAccessOwner(ctx context.Context, ownerID string) bool {
 		return ownerID == ""
 	}
 	return id.System || id.IsPartner || (ownerID != "" && ownerID == id.ProfileID)
+}
+
+// RequireWriteOwner rejects writes that would let an unprivileged caller
+// create or move an artifact into another lawyer's ownership scope.
+func RequireWriteOwner(ctx context.Context, ownerID string) error {
+	id, ok := IdentityFrom(ctx)
+	if !ok {
+		if ownerID == "" {
+			return nil
+		}
+		return fmt.Errorf("store: identity required for owned artifact")
+	}
+	if id.System || id.IsPartner || (ownerID != "" && ownerID == id.ProfileID) {
+		return nil
+	}
+	return fmt.Errorf("store: owner is outside caller scope")
 }

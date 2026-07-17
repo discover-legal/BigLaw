@@ -24,6 +24,14 @@ export function SubmitModal({ onClose, onCreated, notify }: {
     api.listDocuments().then(setDocs).catch(() => {});
   }, []);
 
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !busy && !uploading) onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [busy, uploading, onClose]);
+
   function toggleDoc(id: string) {
     setSelectedDocs((prev) => {
       const next = new Set(prev);
@@ -57,7 +65,8 @@ export function SubmitModal({ onClose, onCreated, notify }: {
       const task = templateId
         ? await api.fromTemplate({ templateId, documentIds, ...refs })
         : await api.submitTask({ description, workflowType: workflow, documentIds, ...refs });
-      notify("Matter submitted — Big Michael is convening the bench");
+      const position = task.queue?.position ? ` · position ${task.queue.position}` : "";
+      notify(`Matter queued${position}`);
       onCreated(task);
     } catch (e) {
       notify((e as Error).message);
@@ -69,11 +78,11 @@ export function SubmitModal({ onClose, onCreated, notify }: {
 
   return (
     <div className="modal-scrim" onClick={onClose}>
-      <motion.div className="modal" onClick={(e) => e.stopPropagation()}
+      <motion.div className="modal" role="dialog" aria-modal="true" aria-labelledby="submit-title" onClick={(e) => e.stopPropagation()}
         initial={{ opacity: 0, y: 18, scale: 0.98 }} animate={{ opacity: 1, y: 0, scale: 1 }}
         transition={{ type: "spring", stiffness: 320, damping: 28 }}>
         <div className="modal-head">
-          <h3>Big Michael convenes the bench</h3>
+          <h3 id="submit-title">Big Michael convenes the bench</h3>
           <p>Brief him on the matter. He assembles the agent graph and runs the protocol.</p>
         </div>
 
@@ -103,11 +112,12 @@ export function SubmitModal({ onClose, onCreated, notify }: {
             <label>Workflow</label>
             <div className="wf-grid">
               {WORKFLOWS.map((w) => (
-                <div key={w.id} className={`wf-chip ${workflow === w.id && !templateId ? "sel" : ""}`}
+                <button type="button" key={w.id} className={`wf-chip ${workflow === w.id && !templateId ? "sel" : ""}`}
+                     aria-pressed={workflow === w.id && !templateId}
                      onClick={() => { setWorkflow(w.id); setTemplateId(""); }}>
                   <div className="wf-name">{w.name}</div>
                   <div className="wf-desc">{w.desc}</div>
-                </div>
+                </button>
               ))}
             </div>
           </div>

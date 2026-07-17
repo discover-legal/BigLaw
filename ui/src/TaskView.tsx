@@ -89,7 +89,7 @@ function MatterActions({ task, profiles, isPartner, onChange, onDeleted, notify 
       <div className="assignees">
         {assignedProfiles.length === 0 && <span className="assignees-none">Unassigned</span>}
         {assignedProfiles.map((p) => (
-          <span key={p.id} className="avatar" style={{ background: p.color ?? "var(--gold-soft)" }} title={`${p.name} · ${p.role}`}>{initials(p.name)}</span>
+          <span key={p.id} className="avatar" style={{ backgroundColor: p.color ?? "var(--gold-soft)" }} title={`${p.name} · ${p.role}`}>{initials(p.name)}</span>
         ))}
       </div>
       {isPartner && (
@@ -102,7 +102,7 @@ function MatterActions({ task, profiles, isPartner, onChange, onDeleted, notify 
               {profiles.map((p) => (
                 <label key={p.id} className="assign-row">
                   <input type="checkbox" checked={assigned.includes(p.id)} disabled={busy} onChange={() => toggle(p.id)} />
-                  <span className="avatar sm" style={{ background: p.color ?? "var(--gold-soft)" }}>{initials(p.name)}</span>
+                  <span className="avatar sm" style={{ backgroundColor: p.color ?? "var(--gold-soft)" }}>{initials(p.name)}</span>
                   <span className="assign-name">{p.name}</span>
                   {p.role === "partner" && <span className="pill sm gold">partner</span>}
                 </label>
@@ -111,7 +111,7 @@ function MatterActions({ task, profiles, isPartner, onChange, onDeleted, notify 
           )}
         </div>
       )}
-      <button className="btn reject sm" disabled={busy} onClick={del} title="Delete matter">✕ Delete</button>
+      {isPartner && <button className="btn reject sm" disabled={busy} onClick={del} title="Delete matter">✕ Delete</button>}
     </div>
   );
 }
@@ -335,9 +335,9 @@ export function TaskView({ task, agentNames, profiles, isPartner, onChange, onDe
         <div className="prose md request-body"><Markdown source={task.description} /></div>
       </details>
 
-      <div className="tabs">
+      <div className="tabs" role="tablist" aria-label="Matter details">
         {tabs.filter((t) => t.show).map((t) => (
-          <button key={t.id} className={`tab ${tab === t.id ? "active" : ""}`} onClick={() => setTab(t.id)}>
+          <button key={t.id} role="tab" aria-selected={tab === t.id} className={`tab ${tab === t.id ? "active" : ""}`} onClick={() => setTab(t.id)}>
             {t.label}
             {t.count != null && <span className="tab-count">{t.count}</span>}
             {tab === t.id && <motion.span layoutId="tab-underline" className="tab-underline" />}

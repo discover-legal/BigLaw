@@ -45,6 +45,7 @@ export default function App() {
   const [health, setHealth] = useState<Health | null>(null);
   const [agents, setAgents] = useState<AgentSummary[]>([]);
   const [me, setMe] = useState<Me | null>(null);
+	const [authReady, setAuthReady] = useState(false);
   const [profiles, setProfiles] = useState<LawyerProfile[]>([]);
   const loadProfiles = useCallback(() => { api.listProfiles().then(setProfiles).catch(() => {}); }, []);
   const [libraryTab, setLibraryTab] = useState<"documents" | "upload" | "search" | undefined>(undefined);
@@ -61,6 +62,7 @@ export default function App() {
 
   // Poll task list + health.
   useEffect(() => {
+	if (!authReady || (me?.authEnabled && !me.user)) return;
     const load = () => api.listTasks().then((t) => {
       setTasks(t);
       setSelectedId((cur) => cur ?? (t.length ? t[0].id : null));
@@ -68,20 +70,33 @@ export default function App() {
     load();
     const iv = window.setInterval(load, 4000);
     return () => window.clearInterval(iv);
-  }, []);
+  }, [authReady, me?.authEnabled, me?.user]);
 
   useEffect(() => {
+	if (!authReady || (me?.authEnabled && !me.user)) return;
     const load = () => api.health().then(setHealth).catch(() => setHealth(null));
     load();
     const iv = window.setInterval(load, 8000);
     return () => window.clearInterval(iv);
-  }, []);
+  }, [authReady, me?.authEnabled, me?.user]);
 
   // The agent registry is effectively static for a session — fetch once and
   // build an id→registered-name map so the Rounds view can label every agent
   // (including those that activated but produced no finding).
-  useEffect(() => { api.listAgents().then(setAgents).catch(() => {}); }, []);
-  useEffect(() => { api.me().then(setMe).catch(() => {}); loadProfiles(); }, [loadProfiles]);
+  useEffect(() => {
+	api.me().then(setMe).catch(() => setMe(null)).finally(() => setAuthReady(true));
+	const unauthorized = () => {
+	  setTasks([]); setTask(null); setProfiles([]); setSelectedId(null);
+	  setMe((current) => current ? { ...current, user: null } : current);
+	};
+	window.addEventListener("biglaw:unauthorized", unauthorized);
+	return () => window.removeEventListener("biglaw:unauthorized", unauthorized);
+  }, []);
+  useEffect(() => {
+	if (!authReady || (me?.authEnabled && !me.user)) return;
+	api.listAgents().then(setAgents).catch(() => {});
+	loadProfiles();
+  }, [authReady, me?.authEnabled, me?.user, loadProfiles]);
 
   const isPartner = me?.user?.role === "partner";
 
@@ -110,6 +125,7 @@ export default function App() {
 
   // Live-track the selected task: snapshot + stream-triggered refetch.
   useEffect(() => {
+	if (!authReady || (me?.authEnabled && !me.user)) return;
     if (!selectedId) { setTask(null); return; }
     let alive = true;
     const refetch = () => api.getTask(selectedId).then((t) => { if (alive) setTask(t); }).catch(() => {});
@@ -119,7 +135,7 @@ export default function App() {
       onPing: refetch,
     });
     return () => { alive = false; stop(); };
-  }, [selectedId]);
+  }, [selectedId, authReady, me?.authEnabled, me?.user]);
 
   const refetchSelected = useCallback(() => {
     if (selectedId) api.getTask(selectedId).then(setTask).catch(() => {});
@@ -159,6 +175,7 @@ export default function App() {
   }, [section, libraryTab]);
 
   // Production with auth on, but no session → show the login screen.
+  if (!authReady) return <div className="app-loading" role="status">Loading workspace…</div>;
   if (me?.authEnabled && !me.user) return <Login />;
 
   return (

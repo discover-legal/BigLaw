@@ -16,10 +16,15 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/http"
+	"net/http/pprof"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/joho/godotenv"
 
@@ -63,6 +68,11 @@ func main() {
 	// Infisical-managed secrets (mirrors the TS entry point: dotenv →
 	// Infisical → config). No-op when INFISICAL_* vars are absent.
 	_ = godotenv.Load()
+	if addr := os.Getenv("PPROF"); addr != "" {
+		if err := startLocalPprof(addr); err != nil {
+			slog.Warn("pprof disabled", "error", err)
+		}
+	}
 	secrets.Load()
 
 	cfg := config.Load()
@@ -79,10 +89,8 @@ func main() {
 			"overrides", disarmed)
 	}
 
-	// With auth enabled, the REST API is gated by a bearer token; a profile
-	// header alone is a claim, not a credential.
-	if cfg.Auth.Enabled && cfg.API.APIKey == "" {
-		fmt.Fprintln(os.Stderr, "config: AUTH_ENABLED=true requires API_KEY (REST bearer token) to be set")
+	if err := config.ValidateSecurity(cfg); err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
 		os.Exit(1)
 	}
 
@@ -380,4 +388,31 @@ func main() {
 
 	wg.Wait()
 	fmt.Println("biglaw: shutdown complete")
+}
+
+func startLocalPprof(addr string) error {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("PPROF must be host:port: %w", err)
+	}
+	ip := net.ParseIP(host)
+	if !strings.EqualFold(host, "localhost") && (ip == nil || !ip.IsLoopback()) {
+		return fmt.Errorf("PPROF may only bind a loopback address")
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+	for _, name := range []string{"allocs", "block", "goroutine", "heap", "mutex", "threadcreate"} {
+		mux.Handle("/debug/pprof/"+name, pprof.Handler(name))
+	}
+	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			slog.Warn("pprof server stopped", "error", err)
+		}
+	}()
+	return nil
 }

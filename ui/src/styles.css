@@ -916,7 +916,7 @@ table.grid tbody tr:last-child td { border-bottom: none; }
 .modal-head { padding: 22px 26px 0; }
 .modal-head h3 { font-family: var(--font-display); font-weight: 500; font-size: 22px; }
 .modal-head p { color: var(--text-dim); font-size: 13px; margin-top: 4px; }
-.modal-body { padding: 22px 26px; display: flex; flex-direction: column; gap: 18px; }
+.modal-body { padding: 22px 26px; display: flex; flex-direction: column; gap: 18px; max-height: 70vh; overflow-y: auto; }
 .field label {
   display: block;
   font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.12em;

@@ -6,8 +6,29 @@ package api
 import (
 	"context"
 	"net/http"
+	"strings"
 	"time"
+
+	"github.com/gin-gonic/gin"
 )
+
+const (
+	maxJSONBody      = 16 << 20
+	maxMultipartBody = 32 << 20
+)
+
+func requestBodyLimit() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		limit := int64(maxJSONBody)
+		if strings.HasPrefix(strings.ToLower(c.GetHeader("Content-Type")), "multipart/form-data") {
+			limit = maxMultipartBody
+		}
+		if c.Request.Body != nil {
+			c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, limit)
+		}
+		c.Next()
+	}
+}
 
 // Run starts the HTTP server on addr (e.g. ":3101").
 func (s *Server) Run(addr string) error {
@@ -19,6 +40,8 @@ func (s *Server) httpServer(addr string) *http.Server {
 		Addr:              addr,
 		Handler:           s.router,
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       45 * time.Second,
+		WriteTimeout:      0, // SSE streams are intentionally long-lived.
 		IdleTimeout:       60 * time.Second,
 	}
 }

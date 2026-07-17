@@ -177,7 +177,7 @@ export function AdminPanel({ notify, isPartner, profiles, onProfilesChange, me }
                       </div>
                     ) : (
                       <div className="lawyer-row">
-                        <span className="avatar sm" style={{ background: p.color ?? "var(--gold-soft)" }}>
+                        <span className="avatar sm" style={{ backgroundColor: p.color ?? "var(--gold-soft)" }}>
                           {p.name.split(/\s+/).slice(0, 2).map((w) => w[0]?.toUpperCase()).join("")}
                         </span>
                         <div style={{ flex: 1, minWidth: 0 }}>

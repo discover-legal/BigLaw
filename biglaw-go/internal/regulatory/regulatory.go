@@ -96,6 +96,8 @@ func (m *Monitor) Start(interval time.Duration, getTasks func() []types.Task) {
 	}
 	m.ticker = time.NewTicker(interval)
 	m.stop = make(chan struct{})
+	ticker := m.ticker
+	stop := m.stop
 	m.mu.Unlock()
 
 	go func() {
@@ -103,9 +105,9 @@ func (m *Monitor) Start(interval time.Duration, getTasks func() []types.Task) {
 		m.CheckAll(getTasks())
 		for {
 			select {
-			case <-m.ticker.C:
+			case <-ticker.C:
 				m.CheckAll(getTasks())
-			case <-m.stop:
+			case <-stop:
 				return
 			}
 		}

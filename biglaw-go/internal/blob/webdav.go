@@ -90,7 +90,7 @@ func (w *WebDAVStore) Get(key string) ([]byte, error) {
 	if resp.StatusCode/100 != 2 {
 		return nil, fmt.Errorf("blob: webdav get %s: HTTP %d", key, resp.StatusCode)
 	}
-	return io.ReadAll(resp.Body)
+	return readBlob(resp.Body)
 }
 
 func (w *WebDAVStore) Delete(key string) error {

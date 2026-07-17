@@ -232,10 +232,13 @@ func HandleSlackEvent(rawBody, timestamp, signature string, orch OrchestratorFac
 	if ev.BotID != "" || ev.Subtype == "bot_message" {
 		return []byte(`{"ok":true}`), 200, nil
 	}
-
 	// Strip Slack user-mention tags <@Uxxxxxxx>
 	slackMentionRe := regexp.MustCompile(`<@[A-Z0-9]+>`)
 	text := strings.TrimSpace(slackMentionRe.ReplaceAllString(ev.Text, ""))
+	if !publicBotCommand(text) && !idAllowed(os.Getenv("SLACK_ALLOWED_USER_IDS"), ev.User) {
+		slog.Warn("Slack events: sender not authorized", "channelId", ev.Channel)
+		return jsonErr("Sender is not authorized for Big Michael"), 403, nil
+	}
 	channelID := ev.Channel
 	threadTS := ev.ThreadTS
 	if threadTS == "" {
@@ -243,7 +246,7 @@ func HandleSlackEvent(rawBody, timestamp, signature string, orch OrchestratorFac
 	}
 
 	// Respond immediately — Slack requires ack within 3 s
-	go func() {
+	if !enqueueBotWork(func() {
 		response := Dispatch(BotMessage{
 			Text:       text,
 			SenderName: ev.User,
@@ -264,7 +267,9 @@ func HandleSlackEvent(rawBody, timestamp, signature string, orch OrchestratorFac
 				slog.Warn("Slack async post failed", "error", postErr)
 			}
 		}
-	}()
+	}) {
+		return jsonErr("Big Michael is busy; please retry shortly"), 503, nil
+	}
 
 	return []byte(`{"ok":true}`), 200, nil
 }

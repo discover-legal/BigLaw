@@ -35,12 +35,16 @@ attack surface is treated seriously.
 | **SSRF protection** | Endpoint URLs are validated lexically and again after DNS resolution by a controlled dialer; private/loopback/link-local/reserved results are rejected, and every redirect is revalidated |
 | **CSV safety** | Time-entry and tabulate CSV exports neutralise formula injection and strip `\r\n` from field values |
 | **Audit integrity** | SHA-256 hash chain verified on restore — tampering logs a warning |
-| **Bot signature verification** | Teams Outgoing Webhook: HMAC-SHA256 over the raw body (`Authorization: HMAC <base64>`). Slack Events API: signing-secret + 5-min replay window. These inbound routes are public only so provider verification can execute; bot administration remains authenticated |
-| **Access control** | Bearer credentials are bound server-side to one profile; reviews and document versions carry owner/matter identity; partner gates cover playbook, roster, client, billing, and analytics endpoints |
+| **Bot authorization** | Provider signatures are verified first, then Slack senders must appear in `SLACK_ALLOWED_USER_IDS`; Teams senders and teams must appear in `TEAMS_ALLOWED_USER_IDS` and `TEAMS_ALLOWED_TEAM_IDS`. Only `help` is public. Work is admitted through a bounded worker queue. |
+| **Access control** | Bearer credentials are bound server-side to one profile; reviews, document versions, documents, and attachments carry owner identity across Postgres, SQLite, and memory stores. Ownerless legacy documents are privileged-only; partner gates cover playbook, roster, client, billing, and analytics endpoints. |
 | **Conflict checks** | Entity-name normalisation + bidirectional matching, with an optional TypeDB conflict-graph sidecar |
 | **Round resilience** | Per-agent round timeout (`AGENT_ROUND_TIMEOUT_MS`, default 300000); an agent that exceeds it gets one retry with an extended budget (`ROUND_TIMEOUT_RETRY_FACTOR`, default 2.0) before recording nothing. A round in which every agent came back empty emits a `round.starved` audit event and annotates the task (`starvedRounds`) so consumers see the run was degraded. Malformed debate resolutions route to a human gate instead of passing silently |
 | **Boot task quarantine** | Tasks restored from `TASKS_FILE` in a mid-run status (`running`/`awaiting_gate`) are marked `interrupted` with a `task.interrupted` audit event — their runner goroutine died with the previous process, so silently re-listing them as running left zombie tasks contending with live work. Resubmit to rerun; `RESUME_RUNNING_TASKS=true` restores the old behaviour |
-| **Bounded execution** | Durable FIFO admission and a fixed worker pool prevent one goroutine per submission; pending work is capped by `QUEUE_MAX_PENDING`, task snapshots are serialized by one streaming writer, and queued wait is not billed |
+| **Bounded execution** | Durable FIFO admission and fixed worker pools prevent one goroutine per submission or bot/audit event. Pending work is capped by `QUEUE_MAX_PENDING`; JSON bodies (16 MiB), multipart bodies (32 MiB), model responses (32 MiB), and blobs (64 MiB) have absolute ceilings. |
 | **No secrets in logs** | API keys appear only in `Authorization` headers; connector error messages are length-capped; response bodies capped (1–2 MB) with 30 s timeouts |
+
+Use Go **1.25.12+** or **1.26.5+**. Earlier patch levels are affected by
+GO-2026-5856 / CVE-2026-42505 in `crypto/tls`. The bundled Docker build is pinned
+to a fixed toolchain.
 
 Related: [Legal notices & disclaimers](legal-notices.md) · [Access control](operations/access-control.md) · [Audit trail](operations/audit-trail.md)

@@ -616,11 +616,19 @@ func (s *Server) handleListJobs(c *gin.Context) {
 			limit = n
 		}
 	}
+	if limit < 1 {
+		limit = 1
+	} else if limit > 200 {
+		limit = 200
+	}
 	offset := 0
 	if v := c.Query("offset"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			offset = n
 		}
+	}
+	if offset < 0 {
+		offset = 0
 	}
 	jobs := s.opsJobs().List(types.JobStatus(c.Query("status")), limit, offset)
 	if jobs == nil {

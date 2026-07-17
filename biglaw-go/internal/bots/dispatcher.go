@@ -91,6 +91,34 @@ type BotResponse struct {
 
 var botNameRe = regexp.MustCompile(`(?i)^@?big[-_]?michael[\s:,]*`)
 
+const botWorkQueueSize = 256
+
+var botWorkQueue = newBotWorkQueue(4, botWorkQueueSize)
+
+func newBotWorkQueue(workers, capacity int) chan func() {
+	ch := make(chan func(), capacity)
+	for i := 0; i < workers; i++ {
+		go func() {
+			for work := range ch {
+				func() {
+					defer func() { _ = recover() }()
+					work()
+				}()
+			}
+		}()
+	}
+	return ch
+}
+
+func enqueueBotWork(work func()) bool {
+	select {
+	case botWorkQueue <- work:
+		return true
+	default:
+		return false
+	}
+}
+
 func parseCommand(raw string) (command, args string) {
 	text := strings.TrimSpace(botNameRe.ReplaceAllString(raw, ""))
 	i := strings.IndexByte(text, ' ')
@@ -98,6 +126,24 @@ func parseCommand(raw string) (command, args string) {
 		return strings.ToLower(text), ""
 	}
 	return strings.ToLower(text[:i]), strings.TrimSpace(text[i+1:])
+}
+
+func idAllowed(csv, id string) bool {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return false
+	}
+	for _, allowed := range strings.Split(csv, ",") {
+		if strings.TrimSpace(allowed) == id {
+			return true
+		}
+	}
+	return false
+}
+
+func publicBotCommand(text string) bool {
+	command, _ := parseCommand(text)
+	return command == "help"
 }
 
 // Dispatch parses a BotMessage and returns a BotResponse.

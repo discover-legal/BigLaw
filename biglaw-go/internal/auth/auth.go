@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -201,8 +202,8 @@ func (s *ProfileStore) Update(id string, patch map[string]interface{}) (*types.L
 		if v, ok := patch["bio"].(string); ok {
 			p.Bio = trunc(strings.TrimSpace(v), 2000)
 		}
-		if v, ok := patch["color"].(string); ok {
-			p.Color = trunc(v, 50)
+		if v, ok := patch["color"].(string); ok && profileColorRE.MatchString(strings.TrimSpace(v)) {
+			p.Color = strings.ToUpper(strings.TrimSpace(v))
 		}
 		if v, ok := patch["role"].(string); ok {
 			if v == "partner" {
@@ -279,10 +280,11 @@ func (s *ProfileStore) persist() {
 // ─── Utilities ────────────────────────────────────────────────────────────────
 
 var palette = []string{"#E6B450", "#84A9CC", "#7FB069", "#DA6A60", "#E0913C", "#B08BD6", "#5FB0B7"}
+var profileColorRE = regexp.MustCompile(`^#[0-9A-Fa-f]{6}$`)
 
 func colorOrPick(color, seed string) string {
-	if color != "" {
-		return trunc(color, 50)
+	if profileColorRE.MatchString(strings.TrimSpace(color)) {
+		return strings.ToUpper(strings.TrimSpace(color))
 	}
 	h := 0
 	for _, c := range seed {

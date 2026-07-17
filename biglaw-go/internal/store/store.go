@@ -26,8 +26,9 @@ import (
 
 // DocRepository is durable CRUD for documents. Implementations must be safe for
 // concurrent use. Every method takes a context carrying the request Identity;
-// the Postgres backend enforces row-level security from it (default-deny), while
-// SQLite/memory (local single-tenant) rely on the application layer.
+// the Postgres backend enforces row-level security from it and SQLite/memory
+// enforce the same policy directly. All implementations are default-deny for
+// owned artifacts when no identity is present.
 type DocRepository interface {
 	// Upsert inserts or replaces a document by ID.
 	Upsert(ctx context.Context, doc types.Document) error

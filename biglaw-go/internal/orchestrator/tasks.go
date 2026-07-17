@@ -270,8 +270,10 @@ func (o *Orchestrator) ApproveGate(taskID, gateID string, note, reviewerProfileI
 	// be written in place.
 	gates := make([]types.GateRequest, len(task.PendingGates))
 	copy(gates, task.PendingGates)
+	found := false
 	for i := range gates {
-		if gates[i].ID == gateID {
+		if gates[i].ID == gateID && gates[i].Status == "pending" {
+			found = true
 			gates[i].Status = "approved"
 			gates[i].ReviewerNote = note
 			now := time.Now()
@@ -279,6 +281,10 @@ func (o *Orchestrator) ApproveGate(taskID, gateID string, note, reviewerProfileI
 			task.UpdatedAt = time.Now()
 			break
 		}
+	}
+	if !found {
+		o.mu.Unlock()
+		return fmt.Errorf("pending gate not found: %s", gateID)
 	}
 	task.PendingGates = gates
 	ch := o.gateChans[taskID]
@@ -307,8 +313,10 @@ func (o *Orchestrator) RejectGate(taskID, gateID, reason, reviewerProfileID stri
 	var findingID string
 	gates := make([]types.GateRequest, len(task.PendingGates))
 	copy(gates, task.PendingGates)
+	found := false
 	for i := range gates {
-		if gates[i].ID == gateID {
+		if gates[i].ID == gateID && gates[i].Status == "pending" {
+			found = true
 			gates[i].Status = "rejected"
 			gates[i].ReviewerNote = reason
 			now := time.Now()
@@ -317,6 +325,10 @@ func (o *Orchestrator) RejectGate(taskID, gateID, reason, reviewerProfileID stri
 			task.UpdatedAt = time.Now()
 			break
 		}
+	}
+	if !found {
+		o.mu.Unlock()
+		return fmt.Errorf("pending gate not found: %s", gateID)
 	}
 	task.PendingGates = gates
 	if findingID != "" {
