@@ -6,14 +6,13 @@
   "main": "dist/server.js",
   "scripts": {
     "build": "tsc",
-    "start": "node dist/server.js",
-    "dev": "node --loader ts-node/esm server.ts"
+    "start": "node dist/server.js"
   },
   "dependencies": {
     "fastify": "^5.8.5"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "typescript": "^5.8.0"
+    "typescript": "^7.0.2"
   }
 }

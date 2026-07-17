@@ -14,9 +14,11 @@
 
 **The platform is a single static Go binary** — it runs end-to-end on a Raspberry Pi with
 4 GB of RAM, or entirely on local models (Ollama / LM Studio). Benchmarks vs the original
-TypeScript implementation: 1.25×–6.9× ([methodology](docs/benchmarks-go-vs-ts.md)). The code
-lives in [`biglaw-go/internal/`](biglaw-go/internal/); the TypeScript original is preserved
-at the tag `typescript-final`.
+TypeScript implementation: 1.25×–6.9× ([methodology](docs/benchmarks-go-vs-ts.md)). The backend
+lives in [`biglaw-go/internal/`](biglaw-go/internal/); the TypeScript original is preserved at
+the tag `typescript-final`. The only active TypeScript is the React workbench and the small
+TypeDB HTTP sidecar. Both compile with TypeScript 7's native compiler; neither duplicates Go
+application logic.
 
 </div>
 

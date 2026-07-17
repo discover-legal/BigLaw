@@ -1,9 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Discover Legal
-// This program is free software: you can redistribute it and/or modify it
-// under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version. See <https://www.gnu.org/licenses/>.
 
 /**
  * TypeDB 3.x client for the conflict-of-interest graph.
@@ -101,7 +97,9 @@ export class TypeDBConflictGraph {
   private token: string | null = null;
   private readonly db = "big_michael_legal";
 
-  async connect(address: string, username = "admin", password = "password"): Promise<void> {
+  async connect(address: string, username: string, password: string): Promise<void> {
+    if (!username.trim()) throw new Error("TYPEDB_USERNAME is required");
+    if (!password) throw new Error("TYPEDB_PASSWORD is required");
     this.origin = assertSafeTypeDbUrl(address);
     this.user = username;
     this.pass = password;

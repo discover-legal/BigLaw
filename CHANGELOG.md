@@ -61,6 +61,16 @@ House rules:
   malformed concurrency test into an OOM. The regression test is now strictly bounded.
 
 ### Maintainability
+- Upgraded the two remaining TypeScript workspaces (the React workbench and TypeDB HTTP
+  sidecar) to TypeScript 7's native compiler. Removed the retired TypeScript setup/template
+  implementations, generated Vite config output, an accidentally tracked Python bytecode
+  cache, and the completed TypeDB migration plan.
+- TypeScript builds no longer emit duplicate configuration/declaration files. The TypeDB
+  sidecar no longer advertises a broken `ts-node` command or silently falls back to published
+  credentials; URL, username, and password must now be supplied explicitly.
+- Split secondary workbench pages into on-demand chunks, reducing initial JavaScript from
+  539 kB to 370 kB. Removed the obsolete duplicate TypeDB Compose profile and bound the
+  remaining local-only DocuSeal/OpenSearch ports to loopback.
 - Split the API composition root into lifecycle, routing, middleware, health, tasks,
   documents, profiles, clients, and reporting modules.
 - Split the orchestrator into task admission, runner, rounds, planning, evidence queries,

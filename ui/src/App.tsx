@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { api, streamTask } from "./api";
 import type { Task, Health, AgentSummary, LawyerProfile, Me } from "./types";
@@ -9,15 +9,16 @@ import { Login } from "./Login";
 import { ErrorBoundary } from "./pages/ErrorBoundary";
 import { HomePage } from "./pages/HomePage";
 import { MattersPage } from "./pages/MattersPage";
-import { LibraryPage } from "./Library";
-import { ClientsPanel } from "./ClientsPanel";
-import { BillingPage } from "./pages/BillingPage";
-import { BudgetsPage } from "./pages/BudgetsPage";
-import { WatchtowerPage } from "./pages/WatchtowerPage";
-import { DraftingPage } from "./pages/DraftingPage";
-import { ReviewsPage } from "./pages/ReviewsPage";
-import { AnalyticsPage } from "./pages/AnalyticsPage";
-import { AdminPanel } from "./AdminPanel";
+
+const LibraryPage = lazy(() => import("./Library").then((m) => ({ default: m.LibraryPage })));
+const ClientsPanel = lazy(() => import("./ClientsPanel").then((m) => ({ default: m.ClientsPanel })));
+const BillingPage = lazy(() => import("./pages/BillingPage").then((m) => ({ default: m.BillingPage })));
+const BudgetsPage = lazy(() => import("./pages/BudgetsPage").then((m) => ({ default: m.BudgetsPage })));
+const WatchtowerPage = lazy(() => import("./pages/WatchtowerPage").then((m) => ({ default: m.WatchtowerPage })));
+const DraftingPage = lazy(() => import("./pages/DraftingPage").then((m) => ({ default: m.DraftingPage })));
+const ReviewsPage = lazy(() => import("./pages/ReviewsPage").then((m) => ({ default: m.ReviewsPage })));
+const AnalyticsPage = lazy(() => import("./pages/AnalyticsPage").then((m) => ({ default: m.AnalyticsPage })));
+const AdminPanel = lazy(() => import("./AdminPanel").then((m) => ({ default: m.AdminPanel })));
 
 type Section =
   | "home" | "matters" | "library" | "clients" | "billing" | "budgets"
@@ -239,6 +240,7 @@ export default function App() {
 
         <div className="workspace">
           <ErrorBoundary key={section}>
+            <Suspense fallback={<div className="empty" role="status">Loading workspace…</div>}>
             {section === "home" && (
               <HomePage
                 tasks={tasks} health={health} me={me} isPartner={isPartner}
@@ -270,6 +272,7 @@ export default function App() {
                 onProfilesChange={loadProfiles} me={me?.user}
               />
             )}
+            </Suspense>
           </ErrorBoundary>
         </div>
       </main>

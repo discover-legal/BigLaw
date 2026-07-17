@@ -24,9 +24,20 @@ import { TypeDBConflictGraph, type ConflictReport } from "./typedb.js";
 
 const socketPath = process.env.TYPEDB_SOCKET ?? "/run/biglaw/typedb.sock";
 const typedbUrl  = process.env.TYPEDB_URL ?? "";
+const typedbUsername = process.env.TYPEDB_USERNAME?.trim() ?? "";
+const typedbPassword = process.env.TYPEDB_PASSWORD ?? "";
 
-if (!typedbUrl) {
-  console.error(JSON.stringify({ level: "error", msg: "TYPEDB_URL is required" }));
+const missingTypeDbConfig = [
+  ["TYPEDB_URL", typedbUrl],
+  ["TYPEDB_USERNAME", typedbUsername],
+  ["TYPEDB_PASSWORD", typedbPassword],
+].filter(([, value]) => !value).map(([name]) => name);
+
+if (missingTypeDbConfig.length > 0) {
+  console.error(JSON.stringify({
+    level: "error",
+    msg: `${missingTypeDbConfig.join(", ")} ${missingTypeDbConfig.length === 1 ? "is" : "are"} required`,
+  }));
   process.exit(1);
 }
 
@@ -45,7 +56,7 @@ let connecting: Promise<void> | null = null;
 async function ensureConnected(): Promise<boolean> {
   if (connected) return true;
   connecting ??= graph
-    .connect(typedbUrl, process.env.TYPEDB_USERNAME ?? "admin", process.env.TYPEDB_PASSWORD ?? "password")
+    .connect(typedbUrl, typedbUsername, typedbPassword)
     .then(() => {
       connected = true;
       console.log(JSON.stringify({ level: "info", msg: "TypeDB connected", url: typedbUrl }));

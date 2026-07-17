@@ -22,9 +22,10 @@ bash setup.sh       # needs Docker running
 
 ## Manual setup (Go platform)
 
-The platform is a single Go binary plus a TypeDB conflict-graph sidecar, packaged as a
-three-container Docker stack. The retired TypeScript implementation is preserved at the
-git tag **`typescript-final`**.
+The platform is a single Go binary plus a small TypeDB HTTP sidecar, packaged as a
+three-container Docker stack. The retired TypeScript application is preserved at the git tag
+**`typescript-final`**. Active TypeScript is limited to that sidecar and the React workbench;
+both use TypeScript 7's native compiler and do not duplicate backend features.
 
 ```bash
 # Secrets — by default the model stack is Qwen, so set QWEN_API_KEY (DashScope).

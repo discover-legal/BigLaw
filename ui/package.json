@@ -6,7 +6,7 @@
   "description": "BigLaw — the BigLaw tool stack, open and free. Workbench UI for the multi-agent orchestrator; Big Michael convenes the bench.",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc --noEmit && tsc --noEmit -p tsconfig.node.json && vite build",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -19,7 +19,7 @@
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^6.0.2",
-    "typescript": "^5.5.4",
+    "typescript": "^7.0.2",
     "vite": "^8.0.16"
   }
 }
