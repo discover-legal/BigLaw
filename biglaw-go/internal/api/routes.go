@@ -3,7 +3,11 @@
 
 package api
 
-import "github.com/gin-gonic/gin"
+import (
+	"github.com/gin-gonic/gin"
+
+	"github.com/discover-legal/biglaw-go/internal/modules"
+)
 
 func (s *Server) newRouter() *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
@@ -14,6 +18,7 @@ func (s *Server) newRouter() *gin.Engine {
 	r.GET("/me", s.handleMe)
 	r.GET("/settings", s.handleGetSettings)
 	r.PUT("/settings", s.handleUpdateSettings)
+	r.GET("/modules", s.handleListModules)
 
 	tasks := r.Group("/tasks")
 	tasks.POST("", s.handleSubmitTask)
@@ -57,16 +62,25 @@ func (s *Server) newRouter() *gin.Engine {
 	r.GET("/audit", s.handleAudit)
 	r.GET("/audit/stream", s.handleAuditStream)
 
-	s.registerBillingRoutes(r)
+	// Optional feature modules — resolved by the modules registry; a disabled
+	// module's routes simply don't exist (404), matching a not-compiled-in
+	// feel without a build matrix.
+	if modules.Default.Enabled("billing") {
+		s.registerBillingRoutes(r)
+	}
 	s.registerMattersRoutes(r)
 	s.registerOpsRoutes(r)
 	s.registerEnginesRoutes(r)
 	s.registerContentRoutes(r)
 	s.registerRedtimeRoutes(r)
 	s.registerReviewRoutes(r)
-	s.registerRemyRoutes(r)
+	if modules.Default.Enabled("clientvoice") {
+		s.registerRemyRoutes(r)
+	}
 	s.registerAuthRoutes(r)
 	s.registerClioRoutes(r)
-	s.mountBots(r)
+	if modules.Default.Enabled("bots") {
+		s.mountBots(r)
+	}
 	return r
 }

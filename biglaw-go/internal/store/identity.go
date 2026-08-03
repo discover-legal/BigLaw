@@ -43,6 +43,17 @@ func CanAccessOwner(ctx context.Context, ownerID string) bool {
 	return id.System || id.IsPartner || (ownerID != "" && ownerID == id.ProfileID)
 }
 
+// CanAccessFirm gates firm-wide artifacts (CRM profiles/facts, intake
+// submissions): any authenticated firm principal — system, partner, or a
+// lawyer with a profile — may access them. Anonymous callers may not.
+func CanAccessFirm(ctx context.Context) bool {
+	id, ok := IdentityFrom(ctx)
+	if !ok {
+		return false
+	}
+	return id.System || id.IsPartner || id.ProfileID != ""
+}
+
 // RequireWriteOwner rejects writes that would let an unprivileged caller
 // create or move an artifact into another lawyer's ownership scope.
 func RequireWriteOwner(ctx context.Context, ownerID string) error {

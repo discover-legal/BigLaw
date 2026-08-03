@@ -37,12 +37,15 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/clientvoice"
 	"github.com/discover-legal/biglaw-go/internal/config"
 	"github.com/discover-legal/biglaw-go/internal/cost"
+	"github.com/discover-legal/biglaw-go/internal/crm"
 	"github.com/discover-legal/biglaw-go/internal/embeddings"
+	"github.com/discover-legal/biglaw-go/internal/intake"
 	"github.com/discover-legal/biglaw-go/internal/knowledge"
 	"github.com/discover-legal/biglaw-go/internal/learning"
 	"github.com/discover-legal/biglaw-go/internal/lpm"
 	"github.com/discover-legal/biglaw-go/internal/mcp"
 	"github.com/discover-legal/biglaw-go/internal/memory"
+	"github.com/discover-legal/biglaw-go/internal/modules"
 	"github.com/discover-legal/biglaw-go/internal/orchestrator"
 	"github.com/discover-legal/biglaw-go/internal/providers"
 	"github.com/discover-legal/biglaw-go/internal/queue"
@@ -93,6 +96,42 @@ func main() {
 		fmt.Fprintln(os.Stderr, err.Error())
 		os.Exit(1)
 	}
+
+	// Resolve the optional feature modules. The core (orchestrator, agents,
+	// DyTopo, documents, REST) is always on; everything below is a named
+	// module with a config-derived default, overridable per-module via
+	// BIGLAW_MODULE_<NAME>=on|off. GET /modules reports the resolved states.
+	mods := modules.Default
+	crmEnabled := mods.Register("crm",
+		"Neurosymbolic client CRM profiles (typed facts, bidirectional consent, semantic query)",
+		true, "default on")
+	intakeEnabled := mods.Register("intake",
+		"Affidavit-maker client intake channel (HMAC-signed portal API)",
+		cfg.Intake.HMACSecret != "", "requires INTAKE_HMAC_SECRET")
+	clientVoiceEnabled := mods.Register("clientvoice",
+		"Client advocacy briefs (Remy/CRM) surfaced at human gates",
+		true, "default on")
+	mods.Register("lpm",
+		"Legal project management: status reports, email intake, drafting",
+		cfg.LPM.Enabled, "LPM_ENABLED")
+	mods.Register("billing",
+		"Pre-bills, LEDES export, invoice validation, OCG checks",
+		true, "default on")
+	mods.Register("bots",
+		"Big Michael Teams/Slack channel agent",
+		cfg.Bots.Teams.Enabled || cfg.Bots.Slack.Enabled, "requires Teams/Slack credentials")
+	mods.Register("briefing",
+		"Hub-and-spoke client intelligence briefing swarm",
+		true, "default on")
+	mods.Register("monitor-budget",
+		"Matter budget threshold alerts",
+		cfg.Monitors.BudgetAlertsEnabled, "MONITOR_BUDGET_ALERTS")
+	mods.Register("monitor-dockets",
+		"CourtListener docket watcher",
+		cfg.Monitors.DocketsEnabled, "MONITOR_DOCKETS")
+	mods.Register("monitor-regulatory",
+		"Regulatory pulse monitor",
+		os.Getenv("TAVILY_API_KEY") != "", "requires TAVILY_API_KEY")
 
 	// Initialise audit logger.
 	audit.Init(cfg.Audit.LogFile, cfg.Audit.Enabled)
@@ -230,16 +269,43 @@ func main() {
 	}
 
 	// Client-voice store (Remy / CNTXT advocacy briefs + matter notifications).
-	clientVoiceStore := clientvoice.New(cfg.Persistence.ClientVoiceFile)
-	if err := clientVoiceStore.Init(); err != nil {
-		fmt.Fprintf(os.Stderr, "client voice init: %v\n", err)
+	var clientVoiceStore *clientvoice.Store
+	if clientVoiceEnabled {
+		clientVoiceStore = clientvoice.New(cfg.Persistence.ClientVoiceFile)
+		if err := clientVoiceStore.Init(); err != nil {
+			fmt.Fprintf(os.Stderr, "client voice init: %v\n", err)
+		}
+		orch.SetClientVoiceStore(clientVoiceStore)
 	}
-	orch.SetClientVoiceStore(clientVoiceStore)
+
+	// CRM: neurosymbolic client profiles on the durable store seam. Every
+	// built-in DocRepository backend implements CRMRepository.
+	var crmSvc *crm.Service
+	if crmEnabled {
+		if crmRepo, ok := docRepo.(store.CRMRepository); ok {
+			crmSvc = crm.New(crmRepo, clientStore, embedC)
+			if clientVoiceStore != nil {
+				crmSvc.SetClientVoice(clientVoiceStore)
+			}
+			if err := crmSvc.Load(); err != nil {
+				slog.Warn("crm load failed; continuing with empty index", "err", err)
+			}
+		}
+	}
+
+	// Intake: the affidavit-maker client channel. Requires CRM (profiles are
+	// where intake lands people) and the shared HMAC secret.
+	var intakeSvc *intake.Service
+	if intakeEnabled && crmSvc != nil {
+		if intakeRepo, ok := docRepo.(store.IntakeRepository); ok {
+			intakeSvc = intake.New(intakeRepo, crmSvc, clientStore, knowledgeStore)
+		}
+	}
 
 	// Build the LPM service (daily status-report spine) when enabled. It owns a
 	// durable queue, a daily scheduler, and a background worker.
 	var lpmSvc *lpm.Service
-	if cfg.LPM.Enabled {
+	if mods.Enabled("lpm") {
 		lpmQueue := queue.New(cfg.Persistence.JobsFile)
 		if err := lpmQueue.Init(); err != nil {
 			fmt.Fprintf(os.Stderr, "lpm queue init: %v\n", err)
@@ -317,6 +383,8 @@ func main() {
 		srv.AttachLPM(lpmSvc)
 		srv.AttachDockets(monitors.Dockets)
 		srv.AttachRegulatory(monitors.Regulatory)
+		srv.AttachCRM(crmSvc)
+		srv.AttachIntake(intakeSvc, crmSvc)
 		return srv
 	}
 

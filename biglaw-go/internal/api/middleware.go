@@ -77,6 +77,11 @@ func isPublicRoute(method, path string) bool {
 	if method == http.MethodPost && (path == "/bots/slack/events" || path == "/bots/teams/webhook") {
 		return true
 	}
+	// Portal-facing intake routes self-authenticate via HMAC request signing
+	// (every handler calls verifyIntakeHMAC before doing anything).
+	if isPortalIntakeRoute(method, path) {
+		return true
+	}
 	if method == http.MethodGet {
 		switch path {
 		case "/auth/providers", "/auth/google/login", "/auth/google/callback",

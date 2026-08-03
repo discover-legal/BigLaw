@@ -171,6 +171,10 @@ func Load() *Config {
 			GateNotes:           envBool("CLIENT_VOICE_GATE_NOTES", true),
 			MatterNotifications: envBool("CLIENT_VOICE_NOTIFICATIONS", true),
 		},
+		Intake: IntakeConfig{
+			HMACSecret: env("INTAKE_HMAC_SECRET", ""),
+			MaxSkewSec: envInt("INTAKE_MAX_SKEW_SEC", 300),
+		},
 		Local: LocalConfig{
 			OllamaURL:           env("OLLAMA_URL", "http://localhost:11434"),
 			OllamaEnabled:       envBool("OLLAMA_ENABLED", false),
