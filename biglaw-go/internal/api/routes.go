@@ -19,6 +19,7 @@ func (s *Server) newRouter() *gin.Engine {
 	r.GET("/settings", s.handleGetSettings)
 	r.PUT("/settings", s.handleUpdateSettings)
 	r.GET("/modules", s.handleListModules)
+	r.GET("/model-tiers", s.handleModelTiers)
 
 	tasks := r.Group("/tasks")
 	tasks.POST("", s.handleSubmitTask)
