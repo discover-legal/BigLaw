@@ -185,6 +185,19 @@ func main() {
 	regQ("quality-gate-notes", "Client-advocacy note on each human gate (1 call per gate)",
 		"CLIENT_VOICE_GATE_NOTES", &cfg.ClientVoice.GateNotes)
 
+	// The compensator boosters exist FOR small local models: staged
+	// extraction is what takes local-model verbatim citation grounding from
+	// ~0% to ~94%. Cutting it is safe on Haiku-class and stronger cloud
+	// models (native verbatim copy-out) but craters citation fidelity on an
+	// all-local stack — warn about exactly that combination.
+	allLocal := strings.EqualFold(cfg.Local.LocalInferenceTiers, "all") ||
+		strings.EqualFold(cfg.Local.OllamaTiers, "all")
+	if allLocal && !cfg.Quality.StagedExtraction {
+		slog.Warn("quality: staged extraction is OFF while all inference tiers run on local models — " +
+			"verbatim citation grounding will degrade sharply on small models; " +
+			"set QUALITY_STAGED_EXTRACTION=true (or BIGLAW_QUALITY=balanced) if citations are scored")
+	}
+
 	// Initialise audit logger.
 	audit.Init(cfg.Audit.LogFile, cfg.Audit.Enabled)
 
