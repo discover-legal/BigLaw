@@ -133,6 +133,58 @@ func main() {
 		"Regulatory pulse monitor",
 		os.Getenv("TAVILY_API_KEY") != "", "requires TAVILY_API_KEY")
 
+	// Model-quality boosters. Defaults come from the BIGLAW_QUALITY preset
+	// (or each booster's own QUALITY_*/existing env var); a BIGLAW_MODULE_
+	// QUALITY_* override wins over both and is written back into cfg, which
+	// is what the orchestrator/engine gates consult. GET /modules therefore
+	// reports the run's actual quality profile.
+	qReason := "preset " + cfg.Quality.Preset
+	regQ := func(name, desc, envVar string, val *bool) {
+		*val = mods.Register(name, desc, *val, envVar+" / "+qReason)
+	}
+	regQ("quality-debate", "Adversarial debate on every finding (1-2 heavy calls × finding × round)",
+		"DEBATE_ADVERSARIAL_ENABLED", &cfg.Debate.AdversarialEnabled)
+	verifyOn := mods.Register("quality-verification",
+		"Verification pipeline (DEBATE_VERIFICATION_PASSES tool calls per finding)",
+		cfg.Debate.VerificationPasses > 0, "DEBATE_VERIFICATION_PASSES / "+qReason)
+	if !verifyOn {
+		cfg.Debate.VerificationPasses = 0
+	} else if cfg.Debate.VerificationPasses <= 0 {
+		cfg.Debate.VerificationPasses = 10
+	}
+	regQ("quality-staged-extraction", "Verbatim extract→analyse staging (≤9 calls per agent per round; the main citation-grounding mechanism)",
+		"QUALITY_STAGED_EXTRACTION", &cfg.Quality.StagedExtraction)
+	regQ("quality-evidence-graph", "Task-start typed evidence graph (multi-pass extraction sweep)",
+		"QUALITY_EVIDENCE_GRAPH", &cfg.Quality.EvidenceGraph)
+	regQ("quality-spine", "BELO conduct/spine triple pass over charging docs (stronger model)",
+		"QUALITY_SPINE_EXTRACTION", &cfg.Quality.SpineExtraction)
+	regQ("quality-figures", "Deterministic figure harvest (1 light call per section chunk per doc)",
+		"QUALITY_FIGURES", &cfg.Quality.Figures)
+	regQ("quality-crossdoc", "Cross-document discrepancy joins (full second figure sweep)",
+		"QUALITY_CROSSDOC", &cfg.Quality.CrossDoc)
+	regQ("quality-deviations", "Requirement-deviation pass on compliance matters (≤80 adjudications)",
+		"QUALITY_DEVIATIONS", &cfg.Quality.Deviations)
+	regQ("quality-specialists", "Matter classification + on-demand specialist synthesis at task start",
+		"QUALITY_SPECIALISTS", &cfg.Quality.Specialists)
+	regQ("quality-specifics-sweep", "At-start entity-aware retrieval sweep (2 query-gen calls)",
+		"QUALITY_SPECIFICS_SWEEP", &cfg.Quality.SpecificsSweep)
+	regQ("quality-reentry", "Round-boundary machinery re-entry on each round's delta",
+		"REENTRANT_MACHINERY", &cfg.ReentrantMachinery)
+	regQ("quality-round-goals", "LLM-generated round goals (1 heavy call per phase)",
+		"QUALITY_ROUND_GOALS", &cfg.Quality.RoundGoals)
+	regQ("quality-memory-digest", "Model rollup of inter-round memory (1 call per round)",
+		"QUALITY_MEMORY_DIGEST", &cfg.Quality.MemoryDigest)
+	regQ("quality-descriptors", "Need/Offer descriptor generation (1 tiny call per agent per round)",
+		"QUALITY_DESCRIPTORS", &cfg.Quality.Descriptors)
+	regQ("quality-writer-multipass", "Scoped multi-pass synthesis writer (per-section drafters)",
+		"QUALITY_WRITER_MULTIPASS", &cfg.Quality.WriterMultipass)
+	regQ("quality-dytopo-drafting", "Two-wave DyTopo section drafting (critique+revise huddles)",
+		"DYTOPO_DRAFTING", &cfg.Drafting.DyTopo)
+	regQ("quality-rag-enrichment", "Background doc2query enrichment at ingest",
+		"QUALITY_RAG_ENRICHMENT", &cfg.Quality.RAGEnrichment)
+	regQ("quality-gate-notes", "Client-advocacy note on each human gate (1 call per gate)",
+		"CLIENT_VOICE_GATE_NOTES", &cfg.ClientVoice.GateNotes)
+
 	// Initialise audit logger.
 	audit.Init(cfg.Audit.LogFile, cfg.Audit.Enabled)
 
@@ -209,7 +261,9 @@ func main() {
 	// document into it. doc2query/HyDE use the light local tier.
 	ragModel := routing.SelectModel(cfg, routing.SelectParams{TaskType: routing.TaskExtraction})
 	var ragGen rag.Generator
-	if prov, perr := provReg.Get(ragModel); perr == nil {
+	// Quality booster gate (QUALITY_RAG_ENRICHMENT): without a generator the
+	// RAG service skips doc2query enrichment entirely (dense + BM25 remain).
+	if prov, perr := provReg.Get(ragModel); perr == nil && cfg.Quality.RAGEnrichment {
 		bare := routing.ResolveModelID(ragModel)
 		temp := cfg.LLMTemperature
 		ragGen = rag.GeneratorFunc(func(system, user string, maxTokens int) (string, error) {

@@ -66,15 +66,24 @@ func (o *Orchestrator) buildEvidenceGraph(task *types.Task, prov providers.Provi
 	// covers the exhibits. Falls back to the Phase-1 chunks if no document yields usable text.
 	const spineTokenBudget = 20000 // ~ the charging doc; bounds the expensive spine pass to a few calls
 	zero := 0.0
-	spineChunks := o.chargingDocChunks(task, spineTokenBudget)
-	if len(spineChunks) == 0 { // no usable doc text → degrade gracefully to the allegation passages
-		spineChunks = chunks
-	}
 	ckept, crej := 0, 0
-	for _, chunk := range spineChunks {
-		k, r := evidencegraph.ExtractTriplesInto(g, spineProv, spineModel, &zero, chunk, "")
-		ckept += k
-		crej += r
+	var spineChunks []string
+	// Quality booster gate (QUALITY_SPINE_EXTRACTION): the typed conduct/
+	// spine pass pages the charging documents on the stronger (slower) model
+	// and retries in full on zero yield. Off → the graph carries Phase-1
+	// entities/relations only and the spine falls back to enumeration.
+	// (Before this gate the pass ran unconditionally — even BELO_SPINE=false
+	// only changed how allegations were derived, not whether the pass ran.)
+	if o.cfg.Quality.SpineExtraction {
+		spineChunks = o.chargingDocChunks(task, spineTokenBudget)
+		if len(spineChunks) == 0 { // no usable doc text → degrade gracefully to the allegation passages
+			spineChunks = chunks
+		}
+		for _, chunk := range spineChunks {
+			k, r := evidencegraph.ExtractTriplesInto(g, spineProv, spineModel, &zero, chunk, "")
+			ckept += k
+			crej += r
+		}
 	}
 	// Zero-yield guard (the July-3 Haiku trigger regression): a spine pass that produces NOTHING
 	// — not even rejected rows — means every call failed or returned unparseable output (chatJSON
@@ -90,7 +99,7 @@ func (o *Orchestrator) buildEvidenceGraph(task *types.Task, prov providers.Provi
 			crej += r
 		}
 	}
-	if ckept+crej == 0 {
+	if o.cfg.Quality.SpineExtraction && ckept+crej == 0 {
 		slog.Warn("BELO spine pass produced no typed triples — spine falls back to enumeration; defense issues derive from the charging documents directly", "task", task.ID, "spine_model", spineModel)
 	}
 	if g.Len() == 0 {
@@ -115,7 +124,15 @@ func (o *Orchestrator) buildEvidenceGraph(task *types.Task, prov providers.Provi
 	// crossdoc's own duplicate full-corpus sweep can be dropped (follow-up wiring).
 	// On compliance matters the raw records feed the deviation pass's mechanical
 	// numeric join (deviationNumericJoin) below.
-	figs, rawFigs := o.harvestAndBindFigures(task, g, prov, figModel)
+	// Quality booster gate (QUALITY_FIGURES): the harvest is 1 light call per
+	// section chunk of every document plus normalization/adjudication calls.
+	// Off → no deterministic figure floor, and the deviation pass's numeric
+	// join gets no raw records.
+	var figs []types.Finding
+	var rawFigs []figureHit
+	if o.cfg.Quality.Figures {
+		figs, rawFigs = o.harvestAndBindFigures(task, g, prov, figModel)
+	}
 	if len(figs) > 0 {
 		o.update(task, func(t *types.Task) { t.Findings = append(t.Findings, figs...) })
 		slog.Info("figure harvest seeded findings", "task", task.ID, "n", len(figs), "model", figModel, "graph_facts_after", g.Len())
@@ -131,14 +148,20 @@ func (o *Orchestrator) buildEvidenceGraph(task *types.Task, prov providers.Provi
 	// quantity-kind + referent) reported with different values in different documents,
 	// plus event-date conflicts (metadata vs narrative). Augments the intra-harvest
 	// contradiction dimension above.
-	if xd := o.detectCrossDocDiscrepancies(task, g, prov, figModel); len(xd) > 0 {
-		o.update(task, func(t *types.Task) { t.Findings = append(t.Findings, xd...) })
+	// Quality booster gate (QUALITY_CROSSDOC): the discrepancy pass re-sweeps
+	// every document for figures plus alias/adjudication calls.
+	if o.cfg.Quality.CrossDoc {
+		if xd := o.detectCrossDocDiscrepancies(task, g, prov, figModel); len(xd) > 0 {
+			o.update(task, func(t *types.Task) { t.Findings = append(t.Findings, xd...) })
+		}
 	}
 	// Stage 2 — for a COMPLIANCE (compare/review) matter, DETECT where the document DEVIATES from
 	// the controlling standard per requirement. This is the finding such tasks are scored on
 	// ("residuary should be 40/35/25, draft has …"), not a description of each requirement. Runs
 	// on the spine model. Enforcement matters use the figure-discrepancy path instead.
-	if o.shouldRunDeviationPass(g) {
+	// Quality booster gate (QUALITY_DEVIATIONS): up to ~80 adjudication calls
+	// on compliance matters — the heaviest single pass on compare tasks.
+	if o.cfg.Quality.Deviations && o.shouldRunDeviationPass(g) {
 		if devs := o.detectDeviations(task, g, spineProv, spineModel, rawFigs, prov, figModel); len(devs) > 0 {
 			o.update(task, func(t *types.Task) { t.Findings = append(t.Findings, devs...) })
 			slog.Info("deviations detected", "task", task.ID, "n", len(devs))

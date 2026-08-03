@@ -143,6 +143,65 @@ type ClientVoiceConfig struct {
 	MatterNotifications bool
 }
 
+// QualityConfig gates the model-quality boosters — the extra model passes
+// beyond the minimum agent-loop → synthesis path. Each booster buys grounding
+// accuracy at a wall-clock cost, so each is individually optional
+// (QUALITY_* env, or BIGLAW_MODULE_QUALITY_* override), and the
+// BIGLAW_QUALITY preset (max | balanced | fast) sets all their defaults at
+// once. "balanced" reproduces the historical defaults; "fast" turns off
+// every booster with a graceful fallback; "max" additionally enables the
+// off-by-default boosters (DyTopo drafting). Explicit env always wins over
+// the preset.
+type QualityConfig struct {
+	Preset string // max | balanced | fast
+
+	// RoundGoals: 1 heavy call per phase generating the round goal; off →
+	// deterministic goal derived from the task description.
+	RoundGoals bool
+	// MemoryDigest: 1 tool-tier call per round rolling findings into the
+	// inter-round memory digest; off → deterministic bullet summary.
+	MemoryDigest bool
+	// Descriptors: 1 tiny call per agent per round (parallel) generating
+	// Need/Offer descriptors for DyTopo matching; off → static descriptors
+	// (flat comm graph).
+	Descriptors bool
+	// StagedExtraction: the extract→analyse split in the agent loop (up to
+	// 8+1 extra calls per agent per round) that keeps evidence verbatim;
+	// off → parse findings from the loop's own output. Biggest single
+	// latency block; also the main verbatim-citation mechanism.
+	StagedExtraction bool
+	// EvidenceGraph: the task-start grounded extraction pass building the
+	// typed evidence graph everything downstream reads. Off disables the
+	// graph AND everything that hangs off it (spine, figures, crossdoc,
+	// deviations, defense analytics, graph-driven sections).
+	EvidenceGraph bool
+	// SpineExtraction: the Phase-2 typed conduct/spine triple pass over the
+	// charging documents (stronger model + zero-yield retry). Previously ran
+	// unconditionally even with BELO_SPINE=false; now honestly gated.
+	SpineExtraction bool
+	// Figures: the deterministic figure harvest (1 light call per section
+	// chunk of every doc + normalization + contradiction adjudications).
+	Figures bool
+	// CrossDoc: cross-document discrepancy joins (full second figure sweep
+	// + alias/adjudication calls).
+	CrossDoc bool
+	// Deviations: the requirement-deviation pass on compliance matters
+	// (up to ~80 adjudications; heaviest single pass on compare matters).
+	Deviations bool
+	// Specialists: matter classification + on-demand specialist synthesis
+	// at task start (2-3 calls, cached per practice area).
+	Specialists bool
+	// SpecificsSweep: the at-start entity-aware retrieval sweep
+	// (2 query-generation calls + bounded retrieval).
+	SpecificsSweep bool
+	// WriterMultipass: the scoped multi-pass writer for large syntheses
+	// (per-section agentic drafters); off → single monolithic call always.
+	WriterMultipass bool
+	// RAGEnrichment: background doc2query enrichment at ingest (1 light
+	// call per prose chunk, off the critical path but occupies model slots).
+	RAGEnrichment bool
+}
+
 // IntakeConfig governs the affidavit-maker client-intake channel. The module
 // self-enables when the shared HMAC secret is present (credential-presence
 // pattern, like the connectors); BIGLAW_MODULE_INTAKE overrides.
@@ -412,6 +471,7 @@ type Config struct {
 	DocuSeal           DocuSealConfig
 	ClientVoice        ClientVoiceConfig
 	Intake             IntakeConfig
+	Quality            QualityConfig
 	Local              LocalConfig
 	PDF                PDFConfig
 	Persistence        PersistenceConfig

@@ -126,6 +126,18 @@ func (o *Orchestrator) generateRoundGoal(task *types.Task, phase types.TaskPhase
 	}
 
 	safeDesc := adapters.SanitizePromptContent(task.Description)
+
+	// Quality booster gate: LLM-generated round goals cost 1 heavy call per
+	// phase. Off → the same deterministic goal the error path falls back to.
+	if !o.cfg.Quality.RoundGoals {
+		return types.RoundGoal{
+			ID:          uuid.New().String(),
+			Round:       task.CurrentRound,
+			Phase:       phase,
+			Description: fmt.Sprintf("Execute the %s phase for: %s", phase, strutil.Truncate(safeDesc, 200)),
+		}, nil
+	}
+
 	priorPhases := make([]string, 0, len(task.Rounds))
 	for _, r := range task.Rounds {
 		priorPhases = append(priorPhases, string(r.Goal.Phase))

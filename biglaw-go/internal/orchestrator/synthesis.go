@@ -44,7 +44,10 @@ func (o *Orchestrator) synthesise(task *types.Task) (string, error) {
 	for _, f := range filteredFindings {
 		estTokens += strutil.EstimateTokens(f.Content) + 40
 	}
-	if estTokens > synthesisWriterBudgetTokens {
+	// Quality booster gate (QUALITY_WRITER_MULTIPASS): the scoped writer runs
+	// one agentic drafter per section; off → always the single monolithic
+	// call (large finding sets truncate to the model's window).
+	if estTokens > synthesisWriterBudgetTokens && o.cfg.Quality.WriterMultipass {
 		if out, err := o.writeDeliverable(task, filteredFindings); err == nil && strings.TrimSpace(out) != "" {
 			return o.appendDiscrepancies(task, out), nil
 		} else if err != nil {

@@ -86,6 +86,18 @@ func normalizeEnum(v, fallback string, allowed ...string) string {
 }
 
 func Load() *Config {
+	// Quality preset — sets the DEFAULT for every model-quality booster in
+	// one knob; each booster's own env var still wins when set explicitly.
+	//   max      — everything on, including the off-by-default DyTopo drafting
+	//   balanced — the historical defaults (all boosters on, drafting off)
+	//   fast     — every booster with a graceful fallback off (minimum
+	//              model calls per task: agent loops + one synthesis call)
+	preset := normalizeEnum(os.Getenv("BIGLAW_QUALITY"), "balanced", "max", "balanced", "fast")
+	qOn := preset != "fast"
+	verifyDefault := 10
+	if !qOn {
+		verifyDefault = 0
+	}
 	c := &Config{
 		Models: ModelsConfig{
 			FigureModel:    env("FIGURE_MODEL", ""),     // empty → fall back to the tool/local model
@@ -94,12 +106,28 @@ func Load() *Config {
 			Available:      envList("AVAILABLE_MODELS", "qwen2.5:1.5b,qwen2.5:3b,qwen2.5:7b,qwen2.5:14b"),
 		},
 		Drafting: DraftingConfig{
-			DyTopo:           envBool("DYTOPO_DRAFTING", false),
+			DyTopo:           envBool("DYTOPO_DRAFTING", preset == "max"),
 			AgentsPerSection: envInt("DRAFTING_AGENTS_PER_SECTION", 2),
 			Rounds:           envInt("DRAFTING_ROUNDS", 2),
 		},
 		BELOSpine:          envBool("BELO_SPINE", false),         // spine from typed Conduct nodes vs LLM enumeration
-		ReentrantMachinery: envBool("REENTRANT_MACHINERY", true), // round-boundary re-entry of the selective machinery (false → one-shot round 0)
+		ReentrantMachinery: envBool("REENTRANT_MACHINERY", qOn), // round-boundary re-entry of the selective machinery (false → one-shot round 0)
+		Quality: QualityConfig{
+			Preset:           preset,
+			RoundGoals:       envBool("QUALITY_ROUND_GOALS", qOn),
+			MemoryDigest:     envBool("QUALITY_MEMORY_DIGEST", qOn),
+			Descriptors:      envBool("QUALITY_DESCRIPTORS", true), // tiny + parallel; DyTopo routing depends on it
+			StagedExtraction: envBool("QUALITY_STAGED_EXTRACTION", qOn),
+			EvidenceGraph:    envBool("QUALITY_EVIDENCE_GRAPH", qOn),
+			SpineExtraction:  envBool("QUALITY_SPINE_EXTRACTION", qOn),
+			Figures:          envBool("QUALITY_FIGURES", qOn),
+			CrossDoc:         envBool("QUALITY_CROSSDOC", qOn),
+			Deviations:       envBool("QUALITY_DEVIATIONS", qOn),
+			Specialists:      envBool("QUALITY_SPECIALISTS", qOn),
+			SpecificsSweep:   envBool("QUALITY_SPECIFICS_SWEEP", qOn),
+			WriterMultipass:  envBool("QUALITY_WRITER_MULTIPASS", qOn),
+			RAGEnrichment:    envBool("QUALITY_RAG_ENRICHMENT", qOn),
+		},
 		Database: DatabaseConfig{
 			Backend:    normalizeEnum(os.Getenv("DB_BACKEND"), "sqlite", "sqlite", "postgres", "memory"),
 			SQLitePath: env("SQLITE_PATH", "./data/biglaw.db"),
@@ -152,8 +180,8 @@ func Load() *Config {
 		Debate: DebateConfig{
 			CitationRequired:        envBool("DEBATE_CITATION_REQUIRED", true),
 			CitationDropUnsupported: envBool("DEBATE_CITATION_DROP_UNSUPPORTED", false),
-			AdversarialEnabled:      envBool("DEBATE_ADVERSARIAL_ENABLED", true),
-			VerificationPasses:      envInt("DEBATE_VERIFICATION_PASSES", 10),
+			AdversarialEnabled:      envBool("DEBATE_ADVERSARIAL_ENABLED", qOn),
+			VerificationPasses:      envInt("DEBATE_VERIFICATION_PASSES", verifyDefault),
 			GateConfidenceThreshold: envFloat("DEBATE_GATE_CONFIDENCE_THRESHOLD", 0.80),
 		},
 		Presentation: PresentationConfig{
@@ -168,7 +196,7 @@ func Load() *Config {
 			Enabled: envBool("DOCUSEAL_ENABLED", os.Getenv("DOCUSEAL_API_KEY") != ""),
 		},
 		ClientVoice: ClientVoiceConfig{
-			GateNotes:           envBool("CLIENT_VOICE_GATE_NOTES", true),
+			GateNotes:           envBool("CLIENT_VOICE_GATE_NOTES", qOn),
 			MatterNotifications: envBool("CLIENT_VOICE_NOTIFICATIONS", true),
 		},
 		Intake: IntakeConfig{

@@ -66,6 +66,37 @@ from config defaults and overridable per-module:
 `BIGLAW_MODULE_BILLING=off` removes the billing routes entirely (404, as if not
 compiled in). `GET /modules` (partner) reports every module, its state, and why.
 
+### Model-quality boosters (`quality-*` modules)
+
+Every extra model pass beyond the minimum agent-loop → synthesis path is an
+optional **quality booster** — grounding accuracy bought with wall-clock. One
+knob sets all their defaults, each booster's own env var beats the preset, and
+`BIGLAW_MODULE_QUALITY_*` beats both:
+
+```bash
+BIGLAW_QUALITY=fast        # every booster with a graceful fallback OFF
+BIGLAW_QUALITY=balanced    # the historical defaults (default)
+BIGLAW_QUALITY=max         # everything, incl. DyTopo section drafting
+```
+
+| Booster (module) | Cost per run | Off → |
+|---|---|---|
+| `quality-debate` (`DEBATE_ADVERSARIAL_ENABLED`) | 1–2 heavy calls × finding × round, serial | findings pass unchallenged |
+| `quality-verification` (`DEBATE_VERIFICATION_PASSES`) | N tool calls per finding (default 10) | no verification votes |
+| `quality-staged-extraction` (`QUALITY_STAGED_EXTRACTION`) | ≤9 calls per agent per round — biggest block | findings parsed from the loop; verbatim-citation rate drops hard |
+| `quality-evidence-graph` (`QUALITY_EVIDENCE_GRAPH`) | multi-pass task-start extraction | no typed graph; spine/figures/crossdoc/deviations all skip |
+| `quality-spine` (`QUALITY_SPINE_EXTRACTION`) | charging-doc pass on the stronger model | allegations fall back to enumeration |
+| `quality-figures` / `quality-crossdoc` / `quality-deviations` | per-chunk sweeps + ≤80 adjudications | lose figure floor / discrepancy joins / deviation findings |
+| `quality-specialists` + `quality-specifics-sweep` | 4-5 task-start calls | generic bench, no seeded specifics |
+| `quality-reentry` (`REENTRANT_MACHINERY`) | ≤8 calls per round boundary | one-shot round-0 machinery |
+| `quality-round-goals` / `quality-memory-digest` / `quality-descriptors` | 1 call per phase / round / agent-round | deterministic fallbacks |
+| `quality-writer-multipass` / `quality-dytopo-drafting` | per-section drafters (+critique huddles) | single monolithic synthesis call |
+| `quality-rag-enrichment` / `quality-gate-notes` | background doc2query / 1 call per gate | dense+BM25 only / raw brief shown |
+
+The citation gate (`DEBATE_CITATION_REQUIRED`) costs **zero model calls** and
+is deliberately not preset-gated. `GET /modules` shows the run's resolved
+quality profile.
+
 ## Client intake + CRM (affidavit-maker integration)
 
 The affidavit-maker app (discover.legal) doubles as the firm's client entry point. In

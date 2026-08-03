@@ -172,7 +172,12 @@ func (a *Agent) Process(ctx AgentContext) ([]types.Finding, error) {
 		// context, and a small model paraphrases under that load; staging keeps the
 		// evidence verbatim by construction. With no retrieval (e.g. no documents),
 		// fall back to parsing the loop's own output.
-		if len(passages) > 0 {
+		//
+		// Quality booster gate (QUALITY_STAGED_EXTRACTION): staging costs up
+		// to 8 extraction calls + 1 analysis call per agent per round — the
+		// single biggest latency block — and is the main verbatim-citation
+		// mechanism. Off → parse the loop's own output directly.
+		if len(passages) > 0 && a.cfg.Quality.StagedExtraction {
 			findings = a.stagedFindings(ctx, passages, model, caps)
 		} else {
 			findings = parseFindings(loopText, a.Def)

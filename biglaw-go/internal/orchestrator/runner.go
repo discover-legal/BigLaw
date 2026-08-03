@@ -54,23 +54,37 @@ func (o *Orchestrator) runTask(task *types.Task) {
 		// coverage spine derive the SAME allegation set from the graph, instead of separate
 		// LLM enumerations that vary run-to-run (the 12↔16-section swing that dominated
 		// scores). buildEvidenceGraph populates task.Allegations via ensureAllegations.
-		o.buildEvidenceGraph(task, prov, bare)
+		// Quality booster gate: the graph build is a multi-pass extraction
+		// sweep; off → no graph, and everything that hangs off it (spine,
+		// figures, crossdoc, deviations, defense analytics) degrades to the
+		// plain retrieval path.
+		if o.cfg.Quality.EvidenceGraph {
+			o.buildEvidenceGraph(task, prov, bare)
+		}
 		// Classify the matter (practice area / sector / work type) from its DOCUMENTS,
 		// so recruitment seats the right specialists. The task description is too thin
 		// (the practice area lives in the exhibits, not "review and summarize"), so we
 		// classify from sampled passages and populate NosLegal — which recruitment then
 		// uses as a signal alongside the (kept-specific) round goal.
-		if tags := o.classifyMatter(task, prov, bare); tags.AreaOfLaw != nil || tags.Sector != nil {
-			o.update(task, func(t *types.Task) { t.NosLegal = &tags })
-			slog.Info("matter classified", "task", task.ID, "area", strDeref(tags.AreaOfLaw), "sector", strDeref(tags.Sector))
-			// On-demand specialist synthesis: generate fine-grained sub-specialty agents
-			// for this area (cached in the agentdb), so the matter is staffed by tailored
-			// specialists rather than only the generic registry.
-			o.ensureSpecialists(strDeref(tags.AreaOfLaw), strDeref(tags.Sector), strDeref(tags.WorkType), prov, bare, task)
+		// Quality booster gate: classification + specialist synthesis cost
+		// 2-3 calls at task start (cached per practice area).
+		if o.cfg.Quality.Specialists {
+			if tags := o.classifyMatter(task, prov, bare); tags.AreaOfLaw != nil || tags.Sector != nil {
+				o.update(task, func(t *types.Task) { t.NosLegal = &tags })
+				slog.Info("matter classified", "task", task.ID, "area", strDeref(tags.AreaOfLaw), "sector", strDeref(tags.Sector))
+				// On-demand specialist synthesis: generate fine-grained sub-specialty agents
+				// for this area (cached in the agentdb), so the matter is staffed by tailored
+				// specialists rather than only the generic registry.
+				o.ensureSpecialists(strDeref(tags.AreaOfLaw), strDeref(tags.Sector), strDeref(tags.WorkType), prov, bare, task)
+			}
 		}
-		if sweep := o.specificsSweep(task, prov, bare); len(sweep) > 0 {
-			o.update(task, func(t *types.Task) { t.Findings = append(t.Findings, sweep...) })
-			slog.Info("specifics sweep seeded findings", "task", task.ID, "n", len(sweep))
+		// Quality booster gate: the specifics sweep costs 2 query-generation
+		// calls + a bounded retrieval fan-out at task start.
+		if o.cfg.Quality.SpecificsSweep {
+			if sweep := o.specificsSweep(task, prov, bare); len(sweep) > 0 {
+				o.update(task, func(t *types.Task) { t.Findings = append(t.Findings, sweep...) })
+				slog.Info("specifics sweep seeded findings", "task", task.ID, "n", len(sweep))
+			}
 		}
 	}
 

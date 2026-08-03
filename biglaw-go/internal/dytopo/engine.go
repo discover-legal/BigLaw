@@ -125,26 +125,39 @@ func (e *Engine) RunRound(task *types.Task, goal types.RoundGoal, lawyerTone *ty
 		offer types.OfferDescriptor
 	}
 	noResults := make([]noResult, len(activeAgents))
-	var g1 errgroup.Group
-	for i, ag := range activeAgents {
-		i, ag := i, ag
-		g1.Go(func() error {
-			ctx := agents.AgentContext{
-				RoundGoal:       goal,
-				MemoryEntries:   agentMemories[ag.Def.ID],
-				TaskDescription: task.Description,
-				TaskID:          task.ID,
+	if !e.cfg.Quality.Descriptors {
+		// Quality booster gate: descriptor generation costs 1 tiny call per
+		// agent per round. Off → the agent definition stands in for the
+		// descriptor (semantic matching still works over its description,
+		// but round-specific routing nuance is lost).
+		for i, ag := range activeAgents {
+			noResults[i] = noResult{
+				need:  types.NeedDescriptor{AgentID: ag.Def.ID, Text: "Needs: " + strutil.Truncate(ag.Def.Description, 120)},
+				offer: types.OfferDescriptor{AgentID: ag.Def.ID, Text: "Offers: " + strutil.Truncate(ag.Def.Description, 120)},
 			}
-			need, offer, err := ag.GenerateNeedOffer(ctx)
-			if err != nil {
-				need = types.NeedDescriptor{AgentID: ag.Def.ID, Text: "No specific need."}
-				offer = types.OfferDescriptor{AgentID: ag.Def.ID, Text: "General expertise."}
-			}
-			noResults[i] = noResult{need, offer}
-			return nil
-		})
+		}
+	} else {
+		var g1 errgroup.Group
+		for i, ag := range activeAgents {
+			i, ag := i, ag
+			g1.Go(func() error {
+				ctx := agents.AgentContext{
+					RoundGoal:       goal,
+					MemoryEntries:   agentMemories[ag.Def.ID],
+					TaskDescription: task.Description,
+					TaskID:          task.ID,
+				}
+				need, offer, err := ag.GenerateNeedOffer(ctx)
+				if err != nil {
+					need = types.NeedDescriptor{AgentID: ag.Def.ID, Text: "No specific need."}
+					offer = types.OfferDescriptor{AgentID: ag.Def.ID, Text: "General expertise."}
+				}
+				noResults[i] = noResult{need, offer}
+				return nil
+			})
+		}
+		g1.Wait()
 	}
-	g1.Wait()
 
 	needs := make([]types.NeedDescriptor, len(noResults))
 	offers := make([]types.OfferDescriptor, len(noResults))
@@ -608,25 +621,30 @@ func (e *Engine) persistRoundMemory(task *types.Task, goal types.RoundGoal, find
 			}
 			bullets += fmt.Sprintf("- [%s] %s\n", f.AgentName, c)
 		}
-
-		tier := types.TierTool
-		model := routing.SelectModel(e.cfg, routing.SelectParams{Tier: &tier, TaskType: routing.TaskDescriptor})
-		prov, err := e.provReg.Get(model)
-		if err == nil {
-			resp, err := prov.Chat(providers.ChatParams{
-				Model:     routing.ResolveModelID(model),
-				MaxTokens: 300,
-				System:    "You are a legal analysis synthesizer. Produce a concise inter-round memory digest.",
-				Messages: []providers.Message{{
-					Role:    "user",
-					Content: fmt.Sprintf("Round %d (%s) findings:\n%s\n\nSummarise the key legal conclusions in 2-3 sentences.", goal.Round, goal.Phase, bullets),
-				}},
-			})
+		// Quality booster gate: the model digest costs 1 tool-tier call per
+		// round. Off → the deterministic bullet list IS the round memory.
+		if !e.cfg.Quality.MemoryDigest {
+			summary = fmt.Sprintf("Round %d (%s), %d findings:\n%s", goal.Round, goal.Phase, len(findings), bullets)
+		} else {
+			tier := types.TierTool
+			model := routing.SelectModel(e.cfg, routing.SelectParams{Tier: &tier, TaskType: routing.TaskDescriptor})
+			prov, err := e.provReg.Get(model)
 			if err == nil {
-				for _, b := range resp.Content {
-					if b.Type == providers.BlockText && b.Text != "" {
-						summary = b.Text
-						break
+				resp, err := prov.Chat(providers.ChatParams{
+					Model:     routing.ResolveModelID(model),
+					MaxTokens: 300,
+					System:    "You are a legal analysis synthesizer. Produce a concise inter-round memory digest.",
+					Messages: []providers.Message{{
+						Role:    "user",
+						Content: fmt.Sprintf("Round %d (%s) findings:\n%s\n\nSummarise the key legal conclusions in 2-3 sentences.", goal.Round, goal.Phase, bullets),
+					}},
+				})
+				if err == nil {
+					for _, b := range resp.Content {
+						if b.Type == providers.BlockText && b.Text != "" {
+							summary = b.Text
+							break
+						}
 					}
 				}
 			}
