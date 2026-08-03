@@ -186,19 +186,19 @@ func main() {
 	regQ("quality-gate-notes", "Client-advocacy note on each human gate (1 call per gate)",
 		"CLIENT_VOICE_GATE_NOTES", &cfg.ClientVoice.GateNotes)
 
-	// The compensator boosters exist FOR the smol/mid rungs of the model
-	// ladder: staged extraction is what takes a mid-tier local model's
-	// verbatim citation grounding from ~0% to ~94%. From `based` upward the
-	// model copies out verbatim natively. Rate the models the agent loop
-	// actually runs on and warn when a compensator-dependent tier is running
-	// without its compensator.
+	// The compensator boosters exist FOR the C/D rows of the model tier
+	// list: staged extraction is what takes a C-tier local model's verbatim
+	// citation grounding from ~0% to ~94%. From B tier upward the model
+	// copies out verbatim natively. Rate the models the agent loop actually
+	// runs on and warn when a compensator-dependent tier is running without
+	// its compensator.
 	workTier := modeltier.Rate(routing.ResolveModelID(routing.Mid(cfg)))
 	if lt := modeltier.Rate(routing.ResolveModelID(routing.Light(cfg))); lt < workTier {
 		workTier = lt // the extraction path runs on the weaker of the two
 	}
 	if workTier.NeedsCompensators() && !cfg.Quality.StagedExtraction {
 		slog.Warn("quality: staged extraction is OFF but the working models rate "+workTier.String()+
-			" on the model ladder — verbatim citation grounding will degrade sharply; "+
+			"-tier on the model tier list — verbatim citation grounding will degrade sharply; "+
 			"set QUALITY_STAGED_EXTRACTION=true (or BIGLAW_QUALITY=balanced) if citations are scored",
 			"midModel", routing.ResolveModelID(routing.Mid(cfg)),
 			"lightModel", routing.ResolveModelID(routing.Light(cfg)))

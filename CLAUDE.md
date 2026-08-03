@@ -79,49 +79,49 @@ BIGLAW_QUALITY=balanced    # the historical defaults (default)
 BIGLAW_QUALITY=max         # everything, incl. DyTopo section drafting
 ```
 
-#### The model ladder (`internal/modeltier/`)
+#### The model tier list (`internal/modeltier/`)
 
-BigLaw rates models on its **own five-tier ladder** — no lab-brand class
+BigLaw rates models on its **own S/A/B/C/D tier list** — no lab-brand class
 names. `modeltier.Rate()` places any model ID (cloud name or `family:14b`
-local string) on a rung; `GET /model-tiers` (partner) shows the ladder and
+local string) on the list; `GET /model-tiers` (partner) shows the list and
 where the deployment's configured heavy/mid/light/vision stack lands.
 
-| Tier | Vibe | Who lives here |
+| Tier | Read | Who lives here |
 |---|---|---|
-| `smol` | smol bean — carried entirely by the scaffolding | qwen2.5:0.5b–3b, llama3.2:1b/3b, gemma:2b, phi-mini |
-| `mid` | literally mid — the daily drivers the compensators were built for | qwen2.5:7b/14b, llama3.1:8b, mistral:7b, mixtral-8x7b |
-| `based` | based — native verbatim copy-out; keep the coverage passes | any Haiku, gpt-\*-mini/nano, gemini \*-flash, qwen-plus/turbo, local ~30–70b |
-| `gigachad` | gigachad — frontier workhorse; structure over scaffolding | any Sonnet, gpt-5.x, gemini \*-pro, qwen-max, deepseek-v3/r1, llama 405b |
-| `galaxybrain` | galaxy brain — buy assurance, not crutches | any Opus, o3/o4-class reasoners, gpt-5-pro |
+| **S** | god tier — buy assurance, not crutches | any Opus, o3/o4-class reasoners, gpt-5-pro |
+| **A** | frontier workhorse — structure over scaffolding | any Sonnet, gpt-5.x, gemini \*-pro, qwen-max, deepseek-v3/r1, llama 405b |
+| **B** | solid pick — native verbatim copy-out; keep the coverage passes | any Haiku, gpt-\*-mini/nano, gemini \*-flash, qwen-plus/turbo, local ~30–70b |
+| **C** | mid — the daily drivers the compensators were built for | qwen2.5:7b/14b, llama3.1:8b, mistral:7b, mixtral-8x7b |
+| **D** | bottom of the list — carried entirely by the scaffolding | qwen2.5:0.5b–3b, llama3.2:1b/3b, gemma:2b, phi-mini |
 
-Unknown models rate `mid` on purpose: under-scaffolding a weak model costs
+Unknown models rate **C** on purpose: under-scaffolding a weak model costs
 far more quality than over-scaffolding a strong one costs time.
 
-The boosters split into two families, and the split × the ladder is what
+The boosters split into two families, and the split × the tier list is what
 should drive your choices:
 
-- **Weakness compensators** exist because a `smol`/`mid` model can't do the
+- **Weakness compensators** exist because a C/D-tier model can't do the
   thing reliably in one pass (verbatim transcription, conduct labeling,
-  small-context synthesis). From `based` upward they are largely redundant —
+  small-context synthesis). From B tier upward they are largely redundant —
   the model does natively what the booster scaffolds. The ~0% → ~94%
-  verbatim-citation gain from staged extraction was measured on **mid-tier
-  local models**; a based-tier model transcribes verbatim reliably without it.
+  verbatim-citation gain from staged extraction was measured on **C-tier
+  local models**; a B-tier model transcribes verbatim reliably without it.
 - **Structural coverage** passes add information no single model call can
-  produce at ANY rung — reading both sides of two documents, independent
+  produce at ANY tier — reading both sides of two documents, independent
   adversarial challenge, run-to-run determinism. These earned their benchmark
-  gains on based-tier models too (fix-wave 37 → 49; the deviation-path port
-  took trust-compare 9 → 14 on a based-tier model). Keep them by stakes and
-  matter shape, not by rung.
+  gains on B tier too (fix-wave 37 → 49; the deviation-path port took
+  trust-compare 9 → 14 on a B-tier model). Keep them by stakes and matter
+  shape, not by tier.
 
-| Booster (module) | Family | Cost per run | smol / mid | based | gigachad / galaxybrain |
+| Booster (module) | Family | Cost per run | C / D tier | B tier | S / A tier |
 |---|---|---|---|---|---|
 | `quality-staged-extraction` (`QUALITY_STAGED_EXTRACTION`) | compensator (verbatim citations) | ≤9 calls per agent per round — biggest block | **required** (0%→94% verbatim) | skip — native copy-out is reliable | skip |
 | `quality-writer-multipass` (`QUALITY_WRITER_MULTIPASS`) | compensator (small context windows) | per-section drafters | **required** for large finding pools | optional — big window; monolith fine except book-length | skip |
-| `quality-spine` (`QUALITY_SPINE_EXTRACTION`) | compensator (mid-tier mislabels conducts) | charging-doc pass on the stronger model | recommended (route `BELO_SPINE_MODEL` up a rung) | optional | optional |
+| `quality-spine` (`QUALITY_SPINE_EXTRACTION`) | compensator (mid-tier mislabels conducts) | charging-doc pass on the stronger model | recommended (route `BELO_SPINE_MODEL` up a tier) | optional | optional |
 | `quality-specialists` / `quality-specifics-sweep` | compensator (weak recruitment/recall) | 4-5 task-start calls | recommended | optional | skip |
 | `quality-figures` (`QUALITY_FIGURES`) | coverage (run-to-run figure determinism) | 1 light call per doc chunk | **recommended** | recommended on numbers-heavy matters | optional |
 | `quality-crossdoc` (`QUALITY_CROSSDOC`) | coverage (needs both sides in view) | full second figure sweep + adjudications | recommended | **recommended** on multi-doc matters | recommended on multi-doc matters |
-| `quality-deviations` (`QUALITY_DEVIATIONS`) | coverage (compare/compliance findings) | ≤80 adjudications | **required** on compare matters | **required** on compare matters (9→14 on based) | recommended on compare matters |
+| `quality-deviations` (`QUALITY_DEVIATIONS`) | coverage (compare/compliance findings) | ≤80 adjudications | **required** on compare matters | **required** on compare matters (9→14 on B tier) | recommended on compare matters |
 | `quality-evidence-graph` (`QUALITY_EVIDENCE_GRAPH`) | coverage (umbrella — spine/figures/crossdoc/deviations all hang off it) | multi-pass task-start extraction | **required** | **recommended** (kills the 12↔16-section wobble) | recommended on multi-doc matters |
 | `quality-debate` (`DEBATE_ADVERSARIAL_ENABLED`) | coverage (independent challenge) | 1–2 heavy calls × finding × round, **serial** | by stakes — biggest serial wall-clock cut | by stakes | by stakes (filed work: keep) |
 | `quality-verification` (`DEBATE_VERIFICATION_PASSES`) | coverage (independent votes) | N tool calls per finding | 10 | 3–5 is plenty | 0–3 by stakes |
@@ -129,22 +129,22 @@ should drive your choices:
 | `quality-round-goals` / `quality-memory-digest` / `quality-descriptors` | routing/cosmetic | 1 call per phase / round / agent-round | either way — deterministic fallbacks are fine | either way | either way |
 | `quality-rag-enrichment` / `quality-gate-notes` / `quality-dytopo-drafting` | recall / UX / style | background / per gate / huddles | optional | optional | optional |
 
-**Ready-made profiles by rung** (umbrella note: `quality-figures`/
+**Ready-made profiles by tier** (umbrella note: `quality-figures`/
 `-crossdoc`/`-deviations`/`-spine` only run when `quality-evidence-graph`
 is on):
 
 ```bash
-# smol / mid (Pi / single-GPU local) — the compensators exist for these rungs
+# C / D tier (Pi / single-GPU local) — the compensators exist for these tiers
 BIGLAW_QUALITY=balanced
 #BIGLAW_MODULE_QUALITY_DEBATE=off       # the one big serial cut if latency hurts
 
-# based — drop the compensators, keep the coverage passes
+# B tier — drop the compensators, keep the coverage passes
 BIGLAW_QUALITY=fast
 QUALITY_EVIDENCE_GRAPH=true QUALITY_FIGURES=true
 QUALITY_CROSSDOC=true QUALITY_DEVIATIONS=true
 DEBATE_VERIFICATION_PASSES=3
 
-# gigachad / galaxybrain — model carries fidelity; buy structure + assurance
+# S / A tier — model carries fidelity; buy structure + assurance
 BIGLAW_QUALITY=fast
 QUALITY_EVIDENCE_GRAPH=true QUALITY_CROSSDOC=true
 DEBATE_ADVERSARIAL_ENABLED=true        # keep for anything that gets filed
@@ -153,7 +153,7 @@ DEBATE_ADVERSARIAL_ENABLED=true        # keep for anything that gets filed
 The citation gate (`DEBATE_CITATION_REQUIRED`) costs **zero model calls** and
 is deliberately not preset-gated. `GET /modules` shows the run's resolved
 quality profile; `GET /model-tiers` shows where the configured stack sits on
-the ladder. At boot, if the working models rate `smol`/`mid` while staged
+the tier list. At boot, if the working models rate C/D tier while staged
 extraction is off, BigLaw logs a warning — that combination is the one that
 measurably craters citation grounding.
 
