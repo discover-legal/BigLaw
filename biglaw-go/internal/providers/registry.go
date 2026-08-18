@@ -15,8 +15,9 @@ import (
 // this build by design.
 type Registry struct {
 	// local serves "ollama:"/"local:"-prefixed IDs — Ollama, LM Studio, vLLM,
-	// llama.cpp, and the OPENAI_MODEL shortcut.
-	local *OllamaProvider
+	// llama.cpp, the OPENAI_MODEL shortcut, and (when GOFETCH_URL is set) the
+	// GoFetch residency-controlled path.
+	local Provider
 	// primary serves the active stack's bare model IDs (qwen-*, glm-*, kimi-* …)
 	// over its OpenAI-compatible endpoint.
 	primary *OllamaProvider
@@ -25,7 +26,12 @@ type Registry struct {
 func NewRegistry(cfg *config.Config) *Registry {
 	r := &Registry{}
 	if cfg.Local.OllamaEnabled || cfg.Local.LocalInferenceURL != "" {
-		r.local = NewOllamaProvider(cfg)
+		local := NewOllamaProvider(cfg)
+		if cfg.Local.GoFetchURL != "" {
+			r.local = NewGoFetchProvider(local, cfg.Local.GoFetchURL)
+		} else {
+			r.local = local
+		}
 	}
 	if cfg.Model.PrimaryURL != "" {
 		r.primary = NewOpenAICompatProvider(cfg.Model.PrimaryURL, cfg.Model.PrimaryKey)

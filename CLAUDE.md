@@ -593,6 +593,13 @@ LOCAL_INFERENCE_TIERS=all
 OLLAMA_ENABLED=true
 OLLAMA_MODEL=llama3.2
 OLLAMA_TIERS=3
+
+# GoFetch — memory-plane daemon (github.com/hordruma/gofetch): BigLaw asks it to
+# make the target GGUF VRAM-resident before each local chat call, then routes
+# inference through its OpenAI passthrough. Residency failures fail open.
+GOFETCH_URL=http://localhost:8080
+LOCAL_INFERENCE_MODEL=qwen2.5-7b-instruct-q4   # must match a gofetch model id
+LOCAL_INFERENCE_TIERS=all
 ```
 
 ## Secrets (Infisical)

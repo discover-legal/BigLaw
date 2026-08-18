@@ -151,6 +151,11 @@ type LocalConfig struct {
 	LocalEmbeddings     bool
 	LocalEmbeddingModel string
 	LocalInferenceURL   string
+	// GoFetchURL points at a GoFetch memory-plane daemon (control API + OpenAI
+	// passthrough). When set, local chat calls are preceded by a VRAM residency
+	// request so GoFetch swaps the right GGUF in before inference. If
+	// LOCAL_INFERENCE_URL is unset, GoFetch's passthrough serves inference too.
+	GoFetchURL          string
 	LocalInferenceKey   string
 	LocalInferenceModel string
 	LocalInferenceTiers string

@@ -179,6 +179,7 @@ func Load() *Config {
 			LocalEmbeddings:     envBool("LOCAL_EMBEDDINGS", false),
 			LocalEmbeddingModel: env("LOCAL_EMBEDDING_MODEL", "nomic-embed-text"),
 			LocalInferenceURL:   os.Getenv("LOCAL_INFERENCE_URL"),
+			GoFetchURL:          os.Getenv("GOFETCH_URL"),
 			LocalInferenceKey:   env("LOCAL_INFERENCE_KEY", "local"),
 			LocalInferenceModel: env("LOCAL_INFERENCE_MODEL", "local-model"),
 			LocalInferenceTiers: env("LOCAL_INFERENCE_TIERS", ""),
@@ -334,6 +335,13 @@ func Load() *Config {
 			DocketsFile:           env("DOCKETS_FILE", "./data/dockets.json"),
 			RegulatoryIntervalMin: envInt("MONITOR_REGULATORY_INTERVAL_MIN", 360),
 		},
+	}
+
+	// GoFetch shortcut: with only GOFETCH_URL set, the daemon's OpenAI-compatible
+	// passthrough is the local inference endpoint too. An explicit
+	// LOCAL_INFERENCE_URL wins — GoFetch then handles residency only.
+	if c.Local.LocalInferenceURL == "" && c.Local.GoFetchURL != "" {
+		c.Local.LocalInferenceURL = c.Local.GoFetchURL
 	}
 
 	// OpenAI chat shortcut: OPENAI_MODEL + OPENAI_API_KEY routes chat through
