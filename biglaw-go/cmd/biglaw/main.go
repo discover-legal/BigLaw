@@ -38,6 +38,7 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/config"
 	"github.com/discover-legal/biglaw-go/internal/cost"
 	"github.com/discover-legal/biglaw-go/internal/embeddings"
+	"github.com/discover-legal/biglaw-go/internal/flavour"
 	"github.com/discover-legal/biglaw-go/internal/knowledge"
 	"github.com/discover-legal/biglaw-go/internal/learning"
 	"github.com/discover-legal/biglaw-go/internal/lpm"
@@ -154,6 +155,22 @@ func main() {
 	allAgents = append(allAgents, pluginReg.AgentDefinitions()...)
 	if lavernAgents, err := adapters.LoadLavernAgents("agents/lavern"); err == nil {
 		allAgents = append(allAgents, lavernAgents...)
+	}
+
+	// Practice-area flavour: trim the bench and template list to the preset
+	// (FLAVOUR env → flavours/<name>.json). Applied after every agent/template
+	// source has loaded so plugin and Lavern additions are filtered too.
+	if fl, err := flavour.Load(".", cfg.Flavour); err != nil {
+		slog.Error("flavour load failed", "flavour", cfg.Flavour, "err", err)
+		os.Exit(1)
+	} else if fl != nil {
+		before := len(allAgents)
+		allAgents = fl.FilterAgents(allAgents)
+		tmplBefore := len(templatesStore.List())
+		templatesStore.Replace(fl.FilterTemplates(templatesStore.List()))
+		slog.Info("flavour active", "flavour", fl.ID, "name", fl.Name,
+			"agents", fmt.Sprintf("%d/%d", len(allAgents), before),
+			"templates", fmt.Sprintf("%d/%d", len(templatesStore.List()), tmplBefore))
 	}
 
 	// Build settings, profiles, clients, time stores.

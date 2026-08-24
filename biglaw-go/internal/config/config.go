@@ -87,6 +87,9 @@ func normalizeEnum(v, fallback string, allowed ...string) string {
 
 func Load() *Config {
 	c := &Config{
+		// Flavour trims the bench + templates to a practice-area preset
+		// (flavours/<name>.json). Empty or "full" = the complete platform.
+		Flavour: env("FLAVOUR", ""),
 		Models: ModelsConfig{
 			FigureModel:    env("FIGURE_MODEL", ""),     // empty → fall back to the tool/local model
 			SpineModel:     env("BELO_SPINE_MODEL", ""), // empty → fall back to the bulk model

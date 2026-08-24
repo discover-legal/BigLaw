@@ -78,6 +78,14 @@ func (s *Store) Add(t types.TaskTemplate) {
 	s.templates = append(s.templates, t)
 }
 
+// Replace swaps the entire template set under a write lock. Used by the
+// flavour filter after all sources (files, Lavern, plugins) have loaded.
+func (s *Store) Replace(ts []types.TaskTemplate) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.templates = ts
+}
+
 // List returns a shallow copy of all stored templates under a read lock.
 func (s *Store) List() []types.TaskTemplate {
 	s.mu.RLock()

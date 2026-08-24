@@ -288,6 +288,26 @@ they are always safe to register in agent allowedTools.
 Security: endpoint URLs are SSRF-validated at startup; response bodies are capped
 at 1 MB; requests timeout at 30 s; API keys never appear in logs or error messages.
 
+## Flavours (practice-area presets)
+
+A flavour trims the platform to a practice area — a family-law solo doesn't need the
+contract playbook stack, and every unseated agent saves a Need/Offer descriptor call per
+DyTopo round. Flavours are data, not forks: JSON presets in `flavours/`, activated with
+`FLAVOUR=<name>` (empty or `full` = complete platform). Switching back is a restart.
+
+```bash
+FLAVOUR=family-law   # → flavours/family-law.json; seats 50 of 199 agents, 8 of 25 templates
+```
+
+A preset declares `agents.includeSkills` (Tier-2 agents must match ≥1; trailing `*` =
+prefix match), `agents.includeAgents` / `excludeAgents` (explicit IDs), and `templates`
+(IDs to expose; empty = all). The T0/T1 orchestration spine and T3 tool agents are always
+seated. The filter runs once at startup in `cmd/biglaw/main.go`, after plugin and Lavern
+agents load (so external agents are filtered too — use `includeAgents` to force-seat one);
+per-task recruitment (semantic search + jurisdiction + Q-rerank) still narrows further at
+runtime. Implementation: `internal/flavour/`. Shipped presets: `family-law`. A flavour
+file is also the place to *add* practice-specific agents later via `adapters/external/`.
+
 ## Jurisdiction routing
 
 Specify `jurisdiction` when submitting a task to filter out jurisdiction-specific agents:

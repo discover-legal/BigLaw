@@ -383,6 +383,9 @@ type DraftingConfig struct {
 }
 
 type Config struct {
+	// Flavour is a practice-area preset name or path (FLAVOUR env). See
+	// internal/flavour. Empty or "full" = no trimming.
+	Flavour   string
 	Models    ModelsConfig
 	Drafting  DraftingConfig
 	BELOSpine bool // derive the spine from typed Conduct nodes instead of LLM enumeration
