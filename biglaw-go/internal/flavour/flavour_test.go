@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/discover-legal/biglaw-go/internal/adapters"
 	"github.com/discover-legal/biglaw-go/internal/agents"
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
@@ -112,6 +113,11 @@ func TestFamilyLawPresetAgainstRealBench(t *testing.T) {
 		"arbitration-adr-analyst", "chronology-builder", "tax-analyst",
 		"real-estate-property-analyst", "client-advice-memo-drafter",
 		"litigation-brief-drafter", "web-search-agent", // T3
+		// the dedicated family bench
+		"custody-parenting-analyst", "child-support-analyst",
+		"spousal-support-analyst", "property-division-analyst",
+		"marital-agreements-drafter", "protection-order-analyst",
+		"family-procedure-analyst", "parentage-adoption-analyst",
 	} {
 		if !got[id] {
 			t.Errorf("family-law should seat %s", id)
@@ -132,4 +138,47 @@ func TestFamilyLawPresetAgainstRealBench(t *testing.T) {
 			len(seated), len(agents.ALL_AGENT_DEFINITIONS))
 	}
 	t.Logf("family-law seats %d of %d agents", len(seated), len(agents.ALL_AGENT_DEFINITIONS))
+}
+
+// TestFamilyLawPresetAgainstLavernBench applies the shipped preset to the
+// Lavern agents. Their configs carry specialties (mapped to Skills by the
+// adapter), so a flavour should seat the relevant ones — mediation, plain
+// language, research — and drop the corporate stack, rather than dropping all
+// 68 as untagged.
+func TestFamilyLawPresetAgainstLavernBench(t *testing.T) {
+	root := filepath.Join("..", "..", "..")
+	f, err := Load(root, "family-law")
+	if err != nil {
+		t.Fatalf("load shipped preset: %v", err)
+	}
+	lavern, err := adapters.LoadLavernAgents(filepath.Join(root, "agents", "lavern"))
+	if err != nil || len(lavern) == 0 {
+		t.Fatalf("load lavern agents: %v (n=%d)", err, len(lavern))
+	}
+	for _, d := range lavern {
+		if len(d.Skills) == 0 {
+			t.Errorf("%s has no skills — adapter should map specialties", d.ID)
+		}
+	}
+	got := ids(f.FilterAgents(lavern))
+	for _, id := range []string{
+		"lavern:dispute-resolution", "lavern:plain-language-specialist",
+		"lavern:legal-researcher", "lavern:litigation-associate",
+		"lavern:real-estate-counsel", "lavern:tax-counsel",
+		"lavern:client-relations-partner",
+	} {
+		if !got[id] {
+			t.Errorf("family-law should seat %s", id)
+		}
+	}
+	for _, id := range []string{
+		"lavern:ma-specialist", "lavern:capital-markets",
+		"lavern:contract-specialist", "lavern:startup-counsel",
+		"lavern:sanctions-specialist",
+	} {
+		if got[id] {
+			t.Errorf("family-law should NOT seat %s", id)
+		}
+	}
+	t.Logf("family-law seats %d of %d lavern agents", len(got), len(lavern))
 }

@@ -262,11 +262,14 @@ func (r *Registry) TaskTemplates() []types.TaskTemplate {
 
 // ─── Lavern adapter ───────────────────────────────────────────────────────────
 
-// LavernAgent is the JSON format of a Lavern agent config.
+// LavernAgent is the JSON format of a Lavern agent config. Two schema
+// generations exist: the original ("role" is an enum, "specialties" a list)
+// and the shipped Shem export ("role" is prose describing the agent, "tier"
+// carries the enum). Both are accepted.
 type LavernAgent struct {
 	ID            string   `json:"id"`
 	Name          string   `json:"name"`
-	Role          string   `json:"role"` // "orchestrator" | "specialist" | "tool-only"
+	Role          string   `json:"role"` // enum ("orchestrator" | "specialist" | "tool-only") or prose description
 	Specialties   []string `json:"specialties"`
 	SystemPrompt  string   `json:"systemPrompt"`
 	AllowedTools  []string `json:"allowedTools"`
@@ -382,13 +385,21 @@ func lavernToAgentDef(a LavernAgent) types.AgentDefinition {
 
 	domain := inferDomain(a.Role, a.Specialties)
 
+	// Prose role (newer exports) is the richest description — it feeds the
+	// registry's semantic recruitment. Fall back to the specialties list.
+	description := strings.Join(a.Specialties, ", ")
+	if strings.Contains(strings.TrimSpace(a.Role), " ") {
+		description = strings.TrimSpace(a.Role)
+	}
+
 	return types.AgentDefinition{
 		ID:            a.ID,
 		Name:          a.Name,
 		Tier:          tier,
 		Type:          agentType,
 		Domain:        domain,
-		Description:   strings.Join(a.Specialties, ", "),
+		Description:   description,
+		Skills:        a.Specialties,
 		SystemPrompt:  a.SystemPrompt,
 		AllowedTools:  a.AllowedTools,
 		Jurisdictions: a.Jurisdictions,

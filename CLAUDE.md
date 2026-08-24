@@ -10,7 +10,7 @@ dispatches tasks to BigLaw's bench, and posts results back. See `biglaw-go/inter
 for the implementation.
 
 **Version 1.0.0** — the Go platform replaces TypeScript on `main` (TS preserved at the
-`typescript-final` tag). 131 agent definitions, Teams/Slack channel bots (Big Michael),
+`typescript-final` tag). 139 agent definitions (incl. a dedicated family-law bench), Teams/Slack channel bots (Big Michael),
 hub-and-spoke client briefing swarm (Chalkboard pattern), SharePoint + Teams search, email
 search (Graph + Gmail), playbook-aware contract redlining, headnote generator, precedent
 generator, four-tier playbook cascade, lawyer voice fingerprinting, per-call cost tracking,
@@ -296,7 +296,7 @@ DyTopo round. Flavours are data, not forks: JSON presets in `flavours/`, activat
 `FLAVOUR=<name>` (empty or `full` = complete platform). Switching back is a restart.
 
 ```bash
-FLAVOUR=family-law   # → flavours/family-law.json; seats 50 of 199 agents, 8 of 25 templates
+FLAVOUR=family-law   # → flavours/family-law.json; seats 78 of 207 agents, 8 of 25 templates
 ```
 
 A preset declares `agents.includeSkills` (Tier-2 agents must match ≥1; trailing `*` =
