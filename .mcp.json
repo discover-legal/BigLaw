@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "biglaw": {
-      "command": "go",
-      "args": ["run", "./biglaw-go/cmd/biglaw"],
+      "command": "./bin/biglaw",
+      "args": [],
       "env": {
         "BIG_MICHAEL_MODE": "auto"
       }
