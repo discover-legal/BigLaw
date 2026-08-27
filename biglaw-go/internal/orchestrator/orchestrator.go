@@ -7,6 +7,7 @@ package orchestrator
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/discover-legal/biglaw-go/internal/agents"
@@ -92,6 +93,37 @@ type Orchestrator struct {
 
 	// rootAgent is used for round goal generation and synthesis.
 	rootAgentDef types.AgentDefinition
+
+	// workflowPersonas overlays a workflow-level persona (e.g. a Lavern
+	// prompt-only orchestrator) onto the root system prompt for round-goal
+	// and synthesis calls on tasks of that workflow type. Set once at
+	// startup via SetWorkflowPersonas; nil = no overlays.
+	workflowPersonas map[types.WorkflowType]string
+}
+
+// SetWorkflowPersonas installs workflow-type → persona system-prompt overlays
+// (see rootSystemPrompt). Call before tasks run; not safe during execution.
+func (o *Orchestrator) SetWorkflowPersonas(p map[types.WorkflowType]string) {
+	o.workflowPersonas = p
+}
+
+// rootSystemPrompt is the system prompt for T0 round-goal and synthesis calls:
+// the root orchestrator definition, plus the task workflow's persona overlay
+// when one is installed. The overlay is appended (not substituted) so BigLaw's
+// output-format contract stays authoritative and the persona shapes tone,
+// emphasis, and workflow-specific judgment.
+func (o *Orchestrator) rootSystemPrompt(task *types.Task) string {
+	base := o.rootAgentDef.SystemPrompt
+	if task == nil {
+		return base
+	}
+	persona, ok := o.workflowPersonas[task.WorkflowType]
+	if !ok || strings.TrimSpace(persona) == "" {
+		return base
+	}
+	return base + "\n\n=== WORKFLOW PERSONA (" + string(task.WorkflowType) + ") ===\n" +
+		"Adopt the following persona and workflow guidance where it does not conflict with the output format required above.\n\n" +
+		persona
 }
 
 // ProgressEvent is emitted for SSE streams.

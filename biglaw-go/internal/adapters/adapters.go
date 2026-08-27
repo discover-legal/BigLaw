@@ -270,6 +270,7 @@ type LavernAgent struct {
 	ID            string   `json:"id"`
 	Name          string   `json:"name"`
 	Role          string   `json:"role"` // enum ("orchestrator" | "specialist" | "tool-only") or prose description
+	PromptOnly    bool     `json:"promptOnly"`
 	Specialties   []string `json:"specialties"`
 	SystemPrompt  string   `json:"systemPrompt"`
 	AllowedTools  []string `json:"allowedTools"`
@@ -315,17 +316,76 @@ func LoadLavernAgents(dir string) ([]types.AgentDefinition, error) {
 			}
 			agentsArr = []LavernAgent{single}
 		}
+		promptOnly := 0
 		for _, a := range agentsArr {
 			if a.ID == "" {
 				continue
 			}
+			// Prompt-only entries are workflow-level personas, not bench
+			// agents: seating them pollutes semantic recruitment with
+			// meta-prompts. They are consumed by
+			// LoadLavernOrchestratorPrompts instead.
+			if a.PromptOnly {
+				promptOnly++
+				continue
+			}
 			defs = append(defs, lavernToAgentDef(a))
+		}
+		if promptOnly > 0 {
+			slog.Info("LavernAdapter: skipped prompt-only workflow personas from the bench",
+				"file", entry.Name(), "count", promptOnly)
 		}
 	}
 	if len(defs) > 0 {
 		slog.Info("Lavern agents loaded", "count", len(defs), "dir", dir)
 	}
 	return defs, nil
+}
+
+// LoadLavernOrchestratorPrompts collects the prompt-only orchestrator personas
+// (lavern:orchestrator-<workflow>) keyed by the BigLaw workflow type they
+// drive. The orchestrator overlays the persona onto its root system prompt for
+// round-goal and synthesis calls on tasks of that workflow type, so the Lavern
+// workflow keeps its voice without the persona occupying a bench seat. The
+// generic "lavern:orchestrator" and non-orchestrator prompt-only entries are
+// ignored — they have no workflow type to attach to.
+func LoadLavernOrchestratorPrompts(dir string) (map[types.WorkflowType]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	personas := map[types.WorkflowType]string{}
+	for _, entry := range entries {
+		if entry.IsDir() || strings.ToLower(filepath.Ext(entry.Name())) != ".json" {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		var agentsArr []LavernAgent
+		if err := json.Unmarshal(data, &agentsArr); err != nil {
+			var single LavernAgent
+			if err2 := json.Unmarshal(data, &single); err2 != nil {
+				continue
+			}
+			agentsArr = []LavernAgent{single}
+		}
+		for _, a := range agentsArr {
+			suffix, ok := strings.CutPrefix(a.ID, "lavern:orchestrator-")
+			if !a.PromptOnly || !ok || strings.TrimSpace(a.SystemPrompt) == "" {
+				continue
+			}
+			personas[mapWorkflowType(suffix)] = a.SystemPrompt
+		}
+	}
+	if len(personas) > 0 {
+		slog.Info("Lavern workflow personas loaded", "count", len(personas), "dir", dir)
+	}
+	return personas, nil
 }
 
 // LoadLavernWorkflows reads all Lavern workflow JSON files from dir.
@@ -435,6 +495,12 @@ func lavernWorkflowToTemplate(w LavernWorkflow) types.TaskTemplate {
 
 func mapWorkflowType(s string) types.WorkflowType {
 	switch strings.ToLower(strings.ReplaceAll(s, "-", "_")) {
+	case "counsel":
+		return types.WorkflowCounsel
+	case "legal_design":
+		return types.WorkflowLegalDesign
+	case "pre_engagement":
+		return types.WorkflowPreEngagement
 	case "full_bench":
 		return types.WorkflowFullBench
 	case "review":

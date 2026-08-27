@@ -246,6 +246,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Lavern prompt-only orchestrator personas: overlaid onto T0 round-goal +
+	// synthesis calls for their workflow types (they are not bench agents).
+	if personas, err := adapters.LoadLavernOrchestratorPrompts("agents/lavern"); err == nil && len(personas) > 0 {
+		orch.SetWorkflowPersonas(personas)
+	}
+
 	// Client-voice store (Remy / CNTXT advocacy briefs + matter notifications).
 	clientVoiceStore := clientvoice.New(cfg.Persistence.ClientVoiceFile)
 	if err := clientVoiceStore.Init(); err != nil {

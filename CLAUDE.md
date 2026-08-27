@@ -296,7 +296,7 @@ DyTopo round. Flavours are data, not forks: JSON presets in `flavours/`, activat
 `FLAVOUR=<name>` (empty or `full` = complete platform). Switching back is a restart.
 
 ```bash
-FLAVOUR=family-law   # → flavours/family-law.json; seats 78 of 207 agents, 8 of 25 templates
+FLAVOUR=family-law   # → flavours/family-law.json; seats 77 of 198 agents, 8 of 25 templates
 ```
 
 A preset declares `agents.includeSkills` (Tier-2 agents must match ≥1; trailing `*` =
@@ -600,6 +600,13 @@ per-model detail table.
 
 Lavern workflow types (`adversarial`, `counsel`, `full-bench`, `legal-design`, `pre-engagement`,
 `review`, `roundtable`, `tabulate`, `verification`) are mapped to BigLaw's WorkflowType.
+
+Lavern `promptOnly` entries (the `lavern:orchestrator-<workflow>` personas) are not seated as
+bench agents. Instead they load as **workflow personas**: for a task of the matching workflow
+type, the persona is appended to the root orchestrator's system prompt on round-goal and
+synthesis calls (BigLaw's output-format contract stays authoritative). See
+`LoadLavernOrchestratorPrompts` in `internal/adapters` and `rootSystemPrompt` in
+`internal/orchestrator`.
 
 ## Local inference (LM Studio / Jan / Ollama)
 

@@ -158,7 +158,7 @@ EXPECTED_OUTPUT_3: <third expected output>`,
 	resp, err := prov.Chat(providers.ChatParams{
 		Model:       routing.ResolveModelID(model),
 		MaxTokens:   600,
-		System:      o.rootAgentDef.SystemPrompt,
+		System:      o.rootSystemPrompt(task),
 		Messages:    []providers.Message{{Role: "user", Content: prompt}},
 		CacheSystem: true,
 	})

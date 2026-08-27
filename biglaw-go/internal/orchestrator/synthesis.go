@@ -127,7 +127,7 @@ Ground every statement in the findings above — do not introduce facts, figures
 	chatParams := providers.ChatParams{
 		Model:       bare,
 		MaxTokens:   maxTokens,
-		System:      o.rootAgentDef.SystemPrompt,
+		System:      o.rootSystemPrompt(task),
 		Messages:    []providers.Message{{Role: "user", Content: prompt}},
 		CacheSystem: true,
 		Temperature: o.cfg.LLMTemperature,
