@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -33,8 +34,34 @@ type Store struct {
 	onIngest func(docID, title, content string)
 }
 
-// SetOnIngest registers a post-ingest callback (e.g. the RAG chunk indexer).
-func (s *Store) SetOnIngest(f func(docID, title, content string)) { s.onIngest = f }
+// SetOnIngest registers a post-ingest callback (e.g. the RAG chunk indexer)
+// and immediately replays it for every document already in the store. The
+// replay is what keeps chunk retrieval alive across restarts: Load() hydrates
+// documents from the durable repo before the indexer exists, and without a
+// replay those documents are permanently invisible to search_chunks — agents
+// then work from titles and truncated tool reads, which is exactly the
+// condition that made a small local model fabricate evidence on a real matter.
+// Synchronous by the same design rationale as Ingest: retrieval is ready the
+// moment registration returns.
+func (s *Store) SetOnIngest(f func(docID, title, content string)) {
+	s.onIngest = f
+	if f == nil {
+		return
+	}
+	s.mu.RLock()
+	docs := make([]types.Document, len(s.docs))
+	copy(docs, s.docs)
+	s.mu.RUnlock()
+	if len(docs) == 0 {
+		return
+	}
+	t0 := time.Now()
+	for _, d := range docs {
+		f(d.ID, d.Title, d.Content)
+	}
+	slog.Info("knowledge: replayed ingest callback for persisted documents",
+		"count", len(docs), "tookMs", time.Since(t0).Milliseconds())
+}
 
 func NewStore(embedC *embeddings.Client) *Store {
 	return &Store{embedC: embedC}
