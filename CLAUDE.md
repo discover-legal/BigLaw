@@ -610,6 +610,17 @@ synthesis calls (BigLaw's output-format contract stays authoritative). See
 
 ## Local inference (LM Studio / Jan / Ollama)
 
+> **Model floor: qwen2.5:14b (or equivalent) for finding-producing agents.** A 7B model,
+> tested on a real matter, fabricated evidence wholesale — invented parties, figures, and
+> verbatim-looking "quotes" that exist in no source document (9/87 findings survived
+> mechanical citation verification, vs ~94-96% on 14B/cloud models). The safety net for
+> that failure mode is grounding-collapse detection (`GROUNDING_COLLAPSE_THRESHOLD`,
+> default 0.5 unverified rate → the task FAILS with an explicit error rather than
+> delivering a fabricated memo; `GROUNDING_COLLAPSE_ACTION=strict|warn` to degrade
+> instead). Synthesis additionally quarantines unverified findings from the deliverable
+> (`WRITER_UNVERIFIED=exclude`, default) and disclosures the count in an Evidence Note.
+> Smaller models remain fine for the T3 tool tier (`OLLAMA_TIERS=3`).
+
 ```bash
 # LM Studio — all tiers local
 LOCAL_INFERENCE_URL=http://localhost:1234/v1
