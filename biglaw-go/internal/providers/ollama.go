@@ -16,6 +16,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/discover-legal/biglaw-go/internal/config"
@@ -30,6 +31,29 @@ type OllamaProvider struct {
 	// limiter throttles the model-call path to a configured per-minute ceiling
 	// (PROVIDER_MAX_CALLS_PER_MIN). nil = unlimited (the default). Shared globally.
 	limiter *rateLimiter
+
+	// effortNone remembers models that need an explicit reasoning_effort of
+	// "none" (learned from a tools+reasoning 400, or an empty completion whose
+	// budget was burned on reasoning). Once learned, every later call without
+	// an explicit effort sends "none" up front instead of paying a doubled
+	// call to rediscover it.
+	effortNoneMu sync.Mutex
+	effortNone   map[string]bool
+}
+
+func (p *OllamaProvider) needsEffortNone(model string) bool {
+	p.effortNoneMu.Lock()
+	defer p.effortNoneMu.Unlock()
+	return p.effortNone[model]
+}
+
+func (p *OllamaProvider) markEffortNone(model string) {
+	p.effortNoneMu.Lock()
+	defer p.effortNoneMu.Unlock()
+	if p.effortNone == nil {
+		p.effortNone = map[string]bool{}
+	}
+	p.effortNone[model] = true
 }
 
 const maxProviderResponseBytes int64 = 32 << 20
@@ -330,6 +354,10 @@ func (p *OllamaProvider) Chat(params ChatParams) (*ChatResponse, error) {
 	}
 	if params.ReasoningEffort != "" {
 		reqBody.ReasoningEffort = params.ReasoningEffort
+	} else if p.needsEffortNone(bareModel) {
+		// This model has already told us it needs reasoning off (tools
+		// rejection or reasoning-burned budget) — send it up front.
+		reqBody.ReasoningEffort = "none"
 	}
 	if params.Temperature != nil && !rejectsTemperature(p.useMaxCompletionTokens, bareModel) {
 		reqBody.Temperature = params.Temperature
@@ -347,6 +375,25 @@ func (p *OllamaProvider) Chat(params ChatParams) (*ChatResponse, error) {
 
 	body, _ := json.Marshal(reqBody)
 	chatResp, err := p.sendChat(body, url)
+	// Reasoning-default models can refuse function tools on the
+	// chat-completions endpoint unless reasoning is explicitly turned off:
+	// OpenAI's gpt-5.6-luna 400s with "Function tools with reasoning_effort
+	// are not supported ... set reasoning_effort to 'none'" — even when the
+	// request never carried the parameter (the model's implicit default
+	// triggers it). On such a rejection, retry once with an explicit
+	// reasoning_effort of "none"; tool-following matters more than reasoning
+	// depth on these calls.
+	if err != nil && reqBody.ReasoningEffort != "none" &&
+		strings.Contains(err.Error(), "HTTP 400") && strings.Contains(err.Error(), "reasoning_effort") {
+		slog.Warn("endpoint rejected reasoning_effort with tools; retrying once with reasoning_effort=none",
+			"model", bareModel, "sentEffort", reqBody.ReasoningEffort)
+		p.markEffortNone(bareModel)
+		retryBody := reqBody
+		retryBody.ReasoningEffort = "none"
+		if b2, mErr := json.Marshal(retryBody); mErr == nil {
+			chatResp, err = p.sendChat(b2, url)
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -356,10 +403,20 @@ func (p *OllamaProvider) Chat(params ChatParams) (*ChatResponse, error) {
 	// the whole cap thinking. When thinking is enabled-or-default, retry ONCE with
 	// thinking explicitly disabled so the model produces visible text.
 	if p.shouldRetryThinkingDisabled(reqBody, chatResp) {
-		slog.Warn("provider returned empty content with reasoning/length finish; retrying once with thinking disabled",
-			"model", bareModel, "finishReason", firstFinishReason(chatResp))
 		retryBody := reqBody
-		retryBody.Thinking = &openAIThinking{Type: "disabled"}
+		if p.useMaxCompletionTokens {
+			// OpenAI-hosted reasoning models (gpt-5.6-luna etc.) ignore the
+			// Zhipu-style thinking toggle; their knob is reasoning_effort.
+			// Remember it so later calls send "none" up front.
+			slog.Warn("provider returned empty content with reasoning/length finish; retrying once with reasoning_effort=none",
+				"model", bareModel, "finishReason", firstFinishReason(chatResp))
+			p.markEffortNone(bareModel)
+			retryBody.ReasoningEffort = "none"
+		} else {
+			slog.Warn("provider returned empty content with reasoning/length finish; retrying once with thinking disabled",
+				"model", bareModel, "finishReason", firstFinishReason(chatResp))
+			retryBody.Thinking = &openAIThinking{Type: "disabled"}
+		}
 		if b2, mErr := json.Marshal(retryBody); mErr == nil {
 			if r2, err2 := p.sendChat(b2, url); err2 == nil {
 				chatResp = r2
