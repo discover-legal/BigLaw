@@ -24,6 +24,7 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/routing"
 	"github.com/discover-legal/biglaw-go/internal/store"
 	"github.com/discover-legal/biglaw-go/internal/strutil"
+	"github.com/discover-legal/biglaw-go/internal/types"
 )
 
 // ToolImpl holds the schema and executor for a single tool.
@@ -215,6 +216,7 @@ func (r *Registry) searchKnowledgeTool() *ToolImpl {
 			if err != nil {
 				return nil, err
 			}
+			results = scopeResults(results, ctx)
 			// Return small, query-relevant VERBATIM passages — not whole
 			// documents. Tool calling is meant to pull only what's needed; a
 			// full-document dump (tens of KB) blows a small model's context
@@ -234,6 +236,23 @@ func (r *Registry) searchKnowledgeTool() *ToolImpl {
 	}
 }
 
+// scopeResults confines knowledge-store search results to the tool context's
+// matter scope (ToolContext.DocumentIDs). The knowledge store holds every
+// matter in the firm; a tool serving a task must never surface another
+// matter's documents.
+func scopeResults(results []types.SearchResult, ctx agents.ToolContext) []types.SearchResult {
+	if len(ctx.DocumentIDs) == 0 {
+		return results
+	}
+	out := results[:0]
+	for _, r := range results {
+		if ctx.InScope(r.Document.ID) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 // ─── search_chunks / get_outline / read_section (hybrid RAG) ───────────────────
 
 func (r *Registry) searchChunksTool() *ToolImpl {
@@ -251,11 +270,12 @@ func (r *Registry) searchChunksTool() *ToolImpl {
 				"required": []string{"query"},
 			},
 		},
-		Exec: func(input map[string]interface{}, _ agents.ToolContext) (interface{}, error) {
+		Exec: func(input map[string]interface{}, ctx agents.ToolContext) (interface{}, error) {
 			if r.rag == nil {
 				return map[string]interface{}{"results": []interface{}{}}, nil
 			}
-			chunks := r.rag.Search(strInput(input, "query"), intInput(input, "top_k", 6))
+			// Matter scope: retrieval never crosses into another matter's documents.
+			chunks := r.rag.SearchDocs(strInput(input, "query"), intInput(input, "top_k", 6), ctx.DocumentIDs)
 			out := make([]map[string]interface{}, 0, len(chunks))
 			for _, c := range chunks {
 				m := map[string]interface{}{
@@ -293,7 +313,7 @@ func (r *Registry) extractSpecificsTool() *ToolImpl {
 				"required": []string{"topic"},
 			},
 		},
-		Exec: func(input map[string]interface{}, _ agents.ToolContext) (interface{}, error) {
+		Exec: func(input map[string]interface{}, ctx agents.ToolContext) (interface{}, error) {
 			if r.rag == nil {
 				return map[string]interface{}{"results": []interface{}{}}, nil
 			}
@@ -305,7 +325,7 @@ func (r *Registry) extractSpecificsTool() *ToolImpl {
 			// exhibit and BURIED the topic's own rows (e.g. the cherry-picking $7.8M row
 			// under generic bank-statement amounts). Pure-topic + figure filter keeps
 			// the topic signal and still returns only specifics. Over-fetch, then trim.
-			chunks := r.rag.Search(topic, topK*3)
+			chunks := r.rag.SearchDocs(topic, topK*3, ctx.DocumentIDs) // matter-scoped
 			out := make([]map[string]interface{}, 0, topK)
 			for _, c := range chunks {
 				if len(out) >= topK {
@@ -350,9 +370,12 @@ func (r *Registry) getOutlineTool() *ToolImpl {
 				"required":   []string{"doc_id"},
 			},
 		},
-		Exec: func(input map[string]interface{}, _ agents.ToolContext) (interface{}, error) {
+		Exec: func(input map[string]interface{}, ctx agents.ToolContext) (interface{}, error) {
 			if r.rag == nil {
 				return map[string]interface{}{"sections": []interface{}{}}, nil
+			}
+			if !ctx.InScope(strInput(input, "doc_id")) {
+				return map[string]interface{}{"sections": []interface{}{}, "error": "document is not part of this matter"}, nil
 			}
 			seen := map[string]bool{}
 			secs := []string{}
@@ -382,9 +405,12 @@ func (r *Registry) readSectionTool() *ToolImpl {
 				"required": []string{"doc_id", "locator"},
 			},
 		},
-		Exec: func(input map[string]interface{}, _ agents.ToolContext) (interface{}, error) {
+		Exec: func(input map[string]interface{}, ctx agents.ToolContext) (interface{}, error) {
 			if r.rag == nil {
 				return map[string]interface{}{"text": ""}, nil
+			}
+			if !ctx.InScope(strInput(input, "doc_id")) {
+				return map[string]interface{}{"text": "", "error": "document is not part of this matter"}, nil
 			}
 			var b strings.Builder
 			for _, c := range r.rag.Section(strInput(input, "doc_id"), strInput(input, "locator")) {
@@ -684,6 +710,9 @@ func (r *Registry) readDocumentTool() *ToolImpl {
 			if ctx.KnowledgeStore == nil {
 				return map[string]interface{}{"text": ""}, nil
 			}
+			if !ctx.InScope(strInput(input, "doc_id")) {
+				return map[string]interface{}{"text": "", "error": "document is not part of this matter"}, nil
+			}
 			text, _ := ctx.KnowledgeStore.GetFullText(strInput(input, "doc_id"))
 			return map[string]interface{}{"text": text}, nil
 		},
@@ -715,6 +744,7 @@ func (r *Registry) listDocumentsTool() *ToolImpl {
 			if err != nil {
 				return nil, err
 			}
+			results = scopeResults(results, ctx)
 			docs := make([]map[string]interface{}, len(results))
 			for i, res := range results {
 				docs[i] = map[string]interface{}{
@@ -751,6 +781,9 @@ func (r *Registry) findInDocumentTool() *ToolImpl {
 			}
 			docID := strInput(input, "doc_id")
 			query := strInput(input, "query")
+			if !ctx.InScope(docID) {
+				return map[string]interface{}{"matches": []interface{}{}, "error": "document is not part of this matter"}, nil
+			}
 			fullText, _ := ctx.KnowledgeStore.GetFullText(docID)
 			if fullText == "" {
 				return map[string]interface{}{"matches": []interface{}{}, "note": "document not found"}, nil

@@ -96,10 +96,31 @@ func (s *Service) enrichQuestions(chunks []Chunk) {
 // Search runs the hybrid retrieval and returns the top-K chunks (verbatim text +
 // section locator), ready to feed the staged evidence extractor.
 func (s *Service) Search(query string, topK int) []Chunk {
+	return s.SearchDocs(query, topK, nil)
+}
+
+// SearchDocs is Search confined to a matter: only chunks belonging to docIDs
+// are returned. The chunk store holds every matter in the firm, so callers
+// with a task in hand MUST pass the task's document IDs — unscoped retrieval
+// leaked one client's record into another client's deliverable. nil/empty =
+// unscoped (matter-less callers only).
+func (s *Service) SearchDocs(query string, topK int, docIDs []string) []Chunk {
+	var allow map[string]bool
+	if len(docIDs) > 0 {
+		allow = make(map[string]bool, len(docIDs))
+		for _, id := range docIDs {
+			allow[id] = true
+		}
+	}
 	if topK <= 0 {
 		topK = 6
 	}
 	pool := topK * 4 // gather more per ranker than we keep, so fusion has signal
+	if allow != nil {
+		// Out-of-scope chunks are discarded after ranking; widen the pool so
+		// the scoped matter still fills topK on a store holding many matters.
+		pool *= 4
+	}
 
 	// HyDE is intentionally OFF the hot query path: on a single local GPU it adds
 	// an LLM call per search and pushes agents past the round timeout. dense(query)
@@ -115,6 +136,9 @@ func (s *Service) Search(query string, topK int) []Chunk {
 	out := make([]Chunk, 0, topK)
 	for _, id := range rrf(rankings, rrfK) {
 		if c, ok := s.store.Get(id); ok {
+			if allow != nil && !allow[c.DocID] {
+				continue // outside the matter scope
+			}
 			out = append(out, c)
 			if len(out) >= topK {
 				break
@@ -162,6 +186,9 @@ func (s *Service) Chunk(chunkID string) (Chunk, bool)    { return s.store.Get(ch
 
 func (s *Service) embedBatch(texts []string) [][]float32 {
 	out := make([][]float32, len(texts))
+	if s.embed == nil {
+		return out // BM25-only mode (no embedder wired, e.g. tests)
+	}
 	if res, err := s.embed.EmbedBatch(texts); err == nil && len(res) == len(texts) {
 		for i := range res {
 			out[i] = res[i].Embedding
@@ -175,6 +202,9 @@ func (s *Service) embedBatch(texts []string) [][]float32 {
 }
 
 func (s *Service) embedOne(text string) []float32 {
+	if s.embed == nil {
+		return nil // BM25-only mode
+	}
 	if r, err := s.embed.Embed(text); err == nil && r != nil {
 		return r.Embedding
 	}

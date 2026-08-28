@@ -4,6 +4,7 @@
 package writer
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -132,5 +133,36 @@ func TestNewDefaultsAndDisableKnob(t *testing.T) {
 	}
 	if out := mergeNearDuplicates(dupFixture(), off.opt.DedupThreshold); len(out) != 3 {
 		t.Fatalf("disabled dedup must keep all findings, got %d", len(out))
+	}
+}
+
+// foldTinyGroups: single-finding clusters must not become one-asset sections.
+func TestFoldTinyGroups(t *testing.T) {
+	mk := func(n int, c []float32) *group {
+		g := &group{centroid: c}
+		for i := 0; i < n; i++ {
+			g.items = append(g.items, Finding{ID: fmt.Sprintf("f%d-%p", i, g)})
+			g.ids = append(g.ids, g.items[len(g.items)-1].ID)
+		}
+		return g
+	}
+	big1 := mk(5, []float32{1, 0})
+	big2 := mk(4, []float32{0, 1})
+	tinyNearBig2 := mk(1, []float32{0.1, 0.9})
+	tinyNoVec := mk(2, nil)
+	out := foldTinyGroups([]*group{big1, big2, tinyNearBig2, tinyNoVec}, 3)
+	if len(out) != 2 {
+		t.Fatalf("want 2 kept groups, got %d", len(out))
+	}
+	if len(out[1].items) != 5 { // big2 absorbed the near tiny (4+1)
+		t.Fatalf("nearest-by-centroid fold failed: big2 has %d items", len(out[1].items))
+	}
+	if len(out[0].items) != 7 { // big1 got the no-centroid tiny (5+2)
+		t.Fatalf("no-centroid tiny should fold into first kept group, got %d", len(out[0].items))
+	}
+	// All-tiny input is left alone.
+	allTiny := []*group{mk(1, []float32{1, 0}), mk(2, []float32{0, 1})}
+	if got := foldTinyGroups(allTiny, 3); len(got) != 2 {
+		t.Fatalf("all-tiny matter must keep its groups, got %d", len(got))
 	}
 }

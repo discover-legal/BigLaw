@@ -23,7 +23,16 @@ time tracking, and NOSLEGAL v4 taxonomy.
 tools (spec: `docs/clean-room-spec-document-tools.md`) removed the last copyleft dependency;
 LICENSE/NOTICE/SPDX headers all swapped.
 
-**Negotiation intelligence + reviews (latest release):** counter-redline loop
+**Evidence integrity + matter isolation (latest):** all retrieval tools are confined to the
+task's `documentIds` (cross-matter leakage pinned by regression tests), the RAG chunk store
+survives restarts, mechanically-unverified findings trip grounding-collapse detection
+(default: the task FAILS rather than deliver fabricated evidence) and are quarantined from
+synthesis with a disclosed Evidence Note, the human gate is budgeted/calibrated, local
+(watt-metered) calls always price $0, and the writer dedups findings/folds tiny sections.
+Proven on two end-to-end matter drives (family + employment): local qwen2.5:7b went from
+10% to 84% grounded with zero fabrication; see `docs/operations/evidence-integrity.md`.
+
+**Negotiation intelligence + reviews:** counter-redline loop
 (`respond_to_redline` — parse opposing tracked changes, judge vs the playbook cascade, emit
 countered redlines + rationale cards), judge memory across rounds with standoff escalation,
 Redtime (`register_document_version`/`get_redline_timeline`, `GET /documents/:id/timeline` —

@@ -62,7 +62,7 @@ func (o *Orchestrator) allegationPassages(task *types.Task, tokenBudget int) str
 	var b strings.Builder
 	seen := map[string]bool{}
 	for _, q := range queries {
-		res, err := o.tools.Execute("search_chunks", map[string]interface{}{"query": q, "top_k": 8}, agents.ToolContext{TaskID: task.ID})
+		res, err := o.tools.Execute("search_chunks", map[string]interface{}{"query": q, "top_k": 8}, agents.ToolContext{TaskID: task.ID, DocumentIDs: task.DocumentIDs})
 		if err != nil {
 			continue
 		}

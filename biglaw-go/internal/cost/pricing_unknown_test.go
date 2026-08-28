@@ -172,3 +172,31 @@ func TestBuiltinClaudeRatesUnchanged(t *testing.T) {
 		}
 	}
 }
+
+// Local inference (watt-metered) is free by definition — even when the model
+// name prefix-matches a hosted family's rate class (qwen2.5:7b → DashScope
+// qwen rates billed a real local run $0.60).
+func TestLocalWattMeteredCallsAreFree(t *testing.T) {
+	s := &Store{}
+	usd := 0.598
+	wh := 12.5
+	s.Record(RecordRequest{Model: "qwen2.5:7b", InputTokens: 1000, OutputTokens: 500,
+		CostUSD: &usd, EstimatedWh: &wh, Context: ContextTask})
+	sum := s.Summarise(nil)
+	if sum.TotalUSD != 0 {
+		t.Fatalf("local watt-metered call must record $0, got %v", sum.TotalUSD)
+	}
+	if sum.UnpricedCalls != 0 {
+		t.Fatalf("local call is deliberately free, not unpriced; got %d", sum.UnpricedCalls)
+	}
+	// A hosted call on the same model name still prices normally (the caller
+	// computes via CalcCostUSD and Record keeps it — no watt meter, no zeroing).
+	hostedUSD := CalcCostUSD("qwen2.5:7b", 1_000_000, 0, 0, 0)
+	if hostedUSD == nil || *hostedUSD == 0 {
+		t.Fatal("hosted qwen should price by class")
+	}
+	s.Record(RecordRequest{Model: "qwen2.5:7b", InputTokens: 1_000_000, CostUSD: hostedUSD, Context: ContextTask})
+	if s.Summarise(nil).TotalUSD == 0 {
+		t.Fatal("hosted (non-watt-metered) qwen call must keep its computed cost")
+	}
+}

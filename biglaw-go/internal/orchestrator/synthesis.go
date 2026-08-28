@@ -408,7 +408,7 @@ func (o *Orchestrator) writeDeliverable(task *types.Task, findings []types.Findi
 		// extract_specifics), rather than every agent pre-stuffing figures into
 		// findings (which floods the writer). Backed by the tool registry's RAG.
 		Specifics: func(topic string, topK int) []writer.SpecificHit {
-			res, err := o.tools.Execute("extract_specifics", map[string]interface{}{"topic": topic, "top_k": topK}, agents.ToolContext{TaskID: task.ID})
+			res, err := o.tools.Execute("extract_specifics", map[string]interface{}{"topic": topic, "top_k": topK}, agents.ToolContext{TaskID: task.ID, DocumentIDs: task.DocumentIDs})
 			if err != nil {
 				return nil
 			}

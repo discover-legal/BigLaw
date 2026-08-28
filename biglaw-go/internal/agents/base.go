@@ -46,6 +46,10 @@ type AgentContext struct {
 	ResponsibleLawyerName string
 	MatterNumber          string
 	ClientNumber          string
+	// DocumentIDs is the task's matter scope, threaded into ToolContext so
+	// every retrieval tool the agent calls stays inside this matter's
+	// documents. See ToolContext.DocumentIDs.
+	DocumentIDs []string
 }
 
 // ToolRegistry is the interface agents use to discover and execute tools.
@@ -73,6 +77,27 @@ type ToolContext struct {
 	TaskID              string
 	OwnerID             string
 	ResponsibleLawyerID string
+	// DocumentIDs is the matter scope: the task's document IDs. Retrieval
+	// tools (search_chunks, search_knowledge, read_document, …) MUST confine
+	// themselves to these documents when the list is non-empty — the chunk
+	// and knowledge stores hold every matter in the firm, and unscoped
+	// retrieval leaked one client's record into another client's deliverable
+	// on a real two-matter store. Empty = no scope (matter-less tasks).
+	DocumentIDs []string
+}
+
+// InScope reports whether docID belongs to the tool context's matter scope.
+// An empty scope admits everything.
+func (c ToolContext) InScope(docID string) bool {
+	if len(c.DocumentIDs) == 0 {
+		return true
+	}
+	for _, id := range c.DocumentIDs {
+		if id == docID {
+			return true
+		}
+	}
+	return false
 }
 
 // ProviderRegistry resolves a model ID to its provider. *providers.Registry
@@ -296,6 +321,7 @@ func (a *Agent) runAgenticLoop(initialPrompt string, maxTokens int, model string
 		TaskID:              ctx.TaskID,
 		OwnerID:             ctx.OwnerID,
 		ResponsibleLawyerID: ctx.ResponsibleLawyerID,
+		DocumentIDs:         ctx.DocumentIDs,
 	}
 
 	prov, err := a.providers.Get(model)

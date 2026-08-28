@@ -596,9 +596,18 @@ func (s *Store) Record(req RecordRequest) {
 		ProfileID:        req.ProfileID,
 		AgentID:          req.AgentID,
 	}
+	// Local inference is free by definition — the meter is watt-hours, not
+	// dollars. Watt metering is only ever attached to local calls, so its
+	// presence is the locality signal. Without this, a local model whose name
+	// prefix-matches a hosted family's rate class (qwen2.5:7b → the DashScope
+	// qwen rates) bills phantom dollars for electricity-only work.
+	if req.EstimatedWh != nil {
+		zero := 0.0
+		entry.CostUSD = &zero
+	}
 	// An unpriced model must never silently record $0: flag the entry (it
 	// persists, and Summarise counts it as UnpricedCalls) and warn once.
-	if _, priced, _ := resolvePricing(req.Model); req.Model != "" && !priced {
+	if _, priced, _ := resolvePricing(req.Model); req.EstimatedWh == nil && req.Model != "" && !priced {
 		entry.PriceUnknown = true
 		if entry.CostUSD == nil {
 			zero := 0.0

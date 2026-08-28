@@ -68,6 +68,7 @@ func cluster(ix *FindingIndex, threshold, mergeThreshold float64, maxClusters in
 		g.centroid = runningMean(g.centroid, v, len(g.items))
 	}
 	groups = mergeCloseGroups(groups, mergeThreshold)
+	groups = foldTinyGroups(groups, minSectionFindings)
 	items := make([][]Finding, 0, len(groups))
 	for _, g := range groups {
 		if len(g.items) > 0 {
@@ -82,6 +83,59 @@ func cluster(ix *FindingIndex, threshold, mergeThreshold float64, maxClusters in
 	// Largest clusters first — the document leads with its biggest themes.
 	sort.SliceStable(out, func(i, j int) bool { return len(out[i].Items) > len(out[j].Items) })
 	return out
+}
+
+// minSectionFindings is the floor below which a cluster is too thin to earn
+// its own section. Weak drafters given single-figure clusters produce one
+// heading per asset ("## TFSA", "## Volvo XC60") and the memo shatters; a tiny
+// cluster folds into its nearest neighbour instead. 1 disables the pass.
+const minSectionFindings = 3
+
+// foldTinyGroups merges groups smaller than min into their nearest-by-centroid
+// larger neighbour, deterministically (smallest first, ties by original order).
+// A tiny group with no centroid folds into the first kept group. If EVERY
+// group is tiny (small matter), they are left alone — a short memo with a few
+// short sections beats one undifferentiated blob.
+func foldTinyGroups(groups []*group, min int) []*group {
+	if min <= 1 || len(groups) < 2 {
+		return groups
+	}
+	anyBig := false
+	for _, g := range groups {
+		if len(g.items) >= min {
+			anyBig = true
+			break
+		}
+	}
+	if !anyBig {
+		return groups
+	}
+	kept := make([]*group, 0, len(groups))
+	var tiny []*group
+	for _, g := range groups {
+		if len(g.items) >= min {
+			kept = append(kept, g)
+		} else if len(g.items) > 0 {
+			tiny = append(tiny, g)
+		}
+	}
+	for _, t := range tiny {
+		best := 0
+		if len(t.centroid) > 0 {
+			best = nearestGroupIdx(t.centroid, kept)
+		}
+		k := kept[best]
+		k.items = append(k.items, t.items...)
+		k.ids = append(k.ids, t.ids...)
+		if len(t.centroid) > 0 && len(k.centroid) > 0 {
+			// Count-weighted merge keeps the centroid honest for later folds.
+			n := len(k.items)
+			for i := range k.centroid {
+				k.centroid[i] = (k.centroid[i]*float32(n-len(t.items)) + t.centroid[i]*float32(len(t.items))) / float32(n)
+			}
+		}
+	}
+	return kept
 }
 
 func nearestGroupIdx(v []float32, groups []*group) int {

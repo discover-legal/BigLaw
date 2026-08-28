@@ -447,7 +447,7 @@ func (o *Orchestrator) deviationSearch(task *types.Task, query string, k int) []
 	if o.tools == nil {
 		return nil
 	}
-	res, err := o.tools.Execute("search_chunks", map[string]interface{}{"query": query, "top_k": k}, agents.ToolContext{TaskID: task.ID})
+	res, err := o.tools.Execute("search_chunks", map[string]interface{}{"query": query, "top_k": k}, agents.ToolContext{TaskID: task.ID, DocumentIDs: task.DocumentIDs})
 	if err != nil {
 		return nil
 	}

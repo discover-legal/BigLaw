@@ -61,7 +61,7 @@ func (o *Orchestrator) specificsSweep(task *types.Task, prov providers.Provider,
 func (o *Orchestrator) runSpecificsQueries(task *types.Task, queries []string, seen map[string]bool, maxFindings int, agentID, agentName string, round int) []types.Finding {
 	var findings []types.Finding
 	for _, q := range queries {
-		sr, err := o.tools.Execute("extract_specifics", map[string]interface{}{"topic": q, "top_k": 4}, agents.ToolContext{TaskID: task.ID})
+		sr, err := o.tools.Execute("extract_specifics", map[string]interface{}{"topic": q, "top_k": 4}, agents.ToolContext{TaskID: task.ID, DocumentIDs: task.DocumentIDs})
 		if err != nil {
 			continue
 		}
@@ -116,7 +116,7 @@ func (o *Orchestrator) classifyMatter(task *types.Task, prov providers.Provider,
 	res, err := o.tools.Execute("search_chunks", map[string]interface{}{
 		"query": "subject matter, parties, the legal claims and allegations, the practice area and legal doctrines at issue",
 		"top_k": 6,
-	}, agents.ToolContext{TaskID: task.ID})
+	}, agents.ToolContext{TaskID: task.ID, DocumentIDs: task.DocumentIDs})
 	passages := ""
 	if err == nil {
 		if m, ok := res.(map[string]interface{}); ok {

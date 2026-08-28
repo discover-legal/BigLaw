@@ -184,6 +184,7 @@ func (e *Engine) RunRound(task *types.Task, goal types.RoundGoal, lawyerTone *ty
 				TaskDescription:    task.Description,
 				TaskID:             task.ID,
 				DocumentIndex:      documentIndex,
+				DocumentIDs:        task.DocumentIDs,
 				ToolRegistry:       e.tools,
 				KnowledgeStore:     e.knowledge,
 				MemoryStore:        e.memAdapter,
