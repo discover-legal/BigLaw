@@ -101,7 +101,15 @@ func main() {
 	// Build provider registry.
 	provReg := providers.NewRegistry(cfg)
 
-	// Build cost store.
+	// Build cost store. Per-model rate overrides (COST_MODEL_RATES, parsed by
+	// the config layer) go in first so every recorded call prices against them.
+	if len(cfg.Cost.ModelRates) > 0 {
+		rates := make(map[string]cost.ModelRate, len(cfg.Cost.ModelRates))
+		for model, r := range cfg.Cost.ModelRates {
+			rates[model] = cost.ModelRate{In: r.In, Out: r.Out}
+		}
+		cost.SetModelRates(rates)
+	}
 	costStore := cost.Default
 	if err := costStore.Init(cfg.Persistence.CostFile); err != nil {
 		fmt.Fprintf(os.Stderr, "cost init: %v\n", err)

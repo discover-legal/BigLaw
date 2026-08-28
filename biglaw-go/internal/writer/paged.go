@@ -243,7 +243,7 @@ func (w *Writer) frameSection(taskDesc string, board *pagedBoard, instr string) 
 	// rules). finalizePaged supplies the frame headings; scaffolding inside the passage
 	// is what produced the NESTED document (two title blocks, two exec summaries) — strip
 	// it mechanically.
-	return polishSection("", stripFrameScaffolding(sanitizeDraft(out)))
+	return polishSection("", stripFrameScaffolding(flagUnfilledFigureNames(sanitizeDraft(out))))
 }
 
 // stripFrameScaffolding removes document-skeleton lines from a frame passage: markdown
@@ -445,7 +445,7 @@ func (w *Writer) reviseSection(taskDesc, workflowType string, s section, draft, 
 			if isRefusalDraft(b.Text) {
 				return draft
 			}
-			if out := polishSection(s.Title, sanitizeDraft(b.Text)); out != "" {
+			if out := polishSection(s.Title, flagUnfilledFigureNames(sanitizeDraft(b.Text))); out != "" {
 				return out
 			}
 		}

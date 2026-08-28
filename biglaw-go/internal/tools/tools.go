@@ -148,6 +148,8 @@ func (r *Registry) registerAll() {
 	r.registerDocumentExtraTools()
 	// Integrity — unmarked-change detection + Unicode obfuscation scan.
 	r.registerIntegrityTools()
+	// Family-law arithmetic — deterministic equalization/support math.
+	r.registerFamilyMathTools()
 	r.registerRedtimeTools()
 }
 

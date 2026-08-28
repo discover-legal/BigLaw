@@ -6,6 +6,7 @@ package cost
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -49,6 +50,10 @@ type CostEntry struct {
 	TaskID           string      `json:"taskId,omitempty"`
 	ProfileID        string      `json:"profileId,omitempty"`
 	AgentID          string      `json:"agentId,omitempty"`
+	// PriceUnknown marks a call whose model had no explicit rate at record
+	// time (recorded as $0.00, i.e. spend the ledger cannot price). Surfaced
+	// as CostSummary.UnpricedCalls so it is never a silent misreport.
+	PriceUnknown bool `json:"priceUnknown,omitempty"`
 }
 
 type CostSummary struct {
@@ -61,6 +66,10 @@ type CostSummary struct {
 	ByModel           map[string]*ModelSummary   `json:"byModel"`
 	ByContext         map[string]*ContextSummary `json:"byContext"`
 	EntryCount        int                        `json:"entryCount"`
+	// UnpricedCalls counts entries flagged PriceUnknown — calls recorded at
+	// $0.00 because the model had no rate entry. The Admin → Cost view shows
+	// this as "N calls unpriced".
+	UnpricedCalls int `json:"unpricedCalls"`
 }
 
 type ModelSummary struct {
@@ -105,18 +114,24 @@ var basePricing = map[string][2]float64{
 	// OpenAI — chat (routed via the OPENAI_MODEL shortcut or LOCAL_INFERENCE_*).
 	// gpt-5.5 has no public list price we can cite, so it stays untracked until
 	// COST_GPT_IN/_OUT (or a specific entry) is set.
-	"gpt-5.5":      {0, 0},
-	"gpt-5":        {1.25, 10.00},
-	"gpt-5-mini":   {0.25, 2.00},
-	"gpt-5-nano":   {0.05, 0.40},
-	"gpt-4.1":      {2.00, 8.00},
-	"gpt-4.1-mini": {0.40, 1.60},
-	"gpt-4.1-nano": {0.10, 0.40},
-	"gpt-4o":       {2.50, 10.00},
-	"gpt-4o-mini":  {0.15, 0.60},
-	"o3":           {2.00, 8.00},
-	"o3-mini":      {1.10, 4.40},
-	"o4-mini":      {1.10, 4.40},
+	// gpt-5.6 family: luna has verified list pricing; terra and sol are
+	// recognised names left unpriced (flagged, not silently $0) until a
+	// COST_MODEL_RATES / COST_GPT_* override supplies a real rate.
+	"gpt-5.6-luna":  {1.00, 6.00},
+	"gpt-5.6-terra": {0, 0},
+	"gpt-5.6-sol":   {0, 0},
+	"gpt-5.5":       {0, 0},
+	"gpt-5":         {1.25, 10.00},
+	"gpt-5-mini":    {0.25, 2.00},
+	"gpt-5-nano":    {0.05, 0.40},
+	"gpt-4.1":       {2.00, 8.00},
+	"gpt-4.1-mini":  {0.40, 1.60},
+	"gpt-4.1-nano":  {0.10, 0.40},
+	"gpt-4o":        {2.50, 10.00},
+	"gpt-4o-mini":   {0.15, 0.60},
+	"o3":            {2.00, 8.00},
+	"o3-mini":       {1.10, 4.40},
+	"o4-mini":       {1.10, 4.40},
 
 	// OpenAI — embeddings (input-only; output rate is 0).
 	"text-embedding-3-small": {0.02, 0},
@@ -142,11 +157,11 @@ var basePricing = map[string][2]float64{
 	"grok-2":      {2.00, 10.00},
 
 	// Alibaba Qwen (DashScope international list prices)
-	"qwen-max":      {1.60, 6.40},
-	"qwen-plus":     {0.40, 1.20},
-	"qwen-turbo":    {0.05, 0.20},
-	"qwen-vl-max":   {1.60, 6.40},
-	"qwen-vl-plus":  {0.21, 0.63},
+	"qwen-max":     {1.60, 6.40},
+	"qwen-plus":    {0.40, 1.20},
+	"qwen-turbo":   {0.05, 0.20},
+	"qwen-vl-max":  {1.60, 6.40},
+	"qwen-vl-plus": {0.21, 0.63},
 
 	// Mistral
 	"mistral-large-latest": {2.00, 6.00},
@@ -197,7 +212,10 @@ type modelClass struct {
 }
 
 var modelClasses = []modelClass{
-	// OpenAI
+	// OpenAI (specific gpt-5.6 variants before the tier/family catch-alls, so
+	// a versioned ID like "gpt-5.6-luna-2026-01" resolves to its own rate)
+	{"gpt", []string{"gpt-5.6-luna"}, [2]float64{1.00, 6.00}},
+	{"gpt", []string{"gpt-5.6-terra", "gpt-5.6-sol"}, [2]float64{0, 0}}, // recognised, unpriced: set COST_MODEL_RATES
 	{"gpt", []string{"gpt-5-nano", "gpt-4.1-nano"}, [2]float64{0.05, 0.40}},
 	{"gpt", []string{"gpt-5-mini", "gpt-4.1-mini", "gpt-4o-mini"}, [2]float64{0.25, 2.00}},
 	{"gpt", []string{"gpt"}, [2]float64{0, 0}}, // gpt-5.x flagship: set COST_GPT_*
@@ -237,8 +255,50 @@ var modelClasses = []modelClass{
 	{"opus", []string{"opus"}, [2]float64{15.00, 75.00}},
 }
 
+// baseEnvPriced / classEnvPriced track which basePricing entries and
+// modelClasses received an explicit COST_<FAMILY>_IN/_OUT override. An entry
+// whose rate is {0, 0} is "recognised but unpriced" — unless an operator set
+// that zero deliberately, in which case it is a real (free/local) price.
+var (
+	baseEnvPriced  = map[string]bool{}
+	classEnvPriced = make([]bool, len(modelClasses))
+)
+
+// ModelRate is a per-model [input, output] USD-per-million-tokens rate pair,
+// as supplied by the COST_MODEL_RATES env JSON (parsed in internal/config).
+type ModelRate struct {
+	In  float64 `json:"in"`
+	Out float64 `json:"out"`
+}
+
+// modelRates holds per-model rate overrides from COST_MODEL_RATES. Keys are
+// lowercased model IDs matched exact-first, then longest-prefix (so
+// "gpt-5.6-terra" also prices "gpt-5.6-terra-2026-03"). Entries override
+// built-ins, and an explicit {0, 0} entry counts as priced (deliberately
+// free), not unknown.
+var (
+	modelRatesMu sync.RWMutex
+	modelRates   = map[string]ModelRate{}
+)
+
+// SetModelRates installs the COST_MODEL_RATES per-model overrides. Called
+// once at startup (cmd/biglaw) with the map parsed by the config layer;
+// replaces any previous set. Negative rates are dropped.
+func SetModelRates(rates map[string]ModelRate) {
+	clean := make(map[string]ModelRate, len(rates))
+	for model, r := range rates {
+		if r.In < 0 || r.Out < 0 {
+			continue
+		}
+		clean[strings.ToLower(strings.TrimSpace(model))] = r
+	}
+	modelRatesMu.Lock()
+	modelRates = clean
+	modelRatesMu.Unlock()
+}
+
 func init() {
-	applyPricingEnvOverrides(basePricing)
+	applyPricingEnvOverridesMarked(basePricing, baseEnvPriced)
 	applyClassPricingOverrides()
 }
 
@@ -258,6 +318,13 @@ func familySubstrings() map[string][]string {
 // (lowercased) ID contains any of the family's match substrings. Unset,
 // non-numeric, or negative values are ignored (the built-in rate stands).
 func applyPricingEnvOverrides(pricing map[string][2]float64) {
+	applyPricingEnvOverridesMarked(pricing, nil)
+}
+
+// applyPricingEnvOverridesMarked is applyPricingEnvOverrides plus tracking:
+// every model whose rate an env override touched is marked in priced (when
+// non-nil), so an explicit zero rate is distinguishable from "unpriced".
+func applyPricingEnvOverridesMarked(pricing map[string][2]float64, priced map[string]bool) {
 	for family, subs := range familySubstrings() {
 		in, inOK := parsePriceEnv("COST_" + strings.ToUpper(family) + "_IN")
 		out, outOK := parsePriceEnv("COST_" + strings.ToUpper(family) + "_OUT")
@@ -275,6 +342,9 @@ func applyPricingEnvOverrides(pricing map[string][2]float64) {
 				p[1] = out
 			}
 			pricing[model] = p
+			if priced != nil {
+				priced[model] = true
+			}
 		}
 	}
 }
@@ -287,9 +357,11 @@ func applyClassPricingOverrides() {
 		fam := strings.ToUpper(modelClasses[i].family)
 		if in, ok := parsePriceEnv("COST_" + fam + "_IN"); ok {
 			modelClasses[i].rate[0] = in
+			classEnvPriced[i] = true
 		}
 		if out, ok := parsePriceEnv("COST_" + fam + "_OUT"); ok {
 			modelClasses[i].rate[1] = out
+			classEnvPriced[i] = true
 		}
 	}
 }
@@ -316,25 +388,61 @@ func parsePriceEnv(name string) (float64, bool) {
 	return f, true
 }
 
+// resolvePricing resolves a model ID to its [input, output] rate and reports
+// two facts about it:
+//
+//   - recognised — the ID matched something (a COST_MODEL_RATES entry, an
+//     exact basePricing entry, or a modelClasses substring). False only for a
+//     genuinely unknown model, which records no cost (nil) from CalcCostUSD.
+//   - priced — the rate is trustworthy: either non-zero, or zero that an
+//     operator explicitly configured (COST_MODEL_RATES / COST_<FAMILY>_*).
+//     A recognised-but-placeholder {0, 0} rate is NOT priced; entries for
+//     such models are flagged PriceUnknown rather than silently billed $0.
+//
+// Resolution order: COST_MODEL_RATES (exact, then longest prefix) → exact
+// basePricing → first modelClasses substring match.
+func resolvePricing(model string) (rate [2]float64, priced, recognised bool) {
+	lm := strings.ToLower(model)
+
+	modelRatesMu.RLock()
+	if r, ok := modelRates[lm]; ok {
+		modelRatesMu.RUnlock()
+		return [2]float64{r.In, r.Out}, true, true
+	}
+	bestLen := -1
+	var best ModelRate
+	for prefix, r := range modelRates {
+		if len(prefix) > bestLen && strings.HasPrefix(lm, prefix) {
+			bestLen, best = len(prefix), r
+		}
+	}
+	modelRatesMu.RUnlock()
+	if bestLen >= 0 {
+		return [2]float64{best.In, best.Out}, true, true
+	}
+
+	if p, ok := basePricing[model]; ok {
+		return p, p != [2]float64{} || baseEnvPriced[model], true
+	}
+	for i, c := range modelClasses {
+		if containsAny(lm, c.match) {
+			return c.rate, c.rate != [2]float64{} || classEnvPriced[i], true
+		}
+	}
+	return [2]float64{}, false, false
+}
+
 // lookupPricing resolves a model ID to its [input, output] rate: an exact
 // basePricing hit first, then the first modelClasses substring match. The bool
 // is false only for a genuinely unrecognised model, which records no cost
 // (nil) rather than a misleading $0.00.
 func lookupPricing(model string) ([2]float64, bool) {
-	if p, ok := basePricing[model]; ok {
-		return p, true
-	}
-	lm := strings.ToLower(model)
-	for _, c := range modelClasses {
-		if containsAny(lm, c.match) {
-			return c.rate, true
-		}
-	}
-	return [2]float64{}, false
+	rate, _, recognised := resolvePricing(model)
+	return rate, recognised
 }
 
 func CalcCostUSD(model string, input, output, cacheWrite, cacheRead int) *float64 {
-	p, ok := lookupPricing(model)
+	p, _, ok := resolvePricing(model)
 	if !ok {
 		return nil
 	}
@@ -388,7 +496,7 @@ func (s *Store) Init(file string) error {
 	// Re-apply pricing overrides: init() ran before main loaded .env /
 	// Infisical, so env vars sourced there are only visible now. Assigning
 	// absolute rates is idempotent.
-	applyPricingEnvOverrides(basePricing)
+	applyPricingEnvOverridesMarked(basePricing, baseEnvPriced)
 	applyClassPricingOverrides()
 	s.file = file
 	if err := os.MkdirAll(filepath.Dir(file), 0755); err != nil {
@@ -458,6 +566,17 @@ func (s *Store) Close() {
 	})
 }
 
+// unpricedWarned dedupes the unknown-model warning: one WARN per model per
+// process, not one per call (a matter run can be tens of thousands of calls).
+var unpricedWarned sync.Map
+
+func warnUnpricedOnce(model string) {
+	if _, seen := unpricedWarned.LoadOrStore(model, struct{}{}); !seen {
+		slog.Warn("no pricing entry for model — its calls are recorded at $0 and flagged priceUnknown; set COST_MODEL_RATES (or a COST_<FAMILY>_IN/_OUT env) to price it",
+			"model", model)
+	}
+}
+
 func (s *Store) Record(req RecordRequest) {
 	entry := CostEntry{
 		ID:               uuid.New().String(),
@@ -476,6 +595,16 @@ func (s *Store) Record(req RecordRequest) {
 		TaskID:           req.TaskID,
 		ProfileID:        req.ProfileID,
 		AgentID:          req.AgentID,
+	}
+	// An unpriced model must never silently record $0: flag the entry (it
+	// persists, and Summarise counts it as UnpricedCalls) and warn once.
+	if _, priced, _ := resolvePricing(req.Model); req.Model != "" && !priced {
+		entry.PriceUnknown = true
+		if entry.CostUSD == nil {
+			zero := 0.0
+			entry.CostUSD = &zero
+		}
+		warnUnpricedOnce(req.Model)
 	}
 	s.mu.Lock()
 	s.entries = append(s.entries, entry)
@@ -547,6 +676,9 @@ func (s *Store) Summarise(entries []CostEntry) CostSummary {
 		sum.TotalCacheRead += cr
 		sum.TotalWh += wh
 		sum.EntryCount++
+		if e.PriceUnknown {
+			sum.UnpricedCalls++
+		}
 
 		m := sum.ByModel[e.Model]
 		if m == nil {

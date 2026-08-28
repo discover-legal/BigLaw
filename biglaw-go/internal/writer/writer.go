@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/discover-legal/biglaw-go/internal/embeddings"
 	"github.com/discover-legal/biglaw-go/internal/providers"
@@ -22,14 +24,25 @@ import (
 // Options tunes the writer. Zero values fall back to sane defaults in New.
 type Options struct {
 	Temperature       *float64
-	MaxToolIterations int                                // agentic loop cap per drafter
-	DraftMaxTokens    int                                // output budget per call
-	InputBudgetTokens int                                // bound on any single call's input (fit the model window)
-	MaxFindingsPerSec int                                // tight-agent cap; bigger clusters sub-fan-out
-	MaxClusters       int                                // top-level topic cap
-	ClusterThreshold  float64                            // cosine threshold for a finding to join a cluster
-	Persona           string                             // optional tone/voice block appended to drafter system prompts
-	RecordCost        func(resp *providers.ChatResponse) // optional cost hook
+	MaxToolIterations int     // agentic loop cap per drafter
+	DraftMaxTokens    int     // output budget per call
+	InputBudgetTokens int     // bound on any single call's input (fit the model window)
+	MaxFindingsPerSec int     // tight-agent cap; bigger clusters sub-fan-out
+	MaxClusters       int     // top-level topic cap
+	ClusterThreshold  float64 // cosine threshold for a finding to join a cluster
+	// DedupDisabled turns off the whole dedup/compression layer (WRITER_DEDUP=false):
+	// both the near-duplicate finding merge and the close-cluster merge. Default on.
+	DedupDisabled bool
+	// DedupThreshold is the token-shingle Jaccard at/above which two findings are
+	// near-duplicates and merge (citations unioned, strongest variant kept).
+	// 0 → defaultDedupThreshold; < 0 disables just this pass.
+	DedupThreshold float64
+	// ClusterMergeThreshold is the centroid cosine at/above which two topic clusters
+	// merge into one section (the one-issue-five-sections fix).
+	// 0 → defaultClusterMergeThreshold; < 0 disables just this pass.
+	ClusterMergeThreshold float64
+	Persona               string                             // optional tone/voice block appended to drafter system prompts
+	RecordCost            func(resp *providers.ChatResponse) // optional cost hook
 	// Specifics, when set, pulls figure-dense source passages (the document-backed
 	// extract_specifics) for a topic. Section drafters call it AT SYNTHESIS — both
 	// seeded into the opening prompt and available as a tool — to ground a section's
@@ -136,6 +149,15 @@ func New(embed *embeddings.Client, prov providers.Provider, model string, opt Op
 	}
 	if opt.ClusterThreshold == 0 {
 		opt.ClusterThreshold = 0.55
+	}
+	if opt.DedupThreshold == 0 {
+		opt.DedupThreshold = defaultDedupThreshold
+	}
+	if opt.ClusterMergeThreshold == 0 {
+		opt.ClusterMergeThreshold = defaultClusterMergeThreshold
+	}
+	if opt.DedupDisabled {
+		opt.DedupThreshold, opt.ClusterMergeThreshold = -1, -1
 	}
 	return &Writer{embed: embed, prov: prov, model: model, opt: opt, groundedCents: map[int64]bool{}}
 }
@@ -446,6 +468,14 @@ func (w *Writer) Write(taskDesc, workflowType string, findings []Finding) (strin
 	// writer (the merge then compresses the whole document to a stub — a real
 	// regression at high finding counts) and litter the deliverable with repetition.
 	findings = dedupeFindings(findings)
+	// Then the near-duplicate merge: findings that say the same thing in slightly
+	// different words (shingle Jaccard ≥ DedupThreshold) collapse to their strongest
+	// variant with citations unioned — the same-issue-re-litigated-five-times fix.
+	before := len(findings)
+	findings = mergeNearDuplicates(findings, w.opt.DedupThreshold)
+	if len(findings) < before {
+		slog.Info("writer dedup merged near-duplicate findings", "before", before, "after", len(findings), "threshold", w.opt.DedupThreshold)
+	}
 	w.seedGroundedMoney(findings)
 	ix := NewFindingIndex(w.embed, findings)
 
@@ -646,7 +676,7 @@ func (w *Writer) spineSections(ix *FindingIndex, required []string) []section {
 	// gets dumped unlabelled.
 	if len(orphans) > 0 {
 		sub := NewFindingIndex(w.embed, orphans)
-		clusters := cluster(sub, w.opt.ClusterThreshold, w.opt.MaxClusters)
+		clusters := cluster(sub, w.opt.ClusterThreshold, w.opt.ClusterMergeThreshold, w.opt.MaxClusters)
 		if len(clusters) == 0 { // no embeddings: keep everything as one labelled section
 			ids := make([]string, 0, len(orphans))
 			for _, f := range orphans {
@@ -794,7 +824,7 @@ func dedupIDs(ids []string) []string {
 // partition turns the finding set into tight sections: cluster, then split any
 // cluster larger than MaxFindingsPerSec into sub-sections (two-level fan-out).
 func (w *Writer) partition(ix *FindingIndex) []section {
-	clusters := cluster(ix, w.opt.ClusterThreshold, w.opt.MaxClusters)
+	clusters := cluster(ix, w.opt.ClusterThreshold, w.opt.ClusterMergeThreshold, w.opt.MaxClusters)
 	var secs []section
 	for _, c := range clusters {
 		for _, part := range chunkFindings(c.Items, w.opt.MaxFindingsPerSec) {
@@ -1025,6 +1055,7 @@ Be COMPREHENSIVE for this category: cover the specific allegations, the parties 
 CRITICAL — for ANY specific figure or precise reference (a dollar amount, a percentage or rate, a count, a date, an account number, or a statutory/section/clause citation), DO NOT write the number or citation yourself. Instead write the NAME of the matching figure from the FIGURES list above (e.g. "the scheme generated Zephyr in excess profits across Quasar trades") — write the name exactly, capitalised. The exact grounded value is substituted for the name automatically, so you never recall a digit — this is how we keep every figure correct. Use a name for EVERY specific you reference, and use ONLY names from the list (if you need a figure that isn't listed, call extract_specifics). NEVER compute, add, sum, total, or otherwise derive a number yourself.
 Where the findings support it, develop the section's prose in this order: the governing statute, rule, or standard; the alleged conduct; the quantities and amounts involved; the parties implicated; and the resulting exposure. Carry statutory and internal-section identifiers exactly as given — via their FIGURES names where listed — never shortened or paraphrased (write "Section 9.1", never "Section 9").
 If a finding is marked UNVERIFIED, either omit it or caveat it explicitly.
+ONE SECTION PER POINT: confine this section to ITS OWN topic. Do not re-argue an issue, restate a fact or figure, or repeat a recommendation that belongs to another section — refer to it in a single brief cross-reference clause at most. Do not include boilerplate lists (e.g. a general disclosure-request or document-request list) unless this section is the one dedicated to that list; the document states each such list exactly once.
 Write FLOWING, professional client-ready prose — connected paragraphs, not an outline. Every sentence must be complete; never end mid-phrase. Do NOT emit internal labels or scaffolding such as "Issue:", "Brief Answer:", "Stronger View", "Counter-Argument", "Open Questions", "Recommendations:", "Analysis:". Do NOT write any commentary about your own process or about the findings/inputs — never write things like "Since there are no findings…", "I will write…", "Based on the provided grounded facts…", "As an AI". No finding numbers or agent names. Output only the section's prose (no heading).%s%s%s`,
 		oneLine(taskDesc), workflowType, s.Title, s.Brief, figuresBlock, factsBlock, extra.priorCompacted)
 
@@ -1099,8 +1130,10 @@ Write FLOWING, professional client-ready prose — connected paragraphs, not an 
 	// A refusal / role-clarification response is not a draft at all — a weak model
 	// arguing with its inputs ("I need to clarify my role here…") must never ship as
 	// section content. Discard it wholesale and render the grounded fallback instead.
+	fromModel := true
 	if result == "" || isRefusalDraft(result) {
 		result = w.fallbackSection(s, ix) // never blank
+		fromModel = false
 	}
 	// Mechanically attach the section's grounded figures the drafter didn't already
 	// state — from BOTH the per-section figure queries AND this section's mapped
@@ -1117,6 +1150,11 @@ Write FLOWING, professional client-ready prose — connected paragraphs, not an 
 	// substituted globally; scrub any UNMAPPED pool name the drafter hallucinated
 	// (outside quoted spans — quotes are never edited) and log what remains.
 	result = scrubUnresolvedHandles(result, handled)
+	// A figure NAME the drafter coined itself (not a pool codename) is an unfilled slot —
+	// flag it visibly. Model prose only; the fallback renders verbatim evidence untouched.
+	if fromModel {
+		result = flagUnfilledFigureNames(result)
+	}
 	w.recordGroundedMoney(handled)
 	result = sanitizeDraft(result)
 	// Authorship QA: no orphan fragments, no pasted ledger runs (tables instead), no
@@ -1492,31 +1530,272 @@ var (
 	reSpaceBefPunct = regexp.MustCompile(`[ \t]+([.,;)])`)
 )
 
-// resolveFigureHandles substitutes each handle (case-insensitive, word-boundary) with its exact
-// grounded value, then strips any stray {{FIG:…}} the drafter emitted out of habit and tidies
-// the artefacts a substitution can leave (empty parens, doubled spaces, space-before-punct).
+// figGapPrefix opens the visible gap marker: a slot whose figure could not be verified
+// renders as "[FIGURE NOT VERIFIED: <label>]" — a reviewer sees the hole, never a wrong
+// number standing in for it.
+const figGapPrefix = "[FIGURE NOT VERIFIED: "
+
+var reGapMarker = regexp.MustCompile(`\[FIGURE NOT VERIFIED: [^\]\n]*\]`)
+
+// resolveFigureHandles substitutes each handle (case-insensitive, word-boundary) with its
+// exact grounded value — but only into a slot the figure verifiably matches. A weak drafter
+// reuses ONE handle for every slot in a list ("TD chequing of Zephyr, a TFSA of Zephyr, an
+// RRSP of Zephyr"), which blind global substitution turned into the same constant filling
+// every asset (the $18,900-everywhere / $1,640,000-for-the-inheritance corruption). So each
+// OCCURRENCE is checked: the clause around the slot is matched against the figure's own
+// source row; if another handled figure's row matches the clause strictly better, the slot
+// is describing a DIFFERENT figure — render the flagged gap instead of the wrong constant.
+// A slot with no contextual signal either way substitutes (the drafter named the handle
+// deliberately); a figure can be omitted or flagged, but never stated wrong.
 //
-// The substitution is LITERAL (ReplaceAllLiteralString): a grounded value like "$7,800,000"
-// contains "$7", which ReplaceAllString would expand as a (nonexistent) capture-group
-// reference — eating the "$7" and corrupting the figure to ",800,000" (the
-// "approximately,800,000" bug). Values are data, never replacement templates.
+// The substitution is LITERAL (never a replacement template): a grounded value like
+// "$7,800,000" contains "$7", which ReplaceAllString would expand as a (nonexistent)
+// capture-group reference — eating the "$7" and corrupting the figure to ",800,000".
 func resolveFigureHandles(text string, handled []handledFig) string {
-	for _, h := range handled {
-		re := regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(h.Handle) + `\b`)
-		text = re.ReplaceAllLiteralString(text, h.Value)
+	// Each figure's match tokens: its source row with the value itself removed, plus the
+	// citation source — the slot must match the row's WORDS, not its digits.
+	ctxToks := make([]map[string]bool, len(handled))
+	for i, h := range handled {
+		ctx := h.Context
+		if h.Value != "" {
+			ctx = strings.ReplaceAll(ctx, h.Value, " ")
+		}
+		ctxToks[i] = verifyTokens(ctx + " " + h.Source)
 	}
-	text = rePlaceholder.ReplaceAllString(text, "")
+	for i, h := range handled {
+		re := regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(h.Handle) + `\b`)
+		locs := re.FindAllStringIndex(text, -1)
+		if len(locs) == 0 {
+			continue
+		}
+		var b strings.Builder
+		prev := 0
+		for _, loc := range locs {
+			b.WriteString(text[prev:loc[0]])
+			wt := verifyTokens(clauseAround(text, loc[0], loc[1]))
+			own := overlapCount(wt, ctxToks[i])
+			bestOther := 0
+			for j := range handled {
+				if j == i {
+					continue
+				}
+				if n := overlapCount(wt, ctxToks[j]); n > bestOther {
+					bestOther = n
+				}
+			}
+			if own >= bestOther {
+				b.WriteString(h.Value)
+			} else {
+				slog.Warn("figure handle used in a slot matching a different figure — flagged, not substituted",
+					"handle", h.Handle, "value", h.Value)
+				b.WriteString(figGapPrefix + figureLabel(h.Context, h.Value) + "]")
+			}
+			prev = loc[1]
+		}
+		b.WriteString(text[prev:])
+		text = b.String()
+	}
+	// A stray {{FIG:…}} the drafter emitted out of habit is an unfilled slot too — flag it
+	// with its own description, never drop it silently.
+	text = rePlaceholder.ReplaceAllStringFunc(text, func(m string) string {
+		return figGapPrefix + rePlaceholder.FindStringSubmatch(m)[1] + "]"
+	})
 	text = reEmptyParens.ReplaceAllString(text, "")
 	text = reSpaceRun.ReplaceAllString(text, " ")
 	return reSpaceBefPunct.ReplaceAllString(text, "$1")
 }
 
+// verifyTokens is the slot-verification match currency: lowercased unicode word tokens
+// (letter/digit runs, split on EVERY other rune so "chequing/savings" yields both words)
+// of length ≥ 4. Accent-preserving and rune-safe.
+func verifyTokens(s string) map[string]bool {
+	out := map[string]bool{}
+	for _, w := range strings.FieldsFunc(s, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsNumber(r)
+	}) {
+		if utf8.RuneCountInString(w) >= 4 {
+			out[strings.ToLower(w)] = true
+		}
+	}
+	return out
+}
+
+func overlapCount(a, b map[string]bool) int {
+	n := 0
+	for t := range a {
+		if b[t] {
+			n++
+		}
+	}
+	return n
+}
+
+// clauseAround returns the clause containing a slot (the handle occurrence excluded):
+// bounded by sentence/clause punctuation on either side. ASCII boundaries only, so the
+// byte scan never lands inside a multibyte rune.
+func clauseAround(text string, start, end int) string {
+	isBoundary := func(c byte) bool {
+		return c == '.' || c == ',' || c == ';' || c == ':' || c == '(' || c == ')' || c == '\n'
+	}
+	lo := start
+	for lo > 0 && start-lo < 160 && !isBoundary(text[lo-1]) {
+		lo--
+	}
+	hi := end
+	for hi < len(text) && hi-end < 100 && !isBoundary(text[hi]) {
+		hi++
+	}
+	return text[lo:start] + " " + text[end:hi]
+}
+
 var rePlaceholder = regexp.MustCompile(`\{\{\s*FIG:\s*([^}]+?)\s*\}\}`)
+
+// figureNounTail is the generic figure-word a drafter-INVENTED placeholder name ends with.
+// Told to "write the NAME of the matching figure", a weak model coins a descriptive name of
+// its own ("Marc's Proposed Child-Support Payment", "Sam's Per-Session Psychological Cost")
+// instead of a pool codename — which nothing substituted or scrubbed, so the literal token
+// shipped where a number belonged. A Title-Case run ending in one of these is a named slot,
+// not prose. Deliberately excludes "figure(s)" (the "**Key figures:**" header) and generic
+// legal-term tails ("Act", "Guidelines").
+var figureNounTail = map[string]bool{
+	"income": true, "payment": true, "payments": true, "cost": true, "costs": true,
+	"percentage": true, "amount": true, "amounts": true, "value": true, "rate": true,
+	"rates": true, "cutoff": true, "frequency": true, "allocation": true,
+	"estimate": true, "total": true, "balance": true, "date": true,
+}
+
+var (
+	reBoldSpan = regexp.MustCompile(`\*\*([^*\n]{3,80})\*\*`)
+	reNonSpace = regexp.MustCompile(`\S+`)
+)
+
+// honorificAbbrev: a capitalized word ending "." that does NOT end the placeholder run
+// ("Dr. Farah Treatment Funding Cutoff" is one name, not two).
+var honorificAbbrev = map[string]bool{"dr.": true, "mr.": true, "ms.": true, "mrs.": true, "st.": true, "no.": true}
+
+// flagUnfilledFigureNames turns a drafter-invented figure NAME left literally in prose into
+// a visible flagged gap — never a silent placeholder posing as content. Model-drafted prose
+// only: verbatim fallback/evidence text is never rewritten.
+func flagUnfilledFigureNames(text string) string {
+	lines := strings.Split(text, "\n")
+	for i, ln := range lines {
+		t := strings.TrimSpace(ln)
+		if t == "" || strings.HasPrefix(t, "#") || strings.HasPrefix(t, "|") ||
+			strings.HasPrefix(t, "- ") || (strings.HasPrefix(t, "*") && !strings.HasPrefix(t, "**")) {
+			continue
+		}
+		ln = reBoldSpan.ReplaceAllStringFunc(ln, func(m string) string {
+			inner := strings.TrimSpace(m[2 : len(m)-2])
+			if isPlaceholderPhrase(inner) {
+				return figGapPrefix + inner + "]"
+			}
+			return m
+		})
+		lines[i] = flagBarePlaceholders(ln)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// isPlaceholderPhrase reports whether a phrase is a named figure slot: ≥2 Title-Case (or
+// year) words ending in a figure noun, and carrying no actual $/% figure. "Date" needs ≥3
+// words so a legitimate defined term like "Valuation Date" is never flagged.
+func isPlaceholderPhrase(s string) bool {
+	if reMoney.MatchString(s) || rePct.MatchString(s) {
+		return false
+	}
+	fs := strings.Fields(s)
+	if len(fs) < 2 {
+		return false
+	}
+	for _, w := range fs {
+		if !capishWord(w) {
+			return false
+		}
+	}
+	last := strings.ToLower(strings.Trim(fs[len(fs)-1], ".,;:!?)]*"))
+	if !figureNounTail[last] {
+		return false
+	}
+	if last == "date" && len(fs) < 3 {
+		return false
+	}
+	return true
+}
+
+// capishWord: starts with an uppercase letter, or is a 4-digit year — the word shape of a
+// coined figure name ("Marc's", "2025", "Per-Session", "Three-Year").
+func capishWord(w string) bool {
+	w = strings.TrimLeft(w, "(\"'“‘[")
+	if w == "" {
+		return false
+	}
+	r, _ := utf8.DecodeRuneInString(w)
+	if unicode.IsUpper(r) {
+		return true
+	}
+	if len(w) >= 4 {
+		year := true
+		for i := 0; i < 4; i++ {
+			if w[i] < '0' || w[i] > '9' {
+				year = false
+				break
+			}
+		}
+		return year
+	}
+	return false
+}
+
+// flagBarePlaceholders flags un-bolded coined figure names in one line: maximal runs of
+// capish words (broken at clause punctuation, honorifics excepted) whose last word is a
+// figure noun. Quoted spans and already-flagged markers are left untouched.
+func flagBarePlaceholders(ln string) string {
+	spans := quotedSpans(ln)
+	for _, m := range reGapMarker.FindAllStringIndex(ln, -1) {
+		spans = append(spans, [2]int{m[0], m[1]})
+	}
+	words := reNonSpace.FindAllStringIndex(ln, -1)
+	var b strings.Builder
+	prev := 0
+	i := 0
+	for i < len(words) {
+		if !capishWord(ln[words[i][0]:words[i][1]]) {
+			i++
+			continue
+		}
+		j := i
+		for j < len(words) {
+			w := ln[words[j][0]:words[j][1]]
+			if !capishWord(w) {
+				break
+			}
+			j++
+			if strings.ContainsAny(w[len(w)-1:], ".,;:!?") && !honorificAbbrev[strings.ToLower(w)] {
+				break
+			}
+		}
+		if j-i >= 2 && isPlaceholderPhrase(ln[words[i][0]:words[j-1][1]]) {
+			start, end := words[i][0], words[j-1][1]
+			for end > start && strings.ContainsAny(ln[end-1:end], ".,;:!?)") {
+				end--
+			}
+			if !inSpans(spans, start, end) {
+				b.WriteString(ln[prev:start])
+				b.WriteString(figGapPrefix + ln[start:end] + "]")
+				prev = end
+			}
+		}
+		i = j
+	}
+	b.WriteString(ln[prev:])
+	return b.String()
+}
 
 // resolveFigurePlaceholders replaces each {{FIG: description}} with the salient
 // figure of the grounded row that best matches the description (by content-word
-// overlap). No confident match → the placeholder is removed (never guessed), so the
-// prose can omit a figure but can never state a wrong one.
+// overlap). No confident match → the placeholder renders as a flagged gap (never a
+// guessed number, never a silent drop), so the prose can leave a visible hole for a
+// human but can never state a wrong figure.
 func resolveFigurePlaceholders(text string, figs []SpecificHit) string {
 	out := rePlaceholder.ReplaceAllStringFunc(text, func(m string) string {
 		desc := rePlaceholder.FindStringSubmatch(m)[1]
@@ -1531,7 +1810,7 @@ func resolveFigurePlaceholders(text string, figs []SpecificHit) string {
 				return sal
 			}
 		}
-		return "" // unmatched → drop, never guess a number
+		return figGapPrefix + desc + "]" // unmatched → flag, never guess a number
 	})
 	// Tidy artefacts a dropped placeholder leaves behind: empty/whitespace-only parens
 	// (e.g. a citation "()" the drafter emitted with no source), doubled spaces, and a
@@ -1702,29 +1981,106 @@ func attachKeyFigures(text string, hits []SpecificHit) string {
 	return text + "\n\n**Key figures:**\n" + strings.Join(lines, "\n")
 }
 
-// figureLabel renders a short human label for a figure row: the row text with the
-// figure value removed and trimmed to a phrase — so the Key-figures list reads
-// "Excess profits to Oceanic Fund: $7,800,000 (src)", not a pasted exhibit row.
+// figureLabel renders a short human label for a figure row — the CLAUSE that captions the
+// figure, not a raw substring window. The old form (row minus the value, hard-cut at 64
+// BYTES) shipped garbled mid-sentence concatenations carrying OTHER figures ("TD
+// chequing/savings: - TFSA: $61,300 (her: $18,900") and could split a multibyte rune. Now:
+// the clause immediately preceding the figure is the label, every remaining $/% figure is
+// stripped, and the trim is rune-safe on a word boundary.
 var reLeadEnum = regexp.MustCompile(`^\s*[\(\[]?\d+[.)\]]\s*`) // "24. " / "25) " / "(3) " paragraph numbers
 
 func figureLabel(row, sal string) string {
 	label := oneLine(row)
 	if i := strings.Index(label, sal); i >= 0 {
-		label = label[:i] + label[i+len(sal):]
-	}
-	label = reLeadEnum.ReplaceAllString(label, "") // drop a leading paragraph/list number
-	label = strings.Trim(strings.Join(strings.Fields(label), " "), " -—:|·,\t")
-	if len(label) > 64 { // cut on a word boundary, not mid-phrase
-		cut := label[:64]
-		if k := strings.LastIndex(cut, " "); k > 20 {
-			cut = cut[:k]
+		if c := precedingClause(label, i); c != "" {
+			label = c
+		} else {
+			label = label[:i] + label[i+len(sal):]
 		}
-		label = strings.TrimRight(cut, " -—:|·,")
 	}
+	// A label must never carry a figure of its own — the value column states the figure.
+	label = reMoney.ReplaceAllString(label, "")
+	label = rePct.ReplaceAllString(label, "")
+	label = reLeadEnum.ReplaceAllString(label, "") // drop a leading paragraph/list number
+	label = strings.Trim(strings.Join(strings.Fields(label), " "), " -—:|·,;(\t")
+	label = trimTrailingConnectives(label)
+	label = truncateRunesWordSafe(label, 64)
 	if label == "" {
 		label = "figure"
 	}
 	return label
+}
+
+// precedingClause returns the clause captioning the figure at byte offset `at`: skip the
+// separators between caption and value, then collect back to the previous clause boundary.
+// A clause with no letters (a year range, a bare enumeration) hops one boundary further.
+func precedingClause(s string, at int) string {
+	isSkip := func(c byte) bool {
+		return c == ' ' || c == '\t' || c == ':' || c == ',' || c == ')' || c == '(' ||
+			c == '|' || c == '"' || c == '\''
+	}
+	isBoundary := func(i int) bool {
+		c := s[i]
+		if c == '.' || c == ';' || c == ':' || c == '(' || c == ')' || c == '|' || c == '\t' {
+			return true
+		}
+		return c == '-' && i > 0 && s[i-1] == ' ' // " - " separator, never an in-word hyphen
+	}
+	end := at
+	for hops := 0; hops < 4; hops++ {
+		for end > 0 && (isSkip(s[end-1]) || (s[end-1] == '-' && end >= 2 && s[end-2] == ' ')) {
+			end--
+		}
+		lo := end
+		for lo > 0 && !isBoundary(lo-1) {
+			lo--
+		}
+		clause := strings.TrimSpace(s[lo:end])
+		if strings.IndexFunc(clause, unicode.IsLetter) >= 0 {
+			return clause
+		}
+		if lo == 0 {
+			return ""
+		}
+		end = lo - 1
+	}
+	return ""
+}
+
+// trimTrailingConnectives drops dangling function words a clause cut can leave
+// ("Appraised 12 June 2026 at" → "Appraised 12 June 2026").
+func trimTrailingConnectives(s string) string {
+	fs := strings.Fields(s)
+	for len(fs) > 0 {
+		switch strings.ToLower(fs[len(fs)-1]) {
+		case "of", "at", "was", "is", "the", "a", "an", "to", "for", "as", "by", "in", "on", "and", "or", "with", "per":
+			fs = fs[:len(fs)-1]
+		default:
+			return strings.Join(fs, " ")
+		}
+	}
+	return ""
+}
+
+// truncateRunesWordSafe caps a label at maxRunes RUNES, cutting on a word boundary —
+// never mid-word, never mid-UTF-8 (the "��lodie" class of mojibake).
+func truncateRunesWordSafe(s string, maxRunes int) string {
+	if utf8.RuneCountInString(s) <= maxRunes {
+		return s
+	}
+	n, idx := 0, len(s)
+	for i := range s {
+		if n == maxRunes {
+			idx = i
+			break
+		}
+		n++
+	}
+	cut := s[:idx]
+	if k := strings.LastIndex(cut, " "); k > 20 {
+		cut = cut[:k]
+	}
+	return strings.TrimRight(cut, " -—:|·,;")
 }
 
 // specificsToJSON shapes figure hits for an extract_specifics tool result.
@@ -1794,9 +2150,9 @@ func (w *Writer) mergeBlocks(taskDesc, workflowType string, blocks []string, dep
 // coherenceMerge runs one bounded dedup/polish pass over a set of section blocks.
 // final=true also adds an opening and smooths transitions for the whole document.
 func (w *Writer) coherenceMerge(taskDesc, workflowType, draft string, final bool) string {
-	instr := "Combine the sections below into coherent prose, REMOVING any repetition across them while keeping every distinct factual point and the section headings (## ). Do not add new facts, figures, or citations."
+	instr := "Combine the sections below into coherent prose, REMOVING any repetition across them while keeping every distinct factual point and the section headings (## ). " + antiRedundancyContract + " Do not add new facts, figures, or citations."
 	if final {
-		instr = "Polish the sections below into one coherent, client-ready deliverable: add a brief executive opening, smooth the transitions, REMOVE duplication across sections, and keep every distinct factual point and the section headings (## ). Do not add new facts, figures, or citations."
+		instr = "Polish the sections below into one coherent, client-ready deliverable: add a brief executive opening, smooth the transitions, REMOVE duplication across sections, and keep every distinct factual point and the section headings (## ). " + antiRedundancyContract + " Do not add new facts, figures, or citations."
 	}
 	prompt := fmt.Sprintf("TASK: %s\nWORKFLOW: %s\n\n%s\n\nSECTIONS:\n%s", oneLine(taskDesc), workflowType, instr, draft)
 	out, err := w.complete(stitchSystem, prompt, w.opt.DraftMaxTokens*2, nil)
@@ -1923,6 +2279,9 @@ const (
 	plannerSystem = "You organise legal findings into a clean document outline. You output only the requested headings and briefs, nothing else."
 	drafterSystem = "You draft ONE section of a client deliverable in flowing, professional prose. Ground every statement in the findings retrieved via search_findings; never invent facts, figures, or citations. Write only this section's substance as connected paragraphs — do NOT add document-level structure (no executive summary, no overall conclusion) and do NOT emit internal labels or scaffolding such as 'Issue:', 'Rule:', 'Brief Answer:', 'Applicable Law:', 'Analysis:', 'Stronger View', 'Counter-Argument', 'Open Questions', 'Conclusion:'. No meta-commentary about your process or the inputs."
 	stitchSystem  = "You are a senior legal editor assembling section drafts into one coherent client-ready deliverable. You never introduce facts the drafts do not contain."
+	// antiRedundancyContract is the stitch-level dedup mandate: the assembled document
+	// reads like ONE memo, not N overlapping ones.
+	antiRedundancyContract = "ANTI-REDUNDANCY CONTRACT: each fact, figure, and recommendation appears in exactly ONE section — the section it most belongs to; where another section touches it, replace the repetition with a brief cross-reference (e.g. \"as set out under [heading]\"). Boilerplate lists (e.g. disclosure or document requests) appear ONCE, consolidated in the single most relevant section, never repeated per section."
 )
 
 // findingsToJSON shapes findings for a search_findings tool result.

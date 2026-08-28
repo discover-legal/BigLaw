@@ -17,6 +17,12 @@ var familyTools = []string{
 	"trellis_search_cases", "trellis_get_docket",
 }
 
+// familyMathTools extends the family bench with family_law_math for the
+// analysts whose work is arithmetic-bearing (support, property, procedure) —
+// the deterministic tool does the equalization/set-off/s.7 math so the model
+// never computes schedules in prose.
+var familyMathTools = append(append([]string{}, familyTools...), "family_law_math")
+
 var tier2FamilySpecialist = []types.AgentDefinition{
 	{
 		ID: "custody-parenting-analyst", Name: "Custody & Parenting Analyst",
@@ -46,8 +52,9 @@ Framework:
 4. TABLE/FORMULA AMOUNT vs deviations: shared-care set-offs, split custody, undue hardship — state the threshold and who bears it.
 5. SPECIAL/EXTRAORDINARY EXPENSES: childcare, medical, education, activities — proportionate sharing by income; require receipts and net-of-tax-credit figures.
 6. RETROACTIVITY: notice date, blameworthy conduct, child's circumstances, hardship of an award.
-Show the arithmetic. Every number needs a document citation; flag any figure that rests on a party's assertion alone.`,
-		AllowedTools: familyTools,
+Show the arithmetic. Every number needs a document citation; flag any figure that rests on a party's assertion alone.
+Use family_law_math for every calculation (set-offs, s.7 proportionate shares, income averaging) — never compute schedules in prose.`,
+		AllowedTools: familyMathTools,
 		Skills:       []string{"child-support", "support-guidelines", "income-determination", "imputation"},
 	},
 	{
@@ -62,8 +69,9 @@ Framework:
 4. INTERACTION with child support (child support ranks first) and with property division (a larger equalization can reduce need).
 5. VARIATION/TERMINATION: material change, retirement, re-partnering, agreed review conditions.
 6. Present LOW / MID / HIGH scenarios with the assumptions that drive each, so counsel can negotiate from the range rather than a point.
-Tax treatment differs by jurisdiction and by periodic-vs-lump-sum — always flag it for the tax analyst.`,
-		AllowedTools: familyTools,
+Tax treatment differs by jurisdiction and by periodic-vs-lump-sum — always flag it for the tax analyst.
+Use family_law_math for income averaging and any support arithmetic — never compute figures in prose.`,
+		AllowedTools: familyMathTools,
 		Skills:       []string{"spousal-support", "support-duration", "compensatory-support"},
 	},
 	{
@@ -78,8 +86,9 @@ Framework:
 4. PENSIONS AND EQUITY COMP: identify valuation method (actuarial vs division-at-source), vested vs unvested, and the if-and-when problem for options/RSUs.
 5. BUSINESS INTERESTS: minority discounts, double-dipping against support income, valuation-date disputes → flag for expert valuation.
 6. TRACING & DISSIPATION: follow excluded funds through accounts; flag transfers to relatives, crypto movements, or unusual withdrawals near separation.
-Output the division schedule as a table with a source citation per line, and a list of missing disclosure blocking completion.`,
-		AllowedTools: familyTools,
+Output the division schedule as a table with a source citation per line, and a list of missing disclosure blocking completion.
+Use family_law_math (operation: equalization) to compute the NFP schedule and equalization payment — never do the arithmetic in prose.`,
+		AllowedTools: familyMathTools,
 		Skills:       []string{"property-division", "equalization", "matrimonial-home", "pension-division"},
 	},
 	{
@@ -125,8 +134,9 @@ Framework:
 4. LIMITATION AND NOTICE PERIODS: equalization/property claims and variation applications carry deadlines — calendar them the day the file opens.
 5. OFFERS AND COSTS: track formal offers to settle and their costs consequences; family costs rules reward reasonableness.
 6. ENFORCEMENT: support enforcement agencies, contempt for parenting breaches, security for payment.
-Output a live procedural roadmap: done / next / blocked-on-disclosure, with dates.`,
-		AllowedTools: familyTools,
+Output a live procedural roadmap: done / next / blocked-on-disclosure, with dates.
+Use family_law_math when a motion or offer needs support or equalization figures — never compute them in prose.`,
+		AllowedTools: familyMathTools,
 		Skills:       []string{"family-procedure", "financial-disclosure", "interim-motions", "case-conference"},
 	},
 	{

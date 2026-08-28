@@ -4,6 +4,8 @@
 package config
 
 import (
+	"encoding/json"
+	"log/slog"
 	"net"
 	"net/url"
 	"os"
@@ -48,6 +50,29 @@ func envFloat(key string, fallback float64) float64 {
 		return fallback
 	}
 	return f
+}
+
+// envModelRates parses a COST_MODEL_RATES-style env var: a JSON object of
+// model ID → {"in": <usd/1M input tokens>, "out": <usd/1M output tokens>}.
+// Malformed JSON is ignored with a warning (the built-in rate table stands);
+// entries with negative rates are dropped individually.
+func envModelRates(key string) map[string]ModelRate {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return nil
+	}
+	var parsed map[string]ModelRate
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		slog.Warn("ignoring malformed model-rate JSON", "env", key, "error", err)
+		return nil
+	}
+	for model, r := range parsed {
+		if r.In < 0 || r.Out < 0 {
+			slog.Warn("ignoring negative model rate", "env", key, "model", model)
+			delete(parsed, model)
+		}
+	}
+	return parsed
 }
 
 func envList(key, fallback string) []string {
@@ -100,6 +125,11 @@ func Load() *Config {
 			DyTopo:           envBool("DYTOPO_DRAFTING", false),
 			AgentsPerSection: envInt("DRAFTING_AGENTS_PER_SECTION", 2),
 			Rounds:           envInt("DRAFTING_ROUNDS", 2),
+		},
+		Writer: WriterConfig{
+			Dedup:                 envBool("WRITER_DEDUP", true),
+			DedupThreshold:        envFloat("WRITER_DEDUP_THRESHOLD", 0.5),
+			ClusterMergeThreshold: envFloat("WRITER_CLUSTER_MERGE_THRESHOLD", 0.8),
 		},
 		BELOSpine:          envBool("BELO_SPINE", false),         // spine from typed Conduct nodes vs LLM enumeration
 		ReentrantMachinery: envBool("REENTRANT_MACHINERY", true), // round-boundary re-entry of the selective machinery (false → one-shot round 0)
@@ -157,7 +187,14 @@ func Load() *Config {
 			CitationDropUnsupported: envBool("DEBATE_CITATION_DROP_UNSUPPORTED", false),
 			AdversarialEnabled:      envBool("DEBATE_ADVERSARIAL_ENABLED", true),
 			VerificationPasses:      envInt("DEBATE_VERIFICATION_PASSES", 10),
-			GateConfidenceThreshold: envFloat("DEBATE_GATE_CONFIDENCE_THRESHOLD", 0.80),
+			// GATE_CONFIDENCE_THRESHOLD is the canonical knob; the older
+			// DEBATE_GATE_CONFIDENCE_THRESHOLD name is honoured as fallback.
+			GateConfidenceThreshold: envFloat("GATE_CONFIDENCE_THRESHOLD", envFloat("DEBATE_GATE_CONFIDENCE_THRESHOLD", 0.80)),
+		},
+		Gate: GateConfig{
+			Policy:        normalizeEnum(os.Getenv("GATE_POLICY"), "calibrated", "strict", "calibrated"),
+			MaxPerTask:    envInt("GATE_MAX_PER_TASK", 25),
+			RankedSampleK: envInt("GATE_RANKED_SAMPLE_K", 10),
 		},
 		Presentation: PresentationConfig{
 			Mode:     env("UI_MODE", "lawyer"),
@@ -207,6 +244,9 @@ func Load() *Config {
 			CostFile:        env("COST_LOG_FILE", "./data/costs.jsonl"),
 			PlaybooksFile:   env("PLAYBOOKS_FILE", "./data/playbooks.json"),
 			ClientVoiceFile: env("CLIENT_VOICE_FILE", "./data/clientvoice.json"),
+		},
+		Cost: CostConfig{
+			ModelRates: envModelRates("COST_MODEL_RATES"),
 		},
 		Queue: QueueConfig{
 			Concurrency:    envInt("QUEUE_CONCURRENCY", 3),

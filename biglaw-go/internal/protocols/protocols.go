@@ -8,7 +8,9 @@ package protocols
 import (
 	"fmt"
 	"log/slog"
+	"math"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -422,23 +424,164 @@ func (r *Runner) RunVerification(finding types.Finding, taskID string) (types.Ve
 
 // ─── 4. Human gate ────────────────────────────────────────────────────────────
 
+// Degenerate-confidence detection constants. When the model behind a round
+// emits near-constant confidence (e.g. 0.8 on every finding), the absolute
+// threshold carries no signal and would flood the human gate.
+const (
+	// degenerateMinSample: distributions smaller than this are never treated
+	// as degenerate — a handful of findings sharing a value is normal.
+	degenerateMinSample = 6
+	// degenerateStddevEpsilon: stddev below this ⇒ near-constant.
+	degenerateStddevEpsilon = 0.02
+	// degenerateShareFraction: one value (2-dp bucket) covering more than
+	// this fraction of findings ⇒ near-constant.
+	degenerateShareFraction = 0.80
+)
+
+func (r *Runner) needsGate(f types.Finding) bool {
+	return f.Confidence < r.cfg.Debate.GateConfidenceThreshold ||
+		(f.Challenged && !f.Resolved) ||
+		(f.VerificationResult != nil && !f.VerificationResult.Passed)
+}
+
+func newGateRequest(taskID string, f types.Finding) types.GateRequest {
+	return types.GateRequest{
+		ID:        uuid.New().String(),
+		TaskID:    taskID,
+		FindingID: f.ID,
+		Finding:   f,
+		Status:    "pending",
+		CreatedAt: time.Now(),
+	}
+}
+
+// IdentifyGates is the strict (legacy) gate policy: every finding meeting the
+// gate criteria is routed to a human, unbounded.
 func (r *Runner) IdentifyGates(taskID string, findings []types.Finding) []types.GateRequest {
-	threshold := r.cfg.Debate.GateConfidenceThreshold
 	var gates []types.GateRequest
 	for _, f := range findings {
-		needsGate := f.Confidence < threshold ||
-			(f.Challenged && !f.Resolved) ||
-			(f.VerificationResult != nil && !f.VerificationResult.Passed)
-		if needsGate {
-			gates = append(gates, types.GateRequest{
-				ID:        uuid.New().String(),
-				TaskID:    taskID,
-				FindingID: f.ID,
-				Finding:   f,
-				Status:    "pending",
-				CreatedAt: time.Now(),
-			})
+		if r.needsGate(f) {
+			gates = append(gates, newGateRequest(taskID, f))
 		}
+	}
+	return gates
+}
+
+// degenerateConfidence reports whether a round's confidence distribution is
+// near-constant — either stddev below epsilon or one value shared by more
+// than degenerateShareFraction of findings.
+func degenerateConfidence(findings []types.Finding) bool {
+	n := len(findings)
+	if n < degenerateMinSample {
+		return false
+	}
+	var sum, sumSq float64
+	buckets := map[int]int{}
+	for _, f := range findings {
+		sum += f.Confidence
+		sumSq += f.Confidence * f.Confidence
+		buckets[int(math.Round(f.Confidence*100))]++
+	}
+	mean := sum / float64(n)
+	variance := sumSq/float64(n) - mean*mean
+	if variance < 0 {
+		variance = 0
+	}
+	if math.Sqrt(variance) < degenerateStddevEpsilon {
+		return true
+	}
+	for _, c := range buckets {
+		if float64(c) > degenerateShareFraction*float64(n) {
+			return true
+		}
+	}
+	return false
+}
+
+// gateWorthiness orders candidates most-gate-worthy first: challenged and
+// unresolved findings, then verification failures, then lowest confidence,
+// then fewest citations. Stable, so round order breaks remaining ties.
+func rankGateWorthy(fs []types.Finding) {
+	score := func(f types.Finding) (int, int) {
+		challenged := 0
+		if f.Challenged && !f.Resolved {
+			challenged = 1
+		}
+		verFailed := 0
+		if f.VerificationResult != nil && !f.VerificationResult.Passed {
+			verFailed = 1
+		}
+		return challenged, verFailed
+	}
+	sort.SliceStable(fs, func(i, j int) bool {
+		ci, vi := score(fs[i])
+		cj, vj := score(fs[j])
+		if ci != cj {
+			return ci > cj
+		}
+		if vi != vj {
+			return vi > vj
+		}
+		if fs[i].Confidence != fs[j].Confidence {
+			return fs[i].Confidence < fs[j].Confidence
+		}
+		return len(fs[i].Citations) < len(fs[j].Citations)
+	})
+}
+
+// SelectGates applies the configured gate policy (GATE_POLICY) to one round's
+// findings. alreadyGated is the number of gates already charged against the
+// task's budget (pending/approved/rejected — not auto-deferred).
+//
+// strict: identical to IdentifyGates — every criteria-meeting finding gates.
+//
+// calibrated: criteria-meeting findings are ranked (challenged first, then
+// verification failures, lowest confidence, fewest citations) and gated up to
+// the remaining per-task budget (GATE_MAX_PER_TASK). When the round's
+// confidence distribution is degenerate the cap tightens to RankedSampleK —
+// the threshold carries no signal, so only the K most gate-worthy findings
+// gate. Overflow findings are recorded with Status "auto_deferred" and
+// AutoDeferred=true: auditable, but they never demand a reviewer click.
+func (r *Runner) SelectGates(taskID string, findings []types.Finding, alreadyGated int) []types.GateRequest {
+	if r.cfg.Gate.Policy == "strict" {
+		return r.IdentifyGates(taskID, findings)
+	}
+
+	candidates := make([]types.Finding, 0, len(findings))
+	for _, f := range findings {
+		if r.needsGate(f) {
+			candidates = append(candidates, f)
+		}
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	remaining := r.cfg.Gate.MaxPerTask - alreadyGated
+	if remaining < 0 {
+		remaining = 0
+	}
+	limit := remaining
+	reason := fmt.Sprintf("per-task gate budget reached (GATE_MAX_PER_TASK=%d)", r.cfg.Gate.MaxPerTask)
+	if degenerateConfidence(findings) {
+		if k := r.cfg.Gate.RankedSampleK; k < limit {
+			limit = k
+			reason = fmt.Sprintf(
+				"degenerate confidence distribution (near-constant across %d findings): ranked sampling kept the %d most gate-worthy",
+				len(findings), limit)
+		}
+	}
+
+	rankGateWorthy(candidates)
+	gates := make([]types.GateRequest, 0, len(candidates))
+	for i, f := range candidates {
+		g := newGateRequest(taskID, f)
+		if i >= limit {
+			g.Status = "auto_deferred"
+			g.AutoDeferred = true
+			g.DeferReason = reason
+		}
+		gates = append(gates, g)
 	}
 	return gates
 }

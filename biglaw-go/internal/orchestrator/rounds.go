@@ -90,7 +90,19 @@ func (o *Orchestrator) runPhase(task *types.Task, phase types.TaskPhase) error {
 		}
 	}
 
-	gates := o.protocols.IdentifyGates(task.ID, debated)
+	// Budget accounting: gates already charged against this task (every gate
+	// created for a human — pending, approved, or rejected; auto-deferred
+	// records are free). PendingGates is rewritten by gate handlers under the
+	// lock, so read it under the lock too.
+	o.mu.RLock()
+	alreadyGated := 0
+	for _, g := range task.PendingGates {
+		if !g.AutoDeferred {
+			alreadyGated++
+		}
+	}
+	o.mu.RUnlock()
+	gates := o.protocols.SelectGates(task.ID, debated, alreadyGated)
 	o.annotateGatesWithClientVoice(task, gates)
 
 	// Fold debate/verification outcomes back into the round record, then

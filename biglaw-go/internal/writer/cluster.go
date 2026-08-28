@@ -8,6 +8,8 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/discover-legal/biglaw-go/internal/bm25"
 	"github.com/discover-legal/biglaw-go/internal/embeddings"
@@ -23,9 +25,12 @@ type Cluster struct {
 // cluster groups findings by embedding similarity (greedy, deterministic in
 // insertion order): each finding joins the nearest existing cluster whose centroid
 // cosine ≥ threshold, else starts a new cluster, up to maxClusters (after which it
-// joins the nearest). Without embeddings it returns a single cluster — the writer's
-// size-based batching then splits it. Each cluster gets a keyword label.
-func cluster(ix *FindingIndex, threshold float64, maxClusters int) []Cluster {
+// joins the nearest). A post-pass merges clusters whose centroids sit within
+// mergeThreshold cosine of each other (≤ 0 disables) — greedy insertion order can
+// split one topic across several clusters, which is how a single issue ends up
+// re-litigated in five sections. Without embeddings it returns a single cluster —
+// the writer's size-based batching then splits it. Each cluster gets a keyword label.
+func cluster(ix *FindingIndex, threshold, mergeThreshold float64, maxClusters int) []Cluster {
 	all := ix.All()
 	if len(all) == 0 {
 		return nil
@@ -62,6 +67,7 @@ func cluster(ix *FindingIndex, threshold float64, maxClusters int) []Cluster {
 		g.ids = append(g.ids, f.ID)
 		g.centroid = runningMean(g.centroid, v, len(g.items))
 	}
+	groups = mergeCloseGroups(groups, mergeThreshold)
 	items := make([][]Finding, 0, len(groups))
 	for _, g := range groups {
 		if len(g.items) > 0 {
@@ -89,6 +95,61 @@ func nearestGroupIdx(v []float32, groups []*group) int {
 		}
 	}
 	return best
+}
+
+// mergeCloseGroups folds together clusters whose centroids' cosine ≥ minCos —
+// greedily, in order, deterministic: each group merges into the FIRST already-kept
+// group close enough, so the earlier (larger-seeded) cluster absorbs the later one
+// and finding order within each is preserved. The merged centroid is the
+// count-weighted mean. Groups without a centroid (no embeddings) are never merged.
+// minCos ≤ 0 or ≥ 1 disables the pass.
+func mergeCloseGroups(groups []*group, minCos float64) []*group {
+	if minCos <= 0 || minCos >= 1 || len(groups) < 2 {
+		return groups
+	}
+	out := make([]*group, 0, len(groups))
+	for _, g := range groups {
+		var home *group
+		if len(g.centroid) > 0 {
+			for _, o := range out {
+				if len(o.centroid) == 0 {
+					continue
+				}
+				if embeddings.CosineSimilarity(g.centroid, o.centroid) >= minCos {
+					home = o
+					break
+				}
+			}
+		}
+		if home == nil {
+			out = append(out, g)
+			continue
+		}
+		home.centroid = weightedMean(home.centroid, len(home.items), g.centroid, len(g.items))
+		home.items = append(home.items, g.items...)
+		home.ids = append(home.ids, g.ids...)
+	}
+	return out
+}
+
+// weightedMean is the count-weighted average of two centroids.
+func weightedMean(a []float32, na int, b []float32, nb int) []float32 {
+	if len(a) == 0 {
+		return b
+	}
+	if len(b) == 0 || na+nb == 0 {
+		return a
+	}
+	out := make([]float32, len(a))
+	wa, wb := float32(na), float32(nb)
+	for i := range a {
+		var bv float32
+		if i < len(b) {
+			bv = b[i]
+		}
+		out[i] = (a[i]*wa + bv*wb) / (wa + wb)
+	}
+	return out
 }
 
 // group is a forming cluster: its findings and the running centroid of their
@@ -127,13 +188,23 @@ func labelClusters(clusters [][]Finding) []string {
 		return nil
 	}
 	tfs := make([]map[string]int, n)
-	df := map[string]int{} // number of clusters containing the term
+	df := map[string]int{}         // number of clusters containing the term
+	surface := map[string]string{} // lowered term → first original-cased surface form
 	for i, items := range clusters {
 		tf := map[string]int{}
 		for _, f := range items {
 			for _, tok := range bm25.Tokenize(f.Content) {
-				if len(tok) >= 4 {
+				if utf8.RuneCountInString(tok) >= 4 {
 					tf[tok]++
+				}
+			}
+			// Original-cased surface forms, so a label renders "TFSA"/"Élodie", not
+			// "Tfsa"/mojibake — the token index stays lowercased for matching.
+			for _, w := range strings.FieldsFunc(f.Content, func(r rune) bool {
+				return !unicode.IsLetter(r) && !unicode.IsNumber(r)
+			}) {
+				if lw := strings.ToLower(w); surface[lw] == "" {
+					surface[lw] = w
 				}
 			}
 		}
@@ -151,6 +222,9 @@ func labelClusters(clusters [][]Finding) []string {
 		}
 		terms := make([]kv, 0, len(tf))
 		for w, f := range tf {
+			if labelStop[w] { // function words make unreadable headings ("… Harwood Does")
+				continue
+			}
 			idf := math.Log(1.0 + float64(n)/float64(df[w]))
 			terms = append(terms, kv{w, float64(f) * idf})
 		}
@@ -162,7 +236,11 @@ func labelClusters(clusters [][]Finding) []string {
 		})
 		var top []string
 		for j := 0; j < len(terms) && j < 4; j++ {
-			top = append(top, titleCase(terms[j].w))
+			w := terms[j].w
+			if sf := surface[w]; sf != "" {
+				w = sf
+			}
+			top = append(top, titleCase(w))
 		}
 		label := strings.Join(top, " ")
 		if label == "" {
@@ -177,9 +255,23 @@ func labelClusters(clusters [][]Finding) []string {
 	return labels
 }
 
+// labelStop extends the (deliberately tiny) BM25 stoplist for HEADING purposes only:
+// verbs/adverbs that survive idf yet read as noise in a title.
+var labelStop = map[string]bool{
+	"does": true, "should": true, "would": true, "could": true, "will": true,
+	"shall": true, "also": true, "been": true, "said": true, "were": true,
+	"must": true, "which": true, "their": true, "there": true, "them": true,
+	"they": true, "other": true, "than": true, "into": true, "upon": true,
+	"about": true, "only": true, "more": true, "most": true, "such": true,
+	"when": true, "while": true, "where": true, "these": true, "those": true,
+}
+
+// titleCase uppercases the first RUNE — byte-slicing here split multibyte letters
+// ("élodie" → two invalid bytes → "��lodie" in section headings).
 func titleCase(w string) string {
-	if w == "" {
+	r, size := utf8.DecodeRuneInString(w)
+	if size == 0 {
 		return w
 	}
-	return strings.ToUpper(w[:1]) + w[1:]
+	return string(unicode.ToUpper(r)) + w[size:]
 }

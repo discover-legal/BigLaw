@@ -271,6 +271,13 @@ type GateRequest struct {
 	ClientVoiceNote string     `json:"clientVoiceNote,omitempty"`
 	CreatedAt       time.Time  `json:"createdAt"`
 	ReviewedAt      *time.Time `json:"reviewedAt,omitempty"`
+	// AutoDeferred: this finding met the gate criteria but was not routed to
+	// a human — the per-task gate budget was exhausted, or a degenerate
+	// (near-constant) confidence distribution triggered ranked sampling and
+	// it fell outside the sample. Status is "auto_deferred"; the record stays
+	// auditable but never blocks the task or demands a reviewer click.
+	AutoDeferred bool   `json:"autoDeferred,omitempty"`
+	DeferReason  string `json:"deferReason,omitempty"`
 }
 
 // ─── Client voice (Remy / CNTXT advocacy) ─────────────────────────────────────

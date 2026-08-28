@@ -1,0 +1,136 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (C) 2026 Discover Legal
+
+package writer
+
+import (
+	"reflect"
+	"strings"
+	"testing"
+)
+
+// Two near-identical findings (the observed matter-run failure: the same $40,000
+// TFSA-transfer conclusion re-emitted with minor rephrasing) plus one distinct one.
+func dupFixture() []Finding {
+	return []Finding{
+		{ID: "f1", Source: "doc-a", Grounded: false, Evidence: "short",
+			Content: "Marc transferred $40,000 from the joint TFSA to his personal account shortly before separation, which Danielle may trace and claim in equalization."},
+		{ID: "f2", Source: "doc-b", Grounded: true, Evidence: "Statement showing the $40,000 withdrawal on April 2.",
+			Content: "Marc transferred $40,000 from the joint TFSA to his personal account shortly before the separation, which Danielle may trace and claim in the equalization."},
+		{ID: "f3", Source: "doc-c", Grounded: true, Evidence: "Vesting schedule for 1,200 RSUs.",
+			Content: "Marc's disputed RSUs vested after the date of separation and their treatment in income for support purposes remains contested."},
+	}
+}
+
+func TestMergeNearDuplicatesUnionsCitationsAndDropsCount(t *testing.T) {
+	out := mergeNearDuplicates(dupFixture(), defaultDedupThreshold)
+	if len(out) != 2 {
+		t.Fatalf("expected 2 findings after merge, got %d", len(out))
+	}
+	rep := out[0]
+	if rep.ID != "f1" {
+		t.Fatalf("representative must keep the first occurrence's ID, got %q", rep.ID)
+	}
+	// Citations unioned, first-seen order.
+	if rep.Source != "doc-a; doc-b" {
+		t.Fatalf("expected unioned citations %q, got %q", "doc-a; doc-b", rep.Source)
+	}
+	// The grounded variant's content/evidence wins (highest-confidence proxy).
+	if !rep.Grounded || !strings.Contains(rep.Evidence, "$40,000 withdrawal") {
+		t.Fatalf("expected the grounded variant's substance to win, got grounded=%v evidence=%q", rep.Grounded, rep.Evidence)
+	}
+	// The distinct finding survives untouched.
+	if out[1].ID != "f3" || out[1].Source != "doc-c" {
+		t.Fatalf("distinct finding must survive unchanged, got %+v", out[1])
+	}
+}
+
+func TestMergeNearDuplicatesDistinctSurvive(t *testing.T) {
+	in := []Finding{
+		{ID: "a", Content: "The matrimonial home at 41 Fernwood Crescent is valued at $1,640,000 with an RBC mortgage of $412,000.", Source: "s1"},
+		{ID: "b", Content: "Danielle seeks occupancy of the home until June 2029 when Sam finishes elementary school.", Source: "s2"},
+		{ID: "c", Content: "Harwood proposes monthly child support of $1,150 based on a shared-parenting set-off.", Source: "s3"},
+	}
+	out := mergeNearDuplicates(in, defaultDedupThreshold)
+	if len(out) != 3 {
+		t.Fatalf("distinct findings must all survive, got %d of 3", len(out))
+	}
+	for i := range in {
+		if out[i].ID != in[i].ID || out[i].Source != in[i].Source {
+			t.Fatalf("finding %d changed: %+v", i, out[i])
+		}
+	}
+}
+
+func TestMergeNearDuplicatesThresholdRespected(t *testing.T) {
+	in := dupFixture()
+	// A near-1 threshold refuses the merge (the two variants differ slightly).
+	if out := mergeNearDuplicates(in, 0.99); len(out) != 3 {
+		t.Fatalf("threshold 0.99 must not merge slight variants, got %d of 3", len(out))
+	}
+	// Disabled (≤ 0) → input returned as-is.
+	if out := mergeNearDuplicates(in, -1); !reflect.DeepEqual(out, in) {
+		t.Fatalf("threshold ≤ 0 must be a no-op")
+	}
+	// Exact duplicates merge even at a very high threshold.
+	exact := []Finding{
+		{ID: "x1", Content: in[0].Content, Source: "s1"},
+		{ID: "x2", Content: in[0].Content, Source: "s2"},
+	}
+	if out := mergeNearDuplicates(exact, 0.99); len(out) != 1 || out[0].Source != "s1; s2" {
+		t.Fatalf("exact duplicates must merge at any threshold ≤ 1, got %+v", out)
+	}
+}
+
+func TestMergeNearDuplicatesDeterministicOrdering(t *testing.T) {
+	first := mergeNearDuplicates(dupFixture(), defaultDedupThreshold)
+	for i := 0; i < 10; i++ {
+		again := mergeNearDuplicates(dupFixture(), defaultDedupThreshold)
+		if !reflect.DeepEqual(first, again) {
+			t.Fatalf("merge is not deterministic: run %d differs", i)
+		}
+	}
+	// Representatives keep first-seen positions.
+	if first[0].ID != "f1" || first[1].ID != "f3" {
+		t.Fatalf("insertion order not preserved: %q, %q", first[0].ID, first[1].ID)
+	}
+}
+
+func TestMergeCloseGroups(t *testing.T) {
+	near := &group{centroid: []float32{1, 0.02, 0}, ids: []string{"a"}, items: []Finding{{ID: "a"}}}
+	nearer := &group{centroid: []float32{0.99, 0, 0.01}, ids: []string{"b"}, items: []Finding{{ID: "b"}}}
+	far := &group{centroid: []float32{0, 0, 1}, ids: []string{"c"}, items: []Finding{{ID: "c"}}}
+	out := mergeCloseGroups([]*group{near, nearer, far}, defaultClusterMergeThreshold)
+	if len(out) != 2 {
+		t.Fatalf("expected the two near-parallel clusters to merge into one (2 total), got %d", len(out))
+	}
+	if got := out[0].ids; !reflect.DeepEqual(got, []string{"a", "b"}) {
+		t.Fatalf("merged cluster must absorb in order, got %v", got)
+	}
+	// Orthogonal cluster survives.
+	if out[1].ids[0] != "c" {
+		t.Fatalf("distinct cluster must survive, got %v", out[1].ids)
+	}
+	// Disabled → unchanged.
+	if out := mergeCloseGroups([]*group{near, nearer, far}, -1); len(out) != 3 {
+		t.Fatalf("mergeThreshold ≤ 0 must be a no-op, got %d groups", len(out))
+	}
+	// Threshold respected: nearly-identical centroids do NOT merge at ≥ their cosine.
+	if out := mergeCloseGroups([]*group{near, far}, 0.999); len(out) != 2 {
+		t.Fatalf("clusters below the merge threshold must stay apart")
+	}
+}
+
+func TestNewDefaultsAndDisableKnob(t *testing.T) {
+	w := New(nil, nil, "m", Options{})
+	if w.opt.DedupThreshold != defaultDedupThreshold || w.opt.ClusterMergeThreshold != defaultClusterMergeThreshold {
+		t.Fatalf("defaults not applied: %v %v", w.opt.DedupThreshold, w.opt.ClusterMergeThreshold)
+	}
+	off := New(nil, nil, "m", Options{DedupDisabled: true})
+	if off.opt.DedupThreshold > 0 || off.opt.ClusterMergeThreshold > 0 {
+		t.Fatalf("DedupDisabled must switch both passes off: %v %v", off.opt.DedupThreshold, off.opt.ClusterMergeThreshold)
+	}
+	if out := mergeNearDuplicates(dupFixture(), off.opt.DedupThreshold); len(out) != 3 {
+		t.Fatalf("disabled dedup must keep all findings, got %d", len(out))
+	}
+}

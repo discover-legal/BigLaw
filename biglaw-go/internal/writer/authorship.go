@@ -724,7 +724,7 @@ func (w *Writer) respondentEntry(name string) string {
 		if len(sents) < 6 {
 			line = strings.TrimRight(line, ".")
 			if line != "" {
-				sents = append(sents, strings.ToUpper(line[:1])+line[1:]+".")
+				sents = append(sents, titleCase(line)+".") // rune-safe: never split a multibyte initial
 			}
 		}
 		for _, m := range append(reMoney.FindAllString(f.Line, -1), rePct.FindAllString(f.Line, -1)...) {

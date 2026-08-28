@@ -318,6 +318,12 @@ func (o *Orchestrator) writeDeliverable(task *types.Task, findings []types.Findi
 		Temperature:       o.cfg.LLMTemperature,
 		InputBudgetTokens: synthesisWriterBudgetTokens,
 		Persona:           persona,
+		// Dedup/compression layer (WRITER_DEDUP, default on): merge near-duplicate
+		// findings before clustering and fold overlapping topic clusters into one
+		// section, so the deliverable doesn't re-litigate one issue in five sections.
+		DedupDisabled:         !o.cfg.Writer.Dedup,
+		DedupThreshold:        o.cfg.Writer.DedupThreshold,
+		ClusterMergeThreshold: o.cfg.Writer.ClusterMergeThreshold,
 		// Coverage spine: the matter's own enumerated topics become guaranteed
 		// sections, so no required allegation category vanishes through clustering.
 		RequiredSections: o.extractCoverageSpine(task, prov, bare),

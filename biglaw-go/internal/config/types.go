@@ -118,6 +118,25 @@ type DebateConfig struct {
 	GateConfidenceThreshold float64
 }
 
+// GateConfig bounds the human-review gate so reviewer attention goes where it
+// matters. A miscalibrated model that emits near-constant confidence makes the
+// absolute threshold meaningless and floods the gate queue; at that volume
+// review degenerates into rubber-stamping.
+type GateConfig struct {
+	// Policy: "strict" = every finding meeting the gate criteria is gated
+	// (legacy behaviour); "calibrated" (default) = degenerate-confidence
+	// detection + per-task budget with ranked sampling.
+	Policy string
+	// MaxPerTask caps the total findings gated for human review per task
+	// (pending/approved/rejected — auto-deferred records don't count).
+	// Challenged findings take priority within the budget.
+	MaxPerTask int
+	// RankedSampleK: when a round's confidence distribution is degenerate
+	// (near-constant), gate only the K most gate-worthy findings of that
+	// round instead of everything under the threshold.
+	RankedSampleK int
+}
+
 // PresentationConfig holds UI/presentation preferences, tunable from the
 // admin panel (persisted via the settings store).
 type PresentationConfig struct {
@@ -186,6 +205,21 @@ type PersistenceConfig struct {
 	CostFile        string
 	PlaybooksFile   string
 	ClientVoiceFile string
+}
+
+// ModelRate is a per-model price pair in USD per million tokens, as it
+// appears in the COST_MODEL_RATES env JSON: {"model-id":{"in":1.0,"out":6.0}}.
+type ModelRate struct {
+	In  float64 `json:"in"`
+	Out float64 `json:"out"`
+}
+
+// CostConfig carries cost-tracking configuration. ModelRates (COST_MODEL_RATES)
+// lets any deployment price any model without a code change; entries override
+// the built-in rate table in internal/cost, and an explicit zero rate marks a
+// model as deliberately free rather than unpriced.
+type CostConfig struct {
+	ModelRates map[string]ModelRate
 }
 
 type QueueConfig struct {
@@ -382,12 +416,22 @@ type DraftingConfig struct {
 	Rounds           int  // huddle rounds: 1 = draft only; 2-3 = draft→critique→revise
 }
 
+// WriterConfig governs the deliverable writer's dedup/compression layer: near-duplicate
+// findings merge before clustering, and overlapping topic clusters merge into one
+// section — so the deliverable reads like one memo, not N overlapping ones.
+type WriterConfig struct {
+	Dedup                 bool    // the whole layer on/off (WRITER_DEDUP, default on)
+	DedupThreshold        float64 // token-shingle Jaccard ≥ this → findings merge (WRITER_DEDUP_THRESHOLD, default 0.5)
+	ClusterMergeThreshold float64 // centroid cosine ≥ this → topic clusters merge (WRITER_CLUSTER_MERGE_THRESHOLD, default 0.8)
+}
+
 type Config struct {
 	// Flavour is a practice-area preset name or path (FLAVOUR env). See
 	// internal/flavour. Empty or "full" = no trimming.
 	Flavour   string
 	Models    ModelsConfig
 	Drafting  DraftingConfig
+	Writer    WriterConfig
 	BELOSpine bool // derive the spine from typed Conduct nodes instead of LLM enumeration
 	// ReentrantMachinery re-fires the task-start selective machinery at every DyTopo
 	// round boundary, targeted at the round's DELTA: the round's findings are absorbed
@@ -405,12 +449,14 @@ type Config struct {
 	Agents             AgentsConfig
 	DyTopo             DyTopoConfig
 	Debate             DebateConfig
+	Gate               GateConfig
 	Presentation       PresentationConfig
 	DocuSeal           DocuSealConfig
 	ClientVoice        ClientVoiceConfig
 	Local              LocalConfig
 	PDF                PDFConfig
 	Persistence        PersistenceConfig
+	Cost               CostConfig
 	Queue              QueueConfig
 	AgentBilling       AgentBillingConfig
 	Audit              AuditConfig
