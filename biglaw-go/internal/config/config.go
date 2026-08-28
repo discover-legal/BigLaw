@@ -196,6 +196,11 @@ func Load() *Config {
 			MaxPerTask:    envInt("GATE_MAX_PER_TASK", 25),
 			RankedSampleK: envInt("GATE_RANKED_SAMPLE_K", 10),
 		},
+		Grounding: GroundingConfig{
+			CollapseThreshold:   envFloat("GROUNDING_COLLAPSE_THRESHOLD", 0.5),
+			CollapseMinFindings: envInt("GROUNDING_COLLAPSE_MIN_FINDINGS", 20),
+			CollapseAction:      normalizeEnum(os.Getenv("GROUNDING_COLLAPSE_ACTION"), "fail", "fail", "strict", "warn"),
+		},
 		Presentation: PresentationConfig{
 			Mode:     env("UI_MODE", "lawyer"),
 			FirmName: env("FIRM_NAME", ""),

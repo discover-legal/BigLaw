@@ -137,6 +137,27 @@ type GateConfig struct {
 	RankedSampleK int
 }
 
+// GroundingConfig detects grounding collapse: the citation gate flags each
+// unverified finding individually (fail-open by design so loose citation from
+// a local model isn't erased), but when MOST findings are unverified the
+// per-finding flag is the norm, not a warning — the model is fabricating
+// evidence wholesale and the deliverable would launder it. On the local
+// qwen2.5:7b matter run 78/87 findings were unverified; the pipeline shipped
+// a memo with invented parties and figures.
+type GroundingConfig struct {
+	// CollapseThreshold: fraction of non-grounded findings (task-cumulative)
+	// at or above which collapse is declared. Env GROUNDING_COLLAPSE_THRESHOLD.
+	CollapseThreshold float64
+	// CollapseMinFindings: don't evaluate collapse before this many findings
+	// exist (small early samples are noisy). Env GROUNDING_COLLAPSE_MIN_FINDINGS.
+	CollapseMinFindings int
+	// CollapseAction: "fail" (default) aborts the task with an explicit error;
+	// "strict" drops non-grounded findings from this point on and records the
+	// alert on the task; "warn" only records the alert.
+	// Env GROUNDING_COLLAPSE_ACTION.
+	CollapseAction string
+}
+
 // PresentationConfig holds UI/presentation preferences, tunable from the
 // admin panel (persisted via the settings store).
 type PresentationConfig struct {
@@ -450,6 +471,7 @@ type Config struct {
 	DyTopo             DyTopoConfig
 	Debate             DebateConfig
 	Gate               GateConfig
+	Grounding          GroundingConfig
 	Presentation       PresentationConfig
 	DocuSeal           DocuSealConfig
 	ClientVoice        ClientVoiceConfig

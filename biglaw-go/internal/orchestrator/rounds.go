@@ -5,6 +5,7 @@ package orchestrator
 
 import (
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -75,6 +76,14 @@ func (o *Orchestrator) runPhase(task *types.Task, phase types.TaskPhase) error {
 	}
 
 	passed, _ := o.protocols.ApplyCitationGate(roundState.Findings, sourceTexts)
+
+	// Grounding-collapse policy: the citation gate is fail-open per finding by
+	// design, but when MOST findings fail mechanical verification the model is
+	// fabricating evidence wholesale and the per-finding flag is meaningless.
+	passed, collapseErr := o.applyGroundingCollapse(task, passed)
+	if collapseErr != nil {
+		return collapseErr
+	}
 
 	// Debate each finding.
 	debated := make([]types.Finding, len(passed))
@@ -217,3 +226,78 @@ client's own words where useful. Do not restate the finding.`, brief, f.Content)
 // document CONTROVERSIES — subjects where sources assert conflicting values. The
 // output is graph-shaped (types.Controversy / types.Claim), the seed for the future
 // TypeDB contradiction graph. Bounded; best-effort.
+
+// applyGroundingCollapse evaluates the task-cumulative rate of findings that
+// failed mechanical citation verification (unverified/unsupported vs grounded)
+// once enough findings exist, and applies the configured action:
+//
+//	fail   — abort the task with an explicit error (default: a legal
+//	         deliverable built on fabricated evidence must not ship)
+//	strict — drop this round's non-grounded findings and alert on the task
+//	warn   — alert on the task only
+//
+// Findings without an EvidenceStatus (pre-gate machinery output) don't vote.
+func (o *Orchestrator) applyGroundingCollapse(task *types.Task, passed []types.Finding) ([]types.Finding, error) {
+	g := o.cfg.Grounding
+	if g.CollapseThreshold <= 0 {
+		return passed, nil
+	}
+	grounded, total := 0, 0
+	count := func(f *types.Finding) {
+		switch f.EvidenceStatus {
+		case types.EvidenceGrounded:
+			grounded++
+			total++
+		case types.EvidenceUnverified, types.EvidenceUnsupported:
+			total++
+		}
+	}
+	o.mu.RLock()
+	for r := range task.Rounds {
+		for i := range task.Rounds[r].Findings {
+			count(&task.Rounds[r].Findings[i])
+		}
+	}
+	o.mu.RUnlock()
+	for i := range passed {
+		count(&passed[i])
+	}
+	if total < g.CollapseMinFindings {
+		return passed, nil
+	}
+	rate := 1 - float64(grounded)/float64(total)
+	if rate < g.CollapseThreshold {
+		return passed, nil
+	}
+
+	msg := fmt.Sprintf(
+		"grounding collapse: %d of %d findings (%.0f%%) failed mechanical citation verification — the model is likely fabricating evidence (weak local model, empty retrieval index, or missing source documents)",
+		total-grounded, total, rate*100)
+	switch g.CollapseAction {
+	case "warn":
+		slog.Warn("grounding collapse detected; continuing (GROUNDING_COLLAPSE_ACTION=warn)", "taskId", task.ID, "rate", rate)
+		o.mu.Lock()
+		task.GroundingAlert = msg
+		o.mu.Unlock()
+		return passed, nil
+	case "strict":
+		kept := passed[:0]
+		dropped := 0
+		for _, f := range passed {
+			if f.EvidenceStatus == types.EvidenceGrounded || f.EvidenceStatus == "" {
+				kept = append(kept, f)
+			} else {
+				dropped++
+			}
+		}
+		slog.Warn("grounding collapse detected; dropping non-grounded findings (GROUNDING_COLLAPSE_ACTION=strict)",
+			"taskId", task.ID, "rate", rate, "droppedThisRound", dropped)
+		o.mu.Lock()
+		task.GroundingAlert = msg + fmt.Sprintf(" — strict mode engaged, %d findings dropped this round", dropped)
+		o.mu.Unlock()
+		return kept, nil
+	default: // fail
+		slog.Error("grounding collapse detected; failing task (GROUNDING_COLLAPSE_ACTION=fail)", "taskId", task.ID, "rate", rate)
+		return nil, fmt.Errorf("%s; refusing to synthesise a deliverable from this record (set GROUNDING_COLLAPSE_ACTION=strict|warn to override)", msg)
+	}
+}

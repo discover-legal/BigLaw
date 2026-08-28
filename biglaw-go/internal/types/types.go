@@ -396,12 +396,16 @@ type Task struct {
 	PendingGates       []GateRequest `json:"pendingGates"`
 	Output             string        `json:"output,omitempty"`
 	Error              string        `json:"error,omitempty"`
-	CreatedAt          time.Time     `json:"createdAt"`
-	StartedAt          *time.Time    `json:"startedAt,omitempty"`
-	UpdatedAt          time.Time     `json:"updatedAt"`
-	CompletedAt        *time.Time    `json:"completedAt,omitempty"`
-	Table              *TaskTable    `json:"table,omitempty"`
-	NosLegal           *NosLegalTags `json:"noslegal,omitempty"`
+	// GroundingAlert records a grounding-collapse condition (most findings
+	// failed mechanical citation verification) when the configured action
+	// keeps the task alive (strict/warn) instead of failing it.
+	GroundingAlert string        `json:"groundingAlert,omitempty"`
+	CreatedAt      time.Time     `json:"createdAt"`
+	StartedAt      *time.Time    `json:"startedAt,omitempty"`
+	UpdatedAt      time.Time     `json:"updatedAt"`
+	CompletedAt    *time.Time    `json:"completedAt,omitempty"`
+	Table          *TaskTable    `json:"table,omitempty"`
+	NosLegal       *NosLegalTags `json:"noslegal,omitempty"`
 	// Controversies are the cross-document conflicts surfaced by the reconciliation
 	// analyst — graph-shaped, the seed for the future TypeDB contradiction graph.
 	Controversies []Controversy `json:"controversies,omitempty"`
