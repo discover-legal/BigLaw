@@ -34,6 +34,16 @@ func (o *Orchestrator) synthesise(task *types.Task) (string, error) {
 		}
 	}
 
+	// Evidence quarantine: findings whose citations failed mechanical
+	// verification don't reach the writer as substantive record (default) —
+	// the local-model matter run showed the writer happily drafting from
+	// fabricated quotes the gate had already flagged. "caveat" restores the
+	// old behaviour (inline ⚠️ markers only). When quarantining would gut the
+	// record, everything is kept with markers instead — a thin honest memo
+	// beats an empty one, and grounding collapse (rounds.go) has its own say
+	// long before this point.
+	filteredFindings, quarantined := o.quarantineUnverified(task, filteredFindings)
+
 	// When the findings won't fit a single synthesis call's input budget, write the
 	// deliverable via the scoped multi-pass writer (cluster → tight agentic drafters
 	// that pull their own findings via search_findings → stitch) instead of dumping
@@ -46,7 +56,7 @@ func (o *Orchestrator) synthesise(task *types.Task) (string, error) {
 	}
 	if estTokens > synthesisWriterBudgetTokens {
 		if out, err := o.writeDeliverable(task, filteredFindings); err == nil && strings.TrimSpace(out) != "" {
-			return o.appendDiscrepancies(task, out), nil
+			return o.appendDiscrepancies(task, appendEvidenceNote(out, quarantined)), nil
 		} else if err != nil {
 			slog.Warn("multi-pass writer failed; falling back to single-call synthesis", "task", task.ID, "err", err)
 		}
@@ -143,10 +153,55 @@ Ground every statement in the findings above — do not introduce facts, figures
 
 	for _, b := range resp.Content {
 		if b.Type == providers.BlockText {
-			return o.appendDiscrepancies(task, b.Text), nil
+			return o.appendDiscrepancies(task, appendEvidenceNote(b.Text, quarantined)), nil
 		}
 	}
 	return "", nil
+}
+
+// quarantineUnverified removes findings whose evidence failed mechanical
+// citation verification from the synthesis record (Writer.UnverifiedPolicy
+// "exclude", the default). Policy "caveat" keeps them — they still carry the
+// inline ⚠️ markers on the monolith path. Exclusion backs off to caveat when
+// it would leave fewer than quarantineFloor findings: a thin honest record
+// beats an empty deliverable, and grounding collapse handles the wholesale-
+// fabrication case upstream.
+const quarantineFloor = 5
+
+func (o *Orchestrator) quarantineUnverified(task *types.Task, findings []types.Finding) ([]types.Finding, int) {
+	if o.cfg.Writer.UnverifiedPolicy == "caveat" {
+		return findings, 0
+	}
+	kept := make([]types.Finding, 0, len(findings))
+	for _, f := range findings {
+		if f.EvidenceStatus == types.EvidenceUnverified || f.EvidenceStatus == types.EvidenceUnsupported {
+			continue
+		}
+		kept = append(kept, f)
+	}
+	quarantined := len(findings) - len(kept)
+	if quarantined == 0 {
+		return findings, 0
+	}
+	if len(kept) < quarantineFloor {
+		slog.Warn("evidence quarantine would gut the record; keeping unverified findings with caveats",
+			"task", task.ID, "grounded", len(kept), "unverified", quarantined)
+		return findings, 0
+	}
+	slog.Info("evidence quarantine excluded unverified findings from synthesis",
+		"task", task.ID, "kept", len(kept), "quarantined", quarantined)
+	return kept, quarantined
+}
+
+// appendEvidenceNote discloses the quarantine in the deliverable itself, so a
+// reader knows the record was filtered and where to find the excluded items.
+func appendEvidenceNote(body string, quarantined int) string {
+	if quarantined == 0 {
+		return body
+	}
+	return body + fmt.Sprintf(
+		"\n\n## Evidence Note\n\n%d finding(s) were excluded from this deliverable because their cited evidence could not be mechanically verified against the source documents (possible paraphrase or fabrication). They remain on the matter record flagged \"unverified\" for human review.\n",
+		quarantined)
 }
 
 // appendDiscrepancies guarantees the detected cross-source contradictions land in the

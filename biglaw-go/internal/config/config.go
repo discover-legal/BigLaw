@@ -130,6 +130,7 @@ func Load() *Config {
 			Dedup:                 envBool("WRITER_DEDUP", true),
 			DedupThreshold:        envFloat("WRITER_DEDUP_THRESHOLD", 0.5),
 			ClusterMergeThreshold: envFloat("WRITER_CLUSTER_MERGE_THRESHOLD", 0.8),
+			UnverifiedPolicy:      normalizeEnum(os.Getenv("WRITER_UNVERIFIED"), "exclude", "exclude", "caveat"),
 		},
 		BELOSpine:          envBool("BELO_SPINE", false),         // spine from typed Conduct nodes vs LLM enumeration
 		ReentrantMachinery: envBool("REENTRANT_MACHINERY", true), // round-boundary re-entry of the selective machinery (false → one-shot round 0)

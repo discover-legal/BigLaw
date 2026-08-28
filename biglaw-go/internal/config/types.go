@@ -444,6 +444,11 @@ type WriterConfig struct {
 	Dedup                 bool    // the whole layer on/off (WRITER_DEDUP, default on)
 	DedupThreshold        float64 // token-shingle Jaccard ≥ this → findings merge (WRITER_DEDUP_THRESHOLD, default 0.5)
 	ClusterMergeThreshold float64 // centroid cosine ≥ this → topic clusters merge (WRITER_CLUSTER_MERGE_THRESHOLD, default 0.8)
+	// UnverifiedPolicy: "exclude" (default) quarantines findings whose cited
+	// evidence failed mechanical verification from the synthesis record —
+	// with a floor fallback to caveats when exclusion would gut the record;
+	// "caveat" keeps them with inline warnings. Env WRITER_UNVERIFIED.
+	UnverifiedPolicy string
 }
 
 type Config struct {
