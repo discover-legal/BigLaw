@@ -171,9 +171,22 @@ func authorityText(ctx defenseContext) string {
 // analyseDefense is the pure, testable core: defense context in, derived issues out.
 // Gated on charged authorities existing — a matter citing no authority in an accusatory
 // context (e.g. a pure compliance/compare matter) derives nothing.
+// reSecuritiesMatter gates the securities-enforcement templates on the record
+// actually charging securities authorities. Every template in this file speaks
+// SEC (§ 2462 penalties, Advisers Act scienter, disgorgement); fired on an
+// employment or family matter they stamp six paragraphs of irrelevant
+// securities boilerplate into the deliverable — observed live. Content-based
+// (not classifier-based) so the gate is deterministic and can't be defeated by
+// a failed NOSLEGAL call.
+var reSecuritiesMatter = regexp.MustCompile(
+	`(?i)\b(?:SEC\b|Securities and Exchange Commission|Advisers Act|Investment Advisers|Exchange Act|Securities Act|Rule 10b-5|17 C\.F\.R\.|Section 206|Rule 204)`)
+
 func analyseDefense(ctx defenseContext) []ontology.DerivedIssue {
 	if strings.TrimSpace(ctx.Auth) == "" {
 		return nil
+	}
+	if !reSecuritiesMatter.MatchString(ctx.Auth) && !reSecuritiesMatter.MatchString(ctx.DocText) {
+		return nil // not a securities-enforcement record — none of these templates apply
 	}
 	var out []ontology.DerivedIssue
 	out = append(out, mentalStateIssues(ctx)...) // Template B (+ the named distinction)

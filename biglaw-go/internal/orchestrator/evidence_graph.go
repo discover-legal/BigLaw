@@ -328,7 +328,7 @@ func (o *Orchestrator) respondentRoster(task *types.Task) []string {
 		// model can misattribute the opposing party's act to the client
 		// ("TerminationForCause committed by <client>"), and an exposure entry
 		// blaming the client is worse than no entry.
-		if client != "" && sharesSurname(bySurname[s], client) {
+		if client != "" && matchesClientParty(bySurname[s], client) {
 			continue
 		}
 		out = append(out, bySurname[s])
@@ -480,10 +480,14 @@ func clientPartyName(desc string) string {
 	return ""
 }
 
+// The verb phrase matches case-insensitively; the NAME group stays
+// case-sensitive — under a blanket (?i), [A-Z] matches lowercase and the
+// capture swallowed trailing prose ("Adaeze Okafor against Meridian"),
+// silently disarming the guard on a live run.
 var clientNameRes = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\bact(?:ing)?\s+for\s+([A-Z][\w'’.\-]+(?:\s+[A-Z][\w'’.\-]+){0,3})`),
-	regexp.MustCompile(`(?i)\bour\s+client,?\s+([A-Z][\w'’.\-]+(?:\s+[A-Z][\w'’.\-]+){0,3})`),
-	regexp.MustCompile(`(?i)\bclient:\s*([A-Z][\w'’.\-]+(?:\s+[A-Z][\w'’.\-]+){0,3})`),
+	regexp.MustCompile(`(?i:\bact(?:ing)?\s+for\s+)([A-Z][\w'’.\-]+(?:\s+[A-Z][\w'’.\-]+){0,3})`),
+	regexp.MustCompile(`(?i:\bour\s+client,?\s+)([A-Z][\w'’.\-]+(?:\s+[A-Z][\w'’.\-]+){0,3})`),
+	regexp.MustCompile(`(?i:\bclient:\s*)([A-Z][\w'’.\-]+(?:\s+[A-Z][\w'’.\-]+){0,3})`),
 }
 
 // sharesSurname reports whether two personal names share a final surname token
@@ -496,4 +500,21 @@ func sharesSurname(a, b string) bool {
 	sa := strings.ToLower(strings.Trim(fa[len(fa)-1], ".,"))
 	sb := strings.ToLower(strings.Trim(fb[len(fb)-1], ".,"))
 	return sa != "" && sa == sb
+}
+
+// matchesClientParty reports whether a graph entity refers to the represented
+// party: shared surname ("Ms. Adaeze Okafor"), or the space-stripped names
+// coincide ("AdaezeOkafor" — extraction models emit concatenated entities).
+func matchesClientParty(entity, client string) bool {
+	if sharesSurname(entity, client) {
+		return true
+	}
+	squash := func(s string) string {
+		s = strings.ToLower(s)
+		for _, h := range []string{"ms.", "mr.", "mrs.", "dr.", "ms ", "mr "} {
+			s = strings.TrimPrefix(s, h)
+		}
+		return strings.Join(strings.Fields(strings.ReplaceAll(s, ".", " ")), "")
+	}
+	return squash(entity) != "" && squash(entity) == squash(client)
 }

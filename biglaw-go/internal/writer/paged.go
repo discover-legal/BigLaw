@@ -126,7 +126,7 @@ func (w *Writer) writePaged(taskDesc, workflowType string, secs []section, ix *F
 				sem <- struct{}{}
 				defer func() { <-sem }()
 				d := w.huddleSection(taskDesc, workflowType, s, ix)
-				if strings.TrimSpace(d) == "" {
+				if strings.TrimSpace(d) == "" || w.isEchoDraft(d, s, ix) {
 					d = w.fallbackSection(s, ix)
 				}
 				drafts[i] = d
@@ -146,8 +146,8 @@ func (w *Writer) writePaged(taskDesc, workflowType string, secs []section, ix *F
 			priorCompacted: board.priorBlock(),
 			board:          board,
 		})
-		if strings.TrimSpace(full) == "" {
-			full = w.fallbackSection(s, ix) // never blank
+		if strings.TrimSpace(full) == "" || w.isEchoDraft(full, s, ix) {
+			full = w.fallbackSection(s, ix) // never blank; echoes get the extracts banner
 		}
 		board.put(s.Title, full, w.compactSection(s.Title, full))
 	}
@@ -500,4 +500,39 @@ func (w *Writer) assemblePaged(secs []section, board *pagedBoard) string {
 		fmt.Fprintf(&sb, "## %s\n\n%s\n\n", s.Title, full)
 	}
 	return strings.TrimSpace(sb.String())
+}
+
+// isEchoDraft reports whether a model "draft" is mostly the section's own
+// findings copied back verbatim rather than drafted prose. Weak drafters echo
+// the prompt's evidence bullets; the result is non-empty, so the labeled
+// fallback never fired and pages of undigested record shipped as unlabeled
+// memo body — observed live. A draft counts as an echo when at least 60% of
+// its substantive lines match a finding's conclusion or evidence by dedup key.
+func (w *Writer) isEchoDraft(draft string, s section, ix *FindingIndex) bool {
+	keys := map[string]bool{}
+	for _, id := range s.FindingIDs {
+		if f, ok := ix.Get(id); ok {
+			if k := dedupKey(oneLine(f.Content)); k != "" {
+				keys[k] = true
+			}
+			if k := dedupKey(oneLine(f.Evidence)); k != "" {
+				keys[k] = true
+			}
+		}
+	}
+	if len(keys) == 0 {
+		return false
+	}
+	total, echoed := 0, 0
+	for _, ln := range strings.Split(draft, "\n") {
+		ln = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(ln), "- "))
+		if len(ln) < 40 || strings.HasPrefix(ln, "#") {
+			continue // headings, blanks, short connectors don't vote
+		}
+		total++
+		if keys[dedupKey(oneLine(ln))] {
+			echoed++
+		}
+	}
+	return total > 0 && float64(echoed)/float64(total) >= 0.6
 }

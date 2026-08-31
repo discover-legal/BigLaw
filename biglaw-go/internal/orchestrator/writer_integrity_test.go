@@ -93,17 +93,43 @@ func TestClientPartyName(t *testing.T) {
 		"Summarize the credit agreement":                         "",
 	}
 	for desc, want := range cases {
-		got := clientPartyName(desc)
-		if !strings.HasPrefix(got, want) || (want == "" && got != "") {
-			t.Errorf("clientPartyName(%q) = %q, want prefix %q", desc, got, want)
+		// EXACT equality — a lenient prefix assertion previously hid a
+		// (?i)-scoping bug that captured "Adaeze Okafor against Meridian"
+		// and silently disarmed the guard on a live run.
+		if got := clientPartyName(desc); got != want {
+			t.Errorf("clientPartyName(%q) = %q, want %q", desc, got, want)
 		}
 	}
-	if !sharesSurname("AdaezeOkafor", "AdaezeOkafor") {
-		t.Error("identical single-token names share a surname")
+	client := "Adaeze Okafor"
+	for _, entity := range []string{"AdaezeOkafor", "Ms. Adaeze Okafor", "A. Okafor", "adaeze okafor"} {
+		if !matchesClientParty(entity, client) {
+			t.Errorf("guard must match entity %q to client %q", entity, client)
+		}
 	}
-	if !sharesSurname("Adaeze Okafor", "A. Okafor") || sharesSurname("Adaeze Okafor", "Marc Tremblay") {
-		t.Error("sharesSurname semantics broken")
+	for _, entity := range []string{"Marc Tremblay", "Meridian CloudWorks", "R. Calloway"} {
+		if matchesClientParty(entity, client) {
+			t.Errorf("guard must NOT match %q", entity)
+		}
 	}
 }
 
 func quarOrchCfg() *config.Config { return &config.Config{} }
+
+// ─── Securities templates never fire on non-securities matters ────────────────
+
+func TestDefenseTemplatesGatedBySecuritiesContent(t *testing.T) {
+	employment := defenseContext{
+		Auth:    "NYLL §193; FLSA §207; Acceptable Use Policy",
+		DocText: "Ms. Okafor was terminated on 9 June 2026. Unpaid commissions of $48,300 under the 2026 Commission Plan.",
+	}
+	if got := analyseDefense(employment); len(got) != 0 {
+		t.Fatalf("employment matter must produce no SEC defense issues, got %d: %q", len(got), got[0].Text)
+	}
+	securities := defenseContext{
+		Auth:    "Advisers Act Section 206(1); Section 206(2); Rule 204A-1",
+		DocText: "The SEC referral charges violations of Section 206(1) and 206(2) during the Review Period.",
+	}
+	if got := analyseDefense(securities); len(got) == 0 {
+		t.Fatal("securities record must still produce defense issues")
+	}
+}

@@ -186,3 +186,24 @@ func TestFallbackSectionIsLabeledExtracts(t *testing.T) {
 		t.Fatal("ungrounded extract must stay marked")
 	}
 }
+
+// Echo drafts (findings copied back as the "draft") must route to the labeled
+// fallback, not ship as unlabeled memo body.
+func TestIsEchoDraft(t *testing.T) {
+	w := &Writer{}
+	fs := []Finding{
+		{ID: "a", Content: "Commissions of $48,300 were earned on paid invoices under the 2026 Commission Plan."},
+		{ID: "b", Content: "The severance offer of four weeks' pay remains open until 2 September 2026 conditioned on a release."},
+	}
+	ix := NewFindingIndex(nil, fs)
+	s := section{FindingIDs: []string{"a", "b"}}
+	echo := "- " + fs[0].Content + "\n- " + fs[1].Content
+	if !w.isEchoDraft(echo, s, ix) {
+		t.Fatal("verbatim finding bullets must be detected as an echo")
+	}
+	drafted := "The commission claim is strong: the plan itself concedes the amounts were earned on paid invoices, and the employer's only defence is the payment-date condition.\n" +
+		"On severance, counsel should respond before the September deadline rather than accept the release as drafted."
+	if w.isEchoDraft(drafted, s, ix) {
+		t.Fatal("genuine prose engaging the same facts must NOT be flagged as echo")
+	}
+}
