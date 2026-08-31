@@ -166,3 +166,23 @@ func TestFoldTinyGroups(t *testing.T) {
 		t.Fatalf("all-tiny matter must keep its groups, got %d", len(got))
 	}
 }
+
+// The no-model fallback must declare itself as undigested extracts — never
+// render as paragraphs that read as the memo's own analysis.
+func TestFallbackSectionIsLabeledExtracts(t *testing.T) {
+	w := &Writer{}
+	ix := NewFindingIndex(nil, []Finding{
+		{ID: "a", Content: "The employer asserts the termination was for cause.", Grounded: true},
+		{ID: "b", Content: "Commissions of $48,300 remain unpaid.", Grounded: false},
+	})
+	out := w.fallbackSection(section{FindingIDs: []string{"a", "b"}}, ix)
+	if !strings.Contains(out, "Drafting unavailable for this section") {
+		t.Fatalf("fallback must carry the extracts banner, got:\n%s", out)
+	}
+	if !strings.Contains(out, "- The employer asserts") {
+		t.Fatalf("fallback items must render as bullets, got:\n%s", out)
+	}
+	if !strings.Contains(out, "(unverified — requires confirmation)") {
+		t.Fatal("ungrounded extract must stay marked")
+	}
+}

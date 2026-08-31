@@ -316,6 +316,7 @@ func (r *Runner) RunDebate(finding types.Finding, taskID string) (types.Finding,
 			}
 		}
 		finding.Resolved = true
+		finding.DebateVerdict = verdict
 	}
 
 	audit.Default.Write(audit.WriteRequest{

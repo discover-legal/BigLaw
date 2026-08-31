@@ -44,6 +44,15 @@ func (o *Orchestrator) synthesise(task *types.Task) (string, error) {
 	// long before this point.
 	filteredFindings, quarantined := o.quarantineUnverified(task, filteredFindings)
 
+	// finish applies the closing integrity passes to a drafted body, in order:
+	// external-authority flagging (case/statute citations outside the matter
+	// record are marked and listed — the citation gate never checks those),
+	// the evidence-note disclosure, then the discrepancy appendix.
+	corpus := o.matterCorpus(task)
+	finish := func(body string) string {
+		return o.appendDiscrepancies(task, appendEvidenceNote(flagExternalAuthorities(body, corpus), quarantined))
+	}
+
 	// When the findings won't fit a single synthesis call's input budget, write the
 	// deliverable via the scoped multi-pass writer (cluster → tight agentic drafters
 	// that pull their own findings via search_findings → stitch) instead of dumping
@@ -56,7 +65,7 @@ func (o *Orchestrator) synthesise(task *types.Task) (string, error) {
 	}
 	if estTokens > synthesisWriterBudgetTokens {
 		if out, err := o.writeDeliverable(task, filteredFindings); err == nil && strings.TrimSpace(out) != "" {
-			return o.appendDiscrepancies(task, appendEvidenceNote(out, quarantined)), nil
+			return finish(out), nil
 		} else if err != nil {
 			slog.Warn("multi-pass writer failed; falling back to single-call synthesis", "task", task.ID, "err", err)
 		}
@@ -153,7 +162,7 @@ Ground every statement in the findings above — do not introduce facts, figures
 
 	for _, b := range resp.Content {
 		if b.Type == providers.BlockText {
-			return o.appendDiscrepancies(task, appendEvidenceNote(b.Text, quarantined)), nil
+			return finish(b.Text), nil
 		}
 	}
 	return "", nil
@@ -169,28 +178,50 @@ Ground every statement in the findings above — do not introduce facts, figures
 const quarantineFloor = 5
 
 func (o *Orchestrator) quarantineUnverified(task *types.Task, findings []types.Finding) ([]types.Finding, int) {
-	if o.cfg.Writer.UnverifiedPolicy == "caveat" {
-		return findings, 0
-	}
+	// Adjudicated losers are excluded under EVERY policy — a finding the
+	// debate OVERTURNED or the verification pipeline failed has been judged
+	// wrong by the pipeline's own protocols. Drafting it anyway is how a memo
+	// ends up arguing both sides of the same clause in alternating sections.
 	kept := make([]types.Finding, 0, len(findings))
+	overturned, failed := 0, 0
+	for _, f := range findings {
+		switch {
+		case f.DebateVerdict == "OVERTURNED":
+			overturned++
+		case f.VerificationResult != nil && !f.VerificationResult.Passed:
+			failed++
+		default:
+			kept = append(kept, f)
+		}
+	}
+	if overturned+failed > 0 {
+		slog.Info("adjudication excluded losing findings from synthesis",
+			"task", task.ID, "overturned", overturned, "verificationFailed", failed)
+	}
+	findings = kept
+
+	if o.cfg.Writer.UnverifiedPolicy == "caveat" {
+		return findings, overturned + failed
+	}
+	kept = make([]types.Finding, 0, len(findings))
 	for _, f := range findings {
 		if f.EvidenceStatus == types.EvidenceUnverified || f.EvidenceStatus == types.EvidenceUnsupported {
 			continue
 		}
 		kept = append(kept, f)
 	}
-	quarantined := len(findings) - len(kept)
-	if quarantined == 0 {
-		return findings, 0
+	unverified := len(findings) - len(kept)
+	if unverified == 0 {
+		return findings, overturned + failed
 	}
 	if len(kept) < quarantineFloor {
 		slog.Warn("evidence quarantine would gut the record; keeping unverified findings with caveats",
-			"task", task.ID, "grounded", len(kept), "unverified", quarantined)
-		return findings, 0
+			"task", task.ID, "grounded", len(kept), "unverified", unverified)
+		return findings, overturned + failed
 	}
 	slog.Info("evidence quarantine excluded unverified findings from synthesis",
-		"task", task.ID, "kept", len(kept), "quarantined", quarantined)
-	return kept, quarantined
+		"task", task.ID, "kept", len(kept), "quarantined", unverified)
+	return kept, overturned + failed + unverified
 }
 
 // appendEvidenceNote discloses the quarantine in the deliverable itself, so a
@@ -200,7 +231,7 @@ func appendEvidenceNote(body string, quarantined int) string {
 		return body
 	}
 	return body + fmt.Sprintf(
-		"\n\n## Evidence Note\n\n%d finding(s) were excluded from this deliverable because their cited evidence could not be mechanically verified against the source documents (possible paraphrase or fabrication). They remain on the matter record flagged \"unverified\" for human review.\n",
+		"\n\n## Evidence Note\n\n%d finding(s) were excluded from this deliverable because they failed the pipeline's own adjudication: cited evidence that could not be mechanically verified against the source documents, a debate resolution that overturned the finding, or a failed verification pass. They remain on the matter record, flagged, for human review.\n",
 		quarantined)
 }
 
@@ -401,7 +432,7 @@ func (o *Orchestrator) writeDeliverable(task *types.Task, findings []types.Findi
 		FactsGlobal: os.Getenv("BIGLAW_FACTS_GLOBAL") == "1" || os.Getenv("BIGLAW_FACTS_GLOBAL") == "true",
 		// Named individual respondents (committedBy → Person claims): the writer enforces
 		// one exposure entry per respondent — consolidated record or explicit gap note.
-		Respondents: o.respondentRoster(task.ID),
+		Respondents: o.respondentRoster(task),
 		RecordCost:  func(resp *providers.ChatResponse) { o.recordCost(resp, bare, cost.ContextSynthesis, task.ID) },
 		// Synthesis-time figure handling: drafters pull exact figures for their
 		// section from the source exhibits on demand (document-backed

@@ -211,15 +211,22 @@ type VerificationResult struct {
 }
 
 type Finding struct {
-	ID                 string              `json:"id"`
-	AgentID            string              `json:"agentId"`
-	AgentName          string              `json:"agentName"`
-	Content            string              `json:"content"`
-	Citations          []Citation          `json:"citations"`
-	Confidence         float64             `json:"confidence"`
-	Challenged         bool                `json:"challenged"`
-	Challenge          *Challenge          `json:"challenge,omitempty"`
-	Resolved           bool                `json:"resolved"`
+	ID         string     `json:"id"`
+	AgentID    string     `json:"agentId"`
+	AgentName  string     `json:"agentName"`
+	Content    string     `json:"content"`
+	Citations  []Citation `json:"citations"`
+	Confidence float64    `json:"confidence"`
+	Challenged bool       `json:"challenged"`
+	Challenge  *Challenge `json:"challenge,omitempty"`
+	Resolved   bool       `json:"resolved"`
+	// DebateVerdict records the resolver's outcome (UPHELD | MODIFIED |
+	// OVERTURNED) so downstream consumers — synthesis above all — know who won
+	// the debate. Before this field existed, OVERTURNED only docked confidence
+	// and the losing finding was drafted into the deliverable as an assertion,
+	// producing memos that argue both sides of the same clause in alternating
+	// sections.
+	DebateVerdict      string              `json:"debateVerdict,omitempty"`
 	VerificationResult *VerificationResult `json:"verificationResult,omitempty"`
 	Round              int                 `json:"round"`
 	Timestamp          time.Time           `json:"timestamp"`

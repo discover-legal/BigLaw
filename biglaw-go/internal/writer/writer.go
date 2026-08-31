@@ -2232,24 +2232,32 @@ func (w *Writer) fallbackSection(s section, ix *FindingIndex) string {
 		}
 		sents = append(sents, c)
 	}
+	// The fallback is UNDRAFTED material: finding conclusions and verbatim
+	// evidence with no model synthesis over them. Rendering it as flowing
+	// paragraphs disguised it as analysis — on a real matter run, whole pages
+	// of raw source text (including the OPPOSING PARTY's assertions, naked)
+	// read as the memo's own voice. It now declares itself and renders as
+	// extracts, never prose.
+	if len(sents) == 0 && len(ledger) == 0 {
+		return ""
+	}
 	var blocks []string
-	// Compose the sentences into paragraphs of a few sentences each — prose, not bullets.
-	const perPara = 4
-	for i := 0; i < len(sents); i += perPara {
-		end := i + perPara
-		if end > len(sents) {
-			end = len(sents)
-		}
-		blocks = append(blocks, strings.Join(sents[i:end], " "))
+	blocks = append(blocks, fallbackBanner)
+	for _, s := range sents {
+		blocks = append(blocks, "- "+s)
 	}
 	if len(ledger) >= 3 {
 		blocks = append(blocks, strings.Join(collapseLedgerRuns(ledger), "\n"))
-	} else if len(ledger) > 0 {
-		// Too few rows for a table — summarize in prose instead of pasting fragments.
-		blocks = append(blocks, "The grounded record also shows: "+strings.Join(ledger, "; ")+".")
+	} else {
+		for _, l := range ledger {
+			blocks = append(blocks, "- "+l)
+		}
 	}
-	return strings.TrimSpace(strings.Join(blocks, "\n\n"))
+	return strings.TrimSpace(strings.Join(blocks, "\n"))
 }
+
+// fallbackBanner labels undrafted fallback output for what it is.
+const fallbackBanner = "*[Drafting unavailable for this section — the items below are undigested extracts from the matter record (conclusions and verbatim quotes as recorded, including positions asserted by opposing parties). They are not this memo's analysis.]*\n"
 
 // complete is a single, tool-less model call (planner / stitch passes).
 func (w *Writer) complete(system, user string, maxTokens int, _ any) (string, error) {

@@ -6,6 +6,7 @@ package orchestrator
 import (
 	"fmt"
 	"log/slog"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -291,7 +292,9 @@ func (o *Orchestrator) allegationAliases(taskID string) map[string][]string {
 // Person). Name variants sharing a surname collapse to the fullest form, so "Whitmore"
 // and "Gerald R. Whitmore" yield one roster entry. The writer enforces one exposure
 // entry per name returned here.
-func (o *Orchestrator) respondentRoster(taskID string) []string {
+func (o *Orchestrator) respondentRoster(task *types.Task) []string {
+	taskID := task.ID
+	client := clientPartyName(task.Description)
 	g := o.evidenceGraph(taskID)
 	if g == nil {
 		return nil
@@ -321,6 +324,13 @@ func (o *Orchestrator) respondentRoster(taskID string) []string {
 	const maxRespondents = 8
 	out := make([]string, 0, len(order))
 	for _, s := range order {
+		// The matter's own client is never a "respondent": a weak extraction
+		// model can misattribute the opposing party's act to the client
+		// ("TerminationForCause committed by <client>"), and an exposure entry
+		// blaming the client is worse than no entry.
+		if client != "" && sharesSurname(bySurname[s], client) {
+			continue
+		}
 		out = append(out, bySurname[s])
 		if len(out) >= maxRespondents {
 			break
@@ -456,3 +466,34 @@ func (o *Orchestrator) allegationContext(task *types.Task, prov providers.Provid
 // matter is classified by the KIND of issues its documents actually raise, and each analytic pass
 // fires for the mode it serves. Extensible — transactional (clause review) and diligence
 // (red-flag triage) slot in as further modes as their issue classes and passes are added.
+
+// clientPartyName extracts the represented party's name from the task
+// description ("Act for Adaeze Okafor…", "our client Danielle Tremblay",
+// "Client: Jane Roe"). Empty when no pattern matches — the roster then runs
+// unguarded, exactly as before.
+func clientPartyName(desc string) string {
+	for _, re := range clientNameRes {
+		if m := re.FindStringSubmatch(desc); len(m) > 1 {
+			return strings.TrimSpace(m[1])
+		}
+	}
+	return ""
+}
+
+var clientNameRes = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\bact(?:ing)?\s+for\s+([A-Z][\w'’.\-]+(?:\s+[A-Z][\w'’.\-]+){0,3})`),
+	regexp.MustCompile(`(?i)\bour\s+client,?\s+([A-Z][\w'’.\-]+(?:\s+[A-Z][\w'’.\-]+){0,3})`),
+	regexp.MustCompile(`(?i)\bclient:\s*([A-Z][\w'’.\-]+(?:\s+[A-Z][\w'’.\-]+){0,3})`),
+}
+
+// sharesSurname reports whether two personal names share a final surname token
+// (case-insensitive) — the same collapse rule the roster itself uses.
+func sharesSurname(a, b string) bool {
+	fa, fb := strings.Fields(a), strings.Fields(b)
+	if len(fa) == 0 || len(fb) == 0 {
+		return false
+	}
+	sa := strings.ToLower(strings.Trim(fa[len(fa)-1], ".,"))
+	sb := strings.ToLower(strings.Trim(fb[len(fb)-1], ".,"))
+	return sa != "" && sa == sb
+}
