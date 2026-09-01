@@ -207,3 +207,39 @@ func TestIsEchoDraft(t *testing.T) {
 		t.Fatal("genuine prose engaging the same facts must NOT be flagged as echo")
 	}
 }
+
+// Concatenated evidence dumps (several record lines fused into one bullet)
+// must be detected as echoes even though no single finding matches the line.
+func TestIsEchoDraftCatchesConcatenatedDumps(t *testing.T) {
+	w := &Writer{}
+	fs := []Finding{
+		{ID: "a", Content: "conclusion a", Evidence: `§1(f): "'Cause' means (i) conviction of a felony; (ii) willful misconduct materially injurious to the Company."`},
+		{ID: "b", Content: "conclusion b", Evidence: `2025 W-2 wages: $193,442 (base $145,000 + commissions $48,442) with no overtime line on any pay statement.`},
+		{ID: "c", Content: "conclusion c", Evidence: `Job description on file (2022): supports account executives in technical qualification; prepares demonstrations and RFP responses.`},
+	}
+	ix := NewFindingIndex(nil, fs)
+	s := section{FindingIDs: []string{"a", "b", "c"}}
+	// One fused bullet made of three different evidence fragments.
+	dump := "- " + `§1(f): "'Cause' means (i) conviction of a felony; (ii) willful misconduct materially injurious to the Company." ` +
+		`2025 W-2 wages: $193,442 (base $145,000 + commissions $48,442) with no overtime line on any pay statement. ` +
+		`Job description on file (2022): supports account executives in technical qualification; prepares demonstrations and RFP responses.`
+	if !w.isEchoDraft(dump, s, ix) {
+		t.Fatal("concatenated evidence dump must be detected as an echo")
+	}
+	prose := "The Cause definition is the employer's weakest point: no cure notice was given, and the W-2 history shows the classification was never revisited despite sustained overtime-level hours."
+	if w.isEchoDraft(prose, s, ix) {
+		t.Fatal("original analysis referencing the same facts must not be flagged")
+	}
+}
+
+// Garbled Key-figures labels fall back to the generic label.
+func TestFigureLabelFloor(t *testing.T) {
+	for _, bad := range []string{"2,", "-", "(a)"} {
+		if got := figureLabel(bad+" $48,300", "$48,300"); got != "figure" {
+			t.Errorf("fragment label %q should floor to \"figure\", got %q", bad, got)
+		}
+	}
+	if got := figureLabel("Unpaid commissions: $48,300", "$48,300"); got == "figure" {
+		t.Error("real caption must survive the floor")
+	}
+}

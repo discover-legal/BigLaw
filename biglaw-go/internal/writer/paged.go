@@ -523,6 +523,28 @@ func (w *Writer) isEchoDraft(draft string, s section, ix *FindingIndex) bool {
 	if len(keys) == 0 {
 		return false
 	}
+	// Corpus for substring matching: concatenated bullets fuse several
+	// evidence lines into one ("§1(f)… PAYROLL SNAPSHOT… Job description…"),
+	// defeating per-line key equality — observed shipping unlabeled on a live
+	// run. A line also counts as echoed when most of its fragments appear
+	// verbatim in the section's own record.
+	var cb strings.Builder
+	for _, id := range s.FindingIDs {
+		if f, ok := ix.Get(id); ok {
+			cb.WriteString(strings.ToLower(oneLine(f.Content)))
+			cb.WriteString(" \u2029 ")
+			cb.WriteString(strings.ToLower(oneLine(f.Evidence)))
+			cb.WriteString(" \u2029 ")
+		}
+	}
+	corpus := cb.String()
+	lineEchoed := func(ln string) bool {
+		if keys[dedupKey(oneLine(ln))] {
+			return true
+		}
+		return echoCoverage(strings.ToLower(oneLine(ln)), corpus) >= 0.6
+	}
+
 	total, echoed := 0, 0
 	for _, ln := range strings.Split(draft, "\n") {
 		ln = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(ln), "- "))
@@ -530,9 +552,37 @@ func (w *Writer) isEchoDraft(draft string, s section, ix *FindingIndex) bool {
 			continue // headings, blanks, short connectors don't vote
 		}
 		total++
-		if keys[dedupKey(oneLine(ln))] {
+		if lineEchoed(ln) {
 			echoed++
 		}
 	}
 	return total > 0 && float64(echoed)/float64(total) >= 0.6
+}
+
+// echoCoverage measures what fraction of a line exists verbatim in the
+// section's record: 50-char windows sampled at a 25-char stride, each checked
+// as a substring of the corpus. Concatenated dumps score near 1.0 regardless
+// of the glue between the fused pieces; original prose that merely cites the
+// same facts scores near 0.
+func echoCoverage(ln, corpus string) float64 {
+	const win, stride = 50, 25
+	if len(ln) < win {
+		if strings.Contains(corpus, ln) {
+			return 1
+		}
+		return 0
+	}
+	total, hit := 0, 0
+	for i := 0; i+win <= len(ln); i += stride {
+		total++
+		if strings.Contains(corpus, ln[i:i+win]) {
+			hit++
+		}
+	}
+	// The tail window, so the final fused piece votes too.
+	total++
+	if strings.Contains(corpus, ln[len(ln)-win:]) {
+		hit++
+	}
+	return float64(hit) / float64(total)
 }

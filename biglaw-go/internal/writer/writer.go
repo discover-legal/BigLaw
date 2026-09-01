@@ -2005,7 +2005,23 @@ func figureLabel(row, sal string) string {
 	label = strings.Trim(strings.Join(strings.Fields(label), " "), " -—:|·,;(\t")
 	label = trimTrailingConnectives(label)
 	label = truncateRunesWordSafe(label, 64)
-	if label == "" {
+	// Floor: a label that is a stray fragment ("2,", a lone connective) is
+	// worse than the generic fallback — it garbles the Key-figures block.
+	// Require at least two words with a real (≥3-letter) word among them.
+	letters := 0
+	words := strings.Fields(label)
+	for _, w := range words {
+		alpha := 0
+		for _, r := range w {
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+				alpha++
+			}
+		}
+		if alpha >= 3 {
+			letters++
+		}
+	}
+	if len(words) < 2 || letters == 0 {
 		label = "figure"
 	}
 	return label
