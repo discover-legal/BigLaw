@@ -402,6 +402,7 @@ func (o *Orchestrator) writeDeliverable(task *types.Task, findings []types.Findi
 	// figure landing is guaranteed mechanically in the writer instead (Key figures).
 	w := writer.New(o.embedC, prov, bare, writer.Options{
 		Temperature:       o.cfg.LLMTemperature,
+		ClientName:        clientPartyName(task.Description),
 		InputBudgetTokens: synthesisWriterBudgetTokens,
 		Persona:           persona,
 		// Dedup/compression layer (WRITER_DEDUP, default on): merge near-duplicate

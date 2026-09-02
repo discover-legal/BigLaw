@@ -516,5 +516,21 @@ func matchesClientParty(entity, client string) bool {
 		}
 		return strings.Join(strings.Fields(strings.ReplaceAll(s, ".", " ")), "")
 	}
-	return squash(entity) != "" && squash(entity) == squash(client)
+	if squash(entity) != "" && squash(entity) == squash(client) {
+		return true
+	}
+	// A single-token entity equal to ANY token of the client's name ("Adaeze"
+	// vs "Adaeze Okafor") — extraction models emit bare first names, and one
+	// slipped past the surname rule onto a live roster. Conservative by
+	// design: wrongly dropping a same-first-name third party from the
+	// exposure roster is cheap; listing the client on it is not.
+	ef := strings.Fields(strings.ToLower(entity))
+	if len(ef) == 1 && len(ef[0]) >= 3 {
+		for _, ct := range strings.Fields(strings.ToLower(client)) {
+			if strings.Trim(ct, ".,") == strings.Trim(ef[0], ".,") {
+				return true
+			}
+		}
+	}
+	return false
 }

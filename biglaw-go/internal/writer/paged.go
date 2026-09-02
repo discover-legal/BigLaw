@@ -415,6 +415,9 @@ func (w *Writer) critiqueSection(s section, draft string, ix *FindingIndex, voic
 // keeping flowing prose and adding only what the findings support.
 func (w *Writer) reviseSection(taskDesc, workflowType string, s section, draft, notes string, lead string) string {
 	system := drafterSystem
+	if d := w.advocacyDirective(); d != "" {
+		system += "\n\n" + d
+	}
 	if lead != "" {
 		system += "\n\n" + lead
 	}
@@ -509,15 +512,17 @@ func (w *Writer) assemblePaged(secs []section, board *pagedBoard) string {
 // memo body — observed live. A draft counts as an echo when at least 60% of
 // its substantive lines match a finding's conclusion or evidence by dedup key.
 func (w *Writer) isEchoDraft(draft string, s section, ix *FindingIndex) bool {
+	// GLOBAL record, not just this section's findings: fused dump bullets
+	// routinely carry content routed to OTHER sections (whole intake-memo
+	// chunks in a commissions section), which a section-scoped corpus scores
+	// as original prose — observed shipping unlabeled on a live run.
 	keys := map[string]bool{}
-	for _, id := range s.FindingIDs {
-		if f, ok := ix.Get(id); ok {
-			if k := dedupKey(oneLine(f.Content)); k != "" {
-				keys[k] = true
-			}
-			if k := dedupKey(oneLine(f.Evidence)); k != "" {
-				keys[k] = true
-			}
+	for _, f := range ix.All() {
+		if k := dedupKey(oneLine(f.Content)); k != "" {
+			keys[k] = true
+		}
+		if k := dedupKey(oneLine(f.Evidence)); k != "" {
+			keys[k] = true
 		}
 	}
 	if len(keys) == 0 {
@@ -529,13 +534,11 @@ func (w *Writer) isEchoDraft(draft string, s section, ix *FindingIndex) bool {
 	// run. A line also counts as echoed when most of its fragments appear
 	// verbatim in the section's own record.
 	var cb strings.Builder
-	for _, id := range s.FindingIDs {
-		if f, ok := ix.Get(id); ok {
-			cb.WriteString(strings.ToLower(oneLine(f.Content)))
-			cb.WriteString(" \u2029 ")
-			cb.WriteString(strings.ToLower(oneLine(f.Evidence)))
-			cb.WriteString(" \u2029 ")
-		}
+	for _, f := range ix.All() {
+		cb.WriteString(strings.ToLower(oneLine(f.Content)))
+		cb.WriteString(" \u2029 ")
+		cb.WriteString(strings.ToLower(oneLine(f.Evidence)))
+		cb.WriteString(" \u2029 ")
 	}
 	corpus := cb.String()
 	lineEchoed := func(ln string) bool {

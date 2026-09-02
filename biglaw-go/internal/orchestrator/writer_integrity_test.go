@@ -133,3 +133,28 @@ func TestDefenseTemplatesGatedBySecuritiesContent(t *testing.T) {
 		t.Fatal("securities record must still produce defense issues")
 	}
 }
+
+// Run-3 residuals, pinned:
+
+func TestClientGuardBareFirstName(t *testing.T) {
+	if !matchesClientParty("Adaeze", "Adaeze Okafor") {
+		t.Error("bare first-name entity must match the client")
+	}
+	if !matchesClientParty("Okafor", "Adaeze Okafor") {
+		t.Error("bare surname entity must match the client")
+	}
+	if matchesClientParty("Meridian", "Adaeze Okafor") || matchesClientParty("Al", "Adaeze Okafor") {
+		t.Error("unrelated or too-short single tokens must not match")
+	}
+}
+
+func TestAuthorityDedupeSpacingVariants(t *testing.T) {
+	body := "Under NYLL §652 and later NYLL § 652, plus NYLL §§ 652, and see NYLL § 74) here."
+	out := flagExternalAuthorities(body, "irrelevant corpus")
+	if got := strings.Count(out, "- NYLL §"); got != 2 {
+		t.Fatalf("spacing variants must collapse: want 2 appendix entries (652, 74), got %d:\n%s", got, out)
+	}
+	if strings.Contains(out, "74)") {
+		t.Fatal("unbalanced trailing paren must be trimmed from the listed authority")
+	}
+}

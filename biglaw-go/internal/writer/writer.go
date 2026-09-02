@@ -90,6 +90,14 @@ type Options struct {
 	// section, and a respondent with nothing extracted gets an explicit gap note —
 	// a structural hole is surfaced, never silent (the omitted-CEO defect).
 	Respondents []string
+	// ClientName is the represented party (parsed from the task description).
+	// When set, every drafting/stitch prompt carries a standing advocacy
+	// directive: the memo analyses FOR this party, and the opposing side's
+	// assertions are positions to evaluate, never facts. Without it, which
+	// voice a drafted section takes depends on whichever surviving findings
+	// dominate its cluster — a run-to-run coin flip observed live (one
+	// validation run argued the employer's case in the client's memo).
+	ClientName string
 	// Paged enables context-paging synthesis: each section is authored in order, then
 	// COMPACTED to a handle so it stops consuming the model's context; later section
 	// authors see the compacted handles and can call expand_section to UNCOMPACT any
@@ -971,6 +979,9 @@ func (w *Writer) draftSection(taskDesc, workflowType string, s section, ix *Find
 	// "exec summary → findings → recommendations" — into every section, producing 16 stacked
 	// templates. The genre belongs at the document level, not the section level.)
 	system := drafterSystem
+	if d := w.advocacyDirective(); d != "" {
+		system += "\n\n" + d
+	}
 	if extra.system != "" {
 		system += "\n\n" + extra.system
 	}
@@ -2005,23 +2016,24 @@ func figureLabel(row, sal string) string {
 	label = strings.Trim(strings.Join(strings.Fields(label), " "), " -—:|·,;(\t")
 	label = trimTrailingConnectives(label)
 	label = truncateRunesWordSafe(label, 64)
-	// Floor: a label that is a stray fragment ("2,", a lone connective) is
+	// Floor: a label that is a stray fragment ("2,", "(a)", a lone dash) is
 	// worse than the generic fallback — it garbles the Key-figures block.
-	// Require at least two words with a real (≥3-letter) word among them.
-	letters := 0
-	words := strings.Fields(label)
-	for _, w := range words {
+	// Require at least one word carrying ≥2 letters ("TFSA" passes; "2," and
+	// "(a)" floor out).
+	worded := false
+	for _, w := range strings.Fields(label) {
 		alpha := 0
 		for _, r := range w {
 			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
 				alpha++
 			}
 		}
-		if alpha >= 3 {
-			letters++
+		if alpha >= 2 {
+			worded = true
+			break
 		}
 	}
-	if len(words) < 2 || letters == 0 {
+	if !worded {
 		label = "figure"
 	}
 	return label
@@ -2171,7 +2183,11 @@ func (w *Writer) coherenceMerge(taskDesc, workflowType, draft string, final bool
 		instr = "Polish the sections below into one coherent, client-ready deliverable: add a brief executive opening, smooth the transitions, REMOVE duplication across sections, and keep every distinct factual point and the section headings (## ). " + antiRedundancyContract + " Do not add new facts, figures, or citations."
 	}
 	prompt := fmt.Sprintf("TASK: %s\nWORKFLOW: %s\n\n%s\n\nSECTIONS:\n%s", oneLine(taskDesc), workflowType, instr, draft)
-	out, err := w.complete(stitchSystem, prompt, w.opt.DraftMaxTokens*2, nil)
+	stitchSys := stitchSystem
+	if d := w.advocacyDirective(); d != "" {
+		stitchSys += "\n\n" + d
+	}
+	out, err := w.complete(stitchSys, prompt, w.opt.DraftMaxTokens*2, nil)
 	if err != nil {
 		return ""
 	}
@@ -2371,3 +2387,16 @@ func cleanHeading(s string) string {
 }
 
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+// advocacyDirective is the standing client-alignment instruction every
+// drafting and stitch prompt carries when the represented party is known.
+func (w *Writer) advocacyDirective() string {
+	if strings.TrimSpace(w.opt.ClientName) == "" {
+		return ""
+	}
+	return "YOU ACT FOR " + w.opt.ClientName + ". This memo advises " + w.opt.ClientName +
+		"'s own counsel. State the opposing party's assertions only as positions to be evaluated" +
+		" — never adopt them as established fact — and orient every section's analysis and" +
+		" recommendations toward " + w.opt.ClientName + "'s interests, while stating genuine" +
+		" weaknesses in the client's position candidly."
+}

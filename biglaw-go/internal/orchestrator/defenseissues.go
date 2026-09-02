@@ -179,7 +179,7 @@ func authorityText(ctx defenseContext) string {
 // (not classifier-based) so the gate is deterministic and can't be defeated by
 // a failed NOSLEGAL call.
 var reSecuritiesMatter = regexp.MustCompile(
-	`(?i)\b(?:SEC\b|Securities and Exchange Commission|Advisers Act|Investment Advisers|Exchange Act|Securities Act|Rule 10b-5|17 C\.F\.R\.|Section 206|Rule 204)`)
+	`(?i)\b(?:SEC\b|Securities and Exchange Commission|Advisers Act|Investment Advisers|Exchange Act|Securities Act|Rule 10b-5|17 C\.F\.R\.|Section 20[4-9]|Rule 204)`)
 
 func analyseDefense(ctx defenseContext) []ontology.DerivedIssue {
 	if strings.TrimSpace(ctx.Auth) == "" {

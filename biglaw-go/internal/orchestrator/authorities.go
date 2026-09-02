@@ -48,7 +48,11 @@ func flagExternalAuthorities(body, corpus string) string {
 	if strings.TrimSpace(body) == "" {
 		return body
 	}
+	// The corpus gets the same sigil normalization as statute keys, so
+	// "§ 2462" in a document matches a normalized "§2462" lookup.
 	corpus = strings.ToLower(corpus)
+	corpus = strings.ReplaceAll(corpus, "§§", "§")
+	corpus = strings.ReplaceAll(corpus, "§ ", "§")
 	type hit struct{ display, key string }
 	var unique []hit
 	seen := map[string]bool{}
@@ -59,6 +63,11 @@ func flagExternalAuthorities(body, corpus string) string {
 			// ("NYLL §193." → "NYLL §193"); real cites end in digits, a year
 			// paren, or a corporate-suffix period already trimmed above.
 			display = strings.TrimSuffix(display, ".")
+			// Unbalanced trailing closers ride in from surrounding prose
+			// ("NYLL § 74)") — trim them; a balanced year paren survives.
+			for strings.HasSuffix(display, ")") && strings.Count(display, ")") > strings.Count(display, "(") {
+				display = strings.TrimSuffix(display, ")")
+			}
 			if display == "" {
 				continue
 			}
@@ -120,6 +129,12 @@ func normalizeAuthority(key string) string {
 		key = reCorporateSuffix.ReplaceAllString(strings.TrimSpace(key), "")
 		return strings.TrimSpace(key)
 	}
+	// Statutes: spacing and section-sigil variants are the same authority
+	// ("NYLL §652" / "NYLL § 652" / "NYLL §§ 652") — a live run listed them
+	// as separate entries. Normalize the sigil and drop stray closers.
+	key = strings.ReplaceAll(key, "§§", "§")
+	key = strings.ReplaceAll(key, "§ ", "§")
+	key = strings.Trim(key, ")]},.;")
 	return strings.Join(strings.Fields(key), " ")
 }
 
