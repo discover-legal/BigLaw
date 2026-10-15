@@ -23,6 +23,9 @@ var dimensionWeights = struct {
 	OCG      float64
 }{0.30, 0.25, 0.20, 0.15, 0.10}
 
+// greenThreshold is the lowest composite score signalled green ("On track").
+const greenThreshold = 75
+
 // BudgetBurner can return budget burn for a matter.
 type BudgetBurner interface {
 	GetBurn(matterNumber string) *types.BudgetBurn
@@ -110,10 +113,29 @@ func (m *Monitor) Compute(
 			float64(oScore)*dimensionWeights.OCG,
 	)
 
+	var riskFactors []types.MatterRiskFactor
+	hasHighRisk := false
+	for _, r := range []*types.MatterRiskFactor{bRisk, dRisk, aRisk, gRisk, oRisk} {
+		if r != nil {
+			riskFactors = append(riskFactors, *r)
+			hasHighRisk = hasHighRisk || r.Severity == "high"
+		}
+	}
+	// A high-severity risk (failed tasks, budget ≥ 80%, ≥ 3 open gates, ≥ 50%
+	// OCG violations) caps the matter below green. The weighted average alone
+	// can't express that: the other four dimensions carry 75% of the weight,
+	// and an unset budget (85), fresh time entries (written by the failed runs
+	// themselves) and an empty gate queue kept a matter whose only task had
+	// failed at 88 "On track" while its own risk list said "high". Capping the
+	// number too keeps score and signal on the same thresholds.
+	if hasHighRisk && composite >= greenThreshold {
+		composite = greenThreshold - 1
+	}
+
 	var signal types.HealthSignal
 	var signalLabel string
 	switch {
-	case composite >= 75:
+	case composite >= greenThreshold:
 		signal = types.HealthGreen
 		signalLabel = "On track"
 	case composite >= 45:
@@ -124,12 +146,6 @@ func (m *Monitor) Compute(
 		signalLabel = "At risk"
 	}
 
-	var riskFactors []types.MatterRiskFactor
-	for _, r := range []*types.MatterRiskFactor{bRisk, dRisk, aRisk, gRisk, oRisk} {
-		if r != nil {
-			riskFactors = append(riskFactors, *r)
-		}
-	}
 	// Sort: high → medium → low
 	severityOrder := map[string]int{"high": 0, "medium": 1, "low": 2}
 	for i := 0; i < len(riskFactors)-1; i++ {
@@ -249,37 +265,52 @@ func budgetDimension(burn *types.BudgetBurn) (int, *types.MatterRiskFactor) {
 	return score, risk
 }
 
+// deadlineDimension scores delivery: tasks that died (failed, or interrupted
+// by a restart and never resubmitted) and tasks stuck in flight for over two
+// weeks.
+//
+// Failures are scored two ways and the worse one wins: a flat penalty per
+// failure (so one failure among many still registers) and the share of the
+// matter's tasks that failed (so a matter whose only work has failed scores
+// 0 here rather than a flat 70 — previously a matter whose single task had
+// failed still came out "On track").
 func deadlineDimension(tasks []types.Task) (int, *types.MatterRiskFactor) {
 	now := time.Now()
 	sevenDays := 7 * 24 * time.Hour
-	overdue := 0
-	imminent := 0
+	failed := 0
+	stalled := 0
 	for _, t := range tasks {
-		if t.Status == "failed" {
-			overdue++
-		}
-		if t.Status == "pending" || t.Status == "running" {
+		switch t.Status {
+		case types.TaskStatusFailed, types.TaskStatusInterrupted:
+			failed++
+		case types.TaskStatusPending, types.TaskStatusQueued, types.TaskStatusRunning:
 			if now.Sub(t.CreatedAt) > sevenDays*2 {
-				imminent++
+				stalled++
 			}
 		}
 	}
 	score := 100
 	var risk *types.MatterRiskFactor
-	if overdue > 0 {
-		score = int(math.Max(0, float64(100-overdue*30)))
+	if failed > 0 {
+		byCount := 100 - failed*30
+		byShare := int(math.Round(100 * (1 - float64(failed)/float64(len(tasks)))))
+		score = max(0, min(byCount, byShare))
+		msg := formatN("%d task(s) have failed on this matter", failed)
+		if failed == len(tasks) {
+			msg = formatN("All %d task(s) on this matter have failed — no work product delivered", failed)
+		}
 		risk = &types.MatterRiskFactor{
 			Type:            "task_failure",
 			Severity:        "high",
-			Message:         formatN("%d task(s) have failed on this matter", overdue),
+			Message:         msg,
 			SuggestedAction: "Review failed tasks and re-run or reassign.",
 		}
-	} else if imminent > 0 {
-		score = int(math.Max(30, float64(100-imminent*15)))
+	} else if stalled > 0 {
+		score = int(math.Max(30, float64(100-stalled*15)))
 		risk = &types.MatterRiskFactor{
 			Type:            "deadline_approaching",
 			Severity:        "medium",
-			Message:         formatN("%d task(s) have been running for over 2 weeks", imminent),
+			Message:         formatN("%d task(s) have been running for over 2 weeks", stalled),
 			SuggestedAction: "Check task progress and ensure no blockers.",
 		}
 	}
