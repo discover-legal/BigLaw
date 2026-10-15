@@ -18,6 +18,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -312,7 +313,7 @@ func (s *Server) handleDeadlineCompute(c *gin.Context) {
 	}
 	result, err := s.mattersDeps().deadlines.Compute(body.Jurisdiction, body.TriggerEvent, date)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		writeDeadlineError(c, err)
 		return
 	}
 	if result.Deadlines == nil {
@@ -359,13 +360,37 @@ func (s *Server) handleMatterDeadlines(c *gin.Context) {
 	}
 	result, err := s.mattersDeps().deadlines.Compute(jurisdiction, body.TriggerEvent, date)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		writeDeadlineError(c, err)
 		return
 	}
 	if result.Deadlines == nil {
 		result.Deadlines = []types.ComputedDeadline{}
 	}
 	c.JSON(http.StatusOK, result)
+}
+
+// writeDeadlineError maps deadline-engine errors to HTTP: an unknown trigger
+// or malformed date is the caller's mistake (400, with the valid triggers so
+// the client can correct it); an unloaded jurisdiction is 404.
+func writeDeadlineError(c *gin.Context, err error) {
+	var trig *deadlines.UnknownTriggerError
+	var jur *deadlines.UnknownJurisdictionError
+	var bad *deadlines.InvalidDateError
+	switch {
+	case errors.As(err, &trig):
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":         err.Error(),
+			"jurisdiction":  trig.Jurisdiction,
+			"triggerEvent":  trig.Trigger,
+			"validTriggers": trig.Valid,
+		})
+	case errors.As(err, &bad):
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	case errors.As(err, &jur):
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error(), "validJurisdictions": jur.Valid})
+	default:
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	}
 }
 
 // mattersNormalizeISODate accepts YYYY-MM-DD or a full RFC 3339 timestamp and

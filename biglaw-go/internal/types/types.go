@@ -1218,6 +1218,12 @@ type ComputedDeadline struct {
 	DayType     DayType `json:"dayType"`
 	Cite        string  `json:"cite"`
 	Note        string  `json:"note,omitempty"`
+	// UnadjustedDate is the raw end of the period before any roll-forward
+	// (e.g. FRCP 6(a)(1)(C)); set only when it differs from DueDate.
+	UnadjustedDate string `json:"unadjustedDate,omitempty"`
+	// Adjustments explains every day the due/warning date was moved past
+	// (weekend, holiday) and the rule that moved it.
+	Adjustments []string `json:"adjustments,omitempty"`
 }
 
 type DeadlineResult struct {
@@ -1226,5 +1232,9 @@ type DeadlineResult struct {
 	TriggerEvent     string             `json:"triggerEvent"`
 	TriggerDate      string             `json:"triggerDate"`
 	ComputedAt       string             `json:"computedAt"`
+	HolidayCalendar  HolidayCalendar    `json:"holidayCalendar,omitempty"`
 	Deadlines        []ComputedDeadline `json:"deadlines"`
+	// Limitations lists what the computation does NOT model (e.g. state
+	// legal holidays under FRCP 6(a)(6)(C)); always surfaced to the user.
+	Limitations []string `json:"limitations,omitempty"`
 }
