@@ -40,6 +40,7 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/agents"
 	"github.com/discover-legal/biglaw-go/internal/providers"
 	"github.com/discover-legal/biglaw-go/internal/strutil"
+	"github.com/discover-legal/biglaw-go/internal/urlguard"
 )
 
 const docusealMaxFileBytes = 100 * 1024 * 1024 // 100 MB
@@ -64,6 +65,19 @@ func (r *Registry) docusealEnabled() bool {
 	return true
 }
 
+// docusealClient returns the HTTP client for the current DocuSeal URL. The
+// operator's own DOCUSEAL_URL (environment) is trusted and may be internal;
+// a URL an admin set through PUT /settings is called through urlguard's
+// public client, which re-validates every DNS answer at dial time (no DNS
+// rebinding to internal hosts after the settings-time check) and every
+// redirect.
+func (r *Registry) docusealClient() *http.Client {
+	if r.cfg.DocuSeal.URL == r.cfg.DocuSeal.OperatorURL {
+		return &http.Client{Timeout: 30 * time.Second}
+	}
+	return urlguard.NewPublicClient(30*time.Second, false)
+}
+
 // docusealFetch issues an authenticated request against the DocuSeal API and
 // decodes the JSON response. contentType is "" for GET requests.
 func (r *Registry) docusealFetch(method, path, contentType string, body io.Reader) (interface{}, error) {
@@ -75,8 +89,7 @@ func (r *Registry) docusealFetch(method, path, contentType string, body io.Reade
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := r.docusealClient().Do(req)
 	if err != nil {
 		return nil, err
 	}

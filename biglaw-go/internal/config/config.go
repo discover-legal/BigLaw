@@ -207,8 +207,9 @@ func Load() *Config {
 			FirmName: env("FIRM_NAME", ""),
 		},
 		DocuSeal: DocuSealConfig{
-			APIKey: env("DOCUSEAL_API_KEY", ""),
-			URL:    env("DOCUSEAL_URL", "http://localhost:3000"),
+			APIKey:      env("DOCUSEAL_API_KEY", ""),
+			URL:         env("DOCUSEAL_URL", "http://localhost:3000"),
+			OperatorURL: env("DOCUSEAL_URL", "http://localhost:3000"),
 			// E-signature defaults to on when an API key is present; the
 			// admin panel can toggle it and set url/key at runtime.
 			Enabled: envBool("DOCUSEAL_ENABLED", os.Getenv("DOCUSEAL_API_KEY") != ""),
