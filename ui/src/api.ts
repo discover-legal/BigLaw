@@ -39,6 +39,24 @@ async function json<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+/**
+ * Defense in depth at the type boundary. The server guarantees list fields are
+ * `[]`, never `null` (biglaw-go/internal/jsonsafe), but a stale backend or a
+ * proxy-rewritten body must not take a whole page down with `null.length`.
+ * Only the shapes whose list fields are dereferenced unguarded are covered.
+ */
+function lists<T>(...keys: (keyof T)[]) {
+  return (v: T): T => {
+    if (v && typeof v === "object") {
+      for (const k of keys) if (v[k] == null) (v as Record<keyof T, unknown>)[k] = [];
+    }
+    return v;
+  };
+}
+const normTask = lists<Task>("documentIds", "activeAgentIds", "rounds", "findings", "pendingGates");
+const normTasks = (ts: Task[] | null) => (ts ?? []).map(normTask);
+const normHeadnotes = lists<HeadnoteReport>("headnotes", "practiceAreas", "relatedPrinciples");
+
 const POST = (body: unknown): RequestInit => ({
   method: "POST",
   headers: { "Content-Type": "application/json" },
@@ -46,8 +64,8 @@ const POST = (body: unknown): RequestInit => ({
 });
 
 export const api = {
-  listTasks: () => fetch("/tasks").then(json<Task[]>),
-  getTask: (id: string) => fetch(`/tasks/${id}`).then(json<Task>),
+  listTasks: () => fetch("/tasks").then(json<Task[]>).then(normTasks),
+  getTask: (id: string) => fetch(`/tasks/${id}`).then(json<Task>).then(normTask),
   health: () => fetch("/health").then(json<Health>),
   listTemplates: () => fetch("/templates").then(json<Template[]>),
   listAgents: () => fetch("/agents").then(json<AgentSummary[]>),
@@ -56,16 +74,16 @@ export const api = {
     fetch("/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) }).then(json<AppSettings>),
 
   submitTask: (body: { description: string; workflowType: WorkflowType; documentIds?: string[]; clientNumber?: string; matterNumber?: string }) =>
-    fetch("/tasks", POST(body)).then(json<Task>),
+    fetch("/tasks", POST(body)).then(json<Task>).then(normTask),
 
   fromTemplate: (body: { templateId: string; substitutions?: Record<string, string>; documentIds?: string[]; clientNumber?: string; matterNumber?: string }) =>
-    fetch("/tasks/from-template", POST(body)).then(json<Task>),
+    fetch("/tasks/from-template", POST(body)).then(json<Task>).then(normTask),
 
   deleteTask: (id: string) =>
     fetch(`/tasks/${id}`, { method: "DELETE" }).then((r) => json<{ ok: true }>(r)),
 
   assignLawyers: (taskId: string, lawyerIds: string[]) =>
-    fetch(`/tasks/${taskId}/assign`, POST({ lawyerIds })).then(json<Task>),
+    fetch(`/tasks/${taskId}/assign`, POST({ lawyerIds })).then(json<Task>).then(normTask),
 
   me: () => fetch("/me").then(json<Me>),
   authProviders: () => fetch("/auth/providers").then(json<{ google: boolean; microsoft: boolean; linkedin: boolean }>),
@@ -285,7 +303,7 @@ export const api = {
   generateHeadnotes: (body: {
     opinionText: string; caseName?: string; citation?: string; court?: string;
     dateFiled?: string; jurisdiction?: string;
-  }) => fetch("/headnotes/generate", POST(body)).then(json<HeadnoteReport>),
+  }) => fetch("/headnotes/generate", POST(body)).then(json<HeadnoteReport>).then(normHeadnotes),
 
   generatePrecedent: (body: {
     documentType: string; practiceArea?: string; jurisdiction?: string; actingFor?: string;
@@ -365,7 +383,7 @@ export function streamTask(
   const es = new EventSource(`/tasks/${id}/stream`);
 
   es.addEventListener("snapshot", (e) => {
-    try { handlers.onSnapshot(JSON.parse((e as MessageEvent).data) as Task); }
+    try { handlers.onSnapshot(normTask(JSON.parse((e as MessageEvent).data) as Task)); }
     catch (err) { console.error(`SSE /tasks/${id}/stream: unparseable snapshot`, err); }
   });
 
