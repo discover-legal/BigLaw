@@ -113,11 +113,12 @@ func (s *Server) engines() (*enginesBundle, error) {
 	return enginesShared, nil
 }
 
-// enginesRequire resolves the engine bundle or writes a 500 and returns nil.
+// enginesRequire resolves the engine bundle or writes an error and returns
+// nil: 503 (typed) when no model provider is configured, else 500.
 func (s *Server) enginesRequire(c *gin.Context) *enginesBundle {
 	eng, err := s.engines()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "engines unavailable: " + err.Error()})
+		writeModelError(c, err, "engines unavailable: "+err.Error())
 		return nil
 	}
 	return eng
@@ -230,7 +231,7 @@ func (s *Server) handleBuildPlaybook(c *gin.Context) {
 		TaskID:       body.TaskID,
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		writeModelError(c, err, "")
 		return
 	}
 	c.JSON(http.StatusCreated, pb)
@@ -327,7 +328,7 @@ func (s *Server) handleRedline(c *gin.Context) {
 		TaskID:        body.TaskID,
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		writeModelError(c, err, "")
 		return
 	}
 	c.JSON(http.StatusOK, report)
@@ -372,7 +373,7 @@ func (s *Server) handleGenerateHeadnotes(c *gin.Context) {
 		TaskID:       body.TaskID,
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		writeModelError(c, err, "")
 		return
 	}
 	c.JSON(http.StatusOK, report)
@@ -426,7 +427,7 @@ func (s *Server) handleGeneratePrecedent(c *gin.Context) {
 		},
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		writeModelError(c, err, "")
 		return
 	}
 	c.JSON(http.StatusOK, doc)

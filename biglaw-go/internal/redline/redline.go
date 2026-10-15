@@ -10,6 +10,7 @@ package redline
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -120,11 +121,23 @@ func New(provider providers.Provider, sonnetModel, haikuModel string) *Engine {
 }
 
 // Redline generates a redline report for a counterparty draft.
+//
+// Any failed model call (or unusable model output where a fallback would look
+// like a real verdict) fails the whole run with an error matching
+// providers.ErrModelUnavailable / providers.ErrNoProvider. A partial report is
+// never returned: a review that silently dropped its missing-clause pass or
+// its clause list reads as a clean contract.
 func (e *Engine) Redline(documentText string, store *playbook.Store, opts RedlineOpts) (*Report, error) {
 	clauses, err := e.extractClauses(documentText, opts.PracticeArea, playbookVocabulary(store, opts), opts.TaskID)
-	if err != nil || len(clauses) == 0 {
-		slog.Warn("RedlineEngine: no clauses extracted — returning empty report", "error", err, "docChars", len(documentText))
-		return e.emptyReport(opts), nil
+	if err != nil {
+		slog.Warn("RedlineEngine: clause extraction failed", "error", err, "docChars", len(documentText))
+		return nil, err
+	}
+	if len(clauses) == 0 {
+		// A zero-clause report reads as a clean contract. No clauses from a
+		// non-empty draft means the review did not happen — fail it.
+		slog.Warn("RedlineEngine: model extracted no clauses", "docChars", len(documentText))
+		return nil, providers.ModelFailure("redline clause extraction", errors.New("the model returned no clauses for this document"))
 	}
 
 	var issues []Issue
@@ -135,12 +148,21 @@ func (e *Engine) Redline(documentText string, store *playbook.Store, opts Redlin
 			end = len(clauses)
 		}
 		batch := clauses[i:end]
-		bIssues := e.analyseBatch(batch, store, opts)
+		bIssues, err := e.analyseBatch(batch, store, opts)
+		if err != nil {
+			return nil, err
+		}
 		issues = append(issues, bIssues...)
 	}
 
-	missing := e.detectMissingClauses(clauses, store, opts)
-	summary := e.generateSummary(issues, opts)
+	missing, err := e.detectMissingClauses(clauses, store, opts)
+	if err != nil {
+		return nil, err
+	}
+	summary, err := e.generateSummary(issues, opts)
+	if err != nil {
+		return nil, err
+	}
 
 	r := &Report{
 		ID:               uuid.New().String(),
@@ -234,8 +256,7 @@ Include up to 40 clauses. Skip boilerplate recitals.`, area, vocabHint)
 		Messages:    []providers.Message{{Role: "user", Content: "Contract text:\n" + truncate(text, 12000)}},
 	})
 	if err != nil {
-		slog.Warn("RedlineEngine: clause extraction failed", "error", err)
-		return nil, err
+		return nil, providers.ModelFailure("redline clause extraction", err)
 	}
 
 	dms := time.Since(start).Milliseconds()
@@ -244,8 +265,10 @@ Include up to 40 clauses. Skip boilerplate recitals.`, area, vocabHint)
 	raw := textFrom(resp)
 	var clauses []rawClause
 	if err := parseJSONArray(raw, &clauses); err != nil {
+		// Unparseable output is a failed call, not "no clauses": an empty
+		// report would read as a clean contract.
 		slog.Warn("RedlineEngine: clause extraction parse failed", "error", err, "rawPrefix", truncate(raw, 300))
-		return nil, nil
+		return nil, providers.ModelFailure("redline clause extraction", fmt.Errorf("unparseable model output: %w", err))
 	}
 	return clauses, nil
 }
@@ -256,7 +279,7 @@ Include up to 40 clauses. Skip boilerplate recitals.`, area, vocabHint)
 // Clause-type naming is free-form on both sides, so the absence judgment is
 // made by the model rather than by string matching.
 
-func (e *Engine) detectMissingClauses(found []rawClause, store *playbook.Store, opts RedlineOpts) []MissingClause {
+func (e *Engine) detectMissingClauses(found []rawClause, store *playbook.Store, opts RedlineOpts) ([]MissingClause, error) {
 	// Union of clause types across the applicable playbooks, each resolved
 	// through the cascade so the effective tier's position is used.
 	type expected struct {
@@ -281,7 +304,7 @@ func (e *Engine) detectMissingClauses(found []rawClause, store *playbook.Store, 
 		}
 	}
 	if len(expectedByType) == 0 {
-		return nil
+		return nil, nil // no playbook positions apply — nothing to be missing
 	}
 
 	var expBlocks, foundTypes []string
@@ -323,8 +346,7 @@ Return a JSON object with a "missing" array (empty array if nothing material is 
 		Messages:    []providers.Message{{Role: "user", Content: user}},
 	})
 	if err != nil {
-		slog.Warn("RedlineEngine: missing-clause detection failed", "error", err)
-		return nil
+		return nil, providers.ModelFailure("redline missing-clause detection", err)
 	}
 	recordCost(e.sonnet, resp, time.Since(start).Milliseconds(), opts.TaskID)
 
@@ -336,8 +358,9 @@ Return a JSON object with a "missing" array (empty array if nothing material is 
 		Severity      string `json:"severity"`
 	}
 	if err := parseJSONArray(raw, &parsed); err != nil {
+		// An empty list here would assert "nothing material is missing".
 		slog.Warn("RedlineEngine: missing-clause parse failed", "error", err, "rawPrefix", truncate(raw, 300))
-		return nil
+		return nil, providers.ModelFailure("redline missing-clause detection", fmt.Errorf("unparseable model output: %w", err))
 	}
 
 	// Map model-returned clause types back to playbook entries with the same
@@ -371,7 +394,7 @@ Return a JSON object with a "missing" array (empty array if nothing material is 
 			Rationale:      m.Rationale,
 		})
 	}
-	return out
+	return out, nil
 }
 
 // ─── Step 2: batch analysis ───────────────────────────────────────────────────
@@ -382,7 +405,7 @@ type posInfo struct {
 	source     string
 }
 
-func (e *Engine) analyseBatch(clauses []rawClause, store *playbook.Store, opts RedlineOpts) []Issue {
+func (e *Engine) analyseBatch(clauses []rawClause, store *playbook.Store, opts RedlineOpts) ([]Issue, error) {
 	start := time.Now()
 
 	// Resolve playbook for each clause
@@ -449,8 +472,7 @@ verdict is bound to its clause:
 		Messages:    []providers.Message{{Role: "user", Content: strings.Join(blocks, "\n\n")}},
 	})
 	if err != nil {
-		slog.Warn("RedlineEngine: batch analysis failed", "error", err)
-		return fallbackIssues(clauses, positions)
+		return nil, providers.ModelFailure("redline clause analysis", err)
 	}
 
 	dms := time.Since(start).Milliseconds()
@@ -459,8 +481,11 @@ verdict is bound to its clause:
 	raw := textFrom(resp)
 	var parsed []map[string]interface{}
 	if err := parseJSONArray(raw, &parsed); err != nil {
+		// The model answered but unusably: every clause is escalated with an
+		// explicit "analysis failed" rationale — a disclosed non-verdict, never
+		// an accept.
 		slog.Warn("RedlineEngine: batch analysis parse failed", "error", err, "rawPrefix", truncate(raw, 300))
-		return fallbackIssues(clauses, positions)
+		return fallbackIssues(clauses, positions), nil
 	}
 
 	// Join verdicts to clauses by the model-echoed 1-based clauseIndex, not by
@@ -512,7 +537,7 @@ verdict is bound to its clause:
 			Severity:         toSeverity(p["severity"]),
 		})
 	}
-	return issues
+	return issues, nil
 }
 
 // clauseIndexOf coerces a model-echoed clauseIndex into an int. JSON numbers
@@ -541,7 +566,7 @@ func clauseIndexOf(v interface{}) (int, bool) {
 
 // ─── Step 3: executive summary ────────────────────────────────────────────────
 
-func (e *Engine) generateSummary(issues []Issue, opts RedlineOpts) string {
+func (e *Engine) generateSummary(issues []Issue, opts RedlineOpts) (string, error) {
 	start := time.Now()
 	var criticals, redlines, accepts []Issue
 	for _, iss := range issues {
@@ -613,23 +638,14 @@ Write as if briefing a senior partner before a negotiation call. Concise, specif
 		Messages:  []providers.Message{{Role: "user", Content: prompt}},
 	})
 	if err != nil {
-		return fmt.Sprintf("Redline review complete. %d critical issue(s), %d clause(s) require amendment.", len(criticals), len(redlines))
+		return "", providers.ModelFailure("redline executive summary", err)
 	}
 	recordCost(e.sonnet, resp, time.Since(start).Milliseconds(), opts.TaskID)
-	return textFrom(resp)
-}
-
-func (e *Engine) emptyReport(opts RedlineOpts) *Report {
-	return &Report{
-		ID:               uuid.New().String(),
-		DocumentID:       opts.DocumentID,
-		DocumentTitle:    opts.DocumentTitle,
-		PracticeArea:     opts.PracticeArea,
-		Jurisdiction:     opts.Jurisdiction,
-		Issues:           []Issue{},
-		ExecutiveSummary: "No clauses extracted from the provided document.",
-		GeneratedAt:      time.Now().UTC().Format(time.RFC3339),
+	summary := strings.TrimSpace(textFrom(resp))
+	if summary == "" {
+		return "", providers.ModelFailure("redline executive summary", errors.New("empty model output"))
 	}
+	return summary, nil
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

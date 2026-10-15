@@ -518,6 +518,11 @@ func (p *OllamaProvider) sendChat(body []byte, url string) (*openAIChatResponse,
 		retryAfter := resp.Header.Get("Retry-After")
 		resp.Body.Close()
 		lastErr = fmt.Errorf("ollama: HTTP %d: %s", resp.StatusCode, string(b))
+		if p.apiKey == "" && (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) {
+			// The endpoint demands credentials and none are configured: that
+			// is a missing provider configuration, not an upstream outage.
+			return nil, fmt.Errorf("%w: no API key is set for %s (%v)", ErrNoProvider, p.baseURL, lastErr)
+		}
 
 		if !retryableStatus(resp.StatusCode) || attempt >= maxProviderRetries {
 			return nil, lastErr

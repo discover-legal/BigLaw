@@ -1,0 +1,63 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (C) 2026 Discover Legal
+
+package playbook
+
+import (
+	"errors"
+	"path/filepath"
+	"sync"
+	"testing"
+
+	"github.com/discover-legal/biglaw-go/internal/providers"
+	"github.com/discover-legal/biglaw-go/internal/types"
+)
+
+// scripted replays one reply per Chat call: an error, or a text block.
+type scripted struct {
+	mu      sync.Mutex
+	replies []interface{} // string | error
+	calls   int
+}
+
+func (s *scripted) Chat(providers.ChatParams) (*providers.ChatResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.calls >= len(s.replies) {
+		s.calls++
+		return nil, errors.New("scripted: no more replies")
+	}
+	r := s.replies[s.calls]
+	s.calls++
+	if err, ok := r.(error); ok {
+		return nil, err
+	}
+	return &providers.ChatResponse{Content: []providers.ContentBlock{{Type: providers.BlockText, Text: r.(string)}}}, nil
+}
+
+func noSearch(string, int) []types.SearchResult { return nil }
+
+// A failed extraction must not persist a playbook whose positions read
+// "Extraction failed" — later redlines would apply it as the firm position.
+func TestBuildModelFailurePersistsNothing(t *testing.T) {
+	for name, reply := range map[string]interface{}{
+		"call fails":  errors.New("ollama: HTTP 500"),
+		"unparseable": "no json here",
+	} {
+		t.Run(name, func(t *testing.T) {
+			st := New(filepath.Join(t.TempDir(), "pb.json"))
+			if err := st.Init(); err != nil {
+				t.Fatal(err)
+			}
+			pb, err := NewBuilder(&scripted{replies: []interface{}{reply}}, "light").Build(st, noSearch, BuildOpts{
+				Scope: types.PlaybookScopeFirm, PracticeArea: "Corporate & M&A", Name: "x", ClauseTypes: []string{"Governing law"},
+			})
+			if pb != nil || !errors.Is(err, providers.ErrModelUnavailable) {
+				t.Fatalf("want (nil, ErrModelUnavailable), got (%+v, %v)", pb, err)
+			}
+			if n := len(st.List("", "", "")); n != 0 {
+				t.Fatalf("store has %d playbooks after a failed build, want 0", n)
+			}
+		})
+	}
+}

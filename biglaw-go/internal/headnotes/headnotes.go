@@ -9,6 +9,7 @@ package headnotes
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -44,14 +45,21 @@ func New(provider providers.Provider, sonnetModel, haikuModel string) *Engine {
 	return &Engine{provider: provider, sonnet: sonnetModel, haiku: haikuModel}
 }
 
-// Generate extracts headnotes from a court opinion text.
+// Generate extracts headnotes from a court opinion text. A failed model call
+// (or unusable extraction output) returns an error matching
+// providers.ErrModelUnavailable / ErrNoProvider — never a "0 headnotes"
+// report, which would read as an opinion with no holdings.
 func (e *Engine) Generate(opinionText string, opts GenerateOpts) (*types.HeadnoteReport, error) {
 	headnotes, err := e.extractHeadnotes(opinionText, opts)
 	if err != nil {
 		slog.Warn("HeadnoteEngine: extraction error", "error", err)
+		return nil, err
 	}
 
-	meta := e.synthesiseMeta(opinionText, headnotes, opts)
+	meta, err := e.synthesiseMeta(opinionText, headnotes, opts)
+	if err != nil {
+		return nil, err
+	}
 
 	caseName := opts.CaseName
 	if caseName == "" {
@@ -136,7 +144,7 @@ Return a JSON array: [{"number":1,"proposition":"...","sourceText":"...","locati
 		Messages:    []providers.Message{{Role: "user", Content: "Court opinion:\n" + truncate(text, 15000)}},
 	})
 	if err != nil {
-		return nil, err
+		return nil, providers.ModelFailure("headnote extraction", err)
 	}
 
 	dms := time.Since(start).Milliseconds()
@@ -146,12 +154,16 @@ Return a JSON array: [{"number":1,"proposition":"...","sourceText":"...","locati
 	s := strings.Index(raw, "[")
 	eIdx := strings.LastIndex(raw, "]")
 	if s < 0 || eIdx <= s {
-		return nil, nil
+		return nil, providers.ModelFailure("headnote extraction", errors.New("unparseable model output: no JSON array"))
 	}
 
 	var parsed []map[string]interface{}
 	if err := json.Unmarshal([]byte(raw[s:eIdx+1]), &parsed); err != nil {
-		return nil, err
+		return nil, providers.ModelFailure("headnote extraction", fmt.Errorf("unparseable model output: %w", err))
+	}
+	if len(parsed) == 0 {
+		// "0 headnotes" reads as an opinion with no holdings.
+		return nil, providers.ModelFailure("headnote extraction", errors.New("the model returned no headnotes for this opinion"))
 	}
 
 	headnotes := make([]types.Headnote, 0, len(parsed))
@@ -180,7 +192,7 @@ Return a JSON array: [{"number":1,"proposition":"...","sourceText":"...","locati
 
 // ─── Step 2: key holding synthesis ───────────────────────────────────────────
 
-func (e *Engine) synthesiseMeta(opinionText string, headnotes []types.Headnote, opts GenerateOpts) map[string]string {
+func (e *Engine) synthesiseMeta(opinionText string, headnotes []types.Headnote, opts GenerateOpts) (map[string]string, error) {
 	start := time.Now()
 
 	ratioLines := make([]string, 0, 5)
@@ -222,7 +234,7 @@ Opinion excerpt:
 		Messages:  []providers.Message{{Role: "user", Content: prompt}},
 	})
 	if err != nil {
-		return fallbackMeta(opts)
+		return nil, providers.ModelFailure("headnote key-holding synthesis", err)
 	}
 
 	dms := time.Since(start).Milliseconds()
@@ -232,16 +244,16 @@ Opinion excerpt:
 	s := strings.Index(raw, "{")
 	eIdx := strings.LastIndex(raw, "}")
 	if s < 0 || eIdx <= s {
-		return fallbackMeta(opts)
+		return fallbackMeta(opts), nil
 	}
 	var parsed map[string]string
 	if err := json.Unmarshal([]byte(raw[s:eIdx+1]), &parsed); err != nil {
-		return fallbackMeta(opts)
+		return fallbackMeta(opts), nil
 	}
 	if parsed["keyHolding"] == "" {
 		parsed["keyHolding"] = "Key holding could not be synthesised — see headnotes."
 	}
-	return parsed
+	return parsed, nil
 }
 
 func fallbackMeta(opts GenerateOpts) map[string]string {

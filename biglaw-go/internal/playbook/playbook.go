@@ -424,7 +424,13 @@ func (b *Builder) Build(store *Store, kSearch func(query string, topK int) []typ
 			end = len(clauseTypes)
 		}
 		batch := clauseTypes[i:end]
-		be := b.extractBatch(batch, excerptText, opts, docCount)
+		be, err := b.extractBatch(batch, excerptText, opts, docCount)
+		if err != nil {
+			// Nothing is persisted: a playbook whose positions read
+			// "Extraction failed" would be applied as the firm's position by
+			// every later redline and precedent run.
+			return nil, err
+		}
 		entries = append(entries, be...)
 	}
 
@@ -455,7 +461,7 @@ func (b *Builder) Build(store *Store, kSearch func(query string, topK int) []typ
 	return &pb, nil
 }
 
-func (b *Builder) extractBatch(clauseTypes []string, excerpts string, opts BuildOpts, docCount int) []types.PlaybookEntry {
+func (b *Builder) extractBatch(clauseTypes []string, excerpts string, opts BuildOpts, docCount int) ([]types.PlaybookEntry, error) {
 	start := time.Now()
 
 	numbered := make([]string, len(clauseTypes))
@@ -505,7 +511,7 @@ If insufficient data: standardPosition: "Insufficient precedent data — apply f
 	})
 	if err != nil {
 		slog.Warn("PlaybookBuilder batch failed", "error", err)
-		return fallbackEntries(clauseTypes, opts.PracticeArea)
+		return nil, providers.ModelFailure("playbook position extraction", err)
 	}
 
 	dms := time.Since(start).Milliseconds()
@@ -539,12 +545,12 @@ If insufficient data: standardPosition: "Insufficient precedent data — apply f
 	s := strings.Index(raw, "[")
 	eIdx := strings.LastIndex(raw, "]")
 	if s < 0 || eIdx <= s {
-		return fallbackEntries(clauseTypes, opts.PracticeArea)
+		return nil, providers.ModelFailure("playbook position extraction", fmt.Errorf("unparseable model output: no JSON array"))
 	}
 
 	var parsed []map[string]interface{}
 	if err := json.Unmarshal([]byte(raw[s:eIdx+1]), &parsed); err != nil {
-		return fallbackEntries(clauseTypes, opts.PracticeArea)
+		return nil, providers.ModelFailure("playbook position extraction", fmt.Errorf("unparseable model output: %w", err))
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -563,23 +569,7 @@ If insufficient data: standardPosition: "Insufficient precedent data — apply f
 		}
 		entries = append(entries, e)
 	}
-	return entries
-}
-
-func fallbackEntries(clauseTypes []string, practiceArea string) []types.PlaybookEntry {
-	now := time.Now().UTC().Format(time.RFC3339)
-	entries := make([]types.PlaybookEntry, len(clauseTypes))
-	for i, ct := range clauseTypes {
-		entries[i] = types.PlaybookEntry{
-			ClauseType:       ct,
-			PracticeArea:     practiceArea,
-			StandardPosition: "Extraction failed — review source documents manually.",
-			RedLines:         []string{"Do not agree without partner sign-off"},
-			DealPoints:       []string{},
-			LastUpdated:      now,
-		}
-	}
-	return entries
+	return entries, nil
 }
 
 // ─── Clause type catalogue ────────────────────────────────────────────────────
