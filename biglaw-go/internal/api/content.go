@@ -618,7 +618,7 @@ func (s *Server) contentToneImport(c *gin.Context, linkedInOnly bool) {
 		writeModelError(c, err, "Tone analysis failed. Please try again.")
 		return
 	}
-	tone, err := analyzer.Analyze(samples, profile.Name, sourceType, profileID)
+	tone, err := analyzer.Analyze(c.Request.Context(), samples, profile.Name, sourceType, profileID)
 	if err != nil {
 		writeModelError(c, err, "Tone analysis failed. Please try again.")
 		return

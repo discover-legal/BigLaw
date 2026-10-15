@@ -89,8 +89,10 @@ func startMonitors(
 
 	var regMon *regulatory.Monitor
 	regModel := routing.Light(cfg)
-	rm := regulatory.New(provReg.MustGet(regModel), regModel)
-	if rm.IsEnabled() {
+	regProvider, perr := provReg.Get(regModel)
+	if perr != nil {
+		slog.Warn("regulatory pulse monitor disabled: no model provider configured", "model", regModel, "error", perr)
+	} else if rm := regulatory.New(regProvider, regModel); rm.IsEnabled() {
 		regMon = rm
 		rm.SetAlertHandler(func(a types.RegulationAlert) {
 			postAlert(poster, "regulatory_alert", a.MatterNumber,

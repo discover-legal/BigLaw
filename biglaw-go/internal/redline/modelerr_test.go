@@ -4,6 +4,7 @@
 package redline
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
 	"sync"
@@ -70,8 +71,8 @@ func TestRedlineModelFailuresReturnErrorNotReport(t *testing.T) {
 		{name: "extraction call fails", replies: []interface{}{upstream}},
 		{name: "extraction provider unconfigured", replies: []interface{}{providers.ModelFailure("x", errors.Join(providers.ErrNoProvider))}, noProvider: true},
 		{name: "extraction unparseable", replies: []interface{}{"I cannot help with that."}},
-		{name: "extraction finds no clauses", replies: []interface{}{`{"clauses":[]}`}},
 		{name: "clause analysis call fails", replies: []interface{}{clausesJSON, upstream}},
+		{name: "clause analysis unparseable", replies: []interface{}{clausesJSON, "garbage"}},
 		{name: "missing-clause call fails", replies: []interface{}{clausesJSON, verdictsJSON, upstream}, withPB: true},
 		{name: "missing-clause unparseable", replies: []interface{}{clausesJSON, verdictsJSON, "no idea"}, withPB: true},
 		{name: "summary call fails", replies: []interface{}{clausesJSON, verdictsJSON, upstream}},
@@ -110,15 +111,44 @@ func TestRedlineHappyPathStillWorks(t *testing.T) {
 	}
 }
 
-// Unparseable verdicts are a disclosed non-verdict: every clause escalated with
-// an explicit "Analysis failed" rationale, never accepted.
-func TestRedlineUnparseableVerdictsEscalate(t *testing.T) {
-	eng := New(&scripted{replies: []interface{}{clausesJSON, "garbage", "Summary."}}, "mid", "light")
-	rep, err := eng.Redline(doc, newStore(t, false), RedlineOpts{})
+// A valid reply with zero clauses is "nothing was reviewed" (ErrNoContent →
+// 422), never a zero-issue report.
+func TestRedlineZeroClausesIsNoContent(t *testing.T) {
+	rep, err := New(&scripted{replies: []interface{}{`{"clauses":[]}`}}, "mid", "light").Redline(doc, newStore(t, false), RedlineOpts{})
+	if rep != nil || !errors.Is(err, providers.ErrNoContent) {
+		t.Fatalf("want (nil, ErrNoContent), got (%+v, %v)", rep, err)
+	}
+}
+
+// A valid verdict reply that skips a clause escalates just that clause (a
+// disclosed non-verdict); the clauses it did judge keep their verdicts.
+func TestRedlineSkippedClauseEscalates(t *testing.T) {
+	two := `{"clauses":[{"clauseType":"Governing law","text":"Delaware"},{"clauseType":"Payment","text":"90 days"}]}`
+	onlyFirst := `{"verdicts":[{"clauseIndex":1,"action":"accept","severity":"low","rationale":"ok","isRedLine":false}]}`
+	rep, err := New(&scripted{replies: []interface{}{two, onlyFirst, "Summary."}}, "mid", "light").Redline(doc, newStore(t, false), RedlineOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rep.Issues) != 1 || rep.Issues[0].Action != ActionEscalate || rep.AcceptCount != 0 {
-		t.Fatalf("want one escalated issue, got %+v", rep.Issues)
+	if len(rep.Issues) != 2 || rep.Issues[0].Action != ActionAccept || rep.Issues[1].Action != ActionEscalate {
+		t.Fatalf("want [accept, escalate], got %+v", rep.Issues)
 	}
 }
+
+// Cancelling the caller's context aborts the run with context.Canceled.
+func TestRedlineHonoursContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var seen context.Context
+	p := providerFunc(func(cp providers.ChatParams) (*providers.ChatResponse, error) {
+		seen = cp.Ctx
+		return nil, cp.Ctx.Err()
+	})
+	_, err := New(p, "mid", "light").Redline(doc, newStore(t, false), RedlineOpts{Ctx: ctx})
+	if seen != ctx || !errors.Is(err, context.Canceled) {
+		t.Fatalf("ctx not propagated or cancel lost: seen=%v err=%v", seen, err)
+	}
+}
+
+type providerFunc func(providers.ChatParams) (*providers.ChatResponse, error)
+
+func (f providerFunc) Chat(p providers.ChatParams) (*providers.ChatResponse, error) { return f(p) }

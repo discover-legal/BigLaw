@@ -9,7 +9,9 @@
 package playbook
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -369,6 +371,8 @@ type KnowledgeSearcher interface {
 
 // BuildOpts configures a playbook build.
 type BuildOpts struct {
+	// Ctx bounds every model call (nil = background).
+	Ctx          context.Context
 	Scope        types.PlaybookScope
 	OwnerID      string
 	OwnerName    string
@@ -502,6 +506,7 @@ If insufficient data: standardPosition: "Insufficient precedent data — apply f
 		opts.PracticeArea, strings.Join(numbered, "\n"), docCount, truncate(excerpts, 8000))
 
 	resp, err := b.provider.Chat(providers.ChatParams{
+		Ctx:         opts.Ctx,
 		Model:       b.haiku,
 		MaxTokens:   2048,
 		System:      system,
@@ -545,7 +550,7 @@ If insufficient data: standardPosition: "Insufficient precedent data — apply f
 	s := strings.Index(raw, "[")
 	eIdx := strings.LastIndex(raw, "]")
 	if s < 0 || eIdx <= s {
-		return nil, providers.ModelFailure("playbook position extraction", fmt.Errorf("unparseable model output: no JSON array"))
+		return nil, providers.ModelFailure("playbook position extraction", errors.New("unparseable model output: no JSON array"))
 	}
 
 	var parsed []map[string]interface{}
@@ -553,11 +558,36 @@ If insufficient data: standardPosition: "Insufficient precedent data — apply f
 		return nil, providers.ModelFailure("playbook position extraction", fmt.Errorf("unparseable model output: %w", err))
 	}
 
-	now := time.Now().UTC().Format(time.RFC3339)
-	entries := make([]types.PlaybookEntry, 0, len(parsed))
+	// Every requested clause type must come back with a real standard
+	// position. A playbook missing a position (or carrying an empty one) is
+	// never saved: later redlines/precedents would treat the gap as the
+	// firm's position. Entries the model invented for unrequested types are
+	// dropped; matching uses the same normalization as Resolve.
+	byType := make(map[string]map[string]interface{}, len(parsed))
 	for _, p := range parsed {
+		key := NormalizeClauseType(strVal(p["clauseType"]))
+		if _, dup := byType[key]; !dup {
+			byType[key] = p
+		}
+	}
+	var missing []string
+	for _, ct := range clauseTypes {
+		p, ok := byType[NormalizeClauseType(ct)]
+		if !ok || strings.TrimSpace(strVal(p["standardPosition"])) == "" {
+			missing = append(missing, ct)
+		}
+	}
+	if len(missing) > 0 {
+		return nil, providers.ModelFailure("playbook position extraction",
+			fmt.Errorf("no standard position returned for %d of %d clause types: %s", len(missing), len(clauseTypes), strings.Join(missing, ", ")))
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	entries := make([]types.PlaybookEntry, 0, len(clauseTypes))
+	for _, ct := range clauseTypes {
+		p := byType[NormalizeClauseType(ct)]
 		e := types.PlaybookEntry{
-			ClauseType:          strVal(p["clauseType"]),
+			ClauseType:          ct,
 			PracticeArea:        opts.PracticeArea,
 			StandardPosition:    strVal(p["standardPosition"]),
 			FallbackPosition:    strVal(p["fallbackPosition"]),

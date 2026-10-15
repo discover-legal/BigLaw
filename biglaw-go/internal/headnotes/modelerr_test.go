@@ -4,7 +4,9 @@
 package headnotes
 
 import (
+	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 
@@ -45,8 +47,9 @@ func TestHeadnotesModelFailuresReturnError(t *testing.T) {
 	}{
 		{"extraction call fails", []interface{}{upstream}},
 		{"extraction unparseable", []interface{}{"Sorry, I can't."}},
-		{"extraction returns zero headnotes", []interface{}{"[]"}},
 		{"key-holding call fails", []interface{}{oneHeadnote, upstream}},
+		{"key-holding unparseable", []interface{}{oneHeadnote, "no json"}},
+		{"key-holding empty", []interface{}{oneHeadnote, `{"caseName":"A v B","keyHolding":""}`}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -73,5 +76,27 @@ func TestHeadnotesHappyPath(t *testing.T) {
 	}
 	if rep.TotalHeadnotes != 1 || rep.KeyHolding != "Consideration is required." {
 		t.Fatalf("unexpected report %+v", rep)
+	}
+}
+
+// A valid reply with zero propositions is ErrNoContent (→ 422), never a
+// "0 headnotes" report.
+func TestHeadnotesZeroIsNoContent(t *testing.T) {
+	rep, err := New(&scripted{replies: []interface{}{"[]"}}, "mid", "light").Generate(opinion, GenerateOpts{})
+	if rep != nil || !errors.Is(err, providers.ErrNoContent) {
+		t.Fatalf("want (nil, ErrNoContent), got (%+v, %v)", rep, err)
+	}
+}
+
+// List fields serialise as [] (not null) — null crashed the Headnotes tab.
+func TestHeadnotesListFieldsNeverNull(t *testing.T) {
+	noLists := `[{"number":1,"proposition":"P","sourceText":"s","holdingType":"ratio"}]`
+	rep, err := New(&scripted{replies: []interface{}{noLists, `{"keyHolding":"K"}`}}, "mid", "light").Generate(opinion, GenerateOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(rep)
+	if strings.Contains(string(b), "null") {
+		t.Fatalf("report JSON contains null: %s", b)
 	}
 }

@@ -5,8 +5,10 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -15,18 +17,15 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/discover-legal/biglaw-go/internal/auth"
 	"github.com/discover-legal/biglaw-go/internal/config"
 	"github.com/discover-legal/biglaw-go/internal/embeddings"
-	"github.com/discover-legal/biglaw-go/internal/headnotes"
 	"github.com/discover-legal/biglaw-go/internal/knowledge"
-	"github.com/discover-legal/biglaw-go/internal/playbook"
-	"github.com/discover-legal/biglaw-go/internal/precedent"
 	"github.com/discover-legal/biglaw-go/internal/providers"
-	"github.com/discover-legal/biglaw-go/internal/redline"
 	"github.com/discover-legal/biglaw-go/internal/services"
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
@@ -44,31 +43,28 @@ func (f *failingProvider) Chat(providers.ChatParams) (*providers.ChatResponse, e
 	return nil, f.err
 }
 
-func TestModelErrorResponseMapping(t *testing.T) {
+func TestClassifyModelError(t *testing.T) {
 	cases := []struct {
-		err      error
-		status   int
-		typ      string
-		fallback string
+		err    error
+		status int
+		typ    string
+		retry  int
 	}{
-		{providers.ModelFailure("s", errors.New("HTTP 500")), http.StatusBadGateway, errorTypeModelUnavailable, ""},
-		{providers.ModelFailure("s", errors.Join(providers.ErrNoProvider)), http.StatusServiceUnavailable, errorTypeModelNotConfigured, ""},
-		{errors.Join(providers.ErrNoProvider, errors.New("no key")), http.StatusServiceUnavailable, errorTypeModelNotConfigured, ""},
-		{errors.New("disk full"), http.StatusInternalServerError, "", "Tone analysis failed."},
+		{providers.ModelFailure("s", errors.New("HTTP 500")), http.StatusBadGateway, errorTypeModelUnavailable, 0},
+		{providers.ModelFailure("s", errors.Join(providers.ErrNoProvider)), http.StatusServiceUnavailable, errorTypeModelNotConfigured, 0},
+		{providers.ModelFailure("s", &providers.RateLimitError{RetryAfter: 1500 * time.Millisecond, Err: errors.New("429")}), http.StatusServiceUnavailable, errorTypeModelRateLimited, 2},
+		{providers.ModelFailure("s", fmt.Errorf("x: %w", providers.ErrModelTimeout)), http.StatusGatewayTimeout, errorTypeModelTimeout, 0},
+		{providers.NoContent("s", "no clauses"), http.StatusUnprocessableEntity, errorTypeNoContent, 0},
+		{providers.ModelFailure("s", context.Canceled), statusClientClosedRequest, "", 0},
+		{errors.New("disk full"), http.StatusInternalServerError, "", 0},
 	}
 	for _, tc := range cases {
-		status, body := modelErrorResponse(tc.err, tc.fallback)
-		if status != tc.status {
-			t.Errorf("%v: status %d, want %d", tc.err, status, tc.status)
+		info := classifyModelError(tc.err, "")
+		if info.status != tc.status || info.errorType != tc.typ || info.retryAfter != tc.retry || info.message == "" {
+			t.Errorf("%v: got %+v, want status %d type %q retry %d", tc.err, info, tc.status, tc.typ, tc.retry)
 		}
-		if got, _ := body["errorType"].(string); got != tc.typ {
-			t.Errorf("%v: errorType %q, want %q", tc.err, got, tc.typ)
-		}
-		if msg, _ := body["error"].(string); msg == "" {
-			t.Errorf("%v: empty error message", tc.err)
-		}
-		if tc.fallback != "" && body["error"] != tc.fallback {
-			t.Errorf("non-model error should use the fallback message, got %v", body["error"])
+		if strings.Contains(info.message, "disk full") || strings.Contains(info.message, "HTTP 500") {
+			t.Errorf("%v: message leaks internals: %q", tc.err, info.message)
 		}
 	}
 }
@@ -78,93 +74,158 @@ func partnerMW(c *gin.Context) {
 	c.Next()
 }
 
-// testEnginesProvider backs the package-level engine bundle seeded by
-// installTestEngines. The bundle is built once per test binary (sync.Once),
-// so the provider must be shared too (go test -count=N).
-var testEnginesProvider = &failingProvider{}
-
-// installTestEngines seeds the package-level engine bundle with engines whose
-// provider fails as directed. Only this file's tests use the bundle.
-func installTestEngines(t *testing.T) *failingProvider {
+// newEngineRouter wires the engine routes onto a Server whose per-request
+// model resolution is scripted: resolveErr != nil simulates "no provider";
+// otherwise every call goes to fp.
+func newEngineRouter(t *testing.T, fp providers.Provider, resolveErr error) (*gin.Engine, *Server) {
 	t.Helper()
-	fp := testEnginesProvider
-	enginesOnce.Do(func() {
-		dir, err := os.MkdirTemp("", "bl-engines-*")
-		if err != nil {
-			t.Fatal(err)
-		}
-		st := playbook.New(filepath.Join(dir, "playbooks.json"))
-		if err := st.Init(); err != nil {
-			t.Fatal(err)
-		}
-		enginesShared = &enginesBundle{
-			playbooks: st,
-			builder:   playbook.NewBuilder(fp, "light"),
-			redline:   redline.New(fp, "mid", "light"),
-			headnotes: headnotes.New(fp, "mid", "light"),
-			precedent: precedent.New(fp, "heavy", "light"),
-		}
-	})
-	return fp
-}
-
-func TestEngineHandlersMapModelFailures(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	fp := installTestEngines(t)
+	orig := engineModelsFor
+	t.Cleanup(func() { engineModelsFor = orig })
+	engineModelsFor = func(*Server) (engineModels, error) {
+		if resolveErr != nil {
+			return engineModels{}, resolveErr
+		}
+		return engineModels{provider: fp, mid: "mid", light: "light", heavy: "heavy"}, nil
+	}
+	playbookStoreMu.Lock()
+	playbookStoreShared = nil // fresh store per test
+	playbookStoreMu.Unlock()
+	t.Cleanup(func() { playbookStoreMu.Lock(); playbookStoreShared = nil; playbookStoreMu.Unlock() })
+
 	// Knowledge store with an unreachable local embedder: search falls back
 	// to lexical without touching the network.
 	kcfg := &config.Config{}
 	kcfg.Local.LocalEmbeddings = true
 	kcfg.Local.OllamaURL = "http://127.0.0.1:1"
-	s := &Server{cfg: &config.Config{}, knowledge: knowledge.NewStore(embeddings.NewClient(kcfg))}
+	cfg := &config.Config{}
+	cfg.Persistence.PlaybooksFile = filepath.Join(t.TempDir(), "playbooks.json")
+	s := &Server{cfg: cfg, knowledge: knowledge.NewStore(embeddings.NewClient(kcfg))}
 	r := gin.New()
 	r.Use(partnerMW)
+	r.GET("/playbooks", s.handleListPlaybooks)
 	r.POST("/redline", s.handleRedline)
 	r.POST("/headnotes/generate", s.handleGenerateHeadnotes)
 	r.POST("/precedents/generate", s.handleGeneratePrecedent)
 	r.POST("/playbooks/build", s.handleBuildPlaybook)
+	return r, s
+}
 
-	reqs := map[string]string{
-		"/redline":             `{"documentText":"1. Governing law. Delaware."}`,
-		"/headnotes/generate":  `{"opinionText":"The court held X."}`,
-		"/precedents/generate": `{"documentType":"nda"}`,
-		"/playbooks/build":     `{"practiceArea":"Corporate & M&A","name":"P","clauseTypes":["Governing law"]}`,
-	}
+var engineReqs = map[string]string{
+	"/redline":             `{"documentText":"1. Governing law. Delaware."}`,
+	"/headnotes/generate":  `{"opinionText":"The court held X."}`,
+	"/precedents/generate": `{"documentType":"nda"}`,
+	"/playbooks/build":     `{"practiceArea":"Corporate & M&A","name":"P","clauseTypes":["Governing law"]}`,
+}
+
+func postJSON(r *gin.Engine, path, body string) *httptest.ResponseRecorder {
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	return w
+}
+
+func TestEngineHandlersMapModelFailures(t *testing.T) {
+	fp := &failingProvider{}
 	for _, mode := range []struct {
-		err    error
-		status int
-		typ    string
+		name       string
+		resolveErr error
+		callErr    error
+		status     int
+		typ        string
+		retryAfter string
 	}{
-		{errors.New("ollama: HTTP 500: overloaded"), http.StatusBadGateway, errorTypeModelUnavailable},
-		{errors.Join(providers.ErrNoProvider, errors.New("no key")), http.StatusServiceUnavailable, errorTypeModelNotConfigured},
+		{"upstream 500", nil, errors.New("ollama: HTTP 500: overloaded at http://10.1.2.3:8000"), http.StatusBadGateway, errorTypeModelUnavailable, ""},
+		{"no provider at resolve", errors.Join(providers.ErrNoProvider, errors.New("unset")), nil, http.StatusServiceUnavailable, errorTypeModelNotConfigured, ""},
+		{"no key (401)", nil, errors.Join(providers.ErrNoProvider, errors.New("no API key")), http.StatusServiceUnavailable, errorTypeModelNotConfigured, ""},
+		{"rate limited", nil, &providers.RateLimitError{RetryAfter: 7 * time.Second, Err: errors.New("429")}, http.StatusServiceUnavailable, errorTypeModelRateLimited, "7"},
+		{"timeout", nil, fmt.Errorf("do request: %w", providers.ErrModelTimeout), http.StatusGatewayTimeout, errorTypeModelTimeout, ""},
 	} {
-		fp.set(mode.err)
-		for path, body := range reqs {
-			w := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
-			req.Header.Set("Content-Type", "application/json")
-			r.ServeHTTP(w, req)
-			if w.Code != mode.status {
-				t.Fatalf("%s (%v): status %d, want %d; body %s", path, mode.err, w.Code, mode.status, w.Body.String())
-			}
-			var got map[string]interface{}
-			if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
-				t.Fatalf("%s: non-JSON body %q", path, w.Body.String())
-			}
-			if got["errorType"] != mode.typ {
-				t.Errorf("%s: errorType %v, want %s", path, got["errorType"], mode.typ)
-			}
-			for _, k := range []string{"issues", "headnotes", "clauses", "document", "entries", "executiveSummary"} {
-				if _, ok := got[k]; ok {
-					t.Errorf("%s: error body carries result field %q", path, k)
+		t.Run(mode.name, func(t *testing.T) {
+			fp.set(mode.callErr)
+			r, _ := newEngineRouter(t, fp, mode.resolveErr)
+			for path, body := range engineReqs {
+				w := postJSON(r, path, body)
+				if w.Code != mode.status {
+					t.Fatalf("%s: status %d, want %d; body %s", path, w.Code, mode.status, w.Body.String())
+				}
+				var got map[string]interface{}
+				if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+					t.Fatalf("%s: non-JSON body %q", path, w.Body.String())
+				}
+				if got["errorType"] != mode.typ {
+					t.Errorf("%s: errorType %v, want %s", path, got["errorType"], mode.typ)
+				}
+				if id, _ := got["requestId"].(string); id == "" || w.Header().Get("X-Request-Id") != id {
+					t.Errorf("%s: missing/mismatched requestId: body %v header %q", path, got["requestId"], w.Header().Get("X-Request-Id"))
+				}
+				if w.Header().Get("Retry-After") != mode.retryAfter {
+					t.Errorf("%s: Retry-After %q, want %q", path, w.Header().Get("Retry-After"), mode.retryAfter)
+				}
+				if _, ok := got["detail"]; ok || strings.Contains(w.Body.String(), "10.1.2.3") || strings.Contains(w.Body.String(), "ollama") {
+					t.Errorf("%s: body leaks internals: %s", path, w.Body.String())
+				}
+				for _, k := range []string{"issues", "headnotes", "clauses", "document", "entries", "executiveSummary"} {
+					if _, ok := got[k]; ok {
+						t.Errorf("%s: error body carries result field %q", path, k)
+					}
 				}
 			}
-		}
-	}
-	if n := len(enginesShared.playbooks.List("", "", "")); n != 0 {
-		t.Fatalf("failed builds persisted %d playbooks", n)
+		})
 	}
 }
+
+// Playbook reads never need a model provider (they used to 500/503 with the
+// engine bundle), and a failed build persists nothing.
+func TestPlaybooksWorkWithoutProvider(t *testing.T) {
+	r, s := newEngineRouter(t, nil, errors.Join(providers.ErrNoProvider, errors.New("unset")))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/playbooks", nil))
+	if w.Code != http.StatusOK || strings.TrimSpace(w.Body.String()) != "[]" {
+		t.Fatalf("GET /playbooks without a provider: %d %s", w.Code, w.Body.String())
+	}
+	if w := postJSON(r, "/playbooks/build", engineReqs["/playbooks/build"]); w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("build without provider: %d", w.Code)
+	}
+	st, _ := s.playbookStore()
+	if n := len(st.List("", "", "")); n != 0 {
+		t.Fatalf("failed build persisted %d playbooks", n)
+	}
+}
+
+// A provider configured after startup is picked up on the next request (no
+// process-lifetime caching of the "no provider" error).
+func TestEngineProviderResolvedPerRequest(t *testing.T) {
+	fp := &failingProvider{}
+	r, _ := newEngineRouter(t, fp, errors.Join(providers.ErrNoProvider, errors.New("unset")))
+	if w := postJSON(r, "/redline", engineReqs["/redline"]); w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("first: %d", w.Code)
+	}
+	engineModelsFor = func(*Server) (engineModels, error) {
+		return engineModels{provider: fp, mid: "m", light: "l", heavy: "h"}, nil
+	}
+	fp.set(errors.New("HTTP 500"))
+	if w := postJSON(r, "/redline", engineReqs["/redline"]); w.Code != http.StatusBadGateway {
+		t.Fatalf("after configuring: %d (still cached?)", w.Code)
+	}
+}
+
+// A valid reply with zero clauses answers 422 no_content.
+func TestRedlineNoContentIs422(t *testing.T) {
+	ok := providerFunc(func(providers.ChatParams) (*providers.ChatResponse, error) {
+		return &providers.ChatResponse{Content: []providers.ContentBlock{{Type: providers.BlockText, Text: `{"clauses":[]}`}}}, nil
+	})
+	r, _ := newEngineRouter(t, ok, nil)
+	w := postJSON(r, "/redline", engineReqs["/redline"])
+	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), errorTypeNoContent) {
+		t.Fatalf("got %d %s", w.Code, w.Body.String())
+	}
+}
+
+type providerFunc func(providers.ChatParams) (*providers.ChatResponse, error)
+
+func (f providerFunc) Chat(p providers.ChatParams) (*providers.ChatResponse, error) { return f(p) }
 
 func TestToneImportModelFailureStoresNothing(t *testing.T) {
 	gin.SetMode(gin.TestMode)

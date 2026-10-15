@@ -6,13 +6,15 @@
 // HTTP contract mirrors the TS backend (src/mcp/server.ts): request fields,
 // response shapes, status codes and partner-gating match the TS handlers.
 //
-// Engines are constructed lazily on first use (file-scoped sync.Once): they
-// only need a provider + the playbook store, and most requests never touch
-// them.
+// Engines are thin structs over (provider, model IDs) built per request, so a
+// provider configured after startup is picked up and a missing one is a typed
+// 503 for that request only. The playbook store is opened once (retried until
+// it succeeds) and playbook reads never need a model provider.
 
 package api
 
 import (
+	"log/slog"
 	"net/http"
 	"sync"
 
@@ -24,6 +26,7 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/knowledge"
 	"github.com/discover-legal/biglaw-go/internal/playbook"
 	"github.com/discover-legal/biglaw-go/internal/precedent"
+	"github.com/discover-legal/biglaw-go/internal/providers"
 	"github.com/discover-legal/biglaw-go/internal/redline"
 	"github.com/discover-legal/biglaw-go/internal/routing"
 	"github.com/discover-legal/biglaw-go/internal/timekeeping"
@@ -51,7 +54,7 @@ func (s *Server) registerEnginesRoutes(r *gin.Engine) {
 	r.GET("/clients/:id/briefing", s.handleClientBriefing)
 }
 
-// ─── Lazy engine construction ─────────────────────────────────────────────────
+// ─── Engine construction ──────────────────────────────────────────────────────
 
 type enginesBundle struct {
 	playbooks *playbook.Store
@@ -63,65 +66,97 @@ type enginesBundle struct {
 	briefing  *briefing.Engine
 }
 
+// The playbook store is model-free state: it is opened on first use under a
+// mutex and only a SUCCESSFUL open is kept, so a transient failure is retried
+// on the next request instead of poisoning the process (as a sync.Once did).
 var (
-	enginesOnce    sync.Once
-	enginesShared  *enginesBundle
-	enginesInitErr error
+	playbookStoreMu     sync.Mutex
+	playbookStoreShared *playbook.Store
 )
 
-// engines builds all engine singletons on first use. Model selection goes
-// through routing.SelectModel so local-inference configs are honored: with
-// LOCAL_INFERENCE_TIERS=all the whole drafting bench runs on the local
-// OpenAI-compatible endpoint; otherwise the TS engines' cloud model mix
-// (Haiku extract / Sonnet analyse / Opus draft).
-func (s *Server) engines() (*enginesBundle, error) {
-	enginesOnce.Do(func() {
-		primary := routing.SelectModel(s.cfg, routing.SelectParams{TaskType: routing.TaskReasoning})
-		// sonnet/haiku/opus here name the mid/light/heavy roles — resolved
-		// against the active stack (Qwen by default), not pinned to Claude.
-		sonnetID, haikuID, opusID := routing.Mid(s.cfg), routing.Light(s.cfg), routing.Heavy(s.cfg)
-		if routing.IsLocalModel(primary) || routing.IsOllamaModel(primary) {
-			resolved := routing.ResolveModelID(primary)
-			sonnetID, haikuID, opusID = resolved, resolved, resolved
-		}
-
-		provider, err := s.orch.Providers().Get(primary)
-		if err != nil {
-			enginesInitErr = err
-			return
-		}
-
-		store := playbook.New(s.cfg.Persistence.PlaybooksFile)
-		if err := store.Init(); err != nil {
-			enginesInitErr = err
-			return
-		}
-
-		enginesShared = &enginesBundle{
-			playbooks: store,
-			builder:   playbook.NewBuilder(provider, haikuID),
-			redline:   redline.New(provider, sonnetID, haikuID),
-			headnotes: headnotes.New(provider, sonnetID, haikuID),
-			precedent: precedent.New(provider, opusID, haikuID),
-			citations: citations.New(provider, haikuID),
-			briefing:  briefing.New(provider, sonnetID),
-		}
-	})
-	if enginesInitErr != nil {
-		return nil, enginesInitErr
+func (s *Server) playbookStore() (*playbook.Store, error) {
+	playbookStoreMu.Lock()
+	defer playbookStoreMu.Unlock()
+	if playbookStoreShared != nil {
+		return playbookStoreShared, nil
 	}
-	return enginesShared, nil
+	st := playbook.New(s.cfg.Persistence.PlaybooksFile)
+	if err := st.Init(); err != nil {
+		return nil, err
+	}
+	playbookStoreShared = st
+	return st, nil
 }
 
-// enginesRequire resolves the engine bundle or writes an error and returns
-// nil: 503 (typed) when no model provider is configured, else 500.
+// engineModels names the provider + mid/light/heavy model IDs for one request.
+type engineModels struct {
+	provider          providers.Provider
+	mid, light, heavy string
+}
+
+// engineModelsFor resolves the model provider per request (so configuring a
+// provider takes effect without a restart). Model selection goes through
+// routing.SelectModel so local-inference configs are honored: with
+// LOCAL_INFERENCE_TIERS=all the whole drafting bench runs on the local
+// OpenAI-compatible endpoint; otherwise the stack's heavy/mid/light mix. A
+// variable so handler tests can substitute a scripted provider.
+var engineModelsFor = func(s *Server) (engineModels, error) {
+	primary := routing.SelectModel(s.cfg, routing.SelectParams{TaskType: routing.TaskReasoning})
+	mid, light, heavy := routing.Mid(s.cfg), routing.Light(s.cfg), routing.Heavy(s.cfg)
+	if routing.IsLocalModel(primary) || routing.IsOllamaModel(primary) {
+		resolved := routing.ResolveModelID(primary)
+		mid, light, heavy = resolved, resolved, resolved
+	}
+	provider, err := s.orch.Providers().Get(primary)
+	if err != nil {
+		return engineModels{}, err
+	}
+	return engineModels{provider: provider, mid: mid, light: light, heavy: heavy}, nil
+}
+
+// engines builds the engine set for one request. Engines are thin structs
+// over (provider, model IDs); construction is cheap.
+func (s *Server) engines() (*enginesBundle, error) {
+	store, err := s.playbookStore()
+	if err != nil {
+		return nil, err
+	}
+	m, err := engineModelsFor(s)
+	if err != nil {
+		return nil, err
+	}
+	return &enginesBundle{
+		playbooks: store,
+		builder:   playbook.NewBuilder(m.provider, m.light),
+		redline:   redline.New(m.provider, m.mid, m.light),
+		headnotes: headnotes.New(m.provider, m.mid, m.light),
+		precedent: precedent.New(m.provider, m.heavy, m.light),
+		citations: citations.New(m.provider, m.light),
+		briefing:  briefing.New(m.provider, m.mid),
+	}, nil
+}
+
+// enginesRequire resolves the engine set or writes an error and returns nil:
+// a typed 503 when no model provider is configured, else a generic 500.
 func (s *Server) enginesRequire(c *gin.Context) *enginesBundle {
 	eng, err := s.engines()
 	if err != nil {
-		writeModelError(c, err, "engines unavailable: "+err.Error())
+		writeModelError(c, err, "The drafting engines are unavailable.")
 		return nil
 	}
 	return eng
+}
+
+// playbooksRequire resolves only the playbook store — reading and deleting
+// playbooks never needs a model provider.
+func (s *Server) playbooksRequire(c *gin.Context) *playbook.Store {
+	st, err := s.playbookStore()
+	if err != nil {
+		slog.Error("playbook store unavailable", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "The playbook store is unavailable."})
+		return nil
+	}
+	return st
 }
 
 // enginesKnowledgeSearcher adapts the knowledge store to the simplified
@@ -150,11 +185,11 @@ func (s *Server) handleListPlaybooks(c *gin.Context) {
 	if !requirePartner(c) {
 		return
 	}
-	eng := s.enginesRequire(c)
-	if eng == nil {
+	store := s.playbooksRequire(c)
+	if store == nil {
 		return
 	}
-	list := eng.playbooks.List(
+	list := store.List(
 		types.PlaybookScope(c.Query("scope")),
 		c.Query("ownerId"),
 		c.Query("practiceArea"),
@@ -169,11 +204,11 @@ func (s *Server) handleGetPlaybook(c *gin.Context) {
 	if !requirePartner(c) {
 		return
 	}
-	eng := s.enginesRequire(c)
-	if eng == nil {
+	store := s.playbooksRequire(c)
+	if store == nil {
 		return
 	}
-	pb := eng.playbooks.GetByID(c.Param("id"))
+	pb := store.GetByID(c.Param("id"))
 	if pb == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Playbook not found"})
 		return
@@ -220,6 +255,7 @@ func (s *Server) handleBuildPlaybook(c *gin.Context) {
 
 	ks := enginesKnowledgeSearcher{store: s.knowledge}
 	pb, err := eng.builder.Build(eng.playbooks, ks.Search, playbook.BuildOpts{
+		Ctx:          c.Request.Context(),
 		Scope:        resolvedScope,
 		OwnerID:      body.OwnerID,
 		OwnerName:    body.OwnerName,
@@ -241,8 +277,8 @@ func (s *Server) handleResolvePlaybook(c *gin.Context) {
 	if !requirePartner(c) {
 		return
 	}
-	eng := s.enginesRequire(c)
-	if eng == nil {
+	store := s.playbooksRequire(c)
+	if store == nil {
 		return
 	}
 	clauseType := c.Param("clauseType")
@@ -253,10 +289,10 @@ func (s *Server) handleResolvePlaybook(c *gin.Context) {
 		ProfileID:    c.Query("profileId"),
 	}
 	if clauseType == "*" {
-		c.JSON(http.StatusOK, eng.playbooks.ResolveAll(opts))
+		c.JSON(http.StatusOK, store.ResolveAll(opts))
 		return
 	}
-	resolved := eng.playbooks.Resolve(clauseType, opts)
+	resolved := store.Resolve(clauseType, opts)
 	if resolved == nil {
 		c.JSON(http.StatusOK, gin.H{
 			"clauseType": clauseType,
@@ -272,11 +308,11 @@ func (s *Server) handleDeletePlaybook(c *gin.Context) {
 	if !requirePartner(c) {
 		return
 	}
-	eng := s.enginesRequire(c)
-	if eng == nil {
+	store := s.playbooksRequire(c)
+	if store == nil {
 		return
 	}
-	if !eng.playbooks.Delete(c.Param("id")) {
+	if !store.Delete(c.Param("id")) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Playbook not found"})
 		return
 	}
@@ -318,6 +354,7 @@ func (s *Server) handleRedline(c *gin.Context) {
 	// Synchronous, like the TS handler: the engine makes several model calls
 	// and the report is returned in the response body.
 	report, err := eng.redline.Redline(body.DocumentText, eng.playbooks, redline.RedlineOpts{
+		Ctx:           c.Request.Context(),
 		PracticeArea:  body.PracticeArea,
 		Jurisdiction:  body.Jurisdiction,
 		MatterNumber:  body.MatterNumber,
@@ -365,6 +402,7 @@ func (s *Server) handleGenerateHeadnotes(c *gin.Context) {
 	}
 
 	report, err := eng.headnotes.Generate(body.OpinionText, headnotes.GenerateOpts{
+		Ctx:          c.Request.Context(),
 		CaseName:     body.CaseName,
 		Citation:     body.Citation,
 		Court:        body.Court,
@@ -416,6 +454,7 @@ func (s *Server) handleGeneratePrecedent(c *gin.Context) {
 		enginesKnowledgeSearcher{store: s.knowledge},
 		eng.playbooks,
 		precedent.GenerateOpts{
+			Ctx:                 c.Request.Context(),
 			PracticeArea:        body.PracticeArea,
 			Jurisdiction:        body.Jurisdiction,
 			ActingFor:           body.ActingFor,

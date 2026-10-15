@@ -3,6 +3,8 @@
 
 package providers
 
+import "context"
+
 // ─── Provider abstraction ─────────────────────────────────────────────────────
 
 type ContentBlockType string
@@ -50,6 +52,10 @@ type ToolParam struct {
 }
 
 type ChatParams struct {
+	// Ctx, when set, bounds the call: cancelling it (e.g. the HTTP client
+	// disconnected) aborts the in-flight request and any retry backoff.
+	// nil means context.Background().
+	Ctx       context.Context
 	Model     string
 	MaxTokens int
 	System    string

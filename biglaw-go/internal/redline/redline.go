@@ -9,6 +9,7 @@
 package redline
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -96,6 +97,9 @@ type Report struct {
 
 // RedlineOpts parameterises a redline run.
 type RedlineOpts struct {
+	// Ctx bounds every model call of the run (nil = background); cancelling
+	// it — e.g. the HTTP client went away — aborts the review.
+	Ctx           context.Context
 	PracticeArea  string
 	Jurisdiction  string
 	MatterNumber  string
@@ -128,16 +132,16 @@ func New(provider providers.Provider, sonnetModel, haikuModel string) *Engine {
 // never returned: a review that silently dropped its missing-clause pass or
 // its clause list reads as a clean contract.
 func (e *Engine) Redline(documentText string, store *playbook.Store, opts RedlineOpts) (*Report, error) {
-	clauses, err := e.extractClauses(documentText, opts.PracticeArea, playbookVocabulary(store, opts), opts.TaskID)
+	clauses, err := e.extractClauses(opts.Ctx, documentText, opts.PracticeArea, playbookVocabulary(store, opts), opts.TaskID)
 	if err != nil {
 		slog.Warn("RedlineEngine: clause extraction failed", "error", err, "docChars", len(documentText))
 		return nil, err
 	}
 	if len(clauses) == 0 {
-		// A zero-clause report reads as a clean contract. No clauses from a
-		// non-empty draft means the review did not happen — fail it.
+		// A valid reply with zero clauses: nothing was reviewed. Never a
+		// zero-issue report, which reads as a clean contract (HTTP 422).
 		slog.Warn("RedlineEngine: model extracted no clauses", "docChars", len(documentText))
-		return nil, providers.ModelFailure("redline clause extraction", errors.New("the model returned no clauses for this document"))
+		return nil, providers.NoContent("redline clause extraction", "no clauses found in the document")
 	}
 
 	var issues []Issue
@@ -221,7 +225,7 @@ func playbookVocabulary(store *playbook.Store, opts RedlineOpts) []string {
 	return out
 }
 
-func (e *Engine) extractClauses(text, practiceArea string, vocabulary []string, taskID string) ([]rawClause, error) {
+func (e *Engine) extractClauses(ctx context.Context, text, practiceArea string, vocabulary []string, taskID string) ([]rawClause, error) {
 	start := time.Now()
 	area := practiceArea
 	if area == "" {
@@ -248,6 +252,7 @@ Return a JSON object with a "clauses" array:
 Include up to 40 clauses. Skip boilerplate recitals.`, area, vocabHint)
 
 	resp, err := e.provider.Chat(providers.ChatParams{
+		Ctx:         ctx,
 		Model:       e.haiku,
 		MaxTokens:   3000,
 		System:      system,
@@ -338,6 +343,7 @@ Return a JSON object with a "missing" array (empty array if nothing material is 
 
 	start := time.Now()
 	resp, err := e.provider.Chat(providers.ChatParams{
+		Ctx:         opts.Ctx,
 		Model:       e.sonnet,
 		MaxTokens:   2500,
 		System:      system,
@@ -464,6 +470,7 @@ verdict is bound to its clause:
 {"verdicts": [{"clauseIndex":1,"clauseType":"...","action":"...","severity":"...","proposedText":"...","rationale":"...","isRedLine":false}]}`
 
 	resp, err := e.provider.Chat(providers.ChatParams{
+		Ctx:         opts.Ctx,
 		Model:       e.sonnet,
 		MaxTokens:   4096,
 		System:      system,
@@ -481,11 +488,10 @@ verdict is bound to its clause:
 	raw := textFrom(resp)
 	var parsed []map[string]interface{}
 	if err := parseJSONArray(raw, &parsed); err != nil {
-		// The model answered but unusably: every clause is escalated with an
-		// explicit "analysis failed" rationale — a disclosed non-verdict, never
-		// an accept.
+		// No usable verdicts at all: the review did not happen. (A valid
+		// reply that merely skips some clauses escalates those clauses below.)
 		slog.Warn("RedlineEngine: batch analysis parse failed", "error", err, "rawPrefix", truncate(raw, 300))
-		return fallbackIssues(clauses, positions), nil
+		return nil, providers.ModelFailure("redline clause analysis", fmt.Errorf("unparseable model output: %w", err))
 	}
 
 	// Join verdicts to clauses by the model-echoed 1-based clauseIndex, not by
@@ -633,6 +639,7 @@ Write as if briefing a senior partner before a negotiation call. Concise, specif
 	)
 
 	resp, err := e.provider.Chat(providers.ChatParams{
+		Ctx:       opts.Ctx,
 		Model:     e.sonnet,
 		MaxTokens: 400,
 		Messages:  []providers.Message{{Role: "user", Content: prompt}},
@@ -649,28 +656,6 @@ Write as if briefing a senior partner before a negotiation call. Concise, specif
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
-func fallbackIssues(clauses []rawClause, positions []posInfo) []Issue {
-	issues := make([]Issue, len(clauses))
-	for i, c := range clauses {
-		firmPos := "No position recorded"
-		src := "none"
-		if i < len(positions) && positions[i].entry != nil {
-			firmPos = positions[i].entry.StandardPosition
-			src = positions[i].source
-		}
-		issues[i] = Issue{
-			ClauseType:       c.ClauseType,
-			CounterpartyText: truncate(c.Text, 500),
-			FirmPosition:     firmPos,
-			PositionSource:   src,
-			Action:           ActionEscalate,
-			Rationale:        "Analysis failed — requires manual review",
-			Severity:         SeverityMedium,
-		}
-	}
-	return issues
-}
 
 func recordCost(model string, resp *providers.ChatResponse, dms int64, taskID string) {
 	cw, cr := 0, 0

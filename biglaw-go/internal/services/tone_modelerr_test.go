@@ -4,9 +4,11 @@
 package services
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/discover-legal/biglaw-go/internal/providers"
 )
@@ -49,7 +51,7 @@ func TestToneModelFailuresReturnErrorNotDefaultProfile(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			p, err := NewToneAnalyzer(&scripted{replies: tc.replies}, "light").Analyze([]string{"one post"}, "Jane", "text", "p1")
+			p, err := NewToneAnalyzer(&scripted{replies: tc.replies}, "light").Analyze(context.Background(), []string{"one post"}, "Jane", "text", "p1")
 			if p != nil {
 				t.Fatalf("failed analysis returned a profile: %+v", p)
 			}
@@ -66,14 +68,14 @@ func TestToneParallelChunkFailureFailsWhole(t *testing.T) {
 	for i := range posts {
 		posts[i] = "post"
 	}
-	p, err := NewToneAnalyzer(&scripted{replies: []interface{}{"note", errors.New("boom")}}, "light").Analyze(posts, "Jane", "text", "p1")
+	p, err := NewToneAnalyzer(&scripted{replies: []interface{}{"note", errors.New("boom")}}, "light").Analyze(context.Background(), posts, "Jane", "text", "p1")
 	if p != nil || !errors.Is(err, providers.ErrModelUnavailable) {
 		t.Fatalf("want (nil, ErrModelUnavailable), got (%+v, %v)", p, err)
 	}
 }
 
 func TestToneHappyPath(t *testing.T) {
-	p, err := NewToneAnalyzer(&scripted{replies: []interface{}{"note", goodProfile}}, "light").Analyze([]string{"one post"}, "Jane", "text", "p1")
+	p, err := NewToneAnalyzer(&scripted{replies: []interface{}{"note", goodProfile}}, "light").Analyze(context.Background(), []string{"one post"}, "Jane", "text", "p1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,3 +83,41 @@ func TestToneHappyPath(t *testing.T) {
 		t.Fatalf("unexpected profile %+v", p)
 	}
 }
+
+// The first failing chunk cancels the others' in-flight calls (errgroup):
+// a blocked sibling call returns as soon as the group context is cancelled.
+func TestToneFirstFailureCancelsSiblings(t *testing.T) {
+	var mu sync.Mutex
+	calls := 0
+	p := providerFn(func(cp providers.ChatParams) (*providers.ChatResponse, error) {
+		mu.Lock()
+		calls++
+		n := calls
+		mu.Unlock()
+		if n == 1 {
+			return nil, errors.New("boom")
+		}
+		select { // a slow sibling: only cancellation releases it
+		case <-cp.Ctx.Done():
+			return nil, cp.Ctx.Err()
+		case <-time.After(10 * time.Second):
+			return nil, errors.New("sibling was not cancelled")
+		}
+	})
+	posts := make([]string, 17) // 3 chunks
+	for i := range posts {
+		posts[i] = "post"
+	}
+	start := time.Now()
+	prof, err := NewToneAnalyzer(p, "light").Analyze(context.Background(), posts, "Jane", "text", "p1")
+	if prof != nil || err == nil {
+		t.Fatalf("want failure, got (%+v, %v)", prof, err)
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Fatalf("siblings were not cancelled (took %s)", time.Since(start))
+	}
+}
+
+type providerFn func(providers.ChatParams) (*providers.ChatResponse, error)
+
+func (f providerFn) Chat(p providers.ChatParams) (*providers.ChatResponse, error) { return f(p) }

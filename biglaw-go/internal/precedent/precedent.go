@@ -10,6 +10,7 @@
 package precedent
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -56,6 +57,8 @@ type Document struct {
 
 // GenerateOpts parameterises a document generation run.
 type GenerateOpts struct {
+	// Ctx bounds every model call (nil = background).
+	Ctx                 context.Context
 	PracticeArea        string
 	Jurisdiction        string
 	ActingFor           string
@@ -195,6 +198,7 @@ Return a JSON array of clause type strings:
 Include 8–20 clauses appropriate for this document type. No other text.`, docType, area, jur)
 
 	resp, err := g.provider.Chat(providers.ChatParams{
+		Ctx:       opts.Ctx,
 		Model:     g.haiku,
 		MaxTokens: 500,
 		Messages:  []providers.Message{{Role: "user", Content: prompt}},
@@ -328,6 +332,7 @@ Clause object schema:
 	userContent := precedentBlock + "\n\nPLAYBOOK POSITIONS:\n" + playbookBlock
 
 	resp, err := g.provider.Chat(providers.ChatParams{
+		Ctx:         opts.Ctx,
 		Model:       g.opus,
 		MaxTokens:   8000,
 		System:      system,

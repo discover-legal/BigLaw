@@ -41,8 +41,12 @@ func noSearch(string, int) []types.SearchResult { return nil }
 // "Extraction failed" — later redlines would apply it as the firm position.
 func TestBuildModelFailurePersistsNothing(t *testing.T) {
 	for name, reply := range map[string]interface{}{
-		"call fails":  errors.New("ollama: HTTP 500"),
-		"unparseable": "no json here",
+		"call fails":          errors.New("ollama: HTTP 500"),
+		"unparseable":         "no json here",
+		"empty entries":       `{"entries":[]}`,
+		"missing a type":      `{"entries":[{"clauseType":"Governing law","standardPosition":"England"}]}`,
+		"empty position":      `{"entries":[{"clauseType":"Governing law","standardPosition":"England"},{"clauseType":"Limitation of liability","standardPosition":"  "}]}`,
+		"only invented types": `{"entries":[{"clauseType":"Force majeure","standardPosition":"x"}]}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			st := New(filepath.Join(t.TempDir(), "pb.json"))
@@ -50,7 +54,7 @@ func TestBuildModelFailurePersistsNothing(t *testing.T) {
 				t.Fatal(err)
 			}
 			pb, err := NewBuilder(&scripted{replies: []interface{}{reply}}, "light").Build(st, noSearch, BuildOpts{
-				Scope: types.PlaybookScopeFirm, PracticeArea: "Corporate & M&A", Name: "x", ClauseTypes: []string{"Governing law"},
+				Scope: types.PlaybookScopeFirm, PracticeArea: "Corporate & M&A", Name: "x", ClauseTypes: []string{"Governing law", "Limitation of liability"},
 			})
 			if pb != nil || !errors.Is(err, providers.ErrModelUnavailable) {
 				t.Fatalf("want (nil, ErrModelUnavailable), got (%+v, %v)", pb, err)
@@ -59,5 +63,25 @@ func TestBuildModelFailurePersistsNothing(t *testing.T) {
 				t.Fatalf("store has %d playbooks after a failed build, want 0", n)
 			}
 		})
+	}
+}
+
+func TestBuildCompleteEntriesSaved(t *testing.T) {
+	st := New(filepath.Join(t.TempDir(), "pb.json"))
+	if err := st.Init(); err != nil {
+		t.Fatal(err)
+	}
+	reply := `{"entries":[{"clauseType":"governing_law","standardPosition":"England"},{"clauseType":"Limitation of Liability","standardPosition":"Cap at fees"},{"clauseType":"Invented","standardPosition":"x"}]}`
+	pb, err := NewBuilder(&scripted{replies: []interface{}{reply}}, "light").Build(st, noSearch, BuildOpts{
+		Scope: types.PlaybookScopeFirm, PracticeArea: "Corporate & M&A", Name: "x", ClauseTypes: []string{"Governing law", "Limitation of liability"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pb.Entries) != 2 || pb.Entries[0].ClauseType != "Governing law" || pb.Entries[1].StandardPosition != "Cap at fees" {
+		t.Fatalf("unexpected entries %+v", pb.Entries)
+	}
+	if len(st.List("", "", "")) != 1 {
+		t.Fatal("complete playbook was not saved")
 	}
 }

@@ -38,7 +38,13 @@ const inboundWebhookMaxBytes = 1 << 20
 // so they are public; matter-link management is partner-gated.
 func (s *Server) mountBots(r *gin.Engine) {
 	midID := routing.Mid(s.cfg)
-	facade := &botFacade{s: s, briefing: briefing.New(s.provReg.MustGet(midID), midID)}
+	// No provider is a degraded mode, not a crash: briefings then fail per
+	// request with model_not_configured while the other commands keep working.
+	briefProvider, perr := s.provReg.GetOrUnconfigured(midID)
+	if perr != nil {
+		slog.Warn("bots: no model provider — @BigMichael briefings will report model_not_configured", "model", midID, "error", perr)
+	}
+	facade := &botFacade{s: s, briefing: briefing.New(briefProvider, midID)}
 
 	r.POST("/bots/teams/webhook", func(c *gin.Context) {
 		body, err := readWebhookBody(c)
