@@ -326,7 +326,6 @@ func rawHash(raw []byte) string {
 	return hex.EncodeToString(h[:])
 }
 
-
 func (l *Logger) FlushSinks() error {
 	l.mu.Lock()
 	sinks := make([]Sink, len(l.sinks))
