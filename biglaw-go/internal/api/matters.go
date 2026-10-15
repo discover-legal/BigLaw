@@ -178,6 +178,9 @@ func (s *Server) handleSetMatterBudget(c *gin.Context) {
 	if err := s.clients.SetMatterBudget(c.Param("num"), &body.BudgetUsd, thresholds); err != nil {
 		slog.Warn("matter budgets: store write-through failed", "matter", c.Param("num"), "err", err)
 	}
+	auditAdmin(c, "matter.budget.set", map[string]interface{}{
+		"clientId": c.Param("id"), "matterNumber": c.Param("num"), "budgetUsd": body.BudgetUsd, "thresholds": thresholds,
+	})
 	c.JSON(http.StatusOK, matter)
 }
 

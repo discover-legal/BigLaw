@@ -45,13 +45,43 @@ func (s *Server) handleCreateClient(c *gin.Context) {
 		return
 	}
 
+	// Conflict check runs automatically BEFORE the client joins the roster
+	// (so it is checked against the existing clients only) and its result is
+	// returned with the created client. A hit does not block creation — a
+	// conflict needs a partner's judgement (waiver, ethical wall) — but it is
+	// surfaced in the response and recorded in the audit log.
+	advs := body.Adversaries
+	if len(advs) > 200 {
+		advs = advs[:200]
+	}
+	conflict := s.clients.CheckConflict(body.Name, advs)
+
 	client, err := s.clients.Create(body.Name, body.ClientNumber, body.Adversaries, body.Notes)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	go s.syncGraph()
-	c.JSON(http.StatusCreated, client)
+	auditAdmin(c, "client.created", map[string]interface{}{
+		"clientId": client.ID, "clientNumber": client.ClientNumber, "name": client.Name,
+		"adversaryCount": len(client.Adversaries), "conflict": conflict.HasConflict,
+	})
+	if conflict.HasConflict {
+		auditAdmin(c, "client.conflict_detected", map[string]interface{}{
+			"clientId": client.ID, "name": client.Name,
+			"conflictingClientId":   conflict.ConflictingClientID,
+			"conflictingClientName": conflict.ConflictingClientName,
+			"matchedAdversary":      conflict.MatchedAdversary,
+		})
+	}
+	c.JSON(http.StatusCreated, createClientResponse{Client: client, Conflict: conflict})
+}
+
+// createClientResponse is the created client with the automatic conflict
+// check result alongside (UI type: Client & { conflict: ConflictCheckResult }).
+type createClientResponse struct {
+	*types.Client
+	Conflict types.ConflictCheckResult `json:"conflict"`
 }
 
 func (s *Server) handleUpdateClient(c *gin.Context) {
@@ -70,6 +100,7 @@ func (s *Server) handleUpdateClient(c *gin.Context) {
 		return
 	}
 	go s.syncGraph()
+	auditAdmin(c, "client.updated", map[string]interface{}{"clientId": client.ID, "fields": patchKeys(patch)})
 	c.JSON(http.StatusOK, client)
 }
 
@@ -87,6 +118,7 @@ func (s *Server) handleDeleteClient(c *gin.Context) {
 		return
 	}
 	go s.syncGraph()
+	auditAdmin(c, "client.deleted", map[string]interface{}{"clientId": c.Param("id")})
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
@@ -120,6 +152,9 @@ func (s *Server) handleAddMatter(c *gin.Context) {
 		return
 	}
 	go s.syncGraph()
+	auditAdmin(c, "matter.created", map[string]interface{}{
+		"clientId": c.Param("id"), "matterNumber": matter.MatterNumber, "practiceArea": matter.PracticeArea,
+	})
 	c.JSON(http.StatusCreated, matter)
 }
 
@@ -137,6 +172,7 @@ func (s *Server) handleRemoveMatter(c *gin.Context) {
 		return
 	}
 	go s.syncGraph()
+	auditAdmin(c, "matter.deleted", map[string]interface{}{"clientId": c.Param("id"), "matterNumber": c.Param("num")})
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
