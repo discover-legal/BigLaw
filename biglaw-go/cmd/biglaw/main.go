@@ -4,16 +4,21 @@
 // biglaw — Go port of the Big Michael multi-agent legal AI platform.
 // Targets Raspberry Pi / ARM64 SBCs (4 GB RAM).
 //
-// Run modes (BIG_MICHAEL_MODE env var):
-//   auto       — own the DB + REST if no other process is running, else MCP client
+// Run modes (BIG_MICHAEL_MODE env var). Exactly one process may own a data
+// dir; ownership is the single-writer lock <data dir>/biglaw.lock.
+//   auto       — take the lock if free and own DB + REST (+ MCP on stdio when
+//                stdin is not a TTY); if another process holds it, run as an
+//                MCP thin client of BIG_MICHAEL_API instead
 //   backend    — own DB + REST, never MCP
-//   mcp        — pure MCP server (no REST, no DB ownership)
+//   mcp        — MCP thin client only: no DB, no monitors, no vector store;
+//                every tool is a REST call to BIG_MICHAEL_API
 //   standalone — own DB + REST + MCP on stdio
 
 package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -33,6 +38,7 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/api"
 	"github.com/discover-legal/biglaw-go/internal/audit"
 	"github.com/discover-legal/biglaw-go/internal/auth"
+	"github.com/discover-legal/biglaw-go/internal/backend"
 	"github.com/discover-legal/biglaw-go/internal/clients"
 	"github.com/discover-legal/biglaw-go/internal/clientvoice"
 	"github.com/discover-legal/biglaw-go/internal/config"
@@ -77,6 +83,45 @@ func main() {
 	secrets.Load()
 
 	cfg := config.Load()
+
+	switch cfg.Run.Mode {
+	case "auto", "backend", "mcp", "standalone":
+	default:
+		fmt.Fprintf(os.Stderr, "biglaw: unknown BIG_MICHAEL_MODE %q (want auto | backend | mcp | standalone)\n", cfg.Run.Mode)
+		os.Exit(2)
+	}
+
+	// ctx is cancelled on Ctrl+C / SIGTERM. The API server shuts down
+	// gracefully via api.Server.Serve and the MCP stdio loop returns.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	// mcp mode is a pure thin client: it never touches the data dir.
+	if cfg.Run.Mode == "mcp" {
+		os.Exit(runThinClient(ctx, cfg, 0))
+	}
+
+	// Every other mode owns the data dir. Take the single-writer lock before
+	// opening anything in it; in auto mode a held lock means "attach".
+	dataLock, err := backend.AcquireDataLock(cfg.VectorDB.DataDir)
+	if errors.Is(err, backend.ErrDataDirLocked) && cfg.Run.Mode == "auto" {
+		if !stdinIsPipe() {
+			fmt.Fprintf(os.Stderr, "biglaw: %v\nauto mode would attach as an MCP client, but stdin is not a pipe "+
+				"from an MCP host (MCP speaks JSON-RPC on stdio). Launch it from an MCP host such as Claude Code, "+
+				"or point this process at its own data dir with RUVECTOR_DATA_DIR.\n", err)
+			os.Exit(1)
+		}
+		slog.Info("data dir is owned by another process; attaching as an MCP thin client",
+			"lock", err, "api", cfg.Run.APIURL)
+		// The owner may still be booting; give its REST API time to come up.
+		os.Exit(runThinClient(ctx, cfg, ownerBootGrace))
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "biglaw: %v\nStop the other process, give this one its own RUVECTOR_DATA_DIR, "+
+			"or run it with BIG_MICHAEL_MODE=mcp to attach to the owner.\n", err)
+		os.Exit(1)
+	}
+	defer dataLock.Release()
 
 	// One-time move of pre-data-dir state files (./.tasks.json, …) into the
 	// data dir. Must run before any store opens its file.
@@ -360,20 +405,12 @@ func main() {
 		return srv
 	}
 
-	mode := os.Getenv("BIG_MICHAEL_MODE")
-	if mode == "" {
-		mode = "auto"
-	}
+	mode := cfg.Run.Mode
 
-	// ctx is cancelled on Ctrl+C / SIGTERM. The API server shuts down
-	// gracefully via api.Server.Serve; wg tracks it so main can wait for
-	// in-flight requests before the deferred cleanups (monitors.Stop,
-	// costStore.Close) run. The MCP stdio server is deliberately NOT in
-	// wg: it blocks reading stdin and cannot be interrupted — it ends when
-	// the parent process closes the pipe or this process exits.
+	// wg tracks the API server so main can wait for in-flight requests
+	// before the deferred cleanups (monitors.Stop, costStore.Close) run. The
+	// MCP stdio loop is not in wg: it ends when stdin closes or ctx is done.
 	var wg sync.WaitGroup
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	serveAPI := func() {
 		addr := fmt.Sprintf("%s:%d", cfg.API.Host, cfg.API.Port)
@@ -386,48 +423,92 @@ func main() {
 			}
 		}()
 	}
+	// The in-process MCP server drives the owner's services directly.
 	serveMCP := func() {
-		mcpSrv := mcp.New(orch, knowledgeStore, agentReg, pluginReg, timeStore)
+		local := backend.NewLocal(orch, knowledgeStore, agentReg, pluginReg, timeStore)
 		go func() {
-			if err := mcpSrv.Serve(); err != nil {
+			if err := mcp.New(local).Serve(ctx); err != nil && ctx.Err() == nil {
 				fmt.Fprintf(os.Stderr, "mcp serve: %v\n", err)
 			}
 		}()
 	}
 
 	switch mode {
-	case "mcp":
-		// Pure MCP mode — serve stdio only, in the foreground.
-		mcpSrv := mcp.New(orch, knowledgeStore, agentReg, pluginReg, timeStore)
-		if err := mcpSrv.Serve(); err != nil {
-			fmt.Fprintf(os.Stderr, "mcp serve: %v\n", err)
-			os.Exit(1)
-		}
-
 	case "backend":
 		// REST API only.
 		serveAPI()
-		<-ctx.Done()
 
 	case "standalone":
 		// REST API + MCP stdio.
 		serveAPI()
 		serveMCP()
-		<-ctx.Done()
 
-	default: // "auto"
-		// Default: run REST API (ARM devices are always "backend").
+	default: // "auto", as the owner
 		serveAPI()
-		// If stdin is not a TTY, also serve MCP on stdio.
-		fi, _ := os.Stdin.Stat()
-		if fi.Mode()&os.ModeCharDevice == 0 {
+		// Launched by an MCP host (stdin is a pipe, not a TTY): also serve MCP.
+		if stdinIsPipe() {
 			serveMCP()
 		}
-		<-ctx.Done()
 	}
+	<-ctx.Done()
 
 	wg.Wait()
-	fmt.Println("biglaw: shutdown complete")
+	fmt.Fprintln(os.Stderr, "biglaw: shutdown complete")
+}
+
+// ownerBootGrace is how long an auto-mode thin client waits for the lock
+// holder's REST API to answer (the owner may have just started).
+const ownerBootGrace = 30 * time.Second
+
+// runThinClient serves MCP on stdio over a backend.Remote — no database, no
+// monitors, no vector store. It fails fast with an actionable error when the
+// backend cannot be reached (after waiting up to grace for it to come up).
+// Returns the process exit code.
+func runThinClient(ctx context.Context, cfg *config.Config, grace time.Duration) int {
+	remote, err := backend.NewRemote(cfg.Run.APIURL, cfg.Run.APIToken)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "biglaw mcp: BIG_MICHAEL_API: %v\n", err)
+		return 1
+	}
+	principal, err := pingWithGrace(ctx, remote, grace)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "biglaw mcp: %v\n", err)
+		return 1
+	}
+	slog.Info("MCP thin client attached", "api", remote.URL(),
+		"principal", principal.User.ProfileID, "role", principal.User.Role,
+		"authEnabled", principal.AuthEnabled)
+	if err := mcp.New(remote).Serve(ctx); err != nil && ctx.Err() == nil {
+		fmt.Fprintf(os.Stderr, "biglaw mcp: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+// pingWithGrace probes the backend, retrying only while it is unreachable
+// and grace has not elapsed. Auth and protocol failures are final at once.
+func pingWithGrace(ctx context.Context, remote *backend.Remote, grace time.Duration) (*backend.Principal, error) {
+	deadline := time.Now().Add(grace)
+	for {
+		probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		p, err := remote.Ping(probeCtx)
+		cancel()
+		if err == nil || !errors.Is(err, backend.ErrUnavailable) || !time.Now().Before(deadline) {
+			return p, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, err
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+}
+
+// stdinIsPipe reports whether stdin can carry MCP traffic: anything but a
+// character device (a TTY, or /dev/null under a service manager).
+func stdinIsPipe() bool {
+	fi, err := os.Stdin.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice == 0
 }
 
 func startLocalPprof(addr string) error {

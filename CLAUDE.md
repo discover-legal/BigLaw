@@ -71,13 +71,21 @@ MCP server on stdio (activated when stdin is not a TTY — i.e. from Claude Code
 
 **Web workbench:** `cd ui && BIG_MICHAEL_API=http://localhost:3102 npm run dev` → :5173.
 
-**Run modes** (`BIG_MICHAEL_MODE`): the vector DB takes an exclusive single-writer lock and the
-REST API binds one port, so only one process can own them. To run the web UI and the Claude
-Code MCP at once, one process owns the DB and the other attaches as a thin client over REST.
-- `auto` (default) — own the DB if free, else attach as an MCP client
-- `backend` — own DB + REST, never MCP (what the Docker stack runs)
-- `mcp` — pure MCP client, requires a reachable backend (`BIG_MICHAEL_API` sets the URL)
-- `standalone` — classic single process (own DB + REST + MCP on stdio)
+**Run modes** (`BIG_MICHAEL_MODE`): one process owns a data dir (`RUVECTOR_DATA_DIR`,
+default `./data` — DB, JSON state files, vector stores), enforced by an OS lock on
+`<data dir>/biglaw.lock`; every other process is a thin MCP client of the owner's REST API.
+- `auto` (default) — take the lock if free and own DB + REST (+ MCP on stdio when stdin is a
+  pipe); if the lock is held, run as an MCP thin client of `BIG_MICHAEL_API`
+- `backend` — own DB + REST, never MCP (what the Docker stack runs); refuses a held lock
+- `mcp` — MCP thin client only: no DB, no monitors, no vector store; every tool is a REST call
+  to `BIG_MICHAEL_API` (default `http://<API_HOST>:<API_PORT>`), bearer
+  `BIG_MICHAEL_API_TOKEN` (falls back to `API_KEY`) when the backend has `AUTH_ENABLED=true`;
+  exits with a clear error if the backend is unreachable at startup
+- `standalone` — single process (own DB + REST + MCP on stdio); refuses a held lock
+The seam is `biglaw-go/internal/backend` (`Backend` / `Local` / `Remote` + the lock); the
+contract test `internal/mcp/contract_test.go` runs every MCP tool through both sides. State
+files (`.tasks.json`, `.profiles.json`, `audit.jsonl`, …) default into the data dir; legacy
+CWD copies are moved there once at startup unless their `*_FILE` env var is set.
 
 ## Using from Claude Code
 
@@ -220,7 +228,7 @@ Each DyTopo round:
 | `src/integrations/clio.ts` | ClioClient — OAuth 2.0, token persistence, auto-refresh, 7 API methods, 4-region routing |
 | `src/tools/clio.ts` | 7 Clio tool definitions (list/get matters, documents, activities, notes, contacts) |
 | `src/mcp/server.ts` | MCP stdio server + Fastify REST API |
-| `src/backend/index.ts` | `LegalBackend` seam — `LocalBackend` (owns DB) / `RemoteBackend` (thin HTTP client) so MCP can run as a client of a separate owner |
+| `src/backend/index.ts` | `LegalBackend` seam — `LocalBackend` (owns DB) / `RemoteBackend` (thin HTTP client) so MCP can run as a client of a separate owner (Go: `internal/backend/`) |
 | `src/index.ts` | Entry point — also resolves the run mode (`BIG_MICHAEL_MODE`: auto/backend/mcp/standalone) |
 | `src/bots/teams.ts` | Big Michael — Teams Outgoing Webhook receiver + Incoming Webhook sender + matter-link management |
 | `src/bots/slack.ts` | Big Michael — Slack Events API receiver + Web API sender + matter-link management |

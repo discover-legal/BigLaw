@@ -172,6 +172,11 @@ func Load() *Config {
 			APIKey:    env("API_KEY", ""),
 			ProfileID: env("API_PROFILE_ID", ""),
 		},
+		Run: RunConfig{
+			Mode:     strings.ToLower(strings.TrimSpace(env("BIG_MICHAEL_MODE", "auto"))),
+			APIURL:   env("BIG_MICHAEL_API", defaultAPIURL(env("API_HOST", "127.0.0.1"), envInt("API_PORT", 3101))),
+			APIToken: env("BIG_MICHAEL_API_TOKEN", env("API_KEY", "")),
+		},
 		Auth: AuthConfig{
 			Enabled:        envBool("AUTH_ENABLED", false),
 			SessionSecret:  env("SESSION_SECRET", DefaultSessionSecret),
@@ -447,6 +452,17 @@ func Load() *Config {
 	c.legacyState = legacy
 
 	return c
+}
+
+// defaultAPIURL is where an MCP thin client looks for the backend when
+// BIG_MICHAEL_API is unset: this machine's own API_HOST:API_PORT, with a
+// wildcard bind address (0.0.0.0 / ::) mapped to loopback.
+func defaultAPIURL(host string, port int) string {
+	switch strings.TrimSpace(host) {
+	case "", "0.0.0.0", "::", "[::]":
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(strings.Trim(host, "[]"), strconv.Itoa(port))
 }
 
 // loadLLMTemperature resolves the sampling temperature for reasoning/synthesis

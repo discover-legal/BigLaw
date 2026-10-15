@@ -175,3 +175,17 @@ func TestMigrateCopyFallbackPreservesContent(t *testing.T) {
 		t.Fatalf("temp files left behind: %v", m)
 	}
 }
+
+func TestDefaultAPIURL(t *testing.T) {
+	for host, want := range map[string]string{
+		"127.0.0.1": "http://127.0.0.1:3101",
+		"0.0.0.0":   "http://127.0.0.1:3101",
+		"::":        "http://127.0.0.1:3101",
+		"::1":       "http://[::1]:3101",
+		"biglaw":    "http://biglaw:3101",
+	} {
+		if got := defaultAPIURL(host, 3101); got != want {
+			t.Errorf("defaultAPIURL(%q) = %q, want %q", host, got, want)
+		}
+	}
+}

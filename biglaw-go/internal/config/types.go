@@ -36,6 +36,22 @@ type APIConfig struct {
 	ProfileID string
 }
 
+// RunConfig selects the process role and, for an MCP thin client, the backend
+// it attaches to. See cmd/biglaw/main.go and docs/deployment/run-modes.md.
+type RunConfig struct {
+	// Mode is BIG_MICHAEL_MODE, lower-cased: auto (default) | backend | mcp |
+	// standalone. Unknown values are kept verbatim so startup can reject them.
+	Mode string
+	// APIURL is the REST base URL an MCP thin client talks to
+	// (BIG_MICHAEL_API; default http://<API_HOST>:<API_PORT>, with a
+	// wildcard bind host mapped to loopback).
+	APIURL string
+	// APIToken is the bearer credential a thin client presents
+	// (BIG_MICHAEL_API_TOKEN, falling back to API_KEY so a client sharing the
+	// backend's .env authenticates as the API_PROFILE_ID profile).
+	APIToken string
+}
+
 const DefaultSessionSecret = "dev-insecure-change-me-in-production-please"
 
 type AuthConfig struct {
@@ -471,6 +487,7 @@ type Config struct {
 	Embeddings         EmbeddingsConfig
 	VectorDB           VectorDBConfig
 	API                APIConfig
+	Run                RunConfig
 	Auth               AuthConfig
 	Agents             AgentsConfig
 	DyTopo             DyTopoConfig

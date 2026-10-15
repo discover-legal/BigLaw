@@ -27,6 +27,7 @@ import (
 
 	"github.com/discover-legal/biglaw-go/internal/adapters"
 	"github.com/discover-legal/biglaw-go/internal/auth"
+	"github.com/discover-legal/biglaw-go/internal/backend"
 	"github.com/discover-legal/biglaw-go/internal/budget"
 	"github.com/discover-legal/biglaw-go/internal/dockets"
 	"github.com/discover-legal/biglaw-go/internal/graph"
@@ -735,18 +736,9 @@ func (s *Server) handleListPlugins(c *gin.Context) {
 	if !requirePartner(c) {
 		return
 	}
-	out := make([]gin.H, 0)
-	for _, p := range s.opsPlugins().List() {
-		out = append(out, gin.H{
-			"id":        p.Plugin.ID,
-			"name":      p.Plugin.Name,
-			"source":    "json", // Go port loads JSON adapters only
-			"tools":     len(p.Plugin.Tools),
-			"agents":    len(p.Plugin.Agents),
-			"workflows": len(p.Plugin.Workflows),
-		})
-	}
-	c.JSON(http.StatusOK, out)
+	// One summary shape for REST and the MCP list_plugins tool (which reads
+	// this route when running as a thin client).
+	c.JSON(http.StatusOK, backend.SummarizePlugins(s.opsPlugins()))
 }
 
 // ─── Inter-round memory query ─────────────────────────────────────────────────
