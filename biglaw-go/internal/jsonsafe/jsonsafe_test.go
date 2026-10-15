@@ -58,7 +58,7 @@ func TestNormalizeReplacesNilSlicesEverywhere(t *testing.T) {
 	s := string(got)
 	for _, want := range []string{
 		`"promoted":[]`, `"rounds":[]`, `"nested":[{"tags":[]},{"tags":["a"]}]`,
-		`"ptr":{"tags":[]}`, `"nilPtr":null`, `"byId":{"k":{"tags":[]}}`, `"nilMap":null`,
+		`"ptr":{"tags":[]}`, `"nilPtr":null`, `"byId":{"k":{"tags":[]}}`, `"nilMap":{}`,
 		`"any":{"list":[],"task":{"tags":[]}}`, `"bytes":null`, `"custom":"custom"`,
 		`"arr":[{"tags":[]},{"tags":[]}]`,
 	} {
@@ -83,6 +83,9 @@ func TestNormalizeTopLevelAndFlatValues(t *testing.T) {
 	}
 	if got, _ := Marshal(&outer{}); !bytes.Contains(got, []byte(`"rounds":[]`)) {
 		t.Fatalf("pointer to struct not normalized: %s", got)
+	}
+	if got, _ := Marshal(map[string][]int(nil)); string(got) != "{}" {
+		t.Fatalf("top-level nil map = %s", got)
 	}
 	if Normalize(nil) != nil {
 		t.Fatal("nil must stay nil")

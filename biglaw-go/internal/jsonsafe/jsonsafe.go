@@ -2,23 +2,25 @@
 // Copyright (C) 2026 Discover Legal
 
 // Package jsonsafe enforces one wire-contract rule for every JSON body the
-// REST API emits: a list field is never null.
+// REST API emits: a collection field (list or object map) is never null.
 //
-// encoding/json writes a nil slice as `null`, and idiomatic Go produces nil
-// slices everywhere (`var out []T` + append, early returns, zero-value
+// encoding/json writes a nil slice or map as `null`, and idiomatic Go
+// produces both everywhere (`var out []T` + append, early returns, zero-value
 // structs). Clients — the workbench UI first among them — reasonably treat a
 // field typed `T[]` as an array, so a single nil slice anywhere in a response
 // graph (a queued task's `rounds`, a fallback headnote report's
-// `practiceAreas`, …) crashes the page that renders it.
+// `practiceAreas`, a review's `legend` map, …) crashes the page that renders
+// it.
 //
 // Fixing that type-by-type means every constructor, early return and future
 // struct must remember; one miss is a crash. Instead the API layer routes all
 // encoding through Normalize, which returns a copy of the value in which every
 // nil slice reachable through exported, JSON-visible fields is replaced by an
-// empty one. The original value is never mutated (handlers often serialise
-// live, shared state). Types that implement json.Marshaler encode themselves
-// and are passed through untouched, as are []byte (base64 in JSON) and nil
-// pointers / interfaces / maps (those mean "absent", not "empty list").
+// empty one, and every nil map by an empty map. The original value is never
+// mutated (handlers often serialise live, shared state). Types that implement
+// json.Marshaler encode themselves and are passed through untouched, as are
+// []byte (base64 in JSON) and nil pointers / interfaces (those mean
+// "absent", not "empty collection").
 package jsonsafe
 
 import (
@@ -29,24 +31,24 @@ import (
 	"sync"
 )
 
-// Marshal is json.Marshal with nil slices encoded as [] instead of null.
+// Marshal is json.Marshal with nil slices encoded as [] and nil maps as {}.
 func Marshal(v any) ([]byte, error) { return json.Marshal(Normalize(v)) }
 
-// MarshalIndent is json.MarshalIndent with nil slices encoded as [].
+// MarshalIndent is json.MarshalIndent with nil slices/maps encoded as []/{}.
 func MarshalIndent(v any, prefix, indent string) ([]byte, error) {
 	return json.MarshalIndent(Normalize(v), prefix, indent)
 }
 
-// Normalize returns v, or a copy of v in which every nil slice reachable
-// through JSON-visible fields, map values, array/slice elements, pointers and
-// interfaces is replaced by an empty slice of the same type. Values whose type
-// cannot contain such a slice are returned as-is without copying.
+// Normalize returns v, or a copy of v in which every nil slice or map
+// reachable through JSON-visible fields, map values, array/slice elements,
+// pointers and interfaces is replaced by an empty one of the same type. Values
+// whose type cannot contain such a collection are returned as-is, uncopied.
 func Normalize(v any) any {
 	if v == nil {
 		return nil
 	}
 	rv := reflect.ValueOf(v)
-	if !mayHoldSlice(rv.Type()) {
+	if !mayHoldNilCollection(rv.Type()) {
 		return v
 	}
 	return normalize(rv).Interface()
@@ -75,12 +77,12 @@ func isByteSlice(t reflect.Type) bool {
 	return t.Kind() == reflect.Slice && t.Elem().Kind() == bytesKind
 }
 
-// mayHoldSlice is a cached, conservative answer to "could a value of type t
-// contain a nil slice that would encode as null?". Interfaces answer true
+// mayHoldNilCollection is a cached, conservative answer to "could a value of type t
+// contain a nil slice or map that would encode as null?". Interfaces answer true
 // (the dynamic type decides). It lets the hot path skip copying flat values.
 var holdCache sync.Map // reflect.Type → bool
 
-func mayHoldSlice(t reflect.Type) bool {
+func mayHoldNilCollection(t reflect.Type) bool {
 	if v, ok := holdCache.Load(t); ok {
 		return v.(bool)
 	}
@@ -98,17 +100,17 @@ func computeMayHold(t reflect.Type) bool {
 	switch t.Kind() {
 	case reflect.Slice:
 		return !isByteSlice(t)
-	case reflect.Interface:
+	case reflect.Interface, reflect.Map:
 		return true
-	case reflect.Pointer, reflect.Array, reflect.Map:
-		return mayHoldSlice(t.Elem())
+	case reflect.Pointer, reflect.Array:
+		return mayHoldNilCollection(t.Elem())
 	case reflect.Struct:
 		for i := range t.NumField() {
 			f := t.Field(i)
 			if !jsonVisible(f) {
 				continue
 			}
-			if mayHoldSlice(f.Type) {
+			if mayHoldNilCollection(f.Type) {
 				return true
 			}
 		}
@@ -138,7 +140,7 @@ func jsonVisible(f reflect.StructField) bool {
 
 func normalize(v reflect.Value) reflect.Value {
 	t := v.Type()
-	if !mayHoldSlice(t) {
+	if !mayHoldNilCollection(t) {
 		return v
 	}
 	switch t.Kind() {
@@ -146,7 +148,7 @@ func normalize(v reflect.Value) reflect.Value {
 		if v.IsNil() {
 			return reflect.MakeSlice(t, 0, 0)
 		}
-		if !mayHoldSlice(t.Elem()) {
+		if !mayHoldNilCollection(t.Elem()) {
 			return v
 		}
 		out := reflect.MakeSlice(t, v.Len(), v.Len())
@@ -177,6 +179,9 @@ func normalize(v reflect.Value) reflect.Value {
 		return out
 	case reflect.Map:
 		if v.IsNil() {
+			return reflect.MakeMap(t)
+		}
+		if !mayHoldNilCollection(t.Elem()) {
 			return v
 		}
 		out := reflect.MakeMapWithSize(t, v.Len())
@@ -190,7 +195,7 @@ func normalize(v reflect.Value) reflect.Value {
 		out.Set(v) // copies every field, unexported ones included
 		for i := range t.NumField() {
 			f := t.Field(i)
-			if !jsonVisible(f) || !mayHoldSlice(f.Type) {
+			if !jsonVisible(f) || !mayHoldNilCollection(f.Type) {
 				continue
 			}
 			dst := out.Field(i)
