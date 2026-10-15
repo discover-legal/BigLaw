@@ -317,6 +317,7 @@ function PlaybookReviewTab({ notify }: { notify: (m: string) => void }) {
   const [title, setTitle] = useState("");
   const [busy, setBusy] = useState(false);
   const [report, setReport] = useState<RedlineReport | null>(null);
+  const [runError, setRunError] = useState<string | null>(null);
   // Disposition per finding: issues keyed "i<n>", missing clauses "m<n>".
   const [dispositions, setDispositions] = useState<Record<string, Disposition>>({});
 
@@ -327,6 +328,7 @@ function PlaybookReviewTab({ notify }: { notify: (m: string) => void }) {
   async function run() {
     setBusy(true);
     setReport(null);
+    setRunError(null);
     setDispositions({});
     try {
       const res = await api.redline({
@@ -338,7 +340,7 @@ function PlaybookReviewTab({ notify }: { notify: (m: string) => void }) {
       });
       setReport(res);
       notify(`Review complete — ${res.redlineCount} redlines, ${res.missingCount ?? 0} missing clauses, ${res.escalateCount} escalations across ${res.totalClauses} clauses`);
-    } catch (e) { notify((e as Error).message); }
+    } catch (e) { setRunError((e as Error).message); }
     finally { setBusy(false); }
   }
 
@@ -439,6 +441,7 @@ function PlaybookReviewTab({ notify }: { notify: (m: string) => void }) {
           {busy ? "Reviewing against playbook…" : "⚖ Review against playbook"}
         </button>
       </RunInputs>
+      {runError && <div style={{ marginTop: 16 }} role="alert"><ErrorState message={runError} /></div>}
 
       {report && (
         <div style={{ marginTop: 24 }}>
@@ -541,10 +544,12 @@ function HeadnotesTab({ notify }: { notify: (m: string) => void }) {
   const [meta, setMeta] = useState({ caseName: "", citation: "", court: "", jurisdiction: "" });
   const [busy, setBusy] = useState(false);
   const [report, setReport] = useState<HeadnoteReport | null>(null);
+  const [runError, setRunError] = useState<string | null>(null);
 
   async function run() {
     setBusy(true);
     setReport(null);
+    setRunError(null);
     try {
       const res = await api.generateHeadnotes({
         opinionText,
@@ -555,7 +560,7 @@ function HeadnotesTab({ notify }: { notify: (m: string) => void }) {
       });
       setReport(res);
       notify(`${res.totalHeadnotes} headnotes extracted (${res.ratioCount} ratio, ${res.obiterCount} obiter)`);
-    } catch (e) { notify((e as Error).message); }
+    } catch (e) { setRunError((e as Error).message); }
     finally { setBusy(false); }
   }
 
@@ -582,6 +587,7 @@ function HeadnotesTab({ notify }: { notify: (m: string) => void }) {
           {busy ? "Extracting…" : "§ Generate headnotes"}
         </button>
       </RunInputs>
+      {runError && <div style={{ marginTop: 16 }} role="alert"><ErrorState message={runError} /></div>}
 
       {report && (
         <div style={{ marginTop: 24 }}>
@@ -641,10 +647,12 @@ function PrecedentsTab({ notify }: { notify: (m: string) => void }) {
   const [instructions, setInstructions] = useState("");
   const [busy, setBusy] = useState(false);
   const [doc, setDoc] = useState<PrecedentDocument | null>(null);
+  const [runError, setRunError] = useState<string | null>(null);
 
   async function run() {
     setBusy(true);
     setDoc(null);
+    setRunError(null);
     try {
       const res = await api.generatePrecedent({
         documentType: docType,
@@ -655,7 +663,7 @@ function PrecedentsTab({ notify }: { notify: (m: string) => void }) {
       });
       setDoc(res);
       notify(`"${res.title}" generated — ${res.clauses.length} clauses, ${res.playbookPositionCount} playbook positions applied`);
-    } catch (e) { notify((e as Error).message); }
+    } catch (e) { setRunError((e as Error).message); }
     finally { setBusy(false); }
   }
 
@@ -691,6 +699,7 @@ function PrecedentsTab({ notify }: { notify: (m: string) => void }) {
           {busy ? "Drafting from precedents…" : "⚒ Generate precedent"}
         </button>
       </RunInputs>
+      {runError && <div style={{ marginTop: 16 }} role="alert"><ErrorState message={runError} /></div>}
 
       {doc && (
         <div style={{ marginTop: 24 }}>

@@ -22,19 +22,39 @@ type SettingsPatch = {
   drafting?: Partial<AppSettings["drafting"]>;
 };
 
+// Typed model-failure errors from the backend (502 model_unavailable, 503
+// model_not_configured). Their messages are written for users, so they are
+// shown even though they arrive as 5xx.
+const MODEL_ERROR_TYPES = new Set(["model_unavailable", "model_not_configured"]);
+
+/** Error thrown for a non-2xx response; errorType is set for typed backend errors. */
+export class ApiError extends Error {
+  readonly status: number;
+  readonly errorType?: string;
+  constructor(message: string, status: number, errorType?: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.errorType = errorType;
+  }
+}
+
 async function json<T>(res: Response): Promise<T> {
   if (!res.ok) {
     if (res.status === 401) window.dispatchEvent(new Event("biglaw:unauthorized"));
     const raw = await res.text().catch(() => "");
     let detail = "";
-    if (res.status < 500 && raw) {
+    let errorType: string | undefined;
+    if (raw) {
       try {
-        const parsed = JSON.parse(raw) as { error?: unknown };
-        if (typeof parsed.error === "string") detail = parsed.error.slice(0, 240);
+        const parsed = JSON.parse(raw) as { error?: unknown; errorType?: unknown };
+        if (typeof parsed.errorType === "string") errorType = parsed.errorType;
+        const showable = res.status < 500 || (errorType !== undefined && MODEL_ERROR_TYPES.has(errorType));
+        if (showable && typeof parsed.error === "string") detail = parsed.error.slice(0, 240);
       } catch { /* non-standard bodies are not shown to users */ }
     }
     const fallback = res.status >= 500 ? "The service could not complete that request." : res.statusText;
-    throw new Error(detail || fallback || `Request failed (${res.status})`);
+    throw new ApiError(detail || fallback || `Request failed (${res.status})`, res.status, errorType);
   }
   return res.json() as Promise<T>;
 }
