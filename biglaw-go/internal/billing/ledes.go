@@ -230,7 +230,6 @@ func fmt2(f float64) string {
 	return fmt.Sprintf("%.2f", f)
 }
 
-
 // sanitizeField removes the 1998B delimiters ("|" separates fields, "[]"
 // terminates a line) and line breaks from free text.
 func sanitizeField(s string) string {
