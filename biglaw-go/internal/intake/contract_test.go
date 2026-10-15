@@ -117,8 +117,8 @@ func TestContractRequestExamplesValidate(t *testing.T) {
 		[]byte(`{"externalId":"d","client":{"externalId":"x","futureField":1},"content":"x","facts":[{"category":"brand_new_category","value":"v"}],"v2Only":{"a":1}}`))
 	// ...but the schemas still catch real breakage.
 	for _, bad := range []string{
-		`{"externalId":"d","client":{"externalId":"x"}}`,                    // no content
-		`{"externalId":"d","content":"x"}`,                                   // no client
+		`{"externalId":"d","client":{"externalId":"x"}}`,                                                    // no content
+		`{"externalId":"d","content":"x"}`,                                                                  // no client
 		`{"externalId":"d","client":{"externalId":"x"},"content":"x","adverseParties":[{"role":"spouse"}]}`, // party w/o name
 	} {
 		if err := validate(t, schemas, "submission-request", []byte(bad)); err == nil {

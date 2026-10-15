@@ -231,7 +231,11 @@ func (s *Service) Submit(ctx context.Context, req SubmissionRequest) (*store.Int
 	}
 	sub.UpdatedAt = time.Now()
 
-	adverse := collectAdverseParties(req.AdverseParties, req.Facts)
+	// Adverse parties are cumulative across re-submits of one document: a
+	// party once named stays in the conflict check and on the record even
+	// if a later draft drops it.
+	prev := decodeConflict(sub.ConflictJSON)
+	adverse, _ := mergeParties(prev.AdverseParties, collectAdverseParties(req.AdverseParties, req.Facts))
 	payload := heldPayload{
 		Content:        req.Content,
 		Facts:          req.Facts,
@@ -252,7 +256,6 @@ func (s *Service) Submit(ctx context.Context, req SubmissionRequest) (*store.Int
 	} else {
 		hits = s.clients.ConflictHits(profile.Name, adverse, "")
 	}
-	prev := decodeConflict(sub.ConflictJSON)
 	rec := ConflictRecord{Hits: hits, AdverseParties: adverse, CheckedAt: time.Now()}
 	if len(hits) > 0 {
 		rec.ConflictCheckResult = hits[0]

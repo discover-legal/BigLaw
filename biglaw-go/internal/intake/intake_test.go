@@ -246,6 +246,16 @@ func TestHoldSurvivesResubmitWithoutConflict(t *testing.T) {
 		t.Fatal("re-submit duplicated the submission")
 	}
 	assertHeldNothingLanded(t, second, crmSvc, repo, 1, cs)
+
+	// Once acknowledged, the party the client named earlier is still
+	// recorded on the new roster client.
+	landed, err := svc.ResolveConflict(sysCtx(), second.ID, true, "waiver", "partner-1")
+	if err != nil {
+		t.Fatalf("ResolveConflict: %v", err)
+	}
+	if rc := cs.Get(landed.ClientID); rc == nil || len(rc.Adversaries) != 1 || rc.Adversaries[0] != "Robert Smith" {
+		t.Fatalf("earlier-named adverse party dropped from the record: %+v", rc)
+	}
 }
 
 func TestResolveConflictAcknowledgeLands(t *testing.T) {
