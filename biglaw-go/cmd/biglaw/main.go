@@ -97,6 +97,13 @@ func main() {
 
 	// Initialise audit logger.
 	audit.Init(cfg.Audit.LogFile, cfg.Audit.Enabled)
+	// Reload the recent window and continue the hash chain from the last
+	// persisted entry. Without this every restart re-seeded the chain at
+	// "genesis" mid-file (breaking tamper-evidence across restarts) and
+	// GET /audit returned nothing written before the restart.
+	if err := audit.Default.RestoreFromFile(); err != nil {
+		slog.Warn("audit: restore from log failed; chain restarts at genesis", "file", cfg.Audit.LogFile, "err", err)
+	}
 
 	// Build provider registry.
 	provReg := providers.NewRegistry(cfg)

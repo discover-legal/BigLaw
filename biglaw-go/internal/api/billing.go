@@ -441,7 +441,8 @@ func (s *Server) handleExportTimeLedes(c *gin.Context) {
 	ledes := billing.ExportLedes1998B(closed, opts)
 	safe := billingFilenameRe.ReplaceAllString(invoice, "_")
 	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", safe+".ledes"))
-	c.Data(http.StatusOK, "application/edi-x12", []byte(ledes))
+	// LEDES 1998B is plain ASCII text; it is not an X12 EDI document.
+	c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(ledes))
 }
 
 // ─── OCG suggestions (read side) ──────────────────────────────────────────────
