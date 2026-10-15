@@ -78,25 +78,41 @@ Full configuration lives in `.env.example` (`MODEL_STACK`/`QWEN_*`, `DB_BACKEND`
 
 All state lives under one data dir — `RUVECTOR_DATA_DIR`, default `./data` — so a single
 volume (the Docker stack's `biglaw-data`) holds everything, and the data dir's single-writer
-lock (`biglaw.lock`, see [Run modes](run-modes.md)) guards all of it.
+lock (`biglaw.lock`, see [Run modes](run-modes.md)) guards all of it. Every default below is
+derived from the data dir; at startup the owner asserts that no state path that is not
+explicitly overridden lies outside it.
 
-| File (in the data dir) | Override |
+| In the data dir | Override |
 |---|---|
+| `biglaw.db` (+ `-wal`/`-shm`) | `SQLITE_PATH` |
 | `.tasks.json`, `.settings.json`, `.profiles.json`, `.clients.json` | `TASKS_FILE`, `SETTINGS_FILE`, `PROFILES_FILE`, `CLIENTS_FILE` |
 | `.time-entries.json`, `.qtable.json`, `.ocg.json`, `.jobs.json` | `TIME_FILE`, `LEARNING_FILE`, `OCG_FILE`, `JOBS_FILE` |
-| `audit.jsonl` | `AUDIT_LOG_FILE` |
+| `audit.jsonl`, `costs.jsonl` | `AUDIT_LOG_FILE`, `COST_LOG_FILE` |
+| `attachments/` | `BLOB_DIR` |
+| `prebills.json`, `playbooks.json`, `clientvoice.json`, `dockets.json`, `clio-tokens.json` | `PREBILLS_FILE`, `PLAYBOOKS_FILE`, `CLIENT_VOICE_FILE`, `DOCKETS_FILE`, `CLIO_TOKENS_FILE` |
+| `status-reports.jsonl`, `reports/`, `routed-emails.jsonl`, `pending-drafts.json`, `backfill-cursor.json` | `LPM_CORPUS_FILE`, `LPM_REPORT_DIR`, `LPM_ROUTED_FILE`, `LPM_PENDING_FILE`, `LPM_BACKFILL_CURSOR_FILE` |
+| `agents.json` | — |
 | `.matter-budgets.json` | follows `CLIENTS_FILE`'s directory |
-| `biglaw.db`, `costs.jsonl`, `agents.json`, `prebills.json`, `playbooks.json`, … | `SQLITE_PATH`, `COST_LOG_FILE`, … (these always lived in `./data`) |
 
-**Upgrading from a build that kept state in the working directory** (`./.tasks.json`,
-`./.profiles.json`, `./audit.jsonl`, …): on its first start as the data-dir owner, BigLaw
-moves each legacy file to its new default and logs every move. The migration is idempotent
-and conservative — a file is moved only when its env var is unset, the legacy file exists
-and the data-dir file does not; if both exist the data-dir copy wins and the legacy file is
-left untouched with a warning. Across filesystems it falls back to copy + fsync + atomic
-rename + remove. An explicit `*_FILE` override (including one copied from an old
-`.env.example`, e.g. `TASKS_FILE=.tasks.json`) always wins and is never migrated — delete
-it from `.env` to adopt the new default.
+**Upgrading from a build that kept state elsewhere** — dotfiles in the working directory
+(`./.tasks.json`, `./audit.jsonl`, …), or `./data/*` while `RUVECTOR_DATA_DIR` pointed
+somewhere else: on its first start as the data-dir owner, BigLaw moves each legacy path to its
+new default and logs every move. Stop any old-version BigLaw process first (old builds take no
+lock). The migration is idempotent and conservative:
+
+- a path moves only when the legacy copy exists and the data-dir one does not; if both exist
+  the data-dir copy wins and the legacy one is left untouched with a warning;
+- a symlink moves as a symlink (a relative target is re-pointed so it still resolves); the
+  SQLite journal moves with its database;
+- rename first; across filesystems a file falls back to copy + fsync + atomic rename + remove;
+- anything that cannot be moved (a directory across filesystems, a directory where a file
+  belongs, a stray journal at the destination) stops startup with an error naming the path and
+  its env var — BigLaw never comes up on empty state while yours sits elsewhere.
+
+An explicit `*_FILE`/`*_DIR` override always wins and is never migrated — **except** a value
+equal to the old default (e.g. `TASKS_FILE=.tasks.json` or `AUDIT_LOG_FILE=./audit.jsonl`
+copied from an old `.env.example`, or `SQLITE_PATH=./data/biglaw.db`), which counts as unset:
+that file is migrated and the data-dir path is used.
 
 ## Vector storage
 

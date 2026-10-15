@@ -38,7 +38,7 @@ final synthesis.
 `.mcp.json` runs in `auto` mode: if another process already owns the data dir (e.g. a
 native process started with `BIG_MICHAEL_MODE=backend`), Claude Code's MCP finds the data
 dir's single-writer lock held and attaches to that owner's REST API (`BIG_MICHAEL_API`,
-default `http://127.0.0.1:3101`) as a thin client — no database, no monitors, no vector
+default `http://127.0.0.1:3101`; in practice the URL the owner records in its lock) as a thin client — no database, no monitors, no vector
 store of its own. Tasks and documents created over MCP are then the backend's: visible in
 the workbench and everywhere else. The Docker stack keeps its data in its own volume, so to
 drive it set `BIG_MICHAEL_MODE=mcp` and `BIG_MICHAEL_API=http://localhost:3102` (plus

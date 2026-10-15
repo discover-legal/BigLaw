@@ -72,20 +72,25 @@ MCP server on stdio (activated when stdin is not a TTY — i.e. from Claude Code
 **Web workbench:** `cd ui && BIG_MICHAEL_API=http://localhost:3102 npm run dev` → :5173.
 
 **Run modes** (`BIG_MICHAEL_MODE`): one process owns a data dir (`RUVECTOR_DATA_DIR`,
-default `./data` — DB, JSON state files, vector stores), enforced by an OS lock on
-`<data dir>/biglaw.lock`; every other process is a thin MCP client of the owner's REST API.
+default `./data` — ALL state: DB, JSON state files, attachments, ledgers, vector stores),
+enforced by an OS lock on `<data dir>/biglaw.lock` that also records the owner's PID + REST URL;
+every other process is a thin MCP client of the owner's REST API.
 - `auto` (default) — take the lock if free and own DB + REST (+ MCP on stdio when stdin is a
-  pipe); if the lock is held, run as an MCP thin client of `BIG_MICHAEL_API`
+  pipe); if the lock is held, attach as an MCP thin client to the URL the owner advertises
 - `backend` — own DB + REST, never MCP (what the Docker stack runs); refuses a held lock
 - `mcp` — MCP thin client only: no DB, no monitors, no vector store; every tool is a REST call
   to `BIG_MICHAEL_API` (default `http://<API_HOST>:<API_PORT>`), bearer
-  `BIG_MICHAEL_API_TOKEN` (falls back to `API_KEY`) when the backend has `AUTH_ENABLED=true`;
-  exits with a clear error if the backend is unreachable at startup
+  `BIG_MICHAEL_API_TOKEN` (falls back to `API_KEY`); answers `initialize` at once and reports
+  an unreachable/misconfigured backend in every tool result; never follows redirects
 - `standalone` — single process (own DB + REST + MCP on stdio); refuses a held lock
-The seam is `biglaw-go/internal/backend` (`Backend` / `Local` / `Remote` + the lock); the
-contract test `internal/mcp/contract_test.go` runs every MCP tool through both sides. State
-files (`.tasks.json`, `.profiles.json`, `audit.jsonl`, …) default into the data dir; legacy
-CWD copies are moved there once at startup unless their `*_FILE` env var is set.
+`BIGLAW_LOCK=off` skips the lock (filesystems without advisory locks). One implementation:
+`backend.Local.As(principal)` (`biglaw-go/internal/backend`) holds the MCP operations AND their
+access rules; the REST handlers for those routes and the in-process MCP server both call it,
+`backend.Remote` calls those routes, and `internal/mcp/contract_test.go` requires identical
+results in-process vs over REST (partner and lawyer). State defaults all derive from the data
+dir; legacy locations (CWD dotfiles, `./data/*` when the data dir is elsewhere) are moved in
+once at startup — env values equal to an old default count as unset — and anything unmovable
+stops startup. Stop old-version processes before upgrading (they take no lock).
 
 ## Using from Claude Code
 
