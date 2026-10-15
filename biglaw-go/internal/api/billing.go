@@ -607,7 +607,7 @@ func (s *Server) handleOcgSuggestionDecision(c *gin.Context, outcome string) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Time entry not found"})
 		return
 	}
-	if !auth.IsPartner(u) && (u == nil || u.ProfileID != entry.ProfileID) {
+	if !auth.IsPartner(u) && (u == nil || (u.ProfileID != entry.ProfileID && u.ProfileID != entry.RequestedByProfileID)) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
 		return
 	}

@@ -171,9 +171,10 @@ func ExportLedes1998B(entries []types.TimeEntry, opts LedesOptions) string {
 		tkName := e.ProfileName
 		var tkClass string
 		desc := e.Description
-		if e.AgentID != "" && e.ProfileID == "" {
-			// Pure AI-agent time has no LEDES class of its own; bill it as
-			// "other timekeeper" and label it so the client can see it.
+		if e.AgentID != "" {
+			// AI time is billed to the AI timekeeper at the AI rate (the
+			// entry's own rate). LEDES has no AI class: "other timekeeper",
+			// labelled so the client can see it is AI work.
 			tkClass = TKOther
 			tkID, tkName = e.AgentID, e.AgentName
 			if tkName == "" {

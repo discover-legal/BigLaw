@@ -123,7 +123,15 @@ func (o *Orchestrator) runTask(task *types.Task) {
 		o.mu.RUnlock()
 		if hasPending {
 			o.update(task, func(t *types.Task) { t.Status = "awaiting_gate" })
+			// Stop the AI clock while a human reviews: the wait is not AI
+			// work (the lawyer's own review time is theirs, not the AI's).
+			if task.ActiveTimeEntryID != "" {
+				o.time.Pause(task.ActiveTimeEntryID)
+			}
 			o.waitForGates(task)
+			if task.ActiveTimeEntryID != "" {
+				o.time.Resume(task.ActiveTimeEntryID)
+			}
 			o.update(task, func(t *types.Task) { t.Status = "running" })
 		}
 	}

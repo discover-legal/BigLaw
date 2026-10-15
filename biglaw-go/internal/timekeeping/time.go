@@ -29,6 +29,9 @@ type TimeFilter struct {
 	To           *time.Time
 	// nil = all, true = only agent_work events, false = exclude agent_work events
 	AgentOnly *bool
+	// VisibleToProfileID restricts to entries a lawyer may see: their own
+	// time, plus AI time on work they requested (RequestedByProfileID).
+	VisibleToProfileID string
 }
 
 // TimeStore holds all time entries in memory and persists them to a JSON file.
@@ -102,12 +105,27 @@ func (s *TimeStore) finish(id, nonBillableReason string) *types.TimeEntry {
 		}
 		if e.EndedAt == nil {
 			now := time.Now()
+			if e.PausedAt != nil {
+				e.PausedMs += now.Sub(*e.PausedAt).Milliseconds()
+				e.PausedAt = nil
+			}
 			e.EndedAt = &now
-			e.DurationMs = now.Sub(e.StartedAt).Milliseconds()
+			e.DurationMs = now.Sub(e.StartedAt).Milliseconds() - e.PausedMs
+			if e.DurationMs < 0 {
+				e.DurationMs = 0
+			}
 		}
 		if nonBillableReason != "" {
 			e.NonBillable = true
 			e.NonBillableReason = nonBillableReason
+		}
+		// AI time bills only at an explicitly configured AI rate; without
+		// one it must not fall through to anyone else's rate.
+		if !e.NonBillable && e.AgentID != "" && (e.BillingRate == nil || *e.BillingRate <= 0) {
+			e.NonBillable = true
+			if e.NonBillableReason == "" {
+				e.NonBillableReason = ReasonAIRateNotConfigured
+			}
 		}
 		if e.NonBillable {
 			e.BillingUnits = 0
@@ -126,6 +144,73 @@ func (s *TimeStore) finish(id, nonBillableReason string) *types.TimeEntry {
 	}
 	s.mu.Unlock()
 	if out != nil {
+		s.persist()
+	}
+	return out
+}
+
+// Pause stops the clock on an open entry (e.g. an AI run waiting at a human
+// gate — the wait is not AI work). No-op if closed or already paused.
+func (s *TimeStore) Pause(id string) {
+	s.setPaused(id, true)
+}
+
+// Resume restarts the clock on a paused entry, adding the pause to PausedMs.
+func (s *TimeStore) Resume(id string) {
+	s.setPaused(id, false)
+}
+
+func (s *TimeStore) setPaused(id string, pause bool) {
+	s.mu.Lock()
+	changed := false
+	for i := range s.entries {
+		e := &s.entries[i]
+		if e.ID != id || e.EndedAt != nil {
+			continue
+		}
+		now := time.Now()
+		switch {
+		case pause && e.PausedAt == nil:
+			e.PausedAt = &now
+			changed = true
+		case !pause && e.PausedAt != nil:
+			e.PausedMs += now.Sub(*e.PausedAt).Milliseconds()
+			e.PausedAt = nil
+			changed = true
+		}
+		break
+	}
+	s.mu.Unlock()
+	if changed {
+		s.persist()
+	}
+}
+
+// WriteOff marks closed, still-billable entries non-billable in one pass.
+// reasonFor returns the write-off reason for an entry, or "" to leave it.
+// Units and amount are zeroed exactly as CloseNonBillable does; the elapsed
+// time is kept. Returns copies of the entries written off. Idempotent: an
+// entry already non-billable is never offered to reasonFor again.
+func (s *TimeStore) WriteOff(reasonFor func(e types.TimeEntry) string) []types.TimeEntry {
+	s.mu.Lock()
+	var out []types.TimeEntry
+	for i := range s.entries {
+		e := &s.entries[i]
+		if e.EndedAt == nil || e.NonBillable {
+			continue
+		}
+		reason := reasonFor(*e)
+		if reason == "" {
+			continue
+		}
+		e.NonBillable = true
+		e.NonBillableReason = reason
+		e.BillingUnits = 0
+		e.BillingAmountUsd = nil
+		out = append(out, *e)
+	}
+	s.mu.Unlock()
+	if len(out) > 0 {
 		s.persist()
 	}
 	return out
@@ -284,6 +369,19 @@ func ClioDurationHours(e types.TimeEntry) float64 {
 	return math.Round(h*100) / 100
 }
 
+// ClioNote is the activity note pushed to Clio: AI time is labelled so it is
+// never mistaken for the connected lawyer's own work.
+func ClioNote(e types.TimeEntry) string {
+	if e.AgentID != "" {
+		name := e.AgentName
+		if name == "" {
+			name = e.AgentID
+		}
+		return "AI agent (" + name + "): " + e.Description
+	}
+	return e.Description
+}
+
 // ExportJSON returns filtered entries as a slice (suitable for JSON marshalling).
 func (s *TimeStore) ExportJSON(filter TimeFilter) []types.TimeEntry {
 	return s.List(filter)
@@ -346,6 +444,9 @@ func (s *TimeStore) ExportCSV(filter TimeFilter) string {
 
 func matchesFilter(e types.TimeEntry, f TimeFilter) bool {
 	if f.ProfileID != "" && e.ProfileID != f.ProfileID {
+		return false
+	}
+	if f.VisibleToProfileID != "" && e.ProfileID != f.VisibleToProfileID && e.RequestedByProfileID != f.VisibleToProfileID {
 		return false
 	}
 	if f.AgentID != "" && e.AgentID != f.AgentID {

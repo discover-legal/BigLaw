@@ -373,16 +373,24 @@ func (c *ClioClient) DownloadDocument(documentID int) ([]byte, error) {
 
 // CreateActivity logs a time entry in Clio.
 func (c *ClioClient) CreateActivity(matterID int, description, dateOn string, durationHours float64) (interface{}, error) {
-	body := map[string]interface{}{
-		"data": map[string]interface{}{
-			"type":              "TimeEntry",
-			"date":              dateOn,
-			"quantity_in_hours": durationHours,
-			"note":              description,
-			"matter":            map[string]int{"id": matterID},
-		},
+	return c.CreateActivityPriced(matterID, description, dateOn, durationHours, nil)
+}
+
+// CreateActivityPriced is CreateActivity with an explicit hourly price. A nil
+// price lets Clio apply the connected user's default rate — wrong for AI
+// time, which must carry the AI timekeeper's own rate.
+func (c *ClioClient) CreateActivityPriced(matterID int, description, dateOn string, durationHours float64, price *float64) (interface{}, error) {
+	data := map[string]interface{}{
+		"type":              "TimeEntry",
+		"date":              dateOn,
+		"quantity_in_hours": durationHours,
+		"note":              description,
+		"matter":            map[string]int{"id": matterID},
 	}
-	return c.post("/api/v4/activities.json", body)
+	if price != nil {
+		data["price"] = *price
+	}
+	return c.post("/api/v4/activities.json", map[string]interface{}{"data": data})
 }
 
 // CreateNote posts a note to a matter — used to save synthesis output and

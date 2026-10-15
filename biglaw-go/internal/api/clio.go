@@ -345,11 +345,12 @@ func (s *Server) handleSyncTimeToClio(c *gin.Context) {
 	synced, errCount := 0, 0
 	for _, entry := range toSync {
 		dateOn := entry.StartedAt.UTC().Format("2006-01-02")
-		_, err := integrations.DefaultClioClient.CreateActivity(
+		_, err := integrations.DefaultClioClient.CreateActivityPriced(
 			body.ClioMatterID,
-			entry.Description,
+			timekeeping.ClioNote(entry),
 			dateOn,
 			timekeeping.ClioDurationHours(entry),
+			entry.BillingRate,
 		)
 		if err != nil {
 			slog.Warn("Clio sync activity failed", "entryId", entry.ID, "err", err)

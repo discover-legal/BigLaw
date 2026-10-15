@@ -470,6 +470,14 @@ type TimeEntry struct {
 	// BillingAmountUsd are zero/nil, and LEDES, pre-bills and Clio sync skip it.
 	NonBillable       bool   `json:"nonBillable,omitempty"`
 	NonBillableReason string `json:"nonBillableReason,omitempty"`
+	// RequestedByProfileID is the lawyer who started the work when the
+	// timekeeper is not that lawyer (AI runs are billed to the AI timekeeper,
+	// AgentID). It drives the lawyer's visibility of the entry, not billing.
+	RequestedByProfileID string `json:"requestedByProfileId,omitempty"`
+	// PausedAt/PausedMs stop the clock while the work is not active (an AI
+	// run waiting at a human gate). DurationMs excludes PausedMs.
+	PausedAt *time.Time `json:"pausedAt,omitempty"`
+	PausedMs int64      `json:"pausedMs,omitempty"`
 }
 
 // ─── Lawyer profiles ──────────────────────────────────────────────────────────

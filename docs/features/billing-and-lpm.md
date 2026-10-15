@@ -7,16 +7,28 @@
 Every task automatically accumulates billable time. Entries open when a task starts and close
 when it completes or is deleted; duration is rounded up to the nearest **6-minute unit**
 (the standard legal billing increment). Partners see all time entries; lawyers see only their own.
+**AI time is billed as AI time.** A task run is attributed to the firm's AI timekeeper
+(`AI_TIMEKEEPER_ID`, default `biglaw-ai`; `AI_TIMEKEEPER_NAME`, default `BigLaw AI`) at its own
+hourly rate `AGENT_BILLING_RATE_DEFAULT` (gated by `AGENT_BILLING_ENABLED`) — never to the submitting lawyer, who is recorded as
+`requestedByProfileId` (and can see the entry). Only active processing time counts: the clock
+pauses while the task waits at a human gate (`pausedMs`). **If the rate is unset or not
+positive, AI time closes non-billable with reason "AI rate not configured"** ("AI billing
+disabled" when `AGENT_BILLING_ENABLED=false`).
+
 A run that **fails** (error, grounding collapse, worker panic, synthesis error) or is
 interrupted by a restart is closed **non-billable**: the elapsed time stays on record with
 `nonBillable: true` and a `nonBillableReason`, at 0 units, and is excluded from LEDES,
-pre-bills and Clio sync.
+pre-bills and Clio sync. A one-off startup migration (owner process only, recorded in
+`<TIME_FILE>.migrations.json`) writes off historical entries of failed/interrupted runs, skipping
+any already on an approved/invoiced pre-bill or synced to Clio, and reports draft pre-bills to
+regenerate (audit event `time.migration.failed_runs_written_off`).
 
 The LEDES 1998B export follows the published 24-field layout (`LEDES1998B[]` line, field-name
 line, `|`-separated rows each ending in `[]`). `TIMEKEEPER_CLASSIFICATION` comes from the
 profile's title (partner / associate / of counsel / paralegal or legal assistant) and otherwise
-its role (partner → `PT`, lawyer → `AS`); unresolvable → `OT`. Pure AI-agent time is `OT` and
-labelled "AI agent:". UTBMS codes are passed through when an entry carries them; gate reviews
+its role (partner → `PT`, lawyer → `AS`); unresolvable → `OT`. AI time uses the AI timekeeper's
+id/name and rate, classification `OT`, labelled "AI agent:" (Clio sync sends the same rate as the
+activity price and labels the note). UTBMS codes are passed through when an entry carries them; gate reviews
 derive activity `A104`; nothing is guessed. Set `LEDES_LAW_FIRM_ID` to fill `LAW_FIRM_ID`.
 
 ```

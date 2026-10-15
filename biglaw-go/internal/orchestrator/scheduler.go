@@ -13,6 +13,7 @@ import (
 
 	"github.com/discover-legal/biglaw-go/internal/audit"
 	"github.com/discover-legal/biglaw-go/internal/strutil"
+	"github.com/discover-legal/biglaw-go/internal/timekeeping"
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
 
@@ -342,23 +343,29 @@ func (o *Orchestrator) executeQueuedTask(task *types.Task) {
 	o.runTask(task)
 }
 
+// openTaskTimeEntry starts the clock for an AI run. The run is AI work, so
+// it is attributed to the firm's AI timekeeper at the AI rate — never to the
+// submitting lawyer at the lawyer's rate. The lawyer is recorded as the
+// requester (visibility only). With no AI rate (AGENT_BILLING_RATE_DEFAULT
+// unset/0) the entry closes non-billable ("AI rate not configured"); with
+// AGENT_BILLING_ENABLED=false, "AI billing disabled".
 func (o *Orchestrator) openTaskTimeEntry(task *types.Task) {
-	if task.CreatedByProfileID == "" || o.profiles == nil || o.time == nil {
+	if o.time == nil {
 		return
 	}
-	profile := o.profiles.Get(task.CreatedByProfileID)
-	if profile == nil {
-		return
-	}
+	tk := timekeeping.NewAITimekeeper(o.cfg.AgentBilling.Enabled, o.cfg.AgentBilling.DefaultRate)
 	entry := o.time.Open(types.TimeEntry{
-		ProfileID:    profile.ID,
-		ProfileName:  profile.Name,
-		TaskID:       task.ID,
-		MatterNumber: task.MatterNumber,
-		ClientNumber: task.ClientNumber,
-		Description:  "Task: " + strutil.Truncate(task.Description, 200),
-		Event:        types.TimeEventTaskRun,
-		StartedAt:    time.Now(),
+		AgentID:              tk.ID,
+		AgentName:            tk.Name,
+		RequestedByProfileID: task.CreatedByProfileID,
+		TaskID:               task.ID,
+		MatterNumber:         task.MatterNumber,
+		ClientNumber:         task.ClientNumber,
+		Description:          "Task: " + strutil.Truncate(task.Description, 200),
+		Event:                types.TimeEventTaskRun,
+		StartedAt:            time.Now(),
+		BillingRate:          tk.RateUSD,
+		NonBillableReason:    tk.NonBillableReason, // applied at close when there is no rate
 	})
 	o.update(task, func(t *types.Task) { t.ActiveTimeEntryID = entry.ID })
 }
