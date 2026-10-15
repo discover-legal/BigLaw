@@ -77,7 +77,7 @@ func TimekeeperClassification(p *types.LawyerProfile) string {
 	case strings.Contains(title, "of counsel"), title == "counsel", strings.Contains(title, "senior counsel"):
 		return TKOfCounsel
 	case strings.Contains(title, "paralegal"), strings.Contains(title, "legal assistant"),
-		strings.Contains(title, "law clerk"), strings.Contains(title, "trainee"):
+		strings.Contains(title, "law clerk"):
 		return TKLegalAssistant
 	case strings.Contains(title, "partner"):
 		return TKPartner

@@ -10,9 +10,28 @@ Feed it a trigger event and date; it returns every downstream deadline under the
 ```bash
 curl -X POST http://localhost:3101/deadlines/compute \
   -H "Content-Type: application/json" \
-  -d '{ "jurisdiction": "us-federal-frcp", "triggerEvent": "complaint_served", "triggerDate": "2026-09-01" }'
-# → deadlines: [{ "event": "answer_due", "date": "…", "cite": "FRCP 12(a)(1)(A)(i)", … }, …]
+  -d '{ "jurisdiction": "US-FED", "triggerEvent": "complaint_served", "triggerDate": "2026-12-04" }'
+# → deadlines: [{ "event": "answer_due", "dueDate": "2026-12-28", "unadjustedDate": "2026-12-25",
+#                 "warningDate": "2026-12-23", "adjustments": ["2026-12-25 (Friday) is Christmas Day — …"],
+#                 "cite": "FRCP 12(a)(1)(A)(i)", … }],
+#   limitations: ["… state holidays (FRCP 6(a)(6)(C)) … NOT modelled …", …]
 ```
+
+`jurisdiction` is the rule set's `jurisdiction` code (`US-FED`, `UK`, `EU-COMP`), not its file id.
+An unknown `triggerEvent` is a **400** whose body lists `validTriggers`; an unknown jurisdiction
+is a 404 listing `validJurisdictions`.
+
+**Counting.** Calendar-day periods exclude the trigger day and, when the last day is a
+Saturday, Sunday or holiday, roll forward to the next working day — FRCP 6(a)(1)(C) /
+FRAP 26(a)(1)(C) for `us_federal`, CPR 2.8(5) for `uk_bank` (and CPR 2.8(4): periods of 5 days
+or less skip weekends and bank holidays), Reg. 1182/71 Art. 3(4) for `eu_institutions`.
+Business-day rules count working days only. Each deadline carries the raw `unadjustedDate`
+and an `adjustments` list explaining every skipped day; the warning date is counted back from
+the adjusted due date and moved *earlier* (never later) off non-working days. Every result
+carries `limitations` — what is not modelled (US state legal holidays where the district court
+sits, ad-hoc presidential closures, FRCP 6(d) mail days, Scotland/NI bank holidays, the full
+EU institutions' holiday lists). US federal holidays follow 5 U.S.C. 6103(a) (Juneteenth from
+2021) with Saturday→Friday / Sunday→Monday observed dates, including across a year boundary.
 
 `GET /deadlines/rules` lists the loaded jurisdictions; `POST /matters/:matterNumber/deadlines`
 computes and attaches deadlines to a matter.

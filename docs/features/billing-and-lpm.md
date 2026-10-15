@@ -7,6 +7,17 @@
 Every task automatically accumulates billable time. Entries open when a task starts and close
 when it completes or is deleted; duration is rounded up to the nearest **6-minute unit**
 (the standard legal billing increment). Partners see all time entries; lawyers see only their own.
+A run that **fails** (error, grounding collapse, worker panic, synthesis error) or is
+interrupted by a restart is closed **non-billable**: the elapsed time stays on record with
+`nonBillable: true` and a `nonBillableReason`, at 0 units, and is excluded from LEDES,
+pre-bills and Clio sync.
+
+The LEDES 1998B export follows the published 24-field layout (`LEDES1998B[]` line, field-name
+line, `|`-separated rows each ending in `[]`). `TIMEKEEPER_CLASSIFICATION` comes from the
+profile's title (partner / associate / of counsel / paralegal or legal assistant) and otherwise
+its role (partner → `PT`, lawyer → `AS`); unresolvable → `OT`. Pure AI-agent time is `OT` and
+labelled "AI agent:". UTBMS codes are passed through when an entry carries them; gate reviews
+derive activity `A104`; nothing is guessed. Set `LEDES_LAW_FIRM_ID` to fill `LAW_FIRM_ID`.
 
 ```
 GET  /time-entries                query: profileId, taskId, matterNumber, from, to
