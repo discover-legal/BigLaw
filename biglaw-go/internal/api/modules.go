@@ -4,11 +4,13 @@
 package api
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/discover-legal/biglaw-go/internal/modules"
+	"github.com/discover-legal/biglaw-go/internal/types"
 )
 
 // handleListModules reports every registered feature module, its resolved
@@ -18,4 +20,44 @@ func (s *Server) handleListModules(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"modules": modules.Default.List()})
+}
+
+// Mount attaches an optional HTTP module (see modules.HTTPModule). It is a
+// no-op when m is nil or the module is disabled in the registry, so a
+// disabled module's routes do not exist. Call before Start.
+func (s *Server) Mount(m modules.HTTPModule) {
+	if m == nil || !modules.Default.Enabled(m.ModuleName()) {
+		return
+	}
+	s.publicRoutes = append(s.publicRoutes, m.PublicRoute)
+	m.Mount(s.router, moduleHost{s})
+}
+
+// isPublic is the full public-route set: the core's fixed set plus each
+// mounted module's self-authenticating routes.
+func (s *Server) isPublic(method, path string) bool {
+	if isPublicRoute(method, path) {
+		return true
+	}
+	for _, pub := range s.publicRoutes {
+		if pub(method, path) {
+			return true
+		}
+	}
+	return false
+}
+
+// moduleHost lends modules request identity without exposing the Server.
+type moduleHost struct{ s *Server }
+
+func (h moduleHost) User(c *gin.Context) *types.SessionUser  { return getUser(c) }
+func (h moduleHost) Identity(c *gin.Context) context.Context { return reqIdentity(c) }
+func (h moduleHost) ProfileName(profileID string) string {
+	if profileID == "" || h.s.profiles == nil {
+		return ""
+	}
+	if p := h.s.profiles.Get(profileID); p != nil {
+		return p.Name
+	}
+	return ""
 }

@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/discover-legal/biglaw-go/internal/audit"
 	"github.com/discover-legal/biglaw-go/internal/clients"
 	"github.com/discover-legal/biglaw-go/internal/config"
 	"github.com/discover-legal/biglaw-go/internal/crm"
@@ -129,19 +130,272 @@ func TestSubmitIsIdempotentPerExternalID(t *testing.T) {
 	}
 }
 
-func TestConflictHoldOnAdverseClient(t *testing.T) {
-	svc, _, cs, _ := newTestIntake(t)
-	ctx := sysCtx()
-	// An existing client lists Dana as an adversary.
+func docCount(t *testing.T, repo *store.MemoryRepo) int {
+	t.Helper()
+	docs, err := repo.List(sysCtx())
+	if err != nil {
+		t.Fatalf("list docs: %v", err)
+	}
+	return len(docs)
+}
+
+func auditEvents(prefix string) []audit.AuditEntry {
+	return audit.Default.ReadFiltered(audit.Filter{Event: prefix, Limit: 1000})
+}
+
+// assertHeldNothingLanded checks the hold invariant: no ingest, no roster
+// client, no matter, no seeded proposals.
+func assertHeldNothingLanded(t *testing.T, sub *store.IntakeSubmission, crmSvc *crm.Service, repo *store.MemoryRepo, rosterBefore int, cs *clients.ClientStore) {
+	t.Helper()
+	if sub.Status != StatusConflictHold || !sub.Conflict {
+		t.Fatalf("expected conflict_hold, got %+v", sub)
+	}
+	if sub.DocumentID != "" || docCount(t, repo) != 0 {
+		t.Fatalf("held submission was ingested (doc %q, %d docs)", sub.DocumentID, docCount(t, repo))
+	}
+	if sub.ClientID != "" || sub.MatterNumber != "" || len(cs.List()) != rosterBefore {
+		t.Fatalf("held submission touched the roster: client %q matter %q roster %d→%d",
+			sub.ClientID, sub.MatterNumber, rosterBefore, len(cs.List()))
+	}
+	if pending, _ := crmSvc.PendingQueue(sysCtx(), crm.RoleLawyer); len(pending) != 0 {
+		t.Fatalf("held submission seeded proposals: %+v", pending)
+	}
+	if len(sub.HeldJSON) == 0 {
+		t.Fatal("held payload not retained for the reviewer")
+	}
+}
+
+// Direction 1: the new client is on an existing client's adverse list.
+func TestConflictHoldWhenClientIsExistingAdversary(t *testing.T) {
+	svc, crmSvc, cs, repo := newTestIntake(t)
 	if _, err := cs.Create("MegaCorp Industries", "C-1", []string{"Dana Client"}, ""); err != nil {
 		t.Fatalf("roster create: %v", err)
 	}
-	sub, err := svc.Submit(ctx, baseRequest())
+	sub, err := svc.Submit(sysCtx(), baseRequest())
 	if err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
-	if sub.Status != StatusConflictHold || !sub.Conflict {
-		t.Fatalf("expected conflict_hold, got %+v", sub)
+	assertHeldNothingLanded(t, sub, crmSvc, repo, 1, cs)
+}
+
+// Direction 2 (the main case the v1 code missed): the opposing party the
+// client names IS an existing client of the firm.
+func TestConflictHoldWhenAdversePartyIsExistingClient(t *testing.T) {
+	for name, mutate := range map[string]func(*SubmissionRequest){
+		"adverseParties list": func(r *SubmissionRequest) {
+			r.AdverseParties = []PartyRef{{Name: "Robert Smith", Role: "spouse"}}
+		},
+		"adverse_party fact": func(r *SubmissionRequest) {
+			r.Facts = append(r.Facts, crm.FactInput{Category: "adverse_party", Predicate: "spouse", Value: "Robert Smith"})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			svc, crmSvc, cs, repo := newTestIntake(t)
+			existing, err := cs.Create("Robert Smith", "C-7", nil, "")
+			if err != nil {
+				t.Fatalf("roster create: %v", err)
+			}
+			req := baseRequest()
+			mutate(&req)
+			sub, err := svc.Submit(sysCtx(), req)
+			if err != nil {
+				t.Fatalf("Submit: %v", err)
+			}
+			assertHeldNothingLanded(t, sub, crmSvc, repo, 1, cs)
+			rec := DecodeConflict(*sub)
+			if rec.ConflictingClientID != existing.ID || rec.MatchedAdversary != "Robert Smith" {
+				t.Fatalf("conflict record wrong: %+v", rec)
+			}
+			found := false
+			for _, e := range auditEvents("intake.conflict_hold") {
+				if e.Data["submissionId"] == sub.ID {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatal("conflict hold not audited")
+			}
+			if err := svc.TaskReady(sub); err == nil {
+				t.Fatal("agent work allowed on a held submission")
+			}
+			if _, err := svc.Update(sysCtx(), sub.ID, StatusInReview, "", "lawyer-1"); err == nil {
+				t.Fatal("status patch released a conflict hold")
+			}
+		})
+	}
+}
+
+// A re-submit that drops the conflicting party stays held: holds are only
+// ever cleared by a partner, never automatically.
+func TestHoldSurvivesResubmitWithoutConflict(t *testing.T) {
+	svc, crmSvc, cs, repo := newTestIntake(t)
+	_, _ = cs.Create("Robert Smith", "C-7", nil, "")
+	req := baseRequest()
+	req.AdverseParties = []PartyRef{{Name: "Robert Smith"}}
+	first, err := svc.Submit(sysCtx(), req)
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	req.AdverseParties = nil
+	req.Content = "Edited draft that no longer names the spouse."
+	second, err := svc.Submit(sysCtx(), req)
+	if err != nil {
+		t.Fatalf("re-submit: %v", err)
+	}
+	if second.ID != first.ID {
+		t.Fatal("re-submit duplicated the submission")
+	}
+	assertHeldNothingLanded(t, second, crmSvc, repo, 1, cs)
+}
+
+func TestResolveConflictAcknowledgeLands(t *testing.T) {
+	svc, crmSvc, cs, repo := newTestIntake(t)
+	_, _ = cs.Create("Robert Smith", "C-7", nil, "")
+	req := baseRequest()
+	req.AdverseParties = []PartyRef{{Name: "Robert Smith"}}
+	sub, _ := svc.Submit(sysCtx(), req)
+
+	if _, err := svc.ResolveConflict(sysCtx(), sub.ID, true, "  ", "partner-1"); err == nil {
+		t.Fatal("acknowledgement without a reason accepted")
+	}
+	got, err := svc.ResolveConflict(sysCtx(), sub.ID, true, "Former client; informed-consent waiver on file", "partner-1")
+	if err != nil {
+		t.Fatalf("ResolveConflict: %v", err)
+	}
+	if got.Status != StatusReceived || got.DocumentID == "" || got.ClientID == "" || got.MatterNumber == "" {
+		t.Fatalf("acknowledged submission did not land: %+v", got)
+	}
+	if len(got.HeldJSON) != 0 {
+		t.Fatal("held payload not cleared after landing")
+	}
+	if docCount(t, repo) != 1 {
+		t.Fatalf("expected the draft ingested once, got %d docs", docCount(t, repo))
+	}
+	rc := cs.Get(got.ClientID)
+	if rc == nil || len(rc.Adversaries) != 1 || rc.Adversaries[0] != "Robert Smith" {
+		t.Fatalf("adverse parties not recorded on the new client: %+v", rc)
+	}
+	rec := DecodeConflict(*got)
+	if !rec.Acknowledged || rec.AcknowledgedBy != "partner-1" || rec.Reason == "" {
+		t.Fatalf("acknowledgement not recorded: %+v", rec)
+	}
+	if pending, _ := crmSvc.PendingQueue(sysCtx(), crm.RoleLawyer); len(pending) != 1 {
+		t.Fatalf("facts not seeded after clearing: %+v", pending)
+	}
+	acked := false
+	for _, e := range auditEvents("intake.conflict_acknowledged") {
+		if e.Data["submissionId"] == sub.ID && e.ActorID == "partner-1" {
+			acked = true
+		}
+	}
+	if !acked {
+		t.Fatal("acknowledgement not audited")
+	}
+	if _, err := svc.ResolveConflict(sysCtx(), sub.ID, true, "again", "partner-1"); err == nil {
+		t.Fatal("resolving a non-held submission accepted")
+	}
+
+	// The same (acknowledged) conflict on a re-submit does not re-hold...
+	again, err := svc.Submit(sysCtx(), req)
+	if err != nil || again.Status == StatusConflictHold {
+		t.Fatalf("acknowledged conflict re-held on re-submit: %v %+v", err, again)
+	}
+	// ...but a new conflicting party does.
+	_, _ = cs.Create("Other Existing Client", "C-8", nil, "")
+	req.AdverseParties = append(req.AdverseParties, PartyRef{Name: "Other Existing Client"})
+	held, err := svc.Submit(sysCtx(), req)
+	if err != nil || held.Status != StatusConflictHold {
+		t.Fatalf("new conflict not held: %v %+v", err, held)
+	}
+}
+
+func TestResolveConflictDecline(t *testing.T) {
+	svc, _, cs, repo := newTestIntake(t)
+	_, _ = cs.Create("Robert Smith", "C-7", nil, "")
+	req := baseRequest()
+	req.AdverseParties = []PartyRef{{Name: "Robert Smith"}}
+	sub, _ := svc.Submit(sysCtx(), req)
+	got, err := svc.ResolveConflict(sysCtx(), sub.ID, false, "Cannot act against a current client", "partner-1")
+	if err != nil {
+		t.Fatalf("decline: %v", err)
+	}
+	if got.Status != StatusRejected || len(got.HeldJSON) != 0 || docCount(t, repo) != 0 || len(cs.List()) != 1 {
+		t.Fatalf("decline state wrong: %+v (docs %d, roster %d)", got, docCount(t, repo), len(cs.List()))
+	}
+}
+
+// A returning client is never in conflict with itself, and newly named
+// adverse parties are recorded on its roster entry.
+func TestReturningClientNoSelfConflict(t *testing.T) {
+	svc, _, cs, _ := newTestIntake(t)
+	first, err := svc.Submit(sysCtx(), baseRequest())
+	if err != nil || first.Status != StatusReceived {
+		t.Fatalf("first submit: %v %+v", err, first)
+	}
+	req := baseRequest()
+	req.ExternalID = "am-doc-43"
+	req.AdverseParties = []PartyRef{{Name: "Pat Opponent"}}
+	second, err := svc.Submit(sysCtx(), req)
+	if err != nil || second.Status != StatusReceived || second.ClientID != first.ClientID {
+		t.Fatalf("returning client: %v %+v", err, second)
+	}
+	if rc := cs.Get(first.ClientID); rc == nil || len(rc.Adversaries) != 1 {
+		t.Fatalf("adverse party not recorded: %+v", rc)
+	}
+}
+
+// A portal user whose name matches an existing client is not attached to
+// that client (no identity hijack) — and is not a conflict either.
+func TestNameCollisionDoesNotAttach(t *testing.T) {
+	svc, _, cs, _ := newTestIntake(t)
+	existing, _ := cs.Create("Dana Client", "C-1", nil, "")
+	sub, err := svc.Submit(sysCtx(), baseRequest())
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if sub.ClientID == existing.ID {
+		t.Fatal("portal identity attached to the existing same-name client")
+	}
+}
+
+func TestPracticeAreaFromBigLawVocabulary(t *testing.T) {
+	cases := []struct {
+		name     string
+		mutate   func(*SubmissionRequest)
+		wantArea string
+	}{
+		{"canonical practiceArea, case-insensitive", func(r *SubmissionRequest) { r.PracticeArea = "employment & labour" }, "Employment & Labour"},
+		{"NOSLEGAL areaOfLaw", func(r *SubmissionRequest) { r.NosLegal = &NosLegal{AreaOfLaw: "Family", WorkType: "Litigious"} }, "Family"},
+		{"canonical beats NOSLEGAL", func(r *SubmissionRequest) {
+			r.PracticeArea = "Immigration"
+			r.NosLegal = &NosLegal{AreaOfLaw: "Family"}
+		}, "Immigration"},
+		{"pack code is never used", func(r *SubmissionRequest) { r.MatterType = "Litigation & Dispute Resolution" }, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, _, cs, repo := newTestIntake(t)
+			req := baseRequest()
+			tc.mutate(&req)
+			sub, err := svc.Submit(sysCtx(), req)
+			if err != nil {
+				t.Fatalf("Submit: %v", err)
+			}
+			if sub.PracticeArea != tc.wantArea {
+				t.Fatalf("practiceArea = %q, want %q", sub.PracticeArea, tc.wantArea)
+			}
+			rc := cs.Get(sub.ClientID)
+			if rc == nil || len(rc.Matters) != 1 || rc.Matters[0].PracticeArea != tc.wantArea {
+				t.Fatalf("matter practiceArea wrong: %+v", rc)
+			}
+			doc, ok, _ := repo.GetByID(sysCtx(), sub.DocumentID)
+			if !ok || doc.PracticeArea != tc.wantArea {
+				t.Fatalf("ingested doc practiceArea wrong: %+v", doc)
+			}
+			if req.NosLegal != nil && (doc.NosLegal == nil || doc.NosLegal.AreaOfLaw == nil) {
+				t.Fatalf("NOSLEGAL not carried onto the document: %+v", doc.NosLegal)
+			}
+		})
 	}
 }
 

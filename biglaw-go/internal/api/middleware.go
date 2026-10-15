@@ -38,7 +38,7 @@ func (s *Server) authMiddleware() gin.HandlerFunc {
 
 		// These endpoints authenticate themselves (OAuth state or provider
 		// signatures) and therefore form the explicit public route set.
-		if isPublicRoute(c.Request.Method, c.Request.URL.Path) {
+		if s.isPublic(c.Request.Method, c.Request.URL.Path) {
 			c.Next()
 			return
 		}
@@ -75,11 +75,6 @@ func (s *Server) bearerUser(authorization string) *types.SessionUser {
 
 func isPublicRoute(method, path string) bool {
 	if method == http.MethodPost && (path == "/bots/slack/events" || path == "/bots/teams/webhook") {
-		return true
-	}
-	// Portal-facing intake routes self-authenticate via HMAC request signing
-	// (every handler calls verifyIntakeHMAC before doing anything).
-	if isPortalIntakeRoute(method, path) {
 		return true
 	}
 	if method == http.MethodGet {

@@ -203,7 +203,8 @@ func (r *pgRepo) queryCRMFacts(ctx context.Context, q string, args ...interface{
 
 const pgIntakeCols = `id, external_id, profile_id, client_id, client_number, matter_number,
 	title, document_type, matter_type, jurisdiction, summary, document_id, status, note,
-	assigned_to, task_id, conflict, conflict_json, metadata_json, created_at, updated_at`
+	assigned_to, task_id, conflict, conflict_json, metadata_json, created_at, updated_at,
+	practice_area, noslegal_json, held_json`
 
 func (r *pgRepo) PutIntakeSubmission(ctx context.Context, s IntakeSubmission) error {
 	created, updated := s.CreatedAt, s.UpdatedAt
@@ -221,10 +222,18 @@ func (r *pgRepo) PutIntakeSubmission(ctx context.Context, s IntakeSubmission) er
 	if len(metadataJSON) == 0 {
 		metadataJSON = []byte(`{}`)
 	}
+	noslegalJSON := s.NosLegalJSON
+	if len(noslegalJSON) == 0 {
+		noslegalJSON = []byte(`{}`)
+	}
+	heldJSON := s.HeldJSON
+	if len(heldJSON) == 0 {
+		heldJSON = []byte(`{}`)
+	}
 	return r.withTx(ctx, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
 			INSERT INTO intake_submissions (`+pgIntakeCols+`)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
 			ON CONFLICT(id) DO UPDATE SET
 				external_id=excluded.external_id, profile_id=excluded.profile_id,
 				client_id=excluded.client_id, client_number=excluded.client_number,
@@ -234,11 +243,13 @@ func (r *pgRepo) PutIntakeSubmission(ctx context.Context, s IntakeSubmission) er
 				document_id=excluded.document_id, status=excluded.status, note=excluded.note,
 				assigned_to=excluded.assigned_to, task_id=excluded.task_id,
 				conflict=excluded.conflict, conflict_json=excluded.conflict_json,
-				metadata_json=excluded.metadata_json, updated_at=excluded.updated_at`,
+				metadata_json=excluded.metadata_json, updated_at=excluded.updated_at,
+				practice_area=excluded.practice_area, noslegal_json=excluded.noslegal_json,
+				held_json=excluded.held_json`,
 			s.ID, s.ExternalID, s.ProfileID, s.ClientID, s.ClientNumber, s.MatterNumber,
 			s.Title, s.DocumentType, s.MatterType, s.Jurisdiction, s.Summary, s.DocumentID,
 			s.Status, s.Note, s.AssignedTo, s.TaskID, s.Conflict, conflictJSON, metadataJSON,
-			created.UTC(), updated.UTC())
+			created.UTC(), updated.UTC(), s.PracticeArea, noslegalJSON, heldJSON)
 		if err != nil {
 			return fmt.Errorf("store: postgres put intake submission %s: %w", s.ID, err)
 		}
@@ -294,8 +305,16 @@ func (r *pgRepo) queryIntake(ctx context.Context, q string, args ...interface{})
 			if err := rows.Scan(&s.ID, &s.ExternalID, &s.ProfileID, &s.ClientID, &s.ClientNumber,
 				&s.MatterNumber, &s.Title, &s.DocumentType, &s.MatterType, &s.Jurisdiction,
 				&s.Summary, &s.DocumentID, &s.Status, &s.Note, &s.AssignedTo, &s.TaskID,
-				&s.Conflict, &s.ConflictJSON, &s.MetadataJSON, &s.CreatedAt, &s.UpdatedAt); err != nil {
+				&s.Conflict, &s.ConflictJSON, &s.MetadataJSON, &s.CreatedAt, &s.UpdatedAt,
+				&s.PracticeArea, &s.NosLegalJSON, &s.HeldJSON); err != nil {
 				return err
+			}
+			// JSONB '{}' is the column default — surface it as "absent".
+			if string(s.NosLegalJSON) == "{}" {
+				s.NosLegalJSON = nil
+			}
+			if string(s.HeldJSON) == "{}" {
+				s.HeldJSON = nil
 			}
 			out = append(out, s)
 		}

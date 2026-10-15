@@ -68,27 +68,36 @@ type CRMRepository interface {
 // IntakeSubmission is one draft document submitted by the client portal
 // (affidavit-maker) for firm review.
 type IntakeSubmission struct {
-	ID           string    `json:"id"`
-	ExternalID   string    `json:"externalId"` // portal's document id (idempotency key per profile)
-	ProfileID    string    `json:"crmProfileId"`
-	ClientID     string    `json:"clientId"`
-	ClientNumber string    `json:"clientNumber"`
-	MatterNumber string    `json:"matterNumber,omitempty"`
-	Title        string    `json:"title"`
-	DocumentType string    `json:"documentType,omitempty"`
-	MatterType   string    `json:"matterType,omitempty"`
-	Jurisdiction string    `json:"jurisdiction,omitempty"`
-	Summary      string    `json:"summary,omitempty"`
-	DocumentID   string    `json:"documentId,omitempty"` // knowledge-store document
-	Status       string    `json:"status"`               // received | conflict_hold | in_review | ready | rejected
-	Note         string    `json:"note,omitempty"`
-	AssignedTo   string    `json:"assignedTo,omitempty"` // lawyer profile id
-	TaskID       string    `json:"taskId,omitempty"`
-	Conflict     bool      `json:"conflict"`
-	ConflictJSON []byte    `json:"-"` // full ConflictCheckResult
-	MetadataJSON []byte    `json:"-"` // portal-supplied metadata, verbatim
-	CreatedAt    time.Time `json:"createdAt"`
-	UpdatedAt    time.Time `json:"updatedAt"`
+	ID           string `json:"id"`
+	ExternalID   string `json:"externalId"` // portal's document id (idempotency key per profile)
+	ProfileID    string `json:"crmProfileId"`
+	ClientID     string `json:"clientId"`
+	ClientNumber string `json:"clientNumber"`
+	MatterNumber string `json:"matterNumber,omitempty"`
+	Title        string `json:"title"`
+	DocumentType string `json:"documentType,omitempty"`
+	MatterType   string `json:"matterType,omitempty"`
+	Jurisdiction string `json:"jurisdiction,omitempty"`
+	Summary      string `json:"summary,omitempty"`
+	DocumentID   string `json:"documentId,omitempty"` // knowledge-store document
+	Status       string `json:"status"`               // received | conflict_hold | in_review | ready | rejected
+	Note         string `json:"note,omitempty"`
+	AssignedTo   string `json:"assignedTo,omitempty"` // lawyer profile id
+	TaskID       string `json:"taskId,omitempty"`
+	Conflict     bool   `json:"conflict"`
+	ConflictJSON []byte `json:"-"` // full ConflictCheckResult
+	MetadataJSON []byte `json:"-"` // portal-supplied metadata, verbatim
+	// PracticeArea is BigLaw's own classification of the submission (from
+	// the payload's practiceArea / NOSLEGAL areaOfLaw), never derived from
+	// the portal's matter-pack code.
+	PracticeArea string `json:"practiceArea,omitempty"`
+	NosLegalJSON []byte `json:"-"` // NOSLEGAL tags supplied with the submission
+	// HeldJSON carries a conflict-held submission's payload (draft text,
+	// facts, adverse parties) while it waits for a lawyer: nothing is
+	// ingested or worked until the hold is cleared. Emptied on clear/decline.
+	HeldJSON  []byte    `json:"-"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 // IntakeRepository stores intake submissions durably.

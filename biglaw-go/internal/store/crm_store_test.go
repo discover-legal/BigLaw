@@ -9,11 +9,20 @@ package store
 
 import (
 	"context"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
+
+	"github.com/discover-legal/biglaw-go/internal/config"
 )
 
+// crmBackends returns the repositories under contract test. Postgres joins
+// when PG_CRM_TEST_URL names a superuser DSN (a scratch database is created
+// and dropped); otherwise only memory + sqlite run.
 func crmBackends(t *testing.T) map[string]DocRepository {
 	t.Helper()
 	sqlite, err := openSQLite(filepath.Join(t.TempDir(), "test.db"))
@@ -21,10 +30,47 @@ func crmBackends(t *testing.T) map[string]DocRepository {
 		t.Fatalf("open sqlite: %v", err)
 	}
 	t.Cleanup(func() { _ = sqlite.Close() })
-	return map[string]DocRepository{
+	out := map[string]DocRepository{
 		"memory": NewMemoryRepo(),
 		"sqlite": sqlite,
 	}
+	if pg := openCRMTestPostgres(t); pg != nil {
+		out["postgres"] = pg
+	}
+	return out
+}
+
+func openCRMTestPostgres(t *testing.T) DocRepository {
+	t.Helper()
+	superURL := os.Getenv("PG_CRM_TEST_URL")
+	if superURL == "" {
+		return nil
+	}
+	ctx := context.Background()
+	admin, err := pgx.Connect(ctx, superURL)
+	if err != nil {
+		t.Fatalf("PG_CRM_TEST_URL set but unreachable: %v", err)
+	}
+	defer admin.Close(ctx)
+	db := "biglaw_crm_contract_" + strings.ToLower(strings.NewReplacer("/", "_", " ", "_").Replace(t.Name()))
+	_, _ = admin.Exec(ctx, `DROP DATABASE IF EXISTS `+db)
+	if _, err := admin.Exec(ctx, `CREATE DATABASE `+db); err != nil {
+		t.Fatalf("create test db: %v", err)
+	}
+	cfg := &config.Config{}
+	cfg.Database.URL = strings.Replace(superURL, "/postgres?", "/"+db+"?", 1)
+	repo, err := openPostgres(cfg)
+	if err != nil {
+		t.Fatalf("open postgres: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = repo.Close()
+		if c, e := pgx.Connect(ctx, superURL); e == nil {
+			_, _ = c.Exec(ctx, `DROP DATABASE IF EXISTS `+db)
+			c.Close(ctx)
+		}
+	})
+	return repo
 }
 
 func TestCRMRepositoryRoundTrip(t *testing.T) {
@@ -107,21 +153,32 @@ func TestIntakeRepositoryRoundTrip(t *testing.T) {
 				ClientNumber: "AM-1", Title: "Affidavit", Status: "received",
 				Conflict: true, ConflictJSON: []byte(`{"hasConflict":true}`),
 				MetadataJSON: []byte(`{"v":"1"}`), CreatedAt: time.Now(),
+				PracticeArea: "Family", NosLegalJSON: []byte(`{"areaOfLaw":"Family"}`),
+				HeldJSON: []byte(`{"content":"held draft"}`),
 			}
 			if err := r.PutIntakeSubmission(ctx, s); err != nil {
 				t.Fatalf("PutIntakeSubmission: %v", err)
+			}
+			if got, ok, err := r.GetIntakeSubmission(ctx, "s1"); err != nil || !ok ||
+				got.PracticeArea != "Family" || !strings.Contains(string(got.NosLegalJSON), `"Family"`) ||
+				!strings.Contains(string(got.HeldJSON), "held draft") {
+				t.Fatalf("new intake columns did not round-trip: %v %v %+v", err, ok, got)
 			}
 			byExt, ok2, err := r.FindIntakeSubmissionByExternalID(ctx, "p1", "doc-1")
 			if err != nil || !ok2 || byExt.ID != "s1" || !byExt.Conflict {
 				t.Fatalf("FindByExternalID: %v %v %+v", err, ok2, byExt)
 			}
-			if string(byExt.ConflictJSON) != `{"hasConflict":true}` {
+			if strings.ReplaceAll(string(byExt.ConflictJSON), " ", "") != `{"hasConflict":true}` { // JSONB normalizes spacing
 				t.Fatalf("conflict json lost: %q", byExt.ConflictJSON)
 			}
 
 			s.Status = "ready"
+			s.HeldJSON = nil // clearing a hold empties the held payload
 			if err := r.PutIntakeSubmission(ctx, s); err != nil {
 				t.Fatalf("PutIntakeSubmission (update): %v", err)
+			}
+			if got, _, _ := r.GetIntakeSubmission(ctx, "s1"); got == nil || len(got.HeldJSON) != 0 {
+				t.Fatalf("held payload not cleared: %+v", got)
 			}
 			list, err := r.ListIntakeSubmissionsByProfile(ctx, "p1")
 			if err != nil || len(list) != 1 || list[0].Status != "ready" {
@@ -138,6 +195,12 @@ func TestIntakeRepositoryRoundTrip(t *testing.T) {
 func TestCRMFirmAccessPolicy(t *testing.T) {
 	for name, repo := range crmBackends(t) {
 		t.Run(name, func(t *testing.T) {
+			if name == "postgres" {
+				// The contract DSN is a superuser, which bypasses RLS; the
+				// postgres policy is exercised as a NOBYPASSRLS role in
+				// postgres_test.go.
+				t.Skip("superuser connection bypasses RLS")
+			}
 			r := repo.(CRMRepository)
 			ir := repo.(IntakeRepository)
 			sys := WithSystem(context.Background())

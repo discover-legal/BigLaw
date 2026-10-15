@@ -288,28 +288,58 @@ func normName(s string) string {
 //  2. an adversary of the new client is itself an existing client (taking the
 //     matter would put us adverse to a current client).
 func (s *ClientStore) CheckConflict(newClientName string, newAdversaries []string) types.ConflictCheckResult {
+	return s.CheckConflictExcluding(newClientName, newAdversaries, "")
+}
+
+// CheckConflictExcluding is CheckConflict for a client already on the roster
+// (e.g. a returning client naming new adverse parties): the roster entry with
+// ID excludeClientID is skipped in both directions so the client never
+// conflicts with itself. "" excludes nothing. Returns the first hit.
+func (s *ClientStore) CheckConflictExcluding(newClientName string, newAdversaries []string, excludeClientID string) types.ConflictCheckResult {
+	if hits := s.conflictHits(newClientName, newAdversaries, excludeClientID, true); len(hits) > 0 {
+		return hits[0]
+	}
+	return types.ConflictCheckResult{HasConflict: false}
+}
+
+// ConflictHits is CheckConflictExcluding returning every hit (one per
+// matching client/adversary pair) instead of only the first, so a reviewer
+// sees — and an acknowledgement covers — each conflict individually.
+func (s *ClientStore) ConflictHits(newClientName string, newAdversaries []string, excludeClientID string) []types.ConflictCheckResult {
+	return s.conflictHits(newClientName, newAdversaries, excludeClientID, false)
+}
+
+func (s *ClientStore) conflictHits(newClientName string, newAdversaries []string, excludeClientID string, firstOnly bool) []types.ConflictCheckResult {
 	name := normName(newClientName)
 	if name == "" {
-		return types.ConflictCheckResult{HasConflict: false}
+		return nil
 	}
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	var hits []types.ConflictCheckResult
 	// 1. New client name vs existing clients' adversary lists.
 	for _, c := range s.clients {
+		if excludeClientID != "" && c.ID == excludeClientID {
+			continue
+		}
 		for _, adv := range c.Adversaries {
 			a := normName(adv)
 			if len(a) < 3 {
 				continue
 			}
 			if strings.Contains(a, name) || strings.Contains(name, a) {
-				return types.ConflictCheckResult{
+				hits = append(hits, types.ConflictCheckResult{
 					HasConflict:           true,
 					ConflictingClientID:   c.ID,
 					ConflictingClientName: c.Name,
 					MatchedAdversary:      adv,
+				})
+				if firstOnly {
+					return hits
 				}
+				break
 			}
 		}
 	}
@@ -324,23 +354,28 @@ func (s *ClientStore) CheckConflict(newClientName string, newAdversaries []strin
 		}
 	}
 	for _, c := range s.clients {
+		if excludeClientID != "" && c.ID == excludeClientID {
+			continue
+		}
 		cn := normName(c.Name)
 		if len(cn) < 3 {
 			continue
 		}
 		for _, adv := range advNorms {
 			if strings.Contains(adv.norm, cn) || strings.Contains(cn, adv.norm) {
-				return types.ConflictCheckResult{
+				hits = append(hits, types.ConflictCheckResult{
 					HasConflict:           true,
 					ConflictingClientID:   c.ID,
 					ConflictingClientName: c.Name,
 					MatchedAdversary:      adv.raw,
+				})
+				if firstOnly {
+					return hits
 				}
 			}
 		}
 	}
-
-	return types.ConflictCheckResult{HasConflict: false}
+	return hits
 }
 
 // SetMatterBudget sets a matter's budget (and optional alert thresholds),

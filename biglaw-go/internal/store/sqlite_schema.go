@@ -128,7 +128,10 @@ CREATE TABLE IF NOT EXISTS intake_submissions (
 	conflict_json TEXT NOT NULL DEFAULT '',
 	metadata_json TEXT NOT NULL DEFAULT '',
 	created_at    TEXT NOT NULL DEFAULT '',
-	updated_at    TEXT NOT NULL DEFAULT ''
+	updated_at    TEXT NOT NULL DEFAULT '',
+	practice_area TEXT NOT NULL DEFAULT '',
+	noslegal_json TEXT NOT NULL DEFAULT '',
+	held_json     TEXT NOT NULL DEFAULT ''
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_intake_profile_external
 	ON intake_submissions(profile_id, external_id) WHERE external_id <> '';

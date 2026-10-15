@@ -3,15 +3,15 @@
 
 // Intake HMAC hardening: the portal channel accepts only correctly signed,
 // fresh requests; the public-route set covers exactly the portal-facing
-// routes and never the firm queue.
+// routes and never the firm queue. Runs against the module mounted on a bare
+// gin router with a fake host — no dependency on the core API package.
 
-package api
+package intake
 
 import (
 	"bytes"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
+	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -21,44 +21,69 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/discover-legal/biglaw-go/internal/auth"
 	"github.com/discover-legal/biglaw-go/internal/clients"
-	"github.com/discover-legal/biglaw-go/internal/config"
 	"github.com/discover-legal/biglaw-go/internal/crm"
-	"github.com/discover-legal/biglaw-go/internal/intake"
 	"github.com/discover-legal/biglaw-go/internal/store"
+	"github.com/discover-legal/biglaw-go/internal/types"
 )
 
 const testIntakeSecret = "test-secret-0123456789abcdef"
 
-func newIntakeTestServer(t *testing.T) *Server {
+// fakeHost authenticates a request as the user in the X-Test-User header
+// ("partner" | "lawyer"); no header = anonymous.
+type fakeHost struct{}
+
+func (fakeHost) User(c *gin.Context) *types.SessionUser {
+	switch c.GetHeader("X-Test-User") {
+	case "partner":
+		u := auth.LocalPartner
+		return &u
+	case "lawyer":
+		return &types.SessionUser{ProfileID: "lawyer-1", Name: "Lee Lawyer", Role: types.LawyerRole("associate")}
+	}
+	return nil
+}
+
+func (h fakeHost) Identity(c *gin.Context) context.Context {
+	u := h.User(c)
+	if u == nil {
+		return c.Request.Context()
+	}
+	return store.WithIdentity(c.Request.Context(), u.ProfileID, auth.IsPartner(u))
+}
+
+func (fakeHost) ProfileName(string) string { return "" }
+
+type testServer struct {
+	router *gin.Engine
+	mod    *HTTP
+	cs     *clients.ClientStore
+}
+
+func (s *testServer) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.router.ServeHTTP(w, r) }
+
+func newIntakeTestServer(t *testing.T) *testServer {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	cfg := &config.Config{}
-	cfg.Intake.HMACSecret = testIntakeSecret
-	cfg.Intake.MaxSkewSec = 300
-
 	repo := store.NewMemoryRepo()
 	cs := clients.NewClientStore()
 	if err := cs.Init(filepath.Join(t.TempDir(), "clients.json")); err != nil {
 		t.Fatalf("clients init: %v", err)
 	}
 	crmSvc := crm.New(repo, cs, nil)
-	intakeSvc := intake.New(repo, crmSvc, cs, nil) // nil knowledge: auth is under test
-
-	s := &Server{cfg: cfg, clients: cs, router: gin.New()}
-	s.AttachIntake(intakeSvc, crmSvc)
-	return s
+	svc := New(repo, crmSvc, cs, nil) // nil knowledge: auth is under test
+	mod := NewHTTP(svc, crmSvc, cs, nil, HTTPConfig{HMACSecret: testIntakeSecret, MaxSkewSec: 300})
+	r := gin.New()
+	mod.Mount(r, fakeHost{})
+	return &testServer{router: r, mod: mod, cs: cs}
 }
 
 func signIntake(method, pathWithQuery, ts string, body []byte) string {
-	h := sha256.Sum256(body)
-	canonical := method + "\n" + pathWithQuery + "\n" + ts + "\n" + hex.EncodeToString(h[:])
-	mac := hmac.New(sha256.New, []byte(testIntakeSecret))
-	mac.Write([]byte(canonical))
-	return "v1=" + hex.EncodeToString(mac.Sum(nil))
+	return Sign(testIntakeSecret, method, pathWithQuery, ts, body)
 }
 
-func doSigned(s *Server, method, path string, body []byte, ts, sig string) *httptest.ResponseRecorder {
+func doSigned(s *testServer, method, path string, body []byte, ts, sig string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, path, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	if ts != "" {
@@ -68,7 +93,7 @@ func doSigned(s *Server, method, path string, body []byte, ts, sig string) *http
 		req.Header.Set("X-Intake-Signature", sig)
 	}
 	w := httptest.NewRecorder()
-	s.router.ServeHTTP(w, req)
+	s.ServeHTTP(w, req)
 	return w
 }
 
@@ -139,7 +164,7 @@ func TestIntakeGETSignsQueryAndEmptyBody(t *testing.T) {
 
 func TestIntakeDisabledWithoutSecret(t *testing.T) {
 	s := newIntakeTestServer(t)
-	s.cfg.Intake.HMACSecret = ""
+	s.mod.cfg.HMACSecret = ""
 	ts := strconv.FormatInt(time.Now().Unix(), 10)
 	w := doSigned(s, http.MethodPost, "/intake/submissions", validBody(), ts, "v1=whatever")
 	if w.Code != http.StatusServiceUnavailable {
@@ -160,21 +185,22 @@ func TestPortalRouteSetIsExact(t *testing.T) {
 		{"GET", "/intake/queue"},
 		{"POST", "/intake/submissions/abc/claim"},
 		{"POST", "/intake/submissions/abc/task"},
+		{"POST", "/intake/submissions/abc/conflict"},
 		{"PATCH", "/intake/submissions/abc"},
 		{"GET", "/intake/submissions/"},
 		{"DELETE", "/intake/submissions/abc"},
 		{"GET", "/tasks"},
 	}
 	for _, p := range public {
-		if !isPortalIntakeRoute(p[0], p[1]) {
+		if !IsPortalRoute(p[0], p[1]) {
 			t.Errorf("expected public: %s %s", p[0], p[1])
 		}
-		if !isPublicRoute(p[0], p[1]) {
-			t.Errorf("isPublicRoute must cover: %s %s", p[0], p[1])
+		if !(&HTTP{}).PublicRoute(p[0], p[1]) {
+			t.Errorf("module PublicRoute must cover: %s %s", p[0], p[1])
 		}
 	}
 	for _, p := range private {
-		if isPortalIntakeRoute(p[0], p[1]) {
+		if IsPortalRoute(p[0], p[1]) {
 			t.Errorf("must NOT be public: %s %s", p[0], p[1])
 		}
 	}
@@ -221,5 +247,84 @@ func TestClientProfileRoundTripThroughPortal(t *testing.T) {
 	ts3 := strconv.FormatInt(time.Now().Unix(), 10)
 	if w := doSigned(s, http.MethodGet, other, nil, ts3, signIntake("GET", other, ts3, nil)); w.Code != http.StatusNotFound {
 		t.Fatalf("unknown profile: %d", w.Code)
+	}
+}
+
+func signedPost(t *testing.T, s *testServer, path string, body []byte) *httptest.ResponseRecorder {
+	t.Helper()
+	ts := strconv.FormatInt(time.Now().Unix(), 10)
+	return doSigned(s, http.MethodPost, path, body, ts, signIntake("POST", path, ts, body))
+}
+
+// The portal never learns who a conflict is with; the firm queue does.
+func TestConflictDetailIsFirmOnly(t *testing.T) {
+	s := newIntakeTestServer(t)
+	if _, err := s.cs.Create("Robert Smith", "C-7", nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`{"externalId":"d-1","client":{"externalId":"auth0|dana","email":"d@example.com","name":"Dana Client"},"title":"Affidavit","content":"I declare...","adverseParties":[{"name":"Robert Smith","role":"spouse"}],"someFutureField":{"x":1}}`)
+	w := signedPost(t, s, "/intake/submissions", body)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("submit: %d %s", w.Code, w.Body.String())
+	}
+	var portal struct {
+		Submission map[string]json.RawMessage `json:"submission"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &portal)
+	if string(portal.Submission["status"]) != `"conflict_hold"` {
+		t.Fatalf("status = %s", portal.Submission["status"])
+	}
+	if got := string(portal.Submission["conflict"]); got != `{"hasConflict":true}` {
+		t.Fatalf("portal conflict detail leaked: %s", got)
+	}
+	if bytes.Contains(w.Body.Bytes(), []byte("Robert Smith")) {
+		t.Fatalf("portal response names the conflicting client: %s", w.Body.String())
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/intake/queue", nil)
+	req.Header.Set("X-Test-User", "partner")
+	rw := httptest.NewRecorder()
+	s.ServeHTTP(rw, req)
+	if rw.Code != http.StatusOK || !bytes.Contains(rw.Body.Bytes(), []byte(`"conflictingClientName":"Robert Smith"`)) {
+		t.Fatalf("firm queue lacks conflict detail: %d %s", rw.Code, rw.Body.String())
+	}
+}
+
+func TestConflictRouteIsPartnerOnly(t *testing.T) {
+	s := newIntakeTestServer(t)
+	_, _ = s.cs.Create("Robert Smith", "C-7", nil, "")
+	body := []byte(`{"externalId":"d-1","client":{"externalId":"auth0|dana","name":"Dana Client"},"content":"x","adverseParties":[{"name":"Robert Smith"}]}`)
+	w := signedPost(t, s, "/intake/submissions", body)
+	var out struct {
+		Submission struct {
+			ID string `json:"id"`
+		} `json:"submission"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &out)
+
+	do := func(user, decision, reason string) int {
+		b, _ := json.Marshal(map[string]string{"decision": decision, "conflictReason": reason})
+		req := httptest.NewRequest(http.MethodPost, "/intake/submissions/"+out.Submission.ID+"/conflict", bytes.NewReader(b))
+		if user != "" {
+			req.Header.Set("X-Test-User", user)
+		}
+		rw := httptest.NewRecorder()
+		s.ServeHTTP(rw, req)
+		return rw.Code
+	}
+	if code := do("", "acknowledge", "waiver"); code != http.StatusUnauthorized {
+		t.Fatalf("anonymous: %d", code)
+	}
+	if code := do("lawyer", "acknowledge", "waiver"); code != http.StatusForbidden {
+		t.Fatalf("non-partner: %d", code)
+	}
+	if code := do("partner", "acknowledge", ""); code != http.StatusBadRequest {
+		t.Fatalf("missing reason: %d", code)
+	}
+	if code := do("partner", "acknowledge", "informed-consent waiver"); code != http.StatusOK {
+		t.Fatalf("partner acknowledge: %d", code)
+	}
+	if code := do("partner", "acknowledge", "again"); code != http.StatusConflict {
+		t.Fatalf("second resolve: %d", code)
 	}
 }

@@ -103,12 +103,20 @@ func main() {
 	// module with a config-derived default, overridable per-module via
 	// BIGLAW_MODULE_<NAME>=on|off. GET /modules reports the resolved states.
 	mods := modules.Default
-	crmEnabled := mods.Register("crm",
-		"Neurosymbolic client CRM profiles (typed facts, bidirectional consent, semantic query)",
-		true, "default on")
+	// intake + crm form one optional module pair (the client-portal
+	// integration). Both are off unless configured: intake needs the shared
+	// HMAC secret, and crm defaults to following intake. The core builds,
+	// runs and tests without them; nothing outside this composition root
+	// imports either package.
 	intakeEnabled := mods.Register("intake",
-		"Affidavit-maker client intake channel (HMAC-signed portal API)",
+		"Client-portal intake channel (HMAC-signed /intake/* API; contract docs/integration/affidavit-intake.md)",
 		cfg.Intake.HMACSecret != "", "requires INTAKE_HMAC_SECRET")
+	crmEnabled := mods.Register("crm",
+		"Client CRM profiles (typed facts, bidirectional consent, semantic query)",
+		intakeEnabled, "follows the intake module")
+	if intakeEnabled && !crmEnabled {
+		slog.Warn("modules: intake requires crm; intake stays off", "fix", "BIGLAW_MODULE_CRM=on")
+	}
 	clientVoiceEnabled := mods.Register("clientvoice",
 		"Client advocacy briefs (Remy/CRM) surfaced at human gates",
 		true, "default on")
@@ -414,8 +422,15 @@ func main() {
 		srv.AttachLPM(lpmSvc)
 		srv.AttachDockets(monitors.Dockets)
 		srv.AttachRegulatory(monitors.Regulatory)
-		srv.AttachCRM(crmSvc)
-		srv.AttachIntake(intakeSvc, crmSvc)
+		if crmSvc != nil {
+			srv.Mount(crm.NewHTTP(crmSvc))
+		}
+		if intakeSvc != nil {
+			srv.Mount(intake.NewHTTP(intakeSvc, crmSvc, clientStore, orch, intake.HTTPConfig{
+				HMACSecret: cfg.Intake.HMACSecret,
+				MaxSkewSec: cfg.Intake.MaxSkewSec,
+			}))
+		}
 		return srv
 	}
 

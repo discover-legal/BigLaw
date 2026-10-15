@@ -17,10 +17,8 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/clients"
 	"github.com/discover-legal/biglaw-go/internal/config"
 	"github.com/discover-legal/biglaw-go/internal/cost"
-	"github.com/discover-legal/biglaw-go/internal/crm"
 	"github.com/discover-legal/biglaw-go/internal/dockets"
 	"github.com/discover-legal/biglaw-go/internal/graph"
-	"github.com/discover-legal/biglaw-go/internal/intake"
 	"github.com/discover-legal/biglaw-go/internal/knowledge"
 	"github.com/discover-legal/biglaw-go/internal/lpm"
 	"github.com/discover-legal/biglaw-go/internal/orchestrator"
@@ -51,10 +49,11 @@ type Server struct {
 	dockets    *dockets.Monitor    // set by AttachDockets; nil when disabled
 	regulatory *regulatory.Monitor // set by AttachRegulatory; nil when disabled
 	lpm        *lpm.Service        // set by AttachLPM; nil when LPM is disabled
-	crm        *crm.Service        // set by AttachCRM; nil when the crm module is disabled
-	intake     *intake.Service     // set by AttachIntake; nil when the intake module is disabled
-	router     *gin.Engine
-	started    time.Time
+	// publicRoutes are mounted modules' self-authenticating route predicates
+	// (see Mount); consulted by the auth middleware alongside isPublicRoute.
+	publicRoutes []func(method, path string) bool
+	router       *gin.Engine
+	started      time.Time
 }
 
 // New creates a Server, registers all routes, and returns it.

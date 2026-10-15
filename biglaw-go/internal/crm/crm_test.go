@@ -36,7 +36,7 @@ func newTestService(t *testing.T) (*Service, *clients.ClientStore, *clientvoice.
 
 func sysCtx() context.Context { return store.WithSystem(context.Background()) }
 
-func TestEnsureProfileCreatesRosterClientAndIsIdempotent(t *testing.T) {
+func TestEnsureProfileCreatesProspectAndIsIdempotent(t *testing.T) {
 	svc, cs, _ := newTestService(t)
 	ctx := sysCtx()
 
@@ -44,12 +44,11 @@ func TestEnsureProfileCreatesRosterClientAndIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnsureProfile: %v", err)
 	}
-	if p1.ClientID == "" {
-		t.Fatal("profile has no roster client")
+	if p1.ClientID != "" {
+		t.Fatalf("a new portal identity must be a prospect (no roster client), got client %s", p1.ClientID)
 	}
-	rc := cs.Get(p1.ClientID)
-	if rc == nil || rc.Name != "Dana Client" || rc.ClientNumber != "AM-1" {
-		t.Fatalf("roster client wrong: %+v", rc)
+	if len(cs.List()) != 0 {
+		t.Fatalf("EnsureProfile must not touch the roster: %+v", cs.List())
 	}
 
 	p2, err := svc.EnsureProfile(ctx, "auth0|abc", "", "")
@@ -61,18 +60,39 @@ func TestEnsureProfileCreatesRosterClientAndIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestEnsureProfileAttachesToExistingRosterClientByName(t *testing.T) {
+// A portal identity whose name collides with an existing client must never
+// be attached to that client's profile (that would hand a stranger the
+// client's matters and facts).
+func TestEnsureProfileNeverAttachesByName(t *testing.T) {
 	svc, cs, _ := newTestService(t)
-	if _, err := cs.Create("Acme, Inc.", "C-100", nil, ""); err != nil {
+	existing, err := cs.Create("Acme, Inc.", "C-100", nil, "")
+	if err != nil {
 		t.Fatalf("roster create: %v", err)
 	}
 	p, err := svc.EnsureProfile(sysCtx(), "auth0|acme", "ops@acme.com", "acme inc")
 	if err != nil {
 		t.Fatalf("EnsureProfile: %v", err)
 	}
-	rc := cs.Get(p.ClientID)
-	if rc == nil || rc.ClientNumber != "C-100" {
-		t.Fatalf("expected attach to existing roster client, got %+v", rc)
+	if p.ClientID == existing.ID {
+		t.Fatal("portal identity attached to an existing roster client by name")
+	}
+}
+
+func TestLinkClient(t *testing.T) {
+	svc, cs, _ := newTestService(t)
+	ctx := sysCtx()
+	p, _ := svc.EnsureProfile(ctx, "auth0|abc", "", "Dana Client")
+	rc, _ := cs.Create("Dana Client", "AM-1", nil, "")
+	linked, err := svc.LinkClient(ctx, p.ID, rc.ID)
+	if err != nil || linked.ClientID != rc.ID {
+		t.Fatalf("LinkClient: %v %+v", err, linked)
+	}
+	if _, err := svc.LinkClient(ctx, p.ID, rc.ID); err != nil {
+		t.Fatalf("re-link to the same client should be a no-op: %v", err)
+	}
+	other, _ := cs.Create("Someone Else", "AM-2", nil, "")
+	if _, err := svc.LinkClient(ctx, p.ID, other.ID); err == nil {
+		t.Fatal("moving a linked profile to another client must be refused")
 	}
 }
 
@@ -203,7 +223,11 @@ func TestAdvocacySyncCompilesClientVoice(t *testing.T) {
 	svc, cs, cv := newTestService(t)
 	ctx := sysCtx()
 	p, _ := svc.EnsureProfile(ctx, "auth0|abc", "", "Dana Client")
-	if _, err := cs.AddMatter(p.ClientID, "AM-1-1", "Divorce", "Family"); err != nil {
+	rc, _ := cs.Create("Dana Client", "AM-1", nil, "")
+	if _, err := svc.LinkClient(ctx, p.ID, rc.ID); err != nil {
+		t.Fatalf("LinkClient: %v", err)
+	}
+	if _, err := cs.AddMatter(rc.ID, "AM-1-1", "Divorce", "Family"); err != nil {
 		t.Fatalf("AddMatter: %v", err)
 	}
 

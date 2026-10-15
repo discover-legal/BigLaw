@@ -144,6 +144,8 @@ func (m *MemoryRepo) PutIntakeSubmission(ctx context.Context, s IntakeSubmission
 	}
 	s.ConflictJSON = append([]byte(nil), s.ConflictJSON...)
 	s.MetadataJSON = append([]byte(nil), s.MetadataJSON...)
+	s.NosLegalJSON = append([]byte(nil), s.NosLegalJSON...)
+	s.HeldJSON = append([]byte(nil), s.HeldJSON...)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.intakes[s.ID] = s

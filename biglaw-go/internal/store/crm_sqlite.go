@@ -213,7 +213,8 @@ func scanCRMFactSQLite(row rowScanner) (*CRMFact, error) {
 
 const sqliteIntakeCols = `id, external_id, profile_id, client_id, client_number, matter_number,
 	title, document_type, matter_type, jurisdiction, summary, document_id, status, note,
-	assigned_to, task_id, conflict, conflict_json, metadata_json, created_at, updated_at`
+	assigned_to, task_id, conflict, conflict_json, metadata_json, created_at, updated_at,
+	practice_area, noslegal_json, held_json`
 
 func (r *sqliteRepo) PutIntakeSubmission(ctx context.Context, s IntakeSubmission) error {
 	if !CanAccessFirm(ctx) {
@@ -228,7 +229,7 @@ func (r *sqliteRepo) PutIntakeSubmission(ctx context.Context, s IntakeSubmission
 	}
 	_, err := r.db.Exec(`
 		INSERT INTO intake_submissions (`+sqliteIntakeCols+`)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET
 			external_id=excluded.external_id, profile_id=excluded.profile_id,
 			client_id=excluded.client_id, client_number=excluded.client_number,
@@ -238,12 +239,15 @@ func (r *sqliteRepo) PutIntakeSubmission(ctx context.Context, s IntakeSubmission
 			document_id=excluded.document_id, status=excluded.status, note=excluded.note,
 			assigned_to=excluded.assigned_to, task_id=excluded.task_id,
 			conflict=excluded.conflict, conflict_json=excluded.conflict_json,
-			metadata_json=excluded.metadata_json, updated_at=excluded.updated_at`,
+			metadata_json=excluded.metadata_json, updated_at=excluded.updated_at,
+			practice_area=excluded.practice_area, noslegal_json=excluded.noslegal_json,
+			held_json=excluded.held_json`,
 		s.ID, s.ExternalID, s.ProfileID, s.ClientID, s.ClientNumber, s.MatterNumber,
 		s.Title, s.DocumentType, s.MatterType, s.Jurisdiction, s.Summary, s.DocumentID,
 		s.Status, s.Note, s.AssignedTo, s.TaskID, boolToInt(s.Conflict),
 		string(s.ConflictJSON), string(s.MetadataJSON),
-		created.UTC().Format(time.RFC3339Nano), updated.UTC().Format(time.RFC3339Nano))
+		created.UTC().Format(time.RFC3339Nano), updated.UTC().Format(time.RFC3339Nano),
+		s.PracticeArea, string(s.NosLegalJSON), string(s.HeldJSON))
 	if err != nil {
 		return fmt.Errorf("store: sqlite put intake submission %s: %w", s.ID, err)
 	}
@@ -316,11 +320,12 @@ func (r *sqliteRepo) queryIntake(q string, args ...interface{}) ([]IntakeSubmiss
 func scanIntakeSQLite(row rowScanner) (*IntakeSubmission, error) {
 	var s IntakeSubmission
 	var conflict int
-	var conflictJSON, metadataJSON, created, updated string
+	var conflictJSON, metadataJSON, created, updated, noslegalJSON, heldJSON string
 	if err := row.Scan(&s.ID, &s.ExternalID, &s.ProfileID, &s.ClientID, &s.ClientNumber,
 		&s.MatterNumber, &s.Title, &s.DocumentType, &s.MatterType, &s.Jurisdiction,
 		&s.Summary, &s.DocumentID, &s.Status, &s.Note, &s.AssignedTo, &s.TaskID,
-		&conflict, &conflictJSON, &metadataJSON, &created, &updated); err != nil {
+		&conflict, &conflictJSON, &metadataJSON, &created, &updated,
+		&s.PracticeArea, &noslegalJSON, &heldJSON); err != nil {
 		return nil, err
 	}
 	s.Conflict = conflict != 0
@@ -329,6 +334,12 @@ func scanIntakeSQLite(row rowScanner) (*IntakeSubmission, error) {
 	}
 	if metadataJSON != "" {
 		s.MetadataJSON = []byte(metadataJSON)
+	}
+	if noslegalJSON != "" {
+		s.NosLegalJSON = []byte(noslegalJSON)
+	}
+	if heldJSON != "" {
+		s.HeldJSON = []byte(heldJSON)
 	}
 	s.CreatedAt = parseSQLiteTime(created)
 	s.UpdatedAt = parseSQLiteTime(updated)

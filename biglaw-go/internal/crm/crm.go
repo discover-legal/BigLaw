@@ -167,9 +167,14 @@ func (s *Service) Load() error {
 
 // ─── Profiles ────────────────────────────────────────────────────────────────
 
-// EnsureProfile finds or creates the CRM profile (and the roster client) for
-// a portal identity. Resolution: profile by externalRef → roster client by
-// normalized name (profile attached) → create both.
+// EnsureProfile finds or creates the CRM profile for a portal identity.
+// Resolution is by externalRef ONLY: a new identity gets a fresh *prospect*
+// profile with no roster client (ClientID ""). It is deliberately never
+// attached to an existing roster client by name or email — a name collision
+// would otherwise hand a stranger an existing client's profile, matters and
+// facts. A prospect joins the roster only through LinkClient, which the
+// intake module calls after the conflict check clears (or a lawyer
+// acknowledges the conflict).
 func (s *Service) EnsureProfile(ctx context.Context, externalRef, email, name string) (*store.CRMProfile, error) {
 	externalRef = strings.TrimSpace(externalRef)
 	if externalRef == "" {
@@ -181,8 +186,8 @@ func (s *Service) EnsureProfile(ctx context.Context, externalRef, email, name st
 		return p, nil
 	}
 
-	name = strings.TrimSpace(name)
-	email = strings.TrimSpace(email)
+	name = strutil.Truncate(strings.TrimSpace(name), 200)
+	email = strutil.Truncate(strings.TrimSpace(email), 320)
 	if name == "" {
 		name = email
 	}
@@ -190,43 +195,11 @@ func (s *Service) EnsureProfile(ctx context.Context, externalRef, email, name st
 		return nil, fmt.Errorf("crm: name or email required to create a profile")
 	}
 
-	// Attach to an existing roster client with the same normalized name, or
-	// create a fresh one with an auto-assigned AM- client number.
-	rosterClient := s.matchRosterByName(name)
-	if rosterClient == nil {
-		num, err := s.nextClientNumber()
-		if err != nil {
-			return nil, err
-		}
-		created, err := s.clients.Create(name, num, nil, "Created via affidavit-maker intake")
-		if err != nil {
-			return nil, fmt.Errorf("crm: create roster client: %w", err)
-		}
-		rosterClient = created
-	}
-
-	// A roster client carries at most one CRM profile; adopt it if present
-	// (e.g. profile created firm-side before the portal identity linked up).
-	if existing, ok, err := s.repo.FindCRMProfileByClientID(ctx, rosterClient.ID); err != nil {
-		return nil, err
-	} else if ok && existing.ExternalRef == "" {
-		existing.ExternalRef = externalRef
-		if email != "" {
-			existing.Email = email
-		}
-		existing.UpdatedAt = time.Now()
-		if err := s.repo.PutCRMProfile(ctx, *existing); err != nil {
-			return nil, err
-		}
-		return existing, nil
-	}
-
 	p := store.CRMProfile{
 		ID:          uuid.New().String(),
-		ClientID:    rosterClient.ID,
 		ExternalRef: externalRef,
 		Email:       email,
-		Name:        rosterClient.Name,
+		Name:        name,
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 	}
@@ -236,35 +209,42 @@ func (s *Service) EnsureProfile(ctx context.Context, externalRef, email, name st
 	audit.Default.Write(audit.WriteRequest{
 		Event:   "crm.profile_created",
 		ActorID: "intake",
-		Data: map[string]interface{}{
-			"profileId": p.ID, "clientId": p.ClientID, "clientNumber": rosterClient.ClientNumber,
-		},
+		Data:    map[string]interface{}{"profileId": p.ID, "prospect": true},
 	})
 	return &p, nil
 }
 
-func (s *Service) matchRosterByName(name string) *types.Client {
-	want := normalizeName(name)
-	if want == "" {
-		return nil
+// LinkClient attaches a profile to its roster client (prospect → client).
+// Re-linking to the same client is a no-op; moving a linked profile to a
+// different client is refused.
+func (s *Service) LinkClient(ctx context.Context, profileID, clientID string) (*store.CRMProfile, error) {
+	p, ok, err := s.repo.GetCRMProfile(ctx, profileID)
+	if err != nil {
+		return nil, err
 	}
-	for _, c := range s.clients.List() {
-		if normalizeName(c.Name) == want {
-			cp := c
-			return &cp
-		}
+	if !ok {
+		return nil, ErrNotFound
 	}
-	return nil
-}
-
-func (s *Service) nextClientNumber() (string, error) {
-	for i := len(s.clients.List()) + 1; i < len(s.clients.List())+10_000; i++ {
-		num := fmt.Sprintf("AM-%d", i)
-		if s.clients.GetByClientNumber(num) == nil {
-			return num, nil
-		}
+	if p.ClientID == clientID {
+		return p, nil
 	}
-	return "", fmt.Errorf("crm: could not allocate a client number")
+	if p.ClientID != "" {
+		return nil, fmt.Errorf("crm: profile %s is already linked to client %s", p.ID, p.ClientID)
+	}
+	if s.clients != nil && s.clients.Get(clientID) == nil {
+		return nil, fmt.Errorf("crm: roster client %s not found", clientID)
+	}
+	p.ClientID = clientID
+	p.UpdatedAt = time.Now()
+	if err := s.repo.PutCRMProfile(ctx, *p); err != nil {
+		return nil, err
+	}
+	audit.Default.Write(audit.WriteRequest{
+		Event:   "crm.profile_linked",
+		ActorID: "intake",
+		Data:    map[string]interface{}{"profileId": p.ID, "clientId": clientID},
+	})
+	return p, nil
 }
 
 // Get returns a profile by id.
@@ -449,7 +429,7 @@ func (s *Service) Decide(ctx context.Context, factID string, actor Actor, approv
 	// roster conflict check (is the adverse party an existing client, or is
 	// this client on someone's adversary list?); hits flag the profile.
 	if f.Category == "adverse_party" && s.clients != nil {
-		res := s.clients.CheckConflict(profile.Name, []string{f.Value})
+		res := s.clients.CheckConflictExcluding(profile.Name, []string{f.Value}, profile.ClientID)
 		if res.HasConflict {
 			profile.ConflictFlag = true
 			profile.UpdatedAt = time.Now()

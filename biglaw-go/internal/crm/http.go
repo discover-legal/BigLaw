@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Discover Legal
 
-// CRM routes — the firm side of the neurosymbolic client profiles. Any
-// authenticated firm member reads profiles and works the consent queue;
-// lawyer-proposed facts await the client's approval through the intake
-// channel (see intake.go), completing the bidirectional-consent loop.
-package api
+// CRM HTTP surface — the firm side of the client profiles. Any authenticated
+// firm member reads profiles and works the consent queue; lawyer-proposed
+// facts await the client's approval through the intake module's portal
+// routes, completing the bidirectional-consent loop.
+package crm
 
 import (
 	"errors"
@@ -13,21 +13,31 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/discover-legal/biglaw-go/internal/crm"
 	"github.com/discover-legal/biglaw-go/internal/modules"
 )
 
-// AttachCRM registers the CRM endpoints. No-op when svc is nil or the crm
-// module is disabled.
-func (s *Server) AttachCRM(svc *crm.Service) {
-	if svc == nil || !modules.Default.Enabled("crm") {
-		return
-	}
-	s.crm = svc
-	g := s.router.Group("/crm")
+// ModuleName is the registry name of the CRM module.
+const ModuleName = "crm"
+
+// HTTP is the CRM module's route set (implements modules.HTTPModule).
+type HTTP struct{ svc *Service }
+
+// NewHTTP builds the CRM HTTP module.
+func NewHTTP(svc *Service) *HTTP { return &HTTP{svc: svc} }
+
+// ModuleName implements modules.HTTPModule.
+func (h *HTTP) ModuleName() string { return ModuleName }
+
+// PublicRoute implements modules.HTTPModule: every CRM route requires a firm
+// credential.
+func (h *HTTP) PublicRoute(method, path string) bool { return false }
+
+// Mount registers the /crm endpoints.
+func (h *HTTP) Mount(r gin.IRouter, host modules.Host) {
+	g := r.Group("/crm")
 
 	g.GET("/profiles", func(c *gin.Context) {
-		profiles, err := svc.List(reqIdentity(c))
+		profiles, err := h.svc.List(host.Identity(c))
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -36,7 +46,7 @@ func (s *Server) AttachCRM(svc *crm.Service) {
 	})
 
 	g.GET("/profiles/:id", func(c *gin.Context) {
-		view, err := svc.View(reqIdentity(c), c.Param("id"))
+		view, err := h.svc.View(host.Identity(c), c.Param("id"))
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -49,29 +59,33 @@ func (s *Server) AttachCRM(svc *crm.Service) {
 	})
 
 	g.GET("/profiles/:id/facts", func(c *gin.Context) {
-		facts, err := svc.Facts(reqIdentity(c), c.Param("id"), c.Query("status"))
+		facts, err := h.svc.Facts(host.Identity(c), c.Param("id"), c.Query("status"))
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"facts": emptyIfNilFacts(facts)})
+		c.JSON(http.StatusOK, gin.H{"facts": NonNil(facts)})
 	})
 
 	// A lawyer proposes facts about the client → the client approves them
 	// through the portal.
 	g.POST("/profiles/:id/facts", func(c *gin.Context) {
-		u := getUser(c)
+		u := host.User(c)
+		if u == nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "authentication required"})
+			return
+		}
 		var body struct {
-			Facts []crm.FactInput `json:"facts"`
+			Facts []FactInput `json:"facts"`
 		}
 		if err := c.ShouldBindJSON(&body); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body: " + err.Error()})
 			return
 		}
-		proposals, err := svc.Propose(reqIdentity(c), c.Param("id"),
-			crm.Actor{Role: crm.RoleLawyer, ID: u.ProfileID}, "lawyer", body.Facts)
+		proposals, err := h.svc.Propose(host.Identity(c), c.Param("id"),
+			Actor{Role: RoleLawyer, ID: u.ProfileID}, "lawyer", body.Facts)
 		if err != nil {
-			c.JSON(crmErrStatus(err), gin.H{"error": err.Error()})
+			c.JSON(ErrStatus(err), gin.H{"error": err.Error()})
 			return
 		}
 		c.JSON(http.StatusCreated, gin.H{"proposals": proposals})
@@ -87,7 +101,7 @@ func (s *Server) AttachCRM(svc *crm.Service) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body: " + err.Error()})
 			return
 		}
-		hits, err := svc.Query(reqIdentity(c), c.Param("id"), body.Query, body.TopK)
+		hits, err := h.svc.Query(host.Identity(c), c.Param("id"), body.Query, body.TopK)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
@@ -99,17 +113,21 @@ func (s *Server) AttachCRM(svc *crm.Service) {
 	// proposals awaiting the firm; approver=client lists what's out with
 	// clients for approval.
 	g.GET("/proposals", func(c *gin.Context) {
-		facts, err := svc.PendingQueue(reqIdentity(c), c.DefaultQuery("approver", crm.RoleLawyer))
+		facts, err := h.svc.PendingQueue(host.Identity(c), c.DefaultQuery("approver", RoleLawyer))
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"proposals": emptyIfNilFacts(facts)})
+		c.JSON(http.StatusOK, gin.H{"proposals": NonNil(facts)})
 	})
 
 	// A lawyer decides a client-proposed fact.
 	g.POST("/proposals/:id/decision", func(c *gin.Context) {
-		u := getUser(c)
+		u := host.User(c)
+		if u == nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "authentication required"})
+			return
+		}
 		var body struct {
 			Decision string `json:"decision"`
 			Note     string `json:"note"`
@@ -122,30 +140,32 @@ func (s *Server) AttachCRM(svc *crm.Service) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "decision must be approve or reject"})
 			return
 		}
-		fact, err := svc.Decide(reqIdentity(c), c.Param("id"),
-			crm.Actor{Role: crm.RoleLawyer, ID: u.ProfileID}, body.Decision == "approve", body.Note)
+		fact, err := h.svc.Decide(host.Identity(c), c.Param("id"),
+			Actor{Role: RoleLawyer, ID: u.ProfileID}, body.Decision == "approve", body.Note)
 		if err != nil {
-			c.JSON(crmErrStatus(err), gin.H{"error": err.Error()})
+			c.JSON(ErrStatus(err), gin.H{"error": err.Error()})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"fact": fact})
 	})
 }
 
-func crmErrStatus(err error) int {
+// ErrStatus maps CRM errors to HTTP status codes.
+func ErrStatus(err error) int {
 	switch {
-	case errors.Is(err, crm.ErrNotFound):
+	case errors.Is(err, ErrNotFound):
 		return http.StatusNotFound
-	case errors.Is(err, crm.ErrForbidden):
+	case errors.Is(err, ErrForbidden):
 		return http.StatusForbidden
-	case errors.Is(err, crm.ErrNotPending):
+	case errors.Is(err, ErrNotPending):
 		return http.StatusConflict
 	default:
 		return http.StatusBadRequest
 	}
 }
 
-func emptyIfNilFacts[T any](in []T) []T {
+// NonNil returns in, or an empty slice for nil (JSON [] not null).
+func NonNil[T any](in []T) []T {
 	if in == nil {
 		return []T{}
 	}

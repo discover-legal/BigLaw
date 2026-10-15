@@ -235,7 +235,10 @@ CREATE TABLE IF NOT EXISTS intake_submissions (
 	conflict_json JSONB NOT NULL DEFAULT '{}'::jsonb,
 	metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
 	created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-	updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+	updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+	practice_area TEXT NOT NULL DEFAULT '',
+	noslegal_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+	held_json     JSONB NOT NULL DEFAULT '{}'::jsonb
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_intake_profile_external
 	ON intake_submissions(profile_id, external_id) WHERE external_id <> '';
