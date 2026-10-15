@@ -4,6 +4,8 @@
 package matters
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -44,25 +46,72 @@ func TestFailedOnlyMatterIsNotHealthy(t *testing.T) {
 	}
 }
 
-func TestInterruptedCountsAsFailed(t *testing.T) {
+func TestInterruptedIsMediumWithOwnWording(t *testing.T) {
 	got := New().Compute("M-1", []types.Task{task("t1", types.TaskStatusInterrupted)},
 		fakeTime{recentEntry()}, fakeBudget{})
-	if got.Signal == types.HealthGreen {
-		t.Fatalf("interrupted-only matter signalled green: %+v", got)
+	if len(got.RiskFactors) != 1 {
+		t.Fatalf("risks = %+v", got.RiskFactors)
+	}
+	r := got.RiskFactors[0]
+	if r.Type != "task_interrupted" || r.Severity != "medium" || strings.Contains(r.Message, "failed") {
+		t.Errorf("interrupted risk = %+v", r)
+	}
+	if got.Dimensions.DeadlineHealth >= 85 || got.Dimensions.DeadlineHealth <= 0 {
+		t.Errorf("interrupted delivery = %v, want a partial penalty", got.Dimensions.DeadlineHealth)
 	}
 }
 
-func TestOneFailureAmongManyStillPenalised(t *testing.T) {
-	tasks := []types.Task{task("f", types.TaskStatusFailed)}
-	for _, id := range []string{"a", "b", "c", "d", "e", "f2", "g", "h", "i"} {
-		tasks = append(tasks, task(id, types.TaskStatusComplete))
+func TestFailurePenaltyIsProportional(t *testing.T) {
+	tasks := []types.Task{}
+	for i := range 104 {
+		st := types.TaskStatusComplete
+		if i < 4 {
+			st = types.TaskStatusFailed
+		}
+		tk := task(fmt.Sprint(i), st)
+		// completions happened before the failures, so nothing is superseded
+		done := time.Now().Add(-48 * time.Hour)
+		if st == types.TaskStatusComplete {
+			tk.CompletedAt = &done
+		}
+		tasks = append(tasks, tk)
 	}
 	got := New().Compute("M-1", tasks, fakeTime{recentEntry()}, fakeBudget{})
-	if got.Dimensions.DeadlineHealth != 70 {
-		t.Errorf("1 of 10 failed: delivery = %v, want the flat-penalty 70", got.Dimensions.DeadlineHealth)
+	if d := got.Dimensions.DeadlineHealth; d != 85 {
+		t.Errorf("4/104 failed: delivery = %v, want 85 (proportional, min 15-point dent)", d)
 	}
-	if got.Signal == types.HealthGreen {
-		t.Errorf("a high-severity failure must cap the signal below green: %+v", got)
+	if got.RiskFactors[0].Severity != "medium" {
+		t.Errorf("a small failure share should be medium: %+v", got.RiskFactors)
+	}
+}
+
+func TestSupersededFailureDoesNotCount(t *testing.T) {
+	failedAt := time.Now().Add(-2 * time.Hour)
+	f := task("f", types.TaskStatusFailed)
+	f.CompletedAt = &failedAt
+	ok := task("ok", types.TaskStatusComplete)
+	done := time.Now().Add(-time.Hour)
+	ok.CompletedAt = &done
+	got := New().Compute("M-1", []types.Task{f, ok}, fakeTime{recentEntry()}, fakeBudget{})
+	if got.Dimensions.DeadlineHealth != 100 || len(got.RiskFactors) != 0 {
+		t.Fatalf("superseded failure still counted: %+v", got)
+	}
+	// …but a failure after the last success still counts.
+	later := time.Now()
+	f.CompletedAt = &later
+	got = New().Compute("M-1", []types.Task{f, ok}, fakeTime{recentEntry()}, fakeBudget{})
+	if got.Dimensions.DeadlineHealth == 100 {
+		t.Fatal("failure after the last success ignored")
+	}
+}
+
+func TestOldFailuresAgeOut(t *testing.T) {
+	old := time.Now().Add(-31 * 24 * time.Hour)
+	f := task("f", types.TaskStatusFailed)
+	f.CreatedAt, f.UpdatedAt, f.CompletedAt = old, old, &old
+	got := New().Compute("M-1", []types.Task{f}, fakeTime{recentEntry()}, fakeBudget{})
+	if got.Dimensions.DeadlineHealth != 100 {
+		t.Fatalf("31-day-old failure still counted: %v", got.Dimensions.DeadlineHealth)
 	}
 }
 

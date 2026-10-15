@@ -121,8 +121,8 @@ func (m *Monitor) Compute(
 			hasHighRisk = hasHighRisk || r.Severity == "high"
 		}
 	}
-	// A high-severity risk (failed tasks, budget ≥ 80%, ≥ 3 open gates, ≥ 50%
-	// OCG violations) caps the matter below green. The weighted average alone
+	// A high-severity risk (≥ half of recent tasks failed, budget ≥ 80%, ≥ 3
+	// open gates, ≥ 50% OCG violations) caps the matter below green. The weighted average alone
 	// can't express that: the other four dimensions carry 75% of the weight,
 	// and an unset budget (85), fresh time entries (written by the failed runs
 	// themselves) and an empty gate queue kept a matter whose only task had
@@ -265,56 +265,104 @@ func budgetDimension(burn *types.BudgetBurn) (int, *types.MatterRiskFactor) {
 	return score, risk
 }
 
-// deadlineDimension scores delivery: tasks that died (failed, or interrupted
-// by a restart and never resubmitted) and tasks stuck in flight for over two
-// weeks.
+// failureWindow is how long an unresolved failure keeps counting against a
+// matter. Older failures age out; the matter's current work is what matters.
+const failureWindow = 30 * 24 * time.Hour
+
+// settledAt is when a task reached its current state.
+func settledAt(t types.Task) time.Time {
+	if t.CompletedAt != nil {
+		return *t.CompletedAt
+	}
+	if !t.UpdatedAt.IsZero() {
+		return t.UpdatedAt
+	}
+	return t.CreatedAt
+}
+
+// deadlineDimension scores delivery: tasks that failed, tasks interrupted by
+// a backend restart (boot-quarantined, must be resubmitted), and tasks stuck
+// in flight for over two weeks.
 //
-// Failures are scored two ways and the worse one wins: a flat penalty per
-// failure (so one failure among many still registers) and the share of the
-// matter's tasks that failed (so a matter whose only work has failed scores
-// 0 here rather than a flat 70 — previously a matter whose single task had
-// failed still came out "On track").
+// A failure or interruption stops counting once it is superseded — a task on
+// the same matter completed after it (the work was re-run successfully) — or
+// once it is older than failureWindow. The penalty is proportional to the
+// share of the matter's counted tasks that failed (any failure costs at least
+// 15 points), so 4 failures among 104 tasks dents delivery rather than
+// zeroing it, while a matter whose only work failed scores 0.
 func deadlineDimension(tasks []types.Task) (int, *types.MatterRiskFactor) {
 	now := time.Now()
-	sevenDays := 7 * 24 * time.Hour
-	failed := 0
-	stalled := 0
+	var lastCompleted time.Time
 	for _, t := range tasks {
-		switch t.Status {
-		case types.TaskStatusFailed, types.TaskStatusInterrupted:
-			failed++
-		case types.TaskStatusPending, types.TaskStatusQueued, types.TaskStatusRunning:
-			if now.Sub(t.CreatedAt) > sevenDays*2 {
-				stalled++
+		if t.Status == types.TaskStatusComplete {
+			if at := settledAt(t); at.After(lastCompleted) {
+				lastCompleted = at
 			}
 		}
 	}
-	score := 100
-	var risk *types.MatterRiskFactor
-	if failed > 0 {
-		byCount := 100 - failed*30
-		byShare := int(math.Round(100 * (1 - float64(failed)/float64(len(tasks)))))
-		score = max(0, min(byCount, byShare))
-		msg := formatN("%d task(s) have failed on this matter", failed)
-		if failed == len(tasks) {
+	counted, failed, interrupted, stalled := 0, 0, 0, 0
+	for _, t := range tasks {
+		switch t.Status {
+		case types.TaskStatusFailed, types.TaskStatusInterrupted:
+			at := settledAt(t)
+			if now.Sub(at) > failureWindow || lastCompleted.After(at) {
+				continue // aged out, or superseded by later successful work
+			}
+			if t.Status == types.TaskStatusFailed {
+				failed++
+			} else {
+				interrupted++
+			}
+		case types.TaskStatusPending, types.TaskStatusQueued, types.TaskStatusRunning:
+			if now.Sub(t.CreatedAt) > 14*24*time.Hour {
+				stalled++
+			}
+		}
+		counted++
+	}
+
+	// penalty: proportional to the share of counted tasks, at least 15 points.
+	penalised := func(n int, weight float64) int {
+		share := float64(n) / float64(counted)
+		return int(math.Round(math.Min(85, 100*(1-share*weight))))
+	}
+	switch {
+	case failed > 0:
+		score := penalised(failed+interrupted, 1)
+		sev := "medium"
+		msg := formatN("%d recent task(s) on this matter have failed", failed)
+		if 2*failed >= counted {
+			sev = "high"
+		}
+		if failed == counted {
 			msg = formatN("All %d task(s) on this matter have failed — no work product delivered", failed)
 		}
-		risk = &types.MatterRiskFactor{
+		if interrupted > 0 {
+			msg += formatN("; %d more were interrupted by a restart", interrupted)
+		}
+		return score, &types.MatterRiskFactor{
 			Type:            "task_failure",
-			Severity:        "high",
+			Severity:        sev,
 			Message:         msg,
 			SuggestedAction: "Review failed tasks and re-run or reassign.",
 		}
-	} else if stalled > 0 {
-		score = int(math.Max(30, float64(100-stalled*15)))
-		risk = &types.MatterRiskFactor{
+	case interrupted > 0:
+		// Not a failure of the work: the run died with the previous process.
+		return penalised(interrupted, 0.5), &types.MatterRiskFactor{
+			Type:            "task_interrupted",
+			Severity:        "medium",
+			Message:         formatN("%d task(s) were interrupted by a server restart and have not been resubmitted", interrupted),
+			SuggestedAction: "Resubmit the interrupted task(s).",
+		}
+	case stalled > 0:
+		return int(math.Max(30, float64(100-stalled*15))), &types.MatterRiskFactor{
 			Type:            "deadline_approaching",
 			Severity:        "medium",
 			Message:         formatN("%d task(s) have been running for over 2 weeks", stalled),
 			SuggestedAction: "Check task progress and ensure no blockers.",
 		}
 	}
-	return score, risk
+	return 100, nil
 }
 
 func activityDimension(lastActivityMs int64) (int, *types.MatterRiskFactor) {
