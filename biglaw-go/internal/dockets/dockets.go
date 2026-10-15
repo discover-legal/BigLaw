@@ -45,7 +45,7 @@ type AlertHandler func(alert types.DocketAlert)
 // Monitor polls CourtListener for new filings on watched dockets.
 type Monitor struct {
 	mu         sync.Mutex
-	persistMu  sync.Mutex                      // serialises concurrent fire-and-forget persists
+	persistMu  sync.Mutex                      // serialises concurrent persists
 	watched    map[string]*types.WatchedDocket // key: matterNumber
 	path       string
 	knowledge  KnowledgeIngester
@@ -174,7 +174,7 @@ func (m *Monitor) Watch(matterNumber, docketNumber, court, caseName string) (*ty
 	m.mu.Lock()
 	m.watched[matterNumber] = entry
 	m.mu.Unlock()
-	go m.persist()
+	m.persist()
 	slog.Info("DocketMonitor: watching docket", "matterNumber", matterNumber, "docketNumber", docketNumber)
 	return entry, nil
 }
@@ -186,7 +186,7 @@ func (m *Monitor) Unwatch(matterNumber string) bool {
 	delete(m.watched, matterNumber)
 	m.mu.Unlock()
 	if had {
-		go m.persist()
+		m.persist()
 		slog.Info("DocketMonitor: unwatched docket", "matterNumber", matterNumber)
 	}
 	return had
@@ -297,7 +297,7 @@ func (m *Monitor) CheckDocket(w *types.WatchedDocket) (*types.DocketAlert, error
 	m.mu.Unlock()
 
 	if len(data.Results) == 0 {
-		go m.persist()
+		m.persist()
 		return nil, nil
 	}
 
@@ -321,7 +321,7 @@ func (m *Monitor) CheckDocket(w *types.WatchedDocket) (*types.DocketAlert, error
 	m.mu.Unlock()
 
 	if !hasNewDate && !hasMoreEntries {
-		go m.persist()
+		m.persist()
 		return nil, nil
 	}
 
@@ -338,7 +338,7 @@ func (m *Monitor) CheckDocket(w *types.WatchedDocket) (*types.DocketAlert, error
 		w.CaseName = docket.CaseName
 	}
 	m.mu.Unlock()
-	go m.persist()
+	m.persist()
 
 	if latestFilingDate == "" {
 		latestFilingDate = now
@@ -385,9 +385,11 @@ func (m *Monitor) persist() {
 	m.persistMu.Lock()
 	defer m.persistMu.Unlock()
 	m.mu.Lock()
-	entries := make([]*types.WatchedDocket, 0, len(m.watched))
+	// Copy values under the lock: CheckDocket mutates *WatchedDocket fields
+	// under m.mu, so marshalling the shared pointers after Unlock races.
+	entries := make([]types.WatchedDocket, 0, len(m.watched))
 	for _, w := range m.watched {
-		entries = append(entries, w)
+		entries = append(entries, *w)
 	}
 	m.mu.Unlock()
 

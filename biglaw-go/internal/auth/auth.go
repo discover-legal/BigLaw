@@ -60,7 +60,7 @@ func CanViewTask(u *types.SessionUser, assignedIDs []string) bool {
 
 type ProfileStore struct {
 	mu        sync.RWMutex
-	persistMu sync.Mutex // serialises concurrent fire-and-forget persists
+	persistMu sync.Mutex // serialises concurrent persists
 	profiles  []types.LawyerProfile
 	path      string
 	cfg       *config.Config
@@ -185,7 +185,18 @@ func (s *ProfileStore) Create(input CreateProfileInput) (*types.LawyerProfile, e
 	return &p, nil
 }
 
+// Update mutates under the lock, then persists synchronously so the change is
+// on disk before the caller sees success (was a fire-and-forget goroutine:
+// lost writes on crash and races with TempDir cleanup in tests).
 func (s *ProfileStore) Update(id string, patch map[string]interface{}) (*types.LawyerProfile, error) {
+	p, err := s.updateNoPersist(id, patch)
+	if err == nil {
+		s.persist()
+	}
+	return p, err
+}
+
+func (s *ProfileStore) updateNoPersist(id string, patch map[string]interface{}) (*types.LawyerProfile, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i := range s.profiles {
@@ -218,27 +229,47 @@ func (s *ProfileStore) Update(id string, patch map[string]interface{}) (*types.L
 			p.Mode = ResolveMode(p.Role, p.Mode)
 		}
 		cp := *p
-		go s.persist()
 		return &cp, nil
 	}
 	return nil, fmt.Errorf("profile not found")
 }
 
+// UpdateTone mutates under the lock, then persists synchronously so the change is
+// on disk before the caller sees success (was a fire-and-forget goroutine:
+// lost writes on crash and races with TempDir cleanup in tests).
 func (s *ProfileStore) UpdateTone(id string, tone *types.ToneProfile) (*types.LawyerProfile, error) {
+	p, err := s.updateToneNoPersist(id, tone)
+	if err == nil {
+		s.persist()
+	}
+	return p, err
+}
+
+func (s *ProfileStore) updateToneNoPersist(id string, tone *types.ToneProfile) (*types.LawyerProfile, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i := range s.profiles {
 		if s.profiles[i].ID == id {
 			s.profiles[i].ToneProfile = tone
 			cp := s.profiles[i]
-			go s.persist()
 			return &cp, nil
 		}
 	}
 	return nil, fmt.Errorf("profile not found")
 }
 
+// Remove mutates under the lock, then persists synchronously so the change is
+// on disk before the caller sees success (was a fire-and-forget goroutine:
+// lost writes on crash and races with TempDir cleanup in tests).
 func (s *ProfileStore) Remove(id string) (bool, error) {
+	removed, err := s.removeNoPersist(id)
+	if removed && err == nil {
+		s.persist()
+	}
+	return removed, err
+}
+
+func (s *ProfileStore) removeNoPersist(id string) (bool, error) {
 	if id == LocalPartner.ProfileID {
 		return false, fmt.Errorf("cannot delete local development profile")
 	}
@@ -255,7 +286,6 @@ func (s *ProfileStore) Remove(id string) (bool, error) {
 	if len(s.profiles) == before {
 		return false, nil
 	}
-	go s.persist()
 	return true, nil
 }
 

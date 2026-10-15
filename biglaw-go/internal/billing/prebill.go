@@ -66,7 +66,7 @@ type PreBill struct {
 // PreBillStore persists pre-bills to a JSON file.
 type PreBillStore struct {
 	mu        sync.RWMutex
-	persistMu sync.Mutex // serialises concurrent fire-and-forget persists
+	persistMu sync.Mutex // serialises concurrent persists
 	bills     []PreBill
 	path      string
 }
@@ -166,8 +166,19 @@ func (s *PreBillStore) GetByID(id string) *PreBill {
 	return nil
 }
 
-// UpdateEntryDescription updates a line-item description.
+// UpdateEntryDescription mutates under the lock, then persists synchronously so the change is
+// on disk before the caller sees success (was a fire-and-forget goroutine:
+// lost writes on crash and races with TempDir cleanup in tests).
 func (s *PreBillStore) UpdateEntryDescription(billID, entryID, description string) *PreBill {
+	b := s.updateEntryDescriptionNoPersist(billID, entryID, description)
+	if b != nil {
+		s.persist()
+	}
+	return b
+}
+
+// UpdateEntryDescription updates a line-item description.
+func (s *PreBillStore) updateEntryDescriptionNoPersist(billID, entryID, description string) *PreBill {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i := range s.bills {
@@ -184,7 +195,6 @@ func (s *PreBillStore) UpdateEntryDescription(billID, entryID, description strin
 					description = strutil.Truncate(description, 500)
 				}
 				b.Entries[j].Description = description
-				go s.persist()
 				cp := *b
 				return &cp
 			}
@@ -193,8 +203,19 @@ func (s *PreBillStore) UpdateEntryDescription(billID, entryID, description strin
 	return nil
 }
 
-// Transition moves a bill through its lifecycle.
+// Transition mutates under the lock, then persists synchronously so the change is
+// on disk before the caller sees success (was a fire-and-forget goroutine:
+// lost writes on crash and races with TempDir cleanup in tests).
 func (s *PreBillStore) Transition(billID string, toStatus PreBillStatus) *PreBill {
+	b := s.transitionNoPersist(billID, toStatus)
+	if b != nil {
+		s.persist()
+	}
+	return b
+}
+
+// Transition moves a bill through its lifecycle.
+func (s *PreBillStore) transitionNoPersist(billID string, toStatus PreBillStatus) *PreBill {
 	validTransitions := map[PreBillStatus][]PreBillStatus{
 		PreBillDraft:    {PreBillReviewed},
 		PreBillReviewed: {PreBillApproved, PreBillDraft},
@@ -229,15 +250,25 @@ func (s *PreBillStore) Transition(billID string, toStatus PreBillStatus) *PreBil
 		case PreBillInvoiced:
 			b.InvoicedAt = now
 		}
-		go s.persist()
 		cp := *b
 		return &cp
 	}
 	return nil
 }
 
-// SetNotes sets the notes on a pre-bill.
+// SetNotes mutates under the lock, then persists synchronously so the change is
+// on disk before the caller sees success (was a fire-and-forget goroutine:
+// lost writes on crash and races with TempDir cleanup in tests).
 func (s *PreBillStore) SetNotes(billID, notes string) *PreBill {
+	b := s.setNotesNoPersist(billID, notes)
+	if b != nil {
+		s.persist()
+	}
+	return b
+}
+
+// SetNotes sets the notes on a pre-bill.
+func (s *PreBillStore) setNotesNoPersist(billID, notes string) *PreBill {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i := range s.bills {
@@ -248,7 +279,6 @@ func (s *PreBillStore) SetNotes(billID, notes string) *PreBill {
 			notes = strutil.Truncate(notes, 2000)
 		}
 		s.bills[i].Notes = notes
-		go s.persist()
 		cp := s.bills[i]
 		return &cp
 	}

@@ -62,7 +62,7 @@ var validCategories = map[string]types.OcgRuleCategory{
 // Store persists OCG documents and runs compliance checks.
 type Store struct {
 	mu        sync.RWMutex
-	persistMu sync.Mutex                    // serialises concurrent fire-and-forget persists
+	persistMu sync.Mutex                    // serialises concurrent persists
 	docs      map[string]*types.OcgDocument // clientID → doc
 	path      string
 	provider  providers.Provider
@@ -286,7 +286,9 @@ func (s *Store) RecordViolations(clientID string, suggestions []types.OcgSuggest
 		}
 	}
 	s.mu.Unlock()
-	go s.persist() //nolint:errcheck
+	if err := s.persist(); err != nil {
+		slog.Warn("OCG persist failed", "error", err)
+	}
 }
 
 // RecordOutcome records that a suggestion was accepted or dismissed.
@@ -309,7 +311,9 @@ func (s *Store) RecordOutcome(clientID, ruleID, outcome string) {
 		}
 	}
 	s.mu.Unlock()
-	go s.persist() //nolint:errcheck
+	if err := s.persist(); err != nil {
+		slog.Warn("OCG persist failed", "error", err)
+	}
 }
 
 // ─── Mechanical checker ───────────────────────────────────────────────────────

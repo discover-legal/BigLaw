@@ -32,7 +32,7 @@ type QueueStats struct {
 // Queue is an in-memory job queue backed by JSON persistence.
 type Queue struct {
 	mu        sync.Mutex
-	persistMu sync.Mutex // serialises concurrent fire-and-forget persists
+	persistMu sync.Mutex // serialises concurrent persists
 	jobs      []*types.Job
 	path      string
 }
@@ -92,7 +92,7 @@ func (q *Queue) Enqueue(jobType types.JobType, payload map[string]interface{}, m
 	q.mu.Lock()
 	q.jobs = append(q.jobs, job)
 	q.mu.Unlock()
-	go q.persist()
+	q.persist()
 	slog.Debug("Job enqueued", "jobId", job.ID, "type", jobType)
 	return job
 }
@@ -100,6 +100,14 @@ func (q *Queue) Enqueue(jobType types.JobType, payload map[string]interface{}, m
 // Dequeue atomically claims one pending job, setting its status to "running".
 // Pass nil to accept any job type.
 func (q *Queue) Dequeue(types_ []types.JobType) *types.Job {
+	j := q.dequeueLocked(types_)
+	if j != nil {
+		q.persist()
+	}
+	return j
+}
+
+func (q *Queue) dequeueLocked(types_ []types.JobType) *types.Job {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	for _, j := range q.jobs {
@@ -111,7 +119,6 @@ func (q *Queue) Dequeue(types_ []types.JobType) *types.Job {
 		}
 		j.Status = types.JobStatusRunning
 		j.StartedAt = time.Now().UTC().Format(time.RFC3339)
-		go q.persist()
 		return j
 	}
 	return nil
@@ -126,7 +133,7 @@ func (q *Queue) Ack(jobID string) {
 		j.CompletedAt = time.Now().UTC().Format(time.RFC3339)
 	}
 	q.mu.Unlock()
-	go q.persist()
+	q.persist()
 }
 
 // Fail increments retries and moves to dead_letter when maxRetries exceeded.
@@ -144,7 +151,7 @@ func (q *Queue) Fail(jobID, errMsg string) {
 		}
 	}
 	q.mu.Unlock()
-	go q.persist()
+	q.persist()
 }
 
 // Retry re-queues a failed or dead_letter job.
@@ -157,7 +164,7 @@ func (q *Queue) Retry(jobID string) *types.Job {
 	}
 	q.mu.Unlock()
 	if j != nil {
-		go q.persist()
+		q.persist()
 	}
 	return j
 }
