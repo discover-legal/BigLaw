@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -111,6 +112,24 @@ func normalizeEnum(v, fallback string, allowed ...string) string {
 }
 
 func Load() *Config {
+	// Every state file defaults to the data dir — the same root the vector
+	// registry uses (RUVECTOR_DATA_DIR, default ./data) — so one volume holds
+	// all of BigLaw's state. stateFile records which defaults moved from the
+	// working directory so MigrateLegacyStateFiles can carry old installs over.
+	dataDir := env("RUVECTOR_DATA_DIR", "./data")
+	var legacy []legacyStateFile
+	// name is both the old working-directory default and the basename in
+	// the data dir (kept, so explicit /app/data/.tasks.json-style overrides
+	// in existing deployments already equal the new defaults).
+	stateFile := func(key, name string) string {
+		if v := os.Getenv(key); v != "" {
+			return v // explicit override: always wins, never migrated
+		}
+		p := filepath.Join(dataDir, name)
+		legacy = append(legacy, legacyStateFile{Env: key, Legacy: name, Path: p})
+		return p
+	}
+
 	c := &Config{
 		// Flavour trims the bench + templates to a practice-area preset
 		// (flavours/<name>.json). Empty or "full" = the complete platform.
@@ -145,7 +164,7 @@ func Load() *Config {
 			Dimensions: envInt("EMBEDDING_DIMENSIONS", 1536),
 		},
 		VectorDB: VectorDBConfig{
-			DataDir: env("RUVECTOR_DATA_DIR", "./data"),
+			DataDir: dataDir,
 		},
 		API: APIConfig{
 			Port:      envInt("API_PORT", 3101),
@@ -238,14 +257,14 @@ func Load() *Config {
 			OutputDir: env("PDF_OUTPUT_DIR", "./output/documents"),
 		},
 		Persistence: PersistenceConfig{
-			TasksFile:       env("TASKS_FILE", ".tasks.json"),
-			SettingsFile:    env("SETTINGS_FILE", ".settings.json"),
-			ProfilesFile:    env("PROFILES_FILE", ".profiles.json"),
-			ClientsFile:     env("CLIENTS_FILE", ".clients.json"),
-			TimeFile:        env("TIME_FILE", ".time-entries.json"),
-			LearningFile:    env("LEARNING_FILE", ".qtable.json"),
-			OcgFile:         env("OCG_FILE", ".ocg.json"),
-			JobsFile:        env("JOBS_FILE", ".jobs.json"),
+			TasksFile:       stateFile("TASKS_FILE", ".tasks.json"),
+			SettingsFile:    stateFile("SETTINGS_FILE", ".settings.json"),
+			ProfilesFile:    stateFile("PROFILES_FILE", ".profiles.json"),
+			ClientsFile:     stateFile("CLIENTS_FILE", ".clients.json"),
+			TimeFile:        stateFile("TIME_FILE", ".time-entries.json"),
+			LearningFile:    stateFile("LEARNING_FILE", ".qtable.json"),
+			OcgFile:         stateFile("OCG_FILE", ".ocg.json"),
+			JobsFile:        stateFile("JOBS_FILE", ".jobs.json"),
 			PreBillsFile:    env("PREBILLS_FILE", "./data/prebills.json"),
 			CostFile:        env("COST_LOG_FILE", "./data/costs.jsonl"),
 			PlaybooksFile:   env("PLAYBOOKS_FILE", "./data/playbooks.json"),
@@ -272,7 +291,7 @@ func Load() *Config {
 		},
 		Audit: AuditConfig{
 			Enabled: envBool("AUDIT_ENABLED", true),
-			LogFile: env("AUDIT_LOG_FILE", "./audit.jsonl"),
+			LogFile: stateFile("AUDIT_LOG_FILE", "audit.jsonl"),
 		},
 		SearchTavily: os.Getenv("TAVILY_API_KEY"),
 		LogLevel:     env("LOG_LEVEL", "info"),
@@ -416,6 +435,16 @@ func Load() *Config {
 		RoundTimeoutRetryFactor: envFloat("ROUND_TIMEOUT_RETRY_FACTOR", 2.0),
 		ResumeRunningTasks:      envBool("RESUME_RUNNING_TASKS", false),
 	}
+
+	// The matter-budget store has no env var of its own: it sits next to the
+	// clients file (internal/api/matters.go), so it moved with it.
+	if os.Getenv("CLIENTS_FILE") == "" {
+		legacy = append(legacy, legacyStateFile{
+			Env: "CLIENTS_FILE", Legacy: ".matter-budgets.json",
+			Path: filepath.Join(filepath.Dir(c.Persistence.ClientsFile), ".matter-budgets.json"),
+		})
+	}
+	c.legacyState = legacy
 
 	return c
 }

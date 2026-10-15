@@ -78,6 +78,15 @@ func main() {
 
 	cfg := config.Load()
 
+	// One-time move of pre-data-dir state files (./.tasks.json, …) into the
+	// data dir. Must run before any store opens its file.
+	if _, err := config.MigrateLegacyStateFiles(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "biglaw: legacy state-file migration failed: %v\n"+
+			"Files that could not be moved were left where they were; move them into %s by hand "+
+			"or pin their locations with the named *_FILE env vars.\n", err, cfg.VectorDB.DataDir)
+		os.Exit(1)
+	}
+
 	// Self-imposed vendor breaker: refuse to start if the config couples the
 	// system to Anthropic or AWS without an explicit opt-in (ALLOW_ANTHROPIC /
 	// ALLOW_AWS). Using those services must be a deliberate, active effort.

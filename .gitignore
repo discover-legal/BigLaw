@@ -34,7 +34,8 @@ tmp/
 output/documents/
 *.bak
 
-# Runtime-generated data
+# Runtime-generated data — legacy working-directory locations. State now
+# defaults into data/ (moved there automatically on first start).
 audit.jsonl
 .tasks.json
 .settings.json
@@ -42,6 +43,9 @@ audit.jsonl
 .clients.json
 .time-entries.json
 .qtable.json
+.ocg.json
+.jobs.json
+.matter-budgets.json
 
 # RuVector persistent stores (created on first run)
 data/

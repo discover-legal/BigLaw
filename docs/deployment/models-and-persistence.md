@@ -42,7 +42,7 @@ order. Configure execution independently from the generic operations-job queue:
 ```bash
 QUEUE_CONCURRENCY=3   # active orchestrator tasks
 QUEUE_MAX_PENDING=1000
-TASKS_FILE=.tasks.json
+# TASKS_FILE defaults to <data dir>/.tasks.json (see "State files" below)
 ```
 
 Task snapshots are serialized by one writer directly to a temporary file and atomically
@@ -73,6 +73,30 @@ GET  /documents/export/:docId                render the document (text + images)
 
 Full configuration lives in `.env.example` (`MODEL_STACK`/`QWEN_*`, `DB_BACKEND`/`DATABASE_URL`,
 `BLOB_DIR`, `EXTRACT_VISION_*`).
+
+## State files
+
+All state lives under one data dir — `RUVECTOR_DATA_DIR`, default `./data` — so a single
+volume (the Docker stack's `biglaw-data`) holds everything, and the data dir's single-writer
+lock (`biglaw.lock`, see [Run modes](run-modes.md)) guards all of it.
+
+| File (in the data dir) | Override |
+|---|---|
+| `.tasks.json`, `.settings.json`, `.profiles.json`, `.clients.json` | `TASKS_FILE`, `SETTINGS_FILE`, `PROFILES_FILE`, `CLIENTS_FILE` |
+| `.time-entries.json`, `.qtable.json`, `.ocg.json`, `.jobs.json` | `TIME_FILE`, `LEARNING_FILE`, `OCG_FILE`, `JOBS_FILE` |
+| `audit.jsonl` | `AUDIT_LOG_FILE` |
+| `.matter-budgets.json` | follows `CLIENTS_FILE`'s directory |
+| `biglaw.db`, `costs.jsonl`, `agents.json`, `prebills.json`, `playbooks.json`, … | `SQLITE_PATH`, `COST_LOG_FILE`, … (these always lived in `./data`) |
+
+**Upgrading from a build that kept state in the working directory** (`./.tasks.json`,
+`./.profiles.json`, `./audit.jsonl`, …): on its first start as the data-dir owner, BigLaw
+moves each legacy file to its new default and logs every move. The migration is idempotent
+and conservative — a file is moved only when its env var is unset, the legacy file exists
+and the data-dir file does not; if both exist the data-dir copy wins and the legacy file is
+left untouched with a warning. Across filesystems it falls back to copy + fsync + atomic
+rename + remove. An explicit `*_FILE` override (including one copied from an old
+`.env.example`, e.g. `TASKS_FILE=.tasks.json`) always wins and is never migrated — delete
+it from `.env` to adopt the new default.
 
 ## Vector storage
 

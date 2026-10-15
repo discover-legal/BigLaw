@@ -507,6 +507,11 @@ type Config struct {
 	LPM            LPMConfig
 	Monitors       MonitorsConfig
 	Resilience     ResilienceConfig
+
+	// legacyState lists the state files that took their default (no env
+	// override) and whose pre-data-dir default was a file in the working
+	// directory. Populated by Load, consumed by MigrateLegacyStateFiles.
+	legacyState []legacyStateFile
 }
 
 // ─── Run-hygiene resilience (round-timeout retry + boot task quarantine) ─────
