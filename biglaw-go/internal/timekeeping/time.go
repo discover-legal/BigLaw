@@ -34,7 +34,7 @@ type TimeFilter struct {
 // TimeStore holds all time entries in memory and persists them to a JSON file.
 type TimeStore struct {
 	mu        sync.Mutex
-	persistMu sync.Mutex // serialises concurrent fire-and-forget persists
+	persistMu sync.Mutex // serialises concurrent persists (every mutator persists synchronously)
 	entries   []types.TimeEntry
 	path      string
 }
@@ -78,27 +78,57 @@ func (s *TimeStore) Open(entry types.TimeEntry) types.TimeEntry {
 // Close marks the entry with the given ID as finished and calculates billing
 // fields. Returns nil if the ID is not found.
 func (s *TimeStore) Close(id string) *types.TimeEntry {
+	return s.finish(id, "")
+}
+
+// CloseNonBillable finishes the entry like Close but writes it off: the
+// elapsed time is kept for the record, while BillingUnits/BillingAmountUsd
+// are zeroed and NonBillable is set with the reason. Used for AI runs that
+// failed, panicked or were interrupted — the client must not pay for them.
+func (s *TimeStore) CloseNonBillable(id, reason string) *types.TimeEntry {
+	if reason == "" {
+		reason = "non-billable"
+	}
+	return s.finish(id, reason)
+}
+
+func (s *TimeStore) finish(id, nonBillableReason string) *types.TimeEntry {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	var out *types.TimeEntry
 	for i := range s.entries {
 		e := &s.entries[i]
 		if e.ID != id {
 			continue
 		}
-		now := time.Now()
-		e.EndedAt = &now
-		e.DurationMs = now.Sub(e.StartedAt).Milliseconds()
-		// Billing units: ceil(durationMs / 360_000)  (1 unit = 0.1 h = 6 min)
-		e.BillingUnits = int(math.Ceil(float64(e.DurationMs) / 360_000.0))
-		if e.BillingRate != nil && *e.BillingRate > 0 {
-			amount := float64(e.BillingUnits) * (*e.BillingRate) / 10.0
-			e.BillingAmountUsd = &amount
+		if e.EndedAt == nil {
+			now := time.Now()
+			e.EndedAt = &now
+			e.DurationMs = now.Sub(e.StartedAt).Milliseconds()
+		}
+		if nonBillableReason != "" {
+			e.NonBillable = true
+			e.NonBillableReason = nonBillableReason
+		}
+		if e.NonBillable {
+			e.BillingUnits = 0
+			e.BillingAmountUsd = nil
+		} else {
+			// Billing units: ceil(durationMs / 360_000)  (1 unit = 0.1 h = 6 min)
+			e.BillingUnits = int(math.Ceil(float64(e.DurationMs) / 360_000.0))
+			if e.BillingRate != nil && *e.BillingRate > 0 {
+				amount := float64(e.BillingUnits) * (*e.BillingRate) / 10.0
+				e.BillingAmountUsd = &amount
+			}
 		}
 		cp := *e
-		go s.persist()
-		return &cp
+		out = &cp
+		break
 	}
-	return nil
+	s.mu.Unlock()
+	if out != nil {
+		s.persist()
+	}
+	return out
 }
 
 // GetByID returns a pointer to a copy of the entry with the given ID, or nil.
@@ -229,11 +259,12 @@ func (s *TimeStore) MarkClioSynced(id string) {
 
 // SplitClioUnsynced partitions billable entries for a Clio sync run: entries
 // with a positive duration that have never been synced go to toSync; already
-// synced ones are counted as skipped. Open entries (durationMs <= 0) are
-// excluded from both, mirroring the TS /time-entries/sync-to-clio filter.
+// synced ones are counted as skipped. Open entries (durationMs <= 0) and
+// non-billable entries (failed/interrupted AI runs) are excluded from both,
+// mirroring the TS /time-entries/sync-to-clio filter.
 func SplitClioUnsynced(entries []types.TimeEntry) (toSync []types.TimeEntry, skipped int) {
 	for _, e := range entries {
-		if e.DurationMs <= 0 {
+		if e.DurationMs <= 0 || e.NonBillable {
 			continue
 		}
 		if e.ClioSyncedAt != "" {

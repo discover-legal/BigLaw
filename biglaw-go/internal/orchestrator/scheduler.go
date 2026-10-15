@@ -331,7 +331,7 @@ func (o *Orchestrator) executeQueuedTask(task *types.Task) {
 				t.UpdatedAt = time.Now()
 			})
 			if task.ActiveTimeEntryID != "" {
-				o.time.Close(task.ActiveTimeEntryID)
+				o.time.CloseNonBillable(task.ActiveTimeEntryID, "task failed: worker panic")
 				o.update(task, func(t *types.Task) { t.ActiveTimeEntryID = "" })
 			}
 			emitProgress(task.ID, "failed", map[string]interface{}{"error": "task worker panic"})

@@ -465,6 +465,11 @@ type TimeEntry struct {
 	UTBMSActivityCode string          `json:"utbmsActivityCode,omitempty"`
 	OcgSuggestions    []OcgSuggestion `json:"ocgSuggestions,omitempty"`
 	OcgCheckedAt      string          `json:"ocgCheckedAt,omitempty"`
+	// NonBillable marks an entry that records elapsed time but must never be
+	// invoiced (e.g. a failed or interrupted AI run). Its BillingUnits and
+	// BillingAmountUsd are zero/nil, and LEDES, pre-bills and Clio sync skip it.
+	NonBillable       bool   `json:"nonBillable,omitempty"`
+	NonBillableReason string `json:"nonBillableReason,omitempty"`
 }
 
 // ─── Lawyer profiles ──────────────────────────────────────────────────────────

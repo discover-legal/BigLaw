@@ -167,7 +167,8 @@ func ParseLEDES(text string) []types.InvoiceLineItem {
 		if l == "" || strings.HasPrefix(strings.ToUpper(l), "LEDES") {
 			continue
 		}
-		lines = append(lines, l)
+		// "[]" terminates every LEDES 1998B line; it is not field data.
+		lines = append(lines, strings.TrimSpace(strings.TrimSuffix(l, "[]")))
 	}
 	if len(lines) == 0 {
 		return items
@@ -179,7 +180,11 @@ func ParseLEDES(text string) []types.InvoiceLineItem {
 	// trusting position. Accept the LEDES1998B aliases
 	// LINE_ITEM_NUMBER_OF_UNITS / LINE_ITEM_AM_BILLED so a file produced by
 	// ExportLedes1998B round-trips without silently losing units and amount.
-	colMap := []int{8, 10, 15, 16, 11, 13, 17, 19, 18, 21}
+	// Headerless default = LEDES 1998B positions (see Ledes1998BFields):
+	// LINE_ITEM_NUMBER 8, LINE_ITEM_DATE 13, TIMEKEEPER_NAME 21,
+	// TIMEKEEPER_CLASSIFICATION 22, TASK 14, ACTIVITY 16, DESCRIPTION 18,
+	// NUMBER_OF_UNITS 10, UNIT_COST 20, LINE_ITEM_TOTAL 12.
+	colMap := []int{8, 13, 21, 22, 14, 16, 18, 10, 20, 12}
 	startIdx := 0
 	firstLower := strings.ToLower(lines[0])
 	if strings.Contains(firstLower, "line_item") || strings.Contains(firstLower, "timekeeper") || strings.Contains(firstLower, "invoice") {

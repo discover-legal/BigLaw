@@ -43,7 +43,7 @@ func (o *Orchestrator) quarantineStaleTask(t *types.Task) bool {
 	t.Error = fmt.Sprintf("interrupted: backend restarted while task was %s; resubmit to rerun", prev)
 	t.UpdatedAt = time.Now()
 	if t.ActiveTimeEntryID != "" && o.time != nil {
-		o.time.Close(t.ActiveTimeEntryID)
+		o.time.CloseNonBillable(t.ActiveTimeEntryID, "task interrupted by backend restart")
 		t.ActiveTimeEntryID = ""
 	}
 

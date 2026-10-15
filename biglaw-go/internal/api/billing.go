@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"mime/multipart"
 	"net/http"
+	"os"
 	"regexp"
 	"sort"
 	"strings"
@@ -125,7 +126,7 @@ func (s *Server) handleCreatePreBill(c *gin.Context) {
 	})
 	closed := entries[:0]
 	for _, e := range entries {
-		if e.EndedAt != nil {
+		if e.EndedAt != nil && !e.NonBillable {
 			closed = append(closed, e)
 		}
 	}
@@ -415,7 +416,7 @@ func (s *Server) handleExportTimeLedes(c *gin.Context) {
 	})
 	closed := entries[:0]
 	for _, e := range entries {
-		if e.EndedAt != nil {
+		if e.EndedAt != nil && !e.NonBillable {
 			closed = append(closed, e)
 		}
 	}
@@ -429,7 +430,15 @@ func (s *Server) handleExportTimeLedes(c *gin.Context) {
 		invoice = ref + "-" + time.Now().UTC().Format("2006-01-02")
 	}
 
-	ledes := billing.ExportLedes1998B(closed, invoice)
+	opts := billing.LedesOptions{
+		InvoiceNumber: invoice,
+		// Firm tax / e-billing ID for LAW_FIRM_ID; blank when unset.
+		LawFirmID: os.Getenv("LEDES_LAW_FIRM_ID"),
+	}
+	if s.profiles != nil {
+		opts.Profile = s.profiles.Get
+	}
+	ledes := billing.ExportLedes1998B(closed, opts)
 	safe := billingFilenameRe.ReplaceAllString(invoice, "_")
 	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", safe+".ledes"))
 	c.Data(http.StatusOK, "application/edi-x12", []byte(ledes))

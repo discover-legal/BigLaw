@@ -4,18 +4,23 @@
 package timekeeping
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
 
 func TestSplitClioUnsynced(t *testing.T) {
 	entries := []types.TimeEntry{
-		{ID: "open", DurationMs: 0},                                          // still open — excluded entirely
+		{ID: "open", DurationMs: 0}, // still open — excluded entirely
 		{ID: "synced", DurationMs: 360_000, ClioSyncedAt: "2026-01-01T00:00:00Z"}, // already synced — skipped
-		{ID: "fresh-1", DurationMs: 360_000},                                 // needs sync
-		{ID: "fresh-2", DurationMs: 90_000},                                  // needs sync
-		{ID: "negative", DurationMs: -1},                                     // defensive — excluded
+		{ID: "fresh-1", DurationMs: 360_000},                                      // needs sync
+		{ID: "fresh-2", DurationMs: 90_000},                                       // needs sync
+		{ID: "negative", DurationMs: -1},                                          // defensive — excluded
+		{ID: "failed-run", DurationMs: 360_000, NonBillable: true},                // written off — excluded
 	}
 
 	toSync, skipped := SplitClioUnsynced(entries)
@@ -60,5 +65,41 @@ func TestClioDurationHours(t *testing.T) {
 				t.Errorf("ClioDurationHours() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// A failed/interrupted AI run keeps its elapsed time but is written off, and
+// the write-off is on disk when CloseNonBillable returns (no async persist).
+func TestCloseNonBillable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "time.json")
+	s := NewTimeStore()
+	if err := s.Init(path); err != nil {
+		t.Fatal(err)
+	}
+	rate := 600.0
+	e := s.Open(types.TimeEntry{ProfileID: "p", TaskID: "t", Event: types.TimeEventTaskRun,
+		StartedAt: time.Now().Add(-10 * time.Minute), BillingRate: &rate})
+	got := s.CloseNonBillable(e.ID, "task failed: boom")
+	if got == nil || !got.NonBillable || got.BillingUnits != 0 || got.BillingAmountUsd != nil ||
+		got.DurationMs < 9*60*1000 || got.EndedAt == nil || got.NonBillableReason != "task failed: boom" {
+		t.Fatalf("CloseNonBillable = %+v", got)
+	}
+	// A later Close must not resurrect billing on a written-off entry.
+	if again := s.Close(e.ID); again.BillingUnits != 0 || !again.NonBillable {
+		t.Fatalf("re-Close re-billed a written-off entry: %+v", again)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var onDisk []types.TimeEntry
+	if err := json.Unmarshal(data, &onDisk); err != nil || len(onDisk) != 1 || !onDisk[0].NonBillable {
+		t.Fatalf("persisted state = %s (%v)", data, err)
+	}
+
+	// The billable path still bills: 10 min → 2 units.
+	e2 := s.Open(types.TimeEntry{ProfileID: "p", StartedAt: time.Now().Add(-10 * time.Minute), BillingRate: &rate})
+	if c := s.Close(e2.ID); c.BillingUnits != 2 || c.BillingAmountUsd == nil || *c.BillingAmountUsd != 120 || c.NonBillable {
+		t.Fatalf("Close = %+v", c)
 	}
 }

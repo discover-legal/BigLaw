@@ -17,6 +17,7 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/strutil"
 )
 
+// taskCodes is the ABA/UTBMS Litigation Code Set (L-series) task list.
 var taskCodes = []string{
 	"L110 Fact Investigation/Development",
 	"L120 Analysis/Strategy",
@@ -24,13 +25,13 @@ var taskCodes = []string{
 	"L140 Document/File Management",
 	"L150 Budgeting",
 	"L160 Settlement/Non-Binding ADR",
-	"L190 Other Case Assessment",
+	"L190 Other Case Assessment, Development and Administration",
 	"L210 Pleadings",
-	"L220 Preliminary Injunctions/TROs",
+	"L220 Preliminary Injunctions/Provisional Remedies",
 	"L230 Court Mandated Conferences",
 	"L240 Dispositive Motions",
-	"L250 Other Written Motions/Submissions",
-	"L260 Class Action Certification",
+	"L250 Other Written Motions and Submissions",
+	"L260 Class Action Certification and Notice",
 	"L310 Written Discovery",
 	"L320 Document Production",
 	"L330 Depositions",
@@ -39,28 +40,29 @@ var taskCodes = []string{
 	"L390 Other Discovery",
 	"L410 Fact Witnesses",
 	"L420 Expert Witnesses",
-	"L430 Trial Preparation",
-	"L440 Trial",
-	"L450 Post-Trial Motions",
-	"L460 Appellate Proceedings",
-	"L510 Project Management",
-	"L520 Litigation Counseling",
-	"L530 Contract/Agreement Drafting",
-	"L540 Due Diligence",
-	"L550 Regulatory Compliance",
+	"L430 Written Motions and Submissions",
+	"L440 Other Trial Preparation and Support",
+	"L450 Trial and Hearing Attendance",
+	"L460 Post-Trial Motions and Submissions",
+	"L470 Enforcement",
+	"L510 Appellate Motions and Submissions",
+	"L520 Appellate Briefs",
+	"L530 Oral Argument",
 }
 
+// activityCodes is the UTBMS activity (A-series) list.
 var activityCodes = []string{
-	"A101 Plan and Prepare",
+	"A101 Plan and prepare for",
 	"A102 Research",
-	"A103 Draft/Revise",
-	"A104 Review/Analyze",
+	"A103 Draft/revise",
+	"A104 Review/analyze",
 	"A105 Communicate (in firm)",
 	"A106 Communicate (with client)",
-	"A107 Communicate (other outside)",
-	"A108 Appear for/Attend",
-	"A109 Obtain/compile/index/organize",
-	"A110 Other",
+	"A107 Communicate (other outside counsel)",
+	"A108 Communicate (other external)",
+	"A109 Appear for/attend",
+	"A110 Manage data/files",
+	"A111 Other",
 }
 
 var validTaskCodes = func() map[string]bool {
@@ -93,7 +95,7 @@ func NewUTBMSClassifier(provider providers.Provider, haikuModel string) *UTBMSCl
 // Classify assigns task and activity codes to a time entry description.
 func (c *UTBMSClassifier) Classify(description, eventType string) (taskCode, activityCode string) {
 	const fallbackTask = "L190"
-	const fallbackActivity = "A110"
+	const fallbackActivity = "A111"
 
 	desc := sanitizeDesc(description)
 	evt := sanitizeDesc(eventType)
