@@ -26,6 +26,7 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/strutil"
 	"github.com/discover-legal/biglaw-go/internal/timekeeping"
 	"github.com/discover-legal/biglaw-go/internal/types"
+	"github.com/discover-legal/biglaw-go/internal/version"
 )
 
 // MCPServer wraps the BigLaw subsystems and exposes them as MCP tools.
@@ -56,7 +57,7 @@ func New(
 
 	s.srv = server.NewMCPServer(
 		"biglaw",
-		"0.5.0",
+		version.Version,
 		server.WithToolCapabilities(false),
 		server.WithInstructions(
 			"BigLaw multi-agent legal AI platform. "+
