@@ -545,8 +545,9 @@ func (s *Store) writeLoop() {
 
 func (s *Store) appendEntry(entry CostEntry) {
 	raw, _ := json.Marshal(entry)
-	f, err := os.OpenFile(s.file, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(s.file, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err == nil {
+		_ = f.Chmod(0o600) // tighten a file created by an older build at 0644
 		fmt.Fprintln(f, string(raw))
 		f.Close()
 	}

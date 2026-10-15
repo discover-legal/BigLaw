@@ -99,11 +99,12 @@ func (s *RoutedStore) Append(r RoutedEmail) error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(s.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(s.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
+	_ = f.Chmod(0o600) // tighten a file created by an older build at 0644
 	if _, err := f.Write(append(line, '\n')); err != nil {
 		return err
 	}

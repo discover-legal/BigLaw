@@ -201,7 +201,7 @@ func (b *Backfill) saveCursor(c backfillCursor) {
 		return
 	}
 	tmp := b.cfg.CursorFile + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return
 	}
 	_ = os.Rename(tmp, b.cfg.CursorFile)
