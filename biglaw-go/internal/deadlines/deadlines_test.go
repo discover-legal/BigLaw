@@ -45,7 +45,7 @@ func findRule(t *testing.T, r *types.DeadlineResult, id string) types.ComputedDe
 func TestFRCPRollForward(t *testing.T) {
 	e := shippedEngine(t)
 	cases := []struct {
-		name, trigger, date, rule string
+		name, trigger, date, rule  string
 		wantDue, wantRaw, wantWarn string
 	}{
 		{"Christmas Friday 2026", "complaint_served", "2026-12-04", "frcp-answer-to-complaint", "2026-12-28", "2026-12-25", "2026-12-23"},
