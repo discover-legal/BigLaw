@@ -1,0 +1,22 @@
+Project Lantern - financial data for merger-control analysis (most recent completed fiscal year ended December 31 2024; prepared by each party's finance team)
+Party,Metric,Geography,Value,Unit,Notes
+Altamira Health Technologies Inc.,Annual net sales,Worldwide (consolidated),3100000000,USD,Audited consolidated
+Altamira Health Technologies Inc.,Total assets,Worldwide (consolidated),4650000000,USD,Audited consolidated balance sheet
+Altamira Health Technologies Inc.,Turnover,Worldwide,2810,EUR million,Converted at ECB average 2024 rate
+Altamira Health Technologies Inc.,Turnover,EU total,1200,EUR million,
+Altamira Health Technologies Inc.,Turnover,Germany,410,EUR million,
+Altamira Health Technologies Inc.,Turnover,France,300,EUR million,
+Altamira Health Technologies Inc.,Turnover,Netherlands,90,EUR million,
+Altamira Health Technologies Inc.,Turnover,Italy,150,EUR million,
+Altamira Health Technologies Inc.,Turnover,Other EU Member States,250,EUR million,
+Sorell Diagnostics B.V.,Annual net sales,Worldwide (consolidated),337000000,USD,Audited consolidated
+Sorell Diagnostics B.V.,Total assets,Worldwide (consolidated),241000000,USD,Audited consolidated balance sheet
+Sorell Diagnostics B.V.,Sales in or into the United States,United States,138000000,USD,Includes sales by Sorell Diagnostics USA Inc. and direct export sales from Eindhoven
+Sorell Diagnostics B.V.,Assets located in the United States,United States,22000000,USD,Inventory and leasehold improvements of Sorell Diagnostics USA Inc.
+Sorell Diagnostics B.V.,Turnover,Worldwide,310,EUR million,
+Sorell Diagnostics B.V.,Turnover,EU total,164,EUR million,
+Sorell Diagnostics B.V.,Turnover,Germany,62,EUR million,
+Sorell Diagnostics B.V.,Turnover,France,31,EUR million,
+Sorell Diagnostics B.V.,Turnover,Netherlands,48,EUR million,
+Sorell Diagnostics B.V.,Turnover,Italy,9,EUR million,
+Sorell Diagnostics B.V.,Turnover,Other EU Member States,14,EUR million,

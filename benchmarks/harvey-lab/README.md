@@ -105,8 +105,10 @@ eval and dashboard tooling find them without flags.
    in the synthesis), `.pdf` via PyMuPDF, everything else as text.
 5. **Writes the run dir**: `config.json`, `transcript.jsonl` (driver-level event log),
    `metrics.json` (token counts and cost from `GET /tasks/:id/cost`, duration, document
-   counts, plus a `biglaw` block with task IDs, gate resolutions, findings count), and
-   `output/` with the deliverables.
+   counts, plus a `biglaw` block with task IDs, gate resolutions, findings count),
+   `output/` with the deliverables, `biglaw_tasks.json` (findings with citations, synthesis,
+   grounding alert — written for failed tasks too) and `documents.json` (BigLaw doc id →
+   source filename). The last two let `../proof-runs` re-verify every cited quote offline.
 
 ## Multi-deliverable tasks (`--split-mode`)
 

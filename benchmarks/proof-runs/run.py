@@ -1,0 +1,161 @@
+#!/usr/bin/env python3
+"""BigLaw proof runs — CLI.
+
+    python run.py list                         # registered matters + criteria counts
+    python run.py validate                     # fixture + answer-key integrity (no backend)
+    python run.py selftest                     # score synthetic oracle/degraded/empty runs (no backend)
+    python run.py drive [--matter ID ...] --model-dir biglaw-haiku   # live backend: run + score
+    python run.py score --matter ID RUN_DIR    # (re)score an existing run dir
+    python run.py smoke                        # live backend against a mock model server (plumbing only)
+
+Results land in results/<task>/<model-dir>/<timestamp>/ (override --results-dir);
+aggregate with ../harvey-lab/compare.py --results-dir results.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+import tempfile
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+
+from proofrun import mock  # noqa: E402
+from proofrun.matter import load_all, load_matter  # noqa: E402
+from proofrun.score import score_run, summary_line  # noqa: E402
+from proofrun.validate import validate_matter  # noqa: E402
+
+
+def cmd_list(a) -> int:
+    for m in load_all(a.matter):
+        k = m.key
+        print(f"{m.id}  [{m.entry['practice']}]  docs={len(m.documents)} facts={len(k.get('facts', []))} "
+              f"traps={len(k.get('traps', []))} dispositions={len(k.get('dispositions', []))}  "
+              f"deliverables={','.join(m.task['deliverables'])}")
+    return 0
+
+
+def cmd_validate(a) -> int:
+    bad = 0
+    for m in load_all(a.matter):
+        errs = validate_matter(m)
+        print(f"{'FAIL' if errs else 'ok  '}  {m.id}")
+        for e in errs:
+            print(f"      - {e}")
+        bad += bool(errs)
+    return 1 if bad else 0
+
+
+def selftest(matters, keep: Path | None = None) -> list[str]:
+    """Score the three synthetic profiles per matter and check exact expectations."""
+    problems = []
+    root = keep or Path(tempfile.mkdtemp(prefix="proofrun-selftest-"))
+    for m in matters:
+        for profile in ("oracle", "degraded", "empty"):
+            rd = mock.build(m, profile, root / m.id / f"mock-{profile}" / "selftest")
+            s = score_run(m, rd)
+            a, g = s["accuracy"], s["grounding"]
+            print(f"  [{profile:8}] {summary_line(s)}")
+            if profile == "oracle":
+                if not s["all_pass"]:
+                    fails = [r["id"] for r in s["criteria_results"] if r["verdict"] != "pass"]
+                    problems.append(f"{m.id} oracle: failing criteria {fails}")
+                if a["facts_grounded"] != a["facts_total"]:
+                    problems.append(f"{m.id} oracle: grounded {a['facts_grounded']}/{a['facts_total']}")
+                if g["citations"]["verified"] != g["citations_total"]:
+                    problems.append(f"{m.id} oracle: citations {g['citations']}")
+            elif profile == "degraded":
+                exp = mock.expected_degraded(m)
+                got = {
+                    "facts_detected": a["facts_detected"], "facts_grounded": a["facts_grounded"],
+                    "traps_passed": a["traps_passed"], "dispositions_correct": a["dispositions_correct"],
+                    "citations_verified": g["citations"]["verified"],
+                    "citations_misattributed": g["citations"]["misattributed"],
+                    "citations_unverified": g["citations"]["unverified"],
+                }
+                for k2, v in exp.items():
+                    if got[k2] != v:
+                        problems.append(f"{m.id} degraded: {k2} expected {v}, got {got[k2]}")
+            else:
+                if a["facts_detected"] or a["traps_passed"] != a["traps_total"] or a["dispositions_correct"]:
+                    problems.append(f"{m.id} empty: scorer credited an empty deliverable ({a})")
+    return problems
+
+
+def cmd_selftest(a) -> int:
+    matters = load_all(a.matter)
+    keep = Path(a.keep).resolve() if a.keep else None
+    problems = selftest(matters, keep)
+    for p in problems:
+        print(f"FAIL {p}")
+    print("selftest:", "FAIL" if problems else "ok")
+    return 1 if problems else 0
+
+
+def cmd_score(a) -> int:
+    m = load_matter(a.matter[0])
+    s = score_run(m, Path(a.run_dir).resolve())
+    print(summary_line(s))
+    if a.json:
+        print(json.dumps(s, indent=2))
+    return 0
+
+
+def cmd_drive(a) -> int:
+    from proofrun.drive import drive
+    results = drive(load_all(a.matter), a)
+    print("\n=== summary ===")
+    for s in results:
+        print(f"error: {s['task']}: {s['error']}" if "error" in s else summary_line(s))
+    return 1 if any("error" in s for s in results) else 0
+
+
+def cmd_smoke(a) -> int:
+    from proofrun.smoke import smoke
+    return smoke(a)
+
+
+def main(argv=None) -> int:
+    p = argparse.ArgumentParser(description="BigLaw multi-practice proof runs")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    def matter_arg(sp, required=False):
+        sp.add_argument("--matter", action="append", required=required,
+                        help="matter id or slug from matters.json (repeatable; default all)")
+
+    sp = sub.add_parser("list"); matter_arg(sp); sp.set_defaults(fn=cmd_list)
+    sp = sub.add_parser("validate"); matter_arg(sp); sp.set_defaults(fn=cmd_validate)
+    sp = sub.add_parser("selftest"); matter_arg(sp)
+    sp.add_argument("--keep", help="write the synthetic run dirs here instead of a temp dir")
+    sp.set_defaults(fn=cmd_selftest)
+    sp = sub.add_parser("score"); matter_arg(sp, required=True)
+    sp.add_argument("run_dir"); sp.add_argument("--json", action="store_true"); sp.set_defaults(fn=cmd_score)
+
+    for name, fn in (("drive", cmd_drive), ("smoke", cmd_smoke)):
+        sp = sub.add_parser(name); matter_arg(sp)
+        sp.add_argument("--api", default="http://localhost:3101", help="BigLaw backend (Docker stack: http://localhost:3102)")
+        sp.add_argument("--model-dir", default="biglaw" if name == "drive" else "smoke-mock",
+                        help="run-id model segment, e.g. biglaw-haiku / biglaw-qwen14b")
+        sp.add_argument("--results-dir", default=str(HERE / "results"))
+        sp.add_argument("--workflow", help="override the matter's workflow")
+        sp.add_argument("--jurisdiction", help="override the matter's jurisdiction tag")
+        sp.add_argument("--split-mode", choices=["markers", "per-task", "duplicate"])
+        sp.add_argument("--gate-policy", choices=["approve", "reject"], default="approve")
+        sp.add_argument("--poll", type=float, default=10.0)
+        sp.add_argument("--timeout", type=float, default=4 * 3600.0, help="per-task timeout seconds")
+        sp.set_defaults(fn=fn)
+    smoke_p = sub.choices["smoke"]
+    smoke_p.add_argument("--start-backend", action="store_true",
+                         help="build and start a throwaway native backend wired to the mock model server")
+    smoke_p.add_argument("--mock-port", type=int, default=18734)
+    smoke_p.add_argument("--backend-port", type=int, default=3199)
+
+    a = p.parse_args(argv)
+    return a.fn(a)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
