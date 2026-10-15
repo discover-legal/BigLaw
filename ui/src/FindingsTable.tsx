@@ -4,9 +4,18 @@ import {
   getSortedRowModel, useReactTable, type SortingState,
 } from "@tanstack/react-table";
 import { motion } from "framer-motion";
-import type { Finding, Task, GateRequest, Notify } from "./types";
+import type { Finding, Task, GateRequest, Notify, TaskStatus } from "./types";
 import { ConfidenceBar, CitationChips } from "./primitives";
 import { api } from "./api";
+
+/** Empty-findings copy for runs that are not (or no longer) deliberating. */
+const EMPTY_FINDINGS: Partial<Record<TaskStatus, string>> = {
+  failed: "No findings — this run failed before producing any. See the error above.",
+  interrupted: "No findings — this run was interrupted by a server restart. Resubmit it to continue.",
+  complete: "This run completed without findings.",
+  queued: "Queued — findings appear once the bench starts deliberating.",
+  pending: "Queued — findings appear once the bench starts deliberating.",
+};
 
 const col = createColumnHelper<Finding>();
 
@@ -156,7 +165,7 @@ export function FindingsTable({ task, onChange, notify }: {
   });
 
   if (!task.findings.length) {
-    return <div className="placeholder">No findings yet — agents are still deliberating.</div>;
+    return <div className="placeholder">{EMPTY_FINDINGS[task.status] ?? "No findings yet — agents are still deliberating."}</div>;
   }
 
   const gateCount = gateByFinding.size;

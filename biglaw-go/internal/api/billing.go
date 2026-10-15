@@ -718,12 +718,13 @@ func (s *Server) handleGetOcg(c *gin.Context) {
 		return
 	}
 	s.billingInit()
-	doc := billingOcg.GetByClient(c.Param("id"))
-	if doc == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "No OCG document found for this client"})
+	if s.clients.Get(c.Param("id")) == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Client not found"})
 		return
 	}
-	c.JSON(http.StatusOK, doc)
+	// A client without OCGs is a normal state, not a missing resource:
+	// 200 with a null body (the UI renders the "ingest OCG" form).
+	c.JSON(http.StatusOK, billingOcg.GetByClient(c.Param("id")))
 }
 
 func (s *Server) handleDeleteOcg(c *gin.Context) {

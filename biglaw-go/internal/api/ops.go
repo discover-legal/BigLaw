@@ -57,6 +57,7 @@ func (s *Server) registerOpsRoutes(r *gin.Engine) {
 	r.GET("/dockets/alerts/stream", s.handleDocketAlertStream)
 
 	// ── Regulatory pulse ──────────────────────────────────────────────────
+	r.GET("/regulatory/status", s.handleRegulatoryStatus)
 	r.GET("/regulatory/alerts/stream", s.handleRegulatoryAlertStream)
 	r.POST("/regulatory/check-now", s.handleRegulatoryCheckNow)
 
@@ -450,6 +451,17 @@ func (s *Server) handleDocketAlertStream(c *gin.Context) {
 }
 
 // ─── Regulatory pulse ─────────────────────────────────────────────────────────
+
+// handleRegulatoryStatus lets clients check the capability before opening
+// the alert stream (which answers 503 when the pulse is off — a browser
+// EventSource then logs a console error on every page view).
+func (s *Server) handleRegulatoryStatus(c *gin.Context) {
+	if !requirePartner(c) {
+		return
+	}
+	m, _, err := s.opsRegulatory()
+	c.JSON(http.StatusOK, gin.H{"enabled": err == nil && opsRegPulseEnabled(m)})
+}
 
 func (s *Server) handleRegulatoryAlertStream(c *gin.Context) {
 	if !requirePartner(c) {

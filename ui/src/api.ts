@@ -177,7 +177,7 @@ export const api = {
   getProfileCost: (id: string) => fetch(`/profiles/${id}/cost`).then(json<{ profileId: string; summary: CostSummary; entries: unknown[] }>),
 
   // OCG
-  getClientOcg: (clientId: string) => fetch(`/clients/${clientId}/ocg`).then(json<OcgDocument>),
+  getClientOcg: (clientId: string) => fetch(`/clients/${clientId}/ocg`).then(json<OcgDocument | null>),
   ingestClientOcg: (clientId: string, body: { title: string; text: string }) =>
     fetch(`/clients/${clientId}/ocg`, POST(body)).then(json<{ ocg: OcgDocument; ruleCount: number }>),
   uploadClientOcg: (clientId: string, title: string, file: File) => {
@@ -269,6 +269,7 @@ export const api = {
   unwatchDocket: (matterNumber: string) =>
     fetch(`/dockets/watch/${encodeURIComponent(matterNumber)}`, { method: "DELETE" }).then((r) => json<{ ok: true }>(r)),
   docketCheckNow: () => fetch("/dockets/check-now", POST({})).then(json<{ ok: true; watching: number }>),
+  regulatoryStatus: () => fetch("/regulatory/status").then(json<{ enabled: boolean }>),
   regulatoryCheckNow: () =>
     fetch("/regulatory/check-now", POST({})).then(json<{ checked: number; alerts: RegulationAlert[] }>),
 

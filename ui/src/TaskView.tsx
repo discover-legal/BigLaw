@@ -259,7 +259,11 @@ function RoundCard({ round, defaultOpen, nameOf }: {
 
 function RoundsPanel({ task, agentNames }: { task: Task; agentNames: Map<string, string> }) {
   const nameOf = useAgentNames(task, agentNames);
-  if (!task.rounds.length) return <div className="placeholder">No rounds executed yet.</div>;
+  if (!task.rounds.length) {
+    return <div className="placeholder">{task.status === "failed" || task.status === "interrupted"
+      ? "No rounds completed before the run stopped."
+      : "No rounds executed yet."}</div>;
+  }
   const lastIdx = task.rounds.length - 1;
   return (
     <div className="rounds">
