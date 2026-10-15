@@ -13,7 +13,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -30,6 +29,7 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/budget"
 	"github.com/discover-legal/biglaw-go/internal/dockets"
 	"github.com/discover-legal/biglaw-go/internal/graph"
+	"github.com/discover-legal/biglaw-go/internal/jsonsafe"
 	"github.com/discover-legal/biglaw-go/internal/knowledge"
 	"github.com/discover-legal/biglaw-go/internal/memory"
 	"github.com/discover-legal/biglaw-go/internal/queue"
@@ -514,7 +514,7 @@ func opsStreamSSE[T any](c *gin.Context, ch <-chan T) {
 			if !ok {
 				return
 			}
-			raw, _ := json.Marshal(v)
+			raw, _ := jsonsafe.Marshal(v)
 			io.WriteString(c.Writer, "data: "+string(raw)+"\n\n")
 			flush()
 		case <-time.After(30 * time.Second):
