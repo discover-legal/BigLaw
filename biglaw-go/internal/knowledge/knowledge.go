@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/discover-legal/biglaw-go/internal/audit"
+	"github.com/discover-legal/biglaw-go/internal/bm25"
 	"github.com/discover-legal/biglaw-go/internal/embeddings"
 	"github.com/discover-legal/biglaw-go/internal/integrity"
 	"github.com/discover-legal/biglaw-go/internal/store"
@@ -32,6 +33,9 @@ type Store struct {
 	// onIngest, when set, runs after each successful Ingest (outside the lock) so
 	// a downstream index — the hybrid RAG chunk store — can re-index the document.
 	onIngest func(docID, title, content string)
+	// lex is a BM25 index over title + content, kept in step with docs. It
+	// ranks Search when no embedder is available (local / offline installs).
+	lex *bm25.Index
 }
 
 // SetOnIngest registers a post-ingest callback (e.g. the RAG chunk indexer)
@@ -64,13 +68,13 @@ func (s *Store) SetOnIngest(f func(docID, title, content string)) {
 }
 
 func NewStore(embedC *embeddings.Client) *Store {
-	return &Store{embedC: embedC}
+	return &Store{embedC: embedC, lex: bm25.New()}
 }
 
 // NewStoreWithRepo wires a durable repository. Call Load after construction to
 // hydrate the in-memory vector index from persisted documents.
 func NewStoreWithRepo(embedC *embeddings.Client, repo store.DocRepository) *Store {
-	return &Store{embedC: embedC, repo: repo}
+	return &Store{embedC: embedC, repo: repo, lex: bm25.New()}
 }
 
 func (s *Store) Init() error { return s.Load() }
@@ -100,6 +104,10 @@ func (s *Store) Load() error {
 	}
 	s.mu.Lock()
 	s.docs = docs
+	s.lex = bm25.New()
+	for _, d := range docs {
+		s.lex.Add(d.ID, lexText(d))
+	}
 	s.mu.Unlock()
 	slog.Info("knowledge: loaded documents from store", "backend", s.repo.Backend(), "count", len(docs))
 	return nil
@@ -168,6 +176,7 @@ func (s *Store) Ingest(ctx context.Context, doc types.Document) (*types.Document
 	if !replaced {
 		s.docs = append(s.docs, doc)
 	}
+	s.lex.Add(doc.ID, lexText(doc))
 	s.mu.Unlock()
 
 	// Re-index into the hybrid RAG chunk store outside the lock — it makes
@@ -226,11 +235,7 @@ func (s *Store) Search(query string, opts SearchOpts) ([]types.SearchResult, err
 	}
 	out := make([]types.SearchResult, k)
 	for i, c := range candidates[:k] {
-		excerpt := c.doc.Content
-		if len(excerpt) > 300 {
-			excerpt = strutil.Truncate(excerpt, 300) + "…"
-		}
-		out[i] = types.SearchResult{Document: c.doc, Score: c.score, Excerpt: excerpt}
+		out[i] = types.SearchResult{Document: c.doc, Score: c.score, Excerpt: excerptOf(c.doc.Content)}
 	}
 	return out, nil
 }
@@ -321,6 +326,13 @@ func (s *Store) ListVisible(ctx context.Context) ([]types.Document, error) {
 	return s.repo.List(ctx)
 }
 
+// fallback ranks documents lexically (BM25 over title + content) when the
+// query cannot be embedded. It used to return the first TopK documents in
+// insertion order with a constant 0.5 score — whatever the query — which the
+// UI rendered as "50% match" on every hit. Now only documents sharing a term
+// with the query are returned, best first, and Score is the BM25 score as a
+// fraction of the maximum attainable for this query (bm25.Index.MaxScore), so
+// it stays in [0, 1) and means the same thing on every query.
 func (s *Store) fallback(query string, opts SearchOpts) []types.SearchResult {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -328,21 +340,40 @@ func (s *Store) fallback(query string, opts SearchOpts) []types.SearchResult {
 	if k <= 0 {
 		k = 5
 	}
-	var out []types.SearchResult
-	for _, d := range s.docs {
-		if opts.OwnerID != "" && d.OwnerID != opts.OwnerID {
+	if k > maxTopK {
+		k = maxTopK
+	}
+	ceiling := s.lex.MaxScore(query)
+	if ceiling <= 0 {
+		return []types.SearchResult{}
+	}
+	byID := make(map[string]*types.Document, len(s.docs))
+	for i := range s.docs {
+		byID[s.docs[i].ID] = &s.docs[i]
+	}
+	// Rank the whole corpus, then apply the owner filter: filtering after a
+	// TopK cut could starve a lawyer of their own matches.
+	out := []types.SearchResult{}
+	for _, r := range s.lex.Search(query, len(s.docs)) {
+		d := byID[r.ID]
+		if d == nil || (opts.OwnerID != "" && d.OwnerID != opts.OwnerID) {
 			continue
 		}
-		excerpt := d.Content
-		if len(excerpt) > 300 {
-			excerpt = strutil.Truncate(excerpt, 300) + "…"
-		}
-		out = append(out, types.SearchResult{Document: d, Score: 0.5, Excerpt: excerpt})
+		out = append(out, types.SearchResult{Document: *d, Score: r.Score / ceiling, Excerpt: excerptOf(d.Content)})
 		if len(out) >= k {
 			break
 		}
 	}
 	return out
+}
+
+func lexText(d types.Document) string { return d.Title + "\n" + d.Content }
+
+func excerptOf(content string) string {
+	if len(content) > 300 {
+		return strutil.Truncate(content, 300) + "…"
+	}
+	return content
 }
 
 // Adapter satisfies agents.KnowledgeStore using the flat-argument interface

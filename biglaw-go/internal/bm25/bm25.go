@@ -232,6 +232,36 @@ func (ix *Index) Search(query string, topK int) []Result {
 	return results
 }
 
+// MaxScore returns the supremum of the BM25 score any document could reach
+// for query against the current corpus: the sum over unique query terms of
+// idf(term)·(k1+1), the value each term's saturating tf component approaches
+// but never attains. Dividing a Search score by it yields a relevance in
+// (0, 1) that is comparable across queries — unlike normalising by the best
+// hit, which would label the strongest of several weak matches "100%".
+//
+// Query terms absent from the corpus count at their (maximal) idf, so a
+// document matching one of three query terms is not reported as a near-full
+// match. Returns 0 for an empty query or empty index.
+func (ix *Index) MaxScore(query string) float64 {
+	seen := map[string]struct{}{}
+	ix.mu.RLock()
+	defer ix.mu.RUnlock()
+	n := float64(len(ix.docs))
+	if n == 0 {
+		return 0
+	}
+	var ceiling float64
+	for _, t := range Tokenize(query) {
+		if _, dup := seen[t]; dup {
+			continue
+		}
+		seen[t] = struct{}{}
+		df := float64(ix.df[t])
+		ceiling += math.Log(1+(n-df+0.5)/(df+0.5)) * (ix.k1 + 1)
+	}
+	return ceiling
+}
+
 // stopwords is a deliberately small set of high-frequency English function
 // words. BM25's idf already down-weights ubiquitous terms, so the goal here is
 // only to drop the most common closed-class words that add noise and bloat
