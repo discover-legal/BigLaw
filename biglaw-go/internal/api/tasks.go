@@ -12,93 +12,32 @@ import (
 	"time"
 
 	"github.com/discover-legal/biglaw-go/internal/auth"
+	"github.com/discover-legal/biglaw-go/internal/backend"
 	"github.com/discover-legal/biglaw-go/internal/cost"
 	"github.com/discover-legal/biglaw-go/internal/orchestrator"
-	"github.com/discover-legal/biglaw-go/internal/types"
 	"github.com/gin-gonic/gin"
 )
 
 // ─── Tasks ────────────────────────────────────────────────────────────────────
 
-type submitTaskBody struct {
-	Description  string             `json:"description"`
-	WorkflowType types.WorkflowType `json:"workflowType"`
-	Jurisdiction string             `json:"jurisdiction"`
-	ClientNumber string             `json:"clientNumber"`
-	MatterNumber string             `json:"matterNumber"`
-	DocumentIDs  []string           `json:"documentIds"`
-}
-
 func (s *Server) handleSubmitTask(c *gin.Context) {
-	u := getUser(c)
-	var body submitTaskBody
+	var body backend.SubmitTaskInput
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body: " + err.Error()})
 		return
 	}
-	if body.Description == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "description is required"})
-		return
-	}
-	if body.WorkflowType == "" {
-		body.WorkflowType = types.WorkflowRoundtable
-	}
-
-	task, err := s.orch.SubmitTask(orchestrator.SubmitParams{
-		Description:        body.Description,
-		WorkflowType:       body.WorkflowType,
-		DocumentIDs:        body.DocumentIDs,
-		ClientNumber:       body.ClientNumber,
-		MatterNumber:       body.MatterNumber,
-		Jurisdiction:       body.Jurisdiction,
-		CreatedByProfileID: u.ProfileID,
-	})
-	if err != nil {
-		if errors.Is(err, orchestrator.ErrTaskQueueFull) {
-			c.Header("Retry-After", "30")
-			c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
-			return
-		}
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusAccepted, task)
+	task, err := s.as(c).SubmitTask(c.Request.Context(), body)
+	reply(c, http.StatusAccepted, task, err)
 }
 
 func (s *Server) handleListTasks(c *gin.Context) {
-	u := getUser(c)
-	all := s.orch.ListTasks()
-
-	if auth.IsPartner(u) {
-		c.JSON(http.StatusOK, all)
-		return
-	}
-
-	// Non-partner: only tasks assigned to this profile or created by them.
-	var filtered []*types.Task
-	for _, t := range all {
-		if auth.CanViewTask(u, t.AssignedLawyerIDs) || t.CreatedByProfileID == u.ProfileID {
-			filtered = append(filtered, t)
-		}
-	}
-	if filtered == nil {
-		filtered = []*types.Task{}
-	}
-	c.JSON(http.StatusOK, filtered)
+	tasks, err := s.as(c).ListTasks(c.Request.Context())
+	reply(c, http.StatusOK, tasks, err)
 }
 
 func (s *Server) handleGetTask(c *gin.Context) {
-	u := getUser(c)
-	task := s.orch.GetTask(c.Param("id"))
-	if task == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "task not found"})
-		return
-	}
-	if !auth.CanViewTask(u, task.AssignedLawyerIDs) && task.CreatedByProfileID != u.ProfileID && !auth.IsPartner(u) {
-		c.JSON(http.StatusNotFound, gin.H{"error": "task not found"})
-		return
-	}
-	c.JSON(http.StatusOK, task)
+	task, err := s.as(c).GetTask(c.Request.Context(), c.Param("id"))
+	reply(c, http.StatusOK, task, err)
 }
 
 func (s *Server) handleDeleteTask(c *gin.Context) {
@@ -206,131 +145,41 @@ func (s *Server) handleTaskStream(c *gin.Context) {
 	}
 }
 
-type submitFromTemplateBody struct {
-	TemplateID    string            `json:"templateId"`
-	Substitutions map[string]string `json:"substitutions"`
-	DocumentIDs   []string          `json:"documentIds"`
-}
-
 func (s *Server) handleSubmitFromTemplate(c *gin.Context) {
-	u := getUser(c)
-	var body submitFromTemplateBody
+	var body backend.SubmitFromTemplateInput
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body: " + err.Error()})
 		return
 	}
-	if body.TemplateID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "templateId is required"})
-		return
-	}
-
-	task, err := s.orch.SubmitFromTemplate(
-		body.TemplateID,
-		body.Substitutions,
-		body.DocumentIDs,
-		orchestrator.SubmitParams{CreatedByProfileID: u.ProfileID},
-	)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusCreated, task)
+	task, err := s.as(c).SubmitFromTemplate(c.Request.Context(), body)
+	reply(c, http.StatusCreated, task, err)
 }
 
 func (s *Server) handleGetRound(c *gin.Context) {
-	u := getUser(c)
-	taskID := c.Param("id")
-	task := s.orch.GetTask(taskID)
-	if task == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "task not found"})
-		return
-	}
-	if !auth.CanViewTask(u, task.AssignedLawyerIDs) && task.CreatedByProfileID != u.ProfileID && !auth.IsPartner(u) {
-		c.JSON(http.StatusNotFound, gin.H{"error": "task not found"})
-		return
-	}
-
-	roundStr := c.Param("round")
-	roundNum, err := strconv.Atoi(roundStr)
-	if err != nil || roundNum < 1 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "round must be a positive integer"})
-		return
-	}
-
-	for _, r := range task.Rounds {
-		if r.Goal.Round == roundNum {
-			c.JSON(http.StatusOK, r)
-			return
-		}
-	}
-	c.JSON(http.StatusNotFound, gin.H{"error": "round not found"})
-}
-
-type approveGateBody struct {
-	Note string `json:"note"`
+	roundNum, _ := strconv.Atoi(c.Param("round")) // non-numeric → 0 → "round must be a positive integer"
+	round, err := s.as(c).GetRound(c.Request.Context(), c.Param("id"), roundNum)
+	reply(c, http.StatusOK, round, err)
 }
 
 func (s *Server) handleApproveGate(c *gin.Context) {
-	u := getUser(c)
-	var body approveGateBody
-	// Note is optional — ignore bind error.
-	c.ShouldBindJSON(&body)
-
-	taskID := c.Param("id")
-	gateID := c.Param("gateId")
-	if !s.canReviewGate(u, taskID, gateID) {
-		c.JSON(http.StatusNotFound, gin.H{"error": "gate not found"})
-		return
+	var body struct {
+		Note string `json:"note"`
 	}
-
-	if err := s.orch.ApproveGate(taskID, gateID, body.Note, u.ProfileID); err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"ok": true})
-}
-
-type rejectGateBody struct {
-	Reason string `json:"reason"`
+	_ = c.ShouldBindJSON(&body) // the note is optional
+	err := s.as(c).ApproveGate(c.Request.Context(), c.Param("id"), c.Param("gateId"), body.Note)
+	reply(c, http.StatusOK, gin.H{"ok": true}, err)
 }
 
 func (s *Server) handleRejectGate(c *gin.Context) {
-	u := getUser(c)
-	var body rejectGateBody
+	var body struct {
+		Reason string `json:"reason"`
+	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body: " + err.Error()})
 		return
 	}
-	if body.Reason == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "reason is required"})
-		return
-	}
-
-	taskID := c.Param("id")
-	gateID := c.Param("gateId")
-	if !s.canReviewGate(u, taskID, gateID) {
-		c.JSON(http.StatusNotFound, gin.H{"error": "gate not found"})
-		return
-	}
-
-	if err := s.orch.RejectGate(taskID, gateID, body.Reason, u.ProfileID); err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"ok": true})
-}
-
-func (s *Server) canReviewGate(u *types.SessionUser, taskID, gateID string) bool {
-	task := s.orch.GetTask(taskID)
-	if task == nil || (!auth.IsPartner(u) && task.CreatedByProfileID != u.ProfileID && !auth.CanViewTask(u, task.AssignedLawyerIDs)) {
-		return false
-	}
-	for _, gate := range task.PendingGates {
-		if gate.ID == gateID && gate.Status == "pending" {
-			return true
-		}
-	}
-	return false
+	err := s.as(c).RejectGate(c.Request.Context(), c.Param("id"), c.Param("gateId"), body.Reason)
+	reply(c, http.StatusOK, gin.H{"ok": true}, err)
 }
 
 // ─── Task cost ────────────────────────────────────────────────────────────────

@@ -25,9 +25,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/discover-legal/biglaw-go/internal/adapters"
 	"github.com/discover-legal/biglaw-go/internal/auth"
-	"github.com/discover-legal/biglaw-go/internal/backend"
 	"github.com/discover-legal/biglaw-go/internal/budget"
 	"github.com/discover-legal/biglaw-go/internal/dockets"
 	"github.com/discover-legal/biglaw-go/internal/graph"
@@ -102,9 +100,6 @@ type opsState struct {
 
 	jobsOnce sync.Once
 	jobQueue *queue.Queue
-
-	pluginsOnce sync.Once
-	plugins     *adapters.Registry
 
 	budgetOnce    sync.Once
 	budgetMonitor *budget.Monitor
@@ -222,11 +217,7 @@ func (s *Server) opsDockets() (*dockets.Monitor, *opsBroadcaster[types.DocketAle
 			return
 		}
 		// Standalone fallback: no firm monitor running — own the instance.
-		path := os.Getenv("DOCKETS_FILE")
-		if path == "" {
-			path = "./data/dockets.json" // TS default (Config.dockets.file)
-		}
-		m := dockets.New(path)
+		m := dockets.New(s.cfg.Monitors.DocketsFile) // inside the data dir unless DOCKETS_FILE overrides
 		if err := m.Init(); err != nil {
 			slog.Warn("ops: docket monitor init failed", "err", err)
 		}
@@ -304,20 +295,6 @@ func (s *Server) opsJobs() *queue.Queue {
 		st.jobQueue = q
 	})
 	return st.jobQueue
-}
-
-func (s *Server) opsPlugins() *adapters.Registry {
-	st := s.ops()
-	st.pluginsOnce.Do(func() {
-		// The plugin registry is loaded in cmd/biglaw/main.go but not injected
-		// into Server; reload the same JSON adapters read-only.
-		reg := adapters.New()
-		if err := reg.LoadDirectory("adapters/external"); err != nil {
-			slog.Warn("ops: plugin adapter load failed", "err", err)
-		}
-		st.plugins = reg
-	})
-	return st.plugins
 }
 
 // opsTimeAdapter bridges timekeeping.TimeStore to budget.TimeStore.
@@ -730,15 +707,10 @@ func (s *Server) handleCheckConflictGraph(c *gin.Context) {
 
 // ─── Plugins ──────────────────────────────────────────────────────────────────
 
-// handleListPlugins mirrors the TS pluginRegistry.list() summary shape:
-// { id, name, source, tools, agents, workflows } with counts, never secrets.
+// handleListPlugins lists the loaded external plugins [partner only].
 func (s *Server) handleListPlugins(c *gin.Context) {
-	if !requirePartner(c) {
-		return
-	}
-	// One summary shape for REST and the MCP list_plugins tool (which reads
-	// this route when running as a thin client).
-	c.JSON(http.StatusOK, backend.SummarizePlugins(s.opsPlugins()))
+	plugins, err := s.as(c).ListPlugins(c.Request.Context())
+	reply(c, http.StatusOK, plugins, err)
 }
 
 // ─── Inter-round memory query ─────────────────────────────────────────────────

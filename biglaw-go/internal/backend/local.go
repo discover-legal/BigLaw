@@ -19,22 +19,21 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
 
-// Local serves the Backend from the in-process services of the process that
-// owns the data dir. It acts as auth.LocalPartner — the same principal the
-// REST API assigns every request when AUTH_ENABLED=false — so tasks and
-// documents it creates are attributed exactly as REST-created ones are.
+// Local holds the in-process services of the process that owns the data
+// dir. It is not itself a Backend: every operation runs as somebody, so
+// callers take a principal's view with As — the REST handlers with the
+// request's session user, the in-process MCP server with its configured
+// principal.
 type Local struct {
 	Orch      *orchestrator.Orchestrator
 	Knowledge *knowledge.Store
 	Registry  *agents.Registry
-	Plugins   *adapters.Registry // may be nil: no plugins loaded
+	Plugins   *adapters.Registry // nil: no plugins loaded
 	Time      *timekeeping.TimeStore
 	Audit     *audit.Logger // nil → audit.Default
-
-	actor types.SessionUser
 }
 
-// NewLocal wires a Local backend over the owner's services.
+// NewLocal wires a Local over the owner's services.
 func NewLocal(
 	orch *orchestrator.Orchestrator,
 	knowledgeStore *knowledge.Store,
@@ -42,33 +41,79 @@ func NewLocal(
 	plugins *adapters.Registry,
 	timeStore *timekeeping.TimeStore,
 ) *Local {
-	return &Local{
-		Orch:      orch,
-		Knowledge: knowledgeStore,
-		Registry:  registry,
-		Plugins:   plugins,
-		Time:      timeStore,
-		actor:     auth.LocalPartner,
+	return &Local{Orch: orch, Knowledge: knowledgeStore, Registry: registry, Plugins: plugins, Time: timeStore}
+}
+
+// As returns the Backend seen by principal u. The view applies BigLaw's
+// access rules: a partner sees everything; anyone else sees only tasks they
+// created or are assigned to, their own documents, time entries and audit
+// actions, and no partner-only listings. A zero SessionUser is anonymous and
+// sees nothing private.
+func (l *Local) As(u types.SessionUser) Backend {
+	return &view{l: l, u: u}
+}
+
+// PrincipalFor builds the session principal for a stored lawyer profile —
+// what a bearer credential bound to that profile acts as.
+func PrincipalFor(p *types.LawyerProfile) types.SessionUser {
+	return types.SessionUser{
+		ProfileID: p.ID,
+		Name:      p.Name,
+		Email:     p.Email,
+		Role:      p.Role,
+		Mode:      auth.ResolveMode(p.Role, p.Mode),
 	}
 }
 
-var _ Backend = (*Local)(nil)
+type view struct {
+	l *Local
+	u types.SessionUser
+}
 
-func (l *Local) audit() *audit.Logger {
-	if l.Audit != nil {
-		return l.Audit
+var _ Backend = (*view)(nil)
+
+func (v *view) partner() bool { return auth.IsPartner(&v.u) }
+
+func (v *view) canView(t *types.Task) bool {
+	return v.partner() || (v.u.ProfileID != "" && t.CreatedByProfileID == v.u.ProfileID) ||
+		auth.CanViewTask(&v.u, t.AssignedLawyerIDs)
+}
+
+func (v *view) audit() *audit.Logger {
+	if v.l.Audit != nil {
+		return v.l.Audit
 	}
 	return audit.Default
 }
 
-func (l *Local) SubmitTask(_ context.Context, in SubmitTaskInput) (*types.Task, error) {
-	task, err := l.Orch.SubmitTask(orchestrator.SubmitParams{
+// visibleTask returns the task or the not-found error an invisible task
+// also gets (existence is not disclosed).
+func (v *view) visibleTask(taskID string) (*types.Task, error) {
+	task := v.l.Orch.GetTask(taskID)
+	if task == nil || !v.canView(task) {
+		return nil, newErr(ErrNotFound, "task not found")
+	}
+	return task, nil
+}
+
+func (v *view) SubmitTask(_ context.Context, in SubmitTaskInput) (*types.Task, error) {
+	if err := checkSize(in); err != nil {
+		return nil, err
+	}
+	if in.Description == "" {
+		return nil, newErr(ErrInvalid, "description is required")
+	}
+	if in.WorkflowType == "" {
+		in.WorkflowType = types.WorkflowRoundtable
+	}
+	task, err := v.l.Orch.SubmitTask(orchestrator.SubmitParams{
 		Description:        in.Description,
 		WorkflowType:       in.WorkflowType,
+		DocumentIDs:        in.DocumentIDs,
 		Jurisdiction:       in.Jurisdiction,
 		ClientNumber:       in.ClientNumber,
 		MatterNumber:       in.MatterNumber,
-		CreatedByProfileID: l.actor.ProfileID,
+		CreatedByProfileID: v.u.ProfileID,
 	})
 	if errors.Is(err, orchestrator.ErrTaskQueueFull) {
 		return nil, newErr(ErrUnavailable, err.Error())
@@ -79,86 +124,91 @@ func (l *Local) SubmitTask(_ context.Context, in SubmitTaskInput) (*types.Task, 
 	return task, nil
 }
 
-func (l *Local) GetTask(_ context.Context, taskID string) (*types.Task, error) {
-	task := l.Orch.GetTask(taskID)
-	if task == nil {
-		return nil, newErr(ErrNotFound, "task not found")
-	}
-	return task, nil
+func (v *view) GetTask(_ context.Context, taskID string) (*types.Task, error) {
+	return v.visibleTask(taskID)
 }
 
-func (l *Local) ListTasks(context.Context) ([]*types.Task, error) {
-	tasks := l.Orch.ListTasks()
-	if tasks == nil {
-		tasks = []*types.Task{}
-	}
-	return tasks, nil
-}
-
-// pendingGate mirrors the REST handlers' pre-check: an unknown task or a gate
-// that is not pending reads as "gate not found".
-func (l *Local) pendingGate(taskID, gateID string) bool {
-	task := l.Orch.GetTask(taskID)
-	if task == nil {
-		return false
-	}
-	for _, g := range task.PendingGates {
-		if g.ID == gateID && g.Status == "pending" {
-			return true
+func (v *view) ListTasks(context.Context) ([]*types.Task, error) {
+	out := []*types.Task{}
+	for _, t := range v.l.Orch.ListTasks() {
+		if v.canView(t) {
+			out = append(out, t)
 		}
 	}
-	return false
+	return out, nil
 }
 
-func (l *Local) ApproveGate(_ context.Context, taskID, gateID, note string) error {
-	if !l.pendingGate(taskID, gateID) {
-		return newErr(ErrNotFound, "gate not found")
+// reviewableGate: the task is visible and the gate is still pending; anything
+// else reads as "gate not found".
+func (v *view) reviewableGate(taskID, gateID string) error {
+	task, err := v.visibleTask(taskID)
+	if err == nil {
+		for _, g := range task.PendingGates {
+			if g.ID == gateID && g.Status == "pending" {
+				return nil
+			}
+		}
 	}
-	if err := l.Orch.ApproveGate(taskID, gateID, note, l.actor.ProfileID); err != nil {
+	return newErr(ErrNotFound, "gate not found")
+}
+
+func (v *view) ApproveGate(_ context.Context, taskID, gateID, note string) error {
+	if err := checkSize(gateNote{note}); err != nil {
+		return err
+	}
+	if err := v.reviewableGate(taskID, gateID); err != nil {
+		return err
+	}
+	if err := v.l.Orch.ApproveGate(taskID, gateID, note, v.u.ProfileID); err != nil {
 		return newErr(ErrNotFound, err.Error())
 	}
 	return nil
 }
 
-func (l *Local) RejectGate(_ context.Context, taskID, gateID, reason string) error {
+func (v *view) RejectGate(_ context.Context, taskID, gateID, reason string) error {
+	if err := checkSize(gateReason{reason}); err != nil {
+		return err
+	}
 	if reason == "" {
 		return newErr(ErrInvalid, "reason is required")
 	}
-	if !l.pendingGate(taskID, gateID) {
-		return newErr(ErrNotFound, "gate not found")
+	if err := v.reviewableGate(taskID, gateID); err != nil {
+		return err
 	}
-	if err := l.Orch.RejectGate(taskID, gateID, reason, l.actor.ProfileID); err != nil {
+	if err := v.l.Orch.RejectGate(taskID, gateID, reason, v.u.ProfileID); err != nil {
 		return newErr(ErrNotFound, err.Error())
 	}
 	return nil
 }
 
-func (l *Local) SubmitFromTemplate(_ context.Context, in SubmitFromTemplateInput) (*types.Task, error) {
+func (v *view) SubmitFromTemplate(_ context.Context, in SubmitFromTemplateInput) (*types.Task, error) {
+	if err := checkSize(in); err != nil {
+		return nil, err
+	}
 	if in.TemplateID == "" {
 		return nil, newErr(ErrInvalid, "templateId is required")
 	}
-	task, err := l.Orch.SubmitFromTemplate(in.TemplateID, in.Substitutions, in.DocumentIDs,
-		orchestrator.SubmitParams{CreatedByProfileID: l.actor.ProfileID})
+	task, err := v.l.Orch.SubmitFromTemplate(in.TemplateID, in.Substitutions, in.DocumentIDs,
+		orchestrator.SubmitParams{CreatedByProfileID: v.u.ProfileID})
 	if err != nil {
 		return nil, newErr(ErrInvalid, err.Error())
 	}
 	return task, nil
 }
 
-func (l *Local) ListTemplates(context.Context) ([]types.TaskTemplate, error) {
-	list := l.Orch.ListTemplates()
+func (v *view) ListTemplates(context.Context) ([]types.TaskTemplate, error) {
+	list := v.l.Orch.ListTemplates()
 	if list == nil {
 		list = []types.TaskTemplate{}
 	}
 	return list, nil
 }
 
-// GetRound addresses a round by its goal's round number, as
-// GET /tasks/:id/rounds/:round does.
-func (l *Local) GetRound(_ context.Context, taskID string, round int) (*types.RoundState, error) {
-	task := l.Orch.GetTask(taskID)
-	if task == nil {
-		return nil, newErr(ErrNotFound, "task not found")
+// GetRound addresses a round by its goal's round number.
+func (v *view) GetRound(_ context.Context, taskID string, round int) (*types.RoundState, error) {
+	task, err := v.visibleTask(taskID)
+	if err != nil {
+		return nil, err
 	}
 	if round < 1 {
 		return nil, newErr(ErrInvalid, "round must be a positive integer")
@@ -172,7 +222,10 @@ func (l *Local) GetRound(_ context.Context, taskID string, round int) (*types.Ro
 	return nil, newErr(ErrNotFound, "round not found")
 }
 
-func (l *Local) IngestDocument(ctx context.Context, in IngestInput) (*types.Document, error) {
+func (v *view) IngestDocument(ctx context.Context, in IngestInput) (*types.Document, error) {
+	if err := checkSize(in); err != nil {
+		return nil, err
+	}
 	if in.Title == "" {
 		return nil, newErr(ErrInvalid, "title is required")
 	}
@@ -180,33 +233,34 @@ func (l *Local) IngestDocument(ctx context.Context, in IngestInput) (*types.Docu
 		return nil, newErr(ErrInvalid, "content is required")
 	}
 	ownerID := in.OwnerID
-	if !auth.IsPartner(&l.actor) || ownerID == "" {
-		ownerID = l.actor.ProfileID
+	if !v.partner() || ownerID == "" {
+		ownerID = v.u.ProfileID // only a partner files a document under someone else
 	}
-	doc := types.Document{
-		Title:      in.Title,
-		Content:    in.Content,
-		OwnerID:    ownerID,
-		IngestedAt: time.Now(),
-	}
-	idCtx := store.WithIdentity(ctx, l.actor.ProfileID, auth.IsPartner(&l.actor))
-	saved, err := l.Knowledge.Ingest(idCtx, doc)
+	doc := types.Document{Title: in.Title, Content: in.Content, OwnerID: ownerID, IngestedAt: time.Now()}
+	saved, err := v.l.Knowledge.Ingest(store.WithIdentity(ctx, v.u.ProfileID, v.partner()), doc)
 	if err != nil {
 		return nil, newErr(ErrInternal, "ingest failed: "+err.Error())
 	}
-	l.audit().Write(audit.WriteRequest{
+	v.audit().Write(audit.WriteRequest{
 		Event:   "document.ingested",
-		ActorID: l.actor.ProfileID,
+		ActorID: v.u.ProfileID,
 		Data:    map[string]interface{}{"docId": saved.ID, "title": saved.Title},
 	})
 	return saved, nil
 }
 
-func (l *Local) SearchKnowledge(_ context.Context, query string, topK int) ([]types.SearchResult, error) {
+func (v *view) SearchKnowledge(_ context.Context, query string, topK int) ([]types.SearchResult, error) {
 	if query == "" {
 		return nil, newErr(ErrInvalid, "q parameter is required")
 	}
-	results, err := l.Knowledge.Search(query, knowledge.SearchOpts{TopK: clampTopK(topK)})
+	opts := knowledge.SearchOpts{TopK: clampTopK(topK)}
+	if !v.partner() {
+		opts.OwnerID = v.u.ProfileID // lawyers search their own documents only
+		if opts.OwnerID == "" {
+			return []types.SearchResult{}, nil
+		}
+	}
+	results, err := v.l.Knowledge.Search(query, opts)
 	if err != nil {
 		return nil, newErr(ErrInternal, "search failed: "+err.Error())
 	}
@@ -216,24 +270,34 @@ func (l *Local) SearchKnowledge(_ context.Context, query string, topK int) ([]ty
 	return results, nil
 }
 
-func (l *Local) ListAgents(context.Context) ([]types.AgentDefinition, error) {
-	all := l.Registry.ListAll()
+func (v *view) ListAgents(context.Context) ([]types.AgentDefinition, error) {
+	all := v.l.Registry.ListAll()
 	if all == nil {
 		all = []types.AgentDefinition{}
 	}
 	return all, nil
 }
 
-func (l *Local) ReadAudit(_ context.Context, q AuditQuery) ([]audit.AuditEntry, error) {
-	entries := l.audit().ReadFiltered(audit.Filter{TaskID: q.TaskID, Limit: clampAuditLimit(q.Limit)})
+func (v *view) ReadAudit(_ context.Context, q AuditQuery) ([]audit.AuditEntry, error) {
+	f := audit.Filter{TaskID: q.TaskID, ActorID: q.ActorID, Event: q.Event, Limit: clampAuditLimit(q.Limit)}
+	if !v.partner() {
+		f.ActorID = v.u.ProfileID // lawyers see only their own actions
+		if f.ActorID == "" {
+			return []audit.AuditEntry{}, nil
+		}
+	}
+	entries := v.audit().ReadFiltered(f)
 	if entries == nil {
 		entries = []audit.AuditEntry{}
 	}
 	return entries, nil
 }
 
-func (l *Local) ListPlugins(context.Context) ([]PluginSummary, error) {
-	return SummarizePlugins(l.Plugins), nil
+func (v *view) ListPlugins(context.Context) ([]PluginSummary, error) {
+	if !v.partner() {
+		return nil, newErr(ErrForbidden, "partner access required")
+	}
+	return SummarizePlugins(v.l.Plugins), nil
 }
 
 // SummarizePlugins renders a plugin registry as the GET /plugins payload.
@@ -258,8 +322,14 @@ func SummarizePlugins(reg *adapters.Registry) []PluginSummary {
 	return out
 }
 
-func (l *Local) ListTimeEntries(_ context.Context, f timekeeping.TimeFilter) ([]types.TimeEntry, error) {
-	entries := l.Time.List(f)
+func (v *view) ListTimeEntries(_ context.Context, f timekeeping.TimeFilter) ([]types.TimeEntry, error) {
+	if !v.partner() {
+		f.ProfileID = v.u.ProfileID // lawyers are locked to their own entries
+		if f.ProfileID == "" {
+			return []types.TimeEntry{}, nil
+		}
+	}
+	entries := v.l.Time.List(f)
 	if entries == nil {
 		entries = []types.TimeEntry{}
 	}

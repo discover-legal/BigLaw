@@ -14,98 +14,170 @@ import (
 	"syscall"
 )
 
-// legacyStateFile is one state file whose default moved from the working
-// directory into the data dir. Legacy is the old default (relative to the
-// process CWD); Path is the new default. Env names the override that, when
-// set, takes the file out of migration altogether.
-type legacyStateFile struct {
-	Env    string
-	Legacy string
-	Path   string
-}
-
-// StateMove reports one legacy state file carried into the data dir.
+// StateMove reports one legacy state path carried into the data dir.
 type StateMove struct {
 	Env    string // the env var whose default moved
-	From   string // legacy location (working directory)
+	From   string // legacy location
 	To     string // new default location (data dir)
-	Copied bool   // true when rename crossed devices and fell back to copy+remove
+	Copied bool   // rename crossed devices and fell back to copy+remove
 }
 
-// MigrateLegacyStateFiles moves state files left at their pre-data-dir
-// defaults (./.tasks.json, ./.profiles.json, ./audit.jsonl, …) to their new
-// defaults under the data dir. It is idempotent and conservative:
+// MigrateLegacyStateFiles carries state left at a pre-data-dir default —
+// ./.tasks.json, ./audit.jsonl, or ./data/<x> when RUVECTOR_DATA_DIR points
+// elsewhere — to its default inside the data dir. Idempotent and
+// conservative:
 //
-//   - only files whose env var is unset are considered (explicit overrides
-//     always win and are never touched);
-//   - a file is moved only when the legacy path exists and the new one does
-//     not — if both exist the new one is kept, the legacy one is left in
-//     place, and a warning names both;
-//   - rename is tried first; across devices it falls back to copy + fsync +
-//     atomic rename into place + remove.
+//   - explicit overrides are never touched (an env value equal to an old
+//     default is not explicit; see stateSet.file);
+//   - a path moves only when a legacy copy exists and the data-dir one does
+//     not; if both exist the data-dir copy wins and the legacy one is left
+//     in place with a warning;
+//   - a symlink moves as a symlink (relative targets are re-pointed so they
+//     still resolve); companions (SQLite -wal/-shm) move with their file;
+//   - rename first; across devices a file falls back to copy + fsync +
+//     atomic rename + remove.
 //
-// It must run before any store opens its file, and only in the process that
-// owns the data dir. Each move is logged; failures are joined and returned
-// so the caller can refuse to start rather than come up with empty state.
+// Anything that cannot be migrated is returned as an error and the caller
+// must refuse to start: coming up on an empty data dir while the user's
+// state sits elsewhere would look like data loss. Run it only in the process
+// holding the data-dir lock, before any store opens its file.
 func MigrateLegacyStateFiles(c *Config) ([]StateMove, error) {
 	var moves []StateMove
 	var errs []error
-	for _, f := range c.legacyState {
-		mv, err := migrateOne(f)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", f.Env, err))
+	for _, p := range c.state {
+		if p.Explicit {
 			continue
 		}
-		if mv != nil {
-			slog.Info("migrated legacy state file into the data dir",
-				"env", mv.Env, "from", mv.From, "to", mv.To, "copied", mv.Copied)
-			moves = append(moves, *mv)
+		mv, err := migratePath(p)
+		moves = append(moves, mv...)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", p.Env, err))
 		}
+	}
+	for _, mv := range moves {
+		slog.Info("migrated legacy state into the data dir",
+			"env", mv.Env, "from", mv.From, "to", mv.To, "copied", mv.Copied)
 	}
 	return moves, errors.Join(errs...)
 }
 
-func migrateOne(f legacyStateFile) (*StateMove, error) {
-	if samePath(f.Legacy, f.Path) {
-		return nil, nil // data dir is the working directory: nothing moved
+func migratePath(p StatePath) ([]StateMove, error) {
+	var src string
+	for _, l := range p.legacy {
+		if samePath(l, p.Path) {
+			continue // the old default is the new one (data dir is ./data or .)
+		}
+		if _, err := os.Lstat(l); err == nil {
+			if src == "" {
+				src = l
+				continue
+			}
+			slog.Warn("another legacy copy left in place; only the first is migrated",
+				"env", p.Env, "migrated", src, "left", l)
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return nil, err
+		}
 	}
-	src, err := os.Lstat(f.Legacy)
-	if errors.Is(err, fs.ErrNotExist) {
+	if src == "" {
 		return nil, nil
 	}
-	if err != nil {
-		return nil, err
-	}
-	if !src.Mode().IsRegular() {
-		slog.Warn("legacy state path is not a regular file; leaving it alone",
-			"env", f.Env, "path", f.Legacy)
-		return nil, nil
-	}
-	if _, err := os.Lstat(f.Path); err == nil {
-		slog.Warn("legacy state file left in place: the data dir already has one (it wins); "+
-			"merge or delete the legacy file by hand",
-			"env", f.Env, "legacy", f.Legacy, "current", f.Path)
+	if _, err := os.Lstat(p.Path); err == nil {
+		slog.Warn("legacy state left in place: the data dir already has its own copy (it wins); "+
+			"merge or delete the legacy one by hand", "env", p.Env, "legacy", src, "current", p.Path)
 		return nil, nil
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return nil, err
 	}
+	// Companions travel with their file; a stray one at the destination
+	// would be replayed against the wrong database.
+	for _, suf := range p.companions {
+		if _, err := os.Lstat(p.Path + suf); err == nil {
+			if _, serr := os.Lstat(src + suf); serr == nil {
+				return nil, fmt.Errorf("%s exists without %s; refusing to pair it with the migrated %s",
+					p.Path+suf, p.Path, src)
+			}
+		}
+	}
 
-	if err := os.MkdirAll(filepath.Dir(f.Path), 0o755); err != nil {
+	mv, err := movePath(p.Env, src, p.Path, p.Dir)
+	if err != nil {
 		return nil, err
 	}
-	mv := &StateMove{Env: f.Env, From: f.Legacy, To: f.Path}
-	err = os.Rename(f.Legacy, f.Path)
+	moves := []StateMove{mv}
+	for _, suf := range p.companions {
+		if _, err := os.Lstat(src + suf); errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		cmv, err := movePath(p.Env, src+suf, p.Path+suf, false)
+		if err != nil {
+			return moves, err
+		}
+		moves = append(moves, cmv)
+	}
+	return moves, nil
+}
+
+// movePath moves src to dst (dst known absent).
+func movePath(env, src, dst string, wantDir bool) (StateMove, error) {
+	mv := StateMove{Env: env, From: src, To: dst}
+	info, err := os.Lstat(src)
+	if err != nil {
+		return mv, err
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return mv, err
+	}
+	switch {
+	case info.Mode()&fs.ModeSymlink != 0:
+		return mv, moveSymlink(src, dst)
+	case wantDir && !info.IsDir(), !wantDir && !info.Mode().IsRegular():
+		want, got := "a regular file", "something else"
+		if wantDir {
+			want = "a directory"
+		}
+		if info.IsDir() {
+			got = "a directory"
+		} else if info.Mode().IsRegular() {
+			got = "a regular file"
+		}
+		return mv, fmt.Errorf("%s is %s, not %s; move it to %s by hand or set %s", src, got, want, dst, env)
+	}
+	err = os.Rename(src, dst)
 	if err == nil {
 		return mv, nil
 	}
 	if !errors.Is(err, syscall.EXDEV) {
-		return nil, err
+		return mv, err
 	}
-	if err := copyThenRemove(f.Legacy, f.Path, src.Mode().Perm()); err != nil {
-		return nil, err
+	if info.IsDir() {
+		return mv, fmt.Errorf("%s is on another filesystem than %s; move the directory by hand or set %s", src, dst, env)
+	}
+	if err := copyThenRemove(src, dst, info.Mode().Perm()); err != nil {
+		return mv, err
 	}
 	mv.Copied = true
 	return mv, nil
+}
+
+// moveSymlink moves a symlink as a symlink. A relative target is resolved
+// against the link's old directory so the moved link still points at the
+// same file.
+func moveSymlink(src, dst string) error {
+	target, err := os.Readlink(src)
+	if err != nil {
+		return err
+	}
+	if filepath.IsAbs(target) {
+		if err := os.Rename(src, dst); err == nil || !errors.Is(err, syscall.EXDEV) {
+			return err
+		}
+	} else if target, err = filepath.Abs(filepath.Join(filepath.Dir(src), target)); err != nil {
+		return err
+	}
+	if err := os.Symlink(target, dst); err != nil {
+		return err
+	}
+	return os.Remove(src)
 }
 
 // copyThenRemove copies src to a temp file beside dst, fsyncs it, renames it

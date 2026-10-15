@@ -97,6 +97,9 @@ func (s *MCPServer) registerTools() {
 			mcplib.WithString("matterNumber",
 				mcplib.Description("Matter number to associate with this task."),
 			),
+			mcplib.WithString("documentIds",
+				mcplib.Description("JSON array of ingested document IDs the task may retrieve from, e.g. [\"doc-uuid-1\"]."),
+			),
 		),
 		s.handleSubmitTask,
 	)
@@ -282,7 +285,7 @@ func (s *MCPServer) registerTools() {
 	// 15. get_time_entries
 	s.srv.AddTool(
 		mcplib.NewTool("get_time_entries",
-			mcplib.WithDescription("Retrieve billable time entries, scoped to the MCP principal (full access as the local partner; a thin client sees what its API_PROFILE_ID may see). Supports filtering by profileId, taskId, matterNumber, and an ISO date range."),
+			mcplib.WithDescription("Retrieve billable time entries, scoped to the MCP principal (partners see everyone's; anyone else only their own). Supports filtering by profileId, taskId, matterNumber, and an ISO date range."),
 			mcplib.WithString("profileId",
 				mcplib.Description("If set, filter entries to this lawyer profile ID."),
 			),
@@ -327,12 +330,18 @@ func (s *MCPServer) handleSubmitTask(ctx context.Context, req mcplib.CallToolReq
 		return mcplib.NewToolResultError("workflowType is required"), nil
 	}
 
+	docIDs, errRes := jsonArrayArg(args, "documentIds")
+	if errRes != nil {
+		return errRes, nil
+	}
+
 	task, err := s.b.SubmitTask(ctx, backend.SubmitTaskInput{
 		Description:  description,
 		WorkflowType: types.WorkflowType(wfStr),
 		Jurisdiction: stringArg(args, "jurisdiction"),
 		ClientNumber: stringArg(args, "clientNumber"),
 		MatterNumber: stringArg(args, "matterNumber"),
+		DocumentIDs:  docIDs,
 	})
 	if err != nil {
 		return toolError("submit_task", err)
@@ -453,12 +462,9 @@ func (s *MCPServer) handleSubmitFromTemplate(ctx context.Context, req mcplib.Cal
 		}
 	}
 
-	// Parse optional documentIds JSON string → slice.
-	var docIDs []string
-	if docIDsStr := stringArg(args, "documentIds"); docIDsStr != "" {
-		if err := json.Unmarshal([]byte(docIDsStr), &docIDs); err != nil {
-			return mcplib.NewToolResultError(fmt.Sprintf("documentIds must be a valid JSON array: %v", err)), nil
-		}
+	docIDs, errRes := jsonArrayArg(args, "documentIds")
+	if errRes != nil {
+		return errRes, nil
 	}
 
 	task, err := s.b.SubmitFromTemplate(ctx, backend.SubmitFromTemplateInput{
@@ -679,6 +685,19 @@ func jsonResult(v interface{}) (*mcplib.CallToolResult, error) {
 		return mcplib.NewToolResultError(fmt.Sprintf("failed to marshal result: %v", err)), nil
 	}
 	return mcplib.NewToolResultText(string(data)), nil
+}
+
+// jsonArrayArg parses an optional JSON-array-of-strings argument.
+func jsonArrayArg(args map[string]interface{}, key string) ([]string, *mcplib.CallToolResult) {
+	raw := stringArg(args, key)
+	if raw == "" {
+		return nil, nil
+	}
+	var out []string
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil, mcplib.NewToolResultError(fmt.Sprintf("%s must be a valid JSON array: %v", key, err))
+	}
+	return out, nil
 }
 
 // stringArg extracts a string argument from the MCP arguments map.

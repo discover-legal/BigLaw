@@ -8,6 +8,10 @@ import "github.com/gin-gonic/gin"
 func (s *Server) newRouter() *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
+	// Route on the escaped path so an ID containing "/" (sent as %2F) stays
+	// one :param segment and reaches its handler — a typed not-found, not
+	// gin's plain-text 404 for an unmatched route.
+	r.UseRawPath = true
 	r.Use(gin.Recovery(), requestBodyLimit(), s.authMiddleware())
 
 	r.GET("/health", s.handleHealth)

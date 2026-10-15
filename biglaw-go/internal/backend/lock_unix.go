@@ -7,13 +7,15 @@ package backend
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"syscall"
 )
 
 // tryLock takes a non-blocking exclusive flock. held reports that another
 // open file description already holds it (EWOULDBLOCK) — an explicit errno
-// check, not error-string matching.
+// check, not error-string matching. ENOLCK / ENOTSUP map to
+// errLockUnsupported.
 func tryLock(f *os.File) (held bool, err error) {
 	for {
 		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
@@ -21,8 +23,13 @@ func tryLock(f *os.File) (held bool, err error) {
 			break
 		}
 	}
-	if errors.Is(err, syscall.EWOULDBLOCK) {
+	switch {
+	case err == nil:
+		return false, nil
+	case errors.Is(err, syscall.EWOULDBLOCK):
 		return true, nil
+	case errors.Is(err, syscall.ENOLCK), errors.Is(err, syscall.ENOTSUP), errors.Is(err, syscall.EOPNOTSUPP):
+		return false, fmt.Errorf("%w: %v", errLockUnsupported, err)
 	}
 	return false, err
 }

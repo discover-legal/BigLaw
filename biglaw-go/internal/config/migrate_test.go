@@ -6,6 +6,8 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -13,7 +15,10 @@ import (
 // clear them so the developer's shell cannot leak overrides in.
 var stateEnvs = []string{
 	"TASKS_FILE", "SETTINGS_FILE", "PROFILES_FILE", "CLIENTS_FILE", "TIME_FILE",
-	"LEARNING_FILE", "OCG_FILE", "JOBS_FILE", "AUDIT_LOG_FILE",
+	"LEARNING_FILE", "OCG_FILE", "JOBS_FILE", "AUDIT_LOG_FILE", "SQLITE_PATH",
+	"BLOB_DIR", "COST_LOG_FILE", "PREBILLS_FILE", "PLAYBOOKS_FILE", "CLIENT_VOICE_FILE",
+	"CLIO_TOKENS_FILE", "LPM_CORPUS_FILE", "LPM_REPORT_DIR", "LPM_ROUTED_FILE",
+	"LPM_PENDING_FILE", "LPM_BACKFILL_CURSOR_FILE", "DOCKETS_FILE",
 }
 
 // inScratch chdirs into a fresh dir with a clean state-file environment and
@@ -125,22 +130,181 @@ func TestMigrateNeverClobbersExistingDataDirFile(t *testing.T) {
 
 func TestMigrateLeavesEnvOverridesAlone(t *testing.T) {
 	inScratch(t)
-	t.Setenv("TASKS_FILE", ".tasks.json") // explicit, even though it is the old default
+	t.Setenv("TASKS_FILE", "pinned/tasks.json")
 	t.Setenv("CLIENTS_FILE", "custom/clients.json")
-	write(t, ".tasks.json", "pinned")
+	write(t, "pinned/tasks.json", "pinned")
+	write(t, ".tasks.json", "legacy")      // not the configured file: untouched
 	write(t, ".matter-budgets.json", "{}") // follows CLIENTS_FILE's dir: not migrated either
 
 	c := Load()
-	if c.Persistence.TasksFile != ".tasks.json" {
+	if c.Persistence.TasksFile != "pinned/tasks.json" {
 		t.Fatalf("override lost: %q", c.Persistence.TasksFile)
 	}
 	moves, err := MigrateLegacyStateFiles(c)
 	if err != nil || len(moves) != 0 {
 		t.Fatalf("moves=%+v err=%v", moves, err)
 	}
-	if read(t, ".tasks.json") != "pinned" || exists("data/.tasks.json") || exists("data/.matter-budgets.json") {
+	if read(t, "pinned/tasks.json") != "pinned" || exists("data/.tasks.json") || exists("data/.matter-budgets.json") {
 		t.Fatal("overridden files must not move")
 	}
+}
+
+// An env value equal to an old default (a stale .env.example line) is not an
+// override: the file is migrated and the data-dir path is used.
+func TestEnvEqualToLegacyDefaultCountsAsUnset(t *testing.T) {
+	inScratch(t)
+	t.Setenv("TASKS_FILE", ".tasks.json")
+	t.Setenv("AUDIT_LOG_FILE", "./audit.jsonl")
+	t.Setenv("SQLITE_PATH", "./data/biglaw.db")
+	t.Setenv("RUVECTOR_DATA_DIR", "state")
+	write(t, ".tasks.json", "t")
+	write(t, "audit.jsonl", "a")
+	write(t, "data/biglaw.db", "db")
+
+	c := Load()
+	if c.Persistence.TasksFile != "state/.tasks.json" || c.Audit.LogFile != "state/audit.jsonl" ||
+		c.Database.SQLitePath != "state/biglaw.db" {
+		t.Fatalf("paths = %q %q %q", c.Persistence.TasksFile, c.Audit.LogFile, c.Database.SQLitePath)
+	}
+	if _, err := MigrateLegacyStateFiles(c); err != nil {
+		t.Fatal(err)
+	}
+	if read(t, "state/.tasks.json") != "t" || read(t, "state/audit.jsonl") != "a" || read(t, "state/biglaw.db") != "db" {
+		t.Fatal("legacy-valued env files were not migrated")
+	}
+}
+
+// With RUVECTOR_DATA_DIR elsewhere, everything that used to sit in ./data
+// (the database and its journal, attachments, ledgers) follows it.
+func TestMigrateDotDataIntoCustomDataDir(t *testing.T) {
+	inScratch(t)
+	dir := t.TempDir()
+	t.Setenv("RUVECTOR_DATA_DIR", filepath.Join(dir, "state"))
+	write(t, "data/biglaw.db", "db")
+	write(t, "data/biglaw.db-wal", "wal")
+	write(t, "data/costs.jsonl", "c")
+	write(t, "data/attachments/a/b.pdf", "pdf")
+	write(t, "data/.profiles.json", "profiles") // a dotfile already in the old default data dir
+
+	c := Load()
+	if _, err := MigrateLegacyStateFiles(c); err != nil {
+		t.Fatal(err)
+	}
+	for rel, want := range map[string]string{
+		"biglaw.db": "db", "biglaw.db-wal": "wal", "costs.jsonl": "c", "attachments/a/b.pdf": "pdf",
+		".profiles.json": "profiles",
+	} {
+		if got := read(t, filepath.Join(dir, "state", rel)); got != want {
+			t.Errorf("%s = %q", rel, got)
+		}
+	}
+	if exists("data/biglaw.db") || exists("data/biglaw.db-wal") || exists("data/attachments") {
+		t.Error("legacy copies left behind")
+	}
+	if err := c.CheckStateLayout(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A database that already exists in the data dir is never paired with a
+// legacy journal.
+func TestMigrateCompanionNeverOrphaned(t *testing.T) {
+	inScratch(t)
+	t.Setenv("RUVECTOR_DATA_DIR", "state")
+	write(t, "data/biglaw.db", "old")
+	write(t, "data/biglaw.db-wal", "oldwal")
+	write(t, "state/biglaw.db-wal", "stray")
+	if _, err := MigrateLegacyStateFiles(Load()); err == nil {
+		t.Fatal("want an error for a stray journal at the destination")
+	}
+	if read(t, "data/biglaw.db") != "old" || exists("state/biglaw.db") {
+		t.Fatal("nothing may move when the group cannot move together")
+	}
+}
+
+func TestMigrateSymlinkMovesAsLink(t *testing.T) {
+	dir := inScratch(t)
+	write(t, "real/tasks.json", "linked")
+	if err := os.Symlink("real/tasks.json", ".tasks.json"); err != nil { // relative target
+		t.Fatal(err)
+	}
+	abs := filepath.Join(dir, "real", "profiles.json")
+	write(t, abs, "p")
+	if err := os.Symlink(abs, ".profiles.json"); err != nil { // absolute target
+		t.Fatal(err)
+	}
+	c := Load()
+	if _, err := MigrateLegacyStateFiles(c); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{c.Persistence.TasksFile, c.Persistence.ProfilesFile} {
+		if info, err := os.Lstat(p); err != nil || info.Mode()&os.ModeSymlink == 0 {
+			t.Fatalf("%s should be a symlink: %v", p, err)
+		}
+	}
+	if read(t, c.Persistence.TasksFile) != "linked" || read(t, c.Persistence.ProfilesFile) != "p" {
+		t.Fatal("moved links do not resolve to the original files")
+	}
+}
+
+func TestMigrateRefusesUnmovableState(t *testing.T) {
+	inScratch(t)
+	if err := os.MkdirAll(".tasks.json", 0o755); err != nil { // a dir where a file belongs
+		t.Fatal(err)
+	}
+	if _, err := MigrateLegacyStateFiles(Load()); err == nil || !strings.Contains(err.Error(), "TASKS_FILE") {
+		t.Fatalf("want an actionable error naming TASKS_FILE, got %v", err)
+	}
+}
+
+// Regression guard: every path-like config field must be a registered state
+// path (so it defaults into the data dir and is migrated + checked), or be
+// listed here as deliberately not state.
+func TestEveryPathFieldIsRegisteredState(t *testing.T) {
+	inScratch(t)
+	t.Setenv("RUVECTOR_DATA_DIR", "/srv/biglaw")
+	c := Load()
+	if err := c.CheckStateLayout(); err != nil {
+		t.Fatal(err)
+	}
+	registered := map[string]bool{}
+	for _, p := range c.StatePaths() {
+		registered[p.Path] = true
+	}
+	notState := map[string]bool{
+		"VectorDB.DataDir": true, // the root itself
+		"PDF.OutputDir":    true, // generated deliverables, not platform state
+		"PDF.PythonBin":    true,
+	}
+	var walk func(v reflect.Value, name string)
+	walk = func(v reflect.Value, name string) {
+		switch v.Kind() {
+		case reflect.Struct:
+			for i := 0; i < v.NumField(); i++ {
+				f := v.Type().Field(i)
+				if !f.IsExported() {
+					continue
+				}
+				n := f.Name
+				if name != "" {
+					n = name + "." + f.Name
+				}
+				walk(v.Field(i), n)
+			}
+		case reflect.String:
+			base := name[strings.LastIndex(name, ".")+1:]
+			if !(strings.HasSuffix(base, "File") || strings.HasSuffix(base, "Dir") || strings.HasSuffix(base, "Path")) {
+				return
+			}
+			if notState[name] || v.String() == "" {
+				return
+			}
+			if !registered[v.String()] {
+				t.Errorf("%s = %q is a path but not a registered state path", name, v.String())
+			}
+		}
+	}
+	walk(reflect.ValueOf(*c), "")
 }
 
 func TestMigrateNoOpWhenDataDirIsWorkingDir(t *testing.T) {
@@ -184,8 +348,8 @@ func TestDefaultAPIURL(t *testing.T) {
 		"::1":       "http://[::1]:3101",
 		"biglaw":    "http://biglaw:3101",
 	} {
-		if got := defaultAPIURL(host, 3101); got != want {
-			t.Errorf("defaultAPIURL(%q) = %q, want %q", host, got, want)
+		if got := LocalAPIURL(host, 3101); got != want {
+			t.Errorf("LocalAPIURL(%q) = %q, want %q", host, got, want)
 		}
 	}
 }

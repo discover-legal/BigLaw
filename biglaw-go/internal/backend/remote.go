@@ -10,10 +10,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/discover-legal/biglaw-go/internal/audit"
@@ -21,14 +24,21 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
 
-// Remote serves the Backend by calling an owner process's REST API. It holds
-// no state beyond an HTTP client: every call is a request to the owner, so
-// tasks and documents created through it are the owner's, visible to the
-// workbench and every other client.
+// Remote serves the Backend by calling an owner process's REST API — the
+// same Local.As(principal) operations, run on the far side of HTTP as the
+// principal the owner resolves for this client's bearer token. It holds no
+// state beyond an HTTP client, so everything created through it is the
+// owner's, visible to the workbench and every other client.
 type Remote struct {
 	base  *url.URL
 	token string
 	hc    *http.Client
+
+	// Lazy attach: the first call (or Attach) probes GET /me, retrying an
+	// unreachable owner until graceUntil, and caches the principal.
+	mu         sync.Mutex
+	principal  *Principal
+	graceUntil time.Time
 }
 
 // remoteTimeout bounds one REST call. Ingest is the slow path (chunking and
@@ -41,23 +51,51 @@ const maxRemoteBody = 64 << 20
 // NewRemote returns a client for the BigLaw REST API at baseURL. A non-empty
 // token is sent as "Authorization: Bearer <token>" on every request — the
 // credential the API's auth middleware accepts from non-browser callers
-// (API_KEY, bound to API_PROFILE_ID) when AUTH_ENABLED=true; the API ignores
-// it when auth is off.
-func NewRemote(baseURL, token string) (*Remote, error) {
+// (API_KEY, bound to API_PROFILE_ID) when AUTH_ENABLED=true. Redirects are
+// never followed (a 3xx would carry the bearer elsewhere), and plain http to
+// a non-loopback host is warned about. grace is how long the first call
+// keeps retrying an owner that is not answering yet (it may be booting).
+func NewRemote(baseURL, token string, grace time.Duration) (*Remote, error) {
 	u, err := url.Parse(strings.TrimRight(strings.TrimSpace(baseURL), "/"))
 	if err != nil {
-		return nil, fmt.Errorf("backend URL %q: %w", baseURL, err)
+		return nil, fmt.Errorf("backend URL: %w", err)
 	}
-	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return nil, fmt.Errorf("backend URL %q: want http(s)://host[:port]", baseURL)
+	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.Hostname() == "" {
+		return nil, fmt.Errorf("backend URL %q: want http(s)://host[:port]", u.Redacted())
 	}
-	return &Remote{base: u, token: token, hc: &http.Client{Timeout: remoteTimeout}}, nil
+	u.RawQuery, u.Fragment = "", ""
+	r := &Remote{
+		base:  u,
+		token: token,
+		hc: &http.Client{
+			Timeout: remoteTimeout,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse // surfaced as an error by do
+			},
+		},
+		graceUntil: time.Now().Add(grace),
+	}
+	if u.Scheme == "http" && !isLoopback(u.Hostname()) {
+		slog.Warn("BigLaw backend reached over plain http on a non-loopback host: requests"+
+			" (and the bearer token, if set) travel unencrypted — prefer https",
+			"api", r.URL(), "token", token != "")
+	}
+	return r, nil
+}
+
+func isLoopback(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 var _ Backend = (*Remote)(nil)
 
-// URL is the backend base URL (for logs and error messages).
-func (r *Remote) URL() string { return r.base.String() }
+// URL is the backend base URL with any userinfo password redacted (for logs
+// and error messages).
+func (r *Remote) URL() string { return r.base.Redacted() }
 
 // Principal is the identity the backend resolved for this client (GET /me).
 type Principal struct {
@@ -65,27 +103,65 @@ type Principal struct {
 	AuthEnabled bool               `json:"authEnabled"`
 }
 
-// Ping checks that a BigLaw backend is reachable at the URL and accepts this
-// client's credentials, returning the principal it acts as. It is the
-// startup probe for mcp mode: an error here means no tool call can work.
+// Ping probes the backend once: reachable, accepts this client's credentials,
+// and really is BigLaw. It returns the principal the client acts as.
 func (r *Remote) Ping(ctx context.Context) (*Principal, error) {
 	var p Principal
-	if err := r.do(ctx, http.MethodGet, "/me", nil, nil, &p); err != nil {
+	if err := r.send(ctx, http.MethodGet, "/me", nil, nil, &p); err != nil {
 		switch {
 		case errors.Is(err, ErrUnauthorized):
-			return nil, fmt.Errorf("BigLaw backend at %s rejected this client: %w — it runs with "+
-				"AUTH_ENABLED=true; set BIG_MICHAEL_API_TOKEN (or API_KEY) to the backend's API_KEY", r.URL(), err)
+			return nil, wrapKind(err, fmt.Sprintf("BigLaw backend at %s rejected this client: %v — it runs with "+
+				"AUTH_ENABLED=true; set BIG_MICHAEL_API_TOKEN (or API_KEY) to the backend's API_KEY", r.URL(), err))
 		case errors.Is(err, ErrUnavailable):
-			return nil, fmt.Errorf("no BigLaw backend reachable at %s: %w — start one "+
-				"(BIG_MICHAEL_MODE=backend, or the Docker stack) or point BIG_MICHAEL_API at it", r.URL(), err)
+			return nil, wrapKind(err, fmt.Sprintf("no BigLaw backend reachable at %s: %v — start one "+
+				"(BIG_MICHAEL_MODE=backend, or the Docker stack) or point BIG_MICHAEL_API at it", r.URL(), err))
 		default:
-			return nil, fmt.Errorf("%s does not look like a BigLaw backend: GET /me: %w", r.URL(), err)
+			return nil, wrapKind(err, fmt.Sprintf("%s does not look like a BigLaw backend: GET /me: %v", r.URL(), err))
 		}
 	}
 	if p.User == nil {
-		return nil, fmt.Errorf("%s does not look like a BigLaw backend: GET /me returned no principal", r.URL())
+		return nil, newErr(ErrInternal, fmt.Sprintf("%s does not look like a BigLaw backend: GET /me returned no principal", r.URL()))
 	}
 	return &p, nil
+}
+
+// wrapKind keeps err's kind under a more helpful message.
+func wrapKind(err error, msg string) error {
+	var be *Error
+	if errors.As(err, &be) {
+		return &Error{Kind: be.Kind, Msg: msg}
+	}
+	return newErr(ErrInternal, msg)
+}
+
+// Attach makes sure the backend has been probed successfully, probing now if
+// not. While the grace window is open an unreachable backend is retried;
+// after it, one attempt per call. Auth and protocol failures are reported at
+// once. Every operation calls Attach first, so the MCP server can answer
+// initialize immediately and a backend that comes up later is picked up.
+func (r *Remote) Attach(ctx context.Context) (*Principal, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.principal != nil {
+		return r.principal, nil
+	}
+	for {
+		p, err := r.Ping(ctx)
+		if err == nil {
+			r.principal = p
+			slog.Info("MCP thin client attached", "api", r.URL(),
+				"principal", p.User.ProfileID, "role", p.User.Role, "authEnabled", p.AuthEnabled)
+			return p, nil
+		}
+		if !errors.Is(err, ErrUnavailable) || !time.Now().Before(r.graceUntil) {
+			return nil, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, err
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
 }
 
 func (r *Remote) SubmitTask(ctx context.Context, in SubmitTaskInput) (*types.Task, error) {
@@ -113,17 +189,11 @@ func (r *Remote) ListTasks(ctx context.Context) ([]*types.Task, error) {
 }
 
 func (r *Remote) ApproveGate(ctx context.Context, taskID, gateID, note string) error {
-	body := struct {
-		Note string `json:"note"`
-	}{note}
-	return r.do(ctx, http.MethodPost, "/tasks/"+seg(taskID)+"/gates/"+seg(gateID)+"/approve", nil, body, nil)
+	return r.do(ctx, http.MethodPost, "/tasks/"+seg(taskID)+"/gates/"+seg(gateID)+"/approve", nil, gateNote{note}, nil)
 }
 
 func (r *Remote) RejectGate(ctx context.Context, taskID, gateID, reason string) error {
-	body := struct {
-		Reason string `json:"reason"`
-	}{reason}
-	return r.do(ctx, http.MethodPost, "/tasks/"+seg(taskID)+"/gates/"+seg(gateID)+"/reject", nil, body, nil)
+	return r.do(ctx, http.MethodPost, "/tasks/"+seg(taskID)+"/gates/"+seg(gateID)+"/reject", nil, gateReason{reason}, nil)
 }
 
 func (r *Remote) SubmitFromTemplate(ctx context.Context, in SubmitFromTemplateInput) (*types.Task, error) {
@@ -178,8 +248,10 @@ func (r *Remote) ListAgents(ctx context.Context) ([]types.AgentDefinition, error
 
 func (r *Remote) ReadAudit(ctx context.Context, aq AuditQuery) ([]audit.AuditEntry, error) {
 	q := url.Values{"limit": {strconv.Itoa(clampAuditLimit(aq.Limit))}}
-	if aq.TaskID != "" {
-		q.Set("taskId", aq.TaskID)
+	for k, v := range map[string]string{"taskId": aq.TaskID, "actorId": aq.ActorID, "event": aq.Event} {
+		if v != "" {
+			q.Set(k, v)
+		}
 	}
 	out := []audit.AuditEntry{}
 	if err := r.do(ctx, http.MethodGet, "/audit", q, nil, &out); err != nil {
@@ -218,17 +290,24 @@ func (r *Remote) ListTimeEntries(ctx context.Context, f timekeeping.TimeFilter) 
 
 // ─── Transport ────────────────────────────────────────────────────────────────
 
-// seg escapes one path segment (task and gate IDs are UUIDs, but never trust
-// a caller-supplied ID not to contain "/" or "..").
+// seg escapes one path segment; the API routes on the raw (escaped) path,
+// so an ID containing "/" or ".." stays a single segment.
 func seg(s string) string { return url.PathEscape(s) }
 
-// do performs one REST call. A non-2xx status becomes an *Error whose kind
-// follows the status and whose message is the API's {"error": …} text, so a
-// remote failure reads exactly like the local one.
+// do attaches (lazily probing the backend) and performs one REST call.
 func (r *Remote) do(ctx context.Context, method, path string, query url.Values, in, out any) error {
-	// path arrives already escaped (see seg); keep it verbatim as RawPath.
+	if _, err := r.Attach(ctx); err != nil {
+		return err
+	}
+	return r.send(ctx, method, path, query, in, out)
+}
+
+// send performs one REST call. A non-2xx status becomes an *Error whose kind
+// follows the status and whose message is the API's {"error": …} text, so a
+// remote failure reads exactly like the in-process one.
+func (r *Remote) send(ctx context.Context, method, path string, query url.Values, in, out any) error {
 	u := *r.base
-	escaped := strings.TrimRight(u.EscapedPath(), "/") + path
+	escaped := strings.TrimRight(u.EscapedPath(), "/") + path // path is pre-escaped (seg)
 	unescaped, err := url.PathUnescape(escaped)
 	if err != nil {
 		return newErr(ErrInvalid, "bad request path: "+err.Error())
@@ -240,7 +319,14 @@ func (r *Remote) do(ctx context.Context, method, path string, query url.Values, 
 	if in != nil {
 		raw, err := json.Marshal(in)
 		if err != nil {
-			return newErr(ErrInternal, "encode request: "+err.Error())
+			return newErr(ErrInvalid, "encode request: "+err.Error())
+		}
+		// The operation's own size rule (checkSize), applied before sending:
+		// the call fails exactly as it would in-process, and the API never
+		// sees a body it would have to cut off.
+		if len(raw) > MaxRequestBytes {
+			return newErr(ErrInvalid, fmt.Sprintf("request too large: %d bytes exceeds the %d MiB limit",
+				len(raw), MaxRequestBytes>>20))
 		}
 		body = bytes.NewReader(raw)
 	}
@@ -266,6 +352,11 @@ func (r *Remote) do(ctx context.Context, method, path string, query url.Values, 
 		return newErr(ErrUnavailable, "read response: "+err.Error())
 	}
 
+	if resp.StatusCode >= 300 && resp.StatusCode <= 399 {
+		return newErr(ErrInternal, fmt.Sprintf("backend answered %s %s with a redirect (HTTP %d to %q); "+
+			"redirects are not followed — point BIG_MICHAEL_API at the final URL",
+			method, path, resp.StatusCode, resp.Header.Get("Location")))
+	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return statusError(resp.StatusCode, raw)
 	}
@@ -289,16 +380,18 @@ func statusError(status int, raw []byte) error {
 	if msg == "" {
 		msg = http.StatusText(status)
 	}
-	switch {
-	case status == http.StatusBadRequest:
+	switch status {
+	case http.StatusBadRequest:
 		return newErr(ErrInvalid, msg)
-	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+	case http.StatusUnauthorized:
 		return newErr(ErrUnauthorized, msg)
-	case status == http.StatusNotFound:
+	case http.StatusForbidden:
+		return newErr(ErrForbidden, msg)
+	case http.StatusNotFound:
 		return newErr(ErrNotFound, msg)
-	case status == http.StatusServiceUnavailable:
+	case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
 		return newErr(ErrUnavailable, msg)
-	case status == http.StatusInternalServerError:
+	case http.StatusInternalServerError:
 		return newErr(ErrInternal, msg)
 	default:
 		return newErr(ErrInternal, fmt.Sprintf("HTTP %d: %s", status, msg))

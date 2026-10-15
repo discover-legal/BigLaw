@@ -46,10 +46,17 @@ type RunConfig struct {
 	// (BIG_MICHAEL_API; default http://<API_HOST>:<API_PORT>, with a
 	// wildcard bind host mapped to loopback).
 	APIURL string
+	// APIURLExplicit is true when BIG_MICHAEL_API was set (auto mode then
+	// warns if the data-dir owner advertises a different URL).
+	APIURLExplicit bool
 	// APIToken is the bearer credential a thin client presents
 	// (BIG_MICHAEL_API_TOKEN, falling back to API_KEY so a client sharing the
 	// backend's .env authenticates as the API_PROFILE_ID profile).
 	APIToken string
+	// LockDisabled (BIGLAW_LOCK=off) skips the data-dir single-writer lock —
+	// an escape hatch for filesystems without advisory locks. Run at most
+	// one owner per data dir by hand then.
+	LockDisabled bool
 }
 
 const DefaultSessionSecret = "dev-insecure-change-me-in-production-please"
@@ -242,6 +249,7 @@ type PersistenceConfig struct {
 	CostFile        string
 	PlaybooksFile   string
 	ClientVoiceFile string
+	ClioTokensFile  string
 }
 
 // ModelRate is a per-model price pair in USD per million tokens, as it
@@ -525,10 +533,9 @@ type Config struct {
 	Monitors       MonitorsConfig
 	Resilience     ResilienceConfig
 
-	// legacyState lists the state files that took their default (no env
-	// override) and whose pre-data-dir default was a file in the working
-	// directory. Populated by Load, consumed by MigrateLegacyStateFiles.
-	legacyState []legacyStateFile
+	// state is every state path Load resolved (see StatePaths), consumed by
+	// MigrateLegacyStateFiles and CheckStateLayout.
+	state []StatePath
 }
 
 // ─── Run-hygiene resilience (round-timeout retry + boot task quarantine) ─────

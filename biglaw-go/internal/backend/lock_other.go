@@ -5,15 +5,10 @@
 
 package backend
 
-import (
-	"log/slog"
-	"os"
-)
+import "os"
 
-// tryLock on platforms without flock (BigLaw ships for Linux/macOS/ARM SBCs)
-// always succeeds: the data dir is unguarded, so do not run two owners there.
+// tryLock on platforms without flock (BigLaw ships for Linux/macOS/ARM SBCs):
+// the data dir runs unguarded, with a warning from AcquireDataLock.
 func tryLock(*os.File) (bool, error) {
-	slog.Warn("data-dir single-writer lock is not supported on this platform; " +
-		"run at most one owning BigLaw process per data dir")
-	return false, nil
+	return false, errLockUnsupported
 }

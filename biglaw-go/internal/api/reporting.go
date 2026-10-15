@@ -12,44 +12,29 @@ import (
 
 	"github.com/discover-legal/biglaw-go/internal/audit"
 	"github.com/discover-legal/biglaw-go/internal/auth"
+	"github.com/discover-legal/biglaw-go/internal/backend"
 	"github.com/discover-legal/biglaw-go/internal/timekeeping"
-	"github.com/discover-legal/biglaw-go/internal/types"
 	"github.com/gin-gonic/gin"
 )
 
 // ─── Time entries ─────────────────────────────────────────────────────────────
 
 func (s *Server) handleListTimeEntries(c *gin.Context) {
-	u := getUser(c)
-
-	filter := timekeeping.TimeFilter{}
-
-	// Partners may filter by any profileId; lawyers are locked to their own.
-	if auth.IsPartner(u) {
-		filter.ProfileID = c.Query("profileId")
-	} else {
-		filter.ProfileID = u.ProfileID
+	// profileId is honoured for partners only; the backend locks everyone
+	// else to their own entries. Unparseable bounds are ignored.
+	filter := timekeeping.TimeFilter{
+		ProfileID:    c.Query("profileId"),
+		TaskID:       c.Query("taskId"),
+		MatterNumber: c.Query("matterNumber"),
 	}
-
-	filter.TaskID = c.Query("taskId")
-	filter.MatterNumber = c.Query("matterNumber")
-
-	if fromStr := c.Query("from"); fromStr != "" {
-		if t, err := time.Parse(time.RFC3339, fromStr); err == nil {
-			filter.From = &t
-		}
+	if t, err := time.Parse(time.RFC3339, c.Query("from")); err == nil {
+		filter.From = &t
 	}
-	if toStr := c.Query("to"); toStr != "" {
-		if t, err := time.Parse(time.RFC3339, toStr); err == nil {
-			filter.To = &t
-		}
+	if t, err := time.Parse(time.RFC3339, c.Query("to")); err == nil {
+		filter.To = &t
 	}
-
-	entries := s.time.List(filter)
-	if entries == nil {
-		entries = []types.TimeEntry{}
-	}
-	c.JSON(http.StatusOK, entries)
+	entries, err := s.as(c).ListTimeEntries(c.Request.Context(), filter)
+	reply(c, http.StatusOK, entries, err)
 }
 
 // ─── Cost ─────────────────────────────────────────────────────────────────────
@@ -65,32 +50,14 @@ func (s *Server) handleCostSummary(c *gin.Context) {
 // ─── Audit ────────────────────────────────────────────────────────────────────
 
 func (s *Server) handleAudit(c *gin.Context) {
-	u := getUser(c)
-
-	limit, err := strconv.Atoi(c.DefaultQuery("limit", "200"))
-	if err != nil || limit < 1 {
-		limit = 200
-	}
-	if limit > 1000 {
-		limit = 1000
-	}
-
-	f := audit.Filter{
+	limit, _ := strconv.Atoi(c.Query("limit")) // absent/invalid → default 200, max 1000
+	entries, err := s.as(c).ReadAudit(c.Request.Context(), backend.AuditQuery{
 		TaskID:  c.Query("taskId"),
-		ActorID: c.Query("actorId"),
+		ActorID: c.Query("actorId"), // lawyers are locked to their own actions
 		Event:   c.Query("event"),
 		Limit:   limit,
-	}
-	// Lawyers see only their own actions; partners may browse anyone's.
-	if !auth.IsPartner(u) {
-		f.ActorID = u.ProfileID
-	}
-
-	entries := audit.Default.ReadFiltered(f)
-	if entries == nil {
-		entries = []audit.AuditEntry{}
-	}
-	c.JSON(http.StatusOK, entries)
+	})
+	reply(c, http.StatusOK, entries, err)
 }
 
 // handleAuditStream streams live audit events as Server-Sent Events.

@@ -10,10 +10,12 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/discover-legal/biglaw-go/internal/backend"
 )
 
 const (
-	maxJSONBody      = 16 << 20
+	maxJSONBody      = backend.MaxRequestBytes
 	maxMultipartBody = 32 << 20
 )
 

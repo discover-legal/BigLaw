@@ -60,8 +60,14 @@ const (
 
 type contractFixture struct {
 	orch   *orchestrator.Orchestrator
-	local  *MCPServer
-	remote *MCPServer
+	local  *MCPServer // MCP over the owner's backend.Local, as the local partner
+	remote *MCPServer // MCP over backend.Remote → REST → the same backend.Local
+
+	// The same pair for a non-partner principal: a lawyer, reached remotely
+	// through a REST server whose bearer key is bound to that lawyer.
+	lawyerLocal  *MCPServer
+	lawyerRemote *MCPServer
+	lawyerID     string
 }
 
 // newContractFixture builds one owner stack (as cmd/biglaw does, minus the
@@ -136,18 +142,41 @@ func newContractFixture(t *testing.T) *contractFixture {
 	}
 
 	srv := api.New(cfg, orch, provReg, profileStore, clientStore, timeStore, knowledgeStore, agentReg, cost.Default, nil)
+	srv.AttachPlugins(plugins)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
-
-	remote, err := backend.NewRemote(ts.URL, "")
+	remote, err := backend.NewRemote(ts.URL, "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := remote.Ping(context.Background()); err != nil {
-		t.Fatalf("ping: %v", err)
+	if _, err := remote.Attach(context.Background()); err != nil {
+		t.Fatalf("attach: %v", err)
 	}
-	fx.local = New(backend.NewLocal(orch, knowledgeStore, agentReg, plugins, timeStore))
+	fx.local = New(srv.Backend().As(auth.LocalPartner))
 	fx.remote = New(remote)
+
+	// A lawyer, and a second REST server over the same services with auth on
+	// and its bearer key bound to that lawyer.
+	lawyer, err := profileStore.Create(auth.CreateProfileInput{Name: "Lee Lawyer", Email: "lee@example.test", Role: "lawyer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fx.lawyerID = lawyer.ID
+	authCfg := *cfg
+	authCfg.Auth.Enabled = true
+	authCfg.Auth.SessionSecret = strings.Repeat("s", 40)
+	authCfg.API.APIKey = strings.Repeat("k", 40)
+	authCfg.API.ProfileID = lawyer.ID
+	lawyerSrv := api.New(&authCfg, orch, provReg, profileStore, clientStore, timeStore, knowledgeStore, agentReg, cost.Default, nil)
+	lawyerSrv.AttachPlugins(plugins)
+	lts := httptest.NewServer(lawyerSrv.Handler())
+	t.Cleanup(lts.Close)
+	lawyerRemote, err := backend.NewRemote(lts.URL, authCfg.API.APIKey, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fx.lawyerLocal = New(srv.Backend().As(backend.PrincipalFor(lawyer)))
+	fx.lawyerRemote = New(lawyerRemote)
 	return fx
 }
 
@@ -308,8 +337,13 @@ func walk(v any, mask bool) any {
 // same calls tool on both servers and requires identical outcomes.
 func (f *contractFixture) same(t *testing.T, tool string, args map[string]any) toolOutcome {
 	t.Helper()
-	l := call(t, f.local, tool, args)
-	r := call(t, f.remote, tool, args)
+	return sameOn(t, f.local, f.remote, tool, args)
+}
+
+func sameOn(t *testing.T, local, remote *MCPServer, tool string, args map[string]any) toolOutcome {
+	t.Helper()
+	l := call(t, local, tool, args)
+	r := call(t, remote, tool, args)
 	if l.IsError != r.IsError {
 		t.Fatalf("%s %v: isError local=%v remote=%v\nlocal:  %s\nremote: %s", tool, args, l.IsError, r.IsError, l.Text, r.Text)
 	}
@@ -475,6 +509,14 @@ func TestMCPContractLocalVsRemote(t *testing.T) {
 	}{
 		{"get_task", map[string]any{"taskId": "no-such-task"}},
 		{"get_task", map[string]any{}},
+		// IDs that are not one URL segment must stay one (typed not-found).
+		{"get_task", map[string]any{"taskId": "a/b"}},
+		{"get_task", map[string]any{"taskId": "../health"}},
+		{"get_task", map[string]any{"taskId": "ünï/../x?y=1#z"}},
+		{"approve_gate", map[string]any{"taskId": seedTaskID, "gateId": "../../tasks"}},
+		// The request-size rule lives in the operation: same error both ways.
+		{"ingest_document", map[string]any{"title": "big", "content": strings.Repeat("x", backend.MaxRequestBytes+1)}},
+		{"submit_task", map[string]any{"description": strings.Repeat("y", backend.MaxRequestBytes+1), "workflowType": "review"}},
 		{"get_round", map[string]any{"taskId": seedTaskID, "round": 9}},
 		{"get_round", map[string]any{"taskId": "no-such-task", "round": 1}},
 		{"approve_gate", map[string]any{"taskId": seedTaskID, "gateId": gateA}}, // already decided
@@ -490,10 +532,72 @@ func TestMCPContractLocalVsRemote(t *testing.T) {
 		}
 	}
 
+	f.lawyerContract(t)
+
 	for _, name := range listToolNames(t, f.local) {
 		if !covered[name] {
 			t.Errorf("tool %q is not covered by the contract test", name)
 		}
+	}
+}
+
+// lawyerContract: for a non-partner the access rules (visibility, owner
+// scoping, partner-only listings) are the same in-process and over REST.
+func (f *contractFixture) lawyerContract(t *testing.T) {
+	t.Helper()
+	ll, lr := f.lawyerLocal, f.lawyerRemote
+
+	// The lawyer's own work, created through each transport.
+	a := call(t, ll, "submit_task", map[string]any{"description": "Lee's research", "workflowType": "counsel"})
+	b := call(t, lr, "submit_task", map[string]any{"description": "Lee's research", "workflowType": "counsel"})
+	if a.IsError || b.IsError {
+		t.Fatalf("lawyer submit: %s / %s", a.Text, b.Text)
+	}
+	for _, out := range []toolOutcome{a, b} {
+		if !strings.Contains(out.Text, `"createdByProfileId":"`+f.lawyerID+`"`) {
+			t.Fatalf("task not attributed to the lawyer: %s", out.Text)
+		}
+	}
+	call(t, ll, "ingest_document", map[string]any{"title": "Lee memo", "content": "Lee's privileged memo on liability caps."})
+	call(t, lr, "ingest_document", map[string]any{"title": "Lee memo 2", "content": "Lee's second memo on liability caps.", "ownerID": "someone-else"})
+	f.settle(t)
+
+	for _, c := range []struct {
+		tool string
+		args map[string]any
+	}{
+		{"list_tasks", nil},
+		{"get_task", map[string]any{"taskId": idOf(t, a.Text)}},
+		{"get_task", map[string]any{"taskId": seedTaskID}}, // a partner's task: hidden
+		{"get_round", map[string]any{"taskId": seedTaskID, "round": 1}},
+		{"approve_gate", map[string]any{"taskId": seedTaskID, "gateId": gateA}},
+		{"reject_gate", map[string]any{"taskId": seedTaskID, "gateId": gateC, "reason": "x"}},
+		{"search_knowledge", map[string]any{"query": "liability", "topK": 10}},
+		{"get_time_entries", nil},
+		{"get_time_entries", map[string]any{"profileId": "local-partner"}}, // ignored for a lawyer
+		{"get_audit", map[string]any{"limit": 50}},
+		{"query_memory", nil},
+		{"list_plugins", nil}, // partner only
+		{"list_agents", nil},
+		{"list_templates", nil},
+	} {
+		sameOn(t, ll, lr, c.tool, c.args)
+	}
+
+	// And the rules really bite.
+	if out := call(t, lr, "get_task", map[string]any{"taskId": seedTaskID}); !out.IsError {
+		t.Fatalf("lawyer sees a partner's task: %s", out.Text)
+	}
+	if out := call(t, lr, "list_plugins", nil); !out.IsError || !strings.Contains(out.Text, "partner access required") {
+		t.Fatalf("lawyer list_plugins: %+v", out)
+	}
+	if out := call(t, lr, "search_knowledge", map[string]any{"query": "liability", "topK": 50}); strings.Contains(out.Text, "Acme MSA") ||
+		!strings.Contains(out.Text, "Lee memo 2") {
+		t.Fatalf("lawyer search not scoped to own documents: %s", out.Text)
+	}
+	if out := call(t, lr, "get_time_entries", map[string]any{"profileId": "local-partner"}); strings.Contains(out.Text, `"profileId":"local-partner"`) ||
+		!strings.Contains(out.Text, f.lawyerID) {
+		t.Fatalf("lawyer reads another profile's time: %s", out.Text)
 	}
 }
 
@@ -562,7 +666,7 @@ func TestRemoteForwardsBearerUnderAuth(t *testing.T) {
 	defer ts.Close()
 
 	// Without the token: the startup probe explains what to set.
-	anon, _ := backend.NewRemote(ts.URL, "")
+	anon, _ := backend.NewRemote(ts.URL, "", 0)
 	if _, err := anon.Ping(context.Background()); err == nil || !strings.Contains(err.Error(), "BIG_MICHAEL_API_TOKEN") {
 		t.Fatalf("anonymous ping: want an auth hint, got %v", err)
 	}
@@ -571,7 +675,7 @@ func TestRemoteForwardsBearerUnderAuth(t *testing.T) {
 	}
 
 	// With it: the backend resolves the bound profile.
-	authed, _ := backend.NewRemote(ts.URL, key)
+	authed, _ := backend.NewRemote(ts.URL, key, 0)
 	p, err := authed.Ping(context.Background())
 	if err != nil {
 		t.Fatalf("authed ping: %v", err)
