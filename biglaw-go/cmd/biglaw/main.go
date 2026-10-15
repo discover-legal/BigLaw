@@ -13,6 +13,10 @@
 package main
 
 import (
+	// Embedded IANA zone data: FIRM_TIMEZONE must resolve in minimal
+	// containers that ship no /usr/share/zoneinfo.
+	_ "time/tzdata"
+
 	"context"
 	"fmt"
 	"log/slog"

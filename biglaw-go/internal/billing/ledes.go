@@ -24,10 +24,17 @@ package billing
 
 import (
 	"fmt"
+	"math"
+	"os"
+	"sort"
 	"strings"
 	"time"
+	"unicode"
 
-	"github.com/discover-legal/biglaw-go/internal/strutil"
+	"golang.org/x/text/runes"
+	"golang.org/x/text/transform"
+	"golang.org/x/text/unicode/norm"
+
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
 
@@ -62,6 +69,10 @@ type LedesOptions struct {
 	// Profile resolves a timekeeper's profile for classification; nil-safe.
 	Profile func(profileID string) *types.LawyerProfile
 	Now     time.Time // zero → time.Now()
+	// Location is the firm's timezone for INVOICE_DATE, billing period and
+	// LINE_ITEM_DATE (work done at 7pm New York is that day's work, not the
+	// next UTC day's). nil → UTC.
+	Location *time.Location
 }
 
 // TimekeeperClassification maps a BigLaw profile to a LEDES classification.
@@ -110,136 +121,236 @@ func activityCodeFor(e types.TimeEntry) string {
 	return ""
 }
 
-// LedesBillable reports whether an entry may appear on a LEDES invoice:
+// ledesBillable reports whether an entry may appear on a LEDES invoice:
 // closed, at least one billing unit, and not written off.
-func LedesBillable(e types.TimeEntry) bool {
+func ledesBillable(e types.TimeEntry) bool {
 	return e.EndedAt != nil && e.BillingUnits > 0 && !e.NonBillable
 }
 
+// LedesSkipped is an otherwise-billable entry left off the invoice because its
+// stored amount disagrees with units × rate (legacy rows); a human must fix it.
+type LedesSkipped struct {
+	EntryID string `json:"entryId"`
+	Reason  string `json:"reason"`
+}
+
+// lineTotal derives LINE_ITEM_TOTAL from the one source of truth, hours ×
+// rate (hours = units / 10), rounded to cents. ok=false when the stored
+// amount contradicts it (or a rate exists but no amount was ever computed):
+// such a row is skipped and reported rather than billed at a guessed figure.
+func lineTotal(e types.TimeEntry) (total, rate float64, reason string) {
+	if e.BillingRate != nil {
+		rate = *e.BillingRate
+	}
+	total = round2(float64(e.BillingUnits) * rate / 10)
+	switch {
+	case e.BillingAmountUsd == nil && rate > 0:
+		return 0, rate, fmt.Sprintf("rate %.2f set but no billed amount recorded", rate)
+	case e.BillingAmountUsd != nil && math.Abs(*e.BillingAmountUsd-total) > 0.005:
+		return 0, rate, fmt.Sprintf("stored amount %.2f != %d units x %.2f/h = %.2f", *e.BillingAmountUsd, e.BillingUnits, rate, total)
+	}
+	return total, rate, ""
+}
+
 // ExportLedes1998B converts time entries to LEDES 1998B pipe-delimited format.
+// See ExportLedes1998BReport.
 func ExportLedes1998B(entries []types.TimeEntry, opts LedesOptions) string {
+	out, _ := ExportLedes1998BReport(entries, opts)
+	return out
+}
+
+// ExportLedes1998BReport converts time entries to a LEDES 1998B file with one
+// invoice per (client, matter): each block has its own INVOICE_NUMBER (the
+// base number, suffixed "-<matter>" when the file holds more than one
+// matter), INVOICE_TOTAL, billing period and line numbering. Dates are in
+// opts.Location (the firm's timezone; UTC when nil). Entries whose stored
+// amount contradicts units × rate are returned as skipped, not billed.
+func ExportLedes1998BReport(entries []types.TimeEntry, opts LedesOptions) (string, []LedesSkipped) {
+	loc := opts.Location
+	if loc == nil {
+		loc = time.UTC
+	}
 	now := opts.Now
 	if now.IsZero() {
 		now = time.Now()
 	}
-	today := ledesDate(now)
+	date := func(t time.Time) string { return t.In(loc).Format("20060102") }
+	today := date(now)
 
-	// Only billable entries produce invoice lines; the invoice total and
-	// billing period are computed from those same entries so the stated
-	// total equals the sum of the line totals.
-	var valid []types.TimeEntry
+	type line struct {
+		e           types.TimeEntry
+		total, rate float64
+	}
+	type invoice struct {
+		client, matter string
+		lines          []line
+	}
+	var order []string
+	invoices := map[string]*invoice{}
+	var skipped []LedesSkipped
 	for _, e := range entries {
-		if LedesBillable(e) {
-			valid = append(valid, e)
+		if !ledesBillable(e) {
+			continue
 		}
-	}
-
-	lineTotals := make([]float64, len(valid))
-	invoiceTotal := 0.0
-	for i, e := range valid {
-		if e.BillingAmountUsd != nil {
-			lineTotals[i] = round2(*e.BillingAmountUsd)
+		total, rate, reason := lineTotal(e)
+		if reason != "" {
+			skipped = append(skipped, LedesSkipped{EntryID: e.ID, Reason: reason})
+			continue
 		}
-		invoiceTotal += lineTotals[i]
-	}
-
-	billingStart, billingEnd := today, today
-	if len(valid) > 0 {
-		earliest, latest := valid[0].StartedAt, *valid[0].EndedAt
-		for _, e := range valid {
-			if e.StartedAt.Before(earliest) {
-				earliest = e.StartedAt
-			}
-			if e.EndedAt.After(latest) {
-				latest = *e.EndedAt
-			}
+		key := e.ClientNumber + "\x00" + e.MatterNumber
+		inv := invoices[key]
+		if inv == nil {
+			inv = &invoice{client: e.ClientNumber, matter: e.MatterNumber}
+			invoices[key] = inv
+			order = append(order, key)
 		}
-		billingStart, billingEnd = ledesDate(earliest), ledesDate(latest)
+		inv.lines = append(inv.lines, line{e: e, total: total, rate: rate})
 	}
+	sort.Strings(order)
 
-	invNum := sanitizeField(opts.InvoiceNumber)
 	invDesc := sanitizeField(opts.InvoiceDescription)
 	firmID := sanitizeField(opts.LawFirmID)
-
-	lines := []string{"LEDES1998B[]", strings.Join(Ledes1998BFields, "|") + "[]"}
-	for i, e := range valid {
-		rate := 0.0
-		if e.BillingRate != nil {
-			rate = *e.BillingRate
+	out := []string{"LEDES1998B[]", strings.Join(Ledes1998BFields, "|") + "[]"}
+	for _, key := range order {
+		inv := invoices[key]
+		invNum := opts.InvoiceNumber
+		if len(order) > 1 {
+			invNum += "-" + inv.matter
 		}
-		tkID := e.ProfileID
-		tkName := e.ProfileName
-		var tkClass string
-		desc := e.Description
-		if e.AgentID != "" {
-			// AI time is billed to the AI timekeeper at the AI rate (the
-			// entry's own rate). LEDES has no AI class: "other timekeeper",
-			// labelled so the client can see it is AI work.
-			tkClass = TKOther
-			tkID, tkName = e.AgentID, e.AgentName
-			if tkName == "" {
-				tkName = e.AgentID
+		invNum = sanitizeField(invNum)
+
+		// The invoice total and billing period come from exactly the lines
+		// on this invoice, so INVOICE_TOTAL equals the sum of LINE_ITEM_TOTAL.
+		invoiceTotal := 0.0
+		earliest, latest := inv.lines[0].e.StartedAt, *inv.lines[0].e.EndedAt
+		for _, l := range inv.lines {
+			invoiceTotal += l.total
+			if l.e.StartedAt.Before(earliest) {
+				earliest = l.e.StartedAt
 			}
-			desc = "AI agent: " + desc
-		} else {
-			var p *types.LawyerProfile
-			if opts.Profile != nil && e.ProfileID != "" {
-				p = opts.Profile(e.ProfileID)
+			if l.e.EndedAt.After(latest) {
+				latest = *l.e.EndedAt
 			}
-			tkClass = TimekeeperClassification(p)
 		}
 
-		fields := []string{
-			today,                               // INVOICE_DATE
-			invNum,                              // INVOICE_NUMBER
-			sanitizeField(e.ClientNumber),       // CLIENT_ID
-			sanitizeField(e.MatterNumber),       // LAW_FIRM_MATTER_ID
-			fmt2(invoiceTotal),                  // INVOICE_TOTAL
-			billingStart,                        // BILLING_START_DATE
-			billingEnd,                          // BILLING_END_DATE
-			invDesc,                             // INVOICE_DESCRIPTION
-			fmt.Sprintf("%d", i+1),              // LINE_ITEM_NUMBER
-			"F",                                 // EXP/FEE/INV_ADJ_TYPE
-			fmt2(float64(e.BillingUnits) * 0.1), // LINE_ITEM_NUMBER_OF_UNITS (hours)
-			"0.00",                              // LINE_ITEM_ADJUSTMENT_AMOUNT
-			fmt2(lineTotals[i]),                 // LINE_ITEM_TOTAL
-			ledesDate(e.StartedAt),              // LINE_ITEM_DATE
-			sanitizeField(e.UTBMSTaskCode),      // LINE_ITEM_TASK_CODE
-			"",                                  // LINE_ITEM_EXPENSE_CODE (fees only)
-			sanitizeField(activityCodeFor(e)),   // LINE_ITEM_ACTIVITY_CODE
-			sanitizeField(tkID),                 // TIMEKEEPER_ID
-			sanitizeField(desc),                 // LINE_ITEM_DESCRIPTION
-			firmID,                              // LAW_FIRM_ID
-			fmt2(rate),                          // LINE_ITEM_UNIT_COST
-			sanitizeField(tkName),               // TIMEKEEPER_NAME
-			tkClass,                             // TIMEKEEPER_CLASSIFICATION
-			"",                                  // CLIENT_MATTER_ID (client's own matter ref; unknown)
+		for i, l := range inv.lines {
+			e := l.e
+			tkID, tkName, desc := e.ProfileID, e.ProfileName, e.Description
+			var tkClass string
+			if e.AgentID != "" {
+				// AI time is billed to the AI timekeeper at the AI rate (the
+				// entry's own rate). LEDES has no AI class: "other timekeeper",
+				// labelled so the client can see it is AI work.
+				tkClass = TKOther
+				tkID, tkName = e.AgentID, e.AgentName
+				if tkName == "" {
+					tkName = e.AgentID
+				}
+				desc = "AI agent: " + desc
+			} else {
+				var p *types.LawyerProfile
+				if opts.Profile != nil && e.ProfileID != "" {
+					p = opts.Profile(e.ProfileID)
+				}
+				tkClass = TimekeeperClassification(p)
+			}
+
+			fields := []string{
+				today,                               // INVOICE_DATE
+				invNum,                              // INVOICE_NUMBER
+				sanitizeField(inv.client),           // CLIENT_ID
+				sanitizeField(inv.matter),           // LAW_FIRM_MATTER_ID
+				fmt2(round2(invoiceTotal)),          // INVOICE_TOTAL
+				date(earliest),                      // BILLING_START_DATE
+				date(latest),                        // BILLING_END_DATE
+				invDesc,                             // INVOICE_DESCRIPTION
+				fmt.Sprintf("%d", i+1),              // LINE_ITEM_NUMBER
+				"F",                                 // EXP/FEE/INV_ADJ_TYPE
+				fmt2(float64(e.BillingUnits) * 0.1), // LINE_ITEM_NUMBER_OF_UNITS (hours)
+				"0.00",                              // LINE_ITEM_ADJUSTMENT_AMOUNT
+				fmt2(l.total),                       // LINE_ITEM_TOTAL = round2(hours × rate)
+				date(e.StartedAt),                   // LINE_ITEM_DATE (firm timezone)
+				sanitizeField(e.UTBMSTaskCode),      // LINE_ITEM_TASK_CODE
+				"",                                  // LINE_ITEM_EXPENSE_CODE (fees only)
+				sanitizeField(activityCodeFor(e)),   // LINE_ITEM_ACTIVITY_CODE
+				sanitizeField(tkID),                 // TIMEKEEPER_ID
+				sanitizeField(desc),                 // LINE_ITEM_DESCRIPTION
+				firmID,                              // LAW_FIRM_ID
+				fmt2(l.rate),                        // LINE_ITEM_UNIT_COST
+				sanitizeField(tkName),               // TIMEKEEPER_NAME
+				tkClass,                             // TIMEKEEPER_CLASSIFICATION
+				"",                                  // CLIENT_MATTER_ID (client's own matter ref; unknown)
+			}
+			out = append(out, strings.Join(fields, "|")+"[]")
 		}
-		lines = append(lines, strings.Join(fields, "|")+"[]")
 	}
-	return strings.Join(lines, crlf) + crlf
-}
-
-func ledesDate(t time.Time) string {
-	// Use UTC components — invoice dates are derived from UTC timestamps
-	// elsewhere, so a non-UTC server must not shift INVOICE_DATE / line
-	// dates by a day.
-	return t.UTC().Format("20060102")
+	return strings.Join(out, crlf) + crlf, skipped
 }
 
 func fmt2(f float64) string {
 	return fmt.Sprintf("%.2f", f)
 }
 
-// sanitizeField removes the 1998B delimiters ("|" separates fields, "[]"
-// terminates a line) and line breaks from free text.
+// sanitizeField makes free text safe for a 1998B field: the delimiters ("|"
+// separates fields, "[]" terminates a line) and line breaks are removed, and
+// the text is reduced to printable ASCII — LEDES 1998B is an ASCII format and
+// e-billing intake rejects or garbles other bytes. Accents are stripped
+// (é→e), common typography is mapped (“”→", —→-, …→...), anything else
+// becomes "?". Truncated to 200 characters after transliteration.
 func sanitizeField(s string) string {
+	s = toASCII(s)
 	s = strings.ReplaceAll(s, "|", " ")
 	s = strings.ReplaceAll(s, "[]", "[ ]")
-	s = strings.ReplaceAll(s, "\r", " ")
-	s = strings.ReplaceAll(s, "\n", " ")
 	if len(s) > 200 {
-		s = strutil.Truncate(s, 200)
+		s = s[:200] // ASCII: bytes == characters
 	}
 	return s
+}
+
+var asciiPunct = strings.NewReplacer(
+	"\u2018", "'", "\u2019", "'", "\u201A", "'", "\u201B", "'",
+	"\u201C", `"`, "\u201D", `"`, "\u201E", `"`, "\u00AB", `"`, "\u00BB", `"`,
+	"\u2013", "-", "\u2014", "-", "\u2212", "-", "\u2010", "-", "\u2011", "-",
+	"\u2026", "...", "\u00A0", " ", "\u2022", "*", "\u00A7", "S.", "\u00B6", "P.",
+	"\u00A9", "(c)", "\u00AE", "(R)", "\u2122", "(TM)", "\u20AC", "EUR", "\u00A3", "GBP",
+	"\u00DF", "ss", "\u00C6", "AE", "\u00E6", "ae", "\u0152", "OE", "\u0153", "oe",
+	"\u00D8", "O", "\u00F8", "o", "\u0141", "L", "\u0142", "l", "\u00D0", "D", "\u00F0", "d",
+	"\u00DE", "Th", "\u00FE", "th",
+)
+
+var stripMarks = transform.Chain(norm.NFD, runes.Remove(runes.In(unicode.Mn)), norm.NFC)
+
+func toASCII(s string) string {
+	s = asciiPunct.Replace(s)
+	if t, _, err := transform.String(stripMarks, s); err == nil {
+		s = t
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch {
+		case r == '\r' || r == '\n' || r == '\t':
+			b.WriteByte(' ')
+		case r >= 0x20 && r < 0x7f:
+			b.WriteRune(r)
+		default:
+			b.WriteByte('?')
+		}
+	}
+	return b.String()
+}
+
+// FirmLocation is the firm's timezone for billing dates: FIRM_TIMEZONE (an
+// IANA name such as "America/New_York"), default UTC. An invalid name falls
+// back to UTC and is reported via ok=false so the caller can warn.
+func FirmLocation() (loc *time.Location, ok bool) {
+	name := strings.TrimSpace(os.Getenv("FIRM_TIMEZONE"))
+	if name == "" {
+		return time.UTC, true
+	}
+	l, err := time.LoadLocation(name)
+	if err != nil {
+		return time.UTC, false
+	}
+	return l, true
 }

@@ -28,7 +28,13 @@ line, `|`-separated rows each ending in `[]`). `TIMEKEEPER_CLASSIFICATION` comes
 profile's title (partner / associate / of counsel / paralegal or legal assistant) and otherwise
 its role (partner → `PT`, lawyer → `AS`); unresolvable → `OT`. AI time uses the AI timekeeper's
 id/name and rate, classification `OT`, labelled "AI agent:" (Clio sync sends the same rate as the
-activity price and labels the note). UTBMS codes are passed through when an entry carries them; gate reviews
+activity price and labels the note). Each (client, matter) becomes its own invoice block
+(`INVOICE_NUMBER` suffixed `-<matter>` when an export spans several matters) with its own total
+and billing period. `LINE_ITEM_TOTAL` is always round2(hours × rate); a legacy entry whose stored
+amount disagrees is left off, logged, audited (`time.ledes_export_skipped`) and counted in the
+`X-Ledes-Skipped-Entries` response header. Free text is transliterated to printable ASCII
+(1998B is an ASCII format) and cut to 200 characters. Dates use `FIRM_TIMEZONE` (IANA name,
+default UTC). UTBMS codes are passed through when an entry carries them; gate reviews
 derive activity `A104`; nothing is guessed. Set `LEDES_LAW_FIRM_ID` to fill `LAW_FIRM_ID`.
 
 ```

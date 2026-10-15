@@ -16,6 +16,7 @@ import (
 	"os"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -438,7 +439,23 @@ func (s *Server) handleExportTimeLedes(c *gin.Context) {
 	if s.profiles != nil {
 		opts.Profile = s.profiles.Get
 	}
-	ledes := billing.ExportLedes1998B(closed, opts)
+	loc, ok := billing.FirmLocation()
+	if !ok {
+		slog.Warn("LEDES export: FIRM_TIMEZONE is not a valid IANA zone; using UTC", "value", os.Getenv("FIRM_TIMEZONE"))
+	}
+	opts.Location = loc
+	ledes, skipped := billing.ExportLedes1998BReport(closed, opts)
+	if len(skipped) > 0 {
+		// Never bill a guessed figure: inconsistent legacy rows are left off
+		// and surfaced for correction.
+		slog.Warn("LEDES export: entries skipped (stored amount disagrees with units x rate)", "count", len(skipped), "entries", skipped)
+		c.Header("X-Ledes-Skipped-Entries", strconv.Itoa(len(skipped)))
+		audit.Default.Write(audit.WriteRequest{
+			Event:   "time.ledes_export_skipped",
+			ActorID: getUser(c).ProfileID,
+			Data:    map[string]interface{}{"invoiceNumber": invoice, "skipped": skipped},
+		})
+	}
 	safe := billingFilenameRe.ReplaceAllString(invoice, "_")
 	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", safe+".ledes"))
 	// LEDES 1998B is plain ASCII text; it is not an X12 EDI document.
