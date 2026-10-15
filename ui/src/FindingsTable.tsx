@@ -4,7 +4,7 @@ import {
   getSortedRowModel, useReactTable, type SortingState,
 } from "@tanstack/react-table";
 import { motion } from "framer-motion";
-import type { Finding, Task, GateRequest } from "./types";
+import type { Finding, Task, GateRequest, Notify } from "./types";
 import { ConfidenceBar, CitationChips } from "./primitives";
 import { api } from "./api";
 
@@ -13,7 +13,7 @@ const col = createColumnHelper<Finding>();
 export function FindingsTable({ task, onChange, notify }: {
   task: Task;
   onChange: () => void;
-  notify: (msg: string) => void;
+  notify: Notify;
 }) {
   const [sorting, setSorting] = useState<SortingState>([{ id: "confidence", desc: false }]);
   const [filter, setFilter] = useState("");
@@ -43,11 +43,11 @@ export function FindingsTable({ task, onChange, notify }: {
       if (!reason) return;
       setBusy(gate.id);
       try { await api.rejectGate(task.id, gate.id, reason); notify("Finding rejected"); onChange(); }
-      catch (e) { notify((e as Error).message); } finally { setBusy(null); }
+      catch (e) { notify((e as Error).message, "error"); } finally { setBusy(null); }
     } else {
       setBusy(gate.id);
       try { await api.approveGate(task.id, gate.id); notify("Finding approved"); onChange(); }
-      catch (e) { notify((e as Error).message); } finally { setBusy(null); }
+      catch (e) { notify((e as Error).message, "error"); } finally { setBusy(null); }
     }
   }
 

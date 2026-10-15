@@ -192,6 +192,7 @@ func (s *SettingsStore) Get() PublicSettings {
 func (s *SettingsStore) Update(p Patch) (PublicSettings, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	p = s.dropUnchangedURL(p)
 	if err := s.validate(p); err != nil {
 		return PublicSettings{}, err
 	}
@@ -231,6 +232,29 @@ func (s *SettingsStore) public() PublicSettings {
 		Models:   Models{FigureModel: c.Models.FigureModel, SpineModel: c.Models.SpineModel, SynthesisModel: c.Models.SynthesisModel, Available: c.Models.Available},
 		Drafting: Drafting{DyTopo: c.Drafting.DyTopo, AgentsPerSection: c.Drafting.AgentsPerSection, Rounds: c.Drafting.Rounds},
 	}
+}
+
+// dropUnchangedURL removes a DocuSeal URL from the patch when it equals the
+// current effective value. The settings form always round-trips every field,
+// so without this the operator-supplied default (DOCUSEAL_URL, which is
+// http://localhost:3000 out of the box) was re-validated as if an admin had
+// typed it, rejected as private, and no setting could ever be saved.
+//
+// SSRF protection is unchanged for anything a request can introduce: a URL
+// that differs from the current one is still required to be public. Values
+// that came from the environment or an earlier validated save are trusted
+// exactly as they already were at load time. Gating on "only when enabled"
+// instead would let a private URL be stored while disabled and then armed by
+// flipping the toggle, so the comparison is against the value, not the flag.
+func (s *SettingsStore) dropUnchangedURL(p Patch) Patch {
+	if p.DocuSeal == nil || p.DocuSeal.URL == nil ||
+		strings.TrimSpace(*p.DocuSeal.URL) != s.cfg.DocuSeal.URL {
+		return p
+	}
+	ds := *p.DocuSeal // copy: never mutate the caller's patch
+	ds.URL = nil
+	p.DocuSeal = &ds
+	return p
 }
 
 // validate rejects values that must fail the whole update (currently only

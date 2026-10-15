@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import type { Task, RoundState, LawyerProfile } from "./types";
+import type { Task, RoundState, LawyerProfile, Notify } from "./types";
 import { PHASE_SEQUENCES } from "./types";
 import { StatusPill, WorkflowPill, ConfidenceBar, CitationChips } from "./primitives";
 import { FindingsTable } from "./FindingsTable";
@@ -23,7 +23,7 @@ function conciseTitle(desc: string): string {
 // NeedsReview surfaces pending human gates as the first, actionable thing a
 // lawyer sees — approve/reject inline rather than hunting through Findings.
 function NeedsReview({ task, onChange, notify }: {
-  task: Task; onChange: () => void; notify: (m: string) => void;
+  task: Task; onChange: () => void; notify: Notify;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const pending = task.pendingGates.filter((g) => g.status === "pending");
@@ -35,7 +35,7 @@ function NeedsReview({ task, onChange, notify }: {
       if (kind === "approve") { await api.approveGate(task.id, gate.id); notify("Finding approved"); }
       else { const r = window.prompt("Reason for rejecting this finding?") || "rejected by reviewer"; await api.rejectGate(task.id, gate.id, r); notify("Finding rejected"); }
       onChange();
-    } catch (e) { notify((e as Error).message); } finally { setBusy(null); }
+    } catch (e) { notify((e as Error).message, "error"); } finally { setBusy(null); }
   }
 
   return (
@@ -63,7 +63,7 @@ function NeedsReview({ task, onChange, notify }: {
 
 function MatterActions({ task, profiles, isPartner, onChange, onDeleted, notify }: {
   task: Task; profiles: LawyerProfile[]; isPartner: boolean;
-  onChange: () => void; onDeleted: (id: string) => void; notify: (m: string) => void;
+  onChange: () => void; onDeleted: (id: string) => void; notify: Notify;
 }) {
   const [assignOpen, setAssignOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -74,14 +74,14 @@ function MatterActions({ task, profiles, isPartner, onChange, onDeleted, notify 
     const next = assigned.includes(id) ? assigned.filter((x) => x !== id) : [...assigned, id];
     setBusy(true);
     try { await api.assignLawyers(task.id, next); onChange(); }
-    catch (e) { notify((e as Error).message); } finally { setBusy(false); }
+    catch (e) { notify((e as Error).message, "error"); } finally { setBusy(false); }
   }
 
   async function del() {
     if (!window.confirm(`Delete this matter? This can't be undone.\n\n${task.description.slice(0, 120)}`)) return;
     setBusy(true);
     try { await api.deleteTask(task.id); notify("Matter deleted"); onDeleted(task.id); }
-    catch (e) { notify((e as Error).message); setBusy(false); }
+    catch (e) { notify((e as Error).message, "error"); setBusy(false); }
   }
 
   return (
@@ -277,7 +277,7 @@ export function TaskView({ task, agentNames, profiles, isPartner, onChange, onDe
   isPartner: boolean;
   onChange: () => void;
   onDeleted: (id: string) => void;
-  notify: (msg: string) => void;
+  notify: Notify;
 }) {
   const hasTable = !!task.table || task.workflowType === "tabulate";
   const initial: Tab = task.findings.length ? "findings" : task.output ? "synthesis" : "findings";

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, streamAlerts } from "../api";
-import type { BudgetAlert, DocketAlert, RegulationAlert, WatchedDocket } from "../types";
+import type { BudgetAlert, DocketAlert, RegulationAlert, WatchedDocket, Notify } from "../types";
 import { ErrorState } from "../Library";
 import { timeAgo } from "../primitives";
 
@@ -8,7 +8,7 @@ import { timeAgo } from "../primitives";
  * The Watchtower — live monitoring: docket watch list + alerts, regulatory
  * pulse, and budget threshold alerts. Streams follow the AuditRail SSE pattern.
  */
-export function WatchtowerPage({ notify }: { notify: (m: string) => void }) {
+export function WatchtowerPage({ notify }: { notify: Notify }) {
   return (
     <div className="page-scroll">
       <div className="page">
@@ -29,7 +29,7 @@ export function WatchtowerPage({ notify }: { notify: (m: string) => void }) {
 
 // ─── Dockets ───────────────────────────────────────────────────────────────────
 
-function DocketsSection({ notify }: { notify: (m: string) => void }) {
+function DocketsSection({ notify }: { notify: Notify }) {
   const [dockets, setDockets] = useState<WatchedDocket[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -58,7 +58,7 @@ function DocketsSection({ notify }: { notify: (m: string) => void }) {
 
   async function watch() {
     if (!nw.matterNumber.trim() || !nw.docketNumber.trim() || !nw.court.trim()) {
-      notify("Matter, docket number, and court slug are required");
+      notify("Matter, docket number, and court slug are required", "error");
       return;
     }
     setBusy(true);
@@ -72,14 +72,14 @@ function DocketsSection({ notify }: { notify: (m: string) => void }) {
       setNw({ matterNumber: "", docketNumber: "", court: "", caseName: "" });
       notify("Docket added to the watch list");
       load();
-    } catch (e) { notify((e as Error).message); }
+    } catch (e) { notify((e as Error).message, "error"); }
     finally { setBusy(false); }
   }
 
   async function unwatch(matterNumber: string) {
     if (!window.confirm(`Stop watching the docket for ${matterNumber}?`)) return;
     try { await api.unwatchDocket(matterNumber); notify("Docket unwatched"); load(); }
-    catch (e) { notify((e as Error).message); }
+    catch (e) { notify((e as Error).message, "error"); }
   }
 
   async function checkNow() {
@@ -88,7 +88,7 @@ function DocketsSection({ notify }: { notify: (m: string) => void }) {
       const res = await api.docketCheckNow();
       notify(`Checked ${res.watching} watched docket${res.watching === 1 ? "" : "s"}`);
       load();
-    } catch (e) { notify((e as Error).message); }
+    } catch (e) { notify((e as Error).message, "error"); }
     finally { setBusy(false); }
   }
 
@@ -160,7 +160,7 @@ function DocketsSection({ notify }: { notify: (m: string) => void }) {
 
 // ─── Regulatory pulse ──────────────────────────────────────────────────────────
 
-function RegulatorySection({ notify }: { notify: (m: string) => void }) {
+function RegulatorySection({ notify }: { notify: Notify }) {
   const [alerts, setAlerts] = useState<RegulationAlert[]>([]);
   const [streamDown, setStreamDown] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -184,7 +184,7 @@ function RegulatorySection({ notify }: { notify: (m: string) => void }) {
         });
       }
       notify(`Regulatory pulse — ${res.checked} matters scanned, ${res.alerts.length} alert${res.alerts.length === 1 ? "" : "s"}`);
-    } catch (e) { notify((e as Error).message); }
+    } catch (e) { notify((e as Error).message, "error"); }
     finally { setBusy(false); }
   }
 

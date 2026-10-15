@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { api } from "./api";
-import { WORKFLOWS, type Task, type Template, type WorkflowType, type DocumentRef } from "./types";
+import { WORKFLOWS, type Task, type Template, type WorkflowType, type DocumentRef, type Notify } from "./types";
 
 export function SubmitModal({ onClose, onCreated, notify }: {
   onClose: () => void;
   onCreated: (task: Task) => void;
-  notify: (msg: string) => void;
+  notify: Notify;
 }) {
   const [description, setDescription] = useState("");
   const [clientNumber, setClientNumber] = useState("");
@@ -51,7 +51,7 @@ export function SubmitModal({ onClose, onCreated, notify }: {
       }
       setDocs(await api.listDocuments());
     } catch (e) {
-      notify((e as Error).message);
+      notify((e as Error).message, "error");
     } finally {
       setUploading(false);
     }
@@ -69,7 +69,7 @@ export function SubmitModal({ onClose, onCreated, notify }: {
       notify(`Matter queued${position}`);
       onCreated(task);
     } catch (e) {
-      notify((e as Error).message);
+      notify((e as Error).message, "error");
       setBusy(false);
     }
   }

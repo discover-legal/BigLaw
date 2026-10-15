@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { api } from "./api";
-import type { Client, ClientMatter, ConflictCheckResult, OcgDocument, OcgRule } from "./types";
+import type { Client, ClientMatter, ConflictCheckResult, OcgDocument, OcgRule, Notify } from "./types";
 import { PRACTICE_AREAS } from "./types";
 
-export function ClientsPanel({ notify }: { notify: (m: string) => void }) {
+export function ClientsPanel({ notify }: { notify: Notify }) {
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -30,7 +30,7 @@ export function ClientsPanel({ notify }: { notify: (m: string) => void }) {
 
   const selected = clients.find((c) => c.id === selectedId) ?? null;
 
-  const load = () => api.listClients().then(setClients).catch((e) => notify((e as Error).message)).finally(() => setLoading(false));
+  const load = () => api.listClients().then(setClients).catch((e) => notify((e as Error).message, "error")).finally(() => setLoading(false));
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load OCG doc when switching to a new client
@@ -51,7 +51,7 @@ export function ClientsPanel({ notify }: { notify: (m: string) => void }) {
       setOcgText("");
       notify(`${res.ruleCount} OCG rules extracted`);
       await load();
-    } catch (e) { notify((e as Error).message); } finally { setOcgBusy(false); }
+    } catch (e) { notify((e as Error).message, "error"); } finally { setOcgBusy(false); }
   }
 
   async function uploadOcgFile(file: File) {
@@ -62,7 +62,7 @@ export function ClientsPanel({ notify }: { notify: (m: string) => void }) {
       setOcgDoc(res.ocg);
       notify(`${res.ruleCount} OCG rules extracted from file`);
       await load();
-    } catch (e) { notify((e as Error).message); } finally { setOcgBusy(false); }
+    } catch (e) { notify((e as Error).message, "error"); } finally { setOcgBusy(false); }
   }
 
   async function deleteOcg() {
@@ -73,7 +73,7 @@ export function ClientsPanel({ notify }: { notify: (m: string) => void }) {
       setOcgDoc(null);
       notify("OCG document removed");
       await load();
-    } catch (e) { notify((e as Error).message); } finally { setOcgBusy(false); }
+    } catch (e) { notify((e as Error).message, "error"); } finally { setOcgBusy(false); }
   }
 
   async function uploadVoiceFile(file: File) {
@@ -83,7 +83,7 @@ export function ClientsPanel({ notify }: { notify: (m: string) => void }) {
       const res = await api.importClientVoice(selectedId, file);
       notify(`Voice guide generated from ${res.samplesAnalysed} samples`);
       await load();
-    } catch (e) { notify((e as Error).message); } finally { setVoiceBusy(false); }
+    } catch (e) { notify((e as Error).message, "error"); } finally { setVoiceBusy(false); }
   }
 
   async function deleteVoiceGuide() {
@@ -93,7 +93,7 @@ export function ClientsPanel({ notify }: { notify: (m: string) => void }) {
       await api.deleteClientVoice(selectedId);
       notify("Voice guide removed");
       await load();
-    } catch (e) { notify((e as Error).message); } finally { setVoiceBusy(false); }
+    } catch (e) { notify((e as Error).message, "error"); } finally { setVoiceBusy(false); }
   }
 
   async function checkConflict() {
@@ -105,13 +105,13 @@ export function ClientsPanel({ notify }: { notify: (m: string) => void }) {
   }
 
   async function addClient() {
-    if (!nc.name.trim() || !nc.clientNumber.trim()) { notify("Name and client number required"); return; }
+    if (!nc.name.trim() || !nc.clientNumber.trim()) { notify("Name and client number required", "error"); return; }
     setBusy(true);
     try {
       const adversaries = nc.adversaries.split(",").map((s) => s.trim()).filter(Boolean);
       const res = await api.createClient({ name: nc.name, clientNumber: nc.clientNumber, adversaries, notes: nc.notes || undefined });
       if (res.conflict?.hasConflict) {
-        notify(`⚠ Conflict detected: ${res.conflict.conflictingClientName} lists "${res.conflict.matchedAdversary}" as an adverse party`);
+        notify(`⚠ Conflict detected: ${res.conflict.conflictingClientName} lists "${res.conflict.matchedAdversary}" as an adverse party`, "warn");
       } else {
         notify("Client added");
       }
@@ -120,17 +120,17 @@ export function ClientsPanel({ notify }: { notify: (m: string) => void }) {
       await load();
       setSelectedId(res.id);
       setTab("clients");
-    } catch (e) { notify((e as Error).message); } finally { setBusy(false); }
+    } catch (e) { notify((e as Error).message, "error"); } finally { setBusy(false); }
   }
 
   async function removeClient(id: string) {
     if (!window.confirm("Delete this client and all their matters?")) return;
     try { await api.deleteClient(id); await load(); setSelectedId(null); notify("Client removed"); }
-    catch (e) { notify((e as Error).message); }
+    catch (e) { notify((e as Error).message, "error"); }
   }
 
   async function addMatter() {
-    if (!selectedId || !nm.matterNumber.trim() || !nm.description.trim()) { notify("Matter number and description required"); return; }
+    if (!selectedId || !nm.matterNumber.trim() || !nm.description.trim()) { notify("Matter number and description required", "error"); return; }
     setBusy(true);
     try {
       await api.addMatter(selectedId, { matterNumber: nm.matterNumber, description: nm.description, practiceArea: nm.practiceArea || undefined });
@@ -138,13 +138,13 @@ export function ClientsPanel({ notify }: { notify: (m: string) => void }) {
       await load();
       setTab("clients");
       notify("Matter added");
-    } catch (e) { notify((e as Error).message); } finally { setBusy(false); }
+    } catch (e) { notify((e as Error).message, "error"); } finally { setBusy(false); }
   }
 
   async function removeMatter(clientId: string, matterNumber: string) {
     if (!window.confirm("Remove this matter?")) return;
     try { await api.removeMatter(clientId, matterNumber); await load(); notify("Matter removed"); }
-    catch (e) { notify((e as Error).message); }
+    catch (e) { notify((e as Error).message, "error"); }
   }
 
   return (
