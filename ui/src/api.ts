@@ -22,6 +22,14 @@ type SettingsPatch = {
   drafting?: Partial<AppSettings["drafting"]>;
 };
 
+/** POST /clients refused because the new client conflicts with an existing one. */
+export class ClientConflictError extends Error {
+  constructor(message: string, public readonly conflict: ConflictCheckResult) {
+    super(message);
+    this.name = "ClientConflictError";
+  }
+}
+
 async function json<T>(res: Response): Promise<T> {
   if (!res.ok) {
     if (res.status === 401) window.dispatchEvent(new Event("biglaw:unauthorized"));
@@ -80,8 +88,16 @@ export const api = {
     fetch(`/profiles/${id}`, { method: "DELETE" }).then((r) => json<{ ok: true }>(r)),
 
   listClients: () => fetch("/clients").then(json<Client[]>),
-  createClient: (body: { name: string; clientNumber: string; adversaries?: string[]; notes?: string }) =>
-    fetch("/clients", POST(body)).then(json<Client & { conflict: ConflictCheckResult }>),
+  // 409 = conflict of interest: throws ClientConflictError carrying the hit.
+  // Re-submit with acknowledgeConflict + conflictReason to override (audited).
+  createClient: async (body: { name: string; clientNumber: string; adversaries?: string[]; notes?: string; acknowledgeConflict?: boolean; conflictReason?: string }) => {
+    const res = await fetch("/clients", POST(body));
+    if (res.status === 409) {
+      const parsed = (await res.json().catch(() => ({}))) as { error?: string; conflict?: ConflictCheckResult };
+      if (parsed.conflict) throw new ClientConflictError(parsed.error ?? "Conflict of interest detected", parsed.conflict);
+    }
+    return json<Client & { conflict: ConflictCheckResult }>(res);
+  },
   updateClient: (id: string, patch: Partial<Pick<Client, "name" | "adversaries" | "notes">>) =>
     fetch(`/clients/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) }).then(json<Client>),
   deleteClient: (id: string) =>

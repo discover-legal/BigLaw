@@ -70,27 +70,51 @@ func TestCreateClientRunsConflictCheck(t *testing.T) {
 		t.Fatalf("first client response = %s", w.Body)
 	}
 
-	// Acme is Globex's adverse party → conflict surfaced, client still created.
+	// Acme is Globex's adverse party → 409 with the conflict, nothing created.
 	w = postJSON(t, r, "/clients", map[string]interface{}{"name": "ACME Corporation", "clientNumber": "C-101"})
+	var refused struct {
+		Conflict types.ConflictCheckResult `json:"conflict"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &refused)
+	if w.Code != http.StatusConflict || !refused.Conflict.HasConflict ||
+		refused.Conflict.ConflictingClientID != first.ID || refused.Conflict.MatchedAdversary != "Acme Corp." {
+		t.Fatalf("expected 409 conflict with Globex, got %d %s", w.Code, w.Body)
+	}
+
+	// Acknowledging without a reason is still refused.
+	w = postJSON(t, r, "/clients", map[string]interface{}{"name": "ACME Corporation", "clientNumber": "C-101",
+		"acknowledgeConflict": true, "conflictReason": "   "})
+	if w.Code != http.StatusConflict {
+		t.Fatalf("ack without reason: %d %s", w.Code, w.Body)
+	}
+
+	// Acknowledged with a reason → created, override audited.
+	w = postJSON(t, r, "/clients", map[string]interface{}{"name": "ACME Corporation", "clientNumber": "C-101",
+		"acknowledgeConflict": true, "conflictReason": "Informed consent from both clients 2026-10-01"})
 	if w.Code != http.StatusCreated {
-		t.Fatalf("create acme: %d %s", w.Code, w.Body)
+		t.Fatalf("acknowledged create: %d %s", w.Code, w.Body)
 	}
 	var second struct {
 		ID       string                    `json:"id"`
 		Conflict types.ConflictCheckResult `json:"conflict"`
 	}
 	_ = json.Unmarshal(w.Body.Bytes(), &second)
-	if !second.Conflict.HasConflict || second.Conflict.ConflictingClientID != first.ID ||
-		second.Conflict.MatchedAdversary != "Acme Corp." {
-		t.Fatalf("expected conflict with Globex, got %s", w.Body)
+	if second.ID == "" || !second.Conflict.HasConflict {
+		t.Fatalf("acknowledged response = %s", w.Body)
 	}
 
 	got := map[string]int{}
+	var override audit.AuditEntry
 	for _, e := range audit.Default.ReadFiltered(audit.Filter{ActorID: "partner-1", Limit: 1000}) {
 		got[e.Event]++
+		if e.Event == "client.conflict_overridden" && e.Data["clientId"] == second.ID {
+			override = e
+		}
 	}
-	if got["client.created"] < 2 || got["client.conflict_detected"] < 1 {
-		t.Fatalf("audit events = %v", got)
+	if got["client.created"] < 2 || got["client.conflict_detected"] < 2 || override.ID == "" ||
+		override.Data["reason"] != "Informed consent from both clients 2026-10-01" ||
+		override.Data["matchedAdversary"] != "Acme Corp." {
+		t.Fatalf("audit events = %v, override = %+v", got, override)
 	}
 
 	w = postJSON(t, r, "/clients/"+first.ID+"/matters", map[string]interface{}{"matterNumber": "M-9"})

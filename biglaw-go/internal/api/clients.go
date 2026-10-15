@@ -33,6 +33,10 @@ type createClientBody struct {
 	ClientNumber string   `json:"clientNumber"`
 	Adversaries  []string `json:"adversaries"`
 	Notes        string   `json:"notes"`
+	// AcknowledgeConflict + ConflictReason override a detected conflict
+	// (e.g. informed-consent waiver, ethical wall). Both are required.
+	AcknowledgeConflict bool   `json:"acknowledgeConflict"`
+	ConflictReason      string `json:"conflictReason"`
 }
 
 func (s *Server) handleCreateClient(c *gin.Context) {
@@ -45,16 +49,35 @@ func (s *Server) handleCreateClient(c *gin.Context) {
 		return
 	}
 
-	// Conflict check runs automatically BEFORE the client joins the roster
-	// (so it is checked against the existing clients only) and its result is
-	// returned with the created client. A hit does not block creation — a
-	// conflict needs a partner's judgement (waiver, ethical wall) — but it is
-	// surfaced in the response and recorded in the audit log.
+	// Conflict check runs automatically BEFORE the client joins the roster,
+	// against the existing clients only. A hit blocks creation with 409 until
+	// a partner re-submits with acknowledgeConflict + a reason (waiver,
+	// ethical wall, ...); the override is audited with who, why and what.
 	advs := body.Adversaries
 	if len(advs) > 200 {
 		advs = advs[:200]
 	}
 	conflict := s.clients.CheckConflict(body.Name, advs)
+	reason := strings.TrimSpace(body.ConflictReason)
+	if len(reason) > 1000 {
+		reason = strutil.Truncate(reason, 1000)
+	}
+	if conflict.HasConflict && (!body.AcknowledgeConflict || reason == "") {
+		auditAdmin(c, "client.conflict_detected", map[string]interface{}{
+			"name":                  body.Name,
+			"conflictingClientId":   conflict.ConflictingClientID,
+			"conflictingClientName": conflict.ConflictingClientName,
+			"matchedAdversary":      conflict.MatchedAdversary,
+			"blocked":               true,
+		})
+		c.JSON(http.StatusConflict, gin.H{
+			"error":    "conflict of interest detected: " + conflict.ConflictingClientName + " lists \"" + conflict.MatchedAdversary + "\" as an adverse party",
+			"conflict": conflict,
+			"resolution": "re-submit with acknowledgeConflict: true and a non-empty conflictReason " +
+				"(e.g. informed-consent waiver, ethical wall) to create the client anyway",
+		})
+		return
+	}
 
 	client, err := s.clients.Create(body.Name, body.ClientNumber, body.Adversaries, body.Notes)
 	if err != nil {
@@ -67,8 +90,9 @@ func (s *Server) handleCreateClient(c *gin.Context) {
 		"adversaryCount": len(client.Adversaries), "conflict": conflict.HasConflict,
 	})
 	if conflict.HasConflict {
-		auditAdmin(c, "client.conflict_detected", map[string]interface{}{
+		auditAdmin(c, "client.conflict_overridden", map[string]interface{}{
 			"clientId": client.ID, "name": client.Name,
+			"reason":                reason,
 			"conflictingClientId":   conflict.ConflictingClientID,
 			"conflictingClientName": conflict.ConflictingClientName,
 			"matchedAdversary":      conflict.MatchedAdversary,
@@ -78,7 +102,8 @@ func (s *Server) handleCreateClient(c *gin.Context) {
 }
 
 // createClientResponse is the created client with the automatic conflict
-// check result alongside (UI type: Client & { conflict: ConflictCheckResult }).
+// check result alongside (UI type: Client & { conflict: ConflictCheckResult });
+// conflict.hasConflict is true only for an acknowledged override.
 type createClientResponse struct {
 	*types.Client
 	Conflict types.ConflictCheckResult `json:"conflict"`
