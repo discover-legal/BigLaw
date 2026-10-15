@@ -5,6 +5,7 @@ package knowledge
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/discover-legal/biglaw-go/internal/config"
@@ -16,10 +17,7 @@ import (
 // Without an embedder, search used to return the first TopK documents in
 // insertion order with a constant 0.5 score, whatever the query.
 func TestSearchWithoutEmbeddingsRanksLexically(t *testing.T) {
-	s := NewStore(embeddings.NewClient(&config.Config{}))
-	if r, err := s.embedC.Embed("probe"); err == nil && r != nil {
-		t.Skip("an embedder is reachable in this environment; fallback not exercised")
-	}
+	s := newLexicalStore(t)
 	ctx := store.WithSystem(context.Background())
 	for _, d := range []types.Document{
 		{ID: "lease", Title: "Commercial lease", Content: "The tenant shall pay rent monthly. Rent review every five years.", OwnerID: "alice"},
@@ -70,4 +68,48 @@ func TestSearchWithoutEmbeddingsRanksLexically(t *testing.T) {
 	if len(res) != 0 {
 		t.Fatalf("stale index entry still matched: %+v", res)
 	}
+}
+
+// Owner-scoped scores depend only on the owner's own documents: adding other
+// owners' documents must not change them (no cross-owner statistics leak).
+func TestOwnerScopedScoresIgnoreOtherOwnersDocs(t *testing.T) {
+	s := newLexicalStore(t)
+	ctx := store.WithSystem(context.Background())
+	ingest := func(id, owner, content string) {
+		if _, err := s.Ingest(ctx, types.Document{ID: id, Title: id, Content: content, OwnerID: owner}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ingest("b1", "bob", "rent arrears notice")
+	ingest("b2", "bob", "holiday pay")
+	before, _ := s.Search("rent", SearchOpts{OwnerID: "bob"})
+	for i := range 20 {
+		ingest(fmt.Sprintf("a%d", i), "alice", "rent rent review")
+	}
+	after, _ := s.Search("rent", SearchOpts{OwnerID: "bob"})
+	if len(before) != 1 || len(after) != 1 || before[0].Score != after[0].Score {
+		t.Fatalf("bob's score moved with alice's corpus: %+v → %+v", before, after)
+	}
+	// Moving a document to another owner moves it between owner indexes.
+	ingest("b1", "carol", "rent arrears notice")
+	if res, _ := s.Search("arrears", SearchOpts{OwnerID: "bob"}); len(res) != 0 {
+		t.Fatalf("moved document still in old owner's results: %+v", res)
+	}
+	if res, _ := s.Search("arrears", SearchOpts{OwnerID: "carol"}); len(res) != 1 {
+		t.Fatalf("moved document missing for new owner: %+v", res)
+	}
+}
+
+// newLexicalStore returns a store whose embedder fails fast (connection
+// refused on a closed local port), so Search takes the lexical fallback.
+func newLexicalStore(t *testing.T) *Store {
+	t.Helper()
+	cfg := &config.Config{}
+	cfg.Local.LocalEmbeddings = true
+	cfg.Local.OllamaURL = "http://127.0.0.1:1"
+	s := NewStore(embeddings.NewClient(cfg))
+	if r, err := s.embedC.Embed("probe"); err == nil && r != nil {
+		t.Skip("embedder unexpectedly reachable")
+	}
+	return s
 }

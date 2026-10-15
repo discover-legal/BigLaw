@@ -391,3 +391,21 @@ func TestMaxScoreBoundsSearchScores(t *testing.T) {
 		t.Error("empty index / stopword-only query must give 0")
 	}
 }
+
+func TestIndexTermsFoldAccents(t *testing.T) {
+	got := terms("Société Générale — café café Ærø naïve")
+	want := []string{"societe", "generale", "cafe", "cafe", "ærø", "naive"}
+	if len(got) != len(want) {
+		t.Fatalf("terms = %q, want %q", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("terms = %q, want %q", got, want)
+		}
+	}
+	ix := New()
+	ix.Add("d", "Ruling of the Cour de cassation on the société's liability")
+	if len(ix.Search("societe", 5)) != 1 || len(ix.Search("SOCIÉTÉ", 5)) != 1 {
+		t.Fatal("accented and unaccented spellings must match each other")
+	}
+}

@@ -36,6 +36,10 @@ type Store struct {
 	// lex is a BM25 index over title + content, kept in step with docs. It
 	// ranks Search when no embedder is available (local / offline installs).
 	lex *bm25.Index
+	// lexByOwner holds one BM25 index per owner, so an owner-scoped search
+	// ranks with document frequencies from that owner's documents only —
+	// other owners' corpora never influence (or leak through) the scores.
+	lexByOwner map[string]*bm25.Index
 }
 
 // SetOnIngest registers a post-ingest callback (e.g. the RAG chunk indexer)
@@ -68,13 +72,13 @@ func (s *Store) SetOnIngest(f func(docID, title, content string)) {
 }
 
 func NewStore(embedC *embeddings.Client) *Store {
-	return &Store{embedC: embedC, lex: bm25.New()}
+	return &Store{embedC: embedC, lex: bm25.New(), lexByOwner: map[string]*bm25.Index{}}
 }
 
 // NewStoreWithRepo wires a durable repository. Call Load after construction to
 // hydrate the in-memory vector index from persisted documents.
 func NewStoreWithRepo(embedC *embeddings.Client, repo store.DocRepository) *Store {
-	return &Store{embedC: embedC, repo: repo, lex: bm25.New()}
+	return &Store{embedC: embedC, repo: repo, lex: bm25.New(), lexByOwner: map[string]*bm25.Index{}}
 }
 
 func (s *Store) Init() error { return s.Load() }
@@ -105,8 +109,9 @@ func (s *Store) Load() error {
 	s.mu.Lock()
 	s.docs = docs
 	s.lex = bm25.New()
+	s.lexByOwner = map[string]*bm25.Index{}
 	for _, d := range docs {
-		s.lex.Add(d.ID, lexText(d))
+		s.indexLexLocked(d)
 	}
 	s.mu.Unlock()
 	slog.Info("knowledge: loaded documents from store", "backend", s.repo.Backend(), "count", len(docs))
@@ -168,6 +173,9 @@ func (s *Store) Ingest(ctx context.Context, doc types.Document) (*types.Document
 	replaced := false
 	for i, d := range s.docs {
 		if d.ID == doc.ID {
+			if d.OwnerID != doc.OwnerID && s.lexByOwner[d.OwnerID] != nil {
+				s.lexByOwner[d.OwnerID].Remove(d.ID) // ownership moved
+			}
 			s.docs[i] = doc
 			replaced = true
 			break
@@ -176,7 +184,7 @@ func (s *Store) Ingest(ctx context.Context, doc types.Document) (*types.Document
 	if !replaced {
 		s.docs = append(s.docs, doc)
 	}
-	s.lex.Add(doc.ID, lexText(doc))
+	s.indexLexLocked(doc)
 	s.mu.Unlock()
 
 	// Re-index into the hybrid RAG chunk store outside the lock — it makes
@@ -332,7 +340,9 @@ func (s *Store) ListVisible(ctx context.Context) ([]types.Document, error) {
 // UI rendered as "50% match" on every hit. Now only documents sharing a term
 // with the query are returned, best first, and Score is the BM25 score as a
 // fraction of the maximum attainable for this query (bm25.Index.MaxScore), so
-// it stays in [0, 1) and means the same thing on every query.
+// it stays in [0, 1) and means the same thing on every query. An
+// owner-scoped search ranks against that owner's own index, so term
+// statistics never come from documents the caller cannot see.
 func (s *Store) fallback(query string, opts SearchOpts) []types.SearchResult {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -343,7 +353,14 @@ func (s *Store) fallback(query string, opts SearchOpts) []types.SearchResult {
 	if k > maxTopK {
 		k = maxTopK
 	}
-	ceiling := s.lex.MaxScore(query)
+	lex := s.lex
+	if opts.OwnerID != "" {
+		lex = s.lexByOwner[opts.OwnerID]
+		if lex == nil {
+			return []types.SearchResult{}
+		}
+	}
+	ceiling := lex.MaxScore(query)
 	if ceiling <= 0 {
 		return []types.SearchResult{}
 	}
@@ -351,13 +368,11 @@ func (s *Store) fallback(query string, opts SearchOpts) []types.SearchResult {
 	for i := range s.docs {
 		byID[s.docs[i].ID] = &s.docs[i]
 	}
-	// Rank the whole corpus, then apply the owner filter: filtering after a
-	// TopK cut could starve a lawyer of their own matches.
 	out := []types.SearchResult{}
-	for _, r := range s.lex.Search(query, len(s.docs)) {
+	for _, r := range lex.Search(query, k) {
 		d := byID[r.ID]
 		if d == nil || (opts.OwnerID != "" && d.OwnerID != opts.OwnerID) {
-			continue
+			continue // defensive: the owner index should hold only own docs
 		}
 		out = append(out, types.SearchResult{Document: *d, Score: r.Score / ceiling, Excerpt: excerptOf(d.Content)})
 		if len(out) >= k {
@@ -368,6 +383,18 @@ func (s *Store) fallback(query string, opts SearchOpts) []types.SearchResult {
 }
 
 func lexText(d types.Document) string { return d.Title + "\n" + d.Content }
+
+// indexLexLocked adds d to the global and its owner's BM25 index (s.mu held).
+func (s *Store) indexLexLocked(d types.Document) {
+	text := lexText(d)
+	s.lex.Add(d.ID, text)
+	ix := s.lexByOwner[d.OwnerID]
+	if ix == nil {
+		ix = bm25.New()
+		s.lexByOwner[d.OwnerID] = ix
+	}
+	ix.Add(d.ID, text)
+}
 
 func excerptOf(content string) string {
 	if len(content) > 300 {

@@ -22,6 +22,9 @@ import (
 	"strings"
 	"sync"
 	"unicode"
+	"unicode/utf8"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 // BM25 tuning defaults. They are exported so callers may construct an Index
@@ -86,7 +89,7 @@ func NewWithParams(k1, b float64) *Index {
 // subsequent Add/Remove of the same id behaves predictably; it simply never
 // matches a query.
 func (ix *Index) Add(id, text string) {
-	tokens := Tokenize(text)
+	tokens := terms(text)
 
 	tf := make(map[string]int, len(tokens))
 	for _, t := range tokens {
@@ -149,7 +152,7 @@ func (ix *Index) Search(query string, topK int) []Result {
 	if topK <= 0 {
 		return nil
 	}
-	qTerms := Tokenize(query)
+	qTerms := terms(query)
 	if len(qTerms) == 0 {
 		return nil
 	}
@@ -251,7 +254,7 @@ func (ix *Index) MaxScore(query string) float64 {
 		return 0
 	}
 	var ceiling float64
-	for _, t := range Tokenize(query) {
+	for _, t := range terms(query) {
 		if _, dup := seen[t]; dup {
 			continue
 		}
@@ -291,7 +294,9 @@ func Tokenize(text string) []string {
 		return nil
 	}
 	fields := strings.FieldsFunc(text, func(r rune) bool {
-		return !unicode.IsLetter(r) && !unicode.IsNumber(r)
+		// Combining marks stay inside the word so decomposed (NFD) input
+		// isn't split mid-word; foldAccents drops them below.
+		return !unicode.IsLetter(r) && !unicode.IsNumber(r) && !unicode.Is(unicode.Mn, r)
 	})
 	tokens := make([]string, 0, len(fields))
 	for _, f := range fields {
@@ -309,6 +314,42 @@ func Tokenize(text string) []string {
 		return nil
 	}
 	return tokens
+}
+
+// terms is what the Index stores and matches: Tokenize's tokens with
+// diacritics folded, so accented and unaccented spellings match each other.
+// Tokenize itself keeps accents because callers also use it for display
+// (e.g. writer cluster labels).
+func terms(text string) []string {
+	toks := Tokenize(text)
+	for i, t := range toks {
+		toks[i] = foldAccents(t)
+	}
+	return toks
+}
+
+// foldAccents strips diacritics so "café", "cafe\u0301" and "cafe" index
+// and query as the same term ("Société" matches "societe"). ASCII input — the
+// common case — returns without allocating.
+func foldAccents(s string) string {
+	ascii := true
+	for i := 0; i < len(s); i++ {
+		if s[i] >= utf8.RuneSelf {
+			ascii = false
+			break
+		}
+	}
+	if ascii {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range norm.NFD.String(s) {
+		if !unicode.Is(unicode.Mn, r) {
+			b.WriteRune(r)
+		}
+	}
+	return norm.NFC.String(b.String())
 }
 
 // utf8RuneCountLessThan reports whether s has fewer than n runes, scanning only
