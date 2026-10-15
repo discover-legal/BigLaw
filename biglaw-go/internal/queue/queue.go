@@ -10,13 +10,13 @@ import (
 	"encoding/json"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"sort"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/discover-legal/biglaw-go/internal/atomicfile"
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
 
@@ -100,16 +100,8 @@ func (q *Queue) Enqueue(jobType types.JobType, payload map[string]interface{}, m
 // Dequeue atomically claims one pending job, setting its status to "running".
 // Pass nil to accept any job type.
 func (q *Queue) Dequeue(types_ []types.JobType) *types.Job {
-	j := q.dequeueLocked(types_)
-	if j != nil {
-		q.persist()
-	}
-	return j
-}
-
-func (q *Queue) dequeueLocked(types_ []types.JobType) *types.Job {
 	q.mu.Lock()
-	defer q.mu.Unlock()
+	var claimed *types.Job
 	for _, j := range q.jobs {
 		if j.Status != types.JobStatusPending {
 			continue
@@ -119,9 +111,14 @@ func (q *Queue) dequeueLocked(types_ []types.JobType) *types.Job {
 		}
 		j.Status = types.JobStatusRunning
 		j.StartedAt = time.Now().UTC().Format(time.RFC3339)
-		return j
+		claimed = j
+		break
 	}
-	return nil
+	q.mu.Unlock()
+	if claimed != nil {
+		q.persist()
+	}
+	return claimed
 }
 
 // Ack marks a job as done.
@@ -245,14 +242,9 @@ func (q *Queue) persist() {
 		slog.Warn("Failed to marshal job queue", "error", err)
 		return
 	}
-	if err := os.MkdirAll(filepath.Dir(q.path), 0o755); err != nil {
-		return
+	if err := atomicfile.WriteFile(q.path, data, 0o600); err != nil {
+		slog.Warn("job queue: persist failed", "path", q.path, "error", err)
 	}
-	tmp := q.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return
-	}
-	_ = os.Rename(tmp, q.path)
 }
 
 func containsType(ts []types.JobType, t types.JobType) bool {

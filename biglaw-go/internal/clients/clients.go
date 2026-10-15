@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/discover-legal/biglaw-go/internal/atomicfile"
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
 
@@ -409,13 +410,8 @@ func (s *ClientStore) persist() {
 	s.mu.RLock()
 	data, _ := json.MarshalIndent(s.clients, "", "  ")
 	s.mu.RUnlock()
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0600); err != nil {
-		slog.Error("clients: persist write failed", "path", tmp, "err", err)
-		return
-	}
-	if err := os.Rename(tmp, s.path); err != nil {
-		slog.Error("clients: persist rename failed", "path", s.path, "err", err)
+	if err := atomicfile.WriteFile(s.path, data, 0o600); err != nil {
+		slog.Error("clients: persist failed", "path", s.path, "err", err)
 	}
 }
 

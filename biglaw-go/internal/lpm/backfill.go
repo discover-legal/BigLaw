@@ -16,10 +16,10 @@ import (
 	"encoding/json"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
+	"github.com/discover-legal/biglaw-go/internal/atomicfile"
 	"github.com/discover-legal/biglaw-go/internal/email"
 )
 
@@ -197,12 +197,5 @@ func (b *Backfill) saveCursor(c backfillCursor) {
 	if err != nil {
 		return
 	}
-	if err := os.MkdirAll(filepath.Dir(b.cfg.CursorFile), 0o755); err != nil {
-		return
-	}
-	tmp := b.cfg.CursorFile + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return
-	}
-	_ = os.Rename(tmp, b.cfg.CursorFile)
+	_ = atomicfile.WriteFile(b.cfg.CursorFile, data, 0o600)
 }

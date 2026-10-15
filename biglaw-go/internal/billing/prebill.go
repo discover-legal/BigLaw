@@ -10,12 +10,12 @@ import (
 	"log/slog"
 	"math"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/discover-legal/biglaw-go/internal/atomicfile"
 	"github.com/discover-legal/biglaw-go/internal/strutil"
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
@@ -166,56 +166,41 @@ func (s *PreBillStore) GetByID(id string) *PreBill {
 	return nil
 }
 
-// UpdateEntryDescription mutates under the lock, then persists synchronously so the change is
-// on disk before the caller sees success (was a fire-and-forget goroutine:
-// lost writes on crash and races with TempDir cleanup in tests).
+// UpdateEntryDescription updates a line-item description on a bill that is
+// not yet approved/invoiced, then persists.
 func (s *PreBillStore) UpdateEntryDescription(billID, entryID, description string) *PreBill {
-	b := s.updateEntryDescriptionNoPersist(billID, entryID, description)
-	if b != nil {
-		s.persist()
-	}
-	return b
-}
-
-// UpdateEntryDescription updates a line-item description.
-func (s *PreBillStore) updateEntryDescriptionNoPersist(billID, entryID, description string) *PreBill {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i := range s.bills {
-		if s.bills[i].ID != billID {
-			continue
-		}
-		b := &s.bills[i]
-		if b.Status == PreBillApproved || b.Status == PreBillInvoiced {
-			return nil
-		}
-		for j := range b.Entries {
-			if b.Entries[j].EntryID == entryID {
-				if len(description) > 500 {
-					description = strutil.Truncate(description, 500)
+	out := func() *PreBill {
+		for i := range s.bills {
+			if s.bills[i].ID != billID {
+				continue
+			}
+			b := &s.bills[i]
+			if b.Status == PreBillApproved || b.Status == PreBillInvoiced {
+				return nil
+			}
+			for j := range b.Entries {
+				if b.Entries[j].EntryID == entryID {
+					if len(description) > 500 {
+						description = strutil.Truncate(description, 500)
+					}
+					b.Entries[j].Description = description
+					cp := *b
+					return &cp
 				}
-				b.Entries[j].Description = description
-				cp := *b
-				return &cp
 			}
 		}
-	}
-	return nil
-}
-
-// Transition mutates under the lock, then persists synchronously so the change is
-// on disk before the caller sees success (was a fire-and-forget goroutine:
-// lost writes on crash and races with TempDir cleanup in tests).
-func (s *PreBillStore) Transition(billID string, toStatus PreBillStatus) *PreBill {
-	b := s.transitionNoPersist(billID, toStatus)
-	if b != nil {
+		return nil
+	}()
+	s.mu.Unlock()
+	if out != nil {
 		s.persist()
 	}
-	return b
+	return out
 }
 
-// Transition moves a bill through its lifecycle.
-func (s *PreBillStore) transitionNoPersist(billID string, toStatus PreBillStatus) *PreBill {
+// Transition moves a bill through its lifecycle, then persists.
+func (s *PreBillStore) Transition(billID string, toStatus PreBillStatus) *PreBill {
 	validTransitions := map[PreBillStatus][]PreBillStatus{
 		PreBillDraft:    {PreBillReviewed},
 		PreBillReviewed: {PreBillApproved, PreBillDraft},
@@ -223,68 +208,71 @@ func (s *PreBillStore) transitionNoPersist(billID string, toStatus PreBillStatus
 		PreBillInvoiced: {},
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i := range s.bills {
-		if s.bills[i].ID != billID {
-			continue
-		}
-		b := &s.bills[i]
-		allowed := validTransitions[b.Status]
-		ok := false
-		for _, st := range allowed {
-			if st == toStatus {
-				ok = true
-				break
+	out := func() *PreBill {
+		for i := range s.bills {
+			if s.bills[i].ID != billID {
+				continue
 			}
+			b := &s.bills[i]
+			allowed := validTransitions[b.Status]
+			ok := false
+			for _, st := range allowed {
+				if st == toStatus {
+					ok = true
+					break
+				}
+			}
+			if !ok {
+				return nil
+			}
+			b.Status = toStatus
+			now := time.Now().UTC().Format(time.RFC3339)
+			switch toStatus {
+			case PreBillReviewed:
+				b.ReviewedAt = now
+			case PreBillApproved:
+				b.ApprovedAt = now
+			case PreBillInvoiced:
+				b.InvoicedAt = now
+			}
+			cp := *b
+			return &cp
 		}
-		if !ok {
-			return nil
-		}
-		b.Status = toStatus
-		now := time.Now().UTC().Format(time.RFC3339)
-		switch toStatus {
-		case PreBillReviewed:
-			b.ReviewedAt = now
-		case PreBillApproved:
-			b.ApprovedAt = now
-		case PreBillInvoiced:
-			b.InvoicedAt = now
-		}
-		cp := *b
-		return &cp
-	}
-	return nil
-}
-
-// SetNotes mutates under the lock, then persists synchronously so the change is
-// on disk before the caller sees success (was a fire-and-forget goroutine:
-// lost writes on crash and races with TempDir cleanup in tests).
-func (s *PreBillStore) SetNotes(billID, notes string) *PreBill {
-	b := s.setNotesNoPersist(billID, notes)
-	if b != nil {
+		return nil
+	}()
+	s.mu.Unlock()
+	if out != nil {
 		s.persist()
 	}
-	return b
+	return out
 }
 
-// SetNotes sets the notes on a pre-bill.
-func (s *PreBillStore) setNotesNoPersist(billID, notes string) *PreBill {
+// SetNotes sets the notes on a pre-bill, then persists.
+func (s *PreBillStore) SetNotes(billID, notes string) *PreBill {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i := range s.bills {
-		if s.bills[i].ID != billID {
-			continue
+	out := func() *PreBill {
+		for i := range s.bills {
+			if s.bills[i].ID != billID {
+				continue
+			}
+			if len(notes) > 2000 {
+				notes = strutil.Truncate(notes, 2000)
+			}
+			s.bills[i].Notes = notes
+			cp := s.bills[i]
+			return &cp
 		}
-		if len(notes) > 2000 {
-			notes = strutil.Truncate(notes, 2000)
-		}
-		s.bills[i].Notes = notes
-		cp := s.bills[i]
-		return &cp
+		return nil
+	}()
+	s.mu.Unlock()
+	if out != nil {
+		s.persist()
 	}
-	return nil
+	return out
 }
 
+// persist writes the bills atomically and durably (temp, fsync, rename);
+// the snapshot is marshalled under the lock, persistMu keeps writes ordered.
 func (s *PreBillStore) persist() {
 	s.persistMu.Lock()
 	defer s.persistMu.Unlock()
@@ -295,16 +283,8 @@ func (s *PreBillStore) persist() {
 		slog.Warn("PreBillStore persist failed", "error", err)
 		return
 	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
-		return
-	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		slog.Warn("PreBillStore persist write failed", "error", err)
-		return
-	}
-	if err := os.Rename(tmp, s.path); err != nil {
-		slog.Warn("PreBillStore persist rename failed", "error", err)
+	if err := atomicfile.WriteFile(s.path, data, 0o600); err != nil {
+		slog.Warn("PreBillStore persist failed", "error", err)
 	}
 }
 

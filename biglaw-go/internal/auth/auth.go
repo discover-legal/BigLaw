@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/discover-legal/biglaw-go/internal/atomicfile"
 	"github.com/discover-legal/biglaw-go/internal/config"
 	"github.com/discover-legal/biglaw-go/internal/strutil"
 	"github.com/discover-legal/biglaw-go/internal/types"
@@ -185,20 +186,11 @@ func (s *ProfileStore) Create(input CreateProfileInput) (*types.LawyerProfile, e
 	return &p, nil
 }
 
-// Update mutates under the lock, then persists synchronously so the change is
-// on disk before the caller sees success (was a fire-and-forget goroutine:
-// lost writes on crash and races with TempDir cleanup in tests).
+// Update applies a profile patch, then persists synchronously so the change
+// is on disk before the caller sees success.
 func (s *ProfileStore) Update(id string, patch map[string]interface{}) (*types.LawyerProfile, error) {
-	p, err := s.updateNoPersist(id, patch)
-	if err == nil {
-		s.persist()
-	}
-	return p, err
-}
-
-func (s *ProfileStore) updateNoPersist(id string, patch map[string]interface{}) (*types.LawyerProfile, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	var out *types.LawyerProfile
 	for i := range s.profiles {
 		if s.profiles[i].ID != id {
 			continue
@@ -229,52 +221,44 @@ func (s *ProfileStore) updateNoPersist(id string, patch map[string]interface{}) 
 			p.Mode = ResolveMode(p.Role, p.Mode)
 		}
 		cp := *p
-		return &cp, nil
+		out = &cp
+		break
 	}
-	return nil, fmt.Errorf("profile not found")
+	s.mu.Unlock()
+	if out == nil {
+		return nil, fmt.Errorf("profile not found")
+	}
+	s.persist()
+	return out, nil
 }
 
-// UpdateTone mutates under the lock, then persists synchronously so the change is
-// on disk before the caller sees success (was a fire-and-forget goroutine:
-// lost writes on crash and races with TempDir cleanup in tests).
+// UpdateTone sets (or clears, with nil) a profile's tone profile and persists.
 func (s *ProfileStore) UpdateTone(id string, tone *types.ToneProfile) (*types.LawyerProfile, error) {
-	p, err := s.updateToneNoPersist(id, tone)
-	if err == nil {
-		s.persist()
-	}
-	return p, err
-}
-
-func (s *ProfileStore) updateToneNoPersist(id string, tone *types.ToneProfile) (*types.LawyerProfile, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	var out *types.LawyerProfile
 	for i := range s.profiles {
 		if s.profiles[i].ID == id {
 			s.profiles[i].ToneProfile = tone
 			cp := s.profiles[i]
-			return &cp, nil
+			out = &cp
+			break
 		}
 	}
-	return nil, fmt.Errorf("profile not found")
-}
-
-// Remove mutates under the lock, then persists synchronously so the change is
-// on disk before the caller sees success (was a fire-and-forget goroutine:
-// lost writes on crash and races with TempDir cleanup in tests).
-func (s *ProfileStore) Remove(id string) (bool, error) {
-	removed, err := s.removeNoPersist(id)
-	if removed && err == nil {
-		s.persist()
+	s.mu.Unlock()
+	if out == nil {
+		return nil, fmt.Errorf("profile not found")
 	}
-	return removed, err
+	s.persist()
+	return out, nil
 }
 
-func (s *ProfileStore) removeNoPersist(id string) (bool, error) {
+// Remove deletes a profile and persists. The local development profile
+// cannot be removed.
+func (s *ProfileStore) Remove(id string) (bool, error) {
 	if id == LocalPartner.ProfileID {
 		return false, fmt.Errorf("cannot delete local development profile")
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	before := len(s.profiles)
 	filtered := s.profiles[:0]
 	for _, p := range s.profiles {
@@ -283,27 +267,25 @@ func (s *ProfileStore) removeNoPersist(id string) (bool, error) {
 		}
 	}
 	s.profiles = filtered
-	if len(s.profiles) == before {
-		return false, nil
+	removed := len(s.profiles) != before
+	s.mu.Unlock()
+	if removed {
+		s.persist()
 	}
-	return true, nil
+	return removed, nil
 }
 
-// persist writes the roster atomically. 0600: profiles carry emails, bios,
-// and tone fingerprints.
+// persist writes the roster atomically and durably (atomicfile: temp file,
+// fsync, rename). 0600: profiles carry emails, bios, and tone fingerprints.
+// The snapshot is marshalled under the lock; persistMu keeps writes ordered.
 func (s *ProfileStore) persist() {
 	s.persistMu.Lock()
 	defer s.persistMu.Unlock()
 	s.mu.RLock()
 	data, _ := json.MarshalIndent(s.profiles, "", "  ")
 	s.mu.RUnlock()
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0600); err != nil {
-		slog.Error("profiles: persist write failed", "path", tmp, "err", err)
-		return
-	}
-	if err := os.Rename(tmp, s.path); err != nil {
-		slog.Error("profiles: persist rename failed", "path", s.path, "err", err)
+	if err := atomicfile.WriteFile(s.path, data, 0o600); err != nil {
+		slog.Error("profiles: persist failed", "path", s.path, "err", err)
 	}
 }
 

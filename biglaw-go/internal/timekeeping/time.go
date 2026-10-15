@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/discover-legal/biglaw-go/internal/atomicfile"
 	"github.com/discover-legal/biglaw-go/internal/csvutil"
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
@@ -487,13 +488,8 @@ func (s *TimeStore) persist() {
 	s.mu.Lock()
 	data, _ := json.MarshalIndent(s.entries, "", "  ")
 	s.mu.Unlock()
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0600); err != nil {
-		slog.Error("timekeeping: persist write failed", "path", tmp, "err", err)
-		return
-	}
-	if err := os.Rename(tmp, s.path); err != nil {
-		slog.Error("timekeeping: persist rename failed", "path", s.path, "err", err)
+	if err := atomicfile.WriteFile(s.path, data, 0o600); err != nil {
+		slog.Error("timekeeping: persist failed", "path", s.path, "err", err)
 	}
 }
 

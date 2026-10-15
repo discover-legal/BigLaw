@@ -15,9 +15,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/discover-legal/biglaw-go/internal/atomicfile"
 )
 
 const clioResponseCap = 2_000_000
@@ -223,10 +224,9 @@ func (c *ClioClient) save() error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(c.tokensFile), 0755); err != nil {
-		return err
-	}
-	return os.WriteFile(c.tokensFile, data, 0600)
+	// OAuth refresh tokens: atomic so a crash never leaves a truncated file
+	// (which would force a re-connect), 0600 as they are credentials.
+	return atomicfile.WriteFile(c.tokensFile, data, 0o600)
 }
 
 // Disconnect clears stored tokens.

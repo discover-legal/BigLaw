@@ -14,13 +14,13 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"regexp"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/discover-legal/biglaw-go/internal/atomicfile"
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
 
@@ -397,12 +397,7 @@ func (m *Monitor) persist() {
 	if err != nil {
 		return
 	}
-	if err := os.MkdirAll(filepath.Dir(m.path), 0o755); err != nil {
-		return
+	if err := atomicfile.WriteFile(m.path, data, 0o600); err != nil {
+		slog.Warn("DocketMonitor: persist failed", "path", m.path, "error", err)
 	}
-	tmp := m.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return
-	}
-	_ = os.Rename(tmp, m.path)
 }
