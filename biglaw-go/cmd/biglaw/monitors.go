@@ -20,6 +20,7 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/dockets"
 	"github.com/discover-legal/biglaw-go/internal/knowledge"
 	"github.com/discover-legal/biglaw-go/internal/lpm"
+	"github.com/discover-legal/biglaw-go/internal/modules"
 	"github.com/discover-legal/biglaw-go/internal/orchestrator"
 	"github.com/discover-legal/biglaw-go/internal/providers"
 	"github.com/discover-legal/biglaw-go/internal/regulatory"
@@ -57,7 +58,7 @@ func startMonitors(
 	var stops []func()
 	var docketMon *dockets.Monitor
 
-	if cfg.Monitors.BudgetAlertsEnabled {
+	if cfg.Monitors.BudgetAlertsEnabled && modules.Default.Enabled("monitor-budget") {
 		bm := budget.NewMonitor(tsAdapter{ts}, budgetClientStore{cs}, func(a types.BudgetAlert) {
 			postAlert(poster, "budget_alert", a.MatterNumber,
 				fmt.Sprintf("Budget alert — %s", a.MatterNumber),
@@ -69,7 +70,7 @@ func startMonitors(
 		stops = append(stops, bm.Stop)
 	}
 
-	if cfg.Monitors.DocketsEnabled {
+	if cfg.Monitors.DocketsEnabled && modules.Default.Enabled("monitor-dockets") {
 		dm := dockets.New(cfg.Monitors.DocketsFile)
 		if err := dm.Init(); err != nil {
 			slog.Warn("docket monitor init failed", "error", err)
@@ -90,7 +91,7 @@ func startMonitors(
 	var regMon *regulatory.Monitor
 	regModel := routing.Light(cfg)
 	rm := regulatory.New(provReg.MustGet(regModel), regModel)
-	if rm.IsEnabled() {
+	if rm.IsEnabled() && modules.Default.Enabled("monitor-regulatory") {
 		regMon = rm
 		rm.SetAlertHandler(func(a types.RegulationAlert) {
 			postAlert(poster, "regulatory_alert", a.MatterNumber,

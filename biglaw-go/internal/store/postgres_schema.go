@@ -143,4 +143,118 @@ CREATE POLICY document_versions_rls ON document_versions
 	WITH CHECK (
 		current_setting('app.system', true) = 'on'
 	);
+
+-- CRM profiles/facts and intake submissions are firm-wide artifacts: any
+-- authenticated principal (system, partner, or a lawyer with a profile) may
+-- read them; writes go through the service layer running as system or an
+-- authenticated firm member. Anonymous sessions (no GUCs) see nothing.
+CREATE TABLE IF NOT EXISTS crm_profiles (
+	id            TEXT PRIMARY KEY,
+	client_id     TEXT NOT NULL DEFAULT '',
+	external_ref  TEXT NOT NULL DEFAULT '',
+	email         TEXT NOT NULL DEFAULT '',
+	name          TEXT NOT NULL DEFAULT '',
+	conflict_flag BOOLEAN NOT NULL DEFAULT FALSE,
+	created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+	updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_crm_profiles_external_ref
+	ON crm_profiles(external_ref) WHERE external_ref <> '';
+CREATE INDEX IF NOT EXISTS idx_crm_profiles_client ON crm_profiles(client_id);
+
+ALTER TABLE crm_profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE crm_profiles FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS crm_profiles_rls ON crm_profiles;
+CREATE POLICY crm_profiles_rls ON crm_profiles
+	USING (
+		current_setting('app.system', true) = 'on'
+		OR current_setting('app.is_partner', true) = 'true'
+		OR COALESCE(current_setting('app.current_profile', true), '') <> ''
+	)
+	WITH CHECK (
+		current_setting('app.system', true) = 'on'
+		OR current_setting('app.is_partner', true) = 'true'
+		OR COALESCE(current_setting('app.current_profile', true), '') <> ''
+	);
+
+CREATE TABLE IF NOT EXISTS crm_facts (
+	id            TEXT PRIMARY KEY,
+	profile_id    TEXT NOT NULL,
+	category      TEXT NOT NULL DEFAULT 'note',
+	predicate     TEXT NOT NULL DEFAULT '',
+	value         TEXT NOT NULL DEFAULT '',
+	note          TEXT NOT NULL DEFAULT '',
+	source        TEXT NOT NULL DEFAULT '',
+	proposed_by   TEXT NOT NULL DEFAULT '',
+	approver_role TEXT NOT NULL DEFAULT 'lawyer',
+	status        TEXT NOT NULL DEFAULT 'pending',
+	decided_by    TEXT NOT NULL DEFAULT '',
+	decision_note TEXT NOT NULL DEFAULT '',
+	superseded_by TEXT NOT NULL DEFAULT '',
+	created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+	decided_at    TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_crm_facts_profile_status ON crm_facts(profile_id, status);
+CREATE INDEX IF NOT EXISTS idx_crm_facts_pending        ON crm_facts(status, approver_role);
+
+ALTER TABLE crm_facts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE crm_facts FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS crm_facts_rls ON crm_facts;
+CREATE POLICY crm_facts_rls ON crm_facts
+	USING (
+		current_setting('app.system', true) = 'on'
+		OR current_setting('app.is_partner', true) = 'true'
+		OR COALESCE(current_setting('app.current_profile', true), '') <> ''
+	)
+	WITH CHECK (
+		current_setting('app.system', true) = 'on'
+		OR current_setting('app.is_partner', true) = 'true'
+		OR COALESCE(current_setting('app.current_profile', true), '') <> ''
+	);
+
+CREATE TABLE IF NOT EXISTS intake_submissions (
+	id            TEXT PRIMARY KEY,
+	external_id   TEXT NOT NULL DEFAULT '',
+	profile_id    TEXT NOT NULL DEFAULT '',
+	client_id     TEXT NOT NULL DEFAULT '',
+	client_number TEXT NOT NULL DEFAULT '',
+	matter_number TEXT NOT NULL DEFAULT '',
+	title         TEXT NOT NULL DEFAULT '',
+	document_type TEXT NOT NULL DEFAULT '',
+	matter_type   TEXT NOT NULL DEFAULT '',
+	jurisdiction  TEXT NOT NULL DEFAULT '',
+	summary       TEXT NOT NULL DEFAULT '',
+	document_id   TEXT NOT NULL DEFAULT '',
+	status        TEXT NOT NULL DEFAULT 'received',
+	note          TEXT NOT NULL DEFAULT '',
+	assigned_to   TEXT NOT NULL DEFAULT '',
+	task_id       TEXT NOT NULL DEFAULT '',
+	conflict      BOOLEAN NOT NULL DEFAULT FALSE,
+	conflict_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+	metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+	created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+	updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_intake_profile_external
+	ON intake_submissions(profile_id, external_id) WHERE external_id <> '';
+CREATE INDEX IF NOT EXISTS idx_intake_profile ON intake_submissions(profile_id);
+CREATE INDEX IF NOT EXISTS idx_intake_status  ON intake_submissions(status);
+
+ALTER TABLE intake_submissions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE intake_submissions FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS intake_submissions_rls ON intake_submissions;
+CREATE POLICY intake_submissions_rls ON intake_submissions
+	USING (
+		current_setting('app.system', true) = 'on'
+		OR current_setting('app.is_partner', true) = 'true'
+		OR COALESCE(current_setting('app.current_profile', true), '') <> ''
+	)
+	WITH CHECK (
+		current_setting('app.system', true) = 'on'
+		OR current_setting('app.is_partner', true) = 'true'
+		OR COALESCE(current_setting('app.current_profile', true), '') <> ''
+	);
 `
