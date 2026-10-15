@@ -76,7 +76,7 @@ func (e *Engine) LoadRules(rules *types.JurisdictionRules) error {
 		return fmt.Errorf("invalid ruleset: missing required fields")
 	}
 	e.mu.Lock()
-	e.rules[strings.ToUpper(rules.Jurisdiction)] = rules
+	e.rules[strings.ToUpper(strings.TrimSpace(rules.Jurisdiction))] = rules
 	e.mu.Unlock()
 	return nil
 }
@@ -127,18 +127,6 @@ type InvalidDateError struct{ Value string }
 
 func (e *InvalidDateError) Error() string {
 	return fmt.Sprintf("invalid triggerDate %q: expected YYYY-MM-DD", e.Value)
-}
-
-// Triggers returns the sorted, de-duplicated trigger events declared by a
-// jurisdiction's rule set (nil when the jurisdiction is not loaded).
-func (e *Engine) Triggers(jurisdiction string) []string {
-	e.mu.RLock()
-	ruleset := e.rules[strings.ToUpper(jurisdiction)]
-	e.mu.RUnlock()
-	if ruleset == nil {
-		return nil
-	}
-	return triggersOf(ruleset)
 }
 
 func triggersOf(rs *types.JurisdictionRules) []string {
@@ -210,26 +198,8 @@ func (e *Engine) Compute(jurisdiction, triggerEvent, triggerDate string) (*types
 		}
 		matched = true
 
-		var dueDate, unadjusted time.Time
-		var adjustments []string
-		switch {
-		case rule.DayType == types.DayTypeBusiness:
-			dueDate = addBusinessDays(tDate, rule.Days, cal)
-			unadjusted = dueDate
-		case cal == types.HolidaysUKBank && rule.Days <= 5:
-			// CPR 2.8(4): short periods skip weekends and bank holidays.
-			dueDate = addBusinessDays(tDate, rule.Days, cal)
-			unadjusted = dueDate
-			adjustments = append(adjustments,
-				"CPR 2.8(4): period of 5 days or less excludes Saturdays, Sundays, bank holidays, Christmas Day and Good Friday")
-		default:
-			unadjusted = tDate.AddDate(0, 0, rule.Days)
-			var why []string
-			dueDate, why = rollForward(unadjusted, cal)
-			for _, w := range why {
-				adjustments = append(adjustments, w+" — "+rollForwardRule(cal))
-			}
-		}
+		dueDate, unadjusted, adjustments := computeDue(tDate, rule, cal)
+		backward := rule.Days < 0
 
 		cd := types.ComputedDeadline{
 			RuleID:      rule.ID,
@@ -240,6 +210,9 @@ func (e *Engine) Compute(jurisdiction, triggerEvent, triggerDate string) (*types
 			Cite:        rule.Cite,
 			Note:        rule.Note,
 			Adjustments: adjustments,
+		}
+		if backward {
+			cd.Direction = "before"
 		}
 		if !unadjusted.Equal(dueDate) {
 			cd.UnadjustedDate = unadjusted.Format("2006-01-02")
@@ -274,27 +247,104 @@ func (e *Engine) Compute(jurisdiction, triggerEvent, triggerDate string) (*types
 	}, nil
 }
 
+// computeDue applies the counting rule. Positive Days count forward from the
+// trigger ("within N days after service"); negative Days count backward from
+// it ("at least N days before the hearing"), and a backward period that ends
+// on a non-working day continues BACKWARD — FRCP 6(a)(5) defines the "next
+// day" for a backward-counted period as the preceding day — which is also
+// the only safe reading under CPR and Reg. 1182/71 (rolling a "before" date
+// forward would move it past the latest permitted day).
+//
+// CPR 2.8(2)-(3): periods are clear days — neither the day of the event nor
+// the day on which the period ends is counted — so "at least 7 days before
+// the hearing" on Friday 20th means by Thursday 12th (8 days earlier); a
+// period of 5 days or less also skips weekends and bank holidays (2.8(4)),
+// e.g. 3 days before Friday 20th → Monday 16th (CPR 2.8 worked example).
+func computeDue(t time.Time, rule types.DeadlineRule, cal types.HolidayCalendar) (due, unadjusted time.Time, adjustments []string) {
+	n := rule.Days
+	backward := n < 0
+	if backward {
+		n = -n
+	}
+	ukClear := cal == types.HolidaysUKBank
+	note := func(why []string, rule string) {
+		for _, w := range why {
+			adjustments = append(adjustments, w+" — "+rule)
+		}
+	}
+	switch {
+	case rule.DayType == types.DayTypeBusiness:
+		if backward {
+			due = subBusinessDays(t, n, cal)
+		} else {
+			due = addBusinessDays(t, n, cal)
+		}
+		return due, due, nil
+	case ukClear && n <= 5:
+		adjustments = append(adjustments,
+			"CPR 2.8(4): period of 5 days or less excludes Saturdays, Sundays, bank holidays, Christmas Day and Good Friday")
+		if !backward {
+			due = addBusinessDays(t, n, cal)
+			return due, due, adjustments
+		}
+		// n clear working days strictly between the act and the event; the
+		// act is due on the day before the earliest of them.
+		unadjusted = subBusinessDays(t, n, cal).AddDate(0, 0, -1)
+		due, why := rollBackward(unadjusted, cal)
+		note(why, rollRule(cal, true))
+		return due, unadjusted, adjustments
+	case backward:
+		unadjusted = t.AddDate(0, 0, -n)
+		if ukClear {
+			unadjusted = unadjusted.AddDate(0, 0, -1)
+			adjustments = append(adjustments,
+				"CPR 2.8(3): clear days — neither the day of the event nor the day the period ends is counted")
+		}
+		due, why := rollBackward(unadjusted, cal)
+		note(why, rollRule(cal, true))
+		return due, unadjusted, adjustments
+	default:
+		unadjusted = t.AddDate(0, 0, n)
+		due, why := rollForward(unadjusted, cal)
+		note(why, rollRule(cal, false))
+		return due, unadjusted, adjustments
+	}
+}
+
 // warningDate counts the warning lead time back from the adjusted due date
 // (business days for business-day rules, calendar days otherwise). A warning
 // that lands on a non-working day moves to the PRECEDING working day — a
-// reminder must never slip later. It is never earlier than the trigger date.
+// reminder must never slip later, and is always on or before the due date.
 func warningDate(trigger, due time.Time, rule types.DeadlineRule, cal types.HolidayCalendar) time.Time {
 	var w time.Time
 	if rule.DayType == types.DayTypeBusiness {
 		w = subBusinessDays(due, rule.WarningDays, cal)
 	} else {
 		w = due.AddDate(0, 0, -rule.WarningDays)
-		for !isBusinessDay(w, cal) && w.After(trigger) {
-			w = w.AddDate(0, 0, -1)
-		}
+		w, _ = rollBackward(w, cal)
 	}
-	if w.Before(trigger) {
+	// A forward period's reminder never precedes the trigger itself. A
+	// backward period's trigger (the hearing) is after the due date, so no
+	// such floor applies — the reminder is simply before the due date.
+	if rule.Days >= 0 && w.Before(trigger) {
 		w = trigger
 	}
 	return w
 }
 
-func rollForwardRule(cal types.HolidayCalendar) string {
+func rollRule(cal types.HolidayCalendar, backward bool) string {
+	if backward {
+		switch cal {
+		case types.HolidaysUSFederal:
+			return "a backward-counted period continues to the PRECEDING day that is not a Saturday, Sunday or legal holiday (FRCP 6(a)(5), 6(a)(1)(C))"
+		case types.HolidaysUKBank:
+			return "moved to the preceding working day: the act must be done on or before the last permitted day (CPR 2.8)"
+		case types.HolidaysEUInstitutions:
+			return "moved to the preceding working day (a time limit before an event cannot be extended past it)"
+		default:
+			return "moved to the preceding day that is not a Saturday or Sunday"
+		}
+	}
 	switch cal {
 	case types.HolidaysUSFederal:
 		return "period continues to the next day that is not a Saturday, Sunday or legal holiday (FRCP 6(a)(1)(C); FRAP 26(a)(1)(C))"
@@ -337,11 +387,20 @@ func limitationsFor(cal types.HolidayCalendar) []string {
 // rollForward moves d forward past Saturdays, Sundays and holidays, returning
 // the first working day and one human-readable reason per day skipped.
 func rollForward(d time.Time, cal types.HolidayCalendar) (time.Time, []string) {
+	return roll(d, cal, 1)
+}
+
+// rollBackward moves d back to the closest preceding working day.
+func rollBackward(d time.Time, cal types.HolidayCalendar) (time.Time, []string) {
+	return roll(d, cal, -1)
+}
+
+func roll(d time.Time, cal types.HolidayCalendar, step int) (time.Time, []string) {
 	var why []string
 	for {
 		if name, ok := holidayName(d, cal); ok {
 			r := fmt.Sprintf("%s is %s", d.Format("2006-01-02 (Monday)"), name)
-			if strings.HasSuffix(name, "(observed)") {
+			if strings.HasSuffix(name, "(observed)") && step > 0 {
 				r += " [in-lieu observed date: federal courts are closed, but a court could read FRCP 6(a)(6)(A) as the statutory date only — the conservative course is to file by the previous court day]"
 			}
 			why = append(why, r)
@@ -350,7 +409,7 @@ func rollForward(d time.Time, cal types.HolidayCalendar) (time.Time, []string) {
 		} else {
 			return d, why
 		}
-		d = d.AddDate(0, 0, 1)
+		d = d.AddDate(0, 0, step)
 	}
 }
 
@@ -532,8 +591,7 @@ func ukBankHolidays(year int) map[string]string {
 		add(date(2022, 9, 19), "State Funeral of Queen Elizabeth II")
 	case 2023:
 		add(date(2023, 5, 8), "Coronation of King Charles III")
-	}
-	if year == 2011 {
+	case 2011:
 		add(date(2011, 4, 29), "Royal Wedding")
 	}
 	add(earlyMay, "Early May bank holiday")

@@ -319,9 +319,6 @@ func (s *Server) handleDeadlineCompute(c *gin.Context) {
 		writeDeadlineError(c, err)
 		return
 	}
-	if result.Deadlines == nil {
-		result.Deadlines = []types.ComputedDeadline{}
-	}
 	c.JSON(http.StatusOK, result)
 }
 
@@ -365,9 +362,6 @@ func (s *Server) handleMatterDeadlines(c *gin.Context) {
 	if err != nil {
 		writeDeadlineError(c, err)
 		return
-	}
-	if result.Deadlines == nil {
-		result.Deadlines = []types.ComputedDeadline{}
 	}
 	c.JSON(http.StatusOK, result)
 }

@@ -197,3 +197,65 @@ func keys(m map[string]string) []string {
 	sort.Strings(out)
 	return out
 }
+
+// Backward-counted periods ("at least N days before the hearing"): negative
+// days count back from the trigger, a non-working end day moves to the
+// PRECEDING working day (FRCP 6(a)(5)), the warning is on or before the due
+// date, and CPR counts clear days (2.8(3)) with the 2.8(4) short-period rule.
+func TestBackwardPeriods(t *testing.T) {
+	type rule struct {
+		days, warn int
+		dt         types.DayType
+	}
+	cases := []struct {
+		name     string
+		cal      types.HolidayCalendar
+		r        rule
+		event    string
+		due, raw string
+		warn     string
+	}{
+		{"US 14 before Sunday hearing → Sat/Sun roll back", types.HolidaysUSFederal, rule{-14, 3, types.DayTypeCalendar}, "2026-12-27", "2026-12-11", "2026-12-13", "2026-12-08"},
+		{"US 3 before, weekday", types.HolidaysUSFederal, rule{-3, 0, types.DayTypeCalendar}, "2026-12-27", "2026-12-24", "", ""},
+		{"US lands on Veterans Day → back to Tue", types.HolidaysUSFederal, rule{-7, 0, types.DayTypeCalendar}, "2026-11-18", "2026-11-10", "2026-11-11", ""},
+		{"US 5 business days before, across Christmas", types.HolidaysUSFederal, rule{-5, 0, types.DayTypeBusiness}, "2026-12-28", "2026-12-18", "", ""},
+		{"CPR 2.8 worked example: 3 days before Fri 20 Oct → Mon 16 Oct", types.HolidaysUKBank, rule{-3, 0, types.DayTypeCalendar}, "2000-10-20", "2000-10-16", "", ""},
+		{"CPR 24.5(1): 7 clear days before Fri 20 Nov → Thu 12 Nov", types.HolidaysUKBank, rule{-7, 2, types.DayTypeCalendar}, "2026-11-20", "2026-11-12", "", "2026-11-10"},
+		{"CPR clear days back over Christmas", types.HolidaysUKBank, rule{-7, 0, types.DayTypeCalendar}, "2027-01-04", "2026-12-24", "2026-12-27", ""},
+		{"EU 10 before → Easter Monday → back", types.HolidaysEUInstitutions, rule{-10, 0, types.DayTypeCalendar}, "2026-04-16", "2026-04-03", "2026-04-06", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := New()
+			_ = e.LoadRules(&types.JurisdictionRules{Jurisdiction: "T", Holidays: tc.cal, Rules: []types.DeadlineRule{
+				{ID: "r", Trigger: "hearing", Event: "x", Days: tc.r.days, DayType: tc.r.dt, WarningDays: tc.r.warn}}})
+			res, err := e.Compute("T", "hearing", tc.event)
+			if err != nil {
+				t.Fatal(err)
+			}
+			d := res.Deadlines[0]
+			if d.DueDate != tc.due || d.UnadjustedDate != tc.raw || d.WarningDate != tc.warn || d.Direction != "before" {
+				t.Errorf("due=%s raw=%s warn=%s dir=%q; want due=%s raw=%s warn=%s (adj %v)",
+					d.DueDate, d.UnadjustedDate, d.WarningDate, d.Direction, tc.due, tc.raw, tc.warn, d.Adjustments)
+			}
+			if d.DueDate >= tc.event {
+				t.Errorf("a 'before' deadline must precede the event: %s vs %s", d.DueDate, tc.event)
+			}
+			if d.WarningDate != "" && d.WarningDate > d.DueDate {
+				t.Errorf("warning %s after due %s", d.WarningDate, d.DueDate)
+			}
+		})
+	}
+}
+
+// The shipped CPR 24.5(1) rule is modelled backward from the hearing.
+func TestShippedCPRSummaryJudgmentRule(t *testing.T) {
+	e := shippedEngine(t)
+	r, err := e.Compute("UK", "summary_judgment_hearing", "2026-11-20")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := findRule(t, r, "cpr-summary-judgment-response"); d.DueDate != "2026-11-12" {
+		t.Errorf("CPR 24.5(1) evidence due %s, want 2026-11-12", d.DueDate)
+	}
+}

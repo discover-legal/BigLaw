@@ -1231,6 +1231,9 @@ type ComputedDeadline struct {
 	DayType     DayType `json:"dayType"`
 	Cite        string  `json:"cite"`
 	Note        string  `json:"note,omitempty"`
+	// Direction is "before" for a period counted backward from the trigger
+	// (negative days: "at least N days before the hearing").
+	Direction string `json:"direction,omitempty"`
 	// UnadjustedDate is the raw end of the period before any roll-forward
 	// (e.g. FRCP 6(a)(1)(C)); set only when it differs from DueDate.
 	UnadjustedDate string `json:"unadjustedDate,omitempty"`
