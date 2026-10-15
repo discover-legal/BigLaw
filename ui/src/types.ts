@@ -831,7 +831,8 @@ export const PRECEDENT_TYPES: { id: string; name: string }[] = [
   { id: "other",             name: "Other (describe)" },
 ];
 
-export type CitationSignal = "green" | "yellow" | "red" | "blue";
+// "unknown": no treatment analysis was produced — the citation is UNCHECKED.
+export type CitationSignal = "green" | "yellow" | "red" | "blue" | "unknown";
 
 export interface CitationTreatment {
   caseName: string;
@@ -849,7 +850,7 @@ export interface CitationCheckResult {
   caseName?: string;
   court?: string;
   year?: number;
-  status: "good_law" | "limited" | "overruled" | "superseded" | "unclear";
+  status: "good_law" | "limited" | "overruled" | "superseded" | "unclear" | "unknown";
   signal: CitationSignal;
   signalLabel: string;
   confidence: number;

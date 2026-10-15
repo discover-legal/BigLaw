@@ -753,6 +753,7 @@ const SIGNAL_STYLE: Record<CitationSignal, { color: string; glyph: string }> = {
   yellow: { color: "var(--amber)", glyph: "▲" },
   red:    { color: "var(--red)",   glyph: "■" },
   blue:   { color: "var(--blue)",  glyph: "◆" },
+  unknown: { color: "var(--text-faint)", glyph: "?" },
 };
 
 function CitationsTab({ notify }: { notify: (m: string) => void }) {
@@ -785,7 +786,7 @@ function CitationsTab({ notify }: { notify: (m: string) => void }) {
         <div style={{ marginTop: 20 }}>
           <div className="section-card">
             <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
-              <span style={{ color: SIGNAL_STYLE[result.signal].color, fontSize: 22 }}>{SIGNAL_STYLE[result.signal].glyph}</span>
+              <span style={{ color: (SIGNAL_STYLE[result.signal] ?? SIGNAL_STYLE.unknown).color, fontSize: 22 }}>{(SIGNAL_STYLE[result.signal] ?? SIGNAL_STYLE.unknown).glyph}</span>
               <div>
                 <div style={{ fontWeight: 600, fontSize: 15 }}>
                   {result.caseName ?? result.query}
@@ -794,7 +795,7 @@ function CitationsTab({ notify }: { notify: (m: string) => void }) {
                 <div style={{ fontSize: 12.5, color: "var(--text-dim)" }}>
                   {result.resolvedCitation && <>{result.resolvedCitation} · </>}
                   {result.court && <>{result.court} · </>}
-                  <span style={{ color: SIGNAL_STYLE[result.signal].color, fontWeight: 600 }}>{result.signalLabel}</span>
+                  <span style={{ color: (SIGNAL_STYLE[result.signal] ?? SIGNAL_STYLE.unknown).color, fontWeight: 600 }}>{result.signalLabel}</span>
                   {" "}· {Math.round(result.confidence * 100)}% confidence
                 </div>
               </div>
