@@ -289,41 +289,43 @@ func (l *Logger) RestoreFromFile() error {
 	if len(lines) > l.maxBuffer {
 		start = len(lines) - l.maxBuffer
 	}
+	// The chain hash is SHA-256 over the exact bytes written for an entry
+	// (Write hashes json.Marshal(entry) and the dispatcher writes those bytes
+	// as the line). Hash the raw line — re-marshalling the decoded entry is
+	// not byte-identical when Data held structs or non-float numbers.
+	var lastRaw []byte
+	restored := 0
 	for _, line := range lines[start:] {
+		line = strings.TrimRight(line, "\r")
 		if line == "" {
 			continue
 		}
 		var e AuditEntry
-		if err := json.Unmarshal([]byte(line), &e); err == nil {
-			l.buffer = append(l.buffer, e)
+		if err := json.Unmarshal([]byte(line), &e); err != nil {
+			continue
 		}
-	}
-	// Verify the hash chain across the restored window — the documented
-	// tamper-evidence is only meaningful if it is actually checked. We can only
-	// validate links within the loaded window (the entry before the first one is
-	// not in memory), so start at index 1. A mismatch means the log was edited.
-	for i := 1; i < len(l.buffer); i++ {
-		if l.buffer[i].PrevHash != hashEntry(l.buffer[i-1]) {
+		if lastRaw != nil && e.PrevHash != rawHash(lastRaw) {
 			slog.Warn("Audit hash-chain break detected on restore — log may have been tampered with",
-				"atEntryId", l.buffer[i].ID,
-				"index", i,
-			)
-			break
+				"atEntryId", e.ID, "index", restored)
 		}
+		l.buffer = append(l.buffer, e)
+		lastRaw = []byte(line)
+		restored++
 	}
-	if last := len(l.buffer); last > 0 {
-		l.lastHash = hashEntry(l.buffer[last-1])
+	if len(l.buffer) > l.maxBuffer {
+		l.buffer = l.buffer[len(l.buffer)-l.maxBuffer:]
+	}
+	if lastRaw != nil {
+		l.lastHash = rawHash(lastRaw)
 	}
 	return nil
 }
 
-// hashEntry computes the SHA-256 chain hash of an entry's JSON encoding —
-// the same scheme used in Write when advancing lastHash.
-func hashEntry(e AuditEntry) string {
-	raw, _ := json.Marshal(e)
+func rawHash(raw []byte) string {
 	h := sha256.Sum256(raw)
 	return hex.EncodeToString(h[:])
 }
+
 
 func (l *Logger) FlushSinks() error {
 	l.mu.Lock()
