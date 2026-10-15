@@ -5,6 +5,7 @@ package templates
 
 import (
 	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -54,21 +55,54 @@ func (s *Store) Load(dirs ...string) error {
 			}
 
 			// Try array first, then single object.
-			var many []types.TaskTemplate
+			var many []templateFile
 			if err := json.Unmarshal(data, &many); err == nil {
 				for _, t := range many {
-					s.Add(t)
+					s.addLoaded(fpath, t)
 				}
 				continue
 			}
 
-			var one types.TaskTemplate
+			var one templateFile
 			if err := json.Unmarshal(data, &one); err == nil {
-				s.Add(one)
+				s.addLoaded(fpath, one)
+			} else {
+				slog.Warn("templates: skipping unparseable template file", "file", fpath, "err", err)
 			}
 		}
 	}
 	return nil
+}
+
+// templateFile is the on-disk template schema. The canonical prompt field is
+// promptTemplate (the same field adapter workflows use);
+// taskDescriptionTemplate is accepted as a legacy alias so older template
+// files keep working. preferredDomains / metadata / source are informational
+// and ignored by the loader.
+type templateFile struct {
+	types.TaskTemplate
+	TaskDescriptionTemplate string `json:"taskDescriptionTemplate"`
+}
+
+// normalize resolves the legacy alias into PromptTemplate.
+func (f templateFile) normalize() types.TaskTemplate {
+	t := f.TaskTemplate
+	if strings.TrimSpace(t.PromptTemplate) == "" {
+		t.PromptTemplate = f.TaskDescriptionTemplate
+	}
+	return t
+}
+
+// addLoaded adds a template read from disk, skipping (with a warning) any
+// that would load with no id or an empty prompt — previously such a
+// template loaded silently and produced empty task descriptions.
+func (s *Store) addLoaded(fpath string, f templateFile) {
+	t := f.normalize()
+	if t.ID == "" || strings.TrimSpace(t.PromptTemplate) == "" {
+		slog.Warn("templates: skipping template with no id or empty promptTemplate", "file", fpath, "id", t.ID)
+		return
+	}
+	s.Add(t)
 }
 
 // Add appends a single TaskTemplate to the store under a write lock.
@@ -109,13 +143,21 @@ func (s *Store) Get(id string) *types.TaskTemplate {
 	return nil
 }
 
-// InstantiateTemplate substitutes {{key}} placeholders in t.PromptTemplate
-// with corresponding values from subs, returning the rendered description and
-// the workflow type string. Keys present in subs that have no corresponding
-// placeholder are ignored; placeholders with no matching key are left as-is.
+// InstantiateTemplate substitutes {{key}} placeholders in t.PromptTemplate,
+// returning the rendered description and the workflow type string. Values
+// come from the template's own default Substitutions, overridden by subs
+// (callers pass only what they want to change). Keys with no corresponding
+// placeholder are ignored; placeholders with no value are left as-is.
 func InstantiateTemplate(t types.TaskTemplate, subs map[string]string) (description, workflowType string) {
+	merged := make(map[string]string, len(t.Substitutions)+len(subs))
+	for k, v := range t.Substitutions {
+		merged[k] = v
+	}
+	for k, v := range subs {
+		merged[k] = v
+	}
 	result := t.PromptTemplate
-	for key, val := range subs {
+	for key, val := range merged {
 		result = strings.ReplaceAll(result, "{{"+key+"}}", val)
 	}
 	return result, string(t.WorkflowType)

@@ -3,7 +3,6 @@
   "name": "Motion Opposition",
   "description": "Analyse the opposing party's brief or motion and draft a point-by-point opposition with full citation validation. Replaces CoCounsel brief drafting.",
   "workflowType": "adversarial",
-  "taskDescriptionTemplate": "Draft an opposition to the following motion/brief in {{matter}}:\n\n{{briefSummary}}\n\nGoverning law: {{jurisdiction}}. Court / forum: {{court}}.",
   "promptTemplate": "Draft an opposition to the following motion/brief in {{matter}}:\n\n{{briefSummary}}\n\nGoverning law: {{jurisdiction}}. Court / forum: {{court}}.",
   "substitutions": {
     "matter": "the referenced matter",
