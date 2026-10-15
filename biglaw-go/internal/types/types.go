@@ -696,6 +696,11 @@ const (
 	CitationSignalYellow CitationSignal = "yellow"
 	CitationSignalRed    CitationSignal = "red"
 	CitationSignalBlue   CitationSignal = "blue"
+	// CitationSignalUnknown: no treatment analysis was produced (the model
+	// call failed or answered unusably) — the citation is UNCHECKED.
+	CitationSignalUnknown CitationSignal = "unknown"
+
+	CitationStatusUnknown CitationStatus = "unknown"
 )
 
 type CitationTreatment struct {
@@ -1063,6 +1068,7 @@ type ClientBriefing struct {
 	RelationshipNotes string                   `json:"relationshipNotes,omitempty"`
 	IndustryContext   string                   `json:"industryContext,omitempty"`
 	Document          string                   `json:"document"`
+	Degraded          string                   `json:"degraded,omitempty"` // non-empty: AI synthesis failed, statistics only (not a partner briefing)
 }
 
 // ─── Budget ───────────────────────────────────────────────────────────────────

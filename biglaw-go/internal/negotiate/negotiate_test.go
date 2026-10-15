@@ -9,6 +9,7 @@
 package negotiate
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -102,16 +103,17 @@ func TestDecideDispositionsAndCascade(t *testing.T) {
 			ContextBefore: "liability cap of ", ContextAfter: " months of fees"},
 		{Kind: ooxml.RevInsertion, Author: "Opposing Counsel",
 			InsertedText: ", acting reasonably", ContextBefore: "notify the other party", ContextAfter: " within ten days"},
-		{Kind: ooxml.RevDeletion, Author: "Opposing Counsel",
-			DeletedText: "JUDGE-FAILS", ContextBefore: "shall ", ContextAfter: " promptly"},
 		{Kind: ooxml.RevInsertion, Author: "Opposing Counsel",
 			InsertedText: "EMPTY-COUNTER", ContextBefore: "and ", ContextAfter: " thereafter"},
 	}
 
 	eng := New(sp, "jdg-model", "cls-model")
-	decisions := eng.Decide(revs, testStore(t), Opts{ClientID: "C-100", TaskID: "task-1"})
-	if len(decisions) != 4 {
-		t.Fatalf("got %d decisions, want 4", len(decisions))
+	decisions, err := eng.Decide(revs, testStore(t), Opts{ClientID: "C-100", TaskID: "task-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(decisions) != 3 {
+		t.Fatalf("got %d decisions, want 3", len(decisions))
 	}
 
 	d0 := decisions[0]
@@ -141,15 +143,7 @@ func TestDecideDispositionsAndCascade(t *testing.T) {
 
 	d2 := decisions[2]
 	if d2.Disposition != DispositionReview {
-		t.Errorf("decision 2 = %s, want review after judge failure", d2.Disposition)
-	}
-	if !strings.Contains(d2.Rationale, "model backend unavailable") {
-		t.Errorf("decision 2 rationale should carry the error, got %q", d2.Rationale)
-	}
-
-	d3 := decisions[3]
-	if d3.Disposition != DispositionReview {
-		t.Errorf("decision 3 = %s, want review for counter without replacement text", d3.Disposition)
+		t.Errorf("decision 2 = %s, want review for counter without replacement text", d2.Disposition)
 	}
 
 	// The judge for the indemnity change must have seen the CLIENT-tier
@@ -175,29 +169,31 @@ func TestDecideDispositionsAndCascade(t *testing.T) {
 	}
 }
 
-// TestDecideClassificationFailure verifies a failed classification also lands
-// on review-and-continue, not an abort.
-func TestDecideClassificationFailure(t *testing.T) {
-	sp := &scriptedProvider{chat: func(p providers.ChatParams) (*providers.ChatResponse, error) {
-		if p.Model == "cls-model" {
-			return nil, fmt.Errorf("classifier down")
-		}
-		return textResp(`{"disposition":"accept","rationale":"fine"}`), nil
-	}}
+// TestDecideModelFailureAborts: any failed classification or judgment aborts
+// the run with a model-failure error and no decisions — a half-judged
+// response must never be written as a negotiating position.
+func TestDecideModelFailureAborts(t *testing.T) {
 	revs := []ooxml.Revision{
 		{Kind: ooxml.RevInsertion, Author: "OC", InsertedText: "text one"},
 		{Kind: ooxml.RevInsertion, Author: "OC", InsertedText: "text two"},
 	}
-	decisions := New(sp, "jdg-model", "cls-model").Decide(revs, testStore(t), Opts{})
-	if len(decisions) != 2 {
-		t.Fatalf("got %d decisions, want 2 (run must continue past failures)", len(decisions))
-	}
-	for i, d := range decisions {
-		if d.Disposition != DispositionReview {
-			t.Errorf("decision %d = %s, want review", i, d.Disposition)
-		}
-		if !strings.Contains(d.Rationale, "classifier down") {
-			t.Errorf("decision %d rationale should carry the error, got %q", i, d.Rationale)
-		}
+	for name, failModel := range map[string]string{"classification": "cls-model", "judgment": "jdg-model"} {
+		t.Run(name, func(t *testing.T) {
+			calls := 0
+			sp := &scriptedProvider{chat: func(p providers.ChatParams) (*providers.ChatResponse, error) {
+				calls++
+				if p.Model == failModel && calls > 2 { // first change succeeds, second fails
+					return nil, fmt.Errorf("model backend down")
+				}
+				if p.Model == "cls-model" {
+					return textResp(`{"clauseType":"Notice"}`), nil
+				}
+				return textResp(`{"disposition":"accept","rationale":"fine"}`), nil
+			}}
+			decisions, err := New(sp, "jdg-model", "cls-model").Decide(revs, testStore(t), Opts{})
+			if decisions != nil || !errors.Is(err, providers.ErrModelUnavailable) {
+				t.Fatalf("want (nil, ErrModelUnavailable), got (%+v, %v)", decisions, err)
+			}
+		})
 	}
 }

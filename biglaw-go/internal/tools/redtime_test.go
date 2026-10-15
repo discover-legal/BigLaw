@@ -11,6 +11,10 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -226,5 +230,42 @@ func TestGetRedlineTimelineByPath(t *testing.T) {
 	tlOut = execRedtimeTool(t, reg, "get_redline_timeline", map[string]interface{}{"path": "nope.docx"})
 	if okFlag, _ := tlOut["ok"].(bool); okFlag {
 		t.Error("unknown path should not resolve to a timeline")
+	}
+}
+
+// TestRespondToRedlineModelFailureWritesNothing: when a judge call fails
+// mid-run, no .response.docx is written and no Redtime version is recorded —
+// a half-judged response is not a negotiating position.
+func TestRespondToRedlineModelFailureWritesNothing(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		var body struct {
+			Model string `json:"model"`
+		}
+		_ = json.NewDecoder(req.Body).Decode(&body)
+		if body.Model == "qwen-turbo" { // classification succeeds
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"choices": []map[string]interface{}{{"message": map[string]interface{}{"role": "assistant", "content": `{"clauseType":"Governing law"}`}, "finish_reason": "stop"}},
+			})
+			return
+		}
+		http.Error(w, `{"error":"judge down"}`, http.StatusBadRequest) // non-retryable
+	}))
+	defer srv.Close()
+	reg, repo := newRedtimeTestRegistry(t, srv.URL)
+	buildOpposingDocx(t, reg.cfg.PDF.OutputDir)
+
+	out := execRedtimeTool(t, reg, "respond_to_redline", map[string]interface{}{"path": "msa.docx"})
+	if okFlag, _ := out["ok"].(bool); okFlag {
+		t.Fatalf("respond_to_redline reported success after a judge failure: %v", out)
+	}
+	msg, _ := out["error"].(string)
+	if !strings.Contains(msg, "no response document was written") || strings.Contains(msg, srv.URL) {
+		t.Errorf("error message = %q (must say nothing was written, without internal URLs)", msg)
+	}
+	if _, err := os.Stat(filepath.Join(reg.cfg.PDF.OutputDir, "msa.response.docx")); !os.IsNotExist(err) {
+		t.Fatalf("msa.response.docx exists after a failed run (stat err=%v)", err)
+	}
+	if v, ok, _ := repo.FindVersionByPath(context.Background(), filepath.Join(reg.cfg.PDF.OutputDir, "msa.docx")); ok {
+		t.Fatalf("a Redtime version was recorded after a failed run: %+v", v)
 	}
 }

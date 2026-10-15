@@ -9,6 +9,7 @@ package bots
 
 import (
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strings"
 
@@ -215,6 +216,9 @@ func Dispatch(msg BotMessage, orch OrchestratorFacade) BotResponse {
 				if err != nil {
 					return "", err
 				}
+				if briefing.Degraded != "" {
+					return "⚠️ **Degraded briefing — " + briefing.Degraded + ".** Not a partner briefing.\n\n" + briefing.Document, nil
+				}
 				return briefing.Document, nil
 			},
 		}
@@ -224,7 +228,13 @@ func Dispatch(msg BotMessage, orch OrchestratorFacade) BotResponse {
 			return BotResponse{Immediate: "Usage: `@BigMichael search [query]`"}
 		}
 		results, err := orch.Knowledge().Search(args, map[string]interface{}{"topK": 5})
-		if err != nil || len(results) == 0 {
+		if err != nil {
+			// A failed search is not "no results" — say so, so nobody reads
+			// it as the knowledge store holding nothing on the topic.
+			slog.Warn("bot knowledge search failed", "query", args, "error", err)
+			return BotResponse{Immediate: fmt.Sprintf("⚠️ Search failed for **%s** — no results could be retrieved. This does not mean nothing exists; try again later.", args)}
+		}
+		if len(results) == 0 {
 			return BotResponse{Immediate: fmt.Sprintf("No results found for: **%s**", args)}
 		}
 		lines := []string{fmt.Sprintf("**Knowledge search:** %s", args), ""}

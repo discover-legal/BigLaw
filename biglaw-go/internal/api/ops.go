@@ -479,11 +479,17 @@ func (s *Server) handleRegulatoryCheckNow(c *gin.Context) {
 		return
 	}
 	tasks := opsDerefTasks(s.orch.ListTasks())
-	alerts := m.CheckAll(tasks)
+	alerts, missed := m.CheckAllReport(tasks)
 	if alerts == nil {
 		alerts = []types.RegulationAlert{}
 	}
-	c.JSON(http.StatusOK, gin.H{"checked": len(tasks), "alerts": alerts})
+	body := gin.H{"checked": len(tasks), "alerts": alerts, "missedChecks": len(missed)}
+	if len(missed) > 0 {
+		// A failed check is not "nothing new" — say which matters were not checked.
+		body["missedMatters"] = missed
+		body["warning"] = fmt.Sprintf("%d matter(s) could not be checked (search or AI relevance check unavailable) — they will be retried; absence of alerts for them means nothing.", len(missed))
+	}
+	c.JSON(http.StatusOK, body)
 }
 
 // opsStreamSSE streams values from ch as `data: {json}` SSE frames until the

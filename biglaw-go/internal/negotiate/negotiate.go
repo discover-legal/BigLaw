@@ -97,8 +97,11 @@ func New(provider providers.Provider, judgeModel, classifyModel string) *Engine 
 }
 
 // Decide classifies and judges every opposing revision. The returned slice is
-// index-aligned with revs. Errors are absorbed per-change as "review".
-func (e *Engine) Decide(revs []ooxml.Revision, store *playbook.Store, opts Opts) []Decision {
+// index-aligned with revs. Any failed classification or judgment aborts the
+// whole run with an error carrying a providers sentinel: a response document
+// whose dispositions were partly never judged must not be written (nor
+// recorded into Redtime history) as if it were a negotiated position.
+func (e *Engine) Decide(revs []ooxml.Revision, store *playbook.Store, opts Opts) ([]Decision, error) {
 	vocab := vocabulary(store)
 	decisions := make([]Decision, len(revs))
 	for i, rv := range revs {
@@ -111,10 +114,7 @@ func (e *Engine) Decide(revs []ooxml.Revision, store *playbook.Store, opts Opts)
 
 		clauseType, err := e.classifyClause(rv, vocab, opts.TaskID)
 		if err != nil {
-			d.Disposition = DispositionReview
-			d.Rationale = "Classification failed — manual review required: " + err.Error()
-			decisions[i] = d
-			continue
+			return nil, providers.ModelFailure(fmt.Sprintf("negotiation: classifying change %d", i+1), err)
 		}
 		d.ClauseType = clauseType
 
@@ -136,10 +136,7 @@ func (e *Engine) Decide(revs []ooxml.Revision, store *playbook.Store, opts Opts)
 
 		verdict, err := e.judgeRevision(rv, clauseType, resolved, hist, opts)
 		if err != nil {
-			d.Disposition = DispositionReview
-			d.Rationale = "Judgment failed — manual review required: " + err.Error()
-			decisions[i] = d
-			continue
+			return nil, providers.ModelFailure(fmt.Sprintf("negotiation: judging change %d", i+1), err)
 		}
 		d.Disposition = verdict.disposition
 		d.Rationale = verdict.rationale
@@ -154,7 +151,7 @@ func (e *Engine) Decide(revs []ooxml.Revision, store *playbook.Store, opts Opts)
 		}
 		decisions[i] = d
 	}
-	return decisions
+	return decisions, nil
 }
 
 // ClassifyChange labels the clause one change touches — the same

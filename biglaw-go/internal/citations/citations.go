@@ -90,7 +90,13 @@ func New(provider providers.Provider, haikuModel string) *Engine {
 func (e *Engine) Check(query, taskID string) types.CitationCheckResult {
 	checkedAt := time.Now().UTC().Format(time.RFC3339)
 
-	hit := clSearch(query)
+	hit, err := clSearch(query)
+	if err != nil {
+		// The lookup itself failed: that is "not checked", never "not found".
+		slog.Warn("CitationEngine: CourtListener search failed", "error", err)
+		return unknownResult(query, checkedAt,
+			"CourtListener could not be reached, so this citation has NOT been checked. Verify it manually or try again later.")
+	}
 	if hit == nil {
 		return unknownResult(query, checkedAt,
 			"CourtListener could not locate this citation. It may be very recent, not yet indexed, or the citation format is unrecognised.")
@@ -193,11 +199,14 @@ Sample citing opinions (most recent):
 Based on this evidence, what is the citation signal?`,
 		caseName, citation, court, year, caseAge, citingCount, citingSnippet)
 
-	signal := types.CitationSignalYellow
-	status := types.CitationStatus("unclear")
-	signalLabel := "Caution — verify treatment manually"
-	confidence := 0.5
-	reasoning := "Unable to synthesise citation treatment. Verify manually."
+	// Until the model's treatment analysis is parsed, the result is an
+	// explicit UNKNOWN — never a Caution/yellow signal, which is itself a
+	// treatment verdict a lawyer would rely on.
+	signal := types.CitationSignalUnknown
+	status := types.CitationStatusUnknown
+	signalLabel := "Unknown — AI treatment analysis unavailable; verify manually"
+	confidence := 0.0
+	reasoning := "No treatment analysis was produced, so this citation has NOT been checked. Verify its treatment manually."
 	var treatments []types.CitationTreatment
 	posCount := 0
 	negCount := 0
@@ -212,6 +221,8 @@ Based on this evidence, what is the citation signal?`,
 	})
 	if err != nil {
 		slog.Warn("CitationEngine AI synthesis failed", "error", err)
+		reasoning = "No treatment analysis was produced (" + providers.Describe(providers.ModelFailure("citation", err)) +
+			"), so this citation has NOT been checked. Verify its treatment manually."
 	} else {
 		durationMs := time.Since(start).Milliseconds()
 		cw := 0
@@ -244,16 +255,20 @@ Based on this evidence, what is the citation signal?`,
 		if s >= 0 && eIdx > s {
 			var parsed map[string]interface{}
 			if json.Unmarshal([]byte(raw[s:eIdx+1]), &parsed) == nil {
-				if v, ok := parsed["signal"].(string); ok {
+				// Only a recognised signal replaces UNKNOWN; anything else
+				// leaves the citation explicitly unchecked.
+				if v, ok := parsed["signal"].(string); ok && validSignal(v) {
 					signal = types.CitationSignal(v)
+					if sv, ok := parsed["status"].(string); ok && sv != "" {
+						status = types.CitationStatus(sv)
+					} else {
+						status = types.CitationStatus("unclear")
+					}
 				}
-				if v, ok := parsed["status"].(string); ok {
-					status = types.CitationStatus(v)
-				}
-				if v, ok := parsed["signalLabel"].(string); ok {
+				if v, ok := parsed["signalLabel"].(string); ok && signal != types.CitationSignalUnknown {
 					signalLabel = v
 				}
-				if v, ok := parsed["confidence"].(float64); ok {
+				if v, ok := parsed["confidence"].(float64); ok && signal != types.CitationSignalUnknown {
 					if v < 0 {
 						v = 0
 					}
@@ -262,7 +277,7 @@ Based on this evidence, what is the citation signal?`,
 					}
 					confidence = v
 				}
-				if v, ok := parsed["reasoning"].(string); ok {
+				if v, ok := parsed["reasoning"].(string); ok && signal != types.CitationSignalUnknown {
 					reasoning = v
 				}
 				if v, ok := parsed["negativeTreatmentCount"].(float64); ok {
@@ -323,6 +338,14 @@ Based on this evidence, what is the citation signal?`,
 	}
 }
 
+func validSignal(v string) bool {
+	switch types.CitationSignal(v) {
+	case types.CitationSignalGreen, types.CitationSignalYellow, types.CitationSignalRed, types.CitationSignalBlue:
+		return true
+	}
+	return false
+}
+
 // ─── CourtListener helpers ────────────────────────────────────────────────────
 
 func clHeaders() map[string]string {
@@ -353,18 +376,23 @@ func clGet(urlStr string) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(resp.Body, clMaxBytes))
 }
 
-func clSearch(query string) *clSearchHit {
+// clSearch returns (nil, nil) when CourtListener answered with no match and
+// an error when the lookup itself failed.
+func clSearch(query string) (*clSearchHit, error) {
 	u := fmt.Sprintf("%s/api/rest/v4/search/?q=%s&type=o&order_by=score+desc&format=json",
 		clBase, url.QueryEscape(query))
 	data, err := clGet(u)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	var r clSearchResp
-	if err := json.Unmarshal(data, &r); err != nil || len(r.Results) == 0 {
-		return nil
+	if err := json.Unmarshal(data, &r); err != nil {
+		return nil, fmt.Errorf("CourtListener search response unparseable: %w", err)
 	}
-	return &r.Results[0]
+	if len(r.Results) == 0 {
+		return nil, nil
+	}
+	return &r.Results[0], nil
 }
 
 func clGetCluster(id int) *clCluster {
@@ -403,9 +431,9 @@ func clGetCiting(id, limit int) *clCitingResult {
 func unknownResult(query, checkedAt, reasoning string) types.CitationCheckResult {
 	return types.CitationCheckResult{
 		Query:                 query,
-		Status:                "unclear",
-		Signal:                types.CitationSignalYellow,
-		SignalLabel:           "Citation not found — verify manually",
+		Status:                types.CitationStatusUnknown,
+		Signal:                types.CitationSignalUnknown,
+		SignalLabel:           "Unknown — citation not checked; verify manually",
 		Confidence:            0,
 		TopNegativeTreatments: []types.CitationTreatment{},
 		Reasoning:             reasoning,

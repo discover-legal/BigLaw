@@ -582,7 +582,10 @@ func judgeDrift(clause, currentText string, opts BuildOpts) *Drift {
 	}
 	status, note, err := driftCall(opts, clause, currentText, resolved)
 	if err != nil {
-		return &Drift{Status: DriftUnknown, PlaybookTier: tier, Note: "drift judgment failed: " + err.Error()}
+		// Disclosed as unknown (never a drift verdict); the internal error —
+		// which can carry endpoint URLs or upstream bodies — stays in the log.
+		slog.Warn("redtime: drift judgment failed", "clause", clause, "error", err)
+		return &Drift{Status: DriftUnknown, PlaybookTier: tier, Note: "drift judgment unavailable: " + providers.Describe(err)}
 	}
 	return &Drift{Status: status, Note: note, PlaybookTier: tier}
 }
