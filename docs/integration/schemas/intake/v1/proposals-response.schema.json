@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.discover.legal/biglaw/intake/v1/proposals-response.schema.json",
+  "title": "POST /intake/clients/:externalId/proposals response",
+  "type": "object",
+  "required": [
+    "proposals"
+  ],
+  "properties": {
+    "proposals": {
+      "type": "array",
+      "items": {
+        "$ref": "fact.schema.json"
+      }
+    }
+  }
+}

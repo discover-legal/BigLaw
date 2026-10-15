@@ -2,8 +2,8 @@
 
 This document is the **authoritative contract** between the two deployables:
 
-- **BigLaw** (`biglaw-go`) — the firm platform. Ships the `intake` and `crm`
-  modules defined here.
+- **BigLaw** (`biglaw-go`) — the firm platform. Ships the optional `intake` and
+  `crm` modules defined here (off unless `INTAKE_HMAC_SECRET` is set).
 - **affidavit-maker** (discover.legal) — the client-facing portal. In **firm
   mode** (`BIGLAW_API_URL` + `BIGLAW_INTAKE_SECRET` set) it becomes the firm's
   client entry point: drafts route to lawyers and clients manage their CRM
@@ -12,6 +12,20 @@ This document is the **authoritative contract** between the two deployables:
 
 The same contract is mirrored at `docs/BIGLAW_INTEGRATION.md` in the
 affidavit-maker repository. Change either side only by changing both.
+
+**The integration surface is this document plus the JSON Schemas in
+[`schemas/intake/v1/`](schemas/intake/v1/)** — not shared code. The two products
+stay independent: neither imports the other, neither depends on the other's
+internal vocabularies (BigLaw never keys behaviour on the portal's matter-pack
+codes), and BigLaw's contract test
+(`biglaw-go/internal/intake/contract_test.go`) validates the example requests and
+every response the portal routes actually produce against those schemas.
+
+**Tolerant reader, both directions:** receivers ignore unknown properties
+(no schema sets `additionalProperties: false`); unknown enum values map to safe
+defaults (an unknown fact `category` is stored as `note`; an unknown submission
+`status` is shown by the portal as `in_review`). New optional fields may be added
+within v1; anything that removes or re-types a field is v2.
 
 ---
 
@@ -68,12 +82,15 @@ system of record for the *client of the firm* (roster + CRM profile).
 
 - `client.externalId` — the portal's stable user id (Auth0 `sub`). BigLaw
   stores it as `CRMProfile.ExternalRef` and uses it to map every later call.
-- On first contact (submission or proposal) BigLaw **finds-or-creates** the
-  roster client and CRM profile:
-  1. CRM profile by `externalRef` — hit → done.
-  2. Roster client by case-insensitive email/name match → attach a new profile.
-  3. Otherwise create roster client (name, auto client number `AM-<n>`) +
-     profile.
+- On first contact (submission or proposal) BigLaw finds the CRM profile by
+  `externalRef`, or creates a **prospect** profile. A prospect is *not* on the
+  firm's client roster: it has no `clientId`/`clientNumber` yet.
+- A new identity is **never** attached to an existing roster client by name or
+  email (a name collision would otherwise hand a stranger that client's
+  profile and matters).
+- A prospect joins the roster (auto client number `AM-<n>`) only when one of
+  its submissions **lands** — i.e. after the conflict check clears, or after a
+  partner acknowledges the conflict (§3.1).
 
 All `/intake/clients/:externalId/...` routes are scoped **hard** to that
 externalRef: the portal can only ever act as the client it authenticated.
@@ -94,8 +111,13 @@ externalRef: the portal can only ever act as the client it authenticated.
   },
   "title": "Affidavit of Dana Client",
   "documentType": "affidavit",           // affidavit | divorce_petition | ...
-  "matterType": "DIVORCE",               // portal matter-type code, optional
+  "matterType": "DIVORCE",               // portal pack code — informational only
   "jurisdiction": "US-CA",               // BCP-47-style region tag
+  "practiceArea": "Family",              // optional — BigLaw's own vocabulary (see below)
+  "noslegal": { "areaOfLaw": "Family", "workType": "Litigious" }, // optional NOSLEGAL v4 tags
+  "adverseParties": [                    // optional — the other side(s), for the conflict check
+    { "name": "Robert Client", "role": "spouse" }
+  ],
   "summary": "Client seeks ...",         // optional plain-text abstract
   "content": "…full draft text…",        // required — the rendered draft
   "facts": [                              // optional — seeds CRM proposals
@@ -105,11 +127,36 @@ externalRef: the portal can only ever act as the client it authenticated.
 }
 ```
 
-**Behaviour** (in order): find-or-create client+profile → conflict check
-(name vs adversary lists) → ingest `content` into the knowledge store
-(`source: "affidavit-maker"`) → create the submission record → seed one CRM
-**proposal** per entry in `facts` (proposer `client`, approver `lawyer`) →
-audit `intake.submission_received`.
+**Behaviour** (in order):
+
+1. Find the CRM profile by `client.externalId`, or create a prospect (§2).
+2. **Conflict check, both directions, every hit:** the client's name against
+   every existing client's adverse parties, *and* every adverse party the
+   client named (`adverseParties` plus any `adverse_party` facts) against
+   every existing client — the main case being that the opposing party is
+   already the firm's client. A returning client is never checked against
+   itself.
+3. **On any hit → `conflict_hold`.** The draft is kept only inside the held
+   submission record. Nothing else happens: no knowledge-store ingest, no
+   roster client, no matter, no fact proposals, no agent work. The hold is
+   audited (`intake.conflict_hold`). Holds are **never auto-acknowledged** —
+   a re-submit that no longer names the conflicting party stays held. Only a
+   partner clears a hold (§4, `POST /intake/submissions/:id/conflict`): an
+   acknowledgement requires a reason (informed-consent waiver, ethical wall,
+   false positive …) and covers exactly the hits it was given for; a decline
+   rejects the submission and discards the held draft.
+4. Otherwise (or once acknowledged) the submission **lands**: the prospect is
+   admitted to the roster (the named adverse parties are recorded on it for
+   future checks), a matter is opened, `content` is ingested into the
+   knowledge store (`source: "client-intake"`, a client-voiced document), one
+   CRM **proposal** is seeded per entry in `facts` (proposer `client`,
+   approver `lawyer`), and `intake.submission_received` is audited.
+
+**Classification:** the matter, the submission and the ingested document carry
+`practiceArea` from BigLaw's own vocabulary — a canonical BigLaw practice area
+in `practiceArea` (case-insensitive) wins, then NOSLEGAL `areaOfLaw`, then a
+free-text `practiceArea`. NOSLEGAL tags land on the document. `matterType` is
+stored and displayed but never drives behaviour.
 
 **Response `201`:**
 
@@ -119,10 +166,12 @@ audit `intake.submission_received`.
     "id": "9f0e…",                        // BigLaw submission id — store it
     "externalId": "doc-4711",
     "status": "received",                 // or "conflict_hold"
-    "clientId": "…", "clientNumber": "AM-1",
+    "clientId": "…", "clientNumber": "AM-1", // "" while held (prospect)
+    "matterNumber": "AM-1-1",
+    "practiceArea": "Family",
     "crmProfileId": "…",
     "documentId": "…",                    // knowledge-store document
-    "conflict": { "hasConflict": false },
+    "conflict": { "hasConflict": false }, // portal never learns with whom
     "createdAt": "2026-08-03T12:00:00Z"
   }
 }
@@ -148,7 +197,7 @@ unknown values as `in_review`):
 | Status | Meaning |
 |---|---|
 | `received` | Landed, awaiting a lawyer |
-| `conflict_hold` | Conflict check flagged; partner must clear |
+| `conflict_hold` | Conflict check flagged; nothing has been worked on; a partner must clear or decline |
 | `in_review` | A lawyer claimed it / task running |
 | `ready` | Reviewed draft ready; the firm will reach out |
 | `rejected` | Firm declined (see `note`) |
@@ -219,7 +268,12 @@ workbench/MCP; listed here because they complete the state machine):
 GET    /intake/queue                      lawyer: own+unassigned · partner: all
 POST   /intake/submissions/:id/claim      assign to self
 PATCH  /intake/submissions/:id            { status, note } → drives §3.3 statuses
+                                          (cannot enter or leave conflict_hold)
+POST   /intake/submissions/:id/conflict   [partner] { decision: acknowledge|decline,
+                                          conflictReason } — the only way out of
+                                          conflict_hold (reason required to acknowledge)
 POST   /intake/submissions/:id/task       spin up an orchestrator review task
+                                          (409 while on conflict_hold)
 GET    /crm/profiles                      list profiles            [any lawyer]
 GET    /crm/profiles/:id                  profile + facts by status
 POST   /crm/profiles/:id/facts            lawyer proposes → approver=client
@@ -253,7 +307,10 @@ GET    /modules                           module registry status
 
 ## 6. Versioning & errors
 
-- Breaking changes bump the signature prefix (`v1=` → `v2=`) and this file.
+- Breaking changes bump the signature prefix (`v1=` → `v2=`), this file, and
+  the schema directory (`schemas/intake/v2/`). Additive optional fields stay v1.
+- Firm-side responses (§4) carry the full conflict record (every hit, who it
+  is with, acknowledgement); portal responses carry only `hasConflict`.
 - Errors: `4xx/5xx` with `{"error": "message"}`. The portal must degrade
   gracefully: BigLaw being unreachable disables firm features for the request
   but never breaks self-rep functionality.

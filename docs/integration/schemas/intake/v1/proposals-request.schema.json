@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.discover.legal/biglaw/intake/v1/proposals-request.schema.json",
+  "title": "POST /intake/clients/:externalId/proposals request",
+  "description": "Tolerant reader: receivers MUST ignore properties they do not know; additionalProperties is therefore never false in this contract.",
+  "type": "object",
+  "required": [
+    "facts"
+  ],
+  "properties": {
+    "client": {
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "facts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
+      "items": {
+        "$ref": "fact-input.schema.json"
+      }
+    }
+  }
+}

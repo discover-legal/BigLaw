@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.discover.legal/biglaw/intake/v1/submission-response.schema.json",
+  "title": "Single-submission response",
+  "type": "object",
+  "required": [
+    "submission"
+  ],
+  "properties": {
+    "submission": {
+      "$ref": "submission.schema.json"
+    }
+  }
+}

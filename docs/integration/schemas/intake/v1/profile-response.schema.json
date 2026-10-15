@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.discover.legal/biglaw/intake/v1/profile-response.schema.json",
+  "title": "GET /intake/clients/:externalId/profile response",
+  "description": "Tolerant reader: receivers MUST ignore properties they do not know; additionalProperties is therefore never false in this contract.",
+  "type": "object",
+  "required": [
+    "profile",
+    "facts",
+    "pendingYourApproval",
+    "pendingLawyerApproval"
+  ],
+  "properties": {
+    "profile": {
+      "type": "object",
+      "required": [
+        "id",
+        "clientId",
+        "clientNumber",
+        "name"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "clientId": {
+          "type": "string"
+        },
+        "clientNumber": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "email": {
+          "type": "string"
+        },
+        "externalRef": {
+          "type": "string"
+        }
+      }
+    },
+    "facts": {
+      "type": "array",
+      "items": {
+        "$ref": "fact.schema.json"
+      }
+    },
+    "pendingYourApproval": {
+      "type": "array",
+      "items": {
+        "$ref": "fact.schema.json"
+      }
+    },
+    "pendingLawyerApproval": {
+      "type": "array",
+      "items": {
+        "$ref": "fact.schema.json"
+      }
+    }
+  }
+}

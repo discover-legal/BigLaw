@@ -51,9 +51,16 @@ consent**: client-proposed facts await a lawyer, lawyer-proposed facts await the
 approval fires supersedence, adverse-party conflict checks, and advocacy sync into
 ClientVoice; embedded facts answer semantic profile queries via `POST /crm/profiles/:id/query`),
 and a **client intake channel** (`internal/intake/` — the affidavit-maker portal at
-discover.legal submits draft documents over an HMAC-signed `/intake/*` API; submissions
-find-or-create the roster client + CRM profile, run conflict checks, open a matter,
-ingest the draft, and queue for a lawyer). Contract: `docs/integration/affidavit-intake.md`.
+discover.legal submits draft documents over an HMAC-signed `/intake/*` API; every
+submission is conflict-checked in both directions first — a hit puts it on
+`conflict_hold` with nothing ingested until a partner acknowledges (with a reason) or
+declines; clear submissions admit the prospect to the roster, open a matter classified by
+BigLaw's own practice-area/NOSLEGAL vocabulary, ingest the draft, and queue for a lawyer).
+Contract: `docs/integration/affidavit-intake.md` + JSON Schemas in
+`docs/integration/schemas/intake/v1/` (the integration surface; pinned by
+`internal/intake/contract_test.go`). intake/crm are a self-contained optional module pair:
+the core API never imports them — `cmd/biglaw` mounts them through the
+`modules.HTTPModule` seam (`api.Server.Mount`) only when enabled.
 
 ## Modules
 
@@ -63,8 +70,8 @@ from config defaults and overridable per-module:
 
 | Module | Default | What it gates |
 |---|---|---|
-| `crm` | on | Neurosymbolic client profiles + consent queue (`/crm/*`) |
-| `intake` | on when `INTAKE_HMAC_SECRET` set | Affidavit-maker portal API (`/intake/*`) |
+| `intake` | on when `INTAKE_HMAC_SECRET` set | Client-portal intake API (`/intake/*`) |
+| `crm` | follows `intake` | Neurosymbolic client profiles + consent queue (`/crm/*`) |
 | `clientvoice` | on | Remy/CRM advocacy briefs + matter notifications (`/matters/:mn/client-voice`) |
 | `lpm` | `LPM_ENABLED` | Status reports, email intake, drafting (`/lpm/*`) |
 | `billing` | on | Pre-bills, LEDES, invoices, OCG routes |
@@ -82,6 +89,10 @@ firm mode it submits client drafts over `/intake/*` (HMAC-SHA256 request signing
 `INTAKE_HMAC_SECRET`); standalone it stays a pure self-rep product. Full wire contract
 (signing scheme, endpoints, fact vocabulary, consent semantics):
 `docs/integration/affidavit-intake.md` (mirrored in the affidavit-maker repo).
+
+Conflict holds: `POST /intake/submissions/:id/conflict` (partner;
+`{decision: acknowledge|decline, conflictReason}`) is the only way out of `conflict_hold`;
+the portal only ever sees `hasConflict`, never who the conflict is with.
 
 Firm-side loop: `GET /intake/queue` → `POST /intake/submissions/:id/claim` →
 `POST /intake/submissions/:id/task` (spin an orchestrator review over the ingested
