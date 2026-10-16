@@ -1000,6 +1000,11 @@ func parseNeedOffer(text, agentID string) (types.NeedDescriptor, types.OfferDesc
 // round, matching the original strict-parser bound.
 const maxFindingsPerAgentRound = 3
 
+// sectionLabel is the regexp fragment for a labelled line inside a finding body.
+// Markdown emphasis around the label ("**Evidence:**", "**Evidence**:") and a
+// leading list marker or ordinal ("- ", "1. ", "2) ") are allowed.
+const sectionLabel = `[ \t>*#_\-\d.)]*(?:Evidence|Citation|Conclusion|Content|Confidence|Source|Cite)[*_]*\s*:[*_]*`
+
 // The finding grammar is forgiving by design: BigLaw must run on cheap/local
 // models (qwen2.5:14b and the like) whose instruction-following is looser than
 // a frontier model's. Such models routinely drop the END_FINDING terminator,
@@ -1008,11 +1013,6 @@ const maxFindingsPerAgentRound = 3
 // in natural language instead of the SOURCE=/QUOTE= micro-format. None of that
 // is a reasoning failure — it is formatting drift — so the parser recovers the
 // work instead of discarding it on the floor.
-// sectionLabel is the regexp fragment for a labelled line inside a finding body.
-// Markdown emphasis around the label ("**Evidence:**", "**Evidence**:") and a
-// leading list marker or ordinal ("- ", "1. ", "2) ") are allowed.
-const sectionLabel = `[ \t>*#_\-\d.)]*(?:Evidence|Citation|Conclusion|Content|Confidence|Source|Cite)[*_]*\s*:[*_]*`
-
 var (
 	// reFindingStart matches a finding header, decoration and ordinal allowed.
 	reFindingStart = regexp.MustCompile(`(?im)^[\s>*#_-]*FINDING\b[ \t]*#?\d*[ \t]*:?`)
@@ -1036,13 +1036,22 @@ var (
 	// its line: unlabelled prose after it (a conclusion whose label the model
 	// dropped) is not part of the quote.
 	reCitationStrict = regexp.MustCompile(`(?si)^[\s>*#_\-\d.)]*(?:Evidence|Citation)[*_]*\s*:[*_\s]*SOURCE\s*=\s*(.+?)\s*\|\s*QUOTE\s*=\s*(.+?)(?:\s*\|\s*PAGE\s*=\s*([^\n|]*)(?:\n.*)?)?\s*$`)
+	// reCitationInline recovers a SOURCE=/QUOTE= citation that does not start
+	// its own line — a whole finding written on one line, or an Evidence clause
+	// trailing the Conclusion. With no line structure to bound the quote, it
+	// ends at "| PAGE=", at an inline Conclusion/Confidence/Content label, or at
+	// END_FINDING. Only tried on sections the anchored form did not match.
+	reCitationInline = regexp.MustCompile(`(?si)\b(?:Evidence|Citation)[*_]*\s*:[*_\s]*SOURCE\s*=\s*(.+?)\s*\|\s*QUOTE\s*=\s*(.+?)(?:\s*\|\s*PAGE\s*=\s*([^\n|]*?))?\s*(?:\b(?:Conclusion|Confidence|Content)[*_]*\s*:|END_FINDING|$)`)
 	// reCitationLoose is the fallback for natural evidence lines ("Evidence: the
 	// LCA, p.3"). It yields a source but no verbatim quote, so the gate marks it
 	// unverified rather than trusting it.
 	reCitationLoose = regexp.MustCompile(`(?im)^[\s>*#_-]*(?:Evidence|Citation|Source|Cite)\s*:\s*(.+)$`)
-	reConfidence    = regexp.MustCompile(`(?i)Confidence\s*:\s*([01]?(?:\.\d+)?)`)
-	rePageLoose     = regexp.MustCompile(`(?i)\b(?:pp?\.?|page|para\.?|¶|§)\s*(\d{1,5})`)
-	reQuoted        = regexp.MustCompile(`["“]([^"”]{3,})["”]`)
+	// reConfidence reads a confidence value. parseConfidence tries it on the
+	// labelled Confidence lines first, so "Confidence: 0.2" quoted inside an
+	// Evidence line cannot override the agent's own Confidence line.
+	reConfidence = regexp.MustCompile(`(?i)Confidence[*_]*\s*:[*_\s]*([01]?(?:\.\d+)?)`)
+	rePageLoose  = regexp.MustCompile(`(?i)\b(?:pp?\.?|page|para\.?|¶|§)\s*(\d{1,5})`)
+	reQuoted     = regexp.MustCompile(`["“]([^"”]{3,})["”]`)
 )
 
 // reMetaConclusion flags a "conclusion" that is pure meta-dialogue — the agent talking
@@ -1068,14 +1077,7 @@ func parseFindings(text string, def types.AgentDefinition) []types.Finding {
 		if content == "" || isMetaDialogueConclusion(content) {
 			continue
 		}
-		confidence := 0.7
-		if m := reConfidence.FindStringSubmatch(body); len(m) > 1 && m[1] != "" {
-			if f, err := strconv.ParseFloat(m[1], 64); err == nil {
-				// Clamp to [0,1] — an agent (or injected text echoed by one)
-				// must not be able to claim out-of-range confidence.
-				confidence = math.Min(1, math.Max(0, f))
-			}
-		}
+		confidence := parseConfidence(body)
 		findings = append(findings, types.Finding{
 			ID:         uuid.New().String(),
 			AgentID:    def.ID,
@@ -1117,6 +1119,30 @@ func splitFindingBlocks(text string) []string {
 	return blocks
 }
 
+// parseConfidence returns the finding's confidence, clamped to [0,1] (an
+// agent, or injected text echoed by one, must not claim an out-of-range
+// value); 0.7 when none parses. A labelled Confidence line wins over a
+// "Confidence:" that merely appears inside other text, such as a quote.
+func parseConfidence(body string) float64 {
+	candidates := []string{}
+	for _, sec := range labelledSections(body) {
+		if reConfidenceLabel.MatchString(sec) {
+			candidates = append(candidates, sec)
+		}
+	}
+	candidates = append(candidates, body)
+	for _, c := range candidates {
+		if m := reConfidence.FindStringSubmatch(c); len(m) > 1 && m[1] != "" {
+			if f, err := strconv.ParseFloat(m[1], 64); err == nil {
+				return math.Min(1, math.Max(0, f))
+			}
+		}
+	}
+	return 0.7
+}
+
+var reConfidenceLabel = regexp.MustCompile(`(?i)^[ \t>*#_\-\d.)]*Confidence\b`)
+
 // extractFindingContent returns the finding's prose. It prefers an explicit
 // "Content:" label, and falls back to the block body with the trailing
 // Citation/Confidence/marker lines stripped — which is how small models that
@@ -1157,11 +1183,15 @@ func extractFindingContent(body string) string {
 func extractCitations(body string) []types.Citation {
 	citations := []types.Citation{}
 	seen := map[string]bool{}
+	var matches [][]string
 	for _, sec := range labelledSections(body) {
-		cm := reCitationStrict.FindStringSubmatch(sec)
-		if cm == nil {
-			continue
+		if cm := reCitationStrict.FindStringSubmatch(sec); cm != nil {
+			matches = append(matches, cm)
+		} else {
+			matches = append(matches, reCitationInline.FindAllStringSubmatch(sec, 50)...)
 		}
+	}
+	for _, cm := range matches {
 		source := truncate(strings.TrimSpace(cm[1]), 200)
 		var page *int
 		if len(cm) > 3 {
@@ -1216,11 +1246,17 @@ func extractCitations(body string) []types.Citation {
 
 // labelledSections splits a finding body at each labelled line, so each
 // section is one label plus its value and any unlabelled continuation lines.
-// Text before the first label is dropped (it carries no citation). Capped at
-// 50 sections, matching the citation cap.
+// Text before the first label is kept as a leading section of its own (it can
+// carry an inline citation). Capped at 50 labels, matching the citation cap.
 func labelledSections(body string) []string {
 	locs := reSectionLabel.FindAllStringIndex(body, 50)
-	secs := make([]string, 0, len(locs))
+	secs := make([]string, 0, len(locs)+1)
+	if len(locs) == 0 {
+		return append(secs, body)
+	}
+	if pre := body[:locs[0][0]]; strings.TrimSpace(pre) != "" {
+		secs = append(secs, pre)
+	}
 	for i, loc := range locs {
 		end := len(body)
 		if i+1 < len(locs) {

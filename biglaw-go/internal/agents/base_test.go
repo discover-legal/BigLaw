@@ -318,6 +318,34 @@ func TestParseFindings_EvidenceThenConclusion(t *testing.T) {
 			concl: "The clause is void.",
 			cites: []cite{{"emp", wantQuote, 7}},
 		},
+		{
+			name: "Windows CRLF line endings",
+			in: "FINDING:\r\nEvidence: SOURCE=a | QUOTE=alpha beta | PAGE=7\r\n" +
+				"Evidence: SOURCE=b | QUOTE=gamma delta\r\nConclusion: Void.\r\nConfidence: 0.8\r\nEND_FINDING\r\n",
+			concl: "Void.",
+			cites: []cite{{"a", "alpha beta", 7}, {"b", "gamma delta", 0}},
+		},
+		{
+			name: "Evidence on the FINDING line",
+			in: "**FINDING 1:** Evidence: SOURCE=emp | QUOTE=" + wantQuote + " | PAGE=7\n" +
+				"Conclusion: Void.\nEND_FINDING",
+			concl: "Void.",
+			cites: []cite{{"emp", wantQuote, 7}},
+		},
+		{
+			name: "Evidence trailing the Conclusion inline",
+			in: "FINDING:\nConclusion: Void. Evidence: SOURCE=emp | QUOTE=" + wantQuote +
+				" | PAGE=7\nConfidence: 0.8\nEND_FINDING",
+			concl: "Void. Evidence: SOURCE=emp | QUOTE=" + wantQuote + " | PAGE=7",
+			cites: []cite{{"emp", wantQuote, 7}},
+		},
+		{
+			name: "Evidence inline in unlabelled prose",
+			in: "FINDING:\nThe clause is void. Evidence: SOURCE=emp | QUOTE=" + wantQuote +
+				" Confidence: 0.8 END_FINDING",
+			concl: "The clause is void. Evidence: SOURCE=emp | QUOTE=" + wantQuote + " Confidence: 0.8",
+			cites: []cite{{"emp", wantQuote, 0}},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -344,5 +372,23 @@ func TestParseFindings_EvidenceThenConclusion(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A "Confidence:" that appears inside a quote (or an unparseable labelled
+// Confidence line) must not override the agent's own Confidence value.
+func TestParseFindings_ConfidenceFromLabelledLine(t *testing.T) {
+	cases := map[string]float64{
+		"FINDING:\nEvidence: SOURCE=a | QUOTE=The form reads Confidence: 0.2 here.\nConclusion: Low.\nConfidence: 0.9\nEND_FINDING":  0.9,
+		"FINDING:\nEvidence: SOURCE=a | QUOTE=x y\nConfidence: high, per the witness\nConclusion: c.\nConfidence: 0.85\nEND_FINDING": 0.85,
+		"FINDING:\n**Conclusion:** c.\n**Confidence:** 0.6\nEND_FINDING":                                                             0.6,
+		"FINDING: Conclusion: c. Confidence: 0.4 END_FINDING":                                                                        0.4,
+		"FINDING:\nConclusion: c.\nConfidence: 7\nEND_FINDING":                                                                       0.7,
+	}
+	for in, want := range cases {
+		fs := parseFindings(in, testDef)
+		if len(fs) != 1 || fs[0].Confidence != want {
+			t.Errorf("%q: got %+v want confidence %v", in, fs, want)
+		}
 	}
 }
