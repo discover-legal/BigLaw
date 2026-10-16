@@ -177,7 +177,7 @@ func HandleTeamsWebhook(rawBody, authHeader string, orch OrchestratorFacade) ([]
 		if !enqueueBotWork(func() {
 			result, err := response.AsyncWork()
 			if err != nil {
-				result = fmt.Sprintf("Error: %s", err.Error())
+				result = asyncFailureMessage(PlatformTeams, err)
 			}
 			if targetURL != "" {
 				if postErr := integrations.PostToTeamsWebhook(targetURL, "Big Michael", result, nil); postErr != nil {
