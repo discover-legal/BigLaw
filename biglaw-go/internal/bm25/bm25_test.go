@@ -393,8 +393,8 @@ func TestMaxScoreBoundsSearchScores(t *testing.T) {
 }
 
 func TestIndexTermsFoldAccents(t *testing.T) {
-	got := terms("Société Générale — café café Ærø naïve")
-	want := []string{"societe", "generale", "cafe", "cafe", "ærø", "naive"}
+	got := terms("Société Générale — café café Ærø naïve Łódź Straße Œuvre Þórr Đakovo")
+	want := []string{"societe", "generale", "cafe", "cafe", "aero", "naive", "lodz", "strasse", "oeuvre", "thorr", "dakovo"}
 	if len(got) != len(want) {
 		t.Fatalf("terms = %q, want %q", got, want)
 	}
@@ -407,5 +407,9 @@ func TestIndexTermsFoldAccents(t *testing.T) {
 	ix.Add("d", "Ruling of the Cour de cassation on the société's liability")
 	if len(ix.Search("societe", 5)) != 1 || len(ix.Search("SOCIÉTÉ", 5)) != 1 {
 		t.Fatal("accented and unaccented spellings must match each other")
+	}
+	ix.Add("w", "Lease of premises in Łódź")
+	if len(ix.Search("lodz", 5)) != 1 {
+		t.Fatal("ł must fold to l")
 	}
 }

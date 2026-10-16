@@ -25,6 +25,8 @@ var reservedPrefixes = []netip.Prefix{
 	netip.MustParsePrefix("100::/64"),
 	netip.MustParsePrefix("2001:2::/48"),
 	netip.MustParsePrefix("2001:db8::/32"),
+	netip.MustParsePrefix("64:ff9b:1::/48"), // NAT64 local-use (RFC 8215)
+	netip.MustParsePrefix("2001::/32"),      // Teredo: tunnels to an embedded IPv4
 }
 
 type resolver interface {

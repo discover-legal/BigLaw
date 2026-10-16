@@ -74,7 +74,7 @@ func TestPublicClientRejectsMixedPublicAndPrivateAnswers(t *testing.T) {
 }
 
 func TestReservedAddressesAreNotPublic(t *testing.T) {
-	for _, raw := range []string{"192.0.2.1", "198.18.0.1", "203.0.113.1", "2001:db8::1"} {
+	for _, raw := range []string{"192.0.2.1", "198.18.0.1", "203.0.113.1", "2001:db8::1", "64:ff9b:1::a00:1", "2001:0:4136:e378:8000:63bf:3fff:fdd2"} {
 		if isPublicIP(net.ParseIP(raw)) {
 			t.Errorf("isPublicIP(%s) = true for reserved address", raw)
 		}
@@ -105,7 +105,7 @@ func TestValidatorRejectsInternalAddressesInAnyEncoding(t *testing.T) {
 		"http://169.254.169.254", "http://[::ffff:169.254.169.254]",
 		"http://localtest.me", "http://metadata.google.internal", "http://metadata.google.internal.",
 		"http://foo.localhost", "http://printer.local", "http://docuseal",
-		"http://224.0.0.1",
+		"http://224.0.0.1", "http://[64:ff9b:1::a9fe:a9fe]", "http://[2001:0:4136:e378:8000:63bf:3fff:fdd2]",
 	} {
 		if _, err := AssertPublicHTTP(raw, "test"); err == nil {
 			t.Errorf("AssertPublicHTTP(%q) accepted an internal address", raw)

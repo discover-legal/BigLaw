@@ -329,8 +329,10 @@ func terms(text string) []string {
 }
 
 // foldAccents strips diacritics so "café", "cafe\u0301" and "cafe" index
-// and query as the same term ("Société" matches "societe"). ASCII input — the
-// common case — returns without allocating.
+// and query as the same term ("Société" matches "societe"), and spells out the
+// letters Unicode does not decompose (ł, ø, ß, æ, œ, đ, ð, þ) so "Łódź" matches
+// "lodz" and "Straße" matches "strasse". Input is already lowercased. ASCII
+// input — the common case — returns without allocating.
 func foldAccents(s string) string {
 	ascii := true
 	for i := 0; i < len(s); i++ {
@@ -349,8 +351,14 @@ func foldAccents(s string) string {
 			b.WriteRune(r)
 		}
 	}
-	return norm.NFC.String(b.String())
+	return undecomposable.Replace(norm.NFC.String(b.String()))
 }
+
+// undecomposable maps the lowercase Latin letters that carry a diacritic or
+// ligature but have no Unicode decomposition to their ASCII spelling.
+var undecomposable = strings.NewReplacer(
+	"ł", "l", "ø", "o", "ß", "ss", "æ", "ae", "œ", "oe", "đ", "d", "ð", "d", "þ", "th",
+)
 
 // utf8RuneCountLessThan reports whether s has fewer than n runes, scanning only
 // as far as needed.
