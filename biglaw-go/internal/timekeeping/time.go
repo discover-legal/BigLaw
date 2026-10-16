@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/discover-legal/biglaw-go/internal/atomicfile"
 	"github.com/discover-legal/biglaw-go/internal/csvutil"
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
@@ -27,14 +28,18 @@ type TimeFilter struct {
 	ClientNumber string
 	From         *time.Time
 	To           *time.Time
-	// nil = all, true = only agent_work events, false = exclude agent_work events
+	// nil = all; true = only agent time (an AgentID — e.g. the AI timekeeper —
+	// or a legacy agent_work event); false = human time only.
 	AgentOnly *bool
+	// VisibleToProfileID restricts to entries a lawyer may see: their own
+	// time, plus AI time on work they requested (RequestedByProfileID).
+	VisibleToProfileID string
 }
 
 // TimeStore holds all time entries in memory and persists them to a JSON file.
 type TimeStore struct {
 	mu        sync.Mutex
-	persistMu sync.Mutex // serialises concurrent fire-and-forget persists
+	persistMu sync.Mutex // serialises concurrent persists (every mutator persists synchronously)
 	entries   []types.TimeEntry
 	path      string
 }
@@ -78,27 +83,139 @@ func (s *TimeStore) Open(entry types.TimeEntry) types.TimeEntry {
 // Close marks the entry with the given ID as finished and calculates billing
 // fields. Returns nil if the ID is not found.
 func (s *TimeStore) Close(id string) *types.TimeEntry {
+	return s.finish(id, "")
+}
+
+// CloseNonBillable finishes the entry like Close but writes it off: the
+// elapsed time is kept for the record, while BillingUnits/BillingAmountUsd
+// are zeroed and NonBillable is set with the reason. Used for AI runs that
+// failed, panicked or were interrupted — the client must not pay for them.
+func (s *TimeStore) CloseNonBillable(id, reason string) *types.TimeEntry {
+	if reason == "" {
+		reason = "non-billable"
+	}
+	return s.finish(id, reason)
+}
+
+func (s *TimeStore) finish(id, nonBillableReason string) *types.TimeEntry {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	var out *types.TimeEntry
 	for i := range s.entries {
 		e := &s.entries[i]
 		if e.ID != id {
 			continue
 		}
-		now := time.Now()
-		e.EndedAt = &now
-		e.DurationMs = now.Sub(e.StartedAt).Milliseconds()
-		// Billing units: ceil(durationMs / 360_000)  (1 unit = 0.1 h = 6 min)
-		e.BillingUnits = int(math.Ceil(float64(e.DurationMs) / 360_000.0))
-		if e.BillingRate != nil && *e.BillingRate > 0 {
-			amount := float64(e.BillingUnits) * (*e.BillingRate) / 10.0
-			e.BillingAmountUsd = &amount
+		if e.EndedAt == nil {
+			now := time.Now()
+			if e.PausedAt != nil {
+				e.PausedMs += now.Sub(*e.PausedAt).Milliseconds()
+				e.PausedAt = nil
+			}
+			e.EndedAt = &now
+			e.DurationMs = now.Sub(e.StartedAt).Milliseconds() - e.PausedMs
+			if e.DurationMs < 0 {
+				e.DurationMs = 0
+			}
+		}
+		if nonBillableReason != "" {
+			e.NonBillable = true
+			e.NonBillableReason = nonBillableReason
+		}
+		// AI time bills only at an explicitly configured AI rate; without
+		// one it must not fall through to anyone else's rate.
+		if !e.NonBillable && e.AgentID != "" && (e.BillingRate == nil || *e.BillingRate <= 0) {
+			e.NonBillable = true
+			if e.NonBillableReason == "" {
+				e.NonBillableReason = ReasonAIRateNotConfigured
+			}
+		}
+		if e.NonBillable {
+			e.BillingUnits = 0
+			e.BillingAmountUsd = nil
+		} else {
+			// Billing units: ceil(durationMs / 360_000)  (1 unit = 0.1 h = 6 min)
+			e.BillingUnits = int(math.Ceil(float64(e.DurationMs) / 360_000.0))
+			if e.BillingRate != nil && *e.BillingRate > 0 {
+				amount := float64(e.BillingUnits) * (*e.BillingRate) / 10.0
+				e.BillingAmountUsd = &amount
+			}
 		}
 		cp := *e
-		go s.persist()
-		return &cp
+		out = &cp
+		break
 	}
-	return nil
+	s.mu.Unlock()
+	if out != nil {
+		s.persist()
+	}
+	return out
+}
+
+// Pause stops the clock on an open entry (e.g. an AI run waiting at a human
+// gate — the wait is not AI work). No-op if closed or already paused.
+func (s *TimeStore) Pause(id string) {
+	s.setPaused(id, true)
+}
+
+// Resume restarts the clock on a paused entry, adding the pause to PausedMs.
+func (s *TimeStore) Resume(id string) {
+	s.setPaused(id, false)
+}
+
+func (s *TimeStore) setPaused(id string, pause bool) {
+	s.mu.Lock()
+	changed := false
+	for i := range s.entries {
+		e := &s.entries[i]
+		if e.ID != id || e.EndedAt != nil {
+			continue
+		}
+		now := time.Now()
+		switch {
+		case pause && e.PausedAt == nil:
+			e.PausedAt = &now
+			changed = true
+		case !pause && e.PausedAt != nil:
+			e.PausedMs += now.Sub(*e.PausedAt).Milliseconds()
+			e.PausedAt = nil
+			changed = true
+		}
+		break
+	}
+	s.mu.Unlock()
+	if changed {
+		s.persist()
+	}
+}
+
+// WriteOff marks closed, still-billable entries non-billable in one pass.
+// reasonFor returns the write-off reason for an entry, or "" to leave it.
+// Units and amount are zeroed exactly as CloseNonBillable does; the elapsed
+// time is kept. Returns copies of the entries written off. Idempotent: an
+// entry already non-billable is never offered to reasonFor again.
+func (s *TimeStore) WriteOff(reasonFor func(e types.TimeEntry) string) []types.TimeEntry {
+	s.mu.Lock()
+	var out []types.TimeEntry
+	for i := range s.entries {
+		e := &s.entries[i]
+		if e.EndedAt == nil || e.NonBillable {
+			continue
+		}
+		reason := reasonFor(*e)
+		if reason == "" {
+			continue
+		}
+		e.NonBillable = true
+		e.NonBillableReason = reason
+		e.BillingUnits = 0
+		e.BillingAmountUsd = nil
+		out = append(out, *e)
+	}
+	s.mu.Unlock()
+	if len(out) > 0 {
+		s.persist()
+	}
+	return out
 }
 
 // GetByID returns a pointer to a copy of the entry with the given ID, or nil.
@@ -229,11 +346,12 @@ func (s *TimeStore) MarkClioSynced(id string) {
 
 // SplitClioUnsynced partitions billable entries for a Clio sync run: entries
 // with a positive duration that have never been synced go to toSync; already
-// synced ones are counted as skipped. Open entries (durationMs <= 0) are
-// excluded from both, mirroring the TS /time-entries/sync-to-clio filter.
+// synced ones are counted as skipped. Open entries (durationMs <= 0) and
+// non-billable entries (failed/interrupted AI runs) are excluded from both,
+// mirroring the TS /time-entries/sync-to-clio filter.
 func SplitClioUnsynced(entries []types.TimeEntry) (toSync []types.TimeEntry, skipped int) {
 	for _, e := range entries {
-		if e.DurationMs <= 0 {
+		if e.DurationMs <= 0 || e.NonBillable {
 			continue
 		}
 		if e.ClioSyncedAt != "" {
@@ -251,6 +369,19 @@ func SplitClioUnsynced(entries []types.TimeEntry) (toSync []types.TimeEntry, ski
 func ClioDurationHours(e types.TimeEntry) float64 {
 	h := math.Max(float64(e.BillingUnits)*0.1, float64(e.DurationMs)/3_600_000.0)
 	return math.Round(h*100) / 100
+}
+
+// ClioNote is the activity note pushed to Clio: AI time is labelled so it is
+// never mistaken for the connected lawyer's own work.
+func ClioNote(e types.TimeEntry) string {
+	if e.AgentID != "" {
+		name := e.AgentName
+		if name == "" {
+			name = e.AgentID
+		}
+		return "AI agent (" + name + "): " + e.Description
+	}
+	return e.Description
 }
 
 // ExportJSON returns filtered entries as a slice (suitable for JSON marshalling).
@@ -271,7 +402,7 @@ func (s *TimeStore) ExportCSV(filter TimeFilter) string {
 	sb.WriteString("id,event,profileId,profileName,agentId,agentName,taskId," +
 		"matterNumber,clientNumber,description,startedAt,endedAt,durationMs," +
 		"billingUnits,billingRate,billingAmountUsd,utbmsTaskCode,utbmsActivityCode," +
-		"clioSyncedAt\n")
+		"clioSyncedAt,nonBillable,nonBillableReason,requestedByProfileId,pausedMs\n")
 
 	for _, e := range entries {
 		endedAt := ""
@@ -286,7 +417,7 @@ func (s *TimeStore) ExportCSV(filter TimeFilter) string {
 		if e.BillingAmountUsd != nil {
 			amount = fmt.Sprintf("%.4f", *e.BillingAmountUsd)
 		}
-		sb.WriteString(fmt.Sprintf("%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%d,%d,%s,%s,%s,%s,%s\n",
+		sb.WriteString(fmt.Sprintf("%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%d,%d,%s,%s,%s,%s,%s,%t,%s,%s,%d\n",
 			csvEscape(e.ID),
 			csvEscape(string(e.Event)),
 			csvEscape(e.ProfileID),
@@ -306,6 +437,10 @@ func (s *TimeStore) ExportCSV(filter TimeFilter) string {
 			csvEscape(e.UTBMSTaskCode),
 			csvEscape(e.UTBMSActivityCode),
 			csvEscape(e.ClioSyncedAt),
+			e.NonBillable,
+			csvEscape(e.NonBillableReason),
+			csvEscape(e.RequestedByProfileID),
+			e.PausedMs,
 		))
 	}
 	return sb.String()
@@ -315,6 +450,9 @@ func (s *TimeStore) ExportCSV(filter TimeFilter) string {
 
 func matchesFilter(e types.TimeEntry, f TimeFilter) bool {
 	if f.ProfileID != "" && e.ProfileID != f.ProfileID {
+		return false
+	}
+	if f.VisibleToProfileID != "" && e.ProfileID != f.VisibleToProfileID && e.RequestedByProfileID != f.VisibleToProfileID {
 		return false
 	}
 	if f.AgentID != "" && e.AgentID != f.AgentID {
@@ -336,7 +474,7 @@ func matchesFilter(e types.TimeEntry, f TimeFilter) bool {
 		return false
 	}
 	if f.AgentOnly != nil {
-		isAgentWork := e.Event == types.TimeEventAgentWork
+		isAgentWork := e.AgentID != "" || e.Event == types.TimeEventAgentWork
 		if *f.AgentOnly && !isAgentWork {
 			return false
 		}
@@ -355,13 +493,8 @@ func (s *TimeStore) persist() {
 	s.mu.Lock()
 	data, _ := json.MarshalIndent(s.entries, "", "  ")
 	s.mu.Unlock()
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0600); err != nil {
-		slog.Error("timekeeping: persist write failed", "path", tmp, "err", err)
-		return
-	}
-	if err := os.Rename(tmp, s.path); err != nil {
-		slog.Error("timekeeping: persist rename failed", "path", s.path, "err", err)
+	if err := atomicfile.WriteFile(s.path, data, 0o600); err != nil {
+		slog.Error("timekeeping: persist failed", "path", s.path, "err", err)
 	}
 }
 

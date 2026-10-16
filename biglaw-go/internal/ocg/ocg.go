@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -20,6 +19,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/discover-legal/biglaw-go/internal/atomicfile"
 	"github.com/discover-legal/biglaw-go/internal/cost"
 	"github.com/discover-legal/biglaw-go/internal/providers"
 	"github.com/discover-legal/biglaw-go/internal/strutil"
@@ -62,7 +62,7 @@ var validCategories = map[string]types.OcgRuleCategory{
 // Store persists OCG documents and runs compliance checks.
 type Store struct {
 	mu        sync.RWMutex
-	persistMu sync.Mutex                    // serialises concurrent fire-and-forget persists
+	persistMu sync.Mutex                    // serialises concurrent persists
 	docs      map[string]*types.OcgDocument // clientID → doc
 	path      string
 	provider  providers.Provider
@@ -105,11 +105,29 @@ func (s *Store) Init() error {
 	return nil
 }
 
-// GetByClient returns the OCG document for a client, or nil.
+// GetByClient returns a snapshot of a client's OCG document (nil if none).
+// RuleStats is copied: RecordViolations/RecordOutcome mutate it under the
+// lock, so handing out the shared map would race with callers that marshal
+// or read it. Rules are never mutated after ingest and are shared.
 func (s *Store) GetByClient(clientID string) *types.OcgDocument {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.docs[clientID]
+	return cloneDoc(s.docs[clientID])
+}
+
+func cloneDoc(d *types.OcgDocument) *types.OcgDocument {
+	if d == nil {
+		return nil
+	}
+	cp := *d
+	if d.RuleStats != nil {
+		cp.RuleStats = make(map[string]*types.OcgRuleStat, len(d.RuleStats))
+		for k, v := range d.RuleStats {
+			st := *v
+			cp.RuleStats[k] = &st
+		}
+	}
+	return &cp
 }
 
 // Remove deletes the OCG document for a client.
@@ -227,13 +245,14 @@ Respond with ONLY a valid JSON array, no markdown, no prose:
 		UpdatedAt: now,
 	}
 	s.docs[clientID] = doc
+	out := cloneDoc(doc) // callers must not hold the stored pointer
 	s.mu.Unlock()
 
 	if err := s.persist(); err != nil {
 		slog.Warn("OCG persist failed", "error", err)
 	}
 	slog.Info("OCG ingested", "clientId", clientID, "title", title, "ruleCount", len(rules))
-	return doc, nil
+	return out, nil
 }
 
 // CheckEntry checks one time entry against all rules in an OCG document.
@@ -286,7 +305,9 @@ func (s *Store) RecordViolations(clientID string, suggestions []types.OcgSuggest
 		}
 	}
 	s.mu.Unlock()
-	go s.persist() //nolint:errcheck
+	if err := s.persist(); err != nil {
+		slog.Warn("OCG persist failed", "error", err)
+	}
 }
 
 // RecordOutcome records that a suggestion was accepted or dismissed.
@@ -309,7 +330,9 @@ func (s *Store) RecordOutcome(clientID, ruleID, outcome string) {
 		}
 	}
 	s.mu.Unlock()
-	go s.persist() //nolint:errcheck
+	if err := s.persist(); err != nil {
+		slog.Warn("OCG persist failed", "error", err)
+	}
 }
 
 // ─── Mechanical checker ───────────────────────────────────────────────────────
@@ -578,28 +601,20 @@ func (s *Store) callHaiku(prompt string, maxTokens int, profileID string) string
 	return ""
 }
 
+// persist writes all documents atomically and durably. The marshal happens
+// under the read lock: the documents' RuleStats maps are mutated under the
+// write lock, so marshalling the shared pointers after unlocking raced (and
+// could fault with a concurrent map read/write).
 func (s *Store) persist() error {
 	s.persistMu.Lock()
 	defer s.persistMu.Unlock()
 	s.mu.RLock()
-	out := make(map[string]*types.OcgDocument, len(s.docs))
-	for k, v := range s.docs {
-		out[k] = v
-	}
+	data, err := json.MarshalIndent(s.docs, "", "  ")
 	s.mu.RUnlock()
-
-	data, err := json.MarshalIndent(out, "", "  ")
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
-		return err
-	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.path)
+	return atomicfile.WriteFile(s.path, data, 0o600)
 }
 
 func sanitizeOCG(s string) string {

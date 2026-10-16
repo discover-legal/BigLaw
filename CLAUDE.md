@@ -813,7 +813,7 @@ Both results are stored in the Qdrant document payload (`practiceArea`, `detecte
 
 ### Conflict of interest
 
-`ClientStore.checkConflict(name)` does a case-insensitive substring match between the incoming client name and every existing client's `adversaries` array. It is called automatically on `POST /clients` and the result is included in the response. Partners can also call `POST /clients/check-conflict` standalone.
+`ClientStore.checkConflict(name)` does a case-insensitive substring match between the incoming client name and every existing client's `adversaries` array (and the new client's adversaries against existing client names). It runs automatically on `POST /clients` and on a `PATCH /clients/:id` that changes the name or adverse parties (for the hits the change introduces), over every adverse party (max 1000): any hit returns **409** listing every conflict with an `id` and changes nothing; re-submitting with `acknowledgedConflictIds` (exactly the ids shown) and a non-empty `conflictReason` proceeds and audits the override (`client.conflict_overridden`: who, reason, every hit). Partners can also call `POST /clients/check-conflict` standalone.
 
 ## Known limitations
 

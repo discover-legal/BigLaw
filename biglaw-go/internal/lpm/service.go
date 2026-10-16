@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/discover-legal/biglaw-go/internal/atomicfile"
 	"github.com/discover-legal/biglaw-go/internal/config"
 	"github.com/discover-legal/biglaw-go/internal/queue"
 	"github.com/discover-legal/biglaw-go/internal/types"
@@ -372,11 +373,11 @@ func (s *Service) writePortfolioArtifacts(br *PortfolioBriefing) error {
 			if err != nil {
 				return err
 			}
-			if err := os.WriteFile(base+".json", b, 0o644); err != nil {
+			if err := atomicfile.WriteFile(base+".json", b, 0o600); err != nil {
 				return err
 			}
 		case "markdown", "md":
-			if err := os.WriteFile(base+".md", []byte(RenderPortfolioMarkdown(br)), 0o644); err != nil {
+			if err := atomicfile.WriteFile(base+".md", []byte(RenderPortfolioMarkdown(br)), 0o600); err != nil {
 				return err
 			}
 		case "docx":
@@ -384,7 +385,7 @@ func (s *Service) writePortfolioArtifacts(br *PortfolioBriefing) error {
 			if err != nil {
 				return err
 			}
-			if err := os.WriteFile(base+".docx", b, 0o644); err != nil {
+			if err := atomicfile.WriteFile(base+".docx", b, 0o600); err != nil {
 				return err
 			}
 		}
@@ -442,11 +443,11 @@ func (s *Service) writeArtifacts(r *types.MatterStatusReport) (string, error) {
 			if err != nil {
 				return docxPath, err
 			}
-			if err := os.WriteFile(base+".json", b, 0o644); err != nil {
+			if err := atomicfile.WriteFile(base+".json", b, 0o600); err != nil {
 				return docxPath, err
 			}
 		case "markdown", "md":
-			if err := os.WriteFile(base+".md", []byte(RenderMarkdown(r)), 0o644); err != nil {
+			if err := atomicfile.WriteFile(base+".md", []byte(RenderMarkdown(r)), 0o600); err != nil {
 				return docxPath, err
 			}
 		case "docx":
@@ -455,7 +456,7 @@ func (s *Service) writeArtifacts(r *types.MatterStatusReport) (string, error) {
 				return docxPath, err
 			}
 			docxPath = base + ".docx"
-			if err := os.WriteFile(docxPath, b, 0o644); err != nil {
+			if err := atomicfile.WriteFile(docxPath, b, 0o600); err != nil {
 				return "", err
 			}
 		}
