@@ -100,7 +100,7 @@ func TestExportLedes1998BFormat(t *testing.T) {
 	// Headerless parse uses the spec positions.
 	headerless := strings.Join(lines[2:], "\r\n")
 	items = ParseLEDES(headerless)
-	if len(items) != 4 || items[1].TaskCode != "L120" || items[1].TimekeeperName != "Ann Assoc" || *items[1].Rate != 400 {
+	if len(items) != 4 || items[1].TaskCode != "L120" || items[1].TimekeeperName != "Assoc, Ann" || *items[1].Rate != 400 {
 		t.Fatalf("headerless parse: %+v", items)
 	}
 }
@@ -165,7 +165,7 @@ func TestLedesInvoicePerMatterTotalsASCIIAndTimezone(t *testing.T) {
 	for _, r := range rows {
 		byInv[r[1]] = append(byInv[r[1]], r)
 	}
-	m1, m2 := byInv["INV-7-M-1"], byInv["INV-7-M-2"]
+	m1, m2 := byInv["INV-7-1"], byInv["INV-7-2"]
 	if len(m1) != 3 || len(m2) != 1 {
 		t.Fatalf("invoices = %v", byInv)
 	}
@@ -189,7 +189,7 @@ func TestLedesInvoicePerMatterTotalsASCIIAndTimezone(t *testing.T) {
 	if got := m1[0][18]; got != `Resume review - "smart quotes" ... ?` {
 		t.Errorf("transliterated description = %q", got)
 	}
-	if m1[0][21] != "Zoe Angstrom" {
+	if m1[0][21] != "Angstrom, Zoe" {
 		t.Errorf("timekeeper name = %q", m1[0][21])
 	}
 	if got := m1[1][18]; len(got) != 200 || strings.Trim(got, "e") != "" {
@@ -223,6 +223,59 @@ func TestTimekeeperClassification(t *testing.T) {
 	for _, tc := range cases {
 		if got := TimekeeperClassification(tc.p); got != tc.want {
 			t.Errorf("%+v → %s want %s", tc.p, got, tc.want)
+		}
+	}
+}
+
+// Round-3: the same matter number under two clients is two invoices with two
+// numbers; client-less work is skipped and reported; INVOICE_NUMBER fits the
+// 20-character field; TIMEKEEPER_NAME is "Last, First" within 30.
+func TestLedesInvoiceNumbersUniqueAndSized(t *testing.T) {
+	st := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	en := st.Add(time.Hour)
+	mk := func(id, client string) types.TimeEntry {
+		return types.TimeEntry{ID: id, ProfileID: "p", ProfileName: "Maximilian Alexander Wolfeschlegelstein Jr.",
+			ClientNumber: client, MatterNumber: "M-1", Description: "x", StartedAt: st, EndedAt: &en,
+			BillingUnits: 10, BillingRate: ptr(100), BillingAmountUsd: ptr(100)}
+	}
+	out, skipped := ExportLedes1998BReport([]types.TimeEntry{mk("a", "C-1"), mk("b", "C-2"), mk("c", "")},
+		LedesOptions{InvoiceNumber: "M-1-2026-10-16-LONG-REF", Now: st})
+	if len(skipped) != 1 || skipped[0].EntryID != "c" {
+		t.Fatalf("client-less entry must be skipped and reported: %+v", skipped)
+	}
+	rows := ledesRows(t, out)
+	if len(rows) != 2 || rows[0][1] == rows[1][1] {
+		t.Fatalf("invoices for (C-1,M-1) and (C-2,M-1) must differ: %v", rows)
+	}
+	for _, r := range rows {
+		if len(r[1]) > MaxInvoiceNumberLen || !strings.HasPrefix(r[1], "M-1-2026-10-16-L") {
+			t.Errorf("INVOICE_NUMBER %q", r[1])
+		}
+		if len(r[21]) > 30 || !strings.HasPrefix(r[21], "Wolfeschlegelstein Jr., Max") {
+			t.Errorf("TIMEKEEPER_NAME %q", r[21])
+		}
+	}
+	for in, want := range map[string]string{
+		"Jane Q. Smith": "Smith, Jane Q.", "Smith, Jane": "Smith, Jane", "Cher": "Cher", "  Ann   Lee ": "Lee, Ann",
+	} {
+		if got := LedesTimekeeperName(in); got != want {
+			t.Errorf("LedesTimekeeperName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestToASCIICompatibilityForms(t *testing.T) {
+	for in, want := range map[string]string{
+		"\ufb01le":            "file",
+		"\uff21\uff22\uff23":  "ABC",
+		"\u0131stanbul":       "istanbul",
+		"\u00bd":              "1/2",
+		"zero\u200bwidth":     "zerowidth",
+		"\ufeffbom\u200d":     "bom",
+		"Caf\u00e9 \u2014 ok": "Cafe - ok",
+	} {
+		if got := toASCII(in); got != want {
+			t.Errorf("toASCII(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

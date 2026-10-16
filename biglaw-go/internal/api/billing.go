@@ -422,13 +422,27 @@ func (s *Server) handleExportTimeLedes(c *gin.Context) {
 		}
 	}
 
-	invoice := c.Query("invoiceNumber")
+	loc, ok := billing.FirmLocation()
+	if !ok {
+		slog.Warn("LEDES export: FIRM_TIMEZONE is not a valid IANA zone; using UTC", "value", os.Getenv("FIRM_TIMEZONE"))
+	}
+	invoice := strings.TrimSpace(c.Query("invoiceNumber"))
 	if invoice == "" {
+		// Default: "<ref>-YYYYMMDD", the reference shortened so the number
+		// fits 1998B's 20-character INVOICE_NUMBER with room for the "-N"
+		// per-invoice suffix of a multi-matter file.
 		ref := matterNumber
 		if ref == "" {
 			ref = clientNumber
 		}
-		invoice = ref + "-" + time.Now().UTC().Format("2006-01-02")
+		ref = billingFilenameRe.ReplaceAllString(ref, "")
+		if len(ref) > 8 {
+			ref = ref[:8]
+		}
+		invoice = ref + "-" + time.Now().In(loc).Format("20060102")
+	} else if len(invoice) > billing.MaxInvoiceNumberLen {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invoiceNumber is %d characters; LEDES 1998B allows at most %d", len(invoice), billing.MaxInvoiceNumberLen)})
+		return
 	}
 
 	opts := billing.LedesOptions{
@@ -439,16 +453,12 @@ func (s *Server) handleExportTimeLedes(c *gin.Context) {
 	if s.profiles != nil {
 		opts.Profile = s.profiles.Get
 	}
-	loc, ok := billing.FirmLocation()
-	if !ok {
-		slog.Warn("LEDES export: FIRM_TIMEZONE is not a valid IANA zone; using UTC", "value", os.Getenv("FIRM_TIMEZONE"))
-	}
 	opts.Location = loc
 	ledes, skipped := billing.ExportLedes1998BReport(closed, opts)
 	if len(skipped) > 0 {
-		// Never bill a guessed figure: inconsistent legacy rows are left off
-		// and surfaced for correction.
-		slog.Warn("LEDES export: entries skipped (stored amount disagrees with units x rate)", "count", len(skipped), "entries", skipped)
+		// Never bill a guessed figure or an unaddressed invoice: inconsistent
+		// legacy rows and client-less work are left off and surfaced.
+		slog.Warn("LEDES export: entries skipped (no client number, or stored amount disagrees with units x rate)", "count", len(skipped), "entries", skipped)
 		c.Header("X-Ledes-Skipped-Entries", strconv.Itoa(len(skipped)))
 		audit.Default.Write(audit.WriteRequest{
 			Event:   "time.ledes_export_skipped",
@@ -465,8 +475,8 @@ func (s *Server) handleExportTimeLedes(c *gin.Context) {
 // ─── OCG suggestions (read side) ──────────────────────────────────────────────
 
 // handleTimeSuggestions lists entries that carry at least one pending OCG
-// suggestion. Lawyers are locked to their own entries; partners may filter
-// by any profileId.
+// suggestion. Lawyers see their own entries and AI entries on work they
+// requested; partners may filter by any profileId.
 func (s *Server) handleTimeSuggestions(c *gin.Context) {
 	u := getUser(c)
 	filter := timekeeping.TimeFilter{
@@ -476,7 +486,9 @@ func (s *Server) handleTimeSuggestions(c *gin.Context) {
 	if auth.IsPartner(u) {
 		filter.ProfileID = c.Query("profileId")
 	} else {
-		filter.ProfileID = u.ProfileID
+		// Own time plus AI time on work this lawyer requested — the same
+		// visibility the OCG decision handler grants.
+		filter.VisibleToProfileID = u.ProfileID
 	}
 
 	entries := s.time.List(filter)

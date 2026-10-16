@@ -17,6 +17,9 @@
 //	LAW_FIRM_ID | LINE_ITEM_UNIT_COST | TIMEKEEPER_NAME |
 //	TIMEKEEPER_CLASSIFICATION | CLIENT_MATTER_ID
 //
+// Field lengths enforced here: INVOICE_NUMBER is Char(20) and
+// TIMEKEEPER_NAME Char(30), "Last, First" for people.
+//
 // TIMEKEEPER_CLASSIFICATION takes PT (partner), AS (associate), OC (of
 // counsel), LA (legal assistant / paralegal) or OT (other timekeeper).
 
@@ -60,6 +63,12 @@ const (
 	TKLegalAssistant = "LA"
 	TKOther          = "OT"
 )
+
+// MaxInvoiceNumberLen is the 1998B INVOICE_NUMBER width (Char 20).
+const MaxInvoiceNumberLen = 20
+
+// maxTimekeeperNameLen is the 1998B TIMEKEEPER_NAME width (Char 30).
+const maxTimekeeperNameLen = 30
 
 // LedesOptions carries invoice-level values the time entries do not hold.
 type LedesOptions struct {
@@ -160,11 +169,14 @@ func ExportLedes1998B(entries []types.TimeEntry, opts LedesOptions) string {
 }
 
 // ExportLedes1998BReport converts time entries to a LEDES 1998B file with one
-// invoice per (client, matter): each block has its own INVOICE_NUMBER (the
-// base number, suffixed "-<matter>" when the file holds more than one
-// matter), INVOICE_TOTAL, billing period and line numbering. Dates are in
-// opts.Location (the firm's timezone; UTC when nil). Entries whose stored
-// amount contradicts units × rate are returned as skipped, not billed.
+// invoice per (client, matter): each block has its own INVOICE_NUMBER, its
+// own INVOICE_TOTAL, billing period and line numbering. With more than one
+// invoice in the file the numbers are the base suffixed "-1", "-2", … in
+// (client, matter) order — unique per invoice, and cut to the 20-character
+// 1998B width by shortening the base, never the suffix. Dates are in
+// opts.Location (the firm's timezone; UTC when nil). Entries that cannot be
+// billed as stored — amount contradicting units × rate, or no client number
+// (an invoice must name its client) — are returned as skipped, not billed.
 func ExportLedes1998BReport(entries []types.TimeEntry, opts LedesOptions) (string, []LedesSkipped) {
 	loc := opts.Location
 	if loc == nil {
@@ -193,6 +205,9 @@ func ExportLedes1998BReport(entries []types.TimeEntry, opts LedesOptions) (strin
 			continue
 		}
 		total, rate, reason := lineTotal(e)
+		if reason == "" && strings.TrimSpace(e.ClientNumber) == "" {
+			reason = "no client number: assign the work to a client before invoicing it"
+		}
 		if reason != "" {
 			skipped = append(skipped, LedesSkipped{EntryID: e.ID, Reason: reason})
 			continue
@@ -211,13 +226,15 @@ func ExportLedes1998BReport(entries []types.TimeEntry, opts LedesOptions) (strin
 	invDesc := sanitizeField(opts.InvoiceDescription)
 	firmID := sanitizeField(opts.LawFirmID)
 	out := []string{"LEDES1998B[]", strings.Join(Ledes1998BFields, "|") + "[]"}
-	for _, key := range order {
+	base := sanitizeField(opts.InvoiceNumber)
+	for n, key := range order {
 		inv := invoices[key]
-		invNum := opts.InvoiceNumber
+		invNum := base
 		if len(order) > 1 {
-			invNum += "-" + inv.matter
+			suffix := fmt.Sprintf("-%d", n+1)
+			invNum = truncate(base, MaxInvoiceNumberLen-len(suffix)) + suffix
 		}
-		invNum = sanitizeField(invNum)
+		invNum = truncate(invNum, MaxInvoiceNumberLen)
 
 		// The invoice total and billing period come from exactly the lines
 		// on this invoice, so INVOICE_TOTAL equals the sum of LINE_ITEM_TOTAL.
@@ -235,7 +252,7 @@ func ExportLedes1998BReport(entries []types.TimeEntry, opts LedesOptions) (strin
 
 		for i, l := range inv.lines {
 			e := l.e
-			tkID, tkName, desc := e.ProfileID, e.ProfileName, e.Description
+			tkID, tkName, desc := e.ProfileID, LedesTimekeeperName(e.ProfileName), e.Description
 			var tkClass string
 			if e.AgentID != "" {
 				// AI time is billed to the AI timekeeper at the AI rate (the
@@ -277,14 +294,47 @@ func ExportLedes1998BReport(entries []types.TimeEntry, opts LedesOptions) (strin
 				sanitizeField(desc),                 // LINE_ITEM_DESCRIPTION
 				firmID,                              // LAW_FIRM_ID
 				fmt2(l.rate),                        // LINE_ITEM_UNIT_COST
-				sanitizeField(tkName),               // TIMEKEEPER_NAME
-				tkClass,                             // TIMEKEEPER_CLASSIFICATION
-				"",                                  // CLIENT_MATTER_ID (client's own matter ref; unknown)
+				truncate(sanitizeField(tkName), maxTimekeeperNameLen), // TIMEKEEPER_NAME
+				tkClass, // TIMEKEEPER_CLASSIFICATION
+				"",      // CLIENT_MATTER_ID (client's own matter ref; unknown)
 			}
 			out = append(out, strings.Join(fields, "|")+"[]")
 		}
 	}
 	return strings.Join(out, crlf) + crlf, skipped
+}
+
+// LedesTimekeeperName renders a person's name the way 1998B wants it, family
+// name first: "Jane Q. Smith" → "Smith, Jane Q.", "John Smith Jr." →
+// "Smith Jr., John". A name already holding a comma, or a single word, is
+// left as it is.
+func LedesTimekeeperName(name string) string {
+	name = strings.Join(strings.Fields(name), " ")
+	if name == "" || strings.Contains(name, ",") {
+		return name
+	}
+	parts := strings.Fields(name)
+	last := len(parts) - 1
+	if last > 1 && nameSuffixes[strings.ToLower(strings.TrimSuffix(parts[last], "."))] {
+		last--
+	}
+	if last < 1 {
+		return name
+	}
+	return strings.Join(parts[last:], " ") + ", " + strings.Join(parts[:last], " ")
+}
+
+var nameSuffixes = map[string]bool{"jr": true, "sr": true, "ii": true, "iii": true, "iv": true, "esq": true}
+
+// truncate cuts ASCII s to at most n bytes.
+func truncate(s string, n int) string {
+	if n < 0 {
+		n = 0
+	}
+	if len(s) > n {
+		return s[:n]
+	}
+	return s
 }
 
 func fmt2(f float64) string {
@@ -315,16 +365,19 @@ var asciiPunct = strings.NewReplacer(
 	"\u00A9", "(c)", "\u00AE", "(R)", "\u2122", "(TM)", "\u20AC", "EUR", "\u00A3", "GBP",
 	"\u00DF", "ss", "\u00C6", "AE", "\u00E6", "ae", "\u0152", "OE", "\u0153", "oe",
 	"\u00D8", "O", "\u00F8", "o", "\u0141", "L", "\u0142", "l", "\u00D0", "D", "\u00F0", "d",
-	"\u00DE", "Th", "\u00FE", "th",
+	"\u00DE", "Th", "\u00FE", "th", "\u0131", "i", "\u2044", "/",
 )
 
-var stripMarks = transform.Chain(norm.NFD, runes.Remove(runes.In(unicode.Mn)), norm.NFC)
+// stripMarks folds compatibility forms (NFKD: ﬁ→fi, fullwidth Ａ→A, ½→1⁄2,
+// superscripts) and drops combining marks (é→e) and format characters
+// (zero-width space/joiners, BOM, bidi controls).
+var stripMarks = transform.Chain(norm.NFKD, runes.Remove(runes.In(unicode.Mn)), runes.Remove(runes.In(unicode.Cf)), norm.NFC)
 
 func toASCII(s string) string {
-	s = asciiPunct.Replace(s)
 	if t, _, err := transform.String(stripMarks, s); err == nil {
 		s = t
 	}
+	s = asciiPunct.Replace(s)
 	var b strings.Builder
 	b.Grow(len(s))
 	for _, r := range s {
