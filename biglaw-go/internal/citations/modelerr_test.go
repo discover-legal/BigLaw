@@ -4,6 +4,8 @@
 package citations
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -46,40 +48,69 @@ func clFound(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// A failed or unusable treatment analysis is an explicit UNKNOWN (unchecked),
-// never a Caution/yellow signal.
-func TestCitationModelFailureIsUnknown(t *testing.T) {
+// A failed or unusable treatment analysis is a model failure (typed HTTP
+// error upstream), never a guessed or "unknown" verdict dressed as a result.
+func TestCitationModelFailureIsError(t *testing.T) {
 	withCourtListener(t, clFound)
 	for name, p := range map[string]providers.Provider{
 		"call fails":     replyProvider{err: errors.New("ollama: HTTP 500")},
 		"garbage":        replyProvider{text: "no json"},
-		"invalid signal": replyProvider{text: `{"signal":"purple","status":"good_law","confidence":0.9}`},
+		"invalid signal": replyProvider{text: `{"signal":"purple","status":"good_law","confidence":0.9,"positiveTreatmentCount":3}`},
 	} {
 		t.Run(name, func(t *testing.T) {
-			res := New(p, "light").Check("410 U.S. 113", "")
-			if res.Signal != types.CitationSignalUnknown || res.Status != types.CitationStatusUnknown || res.Confidence != 0 {
-				t.Fatalf("want unknown/0, got signal=%s status=%s conf=%v", res.Signal, res.Status, res.Confidence)
-			}
-			if !strings.Contains(res.Reasoning, "NOT been checked") {
-				t.Errorf("reasoning does not say unchecked: %q", res.Reasoning)
+			_, err := New(p, "light").Check(context.Background(), "410 U.S. 113", "")
+			if !errors.Is(err, providers.ErrModelUnavailable) {
+				t.Fatalf("want ErrModelUnavailable, got %v", err)
 			}
 		})
+	}
+	_, err := New(replyProvider{err: providers.ErrModelTimeout}, "light").Check(context.Background(), "410 U.S. 113", "")
+	if !errors.Is(err, providers.ErrModelTimeout) {
+		t.Fatalf("timeout classification lost: %v", err)
 	}
 }
 
 func TestCitationGoodAnalysisKept(t *testing.T) {
 	withCourtListener(t, clFound)
-	res := New(replyProvider{text: `{"signal":"green","status":"good_law","signalLabel":"Good law","confidence":0.8,"reasoning":"Followed."}`}, "light").Check("410 U.S. 113", "")
+	res, err := New(replyProvider{text: "```json\n" + `{"signal":"Green","status":"Good_Law","signalLabel":"Good law","confidence":0.8,"reasoning":"Followed."}` + "\n```"}, "light").Check(context.Background(), "410 U.S. 113", "")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if res.Signal != types.CitationSignalGreen || res.Status != "good_law" || res.Reasoning != "Followed." {
 		t.Fatalf("unexpected %+v", res)
 	}
+	// Never null on the wire: the UI reads .length.
+	if b, _ := json.Marshal(res); !strings.Contains(string(b), `"topNegativeTreatments":[]`) {
+		t.Fatalf("treatments must serialise as [], got %s", b)
+	}
 }
 
-// CourtListener being unreachable is "not checked", not "not found".
-func TestCitationLookupFailureIsUnknownNotFound(t *testing.T) {
-	withCourtListener(t, func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "down", http.StatusBadGateway) })
-	res := New(replyProvider{text: "{}"}, "light").Check("410 U.S. 113", "")
-	if res.Signal != types.CitationSignalUnknown || !strings.Contains(res.Reasoning, "could not be reached") {
-		t.Fatalf("unexpected %+v", res)
+// Any CourtListener failure — search, opinion or citing-opinions lookup — is
+// "not checked", never "not found" and never a verdict on missing evidence.
+func TestCitationLookupFailureIsUnknown(t *testing.T) {
+	for name, failing := range map[string]func(*http.Request) bool{
+		"search": func(r *http.Request) bool {
+			return !strings.Contains(r.URL.Path, "/clusters/") && !strings.Contains(r.URL.RawQuery, "cited_gt")
+		},
+		"cluster": func(r *http.Request) bool { return strings.Contains(r.URL.Path, "/clusters/") },
+		"citing":  func(r *http.Request) bool { return strings.Contains(r.URL.RawQuery, "cited_gt") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			withCourtListener(t, func(w http.ResponseWriter, r *http.Request) {
+				if failing(r) {
+					http.Error(w, "down", http.StatusBadGateway)
+					return
+				}
+				clFound(w, r)
+			})
+			green := replyProvider{text: `{"signal":"green","status":"good_law","confidence":0.9}`}
+			res, err := New(green, "light").Check(context.Background(), "410 U.S. 113", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.Signal != types.CitationSignalUnknown || !strings.Contains(res.Reasoning, "could not be reached") {
+				t.Fatalf("unexpected %+v", res)
+			}
+		})
 	}
 }

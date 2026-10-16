@@ -11,6 +11,7 @@ package lpm
 
 import (
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -33,15 +34,18 @@ type PortfolioMatterLine struct {
 
 // PortfolioBriefing is the rolled-up daily digest across a set of matters.
 type PortfolioBriefing struct {
-	GeneratedAt string                `json:"generatedAt"`
-	Date        string                `json:"date"`
-	MatterCount int                   `json:"matterCount"`
-	Green       int                   `json:"green"`
-	Amber       int                   `json:"amber"`
-	Red         int                   `json:"red"`
-	BLUF        string                `json:"bluf"`
-	Matters     []PortfolioMatterLine `json:"matters"`
-	CostUsd     float64               `json:"costUsd"`
+	GeneratedAt string `json:"generatedAt"`
+	Date        string `json:"date"`
+	MatterCount int    `json:"matterCount"`
+	Green       int    `json:"green"`
+	Amber       int    `json:"amber"`
+	Red         int    `json:"red"`
+	BLUF        string `json:"bluf"`
+	// Degraded: the overall BLUF is the record-derived counts line because
+	// the model did not write one (unavailable, failed, or empty reply).
+	Degraded bool                  `json:"degraded,omitempty"`
+	Matters  []PortfolioMatterLine `json:"matters"`
+	CostUsd  float64               `json:"costUsd"`
 }
 
 // PortfolioBriefer builds portfolio briefings from the report corpus.
@@ -104,6 +108,7 @@ func (b *PortfolioBriefer) Generate(matters []MatterRef, corpus *Corpus, date st
 	br.BLUF, br.CostUsd = b.overallBLUF(br)
 	if br.BLUF == "" {
 		br.BLUF = fallbackPortfolioBLUF(br)
+		br.Degraded = true
 	}
 	return br, nil
 }
@@ -133,6 +138,7 @@ func (b *PortfolioBriefer) overallBLUF(br *PortfolioBriefing) (string, float64) 
 		Messages: []providers.Message{{Role: "user", Content: "FACTS:\n" + facts.String()}},
 	})
 	if err != nil {
+		slog.Warn("LPM portfolio BLUF synthesis failed; using statistics-only BLUF", "error", err)
 		return "", 0
 	}
 	v := costOf(b.model, resp)
@@ -169,12 +175,19 @@ func fallbackPortfolioBLUF(br *PortfolioBriefing) string {
 
 // ─── Renderers ──────────────────────────────────────────────────────────────
 
+func portfolioBLUFLabel(br *PortfolioBriefing) string {
+	if br.Degraded {
+		return "Bottom line (statistics only — AI summary unavailable)"
+	}
+	return "Bottom line"
+}
+
 // RenderPortfolioMarkdown renders the briefing as Markdown.
 func RenderPortfolioMarkdown(br *PortfolioBriefing) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Portfolio Briefing — %s\n\n", br.Date)
 	fmt.Fprintf(&b, "*%d matters · %d red / %d amber / %d green*\n\n", br.MatterCount, br.Red, br.Amber, br.Green)
-	fmt.Fprintf(&b, "**Bottom line:** %s\n\n", br.BLUF)
+	fmt.Fprintf(&b, "**%s:** %s\n\n", portfolioBLUFLabel(br), br.BLUF)
 	b.WriteString("## Matters (worst first)\n\n")
 	for _, m := range br.Matters {
 		fmt.Fprintf(&b, "- **%s** (%.0f, %s)", m.MatterNumber, m.HealthScore, orDash(m.HealthSignal))
@@ -195,7 +208,7 @@ func RenderPortfolioDOCX(br *PortfolioBriefing) ([]byte, error) {
 	d := &docxBuilder{}
 	d.Heading(1, "Portfolio Briefing — "+br.Date)
 	d.Para(fmt.Sprintf("%d matters  ·  %d red / %d amber / %d green", br.MatterCount, br.Red, br.Amber, br.Green))
-	d.Heading(2, "Bottom line")
+	d.Heading(2, portfolioBLUFLabel(br))
 	d.Para(br.BLUF)
 	d.Heading(2, "Matters (worst first)")
 	for _, m := range br.Matters {

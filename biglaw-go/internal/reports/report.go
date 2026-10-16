@@ -7,6 +7,8 @@
 package reports
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"html"
 	"log/slog"
@@ -34,6 +36,8 @@ func New(provider providers.Provider, opusModel string) *Generator {
 
 // Opts controls report generation.
 type Opts struct {
+	// Ctx, when set, bounds the model call (client disconnect cancels it).
+	Ctx                context.Context
 	Format             string // "html" or "markdown"
 	IncludeTimeEntries bool
 	IncludeBudgetBurn  bool
@@ -161,6 +165,7 @@ func (g *Generator) Generate(
 
 	start := time.Now()
 	resp, err := g.provider.Chat(providers.ChatParams{
+		Ctx:         opts.Ctx,
 		Model:       g.opus,
 		MaxTokens:   2000,
 		System:      systemPrompt,
@@ -168,7 +173,7 @@ func (g *Generator) Generate(
 		Messages:    []providers.Message{{Role: "user", Content: userPrompt}},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("status report Opus call failed: %w", err)
+		return nil, providers.ModelFailure("status report drafting", err)
 	}
 	dms := time.Since(start).Milliseconds()
 
@@ -191,6 +196,10 @@ func (g *Generator) Generate(
 			rawMarkdown = blk.Text
 			break
 		}
+	}
+	if strings.TrimSpace(rawMarkdown) == "" {
+		// Never send a client an empty "status report".
+		return nil, providers.ModelFailure("status report drafting", errors.New("the model returned an empty report"))
 	}
 
 	generatedAt := time.Now().UTC().Format(time.RFC3339)

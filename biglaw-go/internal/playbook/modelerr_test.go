@@ -85,3 +85,30 @@ func TestBuildCompleteEntriesSaved(t *testing.T) {
 		t.Fatal("complete playbook was not saved")
 	}
 }
+
+// Models echo the prompt's numbering or add "Clause" to the name; when the
+// count matches, an otherwise-unmatched entry is taken by position.
+func TestBuildAcceptsEchoedClauseNames(t *testing.T) {
+	for name, reply := range map[string]string{
+		"numbered":   `{"entries":[{"clauseType":"1. Governing law","standardPosition":"England"},{"clauseType":"2) Limitation of Liability","standardPosition":"Cap at fees"}]}`,
+		"suffixed":   `{"entries":[{"clauseType":"Governing Law Clause","standardPosition":"England"},{"clauseType":"Limitation of liability provision","standardPosition":"Cap at fees"}]}`,
+		"positional": `{"entries":[{"clauseType":"Choice of law","standardPosition":"England"},{"clauseType":"Liability cap","standardPosition":"Cap at fees"}]}`,
+		"mixed":      `{"entries":[{"clauseType":"Liability cap","standardPosition":"Cap at fees"},{"clauseType":"Governing law","standardPosition":"England"}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			st := New(filepath.Join(t.TempDir(), "pb.json"))
+			if err := st.Init(); err != nil {
+				t.Fatal(err)
+			}
+			pb, err := NewBuilder(&scripted{replies: []interface{}{reply}}, "light").Build(st, noSearch, BuildOpts{
+				Scope: types.PlaybookScopeFirm, PracticeArea: "Corporate & M&A", Name: "x", ClauseTypes: []string{"Governing law", "Limitation of liability"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if pb.Entries[0].StandardPosition != "England" || pb.Entries[1].StandardPosition != "Cap at fees" {
+				t.Fatalf("mismatched entries %+v", pb.Entries)
+			}
+		})
+	}
+}

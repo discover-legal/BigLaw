@@ -357,7 +357,7 @@ Clause object schema:
 	var parsed struct {
 		Clauses       []map[string]interface{} `json:"clauses"`
 		Document      string                   `json:"document"`
-		DraftingNotes []string                 `json:"draftingNotes"`
+		DraftingNotes noteList                 `json:"draftingNotes"`
 	}
 	if err := json.Unmarshal([]byte(raw[s:eIdx+1]), &parsed); err != nil {
 		return nil, "", nil, providers.ModelFailure("precedent drafting", fmt.Errorf("unparseable model output: %w", err))
@@ -388,11 +388,43 @@ Clause object schema:
 		}
 		docText = strings.Join(lines, "\n\n")
 	}
-	notes := parsed.DraftingNotes
-	if notes == nil {
+	notes := []string(parsed.DraftingNotes)
+	if notes == nil { // key absent
 		notes = []string{}
 	}
 	return clauses, docText, notes, nil
+}
+
+// noteList decodes draftingNotes as the prompt asks (an array) or as models
+// often answer (one string, a note per line).
+type noteList []string
+
+func (n *noteList) UnmarshalJSON(b []byte) error {
+	var v any
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
+	}
+	out := []string{}
+	add := func(s string) {
+		if s = strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(s), "-*•")); s != "" {
+			out = append(out, s)
+		}
+	}
+	switch t := v.(type) {
+	case string:
+		for _, line := range strings.Split(t, "\n") {
+			add(line)
+		}
+	case []any:
+		for _, x := range t {
+			add(strVal(x))
+		}
+	case nil:
+	default:
+		return fmt.Errorf("draftingNotes: unexpected %T", v)
+	}
+	*n = out
+	return nil
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

@@ -442,7 +442,12 @@ func (r *Registry) extractReviewCell(prov providers.Provider, modelID, docID, do
 		Temperature: &temp,
 	})
 	if err != nil {
-		return failed(fmt.Sprintf("model call failed: %v", err))
+		// The cell (and its CSV/docx exports) carries only a safe description
+		// and a ref; the raw error, which can name provider endpoints or echo
+		// upstream bodies, stays in the server log under that ref.
+		ref := uuid.NewString()[:8]
+		slog.Warn("tabular review cell: model call failed", "ref", ref, "doc", docID, "column", col.Name, "error", err)
+		return failed(fmt.Sprintf("Not reviewed: %s (ref %s).", providers.Describe(providers.ModelFailure("cell", err)), ref))
 	}
 	r.recordTabularCost(resp, modelID, taskID)
 

@@ -6,6 +6,7 @@ package lpm
 import (
 	"archive/zip"
 	"bytes"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -78,6 +79,15 @@ func TestPortfolioFallbackBLUFWhenNoModel(t *testing.T) {
 	}
 	if br.BLUF == "" || !strings.Contains(br.BLUF, "red") {
 		t.Errorf("fallback BLUF expected, got %q", br.BLUF)
+	}
+	if !br.Degraded || !strings.Contains(RenderPortfolioMarkdown(br), "statistics only") {
+		t.Errorf("statistics-only BLUF must be marked degraded: %+v", br)
+	}
+
+	// A failed model call is marked the same way.
+	br, err = NewPortfolioBriefer(&fakeProvider{err: errors.New("down")}, "m").Generate([]MatterRef{{MatterNumber: "M-002"}}, corpus, "2026-06-07")
+	if err != nil || !br.Degraded {
+		t.Fatalf("model failure not marked degraded: %v %+v", err, br)
 	}
 }
 

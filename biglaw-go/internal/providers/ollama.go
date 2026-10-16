@@ -476,6 +476,21 @@ func (p *OllamaProvider) Chat(params ChatParams) (*ChatResponse, error) {
 	}, nil
 }
 
+// transportError classifies a transport-level failure (from Do or from reading
+// the body) the one way: a cancelled caller keeps context.Canceled, a timeout
+// carries ErrModelTimeout (HTTP 504), anything else stays unclassified (and
+// becomes ErrModelUnavailable at the engine boundary).
+func transportError(ctx context.Context, op string, err error) error {
+	if ctx.Err() == context.Canceled {
+		return fmt.Errorf("ollama: %s: %w", op, context.Canceled)
+	}
+	var ne net.Error
+	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &ne) && ne.Timeout()) {
+		return fmt.Errorf("ollama: %s: %w: %w", op, ErrModelTimeout, err)
+	}
+	return fmt.Errorf("ollama: %s: %w", op, err)
+}
+
 // sendChat POSTs one chat request and decodes the reply, retrying transient HTTP
 // failures (429/5xx/529) with Retry-After honored when present, else exponential
 // backoff with jitter — bounded by maxProviderRetries and the client timeout budget.
@@ -499,22 +514,16 @@ func (p *OllamaProvider) sendChat(ctx context.Context, body []byte, url string) 
 		if err != nil {
 			// Transport error (timeout, connection refused, caller cancelled):
 			// not an HTTP status — surface it rather than spin (the client
-			// already applied its timeout). Timeouts are classified so the API
-			// can answer 504; a cancelled caller keeps context.Canceled.
-			if ctx.Err() == context.Canceled {
-				return nil, fmt.Errorf("ollama: do request: %w", context.Canceled)
-			}
-			var ne net.Error
-			if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &ne) && ne.Timeout()) {
-				return nil, fmt.Errorf("ollama: do request: %w: %w", ErrModelTimeout, err)
-			}
-			return nil, fmt.Errorf("ollama: do request: %w", err)
+			// already applied its timeout).
+			return nil, transportError(ctx, "do request", err)
 		}
 		if resp.StatusCode == http.StatusOK {
 			responseBody, rerr := io.ReadAll(io.LimitReader(resp.Body, maxProviderResponseBytes+1))
 			resp.Body.Close()
 			if rerr != nil {
-				return nil, fmt.Errorf("ollama: read response: %w", rerr)
+				// Headers arrived but the body stalled or was cut: the same
+				// timeout/cancel classification as a failed Do.
+				return nil, transportError(ctx, "read response", rerr)
 			}
 			if int64(len(responseBody)) > maxProviderResponseBytes {
 				return nil, fmt.Errorf("ollama: response exceeds %d MiB limit", maxProviderResponseBytes>>20)

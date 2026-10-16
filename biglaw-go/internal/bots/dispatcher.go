@@ -13,6 +13,9 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/google/uuid"
+
+	"github.com/discover-legal/biglaw-go/internal/providers"
 	"github.com/discover-legal/biglaw-go/internal/strutil"
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
@@ -216,8 +219,8 @@ func Dispatch(msg BotMessage, orch OrchestratorFacade) BotResponse {
 				if err != nil {
 					return "", err
 				}
-				if briefing.Degraded != "" {
-					return "⚠️ **Degraded briefing — " + briefing.Degraded + ".** Not a partner briefing.\n\n" + briefing.Document, nil
+				if briefing.Degraded {
+					return "⚠️ **Degraded briefing — " + briefing.DegradedReason + ".** Not a partner briefing.\n\n" + briefing.Document, nil
 				}
 				return briefing.Document, nil
 			},
@@ -347,6 +350,15 @@ func Dispatch(msg BotMessage, orch OrchestratorFacade) BotResponse {
 }
 
 // immediateResult formats a synchronous facade result for posting.
+// AsyncErrorText is what a channel sees when a command's async work failed:
+// a safe description plus a short ref, never err.Error() (which can carry
+// provider URLs or upstream bodies). The full error is logged under the ref.
+func AsyncErrorText(err error) string {
+	ref := uuid.NewString()[:8]
+	slog.Warn("bot async work failed", "ref", ref, "error", err)
+	return fmt.Sprintf("⚠️ That could not be completed: %s. No result was produced. (ref %s)", providers.Describe(err), ref)
+}
+
 func immediateResult(msg string, err error) string {
 	if err != nil {
 		return "Error: " + err.Error()

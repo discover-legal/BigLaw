@@ -261,7 +261,7 @@ func HandleSlackEvent(rawBody, timestamp, signature string, orch OrchestratorFac
 		if response.AsyncWork != nil {
 			result, err := response.AsyncWork()
 			if err != nil {
-				result = "Error: " + err.Error()
+				result = AsyncErrorText(err)
 			}
 			if postErr := PostToSlackChannel(channelID, result, threadTS); postErr != nil {
 				slog.Warn("Slack async post failed", "error", postErr)

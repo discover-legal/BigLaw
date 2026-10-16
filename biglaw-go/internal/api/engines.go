@@ -484,7 +484,19 @@ func (s *Server) handleCitationCheckGet(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "q (citation string) required"})
 		return
 	}
-	c.JSON(http.StatusOK, eng.citations.Check(q, c.Query("taskId")))
+	s.writeCitationCheck(c, eng, q, c.Query("taskId"))
+}
+
+// writeCitationCheck answers a citation check: a CourtListener failure is a
+// 200 "unknown — not checked" result; a model failure is a typed error
+// (502/503/504), never a treatment verdict.
+func (s *Server) writeCitationCheck(c *gin.Context, eng *enginesBundle, query, taskID string) {
+	res, err := eng.citations.Check(c.Request.Context(), query, taskID)
+	if err != nil {
+		writeModelError(c, err, "The citation check failed.")
+		return
+	}
+	c.JSON(http.StatusOK, res)
 }
 
 type citationCheckBody struct {
@@ -506,7 +518,7 @@ func (s *Server) handleCitationCheckPost(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "query required"})
 		return
 	}
-	c.JSON(http.StatusOK, eng.citations.Check(body.Query, body.TaskID))
+	s.writeCitationCheck(c, eng, body.Query, body.TaskID)
 }
 
 // ─── Client briefing ──────────────────────────────────────────────────────────
@@ -536,14 +548,17 @@ func (s *Server) handleClientBriefing(c *gin.Context) {
 	allTasks := s.orch.ListTasks()
 	allEntries := s.time.List(timekeeping.TimeFilter{})
 
+	// A failed synthesis is a 200 briefing marked degraded:true (record-
+	// derived statistics only, no legal analysis); a cancelled client aborts.
 	result, err := eng.briefing.Generate(client, allTasks, allEntries, briefing.GenerateOpts{
+		Ctx:             c.Request.Context(),
 		Knowledge:       enginesKnowledgeSearcher{store: s.knowledge},
 		TaskID:          c.Query("taskId"),
 		BriefingDate:    c.Query("briefingDate"),
 		IndustryContext: c.Query("industryContext"),
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		writeModelError(c, err, "The briefing could not be generated.")
 		return
 	}
 	c.JSON(http.StatusOK, result)

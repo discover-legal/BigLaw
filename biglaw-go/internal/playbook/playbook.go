@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -562,18 +563,11 @@ If insufficient data: standardPosition: "Insufficient precedent data — apply f
 	// position. A playbook missing a position (or carrying an empty one) is
 	// never saved: later redlines/precedents would treat the gap as the
 	// firm's position. Entries the model invented for unrequested types are
-	// dropped; matching uses the same normalization as Resolve.
-	byType := make(map[string]map[string]interface{}, len(parsed))
-	for _, p := range parsed {
-		key := NormalizeClauseType(strVal(p["clauseType"]))
-		if _, dup := byType[key]; !dup {
-			byType[key] = p
-		}
-	}
+	// dropped.
+	matched := matchEntries(clauseTypes, parsed)
 	var missing []string
-	for _, ct := range clauseTypes {
-		p, ok := byType[NormalizeClauseType(ct)]
-		if !ok || strings.TrimSpace(strVal(p["standardPosition"])) == "" {
+	for i, ct := range clauseTypes {
+		if matched[i] == nil || strings.TrimSpace(strVal(matched[i]["standardPosition"])) == "" {
 			missing = append(missing, ct)
 		}
 	}
@@ -584,8 +578,8 @@ If insufficient data: standardPosition: "Insufficient precedent data — apply f
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	entries := make([]types.PlaybookEntry, 0, len(clauseTypes))
-	for _, ct := range clauseTypes {
-		p := byType[NormalizeClauseType(ct)]
+	for i, ct := range clauseTypes {
+		p := matched[i]
 		e := types.PlaybookEntry{
 			ClauseType:          ct,
 			PracticeArea:        opts.PracticeArea,
@@ -600,6 +594,58 @@ If insufficient data: standardPosition: "Insufficient precedent data — apply f
 		entries = append(entries, e)
 	}
 	return entries, nil
+}
+
+// clauseEchoPrefix is the list numbering the prompt uses ("1. ", "2) "),
+// which models often echo back into clauseType.
+var clauseEchoPrefix = regexp.MustCompile(`^\s*\d+\s*[.):-]\s*`)
+
+// clauseKey normalises a clause type as the model may echo it: list numbering
+// stripped and a trailing "clause"/"provision" ignored, so "1. Limitation of
+// Liability Clause" matches "Limitation of Liability".
+func clauseKey(s string) string {
+	k := NormalizeClauseType(clauseEchoPrefix.ReplaceAllString(s, ""))
+	for _, suf := range []string{"_clauses", "_clause", "_provisions", "_provision"} {
+		k = strings.TrimSuffix(k, suf)
+	}
+	return k
+}
+
+// matchEntries pairs each requested clause type with the model's entry for
+// it: by clauseKey first; then, when the model returned exactly one entry
+// per requested type (the prompt lists them in order), the types left
+// unmatched take the entries no type claimed by name, in order.
+func matchEntries(clauseTypes []string, parsed []map[string]interface{}) []map[string]interface{} {
+	byKey := make(map[string]int, len(parsed))
+	for i, p := range parsed {
+		if k := clauseKey(strVal(p["clauseType"])); k != "" {
+			if _, dup := byKey[k]; !dup {
+				byKey[k] = i
+			}
+		}
+	}
+	out := make([]map[string]interface{}, len(clauseTypes))
+	claimed := make(map[int]bool, len(parsed))
+	for i, ct := range clauseTypes {
+		if j, ok := byKey[clauseKey(ct)]; ok && !claimed[j] {
+			out[i] = parsed[j]
+			claimed[j] = true
+		}
+	}
+	if len(parsed) == len(clauseTypes) {
+		next := 0
+		for i := range clauseTypes {
+			if out[i] != nil {
+				continue
+			}
+			for claimed[next] {
+				next++
+			}
+			out[i] = parsed[next]
+			claimed[next] = true
+		}
+	}
+	return out
 }
 
 // ─── Clause type catalogue ────────────────────────────────────────────────────

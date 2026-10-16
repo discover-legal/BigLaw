@@ -109,18 +109,13 @@ func TestGenerateHappyPath(t *testing.T) {
 	}
 }
 
-func TestGenerateFallsBackWhenModelFails(t *testing.T) {
+// A failed narrative is a model failure, never a fact-only report that would
+// read as a normal status report in the corpus, channel post and portfolio.
+func TestGenerateModelFailureIsError(t *testing.T) {
 	g := NewGenerator(&fakeProvider{err: errors.New("model down")}, "m")
 	rep, err := g.Generate(sampleInput(), GenOpts{Verify: true})
-	if err != nil {
-		t.Fatalf("Generate should degrade, not error: %v", err)
-	}
-	if rep.BLUF == "" {
-		t.Error("fallback BLUF should be populated when the model is unavailable")
-	}
-	// Deltas are still computed deterministically without the model.
-	if rep.Deltas.NewTasks != 1 {
-		t.Errorf("deltas should survive model failure, got NewTasks=%d", rep.Deltas.NewTasks)
+	if rep != nil || !errors.Is(err, providers.ErrModelUnavailable) {
+		t.Fatalf("want (nil, ErrModelUnavailable), got (%+v, %v)", rep, err)
 	}
 }
 

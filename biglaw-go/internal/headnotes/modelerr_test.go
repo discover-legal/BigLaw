@@ -100,3 +100,16 @@ func TestHeadnotesListFieldsNeverNull(t *testing.T) {
 		t.Fatalf("report JSON contains null: %s", b)
 	}
 }
+
+// relatedPrinciples / practiceAreas answered as JSON arrays (a common model
+// habit despite the prompt) are accepted, not a 502 that discards keyHolding.
+func TestHeadnotesMetaArraysAccepted(t *testing.T) {
+	arrMeta := `{"keyHolding":"K","relatedPrinciples":["P1","P2"],"practiceAreas":["Contract"]}`
+	rep, err := New(&scripted{replies: []interface{}{oneHeadnote, arrMeta}}, "mid", "light").Generate(opinion, GenerateOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.KeyHolding != "K" || len(rep.RelatedPrinciples) != 2 || rep.RelatedPrinciples[1] != "P2" || len(rep.PracticeAreas) != 1 {
+		t.Fatalf("unexpected %+v", rep)
+	}
+}

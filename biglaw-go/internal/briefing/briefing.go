@@ -10,6 +10,7 @@
 package briefing
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -122,6 +123,10 @@ func New(provider providers.Provider, sonnetModel string) *Engine {
 
 // GenerateOpts are optional parameters for a briefing run.
 type GenerateOpts struct {
+	// Ctx, when set, bounds the synthesis call: a cancelled caller (client
+	// disconnected) aborts the upstream request and Generate returns
+	// ctx.Err() instead of a degraded briefing.
+	Ctx             context.Context
 	Knowledge       KnowledgeSearcher
 	TaskID          string
 	BriefingDate    string
@@ -189,7 +194,10 @@ func (e *Engine) Generate(client *types.Client, allTasks []*types.Task, timeEntr
 	billing := e.buildBillingSnapshot(timeEntries, client.ClientNumber, matters)
 	openItems := e.collectOpenItems(cb, matters)
 
-	execSummary, document, degraded := e.synthesise(client, cb, matters, billing, openItems, opts)
+	execSummary, document, degradedReason := e.synthesise(client, cb, matters, billing, openItems, opts)
+	if opts.Ctx != nil && opts.Ctx.Err() != nil {
+		return nil, opts.Ctx.Err()
+	}
 
 	return &types.ClientBriefing{
 		ID:                uuid.New().String(),
@@ -199,7 +207,8 @@ func (e *Engine) Generate(client *types.Client, allTasks []*types.Task, timeEntr
 		GeneratedAt:       time.Now().UTC().Format(time.RFC3339),
 		BriefingDate:      briefingDate,
 		ExecutiveSummary:  execSummary,
-		Degraded:          degraded,
+		Degraded:          degradedReason != "",
+		DegradedReason:    degradedReason,
 		Matters:           matters,
 		Billing:           billing,
 		OpenItems:         openItems,
@@ -644,6 +653,7 @@ Return JSON: {"executiveSummary":"...","document":"..."}`,
 
 	start := time.Now()
 	resp, err := e.provider.Chat(providers.ChatParams{
+		Ctx:       opts.Ctx,
 		Model:     e.sonnet,
 		MaxTokens: 2000,
 		Messages:  []providers.Message{{Role: "user", Content: prompt}},

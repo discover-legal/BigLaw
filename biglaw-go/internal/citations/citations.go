@@ -8,10 +8,12 @@
 package citations
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -86,76 +88,77 @@ func New(provider providers.Provider, haikuModel string) *Engine {
 	return &Engine{provider: provider, haiku: haikuModel}
 }
 
-// Check verifies a citation and returns a CitationCheckResult.
-func (e *Engine) Check(query, taskID string) types.CitationCheckResult {
-	checkedAt := time.Now().UTC().Format(time.RFC3339)
+var opinionPathRe = regexp.MustCompile(`/opinion/(\d+)/`)
 
-	hit, err := clSearch(query)
-	if err != nil {
-		// The lookup itself failed: that is "not checked", never "not found".
-		slog.Warn("CitationEngine: CourtListener search failed", "error", err)
+// Check verifies a citation.
+//
+// A CourtListener failure (search, cluster or citing-opinions lookup) is an
+// explicit UNKNOWN result ("not checked") — the treatment evidence the signal
+// rests on is missing, so it must never read as "no negative treatment". A
+// model failure (call failed, timed out, unusable output) is an error carrying
+// a providers sentinel, answered as a typed HTTP error like every other
+// model-backed engine; nothing is presented as a treatment verdict.
+func (e *Engine) Check(ctx context.Context, query, taskID string) (types.CitationCheckResult, error) {
+	checkedAt := time.Now().UTC().Format(time.RFC3339)
+	notReached := func(what string, err error) types.CitationCheckResult {
+		slog.Warn("CitationEngine: CourtListener lookup failed", "lookup", what, "error", err)
 		return unknownResult(query, checkedAt,
-			"CourtListener could not be reached, so this citation has NOT been checked. Verify it manually or try again later.")
+			"CourtListener could not be reached ("+what+" lookup failed), so this citation has NOT been checked. Verify it manually or try again later.")
+	}
+
+	hit, err := clSearch(ctx, query)
+	if err != nil {
+		return notReached("search", err), ctxErr(ctx)
 	}
 	if hit == nil {
 		return unknownResult(query, checkedAt,
-			"CourtListener could not locate this citation. It may be very recent, not yet indexed, or the citation format is unrecognised.")
+			"CourtListener could not locate this citation. It may be very recent, not yet indexed, or the citation format is unrecognised."), nil
 	}
 
 	clusterID := 0
 	if hit.ClusterID != nil {
 		clusterID = *hit.ClusterID
-	} else if m := regexp.MustCompile(`/opinion/(\d+)/`).FindStringSubmatch(hit.AbsoluteURL); len(m) > 1 {
+	} else if m := opinionPathRe.FindStringSubmatch(hit.AbsoluteURL); len(m) > 1 {
 		fmt.Sscanf(m[1], "%d", &clusterID)
 	}
+	if clusterID <= 0 {
+		// Without a cluster id there is no citing-opinions history to judge.
+		return unknownResult(query, checkedAt,
+			"CourtListener matched this citation but did not identify the opinion, so its treatment has NOT been checked. Verify it manually."), nil
+	}
 
-	cluster := clGetCluster(clusterID)
-	caseName := hit.CaseName
+	cluster, err := clGetCluster(ctx, clusterID)
+	if err != nil {
+		return notReached("opinion", err), ctxErr(ctx)
+	}
+	citing, err := clGetCiting(ctx, clusterID, 20)
+	if err != nil {
+		return notReached("citing-opinions", err), ctxErr(ctx)
+	}
+
+	caseName := cluster.CaseName
+	if caseName == "" {
+		caseName = hit.CaseName
+	}
 	citation := query
-	year := 0
-	court := hit.Court
-	clURL := ""
-	if cluster != nil {
-		caseName = cluster.CaseName
-		if len(cluster.Citation) > 0 {
-			citation = cluster.Citation[0]
-		}
-		yearStr := ""
-		if len(cluster.DateFiled) >= 4 {
-			yearStr = cluster.DateFiled[:4]
-		}
-		fmt.Sscanf(yearStr, "%d", &year)
-		court = cluster.Court
-		if clusterID > 0 {
-			clURL = fmt.Sprintf("%s/opinion/%d/", clBase, clusterID)
-		}
+	if len(cluster.Citation) > 0 {
+		citation = cluster.Citation[0]
 	} else if len(hit.Citation) > 0 {
 		citation = hit.Citation[0]
 	}
-
-	citing := clGetCiting(clusterID, 20)
-	citingCount := 0
-	var citingResults []struct {
-		CaseName  string
-		Citation  []string
-		DateFiled string
-		Court     string
+	year := 0
+	if len(cluster.DateFiled) >= 4 {
+		fmt.Sscanf(cluster.DateFiled[:4], "%d", &year)
 	}
-	if citing != nil {
-		citingCount = citing.Count
-		for _, r := range citing.Results {
-			citingResults = append(citingResults, struct {
-				CaseName  string
-				Citation  []string
-				DateFiled string
-				Court     string
-			}{r.CaseName, r.Citation, r.DateFiled, r.Court})
-		}
+	court := cluster.Court
+	if court == "" {
+		court = hit.Court
 	}
+	clURL := fmt.Sprintf("%s/opinion/%d/", clBase, clusterID)
 
 	// Build snippet of citing cases for AI synthesis
 	var snippetLines []string
-	for i, c := range citingResults {
+	for i, c := range citing.Results {
 		if i >= 5 {
 			break
 		}
@@ -197,22 +200,10 @@ Sample citing opinions (most recent):
 %s
 
 Based on this evidence, what is the citation signal?`,
-		caseName, citation, court, year, caseAge, citingCount, citingSnippet)
+		caseName, citation, court, year, caseAge, citing.Count, citingSnippet)
 
-	// Until the model's treatment analysis is parsed, the result is an
-	// explicit UNKNOWN — never a Caution/yellow signal, which is itself a
-	// treatment verdict a lawyer would rely on.
-	signal := types.CitationSignalUnknown
-	status := types.CitationStatusUnknown
-	signalLabel := "Unknown — AI treatment analysis unavailable; verify manually"
-	confidence := 0.0
-	reasoning := "No treatment analysis was produced, so this citation has NOT been checked. Verify its treatment manually."
-	var treatments []types.CitationTreatment
-	posCount := 0
-	negCount := 0
-
-	start := time.Now()
 	resp, err := e.provider.Chat(providers.ChatParams{
+		Ctx:         ctx,
 		Model:       e.haiku,
 		MaxTokens:   512,
 		System:      system,
@@ -220,92 +211,35 @@ Based on this evidence, what is the citation signal?`,
 		Messages:    []providers.Message{{Role: "user", Content: userMsg}},
 	})
 	if err != nil {
-		slog.Warn("CitationEngine AI synthesis failed", "error", err)
-		reasoning = "No treatment analysis was produced (" + providers.Describe(providers.ModelFailure("citation", err)) +
-			"), so this citation has NOT been checked. Verify its treatment manually."
-	} else {
-		durationMs := time.Since(start).Milliseconds()
-		cw := 0
-		cr := 0
-		if resp.Usage.CacheWriteTokens != nil {
-			cw = *resp.Usage.CacheWriteTokens
-		}
-		if resp.Usage.CacheReadTokens != nil {
-			cr = *resp.Usage.CacheReadTokens
-		}
-		costUSD := cost.CalcCostUSD(e.haiku, resp.Usage.InputTokens, resp.Usage.OutputTokens, cw, cr)
-		cost.Default.Record(cost.RecordRequest{
-			Model: e.haiku, Provider: "anthropic",
-			InputTokens: resp.Usage.InputTokens, OutputTokens: resp.Usage.OutputTokens,
-			CacheWriteTokens: resp.Usage.CacheWriteTokens, CacheReadTokens: resp.Usage.CacheReadTokens,
-			CostUSD: costUSD, DurationMs: durationMs,
-			Context: cost.CostContext("citation_check"), TaskID: taskID,
-		})
+		return types.CitationCheckResult{}, providers.ModelFailure("citation treatment analysis", err)
+	}
+	cw := 0
+	cr := 0
+	if resp.Usage.CacheWriteTokens != nil {
+		cw = *resp.Usage.CacheWriteTokens
+	}
+	if resp.Usage.CacheReadTokens != nil {
+		cr = *resp.Usage.CacheReadTokens
+	}
+	cost.Default.Record(cost.RecordRequest{
+		Model: e.haiku, Provider: "anthropic",
+		InputTokens: resp.Usage.InputTokens, OutputTokens: resp.Usage.OutputTokens,
+		CacheWriteTokens: resp.Usage.CacheWriteTokens, CacheReadTokens: resp.Usage.CacheReadTokens,
+		CostUSD:    cost.CalcCostUSD(e.haiku, resp.Usage.InputTokens, resp.Usage.OutputTokens, cw, cr),
+		DurationMs: resp.DurationMs,
+		Context:    cost.CostContext("citation_check"), TaskID: taskID,
+	})
 
-		// Extract text
-		raw := ""
-		for _, blk := range resp.Content {
-			if blk.Type == providers.BlockText {
-				raw = blk.Text
-				break
-			}
+	raw := ""
+	for _, blk := range resp.Content {
+		if blk.Type == providers.BlockText {
+			raw = blk.Text
+			break
 		}
-		s := strings.Index(raw, "{")
-		eIdx := strings.LastIndex(raw, "}")
-		if s >= 0 && eIdx > s {
-			var parsed map[string]interface{}
-			if json.Unmarshal([]byte(raw[s:eIdx+1]), &parsed) == nil {
-				// Only a recognised signal replaces UNKNOWN; anything else
-				// leaves the citation explicitly unchecked.
-				if v, ok := parsed["signal"].(string); ok && validSignal(v) {
-					signal = types.CitationSignal(v)
-					if sv, ok := parsed["status"].(string); ok && sv != "" {
-						status = types.CitationStatus(sv)
-					} else {
-						status = types.CitationStatus("unclear")
-					}
-				}
-				if v, ok := parsed["signalLabel"].(string); ok && signal != types.CitationSignalUnknown {
-					signalLabel = v
-				}
-				if v, ok := parsed["confidence"].(float64); ok && signal != types.CitationSignalUnknown {
-					if v < 0 {
-						v = 0
-					}
-					if v > 1 {
-						v = 1
-					}
-					confidence = v
-				}
-				if v, ok := parsed["reasoning"].(string); ok && signal != types.CitationSignalUnknown {
-					reasoning = v
-				}
-				if v, ok := parsed["negativeTreatmentCount"].(float64); ok {
-					negCount = int(v)
-				}
-				if v, ok := parsed["positiveTreatmentCount"].(float64); ok {
-					posCount = int(v)
-				}
-				if arr, ok := parsed["topNegativeTreatments"].([]interface{}); ok {
-					for i, item := range arr {
-						if i >= 3 {
-							break
-						}
-						if m, ok := item.(map[string]interface{}); ok {
-							t := types.CitationTreatment{
-								CaseName:      strVal(m["caseName"]),
-								TreatmentType: strVal(m["treatmentType"]),
-							}
-							if y, ok := m["year"].(float64); ok {
-								yr := int(y)
-								t.Year = &yr
-							}
-							treatments = append(treatments, t)
-						}
-					}
-				}
-			}
-		}
+	}
+	a, err := parseAnalysis(raw)
+	if err != nil {
+		return types.CitationCheckResult{}, providers.ModelFailure("citation treatment analysis", err)
 	}
 
 	clusterIDStr := ""
@@ -324,26 +258,96 @@ Based on this evidence, what is the citation signal?`,
 		CaseName:               caseName,
 		Court:                  court,
 		Year:                   yearPtr,
-		Status:                 status,
-		Signal:                 signal,
-		SignalLabel:            signalLabel,
-		Confidence:             confidence,
-		PositiveTreatmentCount: posCount,
-		NegativeTreatmentCount: negCount,
-		TopNegativeTreatments:  treatments,
-		Reasoning:              reasoning,
+		Status:                 a.Status,
+		Signal:                 a.Signal,
+		SignalLabel:            a.SignalLabel,
+		Confidence:             a.Confidence,
+		PositiveTreatmentCount: a.Positive,
+		NegativeTreatmentCount: a.Negative,
+		TopNegativeTreatments:  a.Treatments,
+		Reasoning:              a.Reasoning,
 		CourtListenerURL:       clURL,
 		CheckedAt:              checkedAt,
 		CheckedBy:              "big-michael",
-	}
+	}, nil
 }
 
-func validSignal(v string) bool {
-	switch types.CitationSignal(v) {
-	case types.CitationSignalGreen, types.CitationSignalYellow, types.CitationSignalRed, types.CitationSignalBlue:
-		return true
+// ctxErr returns the caller's cancellation, if any, so an aborted request is
+// reported as cancelled rather than answered with a "not checked" result.
+func ctxErr(ctx context.Context) error {
+	if ctx != nil {
+		return ctx.Err()
 	}
-	return false
+	return nil
+}
+
+// analysis is the model's treatment verdict after validation.
+type analysis struct {
+	Signal             types.CitationSignal
+	Status             types.CitationStatus
+	SignalLabel        string
+	Confidence         float64
+	Positive, Negative int
+	Treatments         []types.CitationTreatment
+	Reasoning          string
+}
+
+// parseAnalysis decodes the model's JSON leniently (case-insensitive signal
+// and status, fenced or prefixed output) but requires a recognised signal:
+// anything else is unusable output, never a guessed verdict.
+func parseAnalysis(raw string) (analysis, error) {
+	s := strings.Index(raw, "{")
+	eIdx := strings.LastIndex(raw, "}")
+	if s < 0 || eIdx <= s {
+		return analysis{}, fmt.Errorf("no JSON object in model output")
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(raw[s:eIdx+1]), &parsed); err != nil {
+		return analysis{}, fmt.Errorf("unparseable model output: %w", err)
+	}
+	sig := types.CitationSignal(strings.ToLower(strings.TrimSpace(strVal(parsed["signal"]))))
+	switch sig {
+	case types.CitationSignalGreen, types.CitationSignalYellow, types.CitationSignalRed, types.CitationSignalBlue:
+	default:
+		return analysis{}, fmt.Errorf("unrecognised citation signal %q", strVal(parsed["signal"]))
+	}
+	a := analysis{
+		Signal:      sig,
+		Status:      types.CitationStatus(strings.ToLower(strings.TrimSpace(strVal(parsed["status"])))),
+		SignalLabel: strVal(parsed["signalLabel"]),
+		Reasoning:   strVal(parsed["reasoning"]),
+		Treatments:  []types.CitationTreatment{},
+	}
+	if a.Status == "" {
+		a.Status = types.CitationStatus("unclear")
+	}
+	if v, ok := parsed["confidence"].(float64); ok {
+		a.Confidence = math.Max(0, math.Min(1, v))
+	}
+	if v, ok := parsed["negativeTreatmentCount"].(float64); ok && v > 0 {
+		a.Negative = int(v)
+	}
+	if v, ok := parsed["positiveTreatmentCount"].(float64); ok && v > 0 {
+		a.Positive = int(v)
+	}
+	arr, _ := parsed["topNegativeTreatments"].([]any)
+	for _, item := range arr {
+		if len(a.Treatments) >= 3 {
+			break
+		}
+		if m, ok := item.(map[string]any); ok {
+			t := types.CitationTreatment{
+				CaseName:      strVal(m["caseName"]),
+				TreatmentType: strVal(m["treatmentType"]),
+			}
+			if y, ok := m["year"].(float64); ok {
+				yr := int(y)
+				t.Year = &yr
+			}
+			a.Treatments = append(a.Treatments, t)
+		}
+	}
+	return a, nil
 }
 
 // ─── CourtListener helpers ────────────────────────────────────────────────────
@@ -356,9 +360,12 @@ func clHeaders() map[string]string {
 	return h
 }
 
-func clGet(urlStr string) ([]byte, error) {
+func clGet(ctx context.Context, urlStr string) ([]byte, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	client := &http.Client{Timeout: clTimeout}
-	req, err := http.NewRequest("GET", urlStr, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -378,10 +385,10 @@ func clGet(urlStr string) ([]byte, error) {
 
 // clSearch returns (nil, nil) when CourtListener answered with no match and
 // an error when the lookup itself failed.
-func clSearch(query string) (*clSearchHit, error) {
+func clSearch(ctx context.Context, query string) (*clSearchHit, error) {
 	u := fmt.Sprintf("%s/api/rest/v4/search/?q=%s&type=o&order_by=score+desc&format=json",
 		clBase, url.QueryEscape(query))
-	data, err := clGet(u)
+	data, err := clGet(ctx, u)
 	if err != nil {
 		return nil, err
 	}
@@ -395,37 +402,30 @@ func clSearch(query string) (*clSearchHit, error) {
 	return &r.Results[0], nil
 }
 
-func clGetCluster(id int) *clCluster {
-	if id <= 0 {
-		return nil
-	}
-	u := fmt.Sprintf("%s/api/rest/v4/clusters/%d/?format=json", clBase, id)
-	data, err := clGet(u)
+func clGetCluster(ctx context.Context, id int) (*clCluster, error) {
+	data, err := clGet(ctx, fmt.Sprintf("%s/api/rest/v4/clusters/%d/?format=json", clBase, id))
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	var c clCluster
 	if err := json.Unmarshal(data, &c); err != nil {
-		return nil
+		return nil, fmt.Errorf("CourtListener cluster response unparseable: %w", err)
 	}
-	return &c
+	return &c, nil
 }
 
-func clGetCiting(id, limit int) *clCitingResult {
-	if id <= 0 {
-		return nil
-	}
+func clGetCiting(ctx context.Context, id, limit int) (*clCitingResult, error) {
 	u := fmt.Sprintf("%s/api/rest/v4/search/?type=o&cited_gt=%d&order_by=-dateFiled&format=json&page_size=%d",
 		clBase, id, limit)
-	data, err := clGet(u)
+	data, err := clGet(ctx, u)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	var r clCitingResult
 	if err := json.Unmarshal(data, &r); err != nil {
-		return nil
+		return nil, fmt.Errorf("CourtListener citing-opinions response unparseable: %w", err)
 	}
-	return &r
+	return &r, nil
 }
 
 func unknownResult(query, checkedAt, reasoning string) types.CitationCheckResult {

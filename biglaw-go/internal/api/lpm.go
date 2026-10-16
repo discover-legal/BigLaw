@@ -45,7 +45,7 @@ func (s *Server) AttachLPM(svc *lpm.Service) {
 			ClientNumber: body.ClientNumber,
 		}, body.Date)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			writeModelError(c, err, "The status report could not be generated.")
 			return
 		}
 		c.JSON(http.StatusOK, rep)
@@ -55,7 +55,7 @@ func (s *Server) AttachLPM(svc *lpm.Service) {
 	g.GET("/reports", func(c *gin.Context) {
 		reports, err := svc.Corpus().Query(c.Query("matter"), c.Query("from"), c.Query("to"))
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			writeModelError(c, err, "The report corpus could not be read.")
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"reports": reports, "count": len(reports)})
@@ -77,7 +77,7 @@ func (s *Server) AttachLPM(svc *lpm.Service) {
 			MatterNumber: body.MatterNumber, To: body.To, Subject: body.Subject, Body: body.Body,
 		}, actorID(c))
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			writeModelError(c, err, "The draft could not be processed.")
 			return
 		}
 		c.JSON(http.StatusOK, out)
@@ -111,7 +111,7 @@ func (s *Server) AttachLPM(svc *lpm.Service) {
 	g.POST("/portfolio/generate", func(c *gin.Context) {
 		br, err := svc.GeneratePortfolio(svc.ActiveMatters(), c.Query("date"))
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			writeModelError(c, err, "The portfolio briefing could not be generated.")
 			return
 		}
 		c.JSON(http.StatusOK, br)
@@ -126,7 +126,7 @@ func (s *Server) AttachLPM(svc *lpm.Service) {
 		}
 		b, err := lpm.RenderDOCX(rep)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			writeModelError(c, err, "The report could not be rendered.")
 			return
 		}
 		c.Header("Content-Disposition", "attachment; filename=\"status-"+safeFilename(rep.MatterNumber)+"-"+rep.Date+".docx\"")

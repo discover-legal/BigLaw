@@ -252,9 +252,15 @@ Opinion excerpt:
 	if s < 0 || eIdx <= s {
 		return nil, providers.ModelFailure("headnote key-holding synthesis", errors.New("unparseable model output: no JSON object"))
 	}
-	var parsed map[string]string
-	if err := json.Unmarshal([]byte(raw[s:eIdx+1]), &parsed); err != nil {
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(raw[s:eIdx+1]), &decoded); err != nil {
 		return nil, providers.ModelFailure("headnote key-holding synthesis", fmt.Errorf("unparseable model output: %w", err))
+	}
+	// Models often answer the list fields as JSON arrays despite the prompt;
+	// accept either shape rather than discard a valid keyHolding.
+	parsed := make(map[string]string, len(decoded))
+	for k, v := range decoded {
+		parsed[k] = lines(v)
 	}
 	if strings.TrimSpace(parsed["keyHolding"]) == "" {
 		return nil, providers.ModelFailure("headnote key-holding synthesis", errors.New("model output has no keyHolding"))
@@ -263,6 +269,26 @@ Opinion excerpt:
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+// lines renders a decoded JSON value as text: a string as-is, an array as one
+// element per line, a scalar via its default format, null as "".
+func lines(v any) string {
+	switch t := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return t
+	case []any:
+		parts := make([]string, 0, len(t))
+		for _, x := range t {
+			if s := strings.TrimSpace(lines(x)); s != "" {
+				parts = append(parts, s)
+			}
+		}
+		return strings.Join(parts, "\n")
+	}
+	return fmt.Sprint(v)
+}
 
 func recordCost(model string, resp *providers.ChatResponse, dms int64, taskID string) {
 	cw, cr := 0, 0

@@ -82,3 +82,27 @@ func TestPrecedentHappyPathAndAssembly(t *testing.T) {
 		t.Fatal("placeholder leaked into a real draft")
 	}
 }
+
+// draftingNotes as one string (a common model answer) is accepted, one note
+// per line; absent notes serialise as [].
+func TestPrecedentDraftingNotesShapes(t *testing.T) {
+	for name, tc := range map[string]struct {
+		notes string
+		want  []string
+	}{
+		"array":  {`,"draftingNotes":["a","b"]`, []string{"a", "b"}},
+		"string": {`,"draftingNotes":"- check names\n- confirm term"`, []string{"check names", "confirm term"}},
+		"absent": {``, []string{}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			draft := `{"clauses":[{"heading":"Parties","draftText":"Between A and B."}],"document":"D"` + tc.notes + `}`
+			doc, err := New(&scripted{replies: []interface{}{`["Parties"]`, draft}}, "heavy", "light").Generate("nda", nil, store(t), GenerateOpts{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if doc.DraftingNotes == nil || strings.Join(doc.DraftingNotes, "|") != strings.Join(tc.want, "|") {
+				t.Fatalf("notes = %#v, want %#v", doc.DraftingNotes, tc.want)
+			}
+		})
+	}
+}

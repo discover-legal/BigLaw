@@ -104,6 +104,27 @@ func TestChatTimeoutIsErrModelTimeout(t *testing.T) {
 	}
 }
 
+// Headers arrive but the body stalls past the client timeout: still a
+// timeout (504), not an upstream failure (502).
+func TestChatStalledBodyIsErrModelTimeout(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"choices":[`))
+		w.(http.Flusher).Flush()
+		select {
+		case <-time.After(500 * time.Millisecond):
+		case <-r.Context().Done():
+		}
+	}))
+	defer srv.Close()
+	p := NewOpenAICompatProvider(srv.URL, "k")
+	p.client.Timeout = 150 * time.Millisecond
+	if err := chatOnce(p, nil); !errors.Is(err, ErrModelTimeout) {
+		t.Fatalf("want ErrModelTimeout, got %v", err)
+	}
+}
+
 // Cancelling the caller's context aborts the in-flight request promptly.
 func TestChatHonoursContextCancel(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

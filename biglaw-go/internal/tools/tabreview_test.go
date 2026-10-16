@@ -78,6 +78,9 @@ func newFakeModelServer(t *testing.T) *httptest.Server {
 			reply = `{"supported":true,"confidence":0.9}`
 		case strings.Contains(user, "termination"):
 			reply = `{"summary":"90-day convenience termination [[page:5||quote:either party may terminate on ninety days written notice]]","flag":"yellow","reasoning":"Notice period is longer than market standard."}`
+		case strings.Contains(user, "UPSTREAM500"):
+			http.Error(w, `{"error":"boom at http://10.9.8.7:8000/internal"}`, http.StatusBadRequest)
+			return
 		case strings.Contains(user, "GARBLED"):
 			reply = "I am sorry, I cannot produce structured output right now."
 		}
@@ -541,5 +544,31 @@ func TestTabularReviewConcurrencyCap(t *testing.T) {
 	}
 	if got := atomic.LoadInt64(&maxSeen); got > maxConcurrentCellCalls {
 		t.Errorf("max concurrent extraction calls = %d, want <= %d", got, maxConcurrentCellCalls)
+	}
+}
+
+// A failed model call stores only a safe description + ref in the cell (which
+// is persisted and exported to CSV/docx), never the raw upstream error.
+func TestTabularReviewModelFailureCellIsSafe(t *testing.T) {
+	srv := newFakeModelServer(t)
+	defer srv.Close()
+	reg := newTabularTestRegistry(t, srv.URL)
+	input := map[string]interface{}{
+		"documentIds": []interface{}{"doc-a"},
+		"columns": []interface{}{
+			map[string]interface{}{"name": "Broken", "prompt": "UPSTREAM500 request"},
+		},
+	}
+	out := runReview(t, reg, input, twoDocKnowledge())
+	rows, _ := out["rows"].([]ReviewRow)
+	if len(rows) != 1 || len(rows[0].Cells) != 1 {
+		t.Fatalf("want a 1x1 matrix, got %v", rows)
+	}
+	cell := rows[0].Cells[0]
+	if cell.Summary != "Extraction failed" || !strings.Contains(cell.Reasoning, "ref ") {
+		t.Fatalf("unexpected cell %+v", cell)
+	}
+	if strings.Contains(cell.Reasoning, "10.9.8.7") || strings.Contains(cell.Reasoning, "HTTP") {
+		t.Fatalf("raw upstream error leaked into the cell: %q", cell.Reasoning)
 	}
 }

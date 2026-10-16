@@ -114,7 +114,9 @@ func (r *Registry) respondToRedlineTool() *ToolImpl {
 			classifyModel := routing.SelectModel(r.cfg, routing.SelectParams{TaskType: routing.TaskExtraction})
 			prov, err := r.provReg.Get(judgeModel)
 			if err != nil {
-				return fail(err.Error()), nil
+				slog.Warn("respond_to_redline: no provider for judge model", "model", judgeModel, "error", err)
+				return fail("respond_to_redline aborted: " + providers.Describe(providers.ModelFailure("judge", err)) +
+					" — no response document was written"), nil
 			}
 			engine := negotiate.New(prov, routing.ResolveModelID(judgeModel), routing.ResolveModelID(classifyModel))
 			decisions, err := engine.Decide(revs, pbStore, negotiate.Opts{
