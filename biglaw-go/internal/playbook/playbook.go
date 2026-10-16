@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -23,6 +22,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/discover-legal/biglaw-go/internal/atomicfile"
 	"github.com/discover-legal/biglaw-go/internal/cost"
 	"github.com/discover-legal/biglaw-go/internal/providers"
 	"github.com/discover-legal/biglaw-go/internal/strutil"
@@ -349,17 +349,8 @@ func (s *Store) persist() {
 		slog.Warn("PlaybookStore persist marshal failed", "error", err)
 		return
 	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
-		slog.Warn("PlaybookStore persist mkdir failed", "error", err)
-		return
-	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		slog.Warn("PlaybookStore persist write failed", "error", err)
-		return
-	}
-	if err := os.Rename(tmp, s.path); err != nil {
-		slog.Warn("PlaybookStore persist rename failed", "error", err)
+	if err := atomicfile.WriteFile(s.path, data, 0o600); err != nil {
+		slog.Warn("PlaybookStore persist failed", "error", err)
 	}
 }
 

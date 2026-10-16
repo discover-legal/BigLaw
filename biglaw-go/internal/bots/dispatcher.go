@@ -8,14 +8,13 @@
 package bots
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"regexp"
 	"strings"
 
-	"github.com/google/uuid"
-
-	"github.com/discover-legal/biglaw-go/internal/providers"
 	"github.com/discover-legal/biglaw-go/internal/strutil"
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
@@ -349,16 +348,19 @@ func Dispatch(msg BotMessage, orch OrchestratorFacade) BotResponse {
 	}
 }
 
-// immediateResult formats a synchronous facade result for posting.
-// AsyncErrorText is what a channel sees when a command's async work failed:
-// a safe description plus a short ref, never err.Error() (which can carry
-// provider URLs or upstream bodies). The full error is logged under the ref.
-func AsyncErrorText(err error) string {
-	ref := uuid.NewString()[:8]
-	slog.Warn("bot async work failed", "ref", ref, "error", err)
-	return fmt.Sprintf("⚠️ That could not be completed: %s. No result was produced. (ref %s)", providers.Describe(err), ref)
+// asyncFailureMessage is what a channel sees when background work fails: a
+// fixed apology and a reference id. The full error — which can carry file
+// paths, upstream responses or matter details — goes only to the server log
+// under that id, never into a Slack/Teams channel.
+func asyncFailureMessage(platform BotPlatform, err error) string {
+	b := make([]byte, 6)
+	_, _ = rand.Read(b)
+	ref := hex.EncodeToString(b)
+	slog.Error("Big Michael async command failed", "platform", platform, "requestId", ref, "error", err)
+	return "Sorry — that request could not be completed. Ask an administrator to check the server log for reference `" + ref + "`."
 }
 
+// immediateResult formats a synchronous facade result for posting.
 func immediateResult(msg string, err error) string {
 	if err != nil {
 		return "Error: " + err.Error()

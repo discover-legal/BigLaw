@@ -465,6 +465,19 @@ type TimeEntry struct {
 	UTBMSActivityCode string          `json:"utbmsActivityCode,omitempty"`
 	OcgSuggestions    []OcgSuggestion `json:"ocgSuggestions,omitempty"`
 	OcgCheckedAt      string          `json:"ocgCheckedAt,omitempty"`
+	// NonBillable marks an entry that records elapsed time but must never be
+	// invoiced (e.g. a failed or interrupted AI run). Its BillingUnits and
+	// BillingAmountUsd are zero/nil, and LEDES, pre-bills and Clio sync skip it.
+	NonBillable       bool   `json:"nonBillable,omitempty"`
+	NonBillableReason string `json:"nonBillableReason,omitempty"`
+	// RequestedByProfileID is the lawyer who started the work when the
+	// timekeeper is not that lawyer (AI runs are billed to the AI timekeeper,
+	// AgentID). It drives the lawyer's visibility of the entry, not billing.
+	RequestedByProfileID string `json:"requestedByProfileId,omitempty"`
+	// PausedAt/PausedMs stop the clock while the work is not active (an AI
+	// run waiting at a human gate). DurationMs excludes PausedMs.
+	PausedAt *time.Time `json:"pausedAt,omitempty"`
+	PausedMs int64      `json:"pausedMs,omitempty"`
 }
 
 // ─── Lawyer profiles ──────────────────────────────────────────────────────────
@@ -1227,6 +1240,15 @@ type ComputedDeadline struct {
 	DayType     DayType `json:"dayType"`
 	Cite        string  `json:"cite"`
 	Note        string  `json:"note,omitempty"`
+	// Direction is "before" for a period counted backward from the trigger
+	// (negative days: "at least N days before the hearing").
+	Direction string `json:"direction,omitempty"`
+	// UnadjustedDate is the raw end of the period before any roll-forward
+	// (e.g. FRCP 6(a)(1)(C)); set only when it differs from DueDate.
+	UnadjustedDate string `json:"unadjustedDate,omitempty"`
+	// Adjustments explains every day the due/warning date was moved past
+	// (weekend, holiday) and the rule that moved it.
+	Adjustments []string `json:"adjustments,omitempty"`
 }
 
 type DeadlineResult struct {
@@ -1235,5 +1257,9 @@ type DeadlineResult struct {
 	TriggerEvent     string             `json:"triggerEvent"`
 	TriggerDate      string             `json:"triggerDate"`
 	ComputedAt       string             `json:"computedAt"`
+	HolidayCalendar  HolidayCalendar    `json:"holidayCalendar,omitempty"`
 	Deadlines        []ComputedDeadline `json:"deadlines"`
+	// Limitations lists what the computation does NOT model (e.g. state
+	// legal holidays under FRCP 6(a)(6)(C)); always surfaced to the user.
+	Limitations []string `json:"limitations,omitempty"`
 }

@@ -139,6 +139,11 @@ func (s *Server) handleOAuthCallback(p auth.Provider) gin.HandlerFunc {
 				s.oauthFail(c, p, "profile provisioning failed: "+err.Error())
 				return
 			}
+			audit.Default.Write(audit.WriteRequest{
+				Event:   "profile.created",
+				ActorID: profile.ID,
+				Data:    map[string]interface{}{"profileId": profile.ID, "role": string(profile.Role), "via": "oauth_auto_provision", "provider": string(p)},
+			})
 		}
 
 		sessionUser := types.SessionUser{

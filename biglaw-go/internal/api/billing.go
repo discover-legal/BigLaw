@@ -13,8 +13,10 @@ import (
 	"log/slog"
 	"mime/multipart"
 	"net/http"
+	"os"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -128,7 +130,7 @@ func (s *Server) handleCreatePreBill(c *gin.Context) {
 	})
 	closed := entries[:0]
 	for _, e := range entries {
-		if e.EndedAt != nil {
+		if e.EndedAt != nil && !e.NonBillable {
 			closed = append(closed, e)
 		}
 	}
@@ -204,6 +206,24 @@ func (s *Server) handlePatchPreBill(c *gin.Context) {
 	if body.Notes != nil {
 		if updated := billingPreBills.SetNotes(id, *body.Notes); updated != nil {
 			bill = updated
+		}
+	}
+	if to := billing.PreBillStatus(body.Status); s.time != nil && (to == billing.PreBillApproved || to == billing.PreBillInvoiced) {
+		// A bill drafted before an entry was written off still lists it at
+		// its old amount; it must be regenerated, never approved as is.
+		var writtenOff []string
+		for _, pe := range bill.Entries {
+			if e := s.time.GetByID(pe.EntryID); e != nil && e.NonBillable {
+				writtenOff = append(writtenOff, pe.EntryID)
+			}
+		}
+		if len(writtenOff) > 0 {
+			c.JSON(http.StatusConflict, gin.H{
+				"error": fmt.Sprintf("pre-bill lists %d written-off (non-billable) time entr%s; regenerate the pre-bill before it is %s",
+					len(writtenOff), map[bool]string{true: "y", false: "ies"}[len(writtenOff) == 1], to),
+				"nonBillableEntryIds": writtenOff,
+			})
+			return
 		}
 	}
 	if body.Status != "" {
@@ -418,31 +438,66 @@ func (s *Server) handleExportTimeLedes(c *gin.Context) {
 	})
 	closed := entries[:0]
 	for _, e := range entries {
-		if e.EndedAt != nil {
+		if e.EndedAt != nil && !e.NonBillable {
 			closed = append(closed, e)
 		}
 	}
 
-	invoice := c.Query("invoiceNumber")
+	loc, ok := billing.FirmLocation()
+	if !ok {
+		slog.Warn("LEDES export: FIRM_TIMEZONE is not a valid IANA zone; using UTC", "value", os.Getenv("FIRM_TIMEZONE"))
+	}
+	invoice := strings.TrimSpace(c.Query("invoiceNumber"))
 	if invoice == "" {
+		// Default: "<ref>-YYYYMMDD", the reference shortened so the number
+		// fits 1998B's 20-character INVOICE_NUMBER with room for the "-N"
+		// per-invoice suffix of a multi-matter file.
 		ref := matterNumber
 		if ref == "" {
 			ref = clientNumber
 		}
-		invoice = ref + "-" + time.Now().UTC().Format("2006-01-02")
+		ref = billingFilenameRe.ReplaceAllString(ref, "")
+		if len(ref) > 8 {
+			ref = ref[:8]
+		}
+		invoice = ref + "-" + time.Now().In(loc).Format("20060102")
+	} else if len(invoice) > billing.MaxInvoiceNumberLen {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invoiceNumber is %d characters; LEDES 1998B allows at most %d", len(invoice), billing.MaxInvoiceNumberLen)})
+		return
 	}
 
-	ledes := billing.ExportLedes1998B(closed, invoice)
+	opts := billing.LedesOptions{
+		InvoiceNumber: invoice,
+		// Firm tax / e-billing ID for LAW_FIRM_ID; blank when unset.
+		LawFirmID: os.Getenv("LEDES_LAW_FIRM_ID"),
+	}
+	if s.profiles != nil {
+		opts.Profile = s.profiles.Get
+	}
+	opts.Location = loc
+	ledes, skipped := billing.ExportLedes1998BReport(closed, opts)
+	if len(skipped) > 0 {
+		// Never bill a guessed figure or an unaddressed invoice: inconsistent
+		// legacy rows and client-less work are left off and surfaced.
+		slog.Warn("LEDES export: entries skipped (no client number, or stored amount disagrees with units x rate)", "count", len(skipped), "entries", skipped)
+		c.Header("X-Ledes-Skipped-Entries", strconv.Itoa(len(skipped)))
+		audit.Default.Write(audit.WriteRequest{
+			Event:   "time.ledes_export_skipped",
+			ActorID: getUser(c).ProfileID,
+			Data:    map[string]interface{}{"invoiceNumber": invoice, "skipped": skipped},
+		})
+	}
 	safe := billingFilenameRe.ReplaceAllString(invoice, "_")
 	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", safe+".ledes"))
-	c.Data(http.StatusOK, "application/edi-x12", []byte(ledes))
+	// LEDES 1998B is plain ASCII text; it is not an X12 EDI document.
+	c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(ledes))
 }
 
 // ─── OCG suggestions (read side) ──────────────────────────────────────────────
 
 // handleTimeSuggestions lists entries that carry at least one pending OCG
-// suggestion. Lawyers are locked to their own entries; partners may filter
-// by any profileId.
+// suggestion. Lawyers see their own entries and AI entries on work they
+// requested; partners may filter by any profileId.
 func (s *Server) handleTimeSuggestions(c *gin.Context) {
 	u := getUser(c)
 	filter := timekeeping.TimeFilter{
@@ -452,7 +507,9 @@ func (s *Server) handleTimeSuggestions(c *gin.Context) {
 	if auth.IsPartner(u) {
 		filter.ProfileID = c.Query("profileId")
 	} else {
-		filter.ProfileID = u.ProfileID
+		// Own time plus AI time on work this lawyer requested — the same
+		// visibility the OCG decision handler grants.
+		filter.VisibleToProfileID = u.ProfileID
 	}
 
 	entries := s.time.List(filter)
@@ -600,7 +657,7 @@ func (s *Server) handleOcgSuggestionDecision(c *gin.Context, outcome string) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Time entry not found"})
 		return
 	}
-	if !auth.IsPartner(u) && (u == nil || u.ProfileID != entry.ProfileID) {
+	if !auth.IsPartner(u) && (u == nil || (u.ProfileID != entry.ProfileID && u.ProfileID != entry.RequestedByProfileID)) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
 		return
 	}
