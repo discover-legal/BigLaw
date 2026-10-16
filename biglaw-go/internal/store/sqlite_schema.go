@@ -148,9 +148,14 @@ func migrateSQLite(db *sql.DB) error {
 		`ALTER TABLE reviews ADD COLUMN matter_number TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE document_versions ADD COLUMN owner_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE document_versions ADD COLUMN matter_number TEXT NOT NULL DEFAULT ''`,
+		// intake columns added after the table first shipped (databases
+		// created by earlier intake builds lack them).
+		`ALTER TABLE intake_submissions ADD COLUMN practice_area TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE intake_submissions ADD COLUMN noslegal_json TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE intake_submissions ADD COLUMN held_json TEXT NOT NULL DEFAULT ''`,
 	} {
 		if _, err := db.Exec(stmt); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
-			return fmt.Errorf("artifact ownership columns: %w", err)
+			return fmt.Errorf("column migration %q: %w", stmt, err)
 		}
 	}
 	if _, err := db.Exec(`

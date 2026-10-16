@@ -240,6 +240,10 @@ CREATE TABLE IF NOT EXISTS intake_submissions (
 	noslegal_json JSONB NOT NULL DEFAULT '{}'::jsonb,
 	held_json     JSONB NOT NULL DEFAULT '{}'::jsonb
 );
+-- columns added after the table first shipped
+ALTER TABLE intake_submissions ADD COLUMN IF NOT EXISTS practice_area TEXT NOT NULL DEFAULT '';
+ALTER TABLE intake_submissions ADD COLUMN IF NOT EXISTS noslegal_json JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE intake_submissions ADD COLUMN IF NOT EXISTS held_json JSONB NOT NULL DEFAULT '{}'::jsonb;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_intake_profile_external
 	ON intake_submissions(profile_id, external_id) WHERE external_id <> '';
 CREATE INDEX IF NOT EXISTS idx_intake_profile ON intake_submissions(profile_id);
