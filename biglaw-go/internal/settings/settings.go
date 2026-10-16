@@ -145,13 +145,30 @@ type Patch struct {
 //     and restarting takes effect, even after an unrelated Save;
 //   - setting a field back to its environment value removes it from the file.
 //
-// Files written by older versions (full snapshots) still load; their values
-// that match the environment are dropped on the next save.
+// Files are versioned ("v": fileVersion). Files written by older versions
+// carry no marker and hold a full snapshot of every field — including the
+// built-in defaults of fields the admin never touched, which would otherwise
+// mask the environment forever. On load such a file drops every value equal
+// to its built-in default (config.Defaults, no environment applied): those
+// can't be told apart from untouched fields, and the environment or the same
+// default applies in their place. Everything else is kept, and the next save
+// rewrites the file in the current sparse, versioned form.
 type SettingsStore struct {
 	mu       sync.Mutex
 	cfg      *config.Config
 	path     string
 	baseline Patch // env/default values, captured before any overlay
+	defaults Patch // built-in values, no environment applied
+}
+
+// fileVersion marks the sparse overlay format. Unmarked files are legacy
+// full snapshots.
+const fileVersion = 2
+
+// settingsFile is the on-disk shape: the overlay Patch plus its version.
+type settingsFile struct {
+	V int `json:"v"`
+	Patch
 }
 
 // NewSettingsStore creates a SettingsStore that overlays cfg and persists to
@@ -159,7 +176,7 @@ type SettingsStore struct {
 // the values it sees are the environment baseline. Call Init to load any
 // previously persisted settings.
 func NewSettingsStore(cfg *config.Config, path string) *SettingsStore {
-	return &SettingsStore{cfg: cfg, path: path, baseline: snapshot(cfg)}
+	return &SettingsStore{cfg: cfg, path: path, baseline: snapshot(cfg), defaults: snapshot(config.Defaults())}
 }
 
 // Init loads persisted overrides (if any) and applies them onto the config.
@@ -172,9 +189,13 @@ func (s *SettingsStore) Init() error {
 		}
 		return err
 	}
-	var p Patch
-	if err := json.Unmarshal(data, &p); err != nil {
+	var f settingsFile
+	if err := json.Unmarshal(data, &f); err != nil {
 		return fmt.Errorf("settings file %s: %w", s.path, err)
+	}
+	p := f.Patch
+	if f.V == 0 { // legacy full snapshot: built-in defaults weren't admin edits
+		p = diffPatch(p, s.defaults)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -196,7 +217,7 @@ func (s *SettingsStore) Get() PublicSettings {
 func (s *SettingsStore) Update(p Patch) (PublicSettings, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	p = s.dropUnchangedURL(p)
+	p = s.resolveURL(p)
 	if err := s.validate(p); err != nil {
 		return PublicSettings{}, err
 	}
@@ -238,33 +259,42 @@ func (s *SettingsStore) public() PublicSettings {
 	}
 }
 
-// dropUnchangedURL removes a DocuSeal URL from the patch when it equals the
-// current effective value. The settings form always round-trips every field,
-// so without this the operator-supplied default (DOCUSEAL_URL, which is
-// http://localhost:3000 out of the box) was re-validated as if an admin had
-// typed it, rejected as private, and no setting could ever be saved.
-//
-// SSRF protection is unchanged for anything a request can introduce: a URL
-// that differs from the current one is still required to be public. Values
-// that came from the environment or an earlier validated save are trusted
-// exactly as they already were at load time. Gating on "only when enabled"
-// instead would let a private URL be stored while disabled and then armed by
-// flipping the toggle, so the comparison is against the value, not the flag.
-func (s *SettingsStore) dropUnchangedURL(p Patch) Patch {
-	if p.DocuSeal == nil || p.DocuSeal.URL == nil ||
-		strings.TrimSpace(*p.DocuSeal.URL) != s.cfg.DocuSeal.URL {
+// resolveURL normalises a DocuSeal URL in the patch: surrounding whitespace
+// is trimmed, and "" means "back to the operator's DOCUSEAL_URL".
+func (s *SettingsStore) resolveURL(p Patch) Patch {
+	if p.DocuSeal == nil || p.DocuSeal.URL == nil {
 		return p
 	}
+	u := strings.TrimSpace(*p.DocuSeal.URL)
+	if u == "" {
+		u = s.cfg.DocuSeal.OperatorURL
+	}
 	ds := *p.DocuSeal // copy: never mutate the caller's patch
-	ds.URL = nil
+	ds.URL = &u
 	p.DocuSeal = &ds
 	return p
+}
+
+// trustedURL reports whether u may be set without the public-URL check: the
+// operator's own DOCUSEAL_URL (which may name an internal host, e.g. a
+// DocuSeal container — the tools client trusts exactly that string) or the
+// value already in effect. The settings form round-trips every field, so
+// without this the out-of-the-box http://localhost:3000 was rejected as
+// private on every save, and once an admin had changed the URL the operator's
+// value could never be restored.
+//
+// SSRF protection is unchanged for anything a request can introduce: any
+// other URL must be public. Gating on "only when enabled" instead would let a
+// private URL be stored while disabled and then armed by flipping the toggle,
+// so the check is on the value, not the flag.
+func (s *SettingsStore) trustedURL(u string) bool {
+	return u == s.cfg.DocuSeal.OperatorURL || u == s.cfg.DocuSeal.URL
 }
 
 // validate rejects values that must fail the whole update (currently only
 // the DocuSeal URL — clamps handle out-of-range numerics silently, as TS does).
 func (s *SettingsStore) validate(p Patch) error {
-	if p.DocuSeal != nil && p.DocuSeal.URL != nil {
+	if p.DocuSeal != nil && p.DocuSeal.URL != nil && !s.trustedURL(*p.DocuSeal.URL) {
 		if _, err := assertPublicHTTPURL(*p.DocuSeal.URL, "DocuSeal URL"); err != nil {
 			return err
 		}
@@ -312,12 +342,10 @@ func (s *SettingsStore) apply(p Patch, validateURL bool) {
 			c.DocuSeal.Enabled = *v
 		}
 		if v := p.DocuSeal.URL; v != nil {
-			if validateURL {
-				if u, err := assertPublicHTTPURL(*v, "DocuSeal URL"); err == nil {
-					c.DocuSeal.URL = u
-				}
-			} else {
-				c.DocuSeal.URL = strings.TrimSpace(*v)
+			if u := strings.TrimSpace(*v); !validateURL || s.trustedURL(u) {
+				c.DocuSeal.URL = u
+			} else if u, err := assertPublicHTTPURL(u, "DocuSeal URL"); err == nil {
+				c.DocuSeal.URL = u
 			}
 		}
 		if v := p.DocuSeal.APIKey; v != nil {
@@ -372,7 +400,7 @@ func (s *SettingsStore) apply(p Patch, validateURL bool) {
 // baseline — to disk atomically: marshal to path+".tmp" then rename over path.
 func (s *SettingsStore) persist() error {
 	overlay := diffPatch(snapshot(s.cfg), s.baseline)
-	data, err := json.MarshalIndent(overlay, "", "  ")
+	data, err := json.MarshalIndent(settingsFile{V: fileVersion, Patch: overlay}, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -430,7 +458,7 @@ func ptr[T any](v T) *T { return &v }
 
 // diffPatch returns cur with every field equal to base cleared (nil), and
 // every section left with no fields cleared to nil, so the result holds only
-// what differs. Both arguments are full snapshots.
+// what differs. base is a full snapshot; cur may be partial.
 func diffPatch(cur, base Patch) Patch {
 	cv := reflect.ValueOf(&cur).Elem()
 	bv := reflect.ValueOf(base)
@@ -445,6 +473,9 @@ func diffPatch(cur, base Patch) Patch {
 		kept := 0
 		for j := range cs.Elem().NumField() {
 			cf, bf := cs.Elem().Field(j), bs.Elem().Field(j)
+			if cf.IsNil() {
+				continue
+			}
 			if reflect.DeepEqual(cf.Interface(), bf.Interface()) {
 				cf.Set(reflect.Zero(cf.Type()))
 			} else {

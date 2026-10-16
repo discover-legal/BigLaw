@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -123,6 +124,7 @@ func newStore(t *testing.T, path string, mutate func(*config.Config)) (*Settings
 	if mutate != nil {
 		mutate(cfg) // simulates the environment at this boot
 	}
+	cfg.DocuSeal.OperatorURL = cfg.DocuSeal.URL // as config.Load sets it
 	st := NewSettingsStore(cfg, path)
 	if err := st.Init(); err != nil {
 		t.Fatal(err)
@@ -141,8 +143,13 @@ func TestPersistOnlyAdminChangedFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, _ := os.ReadFile(path)
+	var file settingsFile
+	if err := json.Unmarshal(raw, &file); err != nil || file.V != fileVersion {
+		t.Fatalf("file not versioned: %v %s", err, raw)
+	}
 	var onDisk map[string]map[string]any
-	if err := json.Unmarshal(raw, &onDisk); err != nil {
+	trimmed, _ := json.Marshal(file.Patch) // the overlay without the version
+	if err := json.Unmarshal(trimmed, &onDisk); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := onDisk["docuseal"]; ok {
@@ -187,25 +194,88 @@ func TestRevertToEnvValueDropsOverride(t *testing.T) {
 	}
 }
 
-// Files from older versions held a full snapshot; they still load, and the
-// next save keeps only the values that differ from the environment.
+// v1.0.0 wrote a full snapshot of every field, unversioned. Values equal to
+// the built-in defaults can't be admin edits and must not mask the
+// environment; real edits survive; the next save writes the versioned
+// sparse form.
 func TestLegacyFullSnapshotFileMigrates(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
-	legacy := `{"presentation":{"mode":"","firmName":""},"dytopo":{"maxRounds":5},
-		"docuseal":{"enabled":false,"url":"http://localhost:3000","apiKey":""},"models":{"figureModel":"","available":["a","b"]}}`
-	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+	d := config.Defaults()
+	legacy, _ := json.Marshal(map[string]any{
+		"presentation": map[string]any{"mode": "lawyer", "firmName": ""},
+		"dytopo":       map[string]any{"maxRounds": 5, "maxAgentsPerRound": d.DyTopo.MaxAgentsPerRound, "similarityThreshold": d.DyTopo.SimilarityThreshold},
+		"debate": map[string]any{"verificationPasses": d.Debate.VerificationPasses, "gateConfidenceThreshold": d.Debate.GateConfidenceThreshold,
+			"adversarialEnabled": d.Debate.AdversarialEnabled, "citationRequired": d.Debate.CitationRequired},
+		"docuseal":    map[string]any{"enabled": false, "url": "http://localhost:3000", "apiKey": ""},
+		"clientVoice": map[string]any{"gateNotes": true, "matterNotifications": true},
+		"models":      map[string]any{"figureModel": "", "available": d.Models.Available},
+	})
+	if err := os.WriteFile(path, legacy, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	st, cfg := newStore(t, path, nil)
+	// This boot's environment: FIRM_NAME, DOCUSEAL_API_KEY (which enables
+	// DocuSeal), DOCUSEAL_URL, a lower gate threshold and notifications off.
+	st, cfg := newStore(t, path, func(c *config.Config) {
+		c.Presentation.FirmName = "Env LLP"
+		c.DocuSeal.APIKey, c.DocuSeal.Enabled = "sekrit", true
+		c.DocuSeal.URL = "http://docuseal:3000"
+		c.Debate.GateConfidenceThreshold = 0.6
+		c.ClientVoice.MatterNotifications = false
+	})
 	if cfg.DyTopo.MaxRounds != 5 {
-		t.Fatalf("legacy file not applied: %d", cfg.DyTopo.MaxRounds)
+		t.Fatalf("legacy admin edit lost: %d", cfg.DyTopo.MaxRounds)
 	}
-	if _, err := st.Update(patchFrom(t, `{"presentation":{"firmName":"Acme LLP"}}`)); err != nil {
+	if cfg.Presentation.FirmName != "Env LLP" || cfg.DocuSeal.APIKey != "sekrit" || !cfg.DocuSeal.Enabled ||
+		cfg.DocuSeal.URL != "http://docuseal:3000" || cfg.Debate.GateConfidenceThreshold != 0.6 ||
+		cfg.ClientVoice.MatterNotifications {
+		t.Fatalf("legacy defaults masked the environment: %+v %+v %+v %+v", cfg.Presentation, cfg.DocuSeal, cfg.Debate, cfg.ClientVoice)
+	}
+	if _, err := st.Update(patchFrom(t, `{"drafting":{"rounds":3}}`)); err != nil {
 		t.Fatal(err)
 	}
+	var onDisk map[string]any
 	raw, _ := os.ReadFile(path)
-	if strings.Contains(string(raw), "docuseal") || !strings.Contains(string(raw), `"maxRounds": 5`) ||
-		!strings.Contains(string(raw), "Acme LLP") {
+	if err := json.Unmarshal(raw, &onDisk); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{"v": 2.0, "dytopo": map[string]any{"maxRounds": 5.0}, "drafting": map[string]any{"rounds": 3.0}}
+	if !reflect.DeepEqual(onDisk, want) {
 		t.Errorf("migrated file = %s", raw)
+	}
+}
+
+// A current (versioned) file is applied as-is, even where a value equals the
+// built-in default: there it is a deliberate admin choice.
+func TestVersionedFileKeepsDefaultValuedEdits(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(`{"v":2,"presentation":{"firmName":""}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, cfg := newStore(t, path, func(c *config.Config) { c.Presentation.FirmName = "Env LLP" })
+	if cfg.Presentation.FirmName != "" {
+		t.Fatalf("versioned admin edit dropped: %q", cfg.Presentation.FirmName)
+	}
+}
+
+// After an admin points DocuSeal elsewhere, the operator's internal
+// DOCUSEAL_URL can be restored — typed back in, or by clearing the field.
+func TestOperatorDocuSealURLCanBeRestored(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	st, cfg := newStore(t, path, func(c *config.Config) { c.DocuSeal.URL = "http://docuseal:3000" })
+	for _, restore := range []string{`"http://docuseal:3000"`, `""`, `"  "`} {
+		if _, err := st.Update(patchFrom(t, `{"docuseal":{"url":"https://sign.example.com"}}`)); err != nil {
+			t.Fatal(err)
+		}
+		got, err := st.Update(patchFrom(t, `{"docuseal":{"url":`+restore+`}}`))
+		if err != nil || got.DocuSeal.URL != "http://docuseal:3000" {
+			t.Fatalf("restore %s: %v %q", restore, err, got.DocuSeal.URL)
+		}
+	}
+	if raw, _ := os.ReadFile(path); strings.Contains(string(raw), "docuseal") {
+		t.Errorf("restored operator URL persisted as an override: %s", raw)
+	}
+	// Other private URLs are still rejected.
+	if _, err := st.Update(patchFrom(t, `{"docuseal":{"url":"http://docuseal:3001"}}`)); err == nil || cfg.DocuSeal.URL != "http://docuseal:3000" {
+		t.Fatalf("private URL accepted: %v %q", err, cfg.DocuSeal.URL)
 	}
 }
