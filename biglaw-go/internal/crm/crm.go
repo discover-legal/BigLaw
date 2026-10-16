@@ -178,21 +178,21 @@ func (s *Service) Load() error {
 func (s *Service) EnsureProfile(ctx context.Context, externalRef, email, name string) (*store.CRMProfile, error) {
 	externalRef = strings.TrimSpace(externalRef)
 	if externalRef == "" {
-		return nil, fmt.Errorf("crm: externalRef is required")
+		return nil, fmt.Errorf("%w: externalRef is required", ErrInvalid)
 	}
+	name = strutil.Truncate(strings.TrimSpace(name), 200)
+	email = strutil.Truncate(strings.TrimSpace(email), 320)
 	if p, ok, err := s.repo.FindCRMProfileByExternalRef(ctx, externalRef); err != nil {
 		return nil, err
 	} else if ok {
-		return p, nil
+		return s.upgradeName(ctx, p, name), nil
 	}
 
-	name = strutil.Truncate(strings.TrimSpace(name), 200)
-	email = strutil.Truncate(strings.TrimSpace(email), 320)
 	if name == "" {
 		name = email
 	}
 	if name == "" {
-		return nil, fmt.Errorf("crm: name or email required to create a profile")
+		return nil, fmt.Errorf("%w: name or email required to create a profile", ErrInvalid)
 	}
 
 	p := store.CRMProfile{
@@ -204,6 +204,12 @@ func (s *Service) EnsureProfile(ctx context.Context, externalRef, email, name st
 		UpdatedAt:   time.Now(),
 	}
 	if err := s.repo.PutCRMProfile(ctx, p); err != nil {
+		// Idempotent under concurrency: a simultaneous first contact from the
+		// same identity (a double-click) lost the unique-index race — return
+		// the row that won.
+		if existing, ok, ferr := s.repo.FindCRMProfileByExternalRef(ctx, externalRef); ferr == nil && ok {
+			return existing, nil
+		}
 		return nil, err
 	}
 	audit.Default.Write(audit.WriteRequest{
@@ -212,6 +218,30 @@ func (s *Service) EnsureProfile(ctx context.Context, externalRef, email, name st
 		Data:    map[string]interface{}{"profileId": p.ID, "prospect": true},
 	})
 	return &p, nil
+}
+
+// upgradeName replaces a profile name that is only an email address (the
+// portal falls back to the email when the account has no display name) with
+// a real name the identity supplies later, so conflict checks and the
+// roster see the person's name. A real name is never overwritten.
+func (s *Service) upgradeName(ctx context.Context, p *store.CRMProfile, name string) *store.CRMProfile {
+	if name == "" || LooksLikeEmail(name) || !LooksLikeEmail(p.Name) {
+		return p
+	}
+	up := *p
+	up.Name = name
+	up.UpdatedAt = time.Now()
+	if err := s.repo.PutCRMProfile(ctx, up); err != nil {
+		return p
+	}
+	return &up
+}
+
+// LooksLikeEmail reports whether a "name" is really an email address (or
+// empty) — i.e. useless for a conflict check by name.
+func LooksLikeEmail(name string) bool {
+	name = strings.TrimSpace(name)
+	return name == "" || (strings.Contains(name, "@") && !strings.Contains(name, " "))
 }
 
 // LinkClient attaches a profile to its roster client (prospect → client).
@@ -302,10 +332,10 @@ func (s *Service) Propose(ctx context.Context, profileID string, actor Actor, so
 	if _, ok, err := s.repo.GetCRMProfile(ctx, profileID); err != nil {
 		return nil, err
 	} else if !ok {
-		return nil, fmt.Errorf("crm: profile %s not found", profileID)
+		return nil, fmt.Errorf("%w: profile %s", ErrNotFound, profileID)
 	}
 	if len(inputs) == 0 {
-		return nil, fmt.Errorf("crm: facts are required")
+		return nil, fmt.Errorf("%w: facts are required", ErrInvalid)
 	}
 	if len(inputs) > maxFactsPerCall {
 		inputs = inputs[:maxFactsPerCall]
@@ -343,7 +373,7 @@ func (s *Service) Propose(ctx context.Context, profileID string, actor Actor, so
 		out = append(out, f)
 	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("crm: no valid facts in proposal")
+		return nil, fmt.Errorf("%w: no valid facts in proposal", ErrInvalid)
 	}
 	audit.Default.Write(audit.WriteRequest{
 		Event:   "crm.facts_proposed",
@@ -486,7 +516,7 @@ func (s *Service) PendingQueue(ctx context.Context, approverRole string) ([]stor
 func (s *Service) Query(ctx context.Context, profileID, query string, topK int) ([]ScoredFact, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
-		return nil, fmt.Errorf("crm: query is required")
+		return nil, fmt.Errorf("%w: query is required", ErrInvalid)
 	}
 	if topK <= 0 || topK > 50 {
 		topK = 10
@@ -630,6 +660,7 @@ var (
 	ErrNotFound   = fmt.Errorf("crm: not found")
 	ErrNotPending = fmt.Errorf("crm: not pending")
 	ErrForbidden  = fmt.Errorf("crm: forbidden")
+	ErrInvalid    = fmt.Errorf("crm: invalid request")
 )
 
 func coerceCategory(c string) string {
@@ -654,14 +685,6 @@ func factText(f store.CRMFact) string {
 	return strings.Join(parts, ": ")
 }
 
-func normalizeName(s string) string {
-	s = strings.ToLower(strings.TrimSpace(s))
-	for _, cut := range []string{",", "."} {
-		s = strings.ReplaceAll(s, cut, "")
-	}
-	return strings.Join(strings.Fields(s), " ")
-}
-
 // lexicalScore is the no-embeddings fallback: fraction of query terms present.
 func lexicalScore(query, text string) float64 {
 	terms := strings.Fields(strings.ToLower(query))
@@ -676,4 +699,22 @@ func lexicalScore(query, text string) float64 {
 		}
 	}
 	return float64(hits) / float64(len(terms))
+}
+
+// FlagConflict marks a profile as having an unacknowledged conflict hit
+// (e.g. a client proposed an adverse party who is an existing client).
+func (s *Service) FlagConflict(ctx context.Context, profileID string) error {
+	p, ok, err := s.repo.GetCRMProfile(ctx, profileID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return ErrNotFound
+	}
+	if p.ConflictFlag {
+		return nil
+	}
+	p.ConflictFlag = true
+	p.UpdatedAt = time.Now()
+	return s.repo.PutCRMProfile(ctx, *p)
 }

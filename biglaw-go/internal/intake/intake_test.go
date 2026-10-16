@@ -218,7 +218,7 @@ func TestConflictHoldWhenAdversePartyIsExistingClient(t *testing.T) {
 			if err := svc.TaskReady(sub); err == nil {
 				t.Fatal("agent work allowed on a held submission")
 			}
-			if _, err := svc.Update(sysCtx(), sub.ID, StatusInReview, "", "lawyer-1"); err == nil {
+			if _, err := svc.Update(sysCtx(), sub.ID, StatusInReview, "", Viewer{ProfileID: "lawyer-1"}); err == nil {
 				t.Fatal("status patch released a conflict hold")
 			}
 		})
@@ -414,7 +414,7 @@ func TestLawyerStateMachine(t *testing.T) {
 	ctx := sysCtx()
 	sub, _ := svc.Submit(ctx, baseRequest())
 
-	claimed, err := svc.Claim(ctx, sub.ID, "lawyer-1")
+	claimed, err := svc.Claim(ctx, sub.ID, Viewer{ProfileID: "lawyer-1"})
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -422,7 +422,7 @@ func TestLawyerStateMachine(t *testing.T) {
 		t.Fatalf("claim state wrong: %+v", claimed)
 	}
 
-	updated, err := svc.Update(ctx, sub.ID, StatusReady, "Reviewed; call to discuss.", "lawyer-1")
+	updated, err := svc.Update(ctx, sub.ID, StatusReady, "Reviewed; call to discuss.", Viewer{ProfileID: "lawyer-1"})
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
@@ -439,10 +439,10 @@ func TestLawyerStateMachine(t *testing.T) {
 		t.Fatalf("terminal status reset on re-submit: %q", resub.Status)
 	}
 
-	if _, err := svc.Update(ctx, sub.ID, "bogus", "", "lawyer-1"); err == nil {
+	if _, err := svc.Update(ctx, sub.ID, "bogus", "", Viewer{ProfileID: "lawyer-1"}); err == nil {
 		t.Fatal("invalid status accepted")
 	}
-	if _, err := svc.Claim(ctx, "nope", "lawyer-1"); err == nil {
+	if _, err := svc.Claim(ctx, "nope", Viewer{ProfileID: "lawyer-1"}); err == nil {
 		t.Fatal("claimed unknown submission")
 	}
 }
@@ -472,22 +472,22 @@ func TestQueueScoping(t *testing.T) {
 	req.ExternalID = "am-doc-43"
 	b, _ := svc.Submit(ctx, req)
 
-	if _, err := svc.Claim(ctx, a.ID, "lawyer-1"); err != nil {
+	if _, err := svc.Claim(ctx, a.ID, Viewer{ProfileID: "lawyer-1"}); err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
 
 	// Partner scope ("") sees both.
-	all, _ := svc.Queue(ctx, "")
+	all, _ := svc.Queue(ctx, Viewer{Partner: true})
 	if len(all) != 2 {
 		t.Fatalf("partner queue = %d, want 2", len(all))
 	}
 	// Another lawyer sees only the unassigned one.
-	mine, _ := svc.Queue(ctx, "lawyer-2")
+	mine, _ := svc.Queue(ctx, Viewer{ProfileID: "lawyer-2"})
 	if len(mine) != 1 || mine[0].ID != b.ID {
 		t.Fatalf("lawyer-2 queue wrong: %+v", mine)
 	}
 	// The assignee sees their own plus unassigned.
-	assignee, _ := svc.Queue(ctx, "lawyer-1")
+	assignee, _ := svc.Queue(ctx, Viewer{ProfileID: "lawyer-1"})
 	if len(assignee) != 2 {
 		t.Fatalf("assignee queue = %d, want 2", len(assignee))
 	}

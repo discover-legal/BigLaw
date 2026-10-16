@@ -39,6 +39,13 @@ All portal→BigLaw calls are HTTPS REST with JSON bodies, authenticated by
 | BigLaw | `INTAKE_HMAC_SECRET` (enables the intake module when set) |
 | affidavit-maker | `BIGLAW_INTAKE_SECRET` (+ `BIGLAW_API_URL`) |
 
+Every secret must be at least **32 characters** (BigLaw refuses to start
+otherwise; generate with `openssl rand -hex 32`). **Rotation:**
+`INTAKE_HMAC_SECRET` may be a comma-separated list — BigLaw accepts a
+signature made with any of them. Rotate by adding the new secret to BigLaw's
+list, switching the portal's `BIGLAW_INTAKE_SECRET` to it, then removing the
+old one.
+
 ### Signing scheme
 
 ```
@@ -65,13 +72,25 @@ Content-Type: application/json
 1. Reject if `|now − timestamp| > 300` seconds (replay window).
 2. Recompute the signature over the **raw** request body; compare
    constant-time (`hmac.Equal`).
-3. `/intake/*` routes are in the public-route set (they self-authenticate,
+3. **Replay:** a signature already accepted inside the window is refused for
+   every write except the idempotent `POST /intake/submissions` upsert (a
+   double-click re-sending the same signed request must still succeed);
+   `GET`s are harmless to repeat. The portal signs every request afresh, so
+   distinct requests never collide.
+4. `/intake/*` routes are in the public-route set (they self-authenticate,
    like the Slack/Teams webhooks); every other credential is refused there —
    session cookies and bearer tokens do **not** grant intake access, and the
    intake HMAC grants access to **nothing outside `/intake/*`**.
 
 Failures return `401 {"error": "..."}` without detail about which check
 failed.
+
+**Reverse proxies:** BigLaw verifies the path it receives. A proxy in front of
+BigLaw must forward the request path and query **unchanged** — stripping a
+prefix (e.g. the portal calls `https://firm.example/biglaw/intake/...` and
+the proxy forwards `/intake/...`) invalidates every signature. Mount BigLaw
+at the root of its host, or have the portal's `BIGLAW_API_URL` point at the
+path BigLaw itself sees.
 
 ---
 
@@ -82,9 +101,18 @@ system of record for the *client of the firm* (roster + CRM profile).
 
 - `client.externalId` — the portal's stable user id (Auth0 `sub`). BigLaw
   stores it as `CRMProfile.ExternalRef` and uses it to map every later call.
-- On first contact (submission or proposal) BigLaw finds the CRM profile by
+- On first contact (a submission) BigLaw finds the CRM profile by
   `externalRef`, or creates a **prospect** profile. A prospect is *not* on the
-  firm's client roster: it has no `clientId`/`clientNumber` yet.
+  firm's client roster: it has no `clientId`/`clientNumber` yet. Proposals
+  (§3.5) never create a profile.
+- **Conflict holds belong to the identity, not to one document.** Every name
+  the identity has ever supplied (`client.name` on each submission — an
+  email-only name is upgraded when a real name arrives) and every adverse
+  party it has ever named (all its submissions and `adverse_party` facts) is
+  checked on every submission. While any of its submissions is on
+  `conflict_hold`, or once a partner has **declined** one, every new
+  submission from it is held for a partner too (a declined identity is
+  re-held each time with a "previously declined" flag — never auto-admitted).
 - A new identity is **never** attached to an existing roster client by name or
   email (a name collision would otherwise hand a stranger that client's
   profile and matters).
@@ -130,21 +158,38 @@ externalRef: the portal can only ever act as the client it authenticated.
 **Behaviour** (in order):
 
 1. Find the CRM profile by `client.externalId`, or create a prospect (§2).
-2. **Conflict check, both directions, every hit:** the client's name against
-   every existing client's adverse parties, *and* every adverse party the
-   client named (`adverseParties` plus any `adverse_party` facts) against
-   every existing client — the main case being that the opposing party is
-   already the firm's client. A returning client is never checked against
-   itself.
-3. **On any hit → `conflict_hold`.** The draft is kept only inside the held
-   submission record. Nothing else happens: no knowledge-store ingest, no
-   roster client, no matter, no fact proposals, no agent work. The hold is
-   audited (`intake.conflict_hold`). Holds are **never auto-acknowledged** —
-   a re-submit that no longer names the conflicting party stays held. Only a
+2. **Conflict check, both directions, every hit, identity-wide (§2):** every
+   name the client has supplied against every existing client's adverse
+   parties, *and* every adverse party the client has named (`adverseParties`
+   plus any `adverse_party` facts, across all its submissions) against every
+   existing client — the main case being that the opposing party is already
+   the firm's client. A returning client is never checked against itself.
+   Names are matched leniently (accents, punctuation, apostrophes, hidden
+   characters, surname-first and middle initials are all normalised);
+   over-matching only means a lawyer looks. When the check is weak — the
+   identity never supplied a real name (only an email) or named no adverse
+   party — the firm-side record carries `conflictUnchecked`
+   (`name_is_email`, `no_adverse_parties`); the portal should send the
+   person's legal name and `adverseParties` (the opposing party / other
+   parent) to make it meaningful. Caps: ≤ 50 adverse parties per request,
+   ≤ 200 per identity, ≤ 20 names per identity (`400` beyond — never a silent
+   truncation of the check).
+3. **On any hit (or an open/declined hold on the identity) →
+   `conflict_hold`.** The draft is kept only inside the held submission
+   record. Nothing else happens: no knowledge-store ingest, no roster client,
+   no matter, no fact proposals, no agent work. The hold is audited
+   (`intake.conflict_hold`). Holds are **never auto-acknowledged** — a
+   re-submit that no longer names the conflicting party stays held. Only a
    partner clears a hold (§4, `POST /intake/submissions/:id/conflict`): an
    acknowledgement requires a reason (informed-consent waiver, ethical wall,
-   false positive …) and covers exactly the hits it was given for; a decline
-   rejects the submission and discards the held draft.
+   false positive …) and covers exactly the hold reasons it was given for;
+   the check is then **re-run against the roster as it is now**, and anything
+   new (e.g. the client's spouse became a client meanwhile) re-holds the
+   submission with the new detail (`409`) instead of landing it. A decline
+   rejects the submission, discards the held draft and marks the identity
+   (§2). Submissions, conflict decisions and proposals are serialised, so two
+   simultaneous submissions cannot both pass a check only one of them would
+   pass after the other landed.
 4. Otherwise (or once acknowledged) the submission **lands**: the prospect is
    admitted to the roster (the named adverse parties are recorded on it for
    future checks), a matter is opened, `content` is ingested into the
@@ -181,10 +226,13 @@ Re-posting the same `externalId` for the same client **updates** the existing
 submission (new content re-ingested, status reset to `received` unless it is
 `ready`/`rejected`) rather than duplicating it.
 
-### 3.2 `GET /intake/submissions/:id` — one submission
+### 3.2 `GET /intake/submissions/:id?clientExternalId=<externalId>` — one submission
 
+Scoped to the calling client: `clientExternalId` (URL-encoded) is
+**required** and, being in the query, is covered by the signature.
 `200 {"submission": {...}}` — same shape plus `"note"`, `"assignedToName"`,
-`"taskId"`, `"updatedAt"`. `404` if unknown.
+`"taskId"`, `"updatedAt"`. `400` without `clientExternalId`; `404` if unknown
+**or** if the submission belongs to any other client.
 
 ### 3.3 `GET /intake/clients/:externalId/submissions` — all of a client's submissions
 
@@ -238,7 +286,6 @@ unknown values as `in_review`):
 
 ```jsonc
 {
-  "client": { "email": "…", "name": "…" },       // used only if first contact
   "facts": [
     { "category": "contact", "predicate": "phone", "value": "+1 555 0100", "note": "" }
   ]
@@ -247,6 +294,14 @@ unknown values as `in_review`):
 
 `201 {"proposals": [fact, …]}` — each created `pending`, approver `lawyer`.
 Caps: ≤ 20 facts/call, value ≤ 2000 chars, note ≤ 2000 chars.
+
+Only an **admitted** client (on the roster) with **no submission on
+conflict hold** may propose; otherwise `409` (a prospect's information stays
+inside its held submission until a partner clears it). Proposals never
+create a profile; a legacy `client` block is accepted and ignored.
+`adverse_party` facts run through the identity-wide conflict check: a hit no
+partner has acknowledged flags the profile for the firm (audited
+`intake.conflict_flagged`) and holds the client's next submission.
 
 ### 3.6 `POST /intake/proposals/:id/decision` — client decides a lawyer proposal
 
@@ -265,16 +320,22 @@ Lawyers work the queue and the consent loop from these (used by the BigLaw
 workbench/MCP; listed here because they complete the state machine):
 
 ```
-GET    /intake/queue                      lawyer: own+unassigned · partner: all
-POST   /intake/submissions/:id/claim      assign to self
-PATCH  /intake/submissions/:id            { status, note } → drives §3.3 statuses
-                                          (cannot enter or leave conflict_hold)
+GET    /intake/queue                      lawyer: own + unassigned not on hold · partner: all
+POST   /intake/submissions/:id/claim      assign to self (lawyer: only unassigned and
+                                          not on hold; partner: any)
+PATCH  /intake/submissions/:id            [partner or assignee] { status, note } →
+                                          drives §3.3 statuses (cannot enter or
+                                          leave conflict_hold)
 POST   /intake/submissions/:id/conflict   [partner] { decision: acknowledge|decline,
                                           conflictReason } — the only way out of
-                                          conflict_hold (reason required to acknowledge)
-POST   /intake/submissions/:id/task       spin up an orchestrator review task
-                                          (409 while on conflict_hold)
-GET    /crm/profiles                      list profiles            [any lawyer]
+                                          conflict_hold (reason required to
+                                          acknowledge; 409 + the new detail if the
+                                          re-run check finds something new)
+POST   /intake/submissions/:id/task       [partner or assignee] spin up an
+                                          orchestrator review task (409 while on
+                                          conflict_hold)
+GET    /crm/profiles                      list profiles [any lawyer: admitted clients;
+                                          partner: also prospects]
 GET    /crm/profiles/:id                  profile + facts by status
 POST   /crm/profiles/:id/facts            lawyer proposes → approver=client
 POST   /crm/proposals/:id/decision        lawyer decides client proposals
@@ -282,6 +343,12 @@ POST   /crm/profiles/:id/query            { query, topK } semantic fact search
 GET    /crm/proposals?approver=lawyer     firm-wide pending queue
 GET    /modules                           module registry status
 ```
+
+**Screening (Rule 1.18):** a held submission and every conflict detail (who
+the conflict is with, the hits, acknowledgements) are visible only to
+partners and the submission's assignee; other lawyers see neither held
+submissions nor prospect CRM profiles (404), and get only `hasConflict` on
+the submissions they can see.
 
 ## 5. CRM fact semantics (the neurosymbolic profile)
 
@@ -311,6 +378,7 @@ GET    /modules                           module registry status
   the schema directory (`schemas/intake/v2/`). Additive optional fields stay v1.
 - Firm-side responses (§4) carry the full conflict record (every hit, who it
   is with, acknowledgement); portal responses carry only `hasConflict`.
-- Errors: `4xx/5xx` with `{"error": "message"}`. The portal must degrade
+- Errors: `4xx/5xx` with `{"error": "message"}`. `5xx` messages are generic
+  (`"internal error"`) — store/driver detail is logged, never returned. The portal must degrade
   gracefully: BigLaw being unreachable disables firm features for the request
   but never breaks self-rep functionality.

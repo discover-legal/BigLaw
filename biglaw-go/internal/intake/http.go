@@ -15,10 +15,12 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"math"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -45,23 +47,80 @@ type TaskSubmitter interface {
 
 // HTTPConfig configures the portal authentication.
 type HTTPConfig struct {
-	HMACSecret string // shared with the portal; empty = portal routes answer 503
-	MaxSkewSec int    // accepted timestamp skew; <= 0 → 300
+	// HMACSecret is shared with the portal; empty = portal routes answer
+	// 503. A comma-separated list accepts any of its secrets, so a secret
+	// can be rotated without both sides switching at once (add the new one,
+	// move the portal over, drop the old one).
+	HMACSecret string
+	MaxSkewSec int // accepted timestamp skew; <= 0 → 300
+}
+
+// ParseSecrets splits an INTAKE_HMAC_SECRET value into its secrets.
+func ParseSecrets(v string) []string {
+	var out []string
+	for _, s := range strings.Split(v, ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // HTTP is the intake module's route set (implements modules.HTTPModule).
 type HTTP struct {
-	svc    *Service
-	crm    *crm.Service
-	tasks  TaskSubmitter
-	cfg    HTTPConfig
-	roster Roster
+	svc     *Service
+	crm     *crm.Service
+	tasks   TaskSubmitter
+	cfg     HTTPConfig
+	secrets []string
+	roster  Roster
+	replay  *replayCache
 }
 
 // NewHTTP builds the intake HTTP module. tasks may be nil (the /task route
 // then answers 503).
 func NewHTTP(svc *Service, crmSvc *crm.Service, roster Roster, tasks TaskSubmitter, cfg HTTPConfig) *HTTP {
-	return &HTTP{svc: svc, crm: crmSvc, roster: roster, tasks: tasks, cfg: cfg}
+	if cfg.MaxSkewSec <= 0 {
+		cfg.MaxSkewSec = 300
+	}
+	return &HTTP{svc: svc, crm: crmSvc, roster: roster, tasks: tasks, cfg: cfg,
+		secrets: ParseSecrets(cfg.HMACSecret), replay: &replayCache{seen: map[string]time.Time{}}}
+}
+
+// replayCache remembers accepted signatures until they fall out of the skew
+// window, so a captured request cannot be replayed inside it. Signatures
+// cover method, path+query, timestamp and body, so a legitimate client's
+// distinct requests never collide.
+type replayCache struct {
+	mu   sync.Mutex
+	seen map[string]time.Time // signature → expiry
+}
+
+// fresh records sig and reports whether it was not seen before.
+func (r *replayCache) fresh(sig string, ttl time.Duration) bool {
+	now := time.Now()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if exp, ok := r.seen[sig]; ok && now.Before(exp) {
+		return false
+	}
+	if len(r.seen) >= 1024 {
+		for k, exp := range r.seen {
+			if now.After(exp) {
+				delete(r.seen, k)
+			}
+		}
+	}
+	r.seen[sig] = now.Add(ttl)
+	return true
+}
+
+// replayGuarded reports whether a portal route is protected against replay.
+// Reads are harmless to repeat, and the submission upsert is idempotent on
+// the portal's document id (a double-click resends the same signed request
+// and must still succeed); every other write is guarded.
+func replayGuarded(method, path string) bool {
+	return method != http.MethodGet && path != "/intake/submissions"
 }
 
 // ModuleName implements modules.HTTPModule.
@@ -101,8 +160,7 @@ func IsPortalRoute(method, path string) bool {
 // consumes and restores the request body. Writes the error response and
 // returns false on failure.
 func (h *HTTP) VerifyHMAC(c *gin.Context) bool {
-	secret := h.cfg.HMACSecret
-	if secret == "" || !modules.Default.Enabled(ModuleName) {
+	if len(h.secrets) == 0 || !modules.Default.Enabled(ModuleName) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "intake is not configured"})
 		return false
 	}
@@ -120,9 +178,6 @@ func (h *HTTP) VerifyHMAC(c *gin.Context) bool {
 		return fail()
 	}
 	skew := h.cfg.MaxSkewSec
-	if skew <= 0 {
-		skew = 300
-	}
 	if math.Abs(float64(time.Now().Unix()-ts)) > float64(skew) {
 		return fail()
 	}
@@ -132,7 +187,19 @@ func (h *HTTP) VerifyHMAC(c *gin.Context) bool {
 		return false
 	}
 	c.Request.Body = io.NopCloser(bytes.NewReader(body))
-	if !hmac.Equal([]byte(sigHeader), []byte(Sign(secret, c.Request.Method, c.Request.URL.RequestURI(), tsHeader, body))) {
+	// The signed path is the request URI as this server sees it: a reverse
+	// proxy in front of BigLaw must not rewrite or strip the path prefix.
+	valid := false
+	for _, secret := range h.secrets {
+		if hmac.Equal([]byte(sigHeader), []byte(Sign(secret, c.Request.Method, c.Request.URL.RequestURI(), tsHeader, body))) {
+			valid = true
+		}
+	}
+	if !valid {
+		return fail()
+	}
+	if replayGuarded(c.Request.Method, c.Request.URL.Path) &&
+		!h.replay.fresh(sigHeader, 2*time.Duration(skew)*time.Second) {
 		return fail()
 	}
 	return true
@@ -203,23 +270,22 @@ func (h *HTTP) Mount(r gin.IRouter, host modules.Host) {
 		}
 		sub, err := svc.Submit(store.WithSystem(c.Request.Context()), req)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			respondErr(c, err)
 			return
 		}
 		c.JSON(http.StatusCreated, gin.H{"submission": h.wire(host, *sub, false)})
 	})
 
+	// Scoped to the calling client: ?clientExternalId= is required (and,
+	// being in the query, covered by the signature); a submission belonging
+	// to anyone else is 404.
 	r.GET("/intake/submissions/:id", func(c *gin.Context) {
 		if !h.VerifyHMAC(c) {
 			return
 		}
-		sub, ok, err := svc.Get(store.WithSystem(c.Request.Context()), c.Param("id"))
+		sub, err := svc.GetForClient(store.WithSystem(c.Request.Context()), c.Param("id"), c.Query("clientExternalId"))
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		if !ok {
-			c.JSON(http.StatusNotFound, gin.H{"error": "submission not found"})
+			respondErr(c, err)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"submission": h.wire(host, *sub, false)})
@@ -231,7 +297,7 @@ func (h *HTTP) Mount(r gin.IRouter, host modules.Host) {
 		}
 		subs, err := svc.ListForClient(store.WithSystem(c.Request.Context()), c.Param("externalId"))
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			respondErr(c, err)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"submissions": h.wireList(host, subs, false)})
@@ -244,7 +310,7 @@ func (h *HTTP) Mount(r gin.IRouter, host modules.Host) {
 		ctx := store.WithSystem(c.Request.Context())
 		profile, ok, err := crmSvc.GetByExternalRef(ctx, c.Param("externalId"))
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			respondErr(c, err)
 			return
 		}
 		if !ok {
@@ -263,28 +329,19 @@ func (h *HTTP) Mount(r gin.IRouter, host modules.Host) {
 		if !h.VerifyHMAC(c) {
 			return
 		}
+		// Only an admitted client with no open conflict hold may propose
+		// (409 otherwise); the body's "client" block is accepted and ignored
+		// (tolerant reader) — proposals never create a profile.
 		var body struct {
-			Client struct {
-				Email string `json:"email"`
-				Name  string `json:"name"`
-			} `json:"client"`
 			Facts []crm.FactInput `json:"facts"`
 		}
 		if err := c.ShouldBindJSON(&body); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body: " + err.Error()})
 			return
 		}
-		ctx := store.WithSystem(c.Request.Context())
-		externalID := c.Param("externalId")
-		profile, err := crmSvc.EnsureProfile(ctx, externalID, body.Client.Email, body.Client.Name)
+		proposals, err := svc.ProposeFacts(store.WithSystem(c.Request.Context()), c.Param("externalId"), body.Facts)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-		proposals, err := crmSvc.Propose(ctx, profile.ID,
-			crm.Actor{Role: crm.RoleClient, ID: externalID}, "client", body.Facts)
-		if err != nil {
-			c.JSON(crm.ErrStatus(err), gin.H{"error": err.Error()})
+			respondErr(c, err)
 			return
 		}
 		c.JSON(http.StatusCreated, gin.H{"proposals": proposals})
@@ -310,7 +367,7 @@ func (h *HTTP) Mount(r gin.IRouter, host modules.Host) {
 		fact, err := crmSvc.Decide(store.WithSystem(c.Request.Context()), c.Param("id"),
 			crm.Actor{Role: crm.RoleClient, ID: body.ClientExternalID}, body.Decision == "approve", body.Note)
 		if err != nil {
-			c.JSON(crm.ErrStatus(err), gin.H{"error": err.Error()})
+			crm.RespondErr(c, err)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"fact": fact})
@@ -325,22 +382,30 @@ func (h *HTTP) Mount(r gin.IRouter, host modules.Host) {
 		}
 		return u
 	}
+	viewer := func(u *types.SessionUser) Viewer {
+		return Viewer{ProfileID: u.ProfileID, Partner: auth.IsPartner(u)}
+	}
+	// Conflict detail (who the conflict is with) goes only to partners and
+	// the assignee; everyone else gets the portal's {"hasConflict": bool}.
+	firmWire := func(u *types.SessionUser, sub store.IntakeSubmission) submissionWire {
+		return h.wire(host, sub, viewer(u).SeesDetail(sub))
+	}
 
 	r.GET("/intake/queue", func(c *gin.Context) {
 		u := requireUser(c)
 		if u == nil {
 			return
 		}
-		scope := u.ProfileID
-		if auth.IsPartner(u) {
-			scope = "" // partners see everything
-		}
-		subs, err := svc.Queue(host.Identity(c), scope)
+		subs, err := svc.Queue(host.Identity(c), viewer(u))
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			respondErr(c, err)
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"submissions": h.wireList(host, subs, true)})
+		out := make([]submissionWire, 0, len(subs))
+		for _, sub := range subs {
+			out = append(out, firmWire(u, sub))
+		}
+		c.JSON(http.StatusOK, gin.H{"submissions": out})
 	})
 
 	r.POST("/intake/submissions/:id/claim", func(c *gin.Context) {
@@ -348,12 +413,12 @@ func (h *HTTP) Mount(r gin.IRouter, host modules.Host) {
 		if u == nil {
 			return
 		}
-		sub, err := svc.Claim(host.Identity(c), c.Param("id"), u.ProfileID)
+		sub, err := svc.Claim(host.Identity(c), c.Param("id"), viewer(u))
 		if err != nil {
-			c.JSON(errStatus(err), gin.H{"error": err.Error()})
+			respondErr(c, err)
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"submission": h.wire(host, *sub, true)})
+		c.JSON(http.StatusOK, gin.H{"submission": firmWire(u, *sub)})
 	})
 
 	r.PATCH("/intake/submissions/:id", func(c *gin.Context) {
@@ -369,12 +434,12 @@ func (h *HTTP) Mount(r gin.IRouter, host modules.Host) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body: " + err.Error()})
 			return
 		}
-		sub, err := svc.Update(host.Identity(c), c.Param("id"), body.Status, body.Note, u.ProfileID)
+		sub, err := svc.Update(host.Identity(c), c.Param("id"), body.Status, body.Note, viewer(u))
 		if err != nil {
-			c.JSON(errStatus(err), gin.H{"error": err.Error()})
+			respondErr(c, err)
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"submission": h.wire(host, *sub, true)})
+		c.JSON(http.StatusOK, gin.H{"submission": firmWire(u, *sub)})
 	})
 
 	// Conflict-hold decision (partner only — mirrors the roster's
@@ -402,8 +467,13 @@ func (h *HTTP) Mount(r gin.IRouter, host modules.Host) {
 		}
 		sub, err := svc.ResolveConflict(host.Identity(c), c.Param("id"),
 			body.Decision == "acknowledge", body.ConflictReason, u.ProfileID)
+		if errors.Is(err, ErrReheld) {
+			// The re-run check found something new: the partner sees it.
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error(), "submission": h.wire(host, *sub, true)})
+			return
+		}
 		if err != nil {
-			c.JSON(errStatus(err), gin.H{"error": err.Error()})
+			respondErr(c, err)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"submission": h.wire(host, *sub, true)})
@@ -421,48 +491,42 @@ func (h *HTTP) Mount(r gin.IRouter, host modules.Host) {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "task submission unavailable"})
 			return
 		}
-		ctx := host.Identity(c)
-		sub, ok, err := svc.Get(ctx, c.Param("id"))
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		if !ok {
-			c.JSON(http.StatusNotFound, gin.H{"error": "submission not found"})
-			return
-		}
-		if err := svc.TaskReady(sub); err != nil {
-			c.JSON(errStatus(err), gin.H{"error": err.Error()})
-			return
-		}
 		var body struct {
 			Description  string `json:"description"`
 			WorkflowType string `json:"workflowType"`
 		}
 		_ = c.ShouldBindJSON(&body) // both fields optional
-		desc := strings.TrimSpace(body.Description)
-		if desc == "" {
-			desc = "Review the client-submitted draft \"" + sub.Title + "\""
-			if sub.DocumentType != "" {
-				desc += " (" + sub.DocumentType + ")"
+		var task *types.Task
+		updated, err := svc.StartTask(host.Identity(c), c.Param("id"), viewer(u), func(sub *store.IntakeSubmission) (string, error) {
+			desc := strings.TrimSpace(body.Description)
+			if desc == "" {
+				desc = "Review the client-submitted draft \"" + sub.Title + "\""
+				if sub.DocumentType != "" {
+					desc += " (" + sub.DocumentType + ")"
+				}
+				if sub.PracticeArea != "" {
+					desc += " — " + sub.PracticeArea
+				}
+				desc += " for legal sufficiency, jurisdictional compliance, and risk; propose revisions."
 			}
-			if sub.PracticeArea != "" {
-				desc += " — " + sub.PracticeArea
+			wf := types.WorkflowReview
+			if body.WorkflowType != "" {
+				wf = types.WorkflowType(body.WorkflowType)
 			}
-			desc += " for legal sufficiency, jurisdictional compliance, and risk; propose revisions."
-		}
-		wf := types.WorkflowReview
-		if body.WorkflowType != "" {
-			wf = types.WorkflowType(body.WorkflowType)
-		}
-		task, err := h.tasks.SubmitTask(orchestrator.SubmitParams{
-			Description:        desc,
-			WorkflowType:       wf,
-			DocumentIDs:        []string{sub.DocumentID},
-			ClientNumber:       sub.ClientNumber,
-			MatterNumber:       sub.MatterNumber,
-			Jurisdiction:       sub.Jurisdiction,
-			CreatedByProfileID: u.ProfileID,
+			t, err := h.tasks.SubmitTask(orchestrator.SubmitParams{
+				Description:        desc,
+				WorkflowType:       wf,
+				DocumentIDs:        []string{sub.DocumentID},
+				ClientNumber:       sub.ClientNumber,
+				MatterNumber:       sub.MatterNumber,
+				Jurisdiction:       sub.Jurisdiction,
+				CreatedByProfileID: u.ProfileID,
+			})
+			if err != nil {
+				return "", err
+			}
+			task = t
+			return t.ID, nil
 		})
 		if err != nil {
 			if errors.Is(err, orchestrator.ErrTaskQueueFull) {
@@ -470,15 +534,10 @@ func (h *HTTP) Mount(r gin.IRouter, host modules.Host) {
 				c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
 				return
 			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			respondErr(c, err)
 			return
 		}
-		updated, err := svc.AttachTask(ctx, sub.ID, task.ID)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		c.JSON(http.StatusAccepted, gin.H{"submission": h.wire(host, *updated, true), "task": task})
+		c.JSON(http.StatusAccepted, gin.H{"submission": firmWire(u, *updated), "task": task})
 	})
 }
 
@@ -505,11 +564,29 @@ func (h *HTTP) profileWire(view *crm.ProfileView) gin.H {
 
 func errStatus(err error) int {
 	switch {
-	case errors.Is(err, ErrNotFound):
+	case errors.Is(err, ErrNotFound), errors.Is(err, crm.ErrNotFound):
 		return http.StatusNotFound
-	case errors.Is(err, ErrNotHeld), errors.Is(err, ErrConflictHold), errors.Is(err, ErrNoDocument):
+	case errors.Is(err, ErrForbidden):
+		return http.StatusForbidden
+	case errors.Is(err, ErrNotHeld), errors.Is(err, ErrConflictHold), errors.Is(err, ErrNoDocument),
+		errors.Is(err, ErrNotAdmitted), errors.Is(err, ErrReheld):
 		return http.StatusConflict
-	default:
+	case errors.Is(err, ErrInvalid), errors.Is(err, crm.ErrInvalid), errors.Is(err, ErrTaskRefused):
 		return http.StatusBadRequest
+	default:
+		return crm.ErrStatus(err) // crm request errors, else 500
 	}
+}
+
+// respondErr writes err with its mapped status. Internal (store) failures
+// are logged and answered generically: driver text — table, index and
+// constraint names — never reaches a caller.
+func respondErr(c *gin.Context, err error) {
+	status := errStatus(err)
+	if status >= http.StatusInternalServerError {
+		slog.Error("intake: request failed", "path", c.FullPath(), "err", err)
+		c.JSON(status, gin.H{"error": "internal error"})
+		return
+	}
+	c.JSON(status, gin.H{"error": err.Error()})
 }

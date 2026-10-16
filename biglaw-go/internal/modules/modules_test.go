@@ -45,3 +45,19 @@ func TestDefaultsAndOverrides(t *testing.T) {
 		t.Fatalf("reason not recorded: %+v", list[0])
 	}
 }
+
+func TestDisableOverridesEnvOn(t *testing.T) {
+	t.Setenv("BIGLAW_MODULE_INTAKE", "on")
+	r := NewRegistry()
+	if !r.Register("intake", "", false, "") {
+		t.Fatal("env on ignored")
+	}
+	r.Disable("intake", "requires the crm module (crm is off)")
+	if r.Enabled("intake") || r.List()[0].Reason != "requires the crm module (crm is off)" {
+		t.Fatalf("Disable not reported: %+v", r.List())
+	}
+	r.Disable("unknown", "x") // no-op, never registers
+	if len(r.List()) != 1 {
+		t.Fatal("Disable registered an unknown module")
+	}
+}

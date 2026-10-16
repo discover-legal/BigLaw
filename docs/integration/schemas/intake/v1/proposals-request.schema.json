@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schemas.discover.legal/biglaw/intake/v1/proposals-request.schema.json",
   "title": "POST /intake/clients/:externalId/proposals request",
-  "description": "Tolerant reader: receivers MUST ignore properties they do not know; additionalProperties is therefore never false in this contract.",
+  "description": "Only an admitted client (on the firm's roster) with no submission on conflict hold may propose; otherwise 409. Proposals never create a profile. adverse_party facts run through the firm's conflict check. Tolerant reader: receivers MUST ignore properties they do not know; additionalProperties is therefore never false in this contract.",
   "type": "object",
   "required": [
     "facts"
@@ -17,7 +17,8 @@
         "name": {
           "type": "string"
         }
-      }
+      },
+      "description": "Deprecated and ignored (accepted for backward compatibility): proposals no longer create a profile."
     },
     "facts": {
       "type": "array",

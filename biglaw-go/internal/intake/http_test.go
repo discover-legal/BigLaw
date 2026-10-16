@@ -12,10 +12,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,6 +26,7 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/auth"
 	"github.com/discover-legal/biglaw-go/internal/clients"
 	"github.com/discover-legal/biglaw-go/internal/crm"
+	"github.com/discover-legal/biglaw-go/internal/orchestrator"
 	"github.com/discover-legal/biglaw-go/internal/store"
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
@@ -164,7 +167,7 @@ func TestIntakeGETSignsQueryAndEmptyBody(t *testing.T) {
 
 func TestIntakeDisabledWithoutSecret(t *testing.T) {
 	s := newIntakeTestServer(t)
-	s.mod.cfg.HMACSecret = ""
+	s.mod.secrets = nil
 	ts := strconv.FormatInt(time.Now().Unix(), 10)
 	w := doSigned(s, http.MethodPost, "/intake/submissions", validBody(), ts, "v1=whatever")
 	if w.Code != http.StatusServiceUnavailable {
@@ -326,5 +329,115 @@ func TestConflictRouteIsPartnerOnly(t *testing.T) {
 	}
 	if code := do("partner", "acknowledge", "again"); code != http.StatusConflict {
 		t.Fatalf("second resolve: %d", code)
+	}
+}
+
+// A captured signed write cannot be replayed inside the skew window; the
+// idempotent submission upsert (double-click) and reads still can.
+func TestReplayedWritesRejected(t *testing.T) {
+	s := newIntakeTestServer(t)
+	if w := signedPost(t, s, "/intake/submissions", validBody()); w.Code != http.StatusCreated {
+		t.Fatalf("submit: %d %s", w.Code, w.Body.String())
+	}
+	ts := strconv.FormatInt(time.Now().Unix(), 10)
+	body := validBody()
+	sig := signIntake("POST", "/intake/submissions", ts, body)
+	for i := 0; i < 2; i++ {
+		if w := doSigned(s, http.MethodPost, "/intake/submissions", body, ts, sig); w.Code != http.StatusCreated {
+			t.Fatalf("idempotent re-send %d: %d %s", i, w.Code, w.Body.String())
+		}
+	}
+	path := "/intake/clients/auth0%7Cdana/proposals"
+	pb := []byte(`{"facts":[{"category":"contact","predicate":"phone","value":"555"}]}`)
+	sig = signIntake("POST", path, ts, pb)
+	if w := doSigned(s, http.MethodPost, path, pb, ts, sig); w.Code != http.StatusCreated {
+		t.Fatalf("proposal: %d %s", w.Code, w.Body.String())
+	}
+	if w := doSigned(s, http.MethodPost, path, pb, ts, sig); w.Code != http.StatusUnauthorized {
+		t.Fatalf("replayed proposal accepted: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// INTAKE_HMAC_SECRET may list several secrets (rotation).
+func TestSecretRotationList(t *testing.T) {
+	s := newIntakeTestServer(t)
+	s.mod.secrets = ParseSecrets(" new-secret-0123456789abcdef0123456789 , " + testIntakeSecret)
+	for _, secret := range s.mod.secrets {
+		ts := strconv.FormatInt(time.Now().Unix(), 10)
+		body := validBody()
+		if w := doSigned(s, http.MethodPost, "/intake/submissions", body, ts,
+			Sign(secret, "POST", "/intake/submissions", ts, body)); w.Code != http.StatusCreated {
+			t.Fatalf("secret %q rejected: %d", secret[:6], w.Code)
+		}
+	}
+	ts := strconv.FormatInt(time.Now().Unix(), 10)
+	if w := doSigned(s, http.MethodPost, "/intake/submissions", validBody(), ts,
+		Sign("retired-secret-0123456789abcdef", "POST", "/intake/submissions", ts, validBody())); w.Code != http.StatusUnauthorized {
+		t.Fatalf("unknown secret accepted: %d", w.Code)
+	}
+}
+
+// A lawyer's queue hides held submissions; partners see them with detail.
+func TestQueueHidesHeldFromLawyers(t *testing.T) {
+	s := newIntakeTestServer(t)
+	_, _ = s.cs.Create("Robert Smith", "C-7", nil, "")
+	held := []byte(`{"externalId":"d-1","client":{"externalId":"auth0|pat","name":"Pat Prospect"},"content":"x","adverseParties":[{"name":"Robert Smith"}]}`)
+	if w := signedPost(t, s, "/intake/submissions", held); w.Code != http.StatusCreated {
+		t.Fatalf("submit: %d", w.Code)
+	}
+	get := func(user string) string {
+		req := httptest.NewRequest(http.MethodGet, "/intake/queue", nil)
+		req.Header.Set("X-Test-User", user)
+		rw := httptest.NewRecorder()
+		s.ServeHTTP(rw, req)
+		return rw.Body.String()
+	}
+	if out := get("lawyer"); strings.Contains(out, "Pat") || strings.Contains(out, "Robert Smith") {
+		t.Fatalf("lawyer sees a held submission: %s", out)
+	}
+	if out := get("partner"); !strings.Contains(out, `"conflictingClientName":"Robert Smith"`) {
+		t.Fatalf("partner lacks detail: %s", out)
+	}
+}
+
+type fakeTasks struct{ n int }
+
+func (f *fakeTasks) SubmitTask(p orchestrator.SubmitParams) (*types.Task, error) {
+	f.n++
+	return &types.Task{ID: fmt.Sprintf("task-%d", f.n), Description: p.Description}, nil
+}
+
+// /task respects assignment and the hold: no task is ever created for a
+// submission the caller may not act on.
+func TestTaskRouteRespectsAssignmentAndHold(t *testing.T) {
+	svc, crmSvc, cs, _ := newTestIntake(t)
+	_, _ = cs.Create("Rex Existing", "C-1", nil, "")
+	tasks := &fakeTasks{}
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	NewHTTP(svc, crmSvc, cs, tasks, HTTPConfig{HMACSecret: testIntakeSecret}).Mount(r, fakeHost{})
+	clean, _ := svc.Submit(sysCtx(), personReq("auth0|dana", "Dana Client", "d-1"))
+	held, _ := svc.Submit(sysCtx(), personReq("auth0|pat", "Pat Prospect", "p-1", "Rex Existing"))
+	post := func(user, id string) int {
+		req := httptest.NewRequest(http.MethodPost, "/intake/submissions/"+id+"/task", nil)
+		req.Header.Set("X-Test-User", user)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		return w.Code
+	}
+	if code := post("lawyer", clean.ID); code != http.StatusForbidden {
+		t.Fatalf("unassigned lawyer started a task: %d", code)
+	}
+	if code := post("lawyer", held.ID); code != http.StatusNotFound {
+		t.Fatalf("lawyer reached a held submission: %d", code)
+	}
+	if code := post("partner", held.ID); code != http.StatusConflict {
+		t.Fatalf("task on a held submission: %d", code)
+	}
+	if tasks.n != 0 {
+		t.Fatalf("%d tasks created for refused requests", tasks.n)
+	}
+	if code := post("partner", clean.ID); code != http.StatusAccepted || tasks.n != 1 {
+		t.Fatalf("partner task: %d (%d tasks)", code, tasks.n)
 	}
 }

@@ -92,7 +92,13 @@ firm mode it submits client drafts over `/intake/*` (HMAC-SHA256 request signing
 
 Conflict holds: `POST /intake/submissions/:id/conflict` (partner;
 `{decision: acknowledge|decline, conflictReason}`) is the only way out of `conflict_hold`;
-the portal only ever sees `hasConflict`, never who the conflict is with.
+the portal only ever sees `hasConflict`, never who the conflict is with. Holds are keyed to
+the portal *identity* (every name and adverse party it has ever supplied is checked; an
+open or declined hold holds its later submissions too — a declined identity is re-held
+each time, never auto-admitted); acknowledging re-runs the check (`409` + new detail on a
+new hit); held submissions, prospect CRM profiles and conflict detail are partner/assignee
+only (Rule 1.18 screening). Name matching (`clients.NormalizeName`/`NamesMatch`) folds
+accents, punctuation, hidden characters, surname-first and initials.
 
 Firm-side loop: `GET /intake/queue` → `POST /intake/submissions/:id/claim` →
 `POST /intake/submissions/:id/task` (spin an orchestrator review over the ingested

@@ -190,7 +190,7 @@ func TestContractResponsesValidate(t *testing.T) {
 	mustValidate(t, schemas, "submission-response", w.Body.Bytes())
 
 	// 3. Reads.
-	w = signedDo(r, http.MethodGet, "/intake/submissions/"+created.Submission.ID, nil)
+	w = signedDo(r, http.MethodGet, "/intake/submissions/"+created.Submission.ID+"?clientExternalId=auth0%7Cabc123", nil)
 	mustValidate(t, schemas, "submission-response", w.Body.Bytes())
 	w = signedDo(r, http.MethodGet, "/intake/clients/auth0%7Cabc123/submissions", nil)
 	mustValidate(t, schemas, "submission-list-response", w.Body.Bytes())
@@ -234,7 +234,12 @@ func TestContractResponsesValidate(t *testing.T) {
 
 	// 7. Errors.
 	for _, w := range []*httptest.ResponseRecorder{
-		signedDo(r, http.MethodGet, "/intake/submissions/nope", nil),
+		signedDo(r, http.MethodGet, "/intake/submissions/nope?clientExternalId=auth0%7Cabc123", nil),
+		// another client's submission, and a read without the client scope
+		signedDo(r, http.MethodGet, "/intake/submissions/"+created.Submission.ID+"?clientExternalId=auth0%7Cpat", nil),
+		signedDo(r, http.MethodGet, "/intake/submissions/"+created.Submission.ID, nil),
+		// a held prospect cannot push facts into the CRM
+		signedDo(r, http.MethodPost, "/intake/clients/auth0%7Cpat/proposals", []byte(`{"facts":[{"category":"note","value":"x"}]}`)),
 		signedDo(r, http.MethodGet, "/intake/clients/auth0%7Cnobody/profile", nil),
 		signedDo(r, http.MethodPost, "/intake/submissions", []byte(`{"externalId":"x"}`)),
 		signedDo(r, http.MethodPost, "/intake/proposals/nope/decision", []byte(`{"clientExternalId":"x","decision":"approve"}`)),

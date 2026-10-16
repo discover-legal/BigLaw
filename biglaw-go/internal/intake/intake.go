@@ -7,14 +7,18 @@
 //
 //  1. resolve the portal identity to a CRM profile (a *prospect* — no roster
 //     client — on first contact);
-//  2. run the conflict check in BOTH directions: the client's name against
-//     every existing client's adverse parties, and the submitted adverse
-//     parties against every existing client;
-//  3. on a hit: hold the submission for a lawyer (status conflict_hold). The
-//     draft is kept only inside the held record — nothing is ingested, no
-//     roster client or matter is created, no fact is seeded, no agent runs —
-//     and the hold is audited. Holds are never auto-acknowledged; only a
-//     partner clears one (ResolveConflict) with a recorded reason;
+//  2. run the conflict check in BOTH directions over everything the
+//     IDENTITY has ever supplied — every name it has used and every adverse
+//     party it has named, across all its submissions and adverse_party
+//     facts: its names against every existing client's adverse parties, and
+//     its adverse parties against every existing client;
+//  3. on a hit — or while the identity has another submission on hold, or
+//     has ever had one declined — hold the submission for a partner (status
+//     conflict_hold). The draft is kept only inside the held record —
+//     nothing is ingested, no roster client or matter is created, no fact is
+//     seeded, no agent runs — and the hold is audited. Holds are never
+//     auto-acknowledged; only a partner clears one (ResolveConflict) with a
+//     recorded reason, and clearing re-runs the check first;
 //  4. otherwise (or once acknowledged): admit the prospect to the roster,
 //     open a matter classified by BigLaw's own vocabulary (practiceArea /
 //     NOSLEGAL — never the portal's matter-pack code), ingest the draft into
@@ -34,12 +38,14 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
 	"github.com/google/uuid"
 
 	"github.com/discover-legal/biglaw-go/internal/audit"
+	"github.com/discover-legal/biglaw-go/internal/clients"
 	"github.com/discover-legal/biglaw-go/internal/crm"
 	"github.com/discover-legal/biglaw-go/internal/store"
 	"github.com/discover-legal/biglaw-go/internal/strutil"
@@ -57,7 +63,9 @@ const (
 	maxContentLen      = 1 << 20 // 1 MiB of draft text
 	maxTitleLen        = 300
 	maxSummaryLen      = 4000
-	maxAdverseParties  = 50
+	maxAdverseParties  = 50  // per submission / proposal
+	maxIdentityParties = 200 // portal-supplied, cumulative per identity
+	maxIdentityNames   = 20  // names one identity may supply over time
 	maxPartyNameLen    = 200
 	maxClassifierLen   = 100
 	maxConflictReason  = 1000
@@ -127,20 +135,92 @@ type SubmissionRequest struct {
 
 // ConflictRecord is what a submission stores about its conflict check
 // (ConflictJSON). The embedded result is the first hit (wire-compatible with
-// ConflictCheckResult); Hits lists every hit. The full record is firm-only;
-// the portal sees only hasConflict.
+// ConflictCheckResult); Hits lists every hit. The full record is
+// firm-confidential (partner or assignee); the portal sees only hasConflict.
 type ConflictRecord struct {
 	types.ConflictCheckResult
-	Hits           []types.ConflictCheckResult `json:"hits,omitempty"`
-	AdverseParties []string                    `json:"adverseParties,omitempty"`
-	CheckedAt      time.Time                   `json:"checkedAt"`
-	Acknowledged   bool                        `json:"acknowledged,omitempty"`
-	AcknowledgedBy string                      `json:"acknowledgedBy,omitempty"`
-	Reason         string                      `json:"reason,omitempty"`
-	AcknowledgedAt string                      `json:"acknowledgedAt,omitempty"`
-	// AcknowledgedHits are the hit keys (client id + matched party) a
-	// partner has acknowledged; a hit outside this set holds again.
+	Hits []types.ConflictCheckResult `json:"hits,omitempty"`
+	// Names and AdverseParties are what this document's submissions
+	// supplied, cumulative across re-submits.
+	Names          []string `json:"names,omitempty"`
+	AdverseParties []string `json:"adverseParties,omitempty"`
+	// CheckedNames and CheckedParties are the identity-wide unions the check
+	// actually ran on: every name and adverse party this portal identity has
+	// ever supplied (all its submissions and adverse_party facts, plus its
+	// roster entry once admitted).
+	CheckedNames   []string `json:"checkedNames,omitempty"`
+	CheckedParties []string `json:"checkedParties,omitempty"`
+	// OpenHolds are the identity's other submissions on conflict hold when
+	// this one was checked; PreviouslyDeclined are its submissions a partner
+	// declined on conflict grounds. Either holds the submission: a hold
+	// belongs to the person, not to one document.
+	OpenHolds          []string `json:"openHolds,omitempty"`
+	PreviouslyDeclined []string `json:"previouslyDeclined,omitempty"`
+	// ConflictUnchecked says why a clean check is weak: "name_is_email" (the
+	// identity never supplied a real name) and/or "no_adverse_parties".
+	// Firm-side only; it never holds a submission on its own.
+	ConflictUnchecked []string  `json:"conflictUnchecked,omitempty"`
+	CheckedAt         time.Time `json:"checkedAt"`
+	Acknowledged      bool      `json:"acknowledged,omitempty"`
+	AcknowledgedBy    string    `json:"acknowledgedBy,omitempty"`
+	Reason            string    `json:"reason,omitempty"`
+	AcknowledgedAt    string    `json:"acknowledgedAt,omitempty"`
+	// AcknowledgedHits are the hold keys (see holdKeys) a partner has
+	// acknowledged; any other key holds again.
 	AcknowledgedHits []string `json:"acknowledgedHits,omitempty"`
+	// Declined is sticky: once a partner declines this submission on
+	// conflict grounds, every later submission from the identity is held.
+	Declined   bool   `json:"declined,omitempty"`
+	DeclinedBy string `json:"declinedBy,omitempty"`
+	DeclinedAt string `json:"declinedAt,omitempty"`
+}
+
+// holdKeys identifies every reason this record holds its submission.
+func (r ConflictRecord) holdKeys() []string {
+	var keys []string
+	for _, h := range r.Hits {
+		keys = append(keys, hitKey(h))
+	}
+	for _, id := range r.OpenHolds {
+		keys = append(keys, "hold|"+id)
+	}
+	for _, id := range r.PreviouslyDeclined {
+		keys = append(keys, "declined|"+id)
+	}
+	return keys
+}
+
+// unacknowledged returns the hold keys no partner has acknowledged.
+func (r ConflictRecord) unacknowledged() []string {
+	acked := map[string]bool{}
+	for _, k := range r.AcknowledgedHits {
+		acked[k] = true
+	}
+	var out []string
+	for _, k := range r.holdKeys() {
+		if !acked[k] {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+// carry copies the decision history (acknowledgements, a decline) from the
+// record a fresh check replaces.
+func (r *ConflictRecord) carry(prev ConflictRecord) {
+	r.AcknowledgedHits = prev.AcknowledgedHits
+	r.Acknowledged, r.AcknowledgedBy, r.Reason, r.AcknowledgedAt =
+		prev.Acknowledged, prev.AcknowledgedBy, prev.Reason, prev.AcknowledgedAt
+	r.Declined, r.DeclinedBy, r.DeclinedAt = prev.Declined, prev.DeclinedBy, prev.DeclinedAt
+}
+
+// seal sets the wire-facing summary fields from the hold keys.
+func (r *ConflictRecord) seal() {
+	r.ConflictCheckResult = types.ConflictCheckResult{}
+	if len(r.Hits) > 0 {
+		r.ConflictCheckResult = r.Hits[0]
+	}
+	r.HasConflict = len(r.holdKeys()) > 0
 }
 
 // heldPayload is what a conflict-held submission keeps until a lawyer
@@ -153,8 +233,13 @@ type heldPayload struct {
 	ClientRef      string          `json:"clientRef"`
 }
 
-// Service lands portal submissions in the firm. Safe for concurrent use.
+// Service lands portal submissions in the firm. Safe for concurrent use:
+// every state transition (submit, conflict decision, client fact proposal,
+// lawyer updates) runs under one lock, so a conflict check and the admit
+// that depends on it are atomic — two simultaneous submissions cannot both
+// pass a check that only one of them would pass after the other landed.
 type Service struct {
+	mu        sync.Mutex
 	repo      store.IntakeRepository
 	crm       *crm.Service
 	clients   Roster
@@ -169,11 +254,49 @@ func New(repo store.IntakeRepository, crmSvc *crm.Service, roster Roster, ks Ing
 
 // Sentinel errors the HTTP layer maps to status codes.
 var (
+	ErrInvalid      = errors.New("intake: invalid request")
 	ErrNotFound     = errors.New("intake: not found")
+	ErrForbidden    = errors.New("intake: forbidden")
 	ErrNotHeld      = errors.New("intake: submission is not on conflict hold")
 	ErrConflictHold = errors.New("intake: submission is on conflict hold; resolve the conflict first")
+	ErrReheld       = errors.New("intake: the re-run conflict check found new conflicts; the submission stays on hold")
 	ErrNoDocument   = errors.New("intake: submission has no ingested document")
+	ErrNotAdmitted  = errors.New("intake: not yet a client of the firm")
+	ErrTaskRefused  = errors.New("intake: task not started")
 )
+
+func invalid(format string, args ...interface{}) error {
+	return fmt.Errorf("%w: "+format, append([]interface{}{ErrInvalid}, args...)...)
+}
+
+// Viewer is the firm member asking: held submissions and conflict detail
+// are visible only to partners and to the submission's assignee (Rule 1.18
+// screening — the lawyer for the conflicting client must not see them).
+type Viewer struct {
+	ProfileID string
+	Partner   bool
+}
+
+// SeesDetail reports whether v may see sub's conflict detail.
+func (v Viewer) SeesDetail(sub store.IntakeSubmission) bool {
+	return v.Partner || (v.ProfileID != "" && sub.AssignedTo == v.ProfileID)
+}
+
+// authorize gates acting on a submission: partners always; otherwise only
+// the assignee. A held submission someone else could act on is reported as
+// not found rather than forbidden, so its existence does not leak.
+func (v Viewer) authorize(sub *store.IntakeSubmission) error {
+	if v.Partner || (v.ProfileID != "" && sub.AssignedTo == v.ProfileID) {
+		return nil
+	}
+	if sub.Status == StatusConflictHold {
+		return ErrNotFound
+	}
+	if sub.AssignedTo == "" {
+		return fmt.Errorf("%w: claim the submission first", ErrForbidden)
+	}
+	return fmt.Errorf("%w: submission is assigned to another lawyer", ErrForbidden)
+}
 
 // Submit lands (or re-lands, keyed by ExternalID) a portal draft.
 func (s *Service) Submit(ctx context.Context, req SubmissionRequest) (*store.IntakeSubmission, error) {
@@ -181,21 +304,28 @@ func (s *Service) Submit(ctx context.Context, req SubmissionRequest) (*store.Int
 	req.Client.ExternalID = strings.TrimSpace(req.Client.ExternalID)
 	req.Content = strings.TrimSpace(req.Content)
 	if req.ExternalID == "" {
-		return nil, fmt.Errorf("intake: externalId is required")
+		return nil, invalid("externalId is required")
 	}
 	if req.Client.ExternalID == "" {
-		return nil, fmt.Errorf("intake: client.externalId is required")
+		return nil, invalid("client.externalId is required")
 	}
 	if req.Content == "" {
-		return nil, fmt.Errorf("intake: content is required")
+		return nil, invalid("content is required")
 	}
 	if len(req.Content) > maxContentLen {
-		return nil, fmt.Errorf("intake: content exceeds %d bytes", maxContentLen)
+		return nil, invalid("content exceeds %d bytes", maxContentLen)
+	}
+	named := collectAdverseParties(req.AdverseParties, req.Facts)
+	if len(named) > maxAdverseParties {
+		return nil, invalid("at most %d adverse parties per submission", maxAdverseParties)
 	}
 	title := strutil.Truncate(strings.TrimSpace(req.Title), maxTitleLen)
 	if title == "" {
 		title = "Untitled draft " + req.ExternalID
 	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	profile, err := s.crm.EnsureProfile(ctx, req.Client.ExternalID, req.Client.Email, req.Client.Name)
 	if err != nil {
@@ -231,67 +361,40 @@ func (s *Service) Submit(ctx context.Context, req SubmissionRequest) (*store.Int
 	}
 	sub.UpdatedAt = time.Now()
 
-	// Adverse parties are cumulative across re-submits of one document: a
-	// party once named stays in the conflict check and on the record even
-	// if a later draft drops it.
+	// Names and adverse parties are cumulative across re-submits of one
+	// document (and, through identity(), across the person's documents): a
+	// party once named stays in the conflict check even if a later draft
+	// drops it.
 	prev := decodeConflict(sub.ConflictJSON)
-	adverse, _ := mergeParties(prev.AdverseParties, collectAdverseParties(req.AdverseParties, req.Facts))
+	rec, err := s.check(ctx, profile, sub.ID,
+		unionNames(prev.Names, []string{req.Client.Name}),
+		unionNames(prev.AdverseParties, named), true)
+	if err != nil {
+		return nil, err
+	}
+	rec.carry(prev)
+	// Once held, a submission stays held until a partner resolves it — a
+	// re-submit must never slip past the hold.
+	stillHeld := isUpdate && sub.Status == StatusConflictHold
+	if stillHeld && len(rec.holdKeys()) == 0 {
+		rec.Hits = prev.Hits // keep what the reviewer was shown
+	}
+	rec.seal()
+	sub.Conflict = rec.HasConflict
+	sub.ConflictJSON, _ = json.Marshal(rec)
 	payload := heldPayload{
 		Content:        req.Content,
 		Facts:          req.Facts,
-		AdverseParties: adverse,
+		AdverseParties: rec.AdverseParties,
 		ClientEmail:    req.Client.Email,
 		ClientRef:      req.Client.ExternalID,
 	}
 
-	// Conflict check — every submission, both directions, every hit. A
-	// returning client is excluded from its own check.
-	var hits []types.ConflictCheckResult
-	var rosterClient *types.Client
-	if profile.ClientID != "" {
-		rosterClient = s.clients.Get(profile.ClientID)
-	}
-	if rosterClient != nil {
-		hits = s.clients.ConflictHits(rosterClient.Name, adverse, rosterClient.ID)
-	} else {
-		hits = s.clients.ConflictHits(profile.Name, adverse, "")
-	}
-	rec := ConflictRecord{Hits: hits, AdverseParties: adverse, CheckedAt: time.Now()}
-	if len(hits) > 0 {
-		rec.ConflictCheckResult = hits[0]
-	}
-	// A partner's acknowledgement covers exactly the hits it was given for;
-	// any other hit (e.g. a newly named adverse party) holds again.
-	rec.AcknowledgedHits = prev.AcknowledgedHits
-	unacknowledged := 0
-	acked := map[string]bool{}
-	for _, k := range prev.AcknowledgedHits {
-		acked[k] = true
-	}
-	for _, h := range hits {
-		if !acked[hitKey(h)] {
-			unacknowledged++
-		}
-	}
-	if len(hits) > 0 && unacknowledged == 0 {
-		rec.Acknowledged, rec.AcknowledgedBy, rec.Reason, rec.AcknowledgedAt =
-			true, prev.AcknowledgedBy, prev.Reason, prev.AcknowledgedAt
-	}
-	// Once held, a submission stays held until a partner resolves it — a
-	// re-submit that no longer names the conflicting party must not slip
-	// past the hold. The original conflict record is kept for the reviewer.
-	stillHeld := isUpdate && sub.Status == StatusConflictHold
-	if stillHeld && len(hits) == 0 {
-		rec = prev
-	}
-	sub.Conflict = rec.HasConflict
-	sub.ConflictJSON, _ = json.Marshal(rec)
-
-	if unacknowledged > 0 || stillHeld {
+	if len(rec.unacknowledged()) > 0 || stillHeld {
 		return s.hold(ctx, sub, payload, isUpdate)
 	}
 
-	if err := s.land(ctx, &sub, profile, payload, isUpdate); err != nil {
+	if err := s.land(ctx, &sub, profile, payload, rec.CheckedParties, isUpdate); err != nil {
 		return nil, err
 	}
 	audit.Default.Write(audit.WriteRequest{
@@ -301,9 +404,122 @@ func (s *Service) Submit(ctx context.Context, req SubmissionRequest) (*store.Int
 			"submissionId": sub.ID, "externalId": sub.ExternalID,
 			"clientNumber": sub.ClientNumber, "status": sub.Status,
 			"conflict": sub.Conflict, "update": isUpdate, "practiceArea": sub.PracticeArea,
+			"conflictUnchecked": rec.ConflictUnchecked,
 		},
 	})
 	return &sub, nil
+}
+
+// identityState is everything a portal identity has told the firm, across
+// all its submissions — the unit a conflict hold is keyed to.
+type identityState struct {
+	names, parties      []string // portal-supplied (capped)
+	rosterParties       []string // the admitted client's roster adversaries
+	openHolds, declined []string // submission ids
+	acked               []string // hold keys acknowledged on any submission
+}
+
+func (s *Service) identity(ctx context.Context, profile *store.CRMProfile) (identityState, error) {
+	st := identityState{names: unionNames(nil, []string{profile.Name})}
+	subs, err := s.repo.ListIntakeSubmissionsByProfile(ctx, profile.ID)
+	if err != nil {
+		return st, err
+	}
+	for _, sub := range subs {
+		rec := decodeConflict(sub.ConflictJSON)
+		st.names = unionNames(st.names, rec.Names)
+		st.parties = unionNames(st.parties, rec.AdverseParties)
+		st.acked = append(st.acked, rec.AcknowledgedHits...)
+		if sub.Status == StatusConflictHold {
+			st.openHolds = append(st.openHolds, sub.ID)
+		}
+		if rec.Declined {
+			st.declined = append(st.declined, sub.ID)
+		}
+	}
+	facts, err := s.crm.Facts(ctx, profile.ID, "")
+	if err != nil {
+		return st, err
+	}
+	for _, f := range facts {
+		if f.Category == "adverse_party" {
+			st.parties = unionNames(st.parties, []string{f.Value})
+		}
+	}
+	if profile.ClientID != "" {
+		if rc := s.clients.Get(profile.ClientID); rc != nil {
+			st.names = unionNames(st.names, []string{rc.Name})
+			st.rosterParties = rc.Adversaries
+		}
+	}
+	return st, nil
+}
+
+// check runs the conflict check for one submission of profile's identity
+// in both directions over every name and adverse party the identity has
+// ever supplied plus this submission's (docNames, docParties), and records
+// the identity's other open holds (when withOpenHolds) and declined
+// submissions. subID "" checks on behalf of no submission.
+func (s *Service) check(ctx context.Context, profile *store.CRMProfile, subID string, docNames, docParties []string, withOpenHolds bool) (ConflictRecord, error) {
+	st, err := s.identity(ctx, profile)
+	if err != nil {
+		return ConflictRecord{}, err
+	}
+	names := unionNames(st.names, docNames)
+	portalParties := unionNames(st.parties, docParties)
+	if len(names) > maxIdentityNames {
+		return ConflictRecord{}, invalid("this client has supplied more than %d names; contact the firm", maxIdentityNames)
+	}
+	if len(portalParties) > maxIdentityParties {
+		return ConflictRecord{}, invalid("this client has named more than %d adverse parties; contact the firm", maxIdentityParties)
+	}
+	parties := unionNames(portalParties, st.rosterParties)
+
+	var realNames []string
+	for _, n := range names {
+		if !crm.LooksLikeEmail(n) {
+			realNames = append(realNames, n)
+		}
+	}
+	rec := ConflictRecord{
+		Names: docNames, AdverseParties: docParties,
+		CheckedNames: realNames, CheckedParties: parties, CheckedAt: time.Now(),
+	}
+	seen := map[string]bool{}
+	add := func(hits []types.ConflictCheckResult) {
+		for _, h := range hits {
+			if k := hitKey(h); !seen[k] {
+				seen[k] = true
+				rec.Hits = append(rec.Hits, h)
+			}
+		}
+	}
+	// The adverse-party direction runs once (with the first name, or with
+	// none when the identity has no usable name); the client-name direction
+	// runs for every name.
+	if len(realNames) == 0 {
+		add(s.clients.ConflictHits("", parties, profile.ClientID))
+		rec.ConflictUnchecked = append(rec.ConflictUnchecked, "name_is_email")
+	}
+	for i, n := range realNames {
+		var p []string
+		if i == 0 {
+			p = parties
+		}
+		add(s.clients.ConflictHits(n, p, profile.ClientID))
+	}
+	if len(parties) == 0 {
+		rec.ConflictUnchecked = append(rec.ConflictUnchecked, "no_adverse_parties")
+	}
+	if withOpenHolds {
+		for _, id := range st.openHolds {
+			if id != subID {
+				rec.OpenHolds = append(rec.OpenHolds, id)
+			}
+		}
+	}
+	rec.PreviouslyDeclined = st.declined
+	return rec, nil
 }
 
 // hold parks a conflicted submission for a lawyer: the payload stays in the
@@ -328,6 +544,9 @@ func (s *Service) hold(ctx context.Context, sub store.IntakeSubmission, payload 
 			"conflictingClientName": rec.ConflictingClientName,
 			"matchedAdversary":      rec.MatchedAdversary,
 			"hits":                  len(rec.Hits),
+			"openHolds":             rec.OpenHolds,
+			"previouslyDeclined":    rec.PreviouslyDeclined,
+			"unacknowledged":        rec.unacknowledged(),
 			"update":                isUpdate,
 			"ingested":              false,
 		},
@@ -338,8 +557,9 @@ func (s *Service) hold(ctx context.Context, sub store.IntakeSubmission, payload 
 // land admits the client to the roster (if a prospect), opens the matter,
 // ingests the draft, persists, and seeds fact proposals. It is the only
 // path by which intake content reaches the knowledge store or the roster.
-func (s *Service) land(ctx context.Context, sub *store.IntakeSubmission, profile *store.CRMProfile, payload heldPayload, isUpdate bool) error {
-	rosterClient, err := s.admit(ctx, profile, payload.AdverseParties)
+// Callers hold s.mu.
+func (s *Service) land(ctx context.Context, sub *store.IntakeSubmission, profile *store.CRMProfile, payload heldPayload, parties []string, isUpdate bool) error {
+	rosterClient, err := s.admit(ctx, profile, parties)
 	if err != nil {
 		return err
 	}
@@ -403,7 +623,7 @@ func (s *Service) land(ctx context.Context, sub *store.IntakeSubmission, profile
 }
 
 // admit returns the profile's roster client, creating it (prospect →
-// client) when needed, and records the submitted adverse parties on it so
+// client) when needed, and records the identity's adverse parties on it so
 // future conflict checks see them.
 func (s *Service) admit(ctx context.Context, profile *store.CRMProfile, adverse []string) (*types.Client, error) {
 	if profile.ClientID != "" {
@@ -411,7 +631,7 @@ func (s *Service) admit(ctx context.Context, profile *store.CRMProfile, adverse 
 		if rc == nil {
 			return nil, fmt.Errorf("intake: roster client %s not found", profile.ClientID)
 		}
-		if merged, changed := mergeParties(rc.Adversaries, adverse); changed {
+		if merged := unionNames(rc.Adversaries, adverse); len(merged) != len(rc.Adversaries) {
 			if updated, err := s.clients.Update(rc.ID, map[string]interface{}{"adversaries": merged}); err == nil {
 				rc = updated
 			}
@@ -474,15 +694,26 @@ func (s *Service) openMatter(rosterClient *types.Client, sub *store.IntakeSubmis
 	return ""
 }
 
-// ResolveConflict is the lawyer's decision on a conflict hold.
+// ResolveConflict is the partner's decision on a conflict hold.
+//
 // acknowledge=true requires a reason (informed-consent waiver, ethical
-// wall, false positive, ...) and lands the held submission; false declines
-// it (status rejected) and discards the held draft. Both are audited.
+// wall, false positive, ...) and covers exactly the hold reasons the
+// partner was shown. The check is then re-run against the roster as it is
+// now: anything new (e.g. a spouse admitted since the hold) re-holds the
+// submission with the new detail and returns ErrReheld; otherwise the
+// submission lands.
+//
+// acknowledge=false declines it (status rejected), discards the held draft,
+// and marks the identity: every later submission from it is held for a
+// partner with a "previously declined" reason — never auto-admitted.
 func (s *Service) ResolveConflict(ctx context.Context, id string, acknowledge bool, reason, actorID string) (*store.IntakeSubmission, error) {
 	reason = strutil.Truncate(strings.TrimSpace(reason), maxConflictReason)
 	if acknowledge && reason == "" {
-		return nil, fmt.Errorf("intake: conflictReason is required to acknowledge a conflict")
+		return nil, invalid("conflictReason is required to acknowledge a conflict")
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	sub, ok, err := s.repo.GetIntakeSubmission(ctx, id)
 	if err != nil {
 		return nil, err
@@ -494,14 +725,18 @@ func (s *Service) ResolveConflict(ctx context.Context, id string, acknowledge bo
 		return nil, ErrNotHeld
 	}
 	rec := decodeConflict(sub.ConflictJSON)
+	now := time.Now().UTC().Format(time.RFC3339)
 	sub.UpdatedAt = time.Now()
 
 	if !acknowledge {
-		sub.Status = StatusRejected
-		sub.HeldJSON = nil
+		rec.Declined, rec.DeclinedBy, rec.DeclinedAt = true, actorID, now
 		if reason != "" {
+			rec.Reason = reason
 			sub.Note = reason
 		}
+		sub.ConflictJSON, _ = json.Marshal(rec)
+		sub.Status = StatusRejected
+		sub.HeldJSON = nil
 		if err := s.repo.PutIntakeSubmission(ctx, *sub); err != nil {
 			return nil, err
 		}
@@ -509,7 +744,7 @@ func (s *Service) ResolveConflict(ctx context.Context, id string, acknowledge bo
 			Event:   "intake.conflict_declined",
 			ActorID: actorID,
 			Data: map[string]interface{}{
-				"submissionId": sub.ID, "reason": reason,
+				"submissionId": sub.ID, "profileId": sub.ProfileID, "reason": reason,
 				"conflictingClientId": rec.ConflictingClientID, "matchedAdversary": rec.MatchedAdversary,
 			},
 		})
@@ -518,7 +753,7 @@ func (s *Service) ResolveConflict(ctx context.Context, id string, acknowledge bo
 
 	var payload heldPayload
 	if len(sub.HeldJSON) == 0 || json.Unmarshal(sub.HeldJSON, &payload) != nil || payload.Content == "" {
-		return nil, fmt.Errorf("intake: held payload missing; ask the client to re-submit")
+		return nil, fmt.Errorf("%w: held payload missing; ask the client to re-submit", ErrNotHeld)
 	}
 	profile, ok, err := s.crm.Get(ctx, sub.ProfileID)
 	if err != nil {
@@ -527,28 +762,49 @@ func (s *Service) ResolveConflict(ctx context.Context, id string, acknowledge bo
 	if !ok {
 		return nil, fmt.Errorf("intake: profile %s not found", sub.ProfileID)
 	}
-	rec.Acknowledged = true
-	for _, h := range append(rec.Hits, rec.ConflictCheckResult) {
-		if h.HasConflict {
-			rec.AcknowledgedHits = appendUnique(rec.AcknowledgedHits, hitKey(h))
-		}
-	}
-	rec.AcknowledgedBy = actorID
-	rec.Reason = reason
-	rec.AcknowledgedAt = time.Now().UTC().Format(time.RFC3339)
-	sub.ConflictJSON, _ = json.Marshal(rec)
+	// The acknowledgement covers exactly what the partner was shown.
+	shown := rec.holdKeys()
+	rec.AcknowledgedHits = unionKeys(rec.AcknowledgedHits, shown)
+	rec.Acknowledged, rec.AcknowledgedBy, rec.Reason, rec.AcknowledgedAt = true, actorID, reason, now
 	audit.Default.Write(audit.WriteRequest{
 		Event:   "intake.conflict_acknowledged",
 		ActorID: actorID,
 		Data: map[string]interface{}{
 			"submissionId": sub.ID, "profileId": sub.ProfileID, "reason": reason,
+			"acknowledged":          shown,
 			"conflictingClientId":   rec.ConflictingClientID,
 			"conflictingClientName": rec.ConflictingClientName,
 			"matchedAdversary":      rec.MatchedAdversary,
 		},
 	})
+
+	// Re-run the check against the roster as it is now. The identity's own
+	// other holds don't block this one (each is resolved on its own, and
+	// their parties are already in the identity-wide check).
+	fresh, err := s.check(ctx, profile, sub.ID, rec.Names, rec.AdverseParties, false)
+	if err != nil {
+		return nil, err
+	}
+	fresh.carry(rec)
+	fresh.seal()
+	sub.Conflict = fresh.HasConflict
+	sub.ConflictJSON, _ = json.Marshal(fresh)
+	if pending := fresh.unacknowledged(); len(pending) > 0 {
+		if err := s.repo.PutIntakeSubmission(ctx, *sub); err != nil {
+			return nil, err
+		}
+		audit.Default.Write(audit.WriteRequest{
+			Event:   "intake.conflict_reheld",
+			ActorID: actorID,
+			Data: map[string]interface{}{
+				"submissionId": sub.ID, "profileId": sub.ProfileID, "unacknowledged": pending,
+			},
+		})
+		return sub, ErrReheld
+	}
+
 	// isUpdate=false semantics for status: a cleared hold enters the queue.
-	if err := s.land(ctx, sub, profile, payload, false); err != nil {
+	if err := s.land(ctx, sub, profile, payload, fresh.CheckedParties, false); err != nil {
 		return nil, err
 	}
 	audit.Default.Write(audit.WriteRequest{
@@ -563,9 +819,107 @@ func (s *Service) ResolveConflict(ctx context.Context, id string, acknowledge bo
 	return sub, nil
 }
 
+// ProposeFacts records facts a portal client proposes about themselves
+// (pending a lawyer's approval). Only an admitted client with no open
+// conflict hold may propose: a prospect's information stays inside its held
+// submission until a partner clears it. adverse_party facts run through the
+// identity-wide conflict check; a hit no partner has acknowledged flags the
+// profile for the firm (and holds the client's next submission).
+func (s *Service) ProposeFacts(ctx context.Context, externalRef string, facts []crm.FactInput) ([]store.CRMFact, error) {
+	named := collectAdverseParties(nil, facts)
+	if len(named) > maxAdverseParties {
+		return nil, invalid("at most %d adverse parties per proposal", maxAdverseParties)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	profile, ok, err := s.crm.GetByExternalRef(ctx, strings.TrimSpace(externalRef))
+	if err != nil {
+		return nil, err
+	}
+	if !ok || profile.ClientID == "" {
+		return nil, ErrNotAdmitted
+	}
+	st, err := s.identity(ctx, profile)
+	if err != nil {
+		return nil, err
+	}
+	if len(st.openHolds) > 0 {
+		return nil, ErrConflictHold
+	}
+	if len(named) > 0 {
+		rec, err := s.check(ctx, profile, "", nil, named, false)
+		if err != nil {
+			return nil, err
+		}
+		var fresh []types.ConflictCheckResult
+		acked := map[string]bool{}
+		for _, k := range st.acked {
+			acked[k] = true
+		}
+		for _, h := range rec.Hits {
+			if !acked[hitKey(h)] {
+				fresh = append(fresh, h)
+			}
+		}
+		if len(fresh) > 0 {
+			if err := s.crm.FlagConflict(ctx, profile.ID); err != nil {
+				return nil, err
+			}
+			audit.Default.Write(audit.WriteRequest{
+				Event:   "intake.conflict_flagged",
+				ActorID: "intake-portal",
+				Data: map[string]interface{}{
+					"profileId": profile.ID, "hits": fresh, "via": "client_fact_proposal",
+				},
+			})
+		}
+	}
+	return s.crm.Propose(ctx, profile.ID, crm.Actor{Role: crm.RoleClient, ID: profile.ExternalRef}, "client", facts)
+}
+
 // Get returns one submission.
 func (s *Service) Get(ctx context.Context, id string) (*store.IntakeSubmission, bool, error) {
 	return s.repo.GetIntakeSubmission(ctx, id)
+}
+
+// GetForClient returns one submission only if it belongs to the portal
+// identity externalRef; any mismatch is reported as not found.
+func (s *Service) GetForClient(ctx context.Context, id, externalRef string) (*store.IntakeSubmission, error) {
+	externalRef = strings.TrimSpace(externalRef)
+	if externalRef == "" {
+		return nil, invalid("clientExternalId is required")
+	}
+	sub, ok, err := s.repo.GetIntakeSubmission(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, ErrNotFound
+	}
+	profile, ok, err := s.crm.Get(ctx, sub.ProfileID)
+	if err != nil {
+		return nil, err
+	}
+	if !ok || profile.ExternalRef != externalRef {
+		return nil, ErrNotFound
+	}
+	return sub, nil
+}
+
+// GetForViewer returns one submission a firm member may act on.
+func (s *Service) GetForViewer(ctx context.Context, id string, v Viewer) (*store.IntakeSubmission, error) {
+	sub, ok, err := s.repo.GetIntakeSubmission(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, ErrNotFound
+	}
+	if err := v.authorize(sub); err != nil {
+		return nil, err
+	}
+	return sub, nil
 }
 
 // ListForClient returns the submissions of one portal identity, newest-first.
@@ -580,28 +934,32 @@ func (s *Service) ListForClient(ctx context.Context, externalRef string) ([]stor
 	return s.repo.ListIntakeSubmissionsByProfile(ctx, profile.ID)
 }
 
-// Queue returns submissions for the firm view. profileID "" = all (partner);
-// otherwise unassigned + assigned-to-that-lawyer.
-func (s *Service) Queue(ctx context.Context, profileID string) ([]store.IntakeSubmission, error) {
+// Queue returns submissions for the firm view. A partner sees everything;
+// a lawyer sees unassigned submissions not on conflict hold plus their own.
+func (s *Service) Queue(ctx context.Context, v Viewer) ([]store.IntakeSubmission, error) {
 	all, err := s.repo.ListIntakeSubmissions(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if profileID == "" {
+	if v.Partner {
 		return all, nil
 	}
-	var out []store.IntakeSubmission
+	out := []store.IntakeSubmission{}
 	for _, sub := range all {
-		if sub.AssignedTo == "" || sub.AssignedTo == profileID {
+		mine := v.ProfileID != "" && sub.AssignedTo == v.ProfileID
+		if mine || (sub.AssignedTo == "" && sub.Status != StatusConflictHold) {
 			out = append(out, sub)
 		}
 	}
 	return out, nil
 }
 
-// Claim assigns a submission to a lawyer and moves it into review. A held
-// submission can be claimed (someone owns resolving it) but stays held.
-func (s *Service) Claim(ctx context.Context, id, lawyerProfileID string) (*store.IntakeSubmission, error) {
+// Claim assigns a submission to the caller and moves it into review. A
+// lawyer may claim only an unassigned submission that is not on conflict
+// hold; a partner may claim any (a held one stays held).
+func (s *Service) Claim(ctx context.Context, id string, v Viewer) (*store.IntakeSubmission, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	sub, ok, err := s.repo.GetIntakeSubmission(ctx, id)
 	if err != nil {
 		return nil, err
@@ -609,7 +967,15 @@ func (s *Service) Claim(ctx context.Context, id, lawyerProfileID string) (*store
 	if !ok {
 		return nil, ErrNotFound
 	}
-	sub.AssignedTo = lawyerProfileID
+	if !v.Partner {
+		if sub.Status == StatusConflictHold {
+			return nil, ErrNotFound
+		}
+		if sub.AssignedTo != "" && sub.AssignedTo != v.ProfileID {
+			return nil, fmt.Errorf("%w: submission is assigned to another lawyer", ErrForbidden)
+		}
+	}
+	sub.AssignedTo = v.ProfileID
 	if sub.Status == StatusReceived {
 		sub.Status = StatusInReview
 	}
@@ -619,16 +985,18 @@ func (s *Service) Claim(ctx context.Context, id, lawyerProfileID string) (*store
 	}
 	audit.Default.Write(audit.WriteRequest{
 		Event:   "intake.submission_claimed",
-		ActorID: lawyerProfileID,
+		ActorID: v.ProfileID,
 		Data:    map[string]interface{}{"submissionId": sub.ID},
 	})
 	return sub, nil
 }
 
-// Update sets status and/or note (lawyer-driven state machine). The
-// conflict hold is entered only by the conflict check and left only through
-// ResolveConflict, never by a status patch.
-func (s *Service) Update(ctx context.Context, id, status, note, actorID string) (*store.IntakeSubmission, error) {
+// Update sets status and/or note (lawyer-driven state machine; partner or
+// assignee only). The conflict hold is entered only by the conflict check
+// and left only through ResolveConflict, never by a status patch.
+func (s *Service) Update(ctx context.Context, id, status, note string, v Viewer) (*store.IntakeSubmission, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	sub, ok, err := s.repo.GetIntakeSubmission(ctx, id)
 	if err != nil {
 		return nil, err
@@ -636,9 +1004,12 @@ func (s *Service) Update(ctx context.Context, id, status, note, actorID string) 
 	if !ok {
 		return nil, ErrNotFound
 	}
+	if err := v.authorize(sub); err != nil {
+		return nil, err
+	}
 	if status != "" {
 		if !validStatuses[status] {
-			return nil, fmt.Errorf("intake: invalid status %q", status)
+			return nil, invalid("invalid status %q", status)
 		}
 		if status != sub.Status && (status == StatusConflictHold || sub.Status == StatusConflictHold) {
 			return nil, ErrConflictHold
@@ -654,7 +1025,7 @@ func (s *Service) Update(ctx context.Context, id, status, note, actorID string) 
 	}
 	audit.Default.Write(audit.WriteRequest{
 		Event:   "intake.submission_updated",
-		ActorID: actorID,
+		ActorID: v.ProfileID,
 		Data:    map[string]interface{}{"submissionId": sub.ID, "status": sub.Status},
 	})
 	return sub, nil
@@ -672,15 +1043,24 @@ func (s *Service) TaskReady(sub *store.IntakeSubmission) error {
 	return nil
 }
 
-// AttachTask links an orchestrator task to a submission and moves it into
-// review.
-func (s *Service) AttachTask(ctx context.Context, id, taskID string) (*store.IntakeSubmission, error) {
-	sub, ok, err := s.repo.GetIntakeSubmission(ctx, id)
+// StartTask starts agent work on a submission (partner or assignee only):
+// under the service lock it re-reads the submission, checks it is not on
+// conflict hold and has an ingested draft, calls start (which submits the
+// orchestrator task and returns its id), and records the task — so a
+// submission that goes on hold concurrently never gets a task.
+func (s *Service) StartTask(ctx context.Context, id string, v Viewer, start func(*store.IntakeSubmission) (string, error)) (*store.IntakeSubmission, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sub, err := s.GetForViewer(ctx, id, v)
 	if err != nil {
 		return nil, err
 	}
-	if !ok {
-		return nil, ErrNotFound
+	if err := s.TaskReady(sub); err != nil {
+		return nil, err
+	}
+	taskID, err := start(sub)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrTaskRefused, err)
 	}
 	sub.TaskID = taskID
 	if sub.Status == StatusReceived {
@@ -710,20 +1090,26 @@ func decodeConflict(b []byte) ConflictRecord {
 
 // hitKey identifies one conflict hit for acknowledgement tracking.
 func hitKey(h types.ConflictCheckResult) string {
-	return h.ConflictingClientID + "|" + strings.ToLower(strings.TrimSpace(h.MatchedAdversary))
+	return h.ConflictingClientID + "|" + clients.NormalizeName(h.MatchedAdversary)
 }
 
-func appendUnique(list []string, v string) []string {
-	for _, x := range list {
-		if x == v {
-			return list
+func unionKeys(list, add []string) []string {
+	seen := map[string]bool{}
+	out := append([]string(nil), list...)
+	for _, k := range list {
+		seen[k] = true
+	}
+	for _, k := range add {
+		if !seen[k] {
+			seen[k] = true
+			out = append(out, k)
 		}
 	}
-	return append(list, v)
+	return out
 }
 
 // collectAdverseParties gathers the adverse parties the client named, from
-// the explicit list and from adverse_party facts; deduplicated, capped.
+// the explicit list and from adverse_party facts; cleaned and deduplicated.
 func collectAdverseParties(parties []PartyRef, facts []crm.FactInput) []string {
 	var names []string
 	for _, p := range parties {
@@ -734,29 +1120,28 @@ func collectAdverseParties(parties []PartyRef, facts []crm.FactInput) []string {
 			names = append(names, f.Value)
 		}
 	}
-	out, _ := mergeParties(nil, names)
-	return out
+	return unionNames(nil, names)
 }
 
-// mergeParties appends cleaned, case-insensitively new names to base.
-func mergeParties(base, add []string) ([]string, bool) {
+// unionNames appends to base the cleaned names in add that are new under
+// conflict-matching normalisation (so "José García" and "Jose Garcia" are
+// one party). Names that normalise empty are dropped.
+func unionNames(base, add []string) []string {
 	seen := map[string]bool{}
 	out := append([]string(nil), base...)
 	for _, b := range base {
-		seen[strings.ToLower(strings.TrimSpace(b))] = true
+		seen[clients.NormalizeName(b)] = true
 	}
-	changed := false
 	for _, n := range add {
 		n = cleanText(n, maxPartyNameLen)
-		k := strings.ToLower(n)
-		if n == "" || seen[k] || len(out) >= maxAdverseParties+len(base) {
+		k := clients.NormalizeName(n)
+		if k == "" || seen[k] {
 			continue
 		}
 		seen[k] = true
 		out = append(out, n)
-		changed = true
 	}
-	return out, changed
+	return out
 }
 
 // resolvePracticeArea classifies the submission in BigLaw's own vocabulary:

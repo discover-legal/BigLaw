@@ -69,6 +69,18 @@ func (r *Registry) Register(name, description string, defaultOn bool, defaultRea
 	return enabled
 }
 
+// Disable forces a registered module off for a dependency reason (e.g.
+// intake without crm), overriding even an explicit env "on", so GET /modules
+// reports what is actually running.
+func (r *Registry) Disable(name, reason string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if s, ok := r.mods[name]; ok {
+		s.Enabled, s.Reason = false, reason
+		r.mods[name] = s
+	}
+}
+
 // Enabled reports a module's state. Unregistered modules are enabled — the
 // registry constrains only what explicitly opted into being optional.
 func (r *Registry) Enabled(name string) bool {

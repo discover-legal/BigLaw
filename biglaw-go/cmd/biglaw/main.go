@@ -116,6 +116,8 @@ func main() {
 		intakeEnabled, "follows the intake module")
 	if intakeEnabled && !crmEnabled {
 		slog.Warn("modules: intake requires crm; intake stays off", "fix", "BIGLAW_MODULE_CRM=on")
+		mods.Disable("intake", "requires the crm module (crm is off)")
+		intakeEnabled = false
 	}
 	clientVoiceEnabled := mods.Register("clientvoice",
 		"Client advocacy briefs (Remy/CRM) surfaced at human gates",

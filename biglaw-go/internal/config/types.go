@@ -189,6 +189,8 @@ type ClientVoiceConfig struct {
 type IntakeConfig struct {
 	// HMACSecret is the shared secret the portal signs requests with
 	// (contract: docs/integration/affidavit-intake.md). Empty = intake off.
+	// A comma-separated list accepts any of them (rotation); each entry
+	// must be at least MinIntakeSecretLen characters.
 	HMACSecret string
 	// MaxSkewSec is the accepted clock skew for signed timestamps.
 	MaxSkewSec int
