@@ -19,9 +19,12 @@ A run that **fails** (error, grounding collapse, worker panic, synthesis error) 
 interrupted by a restart is closed **non-billable**: the elapsed time stays on record with
 `nonBillable: true` and a `nonBillableReason`, at 0 units, and is excluded from LEDES,
 pre-bills and Clio sync. A one-off startup migration (owner process only, recorded in
-`<TIME_FILE>.migrations.json`) writes off historical entries of failed/interrupted runs, skipping
-any already on an approved/invoiced pre-bill or synced to Clio, and reports draft pre-bills to
-regenerate (audit event `time.migration.failed_runs_written_off`).
+`<TIME_FILE>.migrations.json`) writes off historical entries of failed/interrupted runs and of
+runs that "completed" with a synthesis error (for tasks since deleted, the audit log's last
+`task.failed`/`task.interrupted`/`task.complete` event decides), skipping any already on an
+approved/invoiced pre-bill or synced to Clio, and reports draft pre-bills to regenerate (audit
+event `time.migration.failed_runs_written_off`). A pre-bill that lists a written-off entry cannot
+be approved or invoiced (409 with `nonBillableEntryIds`); regenerate it.
 
 The LEDES 1998B export follows the published 24-field layout (`LEDES1998B[]` line, field-name
 line, `|`-separated rows each ending in `[]`). `TIMEKEEPER_CLASSIFICATION` comes from the
@@ -29,8 +32,11 @@ profile's title (partner / associate / of counsel / paralegal or legal assistant
 its role (partner → `PT`, lawyer → `AS`); unresolvable → `OT`. AI time uses the AI timekeeper's
 id/name and rate, classification `OT`, labelled "AI agent:" (Clio sync sends the same rate as the
 activity price and labels the note). Each (client, matter) becomes its own invoice block
-(`INVOICE_NUMBER` suffixed `-<matter>` when an export spans several matters) with its own total
-and billing period. `LINE_ITEM_TOTAL` is always round2(hours × rate); a legacy entry whose stored
+(`INVOICE_NUMBER` suffixed `-1`, `-2`, … in (client, matter) order when an export holds several
+invoices, kept within 1998B's 20 characters by shortening the base; a longer `invoiceNumber` is a
+400; default `<matter-or-client, 8 chars>-YYYYMMDD`) with its own total and billing period. Work
+with no client number is left off and reported like legacy rows below. `TIMEKEEPER_NAME` is
+"Last, First" (max 30). `LINE_ITEM_TOTAL` is always round2(hours × rate); a legacy entry whose stored
 amount disagrees is left off, logged, audited (`time.ledes_export_skipped`) and counted in the
 `X-Ledes-Skipped-Entries` response header. Free text is transliterated to printable ASCII
 (1998B is an ASCII format) and cut to 200 characters. Dates use `FIRM_TIMEZONE` (IANA name,
@@ -40,10 +46,11 @@ derive activity `A104`; nothing is guessed. Set `LEDES_LAW_FIRM_ID` to fill `LAW
 ```
 GET  /time-entries                query: profileId, taskId, matterNumber, from, to
 GET  /time-entries/export.json    full export (partner only)
-GET  /time-entries/export.csv     CSV for billing import (partner only)
+GET  /time-entries/export.csv     CSV for billing import (partner only; includes nonBillable,
+                                  nonBillableReason, requestedByProfileId, pausedMs)
 GET  /time-entries/export.ledes   LEDES 1998B export for e-billing (partner only)
 GET  /time-entries/{agent-summary,suggestions}
-POST /time-entries/sync-to-clio   push entries to Clio as activities (partner only, idempotent)
+POST /time-entries/sync-to-clio   push entries to Clio as activities, dated in FIRM_TIMEZONE (partner only, idempotent)
 ```
 
 ## Pre-bills, invoices & OCG compliance
