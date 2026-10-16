@@ -237,3 +237,158 @@ func TestParseFindings_RealQwenOutput(t *testing.T) {
 		t.Errorf("no parsed quote was a verbatim substring of the source — wrapping quotes not stripped; citations=%+v", fs[0].Citations)
 	}
 }
+
+// workedExample returns the FINDING block the processing prompt shows the model,
+// taken from the live prompt so this test tracks the format agents are told to
+// emit (Evidence → Conclusion → Confidence).
+func workedExample(t *testing.T) string {
+	t.Helper()
+	p := buildProcessingPrompt(testDef, AgentContext{})
+	_, after, ok := strings.Cut(p, "Worked example:\n")
+	if !ok {
+		t.Fatal("processing prompt has no worked example")
+	}
+	block, _, ok := strings.Cut(after, "END_FINDING")
+	if !ok {
+		t.Fatal("worked example has no END_FINDING")
+	}
+	return block + "END_FINDING"
+}
+
+// Regression: the strict citation used to end only at Evidence:/Citation:/
+// Confidence:/END_FINDING, so in the prompt's own Evidence → Conclusion order the
+// QUOTE swallowed "| PAGE=7\nConclusion: …" and failed verbatim verification, and
+// the terminator consumed a following "Evidence:" label so every second
+// consecutive Evidence line was dropped.
+func TestParseFindings_EvidenceThenConclusion(t *testing.T) {
+	const (
+		wantQuote = "Employee shall not engage in any competing business for two years"
+		wantConcl = "The non-compete clause is unenforceable in California under Bus. & Prof. Code §16600, which voids contracts restraining lawful trade."
+	)
+	type cite struct {
+		source, quote string
+		page          int // 0 = no page
+	}
+	cases := []struct {
+		name  string
+		in    string
+		concl string
+		cites []cite
+	}{
+		{
+			name:  "prompt worked example",
+			in:    workedExample(t),
+			concl: wantConcl,
+			cites: []cite{{"employment-agreement-2024", wantQuote, 7}},
+		},
+		{
+			name: "no PAGE, no END_FINDING",
+			in: "FINDING:\nEvidence: SOURCE=emp | QUOTE=" + wantQuote +
+				"\nConclusion: Void.\nConfidence: 0.8",
+			concl: "Void.",
+			cites: []cite{{"emp", wantQuote, 0}},
+		},
+		{
+			name: "consecutive Evidence lines all kept",
+			in: "FINDING:\nEvidence: SOURCE=a | QUOTE=alpha beta | PAGE=1\n" +
+				"Evidence: SOURCE=b | QUOTE=gamma delta | PAGE=2\n" +
+				"Evidence: SOURCE=c | QUOTE=epsilon\n" +
+				"Conclusion: Three sources agree.\nConfidence: 0.9\nEND_FINDING",
+			concl: "Three sources agree.",
+			cites: []cite{{"a", "alpha beta", 1}, {"b", "gamma delta", 2}, {"c", "epsilon", 0}},
+		},
+		{
+			name: "markdown-decorated labels",
+			in: "FINDING:\n- **Evidence:** SOURCE=emp | QUOTE=" + wantQuote + " | PAGE=7\n" +
+				"- **Conclusion:** Void.\n- Confidence: 0.8\nEND_FINDING",
+			concl: "Void.",
+			cites: []cite{{"emp", wantQuote, 7}},
+		},
+		{
+			name: "numbered Evidence lines",
+			in: "FINDING:\n1. Evidence: SOURCE=a | QUOTE=alpha beta | PAGE=1\n" +
+				"2) Evidence: SOURCE=b | QUOTE=gamma delta\nConclusion: Both agree.\nEND_FINDING",
+			concl: "Both agree.",
+			cites: []cite{{"a", "alpha beta", 1}, {"b", "gamma delta", 0}},
+		},
+		{
+			name: "dropped Conclusion label after PAGE",
+			in: "FINDING:\nEvidence: SOURCE=emp | QUOTE=" + wantQuote + " | PAGE=7\n" +
+				"The clause is void.\nConfidence: 0.8\nEND_FINDING",
+			concl: "The clause is void.",
+			cites: []cite{{"emp", wantQuote, 7}},
+		},
+		{
+			name: "Windows CRLF line endings",
+			in: "FINDING:\r\nEvidence: SOURCE=a | QUOTE=alpha beta | PAGE=7\r\n" +
+				"Evidence: SOURCE=b | QUOTE=gamma delta\r\nConclusion: Void.\r\nConfidence: 0.8\r\nEND_FINDING\r\n",
+			concl: "Void.",
+			cites: []cite{{"a", "alpha beta", 7}, {"b", "gamma delta", 0}},
+		},
+		{
+			name: "Evidence on the FINDING line",
+			in: "**FINDING 1:** Evidence: SOURCE=emp | QUOTE=" + wantQuote + " | PAGE=7\n" +
+				"Conclusion: Void.\nEND_FINDING",
+			concl: "Void.",
+			cites: []cite{{"emp", wantQuote, 7}},
+		},
+		{
+			name: "Evidence trailing the Conclusion inline",
+			in: "FINDING:\nConclusion: Void. Evidence: SOURCE=emp | QUOTE=" + wantQuote +
+				" | PAGE=7\nConfidence: 0.8\nEND_FINDING",
+			concl: "Void. Evidence: SOURCE=emp | QUOTE=" + wantQuote + " | PAGE=7",
+			cites: []cite{{"emp", wantQuote, 7}},
+		},
+		{
+			name: "Evidence inline in unlabelled prose",
+			in: "FINDING:\nThe clause is void. Evidence: SOURCE=emp | QUOTE=" + wantQuote +
+				" Confidence: 0.8 END_FINDING",
+			concl: "The clause is void. Evidence: SOURCE=emp | QUOTE=" + wantQuote + " Confidence: 0.8",
+			cites: []cite{{"emp", wantQuote, 0}},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := parseFindings(tc.in, testDef)
+			if len(fs) != 1 {
+				t.Fatalf("want 1 finding, got %d", len(fs))
+			}
+			if fs[0].Content != tc.concl {
+				t.Errorf("conclusion: %q want %q", fs[0].Content, tc.concl)
+			}
+			got := fs[0].Citations
+			if len(got) != len(tc.cites) {
+				t.Fatalf("want %d citations, got %d: %+v", len(tc.cites), len(got), got)
+			}
+			for i, w := range tc.cites {
+				if got[i].Source != w.source || got[i].Quote != w.quote {
+					t.Errorf("cite %d: source=%q quote=%q want %q / %q", i, got[i].Source, got[i].Quote, w.source, w.quote)
+				}
+				switch {
+				case w.page == 0 && got[i].Page != nil:
+					t.Errorf("cite %d: unexpected page %d", i, *got[i].Page)
+				case w.page != 0 && (got[i].Page == nil || *got[i].Page != w.page):
+					t.Errorf("cite %d: page %v want %d", i, got[i].Page, w.page)
+				}
+			}
+		})
+	}
+}
+
+// A "Confidence:" that appears inside a quote (or an unparseable labelled
+// Confidence line) must not override the agent's own Confidence value.
+func TestParseFindings_ConfidenceFromLabelledLine(t *testing.T) {
+	cases := map[string]float64{
+		"FINDING:\nEvidence: SOURCE=a | QUOTE=The form reads Confidence: 0.2 here.\nConclusion: Low.\nConfidence: 0.9\nEND_FINDING":  0.9,
+		"FINDING:\nEvidence: SOURCE=a | QUOTE=x y\nConfidence: high, per the witness\nConclusion: c.\nConfidence: 0.85\nEND_FINDING": 0.85,
+		"FINDING:\n**Conclusion:** c.\n**Confidence:** 0.6\nEND_FINDING":                                                             0.6,
+		"FINDING: Conclusion: c. Confidence: 0.4 END_FINDING":                                                                        0.4,
+		"FINDING:\nConclusion: c.\nConfidence: 7\nEND_FINDING":                                                                       0.7,
+	}
+	for in, want := range cases {
+		fs := parseFindings(in, testDef)
+		if len(fs) != 1 || fs[0].Confidence != want {
+			t.Errorf("%q: got %+v want confidence %v", in, fs, want)
+		}
+	}
+}

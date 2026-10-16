@@ -88,13 +88,10 @@ func runDemoWithConfig(cfg *config.Config, out io.Writer, color bool) int {
 	// a demo-owned file inside the output directory instead.
 	cfg.Persistence.PlaybooksFile = filepath.Join(root, "demo-playbook.json")
 
-	// Fresh, run-scoped cost ledger (truncated so re-runs start at zero). The
-	// file is pre-created empty because cost.Store.Init only starts its disk
-	// writer when the ledger file already exists (fresh-file early return in
-	// internal/cost — worth fixing there; worked around here).
+	// Fresh, run-scoped cost ledger, truncated so re-runs start at zero.
 	costFile := filepath.Join(root, "demo-costs.jsonl")
 	costs := cost.Default
-	if ierr := os.WriteFile(costFile, nil, 0o644); ierr != nil {
+	if ierr := os.WriteFile(costFile, nil, 0o600); ierr != nil {
 		fmt.Fprintf(out, "  (cost ledger unavailable: %v)\n", ierr)
 	} else if ierr := costs.Init(costFile); ierr != nil {
 		fmt.Fprintf(out, "  (cost ledger unavailable: %v)\n", ierr)

@@ -22,8 +22,8 @@ func TestNoForbiddenVendorSDKs(t *testing.T) {
 	}
 	forbidden := []string{
 		"github.com/anthropics/anthropic-sdk-go",
-		"github.com/aws/aws-sdk-go",   // covers aws-sdk-go and aws-sdk-go-v2
-		"github.com/aws/smithy-go",    // aws-sdk-go-v2 core runtime
+		"github.com/aws/aws-sdk-go", // covers aws-sdk-go and aws-sdk-go-v2
+		"github.com/aws/smithy-go",  // aws-sdk-go-v2 core runtime
 		"github.com/aws/aws-sdk-go-v2",
 	}
 	for _, dep := range info.Deps {

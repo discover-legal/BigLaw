@@ -17,6 +17,7 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/settings"
 	"github.com/discover-legal/biglaw-go/internal/strutil"
 	"github.com/discover-legal/biglaw-go/internal/templates"
+	"github.com/discover-legal/biglaw-go/internal/timekeeping"
 	"github.com/discover-legal/biglaw-go/internal/types"
 	"github.com/google/uuid"
 )
@@ -216,6 +217,9 @@ func (o *Orchestrator) DeleteTask(id string) error {
 	status := task.Status
 	o.mu.RUnlock()
 
+	// Running / awaiting-gate tasks are refused below (409), so their clock is
+	// closed by the runner. Anything else still holding an open entry (e.g.
+	// a hand-edited or legacy task file) is closed here, written off.
 	if status == types.TaskStatusRunning || status == types.TaskStatusAwaitingGate {
 		return ErrTaskActive
 	}
@@ -229,9 +233,13 @@ func (o *Orchestrator) DeleteTask(id string) error {
 		o.mu.Unlock()
 		return ErrTaskNotFound
 	}
+	activeEntry := task.ActiveTimeEntryID
 	delete(o.tasks, id)
 	delete(o.gateChans, id)
 	o.mu.Unlock()
+	if activeEntry != "" && o.time != nil {
+		o.time.CloseNonBillable(activeEntry, timekeeping.ReasonTaskDeleted)
+	}
 	if err := o.persistTasks(); err != nil {
 		return fmt.Errorf("persist task deletion: %w", err)
 	}

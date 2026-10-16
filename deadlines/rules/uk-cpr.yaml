@@ -49,12 +49,13 @@ rules:
     cite: "CPR 15.8"
 
   - id: cpr-summary-judgment-response
-    trigger: summary_judgment_application_served
+    trigger: summary_judgment_hearing
     event: evidence_in_response_due
-    days: 7
-    dayType: business
+    days: -7
+    dayType: calendar
     warningDays: 2
     cite: "CPR 24.5(1)"
+    note: "At least 7 clear days before the hearing (CPR 2.8(3)); the trigger date is the hearing date"
 
   - id: cpr-appeal-notice
     trigger: judgment_handed_down

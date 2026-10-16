@@ -31,7 +31,7 @@ Drop a `.yaml` file in this directory. It is auto-loaded at startup.
 | `rules[].id` | string | Unique rule ID within this file |
 | `rules[].trigger` | string | Trigger event name (snake_case) |
 | `rules[].event` | string | Resulting deadline event name |
-| `rules[].days` | integer | Number of days |
+| `rules[].days` | integer | Number of days. Positive = after the trigger ("within 21 days after service"); **negative = before it** ("at least 7 days before the hearing" → `-7`, trigger date = hearing date). A backward period that ends on a weekend/holiday moves to the *preceding* working day (FRCP 6(a)(5)); `uk_bank` counts clear days (CPR 2.8(3)). |
 | `rules[].dayType` | `calendar`\|`business` | Whether to count weekends/holidays |
 | `rules[].cite` | string | Rule/statute citation |
 

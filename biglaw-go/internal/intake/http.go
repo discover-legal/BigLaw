@@ -443,7 +443,7 @@ func (h *HTTP) Mount(r gin.IRouter, host modules.Host) {
 	})
 
 	// Conflict-hold decision (partner only — mirrors the roster's
-	// acknowledgeConflict + conflictReason override on POST /clients).
+	// acknowledgedConflictIds + conflictReason override on POST /clients).
 	r.POST("/intake/submissions/:id/conflict", func(c *gin.Context) {
 		u := requireUser(c)
 		if u == nil {

@@ -10,6 +10,8 @@ import (
 	"io"
 	"os"
 	"strings"
+
+	"github.com/discover-legal/biglaw-go/internal/atomicfile"
 )
 
 // maxDecompressedBytes caps the total decompressed size of an opened archive
@@ -104,7 +106,7 @@ func (d *Document) SaveFile(path string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, b, 0o644)
+	return atomicfile.WriteFile(path, b, 0o600)
 }
 
 // ─── Text index ───────────────────────────────────────────────────────────────

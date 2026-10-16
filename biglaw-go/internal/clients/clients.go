@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/discover-legal/biglaw-go/internal/atomicfile"
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
 
@@ -126,26 +127,9 @@ func (s *ClientStore) Update(id string, patch map[string]interface{}) (*types.Cl
 		if s.clients[i].ID != id {
 			continue
 		}
-		c := &s.clients[i]
-		if v, ok := patch["name"].(string); ok && strings.TrimSpace(v) != "" {
-			c.Name = strings.TrimSpace(v)
-		}
-		if v, ok := patch["adversaries"].([]string); ok {
-			c.Adversaries = v
-		} else if raw, ok := patch["adversaries"].([]interface{}); ok {
-			adv := make([]string, 0, len(raw))
-			for _, item := range raw {
-				if s, ok := item.(string); ok {
-					adv = append(adv, s)
-				}
-			}
-			c.Adversaries = adv
-		}
-		if v, ok := patch["notes"].(string); ok {
-			c.Notes = v
-		}
-		c.UpdatedAt = time.Now()
-		cp := *c
+		applyPatch(&s.clients[i], patch)
+		s.clients[i].UpdatedAt = time.Now()
+		cp := s.clients[i]
 		updated = &cp
 		break
 	}
@@ -155,6 +139,35 @@ func (s *ClientStore) Update(id string, patch map[string]interface{}) (*types.Cl
 	}
 	s.persist()
 	return updated, nil
+}
+
+// Patched returns c with patch applied exactly as Update would apply it,
+// without touching the store — so a caller can conflict-check the result
+// before committing it.
+func Patched(c types.Client, patch map[string]interface{}) types.Client {
+	c.Adversaries = append([]string(nil), c.Adversaries...)
+	applyPatch(&c, patch)
+	return c
+}
+
+func applyPatch(c *types.Client, patch map[string]interface{}) {
+	if v, ok := patch["name"].(string); ok && strings.TrimSpace(v) != "" {
+		c.Name = strings.TrimSpace(v)
+	}
+	if v, ok := patch["adversaries"].([]string); ok {
+		c.Adversaries = v
+	} else if raw, ok := patch["adversaries"].([]interface{}); ok {
+		adv := make([]string, 0, len(raw))
+		for _, item := range raw {
+			if s, ok := item.(string); ok {
+				adv = append(adv, s)
+			}
+		}
+		c.Adversaries = adv
+	}
+	if v, ok := patch["notes"].(string); ok {
+		c.Notes = v
+	}
 }
 
 // AddMatter appends a new matter to the client with the given ID.
@@ -425,13 +438,8 @@ func (s *ClientStore) persist() {
 	s.mu.RLock()
 	data, _ := json.MarshalIndent(s.clients, "", "  ")
 	s.mu.RUnlock()
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0600); err != nil {
-		slog.Error("clients: persist write failed", "path", tmp, "err", err)
-		return
-	}
-	if err := os.Rename(tmp, s.path); err != nil {
-		slog.Error("clients: persist rename failed", "path", s.path, "err", err)
+	if err := atomicfile.WriteFile(s.path, data, 0o600); err != nil {
+		slog.Error("clients: persist failed", "path", s.path, "err", err)
 	}
 }
 

@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/discover-legal/biglaw-go/internal/atomicfile"
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
 
@@ -57,7 +58,7 @@ func (e *Engine) persist() {
 	}
 	data, err := json.Marshal(e.qtable)
 	if err == nil {
-		if werr := os.WriteFile(e.file, data, 0600); werr != nil {
+		if werr := atomicfile.WriteFile(e.file, data, 0o600); werr != nil {
 			slog.Warn("learning: persist failed", "path", e.file, "err", werr)
 		}
 	}
