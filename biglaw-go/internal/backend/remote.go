@@ -35,7 +35,8 @@ type Remote struct {
 	hc    *http.Client
 
 	// Lazy attach: the first call (or Attach) probes GET /me, retrying an
-	// unreachable owner until graceUntil, and caches the principal.
+	// unreachable owner until graceUntil (fixed at construction), and caches
+	// the principal; mu guards only principal.
 	mu         sync.Mutex
 	principal  *Principal
 	graceUntil time.Time
@@ -44,6 +45,9 @@ type Remote struct {
 // remoteTimeout bounds one REST call. Ingest is the slow path (chunking and
 // dense embeddings run synchronously inside POST /documents).
 const remoteTimeout = 2 * time.Minute
+
+// attachProbeTimeout bounds one GET /me attach probe (a variable for tests).
+var attachProbeTimeout = 3 * time.Second
 
 // maxRemoteBody caps a response body the client will buffer.
 const maxRemoteBody = 64 << 20
@@ -139,18 +143,34 @@ func wrapKind(err error, msg string) error {
 // after it, one attempt per call. Auth and protocol failures are reported at
 // once. Every operation calls Attach first, so the MCP server can answer
 // initialize immediately and a backend that comes up later is picked up.
+//
+// No lock is held while probing, and each probe is bounded by
+// attachProbeTimeout: a backend that accepts connections but never answers
+// costs a caller seconds, not the full request timeout, and never stalls
+// other calls behind it.
 func (r *Remote) Attach(ctx context.Context) (*Principal, error) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.principal != nil {
-		return r.principal, nil
+	p := r.principal
+	r.mu.Unlock()
+	if p != nil {
+		return p, nil
 	}
 	for {
-		p, err := r.Ping(ctx)
+		pctx, cancel := context.WithTimeout(ctx, attachProbeTimeout)
+		p, err := r.Ping(pctx)
+		cancel()
 		if err == nil {
-			r.principal = p
-			slog.Info("MCP thin client attached", "api", r.URL(),
-				"principal", p.User.ProfileID, "role", p.User.Role, "authEnabled", p.AuthEnabled)
+			r.mu.Lock()
+			first := r.principal == nil
+			if first {
+				r.principal = p
+			}
+			p = r.principal
+			r.mu.Unlock()
+			if first {
+				slog.Info("MCP thin client attached", "api", r.URL(),
+					"principal", p.User.ProfileID, "role", p.User.Role, "authEnabled", p.AuthEnabled)
+			}
 			return p, nil
 		}
 		if !errors.Is(err, ErrUnavailable) || !time.Now().Before(r.graceUntil) {
@@ -317,16 +337,12 @@ func (r *Remote) send(ctx context.Context, method, path string, query url.Values
 
 	var body io.Reader
 	if in != nil {
-		raw, err := json.Marshal(in)
-		if err != nil {
-			return newErr(ErrInvalid, "encode request: "+err.Error())
-		}
 		// The operation's own size rule (checkSize), applied before sending:
 		// the call fails exactly as it would in-process, and the API never
 		// sees a body it would have to cut off.
-		if len(raw) > MaxRequestBytes {
-			return newErr(ErrInvalid, fmt.Sprintf("request too large: %d bytes exceeds the %d MiB limit",
-				len(raw), MaxRequestBytes>>20))
+		raw, err := encodeRequest(in)
+		if err != nil {
+			return err
 		}
 		body = bytes.NewReader(raw)
 	}

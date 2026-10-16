@@ -488,11 +488,14 @@ type Store struct {
 
 var Default = &Store{
 	writeCh: make(chan CostEntry, 256),
-	stopCh:  make(chan struct{}),
-	doneCh:  make(chan struct{}),
 }
 
+// Init points the store at its ledger file and starts the disk writer. It
+// may run again after Close (or over a running writer, which is closed
+// first): each Init arms a fresh writer, so a process that runs a command
+// twice — tests at -count=2, the demo — never closes a channel twice.
 func (s *Store) Init(file string) error {
+	s.Close()
 	// Re-apply pricing overrides: init() ran before main loaded .env /
 	// Infisical, so env vars sourced there are only visible now. Assigning
 	// absolute rates is idempotent.
@@ -517,18 +520,20 @@ func (s *Store) Init(file string) error {
 			s.entries = append(s.entries, e)
 		}
 	}
+	s.stopCh, s.doneCh = make(chan struct{}), make(chan struct{})
+	s.closeOnce = sync.Once{}
 	s.started = true
-	go s.writeLoop()
+	go s.writeLoop(s.stopCh, s.doneCh)
 	return nil
 }
 
-func (s *Store) writeLoop() {
-	defer close(s.doneCh)
+func (s *Store) writeLoop(stop <-chan struct{}, done chan<- struct{}) {
+	defer close(done)
 	for {
 		select {
 		case entry := <-s.writeCh:
 			s.appendEntry(entry)
-		case <-s.stopCh:
+		case <-stop:
 			// Drain whatever Record queued before exiting so a graceful
 			// shutdown doesn't drop the tail of the cost ledger.
 			for {

@@ -23,6 +23,7 @@
 package backend
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -146,15 +147,27 @@ func newErr(kind error, msg string) error { return &Error{Kind: kind, Msg: msg} 
 const MaxRequestBytes = 16 << 20
 
 func checkSize(in any) error {
-	raw, err := json.Marshal(in)
-	if err != nil {
-		return newErr(ErrInvalid, "encode request: "+err.Error())
+	_, err := encodeRequest(in)
+	return err
+}
+
+// encodeRequest is the request body for in, refused past MaxRequestBytes.
+// HTML escaping stays off: json.Marshal would turn each <, > and & into a
+// six-byte \u003c, so legal text ("Smith & Jones") or markup would be
+// measured at up to six times the size the client actually sent.
+func encodeRequest(in any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(in); err != nil {
+		return nil, newErr(ErrInvalid, "encode request: "+err.Error())
 	}
+	raw := bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
 	if len(raw) > MaxRequestBytes {
-		return newErr(ErrInvalid, fmt.Sprintf("request too large: %d bytes exceeds the %d MiB limit",
+		return nil, newErr(ErrInvalid, fmt.Sprintf("request too large: %d bytes exceeds the %d MiB limit",
 			len(raw), MaxRequestBytes>>20))
 	}
-	return nil
+	return raw, nil
 }
 
 const (

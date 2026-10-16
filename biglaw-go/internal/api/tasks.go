@@ -156,7 +156,13 @@ func (s *Server) handleSubmitFromTemplate(c *gin.Context) {
 }
 
 func (s *Server) handleGetRound(c *gin.Context) {
-	roundNum, _ := strconv.Atoi(c.Param("round")) // non-numeric → 0 → "round must be a positive integer"
+	// Anything Atoi rejects — non-numeric, or out of int range (where Atoi
+	// returns MaxInt with its error) — is round 0: "round must be a positive
+	// integer" once the task is known to be visible.
+	roundNum, err := strconv.Atoi(c.Param("round"))
+	if err != nil {
+		roundNum = 0
+	}
 	round, err := s.as(c).GetRound(c.Request.Context(), c.Param("id"), roundNum)
 	reply(c, http.StatusOK, round, err)
 }

@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -68,6 +69,8 @@ type contractFixture struct {
 	lawyerLocal  *MCPServer
 	lawyerRemote *MCPServer
 	lawyerID     string
+
+	restURL string // the partner REST server the remote pair talks to
 }
 
 // newContractFixture builds one owner stack (as cmd/biglaw does, minus the
@@ -145,6 +148,7 @@ func newContractFixture(t *testing.T) *contractFixture {
 	srv.AttachPlugins(plugins)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
+	fx.restURL = ts.URL
 	remote, err := backend.NewRemote(ts.URL, "", 0)
 	if err != nil {
 		t.Fatal(err)
@@ -529,6 +533,19 @@ func TestMCPContractLocalVsRemote(t *testing.T) {
 	} {
 		if out := f.same(t, c.tool, c.args); !out.IsError {
 			t.Fatalf("%s %v: expected an error, got %s", c.tool, c.args, out.Text)
+		}
+	}
+
+	// REST-only: a round number out of int range is a bad request (Atoi
+	// reports MaxInt with its error), not a missing round.
+	for _, round := range []string{"99999999999999999999", "x", "0"} {
+		resp, err := http.Get(f.restURL + "/tasks/" + seedTaskID + "/rounds/" + round)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("GET round %s = %d, want 400", round, resp.StatusCode)
 		}
 	}
 

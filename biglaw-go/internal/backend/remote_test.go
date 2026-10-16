@@ -6,6 +6,7 @@ package backend
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -177,5 +178,72 @@ func TestNewRemoteRejectsBadURLs(t *testing.T) {
 		if _, err := NewRemote(u, "", 0); err == nil {
 			t.Errorf("NewRemote(%q) accepted", u)
 		}
+	}
+}
+
+// The 16 MiB rule measures the body the client sends, not json.Marshal's
+// HTML-escaped re-encoding (which turns each <, > and & into six bytes).
+func TestRequestSizeIgnoresHTMLEscaping(t *testing.T) {
+	for _, ch := range []string{"<", "&", ">"} {
+		in := IngestInput{Title: "markup", Content: strings.Repeat(ch, 12<<20)} // 12 MiB, 72 MiB if escaped
+		if err := checkSize(in); err != nil {
+			t.Fatalf("%q-heavy 12 MiB body refused: %v", ch, err)
+		}
+	}
+	if err := checkSize(IngestInput{Content: strings.Repeat("&", MaxRequestBytes)}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("a body over the cap must still be refused, got %v", err)
+	}
+
+	var gotLen int64
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveMe(w, r) {
+			return
+		}
+		b, _ := io.ReadAll(r.Body)
+		gotLen, gotBody = r.ContentLength, string(b)
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"id":"d1"}`))
+	}))
+	defer srv.Close()
+	r, _ := NewRemote(srv.URL, "", 0)
+	content := strings.Repeat("Smith & Jones <v> ", 700_000) // ~12.6 MB raw, ~30 MB escaped
+	if _, err := r.IngestDocument(context.Background(), IngestInput{Title: "t", Content: content}); err != nil {
+		t.Fatalf("remote ingest refused: %v", err)
+	}
+	if gotLen > MaxRequestBytes || !strings.Contains(gotBody, "Smith & Jones <v>") {
+		t.Fatalf("body sent unescaped and under the cap: len=%d", gotLen)
+	}
+}
+
+// A backend that accepts connections but never answers must not hold every
+// caller for the full request timeout, nor serialize callers behind a lock.
+func TestRemoteAttachBoundsAHungBackend(t *testing.T) {
+	old := attachProbeTimeout
+	attachProbeTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { attachProbeTimeout = old })
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	defer srv.Close()
+	defer close(release)
+
+	r, _ := NewRemote(srv.URL, "", 0)
+	start := time.Now()
+	errs := make(chan error, 4)
+	for range 4 {
+		go func() { _, err := r.Attach(context.Background()); errs <- err }()
+	}
+	for range 4 {
+		if err := <-errs; !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("want ErrUnavailable from a hung backend, got %v", err)
+		}
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("concurrent attaches took %v: probes are serialized or unbounded", d)
 	}
 }

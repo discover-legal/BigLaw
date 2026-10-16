@@ -34,7 +34,7 @@ func requestBodyLimit() gin.HandlerFunc {
 
 // Handler is the API's HTTP handler (router plus middleware), for embedding
 // the API in another server or an httptest.Server.
-func (s *Server) Handler() http.Handler { return s.router }
+func (s *Server) Handler() http.Handler { return canonicalRawPath(s.router) }
 
 // Run starts the HTTP server on addr (e.g. ":3101").
 func (s *Server) Run(addr string) error {
@@ -44,7 +44,7 @@ func (s *Server) Run(addr string) error {
 func (s *Server) httpServer(addr string) *http.Server {
 	return &http.Server{
 		Addr:              addr,
-		Handler:           s.router,
+		Handler:           s.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       45 * time.Second,
 		WriteTimeout:      0, // SSE streams are intentionally long-lived.

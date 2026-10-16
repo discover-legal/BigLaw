@@ -4,10 +4,10 @@
 package api
 
 import (
-	"github.com/discover-legal/biglaw-go/internal/backend"
 	"net/http"
 	"strconv"
 
+	"github.com/discover-legal/biglaw-go/internal/backend"
 	"github.com/gin-gonic/gin"
 )
 
