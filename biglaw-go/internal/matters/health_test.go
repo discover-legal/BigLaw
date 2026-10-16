@@ -47,7 +47,9 @@ func TestFailedOnlyMatterIsNotHealthy(t *testing.T) {
 }
 
 func TestInterruptedIsMediumWithOwnWording(t *testing.T) {
-	got := New().Compute("M-1", []types.Task{task("t1", types.TaskStatusInterrupted)},
+	i := task("t1", types.TaskStatusInterrupted)
+	i.Description = "Draft the NDA"
+	got := New().Compute("M-1", []types.Task{i, task("t0", types.TaskStatusComplete)},
 		fakeTime{recentEntry()}, fakeBudget{})
 	if len(got.RiskFactors) != 1 {
 		t.Fatalf("risks = %+v", got.RiskFactors)
@@ -120,5 +122,60 @@ func TestHealthyMatterStaysGreen(t *testing.T) {
 		fakeTime{recentEntry()}, fakeBudget{&types.BudgetBurn{BurnPct: 0.2}})
 	if got.Signal != types.HealthGreen || len(got.RiskFactors) != 0 {
 		t.Fatalf("healthy matter = %v %v %+v", got.Score, got.Signal, got.RiskFactors)
+	}
+}
+
+// Every task interrupted: nothing delivered, so not "On track" — but worded as
+// an interruption, not a failure.
+func TestAllInterruptedNeedsAttention(t *testing.T) {
+	tasks := []types.Task{task("a", types.TaskStatusInterrupted), task("b", types.TaskStatusInterrupted), task("c", types.TaskStatusInterrupted)}
+	got := New().Compute("M-1", tasks, fakeTime{recentEntry()}, fakeBudget{})
+	if got.Signal == types.HealthGreen {
+		t.Fatalf("all-interrupted matter = %v %q, want below green", got.Score, got.SignalLabel)
+	}
+	r := got.RiskFactors[0]
+	if r.Type != "task_interrupted" || r.Severity != "high" || strings.Contains(r.Message, "failed") {
+		t.Errorf("risk = %+v", r)
+	}
+}
+
+// An interruption weighs half a failure in the failure branch too.
+func TestInterruptedHalfWeightAlongsideFailures(t *testing.T) {
+	tasks := []types.Task{task("f", types.TaskStatusFailed)}
+	for i := range 5 {
+		tasks = append(tasks, task(fmt.Sprint("i", i), types.TaskStatusInterrupted))
+	}
+	got := New().Compute("M-1", tasks, fakeTime{recentEntry()}, fakeBudget{})
+	// (1 + 5×0.5) / 6 → 42
+	if d := got.Dimensions.DeadlineHealth; d != 42 {
+		t.Errorf("delivery = %v, want 42", d)
+	}
+}
+
+// Only a successful re-run of the same work supersedes a failure.
+func TestUnrelatedCompletionDoesNotSupersede(t *testing.T) {
+	failedAt := time.Now().Add(-2 * time.Hour)
+	f := task("f", types.TaskStatusFailed)
+	f.Description, f.CompletedAt = "Draft the NDA", &failedAt
+	other := task("o", types.TaskStatusComplete)
+	done := time.Now().Add(-time.Hour)
+	other.Description, other.CompletedAt = "Research HSR thresholds", &done
+	got := New().Compute("M-1", []types.Task{f, other}, fakeTime{recentEntry()}, fakeBudget{})
+	if got.Dimensions.DeadlineHealth == 100 {
+		t.Fatal("unrelated completion superseded the failure")
+	}
+	rerun := other
+	rerun.Description = "  draft the  NDA "
+	got = New().Compute("M-1", []types.Task{f, rerun}, fakeTime{recentEntry()}, fakeBudget{})
+	if got.Dimensions.DeadlineHealth != 100 {
+		t.Fatalf("re-run of the same work did not supersede: %v", got.Dimensions.DeadlineHealth)
+	}
+}
+
+func TestUntimestampedFailureDoesNotAgeOut(t *testing.T) {
+	f := types.Task{ID: "f", MatterNumber: "M-1", Status: types.TaskStatusFailed}
+	got := New().Compute("M-1", []types.Task{f}, fakeTime{recentEntry()}, fakeBudget{})
+	if got.Dimensions.DeadlineHealth != 0 {
+		t.Fatalf("zero-timestamp failure aged out: %v", got.Dimensions.DeadlineHealth)
 	}
 }

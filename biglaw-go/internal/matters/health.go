@@ -10,6 +10,7 @@ package matters
 import (
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/discover-legal/biglaw-go/internal/types"
@@ -121,7 +122,7 @@ func (m *Monitor) Compute(
 			hasHighRisk = hasHighRisk || r.Severity == "high"
 		}
 	}
-	// A high-severity risk (≥ half of recent tasks failed, budget ≥ 80%, ≥ 3
+	// A high-severity risk (≥ half of recent tasks failed, all interrupted, budget ≥ 80%, ≥ 3
 	// open gates, ≥ 50% OCG violations) caps the matter below green. The weighted average alone
 	// can't express that: the other four dimensions carry 75% of the weight,
 	// and an unset budget (85), fresh time entries (written by the failed runs
@@ -284,19 +285,22 @@ func settledAt(t types.Task) time.Time {
 // a backend restart (boot-quarantined, must be resubmitted), and tasks stuck
 // in flight for over two weeks.
 //
-// A failure or interruption stops counting once it is superseded — a task on
-// the same matter completed after it (the work was re-run successfully) — or
-// once it is older than failureWindow. The penalty is proportional to the
-// share of the matter's counted tasks that failed (any failure costs at least
-// 15 points), so 4 failures among 104 tasks dents delivery rather than
-// zeroing it, while a matter whose only work failed scores 0.
+// A failure or interruption stops counting once it is superseded — the same
+// work (same workflow and description) completed after it, i.e. it was re-run
+// successfully — or once it is older than failureWindow. Unrelated later work
+// does not supersede it, and a task with no timestamp at all never ages out.
+// The penalty is proportional to the share of the matter's counted tasks that
+// failed, an interruption weighing half a failure (any penalty costs at least
+// 15 points), so 4 failures among 104 tasks dents delivery rather than zeroing
+// it, while a matter whose only work failed scores 0.
 func deadlineDimension(tasks []types.Task) (int, *types.MatterRiskFactor) {
 	now := time.Now()
-	var lastCompleted time.Time
+	lastCompleted := map[string]time.Time{} // workKey → latest completion
 	for _, t := range tasks {
 		if t.Status == types.TaskStatusComplete {
-			if at := settledAt(t); at.After(lastCompleted) {
-				lastCompleted = at
+			k := workKey(t)
+			if at := settledAt(t); at.After(lastCompleted[k]) {
+				lastCompleted[k] = at
 			}
 		}
 	}
@@ -305,8 +309,8 @@ func deadlineDimension(tasks []types.Task) (int, *types.MatterRiskFactor) {
 		switch t.Status {
 		case types.TaskStatusFailed, types.TaskStatusInterrupted:
 			at := settledAt(t)
-			if now.Sub(at) > failureWindow || lastCompleted.After(at) {
-				continue // aged out, or superseded by later successful work
+			if (!at.IsZero() && now.Sub(at) > failureWindow) || lastCompleted[workKey(t)].After(at) {
+				continue // aged out, or superseded by a successful re-run
 			}
 			if t.Status == types.TaskStatusFailed {
 				failed++
@@ -321,14 +325,13 @@ func deadlineDimension(tasks []types.Task) (int, *types.MatterRiskFactor) {
 		counted++
 	}
 
-	// penalty: proportional to the share of counted tasks, at least 15 points.
-	penalised := func(n int, weight float64) int {
-		share := float64(n) / float64(counted)
-		return int(math.Round(math.Min(85, 100*(1-share*weight))))
-	}
+	// penalty: proportional to the weighted share of counted tasks, at least
+	// 15 points. An interruption is half a failure: the run died with the
+	// previous process, not on the work.
+	score := int(math.Round(math.Min(85,
+		100*(1-(float64(failed)+0.5*float64(interrupted))/float64(max(counted, 1))))))
 	switch {
 	case failed > 0:
-		score := penalised(failed+interrupted, 1)
 		sev := "medium"
 		msg := formatN("%d recent task(s) on this matter have failed", failed)
 		if 2*failed >= counted {
@@ -347,13 +350,19 @@ func deadlineDimension(tasks []types.Task) (int, *types.MatterRiskFactor) {
 			SuggestedAction: "Review failed tasks and re-run or reassign.",
 		}
 	case interrupted > 0:
-		// Not a failure of the work: the run died with the previous process.
-		return penalised(interrupted, 0.5), &types.MatterRiskFactor{
+		r := &types.MatterRiskFactor{
 			Type:            "task_interrupted",
 			Severity:        "medium",
 			Message:         formatN("%d task(s) were interrupted by a server restart and have not been resubmitted", interrupted),
 			SuggestedAction: "Resubmit the interrupted task(s).",
 		}
+		if interrupted == counted {
+			// Nothing on the matter was delivered: not "On track", even though
+			// no work failed on its merits.
+			r.Severity = "high"
+			r.Message = formatN("All %d task(s) on this matter were interrupted by a server restart — no work product delivered", interrupted)
+		}
+		return score, r
 	case stalled > 0:
 		return int(math.Max(30, float64(100-stalled*15))), &types.MatterRiskFactor{
 			Type:            "deadline_approaching",
@@ -363,6 +372,12 @@ func deadlineDimension(tasks []types.Task) (int, *types.MatterRiskFactor) {
 		}
 	}
 	return 100, nil
+}
+
+// workKey identifies "the same work" for supersession: a re-run of a task
+// (or of a template with the same inputs) shares its workflow and description.
+func workKey(t types.Task) string {
+	return string(t.WorkflowType) + "\x00" + strings.ToLower(strings.Join(strings.Fields(t.Description), " "))
 }
 
 func activityDimension(lastActivityMs int64) (int, *types.MatterRiskFactor) {
