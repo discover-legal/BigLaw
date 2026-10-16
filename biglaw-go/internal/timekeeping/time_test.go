@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -211,5 +212,28 @@ func TestWriteOffIdempotent(t *testing.T) {
 	}
 	if s.GetByID(open.ID).NonBillable {
 		t.Fatal("open entry must not be written off")
+	}
+}
+
+// AI-timekeeper entries are agent time (task_run + AgentID), not human time;
+// the CSV carries the write-off and requester columns.
+func TestAgentOnlyAndCSVColumns(t *testing.T) {
+	ts := NewTimeStore()
+	if err := ts.Init(filepath.Join(t.TempDir(), "time.json")); err != nil {
+		t.Fatal(err)
+	}
+	r := 100.0
+	ai := ts.Open(types.TimeEntry{AgentID: "biglaw-ai", BillingRate: &r, Event: types.TimeEventTaskRun, RequestedByProfileID: "p1"})
+	ts.CloseNonBillable(ai.ID, "task failed")
+	hu := ts.Open(types.TimeEntry{ProfileID: "p1", BillingRate: &r, Event: types.TimeEventGateReview})
+	ts.Close(hu.ID)
+	yes, no := true, false
+	if a, h := ts.List(TimeFilter{AgentOnly: &yes}), ts.List(TimeFilter{AgentOnly: &no}); len(a) != 1 || a[0].ID != ai.ID || len(h) != 1 || h[0].ID != hu.ID {
+		t.Fatalf("agentOnly=%v humanOnly=%v", a, h)
+	}
+	csv := strings.Split(ts.ExportCSV(TimeFilter{AgentOnly: &yes}), "\n")
+	if !strings.HasSuffix(csv[0], ",nonBillable,nonBillableReason,requestedByProfileId,pausedMs") ||
+		!strings.HasSuffix(csv[1], `,true,"task failed","p1",0`) {
+		t.Fatalf("csv = %q", csv[:2])
 	}
 }

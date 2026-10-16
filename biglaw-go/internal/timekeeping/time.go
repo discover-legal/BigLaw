@@ -28,7 +28,8 @@ type TimeFilter struct {
 	ClientNumber string
 	From         *time.Time
 	To           *time.Time
-	// nil = all, true = only agent_work events, false = exclude agent_work events
+	// nil = all; true = only agent time (an AgentID — e.g. the AI timekeeper —
+	// or a legacy agent_work event); false = human time only.
 	AgentOnly *bool
 	// VisibleToProfileID restricts to entries a lawyer may see: their own
 	// time, plus AI time on work they requested (RequestedByProfileID).
@@ -401,7 +402,7 @@ func (s *TimeStore) ExportCSV(filter TimeFilter) string {
 	sb.WriteString("id,event,profileId,profileName,agentId,agentName,taskId," +
 		"matterNumber,clientNumber,description,startedAt,endedAt,durationMs," +
 		"billingUnits,billingRate,billingAmountUsd,utbmsTaskCode,utbmsActivityCode," +
-		"clioSyncedAt\n")
+		"clioSyncedAt,nonBillable,nonBillableReason,requestedByProfileId,pausedMs\n")
 
 	for _, e := range entries {
 		endedAt := ""
@@ -416,7 +417,7 @@ func (s *TimeStore) ExportCSV(filter TimeFilter) string {
 		if e.BillingAmountUsd != nil {
 			amount = fmt.Sprintf("%.4f", *e.BillingAmountUsd)
 		}
-		sb.WriteString(fmt.Sprintf("%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%d,%d,%s,%s,%s,%s,%s\n",
+		sb.WriteString(fmt.Sprintf("%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%d,%d,%s,%s,%s,%s,%s,%t,%s,%s,%d\n",
 			csvEscape(e.ID),
 			csvEscape(string(e.Event)),
 			csvEscape(e.ProfileID),
@@ -436,6 +437,10 @@ func (s *TimeStore) ExportCSV(filter TimeFilter) string {
 			csvEscape(e.UTBMSTaskCode),
 			csvEscape(e.UTBMSActivityCode),
 			csvEscape(e.ClioSyncedAt),
+			e.NonBillable,
+			csvEscape(e.NonBillableReason),
+			csvEscape(e.RequestedByProfileID),
+			e.PausedMs,
 		))
 	}
 	return sb.String()
@@ -469,7 +474,7 @@ func matchesFilter(e types.TimeEntry, f TimeFilter) bool {
 		return false
 	}
 	if f.AgentOnly != nil {
-		isAgentWork := e.Event == types.TimeEventAgentWork
+		isAgentWork := e.AgentID != "" || e.Event == types.TimeEventAgentWork
 		if *f.AgentOnly && !isAgentWork {
 			return false
 		}
