@@ -15,9 +15,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/discover-legal/biglaw-go/internal/atomicfile"
 )
 
 const clioResponseCap = 2_000_000
@@ -223,10 +224,9 @@ func (c *ClioClient) save() error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(c.tokensFile), 0755); err != nil {
-		return err
-	}
-	return os.WriteFile(c.tokensFile, data, 0600)
+	// OAuth refresh tokens: atomic so a crash never leaves a truncated file
+	// (which would force a re-connect), 0600 as they are credentials.
+	return atomicfile.WriteFile(c.tokensFile, data, 0o600)
 }
 
 // Disconnect clears stored tokens.
@@ -373,16 +373,24 @@ func (c *ClioClient) DownloadDocument(documentID int) ([]byte, error) {
 
 // CreateActivity logs a time entry in Clio.
 func (c *ClioClient) CreateActivity(matterID int, description, dateOn string, durationHours float64) (interface{}, error) {
-	body := map[string]interface{}{
-		"data": map[string]interface{}{
-			"type":              "TimeEntry",
-			"date":              dateOn,
-			"quantity_in_hours": durationHours,
-			"note":              description,
-			"matter":            map[string]int{"id": matterID},
-		},
+	return c.CreateActivityPriced(matterID, description, dateOn, durationHours, nil)
+}
+
+// CreateActivityPriced is CreateActivity with an explicit hourly price. A nil
+// price lets Clio apply the connected user's default rate — wrong for AI
+// time, which must carry the AI timekeeper's own rate.
+func (c *ClioClient) CreateActivityPriced(matterID int, description, dateOn string, durationHours float64, price *float64) (interface{}, error) {
+	data := map[string]interface{}{
+		"type":              "TimeEntry",
+		"date":              dateOn,
+		"quantity_in_hours": durationHours,
+		"note":              description,
+		"matter":            map[string]int{"id": matterID},
 	}
-	return c.post("/api/v4/activities.json", body)
+	if price != nil {
+		data["price"] = *price
+	}
+	return c.post("/api/v4/activities.json", map[string]interface{}{"data": data})
 }
 
 // CreateNote posts a note to a matter — used to save synthesis output and

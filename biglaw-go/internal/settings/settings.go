@@ -23,6 +23,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/discover-legal/biglaw-go/internal/atomicfile"
 	"github.com/discover-legal/biglaw-go/internal/config"
 	"github.com/discover-legal/biglaw-go/internal/strutil"
 	"github.com/discover-legal/biglaw-go/internal/urlguard"
@@ -397,18 +398,14 @@ func (s *SettingsStore) apply(p Patch, validateURL bool) {
 }
 
 // persist writes the admin overlay — only fields that differ from the
-// baseline — to disk atomically: marshal to path+".tmp" then rename over path.
+// baseline — to disk atomically (crash-safe temp + fsync + rename).
 func (s *SettingsStore) persist() error {
 	overlay := diffPatch(snapshot(s.cfg), s.baseline)
 	data, err := json.MarshalIndent(settingsFile{V: fileVersion, Patch: overlay}, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.path)
+	return atomicfile.WriteFile(s.path, data, 0o600)
 }
 
 // snapshot renders every settings field of c as a fully populated Patch

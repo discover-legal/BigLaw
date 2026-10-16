@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { api } from "./api";
-import type { Client, ClientMatter, ConflictCheckResult, OcgDocument, OcgRule, Notify } from "./types";
+import { api, ClientConflictError } from "./api";
+import type { Client, ClientMatter, ConflictCheckResult, ConflictHit, OcgDocument, OcgRule, Notify } from "./types";
 import { PRACTICE_AREAS } from "./types";
 
 export function ClientsPanel({ notify }: { notify: Notify }) {
@@ -11,6 +11,10 @@ export function ClientsPanel({ notify }: { notify: Notify }) {
   const [tab, setTab] = useState<"clients" | "new-client" | "new-matter">("clients");
   const [busy, setBusy] = useState(false);
   const [conflict, setConflict] = useState<ConflictCheckResult | null>(null);
+  // Set when POST /clients refused with 409: creation needs an explicit,
+  // reasoned acknowledgement (recorded in the audit log).
+  const [pendingConflicts, setPendingConflicts] = useState<ConflictHit[] | null>(null);
+  const [ackReason, setAckReason] = useState("");
 
   const [nc, setNc] = useState({ name: "", clientNumber: "", adversaries: "", notes: "" });
   const [nm, setNm] = useState({ matterNumber: "", description: "", practiceArea: "" });
@@ -104,23 +108,41 @@ export function ClientsPanel({ notify }: { notify: Notify }) {
     } catch { /* ignore */ }
   }
 
-  async function addClient() {
+  async function addClient(acknowledge = false) {
     if (!nc.name.trim() || !nc.clientNumber.trim()) { notify("Name and client number required", "error"); return; }
+    if (acknowledge && !ackReason.trim()) { notify("A reason is required to acknowledge the conflict", "error"); return; }
     setBusy(true);
     try {
       const adversaries = nc.adversaries.split(",").map((s) => s.trim()).filter(Boolean);
-      const res = await api.createClient({ name: nc.name, clientNumber: nc.clientNumber, adversaries, notes: nc.notes || undefined });
-      if (res.conflict?.hasConflict) {
-        notify(`⚠ Conflict detected: ${res.conflict.conflictingClientName} lists "${res.conflict.matchedAdversary}" as an adverse party`, "warn");
-      } else {
-        notify("Client added");
-      }
+      const res = await api.createClient({
+        name: nc.name, clientNumber: nc.clientNumber, adversaries, notes: nc.notes || undefined,
+        ...(acknowledge && pendingConflicts
+          ? { acknowledgedConflictIds: pendingConflicts.map((h) => h.id), conflictReason: ackReason.trim() }
+          : {}),
+      });
+      notify(res.conflict?.hasConflict ? "Client added — conflict override recorded in the audit log" : "Client added");
       setNc({ name: "", clientNumber: "", adversaries: "", notes: "" });
       setConflict(null);
+      setPendingConflicts(null);
+      setAckReason("");
       await load();
       setSelectedId(res.id);
       setTab("clients");
-    } catch (e) { notify((e as Error).message, "error"); } finally { setBusy(false); }
+    } catch (e) {
+      if (e instanceof ClientConflictError) {
+        setPendingConflicts(e.conflicts);
+        notify("Conflict of interest — acknowledge with a reason to add this client", "warn");
+      } else {
+        notify((e as Error).message, "error");
+      }
+    } finally { setBusy(false); }
+  }
+
+  function editNewClient(patch: Partial<typeof nc>) {
+    setNc({ ...nc, ...patch });
+    // Any change to who the client is or who they oppose invalidates a
+    // previous refusal — it must be re-checked by the server.
+    if (patch.name !== undefined || patch.adversaries !== undefined) { setPendingConflicts(null); setAckReason(""); }
   }
 
   async function removeClient(id: string) {
@@ -347,14 +369,15 @@ export function ClientsPanel({ notify }: { notify: Notify }) {
               <motion.div key="new-client" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
                 <div className="field">
                   <label>Client name</label>
-                  <input value={nc.name} onChange={(e) => setNc({ ...nc, name: e.target.value })}
+                  <input value={nc.name} onChange={(e) => editNewClient({ name: e.target.value })}
                     onBlur={checkConflict} placeholder="Acme Corporation" />
                 </div>
                 <AnimatePresence>
                   {conflict?.hasConflict && (
                     <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }}
                       style={{ background: "rgba(218,106,96,0.12)", border: "1px solid rgba(218,106,96,0.4)", borderRadius: 8, padding: "10px 14px", marginBottom: 12, color: "var(--red)", fontSize: 13 }}>
-                      ⚠ Potential conflict of interest — <strong>{conflict.conflictingClientName}</strong> lists "<em>{conflict.matchedAdversary}</em>" as an adverse party.
+                      ⚠ Potential conflict of interest — <strong>{conflict.conflictingClientName}</strong> lists "<em>{conflict.matchedAdversary}</em>" as an adverse party
+                      {(conflict.conflicts?.length ?? 0) > 1 ? ` (and ${(conflict.conflicts?.length ?? 1) - 1} more)` : ""}.
                     </motion.div>
                   )}
                 </AnimatePresence>
@@ -366,12 +389,36 @@ export function ClientsPanel({ notify }: { notify: Notify }) {
                 </div>
                 <div className="field">
                   <label>Adverse parties <span style={{ fontWeight: 400, color: "var(--text-faint)" }}>(comma-separated, for conflict checks)</span></label>
-                  <input value={nc.adversaries} onChange={(e) => setNc({ ...nc, adversaries: e.target.value })} placeholder="Beta Inc, Gamma Ltd" />
+                  <input value={nc.adversaries} onChange={(e) => editNewClient({ adversaries: e.target.value })} placeholder="Beta Inc, Gamma Ltd" />
                 </div>
                 <div className="field">
                   <label>Notes</label>
                   <textarea style={{ minHeight: 72 }} value={nc.notes} onChange={(e) => setNc({ ...nc, notes: e.target.value })} placeholder="Optional internal notes…" />
                 </div>
+                {!!pendingConflicts?.length && (
+                  <div role="alert" style={{ background: "rgba(218,106,96,0.12)", border: "1px solid rgba(218,106,96,0.4)", borderRadius: 8, padding: "12px 14px", marginTop: 4 }}>
+                    <div style={{ color: "var(--red)", fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
+                      Not added — conflict of interest
+                    </div>
+                    <div style={{ fontSize: 13, color: "var(--text-dim)", marginBottom: 10 }}>
+                      <ul style={{ margin: "0 0 8px", paddingLeft: 18 }}>
+                        {pendingConflicts.map((h) => (
+                          <li key={h.id}><strong>{h.conflictingClientName}</strong> — adverse party "<em>{h.matchedAdversary}</em>"</li>
+                        ))}
+                      </ul>
+                      To add this client anyway, record why {pendingConflicts.length > 1 ? "every conflict above is" : "the conflict is"} acceptable (e.g. informed-consent waiver, ethical wall).
+                      Your name and reason are written to the audit log.
+                    </div>
+                    <div className="field" style={{ marginBottom: 10 }}>
+                      <label>Reason for override</label>
+                      <textarea style={{ minHeight: 60 }} value={ackReason} onChange={(e) => setAckReason(e.target.value)}
+                        placeholder="Written informed consent from both clients dated …; ethical wall around team …" />
+                    </div>
+                    <button className="btn reject" disabled={busy || !ackReason.trim()} onClick={() => addClient(true)}>
+                      {busy ? "Adding…" : "Acknowledge conflict & add client"}
+                    </button>
+                  </div>
+                )}
               </motion.div>
             )}
 
@@ -403,7 +450,7 @@ export function ClientsPanel({ notify }: { notify: Notify }) {
 
           {tab === "new-client" && (
             <div style={{ marginTop: 18, display: "flex", gap: 10 }}>
-              <button className="btn primary" disabled={busy || !nc.name.trim() || !nc.clientNumber.trim()} onClick={addClient}>
+              <button className="btn primary" disabled={busy || !nc.name.trim() || !nc.clientNumber.trim() || !!pendingConflicts} onClick={() => addClient()}>
                 {busy ? "Adding…" : "＋ Add client"}
               </button>
               <button className="btn ghost" onClick={() => setTab("clients")}>Cancel</button>

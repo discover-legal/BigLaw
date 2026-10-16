@@ -24,11 +24,12 @@ func (s *Server) handleListTimeEntries(c *gin.Context) {
 
 	filter := timekeeping.TimeFilter{}
 
-	// Partners may filter by any profileId; lawyers are locked to their own.
+	// Partners may filter by any profileId; lawyers are locked to their own
+	// time plus the AI time on tasks they requested.
 	if auth.IsPartner(u) {
 		filter.ProfileID = c.Query("profileId")
 	} else {
-		filter.ProfileID = u.ProfileID
+		filter.VisibleToProfileID = u.ProfileID
 	}
 
 	filter.TaskID = c.Query("taskId")

@@ -4,6 +4,7 @@
 package bots
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -101,5 +102,13 @@ func TestDispatchReportPortfolioAsync(t *testing.T) {
 	out, _ := r.AsyncWork()
 	if out != "report" {
 		t.Errorf("report async result: %q", out)
+	}
+}
+
+// Async failures never echo the raw error into a channel.
+func TestAsyncFailureMessageHidesError(t *testing.T) {
+	msg := asyncFailureMessage(PlatformSlack, errors.New("open /srv/firm/clients/acme/secret.docx: permission denied"))
+	if strings.Contains(msg, "secret") || strings.Contains(msg, "/srv") || !strings.Contains(msg, "reference `") {
+		t.Fatalf("message = %q", msg)
 	}
 }
