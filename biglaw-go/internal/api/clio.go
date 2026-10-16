@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -24,6 +25,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/discover-legal/biglaw-go/internal/audit"
+	"github.com/discover-legal/biglaw-go/internal/billing"
 	"github.com/discover-legal/biglaw-go/internal/integrations"
 	"github.com/discover-legal/biglaw-go/internal/orchestrator"
 	"github.com/discover-legal/biglaw-go/internal/strutil"
@@ -342,14 +344,21 @@ func (s *Server) handleSyncTimeToClio(c *gin.Context) {
 
 	toSync, skipped := timekeeping.SplitClioUnsynced(s.time.List(filter))
 
+	// Date each activity in the firm's timezone, as LEDES does — 7pm work in
+	// New York belongs to that day, not to the next UTC date.
+	loc, ok := billing.FirmLocation()
+	if !ok {
+		slog.Warn("Clio sync: FIRM_TIMEZONE is not a valid IANA zone; using UTC", "value", os.Getenv("FIRM_TIMEZONE"))
+	}
 	synced, errCount := 0, 0
 	for _, entry := range toSync {
-		dateOn := entry.StartedAt.UTC().Format("2006-01-02")
-		_, err := integrations.DefaultClioClient.CreateActivity(
+		dateOn := entry.StartedAt.In(loc).Format("2006-01-02")
+		_, err := integrations.DefaultClioClient.CreateActivityPriced(
 			body.ClioMatterID,
-			entry.Description,
+			timekeeping.ClioNote(entry),
 			dateOn,
 			timekeeping.ClioDurationHours(entry),
+			entry.BillingRate,
 		)
 		if err != nil {
 			slog.Warn("Clio sync activity failed", "entryId", entry.ID, "err", err)

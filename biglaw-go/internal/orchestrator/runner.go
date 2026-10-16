@@ -123,7 +123,15 @@ func (o *Orchestrator) runTask(task *types.Task) {
 		o.mu.RUnlock()
 		if hasPending {
 			o.update(task, func(t *types.Task) { t.Status = "awaiting_gate" })
+			// Stop the AI clock while a human reviews: the wait is not AI
+			// work (the lawyer's own review time is theirs, not the AI's).
+			if task.ActiveTimeEntryID != "" {
+				o.time.Pause(task.ActiveTimeEntryID)
+			}
 			o.waitForGates(task)
+			if task.ActiveTimeEntryID != "" {
+				o.time.Resume(task.ActiveTimeEntryID)
+			}
 			o.update(task, func(t *types.Task) { t.Status = "running" })
 		}
 	}
@@ -134,7 +142,9 @@ func (o *Orchestrator) runTask(task *types.Task) {
 			t.Error = runErr.Error()
 		})
 		if task.ActiveTimeEntryID != "" {
-			o.time.Close(task.ActiveTimeEntryID)
+			// A failed AI run is not billable work product: keep the
+			// elapsed time on record but write the entry off.
+			o.time.CloseNonBillable(task.ActiveTimeEntryID, "task failed: "+strutil.Truncate(runErr.Error(), 200))
 			o.update(task, func(t *types.Task) { t.ActiveTimeEntryID = "" })
 		}
 		emitProgress(task.ID, "failed", map[string]interface{}{"error": runErr.Error()})
@@ -145,9 +155,9 @@ func (o *Orchestrator) runTask(task *types.Task) {
 
 	// Final synthesis. Reads Findings/PendingGates, which gate handlers
 	// rewrite concurrently — work from a locked snapshot.
-	output, err := o.synthesise(o.snapshot(task))
-	if err != nil {
-		output = fmt.Sprintf("Synthesis error: %v", err)
+	output, synthErr := o.synthesise(o.snapshot(task))
+	if synthErr != nil {
+		output = fmt.Sprintf("Synthesis error: %v", synthErr)
 	}
 	o.update(task, func(t *types.Task) { t.Output = output })
 
@@ -166,7 +176,12 @@ func (o *Orchestrator) runTask(task *types.Task) {
 	})
 
 	if task.ActiveTimeEntryID != "" {
-		o.time.Close(task.ActiveTimeEntryID)
+		if synthErr != nil {
+			// The "deliverable" is an error string — nothing billable.
+			o.time.CloseNonBillable(task.ActiveTimeEntryID, "synthesis failed: "+strutil.Truncate(synthErr.Error(), 200))
+		} else {
+			o.time.Close(task.ActiveTimeEntryID)
+		}
 		o.update(task, func(t *types.Task) { t.ActiveTimeEntryID = "" })
 	}
 

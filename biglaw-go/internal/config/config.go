@@ -442,6 +442,12 @@ func Load() *Config {
 		st.derived("CLIENTS_FILE", filepath.Join(filepath.Dir(c.Persistence.ClientsFile), ".matter-budgets.json"),
 			".matter-budgets.json", "data/.matter-budgets.json")
 	}
+	// The one-off time-entry migration marker sits next to the time file
+	// (cmd/biglaw/migrate_failed_runs.go); without it a migrated install
+	// would re-run the write-off.
+	if !st.explicit("TIME_FILE") {
+		st.derived("TIME_FILE", c.Persistence.TimeFile+".migrations.json", ".time-entries.json.migrations.json")
+	}
 	st.withCompanions("SQLITE_PATH", "-wal", "-shm", "-journal")
 	c.state = st.paths
 

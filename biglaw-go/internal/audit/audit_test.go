@@ -94,3 +94,10 @@ func TestRestoreFromFileDetectsTamperedChain(t *testing.T) {
 		t.Errorf("tampered chain did not trigger a tamper warning; log output: %s", logOut.String())
 	}
 }
+
+// hashEntry is the chain hash of an entry as Write produces it (the hash of
+// its json.Marshal bytes, which is also the line written to the log).
+func hashEntry(e AuditEntry) string {
+	raw, _ := json.Marshal(e)
+	return rawHash(raw)
+}

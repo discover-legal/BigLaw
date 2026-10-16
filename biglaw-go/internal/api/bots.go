@@ -18,6 +18,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/discover-legal/biglaw-go/internal/audit"
 	"github.com/discover-legal/biglaw-go/internal/bots"
 	"github.com/discover-legal/biglaw-go/internal/briefing"
 	"github.com/discover-legal/biglaw-go/internal/clients"
@@ -339,6 +340,11 @@ func (f *botFacade) SetMatterBudget(matterNumber, amount string) (string, error)
 	if err := f.s.clients.SetMatterBudget(matterNumber, &amt, nil); err != nil {
 		return "", err
 	}
+	audit.Default.Write(audit.WriteRequest{
+		Event:   "matter.budget.set",
+		ActorID: audit.ActorSystem,
+		Data:    map[string]interface{}{"matterNumber": matterNumber, "budgetUsd": amt, "via": "chat_bot"},
+	})
 	return fmt.Sprintf("Budget for **%s** set to $%.0f.", matterNumber, amt), nil
 }
 

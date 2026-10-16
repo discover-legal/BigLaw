@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/discover-legal/biglaw-go/internal/agents"
+	"github.com/discover-legal/biglaw-go/internal/atomicfile"
 	"github.com/discover-legal/biglaw-go/internal/ooxml"
 	"github.com/discover-legal/biglaw-go/internal/providers"
 )
@@ -221,7 +222,7 @@ func (r *Registry) docxGenerateTool() *ToolImpl {
 			if err != nil {
 				return nil, err
 			}
-			if err := os.WriteFile(outputPath, data, 0o644); err != nil {
+			if err := atomicfile.WriteFile(outputPath, data, 0o600); err != nil {
 				return nil, err
 			}
 			return map[string]interface{}{
@@ -334,7 +335,7 @@ func (r *Registry) replicateDocumentTool() *ToolImpl {
 					name = fmt.Sprintf("%s (%d).docx", stem, count*n+i)
 					dst = filepath.Join(dir, name)
 				}
-				if err := os.WriteFile(dst, data, 0o644); err != nil {
+				if err := atomicfile.WriteFile(dst, data, 0o600); err != nil {
 					return fail(err.Error()), nil
 				}
 				copies = append(copies, map[string]interface{}{"path": dst, "filename": name})

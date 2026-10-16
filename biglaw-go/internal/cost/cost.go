@@ -490,10 +490,9 @@ var Default = &Store{
 	writeCh: make(chan CostEntry, 256),
 }
 
-// Init points the store at its ledger file and starts the disk writer. It
-// may run again after Close (or over a running writer, which is closed
-// first): each Init arms a fresh writer, so a process that runs a command
-// twice — tests at -count=2, the demo — never closes a channel twice.
+// Init loads the ledger at file and starts the disk writer. Calling it again
+// (a re-run in the same process, tests at -count>1) first stops the previous
+// writer — flushing its queue — and reloads, so exactly one writer runs.
 func (s *Store) Init(file string) error {
 	s.Close()
 	// Re-apply pricing overrides: init() ran before main loaded .env /
@@ -501,7 +500,6 @@ func (s *Store) Init(file string) error {
 	// absolute rates is idempotent.
 	applyPricingEnvOverridesMarked(basePricing, baseEnvPriced)
 	applyClassPricingOverrides()
-	s.file = file
 	if err := os.MkdirAll(filepath.Dir(file), 0755); err != nil {
 		return err
 	}
@@ -511,16 +509,22 @@ func (s *Store) Init(file string) error {
 	}
 	// A missing ledger just means a fresh install — the write loop must
 	// still start, or no cost entry ever reaches disk.
+	var loaded []CostEntry
 	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
 		if line == "" {
 			continue
 		}
 		var e CostEntry
 		if json.Unmarshal([]byte(line), &e) == nil {
-			s.entries = append(s.entries, e)
+			loaded = append(loaded, e)
 		}
 	}
-	s.stopCh, s.doneCh = make(chan struct{}), make(chan struct{})
+	s.mu.Lock()
+	s.entries = loaded
+	s.mu.Unlock()
+	s.file = file
+	s.stopCh = make(chan struct{})
+	s.doneCh = make(chan struct{})
 	s.closeOnce = sync.Once{}
 	s.started = true
 	go s.writeLoop(s.stopCh, s.doneCh)
@@ -550,8 +554,9 @@ func (s *Store) writeLoop(stop <-chan struct{}, done chan<- struct{}) {
 
 func (s *Store) appendEntry(entry CostEntry) {
 	raw, _ := json.Marshal(entry)
-	f, err := os.OpenFile(s.file, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(s.file, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err == nil {
+		_ = f.Chmod(0o600) // tighten a file created by an older build at 0644
 		fmt.Fprintln(f, string(raw))
 		f.Close()
 	}

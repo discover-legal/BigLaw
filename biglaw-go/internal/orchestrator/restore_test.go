@@ -139,3 +139,29 @@ func TestRestoreLeavesTerminalStatusesAlone(t *testing.T) {
 		}
 	}
 }
+
+// Upgrade path: a 0644 snapshot (and a stale fixed-name temp file from the
+// pre-atomicfile writer) end up 0600 / removed after restore + persist.
+func TestPersistTightensSnapshotAndDropsLegacyTemp(t *testing.T) {
+	o := bootOrchestrator(t, []*types.Task{staleTask("t1", types.TaskStatusComplete)}, false)
+	file := o.cfg.Persistence.TasksFile
+	if err := os.WriteFile(file+".tmp", []byte("[]"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	o.restoreTasks()
+	if err := o.persistTasks(); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(file)
+	if err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("snapshot perm = %v (%v)", fi.Mode().Perm(), err)
+	}
+	if _, err := os.Stat(file + ".tmp"); !os.IsNotExist(err) {
+		t.Fatalf("legacy temp file left behind: %v", err)
+	}
+	var back []*types.Task
+	raw, _ := os.ReadFile(file)
+	if err := json.Unmarshal(raw, &back); err != nil || len(back) != 1 || back[0].ID != "t1" {
+		t.Fatalf("snapshot = %s (%v)", raw, err)
+	}
+}
