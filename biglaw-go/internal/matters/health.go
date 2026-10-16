@@ -330,18 +330,22 @@ func deadlineDimension(tasks []types.Task) (int, *types.MatterRiskFactor) {
 	// previous process, not on the work.
 	score := int(math.Round(math.Min(85,
 		100*(1-(float64(failed)+0.5*float64(interrupted))/float64(max(counted, 1))))))
+	// Severity uses the same weighting: high once the weighted share of
+	// undelivered work reaches half the counted tasks (an all-interrupted
+	// matter included — nothing on it was delivered).
+	sev := "medium"
+	if failed+interrupted > 0 && 2*failed+interrupted >= counted {
+		sev = "high"
+	}
+	noneDelivered := failed+interrupted == counted
 	switch {
 	case failed > 0:
-		sev := "medium"
 		msg := formatN("%d recent task(s) on this matter have failed", failed)
-		if 2*failed >= counted {
-			sev = "high"
-		}
-		if failed == counted {
-			msg = formatN("All %d task(s) on this matter have failed — no work product delivered", failed)
-		}
 		if interrupted > 0 {
 			msg += formatN("; %d more were interrupted by a restart", interrupted)
+		}
+		if noneDelivered {
+			msg += " — no work product delivered"
 		}
 		return score, &types.MatterRiskFactor{
 			Type:            "task_failure",
@@ -350,19 +354,16 @@ func deadlineDimension(tasks []types.Task) (int, *types.MatterRiskFactor) {
 			SuggestedAction: "Review failed tasks and re-run or reassign.",
 		}
 	case interrupted > 0:
-		r := &types.MatterRiskFactor{
+		msg := formatN("%d task(s) were interrupted by a server restart and have not been resubmitted", interrupted)
+		if noneDelivered {
+			msg = formatN("All %d task(s) on this matter were interrupted by a server restart — no work product delivered", interrupted)
+		}
+		return score, &types.MatterRiskFactor{
 			Type:            "task_interrupted",
-			Severity:        "medium",
-			Message:         formatN("%d task(s) were interrupted by a server restart and have not been resubmitted", interrupted),
+			Severity:        sev,
+			Message:         msg,
 			SuggestedAction: "Resubmit the interrupted task(s).",
 		}
-		if interrupted == counted {
-			// Nothing on the matter was delivered: not "On track", even though
-			// no work failed on its merits.
-			r.Severity = "high"
-			r.Message = formatN("All %d task(s) on this matter were interrupted by a server restart — no work product delivered", interrupted)
-		}
-		return score, r
 	case stalled > 0:
 		return int(math.Max(30, float64(100-stalled*15))), &types.MatterRiskFactor{
 			Type:            "deadline_approaching",

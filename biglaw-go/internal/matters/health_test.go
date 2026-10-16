@@ -179,3 +179,50 @@ func TestUntimestampedFailureDoesNotAgeOut(t *testing.T) {
 		t.Fatalf("zero-timestamp failure aged out: %v", got.Dimensions.DeadlineHealth)
 	}
 }
+
+// Severity uses the same weighting as the score: one failure plus a batch of
+// interruptions is not "On track" (2·failed + interrupted ≥ counted → high).
+func TestFailuresPlusInterruptionsSeverity(t *testing.T) {
+	// Distinct descriptions: a completion supersedes only a re-run of the same work.
+	mk := func(nf, ni, nc int) []types.Task {
+		var ts []types.Task
+		add := func(n int, prefix string, st types.TaskStatus) {
+			for i := range n {
+				t := task(fmt.Sprint(prefix, i), st)
+				t.Description = t.ID
+				ts = append(ts, t)
+			}
+		}
+		add(nf, "f", types.TaskStatusFailed)
+		add(ni, "i", types.TaskStatusInterrupted)
+		add(nc, "c", types.TaskStatusComplete)
+		return ts
+	}
+	for _, tc := range []struct {
+		name          string
+		f, i, c       int
+		sev           string
+		noneDelivered bool
+	}{
+		{"1F+2I", 1, 2, 0, "high", true},
+		{"1F+5I", 1, 5, 0, "high", true},
+		{"1F+1I+2C", 1, 1, 2, "medium", false},
+		{"1F+2I+1C", 1, 2, 1, "high", false},
+		{"1I+2C", 0, 1, 2, "medium", false},
+	} {
+		got := New().Compute("M-1", mk(tc.f, tc.i, tc.c), fakeTime{recentEntry()}, fakeBudget{})
+		if len(got.RiskFactors) == 0 {
+			t.Fatalf("%s: no risk factor", tc.name)
+		}
+		r := got.RiskFactors[0]
+		if r.Severity != tc.sev {
+			t.Errorf("%s: severity = %q, want %q (%+v)", tc.name, r.Severity, tc.sev, r)
+		}
+		if strings.Contains(r.Message, "no work product delivered") != tc.noneDelivered {
+			t.Errorf("%s: message = %q", tc.name, r.Message)
+		}
+		if tc.sev == "high" && got.Signal == types.HealthGreen {
+			t.Errorf("%s: signal green (%v %q)", tc.name, got.Score, got.SignalLabel)
+		}
+	}
+}
