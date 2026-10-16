@@ -1,6 +1,6 @@
 import type {
   Task, Template, Health, WorkflowType, SearchResult, AuditEntry, DocumentRef, AgentSummary,
-  AppSettings, LawyerProfile, ToneProfile, Me, Client, ClientMatter, ConflictCheckResult,
+  AppSettings, LawyerProfile, ToneProfile, Me, Client, ClientMatter, ConflictCheckResult, ConflictHit,
   IngestResult, CostSummary, TaskCostResult, TimeEntry, OcgDocument, ClientVoiceGuide,
   PreBill, PreBillStatus, AgentBillingSummary, InvoiceValidationResult,
   BudgetBurn, BudgetPrediction, DeadlineJurisdiction, DeadlineResult,
@@ -22,12 +22,21 @@ type SettingsPatch = {
   drafting?: Partial<AppSettings["drafting"]>;
 };
 
-/** POST /clients refused because the new client conflicts with an existing one. */
+/** POST/PATCH /clients refused because the client conflicts with an existing one. */
 export class ClientConflictError extends Error {
-  constructor(message: string, public readonly conflict: ConflictCheckResult) {
+  constructor(message: string, public readonly conflicts: ConflictHit[]) {
     super(message);
     this.name = "ClientConflictError";
   }
+}
+
+/** Override for a 409: the ids of exactly the hits shown, plus why. */
+export type ConflictAck = { acknowledgedConflictIds?: string[]; conflictReason?: string };
+
+async function throwOnConflict(res: Response): Promise<void> {
+  if (res.status !== 409) return;
+  const parsed = (await res.clone().json().catch(() => ({}))) as { error?: string; conflicts?: ConflictHit[] };
+  if (parsed.conflicts?.length) throw new ClientConflictError(parsed.error ?? "Conflict of interest detected", parsed.conflicts);
 }
 
 async function json<T>(res: Response): Promise<T> {
@@ -88,18 +97,20 @@ export const api = {
     fetch(`/profiles/${id}`, { method: "DELETE" }).then((r) => json<{ ok: true }>(r)),
 
   listClients: () => fetch("/clients").then(json<Client[]>),
-  // 409 = conflict of interest: throws ClientConflictError carrying the hit.
-  // Re-submit with acknowledgeConflict + conflictReason to override (audited).
-  createClient: async (body: { name: string; clientNumber: string; adversaries?: string[]; notes?: string; acknowledgeConflict?: boolean; conflictReason?: string }) => {
+  // 409 = conflict of interest: throws ClientConflictError carrying every hit.
+  // Re-submit with acknowledgedConflictIds (exactly the ids shown) + a
+  // conflictReason to override (audited).
+  createClient: async (body: { name: string; clientNumber: string; adversaries?: string[]; notes?: string } & ConflictAck) => {
     const res = await fetch("/clients", POST(body));
-    if (res.status === 409) {
-      const parsed = (await res.json().catch(() => ({}))) as { error?: string; conflict?: ConflictCheckResult };
-      if (parsed.conflict) throw new ClientConflictError(parsed.error ?? "Conflict of interest detected", parsed.conflict);
-    }
-    return json<Client & { conflict: ConflictCheckResult }>(res);
+    await throwOnConflict(res);
+    return json<Client & { conflict: ConflictCheckResult; conflicts: ConflictHit[] }>(res);
   },
-  updateClient: (id: string, patch: Partial<Pick<Client, "name" | "adversaries" | "notes">>) =>
-    fetch(`/clients/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) }).then(json<Client>),
+  // A name / adverse-party change goes through the same conflict gate.
+  updateClient: async (id: string, patch: Partial<Pick<Client, "name" | "adversaries" | "notes">> & ConflictAck) => {
+    const res = await fetch(`/clients/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) });
+    await throwOnConflict(res);
+    return json<Client>(res);
+  },
   deleteClient: (id: string) =>
     fetch(`/clients/${id}`, { method: "DELETE" }).then((r) => json<{ ok: true }>(r)),
   addMatter: (clientId: string, body: { matterNumber: string; description: string; practiceArea?: string }) =>

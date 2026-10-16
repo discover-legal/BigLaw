@@ -210,6 +210,17 @@ export interface ConflictCheckResult {
   conflictingClientId?: string;
   conflictingClientName?: string;
   matchedAdversary?: string;
+  /** Every hit (the top-level fields repeat the first). */
+  conflicts?: ConflictHit[];
+}
+
+/** One conflict hit; an override must acknowledge every hit by id. */
+export interface ConflictHit {
+  id: string;
+  hasConflict: true;
+  conflictingClientId: string;
+  conflictingClientName: string;
+  matchedAdversary: string;
 }
 
 export interface SuggestedLawyer {
