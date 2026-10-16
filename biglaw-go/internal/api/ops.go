@@ -455,12 +455,28 @@ func (s *Server) handleDocketAlertStream(c *gin.Context) {
 // handleRegulatoryStatus lets clients check the capability before opening
 // the alert stream (which answers 503 when the pulse is off — a browser
 // EventSource then logs a console error on every page view).
+// handleRegulatoryStatus reports whether the regulatory pulse is configured
+// and whether the caller may read its alerts (partners only). Any signed-in
+// user may ask — the flag is not sensitive — and asking has no side effects:
+// the monitor is only built by the partner-only stream/check-now endpoints.
 func (s *Server) handleRegulatoryStatus(c *gin.Context) {
-	if !requirePartner(c) {
-		return
+	c.JSON(http.StatusOK, gin.H{"enabled": s.regPulseConfigured(), "canView": auth.IsPartner(getUser(c))})
+}
+
+// regPulseConfigured mirrors opsRegPulseEnabled(opsRegulatory()) without
+// constructing (and starting) the standalone monitor.
+func (s *Server) regPulseConfigured() bool {
+	if !opsEnvBool("REG_PULSE_ENABLED") {
+		return false
 	}
-	m, _, err := s.opsRegulatory()
-	c.JSON(http.StatusOK, gin.H{"enabled": err == nil && opsRegPulseEnabled(m)})
+	if s.regulatory != nil {
+		return s.regulatory.IsEnabled()
+	}
+	if os.Getenv("TAVILY_API_KEY") == "" {
+		return false
+	}
+	_, err := s.orch.Providers().Get(routing.Light(s.cfg))
+	return err == nil
 }
 
 func (s *Server) handleRegulatoryAlertStream(c *gin.Context) {

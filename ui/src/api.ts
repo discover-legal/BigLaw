@@ -269,7 +269,7 @@ export const api = {
   unwatchDocket: (matterNumber: string) =>
     fetch(`/dockets/watch/${encodeURIComponent(matterNumber)}`, { method: "DELETE" }).then((r) => json<{ ok: true }>(r)),
   docketCheckNow: () => fetch("/dockets/check-now", POST({})).then(json<{ ok: true; watching: number }>),
-  regulatoryStatus: () => fetch("/regulatory/status").then(json<{ enabled: boolean }>),
+  regulatoryStatus: () => fetch("/regulatory/status").then(json<{ enabled: boolean; canView: boolean }>),
   regulatoryCheckNow: () =>
     fetch("/regulatory/check-now", POST({})).then(json<{ checked: number; alerts: RegulationAlert[] }>),
 

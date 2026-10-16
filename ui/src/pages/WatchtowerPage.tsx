@@ -164,24 +164,25 @@ function RegulatorySection({ notify }: { notify: Notify }) {
   const [alerts, setAlerts] = useState<RegulationAlert[]>([]);
   const [streamDown, setStreamDown] = useState(false);
   const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [canView, setCanView] = useState(false); // alerts are partner-only
   const [busy, setBusy] = useState(false);
 
   // Check the capability first: the stream answers 503 when the pulse is off,
   // and an EventSource on a 503 logs a console error on every visit.
   useEffect(() => {
     let alive = true;
-    api.regulatoryStatus().then((s) => { if (alive) setEnabled(s.enabled); }).catch(() => { if (alive) setEnabled(false); });
+    api.regulatoryStatus().then((s) => { if (alive) { setEnabled(s.enabled); setCanView(s.canView); } }).catch(() => { if (alive) setEnabled(false); });
     return () => { alive = false; };
   }, []);
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || !canView) return;
     return streamAlerts<RegulationAlert>(
       "/regulatory/alerts/stream",
       (a) => setAlerts((prev) => [a, ...prev.filter((p) => p.id !== a.id)].slice(0, 50)),
       () => setStreamDown(true),
     );
-  }, [enabled]);
+  }, [enabled, canView]);
 
   async function checkNow() {
     setBusy(true);
@@ -202,19 +203,24 @@ function RegulatorySection({ notify }: { notify: Notify }) {
     <div className="section-card">
       <div className="section-card-head">
         <div className="section-card-title">Regulatory pulse</div>
-        <button className="btn ghost sm" disabled={busy || enabled === false} onClick={checkNow}>{busy ? "Scanning…" : "⟳ Check now"}</button>
+        <button className="btn ghost sm" disabled={busy || !enabled || !canView} onClick={checkNow}>{busy ? "Scanning…" : "⟳ Check now"}</button>
       </div>
       {enabled === false && (
         <div className="grid-meta" style={{ marginBottom: 10 }}>
-          Regulatory pulse is off. Set REG_PULSE_ENABLED=true and TAVILY_API_KEY on the server to enable it.
+          Regulatory pulse is off.{canView && " Set REG_PULSE_ENABLED=true and TAVILY_API_KEY on the server to enable it."}
         </div>
       )}
-      {enabled && streamDown && (
+      {enabled && !canView && (
+        <div className="grid-meta" style={{ marginBottom: 10 }}>
+          Regulatory pulse is on. Its alerts are visible to partners.
+        </div>
+      )}
+      {enabled && canView && streamDown && (
         <div className="grid-meta" style={{ marginBottom: 10 }}>
           Live stream unavailable — reconnect by reloading the page.
         </div>
       )}
-      {enabled !== false && alerts.length === 0 && (
+      {enabled && canView && alerts.length === 0 && (
         <div className="placeholder">No regulatory alerts yet. New developments affecting active matters appear here.</div>
       )}
       {alerts.map((a) => (
