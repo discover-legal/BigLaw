@@ -111,6 +111,9 @@ func runDispatcher(ch <-chan dispatchItem) {
 				_ = os.MkdirAll(dir, 0o700)
 			}
 			if f, err := os.OpenFile(item.logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
+				// The create mode only applies to a new file: tighten a log
+				// left 0644 by an earlier version.
+				_ = f.Chmod(0o600)
 				_, _ = fmt.Fprintln(f, string(item.raw))
 				_ = f.Close()
 			}

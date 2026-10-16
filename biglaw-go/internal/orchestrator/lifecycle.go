@@ -6,12 +6,13 @@ package orchestrator
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"time"
 
+	"github.com/discover-legal/biglaw-go/internal/atomicfile"
 	"github.com/discover-legal/biglaw-go/internal/audit"
 	"github.com/discover-legal/biglaw-go/internal/cost"
 	"github.com/discover-legal/biglaw-go/internal/providers"
@@ -55,45 +56,31 @@ func (o *Orchestrator) persistTasks() error {
 	o.persistMu.Lock()
 	defer o.persistMu.Unlock()
 
-	path := o.cfg.Persistence.TasksFile
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	tmp := path + ".tmp"
-	file, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
-	if err != nil {
-		return err
-	}
-
 	// Hold the read lock while the encoder streams. This trades a bounded
 	// period of update backpressure for a race-free snapshot without creating
-	// a second full in-memory copy of every task and its findings.
-	o.mu.RLock()
-	tasks := make([]*types.Task, 0, len(o.tasks))
-	for _, task := range o.tasks {
-		tasks = append(tasks, task)
-	}
-	sort.Slice(tasks, func(i, j int) bool { return tasks[i].CreatedAt.Before(tasks[j].CreatedAt) })
-	err = json.NewEncoder(file).Encode(tasks)
-	o.mu.RUnlock()
-	if err == nil {
-		err = file.Sync()
-	}
-	if closeErr := file.Close(); err == nil {
-		err = closeErr
-	}
+	// a second full in-memory copy of every task and its findings. atomicfile
+	// gives the snapshot 0600 (also over an older 0644 file), fsyncs the file
+	// and its directory, and never leaves a half-written snapshot behind.
+	err := atomicfile.Write(o.cfg.Persistence.TasksFile, 0o600, func(w io.Writer) error {
+		o.mu.RLock()
+		defer o.mu.RUnlock()
+		tasks := make([]*types.Task, 0, len(o.tasks))
+		for _, task := range o.tasks {
+			tasks = append(tasks, task)
+		}
+		sort.Slice(tasks, func(i, j int) bool { return tasks[i].CreatedAt.Before(tasks[j].CreatedAt) })
+		return json.NewEncoder(w).Encode(tasks)
+	})
 	if err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
 		return fmt.Errorf("replace task snapshot: %w", err)
 	}
 	return nil
 }
 
 func (o *Orchestrator) restoreTasks() {
+	// Earlier versions snapshotted through a fixed "<file>.tmp" that could
+	// be left behind (possibly 0644) by a crash; it is never read.
+	_ = os.Remove(o.cfg.Persistence.TasksFile + ".tmp")
 	data, err := os.ReadFile(o.cfg.Persistence.TasksFile)
 	if err != nil {
 		return

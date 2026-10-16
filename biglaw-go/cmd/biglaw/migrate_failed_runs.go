@@ -9,6 +9,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/discover-legal/biglaw-go/internal/atomicfile"
 	"github.com/discover-legal/biglaw-go/internal/audit"
 	"github.com/discover-legal/biglaw-go/internal/billing"
 	"github.com/discover-legal/biglaw-go/internal/timekeeping"
@@ -119,13 +120,7 @@ func writeOffHistoricalFailedRuns(timeFile, preBillsFile string, tasks []*types.
 
 	marker[failedRunWriteOffID] = rec
 	raw, _ := json.MarshalIndent(marker, "", "  ")
-	tmp := markerPath + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0o600); err == nil {
-		err = os.Rename(tmp, markerPath)
-		if err != nil {
-			slog.Warn("failed-run write-off: marker not saved (migration will re-run idempotently)", "err", err)
-		}
-	} else {
+	if err := atomicfile.WriteFile(markerPath, raw, 0o600); err != nil {
 		slog.Warn("failed-run write-off: marker not saved (migration will re-run idempotently)", "err", err)
 	}
 }
