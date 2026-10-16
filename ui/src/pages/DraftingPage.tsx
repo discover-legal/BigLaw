@@ -66,7 +66,7 @@ export function DraftingPage({ notify, isPartner }: { notify: (m: string) => voi
         {tab === "draft" && <PrecedentsTab notify={notify} />}
         {tab === "playbooks" && <PlaybooksTab notify={notify} isPartner={isPartner} />}
         {tab === "headnotes" && <HeadnotesTab notify={notify} />}
-        {tab === "citations" && <CitationsTab notify={notify} />}
+        {tab === "citations" && <CitationsTab />}
       </div>
     </div>
   );
@@ -756,19 +756,22 @@ const SIGNAL_STYLE: Record<CitationSignal, { color: string; glyph: string }> = {
   unknown: { color: "var(--text-faint)", glyph: "?" },
 };
 
-function CitationsTab({ notify }: { notify: (m: string) => void }) {
+function CitationsTab() {
   const [q, setQ] = useState("");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<CitationCheckResult | null>(null);
+  const [runError, setRunError] = useState<string | null>(null);
 
   async function check() {
     if (!q.trim()) return;
     setBusy(true);
     setResult(null);
+    setRunError(null);
     try { setResult(await api.checkCitation(q.trim())); }
-    catch (e) { notify((e as Error).message); }
+    catch (e) { setRunError((e as Error).message); }
     finally { setBusy(false); }
   }
+  const negatives = result?.topNegativeTreatments ?? [];
 
   return (
     <div className="panel-body" style={{ maxWidth: 780 }}>
@@ -781,6 +784,7 @@ function CitationsTab({ notify }: { notify: (m: string) => void }) {
           <button className="btn primary" disabled={busy || !q.trim()} onClick={check}>{busy ? "Checking…" : "⚖ Check"}</button>
         </div>
       </div>
+      {runError && <div style={{ marginTop: 16 }} role="alert"><ErrorState message={runError} /></div>}
 
       {result && (
         <div style={{ marginTop: 20 }}>
@@ -803,18 +807,20 @@ function CitationsTab({ notify }: { notify: (m: string) => void }) {
                 <a className="btn ghost sm" style={{ marginLeft: "auto" }} href={result.courtListenerUrl} target="_blank" rel="noreferrer">CourtListener ↗</a>
               )}
             </div>
-            <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
-              <span className="pill green">{result.positiveTreatmentCount} positive</span>
-              <span className="pill red">{result.negativeTreatmentCount} negative</span>
-              <span className="pill">{result.status.replace("_", " ")}</span>
-            </div>
+            {result.signal !== "unknown" && (
+              <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
+                <span className="pill green">{result.positiveTreatmentCount} positive</span>
+                <span className="pill red">{result.negativeTreatmentCount} negative</span>
+                <span className="pill">{result.status.replace("_", " ")}</span>
+              </div>
+            )}
             <div style={{ fontSize: 13.5, lineHeight: 1.6, color: "var(--text-dim)" }}>{result.reasoning}</div>
           </div>
 
-          {result.topNegativeTreatments.length > 0 && (
+          {negatives.length > 0 && (
             <div className="section-card" style={{ marginTop: 14 }}>
               <div className="section-card-title">Negative treatments</div>
-              {result.topNegativeTreatments.map((t, i) => (
+              {negatives.map((t, i) => (
                 <div key={i} style={{ display: "flex", gap: 8, alignItems: "baseline", marginBottom: 8, fontSize: 13, flexWrap: "wrap" }}>
                   <span className="pill sm red">{t.treatmentType}</span>
                   <span style={{ fontWeight: 500 }}>{t.caseName}</span>
