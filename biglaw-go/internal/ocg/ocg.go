@@ -105,7 +105,6 @@ func (s *Store) Init() error {
 	return nil
 }
 
-// GetByClient returns the OCG document for a client, or nil.
 // GetByClient returns a snapshot of a client's OCG document (nil if none).
 // RuleStats is copied: RecordViolations/RecordOutcome mutate it under the
 // lock, so handing out the shared map would race with callers that marshal
