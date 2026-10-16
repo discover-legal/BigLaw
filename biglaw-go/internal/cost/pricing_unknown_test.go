@@ -137,6 +137,10 @@ func TestWarnUnpricedOnce_PerModel(t *testing.T) {
 	prev := slog.Default()
 	slog.SetDefault(slog.New(h))
 	t.Cleanup(func() { slog.SetDefault(prev) })
+	// Per-process dedupe: forget models warned about by an earlier run of
+	// this test (-count>1).
+	unpricedWarned.Delete("warn-once-model-a")
+	unpricedWarned.Delete("warn-once-model-b")
 
 	s := &Store{}
 	for i := 0; i < 5; i++ {
