@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 )
@@ -52,11 +53,25 @@ type StateMove struct {
 // user's state sits elsewhere would look like data loss. Run it only in the
 // process holding the data-dir lock, before any store opens its file.
 func MigrateLegacyStateFiles(c *Config) ([]StateMove, error) {
+	// A ./data holding a lock file was written by a data-dir-era build: it is
+	// another install's data dir (perhaps live right now), not legacy state.
+	// Migrating from it would pull a running owner's database out from under
+	// it, so its ./data/<x> candidates are skipped.
+	_, err := os.Lstat(filepath.Join(dotData, LockFileName))
+	foreignDotData := err == nil && !samePath(dotData, c.VectorDB.DataDir)
+	if foreignDotData {
+		slog.Warn("./data holds another install's data dir (it has a "+LockFileName+"); "+
+			"not migrating from it — move its state by hand if this install should take it over",
+			"dataDir", c.VectorDB.DataDir)
+	}
 	var moves []StateMove
 	var errs []error
 	for _, p := range c.state {
 		if p.Explicit {
 			continue
+		}
+		if foreignDotData {
+			p.legacy = slices.DeleteFunc(slices.Clone(p.legacy), inDotData)
 		}
 		mv, err := migratePath(p)
 		moves = append(moves, mv...)
@@ -69,6 +84,17 @@ func MigrateLegacyStateFiles(c *Config) ([]StateMove, error) {
 			"env", mv.Env, "from", mv.From, "to", mv.To, "copied", mv.Copied)
 	}
 	return moves, errors.Join(errs...)
+}
+
+// LockFileName is the single-writer lock file inside a data dir.
+const LockFileName = "biglaw.lock"
+
+// dotData is the default data dir, where pre-RUVECTOR_DATA_DIR-change
+// installs kept their state.
+const dotData = "data"
+
+func inDotData(p string) bool {
+	return strings.HasPrefix(filepath.Clean(p), dotData+string(filepath.Separator))
 }
 
 // JournalSuffix names the journal a multi-file migration unit writes beside

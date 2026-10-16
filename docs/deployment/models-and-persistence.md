@@ -102,6 +102,8 @@ lock). The migration is idempotent and conservative:
 
 - a path moves only when the legacy copy exists and the data-dir one does not; if both exist
   the data-dir copy wins and the legacy one is left untouched with a warning;
+- a `./data` that contains `biglaw.lock` is another install's data dir (a data-dir-era build,
+  possibly running right now), not legacy state: nothing is migrated out of it, with a warning;
 - a symlink moves as a symlink (a relative target is re-pointed so it still resolves);
 - the database and its `-wal`/`-shm`/`-journal` move as one unit — companions first, the
   database last — recorded in `biglaw.db.migration-journal` (beside the destination) before the

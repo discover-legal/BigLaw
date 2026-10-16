@@ -13,10 +13,12 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/discover-legal/biglaw-go/internal/config"
 )
 
 // LockFileName is the single-writer lock inside the data dir.
-const LockFileName = "biglaw.lock"
+const LockFileName = config.LockFileName
 
 // ErrDataDirLocked reports that another live process owns the data dir.
 // Test with errors.Is; the concrete error is a *LockedError naming the holder.

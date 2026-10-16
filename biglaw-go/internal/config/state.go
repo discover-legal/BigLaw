@@ -89,7 +89,7 @@ func (s *stateSet) explicit(env string) bool {
 // withDotData adds ./data/<name> — where the default data dir kept it —
 // to the legacy locations, so state follows a RUVECTOR_DATA_DIR that moved.
 func withDotData(name string, legacy []string) []string {
-	dd := filepath.Join("data", name)
+	dd := filepath.Join(dotData, name)
 	for _, l := range legacy {
 		if filepath.Clean(l) == dd {
 			return legacy

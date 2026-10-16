@@ -208,6 +208,44 @@ func TestMigrateDotDataIntoCustomDataDir(t *testing.T) {
 	}
 }
 
+// A ./data with a biglaw.lock is another install's data dir (possibly a live
+// owner), not legacy state: a second owner started with its own data dir
+// must never migrate it out from under that owner.
+func TestMigrateSkipsLockedDotData(t *testing.T) {
+	inScratch(t)
+	dir := t.TempDir()
+	t.Setenv("RUVECTOR_DATA_DIR", filepath.Join(dir, "state"))
+	write(t, "data/"+LockFileName, "4242\n")
+	write(t, "data/biglaw.db", "db")
+	write(t, "data/biglaw.db-wal", "wal")
+	write(t, "data/biglaw.db-shm", "shm")
+	write(t, "data/.clients.json", "clients")
+	write(t, "data/attachments/a/b.pdf", "pdf")
+	write(t, ".tasks.json", "tasks") // CWD dotfiles are still legacy state
+
+	c := Load()
+	moves, err := MigrateLegacyStateFiles(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mv := range moves {
+		if strings.HasPrefix(filepath.Clean(mv.From), "data"+string(filepath.Separator)) {
+			t.Errorf("migrated from the locked ./data: %+v", mv)
+		}
+	}
+	for _, rel := range []string{"biglaw.db", "biglaw.db-wal", "biglaw.db-shm", ".clients.json", "attachments/a/b.pdf", LockFileName} {
+		if !exists(filepath.Join("data", rel)) {
+			t.Errorf("data/%s moved out of the other install's data dir", rel)
+		}
+		if rel != LockFileName && exists(filepath.Join(dir, "state", rel)) {
+			t.Errorf("state/%s appeared", rel)
+		}
+	}
+	if got := read(t, filepath.Join(dir, "state", ".tasks.json")); got != "tasks" {
+		t.Errorf(".tasks.json = %q, want migrated from the working dir", got)
+	}
+}
+
 // A database that already exists in the data dir is never paired with a
 // legacy journal.
 func TestMigrateCompanionNeverOrphaned(t *testing.T) {
