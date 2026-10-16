@@ -22,10 +22,12 @@ const (
 // Tier accessors return the active model stack's ID for each role (Qwen by
 // default; see config.ModelConfig). Every call site routes through these so the
 // whole platform follows MODEL_STACK. No Claude/Anthropic path exists.
-func Heavy(cfg *config.Config) string  { return firstNonEmpty(cfg.Model.Heavy, defaultHeavy) }
-func Mid(cfg *config.Config) string    { return firstNonEmpty(cfg.Model.Mid, defaultMid) }
-func Light(cfg *config.Config) string  { return firstNonEmpty(cfg.Model.Light, defaultLight) }
-func Vision(cfg *config.Config) string { return firstNonEmpty(cfg.Model.Vision, cfg.Model.Mid, defaultVision) }
+func Heavy(cfg *config.Config) string { return firstNonEmpty(cfg.Model.Heavy, defaultHeavy) }
+func Mid(cfg *config.Config) string   { return firstNonEmpty(cfg.Model.Mid, defaultMid) }
+func Light(cfg *config.Config) string { return firstNonEmpty(cfg.Model.Light, defaultLight) }
+func Vision(cfg *config.Config) string {
+	return firstNonEmpty(cfg.Model.Vision, cfg.Model.Mid, defaultVision)
+}
 
 func firstNonEmpty(vals ...string) string {
 	for _, v := range vals {
