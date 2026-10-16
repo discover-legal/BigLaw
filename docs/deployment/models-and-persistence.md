@@ -84,7 +84,7 @@ explicitly overridden lies outside it.
 
 | In the data dir | Override |
 |---|---|
-| `biglaw.db` (+ `-wal`/`-shm`) | `SQLITE_PATH` |
+| `biglaw.db` (+ `-wal`/`-shm`/`-journal`) | `SQLITE_PATH` |
 | `.tasks.json`, `.settings.json`, `.profiles.json`, `.clients.json` | `TASKS_FILE`, `SETTINGS_FILE`, `PROFILES_FILE`, `CLIENTS_FILE` |
 | `.time-entries.json`, `.qtable.json`, `.ocg.json`, `.jobs.json` | `TIME_FILE`, `LEARNING_FILE`, `OCG_FILE`, `JOBS_FILE` |
 | `audit.jsonl`, `costs.jsonl` | `AUDIT_LOG_FILE`, `COST_LOG_FILE` |
@@ -102,12 +102,20 @@ lock). The migration is idempotent and conservative:
 
 - a path moves only when the legacy copy exists and the data-dir one does not; if both exist
   the data-dir copy wins and the legacy one is left untouched with a warning;
-- a symlink moves as a symlink (a relative target is re-pointed so it still resolves); the
-  SQLite journal moves with its database;
+- a symlink moves as a symlink (a relative target is re-pointed so it still resolves);
+- the database and its `-wal`/`-shm`/`-journal` move as one unit — companions first, the
+  database last — recorded in `biglaw.db.migration-journal` (beside the destination) before the
+  first move and removed after the last. If a start is interrupted mid-unit, the next start
+  finds the journal and finishes the unit (or refuses, naming any file that is at neither end
+  or differs at both); the database is never opened without its WAL;
+- a legacy `-wal`/`-shm`/`-journal` whose database is gone, or one already at the destination
+  before its database arrives, stops startup — it may hold commits, and pairing it with the
+  wrong database (or dropping it) loses data;
 - rename first; across filesystems a file falls back to copy + fsync + atomic rename + remove;
 - anything that cannot be moved (a directory across filesystems, a directory where a file
-  belongs, a stray journal at the destination) stops startup with an error naming the path and
-  its env var — BigLaw never comes up on empty state while yours sits elsewhere.
+  belongs, the companion cases above) stops startup with an error naming the env var and
+  listing exactly which files moved and which did not — BigLaw never comes up on empty state
+  while yours sits elsewhere.
 
 An explicit `*_FILE`/`*_DIR` override always wins and is never migrated — **except** a value
 equal to the old default (e.g. `TASKS_FILE=.tasks.json` or `AUDIT_LOG_FILE=./audit.jsonl`

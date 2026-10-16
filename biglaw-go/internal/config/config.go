@@ -442,7 +442,7 @@ func Load() *Config {
 		st.derived("CLIENTS_FILE", filepath.Join(filepath.Dir(c.Persistence.ClientsFile), ".matter-budgets.json"),
 			".matter-budgets.json", "data/.matter-budgets.json")
 	}
-	st.withCompanions("SQLITE_PATH", "-wal", "-shm")
+	st.withCompanions("SQLITE_PATH", "-wal", "-shm", "-journal")
 	c.state = st.paths
 
 	return c

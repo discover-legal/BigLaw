@@ -83,7 +83,8 @@ every other process is a thin MCP client of the owner's REST API.
   `BIG_MICHAEL_API_TOKEN` (falls back to `API_KEY`); answers `initialize` at once and reports
   an unreachable/misconfigured backend in every tool result; never follows redirects
 - `standalone` — single process (own DB + REST + MCP on stdio); refuses a held lock
-`BIGLAW_LOCK=off` skips the lock (filesystems without advisory locks). One implementation:
+`BIGLAW_LOCK=off` makes the lock best-effort (a held lock, or a lock record naming a live PID,
+still refuses). One implementation:
 `backend.Local.As(principal)` (`biglaw-go/internal/backend`) holds the MCP operations AND their
 access rules; the REST handlers for those routes and the in-process MCP server both call it,
 `backend.Remote` calls those routes, and `internal/mcp/contract_test.go` requires identical

@@ -37,6 +37,9 @@ type LockInfo struct {
 type LockedError struct {
 	Path   string   // lock file
 	Holder LockInfo // zero fields when the holder has not written them yet
+	// ByRecord: the lock itself could not be taken (unsupported filesystem
+	// or BIGLAW_LOCK=off), but the lock file names a live process.
+	ByRecord bool
 }
 
 func (e *LockedError) Error() string {
@@ -47,7 +50,12 @@ func (e *LockedError) Error() string {
 	if e.Holder.API != "" {
 		holder += ", API " + e.Holder.API
 	}
-	return fmt.Sprintf("%v (%s holds %s)", ErrDataDirLocked, holder, e.Path)
+	msg := fmt.Sprintf("%v (%s holds %s)", ErrDataDirLocked, holder, e.Path)
+	if e.ByRecord {
+		msg += "; this filesystem cannot lock, so that is going by the lock file's record of a " +
+			"live process — if it is not a BigLaw owner of this data dir, delete the lock file"
+	}
+	return msg
 }
 
 func (e *LockedError) Unwrap() error { return ErrDataDirLocked }
@@ -72,23 +80,46 @@ func (l *DataLock) Path() string { return l.path }
 func (l *DataLock) Enforced() bool { return l != nil && l.enforced }
 
 // Release drops the lock. Safe to call on a nil lock and more than once.
+// An unenforced owner also clears its record, which is all that announced
+// it to the next process.
 func (l *DataLock) Release() error {
 	if l == nil || l.f == nil {
 		return nil
+	}
+	if !l.enforced {
+		_ = l.f.Truncate(0)
 	}
 	err := l.f.Close() // closing the descriptor releases the advisory lock
 	l.f = nil
 	return err
 }
 
+// LockMode says what AcquireDataLock may fall back to.
+type LockMode int
+
+const (
+	// LockRequired: only a filesystem without advisory locks
+	// (ENOLCK/ENOTSUP) may run unguarded; any other locking error is fatal.
+	LockRequired LockMode = iota
+	// LockBestEffort (BIGLAW_LOCK=off): any locking error runs unguarded.
+	// A lock that is actually held still refuses — its holder is alive.
+	LockBestEffort
+)
+
+// tryLockFn is tryLock; tests swap it to simulate an unlockable filesystem.
+var tryLockFn = tryLock
+
 // AcquireDataLock takes the exclusive single-writer lock on dataDir without
 // blocking, creating the directory if needed, and records info (PID + REST
 // URL) in it. When another live process holds it the error wraps
-// ErrDataDirLocked (a *LockedError carrying the holder's LockInfo). On a
-// filesystem without advisory locks (ENOLCK/ENOTSUP, e.g. some network
-// mounts) it warns and returns an unenforced lock; any other error means the
-// lock could not be attempted.
-func AcquireDataLock(dataDir string, info LockInfo) (*DataLock, error) {
+// ErrDataDirLocked (a *LockedError carrying the holder's LockInfo).
+//
+// When the lock cannot be taken at all (ENOLCK/ENOTSUP, e.g. some network
+// mounts; or any error under LockBestEffort) the process runs unguarded,
+// with a warning — but only after reading the lock file: a record naming a
+// live process other than this one refuses (ErrDataDirLocked, ByRecord) and
+// is left intact, so auto-mode clients keep finding the real owner.
+func AcquireDataLock(dataDir string, info LockInfo, mode LockMode) (*DataLock, error) {
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create data dir: %w", err)
 	}
@@ -97,20 +128,24 @@ func AcquireDataLock(dataDir string, info LockInfo) (*DataLock, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open lock file: %w", err)
 	}
-	held, err := tryLock(f)
+	held, err := tryLockFn(f)
 	switch {
-	case errors.Is(err, errLockUnsupported):
-		slog.Warn("data-dir lock unavailable on this filesystem; running UNGUARDED — "+
+	case held:
+		holder := readInfo(f)
+		f.Close()
+		return nil, &LockedError{Path: path, Holder: holder}
+	case err != nil && (errors.Is(err, errLockUnsupported) || mode == LockBestEffort):
+		if holder := readInfo(f); holder.PID > 0 && holder.PID != info.PID && pidAlive(holder.PID) {
+			f.Close()
+			return nil, &LockedError{Path: path, Holder: holder, ByRecord: true}
+		}
+		slog.Warn("data-dir lock unavailable; running UNGUARDED — "+
 			"make sure no other BigLaw process owns this data dir", "lock", path, "error", err)
 		writeInfo(f, info)
 		return &DataLock{f: f, path: path}, nil
 	case err != nil:
 		f.Close()
 		return nil, fmt.Errorf("lock %s: %w", path, err)
-	case held:
-		holder := readInfo(f)
-		f.Close()
-		return nil, &LockedError{Path: path, Holder: holder}
 	}
 	writeInfo(f, info)
 	return &DataLock{f: f, path: path, enforced: true}, nil

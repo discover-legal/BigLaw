@@ -6,9 +6,11 @@
 package backend
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"syscall"
 )
 
@@ -32,4 +34,22 @@ func tryLock(f *os.File) (held bool, err error) {
 		return false, fmt.Errorf("%w: %v", errLockUnsupported, err)
 	}
 	return false, err
+}
+
+// pidAlive reports whether pid names a running process (EPERM: it exists
+// but belongs to someone else — still alive). A zombie — dead, not yet
+// reaped, which kill(0) still finds — is not alive (Linux /proc check).
+func pidAlive(pid int) bool {
+	if err := syscall.Kill(pid, 0); err != nil && !errors.Is(err, syscall.EPERM) {
+		return false
+	}
+	stat, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	if err != nil {
+		return true // no procfs (macOS): kill(0) is all there is
+	}
+	// "pid (comm) S ...": the state follows the last ')' (comm may hold one).
+	if i := bytes.LastIndexByte(stat, ')'); i >= 0 && i+2 < len(stat) {
+		return stat[i+2] != 'Z'
+	}
+	return true
 }

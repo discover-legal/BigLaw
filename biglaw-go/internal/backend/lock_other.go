@@ -12,3 +12,13 @@ import "os"
 func tryLock(*os.File) (bool, error) {
 	return false, errLockUnsupported
 }
+
+// pidAlive: os.FindProcess fails for a PID with no process on Windows.
+func pidAlive(pid int) bool {
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	_ = p.Release()
+	return true
+}

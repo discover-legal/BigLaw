@@ -23,7 +23,7 @@ type StatePath struct {
 	// directory), most likely first; the first one present is migrated.
 	legacy []string
 	// companions are suffixes of sibling files that must move with Path
-	// (SQLite's -wal / -shm journal next to the database).
+	// (SQLite's -wal / -shm / -journal next to the database).
 	companions []string
 }
 

@@ -132,8 +132,9 @@ func main() {
 	// store opens a file.
 	if _, err := config.MigrateLegacyStateFiles(cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "biglaw: refusing to start — legacy state could not be migrated into %s:\n%v\n"+
-			"Each path listed was left where it was (anything else migrated is logged above). Move it there by "+
-			"hand, or pin its location with the named env var, then start again.\n", cfg.VectorDB.DataDir, err)
+			"Each entry lists what moved and what did not (other migrations are logged above). Fix the cause — "+
+			"or move the files by hand, or pin the location with the named env var — then start again.\n",
+			cfg.VectorDB.DataDir, err)
 		os.Exit(1)
 	}
 	if err := cfg.CheckStateLayout(); err != nil {
@@ -458,18 +459,19 @@ func main() {
 }
 
 // acquireDataDir takes the data dir's single-writer lock, recording this
-// process's PID and REST URL for whoever finds it held. BIGLAW_LOCK=off
-// skips it (filesystems without advisory locks), loudly.
+// process's PID and REST URL for whoever finds it held. BIGLAW_LOCK=off is
+// for filesystems whose locking misbehaves: a lock failure then runs
+// unguarded instead of refusing — but a lock that is actually held (or a
+// lock record naming a live process) still refuses.
 func acquireDataDir(cfg *config.Config) (*backend.DataLock, error) {
+	mode := backend.LockRequired
 	if cfg.Run.LockDisabled {
-		slog.Warn("BIGLAW_LOCK=off: data-dir single-writer lock DISABLED — run at most one owner per data dir",
-			"dataDir", cfg.VectorDB.DataDir)
-		return nil, nil
+		mode = backend.LockBestEffort
 	}
 	return backend.AcquireDataLock(cfg.VectorDB.DataDir, backend.LockInfo{
 		PID: os.Getpid(),
 		API: config.LocalAPIURL(cfg.API.Host, cfg.API.Port),
-	})
+	}, mode)
 }
 
 // ownerAPIURL is where an auto-mode client finds the data-dir owner: the URL

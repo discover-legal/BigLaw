@@ -21,8 +21,15 @@ owner as a **thin client** over its REST API. `BIG_MICHAEL_MODE` selects the rol
 starting a new one on the same data dir — the new lock cannot see an old owner.
 
 **Filesystems without advisory locks** (some network mounts return `ENOLCK`/`ENOTSUP`): BigLaw
-logs a warning and runs unguarded. `BIGLAW_LOCK=off` skips the lock deliberately. Either way,
-run at most one owner per data dir yourself.
+runs unguarded, with a warning — but first reads the lock file, and if it names a live process
+other than itself it treats the data dir as owned (backend/standalone refuse, auto attaches to
+the recorded URL) and leaves that record intact. An unguarded owner clears its record on clean
+exit. `BIGLAW_LOCK=off` makes locking best-effort for filesystems whose locking errors out in
+other ways: the lock is still attempted, a lock that is actually held still refuses (its holder
+is alive), and any other locking error runs unguarded under the same record check. A PID on
+another host cannot be checked, so on shared network storage still run at most one owner per
+data dir yourself; if a recorded PID is stale and reused by an unrelated process, delete
+`biglaw.lock`.
 
 ## The thin client
 

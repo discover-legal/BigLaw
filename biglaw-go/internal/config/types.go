@@ -53,9 +53,10 @@ type RunConfig struct {
 	// (BIG_MICHAEL_API_TOKEN, falling back to API_KEY so a client sharing the
 	// backend's .env authenticates as the API_PROFILE_ID profile).
 	APIToken string
-	// LockDisabled (BIGLAW_LOCK=off) skips the data-dir single-writer lock —
-	// an escape hatch for filesystems without advisory locks. Run at most
-	// one owner per data dir by hand then.
+	// LockDisabled (BIGLAW_LOCK=off) makes the data-dir lock best-effort —
+	// an escape hatch for filesystems whose locking errors out: a failure to
+	// lock runs unguarded (with a warning) instead of refusing. A lock that
+	// is held, or a lock record naming a live process, still refuses.
 	LockDisabled bool
 }
 
