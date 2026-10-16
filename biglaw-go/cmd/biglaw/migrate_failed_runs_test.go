@@ -37,7 +37,10 @@ func TestWriteOffHistoricalFailedRuns(t *testing.T) {
 	onDraft := mk("t-failed", types.TimeEventTaskRun)
 	gate := mk("t-failed", types.TimeEventGateReview) // a lawyer's own time: untouched
 	ok := mk("t-ok", types.TimeEventTaskRun)
-	unknown := mk("t-gone", types.TimeEventTaskRun) // task deleted: status unknown
+	unknown := mk("t-gone", types.TimeEventTaskRun)             // task deleted, no audit trace: unknown
+	deletedFailed := mk("t-del-failed", types.TimeEventTaskRun) // deleted; audit says failed
+	retried := mk("t-del-retried", types.TimeEventTaskRun)      // deleted; failed, then completed
+	synthErr := mk("t-synth", types.TimeEventTaskRun)           // "completed" with a synthesis error
 	ts.MarkClioSynced(synced.ID)
 
 	pb := billing.NewPreBillStore(preBillsFile)
@@ -51,12 +54,25 @@ func TestWriteOffHistoricalFailedRuns(t *testing.T) {
 	tasks := []*types.Task{
 		{ID: "t-failed", Status: types.TaskStatusFailed},
 		{ID: "t-int", Status: types.TaskStatusInterrupted},
-		{ID: "t-ok", Status: types.TaskStatusComplete},
+		{ID: "t-ok", Status: types.TaskStatusComplete, Output: "Memo"},
+		{ID: "t-synth", Status: types.TaskStatusComplete, Output: "Synthesis error: model unavailable"},
 	}
-	writeOffHistoricalFailedRuns(timeFile, preBillsFile, tasks, ts)
+	auditFile := filepath.Join(dir, "audit.jsonl")
+	auditLines := `{"event":"task.started","taskId":"t-del-failed"}
+{"event":"task.failed","taskId":"t-del-failed","data":{"error":"x"}}
+{"event":"task.failed","taskId":"t-del-retried"}
+not json
+{"event":"task.complete","taskId":"t-del-retried"}
+{"event":"task.failed","taskId":"t-ok"}
+{"event":"task.deleted","taskId":"t-del-failed"}`
+	if err := os.WriteFile(auditFile, []byte(auditLines), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeOffHistoricalFailedRuns(timeFile, preBillsFile, auditFile, tasks, ts)
 
 	want := map[string]bool{failed.ID: true, interrupted.ID: true, onDraft.ID: true,
-		onInvoice.ID: false, synced.ID: false, gate.ID: false, ok.ID: false, unknown.ID: false}
+		onInvoice.ID: false, synced.ID: false, gate.ID: false, ok.ID: false, unknown.ID: false,
+		deletedFailed.ID: true, retried.ID: false, synthErr.ID: true}
 	for id, nb := range want {
 		e := ts.GetByID(id)
 		if e.NonBillable != nb {
@@ -74,14 +90,14 @@ func TestWriteOffHistoricalFailedRuns(t *testing.T) {
 	var marker migrationMarker
 	_ = json.Unmarshal(raw, &marker)
 	rec := marker[failedRunWriteOffID]
-	if rec.WrittenOff != 3 || len(rec.SkippedFinalised) != 2 || len(rec.DraftPreBills) != 1 || rec.DraftPreBills[0] != draft.ID {
+	if rec.WrittenOff != 5 || len(rec.SkippedFinalised) != 2 || len(rec.DraftPreBills) != 1 || rec.DraftPreBills[0] != draft.ID {
 		t.Fatalf("marker = %s", raw)
 	}
 
 	// Recorded as run: a later start does nothing even if a new failed
 	// entry appears (new failures are closed non-billable at run time).
 	later := mk("t-failed", types.TimeEventTaskRun)
-	writeOffHistoricalFailedRuns(timeFile, preBillsFile, tasks, ts)
+	writeOffHistoricalFailedRuns(timeFile, preBillsFile, auditFile, tasks, ts)
 	if ts.GetByID(later.ID).NonBillable {
 		t.Fatal("migration re-ran despite its marker")
 	}

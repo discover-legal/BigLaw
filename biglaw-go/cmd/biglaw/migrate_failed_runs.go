@@ -4,9 +4,11 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/discover-legal/biglaw-go/internal/atomicfile"
@@ -31,14 +33,20 @@ type migrationRecord struct {
 }
 
 // writeOffHistoricalFailedRuns is a one-off, idempotent migration: before
-// failed/interrupted AI runs were closed non-billable, they were billed. It
-// writes those historical entries off — unless the entry is already on a
+// failed/interrupted AI runs (and runs whose synthesis failed, which still
+// "completed" with an error string as the deliverable) were closed
+// non-billable, they were billed. It writes those historical entries off — unless the entry is already on a
 // finalised pre-bill (approved / invoiced) or synced to Clio, which would
 // rewrite money already sent; those are skipped and reported for a human.
 // Draft/reviewed pre-bills that list a written-off entry are reported so
 // they can be regenerated. Runs only in the process that owns the stores,
 // and records itself in a marker file so later starts skip it.
-func writeOffHistoricalFailedRuns(timeFile, preBillsFile string, tasks []*types.Task, ts *timekeeping.TimeStore) {
+//
+// A task's outcome comes from the task store; for a task since deleted, the
+// audit log's last task.failed / task.interrupted / task.complete event is
+// the second source (a deleted task's synthesis failure left no trace and
+// cannot be recovered).
+func writeOffHistoricalFailedRuns(timeFile, preBillsFile, auditLogFile string, tasks []*types.Task, ts *timekeeping.TimeStore) {
 	markerPath := timeFile + ".migrations.json"
 	marker := migrationMarker{}
 	if raw, err := os.ReadFile(markerPath); err == nil {
@@ -48,10 +56,19 @@ func writeOffHistoricalFailedRuns(timeFile, preBillsFile string, tasks []*types.
 		return
 	}
 
-	status := map[string]types.TaskStatus{}
+	// Why each task's AI run is not billable ("" = billable / unknown).
+	failure := taskOutcomesFromAudit(auditLogFile)
 	for _, t := range tasks {
-		if t != nil {
-			status[t.ID] = t.Status
+		if t == nil {
+			continue
+		}
+		switch {
+		case t.Status == types.TaskStatusFailed || t.Status == types.TaskStatusInterrupted:
+			failure[t.ID] = "task " + string(t.Status)
+		case t.Status == types.TaskStatusComplete && strings.HasPrefix(t.Output, "Synthesis error:"):
+			failure[t.ID] = "synthesis failed"
+		default:
+			failure[t.ID] = ""
 		}
 	}
 
@@ -79,8 +96,8 @@ func writeOffHistoricalFailedRuns(timeFile, preBillsFile string, tasks []*types.
 	var skipped []string
 	draftSet := map[string]bool{}
 	written := ts.WriteOff(func(e types.TimeEntry) string {
-		st, known := status[e.TaskID]
-		if !known || (st != types.TaskStatusFailed && st != types.TaskStatusInterrupted) {
+		why := failure[e.TaskID]
+		if why == "" {
 			return ""
 		}
 		if e.Event != types.TimeEventTaskRun {
@@ -97,7 +114,7 @@ func writeOffHistoricalFailedRuns(timeFile, preBillsFile string, tasks []*types.
 		for _, id := range drafts[e.ID] {
 			draftSet[id] = true
 		}
-		return "task " + string(st) + " (historical write-off)"
+		return why + " (historical write-off)"
 	})
 
 	rec := migrationRecord{RanAt: time.Now().UTC().Format(time.RFC3339), WrittenOff: len(written), SkippedFinalised: skipped}
@@ -122,5 +139,40 @@ func writeOffHistoricalFailedRuns(timeFile, preBillsFile string, tasks []*types.
 	raw, _ := json.MarshalIndent(marker, "", "  ")
 	if err := atomicfile.WriteFile(markerPath, raw, 0o600); err != nil {
 		slog.Warn("failed-run write-off: marker not saved (migration will re-run idempotently)", "err", err)
+	}
+}
+
+// taskOutcomesFromAudit maps task ID → why its run is not billable, from the
+// last terminal task event in the audit log ("" when the last one was
+// task.complete). A missing or unreadable log yields an empty map.
+func taskOutcomesFromAudit(path string) map[string]string {
+	out := map[string]string{}
+	f, err := os.Open(path)
+	if err != nil {
+		return out
+	}
+	defer f.Close()
+	r := bufio.NewReader(f)
+	for {
+		line, err := r.ReadBytes('\n')
+		if len(line) > 0 {
+			var e struct {
+				Event  string `json:"event"`
+				TaskID string `json:"taskId"`
+			}
+			if json.Unmarshal(line, &e) == nil && e.TaskID != "" {
+				switch e.Event {
+				case "task.failed":
+					out[e.TaskID] = "task failed"
+				case "task.interrupted":
+					out[e.TaskID] = "task interrupted"
+				case "task.complete":
+					out[e.TaskID] = ""
+				}
+			}
+		}
+		if err != nil {
+			return out
+		}
 	}
 }

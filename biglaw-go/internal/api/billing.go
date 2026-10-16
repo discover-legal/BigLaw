@@ -205,6 +205,24 @@ func (s *Server) handlePatchPreBill(c *gin.Context) {
 			bill = updated
 		}
 	}
+	if to := billing.PreBillStatus(body.Status); s.time != nil && (to == billing.PreBillApproved || to == billing.PreBillInvoiced) {
+		// A bill drafted before an entry was written off still lists it at
+		// its old amount; it must be regenerated, never approved as is.
+		var writtenOff []string
+		for _, pe := range bill.Entries {
+			if e := s.time.GetByID(pe.EntryID); e != nil && e.NonBillable {
+				writtenOff = append(writtenOff, pe.EntryID)
+			}
+		}
+		if len(writtenOff) > 0 {
+			c.JSON(http.StatusConflict, gin.H{
+				"error": fmt.Sprintf("pre-bill lists %d written-off (non-billable) time entr%s; regenerate the pre-bill before it is %s",
+					len(writtenOff), map[bool]string{true: "y", false: "ies"}[len(writtenOff) == 1], to),
+				"nonBillableEntryIds": writtenOff,
+			})
+			return
+		}
+	}
 	if body.Status != "" {
 		updated := billingPreBills.Transition(id, billing.PreBillStatus(body.Status))
 		if updated == nil {

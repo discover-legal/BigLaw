@@ -268,7 +268,7 @@ func main() {
 	// One-off billing migration — only in a process that owns the stores
 	// (BIG_MICHAEL_MODE=mcp is the thin-client mode and must not write them).
 	if os.Getenv("BIG_MICHAEL_MODE") != "mcp" {
-		writeOffHistoricalFailedRuns(cfg.Persistence.TimeFile, cfg.Persistence.PreBillsFile, orch.ListTasks(), timeStore)
+		writeOffHistoricalFailedRuns(cfg.Persistence.TimeFile, cfg.Persistence.PreBillsFile, cfg.Audit.LogFile, orch.ListTasks(), timeStore)
 	}
 
 	// Lavern prompt-only orchestrator personas: overlaid onto T0 round-goal +
