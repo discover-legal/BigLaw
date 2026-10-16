@@ -19,11 +19,11 @@ import (
 
 	// Image decoders for the normalize-to-PNG fallback (formats fpdf can't embed
 	// natively). Stdlib covers png/jpeg/gif; these add webp/bmp/tiff.
-	_ "image/gif"
-	_ "image/jpeg"
 	_ "golang.org/x/image/bmp"
 	_ "golang.org/x/image/tiff"
 	_ "golang.org/x/image/webp"
+	_ "image/gif"
+	_ "image/jpeg"
 )
 
 // Image is one image to place in the document.
@@ -34,11 +34,11 @@ type Image struct {
 }
 
 const (
-	pageW      = 210.0 // A4 mm
-	margin     = 20.0
-	contentW   = pageW - 2*margin
-	maxImageH  = 210.0 // cap image height so a tall scan doesn't overflow a page
-	bodyFont   = "Helvetica"
+	pageW     = 210.0 // A4 mm
+	margin    = 20.0
+	contentW  = pageW - 2*margin
+	maxImageH = 210.0 // cap image height so a tall scan doesn't overflow a page
+	bodyFont  = "Helvetica"
 )
 
 // Generate renders a title, a text body (light Markdown: #/##/### headings and
