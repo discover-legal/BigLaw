@@ -612,9 +612,12 @@ func clauseKey(s string) string {
 }
 
 // matchEntries pairs each requested clause type with the model's entry for
-// it: by clauseKey first; then, when the model returned exactly one entry
-// per requested type (the prompt lists them in order), the types left
-// unmatched take the entries no type claimed by name, in order.
+// it by clauseKey (which already absorbs echoed numbering and a trailing
+// "clause"/"provision"). The only positional pairing is for an entry that
+// carries no clause name at all (missing, blank or bare numbering), at the
+// requested type's own index and only when the counts match: a named
+// entry is never re-labelled, because a paraphrase or an invented type taken
+// by position can save the wrong firm position under a requested type.
 func matchEntries(clauseTypes []string, parsed []map[string]interface{}) []map[string]interface{} {
 	byKey := make(map[string]int, len(parsed))
 	for i, p := range parsed {
@@ -625,24 +628,11 @@ func matchEntries(clauseTypes []string, parsed []map[string]interface{}) []map[s
 		}
 	}
 	out := make([]map[string]interface{}, len(clauseTypes))
-	claimed := make(map[int]bool, len(parsed))
 	for i, ct := range clauseTypes {
-		if j, ok := byKey[clauseKey(ct)]; ok && !claimed[j] {
+		if j, ok := byKey[clauseKey(ct)]; ok {
 			out[i] = parsed[j]
-			claimed[j] = true
-		}
-	}
-	if len(parsed) == len(clauseTypes) {
-		next := 0
-		for i := range clauseTypes {
-			if out[i] != nil {
-				continue
-			}
-			for claimed[next] {
-				next++
-			}
-			out[i] = parsed[next]
-			claimed[next] = true
+		} else if len(parsed) == len(clauseTypes) && clauseKey(strVal(parsed[i]["clauseType"])) == "" {
+			out[i] = parsed[i]
 		}
 	}
 	return out

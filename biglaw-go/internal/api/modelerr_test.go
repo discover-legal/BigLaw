@@ -118,7 +118,7 @@ var engineReqs = map[string]string{
 	"/playbooks/build":     `{"practiceArea":"Corporate & M&A","name":"P","clauseTypes":["Governing law"]}`,
 }
 
-func postJSON(r *gin.Engine, path, body string) *httptest.ResponseRecorder {
+func postRawJSON(r *gin.Engine, path, body string) *httptest.ResponseRecorder {
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -146,7 +146,7 @@ func TestEngineHandlersMapModelFailures(t *testing.T) {
 			fp.set(mode.callErr)
 			r, _ := newEngineRouter(t, fp, mode.resolveErr)
 			for path, body := range engineReqs {
-				w := postJSON(r, path, body)
+				w := postRawJSON(r, path, body)
 				if w.Code != mode.status {
 					t.Fatalf("%s: status %d, want %d; body %s", path, w.Code, mode.status, w.Body.String())
 				}
@@ -185,7 +185,7 @@ func TestPlaybooksWorkWithoutProvider(t *testing.T) {
 	if w.Code != http.StatusOK || strings.TrimSpace(w.Body.String()) != "[]" {
 		t.Fatalf("GET /playbooks without a provider: %d %s", w.Code, w.Body.String())
 	}
-	if w := postJSON(r, "/playbooks/build", engineReqs["/playbooks/build"]); w.Code != http.StatusServiceUnavailable {
+	if w := postRawJSON(r, "/playbooks/build", engineReqs["/playbooks/build"]); w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("build without provider: %d", w.Code)
 	}
 	st, _ := s.playbookStore()
@@ -199,14 +199,14 @@ func TestPlaybooksWorkWithoutProvider(t *testing.T) {
 func TestEngineProviderResolvedPerRequest(t *testing.T) {
 	fp := &failingProvider{}
 	r, _ := newEngineRouter(t, fp, errors.Join(providers.ErrNoProvider, errors.New("unset")))
-	if w := postJSON(r, "/redline", engineReqs["/redline"]); w.Code != http.StatusServiceUnavailable {
+	if w := postRawJSON(r, "/redline", engineReqs["/redline"]); w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("first: %d", w.Code)
 	}
 	engineModelsFor = func(*Server) (engineModels, error) {
 		return engineModels{provider: fp, mid: "m", light: "l", heavy: "h"}, nil
 	}
 	fp.set(errors.New("HTTP 500"))
-	if w := postJSON(r, "/redline", engineReqs["/redline"]); w.Code != http.StatusBadGateway {
+	if w := postRawJSON(r, "/redline", engineReqs["/redline"]); w.Code != http.StatusBadGateway {
 		t.Fatalf("after configuring: %d (still cached?)", w.Code)
 	}
 }
@@ -217,7 +217,7 @@ func TestRedlineNoContentIs422(t *testing.T) {
 		return &providers.ChatResponse{Content: []providers.ContentBlock{{Type: providers.BlockText, Text: `{"clauses":[]}`}}}, nil
 	})
 	r, _ := newEngineRouter(t, ok, nil)
-	w := postJSON(r, "/redline", engineReqs["/redline"])
+	w := postRawJSON(r, "/redline", engineReqs["/redline"])
 	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), errorTypeNoContent) {
 		t.Fatalf("got %d %s", w.Code, w.Body.String())
 	}

@@ -47,6 +47,12 @@ func TestBuildModelFailurePersistsNothing(t *testing.T) {
 		"missing a type":      `{"entries":[{"clauseType":"Governing law","standardPosition":"England"}]}`,
 		"empty position":      `{"entries":[{"clauseType":"Governing law","standardPosition":"England"},{"clauseType":"Limitation of liability","standardPosition":"  "}]}`,
 		"only invented types": `{"entries":[{"clauseType":"Force majeure","standardPosition":"x"}]}`,
+		// An unrequested type is never re-labelled as a requested one, even
+		// when the entry count matches.
+		"invented type in a requested slot": `{"entries":[{"clauseType":"Governing law","standardPosition":"England"},{"clauseType":"Non-compete","standardPosition":"12 months"}]}`,
+		// Paraphrases are not taken by position: out of order they would swap.
+		"swapped paraphrases": `{"entries":[{"clauseType":"Liability cap","standardPosition":"Cap at fees"},{"clauseType":"Choice of law","standardPosition":"England"}]}`,
+		"one paraphrase":      `{"entries":[{"clauseType":"Liability cap","standardPosition":"Cap at fees"},{"clauseType":"Governing law","standardPosition":"England"}]}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			st := New(filepath.Join(t.TempDir(), "pb.json"))
@@ -86,14 +92,14 @@ func TestBuildCompleteEntriesSaved(t *testing.T) {
 	}
 }
 
-// Models echo the prompt's numbering or add "Clause" to the name; when the
-// count matches, an otherwise-unmatched entry is taken by position.
+// Models echo the prompt's numbering or add "Clause" to the name; an entry
+// with no clause name at all is taken at its own index when the count matches.
 func TestBuildAcceptsEchoedClauseNames(t *testing.T) {
 	for name, reply := range map[string]string{
-		"numbered":   `{"entries":[{"clauseType":"1. Governing law","standardPosition":"England"},{"clauseType":"2) Limitation of Liability","standardPosition":"Cap at fees"}]}`,
-		"suffixed":   `{"entries":[{"clauseType":"Governing Law Clause","standardPosition":"England"},{"clauseType":"Limitation of liability provision","standardPosition":"Cap at fees"}]}`,
-		"positional": `{"entries":[{"clauseType":"Choice of law","standardPosition":"England"},{"clauseType":"Liability cap","standardPosition":"Cap at fees"}]}`,
-		"mixed":      `{"entries":[{"clauseType":"Liability cap","standardPosition":"Cap at fees"},{"clauseType":"Governing law","standardPosition":"England"}]}`,
+		"numbered": `{"entries":[{"clauseType":"1. Governing law","standardPosition":"England"},{"clauseType":"2) Limitation of Liability","standardPosition":"Cap at fees"}]}`,
+		"suffixed": `{"entries":[{"clauseType":"Governing Law Clause","standardPosition":"England"},{"clauseType":"Limitation of liability provision","standardPosition":"Cap at fees"}]}`,
+		"unnamed":  `{"entries":[{"standardPosition":"England"},{"clauseType":"","standardPosition":"Cap at fees"}]}`,
+		"mixed":    `{"entries":[{"clauseType":"Limitation of Liability Clause","standardPosition":"Cap at fees"},{"clauseType":"1. Governing law","standardPosition":"England"}]}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			st := New(filepath.Join(t.TempDir(), "pb.json"))
