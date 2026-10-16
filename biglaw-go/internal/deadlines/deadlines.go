@@ -260,6 +260,8 @@ func (e *Engine) Compute(jurisdiction, triggerEvent, triggerDate string) (*types
 // the hearing" on Friday 20th means by Thursday 12th (8 days earlier); a
 // period of 5 days or less also skips weekends and bank holidays (2.8(4)),
 // e.g. 3 days before Friday 20th → Monday 16th (CPR 2.8 worked example).
+// A UK rule declared in business days is counted the same way at any length:
+// clear working days, so "3 business days before" also gives Monday 16th.
 func computeDue(t time.Time, rule types.DeadlineRule, cal types.HolidayCalendar) (due, unadjusted time.Time, adjustments []string) {
 	n := rule.Days
 	backward := n < 0
@@ -272,7 +274,23 @@ func computeDue(t time.Time, rule types.DeadlineRule, cal types.HolidayCalendar)
 			adjustments = append(adjustments, w+" — "+rule)
 		}
 	}
+	ukWorkingDays := ukClear && (rule.DayType == types.DayTypeBusiness || n <= 5)
 	switch {
+	case ukWorkingDays && backward:
+		if rule.DayType == types.DayTypeBusiness {
+			adjustments = append(adjustments,
+				"CPR 2.8(3): clear days — neither the day of the event nor the day the period ends is counted; working days only")
+		} else {
+			adjustments = append(adjustments,
+				"CPR 2.8(4): period of 5 days or less excludes Saturdays, Sundays, bank holidays, Christmas Day and Good Friday")
+		}
+		// n clear working days strictly between the act and the event; the
+		// act is due on the day before the earliest of them (a UK
+		// business-day rule is counted the same way, whatever its length).
+		unadjusted = subBusinessDays(t, n, cal).AddDate(0, 0, -1)
+		due, why := rollBackward(unadjusted, cal)
+		note(why, rollRule(cal, true))
+		return due, unadjusted, adjustments
 	case rule.DayType == types.DayTypeBusiness:
 		if backward {
 			due = subBusinessDays(t, n, cal)
@@ -283,16 +301,8 @@ func computeDue(t time.Time, rule types.DeadlineRule, cal types.HolidayCalendar)
 	case ukClear && n <= 5:
 		adjustments = append(adjustments,
 			"CPR 2.8(4): period of 5 days or less excludes Saturdays, Sundays, bank holidays, Christmas Day and Good Friday")
-		if !backward {
-			due = addBusinessDays(t, n, cal)
-			return due, due, adjustments
-		}
-		// n clear working days strictly between the act and the event; the
-		// act is due on the day before the earliest of them.
-		unadjusted = subBusinessDays(t, n, cal).AddDate(0, 0, -1)
-		due, why := rollBackward(unadjusted, cal)
-		note(why, rollRule(cal, true))
-		return due, unadjusted, adjustments
+		due = addBusinessDays(t, n, cal)
+		return due, due, adjustments
 	case backward:
 		unadjusted = t.AddDate(0, 0, -n)
 		if ukClear {

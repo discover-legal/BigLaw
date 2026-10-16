@@ -29,7 +29,8 @@ Rules with **negative** `days` count *backward* from the trigger ("at least 7 da
 hearing": the trigger date is the hearing); a backward period ending on a non-working day moves to
 the **preceding** working day (FRCP 6(a)(5)), and `uk_bank` counts clear days (CPR 2.8(3)), so
 CPR 24.5(1) evidence for a Friday 20 November hearing is due Thursday 12 November. Such deadlines
-carry `direction: "before"`. Business-day rules count working days only. Each deadline carries the raw `unadjustedDate`
+carry `direction: "before"`. Business-day rules count working days only; a backward `uk_bank`
+business-day rule is counted in clear working days too (3 business days before Friday 20th → Monday 16th). Each deadline carries the raw `unadjustedDate`
 and an `adjustments` list explaining every skipped day; the warning date is counted back from
 the adjusted due date and moved *earlier* (never later) off non-working days. Every result
 carries `limitations` — what is not modelled (US state legal holidays where the district court

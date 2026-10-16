@@ -222,6 +222,9 @@ func TestBackwardPeriods(t *testing.T) {
 		{"CPR 2.8 worked example: 3 days before Fri 20 Oct → Mon 16 Oct", types.HolidaysUKBank, rule{-3, 0, types.DayTypeCalendar}, "2000-10-20", "2000-10-16", "", ""},
 		{"CPR 24.5(1): 7 clear days before Fri 20 Nov → Thu 12 Nov", types.HolidaysUKBank, rule{-7, 2, types.DayTypeCalendar}, "2026-11-20", "2026-11-12", "", "2026-11-10"},
 		{"CPR clear days back over Christmas", types.HolidaysUKBank, rule{-7, 0, types.DayTypeCalendar}, "2027-01-04", "2026-12-24", "2026-12-27", ""},
+		{"CPR business-day rule: 3 business days before Fri 20 Oct → Mon 16 Oct (clear days)", types.HolidaysUKBank, rule{-3, 0, types.DayTypeBusiness}, "2023-10-20", "2023-10-16", "", ""},
+		{"CPR business-day rule longer than 5: 7 before Fri 20 Nov → Tue 10 Nov", types.HolidaysUKBank, rule{-7, 1, types.DayTypeBusiness}, "2026-11-20", "2026-11-10", "", "2026-11-09"},
+		{"CPR business-day rule over a weekend: 2 before Tue 24 Nov → Thu 19 Nov", types.HolidaysUKBank, rule{-2, 0, types.DayTypeBusiness}, "2026-11-24", "2026-11-19", "", ""},
 		{"EU 10 before → Easter Monday → back", types.HolidaysEUInstitutions, rule{-10, 0, types.DayTypeCalendar}, "2026-04-16", "2026-04-03", "2026-04-06", ""},
 	}
 	for _, tc := range cases {
