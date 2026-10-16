@@ -11,11 +11,11 @@ import (
 
 func TestSplitClioUnsynced(t *testing.T) {
 	entries := []types.TimeEntry{
-		{ID: "open", DurationMs: 0},                                          // still open — excluded entirely
+		{ID: "open", DurationMs: 0}, // still open — excluded entirely
 		{ID: "synced", DurationMs: 360_000, ClioSyncedAt: "2026-01-01T00:00:00Z"}, // already synced — skipped
-		{ID: "fresh-1", DurationMs: 360_000},                                 // needs sync
-		{ID: "fresh-2", DurationMs: 90_000},                                  // needs sync
-		{ID: "negative", DurationMs: -1},                                     // defensive — excluded
+		{ID: "fresh-1", DurationMs: 360_000},                                      // needs sync
+		{ID: "fresh-2", DurationMs: 90_000},                                       // needs sync
+		{ID: "negative", DurationMs: -1},                                          // defensive — excluded
 	}
 
 	toSync, skipped := SplitClioUnsynced(entries)
