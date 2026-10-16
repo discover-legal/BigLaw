@@ -13,6 +13,10 @@
 package main
 
 import (
+	// Embedded IANA zone data: FIRM_TIMEZONE must resolve in minimal
+	// containers that ship no /usr/share/zoneinfo.
+	_ "time/tzdata"
+
 	"context"
 	"fmt"
 	"log/slog"
@@ -95,8 +99,21 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Upgrade: state files an older build created 0644 → 0600. Not in the
+	// thin-client mode, which must not touch the owner's stores.
+	if os.Getenv("BIG_MICHAEL_MODE") != "mcp" {
+		tightenStatePerms(cfg)
+	}
+
 	// Initialise audit logger.
 	audit.Init(cfg.Audit.LogFile, cfg.Audit.Enabled)
+	// Reload the recent window and continue the hash chain from the last
+	// persisted entry. Without this every restart re-seeded the chain at
+	// "genesis" mid-file (breaking tamper-evidence across restarts) and
+	// GET /audit returned nothing written before the restart.
+	if err := audit.Default.RestoreFromFile(); err != nil {
+		slog.Warn("audit: restore from log failed; chain restarts at genesis", "file", cfg.Audit.LogFile, "err", err)
+	}
 
 	// Build provider registry.
 	provReg := providers.NewRegistry(cfg)
@@ -252,6 +269,12 @@ func main() {
 	if err := orch.Init(allAgents); err != nil {
 		fmt.Fprintf(os.Stderr, "orchestrator init: %v\n", err)
 		os.Exit(1)
+	}
+
+	// One-off billing migration — only in a process that owns the stores
+	// (BIG_MICHAEL_MODE=mcp is the thin-client mode and must not write them).
+	if os.Getenv("BIG_MICHAEL_MODE") != "mcp" {
+		writeOffHistoricalFailedRuns(cfg.Persistence.TimeFile, cfg.Persistence.PreBillsFile, cfg.Audit.LogFile, orch.ListTasks(), timeStore)
 	}
 
 	// Lavern prompt-only orchestrator personas: overlaid onto T0 round-goal +
