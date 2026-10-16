@@ -17,7 +17,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +24,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/discover-legal/biglaw-go/internal/agents"
+	"github.com/discover-legal/biglaw-go/internal/atomicfile"
 	"github.com/discover-legal/biglaw-go/internal/cost"
 	"github.com/discover-legal/biglaw-go/internal/ooxml"
 	"github.com/discover-legal/biglaw-go/internal/providers"
@@ -403,7 +403,7 @@ func (r *Registry) renderReviewDocx(rec *ReviewRecord) (path, filename string, e
 	if err != nil {
 		return "", "", err
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := atomicfile.WriteFile(path, data, 0o600); err != nil {
 		return "", "", err
 	}
 	return path, filename, nil

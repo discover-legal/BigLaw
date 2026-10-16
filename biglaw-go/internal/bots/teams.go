@@ -79,16 +79,31 @@ func DeleteTeamsMatterLink(matterNumber string) {
 
 var teamsAtRe = regexp.MustCompile(`<at>[^<]+</at>`)
 
-// VerifyTeamsSignature checks the HMAC-SHA256 Authorization header.
+// VerifyTeamsSignature checks a Teams Outgoing Webhook request per
+// Microsoft's spec ("Create an Outgoing Webhook" → "Verify the outgoing
+// webhook HMAC token"): the security token Teams shows at creation is
+// base64; its DECODED bytes are the HMAC-SHA256 key, the MAC is computed
+// over the raw UTF-8 request body, and the request carries
+// "Authorization: HMAC <base64(mac)>". Comparison is constant-time on the
+// decoded MAC bytes. A token that is not valid base64 can never match a
+// real Teams request, so it is rejected (and logged) rather than used raw.
 func VerifyTeamsSignature(body, authHeader, secret string) bool {
-	if !strings.HasPrefix(authHeader, "HMAC ") {
+	const prefix = "HMAC "
+	if len(authHeader) < len(prefix) || !strings.EqualFold(authHeader[:len(prefix)], prefix) {
 		return false
 	}
-	provided := strings.TrimSpace(authHeader[5:])
-	mac := hmac.New(sha256.New, []byte(secret))
+	provided, err := base64.StdEncoding.DecodeString(strings.TrimSpace(authHeader[len(prefix):]))
+	if err != nil || len(provided) != sha256.Size {
+		return false
+	}
+	key, err := base64.StdEncoding.DecodeString(strings.TrimSpace(secret))
+	if err != nil || len(key) == 0 {
+		slog.Error("Teams webhook: TEAMS_WEBHOOK_SECRET is not the base64 security token Teams issued; every request will be rejected")
+		return false
+	}
+	mac := hmac.New(sha256.New, key)
 	mac.Write([]byte(body))
-	expected := base64.StdEncoding.EncodeToString(mac.Sum(nil))
-	return hmac.Equal([]byte(provided), []byte(expected))
+	return hmac.Equal(provided, mac.Sum(nil))
 }
 
 // ─── Route handlers (framework-agnostic) ─────────────────────────────────────
@@ -162,7 +177,7 @@ func HandleTeamsWebhook(rawBody, authHeader string, orch OrchestratorFacade) ([]
 		if !enqueueBotWork(func() {
 			result, err := response.AsyncWork()
 			if err != nil {
-				result = fmt.Sprintf("Error: %s", err.Error())
+				result = asyncFailureMessage(PlatformTeams, err)
 			}
 			if targetURL != "" {
 				if postErr := integrations.PostToTeamsWebhook(targetURL, "Big Michael", result, nil); postErr != nil {

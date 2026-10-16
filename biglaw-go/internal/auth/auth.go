@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/discover-legal/biglaw-go/internal/atomicfile"
 	"github.com/discover-legal/biglaw-go/internal/config"
 	"github.com/discover-legal/biglaw-go/internal/strutil"
 	"github.com/discover-legal/biglaw-go/internal/types"
@@ -60,7 +61,7 @@ func CanViewTask(u *types.SessionUser, assignedIDs []string) bool {
 
 type ProfileStore struct {
 	mu        sync.RWMutex
-	persistMu sync.Mutex // serialises concurrent fire-and-forget persists
+	persistMu sync.Mutex // serialises concurrent persists
 	profiles  []types.LawyerProfile
 	path      string
 	cfg       *config.Config
@@ -185,9 +186,11 @@ func (s *ProfileStore) Create(input CreateProfileInput) (*types.LawyerProfile, e
 	return &p, nil
 }
 
+// Update applies a profile patch, then persists synchronously so the change
+// is on disk before the caller sees success.
 func (s *ProfileStore) Update(id string, patch map[string]interface{}) (*types.LawyerProfile, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	var out *types.LawyerProfile
 	for i := range s.profiles {
 		if s.profiles[i].ID != id {
 			continue
@@ -218,32 +221,44 @@ func (s *ProfileStore) Update(id string, patch map[string]interface{}) (*types.L
 			p.Mode = ResolveMode(p.Role, p.Mode)
 		}
 		cp := *p
-		go s.persist()
-		return &cp, nil
+		out = &cp
+		break
 	}
-	return nil, fmt.Errorf("profile not found")
+	s.mu.Unlock()
+	if out == nil {
+		return nil, fmt.Errorf("profile not found")
+	}
+	s.persist()
+	return out, nil
 }
 
+// UpdateTone sets (or clears, with nil) a profile's tone profile and persists.
 func (s *ProfileStore) UpdateTone(id string, tone *types.ToneProfile) (*types.LawyerProfile, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	var out *types.LawyerProfile
 	for i := range s.profiles {
 		if s.profiles[i].ID == id {
 			s.profiles[i].ToneProfile = tone
 			cp := s.profiles[i]
-			go s.persist()
-			return &cp, nil
+			out = &cp
+			break
 		}
 	}
-	return nil, fmt.Errorf("profile not found")
+	s.mu.Unlock()
+	if out == nil {
+		return nil, fmt.Errorf("profile not found")
+	}
+	s.persist()
+	return out, nil
 }
 
+// Remove deletes a profile and persists. The local development profile
+// cannot be removed.
 func (s *ProfileStore) Remove(id string) (bool, error) {
 	if id == LocalPartner.ProfileID {
 		return false, fmt.Errorf("cannot delete local development profile")
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	before := len(s.profiles)
 	filtered := s.profiles[:0]
 	for _, p := range s.profiles {
@@ -252,28 +267,25 @@ func (s *ProfileStore) Remove(id string) (bool, error) {
 		}
 	}
 	s.profiles = filtered
-	if len(s.profiles) == before {
-		return false, nil
+	removed := len(s.profiles) != before
+	s.mu.Unlock()
+	if removed {
+		s.persist()
 	}
-	go s.persist()
-	return true, nil
+	return removed, nil
 }
 
-// persist writes the roster atomically. 0600: profiles carry emails, bios,
-// and tone fingerprints.
+// persist writes the roster atomically and durably (atomicfile: temp file,
+// fsync, rename). 0600: profiles carry emails, bios, and tone fingerprints.
+// The snapshot is marshalled under the lock; persistMu keeps writes ordered.
 func (s *ProfileStore) persist() {
 	s.persistMu.Lock()
 	defer s.persistMu.Unlock()
 	s.mu.RLock()
 	data, _ := json.MarshalIndent(s.profiles, "", "  ")
 	s.mu.RUnlock()
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0600); err != nil {
-		slog.Error("profiles: persist write failed", "path", tmp, "err", err)
-		return
-	}
-	if err := os.Rename(tmp, s.path); err != nil {
-		slog.Error("profiles: persist rename failed", "path", s.path, "err", err)
+	if err := atomicfile.WriteFile(s.path, data, 0o600); err != nil {
+		slog.Error("profiles: persist failed", "path", s.path, "err", err)
 	}
 }
 

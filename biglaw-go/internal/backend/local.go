@@ -324,10 +324,12 @@ func SummarizePlugins(reg *adapters.Registry) []PluginSummary {
 
 func (v *view) ListTimeEntries(_ context.Context, f timekeeping.TimeFilter) ([]types.TimeEntry, error) {
 	if !v.partner() {
-		f.ProfileID = v.u.ProfileID // lawyers are locked to their own entries
-		if f.ProfileID == "" {
+		// Lawyers see their own time plus the AI time on tasks they
+		// requested; a principal with no profile sees nothing.
+		if v.u.ProfileID == "" {
 			return []types.TimeEntry{}, nil
 		}
+		f.ProfileID, f.VisibleToProfileID = "", v.u.ProfileID
 	}
 	entries := v.l.Time.List(f)
 	if entries == nil {

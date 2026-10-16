@@ -85,16 +85,17 @@ func TestMigrateMovesLegacyDotfiles(t *testing.T) {
 	write(t, ".profiles.json", `[]`)
 	write(t, "audit.jsonl", "{}\n")
 	write(t, ".matter-budgets.json", `{}`)
+	write(t, ".time-entries.json.migrations.json", `{}`) // one-off migration marker beside the time file
 
 	c := Load()
 	moves, err := MigrateLegacyStateFiles(c)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(moves) != 4 {
-		t.Fatalf("moves = %+v, want 4", moves)
+	if len(moves) != 5 {
+		t.Fatalf("moves = %+v, want 5", moves)
 	}
-	for _, p := range []string{".tasks.json", ".profiles.json", "audit.jsonl", ".matter-budgets.json"} {
+	for _, p := range []string{".tasks.json", ".profiles.json", "audit.jsonl", ".matter-budgets.json", ".time-entries.json.migrations.json"} {
 		if exists(p) {
 			t.Errorf("legacy %s still present", p)
 		}

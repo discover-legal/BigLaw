@@ -10,11 +10,12 @@ package lpm
 import (
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/discover-legal/biglaw-go/internal/atomicfile"
 )
 
 // PendingStatus is the lifecycle state of a pending draft.
@@ -135,12 +136,5 @@ func (s *PendingStore) persistLocked() error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
-		return err
-	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.path)
+	return atomicfile.WriteFile(s.path, data, 0o600)
 }

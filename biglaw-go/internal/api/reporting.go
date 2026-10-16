@@ -20,8 +20,9 @@ import (
 // ─── Time entries ─────────────────────────────────────────────────────────────
 
 func (s *Server) handleListTimeEntries(c *gin.Context) {
-	// profileId is honoured for partners only; the backend locks everyone
-	// else to their own entries. Unparseable bounds are ignored.
+	// profileId is honoured for partners only; the backend limits everyone
+	// else to their own time plus AI time on work they requested.
+	// Unparseable bounds are ignored.
 	filter := timekeeping.TimeFilter{
 		ProfileID:    c.Query("profileId"),
 		TaskID:       c.Query("taskId"),

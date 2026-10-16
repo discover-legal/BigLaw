@@ -285,7 +285,7 @@ func (s *MCPServer) registerTools() {
 	// 15. get_time_entries
 	s.srv.AddTool(
 		mcplib.NewTool("get_time_entries",
-			mcplib.WithDescription("Retrieve billable time entries, scoped to the MCP principal (partners see everyone's; anyone else only their own). Supports filtering by profileId, taskId, matterNumber, and an ISO date range."),
+			mcplib.WithDescription("Retrieve billable time entries, scoped to the MCP principal (partners see everyone's; anyone else their own plus AI time on tasks they requested). Supports filtering by profileId, taskId, matterNumber, and an ISO date range."),
 			mcplib.WithString("profileId",
 				mcplib.Description("If set, filter entries to this lawyer profile ID."),
 			),
