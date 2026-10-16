@@ -99,6 +99,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Upgrade: state files an older build created 0644 → 0600. Not in the
+	// thin-client mode, which must not touch the owner's stores.
+	if os.Getenv("BIG_MICHAEL_MODE") != "mcp" {
+		tightenStatePerms(cfg)
+	}
+
 	// Initialise audit logger.
 	audit.Init(cfg.Audit.LogFile, cfg.Audit.Enabled)
 	// Reload the recent window and continue the hash chain from the last
