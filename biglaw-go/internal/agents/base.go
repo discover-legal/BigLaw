@@ -1008,6 +1008,11 @@ const maxFindingsPerAgentRound = 3
 // in natural language instead of the SOURCE=/QUOTE= micro-format. None of that
 // is a reasoning failure — it is formatting drift — so the parser recovers the
 // work instead of discarding it on the floor.
+// sectionLabel is the regexp fragment for a labelled line inside a finding body.
+// Markdown emphasis around the label ("**Evidence:**", "**Evidence**:") and a
+// leading list marker or ordinal ("- ", "1. ", "2) ") are allowed.
+const sectionLabel = `[ \t>*#_\-\d.)]*(?:Evidence|Citation|Conclusion|Content|Confidence|Source|Cite)[*_]*\s*:[*_]*`
+
 var (
 	// reFindingStart matches a finding header, decoration and ordinal allowed.
 	reFindingStart = regexp.MustCompile(`(?im)^[\s>*#_-]*FINDING\b[ \t]*#?\d*[ \t]*:?`)
@@ -1015,11 +1020,22 @@ var (
 	reNoFindings   = regexp.MustCompile(`(?i)\bNO_FINDINGS\b`)
 	// reContent captures the conclusion. "Conclusion:" is the current label;
 	// "Content:" is accepted for back-compat with older output.
-	reContent = regexp.MustCompile(`(?si)\b(?:Conclusion|Content)\s*:\s*(.*?)(?:\n\s*(?:Evidence|Citation)\s*:|\n\s*Confidence\s*:|END_FINDING|$)`)
+	// It runs until the next labelled line (any reSectionLabel label).
+	reContent = regexp.MustCompile(`(?si)\b(?:Conclusion|Content)[*_]*\s*:[*_\s]*(.*?)(?:\n` + sectionLabel + `|END_FINDING|$)`)
+	// reSectionLabel marks the start of each labelled line of a finding body
+	// (decoration allowed, as for FINDING headers). The prompt's format is
+	// Evidence → Conclusion → Confidence; Citation/Content are back-compat and
+	// Source/Cite are the loose citation labels.
+	reSectionLabel = regexp.MustCompile(`(?im)^` + sectionLabel)
 	// reCitationStrict is the verifiable gold form: SOURCE=/QUOTE= give the gate
 	// a verbatim quote to check. "Evidence:" is the current label; "Citation:"
-	// is accepted for back-compat.
-	reCitationStrict = regexp.MustCompile(`(?si)(?:Evidence|Citation)\s*:\s*SOURCE\s*=\s*(.+?)\s*\|\s*QUOTE\s*=\s*(.+?)(?:\s*\|\s*PAGE\s*=\s*([^\n|]+))?(?:\n\s*(?:Evidence|Citation)\s*:|\n\s*Confidence\s*:|END_FINDING|$)`)
+	// is accepted for back-compat. It is matched against ONE labelled section
+	// (see labelledSections), so the quote ends where the next label begins —
+	// a following "Conclusion:" can never be absorbed into the quote, and a
+	// following "Evidence:" line is never consumed as a terminator. PAGE= ends
+	// its line: unlabelled prose after it (a conclusion whose label the model
+	// dropped) is not part of the quote.
+	reCitationStrict = regexp.MustCompile(`(?si)^[\s>*#_\-\d.)]*(?:Evidence|Citation)[*_]*\s*:[*_\s]*SOURCE\s*=\s*(.+?)\s*\|\s*QUOTE\s*=\s*(.+?)(?:\s*\|\s*PAGE\s*=\s*([^\n|]*)(?:\n.*)?)?\s*$`)
 	// reCitationLoose is the fallback for natural evidence lines ("Evidence: the
 	// LCA, p.3"). It yields a source but no verbatim quote, so the gate marks it
 	// unverified rather than trusting it.
@@ -1141,7 +1157,11 @@ func extractFindingContent(body string) string {
 func extractCitations(body string) []types.Citation {
 	citations := []types.Citation{}
 	seen := map[string]bool{}
-	for _, cm := range reCitationStrict.FindAllStringSubmatch(body, 50) {
+	for _, sec := range labelledSections(body) {
+		cm := reCitationStrict.FindStringSubmatch(sec)
+		if cm == nil {
+			continue
+		}
 		source := truncate(strings.TrimSpace(cm[1]), 200)
 		var page *int
 		if len(cm) > 3 {
@@ -1192,6 +1212,23 @@ func extractCitations(body string) []types.Citation {
 		}
 	}
 	return citations
+}
+
+// labelledSections splits a finding body at each labelled line, so each
+// section is one label plus its value and any unlabelled continuation lines.
+// Text before the first label is dropped (it carries no citation). Capped at
+// 50 sections, matching the citation cap.
+func labelledSections(body string) []string {
+	locs := reSectionLabel.FindAllStringIndex(body, 50)
+	secs := make([]string, 0, len(locs))
+	for i, loc := range locs {
+		end := len(body)
+		if i+1 < len(locs) {
+			end = locs[i+1][0]
+		}
+		secs = append(secs, body[loc[0]:end])
+	}
+	return secs
 }
 
 func stripMarkerDecoration(s string) string {
