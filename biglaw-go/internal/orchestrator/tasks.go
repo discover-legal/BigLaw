@@ -364,7 +364,10 @@ func (o *Orchestrator) SubmitFromTemplate(templateID string, subs map[string]str
 	if t == nil {
 		return nil, fmt.Errorf("template not found: %s", templateID)
 	}
-	desc, wfType := templates.InstantiateTemplate(*t, subs)
+	desc, wfType, missing := templates.InstantiateTemplate(*t, subs)
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("template %s needs: %s (pass them as substitutions)", templateID, strings.Join(missing, ", "))
+	}
 	refs.Description = desc
 	refs.WorkflowType = types.WorkflowType(wfType)
 	refs.DocumentIDs = documentIDs

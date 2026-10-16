@@ -49,7 +49,10 @@ func TestShippedTemplatesHavePromptsAndInstantiate(t *testing.T) {
 		if tpl.WorkflowType == "" {
 			t.Errorf("%s: no workflowType", tpl.ID)
 		}
-		desc, wf := InstantiateTemplate(tpl, nil)
+		desc, wf, missing := InstantiateTemplate(tpl, nil)
+		if len(missing) > 0 {
+			t.Errorf("%s: unfilled placeholders reported: %v", tpl.ID, missing)
+		}
 		if strings.TrimSpace(desc) == "" || wf == "" {
 			t.Errorf("%s: instantiated to empty description/workflow", tpl.ID)
 		}
@@ -111,11 +114,32 @@ func TestInstantiateMergesDefaultsWithOverrides(t *testing.T) {
 		WorkflowType:   types.WorkflowReview,
 		Substitutions:  map[string]string{"doc": "the contract", "law": "English law"},
 	}
-	desc, wf := InstantiateTemplate(tpl, map[string]string{"law": "New York law", "unused": "x"})
+	desc, wf, missing := InstantiateTemplate(tpl, map[string]string{"law": "New York law", "unused": "x"})
+	if len(missing) != 0 {
+		t.Fatalf("missing = %v", missing)
+	}
 	if desc != "Review the contract under New York law." || wf != string(types.WorkflowReview) {
 		t.Fatalf("got %q / %q", desc, wf)
 	}
 	if tpl.Substitutions["law"] != "English law" {
 		t.Fatal("instantiation mutated the template's defaults")
+	}
+}
+
+// A template whose placeholders have no value (e.g. Lavern workflow
+// templates, which ship no defaults) reports them instead of rendering
+// literal {{placeholders}} into a task.
+func TestInstantiateReportsUnfilledKeys(t *testing.T) {
+	tpl := types.TaskTemplate{
+		PromptTemplate: "Assess {{description}} against {{ document }} and {{description}}.",
+		WorkflowType:   types.WorkflowReview,
+	}
+	desc, _, missing := InstantiateTemplate(tpl, nil)
+	if strings.Join(missing, ",") != "description,document" {
+		t.Fatalf("missing = %v (desc %q)", missing, desc)
+	}
+	_, _, missing = InstantiateTemplate(tpl, map[string]string{"description": "the DPIA", "document": "doc-1"})
+	if len(missing) != 0 {
+		t.Fatalf("filled template still reports %v", missing)
 	}
 }

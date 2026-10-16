@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"sync"
 
@@ -143,12 +145,17 @@ func (s *Store) Get(id string) *types.TaskTemplate {
 	return nil
 }
 
+// placeholderRe matches a {{key}} placeholder.
+var placeholderRe = regexp.MustCompile(`\{\{\s*([^{}\s]+)\s*\}\}`)
+
 // InstantiateTemplate substitutes {{key}} placeholders in t.PromptTemplate,
-// returning the rendered description and the workflow type string. Values
-// come from the template's own default Substitutions, overridden by subs
+// returning the rendered description, the workflow type string, and the
+// keys of any placeholders left unfilled (sorted, deduplicated). Values come
+// from the template's own default Substitutions, overridden by subs
 // (callers pass only what they want to change). Keys with no corresponding
-// placeholder are ignored; placeholders with no value are left as-is.
-func InstantiateTemplate(t types.TaskTemplate, subs map[string]string) (description, workflowType string) {
+// placeholder are ignored. A non-empty missing list means the description
+// still contains literal placeholders and must not be submitted as a task.
+func InstantiateTemplate(t types.TaskTemplate, subs map[string]string) (description, workflowType string, missing []string) {
 	merged := make(map[string]string, len(t.Substitutions)+len(subs))
 	for k, v := range t.Substitutions {
 		merged[k] = v
@@ -156,9 +163,18 @@ func InstantiateTemplate(t types.TaskTemplate, subs map[string]string) (descript
 	for k, v := range subs {
 		merged[k] = v
 	}
-	result := t.PromptTemplate
-	for key, val := range merged {
-		result = strings.ReplaceAll(result, "{{"+key+"}}", val)
-	}
-	return result, string(t.WorkflowType)
+	seen := map[string]bool{}
+	result := placeholderRe.ReplaceAllStringFunc(t.PromptTemplate, func(m string) string {
+		key := placeholderRe.FindStringSubmatch(m)[1]
+		if val, ok := merged[key]; ok {
+			return val
+		}
+		if !seen[key] {
+			seen[key] = true
+			missing = append(missing, key)
+		}
+		return m
+	})
+	sort.Strings(missing)
+	return result, string(t.WorkflowType), missing
 }
