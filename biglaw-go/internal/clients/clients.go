@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -261,29 +260,10 @@ func (s *ClientStore) Remove(id string) (bool, error) {
 	return removed, nil
 }
 
-var (
-	normPunctRe  = regexp.MustCompile(`[.,&]`)
-	normSuffixRe = regexp.MustCompile(`\b(inc|llc|llp|ltd|limited|corp|corporation|co|company|plc|gmbh|sa|nv|lp|group|holdings)\b`)
-	normSpaceRe  = regexp.MustCompile(`\s+`)
-)
-
-// normName normalizes an entity name for conflict matching: lowercase, strip
-// punctuation and common corporate suffixes (Inc/LLC/Ltd/…), collapse
-// whitespace. This lets "Acme Inc." match "Acme Corporation". Conflict checks
-// should err toward flagging, so over-matching here is acceptable (it just
-// triggers human review).
-func normName(s string) string {
-	out := strings.ToLower(s)
-	out = normPunctRe.ReplaceAllString(out, " ")
-	out = normSuffixRe.ReplaceAllString(out, " ")
-	out = normSpaceRe.ReplaceAllString(out, " ")
-	return strings.TrimSpace(out)
-}
-
 // CheckConflict checks whether onboarding newClientName (optionally with the
 // new client's own newAdversaries) conflicts with the existing roster.
-// Names are normalized (lowercase, punctuation and entity suffixes stripped)
-// before substring matching. Checks both directions:
+// Names are compared with NamesMatch (normalised, token-sorted,
+// initials-dropped and spacing-insensitive forms). Checks both directions:
 //  1. the new client appears on an existing client's adversary list, and
 //  2. an adversary of the new client is itself an existing client (taking the
 //     matter would put us adverse to a current client).
@@ -311,16 +291,17 @@ func (s *ClientStore) ConflictHits(newClientName string, newAdversaries []string
 
 func (s *ClientStore) conflictHits(newClientName string, newAdversaries []string, excludeClientID string, firstOnly bool) []types.ConflictCheckResult {
 	name := normName(newClientName)
-	if name == "" {
-		return nil
-	}
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	var hits []types.ConflictCheckResult
-	// 1. New client name vs existing clients' adversary lists.
+	// 1. New client name vs existing clients' adversary lists. A name that
+	// normalises empty skips only this direction, never the other.
 	for _, c := range s.clients {
+		if name == "" {
+			break
+		}
 		if excludeClientID != "" && c.ID == excludeClientID {
 			continue
 		}
@@ -329,7 +310,7 @@ func (s *ClientStore) conflictHits(newClientName string, newAdversaries []string
 			if len(a) < 3 {
 				continue
 			}
-			if strings.Contains(a, name) || strings.Contains(name, a) {
+			if NamesMatch(adv, newClientName) {
 				hits = append(hits, types.ConflictCheckResult{
 					HasConflict:           true,
 					ConflictingClientID:   c.ID,
@@ -362,7 +343,7 @@ func (s *ClientStore) conflictHits(newClientName string, newAdversaries []string
 			continue
 		}
 		for _, adv := range advNorms {
-			if strings.Contains(adv.norm, cn) || strings.Contains(cn, adv.norm) {
+			if NamesMatch(adv.raw, c.Name) {
 				hits = append(hits, types.ConflictCheckResult{
 					HasConflict:           true,
 					ConflictingClientID:   c.ID,
