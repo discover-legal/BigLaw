@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.discover.legal/biglaw/intake/v1/submission-request.schema.json",
+  "title": "POST /intake/submissions request",
+  "description": "Submit (or re-submit, keyed by externalId per client) a client-voiced draft to the firm. Tolerant reader: receivers MUST ignore properties they do not know; additionalProperties is therefore never false in this contract.",
+  "type": "object",
+  "required": [
+    "externalId",
+    "client",
+    "content"
+  ],
+  "properties": {
+    "externalId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Portal document id — the idempotency key per client."
+    },
+    "client": {
+      "type": "object",
+      "required": [
+        "externalId"
+      ],
+      "description": "The portal identity. email or name is required on first contact.",
+      "properties": {
+        "externalId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "email": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "title": {
+      "type": "string",
+      "maxLength": 300
+    },
+    "documentType": {
+      "type": "string",
+      "maxLength": 100,
+      "description": "Free text, e.g. affidavit, divorce_petition."
+    },
+    "matterType": {
+      "type": "string",
+      "maxLength": 100,
+      "description": "Portal matter-pack code. INFORMATIONAL ONLY: stored and displayed, never drives BigLaw behaviour."
+    },
+    "jurisdiction": {
+      "type": "string",
+      "maxLength": 40,
+      "description": "BCP-47-style region tag, e.g. US-CA, CA-ON."
+    },
+    "practiceArea": {
+      "type": "string",
+      "maxLength": 100,
+      "description": "Optional. A BigLaw canonical practice area matches case-insensitively; anything else is kept as free text after NOSLEGAL areaOfLaw."
+    },
+    "noslegal": {
+      "$ref": "noslegal.schema.json"
+    },
+    "adverseParties": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "$ref": "party.schema.json"
+      },
+      "description": "Parties on the other side. adverse_party facts are also treated as adverse parties."
+    },
+    "summary": {
+      "type": "string",
+      "maxLength": 4000
+    },
+    "content": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1048576,
+      "description": "The rendered draft text (≤ 1 MiB)."
+    },
+    "facts": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "$ref": "fact-input.schema.json"
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Stored verbatim (≤ 16 KiB serialized); never interpreted."
+    }
+  }
+}

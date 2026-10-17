@@ -3,11 +3,25 @@
 
 package config
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
+
+// MinIntakeSecretLen is the minimum length of each INTAKE_HMAC_SECRET entry.
+const MinIntakeSecretLen = 32
 
 // ValidateSecurity rejects authentication settings that would allow session
-// forgery or let a shared bearer credential choose its own principal.
+// forgery or let a shared bearer credential choose its own principal, and
+// guessable intake signing secrets.
 func ValidateSecurity(cfg *Config) error {
+	// INTAKE_HMAC_SECRET may list several comma-separated secrets (key
+	// rotation); every one must be long enough to resist guessing.
+	for _, s := range strings.Split(cfg.Intake.HMACSecret, ",") {
+		if s = strings.TrimSpace(s); s != "" && len(s) < MinIntakeSecretLen {
+			return fmt.Errorf("config: every INTAKE_HMAC_SECRET entry must be at least %d characters (generate with: openssl rand -hex 32)", MinIntakeSecretLen)
+		}
+	}
 	if !cfg.Auth.Enabled {
 		return nil
 	}

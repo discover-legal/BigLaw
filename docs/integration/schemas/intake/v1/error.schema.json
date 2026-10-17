@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.discover.legal/biglaw/intake/v1/error.schema.json",
+  "title": "Error response",
+  "description": "Every 4xx/5xx. Tolerant reader: receivers MUST ignore properties they do not know; additionalProperties is therefore never false in this contract.",
+  "type": "object",
+  "required": [
+    "error"
+  ],
+  "properties": {
+    "error": {
+      "type": "string"
+    }
+  }
+}

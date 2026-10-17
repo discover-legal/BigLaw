@@ -3,7 +3,6 @@
   "name": "Build Playbook",
   "description": "Extract the firm's market positions from precedent documents and build a scoped playbook (firm / client / matter / personal). Replaces Contract Express and Practical Law market standards.",
   "workflowType": "tabulate",
-  "taskDescriptionTemplate": "Build a {{scope}}-scope {{practiceArea}} playbook{{ownerContext}} for {{jurisdiction}}. Extract standard positions, fallbacks, and red lines for all standard clause types in this practice area from the firm's precedent library.",
   "promptTemplate": "Build a {{scope}}-scope {{practiceArea}} playbook{{ownerContext}} for {{jurisdiction}}. Extract standard positions, fallbacks, and red lines for all standard clause types in this practice area from the firm's precedent library.",
   "substitutions": {
     "scope": "firm",

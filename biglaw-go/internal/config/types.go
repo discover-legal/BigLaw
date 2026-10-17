@@ -213,6 +213,19 @@ type ClientVoiceConfig struct {
 	MatterNotifications bool
 }
 
+// IntakeConfig governs the affidavit-maker client-intake channel. The module
+// self-enables when the shared HMAC secret is present (credential-presence
+// pattern, like the connectors); BIGLAW_MODULE_INTAKE overrides.
+type IntakeConfig struct {
+	// HMACSecret is the shared secret the portal signs requests with
+	// (contract: docs/integration/affidavit-intake.md). Empty = intake off.
+	// A comma-separated list accepts any of them (rotation); each entry
+	// must be at least MinIntakeSecretLen characters.
+	HMACSecret string
+	// MaxSkewSec is the accepted clock skew for signed timestamps.
+	MaxSkewSec int
+}
+
 type LocalConfig struct {
 	OllamaURL           string
 	OllamaEnabled       bool
@@ -512,6 +525,7 @@ type Config struct {
 	Presentation       PresentationConfig
 	DocuSeal           DocuSealConfig
 	ClientVoice        ClientVoiceConfig
+	Intake             IntakeConfig
 	Local              LocalConfig
 	PDF                PDFConfig
 	Persistence        PersistenceConfig

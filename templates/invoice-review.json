@@ -3,7 +3,6 @@
   "name": "Invoice OCG Review",
   "description": "Audit outside counsel invoice against the client's OCG. Flags block billing, rate violations, vague descriptions, and unauthorised tasks. Generates a dispute letter. Replaces BillBlast / TyMetrix / Apperio.",
   "workflowType": "review",
-  "taskDescriptionTemplate": "Review the attached outside-counsel invoice from {{lawFirm}} for matter {{matterNumber}} against {{client}}'s Outside Counsel Guidelines. Identify all violations, quantify the suggested reduction, and draft a dispute letter if required.",
   "promptTemplate": "Review the attached outside-counsel invoice from {{lawFirm}} for matter {{matterNumber}} against {{client}}'s Outside Counsel Guidelines. Identify all violations, quantify the suggested reduction, and draft a dispute letter if required.",
   "substitutions": {
     "lawFirm": "the outside law firm",

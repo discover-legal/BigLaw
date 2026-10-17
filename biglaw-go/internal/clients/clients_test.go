@@ -63,10 +63,13 @@ func TestCheckConflict(t *testing.T) {
 		}
 	})
 
-	t.Run("empty name never conflicts", func(t *testing.T) {
+	t.Run("empty name still checks the adverse parties", func(t *testing.T) {
+		if res := store.CheckConflict("   ", nil); res.HasConflict {
+			t.Fatalf("expected no conflict for empty name and no parties, got %+v", res)
+		}
 		res := store.CheckConflict("   ", []string{"Globex"})
-		if res.HasConflict {
-			t.Fatalf("expected no conflict for empty name, got %+v", res)
+		if !res.HasConflict || res.ConflictingClientID != "c1" {
+			t.Fatalf("an empty client name must not skip the adverse-party direction, got %+v", res)
 		}
 	})
 
@@ -79,4 +82,47 @@ func TestCheckConflict(t *testing.T) {
 			t.Fatalf("expected short adversary to be skipped, got %+v", res)
 		}
 	})
+}
+
+func TestNamesMatchVariants(t *testing.T) {
+	match := [][2]string{
+		{"José García", "Jose Garcia"},
+		{"Mary O'Brien-Smith", "Mary OBrien-Smith"},
+		{"Mary O'Brien-Smith", "Mary O Brien Smith"},
+		{"Mary O’Brien", "Mary O'Brien"},
+		{"Smith, Robert", "Robert Smith"},
+		{"Robert J. Smith", "Robert Smith"},
+		{"Rob​ert Smith", "Robert Smith"},
+		{"ROBERT SMITH", "robert smith"},
+		{"Acme Inc.", "Acme Corporation"},
+	}
+	for _, m := range match {
+		if !NamesMatch(m[0], m[1]) || !NamesMatch(m[1], m[0]) {
+			t.Errorf("NamesMatch(%q, %q) = false, want true", m[0], m[1])
+		}
+	}
+	noMatch := [][2]string{
+		{"Robert Smith", "Alice Jones"},
+		{"", "Robert Smith"},
+		{"Inc", "Acme"},
+	}
+	for _, m := range noMatch {
+		if NamesMatch(m[0], m[1]) {
+			t.Errorf("NamesMatch(%q, %q) = true, want false", m[0], m[1])
+		}
+	}
+}
+
+func TestConflictHitsCatchesNameVariants(t *testing.T) {
+	store := &ClientStore{clients: []types.Client{
+		{ID: "c1", Name: "José García", Adversaries: []string{"Smith, Robert"}},
+	}}
+	// Forward: the new client is on c1's adversary list under another spelling.
+	if hits := store.ConflictHits("Robert J. Smith", nil, ""); len(hits) != 1 {
+		t.Fatalf("forward variant missed: %+v", hits)
+	}
+	// Reverse: the new client's adverse party is c1 under another spelling.
+	if hits := store.ConflictHits("Pat Doe", []string{"Jose Garcia"}, ""); len(hits) != 1 {
+		t.Fatalf("reverse variant missed: %+v", hits)
+	}
 }
