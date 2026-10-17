@@ -76,6 +76,18 @@ Document ingestion (`POST /documents`, `POST /documents/upload`) returns enriche
 { "id": "…", "practiceArea": "Corporate & M&A", "detectedClient": { "clientNumber": "C-001", "clientName": "Acme Corp" }, "suggestedLawyers": [{ "id": "…", "name": "Jane Smith" }] }
 ```
 
+List fields are never `null`: a collection with no items is encoded as `[]`
+(a map as `{}`); only absent single values (nil pointers) are `null`.
+
+`PUT /settings` takes a partial patch and applies it live. The settings file
+(`SETTINGS_FILE`) stores only the fields an admin changed — those that differ
+from the environment/defaults at boot. A changed field keeps the admin's value
+across restarts even if its environment variable changes; every other field
+keeps following the environment (e.g. a new `DOCUSEAL_URL` takes effect on
+restart after any unrelated save). Setting a field back to its environment
+value removes the override. A DocuSeal URL is SSRF-checked only when it
+differs from the current value; the environment's value is trusted as-is.
+
 Every matter-scoped route enforces access control — see
 [Access control](../operations/access-control.md).
 

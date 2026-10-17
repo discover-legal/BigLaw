@@ -1,13 +1,13 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { api } from "./api";
-import type { DocumentRef, IngestResult, SearchResult, Attachment } from "./types";
+import type { DocumentRef, IngestResult, SearchResult, Attachment, Notify } from "./types";
 import { PRACTICE_AREAS } from "./types";
 import { timeAgo } from "./primitives";
 
 type Mode = "documents" | "ingest" | "upload" | "search";
 
-export function LibraryPage({ notify, initialMode }: { notify: (m: string) => void; initialMode?: Mode }) {
+export function LibraryPage({ notify, initialMode }: { notify: Notify; initialMode?: Mode }) {
   const [mode, setMode] = useState<Mode>(initialMode ?? "documents");
 
   // document list
@@ -68,7 +68,7 @@ export function LibraryPage({ notify, initialMode }: { notify: (m: string) => vo
       notify("Document ingested into the registry");
       setTitle(""); setContent(""); setManualPracticeArea("");
       loadDocs();
-    } catch (e) { notify((e as Error).message); }
+    } catch (e) { notify((e as Error).message, "error"); }
     finally { setBusy(false); }
   }
 
@@ -80,14 +80,14 @@ export function LibraryPage({ notify, initialMode }: { notify: (m: string) => vo
       setUploadResult(result);
       notify(`"${result.title}" ingested`);
       loadDocs();
-    } catch (e) { notify((e as Error).message); }
+    } catch (e) { notify((e as Error).message, "error"); }
     finally { setUploading(false); }
   }
 
   async function search() {
     setSearching(true);
     try { setResults(await api.searchDocuments(query)); }
-    catch (e) { notify((e as Error).message); }
+    catch (e) { notify((e as Error).message, "error"); }
     finally { setSearching(false); }
   }
 

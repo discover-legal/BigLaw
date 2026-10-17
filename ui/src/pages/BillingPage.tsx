@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { api } from "../api";
-import type { AgentBillingSummary, InvoiceValidationResult, PreBill, PreBillStatus } from "../types";
+import type { AgentBillingSummary, InvoiceValidationResult, PreBill, PreBillStatus, Notify } from "../types";
 import { TimeEntryPane } from "../TimeEntryPane";
 import { ErrorState } from "../Library";
 import { timeAgo } from "../primitives";
@@ -22,7 +22,7 @@ const STATUS_PILL: Record<PreBillStatus, string> = {
   draft: "", reviewed: "blue", approved: "gold", invoiced: "green",
 };
 
-export function BillingPage({ notify, isPartner }: { notify: (m: string) => void; isPartner: boolean }) {
+export function BillingPage({ notify, isPartner }: { notify: Notify; isPartner: boolean }) {
   const [tab, setTab] = useState<Tab>("time");
 
   return (
@@ -61,7 +61,7 @@ export function BillingPage({ notify, isPartner }: { notify: (m: string) => void
 
 // ─── Pre-bills ─────────────────────────────────────────────────────────────────
 
-function PreBillsTab({ notify, isPartner }: { notify: (m: string) => void; isPartner: boolean }) {
+function PreBillsTab({ notify, isPartner }: { notify: Notify; isPartner: boolean }) {
   const [bills, setBills] = useState<PreBill[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -91,7 +91,7 @@ function PreBillsTab({ notify, isPartner }: { notify: (m: string) => void; isPar
   useEffect(() => { setNotesDraft(selected?.notes ?? ""); setEditingEntry(null); }, [selectedId, selected?.notes]);
 
   async function create() {
-    if (!nb.matterNumber.trim()) { notify("Matter number required"); return; }
+    if (!nb.matterNumber.trim()) { notify("Matter number required", "error"); return; }
     setBusy(true);
     try {
       const bill = await api.createPreBill({
@@ -104,7 +104,7 @@ function PreBillsTab({ notify, isPartner }: { notify: (m: string) => void; isPar
       setSelectedId(bill.id);
       setNb({ matterNumber: "", clientNumber: "", from: "", to: "" });
       notify(`Pre-bill created — ${bill.entries.length} entries, ${fmt$(bill.totalAmountUsd)}`);
-    } catch (e) { notify((e as Error).message); }
+    } catch (e) { notify((e as Error).message, "error"); }
     finally { setBusy(false); }
   }
 
@@ -115,7 +115,7 @@ function PreBillsTab({ notify, isPartner }: { notify: (m: string) => void; isPar
       const updated = await api.patchPreBill(selected.id, body);
       setBills((prev) => prev.map((b) => (b.id === updated.id ? updated : b)));
       setEditingEntry(null);
-    } catch (e) { notify((e as Error).message); }
+    } catch (e) { notify((e as Error).message, "error"); }
     finally { setBusy(false); }
   }
 
@@ -244,7 +244,7 @@ function PreBillsTab({ notify, isPartner }: { notify: (m: string) => void; isPar
 
 // ─── Invoice validation ────────────────────────────────────────────────────────
 
-function InvoiceValidationTab({ notify }: { notify: (m: string) => void }) {
+function InvoiceValidationTab({ notify }: { notify: Notify }) {
   const [invoiceText, setInvoiceText] = useState("");
   const [clientId, setClientId] = useState("");
   const [firm, setFirm] = useState("");
@@ -271,7 +271,7 @@ function InvoiceValidationTab({ notify }: { notify: (m: string) => void }) {
       });
       setResult(res);
       notify(`${res.violationCount} violation${res.violationCount === 1 ? "" : "s"} found — suggested reduction ${fmt$(res.totalSuggestedReduction)}`);
-    } catch (e) { notify((e as Error).message); }
+    } catch (e) { notify((e as Error).message, "error"); }
     finally { setBusy(false); }
   }
 

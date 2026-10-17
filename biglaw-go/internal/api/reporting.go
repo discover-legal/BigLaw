@@ -4,7 +4,6 @@
 package api
 
 import (
-	"encoding/json"
 	"io"
 	"net/http"
 	"strconv"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/discover-legal/biglaw-go/internal/audit"
 	"github.com/discover-legal/biglaw-go/internal/auth"
+	"github.com/discover-legal/biglaw-go/internal/jsonsafe"
 	"github.com/discover-legal/biglaw-go/internal/timekeeping"
 	"github.com/discover-legal/biglaw-go/internal/types"
 	"github.com/gin-gonic/gin"
@@ -117,7 +117,7 @@ func (s *Server) handleAuditStream(c *gin.Context) {
 	flusher, hasFlusher := c.Writer.(http.Flusher)
 
 	writeSSE := func(entry audit.AuditEntry) {
-		raw, _ := json.Marshal(entry)
+		raw, _ := jsonsafe.Marshal(entry)
 		io.WriteString(c.Writer, "data: "+string(raw)+"\n\n")
 		if hasFlusher {
 			flusher.Flush()

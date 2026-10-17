@@ -33,6 +33,7 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/clients"
 	"github.com/discover-legal/biglaw-go/internal/deadlines"
 	"github.com/discover-legal/biglaw-go/internal/dockets"
+	"github.com/discover-legal/biglaw-go/internal/jsonsafe"
 	"github.com/discover-legal/biglaw-go/internal/matters"
 	"github.com/discover-legal/biglaw-go/internal/orchestrator"
 	"github.com/discover-legal/biglaw-go/internal/regulatory"
@@ -253,7 +254,7 @@ func (s *Server) handleBudgetAlertStream(c *gin.Context) {
 			if !open {
 				return
 			}
-			raw, _ := json.Marshal(alert)
+			raw, _ := jsonsafe.Marshal(alert)
 			io.WriteString(c.Writer, "data: "+string(raw)+"\n\n")
 			if hasFlusher {
 				flusher.Flush()
