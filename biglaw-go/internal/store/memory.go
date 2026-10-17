@@ -23,6 +23,9 @@ type MemoryRepo struct {
 	reviews     map[string]memReview
 	versions    map[string]DocumentVersion
 	verOrder    []string // insertion order — the tie-break FindVersionBy* recency needs
+	crmProfiles map[string]CRMProfile
+	crmFacts    map[string]CRMFact
+	intakes     map[string]IntakeSubmission
 }
 
 // memReview is one stored tabular-review payload.
@@ -39,6 +42,9 @@ func NewMemoryRepo() *MemoryRepo {
 		attachments: map[string]types.Attachment{},
 		reviews:     map[string]memReview{},
 		versions:    map[string]DocumentVersion{},
+		crmProfiles: map[string]CRMProfile{},
+		crmFacts:    map[string]CRMFact{},
+		intakes:     map[string]IntakeSubmission{},
 	}
 }
 

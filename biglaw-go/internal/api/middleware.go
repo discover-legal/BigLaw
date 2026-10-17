@@ -37,10 +37,11 @@ func (s *Server) authMiddleware() gin.HandlerFunc {
 		}
 
 		// These endpoints authenticate themselves (OAuth state or provider
-		// signatures) and therefore form the explicit public route set —
-		// matched on the route gin actually selected, not on a decoded
-		// path, so no other route can borrow a public path's exemption.
-		if isPublicRoute(c.Request.Method, c.FullPath()) {
+		// signatures) and therefore form the explicit public route set (the
+		// core's plus mounted modules') — matched on the route gin actually
+		// selected, not on a decoded path, so no other route can borrow a
+		// public path's exemption.
+		if s.isPublic(c.Request.Method, c.FullPath()) {
 			c.Next()
 			return
 		}
