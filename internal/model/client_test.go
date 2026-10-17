@@ -325,7 +325,7 @@ func TestRetryBackoffBounded(t *testing.T) {
 	}
 	// A backoff that would outlast the caller's deadline is not slept.
 	c, n := counting([]int{503, 503, 503}, "")
-	c.backoff = time.Hour / 4
+	c.backoff = 5 * time.Second // under maxWait, over the deadline
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	start := time.Now()
