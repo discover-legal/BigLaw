@@ -4,6 +4,7 @@
 package main
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"net"
@@ -42,7 +43,7 @@ var envVars = []envVar{
 	{name: "BIGLAW_MODEL_CRITIC", pr: 2},
 	{name: "BIGLAW_BUDGET_CALLS", def: "150", pr: 4},
 	{name: "BIGLAW_BUDGET_USD", def: "5", pr: 4},
-	{name: "BIGLAW_LOCAL_WATTS", def: "250", pr: 2},
+	{name: "BIGLAW_LOCAL_WATTS", pr: 2},
 	{name: "BIGLAW_PRICES", pr: 2},
 	{name: "BIGLAW_COLLAPSE_THRESHOLD", def: "0.5", pr: 4},
 	{name: "BIGLAW_COLLAPSE_ACTION", def: "strict", pr: 4},
@@ -107,7 +108,7 @@ func Load(getenv func(string) string) (Config, error) {
 	if strings.ContainsFunc(c.ModelKey, func(r rune) bool { return r <= ' ' || r == 0x7f }) {
 		bad("BIGLAW_MODEL_KEY", "contains white space or a control character (value not shown)")
 	}
-	w, err := strconv.ParseFloat(get("BIGLAW_LOCAL_WATTS"), 64)
+	w, err := strconv.ParseFloat(cmp.Or(get("BIGLAW_LOCAL_WATTS"), "0"), 64)
 	if c.LocalWatts = w; err != nil || !(w >= 0 && w <= 100000) {
 		bad("BIGLAW_LOCAL_WATTS", "%s is not a number of watts from 0 to 100000", shown("BIGLAW_LOCAL_WATTS", get("BIGLAW_LOCAL_WATTS")))
 	}
@@ -121,13 +122,22 @@ func Load(getenv func(string) string) (Config, error) {
 }
 
 // roles reads the model id per role: an unset specialist or critic uses the lead's, so neither may
-// be set without it. Ids are not checked here: a wrong one fails at its first call (404).
+// be set without it. Ids are otherwise unchecked: a wrong one fails at its first call (404).
 func roles(get func(string) string) (model.Roles, []error) {
 	r := model.Roles{Lead: get("BIGLAW_MODEL_LEAD"), Specialist: get("BIGLAW_MODEL_SPECIALIST"), Critic: get("BIGLAW_MODEL_CRITIC")}
+	var errs []error
 	if r.Lead == "" && (r.Specialist != "" || r.Critic != "") {
-		return r, []error{errors.New("BIGLAW_MODEL_LEAD: is required when BIGLAW_MODEL_SPECIALIST or _CRITIC is set (unset roles fall back to the lead)")}
+		errs = append(errs, errors.New("BIGLAW_MODEL_LEAD: is required when BIGLAW_MODEL_SPECIALIST or _CRITIC is set (unset roles fall back to the lead)"))
 	}
-	return r, nil
+	for _, name := range []string{"BIGLAW_MODEL_LEAD", "BIGLAW_MODEL_SPECIALIST", "BIGLAW_MODEL_CRITIC"} {
+		if id, v := get(name), shown(name, get(name)); v != id || strings.Contains(id, "://") { // ids reach logs raw
+			if v == id {
+				v = "(set, not shown: a URL)"
+			}
+			errs = append(errs, fmt.Errorf("%s: %s is not a model id (a URL, user:password@host, or a control character)", name, v))
+		}
+	}
+	return r, errs
 }
 
 // value is getenv(name) trimmed, or the table default when empty.

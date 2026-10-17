@@ -46,7 +46,7 @@ func TestFakeScriptExhaustedIsError(t *testing.T) {
 func TestFakeIsDeterministic(t *testing.T) {
 	scripts := map[string][]Reply{
 		"lead":          {{ToolCalls: []ToolCall{{Function: Function{Name: "extract_facts"}}, {Function: Function{Name: "retrieve", Arguments: `{"q":"x"}`}}}}, {Text: "done"}},
-		"extract_facts": {{Text: `{"facts":[]}`, Usage: Usage{InputTokens: 10}}},
+		"extract_facts": {{Text: `{"facts":[]}`, Truncated: true, Usage: Usage{InputTokens: 10}}},
 	}
 	run := func() []*Response {
 		f := NewFake(scripts)
@@ -63,6 +63,9 @@ func TestFakeIsDeterministic(t *testing.T) {
 	a, b := run(), run()
 	if !reflect.DeepEqual(a, b) {
 		t.Fatalf("two runs differ:\n%+v\n%+v", a, b)
+	}
+	if !a[1].Truncated || a[0].Truncated { // r2 A2-4: PR 4a scripts a cut-off answer
+		t.Errorf("Truncated not scripted: %v %v", a[0].Truncated, a[1].Truncated)
 	}
 	tc := a[0].ToolCalls
 	if tc[0].ID != "lead-1-0" || tc[1].ID != "lead-1-1" || tc[0].Function.Arguments != "{}" || tc[0].Type != "function" {

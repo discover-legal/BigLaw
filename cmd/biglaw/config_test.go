@@ -44,7 +44,7 @@ func TestConfigDefaults(t *testing.T) {
 		"BIGLAW_PUBLIC_URL          http://127.0.0.1:3101  [default, read from PR 8]",
 		"BIGLAW_BUDGET_CALLS        150  [default, read from PR 4]",
 		"BIGLAW_BUDGET_USD          5  [default, read from PR 4]",
-		"BIGLAW_LOCAL_WATTS         250  [default]",
+		"BIGLAW_LOCAL_WATTS         (unset)\n",
 		"BIGLAW_COLLAPSE_THRESHOLD  0.5  [default, read from PR 4]",
 		"BIGLAW_COLLAPSE_ACTION     strict  [default, read from PR 4]",
 		"BIGLAW_MODEL_KEY           (unset)\n",
@@ -300,12 +300,12 @@ func TestConfigModelVars(t *testing.T) {
 			t.Errorf("Roles.Model(%s) = %q, %v; want %q (unset roles fall back to the lead)", role, got, err, want)
 		}
 	}
-	if e, _, op := c.Prices.Lookup("qwen2.5:14b"); e.Rate == nil || *e.Rate != (model.Rate{In: 0.5, Out: 1}) || !op {
-		t.Errorf("BIGLAW_PRICES did not reach Config: %v %v", e, op)
+	if r, _, op := c.Prices.Lookup("qwen2.5:14b"); r == nil || *r != (model.Rate{In: 0.5, Out: 1}) || !op {
+		t.Errorf("BIGLAW_PRICES did not reach Config: %v %v", r, op)
 	}
-	// Defaults: no model, 250 W, the built-in table.
+	// Defaults: no model, no watt-hours, the built-in table.
 	c, err = Load(env("BIGLAW_DATABASE_URL", dsn))
-	if err != nil || c.LocalWatts != 250 || c.Roles != (model.Roles{}) || c.Prices == nil {
+	if err != nil || c.LocalWatts != 0 || c.Roles != (model.Roles{}) || c.Prices == nil {
 		t.Fatalf("defaults: %+v, %v", c, err)
 	}
 	if _, err := c.Roles.Model(model.Lead); !errors.Is(err, model.ErrNotConfigured) {
@@ -324,6 +324,7 @@ func TestConfigModelVars(t *testing.T) {
 		"BIGLAW_MODEL_KEY: contains white space",
 		"BIGLAW_MODEL_LEAD: is required when BIGLAW_MODEL_SPECIALIST or _CRITIC is set",
 		"BIGLAW_LOCAL_WATTS: NaN is not a number of watts",
+		`BIGLAW_MODEL_CRITIC: "x\nBIGLAW_FORGED" is not a model id`,
 		"BIGLAW_PRICES: the file it names: is not a JSON object",
 	} {
 		if !strings.Contains(msg, want) {
@@ -342,6 +343,13 @@ func TestConfigModelVars(t *testing.T) {
 	}
 	if _, err := Load(env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_MODEL_URL", "http://lmstudio:1234/v1", "BIGLAW_MODEL_LEAD", "qwen2.5-14b-instruct@q4_k_m")); err != nil {
 		t.Errorf("an @quant model id: %v", err)
+	}
+	// r2 R2-2: role ids reach the logs raw, so a URL or credentials pasted into a role is refused, unechoed.
+	for _, v := range []string{"https://alice:Pa55w0rd@gw.example.com/v1", "alice:Pa55w0rd@gw.example.com", "http://Pa55w0rd.example.com"} {
+		_, err := Load(env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_MODEL_URL", "http://lmstudio:1234/v1", "BIGLAW_MODEL_LEAD", "ok", "BIGLAW_MODEL_SPECIALIST", v))
+		if msg := fmt.Sprint(err); !strings.Contains(msg, "BIGLAW_MODEL_SPECIALIST: (set, not shown") || strings.Contains(msg, "Pa55w0rd") {
+			t.Errorf("role %q: %v", v, err)
+		}
 	}
 	for _, w := range []string{"-1", "100000.5", "Inf", "1e9", "250W", "0x10"} {
 		if _, err := Load(env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_LOCAL_WATTS", w)); err == nil {

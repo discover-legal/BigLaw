@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -51,8 +52,8 @@ func (r Roles) Model(role Role) (string, error) {
 	return m, nil
 }
 
-// Message is one chat message (role system, user, assistant or tool). Content is a string, nil (a
-// tool-calls-only turn) or, for a user, []Part whose images are base64 data URLs, never remote.
+// Message is one chat message (role system, user, assistant or tool). Content is a string, nil (sent
+// as "", or null on a tool-calls-only assistant turn) or, for a user, a non-empty []Part whose images are base64 data URLs, never remote.
 type Message struct {
 	Role       string     `json:"role"`
 	Content    any        `json:"content"`
@@ -107,7 +108,7 @@ type Request struct {
 }
 
 // Usage is what one call consumed; InputTokens excludes cache reads and writes. CostUSD is nil
-// when the model has no price (unknown, never $0); a free local call carries WattHours.
+// when the model has no price (unknown, never $0); WattHours is set when BIGLAW_LOCAL_WATTS is.
 type Usage struct {
 	InputTokens, OutputTokens, CacheReadTokens, CacheWriteTokens int
 	Duration                                                     time.Duration
@@ -150,9 +151,9 @@ func (r *Request) check() error {
 	}
 	for i, m := range r.Messages {
 		parts, isParts := m.Content.([]Part)
-		if _, isText := m.Content.(string); !msgRoles[m.Role] || !isText && !isParts && m.Content != nil || isParts && m.Role != "user" ||
+		if _, isText := m.Content.(string); !msgRoles[m.Role] || !isText && !isParts && m.Content != nil || isParts && (m.Role != "user" || len(parts) == 0) ||
 			len(m.ToolCalls) > 0 && m.Role != "assistant" || (m.ToolCallID != "") != (m.Role == "tool") {
-			return bad("message %d: unknown role, content not a string, nil or user []Part, tool calls outside an assistant message, or a tool call id missing or misplaced", i)
+			return bad("message %d: unknown role, content not a string, nil or a non-empty user []Part, tool calls outside an assistant message, or a tool call id missing or misplaced", i)
 		}
 		for _, p := range parts {
 			if !(p.Type == "text" && p.Text != "" && p.ImageURL == nil || p.Type == "image_url" && p.Text == "" && imageURL.MatchString(p.ImageURL["url"])) {
@@ -182,7 +183,7 @@ type Options struct {
 	URL, Key   string // BIGLAW_MODEL_URL (the API base, e.g. http://localhost:11434/v1) and BIGLAW_MODEL_KEY
 	Roles      Roles
 	Prices     *Prices // nil: the built-in table
-	LocalWatts float64
+	LocalWatts float64 // BIGLAW_LOCAL_WATTS: > 0 records watt-hours on every call (pricing is unaffected)
 	Log        *slog.Logger
 	Timeout    time.Duration // per HTTP attempt; 0 means 5 minutes
 }
@@ -193,7 +194,7 @@ type Client struct {
 	roles         Roles
 	prices        *Prices
 	watts         float64
-	local, openAI bool
+	openAI        bool
 	http          *http.Client
 	log           *slog.Logger
 	attempts      int           // HTTP attempts per call
@@ -218,7 +219,7 @@ func New(o Options) (*Client, error) {
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil {
 			return nil, errors.New("model: the endpoint must be an http(s) URL without credentials")
 		}
-		c.local, c.openAI = IsLocalHost(u.Hostname()), strings.EqualFold(u.Hostname(), "api.openai.com")
+		c.openAI = strings.EqualFold(u.Hostname(), "api.openai.com")
 		u.Path, u.RawPath = strings.TrimRight(u.Path, "/")+"/chat/completions", ""
 		c.endpoint = u.String()
 	}
@@ -240,7 +241,13 @@ func (c *Client) Chat(ctx context.Context, req Request) (*Response, error) {
 	if c.endpoint == "" {
 		return nil, fail(ErrNotConfigured, "BIGLAW_MODEL_URL is not set")
 	}
-	w := map[string]any{"model": model, "messages": req.Messages, "stream": false}
+	msgs := slices.Clone(req.Messages) // a nil Content is sent as "", except on a tool-calls-only assistant turn
+	for i, m := range msgs {
+		if m.Content == nil && len(m.ToolCalls) == 0 {
+			msgs[i].Content = ""
+		}
+	}
+	w := map[string]any{"model": model, "messages": msgs, "stream": false}
 	set := func(k string, ok bool, v any) {
 		if ok {
 			w[k] = v
@@ -268,7 +275,7 @@ func (c *Client) Chat(ctx context.Context, req Request) (*Response, error) {
 		return nil, err
 	}
 	resp.Model, resp.Usage.Duration = model, took
-	c.prices.charge(model, &resp.Usage, c.local, c.watts, c.log)
+	c.prices.charge(model, &resp.Usage, c.watts, c.log)
 	if err != nil {
 		return nil, err
 	}

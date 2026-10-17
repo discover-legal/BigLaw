@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -153,6 +154,30 @@ func TestRequestBytesStable(t *testing.T) {
 	if !bytes.Equal(bodies[0], bodies[1]) || !bytes.Contains(bodies[0], []byte(schema)) ||
 		bytes.Index(bodies[0], []byte(`"b_tool"`)) > bytes.Index(bodies[0], []byte(`"a_tool"`)) {
 		t.Fatalf("request bytes not stable or reordered:\n%s\n%s", bodies[0], bodies[1])
+	}
+}
+
+// TestNilContentSentAsEmpty (r2 R2-3): an unset Content goes out as "" (servers refuse null for
+// user, system and tool turns); only a tool-calls-only assistant turn sends null.
+func TestNilContentSentAsEmpty(t *testing.T) {
+	var body []byte
+	c, _ := endpoint(t, "", func(w http.ResponseWriter, r *http.Request) {
+		body, _ = io.ReadAll(r.Body)
+		reply(w, `{"choices":[{"message":{"content":"ok"}}]}`)
+	})
+	req := Request{Agent: "lead", Role: Lead, Messages: []Message{{Role: "system"}, {Role: "user"}, {Role: "assistant"},
+		{Role: "assistant", ToolCalls: []ToolCall{{ID: "a", Type: "function", Function: Function{Name: "f", Arguments: "{}"}}}}, {Role: "tool", ToolCallID: "a"}}}
+	if _, err := c.Chat(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`{"role":"system","content":""}`, `{"role":"user","content":""}`, `{"role":"assistant","content":""}`,
+		`{"role":"assistant","content":null,"tool_calls":`, `{"role":"tool","content":"","tool_call_id":"a"}`} {
+		if !bytes.Contains(body, []byte(want)) {
+			t.Errorf("request lacks %s:\n%s", want, body)
+		}
+	}
+	if req.Messages[1].Content != nil {
+		t.Error("Chat changed the caller's messages")
 	}
 }
 
@@ -379,6 +404,7 @@ func TestRequestCheck(t *testing.T) {
 		"calls on user msg": {Agent: "lead", Messages: []Message{{Role: "user", Content: "x", ToolCalls: []ToolCall{{ID: "c"}}}}},
 		"untyped parts":     {Agent: "lead", Messages: []Message{{Role: "user", Content: []map[string]any{{"type": "image_url", "image_url": map[string]string{"url": "https://evil.example/a.png"}}}}}},
 		"parts on system":   {Agent: "lead", Messages: []Message{{Role: "system", Content: []Part{TextPart("y")}}}},
+		"empty parts":       {Agent: "lead", Messages: []Message{{Role: "user", Content: []Part{}}}}, // r2 R2-3
 	} {
 		if err := req.check(); err == nil {
 			t.Errorf("%s: accepted", name)
@@ -405,11 +431,11 @@ func TestBilledFailureKeepsUsage(t *testing.T) {
 	} {
 		c, _ := endpoint(t, "", func(w http.ResponseWriter, r *http.Request) { reply(w, body) })
 		req := userReq("hi")
-		req.Model = "claude-opus-4-8" // closed weights: priced even on this loopback endpoint
+		req.Model = "claude-opus-4-8"
 		resp, err := c.Chat(context.Background(), req)
 		var e *Error
 		if resp != nil || !errors.Is(err, kind) || !errors.As(err, &e) || e.Usage == nil || e.Usage.OutputTokens != 64000 ||
-			e.Usage.CostUSD == nil || !approx(*e.Usage.CostUSD, 7.80) {
+			e.Usage.CostUSD == nil || !approx(*e.Usage.CostUSD, 7.80) || e.Usage.Duration <= 0 || e.Usage.WattHours == nil { // r2 L-3
 			t.Errorf("%s: resp %v err %v usage %+v; want %v with the billed usage at $7.80", body, resp, err, e, kind)
 		}
 	}
@@ -443,7 +469,7 @@ func TestUnpinnedBehaviours(t *testing.T) {
 				t.Errorf("openAI=%v: request %v", openAI, got)
 			}
 		}
-		if c, _ := New(Options{URL: "https://API.openai.com/v1"}); !c.openAI || c.local {
+		if c, _ := New(Options{URL: "https://API.openai.com/v1"}); !c.openAI {
 			t.Error("api.openai.com not recognised")
 		}
 	})
@@ -559,6 +585,11 @@ func TestTransportErrorsFixedText(t *testing.T) {
 	c, _ := New(Options{URL: "http://127.0.0.1:1/v1", Roles: Roles{Lead: "m"}})
 	if _, err := c.Chat(context.Background(), userReq("hi")); err == nil || err.Error() != "model call failed: could not reach the endpoint: connection refused" {
 		t.Errorf("refused: %v", err)
+	}
+	// r2 A2-3 / L-1: a DNS failure is its fixed phrase; the lookup's name and resolver are not repeated.
+	dns := &url.Error{Op: "Post", URL: "http://secret-gw.invalid/v1", Err: &net.OpError{Op: "dial", Err: &net.DNSError{Err: "no such host", Name: "secret-gw.invalid", Server: "10.0.0.53:53"}}}
+	if err := transportErr(context.Background(), dns); err.Error() != "model call failed: could not reach the endpoint: DNS lookup failed" {
+		t.Errorf("DNS: %v", err)
 	}
 }
 

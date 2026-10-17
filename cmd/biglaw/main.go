@@ -97,8 +97,11 @@ func run(ctx context.Context, args []string, getenv func(string) string, environ
 		}
 		for _, role := range []model.Role{model.Lead, model.Specialist, model.Critic} {
 			if id, err := cfg.Roles.Model(role); err == nil { // a role implies BIGLAW_MODEL_URL (Load)
-				rate, free := cfg.Prices.Pricing(id, model.IsLocalHost(httpURL(cfg.ModelURL).Hostname()))
-				log.Info("model pricing (free: $0 + watt-hours; no rate: cost unknown, the USD budget cannot count it)", "role", role, "model", id, "free", free, "rate", rate)
+				price := "unpriced: cost unknown, the USD budget cannot count it (set BIGLAW_PRICES)"
+				if r, _, _ := cfg.Prices.Lookup(id); r != nil {
+					price = fmt.Sprintf("$%g in / $%g out per 1M tokens", r.In, r.Out)
+				}
+				log.Info("model pricing", "role", role, "model", id, "price", price)
 			}
 		}
 		if cfg.AllowAnthropic || cfg.AllowAWS {

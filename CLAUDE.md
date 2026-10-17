@@ -13,8 +13,8 @@ change. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`, not here.
 - `internal/model` — `Client` (OpenAI-compatible chat + tool calls + image parts, typed errors,
   ≤ 3 attempts; a refused-but-billed 200 carries `Usage` on `*model.Error`), `HTTPStatus` (the one
   failure→status mapping), `Roles` (the one role accessor), `Prices`/`LoadPrices`/`ParsePrices`
-  (embedded `prices.json` + `BIGLAW_PRICES`, one parser; `Pricing` = the one $0-local rule: only
-  `"open": true` or unlisted models on a local host),
+  (embedded `prices.json` + `BIGLAW_PRICES`, one parser; every call priced from the table whatever
+  the host, no row = unknown cost, never $0; `BIGLAW_LOCAL_WATTS` only adds watt-hours),
   `Fake` (scripts keyed by agent name; unscripted or exhausted is an error).
 
 Everything else in README is marked planned.
@@ -53,6 +53,6 @@ make ci     # gofmt, vet, mod verify/tidy, static build, go test -race -shuffle,
 make lint vuln   # staticcheck, govulncheck (CI lint job)
 # DB tests: BIGLAW_TEST_DSN=postgres://…?sslmode=disable BIGLAW_REQUIRE_DB=1
 ```
-Budgets: Go prod LOC ≤ 14,250 (test-support packages such as `storetest` count), internal
+Budgets: Go prod LOC ≤ 14,500 (test-support packages such as `storetest` count), internal
 packages ≤ 12 (test-support packages do not count), direct deps ≤ 3, env vars ≤ 20, UI runtime
 deps ≤ 2, untested packages 0, longest source file ≤ 2,000 lines.

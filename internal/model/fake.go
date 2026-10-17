@@ -23,6 +23,7 @@ var (
 type Reply struct {
 	Text      string
 	ToolCalls []ToolCall
+	Truncated bool // the output stopped at MaxTokens
 	Usage     Usage
 	Err       error
 }
@@ -77,7 +78,7 @@ func (f *Fake) Chat(ctx context.Context, req Request) (*Response, error) {
 	if strings.TrimSpace(r.Text) == "" && len(r.ToolCalls) == 0 {
 		return nil, fail(ErrNoContent, "the scripted reply has neither text nor tool calls")
 	}
-	resp := &Response{Model: cmp.Or(req.Model, "fake:"+string(req.Role)), Text: r.Text, Usage: r.Usage}
+	resp := &Response{Model: cmp.Or(req.Model, "fake:"+string(req.Role)), Text: r.Text, Truncated: r.Truncated, Usage: r.Usage}
 	for i, tc := range r.ToolCalls {
 		tc.ID = cmp.Or(tc.ID, req.Agent+"-"+strconv.Itoa(n)+"-"+strconv.Itoa(i))
 		tc.Type, tc.Function.Arguments = "function", cmp.Or(strings.TrimSpace(tc.Function.Arguments), "{}")
