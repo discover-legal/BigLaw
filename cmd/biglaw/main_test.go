@@ -193,3 +193,25 @@ func holdMigrationLock(t *testing.T, dsn string) {
 	}
 	t.Cleanup(func() { conn.Close(); db.Close() })
 }
+
+// TestServeLogsModelSetup: before touching the database, serve warns that the key would cross plain
+// http and logs each role's price once, or that it is unpriced (r1 L2, R1-1; r2 owner ruling: the
+// host plays no part, so qwen2.5:14b on localhost is priced).
+func TestServeLogsModelSetup(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // stop at store.Open: only the startup log matters here
+	var stderr bytes.Buffer
+	run(ctx, []string{"serve"}, env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_MODEL_URL", "http://localhost:4000/v1", "BIGLAW_MODEL_KEY", "sk-SECRET",
+		"BIGLAW_MODEL_LEAD", "claude-sonnet-4-6", "BIGLAW_MODEL_CRITIC", "qwen2.5:14b", "BIGLAW_MODEL_SPECIALIST", "my-finetune"), nil, io.Discard, &stderr)
+	out := stderr.String()
+	for _, want := range []string{"BIGLAW_MODEL_KEY will be sent over plain http",
+		`role=lead model=claude-sonnet-4-6 price="$3 in / $15 out per 1M tokens"`, `role=specialist model=my-finetune price="unpriced: cost unknown`,
+		`role=critic model=qwen2.5:14b price="$1.6 in / $6.4 out per 1M tokens"`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("serve log lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "SECRET") {
+		t.Errorf("serve logged the key:\n%s", out)
+	}
+}
