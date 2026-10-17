@@ -1,0 +1,11 @@
+{
+  "id": "litigation/greystone-v-talbot-defense",
+  "title": "Greystone Packaging v. Talbot Fresh Foods — defense intake: chronology, issues list, deadlines",
+  "practice_area": "litigation",
+  "work_type": "analyze",
+  "jurisdiction": "US",
+  "as_of": "2026-10-26",
+  "synthetic": true,
+  "instructions": "We have been retained to defend Talbot Fresh Foods, Inc. in Greystone Packaging Co. v. Talbot Fresh Foods, Inc., pending in the U.S. District Court for the Northern District of Illinois. Today is October 26, 2026. Using the complaint, the Packaging Supply Agreement, the key correspondence, the docket sheet and the desk reference, produce three deliverables:\n\n1. chronology.md — a dated chronology of every material event from contract formation to today, each entry citing its source document.\n2. issues_list.md — the defense issues list: every defense, limitation, damages challenge and potential counterclaim, with the contract section or rule, the supporting facts and the dollar figures (show the arithmetic for any recalculated amount).\n3. deadlines.md — every deadline Talbot faces in the case, computed under the Federal Rules of Civil Procedure and the court's orders, showing the trigger date, the rule, the raw computed date and any adjustment for weekends or legal holidays.\n\nQuote the operative language verbatim from the source documents for every entry.",
+  "deliverables": ["chronology.md", "issues_list.md", "deadlines.md"]
+}

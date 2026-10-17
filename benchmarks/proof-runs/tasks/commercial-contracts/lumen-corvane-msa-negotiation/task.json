@@ -1,0 +1,11 @@
+{
+  "id": "commercial-contracts/lumen-corvane-msa-negotiation",
+  "title": "Lumen Ridge / Corvane — respond to customer redline of the Master Subscription Agreement against the firm playbook",
+  "practice_area": "commercial-contracts",
+  "work_type": "review",
+  "jurisdiction": "US",
+  "as_of": "2026-10-15",
+  "synthetic": true,
+  "instructions": "We act for Lumen Ridge Software, Inc. (Provider). Corvane Logistics Group, Inc. (Customer) has returned a marked-up version of our Form MSA v4.2 with its changes numbered in the margin. Using our negotiation playbook, prepare our response to Corvane's markup.\n\nProduce a negotiation response memo containing:\n1. A response table with exactly one row per numbered change, columns: Change | Clause | Disposition | Counter-position / rationale | Playbook ref. The Disposition column must contain exactly one of the words ACCEPT, COUNTER or REJECT in capitals. For every COUNTER, state the specific counter-position (numbers, periods, conditions) the playbook permits.\n2. A comparison of the markup against the version we sent, identifying any change the counterparty made without marking it, and our response to it.\n3. A short cover email to Corvane's counsel summarising our position on the key risk-allocation points.\n\nQuote the operative language (from the markup, the form as sent, and the playbook) verbatim for each position.",
+  "deliverables": ["negotiation_response.md"]
+}

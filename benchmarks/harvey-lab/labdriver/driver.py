@@ -103,12 +103,47 @@ def run_one_biglaw_task(
             gates.append({"taskId": task_id, **payload})
         log(kind, payload)
 
-    final = client.wait_for_task(
-        task_id, args.poll, args.timeout, on_event=on_event, gate_policy=args.gate_policy
-    )
+    try:
+        final = client.wait_for_task(
+            task_id, args.poll, args.timeout, on_event=on_event, gate_policy=args.gate_policy
+        )
+    except BigLawError as e:
+        e.task_id = task_id  # lets run_task record the failed task (e.g. a grounding collapse)
+        raise
     if not (final.get("output") or "").strip():
         raise BigLawError(f"task {task_id} completed with an empty synthesis")
     return final
+
+
+def _task_record(f: dict) -> dict:
+    return {k: f.get(k) for k in ("id", "status", "workflowType", "jurisdiction", "output", "findings",
+                                  "groundingAlert", "starvedRounds", "error", "createdAt", "completedAt")}
+
+
+def _run_biglaw(client, task_cfg, args, deliverables, workflow, multi, doc_ids, doc_names,
+                log, gates, finals, outputs) -> None:
+    if multi and args.split_mode == "per-task":
+        for name in deliverables:
+            description = build_description(task_cfg, doc_names, [name], use_markers=False)
+            # An .xlsx deliverable still wants tabulate even if its siblings don't.
+            wf = pick_workflow(task_cfg, args.workflow, [name])
+            final = run_one_biglaw_task(client, description, wf, doc_ids, args, log, gates)
+            finals.append(final)
+            outputs[name] = (final["output"], final.get("table"))
+    else:
+        use_markers = multi and args.split_mode == "markers"
+        description = build_description(task_cfg, doc_names, deliverables, use_markers)
+        final = run_one_biglaw_task(client, description, workflow, doc_ids, args, log, gates)
+        finals.append(final)
+        synthesis, table = final["output"], final.get("table")
+        sections = split_by_markers(synthesis, deliverables) if use_markers else {}
+        if use_markers:
+            log("synthesis_split", {
+                "matched": sorted(sections),
+                "fallback": sorted(set(deliverables) - set(sections)),
+            })
+        for name in deliverables:
+            outputs[name] = (sections.get(name, strip_markers(synthesis)), table)
 
 
 def run_task(args: argparse.Namespace) -> Path:
@@ -162,34 +197,44 @@ def run_task(args: argparse.Namespace) -> Path:
         doc_ids.append(client.ingest_text(rel, text))
         doc_names.append(rel)
     log("documents_ingested", {"count": len(doc_ids), "skipped": len(skipped)})
+    # BigLaw document id -> source filename, so citations (which may name a
+    # document by id) can be re-verified offline against the task's documents.
+    (run_dir / "documents.json").write_text(
+        json.dumps(dict(zip(doc_ids, doc_names)), indent=2), encoding="utf-8")
 
     # 2. Run BigLaw and map each deliverable to its content + optional table.
     gates: list[dict] = []
     finals: list[dict] = []
     outputs: dict[str, tuple[str, dict | None]] = {}
+    try:
+        _run_biglaw(client, task_cfg, args, deliverables, workflow, multi, doc_ids, doc_names,
+                    log, gates, finals, outputs)
+    except BigLawError as e:
+        # A failed task is a result too (a grounding collapse is the integrity
+        # ladder working): keep its record so it can be inspected and scored.
+        failed = []
+        if getattr(e, "task_id", None):
+            try:
+                failed = [client.get_task(e.task_id)]
+            except BigLawError:
+                pass  # best effort: the failure is recorded below even if its task record can't be fetched
+        (run_dir / "biglaw_tasks.json").write_text(json.dumps([_task_record(f) for f in finals + failed],
+                                                              indent=2), encoding="utf-8")
+        (run_dir / "metrics.json").write_text(json.dumps({
+            "completed": False, "error": str(e),
+            "duration_seconds": round(time.monotonic() - started, 1),
+            "num_documents": len(doc_ids),
+            "biglaw": {"task_ids": [f.get("id") for f in finals + failed], "gates": gates},
+        }, indent=2), encoding="utf-8")
+        log("task_failed", {"error": str(e)})
+        e.run_dir = run_dir
+        raise
 
-    if multi and args.split_mode == "per-task":
-        for name in deliverables:
-            description = build_description(task_cfg, doc_names, [name], use_markers=False)
-            # An .xlsx deliverable still wants tabulate even if its siblings don't.
-            wf = pick_workflow(task_cfg, args.workflow, [name])
-            final = run_one_biglaw_task(client, description, wf, doc_ids, args, log, gates)
-            finals.append(final)
-            outputs[name] = (final["output"], final.get("table"))
-    else:
-        use_markers = multi and args.split_mode == "markers"
-        description = build_description(task_cfg, doc_names, deliverables, use_markers)
-        final = run_one_biglaw_task(client, description, workflow, doc_ids, args, log, gates)
-        finals.append(final)
-        synthesis, table = final["output"], final.get("table")
-        sections = split_by_markers(synthesis, deliverables) if use_markers else {}
-        if use_markers:
-            log("synthesis_split", {
-                "matched": sorted(sections),
-                "fallback": sorted(set(deliverables) - set(sections)),
-            })
-        for name in deliverables:
-            outputs[name] = (sections.get(name, strip_markers(synthesis)), table)
+    # 2b. Keep the raw task record (findings with their citations, synthesis,
+    # grounding alerts) — mechanical grounding scorers (benchmarks/proof-runs)
+    # re-verify every cited quote from it; LAB's eval ignores the file.
+    (run_dir / "biglaw_tasks.json").write_text(
+        json.dumps([_task_record(f) for f in finals], indent=2), encoding="utf-8")
 
     # 3. Render deliverables where LAB's evaluation phase will look for them.
     for name, (text, table) in outputs.items():

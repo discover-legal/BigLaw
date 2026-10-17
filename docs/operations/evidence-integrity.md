@@ -48,6 +48,19 @@ ranked sampling under degenerate confidence, overflow recorded as auditable
 The hosted-model run (gpt-5.6-luna) grounded 703/730 (96%) before these changes and is the
 quality bar; the ladder exists for everything below that bar.
 
+## Proof runs beyond family and employment
+
+The two drives above are now generalised into a repeatable, data-driven harness:
+[`benchmarks/proof-runs/`](../../benchmarks/proof-runs/README.md). It ships five synthetic matters
+with planted facts and answer keys: M&A due diligence, commercial contract negotiation (playbook
+dispositions), HSR/EUMR merger control, litigation (chronology, issues and FRCP deadlines) and IP
+licensing review. That is 68 planted facts, 13 dispositions and 7 traps. Each matter is driven end
+to end through a live backend and scored mechanically. Accuracy means the planted facts stated and
+the traps avoided. Grounding means every cited quote is checked again, verbatim, against the
+fixture text. `python run.py smoke --start-backend` exercises the whole pipeline with no model
+credentials, against a scripted mock model. **No real-model scores have been recorded yet.** See
+the README for the Haiku and qwen2.5:14b recipes.
+
 ## Model floor
 
 **qwen2.5:14b (or equivalent) is the floor for finding-producing tiers.** A 7B model is now

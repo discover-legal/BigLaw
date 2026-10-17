@@ -67,6 +67,14 @@ both fixed mechanically (per-document saturation retrieval, per-part verdicts, a
 numeric join). Deviation summaries now withhold any value that cannot be substring-verified
 against source.
 
+## Multi-practice proof runs
+
+[`benchmarks/proof-runs/`](../benchmarks/proof-runs/README.md) covers five synthetic matters (M&A
+diligence, MSA negotiation, HSR/EUMR, litigation deadlines, IP licensing). Each has a mechanical
+answer key and checks grounding again from the fixture text, with no judge model. The harness and
+fixtures are validated and run end to end against a mock model, but no real-model scores are
+published yet.
+
 ## Provenance of the numbers
 
 Benchmark claims in this repo have been through a forensics pass — corrected claims and their

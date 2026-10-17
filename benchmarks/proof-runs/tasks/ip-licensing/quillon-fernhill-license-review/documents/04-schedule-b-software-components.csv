@@ -1,0 +1,7 @@
+Schedule B - Licensed Software components (GraspCore control software v3.2)
+Component,Version,Origin,License,Linked into GraspCore binary,Notes
+graspcore-runtime,3.2.0,Quillon proprietary,Proprietary,Yes,Core control loop
+tactile-filter,1.4.1,Quillon proprietary,Proprietary,Yes,
+motion-planner-core,2.7.3,Open source (community project),GPL-3.0-only,Yes - statically linked,Trajectory planning for gripper approach
+eigen-math,3.4.0,Open source,MPL-2.0,Yes - header-only,Linear algebra
+protobuf-lite,3.21.12,Open source,BSD-3-Clause,Yes,Message serialization
