@@ -1,4 +1,4 @@
-# BigLaw 2: postgres:16 + biglaw. All state lives in the pgdata volume.
+# BigLaw 2: postgres:16-alpine + biglaw. All state lives in the pgdata volume.
 # Values come from the shell or from .env (copy .env.example).
 services:
   postgres:
@@ -6,7 +6,7 @@ services:
     environment:
       POSTGRES_USER: biglaw
       POSTGRES_DB: biglaw
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (URL-safe characters, e.g. openssl rand -hex 24)}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (e.g. openssl rand -hex 24)}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -19,11 +19,20 @@ services:
 
   biglaw:
     build: .
+    image: biglaw:local
+    # No auth exists before PR 8, and serve refuses a non-loopback address
+    # without --allow-no-auth. That is safe here only because the port below is
+    # published on the host's loopback; do not change it to 0.0.0.0 or a LAN IP
+    # (README § Exposure).
+    command: ["serve", "--allow-no-auth"]
     depends_on:
       postgres:
         condition: service_healthy
     environment:
-      BIGLAW_DATABASE_URL: postgres://biglaw:${POSTGRES_PASSWORD}@postgres:5432/biglaw?sslmode=disable
+      # The password travels in PGPASSWORD (read by lib/pq), not in the URL,
+      # so any character in POSTGRES_PASSWORD works without percent-encoding.
+      BIGLAW_DATABASE_URL: postgres://biglaw@postgres:5432/biglaw?sslmode=disable
+      PGPASSWORD: ${POSTGRES_PASSWORD}
       BIGLAW_ADDR: 0.0.0.0:3101
       BIGLAW_PUBLIC_URL: ${BIGLAW_PUBLIC_URL:-}
       BIGLAW_MODEL_URL: ${BIGLAW_MODEL_URL:-}
@@ -42,8 +51,9 @@ services:
       BIGLAW_OIDC_CLIENT_SECRET: ${BIGLAW_OIDC_CLIENT_SECRET:-}
       BIGLAW_AI_RATE: ${BIGLAW_AI_RATE:-}
       ALLOW_ANTHROPIC: ${ALLOW_ANTHROPIC:-}
+      ALLOW_AWS: ${ALLOW_AWS:-}
     ports:
-      - "127.0.0.1:3101:3101"   # loopback only on the host
+      - "127.0.0.1:3101:3101"   # loopback only on the host: the --allow-no-auth precondition
     restart: unless-stopped
 
 volumes:

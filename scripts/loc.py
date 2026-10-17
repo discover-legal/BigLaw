@@ -10,6 +10,9 @@ Fails (exit 1) when any budget is exceeded:
   runtime env vars      <= 20      distinct names read by production Go code
   UI runtime deps       <= 2       ui/package.json "dependencies"
   packages without tests == 0      every Go package directory has a *_test.go
+  longest source file   <= 2,000   lines of any .go/.py/.sql/.sh/.js/.ts/.tsx/.css file (owner rule)
+It also fails when LICENSE or NOTICE is missing, or a .go/.py file lacks the
+SPDX-License-Identifier: Apache-2.0 header in its first five lines.
 
 Env-var names are found statically: literal arguments of os.Getenv/LookupEnv
 (and of any getenv(...) call), every `name: "X"` entry of the config table,
@@ -33,10 +36,13 @@ BUDGETS = {
     "env_vars": 20,
     "ui_runtime_deps": 2,
     "untested_packages": 0,
+    "longest_source_file": 2000,
 }
 TEST_ONLY_VARS = {"BIGLAW_TEST_DSN", "BIGLAW_REQUIRE_DB"}
 TEST_ONLY_HOME = os.path.join("internal", "store", "storetest")
 SKIP_DIRS = {".git", "node_modules", "vendor", "testdata", "dist"}
+SOURCE_EXT = (".go", ".py", ".sql", ".sh", ".js", ".mjs", ".ts", ".tsx", ".css")
+SPDX = "SPDX-License-Identifier: Apache-2.0"
 
 CALL_LITERAL = re.compile(r'\b(?:os\.Getenv|os\.LookupEnv|getenv)\(\s*"([A-Za-z_][A-Za-z0-9_]*)"\s*\)')
 CALL_DYNAMIC = re.compile(r'\bos\.(?:Getenv|LookupEnv)\(\s*([^")\s][^)]*)\)')
@@ -87,13 +93,36 @@ def ui_deps(root):
     return sorted(json.load(open(path, encoding="utf-8")).get("dependencies", {}))
 
 
+def source_files(root):
+    for dp, dirs, files in os.walk(root):
+        dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS and not d.startswith("."))
+        for f in sorted(files):
+            if f.endswith(SOURCE_EXT):
+                yield os.path.join(dp, f)
+
+
+def lines(src):
+    return src.count("\n") + (0 if src.endswith("\n") or not src else 1)
+
+
 def measure(root):
     pkgs = go_packages(root)
-    loc, env, problems = 0, set(), []
+    loc, env, problems, longest = 0, set(), [], 0
+    for path in source_files(root):
+        src = open(path, encoding="utf-8", errors="replace").read()
+        n, rel = lines(src), os.path.relpath(path, root)
+        longest = max(longest, n)
+        if n > BUDGETS["longest_source_file"]:
+            problems.append(f"{rel}: {n} lines exceeds the per-file cap of {BUDGETS['longest_source_file']} (longest_source_file); split it")
+        if path.endswith((".go", ".py")) and SPDX not in "\n".join(src.splitlines()[:5]):
+            problems.append(f"{rel}: missing the '{SPDX}' header")
+    for name in ("LICENSE", "NOTICE"):
+        if not os.path.exists(os.path.join(root, name)):
+            problems.append(f"{name} is missing at the repository root")
     for rel, files in pkgs.items():
         for path in files["prod"]:
             src = open(path, encoding="utf-8", errors="replace").read()
-            loc += src.count("\n") + (0 if src.endswith("\n") or not src else 1)
+            loc += lines(src)
             read = set(CALL_LITERAL.findall(src)) | set(TABLE_NAME.findall(src))
             names = read | set(SHAPED.findall(src))
             for m in CALL_DYNAMIC.finditer(src):
@@ -112,6 +141,7 @@ def measure(root):
         "env_vars": len(env),
         "ui_runtime_deps": len(ui),
         "untested_packages": len(untested),
+        "longest_source_file": longest,
     }
     detail = {"internal": internal, "deps": deps, "env": sorted(env), "ui": ui, "untested": untested}
     return m, detail, problems
@@ -130,7 +160,7 @@ def main(argv=None):
         print(json.dumps({"measured": m, "budgets": BUDGETS, "detail": detail, "problems": problems}, indent=1))
     else:
         for k, limit in BUDGETS.items():
-            print(f"{k:18} {m[k]:>7} / {limit:<7} {'ok' if m[k] <= limit else 'OVER'}")
+            print(f"{k:19} {m[k]:>7} / {limit:<7} {'ok' if m[k] <= limit else 'OVER'}")
         print("env vars:", ", ".join(detail["env"]) or "-")
         print("direct deps:", ", ".join(detail["deps"]) or "-")
         print("internal packages:", ", ".join(detail["internal"]) or "-")

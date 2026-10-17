@@ -1,3 +1,6 @@
 .git
 .env
+.env.*
+!.env.example
 biglaw
+__pycache__

@@ -1,5 +1,11 @@
 # Render Blueprint: the Docker web service plus a Render Postgres.
 # Set the model and OIDC variables in the dashboard (sync: false).
+#
+# INERT UNTIL PR 8 (by design): a Render web service is public, and this build
+# has no authentication, so the image's default `serve` refuses to listen on
+# 0.0.0.0 and the deploy fails its start. Do not add --allow-no-auth here
+# (README § Exposure). PR 8 (auth) makes this blueprint deployable and pins
+# the instance plans; it has never been deployed (README § Limitations).
 services:
   - type: web
     name: biglaw

@@ -1,0 +1,18 @@
+BigLaw 2
+Copyright (C) 2026 Discover Legal
+
+This distribution is licensed under the Apache License, Version 2.0
+(Apache-2.0). See the LICENSE file for the full text.
+
+================================================================================
+Third-party components
+================================================================================
+
+The biglaw binary is compiled with the following module, which is not
+included in this source tree (go.mod pins it; `go mod download` fetches it):
+
+1. github.com/lib/pq
+   Source:  https://github.com/lib/pq
+   License: MIT License
+   Notice:  Copyright (c) 2011-2013, 'pq' Contributors
+            Portions Copyright (C) 2011 Blake Mizerany

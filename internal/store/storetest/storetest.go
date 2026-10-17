@@ -16,6 +16,7 @@
 package storetest
 
 import (
+	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
@@ -23,6 +24,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	_ "github.com/lib/pq"
 )
@@ -58,7 +60,9 @@ func DSNFrom(t T, getenv func(string) string) string {
 	}
 	admin, err := sql.Open("postgres", base)
 	if err == nil {
-		err = admin.Ping()
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second) // a blackholed host must not hang the suite
+		err = admin.PingContext(ctx)
+		cancel()
 	}
 	if err != nil {
 		t.Fatalf("BIGLAW_TEST_DSN is set but the database is unreachable: %v", err)

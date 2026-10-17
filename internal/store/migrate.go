@@ -12,9 +12,10 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"regexp"
-	"sort"
 	"strconv"
+	"time"
 )
 
 //go:embed migrations/*.sql
@@ -38,42 +39,49 @@ var migrationName = regexp.MustCompile(`^(\d{4})_[a-z0-9_]+\.sql$`)
 // duplicates. Any other file is an error, so a misnamed migration can never
 // be silently skipped.
 func LoadMigrations(fsys fs.FS) ([]Migration, error) {
-	entries, err := fs.ReadDir(fsys, ".")
+	entries, err := fs.ReadDir(fsys, ".") // sorted by name
 	if err != nil {
 		return nil, fmt.Errorf("migrations: %w", err)
 	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 	var out []Migration
 	for i, e := range entries {
 		m := migrationName.FindStringSubmatch(e.Name())
 		if e.IsDir() || m == nil {
 			return nil, fmt.Errorf("migrations: %q is not named NNNN_name.sql", e.Name())
 		}
-		v, _ := strconv.Atoi(m[1])
-		if v != i+1 {
-			return nil, fmt.Errorf("migrations: %q has version %04d, want %04d (versions must start at 0001 and increase by one)", e.Name(), v, i+1)
+		if v, _ := strconv.Atoi(m[1]); v != i+1 {
+			return nil, fmt.Errorf("migrations: %q has version %04d, want %04d (versions start at 0001 and increase by one)", e.Name(), v, i+1)
 		}
 		body, err := fs.ReadFile(fsys, e.Name())
 		if err != nil {
 			return nil, fmt.Errorf("migrations: %w", err)
 		}
 		sum := sha256.Sum256(body)
-		out = append(out, Migration{Version: v, Name: e.Name(), SQL: string(body), Checksum: hex.EncodeToString(sum[:])})
+		out = append(out, Migration{Version: i + 1, Name: e.Name(), SQL: string(body), Checksum: hex.EncodeToString(sum[:])})
 	}
 	return out, nil
 }
 
 // Migrate applies the embedded migrations. See MigrateFS.
-func Migrate(ctx context.Context, db *sql.DB) error { return MigrateFS(ctx, db, Migrations) }
+func Migrate(ctx context.Context, db *sql.DB, log *slog.Logger) error {
+	return MigrateFS(ctx, db, Migrations, log)
+}
 
 // MigrateFS applies every pending migration in fsys to the schema named by
-// the connection's search_path. It holds a session advisory lock keyed on
-// that schema for the whole run, so concurrent runners serialise and each
-// file is applied exactly once. Each file runs in its own transaction
-// together with its schema_migrations row: a failing file leaves neither.
+// the connection's search_path. Migrations are forward-only.
+//
+// It holds a session advisory lock keyed on that schema for the whole run,
+// so concurrent runners serialise and each file is applied exactly once.
+// Waiting for another process's lock is logged and lasts until ctx ends.
+// Each file runs in one transaction together with its schema_migrations
+// row: if either fails, neither persists. A file must not end that
+// transaction itself (COMMIT/ROLLBACK), and so cannot use statements that
+// refuse to run in one (CREATE INDEX CONCURRENTLY).
+//
 // It refuses to run when the database records a migration this binary does
 // not have (a newer build migrated it) or one whose contents changed.
-func MigrateFS(ctx context.Context, db *sql.DB, fsys fs.FS) error {
+func MigrateFS(ctx context.Context, db *sql.DB, fsys fs.FS, log *slog.Logger) error {
+	log = orDiscard(log)
 	files, err := LoadMigrations(fsys)
 	if err != nil {
 		return err
@@ -92,8 +100,21 @@ func MigrateFS(ctx context.Context, db *sql.DB, fsys fs.FS) error {
 		return fmt.Errorf("migrate: no schema on the search_path exists")
 	}
 	lockKey := "biglaw.migrate." + schema.String
-	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock(hashtext($1))`, lockKey); err != nil {
+	var got bool
+	if err := conn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock(hashtext($1))`, lockKey).Scan(&got); err != nil {
 		return fmt.Errorf("migrate: lock: %w", err)
+	}
+	if !got {
+		start := time.Now()
+		log.Info("waiting for the migration lock: another BigLaw process is migrating this database", "schema", schema.String)
+		if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock(hashtext($1))`, lockKey); err != nil {
+			if ctx.Err() != nil {
+				return fmt.Errorf("migrate: stopped after %s waiting for the migration lock held by another BigLaw process: %w",
+					time.Since(start).Round(time.Second), context.Cause(ctx))
+			}
+			return fmt.Errorf("migrate: lock: %w", err)
+		}
+		log.Info("migration lock acquired", "waited", time.Since(start).Round(time.Millisecond).String())
 	}
 	defer func() {
 		if _, err := conn.ExecContext(context.Background(), `SELECT pg_advisory_unlock(hashtext($1))`, lockKey); err != nil {
@@ -109,41 +130,39 @@ func MigrateFS(ctx context.Context, db *sql.DB, fsys fs.FS) error {
 		applied_at timestamptz NOT NULL DEFAULT now())`); err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}
-
-	applied := map[int][2]string{}
-	rows, err := conn.QueryContext(ctx, `SELECT version, name, checksum FROM schema_migrations`)
+	applied := map[int]bool{}
+	rows, err := conn.QueryContext(ctx, `SELECT version, name, checksum FROM schema_migrations ORDER BY version`)
 	if err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}
+	defer rows.Close()
 	for rows.Next() {
 		var v int
 		var name, sum string
 		if err := rows.Scan(&v, &name, &sum); err != nil {
-			rows.Close()
 			return fmt.Errorf("migrate: %w", err)
 		}
-		applied[v] = [2]string{name, sum}
+		if v < 1 || v > len(files) {
+			return fmt.Errorf("migrate: database has migration %s, which this binary does not know (was it migrated by a newer build? migrations are forward-only: restore a backup or run the newer build)", name)
+		}
+		if f := files[v-1]; f.Name != name || f.Checksum != sum {
+			return fmt.Errorf("migrate: migration %04d was changed after it was applied (database has %s sha256 %.12s, binary has %s sha256 %.12s); add a new migration instead of editing an applied one", v, name, sum, f.Name, f.Checksum)
+		}
+		applied[v] = true
 	}
-	rows.Close()
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}
-	for v, rec := range applied {
-		if v < 1 || v > len(files) {
-			return fmt.Errorf("migrate: database has migration %s, which this binary does not know (was it migrated by a newer build?)", rec[0])
-		}
-		if f := files[v-1]; f.Name != rec[0] || f.Checksum != rec[1] {
-			return fmt.Errorf("migrate: migration %04d was changed after it was applied (database has %s sha256 %.12s, binary has %s sha256 %.12s); add a new migration instead of editing an applied one", v, rec[0], rec[1], f.Name, f.Checksum)
-		}
-	}
+	rows.Close()
 
 	for _, f := range files {
-		if _, ok := applied[f.Version]; ok {
+		if applied[f.Version] {
 			continue
 		}
 		if err := applyOne(ctx, conn, f); err != nil {
-			return err
+			return fmt.Errorf("migrate %s: %w", f.Name, err)
 		}
+		log.Info("applied migration", "name", f.Name)
 	}
 	return nil
 }
@@ -151,19 +170,27 @@ func MigrateFS(ctx context.Context, db *sql.DB, fsys fs.FS) error {
 func applyOne(ctx context.Context, conn *sql.Conn, f Migration) error {
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("migrate %s: %w", f.Name, err)
+		return err
+	}
+	defer tx.Rollback() // no-op after Commit
+	// A transaction-local marker: if the file ends the transaction, it is gone.
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('biglaw.migration', $1, true)`, f.Name); err != nil {
+		return err
 	}
 	if _, err := tx.ExecContext(ctx, f.SQL); err != nil {
-		_ = tx.Rollback()
-		return fmt.Errorf("migrate %s: %w", f.Name, err)
+		return err
+	}
+	var marker sql.NullString
+	if err := tx.QueryRowContext(ctx, `SELECT current_setting('biglaw.migration', true)`).Scan(&marker); err != nil {
+		return err
+	}
+	if marker.String != f.Name {
+		return fmt.Errorf("the file ended the migration's transaction itself (COMMIT or ROLLBACK is not allowed in a migration); " +
+			"statements before that point may have been committed, so check the schema before re-running")
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations (version, name, checksum) VALUES ($1, $2, $3)`,
 		f.Version, f.Name, f.Checksum); err != nil {
-		_ = tx.Rollback()
-		return fmt.Errorf("migrate %s: %w", f.Name, err)
+		return err
 	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("migrate %s: %w", f.Name, err)
-	}
-	return nil
+	return tx.Commit()
 }

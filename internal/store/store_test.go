@@ -10,6 +10,51 @@ import (
 	"time"
 )
 
+// TestCheckDSN: the validator and lib/pq must read a DSN the same way, and
+// no error may carry the password (marked SECRET in every case).
+func TestCheckDSN(t *testing.T) {
+	cases := []struct {
+		dsn  string
+		ok   bool
+		want string // substring of the error
+	}{
+		{"postgres://u:SECRET@h:5432/db?sslmode=disable", true, ""},
+		{"postgresql://u:SECRET@h/db", true, ""},
+		{"postgres:///biglaw?sslmode=disable", true, ""},
+		{"postgres://u:SE%2FCRET%3F%23%25%40@h/db", true, ""}, // percent-encoded reserved characters
+		{"postgres://u:SE@CRET@h/db", true, ""},               // '@' inside the password: Go and lib/pq both take the last '@'
+		{"host=h user=u password='SECRET pw' dbname=d", true, ""},
+		{"host=h user=u password=SECRET dbname=d sslmode=disable", true, ""},
+
+		{"POSTGRES://u:SECRET@h/db?sslmode=disable", false, "lowercase"},
+		{"Postgresql://u:SECRET@h:5433/db?sslmode=disable", false, "lowercase"},
+		{"mysql://u:SECRET@h/db", false, "postgres://"},
+		{"postgres://biglaw:p@ss/w0rdSECRET@127.0.0.1:5433/x", false, "percent-encode"},
+		{"postgres://u:SECRET/x@h/db", false, "percent-encode"},
+		{"postgres://u:SE#CRET@h/db", false, "percent-encode"},
+		{"postgres://u:SE?CRET@h/db", false, "percent-encode"},
+		{"postgres://u:SE CRET@h/db", false, "percent-encode"},
+		{"postgres://u:SECRET%zz@h/db", false, "percent-encode"},
+		{"postgres://u:SECRET@h:badport/db", false, "percent-encode"},
+		{"postgres://u:SECRET@h/db?sslmode=bogus&sslpassword=SECRET", false, "sslmode"},
+		{"host=h user=u password=SECRET PW dbname=d", false, "key=value"},
+		{"host=h user=u password='SECRET dbname=d", false, "key=value"},
+	}
+	for _, tc := range cases {
+		err := CheckDSN(tc.dsn)
+		if tc.ok != (err == nil) || err != nil && !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("CheckDSN(%q) = %v, want ok=%v containing %q", tc.dsn, err, tc.ok, tc.want)
+		}
+		if err != nil && (strings.Contains(err.Error(), "SECRET") || strings.Contains(err.Error(), "CRET")) {
+			t.Errorf("CheckDSN(%q) error leaks the password: %v", tc.dsn, err)
+		}
+	}
+	t.Setenv("PGGSSENCMODE", "disable") // lib/pq refuses some libpq variables outright
+	if err := CheckDSN("postgres://h/db"); err == nil || !strings.Contains(err.Error(), "PGGSSENCMODE") {
+		t.Errorf("unsupported PG variable: %v", err)
+	}
+}
+
 // TestOpenErrorHidesPassword: connection errors are logged at startup, so
 // they must never carry the DSN's password.
 func TestOpenErrorHidesPassword(t *testing.T) {
@@ -17,11 +62,14 @@ func TestOpenErrorHidesPassword(t *testing.T) {
 		"postgres://u:SECRETPW@127.0.0.1:badport/db",
 		"postgres://u:SECRETPW@127.0.0.1:1/db?sslmode=disable&connect_timeout=2",
 		"host=127.0.0.1 port=1 user=u password=SECRETPW sslmode=disable connect_timeout=2",
+		"host=127.0.0.1 port=1 user=u password=SECRETPW PW sslmode=disable",
+		"POSTGRES://u:SECRETPW@127.0.0.1:1/db?sslmode=disable",
+		"postgres://u:p@ss/SECRETPW@127.0.0.1:1/db",
 	} {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		_, err := Open(ctx, dsn)
+		_, err := Open(ctx, dsn, nil)
 		cancel()
-		if err == nil || strings.Contains(err.Error(), "SECRETPW") {
+		if err == nil || strings.Contains(err.Error(), "SECRETPW") || strings.Contains(err.Error(), "ss") && strings.Contains(err.Error(), "lookup") {
 			t.Errorf("Open(%q) error = %v", strings.ReplaceAll(dsn, "SECRETPW", "***"), err)
 		}
 	}

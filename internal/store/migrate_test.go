@@ -4,8 +4,11 @@
 package store
 
 import (
+	"bytes"
+	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"reflect"
 	"strings"
 	"sync"
@@ -102,22 +105,22 @@ func tableExists(t *testing.T, db *sql.DB, name string) bool {
 func TestMigrateIdempotent(t *testing.T) {
 	t.Parallel()
 	dsn := storetest.DSN(t)
-	s, err := Open(t.Context(), dsn)
+	s, err := Open(t.Context(), dsn, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	first := migrations(t, s.DB())
+	first := migrations(t, s.db)
 	files, _ := LoadMigrations(Migrations)
 	if len(first) != len(files) {
 		t.Fatalf("after first migrate: %d rows, want %d", len(first), len(files))
 	}
 	for i := 0; i < 2; i++ {
-		if err := Migrate(t.Context(), s.DB()); err != nil {
+		if err := Migrate(t.Context(), s.db, nil); err != nil {
 			t.Fatalf("re-migrate %d: %v", i, err)
 		}
 	}
-	if again := migrations(t, s.DB()); !reflect.DeepEqual(first, again) {
+	if again := migrations(t, s.db); !reflect.DeepEqual(first, again) {
 		t.Fatalf("schema_migrations changed on re-run:\n first %v\n again %v", first, again)
 	}
 }
@@ -140,7 +143,7 @@ func TestConcurrentMigrateSafe(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			errs[i] = MigrateFS(t.Context(), db, fsys)
+			errs[i] = MigrateFS(t.Context(), db, fsys, nil)
 		}(i)
 	}
 	wg.Wait()
@@ -168,7 +171,7 @@ func TestFailedMigrationRollsBack(t *testing.T) {
 		"0001_ok.sql":  good,
 		"0002_bad.sql": `CREATE TABLE partial_t (x int); CREATE INDEX partial_i ON partial_t (x); SELECT 1/0;`,
 	})
-	err := MigrateFS(t.Context(), db, bad)
+	err := MigrateFS(t.Context(), db, bad, nil)
 	if err == nil || !strings.Contains(err.Error(), "0002_bad.sql") {
 		t.Fatalf("err = %v, want a failure naming 0002_bad.sql", err)
 	}
@@ -183,7 +186,7 @@ func TestFailedMigrationRollsBack(t *testing.T) {
 	}
 	// Fixing the file lets the next run finish.
 	fixed := mapFS(map[string]string{"0001_ok.sql": good, "0002_bad.sql": `CREATE TABLE partial_t (x int);`})
-	if err := MigrateFS(t.Context(), db, fixed); err != nil {
+	if err := MigrateFS(t.Context(), db, fixed, nil); err != nil {
 		t.Fatalf("after fix: %v", err)
 	}
 	if got := migrations(t, db); len(got) != 2 {
@@ -195,15 +198,15 @@ func TestMigrateRefusesDrift(t *testing.T) {
 	t.Parallel()
 	db := openDB(t, storetest.DSN(t))
 	two := mapFS(map[string]string{"0001_a.sql": `CREATE TABLE a (x int);`, "0002_b.sql": `CREATE TABLE b (x int);`})
-	if err := MigrateFS(t.Context(), db, two); err != nil {
+	if err := MigrateFS(t.Context(), db, two, nil); err != nil {
 		t.Fatal(err)
 	}
 	edited := mapFS(map[string]string{"0001_a.sql": `CREATE TABLE a (x bigint);`, "0002_b.sql": `CREATE TABLE b (x int);`})
-	if err := MigrateFS(t.Context(), db, edited); err == nil || !strings.Contains(err.Error(), "changed after it was applied") {
+	if err := MigrateFS(t.Context(), db, edited, nil); err == nil || !strings.Contains(err.Error(), "changed after it was applied") {
 		t.Errorf("edited applied migration: err = %v", err)
 	}
 	older := mapFS(map[string]string{"0001_a.sql": `CREATE TABLE a (x int);`})
-	if err := MigrateFS(t.Context(), db, older); err == nil || !strings.Contains(err.Error(), "does not know") {
+	if err := MigrateFS(t.Context(), db, older, nil); err == nil || !strings.Contains(err.Error(), "does not know") {
 		t.Errorf("binary older than database: err = %v", err)
 	}
 }
@@ -211,7 +214,94 @@ func TestMigrateRefusesDrift(t *testing.T) {
 func TestMigrateNeedsExistingSchema(t *testing.T) {
 	t.Parallel()
 	dsn := storetest.WithSearchPath(storetest.DSN(t), "no_such_schema_x")
-	if err := Migrate(t.Context(), openDB(t, dsn)); err == nil || !strings.Contains(err.Error(), "no schema") {
+	if err := Migrate(t.Context(), openDB(t, dsn), nil); err == nil || !strings.Contains(err.Error(), "no schema") {
 		t.Fatalf("err = %v, want a missing-schema error", err)
+	}
+}
+
+// TestMigrationRowFailureRollsBackFile pins the per-file transaction: the
+// file's SQL succeeds, then recording its schema_migrations row fails (a
+// trigger the file itself installs raises). Nothing from the file may
+// persist. Without the transaction, table a and the trigger would remain and
+// every later start would fail on "relation already exists".
+func TestMigrationRowFailureRollsBackFile(t *testing.T) {
+	t.Parallel()
+	db := openDB(t, storetest.DSN(t))
+	fsys := mapFS(map[string]string{"0001_a.sql": `
+		CREATE TABLE a (x int);
+		CREATE FUNCTION refuse_row() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'row refused'; END $$;
+		CREATE TRIGGER refuse BEFORE INSERT ON schema_migrations FOR EACH ROW EXECUTE FUNCTION refuse_row();`})
+	err := MigrateFS(t.Context(), db, fsys, nil)
+	if err == nil || !strings.Contains(err.Error(), "row refused") {
+		t.Fatalf("err = %v, want the row insert's failure", err)
+	}
+	if tableExists(t, db, "a") {
+		t.Fatal("the file's table persisted although its schema_migrations row was not written")
+	}
+	var triggers int
+	if err := db.QueryRow(`SELECT count(*) FROM pg_trigger WHERE tgname = 'refuse'`).Scan(&triggers); err != nil || triggers != 0 {
+		t.Fatalf("the file's trigger persisted (%d, %v)", triggers, err)
+	}
+	if got := migrations(t, db); len(got) != 0 {
+		t.Fatalf("schema_migrations = %v, want empty", got)
+	}
+}
+
+// TestMigrationMayNotEndTransaction: a file that COMMITs or ROLLBACKs the
+// runner's transaction is refused and not recorded as applied.
+func TestMigrationMayNotEndTransaction(t *testing.T) {
+	t.Parallel()
+	for _, stmt := range []string{"COMMIT", "ROLLBACK", "END"} {
+		db := openDB(t, storetest.DSN(t))
+		err := MigrateFS(t.Context(), db, mapFS(map[string]string{"0001_a.sql": "CREATE TABLE a (x int); " + stmt + "; CREATE TABLE b (x int);"}), nil)
+		if err == nil || !strings.Contains(err.Error(), "ended the migration's transaction") {
+			t.Errorf("%s: err = %v", stmt, err)
+		}
+		if got := migrations(t, db); len(got) != 0 {
+			t.Errorf("%s: recorded as applied: %v", stmt, got)
+		}
+	}
+}
+
+// TestMigrateWaitsForLockAndSaysSo: a runner that finds the lock taken logs
+// that it is waiting, gives a clear error when its context ends, and
+// proceeds once the lock is released.
+func TestMigrateWaitsForLockAndSaysSo(t *testing.T) {
+	t.Parallel()
+	dsn := storetest.DSN(t)
+	holder := openDB(t, dsn)
+	conn, err := holder.Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	lock := `SELECT pg_advisory_lock(hashtext('biglaw.migrate.' || current_schema()))`
+	if _, err := conn.ExecContext(t.Context(), lock); err != nil {
+		t.Fatal(err)
+	}
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, nil))
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+	err = Migrate(ctx, openDB(t, dsn), log)
+	cancel()
+	if err == nil || !strings.Contains(err.Error(), "waiting for the migration lock held by another BigLaw process") ||
+		!strings.Contains(err.Error(), "deadline exceeded") {
+		t.Fatalf("err = %v", err)
+	}
+	if !strings.Contains(logs.String(), "waiting for the migration lock") {
+		t.Fatalf("no waiting log line: %q", logs.String())
+	}
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		conn.ExecContext(context.Background(), `SELECT pg_advisory_unlock_all()`)
+	}()
+	logs.Reset()
+	if err := Migrate(t.Context(), openDB(t, dsn), log); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"waiting for the migration lock", "migration lock acquired", "name=0001_init.sql"} {
+		if !strings.Contains(logs.String(), want) {
+			t.Errorf("logs lack %q: %q", want, logs.String())
+		}
 	}
 }

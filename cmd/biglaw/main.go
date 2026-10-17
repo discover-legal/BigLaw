@@ -3,8 +3,8 @@
 
 // Command biglaw is the BigLaw 2 server.
 //
-//	biglaw serve              run the HTTP server (migrates the database first)
-//	biglaw version [--config] print the version (and the resolved configuration)
+//	biglaw serve [--allow-no-auth]  run the HTTP server (migrates the database first)
+//	biglaw version [--config]       print the version (and the configuration)
 //
 // Later PRs add mcp, token and import-v1 (README § What is on disk).
 package main
@@ -33,9 +33,13 @@ var version = "2.0.0-dev"
 
 const usage = `usage: biglaw <command>
 
-  serve              run the server on BIGLAW_ADDR (migrates the database first)
-  version [--config] print the version; --config also prints the resolved
-                     configuration (secrets hidden) and checks it
+  serve [--allow-no-auth]  run the server on BIGLAW_ADDR (migrates the database
+                           first). There is no authentication yet, so serve
+                           refuses a non-loopback BIGLAW_ADDR unless
+                           --allow-no-auth says something else (such as a
+                           loopback-only port publish) limits who can reach it.
+  version [--config]       print the version; --config also prints the
+                           configuration (secrets hidden) and checks it
 `
 
 func main() {
@@ -49,22 +53,24 @@ func run(ctx context.Context, args []string, getenv func(string) string, environ
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
-	switch args[0] {
+	switch cmd, flags := args[0], args[1:]; cmd {
 	case "version":
+		if len(flags) > 1 || len(flags) == 1 && flags[0] != "--config" {
+			fmt.Fprint(stderr, usage)
+			return 2
+		}
 		fmt.Fprintf(stdout, "biglaw %s (%s)\n", version, runtime.Version())
-		if len(args) > 1 && args[1] == "--config" {
-			fmt.Fprint(stdout, Describe(getenv))
+		if len(flags) == 1 {
+			fmt.Fprint(stdout, Describe(getenv, environ))
 			if _, err := Load(getenv); err != nil {
 				fmt.Fprintf(stderr, "biglaw: configuration is not valid:\n%v\n", err)
 				return 2
 			}
-		} else if len(args) > 1 {
-			fmt.Fprint(stderr, usage)
-			return 2
 		}
 		return 0
 	case "serve":
-		if len(args) > 1 {
+		allowNoAuth := len(flags) == 1 && flags[0] == "--allow-no-auth"
+		if len(flags) > 1 || len(flags) == 1 && !allowNoAuth {
 			fmt.Fprint(stderr, usage)
 			return 2
 		}
@@ -74,21 +80,45 @@ func run(ctx context.Context, args []string, getenv func(string) string, environ
 			fmt.Fprintf(stderr, "biglaw: refusing to start:\n%v\n", err)
 			return 2
 		}
-		if unknown := UnknownVars(environ); len(unknown) > 0 {
-			log.Warn("ignoring unknown BIGLAW_ variables (typo?)", "names", strings.Join(unknown, ","))
+		if !isLoopback(cfg.Addr) && !allowNoAuth {
+			fmt.Fprintf(stderr, "biglaw: refusing to start: BIGLAW_ADDR %s is not a loopback address and this build has no authentication "+
+				"(it lands in PR 8). Listen on 127.0.0.1, or pass --allow-no-auth if something else limits who can reach the port "+
+				"(docker-compose.yml publishes it on the host's loopback only). See README § Exposure.\n", cfg.Addr)
+			return 2
 		}
-		if cfg.AllowAnthropic {
-			log.Warn("vendor breaker disarmed by ALLOW_ANTHROPIC")
+		if !isLoopback(cfg.Addr) {
+			log.Warn("serving WITHOUT authentication on a non-loopback address (--allow-no-auth)", "addr", cfg.Addr)
 		}
+		if names := UnknownVars(environ); len(names) > 0 {
+			log.Warn("ignoring unknown BIGLAW_ variables (typo?)", "names", strings.Join(names, ","))
+		}
+		if names := NotYetRead(getenv); len(names) > 0 {
+			log.Warn("these variables are set but not read by this build yet", "names", strings.Join(names, ","))
+		}
+		if cfg.AllowAnthropic || cfg.AllowAWS {
+			log.Warn("vendor breaker disarmed", "ALLOW_ANTHROPIC", cfg.AllowAnthropic, "ALLOW_AWS", cfg.AllowAWS)
+		}
+		st, err := store.Open(ctx, cfg.DatabaseURL, log)
+		if err != nil {
+			if ctx.Err() != nil {
+				err = fmt.Errorf("stopped by a signal before startup finished: %w", err)
+			}
+			fmt.Fprintf(stderr, "biglaw: %v\n", err)
+			return 1
+		}
+		defer st.Close()
+		// Listen only once the database is ready, so a probe that can connect
+		// can also be answered.
 		ln, err := net.Listen("tcp", cfg.Addr)
 		if err != nil {
 			fmt.Fprintf(stderr, "biglaw: %v\n", err)
 			return 1
 		}
-		if err := serve(ctx, cfg, ln, log); err != nil {
+		if err := serve(ctx, st, ln, log); err != nil {
 			fmt.Fprintf(stderr, "biglaw: %v\n", err)
 			return 1
 		}
+		log.Info("biglaw stopped")
 		return 0
 	case "help", "-h", "--help":
 		fmt.Fprint(stdout, usage)
@@ -98,19 +128,12 @@ func run(ctx context.Context, args []string, getenv func(string) string, environ
 	return 2
 }
 
-// serve opens (and migrates) the store, then serves HTTP on ln until ctx ends.
-func serve(ctx context.Context, cfg Config, ln net.Listener, log *slog.Logger) error {
-	defer ln.Close()
-	openCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	st, err := store.Open(openCtx, cfg.DatabaseURL)
-	cancel()
-	if err != nil {
-		return err
-	}
-	defer st.Close()
+type pinger interface{ Ping(context.Context) error }
 
+// serve serves HTTP on ln until ctx ends, then shuts down gracefully.
+func serve(ctx context.Context, db pinger, ln net.Listener, log *slog.Logger) error {
 	srv := &http.Server{
-		Handler:           routes(st),
+		Handler:           routes(db, log),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    64 << 10,
@@ -135,17 +158,16 @@ func serve(ctx context.Context, cfg Config, ln net.Listener, log *slog.Logger) e
 	return nil
 }
 
-type pinger interface{ Ping(context.Context) error }
-
-// routes is the PR 1 surface: only GET /health. Everything else is 404.
-func routes(db pinger) http.Handler {
+// routes is the PR 1 surface: only GET /health. Everything else is 404/405.
+func routes(db pinger, log *slog.Logger) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 		defer cancel()
 		status, code := "ok", http.StatusOK
 		if err := db.Ping(ctx); err != nil {
-			// The cause is not echoed: /health is unauthenticated.
+			// Logged for the operator, not echoed: /health is unauthenticated.
+			log.Warn("health check: database unavailable", "err", err)
 			status, code = "database unavailable", http.StatusServiceUnavailable
 		}
 		w.Header().Set("Content-Type", "application/json")

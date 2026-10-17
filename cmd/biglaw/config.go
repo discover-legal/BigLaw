@@ -6,182 +6,164 @@ package main
 import (
 	"errors"
 	"fmt"
-	"math"
 	"net"
 	"net/url"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/discover-legal/BigLaw/internal/store"
 )
 
 // envVar is one runtime environment variable. This table is the complete
 // configuration surface (README § Configuration); scripts/loc.py counts the
-// distinct names read in Go and fails CI above 20.
+// distinct names read in Go and fails CI above 20. Each variable is
+// validated by the PR that first reads it (pr); later ones are declared here
+// so the surface is fixed, shown by `version --config`, and warned about
+// when set but not yet read.
 type envVar struct {
 	name, def string
 	secret    bool // never printed by `biglaw version --config`
+	pr        int  // the build PR that first reads it
 }
 
 var envVars = []envVar{
-	{name: "BIGLAW_DATABASE_URL", secret: true}, // password inside; printed redacted
-	{name: "BIGLAW_ADDR", def: "127.0.0.1:3101"},
-	{name: "BIGLAW_PUBLIC_URL", def: "http://127.0.0.1:3101"},
-	{name: "BIGLAW_MODEL_URL"},
-	{name: "BIGLAW_MODEL_KEY", secret: true},
-	{name: "BIGLAW_MODEL_LEAD"},
-	{name: "BIGLAW_MODEL_SPECIALIST"},
-	{name: "BIGLAW_MODEL_CRITIC"},
-	{name: "BIGLAW_BUDGET_CALLS", def: "150"},
-	{name: "BIGLAW_BUDGET_USD", def: "5"},
-	{name: "BIGLAW_LOCAL_WATTS", def: "250"},
-	{name: "BIGLAW_PRICES"},
-	{name: "BIGLAW_COLLAPSE_THRESHOLD", def: "0.5"},
-	{name: "BIGLAW_COLLAPSE_ACTION", def: "strict"},
-	{name: "BIGLAW_OIDC_ISSUER"},
-	{name: "BIGLAW_OIDC_CLIENT_ID"},
-	{name: "BIGLAW_OIDC_CLIENT_SECRET", secret: true},
-	{name: "BIGLAW_AI_RATE"},
-	{name: "ALLOW_ANTHROPIC"},
+	{name: "BIGLAW_DATABASE_URL", secret: true, pr: 1}, // password inside; printed redacted
+	{name: "BIGLAW_ADDR", def: "127.0.0.1:3101", pr: 1},
+	{name: "BIGLAW_PUBLIC_URL", def: "http://127.0.0.1:3101", pr: 8},
+	{name: "BIGLAW_MODEL_URL", pr: 1}, // vendor breaker today; model client in PR 2
+	{name: "BIGLAW_MODEL_KEY", secret: true, pr: 2},
+	{name: "BIGLAW_MODEL_LEAD", pr: 2},
+	{name: "BIGLAW_MODEL_SPECIALIST", pr: 2},
+	{name: "BIGLAW_MODEL_CRITIC", pr: 2},
+	{name: "BIGLAW_BUDGET_CALLS", def: "150", pr: 4},
+	{name: "BIGLAW_BUDGET_USD", def: "5", pr: 4},
+	{name: "BIGLAW_LOCAL_WATTS", def: "250", pr: 2},
+	{name: "BIGLAW_PRICES", pr: 2},
+	{name: "BIGLAW_COLLAPSE_THRESHOLD", def: "0.5", pr: 4},
+	{name: "BIGLAW_COLLAPSE_ACTION", def: "strict", pr: 4},
+	{name: "BIGLAW_OIDC_ISSUER", pr: 8},
+	{name: "BIGLAW_OIDC_CLIENT_ID", pr: 8},
+	{name: "BIGLAW_OIDC_CLIENT_SECRET", secret: true, pr: 8},
+	{name: "BIGLAW_AI_RATE", pr: 9},
+	{name: "ALLOW_ANTHROPIC", pr: 1},
+	{name: "ALLOW_AWS", pr: 1},
 }
 
-// Config is the resolved runtime configuration.
+// Config is the configuration this build reads. Variables first read by a
+// later PR join it (and its validation) in that PR.
 type Config struct {
-	DatabaseURL string
-	Addr        string
-	PublicURL   string // no trailing slash
-
-	ModelURL, ModelKey                      string
-	ModelLead, ModelSpecialist, ModelCritic string // specialist/critic fall back to lead
-
-	BudgetCalls int
-	BudgetUSD   float64
-	LocalWatts  float64
-	Prices      string // JSON object or file path; parsed by the model package
-
-	CollapseThreshold float64
-	CollapseAction    string // strict | warn
-
-	OIDCIssuer, OIDCClientID, OIDCClientSecret string
-
-	AIRate         *float64 // nil: AI time is non-billable
+	DatabaseURL    string
+	Addr           string
+	ModelURL       string // checked by the vendor breaker only, until PR 2
 	AllowAnthropic bool
+	AllowAWS       bool
 }
 
-// Load resolves the configuration from getenv (os.Getenv in production) and
-// validates every value. All problems are reported at once. The vendor
-// breaker runs last, so a valid config that couples directly to a gated
-// vendor is still refused.
+// Load resolves and validates the configuration from getenv (os.Getenv in
+// production). All problems are reported at once. The vendor breaker runs
+// last, so a valid config that couples directly to a gated vendor is still
+// refused.
 func Load(getenv func(string) string) (Config, error) {
-	get := func(name string) string {
-		if v := strings.TrimSpace(getenv(name)); v != "" {
-			return v
-		}
-		for _, e := range envVars {
-			if e.name == name {
-				return e.def
-			}
-		}
-		panic("config: unknown variable " + name) // programming error
-	}
+	get := func(name string) string { return value(getenv, name) }
 	var errs []error
 	bad := func(name, format string, args ...any) {
 		errs = append(errs, fmt.Errorf("%s: "+format, append([]any{name}, args...)...))
 	}
-
 	c := Config{
-		DatabaseURL:      get("BIGLAW_DATABASE_URL"),
-		Addr:             get("BIGLAW_ADDR"),
-		PublicURL:        strings.TrimRight(get("BIGLAW_PUBLIC_URL"), "/"),
-		ModelURL:         get("BIGLAW_MODEL_URL"),
-		ModelKey:         get("BIGLAW_MODEL_KEY"),
-		ModelLead:        get("BIGLAW_MODEL_LEAD"),
-		ModelSpecialist:  get("BIGLAW_MODEL_SPECIALIST"),
-		ModelCritic:      get("BIGLAW_MODEL_CRITIC"),
-		Prices:           get("BIGLAW_PRICES"),
-		CollapseAction:   strings.ToLower(get("BIGLAW_COLLAPSE_ACTION")),
-		OIDCIssuer:       get("BIGLAW_OIDC_ISSUER"),
-		OIDCClientID:     get("BIGLAW_OIDC_CLIENT_ID"),
-		OIDCClientSecret: get("BIGLAW_OIDC_CLIENT_SECRET"),
-		AllowAnthropic:   truthy(get("ALLOW_ANTHROPIC")),
+		DatabaseURL:    get("BIGLAW_DATABASE_URL"),
+		Addr:           get("BIGLAW_ADDR"),
+		ModelURL:       get("BIGLAW_MODEL_URL"),
+		AllowAnthropic: truthy(get("ALLOW_ANTHROPIC")),
+		AllowAWS:       truthy(get("ALLOW_AWS")),
 	}
-
 	if c.DatabaseURL == "" {
 		bad("BIGLAW_DATABASE_URL", "is required: a Postgres DSN such as postgres://biglaw:PASSWORD@localhost:5432/biglaw?sslmode=disable")
-	} else if strings.Contains(c.DatabaseURL, "://") {
-		if u, err := url.Parse(c.DatabaseURL); err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") {
-			bad("BIGLAW_DATABASE_URL", "is not a valid postgres:// URL (value not shown: it may contain a password)")
-		}
+	} else if err := store.CheckDSN(c.DatabaseURL); err != nil {
+		bad("BIGLAW_DATABASE_URL", "%v", err)
 	}
 	if host, port, err := net.SplitHostPort(c.Addr); err != nil || !validPort(port) {
 		bad("BIGLAW_ADDR", "%q is not host:port", c.Addr)
 	} else if host == "" {
-		bad("BIGLAW_ADDR", "%q has no host; write 0.0.0.0:%s to listen on every interface", c.Addr, port)
-	}
-	if err := checkURL(c.PublicURL, false); err != nil {
-		bad("BIGLAW_PUBLIC_URL", "%v", err)
+		bad("BIGLAW_ADDR", "%q has no host; write 127.0.0.1:%s (or 0.0.0.0:%s with serve --allow-no-auth, see README § Exposure)", c.Addr, port, port)
 	}
 	if c.ModelURL != "" {
-		if err := checkURL(c.ModelURL, true); err != nil {
-			bad("BIGLAW_MODEL_URL", "%v", err)
+		if u, err := url.Parse(c.ModelURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			bad("BIGLAW_MODEL_URL", "%s must be an http(s) URL with a host", redactURL(c.ModelURL))
+		} else if u.User != nil {
+			bad("BIGLAW_MODEL_URL", "must not carry credentials in the URL; put the key in BIGLAW_MODEL_KEY")
+		} else if h := u.Hostname(); !isASCII(h) {
+			bad("BIGLAW_MODEL_URL", "host must be ASCII; write an internationalised host name in its xn-- form")
 		}
 	}
-	if c.ModelSpecialist == "" {
-		c.ModelSpecialist = c.ModelLead
-	}
-	if c.ModelCritic == "" {
-		c.ModelCritic = c.ModelLead
-	}
-
-	if n, err := strconv.Atoi(get("BIGLAW_BUDGET_CALLS")); err != nil || n < 1 || n > 100000 {
-		bad("BIGLAW_BUDGET_CALLS", "%q must be a whole number from 1 to 100000", get("BIGLAW_BUDGET_CALLS"))
-	} else {
-		c.BudgetCalls = n
-	}
-	c.BudgetUSD = number(get, "BIGLAW_BUDGET_USD", 0, math.MaxFloat64, bad)
-	c.LocalWatts = number(get, "BIGLAW_LOCAL_WATTS", 0, 100000, bad)
-	c.CollapseThreshold = number(get, "BIGLAW_COLLAPSE_THRESHOLD", 0, 1, bad)
-	if f, err := strconv.ParseFloat(get("BIGLAW_COLLAPSE_THRESHOLD"), 64); err == nil && f == 0 {
-		bad("BIGLAW_COLLAPSE_THRESHOLD", "must be above 0 (0 would fail every task)")
-	}
-	if c.CollapseAction != "strict" && c.CollapseAction != "warn" {
-		bad("BIGLAW_COLLAPSE_ACTION", "%q must be strict or warn", c.CollapseAction)
-	}
-	if v := get("BIGLAW_AI_RATE"); v != "" {
-		r := number(get, "BIGLAW_AI_RATE", 0, 1e6, bad)
-		c.AIRate = &r
-	}
-
-	switch {
-	case c.OIDCIssuer != "":
-		if err := checkIssuer(c.OIDCIssuer); err != nil {
-			bad("BIGLAW_OIDC_ISSUER", "%v", err)
-		}
-		if c.OIDCClientID == "" || c.OIDCClientSecret == "" {
-			bad("BIGLAW_OIDC_ISSUER", "is set, so BIGLAW_OIDC_CLIENT_ID and BIGLAW_OIDC_CLIENT_SECRET are required")
-		}
-	case c.OIDCClientID != "" || c.OIDCClientSecret != "":
-		bad("BIGLAW_OIDC_CLIENT_ID", "an OIDC client is set but BIGLAW_OIDC_ISSUER is not")
-	}
-
 	if err := errors.Join(errs...); err != nil {
 		return c, err
 	}
 	return c, GuardVendors(c)
 }
 
-// GuardVendors is the self-imposed vendor breaker ported from v1
-// (biglaw-go/internal/config/guard.go). It refuses a model endpoint that
-// couples BigLaw DIRECTLY to Anthropic's own API unless ALLOW_ANTHROPIC is
-// set. It keys on the endpoint, not the model name: a Claude model reached
-// through a third-party OpenAI-compatible gateway is allowed. Like v1 it
-// matches "anthropic.com" anywhere in the URL, so it fails closed.
-func GuardVendors(c Config) error {
-	if strings.Contains(strings.ToLower(c.ModelURL), "anthropic.com") && !c.AllowAnthropic {
-		return fmt.Errorf("vendor breaker tripped: BIGLAW_MODEL_URL %s couples BigLaw directly to Anthropic, a gated closed vendor; "+
-			"set ALLOW_ANTHROPIC=1 to opt in deliberately, or reach the model through a gateway", redactURL(c.ModelURL))
+// value is getenv(name) trimmed, or the table default when empty.
+func value(getenv func(string) string, name string) string {
+	if v := strings.TrimSpace(getenv(name)); v != "" {
+		return v
 	}
-	return nil
+	for _, e := range envVars {
+		if e.name == name {
+			return e.def
+		}
+	}
+	panic("config: unknown variable " + name) // programming error
+}
+
+// vendors is the self-imposed vendor breaker ported from v1
+// (biglaw-go/internal/config/guard.go): endpoints that couple BigLaw
+// DIRECTLY to a gated closed vendor, and the variable that opts in. It keys
+// on the endpoint, not the model name: a Claude model behind a third-party
+// OpenAI-compatible gateway is allowed. Like v1 it matches the marker
+// anywhere in the URL (and in the decoded host name), so it fails closed.
+var vendors = []struct {
+	name, optIn string
+	markers     []string
+}{
+	{"Anthropic", "ALLOW_ANTHROPIC", []string{"anthropic.com"}},
+	{"AWS/Amazon", "ALLOW_AWS", []string{"amazonaws.com", "bedrock"}},
+}
+
+// GuardVendors returns an error naming every tripped breaker and its opt-in.
+func GuardVendors(c Config) error {
+	if c.ModelURL == "" {
+		return nil
+	}
+	haystack := strings.ToLower(c.ModelURL)
+	if u, err := url.Parse(c.ModelURL); err == nil {
+		haystack += " " + strings.ToLower(u.Hostname()) // decodes %2E and the like
+	}
+	allowed := map[string]bool{"ALLOW_ANTHROPIC": c.AllowAnthropic, "ALLOW_AWS": c.AllowAWS}
+	var errs []error
+	for _, v := range vendors {
+		for _, m := range v.markers {
+			if strings.Contains(haystack, m) && !allowed[v.optIn] {
+				errs = append(errs, fmt.Errorf("vendor breaker tripped: BIGLAW_MODEL_URL %s couples BigLaw directly to %s, a gated closed vendor; "+
+					"set %s=1 to opt in deliberately, or reach the model through a gateway", redactURL(c.ModelURL), v.name, v.optIn))
+				break
+			}
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// isLoopback reports whether addr (host:port) listens on loopback only.
+func isLoopback(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // UnknownVars lists BIGLAW_* names in environ that BigLaw does not read
@@ -193,8 +175,7 @@ func UnknownVars(environ []string) []string {
 	}
 	var out []string
 	for _, kv := range environ {
-		name, _, _ := strings.Cut(kv, "=")
-		if strings.HasPrefix(name, "BIGLAW_") && !known[name] {
+		if name, _, _ := strings.Cut(kv, "="); strings.HasPrefix(name, "BIGLAW_") && !known[name] {
 			out = append(out, name)
 		}
 	}
@@ -202,9 +183,24 @@ func UnknownVars(environ []string) []string {
 	return out
 }
 
-// Describe renders the resolved configuration for `biglaw version --config`.
-// Secrets print only as set/unset; the database password is masked.
-func Describe(getenv func(string) string) string {
+// NotYetRead lists declared variables that are set but first read by a
+// later PR, so an operator is not misled into thinking they took effect.
+func NotYetRead(getenv func(string) string) []string {
+	var out []string
+	for _, e := range envVars {
+		if e.pr > 1 && strings.TrimSpace(getenv(e.name)) != "" {
+			out = append(out, e.name)
+		}
+	}
+	return out
+}
+
+// Describe renders the configuration for `biglaw version --config`.
+// Secrets print only as set/unset; the database password and every URL's
+// user info and query values are masked; a database URL that does not pass
+// CheckDSN is not shown at all. The PG* variables lib/pq also reads are
+// listed by name only.
+func Describe(getenv func(string) string, environ []string) string {
 	var b strings.Builder
 	for _, e := range envVars {
 		raw := strings.TrimSpace(getenv(e.name))
@@ -216,11 +212,18 @@ func Describe(getenv func(string) string) string {
 		case val == "":
 			val, src = "(unset)", ""
 		case e.name == "BIGLAW_DATABASE_URL":
-			val = redactDSN(val)
+			if store.CheckDSN(val) != nil {
+				val = "(set, not shown: invalid, see below)"
+			} else {
+				val = redactDSN(val)
+			}
 		case e.secret:
 			val = "(set, hidden)"
-		case e.name == "BIGLAW_MODEL_URL":
+		case strings.Contains(val, "://"):
 			val = redactURL(val)
+		}
+		if e.pr > 1 {
+			src = strings.TrimPrefix(src+", ", ", ") + "read from PR " + strconv.Itoa(e.pr)
 		}
 		fmt.Fprintf(&b, "%-26s %s", e.name, val)
 		if src != "" {
@@ -228,88 +231,75 @@ func Describe(getenv func(string) string) string {
 		}
 		b.WriteByte('\n')
 	}
-	return b.String()
-}
-
-func number(get func(string) string, name string, lo, hi float64, bad func(string, string, ...any)) float64 {
-	v := get(name)
-	f, err := strconv.ParseFloat(v, 64)
-	if err != nil || math.IsNaN(f) || f < lo || f > hi {
-		bad(name, "%q must be a number from %g to %g", v, lo, hi)
-		return 0
+	var pg []string
+	for _, kv := range environ {
+		if name, _, _ := strings.Cut(kv, "="); strings.HasPrefix(name, "PG") {
+			pg = append(pg, name)
+		}
 	}
-	return f
+	if len(pg) > 0 {
+		sort.Strings(pg)
+		fmt.Fprintf(&b, "lib/pq also reads these libpq variables (values not shown): %s\n", strings.Join(pg, ", "))
+	}
+	return b.String()
 }
 
 func validPort(p string) bool {
 	n, err := strconv.Atoi(p)
-	return err == nil && n >= 0 && n <= 65535
+	return err == nil && n >= 0 && n <= 65535 && p[0] >= '0' && p[0] <= '9' // no sign
 }
 
-func checkURL(raw string, allowPath bool) error {
-	u, err := url.Parse(raw)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return fmt.Errorf("%q must be an http(s) URL with a host", redactURL(raw))
-	}
-	if u.User != nil {
-		return fmt.Errorf("must not carry credentials in the URL")
-	}
-	if !allowPath && (u.RawQuery != "" || u.Fragment != "") {
-		return fmt.Errorf("%q must not have a query or fragment", raw)
-	}
-	return nil
-}
-
-var tenantRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.-]*$`)
-
-// checkIssuer accepts the two presets or an https issuer URL. Resolving and
-// discovering the issuer is the OIDC flow's job (PR 8).
-func checkIssuer(v string) error {
-	switch {
-	case v == "google":
-		return nil
-	case strings.HasPrefix(v, "microsoft:"):
-		if t := strings.TrimPrefix(v, "microsoft:"); !tenantRe.MatchString(t) {
-			return fmt.Errorf("%q: write microsoft:<tenant-id>", v)
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x80 {
+			return false
 		}
-		return nil
 	}
-	if u, err := url.Parse(v); err != nil || u.Scheme != "https" || u.Host == "" {
-		return fmt.Errorf("%q must be google, microsoft:<tenant-id> or an https issuer URL", v)
-	}
-	return nil
+	return true
 }
 
-// redactURL hides a password in userinfo and every query value (some
-// gateways take the key as ?key=…).
+// redactURL hides all user info (a key is sometimes the user name) and every
+// query value and fragment (some gateways take the key as ?key=…).
 func redactURL(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil {
-		return "(unparseable URL)"
+		return "(unparseable URL, not shown)"
+	}
+	if u.User != nil {
+		u.User = url.User("xxxxx")
 	}
 	q := u.Query()
 	for k := range q {
 		q.Set(k, "xxxxx")
 	}
 	u.RawQuery = q.Encode()
-	return u.Redacted()
+	if u.Fragment != "" {
+		u.Fragment = "xxxxx"
+	}
+	return u.String()
 }
 
-var kvPassword = regexp.MustCompile(`(?i)(password\s*=\s*)('(?:[^'\\]|\\.)*'|\S+)`)
+// kvPassword matches password=… and sslpassword=… in a key=value DSN, quoted
+// or unquoted (an unquoted value may hold backslash escapes).
+var kvPassword = regexp.MustCompile(`(?i)(password\s*=\s*)('(?:[^'\\]|\\.)*'|(?:[^\s'\\]|\\.)+)`)
 
+// redactDSN masks the password of a DSN that passed store.CheckDSN.
 func redactDSN(dsn string) string {
-	if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
-		u, err := url.Parse(dsn)
-		if err != nil {
-			return "(unparseable DSN)"
-		}
-		if q := u.Query(); q.Has("password") {
-			q.Set("password", "xxxxx")
-			u.RawQuery = q.Encode()
-		}
-		return u.Redacted()
+	if !strings.HasPrefix(dsn, "postgres://") && !strings.HasPrefix(dsn, "postgresql://") {
+		return kvPassword.ReplaceAllString(dsn, "${1}xxxxx")
 	}
-	return kvPassword.ReplaceAllString(dsn, "${1}xxxxx")
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return "(unparseable DSN, not shown)"
+	}
+	q := u.Query()
+	for k := range q {
+		if strings.Contains(strings.ToLower(k), "password") {
+			q.Set(k, "xxxxx")
+		}
+	}
+	u.RawQuery, u.Fragment = q.Encode(), ""
+	return u.Redacted()
 }
 
 func truthy(v string) bool {
