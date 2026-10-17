@@ -1,0 +1,50 @@
+# BigLaw 2: postgres:16 + biglaw. All state lives in the pgdata volume.
+# Values come from the shell or from .env (copy .env.example).
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: biglaw
+      POSTGRES_DB: biglaw
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (URL-safe characters, e.g. openssl rand -hex 24)}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U biglaw -d biglaw"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+    # No ports: Postgres is reachable only from the biglaw container.
+
+  biglaw:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      BIGLAW_DATABASE_URL: postgres://biglaw:${POSTGRES_PASSWORD}@postgres:5432/biglaw?sslmode=disable
+      BIGLAW_ADDR: 0.0.0.0:3101
+      BIGLAW_PUBLIC_URL: ${BIGLAW_PUBLIC_URL:-}
+      BIGLAW_MODEL_URL: ${BIGLAW_MODEL_URL:-}
+      BIGLAW_MODEL_KEY: ${BIGLAW_MODEL_KEY:-}
+      BIGLAW_MODEL_LEAD: ${BIGLAW_MODEL_LEAD:-}
+      BIGLAW_MODEL_SPECIALIST: ${BIGLAW_MODEL_SPECIALIST:-}
+      BIGLAW_MODEL_CRITIC: ${BIGLAW_MODEL_CRITIC:-}
+      BIGLAW_BUDGET_CALLS: ${BIGLAW_BUDGET_CALLS:-}
+      BIGLAW_BUDGET_USD: ${BIGLAW_BUDGET_USD:-}
+      BIGLAW_LOCAL_WATTS: ${BIGLAW_LOCAL_WATTS:-}
+      BIGLAW_PRICES: ${BIGLAW_PRICES:-}
+      BIGLAW_COLLAPSE_THRESHOLD: ${BIGLAW_COLLAPSE_THRESHOLD:-}
+      BIGLAW_COLLAPSE_ACTION: ${BIGLAW_COLLAPSE_ACTION:-}
+      BIGLAW_OIDC_ISSUER: ${BIGLAW_OIDC_ISSUER:-}
+      BIGLAW_OIDC_CLIENT_ID: ${BIGLAW_OIDC_CLIENT_ID:-}
+      BIGLAW_OIDC_CLIENT_SECRET: ${BIGLAW_OIDC_CLIENT_SECRET:-}
+      BIGLAW_AI_RATE: ${BIGLAW_AI_RATE:-}
+      ALLOW_ANTHROPIC: ${ALLOW_ANTHROPIC:-}
+    ports:
+      - "127.0.0.1:3101:3101"   # loopback only on the host
+    restart: unless-stopped
+
+volumes:
+  pgdata:

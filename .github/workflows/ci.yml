@@ -1,0 +1,52 @@
+name: CI
+
+# Adapted from v1's .github/workflows/ci.yml (fix/ci-and-citation-parse):
+# the Go module is now the repo root, Postgres 16 runs as a service container,
+# and BIGLAW_REQUIRE_DB=1 turns any skipped database test into a failure.
+on:
+  pull_request:
+  push:
+    branches: [main, v2]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      BIGLAW_TEST_DSN: postgres://postgres:ci@localhost:5432/postgres?sslmode=disable
+      BIGLAW_REQUIRE_DB: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # fmt-check, vet, build, go test -race (unit + DB), scripts/loc.py budgets,
+      # docker compose config -q.
+      - name: make ci
+        run: make ci
