@@ -1,0 +1,60 @@
+# BigLaw 2: postgres:16-alpine + biglaw. All state lives in the pgdata volume.
+# Values come from the shell or from .env (copy .env.example).
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: biglaw
+      POSTGRES_DB: biglaw
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (e.g. openssl rand -hex 24)}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U biglaw -d biglaw"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+    # No ports: Postgres is reachable only from the biglaw container.
+
+  biglaw:
+    build: .
+    image: biglaw:local
+    # No auth exists before PR 8, and serve refuses a non-loopback address
+    # without --allow-no-auth. That is safe here only because the port below is
+    # published on the host's loopback; do not change it to 0.0.0.0 or a LAN IP
+    # (README § Exposure).
+    command: ["serve", "--allow-no-auth"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # The password travels in PGPASSWORD (read by lib/pq), not in the URL,
+      # so any character in POSTGRES_PASSWORD works without percent-encoding.
+      BIGLAW_DATABASE_URL: postgres://biglaw@postgres:5432/biglaw?sslmode=disable
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      BIGLAW_ADDR: 0.0.0.0:3101
+      BIGLAW_PUBLIC_URL: ${BIGLAW_PUBLIC_URL:-}
+      BIGLAW_MODEL_URL: ${BIGLAW_MODEL_URL:-}
+      BIGLAW_MODEL_KEY: ${BIGLAW_MODEL_KEY:-}
+      BIGLAW_MODEL_LEAD: ${BIGLAW_MODEL_LEAD:-}
+      BIGLAW_MODEL_SPECIALIST: ${BIGLAW_MODEL_SPECIALIST:-}
+      BIGLAW_MODEL_CRITIC: ${BIGLAW_MODEL_CRITIC:-}
+      BIGLAW_BUDGET_CALLS: ${BIGLAW_BUDGET_CALLS:-}
+      BIGLAW_BUDGET_USD: ${BIGLAW_BUDGET_USD:-}
+      BIGLAW_LOCAL_WATTS: ${BIGLAW_LOCAL_WATTS:-}
+      BIGLAW_PRICES: ${BIGLAW_PRICES:-}
+      BIGLAW_COLLAPSE_THRESHOLD: ${BIGLAW_COLLAPSE_THRESHOLD:-}
+      BIGLAW_COLLAPSE_ACTION: ${BIGLAW_COLLAPSE_ACTION:-}
+      BIGLAW_OIDC_ISSUER: ${BIGLAW_OIDC_ISSUER:-}
+      BIGLAW_OIDC_CLIENT_ID: ${BIGLAW_OIDC_CLIENT_ID:-}
+      BIGLAW_OIDC_CLIENT_SECRET: ${BIGLAW_OIDC_CLIENT_SECRET:-}
+      BIGLAW_AI_RATE: ${BIGLAW_AI_RATE:-}
+      ALLOW_ANTHROPIC: ${ALLOW_ANTHROPIC:-}
+      ALLOW_AWS: ${ALLOW_AWS:-}
+    ports:
+      - "127.0.0.1:3101:3101"   # loopback only on the host: the --allow-no-auth precondition
+    restart: unless-stopped
+
+volumes:
+  pgdata:

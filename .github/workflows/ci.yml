@@ -1,0 +1,106 @@
+name: CI
+
+# Adapted from v1's .github/workflows/ci.yml (fix/ci-and-citation-parse):
+# the Go module is now the repo root, Postgres 16 runs as a service container,
+# and BIGLAW_REQUIRE_DB=1 turns any skipped database test into a failure.
+# Three jobs run in parallel: go (make ci), lint (staticcheck + govulncheck)
+# and docker (image build + Compose smoke test).
+on:
+  pull_request:
+  push:
+    branches: [main, v2]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        # README promises any supported Postgres >= 14 (13 reached end of life
+        # in November 2025); 16 is what Compose and Render run.
+        postgres: ["14", "16"]
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_PASSWORD: ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      BIGLAW_TEST_DSN: postgres://postgres:ci@localhost:5432/postgres?sslmode=disable
+      BIGLAW_REQUIRE_DB: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same version as go.mod's toolchain line and the Dockerfile
+      # (TestGoVersionPinnedEverywhere checks all three agree).
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.9"
+          cache-dependency-path: go.sum
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # fmt-check, vet, go mod verify/tidy, build + static-check, go test -race (unit + DB),
+      # scripts/loc.py and its tests, docker compose config -q.
+      - name: make ci
+        run: make ci
+
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.9"
+          cache-dependency-path: go.sum
+      - name: staticcheck
+        run: make lint
+      - name: govulncheck
+        run: make vuln
+
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # Reserved URL characters on purpose: Compose passes it as PGPASSWORD.
+      POSTGRES_PASSWORD: "ci/p@ss?w#rd:%"
+    steps:
+      - uses: actions/checkout@v4
+      - name: build the image
+        run: docker compose build biglaw
+      - name: start the Compose stack
+        run: docker compose up -d --wait postgres && docker compose up -d biglaw
+      - name: /health answers on the host's loopback
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:3101/health; then exit 0; fi
+            sleep 1
+          done
+          docker compose logs biglaw
+          exit 1
+      # --user: a uid with no passwd entry (k8s runAsUser) must still accept a DSN naming its user.
+      - name: the image alone refuses to serve without auth on 0.0.0.0
+        run: |
+          set +e
+          docker run --rm --user 54321:54321 -e BIGLAW_DATABASE_URL=postgres://u@db/x biglaw:local 2>err.txt; code=$?
+          cat err.txt
+          test "$code" = 2 && grep -q -- '--allow-no-auth' err.txt
+      - name: logs
+        if: always()
+        run: docker compose logs; docker compose down -v
