@@ -125,15 +125,16 @@ that way:
 ## Run it
 
 ```bash
-sed "s/^POSTGRES_PASSWORD=\$/POSTGRES_PASSWORD=$(openssl rand -hex 24)/" .env.example > .env
+test -e .env || sed "s/^POSTGRES_PASSWORD=\$/POSTGRES_PASSWORD=$(openssl rand -hex 24)/" .env.example > .env
 docker compose up -d            # postgres:16-alpine + biglaw; host port 127.0.0.1:3101 only
 curl -s http://127.0.0.1:3101/health
 ```
 
 Compose gives biglaw the database password as `PGPASSWORD` rather than inside
 `BIGLAW_DATABASE_URL`, so it needs no percent-encoding. The first line above writes a random hex
-password into `.env` (Compose does not run `$(…)` written inside `.env`). Compose's own `.env` parsing does
-constrain it, though: unquoted, a value is cut at ` #` and `$` is expanded (`a$b` fails, and
+password into `.env` (Compose does not run `$(…)` written inside `.env`), and only when there is no
+`.env` yet: an existing one keeps its settings and the password its `pgdata` volume was created with.
+Compose's own `.env` parsing does constrain it, though: unquoted, a value is cut at ` #` and `$` is expanded (`a$b` fails, and
 `abc #def` becomes `abc`, on both the Postgres and the biglaw side). Use a hex password, or
 single-quote your own (`POSTGRES_PASSWORD='…'`) without a `'` in it.
 

@@ -14,6 +14,7 @@ import (
 	"io"
 	"log/slog"
 	"net/url"
+	"os/user"
 	"strconv"
 	"strings"
 	"time"
@@ -97,9 +98,23 @@ func CheckDSN(dsn string) error {
 		}
 	}
 	if _, err := pq.NewConfig(dsn); err != nil {
+		if noDefaultUser(err) {
+			return fmt.Errorf("names no user, and this process has no user name to default to (%w); "+
+				"name the user in the database URL (postgres://USER@host/db) or set PGUSER", hideDSN(err, dsn))
+		}
 		return fmt.Errorf("is not valid: %w", hideDSN(err, dsn))
 	}
 	return nil
+}
+
+// noDefaultUser reports whether err is lib/pq failing to find a default user
+// name: the DSN names none and os/user cannot resolve the uid (no passwd entry
+// and no $USER, as under docker run --user or Kubernetes runAsUser). Every
+// os/user error starts with "user: " ("user: Current requires cgo or $USER
+// set in environment" without cgo, "user: unknown userid N" with it).
+func noDefaultUser(err error) bool {
+	var unknown user.UnknownUserIdError
+	return errors.As(err, &unknown) || strings.HasPrefix(err.Error(), "user: ")
 }
 
 // hideDSN replaces an error that echoes the DSN (lib/pq quotes the whole URL

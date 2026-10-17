@@ -6,9 +6,11 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -82,6 +84,11 @@ func TestCheckDSNWithoutPasswdEntry(t *testing.T) {
 		if err := CheckDSN("postgres://biglaw@db:5432/biglaw?sslmode=disable"); err != nil {
 			t.Fatalf("CheckDSN of a DSN naming its user: %v", err)
 		}
+		// r4 verifier L2: one that names no user gets a hint, not just os/user's error.
+		err := CheckDSN("postgres://:SECRETPW@db:5432/biglaw?sslmode=disable")
+		if err == nil || !strings.Contains(err.Error(), "name the user in the database URL") || strings.Contains(err.Error(), "SECRETPW") {
+			t.Fatalf("CheckDSN of a DSN naming no user: %v", err)
+		}
 		return
 	}
 	if os.Geteuid() != 0 {
@@ -103,6 +110,21 @@ func TestCheckDSNWithoutPasswdEntry(t *testing.T) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: 54321, Gid: 54321}}
 	if out, err := cmd.CombinedOutput(); err != nil || !strings.Contains(string(out), "--- PASS") {
 		t.Fatalf("as uid 54321: %v\n%s", err, out)
+	}
+}
+
+// TestNoDefaultUser: both os/user failures (static build without cgo, and
+// with cgo) are recognised; other parse errors are not.
+func TestNoDefaultUser(t *testing.T) {
+	for err, want := range map[error]bool{
+		errors.New("user: Current requires cgo or $USER set in environment"): true,
+		user.UnknownUserIdError(54321):                                       true,
+		fmt.Errorf("wrapped: %w", user.UnknownUserIdError(1)):                true,
+		errors.New(`pq: unsupported sslmode "x"`):                            false,
+	} {
+		if got := noDefaultUser(err); got != want {
+			t.Errorf("noDefaultUser(%v) = %v, want %v", err, got, want)
+		}
 	}
 }
 
