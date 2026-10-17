@@ -42,6 +42,8 @@ services:
       RUVECTOR_DATA_DIR: /app/data
       TYPEDB_SOCKET: /run/biglaw/typedb.sock
       # State files live inside the data volume so they survive rebuilds.
+      # These equal the built-in defaults (RUVECTOR_DATA_DIR/<file>); they stay
+      # pinned so a stale *_FILE in ../.env cannot move state out of the volume.
       SETTINGS_FILE: /app/data/.settings.json
       TASKS_FILE: /app/data/.tasks.json
       PROFILES_FILE: /app/data/.profiles.json

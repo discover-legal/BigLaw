@@ -37,8 +37,10 @@ func (s *Server) authMiddleware() gin.HandlerFunc {
 		}
 
 		// These endpoints authenticate themselves (OAuth state or provider
-		// signatures) and therefore form the explicit public route set.
-		if isPublicRoute(c.Request.Method, c.Request.URL.Path) {
+		// signatures) and therefore form the explicit public route set —
+		// matched on the route gin actually selected, not on a decoded
+		// path, so no other route can borrow a public path's exemption.
+		if isPublicRoute(c.Request.Method, c.FullPath()) {
 			c.Next()
 			return
 		}
@@ -73,12 +75,14 @@ func (s *Server) bearerUser(authorization string) *types.SessionUser {
 	}
 }
 
-func isPublicRoute(method, path string) bool {
-	if method == http.MethodPost && (path == "/bots/slack/events" || path == "/bots/teams/webhook") {
+// isPublicRoute reports whether the matched route pattern (c.FullPath) is
+// public; an unmatched request has an empty pattern and is not.
+func isPublicRoute(method, route string) bool {
+	if method == http.MethodPost && (route == "/bots/slack/events" || route == "/bots/teams/webhook") {
 		return true
 	}
 	if method == http.MethodGet {
-		switch path {
+		switch route {
 		case "/auth/providers", "/auth/google/login", "/auth/google/callback",
 			"/auth/microsoft/login", "/auth/microsoft/callback",
 			"/auth/linkedin/login", "/auth/linkedin/callback", "/auth/clio/callback":
