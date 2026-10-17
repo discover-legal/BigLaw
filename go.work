@@ -1,6 +1,0 @@
-// Lets `go run ./biglaw-go/cmd/biglaw` work from the repo root, which is
-// required at runtime anyway: templates/, deadlines/rules/, agents/, and
-// adapters/ resolve relative to the working directory.
-go 1.25.0
-
-use ./biglaw-go
