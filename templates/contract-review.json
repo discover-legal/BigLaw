@@ -2,7 +2,11 @@
   "id": "contract-review",
   "name": "Contract Review & Risk Summary",
   "description": "Multi-agent review of a contract or agreement of any type. Extracts the deal, maps obligations and risk allocation, flags unusual or one-sided terms, and produces a decision-ready risk summary. Jurisdiction-neutral — applies the contract's own governing law.",
-  "taskDescriptionTemplate": "Review the following contract and produce a structured risk summary.\n\nMatter: {{description}}\n\nDocuments provided: {{document}}\n\nThe review should:\n1. Identify the parties, term, governing law, and dispute-resolution forum.\n2. Map each party's key obligations, conditions, and termination triggers, with clause references.\n3. Analyse the risk-allocation machinery: warranties, indemnities, limitation/exclusion of liability, caps.\n4. Flag ambiguous, one-sided, missing, or unusual terms relative to market standard for this contract type.\n5. Assess enforceability concerns under the governing law.\n6. Summarise the key risks and recommended actions, prioritised, for a business reader.",
+  "promptTemplate": "Review the following contract and produce a structured risk summary.\n\nMatter: {{description}}\n\nDocuments provided: {{document}}\n\nThe review should:\n1. Identify the parties, term, governing law, and dispute-resolution forum.\n2. Map each party's key obligations, conditions, and termination triggers, with clause references.\n3. Analyse the risk-allocation machinery: warranties, indemnities, limitation/exclusion of liability, caps.\n4. Flag ambiguous, one-sided, missing, or unusual terms relative to market standard for this contract type.\n5. Assess enforceability concerns under the governing law.\n6. Summarise the key risks and recommended actions, prioritised, for a business reader.",
+  "substitutions": {
+    "description": "the matter described in the attached documents",
+    "document": "see the documents attached to this task"
+  },
   "workflowType": "review",
   "preferredDomains": ["analysis", "review", "drafting"],
   "source": "custom",

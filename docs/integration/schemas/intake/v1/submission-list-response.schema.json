@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.discover.legal/biglaw/intake/v1/submission-list-response.schema.json",
+  "title": "GET /intake/clients/:externalId/submissions response",
+  "type": "object",
+  "required": [
+    "submissions"
+  ],
+  "properties": {
+    "submissions": {
+      "type": "array",
+      "items": {
+        "$ref": "submission.schema.json"
+      }
+    }
+  }
+}

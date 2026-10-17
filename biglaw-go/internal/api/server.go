@@ -51,8 +51,11 @@ type Server struct {
 	dockets    *dockets.Monitor    // set by AttachDockets; nil when disabled
 	regulatory *regulatory.Monitor // set by AttachRegulatory; nil when disabled
 	lpm        *lpm.Service        // set by AttachLPM; nil when LPM is disabled
-	router     *gin.Engine
-	started    time.Time
+	// publicRoutes are mounted modules' self-authenticating route predicates
+	// (see Mount); consulted by the auth middleware alongside isPublicRoute.
+	publicRoutes []func(method, route string) bool
+	router       *gin.Engine
+	started      time.Time
 }
 
 // New creates a Server, registers all routes, and returns it.

@@ -30,3 +30,21 @@ func TestValidateSecurity(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateSecurityIntakeSecrets(t *testing.T) {
+	long := "0123456789abcdef0123456789abcdef"
+	for v, ok := range map[string]bool{
+		"":                           true,
+		long:                         true,
+		long + ", " + long + "-next": true, // rotation list
+		"short":                      false,
+		long + ",short":              false,
+		" , " + long + " , ":         true,
+	} {
+		cfg := &Config{}
+		cfg.Intake.HMACSecret = v
+		if err := ValidateSecurity(cfg); (err == nil) != ok {
+			t.Errorf("INTAKE_HMAC_SECRET=%q: err=%v, want ok=%v", v, err, ok)
+		}
+	}
+}

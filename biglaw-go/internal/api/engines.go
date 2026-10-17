@@ -22,6 +22,7 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/citations"
 	"github.com/discover-legal/biglaw-go/internal/headnotes"
 	"github.com/discover-legal/biglaw-go/internal/knowledge"
+	"github.com/discover-legal/biglaw-go/internal/modules"
 	"github.com/discover-legal/biglaw-go/internal/playbook"
 	"github.com/discover-legal/biglaw-go/internal/precedent"
 	"github.com/discover-legal/biglaw-go/internal/redline"
@@ -48,7 +49,9 @@ func (s *Server) registerEnginesRoutes(r *gin.Engine) {
 	r.GET("/citations/check", s.handleCitationCheckGet)
 	r.POST("/citations/check", s.handleCitationCheckPost)
 
-	r.GET("/clients/:id/briefing", s.handleClientBriefing)
+	if modules.Default.Enabled("briefing") {
+		r.GET("/clients/:id/briefing", s.handleClientBriefing)
+	}
 }
 
 // ─── Lazy engine construction ─────────────────────────────────────────────────

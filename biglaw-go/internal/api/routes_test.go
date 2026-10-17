@@ -12,12 +12,19 @@ import (
 	"testing"
 
 	"github.com/discover-legal/biglaw-go/internal/config"
+	"github.com/discover-legal/biglaw-go/internal/crm"
+	"github.com/discover-legal/biglaw-go/internal/intake"
 	"github.com/discover-legal/biglaw-go/internal/lpm"
+	"github.com/discover-legal/biglaw-go/internal/modules"
 	"github.com/discover-legal/biglaw-go/internal/providers"
 )
 
-// registeredPrefixes builds the full production router (including the
-// optional LPM group) and returns the first path segment of every route.
+// registeredPrefixes builds the full production router — including the
+// optional LPM group and the optional HTTP modules (crm, intake) that
+// cmd/biglaw mounts when they are enabled — and returns the first path
+// segment of every route. The modules are imported here only so this
+// lock-step check sees every route a deployment can serve; the core itself
+// never imports them.
 func registeredPrefixes(t *testing.T) map[string]bool {
 	t.Helper()
 	cfg := &config.Config{}
@@ -25,6 +32,10 @@ func registeredPrefixes(t *testing.T) map[string]bool {
 	s := &Server{cfg: cfg, provReg: providers.NewRegistry(cfg)}
 	s.router = s.newRouter()
 	s.AttachLPM(&lpm.Service{})
+	modules.Default.Register(crm.ModuleName, "test", true, "test")
+	modules.Default.Register(intake.ModuleName, "test", true, "test")
+	s.Mount(crm.NewHTTP(nil))
+	s.Mount(intake.NewHTTP(nil, nil, nil, nil, intake.HTTPConfig{}))
 
 	out := map[string]bool{}
 	for _, rt := range s.router.Routes() {

@@ -43,6 +43,72 @@ reviews with a citation-verification ladder (exact → tolerant → paraphrase j
 workbench views, `biglaw demo` (one-command end-to-end tour, ~$0.03), and BELO
 (`internal/ontology/` — epistemic ontology, graph-discovered section spine).
 
+**Client entry point + CRM (latest):** the platform now has a **module registry**
+(`internal/modules/` — slim always-on core, every optional subsystem is a named module
+toggled with `BIGLAW_MODULE_<NAME>=on|off`, states at `GET /modules`), a **neurosymbolic
+client CRM** (`internal/crm/` — typed facts with provenance under **bidirectional
+consent**: client-proposed facts await a lawyer, lawyer-proposed facts await the client;
+approval fires supersedence, adverse-party conflict checks, and advocacy sync into
+ClientVoice; embedded facts answer semantic profile queries via `POST /crm/profiles/:id/query`),
+and a **client intake channel** (`internal/intake/` — the affidavit-maker portal at
+discover.legal submits draft documents over an HMAC-signed `/intake/*` API; every
+submission is conflict-checked in both directions first — a hit puts it on
+`conflict_hold` with nothing ingested until a partner acknowledges (with a reason) or
+declines; clear submissions admit the prospect to the roster, open a matter classified by
+BigLaw's own practice-area/NOSLEGAL vocabulary, ingest the draft, and queue for a lawyer).
+Contract: `docs/integration/affidavit-intake.md` + JSON Schemas in
+`docs/integration/schemas/intake/v1/` (the integration surface; pinned by
+`internal/intake/contract_test.go`). intake/crm are a self-contained optional module pair:
+the core API never imports them — `cmd/biglaw` mounts them through the
+`modules.HTTPModule` seam (`api.Server.Mount`) only when enabled.
+
+## Modules
+
+The always-on core is the orchestrator, agents, DyTopo, documents/knowledge, and the
+REST API. Everything else is a registered module (`internal/modules/`), resolved at boot
+from config defaults and overridable per-module:
+
+| Module | Default | What it gates |
+|---|---|---|
+| `intake` | on when `INTAKE_HMAC_SECRET` set | Client-portal intake API (`/intake/*`) |
+| `crm` | follows `intake` | Neurosymbolic client profiles + consent queue (`/crm/*`) |
+| `clientvoice` | on | Remy/CRM advocacy briefs + matter notifications (`/matters/:mn/client-voice`) |
+| `lpm` | `LPM_ENABLED` | Status reports, email intake, drafting (`/lpm/*`) |
+| `billing` | on | Pre-bills, LEDES, invoices, OCG routes |
+| `bots` | on when Teams/Slack creds set | Big Michael channel agent (`/bots/*`) |
+| `briefing` | on | Client-intelligence briefing (`/clients/:id/briefing`) |
+| `monitor-budget` / `monitor-dockets` / `monitor-regulatory` | their env flags | Background monitors |
+
+`BIGLAW_MODULE_BILLING=off` removes the billing routes entirely (404, as if not
+compiled in). `GET /modules` (partner) reports every module, its state, and why.
+
+## Client intake + CRM (affidavit-maker integration)
+
+The affidavit-maker app (discover.legal) doubles as the firm's client entry point. In
+firm mode it submits client drafts over `/intake/*` (HMAC-SHA256 request signing,
+`INTAKE_HMAC_SECRET`); standalone it stays a pure self-rep product. Full wire contract
+(signing scheme, endpoints, fact vocabulary, consent semantics):
+`docs/integration/affidavit-intake.md` (mirrored in the affidavit-maker repo).
+
+Conflict holds: `POST /intake/submissions/:id/conflict` (partner;
+`{decision: acknowledge|decline, conflictReason}`) is the only way out of `conflict_hold`;
+the portal only ever sees `hasConflict`, never who the conflict is with. Holds are keyed to
+the portal *identity* (every name and adverse party it has ever supplied is checked; an
+open or declined hold holds its later submissions too — a declined identity is re-held
+each time, never auto-admitted); acknowledging re-runs the check (`409` + new detail on a
+new hit); held submissions, prospect CRM profiles and conflict detail are partner/assignee
+only (Rule 1.18 screening). Name matching (`clients.NormalizeName`/`NamesMatch`) folds
+accents, punctuation, hidden characters, surname-first and initials.
+
+Firm-side loop: `GET /intake/queue` → `POST /intake/submissions/:id/claim` →
+`POST /intake/submissions/:id/task` (spin an orchestrator review over the ingested
+draft) → `PATCH /intake/submissions/:id` (`in_review`/`ready`/`rejected` — statuses the
+client sees in the portal). CRM consent loop: `GET /crm/proposals` (client-proposed facts
+awaiting the firm) → `POST /crm/proposals/:id/decision`; lawyer proposals via
+`POST /crm/profiles/:id/facts` go out to the client for approval. Approved
+`goal|concern|constraint|preference` facts compile into the per-matter ClientVoice brief
+the orchestrator surfaces at human gates — the client advocacy engine runs off the CRM.
+
 ## Quick start
 
 **The platform is Go** (`biglaw-go/` — single static binary, runs on a Raspberry Pi 4GB or
@@ -827,7 +893,7 @@ Both results are stored in the Qdrant document payload (`practiceArea`, `detecte
 
 ### Conflict of interest
 
-`ClientStore.checkConflict(name)` does a case-insensitive substring match between the incoming client name and every existing client's `adversaries` array (and the new client's adversaries against existing client names). It runs automatically on `POST /clients` and on a `PATCH /clients/:id` that changes the name or adverse parties (for the hits the change introduces), over every adverse party (max 1000): any hit returns **409** listing every conflict with an `id` and changes nothing; re-submitting with `acknowledgedConflictIds` (exactly the ids shown) and a non-empty `conflictReason` proceeds and audits the override (`client.conflict_overridden`: who, reason, every hit). Partners can also call `POST /clients/check-conflict` standalone.
+`ClientStore.CheckConflict` matches names with `clients.NamesMatch` (normalised: case, diacritics, punctuation and corporate suffixes folded; token order and middle initials ignored; containment either way) between the incoming client name and every existing client's `adversaries` array (and the new client's adversaries against existing client names). It runs automatically on `POST /clients` and on a `PATCH /clients/:id` that changes the name or adverse parties (for the hits the change introduces), over every adverse party (max 1000): any hit returns **409** listing every conflict with an `id` and changes nothing; re-submitting with `acknowledgedConflictIds` (exactly the ids shown) and a non-empty `conflictReason` proceeds and audits the override (`client.conflict_overridden`: who, reason, every hit). Partners can also call `POST /clients/check-conflict` standalone.
 
 ## Known limitations
 
