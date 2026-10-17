@@ -95,6 +95,9 @@ func run(ctx context.Context, args []string, getenv func(string) string, environ
 		if names := NotYetRead(getenv); len(names) > 0 {
 			log.Warn("these variables are set but not read by this build yet", "names", strings.Join(names, ","))
 		}
+		if cfg.ModelKey != "" && strings.HasPrefix(strings.ToLower(cfg.ModelURL), "http:") {
+			log.Warn("BIGLAW_MODEL_KEY will be sent over plain http; use https unless the endpoint is on this machine", "endpoint", shown("BIGLAW_MODEL_URL", cfg.ModelURL))
+		}
 		if cfg.AllowAnthropic || cfg.AllowAWS {
 			log.Warn("vendor breaker disarmed", "ALLOW_ANTHROPIC", cfg.AllowAnthropic, "ALLOW_AWS", cfg.AllowAWS)
 		}

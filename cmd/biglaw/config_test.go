@@ -6,8 +6,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/discover-legal/BigLaw/internal/model"
 )
 
 func env(kv ...string) func(string) string {
@@ -38,10 +44,10 @@ func TestConfigDefaults(t *testing.T) {
 		"BIGLAW_PUBLIC_URL          http://127.0.0.1:3101  [default, read from PR 8]",
 		"BIGLAW_BUDGET_CALLS        150  [default, read from PR 4]",
 		"BIGLAW_BUDGET_USD          5  [default, read from PR 4]",
-		"BIGLAW_LOCAL_WATTS         250  [default, read from PR 2]",
+		"BIGLAW_LOCAL_WATTS         250  [default]",
 		"BIGLAW_COLLAPSE_THRESHOLD  0.5  [default, read from PR 4]",
 		"BIGLAW_COLLAPSE_ACTION     strict  [default, read from PR 4]",
-		"BIGLAW_MODEL_KEY           (unset)  [read from PR 2]",
+		"BIGLAW_MODEL_KEY           (unset)\n",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("Describe lacks %q:\n%s", want, out)
@@ -66,7 +72,8 @@ func TestConfigRejectsBadValues(t *testing.T) {
 		"BIGLAW_MODEL_URL": {"localhost:11434", "file:///etc/passwd", "http://user:pw@h/v1", "https://KEY@gw.example/v1",
 			"https://api.anthropic\u3002com/v1", "https://api.anthropic%E3%80%82com/v1", "https://api.anthropic%2Ecom/v1", // breaker evasions
 			"https://Zm9vYmFy/c2VjcmV0S0VZ+abc==@gw.example.com/v1", "https://user:/pw@gw.example.com/v1", "https://user:1234/rest@gw.example.com/v1", // r3 P1
-			"http://[::1%25zone]:80/", "https://gw.example/v1/a@b"},
+			"http://[::1%25zone]:80/", "https://gw.example/v1/a@b",
+			"https://h.com:99999", "https://.", "https://..:80/v1", "http://-_/v1"}, // r4 L1: port range, a host with no letter or digit
 		"BIGLAW_DATABASE_URL": {"POSTGRES://u:p@h/db", "mysql://u:p@h/db", "postgres://u:p/w@h/db"},
 	}
 	for name, values := range cases {
@@ -217,10 +224,10 @@ func TestDescribeRedactsSecrets(t *testing.T) {
 		"BIGLAW_MODEL_URL", "https://gw.example/v1/chat?key=k&b=2#f", "BIGLAW_PUBLIC_URL", "HTTPS://Biglaw.Example:8443",
 		"BIGLAW_PRICES", "https://K@prices.example/p.json"), []string{"PGPASSWORD=x", "PGHOST=db", "PATH=/bin"})
 	for _, want := range []string{
-		"BIGLAW_MODEL_KEY           (set, hidden)  [env, read from PR 2]",
+		"BIGLAW_MODEL_KEY           (set, hidden)  [env]",
 		`BIGLAW_DATABASE_URL        host="db" port=5432 user="biglaw" dbname="biglaw" sslmode="disable" password=(set, hidden)  [env]`,
 		"BIGLAW_MODEL_URL           https://gw.example  [env]", // host only: never path, query or fragment
-		"BIGLAW_PRICES              (set, not shown: not an http(s) URL with a plain host and no @)  [env, read from PR 2]",
+		"BIGLAW_PRICES              (set, not shown: not an http(s) URL with a plain host and no @)  [env]",
 		"BIGLAW_PUBLIC_URL          https://Biglaw.Example:8443  [env, read from PR 8]",
 		"BIGLAW_OIDC_ISSUER         microsoft:contoso.onmicrosoft.com  [env, read from PR 8]",
 		"lib/pq also reads these libpq variables (values not shown): PGHOST, PGPASSWORD",
@@ -270,8 +277,72 @@ func TestUnknownAndNotYetReadVars(t *testing.T) {
 	if strings.Join(got, ",") != "BIGLAW_DATABASE_URI,BIGLAW_MODEL_LAED" {
 		t.Fatalf("UnknownVars = %v", got)
 	}
-	got = NotYetRead(env("BIGLAW_ADDR", "x", "BIGLAW_MODEL_KEY", "k", "BIGLAW_AI_RATE", "100", "ALLOW_AWS", "1"))
-	if strings.Join(got, ",") != "BIGLAW_MODEL_KEY,BIGLAW_AI_RATE" {
+	got = NotYetRead(env("BIGLAW_ADDR", "x", "BIGLAW_MODEL_KEY", "k", "BIGLAW_LOCAL_WATTS", "9", "BIGLAW_BUDGET_CALLS", "5", "BIGLAW_AI_RATE", "100", "ALLOW_AWS", "1"))
+	if strings.Join(got, ",") != "BIGLAW_BUDGET_CALLS,BIGLAW_AI_RATE" {
 		t.Fatalf("NotYetRead = %v", got)
+	}
+}
+
+// TestConfigModelVars: PR 2's variables join Config and are validated, with
+// every problem reported at once and no value of a secret in any message.
+func TestConfigModelVars(t *testing.T) {
+	c, err := Load(env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_MODEL_URL", "http://ollama:11434/v1", "BIGLAW_MODEL_KEY", "sk-k",
+		"BIGLAW_MODEL_LEAD", "qwen2.5:14b", "BIGLAW_MODEL_CRITIC", "anthropic/claude-haiku-4.5", "BIGLAW_LOCAL_WATTS", "65.5",
+		"BIGLAW_PRICES", `{"qwen2.5:14b": {"in": 0.5, "out": 1}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.ModelKey != "sk-k" || c.LocalWatts != 65.5 || c.Roles != (model.Roles{Lead: "qwen2.5:14b", Critic: "anthropic/claude-haiku-4.5"}) {
+		t.Fatalf("config = %+v", c)
+	}
+	for role, want := range map[model.Role]string{model.Lead: "qwen2.5:14b", model.Specialist: "qwen2.5:14b", model.Critic: "anthropic/claude-haiku-4.5"} {
+		if got, err := c.Roles.Model(role); err != nil || got != want {
+			t.Errorf("Roles.Model(%s) = %q, %v; want %q (unset roles fall back to the lead)", role, got, err, want)
+		}
+	}
+	if r, _, op := c.Prices.Lookup("qwen2.5:14b"); r == nil || *r != (model.Rate{In: 0.5, Out: 1}) || !op {
+		t.Errorf("BIGLAW_PRICES did not reach Config: %v %v", r, op)
+	}
+	// Defaults: no model, 250 W, the built-in table.
+	c, err = Load(env("BIGLAW_DATABASE_URL", dsn))
+	if err != nil || c.LocalWatts != 250 || c.Roles != (model.Roles{}) || c.Prices == nil {
+		t.Fatalf("defaults: %+v, %v", c, err)
+	}
+	if _, err := c.Roles.Model(model.Lead); !errors.Is(err, model.ErrNotConfigured) {
+		t.Errorf("no lead: %v, want ErrNotConfigured", err)
+	}
+
+	bad := filepath.Join(t.TempDir(), "prices.json")
+	if err := os.WriteFile(bad, []byte(`{"gpt-x": {"in": "PRICEFILESECRET"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = Load(env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_MODEL_KEY", "sk SECRETKEY", "BIGLAW_MODEL_SPECIALIST", "a b",
+		"BIGLAW_MODEL_CRITIC", "x\nBIGLAW_FORGED", "BIGLAW_LOCAL_WATTS", "NaN", "BIGLAW_PRICES", bad))
+	msg := fmt.Sprint(err)
+	for _, want := range []string{
+		"BIGLAW_MODEL_URL: is required when BIGLAW_MODEL_KEY",
+		"BIGLAW_MODEL_KEY: contains white space",
+		`BIGLAW_MODEL_SPECIALIST: a b is not a model id`,
+		`BIGLAW_MODEL_CRITIC: "x\nBIGLAW_FORGED" is not a model id`,
+		"BIGLAW_MODEL_LEAD: is required when BIGLAW_MODEL_SPECIALIST or _CRITIC is set",
+		"BIGLAW_LOCAL_WATTS: NaN is not a number of watts",
+		"BIGLAW_PRICES: the file it names: entry 1",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("combined error lacks %q:\n%s", want, msg)
+		}
+	}
+	if strings.Contains(msg, "SECRET") {
+		t.Errorf("an error echoed a secret or the prices file:\n%s", msg)
+	}
+	for _, w := range []string{"-1", "100000.5", "Inf", "1e9", "250W", "0x10"} {
+		if _, err := Load(env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_LOCAL_WATTS", w)); err == nil {
+			t.Errorf("BIGLAW_LOCAL_WATTS=%s accepted", w)
+		}
+	}
+	for _, w := range []string{"0", "100000", "1e3"} {
+		if _, err := Load(env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_LOCAL_WATTS", w)); err != nil {
+			t.Errorf("BIGLAW_LOCAL_WATTS=%s refused: %v", w, err)
+		}
 	}
 }

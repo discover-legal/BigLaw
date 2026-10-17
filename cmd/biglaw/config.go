@@ -15,8 +15,12 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/discover-legal/BigLaw/internal/model"
 	"github.com/discover-legal/BigLaw/internal/store"
 )
+
+// builtPR is the last build PR whose variables this build reads.
+const builtPR = 2
 
 // envVar is one runtime environment variable. This table is the complete
 // configuration surface (README § Configuration); scripts/loc.py counts the
@@ -35,7 +39,7 @@ var envVars = []envVar{
 	{name: "BIGLAW_DATABASE_URL", secret: true, pr: 1}, // password inside; printed redacted
 	{name: "BIGLAW_ADDR", def: "127.0.0.1:3101", pr: 1},
 	{name: "BIGLAW_PUBLIC_URL", def: "http://127.0.0.1:3101", url: true, pr: 8},
-	{name: "BIGLAW_MODEL_URL", url: true, pr: 1}, // vendor breaker today; model client in PR 2
+	{name: "BIGLAW_MODEL_URL", url: true, pr: 1}, // the vendor breaker (PR 1) and the model client (PR 2)
 	{name: "BIGLAW_MODEL_KEY", secret: true, pr: 2},
 	{name: "BIGLAW_MODEL_LEAD", pr: 2},
 	{name: "BIGLAW_MODEL_SPECIALIST", pr: 2},
@@ -59,7 +63,11 @@ var envVars = []envVar{
 type Config struct {
 	DatabaseURL    string
 	Addr           string
-	ModelURL       string // checked by the vendor breaker only, until PR 2
+	ModelURL       string
+	ModelKey       string
+	Roles          model.Roles // read only through roles(), so PR 3's BIGLAW_MODELS is a local change
+	LocalWatts     float64
+	Prices         *model.Prices
 	AllowAnthropic bool
 	AllowAWS       bool
 }
@@ -78,6 +86,7 @@ func Load(getenv func(string) string) (Config, error) {
 		DatabaseURL:    get("BIGLAW_DATABASE_URL"),
 		Addr:           get("BIGLAW_ADDR"),
 		ModelURL:       get("BIGLAW_MODEL_URL"),
+		ModelKey:       get("BIGLAW_MODEL_KEY"),
 		AllowAnthropic: truthy(get("ALLOW_ANTHROPIC")),
 		AllowAWS:       truthy(get("ALLOW_AWS")),
 	}
@@ -92,13 +101,48 @@ func Load(getenv func(string) string) (Config, error) {
 		bad("BIGLAW_ADDR", "%s has no host; write 127.0.0.1:%s (or 0.0.0.0:%s with serve --allow-no-auth, see README § Exposure)", c.Addr, port, port)
 	}
 	if c.ModelURL != "" && httpURL(c.ModelURL) == nil {
-		bad("BIGLAW_MODEL_URL", "%s must be an http(s) URL with a plain ASCII host (an internationalised name in its xn-- form) and no \"@\": "+
+		bad("BIGLAW_MODEL_URL", "%s must be an http(s) URL with a plain ASCII host (an internationalised name in its xn-- form), a port up to 65535 and no \"@\": "+
 			"put the key in BIGLAW_MODEL_KEY, not in the URL, and write any other @ as %%40", shown("BIGLAW_MODEL_URL", c.ModelURL))
+	}
+	var roleErrs []error
+	c.Roles, roleErrs = roles(get)
+	errs = append(errs, roleErrs...)
+	if c.ModelURL == "" && (c.ModelKey != "" || c.Roles != (model.Roles{})) {
+		bad("BIGLAW_MODEL_URL", "is required when BIGLAW_MODEL_KEY or a BIGLAW_MODEL_* role is set (the key and models need an endpoint)")
+	}
+	if strings.ContainsFunc(c.ModelKey, func(r rune) bool { return r <= ' ' || r == 0x7f }) {
+		bad("BIGLAW_MODEL_KEY", "contains white space or a control character (value not shown)")
+	}
+	w, err := strconv.ParseFloat(get("BIGLAW_LOCAL_WATTS"), 64)
+	if c.LocalWatts = w; err != nil || !(w >= 0 && w <= 100000) {
+		bad("BIGLAW_LOCAL_WATTS", "%s is not a number of watts from 0 to 100000", shown("BIGLAW_LOCAL_WATTS", get("BIGLAW_LOCAL_WATTS")))
+	}
+	if c.Prices, err = model.LoadPrices(get("BIGLAW_PRICES")); err != nil {
+		bad("BIGLAW_PRICES", "%v", err)
 	}
 	if err := errors.Join(errs...); err != nil {
 		return c, err
 	}
 	return c, GuardVendors(c)
+}
+
+var modelID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,199}$`)
+
+// roles reads the model id per role (README § Configuration): an unset
+// specialist or critic uses the lead's, and neither may be set without it.
+func roles(get func(string) string) (model.Roles, []error) {
+	r := model.Roles{Lead: get("BIGLAW_MODEL_LEAD"), Specialist: get("BIGLAW_MODEL_SPECIALIST"), Critic: get("BIGLAW_MODEL_CRITIC")}
+	var errs []error
+	for name, v := range map[string]string{"BIGLAW_MODEL_LEAD": r.Lead, "BIGLAW_MODEL_SPECIALIST": r.Specialist, "BIGLAW_MODEL_CRITIC": r.Critic} {
+		if v != "" && !modelID.MatchString(v) {
+			errs = append(errs, fmt.Errorf("%s: %s is not a model id (letters, digits and . _ : / + -, up to 200)", name, shown(name, v)))
+		}
+	}
+	if r.Lead == "" && (r.Specialist != "" || r.Critic != "") {
+		errs = append(errs, errors.New("BIGLAW_MODEL_LEAD: is required when BIGLAW_MODEL_SPECIALIST or _CRITIC is set (unset roles fall back to the lead)"))
+	}
+	slices.SortFunc(errs, func(a, b error) int { return strings.Compare(a.Error(), b.Error()) })
+	return r, errs
 }
 
 // value is getenv(name) trimmed, or the table default when empty.
@@ -184,7 +228,7 @@ func UnknownVars(environ []string) []string {
 func NotYetRead(getenv func(string) string) []string {
 	var out []string
 	for _, e := range envVars {
-		if e.pr > 1 && strings.TrimSpace(getenv(e.name)) != "" {
+		if e.pr > builtPR && strings.TrimSpace(getenv(e.name)) != "" {
 			out = append(out, e.name)
 		}
 	}
@@ -207,7 +251,7 @@ func Describe(getenv func(string) string, environ []string) string {
 		} else {
 			val = shown(e.name, val)
 		}
-		if e.pr > 1 {
+		if e.pr > builtPR {
 			src = strings.TrimPrefix(src+", ", ", ") + "read from PR " + strconv.Itoa(e.pr)
 		}
 		fmt.Fprintf(&b, "%-26s %s", e.name, val)
@@ -283,7 +327,9 @@ var (
 // rule CheckDSN applies to the database URL). nil for anything else.
 func httpURL(raw string) *url.URL {
 	u, err := url.Parse(raw)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Opaque != "" || !plainHost.MatchString(u.Host) || strings.Contains(raw, "@") {
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Opaque != "" || !plainHost.MatchString(u.Host) || strings.Contains(raw, "@") ||
+		!strings.ContainsFunc(u.Hostname(), func(r rune) bool { return r < 128 && (unicode.IsLetter(r) || unicode.IsDigit(r)) }) ||
+		u.Port() != "" && !validPort(u.Port()) {
 		return nil
 	}
 	return u
