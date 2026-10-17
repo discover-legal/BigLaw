@@ -4,7 +4,7 @@
 # missing database a failure instead of a skip (CI does).
 GO ?= go
 VERSION ?= 2.0.0-dev
-STATICCHECK ?= honnef.co/go/tools/cmd/staticcheck@2025.1.1
+STATICCHECK ?= honnef.co/go/tools/cmd/staticcheck@2026.1
 GOVULNCHECK ?= golang.org/x/vuln/cmd/govulncheck@v1.1.4
 # `go run tool@version` picks its toolchain from the tool's go.mod, so pin it
 # to ours: a tool built with an older Go cannot analyse this module.

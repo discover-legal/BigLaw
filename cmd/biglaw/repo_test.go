@@ -137,6 +137,18 @@ func TestGoVersionPinnedEverywhere(t *testing.T) {
 		t.Fatalf("go.mod has %d toolchain lines, want 1", len(toolchain))
 	}
 	want := toolchain[0]
+	// The language version is the same release line (go 1.N.0 with toolchain go1.N.x),
+	// and the README names both.
+	minor := regexp.MustCompile(`^\d+\.\d+`).FindString(want)
+	if got := find("go.mod", `(?m)^go (\S+)$`); !slices.Equal(got, []string{minor + ".0"}) {
+		t.Errorf("go.mod's go line is %v, want [%s.0] for toolchain go%s", got, minor, want)
+	}
+	readme := readRepo(t, "README.md")
+	for _, s := range []string{"golang:" + want + "-alpine", "(Go " + minor + "+,"} {
+		if !strings.Contains(readme, s) {
+			t.Errorf("README.md does not name %q (go.mod pins toolchain go%s)", s, want)
+		}
+	}
 	if got := find("Dockerfile", `(?m)^FROM golang:(\S+?)-alpine`); !slices.Equal(got, []string{want}) {
 		t.Errorf("Dockerfile builds with Go %v, go.mod pins %s", got, want)
 	}

@@ -137,7 +137,7 @@ constrain it, though: unquoted, a value is cut at ` #` and `$` is expanded (`a$b
 `abc #def` becomes `abc`, on both the Postgres and the biglaw side). Use a hex password, or
 single-quote your own (`POSTGRES_PASSWORD='…'`) without a `'` in it.
 
-Without Docker (Go 1.25+, any supported Postgres ≥ 14):
+Without Docker (Go 1.26+, any supported Postgres ≥ 14):
 
 ```bash
 createdb biglaw
@@ -275,7 +275,7 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
   operator adds after checkout is outside the repository; publishing beyond loopback there is the
   operator's own act.
 - `govulncheck` runs only in CI: the build sandbox cannot reach `vuln.go.dev`.
-- GitHub Actions and container images are pinned to tags (`@v4`, `golang:1.25.14-alpine`,
+- GitHub Actions and container images are pinned to tags (`@v4`, `golang:1.26.9-alpine`,
   `postgres:14`, `postgres:16`, `postgres:16-alpine`), not to SHAs/digests, so an upstream retag changes what CI
   runs.
 - Files: there is no per-matter scoping or owner yet (`GetFile` takes only an id; PR 3 adds the
