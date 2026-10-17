@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { api } from "./api";
-import type { AppSettings, AuditEntry, Job, JobStatus, LawyerProfile, QueueStats, UserMode } from "./types";
+import type { AppSettings, AuditEntry, Job, JobStatus, LawyerProfile, QueueStats, UserMode, Notify } from "./types";
 import { PRACTICE_AREAS, MODE_LABEL } from "./types";
 import { ToneImportModal } from "./ToneImportModal";
 import { ErrorState } from "./Library";
@@ -9,7 +9,7 @@ import { timeAgo } from "./primitives";
 import { tone, auditSummary } from "./AuditRail";
 
 export function AdminPanel({ notify, isPartner, profiles, onProfilesChange, me }: {
-  notify: (m: string) => void;
+  notify: Notify;
   isPartner: boolean; profiles: LawyerProfile[]; onProfilesChange: () => void;
   me?: { profileId: string } | null;
 }) {
@@ -22,7 +22,7 @@ export function AdminPanel({ notify, isPartner, profiles, onProfilesChange, me }
   const [editPatch, setEditPatch] = useState<Partial<LawyerProfile>>({});
   const [toneModalProfile, setToneModalProfile] = useState<LawyerProfile | null>(null);
 
-  useEffect(() => { api.getSettings().then(setS).catch((e) => notify((e as Error).message)); }, [notify]);
+  useEffect(() => { api.getSettings().then(setS).catch((e) => notify((e as Error).message, "error")); }, [notify]);
 
   function patch<K extends keyof AppSettings>(section: K, key: keyof AppSettings[K], value: unknown) {
     setS((prev) => prev && ({ ...prev, [section]: { ...prev[section], [key]: value } }));
@@ -43,24 +43,24 @@ export function AdminPanel({ notify, isPartner, profiles, onProfilesChange, me }
       });
       setS(next); setApiKey("");
       notify("Settings saved — applied live");
-    } catch (e) { notify((e as Error).message); } finally { setBusy(false); }
+    } catch (e) { notify((e as Error).message, "error"); } finally { setBusy(false); }
   }
 
   async function addLawyer() {
-    if (!np.name.trim() || !np.email.trim()) { notify("Name and email required"); return; }
+    if (!np.name.trim() || !np.email.trim()) { notify("Name and email required", "error"); return; }
     setBusy(true);
     try {
       await api.createProfile({ name: np.name, email: np.email, role: np.role, title: np.title || undefined, practiceAreas: np.practiceAreas, bio: np.bio || undefined });
       setNp({ name: "", email: "", role: "lawyer", title: "", practiceAreas: [], bio: "" });
       onProfilesChange();
       notify("User added");
-    } catch (e) { notify((e as Error).message); } finally { setBusy(false); }
+    } catch (e) { notify((e as Error).message, "error"); } finally { setBusy(false); }
   }
 
   async function removeLawyer(id: string) {
     if (!window.confirm("Remove this user?")) return;
     try { await api.deleteProfile(id); onProfilesChange(); notify("User removed"); }
-    catch (e) { notify((e as Error).message); }
+    catch (e) { notify((e as Error).message, "error"); }
   }
 
   function startEdit(p: LawyerProfile) {
@@ -75,7 +75,7 @@ export function AdminPanel({ notify, isPartner, profiles, onProfilesChange, me }
       setEditingId(null);
       onProfilesChange();
       notify("Profile updated");
-    } catch (e) { notify((e as Error).message); } finally { setBusy(false); }
+    } catch (e) { notify((e as Error).message, "error"); } finally { setBusy(false); }
   }
 
   function togglePA(pa: string, current: string[] | undefined, setter: (v: string[]) => void) {
@@ -492,7 +492,7 @@ const JOB_STATUS_PILL: Record<JobStatus, string> = {
   pending: "", running: "gold", done: "green", failed: "red", dead_letter: "red",
 };
 
-function JobsPanel({ notify }: { notify: (m: string) => void }) {
+function JobsPanel({ notify }: { notify: Notify }) {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [stats, setStats] = useState<QueueStats | null>(null);
   const [statusFilter, setStatusFilter] = useState<JobStatus | "">("");
@@ -520,7 +520,7 @@ function JobsPanel({ notify }: { notify: (m: string) => void }) {
       await api.retryJob(id);
       notify("Job re-queued");
       load();
-    } catch (e) { notify((e as Error).message); }
+    } catch (e) { notify((e as Error).message, "error"); }
     finally { setRetrying(null); }
   }
 

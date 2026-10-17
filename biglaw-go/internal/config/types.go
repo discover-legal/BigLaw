@@ -194,6 +194,12 @@ type DocuSealConfig struct {
 	APIKey  string
 	URL     string
 	Enabled bool
+	// OperatorURL is DOCUSEAL_URL as the operator configured it. The live URL
+	// may later be replaced by an admin through PUT /settings; only the
+	// operator's value is trusted to point at an internal host (e.g. a
+	// DocuSeal container on the compose network). Any other URL is called
+	// through the SSRF-guarded client.
+	OperatorURL string
 }
 
 // ClientVoiceConfig governs the Remy/CNTXT client-advocate integration.

@@ -4,7 +4,7 @@
 import { useRef, useState, useCallback, type DragEvent, type ChangeEvent } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { api } from "./api";
-import type { LawyerProfile, ToneProfile } from "./types";
+import type { LawyerProfile, ToneProfile, Notify } from "./types";
 
 // ─── Source type config ────────────────────────────────────────────────────────
 
@@ -269,7 +269,7 @@ export function ToneImportModal({ profile, onClose, onUpdated, notify }: {
   profile: LawyerProfile;
   onClose: () => void;
   onUpdated: (p: LawyerProfile) => void;
-  notify: (m: string) => void;
+  notify: Notify;
 }) {
   const [view, setView] = useState<"profile" | "import">(profile.toneProfile ? "profile" : "import");
   const [source, setSource] = useState<SourceId>("linkedin");
@@ -288,7 +288,7 @@ export function ToneImportModal({ profile, onClose, onUpdated, notify }: {
       notify(`Voice profile built — ${result.samplesAnalysed} samples analysed`);
       setView("profile");
     } catch (e) {
-      notify((e as Error).message);
+      notify((e as Error).message, "error");
     } finally {
       setBusy(false);
     }
@@ -303,7 +303,7 @@ export function ToneImportModal({ profile, onClose, onUpdated, notify }: {
       notify("Voice profile cleared");
       setView("import");
     } catch (e) {
-      notify((e as Error).message);
+      notify((e as Error).message, "error");
     } finally {
       setClearBusy(false);
     }

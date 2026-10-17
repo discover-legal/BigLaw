@@ -3,7 +3,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { api } from "./api";
-import type { CostSummary } from "./types";
+import type { CostSummary, Notify } from "./types";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -168,7 +168,7 @@ function modelColor(m: string): string {
   return MODEL_COLORS[m] ?? "var(--text-dim)";
 }
 
-export function CostDashboard({ notify }: { notify: (m: string) => void }) {
+export function CostDashboard({ notify }: { notify: Notify }) {
   const [summary, setSummary] = useState<CostSummary | null>(null);
   const [busy, setBusy] = useState(true);
 
@@ -176,7 +176,7 @@ export function CostDashboard({ notify }: { notify: (m: string) => void }) {
     setBusy(true);
     api.getCostSummary()
       .then(setSummary)
-      .catch((e: Error) => notify(e.message))
+      .catch((e: Error) => notify(e.message, "error"))
       .finally(() => setBusy(false));
   }, [notify]);
 

@@ -4,8 +4,7 @@ import { motion } from "framer-motion";
 import { api } from "../api";
 import type {
   CitationCheckResult, CitationSignal, HeadnoteReport, MissingClause, Playbook, PlaybookEntry,
-  PlaybookQueryResult, PlaybookScope, PrecedentDocument, RedlineReport,
-} from "../types";
+  PlaybookQueryResult, PlaybookScope, PrecedentDocument, RedlineReport, Notify } from "../types";
 import { PRACTICE_AREAS, PRECEDENT_TYPES } from "../types";
 import { ErrorState } from "../Library";
 import { timeAgo } from "../primitives";
@@ -32,7 +31,7 @@ const SCOPE_PILL: Record<PlaybookScope, string> = {
   firm: "", personal: "blue", matter: "amber", client: "gold",
 };
 
-export function DraftingPage({ notify, isPartner }: { notify: (m: string) => void; isPartner: boolean }) {
+export function DraftingPage({ notify, isPartner }: { notify: Notify; isPartner: boolean }) {
   const [tab, setTab] = useState<Tab>(isPartner ? "review" : "citations");
 
   // All engine routes except citation checking are partner-gated server-side
@@ -74,7 +73,7 @@ export function DraftingPage({ notify, isPartner }: { notify: (m: string) => voi
 
 // ─── Playbooks ─────────────────────────────────────────────────────────────────
 
-function PlaybooksTab({ notify, isPartner }: { notify: (m: string) => void; isPartner: boolean }) {
+function PlaybooksTab({ notify, isPartner }: { notify: Notify; isPartner: boolean }) {
   const [playbooks, setPlaybooks] = useState<Playbook[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -106,7 +105,7 @@ function PlaybooksTab({ notify, isPartner }: { notify: (m: string) => void; isPa
   useEffect(() => { load(); }, [load]);
 
   async function build() {
-    if (!nb.name.trim() || !nb.practiceArea) { notify("Name and practice area required"); return; }
+    if (!nb.name.trim() || !nb.practiceArea) { notify("Name and practice area required", "error"); return; }
     setBusy(true);
     try {
       const pb = await api.buildPlaybook({
@@ -122,14 +121,14 @@ function PlaybooksTab({ notify, isPartner }: { notify: (m: string) => void; isPa
       setNb({ name: "", practiceArea: PRACTICE_AREAS[0], scope: "firm", jurisdiction: "", description: "", clauseTypes: "" });
       load();
       setSelectedId(pb.id);
-    } catch (e) { notify((e as Error).message); }
+    } catch (e) { notify((e as Error).message, "error"); }
     finally { setBusy(false); }
   }
 
   async function remove(id: string) {
     if (!window.confirm("Delete this playbook?")) return;
     try { await api.deletePlaybook(id); notify("Playbook deleted"); setSelectedId(null); load(); }
-    catch (e) { notify((e as Error).message); }
+    catch (e) { notify((e as Error).message, "error"); }
   }
 
   async function resolve() {
@@ -138,7 +137,7 @@ function PlaybooksTab({ notify, isPartner }: { notify: (m: string) => void; isPa
     setResolved(null);
     try {
       setResolved(await api.resolvePlaybook(resClause.trim(), { practiceArea: resArea || undefined }));
-    } catch (e) { notify((e as Error).message); }
+    } catch (e) { notify((e as Error).message, "error"); }
     finally { setResBusy(false); }
   }
 
@@ -309,7 +308,7 @@ function sevPill(sev: string): string {
   return sev === "critical" || sev === "high" ? "red" : sev === "medium" ? "amber" : "";
 }
 
-function PlaybookReviewTab({ notify }: { notify: (m: string) => void }) {
+function PlaybookReviewTab({ notify }: { notify: Notify }) {
   const [text, setText] = useState("");
   const [practiceArea, setPracticeArea] = useState("");
   const [jurisdiction, setJurisdiction] = useState("");
@@ -338,7 +337,7 @@ function PlaybookReviewTab({ notify }: { notify: (m: string) => void }) {
       });
       setReport(res);
       notify(`Review complete — ${res.redlineCount} redlines, ${res.missingCount ?? 0} missing clauses, ${res.escalateCount} escalations across ${res.totalClauses} clauses`);
-    } catch (e) { notify((e as Error).message); }
+    } catch (e) { notify((e as Error).message, "error"); }
     finally { setBusy(false); }
   }
 
@@ -536,7 +535,7 @@ function PlaybookReviewTab({ notify }: { notify: (m: string) => void }) {
 
 // ─── Headnotes ─────────────────────────────────────────────────────────────────
 
-function HeadnotesTab({ notify }: { notify: (m: string) => void }) {
+function HeadnotesTab({ notify }: { notify: Notify }) {
   const [opinionText, setOpinionText] = useState("");
   const [meta, setMeta] = useState({ caseName: "", citation: "", court: "", jurisdiction: "" });
   const [busy, setBusy] = useState(false);
@@ -555,7 +554,7 @@ function HeadnotesTab({ notify }: { notify: (m: string) => void }) {
       });
       setReport(res);
       notify(`${res.totalHeadnotes} headnotes extracted (${res.ratioCount} ratio, ${res.obiterCount} obiter)`);
-    } catch (e) { notify((e as Error).message); }
+    } catch (e) { notify((e as Error).message, "error"); }
     finally { setBusy(false); }
   }
 
@@ -633,7 +632,7 @@ function HeadnotesTab({ notify }: { notify: (m: string) => void }) {
 
 // ─── Precedents ────────────────────────────────────────────────────────────────
 
-function PrecedentsTab({ notify }: { notify: (m: string) => void }) {
+function PrecedentsTab({ notify }: { notify: Notify }) {
   const [docType, setDocType] = useState("nda");
   const [practiceArea, setPracticeArea] = useState("");
   const [jurisdiction, setJurisdiction] = useState("");
@@ -655,7 +654,7 @@ function PrecedentsTab({ notify }: { notify: (m: string) => void }) {
       });
       setDoc(res);
       notify(`"${res.title}" generated — ${res.clauses.length} clauses, ${res.playbookPositionCount} playbook positions applied`);
-    } catch (e) { notify((e as Error).message); }
+    } catch (e) { notify((e as Error).message, "error"); }
     finally { setBusy(false); }
   }
 
@@ -746,7 +745,7 @@ const SIGNAL_STYLE: Record<CitationSignal, { color: string; glyph: string }> = {
   blue:   { color: "var(--blue)",  glyph: "◆" },
 };
 
-function CitationsTab({ notify }: { notify: (m: string) => void }) {
+function CitationsTab({ notify }: { notify: Notify }) {
   const [q, setQ] = useState("");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<CitationCheckResult | null>(null);
@@ -756,7 +755,7 @@ function CitationsTab({ notify }: { notify: (m: string) => void }) {
     setBusy(true);
     setResult(null);
     try { setResult(await api.checkCitation(q.trim())); }
-    catch (e) { notify((e as Error).message); }
+    catch (e) { notify((e as Error).message, "error"); }
     finally { setBusy(false); }
   }
 

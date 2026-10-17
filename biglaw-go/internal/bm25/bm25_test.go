@@ -363,3 +363,53 @@ func TestNewWithParams(t *testing.T) {
 		t.Fatalf("with b=0 scores should be equal: short=%.6f long=%.6f", sShort, sLong)
 	}
 }
+
+func TestMaxScoreBoundsSearchScores(t *testing.T) {
+	ix := New()
+	ix.Add("a", "rent review rent rent rent rent rent rent rent rent")
+	ix.Add("b", "notice period holiday pay")
+	ix.Add("c", "rent")
+	for _, q := range []string{"rent", "rent review", "rent indemnity", "rent rent"} {
+		ceiling := ix.MaxScore(q)
+		if ceiling <= 0 {
+			t.Fatalf("%q: MaxScore = %v", q, ceiling)
+		}
+		for _, r := range ix.Search(q, 10) {
+			if r.Score <= 0 || r.Score >= ceiling {
+				t.Errorf("%q: %s scored %v, want in (0, %v)", q, r.ID, r.Score, ceiling)
+			}
+		}
+	}
+	// An absent term widens the ceiling: a partial match is not a near-full one.
+	if ix.MaxScore("rent indemnity") <= ix.MaxScore("rent") {
+		t.Error("absent query terms must count toward the ceiling")
+	}
+	if ix.MaxScore("rent rent") != ix.MaxScore("rent") {
+		t.Error("duplicate query terms must not raise the ceiling")
+	}
+	if New().MaxScore("rent") != 0 || ix.MaxScore("the of") != 0 {
+		t.Error("empty index / stopword-only query must give 0")
+	}
+}
+
+func TestIndexTermsFoldAccents(t *testing.T) {
+	got := terms("Société Générale — café café Ærø naïve Łódź Straße Œuvre Þórr Đakovo")
+	want := []string{"societe", "generale", "cafe", "cafe", "aero", "naive", "lodz", "strasse", "oeuvre", "thorr", "dakovo"}
+	if len(got) != len(want) {
+		t.Fatalf("terms = %q, want %q", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("terms = %q, want %q", got, want)
+		}
+	}
+	ix := New()
+	ix.Add("d", "Ruling of the Cour de cassation on the société's liability")
+	if len(ix.Search("societe", 5)) != 1 || len(ix.Search("SOCIÉTÉ", 5)) != 1 {
+		t.Fatal("accented and unaccented spellings must match each other")
+	}
+	ix.Add("w", "Lease of premises in Łódź")
+	if len(ix.Search("lodz", 5)) != 1 {
+		t.Fatal("ł must fold to l")
+	}
+}

@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
-import type { NosLegalBreakdown } from "../types";
+import type { NosLegalBreakdown, Notify } from "../types";
 import { CostDashboard } from "../CostDashboard";
 import { ErrorState } from "../Library";
 
-export function AnalyticsPage({ notify }: { notify: (m: string) => void }) {
+export function AnalyticsPage({ notify }: { notify: Notify }) {
   return (
     <div className="page-scroll">
       <div className="page" style={{ maxWidth: 980 }}>

@@ -25,6 +25,7 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/strutil"
 	"github.com/discover-legal/biglaw-go/internal/timekeeping"
 	"github.com/discover-legal/biglaw-go/internal/types"
+	"github.com/discover-legal/biglaw-go/internal/version"
 )
 
 // MCPServer exposes a BigLaw Backend as MCP tools. It is identical whether
@@ -41,7 +42,7 @@ func New(b backend.Backend) *MCPServer {
 
 	s.srv = server.NewMCPServer(
 		"biglaw",
-		"0.5.0",
+		version.Version,
 		server.WithToolCapabilities(false),
 		server.WithInstructions(
 			"BigLaw multi-agent legal AI platform. "+

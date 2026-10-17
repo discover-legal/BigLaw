@@ -6,7 +6,6 @@ package config
 import (
 	"fmt"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"strings"
 )
@@ -48,7 +47,7 @@ func (s *stateSet) dir(env, name string, legacy ...string) string {
 }
 
 func (s *stateSet) add(env, name string, dir bool, legacy []string) string {
-	if v := os.Getenv(env); v != "" {
+	if v := getenv(env); v != "" {
 		if !matchesAny(v, legacy) {
 			s.paths = append(s.paths, StatePath{Env: env, Path: v, Explicit: true, Dir: dir})
 			return v

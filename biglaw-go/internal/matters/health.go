@@ -10,6 +10,7 @@ package matters
 import (
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/discover-legal/biglaw-go/internal/types"
@@ -22,6 +23,9 @@ var dimensionWeights = struct {
 	Gates    float64
 	OCG      float64
 }{0.30, 0.25, 0.20, 0.15, 0.10}
+
+// greenThreshold is the lowest composite score signalled green ("On track").
+const greenThreshold = 75
 
 // BudgetBurner can return budget burn for a matter.
 type BudgetBurner interface {
@@ -110,10 +114,29 @@ func (m *Monitor) Compute(
 			float64(oScore)*dimensionWeights.OCG,
 	)
 
+	var riskFactors []types.MatterRiskFactor
+	hasHighRisk := false
+	for _, r := range []*types.MatterRiskFactor{bRisk, dRisk, aRisk, gRisk, oRisk} {
+		if r != nil {
+			riskFactors = append(riskFactors, *r)
+			hasHighRisk = hasHighRisk || r.Severity == "high"
+		}
+	}
+	// A high-severity risk (≥ half of recent tasks failed, all interrupted, budget ≥ 80%, ≥ 3
+	// open gates, ≥ 50% OCG violations) caps the matter below green. The weighted average alone
+	// can't express that: the other four dimensions carry 75% of the weight,
+	// and an unset budget (85), fresh time entries (written by the failed runs
+	// themselves) and an empty gate queue kept a matter whose only task had
+	// failed at 88 "On track" while its own risk list said "high". Capping the
+	// number too keeps score and signal on the same thresholds.
+	if hasHighRisk && composite >= greenThreshold {
+		composite = greenThreshold - 1
+	}
+
 	var signal types.HealthSignal
 	var signalLabel string
 	switch {
-	case composite >= 75:
+	case composite >= greenThreshold:
 		signal = types.HealthGreen
 		signalLabel = "On track"
 	case composite >= 45:
@@ -124,12 +147,6 @@ func (m *Monitor) Compute(
 		signalLabel = "At risk"
 	}
 
-	var riskFactors []types.MatterRiskFactor
-	for _, r := range []*types.MatterRiskFactor{bRisk, dRisk, aRisk, gRisk, oRisk} {
-		if r != nil {
-			riskFactors = append(riskFactors, *r)
-		}
-	}
 	// Sort: high → medium → low
 	severityOrder := map[string]int{"high": 0, "medium": 1, "low": 2}
 	for i := 0; i < len(riskFactors)-1; i++ {
@@ -249,41 +266,119 @@ func budgetDimension(burn *types.BudgetBurn) (int, *types.MatterRiskFactor) {
 	return score, risk
 }
 
+// failureWindow is how long an unresolved failure keeps counting against a
+// matter. Older failures age out; the matter's current work is what matters.
+const failureWindow = 30 * 24 * time.Hour
+
+// settledAt is when a task reached its current state.
+func settledAt(t types.Task) time.Time {
+	if t.CompletedAt != nil {
+		return *t.CompletedAt
+	}
+	if !t.UpdatedAt.IsZero() {
+		return t.UpdatedAt
+	}
+	return t.CreatedAt
+}
+
+// deadlineDimension scores delivery: tasks that failed, tasks interrupted by
+// a backend restart (boot-quarantined, must be resubmitted), and tasks stuck
+// in flight for over two weeks.
+//
+// A failure or interruption stops counting once it is superseded — the same
+// work (same workflow and description) completed after it, i.e. it was re-run
+// successfully — or once it is older than failureWindow. Unrelated later work
+// does not supersede it, and a task with no timestamp at all never ages out.
+// The penalty is proportional to the share of the matter's counted tasks that
+// failed, an interruption weighing half a failure (any penalty costs at least
+// 15 points), so 4 failures among 104 tasks dents delivery rather than zeroing
+// it, while a matter whose only work failed scores 0.
 func deadlineDimension(tasks []types.Task) (int, *types.MatterRiskFactor) {
 	now := time.Now()
-	sevenDays := 7 * 24 * time.Hour
-	overdue := 0
-	imminent := 0
+	lastCompleted := map[string]time.Time{} // workKey → latest completion
 	for _, t := range tasks {
-		if t.Status == "failed" {
-			overdue++
-		}
-		if t.Status == "pending" || t.Status == "running" {
-			if now.Sub(t.CreatedAt) > sevenDays*2 {
-				imminent++
+		if t.Status == types.TaskStatusComplete {
+			k := workKey(t)
+			if at := settledAt(t); at.After(lastCompleted[k]) {
+				lastCompleted[k] = at
 			}
 		}
 	}
-	score := 100
-	var risk *types.MatterRiskFactor
-	if overdue > 0 {
-		score = int(math.Max(0, float64(100-overdue*30)))
-		risk = &types.MatterRiskFactor{
+	counted, failed, interrupted, stalled := 0, 0, 0, 0
+	for _, t := range tasks {
+		switch t.Status {
+		case types.TaskStatusFailed, types.TaskStatusInterrupted:
+			at := settledAt(t)
+			if (!at.IsZero() && now.Sub(at) > failureWindow) || lastCompleted[workKey(t)].After(at) {
+				continue // aged out, or superseded by a successful re-run
+			}
+			if t.Status == types.TaskStatusFailed {
+				failed++
+			} else {
+				interrupted++
+			}
+		case types.TaskStatusPending, types.TaskStatusQueued, types.TaskStatusRunning:
+			if now.Sub(t.CreatedAt) > 14*24*time.Hour {
+				stalled++
+			}
+		}
+		counted++
+	}
+
+	// penalty: proportional to the weighted share of counted tasks, at least
+	// 15 points. An interruption is half a failure: the run died with the
+	// previous process, not on the work.
+	score := int(math.Round(math.Min(85,
+		100*(1-(float64(failed)+0.5*float64(interrupted))/float64(max(counted, 1))))))
+	// Severity uses the same weighting: high once the weighted share of
+	// undelivered work reaches half the counted tasks (an all-interrupted
+	// matter included — nothing on it was delivered).
+	sev := "medium"
+	if failed+interrupted > 0 && 2*failed+interrupted >= counted {
+		sev = "high"
+	}
+	noneDelivered := failed+interrupted == counted
+	switch {
+	case failed > 0:
+		msg := formatN("%d recent task(s) on this matter have failed", failed)
+		if interrupted > 0 {
+			msg += formatN("; %d more were interrupted by a restart", interrupted)
+		}
+		if noneDelivered {
+			msg += " — no work product delivered"
+		}
+		return score, &types.MatterRiskFactor{
 			Type:            "task_failure",
-			Severity:        "high",
-			Message:         formatN("%d task(s) have failed on this matter", overdue),
+			Severity:        sev,
+			Message:         msg,
 			SuggestedAction: "Review failed tasks and re-run or reassign.",
 		}
-	} else if imminent > 0 {
-		score = int(math.Max(30, float64(100-imminent*15)))
-		risk = &types.MatterRiskFactor{
+	case interrupted > 0:
+		msg := formatN("%d task(s) were interrupted by a server restart and have not been resubmitted", interrupted)
+		if noneDelivered {
+			msg = formatN("All %d task(s) on this matter were interrupted by a server restart — no work product delivered", interrupted)
+		}
+		return score, &types.MatterRiskFactor{
+			Type:            "task_interrupted",
+			Severity:        sev,
+			Message:         msg,
+			SuggestedAction: "Resubmit the interrupted task(s).",
+		}
+	case stalled > 0:
+		return int(math.Max(30, float64(100-stalled*15))), &types.MatterRiskFactor{
 			Type:            "deadline_approaching",
 			Severity:        "medium",
-			Message:         formatN("%d task(s) have been running for over 2 weeks", imminent),
+			Message:         formatN("%d task(s) have been running for over 2 weeks", stalled),
 			SuggestedAction: "Check task progress and ensure no blockers.",
 		}
 	}
-	return score, risk
+	return 100, nil
+}
+
+// workKey identifies "the same work" for supersession: a re-run of a task
+// (or of a template with the same inputs) shares its workflow and description.
+func workKey(t types.Task) string {
+	return string(t.WorkflowType) + "\x00" + strings.ToLower(strings.Join(strings.Fields(t.Description), " "))
 }
 
 func activityDimension(lastActivityMs int64) (int, *types.MatterRiskFactor) {

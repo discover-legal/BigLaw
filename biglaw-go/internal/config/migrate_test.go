@@ -556,3 +556,29 @@ func TestDefaultAPIURL(t *testing.T) {
 		}
 	}
 }
+
+// Defaults is the env-free baseline: neither RUVECTOR_DATA_DIR nor a state
+// override may reach it, and every state path is the stock ./data default.
+func TestDefaultsIgnoreStateEnv(t *testing.T) {
+	t.Setenv("RUVECTOR_DATA_DIR", "/elsewhere")
+	t.Setenv("TASKS_FILE", "/explicit/tasks.json")
+	t.Setenv("BIGLAW_LOCK", "off")
+	d := Defaults()
+	if d.Persistence.TasksFile != filepath.Join("data", ".tasks.json") {
+		t.Errorf("TasksFile = %q, want data/.tasks.json", d.Persistence.TasksFile)
+	}
+	if d.Run.LockDisabled {
+		t.Error("Defaults saw BIGLAW_LOCK")
+	}
+	for _, p := range d.StatePaths() {
+		if p.Explicit || !strings.HasPrefix(p.Path, "data"+string(filepath.Separator)) {
+			t.Errorf("%s: %q (explicit=%v) not a ./data default", p.Env, p.Path, p.Explicit)
+		}
+	}
+	if err := d.CheckStateLayout(); err != nil {
+		t.Error(err)
+	}
+	if got := Load().Persistence.TasksFile; got != "/explicit/tasks.json" {
+		t.Errorf("Load after Defaults lost the env: TasksFile = %q", got)
+	}
+}

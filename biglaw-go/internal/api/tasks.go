@@ -4,7 +4,6 @@
 package api
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -14,6 +13,7 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/auth"
 	"github.com/discover-legal/biglaw-go/internal/backend"
 	"github.com/discover-legal/biglaw-go/internal/cost"
+	"github.com/discover-legal/biglaw-go/internal/jsonsafe"
 	"github.com/discover-legal/biglaw-go/internal/orchestrator"
 	"github.com/gin-gonic/gin"
 )
@@ -110,7 +110,7 @@ func (s *Server) handleTaskStream(c *gin.Context) {
 	flusher, hasFlusher := c.Writer.(http.Flusher)
 
 	writeEvent := func(typ string, data interface{}) {
-		raw, _ := json.Marshal(data)
+		raw, _ := jsonsafe.Marshal(data)
 		fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", typ, raw)
 		if hasFlusher {
 			flusher.Flush()
