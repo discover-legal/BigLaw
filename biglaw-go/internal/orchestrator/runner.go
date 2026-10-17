@@ -4,20 +4,66 @@
 package orchestrator
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/discover-legal/biglaw-go/internal/audit"
 	"github.com/discover-legal/biglaw-go/internal/learning"
+	"github.com/discover-legal/biglaw-go/internal/providers"
 	"github.com/discover-legal/biglaw-go/internal/routing"
 	"github.com/discover-legal/biglaw-go/internal/strutil"
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
 
 // ─── Internal task runner ─────────────────────────────────────────────────────
+
+// UserFacingError is a task failure whose message is written for the lawyer
+// (e.g. grounding collapse) and is shown verbatim in the task's error field.
+type UserFacingError struct{ Msg string }
+
+func (e *UserFacingError) Error() string { return e.Msg }
+
+// taskFailureMessage is the task's user-visible error. Only UserFacingError
+// text is shown verbatim; anything else (provider, embedding, transport
+// errors — which carry endpoint URLs, resolver addresses and upstream bodies)
+// becomes a safe description plus a ref, with the full error logged under it.
+func taskFailureMessage(taskID string, err error) string {
+	var uf *UserFacingError
+	if errors.As(err, &uf) {
+		return uf.Msg
+	}
+	ref := uuid.NewString()[:8]
+	slog.Error("task failed", "taskId", taskID, "ref", ref, "error", err)
+	what := "an internal step failed (model, embedding or storage call)"
+	if providers.IsModelFailure(err) {
+		what = providers.Describe(err)
+	}
+	return fmt.Sprintf("Task failed: %s. No deliverable was produced. (ref %s)", what, ref)
+}
+
+// failTask marks task failed with a safe error message and closes its clock.
+func (o *Orchestrator) failTask(task *types.Task, err error) {
+	msg := taskFailureMessage(task.ID, err)
+	o.update(task, func(t *types.Task) {
+		t.Status = "failed"
+		t.Error = msg
+	})
+	if task.ActiveTimeEntryID != "" {
+		// A failed AI run is not billable work product: keep the
+		// elapsed time on record but write the entry off.
+		o.time.CloseNonBillable(task.ActiveTimeEntryID, strutil.Truncate(msg, 200))
+		o.update(task, func(t *types.Task) { t.ActiveTimeEntryID = "" })
+	}
+	emitProgress(task.ID, "failed", map[string]interface{}{"error": msg})
+	audit.Default.Write(audit.WriteRequest{Event: "task.failed", ActorID: audit.ActorSystem, TaskID: task.ID, Data: map[string]interface{}{"error": msg}})
+	o.persistTasks()
+}
 
 func (o *Orchestrator) runTask(task *types.Task) {
 	o.update(task, func(t *types.Task) { t.Status = "running" })
@@ -137,27 +183,17 @@ func (o *Orchestrator) runTask(task *types.Task) {
 	}
 
 	if runErr != nil {
-		o.update(task, func(t *types.Task) {
-			t.Status = "failed"
-			t.Error = runErr.Error()
-		})
-		if task.ActiveTimeEntryID != "" {
-			// A failed AI run is not billable work product: keep the
-			// elapsed time on record but write the entry off.
-			o.time.CloseNonBillable(task.ActiveTimeEntryID, "task failed: "+strutil.Truncate(runErr.Error(), 200))
-			o.update(task, func(t *types.Task) { t.ActiveTimeEntryID = "" })
-		}
-		emitProgress(task.ID, "failed", map[string]interface{}{"error": runErr.Error()})
-		audit.Default.Write(audit.WriteRequest{Event: "task.failed", ActorID: audit.ActorSystem, TaskID: task.ID, Data: map[string]interface{}{"error": runErr.Error()}})
-		o.persistTasks()
+		o.failTask(task, runErr)
 		return
 	}
 
 	// Final synthesis. Reads Findings/PendingGates, which gate handlers
-	// rewrite concurrently — work from a locked snapshot.
-	output, synthErr := o.synthesise(o.snapshot(task))
-	if synthErr != nil {
-		output = fmt.Sprintf("Synthesis error: %v", synthErr)
+	// rewrite concurrently — work from a locked snapshot. A failed synthesis
+	// fails the task: an error string is never delivered as the output.
+	output, err := o.synthesise(o.snapshot(task))
+	if err != nil {
+		o.failTask(task, fmt.Errorf("synthesis: %w", err))
+		return
 	}
 	o.update(task, func(t *types.Task) { t.Output = output })
 
@@ -176,12 +212,7 @@ func (o *Orchestrator) runTask(task *types.Task) {
 	})
 
 	if task.ActiveTimeEntryID != "" {
-		if synthErr != nil {
-			// The "deliverable" is an error string — nothing billable.
-			o.time.CloseNonBillable(task.ActiveTimeEntryID, "synthesis failed: "+strutil.Truncate(synthErr.Error(), 200))
-		} else {
-			o.time.Close(task.ActiveTimeEntryID)
-		}
+		o.time.Close(task.ActiveTimeEntryID)
 		o.update(task, func(t *types.Task) { t.ActiveTimeEntryID = "" })
 	}
 

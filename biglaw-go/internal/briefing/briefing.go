@@ -10,7 +10,9 @@
 package briefing
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -121,6 +123,10 @@ func New(provider providers.Provider, sonnetModel string) *Engine {
 
 // GenerateOpts are optional parameters for a briefing run.
 type GenerateOpts struct {
+	// Ctx, when set, bounds the synthesis call: a cancelled caller (client
+	// disconnected) aborts the upstream request and Generate returns
+	// ctx.Err() instead of a degraded briefing.
+	Ctx             context.Context
 	Knowledge       KnowledgeSearcher
 	TaskID          string
 	BriefingDate    string
@@ -188,7 +194,10 @@ func (e *Engine) Generate(client *types.Client, allTasks []*types.Task, timeEntr
 	billing := e.buildBillingSnapshot(timeEntries, client.ClientNumber, matters)
 	openItems := e.collectOpenItems(cb, matters)
 
-	execSummary, document := e.synthesise(client, cb, matters, billing, openItems, opts)
+	execSummary, document, degradedReason := e.synthesise(client, cb, matters, billing, openItems, opts)
+	if opts.Ctx != nil && opts.Ctx.Err() != nil {
+		return nil, opts.Ctx.Err()
+	}
 
 	return &types.ClientBriefing{
 		ID:                uuid.New().String(),
@@ -198,6 +207,8 @@ func (e *Engine) Generate(client *types.Client, allTasks []*types.Task, timeEntr
 		GeneratedAt:       time.Now().UTC().Format(time.RFC3339),
 		BriefingDate:      briefingDate,
 		ExecutiveSummary:  execSummary,
+		Degraded:          degradedReason != "",
+		DegradedReason:    degradedReason,
 		Matters:           matters,
 		Billing:           billing,
 		OpenItems:         openItems,
@@ -519,7 +530,7 @@ func (e *Engine) synthesise(
 	billing types.BriefingBillingSnapshot,
 	openItems []string,
 	opts GenerateOpts,
-) (execSummary, document string) {
+) (execSummary, document, degraded string) {
 	bySource := func(src string, limit int) string {
 		items := cb.BySource(src)
 		if limit > 0 && len(items) > limit {
@@ -642,13 +653,14 @@ Return JSON: {"executiveSummary":"...","document":"..."}`,
 
 	start := time.Now()
 	resp, err := e.provider.Chat(providers.ChatParams{
+		Ctx:       opts.Ctx,
 		Model:     e.sonnet,
 		MaxTokens: 2000,
 		Messages:  []providers.Message{{Role: "user", Content: prompt}},
 	})
 	if err != nil {
 		slog.Warn("BriefingEngine synthesis failed", "error", err)
-		return e.fallback(client, matters, billing, openItems)
+		return e.fallback(client, matters, billing, openItems, err)
 	}
 
 	dms := time.Since(start).Milliseconds()
@@ -678,25 +690,36 @@ Return JSON: {"executiveSummary":"...","document":"..."}`,
 	s := strings.Index(raw, "{")
 	eIdx := strings.LastIndex(raw, "}")
 	if s < 0 || eIdx <= s {
-		return e.fallback(client, matters, billing, openItems)
+		return e.fallback(client, matters, billing, openItems, errors.New("unparseable model output"))
 	}
 	var parsed map[string]string
 	if err := json.Unmarshal([]byte(raw[s:eIdx+1]), &parsed); err != nil {
-		return e.fallback(client, matters, billing, openItems)
+		return e.fallback(client, matters, billing, openItems, fmt.Errorf("unparseable model output: %w", err))
 	}
-	return parsed["executiveSummary"], parsed["document"]
+	if strings.TrimSpace(parsed["executiveSummary"]) == "" && strings.TrimSpace(parsed["document"]) == "" {
+		return e.fallback(client, matters, billing, openItems, errors.New("empty model output"))
+	}
+	return parsed["executiveSummary"], parsed["document"], ""
 }
 
-func (e *Engine) fallback(client *types.Client, matters []types.BriefingMatterSnapshot, billing types.BriefingBillingSnapshot, openItems []string) (string, string) {
-	summary := fmt.Sprintf("%s has %d matter(s) on record. $%.0f WIP outstanding; %d open item(s) require attention.",
-		client.Name, len(matters), billing.WipUsd, len(openItems))
+// DegradedStatsOnly marks a briefing whose AI synthesis failed: it carries
+// only figures computed from BigLaw's own records, never a partner briefing.
+const DegradedStatsOnly = "statistics only — AI summary unavailable"
+
+// fallback renders the record-derived statistics when synthesis failed, and
+// says so in the summary, the document heading and the Degraded field — it
+// must not be passed off as the partner briefing.
+func (e *Engine) fallback(client *types.Client, matters []types.BriefingMatterSnapshot, billing types.BriefingBillingSnapshot, openItems []string, cause error) (string, string, string) {
+	slog.Warn("BriefingEngine: returning degraded statistics-only briefing", "client", client.Name, "error", cause)
+	summary := fmt.Sprintf("DEGRADED — %s (%s). From BigLaw's own records: %s has %d matter(s) on record, $%.0f WIP outstanding, %d open item(s).",
+		DegradedStatsOnly, providers.Describe(providers.ModelFailure("briefing", cause)), client.Name, len(matters), billing.WipUsd, len(openItems))
 	lines := make([]string, len(openItems))
 	for i, it := range openItems {
 		lines[i] = "- " + it
 	}
-	doc := fmt.Sprintf("## %s — Partner Briefing\n\n**Matters:** %d | **WIP:** $%.0f | **Open:** %d\n\n%s",
+	doc := fmt.Sprintf("## %s — Statistics only (degraded)\n\n> **AI summary unavailable.** This is NOT a partner briefing: it lists only figures computed from BigLaw's own records. Re-run the briefing once the model is available.\n\n**Matters:** %d | **WIP:** $%.0f | **Open:** %d\n\n%s",
 		client.Name, len(matters), billing.WipUsd, len(openItems), strings.Join(lines, "\n"))
-	return summary, doc
+	return summary, doc, DegradedStatsOnly
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

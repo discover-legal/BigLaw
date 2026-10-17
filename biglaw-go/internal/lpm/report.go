@@ -106,12 +106,11 @@ func (g *Generator) Generate(in ReportInput, opts GenOpts) (*types.MatterStatusR
 
 	narrative, costUSD, err := g.synthesize(in, facts)
 	if err != nil {
-		// Degrade gracefully: a fact-only report still has value on the box.
-		slog.Warn("LPM narrative synthesis failed; emitting fact-only report", "matter", in.MatterNumber, "error", err)
-		report.BLUF = fallbackBLUF(in, deltas)
-		report.Summary = facts
-		report.Sources = []string{"deterministic facts only (model unavailable)"}
-		return report, nil
+		// No report rather than a fact-only one that reads like a normal
+		// status report in the corpus, the channel post and the portfolio.
+		// The worker retries on its next run; on-demand callers get a typed
+		// model error.
+		return nil, providers.ModelFailure("status report narrative", err)
 	}
 
 	report.BLUF = strings.TrimSpace(narrative.BLUF)

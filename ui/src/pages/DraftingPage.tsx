@@ -65,7 +65,7 @@ export function DraftingPage({ notify, isPartner }: { notify: Notify; isPartner:
         {tab === "draft" && <PrecedentsTab notify={notify} />}
         {tab === "playbooks" && <PlaybooksTab notify={notify} isPartner={isPartner} />}
         {tab === "headnotes" && <HeadnotesTab notify={notify} />}
-        {tab === "citations" && <CitationsTab notify={notify} />}
+        {tab === "citations" && <CitationsTab />}
       </div>
     </div>
   );
@@ -316,6 +316,7 @@ function PlaybookReviewTab({ notify }: { notify: Notify }) {
   const [title, setTitle] = useState("");
   const [busy, setBusy] = useState(false);
   const [report, setReport] = useState<RedlineReport | null>(null);
+  const [runError, setRunError] = useState<string | null>(null);
   // Disposition per finding: issues keyed "i<n>", missing clauses "m<n>".
   const [dispositions, setDispositions] = useState<Record<string, Disposition>>({});
 
@@ -326,6 +327,7 @@ function PlaybookReviewTab({ notify }: { notify: Notify }) {
   async function run() {
     setBusy(true);
     setReport(null);
+    setRunError(null);
     setDispositions({});
     try {
       const res = await api.redline({
@@ -337,7 +339,7 @@ function PlaybookReviewTab({ notify }: { notify: Notify }) {
       });
       setReport(res);
       notify(`Review complete — ${res.redlineCount} redlines, ${res.missingCount ?? 0} missing clauses, ${res.escalateCount} escalations across ${res.totalClauses} clauses`);
-    } catch (e) { notify((e as Error).message, "error"); }
+    } catch (e) { setRunError((e as Error).message); }
     finally { setBusy(false); }
   }
 
@@ -438,6 +440,7 @@ function PlaybookReviewTab({ notify }: { notify: Notify }) {
           {busy ? "Reviewing against playbook…" : "⚖ Review against playbook"}
         </button>
       </RunInputs>
+      {runError && <div style={{ marginTop: 16 }} role="alert"><ErrorState message={runError} /></div>}
 
       {report && (
         <div style={{ marginTop: 24 }}>
@@ -540,10 +543,12 @@ function HeadnotesTab({ notify }: { notify: Notify }) {
   const [meta, setMeta] = useState({ caseName: "", citation: "", court: "", jurisdiction: "" });
   const [busy, setBusy] = useState(false);
   const [report, setReport] = useState<HeadnoteReport | null>(null);
+  const [runError, setRunError] = useState<string | null>(null);
 
   async function run() {
     setBusy(true);
     setReport(null);
+    setRunError(null);
     try {
       const res = await api.generateHeadnotes({
         opinionText,
@@ -554,7 +559,7 @@ function HeadnotesTab({ notify }: { notify: Notify }) {
       });
       setReport(res);
       notify(`${res.totalHeadnotes} headnotes extracted (${res.ratioCount} ratio, ${res.obiterCount} obiter)`);
-    } catch (e) { notify((e as Error).message, "error"); }
+    } catch (e) { setRunError((e as Error).message); }
     finally { setBusy(false); }
   }
 
@@ -581,6 +586,7 @@ function HeadnotesTab({ notify }: { notify: Notify }) {
           {busy ? "Extracting…" : "§ Generate headnotes"}
         </button>
       </RunInputs>
+      {runError && <div style={{ marginTop: 16 }} role="alert"><ErrorState message={runError} /></div>}
 
       {report && (
         <div style={{ marginTop: 24 }}>
@@ -640,10 +646,12 @@ function PrecedentsTab({ notify }: { notify: Notify }) {
   const [instructions, setInstructions] = useState("");
   const [busy, setBusy] = useState(false);
   const [doc, setDoc] = useState<PrecedentDocument | null>(null);
+  const [runError, setRunError] = useState<string | null>(null);
 
   async function run() {
     setBusy(true);
     setDoc(null);
+    setRunError(null);
     try {
       const res = await api.generatePrecedent({
         documentType: docType,
@@ -654,7 +662,7 @@ function PrecedentsTab({ notify }: { notify: Notify }) {
       });
       setDoc(res);
       notify(`"${res.title}" generated — ${res.clauses.length} clauses, ${res.playbookPositionCount} playbook positions applied`);
-    } catch (e) { notify((e as Error).message, "error"); }
+    } catch (e) { setRunError((e as Error).message); }
     finally { setBusy(false); }
   }
 
@@ -690,6 +698,7 @@ function PrecedentsTab({ notify }: { notify: Notify }) {
           {busy ? "Drafting from precedents…" : "⚒ Generate precedent"}
         </button>
       </RunInputs>
+      {runError && <div style={{ marginTop: 16 }} role="alert"><ErrorState message={runError} /></div>}
 
       {doc && (
         <div style={{ marginTop: 24 }}>
@@ -743,21 +752,25 @@ const SIGNAL_STYLE: Record<CitationSignal, { color: string; glyph: string }> = {
   yellow: { color: "var(--amber)", glyph: "▲" },
   red:    { color: "var(--red)",   glyph: "■" },
   blue:   { color: "var(--blue)",  glyph: "◆" },
+  unknown: { color: "var(--text-faint)", glyph: "?" },
 };
 
-function CitationsTab({ notify }: { notify: Notify }) {
+function CitationsTab() {
   const [q, setQ] = useState("");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<CitationCheckResult | null>(null);
+  const [runError, setRunError] = useState<string | null>(null);
 
   async function check() {
     if (!q.trim()) return;
     setBusy(true);
     setResult(null);
+    setRunError(null);
     try { setResult(await api.checkCitation(q.trim())); }
-    catch (e) { notify((e as Error).message, "error"); }
+    catch (e) { setRunError((e as Error).message); }
     finally { setBusy(false); }
   }
+  const negatives = result?.topNegativeTreatments ?? [];
 
   return (
     <div className="panel-body" style={{ maxWidth: 780 }}>
@@ -770,12 +783,13 @@ function CitationsTab({ notify }: { notify: Notify }) {
           <button className="btn primary" disabled={busy || !q.trim()} onClick={check}>{busy ? "Checking…" : "⚖ Check"}</button>
         </div>
       </div>
+      {runError && <div style={{ marginTop: 16 }} role="alert"><ErrorState message={runError} /></div>}
 
       {result && (
         <div style={{ marginTop: 20 }}>
           <div className="section-card">
             <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
-              <span style={{ color: SIGNAL_STYLE[result.signal].color, fontSize: 22 }}>{SIGNAL_STYLE[result.signal].glyph}</span>
+              <span style={{ color: (SIGNAL_STYLE[result.signal] ?? SIGNAL_STYLE.unknown).color, fontSize: 22 }}>{(SIGNAL_STYLE[result.signal] ?? SIGNAL_STYLE.unknown).glyph}</span>
               <div>
                 <div style={{ fontWeight: 600, fontSize: 15 }}>
                   {result.caseName ?? result.query}
@@ -784,7 +798,7 @@ function CitationsTab({ notify }: { notify: Notify }) {
                 <div style={{ fontSize: 12.5, color: "var(--text-dim)" }}>
                   {result.resolvedCitation && <>{result.resolvedCitation} · </>}
                   {result.court && <>{result.court} · </>}
-                  <span style={{ color: SIGNAL_STYLE[result.signal].color, fontWeight: 600 }}>{result.signalLabel}</span>
+                  <span style={{ color: (SIGNAL_STYLE[result.signal] ?? SIGNAL_STYLE.unknown).color, fontWeight: 600 }}>{result.signalLabel}</span>
                   {" "}· {Math.round(result.confidence * 100)}% confidence
                 </div>
               </div>
@@ -792,18 +806,20 @@ function CitationsTab({ notify }: { notify: Notify }) {
                 <a className="btn ghost sm" style={{ marginLeft: "auto" }} href={result.courtListenerUrl} target="_blank" rel="noreferrer">CourtListener ↗</a>
               )}
             </div>
-            <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
-              <span className="pill green">{result.positiveTreatmentCount} positive</span>
-              <span className="pill red">{result.negativeTreatmentCount} negative</span>
-              <span className="pill">{result.status.replace("_", " ")}</span>
-            </div>
+            {result.signal !== "unknown" && (
+              <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
+                <span className="pill green">{result.positiveTreatmentCount} positive</span>
+                <span className="pill red">{result.negativeTreatmentCount} negative</span>
+                <span className="pill">{result.status.replace("_", " ")}</span>
+              </div>
+            )}
             <div style={{ fontSize: 13.5, lineHeight: 1.6, color: "var(--text-dim)" }}>{result.reasoning}</div>
           </div>
 
-          {result.topNegativeTreatments.length > 0 && (
+          {negatives.length > 0 && (
             <div className="section-card" style={{ marginTop: 14 }}>
               <div className="section-card-title">Negative treatments</div>
-              {result.topNegativeTreatments.map((t, i) => (
+              {negatives.map((t, i) => (
                 <div key={i} style={{ display: "flex", gap: 8, alignItems: "baseline", marginBottom: 8, fontSize: 13, flexWrap: "wrap" }}>
                   <span className="pill sm red">{t.treatmentType}</span>
                   <span style={{ fontWeight: 500 }}>{t.caseName}</span>

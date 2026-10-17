@@ -10,7 +10,9 @@
 package precedent
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -55,6 +57,8 @@ type Document struct {
 
 // GenerateOpts parameterises a document generation run.
 type GenerateOpts struct {
+	// Ctx bounds every model call (nil = background).
+	Ctx                 context.Context
 	PracticeArea        string
 	Jurisdiction        string
 	ActingFor           string
@@ -89,13 +93,18 @@ func New(provider providers.Provider, opusModel, haikuModel string) *Generator {
 	return &Generator{provider: provider, opus: opusModel, haiku: haikuModel}
 }
 
-// Generate assembles a precedent document from firm knowledge + playbook.
+// Generate assembles a precedent document from firm knowledge + playbook. A
+// failed model call returns an error matching providers.ErrModelUnavailable /
+// ErrNoProvider; no placeholder document is ever assembled in its place.
 func (g *Generator) Generate(documentType string, ks KnowledgeSearcher, store *playbook.Store, opts GenerateOpts) (*Document, error) {
 	// Step 1 — find firm precedents
 	precedents := g.findPrecedents(documentType, ks, opts)
 
 	// Step 2 — determine clause structure
-	clauseTypes := g.determineClauseStructure(documentType, opts)
+	clauseTypes, err := g.determineClauseStructure(documentType, opts)
+	if err != nil {
+		return nil, err
+	}
 
 	// Step 3 — resolve playbook for each clause type
 	positions := make([]posEntry, len(clauseTypes))
@@ -114,7 +123,10 @@ func (g *Generator) Generate(documentType string, ks KnowledgeSearcher, store *p
 	}
 
 	// Step 4 — draft the document
-	clauses, docText, draftingNotes := g.draftDocument(documentType, precedents, positions, opts)
+	clauses, docText, draftingNotes, err := g.draftDocument(documentType, precedents, positions, opts)
+	if err != nil {
+		return nil, err
+	}
 
 	title := buildTitle(documentType, opts)
 	doc := &Document{
@@ -165,7 +177,10 @@ func (g *Generator) findPrecedents(docType string, ks KnowledgeSearcher, opts Ge
 
 // ─── Step 2: clause structure ─────────────────────────────────────────────────
 
-func (g *Generator) determineClauseStructure(docType string, opts GenerateOpts) []string {
+// determineClauseStructure asks the model for the clause headings. A failed
+// call is an error; output that parses badly falls back to a deterministic
+// heading list (headings only — the drafting call still has to succeed).
+func (g *Generator) determineClauseStructure(docType string, opts GenerateOpts) ([]string, error) {
 	start := time.Now()
 	jur := opts.Jurisdiction
 	if jur == "" {
@@ -183,12 +198,13 @@ Return a JSON array of clause type strings:
 Include 8–20 clauses appropriate for this document type. No other text.`, docType, area, jur)
 
 	resp, err := g.provider.Chat(providers.ChatParams{
+		Ctx:       opts.Ctx,
 		Model:     g.haiku,
 		MaxTokens: 500,
 		Messages:  []providers.Message{{Role: "user", Content: prompt}},
 	})
 	if err != nil {
-		return defaultClauseTypes(docType)
+		return nil, providers.ModelFailure("precedent clause structure", err)
 	}
 
 	dms := time.Since(start).Milliseconds()
@@ -198,13 +214,13 @@ Include 8–20 clauses appropriate for this document type. No other text.`, docT
 	s := strings.Index(raw, "[")
 	eIdx := strings.LastIndex(raw, "]")
 	if s < 0 || eIdx <= s {
-		return defaultClauseTypes(docType)
+		return defaultClauseTypes(docType), nil
 	}
 	var clauses []string
-	if err := json.Unmarshal([]byte(raw[s:eIdx+1]), &clauses); err != nil {
-		return defaultClauseTypes(docType)
+	if err := json.Unmarshal([]byte(raw[s:eIdx+1]), &clauses); err != nil || len(clauses) == 0 {
+		return defaultClauseTypes(docType), nil
 	}
-	return clauses
+	return clauses, nil
 }
 
 var defaultsByType = map[string][]string{
@@ -233,7 +249,7 @@ func (g *Generator) draftDocument(
 	precedents []precedentDoc,
 	positions []posEntry,
 	opts GenerateOpts,
-) ([]Clause, string, []string) {
+) ([]Clause, string, []string, error) {
 	start := time.Now()
 
 	// Build precedent block
@@ -316,6 +332,7 @@ Clause object schema:
 	userContent := precedentBlock + "\n\nPLAYBOOK POSITIONS:\n" + playbookBlock
 
 	resp, err := g.provider.Chat(providers.ChatParams{
+		Ctx:         opts.Ctx,
 		Model:       g.opus,
 		MaxTokens:   8000,
 		System:      system,
@@ -324,7 +341,7 @@ Clause object schema:
 	})
 	if err != nil {
 		slog.Warn("PrecedentGenerator: draft failed", "error", err)
-		return g.fallbackDraft(docType, positions)
+		return nil, "", nil, providers.ModelFailure("precedent drafting", err)
 	}
 
 	dms := time.Since(start).Milliseconds()
@@ -334,16 +351,16 @@ Clause object schema:
 	s := strings.Index(raw, "{")
 	eIdx := strings.LastIndex(raw, "}")
 	if s < 0 || eIdx <= s {
-		return g.fallbackDraft(docType, positions)
+		return nil, "", nil, providers.ModelFailure("precedent drafting", errors.New("unparseable model output: no JSON object"))
 	}
 
 	var parsed struct {
 		Clauses       []map[string]interface{} `json:"clauses"`
 		Document      string                   `json:"document"`
-		DraftingNotes []string                 `json:"draftingNotes"`
+		DraftingNotes noteList                 `json:"draftingNotes"`
 	}
 	if err := json.Unmarshal([]byte(raw[s:eIdx+1]), &parsed); err != nil {
-		return g.fallbackDraft(docType, positions)
+		return nil, "", nil, providers.ModelFailure("precedent drafting", fmt.Errorf("unparseable model output: %w", err))
 	}
 
 	clauses := make([]Clause, 0, len(parsed.Clauses))
@@ -358,44 +375,56 @@ Clause object schema:
 		})
 	}
 
-	docText := parsed.Document
-	if docText == "" {
-		docText = "(draft generation failed — see clauses array)"
+	docText := strings.TrimSpace(parsed.Document)
+	if docText == "" && len(clauses) == 0 {
+		return nil, "", nil, providers.ModelFailure("precedent drafting", errors.New("the model returned an empty draft"))
 	}
-	return clauses, docText, parsed.DraftingNotes
+	if docText == "" {
+		// The model drafted clauses but omitted the assembled text: assemble
+		// it from those clauses (real model output, not a placeholder).
+		lines := make([]string, len(clauses))
+		for i, c := range clauses {
+			lines[i] = fmt.Sprintf("## %s\n\n%s", c.Heading, c.DraftText)
+		}
+		docText = strings.Join(lines, "\n\n")
+	}
+	notes := []string(parsed.DraftingNotes)
+	if notes == nil { // key absent
+		notes = []string{}
+	}
+	return clauses, docText, notes, nil
 }
 
-func (g *Generator) fallbackDraft(docType string, positions []posEntry) ([]Clause, string, []string) {
-	clauses := make([]Clause, len(positions))
-	for i, pos := range positions {
-		draftText := "[INSERT standard position]"
-		src := "generated"
-		hasRL := false
-		fb := ""
-		if pos.resolved != nil {
-			e := pos.resolved.EffectiveEntry
-			if e.StandardPosition != "" {
-				draftText = e.StandardPosition
-			}
-			src = string(pos.resolved.ResolvedFrom)
-			hasRL = len(e.RedLines) > 0
-			fb = e.FallbackPosition
-		}
-		clauses[i] = Clause{
-			Heading:    pos.clauseType,
-			DraftText:  draftText,
-			Source:     src,
-			HasRedLine: hasRL,
-			Notes:      "Draft generation failed — manually complete this clause.",
-			Fallback:   fb,
+// noteList decodes draftingNotes as the prompt asks (an array) or as models
+// often answer (one string, a note per line).
+type noteList []string
+
+func (n *noteList) UnmarshalJSON(b []byte) error {
+	var v any
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
+	}
+	out := []string{}
+	add := func(s string) {
+		if s = strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(s), "-*•")); s != "" {
+			out = append(out, s)
 		}
 	}
-	lines := make([]string, len(clauses))
-	for i, c := range clauses {
-		lines[i] = fmt.Sprintf("## %s\n\n%s", c.Heading, c.DraftText)
+	switch t := v.(type) {
+	case string:
+		for _, line := range strings.Split(t, "\n") {
+			add(line)
+		}
+	case []any:
+		for _, x := range t {
+			add(strVal(x))
+		}
+	case nil:
+	default:
+		return fmt.Errorf("draftingNotes: unexpected %T", v)
 	}
-	docText := fmt.Sprintf("# %s\n\n%s", strings.ToUpper(docType), strings.Join(lines, "\n\n"))
-	return clauses, docText, []string{"Automatic draft generation failed. Review each clause manually against the playbook."}
+	*n = out
+	return nil
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

@@ -51,7 +51,10 @@ func (s *Server) billingInit() {
 			slog.Warn("billing: pre-bill store load failed", "path", s.cfg.Persistence.PreBillsFile, "err", err)
 		}
 		lightID, midID := routing.Light(s.cfg), routing.Mid(s.cfg)
-		provider := s.orch.Providers().MustGet(lightID)
+		provider, perr := s.orch.Providers().GetOrUnconfigured(lightID)
+		if perr != nil {
+			slog.Warn("billing: no model provider — OCG extraction and invoice checks will fail with model_not_configured", "model", lightID, "error", perr)
+		}
 		billingOcg = ocg.NewStore(s.cfg.Persistence.OcgFile, provider, lightID)
 		if err := billingOcg.Init(); err != nil {
 			slog.Warn("billing: OCG store load failed", "path", s.cfg.Persistence.OcgFile, "err", err)

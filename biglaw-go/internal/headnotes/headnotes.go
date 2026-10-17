@@ -8,7 +8,9 @@
 package headnotes
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -24,6 +26,8 @@ import (
 
 // GenerateOpts parameterises a headnote generation run.
 type GenerateOpts struct {
+	// Ctx bounds every model call (nil = background).
+	Ctx          context.Context
 	CaseName     string
 	Citation     string
 	Court        string
@@ -44,14 +48,21 @@ func New(provider providers.Provider, sonnetModel, haikuModel string) *Engine {
 	return &Engine{provider: provider, sonnet: sonnetModel, haiku: haikuModel}
 }
 
-// Generate extracts headnotes from a court opinion text.
+// Generate extracts headnotes from a court opinion text. A failed model call
+// (or unusable extraction output) returns an error matching
+// providers.ErrModelUnavailable / ErrNoProvider — never a "0 headnotes"
+// report, which would read as an opinion with no holdings.
 func (e *Engine) Generate(opinionText string, opts GenerateOpts) (*types.HeadnoteReport, error) {
 	headnotes, err := e.extractHeadnotes(opinionText, opts)
 	if err != nil {
 		slog.Warn("HeadnoteEngine: extraction error", "error", err)
+		return nil, err
 	}
 
-	meta := e.synthesiseMeta(opinionText, headnotes, opts)
+	meta, err := e.synthesiseMeta(opinionText, headnotes, opts)
+	if err != nil {
+		return nil, err
+	}
 
 	caseName := opts.CaseName
 	if caseName == "" {
@@ -129,6 +140,7 @@ Rules:
 Return a JSON array: [{"number":1,"proposition":"...","sourceText":"...","location":"...","holdingType":"ratio","distinguishingFactors":[],"areaOfLaw":"...","confidence":0.9}, ...]`
 
 	resp, err := e.provider.Chat(providers.ChatParams{
+		Ctx:         opts.Ctx,
 		Model:       e.sonnet,
 		MaxTokens:   6000,
 		System:      system,
@@ -136,7 +148,7 @@ Return a JSON array: [{"number":1,"proposition":"...","sourceText":"...","locati
 		Messages:    []providers.Message{{Role: "user", Content: "Court opinion:\n" + truncate(text, 15000)}},
 	})
 	if err != nil {
-		return nil, err
+		return nil, providers.ModelFailure("headnote extraction", err)
 	}
 
 	dms := time.Since(start).Milliseconds()
@@ -146,12 +158,17 @@ Return a JSON array: [{"number":1,"proposition":"...","sourceText":"...","locati
 	s := strings.Index(raw, "[")
 	eIdx := strings.LastIndex(raw, "]")
 	if s < 0 || eIdx <= s {
-		return nil, nil
+		return nil, providers.ModelFailure("headnote extraction", errors.New("unparseable model output: no JSON array"))
 	}
 
 	var parsed []map[string]interface{}
 	if err := json.Unmarshal([]byte(raw[s:eIdx+1]), &parsed); err != nil {
-		return nil, err
+		return nil, providers.ModelFailure("headnote extraction", fmt.Errorf("unparseable model output: %w", err))
+	}
+	if len(parsed) == 0 {
+		// A valid reply with zero propositions: nothing was extracted. Never
+		// a "0 headnotes" report, which reads as an opinion with no holdings.
+		return nil, providers.NoContent("headnote extraction", "no legal propositions found in the opinion")
 	}
 
 	headnotes := make([]types.Headnote, 0, len(parsed))
@@ -180,7 +197,7 @@ Return a JSON array: [{"number":1,"proposition":"...","sourceText":"...","locati
 
 // ─── Step 2: key holding synthesis ───────────────────────────────────────────
 
-func (e *Engine) synthesiseMeta(opinionText string, headnotes []types.Headnote, opts GenerateOpts) map[string]string {
+func (e *Engine) synthesiseMeta(opinionText string, headnotes []types.Headnote, opts GenerateOpts) (map[string]string, error) {
 	start := time.Now()
 
 	ratioLines := make([]string, 0, 5)
@@ -217,12 +234,13 @@ Opinion excerpt:
 %s`, ratioBlock, truncate(opinionText, 3000))
 
 	resp, err := e.provider.Chat(providers.ChatParams{
+		Ctx:       opts.Ctx,
 		Model:     e.haiku,
 		MaxTokens: 600,
 		Messages:  []providers.Message{{Role: "user", Content: prompt}},
 	})
 	if err != nil {
-		return fallbackMeta(opts)
+		return nil, providers.ModelFailure("headnote key-holding synthesis", err)
 	}
 
 	dms := time.Since(start).Milliseconds()
@@ -232,31 +250,45 @@ Opinion excerpt:
 	s := strings.Index(raw, "{")
 	eIdx := strings.LastIndex(raw, "}")
 	if s < 0 || eIdx <= s {
-		return fallbackMeta(opts)
+		return nil, providers.ModelFailure("headnote key-holding synthesis", errors.New("unparseable model output: no JSON object"))
 	}
-	var parsed map[string]string
-	if err := json.Unmarshal([]byte(raw[s:eIdx+1]), &parsed); err != nil {
-		return fallbackMeta(opts)
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(raw[s:eIdx+1]), &decoded); err != nil {
+		return nil, providers.ModelFailure("headnote key-holding synthesis", fmt.Errorf("unparseable model output: %w", err))
 	}
-	if parsed["keyHolding"] == "" {
-		parsed["keyHolding"] = "Key holding could not be synthesised — see headnotes."
+	// Models often answer the list fields as JSON arrays despite the prompt;
+	// accept either shape rather than discard a valid keyHolding.
+	parsed := make(map[string]string, len(decoded))
+	for k, v := range decoded {
+		parsed[k] = lines(v)
 	}
-	return parsed
-}
-
-func fallbackMeta(opts GenerateOpts) map[string]string {
-	return map[string]string{
-		"caseName":          opts.CaseName,
-		"citation":          opts.Citation,
-		"court":             opts.Court,
-		"keyHolding":        "Key holding could not be synthesised — see headnotes.",
-		"relatedPrinciples": "",
-		"practiceAreas":     "",
-		"noslegalArea":      "",
+	if strings.TrimSpace(parsed["keyHolding"]) == "" {
+		return nil, providers.ModelFailure("headnote key-holding synthesis", errors.New("model output has no keyHolding"))
 	}
+	return parsed, nil
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+// lines renders a decoded JSON value as text: a string as-is, an array as one
+// element per line, a scalar via its default format, null as "".
+func lines(v any) string {
+	switch t := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return t
+	case []any:
+		parts := make([]string, 0, len(t))
+		for _, x := range t {
+			if s := strings.TrimSpace(lines(x)); s != "" {
+				parts = append(parts, s)
+			}
+		}
+		return strings.Join(parts, "\n")
+	}
+	return fmt.Sprint(v)
+}
 
 func recordCost(model string, resp *providers.ChatResponse, dms int64, taskID string) {
 	cw, cr := 0, 0
@@ -299,13 +331,15 @@ func strVal(v interface{}) string {
 	return fmt.Sprintf("%v", v)
 }
 
+// strSlice and splitLines always return a non-nil slice: these fields are
+// JSON arrays the UI iterates, and null crashed the Headnotes tab.
 func strSlice(v interface{}) []string {
 	if v == nil {
-		return nil
+		return []string{}
 	}
 	arr, ok := v.([]interface{})
 	if !ok {
-		return nil
+		return []string{}
 	}
 	out := make([]string, 0, len(arr))
 	for _, item := range arr {
@@ -316,7 +350,7 @@ func strSlice(v interface{}) []string {
 
 func splitLines(s string) []string {
 	if s == "" {
-		return nil
+		return []string{}
 	}
 	parts := strings.Split(s, "\n")
 	out := make([]string, 0, len(parts))

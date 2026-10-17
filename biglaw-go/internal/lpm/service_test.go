@@ -4,6 +4,7 @@
 package lpm
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -71,6 +72,20 @@ func TestServiceGenerateForMatterWritesArtifactsAndCorpus(t *testing.T) {
 		if _, err := os.Stat(base + ext); err != nil {
 			t.Errorf("expected artifact %s: %v", base+ext, err)
 		}
+	}
+}
+
+// A model failure persists nothing: no corpus row, no artifacts.
+func TestServiceGenerateForMatterModelFailurePersistsNothing(t *testing.T) {
+	svc, dir := newTestService(t, &fakeProvider{err: errors.New("model down")})
+	if rep, err := svc.GenerateForMatter(MatterRef{MatterNumber: "M-001"}, "2026-06-07"); rep != nil || err == nil {
+		t.Fatalf("want error, got (%+v, %v)", rep, err)
+	}
+	if got, _ := svc.Corpus().Query("M-001", "", ""); len(got) != 0 {
+		t.Fatalf("corpus has %d reports after a model failure", len(got))
+	}
+	if _, err := os.Stat(filepath.Join(dir, "reports", "M-001")); !os.IsNotExist(err) {
+		t.Fatalf("artifacts written after a model failure: %v", err)
 	}
 }
 

@@ -114,10 +114,12 @@ func (r *Registry) respondToRedlineTool() *ToolImpl {
 			classifyModel := routing.SelectModel(r.cfg, routing.SelectParams{TaskType: routing.TaskExtraction})
 			prov, err := r.provReg.Get(judgeModel)
 			if err != nil {
-				return fail(err.Error()), nil
+				slog.Warn("respond_to_redline: no provider for judge model", "model", judgeModel, "error", err)
+				return fail("respond_to_redline aborted: " + providers.Describe(providers.ModelFailure("judge", err)) +
+					" — no response document was written"), nil
 			}
 			engine := negotiate.New(prov, routing.ResolveModelID(judgeModel), routing.ResolveModelID(classifyModel))
-			decisions := engine.Decide(revs, pbStore, negotiate.Opts{
+			decisions, err := engine.Decide(revs, pbStore, negotiate.Opts{
 				MatterNumber: strInput(input, "matter_number"),
 				ClientID:     strInput(input, "client_number"),
 				ProfileID:    strInput(input, "owner_id"),
@@ -125,6 +127,13 @@ func (r *Registry) respondToRedlineTool() *ToolImpl {
 				TaskID:       ctx.TaskID,
 				History:      history,
 			})
+			if err != nil {
+				// Nothing is written — no .response.docx, no Redtime versions:
+				// a half-judged response is not a negotiating position.
+				slog.Warn("respond_to_redline: aborted on model failure", "error", err)
+				return fail("respond_to_redline aborted: " + providers.Describe(err) +
+					" — no response document was written and no negotiation history was recorded"), nil
+			}
 
 			author := strings.TrimSpace(strInput(input, "author"))
 			if author == "" {

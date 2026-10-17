@@ -8,10 +8,13 @@ package providers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"regexp"
@@ -374,7 +377,7 @@ func (p *OllamaProvider) Chat(params ChatParams) (*ChatResponse, error) {
 	}
 
 	body, _ := json.Marshal(reqBody)
-	chatResp, err := p.sendChat(body, url)
+	chatResp, err := p.sendChat(params.Ctx, body, url)
 	// Reasoning-default models can refuse function tools on the
 	// chat-completions endpoint unless reasoning is explicitly turned off:
 	// OpenAI's gpt-5.6-luna 400s with "Function tools with reasoning_effort
@@ -391,7 +394,7 @@ func (p *OllamaProvider) Chat(params ChatParams) (*ChatResponse, error) {
 		retryBody := reqBody
 		retryBody.ReasoningEffort = "none"
 		if b2, mErr := json.Marshal(retryBody); mErr == nil {
-			chatResp, err = p.sendChat(b2, url)
+			chatResp, err = p.sendChat(params.Ctx, b2, url)
 		}
 	}
 	if err != nil {
@@ -418,7 +421,7 @@ func (p *OllamaProvider) Chat(params ChatParams) (*ChatResponse, error) {
 			retryBody.Thinking = &openAIThinking{Type: "disabled"}
 		}
 		if b2, mErr := json.Marshal(retryBody); mErr == nil {
-			if r2, err2 := p.sendChat(b2, url); err2 == nil {
+			if r2, err2 := p.sendChat(params.Ctx, b2, url); err2 == nil {
 				chatResp = r2
 			}
 		}
@@ -473,16 +476,32 @@ func (p *OllamaProvider) Chat(params ChatParams) (*ChatResponse, error) {
 	}, nil
 }
 
+// transportError classifies a transport-level failure (from Do or from reading
+// the body) the one way: a cancelled caller keeps context.Canceled, a timeout
+// carries ErrModelTimeout (HTTP 504), anything else stays unclassified (and
+// becomes ErrModelUnavailable at the engine boundary).
+func transportError(ctx context.Context, op string, err error) error {
+	if ctx.Err() == context.Canceled {
+		return fmt.Errorf("ollama: %s: %w", op, context.Canceled)
+	}
+	var ne net.Error
+	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &ne) && ne.Timeout()) {
+		return fmt.Errorf("ollama: %s: %w: %w", op, ErrModelTimeout, err)
+	}
+	return fmt.Errorf("ollama: %s: %w", op, err)
+}
+
 // sendChat POSTs one chat request and decodes the reply, retrying transient HTTP
 // failures (429/5xx/529) with Retry-After honored when present, else exponential
 // backoff with jitter — bounded by maxProviderRetries and the client timeout budget.
 // Each retry is logged at WARN with the attempt count. A network error or a
 // non-retryable status returns immediately.
-func (p *OllamaProvider) sendChat(body []byte, url string) (*openAIChatResponse, error) {
+func (p *OllamaProvider) sendChat(ctx context.Context, body []byte, url string) (*openAIChatResponse, error) {
+	ctx = ctxOrBackground(ctx)
 	start := time.Now()
 	var lastErr error
 	for attempt := 0; ; attempt++ {
-		req, err := http.NewRequest("POST", url, bytes.NewReader(body))
+		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 		if err != nil {
 			return nil, fmt.Errorf("ollama: build request: %w", err)
 		}
@@ -493,15 +512,18 @@ func (p *OllamaProvider) sendChat(body []byte, url string) (*openAIChatResponse,
 
 		resp, err := p.client.Do(req)
 		if err != nil {
-			// Transport error (timeout, connection refused): not an HTTP status —
-			// surface it rather than spin (the client already applied its timeout).
-			return nil, fmt.Errorf("ollama: do request: %w", err)
+			// Transport error (timeout, connection refused, caller cancelled):
+			// not an HTTP status — surface it rather than spin (the client
+			// already applied its timeout).
+			return nil, transportError(ctx, "do request", err)
 		}
 		if resp.StatusCode == http.StatusOK {
 			responseBody, rerr := io.ReadAll(io.LimitReader(resp.Body, maxProviderResponseBytes+1))
 			resp.Body.Close()
 			if rerr != nil {
-				return nil, fmt.Errorf("ollama: read response: %w", rerr)
+				// Headers arrived but the body stalled or was cut: the same
+				// timeout/cancel classification as a failed Do.
+				return nil, transportError(ctx, "read response", rerr)
 			}
 			if int64(len(responseBody)) > maxProviderResponseBytes {
 				return nil, fmt.Errorf("ollama: response exceeds %d MiB limit", maxProviderResponseBytes>>20)
@@ -518,12 +540,17 @@ func (p *OllamaProvider) sendChat(body []byte, url string) (*openAIChatResponse,
 		retryAfter := resp.Header.Get("Retry-After")
 		resp.Body.Close()
 		lastErr = fmt.Errorf("ollama: HTTP %d: %s", resp.StatusCode, string(b))
-
-		if !retryableStatus(resp.StatusCode) || attempt >= maxProviderRetries {
-			return nil, lastErr
+		if p.apiKey == "" && (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) {
+			// The endpoint demands credentials and none are configured: that
+			// is a missing provider configuration, not an upstream outage.
+			return nil, fmt.Errorf("%w: no API key is set for %s (%v)", ErrNoProvider, p.baseURL, lastErr)
 		}
 
 		wait, honored := parseRetryAfter(retryAfter)
+		if !retryableStatus(resp.StatusCode) || attempt >= maxProviderRetries {
+			return nil, finalStatusError(resp.StatusCode, wait, honored, lastErr)
+		}
+
 		if !honored {
 			wait = backoffDuration(attempt)
 		}
@@ -532,13 +559,31 @@ func (p *OllamaProvider) sendChat(body []byte, url string) (*openAIChatResponse,
 		}
 		// Respect the client timeout budget: don't sleep past what the caller allotted.
 		if p.client.Timeout > 0 && time.Since(start)+wait > p.client.Timeout {
-			return nil, lastErr
+			return nil, finalStatusError(resp.StatusCode, wait, honored, lastErr)
 		}
 		slog.Warn("provider call failed; backing off and retrying",
 			"status", resp.StatusCode, "attempt", attempt+1, "maxAttempts", maxProviderRetries+1,
 			"waitMs", wait.Milliseconds(), "retryAfterHonored", honored)
-		time.Sleep(wait)
+		select {
+		case <-time.After(wait):
+		case <-ctx.Done():
+			return nil, fmt.Errorf("ollama: %w (while backing off after: %v)", ctx.Err(), lastErr)
+		}
 	}
+}
+
+// finalStatusError classifies a non-200 status that will not be retried: a
+// 429 becomes a *RateLimitError (ErrModelRateLimited) carrying the provider's
+// Retry-After when it sent one; anything else is returned as-is.
+func finalStatusError(status int, wait time.Duration, honored bool, err error) error {
+	if status == http.StatusTooManyRequests {
+		ra := time.Duration(0)
+		if honored {
+			ra = wait
+		}
+		return &RateLimitError{RetryAfter: ra, Err: err}
+	}
+	return err
 }
 
 // shouldRetryThinkingDisabled reports whether an empty-content response is the

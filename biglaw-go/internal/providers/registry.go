@@ -46,14 +46,14 @@ func NewRegistry(cfg *config.Config) *Registry {
 func (r *Registry) Get(modelID string) (Provider, error) {
 	if routing.IsOllamaModel(modelID) || routing.IsLocalModel(modelID) {
 		if r.local == nil {
-			return nil, fmt.Errorf("local inference not configured for model %s", modelID)
+			return nil, fmt.Errorf("%w: local inference not configured for model %s", ErrNoProvider, modelID)
 		}
 		return r.local, nil
 	}
 	if r.primary != nil {
 		return r.primary, nil
 	}
-	return nil, fmt.Errorf("no provider configured for model %s (set the stack API key / PRIMARY_MODEL_URL, or LOCAL_INFERENCE_URL)", modelID)
+	return nil, fmt.Errorf("%w for model %s (set the stack API key / PRIMARY_MODEL_URL, or LOCAL_INFERENCE_URL)", ErrNoProvider, modelID)
 }
 
 // MustGet panics if the provider is not available (use only in startup paths).

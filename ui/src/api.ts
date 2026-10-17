@@ -39,19 +39,48 @@ async function throwOnConflict(res: Response): Promise<void> {
   if (parsed.conflicts?.length) throw new ClientConflictError(parsed.error ?? "Conflict of interest detected", parsed.conflicts);
 }
 
+// Typed model-failure errors from the backend (502 model_unavailable, 503
+// model_not_configured / model_rate_limited, 504 model_timeout, 422
+// no_content). Their messages are written for users, so they are shown even
+// though most arrive as 5xx; the request id lets support find the server log.
+const MODEL_ERROR_TYPES = new Set([
+  "model_unavailable", "model_not_configured", "model_rate_limited", "model_timeout", "no_content",
+]);
+
+/** Error thrown for a non-2xx response; errorType is set for typed backend errors. */
+export class ApiError extends Error {
+  readonly status: number;
+  readonly errorType?: string;
+  readonly requestId?: string;
+  constructor(message: string, status: number, errorType?: string, requestId?: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.errorType = errorType;
+    this.requestId = requestId;
+  }
+}
+
 async function json<T>(res: Response): Promise<T> {
   if (!res.ok) {
     if (res.status === 401) window.dispatchEvent(new Event("biglaw:unauthorized"));
     const raw = await res.text().catch(() => "");
     let detail = "";
-    if (res.status < 500 && raw) {
+    let errorType: string | undefined;
+    let requestId: string | undefined;
+    if (raw) {
       try {
-        const parsed = JSON.parse(raw) as { error?: unknown };
-        if (typeof parsed.error === "string") detail = parsed.error.slice(0, 240);
+        const parsed = JSON.parse(raw) as { error?: unknown; errorType?: unknown; requestId?: unknown };
+        if (typeof parsed.errorType === "string") errorType = parsed.errorType;
+        if (typeof parsed.requestId === "string") requestId = parsed.requestId.slice(0, 64);
+        const showable = res.status < 500 || (errorType !== undefined && MODEL_ERROR_TYPES.has(errorType));
+        if (showable && typeof parsed.error === "string") detail = parsed.error.slice(0, 240);
       } catch { /* non-standard bodies are not shown to users */ }
     }
     const fallback = res.status >= 500 ? "The service could not complete that request." : res.statusText;
-    throw new Error(detail || fallback || `Request failed (${res.status})`);
+    let message = detail || fallback || `Request failed (${res.status})`;
+    if (requestId && errorType && MODEL_ERROR_TYPES.has(errorType)) message += ` (ref ${requestId.slice(0, 8)})`;
+    throw new ApiError(message, res.status, errorType, requestId);
   }
   return res.json() as Promise<T>;
 }

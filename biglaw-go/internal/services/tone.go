@@ -8,12 +8,15 @@
 package services
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
-	"sync"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/discover-legal/biglaw-go/internal/cost"
 	"github.com/discover-legal/biglaw-go/internal/providers"
@@ -38,8 +41,18 @@ func NewToneAnalyzer(provider providers.Provider, haikuModel string) *ToneAnalyz
 	return &ToneAnalyzer{provider: provider, haiku: haikuModel}
 }
 
-// Analyze runs the MapReduce pipeline on writing samples.
-func (a *ToneAnalyzer) Analyze(samples []string, lawyerName, sourceType, profileID string) (*types.ToneProfile, error) {
+// Analyze runs the MapReduce pipeline on writing samples. Any failed model
+// call, or a final profile the model did not actually produce, returns an
+// error matching providers.ErrModelUnavailable / ErrNoProvider. No default
+// profile is ever synthesised: a stored profile is injected into every
+// drafting agent as "this lawyer's voice".
+//
+// ctx bounds every model call (nil = background); the first failing call
+// cancels the rest of its level.
+func (a *ToneAnalyzer) Analyze(ctx context.Context, samples []string, lawyerName, sourceType, profileID string) (*types.ToneProfile, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	safeName := sanitizeTone(lawyerName, 200)
 
 	posts := make([]string, 0, len(samples))
@@ -58,43 +71,53 @@ func (a *ToneAnalyzer) Analyze(samples []string, lawyerName, sourceType, profile
 
 	slog.Info("Tone analysis starting", "lawyer", safeName, "posts", len(posts), "sourceType", sourceType)
 
-	finalNote := a.recursiveRollup(posts, safeName, 0, true, profileID)
-	profile := a.buildProfile(finalNote, safeName, len(posts), sourceType, profileID)
+	finalNote, err := a.recursiveRollup(ctx, posts, safeName, 0, true, profileID)
+	if err != nil {
+		return nil, err
+	}
+	profile, err := a.buildProfile(ctx, finalNote, safeName, len(posts), sourceType, profileID)
+	if err != nil {
+		return nil, err
+	}
 
 	slog.Info("Tone analysis complete", "lawyer", safeName, "formality", profile.Formality)
 	return profile, nil
 }
 
-func (a *ToneAnalyzer) recursiveRollup(items []string, name string, level int, isRaw bool, profileID string) string {
+func (a *ToneAnalyzer) recursiveRollup(ctx context.Context, items []string, name string, level int, isRaw bool, profileID string) (string, error) {
 	chunkSize := noteChunkSize
 	if isRaw {
 		chunkSize = postChunkSize
 	}
 	chunks := chunkSlice(items, chunkSize)
 
-	// Process all chunks in parallel
+	// Process all chunks in parallel. The first failure cancels the group's
+	// context, aborting the in-flight calls of the other chunks — a failed
+	// analysis must not keep spending on calls whose result is discarded.
 	notes := make([]string, len(chunks))
-	var wg sync.WaitGroup
+	g, gctx := errgroup.WithContext(ctx)
 	for i, chunk := range chunks {
-		wg.Add(1)
-		go func(idx int, c []string) {
-			defer wg.Done()
+		g.Go(func() error {
+			var err error
 			if isRaw {
-				notes[idx] = a.analyzeChunk(c, name, profileID)
+				notes[i], err = a.analyzeChunk(gctx, chunk, name, profileID)
 			} else {
-				notes[idx] = a.rollupNotes(c, name, profileID)
+				notes[i], err = a.rollupNotes(gctx, chunk, name, profileID)
 			}
-		}(i, chunk)
+			return err
+		})
 	}
-	wg.Wait()
+	if err := g.Wait(); err != nil {
+		return "", err
+	}
 
 	if len(notes) == 1 {
-		return notes[0]
+		return notes[0], nil
 	}
-	return a.recursiveRollup(notes, name, level+1, false, profileID)
+	return a.recursiveRollup(ctx, notes, name, level+1, false, profileID)
 }
 
-func (a *ToneAnalyzer) analyzeChunk(posts []string, name, profileID string) string {
+func (a *ToneAnalyzer) analyzeChunk(ctx context.Context, posts []string, name, profileID string) (string, error) {
 	var sb strings.Builder
 	for i, p := range posts {
 		fmt.Fprintf(&sb, "---POST %d---\n%s\n\n", i+1, p)
@@ -105,10 +128,10 @@ func (a *ToneAnalyzer) analyzeChunk(posts []string, name, profileID string) stri
 			"Be specific — quote actual words or phrases observed. "+
 			"Plain prose only. No JSON, no headers, no bullet points.\n\n%s",
 		name, len(posts), sb.String())
-	return a.haiku3(prompt, 300, profileID)
+	return a.haiku3(ctx, prompt, 300, profileID)
 }
 
-func (a *ToneAnalyzer) rollupNotes(notes []string, name, profileID string) string {
+func (a *ToneAnalyzer) rollupNotes(ctx context.Context, notes []string, name, profileID string) (string, error) {
 	var sb strings.Builder
 	for i, n := range notes {
 		fmt.Fprintf(&sb, "[Observation %d]\n%s\n\n", i+1, n)
@@ -118,10 +141,10 @@ func (a *ToneAnalyzer) rollupNotes(notes []string, name, profileID string) strin
 			"Preserve specific phrases and concrete patterns. Where observations conflict, note the variation briefly. "+
 			"Plain prose only. No JSON, no headers, no bullet points.\n\n%s",
 		len(notes), name, sb.String())
-	return a.haiku3(prompt, 300, profileID)
+	return a.haiku3(ctx, prompt, 300, profileID)
 }
 
-func (a *ToneAnalyzer) buildProfile(note, name string, sampleCount int, sourceType, profileID string) *types.ToneProfile {
+func (a *ToneAnalyzer) buildProfile(ctx context.Context, note, name string, sampleCount int, sourceType, profileID string) (*types.ToneProfile, error) {
 	prompt := fmt.Sprintf(
 		"Convert this writing style description for %s into structured JSON. "+
 			"Respond with ONLY valid JSON — no prose, no markdown fences.\n\n"+
@@ -137,18 +160,28 @@ func (a *ToneAnalyzer) buildProfile(note, name string, sampleCount int, sourceTy
 			"Style description:\n%s",
 		name, note)
 
-	raw := a.haiku3(prompt, 800, profileID)
+	raw, err := a.haiku3(ctx, prompt, 800, profileID)
+	if err != nil {
+		return nil, err
+	}
 	raw = strings.ReplaceAll(raw, "```json", "")
 	raw = strings.ReplaceAll(raw, "```", "")
 	raw = strings.TrimSpace(raw)
 	s := strings.Index(raw, "{")
 	eIdx := strings.LastIndex(raw, "}")
 	if s < 0 || eIdx <= s {
-		return fallbackProfile(name, sampleCount, sourceType)
+		return nil, providers.ModelFailure("tone analysis", errors.New("unparseable model output: no JSON object"))
 	}
 	var p map[string]interface{}
 	if err := json.Unmarshal([]byte(raw[s:eIdx+1]), &p); err != nil {
-		return fallbackProfile(name, sampleCount, sourceType)
+		return nil, providers.ModelFailure("tone analysis", fmt.Errorf("unparseable model output: %w", err))
+	}
+	// The injection snippet is the part drafting agents actually consume; a
+	// profile without one is not a voice profile.
+	inj, _ := p["injectionSnippet"].(string)
+	inj = strings.TrimSpace(inj)
+	if inj == "" {
+		return nil, providers.ModelFailure("tone analysis", errors.New("model output has no injectionSnippet"))
 	}
 
 	profile := &types.ToneProfile{
@@ -175,28 +208,28 @@ func (a *ToneAnalyzer) buildProfile(note, name string, sampleCount int, sourceTy
 		}
 	}
 
-	if inj, ok := p["injectionSnippet"].(string); ok && inj != "" {
-		if len(inj) > 1000 {
-			inj = strutil.Truncate(inj, 1000)
-		}
-		profile.InjectionSnippet = inj
-	} else {
-		profile.InjectionSnippet = fmt.Sprintf("%s — no distinctive style detected. Write in clear, professional legal English.", name)
+	if len(inj) > 1000 {
+		inj = strutil.Truncate(inj, 1000)
+	}
+	profile.InjectionSnippet = inj
+	if profile.SignaturePatterns == nil {
+		profile.SignaturePatterns = []string{}
 	}
 
-	return profile
+	return profile, nil
 }
 
-func (a *ToneAnalyzer) haiku3(prompt string, maxTokens int, profileID string) string {
+func (a *ToneAnalyzer) haiku3(ctx context.Context, prompt string, maxTokens int, profileID string) (string, error) {
 	start := time.Now()
 	resp, err := a.provider.Chat(providers.ChatParams{
+		Ctx:       ctx,
 		Model:     a.haiku,
 		MaxTokens: maxTokens,
 		Messages:  []providers.Message{{Role: "user", Content: prompt}},
 	})
 	if err != nil {
 		slog.Warn("ToneAnalyzer Haiku call failed", "error", err)
-		return ""
+		return "", providers.ModelFailure("tone analysis", err)
 	}
 	dms := time.Since(start).Milliseconds()
 	costUSD := cost.CalcCostUSD(a.haiku, resp.Usage.InputTokens, resp.Usage.OutputTokens, 0, 0)
@@ -207,25 +240,11 @@ func (a *ToneAnalyzer) haiku3(prompt string, maxTokens int, profileID string) st
 		Context: "tone_analysis", ProfileID: profileID,
 	})
 	for _, blk := range resp.Content {
-		if blk.Type == providers.BlockText {
-			return blk.Text
+		if blk.Type == providers.BlockText && strings.TrimSpace(blk.Text) != "" {
+			return blk.Text, nil
 		}
 	}
-	return ""
-}
-
-func fallbackProfile(name string, sampleCount int, sourceType string) *types.ToneProfile {
-	return &types.ToneProfile{
-		GeneratedAt:       time.Now().UTC().Format(time.RFC3339),
-		SourceType:        sourceType,
-		SampleCount:       sampleCount,
-		Formality:         "semi-formal",
-		SentenceStyle:     "mixed",
-		Vocabulary:        "balanced",
-		RhetoricalStyle:   "analytical",
-		SignaturePatterns: []string{},
-		InjectionSnippet:  fmt.Sprintf("%s — no distinctive style detected. Write in clear, professional legal English.", name),
-	}
+	return "", providers.ModelFailure("tone analysis", errors.New("empty model output"))
 }
 
 func chunkSlice(items []string, size int) [][]string {

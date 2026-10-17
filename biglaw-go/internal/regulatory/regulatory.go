@@ -9,6 +9,7 @@ package regulatory
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -128,19 +129,31 @@ func (m *Monitor) Stop() {
 
 // CheckAll checks all open tasks for new regulations.
 func (m *Monitor) CheckAll(tasks []types.Task) []types.RegulationAlert {
-	var allAlerts []types.RegulationAlert
+	alerts, _ := m.CheckAllReport(tasks)
+	return alerts
+}
+
+// CheckAllReport checks all open tasks and also returns the matters whose
+// check failed (search or relevance model unavailable). A failed check is a
+// MISSED check, not "no new regulations": callers must surface it, and the
+// matter's cooldown is not consumed so the next tick retries it.
+func (m *Monitor) CheckAllReport(tasks []types.Task) (alerts []types.RegulationAlert, missed []string) {
 	for _, t := range tasks {
 		if t.Status != "running" && t.Status != "pending" {
 			continue
 		}
-		alerts, err := m.CheckMatter(t)
+		a, err := m.CheckMatter(t)
+		alerts = append(alerts, a...)
 		if err != nil {
-			slog.Warn("RegPulseMonitor: error checking matter", "taskId", t.ID, "error", err)
-			continue
+			key := t.MatterNumber
+			if key == "" {
+				key = t.ID
+			}
+			slog.Warn("RegPulseMonitor: regulatory check MISSED for matter — will retry next run", "matter", key, "error", err)
+			missed = append(missed, key)
 		}
-		allAlerts = append(allAlerts, alerts...)
 	}
-	return allAlerts
+	return alerts, missed
 }
 
 // CheckMatter checks a single task for new regulations.
@@ -168,15 +181,28 @@ func (m *Monitor) CheckMatter(task types.Task) ([]types.RegulationAlert, error) 
 	m.lastChecked[cooldownKey] = time.Now()
 	m.mu.Unlock()
 
-	query := m.BuildQuery(practiceArea, jurisdiction)
-	results, err := m.searchTavily(query)
-	if err != nil || len(results) == 0 {
-		return nil, err
+	// A failed check must be retried, not counted as checked.
+	releaseCooldown := func() {
+		m.mu.Lock()
+		m.lastChecked[cooldownKey] = lastCheck
+		m.mu.Unlock()
 	}
 
-	alerts, err := m.filterRelevant(results, practiceArea, jurisdiction, task.MatterNumber)
+	query := m.BuildQuery(practiceArea, jurisdiction)
+	results, err := m.searchTavily(query)
 	if err != nil {
+		releaseCooldown()
 		return nil, err
+	}
+	if len(results) == 0 {
+		return nil, nil
+	}
+
+	// Alerts the relevance model DID confirm are still emitted when other
+	// results' checks failed; the failure is returned alongside them.
+	alerts, filterErr := m.filterRelevant(results, practiceArea, jurisdiction, task.MatterNumber)
+	if filterErr != nil {
+		releaseCooldown()
 	}
 
 	m.mu.Lock()
@@ -192,7 +218,7 @@ func (m *Monitor) CheckMatter(task types.Task) ([]types.RegulationAlert, error) 
 	if len(alerts) > 0 {
 		slog.Info("RegPulseMonitor: emitted regulation alerts", "taskId", task.ID, "count", len(alerts))
 	}
-	return alerts, nil
+	return alerts, filterErr
 }
 
 // BuildQuery constructs a Tavily search query.
@@ -227,14 +253,12 @@ func (m *Monitor) searchTavily(query string) ([]tavilyResult, error) {
 	client := &http.Client{Timeout: time.Duration(requestTimeoutMs) * time.Millisecond}
 	resp, err := client.Post(tavilyURL, "application/json", bytes.NewReader(body))
 	if err != nil {
-		slog.Warn("RegPulseMonitor: Tavily request failed", "error", err)
-		return nil, nil
+		return nil, fmt.Errorf("regulatory search request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		slog.Warn("RegPulseMonitor: Tavily non-200", "status", resp.StatusCode)
-		return nil, nil
+		return nil, fmt.Errorf("regulatory search returned HTTP %d", resp.StatusCode)
 	}
 
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
@@ -242,19 +266,23 @@ func (m *Monitor) searchTavily(query string) ([]tavilyResult, error) {
 		return nil, err
 	}
 	if int64(len(raw)) > maxResponseBytes {
-		slog.Warn("RegPulseMonitor: Tavily response exceeded 2 MB cap")
-		return nil, nil
+		return nil, fmt.Errorf("regulatory search response exceeded the %d-byte cap", maxResponseBytes)
 	}
 
 	var data tavilyResponse
 	if err := json.Unmarshal(raw, &data); err != nil {
-		return nil, nil
+		return nil, fmt.Errorf("regulatory search response unparseable: %w", err)
 	}
 	return data.Results, nil
 }
 
+// filterRelevant asks the model which results matter. Results whose check
+// failed are counted and reported as an error (alongside the alerts that were
+// confirmed) — never silently treated as "not relevant".
 func (m *Monitor) filterRelevant(results []tavilyResult, practiceArea, jurisdiction, matterNumber string) ([]types.RegulationAlert, error) {
 	var alerts []types.RegulationAlert
+	failed := 0
+	var lastErr error
 
 	for _, result := range results {
 		safeTitle := sanitize(result.Title)
@@ -278,7 +306,9 @@ func (m *Monitor) filterRelevant(results []tavilyResult, practiceArea, jurisdict
 			Messages:  []providers.Message{{Role: "user", Content: userPrompt}},
 		})
 		if err != nil {
-			slog.Warn("RegPulseMonitor: Haiku relevance call failed", "error", err)
+			slog.Warn("RegPulseMonitor: relevance call failed", "error", err)
+			failed++
+			lastErr = err
 			continue
 		}
 		dms := time.Since(start).Milliseconds()
@@ -303,10 +333,14 @@ func (m *Monitor) filterRelevant(results []tavilyResult, practiceArea, jurisdict
 		s := strings.Index(raw, "{")
 		e := strings.LastIndex(raw, "}")
 		if s < 0 || e <= s {
+			failed++
+			lastErr = errors.New("unparseable relevance output")
 			continue
 		}
 		var parsed map[string]interface{}
 		if err := json.Unmarshal([]byte(raw[s:e+1]), &parsed); err != nil {
+			failed++
+			lastErr = fmt.Errorf("unparseable relevance output: %w", err)
 			continue
 		}
 		relevant, _ := parsed["relevant"].(bool)
@@ -329,6 +363,9 @@ func (m *Monitor) filterRelevant(results []tavilyResult, practiceArea, jurisdict
 			DetectedAt:   time.Now().UTC().Format(time.RFC3339),
 			Source:       "tavily",
 		})
+	}
+	if failed > 0 {
+		return alerts, providers.ModelFailure(fmt.Sprintf("regulatory relevance (%d of %d results unchecked)", failed, len(results)), lastErr)
 	}
 	return alerts, nil
 }

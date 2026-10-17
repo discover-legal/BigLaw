@@ -9,10 +9,13 @@
 package playbook
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -360,6 +363,8 @@ type KnowledgeSearcher interface {
 
 // BuildOpts configures a playbook build.
 type BuildOpts struct {
+	// Ctx bounds every model call (nil = background).
+	Ctx          context.Context
 	Scope        types.PlaybookScope
 	OwnerID      string
 	OwnerName    string
@@ -415,7 +420,13 @@ func (b *Builder) Build(store *Store, kSearch func(query string, topK int) []typ
 			end = len(clauseTypes)
 		}
 		batch := clauseTypes[i:end]
-		be := b.extractBatch(batch, excerptText, opts, docCount)
+		be, err := b.extractBatch(batch, excerptText, opts, docCount)
+		if err != nil {
+			// Nothing is persisted: a playbook whose positions read
+			// "Extraction failed" would be applied as the firm's position by
+			// every later redline and precedent run.
+			return nil, err
+		}
 		entries = append(entries, be...)
 	}
 
@@ -446,7 +457,7 @@ func (b *Builder) Build(store *Store, kSearch func(query string, topK int) []typ
 	return &pb, nil
 }
 
-func (b *Builder) extractBatch(clauseTypes []string, excerpts string, opts BuildOpts, docCount int) []types.PlaybookEntry {
+func (b *Builder) extractBatch(clauseTypes []string, excerpts string, opts BuildOpts, docCount int) ([]types.PlaybookEntry, error) {
 	start := time.Now()
 
 	numbered := make([]string, len(clauseTypes))
@@ -487,6 +498,7 @@ If insufficient data: standardPosition: "Insufficient precedent data — apply f
 		opts.PracticeArea, strings.Join(numbered, "\n"), docCount, truncate(excerpts, 8000))
 
 	resp, err := b.provider.Chat(providers.ChatParams{
+		Ctx:         opts.Ctx,
 		Model:       b.haiku,
 		MaxTokens:   2048,
 		System:      system,
@@ -496,7 +508,7 @@ If insufficient data: standardPosition: "Insufficient precedent data — apply f
 	})
 	if err != nil {
 		slog.Warn("PlaybookBuilder batch failed", "error", err)
-		return fallbackEntries(clauseTypes, opts.PracticeArea)
+		return nil, providers.ModelFailure("playbook position extraction", err)
 	}
 
 	dms := time.Since(start).Milliseconds()
@@ -530,19 +542,37 @@ If insufficient data: standardPosition: "Insufficient precedent data — apply f
 	s := strings.Index(raw, "[")
 	eIdx := strings.LastIndex(raw, "]")
 	if s < 0 || eIdx <= s {
-		return fallbackEntries(clauseTypes, opts.PracticeArea)
+		return nil, providers.ModelFailure("playbook position extraction", errors.New("unparseable model output: no JSON array"))
 	}
 
 	var parsed []map[string]interface{}
 	if err := json.Unmarshal([]byte(raw[s:eIdx+1]), &parsed); err != nil {
-		return fallbackEntries(clauseTypes, opts.PracticeArea)
+		return nil, providers.ModelFailure("playbook position extraction", fmt.Errorf("unparseable model output: %w", err))
+	}
+
+	// Every requested clause type must come back with a real standard
+	// position. A playbook missing a position (or carrying an empty one) is
+	// never saved: later redlines/precedents would treat the gap as the
+	// firm's position. Entries the model invented for unrequested types are
+	// dropped.
+	matched := matchEntries(clauseTypes, parsed)
+	var missing []string
+	for i, ct := range clauseTypes {
+		if matched[i] == nil || strings.TrimSpace(strVal(matched[i]["standardPosition"])) == "" {
+			missing = append(missing, ct)
+		}
+	}
+	if len(missing) > 0 {
+		return nil, providers.ModelFailure("playbook position extraction",
+			fmt.Errorf("no standard position returned for %d of %d clause types: %s", len(missing), len(clauseTypes), strings.Join(missing, ", ")))
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
-	entries := make([]types.PlaybookEntry, 0, len(parsed))
-	for _, p := range parsed {
+	entries := make([]types.PlaybookEntry, 0, len(clauseTypes))
+	for i, ct := range clauseTypes {
+		p := matched[i]
 		e := types.PlaybookEntry{
-			ClauseType:          strVal(p["clauseType"]),
+			ClauseType:          ct,
 			PracticeArea:        opts.PracticeArea,
 			StandardPosition:    strVal(p["standardPosition"]),
 			FallbackPosition:    strVal(p["fallbackPosition"]),
@@ -554,23 +584,49 @@ If insufficient data: standardPosition: "Insufficient precedent data — apply f
 		}
 		entries = append(entries, e)
 	}
-	return entries
+	return entries, nil
 }
 
-func fallbackEntries(clauseTypes []string, practiceArea string) []types.PlaybookEntry {
-	now := time.Now().UTC().Format(time.RFC3339)
-	entries := make([]types.PlaybookEntry, len(clauseTypes))
-	for i, ct := range clauseTypes {
-		entries[i] = types.PlaybookEntry{
-			ClauseType:       ct,
-			PracticeArea:     practiceArea,
-			StandardPosition: "Extraction failed — review source documents manually.",
-			RedLines:         []string{"Do not agree without partner sign-off"},
-			DealPoints:       []string{},
-			LastUpdated:      now,
+// clauseEchoPrefix is the list numbering the prompt uses ("1. ", "2) "),
+// which models often echo back into clauseType.
+var clauseEchoPrefix = regexp.MustCompile(`^\s*\d+\s*[.):-]\s*`)
+
+// clauseKey normalises a clause type as the model may echo it: list numbering
+// stripped and a trailing "clause"/"provision" ignored, so "1. Limitation of
+// Liability Clause" matches "Limitation of Liability".
+func clauseKey(s string) string {
+	k := NormalizeClauseType(clauseEchoPrefix.ReplaceAllString(s, ""))
+	for _, suf := range []string{"_clauses", "_clause", "_provisions", "_provision"} {
+		k = strings.TrimSuffix(k, suf)
+	}
+	return k
+}
+
+// matchEntries pairs each requested clause type with the model's entry for
+// it by clauseKey (which already absorbs echoed numbering and a trailing
+// "clause"/"provision"). The only positional pairing is for an entry that
+// carries no clause name at all (missing, blank or bare numbering), at the
+// requested type's own index and only when the counts match: a named
+// entry is never re-labelled, because a paraphrase or an invented type taken
+// by position can save the wrong firm position under a requested type.
+func matchEntries(clauseTypes []string, parsed []map[string]interface{}) []map[string]interface{} {
+	byKey := make(map[string]int, len(parsed))
+	for i, p := range parsed {
+		if k := clauseKey(strVal(p["clauseType"])); k != "" {
+			if _, dup := byKey[k]; !dup {
+				byKey[k] = i
+			}
 		}
 	}
-	return entries
+	out := make([]map[string]interface{}, len(clauseTypes))
+	for i, ct := range clauseTypes {
+		if j, ok := byKey[clauseKey(ct)]; ok {
+			out[i] = parsed[j]
+		} else if len(parsed) == len(clauseTypes) && clauseKey(strVal(parsed[i]["clauseType"])) == "" {
+			out[i] = parsed[i]
+		}
+	}
+	return out
 }
 
 // ─── Clause type catalogue ────────────────────────────────────────────────────

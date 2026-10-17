@@ -137,9 +137,12 @@ func TestDecideWithHistory(t *testing.T) {
 			InsertedText: ", acting reasonably", ContextBefore: "notify", ContextAfter: " promptly"},
 	}
 
-	decisions := New(sp, "jdg-model", "cls-model").Decide(revs, testStore(t), Opts{
+	decisions, err := New(sp, "jdg-model", "cls-model").Decide(revs, testStore(t), Opts{
 		ClientID: "C-100", History: hist,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(decisions) != 2 {
 		t.Fatalf("got %d decisions, want 2", len(decisions))
 	}

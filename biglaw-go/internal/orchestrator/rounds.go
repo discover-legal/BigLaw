@@ -298,6 +298,6 @@ func (o *Orchestrator) applyGroundingCollapse(task *types.Task, passed []types.F
 		return kept, nil
 	default: // fail
 		slog.Error("grounding collapse detected; failing task (GROUNDING_COLLAPSE_ACTION=fail)", "taskId", task.ID, "rate", rate)
-		return nil, fmt.Errorf("%s; refusing to synthesise a deliverable from this record (set GROUNDING_COLLAPSE_ACTION=strict|warn to override)", msg)
+		return nil, &UserFacingError{Msg: fmt.Sprintf("%s; refusing to synthesise a deliverable from this record (set GROUNDING_COLLAPSE_ACTION=strict|warn to override)", msg)}
 	}
 }

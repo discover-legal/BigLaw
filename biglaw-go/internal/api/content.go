@@ -27,6 +27,7 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/csvutil"
 	"github.com/discover-legal/biglaw-go/internal/linkedin"
 	"github.com/discover-legal/biglaw-go/internal/pdfgen"
+	"github.com/discover-legal/biglaw-go/internal/providers"
 	"github.com/discover-legal/biglaw-go/internal/routing"
 	"github.com/discover-legal/biglaw-go/internal/services"
 	"github.com/discover-legal/biglaw-go/internal/tools"
@@ -610,14 +611,16 @@ func (s *Server) contentToneImport(c *gin.Context, linkedInOnly bool) {
 		}
 	}
 
-	analyzer := s.contentToneAnalyzer()
-	if analyzer == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Tone analysis failed. Please try again."})
+	// A model failure is reported as a typed 502/503 and nothing is stored —
+	// never a default profile that would be injected as this lawyer's voice.
+	analyzer, err := contentToneAnalyzerFor(s)
+	if err != nil {
+		writeModelError(c, err, "Tone analysis failed. Please try again.")
 		return
 	}
-	tone, err := analyzer.Analyze(samples, profile.Name, sourceType, profileID)
+	tone, err := analyzer.Analyze(c.Request.Context(), samples, profile.Name, sourceType, profileID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Tone analysis failed. Please try again."})
+		writeModelError(c, err, "Tone analysis failed. Please try again.")
 		return
 	}
 	updated, err := s.profiles.UpdateTone(profileID, tone)
@@ -678,14 +681,22 @@ func (s *Server) contentClassifier() *services.Classifier {
 	return services.New(p, model)
 }
 
+// contentToneAnalyzerFor resolves the tone analyzer for a request; a variable
+// so handler tests can substitute a scripted provider.
+var contentToneAnalyzerFor = (*Server).contentToneAnalyzer
+
 // contentToneAnalyzer builds a Haiku tone analyzer from the provider registry.
-func (s *Server) contentToneAnalyzer() *services.ToneAnalyzer {
+// The error wraps providers.ErrNoProvider when no provider serves the model.
+func (s *Server) contentToneAnalyzer() (*services.ToneAnalyzer, error) {
 	model := routing.Light(s.cfg)
 	p, err := s.orch.Providers().Get(model)
-	if err != nil || p == nil {
-		return nil
+	if err != nil {
+		return nil, err
 	}
-	return services.NewToneAnalyzer(p, model)
+	if p == nil {
+		return nil, fmt.Errorf("%w for model %s", providers.ErrNoProvider, model)
+	}
+	return services.NewToneAnalyzer(p, model), nil
 }
 
 // contentExtractor builds the hybrid document extractor: the Mid-tier model

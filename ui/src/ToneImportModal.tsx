@@ -276,19 +276,24 @@ export function ToneImportModal({ profile, onClose, onUpdated, notify }: {
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [clearBusy, setClearBusy] = useState(false);
+  // Import failure (e.g. the AI model call failed). Nothing was stored, so the
+  // modal stays on the import view and shows the error — never a profile.
+  const [importError, setImportError] = useState<string | null>(null);
 
   const currentSource = SOURCES.find((s) => s.id === source)!;
 
   async function handleImport() {
     if (!file) return;
     setBusy(true);
+    setImportError(null);
     try {
       const result = await api.toneImport(profile.id, file);
       onUpdated({ ...profile, toneProfile: result.toneProfile });
       notify(`Voice profile built — ${result.samplesAnalysed} samples analysed`);
       setView("profile");
     } catch (e) {
-      notify((e as Error).message, "error");
+      setImportError((e as Error).message);
+      setView("import");
     } finally {
       setBusy(false);
     }
@@ -354,7 +359,7 @@ export function ToneImportModal({ profile, onClose, onUpdated, notify }: {
               <ProfileDisplay
                 key="profile"
                 profile={activeTone}
-                onReimport={() => { setFile(null); setView("import"); }}
+                onReimport={() => { setFile(null); setImportError(null); setView("import"); }}
                 onClear={handleClear}
                 loading={clearBusy}
               />
@@ -369,13 +374,23 @@ export function ToneImportModal({ profile, onClose, onUpdated, notify }: {
                 <div className="wf-grid" style={{ marginBottom: 14 }}>
                   {SOURCES.map((s) => (
                     <div key={s.id} className={`wf-chip ${source === s.id ? "sel" : ""}`}
-                      onClick={() => { setSource(s.id); setFile(null); }}>
+                      onClick={() => { setSource(s.id); setFile(null); setImportError(null); }}>
                       <div style={{ display: "flex", justifyContent: "center", marginBottom: 5, opacity: source === s.id ? 1 : 0.5, transition: "opacity 0.15s" }}>{s.icon}</div>
                       <div className="wf-name">{s.label}</div>
                       <div className="wf-desc">{s.desc}</div>
                     </div>
                   ))}
                 </div>
+
+                {importError && (
+                  <div className="error-state" role="alert" style={{ marginBottom: 14 }}>
+                    <span className="error-state-mark">✕</span>
+                    <span style={{ flex: 1, wordBreak: "break-word" }}>
+                      <strong>Voice profile not created.</strong> {importError}
+                      {activeTone ? " Your existing voice profile is unchanged." : ""}
+                    </span>
+                  </div>
+                )}
 
                 {/* Drop zone */}
                 <DropZone

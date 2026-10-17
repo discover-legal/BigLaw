@@ -95,10 +95,6 @@ type opsState struct {
 	regBroadcast *opsBroadcaster[types.RegulationAlert]
 	regErr       error
 
-	reportsOnce sync.Once
-	reportsGen  *reports.Generator
-	reportsErr  error
-
 	jobsOnce sync.Once
 	jobQueue *queue.Queue
 
@@ -272,18 +268,15 @@ func opsRegPulseEnabled(m *regulatory.Monitor) bool {
 	return m != nil && opsEnvBool("REG_PULSE_ENABLED") && m.IsEnabled()
 }
 
+// opsReports resolves the report generator per request (cheap), so a model
+// provider configured after startup is picked up without a restart.
 func (s *Server) opsReports() (*reports.Generator, error) {
-	st := s.ops()
-	st.reportsOnce.Do(func() {
-		heavyID := routing.Heavy(s.cfg)
-		provider, err := s.orch.Providers().Get(heavyID)
-		if err != nil {
-			st.reportsErr = err
-			return
-		}
-		st.reportsGen = reports.New(provider, heavyID)
-	})
-	return st.reportsGen, st.reportsErr
+	heavyID := routing.Heavy(s.cfg)
+	provider, err := s.orch.Providers().Get(heavyID)
+	if err != nil {
+		return nil, err
+	}
+	return reports.New(provider, heavyID), nil
 }
 
 func (s *Server) opsJobs() *queue.Queue {
@@ -485,11 +478,17 @@ func (s *Server) handleRegulatoryCheckNow(c *gin.Context) {
 		return
 	}
 	tasks := opsDerefTasks(s.orch.ListTasks())
-	alerts := m.CheckAll(tasks)
+	alerts, missed := m.CheckAllReport(tasks)
 	if alerts == nil {
 		alerts = []types.RegulationAlert{}
 	}
-	c.JSON(http.StatusOK, gin.H{"checked": len(tasks), "alerts": alerts})
+	body := gin.H{"checked": len(tasks), "alerts": alerts, "missedChecks": len(missed)}
+	if len(missed) > 0 {
+		// A failed check is not "nothing new" — say which matters were not checked.
+		body["missedMatters"] = missed
+		body["warning"] = fmt.Sprintf("%d matter(s) could not be checked (search or AI relevance check unavailable) — they will be retried; absence of alerts for them means nothing.", len(missed))
+	}
+	c.JSON(http.StatusOK, body)
 }
 
 // opsStreamSSE streams values from ch as `data: {json}` SSE frames until the
@@ -589,17 +588,18 @@ func (s *Server) handleStatusReport(c *gin.Context) {
 
 	gen, err := s.opsReports()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "report generator unavailable: " + err.Error()})
+		writeModelError(c, err, "The status report generator is unavailable.")
 		return
 	}
 	report, err := gen.Generate(*task, timeEntries, burn, reports.Opts{
+		Ctx:                c.Request.Context(),
 		Format:             format,
 		IncludeTimeEntries: includeTime,
 		IncludeBudgetBurn:  includeBudget,
 		CustomNote:         body.CustomNote,
 	}, lawyer)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		writeModelError(c, err, "The status report could not be generated.")
 		return
 	}
 
