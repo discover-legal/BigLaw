@@ -3,14 +3,13 @@ import { motion, AnimatePresence } from "framer-motion";
 import { api } from "../api";
 import type {
   ClauseEvent, ClauseTimeline, DriftStatus, RedtimeSource, RedtimeTimeline, RedtimeVersion,
-  ReviewCell, ReviewCitation, ReviewCitationMethod, ReviewRecord, ReviewRow,
-} from "../types";
+  ReviewCell, ReviewCitation, ReviewCitationMethod, ReviewRecord, ReviewRow, Notify } from "../types";
 import { ErrorState } from "../Library";
 import { timeAgo } from "../primitives";
 
 type Tab = "grid" | "timeline";
 
-export function ReviewsPage({ notify }: { notify: (m: string) => void }) {
+export function ReviewsPage({ notify }: { notify: Notify }) {
   const [tab, setTab] = useState<Tab>("grid");
 
   return (
@@ -114,7 +113,7 @@ const METHOD_LABEL: Record<ReviewCitationMethod, string> = {
   ensemble_majority: "ensemble", unverified: "unverified",
 };
 
-function DueDiligenceTab({ notify }: { notify: (m: string) => void }) {
+function DueDiligenceTab({ notify }: { notify: Notify }) {
   const [idInput, setIdInput] = useState("");
   const [review, setReview] = useState<ReviewRecord | null>(null);
   const [loading, setLoading] = useState(false);
@@ -424,7 +423,7 @@ function truncText(s: string, max = 90): string {
   return (i > 40 ? cut.slice(0, i) : cut) + "…";
 }
 
-function RedtimeTab({ notify }: { notify: (m: string) => void }) {
+function RedtimeTab({ notify }: { notify: Notify }) {
   const [idInput, setIdInput] = useState("");
   const [matterNumber, setMatterNumber] = useState("");
   const [practiceArea, setPracticeArea] = useState("");

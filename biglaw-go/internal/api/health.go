@@ -10,6 +10,7 @@ import (
 	"github.com/discover-legal/biglaw-go/internal/audit"
 	"github.com/discover-legal/biglaw-go/internal/settings"
 	"github.com/discover-legal/biglaw-go/internal/types"
+	"github.com/discover-legal/biglaw-go/internal/version"
 	"github.com/gin-gonic/gin"
 )
 
@@ -35,7 +36,7 @@ func (s *Server) handleHealth(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"status":  "ok",
 		"ok":      true,
-		"version": "0.1.0",
+		"version": version.Version,
 		"uptime":  int(time.Since(s.started).Seconds()),
 		"tasks": gin.H{
 			"total":         len(all),

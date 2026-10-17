@@ -19,9 +19,11 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 
+	"github.com/discover-legal/biglaw-go/internal/atomicfile"
 	"github.com/discover-legal/biglaw-go/internal/config"
 	"github.com/discover-legal/biglaw-go/internal/strutil"
 	"github.com/discover-legal/biglaw-go/internal/urlguard"
@@ -87,75 +89,95 @@ type PublicSettings struct {
 	Drafting     Drafting            `json:"drafting"`
 }
 
-// persisted is the on-disk file shape: full settings including the API key.
-type persisted struct {
-	Presentation Presentation `json:"presentation"`
-	DyTopo       DyTopo       `json:"dytopo"`
-	Debate       Debate       `json:"debate"`
-	DocuSeal     struct {
-		Enabled bool   `json:"enabled"`
-		URL     string `json:"url"`
-		APIKey  string `json:"apiKey"`
-	} `json:"docuseal"`
-	ClientVoice ClientVoiceSettings `json:"clientVoice"`
-	Models      Models              `json:"models"`
-	Drafting    Drafting            `json:"drafting"`
-}
-
 // Patch is a deep-partial update; nil fields are left unchanged. Numeric
 // fields are *float64 so any JSON number is accepted, then clamped.
 type Patch struct {
 	Presentation *struct {
-		Mode     *string `json:"mode"`
-		FirmName *string `json:"firmName"`
-	} `json:"presentation"`
+		Mode     *string `json:"mode,omitempty"`
+		FirmName *string `json:"firmName,omitempty"`
+	} `json:"presentation,omitempty"`
 	DyTopo *struct {
-		MaxRounds           *float64 `json:"maxRounds"`
-		MaxAgentsPerRound   *float64 `json:"maxAgentsPerRound"`
-		SimilarityThreshold *float64 `json:"similarityThreshold"`
-	} `json:"dytopo"`
+		MaxRounds           *float64 `json:"maxRounds,omitempty"`
+		MaxAgentsPerRound   *float64 `json:"maxAgentsPerRound,omitempty"`
+		SimilarityThreshold *float64 `json:"similarityThreshold,omitempty"`
+	} `json:"dytopo,omitempty"`
 	Debate *struct {
-		VerificationPasses      *float64 `json:"verificationPasses"`
-		GateConfidenceThreshold *float64 `json:"gateConfidenceThreshold"`
-		AdversarialEnabled      *bool    `json:"adversarialEnabled"`
-		CitationRequired        *bool    `json:"citationRequired"`
-	} `json:"debate"`
+		VerificationPasses      *float64 `json:"verificationPasses,omitempty"`
+		GateConfidenceThreshold *float64 `json:"gateConfidenceThreshold,omitempty"`
+		AdversarialEnabled      *bool    `json:"adversarialEnabled,omitempty"`
+		CitationRequired        *bool    `json:"citationRequired,omitempty"`
+	} `json:"debate,omitempty"`
 	DocuSeal *struct {
-		Enabled *bool   `json:"enabled"`
-		URL     *string `json:"url"`
-		APIKey  *string `json:"apiKey"`
-	} `json:"docuseal"`
+		Enabled *bool   `json:"enabled,omitempty"`
+		URL     *string `json:"url,omitempty"`
+		APIKey  *string `json:"apiKey,omitempty"`
+	} `json:"docuseal,omitempty"`
 	ClientVoice *struct {
-		GateNotes           *bool `json:"gateNotes"`
-		MatterNotifications *bool `json:"matterNotifications"`
-	} `json:"clientVoice"`
+		GateNotes           *bool `json:"gateNotes,omitempty"`
+		MatterNotifications *bool `json:"matterNotifications,omitempty"`
+	} `json:"clientVoice,omitempty"`
 	Models *struct {
-		FigureModel    *string  `json:"figureModel"`
-		SpineModel     *string  `json:"spineModel"`
-		SynthesisModel *string  `json:"synthesisModel"`
-		Available      []string `json:"available"`
-	} `json:"models"`
+		FigureModel    *string  `json:"figureModel,omitempty"`
+		SpineModel     *string  `json:"spineModel,omitempty"`
+		SynthesisModel *string  `json:"synthesisModel,omitempty"`
+		Available      []string `json:"available,omitempty"`
+	} `json:"models,omitempty"`
 	Drafting *struct {
-		DyTopo           *bool    `json:"dytopo"`
-		AgentsPerSection *float64 `json:"agentsPerSection"`
-		Rounds           *float64 `json:"rounds"`
-	} `json:"drafting"`
+		DyTopo           *bool    `json:"dytopo,omitempty"`
+		AgentsPerSection *float64 `json:"agentsPerSection,omitempty"`
+		Rounds           *float64 `json:"rounds,omitempty"`
+	} `json:"drafting,omitempty"`
 }
 
 // ─── Store ────────────────────────────────────────────────────────────────────
 
 // SettingsStore applies persisted overrides onto the live config and writes
 // updates back to disk atomically (write-to-tmp then rename).
+//
+// Precedence: the settings file is an overlay of the fields an admin changed
+// in the UI, not a snapshot of the whole config. On every save only the
+// fields whose value differs from the environment/defaults (the config as it
+// was before any overlay — the baseline) are written, in the same sparse
+// shape as a PUT /settings Patch. So:
+//
+//   - a field the admin changed keeps the admin's value across restarts, even
+//     if the environment later changes it (the file wins for that field);
+//   - every other field follows the environment: changing e.g. DOCUSEAL_URL
+//     and restarting takes effect, even after an unrelated Save;
+//   - setting a field back to its environment value removes it from the file.
+//
+// Files are versioned ("v": fileVersion). Files written by older versions
+// carry no marker and hold a full snapshot of every field — including the
+// built-in defaults of fields the admin never touched, which would otherwise
+// mask the environment forever. On load such a file drops every value equal
+// to its built-in default (config.Defaults, no environment applied): those
+// can't be told apart from untouched fields, and the environment or the same
+// default applies in their place. Everything else is kept, and the next save
+// rewrites the file in the current sparse, versioned form.
 type SettingsStore struct {
-	mu   sync.Mutex
-	cfg  *config.Config
-	path string
+	mu       sync.Mutex
+	cfg      *config.Config
+	path     string
+	baseline Patch // env/default values, captured before any overlay
+	defaults Patch // built-in values, no environment applied
+}
+
+// fileVersion marks the sparse overlay format. Unmarked files are legacy
+// full snapshots.
+const fileVersion = 2
+
+// settingsFile is the on-disk shape: the overlay Patch plus its version.
+type settingsFile struct {
+	V int `json:"v"`
+	Patch
 }
 
 // NewSettingsStore creates a SettingsStore that overlays cfg and persists to
-// path. Call Init to load any previously persisted settings.
+// path. It must be called before anything else mutates cfg's settings fields:
+// the values it sees are the environment baseline. Call Init to load any
+// previously persisted settings.
 func NewSettingsStore(cfg *config.Config, path string) *SettingsStore {
-	return &SettingsStore{cfg: cfg, path: path}
+	return &SettingsStore{cfg: cfg, path: path, baseline: snapshot(cfg), defaults: snapshot(config.Defaults())}
 }
 
 // Init loads persisted overrides (if any) and applies them onto the config.
@@ -168,9 +190,13 @@ func (s *SettingsStore) Init() error {
 		}
 		return err
 	}
-	var p Patch
-	if err := json.Unmarshal(data, &p); err != nil {
+	var f settingsFile
+	if err := json.Unmarshal(data, &f); err != nil {
 		return fmt.Errorf("settings file %s: %w", s.path, err)
+	}
+	p := f.Patch
+	if f.V == 0 { // legacy full snapshot: built-in defaults weren't admin edits
+		p = diffPatch(p, s.defaults)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -192,6 +218,7 @@ func (s *SettingsStore) Get() PublicSettings {
 func (s *SettingsStore) Update(p Patch) (PublicSettings, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	p = s.resolveURL(p)
 	if err := s.validate(p); err != nil {
 		return PublicSettings{}, err
 	}
@@ -233,10 +260,42 @@ func (s *SettingsStore) public() PublicSettings {
 	}
 }
 
+// resolveURL normalises a DocuSeal URL in the patch: surrounding whitespace
+// is trimmed, and "" means "back to the operator's DOCUSEAL_URL".
+func (s *SettingsStore) resolveURL(p Patch) Patch {
+	if p.DocuSeal == nil || p.DocuSeal.URL == nil {
+		return p
+	}
+	u := strings.TrimSpace(*p.DocuSeal.URL)
+	if u == "" {
+		u = s.cfg.DocuSeal.OperatorURL
+	}
+	ds := *p.DocuSeal // copy: never mutate the caller's patch
+	ds.URL = &u
+	p.DocuSeal = &ds
+	return p
+}
+
+// trustedURL reports whether u may be set without the public-URL check: the
+// operator's own DOCUSEAL_URL (which may name an internal host, e.g. a
+// DocuSeal container — the tools client trusts exactly that string) or the
+// value already in effect. The settings form round-trips every field, so
+// without this the out-of-the-box http://localhost:3000 was rejected as
+// private on every save, and once an admin had changed the URL the operator's
+// value could never be restored.
+//
+// SSRF protection is unchanged for anything a request can introduce: any
+// other URL must be public. Gating on "only when enabled" instead would let a
+// private URL be stored while disabled and then armed by flipping the toggle,
+// so the check is on the value, not the flag.
+func (s *SettingsStore) trustedURL(u string) bool {
+	return u == s.cfg.DocuSeal.OperatorURL || u == s.cfg.DocuSeal.URL
+}
+
 // validate rejects values that must fail the whole update (currently only
 // the DocuSeal URL — clamps handle out-of-range numerics silently, as TS does).
 func (s *SettingsStore) validate(p Patch) error {
-	if p.DocuSeal != nil && p.DocuSeal.URL != nil {
+	if p.DocuSeal != nil && p.DocuSeal.URL != nil && !s.trustedURL(*p.DocuSeal.URL) {
 		if _, err := assertPublicHTTPURL(*p.DocuSeal.URL, "DocuSeal URL"); err != nil {
 			return err
 		}
@@ -284,12 +343,10 @@ func (s *SettingsStore) apply(p Patch, validateURL bool) {
 			c.DocuSeal.Enabled = *v
 		}
 		if v := p.DocuSeal.URL; v != nil {
-			if validateURL {
-				if u, err := assertPublicHTTPURL(*v, "DocuSeal URL"); err == nil {
-					c.DocuSeal.URL = u
-				}
-			} else {
-				c.DocuSeal.URL = strings.TrimSpace(*v)
+			if u := strings.TrimSpace(*v); !validateURL || s.trustedURL(u) {
+				c.DocuSeal.URL = u
+			} else if u, err := assertPublicHTTPURL(u, "DocuSeal URL"); err == nil {
+				c.DocuSeal.URL = u
 			}
 		}
 		if v := p.DocuSeal.APIKey; v != nil {
@@ -340,42 +397,93 @@ func (s *SettingsStore) apply(p Patch, validateURL bool) {
 	}
 }
 
-// persist writes the full current settings (including the API key) to disk
-// atomically: marshal to path+".tmp" then rename over path.
+// persist writes the admin overlay — only fields that differ from the
+// baseline — to disk atomically (crash-safe temp + fsync + rename).
 func (s *SettingsStore) persist() error {
-	c := s.cfg
-	var p persisted
-	p.Presentation = Presentation{Mode: c.Presentation.Mode, FirmName: c.Presentation.FirmName}
-	p.DyTopo = DyTopo{
-		MaxRounds:           c.DyTopo.MaxRounds,
-		MaxAgentsPerRound:   c.DyTopo.MaxAgentsPerRound,
-		SimilarityThreshold: c.DyTopo.SimilarityThreshold,
-	}
-	p.Debate = Debate{
-		VerificationPasses:      c.Debate.VerificationPasses,
-		GateConfidenceThreshold: c.Debate.GateConfidenceThreshold,
-		AdversarialEnabled:      c.Debate.AdversarialEnabled,
-		CitationRequired:        c.Debate.CitationRequired,
-	}
-	p.DocuSeal.Enabled = c.DocuSeal.Enabled
-	p.DocuSeal.URL = c.DocuSeal.URL
-	p.DocuSeal.APIKey = c.DocuSeal.APIKey
-	p.ClientVoice = ClientVoiceSettings{
-		GateNotes:           c.ClientVoice.GateNotes,
-		MatterNotifications: c.ClientVoice.MatterNotifications,
-	}
-	p.Models = Models{FigureModel: c.Models.FigureModel, Available: c.Models.Available}
-	p.Drafting = Drafting{DyTopo: c.Drafting.DyTopo, AgentsPerSection: c.Drafting.AgentsPerSection, Rounds: c.Drafting.Rounds}
-
-	data, err := json.MarshalIndent(p, "", "  ")
+	overlay := diffPatch(snapshot(s.cfg), s.baseline)
+	data, err := json.MarshalIndent(settingsFile{V: fileVersion, Patch: overlay}, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return err
+	return atomicfile.WriteFile(s.path, data, 0o600)
+}
+
+// snapshot renders every settings field of c as a fully populated Patch
+// (the API key included — the file is 0600 and never served).
+func snapshot(c *config.Config) Patch {
+	var p Patch
+	f := func(v float64) *float64 { return &v }
+	p.Presentation = &struct {
+		Mode     *string `json:"mode,omitempty"`
+		FirmName *string `json:"firmName,omitempty"`
+	}{ptr(c.Presentation.Mode), ptr(c.Presentation.FirmName)}
+	p.DyTopo = &struct {
+		MaxRounds           *float64 `json:"maxRounds,omitempty"`
+		MaxAgentsPerRound   *float64 `json:"maxAgentsPerRound,omitempty"`
+		SimilarityThreshold *float64 `json:"similarityThreshold,omitempty"`
+	}{f(float64(c.DyTopo.MaxRounds)), f(float64(c.DyTopo.MaxAgentsPerRound)), f(c.DyTopo.SimilarityThreshold)}
+	p.Debate = &struct {
+		VerificationPasses      *float64 `json:"verificationPasses,omitempty"`
+		GateConfidenceThreshold *float64 `json:"gateConfidenceThreshold,omitempty"`
+		AdversarialEnabled      *bool    `json:"adversarialEnabled,omitempty"`
+		CitationRequired        *bool    `json:"citationRequired,omitempty"`
+	}{f(float64(c.Debate.VerificationPasses)), f(c.Debate.GateConfidenceThreshold), ptr(c.Debate.AdversarialEnabled), ptr(c.Debate.CitationRequired)}
+	p.DocuSeal = &struct {
+		Enabled *bool   `json:"enabled,omitempty"`
+		URL     *string `json:"url,omitempty"`
+		APIKey  *string `json:"apiKey,omitempty"`
+	}{ptr(c.DocuSeal.Enabled), ptr(c.DocuSeal.URL), ptr(c.DocuSeal.APIKey)}
+	p.ClientVoice = &struct {
+		GateNotes           *bool `json:"gateNotes,omitempty"`
+		MatterNotifications *bool `json:"matterNotifications,omitempty"`
+	}{ptr(c.ClientVoice.GateNotes), ptr(c.ClientVoice.MatterNotifications)}
+	p.Models = &struct {
+		FigureModel    *string  `json:"figureModel,omitempty"`
+		SpineModel     *string  `json:"spineModel,omitempty"`
+		SynthesisModel *string  `json:"synthesisModel,omitempty"`
+		Available      []string `json:"available,omitempty"`
+	}{ptr(c.Models.FigureModel), ptr(c.Models.SpineModel), ptr(c.Models.SynthesisModel), append([]string{}, c.Models.Available...)}
+	p.Drafting = &struct {
+		DyTopo           *bool    `json:"dytopo,omitempty"`
+		AgentsPerSection *float64 `json:"agentsPerSection,omitempty"`
+		Rounds           *float64 `json:"rounds,omitempty"`
+	}{ptr(c.Drafting.DyTopo), f(float64(c.Drafting.AgentsPerSection)), f(float64(c.Drafting.Rounds))}
+	return p
+}
+
+func ptr[T any](v T) *T { return &v }
+
+// diffPatch returns cur with every field equal to base cleared (nil), and
+// every section left with no fields cleared to nil, so the result holds only
+// what differs. base is a full snapshot; cur may be partial.
+func diffPatch(cur, base Patch) Patch {
+	cv := reflect.ValueOf(&cur).Elem()
+	bv := reflect.ValueOf(base)
+	for i := range cv.NumField() {
+		cs, bs := cv.Field(i), bv.Field(i) // *struct sections
+		if cs.IsNil() {
+			continue
+		}
+		if bs.IsNil() {
+			continue // nothing to compare against: keep the section whole
+		}
+		kept := 0
+		for j := range cs.Elem().NumField() {
+			cf, bf := cs.Elem().Field(j), bs.Elem().Field(j)
+			if cf.IsNil() {
+				continue
+			}
+			if reflect.DeepEqual(cf.Interface(), bf.Interface()) {
+				cf.Set(reflect.Zero(cf.Type()))
+			} else {
+				kept++
+			}
+		}
+		if kept == 0 {
+			cs.Set(reflect.Zero(cs.Type()))
+		}
 	}
-	return os.Rename(tmp, s.path)
+	return cur
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

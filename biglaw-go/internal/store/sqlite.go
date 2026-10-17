@@ -31,6 +31,12 @@ func openSQLite(path string) (DocRepository, error) {
 			return nil, fmt.Errorf("store: create sqlite dir %s: %w", dir, err)
 		}
 	}
+	// Create the database 0600 before SQLite touches it: SQLite gives its
+	// -wal/-shm files the database file's mode, and those hold document
+	// text too. (Chmod after the fact left them at the umask's 0644.)
+	if f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600); err == nil {
+		_ = f.Close()
+	}
 	// _pragma busy_timeout avoids "database is locked" under concurrent writes;
 	// journal_mode=WAL gives reader/writer concurrency.
 	dsn := path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(on)"
@@ -45,6 +51,13 @@ func openSQLite(path string) (DocRepository, error) {
 	if err := os.Chmod(path, 0o600); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("store: secure sqlite file %s: %w", path, err)
+	}
+	// An existing WAL/shared-memory pair from an older build keeps its mode.
+	for _, side := range []string{path + "-wal", path + "-shm"} {
+		if err := os.Chmod(side, 0o600); err != nil && !os.IsNotExist(err) {
+			db.Close()
+			return nil, fmt.Errorf("store: secure sqlite file %s: %w", side, err)
+		}
 	}
 	return &sqliteRepo{db: db, path: path}, nil
 }

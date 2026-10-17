@@ -10,12 +10,14 @@ package clientvoice
 
 import (
 	"encoding/json"
+	"log/slog"
 	"os"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/discover-legal/biglaw-go/internal/atomicfile"
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
 
@@ -25,6 +27,7 @@ const maxNotificationsPerMatter = 500
 // single JSON file with the same atomic write pattern as the other stores.
 type Store struct {
 	mu            sync.Mutex
+	persistMu     sync.Mutex
 	voices        map[string]types.ClientVoice          // matterNumber → brief
 	notifications map[string][]types.MatterNotification // matterNumber → newest-last
 	path          string
@@ -134,6 +137,8 @@ func (s *Store) Notifications(matterNumber string, limit int) []types.MatterNoti
 // persist writes atomically (tmp + rename). Errors are swallowed so callers
 // don't fail on disk issues — same policy as the other stores.
 func (s *Store) persist() {
+	s.persistMu.Lock() // ordered writes: a stale snapshot never lands last
+	defer s.persistMu.Unlock()
 	s.mu.Lock()
 	p := persisted{Voices: s.voices, Notifications: s.notifications}
 	data, err := json.MarshalIndent(p, "", "  ")
@@ -141,9 +146,7 @@ func (s *Store) persist() {
 	if err != nil {
 		return
 	}
-	tmp := s.path + ".tmp"
-	if os.WriteFile(tmp, data, 0o600) != nil {
-		return
+	if err := atomicfile.WriteFile(s.path, data, 0o600); err != nil {
+		slog.Warn("clientvoice: persist failed", "path", s.path, "err", err)
 	}
-	_ = os.Rename(tmp, s.path)
 }

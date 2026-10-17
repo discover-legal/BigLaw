@@ -10,12 +10,12 @@ import (
 	"log/slog"
 	"math"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/discover-legal/biglaw-go/internal/atomicfile"
 	"github.com/discover-legal/biglaw-go/internal/strutil"
 	"github.com/discover-legal/biglaw-go/internal/types"
 )
@@ -66,7 +66,7 @@ type PreBill struct {
 // PreBillStore persists pre-bills to a JSON file.
 type PreBillStore struct {
 	mu        sync.RWMutex
-	persistMu sync.Mutex // serialises concurrent fire-and-forget persists
+	persistMu sync.Mutex // serialises concurrent persists
 	bills     []PreBill
 	path      string
 }
@@ -166,34 +166,40 @@ func (s *PreBillStore) GetByID(id string) *PreBill {
 	return nil
 }
 
-// UpdateEntryDescription updates a line-item description.
+// UpdateEntryDescription updates a line-item description on a bill that is
+// not yet approved/invoiced, then persists.
 func (s *PreBillStore) UpdateEntryDescription(billID, entryID, description string) *PreBill {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i := range s.bills {
-		if s.bills[i].ID != billID {
-			continue
-		}
-		b := &s.bills[i]
-		if b.Status == PreBillApproved || b.Status == PreBillInvoiced {
-			return nil
-		}
-		for j := range b.Entries {
-			if b.Entries[j].EntryID == entryID {
-				if len(description) > 500 {
-					description = strutil.Truncate(description, 500)
+	out := func() *PreBill {
+		for i := range s.bills {
+			if s.bills[i].ID != billID {
+				continue
+			}
+			b := &s.bills[i]
+			if b.Status == PreBillApproved || b.Status == PreBillInvoiced {
+				return nil
+			}
+			for j := range b.Entries {
+				if b.Entries[j].EntryID == entryID {
+					if len(description) > 500 {
+						description = strutil.Truncate(description, 500)
+					}
+					b.Entries[j].Description = description
+					cp := *b
+					return &cp
 				}
-				b.Entries[j].Description = description
-				go s.persist()
-				cp := *b
-				return &cp
 			}
 		}
+		return nil
+	}()
+	s.mu.Unlock()
+	if out != nil {
+		s.persist()
 	}
-	return nil
+	return out
 }
 
-// Transition moves a bill through its lifecycle.
+// Transition moves a bill through its lifecycle, then persists.
 func (s *PreBillStore) Transition(billID string, toStatus PreBillStatus) *PreBill {
 	validTransitions := map[PreBillStatus][]PreBillStatus{
 		PreBillDraft:    {PreBillReviewed},
@@ -202,59 +208,71 @@ func (s *PreBillStore) Transition(billID string, toStatus PreBillStatus) *PreBil
 		PreBillInvoiced: {},
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i := range s.bills {
-		if s.bills[i].ID != billID {
-			continue
-		}
-		b := &s.bills[i]
-		allowed := validTransitions[b.Status]
-		ok := false
-		for _, st := range allowed {
-			if st == toStatus {
-				ok = true
-				break
+	out := func() *PreBill {
+		for i := range s.bills {
+			if s.bills[i].ID != billID {
+				continue
 			}
+			b := &s.bills[i]
+			allowed := validTransitions[b.Status]
+			ok := false
+			for _, st := range allowed {
+				if st == toStatus {
+					ok = true
+					break
+				}
+			}
+			if !ok {
+				return nil
+			}
+			b.Status = toStatus
+			now := time.Now().UTC().Format(time.RFC3339)
+			switch toStatus {
+			case PreBillReviewed:
+				b.ReviewedAt = now
+			case PreBillApproved:
+				b.ApprovedAt = now
+			case PreBillInvoiced:
+				b.InvoicedAt = now
+			}
+			cp := *b
+			return &cp
 		}
-		if !ok {
-			return nil
-		}
-		b.Status = toStatus
-		now := time.Now().UTC().Format(time.RFC3339)
-		switch toStatus {
-		case PreBillReviewed:
-			b.ReviewedAt = now
-		case PreBillApproved:
-			b.ApprovedAt = now
-		case PreBillInvoiced:
-			b.InvoicedAt = now
-		}
-		go s.persist()
-		cp := *b
-		return &cp
+		return nil
+	}()
+	s.mu.Unlock()
+	if out != nil {
+		s.persist()
 	}
-	return nil
+	return out
 }
 
-// SetNotes sets the notes on a pre-bill.
+// SetNotes sets the notes on a pre-bill, then persists.
 func (s *PreBillStore) SetNotes(billID, notes string) *PreBill {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i := range s.bills {
-		if s.bills[i].ID != billID {
-			continue
+	out := func() *PreBill {
+		for i := range s.bills {
+			if s.bills[i].ID != billID {
+				continue
+			}
+			if len(notes) > 2000 {
+				notes = strutil.Truncate(notes, 2000)
+			}
+			s.bills[i].Notes = notes
+			cp := s.bills[i]
+			return &cp
 		}
-		if len(notes) > 2000 {
-			notes = strutil.Truncate(notes, 2000)
-		}
-		s.bills[i].Notes = notes
-		go s.persist()
-		cp := s.bills[i]
-		return &cp
+		return nil
+	}()
+	s.mu.Unlock()
+	if out != nil {
+		s.persist()
 	}
-	return nil
+	return out
 }
 
+// persist writes the bills atomically and durably (temp, fsync, rename);
+// the snapshot is marshalled under the lock, persistMu keeps writes ordered.
 func (s *PreBillStore) persist() {
 	s.persistMu.Lock()
 	defer s.persistMu.Unlock()
@@ -265,16 +283,8 @@ func (s *PreBillStore) persist() {
 		slog.Warn("PreBillStore persist failed", "error", err)
 		return
 	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
-		return
-	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		slog.Warn("PreBillStore persist write failed", "error", err)
-		return
-	}
-	if err := os.Rename(tmp, s.path); err != nil {
-		slog.Warn("PreBillStore persist rename failed", "error", err)
+	if err := atomicfile.WriteFile(s.path, data, 0o600); err != nil {
+		slog.Warn("PreBillStore persist failed", "error", err)
 	}
 }
 

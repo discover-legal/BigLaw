@@ -67,6 +67,8 @@ Every document ingest runs light-tier classifier calls: practice-area detection 
 areas) and client matching against the roster; the response surfaces `suggestedLawyers` whose
 practice areas match. Conflict-of-interest checks (`POST /clients/check-conflict`, plus the
 TypeDB conflict-graph variant `POST /clients/check-conflict-graph`) run automatically on
-client creation.
+client creation and on any `PATCH /clients/:id` that changes the name or adverse parties. Every
+hit is returned with an `id`; an override must list exactly those ids in
+`acknowledgedConflictIds` with a `conflictReason`.
 
 Related: [Security](../security.md) · [Audit trail](audit-trail.md) · [REST API](../integration/rest-api.md)

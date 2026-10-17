@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import type { Task, LawyerProfile } from "../types";
+import type { Task, LawyerProfile, Notify } from "../types";
 import { StatusDot, WorkflowPill, timeAgo } from "../primitives";
 import { TaskView } from "../TaskView";
 
@@ -21,7 +21,7 @@ export function MattersPage({
   isPartner: boolean;
   onChange: () => void;
   onDeleted: (id: string) => void;
-  notify: (m: string) => void;
+  notify: Notify;
   onNew: () => void;
   offline: boolean;
 }) {

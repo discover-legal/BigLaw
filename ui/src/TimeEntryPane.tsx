@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { api } from "./api";
-import type { TimeEntry, OcgSuggestion } from "./types";
+import type { TimeEntry, OcgSuggestion, Notify } from "./types";
 import { timeAgo } from "./primitives";
 
 type ViewTab = "pending" | "all";
@@ -122,7 +122,7 @@ export function TimeEntryPane({
   notify,
   isPartner,
 }: {
-  notify: (m: string) => void;
+  notify: Notify;
   isPartner: boolean;
 }) {
   const [tab, setTab] = useState<ViewTab>("pending");
@@ -151,7 +151,7 @@ export function TimeEntryPane({
         setEntries(data);
       }
     } catch (e) {
-      notify((e as Error).message);
+      notify((e as Error).message, "error");
     } finally {
       setLoading(false);
     }
@@ -173,7 +173,7 @@ export function TimeEntryPane({
       notify(`OCG check complete — ${res.checked} entries checked, ${res.withSuggestions} with issues`);
       await load();
     } catch (e) {
-      notify((e as Error).message);
+      notify((e as Error).message, "error");
     } finally {
       setCheckBusy(false);
     }
@@ -187,7 +187,7 @@ export function TimeEntryPane({
       notify(`OCG check — ${res.checked} entries checked, ${res.withSuggestions} with issues`);
       await load();
     } catch (e) {
-      notify((e as Error).message);
+      notify((e as Error).message, "error");
     } finally {
       setCheckBusy(false);
     }
@@ -208,7 +208,7 @@ export function TimeEntryPane({
       }
       notify("Suggestion accepted — description updated");
     } catch (e) {
-      notify((e as Error).message);
+      notify((e as Error).message, "error");
     } finally {
       setSuggBusy(false);
     }
@@ -228,7 +228,7 @@ export function TimeEntryPane({
       }
       notify("Suggestion dismissed");
     } catch (e) {
-      notify((e as Error).message);
+      notify((e as Error).message, "error");
     } finally {
       setSuggBusy(false);
     }

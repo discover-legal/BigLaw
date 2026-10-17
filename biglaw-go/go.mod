@@ -7,6 +7,7 @@ go 1.25.0
 
 require (
 	github.com/gin-gonic/gin v1.12.0
+	github.com/go-json-experiment/json v0.0.0-20260213210345-44df1a37e875
 	github.com/go-pdf/fpdf v0.9.0
 	github.com/goccy/go-yaml v1.19.2
 	github.com/google/uuid v1.6.0
@@ -17,6 +18,7 @@ require (
 	github.com/opencontainers/image-spec v1.1.1
 	golang.org/x/image v0.43.0
 	golang.org/x/sync v0.22.0
+	golang.org/x/text v0.38.0
 	modernc.org/sqlite v1.52.0
 	oras.land/oras-go/v2 v2.6.2
 )
@@ -56,7 +58,6 @@ require (
 	golang.org/x/crypto v0.52.0 // indirect
 	golang.org/x/net v0.55.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
-	golang.org/x/text v0.38.0 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect
 	modernc.org/libc v1.72.3 // indirect
 	modernc.org/mathutil v1.7.1 // indirect

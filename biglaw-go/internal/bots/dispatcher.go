@@ -8,7 +8,10 @@
 package bots
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strings"
 
@@ -334,6 +337,18 @@ func Dispatch(msg BotMessage, orch OrchestratorFacade) BotResponse {
 	default:
 		return BotResponse{Immediate: helpText}
 	}
+}
+
+// asyncFailureMessage is what a channel sees when background work fails: a
+// fixed apology and a reference id. The full error — which can carry file
+// paths, upstream responses or matter details — goes only to the server log
+// under that id, never into a Slack/Teams channel.
+func asyncFailureMessage(platform BotPlatform, err error) string {
+	b := make([]byte, 6)
+	_, _ = rand.Read(b)
+	ref := hex.EncodeToString(b)
+	slog.Error("Big Michael async command failed", "platform", platform, "requestId", ref, "error", err)
+	return "Sorry — that request could not be completed. Ask an administrator to check the server log for reference `" + ref + "`."
 }
 
 // immediateResult formats a synchronous facade result for posting.

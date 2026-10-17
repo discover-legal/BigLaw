@@ -2,8 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
 import type {
   BudgetBurn, BudgetPrediction, Client, DeadlineJurisdiction, DeadlineResult,
-  HealthSignal, MatterHealthScore, PortfolioHealthSummary,
-} from "../types";
+  HealthSignal, MatterHealthScore, PortfolioHealthSummary, Notify } from "../types";
 import { ErrorState } from "../Library";
 
 function fmt$(n: number): string {
@@ -14,7 +13,7 @@ const SIGNAL_COLOR: Record<HealthSignal, string> = {
   green: "var(--green)", amber: "var(--amber)", red: "var(--red)",
 };
 
-export function BudgetsPage({ notify, isPartner }: { notify: (m: string) => void; isPartner: boolean }) {
+export function BudgetsPage({ notify, isPartner }: { notify: Notify; isPartner: boolean }) {
   return (
     <div className="page-scroll">
       <div className="page">
@@ -136,7 +135,7 @@ function HealthRow({ m, open, onToggle }: { m: MatterHealthScore; open: boolean;
 
 // ─── Matter budget ─────────────────────────────────────────────────────────────
 
-function MatterBudgetSection({ notify }: { notify: (m: string) => void }) {
+function MatterBudgetSection({ notify }: { notify: Notify }) {
   const [clients, setClients] = useState<Client[]>([]);
   const [clientsError, setClientsError] = useState<string | null>(null);
   const [clientId, setClientId] = useState("");
@@ -179,14 +178,14 @@ function MatterBudgetSection({ notify }: { notify: (m: string) => void }) {
 
   async function setBudget() {
     const usd = parseFloat(budgetInput);
-    if (!clientId || !matterNumber || !Number.isFinite(usd) || usd <= 0) { notify("Pick a matter and a positive budget"); return; }
+    if (!clientId || !matterNumber || !Number.isFinite(usd) || usd <= 0) { notify("Pick a matter and a positive budget", "error"); return; }
     setBusy(true);
     try {
       await api.setMatterBudget(clientId, matterNumber, { budgetUsd: usd });
       notify(`Budget set: ${fmt$(usd)} on ${matterNumber}`);
       setBudgetInput("");
       loadBurn(clientId, matterNumber);
-    } catch (e) { notify((e as Error).message); }
+    } catch (e) { notify((e as Error).message, "error"); }
     finally { setBusy(false); }
   }
 
@@ -197,7 +196,7 @@ function MatterBudgetSection({ notify }: { notify: (m: string) => void }) {
       await api.checkMatterBudget(clientId, matterNumber);
       notify("Budget thresholds checked — alerts (if any) hit the Watchtower stream");
       loadBurn(clientId, matterNumber);
-    } catch (e) { notify((e as Error).message); }
+    } catch (e) { notify((e as Error).message, "error"); }
     finally { setBusy(false); }
   }
 
@@ -274,7 +273,7 @@ function PredStat({ label, value, sub }: { label: string; value: string; sub?: s
 
 // ─── Deadlines ─────────────────────────────────────────────────────────────────
 
-function DeadlinesSection({ notify }: { notify: (m: string) => void }) {
+function DeadlinesSection({ notify }: { notify: Notify }) {
   const [rules, setRules] = useState<DeadlineJurisdiction[]>([]);
   const [rulesError, setRulesError] = useState<string | null>(null);
   const [jurisdiction, setJurisdiction] = useState("");
@@ -293,12 +292,12 @@ function DeadlinesSection({ notify }: { notify: (m: string) => void }) {
   useEffect(() => { loadRules(); }, [loadRules]);
 
   async function compute() {
-    if (!jurisdiction || !triggerEvent.trim() || !triggerDate) { notify("Jurisdiction, trigger event, and date required"); return; }
+    if (!jurisdiction || !triggerEvent.trim() || !triggerDate) { notify("Jurisdiction, trigger event, and date required", "error"); return; }
     setBusy(true);
     setResult(null);
     try {
       setResult(await api.computeDeadlines({ jurisdiction, triggerEvent: triggerEvent.trim(), triggerDate }));
-    } catch (e) { notify((e as Error).message); }
+    } catch (e) { notify((e as Error).message, "error"); }
     finally { setBusy(false); }
   }
 

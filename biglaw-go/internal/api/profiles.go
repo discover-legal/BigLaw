@@ -65,6 +65,7 @@ func (s *Server) handleCreateProfile(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	auditAdmin(c, "profile.created", map[string]interface{}{"profileId": p.ID, "role": string(p.Role), "mode": string(p.Mode)})
 	c.JSON(http.StatusCreated, p)
 }
 
@@ -90,11 +91,18 @@ func (s *Server) handleUpdateProfile(c *gin.Context) {
 		delete(patch, "role")
 	}
 
+	before := s.profiles.Get(targetID)
 	p, err := s.profiles.Update(targetID, patch)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 		return
 	}
+	data := map[string]interface{}{"profileId": p.ID, "fields": patchKeys(patch)}
+	if before != nil && before.Role != p.Role {
+		// Role changes are privilege changes: record old and new.
+		data["roleFrom"], data["roleTo"] = string(before.Role), string(p.Role)
+	}
+	auditAdmin(c, "profile.updated", data)
 	c.JSON(http.StatusOK, p)
 }
 
@@ -111,5 +119,6 @@ func (s *Server) handleDeleteProfile(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "profile not found"})
 		return
 	}
+	auditAdmin(c, "profile.deleted", map[string]interface{}{"profileId": c.Param("id")})
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }

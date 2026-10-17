@@ -210,6 +210,17 @@ export interface ConflictCheckResult {
   conflictingClientId?: string;
   conflictingClientName?: string;
   matchedAdversary?: string;
+  /** Every hit (the top-level fields repeat the first). */
+  conflicts?: ConflictHit[];
+}
+
+/** One conflict hit; an override must acknowledge every hit by id. */
+export interface ConflictHit {
+  id: string;
+  hasConflict: true;
+  conflictingClientId: string;
+  conflictingClientName: string;
+  matchedAdversary: string;
 }
 
 export interface SuggestedLawyer {
@@ -1005,3 +1016,8 @@ export const PHASE_SEQUENCES: Record<WorkflowType, TaskPhase[]> = {
   tabulate:    ["intake", "analysis", "delivery"],
   full_bench:  ["intake", "research", "analysis", "drafting", "review", "verification", "delivery"],
 };
+
+/** Toast tone: success (default, green), a warning (amber) or a failure (red). */
+export type NotifyTone = "ok" | "warn" | "error";
+/** App-wide toast callback threaded through pages and panels. */
+export type Notify = (msg: string, tone?: NotifyTone) => void;
