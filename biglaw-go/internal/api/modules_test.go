@@ -19,11 +19,11 @@ import (
 type fakeModule struct{ name string }
 
 func (m fakeModule) ModuleName() string { return m.name }
-func (m fakeModule) PublicRoute(method, path string) bool {
-	return method == http.MethodPost && path == "/fake/hook"
+func (m fakeModule) PublicRoute(method, route string) bool {
+	return method == http.MethodPost && route == "/fake/hook/:id"
 }
 func (m fakeModule) Mount(r gin.IRouter, host modules.Host) {
-	r.POST("/fake/hook", func(c *gin.Context) { c.String(http.StatusOK, "hook") })
+	r.POST("/fake/hook/:id", func(c *gin.Context) { c.String(http.StatusOK, "hook") })
 	r.GET("/fake/private", func(c *gin.Context) {
 		if host.User(c) == nil {
 			c.Status(http.StatusUnauthorized)
@@ -50,13 +50,14 @@ func serve(s *Server, method, path string) int {
 	return w.Code
 }
 
-// A mounted module's self-authenticating routes join the public set; its
-// other routes still need a credential.
+// A mounted module's self-authenticating routes join the public set — by
+// registered route pattern, so a concrete path under a param route is
+// public; its other routes still need a credential.
 func TestMountPublicRoutes(t *testing.T) {
 	modules.Default.Register("fake-on", "test module", true, "test")
 	s := newModuleTestServer()
 	s.Mount(fakeModule{name: "fake-on"})
-	if code := serve(s, http.MethodPost, "/fake/hook"); code != http.StatusOK {
+	if code := serve(s, http.MethodPost, "/fake/hook/abc"); code != http.StatusOK {
 		t.Fatalf("module public route blocked by core auth: %d", code)
 	}
 	if code := serve(s, http.MethodGet, "/fake/private"); code != http.StatusUnauthorized {
@@ -70,10 +71,10 @@ func TestMountDisabledModule(t *testing.T) {
 	modules.Default.Register("fake-off", "test module", false, "test")
 	s := newModuleTestServer()
 	s.Mount(fakeModule{name: "fake-off"})
-	if code := serve(s, http.MethodPost, "/fake/hook"); code != http.StatusUnauthorized {
+	if code := serve(s, http.MethodPost, "/fake/hook/abc"); code != http.StatusUnauthorized {
 		t.Fatalf("disabled module's route not refused by auth: %d", code)
 	}
-	if s.isPublic(http.MethodPost, "/fake/hook") {
+	if s.isPublic(http.MethodPost, "/fake/hook/:id") {
 		t.Fatal("disabled module widened the public route set")
 	}
 	s.Mount(nil) // nil is a no-op

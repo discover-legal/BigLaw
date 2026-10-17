@@ -17,7 +17,12 @@ COPY biglaw-go/go.mod biglaw-go/go.sum ./
 RUN go mod download
 COPY biglaw-go/ ./
 # -buildid= makes the output bit-for-bit reproducible across builds.
-RUN CGO_ENABLED=0 GOFLAGS=-trimpath go build -ldflags="-s -w -buildid=" -o /out/biglaw ./cmd/biglaw
+# --build-arg VERSION=x.y.z stamps internal/version (GET /health, MCP handshake);
+# unset, the binary reports the release line compiled into the source.
+ARG VERSION=
+RUN CGO_ENABLED=0 GOFLAGS=-trimpath go build \
+      -ldflags="-s -w -buildid= ${VERSION:+-X github.com/discover-legal/biglaw-go/internal/version.Version=${VERSION}}" \
+      -o /out/biglaw ./cmd/biglaw
 
 FROM alpine:3.21
 RUN apk add --no-cache ca-certificates tzdata wget \

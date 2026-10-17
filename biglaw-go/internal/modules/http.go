@@ -21,10 +21,13 @@ type HTTPModule interface {
 	// ModuleName is the registry name (BIGLAW_MODULE_<NAME> override).
 	ModuleName() string
 	// PublicRoute reports the module's self-authenticating routes (e.g.
-	// HMAC-signed webhooks). The core auth middleware lets them through
-	// without a session/bearer credential; the module's handlers MUST
-	// authenticate every such request themselves.
-	PublicRoute(method, path string) bool
+	// HMAC-signed webhooks). route is the registered gin route pattern the
+	// request matched (c.FullPath(), e.g. "/intake/submissions/:id"; empty
+	// when nothing matched), never the request path, so a public exemption
+	// cannot be borrowed by another route. The core auth middleware lets
+	// these through without a session/bearer credential; the module's
+	// handlers MUST authenticate every such request themselves.
+	PublicRoute(method, route string) bool
 	// Mount registers the module's routes.
 	Mount(r gin.IRouter, host Host)
 }

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, streamAlerts } from "../api";
-import type { BudgetAlert, DocketAlert, RegulationAlert, WatchedDocket } from "../types";
+import type { BudgetAlert, DocketAlert, RegulationAlert, WatchedDocket, Notify } from "../types";
 import { ErrorState } from "../Library";
 import { timeAgo } from "../primitives";
 
@@ -8,7 +8,7 @@ import { timeAgo } from "../primitives";
  * The Watchtower — live monitoring: docket watch list + alerts, regulatory
  * pulse, and budget threshold alerts. Streams follow the AuditRail SSE pattern.
  */
-export function WatchtowerPage({ notify }: { notify: (m: string) => void }) {
+export function WatchtowerPage({ notify }: { notify: Notify }) {
   return (
     <div className="page-scroll">
       <div className="page">
@@ -29,7 +29,7 @@ export function WatchtowerPage({ notify }: { notify: (m: string) => void }) {
 
 // ─── Dockets ───────────────────────────────────────────────────────────────────
 
-function DocketsSection({ notify }: { notify: (m: string) => void }) {
+function DocketsSection({ notify }: { notify: Notify }) {
   const [dockets, setDockets] = useState<WatchedDocket[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -58,7 +58,7 @@ function DocketsSection({ notify }: { notify: (m: string) => void }) {
 
   async function watch() {
     if (!nw.matterNumber.trim() || !nw.docketNumber.trim() || !nw.court.trim()) {
-      notify("Matter, docket number, and court slug are required");
+      notify("Matter, docket number, and court slug are required", "error");
       return;
     }
     setBusy(true);
@@ -72,14 +72,14 @@ function DocketsSection({ notify }: { notify: (m: string) => void }) {
       setNw({ matterNumber: "", docketNumber: "", court: "", caseName: "" });
       notify("Docket added to the watch list");
       load();
-    } catch (e) { notify((e as Error).message); }
+    } catch (e) { notify((e as Error).message, "error"); }
     finally { setBusy(false); }
   }
 
   async function unwatch(matterNumber: string) {
     if (!window.confirm(`Stop watching the docket for ${matterNumber}?`)) return;
     try { await api.unwatchDocket(matterNumber); notify("Docket unwatched"); load(); }
-    catch (e) { notify((e as Error).message); }
+    catch (e) { notify((e as Error).message, "error"); }
   }
 
   async function checkNow() {
@@ -88,7 +88,7 @@ function DocketsSection({ notify }: { notify: (m: string) => void }) {
       const res = await api.docketCheckNow();
       notify(`Checked ${res.watching} watched docket${res.watching === 1 ? "" : "s"}`);
       load();
-    } catch (e) { notify((e as Error).message); }
+    } catch (e) { notify((e as Error).message, "error"); }
     finally { setBusy(false); }
   }
 
@@ -160,18 +160,29 @@ function DocketsSection({ notify }: { notify: (m: string) => void }) {
 
 // ─── Regulatory pulse ──────────────────────────────────────────────────────────
 
-function RegulatorySection({ notify }: { notify: (m: string) => void }) {
+function RegulatorySection({ notify }: { notify: Notify }) {
   const [alerts, setAlerts] = useState<RegulationAlert[]>([]);
   const [streamDown, setStreamDown] = useState(false);
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [canView, setCanView] = useState(false); // alerts are partner-only
   const [busy, setBusy] = useState(false);
 
+  // Check the capability first: the stream answers 503 when the pulse is off,
+  // and an EventSource on a 503 logs a console error on every visit.
   useEffect(() => {
+    let alive = true;
+    api.regulatoryStatus().then((s) => { if (alive) { setEnabled(s.enabled); setCanView(s.canView); } }).catch(() => { if (alive) setEnabled(false); });
+    return () => { alive = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!enabled || !canView) return;
     return streamAlerts<RegulationAlert>(
       "/regulatory/alerts/stream",
       (a) => setAlerts((prev) => [a, ...prev.filter((p) => p.id !== a.id)].slice(0, 50)),
       () => setStreamDown(true),
     );
-  }, []);
+  }, [enabled, canView]);
 
   async function checkNow() {
     setBusy(true);
@@ -184,7 +195,7 @@ function RegulatorySection({ notify }: { notify: (m: string) => void }) {
         });
       }
       notify(`Regulatory pulse — ${res.checked} matters scanned, ${res.alerts.length} alert${res.alerts.length === 1 ? "" : "s"}`);
-    } catch (e) { notify((e as Error).message); }
+    } catch (e) { notify((e as Error).message, "error"); }
     finally { setBusy(false); }
   }
 
@@ -192,14 +203,24 @@ function RegulatorySection({ notify }: { notify: (m: string) => void }) {
     <div className="section-card">
       <div className="section-card-head">
         <div className="section-card-title">Regulatory pulse</div>
-        <button className="btn ghost sm" disabled={busy} onClick={checkNow}>{busy ? "Scanning…" : "⟳ Check now"}</button>
+        <button className="btn ghost sm" disabled={busy || !enabled || !canView} onClick={checkNow}>{busy ? "Scanning…" : "⟳ Check now"}</button>
       </div>
-      {streamDown && (
+      {enabled === false && (
         <div className="grid-meta" style={{ marginBottom: 10 }}>
-          Live stream unavailable — regulatory pulse may be disabled (REG_PULSE_ENABLED) or partner-only.
+          Regulatory pulse is off.{canView && " Set REG_PULSE_ENABLED=true and TAVILY_API_KEY on the server to enable it."}
         </div>
       )}
-      {alerts.length === 0 && (
+      {enabled && !canView && (
+        <div className="grid-meta" style={{ marginBottom: 10 }}>
+          Regulatory pulse is on. Its alerts are visible to partners.
+        </div>
+      )}
+      {enabled && canView && streamDown && (
+        <div className="grid-meta" style={{ marginBottom: 10 }}>
+          Live stream unavailable — reconnect by reloading the page.
+        </div>
+      )}
+      {enabled && canView && alerts.length === 0 && (
         <div className="placeholder">No regulatory alerts yet. New developments affecting active matters appear here.</div>
       )}
       {alerts.map((a) => (

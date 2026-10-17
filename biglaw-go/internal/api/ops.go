@@ -13,7 +13,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -25,11 +24,11 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/discover-legal/biglaw-go/internal/adapters"
 	"github.com/discover-legal/biglaw-go/internal/auth"
 	"github.com/discover-legal/biglaw-go/internal/budget"
 	"github.com/discover-legal/biglaw-go/internal/dockets"
 	"github.com/discover-legal/biglaw-go/internal/graph"
+	"github.com/discover-legal/biglaw-go/internal/jsonsafe"
 	"github.com/discover-legal/biglaw-go/internal/knowledge"
 	"github.com/discover-legal/biglaw-go/internal/memory"
 	"github.com/discover-legal/biglaw-go/internal/queue"
@@ -57,6 +56,7 @@ func (s *Server) registerOpsRoutes(r *gin.Engine) {
 	r.GET("/dockets/alerts/stream", s.handleDocketAlertStream)
 
 	// ── Regulatory pulse ──────────────────────────────────────────────────
+	r.GET("/regulatory/status", s.handleRegulatoryStatus)
 	r.GET("/regulatory/alerts/stream", s.handleRegulatoryAlertStream)
 	r.POST("/regulatory/check-now", s.handleRegulatoryCheckNow)
 
@@ -101,9 +101,6 @@ type opsState struct {
 
 	jobsOnce sync.Once
 	jobQueue *queue.Queue
-
-	pluginsOnce sync.Once
-	plugins     *adapters.Registry
 
 	budgetOnce    sync.Once
 	budgetMonitor *budget.Monitor
@@ -221,11 +218,7 @@ func (s *Server) opsDockets() (*dockets.Monitor, *opsBroadcaster[types.DocketAle
 			return
 		}
 		// Standalone fallback: no firm monitor running — own the instance.
-		path := os.Getenv("DOCKETS_FILE")
-		if path == "" {
-			path = "./data/dockets.json" // TS default (Config.dockets.file)
-		}
-		m := dockets.New(path)
+		m := dockets.New(s.cfg.Monitors.DocketsFile) // inside the data dir unless DOCKETS_FILE overrides
 		if err := m.Init(); err != nil {
 			slog.Warn("ops: docket monitor init failed", "err", err)
 		}
@@ -303,20 +296,6 @@ func (s *Server) opsJobs() *queue.Queue {
 		st.jobQueue = q
 	})
 	return st.jobQueue
-}
-
-func (s *Server) opsPlugins() *adapters.Registry {
-	st := s.ops()
-	st.pluginsOnce.Do(func() {
-		// The plugin registry is loaded in cmd/biglaw/main.go but not injected
-		// into Server; reload the same JSON adapters read-only.
-		reg := adapters.New()
-		if err := reg.LoadDirectory("adapters/external"); err != nil {
-			slog.Warn("ops: plugin adapter load failed", "err", err)
-		}
-		st.plugins = reg
-	})
-	return st.plugins
 }
 
 // opsTimeAdapter bridges timekeeping.TimeStore to budget.TimeStore.
@@ -451,6 +430,33 @@ func (s *Server) handleDocketAlertStream(c *gin.Context) {
 
 // ─── Regulatory pulse ─────────────────────────────────────────────────────────
 
+// handleRegulatoryStatus lets clients check the capability before opening
+// the alert stream (which answers 503 when the pulse is off — a browser
+// EventSource then logs a console error on every page view).
+// handleRegulatoryStatus reports whether the regulatory pulse is configured
+// and whether the caller may read its alerts (partners only). Any signed-in
+// user may ask — the flag is not sensitive — and asking has no side effects:
+// the monitor is only built by the partner-only stream/check-now endpoints.
+func (s *Server) handleRegulatoryStatus(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"enabled": s.regPulseConfigured(), "canView": auth.IsPartner(getUser(c))})
+}
+
+// regPulseConfigured mirrors opsRegPulseEnabled(opsRegulatory()) without
+// constructing (and starting) the standalone monitor.
+func (s *Server) regPulseConfigured() bool {
+	if !opsEnvBool("REG_PULSE_ENABLED") {
+		return false
+	}
+	if s.regulatory != nil {
+		return s.regulatory.IsEnabled()
+	}
+	if os.Getenv("TAVILY_API_KEY") == "" {
+		return false
+	}
+	_, err := s.orch.Providers().Get(routing.Light(s.cfg))
+	return err == nil
+}
+
 func (s *Server) handleRegulatoryAlertStream(c *gin.Context) {
 	if !requirePartner(c) {
 		return
@@ -514,7 +520,7 @@ func opsStreamSSE[T any](c *gin.Context, ch <-chan T) {
 			if !ok {
 				return
 			}
-			raw, _ := json.Marshal(v)
+			raw, _ := jsonsafe.Marshal(v)
 			io.WriteString(c.Writer, "data: "+string(raw)+"\n\n")
 			flush()
 		case <-time.After(30 * time.Second):
@@ -729,24 +735,10 @@ func (s *Server) handleCheckConflictGraph(c *gin.Context) {
 
 // ─── Plugins ──────────────────────────────────────────────────────────────────
 
-// handleListPlugins mirrors the TS pluginRegistry.list() summary shape:
-// { id, name, source, tools, agents, workflows } with counts, never secrets.
+// handleListPlugins lists the loaded external plugins [partner only].
 func (s *Server) handleListPlugins(c *gin.Context) {
-	if !requirePartner(c) {
-		return
-	}
-	out := make([]gin.H, 0)
-	for _, p := range s.opsPlugins().List() {
-		out = append(out, gin.H{
-			"id":        p.Plugin.ID,
-			"name":      p.Plugin.Name,
-			"source":    "json", // Go port loads JSON adapters only
-			"tools":     len(p.Plugin.Tools),
-			"agents":    len(p.Plugin.Agents),
-			"workflows": len(p.Plugin.Workflows),
-		})
-	}
-	c.JSON(http.StatusOK, out)
+	plugins, err := s.as(c).ListPlugins(c.Request.Context())
+	reply(c, http.StatusOK, plugins, err)
 }
 
 // ─── Inter-round memory query ─────────────────────────────────────────────────

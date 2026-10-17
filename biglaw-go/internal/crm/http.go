@@ -36,7 +36,7 @@ func (h *HTTP) ModuleName() string { return ModuleName }
 
 // PublicRoute implements modules.HTTPModule: every CRM route requires a firm
 // credential.
-func (h *HTTP) PublicRoute(method, path string) bool { return false }
+func (h *HTTP) PublicRoute(method, route string) bool { return false }
 
 // Mount registers the /crm endpoints.
 func (h *HTTP) Mount(r gin.IRouter, host modules.Host) {

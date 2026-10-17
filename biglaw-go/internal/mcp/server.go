@@ -2,8 +2,9 @@
 // Copyright (C) 2026 Discover Legal
 
 // MCP (Model Context Protocol) stdio server for BigLaw.
-// Exposes the orchestrator, knowledge store, and agent registry as MCP tools
-// so that Claude Code and other MCP clients can drive BigLaw directly.
+// Exposes a backend.Backend — the in-process owner or a REST thin client of
+// one — as MCP tools so that Claude Code and other MCP clients can drive
+// BigLaw directly.
 
 package mcp
 
@@ -11,52 +12,38 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
+	"os"
+	"sort"
 	"strconv"
 	"time"
 
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	"github.com/discover-legal/biglaw-go/internal/adapters"
-	"github.com/discover-legal/biglaw-go/internal/agents"
-	"github.com/discover-legal/biglaw-go/internal/audit"
-	"github.com/discover-legal/biglaw-go/internal/knowledge"
-	"github.com/discover-legal/biglaw-go/internal/orchestrator"
-	"github.com/discover-legal/biglaw-go/internal/store"
+	"github.com/discover-legal/biglaw-go/internal/backend"
+	"github.com/discover-legal/biglaw-go/internal/jsonsafe"
 	"github.com/discover-legal/biglaw-go/internal/strutil"
 	"github.com/discover-legal/biglaw-go/internal/timekeeping"
 	"github.com/discover-legal/biglaw-go/internal/types"
+	"github.com/discover-legal/biglaw-go/internal/version"
 )
 
-// MCPServer wraps the BigLaw subsystems and exposes them as MCP tools.
+// MCPServer exposes a BigLaw Backend as MCP tools. It is identical whether
+// the backend is the in-process owner (backend.Local) or a REST thin client
+// (backend.Remote).
 type MCPServer struct {
-	orch      *orchestrator.Orchestrator
-	knowledge *knowledge.Store
-	registry  *agents.Registry
-	plugins   *adapters.Registry
-	time      *timekeeping.TimeStore
-	srv       *server.MCPServer
+	b   backend.Backend
+	srv *server.MCPServer
 }
 
-// New creates a new MCPServer. Call Serve() to start the stdio loop.
-func New(
-	orch *orchestrator.Orchestrator,
-	knowledgeStore *knowledge.Store,
-	registry *agents.Registry,
-	plugins *adapters.Registry,
-	timeStore *timekeeping.TimeStore,
-) *MCPServer {
-	s := &MCPServer{
-		orch:      orch,
-		knowledge: knowledgeStore,
-		registry:  registry,
-		plugins:   plugins,
-		time:      timeStore,
-	}
+// New creates an MCPServer over b. Call Serve to start the stdio loop.
+func New(b backend.Backend) *MCPServer {
+	s := &MCPServer{b: b}
 
 	s.srv = server.NewMCPServer(
 		"biglaw",
-		"0.5.0",
+		version.Version,
 		server.WithToolCapabilities(false),
 		server.WithInstructions(
 			"BigLaw multi-agent legal AI platform. "+
@@ -69,10 +56,12 @@ func New(
 	return s
 }
 
-// Serve starts the MCP stdio server and blocks until stdin closes or a signal
-// is received.
-func (s *MCPServer) Serve() error {
-	return server.ServeStdio(s.srv)
+// Serve runs the MCP stdio loop on os.Stdin/os.Stdout until stdin closes or
+// ctx is cancelled. Logs go to stderr; stdout carries only JSON-RPC.
+func (s *MCPServer) Serve(ctx context.Context) error {
+	stdio := server.NewStdioServer(s.srv)
+	stdio.SetErrorLogger(log.New(os.Stderr, "mcp: ", log.LstdFlags))
+	return stdio.Listen(ctx, os.Stdin, os.Stdout)
 }
 
 // ─── Tool registration ────────────────────────────────────────────────────────
@@ -110,6 +99,9 @@ func (s *MCPServer) registerTools() {
 			mcplib.WithString("matterNumber",
 				mcplib.Description("Matter number to associate with this task."),
 			),
+			mcplib.WithString("documentIds",
+				mcplib.Description("JSON array of ingested document IDs the task may retrieve from, e.g. [\"doc-uuid-1\"]."),
+			),
 		),
 		s.handleSubmitTask,
 	)
@@ -129,7 +121,7 @@ func (s *MCPServer) registerTools() {
 	// 3. list_tasks
 	s.srv.AddTool(
 		mcplib.NewTool("list_tasks",
-			mcplib.WithDescription("List all tasks (summary view, no findings content)."),
+			mcplib.WithDescription("List all tasks visible to the MCP principal, newest first (summary view, no findings content)."),
 		),
 		s.handleListTasks,
 	)
@@ -295,7 +287,7 @@ func (s *MCPServer) registerTools() {
 	// 15. get_time_entries
 	s.srv.AddTool(
 		mcplib.NewTool("get_time_entries",
-			mcplib.WithDescription("Retrieve billable time entries. MCP runs with full (partner) access. Supports filtering by profileId, taskId, matterNumber, and an ISO date range."),
+			mcplib.WithDescription("Retrieve billable time entries, scoped to the MCP principal (partners see everyone's; anyone else their own plus AI time on tasks they requested). Supports filtering by profileId, taskId, matterNumber, and an ISO date range."),
 			mcplib.WithString("profileId",
 				mcplib.Description("If set, filter entries to this lawyer profile ID."),
 			),
@@ -317,8 +309,17 @@ func (s *MCPServer) registerTools() {
 }
 
 // ─── Handlers ─────────────────────────────────────────────────────────────────
+//
+// Handlers validate arguments, call the Backend, and shape the result. They
+// never touch a store directly, so they behave identically over the Local
+// (in-process owner) and Remote (REST thin client) backends.
 
-func (s *MCPServer) handleSubmitTask(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+// toolError renders a Backend failure as an MCP tool error.
+func toolError(tool string, err error) (*mcplib.CallToolResult, error) {
+	return mcplib.NewToolResultError(fmt.Sprintf("%s failed: %v", tool, err)), nil
+}
+
+func (s *MCPServer) handleSubmitTask(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	args := req.Params.Arguments
 
 	description := stringArg(args, "description")
@@ -331,51 +332,55 @@ func (s *MCPServer) handleSubmitTask(_ context.Context, req mcplib.CallToolReque
 		return mcplib.NewToolResultError("workflowType is required"), nil
 	}
 
-	params := orchestrator.SubmitParams{
+	docIDs, errRes := jsonArrayArg(args, "documentIds")
+	if errRes != nil {
+		return errRes, nil
+	}
+
+	task, err := s.b.SubmitTask(ctx, backend.SubmitTaskInput{
 		Description:  description,
 		WorkflowType: types.WorkflowType(wfStr),
 		Jurisdiction: stringArg(args, "jurisdiction"),
 		ClientNumber: stringArg(args, "clientNumber"),
 		MatterNumber: stringArg(args, "matterNumber"),
-	}
-
-	task, err := s.orch.SubmitTask(params)
+		DocumentIDs:  docIDs,
+	})
 	if err != nil {
-		return mcplib.NewToolResultError(fmt.Sprintf("submit_task failed: %v", err)), nil
+		return toolError("submit_task", err)
 	}
-
 	return jsonResult(task)
 }
 
-func (s *MCPServer) handleGetTask(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+func (s *MCPServer) handleGetTask(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	taskID := stringArg(req.Params.Arguments, "taskId")
 	if taskID == "" {
 		return mcplib.NewToolResultError("taskId is required"), nil
 	}
-
-	task := s.orch.GetTask(taskID)
-	if task == nil {
-		return mcplib.NewToolResultError(fmt.Sprintf("task not found: %s", taskID)), nil
+	task, err := s.b.GetTask(ctx, taskID)
+	if err != nil {
+		return toolError("get_task", err)
 	}
-
 	return jsonResult(task)
 }
 
-func (s *MCPServer) handleListTasks(_ context.Context, _ mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	tasks := s.orch.ListTasks()
+// taskSummary is the compact list_tasks row (no findings content).
+type taskSummary struct {
+	ID           string             `json:"id"`
+	Description  string             `json:"description"`
+	WorkflowType types.WorkflowType `json:"workflowType"`
+	Status       types.TaskStatus   `json:"status"`
+	CurrentPhase types.TaskPhase    `json:"currentPhase"`
+	CurrentRound int                `json:"currentRound"`
+	Findings     int                `json:"findings"`
+	PendingGates int                `json:"pendingGates"`
+	CreatedAt    time.Time          `json:"createdAt"`
+	UpdatedAt    time.Time          `json:"updatedAt"`
+}
 
-	// Return lightweight summaries to keep the response compact.
-	type taskSummary struct {
-		ID           string             `json:"id"`
-		Description  string             `json:"description"`
-		WorkflowType types.WorkflowType `json:"workflowType"`
-		Status       types.TaskStatus   `json:"status"`
-		CurrentPhase types.TaskPhase    `json:"currentPhase"`
-		CurrentRound int                `json:"currentRound"`
-		Findings     int                `json:"findings"`
-		PendingGates int                `json:"pendingGates"`
-		CreatedAt    time.Time          `json:"createdAt"`
-		UpdatedAt    time.Time          `json:"updatedAt"`
+func (s *MCPServer) handleListTasks(ctx context.Context, _ mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	tasks, err := s.b.ListTasks(ctx)
+	if err != nil {
+		return toolError("list_tasks", err)
 	}
 
 	summaries := make([]taskSummary, len(tasks))
@@ -393,11 +398,18 @@ func (s *MCPServer) handleListTasks(_ context.Context, _ mcplib.CallToolRequest)
 			UpdatedAt:    t.UpdatedAt,
 		}
 	}
-
+	// Newest first, so the order is stable across calls (the orchestrator
+	// keeps tasks in a map).
+	sort.SliceStable(summaries, func(i, j int) bool {
+		if !summaries[i].CreatedAt.Equal(summaries[j].CreatedAt) {
+			return summaries[i].CreatedAt.After(summaries[j].CreatedAt)
+		}
+		return summaries[i].ID < summaries[j].ID
+	})
 	return jsonResult(summaries)
 }
 
-func (s *MCPServer) handleApproveGate(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+func (s *MCPServer) handleApproveGate(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	args := req.Params.Arguments
 
 	taskID := stringArg(args, "taskId")
@@ -406,16 +418,13 @@ func (s *MCPServer) handleApproveGate(_ context.Context, req mcplib.CallToolRequ
 		return mcplib.NewToolResultError("taskId and gateId are required"), nil
 	}
 
-	note := stringArg(args, "note")
-
-	if err := s.orch.ApproveGate(taskID, gateID, note, ""); err != nil {
-		return mcplib.NewToolResultError(fmt.Sprintf("approve_gate failed: %v", err)), nil
+	if err := s.b.ApproveGate(ctx, taskID, gateID, stringArg(args, "note")); err != nil {
+		return toolError("approve_gate", err)
 	}
-
-	return mcplib.NewToolResultText(fmt.Sprintf(`{"ok":true,"taskId":%q,"gateId":%q}`, taskID, gateID)), nil
+	return gateResult(taskID, gateID)
 }
 
-func (s *MCPServer) handleRejectGate(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+func (s *MCPServer) handleRejectGate(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	args := req.Params.Arguments
 
 	taskID := stringArg(args, "taskId")
@@ -425,14 +434,21 @@ func (s *MCPServer) handleRejectGate(_ context.Context, req mcplib.CallToolReque
 		return mcplib.NewToolResultError("taskId, gateId and reason are required"), nil
 	}
 
-	if err := s.orch.RejectGate(taskID, gateID, reason, ""); err != nil {
-		return mcplib.NewToolResultError(fmt.Sprintf("reject_gate failed: %v", err)), nil
+	if err := s.b.RejectGate(ctx, taskID, gateID, reason); err != nil {
+		return toolError("reject_gate", err)
 	}
-
-	return mcplib.NewToolResultText(fmt.Sprintf(`{"ok":true,"taskId":%q,"gateId":%q}`, taskID, gateID)), nil
+	return gateResult(taskID, gateID)
 }
 
-func (s *MCPServer) handleSubmitFromTemplate(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+func gateResult(taskID, gateID string) (*mcplib.CallToolResult, error) {
+	return jsonResult(struct {
+		OK     bool   `json:"ok"`
+		TaskID string `json:"taskId"`
+		GateID string `json:"gateId"`
+	}{true, taskID, gateID})
+}
+
+func (s *MCPServer) handleSubmitFromTemplate(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	args := req.Params.Arguments
 
 	templateID := stringArg(args, "templateId")
@@ -448,57 +464,50 @@ func (s *MCPServer) handleSubmitFromTemplate(_ context.Context, req mcplib.CallT
 		}
 	}
 
-	// Parse optional documentIds JSON string → slice.
-	var docIDs []string
-	if docIDsStr := stringArg(args, "documentIds"); docIDsStr != "" {
-		if err := json.Unmarshal([]byte(docIDsStr), &docIDs); err != nil {
-			return mcplib.NewToolResultError(fmt.Sprintf("documentIds must be a valid JSON array: %v", err)), nil
-		}
+	docIDs, errRes := jsonArrayArg(args, "documentIds")
+	if errRes != nil {
+		return errRes, nil
 	}
 
-	task, err := s.orch.SubmitFromTemplate(templateID, subs, docIDs, orchestrator.SubmitParams{})
+	task, err := s.b.SubmitFromTemplate(ctx, backend.SubmitFromTemplateInput{
+		TemplateID:    templateID,
+		Substitutions: subs,
+		DocumentIDs:   docIDs,
+	})
 	if err != nil {
-		return mcplib.NewToolResultError(fmt.Sprintf("submit_from_template failed: %v", err)), nil
+		return toolError("submit_from_template", err)
 	}
-
 	return jsonResult(task)
 }
 
-func (s *MCPServer) handleListTemplates(_ context.Context, _ mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	templates := s.orch.ListTemplates()
+func (s *MCPServer) handleListTemplates(ctx context.Context, _ mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	templates, err := s.b.ListTemplates(ctx)
+	if err != nil {
+		return toolError("list_templates", err)
+	}
 	return jsonResult(templates)
 }
 
-func (s *MCPServer) handleGetRound(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+func (s *MCPServer) handleGetRound(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	args := req.Params.Arguments
 
 	taskID := stringArg(args, "taskId")
 	if taskID == "" {
 		return mcplib.NewToolResultError("taskId is required"), nil
 	}
-
 	roundNum := intArg(args, "round")
 	if roundNum < 1 {
 		return mcplib.NewToolResultError("round must be >= 1"), nil
 	}
 
-	task := s.orch.GetTask(taskID)
-	if task == nil {
-		return mcplib.NewToolResultError(fmt.Sprintf("task not found: %s", taskID)), nil
+	round, err := s.b.GetRound(ctx, taskID, roundNum)
+	if err != nil {
+		return toolError("get_round", err)
 	}
-
-	// Rounds are 1-based in the protocol but 0-based in the slice.
-	idx := roundNum - 1
-	if idx >= len(task.Rounds) {
-		return mcplib.NewToolResultError(
-			fmt.Sprintf("round %d not found; task has %d round(s) so far", roundNum, len(task.Rounds)),
-		), nil
-	}
-
-	return jsonResult(task.Rounds[idx])
+	return jsonResult(round)
 }
 
-func (s *MCPServer) handleIngestDocument(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+func (s *MCPServer) handleIngestDocument(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	args := req.Params.Arguments
 
 	title := stringArg(args, "title")
@@ -507,32 +516,18 @@ func (s *MCPServer) handleIngestDocument(_ context.Context, req mcplib.CallToolR
 		return mcplib.NewToolResultError("title and content are required"), nil
 	}
 
-	doc := types.Document{
-		Title:      title,
-		Content:    content,
-		OwnerID:    stringArg(args, "ownerID"),
-		IngestedAt: time.Now(),
-	}
-
-	// MCP runs as the trusted local operator (Claude Code) → system identity.
-	saved, err := s.knowledge.Ingest(store.WithSystem(context.Background()), doc)
-	if err != nil {
-		return mcplib.NewToolResultError(fmt.Sprintf("ingest_document failed: %v", err)), nil
-	}
-
-	audit.Default.Write(audit.WriteRequest{
-		Event:   "document.ingested",
-		ActorID: audit.ActorSystem,
-		Data: map[string]interface{}{
-			"documentId": saved.ID,
-			"title":      title,
-		},
+	saved, err := s.b.IngestDocument(ctx, backend.IngestInput{
+		Title:   title,
+		Content: content,
+		OwnerID: stringArg(args, "ownerID"),
 	})
-
+	if err != nil {
+		return toolError("ingest_document", err)
+	}
 	return jsonResult(saved)
 }
 
-func (s *MCPServer) handleSearchKnowledge(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+func (s *MCPServer) handleSearchKnowledge(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	args := req.Params.Arguments
 
 	query := stringArg(args, "query")
@@ -540,34 +535,31 @@ func (s *MCPServer) handleSearchKnowledge(_ context.Context, req mcplib.CallTool
 		return mcplib.NewToolResultError("query is required"), nil
 	}
 
-	topK := intArg(args, "topK")
-	if topK <= 0 {
-		topK = 5
-	}
-
-	results, err := s.knowledge.Search(query, knowledge.SearchOpts{TopK: topK})
+	results, err := s.b.SearchKnowledge(ctx, query, intArg(args, "topK"))
 	if err != nil {
-		return mcplib.NewToolResultError(fmt.Sprintf("search_knowledge failed: %v", err)), nil
+		return toolError("search_knowledge", err)
 	}
-
 	return jsonResult(results)
 }
 
-func (s *MCPServer) handleListAgents(_ context.Context, _ mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	defs := s.registry.ListAll()
+// agentSummary is a registry entry without its system prompt.
+type agentSummary struct {
+	ID            string            `json:"id"`
+	Name          string            `json:"name"`
+	Tier          types.AgentTier   `json:"tier"`
+	Type          types.AgentType   `json:"type"`
+	Domain        types.AgentDomain `json:"domain"`
+	Description   string            `json:"description"`
+	AllowedTools  []string          `json:"allowedTools"`
+	Skills        []string          `json:"skills"`
+	Jurisdictions []string          `json:"jurisdictions,omitempty"`
+	SuccessScore  float64           `json:"successScore"`
+}
 
-	// Strip the system-prompt text to keep the response lean.
-	type agentSummary struct {
-		ID            string            `json:"id"`
-		Name          string            `json:"name"`
-		Tier          types.AgentTier   `json:"tier"`
-		Type          types.AgentType   `json:"type"`
-		Domain        types.AgentDomain `json:"domain"`
-		Description   string            `json:"description"`
-		AllowedTools  []string          `json:"allowedTools"`
-		Skills        []string          `json:"skills"`
-		Jurisdictions []string          `json:"jurisdictions,omitempty"`
-		SuccessScore  float64           `json:"successScore"`
+func (s *MCPServer) handleListAgents(ctx context.Context, _ mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	defs, err := s.b.ListAgents(ctx)
+	if err != nil {
+		return toolError("list_agents", err)
 	}
 
 	summaries := make([]agentSummary, len(defs))
@@ -585,26 +577,28 @@ func (s *MCPServer) handleListAgents(_ context.Context, _ mcplib.CallToolRequest
 			SuccessScore:  d.SuccessScore,
 		}
 	}
-
 	return jsonResult(summaries)
 }
 
-func (s *MCPServer) handleQueryMemory(_ context.Context, _ mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	// Return recent round-related audit entries as a proxy for inter-round memory.
-	entries := audit.Default.ReadRecent("", 100)
+// memoryItem is a round/phase lifecycle audit entry surfaced by query_memory.
+type memoryItem struct {
+	ID      string                 `json:"id"`
+	TS      string                 `json:"ts"`
+	Event   string                 `json:"event"`
+	TaskID  string                 `json:"taskId,omitempty"`
+	AgentID string                 `json:"agentId,omitempty"`
+	Data    map[string]interface{} `json:"data"`
+}
 
-	type memoryItem struct {
-		ID      string                 `json:"id"`
-		TS      string                 `json:"ts"`
-		Event   string                 `json:"event"`
-		TaskID  string                 `json:"taskId,omitempty"`
-		AgentID string                 `json:"agentId,omitempty"`
-		Data    map[string]interface{} `json:"data"`
+func (s *MCPServer) handleQueryMemory(ctx context.Context, _ mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	// Recent round-related audit entries stand in for inter-round memory.
+	entries, err := s.b.ReadAudit(ctx, backend.AuditQuery{Limit: 100})
+	if err != nil {
+		return toolError("query_memory", err)
 	}
 
 	items := make([]memoryItem, 0, len(entries))
 	for _, e := range entries {
-		// Surface round-digest and phase events as memory entries.
 		switch e.Event {
 		case "phase.complete", "phase.start", "task.complete", "task.started", "round.digest":
 			items = append(items, memoryItem{
@@ -617,11 +611,10 @@ func (s *MCPServer) handleQueryMemory(_ context.Context, _ mcplib.CallToolReques
 			})
 		}
 	}
-
 	return jsonResult(items)
 }
 
-func (s *MCPServer) handleGetAudit(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+func (s *MCPServer) handleGetAudit(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	args := req.Params.Arguments
 
 	limit := intArg(args, "limit")
@@ -632,52 +625,24 @@ func (s *MCPServer) handleGetAudit(_ context.Context, req mcplib.CallToolRequest
 		limit = 500
 	}
 
-	taskID := stringArg(args, "taskId")
-
-	entries := audit.Default.ReadRecent(taskID, limit)
+	entries, err := s.b.ReadAudit(ctx, backend.AuditQuery{TaskID: stringArg(args, "taskId"), Limit: limit})
+	if err != nil {
+		return toolError("get_audit", err)
+	}
 	return jsonResult(entries)
 }
 
-func (s *MCPServer) handleListPlugins(_ context.Context, _ mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	// Summary shape mirrors GET /plugins (ops.go) and the TS pluginRegistry
-	// list(): descriptor fields + counts, never API keys or endpoints.
-	type pluginSummary struct {
-		ID          string `json:"id"`
-		Name        string `json:"name"`
-		Version     string `json:"version,omitempty"`
-		Description string `json:"description,omitempty"`
-		Source      string `json:"source"`
-		Enabled     bool   `json:"enabled"`
-		Tools       int    `json:"tools"`
-		Agents      int    `json:"agents"`
-		Workflows   int    `json:"workflows"`
+func (s *MCPServer) handleListPlugins(ctx context.Context, _ mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	plugins, err := s.b.ListPlugins(ctx)
+	if err != nil {
+		return toolError("list_plugins", err)
 	}
-
-	summaries := []pluginSummary{}
-	if s.plugins != nil {
-		for _, p := range s.plugins.List() {
-			summaries = append(summaries, pluginSummary{
-				ID:          p.Plugin.ID,
-				Name:        p.Plugin.Name,
-				Version:     p.Plugin.Version,
-				Description: p.Plugin.Description,
-				Source:      "json", // the Go port loads JSON adapters only
-				Enabled:     p.Enabled,
-				Tools:       len(p.Plugin.Tools),
-				Agents:      len(p.Plugin.Agents),
-				Workflows:   len(p.Plugin.Workflows),
-			})
-		}
-	}
-
-	return jsonResult(summaries)
+	return jsonResult(plugins)
 }
 
-func (s *MCPServer) handleGetTimeEntries(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+func (s *MCPServer) handleGetTimeEntries(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	args := req.Params.Arguments
 
-	// MCP over stdio runs as the local partner — full visibility, same as the
-	// TS get_time_entries tool.
 	filter := timekeeping.TimeFilter{
 		ProfileID:    stringArg(args, "profileId"),
 		TaskID:       stringArg(args, "taskId"),
@@ -698,9 +663,9 @@ func (s *MCPServer) handleGetTimeEntries(_ context.Context, req mcplib.CallToolR
 		filter.To = &t
 	}
 
-	entries := s.time.List(filter)
-	if entries == nil {
-		entries = []types.TimeEntry{}
+	entries, err := s.b.ListTimeEntries(ctx, filter)
+	if err != nil {
+		return toolError("get_time_entries", err)
 	}
 	return jsonResult(entries)
 }
@@ -716,12 +681,27 @@ func parseISOTime(v string) (time.Time, error) {
 }
 
 // jsonResult marshals v to JSON and wraps it in a TextContent tool result.
+// It uses the REST API's encoder (nil collections as [] / {}), so a tool
+// answers identically in-process and as a thin client over REST.
 func jsonResult(v interface{}) (*mcplib.CallToolResult, error) {
-	data, err := json.Marshal(v)
+	data, err := jsonsafe.Marshal(v)
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("failed to marshal result: %v", err)), nil
 	}
 	return mcplib.NewToolResultText(string(data)), nil
+}
+
+// jsonArrayArg parses an optional JSON-array-of-strings argument.
+func jsonArrayArg(args map[string]interface{}, key string) ([]string, *mcplib.CallToolResult) {
+	raw := stringArg(args, key)
+	if raw == "" {
+		return nil, nil
+	}
+	var out []string
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil, mcplib.NewToolResultError(fmt.Sprintf("%s must be a valid JSON array: %v", key, err))
+	}
+	return out, nil
 }
 
 // stringArg extracts a string argument from the MCP arguments map.

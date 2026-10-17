@@ -34,13 +34,14 @@ func (s *Server) Mount(m modules.HTTPModule) {
 }
 
 // isPublic is the full public-route set: the core's fixed set plus each
-// mounted module's self-authenticating routes.
-func (s *Server) isPublic(method, path string) bool {
-	if isPublicRoute(method, path) {
+// mounted module's self-authenticating routes. route is the matched route
+// pattern (c.FullPath), as for isPublicRoute.
+func (s *Server) isPublic(method, route string) bool {
+	if isPublicRoute(method, route) {
 		return true
 	}
 	for _, pub := range s.publicRoutes {
-		if pub(method, path) {
+		if pub(method, route) {
 			return true
 		}
 	}

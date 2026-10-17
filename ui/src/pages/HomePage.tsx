@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import type { Task, Health, Me, GateRequest } from "../types";
+import type { Task, Health, Me, GateRequest, Notify } from "../types";
 import { api } from "../api";
 import { ConfidenceBar } from "../primitives";
 
@@ -16,7 +16,7 @@ export function HomePage({ tasks, health, me, isPartner, onOpenMatter, onGo, onG
   onGo: (section: string) => void;
   onGoLibrary: (tab: "documents" | "upload" | "search") => void;
   onNew: () => void;
-  notify: (m: string) => void;
+  notify: Notify;
 }) {
   const mode = me?.mode ?? "admin";
   const name = me?.user?.name?.split(/\s+/)[0] ?? "there";
@@ -100,7 +100,7 @@ function StatTile({ n, label, tone, onClick }: { n: number; label: string; tone?
 function NeedsYourReview({ items, onOpenMatter, notify }: {
   items: Array<{ task: Task; gate: GateRequest }>;
   onOpenMatter: (id: string) => void;
-  notify: (m: string) => void;
+  notify: Notify;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   if (!items.length) {
@@ -116,7 +116,7 @@ function NeedsYourReview({ items, onOpenMatter, notify }: {
     try {
       if (kind === "approve") { await api.approveGate(task.id, gate.id); notify("Finding approved"); }
       else { const r = window.prompt("Reason for rejecting?") || "rejected by reviewer"; await api.rejectGate(task.id, gate.id, r); notify("Finding rejected"); }
-    } catch (e) { notify((e as Error).message); } finally { setBusy(null); }
+    } catch (e) { notify((e as Error).message, "error"); } finally { setBusy(null); }
   }
   return (
     <div className="home-card amber-card">

@@ -201,6 +201,20 @@ func (c *ClioClient) ensureValid() (string, error) {
 	return at, nil
 }
 
+// UseTokensFile points the client at the token store the config resolved
+// (config.Persistence.ClioTokensFile, inside the data dir) and reloads it.
+// Call once at startup, after the legacy state migration, before serving.
+func (c *ClioClient) UseTokensFile(path string) error {
+	c.mu.Lock()
+	c.tokensFile = path
+	c.tokens = nil
+	c.mu.Unlock()
+	if err := c.Load(); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
 // Load reads persisted tokens from disk.
 func (c *ClioClient) Load() error {
 	data, err := os.ReadFile(c.tokensFile)

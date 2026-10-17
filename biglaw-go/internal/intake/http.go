@@ -129,32 +129,23 @@ func (h *HTTP) ModuleName() string { return ModuleName }
 // PublicRoute marks the portal-facing routes as public: they self-
 // authenticate via HMAC, exactly like the Slack/Teams webhooks. The
 // firm-facing queue routes are NOT public.
-func (h *HTTP) PublicRoute(method, path string) bool { return IsPortalRoute(method, path) }
+func (h *HTTP) PublicRoute(method, route string) bool { return IsPortalRoute(method, route) }
 
-// IsPortalRoute reports whether method+path is in the HMAC portal set.
-func IsPortalRoute(method, path string) bool {
-	switch method {
-	case http.MethodPost:
-		if path == "/intake/submissions" {
-			return true
-		}
-		if strings.HasPrefix(path, "/intake/proposals/") && strings.HasSuffix(path, "/decision") {
-			return true
-		}
-		if strings.HasPrefix(path, "/intake/clients/") && strings.HasSuffix(path, "/proposals") {
-			return true
-		}
-	case http.MethodGet:
-		if rest, ok := strings.CutPrefix(path, "/intake/submissions/"); ok && rest != "" && !strings.Contains(rest, "/") {
-			return true
-		}
-		if strings.HasPrefix(path, "/intake/clients/") &&
-			(strings.HasSuffix(path, "/profile") || strings.HasSuffix(path, "/submissions")) {
-			return true
-		}
-	}
-	return false
+// portalRoutes is the HMAC portal set, keyed by method and registered route
+// pattern (see Mount). Matching patterns, not request paths, means only
+// these exact routes are exempt from firm auth.
+var portalRoutes = map[[2]string]bool{
+	{http.MethodPost, "/intake/submissions"}:                    true,
+	{http.MethodGet, "/intake/submissions/:id"}:                 true,
+	{http.MethodGet, "/intake/clients/:externalId/submissions"}: true,
+	{http.MethodGet, "/intake/clients/:externalId/profile"}:     true,
+	{http.MethodPost, "/intake/clients/:externalId/proposals"}:  true,
+	{http.MethodPost, "/intake/proposals/:id/decision"}:         true,
 }
+
+// IsPortalRoute reports whether method+route (a registered route pattern,
+// c.FullPath()) is in the HMAC portal set.
+func IsPortalRoute(method, route string) bool { return portalRoutes[[2]string{method, route}] }
 
 // VerifyHMAC authenticates a portal request per the signing contract. It
 // consumes and restores the request body. Writes the error response and

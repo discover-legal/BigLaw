@@ -4,14 +4,47 @@
 package api
 
 import (
+	"net/http"
+	"net/url"
+	"strings"
+
 	"github.com/gin-gonic/gin"
 
 	"github.com/discover-legal/biglaw-go/internal/modules"
 )
 
+// canonicalRawPath re-escapes each segment of a request's raw path
+// canonically before gin routes on it (UseRawPath, below). Escapes that
+// carry meaning survive — %2F inside an ID stays one segment, %25 stays a
+// literal "%" — while gratuitous ones (/heal%74h, /auth/%70roviders) decode,
+// so static routes match exactly as they did when gin routed on the decoded
+// path. Param values are unaffected: gin unescapes them either way.
+func canonicalRawPath(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.RawPath != "" {
+			segs := strings.Split(r.URL.RawPath, "/")
+			for i, seg := range segs {
+				if dec, err := url.PathUnescape(seg); err == nil {
+					segs[i] = url.PathEscape(dec)
+				}
+			}
+			u := *r.URL
+			u.RawPath = strings.Join(segs, "/")
+			r2 := *r
+			r2.URL = &u
+			r = &r2
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func (s *Server) newRouter() *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
+	// Route on the escaped path so an ID containing "/" (sent as %2F) stays
+	// one :param segment and reaches its handler — a typed not-found, not
+	// gin's plain-text 404 for an unmatched route.
+	r.UseRawPath = true
 	r.Use(gin.Recovery(), requestBodyLimit(), s.authMiddleware())
 
 	r.GET("/health", s.handleHealth)

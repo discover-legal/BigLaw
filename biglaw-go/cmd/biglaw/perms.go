@@ -22,15 +22,12 @@ func tightenStatePerms(cfg *config.Config) {
 	files := []string{
 		p.TasksFile, p.SettingsFile, p.ProfilesFile, p.ClientsFile, p.TimeFile,
 		p.TimeFile + ".migrations.json", p.LearningFile, p.OcgFile, p.JobsFile,
-		p.PreBillsFile, p.CostFile, p.PlaybooksFile, p.ClientVoiceFile,
+		p.PreBillsFile, p.CostFile, p.PlaybooksFile, p.ClientVoiceFile, p.ClioTokensFile,
 		cfg.Audit.LogFile, cfg.LPM.CorpusFile, cfg.LPM.RoutedFile, cfg.LPM.PendingFile,
 		cfg.LPM.BackfillCursorFile, cfg.Monitors.DocketsFile,
 	}
 	if db := cfg.Database.SQLitePath; db != "" && cfg.Database.Backend == "sqlite" {
 		files = append(files, db, db+"-wal", db+"-shm", db+"-journal")
-	}
-	if f := os.Getenv("CLIO_TOKENS_FILE"); f != "" {
-		files = append(files, f)
 	}
 	n := 0
 	for _, f := range files {

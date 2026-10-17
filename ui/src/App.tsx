@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { api, streamTask } from "./api";
-import type { Task, Health, AgentSummary, LawyerProfile, Me } from "./types";
+import type { Task, Health, AgentSummary, LawyerProfile, Me, Notify, NotifyTone } from "./types";
 import { MODE_ACCENT, MODE_LABEL } from "./types";
 import { SubmitModal } from "./SubmitModal";
 import { AuditRail } from "./AuditRail";
@@ -9,6 +9,9 @@ import { Login } from "./Login";
 import { ErrorBoundary } from "./pages/ErrorBoundary";
 import { HomePage } from "./pages/HomePage";
 import { MattersPage } from "./pages/MattersPage";
+
+/** Toast status dot — reuses the task-status dot palette. */
+const TOAST_DOT: Record<NotifyTone, string> = { ok: "complete", warn: "interrupted", error: "failed" };
 
 const LibraryPage = lazy(() => import("./Library").then((m) => ({ default: m.LibraryPage })));
 const ClientsPanel = lazy(() => import("./ClientsPanel").then((m) => ({ default: m.ClientsPanel })));
@@ -52,11 +55,11 @@ export default function App() {
   const [libraryTab, setLibraryTab] = useState<"documents" | "upload" | "search" | undefined>(undefined);
   const [submitOpen, setSubmitOpen] = useState(false);
   const [auditOpen, setAuditOpen] = useState(false);
-  const [toast, setToast] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ msg: string; tone: NotifyTone } | null>(null);
   const toastTimer = useRef<number | undefined>(undefined);
 
-  const notify = useCallback((msg: string) => {
-    setToast(msg);
+  const notify = useCallback<Notify>((msg, tone = "ok") => {
+    setToast({ msg, tone });
     window.clearTimeout(toastTimer.current);
     toastTimer.current = window.setTimeout(() => setToast(null), 3200);
   }, []);
@@ -285,9 +288,9 @@ export default function App() {
 
       <AnimatePresence>
         {toast && (
-          <motion.div className="toast"
+          <motion.div className={`toast ${toast.tone}`} role={toast.tone === "error" ? "alert" : "status"}
             initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 20 }}>
-            <span className="dot complete" />{toast}
+            <span className={`dot ${TOAST_DOT[toast.tone]}`} />{toast.msg}
           </motion.div>
         )}
       </AnimatePresence>

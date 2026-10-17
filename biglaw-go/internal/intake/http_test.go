@@ -176,35 +176,45 @@ func TestIntakeDisabledWithoutSecret(t *testing.T) {
 }
 
 func TestPortalRouteSetIsExact(t *testing.T) {
-	public := [][2]string{
-		{"POST", "/intake/submissions"},
+	// The public set is matched on registered route patterns (c.FullPath),
+	// so check it against what Mount actually registers: exactly these
+	// routes are portal (HMAC) routes, every other intake route needs a
+	// firm credential, and no portal entry is stale.
+	want := map[[2]string]bool{
+		{"POST", "/intake/submissions"}:                    true,
+		{"GET", "/intake/submissions/:id"}:                 true,
+		{"GET", "/intake/clients/:externalId/profile"}:     true,
+		{"GET", "/intake/clients/:externalId/submissions"}: true,
+		{"POST", "/intake/clients/:externalId/proposals"}:  true,
+		{"POST", "/intake/proposals/:id/decision"}:         true,
+	}
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	mod := &HTTP{}
+	mod.Mount(r, fakeHost{})
+	registered := map[[2]string]bool{}
+	for _, rt := range r.Routes() {
+		k := [2]string{rt.Method, rt.Path}
+		registered[k] = true
+		if got := mod.PublicRoute(rt.Method, rt.Path); got != want[k] {
+			t.Errorf("%s %s: public=%v, want %v", rt.Method, rt.Path, got, want[k])
+		}
+	}
+	for k := range want {
+		if !registered[k] {
+			t.Errorf("portal route %s %s is not registered by Mount", k[0], k[1])
+		}
+	}
+	// Request paths are not route patterns: a concrete path never matches,
+	// and neither does an unmatched request (empty pattern).
+	for _, p := range [][2]string{
 		{"GET", "/intake/submissions/abc-123"},
-		{"GET", "/intake/clients/auth0|x/profile"},
-		{"GET", "/intake/clients/auth0|x/submissions"},
-		{"POST", "/intake/clients/auth0|x/proposals"},
 		{"POST", "/intake/proposals/f-1/decision"},
-	}
-	private := [][2]string{
-		{"GET", "/intake/queue"},
-		{"POST", "/intake/submissions/abc/claim"},
-		{"POST", "/intake/submissions/abc/task"},
-		{"POST", "/intake/submissions/abc/conflict"},
-		{"PATCH", "/intake/submissions/abc"},
-		{"GET", "/intake/submissions/"},
-		{"DELETE", "/intake/submissions/abc"},
+		{"GET", ""},
 		{"GET", "/tasks"},
-	}
-	for _, p := range public {
-		if !IsPortalRoute(p[0], p[1]) {
-			t.Errorf("expected public: %s %s", p[0], p[1])
-		}
-		if !(&HTTP{}).PublicRoute(p[0], p[1]) {
-			t.Errorf("module PublicRoute must cover: %s %s", p[0], p[1])
-		}
-	}
-	for _, p := range private {
+	} {
 		if IsPortalRoute(p[0], p[1]) {
-			t.Errorf("must NOT be public: %s %s", p[0], p[1])
+			t.Errorf("must NOT be public: %q %q", p[0], p[1])
 		}
 	}
 }

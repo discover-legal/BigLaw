@@ -22,6 +22,9 @@ import (
 	"strings"
 	"sync"
 	"unicode"
+	"unicode/utf8"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 // BM25 tuning defaults. They are exported so callers may construct an Index
@@ -86,7 +89,7 @@ func NewWithParams(k1, b float64) *Index {
 // subsequent Add/Remove of the same id behaves predictably; it simply never
 // matches a query.
 func (ix *Index) Add(id, text string) {
-	tokens := Tokenize(text)
+	tokens := terms(text)
 
 	tf := make(map[string]int, len(tokens))
 	for _, t := range tokens {
@@ -149,7 +152,7 @@ func (ix *Index) Search(query string, topK int) []Result {
 	if topK <= 0 {
 		return nil
 	}
-	qTerms := Tokenize(query)
+	qTerms := terms(query)
 	if len(qTerms) == 0 {
 		return nil
 	}
@@ -232,6 +235,36 @@ func (ix *Index) Search(query string, topK int) []Result {
 	return results
 }
 
+// MaxScore returns the supremum of the BM25 score any document could reach
+// for query against the current corpus: the sum over unique query terms of
+// idf(term)·(k1+1), the value each term's saturating tf component approaches
+// but never attains. Dividing a Search score by it yields a relevance in
+// (0, 1) that is comparable across queries — unlike normalising by the best
+// hit, which would label the strongest of several weak matches "100%".
+//
+// Query terms absent from the corpus count at their (maximal) idf, so a
+// document matching one of three query terms is not reported as a near-full
+// match. Returns 0 for an empty query or empty index.
+func (ix *Index) MaxScore(query string) float64 {
+	seen := map[string]struct{}{}
+	ix.mu.RLock()
+	defer ix.mu.RUnlock()
+	n := float64(len(ix.docs))
+	if n == 0 {
+		return 0
+	}
+	var ceiling float64
+	for _, t := range terms(query) {
+		if _, dup := seen[t]; dup {
+			continue
+		}
+		seen[t] = struct{}{}
+		df := float64(ix.df[t])
+		ceiling += math.Log(1+(n-df+0.5)/(df+0.5)) * (ix.k1 + 1)
+	}
+	return ceiling
+}
+
 // stopwords is a deliberately small set of high-frequency English function
 // words. BM25's idf already down-weights ubiquitous terms, so the goal here is
 // only to drop the most common closed-class words that add noise and bloat
@@ -261,7 +294,9 @@ func Tokenize(text string) []string {
 		return nil
 	}
 	fields := strings.FieldsFunc(text, func(r rune) bool {
-		return !unicode.IsLetter(r) && !unicode.IsNumber(r)
+		// Combining marks stay inside the word so decomposed (NFD) input
+		// isn't split mid-word; foldAccents drops them below.
+		return !unicode.IsLetter(r) && !unicode.IsNumber(r) && !unicode.Is(unicode.Mn, r)
 	})
 	tokens := make([]string, 0, len(fields))
 	for _, f := range fields {
@@ -280,6 +315,50 @@ func Tokenize(text string) []string {
 	}
 	return tokens
 }
+
+// terms is what the Index stores and matches: Tokenize's tokens with
+// diacritics folded, so accented and unaccented spellings match each other.
+// Tokenize itself keeps accents because callers also use it for display
+// (e.g. writer cluster labels).
+func terms(text string) []string {
+	toks := Tokenize(text)
+	for i, t := range toks {
+		toks[i] = foldAccents(t)
+	}
+	return toks
+}
+
+// foldAccents strips diacritics so "café", "cafe\u0301" and "cafe" index
+// and query as the same term ("Société" matches "societe"), and spells out the
+// letters Unicode does not decompose (ł, ø, ß, æ, œ, đ, ð, þ) so "Łódź" matches
+// "lodz" and "Straße" matches "strasse". Input is already lowercased. ASCII
+// input — the common case — returns without allocating.
+func foldAccents(s string) string {
+	ascii := true
+	for i := 0; i < len(s); i++ {
+		if s[i] >= utf8.RuneSelf {
+			ascii = false
+			break
+		}
+	}
+	if ascii {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range norm.NFD.String(s) {
+		if !unicode.Is(unicode.Mn, r) {
+			b.WriteRune(r)
+		}
+	}
+	return undecomposable.Replace(norm.NFC.String(b.String()))
+}
+
+// undecomposable maps the lowercase Latin letters that carry a diacritic or
+// ligature but have no Unicode decomposition to their ASCII spelling.
+var undecomposable = strings.NewReplacer(
+	"ł", "l", "ø", "o", "ß", "ss", "æ", "ae", "œ", "oe", "đ", "d", "ð", "d", "þ", "th",
+)
 
 // utf8RuneCountLessThan reports whether s has fewer than n runes, scanning only
 // as far as needed.
