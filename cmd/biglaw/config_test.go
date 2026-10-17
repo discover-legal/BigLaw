@@ -139,42 +139,80 @@ func TestVendorBreakerRefusesDirectAnthropic(t *testing.T) {
 	}
 }
 
+// TestDescribeRedactsSecrets: whatever shape a value has, no secret in it
+// reaches `version --config` or a `serve` refusal. Every secret below
+// contains "SECRET"; the inputs include the r2 critics' exact repros.
 func TestDescribeRedactsSecrets(t *testing.T) {
-	secrets := []string{"s3cret-pw", "sk-live-abc123", "oidc-shh", "gwkey999", "SECRETKEY", "PUBSECRET", "ISSPW", "QSECRET", "FRAGSECRET", "SSLPW", "PGSECRET"}
-	cases := []struct{ name, dsn string }{
-		{"url", dsn},
-		{"url sslpassword", "postgres://u:s3cret-pw@h/db?sslmode=disable&sslpassword=SSLPW"},
-		{"url fragment", "postgres://u:s3cret-pw@h/db#FRAGSECRET"},
-		{"kv quoted", `host=db user=biglaw password='s3cret-pw a\'b' dbname=x`},
-		{"kv escaped space", `host=db password=s3cret-pw\ PUBSECRET dbname=x`},
-		{"kv sslpassword", "host=db sslpassword=SSLPW password = s3cret-pw"},
-		{"kv broken", "host=db password=s3cret-pw PUBSECRET dbname=x"},   // unquoted space: invalid
-		{"upper scheme", "POSTGRES://biglaw:s3cret-pw@127.0.0.1:5433/x"}, // lib/pq would misread it
-		{"slash in password", "postgres://biglaw:s3cret/pw@127.0.0.1/x"}, // would leak to DNS
-		{"slash in pw, @ later", "postgres://biglaw:p@ss/s3cret-pw@h/x"}, // host "ss" in Go's reading
+	const base = "postgres://biglaw:SECRET0@127.0.0.1:1/biglaw?sslmode=disable&connect_timeout=1"
+	cases := []struct {
+		name string
+		kv   []string
+	}{
+		{"url dsn", nil},
+		{"url sslpassword", []string{"BIGLAW_DATABASE_URL", "postgres://u:SECRET1@127.0.0.1:1/db?sslmode=disable&sslpassword=SECRET2"}},
+		{"url fragment", []string{"BIGLAW_DATABASE_URL", "postgres://u:SECRET1@127.0.0.1:1/db?sslmode=disable#SECRET3"}},
+		{"kv quoted", []string{"BIGLAW_DATABASE_URL", `host=127.0.0.1 port=1 user=biglaw password='SECRET a\'b' dbname=x sslmode=disable`}},
+		{"kv escaped space", []string{"BIGLAW_DATABASE_URL", `host=127.0.0.1 port=1 password=SECRET\ PW dbname=x sslmode=disable`}},
+		{"kv sslpassword", []string{"BIGLAW_DATABASE_URL", "host=127.0.0.1 port=1 sslpassword=SECRET1 password = SECRET2 sslmode=disable"}},
+		{"kv broken", []string{"BIGLAW_DATABASE_URL", "host=db password=SECRET PW dbname=x"}}, // unquoted space: invalid
+		// r2 prosecutor F2 / reproducer: lib/pq reads an unquoted value up to white space, quotes included.
+		{"kv apostrophe inside", []string{"BIGLAW_DATABASE_URL", "host=127.0.0.1 port=1 user=postgres password=ab'SECRETcd dbname=x sslmode=disable"}},
+		{"kv trailing quotes", []string{"BIGLAW_DATABASE_URL", "host=127.0.0.1 port=1 password=SECRET'' dbname=x sslmode=disable"}},
+		{"kv escaped quote", []string{"BIGLAW_DATABASE_URL", `host=127.0.0.1 port=1 password=a\'SECRET dbname=x sslmode=disable`}},
+		{"kv empty value eats next", []string{"BIGLAW_DATABASE_URL", "host=127.0.0.1 port=1 password= SECRETdb=x sslmode=disable"}}, // pq: password is "SECRETdb=x"
+		{"upper scheme", []string{"BIGLAW_DATABASE_URL", "POSTGRES://biglaw:SECRET@127.0.0.1:5433/x"}},
+		{"slash in password", []string{"BIGLAW_DATABASE_URL", "postgres://biglaw:SECRET/pw@127.0.0.1/x"}},
+		{"slash in pw, @ later", []string{"BIGLAW_DATABASE_URL", "postgres://biglaw:p@ss/SECRET@h/x"}},
+		// r2 prosecutor F1: scheme-less and malformed URLs.
+		{"model url no scheme", []string{"BIGLAW_MODEL_URL", "user:sk-SECRETKEY1@api.example.com"}},
+		{"model url key in query, no scheme", []string{"BIGLAW_MODEL_URL", "api.example.com/v1?key=SECRETKEY2"}},
+		{"model url scheme-relative", []string{"BIGLAW_MODEL_URL", "//sk-SECRETKEY3@api.example.com/v1"}},
+		{"model url https:/ typo", []string{"BIGLAW_MODEL_URL", "https:/u:SECRETKEY4@api.example.com"}},
+		{"model url backslash", []string{"BIGLAW_MODEL_URL", `https://gw.example\SECRET@x/v1`}},
+		{"model url userinfo, query, fragment", []string{"BIGLAW_MODEL_URL", "https://SECRET1@gw.example/v1?key=SECRET2#SECRET3"}},
+		{"model url bare query key", []string{"BIGLAW_MODEL_URL", "https://gw.example/v1?sk-SECRET"}}, // red team: a query name can be the key
+		{"model url key named like a param", []string{"BIGLAW_MODEL_URL", "https://gw.example/v1?SECRET=1&x"}},
+		{"breaker with key in query", []string{"BIGLAW_MODEL_URL", "https://api.anthropic.com/v1?key=sk-ant-SECRET"}},
+		{"public url no scheme", []string{"BIGLAW_PUBLIC_URL", "admin:SECRETKEY5@biglaw.example.com"}},
+		{"public url userinfo", []string{"BIGLAW_PUBLIC_URL", "http://admin:SECRET@h.example"}},
+		{"issuer no scheme, query", []string{"BIGLAW_OIDC_ISSUER", "accounts.google.com?client_secret=SECRETKEY6"}},
+		{"issuer full", []string{"BIGLAW_OIDC_ISSUER", "https://u:SECRET1@idp.example/?x=SECRET2#SECRET3"}},
+		{"issuer opaque", []string{"BIGLAW_OIDC_ISSUER", "microsoft:SECRET@tenant"}},
+		{"addr userinfo", []string{"BIGLAW_ADDR", "u:SECRET@h:1"}},
+		{"addr userinfo, valid host:port", []string{"BIGLAW_ADDR", "[u:SECRET@h]:1"}},
+		{"plain var holding a url", []string{"BIGLAW_PRICES", "https://u:SECRET@prices.example/x.json"}},
+		{"secrets", []string{"BIGLAW_MODEL_KEY", "sk-live-SECRET", "BIGLAW_OIDC_CLIENT_SECRET", "oidc-SECRET"}},
 	}
 	for _, tc := range cases {
-		e := env("BIGLAW_DATABASE_URL", tc.dsn, "BIGLAW_MODEL_KEY", "sk-live-abc123", "BIGLAW_OIDC_CLIENT_SECRET", "oidc-shh",
-			"BIGLAW_MODEL_URL", "https://SECRETKEY@gw.example/v1?key=gwkey999",
-			"BIGLAW_PUBLIC_URL", "http://admin:PUBSECRET@h.example",
-			"BIGLAW_OIDC_ISSUER", "https://u:ISSPW@idp.example/?x=QSECRET#FRAGSECRET")
-		out := Describe(e, []string{"PGPASSWORD=PGSECRET", "PGHOST=db", "PATH=/bin"})
-		var stdout, stderr bytes.Buffer
-		run(context.Background(), []string{"version", "--config"}, e, nil, &stdout, &stderr)
-		for _, secret := range secrets {
-			if strings.Contains(out, secret) || strings.Contains(stdout.String()+stderr.String(), secret) {
-				t.Errorf("%s: version --config leaked %q:\n%s%s", tc.name, secret, stdout.String(), stderr.String())
+		e := env(append([]string{"BIGLAW_DATABASE_URL", base}, tc.kv...)...)
+		for _, args := range [][]string{{"version", "--config"}, {"serve"}} {
+			var stdout, stderr bytes.Buffer
+			run(context.Background(), args, e, []string{"PGPASSWORD=PGSECRET", "PGHOST=db", "PATH=/bin"}, &stdout, &stderr)
+			out := strings.ReplaceAll(stdout.String()+stderr.String(), "BIGLAW_OIDC_CLIENT_SECRET", "") // the name is not a secret
+			if strings.Contains(out, "SECRET") {
+				t.Errorf("%s: biglaw %v leaked a secret:\n%s", tc.name, args, out)
 			}
 		}
-		if !strings.Contains(out, "lib/pq also reads these libpq variables (values not shown): PGHOST, PGPASSWORD") {
-			t.Errorf("%s: PG* variables not listed:\n%s", tc.name, out)
-		}
 	}
-	out := Describe(env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_MODEL_KEY", "k"), nil)
-	for _, want := range []string{"BIGLAW_MODEL_KEY           (set, hidden)  [env, read from PR 2]", "biglaw:xxxxx@db:5432/biglaw"} {
+	out := Describe(env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_MODEL_KEY", "k", "BIGLAW_OIDC_ISSUER", "microsoft:contoso.onmicrosoft.com",
+		"BIGLAW_MODEL_URL", "https://K@gw.example/v1/chat?key=k&b=2#f", "BIGLAW_PUBLIC_URL", "HTTPS://Biglaw.Example:8443"), []string{"PGPASSWORD=x", "PGHOST=db", "PATH=/bin"})
+	for _, want := range []string{
+		"BIGLAW_MODEL_KEY           (set, hidden)  [env, read from PR 2]",
+		`BIGLAW_DATABASE_URL        host="db" port=5432 user="biglaw" dbname="biglaw" sslmode="disable" password=(set, hidden)  [env]`,
+		"BIGLAW_MODEL_URL           https://xxxxx@gw.example/v1/chat?(2 query parameters, not shown)#xxxxx  [env]",
+		"BIGLAW_PUBLIC_URL          https://Biglaw.Example:8443  [env, read from PR 8]",
+		"BIGLAW_OIDC_ISSUER         microsoft:contoso.onmicrosoft.com  [env, read from PR 8]",
+		"lib/pq also reads these libpq variables (values not shown): PGHOST, PGPASSWORD",
+	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("Describe lacks %q:\n%s", want, out)
 		}
+	}
+	if got := shown("BIGLAW_MODEL_LEAD", "x\nBIGLAW_FORGED y"); strings.Contains(got, "\n") { // red team: no forged output lines
+		t.Errorf("a newline in a value reached the output: %q", got)
+	}
+	if got := shown("BIGLAW_DATABASE_URL", "postgres:///x?sslmode=disable&application_name=a&search_path=s"); !strings.Contains(got, "(+1 other parameters, not shown)") {
+		t.Errorf("runtime parameters: %s", got)
 	}
 }
 

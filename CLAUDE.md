@@ -21,7 +21,9 @@ Everything else in README is marked planned.
   first reads it, not before. Read env only through that table (literal names; `scripts/loc.py`
   rejects dynamic `os.Getenv`).
 - Migrations: a new `internal/store/migrations/NNNN_name.sql` (next number, lowercase name).
-  Never edit an applied one (checksums are checked). They are forward-only and each runs in a
+  Never edit an applied one (checksums are checked). Pre-release exception: until v2's first
+  release, `0001_init.sql` may still be rewritten; say so in the PR and tell reviewers to
+  recreate dev databases (README § Database). They are forward-only and each runs in a
   transaction: no `COMMIT`/`ROLLBACK`, no `CREATE INDEX CONCURRENTLY`. Extensions are
   database-wide, which schema-per-test isolation cannot handle: an extension must be created once
   outside the numbered migrations (and storetest taught to skip it) before any migration uses one.
@@ -30,9 +32,10 @@ Everything else in README is marked planned.
 - Every package has a `_test.go`; DB tests use `storetest.DSN(t)` and `t.Parallel()`.
 - No model calls in `go test` (later PRs: only through `model.Fake`).
 - Errors and logs must never contain the database password or any key. Run user-supplied DSNs
-  through `store.CheckDSN` before anything else sees them.
-- Until PR 8 there is no auth: only Compose (loopback-published) may pass `--allow-no-auth`
-  (`TestDeployFilesFollowExposureRule`).
+  through `store.CheckDSN` before anything else sees them; print config values only through
+  `shown` in `cmd/biglaw/config.go` (DSNs via `store.DescribeDSN`), never raw.
+- Until PR 8 there is no auth: only Compose (loopback-published) may pass `--allow-no-auth`, and
+  every Compose port must name a loopback IP (`TestDeployFilesFollowExposureRule`).
 - One Go version: go.mod's `toolchain` line, the Dockerfile `FROM` and CI's `go-version` move
   together (`TestGoVersionPinnedEverywhere`).
 
@@ -42,5 +45,6 @@ make ci     # gofmt, vet, mod verify/tidy, static build, go test -race -shuffle,
 make lint vuln   # staticcheck, govulncheck (CI lint job)
 # DB tests: BIGLAW_TEST_DSN=postgres://…?sslmode=disable BIGLAW_REQUIRE_DB=1
 ```
-Budgets: Go prod LOC ≤ 14,000, internal packages ≤ 12, direct deps ≤ 3, env vars ≤ 20,
-UI runtime deps ≤ 2, untested packages 0, longest source file ≤ 2,000 lines.
+Budgets: Go prod LOC ≤ 14,250 (test-support packages such as `storetest` count), internal
+packages ≤ 12 (test-support packages do not count), direct deps ≤ 3, env vars ≤ 20, UI runtime
+deps ≤ 2, untested packages 0, longest source file ≤ 2,000 lines.

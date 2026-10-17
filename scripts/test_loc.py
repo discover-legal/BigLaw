@@ -61,14 +61,17 @@ class TestLocBudget(unittest.TestCase):
                 write(r, f"internal/p{i}/p_test.go", HEADER + "package p\n")
 
         over = {
-            # 14,001 lines in total, spread so no single file trips the per-file cap
-            "go_prod_loc": lambda r: [write(r, f"internal/a/big{i}.go", HEADER + "package a\n" + "// x\n" * 1749) for i in range(8)],
+            # 14,251 lines in total (a.go's 2 + 7 x 1,781 + 1,782), spread under the per-file cap
+            "go_prod_loc": lambda r: [write(r, f"internal/a/big{i}.go", HEADER + "package a\n" + "// x\n" * (1780 if i == 0 else 1779)) for i in range(8)],
             "internal_packages": packages,
             "direct_go_deps": lambda r: write(r, "go.mod", "module x\n\ngo 1.25\n\nrequire (\n\ta.example/a v1.0.0\n\tb.example/b v1.0.0\n\tc.example/c v1.0.0 // indirect\n\td.example/d v1.0.0\n)\n\nrequire e.example/e v1.0.0\n"),
             "env_vars": env_vars,
             "ui_runtime_deps": lambda r: write(r, "ui/package.json", '{"dependencies":{"react":"18","react-dom":"18","left-pad":"1"}}'),
             "untested_packages": lambda r: write(r, "internal/b/b.go", HEADER + "package b\n"),
             "non-literal": lambda r: write(r, "internal/a/dyn.go", HEADER + 'package a\n\nimport "os"\n\nfunc g(n string) string { return os.Getenv(n) }\n'),
+            # r2 prosecutor F6: a concatenation of literals hid BIGLAW_SNEAK.
+            "non-literal (concatenation)": lambda r: write(r, "internal/a/dyn.go", HEADER + 'package a\n\nimport "os"\n\nfunc g() (string, bool) { return os.LookupEnv("BIGLAW_" + "SNEAK") }\n'),
+            "non-literal (raw string, multi-line)": lambda r: write(r, "internal/a/dyn.go", HEADER + 'package a\n\nimport "os"\n\nvar _ = os.Getenv(\n\t`BIGLAW_RAW`,\n)\n'),
             "test-only": lambda r: write(r, "internal/a/t.go", HEADER + 'package a\n\nimport "os"\n\nvar _ = os.Getenv("BIGLAW_TEST_DSN")\n'),
             "longest_source_file": lambda r: write(r, "internal/a/a_test.go", HEADER + "package a\n" + "// x\n" * 1999),  # 2,001 lines, a test file
             "LICENSE": lambda r: os.remove(os.path.join(r, "LICENSE")),
@@ -80,8 +83,48 @@ class TestLocBudget(unittest.TestCase):
                 root = self.base()
                 mutate(root)
                 code, out = run(root)
-                failed = [l for l in out.splitlines() if l.startswith("FAIL:") and name in l]
+                failed = [l for l in out.splitlines() if l.startswith("FAIL:") and name.split(" (")[0] in l]
                 self.assertTrue(code != 0 and failed, f"{name}: exit {code}\n{out}")
+
+    def test_loc_ceiling_boundary(self):
+        """14,250 lines pass, 14,251 fail (owner decision: ceiling 14,250)."""
+        root = self.base()  # internal/a/a.go has 2 lines; each big file 2 + 1,779
+        for i in range(8):
+            write(root, f"internal/a/big{i}.go", HEADER + "package a\n" + "// x\n" * 1779)
+        code, out = run(root)
+        self.assertEqual(code, 0, out)
+        self.assertIn("go_prod_loc           14250 / 14250   ok", out)
+        write(root, "internal/a/big0.go", HEADER + "package a\n" + "// x\n" * 1780)
+        code, out = run(root)
+        self.assertNotEqual(code, 0, out)
+        self.assertIn("go_prod_loc           14251 / 14250   OVER", out)
+
+    def test_support_packages_count_lines_not_packages(self):
+        """Coordinator ruling: a *test package no production code imports is out of the
+        package count (12 real + storetest passes) but its lines still count."""
+        root = self.base()
+        for i in range(11):  # 12 real packages with internal/a
+            write(root, f"internal/p{i}/p.go", HEADER + "package p\n")
+            write(root, f"internal/p{i}/p_test.go", HEADER + "package p\n")
+        write(root, "internal/store/storetest/storetest.go", HEADER + "package storetest\n" + "// x\n" * 500)
+        write(root, "internal/store/storetest/storetest_test.go", HEADER + "package storetest\n")
+        code, out = run(root)
+        self.assertEqual(code, 0, out)
+        self.assertIn("internal_packages        12 / 12", out)
+        self.assertIn("go_prod_loc             526", out)  # 12 packages x 2 lines + storetest's 502: still counted
+        # A 13th real package fails ...
+        write(root, "internal/q/q.go", HEADER + "package q\n")
+        write(root, "internal/q/q_test.go", HEADER + "package q\n")
+        code, out = run(root)
+        self.assertNotEqual(code, 0, out)
+        os.remove(os.path.join(root, "internal/q/q.go"))
+        os.remove(os.path.join(root, "internal/q/q_test.go"))
+        # ... and so does a *test package that production code imports: it is not test support.
+        write(root, "go.mod", "module x\n\ngo 1.25\n")
+        write(root, "internal/p0/p.go", HEADER + 'package p\n\nimport _ "x/internal/store/storetest"\n')
+        code, out = run(root)
+        self.assertNotEqual(code, 0, out)
+        self.assertIn("internal_packages        13 / 12", out)
 
     def test_per_file_cap_boundary(self):
         root = self.base()

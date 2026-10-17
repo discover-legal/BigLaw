@@ -35,8 +35,9 @@ const (
 var (
 	ErrFileTooLarge = fmt.Errorf("store: file exceeds %d bytes", MaxFileSize)
 	ErrNotFound     = errors.New("store: not found")
-	ErrBadName      = errors.New(`store: file name must be 1-255 bytes of valid UTF-8, not "." or "..", with no path separator, control or bidi-control character`)
-	ErrBadType      = errors.New("store: content type must be a valid media type such as text/plain")
+	ErrBadName      = errors.New(`store: file name must be 1-255 bytes of valid UTF-8, not "." or "..", with no path separator, ` +
+		"control or invisible format character (bidi controls, zero-width spaces), line separator, or leading/trailing space")
+	ErrBadType = errors.New("store: content type must be a valid media type such as text/plain, in printable ASCII")
 	// ErrCorrupt means the stored bytes do not match the recorded size or
 	// SHA-256. The checksum detects storage corruption, not tampering:
 	// anyone who can write the rows can rewrite the hash too.
@@ -56,18 +57,34 @@ type File struct {
 
 // PutFile streams r into a new file and returns its metadata. It holds one
 // ChunkSize buffer at a time and stops with ErrFileTooLarge within one chunk
-// of MaxFileSize. The file and all its chunks are written in one transaction.
+// of MaxFileSize. The file and its chunks are written in one transaction
+// (bounded as MaxConcurrentUploads says; a call over the cap waits for a
+// slot or ctx). The content type is stored in canonical form.
 func (s *Store) PutFile(ctx context.Context, name, contentType string, r io.Reader) (File, error) {
 	if !validName(name) {
 		return File{}, ErrBadName
 	}
-	if mt, _, err := mime.ParseMediaType(contentType); err != nil || !strings.Contains(mt, "/") || len(contentType) > MaxNameLen {
+	mt, params, err := mime.ParseMediaType(contentType)
+	if err != nil || !strings.Contains(mt, "/") || len(contentType) > MaxNameLen ||
+		strings.ContainsFunc(contentType, func(r rune) bool { return r < 0x20 || r >= 0x7f }) {
 		return File{}, ErrBadType
 	}
-	f := File{Name: name, ContentType: contentType}
-	err := s.InTx(ctx, func(tx *sql.Tx) error {
+	f := File{Name: name, ContentType: mime.FormatMediaType(mt, params)}
+	if f.ContentType == "" {
+		return File{}, ErrBadType
+	}
+	select {
+	case s.uploads <- struct{}{}:
+		defer func() { <-s.uploads }()
+	case <-ctx.Done():
+		return File{}, fmt.Errorf("store: put file: waiting for an upload slot: %w", ctx.Err())
+	}
+	err = s.InTx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`SET LOCAL idle_in_transaction_session_timeout = %d`, s.uploadIdle.Milliseconds())); err != nil {
+			return err
+		}
 		if err := tx.QueryRowContext(ctx, `INSERT INTO files (name, content_type, size, sha256) VALUES ($1, $2, 0, '')
-			RETURNING id, created_at`, name, contentType).Scan(&f.ID, &f.CreatedAt); err != nil {
+			RETURNING id, created_at`, name, f.ContentType).Scan(&f.ID, &f.CreatedAt); err != nil {
 			return err
 		}
 		ins, err := tx.PrepareContext(ctx, `INSERT INTO file_chunks (file_id, seq, data) VALUES ($1, $2, $3)`)
@@ -159,8 +176,14 @@ func validName(name string) bool {
 	if name == "" || len(name) > MaxNameLen || name == "." || name == ".." || !utf8.ValidString(name) {
 		return false
 	}
+	if strings.TrimFunc(name, unicode.IsSpace) != name { // "report.pdf " hides an extension or a trailing character
+		return false
+	}
+	// Cf: bidi controls ("a\u202Efdp.exe" shows as "aexe.pdf"), zero-width
+	// spaces, BOM. ZWNJ/ZWJ stay: Persian, Indic scripts and emoji need them.
 	return !strings.ContainsFunc(name, func(r rune) bool {
-		return r == '/' || r == '\\' || unicode.IsControl(r) || unicode.Is(unicode.Bidi_Control, r) // bidi: "a\u202Efdp.exe" displays as "aexe.pdf"
+		return r == '/' || r == '\\' || unicode.IsControl(r) || unicode.In(r, unicode.Zl, unicode.Zp) ||
+			unicode.Is(unicode.Cf, r) && r != '\u200c' && r != '\u200d'
 	})
 }
 

@@ -22,7 +22,7 @@ PostgreSQL database. Licensed Apache-2.0 (`LICENSE`, `NOTICE`).
 | Test helper | `internal/store/storetest/` | Gives each DB test its own schema; skips without a DSN, fails if `BIGLAW_REQUIRE_DB` is set |
 | Budgets | `scripts/loc.py` (+ `scripts/test_loc.py`) | Fails CI if a size budget is exceeded (below) |
 | Build/deploy | `Makefile`, `Dockerfile`, `docker-compose.yml`, `render.yaml`, `.env.example` | `make ci`; `postgres:16-alpine` + biglaw under Compose; Render blueprint (inert until PR 8, see § Exposure) |
-| CI | `.github/workflows/ci.yml` | `make ci` against `postgres:13` and `postgres:16` service containers with `BIGLAW_REQUIRE_DB=1`; staticcheck + govulncheck; image build + Compose smoke test |
+| CI | `.github/workflows/ci.yml` | `make ci` against `postgres:14` and `postgres:16` service containers with `BIGLAW_REQUIRE_DB=1`; staticcheck + govulncheck; image build + Compose smoke test |
 
 HTTP surface today: `GET /health` only. It returns `{"status":"ok","version":"…"}` (200) or
 `{"status":"database unavailable",…}` (503; the cause is logged, not returned). Every other path
@@ -37,15 +37,30 @@ discover.legal intake module is **not** part of v2 (owner decision; it moves to 
 ## Configuration
 
 Environment variables only. All 20 are declared in `cmd/biglaw/config.go`; each is validated by
-the PR that first reads it ("Read from"). `biglaw version --config` prints every value (secrets
-as set/unset; the database password, and the user info, query values and fragment of every URL,
-masked; a database URL that fails its check is not shown at all) and exits nonzero if what this
-build reads is invalid. `biglaw serve` warns about a variable that is set but not read yet, and
-about any unknown `BIGLAW_*` name (likely a typo).
+the PR that first reads it ("Read from"). `biglaw version --config` prints every value and exits
+nonzero if what this build reads is invalid. `biglaw serve` warns about a variable that is set
+but not read yet, and about any unknown `BIGLAW_*` name (likely a typo).
+
+What may be printed follows one rule, used by `version --config` and by every startup error:
+whatever does not parse into a shape known to be safe is not shown.
+- Secrets (`BIGLAW_MODEL_KEY`, `BIGLAW_OIDC_CLIENT_SECRET`): set/unset only.
+- `BIGLAW_DATABASE_URL`: only `host`, `port`, `user`, `dbname` and `sslmode` as lib/pq itself
+  parses them (`PG*` defaults included), whether a password is set, and a count of other
+  parameters. Nothing is copied from the DSN text, so no quoting in it can expose part of a
+  password. A DSN that fails its check is not shown at all.
+- URL variables (`BIGLAW_MODEL_URL`, `BIGLAW_PUBLIC_URL`, `BIGLAW_OIDC_ISSUER`): only an absolute
+  `http(s)://host…` URL is shown, with its user info and fragment masked and its query only
+  counted (`?(2 query parameters, not shown)`), because a bare `?KEY` makes the key a parameter
+  name. A value without a scheme, with a typo such as `https:/`, or in `user:pw@host` form
+  prints as "(set, not shown …)". The host and path are shown, so never put a key in either. An
+  OIDC preset (`google`, `microsoft:<tenant>`) is shown as is.
+- Anything else is shown as set (quoted if it contains a control character, so a newline cannot
+  forge an output line), unless it contains `://` (then treated as a URL) or has the
+  `user:password@` shape (then not shown).
 
 | Variable | Default | Meaning | Read from |
 |---|---|---|---|
-| `BIGLAW_DATABASE_URL` | — (required) | Postgres DSN: `postgres://user:password@host:5432/db?sslmode=disable`, or libpq `key=value` form. The scheme must be lowercase, and reserved characters in the password percent-encoded (`/`→`%2F`, `?`→`%3F`, `#`→`%23`, `%`→`%25`, `@`→`%40`); anything else is refused with a message that never shows the password. lib/pq defaults to `sslmode=require`. | PR 1 |
+| `BIGLAW_DATABASE_URL` | — (required) | Postgres DSN: `postgres://user:password@host:5432/db?sslmode=disable`, or libpq `key=value` form. The scheme must be lowercase, and reserved characters in the password percent-encoded (`/`→`%2F`, `?`→`%3F`, `#`→`%23`, `%`→`%25`, `@`→`%40`). An `@` after the host (in the database name or a query value such as `application_name=ops@corp`) is refused too, because it cannot be told apart from a broken password; write `%40`. Anything else is refused with a message that never shows the password. lib/pq defaults to `sslmode=require`. | PR 1 |
 | `BIGLAW_ADDR` | `127.0.0.1:3101` | Listen address. Non-loopback needs `serve --allow-no-auth` (§ Exposure). | PR 1 |
 | `BIGLAW_PUBLIC_URL` | `http://127.0.0.1:3101` | External base URL (OIDC redirect, cookie `Secure`) | PR 8 |
 | `BIGLAW_MODEL_URL` | — | OpenAI-compatible base URL; today only the vendor breaker reads it (http(s), ASCII host, no credentials in the URL) | PR 1 |
@@ -63,8 +78,10 @@ about any unknown `BIGLAW_*` name (likely a typo).
 | `ALLOW_AWS` | off | Opt in to a direct AWS/Bedrock model endpoint (vendor breaker) | PR 1 |
 
 Tests use two more: `BIGLAW_TEST_DSN` and `BIGLAW_REQUIRE_DB` (turns a skipped DB test into a
-failure). `TestEnvVarTablesAgree` fails if this table, `docker-compose.yml`, `.env.example`,
-`render.yaml` and `config.go` disagree.
+failure). `TestEnvVarTablesAgree` fails if this table or `docker-compose.yml` lacks a variable
+`config.go` declares, if `.env.example` or `render.yaml` sets other than its fixed list (the
+model URL/key/lead and the OIDC variables; Render adds the database URL and address), or if any
+of these files names a variable `config.go` does not declare.
 
 **libpq variables.** lib/pq also reads the standard libpq `PG*` variables (`PGHOST`, `PGPORT`,
 `PGUSER`, `PGPASSWORD`, `PGSSLMODE`, `PGPASSFILE`, …) as defaults for anything the DSN leaves
@@ -75,8 +92,9 @@ Compose uses `PGPASSWORD` on purpose (§ Run it).
 **Vendor breakers.** Ported from v1 `biglaw-go/internal/config/guard.go`: a `BIGLAW_MODEL_URL`
 containing `anthropic.com` refuses to start unless `ALLOW_ANTHROPIC` is `1/true/yes/on`; one
 containing `amazonaws.com` or `bedrock` refuses unless `ALLOW_AWS` is. Matching is
-case-insensitive, on the whole URL and on its decoded host name, and a non-ASCII host is refused
-(write it in `xn--` form), so look-alike dots such as `。` cannot slip past. A Claude model behind
+case-insensitive, on the whole URL, and a non-ASCII host is refused (write it in `xn--` form), so
+look-alike dots such as `。` cannot slip past; Go's URL parser already refuses `%`-escapes such as
+`%2E` in an ASCII host. A Claude model behind
 a third-party gateway (OpenRouter, LiteLLM) is allowed.
 
 ## Exposure (there is no authentication yet)
@@ -88,6 +106,14 @@ the port. The deploy files follow the rule, and `TestDeployFilesFollowExposureRu
 that way:
 - **Compose** listens on `0.0.0.0` inside the container, publishes the port on the host's
   `127.0.0.1` only, and passes `--allow-no-auth`. Do not publish it on `0.0.0.0` or a LAN address.
+  The test reads every published port of every service in `docker-compose.yml`: short syntax
+  quoted or not (`3101:3101`, `0.0.0.0:…`, `[::]:…`), flow lists, and long syntax (`host_ip`).
+  Each must name a loopback IP. An interpolated host (`${BIND:-127.0.0.1}:…`) is refused because
+  the environment could change it, and `network_mode`, `extends`, `include` and YAML
+  anchors/merge keys are refused because the text check cannot follow them. Where `docker` is
+  installed (CI) it also checks the model `docker compose config` resolves.
+  `TestComposeExposureCheckCatchesBypasses` runs both checks on the spellings that got past the
+  earlier check.
 - **The image's default command** is plain `serve`, so `docker run -p …` or any platform that
   exposes the container refuses to start.
 - **Render** is public by nature, so `render.yaml` is inert until PR 8: the service fails its
@@ -96,15 +122,18 @@ that way:
 ## Run it
 
 ```bash
-cp .env.example .env            # set POSTGRES_PASSWORD (any characters), e.g. openssl rand -hex 24
+cp .env.example .env            # set POSTGRES_PASSWORD=$(openssl rand -hex 24); see the note below
 docker compose up -d            # postgres:16-alpine + biglaw; host port 127.0.0.1:3101 only
 curl -s http://127.0.0.1:3101/health
 ```
 
 Compose gives biglaw the database password as `PGPASSWORD` rather than inside
-`BIGLAW_DATABASE_URL`, so it needs no percent-encoding.
+`BIGLAW_DATABASE_URL`, so it needs no percent-encoding. Compose's own `.env` parsing does
+constrain it, though: unquoted, a value is cut at ` #` and `$` is expanded (`a$b` fails, and
+`abc #def` becomes `abc`, on both the Postgres and the biglaw side). Use a hex password, or
+single-quote your own (`POSTGRES_PASSWORD='…'`) without a `'` in it.
 
-Without Docker (Go 1.25+, any Postgres ≥ 13):
+Without Docker (Go 1.25+, any supported Postgres ≥ 14):
 
 ```bash
 createdb biglaw
@@ -131,26 +160,44 @@ connection to the port is answered as soon as it is accepted.
   back the image (an older tag, Render's rollback button) after a release that added a migration
   therefore fails at start with "database has migration … which this binary does not know". To
   go back, restore the backup taken before the upgrade, or deploy a forward fix.
+- **Pre-release:** until v2's first release, `0001_init.sql` may still change. A database created
+  by an earlier pre-release build then refuses to start ("migration 0001 was changed after it
+  was applied"); recreate it (`docker compose down -v`, or `dropdb`/`createdb`). From the first
+  release on, applied migrations are never edited.
 - **Back up with `pg_dump`** before every upgrade (all state, files included, is in Postgres),
   for example `docker compose exec postgres pg_dump -U biglaw -Fc biglaw > biglaw.dump`; restore
   with `pg_restore`.
 
 ## Files
 
-Files are stored in `file_chunks` rows of at most 1 MiB, written in one transaction from a
-stream. lib/pq moves `bytea` as hex text, so each chunk costs a few times its size in transient
-memory; chunking bounds that by the chunk, not the file. A read checks the recorded size against
-the 64 MiB cap before reading content, allocates the file once, and re-verifies size and SHA-256.
-The SHA-256 detects **storage corruption, not tampering**: anyone who can write the rows can
-rewrite the hash too. Names must be 1–255 bytes of UTF-8 without `/`, `\`, control characters
-or bidi controls (which can disguise an extension), and not `.` or `..`; content types must be
-valid media types.
+Files are stored in `file_chunks` rows of at most 1 MiB (a `CHECK` in the schema refuses a
+larger row), written in one transaction from a stream. lib/pq moves `bytea` as hex text, so each
+chunk costs a few times its size in transient memory; chunking bounds **writing** by the chunk,
+not the file. **Reading** still holds the whole file: a read checks the recorded size against
+the 64 MiB cap before reading content, allocates the file once, and re-verifies size and
+SHA-256. The SHA-256 detects **storage corruption, not tampering**: anyone who can write the rows
+can rewrite the hash too.
+
+An upload holds one pooled connection, inside its transaction, for as long as its reader takes.
+So at most 16 uploads (`MaxConcurrentUploads`) run at once, leaving 4 of the 20 connections for
+`/health` and reads. Further uploads wait for a slot until their context ends. An upload whose
+reader delivers no 1 MiB chunk for 60 s (`UploadIdleTimeout`, Postgres
+`idle_in_transaction_session_timeout` for that transaction) is ended by the server and leaves
+nothing behind. In effect that is a minimum upload rate of about 17 KiB/s.
+
+Names must be 1–255 bytes of UTF-8 and not `.` or `..`. They may not contain `/`, `\`, control
+characters, invisible format characters (bidi controls, zero-width spaces, the BOM, soft hyphens;
+ZWNJ/ZWJ are allowed for Persian, Indic scripts and emoji) or line/paragraph separators, and may
+not start or end with white space, any of which can disguise an extension. Content types must
+be valid media types in printable ASCII; they are stored in canonical form
+(`Text/HTML;  Charset=UTF-8` → `text/html; charset=UTF-8`).
 
 Measured on a 64 MiB file (before → after this layout; peak above baseline, the same for Go heap
 and RSS): writing 256 → 67 MiB, reading 128 → 126 MiB at the default `GOGC=100`; with
-`GOGC=10`, writing 256 → 11 MiB and reading 128 → 73 MiB. The difference is garbage the
-collector has not yet reclaimed, so a small machine should set `GOMEMLIMIT` (for example
-`GOMEMLIMIT=512MiB` on a 4 GB Pi) to make the runtime collect it sooner.
+`GOGC=10`, writing 256 → 11 MiB and reading 128 → 73 MiB. So a read holds about 64 MiB live and
+peaks near 128 MiB at the default `GOGC`. The difference is garbage the collector has not yet
+reclaimed, so a small machine should set `GOMEMLIMIT` (for example `GOMEMLIMIT=512MiB` on a
+4 GB Pi) to make the runtime collect it sooner.
 
 ## Test it
 
@@ -169,35 +216,44 @@ Named tests (PLAN.md PR 1): `TestConfigDefaults`, `TestVendorBreakerRefusesDirec
 `TestMigrationFilesOrderedAndUnique`, `TestStoretestSkipsWithoutDSN`,
 `TestStoretestFailsWhenRequired`, `TestLocBudget` (Python, `scripts/test_loc.py`), and against
 Postgres `TestMigrateIdempotent`, `TestConcurrentMigrateSafe`, `TestFailedMigrationRollsBack`,
-`TestFilesRoundTripBytea`, `TestSchemaPerTestIsolation`. Extra: DSN checks and secret redaction,
-the exposure rule, migration atomicity when the bookkeeping row fails, a file that ends its own
-transaction, lock-wait logging and cancellation, chunked storage, the 64 MiB boundary,
-corruption detection, name/type validation, `/health`, command dispatch, a real `serve` end to
-end, and repository consistency (env-var tables, one Go version, deploy files).
+`TestFilesRoundTripBytea`, `TestSchemaPerTestIsolation`. Extra: DSN checks and secret redaction
+(every shape the review committee used to leak one), the exposure rule (runtime refusal and the
+Compose port check with its bypass cases), migration atomicity when the bookkeeping row fails, a
+file that ends its own transaction, lock-wait logging and cancellation with the port still
+closed, chunked storage and the chunk-size `CHECK`, the 64 MiB boundary, corruption detection,
+name/type validation, upload slots and the idle timeout, `/health`, command dispatch, a real
+`serve` end to end, and repository consistency (env-var tables, one Go version, deploy files,
+LICENSE/NOTICE in the image).
 
 ## Budgets (`scripts/loc.py`, run in CI)
 
 | Budget | Ceiling | Today |
 |---|---:|---:|
-| Go production lines (physical lines, non-`_test.go`) | 14,000 | 1,117 |
-| Packages under `internal/` | 12 | 2 (`store`, `store/storetest`) |
+| Go production lines (physical lines, non-`_test.go`, test-support packages included) | 14,250 | 1,196 |
+| Packages under `internal/`, test-support packages excluded | 12 | 1 (`store`; `store/storetest` is test support) |
 | Direct Go dependencies | 3 | 1 (`github.com/lib/pq`) |
 | Runtime environment variables | 20 | 20 |
 | UI runtime dependencies | 2 | 0 (no UI yet) |
 | Packages without a `_test.go` | 0 | 0 |
-| Lines in any one source file (`.go`, `.py`, `.sql`, `.sh`, `.js`, `.ts`, `.css`; tests included) | 2,000 | 311 |
+| Lines in any one source file (`.go`, `.py`, `.sql`, `.sh`, `.js`, `.ts`, `.css`; tests included) | 2,000 | 421 |
 
-loc.py also fails if `LICENSE` or `NOTICE` is missing or a `.go`/`.py` file lacks its SPDX
-header. Env-var names are found statically (literal `os.Getenv`/`LookupEnv`/`getenv` arguments,
-the config table, and `BIGLAW_*`/`ALLOW_*` literals); a non-literal `os.Getenv` argument fails the
-check.
+The line ceiling is 14,250 (owner decision; it was 14,000). A **test-support package** is one
+whose directory name ends in `test` and that no production file outside it imports, such as
+`storetest`. Under the coordinator's ruling it is left out of the package count, but its lines
+count toward the line ceiling like any other non-`_test.go` file. A `*test` package that
+production code imports is an ordinary package. loc.py also fails if `LICENSE` or `NOTICE` is
+missing or a `.go`/`.py` file lacks its SPDX header. Env-var names are found statically (literal
+`os.Getenv`/`LookupEnv`/`getenv` arguments, the config table, and `BIGLAW_*`/`ALLOW_*` literals).
+An `os.Getenv`/`os.LookupEnv` argument that is not one plain string literal (a variable, a
+concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
 
 ## Limitations
 
 - Nothing user-facing exists yet beyond `/health`; every workflow, the REST API, auth and the
   UI are planned. The exposure rule above is the only protection until PR 8.
 - The env-var budget is a static heuristic: code that reads the environment another way
-  (`syscall.Getenv`, scanning `os.Environ()`) would evade it. Review is the backstop.
+  (`syscall.Getenv`, scanning `os.Environ()`, importing `os` under another name) would evade
+  it. Review is the backstop.
 - The vendor breakers key on names: an IP literal of a vendor's API is not recognised. They are
   a self-imposed policy, not a security boundary. The substring match fails closed: a gateway
   URL that merely contains `anthropic.com` or `bedrock` is refused too and needs the opt-in.
@@ -205,17 +261,29 @@ check.
   connection string may need an explicit `sslmode`, and the instance plans are not pinned; PR 8
   settles both.
 - The image build and the Compose smoke test run in CI's `docker` job, which has not run on
-  GitHub yet. Locally they were verified with a scratch copy of the Dockerfile that trusts the
-  build sandbox's TLS proxy (its only difference). No `linux/arm64` image or release binaries
-  are produced yet, so the Raspberry Pi path means building natively with `make build`.
+  GitHub yet. Locally they were verified once (PR 1's first fix round) with a scratch copy of
+  the Dockerfile that trusts the build sandbox's TLS proxy. The second fix round added
+  `COPY LICENSE NOTICE` to the final stage without a Docker daemon to build it, so that line
+  is checked only by `TestImageShipsLicenseAndNotice` (text) until CI runs. No `linux/arm64`
+  image or release binaries are produced yet, so the Raspberry Pi path means building natively
+  with `make build`.
+- The Compose exposure check reads `docker-compose.yml` only. Compose also merges a
+  `docker-compose.override.yml` (or `compose.override.yaml`) that an operator puts next to it,
+  and nothing checks that file. Publishing beyond loopback there is the operator's own act.
 - `govulncheck` runs only in CI: the build sandbox cannot reach `vuln.go.dev`.
 - GitHub Actions and container images are pinned to tags (`@v4`, `golang:1.25.14-alpine`,
-  `postgres:13`, `postgres:16`, `postgres:16-alpine`), not to SHAs/digests, so an upstream retag changes what CI
+  `postgres:14`, `postgres:16`, `postgres:16-alpine`), not to SHAs/digests, so an upstream retag changes what CI
   runs.
 - Files: there is no per-matter scoping or owner yet (`GetFile` takes only an id; PR 3 adds the
-  document/matter reference and access checks), no delete, no quota, and no concurrency limit.
-  Each concurrent read of a maximum-size file holds about 64 MiB plus one chunk in transient
-  memory, so the API that exposes files (PR 3) must cap concurrent file I/O on a 4 GB Pi.
+  document/matter reference and access checks), no delete, no quota, and no limit on concurrent
+  reads. Each concurrent read of a maximum-size file holds about 64 MiB live and peaks near
+  128 MiB at the default `GOGC`, so the API that exposes files (PR 3) must cap concurrent reads
+  on a 4 GB Pi or stream them (PLAN PR 3). Uploads are capped at 16 at once and ended by an idle
+  reader (§ Files). A reader that trickles at least one 1 MiB chunk a minute can still hold a
+  slot for a long time; PR 3 sets per-request read deadlines on the HTTP side.
+- The file-name policy is provisional: it has no production caller yet. PR 3 decides it with
+  the upload/download API. Names such as `CON`, `aux.txt` or `c:evil.txt` are stored as given,
+  and PR 3 must make them safe on download (RFC 6266 `filename*`).
 - Test schemas are dropped by `t.Cleanup`; a test binary that is killed (SIGKILL, timeout)
   leaves its `t_<hex>` schema behind. Drop them with
   `psql -c "select 'drop schema '||nspname||' cascade;' from pg_namespace where nspname like 't\_%'" -At | psql`.
@@ -225,6 +293,4 @@ check.
   even when `/health` is 503. No access log; logs are text.
 - `/health` is unauthenticated and reports the version string. Images built by Compose report
   `2.0.0-dev` (no version is passed at build time).
-- `internal/store/storetest` counts as an internal package; with the 11 planned packages the
-  12-package budget has no headroom.
 - Postgres is required, including on a Pi. There is no embedded-database mode.

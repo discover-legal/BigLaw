@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -120,7 +121,8 @@ func TestServeEndToEnd(t *testing.T) {
 }
 
 // TestServeStopsCleanlyWhileWaitingForLock: a signal during startup (here,
-// while another process holds the migration lock) gives a clear message.
+// while another process holds the migration lock) gives a clear message,
+// and the port is not open until migrations are done.
 func TestServeStopsCleanlyWhileWaitingForLock(t *testing.T) {
 	db := storetest.DSN(t)
 	holder, err := store.Open(t.Context(), db, nil) // migrated; now hold the lock
@@ -129,16 +131,50 @@ func TestServeStopsCleanlyWhileWaitingForLock(t *testing.T) {
 	}
 	defer holder.Close()
 	holdMigrationLock(t, db)
-	ctx, cancel := context.WithTimeout(t.Context(), 1500*time.Millisecond)
+	free, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := free.Addr().String()
+	free.Close()
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	var stdout, stderr bytes.Buffer
-	code := run(ctx, []string{"serve"}, env("BIGLAW_DATABASE_URL", db, "BIGLAW_ADDR", "127.0.0.1:0"), nil, &stdout, &stderr)
-	for _, want := range []string{"waiting for the migration lock", "stopped by a signal before startup finished", "held by another BigLaw process"} {
-		if code != 1 || !strings.Contains(stderr.String(), want) {
-			t.Errorf("code %d, stderr lacks %q:\n%s", code, want, stderr.String())
+	var stderr syncBuffer
+	code := make(chan int, 1)
+	go func() {
+		code <- run(ctx, []string{"serve"}, env("BIGLAW_DATABASE_URL", db, "BIGLAW_ADDR", addr), nil, io.Discard, &stderr)
+	}()
+	for deadline := time.Now().Add(10 * time.Second); !strings.Contains(stderr.String(), "waiting for the migration lock"); {
+		if time.Now().After(deadline) {
+			t.Fatalf("serve never waited for the lock:\n%s", stderr.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if c, err := net.DialTimeout("tcp", addr, time.Second); err == nil {
+		c.Close()
+		t.Errorf("%s accepts connections while migrations wait for the lock", addr)
+	}
+	cancel()
+	got := <-code
+	for _, want := range []string{"stopped by a signal before startup finished", "held by another BigLaw process"} {
+		if got != 1 || !strings.Contains(stderr.String(), want) {
+			t.Errorf("code %d, stderr lacks %q:\n%s", got, want, stderr.String())
 		}
 	}
 }
+
+// syncBuffer is a bytes.Buffer safe for one writer and one reader.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+func (s *syncBuffer) String() string { s.mu.Lock(); defer s.mu.Unlock(); return s.b.String() }
 
 // holdMigrationLock takes the advisory lock store.MigrateFS uses for the
 // DSN's schema on its own session until the test ends.

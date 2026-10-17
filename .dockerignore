@@ -1,6 +1,7 @@
 .git
-.env
-.env.*
+**/.env
+**/.env.*
 !.env.example
+.envrc
 biglaw
 __pycache__

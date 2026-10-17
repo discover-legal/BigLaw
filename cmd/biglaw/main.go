@@ -83,11 +83,11 @@ func run(ctx context.Context, args []string, getenv func(string) string, environ
 		if !isLoopback(cfg.Addr) && !allowNoAuth {
 			fmt.Fprintf(stderr, "biglaw: refusing to start: BIGLAW_ADDR %s is not a loopback address and this build has no authentication "+
 				"(it lands in PR 8). Listen on 127.0.0.1, or pass --allow-no-auth if something else limits who can reach the port "+
-				"(docker-compose.yml publishes it on the host's loopback only). See README § Exposure.\n", cfg.Addr)
+				"(docker-compose.yml publishes it on the host's loopback only). See README § Exposure.\n", shown("BIGLAW_ADDR", cfg.Addr))
 			return 2
 		}
 		if !isLoopback(cfg.Addr) {
-			log.Warn("serving WITHOUT authentication on a non-loopback address (--allow-no-auth)", "addr", cfg.Addr)
+			log.Warn("serving WITHOUT authentication on a non-loopback address (--allow-no-auth)", "addr", shown("BIGLAW_ADDR", cfg.Addr))
 		}
 		if names := UnknownVars(environ); len(names) > 0 {
 			log.Warn("ignoring unknown BIGLAW_ variables (typo?)", "names", strings.Join(names, ","))

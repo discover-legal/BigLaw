@@ -4,8 +4,10 @@
 """BigLaw 2 size budgets (README § What is on disk; PLAN.md "Rules for every PR").
 
 Fails (exit 1) when any budget is exceeded:
-  Go production lines   <= 14,000  physical lines of every non-_test .go file
-  internal packages     <= 12      directories under internal/ holding non-test Go
+  Go production lines   <= 14,250  physical lines of every non-_test .go file,
+                                   test-support packages (storetest) included
+  internal packages     <= 12      directories under internal/ holding non-test Go,
+                                   except test-support packages (below)
   direct Go deps        <= 3       go.mod requires not marked // indirect
   runtime env vars      <= 20      distinct names read by production Go code
   UI runtime deps       <= 2       ui/package.json "dependencies"
@@ -14,10 +16,18 @@ Fails (exit 1) when any budget is exceeded:
 It also fails when LICENSE or NOTICE is missing, or a .go/.py file lacks the
 SPDX-License-Identifier: Apache-2.0 header in its first five lines.
 
+A test-support package (coordinator ruling) is one whose directory name ends
+in "test" (storetest, modeltest) and that no non-_test.go file outside it
+imports. It is left out of the package count only: its lines count toward
+the LOC ceiling like any other non-_test.go file (owner decision, ceiling
+14,250). A *test package that production code imports is an ordinary package.
+
 Env-var names are found statically: literal arguments of os.Getenv/LookupEnv
 (and of any getenv(...) call), every `name: "X"` entry of the config table,
-and any string literal shaped like BIGLAW_*/ALLOW_*. A non-literal os.Getenv
-or os.LookupEnv argument is itself a violation, because it would hide a name.
+and any string literal shaped like BIGLAW_*/ALLOW_*. An os.Getenv or
+os.LookupEnv argument that is not one plain string literal (a variable, a
+concatenation, a raw string) is itself a violation, because it would hide a
+name.
 BIGLAW_TEST_DSN and BIGLAW_REQUIRE_DB are test-only and may appear only in
 internal/store/storetest.
 
@@ -30,7 +40,7 @@ import re
 import sys
 
 BUDGETS = {
-    "go_prod_loc": 14000,
+    "go_prod_loc": 14250,
     "internal_packages": 12,
     "direct_go_deps": 3,
     "env_vars": 20,
@@ -45,7 +55,9 @@ SOURCE_EXT = (".go", ".py", ".sql", ".sh", ".js", ".mjs", ".ts", ".tsx", ".css")
 SPDX = "SPDX-License-Identifier: Apache-2.0"
 
 CALL_LITERAL = re.compile(r'\b(?:os\.Getenv|os\.LookupEnv|getenv)\(\s*"([A-Za-z_][A-Za-z0-9_]*)"\s*\)')
-CALL_DYNAMIC = re.compile(r'\bos\.(?:Getenv|LookupEnv)\(\s*([^")\s][^)]*)\)')
+OS_CALL = re.compile(r'\bos\.(?:Getenv|LookupEnv)\(')
+ONE_LITERAL = re.compile(r'\s*"[A-Za-z_][A-Za-z0-9_]*"\s*')
+IMPORT = re.compile(r'"([^"\s]+)"')
 TABLE_NAME = re.compile(r'\bname:\s*"([A-Z][A-Z0-9_]*)"')
 SHAPED = re.compile(r'"((?:BIGLAW|ALLOW)_[A-Z0-9_]+)"')
 
@@ -62,6 +74,36 @@ def go_packages(root):
             kind = "test" if f.endswith("_test.go") else "prod"
             pkgs.setdefault(rel, {"prod": [], "test": []})[kind].append(os.path.join(dp, f))
     return pkgs
+
+
+def os_call_args(src):
+    """The argument text of every os.Getenv/os.LookupEnv call (parentheses balanced)."""
+    for m in OS_CALL.finditer(src):
+        depth, i = 1, m.end()
+        while i < len(src) and depth:
+            depth += {"(": 1, ")": -1}.get(src[i], 0)
+            i += 1
+        yield src[m.end():i - 1]
+
+
+def module_path(root):
+    path = os.path.join(root, "go.mod")
+    if os.path.exists(path):
+        for line in open(path, encoding="utf-8"):
+            if line.startswith("module "):
+                return line.split()[1]
+    return ""
+
+
+def test_support(root, pkgs):
+    """Package dirs named *test that no production file of another package imports."""
+    mod, imported = module_path(root), set()
+    for rel, files in pkgs.items():
+        for path in files["prod"]:
+            for imp in IMPORT.findall(open(path, encoding="utf-8", errors="replace").read()):
+                if mod and imp.startswith(mod + "/") and imp[len(mod) + 1:] != rel.replace(os.sep, "/"):
+                    imported.add(imp[len(mod) + 1:])
+    return {r for r in pkgs if os.path.basename(r).endswith("test") and r.replace(os.sep, "/") not in imported}
 
 
 def direct_deps(root):
@@ -125,13 +167,15 @@ def measure(root):
             loc += lines(src)
             read = set(CALL_LITERAL.findall(src)) | set(TABLE_NAME.findall(src))
             names = read | set(SHAPED.findall(src))
-            for m in CALL_DYNAMIC.finditer(src):
-                problems.append(f"{os.path.relpath(path, root)}: os.Getenv/LookupEnv with a non-literal name ({m.group(1).strip()}) hides an env var from this check")
+            for arg in os_call_args(src):
+                if not ONE_LITERAL.fullmatch(arg):
+                    problems.append(f"{os.path.relpath(path, root)}: os.Getenv/LookupEnv with a non-literal name ({' '.join(arg.split())}) hides an env var from this check")
             for n in read & TEST_ONLY_VARS:
                 if rel != TEST_ONLY_HOME:
                     problems.append(f"{os.path.relpath(path, root)}: test-only variable {n} read outside {TEST_ONLY_HOME}")
             env |= names - TEST_ONLY_VARS
-    internal = sorted(r for r, f in pkgs.items() if f["prod"] and (r == "internal" or r.startswith("internal" + os.sep)) and r != "internal")
+    support = test_support(root, pkgs)
+    internal = sorted(r for r, f in pkgs.items() if f["prod"] and r.startswith("internal" + os.sep) and r not in support)
     untested = sorted(r for r, f in pkgs.items() if f["prod"] and not f["test"])
     deps, ui = direct_deps(root), ui_deps(root)
     m = {
@@ -143,7 +187,7 @@ def measure(root):
         "untested_packages": len(untested),
         "longest_source_file": longest,
     }
-    detail = {"internal": internal, "deps": deps, "env": sorted(env), "ui": ui, "untested": untested}
+    detail = {"internal": internal, "test_support": sorted(r for r in support if pkgs[r]["prod"]), "deps": deps, "env": sorted(env), "ui": ui, "untested": untested}
     return m, detail, problems
 
 
@@ -164,6 +208,7 @@ def main(argv=None):
         print("env vars:", ", ".join(detail["env"]) or "-")
         print("direct deps:", ", ".join(detail["deps"]) or "-")
         print("internal packages:", ", ".join(detail["internal"]) or "-")
+        print("test-support packages (LOC counted, package budget not):", ", ".join(detail["test_support"]) or "-")
         for p in problems:
             print("FAIL:", p)
     return 1 if problems else 0

@@ -11,6 +11,8 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${VERSION}"
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/biglaw /usr/local/bin/biglaw
+# Apache-2.0 §4 and lib/pq's MIT terms: the notices travel with the binary.
+COPY LICENSE NOTICE /usr/share/doc/biglaw/
 # Inside a container the server must listen on every interface. Until auth
 # lands (PR 8), `serve` refuses a non-loopback address unless it is started
 # with --allow-no-auth, which docker-compose.yml does because it publishes the

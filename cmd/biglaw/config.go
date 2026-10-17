@@ -9,9 +9,11 @@ import (
 	"net"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/discover-legal/BigLaw/internal/store"
 )
@@ -25,14 +27,15 @@ import (
 type envVar struct {
 	name, def string
 	secret    bool // never printed by `biglaw version --config`
+	url       bool // printed only as an http(s) URL with its credentials masked
 	pr        int  // the build PR that first reads it
 }
 
 var envVars = []envVar{
 	{name: "BIGLAW_DATABASE_URL", secret: true, pr: 1}, // password inside; printed redacted
 	{name: "BIGLAW_ADDR", def: "127.0.0.1:3101", pr: 1},
-	{name: "BIGLAW_PUBLIC_URL", def: "http://127.0.0.1:3101", pr: 8},
-	{name: "BIGLAW_MODEL_URL", pr: 1}, // vendor breaker today; model client in PR 2
+	{name: "BIGLAW_PUBLIC_URL", def: "http://127.0.0.1:3101", url: true, pr: 8},
+	{name: "BIGLAW_MODEL_URL", url: true, pr: 1}, // vendor breaker today; model client in PR 2
 	{name: "BIGLAW_MODEL_KEY", secret: true, pr: 2},
 	{name: "BIGLAW_MODEL_LEAD", pr: 2},
 	{name: "BIGLAW_MODEL_SPECIALIST", pr: 2},
@@ -43,7 +46,7 @@ var envVars = []envVar{
 	{name: "BIGLAW_PRICES", pr: 2},
 	{name: "BIGLAW_COLLAPSE_THRESHOLD", def: "0.5", pr: 4},
 	{name: "BIGLAW_COLLAPSE_ACTION", def: "strict", pr: 4},
-	{name: "BIGLAW_OIDC_ISSUER", pr: 8},
+	{name: "BIGLAW_OIDC_ISSUER", url: true, pr: 8}, // or a preset: google, microsoft:<tenant>
 	{name: "BIGLAW_OIDC_CLIENT_ID", pr: 8},
 	{name: "BIGLAW_OIDC_CLIENT_SECRET", secret: true, pr: 8},
 	{name: "BIGLAW_AI_RATE", pr: 9},
@@ -84,13 +87,13 @@ func Load(getenv func(string) string) (Config, error) {
 		bad("BIGLAW_DATABASE_URL", "%v", err)
 	}
 	if host, port, err := net.SplitHostPort(c.Addr); err != nil || !validPort(port) {
-		bad("BIGLAW_ADDR", "%q is not host:port", c.Addr)
+		bad("BIGLAW_ADDR", "%s is not host:port", shown("BIGLAW_ADDR", c.Addr))
 	} else if host == "" {
-		bad("BIGLAW_ADDR", "%q has no host; write 127.0.0.1:%s (or 0.0.0.0:%s with serve --allow-no-auth, see README § Exposure)", c.Addr, port, port)
+		bad("BIGLAW_ADDR", "%s has no host; write 127.0.0.1:%s (or 0.0.0.0:%s with serve --allow-no-auth, see README § Exposure)", c.Addr, port, port)
 	}
 	if c.ModelURL != "" {
-		if u, err := url.Parse(c.ModelURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-			bad("BIGLAW_MODEL_URL", "%s must be an http(s) URL with a host", redactURL(c.ModelURL))
+		if u := httpURL(c.ModelURL); u == nil {
+			bad("BIGLAW_MODEL_URL", "%s must be an http(s) URL with a host", shown("BIGLAW_MODEL_URL", c.ModelURL))
 		} else if u.User != nil {
 			bad("BIGLAW_MODEL_URL", "must not carry credentials in the URL; put the key in BIGLAW_MODEL_KEY")
 		} else if h := u.Hostname(); !isASCII(h) {
@@ -121,7 +124,8 @@ func value(getenv func(string) string, name string) string {
 // DIRECTLY to a gated closed vendor, and the variable that opts in. It keys
 // on the endpoint, not the model name: a Claude model behind a third-party
 // OpenAI-compatible gateway is allowed. Like v1 it matches the marker
-// anywhere in the URL (and in the decoded host name), so it fails closed.
+// anywhere in the URL, so it fails closed. (Load has already refused a host
+// that is not ASCII; Go's URL parser refuses %-escapes in an ASCII host.)
 var vendors = []struct {
 	name, optIn string
 	markers     []string
@@ -136,16 +140,13 @@ func GuardVendors(c Config) error {
 		return nil
 	}
 	haystack := strings.ToLower(c.ModelURL)
-	if u, err := url.Parse(c.ModelURL); err == nil {
-		haystack += " " + strings.ToLower(u.Hostname()) // decodes %2E and the like
-	}
 	allowed := map[string]bool{"ALLOW_ANTHROPIC": c.AllowAnthropic, "ALLOW_AWS": c.AllowAWS}
 	var errs []error
 	for _, v := range vendors {
 		for _, m := range v.markers {
 			if strings.Contains(haystack, m) && !allowed[v.optIn] {
 				errs = append(errs, fmt.Errorf("vendor breaker tripped: BIGLAW_MODEL_URL %s couples BigLaw directly to %s, a gated closed vendor; "+
-					"set %s=1 to opt in deliberately, or reach the model through a gateway", redactURL(c.ModelURL), v.name, v.optIn))
+					"set %s=1 to opt in deliberately, or reach the model through a gateway", shown("BIGLAW_MODEL_URL", c.ModelURL), v.name, v.optIn))
 				break
 			}
 		}
@@ -195,11 +196,9 @@ func NotYetRead(getenv func(string) string) []string {
 	return out
 }
 
-// Describe renders the configuration for `biglaw version --config`.
-// Secrets print only as set/unset; the database password and every URL's
-// user info and query values are masked; a database URL that does not pass
-// CheckDSN is not shown at all. The PG* variables lib/pq also reads are
-// listed by name only.
+// Describe renders the configuration for `biglaw version --config`. Every
+// value goes through shown; the PG* variables lib/pq also reads are listed
+// by name only.
 func Describe(getenv func(string) string, environ []string) string {
 	var b strings.Builder
 	for _, e := range envVars {
@@ -208,19 +207,10 @@ func Describe(getenv func(string) string, environ []string) string {
 		if raw == "" {
 			val, src = e.def, "default"
 		}
-		switch {
-		case val == "":
+		if val == "" {
 			val, src = "(unset)", ""
-		case e.name == "BIGLAW_DATABASE_URL":
-			if store.CheckDSN(val) != nil {
-				val = "(set, not shown: invalid, see below)"
-			} else {
-				val = redactDSN(val)
-			}
-		case e.secret:
-			val = "(set, hidden)"
-		case strings.Contains(val, "://"):
-			val = redactURL(val)
+		} else {
+			val = shown(e.name, val)
 		}
 		if e.pr > 1 {
 			src = strings.TrimPrefix(src+", ", ", ") + "read from PR " + strconv.Itoa(e.pr)
@@ -258,48 +248,67 @@ func isASCII(s string) bool {
 	return true
 }
 
-// redactURL hides all user info (a key is sometimes the user name) and every
-// query value and fragment (some gateways take the key as ?key=…).
-func redactURL(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return "(unparseable URL, not shown)"
+// shown is how the value of variable name may appear in any output
+// (`version --config`, startup errors). The rule is total: whatever does
+// not parse into a shape known to be safe is not shown at all.
+//   - secrets: "(set, hidden)";
+//   - the database URL: store.DescribeDSN (fields from lib/pq's own parse,
+//     never the text);
+//   - URL variables: only an absolute http(s) URL with a host is shown, as
+//     scheme://host[:port]/path; user info and fragment are masked and the
+//     query is only counted (a bare "?KEY" is a name). Anything else (no
+//     scheme, a typo such as "https:/", user:pw@host) is "(set, not shown:
+//     …)". An OIDC preset (google, microsoft:<tenant>) is shown as is;
+//   - any other value is shown as is (quoted if it holds a control
+//     character), unless it holds "://" (treated as a URL) or the
+//     user:password@ shape.
+func shown(name, val string) string {
+	e := envVars[slices.IndexFunc(envVars, func(e envVar) bool { return e.name == name })]
+	switch {
+	case e.secret && name != "BIGLAW_DATABASE_URL":
+		return "(set, hidden)"
+	case name == "BIGLAW_DATABASE_URL":
+		return store.DescribeDSN(val)
+	case name == "BIGLAW_OIDC_ISSUER" && oidcPreset.MatchString(val):
+		return val
+	case e.url || strings.Contains(val, "://"):
+		u := httpURL(val)
+		if u == nil {
+			return "(set, not shown: not an http(s) URL with a host)"
+		}
+		out := u.Scheme + "://"
+		if u.User != nil {
+			out += "xxxxx@"
+		}
+		out += u.Host + u.EscapedPath()
+		if u.RawQuery != "" || u.ForceQuery {
+			out += fmt.Sprintf("?(%d query parameters, not shown)", len(strings.Split(u.RawQuery, "&")))
+		}
+		if u.Fragment != "" || strings.HasSuffix(val, "#") {
+			out += "#xxxxx"
+		}
+		return out
+	case userinfoShape.MatchString(val):
+		return "(set, not shown: it looks like user:password@host)"
+	case strings.ContainsFunc(val, unicode.IsControl):
+		return strconv.Quote(val) // a newline must not forge a line of output
 	}
-	if u.User != nil {
-		u.User = url.User("xxxxx")
-	}
-	q := u.Query()
-	for k := range q {
-		q.Set(k, "xxxxx")
-	}
-	u.RawQuery = q.Encode()
-	if u.Fragment != "" {
-		u.Fragment = "xxxxx"
-	}
-	return u.String()
+	return val
 }
 
-// kvPassword matches password=… and sslpassword=… in a key=value DSN, quoted
-// or unquoted (an unquoted value may hold backslash escapes).
-var kvPassword = regexp.MustCompile(`(?i)(password\s*=\s*)('(?:[^'\\]|\\.)*'|(?:[^\s'\\]|\\.)+)`)
+var (
+	oidcPreset    = regexp.MustCompile(`^(google|microsoft:[A-Za-z0-9.-]+)$`)
+	userinfoShape = regexp.MustCompile(`:[^@]*@`)
+)
 
-// redactDSN masks the password of a DSN that passed store.CheckDSN.
-func redactDSN(dsn string) string {
-	if !strings.HasPrefix(dsn, "postgres://") && !strings.HasPrefix(dsn, "postgresql://") {
-		return kvPassword.ReplaceAllString(dsn, "${1}xxxxx")
+// httpURL returns raw parsed when it is an absolute http(s) URL with a host
+// (url.Parse lowercases the scheme), and nil for anything else.
+func httpURL(raw string) *url.URL {
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.Opaque != "" {
+		return nil
 	}
-	u, err := url.Parse(dsn)
-	if err != nil {
-		return "(unparseable DSN, not shown)"
-	}
-	q := u.Query()
-	for k := range q {
-		if strings.Contains(strings.ToLower(k), "password") {
-			q.Set(k, "xxxxx")
-		}
-	}
-	u.RawQuery, u.Fragment = q.Encode(), ""
-	return u.Redacted()
+	return u
 }
 
 func truthy(v string) bool {

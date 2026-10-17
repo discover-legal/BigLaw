@@ -5,6 +5,8 @@ package store
 
 import (
 	"context"
+	"errors"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -36,6 +38,11 @@ func TestCheckDSN(t *testing.T) {
 		{"postgres://u:SE CRET@h/db", false, "percent-encode"},
 		{"postgres://u:SECRET%zz@h/db", false, "percent-encode"},
 		{"postgres://u:SECRET@h:badport/db", false, "percent-encode"},
+		// An "@" after the host is refused even where it is harmless (r2: the
+		// message names the database name and query, and %40 works).
+		{"postgres://u:SECRET@h/db?sslmode=disable&application_name=ops@corp", false, "query value"},
+		{"postgres://u:SECRET@h/db@2026?sslmode=disable", false, "database name"},
+		{"postgres://u:SECRET@h/db?sslmode=disable&application_name=ops%40corp", true, ""},
 		{"postgres://u:SECRET@h/db?sslmode=bogus&sslpassword=SECRET", false, "sslmode"},
 		{"host=h user=u password=SECRET PW dbname=d", false, "key=value"},
 		{"host=h user=u password='SECRET dbname=d", false, "key=value"},
@@ -52,6 +59,25 @@ func TestCheckDSN(t *testing.T) {
 	t.Setenv("PGGSSENCMODE", "disable") // lib/pq refuses some libpq variables outright
 	if err := CheckDSN("postgres://h/db"); err == nil || !strings.Contains(err.Error(), "PGGSSENCMODE") {
 		t.Errorf("unsupported PG variable: %v", err)
+	}
+}
+
+// TestHideDSN tests the last line of defence directly: CheckDSN now refuses
+// every DSN known to make lib/pq echo itself, so Open never reaches these.
+func TestHideDSN(t *testing.T) {
+	const dsn = "postgres://u:SECRETPW@h/db"
+	for _, err := range []error{
+		&url.Error{Op: "parse", URL: dsn, Err: errors.New("bad")},
+		errors.New("pq: cannot use " + dsn),
+		errors.New(`missing "=" after "SECRETPW" in connection info string`),
+	} {
+		if got := hideDSN(err, dsn); strings.Contains(got.Error(), "SECRETPW") || !strings.Contains(got.Error(), "not shown") {
+			t.Errorf("hideDSN(%v) = %v", err, got)
+		}
+	}
+	plain := errors.New("dial tcp 127.0.0.1:1: connect: connection refused")
+	if got := hideDSN(plain, dsn); got != plain {
+		t.Errorf("an error without the DSN was replaced: %v", got)
 	}
 }
 

@@ -23,8 +23,9 @@ jobs:
     timeout-minutes: 15
     strategy:
       matrix:
-        # README promises any Postgres >= 13; 16 is what Compose and Render run.
-        postgres: ["13", "16"]
+        # README promises any supported Postgres >= 14 (13 reached end of life
+        # in November 2025); 16 is what Compose and Render run.
+        postgres: ["14", "16"]
     services:
       postgres:
         image: postgres:${{ matrix.postgres }}

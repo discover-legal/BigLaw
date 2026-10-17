@@ -14,19 +14,31 @@ import (
 	"io"
 	"log/slog"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/lib/pq"
 )
 
-// ConnectTimeout bounds the first connection in Open. Waiting for another
-// process's migration lock is not bounded by it (see MigrateFS).
-const ConnectTimeout = 30 * time.Second
+const (
+	// ConnectTimeout bounds the first connection in Open. Waiting for another
+	// process's migration lock is not bounded by it (see MigrateFS).
+	ConnectTimeout = 30 * time.Second
+	// PutFile holds a connection while its reader runs, so at most
+	// MaxConcurrentUploads of the MaxOpenConns run at once (the rest stay for
+	// /health and reads), and a reader idle for UploadIdleTimeout between
+	// chunks ends its upload (idle_in_transaction_session_timeout).
+	MaxOpenConns         = 20
+	MaxConcurrentUploads = MaxOpenConns - 4
+	UploadIdleTimeout    = time.Minute
+)
 
 // Store wraps the connection pool.
 type Store struct {
-	db *sql.DB
+	db         *sql.DB
+	uploads    chan struct{} // PutFile slots (MaxConcurrentUploads)
+	uploadIdle time.Duration // UploadIdleTimeout; tests shorten it
 }
 
 // Open checks dsn (CheckDSN), connects, and applies every pending embedded
@@ -40,7 +52,7 @@ func Open(ctx context.Context, dsn string, log *slog.Logger) (*Store, error) {
 	if err != nil {
 		return nil, errors.New("store: invalid database URL")
 	}
-	db.SetMaxOpenConns(20)
+	db.SetMaxOpenConns(MaxOpenConns)
 	db.SetConnMaxIdleTime(5 * time.Minute)
 	pctx, cancel := context.WithTimeout(ctx, ConnectTimeout)
 	err = db.PingContext(pctx)
@@ -56,11 +68,15 @@ func Open(ctx context.Context, dsn string, log *slog.Logger) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	return &Store{db: db}, nil
+	return &Store{db: db, uploads: make(chan struct{}, MaxConcurrentUploads), uploadIdle: UploadIdleTimeout}, nil
 }
 
-var errReserved = errors.New("is not a valid URL: percent-encode reserved characters in the user name or password " +
-	"(@ → %40, / → %2F, ? → %3F, # → %23, % → %25, space → %20); the value is not shown because it may contain a password")
+var (
+	errReserved = errors.New("is not a valid URL: percent-encode reserved characters in the user name or password " +
+		"(@ → %40, / → %2F, ? → %3F, # → %23, % → %25, space → %20); the value is not shown because it may contain a password")
+	errAtAfterHost = errors.New(`is not accepted: it has an "@" after the host part (in the password, the database name or a query value); ` +
+		"percent-encode that @ as %40, and / ? # % in a password as %2F %3F %23 %25. The value is not shown because it may contain a password")
+)
 
 // CheckDSN reports whether lib/pq will read dsn the way it looks, without
 // connecting. Its errors never contain the password. It refuses:
@@ -69,7 +85,8 @@ var errReserved = errors.New("is not a valid URL: percent-encode reserved charac
 //     "POSTGRES://…" as a key=value string and dial a different server);
 //   - an "@" after the host part, the sign of an unescaped "/", "?" or "#"
 //     in the password (Go's URL parser would take part of the password for
-//     the host and resolve it in DNS);
+//     the host and resolve it in DNS). An "@" in a database name or query
+//     value is refused too, because it cannot be told apart; %40 works;
 //   - anything lib/pq itself cannot parse.
 func CheckDSN(dsn string) error {
 	if _, err := pq.NewConfig(""); err != nil {
@@ -90,7 +107,7 @@ func CheckDSN(dsn string) error {
 	}
 	rest := dsn[strings.Index(dsn, "://")+3:]
 	if i := strings.IndexAny(rest, "/?#"); i >= 0 && strings.Contains(rest[i:], "@") {
-		return errReserved
+		return errAtAfterHost
 	}
 	u, err := url.Parse(dsn)
 	if err != nil {
@@ -121,6 +138,36 @@ func hideDSN(err error, dsn string) error {
 		return errors.New("the database URL could not be parsed (not shown: it may contain a password)")
 	}
 	return err
+}
+
+// DescribeDSN renders what lib/pq will use for dsn without any secret: only
+// host, port, user, dbname and sslmode from lib/pq's own parse (PG* defaults
+// included), whether a password is set, and counts. Nothing is copied from
+// the DSN's text, so no quoting in it can bring a password fragment out. A
+// DSN that fails CheckDSN is not described.
+func DescribeDSN(dsn string) string {
+	if CheckDSN(dsn) != nil {
+		return "(set, not shown: invalid, see below)"
+	}
+	c, err := pq.NewConfig(dsn)
+	if err != nil {
+		return "(set, not shown: invalid)"
+	}
+	pw, ssl := "unset", strconv.Quote(string(c.SSLMode))
+	if c.Password != "" {
+		pw = "set, hidden"
+	}
+	if c.SSLMode == "" {
+		ssl = "(unset: lib/pq uses TLS, as require)"
+	}
+	out := fmt.Sprintf("host=%q port=%d user=%q dbname=%q sslmode=%s password=(%s)", c.Host, c.Port, c.User, c.Database, ssl, pw)
+	if n := len(c.Multi); n > 0 {
+		out += fmt.Sprintf(" (+%d more hosts)", n)
+	}
+	if n := len(c.Runtime); n > 0 {
+		out += fmt.Sprintf(" (+%d other parameters, not shown)", n)
+	}
+	return out
 }
 
 // Close releases the pool.

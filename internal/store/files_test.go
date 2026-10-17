@@ -6,6 +6,7 @@ package store
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"database/sql"
 	"errors"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/discover-legal/BigLaw/internal/store/storetest"
 )
@@ -160,20 +162,30 @@ func TestFilesEdgeCases(t *testing.T) {
 		t.Fatal("a refused or failed upload left rows behind")
 	}
 
-	for _, name := range []string{"", ".", "..", "../../etc/passwd", `a\b`, "a/b", "a\x00b", "a\nb", "\xff\xfe", "invoice\u202Efdp.exe", "a\u2066b", strings.Repeat("n", MaxNameLen+1)} {
+	for _, name := range []string{"", ".", "..", "../../etc/passwd", `a\b`, "a/b", "a\x00b", "a\nb", "\xff\xfe", "invoice\u202Efdp.exe", "a\u2066b", strings.Repeat("n", MaxNameLen+1),
+		// r2 reproducer: invisible format characters, separators, edge spaces.
+		"a\u2028b.pdf", "a\u2029b.pdf", "invoice\u200b.pdf", "x\ufeff.exe", "pay\u00ad.pdf", "file.pdf\u180e.exe", "report.pdf ", " lead.pdf", "a.pdf\u3000"} {
 		if _, err := put(name, "text/plain", strings.NewReader("x")); !errors.Is(err, ErrBadName) {
 			t.Errorf("name %q: %v, want ErrBadName", name, err)
 		}
 	}
-	for _, name := range []string{"memo.docx", "Mémoire d'appel (v2).docx", "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645.pdf", "a..b.txt", strings.Repeat("n", MaxNameLen)} {
+	for _, name := range []string{"memo.docx", "Mémoire d'appel (v2).docx", "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645.pdf", "a..b.txt", strings.Repeat("n", MaxNameLen),
+		"a b.pdf", "a\u3000b.pdf", "\U0001F468\u200d\U0001F4BB notes.txt"} {
 		if _, err := put(name, "text/plain", strings.NewReader("x")); err != nil {
 			t.Errorf("name %q refused: %v", name, err)
 		}
 	}
-	for _, ct := range []string{"", "text", "text/html\r\nSet-Cookie: a=b", "text/plain; charset", strings.Repeat("a", 250) + "/plain"} {
+	for _, ct := range []string{"", "text", "text/html\r\nSet-Cookie: a=b", "text/plain; charset", strings.Repeat("a", 250) + "/plain",
+		"text/html\r\n", "text/html\n", "a/b; c=\"\x00\"", "text/plain; charset=\"\u00e9\"", "text/plain\x7f"} { // r2: trailing CRLF, NUL, non-ASCII
 		if _, err := put("a.txt", ct, strings.NewReader("x")); !errors.Is(err, ErrBadType) {
 			t.Errorf("content type %q: %v, want ErrBadType", ct, err)
 		}
+	}
+	// Stored in canonical form, not as given.
+	if f, err := put("a.txt", "Text/HTML;  Charset=UTF-8", strings.NewReader("x")); err != nil || f.ContentType != "text/html; charset=UTF-8" {
+		t.Errorf("canonical content type: %q, %v", f.ContentType, err)
+	} else if got, _ := s.GetFile(ctx, f.ID); got.ContentType != f.ContentType {
+		t.Errorf("stored content type %q, returned %q", got.ContentType, f.ContentType)
 	}
 	for _, id := range []string{"", "x", "'; DROP TABLE files; --", "00000000-0000-0000-0000-00000000000g", "00000000-0000-0000-0000-000000000000"} {
 		if _, err := s.GetFile(ctx, id); !errors.Is(err, ErrNotFound) {
@@ -181,6 +193,114 @@ func TestFilesEdgeCases(t *testing.T) {
 		}
 	}
 }
+
+// TestFileChunkSizeChecked: the schema refuses a chunk over ChunkSize, so a
+// row written out of band cannot make GetFile materialise more than one
+// chunk beyond the recorded size (r2 reproducer).
+func TestFileChunkSizeChecked(t *testing.T) {
+	t.Parallel()
+	s := openStore(t, storetest.DSN(t))
+	f, err := s.PutFile(t.Context(), "a.bin", "application/octet-stream", strings.NewReader("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.db.Exec(`INSERT INTO file_chunks (file_id, seq, data) VALUES ($1, 1, $2)`, f.ID, make([]byte, ChunkSize+1))
+	if err == nil || !strings.Contains(err.Error(), "check constraint") {
+		t.Fatalf("a %d-byte chunk was accepted: %v", ChunkSize+1, err)
+	}
+}
+
+// stallReader returns one byte, then blocks until release is closed.
+type stallReader struct {
+	sent    bool
+	release chan struct{}
+}
+
+func (r *stallReader) Read(p []byte) (int, error) {
+	if !r.sent {
+		r.sent = true
+		p[0] = 'x'
+		return 1, nil
+	}
+	<-r.release
+	return 0, errors.New("client went away")
+}
+
+// TestSlowUploadsLeaveConnections: uploads whose readers stall hold at most
+// MaxConcurrentUploads connections, so /health's Ping and reads still get
+// one, and an upload beyond the cap waits for a slot instead of a connection
+// (r2 reproducer: 20 stalled uploads took the whole pool).
+func TestSlowUploadsLeaveConnections(t *testing.T) {
+	t.Parallel()
+	s := openStore(t, storetest.DSN(t))
+	ctx := t.Context()
+	small, err := s.PutFile(ctx, "small.txt", "text/plain", strings.NewReader("ok"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := make(chan struct{})
+	done := make(chan error, MaxOpenConns)
+	for range MaxOpenConns {
+		go func() {
+			_, err := s.PutFile(ctx, "slow.bin", "application/octet-stream", &stallReader{release: release})
+			done <- err
+		}()
+	}
+	// Wait until every slot is taken (the stalled uploads sit in their transactions).
+	deadline := time.Now().Add(10 * time.Second)
+	for len(s.uploads) < MaxConcurrentUploads && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(s.uploads) != MaxConcurrentUploads {
+		t.Fatalf("%d upload slots taken, want %d", len(s.uploads), MaxConcurrentUploads)
+	}
+	pctx, cancel := context.WithTimeout(ctx, 3*time.Second) // /health's budget
+	defer cancel()
+	if err := s.Ping(pctx); err != nil {
+		t.Errorf("Ping with %d stalled uploads: %v", MaxOpenConns, err)
+	}
+	if _, err := s.GetFile(pctx, small.ID); err != nil {
+		t.Errorf("GetFile with %d stalled uploads: %v", MaxOpenConns, err)
+	}
+	wctx, wcancel := context.WithTimeout(ctx, 200*time.Millisecond)
+	defer wcancel()
+	if _, err := s.PutFile(wctx, "late.txt", "text/plain", strings.NewReader("x")); !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "upload slot") {
+		t.Errorf("an upload beyond the cap: %v, want a deadline while waiting for a slot", err)
+	}
+	close(release)
+	for range MaxOpenConns {
+		if err := <-done; err == nil || !strings.Contains(err.Error(), "client went away") {
+			t.Errorf("stalled upload ended with %v", err)
+		}
+	}
+	if n := count(t, s, "files"); n != 1 {
+		t.Errorf("%d files after the stalled uploads failed, want 1", n)
+	}
+}
+
+// TestStalledUploadEndsAtIdleTimeout: Postgres ends an upload whose reader
+// delivers nothing for uploadIdle, and nothing of it persists.
+func TestStalledUploadEndsAtIdleTimeout(t *testing.T) {
+	t.Parallel()
+	s := openStore(t, storetest.DSN(t))
+	s.uploadIdle = 500 * time.Millisecond
+	_, err := s.PutFile(t.Context(), "slow.bin", "application/octet-stream", io.MultiReader(&slowOnce{d: 2 * time.Second}, strings.NewReader("tail")))
+	t.Logf("stalled upload: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "idle") && !strings.Contains(err.Error(), "bad connection") {
+		t.Fatalf("an upload that stalled past the idle timeout: %v", err)
+	}
+	if n := count(t, s, "files"); n != 0 {
+		t.Errorf("%d files persisted", n)
+	}
+	if _, err := s.PutFile(t.Context(), "fast.txt", "text/plain", strings.NewReader("ok")); err != nil {
+		t.Errorf("a normal upload after the timeout: %v", err)
+	}
+}
+
+// slowOnce sleeps d, then reports EOF (so PutFile's first chunk read stalls).
+type slowOnce struct{ d time.Duration }
+
+func (r *slowOnce) Read([]byte) (int, error) { time.Sleep(r.d); return 0, io.EOF }
 
 // TestFilesCorruptionDetected: storage corruption is ErrCorrupt, not a wrong
 // document, and an implausible recorded size is refused before any content
