@@ -64,7 +64,9 @@ func TestConfigRejectsBadValues(t *testing.T) {
 	cases := map[string][]string{
 		"BIGLAW_ADDR": {"3101", ":3101", "localhost:99999", "h:p", "127.0.0.1:+3109", "127.0.0.1:-0"},
 		"BIGLAW_MODEL_URL": {"localhost:11434", "file:///etc/passwd", "http://user:pw@h/v1", "https://KEY@gw.example/v1",
-			"https://api.anthropic\u3002com/v1", "https://api.anthropic%E3%80%82com/v1", "https://api.anthropic%2Ecom/v1"}, // breaker evasions
+			"https://api.anthropic\u3002com/v1", "https://api.anthropic%E3%80%82com/v1", "https://api.anthropic%2Ecom/v1", // breaker evasions
+			"https://Zm9vYmFy/c2VjcmV0S0VZ+abc==@gw.example.com/v1", "https://user:/pw@gw.example.com/v1", "https://user:1234/rest@gw.example.com/v1", // r3 P1
+			"http://[::1%25zone]:80/", "https://gw.example/v1/a@b"},
 		"BIGLAW_DATABASE_URL": {"POSTGRES://u:p@h/db", "mysql://u:p@h/db", "postgres://u:p/w@h/db"},
 	}
 	for name, values := range cases {
@@ -80,6 +82,12 @@ func TestConfigRejectsBadValues(t *testing.T) {
 	for _, want := range []string{"BIGLAW_DATABASE_URL", "BIGLAW_ADDR", "BIGLAW_MODEL_URL"} {
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("combined error %v lacks %s", err, want)
+		}
+	}
+	// Ordinary endpoints stay accepted (a Compose service name may hold "_").
+	for _, u := range []string{"http://ollama_1:11434/v1", "http://[::1]:11434", "https://GW.example.:8443/v1?x=1"} {
+		if _, err := Load(env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_MODEL_URL", u)); err != nil {
+			t.Errorf("BIGLAW_MODEL_URL=%q refused: %v", u, err)
 		}
 	}
 	// Variables a later PR reads are not validated yet (that PR validates them).
@@ -181,6 +189,17 @@ func TestDescribeRedactsSecrets(t *testing.T) {
 		{"addr userinfo", []string{"BIGLAW_ADDR", "u:SECRET@h:1"}},
 		{"addr userinfo, valid host:port", []string{"BIGLAW_ADDR", "[u:SECRET@h]:1"}},
 		{"plain var holding a url", []string{"BIGLAW_PRICES", "https://u:SECRET@prices.example/x.json"}},
+		// r3 prosecutor P1: an unescaped "/" (or "#") in user info makes Go read the credential as host + path.
+		{"model url slash in base64 key", []string{"BIGLAW_MODEL_URL", "https://Zm9vYmFy/c2VjcmV0S0VZ+SECRET==@gw.example.com/v1"}},
+		{"model url empty user, slash pw", []string{"BIGLAW_MODEL_URL", "https://user:/SECRETpw@gw.example.com/v1"}},
+		{"model url numeric pw prefix", []string{"BIGLAW_MODEL_URL", "https://user:1234/SECRETrest@gw.example.com/v1"}},
+		{"public url numeric pw prefix", []string{"BIGLAW_PUBLIC_URL", "https://user:1234/SECRETrest@gw.example.com/v1"}},
+		{"model url hash in pw", []string{"BIGLAW_MODEL_URL", "https://user:123456#SECRET@gw.example.com"}},
+		{"model url key, slash, @", []string{"BIGLAW_MODEL_URL", "https://SECRETKEY/x@gw.example/"}},
+		// r3 auditor B5: path parameters, IPv6 zone ids and spaces are never printed.
+		{"model url path param", []string{"BIGLAW_MODEL_URL", "https://gw.example/v1;key=SECRET"}},
+		{"model url zone id", []string{"BIGLAW_MODEL_URL", "http://[::1%25SECRET]:80/"}},
+		{"model url space", []string{"BIGLAW_MODEL_URL", "https://gw.example/v1 SECRET"}},
 		{"secrets", []string{"BIGLAW_MODEL_KEY", "sk-live-SECRET", "BIGLAW_OIDC_CLIENT_SECRET", "oidc-SECRET"}},
 	}
 	for _, tc := range cases {
@@ -195,11 +214,13 @@ func TestDescribeRedactsSecrets(t *testing.T) {
 		}
 	}
 	out := Describe(env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_MODEL_KEY", "k", "BIGLAW_OIDC_ISSUER", "microsoft:contoso.onmicrosoft.com",
-		"BIGLAW_MODEL_URL", "https://K@gw.example/v1/chat?key=k&b=2#f", "BIGLAW_PUBLIC_URL", "HTTPS://Biglaw.Example:8443"), []string{"PGPASSWORD=x", "PGHOST=db", "PATH=/bin"})
+		"BIGLAW_MODEL_URL", "https://gw.example/v1/chat?key=k&b=2#f", "BIGLAW_PUBLIC_URL", "HTTPS://Biglaw.Example:8443",
+		"BIGLAW_PRICES", "https://K@prices.example/p.json"), []string{"PGPASSWORD=x", "PGHOST=db", "PATH=/bin"})
 	for _, want := range []string{
 		"BIGLAW_MODEL_KEY           (set, hidden)  [env, read from PR 2]",
 		`BIGLAW_DATABASE_URL        host="db" port=5432 user="biglaw" dbname="biglaw" sslmode="disable" password=(set, hidden)  [env]`,
-		"BIGLAW_MODEL_URL           https://xxxxx@gw.example/v1/chat?(2 query parameters, not shown)#xxxxx  [env]",
+		"BIGLAW_MODEL_URL           https://gw.example  [env]", // host only: never path, query or fragment
+		"BIGLAW_PRICES              (set, not shown: not an http(s) URL with a plain host and no @)  [env, read from PR 2]",
 		"BIGLAW_PUBLIC_URL          https://Biglaw.Example:8443  [env, read from PR 8]",
 		"BIGLAW_OIDC_ISSUER         microsoft:contoso.onmicrosoft.com  [env, read from PR 8]",
 		"lib/pq also reads these libpq variables (values not shown): PGHOST, PGPASSWORD",

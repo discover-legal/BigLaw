@@ -9,6 +9,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io"
 	"math/rand/v2"
 	"os"
@@ -175,7 +176,14 @@ func TestFilesEdgeCases(t *testing.T) {
 			t.Errorf("name %q refused: %v", name, err)
 		}
 	}
-	for _, ct := range []string{"", "text", "text/html\r\nSet-Cookie: a=b", "text/plain; charset", strings.Repeat("a", 250) + "/plain",
+	grows := "text/plain" // r3 auditor: <= 255 bytes as given, > 255 once canonical ("; " per parameter)
+	for i := 0; len(grows) < 246; i++ {
+		grows += fmt.Sprintf(";p%d=v", i)
+	}
+	if _, err := put("a.txt", strings.Repeat("a", 249)+"/plain", strings.NewReader("x")); err != nil {
+		t.Errorf("a 255-byte content type: %v", err)
+	}
+	for _, ct := range []string{"", "text", "text/html\r\nSet-Cookie: a=b", "text/plain; charset", strings.Repeat("a", 250) + "/plain", grows, "*/*", "text/*",
 		"text/html\r\n", "text/html\n", "a/b; c=\"\x00\"", "text/plain; charset=\"\u00e9\"", "text/plain\x7f"} { // r2: trailing CRLF, NUL, non-ASCII
 		if _, err := put("a.txt", ct, strings.NewReader("x")); !errors.Is(err, ErrBadType) {
 			t.Errorf("content type %q: %v, want ErrBadType", ct, err)
@@ -277,30 +285,6 @@ func TestSlowUploadsLeaveConnections(t *testing.T) {
 		t.Errorf("%d files after the stalled uploads failed, want 1", n)
 	}
 }
-
-// TestStalledUploadEndsAtIdleTimeout: Postgres ends an upload whose reader
-// delivers nothing for uploadIdle, and nothing of it persists.
-func TestStalledUploadEndsAtIdleTimeout(t *testing.T) {
-	t.Parallel()
-	s := openStore(t, storetest.DSN(t))
-	s.uploadIdle = 500 * time.Millisecond
-	_, err := s.PutFile(t.Context(), "slow.bin", "application/octet-stream", io.MultiReader(&slowOnce{d: 2 * time.Second}, strings.NewReader("tail")))
-	t.Logf("stalled upload: %v", err)
-	if err == nil || !strings.Contains(err.Error(), "idle") && !strings.Contains(err.Error(), "bad connection") {
-		t.Fatalf("an upload that stalled past the idle timeout: %v", err)
-	}
-	if n := count(t, s, "files"); n != 0 {
-		t.Errorf("%d files persisted", n)
-	}
-	if _, err := s.PutFile(t.Context(), "fast.txt", "text/plain", strings.NewReader("ok")); err != nil {
-		t.Errorf("a normal upload after the timeout: %v", err)
-	}
-}
-
-// slowOnce sleeps d, then reports EOF (so PutFile's first chunk read stalls).
-type slowOnce struct{ d time.Duration }
-
-func (r *slowOnce) Read([]byte) (int, error) { time.Sleep(r.d); return 0, io.EOF }
 
 // TestFilesCorruptionDetected: storage corruption is ErrCorrupt, not a wrong
 // document, and an implausible recorded size is refused before any content

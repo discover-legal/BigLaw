@@ -25,20 +25,18 @@ const (
 	// ConnectTimeout bounds the first connection in Open. Waiting for another
 	// process's migration lock is not bounded by it (see MigrateFS).
 	ConnectTimeout = 30 * time.Second
-	// PutFile holds a connection while its reader runs, so at most
-	// MaxConcurrentUploads of the MaxOpenConns run at once (the rest stay for
-	// /health and reads), and a reader idle for UploadIdleTimeout between
-	// chunks ends its upload (idle_in_transaction_session_timeout).
+	// PutFile holds a connection for as long as its reader runs, so at most
+	// MaxConcurrentUploads of the MaxOpenConns run at once and the rest stay
+	// for /health and reads. Only the caller can end a stalled reader (PR 3:
+	// the HTTP read deadline); until it returns, its slot stays taken.
 	MaxOpenConns         = 20
 	MaxConcurrentUploads = MaxOpenConns - 4
-	UploadIdleTimeout    = time.Minute
 )
 
 // Store wraps the connection pool.
 type Store struct {
-	db         *sql.DB
-	uploads    chan struct{} // PutFile slots (MaxConcurrentUploads)
-	uploadIdle time.Duration // UploadIdleTimeout; tests shorten it
+	db      *sql.DB
+	uploads chan struct{} // PutFile slots (MaxConcurrentUploads)
 }
 
 // Open checks dsn (CheckDSN), connects, and applies every pending embedded
@@ -68,15 +66,8 @@ func Open(ctx context.Context, dsn string, log *slog.Logger) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	return &Store{db: db, uploads: make(chan struct{}, MaxConcurrentUploads), uploadIdle: UploadIdleTimeout}, nil
+	return &Store{db: db, uploads: make(chan struct{}, MaxConcurrentUploads)}, nil
 }
-
-var (
-	errReserved = errors.New("is not a valid URL: percent-encode reserved characters in the user name or password " +
-		"(@ → %40, / → %2F, ? → %3F, # → %23, % → %25, space → %20); the value is not shown because it may contain a password")
-	errAtAfterHost = errors.New(`is not accepted: it has an "@" after the host part (in the password, the database name or a query value); ` +
-		"percent-encode that @ as %40, and / ? # % in a password as %2F %3F %23 %25. The value is not shown because it may contain a password")
-)
 
 // CheckDSN reports whether lib/pq will read dsn the way it looks, without
 // connecting. Its errors never contain the password. It refuses:
@@ -87,55 +78,38 @@ var (
 //     in the password (Go's URL parser would take part of the password for
 //     the host and resolve it in DNS). An "@" in a database name or query
 //     value is refused too, because it cannot be told apart; %40 works;
-//   - anything lib/pq itself cannot parse.
+//   - anything lib/pq itself cannot parse, from the same single parse it
+//     connects with (so a DSN that names its user needs no passwd entry for
+//     the process's uid, as under docker run --user or Kubernetes runAsUser).
 func CheckDSN(dsn string) error {
-	if _, err := pq.NewConfig(""); err != nil {
-		return fmt.Errorf("cannot be used: the libpq environment is invalid: %w", err) // PG* variables only, no DSN involved
-	}
-	lower := strings.ToLower(dsn)
-	if !strings.HasPrefix(lower, "postgres://") && !strings.HasPrefix(lower, "postgresql://") {
-		if strings.Contains(dsn, "://") {
+	if scheme, rest, ok := strings.Cut(dsn, "://"); ok {
+		switch {
+		case strings.EqualFold(scheme, "postgres") || strings.EqualFold(scheme, "postgresql"):
+			if scheme != strings.ToLower(scheme) {
+				return errors.New("must start with lowercase postgres:// or postgresql:// (lib/pq reads any other spelling as a key=value string and would connect somewhere else)")
+			}
+		default:
 			return errors.New("must be a postgres:// URL or a key=value string (value not shown: it may contain a password)")
 		}
-		if _, err := pq.NewConfig(dsn); err != nil {
-			return errors.New("is not a valid key=value connection string (details not shown: they may quote the password)")
-		}
-		return nil
-	}
-	if !strings.HasPrefix(dsn, "postgres://") && !strings.HasPrefix(dsn, "postgresql://") {
-		return errors.New("must start with lowercase postgres:// or postgresql:// (lib/pq reads any other spelling as a key=value string and would connect somewhere else)")
-	}
-	rest := dsn[strings.Index(dsn, "://")+3:]
-	if i := strings.IndexAny(rest, "/?#"); i >= 0 && strings.Contains(rest[i:], "@") {
-		return errAtAfterHost
-	}
-	u, err := url.Parse(dsn)
-	if err != nil {
-		return errReserved
-	}
-	// With the secrets replaced, lib/pq's own message is safe to show.
-	if u.User != nil {
-		u.User = url.UserPassword(u.User.Username(), "x")
-	}
-	q := u.Query()
-	for k := range q {
-		if strings.Contains(strings.ToLower(k), "password") {
-			q.Set(k, "x")
+		if i := strings.IndexAny(rest, "/?#"); i >= 0 && strings.Contains(rest[i:], "@") {
+			return errors.New(`is not accepted: it has an "@" after the host part (in the password, the database name or a query value); ` +
+				"percent-encode that @ as %40, and / ? # % in a password as %2F %3F %23 %25. The value is not shown because it may contain a password")
 		}
 	}
-	u.RawQuery = q.Encode()
-	if _, err := pq.NewConfig(u.String()); err != nil {
-		return fmt.Errorf("is not valid: %w", err)
+	if _, err := pq.NewConfig(dsn); err != nil {
+		return fmt.Errorf("is not valid: %w", hideDSN(err, dsn))
 	}
 	return nil
 }
 
 // hideDSN replaces an error that echoes the DSN (lib/pq quotes the whole URL
-// in parse errors, password included) with one that does not.
+// in parse errors, password included, and a key=value fragment in others)
+// with one that does not.
 func hideDSN(err error, dsn string) error {
 	var ue *url.Error
 	if errors.As(err, &ue) || (dsn != "" && strings.Contains(err.Error(), dsn)) || strings.Contains(err.Error(), "connection info string") {
-		return errors.New("the database URL could not be parsed (not shown: it may contain a password)")
+		return errors.New("the database URL could not be parsed (not shown: it may contain a password). In a URL, percent-encode reserved " +
+			"characters in the user name or password: @ → %40, / → %2F, ? → %3F, # → %23, % → %25, space → %20; in key=value form, quote a value with spaces in single quotes")
 	}
 	return err
 }

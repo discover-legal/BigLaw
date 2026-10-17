@@ -7,9 +7,15 @@ import (
 	"context"
 	"errors"
 	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
+
+	"github.com/lib/pq"
 )
 
 // TestCheckDSN: the validator and lib/pq must read a DSN the same way, and
@@ -44,8 +50,8 @@ func TestCheckDSN(t *testing.T) {
 		{"postgres://u:SECRET@h/db@2026?sslmode=disable", false, "database name"},
 		{"postgres://u:SECRET@h/db?sslmode=disable&application_name=ops%40corp", true, ""},
 		{"postgres://u:SECRET@h/db?sslmode=bogus&sslpassword=SECRET", false, "sslmode"},
-		{"host=h user=u password=SECRET PW dbname=d", false, "key=value"},
-		{"host=h user=u password='SECRET dbname=d", false, "key=value"},
+		{"host=h user=u password=SECRET PW dbname=d", false, "not shown"},
+		{"host=h user=u password='SECRET dbname=d", false, "unterminated"},
 	}
 	for _, tc := range cases {
 		err := CheckDSN(tc.dsn)
@@ -59,6 +65,44 @@ func TestCheckDSN(t *testing.T) {
 	t.Setenv("PGGSSENCMODE", "disable") // lib/pq refuses some libpq variables outright
 	if err := CheckDSN("postgres://h/db"); err == nil || !strings.Contains(err.Error(), "PGGSSENCMODE") {
 		t.Errorf("unsupported PG variable: %v", err)
+	}
+}
+
+// TestCheckDSNWithoutPasswdEntry: a DSN that names its user is accepted by
+// a process whose uid has no passwd entry and no USER/PGUSER (docker run
+// --user, Kubernetes runAsUser), as it is by lib/pq when connecting (r3
+// auditor B6: a pre-check of the bare libpq environment refused it). The
+// test re-runs itself as such a uid, so it needs root; CI's docker job runs
+// the image with --user for the same reason.
+func TestCheckDSNWithoutPasswdEntry(t *testing.T) {
+	if os.Getenv("STORE_TEST_NO_PASSWD") == "1" {
+		if _, err := pq.NewConfig(""); err == nil {
+			t.Fatal("the child resolved a default user: the condition under test is not reproduced")
+		}
+		if err := CheckDSN("postgres://biglaw@db:5432/biglaw?sslmode=disable"); err != nil {
+			t.Fatalf("CheckDSN of a DSN naming its user: %v", err)
+		}
+		return
+	}
+	if os.Geteuid() != 0 {
+		t.Skip("needs root to run a child as a uid without a passwd entry")
+	}
+	dir := t.TempDir()
+	bin, err := os.ReadFile(os.Args[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "store.test"), bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for d := dir; len(d) > len(filepath.Clean(os.TempDir())); d = filepath.Dir(d) {
+		os.Chmod(d, 0o755) // t.TempDir's directories are 0700
+	}
+	cmd := exec.Command(filepath.Join(dir, "store.test"), "-test.run=^TestCheckDSNWithoutPasswdEntry$", "-test.v")
+	cmd.Env = []string{"STORE_TEST_NO_PASSWD=1", "HOME=/"}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: 54321, Gid: 54321}}
+	if out, err := cmd.CombinedOutput(); err != nil || !strings.Contains(string(out), "--- PASS") {
+		t.Fatalf("as uid 54321: %v\n%s", err, out)
 	}
 }
 

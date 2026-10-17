@@ -91,14 +91,9 @@ func Load(getenv func(string) string) (Config, error) {
 	} else if host == "" {
 		bad("BIGLAW_ADDR", "%s has no host; write 127.0.0.1:%s (or 0.0.0.0:%s with serve --allow-no-auth, see README § Exposure)", c.Addr, port, port)
 	}
-	if c.ModelURL != "" {
-		if u := httpURL(c.ModelURL); u == nil {
-			bad("BIGLAW_MODEL_URL", "%s must be an http(s) URL with a host", shown("BIGLAW_MODEL_URL", c.ModelURL))
-		} else if u.User != nil {
-			bad("BIGLAW_MODEL_URL", "must not carry credentials in the URL; put the key in BIGLAW_MODEL_KEY")
-		} else if h := u.Hostname(); !isASCII(h) {
-			bad("BIGLAW_MODEL_URL", "host must be ASCII; write an internationalised host name in its xn-- form")
-		}
+	if c.ModelURL != "" && httpURL(c.ModelURL) == nil {
+		bad("BIGLAW_MODEL_URL", "%s must be an http(s) URL with a plain ASCII host (an internationalised name in its xn-- form) and no \"@\": "+
+			"put the key in BIGLAW_MODEL_KEY, not in the URL, and write any other @ as %%40", shown("BIGLAW_MODEL_URL", c.ModelURL))
 	}
 	if err := errors.Join(errs...); err != nil {
 		return c, err
@@ -125,7 +120,7 @@ func value(getenv func(string) string, name string) string {
 // on the endpoint, not the model name: a Claude model behind a third-party
 // OpenAI-compatible gateway is allowed. Like v1 it matches the marker
 // anywhere in the URL, so it fails closed. (Load has already refused a host
-// that is not ASCII; Go's URL parser refuses %-escapes in an ASCII host.)
+// that is not plain ASCII, so no escape or look-alike dot can hide one.)
 var vendors = []struct {
 	name, optIn string
 	markers     []string
@@ -239,26 +234,17 @@ func validPort(p string) bool {
 	return err == nil && n >= 0 && n <= 65535 && p[0] >= '0' && p[0] <= '9' // no sign
 }
 
-func isASCII(s string) bool {
-	for i := 0; i < len(s); i++ {
-		if s[i] >= 0x80 {
-			return false
-		}
-	}
-	return true
-}
-
 // shown is how the value of variable name may appear in any output
 // (`version --config`, startup errors). The rule is total: whatever does
 // not parse into a shape known to be safe is not shown at all.
 //   - secrets: "(set, hidden)";
 //   - the database URL: store.DescribeDSN (fields from lib/pq's own parse,
 //     never the text);
-//   - URL variables: only an absolute http(s) URL with a host is shown, as
-//     scheme://host[:port]/path; user info and fragment are masked and the
-//     query is only counted (a bare "?KEY" is a name). Anything else (no
-//     scheme, a typo such as "https:/", user:pw@host) is "(set, not shown:
-//     …)". An OIDC preset (google, microsoft:<tenant>) is shown as is;
+//   - URL variables: scheme://host[:port] only, never the path, query or
+//     fragment, and only for a value httpURL accepts (so none with an "@"
+//     anywhere: an unescaped "/" in user info turns a credential into a
+//     "path"); anything else is "(set, not shown: …)". An OIDC preset
+//     (google, microsoft:<tenant>) is shown as is;
 //   - any other value is shown as is (quoted if it holds a control
 //     character), unless it holds "://" (treated as a URL) or the
 //     user:password@ shape.
@@ -272,22 +258,10 @@ func shown(name, val string) string {
 	case name == "BIGLAW_OIDC_ISSUER" && oidcPreset.MatchString(val):
 		return val
 	case e.url || strings.Contains(val, "://"):
-		u := httpURL(val)
-		if u == nil {
-			return "(set, not shown: not an http(s) URL with a host)"
+		if u := httpURL(val); u != nil {
+			return u.Scheme + "://" + u.Host
 		}
-		out := u.Scheme + "://"
-		if u.User != nil {
-			out += "xxxxx@"
-		}
-		out += u.Host + u.EscapedPath()
-		if u.RawQuery != "" || u.ForceQuery {
-			out += fmt.Sprintf("?(%d query parameters, not shown)", len(strings.Split(u.RawQuery, "&")))
-		}
-		if u.Fragment != "" || strings.HasSuffix(val, "#") {
-			out += "#xxxxx"
-		}
-		return out
+		return "(set, not shown: not an http(s) URL with a plain host and no @)"
 	case userinfoShape.MatchString(val):
 		return "(set, not shown: it looks like user:password@host)"
 	case strings.ContainsFunc(val, unicode.IsControl):
@@ -299,13 +273,17 @@ func shown(name, val string) string {
 var (
 	oidcPreset    = regexp.MustCompile(`^(google|microsoft:[A-Za-z0-9.-]+)$`)
 	userinfoShape = regexp.MustCompile(`:[^@]*@`)
+	plainHost     = regexp.MustCompile(`^([A-Za-z0-9._-]+|\[[0-9A-Fa-f:.]+\])(:[0-9]+)?$`)
 )
 
-// httpURL returns raw parsed when it is an absolute http(s) URL with a host
-// (url.Parse lowercases the scheme), and nil for anything else.
+// httpURL returns raw parsed when it is an absolute http(s) URL whose host
+// is a plain ASCII name or IP (no IPv6 zone, no escape) and which has no
+// "@" anywhere: no URL variable may carry credentials, and an "@" after an
+// unescaped "/", "?" or "#" in user info would hide them in the path (the
+// rule CheckDSN applies to the database URL). nil for anything else.
 func httpURL(raw string) *url.URL {
 	u, err := url.Parse(raw)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.Opaque != "" {
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Opaque != "" || !plainHost.MatchString(u.Host) || strings.Contains(raw, "@") {
 		return nil
 	}
 	return u

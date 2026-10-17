@@ -94,10 +94,11 @@ jobs:
           done
           docker compose logs biglaw
           exit 1
+      # --user: a uid with no passwd entry (k8s runAsUser) must still accept a DSN naming its user.
       - name: the image alone refuses to serve without auth on 0.0.0.0
         run: |
           set +e
-          docker run --rm -e BIGLAW_DATABASE_URL=postgres://u@db/x biglaw:local 2>err.txt; code=$?
+          docker run --rm --user 54321:54321 -e BIGLAW_DATABASE_URL=postgres://u@db/x biglaw:local 2>err.txt; code=$?
           cat err.txt
           test "$code" = 2 && grep -q -- '--allow-no-auth' err.txt
       - name: logs

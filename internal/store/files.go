@@ -37,7 +37,7 @@ var (
 	ErrNotFound     = errors.New("store: not found")
 	ErrBadName      = errors.New(`store: file name must be 1-255 bytes of valid UTF-8, not "." or "..", with no path separator, ` +
 		"control or invisible format character (bidi controls, zero-width spaces), line separator, or leading/trailing space")
-	ErrBadType = errors.New("store: content type must be a valid media type such as text/plain, in printable ASCII")
+	ErrBadType = errors.New("store: content type must be a concrete media type such as text/plain (no wildcard), in printable ASCII, at most 255 bytes in canonical form")
 	// ErrCorrupt means the stored bytes do not match the recorded size or
 	// SHA-256. The checksum detects storage corruption, not tampering:
 	// anyone who can write the rows can rewrite the hash too.
@@ -59,18 +59,19 @@ type File struct {
 // ChunkSize buffer at a time and stops with ErrFileTooLarge within one chunk
 // of MaxFileSize. The file and its chunks are written in one transaction
 // (bounded as MaxConcurrentUploads says; a call over the cap waits for a
-// slot or ctx). The content type is stored in canonical form.
+// slot or ctx, but a call whose reader blocks returns only when the reader
+// does). The content type is stored in canonical form.
 func (s *Store) PutFile(ctx context.Context, name, contentType string, r io.Reader) (File, error) {
 	if !validName(name) {
 		return File{}, ErrBadName
 	}
 	mt, params, err := mime.ParseMediaType(contentType)
-	if err != nil || !strings.Contains(mt, "/") || len(contentType) > MaxNameLen ||
+	if err != nil || !strings.Contains(mt, "/") || strings.Contains(mt, "*") ||
 		strings.ContainsFunc(contentType, func(r rune) bool { return r < 0x20 || r >= 0x7f }) {
 		return File{}, ErrBadType
 	}
 	f := File{Name: name, ContentType: mime.FormatMediaType(mt, params)}
-	if f.ContentType == "" {
+	if f.ContentType == "" || len(f.ContentType) > MaxNameLen { // the stored form: canonicalising adds "; " per parameter
 		return File{}, ErrBadType
 	}
 	select {
@@ -80,9 +81,6 @@ func (s *Store) PutFile(ctx context.Context, name, contentType string, r io.Read
 		return File{}, fmt.Errorf("store: put file: waiting for an upload slot: %w", ctx.Err())
 	}
 	err = s.InTx(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`SET LOCAL idle_in_transaction_session_timeout = %d`, s.uploadIdle.Milliseconds())); err != nil {
-			return err
-		}
 		if err := tx.QueryRowContext(ctx, `INSERT INTO files (name, content_type, size, sha256) VALUES ($1, $2, 0, '')
 			RETURNING id, created_at`, name, f.ContentType).Scan(&f.ID, &f.CreatedAt); err != nil {
 			return err

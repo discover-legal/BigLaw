@@ -151,32 +151,14 @@ func TestGoVersionPinnedEverywhere(t *testing.T) {
 
 // TestDeployFilesFollowExposureRule: only Compose, which publishes on the
 // host's loopback, may start the server with --allow-no-auth; the image and
-// Render may not. Compose's ports are checked twice: in the text (so an
-// interpolated host such as "${BIND:-127.0.0.1}" is refused, whatever the
-// current environment) and, where docker is installed (it is in CI), in the
-// model `docker compose config` resolves (so YAML the text check does not
-// understand cannot hide a port).
+// Render may not. Compose's ports are read from the model `docker compose
+// config` resolves the way `docker compose up` does (from the repo root, no
+// -f, so override files count; every profile; nothing interpolated, so a
+// host such as "${BIND:-127.0.0.1}" is never taken for loopback).
 func TestDeployFilesFollowExposureRule(t *testing.T) {
 	compose := readRepo(t, "docker-compose.yml")
 	if !strings.Contains(compose, `command: ["serve", "--allow-no-auth"]`) {
 		t.Error("docker-compose.yml must start biglaw with --allow-no-auth (it listens on 0.0.0.0 in the container)")
-	}
-	ports, err := composePublished(compose)
-	if err != nil {
-		t.Error(err)
-	}
-	if len(ports) == 0 {
-		t.Error("no published ports found in docker-compose.yml")
-	}
-	for _, p := range ports {
-		if !loopbackHost(p.host) {
-			t.Errorf("docker-compose.yml: %s", p)
-		}
-	}
-	for _, p := range resolvedPublished(t, "../../docker-compose.yml") {
-		if !loopbackHost(p.host) {
-			t.Errorf("docker compose config: %s", p)
-		}
 	}
 	for _, file := range []string{"Dockerfile", "render.yaml"} {
 		body := readRepo(t, file)
@@ -189,12 +171,28 @@ func TestDeployFilesFollowExposureRule(t *testing.T) {
 	if !strings.Contains(readRepo(t, "Dockerfile"), `CMD ["serve"]`) {
 		t.Error(`Dockerfile default command must be ["serve"] (no --allow-no-auth)`)
 	}
+	// Compose would read (or prefer) any of these; only docker-compose.yml is allowed.
+	for _, glob := range []string{"compose.y*ml", "docker-compose.yaml", "*.override.y*ml"} {
+		if m, _ := filepath.Glob("../../" + glob); len(m) > 0 {
+			t.Errorf("%v: Compose would read it too; keep the stack in docker-compose.yml alone", m)
+		}
+	}
+	ports, err := composePublished(t, "../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ports) == 0 {
+		t.Error("no published ports found in docker-compose.yml")
+	}
+	for _, p := range ports {
+		if !loopbackHost(p.host) {
+			t.Errorf("docker compose config: %s", p)
+		}
+	}
 }
 
-// TestComposeExposureCheckCatchesBypasses runs both Compose checks on the
-// spellings the r2 committee used to publish beyond loopback while the old
-// regex stayed green. Each must be refused by the text check and, where
-// docker is installed, by the resolved model too.
+// TestComposeExposureCheckCatchesBypasses runs the check on the spellings
+// the r2 and r3 committees used to publish beyond loopback.
 func TestComposeExposureCheckCatchesBypasses(t *testing.T) {
 	const head = "services:\n  biglaw:\n    image: biglaw:local\n    command: [\"serve\", \"--allow-no-auth\"]\n"
 	bad := map[string]string{
@@ -216,23 +214,11 @@ func TestComposeExposureCheckCatchesBypasses(t *testing.T) {
 		"flow list":            "    ports: [\"3101:3101\"]\n",
 		"flow list mixed":      "    ports: [\"127.0.0.1:3101:3101\", \"3102:3101\"]\n",
 		"second service":       "    ports:\n      - \"127.0.0.1:3101:3101\"\n  postgres:\n    image: postgres:16-alpine\n    ports:\n      - 5432:5432\n",
-		"merge key":            "    <<: *exposed\n",
-		"quoted ports key":     "    \"ports\":\n      - 3102:3101\n", // red team: the text check read only a bare key
-	}
-	for name, tail := range bad {
-		body := head + tail
-		ports, err := composePublished(body)
-		if err == nil && !slices.ContainsFunc(ports, func(p published) bool { return !loopbackHost(p.host) }) {
-			t.Errorf("%s: text check passed %v:\n%s", name, ports, body)
-		}
-		if strings.Contains(body, "<<:") || strings.Contains(body, "${") {
-			continue // not valid / resolved by the environment: the text check alone owns these
-		}
-		dir := t.TempDir()
-		os.WriteFile(filepath.Join(dir, "compose.yml"), []byte(body), 0o600)
-		if r := resolvedPublished(t, filepath.Join(dir, "compose.yml")); r != nil && !slices.ContainsFunc(r, func(p published) bool { return !loopbackHost(p.host) }) {
-			t.Errorf("%s: resolved check passed %v", name, r)
-		}
+		"merge key":            "    ports: [\"127.0.0.1:3101:3101\"]\n  base: &exposed\n    image: x\n    network_mode: host\n  side:\n    <<: *exposed\n",
+		"quoted ports key":     "    \"ports\":\n      - 3102:3101\n",
+		"flow-mapped service":  "    ports: [\"127.0.0.1:3101:3101\"]\n  side: {image: \"alpine\", ports: [\"3102:3101\"]}\n",            // r3 P2
+		"profiled service":     "    ports: [\"127.0.0.1:3101:3101\"]\n  debug: {profiles: [debug], image: x, ports: [\"3102:3101\"]}\n", // r3 R3-1
+		"override file":        "    ports: [\"127.0.0.1:3101:3101\"]\n" + "\x00services:\n  biglaw:\n    ports: [\"3101:3101\"]\n",      // r3 R3-1
 	}
 	good := map[string]string{
 		"quoted loopback":   "    ports:\n      - \"127.0.0.1:3101:3101\"   # comment\n",
@@ -242,10 +228,25 @@ func TestComposeExposureCheckCatchesBypasses(t *testing.T) {
 		"long loopback":     "    ports:\n      - target: 3101\n        host_ip: 127.0.0.1\n        published: \"3101\"\n",
 		"flow loopback":     "    ports: [\"127.0.0.1:3101:3101\"]\n",
 	}
+	check := func(name, tail string) ([]published, error) {
+		dir := t.TempDir()
+		main, override, _ := strings.Cut(head+tail, "\x00")
+		os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte(main), 0o600)
+		if override != "" {
+			os.WriteFile(filepath.Join(dir, "docker-compose.override.yml"), []byte(override), 0o600)
+		}
+		return composePublished(t, dir)
+	}
+	for name, tail := range bad {
+		ports, err := check(name, tail)
+		if err == nil && !slices.ContainsFunc(ports, func(p published) bool { return !loopbackHost(p.host) }) {
+			t.Errorf("%s: passed %v", name, ports)
+		}
+	}
 	for name, tail := range good {
-		ports, err := composePublished(head + tail)
+		ports, err := check(name, tail)
 		if err != nil || len(ports) == 0 || slices.ContainsFunc(ports, func(p published) bool { return !loopbackHost(p.host) }) {
-			t.Errorf("%s: refused (%v, %v):\n%s", name, ports, err, head+tail)
+			t.Errorf("%s: refused (%v, %v)", name, ports, err)
 		}
 	}
 }
@@ -266,142 +267,54 @@ func loopbackHost(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// composePublished lists every port a compose file publishes, from its text:
-// short syntax (quoted or not, block or flow list) and long syntax
-// (target/published/host_ip). An interpolated host ("${…}") is reported with
-// the raw text as its host, so it never counts as loopback. It returns an
-// error for a construct that can publish or share ports in a way it does not
-// read: network_mode, extends, include, YAML anchors and merge keys.
-func composePublished(body string) ([]published, error) {
-	var out []published
-	var long *published // the long-syntax item being read
-	portsIndent := -1
-	flush := func() {
-		if long != nil {
-			out = append(out, *long)
-			long = nil
-		}
-	}
-	for _, raw := range strings.Split(body, "\n") {
-		line := raw
-		if i := strings.Index(line, " #"); i >= 0 {
-			line = line[:i]
-		}
-		if strings.HasPrefix(strings.TrimSpace(line), "#") || strings.TrimSpace(line) == "" {
-			continue
-		}
-		indent := len(line) - len(strings.TrimLeft(line, " "))
-		text := strings.TrimSpace(line)
-		for _, bad := range []string{"network_mode:", "extends:", "include:", "<<:"} {
-			if strings.HasPrefix(text, bad) || strings.HasPrefix(text, "- "+bad) {
-				return out, fmt.Errorf("docker-compose.yml uses %q, which this check cannot follow; publish ports only through ports: on the host's loopback", bad)
-			}
-		}
-		if regexp.MustCompile(`(^|[\s:\[,])[&*][A-Za-z_]`).MatchString(text) {
-			return out, fmt.Errorf("docker-compose.yml uses a YAML anchor or alias (%q), which this check cannot follow", text)
-		}
-		if portsIndent >= 0 && indent <= portsIndent {
-			flush()
-			portsIndent = -1
-		}
-		if key, rest, ok := strings.Cut(text, ":"); ok && strings.Trim(key, `"'`) == "ports" {
-			portsIndent = indent
-			if flow := strings.TrimSpace(rest); strings.HasPrefix(flow, "[") {
-				for _, item := range strings.Split(strings.Trim(flow, "[]"), ",") {
-					if item = strings.TrimSpace(item); item != "" {
-						out = append(out, shortPort(item))
-					}
-				}
-				portsIndent = -1
-			}
-			continue
-		}
-		if portsIndent < 0 {
-			continue
-		}
-		item, isItem := strings.CutPrefix(text, "- ")
-		if isItem {
-			flush()
-			if k, v, ok := strings.Cut(item, ":"); ok && regexp.MustCompile(`^[a-z_]+$`).MatchString(k) && (v == "" || v[0] == ' ') {
-				long = &published{spec: item}
-				text = item // the first key of a long-syntax item
-			} else {
-				out = append(out, shortPort(item))
-				continue
-			}
-		}
-		if long != nil {
-			if k, v, ok := strings.Cut(text, ":"); ok && strings.TrimSpace(k) == "host_ip" {
-				long.host = strings.Trim(strings.TrimSpace(v), `"'`)
-			}
-		}
-	}
-	flush()
-	return out, nil
-}
-
-// shortPort reads a short-syntax spec: [HOST_IP:][HOST_PORT:]CONTAINER_PORT[/PROTO],
-// with an IPv6 HOST_IP in brackets. Without a HOST_IP Docker publishes on
-// every interface.
-func shortPort(spec string) published {
-	s := strings.Trim(strings.TrimSpace(spec), `"'`)
-	s, _, _ = strings.Cut(s, "/")
-	p := published{spec: s}
-	switch parts := strings.Split(s, ":"); {
-	case strings.Contains(s, "$"):
-		p.host = s // interpolated: cannot be proven loopback
-	case strings.HasPrefix(s, "["):
-		if i := strings.Index(s, "]:"); i > 0 {
-			p.host = s[1:i]
-		} else {
-			p.host = s
-		}
-	case len(parts) == 3:
-		p.host = parts[0]
-	case len(parts) > 3:
-		p.host = s // an unbracketed IPv6 address or worse: not understood
-	}
-	return p
-}
-
-// resolvedPublished returns the ports `docker compose config` resolves for
-// file, or nil (logged) when docker is not installed. CI installs it; there
-// make compose-check fails without docker.
-func resolvedPublished(t *testing.T, file string) []published {
+// composePublished lists every port (and network_mode) of every service, in
+// every profile, that `docker compose config --no-interpolate` resolves in
+// dir. A port Compose leaves as text (it does when the list holds an
+// interpolation) is reported with that text as its host, so it never counts
+// as loopback. Without docker the test is skipped, or fails where CI is set
+// (GitHub sets it), like make compose-check.
+func composePublished(t *testing.T, dir string) ([]published, error) {
 	t.Helper()
 	if _, err := exec.LookPath("docker"); err != nil {
-		t.Log("docker not installed: resolved-model exposure check skipped (CI runs it)")
-		return nil
+		if os.Getenv("CI") != "" {
+			t.Fatal("docker is required when CI is set: the Compose exposure check needs docker compose config")
+		}
+		t.Skip("docker not installed: Compose exposure check skipped (CI runs it)")
 	}
-	cmd := exec.Command("docker", "compose", "-f", file, "config", "--format", "json")
-	cmd.Env = append(os.Environ(), "POSTGRES_PASSWORD=exposure-check")
+	cmd := exec.Command("docker", "compose", "--profile", "*", "config", "--no-interpolate", "--format", "json")
+	cmd.Dir = dir
 	b, err := cmd.Output()
 	if err != nil {
-		t.Fatalf("docker compose config %s: %v", file, err)
+		return nil, fmt.Errorf("docker compose config in %s: %v", dir, err)
 	}
 	var cfg struct {
 		Services map[string]struct {
-			NetworkMode string `json:"network_mode"`
-			Ports       []struct {
-				HostIP    string `json:"host_ip"`
-				Published string `json:"published"`
-				Target    int    `json:"target"`
-			} `json:"ports"`
+			NetworkMode string            `json:"network_mode"`
+			Ports       []json.RawMessage `json:"ports"`
 		} `json:"services"`
 	}
 	if err := json.Unmarshal(b, &cfg); err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
 	out := []published{}
 	for name, svc := range cfg.Services {
 		if svc.NetworkMode != "" {
 			out = append(out, published{host: "network_mode " + svc.NetworkMode, spec: name})
 		}
-		for _, p := range svc.Ports {
+		for _, raw := range svc.Ports {
+			var p struct {
+				HostIP    string `json:"host_ip"`
+				Published string `json:"published"`
+				Target    int    `json:"target"`
+			}
+			if json.Unmarshal(raw, &p) != nil {
+				out = append(out, published{host: string(raw), spec: name}) // unresolved text
+				continue
+			}
 			out = append(out, published{host: p.HostIP, spec: fmt.Sprintf("%s %s:%d", name, p.Published, p.Target)})
 		}
 	}
-	return out
+	return out, nil
 }
 
 // TestImageShipsLicenseAndNotice: the image redistributes the binary (and

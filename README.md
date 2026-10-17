@@ -48,12 +48,14 @@ whatever does not parse into a shape known to be safe is not shown.
   parses them (`PG*` defaults included), whether a password is set, and a count of other
   parameters. Nothing is copied from the DSN text, so no quoting in it can expose part of a
   password. A DSN that fails its check is not shown at all.
-- URL variables (`BIGLAW_MODEL_URL`, `BIGLAW_PUBLIC_URL`, `BIGLAW_OIDC_ISSUER`): only an absolute
-  `http(s)://host…` URL is shown, with its user info and fragment masked and its query only
-  counted (`?(2 query parameters, not shown)`), because a bare `?KEY` makes the key a parameter
-  name. A value without a scheme, with a typo such as `https:/`, or in `user:pw@host` form
-  prints as "(set, not shown …)". The host and path are shown, so never put a key in either. An
-  OIDC preset (`google`, `microsoft:<tenant>`) is shown as is.
+- URL variables (`BIGLAW_MODEL_URL`, `BIGLAW_PUBLIC_URL`, `BIGLAW_OIDC_ISSUER`): only
+  `scheme://host[:port]`, never the path, query or fragment, and only for an absolute http(s) URL
+  whose host is a plain ASCII name or IP and which has no `@` anywhere. Everything else (no scheme,
+  a typo such as `https:/`, user info, an IPv6 zone id) prints as "(set, not shown …)". The `@`
+  rule matters because an unescaped `/`, `?` or `#` in user info makes Go read part of the
+  credential as the host and the rest as the path. The host is shown, so never put a key there.
+  A Compose service name with `_` is a plain host. An OIDC preset (`google`,
+  `microsoft:<tenant>`) is shown as is.
 - Anything else is shown as set (quoted if it contains a control character, so a newline cannot
   forge an output line), unless it contains `://` (then treated as a URL) or has the
   `user:password@` shape (then not shown).
@@ -63,7 +65,7 @@ whatever does not parse into a shape known to be safe is not shown.
 | `BIGLAW_DATABASE_URL` | — (required) | Postgres DSN: `postgres://user:password@host:5432/db?sslmode=disable`, or libpq `key=value` form. The scheme must be lowercase, and reserved characters in the password percent-encoded (`/`→`%2F`, `?`→`%3F`, `#`→`%23`, `%`→`%25`, `@`→`%40`). An `@` after the host (in the database name or a query value such as `application_name=ops@corp`) is refused too, because it cannot be told apart from a broken password; write `%40`. Anything else is refused with a message that never shows the password. lib/pq defaults to `sslmode=require`. | PR 1 |
 | `BIGLAW_ADDR` | `127.0.0.1:3101` | Listen address. Non-loopback needs `serve --allow-no-auth` (§ Exposure). | PR 1 |
 | `BIGLAW_PUBLIC_URL` | `http://127.0.0.1:3101` | External base URL (OIDC redirect, cookie `Secure`) | PR 8 |
-| `BIGLAW_MODEL_URL` | — | OpenAI-compatible base URL; today only the vendor breaker reads it (http(s), ASCII host, no credentials in the URL) | PR 1 |
+| `BIGLAW_MODEL_URL` | — | OpenAI-compatible base URL; today only the vendor breaker reads it (http(s), plain ASCII host, no `@` anywhere: no credentials in the URL; write any other `@` as `%40`) | PR 1 |
 | `BIGLAW_MODEL_KEY` | — | API key for that URL | PR 2 |
 | `BIGLAW_MODEL_LEAD` / `_SPECIALIST` / `_CRITIC` | — | Model id per role; unset roles use the lead's | PR 2 |
 | `BIGLAW_BUDGET_CALLS` | `150` | Model calls per task | PR 4 |
@@ -106,14 +108,15 @@ the port. The deploy files follow the rule, and `TestDeployFilesFollowExposureRu
 that way:
 - **Compose** listens on `0.0.0.0` inside the container, publishes the port on the host's
   `127.0.0.1` only, and passes `--allow-no-auth`. Do not publish it on `0.0.0.0` or a LAN address.
-  The test reads every published port of every service in `docker-compose.yml`: short syntax
-  quoted or not (`3101:3101`, `0.0.0.0:…`, `[::]:…`), flow lists, and long syntax (`host_ip`).
-  Each must name a loopback IP. An interpolated host (`${BIND:-127.0.0.1}:…`) is refused because
-  the environment could change it, and `network_mode`, `extends`, `include` and YAML
-  anchors/merge keys are refused because the text check cannot follow them. Where `docker` is
-  installed (CI) it also checks the model `docker compose config` resolves.
-  `TestComposeExposureCheckCatchesBypasses` runs both checks on the spellings that got past the
-  earlier check.
+  The test reads every published port and `network_mode` of every service, in every profile,
+  from what `docker compose --profile '*' config --no-interpolate` resolves at the repo root (as
+  `docker compose up` would, override files included). Each port must name a loopback IP; an
+  interpolated host (`${BIND:-127.0.0.1}:…`) is refused because the environment could change it.
+  Any Compose file besides `docker-compose.yml` at the root (`compose.yaml`,
+  `docker-compose.override.yml`, …) fails the test. It needs `docker`: without it the test is
+  skipped, and fails where `CI` is set, like `make compose-check`.
+  `TestComposeExposureCheckCatchesBypasses` runs it on the spellings the review committee used to
+  get past earlier checks.
 - **The image's default command** is plain `serve`, so `docker run -p …` or any platform that
   exposes the container refuses to start.
 - **Render** is public by nature, so `render.yaml` is inert until PR 8: the service fails its
@@ -122,13 +125,14 @@ that way:
 ## Run it
 
 ```bash
-cp .env.example .env            # set POSTGRES_PASSWORD=$(openssl rand -hex 24); see the note below
+sed "s/^POSTGRES_PASSWORD=\$/POSTGRES_PASSWORD=$(openssl rand -hex 24)/" .env.example > .env
 docker compose up -d            # postgres:16-alpine + biglaw; host port 127.0.0.1:3101 only
 curl -s http://127.0.0.1:3101/health
 ```
 
 Compose gives biglaw the database password as `PGPASSWORD` rather than inside
-`BIGLAW_DATABASE_URL`, so it needs no percent-encoding. Compose's own `.env` parsing does
+`BIGLAW_DATABASE_URL`, so it needs no percent-encoding. The first line above writes a random hex
+password into `.env` (Compose does not run `$(…)` written inside `.env`). Compose's own `.env` parsing does
 constrain it, though: unquoted, a value is cut at ` #` and `$` is expanded (`a$b` fails, and
 `abc #def` becomes `abc`, on both the Postgres and the biglaw side). Use a hex password, or
 single-quote your own (`POSTGRES_PASSWORD='…'`) without a `'` in it.
@@ -180,17 +184,17 @@ can rewrite the hash too.
 
 An upload holds one pooled connection, inside its transaction, for as long as its reader takes.
 So at most 16 uploads (`MaxConcurrentUploads`) run at once, leaving 4 of the 20 connections for
-`/health` and reads. Further uploads wait for a slot until their context ends. An upload whose
-reader delivers no 1 MiB chunk for 60 s (`UploadIdleTimeout`, Postgres
-`idle_in_transaction_session_timeout` for that transaction) is ended by the server and leaves
-nothing behind. In effect that is a minimum upload rate of about 17 KiB/s.
+`/health` and reads. Further uploads wait for a slot until their context ends. Nothing in the
+store ends a stalled upload: its slot and connection are freed when its reader returns (an error
+rolls the transaction back, leaving nothing behind). Bounding a stalled client is the caller's job;
+PR 3's HTTP read deadline does it.
 
 Names must be 1–255 bytes of UTF-8 and not `.` or `..`. They may not contain `/`, `\`, control
 characters, invisible format characters (bidi controls, zero-width spaces, the BOM, soft hyphens;
 ZWNJ/ZWJ are allowed for Persian, Indic scripts and emoji) or line/paragraph separators, and may
 not start or end with white space, any of which can disguise an extension. Content types must
-be valid media types in printable ASCII; they are stored in canonical form
-(`Text/HTML;  Charset=UTF-8` → `text/html; charset=UTF-8`).
+be concrete media types (no `*` wildcard) in printable ASCII, at most 255 bytes in the canonical
+form they are stored in (`Text/HTML;  Charset=UTF-8` → `text/html; charset=UTF-8`).
 
 Measured on a 64 MiB file (before → after this layout; peak above baseline, the same for Go heap
 and RSS): writing 256 → 67 MiB, reading 128 → 126 MiB at the default `GOGC=100`; with
@@ -221,7 +225,7 @@ Postgres `TestMigrateIdempotent`, `TestConcurrentMigrateSafe`, `TestFailedMigrat
 Compose port check with its bypass cases), migration atomicity when the bookkeeping row fails, a
 file that ends its own transaction, lock-wait logging and cancellation with the port still
 closed, chunked storage and the chunk-size `CHECK`, the 64 MiB boundary, corruption detection,
-name/type validation, upload slots and the idle timeout, `/health`, command dispatch, a real
+name/type validation, upload slots, a DSN accepted under a uid with no passwd entry, `/health`, command dispatch, a real
 `serve` end to end, and repository consistency (env-var tables, one Go version, deploy files,
 LICENSE/NOTICE in the image).
 
@@ -229,13 +233,13 @@ LICENSE/NOTICE in the image).
 
 | Budget | Ceiling | Today |
 |---|---:|---:|
-| Go production lines (physical lines, non-`_test.go`, test-support packages included) | 14,250 | 1,196 |
+| Go production lines (physical lines, non-`_test.go`, test-support packages included) | 14,250 | 1,146 |
 | Packages under `internal/`, test-support packages excluded | 12 | 1 (`store`; `store/storetest` is test support) |
 | Direct Go dependencies | 3 | 1 (`github.com/lib/pq`) |
 | Runtime environment variables | 20 | 20 |
 | UI runtime dependencies | 2 | 0 (no UI yet) |
 | Packages without a `_test.go` | 0 | 0 |
-| Lines in any one source file (`.go`, `.py`, `.sql`, `.sh`, `.js`, `.ts`, `.css`; tests included) | 2,000 | 421 |
+| Lines in any one source file (`.go`, `.py`, `.sql`, `.sh`, `.js`, `.ts`, `.css`; tests included) | 2,000 | 379 |
 
 The line ceiling is 14,250 (owner decision; it was 14,000). A **test-support package** is one
 whose directory name ends in `test` and that no production file outside it imports, such as
@@ -267,9 +271,9 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
   is checked only by `TestImageShipsLicenseAndNotice` (text) until CI runs. No `linux/arm64`
   image or release binaries are produced yet, so the Raspberry Pi path means building natively
   with `make build`.
-- The Compose exposure check reads `docker-compose.yml` only. Compose also merges a
-  `docker-compose.override.yml` (or `compose.override.yaml`) that an operator puts next to it,
-  and nothing checks that file. Publishing beyond loopback there is the operator's own act.
+- The Compose exposure check runs only where `docker` is installed (CI). An override file an
+  operator adds after checkout is outside the repository; publishing beyond loopback there is the
+  operator's own act.
 - `govulncheck` runs only in CI: the build sandbox cannot reach `vuln.go.dev`.
 - GitHub Actions and container images are pinned to tags (`@v4`, `golang:1.25.14-alpine`,
   `postgres:14`, `postgres:16`, `postgres:16-alpine`), not to SHAs/digests, so an upstream retag changes what CI
@@ -278,11 +282,13 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
   document/matter reference and access checks), no delete, no quota, and no limit on concurrent
   reads. Each concurrent read of a maximum-size file holds about 64 MiB live and peaks near
   128 MiB at the default `GOGC`, so the API that exposes files (PR 3) must cap concurrent reads
-  on a 4 GB Pi or stream them (PLAN PR 3). Uploads are capped at 16 at once and ended by an idle
-  reader (§ Files). A reader that trickles at least one 1 MiB chunk a minute can still hold a
-  slot for a long time; PR 3 sets per-request read deadlines on the HTTP side.
+  on a 4 GB Pi or stream them (PLAN PR 3). Uploads are capped at 16 at once, but a reader that
+  blocks (or trickles) holds its slot and connection until it returns, so 16 stalled clients stop
+  further uploads (not `/health` or reads) until PR 3's per-request read deadline ends them.
 - The file-name policy is provisional: it has no production caller yet. PR 3 decides it with
-  the upload/download API. Names such as `CON`, `aux.txt` or `c:evil.txt` are stored as given,
+  the upload/download API. It still admits invisible characters outside category Cf (Hangul
+  filler U+3164, braille blank, combining grapheme joiner, variation selectors, ZWJ runs) and
+  interior runs of no-break spaces, which can push an extension out of view. Names such as `CON`, `aux.txt` or `c:evil.txt` are stored as given,
   and PR 3 must make them safe on download (RFC 6266 `filename*`).
 - Test schemas are dropped by `t.Cleanup`; a test binary that is killed (SIGKILL, timeout)
   leaves its `t_<hex>` schema behind. Drop them with
