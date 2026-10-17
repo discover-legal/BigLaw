@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Discover Legal
 
-// Package model is BigLaw's one model client: OpenAI-compatible chat
-// completions with native tool calls (Ollama, LM Studio, vLLM, GoFetch,
-// OpenRouter, LiteLLM or a cloud vendor), typed failures, bounded retries,
-// pricing and watt-hour metering. Tests use Fake; none calls a real model.
+// Package model is BigLaw's one model client (OpenAI-compatible chat completions with tool calls),
+// with typed failures, bounded retries, pricing and watt-hour metering. Tests use Fake.
 package model
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -22,7 +21,9 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
+	"unicode/utf8"
 )
 
 // Role names which configured model runs a call.
@@ -44,40 +45,19 @@ func (r Roles) Model(role Role) (string, error) {
 	if !ok {
 		return "", fail(ErrNotConfigured, "unknown model role "+strconv.Quote(string(role)))
 	}
-	if m == "" {
-		m = r.Lead
-	}
-	if m == "" {
+	if m = cmp.Or(m, r.Lead); m == "" {
 		return "", fail(ErrNotConfigured, "no model is set for the "+string(role)+" role (set BIGLAW_MODEL_LEAD)")
 	}
 	return m, nil
 }
 
-// Message is one chat message in the OpenAI shape. Role is system, user,
-// assistant or tool. Parts (user only) replaces Text with text and image
-// parts; an image must be a base64 data:image/(png|jpeg|webp|gif) URL, so
-// the endpoint never fetches anything on BigLaw's behalf.
+// Message is one chat message (role system, user, assistant or tool). Content is a string, nil (a
+// tool-calls-only turn) or, for a user, []Part whose images are base64 data URLs, never remote.
 type Message struct {
 	Role       string     `json:"role"`
-	Text       string     `json:"-"`
-	Parts      []Part     `json:"-"`
+	Content    any        `json:"content"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"` // assistant
 	ToolCallID string     `json:"tool_call_id,omitempty"`
-}
-
-// MarshalJSON writes content as Parts, Text, or null (a tool-calls-only turn).
-func (m Message) MarshalJSON() ([]byte, error) {
-	type plain Message
-	var content any = m.Text
-	if len(m.Parts) > 0 {
-		content = m.Parts
-	} else if m.Text == "" && len(m.ToolCalls) > 0 {
-		content = nil
-	}
-	return json.Marshal(struct {
-		plain
-		Content any `json:"content"`
-	}{plain(m), content})
 }
 
 // Part is a text or image content part (TextPart, ImagePart).
@@ -92,7 +72,7 @@ func ImagePart(dataURL string) Part {
 	return Part{Type: "image_url", ImageURL: map[string]string{"url": dataURL}}
 }
 
-// ToolCall is one call the model asked for; Function.Arguments is JSON text.
+// ToolCall is one call the model asked for; Function.Arguments is a JSON object as text.
 type ToolCall struct {
 	ID       string   `json:"id"`
 	Type     string   `json:"type"` // "function"
@@ -104,10 +84,8 @@ type Function struct {
 	Arguments string `json:"arguments"`
 }
 
-// Tool is a function the model may call. Parameters (a JSON Schema object)
-// is sent byte for byte, so a fixed tool list keeps the prompt-cache prefix
-// stable. Strict asks the endpoint to enforce the schema; Go validation
-// stays authoritative, as local endpoints ignore it.
+// Tool is a function the model may call; Parameters is a JSON Schema object. Strict asks the
+// endpoint to enforce it (Go validation stays authoritative: local endpoints ignore it).
 type Tool struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
@@ -128,9 +106,8 @@ type Request struct {
 	Temperature       *float64
 }
 
-// Usage is what one call consumed; InputTokens excludes cache reads and
-// writes. CostUSD is nil when the model has no price (unknown, never $0); a
-// call to a local endpoint costs $0 and carries WattHours.
+// Usage is what one call consumed; InputTokens excludes cache reads and writes. CostUSD is nil
+// when the model has no price (unknown, never $0); a free local call carries WattHours.
 type Usage struct {
 	InputTokens, OutputTokens, CacheReadTokens, CacheWriteTokens int
 	Duration                                                     time.Duration
@@ -172,15 +149,30 @@ func (r *Request) check() error {
 		seen[t.Name] = true
 	}
 	for i, m := range r.Messages {
-		if !msgRoles[m.Role] || len(m.Parts) > 0 && (m.Role != "user" || m.Text != "") ||
+		parts, isParts := m.Content.([]Part)
+		if _, isText := m.Content.(string); !msgRoles[m.Role] || !isText && !isParts && m.Content != nil || isParts && m.Role != "user" ||
 			len(m.ToolCalls) > 0 && m.Role != "assistant" || (m.ToolCallID != "") != (m.Role == "tool") {
-			return bad("message %d: unknown role, parts outside a user message or beside Text, tool calls outside an assistant message, or a tool call id missing or misplaced", i)
+			return bad("message %d: unknown role, content not a string, nil or user []Part, tool calls outside an assistant message, or a tool call id missing or misplaced", i)
 		}
-		for _, p := range m.Parts {
+		for _, p := range parts {
 			if !(p.Type == "text" && p.Text != "" && p.ImageURL == nil || p.Type == "image_url" && p.Text == "" && imageURL.MatchString(p.ImageURL["url"])) {
 				return bad("message %d: a part is non-empty text or one base64 data:image/(png|jpeg|webp|gif) URL", i)
 			}
 		}
+	}
+	return nil
+}
+
+// checkCalls refuses tool calls the agent loop cannot answer: a malformed name, a repeated id, or
+// arguments that are not a UTF-8 JSON object. Client and Fake both apply it.
+func checkCalls(calls []ToolCall) *Error {
+	seen := map[string]bool{}
+	for _, tc := range calls {
+		if a := strings.TrimSpace(tc.Function.Arguments); !toolName.MatchString(tc.Function.Name) || seen[tc.ID] ||
+			!json.Valid([]byte(a)) || !strings.HasPrefix(a, "{") || !utf8.ValidString(a) {
+			return fail(ErrUnavailable, "the answer has a tool call with a malformed name, a repeated id, or arguments that are not a JSON object")
+		}
+		seen[tc.ID] = true
 	}
 	return nil
 }
@@ -217,32 +209,24 @@ const (
 // New builds a client. With no URL every call fails with ErrNotConfigured,
 // so the server still runs without a model.
 func New(o Options) (*Client, error) {
-	c := &Client{key: o.Key, roles: o.Roles, prices: o.Prices, watts: o.LocalWatts, log: o.Log, attempts: maxAttempts, backoff: time.Second}
-	if c.prices == nil {
-		c.prices, _ = LoadPrices("")
-	}
-	if c.log == nil {
-		c.log = slog.Default()
-	}
-	if o.Timeout <= 0 {
-		o.Timeout = 5 * time.Minute
-	}
+	c := &Client{key: o.Key, roles: o.Roles, prices: cmp.Or(o.Prices, &Prices{builtin: builtinPrices}), watts: o.LocalWatts,
+		log: cmp.Or(o.Log, slog.Default()), attempts: maxAttempts, backoff: time.Second}
 	// Redirects are not followed: prompts carry matter data and go only where configured.
-	c.http = &http.Client{Timeout: o.Timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	c.http = &http.Client{Timeout: cmp.Or(o.Timeout, 5*time.Minute), CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	if o.URL != "" {
 		u, err := url.Parse(o.URL)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil {
 			return nil, errors.New("model: the endpoint must be an http(s) URL without credentials")
 		}
-		c.local, c.openAI = isLocalHost(u.Hostname()), strings.EqualFold(u.Hostname(), "api.openai.com")
+		c.local, c.openAI = IsLocalHost(u.Hostname()), strings.EqualFold(u.Hostname(), "api.openai.com")
 		u.Path, u.RawPath = strings.TrimRight(u.Path, "/")+"/chat/completions", ""
 		c.endpoint = u.String()
 	}
 	return c, nil
 }
 
-// Chat runs one call. A failure matches one Err* kind (or context.Canceled)
-// under errors.Is; a malformed request is a plain error.
+// Chat runs one call. A failure matches one Err* kind (or context.Canceled) under errors.Is;
+// a malformed request is a plain error.
 func (c *Client) Chat(ctx context.Context, req Request) (*Response, error) {
 	if err := req.check(); err != nil {
 		return nil, err
@@ -279,19 +263,22 @@ func (c *Client) Chat(ctx context.Context, req Request) (*Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	resp, err := parse(raw)
-	if err != nil {
+	resp, err := parse(raw) // a billed answer BigLaw refuses still reports its usage, on the *Error
+	if resp == nil {
 		return nil, err
 	}
 	resp.Model, resp.Usage.Duration = model, took
 	c.prices.charge(model, &resp.Usage, c.local, c.watts, c.log)
+	if err != nil {
+		return nil, err
+	}
 	return resp, nil
 }
 
-// send POSTs body, retrying 429 and 500/502/503/504/529 after a backoff or
-// the provider's Retry-After (up to maxWait), at most c.attempts attempts in
-// all. It returns a 200's body and how long that attempt took.
+// send POSTs body, retrying 429 and 500/502/503/504/529 (never a network error: the call may
+// have run) at most c.attempts times. It returns a 200's body and the attempts' total time.
 func (c *Client) send(ctx context.Context, agent string, body []byte) ([]byte, time.Duration, error) {
+	var took time.Duration
 	for attempt := 1; ; attempt++ {
 		t0 := time.Now()
 		hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
@@ -304,19 +291,18 @@ func (c *Client) send(ctx context.Context, agent string, body []byte) ([]byte, t
 		}
 		hresp, err := c.http.Do(hreq)
 		if err != nil {
-			return nil, 0, c.transportErr(ctx, err)
+			return nil, 0, transportErr(ctx, err)
 		}
 		data, retry, err := c.answer(ctx, hresp)
-		if err == nil {
-			return data, time.Since(t0), nil
+		if took += time.Since(t0); err == nil {
+			return data, took, nil
 		}
-		wait := RetryAfter(err)
-		if wait == 0 {
-			wait = c.backoff << (attempt - 1)
-			wait += time.Duration(rand.Int64N(int64(wait)/4 + 1))
+		if !retry || attempt >= c.attempts {
+			return nil, 0, err
 		}
-		dl, hasDL := ctx.Deadline()
-		if !retry || attempt >= c.attempts || wait > maxWait || hasDL && time.Until(dl) < wait {
+		backoff := c.backoff << (attempt - 1) // plus up to 25% jitter; a retried failure is always an *Error
+		wait := cmp.Or(err.(*Error).RetryAfter, backoff+time.Duration(rand.Int64N(int64(backoff)/4+1)))
+		if dl, hasDL := ctx.Deadline(); wait > maxWait || hasDL && time.Until(dl) < wait {
 			return nil, 0, err
 		}
 		c.log.Warn("model call failed; retrying", "agent", agent, "attempt", attempt, "of", c.attempts, "wait", wait, "error", err.Error())
@@ -328,15 +314,14 @@ func (c *Client) send(ctx context.Context, agent string, body []byte) ([]byte, t
 	}
 }
 
-// answer reads a response: a 200's body, or the classified failure and
-// whether to retry. No upstream text reaches the error (it may quote the
-// request or the key).
+// answer reads a response: a 200's body, or the classified *Error and whether to retry. No
+// upstream text reaches the error (it may quote the request or the key).
 func (c *Client) answer(ctx context.Context, hresp *http.Response) (data []byte, retry bool, err error) {
 	defer hresp.Body.Close()
 	code := hresp.StatusCode
 	if code == http.StatusOK {
 		if data, err = io.ReadAll(io.LimitReader(hresp.Body, maxResponse+1)); err != nil {
-			return nil, false, c.transportErr(ctx, err)
+			return nil, false, transportErr(ctx, err)
 		}
 		if len(data) > maxResponse {
 			return nil, false, fail(ErrUnavailable, "the answer is over 32 MiB")
@@ -347,19 +332,12 @@ func (c *Client) answer(ctx context.Context, hresp *http.Response) (data []byte,
 	switch {
 	case code == http.StatusTooManyRequests:
 		e := fail(ErrRateLimited, detail)
-		if s, err := strconv.Atoi(strings.TrimSpace(hresp.Header.Get("Retry-After"))); err == nil && s > 0 {
-			e.RetryAfter = time.Duration(s) * time.Second
+		if s, _ := strconv.ParseInt(strings.TrimSpace(hresp.Header.Get("Retry-After")), 10, 64); s > 0 { // overflow parses as MaxInt64
+			e.RetryAfter = time.Duration(min(s, 86400)) * time.Second
 		}
 		return nil, true, e
-	case code == 401 || code == 403:
-		if c.key == "" {
-			return nil, false, fail(ErrNotConfigured, detail+": the endpoint wants a key and BIGLAW_MODEL_KEY is not set")
-		}
-		return nil, false, fail(ErrNotConfigured, detail+": the endpoint refused BIGLAW_MODEL_KEY")
-	case code == 404:
-		return nil, false, fail(ErrNotConfigured, detail+": check that BIGLAW_MODEL_URL is the API base (usually ending in /v1) and the model id exists there")
-	case code >= 300 && code < 400:
-		return nil, false, fail(ErrUnavailable, detail+": redirects are not followed; set BIGLAW_MODEL_URL to the final address")
+	case code == 401 || code == 403 || code == 404:
+		return nil, false, fail(ErrNotConfigured, detail+": check BIGLAW_MODEL_KEY, that BIGLAW_MODEL_URL is the API base (usually ending in /v1), and the model id")
 	}
 	return nil, code == 500 || code == 502 || code == 503 || code == 504 || code == 529, fail(ErrUnavailable, detail)
 }
@@ -371,31 +349,26 @@ func ctxErr(ctx context.Context) error {
 	return fail(ErrTimeout, "the caller's deadline passed before the model answered")
 }
 
-// transportErr classifies a failure to connect or to read the answer. The
-// URL is cut out (url.Error carries it, and a query may hold a key), and
-// the key is masked should anything echo it.
-func (c *Client) transportErr(ctx context.Context, err error) error {
-	if ctx.Err() != nil {
-		return ctxErr(ctx)
-	}
+// transportErr classifies a failure to connect or to read the answer into a fixed phrase: Go's
+// error text can quote the host, port, URL or bytes the endpoint sent (an echoed key or prompt).
+func transportErr(ctx context.Context, err error) error {
 	var ne net.Error
-	if errors.As(err, &ne) && ne.Timeout() {
+	var dns *net.DNSError
+	switch {
+	case ctx.Err() != nil:
+		return ctxErr(ctx)
+	case errors.As(err, &ne) && ne.Timeout():
 		return fail(ErrTimeout, "no answer within the client timeout")
+	case errors.As(err, &dns):
+		return fail(ErrUnavailable, "could not reach the endpoint: DNS lookup failed")
+	case errors.Is(err, syscall.ECONNREFUSED):
+		return fail(ErrUnavailable, "could not reach the endpoint: connection refused")
 	}
-	var ue *url.Error
-	if errors.As(err, &ue) {
-		err = ue.Err
-	}
-	msg := strings.ReplaceAll(err.Error(), c.endpoint, "[endpoint]")
-	if c.key != "" {
-		msg = strings.ReplaceAll(msg, c.key, "[key]")
-	}
-	return fail(ErrUnavailable, "could not reach the endpoint: "+msg)
+	return fail(ErrUnavailable, "the connection failed or the answer is not valid HTTP")
 }
 
-// parse turns a 200 body into a Response. No choice, or a choice with
-// neither text nor tool calls, is ErrNoContent; anything that is not the
-// chat-completions shape is ErrUnavailable.
+// parse turns a 200 body into a Response. No usable choice is ErrNoContent; anything else that is
+// not a chat completion is ErrUnavailable. Once usage is read, an error comes with the Response.
 func parse(raw []byte) (*Response, error) {
 	var w struct {
 		Choices []struct {
@@ -423,36 +396,32 @@ func parse(raw []byte) (*Response, error) {
 	if json.Unmarshal(raw, &w) != nil {
 		return nil, fail(ErrUnavailable, "the answer is not OpenAI chat-completions JSON")
 	}
+	u := w.Usage
+	r := &Response{Usage: Usage{InputTokens: max(0, u.Prompt-max(0, u.Details.Cached)-max(0, u.CacheWrite)), OutputTokens: max(0, u.Complete),
+		CacheReadTokens: max(0, u.Details.Cached), CacheWriteTokens: max(0, u.CacheWrite)}}
+	bad := func(e *Error) (*Response, error) { e.Usage = &r.Usage; return r, e }
 	if len(w.Choices) == 0 {
-		return nil, fail(ErrNoContent, "the answer has no choices")
+		return bad(fail(ErrNoContent, "the answer has no choices"))
 	}
 	ch := w.Choices[0]
-	r := &Response{Truncated: ch.FinishReason == "length"}
+	r.Truncated = ch.FinishReason == "length"
 	if ch.Message.Content != nil {
 		r.Text = *ch.Message.Content
 	}
 	for i, tc := range ch.Message.ToolCalls {
-		if tc.Function.Name == "" {
-			return nil, fail(ErrUnavailable, "the answer has a tool call without a function name")
-		}
 		args := string(tc.Function.Arguments) // a JSON string per the protocol; an object from some servers
 		var s string
 		if json.Unmarshal(tc.Function.Arguments, &s) == nil {
 			args = s
 		}
-		if strings.TrimSpace(args) == "" {
-			args = "{}"
-		}
-		if tc.ID == "" {
-			tc.ID = "call_" + strconv.Itoa(i) // some local servers omit it
-		}
-		r.ToolCalls = append(r.ToolCalls, ToolCall{tc.ID, "function", Function{tc.Function.Name, args}})
+		id := cmp.Or(tc.ID, "call_"+strconv.Itoa(i)) // some local servers omit it
+		r.ToolCalls = append(r.ToolCalls, ToolCall{id, "function", Function{tc.Function.Name, cmp.Or(strings.TrimSpace(args), "{}")}})
+	}
+	if e := checkCalls(r.ToolCalls); e != nil {
+		return bad(e)
 	}
 	if strings.TrimSpace(r.Text) == "" && len(r.ToolCalls) == 0 {
-		return nil, fail(ErrNoContent, "the answer has neither text nor tool calls"+map[bool]string{true: " (cut off at max_tokens)"}[r.Truncated])
+		return bad(fail(ErrNoContent, "the answer has neither text nor tool calls"+map[bool]string{true: " (cut off at max_tokens)"}[r.Truncated]))
 	}
-	u := w.Usage
-	r.Usage = Usage{InputTokens: max(0, u.Prompt-max(0, u.Details.Cached)-max(0, u.CacheWrite)), OutputTokens: max(0, u.Complete),
-		CacheReadTokens: max(0, u.Details.Cached), CacheWriteTokens: max(0, u.CacheWrite)}
 	return r, nil
 }

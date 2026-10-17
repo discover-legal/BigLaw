@@ -8,11 +8,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -44,7 +48,7 @@ func reply(w http.ResponseWriter, body string) {
 }
 
 func userReq(text string) Request {
-	return Request{Agent: "lead", Role: Lead, Messages: []Message{{Role: "user", Text: text}}}
+	return Request{Agent: "lead", Role: Lead, Messages: []Message{{Role: "user", Content: text}}}
 }
 
 func TestChatToolCallRoundTrip(t *testing.T) {
@@ -62,9 +66,9 @@ func TestChatToolCallRoundTrip(t *testing.T) {
 	req := Request{Agent: "lead", Role: Specialist, ToolChoice: "required", ParallelToolCalls: &par, MaxTokens: 512,
 		Tools: []Tool{{Name: "retrieve", Description: "Search the matter.", Parameters: json.RawMessage(`{"type":"object","properties":{"q":{"type":"string"}}}`), Strict: true},
 			{Name: "ledger", Description: "The plan.", Parameters: json.RawMessage(`{"type":"object"}`)}},
-		Messages: []Message{{Role: "system", Text: "You are the lead."}, {Role: "user", Text: "Draft the memo."},
+		Messages: []Message{{Role: "system", Content: "You are the lead."}, {Role: "user", Content: "Draft the memo."},
 			{Role: "assistant", ToolCalls: []ToolCall{{ID: "c0", Type: "function", Function: Function{Name: "retrieve", Arguments: `{"q":"x"}`}}}},
-			{Role: "tool", ToolCallID: "c0", Text: "[result r1]"}}}
+			{Role: "tool", ToolCallID: "c0", Content: "[result r1]"}}}
 	resp, err := c.Chat(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
@@ -107,7 +111,7 @@ func TestImagePartsRoundTrip(t *testing.T) {
 		reply(w, `{"choices":[{"message":{"content":"Page 1: NOTICE OF APPLICATION"}}]}`)
 	})
 	img := "data:image/png;base64,iVBORw0KGgo="
-	req := Request{Agent: "transcribe_page", Role: Lead, Messages: []Message{{Role: "user", Parts: []Part{TextPart("Transcribe this page."), ImagePart(img)}}}}
+	req := Request{Agent: "transcribe_page", Role: Lead, Messages: []Message{{Role: "user", Content: []Part{TextPart("Transcribe this page."), ImagePart(img)}}}}
 	resp, err := c.Chat(context.Background(), req)
 	if err != nil || resp.Text != "Page 1: NOTICE OF APPLICATION" {
 		t.Fatalf("%v %v", resp, err)
@@ -121,7 +125,7 @@ func TestImagePartsRoundTrip(t *testing.T) {
 	// that is both or neither never leaves BigLaw.
 	for _, p := range [][]Part{{ImagePart("https://evil.example/a.png")}, {ImagePart("data:text/html;base64,PGI+")},
 		{ImagePart("data:image/png;base64,abc def")}, {{Type: "text"}}, {{Type: "text", Text: "x", ImageURL: map[string]string{"url": img}}}} {
-		bad := Request{Agent: "x", Messages: []Message{{Role: "user", Parts: p}}}
+		bad := Request{Agent: "x", Messages: []Message{{Role: "user", Content: p}}}
 		if _, err := c.Chat(context.Background(), bad); err == nil || !strings.Contains(err.Error(), "invalid request") {
 			t.Errorf("parts %v: err = %v", p, err)
 		}
@@ -235,7 +239,7 @@ func TestTypedErrors(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("err = %v", err)
 		}
-		if s, _, _ := HTTPStatus(err); s != 499 {
+		if s := HTTPStatus(err); s != 499 {
 			t.Errorf("cancelled → %d", s)
 		}
 	})
@@ -260,8 +264,8 @@ func TestTypedErrors(t *testing.T) {
 			t.Error("the redirect was followed: the prompt went to another host")
 		}
 	})
-	if s, typ, _ := HTTPStatus(errors.New("db down")); s != 500 || typ != "" {
-		t.Errorf("a non-model error → %d %q", s, typ)
+	if s := HTTPStatus(errors.New("db down")); s != 500 {
+		t.Errorf("a non-model error → %d", s)
 	}
 }
 
@@ -275,8 +279,8 @@ func assertKind(t *testing.T, err, kind error, status int, typ string) {
 			t.Errorf("err %v also matches %v", err, other)
 		}
 	}
-	if s, ty, msg := HTTPStatus(err); s != status || ty != typ || msg == "" {
-		t.Errorf("HTTPStatus = %d %q %q, want %d %q", s, ty, msg, status, typ)
+	if s := HTTPStatus(err); s != status {
+		t.Errorf("HTTPStatus = %d, want %d (%s)", s, status, typ)
 	}
 }
 
@@ -320,8 +324,8 @@ func TestRetryBackoffBounded(t *testing.T) {
 	}
 	// The provider's Retry-After reaches the caller for the 503's header.
 	c, _ := counting([]int{429, 200}, "120")
-	if _, err := c.Chat(context.Background(), userReq("hi")); RetryAfter(err) != 120*time.Second {
-		t.Errorf("RetryAfter = %v", RetryAfter(err))
+	if _, err := c.Chat(context.Background(), userReq("hi")); retryAfter(err) != 120*time.Second {
+		t.Errorf("RetryAfter = %v", retryAfter(err))
 	}
 	// A backoff that would outlast the caller's deadline is not slept.
 	c, n := counting([]int{503, 503, 503}, "")
@@ -332,6 +336,14 @@ func TestRetryBackoffBounded(t *testing.T) {
 	if _, err := c.Chat(ctx, userReq("hi")); !errors.Is(err, ErrUnavailable) || n.Load() != 1 || time.Since(start) > 500*time.Millisecond {
 		t.Errorf("err %v after %d attempts in %v", err, n.Load(), time.Since(start))
 	}
+}
+
+func retryAfter(err error) time.Duration {
+	var e *Error
+	if errors.As(err, &e) {
+		return e.RetryAfter
+	}
+	return -1
 }
 
 func TestRolesModel(t *testing.T) {
@@ -355,18 +367,18 @@ func TestRolesModel(t *testing.T) {
 func TestRequestCheck(t *testing.T) {
 	ok := json.RawMessage(`{"type":"object"}`)
 	for name, req := range map[string]Request{
-		"no agent":          {Messages: []Message{{Role: "user", Text: "x"}}},
+		"no agent":          {Messages: []Message{{Role: "user", Content: "x"}}},
 		"no messages":       {Agent: "lead"},
-		"bad choice":        {Agent: "lead", ToolChoice: "any", Messages: []Message{{Role: "user", Text: "x"}}},
-		"bad role":          {Agent: "lead", Messages: []Message{{Role: "developer", Text: "x"}}},
-		"tool name":         {Agent: "lead", Tools: []Tool{{Name: "a b", Parameters: ok}}, Messages: []Message{{Role: "user", Text: "x"}}},
-		"duplicate tool":    {Agent: "lead", Tools: []Tool{{Name: "a", Parameters: ok}, {Name: "a", Parameters: ok}}, Messages: []Message{{Role: "user", Text: "x"}}},
-		"schema not object": {Agent: "lead", Tools: []Tool{{Name: "a", Parameters: json.RawMessage(`[]`)}}, Messages: []Message{{Role: "user", Text: "x"}}},
-		"tool msg no id":    {Agent: "lead", Messages: []Message{{Role: "tool", Text: "x"}}},
-		"id on user msg":    {Agent: "lead", Messages: []Message{{Role: "user", Text: "x", ToolCallID: "c"}}},
-		"calls on user msg": {Agent: "lead", Messages: []Message{{Role: "user", Text: "x", ToolCalls: []ToolCall{{ID: "c"}}}}},
-		"parts beside text": {Agent: "lead", Messages: []Message{{Role: "user", Text: "x", Parts: []Part{TextPart("y")}}}},
-		"parts on system":   {Agent: "lead", Messages: []Message{{Role: "system", Parts: []Part{TextPart("y")}}}},
+		"bad choice":        {Agent: "lead", ToolChoice: "any", Messages: []Message{{Role: "user", Content: "x"}}},
+		"bad role":          {Agent: "lead", Messages: []Message{{Role: "developer", Content: "x"}}},
+		"tool name":         {Agent: "lead", Tools: []Tool{{Name: "a b", Parameters: ok}}, Messages: []Message{{Role: "user", Content: "x"}}},
+		"duplicate tool":    {Agent: "lead", Tools: []Tool{{Name: "a", Parameters: ok}, {Name: "a", Parameters: ok}}, Messages: []Message{{Role: "user", Content: "x"}}},
+		"schema not object": {Agent: "lead", Tools: []Tool{{Name: "a", Parameters: json.RawMessage(`[]`)}}, Messages: []Message{{Role: "user", Content: "x"}}},
+		"tool msg no id":    {Agent: "lead", Messages: []Message{{Role: "tool", Content: "x"}}},
+		"id on user msg":    {Agent: "lead", Messages: []Message{{Role: "user", Content: "x", ToolCallID: "c"}}},
+		"calls on user msg": {Agent: "lead", Messages: []Message{{Role: "user", Content: "x", ToolCalls: []ToolCall{{ID: "c"}}}}},
+		"untyped parts":     {Agent: "lead", Messages: []Message{{Role: "user", Content: []map[string]any{{"type": "image_url", "image_url": map[string]string{"url": "https://evil.example/a.png"}}}}}},
+		"parts on system":   {Agent: "lead", Messages: []Message{{Role: "system", Content: []Part{TextPart("y")}}}},
 	} {
 		if err := req.check(); err == nil {
 			t.Errorf("%s: accepted", name)
@@ -378,6 +390,206 @@ func TestRequestCheck(t *testing.T) {
 	for _, u := range []string{"ftp://h/v1", "http://u:p@h/v1", "/v1", "http:///v1"} {
 		if _, err := New(Options{URL: u}); err == nil {
 			t.Errorf("New(%q) accepted", u)
+		}
+	}
+}
+
+// TestBilledFailureKeepsUsage: a 200 the provider billed but BigLaw refuses (cut off at max_tokens
+// with no output, or a malformed tool call) still reports its usage and cost on the *Error, so the
+// USD budget can count it.
+func TestBilledFailureKeepsUsage(t *testing.T) {
+	for body, kind := range map[string]error{
+		`{"choices":[{"message":{"content":""},"finish_reason":"length"}],"usage":{"prompt_tokens":200000,"completion_tokens":64000}}`:                                ErrNoContent,
+		`{"choices":[{"message":{"tool_calls":[{"id":"a","function":{"name":"x y","arguments":"{}"}}]}}],"usage":{"prompt_tokens":200000,"completion_tokens":64000}}`: ErrUnavailable,
+		`{"choices":[],"usage":{"prompt_tokens":200000,"completion_tokens":64000}}`:                                                                                   ErrNoContent,
+	} {
+		c, _ := endpoint(t, "", func(w http.ResponseWriter, r *http.Request) { reply(w, body) })
+		req := userReq("hi")
+		req.Model = "claude-opus-4-8" // closed weights: priced even on this loopback endpoint
+		resp, err := c.Chat(context.Background(), req)
+		var e *Error
+		if resp != nil || !errors.Is(err, kind) || !errors.As(err, &e) || e.Usage == nil || e.Usage.OutputTokens != 64000 ||
+			e.Usage.CostUSD == nil || !approx(*e.Usage.CostUSD, 7.80) {
+			t.Errorf("%s: resp %v err %v usage %+v; want %v with the billed usage at $7.80", body, resp, err, e, kind)
+		}
+	}
+}
+
+// TestUnpinnedBehaviours pins what the README states and no other test did (r1 P2, R1-3, R1-7).
+func TestUnpinnedBehaviours(t *testing.T) {
+	t.Run("network error not retried", func(t *testing.T) {
+		var n atomic.Int32
+		c, _ := endpoint(t, "", func(w http.ResponseWriter, r *http.Request) {
+			n.Add(1)
+			conn, _, _ := w.(http.Hijacker).Hijack()
+			conn.Close() // the request was received (and may be billed); no answer
+		})
+		if _, err := c.Chat(context.Background(), userReq("hi")); !errors.Is(err, ErrUnavailable) || n.Load() != 1 {
+			t.Errorf("err %v after %d attempts; want ErrUnavailable after 1", err, n.Load())
+		}
+	})
+	t.Run("max_completion_tokens for api.openai.com", func(t *testing.T) {
+		var got map[string]any
+		c, _ := endpoint(t, "", func(w http.ResponseWriter, r *http.Request) {
+			json.NewDecoder(r.Body).Decode(&got)
+			reply(w, `{"choices":[{"message":{"content":"ok"}}]}`)
+		})
+		req := userReq("hi")
+		req.MaxTokens = 512
+		for _, openAI := range []bool{true, false} {
+			c.openAI, got = openAI, nil
+			c.Chat(context.Background(), req)
+			if _, mt := got["max_tokens"]; got["max_completion_tokens"] != map[bool]any{true: 512.0, false: nil}[openAI] || mt == openAI {
+				t.Errorf("openAI=%v: request %v", openAI, got)
+			}
+		}
+		if c, _ := New(Options{URL: "https://API.openai.com/v1"}); !c.openAI || c.local {
+			t.Error("api.openai.com not recognised")
+		}
+	})
+	t.Run("truncated", func(t *testing.T) {
+		for reason, want := range map[string]bool{"length": true, "stop": false} {
+			c, _ := endpoint(t, "", func(w http.ResponseWriter, r *http.Request) {
+				reply(w, `{"choices":[{"message":{"content":"partial"},"finish_reason":"`+reason+`"}]}`)
+			})
+			if resp, err := c.Chat(context.Background(), userReq("hi")); err != nil || resp.Truncated != want {
+				t.Errorf("finish_reason %s: %+v %v", reason, resp, err)
+			}
+		}
+	})
+	t.Run("jitter at most 25%", func(t *testing.T) {
+		var mu sync.Mutex
+		var waits []time.Duration
+		c, _ := endpoint(t, "", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(503) })
+		c.backoff = 4 * time.Millisecond
+		c.log = slog.New(slogFunc(func(r slog.Record) {
+			r.Attrs(func(a slog.Attr) bool {
+				if a.Key == "wait" {
+					mu.Lock()
+					waits = append(waits, a.Value.Duration())
+					mu.Unlock()
+				}
+				return true
+			})
+		}))
+		for range 4 {
+			c.Chat(context.Background(), userReq("hi"))
+		}
+		if len(waits) != 8 {
+			t.Fatalf("%d waits logged, want 8", len(waits))
+		}
+		for i, w := range waits {
+			if base := c.backoff << (i % 2); w < base || w > base+base/4 {
+				t.Errorf("wait %d = %v, want %v plus at most 25%%", i, w, base)
+			}
+		}
+	})
+	t.Run("Retry-After overflow ends the call", func(t *testing.T) {
+		for _, h := range []string{"9223372037", "18446744074", "99999999999999999999"} {
+			var n atomic.Int32
+			c, _ := endpoint(t, "", func(w http.ResponseWriter, r *http.Request) {
+				n.Add(1)
+				w.Header().Set("Retry-After", h)
+				w.WriteHeader(429)
+			})
+			if _, err := c.Chat(context.Background(), userReq("hi")); n.Load() != 1 || retryAfter(err) != 24*time.Hour {
+				t.Errorf("Retry-After %s: %d attempts, RetryAfter %v; want 1 and 24h", h, n.Load(), retryAfter(err))
+			}
+		}
+	})
+	t.Run("duration counts every attempt", func(t *testing.T) {
+		var n atomic.Int32
+		c, _ := endpoint(t, "", func(w http.ResponseWriter, r *http.Request) {
+			if n.Add(1) < 3 {
+				time.Sleep(60 * time.Millisecond)
+				w.WriteHeader(503)
+				return
+			}
+			reply(w, `{"choices":[{"message":{"content":"ok"}}]}`)
+		})
+		if resp, err := c.Chat(context.Background(), userReq("hi")); err != nil || resp.Usage.Duration < 120*time.Millisecond {
+			t.Errorf("duration %v, err %v; want the two failed attempts' 120 ms included", resp.Usage.Duration, err)
+		}
+	})
+}
+
+type slogFunc func(slog.Record)
+
+func (f slogFunc) Enabled(context.Context, slog.Level) bool      { return true }
+func (f slogFunc) Handle(_ context.Context, r slog.Record) error { f(r); return nil }
+func (f slogFunc) WithAttrs([]slog.Attr) slog.Handler            { return f }
+func (f slogFunc) WithGroup(string) slog.Handler                 { return f }
+
+// TestTransportErrorsFixedText: whatever bytes a broken or hostile endpoint sends (here an echo of
+// the key and the prompt in the status line and a 900 kB header line), the error is a short fixed
+// phrase with no host, port, key or upstream text (r1 R1-2, P4).
+func TestTransportErrorsFixedText(t *testing.T) {
+	prompt := "PRIVILEGED-MATTER-TEXT"
+	for name, answer := range map[string]string{
+		"status line": "HTTP/1.1 " + strings.ToUpper(secretKey) + " " + prompt + "\r\n\r\n",
+		"header line": "HTTP/1.1 200 OK\r\n" + secretKey + strings.Repeat(prompt, 40000) + "\r\n\r\n",
+		"cut off":     "HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n{\"choices\":[" + prompt,
+	} {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		go func() {
+			for {
+				conn, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				go func() { conn.Read(make([]byte, 1<<16)); io.WriteString(conn, answer); conn.Close() }()
+			}
+		}()
+		c, err := New(Options{URL: "http://" + ln.Addr().String() + "/v1", Key: secretKey, Roles: Roles{Lead: "m"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = c.Chat(context.Background(), userReq(prompt))
+		ln.Close()
+		_, port, _ := net.SplitHostPort(ln.Addr().String())
+		msg := strings.ToLower(fmt.Sprint(err))
+		if !errors.Is(err, ErrUnavailable) || len(msg) > 120 || strings.Contains(msg, "privileged") || strings.Contains(msg, "secretkey") ||
+			strings.Contains(msg, "127.0.0.1") || strings.Contains(msg, port) {
+			t.Errorf("%s: %d-byte error %.200q", name, len(msg), msg)
+		}
+	}
+	c, _ := New(Options{URL: "http://127.0.0.1:1/v1", Roles: Roles{Lead: "m"}})
+	if _, err := c.Chat(context.Background(), userReq("hi")); err == nil || err.Error() != "model call failed: could not reach the endpoint: connection refused" {
+		t.Errorf("refused: %v", err)
+	}
+}
+
+// TestAnswerToolCallsChecked: an answer's tool calls must have a well-formed name, unique ids and
+// a JSON object as arguments, or the call fails typed (r1 R1-4); Fake applies the same check.
+func TestAnswerToolCallsChecked(t *testing.T) {
+	call := func(id, name, args string) string {
+		return `{"id":` + strconv.Quote(id) + `,"function":{"name":` + strconv.Quote(name) + `,"arguments":` + args + `}}`
+	}
+	for name, calls := range map[string]string{
+		"name newline":    call("a", "f\nlevel=ERROR msg=forged", `"{}"`),
+		"name too long":   call("a", strings.Repeat("n", 65), `"{}"`),
+		"duplicate ids":   call("a", "f", `"{}"`) + "," + call("a", "g", `"{}"`),
+		"synthesised id":  call("call_1", "f", `"{}"`) + "," + call("", "g", `"{}"`),
+		"args not json":   call("a", "f", `"{not json"`),
+		"args a number":   call("a", "f", `"123"`),
+		"args an array":   call("a", "f", `[1,2]`),
+		"args non-UTF-8":  call("a", "f", "{\"q\":\"\xff\"}"),
+		"args then extra": call("a", "f", `"{} {}"`),
+	} {
+		c, _ := endpoint(t, "", func(w http.ResponseWriter, r *http.Request) {
+			reply(w, `{"choices":[{"message":{"tool_calls":[`+calls+`]}}]}`)
+		})
+		if _, err := c.Chat(context.Background(), userReq("hi")); !errors.Is(err, ErrUnavailable) {
+			t.Errorf("%s: err %v, want ErrUnavailable", name, err)
+		}
+	}
+	f := NewFake(map[string][]Reply{"lead": {{ToolCalls: []ToolCall{{Function: Function{Arguments: "{}"}}}}, {ToolCalls: []ToolCall{{Function: Function{Name: "f", Arguments: "[]"}}}}}})
+	for range 2 {
+		if _, err := f.Chat(context.Background(), userReq("hi")); !errors.Is(err, ErrUnavailable) {
+			t.Errorf("Fake accepted a call Client refuses: %v", err)
 		}
 	}
 }

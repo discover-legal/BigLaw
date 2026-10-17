@@ -1,12 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Discover Legal
 
-// Command biglaw is the BigLaw 2 server.
-//
-//	biglaw serve [--allow-no-auth]  run the HTTP server (migrates the database first)
-//	biglaw version [--config]       print the version (and the configuration)
-//
-// Later PRs add mcp, token and import-v1 (README § What is on disk).
+// Command biglaw is the BigLaw 2 server: `serve [--allow-no-auth]` and `version [--config]` (see
+// usage); later PRs add mcp, token and import-v1 (README § What is on disk).
 package main
 
 import (
@@ -25,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/discover-legal/BigLaw/internal/model"
 	"github.com/discover-legal/BigLaw/internal/store"
 )
 
@@ -97,6 +94,12 @@ func run(ctx context.Context, args []string, getenv func(string) string, environ
 		}
 		if cfg.ModelKey != "" && strings.HasPrefix(strings.ToLower(cfg.ModelURL), "http:") {
 			log.Warn("BIGLAW_MODEL_KEY will be sent over plain http; use https unless the endpoint is on this machine", "endpoint", shown("BIGLAW_MODEL_URL", cfg.ModelURL))
+		}
+		for _, role := range []model.Role{model.Lead, model.Specialist, model.Critic} {
+			if id, err := cfg.Roles.Model(role); err == nil { // a role implies BIGLAW_MODEL_URL (Load)
+				rate, free := cfg.Prices.Pricing(id, model.IsLocalHost(httpURL(cfg.ModelURL).Hostname()))
+				log.Info("model pricing (free: $0 + watt-hours; no rate: cost unknown, the USD budget cannot count it)", "role", role, "model", id, "free", free, "rate", rate)
+			}
 		}
 		if cfg.AllowAnthropic || cfg.AllowAWS {
 			log.Warn("vendor breaker disarmed", "ALLOW_ANTHROPIC", cfg.AllowAnthropic, "ALLOW_AWS", cfg.AllowAWS)

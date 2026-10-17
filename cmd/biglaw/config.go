@@ -22,12 +22,8 @@ import (
 // builtPR is the last build PR whose variables this build reads.
 const builtPR = 2
 
-// envVar is one runtime environment variable. This table is the complete
-// configuration surface (README § Configuration); scripts/loc.py counts the
-// distinct names read in Go and fails CI above 20. Each variable is
-// validated by the PR that first reads it (pr); later ones are declared here
-// so the surface is fixed, shown by `version --config`, and warned about
-// when set but not yet read.
+// envVar is one runtime environment variable; envVars is the complete surface (README § Configuration,
+// loc.py caps it at 20). A variable is validated by the PR that first reads it (pr), warned about before.
 type envVar struct {
 	name, def string
 	secret    bool // never printed by `biglaw version --config`
@@ -72,10 +68,8 @@ type Config struct {
 	AllowAWS       bool
 }
 
-// Load resolves and validates the configuration from getenv (os.Getenv in
-// production). All problems are reported at once. The vendor breaker runs
-// last, so a valid config that couples directly to a gated vendor is still
-// refused.
+// Load resolves and validates the configuration from getenv, reporting all problems at once; the
+// vendor breaker runs last, so a valid config that couples directly to a gated vendor is refused.
 func Load(getenv func(string) string) (Config, error) {
 	get := func(name string) string { return value(getenv, name) }
 	var errs []error
@@ -126,23 +120,14 @@ func Load(getenv func(string) string) (Config, error) {
 	return c, GuardVendors(c)
 }
 
-var modelID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,199}$`)
-
-// roles reads the model id per role (README § Configuration): an unset
-// specialist or critic uses the lead's, and neither may be set without it.
+// roles reads the model id per role: an unset specialist or critic uses the lead's, so neither may
+// be set without it. Ids are not checked here: a wrong one fails at its first call (404).
 func roles(get func(string) string) (model.Roles, []error) {
 	r := model.Roles{Lead: get("BIGLAW_MODEL_LEAD"), Specialist: get("BIGLAW_MODEL_SPECIALIST"), Critic: get("BIGLAW_MODEL_CRITIC")}
-	var errs []error
-	for name, v := range map[string]string{"BIGLAW_MODEL_LEAD": r.Lead, "BIGLAW_MODEL_SPECIALIST": r.Specialist, "BIGLAW_MODEL_CRITIC": r.Critic} {
-		if v != "" && !modelID.MatchString(v) {
-			errs = append(errs, fmt.Errorf("%s: %s is not a model id (letters, digits and . _ : / + -, up to 200)", name, shown(name, v)))
-		}
-	}
 	if r.Lead == "" && (r.Specialist != "" || r.Critic != "") {
-		errs = append(errs, errors.New("BIGLAW_MODEL_LEAD: is required when BIGLAW_MODEL_SPECIALIST or _CRITIC is set (unset roles fall back to the lead)"))
+		return r, []error{errors.New("BIGLAW_MODEL_LEAD: is required when BIGLAW_MODEL_SPECIALIST or _CRITIC is set (unset roles fall back to the lead)")}
 	}
-	slices.SortFunc(errs, func(a, b error) int { return strings.Compare(a.Error(), b.Error()) })
-	return r, errs
+	return r, nil
 }
 
 // value is getenv(name) trimmed, or the table default when empty.
@@ -158,13 +143,8 @@ func value(getenv func(string) string, name string) string {
 	panic("config: unknown variable " + name) // programming error
 }
 
-// vendors is the self-imposed vendor breaker ported from v1
-// (biglaw-go/internal/config/guard.go): endpoints that couple BigLaw
-// DIRECTLY to a gated closed vendor, and the variable that opts in. It keys
-// on the endpoint, not the model name: a Claude model behind a third-party
-// OpenAI-compatible gateway is allowed. Like v1 it matches the marker
-// anywhere in the URL, so it fails closed. (Load has already refused a host
-// that is not plain ASCII, so no escape or look-alike dot can hide one.)
+// vendors is v1's self-imposed vendor breaker: endpoint markers (anywhere in the URL: fails closed)
+// coupling BigLaw DIRECTLY to a gated vendor, and the opt-in; a gateway in between is allowed.
 var vendors = []struct {
 	name, optIn string
 	markers     []string
@@ -223,8 +203,7 @@ func UnknownVars(environ []string) []string {
 	return out
 }
 
-// NotYetRead lists declared variables that are set but first read by a
-// later PR, so an operator is not misled into thinking they took effect.
+// NotYetRead lists declared variables that are set but first read by a later PR (warned about).
 func NotYetRead(getenv func(string) string) []string {
 	var out []string
 	for _, e := range envVars {
@@ -235,9 +214,8 @@ func NotYetRead(getenv func(string) string) []string {
 	return out
 }
 
-// Describe renders the configuration for `biglaw version --config`. Every
-// value goes through shown; the PG* variables lib/pq also reads are listed
-// by name only.
+// Describe renders the configuration for `biglaw version --config`: every value through shown, and
+// the PG* variables lib/pq also reads by name only.
 func Describe(getenv func(string) string, environ []string) string {
 	var b strings.Builder
 	for _, e := range envVars {
@@ -278,20 +256,8 @@ func validPort(p string) bool {
 	return err == nil && n >= 0 && n <= 65535 && p[0] >= '0' && p[0] <= '9' // no sign
 }
 
-// shown is how the value of variable name may appear in any output
-// (`version --config`, startup errors). The rule is total: whatever does
-// not parse into a shape known to be safe is not shown at all.
-//   - secrets: "(set, hidden)";
-//   - the database URL: store.DescribeDSN (fields from lib/pq's own parse,
-//     never the text);
-//   - URL variables: scheme://host[:port] only, never the path, query or
-//     fragment, and only for a value httpURL accepts (so none with an "@"
-//     anywhere: an unescaped "/" in user info turns a credential into a
-//     "path"); anything else is "(set, not shown: …)". An OIDC preset
-//     (google, microsoft:<tenant>) is shown as is;
-//   - any other value is shown as is (quoted if it holds a control
-//     character), unless it holds "://" (treated as a URL) or the
-//     user:password@ shape.
+// shown is the only form in which a config value is output. Total rule: secrets hidden, the DSN via
+// store.DescribeDSN, URLs as scheme://host only if httpURL accepts them, anything URL- or user:pw@-shaped hidden.
 func shown(name, val string) string {
 	e := envVars[slices.IndexFunc(envVars, func(e envVar) bool { return e.name == name })]
 	switch {
@@ -320,11 +286,8 @@ var (
 	plainHost     = regexp.MustCompile(`^([A-Za-z0-9._-]+|\[[0-9A-Fa-f:.]+\])(:[0-9]+)?$`)
 )
 
-// httpURL returns raw parsed when it is an absolute http(s) URL whose host
-// is a plain ASCII name or IP (no IPv6 zone, no escape) and which has no
-// "@" anywhere: no URL variable may carry credentials, and an "@" after an
-// unescaped "/", "?" or "#" in user info would hide them in the path (the
-// rule CheckDSN applies to the database URL). nil for anything else.
+// httpURL parses raw if it is an absolute http(s) URL with a plain ASCII host (no zone, no escape) and no
+// "@" anywhere (an "@" after an unescaped / ? # would hide credentials in the path); else nil.
 func httpURL(raw string) *url.URL {
 	u, err := url.Parse(raw)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Opaque != "" || !plainHost.MatchString(u.Host) || strings.Contains(raw, "@") ||

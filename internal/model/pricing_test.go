@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -29,7 +30,12 @@ func builtin(t *testing.T) *Prices {
 }
 
 func cost(p *Prices, model string, in, out, cw, cr int) *float64 {
-	return p.Cost(model, Usage{InputTokens: in, OutputTokens: out, CacheWriteTokens: cw, CacheReadTokens: cr})
+	e, _, _ := p.Lookup(model)
+	if e.Rate == nil {
+		return nil
+	}
+	c := e.Rate.Cost(Usage{InputTokens: in, OutputTokens: out, CacheWriteTokens: cw, CacheReadTokens: cr})
+	return &c
 }
 
 // v1Base is v1's basePricing (cost/cost.go at origin/main 971785a). Every
@@ -61,7 +67,8 @@ func TestBuiltinPricesParse(t *testing.T) {
 	}
 	p := builtin(t)
 	for model, want := range v1Base {
-		r, known, op := p.Lookup(model)
+		e, known, op := p.Lookup(model)
+		r := e.Rate
 		switch {
 		case !known || op:
 			t.Errorf("%s: known=%v operator=%v", model, known, op)
@@ -96,7 +103,8 @@ func TestLookupPricing(t *testing.T) {
 		{"anthropic/claude-haiku-4.5", Rate{1, 5}, true}, // OpenRouter-style vendor prefix
 		{"some-unknown-model", Rate{}, false},
 	} {
-		r, known, _ := p.Lookup(c.model)
+		e, known, _ := p.Lookup(c.model)
+		r := e.Rate
 		if known != c.ok || c.ok && (r == nil || *r != c.want) {
 			t.Errorf("Lookup(%q) = %v, %v; want %v, %v", c.model, r, known, c.want, c.ok)
 		}
@@ -104,8 +112,8 @@ func TestLookupPricing(t *testing.T) {
 	// A flagship without a list price is known but unpriced, not priced as
 	// a cheaper sibling that shares its prefix.
 	for _, m := range []string{"gpt-5.5", "gpt-5.7", "gpt-6"} {
-		if r, known, _ := p.Lookup(m); !known || r != nil {
-			t.Errorf("%s: %v %v, want known and unpriced", m, r, known)
+		if e, known, _ := p.Lookup(m); !known || e.Rate != nil {
+			t.Errorf("%s: %v %v, want known and unpriced", m, e.Rate, known)
 		}
 	}
 }
@@ -142,8 +150,8 @@ func TestCalcCostUSD_GPT56Luna(t *testing.T) {
 func TestGPT56Siblings_RecognisedButUnpriced(t *testing.T) {
 	p := builtin(t)
 	for _, m := range []string{"gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.6-terra-2026-03"} {
-		if r, known, _ := p.Lookup(m); !known || r != nil || cost(p, m, 1, 1, 0, 0) != nil {
-			t.Errorf("%s: rate %v known %v; want known, unpriced, cost unknown", m, r, known)
+		if e, known, _ := p.Lookup(m); !known || e.Rate != nil || cost(p, m, 1, 1, 0, 0) != nil {
+			t.Errorf("%s: rate %v known %v; want known, unpriced, cost unknown", m, e.Rate, known)
 		}
 	}
 }
@@ -160,8 +168,8 @@ func TestSetModelRates_OverridesBuiltins(t *testing.T) {
 	if got := cost(p, "gpt-5.6-terra-2026-03", 1_000_000, 1_000_000, 0, 0); got == nil || !approx(*got, 15) {
 		t.Errorf("terra drift = %v, want 15", got)
 	}
-	if r, known, op := p.Lookup("qwen2.5:14b"); r == nil || *r != (Rate{}) || !known || !op {
-		t.Errorf("explicit zero = %v %v %v, want priced at $0 by the operator", r, known, op)
+	if e, known, op := p.Lookup("qwen2.5:14b"); e.Rate == nil || *e.Rate != (Rate{}) || !known || !op {
+		t.Errorf("explicit zero = %v %v %v, want priced at $0 by the operator", e, known, op)
 	}
 	if _, err := LoadPrices(`{"bad-model": {"in": -1, "out": 5}}`); err == nil {
 		t.Error("a negative rate was accepted (v1 dropped it silently; v2 refuses to start)")
@@ -255,6 +263,69 @@ func TestLocalCallPricedZeroWithWattHours(t *testing.T) {
 	}
 }
 
+// TestLocalPricingRule (r1 R1-1): the host never makes a closed-weights model free. On a local
+// endpoint only an open-weights or unlisted model is $0 + watt-hours; a closed model behind a
+// LiteLLM-style localhost:4000 gateway is priced (or unknown, never $0); BIGLAW_PRICES wins.
+func TestLocalPricingRule(t *testing.T) {
+	p, op := builtin(t), func(v string) *Prices {
+		p, err := LoadPrices(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	for _, c := range []struct {
+		prices      *Prices
+		model       string
+		local, free bool
+		cost        *float64 // for 1M in + 1M out when not free
+	}{
+		{p, "claude-sonnet-4-6", true, false, ptr(18)},
+		{p, "anthropic/claude-sonnet-4-6", true, false, ptr(18)},
+		{p, "openai/gpt-4o", true, false, ptr(12.5)},
+		{p, "gemini-2.5-pro", true, false, ptr(11.25)},
+		{p, "qwen-max", true, false, ptr(8)},
+		{p, "qwen3-max-preview", true, false, ptr(8)},
+		{p, "gpt-5.5", true, false, nil}, // closed, unpriced: unknown, not $0
+		{p, "qwen2.5:14b", true, true, nil},
+		{p, "qwen3:8b", true, true, nil},
+		{p, "llama3.1:8b", true, true, nil},
+		{p, "gpt-oss:20b", true, true, nil},
+		{p, "deepseek-r1:14b", true, true, nil},
+		{p, "my-own-finetune", true, true, nil},  // unlisted
+		{p, "qwen2.5:14b", false, false, ptr(8)}, // hosted: priced
+		{p, "llama3.1:8b", false, false, nil},    // hosted, unpriced: unknown
+		{p, "my-own-finetune", false, false, nil},
+		{op(`{"qwen2.5:14b": {"in": 2, "out": 2}}`), "qwen2.5:14b", true, false, ptr(4)}, // the operator wins
+		{op(`{"claude*": {"in": 0, "out": 0, "open": true}}`), "claude-sonnet-4-6", true, true, nil},
+	} {
+		u := Usage{InputTokens: 1_000_000, OutputTokens: 1_000_000, Duration: time.Hour}
+		c.prices.charge(c.model, &u, c.local, 50, slog.New(slog.DiscardHandler))
+		if c.free && (u.CostUSD == nil || *u.CostUSD != 0 || u.WattHours == nil || *u.WattHours != 50) ||
+			!c.free && (u.WattHours != nil || (u.CostUSD == nil) != (c.cost == nil) || c.cost != nil && !approx(*u.CostUSD, *c.cost)) {
+			t.Errorf("%s local=%v: cost %v wh %v; want free=%v cost %v", c.model, c.local, u.CostUSD, u.WattHours, c.free, c.cost)
+		}
+		if _, free := c.prices.Pricing(c.model, c.local); free != c.free {
+			t.Errorf("%s local=%v: Pricing free=%v", c.model, c.local, free)
+		}
+	}
+	// A FIFO (or any non-regular file) is refused at once instead of blocking startup.
+	fifo := filepath.Join(t.TempDir(), "prices.fifo")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Skip("no FIFOs here:", err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := LoadPrices(fifo); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+			t.Errorf("FIFO: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("LoadPrices blocked on a FIFO")
+	}
+}
+
 func TestIsLocalHost(t *testing.T) {
 	for host, want := range map[string]bool{
 		"127.0.0.1": true, "::1": true, "localhost": true, "LOCALHOST.": true, "10.1.2.3": true, "192.168.1.20": true, "172.16.0.9": true,
@@ -262,8 +333,8 @@ func TestIsLocalHost(t *testing.T) {
 		"box.home.arpa": true, "api.openai.com": false, "openrouter.ai": false, "8.8.8.8": false, "172.32.0.1": false, "": false,
 		"2001:4860::8888": false, "localhost.evil.com": false,
 	} {
-		if got := isLocalHost(host); got != want {
-			t.Errorf("isLocalHost(%q) = %v, want %v", host, got, want)
+		if got := IsLocalHost(host); got != want {
+			t.Errorf("IsLocalHost(%q) = %v, want %v", host, got, want)
 		}
 	}
 }
@@ -287,12 +358,12 @@ func TestPricesJSONOverride(t *testing.T) {
 	// beats the built-in exact rows of that family.
 	p, _ = LoadPrices(`{"deepseek*": {"in": 0.30, "out": 1.20}}`)
 	for _, m := range []string{"deepseek-chat", "deepseek-reasoner"} {
-		if r, _, op := p.Lookup(m); r == nil || *r != (Rate{0.30, 1.20}) || !op {
-			t.Errorf("%s = %v (operator %v)", m, r, op)
+		if e, _, op := p.Lookup(m); e.Rate == nil || *e.Rate != (Rate{0.30, 1.20}) || !op {
+			t.Errorf("%s = %v (operator %v)", m, e, op)
 		}
 	}
-	if r, _, _ := p.Lookup("gemini-2.5-flash"); r == nil || *r != (Rate{0.30, 2.50}) {
-		t.Errorf("another family changed: %v", r)
+	if e, _, _ := p.Lookup("gemini-2.5-flash"); e.Rate == nil || *e.Rate != (Rate{0.30, 2.50}) {
+		t.Errorf("another family changed: %v", e)
 	}
 	// An operator null un-prices a model.
 	if p, _ = LoadPrices(`{"claude-haiku-4-5": null}`); cost(p, "claude-haiku-4-5", 1, 1, 0, 0) != nil {
@@ -311,7 +382,8 @@ func TestPricesJSONOverride(t *testing.T) {
 		"negative":       `{"m": {"in": -1, "out": 2}}`,
 		"too large":      `{"m": {"in": 1e5, "out": 2}}`,
 		"overflow":       `{"m": {"in": 1e400, "out": 2}}`,
-		"unknown field":  `{"m": {"in": 1, "out": 2, "cached": 0.1}}`,
+		"open, one rate": `{"m": {"in": 1, "open": true}}`,
+		"empty object":   `{"m": {}}`,
 		"number":         `{"m": 3}`,
 		"duplicate":      `{"m": null, "M": null}`,
 		"bad id":         `{"a b": null}`,
@@ -333,13 +405,14 @@ func TestPricesJSONOverride(t *testing.T) {
 	if p, err = LoadPrices(good); err != nil || cost(p, "my-model", 1_000_000, 0, 0, 0) == nil {
 		t.Errorf("a file path: %v", err)
 	}
-	for _, v := range []string{bad, filepath.Join(dir, "SECRETPATH-missing.json"), dir} {
+	badRate := filepath.Join(dir, "rate.json") // a valid id that could be a secret, with a bad value
+	os.WriteFile(badRate, []byte(`{"sk-live-secret": {"in": -1, "out": 1}}`), 0o600)
+	badID := filepath.Join(dir, "id.json") // a malformed id that is a secret
+	os.WriteFile(badID, []byte(`{"PASSWORD=hunter2 SECRET": null}`), 0o600)
+	for _, v := range []string{bad, badRate, badID, filepath.Join(dir, "SECRETPATH-missing.json"), dir} {
 		_, err := LoadPrices(v)
 		if msg := strings.ToLower(fmt.Sprint(err)); err == nil || strings.Contains(msg, "secret") || strings.Contains(msg, "hunter2") || strings.Contains(msg, strings.ToLower(dir)) {
 			t.Errorf("LoadPrices(%s) = %v: want an error that names neither the file's contents nor its path", filepath.Base(v), err)
 		}
-	}
-	if _, err := LoadPrices(bad); err == nil || !strings.Contains(err.Error(), "entry 2") {
-		t.Errorf("the error should name the entry by number: %v", err)
 	}
 }

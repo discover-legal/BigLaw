@@ -29,6 +29,7 @@
   "gpt-4.1-nano*": {"in": 0.10, "out": 0.40},
   "gpt-4o": {"in": 2.50, "out": 10.00},
   "gpt-4o-mini*": {"in": 0.15, "out": 0.60},
+  "gpt-oss*": {"open": true},
   "gpt*": null,
   "o3": {"in": 2.00, "out": 8.00},
   "o3-mini": {"in": 1.10, "out": 4.40},
@@ -48,7 +49,7 @@
 
   "deepseek-chat": {"in": 0.27, "out": 1.10},
   "deepseek-reasoner*": {"in": 0.55, "out": 2.19},
-  "deepseek-r1*": {"in": 0.55, "out": 2.19},
+  "deepseek-r1*": {"in": 0.55, "out": 2.19, "open": true},
   "deepseek*": {"in": 0.27, "out": 1.10},
 
   "grok-4": {"in": 3.00, "out": 15.00},
@@ -63,6 +64,9 @@
   "qwen-turbo*": {"in": 0.05, "out": 0.20},
   "qwen-vl-max": {"in": 1.60, "out": 6.40},
   "qwen-vl-plus": {"in": 0.21, "out": 0.63},
+  "qwen3-max*": {"in": 1.60, "out": 6.40},
+  "qwen2*": {"in": 1.60, "out": 6.40, "open": true},
+  "qwen3*": {"in": 1.60, "out": 6.40, "open": true},
   "qwen*": {"in": 1.60, "out": 6.40},
 
   "mistral-large*": {"in": 2.00, "out": 6.00},
@@ -71,7 +75,8 @@
   "ministral*": {"in": 0.10, "out": 0.30},
   "open-mistral-nemo*": {"in": 0.15, "out": 0.15},
   "mistral*": {"in": 2.00, "out": 6.00},
-  "mixtral*": {"in": 2.00, "out": 6.00},
+  "mistral:*": {"in": 2.00, "out": 6.00, "open": true},
+  "mixtral*": {"in": 2.00, "out": 6.00, "open": true},
   "codestral*": {"in": 2.00, "out": 6.00},
   "magistral*": {"in": 2.00, "out": 6.00},
   "pixtral*": {"in": 2.00, "out": 6.00},
@@ -84,8 +89,8 @@
   "nova-lite*": {"in": 0.06, "out": 0.24},
   "nova-micro*": {"in": 0.035, "out": 0.14},
 
-  "kimi*": null,
+  "kimi*": {"open": true},
   "moonshot*": null,
-  "glm*": null,
-  "llama*": null
+  "glm*": {"open": true},
+  "llama*": {"open": true}
 }

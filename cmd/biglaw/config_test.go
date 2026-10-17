@@ -300,8 +300,8 @@ func TestConfigModelVars(t *testing.T) {
 			t.Errorf("Roles.Model(%s) = %q, %v; want %q (unset roles fall back to the lead)", role, got, err, want)
 		}
 	}
-	if r, _, op := c.Prices.Lookup("qwen2.5:14b"); r == nil || *r != (model.Rate{In: 0.5, Out: 1}) || !op {
-		t.Errorf("BIGLAW_PRICES did not reach Config: %v %v", r, op)
+	if e, _, op := c.Prices.Lookup("qwen2.5:14b"); e.Rate == nil || *e.Rate != (model.Rate{In: 0.5, Out: 1}) || !op {
+		t.Errorf("BIGLAW_PRICES did not reach Config: %v %v", e, op)
 	}
 	// Defaults: no model, 250 W, the built-in table.
 	c, err = Load(env("BIGLAW_DATABASE_URL", dsn))
@@ -322,11 +322,9 @@ func TestConfigModelVars(t *testing.T) {
 	for _, want := range []string{
 		"BIGLAW_MODEL_URL: is required when BIGLAW_MODEL_KEY",
 		"BIGLAW_MODEL_KEY: contains white space",
-		`BIGLAW_MODEL_SPECIALIST: a b is not a model id`,
-		`BIGLAW_MODEL_CRITIC: "x\nBIGLAW_FORGED" is not a model id`,
 		"BIGLAW_MODEL_LEAD: is required when BIGLAW_MODEL_SPECIALIST or _CRITIC is set",
 		"BIGLAW_LOCAL_WATTS: NaN is not a number of watts",
-		"BIGLAW_PRICES: the file it names: entry 1",
+		"BIGLAW_PRICES: the file it names: is not a JSON object",
 	} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("combined error lacks %q:\n%s", want, msg)
@@ -334,6 +332,16 @@ func TestConfigModelVars(t *testing.T) {
 	}
 	if strings.Contains(msg, "SECRET") {
 		t.Errorf("an error echoed a secret or the prices file:\n%s", msg)
+	}
+	// The URL is required by a key alone and by a role alone; any model id is accepted (an LM Studio
+	// "@quant" suffix too: a wrong id fails at its first call, as a 404).
+	for _, kv := range [][]string{{"BIGLAW_MODEL_KEY", "sk-k"}, {"BIGLAW_MODEL_LEAD", "m"}} {
+		if _, err := Load(env("BIGLAW_DATABASE_URL", dsn, kv[0], kv[1])); err == nil || !strings.Contains(err.Error(), "BIGLAW_MODEL_URL: is required") {
+			t.Errorf("%s without BIGLAW_MODEL_URL: %v", kv[0], err)
+		}
+	}
+	if _, err := Load(env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_MODEL_URL", "http://lmstudio:1234/v1", "BIGLAW_MODEL_LEAD", "qwen2.5-14b-instruct@q4_k_m")); err != nil {
+		t.Errorf("an @quant model id: %v", err)
 	}
 	for _, w := range []string{"-1", "100000.5", "Inf", "1e9", "250W", "0x10"} {
 		if _, err := Load(env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_LOCAL_WATTS", w)); err == nil {

@@ -11,7 +11,7 @@ import (
 )
 
 func call(agent string) Request {
-	return Request{Agent: agent, Role: Lead, Messages: []Message{{Role: "user", Text: "go"}}}
+	return Request{Agent: agent, Role: Lead, Messages: []Message{{Role: "user", Content: "go"}}}
 }
 
 func TestFakeScriptExhaustedIsError(t *testing.T) {
@@ -25,7 +25,7 @@ func TestFakeScriptExhaustedIsError(t *testing.T) {
 	if !errors.Is(err, ErrScriptExhausted) || r != nil {
 		t.Fatalf("third call: %+v, %v; want ErrScriptExhausted", r, err)
 	}
-	if s, _, _ := HTTPStatus(err); s != 500 {
+	if s := HTTPStatus(err); s != 500 {
 		t.Errorf("a script error maps to %d, want 500 (it is a test bug, not a model failure)", s)
 	}
 	// A reply with nothing in it is a model failure, as from the real client.
@@ -98,6 +98,13 @@ func TestFakeRoutesByAgentName(t *testing.T) {
 	}
 	if got := len(f.Calls()); got != 5 {
 		t.Errorf("Calls() = %d, want 5", got)
+	}
+	// Tool-call ids count the agent's own calls, not all calls (r1 P6).
+	f = NewFake(map[string][]Reply{"a": {{Text: "x"}}, "b": {{Text: "y"}, {ToolCalls: []ToolCall{{Function: Function{Name: "f"}}}}}})
+	for _, a := range []string{"a", "b", "b"} {
+		if r, _ := f.Chat(context.Background(), call(a)); r == nil || len(r.ToolCalls) > 0 && r.ToolCalls[0].ID != "b-2-0" {
+			t.Errorf("%s: %+v, want id b-2-0", a, r)
+		}
 	}
 	var _ Chatter = f // the fake and the client are interchangeable
 	var _ Chatter = (*Client)(nil)

@@ -4,6 +4,7 @@
 package model
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -18,8 +19,7 @@ var (
 	ErrScriptExhausted = errors.New("model.Fake: script exhausted")
 )
 
-// Reply is one scripted answer; Err (e.g. &Error{Kind: ErrTimeout}) is
-// returned instead when set.
+// Reply is one scripted answer; Err (e.g. &Error{Kind: ErrTimeout}) is returned instead when set.
 type Reply struct {
 	Text      string
 	ToolCalls []ToolCall
@@ -27,20 +27,17 @@ type Reply struct {
 	Err       error
 }
 
-// Fake is the scripted Chatter for tests, keyed by Request.Agent ("lead" or
-// a subagent tool's name) so each subagent is testable alone. Each agent's
-// replies are used in order. An unscripted agent, or a call past the end of
-// its script, is an error, never a default reply; a reply with neither text
-// nor tool calls is ErrNoContent, as from Client. Nothing is random: empty
-// tool-call ids become "<agent>-<call>-<index>".
+// Fake is the scripted Chatter for tests: each agent's replies in order; unscripted or exhausted is
+// an error. It checks replies as Client does, ids "<agent>-<call>-<index>"; it does not resolve Roles.
 type Fake struct {
 	mu      sync.Mutex
 	scripts map[string][]Reply
 	calls   []Request
+	n       map[string]int
 }
 
 func NewFake(scripts map[string][]Reply) *Fake {
-	f := &Fake{scripts: map[string][]Reply{}}
+	f := &Fake{scripts: map[string][]Reply{}, n: map[string]int{}}
 	for agent, rs := range scripts {
 		f.scripts[agent] = append([]Reply(nil), rs...)
 	}
@@ -64,12 +61,8 @@ func (f *Fake) Chat(ctx context.Context, req Request) (*Response, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, req)
-	n := 0 // this agent's call number
-	for _, c := range f.calls {
-		if c.Agent == req.Agent {
-			n++
-		}
-	}
+	f.n[req.Agent]++
+	n := f.n[req.Agent] // this agent's call number
 	script, ok := f.scripts[req.Agent]
 	switch {
 	case !ok:
@@ -84,18 +77,14 @@ func (f *Fake) Chat(ctx context.Context, req Request) (*Response, error) {
 	if strings.TrimSpace(r.Text) == "" && len(r.ToolCalls) == 0 {
 		return nil, fail(ErrNoContent, "the scripted reply has neither text nor tool calls")
 	}
-	resp := &Response{Model: req.Model, Text: r.Text, Usage: r.Usage}
-	if resp.Model == "" {
-		resp.Model = "fake:" + string(req.Role)
-	}
+	resp := &Response{Model: cmp.Or(req.Model, "fake:"+string(req.Role)), Text: r.Text, Usage: r.Usage}
 	for i, tc := range r.ToolCalls {
-		if tc.ID == "" {
-			tc.ID = req.Agent + "-" + strconv.Itoa(n) + "-" + strconv.Itoa(i)
-		}
-		if tc.Type, tc.Function.Arguments = "function", strings.TrimSpace(tc.Function.Arguments); tc.Function.Arguments == "" {
-			tc.Function.Arguments = "{}"
-		}
+		tc.ID = cmp.Or(tc.ID, req.Agent+"-"+strconv.Itoa(n)+"-"+strconv.Itoa(i))
+		tc.Type, tc.Function.Arguments = "function", cmp.Or(strings.TrimSpace(tc.Function.Arguments), "{}")
 		resp.ToolCalls = append(resp.ToolCalls, tc)
+	}
+	if e := checkCalls(resp.ToolCalls); e != nil {
+		return nil, e
 	}
 	return resp, nil
 }

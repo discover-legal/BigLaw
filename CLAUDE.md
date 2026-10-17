@@ -11,8 +11,10 @@ change. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`, not here.
   `bytea`, `PutFile` from an `io.Reader`, `GetFile`), migration runner.
 - `internal/store/storetest` — `storetest.DSN(t)` gives a test its own schema.
 - `internal/model` — `Client` (OpenAI-compatible chat + tool calls + image parts, typed errors,
-  ≤ 3 attempts), `HTTPStatus` (the one failure→HTTP mapping), `Roles` (the one role accessor),
-  `Prices`/`LoadPrices`/`ParsePrices` (embedded `prices.json` + `BIGLAW_PRICES`, one parser),
+  ≤ 3 attempts; a refused-but-billed 200 carries `Usage` on `*model.Error`), `HTTPStatus` (the one
+  failure→status mapping), `Roles` (the one role accessor), `Prices`/`LoadPrices`/`ParsePrices`
+  (embedded `prices.json` + `BIGLAW_PRICES`, one parser; `Pricing` = the one $0-local rule: only
+  `"open": true` or unlisted models on a local host),
   `Fake` (scripts keyed by agent name; unscripted or exhausted is an error).
 
 Everything else in README is marked planned.
@@ -35,7 +37,8 @@ Everything else in README is marked planned.
   SPDX header.
 - Every package has a `_test.go`; DB tests use `storetest.DSN(t)` and `t.Parallel()`.
 - No model calls in `go test`: only `model.Fake` or an `httptest` server. Model errors carry
-  BigLaw's own text only (never the URL, key or upstream body); map them with `model.HTTPStatus`.
+  BigLaw's own fixed text only (never the URL, host, key or anything the endpoint sent, so never
+  `err.Error()` of a transport error); map them with `model.HTTPStatus`.
 - Errors and logs must never contain the database password or any key. Run user-supplied DSNs
   through `store.CheckDSN` before anything else sees them; print config values only through
   `shown` in `cmd/biglaw/config.go` (DSNs via `store.DescribeDSN`), never raw.
