@@ -35,7 +35,7 @@ def _wait_health(api: str, seconds: float) -> bool:
                 if r.status == 200:
                     return True
         except OSError:
-            pass
+            pass  # not up yet (connection refused / reset / timeout): poll again
         time.sleep(1)
     return False
 
@@ -68,10 +68,12 @@ def start_backend(mock_port: int, port: int, workdir: Path) -> subprocess.Popen:
         "AUTH_ENABLED": "false",
         "INFISICAL_CLIENT_ID": "",
     })
-    log = open(workdir / "backend.log", "w")
     print(f"starting backend on :{port} (log {workdir / 'backend.log'})")
-    return subprocess.Popen([str(binary)], cwd=workdir, env=env, stdout=log, stderr=subprocess.STDOUT,
-                            stdin=subprocess.DEVNULL)
+    # The child gets its own copy of the log fd, so the parent's handle can
+    # close as soon as the process is spawned.
+    with open(workdir / "backend.log", "w") as log:
+        return subprocess.Popen([str(binary)], cwd=workdir, env=env, stdout=log, stderr=subprocess.STDOUT,
+                                stdin=subprocess.DEVNULL)
 
 
 def smoke(a: argparse.Namespace) -> int:

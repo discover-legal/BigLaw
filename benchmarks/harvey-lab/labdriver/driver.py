@@ -217,7 +217,7 @@ def run_task(args: argparse.Namespace) -> Path:
             try:
                 failed = [client.get_task(e.task_id)]
             except BigLawError:
-                pass
+                pass  # best effort: the failure is recorded below even if its task record can't be fetched
         (run_dir / "biglaw_tasks.json").write_text(json.dumps([_task_record(f) for f in finals + failed],
                                                               indent=2), encoding="utf-8")
         (run_dir / "metrics.json").write_text(json.dumps({

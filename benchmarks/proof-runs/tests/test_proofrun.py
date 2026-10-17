@@ -16,7 +16,6 @@ HERE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
 
 import run as cli  # noqa: E402
-from proofrun import mock  # noqa: E402
 from proofrun.matter import load_all, load_matter  # noqa: E402
 from proofrun.patterns import pattern_matches, split_units  # noqa: E402
 from proofrun.score import Corpus, score_run  # noqa: E402

@@ -18,8 +18,10 @@ def labdriver():
     """Import benchmarks/harvey-lab/labdriver (the shared ingest/submit/poll/render driver)."""
     if str(LABDRIVER_PARENT) not in sys.path:
         sys.path.insert(0, str(LABDRIVER_PARENT))
-    import labdriver  # noqa: F401  (imported for side effect of package init)
-    from labdriver import driver, convert, biglaw  # noqa: F401
+    # Importing the submodules binds them as attributes of the package.
+    import labdriver.biglaw
+    import labdriver.convert
+    import labdriver.driver
     return labdriver
 
 
