@@ -22,6 +22,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 
 	"github.com/discover-legal/biglaw-go/internal/backend"
+	"github.com/discover-legal/biglaw-go/internal/jsonsafe"
 	"github.com/discover-legal/biglaw-go/internal/strutil"
 	"github.com/discover-legal/biglaw-go/internal/timekeeping"
 	"github.com/discover-legal/biglaw-go/internal/types"
@@ -680,8 +681,10 @@ func parseISOTime(v string) (time.Time, error) {
 }
 
 // jsonResult marshals v to JSON and wraps it in a TextContent tool result.
+// It uses the REST API's encoder (nil collections as [] / {}), so a tool
+// answers identically in-process and as a thin client over REST.
 func jsonResult(v interface{}) (*mcplib.CallToolResult, error) {
-	data, err := json.Marshal(v)
+	data, err := jsonsafe.Marshal(v)
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("failed to marshal result: %v", err)), nil
 	}
