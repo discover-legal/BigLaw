@@ -10,7 +10,7 @@ tables in which every factual statement cites a quote that the software has veri
 matter's own documents, with a lawyer approving every deliverable. It is one Go binary plus one
 PostgreSQL database. Licensed Apache-2.0 (`LICENSE`, `NOTICE`).
 
-## What exists today (PR 1: skeleton, config, store, CI)
+## What exists today (PR 1: skeleton, config, store, CI; PR 2: model client)
 
 | Piece | Path | What it does |
 |---|---|---|
@@ -19,6 +19,7 @@ PostgreSQL database. Licensed Apache-2.0 (`LICENSE`, `NOTICE`).
 | Store | `internal/store/store.go` | Postgres via `database/sql` + `github.com/lib/pq`; DSN check that matches lib/pq's reading; transaction helper |
 | Migrations | `internal/store/migrate.go`, `internal/store/migrations/NNNN_*.sql` | Embedded SQL files applied in order under an advisory lock; each file and its `schema_migrations` row in one transaction |
 | Files | `internal/store/files.go` | Binary files (uploads, generated `.docx`) stored in 1 MiB `bytea` chunks, streamed in, with size and SHA-256 checked on every read |
+| Model client | `internal/model/` (`client.go`, `errors.go`, `fake.go`, `pricing.go`, `prices.json`) | One OpenAI-compatible chat client with tool calls and image parts, typed failures with their HTTP mapping, at most 3 attempts per call, cache-aware pricing from a built-in table plus `BIGLAW_PRICES`, watt-hour metering for local endpoints, and `model.Fake` for tests (§ Model client). Nothing calls it yet: the agent loop that does arrives in PR 4a. |
 | Test helper | `internal/store/storetest/` | Gives each DB test its own schema; skips without a DSN, fails if `BIGLAW_REQUIRE_DB` is set |
 | Budgets | `scripts/loc.py` (+ `scripts/test_loc.py`) | Fails CI if a size budget is exceeded (below) |
 | Build/deploy | `Makefile`, `Dockerfile`, `docker-compose.yml`, `render.yaml`, `.env.example` | `make ci`; `postgres:16-alpine` + biglaw under Compose; Render blueprint (inert until PR 8, see § Exposure) |
@@ -28,7 +29,7 @@ HTTP surface today: `GET /health` only. It returns `{"status":"ok","version":"�
 `{"status":"database unavailable",…}` (503; the cause is logged, not returned). Every other path
 is 404/405.
 
-**Planned** (not built): the model client (PR 2), document ingest/search/verification (PR 3), the
+**Planned** (not built): document ingest/search/verification (PR 3), the
 engine and the memo workflow with its REST API (PR 4), diligence (PR 5), contract review (PR 6),
 MCP (PR 7), clients/conflicts and OIDC/session/token auth (PR 8), time and billing (PR 9), the
 UI (PR 11), jurisdiction and practice packs (PR 12), v1 import and docs (PR 13). The
@@ -65,13 +66,13 @@ whatever does not parse into a shape known to be safe is not shown.
 | `BIGLAW_DATABASE_URL` | — (required) | Postgres DSN: `postgres://user:password@host:5432/db?sslmode=disable`, or libpq `key=value` form. The scheme must be lowercase, and reserved characters in the password percent-encoded (`/`→`%2F`, `?`→`%3F`, `#`→`%23`, `%`→`%25`, `@`→`%40`). An `@` after the host (in the database name or a query value such as `application_name=ops@corp`) is refused too, because it cannot be told apart from a broken password; write `%40`. Anything else is refused with a message that never shows the password. lib/pq defaults to `sslmode=require`. | PR 1 |
 | `BIGLAW_ADDR` | `127.0.0.1:3101` | Listen address. Non-loopback needs `serve --allow-no-auth` (§ Exposure). | PR 1 |
 | `BIGLAW_PUBLIC_URL` | `http://127.0.0.1:3101` | External base URL (OIDC redirect, cookie `Secure`) | PR 8 |
-| `BIGLAW_MODEL_URL` | — | OpenAI-compatible base URL; today only the vendor breaker reads it (http(s), plain ASCII host, no `@` anywhere: no credentials in the URL; write any other `@` as `%40`) | PR 1 |
-| `BIGLAW_MODEL_KEY` | — | API key for that URL | PR 2 |
-| `BIGLAW_MODEL_LEAD` / `_SPECIALIST` / `_CRITIC` | — | Model id per role; unset roles use the lead's | PR 2 |
+| `BIGLAW_MODEL_URL` | — | OpenAI-compatible API base, ending in its version (`http://localhost:11434/v1`); calls go to `<URL>/chat/completions`. http(s), a plain ASCII host with at least one letter or digit, a port up to 65535, no `@` anywhere (no credentials in the URL; write any other `@` as `%40`). Required when the key or a role is set. | PR 1 |
+| `BIGLAW_MODEL_KEY` | — | API key for that URL, sent as `Authorization: Bearer`; no white space or control characters. `serve` warns if it would go over plain `http`. | PR 2 |
+| `BIGLAW_MODEL_LEAD` / `_SPECIALIST` / `_CRITIC` | — | Model id per role, as the endpoint names it (not checked at startup: a wrong id fails at its first call with 404 → `model_not_configured`). Unset specialist or critic use the lead's; setting either without the lead is refused. With no lead, model calls fail with 503 `model_not_configured`. | PR 2 |
 | `BIGLAW_BUDGET_CALLS` | `150` | Model calls per task | PR 4 |
 | `BIGLAW_BUDGET_USD` | `5` | Dollar cap per task | PR 4 |
-| `BIGLAW_LOCAL_WATTS` | `250` | Power draw for watt-hour metering | PR 2 |
-| `BIGLAW_PRICES` | built-in | JSON object or file path of model rates | PR 2 |
+| `BIGLAW_LOCAL_WATTS` | `250` | Power draw for watt-hour metering of local calls; a number from 0 to 100000 | PR 2 |
+| `BIGLAW_PRICES` | built-in | Model rates overriding the built-in table: the JSON itself (a value starting with `{`) or a path to a regular file of at most 1 MiB holding it (§ Model client) | PR 2 |
 | `BIGLAW_COLLAPSE_THRESHOLD` / `_ACTION` | `0.5` / `strict` | Grounding-collapse policy | PR 4 |
 | `BIGLAW_OIDC_ISSUER` | — | `google`, `microsoft:<tenant-id>` or an https issuer URL | PR 8 |
 | `BIGLAW_OIDC_CLIENT_ID` / `_CLIENT_SECRET` | — | The OIDC client | PR 8 |
@@ -98,6 +99,91 @@ case-insensitive, on the whole URL, and a non-ASCII host is refused (write it in
 look-alike dots such as `。` cannot slip past; Go's URL parser already refuses `%`-escapes such as
 `%2E` in an ASCII host. A Claude model behind
 a third-party gateway (OpenRouter, LiteLLM) is allowed.
+
+## Model client
+
+`internal/model` is the only code that talks to a model. It speaks the OpenAI chat-completions
+protocol with native tool calls, so one client serves Ollama, LM Studio, vLLM, GoFetch,
+OpenRouter, LiteLLM or a cloud vendor's compatible endpoint. No test calls a real model: every
+caller is tested against `model.Fake` or an `httptest` server.
+
+- **Requests.** A request names its `Agent` (`lead` or the subagent tool's name), its `Role`
+  (`lead`, `specialist`, `critic`; resolved through `model.Roles`, the one accessor that PR 3's
+  single role-map variable will feed) or an explicit `Model`, the messages, the tools, and optionally
+  `tool_choice`, `parallel_tool_calls`, `max_tokens` (sent as `max_completion_tokens` to
+  `api.openai.com`, which refuses `max_tokens` for reasoning models) and `temperature`. The same
+  request encodes to identical bytes every call (a tool's JSON Schema is compacted, deterministically)
+  and tools stay in the order given, so a fixed tool list keeps the provider's prompt-cache prefix
+  stable; `Strict` sends `"strict": true` (Go validation stays authoritative, since local endpoints
+  ignore it). A message's `Content` is a string, `nil` (an assistant turn with only tool calls) or,
+  for a user message, `[]model.Part`: text, and images as base64 `data:image/(png|jpeg|webp|gif)`
+  URLs only, so the endpoint never fetches a remote URL on BigLaw's behalf. A malformed request (no
+  agent, a repeated or malformed tool name, a schema that is not a JSON object, content of any other
+  type, a misplaced tool-call id) is refused before sending.
+- **Answers.** Text and/or typed tool calls (`id`, `name`, `arguments` as JSON object text; an
+  object sent by a non-conforming server is accepted, a missing id becomes `call_<n>`), a
+  `Truncated` flag for `finish_reason: length`, and usage. A tool call whose name is malformed
+  (`[A-Za-z0-9_-]{1,64}`), whose id repeats another's, or whose arguments are not a UTF-8 JSON
+  object fails the call (`ErrUnavailable`); `model.Fake` applies the same check. A 200 the provider
+  billed but BigLaw refuses (no choice, nothing usable, a bad tool call) still reports its usage
+  and cost on the error (`(*model.Error).Usage`), so the USD budget can count it. Input tokens exclude cache reads
+  (`prompt_tokens_details.cached_tokens`) and cache writes (`cache_creation_input_tokens`, sent
+  by Anthropic-style gateways); both are assumed to be counted inside `prompt_tokens`, as OpenAI
+  does. Redirects are not followed, since prompts carry matter data.
+- **Failures** are typed (README G6 of the v2 contract); `model.HTTPStatus` is the one status
+  mapping (the API sets `errorType` and the message from the kind, PR 4b):
+
+  | Kind | When | HTTP | `errorType` |
+  |---|---|---:|---|
+  | `ErrNotConfigured` | no URL, no model for the role, 401/403/404 (a missing or refused key, a wrong base URL or model id: one hint names all three) | 503 | `model_not_configured` |
+  | `ErrRateLimited` | 429 after the last attempt (`(*model.Error).RetryAfter` is the provider's `Retry-After`, at most 24 h) | 503 | `model_rate_limited` |
+  | `ErrUnavailable` | 5xx after the last attempt, another 4xx (400/413/422 included, see Limitations), a redirect (never followed), an unreachable endpoint, an answer over 32 MiB or not in the chat-completions shape, a malformed tool call | 502 | `model_unavailable` |
+  | `ErrTimeout` | the caller's deadline, or no answer within the 5-minute client timeout | 504 | `model_timeout` |
+  | `ErrNoContent` | no choice, or a choice with neither text nor tool calls | 422 | `no_content` |
+  | (cancelled) | the caller cancelled | 499 | — |
+
+  Anything else is a 500. Error text holds only BigLaw's own fixed words and the status code:
+  never the endpoint URL, host or port, the key, or anything the endpoint sent. A transport failure
+  is one of "connection refused", "DNS lookup failed", a timeout, or "the connection failed or the
+  answer is not valid HTTP" (Go's own error text can quote the bytes a server sent).
+- **Retries.** At most 3 attempts per call, only after 429, 500, 502, 503, 504 or 529. The wait
+  is the provider's `Retry-After` in seconds, or 1 s then 2 s plus up to 25% jitter. A
+  `Retry-After` over 30 s (however large: values past int64 too), or a wait that would outlast
+  the caller's deadline, ends the call at once with the last error. Network errors are not retried (the request may already have been
+  billed).
+- **Pricing.** `internal/model/prices.json` is the built-in table, in the `BIGLAW_PRICES` format
+  and read by the same parser: an object mapping a model id (case-insensitive; a trailing `*`
+  makes it a prefix) to `{"in": USD, "out": USD}` per million tokens, both required and from 0 to
+  10000, to `null` for a model that is known but has no price, or to `{"open": true}` for an
+  open-weights model with no price (`"open": true` may also join a rate). Repeated ids
+  (case-insensitive) and trailing data are refused at startup; other fields inside an entry are
+  ignored. Errors never quote the value, an id, or the file's contents. A model id resolves in the operator's `BIGLAW_PRICES` table
+  first, then the built-in one; in each, an exact id beats the longest prefix, and
+  `vendor/model` (OpenRouter style) is also tried as `model`. So
+  `BIGLAW_PRICES='{"deepseek*": {"in": 0.3, "out": 1.2}}'` reprices the whole family, and
+  `{"claude-haiku-4-5": null}` un-prices one model. (Under Compose a file path must exist inside
+  the container; the inline JSON form is simpler.) The built-in table has 85 entries: the 80 ported
+  from v1's `cost/cost.go` (v1's list prices as of early 2026, unverified here; v1's `{0, 0}`
+  placeholders are `null`, or `{"open": true}` for `llama*`, `glm*`, `kimi*`), plus open-weights
+  markers that keep v1's rates (`qwen2*`, `qwen3*`, `mistral:*`, `gpt-oss*`) and `qwen3-max*`
+  (closed, the `qwen*` rate). `deepseek-r1*` and `mixtral*` are marked open too. Cost = (input × in + output × out + cache writes × in × 1.25 +
+  cache reads × in × 0.10) / 10⁶. A model with no price has an **unknown** cost (nil), never
+  $0; the first call to each such model logs one warning.
+- **Local calls.** The host never makes a closed-weights model free. When `BIGLAW_MODEL_URL`'s
+  host is local (loopback, a private or link-local IP, `localhost`, a single-label name such as
+  the Compose service `ollama`, or a `.local`, `.internal`, `.lan` or `.home.arpa` name), a call
+  to an **open-weights** model (marked `"open": true`) or to a model the table does not list costs
+  $0 and is metered at `BIGLAW_LOCAL_WATTS` × the call's duration (all attempts). Any other model
+  is priced as on a hosted endpoint (or unknown, never $0), so `claude-sonnet-4-6` behind LiteLLM
+  on `localhost:4000` still counts against the USD budget. The operator's `BIGLAW_PRICES` entry
+  wins: `{"my-model": {"open": true}}` makes a model free locally, `{"qwen*": {"in": 0, "out": 0}}`
+  makes a family $0 everywhere. `serve` logs each role's decision once at startup
+  (`model pricing … role=lead model=… free=… rate=…`).
+- **`model.Fake`** answers from scripts keyed by agent name, in order. A call for an agent with
+  no script, or past the end of its script, is an error, never a default reply; an empty reply is
+  `ErrNoContent` and a malformed tool call `ErrUnavailable`, as from the real client; tool-call ids
+  it fills in are `<agent>-<call>-<index>` (the agent's own call count), so runs are deterministic.
+  It does not resolve roles: a request's `Role` only names its reply's model (`fake:<role>`).
 
 ## Exposure (there is no authentication yet)
 
@@ -230,17 +316,35 @@ name/type validation, upload slots, a DSN accepted under a uid with no passwd en
 `serve` end to end, and repository consistency (env-var tables, one Go version, deploy files,
 LICENSE/NOTICE in the image).
 
+Named tests (PLAN.md PR 2, `internal/model`, no network and no key): `TestChatToolCallRoundTrip`,
+`TestTypedErrors`, `TestRetryBackoffBounded`, `TestFakeScriptExhaustedIsError`,
+`TestFakeIsDeterministic`, `TestFakeRoutesByAgentName`, `TestLocalCallPricedZeroWithWattHours`,
+`TestPricesJSONOverride`, `TestImagePartsRoundTrip`, and in `cmd/biglaw` `TestConfigModelVars`.
+v1's pricing vectors are carried as `TestLookupPricing`, `TestCalcCostUSD`,
+`TestCalcCostUSD_GPT56Luna`, `TestGPT56Siblings_RecognisedButUnpriced`,
+`TestSetModelRates_OverridesBuiltins`, `TestRecord_UnknownModelFlaggedAndCounted`,
+`TestWarnUnpricedOnce_PerModel`, `TestBuiltinClaudeRatesUnchanged` (v1's
+`TestLocalWattMeteredCallsAreFree` is inside `TestLocalCallPricedZeroWithWattHours`), and
+`TestBuiltinPricesParse` checks every row of v1's `basePricing` against the new table. Extra:
+request validation, stable request bytes for prompt caching, role fallback, local-host
+detection, and that no error carries the key, the endpoint URL or upstream text. Round 1 of
+review added `TestBilledFailureKeepsUsage`, `TestUnpinnedBehaviours` (no retry after a network
+error, `max_completion_tokens`, `Truncated`, the 25% jitter bound, `Retry-After` overflow,
+duration over all attempts), `TestTransportErrorsFixedText` (an endpoint echoing the key and the
+prompt), `TestAnswerToolCallsChecked`, `TestLocalPricingRule` (with a FIFO price file) and, in
+`cmd/biglaw`, `TestServeLogsModelSetup`.
+
 ## Budgets (`scripts/loc.py`, run in CI)
 
 | Budget | Ceiling | Today |
 |---|---:|---:|
-| Go production lines (physical lines, non-`_test.go`, test-support packages included) | 14,250 | 1,146 |
-| Packages under `internal/`, test-support packages excluded | 12 | 1 (`store`; `store/storetest` is test support) |
+| Go production lines (physical lines, non-`_test.go`, test-support packages included) | 14,250 | 1,906 |
+| Packages under `internal/`, test-support packages excluded | 12 | 2 (`model`, `store`; `store/storetest` is test support) |
 | Direct Go dependencies | 3 | 1 (`github.com/lib/pq`) |
 | Runtime environment variables | 20 | 20 |
 | UI runtime dependencies | 2 | 0 (no UI yet) |
 | Packages without a `_test.go` | 0 | 0 |
-| Lines in any one source file (`.go`, `.py`, `.sql`, `.sh`, `.js`, `.ts`, `.css`; tests included) | 2,000 | 379 |
+| Lines in any one source file (`.go`, `.py`, `.sql`, `.sh`, `.js`, `.ts`, `.css`; tests included) | 2,000 | 595 |
 
 The line ceiling is 14,250 (owner decision; it was 14,000). A **test-support package** is one
 whose directory name ends in `test` and that no production file outside it imports, such as
@@ -265,11 +369,9 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
 - `render.yaml` has never been deployed and is inert until PR 8 (§ Exposure). Render's internal
   connection string may need an explicit `sslmode`, and the instance plans are not pinned; PR 8
   settles both.
-- The image build and the Compose smoke test run in CI's `docker` job, which has not run on
-  GitHub yet. Locally they were verified once (PR 1's first fix round) with a scratch copy of
-  the Dockerfile that trusts the build sandbox's TLS proxy. The second fix round added
-  `COPY LICENSE NOTICE` to the final stage without a Docker daemon to build it, so that line
-  is checked only by `TestImageShipsLicenseAndNotice` (text) until CI runs. No `linux/arm64`
+- The image build and the Compose smoke test run only in CI's `docker` job (green on GitHub
+  since PR 2, including the `COPY LICENSE NOTICE` line); the build sandbox has no Docker
+  daemon, so they are not run locally. No `linux/arm64`
   image or release binaries are produced yet, so the Raspberry Pi path means building natively
   with `make build`.
 - The Compose exposure check runs only where `docker` is installed (CI). An override file an
@@ -301,3 +403,54 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
 - `/health` is unauthenticated and reports the version string. Images built by Compose report
   `2.0.0-dev` (no version is passed at build time).
 - Postgres is required, including on a Pi. There is no embedded-database mode.
+- **Model client (PR 2):**
+  - Nothing calls it yet; `serve` validates its configuration only. The agent loop (PR 4a) is
+    its first caller, so no real endpoint has been exercised: every test uses `httptest` or
+    `model.Fake`. Behaviour against real Ollama, vLLM or vendor endpoints is unproven until the
+    owner's gates run.
+  - **"Local" is a guess from the host name**, and "open weights" is a list in the data. An
+    open-weights or unlisted model behind a local gateway that forwards to a paid host (LiteLLM to
+    OpenRouter for `llama-3.1-70b`, or a fine-tune name the table does not list) is $0, so only the
+    call budget bounds it; the startup `model pricing` line shows it, and a `BIGLAW_PRICES` entry
+    prices it. The reverse also holds: an open-weights model run on your own GPU behind a public
+    name or a Tailscale address (100.64/10) is priced at its hosted rate unless you mark it
+    `{"open": true}`.
+  - A model with no price (unknown, or `null`) has an unknown cost: the USD cap cannot count it,
+    and only the call cap bounds it. One warning is logged per model per process.
+  - The built-in rates are v1's list prices (early 2026) and were not re-verified for v2; they
+    may be stale. v1's substring families became prefix keys, so a name that only *contains* a
+    family (`my-haiku-finetune`) is no longer priced as that family; `vendor/model` ids are
+    still matched. One carried vector changed (`gemini-2.5-flash-lite-preview` now takes the
+    exact flash-lite row's 0.10/0.40, not v1's contradictory class rate 0.075/0.30).
+  - Inside one `BIGLAW_PRICES` entry, Go matches `in`/`out`/`open` case-insensitively, a repeated
+    field keeps the last value, and other fields are ignored; an exactly repeated id keeps the last
+    entry (Go's JSON decoder), a case-variant repeat is refused. Errors name no id, so a typo in
+    a long file is found by bisecting it.
+  - Upstream 400/413/422 (a context-length or schema refusal) is `ErrUnavailable` "HTTP 4xx", not
+    retried, and not yet a distinct kind: PR 4a must tell "compact the transcript" from an outage
+    (PLAN PR 4a). An answer's tool-call name is not checked against the tools offered; the agent
+    loop must (PR 4a).
+  - A 200 whose body is an error object (some gateways) is `ErrNoContent` "no choices", not
+    retried, and an OpenAI `refusal` is reported as an answer with neither text nor tool calls (its
+    text is dropped). A 200 with one malformed `usage` field (a string or a fraction) is
+    `ErrUnavailable`: the billed answer is lost and its usage is not counted. An answer with no
+    `usage` object counts as 0 tokens, so a priced model's call reads $0.
+  - A call that fails outright (non-200, transport error) carries no usage or watt-hours: a local
+    GPU's energy for a failed generation is not metered.
+  - Cache accounting assumes `prompt_tokens` includes cached and cache-write tokens (OpenAI's
+    convention). A gateway that reports them separately would make input tokens read low.
+  - `Retry-After` is read only in its seconds form; an HTTP date falls back to the backoff.
+    Without a caller deadline a call can take up to 3 × 5 minutes plus waits.
+  - Answers whose `content` is an array of parts, streaming, and `n > 1` are not supported (the
+    first choice is used). The number and size of tool calls in an answer are bounded only by the
+    32 MiB answer cap; the agent loop must cap what it executes.
+  - `Strict` and `parallel_tool_calls` are passed through as given; which tools may run in
+    parallel, and turning strict off where an endpoint refuses the combination, is PR 4a's policy.
+  - `model.Fake` hands out an agent's replies in call order, so concurrent calls *for the same
+    agent* get replies in a scheduling-dependent order; script those calls sequentially.
+  - **Line budget:** `internal/model` measures 730 lines against the 610 the v2 design planned
+    (670 in revision 5, less 60 for the price table as data): 120 over its share. `cmd/biglaw`
+    measures 492 against PR 1's 477. Measured the review's way (PR 1 as built, 1,161, plus PR 2's
+    growth over plan, with the remaining packages at their DESIGN budgets and cmd's import-v1
+    reservation intact), the plan totals 14,248 of the 14,250 ceiling: 2 lines of headroom, which
+    is for the owner to rule on.
