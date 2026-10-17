@@ -488,8 +488,6 @@ type Store struct {
 
 var Default = &Store{
 	writeCh: make(chan CostEntry, 256),
-	stopCh:  make(chan struct{}),
-	doneCh:  make(chan struct{}),
 }
 
 // Init loads the ledger at file and starts the disk writer. Calling it again

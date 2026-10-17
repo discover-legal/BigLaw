@@ -101,7 +101,7 @@ flowchart LR
 
 - A `LearningEngine` maintains a Q-table across `"phase:jurisdiction:workflowType"` states
 - High-confidence uncontested findings → reward; challenged findings → penalised ×0.3
-- Q-table persisted to `.qtable.json` (override with `LEARNING_FILE`) and reloaded on restart
+- Q-table persisted to `<data dir>/.qtable.json` (override with `LEARNING_FILE`) and reloaded on restart
 
 ## Vector storage
 
@@ -128,7 +128,7 @@ All platform code lives under `biglaw-go/` (module `biglaw-go`, entry point
 | `internal/topoflow/` | AgensFlow bandit over DyTopo topology selection |
 | `internal/agents/` | All 131 agent definitions + the agentic-loop base class |
 | `internal/agents/registry.go` | In-process vector agent registry — persists to `./data/agents.json` |
-| `internal/learning/` | Q-learning recruitment — Q-table persisted to `.qtable.json` |
+| `internal/learning/` | Q-learning recruitment — Q-table persisted to `<data dir>/.qtable.json` |
 | `internal/memory/` | Intra-round whiteboard + inter-round vector memory store |
 | `internal/knowledge/` | Document knowledge base — chunk ingestion + semantic search |
 | `internal/protocols/` | CitationGate · DebateProtocol · VerificationPipeline |

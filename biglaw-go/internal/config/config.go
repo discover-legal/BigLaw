@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -136,6 +137,15 @@ func Defaults() *Config {
 }
 
 func load() *Config {
+	// Every piece of state defaults into one data dir — RUVECTOR_DATA_DIR,
+	// default ./data — the directory the single-writer lock guards. st
+	// records each path with its pre-data-dir defaults so
+	// MigrateLegacyStateFiles can carry old installs over and
+	// CheckStateLayout can assert nothing escaped the dir.
+	dataDir := env("RUVECTOR_DATA_DIR", "./data")
+	st := &stateSet{dataDir: dataDir}
+	playbooksFile := st.file("PLAYBOOKS_FILE", "playbooks.json", "data/playbooks.json")
+
 	c := &Config{
 		// Flavour trims the bench + templates to a practice-area preset
 		// (flavours/<name>.json). Empty or "full" = the complete platform.
@@ -161,7 +171,7 @@ func load() *Config {
 		ReentrantMachinery: envBool("REENTRANT_MACHINERY", true), // round-boundary re-entry of the selective machinery (false → one-shot round 0)
 		Database: DatabaseConfig{
 			Backend:    normalizeEnum(getenv("DB_BACKEND"), "sqlite", "sqlite", "postgres", "memory"),
-			SQLitePath: env("SQLITE_PATH", "./data/biglaw.db"),
+			SQLitePath: st.file("SQLITE_PATH", "biglaw.db", "data/biglaw.db"),
 			URL:        getenv("DATABASE_URL"),
 		},
 		Embeddings: EmbeddingsConfig{
@@ -170,13 +180,20 @@ func load() *Config {
 			Dimensions: envInt("EMBEDDING_DIMENSIONS", 1536),
 		},
 		VectorDB: VectorDBConfig{
-			DataDir: env("RUVECTOR_DATA_DIR", "./data"),
+			DataDir: dataDir,
 		},
 		API: APIConfig{
 			Port:      envInt("API_PORT", 3101),
 			Host:      env("API_HOST", "127.0.0.1"),
 			APIKey:    env("API_KEY", ""),
 			ProfileID: env("API_PROFILE_ID", ""),
+		},
+		Run: RunConfig{
+			Mode:           strings.ToLower(strings.TrimSpace(env("BIG_MICHAEL_MODE", "auto"))),
+			APIURL:         env("BIG_MICHAEL_API", LocalAPIURL(env("API_HOST", "127.0.0.1"), envInt("API_PORT", 3101))),
+			APIURLExplicit: getenv("BIG_MICHAEL_API") != "",
+			APIToken:       env("BIG_MICHAEL_API_TOKEN", env("API_KEY", "")),
+			LockDisabled:   strings.EqualFold(strings.TrimSpace(getenv("BIGLAW_LOCK")), "off"),
 		},
 		Auth: AuthConfig{
 			Enabled:        envBool("AUTH_ENABLED", false),
@@ -264,18 +281,19 @@ func load() *Config {
 			OutputDir: env("PDF_OUTPUT_DIR", "./output/documents"),
 		},
 		Persistence: PersistenceConfig{
-			TasksFile:       env("TASKS_FILE", ".tasks.json"),
-			SettingsFile:    env("SETTINGS_FILE", ".settings.json"),
-			ProfilesFile:    env("PROFILES_FILE", ".profiles.json"),
-			ClientsFile:     env("CLIENTS_FILE", ".clients.json"),
-			TimeFile:        env("TIME_FILE", ".time-entries.json"),
-			LearningFile:    env("LEARNING_FILE", ".qtable.json"),
-			OcgFile:         env("OCG_FILE", ".ocg.json"),
-			JobsFile:        env("JOBS_FILE", ".jobs.json"),
-			PreBillsFile:    env("PREBILLS_FILE", "./data/prebills.json"),
-			CostFile:        env("COST_LOG_FILE", "./data/costs.jsonl"),
-			PlaybooksFile:   env("PLAYBOOKS_FILE", "./data/playbooks.json"),
-			ClientVoiceFile: env("CLIENT_VOICE_FILE", "./data/clientvoice.json"),
+			TasksFile:       st.file("TASKS_FILE", ".tasks.json", ".tasks.json"),
+			SettingsFile:    st.file("SETTINGS_FILE", ".settings.json", ".settings.json"),
+			ProfilesFile:    st.file("PROFILES_FILE", ".profiles.json", ".profiles.json"),
+			ClientsFile:     st.file("CLIENTS_FILE", ".clients.json", ".clients.json"),
+			TimeFile:        st.file("TIME_FILE", ".time-entries.json", ".time-entries.json"),
+			LearningFile:    st.file("LEARNING_FILE", ".qtable.json", ".qtable.json"),
+			OcgFile:         st.file("OCG_FILE", ".ocg.json", ".ocg.json"),
+			JobsFile:        st.file("JOBS_FILE", ".jobs.json", ".jobs.json"),
+			PreBillsFile:    st.file("PREBILLS_FILE", "prebills.json", "data/prebills.json"),
+			CostFile:        st.file("COST_LOG_FILE", "costs.jsonl", "data/costs.jsonl"),
+			PlaybooksFile:   playbooksFile,
+			ClioTokensFile:  st.file("CLIO_TOKENS_FILE", "clio-tokens.json", "data/clio-tokens.json"),
+			ClientVoiceFile: st.file("CLIENT_VOICE_FILE", "clientvoice.json", "data/clientvoice.json"),
 		},
 		Cost: CostConfig{
 			ModelRates: envModelRates("COST_MODEL_RATES"),
@@ -298,13 +316,13 @@ func load() *Config {
 		},
 		Audit: AuditConfig{
 			Enabled: envBool("AUDIT_ENABLED", true),
-			LogFile: env("AUDIT_LOG_FILE", "./audit.jsonl"),
+			LogFile: st.file("AUDIT_LOG_FILE", "audit.jsonl", "audit.jsonl", "data/audit.jsonl"),
 		},
 		SearchTavily: getenv("TAVILY_API_KEY"),
 		LogLevel:     env("LOG_LEVEL", "info"),
 		Blob: BlobConfig{
 			Backend:        normalizeEnum(getenv("BLOB_BACKEND"), "disk", "disk", "webdav", "supabase", "oci"),
-			Dir:            env("BLOB_DIR", "./data/attachments"),
+			Dir:            st.dir("BLOB_DIR", "attachments", "data/attachments"),
 			WebDAVURL:      getenv("BLOB_WEBDAV_URL"),
 			WebDAVUser:     getenv("BLOB_WEBDAV_USER"),
 			WebDAVPass:     getenv("BLOB_WEBDAV_PASS"),
@@ -319,7 +337,7 @@ func load() *Config {
 		ReasoningEffort: normalizeEnum(getenv("REASONING_EFFORT"), "", "low", "medium", "high"),
 		LLMTemperature:  loadLLMTemperature(),
 		Playbooks: PlaybooksConfig{
-			File: env("PLAYBOOKS_FILE", "./data/playbooks.json"),
+			File: playbooksFile,
 		},
 		Email: EmailConfig{
 			Graph: GraphEmailConfig{
@@ -382,32 +400,32 @@ func load() *Config {
 			Enabled:        envBool("LPM_ENABLED", false),
 			DailyHour:      envInt("LPM_DAILY_HOUR", 6),
 			Formats:        envList("LPM_REPORT_FORMATS", "json,docx,markdown"),
-			CorpusFile:     env("LPM_CORPUS_FILE", "./data/status-reports.jsonl"),
-			ReportDir:      env("LPM_REPORT_DIR", "./data/reports"),
+			CorpusFile:     st.file("LPM_CORPUS_FILE", "status-reports.jsonl", "data/status-reports.jsonl"),
+			ReportDir:      st.dir("LPM_REPORT_DIR", "reports", "data/reports"),
 			Model:          env("LPM_MODEL", ""),
 			ChannelPost:    envBool("LPM_CHANNEL_POST", false),
 			EmailWriteMode: normalizeEnum(env("LPM_EMAIL_WRITE_MODE", "off"), "off", "off", "channel", "draft", "send_gate"),
 			IntakeMode:     normalizeEnum(env("LPM_INTAKE_MODE", "polling"), "polling", "shared_inbox", "polling", "both"),
 			SharedInbox:    env("LPM_SHARED_INBOX", ""),
 			PollIntervalM:  envInt("LPM_POLL_INTERVAL_MIN", 15),
-			RoutedFile:     env("LPM_ROUTED_FILE", "./data/routed-emails.jsonl"),
+			RoutedFile:     st.file("LPM_ROUTED_FILE", "routed-emails.jsonl", "data/routed-emails.jsonl"),
 			RouteMinConf:   envFloat("LPM_ROUTE_MIN_CONFIDENCE", 0.6),
 			AllowedDomains: envList("LPM_ALLOWED_DOMAINS", ""),
-			PendingFile:    env("LPM_PENDING_FILE", "./data/pending-drafts.json"),
+			PendingFile:    st.file("LPM_PENDING_FILE", "pending-drafts.json", "data/pending-drafts.json"),
 
 			BackfillEnabled:    envBool("LPM_BACKFILL_ENABLED", false),
 			BackfillWindowDays: envInt("LPM_BACKFILL_WINDOW_DAYS", 365),
 			BackfillStepDays:   envInt("LPM_BACKFILL_STEP_DAYS", 7),
 			BackfillMaxPerStep: envInt("LPM_BACKFILL_MAX_PER_STEP", 100),
 			BackfillPauseMs:    envInt("LPM_BACKFILL_PAUSE_MS", 1000),
-			BackfillCursorFile: env("LPM_BACKFILL_CURSOR_FILE", "./data/backfill-cursor.json"),
+			BackfillCursorFile: st.file("LPM_BACKFILL_CURSOR_FILE", "backfill-cursor.json", "data/backfill-cursor.json"),
 		},
 		Monitors: MonitorsConfig{
 			BudgetAlertsEnabled:   envBool("MONITOR_BUDGET_ALERTS", true),
 			BudgetIntervalMin:     envInt("MONITOR_BUDGET_INTERVAL_MIN", 60),
 			DocketsEnabled:        envBool("MONITOR_DOCKETS", true),
 			DocketsIntervalMin:    envInt("MONITOR_DOCKET_INTERVAL_MIN", 30),
-			DocketsFile:           env("DOCKETS_FILE", "./data/dockets.json"),
+			DocketsFile:           st.file("DOCKETS_FILE", "dockets.json", "data/dockets.json"),
 			RegulatoryIntervalMin: envInt("MONITOR_REGULATORY_INTERVAL_MIN", 360),
 		},
 	}
@@ -443,7 +461,34 @@ func load() *Config {
 		ResumeRunningTasks:      envBool("RESUME_RUNNING_TASKS", false),
 	}
 
+	// The matter-budget store has no env var of its own: it sits next to the
+	// clients file (internal/api/matters.go), so it moves with it. SQLite's
+	// journal files move with the database.
+	if !st.explicit("CLIENTS_FILE") {
+		st.derived("CLIENTS_FILE", filepath.Join(filepath.Dir(c.Persistence.ClientsFile), ".matter-budgets.json"),
+			".matter-budgets.json", "data/.matter-budgets.json")
+	}
+	// The one-off time-entry migration marker sits next to the time file
+	// (cmd/biglaw/migrate_failed_runs.go); without it a migrated install
+	// would re-run the write-off.
+	if !st.explicit("TIME_FILE") {
+		st.derived("TIME_FILE", c.Persistence.TimeFile+".migrations.json", ".time-entries.json.migrations.json")
+	}
+	st.withCompanions("SQLITE_PATH", "-wal", "-shm", "-journal")
+	c.state = st.paths
+
 	return c
+}
+
+// LocalAPIURL is the URL this machine reaches a REST API bound to
+// host:port at — a wildcard bind address (0.0.0.0 / ::) maps to loopback.
+// It is BIG_MICHAEL_API's default and what an owner records in its lock.
+func LocalAPIURL(host string, port int) string {
+	switch strings.TrimSpace(host) {
+	case "", "0.0.0.0", "::", "[::]":
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(strings.Trim(host, "[]"), strconv.Itoa(port))
 }
 
 // loadLLMTemperature resolves the sampling temperature for reasoning/synthesis

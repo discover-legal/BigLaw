@@ -35,13 +35,18 @@ final synthesis.
 
 ## Coexisting with a running backend
 
-`.mcp.json` runs in `auto` mode: if a backend is already serving the REST API (e.g. the
-Docker stack, or a native process started with `BIG_MICHAEL_MODE=backend`), Claude Code's
-MCP attaches to it as a thin client instead of opening the vector DB itself — so the console
-and the MCP run side by side without fighting over the single-writer lock. See
+`.mcp.json` runs in `auto` mode: if another process already owns the data dir (e.g. a
+native process started with `BIG_MICHAEL_MODE=backend`), Claude Code's MCP finds the data
+dir's single-writer lock held and attaches to that owner's REST API (`BIG_MICHAEL_API`,
+default `http://127.0.0.1:3101`; in practice the URL the owner records in its lock) as a thin client — no database, no monitors, no vector
+store of its own. Tasks and documents created over MCP are then the backend's: visible in
+the workbench and everywhere else. The Docker stack keeps its data in its own volume, so to
+drive it set `BIG_MICHAEL_MODE=mcp` and `BIG_MICHAEL_API=http://localhost:3102` (plus
+`BIG_MICHAEL_API_TOKEN` when the backend runs with `AUTH_ENABLED=true`). See
 [Run modes](../deployment/run-modes.md).
 
 The MCP server is activated when stdin is not a TTY — i.e. exactly when launched by
-Claude Code. The implementation lives in `biglaw-go/internal/mcp/`.
+Claude Code. The implementation lives in `biglaw-go/internal/mcp/` (tools) over
+`biglaw-go/internal/backend/` (the in-process / REST seam).
 
 Related: [REST API](rest-api.md) · [Jurisdiction & NOSLEGAL](jurisdiction-and-noslegal.md)

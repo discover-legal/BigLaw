@@ -133,6 +133,7 @@ func (h *countWarnHandler) WithGroup(_ string) slog.Handler      { return h }
 
 // The unknown-model warning fires once per model per process, not per call.
 func TestWarnUnpricedOnce_PerModel(t *testing.T) {
+	unpricedWarned.Clear() // process-wide dedupe: a rerun (-count=2) starts fresh
 	h := &countWarnHandler{}
 	prev := slog.Default()
 	slog.SetDefault(slog.New(h))
