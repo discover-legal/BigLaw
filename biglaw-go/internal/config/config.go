@@ -9,19 +9,28 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+)
+
+// getenv is the environment Load reads. Defaults swaps it for an empty
+// environment; both hold loadMu, and nothing outside load() reads it.
+var (
+	loadMu sync.Mutex
+	getenv = os.Getenv
 )
 
 func env(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
+	if v := getenv(key); v != "" {
 		return v
 	}
 	return fallback
 }
 
 func envBool(key string, fallback bool) bool {
-	v := os.Getenv(key)
+	v := getenv(key)
 	if v == "" {
 		return fallback
 	}
@@ -29,7 +38,7 @@ func envBool(key string, fallback bool) bool {
 }
 
 func envInt(key string, fallback int) int {
-	v := os.Getenv(key)
+	v := getenv(key)
 	if v == "" {
 		return fallback
 	}
@@ -41,7 +50,7 @@ func envInt(key string, fallback int) int {
 }
 
 func envFloat(key string, fallback float64) float64 {
-	v := os.Getenv(key)
+	v := getenv(key)
 	if v == "" {
 		return fallback
 	}
@@ -57,7 +66,7 @@ func envFloat(key string, fallback float64) float64 {
 // Malformed JSON is ignored with a warning (the built-in rate table stands);
 // entries with negative rates are dropped individually.
 func envModelRates(key string) map[string]ModelRate {
-	raw := strings.TrimSpace(os.Getenv(key))
+	raw := strings.TrimSpace(getenv(key))
 	if raw == "" {
 		return nil
 	}
@@ -110,7 +119,33 @@ func normalizeEnum(v, fallback string, allowed ...string) string {
 	return fallback
 }
 
+// Load reads the configuration from the environment.
 func Load() *Config {
+	loadMu.Lock()
+	defer loadMu.Unlock()
+	return load()
+}
+
+// Defaults returns the built-in configuration — what Load returns with no
+// environment variables set.
+func Defaults() *Config {
+	loadMu.Lock()
+	defer loadMu.Unlock()
+	getenv = func(string) string { return "" }
+	defer func() { getenv = os.Getenv }()
+	return load()
+}
+
+func load() *Config {
+	// Every piece of state defaults into one data dir — RUVECTOR_DATA_DIR,
+	// default ./data — the directory the single-writer lock guards. st
+	// records each path with its pre-data-dir defaults so
+	// MigrateLegacyStateFiles can carry old installs over and
+	// CheckStateLayout can assert nothing escaped the dir.
+	dataDir := env("RUVECTOR_DATA_DIR", "./data")
+	st := &stateSet{dataDir: dataDir}
+	playbooksFile := st.file("PLAYBOOKS_FILE", "playbooks.json", "data/playbooks.json")
+
 	c := &Config{
 		// Flavour trims the bench + templates to a practice-area preset
 		// (flavours/<name>.json). Empty or "full" = the complete platform.
@@ -130,14 +165,14 @@ func Load() *Config {
 			Dedup:                 envBool("WRITER_DEDUP", true),
 			DedupThreshold:        envFloat("WRITER_DEDUP_THRESHOLD", 0.5),
 			ClusterMergeThreshold: envFloat("WRITER_CLUSTER_MERGE_THRESHOLD", 0.8),
-			UnverifiedPolicy:      normalizeEnum(os.Getenv("WRITER_UNVERIFIED"), "exclude", "exclude", "caveat"),
+			UnverifiedPolicy:      normalizeEnum(getenv("WRITER_UNVERIFIED"), "exclude", "exclude", "caveat"),
 		},
 		BELOSpine:          envBool("BELO_SPINE", false),         // spine from typed Conduct nodes vs LLM enumeration
 		ReentrantMachinery: envBool("REENTRANT_MACHINERY", true), // round-boundary re-entry of the selective machinery (false → one-shot round 0)
 		Database: DatabaseConfig{
-			Backend:    normalizeEnum(os.Getenv("DB_BACKEND"), "sqlite", "sqlite", "postgres", "memory"),
-			SQLitePath: env("SQLITE_PATH", "./data/biglaw.db"),
-			URL:        os.Getenv("DATABASE_URL"),
+			Backend:    normalizeEnum(getenv("DB_BACKEND"), "sqlite", "sqlite", "postgres", "memory"),
+			SQLitePath: st.file("SQLITE_PATH", "biglaw.db", "data/biglaw.db"),
+			URL:        getenv("DATABASE_URL"),
 		},
 		Embeddings: EmbeddingsConfig{
 			APIKey:     env("OPENAI_API_KEY", ""),
@@ -145,13 +180,20 @@ func Load() *Config {
 			Dimensions: envInt("EMBEDDING_DIMENSIONS", 1536),
 		},
 		VectorDB: VectorDBConfig{
-			DataDir: env("RUVECTOR_DATA_DIR", "./data"),
+			DataDir: dataDir,
 		},
 		API: APIConfig{
 			Port:      envInt("API_PORT", 3101),
 			Host:      env("API_HOST", "127.0.0.1"),
 			APIKey:    env("API_KEY", ""),
 			ProfileID: env("API_PROFILE_ID", ""),
+		},
+		Run: RunConfig{
+			Mode:           strings.ToLower(strings.TrimSpace(env("BIG_MICHAEL_MODE", "auto"))),
+			APIURL:         env("BIG_MICHAEL_API", LocalAPIURL(env("API_HOST", "127.0.0.1"), envInt("API_PORT", 3101))),
+			APIURLExplicit: getenv("BIG_MICHAEL_API") != "",
+			APIToken:       env("BIG_MICHAEL_API_TOKEN", env("API_KEY", "")),
+			LockDisabled:   strings.EqualFold(strings.TrimSpace(getenv("BIGLAW_LOCK")), "off"),
 		},
 		Auth: AuthConfig{
 			Enabled:        envBool("AUTH_ENABLED", false),
@@ -193,25 +235,26 @@ func Load() *Config {
 			GateConfidenceThreshold: envFloat("GATE_CONFIDENCE_THRESHOLD", envFloat("DEBATE_GATE_CONFIDENCE_THRESHOLD", 0.80)),
 		},
 		Gate: GateConfig{
-			Policy:        normalizeEnum(os.Getenv("GATE_POLICY"), "calibrated", "strict", "calibrated"),
+			Policy:        normalizeEnum(getenv("GATE_POLICY"), "calibrated", "strict", "calibrated"),
 			MaxPerTask:    envInt("GATE_MAX_PER_TASK", 25),
 			RankedSampleK: envInt("GATE_RANKED_SAMPLE_K", 10),
 		},
 		Grounding: GroundingConfig{
 			CollapseThreshold:   envFloat("GROUNDING_COLLAPSE_THRESHOLD", 0.5),
 			CollapseMinFindings: envInt("GROUNDING_COLLAPSE_MIN_FINDINGS", 20),
-			CollapseAction:      normalizeEnum(os.Getenv("GROUNDING_COLLAPSE_ACTION"), "fail", "fail", "strict", "warn"),
+			CollapseAction:      normalizeEnum(getenv("GROUNDING_COLLAPSE_ACTION"), "fail", "fail", "strict", "warn"),
 		},
 		Presentation: PresentationConfig{
 			Mode:     env("UI_MODE", "lawyer"),
 			FirmName: env("FIRM_NAME", ""),
 		},
 		DocuSeal: DocuSealConfig{
-			APIKey: env("DOCUSEAL_API_KEY", ""),
-			URL:    env("DOCUSEAL_URL", "http://localhost:3000"),
+			APIKey:      env("DOCUSEAL_API_KEY", ""),
+			URL:         env("DOCUSEAL_URL", "http://localhost:3000"),
+			OperatorURL: env("DOCUSEAL_URL", "http://localhost:3000"),
 			// E-signature defaults to on when an API key is present; the
 			// admin panel can toggle it and set url/key at runtime.
-			Enabled: envBool("DOCUSEAL_ENABLED", os.Getenv("DOCUSEAL_API_KEY") != ""),
+			Enabled: envBool("DOCUSEAL_ENABLED", getenv("DOCUSEAL_API_KEY") != ""),
 		},
 		ClientVoice: ClientVoiceConfig{
 			GateNotes:           envBool("CLIENT_VOICE_GATE_NOTES", true),
@@ -224,8 +267,8 @@ func Load() *Config {
 			OllamaTiers:         env("OLLAMA_TIERS", "3"),
 			LocalEmbeddings:     envBool("LOCAL_EMBEDDINGS", false),
 			LocalEmbeddingModel: env("LOCAL_EMBEDDING_MODEL", "nomic-embed-text"),
-			LocalInferenceURL:   os.Getenv("LOCAL_INFERENCE_URL"),
-			GoFetchURL:          os.Getenv("GOFETCH_URL"),
+			LocalInferenceURL:   getenv("LOCAL_INFERENCE_URL"),
+			GoFetchURL:          getenv("GOFETCH_URL"),
 			LocalInferenceKey:   env("LOCAL_INFERENCE_KEY", "local"),
 			LocalInferenceModel: env("LOCAL_INFERENCE_MODEL", "local-model"),
 			LocalInferenceTiers: env("LOCAL_INFERENCE_TIERS", ""),
@@ -238,18 +281,19 @@ func Load() *Config {
 			OutputDir: env("PDF_OUTPUT_DIR", "./output/documents"),
 		},
 		Persistence: PersistenceConfig{
-			TasksFile:       env("TASKS_FILE", ".tasks.json"),
-			SettingsFile:    env("SETTINGS_FILE", ".settings.json"),
-			ProfilesFile:    env("PROFILES_FILE", ".profiles.json"),
-			ClientsFile:     env("CLIENTS_FILE", ".clients.json"),
-			TimeFile:        env("TIME_FILE", ".time-entries.json"),
-			LearningFile:    env("LEARNING_FILE", ".qtable.json"),
-			OcgFile:         env("OCG_FILE", ".ocg.json"),
-			JobsFile:        env("JOBS_FILE", ".jobs.json"),
-			PreBillsFile:    env("PREBILLS_FILE", "./data/prebills.json"),
-			CostFile:        env("COST_LOG_FILE", "./data/costs.jsonl"),
-			PlaybooksFile:   env("PLAYBOOKS_FILE", "./data/playbooks.json"),
-			ClientVoiceFile: env("CLIENT_VOICE_FILE", "./data/clientvoice.json"),
+			TasksFile:       st.file("TASKS_FILE", ".tasks.json", ".tasks.json"),
+			SettingsFile:    st.file("SETTINGS_FILE", ".settings.json", ".settings.json"),
+			ProfilesFile:    st.file("PROFILES_FILE", ".profiles.json", ".profiles.json"),
+			ClientsFile:     st.file("CLIENTS_FILE", ".clients.json", ".clients.json"),
+			TimeFile:        st.file("TIME_FILE", ".time-entries.json", ".time-entries.json"),
+			LearningFile:    st.file("LEARNING_FILE", ".qtable.json", ".qtable.json"),
+			OcgFile:         st.file("OCG_FILE", ".ocg.json", ".ocg.json"),
+			JobsFile:        st.file("JOBS_FILE", ".jobs.json", ".jobs.json"),
+			PreBillsFile:    st.file("PREBILLS_FILE", "prebills.json", "data/prebills.json"),
+			CostFile:        st.file("COST_LOG_FILE", "costs.jsonl", "data/costs.jsonl"),
+			PlaybooksFile:   playbooksFile,
+			ClioTokensFile:  st.file("CLIO_TOKENS_FILE", "clio-tokens.json", "data/clio-tokens.json"),
+			ClientVoiceFile: st.file("CLIENT_VOICE_FILE", "clientvoice.json", "data/clientvoice.json"),
 		},
 		Cost: CostConfig{
 			ModelRates: envModelRates("COST_MODEL_RATES"),
@@ -272,116 +316,116 @@ func Load() *Config {
 		},
 		Audit: AuditConfig{
 			Enabled: envBool("AUDIT_ENABLED", true),
-			LogFile: env("AUDIT_LOG_FILE", "./audit.jsonl"),
+			LogFile: st.file("AUDIT_LOG_FILE", "audit.jsonl", "audit.jsonl", "data/audit.jsonl"),
 		},
-		SearchTavily: os.Getenv("TAVILY_API_KEY"),
+		SearchTavily: getenv("TAVILY_API_KEY"),
 		LogLevel:     env("LOG_LEVEL", "info"),
 		Blob: BlobConfig{
-			Backend:        normalizeEnum(os.Getenv("BLOB_BACKEND"), "disk", "disk", "webdav", "supabase", "oci"),
-			Dir:            env("BLOB_DIR", "./data/attachments"),
-			WebDAVURL:      os.Getenv("BLOB_WEBDAV_URL"),
-			WebDAVUser:     os.Getenv("BLOB_WEBDAV_USER"),
-			WebDAVPass:     os.Getenv("BLOB_WEBDAV_PASS"),
-			SupabaseURL:    os.Getenv("BLOB_SUPABASE_URL"),
+			Backend:        normalizeEnum(getenv("BLOB_BACKEND"), "disk", "disk", "webdav", "supabase", "oci"),
+			Dir:            st.dir("BLOB_DIR", "attachments", "data/attachments"),
+			WebDAVURL:      getenv("BLOB_WEBDAV_URL"),
+			WebDAVUser:     getenv("BLOB_WEBDAV_USER"),
+			WebDAVPass:     getenv("BLOB_WEBDAV_PASS"),
+			SupabaseURL:    getenv("BLOB_SUPABASE_URL"),
 			SupabaseBucket: env("BLOB_SUPABASE_BUCKET", "attachments"),
-			SupabaseKey:    os.Getenv("BLOB_SUPABASE_KEY"),
-			OCIRef:         os.Getenv("BLOB_OCI_REF"),
-			OCIUser:        os.Getenv("BLOB_OCI_USER"),
-			OCIPass:        os.Getenv("BLOB_OCI_PASS"),
+			SupabaseKey:    getenv("BLOB_SUPABASE_KEY"),
+			OCIRef:         getenv("BLOB_OCI_REF"),
+			OCIUser:        getenv("BLOB_OCI_USER"),
+			OCIPass:        getenv("BLOB_OCI_PASS"),
 			OCIPlainHTTP:   envBool("BLOB_OCI_PLAIN_HTTP", false),
 		},
-		ReasoningEffort: normalizeEnum(os.Getenv("REASONING_EFFORT"), "", "low", "medium", "high"),
+		ReasoningEffort: normalizeEnum(getenv("REASONING_EFFORT"), "", "low", "medium", "high"),
 		LLMTemperature:  loadLLMTemperature(),
 		Playbooks: PlaybooksConfig{
-			File: env("PLAYBOOKS_FILE", "./data/playbooks.json"),
+			File: playbooksFile,
 		},
 		Email: EmailConfig{
 			Graph: GraphEmailConfig{
-				TenantID:     os.Getenv("GRAPH_TENANT_ID"),
-				ClientID:     os.Getenv("GRAPH_CLIENT_ID"),
-				ClientSecret: os.Getenv("GRAPH_CLIENT_SECRET"),
-				UserEmail:    os.Getenv("GRAPH_USER_EMAIL"),
-				AccessToken:  os.Getenv("GRAPH_ACCESS_TOKEN"),
-				Enabled: os.Getenv("GRAPH_ACCESS_TOKEN") != "" ||
-					(os.Getenv("GRAPH_TENANT_ID") != "" && os.Getenv("GRAPH_CLIENT_ID") != "" && os.Getenv("GRAPH_CLIENT_SECRET") != ""),
+				TenantID:     getenv("GRAPH_TENANT_ID"),
+				ClientID:     getenv("GRAPH_CLIENT_ID"),
+				ClientSecret: getenv("GRAPH_CLIENT_SECRET"),
+				UserEmail:    getenv("GRAPH_USER_EMAIL"),
+				AccessToken:  getenv("GRAPH_ACCESS_TOKEN"),
+				Enabled: getenv("GRAPH_ACCESS_TOKEN") != "" ||
+					(getenv("GRAPH_TENANT_ID") != "" && getenv("GRAPH_CLIENT_ID") != "" && getenv("GRAPH_CLIENT_SECRET") != ""),
 			},
 			Gmail: GmailConfig{
-				SAKeyJSON:   os.Getenv("GMAIL_SA_KEY_JSON"),
-				UserEmail:   os.Getenv("GMAIL_USER_EMAIL"),
-				AccessToken: os.Getenv("GMAIL_ACCESS_TOKEN"),
-				Enabled:     os.Getenv("GMAIL_ACCESS_TOKEN") != "" || os.Getenv("GMAIL_SA_KEY_JSON") != "",
+				SAKeyJSON:   getenv("GMAIL_SA_KEY_JSON"),
+				UserEmail:   getenv("GMAIL_USER_EMAIL"),
+				AccessToken: getenv("GMAIL_ACCESS_TOKEN"),
+				Enabled:     getenv("GMAIL_ACCESS_TOKEN") != "" || getenv("GMAIL_SA_KEY_JSON") != "",
 			},
 		},
 		Bots: BotsConfig{
 			Teams: TeamsBotsConfig{
-				WebhookSecret:      os.Getenv("TEAMS_WEBHOOK_SECRET"),
-				IncomingWebhookURL: os.Getenv("TEAMS_INCOMING_WEBHOOK_URL"),
-				Enabled:            os.Getenv("TEAMS_WEBHOOK_SECRET") != "" || os.Getenv("TEAMS_INCOMING_WEBHOOK_URL") != "",
+				WebhookSecret:      getenv("TEAMS_WEBHOOK_SECRET"),
+				IncomingWebhookURL: getenv("TEAMS_INCOMING_WEBHOOK_URL"),
+				Enabled:            getenv("TEAMS_WEBHOOK_SECRET") != "" || getenv("TEAMS_INCOMING_WEBHOOK_URL") != "",
 			},
 			Slack: SlackBotConfig{
-				BotToken:       os.Getenv("SLACK_BOT_TOKEN"),
-				SigningSecret:  os.Getenv("SLACK_SIGNING_SECRET"),
-				DefaultChannel: os.Getenv("SLACK_DEFAULT_CHANNEL"),
-				Enabled:        os.Getenv("SLACK_BOT_TOKEN") != "" && os.Getenv("SLACK_SIGNING_SECRET") != "",
+				BotToken:       getenv("SLACK_BOT_TOKEN"),
+				SigningSecret:  getenv("SLACK_SIGNING_SECRET"),
+				DefaultChannel: getenv("SLACK_DEFAULT_CHANNEL"),
+				Enabled:        getenv("SLACK_BOT_TOKEN") != "" && getenv("SLACK_SIGNING_SECRET") != "",
 			},
 		},
 		Connectors: ConnectorsConfig{
 			CourtListener: ConnectorConfig{
-				APIKey:   os.Getenv("COURT_LISTENER_API_KEY"),
+				APIKey:   getenv("COURT_LISTENER_API_KEY"),
 				Endpoint: env("COURT_LISTENER_API_URL", "https://www.courtlistener.com/api/rest/v4"),
 				Enabled:  true,
 			},
 			Ironclad: ConnectorConfig{
-				APIKey:   os.Getenv("IRONCLAD_API_KEY"),
+				APIKey:   getenv("IRONCLAD_API_KEY"),
 				Endpoint: env("IRONCLAD_MCP_URL", "https://mcp.na1.ironcladapp.com/mcp"),
-				Enabled:  os.Getenv("IRONCLAD_API_KEY") != "",
+				Enabled:  getenv("IRONCLAD_API_KEY") != "",
 			},
 			Westlaw: ConnectorConfig{
-				APIKey:   os.Getenv("WESTLAW_API_KEY"),
+				APIKey:   getenv("WESTLAW_API_KEY"),
 				Endpoint: env("WESTLAW_MCP_URL", "https://legal-mcp.thomsonreuters.com/mcp"),
-				Enabled:  os.Getenv("WESTLAW_API_KEY") != "",
+				Enabled:  getenv("WESTLAW_API_KEY") != "",
 			},
 			Everlaw: ConnectorConfig{
-				APIKey:   os.Getenv("EVERLAW_API_KEY"),
+				APIKey:   getenv("EVERLAW_API_KEY"),
 				Endpoint: env("EVERLAW_MCP_URL", "https://api.everlaw.com/v1/mcp"),
-				Enabled:  os.Getenv("EVERLAW_API_KEY") != "",
+				Enabled:  getenv("EVERLAW_API_KEY") != "",
 			},
 			Trellis: ConnectorConfig{
-				APIKey:   os.Getenv("TRELLIS_API_KEY"),
+				APIKey:   getenv("TRELLIS_API_KEY"),
 				Endpoint: env("TRELLIS_MCP_URL", "https://mcp.trellis.law/anthropic"),
-				Enabled:  os.Getenv("TRELLIS_API_KEY") != "",
+				Enabled:  getenv("TRELLIS_API_KEY") != "",
 			},
 		},
 		LPM: LPMConfig{
 			Enabled:        envBool("LPM_ENABLED", false),
 			DailyHour:      envInt("LPM_DAILY_HOUR", 6),
 			Formats:        envList("LPM_REPORT_FORMATS", "json,docx,markdown"),
-			CorpusFile:     env("LPM_CORPUS_FILE", "./data/status-reports.jsonl"),
-			ReportDir:      env("LPM_REPORT_DIR", "./data/reports"),
+			CorpusFile:     st.file("LPM_CORPUS_FILE", "status-reports.jsonl", "data/status-reports.jsonl"),
+			ReportDir:      st.dir("LPM_REPORT_DIR", "reports", "data/reports"),
 			Model:          env("LPM_MODEL", ""),
 			ChannelPost:    envBool("LPM_CHANNEL_POST", false),
 			EmailWriteMode: normalizeEnum(env("LPM_EMAIL_WRITE_MODE", "off"), "off", "off", "channel", "draft", "send_gate"),
 			IntakeMode:     normalizeEnum(env("LPM_INTAKE_MODE", "polling"), "polling", "shared_inbox", "polling", "both"),
 			SharedInbox:    env("LPM_SHARED_INBOX", ""),
 			PollIntervalM:  envInt("LPM_POLL_INTERVAL_MIN", 15),
-			RoutedFile:     env("LPM_ROUTED_FILE", "./data/routed-emails.jsonl"),
+			RoutedFile:     st.file("LPM_ROUTED_FILE", "routed-emails.jsonl", "data/routed-emails.jsonl"),
 			RouteMinConf:   envFloat("LPM_ROUTE_MIN_CONFIDENCE", 0.6),
 			AllowedDomains: envList("LPM_ALLOWED_DOMAINS", ""),
-			PendingFile:    env("LPM_PENDING_FILE", "./data/pending-drafts.json"),
+			PendingFile:    st.file("LPM_PENDING_FILE", "pending-drafts.json", "data/pending-drafts.json"),
 
 			BackfillEnabled:    envBool("LPM_BACKFILL_ENABLED", false),
 			BackfillWindowDays: envInt("LPM_BACKFILL_WINDOW_DAYS", 365),
 			BackfillStepDays:   envInt("LPM_BACKFILL_STEP_DAYS", 7),
 			BackfillMaxPerStep: envInt("LPM_BACKFILL_MAX_PER_STEP", 100),
 			BackfillPauseMs:    envInt("LPM_BACKFILL_PAUSE_MS", 1000),
-			BackfillCursorFile: env("LPM_BACKFILL_CURSOR_FILE", "./data/backfill-cursor.json"),
+			BackfillCursorFile: st.file("LPM_BACKFILL_CURSOR_FILE", "backfill-cursor.json", "data/backfill-cursor.json"),
 		},
 		Monitors: MonitorsConfig{
 			BudgetAlertsEnabled:   envBool("MONITOR_BUDGET_ALERTS", true),
 			BudgetIntervalMin:     envInt("MONITOR_BUDGET_INTERVAL_MIN", 60),
 			DocketsEnabled:        envBool("MONITOR_DOCKETS", true),
 			DocketsIntervalMin:    envInt("MONITOR_DOCKET_INTERVAL_MIN", 30),
-			DocketsFile:           env("DOCKETS_FILE", "./data/dockets.json"),
+			DocketsFile:           st.file("DOCKETS_FILE", "dockets.json", "data/dockets.json"),
 			RegulatoryIntervalMin: envInt("MONITOR_REGULATORY_INTERVAL_MIN", 360),
 		},
 	}
@@ -399,10 +443,10 @@ func Load() *Config {
 	// opt-in — OPENAI_API_KEY alone keeps powering only embeddings (many
 	// deployments hold an OpenAI key for embeddings and Anthropic for chat).
 	// An explicit LOCAL_INFERENCE_URL always wins over the shortcut.
-	if c.Local.LocalInferenceURL == "" && os.Getenv("OPENAI_MODEL") != "" && os.Getenv("OPENAI_API_KEY") != "" {
+	if c.Local.LocalInferenceURL == "" && getenv("OPENAI_MODEL") != "" && getenv("OPENAI_API_KEY") != "" {
 		c.Local.LocalInferenceURL = "https://api.openai.com/v1"
-		c.Local.LocalInferenceKey = os.Getenv("OPENAI_API_KEY")
-		c.Local.LocalInferenceModel = os.Getenv("OPENAI_MODEL")
+		c.Local.LocalInferenceKey = getenv("OPENAI_API_KEY")
+		c.Local.LocalInferenceModel = getenv("OPENAI_MODEL")
 		if strings.TrimSpace(c.Local.LocalInferenceTiers) == "" {
 			c.Local.LocalInferenceTiers = env("OPENAI_TIERS", "all")
 		}
@@ -417,7 +461,34 @@ func Load() *Config {
 		ResumeRunningTasks:      envBool("RESUME_RUNNING_TASKS", false),
 	}
 
+	// The matter-budget store has no env var of its own: it sits next to the
+	// clients file (internal/api/matters.go), so it moves with it. SQLite's
+	// journal files move with the database.
+	if !st.explicit("CLIENTS_FILE") {
+		st.derived("CLIENTS_FILE", filepath.Join(filepath.Dir(c.Persistence.ClientsFile), ".matter-budgets.json"),
+			".matter-budgets.json", "data/.matter-budgets.json")
+	}
+	// The one-off time-entry migration marker sits next to the time file
+	// (cmd/biglaw/migrate_failed_runs.go); without it a migrated install
+	// would re-run the write-off.
+	if !st.explicit("TIME_FILE") {
+		st.derived("TIME_FILE", c.Persistence.TimeFile+".migrations.json", ".time-entries.json.migrations.json")
+	}
+	st.withCompanions("SQLITE_PATH", "-wal", "-shm", "-journal")
+	c.state = st.paths
+
 	return c
+}
+
+// LocalAPIURL is the URL this machine reaches a REST API bound to
+// host:port at — a wildcard bind address (0.0.0.0 / ::) maps to loopback.
+// It is BIG_MICHAEL_API's default and what an owner records in its lock.
+func LocalAPIURL(host string, port int) string {
+	switch strings.TrimSpace(host) {
+	case "", "0.0.0.0", "::", "[::]":
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(strings.Trim(host, "[]"), strconv.Itoa(port))
 }
 
 // loadLLMTemperature resolves the sampling temperature for reasoning/synthesis
@@ -425,7 +496,7 @@ func Load() *Config {
 // work); LLM_TEMPERATURE=<float> overrides; LLM_TEMPERATURE=default returns nil
 // to leave the server's own default in place.
 func loadLLMTemperature() *float64 {
-	v := strings.TrimSpace(strings.ToLower(os.Getenv("LLM_TEMPERATURE")))
+	v := strings.TrimSpace(strings.ToLower(getenv("LLM_TEMPERATURE")))
 	if v == "default" || v == "server" {
 		return nil
 	}
@@ -444,32 +515,32 @@ func loadLLMTemperature() *float64 {
 // overrides win over any preset, and PRIMARY_MODEL_URL/KEY override the endpoint
 // — together they make "custom" (or any stack) point anywhere without code.
 func loadModelStack() ModelConfig {
-	stack := normalizeEnum(os.Getenv("MODEL_STACK"), "qwen", "qwen", "glm", "kimi", "custom")
+	stack := normalizeEnum(getenv("MODEL_STACK"), "qwen", "qwen", "glm", "kimi", "custom")
 	m := ModelConfig{Stack: stack}
 
 	switch stack {
 	case "glm":
 		m.PrimaryURL = env("GLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4")
-		m.PrimaryKey = env("GLM_API_KEY", os.Getenv("PRIMARY_MODEL_KEY"))
+		m.PrimaryKey = env("GLM_API_KEY", getenv("PRIMARY_MODEL_KEY"))
 		m.Heavy = "glm-4.6"
 		m.Mid = "glm-4.5-air"
 		m.Light = "glm-4-flash"
 		m.Vision = "glm-4v"
 	case "kimi":
 		m.PrimaryURL = env("KIMI_BASE_URL", env("MOONSHOT_BASE_URL", "https://api.moonshot.ai/v1"))
-		m.PrimaryKey = env("KIMI_API_KEY", env("MOONSHOT_API_KEY", os.Getenv("PRIMARY_MODEL_KEY")))
+		m.PrimaryKey = env("KIMI_API_KEY", env("MOONSHOT_API_KEY", getenv("PRIMARY_MODEL_KEY")))
 		m.Heavy = "kimi-k2-0905-preview"
 		m.Mid = "moonshot-v1-32k"
 		m.Light = "moonshot-v1-8k"
 		m.Vision = "moonshot-v1-128k-vision-preview"
 	case "custom":
-		m.PrimaryURL = os.Getenv("PRIMARY_MODEL_URL")
-		m.PrimaryKey = os.Getenv("PRIMARY_MODEL_KEY")
+		m.PrimaryURL = getenv("PRIMARY_MODEL_URL")
+		m.PrimaryKey = getenv("PRIMARY_MODEL_KEY")
 		// All tier IDs come from the MODEL_* overrides below.
 	default: // qwen
 		m.PrimaryURL = env("QWEN_BASE_URL", env("DASHSCOPE_BASE_URL",
 			"https://dashscope-intl.aliyuncs.com/compatible-mode/v1"))
-		m.PrimaryKey = env("QWEN_API_KEY", env("DASHSCOPE_API_KEY", os.Getenv("PRIMARY_MODEL_KEY")))
+		m.PrimaryKey = env("QWEN_API_KEY", env("DASHSCOPE_API_KEY", getenv("PRIMARY_MODEL_KEY")))
 		m.Heavy = "qwen-max"
 		m.Mid = "qwen-plus"
 		m.Light = "qwen-turbo"
@@ -477,10 +548,10 @@ func loadModelStack() ModelConfig {
 	}
 
 	// Endpoint override applies to any non-Claude stack.
-	if v := os.Getenv("PRIMARY_MODEL_URL"); v != "" {
+	if v := getenv("PRIMARY_MODEL_URL"); v != "" {
 		m.PrimaryURL = v
 	}
-	if v := os.Getenv("PRIMARY_MODEL_KEY"); v != "" {
+	if v := getenv("PRIMARY_MODEL_KEY"); v != "" {
 		m.PrimaryKey = v
 	}
 	// Per-tier overrides win over the preset (e.g. mix a Claude tier into Qwen).

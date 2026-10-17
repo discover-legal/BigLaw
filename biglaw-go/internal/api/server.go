@@ -12,6 +12,7 @@ import (
 
 	"github.com/discover-legal/biglaw-go/internal/agents"
 	"github.com/discover-legal/biglaw-go/internal/auth"
+	"github.com/discover-legal/biglaw-go/internal/backend"
 	"github.com/discover-legal/biglaw-go/internal/blob"
 	"github.com/discover-legal/biglaw-go/internal/budget"
 	"github.com/discover-legal/biglaw-go/internal/clients"
@@ -42,6 +43,7 @@ type Server struct {
 	knowledge  *knowledge.Store
 	registry   *agents.Registry
 	costs      *cost.Store
+	svc        *backend.Local         // the operations shared with MCP (see backend.go)
 	reviews    store.ReviewRepository // durable tabular-review matrices; nil if unavailable
 	blobs      blob.Store             // attachment bytes (disk now, object-store later); nil if unavailable
 	graph      *graph.Client
@@ -78,6 +80,7 @@ func New(
 		registry:  registry,
 		costs:     costStore,
 		reviews:   reviewRepo,
+		svc:       backend.NewLocal(orch, knowledgeStore, registry, nil, timeStore),
 		blobs:     newBlobStore(cfg),
 		graph:     graph.New(),
 		started:   time.Now(),

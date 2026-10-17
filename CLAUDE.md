@@ -71,13 +71,27 @@ MCP server on stdio (activated when stdin is not a TTY — i.e. from Claude Code
 
 **Web workbench:** `cd ui && BIG_MICHAEL_API=http://localhost:3102 npm run dev` → :5173.
 
-**Run modes** (`BIG_MICHAEL_MODE`): the vector DB takes an exclusive single-writer lock and the
-REST API binds one port, so only one process can own them. To run the web UI and the Claude
-Code MCP at once, one process owns the DB and the other attaches as a thin client over REST.
-- `auto` (default) — own the DB if free, else attach as an MCP client
-- `backend` — own DB + REST, never MCP (what the Docker stack runs)
-- `mcp` — pure MCP client, requires a reachable backend (`BIG_MICHAEL_API` sets the URL)
-- `standalone` — classic single process (own DB + REST + MCP on stdio)
+**Run modes** (`BIG_MICHAEL_MODE`): one process owns a data dir (`RUVECTOR_DATA_DIR`,
+default `./data` — ALL state: DB, JSON state files, attachments, ledgers, vector stores),
+enforced by an OS lock on `<data dir>/biglaw.lock` that also records the owner's PID + REST URL;
+every other process is a thin MCP client of the owner's REST API.
+- `auto` (default) — take the lock if free and own DB + REST (+ MCP on stdio when stdin is a
+  pipe); if the lock is held, attach as an MCP thin client to the URL the owner advertises
+- `backend` — own DB + REST, never MCP (what the Docker stack runs); refuses a held lock
+- `mcp` — MCP thin client only: no DB, no monitors, no vector store; every tool is a REST call
+  to `BIG_MICHAEL_API` (default `http://<API_HOST>:<API_PORT>`), bearer
+  `BIG_MICHAEL_API_TOKEN` (falls back to `API_KEY`); answers `initialize` at once and reports
+  an unreachable/misconfigured backend in every tool result; never follows redirects
+- `standalone` — single process (own DB + REST + MCP on stdio); refuses a held lock
+`BIGLAW_LOCK=off` makes the lock best-effort (a held lock, or a lock record naming a live PID,
+still refuses). One implementation:
+`backend.Local.As(principal)` (`biglaw-go/internal/backend`) holds the MCP operations AND their
+access rules; the REST handlers for those routes and the in-process MCP server both call it,
+`backend.Remote` calls those routes, and `internal/mcp/contract_test.go` requires identical
+results in-process vs over REST (partner and lawyer). State defaults all derive from the data
+dir; legacy locations (CWD dotfiles, `./data/*` when the data dir is elsewhere) are moved in
+once at startup — env values equal to an old default count as unset — and anything unmovable
+stops startup. Stop old-version processes before upgrading (they take no lock).
 
 ## Using from Claude Code
 
@@ -220,7 +234,7 @@ Each DyTopo round:
 | `src/integrations/clio.ts` | ClioClient — OAuth 2.0, token persistence, auto-refresh, 7 API methods, 4-region routing |
 | `src/tools/clio.ts` | 7 Clio tool definitions (list/get matters, documents, activities, notes, contacts) |
 | `src/mcp/server.ts` | MCP stdio server + Fastify REST API |
-| `src/backend/index.ts` | `LegalBackend` seam — `LocalBackend` (owns DB) / `RemoteBackend` (thin HTTP client) so MCP can run as a client of a separate owner |
+| `src/backend/index.ts` | `LegalBackend` seam — `LocalBackend` (owns DB) / `RemoteBackend` (thin HTTP client) so MCP can run as a client of a separate owner (Go: `internal/backend/`) |
 | `src/index.ts` | Entry point — also resolves the run mode (`BIG_MICHAEL_MODE`: auto/backend/mcp/standalone) |
 | `src/bots/teams.ts` | Big Michael — Teams Outgoing Webhook receiver + Incoming Webhook sender + matter-link management |
 | `src/bots/slack.ts` | Big Michael — Slack Events API receiver + Web API sender + matter-link management |

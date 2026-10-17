@@ -16,7 +16,7 @@ landing page; everything of substance lives here.
 | Page | What it covers |
 |---|---|
 | [Security](security.md) | The experimental-status notice and the security hardening inventory |
-| [Run modes](deployment/run-modes.md) | `BIG_MICHAEL_MODE` — running the workbench and the Claude Code MCP side by side |
+| [Run modes](deployment/run-modes.md) | `BIG_MICHAEL_MODE` — data-dir ownership, and the MCP as a thin REST client of a running backend |
 | [Models, persistence & documents](deployment/models-and-persistence.md) | Model stack selection, SQLite/Postgres + RLS, omnimodal ingestion, the blob store |
 | [Local inference](deployment/local-inference.md) | Ollama / LM Studio / vLLM — air-gapped and per-tier local routing |
 | [Secrets](deployment/secrets.md) | Infisical bootstrap — keep everything but three vars out of `.env` |

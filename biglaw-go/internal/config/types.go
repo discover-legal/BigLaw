@@ -36,6 +36,30 @@ type APIConfig struct {
 	ProfileID string
 }
 
+// RunConfig selects the process role and, for an MCP thin client, the backend
+// it attaches to. See cmd/biglaw/main.go and docs/deployment/run-modes.md.
+type RunConfig struct {
+	// Mode is BIG_MICHAEL_MODE, lower-cased: auto (default) | backend | mcp |
+	// standalone. Unknown values are kept verbatim so startup can reject them.
+	Mode string
+	// APIURL is the REST base URL an MCP thin client talks to
+	// (BIG_MICHAEL_API; default http://<API_HOST>:<API_PORT>, with a
+	// wildcard bind host mapped to loopback).
+	APIURL string
+	// APIURLExplicit is true when BIG_MICHAEL_API was set (auto mode then
+	// warns if the data-dir owner advertises a different URL).
+	APIURLExplicit bool
+	// APIToken is the bearer credential a thin client presents
+	// (BIG_MICHAEL_API_TOKEN, falling back to API_KEY so a client sharing the
+	// backend's .env authenticates as the API_PROFILE_ID profile).
+	APIToken string
+	// LockDisabled (BIGLAW_LOCK=off) makes the data-dir lock best-effort —
+	// an escape hatch for filesystems whose locking errors out: a failure to
+	// lock runs unguarded (with a warning) instead of refusing. A lock that
+	// is held, or a lock record naming a live process, still refuses.
+	LockDisabled bool
+}
+
 const DefaultSessionSecret = "dev-insecure-change-me-in-production-please"
 
 type AuthConfig struct {
@@ -170,6 +194,12 @@ type DocuSealConfig struct {
 	APIKey  string
 	URL     string
 	Enabled bool
+	// OperatorURL is DOCUSEAL_URL as the operator configured it. The live URL
+	// may later be replaced by an admin through PUT /settings; only the
+	// operator's value is trusted to point at an internal host (e.g. a
+	// DocuSeal container on the compose network). Any other URL is called
+	// through the SSRF-guarded client.
+	OperatorURL string
 }
 
 // ClientVoiceConfig governs the Remy/CNTXT client-advocate integration.
@@ -226,6 +256,7 @@ type PersistenceConfig struct {
 	CostFile        string
 	PlaybooksFile   string
 	ClientVoiceFile string
+	ClioTokensFile  string
 }
 
 // ModelRate is a per-model price pair in USD per million tokens, as it
@@ -471,6 +502,7 @@ type Config struct {
 	Embeddings         EmbeddingsConfig
 	VectorDB           VectorDBConfig
 	API                APIConfig
+	Run                RunConfig
 	Auth               AuthConfig
 	Agents             AgentsConfig
 	DyTopo             DyTopoConfig
@@ -507,6 +539,10 @@ type Config struct {
 	LPM            LPMConfig
 	Monitors       MonitorsConfig
 	Resilience     ResilienceConfig
+
+	// state is every state path Load resolved (see StatePaths), consumed by
+	// MigrateLegacyStateFiles and CheckStateLayout.
+	state []StatePath
 }
 
 // ─── Run-hygiene resilience (round-timeout retry + boot task quarantine) ─────

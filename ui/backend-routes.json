@@ -1,0 +1,7 @@
+[
+  "/agents", "/analytics", "/audit", "/auth", "/bots", "/budget", "/citations", "/clients",
+  "/cost", "/deadlines", "/dockets", "/documents", "/graph", "/headnotes", "/health",
+  "/invoices", "/jobs", "/lpm", "/matters", "/me", "/memory", "/playbooks", "/plugins",
+  "/pre-bills", "/precedents", "/profiles", "/redline", "/regulatory", "/reviews",
+  "/settings", "/tasks", "/templates", "/time-entries"
+]
