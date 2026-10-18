@@ -63,7 +63,8 @@ func TestHybridKeepsScope(t *testing.T) {
 		t.Fatalf("with the other document in scope its chunk must rank first (the vector leg works): %v %v", hitIDs(both), err)
 	}
 	calls := len(f.EmbedCalls())
-	for _, scope := range [][]string{nil, {}, {"not-a-uuid"}, {out.ID[:35] + "0"}} {
+	nearMiss := out.ID[:35] + map[bool]string{true: "1", false: "0"}[out.ID[35] == '0'] // differs in the last hex digit, always
+	for _, scope := range [][]string{nil, {}, {"not-a-uuid"}, {nearMiss}} {
 		if hits, err := s.Search(t.Context(), scope, q, 8, 0); err != nil || slices.ContainsFunc(hits, func(h Hit) bool { return h.DocumentID == out.ID }) {
 			t.Errorf("scope %v: %v %v", scope, hitIDs(hits), err)
 		}
