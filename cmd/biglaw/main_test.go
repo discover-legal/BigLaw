@@ -231,10 +231,13 @@ func TestServeHybridEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := docs.New(st).IngestText(t.Context(), "poison.txt", "UNEMBEDDABLE clause."); err != nil { // the endpoint refuses it: stays lexical
+		t.Fatal(err)
+	}
 	var calls atomic.Int32
 	emb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct{ Input []string }
-		if r.URL.Path != "/v1/embeddings" || json.NewDecoder(r.Body).Decode(&req) != nil {
+		if r.URL.Path != "/v1/embeddings" || json.NewDecoder(r.Body).Decode(&req) != nil || strings.Contains(strings.Join(req.Input, " "), "UNEMBEDDABLE") {
 			w.WriteHeader(404)
 			return
 		}
@@ -288,6 +291,9 @@ func TestServeHybridEndToEnd(t *testing.T) {
 		}
 	case <-time.After(15 * time.Second):
 		t.Fatal("serve did not stop")
+	}
+	if !strings.Contains(stderr.String(), "documents searched lexically only") || !strings.Contains(stderr.String(), "documents=1") {
+		t.Errorf("no lexical-only count after the backfill (PR 3b r2 L2):\n%s", stderr.String())
 	}
 	if !strings.Contains(stderr.String(), "embedding backfill") {
 		t.Errorf("no backfill log line:\n%s", stderr.String())
@@ -403,5 +409,97 @@ func TestBinaryIsItsOwnPDFReader(t *testing.T) {
 	out, err := cmd.Output()
 	if err != nil || !strings.Contains(string(out), `"Err":"docs: the file could not be read: the PDF is damaged or encrypted"`) {
 		t.Errorf("child answer: %s %v", out, err)
+	}
+}
+
+// TestServeNeverSendsImagesToTheLead (trap, PR 3c): with only a lead role, `biglaw serve` stores an
+// uploaded image as needs_transcription (503 vision_not_configured) and sends nothing to the model
+// endpoint. Restarted with a vision role, it transcribes the waiting image at startup through the
+// endpoint's chat route, every call naming the vision model and none the lead.
+func TestServeNeverSendsImagesToTheLead(t *testing.T) {
+	dsn := storetest.DSN(t)
+	var mu sync.Mutex
+	var models []string
+	chat := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct{ Model string }
+		json.NewDecoder(r.Body).Decode(&req)
+		mu.Lock()
+		models = append(models, req.Model)
+		mu.Unlock()
+		json.NewEncoder(w).Encode(map[string]any{"choices": []map[string]any{{"message": map[string]any{"content": "Notice of hearing on 3 May 2027."}, "finish_reason": "stop"}},
+			"usage": map[string]int{"prompt_tokens": 800, "completion_tokens": 12}})
+	}))
+	defer chat.Close()
+	serveWith := func(roles string, while func(addr string)) string {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		addr := ln.Addr().String()
+		ln.Close()
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan int, 1)
+		var stderr syncBuffer
+		go func() {
+			done <- run(ctx, []string{"serve"}, env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_ADDR", addr, "BIGLAW_MODEL_URL", chat.URL+"/v1", "BIGLAW_MODELS", roles), nil, io.Discard, &stderr)
+		}()
+		for i := 0; i < 100; i++ {
+			if resp, err := http.Get("http://" + addr + "/health"); err == nil {
+				resp.Body.Close()
+				break
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		while(addr)
+		cancel()
+		if code := <-done; code != 0 {
+			t.Fatalf("serve exited %d:\n%s", code, stderr.String())
+		}
+		return stderr.String()
+	}
+	var id string
+	serveWith("lead=text-model", func(addr string) {
+		var body bytes.Buffer
+		mw := multipart.NewWriter(&body)
+		fw, _ := mw.CreateFormFile("file", "letter.png")
+		fw.Write([]byte("\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x00\x00\x00\x00\x3a\x7e\x9b\x55\x00\x00\x00\x0aIDATx\x9cc\x60\x00\x00\x00\x02\x00\x01H\xaf\xa4q\x00\x00\x00\x00IEND\xaeB`\x82"))
+		mw.Close()
+		resp, err := http.Post("http://"+addr+"/documents/upload", mw.FormDataContentType(), &body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out struct {
+			ErrorType string
+			Document  struct{ ID, Status string }
+		}
+		json.NewDecoder(resp.Body).Decode(&out)
+		resp.Body.Close()
+		if resp.StatusCode != 503 || out.ErrorType != "vision_not_configured" || out.Document.Status != "needs_transcription" {
+			t.Fatalf("upload with only a lead: %d %+v", resp.StatusCode, out)
+		}
+		id = out.Document.ID
+	})
+	mu.Lock()
+	if len(models) != 0 {
+		t.Fatalf("an image was sent to the model endpoint with no vision role: %v", models)
+	}
+	mu.Unlock()
+	st, err := store.Open(t.Context(), dsn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	var status, text string
+	log := serveWith("lead=text-model,vision=qwen2.5vl:7b", func(string) {
+		for i := 0; i < 100 && status != "ready"; i++ {
+			st.DB().QueryRow(`SELECT status, text FROM documents WHERE id = $1`, id).Scan(&status, &text)
+			time.Sleep(50 * time.Millisecond)
+		}
+	})
+	mu.Lock()
+	defer mu.Unlock()
+	if status != "ready" || text != "Notice of hearing on 3 May 2027." || len(models) != 2 || models[0] != "qwen2.5vl:7b" || models[1] != "qwen2.5vl:7b" ||
+		!strings.Contains(log, "transcription jobs") {
+		t.Errorf("waiting image after a vision role: %s %q, calls %v\n%s", status, text, models, log)
 	}
 }

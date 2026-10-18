@@ -10,7 +10,8 @@ change. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`, not here.
   map `role=id,…`, ids refused if they hold `://`, `user:pw@`, white space, control or invisible
   characters or `? = &`, are over 200 bytes or look like a key)
   and the vendor breakers. `serve` gives `docs` the embedder when an `embed` role is set and runs
-  the embedding backfill at startup.
+  the embedding backfill at startup, and the vision model when a `vision` role is set and runs the
+  transcription jobs at startup and every 15 minutes.
 - `internal/store` — `Open` (check DSN, connect, migrate), `CheckDSN`, `InTx`, `DB`, files (chunked
   `bytea`, `PutFile` from an `io.Reader` under 16 upload slots, `GetFile`/`ReadFile` (streams
   one chunk at a time) under 4 read slots,
@@ -31,7 +32,16 @@ change. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`, not here.
   word check and only when the scope has vectors),
   chunks embedded 64 per call at ingest outside the ingest slot (a failure leaves the document
   lexical only with `EmbedNote`, never fails the ingest), `Backfill`; a document is in the vector
-  leg only when `embed_model` (cleared first, set after all its chunks at one length) is the current model. `internal/docs/ooxml` — `.docx` reader (text parts only, linear XML pass).
+  leg only when `embed_model` (cleared first, set after all its chunks at one length) is the current model.
+  PR 3c (`vision.go`, `scanpdf.go`, `jobs.go`): `UseVision` (the `vision` role only; never a text
+  role) transcribes images and text-less PDF pages whose images are whole JPEG streams (found by
+  offset in the child, sent as they are); two readings per page by two prompts
+  (`vision_prompts.txt`), agreement < 0.75 refuses (422 `transcription_unreliable`), < 0.9 is
+  `lowConfidence`, `[illegible]` never filled; a mixed PDF's text-layer pages are never touched;
+  `Transcript` provenance on the document (byte spans per page), `chunks.transcribed`, citations
+  `…@transcript` capped at `TranscriptCap` 0.85; no vision role → stored `needs_transcription`
+  + 503, and `TranscribePending` (leased, serve: startup + every 15 min) completes it later.
+  `internal/docs/ooxml` — `.docx` reader (text parts only, linear XML pass).
 - `internal/store/storetest` — `storetest.DSN(t)` gives a test its own schema, creates the
   `vector` extension once per database and puts its schema on the test's `search_path`.
 - `internal/model` — `Client` (OpenAI-compatible chat + tool calls + image parts, typed errors,
@@ -49,8 +59,8 @@ change. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`, not here.
   A chunker or fixture change makes the tape stale (`TestE4TapeReplays` fails): re-record the
   self-test tape with `make e4-record EMBED_MODEL=biglaw-selftest-hash` and say so in the PR.
 
-Everything else in README is marked planned (next: PR 3c vision on the `vision` role; PR 3d the
-`.docx` writer and tracked changes). Lexical search alone measured E4 0.882; the hybrid gate is
+Everything else in README is marked planned (next: PR 3d the `.docx` writer and tracked changes;
+contract v1's `content`/202/`capabilities` for vision intake are PR 8's). Lexical search alone measured E4 0.882; the hybrid gate is
 not yet judged (self-test tape).
 
 ## Rules
@@ -80,6 +90,9 @@ not yet judged (self-test tape).
 - No source file over 2,000 lines (`scripts/loc.py`). Every `.go`/`.py` file starts with the
   SPDX header.
 - Every package has a `_test.go`; DB tests use `storetest.DSN(t)` and `t.Parallel()`.
+- Images and scans go only to the `vision` role (`docs.UseVision`); never wire another role's
+  model there (`TestTextModelNeverSentImages`, `TestServeNeverSendsImagesToTheLead`). Text a model
+  transcribed is evidence of a lower class: keep its provenance and the `@transcript` cap.
 - No model calls in `go test`: only `model.Fake` or an `httptest` server. Model errors carry
   BigLaw's own fixed text only (never the URL, host, key or anything the endpoint sent, so never
   `err.Error()` of a transport error); map them with `model.HTTPStatus`.

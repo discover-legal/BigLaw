@@ -428,3 +428,59 @@ func TestEmbedWaitsBounded(t *testing.T) {
 		t.Fatalf("search against a hung endpoint: %v after %s", err, time.Since(start))
 	}
 }
+
+// TestLexicalOnlyDisplacementMeasured (PR 3b r2 verifier L2, measured here for README Limitations):
+// a lexical-only chunk scores 2/(60 + lexical rank), its best case, so a lexical-only document whose
+// chunks all share a query word outranks an embedded chunk that is the vector leg's first but
+// lexically weak. With 8 and 20 such chunks the embedded match is #5 and #10 (off a page of 8);
+// once the backfill embeds them it is #1 again.
+func TestLexicalOnlyDisplacementMeasured(t *testing.T) {
+	t.Parallel()
+	for n, want := range map[int]int{8: 5, 20: 10} {
+		s := newService(t)
+		var l, e strings.Builder
+		for i := range n {
+			fmt.Fprintf(&l, "%d. Indemnity %d\n\nThe indemnity covers loss %d and the indemnity is uncapped.\n\n", i+1, i+1, i)
+		}
+		lexical := ingestText(t, s, "l.txt", l.String())
+		f := model.NewFake(nil)
+		f.Vectors = func(text string) ([]float32, error) { // l.txt is semantically far from the query, e.txt's filler nearer
+			if strings.Contains(text, "uncapped") {
+				return []float32{-1, 0.1}, nil
+			}
+			return axes(text)
+		}
+		s.UseEmbedder(f, "test-embed")
+		for i := range 20 {
+			fmt.Fprintf(&e, "%d. Filler %d\n\nThe parties agree to term %d of the schedule.\n\n", i+1, i+1, i)
+		}
+		e.WriteString("21. Schedule\n\nThe stripes indemnity schedule applies.\n")
+		embedded := ingestText(t, s, "e.txt", e.String())
+		position := func() int {
+			hits, err := s.Search(t.Context(), []string{lexical.ID, embedded.ID}, "zebra indemnity", 50, 0)
+			for i, h := range hits {
+				if strings.Contains(h.Text, "stripes") {
+					return i + 1
+				}
+			}
+			t.Fatalf("no match: %v", err)
+			return 0
+		}
+		if got := position(); got != want {
+			t.Errorf("%d lexical-only chunks: the embedded match is #%d, want #%d (README Limitations)", n, got, want)
+		}
+		if k, err := s.LexicalOnly(t.Context()); k != 1 || err != nil {
+			t.Errorf("LexicalOnly before the backfill: %d %v, want 1", k, err)
+		}
+		if done, _, err := s.Backfill(t.Context()); done != 1 || err != nil {
+			t.Fatalf("backfill: %d %v", done, err)
+		}
+		if k, err := s.LexicalOnly(t.Context()); k != 0 || err != nil {
+			t.Errorf("LexicalOnly after the backfill: %d %v, want 0", k, err)
+		}
+		if got := position(); got != 1 {
+			t.Errorf("all embedded (%d chunks): #%d, want #1", n, got)
+		}
+		t.Logf("%d lexical-only chunks sharing a query word: the vector leg's first match is #%d; all embedded: #1", n, want)
+	}
+}

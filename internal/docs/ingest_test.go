@@ -9,6 +9,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"image"
+	"image/jpeg"
 	"os"
 	"regexp"
 	"runtime"
@@ -41,24 +43,46 @@ func minimalDocx(paras ...string) []byte {
 }
 
 // makePDF writes a PDF with one page per entry: text pages draw their text in Helvetica; an
-// entry "" is a scanned page (a JPEG image XObject painted, no text operators).
+// entry "" is a scanned page (an 8×8 JPEG image XObject painted, no text operators) and "-" a blank
+// page (no text, no image).
 func makePDF(pages ...string) []byte { return makePDFCount(len(pages), pages...) }
 
 func makePDFCount(count int, pages ...string) []byte {
+	var ps []pdfPage
+	for _, p := range pages {
+		switch p {
+		case "":
+			ps = append(ps, pdfPage{Image: dctImage(jpegOf(8, 8, 0))})
+		case "-":
+			ps = append(ps, pdfPage{})
+		default:
+			ps = append(ps, pdfPage{Text: p})
+		}
+	}
+	return buildPDF(count, ps...)
+}
+
+// pdfPage is one page of buildPDF: Text drawn in Helvetica, and/or Image (an XObject's dictionary
+// and stream, e.g. dctImage) painted as /Im1.
+type pdfPage struct{ Text, Image string }
+
+func buildPDF(count int, pages ...pdfPage) []byte {
 	var objs []string
 	add := func(s string) int { objs = append(objs, s); return len(objs) }
 	add("") // 1: catalog, filled below
 	add("") // 2: pages
 	font := add("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>")
-	img := add("<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /DCTDecode /Length 4 >>\nstream\n\xff\xd8\xff\xd9\nendstream")
 	var kids []string
-	for _, text := range pages {
-		content := "q 612 0 0 792 0 0 cm /Im1 Do Q"
-		if text != "" {
-			content = "BT /F1 12 Tf 72 720 Td (" + text + ") Tj ET"
+	for _, pg := range pages {
+		content, xo := "", ""
+		if pg.Image != "" {
+			content, xo = "q 612 0 0 792 0 0 cm /Im1 Do Q\n", fmt.Sprintf(" /XObject << /Im1 %d 0 R >>", add(pg.Image))
+		}
+		if pg.Text != "" {
+			content += "BT /F1 12 Tf 72 720 Td (" + pg.Text + ") Tj ET"
 		}
 		c := add(fmt.Sprintf("<< /Length %d >>\nstream\n%s\nendstream", len(content), content))
-		p := add(fmt.Sprintf("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents %d 0 R /Resources << /Font << /F1 %d 0 R >> /XObject << /Im1 %d 0 R >> >> >>", c, font, img))
+		p := add(fmt.Sprintf("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents %d 0 R /Resources << /Font << /F1 %d 0 R >>%s >> >>", c, font, xo))
 		kids = append(kids, fmt.Sprintf("%d 0 R", p))
 	}
 	objs[0] = "<< /Type /Catalog /Pages 2 0 R >>"
@@ -79,15 +103,38 @@ func makePDFCount(count int, pages ...string) []byte {
 	return b.Bytes()
 }
 
+// dctImage is an image XObject holding JPEG data as a /DCTDecode stream (filter overrides it).
+func dctImage(jpg []byte, filter ...string) string {
+	f := "/DCTDecode"
+	if len(filter) > 0 {
+		f = filter[0]
+	}
+	return fmt.Sprintf("<< /Type /XObject /Subtype /Image /Width 8 /Height 8 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter %s /Length %d >>\nstream\n%s\nendstream", f, len(jpg), jpg)
+}
+
+// jpegOf is a w×h grey JPEG; seed varies its pixels, so two images differ.
+func jpegOf(w, h, seed int) []byte {
+	img := image.NewGray(image.Rect(0, 0, w, h))
+	for i := range img.Pix {
+		img.Pix[i] = byte(i*7 + seed*31)
+	}
+	var b bytes.Buffer
+	jpeg.Encode(&b, img, nil)
+	return b.Bytes()
+}
+
 func TestExtractPlainText(t *testing.T) {
 	x, err := Extract(t.Context(), []byte("PRIVILEGED. Preserve all documents for the Acme matter."))
 	if err != nil || x.Method != "text" || !strings.Contains(x.Text, "Acme") || x.NoText {
 		t.Errorf("plain text: %+v %v", x, err)
 	}
-	for _, bin := range [][]byte{{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0}, {0xff, 0xd8, 0xff, 0xe0}, []byte("a\x00b"), []byte("\xff\xfe\x00b")} {
+	for _, bin := range [][]byte{{0, 1, 2, 3}, {0x89, 'P', 'N', 'X', 0}, []byte("a\x00b"), []byte("\xff\xfe\x00b")} {
 		if _, err := Extract(t.Context(), bin); !errors.Is(err, ErrUnsupported) {
 			t.Errorf("Extract(%q) = %v, want ErrUnsupported (never an empty document)", bin, err)
 		}
+	}
+	if x, err := Extract(t.Context(), []byte{0xff, 0xd8, 0xff, 0xe0, 0}); err != nil || x.Method != "vision" || !x.NoText || len(x.Scans) != 1 {
+		t.Errorf("an image is one page to transcribe (PR 3c), never text: %+v %v", x, err)
 	}
 	if x, err := Extract(t.Context(), []byte("bell\a esc\x1b[31m red")); err != nil || x.Text != "bell  esc [31m red" { // r1 R11
 		t.Errorf("control characters in text are cleaned for storage: %q %v", x.Text, err)
@@ -221,20 +268,21 @@ func TestHostilePDFContained(t *testing.T) {
 // keeps its original file, and is never silently empty.
 func TestScannedPDFFlaggedNoText(t *testing.T) {
 	t.Parallel()
-	s := newService(t)
+	s := newService(t) // no vision model: a scan is stored, waiting, and said so (PR 3c)
 	d, err := s.Ingest(t.Context(), "scan.pdf", "application/pdf", bytes.NewReader(makePDF("", "")))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !d.NoText || d.Pages != 2 || len(d.Notes) != 1 || !strings.Contains(d.Notes[0], "no text layer") || d.FileID == "" {
-		t.Fatalf("scanned PDF: %+v", d)
+	if !errors.Is(err, ErrVisionNotConfigured) || !d.NoText || d.Pages != 2 || len(d.Notes) != 1 || d.Notes[0] != pendingNote || d.FileID == "" || d.Status != "needs_transcription" {
+		t.Fatalf("scanned PDF: %+v %v", d, err)
 	}
 	got, err := s.Get(t.Context(), []string{d.ID}, d.ID)
-	if err != nil || !got.NoText || len(got.Notes) != 1 || got.Notes[0] != d.Notes[0] || got.Pages != 2 || got.Method != "text_layer" {
+	if err != nil || !got.NoText || len(got.Notes) != 1 || got.Notes[0] != d.Notes[0] || got.Pages != 2 || got.Status != "needs_transcription" || got.Chunks != 0 {
 		t.Fatalf("stored: %+v %v", got, err)
 	}
 	if data, err := fileData(s, []string{d.ID}, d.ID); err != nil || !bytes.HasPrefix(data, []byte("%PDF-")) {
 		t.Errorf("the original is kept: %v", err)
+	}
+	blank, err := s.Ingest(t.Context(), "blank.pdf", "application/pdf", bytes.NewReader(makePDF("-", "-")))
+	if err != nil || !blank.NoText || len(blank.Notes) != 1 || !strings.Contains(blank.Notes[0], "no text layer") || blank.Status != "ready" || blank.Method != "text_layer" {
+		t.Fatalf("a PDF with nothing on it is stored as noText with a note: %+v %v", blank, err)
 	}
 	text, err := s.Ingest(t.Context(), "lease.pdf", "application/pdf", bytes.NewReader(makePDF("The Lessee shall pay rent.")))
 	if err != nil || text.NoText || len(text.Notes) != 0 {
@@ -250,7 +298,8 @@ func TestIngestRefusalLeavesNothing(t *testing.T) {
 	for _, c := range []struct {
 		data []byte
 		want error
-	}{{[]byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a}, ErrUnsupported}, {[]byte("%PDF-1.7 broken"), ErrUnreadable}, {[]byte("a\x00b"), ErrUnsupported}} {
+	}{{[]byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a}, ErrUnreadable}, {[]byte("%PDF-1.7 broken"), ErrUnreadable}, {[]byte("a\x00b"), ErrUnsupported},
+		{[]byte("II*\x00\x08\x00"), ErrScanEncoding}, {buildPDF(1, pdfPage{Image: dctImage(jpegOf(8, 8, 0), "/CCITTFaxDecode")}), ErrScanEncoding}} {
 		if _, err := s.Ingest(t.Context(), "x.bin", "application/octet-stream", bytes.NewReader(c.data)); !errors.Is(err, c.want) {
 			t.Errorf("ingest %q: %v, want %v", c.data, err, c.want)
 		}

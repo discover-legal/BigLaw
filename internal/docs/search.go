@@ -44,6 +44,8 @@ type Hit struct {
 	Text       string  `json:"text"`
 	Context    string  `json:"context,omitempty"`
 	Rank       float64 `json:"rank"`
+	// Transcribed: the chunk is (partly) a vision model's transcription of an image (README § Vision).
+	Transcribed bool `json:"transcribed,omitempty"`
 }
 
 // Search ranks the scope's chunks for query. Each query word is a term (OR, not AND), weighted
@@ -90,7 +92,7 @@ func (s *Service) Search(ctx context.Context, scope []string, query string, k, o
 		var h Hit
 		var id int64
 		var ord int
-		if err := rows.Scan(&id, &h.DocumentID, &ord, &h.Title, &h.Text, &h.Context, &h.Rank); err != nil {
+		if err := rows.Scan(&id, &h.DocumentID, &ord, &h.Title, &h.Text, &h.Context, &h.Rank, &h.Transcribed); err != nil {
 			return nil, s.searchError(ctx, err)
 		}
 		h.SectionID = sectionID(ord)
@@ -133,7 +135,7 @@ fused AS (SELECT coalesce(l.id, v.id) AS id,
     CASE WHEN $5::vector IS NULL THEN l.rank WHEN v.id IS NULL THEN 2.0 / (60 + l.r) ELSE coalesce(1.0 / (60 + l.r), 0) + 1.0 / (60 + v.r) END AS rank
   FROM (SELECT id, rank, row_number() OVER (ORDER BY rank DESC, id) AS r FROM lex) l FULL JOIN vec v ON v.id = l.id),
 top AS (SELECT id, rank FROM fused ORDER BY rank DESC, id LIMIT $3 OFFSET $4)
-SELECT c.id, c.document_id, c.section_ord, c.locator, c.body, c.context, top.rank
+SELECT c.id, c.document_id, c.section_ord, c.locator, c.body, c.context, top.rank, c.transcribed
 FROM top JOIN chunks c ON c.id = top.id ORDER BY top.rank DESC, c.id`
 
 func sectionID(ord int) string { return "s" + strconv.Itoa(ord) }

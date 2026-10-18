@@ -192,6 +192,11 @@ type VerifiedQuote struct {
 	Verification
 	SectionID string `json:"sectionId,omitempty"`
 	Number    string `json:"number,omitempty"`
+	// TranscribedBy names the vision model when the match is in transcribed text: the method gets
+	// "@transcript", the confidence at most TranscriptCap, and LowConfidence marks a page whose two
+	// readings agreed less than lowBelow (a finding resting only on it is gated, PR 4b).
+	TranscribedBy string `json:"transcribedBy,omitempty"`
+	LowConfidence bool   `json:"lowConfidence,omitempty"`
 }
 
 // VerifyQuote runs the ladder on one document in scope.
@@ -212,5 +217,10 @@ func (s *Service) VerifyQuote(ctx context.Context, scope []string, docID, quote 
 		return VerifiedQuote{}, fmt.Errorf("docs: verify: locate: %w", err)
 	}
 	out.SectionID = sectionID(ord)
+	if p := d.Transcript.covers(v.Start, v.End); p != nil {
+		out.Method, out.Confidence = v.Method+"@transcript", min(v.Confidence, TranscriptCap)
+		out.TranscribedBy, out.LowConfidence = d.Transcript.Model, p.Agreement < lowBelow
+		out.Note = "machine transcription of an image (" + d.Transcript.Model + "): check against the original"
+	}
 	return out, nil
 }

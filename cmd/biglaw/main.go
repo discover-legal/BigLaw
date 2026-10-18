@@ -126,13 +126,18 @@ func run(ctx context.Context, args []string, getenv func(string) string, environ
 			return 1
 		}
 		d := docs.New(st)
-		if cfg.Roles.Embed != "" {
+		if cfg.Roles.Embed != "" || cfg.Roles.Vision != "" {
 			client, err := model.New(model.Options{URL: cfg.ModelURL, Key: cfg.ModelKey, Roles: cfg.Roles, Prices: cfg.Prices, LocalWatts: cfg.LocalWatts, Log: log})
 			if err != nil {
 				fmt.Fprintf(stderr, "biglaw: %v\n", err)
 				return 1
 			}
-			d.UseEmbedder(client, cfg.Roles.Embed)
+			if cfg.Roles.Embed != "" {
+				d.UseEmbedder(client, cfg.Roles.Embed)
+			}
+			if cfg.Roles.Vision != "" { // images go to this role only, never to a text model
+				d.UseVision(client, cfg.Roles.Vision)
+			}
 		}
 		if err := serve(ctx, st, d, ln, log); err != nil {
 			fmt.Fprintf(stderr, "biglaw: %v\n", err)
@@ -152,7 +157,7 @@ type pinger interface{ Ping(context.Context) error }
 
 // shutdownGrace is how long a stop waits for requests in flight before cancelling them (an ingest
 // then removes its file and answers 503), and again for them to end before closing connections.
-var shutdownGrace = 10 * time.Second
+var shutdownGrace, jobEvery = 10 * time.Second, 15 * time.Minute
 
 // serve serves HTTP on ln, and runs the embedding backfill, until ctx ends; then it shuts down gracefully.
 func serve(ctx context.Context, st *store.Store, d *docs.Service, ln net.Listener, log *slog.Logger) error {
@@ -168,6 +173,19 @@ func serve(ctx context.Context, st *store.Store, d *docs.Service, ln net.Listene
 			log.Warn("embedding backfill: some documents stay lexical only (EmbedNote)", "embedded", n, "failed", failed, "err", err)
 		} else if n > 0 {
 			log.Info("embedding backfill", "embedded", n)
+		}
+		if n, err := d.LexicalOnly(backfill); n > 0 || err != nil {
+			log.Warn("documents searched lexically only until a backfill embeds them (README § Documents)", "documents", n, "err", err)
+		}
+		for { // transcription jobs, at startup and every 15 minutes (a job whose lease ran out is taken again)
+			if n, failed, err := d.TranscribePending(backfill); n+failed > 0 || err != nil {
+				log.Info("transcription jobs", "transcribed", n, "failed", failed, "err", err)
+			}
+			select {
+			case <-backfill.Done():
+				return
+			case <-time.After(jobEvery):
+			}
 		}
 	}()
 	base, stopRequests := context.WithCancelCause(context.Background())

@@ -10,7 +10,7 @@ tables in which every factual statement cites a quote that the software has veri
 matter's own documents, with a lawyer approving every deliverable. It is one Go binary plus one
 PostgreSQL database. Licensed Apache-2.0 (`LICENSE`, `NOTICE`).
 
-## What exists today (PR 1: skeleton, config, store, CI; PR 2: model client; PR 3a: documents; PR 3b: model roles, embeddings, hybrid search)
+## What exists today (PR 1: skeleton, config, store, CI; PR 2: model client; PR 3a: documents; PR 3b: model roles, embeddings, hybrid search; PR 3c: vision transcription)
 
 | Piece | Path | What it does |
 |---|---|---|
@@ -20,7 +20,7 @@ PostgreSQL database. Licensed Apache-2.0 (`LICENSE`, `NOTICE`).
 | Migrations | `internal/store/migrate.go`, `internal/store/migrations/NNNN_*.sql` | Embedded SQL files applied in order under an advisory lock; each file and its `schema_migrations` row in one transaction. `store.Open` first creates the `vector` extension (pgvector), which is database-wide (§ Database) |
 | Files | `internal/store/files.go` | Binary files (uploads, generated `.docx`) stored in 1 MiB `bytea` chunks, streamed in and out, with size and SHA-256 checked on every read |
 | Model client | `internal/model/` (`client.go`, `embed.go`, `errors.go`, `fake.go`, `pricing.go`, `prices.json`) | One OpenAI-compatible chat client with tool calls and image parts, an embeddings call (`Embed`) on the same transport, typed failures with their HTTP mapping, at most 3 attempts per call, cache-aware pricing of every call from a built-in table plus `BIGLAW_PRICES` (the host never makes a call free), watt-hour metering when `BIGLAW_LOCAL_WATTS` is set, and `model.Fake` for tests (§ Model client). Only `Embed` has a caller yet (documents, below); the agent loop that calls `Chat` arrives in PR 4a. |
-| Documents | `internal/docs/` (`ingest.go`, `child.go` + `child_linux.go`/`child_other.go`, `pageindex.go`, `chunk.go`, `search.go`, `embed.go`, `verify.go`, `http.go`) | Ingest of UTF-8 text, `.docx` and PDF text layers (PDFs and `.docx` files parsed in a bounded child process); the byte-exact section tree; search chunks; Postgres full-text search, fused with pgvector similarity when an `embed` role is set (chunk embedding at ingest, a startup backfill); the page reader (outline, paged sections); the quote-verification ladder; the upload and download routes. Every read is scoped to the caller's document ids (§ Documents) |
+| Documents | `internal/docs/` (`ingest.go`, `child.go` + `child_linux.go`/`child_other.go`, `pageindex.go`, `chunk.go`, `search.go`, `embed.go`, `verify.go`, `http.go`, `vision.go` + `vision_prompts.txt`, `scanpdf.go`, `jobs.go`) | Ingest of UTF-8 text, `.docx` and PDF text layers (PDFs and `.docx` files parsed in a bounded child process); images and JPEG-scanned PDF pages transcribed by the `vision` role, each page read twice and the readings compared, with provenance on every document, chunk and citation, and a leased job that transcribes what was stored before a vision role was set (§ Vision transcription); the byte-exact section tree; search chunks; Postgres full-text search, fused with pgvector similarity when an `embed` role is set (chunk embedding at ingest, a startup backfill); the page reader (outline, paged sections); the quote-verification ladder; the upload and download routes. Every read is scoped to the caller's document ids (§ Documents) |
 | `.docx` reader | `internal/docs/ooxml/` | Opens a `.docx`'s text parts only (body, footnotes, endnotes; 128 MiB decompression cap) and reads its visible text in one linear XML pass. The writer, the XML escapers, the part-preserving re-zip and tracked-change parse/apply are planned (PR 3d) |
 | Proof-run fixtures | `eval/tasks/`, `eval/e4/embeddings.json` | The five synthetic proof-run matters (documents + answer keys), copied from `feat/proof-runs-multi-practice`; PR 3 reads them for gate E4, PR 4b adds the driver and scorer. `eval/e4/embeddings.json` is E4's embeddings tape: today the **self-test** tape of a hash embedder, not a real model's (§ Documents, gate E4) |
 | Test helper | `internal/store/storetest/` | Gives each DB test its own schema; skips without a DSN, fails if `BIGLAW_REQUIRE_DB` is set |
@@ -34,8 +34,7 @@ HTTP surface today: `GET /health`, which returns `{"status":"ok","version":"…"
 document file routes of § Documents: `POST /documents/upload` and `GET /documents/{id}/file`.
 Every other path is 404/405. There is no authentication yet (§ Exposure).
 
-**Planned** (not built): vision transcription of images and scanned
-PDFs (PR 3c); the `.docx` writer and tracked-change parse/apply (PR 3d); the engine and the memo workflow with its REST API (PR 4), diligence (PR 5), contract review (PR 6),
+**Planned** (not built): the `.docx` writer and tracked-change parse/apply (PR 3d); the engine and the memo workflow with its REST API (PR 4), diligence (PR 5), contract review (PR 6),
 MCP (PR 7), clients/conflicts and OIDC/session/token auth (PR 8), time and billing (PR 9), the
 UI (PR 11), jurisdiction and practice packs (PR 12), v1 import and docs (PR 13). The
 discover.legal intake module is **not** part of v2 (owner decision; it moves to a separate repo).
@@ -78,7 +77,7 @@ whatever does not parse into a shape known to be safe is not shown.
 | `BIGLAW_PUBLIC_URL` | `http://127.0.0.1:3101` | External base URL (OIDC redirect, cookie `Secure`) | PR 8 |
 | `BIGLAW_MODEL_URL` | — | OpenAI-compatible API base, ending in its version (`http://localhost:11434/v1`); calls go to `<URL>/chat/completions` and `<URL>/embeddings`. http(s), a plain ASCII host with at least one letter or digit, a port up to 65535, no `@` anywhere (no credentials in the URL; write any other `@` as `%40`). Required when the key or a role is set. | PR 1 |
 | `BIGLAW_MODEL_KEY` | — | API key for that URL, sent as `Authorization: Bearer`; no white space or control characters. `serve` warns if it would go over plain `http`. | PR 2 |
-| `BIGLAW_MODELS` | — | Model id per role, as the endpoint names it: comma-separated `role=id`, roles `lead`, `specialist`, `critic`, `vision`, `embed`, each at most once (e.g. `lead=qwen2.5:14b,critic=glm-4.5-air,embed=nomic-embed-text`). Unset `specialist` or `critic` use the lead's; setting either without the lead is refused. `vision` and `embed` have **no** fallback: with no `embed` role search is lexical only (`/health` says `"search":"lexical"`); `vision` is read from PR 3c (images are refused until then). An unknown role, a repeated one, an empty id, an id over 200 bytes, or an id holding `://`, `user:password@`, white space, a control or invisible (format) character, `?` `=` `&`, or a key's shape (`sk-`, `sk_`, `AKIA`, `ASIA`, `AIza`, `xox?-`, `gh?_` prefixes, or 24 letters and digits in a row) is a startup error that does not echo the value. A wrong id fails at its first call with 404 → `model_not_configured`; with no lead, chat calls fail with 503 `model_not_configured`. | PR 3 |
+| `BIGLAW_MODELS` | — | Model id per role, as the endpoint names it: comma-separated `role=id`, roles `lead`, `specialist`, `critic`, `vision`, `embed`, each at most once (e.g. `lead=qwen2.5:14b,critic=glm-4.5-air,embed=nomic-embed-text`). Unset `specialist` or `critic` use the lead's; setting either without the lead is refused. `vision` and `embed` have **no** fallback: with no `embed` role search is lexical only (`/health` says `"search":"lexical"`); `vision` names the model images and scanned pages are sent to; without it they are stored as `needs_transcription` (503 `vision_not_configured`) and never sent to another role's model (§ Vision transcription). An unknown role, a repeated one, an empty id, an id over 200 bytes, or an id holding `://`, `user:password@`, white space, a control or invisible (format) character, `?` `=` `&`, or a key's shape (`sk-`, `sk_`, `AKIA`, `ASIA`, `AIza`, `xox?-`, `gh?_` prefixes, or 24 letters and digits in a row) is a startup error that does not echo the value. A wrong id fails at its first call with 404 → `model_not_configured`; with no lead, chat calls fail with 503 `model_not_configured`. | PR 3 |
 | `BIGLAW_BUDGET_CALLS` | `150` | Model calls per task | PR 4 |
 | `BIGLAW_BUDGET_USD` | `5` | Dollar cap per task | PR 4 |
 | `BIGLAW_LOCAL_WATTS` | — | Power draw of the machine running the model; when set (above 0) every call records watts × duration as watt-hours, for reporting only (never a price). A number from 0 to 100000 | PR 2 |
@@ -320,10 +319,11 @@ exist, and a file is reachable only through a document in scope (`TestRetrieveNe
 
 **Ingest.** The type is detected from the content, never from the name or the declared type:
 `%PDF-` is a PDF, a ZIP with `word/document.xml` is a `.docx`, valid UTF-8 without NUL is text.
-Anything else is refused with 415 `unsupported_type` (images included: transcription is PR 3c);
+a PNG, JPEG, GIF or WebP image is transcribed (§ Vision transcription; a TIFF is 422
+`scan_encoding_unsupported`). Anything else is refused with 415 `unsupported_type`;
 a damaged, encrypted or over-2,000-page PDF and a damaged `.docx` are 422 `unreadable`. A refused
 upload leaves no row behind (`TestIngestRefusalLeavesNothing`). A document that has nothing
-readable (a scanned PDF, a `.docx` holding only images, an empty file) is stored with
+readable (a PDF with neither text nor JPEG scans, a `.docx` holding only images, an empty file) is stored with
 `noText: true` and a note saying so, never as a silently empty document
 (`TestScannedPDFFlaggedNoText`); a PDF with some blank pages keeps its text and its note counts
 every page that was not read (listing the first ten). PDF pages are joined with a form feed.
@@ -509,6 +509,77 @@ only the other hop, so 2–3 misses are partly measurement; the per-evidence-str
 printed beside the gate figure and the gate is not moved for it. Gate A (PR 4b) measures recall
 through the agent's own queries.
 
+**Vision transcription (PR 3c; DESIGN revision 5 § 4).** Images (PNG, JPEG, GIF, WebP, by magic
+bytes) and PDF pages that have no text layer are sent to the model of the `vision` role in
+`BIGLAW_MODELS`, as base64 `image_url` parts through the same OpenAI-compatible client (every call
+priced like any other). There is no OCR engine and no rasteriser: a scanned PDF page is read only
+when it is one to four JPEG images stored whole (`/DCTDecode`), which the reader child finds by
+their offsets in the file and the server sends **as they are** (`TestScannedPDFDCTPagesExtracted`:
+the bytes sent are the embedded JPEGs). A page whose images use another encoding (CCITT fax, JBIG2,
+Flate bitmaps, a JPEG under a second filter), a form XObject, an encrypted PDF, or a TIFF image is
+422 `scan_encoding_unsupported`, with advice to export as JPEG or from a phone scanner app
+(`TestScanEncodingUnsupportedTyped`). Every image's header is checked (`image.DecodeConfig`; WebP
+by magic only) before it is stored or sent, so a damaged one is 422 `unreadable`; a page's images
+may total 20 MiB.
+- **Two independent readings.** Each page is read twice, by two different prompts
+  (`vision_prompts.txt`; agents `transcribe-a`/`-b`), each told to write `[illegible]` rather than
+  guess and `[blank]` for a page with no text. The readings are compared on their words (case
+  folded, the marks left out; Dice over word multisets): below **0.75** the upload is 422
+  `transcription_unreliable` and nothing is stored, no text, no chunk, no file
+  (`TestUnreadableImageNotFabricated`: two plausible letters for a noise image); from 0.75 to 0.9
+  the page is stored as **low confidence**; a blank reading beside a non-blank one is a
+  disagreement. The reading with more `[illegible]` marks is the one stored, so a mark is never
+  filled in from the other reading (`TestIllegibleNeverFilled`). Nothing readable on any page is
+  422 `no_content` (`TestBlankImageNoContent`); an answer cut at the output limit (8,192 tokens) is
+  422 `transcription_unreliable`, never a silently short page. More than **20** scanned pages is
+  413 `too_many_pages` before any call (`TestTooManyPages413`). All of one document's vision calls
+  stop after 10 minutes, and their text after 16 MiB (`TestVisionFailuresTyped`).
+- **A mixed PDF keeps its text layer.** Only pages with no text are read; each transcript goes in
+  its page's place and every text-layer page stays byte for byte (`TestMixedPDFTextLayerNotRewritten`:
+  the vision model "reading" different words for them changes nothing). A page there whose
+  readings disagree, or past the first 20 scanned pages, is left unread with a note, and the text
+  layer is still stored (v1's model merge of the two is dropped).
+- **Provenance.** A document's `transcript` names the model, each transcribed page with its byte
+  span in the text and its agreement, the least agreement, `lowConfidence`, `transcribedAt`, and
+  the calls' `tokens` and `costUsd` (null when the model is unpriced); `method` is `vision` (a mixed
+  PDF stays `text_layer`, its `transcript` listing the transcribed pages); a note names the model
+  and says to check quotes against the original, which is kept and downloadable. Each chunk that
+  overlaps a transcribed page is marked `transcribed` (search hits say so).
+- **Citations into a transcript** (`VerifyQuote`): the method gets `@transcript`
+  (`exact@transcript`, `tolerant@transcript`, `judge@transcript`, …), the confidence is capped at
+  **0.85** (below text-exact 1.0 and tolerant 0.95, above the judge's 0.8), the result names the
+  model (`transcribedBy`) with the note "machine transcription of an image (model): check against
+  the original", and `lowConfidence` is set when the match touches a page whose readings agreed
+  less than 0.9: per quote, so a finding resting on a good page is not flagged
+  (`TestTranscriptCitationCappedAndDisclosed`, `TestLowAgreementFindingsGatedIndividually`; PR 4b's
+  gate acts on the flag).
+- **No vision role.** An image or a fully scanned PDF is stored with `status: needs_transcription`
+  (no text, `noText: true`, a note) and the upload is **503 `vision_not_configured`** with the
+  document; the original is kept (`TestVisionNotConfiguredTyped503KeepsOriginal`,
+  `TestExtractImageWithoutVisionDegrades`). Nothing is sent to any model: no text role is ever used
+  for images (`TestTextModelNeverSentImages`; end to end, `TestServeNeverSendsImagesToTheLead`). A
+  mixed PDF is stored with its text layer and a note on its unread pages. Failures of a vision call
+  are the model's G6 status (502/503/504), and the upload stores nothing.
+- **Transcription jobs** (`jobs.go`). With a vision role set, `serve` transcribes waiting
+  documents at startup and every 15 minutes, oldest first, one at a time, each under a 30-minute
+  lease in the database (two servers never take the same one; one whose server died mid-job is
+  taken again when its lease ends), completing it under its own id with its original file. One its
+  reading refuses (unreliable, no content, unsupported, too many pages, damaged) becomes
+  `status: failed` with the reason as its note; a model or database failure ends that run and the
+  document is retried at the next one, then failed after its third attempt; a document whose
+  server died during three attempts (an OOM kill, say) is failed at its fourth claim without a
+  call, not retried forever (`TestTranscriptionJobResumesAfterRestart`). The run logs how many it transcribed and failed.
+  The contract v1 fields (`POST /documents` with `content` + `contentType` → 202 `transcribing`,
+  `GET /health` `capabilities`) are PR 8's (PLAN PR 8), not built here.
+- **Live check (owner, no key here).** Every test runs on `model.Fake` or `httptest`. With a vision
+  model on an OpenAI-compatible endpoint:
+  ```bash
+  BIGLAW_DATABASE_URL=… BIGLAW_MODEL_URL=http://localhost:11434/v1 BIGLAW_MODELS='lead=qwen2.5:14b,vision=qwen2.5vl:7b' \
+    ./biglaw serve --allow-no-auth &
+  curl -s -F file=@letter.jpg http://127.0.0.1:3101/documents/upload | jq '{status, method, notes, transcript}'
+  ```
+  then download `GET /documents/{id}/file` and compare it with the transcript by eye.
+
 **Page reader.** `Outline` lists every section in order as `{sectionId, number, title, level,
 tokens}`, where `tokens` estimates what `Section` returns for it: the section with its
 subsections. `Section` reads that text verbatim from a character `offset`, at most `limit` tokens
@@ -532,12 +603,16 @@ extension) to the one document in scope with that name; an ambiguous name resolv
 
 **Upload and download.** `POST /documents/upload` takes `multipart/form-data` with one part named
 `file`, streams it into the files table and ingests it: 201 with the document (`id`, `name`,
-`contentType` (detected), `fileId`, `method` `text`|`text_layer`, `noText`, `pages`, `notes`,
+`contentType` (detected), `fileId`, `method` `text`|`text_layer`|`vision`, `noText`, `status`
+(`ready`|`needs_transcription`|`failed`), `transcript` (when anything was transcribed), `pages`, `notes`,
 `sections`, `chunks`, `createdAt`). A part with no file name is 400 `bad_request`; the declared
 type is kept as the file's metadata only (a wildcard such as `*/*` is stored as
 `application/octet-stream`). Errors are `{error, errorType}`: 400 `bad_request`/`bad_name`/
-`bad_content_type`, 403 `cross_origin`, 408 `upload_timeout`, 413 `too_large`, 415, 422, 499
-`cancelled`, 500 `internal` (logged, fixed text). A client must send at least 64 KiB every 30
+`bad_content_type`, 403 `cross_origin`, 408 `upload_timeout`, 413 `too_large`/`too_many_pages`, 415, 422
+`unreadable`/`transcription_unreliable`/`no_content`/`scan_encoding_unsupported`, 499
+`cancelled`, 500 `internal` (logged, fixed text), and a vision call's failure as its model kind (502
+`model_unavailable`, 503 `model_rate_limited`/`model_not_configured`, 504 `model_timeout`; fixed text). 503
+`vision_not_configured` also carries the stored `document`. A client must send at least 64 KiB every 30
 seconds and the whole file within 15 minutes, or its read fails and its upload slot and pool
 connection are released at once (`TestUploadReadDeadline`: 16 stalled clients and one trickling
 client, then the slots are free, the pool is back to its baseline, a 17th upload succeeds and no
@@ -567,7 +642,7 @@ removes a document with its sections, chunks and original file in one statement;
 document or its file in any other way (SQL, a later cascade) takes the other along: a trigger and a
 cascade (`TestFileDeletedWithDocument`). A file left without a document by a server that died
 mid-ingest is deleted at the next `serve` start once it is an hour old (`TestOrphanFilesSwept`);
-no live upload is that old (15 minutes to upload + 10 to wait for a slot + 2 to read). A stop
+no live upload is that old (15 minutes to upload + 10 to wait for a slot + 2 to read + 10 for the vision calls). A stop
 (SIGTERM) waits 10 s for requests in flight, then cancels them: an ingest still running answers
 503 `stopping` and removes its file, `serve` exits 0 with a warning, and connections still open
 after another 10 s are closed (`TestServeStopCancelsIngest`).
@@ -751,11 +826,29 @@ an outage), `TestEmbeddingsPriced` (token cap, ada-002, no usage), `TestEmbedTyp
 shapes, length), `TestOpenNeedsVector` (8 concurrent first starts) and `TestDownloadBounded`
 (measures the stalled state).
 
+Named tests (PLAN.md PR 3, slice 3c, vision; no model key: `model.Fake` and `httptest` only):
+`TestTextModelNeverSentImages`, `TestUnreadableImageNotFabricated`, `TestBlankImageNoContent`,
+`TestVisionNotConfiguredTyped503KeepsOriginal`, `TestTranscriptCitationCappedAndDisclosed`,
+`TestLowAgreementFindingsGatedIndividually`, `TestScannedPDFDCTPagesExtracted`,
+`TestScanEncodingUnsupportedTyped` (CCITT, JBIG2, a second filter, TIFF), `TestTooManyPages413`,
+`TestMixedPDFTextLayerNotRewritten` and `TestTranscriptionJobResumesAfterRestart` (DB), and v1
+`services` vectors `TestExtractImageWithoutVisionDegrades` (changed: the image is kept, waiting,
+with a note naming vision, and the upload is 503) and `TestSniffImageMIME`. Extra:
+`TestIllegibleNeverFilled`, `TestVisionFailuresTyped` (G6 kinds, a cut-off reading, the text cap,
+the 10-minute bound), `TestLexicalOnlyDisplacementMeasured` (PR 3b r2 L2's figures) and, in
+`cmd/biglaw`, `TestServeNeverSendsImagesToTheLead` (a lead-only server sends nothing; restarted
+with a vision role it transcribes the waiting image at startup). Changed by 3c:
+`TestScannedPDFFlaggedNoText` (a JPEG-scanned PDF without a vision role is stored waiting, 503; a
+PDF with nothing on it is still `noText` with its note), `TestIngestRefusalLeavesNothing` and
+`TestUploadErrorsTyped` (a damaged image is 422, a TIFF or CCITT scan 422
+`scan_encoding_unsupported`, all leaving nothing), `TestExtractPlainText` (an image is a page to
+transcribe, never text).
+
 ## Budgets (`scripts/loc.py`, run in CI)
 
 | Budget | Ceiling | Today |
 |---|---:|---:|
-| Go production lines (physical lines, non-`_test.go`, test-support packages included) | 15,500 | 4,295 |
+| Go production lines (physical lines, non-`_test.go`, test-support packages included) | 15,500 | 4,777 |
 | Packages under `internal/`, test-support packages excluded | 12 | 4 (`docs`, `docs/ooxml`, `model`, `store`; `store/storetest` is test support) |
 | Direct Go dependencies | 3 | 2 (`github.com/lib/pq`, `github.com/ledongthuc/pdf`) |
 | Runtime environment variables | 20 | 18 |
@@ -816,8 +909,8 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
   A stored file with no document is swept only at startup and only after an hour; a later PR that
   stores files of its own must teach `SweepOrphanFiles` about them.
 - **Documents (PR 3a):**
-  - Images and scanned PDFs are refused or stored as `noText` until PR 3c's vision transcription;
-    there is no OCR. A text-layer PDF whose layer is wrong (a scan with an invisible, bad OCR
+  - There is no OCR: images and scanned pages are read by the vision model (§ Vision
+    transcription; its limits are below). A text-layer PDF whose layer is wrong (a scan with an invisible, bad OCR
     layer) is taken as is. Text that the PDF reader puts in an odd order (columns, tables) stays
     in that order.
   - A text upload that happens to start with `%PDF-` is read as a PDF and refused; posted text
@@ -916,7 +1009,18 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
   - The lexical-only rule (`2/(60 + lexical rank)`) makes a lexical-only chunk equal to an
     embedded chunk ranked the same by both legs; it cannot gain from meaning, so for a question
     that shares no word with it, a lexical-only document is still not found (as with lexical
-    search alone).
+    search alone). It is also the **best case** for that chunk: its vector rank is taken to equal
+    its lexical rank, so until the backfill embeds it a lexical-only document whose chunks share a
+    query word outranks embedded chunks that are semantically closer. Measured
+    (`TestLexicalOnlyDisplacementMeasured`): the vector leg's first match, lexically weak, is #5
+    behind 8 such chunks and **#10** (off a page of 8) behind 20; #1 once they are embedded. `serve`
+    logs how many documents are lexical only after its startup backfill. A neutral imputation would
+    trade this for part of the burying it was chosen to avoid (owner's call).
+  - A vector space is known only by the model id: if the model behind an id changes (an Azure
+    deployment upgraded in place, an Ollama `:latest` re-pull), old documents are not re-embedded,
+    and are compared across models (same length) or silently drop out of the vector leg (another
+    length) while `/health` still says `hybrid`. Change the id when the model changes, so the
+    backfill re-embeds.
   - Paging re-embeds the query for each page (one call, about $0.0000002 at
     `text-embedding-3-small`'s rate): a per-server cache of the last query's vector was left out,
     because its timing would tell one user whether another just searched the same words.
@@ -932,7 +1036,10 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     only when they finish (or fails over to
     lexical only, with the note, if the client goes away). The backfill runs only at startup: a
     document whose embedding failed stays lexical until the next start. Two servers on one
-    database may both backfill the same old document (twice the cost, same result). Changing the
+    database may both backfill the same old document (twice the cost, same result, **as long as
+    both use the same `embed` model**: two servers backfilling under different models can interleave
+    on one document and leave it labelled with one model over a mix of both models' vectors; run one
+    embed model per database). Changing the
     `embed` model makes every document lexical until the backfill re-embeds it; a re-embed that
     fails turns a document embedded by the old model lexical only (its old vectors are no longer
     trusted, and are overwritten when it is next embedded).
@@ -970,6 +1077,54 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     (then it is lexical only, with the note), a query's embedding after 30 s (then 504
     `model_timeout`; `TestEmbedWaitsBounded`), and an answer with vectors over 16,000 dimensions
     (pgvector's limit) is refused.
+- **Vision transcription (PR 3c):**
+  - **No vision model has been run.** There is no vision key in the build environment: every test
+    uses `model.Fake` or `httptest`, so the prompts, the 0.75/0.9 thresholds and the 8,192-token
+    output cap are not calibrated on any real model (owner's live check: § Vision transcription).
+  - Agreement compares the readings' words as **multisets**: two readings with the same words in
+    a different order agree fully, and two models that make the same mistake agree. It is a check
+    against invention, not proof of accuracy; the citation cap and the "check against the
+    original" note say so to the reader.
+  - A model's **refusal or commentary** ("I can't transcribe this image") is not recognised: if
+    both readings phrase it alike they agree, and it is stored as the page's transcript (capped and
+    disclosed like any transcript). Telling commentary from text needs a judgement call BigLaw
+    does not make here.
+  - A WebP image is checked by its magic bytes only (no decoder in the standard library), so a
+    damaged one is stored or sent and fails at the model instead (502, or disagreeing readings).
+  - **Prompt injection:** text in an image is read by the model like any instruction. A page that
+    tells the model to write something else can be obeyed by both readings, which then agree; the
+    result is stored as a machine transcription (capped, disclosed), never as text-layer truth, and
+    downstream prompts must treat it as untrusted document text (PR 4a).
+  - Scans are found only as image XObjects in a page's own resources: inline images (`BI … EI`),
+    images inside form XObjects, and pages drawn as vector paths read as blank or unsupported. A PDF
+    page with a form feed inside its text layer makes a mixed PDF's pages unplaceable, and then none
+    of its scanned pages are transcribed (the note still lists them). TIFF, BMP, HEIC and JPEG 2000
+    are not read (no decoder without a dependency).
+  - **Images leave the machine** with a hosted vision model, as chat prompts will. Setting a vision
+    role for the first time also sends every waiting document to it (the startup job run).
+  - Until PR 8 there is no auth or quota: anyone who can reach the port can make the server pay for
+    up to 40 vision calls per upload (20 pages × 2 readings), each up to 8,192 output tokens plus
+    its image: at most 327,680 output tokens, $2.10 at `qwen-vl-max`'s output rate ($6.40/M), $3.28
+    at `gpt-4o`'s ($10/M), before image input.
+  - The calls of a refused transcription (422, or a model failure) are priced by the client but
+    recorded nowhere except the error text's token count (the document is not stored); a job's
+    are recorded only on success, in its `transcript`. PR 4a's ledger charges tasks.
+  - One page's two readings run one after the other, so a document takes up to 40 sequential calls
+    (bounded at 10 minutes in all, then 504 `model_timeout`);
+    the vision calls run inside the ingest slot, so two slow scans hold both slots meanwhile.
+    Memory per vision ingest: the file plus one page's images about three times over (base64 and
+    the JSON request), at most about 64 + 3 × 20 MiB.
+  - The job runs every 15 minutes and at startup, not when a role changes while serving (a role
+    change needs a restart anyway); a failed document stays failed (delete and upload again).
+    `lowConfidence` is only a flag until PR 4b's gate acts on it.
+  - **Line budget:** PR 3c adds 482 production lines (4,295 → 4,777) against DESIGN's 310 for it
+    (`docs` 300 + `cmd` 10; the `model` image parts landed in PR 2 and contract v1's `api` 40 is PR 8's):
+    **172 over**. Per file: `docs/vision.go` 255, `docs/scanpdf.go` 79 (with the page-note
+    helpers moved out of `ingest.go`), `docs/jobs.go` 66, `docs/ingest.go` +34 net, `docs/verify.go`
+    +10, `docs/http.go` +9 net, `docs/embed.go` +9 (the lexical-only count), `docs/search.go` +2,
+    `cmd/biglaw/main.go` +18. The prompts are data (`vision_prompts.txt`, not counted, as
+    `prices.json` is). Plan total 15,267–15,297 + 482 − 310 = **15,439–15,469, under the final
+    15,500 ceiling by 31–61** (DESIGN § PR 3c as built; a decision for the coordinator).
 - **Model client (PR 2):**
   - Only `Embed` has a caller yet (documents); `Chat`'s first caller is the agent loop (PR 4a),
     so no real endpoint has been exercised: every test uses `httptest` or

@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/discover-legal/BigLaw/internal/model"
 	"github.com/discover-legal/BigLaw/internal/store"
 )
 
@@ -125,7 +126,12 @@ func (s *Service) upload(w http.ResponseWriter, r *http.Request, log *slog.Logge
 		if errors.Is(context.Cause(r.Context()), ErrStopping) {
 			err = ErrStopping
 		}
-		if err != nil {
+		if errors.Is(err, ErrVisionNotConfigured) { // stored, to be transcribed: 503 with the document
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			json.NewEncoder(w).Encode(map[string]any{"error": strings.TrimPrefix(err.Error(), "docs: "), "errorType": "vision_not_configured", "document": d})
+			return
+		} else if err != nil {
 			writeError(w, log, readError(err, pr.timedOut, ""))
 			return
 		}
@@ -206,7 +212,10 @@ func writeError(w http.ResponseWriter, log *slog.Logger, err error) {
 		{ErrNotFound, 404, "not_found", false}, {ErrBadInput, 400, "bad_request", true}, {store.ErrBadName, 400, "bad_name", true},
 		{store.ErrBadType, 400, "bad_content_type", true}, {store.ErrFileTooLarge, 413, "too_large", true},
 		{errTimeout, 408, "upload_timeout", true}, {errCrossOrigin, 403, "cross_origin", true}, {ErrUnsupported, 415, "unsupported_type", true}, {ErrUnreadable, 422, "unreadable", true},
-		{ErrBusy, 503, "busy", true}, {ErrStopping, 503, "stopping", true},
+		{ErrBusy, 503, "busy", true}, {ErrStopping, 503, "stopping", true}, {ErrUnreliable, 422, "transcription_unreliable", true},
+		{ErrNoContent, 422, "no_content", true}, {ErrScanEncoding, 422, "scan_encoding_unsupported", true}, {ErrTooManyPages, 413, "too_many_pages", true},
+		{model.ErrNotConfigured, 503, "model_not_configured", true}, {model.ErrRateLimited, 503, "model_rate_limited", true}, // G6: fixed text only
+		{model.ErrUnavailable, 502, "model_unavailable", true}, {model.ErrTimeout, 504, "model_timeout", true}, {model.ErrNoContent, 422, "no_content", true},
 	} {
 		if errors.Is(err, c.err) {
 			code, kind, msg = c.code, c.kind, "not found"
