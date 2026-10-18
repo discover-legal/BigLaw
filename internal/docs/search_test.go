@@ -4,17 +4,14 @@
 package docs
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/discover-legal/BigLaw/internal/model"
 	"github.com/discover-legal/BigLaw/internal/store"
 	"github.com/discover-legal/BigLaw/internal/store/storetest"
 )
@@ -294,103 +291,25 @@ func TestSectionPaginates(t *testing.T) {
 	}
 }
 
-// TestLexicalRecallProofRuns (gate E4): for each planted proof-run fact, a search restricted to its
-// matter's documents returns a chunk holding one of its evidence strings in the top 8. The gate
-// query is the fact's answer-free question (answer_key.json "question", written without its
-// figures or conclusion: r1 auditor A3); the fact's title, which states the answer, is measured
-// too and printed as an upper bound. Per-matter recall is printed.
+// TestLexicalRecallProofRuns (gate E4, lexical leg): e4Measure with no embedder. The gate query is
+// the fact's answer-free question (answer_key.json "question", written without its figures or
+// conclusion: r1 auditor A3); the title, which states the answer, is an upper bound. Lexical
+// search does not meet the gate (60/68 = 0.882): this test fails only on a regression below that;
+// TestHybridRecallProofRuns is the gate.
 func TestLexicalRecallProofRuns(t *testing.T) {
 	t.Parallel()
-	s := newService(t)
-	keys, _ := filepath.Glob("../../eval/tasks/*/*/answer_key.json")
-	if len(keys) != 5 {
-		t.Fatalf("%d proof-run matters, want 5", len(keys))
+	r := e4Measure(t, newService(t))
+	if float64(r.question.found) < 0.95*float64(r.question.facts) {
+		t.Logf("E4 not met by lexical search alone: %d/%d < 0.95 (the gate is TestHybridRecallProofRuns)", r.question.found, r.question.facts)
 	}
-	ws := regexp.MustCompile(`\s+`)
-	norm := func(x string) string { return strings.ToLower(ws.ReplaceAllString(strings.TrimSpace(x), " ")) }
-	type tally struct{ facts, found, strings, stringsFound int }
-	var question, title tally
-	for _, key := range keys {
-		var ak struct {
-			Facts []struct {
-				ID, Title, Question string
-				Evidence            []string
-			}
-		}
-		raw, err := os.ReadFile(key)
-		if err != nil || json.Unmarshal(raw, &ak) != nil {
-			t.Fatalf("%s: %v", key, err)
-		}
-		docsDir := filepath.Join(filepath.Dir(key), "documents")
-		files, _ := os.ReadDir(docsDir)
-		var scope []string
-		for _, f := range files {
-			b, err := os.ReadFile(filepath.Join(docsDir, f.Name()))
-			if err != nil {
-				t.Fatal(err)
-			}
-			scope = append(scope, ingestText(t, s, f.Name(), string(b)).ID)
-		}
-		var matterQ, matterT tally
-		for _, f := range ak.Facts {
-			if f.Question == "" {
-				t.Fatalf("%s: fact %s has no answer-free question", key, f.ID)
-			}
-			for _, run := range []struct {
-				query    string
-				into     *tally
-				logMiss  bool
-				variants string
-			}{{f.Question, &matterQ, true, "question"}, {f.Title, &matterT, false, "title"}} {
-				hits, err := s.Search(t.Context(), scope, run.query, 8, 0)
-				if err != nil {
-					t.Fatal(err)
-				}
-				any := false
-				for _, ev := range f.Evidence {
-					run.into.strings++
-					if slices.ContainsFunc(hits, func(h Hit) bool { return strings.Contains(norm(h.Text), norm(ev)) }) {
-						run.into.stringsFound++
-						any = true
-					}
-				}
-				if run.into.facts++; any {
-					run.into.found++
-				} else if run.logMiss {
-					t.Logf("  miss %s: %s", f.ID, f.Question)
-				}
-			}
-		}
-		t.Logf("%s: recall@8 %d/%d by question, %d/%d by title", filepath.Base(filepath.Dir(key)), matterQ.found, matterQ.facts, matterT.found, matterT.facts)
-		for _, p := range [][2]*tally{{&question, &matterQ}, {&title, &matterT}} {
-			p[0].facts, p[0].found, p[0].strings, p[0].stringsFound = p[0].facts+p[1].facts, p[0].found+p[1].found, p[0].strings+p[1].strings, p[0].stringsFound+p[1].stringsFound
-		}
-	}
-	for _, r := range []struct {
-		name string
-		t    tally
-	}{{"by answer-free question (the gate)", question}, {"by fact title (upper bound: titles state the answer)", title}} {
-		t.Logf("E4 recall@8 %s: %d/%d facts = %.3f (every evidence string: %d/%d = %.3f)", r.name, r.t.found, r.t.facts,
-			float64(r.t.found)/float64(r.t.facts), r.t.stringsFound, r.t.strings, float64(r.t.stringsFound)/float64(r.t.strings))
-	}
-	if question.facts != 68 {
-		t.Errorf("%d planted facts, want 68", question.facts)
-	}
-	// E4 is NOT met: by answer-free question recall@8 is 60/68 = 0.882 < 0.95 (measured at the r1
-	// fix, questions written before the first run and not tuned since). Whether that means pgvector
-	// is the coordinator's decision (DESIGN § riskiest assumption); until then these floors only
-	// stop a regression, and the gate line below says plainly that it failed.
-	if float64(question.found) < 0.95*float64(question.facts) {
-		t.Logf("E4 GATE NOT MET: recall@8 by answer-free question %d/%d < 0.95", question.found, question.facts)
-	}
-	if question.found < 60 || float64(title.found) < 0.95*float64(title.facts) {
-		t.Errorf("E4 regressed: %d/%d by question (floor 60), %d/%d by title (floor 0.95)", question.found, question.facts, title.found, title.facts)
+	if r.question.found < 60 || float64(r.title.found) < 0.95*float64(r.title.facts) {
+		t.Errorf("E4 regressed: %d/%d by question (floor 60), %d/%d by title (floor 0.95)", r.question.found, r.question.facts, r.title.found, r.title.facts)
 	}
 }
 
 // TestSearchCost (r2 reproducer N2): a search costs scope × distinct terms, so terms are capped at
 // MaxTerms and the statement at searchTimeout. On a 4 MiB scope of short clauses this prints the
-// times README § Search quotes; 33 distinct words and a statement past the timeout are refused.
+// times README § Documents quotes; 33 distinct words and a statement past the timeout are refused.
 func TestSearchCost(t *testing.T) {
 	if testing.Short() {
 		t.Skip("ingests 4 MiB")
@@ -420,6 +339,24 @@ func TestSearchCost(t *testing.T) {
 	}
 	if _, err := s.Search(t.Context(), scope, words(MaxTerms+1, "w%d"), 8, 0); !errors.Is(err, ErrBadInput) || !strings.Contains(err.Error(), "33 distinct words") {
 		t.Errorf("33 distinct words: %v", err)
+	}
+	// Hybrid: the same scope embedded at 512 dimensions (the E4 tape's size); the vector leg ranks
+	// every embedded chunk in scope exactly, so it costs scope × dimensions.
+	f := model.NewFake(nil)
+	f.Vectors = func(text string) ([]float32, error) { return hashVector(text, 512), nil }
+	s.UseEmbedder(f, "hash-512")
+	start := time.Now()
+	if n, _, err := s.Backfill(t.Context()); n != 1 || err != nil {
+		t.Fatalf("embedding the scope: %d %v", n, err)
+	}
+	t.Logf("embedding %d chunks at 512 dimensions (fake model, %d calls): %s", d.Chunks, len(f.EmbedCalls()), time.Since(start))
+	for _, q := range []string{"supplier invoice", "absentword1 absentword2", "supplier shall pay fee euros invoice " + words(MaxTerms-6, "absentword%d")} {
+		start := time.Now()
+		hits, err := s.Search(t.Context(), scope, q, 8, 0)
+		t.Logf("hybrid %q on %d chunks: %d hits in %s", q, d.Chunks, len(hits), time.Since(start))
+		if err != nil || len(hits) != 8 || time.Since(start) > searchTimeout {
+			t.Errorf("hybrid %q: %d hits, %v", q, len(hits), err)
+		}
 	}
 	old := searchTimeout
 	searchTimeout = time.Millisecond

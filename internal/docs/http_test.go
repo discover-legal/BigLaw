@@ -19,6 +19,7 @@ import (
 	"net/http/httptest"
 	"net/textproto"
 	"runtime"
+	"runtime/metrics"
 	"slices"
 	"strings"
 	"testing"
@@ -461,13 +462,10 @@ func TestDownloadBounded(t *testing.T) { // not parallel: it shortens the packag
 		t.Fatal(err)
 	}
 	old := uploadWindow
-	uploadWindow = 500 * time.Millisecond
+	uploadWindow = 1500 * time.Millisecond
 	t.Cleanup(func() { uploadWindow = old })
 	srv := serveDocs(t, s)
-	var m runtime.MemStats
-	runtime.GC()
-	runtime.ReadMemStats(&m)
-	base := int64(m.HeapAlloc)
+	base := liveHeap()
 	for range 12 {
 		c, err := net.Dial("tcp", srv.Listener.Addr().String())
 		if err != nil {
@@ -477,12 +475,22 @@ func TestDownloadBounded(t *testing.T) { // not parallel: it shortens the packag
 		c.(*net.TCPConn).SetReadBuffer(4096)
 		fmt.Fprintf(c, "GET /documents/%s/file HTTP/1.1\r\nHost: %s\r\n\r\n", d.ID, srv.Listener.Addr())
 	}
-	time.Sleep(300 * time.Millisecond)
-	runtime.GC()
-	runtime.ReadMemStats(&m)
-	grew := int64(m.HeapAlloc) - base
-	t.Logf("12 stalled downloads of an 8 MiB file: heap +%d MiB, read slots in use %d", grew>>20, s.st.Reads())
-	if grew > 24<<20 || s.st.Reads() > store.MaxConcurrentReads {
+	// Measure the state being bounded (r1 L-10): every read slot's holder blocked writing to its
+	// stalled client (not still fetching chunks), the live heap after a GC (not garbage made since).
+	var grew int64
+	for start := time.Now(); ; time.Sleep(10 * time.Millisecond) {
+		if time.Since(start) > 10*time.Second {
+			t.Fatalf("the %d read slot holders never all blocked writing (%d did)", store.MaxConcurrentReads, stalledWriters())
+		}
+		if stalledWriters() == store.MaxConcurrentReads {
+			if grew = liveHeap() - base; stalledWriters() == store.MaxConcurrentReads {
+				break
+			}
+		}
+	}
+	t.Logf("12 stalled downloads of an 8 MiB file: live heap +%d MiB, read slots in use %d", grew>>20, s.st.Reads())
+	// Each holder keeps the chunk it holds back and the one it is writing; 8 MiB for the rest.
+	if grew > store.MaxConcurrentReads*2*store.ChunkSize+8<<20 || s.st.Reads() > store.MaxConcurrentReads {
 		t.Errorf("stalled downloads hold %d MiB and %d read slots", grew>>20, s.st.Reads())
 	}
 	start := time.Now()
@@ -502,6 +510,26 @@ func TestDownloadBounded(t *testing.T) { // not parallel: it shortens the packag
 	if err != nil || !bytes.Equal(got, data) || resp.Header.Get("Content-Length") != fmt.Sprint(len(data)) {
 		t.Errorf("a reading client: %d of %d bytes, %v, Content-Length %q", len(got), len(data), err, resp.Header.Get("Content-Length"))
 	}
+}
+
+// liveHeap is the heap live after a full GC (runtime/metrics: no garbage allocated since counts).
+func liveHeap() int64 {
+	runtime.GC()
+	m := []metrics.Sample{{Name: "/gc/heap/live:bytes"}}
+	metrics.Read(m)
+	return int64(m[0].Value.Uint64())
+}
+
+// stalledWriters counts goroutines blocked writing a download to a client that stopped reading.
+func stalledWriters() int {
+	buf := make([]byte, 8<<20)
+	n := 0
+	for _, g := range strings.Split(string(buf[:runtime.Stack(buf, true)]), "\n\n") {
+		if strings.Contains(g, "docs.floorWriter.Write(") && strings.Contains(g, "waitWrite") {
+			n++
+		}
+	}
+	return n
 }
 
 // plainWriter hides the connection from http.ResponseController, as a middleware wrapper without

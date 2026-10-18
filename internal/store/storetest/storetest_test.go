@@ -4,6 +4,7 @@
 package storetest
 
 import (
+	"database/sql"
 	"fmt"
 	"strings"
 	"testing"
@@ -84,4 +85,43 @@ func TestWithSearchPath(t *testing.T) {
 			t.Errorf("WithSearchPath(%q) = %q, want %q", in, got, want)
 		}
 	}
+}
+
+// TestVectorOncePerDatabase: the pgvector extension is created once per database, not in a test's
+// schema (dropping that schema would drop it for every other test): its schema follows the test
+// schema on the search_path, the vector type works there, and it outlives the schema.
+func TestVectorOncePerDatabase(t *testing.T) {
+	var first string
+	t.Run("a", func(t *testing.T) {
+		first = DSN(t)
+		db, err := sql.Open("postgres", first)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		var path, ext, here string
+		if err := db.QueryRow(`SELECT current_setting('search_path'), n.nspname, current_schema() FROM pg_extension e JOIN pg_namespace n ON n.oid = e.extnamespace WHERE e.extname = 'vector'`).Scan(&path, &ext, &here); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.HasPrefix(here, "t_") || path != here+", "+ext && path != here+","+ext || ext == here {
+			t.Fatalf("search_path %q, extension in %q, tables go to %q", path, ext, here)
+		}
+		if _, err := db.Exec(`CREATE TABLE v (e vector(3)); INSERT INTO v VALUES ('[1,2,3]')`); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("b", func(t *testing.T) {
+		db, err := sql.Open("postgres", DSN(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		var n int
+		if err := db.QueryRow(`SELECT count(*) FROM pg_extension WHERE extname = 'vector'`).Scan(&n); err != nil || n != 1 {
+			t.Fatalf("after schema a was dropped the extension is gone: %d %v", n, err)
+		}
+		if err := db.QueryRow(`SELECT count(*) FROM information_schema.tables WHERE table_name = 'v' AND table_schema = current_schema()`).Scan(&n); err != nil || n != 0 {
+			t.Fatalf("schema b sees a's table: %d %v", n, err)
+		}
+	})
 }

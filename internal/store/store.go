@@ -69,6 +69,11 @@ func Open(ctx context.Context, dsn string, log *slog.Logger) (*Store, error) {
 		}
 		return nil, fmt.Errorf("store: connect: %w", hideDSN(err, dsn))
 	}
+	if _, err := db.ExecContext(ctx, createVector); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("store: the pgvector extension (vector) is missing and could not be created: use a Postgres with pgvector "+
+			"(the pgvector/pgvector images) or have a superuser run CREATE EXTENSION vector in this database (README § Database): %w", hideDSN(err, dsn))
+	}
 	if err := Migrate(ctx, db, log); err != nil {
 		db.Close()
 		return nil, err
@@ -205,3 +210,7 @@ func orDiscard(log *slog.Logger) *slog.Logger {
 	}
 	return log
 }
+
+// createVector creates pgvector (migration 0003's type) database-wide, outside the per-schema migrations,
+// under a lock: two concurrent CREATE EXTENSIONs collide (one string = one transaction).
+const createVector = `SELECT pg_advisory_xact_lock(hashtext('biglaw.extension.vector')); CREATE EXTENSION IF NOT EXISTS vector`

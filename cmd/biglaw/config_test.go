@@ -34,8 +34,8 @@ func TestConfigDefaults(t *testing.T) {
 	if c.Addr != "127.0.0.1:3101" || c.ModelURL != "" || c.AllowAnthropic || c.AllowAWS {
 		t.Fatalf("defaults differ from README: %+v", c)
 	}
-	if len(envVars) != 20 {
-		t.Fatalf("%d runtime variables, README promises 20", len(envVars))
+	if len(envVars) != 18 {
+		t.Fatalf("%d runtime variables, README promises 18 (BIGLAW_MODELS replaced three)", len(envVars))
 	}
 	// Variables read by later PRs still show their README defaults.
 	out := Describe(env("BIGLAW_DATABASE_URL", dsn), nil)
@@ -144,7 +144,7 @@ func TestVendorBreakerRefusesDirectAnthropic(t *testing.T) {
 	// A Claude model behind a third-party gateway is not a direct coupling;
 	// neither is an IP literal (the breaker keys on names, see Limitations).
 	for _, u := range []string{"https://openrouter.ai/api/v1", "http://192.168.1.20:11434/v1"} {
-		if err := trip(u, "BIGLAW_MODEL_LEAD", "anthropic/claude-haiku-4.5"); err != nil {
+		if err := trip(u, "BIGLAW_MODELS", "lead=anthropic/claude-haiku-4.5"); err != nil {
 			t.Errorf("%s refused: %v", u, err)
 		}
 	}
@@ -236,8 +236,11 @@ func TestDescribeRedactsSecrets(t *testing.T) {
 			t.Errorf("Describe lacks %q:\n%s", want, out)
 		}
 	}
-	if got := shown("BIGLAW_MODEL_LEAD", "x\nBIGLAW_FORGED y"); strings.Contains(got, "\n") { // red team: no forged output lines
+	if got := shown("BIGLAW_MODELS", "lead=x\nBIGLAW_FORGED y"); strings.Contains(got, "\n") { // red team: no forged output lines
 		t.Errorf("a newline in a value reached the output: %q", got)
+	}
+	if got := shown("BIGLAW_ADDR", "127.0.0.1:3101\u202e1013:1.0.0.721"); strings.ContainsRune(got, '\u202e') { // r1 L-2: a bidi override is escaped
+		t.Errorf("a format character reached the output: %q", got)
 	}
 	if got := shown("BIGLAW_DATABASE_URL", "postgres:///x?sslmode=disable&application_name=a&search_path=s"); !strings.Contains(got, "(+1 other parameters, not shown)") {
 		t.Errorf("runtime parameters: %s", got)
@@ -273,8 +276,8 @@ func TestNonLoopbackRefusedWithoutAuth(t *testing.T) {
 }
 
 func TestUnknownAndNotYetReadVars(t *testing.T) {
-	got := UnknownVars([]string{"BIGLAW_DATABASE_URI=x", "BIGLAW_ADDR=y", "PATH=/bin", "BIGLAW_TEST_DSN=z", "BIGLAW_MODEL_LAED=q"})
-	if strings.Join(got, ",") != "BIGLAW_DATABASE_URI,BIGLAW_MODEL_LAED" {
+	got := UnknownVars([]string{"BIGLAW_DATABASE_URI=x", "BIGLAW_ADDR=y", "PATH=/bin", "BIGLAW_TEST_DSN=z", "BIGLAW_MODEL_LEAD=q"})
+	if strings.Join(got, ",") != "BIGLAW_DATABASE_URI,BIGLAW_MODEL_LEAD" {
 		t.Fatalf("UnknownVars = %v", got)
 	}
 	got = NotYetRead(env("BIGLAW_ADDR", "x", "BIGLAW_MODEL_KEY", "k", "BIGLAW_LOCAL_WATTS", "9", "BIGLAW_BUDGET_CALLS", "5", "BIGLAW_AI_RATE", "100", "ALLOW_AWS", "1"))
@@ -283,11 +286,11 @@ func TestUnknownAndNotYetReadVars(t *testing.T) {
 	}
 }
 
-// TestConfigModelVars: PR 2's variables join Config and are validated, with
+// TestConfigModelVars: the model variables join Config and are validated, with
 // every problem reported at once and no value of a secret in any message.
 func TestConfigModelVars(t *testing.T) {
 	c, err := Load(env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_MODEL_URL", "http://ollama:11434/v1", "BIGLAW_MODEL_KEY", "sk-k",
-		"BIGLAW_MODEL_LEAD", "qwen2.5:14b", "BIGLAW_MODEL_CRITIC", "anthropic/claude-haiku-4.5", "BIGLAW_LOCAL_WATTS", "65.5",
+		"BIGLAW_MODELS", "lead=qwen2.5:14b,critic=anthropic/claude-haiku-4.5", "BIGLAW_LOCAL_WATTS", "65.5",
 		"BIGLAW_PRICES", `{"qwen2.5:14b": {"in": 0.5, "out": 1}}`))
 	if err != nil {
 		t.Fatal(err)
@@ -316,15 +319,15 @@ func TestConfigModelVars(t *testing.T) {
 	if err := os.WriteFile(bad, []byte(`{"gpt-x": {"in": "PRICEFILESECRET"}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, err = Load(env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_MODEL_KEY", "sk SECRETKEY", "BIGLAW_MODEL_SPECIALIST", "a b",
-		"BIGLAW_MODEL_CRITIC", "x\nBIGLAW_FORGED", "BIGLAW_LOCAL_WATTS", "NaN", "BIGLAW_PRICES", bad))
+	_, err = Load(env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_MODEL_KEY", "sk SECRETKEY", "BIGLAW_MODELS", "specialist=a b,critic=x\nBIGLAW_FORGED",
+		"BIGLAW_LOCAL_WATTS", "NaN", "BIGLAW_PRICES", bad))
 	msg := fmt.Sprint(err)
 	for _, want := range []string{
 		"BIGLAW_MODEL_URL: is required when BIGLAW_MODEL_KEY",
 		"BIGLAW_MODEL_KEY: contains white space",
-		"BIGLAW_MODEL_LEAD: is required when BIGLAW_MODEL_SPECIALIST or _CRITIC is set",
+		"BIGLAW_MODELS: the specialist id is empty or not a model id",
 		"BIGLAW_LOCAL_WATTS: NaN is not a number of watts",
-		`BIGLAW_MODEL_CRITIC: "x\nBIGLAW_FORGED" is not a model id`,
+		"BIGLAW_MODELS: the critic id is empty or not a model id",
 		"BIGLAW_PRICES: the file it names: is not a JSON object",
 	} {
 		if !strings.Contains(msg, want) {
@@ -336,18 +339,18 @@ func TestConfigModelVars(t *testing.T) {
 	}
 	// The URL is required by a key alone and by a role alone; any model id is accepted (an LM Studio
 	// "@quant" suffix too: a wrong id fails at its first call, as a 404).
-	for _, kv := range [][]string{{"BIGLAW_MODEL_KEY", "sk-k"}, {"BIGLAW_MODEL_LEAD", "m"}} {
+	for _, kv := range [][]string{{"BIGLAW_MODEL_KEY", "sk-k"}, {"BIGLAW_MODELS", "lead=m"}} {
 		if _, err := Load(env("BIGLAW_DATABASE_URL", dsn, kv[0], kv[1])); err == nil || !strings.Contains(err.Error(), "BIGLAW_MODEL_URL: is required") {
 			t.Errorf("%s without BIGLAW_MODEL_URL: %v", kv[0], err)
 		}
 	}
-	if _, err := Load(env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_MODEL_URL", "http://lmstudio:1234/v1", "BIGLAW_MODEL_LEAD", "qwen2.5-14b-instruct@q4_k_m")); err != nil {
+	if _, err := Load(env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_MODEL_URL", "http://lmstudio:1234/v1", "BIGLAW_MODELS", "lead=qwen2.5-14b-instruct@q4_k_m")); err != nil {
 		t.Errorf("an @quant model id: %v", err)
 	}
 	// r2 R2-2: role ids reach the logs raw, so a URL or credentials pasted into a role is refused, unechoed.
 	for _, v := range []string{"https://alice:Pa55w0rd@gw.example.com/v1", "alice:Pa55w0rd@gw.example.com", "http://Pa55w0rd.example.com"} {
-		_, err := Load(env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_MODEL_URL", "http://lmstudio:1234/v1", "BIGLAW_MODEL_LEAD", "ok", "BIGLAW_MODEL_SPECIALIST", v))
-		if msg := fmt.Sprint(err); !strings.Contains(msg, "BIGLAW_MODEL_SPECIALIST: (set, not shown") || strings.Contains(msg, "Pa55w0rd") {
+		_, err := Load(env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_MODEL_URL", "http://lmstudio:1234/v1", "BIGLAW_MODELS", "lead=ok,specialist="+v))
+		if msg := fmt.Sprint(err); !strings.Contains(msg, "BIGLAW_MODELS: the specialist id is empty or not a model id") || strings.Contains(msg, "Pa55w0rd") {
 			t.Errorf("role %q: %v", v, err)
 		}
 	}
@@ -359,6 +362,95 @@ func TestConfigModelVars(t *testing.T) {
 	for _, w := range []string{"0", "100000", "1e3"} {
 		if _, err := Load(env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_LOCAL_WATTS", w)); err != nil {
 			t.Errorf("BIGLAW_LOCAL_WATTS=%s refused: %v", w, err)
+		}
+	}
+}
+
+// TestModelsRoleMap (PLAN § PR 3b): BIGLAW_MODELS parses role=id pairs; specialist and critic fall
+// back to the lead, vision and embed never do; a bad entry is a startup error that echoes no value.
+func TestModelsRoleMap(t *testing.T) {
+	load := func(v string) (Config, error) {
+		return Load(env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_MODEL_URL", "http://ollama:11434/v1", "BIGLAW_MODELS", v))
+	}
+	c, err := load(" lead = qwen2.5:14b , critic=glm-4.5-air,vision=qwen2.5vl:7b,embed=nomic-embed-text")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (model.Roles{Lead: "qwen2.5:14b", Critic: "glm-4.5-air", Vision: "qwen2.5vl:7b", Embed: "nomic-embed-text"}); c.Roles != want {
+		t.Fatalf("roles = %+v, want %+v", c.Roles, want)
+	}
+	for role, want := range map[model.Role]string{model.Lead: "qwen2.5:14b", model.Specialist: "qwen2.5:14b", model.Critic: "glm-4.5-air",
+		model.Vision: "qwen2.5vl:7b", model.Embed: "nomic-embed-text"} {
+		if got, err := c.Roles.Model(role); err != nil || got != want {
+			t.Errorf("Model(%s) = %q, %v; want %q", role, got, err, want)
+		}
+	}
+	// No fallback for vision or embed: a lead alone leaves both unset (images refused, search lexical).
+	c, err = load("lead=qwen2.5:14b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, role := range []model.Role{model.Vision, model.Embed} {
+		if got, err := c.Roles.Model(role); !errors.Is(err, model.ErrNotConfigured) || got != "" || !strings.Contains(err.Error(), string(role)+"=<model id> in BIGLAW_MODELS") {
+			t.Errorf("Model(%s) with only a lead = %q, %v; want ErrNotConfigured naming the variable", role, got, err)
+		}
+	}
+	// embed alone is fine (search only); a specialist or critic without the lead is not.
+	if c, err := load("embed=text-embedding-3-small"); err != nil || c.Roles != (model.Roles{Embed: "text-embedding-3-small"}) {
+		t.Errorf("embed alone: %+v, %v", c.Roles, err)
+	}
+	for v, want := range map[string]string{
+		"specialist=x":          "lead is required when specialist or critic is set",
+		"lead=a,lead=b":         "the lead role is set twice",
+		"lead=a,":               "entry 2 is not role=<model id>",
+		"lead=a,emebd=SECRETX":  "entry 2 is not role=<model id>",
+		"qwen2.5:14b":           "entry 1 is not role=<model id>",
+		"lead=":                 "the lead id is empty or not a model id",
+		"Lead=a":                "entry 1 is not role=<model id>",
+		"lead=a;embed=SECRETXY": "the lead id is empty or not a model id",
+	} {
+		_, err := load(v)
+		if msg := fmt.Sprint(err); !strings.Contains(msg, "BIGLAW_MODELS: "+want) || strings.Contains(msg, "SECRET") {
+			t.Errorf("BIGLAW_MODELS=%q: %v; want %q, no value echoed", v, err, want)
+		}
+	}
+	if _, err := Load(env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_MODELS", "embed=m")); err == nil || !strings.Contains(err.Error(), "BIGLAW_MODEL_URL: is required when BIGLAW_MODEL_KEY or BIGLAW_MODELS") {
+		t.Errorf("a role without BIGLAW_MODEL_URL: %v", err)
+	}
+	if got := shown("BIGLAW_MODELS", "lead=qwen2.5:14b,embed=nomic-embed-text"); got != "lead=qwen2.5:14b,embed=nomic-embed-text" {
+		t.Errorf("a valid map is shown as %q", got)
+	}
+}
+
+// TestRoleIDRefusesQueryCharacters (PR 2 L-1): role ids reach the logs raw, so an id that could
+// carry a secret (a query string, white space, a URL, user:password@) is refused at startup and
+// never shown, by Load, by `version --config` or by a `serve` refusal.
+func TestRoleIDRefusesQueryCharacters(t *testing.T) {
+	for _, id := range []string{"gw.example.com/v1?key=PWMARK1", "m&token=PWMARK2", "m?PWMARK3", "PWMARK4 extra", "PWMARK5\tx",
+		"https://gw.example.com/PWMARK6", "alice:PWMARK7@gw", "x\nPWMARK8", "m\u00a0PWMARK9", "a\u202ePWMARK10", "a\u200bPWMARK11",
+		"a\u2066PWMARK12", "sk-proj-PWMARK13", "AKIAPWMARK14", "ghp_PWMARK15", "xPWMARK16a0b1c2d3e4f5g6h7i8j9", "m" + strings.Repeat("-PWMARK17", 23)} {
+		for _, role := range []string{"lead", "embed"} {
+			v := "lead=ok," + role + "=" + id
+			if role == "lead" {
+				v = "lead=" + id
+			}
+			e := env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_MODEL_URL", "http://ollama:11434/v1", "BIGLAW_MODELS", v)
+			_, err := Load(e)
+			var stdout, stderr bytes.Buffer
+			run(context.Background(), []string{"version", "--config"}, e, nil, &stdout, &stderr)
+			out := fmt.Sprint(err) + stdout.String() + stderr.String()
+			if err == nil || !strings.Contains(fmt.Sprint(err), "the "+role+" id is empty or not a model id") || strings.Contains(out, "PWMARK") {
+				t.Errorf("%s=%q: err %v; output leaked or accepted:\n%s", role, id, err, out)
+			}
+			if !strings.Contains(stdout.String(), "BIGLAW_MODELS              (set, not shown") {
+				t.Errorf("version --config shows BIGLAW_MODELS=%q:\n%s", v, stdout.String())
+			}
+		}
+	}
+	// Ordinary ids pass: Ollama tags, LM Studio @quant, OpenRouter vendor/model, Bedrock-style ids.
+	for _, id := range []string{"qwen2.5:14b", "qwen2.5-14b-instruct@q4_k_m", "deepseek/deepseek-r1", "us.anthropic.claude-haiku-4-5-v1:0", "text-embedding-3-small"} {
+		if _, err := Load(env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_MODEL_URL", "http://ollama:11434/v1", "BIGLAW_MODELS", "lead="+id)); err != nil {
+			t.Errorf("%q refused: %v", id, err)
 		}
 	}
 }

@@ -378,8 +378,16 @@ func TestRolesModel(t *testing.T) {
 			t.Errorf("%s → %q %v", role, got, err)
 		}
 	}
-	if _, err := r.Model("vision"); !errors.Is(err, ErrNotConfigured) {
+	if _, err := r.Model("judge"); !errors.Is(err, ErrNotConfigured) || !strings.Contains(err.Error(), "unknown model role") {
 		t.Errorf("unknown role: %v", err)
+	}
+	for _, role := range []Role{Vision, Embed} { // no fallback to the lead
+		if m, err := r.Model(role); !errors.Is(err, ErrNotConfigured) || m != "" {
+			t.Errorf("%s with only a lead set: %q, %v", role, m, err)
+		}
+		if m, err := (Roles{Lead: "big", Vision: "v", Embed: "e"}).Model(role); err != nil || m != string(role)[:1] {
+			t.Errorf("%s set: %q, %v", role, m, err)
+		}
 	}
 	if _, err := (Roles{Critic: "x"}).Model(Critic); err != nil {
 		t.Errorf("a set critic without a lead: %v", err)

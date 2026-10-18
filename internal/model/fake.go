@@ -31,7 +31,11 @@ type Reply struct {
 // Fake is the scripted Chatter for tests: each agent's replies in order; unscripted or exhausted is
 // an error. It checks replies as Client does, ids "<agent>-<call>-<index>"; it does not resolve Roles.
 type Fake struct {
+	// Vectors answers Embed, one input at a time (nil: Embed is unscripted). Set it before use.
+	Vectors func(text string) ([]float32, error)
+
 	mu      sync.Mutex
+	embeds  []EmbedRequest
 	scripts map[string][]Reply
 	calls   []Request
 	n       map[string]int
@@ -88,4 +92,39 @@ func (f *Fake) Chat(ctx context.Context, req Request) (*Response, error) {
 		return nil, e
 	}
 	return resp, nil
+}
+
+// EmbedCalls returns every embeddings request received, in order.
+func (f *Fake) EmbedCalls() []EmbedRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]EmbedRequest(nil), f.embeds...)
+}
+
+// Embed answers from f.Vectors, checking the request and vectors as Client does; no usage.
+func (f *Fake) Embed(ctx context.Context, req EmbedRequest) (*Embeddings, error) {
+	if err := req.check(); err != nil {
+		return nil, err
+	}
+	if ctx.Err() != nil {
+		return nil, ctxErr(ctx)
+	}
+	f.mu.Lock()
+	f.embeds = append(f.embeds, req)
+	f.mu.Unlock()
+	if f.Vectors == nil {
+		return nil, fmt.Errorf("%w: Fake.Vectors is unset", ErrUnscripted)
+	}
+	e := &Embeddings{Model: "fake:embed"}
+	for _, text := range req.Inputs {
+		v, err := f.Vectors(text)
+		if err != nil {
+			return nil, err
+		}
+		e.Vectors = append(e.Vectors, v)
+	}
+	if !usable(e.Vectors) {
+		return nil, fail(ErrUnavailable, "the scripted vectors are not of one length with a norm of 1e-6 to 1e6")
+	}
+	return e, nil
 }

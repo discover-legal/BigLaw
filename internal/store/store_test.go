@@ -5,6 +5,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net/url"
@@ -17,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/discover-legal/BigLaw/internal/store/storetest"
 	"github.com/lib/pq"
 )
 
@@ -163,6 +165,94 @@ func TestOpenErrorHidesPassword(t *testing.T) {
 		cancel()
 		if err == nil || strings.Contains(err.Error(), "SECRETPW") || strings.Contains(err.Error(), "ss") && strings.Contains(err.Error(), "lookup") {
 			t.Errorf("Open(%q) error = %v", strings.ReplaceAll(dsn, "SECRETPW", "***"), err)
+		}
+	}
+}
+
+// TestOpenNeedsVector (PR 3b): Open creates the pgvector extension once per database, outside the
+// numbered migrations. A role that may not create it, in a database that lacks it, gets a clear
+// error naming the fix and never the password; the same role opens a database where the
+// extension already exists (IF NOT EXISTS needs no privilege); and 8 servers starting at once on a
+// fresh database all start (the advisory lock: without it two CREATE EXTENSIONs collide, r1 L-4).
+// It creates a role and three databases with the test DSN's (superuser) rights and drops them.
+func TestOpenNeedsVector(t *testing.T) {
+	base := strings.TrimSpace(os.Getenv("BIGLAW_TEST_DSN"))
+	if base == "" {
+		storetest.DSN(t) // skips, or fails under BIGLAW_REQUIRE_DB
+		return
+	}
+	admin, err := sql.Open("postgres", base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	var super bool
+	if err := admin.QueryRow(`SELECT rolsuper FROM pg_roles WHERE rolname = current_user`).Scan(&super); err != nil || !super {
+		t.Skipf("needs a superuser BIGLAW_TEST_DSN (CI's is): %v", err)
+	}
+	suffix := fmt.Sprintf("%d_%d", os.Getpid(), time.Now().UnixNano()%1e9)
+	role, without, with, fresh := "biglaw_noext_"+suffix, "biglaw_noext_a_"+suffix, "biglaw_noext_b_"+suffix, "biglaw_noext_c_"+suffix
+	const pw = "PWMARK-noext"
+	for _, q := range []string{`CREATE ROLE ` + role + ` LOGIN PASSWORD '` + pw + `'`, `CREATE DATABASE ` + without + ` OWNER ` + role,
+		`CREATE DATABASE ` + with + ` OWNER ` + role, `CREATE DATABASE ` + fresh} {
+		if _, err := admin.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		for _, q := range []string{`DROP DATABASE IF EXISTS ` + without + ` WITH (FORCE)`, `DROP DATABASE IF EXISTS ` + with + ` WITH (FORCE)`,
+			`DROP DATABASE IF EXISTS ` + fresh + ` WITH (FORCE)`, `DROP ROLE IF EXISTS ` + role} {
+			admin.Exec(q)
+		}
+	})
+	dsnFor := func(db string, as *url.Userinfo) string {
+		u, err := url.Parse(base)
+		if err != nil || u.Scheme == "" {
+			t.Skip("BIGLAW_TEST_DSN is not a URL")
+		}
+		if as != nil {
+			u.User = as
+		}
+		u.Path = "/" + db
+		return u.String()
+	}
+	noext := url.UserPassword(role, pw)
+	_, err = Open(t.Context(), dsnFor(without, noext), nil)
+	if err == nil || !strings.Contains(err.Error(), "the pgvector extension (vector) is missing and could not be created") ||
+		!strings.Contains(err.Error(), "CREATE EXTENSION vector") || strings.Contains(err.Error(), pw) {
+		t.Fatalf("Open without the extension or the right to create it: %v", err)
+	}
+	other, err := sql.Open("postgres", dsnFor(with, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	if _, err := other.Exec(`CREATE EXTENSION vector`); err != nil { // as the superuser, in that database
+		t.Fatal(err)
+	}
+	other.Close()
+	st, err := Open(t.Context(), dsnFor(with, noext), nil)
+	if err != nil {
+		t.Fatalf("Open where the extension exists, without the right to create one: %v", err)
+	}
+	defer st.Close()
+	var dims int
+	if err := st.DB().QueryRow(`SELECT vector_dims('[1,2,3]'::vector)`).Scan(&dims); err != nil || dims != 3 {
+		t.Fatalf("vector type unusable: %d %v", dims, err)
+	}
+	errs := make(chan error, 8)
+	for range 8 {
+		go func() {
+			st, err := Open(t.Context(), dsnFor(fresh, nil), nil)
+			if err == nil {
+				st.Close()
+			}
+			errs <- err
+		}()
+	}
+	for range 8 {
+		if err := <-errs; err != nil {
+			t.Errorf("one of 8 concurrent first starts: %v", err)
 		}
 	}
 }

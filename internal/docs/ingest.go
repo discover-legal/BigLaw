@@ -21,6 +21,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/discover-legal/BigLaw/internal/docs/ooxml"
+	"github.com/discover-legal/BigLaw/internal/model"
 	"github.com/discover-legal/BigLaw/internal/store"
 	"github.com/ledongthuc/pdf"
 	"github.com/lib/pq"
@@ -54,25 +55,31 @@ var (
 // Document is one stored document. Text is what search, the reader and the ladder read.
 // ContentType is the type BigLaw detected from the content, not what the uploader declared.
 type Document struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	ContentType string    `json:"contentType"`
-	FileID      string    `json:"fileId"` // the original upload; "" for a document posted as text
-	Method      string    `json:"method"` // "text" (read as text) or "text_layer" (.docx, PDF text layer)
-	NoText      bool      `json:"noText"` // nothing readable: a scanned PDF, or a .docx with no text. Never silently empty.
-	Pages       int       `json:"pages"`
-	Notes       []string  `json:"notes"`
-	Sections    int       `json:"sections"`
-	Chunks      int       `json:"chunks"`
-	CreatedAt   time.Time `json:"createdAt"`
-	Text        string    `json:"-"`
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	ContentType string   `json:"contentType"`
+	FileID      string   `json:"fileId"` // the original upload; "" for a document posted as text
+	Method      string   `json:"method"` // "text" (read as text) or "text_layer" (.docx, PDF text layer)
+	NoText      bool     `json:"noText"` // nothing readable: a scanned PDF, or a .docx with no text. Never silently empty.
+	Pages       int      `json:"pages"`
+	Notes       []string `json:"notes"`
+	Sections    int      `json:"sections"`
+	Chunks      int      `json:"chunks"`
+	// EmbedModel embedded every chunk ("": lexical only); EmbedCostUSD nil: unpriced, unknown.
+	EmbedModel   string    `json:"embedModel,omitempty"`
+	EmbedTokens  int64     `json:"embedTokens"`
+	EmbedCostUSD *float64  `json:"embedCostUsd"`
+	CreatedAt    time.Time `json:"createdAt"`
+	Text         string    `json:"-"`
 }
 
 // Service reads and writes documents in the store.
 type Service struct {
-	st    *store.Store
-	db    *sql.DB
-	slots chan struct{}
+	st         *store.Store
+	db         *sql.DB
+	slots      chan struct{}
+	embedder   model.Embedder // nil: lexical search only (UseEmbedder)
+	embedModel string
 }
 
 func New(st *store.Store) *Service {
@@ -211,8 +218,10 @@ func (s *Service) Ingest(ctx context.Context, name, contentType string, r io.Rea
 		dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		defer cancel()
 		_, _ = s.db.ExecContext(dctx, `DELETE FROM files WHERE id = $1`, f.ID)
+		return d, err
 	}
-	return d, err
+	s.embedDoc(ctx, &d) // outside the ingest slot
+	return d, nil
 }
 
 func (s *Service) ingestFile(ctx context.Context, f store.File) (Document, error) {
@@ -246,7 +255,11 @@ func (s *Service) IngestText(ctx context.Context, name, text string) (Document, 
 	if !utf8.ValidString(text) || strings.IndexByte(text, 0) >= 0 {
 		return Document{}, fmt.Errorf("%w (the text is not valid UTF-8, or holds a NUL)", ErrUnsupported)
 	}
-	return s.insert(ctx, Document{Name: name}, textOf(text))
+	d, err := s.insert(ctx, Document{Name: name}, textOf(text))
+	if err == nil {
+		s.embedDoc(ctx, &d)
+	}
+	return d, err
 }
 
 func (s *Service) insert(ctx context.Context, d Document, x Extraction) (Document, error) {
@@ -332,17 +345,17 @@ func (s *Service) Get(ctx context.Context, scope []string, id string) (Document,
 		return Document{}, ErrNotFound
 	}
 	var d Document
-	var file sql.NullString
+	var file, embedModel sql.NullString
 	err := s.db.QueryRowContext(ctx, `SELECT id, name, content_type, file_id, text, method, no_text, coalesce(pages, 0), notes, created_at,
-		(SELECT count(*) FROM sections WHERE document_id = d.id), (SELECT count(*) FROM chunks WHERE document_id = d.id)
-		FROM documents d WHERE id = $1`, id).Scan(&d.ID, &d.Name, &d.ContentType, &file, &d.Text, &d.Method, &d.NoText, &d.Pages,
-		pq.Array(&d.Notes), &d.CreatedAt, &d.Sections, &d.Chunks)
+		(SELECT count(*) FROM sections WHERE document_id = d.id), (SELECT count(*) FROM chunks WHERE document_id = d.id),
+		embed_model, embed_tokens, embed_cost_usd FROM documents d WHERE id = $1`, id).Scan(&d.ID, &d.Name, &d.ContentType, &file, &d.Text,
+		&d.Method, &d.NoText, &d.Pages, pq.Array(&d.Notes), &d.CreatedAt, &d.Sections, &d.Chunks, &embedModel, &d.EmbedTokens, &d.EmbedCostUSD)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Document{}, ErrNotFound
 	} else if err != nil {
 		return Document{}, fmt.Errorf("docs: get document: %w", err)
 	}
-	d.FileID = file.String
+	d.FileID, d.EmbedModel = file.String, embedModel.String
 	return d, nil
 }
 

@@ -1,8 +1,8 @@
-# BigLaw 2: postgres:16-alpine + biglaw. All state lives in the pgdata volume.
+# BigLaw 2: Postgres 16 with pgvector + biglaw. All state lives in the pgdata volume.
 # Values come from the shell or from .env (copy .env.example).
 services:
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:0.8.6-pg16 # Postgres 16 with the vector extension (hybrid search)
     environment:
       POSTGRES_USER: biglaw
       POSTGRES_DB: biglaw
@@ -37,9 +37,7 @@ services:
       BIGLAW_PUBLIC_URL: ${BIGLAW_PUBLIC_URL:-}
       BIGLAW_MODEL_URL: ${BIGLAW_MODEL_URL:-}
       BIGLAW_MODEL_KEY: ${BIGLAW_MODEL_KEY:-}
-      BIGLAW_MODEL_LEAD: ${BIGLAW_MODEL_LEAD:-}
-      BIGLAW_MODEL_SPECIALIST: ${BIGLAW_MODEL_SPECIALIST:-}
-      BIGLAW_MODEL_CRITIC: ${BIGLAW_MODEL_CRITIC:-}
+      BIGLAW_MODELS: ${BIGLAW_MODELS:-}
       BIGLAW_BUDGET_CALLS: ${BIGLAW_BUDGET_CALLS:-}
       BIGLAW_BUDGET_USD: ${BIGLAW_BUDGET_USD:-}
       BIGLAW_LOCAL_WATTS: ${BIGLAW_LOCAL_WATTS:-}
