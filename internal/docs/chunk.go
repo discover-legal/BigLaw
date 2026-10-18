@@ -14,8 +14,8 @@ const ChunkTokens = 400
 
 // Chunk is one search unit (ported from v1 rag.Chunkify): a verbatim slice text[Start:End] of one
 // section's own text, so a quote copied from it verifies. Search is what the full-text index
-// reads: Text, or for a table row its cells paired with their column headers, so a bare figure is
-// findable by what it means. Context names a row's sheet and columns.
+// reads: Text, or for table rows their cells paired with their column names (tableRows). Context
+// names a table chunk's sheet and columns.
 type Chunk struct {
 	Section      int    // index into Parse's list
 	Locator      string // the section path, e.g. "ARTICLE I > 1.2 Fees"
@@ -64,9 +64,8 @@ func Chunkify(text string, secs []Section) []Chunk {
 				out = append(out, c)
 			}
 		}
-		body := text[s.Start:s.BodyEnd]
-		if isTabular(body) {
-			tableRows(body, s.Start, add)
+		if isTabular(text[s.Start:s.BodyEnd]) {
+			tableRows(text, s.Start, s.BodyEnd, add)
 			continue
 		}
 		for start := s.Start; start < s.BodyEnd; {
@@ -113,61 +112,109 @@ func isTabular(body string) bool {
 	return false
 }
 
-// tableRows emits one chunk per data row; the first row after a "#"/"## Sheet:" marker is the
-// header and is not a chunk; other lines are emitted as prose runs.
-func tableRows(body string, base int, add func(start, end int, search, context string)) {
+// Bounds on what a table adds to its own text (r2 H-1: every row used to copy the whole header,
+// C×R bytes): rows are grouped into chunks of at least minTableChunk bytes, a row gets column
+// names of at most half its own length, and a chunk's Context (also indexed, once per chunk) is
+// at most maxContext bytes.
+const (
+	minTableChunk = 1024
+	maxContext    = 256
+)
+
+// tableRows chunks the tabular text[from:to]: whole lines (rows, "#"/"## Sheet:" markers, prose)
+// grouped until a chunk holds minTableChunk bytes, never over ChunkTokens (a longer line is split
+// like prose). The first row after the start or a marker is the header; a data row is indexed as
+// its cells paired with their column names, so a bare figure is findable by what it means.
+// Context names the sheet and columns of the chunk's first data row.
+func tableRows(text string, from, to int, add func(start, end int, search, context string)) {
 	var header []string
-	sheet, prose := "", -1
+	sheet, columns, start, runes, context := "", "", -1, 0, ""
+	var search strings.Builder
 	flush := func(at int) {
-		if prose >= 0 {
-			add(prose, at, "", "")
-			prose = -1
+		if start >= 0 {
+			add(start, at, strings.TrimPrefix(context+"\n", "\n")+search.String(), context)
 		}
+		start, runes, context = -1, 0, ""
+		search.Reset()
 	}
-	pos := base
-	for _, ln := range strings.SplitAfter(body, "\n") {
-		start := pos
-		pos += len(ln)
-		line := strings.TrimRight(ln, "\r\n")
-		switch t := strings.TrimSpace(line); {
-		case strings.HasPrefix(t, "#"):
-			flush(start)
+	for pos := from; pos < to; {
+		end := to
+		if i := strings.IndexByte(text[pos:to], '\n'); i >= 0 {
+			end = pos + i + 1
+		}
+		line, n := strings.TrimRight(text[pos:end], "\r\n"), utf8.RuneCountInString(text[pos:end])
+		row := isTableRow(line)
+		if t := strings.TrimSpace(line); strings.HasPrefix(t, "#") {
 			sheet, header = strings.TrimSpace(strings.TrimPrefix(strings.TrimLeft(t, "# "), "Sheet:")), nil
-		case isTableRow(line):
-			flush(start)
-			cells := strings.Split(line, "\t")
-			if header == nil {
-				header = cells
-				continue
-			}
-			var pairs, cols []string
-			if sheet != "" {
-				pairs = append(pairs, sheet)
-			}
-			for k, c := range cells {
-				if c = strings.TrimSpace(c); c != "" && k < len(header) && strings.TrimSpace(header[k]) != "" {
-					pairs = append(pairs, strings.TrimSpace(header[k])+": "+c)
-				} else if c != "" {
-					pairs = append(pairs, c)
-				}
-			}
+		} else if row && header == nil { // the header, however long
+			header, row = strings.Split(line, "\t"), false
+			var cols []string
 			for _, h := range header {
 				if h = strings.TrimSpace(h); h != "" {
 					cols = append(cols, h)
 				}
 			}
-			context := "columns: " + strings.Join(cols, ", ")
-			if sheet != "" {
-				context = "Sheet: " + sheet + "; " + context
+			if columns = "columns: " + strings.Join(cols, ", "); sheet != "" {
+				columns = "Sheet: " + sheet + "; " + columns
 			}
-			add(start, start+len(line), strings.Join(pairs, " | "), context)
-		default:
-			if prose < 0 {
-				prose = start
+			columns = clip(columns, maxContext)
+		}
+		if n > ChunkTokens*7/2 {
+			flush(pos)
+			for s := pos; s < end; {
+				e := capEnd(text, s, end)
+				add(s, e, "", "")
+				s = e
+			}
+			pos = end
+			continue
+		}
+		if start >= 0 && (pos-start >= minTableChunk || runes+n > ChunkTokens*7/2) {
+			flush(pos)
+		}
+		if start < 0 {
+			start = pos
+		}
+		runes += n
+		indexed := line
+		if row {
+			indexed = pairCells(line, header)
+			if context == "" {
+				context = columns
 			}
 		}
+		search.WriteString(indexed + "\n")
+		pos = end
 	}
-	flush(pos)
+	flush(to)
+}
+
+// pairCells is a data row's search text: "Column: cell" for each cell while the column names
+// added stay within half the row's length, bare cells after that.
+func pairCells(line string, header []string) string {
+	var cells []string
+	budget := len(line) / 2
+	for k, c := range strings.Split(line, "\t") {
+		if c = strings.TrimSpace(c); c == "" {
+			continue
+		}
+		if k < len(header) {
+			if h := strings.TrimSpace(header[k]); h != "" && len(h)+2 <= budget {
+				budget -= len(h) + 2
+				c = h + ": " + c
+			}
+		}
+		cells = append(cells, c)
+	}
+	return strings.Join(cells, "\t")
+}
+
+// clip cuts s to at most n bytes (at a rune boundary) and marks the cut with "…".
+func clip(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return strings.ToValidUTF8(s[:n], "") + "…"
 }
 
 func runeLen(s string, i int) int { _, n := utf8.DecodeRuneInString(s[i:]); return n }

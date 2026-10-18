@@ -324,6 +324,63 @@ func TestConcurrentReadsBounded(t *testing.T) {
 	if len(s.reads) != 0 {
 		t.Errorf("%d read slots still held after every read returned", len(s.reads))
 	}
+	// r2 prosecutor L-1: a read holds its slot while it writes (a slow download client).
+	release := make(chan struct{})
+	for range MaxConcurrentReads {
+		go s.ReadFile(t.Context(), f.ID, nil, blockedWriter(release))
+	}
+	time.Sleep(200 * time.Millisecond)
+	if got := s.Reads(); got != MaxConcurrentReads {
+		t.Errorf("%d read slots held by %d reads blocked in their writer", got, MaxConcurrentReads)
+	}
+	wctx, cancel = context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+	if _, err := s.GetFile(wctx, f.ID); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("a fifth read beside four blocked ones: %v, want it to wait", err)
+	}
+	close(release)
+}
+
+type blockedWriter chan struct{}
+
+func (b blockedWriter) Write(p []byte) (int, error) { <-b; return len(p), nil }
+
+// TestReadFileWithholdsUnverifiedTail (r2 reproducer N3): a file whose rows change while it is
+// read never reaches the writer whole: the last chunk is written only after the hash matches.
+func TestReadFileWithholdsUnverifiedTail(t *testing.T) {
+	t.Parallel()
+	s := openStore(t, storetest.DSN(t))
+	data := bytes.Repeat([]byte("0123456789"), (2*ChunkSize+ChunkSize/2)/10)
+	f, err := s.PutFile(t.Context(), "a.bin", "application/octet-stream", bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := &tamperWriter{tamper: func() error {
+		_, err := s.DB().Exec(`UPDATE file_chunks SET data = overlay(data placing 'XXXX'::bytea from 1) WHERE file_id = $1 AND seq = 2`, f.ID)
+		return err
+	}}
+	if _, err := s.ReadFile(t.Context(), f.ID, nil, w); !errors.Is(err, ErrCorrupt) || w.n >= len(data) {
+		t.Errorf("rows changed mid-read: %v after %d of %d bytes, want ErrCorrupt and a short write", err, w.n, len(data))
+	}
+	var all bytes.Buffer
+	if _, err := s.ReadFile(t.Context(), f.ID, nil, &all); !errors.Is(err, ErrCorrupt) || all.Len() != 2*ChunkSize {
+		t.Errorf("a corrupt last chunk: %v, %d bytes written, want ErrCorrupt after %d", err, all.Len(), 2*ChunkSize)
+	}
+}
+
+type tamperWriter struct {
+	tamper func() error
+	n      int
+}
+
+func (w *tamperWriter) Write(p []byte) (int, error) {
+	if w.n == 0 && len(p) > 0 {
+		if err := w.tamper(); err != nil {
+			return 0, err
+		}
+	}
+	w.n += len(p)
+	return len(p), nil
 }
 
 // TestFilesCorruptionDetected: storage corruption is ErrCorrupt, not a wrong

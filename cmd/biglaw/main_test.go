@@ -9,8 +9,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -23,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/discover-legal/BigLaw/internal/docs"
 	"github.com/discover-legal/BigLaw/internal/store"
 	"github.com/discover-legal/BigLaw/internal/store/storetest"
 )
@@ -90,6 +93,86 @@ func TestRunCommands(t *testing.T) {
 
 // TestServeEndToEnd opens (and migrates) a real store, serves /health, and
 // stops cleanly on cancel.
+// TestMain makes this test binary its own PDF reader (docs.MaybeRunChild), as main does.
+func TestMain(m *testing.M) {
+	docs.MaybeRunChild()
+	os.Exit(m.Run())
+}
+
+// loopPDF has a page tree whose Pages node is its own kid: the reader walks it until its timeout.
+func loopPDF() []byte {
+	var b bytes.Buffer
+	b.WriteString("%PDF-1.4\n")
+	var off []int
+	for i, o := range []string{"<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [2 0 R] /Count 1 >>"} {
+		off = append(off, b.Len())
+		fmt.Fprintf(&b, "%d 0 obj\n%s\nendobj\n", i+1, o)
+	}
+	x := b.Len()
+	fmt.Fprintf(&b, "xref\n0 3\n0000000000 65535 f \n%010d 00000 n \n%010d 00000 n \ntrailer\n<< /Size 3 /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", off[0], off[1], x)
+	return b.Bytes()
+}
+
+// TestServeStopCancelsIngest (r2 reproducer N6): a stop while an ingest is still reading a file
+// cancels it after the grace period: serve returns nil, the client gets 503 "stopping" (not an
+// empty reply), and the stored upload is removed, not left for the orphan sweep.
+func TestServeStopCancelsIngest(t *testing.T) {
+	st, err := store.Open(t.Context(), storetest.DSN(t), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	old := shutdownGrace
+	shutdownGrace = 300 * time.Millisecond
+	t.Cleanup(func() { shutdownGrace = old })
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- serve(ctx, st, ln, discard()) }()
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	fw, _ := mw.CreateFormFile("file", "loop.pdf")
+	fw.Write(loopPDF())
+	mw.Close()
+	type reply struct {
+		code int
+		body string
+	}
+	got := make(chan reply, 1)
+	go func() {
+		resp, err := http.Post("http://"+ln.Addr().String()+"/documents/upload", mw.FormDataContentType(), &body)
+		if err != nil {
+			got <- reply{0, err.Error()}
+			return
+		}
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		got <- reply{resp.StatusCode, string(b)}
+	}()
+	files := func() (n int) { st.DB().QueryRow(`SELECT count(*) FROM files`).Scan(&n); return n }
+	for start := time.Now(); files() == 0; time.Sleep(20 * time.Millisecond) {
+		if time.Since(start) > 10*time.Second {
+			t.Fatal("the upload was never stored")
+		}
+	}
+	time.Sleep(200 * time.Millisecond) // the reader child is now walking the loop
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("serve returned %v after a stop with an ingest in flight", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("serve did not stop")
+	}
+	if r := <-got; r.code != 503 || !strings.Contains(r.body, `"errorType":"stopping"`) || files() != 0 {
+		t.Errorf("the in-flight upload: %d %s; %d files left", r.code, r.body, files())
+	}
+}
+
 func TestServeEndToEnd(t *testing.T) {
 	st, err := store.Open(t.Context(), storetest.DSN(t), nil)
 	if err != nil {

@@ -97,7 +97,8 @@ func Verify(ctx context.Context, text, quote string, judge Judge) (Verification,
 	return Verification{Verified: true, Method: "ensemble", Confidence: ensembleScale * float64(votes) / ensembleVotes, Start: start, End: end}, nil
 }
 
-// normalize straightens curly quotes, folds case and collapses each white-space run to one space.
+// normalize straightens curly quotes and hyphens, folds case and collapses each white-space run to
+// one space.
 // back maps every byte of the result (and one past its end) to a byte offset in s.
 func normalize(s string) (string, []int) {
 	var b strings.Builder
@@ -123,6 +124,8 @@ func normalize(s string) (string, []int) {
 			r = '\''
 		case '“', '”', '„', '‟':
 			r = '"'
+		case '\u2010', '\u2011': // hyphen, non-breaking hyphen (a .docx's <w:noBreakHyphen/>)
+			r = '-'
 		default:
 			r = unicode.ToLower(r)
 		}

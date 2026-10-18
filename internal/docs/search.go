@@ -11,6 +11,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/discover-legal/BigLaw/internal/store"
@@ -19,7 +20,10 @@ import (
 
 const (
 	MaxK     = 50   // search results per call
-	MaxQuery = 1024 // bytes: each word is a term scored against every chunk in scope
+	MaxQuery = 1024 // bytes
+	// MaxTerms caps a query's distinct words: each is matched against every chunk in scope, so a
+	// search costs scope × terms (r2 N2: a pasted paragraph of 180 words took 12 s on 20 MiB).
+	MaxTerms = 32
 	// DefaultSectionTokens / MaxSectionTokens bound one page of a section.
 	DefaultSectionTokens = 2000
 	MaxSectionTokens     = 8000
@@ -27,6 +31,9 @@ const (
 
 // ErrBadInput (400): a search or section request outside its bounds.
 var ErrBadInput = errors.New("docs: bad request")
+
+// searchTimeout bounds one search statement (a variable for tests).
+var searchTimeout = 10 * time.Second
 
 // Hit is one search result: a verbatim chunk and where it is (Title is the section path).
 type Hit struct {
@@ -42,14 +49,23 @@ type Hit struct {
 // by how rare it is in the scope (idf = ln(1 + N/(1+df))) times ts_rank_cd of that term,
 // saturated (normalisation 32). Both the English (stemmed) and the simple (exact) vectors are
 // scored and summed, so an identifier such as FS-26-01234 counts even where stemming would mangle
-// it. Ties are broken by chunk id. A query with no searchable word returns no hits.
+// it. Ties are broken by chunk id. A query with no searchable word returns no hits; one of more
+// than MaxTerms distinct words, or one that runs past searchTimeout, is ErrBadInput.
 func (s *Service) Search(ctx context.Context, scope []string, query string, k, offset int) ([]Hit, error) {
 	if k < 1 || k > MaxK || offset < 0 || offset > 10000 || len(query) > MaxQuery || !utf8.ValidString(query) || strings.IndexByte(query, 0) >= 0 {
 		return nil, fmt.Errorf("%w: k is 1 to %d, offset 0 to 10000, the query at most %d bytes of UTF-8", ErrBadInput, MaxK, MaxQuery)
 	}
+	ctx, cancel := context.WithTimeout(ctx, searchTimeout)
+	defer cancel()
+	var terms int
+	if err := s.db.QueryRowContext(ctx, `SELECT coalesce(array_length(tsvector_to_array(to_tsvector('simple', $1)), 1), 0)`, query).Scan(&terms); err != nil {
+		return nil, s.searchError(ctx, err)
+	} else if terms > MaxTerms {
+		return nil, fmt.Errorf("%w: the query has %d distinct words; search with at most %d", ErrBadInput, terms, MaxTerms)
+	}
 	rows, err := s.db.QueryContext(ctx, searchSQL, pq.Array(validIDs(scope)), query, k, offset)
 	if err != nil {
-		return nil, fmt.Errorf("docs: search: %w", err)
+		return nil, s.searchError(ctx, err)
 	}
 	defer rows.Close()
 	hits := []Hit{}
@@ -58,30 +74,40 @@ func (s *Service) Search(ctx context.Context, scope []string, query string, k, o
 		var id int64
 		var ord int
 		if err := rows.Scan(&id, &h.DocumentID, &ord, &h.Title, &h.Text, &h.Context, &h.Rank); err != nil {
-			return nil, fmt.Errorf("docs: search: %w", err)
+			return nil, s.searchError(ctx, err)
 		}
 		h.SectionID = sectionID(ord)
 		hits = append(hits, h)
 	}
-	return hits, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, s.searchError(ctx, err)
+	}
+	return hits, nil
 }
 
+func (s *Service) searchError(ctx context.Context, err error) error {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return fmt.Errorf("%w: the search took longer than %s; use fewer or rarer words, or fewer documents", ErrBadInput, searchTimeout)
+	}
+	return fmt.Errorf("docs: search: %w", err)
+}
+
+// searchSQL matches every term against the scope's chunks once (m), takes each term's rarity from
+// those matches (w), ranks, and only then reads the k bodies.
 const searchSQL = `
 WITH s AS (SELECT id, tsv, tsv_simple FROM chunks WHERE document_id = ANY($1::uuid[])),
-n AS (SELECT count(*)::float8 AS n FROM s),
 terms AS (
   SELECT DISTINCT true AS en, plainto_tsquery('simple', l) AS q FROM unnest(tsvector_to_array(to_tsvector('english', $2))) AS l
   UNION
   SELECT DISTINCT false, plainto_tsquery('simple', l) FROM unnest(tsvector_to_array(to_tsvector('simple', $2))) AS l),
-w AS (
-  SELECT t.en, t.q, ln(1 + n.n / (1 + count(s.id))) AS idf
-  FROM terms t CROSS JOIN n LEFT JOIN s ON (CASE WHEN t.en THEN s.tsv ELSE s.tsv_simple END) @@ t.q
-  WHERE numnode(t.q) > 0 GROUP BY t.en, t.q, n.n)
-SELECT c.id, c.document_id, c.section_ord, c.locator, c.body, c.context,
-  sum(ts_rank_cd(CASE WHEN w.en THEN c.tsv ELSE c.tsv_simple END, w.q, 32) * w.idf) AS rank
-FROM chunks c JOIN w ON (CASE WHEN w.en THEN c.tsv ELSE c.tsv_simple END) @@ w.q
-WHERE c.document_id = ANY($1::uuid[])
-GROUP BY c.id ORDER BY rank DESC, c.id LIMIT $3 OFFSET $4`
+m AS (
+  SELECT s.id, t.en, t.q, ts_rank_cd(CASE WHEN t.en THEN s.tsv ELSE s.tsv_simple END, t.q, 32) AS r
+  FROM s JOIN terms t ON numnode(t.q) > 0 AND (CASE WHEN t.en THEN s.tsv ELSE s.tsv_simple END) @@ t.q),
+w AS (SELECT en, q, ln(1 + (SELECT count(*) FROM s)::float8 / (1 + count(*))) AS idf FROM m GROUP BY en, q),
+top AS (SELECT m.id, sum(m.r * w.idf) AS rank FROM m JOIN w ON w.en = m.en AND w.q = m.q
+  GROUP BY m.id ORDER BY rank DESC, m.id LIMIT $3 OFFSET $4)
+SELECT c.id, c.document_id, c.section_ord, c.locator, c.body, c.context, top.rank
+FROM top JOIN chunks c ON c.id = top.id ORDER BY top.rank DESC, c.id`
 
 func sectionID(ord int) string { return "s" + strconv.Itoa(ord) }
 

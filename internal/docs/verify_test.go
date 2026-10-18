@@ -182,3 +182,15 @@ func TestLadderMethodsAndCaps(t *testing.T) {
 		t.Error("rung confidences are not strictly ordered")
 	}
 }
+
+// TestToleranceFoldsHyphens (r2 red team): a .docx non-breaking hyphen (U+2011, now kept) and the
+// Unicode hyphen verify against an ASCII hyphen at the tolerant rung, never exact.
+func TestToleranceFoldsHyphens(t *testing.T) {
+	doc := "Case FS‑26‑01234 and the co‐operative."
+	for _, q := range []string{"FS-26-01234", "co-operative"} {
+		v, err := Verify(t.Context(), doc, q, judgeOf().judge)
+		if err != nil || !v.Verified || v.Method != "tolerant" {
+			t.Errorf("%q: %+v %v", q, v, err)
+		}
+	}
+}

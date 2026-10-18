@@ -2,9 +2,9 @@
 // Copyright (C) 2026 Discover Legal
 
 // Package ooxml reads the subset of ECMA-376 WordprocessingML that BigLaw needs: a .docx is a ZIP
-// whose word/document.xml holds the text. Open keeps every part in its original order so a later
-// writer can round-trip the archive untouched. (Ported from v1 internal/ooxml; the writer and the
-// tracked-change parse/apply land with their vectors in a later slice of PR 3.)
+// whose word/document.xml holds the text, with footnotes and endnotes beside it. (Ported from v1
+// internal/ooxml; the writer, the XML escapers and the byte-for-byte re-zip land with their
+// vectors in PR 3d.)
 package ooxml
 
 import (
@@ -16,31 +16,19 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // maxDecompressed (128 MiB) caps the total decompressed size of an opened archive, so a ZIP bomb cannot
 // exhaust memory. (A variable only so the test can lower it.)
 var maxDecompressed int64 = 128 << 20
 
-var (
-	escaper   = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;", "'", "&apos;")
-	unescaper = strings.NewReplacer("&lt;", "<", "&gt;", ">", "&quot;", `"`, "&apos;", "'", "&amp;", "&") // one pass: "&amp;lt;" → "&lt;"
-)
+// textParts are the parts Text reads; Open decompresses nothing else.
+var textParts = map[string]string{"word/document.xml": "", "word/footnotes.xml": "Footnotes", "word/endnotes.xml": "Endnotes"}
 
-// Escape escapes the five predefined XML entities; Unescape decodes them.
-func Escape(s string) string   { return escaper.Replace(s) }
-func Unescape(s string) string { return unescaper.Replace(s) }
-
-type part struct {
-	name string
-	data []byte
-}
-
-// Document is an opened .docx: word/document.xml as text, every other part kept byte for byte.
-type Document struct {
-	parts  []part
-	docXML string
-}
+// Document is an opened .docx: the XML of its text parts, by part name.
+type Document struct{ parts map[string]string }
 
 // ErrNotDocx means the bytes are not a ZIP with a word/document.xml part.
 var ErrNotDocx = errors.New("ooxml: not a .docx (a ZIP archive with word/document.xml)")
@@ -51,8 +39,11 @@ func Open(data []byte) (*Document, error) {
 	if err != nil {
 		return nil, ErrNotDocx
 	}
-	d, total, found := &Document{}, int64(0), false
+	d, total := &Document{parts: map[string]string{}}, int64(0)
 	for _, f := range zr.File {
+		if _, ok := textParts[f.Name]; !ok {
+			continue
+		}
 		rc, err := f.Open()
 		if err != nil {
 			return nil, fmt.Errorf("%w: part %q cannot be read", ErrNotDocx, f.Name)
@@ -65,36 +56,12 @@ func Open(data []byte) (*Document, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%w: part %q is corrupt", ErrNotDocx, f.Name)
 		}
-		if f.Name == "word/document.xml" {
-			d.docXML, found = string(b), true
-		}
-		d.parts = append(d.parts, part{f.Name, b})
+		d.parts[f.Name] = string(b)
 	}
-	if !found {
+	if _, ok := d.parts["word/document.xml"]; !ok {
 		return nil, ErrNotDocx
 	}
 	return d, nil
-}
-
-// Bytes re-zips the archive in the original part order, every part byte for byte.
-func (d *Document) Bytes() ([]byte, error) {
-	var buf bytes.Buffer
-	zw := zip.NewWriter(&buf)
-	for _, p := range d.parts {
-		data := p.data
-		if p.name == "word/document.xml" {
-			data = []byte(d.docXML)
-		}
-		w, err := zw.Create(p.name)
-		if err == nil {
-			_, err = w.Write(data)
-		}
-		if err != nil {
-			return nil, err
-		}
-	}
-	err := zw.Close()
-	return buf.Bytes(), err
 }
 
 // wml is the WordprocessingML namespace: elements are matched by namespace URI, whatever prefix a
@@ -106,25 +73,23 @@ const (
 
 // Text is the visible text, in one linear pass of an XML decoder: the content of every <w:t> in
 // document order (character references decoded), a tab for <w:tab/>, a line break for <w:br/> and
-// <w:cr/>, "\n" after each paragraph. A run's text counts when the run closes; hidden runs
+// <w:cr/>, U+2011 for <w:noBreakHyphen/>, a <w:sym/>'s character unless it is a private-use
+// (Symbol-font) code, "\n" after each paragraph. A run's text counts when the run closes; hidden runs
 // (<w:vanish/>), deleted text (<w:delText>) and markup-compatibility fallbacks (a copy of the
 // choice) are left out. Footnotes and endnotes follow the body, each as "[id] text", under a
 // "Footnotes"/"Endnotes" line.
 func (d *Document) Text() (string, error) {
 	var b strings.Builder
-	if err := text(&b, d.docXML); err != nil {
+	if err := text(&b, d.parts["word/document.xml"]); err != nil {
 		return "", err
 	}
-	for _, p := range d.parts {
-		label := map[string]string{"word/footnotes.xml": "Footnotes", "word/endnotes.xml": "Endnotes"}[p.name]
+	for _, name := range []string{"word/footnotes.xml", "word/endnotes.xml"} {
 		var notes strings.Builder
-		if label == "" {
-			continue
-		} else if err := text(&notes, string(p.data)); err != nil {
+		if err := text(&notes, d.parts[name]); err != nil {
 			return "", err
 		}
 		if strings.TrimSpace(notes.String()) != "" {
-			b.WriteString("\n" + label + "\n" + notes.String())
+			b.WriteString("\n" + textParts[name] + "\n" + notes.String())
 		}
 	}
 	return b.String(), nil
@@ -166,9 +131,13 @@ func text(b *strings.Builder, src string) error {
 				run.Reset()
 			case "t":
 				inT = inRun
-			case "tab", "br", "cr":
+			case "tab", "br", "cr", "noBreakHyphen":
 				if inRun {
-					run.WriteString(map[string]string{"tab": "\t", "br": "\n", "cr": "\n"}[t.Name.Local])
+					run.WriteString(map[string]string{"tab": "\t", "br": "\n", "cr": "\n", "noBreakHyphen": "\u2011"}[t.Name.Local])
+				}
+			case "sym": // a symbol-font character: kept when it is a Unicode character, not a private-use code
+				if c, err := strconv.ParseUint(attr(t, "char"), 16, 32); inRun && err == nil && utf8.ValidRune(rune(c)) && !unicode.Is(unicode.Co, rune(c)) && c >= 0x20 {
+					run.WriteRune(rune(c))
 				}
 			case "vanish":
 				hidden = hidden || inRun && val != "0" && val != "false" && val != "off"

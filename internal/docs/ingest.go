@@ -41,6 +41,14 @@ var (
 		"Images and scanned pages need a vision model, which this build does not have yet")
 	// ErrUnreadable (422): a PDF or .docx that cannot be parsed (damaged, encrypted, or too large).
 	ErrUnreadable = errors.New("docs: the file could not be read")
+	// ErrBusy (503): every ingest slot stayed taken for slotWait. ErrStopping (503): the server
+	// stopped during the request (its ingest was cancelled and its file removed).
+	ErrBusy     = errors.New("docs: busy: other documents are being read; retry in a few minutes")
+	ErrStopping = errors.New("docs: the server is stopping; retry when it is back")
+	// slotWait bounds the wait for an ingest slot, so a stored upload is ingested or removed well
+	// within the hour after which SweepOrphanFiles takes it for a crash's leftover (uploadTotal +
+	// slotWait + childTimeout = 27 minutes).
+	slotWait = 10 * time.Minute
 )
 
 // Document is one stored document. Text is what search, the reader and the ladder read.
@@ -109,10 +117,18 @@ func Extract(ctx context.Context, data []byte) (Extraction, error) {
 	switch {
 	case bytes.HasPrefix(data, []byte("%PDF-")), bytes.HasPrefix(data, []byte("PK\x03\x04")):
 		return extractInChild(ctx, data)
+	case len(data) > maxText && utf8.Valid(data) && bytes.IndexByte(data, 0) < 0:
+		return Extraction{}, textTooLarge()
 	case utf8.Valid(data) && bytes.IndexByte(data, 0) < 0:
 		return textOf(string(data)), nil
 	}
 	return Extraction{}, ErrUnsupported
+}
+
+// textTooLarge (422): more text than one document holds (maxText; the file itself may be up to
+// store.MaxFileSize, e.g. a PDF of scans).
+func textTooLarge() error {
+	return fmt.Errorf("%w: its text is larger than %d bytes (split the document)", ErrUnreadable, maxText)
 }
 
 // parse is what the child runs.
@@ -131,7 +147,7 @@ func parse(data []byte) (Extraction, error) {
 		return Extraction{}, fmt.Errorf("%w: %v", ErrUnreadable, err)
 	}
 	if len(text) > maxText { // 128 MiB of parts can hold more text than any stored document
-		return Extraction{}, fmt.Errorf("%w: the document's text is larger than %d bytes", ErrUnreadable, maxText)
+		return Extraction{}, textTooLarge()
 	}
 	x := Extraction{Text: clean(text), Method: "text_layer", ContentType: docxType}
 	if strings.TrimSpace(x.Text) == "" {
@@ -160,7 +176,7 @@ func extractPDF(data []byte) (x Extraction, err error) {
 			return Extraction{}, fmt.Errorf("%w: page %d of the PDF is damaged", ErrUnreadable, i+1)
 		}
 		if size += len(pages[i]); size > maxText { // compressed text can expand far beyond the file
-			return Extraction{}, fmt.Errorf("%w: the PDF's text is larger than %d bytes", ErrUnreadable, maxText)
+			return Extraction{}, textTooLarge()
 		}
 	}
 	x.Text = clean(strings.Join(pages, "\f")) // a form feed between pages
@@ -205,6 +221,8 @@ func (s *Service) ingestFile(ctx context.Context, f store.File) (Document, error
 		defer func() { <-s.slots }()
 	case <-ctx.Done():
 		return Document{}, ctx.Err()
+	case <-time.After(slotWait):
+		return Document{}, ErrBusy
 	}
 	f, err := s.st.GetFile(ctx, f.ID)
 	if err != nil {
@@ -219,8 +237,8 @@ func (s *Service) ingestFile(ctx context.Context, f store.File) (Document, error
 
 // IngestText stores a document given as text (no original file).
 func (s *Service) IngestText(ctx context.Context, name, text string) (Document, error) {
-	if len(text) > store.MaxFileSize {
-		return Document{}, store.ErrFileTooLarge
+	if len(text) > maxText {
+		return Document{}, textTooLarge()
 	}
 	if !store.ValidName(name) {
 		return Document{}, store.ErrBadName
@@ -233,7 +251,11 @@ func (s *Service) IngestText(ctx context.Context, name, text string) (Document, 
 
 func (s *Service) insert(ctx context.Context, d Document, x Extraction) (Document, error) {
 	d.Text, d.Method, d.ContentType, d.NoText, d.Pages, d.Notes = x.Text, x.Method, x.ContentType, x.NoText, x.Pages, append([]string{}, x.Notes...)
-	secs := Parse(d.Text)
+	secs, capped := parseTree(d.Text)
+	if capped { // r2 auditor L3: the outline must not look complete
+		d.Notes = append(d.Notes, fmt.Sprintf("The outline lists the first %d headings only: later headings are text of section %s (search and quotes still cover all of it).",
+			MaxSections, sectionID(len(secs)-1)))
+	}
 	chunks := Chunkify(d.Text, secs)
 	d.Sections, d.Chunks = len(secs), len(chunks)
 	err := s.st.InTx(ctx, func(tx *sql.Tx) error {
@@ -258,18 +280,22 @@ func (s *Service) insert(ctx context.Context, d Document, x Extraction) (Documen
 			d.ID, pq.Array(ord), pq.Array(num), pq.Array(title), pq.Array(level), pq.Array(cs), pq.Array(ce), pq.Array(tok)); err != nil {
 			return err
 		}
-		var sec, bs, be []int64
-		var loc, body, search, about []string
+		// COPY streams the chunks a row at a time (r2 N1: an array literal of every body was the
+		// largest of the server's copies of the text).
+		cp, err := tx.PrepareContext(ctx, `COPY chunks (document_id, section_ord, locator, body, search_text, context, byte_start, byte_end) FROM STDIN`)
+		if err != nil {
+			return err
+		}
+		defer cp.Close()
 		for _, c := range chunks {
-			sec, bs, be = append(sec, int64(c.Section)), append(bs, int64(c.Start)), append(be, int64(c.End))
 			if c.Search == c.Text {
 				c.Search = "" // prose is indexed from body (the schema's coalesce): stored once
 			}
-			loc, body, search, about = append(loc, c.Locator), append(body, c.Text), append(search, c.Search), append(about, c.Context)
+			if _, err := cp.ExecContext(ctx, d.ID, c.Section, c.Locator, c.Text, c.Search, c.Context, c.Start, c.End); err != nil {
+				return err
+			}
 		}
-		_, err := tx.ExecContext(ctx, `INSERT INTO chunks (document_id, section_ord, locator, body, search_text, context, byte_start, byte_end)
-			SELECT $1, * FROM unnest($2::int[], $3::text[], $4::text[], $5::text[], $6::text[], $7::int[], $8::int[])`,
-			d.ID, pq.Array(sec), pq.Array(loc), pq.Array(body), pq.Array(search), pq.Array(about), pq.Array(bs), pq.Array(be))
+		_, err = cp.ExecContext(ctx)
 		return err
 	})
 	if err != nil {

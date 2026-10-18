@@ -10,6 +10,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
+	"runtime"
+	"runtime/metrics"
 	"strings"
 	"testing"
 	"time"
@@ -192,8 +195,15 @@ func TestHostilePDFContained(t *testing.T) {
 	old := maxText
 	maxText = 40
 	_, err = extractPDF(makePDF("twenty-five characters..", "twenty-five characters.."))
-	_, errDocx := parse(minimalDocx(strings.Repeat("x", 41))) // a .docx's text is capped too (red team r1)
+	_, errDocx := parse(minimalDocx(strings.Repeat("x", 41)))           // a .docx's text is capped too (red team r1)
+	_, errText := Extract(t.Context(), []byte(strings.Repeat("x", 41))) // and an upload of text (r2 N1)
+	_, errPosted := (&Service{}).IngestText(t.Context(), "a.txt", strings.Repeat("x", 41))
 	maxText = old
+	for _, err := range []error{errText, errPosted} {
+		if !errors.Is(err, ErrUnreadable) || !strings.Contains(err.Error(), "larger than 40 bytes") {
+			t.Errorf("text past the cap: %v", err)
+		}
+	}
 	if !errors.Is(errDocx, ErrUnreadable) || !strings.Contains(errDocx.Error(), "larger than 40 bytes") {
 		t.Errorf("a .docx whose text is past the cap: %v", errDocx)
 	}
@@ -290,5 +300,53 @@ func TestResolvesByTitle(t *testing.T) {
 	v, err := s.VerifyQuote(t.Context(), []string{a.ID}, a.ID, "substantial unauthorized trading", nil)
 	if err != nil || !v.Verified || v.Method != "exact" {
 		t.Errorf("verify after resolve: %+v %v", v, err)
+	}
+}
+
+// TestIngestMemoryBounded (r2 reproducer N1): the server process's own memory for one ingest at
+// the text cap, escape-heavy text (what JSON and Postgres array literals double), as a PDF (read
+// by the child) and as an uploaded text file. Peak live heap above the start, sampled every
+// millisecond; README § Memory states these figures and the whole-ingest bound.
+func TestIngestMemoryBounded(t *testing.T) {
+	if testing.Short() {
+		t.Skip("ingests 2 × 15 MiB")
+	}
+	s := newService(t)
+	text := strings.Repeat(`\"`+"x ", (maxText-1<<20)/4)
+	for name, data := range map[string][]byte{
+		"pdf":  textPDF((maxText-1<<20)*3/2, strings.Repeat(`\\"`, 500)),
+		"text": []byte(text),
+	} {
+		runtime.GC()
+		sample := []metrics.Sample{{Name: "/memory/classes/heap/objects:bytes"}}
+		metrics.Read(sample)
+		base := sample[0].Value.Uint64()
+		done, peaked := make(chan struct{}), make(chan uint64)
+		go func() {
+			peak := uint64(0)
+			for {
+				select {
+				case <-done:
+					peaked <- peak
+					return
+				case <-time.After(time.Millisecond):
+					metrics.Read(sample)
+					peak = max(peak, sample[0].Value.Uint64())
+				}
+			}
+		}()
+		start := time.Now()
+		d, err := s.Ingest(t.Context(), "big."+name, "application/octet-stream", bytes.NewReader(data))
+		close(done)
+		peak := <-peaked
+		growth := (peak - min(peak, base)) >> 20
+		t.Logf("%s: %d-byte file, %d chunks, %s; server peak heap +%d MiB (%.1f× the %d MiB text cap)", name, len(data), d.Chunks, time.Since(start), growth,
+			float64(growth)/float64(maxText>>20), maxText>>20)
+		if err != nil || growth > 80 { // MiB: 5× the 16 MiB cap README states
+			t.Errorf("%s: %v, peak heap +%d MiB", name, err, growth)
+		}
+	}
+	if b, err := os.ReadFile("/proc/self/status"); err == nil { // Linux: this process's peak RSS so far
+		t.Logf("test process %s", regexp.MustCompile(`VmHWM:\s*\d+ kB`).Find(b))
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/discover-legal/BigLaw/internal/store"
 	"github.com/discover-legal/BigLaw/internal/store/storetest"
@@ -115,18 +116,23 @@ func TestSearchRareTermOutranksCommon(t *testing.T) {
 
 // TestSearchRarityIsScoped (r1 prosecutor L-2): term rarity is counted over the scope only, so
 // another matter's documents cannot reorder this one's results (a cross-matter side channel):
-// "zeta" fills 20 out-of-scope documents, and inside the scope it ties with "omega".
+// "zeta" fills 20 out-of-scope documents, and inside the scope it ties with "omega", at exactly
+// the rank it had before they existed (neither df nor N counts them).
 func TestSearchRarityIsScoped(t *testing.T) {
 	t.Parallel()
 	s := newService(t)
 	x := ingestText(t, s, "x.txt", "zeta report")
 	y := ingestText(t, s, "y.txt", "omega report")
+	alone, err := s.Search(t.Context(), []string{x.ID, y.ID}, "zeta omega", 8, 0)
+	if err != nil || len(alone) != 2 {
+		t.Fatal(alone, err)
+	}
 	for i := range 20 {
 		ingestText(t, s, fmt.Sprintf("other%d.txt", i), "zeta zeta zeta")
 	}
 	hits, err := s.Search(t.Context(), []string{x.ID, y.ID}, "zeta omega", 8, 0)
-	if err != nil || len(hits) != 2 || hits[0].DocumentID != x.ID || hits[0].Rank != hits[1].Rank {
-		t.Errorf("hits %v %v, want a tie broken by chunk id (x first)", hitIDs(hits), err)
+	if err != nil || len(hits) != 2 || hits[0].DocumentID != x.ID || hits[0].Rank != hits[1].Rank || hits[0].Rank != alone[0].Rank {
+		t.Errorf("hits %v %v, want a tie broken by chunk id (x first) at the rank they had before the other documents existed", hitIDs(hits), err)
 	}
 }
 
@@ -379,5 +385,47 @@ func TestLexicalRecallProofRuns(t *testing.T) {
 	}
 	if question.found < 60 || float64(title.found) < 0.95*float64(title.facts) {
 		t.Errorf("E4 regressed: %d/%d by question (floor 60), %d/%d by title (floor 0.95)", question.found, question.facts, title.found, title.facts)
+	}
+}
+
+// TestSearchCost (r2 reproducer N2): a search costs scope × distinct terms, so terms are capped at
+// MaxTerms and the statement at searchTimeout. On a 4 MiB scope of short clauses this prints the
+// times README § Search quotes; 33 distinct words and a statement past the timeout are refused.
+func TestSearchCost(t *testing.T) {
+	if testing.Short() {
+		t.Skip("ingests 4 MiB")
+	}
+	s := newService(t)
+	var b strings.Builder
+	for i := 0; b.Len() < 4<<20; i++ {
+		fmt.Fprintf(&b, "(%c) Clause %d: the Supplier shall pay the fee of %d euros within 30 days of the invoice.\n", 'a'+i%26, i, i*7)
+	}
+	d := ingestText(t, s, "clauses.txt", b.String())
+	scope := []string{d.ID}
+	words := func(n int, f string) string {
+		var w []string
+		for i := range n {
+			w = append(w, fmt.Sprintf(f, i))
+		}
+		return strings.Join(w, " ")
+	}
+	for name, q := range map[string]string{"2 common words": "supplier invoice", "32 absent words": words(MaxTerms, "absentword%d"),
+		"32 words, 6 common": "supplier shall pay fee euros invoice " + words(MaxTerms-6, "absentword%d")} {
+		start := time.Now()
+		hits, err := s.Search(t.Context(), scope, q, 8, 0)
+		t.Logf("%s on %d chunks (%d MiB): %d hits in %s", name, d.Chunks, b.Len()>>20, len(hits), time.Since(start))
+		if err != nil || time.Since(start) > searchTimeout {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if _, err := s.Search(t.Context(), scope, words(MaxTerms+1, "w%d"), 8, 0); !errors.Is(err, ErrBadInput) || !strings.Contains(err.Error(), "33 distinct words") {
+		t.Errorf("33 distinct words: %v", err)
+	}
+	old := searchTimeout
+	searchTimeout = time.Millisecond
+	_, err := s.Search(t.Context(), scope, "supplier invoice", 8, 0)
+	searchTimeout = old
+	if !errors.Is(err, ErrBadInput) || !strings.Contains(err.Error(), "took longer") {
+		t.Errorf("a search past its timeout: %v", err)
 	}
 }

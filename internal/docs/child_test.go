@@ -27,11 +27,15 @@ func loopPDF() []byte {
 }
 
 // bombPDF is one page whose FlateDecode content stream inflates to mib MiB of shown text.
-func bombPDF(mib int) []byte {
+func bombPDF(mib int) []byte { return textPDF(mib<<20, strings.Repeat("A", 1000)) }
+
+// textPDF is one page whose FlateDecode content stream shows about size bytes: the PDF string
+// shown repeatedly.
+func textPDF(size int, shown string) []byte {
 	var z bytes.Buffer
 	zw, _ := zlib.NewWriterLevel(&z, zlib.BestSpeed)
-	line := []byte("(" + strings.Repeat("A", 1000) + ") Tj\n")
-	for n := 0; n < mib<<20; n += len(line) {
+	line := []byte("(" + shown + ") Tj\n")
+	for n := 0; n < size; n += len(line) {
 		zw.Write(line)
 	}
 	zw.Close()
@@ -211,5 +215,87 @@ func TestForgottenMaybeRunChildIsAnError(t *testing.T) {
 	childReady = true
 	if !errors.Is(err, errNoChild) || !errors.Is(errDocx, errNoChild) {
 		t.Errorf("Extract without MaybeRunChild: PDF %v, .docx %v", err, errDocx)
+	}
+}
+
+// TestReadChildBounded (r2 reproducer N1): the parent reads a child's output through hard bounds:
+// a short header line, exactly Len ≤ maxText bytes of text (one allocation, no unescaping copy),
+// valid UTF-8 without NUL, and nothing after it; anything else is garbage, never text.
+func TestReadChildBounded(t *testing.T) {
+	head := func(n int) string {
+		return fmt.Sprintf(`{"X":{"Method":"text_layer","Pages":2},"Err":"","Len":%d}`+"\n", n)
+	}
+	if _, ok := readChild(strings.NewReader(head(2) + "hé"[:2])); ok {
+		t.Error("a cut rune is not valid text")
+	}
+	if out, ok := readChild(strings.NewReader(head(6) + "héllo")); !ok || out.X.Text != "héllo" || out.X.Pages != 2 {
+		t.Errorf("good output: %+v %v", out, ok)
+	}
+	for name, in := range map[string]string{
+		"over the cap": head(maxText+1) + strings.Repeat("x", maxText+1), "negative length": head(-1), "short text": head(10) + "abc", "trailing bytes": head(1) + "ab",
+		"a NUL": head(3) + "a\x00b", "no header line": strings.Repeat("x", 70<<10), "a long header": `{"Err":"` + strings.Repeat("x", 70<<10) + `"}` + "\n",
+	} {
+		if _, ok := readChild(strings.NewReader(in)); ok {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+// TestChildRunsTheRunningImage (r2 reproducer N4): with the binary replaced on disk after the start
+// (an in-place rebuild, an upgrade before the restart), the reader child is still this image, not
+// the file now at the path. Run in a copy of the test binary, which replaces itself by a script
+// that prints forged output.
+func TestChildRunsTheRunningImage(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the child runs /proc/self/exe on Linux only (README Limitations)")
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.Getenv("BIGLAW_TEST_REPLACED_SELF") == "1" {
+		forged := "#!/bin/sh\necho '{\"X\":{\"Method\":\"text_layer\"},\"Len\":6}'; printf forged\n"
+		if err := os.Remove(exe); err != nil || os.WriteFile(exe, []byte(forged), 0o755) != nil {
+			t.Fatal("replacing the test binary:", err)
+		}
+		x, err := Extract(t.Context(), pdfWith("[]"))
+		if err != nil || !strings.Contains(x.Text, "hello") {
+			t.Fatalf("the reader ran the file at the path: %q %v", x.Text, err)
+		}
+		return
+	}
+	cp := t.TempDir() + "/docs.test"
+	if b, err := os.ReadFile(exe); err != nil || os.WriteFile(cp, b, 0o755) != nil {
+		t.Fatal("copying the test binary:", err)
+	}
+	cmd := exec.Command(cp, "-test.run=^TestChildRunsTheRunningImage$", "-test.count=1")
+	cmd.Env = append(os.Environ(), "BIGLAW_TEST_REPLACED_SELF=1")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// TestChildNearTextCap (r2 reproducer N9): acceptance near the text cap is not left to garbage-
+// collector timing. A PDF of escape-heavy text just under maxText is read every time with the
+// child's peak RSS under half its memory cap, and one just over is refused as too large.
+func TestChildNearTextCap(t *testing.T) {
+	if raceBuild() || runtime.GOOS != "linux" || testing.Short() {
+		t.Skip("the memory cap is Linux-only and off under the race detector (make ci runs this test without -race too)")
+	}
+	exe, _ := os.Executable()
+	under := textPDF((maxText-1<<20)*3/2, strings.Repeat(`\\"`, 500)) // 3 bytes show \" (2), what JSON would escape
+	x, err := Extract(t.Context(), under)
+	if err != nil || len(x.Text) > maxText || len(x.Text) < maxText-2<<20 {
+		t.Fatalf("%d bytes of text, %v", len(x.Text), err)
+	}
+	for i := range 3 {
+		exit, rss, took := runChild(t, childCommand(t.Context(), exe), under, time.Minute)
+		t.Logf("%d bytes of text: exit %d, child peak RSS %d MiB, %s", len(x.Text), exit, rss, took)
+		if exit != 0 || rss > int64(childMemory>>21) {
+			t.Errorf("run %d: exit %d, peak RSS %d MiB (cap %d MiB)", i, exit, rss, childMemory>>20)
+		}
+	}
+	if _, err := Extract(t.Context(), textPDF(maxText+1<<20, strings.Repeat("A", 1000))); !errors.Is(err, ErrUnreadable) || !strings.Contains(err.Error(), "larger than") {
+		t.Errorf("text past the cap: %v", err)
 	}
 }

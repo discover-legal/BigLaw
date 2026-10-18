@@ -122,6 +122,9 @@ func (s *Service) upload(w http.ResponseWriter, r *http.Request, log *slog.Logge
 			ct = "application/octet-stream"
 		}
 		d, err := s.Ingest(r.Context(), p.FileName(), ct, p)
+		if errors.Is(context.Cause(r.Context()), ErrStopping) {
+			err = ErrStopping
+		}
 		if err != nil {
 			writeError(w, log, readError(err, pr.timedOut, ""))
 			return
@@ -203,6 +206,7 @@ func writeError(w http.ResponseWriter, log *slog.Logger, err error) {
 		{ErrNotFound, 404, "not_found", false}, {ErrBadInput, 400, "bad_request", true}, {store.ErrBadName, 400, "bad_name", true},
 		{store.ErrBadType, 400, "bad_content_type", true}, {store.ErrFileTooLarge, 413, "too_large", true},
 		{errTimeout, 408, "upload_timeout", true}, {errCrossOrigin, 403, "cross_origin", true}, {ErrUnsupported, 415, "unsupported_type", true}, {ErrUnreadable, 422, "unreadable", true},
+		{ErrBusy, 503, "busy", true}, {ErrStopping, 503, "stopping", true},
 	} {
 		if errors.Is(err, c.err) {
 			code, kind, msg = c.code, c.kind, "not found"

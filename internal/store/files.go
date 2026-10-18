@@ -138,13 +138,14 @@ func (s *Store) GetFile(ctx context.Context, id string) (File, error) {
 	return f, nil
 }
 
-// ReadFile writes a file to w one chunk at a time (one query per chunk, so it holds one chunk, not
-// the file) and returns its metadata; head, if not nil, gets the metadata before the first byte.
-// Unknown or malformed ids give ErrNotFound. The recorded size is checked against MaxFileSize
-// before any content is read, and the size and SHA-256 are re-verified at the end: ErrCorrupt
-// then means w has received wrong bytes, so a caller that must not pass them on reads twice
-// (once into io.Discard) or buffers (GetFile). Files are never modified, only deleted, so the
-// chunks read are the file's even without one snapshot. A read slot is held throughout.
+// ReadFile writes a file to w one chunk at a time (one query per chunk, so it holds two chunks,
+// not the file) and returns its metadata; head, if not nil, gets the metadata before the first
+// byte. Unknown or malformed ids give ErrNotFound. The recorded size is checked against
+// MaxFileSize before any content is read, and the size and SHA-256 are verified before the last
+// chunk is written: on ErrCorrupt w has received at most all but the last chunk, never the whole
+// file, so a client given the recorded size as Content-Length sees a short body (r2 N3: rows
+// changed between a caller's verifying read and its streaming read). A read slot is held
+// throughout.
 func (s *Store) ReadFile(ctx context.Context, id string, head func(File) error, w io.Writer) (File, error) {
 	if !ValidID(id) {
 		return File{}, ErrNotFound
@@ -172,7 +173,7 @@ func (s *Store) ReadFile(ctx context.Context, id string, head func(File) error, 
 			return File{}, err
 		}
 	}
-	h, n, seq := sha256.New(), int64(0), 0
+	h, n, seq, held := sha256.New(), int64(0), 0, []byte(nil)
 	for ; ; seq++ {
 		var chunk []byte
 		err := s.db.QueryRowContext(ctx, `SELECT data FROM file_chunks WHERE file_id = $1 AND seq = $2`, id, seq).Scan(&chunk)
@@ -185,12 +186,16 @@ func (s *Store) ReadFile(ctx context.Context, id string, head func(File) error, 
 			return File{}, fmt.Errorf("%w: file %s holds more than its recorded %d bytes", ErrCorrupt, f.ID, f.Size)
 		}
 		h.Write(chunk)
-		if _, err := w.Write(chunk); err != nil {
+		if _, err := w.Write(held); err != nil {
 			return File{}, fmt.Errorf("store: get file: write: %w", err)
 		}
+		held = chunk
 	}
 	if n != f.Size || seq != chunks || !strings.EqualFold(hex.EncodeToString(h.Sum(nil)), f.SHA256) {
 		return File{}, fmt.Errorf("%w: file %s", ErrCorrupt, f.ID)
+	}
+	if _, err := w.Write(held); err != nil {
+		return File{}, fmt.Errorf("store: get file: write: %w", err)
 	}
 	return f, nil
 }

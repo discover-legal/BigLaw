@@ -36,14 +36,20 @@ const (
 
 // Parse builds the section tree of text. A document with no recognised heading is one level-0
 // section; text before the first heading is a level-0 preface section.
-func Parse(text string) []Section {
-	var secs []Section
+func Parse(text string) []Section { secs, _ := parseTree(text); return secs }
+
+// parseTree is Parse, and whether MaxSections cut the tree (later headings are body text).
+func parseTree(text string) (secs []Section, capped bool) {
 	for start := 0; start < len(text); {
 		end := len(text)
 		if i := strings.IndexByte(text[start:], '\n'); i >= 0 {
 			end = start + i + 1
 		}
-		if s, ok := classify(strings.TrimSuffix(strings.TrimSuffix(text[start:end], "\n"), "\r")); ok && len(secs) < MaxSections-1 {
+		s, ok := classify(strings.TrimSuffix(strings.TrimSuffix(text[start:end], "\n"), "\r"))
+		if room := MaxSections - len(secs); ok && (room < 1 || room < 2 && len(secs) == 0 && start > 0) {
+			ok, capped = false, true
+		}
+		if ok {
 			if len(secs) == 0 && start > 0 {
 				secs = append(secs, Section{BodyEnd: start, End: start}) // the preface
 			}
@@ -53,7 +59,7 @@ func Parse(text string) []Section {
 		start = end
 	}
 	if len(secs) == 0 {
-		return []Section{{BodyEnd: len(text), End: len(text)}}
+		return []Section{{BodyEnd: len(text), End: len(text)}}, false
 	}
 	for i := range secs {
 		if secs[i].Level == 0 {
@@ -70,7 +76,7 @@ func Parse(text string) []Section {
 			}
 		}
 	}
-	return secs
+	return secs, capped
 }
 
 var (
@@ -90,7 +96,11 @@ var (
 // classify reports whether a line is a heading. Levels keep the legal hierarchy in order:
 // ARTICLE/SCHEDULE/RECITALS 1, Section/§/WHEREAS 2, decimal "1" 2, "1.1" 3, …, (a) 4, (i) 5.
 // A Markdown "#" heading is classified by its text; an unnumbered one is a heading at its depth.
+// A line with two or more tabs is a table row, not a heading.
 func classify(line string) (Section, bool) {
+	if isTableRow(line) {
+		return Section{}, false // a table row ("1\t2023\t$400") is never a heading
+	}
 	s := strings.TrimSpace(line)
 	md := reMarkdown.FindStringSubmatch(s)
 	if md != nil {
@@ -107,10 +117,7 @@ func classify(line string) (Section, bool) {
 		if len(number) > maxNumber || scheme == "decimal" && (level > 6 || startsLower(title)) {
 			return Section{}, false // "1.2.3.4.5.6", "100 dollars were paid", "1.5 million"
 		}
-		if len(title) > maxTitle {
-			title = strings.ToValidUTF8(title[:maxTitle], "") + "…"
-		}
-		return Section{Number: number, Title: title, Scheme: scheme, Level: level, Defs: reDefinitions.MatchString(title)}, true
+		return Section{Number: number, Title: clip(title, maxTitle), Scheme: scheme, Level: level, Defs: reDefinitions.MatchString(clip(title, maxTitle))}, true
 	}
 	if m := reRecitals.FindStringSubmatch(s); m != nil {
 		return sec("recital", "", s, 1)

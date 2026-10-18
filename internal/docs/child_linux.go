@@ -13,3 +13,7 @@ func childAttr() *syscall.SysProcAttr { return &syscall.SysProcAttr{Pdeathsig: s
 func limitMemory(n uint64) {
 	_ = syscall.Setrlimit(syscall.RLIMIT_DATA, &syscall.Rlimit{Cur: n, Max: n})
 }
+
+// selfExe is the running image: a binary replaced or deleted on disk since the start (an in-place
+// rebuild, an upgrade before the restart) is not what the child runs.
+func selfExe() (string, error) { return "/proc/self/exe", nil }

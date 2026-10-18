@@ -19,6 +19,7 @@ import (
 	"net/http/httptest"
 	"net/textproto"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -529,5 +530,54 @@ func TestTransferDeadlinesFailClosed(t *testing.T) {
 		if err == nil && string(body) == "bounded" {
 			t.Errorf("a download without a write deadline was sent: %d %q", resp.StatusCode, body)
 		}
+	}
+}
+
+// deadlineRecorder is a ResponseWriter that records each write's size and whether a fresh write
+// deadline preceded it (http.ResponseController finds SetWriteDeadline by method).
+type deadlineRecorder struct {
+	httptest.ResponseRecorder
+	fresh  bool
+	writes []int
+	bad    int
+}
+
+func (d *deadlineRecorder) SetWriteDeadline(time.Time) error { d.fresh = true; return nil }
+func (d *deadlineRecorder) Write(p []byte) (int, error) {
+	if !d.fresh {
+		d.bad++
+	}
+	d.fresh, d.writes = false, append(d.writes, len(p))
+	return len(p), nil
+}
+
+// TestDownloadDeadlinePerWindow (r2 prosecutor L-2): a download writes at most uploadMinBytes
+// under each write deadline, so a client reading just above the floor completes a large file.
+func TestDownloadDeadlinePerWindow(t *testing.T) {
+	t.Parallel()
+	rec := &deadlineRecorder{}
+	fw := floorWriter{rec, http.NewResponseController(rec), time.Now().Add(time.Hour)}
+	if n, err := fw.Write(make([]byte, 2<<20+5)); err != nil || n != 2<<20+5 {
+		t.Fatal(n, err)
+	}
+	if len(rec.writes) != 33 || slices.Max(rec.writes) > uploadMinBytes || rec.bad != 0 {
+		t.Errorf("%d writes, largest %d bytes, %d without a fresh deadline; want 33 of at most %d, each with one", len(rec.writes), slices.Max(rec.writes), rec.bad, uploadMinBytes)
+	}
+}
+
+// TestIngestSlotWaitBounded (r2 reproducer N5): an upload waits at most slotWait for an ingest
+// slot, then is 503 busy and its stored file removed, so no upload outlives the orphan sweep's hour.
+func TestIngestSlotWaitBounded(t *testing.T) { // not parallel: it shortens slotWait
+	s := newService(t)
+	old := slotWait
+	slotWait = 200 * time.Millisecond
+	t.Cleanup(func() { slotWait = old })
+	for range ingestSlots {
+		s.slots <- struct{}{}
+	}
+	start := time.Now()
+	resp, body := upload(t, serveDocs(t, s).URL, "a.txt", []byte("waiting"))
+	if resp.StatusCode != 503 || body["errorType"] != "busy" || count(t, s, "files") != 0 || time.Since(start) > 5*time.Second {
+		t.Errorf("an upload with every slot taken: %d %v after %s, %d files", resp.StatusCode, body, time.Since(start), count(t, s, "files"))
 	}
 }

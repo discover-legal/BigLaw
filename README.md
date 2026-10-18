@@ -21,7 +21,7 @@ PostgreSQL database. Licensed Apache-2.0 (`LICENSE`, `NOTICE`).
 | Files | `internal/store/files.go` | Binary files (uploads, generated `.docx`) stored in 1 MiB `bytea` chunks, streamed in and out, with size and SHA-256 checked on every read |
 | Model client | `internal/model/` (`client.go`, `errors.go`, `fake.go`, `pricing.go`, `prices.json`) | One OpenAI-compatible chat client with tool calls and image parts, typed failures with their HTTP mapping, at most 3 attempts per call, cache-aware pricing of every call from a built-in table plus `BIGLAW_PRICES` (the host never makes a call free), watt-hour metering when `BIGLAW_LOCAL_WATTS` is set, and `model.Fake` for tests (§ Model client). Nothing calls it yet: the agent loop that does arrives in PR 4a. |
 | Documents | `internal/docs/` (`ingest.go`, `child.go` + `child_linux.go`/`child_other.go`, `pageindex.go`, `chunk.go`, `search.go`, `verify.go`, `http.go`) | Ingest of UTF-8 text, `.docx` and PDF text layers (PDFs and `.docx` files parsed in a bounded child process); the byte-exact section tree; search chunks; Postgres full-text search; the page reader (outline, paged sections); the quote-verification ladder; the upload and download routes. Every read is scoped to the caller's document ids (§ Documents) |
-| `.docx` reader | `internal/docs/ooxml/` | Opens a `.docx` (128 MiB decompression cap), its visible text (one linear XML pass, footnotes and endnotes included), a part-preserving re-zip. The writer and tracked-change parse/apply are planned (PR 3c) |
+| `.docx` reader | `internal/docs/ooxml/` | Opens a `.docx`'s text parts only (body, footnotes, endnotes; 128 MiB decompression cap) and reads its visible text in one linear XML pass. The writer, the XML escapers, the part-preserving re-zip and tracked-change parse/apply are planned (PR 3d) |
 | Proof-run fixtures | `eval/tasks/` | The five synthetic proof-run matters (documents + answer keys), copied from `feat/proof-runs-multi-practice`; PR 3 reads them for gate E4, PR 4b adds the driver and scorer |
 | Test helper | `internal/store/storetest/` | Gives each DB test its own schema; skips without a DSN, fails if `BIGLAW_REQUIRE_DB` is set |
 | Budgets | `scripts/loc.py` (+ `scripts/test_loc.py`) | Fails CI if a size budget is exceeded (below) |
@@ -33,9 +33,10 @@ HTTP surface today: `GET /health`, which returns `{"status":"ok","version":"…"
 document file routes of § Documents: `POST /documents/upload` and `GET /documents/{id}/file`.
 Every other path is 404/405. There is no authentication yet (§ Exposure).
 
-**Planned** (not built): vision transcription of images and scanned PDFs, with one role-map
-variable replacing the three role variables (PR 3b); the `.docx` writer and tracked-change
-parse/apply (PR 3c); the engine and the memo workflow with its REST API (PR 4), diligence (PR 5), contract review (PR 6),
+**Planned** (not built): one role-map variable replacing the three role
+variables, with an `embed` role, priced embedding calls and pgvector hybrid search (PR 3b; owner
+decision 9, because lexical search missed gate E4); vision transcription of images and scanned
+PDFs (PR 3c); the `.docx` writer and tracked-change parse/apply (PR 3d); the engine and the memo workflow with its REST API (PR 4), diligence (PR 5), contract review (PR 6),
 MCP (PR 7), clients/conflicts and OIDC/session/token auth (PR 8), time and billing (PR 9), the
 UI (PR 11), jurisdiction and practice packs (PR 12), v1 import and docs (PR 13). The
 discover.legal intake module is **not** part of v2 (owner decision; it moves to a separate repo).
@@ -277,7 +278,7 @@ exist, and a file is reachable only through a document in scope (`TestRetrieveNe
 
 **Ingest.** The type is detected from the content, never from the name or the declared type:
 `%PDF-` is a PDF, a ZIP with `word/document.xml` is a `.docx`, valid UTF-8 without NUL is text.
-Anything else is refused with 415 `unsupported_type` (images included: transcription is PR 3b);
+Anything else is refused with 415 `unsupported_type` (images included: transcription is PR 3c);
 a damaged, encrypted or over-2,000-page PDF and a damaged `.docx` are 422 `unreadable`. A refused
 upload leaves no row behind (`TestIngestRefusalLeavesNothing`). A document that has nothing
 readable (a scanned PDF, a `.docx` holding only images, an empty file) is stored with
@@ -295,14 +296,26 @@ parent's death, and on Linux the kernel kills it with its parent (`Pdeathsig`)
 (`TestChildBoundsItself`, `TestChildDiesWithParent`). Its stack is 64 MiB and, on Linux, its data
 segment is a **hard** 1 GiB cap (`RLIMIT_DATA`): a decompression bomb dies at the cap and the
 upload is 422 `unreadable` (measured: a 512 MiB text bomb under a 256 MiB test cap died at
-142–221 MiB peak RSS across runs). Extracted text over 64 MiB, from either format, is 422 too. Two run at once, so children take at most about 2 GiB. A binary whose `main`
+142–221 MiB peak RSS across runs). A document's text is capped at **16 MiB** (`maxText`, about
+8,000 pages; the file itself may be up to 64 MiB): more, from a PDF, a `.docx` or an uploaded
+text file, is 422 `unreadable` ("its text is larger than …"). The child sends its text as a
+length-prefixed raw block after a one-line JSON header, which the server reads through hard bounds
+(a 64 KiB header, exactly the stated length up to the cap, valid UTF-8, nothing after:
+`TestReadChildBounded`), into one allocation. At the cap a child peaks at about 60 MiB RSS on
+escape-heavy text, under half its memory cap, every run (`TestChildNearTextCap`), so acceptance
+near the cap does not depend on garbage-collector timing. The child is the running image
+(`/proc/self/exe` on Linux), so replacing or deleting the binary on disk while serving does not
+change the reader (`TestChildRunsTheRunningImage`); a reader that cannot start is a 500 that says
+so, not "damaged". Two run at once (`ingestSlots`); an upload waits at most 10 minutes for a slot,
+then is 503 `busy` and its file is removed (`TestIngestSlotWaitBounded`). A binary whose `main`
 (or test package's `TestMain`) forgot `docs.MaybeRunChild()` gets a clear error instead of
 re-running itself (`TestForgottenMaybeRunChildIsAnError`).
 
 `.docx` text is read in one linear pass of an XML decoder (a 9 KB file of 160,000 runs took
 48 s in v1's reader; 1,000,000 runs now take about a second: `TestTextLinearAndBounded`), with
 elements matched by namespace, whatever their prefix: `<w:tab/>` is a tab, `<w:br/>`/`<w:cr/>` a
-line break, character references are decoded, comments ignored, hidden text (`<w:vanish/>`),
+line break, `<w:noBreakHyphen/>` is U+2011 (as in `FS‑26‑01234`), a `<w:sym/>` is its character
+unless it is a private-use Symbol-font code (dropped), character references are decoded, comments ignored, hidden text (`<w:vanish/>`),
 deleted text and markup-compatibility fallbacks left out, nesting capped at 256 elements, and
 footnotes and endnotes appended after the body as `[id] text` under a `Footnotes`/`Endnotes`
 line (`TestTextFidelity`). Entities are never expanded. Text hidden only by formatting (white on
@@ -316,21 +329,38 @@ decimal clauses (`1`, `1.1`; the first number at most three digits, so a year is
 and a number followed by a lower-case word, such as `100 dollars were paid` or `1.5 million`, is
 body text), `(a)` and `(i)` items, schedules/exhibits/annexes, recitals, and Markdown `#` or bold
 headings. The tree is bounded so storage stays linear in the input (each chunk carries its
-section path): at most 10,000 sections per document (later headings stay body text), titles cut
-at 120 bytes, numbers of at most 24 bytes and five decimal levels, so a path has at most six
-levels; titles lose bidi and other invisible or control characters (`TestSectionTreeBounded`:
-1 MB of each hostile shape stores at most 2.2× its input, where v1's tree copied the full path
-into every chunk, 3,284× and 168 s for a long heading over 40,000 items; `TestHeadingHeuristics`). Joining every section's own text gives back the document byte for byte, so every
+section path): at most 10,000 sections per document (later headings stay body text of the last
+one, and the document's `notes` say so, so an outline never looks complete when it is not),
+titles cut at 120 bytes, numbers of at most 24 bytes and five decimal levels, so a path has at
+most six levels; titles lose bidi and other invisible or control characters. **Bound:** every
+chunk column together (path, body, search text, column context) is at most 3× the input for each
+hostile shape `TestSectionTreeBounded` builds (measured 1.0×–2.9×: a long heading over 40,000
+items 2.2×, 2,500 rows of 100 one-digit cells under 100 named columns 2.9×), and by construction
+at most about 4× (a body, its search text at most 1.5× plus the column list, a path of at most
+about 870 bytes and a context of at most 256 per chunk of at least 1,024 bytes; a section's
+last chunk can be shorter, and there are at most 10,000 sections). v1's tree copied the full path into every chunk (3,284×
+and 168 s for the long heading); round 1's table rows copied the whole header into every row
+(a 120 KB, 20,000-column table: 1.2 GB and 20 s; 9 ms and 260 KB now). `TestHeadingHeuristics`. Joining every section's own text gives back the document byte for byte, so every
 section and chunk is a verbatim slice (`TestReconstruction`, `TestChunksCoverEveryWordOnce`).
 Chunks hold at most 400 tokens (3.5 characters per token), cut at a sentence end, else at white
-space; a tab-separated table becomes one chunk per row, indexed with its column headers
-(`TestTableRowChunking`).
+space. A tab-separated table is chunked by whole rows, grouped until a chunk holds at least
+1,024 bytes (a row longer than the token cap is split like prose); the first row (after the
+start or a `#`/`## Sheet:` line) is the header, however long. Each data cell is indexed as
+`Column: cell` while the names added stay within half the row's length (bare cells after that),
+and a chunk's `context` names the sheet and columns (at most 256 bytes; indexed once per chunk)
+(`TestTableRowChunking`). So a table hit returns a few rows, not one. A line with two or more
+tabs is a table row, never a heading (a numeric row such as `1⇥2023⇥$400` used to become a
+section).
 
-**Search.** Postgres full text, no vectors: each chunk has a stored English `tsvector` and a
-`simple` (unstemmed) one. Search reads the scope's chunks (by document) and matches each term
-against them, so a query costs time in proportion to the scope's size times its terms; there is
-no GIN index, because this ranking query cannot use one (`EXPLAIN` showed none used, so it would
-only cost writes). Every word of the query is a separate term (OR, not AND; quotes, `-` and other
+**Search.** Postgres full text, no vectors in this PR (pgvector hybrid search is PR 3b): each
+chunk has a stored English `tsvector` and a `simple` (unstemmed) one. Search reads the scope's
+chunks (by document) and matches each term against them once, so a query costs time in
+proportion to the scope's size times its terms; there is no GIN index, because this ranking
+query cannot use one (`EXPLAIN` showed none used, so it would only cost writes). The bound: at
+most **32 distinct words** per query (more is 400 `bad_request`) and a **10 s** statement timeout
+(then 400, "use fewer or rarer words"). `TestSearchCost` prints the cost on this machine: on a
+4 MiB scope of 12,425 chunks, 2 common words took 135 ms, 32 absent words 128 ms, and 32 words of
+which 6 are common 492 ms (the round-1 query: 193 ms, 444 ms and 867 ms on the same data). Every word of the query is a separate term (OR, not AND; quotes, `-` and other
 operators are plain text, so a quoted phrase is its words), scored as `ts_rank_cd` of that term (saturated) times its rarity in the scope
 (`ln(1 + N/(1 + df))`), on both vectors, summed; ties go to the lower chunk id. So a rare term
 outranks a repeated common one (`TestSearchRareTermOutranksCommon`), results are deterministic
@@ -348,9 +378,12 @@ string counted separately: 86/106 = 0.811). Searching with the fact's **title**,
 answer, gives **66/68 = 0.971** (100/106), an upper bound, not a measure of an agent's real query.
 Misses by question: `REG-05`, `REG-14`, `DD-06`, `DD-09`, `LIT-D1`, `LIT-I3`, `LIT-I6`, `LIT-C6`.
 `TestLexicalRecallProofRuns` prints both figures and per-matter recall, says that the gate is not
-met, and fails only on a regression (below 60/68 by question or 0.95 by title). Whether this
-means pgvector is the coordinator's decision (DESIGN § riskiest assumption); gate A (PR 4b)
-measures recall through the agent's own queries.
+met, and fails only on a regression (below 60/68 by question or 0.95 by title). Owner decision 9:
+pgvector is added in PR 3b, where E4 becomes a failing gate again, replayed in CI from a recorded
+embeddings tape (`TestHybridRecallProofRuns`, PLAN § PR 3 slices); gate A (PR 4b) measures recall
+through the agent's own queries. Scoring note (r2 auditor): for a few multi-hop facts (`DD-06`,
+`LIT-I3`, `LIT-D1`) the question retrieves the operative clause while the key designates only
+the other hop, so 2–3 misses are partly measurement; the gate is not moved for it.
 
 **Page reader.** `Outline` lists every section in order as `{sectionId, number, title, level,
 tokens}`, where `tokens` estimates what `Section` returns for it: the section with its
@@ -361,7 +394,7 @@ subsections. `Section` reads that text verbatim from a character `offset`, at mo
 section id past it is 404, never a database error.
 
 **Verification ladder** (v1's `tabcite` ladder): exact substring, confidence 1.0; tolerant
-substring (curly quotes straightened, white space collapsed, case folded on both sides), 0.95; one
+substring (curly quotes straightened, U+2010/U+2011 hyphens read as `-`, white space collapsed, case folded on both sides; `TestToleranceFoldsHyphens`), 0.95; one
 paraphrase-judge call over the best-matching window of the document (at most about 3,000 bytes
 around the span holding most of the quote's words), capped at 0.8; when the judge is less than
 0.75 sure, three independent votes, a strict majority needed, confidence 0.75 × votes/3, below
@@ -397,14 +430,22 @@ first pass (so corrupt bytes are never sent), then it is sent one 1 MiB chunk at
 read slot, each 64 KiB under its own 30-second write deadline and the whole within 15 minutes, so
 a client that stops reading is cut within a window and holds at most one chunk meanwhile
 (`TestDownloadBounded`: 12 stalled downloads of an 8 MiB file grew the heap by 4 MiB and were all
-cut after 1.5 s at a 0.5 s window; the route used to hold a whole file per stalled client). Where
+cut after 1.5 s at a 0.5 s window; the route used to hold a whole file per stalled client;
+`TestDownloadDeadlinePerWindow` pins the 64 KiB per deadline). The last chunk is sent only after
+the streamed bytes' hash matches, so a file whose rows change between the verifying pass and the
+streaming pass reaches the client as a short body, never as a complete 200
+(`TestReadFileWithholdsUnverifiedTail`). Where
 a deadline cannot be set (a response writer that hides its connection, such as a middleware
 wrapper without `Unwrap`), an upload is refused and a download cut before its first byte, never
 run unbounded (`TestTransferDeadlinesFailClosed`). `Delete`
 removes a document with its sections, chunks and original file in one statement; deleting either a
 document or its file in any other way (SQL, a later cascade) takes the other along: a trigger and a
 cascade (`TestFileDeletedWithDocument`). A file left without a document by a server that died
-mid-ingest is deleted at the next `serve` start once it is an hour old (`TestOrphanFilesSwept`).
+mid-ingest is deleted at the next `serve` start once it is an hour old (`TestOrphanFilesSwept`);
+no live upload is that old (15 minutes to upload + 10 to wait for a slot + 2 to read). A stop
+(SIGTERM) waits 10 s for requests in flight, then cancels them: an ingest still running answers
+503 `stopping` and removes its file, `serve` exits 0 with a warning, and connections still open
+after another 10 s are closed (`TestServeStopCancelsIngest`).
 
 ## Files
 
@@ -412,10 +453,12 @@ Files are stored in `file_chunks` rows of at most 1 MiB (a `CHECK` in the schema
 larger row), written in one transaction from a stream. lib/pq moves `bytea` as hex text, so each
 chunk costs a few times its size in transient memory; chunking bounds **writing** by the chunk,
 not the file. `ReadFile` streams a file to a writer one chunk at a time (one query per chunk, so
-it holds one chunk); `GetFile` reads it into one buffer of the recorded size. Both check the
-recorded size against the 64 MiB cap before reading content and re-verify the size, the chunk
-count and SHA-256 at the end (a streaming caller that must not pass on corrupt bytes reads twice,
-as the download route does). The SHA-256 detects **storage corruption, not tampering**: anyone who can write the rows
+it holds two chunks: the last is written only after verification); `GetFile` reads it into one
+buffer of the recorded size. Both check the recorded size against the 64 MiB cap before reading
+content and verify the size, the chunk count and SHA-256 before the last chunk is written, so a
+writer never receives a whole file that fails the check (`TestReadFileWithholdsUnverifiedTail`;
+the download route also verifies once before sending headers, so a corrupt file is an error
+status, not a short body). The SHA-256 detects **storage corruption, not tampering**: anyone who can write the rows
 can rewrite the hash too.
 
 An upload holds one pooled connection, inside its transaction, for as long as its reader takes.
@@ -425,7 +468,8 @@ store ends a stalled upload: its slot and connection are freed when its reader r
 rolls the transaction back, leaving nothing behind). Bounding a stalled client is the caller's job;
 the upload route's read deadline does it (§ Documents). At most 4 reads (`MaxConcurrentReads`,
 `GetFile` or `ReadFile`) run at once; a read over the cap waits for a slot or its context
-(`TestConcurrentReadsBounded`). So whole-file reads (ingest's) stay near 512 MiB, and streamed
+(`TestConcurrentReadsBounded`, which also pins that a read holds its slot while its writer
+blocks). So whole-file reads (ingest's) stay near 512 MiB, and streamed
 reads (downloads) hold one chunk each, a stalled client no longer than one transfer window
 (`TestDownloadBounded`).
 
@@ -449,6 +493,20 @@ and RSS): writing 256 → 67 MiB, reading 128 → 126 MiB at the default `GOGC=1
 peaks near 128 MiB at the default `GOGC`. The difference is garbage the collector has not yet
 reclaimed, so a small machine should set `GOMEMLIMIT` (for example `GOMEMLIMIT=512MiB` on a
 4 GB Pi) to make the runtime collect it sooner.
+
+**Memory of one ingest, end to end** (r2: the server, not the capped child, used to take 0.8 GB
+for one 431 KB PDF of 63 MiB escape-heavy text: an unbounded buffer of the child's JSON and an
+array literal of every chunk body). Measured with `go test -run '^TestIngestMemoryBounded$' -v
+./internal/docs` (the server's live heap, sampled every millisecond) while sampling every Postgres
+process with `ps -o rss= -C postgres` every 50 ms: ingesting 15 MiB of escape-heavy text, the worst
+case for copies, raised the server's live heap by **49 MiB as a PDF** (through the child) and
+**52 MiB as an uploaded text file**; the test process peaked at 105 MiB RSS, the largest Postgres
+backend at **127 MiB**, and the child at about **60 MiB** (`TestChildNearTextCap`). The test fails
+above 5× the text cap (80 MiB). Chunks go to Postgres by `COPY`, a row at a time. Add the file
+itself, which the reader is handed whole (up to 64 MiB, about 128 MiB peak at the default `GOGC`,
+as above). So two ingests at once (`ingestSlots`) of successful files at the text cap take about
+2 × (52 + 127 + 60) ≈ 0.5 GB above an idle server, plus up to 2 × 64 MiB of file; the worst case
+is two hostile files whose children die at their 1 GiB cap: about 2 GiB of children plus that.
 
 ## Test it
 
@@ -506,9 +564,9 @@ Named tests (PLAN.md PR 3, slice 3a; DB tests need Postgres): the carried vector
 `TestCitationEnsembleMajorityUnsupported`, `TestCitationFabricatedQuoteUnverified`,
 `TestCitationJudgeFailureIsAnError` (changed: an error, not "unverified"),
 `TestCitationWindowLocatesRegion` (without its page variant); the two cell/tally vectors go with
-the diligence table, PR 5), the reader part of `ooxml_test` (`TestEscapeUnescapeRoundTrip`,
-`TestRoundTripPreservesPartsAndOrder`, `TestOpenRejectsNonDocx`,
-`TestTextJoinsRunsAndSeparatesParagraphs`), v1 `protocols` (`TestVerbatimContains`,
+the diligence table, PR 5), the reader part of `ooxml_test` (`TestOpenRejectsNonDocx`,
+`TestTextJoinsRunsAndSeparatesParagraphs`; `TestEscapeUnescapeRoundTrip` and
+`TestRoundTripPreservesPartsAndOrder` move to PR 3d with the writer code they test), v1 `protocols` (`TestVerbatimContains`,
 `TestNormalizeSourceKey`, `TestResolvesByTitle`) and v1 `services` (`TestExtractPlainText`,
 `TestExtractDOCX`); `TestScannedPDFFlaggedNoText`, `TestOutlineHasNumbersTitlesTokens`,
 `TestSectionPaginates`, `TestRetrieveNeverLeavesMatter`, `TestSearchRareTermOutranksCommon`,
@@ -526,14 +584,22 @@ added `TestChildBoundsItself`, `TestChildDiesWithParent`, `TestForgottenMaybeRun
 `TestCitationJudgeFailureIsAnError` (a failed vote), `TestExtractPDFTextLayer` (12 blank pages),
 `TestDownloadNameSafe`, `TestFilesEdgeCases` (emoji names), `TestOutlineHasNumbersTitlesTokens`
 and `TestSectionPaginates` (out-of-range ids and offsets) and `TestServeEndToEnd` (the orphan
-sweep at startup). One carried vector changed: `TestTextJoinsRunsAndSeparatesParagraphs` now
-expects a tab for `<w:tab/>`, which v1 dropped.
+sweep at startup). Review round 2 added `TestReadChildBounded`, `TestChildNearTextCap`,
+`TestChildRunsTheRunningImage`, `TestIngestMemoryBounded`, `TestSearchCost`,
+`TestReadFileWithholdsUnverifiedTail`, `TestDownloadDeadlinePerWindow`,
+`TestIngestSlotWaitBounded` and, in `cmd/biglaw`, `TestServeStopCancelsIngest`; extended
+`TestSectionTreeBounded` (table shapes, every chunk column, the exact cap and its note),
+`TestConcurrentReadsBounded` (a slot held while the writer blocks), `TestHostilePDFContained`
+(the text cap on uploads), `TestOpenRefusesZipBomb` (only text parts are read) and
+`TestTextFidelity` (`noBreakHyphen`, `sym`). Two carried vectors changed:
+`TestTextJoinsRunsAndSeparatesParagraphs` expects a tab for `<w:tab/>`, which v1 dropped, and
+`TestTableRowChunking` expects rows grouped into one chunk, not one chunk per row.
 
 ## Budgets (`scripts/loc.py`, run in CI)
 
 | Budget | Ceiling | Today |
 |---|---:|---:|
-| Go production lines (physical lines, non-`_test.go`, test-support packages included) | 14,500 | 3,736 |
+| Go production lines (physical lines, non-`_test.go`, test-support packages included) | 15,000 | 3,878 |
 | Packages under `internal/`, test-support packages excluded | 12 | 4 (`docs`, `docs/ooxml`, `model`, `store`; `store/storetest` is test support) |
 | Direct Go dependencies | 3 | 2 (`github.com/lib/pq`, `github.com/ledongthuc/pdf`) |
 | Runtime environment variables | 20 | 20 |
@@ -541,7 +607,7 @@ expects a tab for `<w:tab/>`, which v1 dropped.
 | Packages without a `_test.go` | 0 | 0 |
 | Lines in any one source file (`.go`, `.py`, `.sql`, `.sh`, `.js`, `.ts`, `.css`; tests included) | 2,000 | 626 |
 
-The line ceiling is 14,500 (owner decisions: 14,000, then 14,250, then 14,500 during PR 2's review). A **test-support package** is one
+The line ceiling is 15,000 (owner decisions: 14,000, then 14,250, then 14,500 during PR 2's review, then 15,000 at PR 3a's, with pgvector). A **test-support package** is one
 whose directory name ends in `test` and that no production file outside it imports, such as
 `storetest`. Under the coordinator's ruling it is left out of the package count, but its lines
 count toward the line ceiling like any other non-`_test.go` file. A `*test` package that
@@ -586,13 +652,14 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
   held only while the client keeps up the read floor, but the floor is low: 16 clients each
   sending 64 KiB per 30 s (about 35 KiB/s in all) can hold every upload slot for the full 15
   minutes. Uploads are buffered per extraction: two at a time (`ingestSlots`), each holding the
-  file (≤ 64 MiB) plus a `.docx`'s decompressed parts (≤ 128 MiB). Downloads use the same floor
+  file (≤ 64 MiB) plus a `.docx`'s decompressed text parts (≤ 128 MiB) in the child, and about
+  52 MiB of server heap at the 16 MiB text cap (§ Files, memory of one ingest). Downloads use the same floor
   (64 KiB per 30 s, 15 minutes in all), so 4 clients reading just above it can hold all 4 read
   slots for 15 minutes, and ingest (which reads the stored file back) waits for them meanwhile.
   A stored file with no document is swept only at startup and only after an hour; a later PR that
   stores files of its own must teach `SweepOrphanFiles` about them.
 - **Documents (PR 3a):**
-  - Images and scanned PDFs are refused or stored as `noText` until PR 3b's vision transcription;
+  - Images and scanned PDFs are refused or stored as `noText` until PR 3c's vision transcription;
     there is no OCR. A text-layer PDF whose layer is wrong (a scan with an invisible, bad OCR
     layer) is taken as is. Text that the PDF reader puts in an odd order (columns, tables) stays
     in that order.
@@ -606,29 +673,36 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     2 minutes stop ingestion; there is no quota or rate limit before PR 8).
   - The child's hard memory cap is Linux-only (`RLIMIT_DATA`; elsewhere only a 512 MiB
     `SetMemoryLimit` target, which the runtime can exceed) and is off in race-detector builds (whose
-    shadow memory counts against it; `make ci` re-runs the child tests without `-race`). The
+    shadow memory counts against it; `make ci` re-runs the child tests without `-race`). Outside
+    Linux the child is the binary at the server's path, not `/proc/self/exe`, so replacing the
+    binary while serving changes the reader there. The
     parent-death signal is tied to the server thread that started the child: Go rarely ends a
     thread, but if it did the child would be killed and the upload reported unreadable. The
     250 ms parent-pid check covers every platform.
-  - Extracted text has no size quota beyond 64 MiB: a 228 KB PDF can store 64 MB of text and
-    about as much again in chunks.
+  - A document's text is capped at 16 MiB (more is 422, split the document), but there is no
+    per-matter quota: a 144 KB PDF can store 15 MiB of text and about as much again in chunks.
   - `.docx`: footnote and endnote references are not marked in the body (the notes follow it, by
     id), so a quote spanning a reference's superscript number reads without it; text boxes keep
     their `mc:Choice` copy only; a run whose formatting history (`<w:rPrChange>`) was hidden is
-    treated as hidden; text in headers, footers and comments is not read.
+    treated as hidden; text in headers, footers and comments is not read; a document whose `w:`
+    namespace is not declared reads as having no text (Word always declares it); Symbol-font
+    `<w:sym/>` codes (private use) are dropped, not mapped to Unicode.
+  - Table hits return a chunk of several rows (≥ 1,024 bytes), not one row: per-row chunks would
+    need the column list stored once per table to stay linear.
   - Citations carry **no page number**: v1's ladder could use a cited page to pick the judge's
     window (`TestCitationWindowLocatesRegion`'s form-feed variant, dropped); v2 locates the window
     by the quote's words, and a PDF cite has no pinpoint page.
   - Section ids are positions in the section tree (`s0`, `s1`, …) of the text as ingested; a
     change to the heading rules does not renumber stored documents, which keep the ids they were
     ingested with. Re-ingest to pick up new rules.
-  - **Gate E4 is not met** by answer-free questions (0.882 < 0.95; § Documents). Search ranking is
-    lexical: a question that shares no word with the passage is not found (`REG-05`'s fee-table
-    row by its title; most question misses ask about a date or figure the passage states in
-    other words). Each query scans the scope's chunks once per term, so a very large scope makes
-    every query slower (measured: 20 MiB of documents, a 2-term query about 0.28 s, a 180-term
-    query about 0.56 s); nothing caps a scope's size. Quoted phrases and `-exclusion` are not
-    supported (their words are searched).
+  - **Gate E4 is not met** by answer-free questions (0.882 < 0.95; § Documents); pgvector hybrid
+    search comes in PR 3b. Search ranking here is lexical: a question that shares no word with
+    the passage is not found (`REG-05`'s fee-table row by its title; most question misses ask
+    about a date or figure the passage states in other words). Each query scans the scope's
+    chunks once per term (at most 32), so a very large scope makes every query slower
+    (`TestSearchCost` prints the figures; 32 terms on 4 MiB took about 0.5 s here) up to the 10 s
+    timeout, which then refuses it; nothing caps a scope's size. Quoted phrases and `-exclusion`
+    are not supported (their words are searched).
   - Heading heuristics are guesses: `999 Main Street` or `10 May 2026 the parties met` at a line
     start (a wrapped PDF line) is still a decimal heading, and a sub-clause whose title starts in
     lower case (`1.1 the Supplier shall`) is now body text of its parent.
@@ -636,14 +710,16 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     data, since a document can contain text addressed to the judge (`.docx` text hidden by
     formatting, not by `<w:vanish/>`, reaches it too).
   - The tolerant rung folds case, so `ACME` verifies against `Acme` (at 0.95).
-  - **Line budget:** `internal/docs` measures 1,562 lines (1,304 plus `http.go` 258) against the
+  - **Line budget:** `internal/docs` measures 1,717 lines (1,455 plus `http.go` 262) against the
     1,110 DESIGN plans for what 3a builds plus api's `documents` 200 (moved here, covering the
-    routes PR 4b still adds), `docs/ooxml` 205 against its reader's 120, `store` 636 against 580
-    and `cmd` 515 against 505. With the 4a adapters and the remaining documents routes counted,
-    the plan totals 14,708–14,738, **over the 14,500 ceiling by 208–238** (DESIGN § PR 3a as
-    built); the coordinator decides the trims. `scripts/loc.py`'s actual count is far below it.
+    routes PR 4b still adds), `docs/ooxml` 174 against its reader's 120, `store` 641 against 580
+    and `cmd` 528 against 505. With the 4a adapters and the remaining documents routes counted,
+    the plan totals 14,850–14,880, under the 15,000 ceiling by 120–150; with PR 3b's pgvector
+    estimate (270–405 lines, DESIGN § PR 3b pgvector estimate) it is 15,120–15,285, **over by
+    120–285** until trimmed; the coordinator and owner decide the trims. `scripts/loc.py`'s
+    actual count is far below it.
   - Migration `0002_docs.sql` changed during this PR's review (the delete trigger, the dropped GIN
-    indexes, prose search text stored once): a dev database that applied an earlier version
+    indexes, prose search text stored once; round 2 changed no SQL): a dev database that applied an earlier version
     refuses to start (checksum drift); recreate it.
   - `ledongthuc/pdf` is a small, lightly maintained library pinned at a 2025 pseudo-version; it
     is the second of the three allowed dependencies.
@@ -706,4 +782,5 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     measures 505 against PR 1's 477 (+28). The owner raised the ceiling to 14,500 and DESIGN
     records the move: measured the review's way (PR 1 as built, 1,161, plus PR 2's growth over
     plan, the remaining packages at their DESIGN budgets, cmd's import-v1 reservation intact), the
-    plan totals 14,245 of 14,500, 255 lines of headroom.
+    plan totals 14,245 of 14,500, 255 lines of headroom (superseded: PR 3a's figures and the
+    15,000 ceiling are under § Documents above).

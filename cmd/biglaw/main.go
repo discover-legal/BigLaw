@@ -141,13 +141,20 @@ func run(ctx context.Context, args []string, getenv func(string) string, environ
 
 type pinger interface{ Ping(context.Context) error }
 
+// shutdownGrace is how long a stop waits for requests in flight before cancelling them (an ingest
+// then removes its file and answers 503), and again for them to end before closing connections.
+var shutdownGrace = 10 * time.Second
+
 // serve serves HTTP on ln until ctx ends, then shuts down gracefully.
 func serve(ctx context.Context, st *store.Store, ln net.Listener, log *slog.Logger) error {
 	d := docs.New(st)
 	if n, err := d.SweepOrphanFiles(ctx); err != nil || n > 0 {
 		log.Warn("orphan files (uploads interrupted by a crash) swept", "files", n, "err", err)
 	}
+	base, stopRequests := context.WithCancelCause(context.Background())
+	defer stopRequests(nil)
 	srv := &http.Server{
+		BaseContext:       func(net.Listener) context.Context { return base },
 		Handler:           routes(st, d, log),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
@@ -162,10 +169,16 @@ func serve(ctx context.Context, st *store.Store, ln net.Listener, log *slog.Logg
 		return err
 	case <-ctx.Done():
 	}
-	shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	shutCtx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
 	defer cancel()
-	if err := srv.Shutdown(shutCtx); err != nil {
-		return err
+	if err := srv.Shutdown(shutCtx); err != nil { // r2 N6: cancel what still runs, wait again, then close
+		stopRequests(docs.ErrStopping)
+		log.Warn("stopping: requests still running after the grace period were cancelled", "grace", shutdownGrace)
+		again, cancel := context.WithTimeout(context.Background(), shutdownGrace)
+		defer cancel()
+		if srv.Shutdown(again) != nil {
+			srv.Close()
+		}
 	}
 	if err := <-errc; !errors.Is(err, http.ErrServerClosed) {
 		return err
