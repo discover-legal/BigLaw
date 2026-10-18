@@ -7,7 +7,8 @@ change. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`, not here.
 ## Built so far
 - `cmd/biglaw` — `serve [--allow-no-auth]`, `version [--config]`; `config.go` holds the complete
   env-var table (18 vars, each tagged with the PR that first reads it; `BIGLAW_MODELS` is the role
-  map `role=id,…`, ids refused if they hold `://`, `user:pw@`, white space, controls or `? = &`)
+  map `role=id,…`, ids refused if they hold `://`, `user:pw@`, white space, control or invisible
+  characters or `? = &`, are over 200 bytes or look like a key)
   and the vendor breakers. `serve` gives `docs` the embedder when an `embed` role is set and runs
   the embedding backfill at startup.
 - `internal/store` — `Open` (check DSN, connect, migrate), `CheckDSN`, `InTx`, `DB`, files (chunked
@@ -25,16 +26,19 @@ change. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`, not here.
   task's document ids). Bounds to keep: document text ≤ 16 MiB (`maxText`), table chunks grouped
   (no per-row copy of the header), ≤ 32 query terms and a 10 s search timeout, chunks inserted by
   `COPY`. PR 3b (`embed.go`): `UseEmbedder` turns on hybrid search (RRF of the lexical ranking and
-  an exact cosine ranking of the scope's embedded chunks; no ANN index, it breaks scoped recall),
+  an exact cosine ranking of the scope's embedded chunks; a lexical-only document's chunk counts
+  its lexical rank twice; no ANN index, it breaks scoped recall; the query is embedded only after the
+  word check and only when the scope has vectors),
   chunks embedded 64 per call at ingest outside the ingest slot (a failure leaves the document
   lexical only with `EmbedNote`, never fails the ingest), `Backfill`; a document is in the vector
-  leg only when `embed_model` (set after all its chunks) is the current model. `internal/docs/ooxml` — `.docx` reader (text parts only, linear XML pass).
+  leg only when `embed_model` (cleared first, set after all its chunks at one length) is the current model. `internal/docs/ooxml` — `.docx` reader (text parts only, linear XML pass).
 - `internal/store/storetest` — `storetest.DSN(t)` gives a test its own schema, creates the
   `vector` extension once per database and puts its schema on the test's `search_path`.
 - `internal/model` — `Client` (OpenAI-compatible chat + tool calls + image parts, typed errors,
   ≤ 3 attempts; a refused-but-billed 200 carries `Usage` on `*model.Error`), `HTTPStatus` (the one
   failure→status mapping), `Roles` (the one role accessor: lead/specialist/critic fall back to the
-  lead, vision/embed never), `Embed` (`embed.go`: `/embeddings`, ≤ 256 inputs, priced like chat), `Prices`/`LoadPrices`/`ParsePrices`
+  lead, vision/embed never), `Embed` (`embed.go`: `/embeddings`, ≤ 256 inputs, vectors of one length with a sane norm,
+  priced like chat, no usage = unknown cost), `Prices`/`LoadPrices`/`ParsePrices`
   (embedded `prices.json` + `BIGLAW_PRICES`, one parser; every call priced from the table whatever
   the host, no row = unknown cost, never $0; `BIGLAW_LOCAL_WATTS` only adds watt-hours),
   `Fake` (scripts keyed by agent name; unscripted or exhausted is an error; `Fake.Vectors` answers
@@ -92,7 +96,7 @@ not yet judged (self-test tape).
 make ci     # gofmt, vet, mod verify/tidy, static build, go test -race -shuffle, loc.py + tests, compose config -q
 make lint vuln   # staticcheck, govulncheck (CI lint job)
 # DB tests: BIGLAW_TEST_DSN=postgres://…?sslmode=disable BIGLAW_REQUIRE_DB=1 (Postgres with pgvector)
-make e4-record EMBED_MODEL=… EMBED_DIMENSIONS=512   # owner-run: record the E4 tape (make e4-live: no tape)
+make e4-record EMBED_MODEL=…   # owner-run: record the E4 tape at the model's own length (make e4-live: no tape)
 ```
 Budgets: Go prod LOC ≤ 15,500, final (owner decision 10; test-support packages such as `storetest` count), internal
 packages ≤ 12 (test-support packages do not count), direct deps ≤ 3, env vars ≤ 20 (18 used), UI runtime

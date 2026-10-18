@@ -101,7 +101,7 @@ func (f *Fake) EmbedCalls() []EmbedRequest {
 	return append([]EmbedRequest(nil), f.embeds...)
 }
 
-// Embed answers from f.Vectors, checking the request as Client does. Usage is zero (unpriced).
+// Embed answers from f.Vectors, checking the request and vectors as Client does; no usage.
 func (f *Fake) Embed(ctx context.Context, req EmbedRequest) (*Embeddings, error) {
 	if err := req.check(); err != nil {
 		return nil, err
@@ -122,6 +122,9 @@ func (f *Fake) Embed(ctx context.Context, req EmbedRequest) (*Embeddings, error)
 			return nil, err
 		}
 		e.Vectors = append(e.Vectors, v)
+	}
+	if !usable(e.Vectors) {
+		return nil, fail(ErrUnavailable, "the scripted vectors are not of one length with a norm of 1e-6 to 1e6")
 	}
 	return e, nil
 }

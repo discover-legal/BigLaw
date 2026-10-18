@@ -106,9 +106,6 @@ func run(ctx context.Context, args []string, getenv func(string) string, environ
 				log.Info("model pricing", "role", role, "model", id, "price", price)
 			}
 		}
-		if cfg.Roles.Embed == "" {
-			log.Info("search is lexical only: BIGLAW_MODELS has no embed role (README § Search)")
-		}
 		if cfg.AllowAnthropic || cfg.AllowAWS {
 			log.Warn("vendor breaker disarmed", "ALLOW_ANTHROPIC", cfg.AllowAnthropic, "ALLOW_AWS", cfg.AllowAWS)
 		}
@@ -157,8 +154,7 @@ type pinger interface{ Ping(context.Context) error }
 // then removes its file and answers 503), and again for them to end before closing connections.
 var shutdownGrace = 10 * time.Second
 
-// serve serves HTTP on ln until ctx ends, then shuts down gracefully. With hybrid search it first
-// starts the embedding backfill, which stops with the server.
+// serve serves HTTP on ln, and runs the embedding backfill, until ctx ends; then it shuts down gracefully.
 func serve(ctx context.Context, st *store.Store, d *docs.Service, ln net.Listener, log *slog.Logger) error {
 	if n, err := d.SweepOrphanFiles(ctx); err != nil || n > 0 {
 		log.Warn("orphan files (uploads interrupted by a crash) swept", "files", n, "err", err)
@@ -168,8 +164,10 @@ func serve(ctx context.Context, st *store.Store, d *docs.Service, ln net.Listene
 	defer func() { stopBackfill(); <-backfilled }()
 	go func() {
 		defer close(backfilled)
-		if n, err := d.Backfill(backfill); err != nil || n > 0 {
-			log.Info("embedding backfill", "documents", n, "err", err) // model errors are fixed text
+		if n, failed, err := d.Backfill(backfill); err != nil || failed > 0 { // model errors are fixed text
+			log.Warn("embedding backfill: some documents stay lexical only (EmbedNote)", "embedded", n, "failed", failed, "err", err)
+		} else if n > 0 {
+			log.Info("embedding backfill", "embedded", n)
 		}
 	}()
 	base, stopRequests := context.WithCancelCause(context.Background())
@@ -217,7 +215,7 @@ func routes(db pinger, d *docs.Service, log *slog.Logger) http.Handler {
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 		defer cancel()
-		status, code, search := "ok", http.StatusOK, "lexical" // lexical only: no embed role (README § Search)
+		status, code, search := "ok", http.StatusOK, "lexical" // lexical only: no embed role (README § Documents)
 		if d != nil && d.Hybrid() {
 			search = "hybrid"
 		}

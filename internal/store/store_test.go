@@ -172,8 +172,9 @@ func TestOpenErrorHidesPassword(t *testing.T) {
 // TestOpenNeedsVector (PR 3b): Open creates the pgvector extension once per database, outside the
 // numbered migrations. A role that may not create it, in a database that lacks it, gets a clear
 // error naming the fix and never the password; the same role opens a database where the
-// extension already exists (IF NOT EXISTS needs no privilege). It creates a role and two databases
-// with the test DSN's (superuser) rights and drops them afterwards.
+// extension already exists (IF NOT EXISTS needs no privilege); and 8 servers starting at once on a
+// fresh database all start (the advisory lock: without it two CREATE EXTENSIONs collide, r1 L-4).
+// It creates a role and three databases with the test DSN's (superuser) rights and drops them.
 func TestOpenNeedsVector(t *testing.T) {
 	base := strings.TrimSpace(os.Getenv("BIGLAW_TEST_DSN"))
 	if base == "" {
@@ -190,16 +191,17 @@ func TestOpenNeedsVector(t *testing.T) {
 		t.Skipf("needs a superuser BIGLAW_TEST_DSN (CI's is): %v", err)
 	}
 	suffix := fmt.Sprintf("%d_%d", os.Getpid(), time.Now().UnixNano()%1e9)
-	role, without, with := "biglaw_noext_"+suffix, "biglaw_noext_a_"+suffix, "biglaw_noext_b_"+suffix
+	role, without, with, fresh := "biglaw_noext_"+suffix, "biglaw_noext_a_"+suffix, "biglaw_noext_b_"+suffix, "biglaw_noext_c_"+suffix
 	const pw = "PWMARK-noext"
 	for _, q := range []string{`CREATE ROLE ` + role + ` LOGIN PASSWORD '` + pw + `'`, `CREATE DATABASE ` + without + ` OWNER ` + role,
-		`CREATE DATABASE ` + with + ` OWNER ` + role} {
+		`CREATE DATABASE ` + with + ` OWNER ` + role, `CREATE DATABASE ` + fresh} {
 		if _, err := admin.Exec(q); err != nil {
 			t.Fatal(err)
 		}
 	}
 	t.Cleanup(func() {
-		for _, q := range []string{`DROP DATABASE IF EXISTS ` + without + ` WITH (FORCE)`, `DROP DATABASE IF EXISTS ` + with + ` WITH (FORCE)`, `DROP ROLE IF EXISTS ` + role} {
+		for _, q := range []string{`DROP DATABASE IF EXISTS ` + without + ` WITH (FORCE)`, `DROP DATABASE IF EXISTS ` + with + ` WITH (FORCE)`,
+			`DROP DATABASE IF EXISTS ` + fresh + ` WITH (FORCE)`, `DROP ROLE IF EXISTS ` + role} {
 			admin.Exec(q)
 		}
 	})
@@ -237,5 +239,20 @@ func TestOpenNeedsVector(t *testing.T) {
 	var dims int
 	if err := st.DB().QueryRow(`SELECT vector_dims('[1,2,3]'::vector)`).Scan(&dims); err != nil || dims != 3 {
 		t.Fatalf("vector type unusable: %d %v", dims, err)
+	}
+	errs := make(chan error, 8)
+	for range 8 {
+		go func() {
+			st, err := Open(t.Context(), dsnFor(fresh, nil), nil)
+			if err == nil {
+				st.Close()
+			}
+			errs <- err
+		}()
+	}
+	for range 8 {
+		if err := <-errs; err != nil {
+			t.Errorf("one of 8 concurrent first starts: %v", err)
+		}
 	}
 }

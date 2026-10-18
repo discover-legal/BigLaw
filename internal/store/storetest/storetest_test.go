@@ -124,12 +124,4 @@ func TestVectorOncePerDatabase(t *testing.T) {
 			t.Fatalf("schema b sees a's table: %d %v", n, err)
 		}
 	})
-	if first == "" {
-		return // skipped
-	}
-	n := 0
-	vectorSchemas.Range(func(any, any) bool { n++; return true })
-	if n != 1 {
-		t.Errorf("the extension check ran for %d databases, want 1 (once, cached)", n)
-	}
 }

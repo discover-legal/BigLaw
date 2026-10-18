@@ -137,9 +137,9 @@ func roles(get func(string) string) (model.Roles, []error) {
 				bad("entry %d is not role=<model id> with a role of lead, specialist, critic, vision or embed", i+1)
 			case dup:
 				bad("the %s role is set twice", r)
-			case id == "" || strings.Contains(id, "://") || userinfoShape.MatchString(id) || strings.ContainsAny(id, "?=&") ||
-				strings.ContainsFunc(id, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }): // ids reach logs raw (PR 2 L-1)
-				bad("the %s id is empty or not a model id (a URL, user:password@host, white space, a control character, or ? = &: value not shown)", r)
+			case id == "" || len(id) > 200 || strings.Contains(id, "://") || userinfoShape.MatchString(id) || keyShape.MatchString(id) || strings.ContainsAny(id, "?=&") ||
+				strings.ContainsFunc(id, func(r rune) bool { return unicode.IsSpace(r) || !unicode.IsGraphic(r) }): // ids reach logs raw (PR 2 L-1)
+				bad("the %s id is empty or not a model id (a URL, user:pw@, a key's shape, over 200 bytes, white space, ? = & or an invisible character: value not shown)", r)
 			default:
 				ids[r] = id
 			}
@@ -301,8 +301,8 @@ func shown(name, val string) string {
 		return "(set, not shown: not an http(s) URL with a plain host and no @)"
 	case userinfoShape.MatchString(val):
 		return "(set, not shown: it looks like user:password@host)"
-	case strings.ContainsFunc(val, unicode.IsControl):
-		return strconv.Quote(val) // a newline must not forge a line of output
+	case strings.ContainsFunc(val, func(r rune) bool { return !unicode.IsPrint(r) }):
+		return strconv.Quote(val) // a newline or a bidi override must not forge or disguise output
 	}
 	return val
 }
@@ -310,6 +310,7 @@ func shown(name, val string) string {
 var (
 	oidcPreset    = regexp.MustCompile(`^(google|microsoft:[A-Za-z0-9.-]+)$`)
 	userinfoShape = regexp.MustCompile(`:[^@]*@`)
+	keyShape      = regexp.MustCompile(`^(sk-|sk_|AKIA|ASIA|AIza|xox[abpr]-|gh[pousr]_)|[A-Za-z0-9]{24}`) // a pasted API key
 	plainHost     = regexp.MustCompile(`^([A-Za-z0-9._-]+|\[[0-9A-Fa-f:.]+\])(:[0-9]+)?$`)
 )
 

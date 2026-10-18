@@ -69,8 +69,8 @@ func TestHybridKeepsScope(t *testing.T) {
 			t.Errorf("scope %v: %v %v", scope, hitIDs(hits), err)
 		}
 	}
-	if n := len(f.EmbedCalls()) - calls; n > 1 { // only the near-miss uuid is well-formed enough to embed for
-		t.Errorf("%d query embeddings for scopes with no valid document", n)
+	if n := len(f.EmbedCalls()) - calls; n != 0 {
+		t.Errorf("%d query embeddings for scopes with no document of the scope", n)
 	}
 	// Without an embedder the same query finds nothing: the hits above came from the vector leg.
 	lex := New(s.st)
@@ -134,7 +134,7 @@ func TestHybridFusion(t *testing.T) {
 func TestEmbedFailureLeavesLexical(t *testing.T) {
 	t.Parallel()
 	var fail atomic.Bool
-	s, _ := hybridService(t, func(text string) ([]float32, error) {
+	s, f := hybridService(t, func(text string) ([]float32, error) {
 		if fail.Load() {
 			return nil, &model.Error{Kind: model.ErrUnavailable, Detail: "HTTP 500"}
 		}
@@ -160,21 +160,27 @@ func TestEmbedFailureLeavesLexical(t *testing.T) {
 	if got, err := cs.Get(t.Context(), []string{cd.ID}, cd.ID); err != nil || !slices.Contains(got.Notes, EmbedNote) {
 		t.Fatalf("cancelled ingest's note not stored: %+v %v", got.Notes, err)
 	}
-	// Found lexically, ranked by the lexical leg alone (1/61), never by its unembedded vectors.
+	// Found lexically, ranked by its lexical rank counted twice (2/61: no penalty for the missing
+	// vector), never by its unembedded vectors.
 	ok := ingestText(t, s, "ok.txt", "Zebra herds graze.")
 	hits, err := s.Search(t.Context(), []string{d.ID, ok.ID}, "supplier warrants", 8, 0)
-	if err != nil || len(hits) != 2 || hits[0].DocumentID != d.ID || hits[0].Rank != 1.0/61 {
+	if err != nil || len(hits) != 2 || hits[0].DocumentID != d.ID || hits[0].Rank != 2.0/61 {
 		t.Fatalf("lexical-only document in a hybrid search: %v %v", hits, err)
 	}
-	// The query's own embedding failing is an error, typed for the API (502).
+	// The query's own embedding failing is an error, typed for the API (502), where the scope has
+	// vectors to compare; a scope with none is searched lexically without embedding the query.
 	fail.Store(true)
-	if _, err := s.Search(t.Context(), []string{d.ID}, "supplier", 8, 0); !errors.Is(err, model.ErrUnavailable) || model.HTTPStatus(err) != 502 {
+	if _, err := s.Search(t.Context(), []string{d.ID, ok.ID}, "supplier", 8, 0); !errors.Is(err, model.ErrUnavailable) || model.HTTPStatus(err) != 502 {
 		t.Fatalf("failed query embedding: %v", err)
+	}
+	calls := len(f.EmbedCalls())
+	if hits, err := s.Search(t.Context(), []string{d.ID}, "supplier", 8, 0); err != nil || len(hits) != 1 || len(f.EmbedCalls()) != calls {
+		t.Fatalf("a lexical-only scope during an embed outage: %v %v, %d calls", hitIDs(hits), err, len(f.EmbedCalls())-calls)
 	}
 	// The backfill embeds it later and removes the note.
 	fail.Store(false)
-	if n, err := s.Backfill(t.Context()); err != nil || n != 1 {
-		t.Fatalf("backfill: %d, %v", n, err)
+	if n, failed, err := s.Backfill(t.Context()); err != nil || n != 1 || failed != 0 {
+		t.Fatalf("backfill: %d, %d failed, %v", n, failed, err)
 	}
 	if got, _ := s.Get(t.Context(), []string{d.ID}, d.ID); got.EmbedModel != "test-embed" || slices.Contains(got.Notes, EmbedNote) {
 		t.Errorf("after backfill: %q %v", got.EmbedModel, got.Notes)
@@ -183,7 +189,8 @@ func TestEmbedFailureLeavesLexical(t *testing.T) {
 
 // TestBackfillEmbedsOldDocuments: documents stored before the embed role was set, or embedded by
 // another model, are embedded by Backfill one at a time; documents stored after it starts are left
-// to their own ingest; it stops after 3 failures in a row, and a second run has nothing to do.
+// to their own ingest; each failure is counted and noted on its document; it stops after 3
+// failures in a row (not 3 in all), and a second run has nothing to do.
 func TestBackfillEmbedsOldDocuments(t *testing.T) {
 	t.Parallel()
 	s := newService(t) // no embedder: lexical only
@@ -192,8 +199,8 @@ func TestBackfillEmbedsOldDocuments(t *testing.T) {
 		ids = append(ids, ingestText(t, s, fmt.Sprintf("old-%d.txt", i), fmt.Sprintf("Clause %d. Zebra stripes, item %d.", i, i)).ID)
 	}
 	empty := ingestText(t, s, "empty.txt", " \n")
-	if n, err := s.Backfill(t.Context()); n != 0 || err != nil {
-		t.Fatalf("backfill without an embedder: %d %v", n, err)
+	if n, failed, err := s.Backfill(t.Context()); n != 0 || failed != 0 || err != nil {
+		t.Fatalf("backfill without an embedder: %d %d %v", n, failed, err)
 	}
 	if _, err := s.db.Exec(`UPDATE documents SET embed_model = 'old-model' WHERE id = $1`, ids[0]); err != nil {
 		t.Fatal(err)
@@ -207,14 +214,18 @@ func TestBackfillEmbedsOldDocuments(t *testing.T) {
 		return nil, &model.Error{Kind: model.ErrUnavailable, Detail: "HTTP 503"}
 	}
 	s.UseEmbedder(failing, "new-model")
-	if n, err := s.Backfill(t.Context()); n != 0 || err == nil || !strings.Contains(err.Error(), "3 documents in a row") || len(failing.EmbedCalls()) != 3 {
-		t.Fatalf("failing backfill: %d, %v, %d calls", n, err, len(failing.EmbedCalls()))
+	if n, failed, err := s.Backfill(t.Context()); n != 0 || failed != 3 || err == nil || !strings.Contains(err.Error(), "3 documents in a row") || len(failing.EmbedCalls()) != 3 {
+		t.Fatalf("failing backfill: %d, %d failed, %v, %d calls", n, failed, err, len(failing.EmbedCalls()))
+	}
+	var noted int
+	if err := s.db.QueryRow(`SELECT count(*) FROM documents WHERE $1 = ANY(notes)`, EmbedNote).Scan(&noted); err != nil || noted != 3 {
+		t.Errorf("%d failed documents carry EmbedNote, want 3 (%v)", noted, err)
 	}
 	f := model.NewFake(nil)
 	f.Vectors = axes
 	s.UseEmbedder(f, "new-model")
-	if n, err := s.Backfill(t.Context()); n != 4 || err != nil {
-		t.Fatalf("backfill: %d documents, %v; want 4 (ids 0-3: one of another model, three never embedded)", n, err)
+	if n, failed, err := s.Backfill(t.Context()); n != 4 || failed != 0 || err != nil {
+		t.Fatalf("backfill: %d documents, %d failed, %v; want 4 (ids 0-3: one of another model, three never embedded)", n, failed, err)
 	}
 	for i, id := range ids {
 		d, _ := s.Get(t.Context(), []string{id}, id)
@@ -229,8 +240,8 @@ func TestBackfillEmbedsOldDocuments(t *testing.T) {
 	if err := s.db.QueryRow(`SELECT count(*) FROM chunks c JOIN documents d ON d.id = c.document_id WHERE d.embed_model = 'new-model' AND c.embedding IS NULL`).Scan(&missing); err != nil || missing != 0 {
 		t.Errorf("%d chunks of embedded documents have no vector (%v)", missing, err)
 	}
-	if n, err := s.Backfill(t.Context()); n != 0 || err != nil {
-		t.Errorf("second backfill: %d %v", n, err)
+	if n, failed, err := s.Backfill(t.Context()); n != 0 || failed != 0 || err != nil {
+		t.Errorf("second backfill: %d %d %v", n, failed, err)
 	}
 	// A cancelled backfill stops at once.
 	ctx, cancel := context.WithCancel(t.Context())
@@ -239,8 +250,115 @@ func TestBackfillEmbedsOldDocuments(t *testing.T) {
 		t.Fatal(err)
 	}
 	start := time.Now()
-	if n, err := s.Backfill(ctx); n != 0 || err == nil || time.Since(start) > 5*time.Second {
+	if n, _, err := s.Backfill(ctx); n != 0 || err == nil || time.Since(start) > 5*time.Second {
 		t.Errorf("cancelled backfill: %d %v", n, err)
+	}
+	// Failures not in a row never stop it: fail, embed, fail, fail, embed covers all five.
+	s2 := newService(t)
+	for i := range 5 {
+		ingestText(t, s2, fmt.Sprintf("d%d.txt", i), "Zebra stripes.")
+	}
+	var call atomic.Int32
+	flaky := model.NewFake(nil)
+	flaky.Vectors = func(text string) ([]float32, error) {
+		if n := call.Add(1); n == 1 || n == 3 || n == 4 {
+			return nil, &model.Error{Kind: model.ErrUnavailable, Detail: "HTTP 503"}
+		}
+		return axes(text)
+	}
+	s2.UseEmbedder(flaky, "new-model")
+	if n, failed, err := s2.Backfill(t.Context()); n != 2 || failed != 3 || err != nil {
+		t.Errorf("fail, embed, fail, fail, embed: %d embedded, %d failed, %v", n, failed, err)
+	}
+}
+
+// TestReembedNeverMixesModels (r1 M-1, L2): a re-embed under a new model that fails part-way, or
+// whose batches come back at different lengths, leaves the document lexical only (embed_model
+// unset, EmbedNote), so a rollback to the old model re-embeds it completely instead of searching a
+// mix of two models' vectors under the old model's name.
+func TestReembedNeverMixesModels(t *testing.T) {
+	t.Parallel()
+	var b strings.Builder
+	for i := range embedBatch + 10 {
+		fmt.Fprintf(&b, "%d. Clause %d\n\nZebra term %d.\n\n", i+1, i+1, i)
+	}
+	vecA := func(string) ([]float32, error) { return []float32{1, 0}, nil }
+	s, _ := hybridService(t, vecA)
+	s.UseEmbedder(s.embedder, "model-a")
+	d := ingestText(t, s, "long.txt", b.String())
+	if d.EmbedModel != "model-a" || d.Chunks <= embedBatch {
+		t.Fatalf("%d chunks embedded by %q", d.Chunks, d.EmbedModel)
+	}
+	for name, second := range map[string]func(string) ([]float32, error){
+		"fails on its second batch": func(string) ([]float32, error) {
+			return nil, &model.Error{Kind: model.ErrUnavailable, Detail: "HTTP 400"}
+		},
+		"second batch longer": func(string) ([]float32, error) { return []float32{0, 1, 0}, nil },
+	} {
+		var calls atomic.Int32
+		f := model.NewFake(nil)
+		f.Vectors = func(text string) ([]float32, error) {
+			if calls.Add(1) <= embedBatch { // the first batch: model B's vector
+				return []float32{0, 1}, nil
+			}
+			return second(text)
+		}
+		s.UseEmbedder(f, "model-b")
+		if n, failed, err := s.Backfill(t.Context()); n != 0 || failed != 1 || err != nil {
+			t.Fatalf("%s: backfill under B: %d, %d failed, %v", name, n, failed, err)
+		}
+		got, _ := s.Get(t.Context(), []string{d.ID}, d.ID)
+		if got.EmbedModel != "" || got.EmbedTokens != 0 || !slices.Contains(got.Notes, EmbedNote) {
+			t.Errorf("%s: after a failed re-embed: %q, %d tokens, %v", name, got.EmbedModel, got.EmbedTokens, got.Notes)
+		}
+		a := model.NewFake(nil)
+		a.Vectors = vecA
+		s.UseEmbedder(a, "model-a") // the operator rolls back
+		if n, failed, err := s.Backfill(t.Context()); n != 1 || failed != 0 || err != nil {
+			t.Fatalf("%s: backfill under A again: %d, %d failed, %v", name, n, failed, err)
+		}
+		var foreign int
+		if err := s.db.QueryRow(`SELECT count(*) FROM chunks WHERE document_id = $1 AND embedding::text <> '[1,0]'`, d.ID).Scan(&foreign); err != nil || foreign != 0 {
+			t.Errorf("%s: %d chunks searched as model A's hold another vector (%v)", name, foreign, err)
+		}
+	}
+}
+
+// TestLexicalOnlyNotBuried (r1 reproducer M1): in a scope where another document is embedded, a
+// lexical-only document's chunk (embedding failed, or a model change not yet backfilled) is ranked
+// by its lexical rank alone, so the only chunk naming "Zebracorn Holdings" stays first instead of
+// falling out of the top 8 behind embedded chunks that share one common word; embedded documents
+// still gain from the vector leg. A query over MaxTerms words is refused before it is embedded.
+func TestLexicalOnlyNotBuried(t *testing.T) {
+	t.Parallel()
+	s := newService(t) // no embedder: old.txt is stored lexical only
+	old := ingestText(t, s, "old.txt", "Zebracorn Holdings indemnity cap is ten million.")
+	f := model.NewFake(nil)
+	f.Vectors = func(text string) ([]float32, error) { return []float32{1, float32(len(text) % 7)}, nil }
+	s.UseEmbedder(f, "test-embed")
+	var b strings.Builder
+	for i := range 30 {
+		fmt.Fprintf(&b, "%d. Clause %d\n\nThe indemnity under clause %d is limited.\n\n", i+1, i+1, i)
+	}
+	fresh := ingestText(t, s, "new.txt", b.String())
+	if old.EmbedModel != "" || fresh.EmbedModel != "test-embed" {
+		t.Fatalf("setup: %q %q", old.EmbedModel, fresh.EmbedModel)
+	}
+	hits, err := s.Search(t.Context(), []string{old.ID, fresh.ID}, "Zebracorn Holdings indemnity cap", 8, 0)
+	if err != nil || len(hits) != 8 || hits[0].DocumentID != old.ID {
+		t.Fatalf("the lexical-only exact match is not first: %v %v", hitIDs(hits), err)
+	}
+	// An embedded chunk the lexical leg misses entirely is still found by its vector.
+	if hits, err := s.Search(t.Context(), []string{old.ID, fresh.ID}, "absentword", 8, 0); err != nil || len(hits) != 8 || hits[0].DocumentID != fresh.ID {
+		t.Fatalf("vector leg: %v %v", hitIDs(hits), err)
+	}
+	long := ""
+	for i := range MaxTerms + 1 {
+		long += fmt.Sprintf("w%d ", i)
+	}
+	calls := len(f.EmbedCalls())
+	if _, err := s.Search(t.Context(), []string{fresh.ID}, long, 8, 0); !errors.Is(err, ErrBadInput) || len(f.EmbedCalls()) != calls {
+		t.Errorf("33 words: %v after %d query embeddings, want ErrBadInput before any", err, len(f.EmbedCalls())-calls)
 	}
 }
 
@@ -296,6 +414,14 @@ func TestEmbedWaitsBounded(t *testing.T) {
 	d, err := s.IngestText(t.Context(), "hung.txt", "The Supplier shall deliver.")
 	if err != nil || !slices.Contains(d.Notes, EmbedNote) || d.EmbedModel != "" || time.Since(start) > 10*time.Second {
 		t.Fatalf("ingest against a hung endpoint: %v, %+v after %s", err, d, time.Since(start))
+	}
+	// The backfill bounds each document the same way (r1 L-5): it notes the failure and goes on.
+	start = time.Now()
+	if n, failed, err := s.Backfill(t.Context()); n != 0 || failed != 1 || err != nil || time.Since(start) > 10*time.Second {
+		t.Fatalf("backfill against a hung endpoint: %d, %d failed, %v after %s", n, failed, err, time.Since(start))
+	}
+	if _, err := s.db.Exec(`UPDATE documents SET embed_model = 'm' WHERE id = $1`, d.ID); err != nil { // so search embeds the query
+		t.Fatal(err)
 	}
 	start = time.Now()
 	if _, err := s.Search(t.Context(), []string{d.ID}, "supplier", 8, 0); !errors.Is(err, model.ErrTimeout) || model.HTTPStatus(err) != 504 || time.Since(start) > 10*time.Second {

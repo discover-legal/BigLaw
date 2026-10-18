@@ -65,8 +65,7 @@ type Document struct {
 	Notes       []string `json:"notes"`
 	Sections    int      `json:"sections"`
 	Chunks      int      `json:"chunks"`
-	// EmbedModel is the model that embedded every chunk ("": lexical only), with its calls' input
-	// tokens and cost (nil: the model has no price, cost unknown).
+	// EmbedModel embedded every chunk ("": lexical only); EmbedCostUSD nil: unpriced, unknown.
 	EmbedModel   string    `json:"embedModel,omitempty"`
 	EmbedTokens  int64     `json:"embedTokens"`
 	EmbedCostUSD *float64  `json:"embedCostUsd"`

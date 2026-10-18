@@ -211,7 +211,6 @@ func orDiscard(log *slog.Logger) *slog.Logger {
 	return log
 }
 
-// createVector creates the pgvector extension migration 0003 needs. Extensions are database-wide,
-// so this runs outside the per-schema migrations, under a lock (two concurrent CREATE EXTENSION IF
-// NOT EXISTS can collide); one query string is one transaction. An existing one needs no privilege.
+// createVector creates pgvector (migration 0003's type) database-wide, outside the per-schema migrations,
+// under a lock: two concurrent CREATE EXTENSIONs collide (one string = one transaction).
 const createVector = `SELECT pg_advisory_xact_lock(hashtext('biglaw.extension.vector')); CREATE EXTENSION IF NOT EXISTS vector`

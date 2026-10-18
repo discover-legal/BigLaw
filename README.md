@@ -64,9 +64,11 @@ whatever does not parse into a shape known to be safe is not shown.
   A Compose service name with `_` is a plain host. An OIDC preset (`google`,
   `microsoft:<tenant>`) is shown as is.
 - `BIGLAW_MODELS`: shown as set only if every entry parses as `role=<model id>` with a safe id
-  (below); otherwise "(set, not shown …)", so a key pasted into an id never reaches the output.
-- Anything else is shown as set (quoted if it contains a control character, so a newline cannot
-  forge an output line), unless it contains `://` (then treated as a URL) or has the
+  (below); otherwise "(set, not shown …)". A value that does not parse is never shown; a
+  well-formed id is shown and logged as written, so ids shaped like a key are refused (below).
+- Anything else is shown as set (quoted, with escapes, if it holds a control or other
+  non-printing character such as a bidi override or a zero-width space, so it cannot forge or
+  disguise an output line), unless it contains `://` (then treated as a URL) or has the
   `user:password@` shape (then not shown).
 
 | Variable | Default | Meaning | Read from |
@@ -76,7 +78,7 @@ whatever does not parse into a shape known to be safe is not shown.
 | `BIGLAW_PUBLIC_URL` | `http://127.0.0.1:3101` | External base URL (OIDC redirect, cookie `Secure`) | PR 8 |
 | `BIGLAW_MODEL_URL` | — | OpenAI-compatible API base, ending in its version (`http://localhost:11434/v1`); calls go to `<URL>/chat/completions` and `<URL>/embeddings`. http(s), a plain ASCII host with at least one letter or digit, a port up to 65535, no `@` anywhere (no credentials in the URL; write any other `@` as `%40`). Required when the key or a role is set. | PR 1 |
 | `BIGLAW_MODEL_KEY` | — | API key for that URL, sent as `Authorization: Bearer`; no white space or control characters. `serve` warns if it would go over plain `http`. | PR 2 |
-| `BIGLAW_MODELS` | — | Model id per role, as the endpoint names it: comma-separated `role=id`, roles `lead`, `specialist`, `critic`, `vision`, `embed`, each at most once (e.g. `lead=qwen2.5:14b,critic=glm-4.5-air,embed=nomic-embed-text`). Unset `specialist` or `critic` use the lead's; setting either without the lead is refused. `vision` and `embed` have **no** fallback: with no `embed` role search is lexical only (said at startup and on `/health`); `vision` is read from PR 3c (images are refused until then). An unknown role, a repeated one, an empty id, or an id holding `://`, `user:password@`, white space, a control character or `?` `=` `&` is a startup error that does not echo the value. A wrong id fails at its first call with 404 → `model_not_configured`; with no lead, chat calls fail with 503 `model_not_configured`. | PR 3 |
+| `BIGLAW_MODELS` | — | Model id per role, as the endpoint names it: comma-separated `role=id`, roles `lead`, `specialist`, `critic`, `vision`, `embed`, each at most once (e.g. `lead=qwen2.5:14b,critic=glm-4.5-air,embed=nomic-embed-text`). Unset `specialist` or `critic` use the lead's; setting either without the lead is refused. `vision` and `embed` have **no** fallback: with no `embed` role search is lexical only (`/health` says `"search":"lexical"`); `vision` is read from PR 3c (images are refused until then). An unknown role, a repeated one, an empty id, an id over 200 bytes, or an id holding `://`, `user:password@`, white space, a control or invisible (format) character, `?` `=` `&`, or a key's shape (`sk-`, `sk_`, `AKIA`, `ASIA`, `AIza`, `xox?-`, `gh?_` prefixes, or 24 letters and digits in a row) is a startup error that does not echo the value. A wrong id fails at its first call with 404 → `model_not_configured`; with no lead, chat calls fail with 503 `model_not_configured`. | PR 3 |
 | `BIGLAW_BUDGET_CALLS` | `150` | Model calls per task | PR 4 |
 | `BIGLAW_BUDGET_USD` | `5` | Dollar cap per task | PR 4 |
 | `BIGLAW_LOCAL_WATTS` | — | Power draw of the machine running the model; when set (above 0) every call records watts × duration as watt-hours, for reporting only (never a price). A number from 0 to 100000 | PR 2 |
@@ -155,8 +157,10 @@ caller is tested against `model.Fake` or an `httptest` server.
   is one of "connection refused", "DNS lookup failed", a timeout, or "the connection failed or the
   answer is not valid HTTP" (Go's own error text can quote the bytes a server sent).
   Role ids (`BIGLAW_MODELS`) reach the logs as written, so startup refuses an id that holds `://`,
-  `user:password@`, white space, a control character, or `?`, `=` or `&` (a query string such as
-  `gw.example.com/v1?key=…` could carry a key), and never echoes it (`TestRoleIDRefusesQueryCharacters`);
+  `user:password@`, white space, a control or invisible character (a bidi override could disguise a
+  log line), `?`, `=` or `&` (a query string such as `gw.example.com/v1?key=…` could carry a key),
+  or has a key's shape (vendor prefixes, 24 letters and digits in a row; a heuristic: a key in
+  another shape is shown), and never echoes it (`TestRoleIDRefusesQueryCharacters`);
   so `name:tag@quant` is refused too, while LM Studio's `name@quant`, Ollama's `name:tag`,
   OpenRouter's `vendor/model` and Bedrock-style `us.anthropic.…-v1:0` are fine.
 - **Retries.** At most 3 attempts per call, only after 429, 500, 502, 503, 504 or 529. The wait
@@ -191,16 +195,20 @@ caller is tested against `model.Fake` or an `httptest` server.
   family). `serve` logs each role's price once at startup (`model pricing role=lead model=…
   price="$3 in / $15 out per 1M tokens"`, or `price="unpriced: …"`).
 - **Embeddings.** `Embed` sends up to 256 non-blank UTF-8 texts (each at most 16 KiB) in one
-  OpenAI-compatible `POST <URL>/embeddings` (`"encoding_format": "float"`, and `dimensions` only
-  when the caller asks for it) on the `embed` role's model, with the same retries, redirect rule
-  and fixed-text typed failures as a chat call. It returns one vector per input in input order
-  (the answer's `index` decides, not its order). An answer without exactly one non-zero vector of
-  one length per input (or of the asked dimension) is `ErrUnavailable`; no vectors is
-  `ErrNoContent`; either way a billed answer keeps its usage on the error. **It is priced like
-  every call**: `prompt_tokens` at the model's input rate from the same table
-  (`text-embedding-3-small` $0.02 per million tokens; `nomic-embed-text` has no row, so its cost
-  is unknown, not $0, unless `BIGLAW_PRICES` sets it), with watt-hours when `BIGLAW_LOCAL_WATTS`
-  is set (`TestEmbeddingsPriced`, `TestEmbedTypedErrors`). No `embed` role is 503
+  OpenAI-compatible `POST <URL>/embeddings` (`"encoding_format": "float"`, never `dimensions`:
+  vectors come at the model's own length) on the `embed` role's model, with the same retries,
+  redirect rule and fixed-text typed failures as a chat call. It returns one vector per input in
+  input order (the answer's `index` decides, not its order). An answer without exactly one vector
+  per input, all of one length (at most 16,000, pgvector's limit) with a norm between 1e-6 and 1e6
+  (zero, subnormal or huge values make pgvector's distances NaN), is `ErrUnavailable`; no vectors
+  is `ErrNoContent`; either way a billed answer keeps its usage on the error. `model.Fake` applies
+  the same vector checks. **It is priced like every call**: `prompt_tokens` (capped at the
+  request's size in bytes, since a token is at least a byte) at the model's input rate from the
+  same table (`text-embedding-3-small` $0.02, `-3-large` $0.13, `-ada-002` $0.10 per million
+  tokens; there is no `text-embedding*` wildcard, so another vendor's model of that name is
+  unpriced; `nomic-embed-text` has no row, so its cost is unknown, not $0, unless `BIGLAW_PRICES`
+  sets it). An answer with no `usage` has an unknown cost (nil), never $0. Watt-hours are added
+  when `BIGLAW_LOCAL_WATTS` is set (`TestEmbeddingsPriced`, `TestEmbedTypedErrors`). No `embed` role is 503
   `model_not_configured`.
 - **Watt-hours.** With `BIGLAW_LOCAL_WATTS` set, every call (successful or billed-but-refused)
   records `BIGLAW_LOCAL_WATTS` × its duration (all attempts) as watt-hours, beside its price. They
@@ -399,7 +407,7 @@ chunks (by document) and matches each term against them once, so a query costs t
 proportion to the scope's size times its terms; there is no GIN index, because this ranking
 query cannot use one (`EXPLAIN` showed none used, so it would only cost writes). The bound: at
 most **32 distinct words** per query (more is 400 `bad_request`) and a **10 s** statement timeout
-(then 400, "use fewer or rarer words"). `TestSearchCost` prints the cost on this machine: on a
+(then 400, "search fewer documents, or use fewer or rarer words"). `TestSearchCost` prints the cost on this machine: on a
 4 MiB scope of 12,425 chunks, 2 common words took 135 ms, 32 absent words 128 ms, and 32 words of
 which 6 are common 492 ms (the round-1 query: 193 ms, 444 ms and 867 ms on the same data). Every word of the query is a separate term (OR, not AND; quotes, `-` and other
 operators are plain text, so a quoted phrase is its words), scored as `ts_rank_cd` of that term (saturated) times its rarity in the scope
@@ -413,30 +421,54 @@ documents cannot reorder this one's results (`TestSearchRarityIsScoped`). Querie
 
 **Hybrid search (PR 3b; owner decision 9).** With an `embed` role in `BIGLAW_MODELS`, every
 chunk is embedded at ingest (its section path and search text, at most 4,096 characters, 64 chunks
-per call, after the ingest slot is released) and so is every query. The lexical ranking above is
-fused with the scope's embedded chunks ranked **exactly** by cosine distance to the query's vector:
-reciprocal-rank fusion, `1/(60 + lexical rank) + 1/(60 + vector rank)`, each leg's ties by chunk
-id, so `Rank` is the fused score and results are deterministic (`TestHybridFusion`). Every
+per call, after the ingest slot is released) and so is every query whose scope holds an embedded
+document (the word limit is checked first, so a refused query is never embedded or billed; a scope
+with nothing embedded is searched lexically without an embeddings call, so it keeps working during
+an embedding outage). The lexical ranking above is fused with the scope's embedded chunks ranked
+**exactly** by cosine distance to the query's vector: reciprocal-rank fusion,
+`1/(60 + lexical rank) + 1/(60 + vector rank)`, each leg's ties by chunk id, so `Rank` is the fused
+score and results are deterministic (`TestHybridFusion`). **A chunk of a lexical-only document**
+(its embedding failed, or the model changed and the backfill has not reached it) has no vector
+rank, so it scores `2/(60 + lexical rank)`: its lexical rank counts for both legs, so it competes
+on equal terms instead of being buried under embedded chunks that share one common word
+(`TestLexicalOnlyNotBuried`: the only chunk naming "Zebracorn Holdings" stays first). Every
 embedded chunk in scope is a candidate, so a hybrid search returns up to `k` hits even when no word
 matches. Both legs read only the scope's documents (G1, `TestHybridKeepsScope`). There is **no
 HNSW or IVFFlat index**: an approximate index filtered to one matter's documents returns fewer
 than `k` rows (measured at PR 3b: with the HNSW index forced, a scoped top-8 over 50,000 vectors of
 which 40 were in scope returned 0 rows; pgvector's iterative scan recovers that only up to its
 scan limit), so an index would cost writes and break scoped recall. A query costs scope ×
-dimensions: `TestSearchCost` measured 225 ms for a hybrid query over 12,426 chunks at 512
-dimensions (4 MiB; embedding them with the fake model took 3.3 s in 195 calls). The `vector`
-column has no fixed length: a document records the model that embedded **all** its chunks
+dimensions; on a 4 MiB scope of 12,426 short clauses with dense unit vectors (a probe run for PR
+3b's round-1 fixes, 4 x86 cores), 2 common words took 245–350 ms, 2 absent words (the vector leg
+dominates) 105–180 ms and 32 words of which 6 are common 555–710 ms, at 512 and at 1,536
+dimensions alike (the lexical leg dominates); `TestSearchCost` prints its own hybrid figures. The
+`vector` column has no fixed length: a document records the model that embedded **all** its chunks
 (`embedModel`, with the calls' `embedTokens` and `embedCostUsd`, null when unpriced), and the vector
-leg reads only documents of the current `embed` model whose vectors have the query's length, so a
-half-embedded document, or one embedded by a previous model, is searched lexically only. A failed
-or cancelled embedding call never fails an ingest: the document is stored lexical only with the
-note "Search over this document is lexical only: embedding its chunks failed or was cancelled …"
-(`TestEmbedFailureLeavesLexical`). `serve` runs a **backfill** at startup, one document at a time,
-for documents stored before the role was set, under another model, or whose embedding failed; it
-skips documents stored after it starts, stops with the server, and gives up after 3 documents in a
-row fail (`TestBackfillEmbedsOldDocuments`, `TestServeHybridEndToEnd`). A failed **query**
+leg reads only documents of the current `embed` model whose vectors have the query's length.
+Embedding a document first clears its `embedModel`, and sets it only after every batch landed at
+one vector length, so a run that fails part-way (or whose batches come back at different lengths)
+leaves it lexical only, never a previous model's name over a mix of two models' vectors
+(`TestReembedNeverMixesModels`: roll back to the old model and it is re-embedded completely). A
+failed or cancelled embedding call never fails an ingest: the document is stored lexical only with
+the note "Search over this document is lexical only: embedding its chunks failed or was cancelled
+…" (`TestEmbedFailureLeavesLexical`). `serve` runs a **backfill** at startup, one document at a
+time (each within the same 10-minute bound as an ingest), for documents stored before the role was
+set, under another model, or whose embedding failed; it skips documents stored after it starts (by
+the database's clock), notes each failure on its document, logs how many it embedded and how many
+failed (a warning when any failed), stops with the server, and gives up after 3 documents **in a
+row** fail (`TestBackfillEmbedsOldDocuments`, `TestServeHybridEndToEnd`). A failed **query**
 embedding is returned as its model error (502/503/504), never a silent lexical answer. With no
-`embed` role, search is the lexical leg alone, as `serve`'s log and `/health` say.
+`embed` role, search is the lexical leg alone, as `/health` says.
+
+**Scale and disk (no index).** Each query reads every embedded chunk in its scope. Stored at 1,536
+dimensions (what `text-embedding-3-small` returns), a vector is 6,148 bytes (512: 2,052); the probe
+above's chunks table was 119 MB for 12,426 chunks at 1,536 dimensions, 58 MB at 512. The round-1
+auditor measured ≈ 8 KB per chunk with TOAST at 1,536 dimensions (≈ 95 MB for a maximum-size
+document of about 12,000 chunks) and, for one scope, 497–615 ms warm at 51,000–120,000 chunks and
+about 1.1 s cold on 4 vCPUs. The rule for operators: keep a matter's scope × 8 KB within free RAM,
+and expect search to near its 10 s timeout past about **100,000 chunks per matter on x86** (≈ 20,000
+on a Pi 4 with SD or USB storage: an estimate, not measured). Past that, search fails with 400
+"search fewer documents".
 
 **Gate E4 (`TestHybridRecallProofRuns`): not yet judged.** Over the 68 planted proof-run facts, a
 search within the fact's matter with an **answer-free question** (one per fact in
@@ -448,8 +480,8 @@ an upper bound; `TestLexicalRecallProofRuns` prints both and fails only below th
 misses by question: `REG-05`, `REG-14`, `DD-06`, `DD-09`, `LIT-D1`, `LIT-I3`, `LIT-I6`, `LIT-C6`.
 The hybrid gate runs in CI without a model key by replaying `eval/e4/embeddings.json`, a tape of
 `sha256(text) → vector` for every text the measurement embeds (the 355 proof-run chunks as the
-chunker cuts them, and the 68 questions and 68 titles: 491 vectors), with the model and dimensions
-that recorded it. **The committed tape is a self-test tape**, recorded offline by a bag-of-words
+chunker cuts them, and the 68 questions and 68 titles: 491 vectors), with the model that recorded
+it, at that model's own vector length (the length `serve` stores: there is no dimensions setting). **The committed tape is a self-test tape**, recorded offline by a bag-of-words
 hash embedder (`biglaw-selftest-hash`, 64 dimensions), because no embedding key exists where this
 was built. It proves the harness only (`TestE4TapeReplays`: every text is on the tape, replay
 leaves no document lexical, the vectors are the hash embedder's), and on it
@@ -457,13 +489,17 @@ leaves no document lexical, the vectors are the hash embedder's), and on it
 50/68, is no gate result (a bag-of-words embedder fused with lexical search did worse than lexical
 alone). The owner records the real tape once, and from then on CI judges the gate (`t.Errorf`
 below 65/68) and fails if any text it embeds is missing from the tape (the chunker or the fixtures
-changed: re-record):
+changed: re-record). In **every** mode (replay, record, live) a matter with a document left
+lexical only (a failed or refused embeddings call, or on replay a text not on the tape) fails the
+test with "E4 NOT JUDGED" before any recall is scored or any tape written, so a flaky endpoint
+cannot produce a verdict or a partial tape. `make test` prints the verdict line (in CI too) and,
+where the database is required, fails unless the gate passed or skipped as not judged:
 
 ```bash
-make e4-record EMBED_MODEL=text-embedding-3-small EMBED_DIMENSIONS=512 \
+make e4-record EMBED_MODEL=text-embedding-3-small \
   BIGLAW_MODEL_URL=https://api.openai.com/v1 BIGLAW_MODEL_KEY=sk-… \
   BIGLAW_TEST_DSN='postgres://…?sslmode=disable'      # writes eval/e4/embeddings.json; commit it
-make e4-live EMBED_MODEL=… BIGLAW_MODEL_URL=… BIGLAW_MODEL_KEY=… BIGLAW_TEST_DSN=…   # live, no tape
+make e4-live EMBED_MODEL=… BIGLAW_MODEL_URL=… BIGLAW_TEST_DSN=…   # live, no tape (BIGLAW_MODEL_KEY if the endpoint needs one)
 ```
 
 Any model may be named; the tape records which. `make e4-record EMBED_MODEL=biglaw-selftest-hash`
@@ -517,8 +553,9 @@ such as `CON`, `aux.txt` or `COM1.tar.gz` gets a `_` prefix, trailing dots and s
 first pass (so corrupt bytes are never sent), then it is sent one 1 MiB chunk at a time under a
 read slot, each 64 KiB under its own 30-second write deadline and the whole within 15 minutes, so
 a client that stops reading is cut within a window and holds at most one chunk meanwhile
-(`TestDownloadBounded`: 12 stalled downloads of an 8 MiB file grew the heap by 4 MiB and were all
-cut after 1.5 s at a 0.5 s window; the route used to hold a whole file per stalled client;
+(`TestDownloadBounded`: once all 4 read slots' holders are blocked writing to their stalled
+clients, 12 stalled downloads of an 8 MiB file hold +8 MiB of live heap, 2 chunks per slot, under
+a bound of 2 chunks per slot + 8 MiB, and were all cut after about 4.9 s at a 1.5 s window; the route used to hold a whole file per stalled client;
 `TestDownloadDeadlinePerWindow` pins the 64 KiB per deadline). The last chunk is sent only after
 the streamed bytes' hash matches, so a file whose rows change between the verifying pass and the
 streaming pass reaches the client as a short body, never as a complete 200
@@ -706,7 +743,13 @@ Named tests (PLAN.md PR 3, slice 3b; DB tests need Postgres with pgvector): in `
 (storetest creates the extension once per database, not per schema), `TestServeHybridEndToEnd`,
 the hybrid figures in `TestSearchCost`, the `embed`/`vision` cases of `TestRolesModel`, and the
 `search` field in `TestHealth`. `TestLexicalRecallProofRuns` now shares E4's scoring with the
-hybrid gate (`e4Measure`).
+hybrid gate (`e4Measure`). Review round 1 added `TestReembedNeverMixesModels`, `TestLexicalOnlyNotBuried`, and cases in
+`TestBackfillEmbedsOldDocuments` (failures counted and noted, "in a row" pinned), `TestEmbedWaitsBounded`
+(the backfill's per-document bound), `TestEmbedFailureLeavesLexical` (a lexical-only scope during
+an outage), `TestEmbeddingsPriced` (token cap, ada-002, no usage), `TestEmbedTypedErrors`
+(subnormal, huge), `TestFakeEmbed`, `TestRoleIDRefusesQueryCharacters` (bidi, zero-width, key
+shapes, length), `TestOpenNeedsVector` (8 concurrent first starts) and `TestDownloadBounded`
+(measures the stalled state).
 
 ## Budgets (`scripts/loc.py`, run in CI)
 
@@ -836,9 +879,12 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     refuses to start (checksum drift); recreate it.
   - `ledongthuc/pdf` is a small, lightly maintained library pinned at a 2025 pseudo-version; it
     is the second of the three allowed dependencies.
-- Heap-measuring tests share one test process: `TestDownloadBounded` (24 MiB bound) measured
-  +30 MiB once in a full `-race` run during PR 3b (10–19 MiB alone, 17 MiB on a rerun with the
-  same shuffle seed), so it can fail spuriously on a loaded machine; rerun before suspecting a leak.
+- Heap-measuring tests share one test process. `TestDownloadBounded` used to sample the heap
+  300 ms after starting its downloads, which under `-race` or CPU load caught the slot holders
+  still fetching chunks (up to +31 MiB against its 24 MiB bound, r1 L-10): it now waits until all
+  4 holders are blocked writing and reads the live heap after a GC (+8 MiB in 9 runs, 4 of them
+  beside 6 busy loops on 4 cores). It does not bound the transient peak while chunks are fetched
+  (about 6 chunk-sized buffers per slot, measured in review).
 - Test schemas are dropped by `t.Cleanup`; a test binary that is killed (SIGKILL, timeout)
   leaves its `t_<hex>` schema behind. Drop them with
   `psql -c "select 'drop schema '||nspname||' cascade;' from pg_namespace where nspname like 't\_%'" -At | psql`.
@@ -859,20 +905,27 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     **worse** than lexical alone: with the bag-of-words self-test embedder it fell from 60/68 to
     50/68. If the real tape misses the gate, the fusion constant or weights, not the gate, are the
     next question (owner).
-  - The tape recipe asks for 512 dimensions (`EMBED_DIMENSIONS=512`), but `serve` never sends
-    `dimensions`, so production embeds at the model's own length (1,536 for
-    `text-embedding-3-small`): the gate then measures a smaller variant of the model than the
-    server runs. Record without `EMBED_DIMENSIONS` (a tape about 3× larger) to measure exactly
-    what runs.
+  - The tape is recorded at the model's own length, as `serve` embeds (1,536 dimensions for
+    `text-embedding-3-small`: a tape of about 4 MB, three times the old 512-dimension recipe's).
+    A model can be run only at its own length: there is no dimensions setting.
   - Every embedded chunk in scope is a vector candidate, so a hybrid search returns `k` hits even
     for a query nothing matches; callers must not read "a hit" as "relevant". No index: each query
-    computes the distance to every embedded chunk in scope (225 ms for 12,426 chunks at 512
-    dimensions here; about 3× that at 1,536), under the same 10 s timeout.
+    computes the distance to every embedded chunk in scope, under the same 10 s timeout, and the
+    vectors cost about 8 KB of disk per chunk at 1,536 dimensions; see § Documents, "Scale and
+    disk" for the measured figures and the ceiling (about 100,000 chunks per matter on x86).
+  - The lexical-only rule (`2/(60 + lexical rank)`) makes a lexical-only chunk equal to an
+    embedded chunk ranked the same by both legs; it cannot gain from meaning, so for a question
+    that shares no word with it, a lexical-only document is still not found (as with lexical
+    search alone).
+  - Paging re-embeds the query for each page (one call, about $0.0000002 at
+    `text-embedding-3-small`'s rate): a per-server cache of the last query's vector was left out,
+    because its timing would tell one user whether another just searched the same words.
   - Embedding usage is priced on every call, but only an ingest's usage is recorded (on the
     document, and only for a run that embedded every chunk: a failed run's billed calls are not
     stored), and a search's query embedding is charged to no task until PR 4a's budget ledger
-    (`docs.Service` takes the embedder at `UseEmbedder`; 4a can wrap it per task). An endpoint
-    that reports no `usage` counts 0 tokens, so a priced model's call reads $0, as for chat.
+    (`docs.Service` takes the embedder at `UseEmbedder`; 4a can wrap it per task). An embeddings
+    answer with no `usage` has an unknown cost (nil); a **chat** answer without `usage` still
+    counts 0 tokens and reads $0 for a priced model (PR 2's behaviour, unchanged here).
   - Embedding runs inside the upload request, after the ingest slot is released: a 16 MiB
     document is about 190 calls of 64 chunks at the 1,400-character chunk size, up to about 780
     for short clauses (`TestSearchCost`'s 4 MiB of them is 12,426 chunks), so its upload answers
@@ -880,8 +933,12 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     lexical only, with the note, if the client goes away). The backfill runs only at startup: a
     document whose embedding failed stays lexical until the next start. Two servers on one
     database may both backfill the same old document (twice the cost, same result). Changing the
-    `embed` model makes every document lexical until the backfill re-embeds it. A half-embedded
-    document keeps the vectors it got (unused) until it is embedded again.
+    `embed` model makes every document lexical until the backfill re-embeds it; a re-embed that
+    fails turns a document embedded by the old model lexical only (its old vectors are no longer
+    trusted, and are overwritten when it is next embedded).
+  - The key-shape refusal of `BIGLAW_MODELS` ids is a heuristic: a key in another shape is still
+    shown and logged, and a real id with 24 letters and digits in a row (an Azure deployment name,
+    say) is refused at startup; name such a deployment with a `-` or `_` in it.
   - Inputs are cut at 4,096 characters; an embedding model with a short context (some 512-token
     BERT-style models) may refuse a 1,400-character chunk (HTTP 400 → `model_unavailable`), which
     leaves that document lexical only.
@@ -889,12 +946,12 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     `pgvector/pgvector:0.8.6-pg16` (Debian, glibc). Collations differ between the two C
     libraries, so a `pgdata` volume created by an earlier pre-release Compose stack should be
     recreated (`docker compose down -v`; v2 has no release yet) rather than reused.
-  - **Line budget:** PR 3b adds 394 production lines (3,894 → 4,288) against DESIGN's 270–405
-    (§ PR 3b pgvector estimate), near its top: the embeddings call 112 (90–130), the role map's
-    embed/vision roles, the lexical log and `/health` 32 (10–20), the store's extension check 10
-    (10–20), ingest embedding, the time bounds, backfill and serve's backfill goroutine 153
-    (80–120), hybrid search 23 (40–60), `storetest` 28 (10–15) and `Fake.Embed` 36 (30–40). Plan
-    total 14,866–14,896 + 394 = 15,260–15,290, under the final 15,500 ceiling by 210–240.
+  - **Line budget:** PR 3b adds 401 production lines (3,894 → 4,295) against DESIGN's 270–405
+    (§ PR 3b pgvector estimate), at its top: round 1's fixes (mixed-model re-embeds, lexical-only
+    fusion, query checks before embedding, vector and token guards, key-shaped ids) were paid for
+    by deleting the dimensions option, the "lexical only" startup log, storetest's extension cache
+    and doc comments that repeated this README. Per file: `model/embed.go` 118, `docs/embed.go` 131, `docs/search.go` 27, `docs/ingest.go` 13, `model/fake.go` 39, `cmd/biglaw/main.go` 22, `config.go` 18, `model/client.go` 9, `store.go` 9, `storetest` 15. Plan total
+    14,866–14,896 + 401 = 15,267–15,297, under the final 15,500 ceiling by 203–233.
   - **Every chunk of every document goes to the embedding endpoint**, at ingest, and so does
     every search query: with a hosted embedder (OpenAI, a gateway) the full text of privileged
     matter documents leaves the machine, as the chat calls' prompts will. Setting the `embed`
@@ -908,10 +965,11 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
   - A matter's own documents can steer the vector leg: a chunk written to sit near many queries
     (a "hub") is returned for them, crowding out evidence (inside the scope only: G1 holds). Three
     documents in a row that the endpoint always refuses stop the startup backfill early, so later
-    documents stay lexical until the next start.
-  - Time bounds: embedding one document stops after 10 minutes (then it is lexical only, with the
-    note), a query's embedding after 30 s (then 504 `model_timeout`; `TestEmbedWaitsBounded`), and
-    an answer with vectors over 16,000 dimensions (pgvector's limit) is refused.
+    documents stay lexical until the next start (the log counts them; each carries the note).
+  - Time bounds: embedding one document, at ingest or in the backfill, stops after 10 minutes
+    (then it is lexical only, with the note), a query's embedding after 30 s (then 504
+    `model_timeout`; `TestEmbedWaitsBounded`), and an answer with vectors over 16,000 dimensions
+    (pgvector's limit) is refused.
 - **Model client (PR 2):**
   - Only `Embed` has a caller yet (documents); `Chat`'s first caller is the agent loop (PR 4a),
     so no real endpoint has been exercised: every test uses `httptest` or

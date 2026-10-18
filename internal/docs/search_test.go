@@ -309,7 +309,7 @@ func TestLexicalRecallProofRuns(t *testing.T) {
 
 // TestSearchCost (r2 reproducer N2): a search costs scope × distinct terms, so terms are capped at
 // MaxTerms and the statement at searchTimeout. On a 4 MiB scope of short clauses this prints the
-// times README § Search quotes; 33 distinct words and a statement past the timeout are refused.
+// times README § Documents quotes; 33 distinct words and a statement past the timeout are refused.
 func TestSearchCost(t *testing.T) {
 	if testing.Short() {
 		t.Skip("ingests 4 MiB")
@@ -346,11 +346,11 @@ func TestSearchCost(t *testing.T) {
 	f.Vectors = func(text string) ([]float32, error) { return hashVector(text, 512), nil }
 	s.UseEmbedder(f, "hash-512")
 	start := time.Now()
-	if n, err := s.Backfill(t.Context()); n != 1 || err != nil {
+	if n, _, err := s.Backfill(t.Context()); n != 1 || err != nil {
 		t.Fatalf("embedding the scope: %d %v", n, err)
 	}
 	t.Logf("embedding %d chunks at 512 dimensions (fake model, %d calls): %s", d.Chunks, len(f.EmbedCalls()), time.Since(start))
-	for _, q := range []string{"supplier invoice", "absentword1 absentword2"} {
+	for _, q := range []string{"supplier invoice", "absentword1 absentword2", "supplier shall pay fee euros invoice " + words(MaxTerms-6, "absentword%d")} {
 		start := time.Now()
 		hits, err := s.Search(t.Context(), scope, q, 8, 0)
 		t.Logf("hybrid %q on %d chunks: %d hits in %s", q, d.Chunks, len(hits), time.Since(start))

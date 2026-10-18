@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"slices"
 	"strings"
 	"unicode/utf8"
 )
@@ -19,9 +18,8 @@ const (
 
 // EmbedRequest is one embeddings call on the embed role's model.
 type EmbedRequest struct {
-	Agent      string   // labels logs, as Request.Agent does
-	Inputs     []string // 1 to MaxEmbedInputs non-blank UTF-8 texts
-	Dimensions int      // asks for this many dimensions (text-embedding-3 models); 0: the model's own
+	Agent  string   // labels logs, as Request.Agent does
+	Inputs []string // 1 to MaxEmbedInputs non-blank UTF-8 texts (sent at the model's own length)
 }
 
 // Embeddings is a successful call: one vector per input, in order, all the same length.
@@ -37,12 +35,12 @@ type Embedder interface {
 }
 
 func (r *EmbedRequest) check() error {
-	ok := r.Agent != "" && len(r.Inputs) > 0 && len(r.Inputs) <= MaxEmbedInputs && r.Dimensions >= 0 && r.Dimensions <= 16000
+	ok := r.Agent != "" && len(r.Inputs) > 0 && len(r.Inputs) <= MaxEmbedInputs
 	for _, s := range r.Inputs {
 		ok = ok && strings.TrimSpace(s) != "" && len(s) <= MaxEmbedInput && utf8.ValidString(s)
 	}
 	if !ok {
-		return fmt.Errorf("model: invalid embeddings request: it needs an Agent, 1 to %d non-blank UTF-8 inputs of at most %d bytes, and 0 to 16000 dimensions", MaxEmbedInputs, MaxEmbedInput)
+		return fmt.Errorf("model: invalid embeddings request: it needs an Agent, 1 to %d non-blank UTF-8 inputs of at most %d bytes", MaxEmbedInputs, MaxEmbedInput)
 	}
 	return nil
 }
@@ -60,11 +58,7 @@ func (c *Client) Embed(ctx context.Context, req EmbedRequest) (*Embeddings, erro
 	if c.embeddings == "" {
 		return nil, fail(ErrNotConfigured, "BIGLAW_MODEL_URL is not set")
 	}
-	w := map[string]any{"model": model, "input": req.Inputs, "encoding_format": "float"}
-	if req.Dimensions > 0 {
-		w["dimensions"] = req.Dimensions
-	}
-	body, err := json.Marshal(w)
+	body, err := json.Marshal(map[string]any{"model": model, "input": req.Inputs, "encoding_format": "float"})
 	if err != nil {
 		return nil, fmt.Errorf("model: encode request: %w", err)
 	}
@@ -78,31 +72,47 @@ func (c *Client) Embed(ctx context.Context, req EmbedRequest) (*Embeddings, erro
 			Embedding []float32 `json:"embedding"`
 		} `json:"data"`
 		Usage struct {
-			Prompt int `json:"prompt_tokens"`
+			Prompt *int `json:"prompt_tokens"`
 		} `json:"usage"`
 	}
 	if json.Unmarshal(raw, &a) != nil {
 		return nil, fail(ErrUnavailable, "the answer is not OpenAI embeddings JSON")
 	}
-	e := &Embeddings{Model: model, Vectors: make([][]float32, len(req.Inputs)), Usage: Usage{InputTokens: max(0, a.Usage.Prompt), Duration: took}}
-	c.prices.charge(model, &e.Usage, c.watts, c.log)
-	kind, detail := error(nil), ""
-	if len(a.Data) == 0 {
-		kind, detail = ErrNoContent, "the answer has no vectors"
+	e := &Embeddings{Model: model, Vectors: make([][]float32, len(req.Inputs)), Usage: Usage{Duration: took}}
+	if p := a.Usage.Prompt; p != nil { // a token is at least a byte: a count past the request's size is capped there
+		e.Usage.InputTokens = min(len(body), max(0, *p))
 	}
+	if c.prices.charge(model, &e.Usage, c.watts, c.log); a.Usage.Prompt == nil {
+		e.Usage.CostUSD = nil // no usage: the cost is unknown, never $0
+	}
+	ok := len(a.Data) == len(req.Inputs)
 	for _, d := range a.Data {
-		if len(a.Data) != len(req.Inputs) || d.Index < 0 || d.Index >= len(e.Vectors) || e.Vectors[d.Index] != nil ||
-			len(d.Embedding) != len(a.Data[0].Embedding) || len(d.Embedding) > 16000 || req.Dimensions > 0 && len(d.Embedding) != req.Dimensions ||
-			!slices.ContainsFunc(d.Embedding, func(f float32) bool { return f != 0 }) { // a zero vector has no cosine distance
-			kind, detail = ErrUnavailable, "the answer does not hold one non-zero vector of one length (at most 16,000) per input"
-			break
+		if ok = ok && d.Index >= 0 && d.Index < len(e.Vectors) && e.Vectors[d.Index] == nil; ok {
+			e.Vectors[d.Index] = d.Embedding
 		}
-		e.Vectors[d.Index] = d.Embedding
 	}
-	if kind != nil { // billed: the usage goes with the error
-		x := fail(kind, detail)
+	if !ok || !usable(e.Vectors) { // billed: the usage goes with the error
+		x := fail(ErrUnavailable, "the answer does not hold one vector per input, of one length (at most 16,000) and a norm of 1e-6 to 1e6")
+		if len(a.Data) == 0 {
+			x = fail(ErrNoContent, "the answer has no vectors")
+		}
 		x.Usage = &e.Usage
 		return nil, x
 	}
 	return e, nil
+}
+
+// usable reports whether cosine distance can use vs: one length, at most pgvector's 16,000, each
+// norm 1e-6 to 1e6 (zero, subnormal or huge values make pgvector's float32 distances NaN).
+func usable(vs [][]float32) bool {
+	for _, v := range vs {
+		var sq float64
+		for _, f := range v {
+			sq += float64(f) * float64(f)
+		}
+		if len(v) != len(vs[0]) || len(v) == 0 || len(v) > 16000 || !(sq >= 1e-12 && sq <= 1e12) {
+			return false
+		}
+	}
+	return true
 }

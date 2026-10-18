@@ -50,17 +50,26 @@ type Hit struct {
 // by how rare it is in the scope (idf = ln(1 + N/(1+df))) times ts_rank_cd of that term,
 // saturated (normalisation 32). Both the English (stemmed) and the simple (exact) vectors are
 // scored and summed, so an identifier such as FS-26-01234 counts even where stemming would mangle
-// it. With an embedder (UseEmbedder) that ranking is fused with the scope's embedded chunks ranked
-// exactly by cosine distance to the query's embedding (reciprocal-rank fusion, 1/(60+rank) from
-// each; Rank is then the fused score); a failed query embedding is its model error, never a silent
-// lexical answer. Ties go to the lower chunk id. With no searchable word and no embedder there are
-// no hits; more than MaxTerms distinct words, or a statement past searchTimeout, is ErrBadInput.
+// it. With vectors in scope (UseEmbedder) it is fused with a vector ranking (searchSQL); a failed
+// query embedding is its model error, never a silent lexical answer. Ties go to the lower chunk id.
+// Over MaxTerms distinct words (checked before embedding) or past searchTimeout is ErrBadInput.
 func (s *Service) Search(ctx context.Context, scope []string, query string, k, offset int) ([]Hit, error) {
 	if k < 1 || k > MaxK || offset < 0 || offset > 10000 || len(query) > MaxQuery || !utf8.ValidString(query) || strings.IndexByte(query, 0) >= 0 {
 		return nil, fmt.Errorf("%w: k is 1 to %d, offset 0 to 10000, the query at most %d bytes of UTF-8", ErrBadInput, MaxK, MaxQuery)
 	}
+	ids := pq.Array(validIDs(scope))
+	pctx, cancel := context.WithTimeout(ctx, searchTimeout)
+	defer cancel()
+	var terms int
+	var vectors bool // the scope holds a document the embed model embedded
+	if err := s.db.QueryRowContext(pctx, `SELECT coalesce(array_length(tsvector_to_array(to_tsvector('simple', $1)), 1), 0),
+		EXISTS (SELECT 1 FROM documents WHERE id = ANY($2::uuid[]) AND embed_model = $3)`, query, ids, s.embedModel).Scan(&terms, &vectors); err != nil {
+		return nil, s.searchError(pctx, err)
+	} else if terms > MaxTerms {
+		return nil, fmt.Errorf("%w: the query has %d distinct words; search with at most %d", ErrBadInput, terms, MaxTerms)
+	}
 	var qvec any // NULL: lexical only
-	if s.embedder != nil && strings.TrimSpace(query) != "" && len(validIDs(scope)) > 0 {
+	if s.embedder != nil && vectors && strings.TrimSpace(query) != "" {
 		ectx, cancel := context.WithTimeout(ctx, queryWait)
 		e, err := s.embedder.Embed(ectx, model.EmbedRequest{Agent: "search", Inputs: []string{query}})
 		cancel()
@@ -69,15 +78,9 @@ func (s *Service) Search(ctx context.Context, scope []string, query string, k, o
 		}
 		qvec = vectorText(e.Vectors[0])
 	}
-	ctx, cancel := context.WithTimeout(ctx, searchTimeout)
+	ctx, cancel = context.WithTimeout(ctx, searchTimeout)
 	defer cancel()
-	var terms int
-	if err := s.db.QueryRowContext(ctx, `SELECT coalesce(array_length(tsvector_to_array(to_tsvector('simple', $1)), 1), 0)`, query).Scan(&terms); err != nil {
-		return nil, s.searchError(ctx, err)
-	} else if terms > MaxTerms {
-		return nil, fmt.Errorf("%w: the query has %d distinct words; search with at most %d", ErrBadInput, terms, MaxTerms)
-	}
-	rows, err := s.db.QueryContext(ctx, searchSQL, pq.Array(validIDs(scope)), query, k, offset, qvec, s.embedModel)
+	rows, err := s.db.QueryContext(ctx, searchSQL, ids, query, k, offset, qvec, s.embedModel)
 	if err != nil {
 		return nil, s.searchError(ctx, err)
 	}
@@ -101,15 +104,16 @@ func (s *Service) Search(ctx context.Context, scope []string, query string, k, o
 
 func (s *Service) searchError(ctx context.Context, err error) error {
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return fmt.Errorf("%w: the search took longer than %s; use fewer or rarer words, or fewer documents", ErrBadInput, searchTimeout)
+		return fmt.Errorf("%w: the search took longer than %s; search fewer documents, or use fewer or rarer words", ErrBadInput, searchTimeout)
 	}
 	return fmt.Errorf("docs: search: %w", err)
 }
 
 // searchSQL matches every term against the scope's chunks once (m), takes each term's rarity from
-// those matches (w), ranks (lex), fuses that with the vector ranking when $5 (the query's vector)
-// is set, and only then reads the k bodies. The vector leg reads the same scope ($1) and only
-// chunks of documents its model ($6) embedded completely.
+// those matches (w), ranks (lex), fuses that with the exact cosine ranking (vec) of the scope's
+// chunks its model ($6) embedded completely when $5 (the query's vector) is set, and only then reads
+// the k bodies. Fused: 1/(60+lexical rank) + 1/(60+vector rank); a chunk of a lexical-only document
+// counts its lexical rank twice, so lacking a vector never buries it.
 const searchSQL = `
 WITH s AS (SELECT id, tsv, tsv_simple FROM chunks WHERE document_id = ANY($1::uuid[])),
 terms AS (
@@ -126,7 +130,7 @@ vec AS (SELECT c.id, row_number() OVER (ORDER BY c.embedding <=> $5::vector, c.i
   WHERE $5::vector IS NOT NULL AND c.document_id = ANY($1::uuid[]) AND d.embed_model = $6
     AND c.embedding IS NOT NULL AND vector_dims(c.embedding) = vector_dims($5::vector)),
 fused AS (SELECT coalesce(l.id, v.id) AS id,
-    CASE WHEN $5::vector IS NULL THEN l.rank ELSE coalesce(1.0 / (60 + l.r), 0) + coalesce(1.0 / (60 + v.r), 0) END AS rank
+    CASE WHEN $5::vector IS NULL THEN l.rank WHEN v.id IS NULL THEN 2.0 / (60 + l.r) ELSE coalesce(1.0 / (60 + l.r), 0) + 1.0 / (60 + v.r) END AS rank
   FROM (SELECT id, rank, row_number() OVER (ORDER BY rank DESC, id) AS r FROM lex) l FULL JOIN vec v ON v.id = l.id),
 top AS (SELECT id, rank FROM fused ORDER BY rank DESC, id LIMIT $3 OFFSET $4)
 SELECT c.id, c.document_id, c.section_ord, c.locator, c.body, c.context, top.rank

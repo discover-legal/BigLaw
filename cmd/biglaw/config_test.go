@@ -239,6 +239,9 @@ func TestDescribeRedactsSecrets(t *testing.T) {
 	if got := shown("BIGLAW_MODELS", "lead=x\nBIGLAW_FORGED y"); strings.Contains(got, "\n") { // red team: no forged output lines
 		t.Errorf("a newline in a value reached the output: %q", got)
 	}
+	if got := shown("BIGLAW_ADDR", "127.0.0.1:3101\u202e1013:1.0.0.721"); strings.ContainsRune(got, '\u202e') { // r1 L-2: a bidi override is escaped
+		t.Errorf("a format character reached the output: %q", got)
+	}
 	if got := shown("BIGLAW_DATABASE_URL", "postgres:///x?sslmode=disable&application_name=a&search_path=s"); !strings.Contains(got, "(+1 other parameters, not shown)") {
 		t.Errorf("runtime parameters: %s", got)
 	}
@@ -424,7 +427,8 @@ func TestModelsRoleMap(t *testing.T) {
 // never shown, by Load, by `version --config` or by a `serve` refusal.
 func TestRoleIDRefusesQueryCharacters(t *testing.T) {
 	for _, id := range []string{"gw.example.com/v1?key=PWMARK1", "m&token=PWMARK2", "m?PWMARK3", "PWMARK4 extra", "PWMARK5\tx",
-		"https://gw.example.com/PWMARK6", "alice:PWMARK7@gw", "x\nPWMARK8", "m\u00a0PWMARK9"} {
+		"https://gw.example.com/PWMARK6", "alice:PWMARK7@gw", "x\nPWMARK8", "m\u00a0PWMARK9", "a\u202ePWMARK10", "a\u200bPWMARK11",
+		"a\u2066PWMARK12", "sk-proj-PWMARK13", "AKIAPWMARK14", "ghp_PWMARK15", "xPWMARK16a0b1c2d3e4f5g6h7i8j9", "m" + strings.Repeat("-PWMARK17", 23)} {
 		for _, role := range []string{"lead", "embed"} {
 			v := "lead=ok," + role + "=" + id
 			if role == "lead" {

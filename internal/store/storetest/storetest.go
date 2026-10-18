@@ -23,7 +23,6 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -69,7 +68,7 @@ func DSNFrom(t T, getenv func(string) string) string {
 		t.Fatalf("BIGLAW_TEST_DSN is set but the database is unreachable: %v", err)
 		return ""
 	}
-	extSchema, err := vectorOnce(base, admin)
+	extSchema, err := vectorOnce(admin)
 	if err != nil {
 		admin.Close()
 		t.Fatalf("storetest: the pgvector extension (vector) is missing and could not be created (use a pgvector/pgvector image): %v", err)
@@ -90,25 +89,13 @@ func DSNFrom(t T, getenv func(string) string) string {
 	return WithSearchPath(base, schema+","+extSchema)
 }
 
-var vectorSchemas sync.Map // base DSN -> the schema holding the vector extension
-
-// vectorOnce creates the pgvector extension once per database (CREATE EXTENSION is database-wide:
-// in a test's schema, dropping that would drop it for every test), as store.Open does, and returns
-// its schema, which test schemas put on their search_path for the vector type.
-func vectorOnce(base string, admin *sql.DB) (string, error) {
-	if s, ok := vectorSchemas.Load(base); ok {
-		return s.(string), nil
-	}
-	var schema string
-	_, err := admin.Exec(`SELECT pg_advisory_xact_lock(hashtext('biglaw.extension.vector')); CREATE EXTENSION IF NOT EXISTS vector`)
-	if err == nil {
+// vectorOnce creates pgvector once per database as store.Open does, never in a test's schema (its drop
+// would drop it for all), and returns its schema, which test schemas put on their search_path.
+func vectorOnce(admin *sql.DB) (schema string, err error) {
+	if _, err = admin.Exec(`SELECT pg_advisory_xact_lock(hashtext('biglaw.extension.vector')); CREATE EXTENSION IF NOT EXISTS vector`); err == nil {
 		err = admin.QueryRow(`SELECT extnamespace::regnamespace::text FROM pg_extension WHERE extname = 'vector'`).Scan(&schema)
 	}
-	if err != nil {
-		return "", err
-	}
-	vectorSchemas.Store(base, schema)
-	return schema, nil
+	return schema, err
 }
 
 // WithSearchPath returns dsn with its search_path set to schema. lib/pq sends

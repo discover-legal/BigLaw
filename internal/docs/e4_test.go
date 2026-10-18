@@ -4,7 +4,6 @@
 package docs
 
 import (
-	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -18,12 +17,12 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/discover-legal/BigLaw/internal/model"
+	"github.com/lib/pq"
 )
 
 type tally struct{ facts, found, strings, stringsFound int }
@@ -74,6 +73,14 @@ func e4Measure(t *testing.T, s *Service) e4Result {
 			}
 			scope = append(scope, ingestText(t, s, f.Name(), string(b)).ID)
 		}
+		// In every mode (replay, record, live): a document left lexical only (a failed or refused
+		// call; on replay, texts not on the tape) would be scored as hybrid. Not judged, then.
+		var lexical int // (the lexical baseline, TestLexicalRecallProofRuns, has no embedder)
+		err = s.db.QueryRow(`SELECT count(*) FROM documents WHERE id = ANY($1::uuid[]) AND embed_model IS DISTINCT FROM $2`, pq.Array(scope), s.embedModel).Scan(&lexical)
+		if s.embedder != nil && (err != nil || lexical > 0) {
+			t.Fatalf("E4 NOT JUDGED: %d of %s's %d documents were not embedded by %s (%v; their EmbedNote says why: a failed embeddings call, or texts not on the tape): "+
+				"no recall is scored and no tape is written", lexical, filepath.Base(filepath.Dir(key)), len(scope), s.embedModel, err)
+		}
 		var q, ti tally
 		for _, f := range ak.Facts {
 			if f.Question == "" {
@@ -107,7 +114,11 @@ func e4Measure(t *testing.T, s *Service) e4Result {
 		r.question.add(q)
 		r.title.add(ti)
 	}
-	t.Logf("E4 recall@8 by answer-free question (the gate): %s", r.question)
+	label := "the gate"
+	if s.embedModel == selfTestModel {
+		label = "harness self-test, not the gate"
+	}
+	t.Logf("E4 recall@8 by answer-free question (%s): %s", label, r.question)
 	t.Logf("E4 recall@8 by fact title (upper bound: titles state the answer): %s", r.title)
 	if r.question.facts != 68 {
 		t.Errorf("%d planted facts, want 68", r.question.facts)
@@ -124,15 +135,14 @@ const tapePath = "../../eval/e4/embeddings.json"
 // the record/replay harness works: it is never a gate result.
 const selfTestModel = "biglaw-selftest-hash"
 
+// e4Tape vectors are at the model's own length, as serve asks for them (no dimensions parameter).
 type e4Tape struct {
-	Model      string            `json:"model"`
-	Dimensions int               `json:"dimensions"` // what the recording asked for (0: the model's own)
-	Chunker    string            `json:"chunker"`
-	Note       string            `json:"note,omitempty"`
-	Vectors    map[string]string `json:"vectors"` // sha256(text) hex -> base64 of little-endian float32s
+	Model   string            `json:"model"`
+	Note    string            `json:"note,omitempty"`
+	Vectors map[string]string `json:"vectors"` // sha256(text) hex -> base64 of little-endian float32s
 }
 
-const chunkerID = "docs.Chunkify, ChunkTokens=400 (PR 3a)"
+const selfTestDims = 64 // the self-test embedder's length
 
 func textKey(text string) string { s := sha256.Sum256([]byte(text)); return hex.EncodeToString(s[:]) }
 
@@ -177,16 +187,14 @@ func hashVector(text string, dims int) []float32 {
 	return v
 }
 
-// recorder asks inner for vectors (with dims, if set) and keeps every text it embedded.
+// recorder asks inner for vectors, exactly as serve would, and keeps every text it embedded.
 type recorder struct {
 	inner model.Embedder
-	dims  int
 	mu    sync.Mutex
 	tape  map[string]string
 }
 
 func (r *recorder) Embed(ctx context.Context, req model.EmbedRequest) (*model.Embeddings, error) {
-	req.Dimensions = r.dims
 	e, err := r.inner.Embed(ctx, req)
 	if err == nil {
 		r.mu.Lock()
@@ -226,15 +234,11 @@ func loadTape(t *testing.T) e4Tape {
 }
 
 // checkReplay fails the test if the measurement embedded a text the tape lacks (the chunker or a
-// fixture changed since recording: re-record) or left a document lexical only.
-func checkReplay(t *testing.T, s *Service, missing func() []string) {
+// fixture changed since recording: re-record).
+func checkReplay(t *testing.T, missing func() []string) {
 	t.Helper()
 	if m := missing(); len(m) > 0 {
 		t.Errorf("%d texts are not on %s (the chunker or the fixtures changed): re-record with make e4-record; first: %.80q", len(m), tapePath, m[0])
-	}
-	var lexical int
-	if err := s.db.QueryRow(`SELECT count(*) FROM documents WHERE embed_model IS DISTINCT FROM $1`, s.embedModel).Scan(&lexical); err != nil || lexical != 0 {
-		t.Errorf("%d documents were not embedded (%v)", lexical, err)
 	}
 }
 
@@ -247,8 +251,8 @@ func TestE4TapeReplays(t *testing.T) {
 	tape := loadTape(t)
 	if tape.Model == selfTestModel {
 		for k, enc := range tape.Vectors {
-			if v, err := decodeVector(enc); err != nil || len(v) != tape.Dimensions {
-				t.Fatalf("vector %s: %v, %d dimensions, want %d", k, err, len(v), tape.Dimensions)
+			if v, err := decodeVector(enc); err != nil || len(v) != selfTestDims {
+				t.Fatalf("vector %s: %v, %d dimensions, want %d", k, err, len(v), selfTestDims)
 			}
 		}
 	}
@@ -256,13 +260,13 @@ func TestE4TapeReplays(t *testing.T) {
 	s := newService(t)
 	s.UseEmbedder(f, tape.Model)
 	r := e4Measure(t, s)
-	checkReplay(t, s, missing)
+	checkReplay(t, missing)
 	t.Logf("harness self-test with %s (%d vectors): %s; not a gate result unless the tape is a real model's", tape.Model, len(tape.Vectors), r.question)
 	if tape.Model == selfTestModel {
 		n := 0
 		for _, c := range f.EmbedCalls() {
 			for _, text := range c.Inputs {
-				if want := encodeVector(hashVector(text, tape.Dimensions)); tape.Vectors[textKey(text)] != want {
+				if want := encodeVector(hashVector(text, selfTestDims)); tape.Vectors[textKey(text)] != want {
 					t.Fatalf("the tape's vector for %.60q is not the hash embedder's", text)
 				}
 				n++
@@ -276,7 +280,7 @@ func TestE4TapeReplays(t *testing.T) {
 
 // TestHybridRecallProofRuns is gate E4 (PLAN § PR 3b): answer-free recall@8 of hybrid search must
 // be ≥ 0.95 (65/68). By default it replays eval/e4/embeddings.json; E4_RECORD=1 records that tape
-// with EMBED_MODEL (and EMBED_DIMENSIONS) at BIGLAW_MODEL_URL/BIGLAW_MODEL_KEY (make e4-record), and
+// with EMBED_MODEL at BIGLAW_MODEL_URL (BIGLAW_MODEL_KEY if it needs one; make e4-record), and
 // E4_LIVE=1 measures live without writing it (make e4-live). A tape recorded by the self-test
 // embedder is no gate: the test then skips, saying so.
 func TestHybridRecallProofRuns(t *testing.T) {
@@ -288,16 +292,13 @@ func TestHybridRecallProofRuns(t *testing.T) {
 	modelID := ""
 	switch {
 	case record || live:
-		modelID = os.Getenv("EMBED_MODEL")
-		dims, err := strconv.Atoi(cmp.Or(os.Getenv("EMBED_DIMENSIONS"), "0"))
-		if modelID == "" || err != nil || dims < 0 {
-			t.Fatal("E4_RECORD/E4_LIVE need EMBED_MODEL (and EMBED_DIMENSIONS, a number, or unset)")
+		if modelID = os.Getenv("EMBED_MODEL"); modelID == "" {
+			t.Fatal("E4_RECORD/E4_LIVE need EMBED_MODEL")
 		}
 		var inner model.Embedder
 		if modelID == selfTestModel {
-			dims = cmp.Or(dims, 64)
 			f := model.NewFake(nil)
-			f.Vectors = func(text string) ([]float32, error) { return hashVector(text, dims), nil }
+			f.Vectors = func(text string) ([]float32, error) { return hashVector(text, selfTestDims), nil }
 			inner = f
 		} else {
 			c, err := model.New(model.Options{URL: os.Getenv("BIGLAW_MODEL_URL"), Key: os.Getenv("BIGLAW_MODEL_KEY"), Roles: model.Roles{Embed: modelID}})
@@ -306,7 +307,7 @@ func TestHybridRecallProofRuns(t *testing.T) {
 			}
 			inner = c
 		}
-		rec = &recorder{inner: inner, dims: dims, tape: map[string]string{}}
+		rec = &recorder{inner: inner, tape: map[string]string{}}
 		s.UseEmbedder(rec, modelID)
 	default:
 		tape := loadTape(t)
@@ -317,13 +318,13 @@ func TestHybridRecallProofRuns(t *testing.T) {
 	}
 	r := e4Measure(t, s)
 	if missing != nil {
-		checkReplay(t, s, missing)
+		checkReplay(t, missing)
 	}
 	if rec != nil && record {
-		tape := e4Tape{Model: modelID, Dimensions: rec.dims, Chunker: chunkerID, Vectors: rec.tape}
+		tape := e4Tape{Model: modelID, Vectors: rec.tape}
 		if modelID == selfTestModel {
 			tape.Note = "Self-test tape: a bag-of-words hash embedder, not a language model. It proves the E4 record/replay harness only; " +
-				"TestHybridRecallProofRuns skips on it. The owner replaces it with: make e4-record EMBED_MODEL=(a real embedding model) EMBED_DIMENSIONS=512."
+				"TestHybridRecallProofRuns skips on it. The owner replaces it with: make e4-record EMBED_MODEL=(a real embedding model)."
 		}
 		out, _ := json.MarshalIndent(tape, "", " ")
 		if err := os.WriteFile(tapePath, append(out, '\n'), 0o644); err != nil {
@@ -333,7 +334,7 @@ func TestHybridRecallProofRuns(t *testing.T) {
 	}
 	if modelID == selfTestModel {
 		t.Skipf("E4 GATE NOT JUDGED: these are the self-test hash embedder's vectors (%s), not a real model's; their recall, %s, is no gate result. "+
-			"Record the real tape once: make e4-record EMBED_MODEL=text-embedding-3-small EMBED_DIMENSIONS=512 BIGLAW_MODEL_URL=… BIGLAW_MODEL_KEY=… BIGLAW_TEST_DSN=…",
+			"Record the real tape once: make e4-record EMBED_MODEL=text-embedding-3-small BIGLAW_MODEL_URL=… BIGLAW_MODEL_KEY=… BIGLAW_TEST_DSN=…",
 			selfTestModel, r.question)
 	}
 	if float64(r.question.found) < 0.95*float64(r.question.facts) {
