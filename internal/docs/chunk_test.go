@@ -67,6 +67,13 @@ func TestTableRowChunking(t *testing.T) {
 	if wc := Chunkify(wide.String(), Parse(wide.String())); !strings.HasPrefix(wc[len(wc)-1].Context, "columns: Col000, Col001") {
 		t.Errorf("a long header was lost: %+v", wc[len(wc)-1])
 	}
+	// r3 L2: a "#" row-number column is a header cell, not a sheet marker; a "#" line still is one.
+	hashed := "#\tItem\tAmount\n1\tMonthly rent payment\t$400.00\n2\tLate filing fee owed\t$50.00\n# Sheet: Fees\nNo\tKind\tSum\n3\tLate\t$9\n"
+	hc := Chunkify(hashed, Parse(hashed))
+	if len(hc) != 2 || hc[0].Context != "columns: #, Item, Amount" || !strings.Contains(hc[0].Search, "#: 1\tItem: Monthly rent payment") ||
+		!strings.Contains(hc[0].Search, "Item: Late filing fee") || hc[1].Context != "Sheet: Fees; columns: No, Kind, Sum" {
+		t.Errorf("a '#' first column: %+v", hc)
+	}
 	for _, c := range chunks[:len(chunks)-1] {
 		if len(c.Text) < minTableChunk-40 || text[c.End] != '\n' {
 			t.Errorf("chunk of %d bytes does not end at a row end: %q", len(c.Text), c.Text)
@@ -142,7 +149,12 @@ func TestSectionTreeBounded(t *testing.T) {
 		"deep tiny rows": deep + strings.Repeat("a\t\t\n", 250_000),
 		"many sheets":    strings.Repeat("#\nh\th\th\na\tb\tc\n", 50_000),
 		"long row":       "h\th\th\n" + strings.Repeat("word ", 300_000) + "\tb\tc\n" + "a\tb\tc\n", // r2 L-3: one 1.5 MB cell
+		// r3 L1: one short section per heading, each carrying a long path, beats any ratio; the
+		// bound is additive (below).
+		"deep titles": deep[:len(deep)-7] + strings.Repeat(title("1.1.1.1.7"), 9_990),
 	}
+	// A path has at most six levels of number, title (clipped, "…") and " > "; a context is clipped.
+	const perSection = 6*(maxNumber+1+maxTitle+len("…")+len(" > ")) + maxContext + len("…")
 	for name, text := range shapes {
 		start := time.Now()
 		secs := Parse(text)
@@ -156,7 +168,12 @@ func TestSectionTreeBounded(t *testing.T) {
 		}
 		checkChunks(t, text, chunks)
 		t.Logf("%s: %d bytes in, %d sections, %d chunks, all chunk columns %d bytes (%.2f×), %s", name, len(text), len(secs), len(chunks), size, float64(size)/float64(len(text)), took)
-		if size > len(text)*bound || len(secs) > MaxSections || took > 30*time.Second || strings.Contains(name, "items") && len(secs) != MaxSections {
+		limit := len(text) * bound
+		if name == "deep titles" { // ≈4× (body, search ≤1.5×, …) plus per-section overhead
+			limit = 4*len(text) + len(secs)*perSection
+			t.Logf("%s: %d bytes over 4× the input, %d per section (bound %d)", name, size-4*len(text), (size-4*len(text))/len(secs), perSection)
+		}
+		if size > limit || len(secs) > MaxSections || took > 30*time.Second || strings.Contains(name, "items") && len(secs) != MaxSections {
 			t.Errorf("%s: not bounded", name)
 		}
 	}

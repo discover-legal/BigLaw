@@ -334,18 +334,25 @@ one, and the document's `notes` say so, so an outline never looks complete when 
 titles cut at 120 bytes, numbers of at most 24 bytes and five decimal levels, so a path has at
 most six levels; titles lose bidi and other invisible or control characters. **Bound:** every
 chunk column together (path, body, search text, column context) is at most 3× the input for each
-hostile shape `TestSectionTreeBounded` builds (measured 1.0×–2.9×: a long heading over 40,000
-items 2.2×, 2,500 rows of 100 one-digit cells under 100 named columns 2.9×), and by construction
-at most about 4× (a body, its search text at most 1.5× plus the column list, a path of at most
-about 870 bytes and a context of at most 256 per chunk of at least 1,024 bytes; a section's
-last chunk can be shorter, and there are at most 10,000 sections). v1's tree copied the full path into every chunk (3,284×
+hostile shape `TestSectionTreeBounded` builds except one (measured 1.0×–2.9×: a long heading over
+40,000 items 2.2×, 2,500 rows of 100 one-digit cells under 100 named columns 2.9×). The bound is
+**additive, not a ratio**: about 4× the input (a body, its search text at most 1.5× plus the
+column list, a path and a context per chunk of at least 1,024 bytes) **plus** up to 1,165 bytes
+per section (a path of six levels of number, 120-byte title and separator, 906 bytes, and a
+context of 259), so at most about 11.7 MB more per document at the 10,000-section cap, because a
+section's last chunk can be short. Small documents of many short, deeply nested sections show it:
+9,990 sections of 120-byte titles six levels deep (1.3 MB in) store 9.0 MB, **6.9×** (3.7 MB, 373
+bytes per section, over 4×), and the ratio falls as the document grows past the section cap
+(`TestSectionTreeBounded` "deep titles", which asserts the additive bound). v1's tree copied the full path into every chunk (3,284×
 and 168 s for the long heading); round 1's table rows copied the whole header into every row
 (a 120 KB, 20,000-column table: 1.2 GB and 20 s; 9 ms and 260 KB now). `TestHeadingHeuristics`. Joining every section's own text gives back the document byte for byte, so every
 section and chunk is a verbatim slice (`TestReconstruction`, `TestChunksCoverEveryWordOnce`).
 Chunks hold at most 400 tokens (3.5 characters per token), cut at a sentence end, else at white
 space. A tab-separated table is chunked by whole rows, grouped until a chunk holds at least
 1,024 bytes (a row longer than the token cap is split like prose); the first row (after the
-start or a `#`/`## Sheet:` line) is the header, however long. Each data cell is indexed as
+start or a `#`/`## Sheet:` line that is not itself a row, so a `#` row-number column stays a
+column) is the header, however long (only its first 1,401 cells are kept as names, the most a
+row under the token cap can pair). Each data cell is indexed as
 `Column: cell` while the names added stay within half the row's length (bare cells after that),
 and a chunk's `context` names the sheet and columns (at most 256 bytes; indexed once per chunk)
 (`TestTableRowChunking`). So a table hit returns a few rows, not one. A line with two or more
@@ -498,14 +505,24 @@ reclaimed, so a small machine should set `GOMEMLIMIT` (for example `GOMEMLIMIT=5
 for one 431 KB PDF of 63 MiB escape-heavy text: an unbounded buffer of the child's JSON and an
 array literal of every chunk body). Measured with `go test -run '^TestIngestMemoryBounded$' -v
 ./internal/docs` (the server's live heap, sampled every millisecond) while sampling every Postgres
-process with `ps -o rss= -C postgres` every 50 ms: ingesting 15 MiB of escape-heavy text, the worst
-case for copies, raised the server's live heap by **49 MiB as a PDF** (through the child) and
-**52 MiB as an uploaded text file**; the test process peaked at 105 MiB RSS, the largest Postgres
-backend at **127 MiB**, and the child at about **60 MiB** (`TestChildNearTextCap`). The test fails
-above 5× the text cap (80 MiB). Chunks go to Postgres by `COPY`, a row at a time. Add the file
+process with `ps -o rss= -C postgres` every 50 ms: ingesting each of seven text-cap shapes raised the server's live heap by
+**48–60 MiB** (one run: 15 MiB of escape-heavy text **49 MiB as a PDF** through the child and 49
+as a text file; 16 MiB of newlines 48; one header line of 16 M tabs 48; a 16 MiB header of three
+4 MiB cells under a 4 MiB `#` line 49–60 across runs; `x\n` × 8 M and `ten bytes\n` × 1.6 M 52).
+The test process peaked at 99–111 MiB RSS, the largest Postgres backend at **180 MiB** over the seven
+shapes (round 2 measured 127 MiB with the escape-heavy shape alone), and the child at about **60 MiB**
+(`TestChildNearTextCap`). The test (skipped under `-race`; `make test` runs it in its non-race
+pass) fails above 5× the text cap (80 MiB, a 20 MiB margin over the
+largest figure measured). Round 2's version split every section body into a slice of lines and
+the header row into a slice of cells first (16 bytes per line or tab): in this test 16 MiB of
+newlines cost +288 MiB and a 16 M-tab header +288 MiB (`x\n` lines +172), and a live server
+peaked at 326–589 MB; now lines and cells are walked one at a time, and the header keeps at most
+the 1,401 cells a pairable row can have (a longer row is split like prose). The live binary
+(`VmHWM`, idle 9.8 MB) now peaks at 96 MB for a 16 MiB newline file and then an `x\n` file, and
+133 MB for an `x\n` file and a tab-header file at once. Chunks go to Postgres by `COPY`, a row at a time. Add the file
 itself, which the reader is handed whole (up to 64 MiB, about 128 MiB peak at the default `GOGC`,
 as above). So two ingests at once (`ingestSlots`) of successful files at the text cap take about
-2 × (52 + 127 + 60) ≈ 0.5 GB above an idle server, plus up to 2 × 64 MiB of file; the worst case
+2 × (60 + 180 + 60) ≈ 0.6 GB above an idle server, plus up to 2 × 64 MiB of file; the worst case
 is two hostile files whose children die at their 1 GiB cap: about 2 GiB of children plus that.
 
 ## Test it
@@ -599,7 +616,7 @@ sweep at startup). Review round 2 added `TestReadChildBounded`, `TestChildNearTe
 
 | Budget | Ceiling | Today |
 |---|---:|---:|
-| Go production lines (physical lines, non-`_test.go`, test-support packages included) | 15,000 | 3,878 |
+| Go production lines (physical lines, non-`_test.go`, test-support packages included) | 15,500 | 3,894 |
 | Packages under `internal/`, test-support packages excluded | 12 | 4 (`docs`, `docs/ooxml`, `model`, `store`; `store/storetest` is test support) |
 | Direct Go dependencies | 3 | 2 (`github.com/lib/pq`, `github.com/ledongthuc/pdf`) |
 | Runtime environment variables | 20 | 20 |
@@ -607,7 +624,7 @@ sweep at startup). Review round 2 added `TestReadChildBounded`, `TestChildNearTe
 | Packages without a `_test.go` | 0 | 0 |
 | Lines in any one source file (`.go`, `.py`, `.sql`, `.sh`, `.js`, `.ts`, `.css`; tests included) | 2,000 | 626 |
 
-The line ceiling is 15,000 (owner decisions: 14,000, then 14,250, then 14,500 during PR 2's review, then 15,000 at PR 3a's, with pgvector). A **test-support package** is one
+The line ceiling is 15,500, declared final (owner decisions: 14,000, then 14,250, then 14,500 during PR 2's review, then 15,000 at PR 3a's, with pgvector, then 15,500 at PR 3a's round 3, with no further rises). A **test-support package** is one
 whose directory name ends in `test` and that no production file outside it imports, such as
 `storetest`. Under the coordinator's ruling it is left out of the package count, but its lines
 count toward the line ceiling like any other non-`_test.go` file. A `*test` package that
@@ -653,7 +670,7 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
   sending 64 KiB per 30 s (about 35 KiB/s in all) can hold every upload slot for the full 15
   minutes. Uploads are buffered per extraction: two at a time (`ingestSlots`), each holding the
   file (≤ 64 MiB) plus a `.docx`'s decompressed text parts (≤ 128 MiB) in the child, and about
-  52 MiB of server heap at the 16 MiB text cap (§ Files, memory of one ingest). Downloads use the same floor
+  60 MiB of server heap at the 16 MiB text cap (§ Files, memory of one ingest). Downloads use the same floor
   (64 KiB per 30 s, 15 minutes in all), so 4 clients reading just above it can hold all 4 read
   slots for 15 minutes, and ingest (which reads the stored file back) waits for them meanwhile.
   A stored file with no document is swept only at startup and only after an hour; a later PR that
@@ -710,13 +727,13 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     data, since a document can contain text addressed to the judge (`.docx` text hidden by
     formatting, not by `<w:vanish/>`, reaches it too).
   - The tolerant rung folds case, so `ACME` verifies against `Acme` (at 0.95).
-  - **Line budget:** `internal/docs` measures 1,717 lines (1,455 plus `http.go` 262) against the
+  - **Line budget:** `internal/docs` measures 1,733 lines (1,471 plus `http.go` 262) against the
     1,110 DESIGN plans for what 3a builds plus api's `documents` 200 (moved here, covering the
     routes PR 4b still adds), `docs/ooxml` 174 against its reader's 120, `store` 641 against 580
     and `cmd` 528 against 505. With the 4a adapters and the remaining documents routes counted,
-    the plan totals 14,850–14,880, under the 15,000 ceiling by 120–150; with PR 3b's pgvector
-    estimate (270–405 lines, DESIGN § PR 3b pgvector estimate) it is 15,120–15,285, **over by
-    120–285** until trimmed; the coordinator and owner decide the trims. `scripts/loc.py`'s
+    the plan totals 14,866–14,896, under the 15,500 ceiling (final) by 604–634; with PR 3b's
+    pgvector estimate (270–405 lines, DESIGN § PR 3b pgvector estimate) it is 15,136–15,301,
+    **under by 199–364**; the ceiling will not rise again, so a later overrun must be trimmed. `scripts/loc.py`'s
     actual count is far below it.
   - Migration `0002_docs.sql` changed during this PR's review (the delete trigger, the dropped GIN
     indexes, prose search text stored once; round 2 changed no SQL): a dev database that applied an earlier version
@@ -783,4 +800,4 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     records the move: measured the review's way (PR 1 as built, 1,161, plus PR 2's growth over
     plan, the remaining packages at their DESIGN budgets, cmd's import-v1 reservation intact), the
     plan totals 14,245 of 14,500, 255 lines of headroom (superseded: PR 3a's figures and the
-    15,000 ceiling are under § Documents above).
+    15,500 ceiling are under § Documents above).

@@ -100,9 +100,10 @@ func capEnd(text string, start, limit int) int {
 func isTableRow(line string) bool { return strings.Count(line, "\t") >= 2 }
 
 // isTabular: at least two tab-delimited rows of 3+ columns (spreadsheet exhibits, docx tables).
+// It walks the lines without a slice of them (r3 M1: 16 B per line of a newline-dense body).
 func isTabular(body string) bool {
 	n := 0
-	for _, ln := range strings.Split(body, "\n") {
+	for ln := range strings.SplitSeq(body, "\n") {
 		if isTableRow(ln) {
 			if n++; n == 2 {
 				return true
@@ -119,6 +120,9 @@ func isTabular(body string) bool {
 const (
 	minTableChunk = 1024
 	maxContext    = 256
+	// A data row longer than ChunkTokens*7/2 runes is split like prose, never paired, so it has at
+	// most this many cells; the header keeps no more names than that (r3 M1: a 16 M-tab header).
+	maxColumns = ChunkTokens*7/2 + 1
 )
 
 // tableRows chunks the tabular text[from:to]: whole lines (rows, "#"/"## Sheet:" markers, prose)
@@ -144,11 +148,11 @@ func tableRows(text string, from, to int, add func(start, end int, search, conte
 		}
 		line, n := strings.TrimRight(text[pos:end], "\r\n"), utf8.RuneCountInString(text[pos:end])
 		row := isTableRow(line)
-		if t := strings.TrimSpace(line); strings.HasPrefix(t, "#") {
+		if t := strings.TrimSpace(line); !row && strings.HasPrefix(t, "#") { // a "#" cell is a column
 			sheet, header = strings.TrimSpace(strings.TrimPrefix(strings.TrimLeft(t, "# "), "Sheet:")), nil
 		} else if row && header == nil { // the header, however long
-			header, row = strings.Split(line, "\t"), false
-			var cols []string
+			header, row = headerCells(line), false
+			var cols []string // one copy of at most the header line, once per table
 			for _, h := range header {
 				if h = strings.TrimSpace(h); h != "" {
 					cols = append(cols, h)
@@ -187,6 +191,18 @@ func tableRows(text string, from, to int, add func(start, end int, search, conte
 		pos = end
 	}
 	flush(to)
+}
+
+// headerCells is the header row's first maxColumns cells, split without a slice of every tab.
+func headerCells(line string) []string {
+	header := []string{}
+	for h := range strings.SplitSeq(line, "\t") {
+		if len(header) == maxColumns {
+			break
+		}
+		header = append(header, h)
+	}
+	return header
 }
 
 // pairCells is a data row's search text: "Column: cell" for each cell while the column names

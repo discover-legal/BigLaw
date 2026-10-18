@@ -77,6 +77,6 @@ make ci     # gofmt, vet, mod verify/tidy, static build, go test -race -shuffle,
 make lint vuln   # staticcheck, govulncheck (CI lint job)
 # DB tests: BIGLAW_TEST_DSN=postgres://…?sslmode=disable BIGLAW_REQUIRE_DB=1
 ```
-Budgets: Go prod LOC ≤ 15,000 (owner decision 9; test-support packages such as `storetest` count), internal
+Budgets: Go prod LOC ≤ 15,500, final (owner decision 10; test-support packages such as `storetest` count), internal
 packages ≤ 12 (test-support packages do not count), direct deps ≤ 3, env vars ≤ 20, UI runtime
 deps ≤ 2, untested packages 0, longest source file ≤ 2,000 lines.

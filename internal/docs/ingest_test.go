@@ -308,15 +308,29 @@ func TestResolvesByTitle(t *testing.T) {
 // by the child) and as an uploaded text file. Peak live heap above the start, sampled every
 // millisecond; README § Memory states these figures and the whole-ingest bound.
 func TestIngestMemoryBounded(t *testing.T) {
-	if testing.Short() {
-		t.Skip("ingests 2 × 15 MiB")
+	if testing.Short() || raceOn { // make test runs it in its non-race pass (7 × 16 MiB under -race: ~4 min)
+		t.Skip("ingests 7 inputs of up to 16 MiB; run without -race and -short")
 	}
 	s := newService(t)
-	text := strings.Repeat(`\"`+"x ", (maxText-1<<20)/4)
-	for name, data := range map[string][]byte{
-		"pdf":  textPDF((maxText-1<<20)*3/2, strings.Repeat(`\\"`, 500)),
-		"text": []byte(text),
+	// Each input is built inside its own measurement, so earlier inputs do not inflate the live
+	// heap (and with it the garbage the collector lets accumulate before it runs).
+	for _, c := range []struct {
+		name, file string
+		data       func() []byte
+	}{
+		{"pdf", "big.pdf", func() []byte { return textPDF((maxText-1<<20)*3/2, strings.Repeat(`\\"`, 500)) }},
+		{"escapes", "big.txt", func() []byte { return []byte(strings.Repeat(`\"`+"x ", (maxText-1<<20)/4)) }},
+		// r3 M1: line- and tab-dense text used to cost 16 B per line or header tab in the server.
+		{"newlines", "big.txt", func() []byte { return bytes.Repeat([]byte("\n"), maxText) }},
+		{"tab header", "big.txt", func() []byte { return []byte("h" + strings.Repeat("\t", maxText-16) + "\n1\t2\t3\n") }},
+		{"long header cells", "big.txt", func() []byte {
+			cell := strings.Repeat("w", maxText/4-8)
+			return []byte("# " + cell + "\n" + cell + "\t" + cell + "\t" + cell + "\n1\t2\t3\n")
+		}},
+		{"x lines", "big.txt", func() []byte { return bytes.Repeat([]byte("x\n"), maxText/2) }},
+		{"short lines", "big.txt", func() []byte { return bytes.Repeat([]byte("ten bytes\n"), maxText/10) }},
 	} {
+		name, data := c.name, c.data()
 		runtime.GC()
 		sample := []metrics.Sample{{Name: "/memory/classes/heap/objects:bytes"}}
 		metrics.Read(sample)
@@ -336,7 +350,7 @@ func TestIngestMemoryBounded(t *testing.T) {
 			}
 		}()
 		start := time.Now()
-		d, err := s.Ingest(t.Context(), "big."+name, "application/octet-stream", bytes.NewReader(data))
+		d, err := s.Ingest(t.Context(), c.file, "application/octet-stream", bytes.NewReader(data))
 		close(done)
 		peak := <-peaked
 		growth := (peak - min(peak, base)) >> 20
