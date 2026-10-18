@@ -1,6 +1,6 @@
 -- 0002_docs: documents (owned by internal/docs), their section tree and search chunks.
--- A document's original upload is a files row; deleting the document deletes the file (docs.Delete,
--- one transaction), and a file deleted any other way takes its document with it (the CASCADE).
+-- A document's original upload is a files row. Deleting either deletes the other, however it is
+-- deleted: the file's CASCADE takes its document, and documents_delete_file takes the file.
 -- Every read in Go is scoped to a task's document ids (README G1).
 CREATE TABLE documents (
     id           uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -14,6 +14,14 @@ CREATE TABLE documents (
     notes        text[]      NOT NULL,
     created_at   timestamptz NOT NULL DEFAULT now()
 );
+
+CREATE FUNCTION documents_delete_file() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    DELETE FROM files WHERE id = OLD.file_id;
+    RETURN NULL;
+END $$;
+CREATE TRIGGER documents_delete_file AFTER DELETE ON documents
+    FOR EACH ROW WHEN (OLD.file_id IS NOT NULL) EXECUTE FUNCTION documents_delete_file();
 
 -- One row per node of the section tree, in pre-order (ord). char_start/char_end are character
 -- (not byte) offsets into documents.text of the node with its subsections, for substr().
@@ -30,7 +38,8 @@ CREATE TABLE sections (
 );
 
 -- Search units: body is a verbatim slice of documents.text [byte_start, byte_end); search_text
--- is what is indexed (the body, or a table row paired with its headers). Two generated tsvectors:
+-- is what is indexed when it is not the body itself ('' for prose: a table row paired with its
+-- headers). locator is the chunk's section path, bounded by docs.Parse (six levels, short titles). Two generated tsvectors:
 -- English (stemmed) for words, simple (unstemmed) for identifiers such as s.9.4 or FS-26-01234.
 CREATE TABLE chunks (
     id          bigint  GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -42,10 +51,11 @@ CREATE TABLE chunks (
     context     text    NOT NULL,
     byte_start  integer NOT NULL CHECK (byte_start >= 0),
     byte_end    integer NOT NULL CHECK (byte_end > byte_start),
-    tsv         tsvector GENERATED ALWAYS AS (to_tsvector('english'::regconfig, locator || ' ' || search_text)) STORED,
-    tsv_simple  tsvector GENERATED ALWAYS AS (to_tsvector('simple'::regconfig, locator || ' ' || search_text)) STORED,
+    tsv         tsvector GENERATED ALWAYS AS (to_tsvector('english'::regconfig, locator || ' ' || coalesce(nullif(search_text, ''), body))) STORED,
+    tsv_simple  tsvector GENERATED ALWAYS AS (to_tsvector('simple'::regconfig, locator || ' ' || coalesce(nullif(search_text, ''), body))) STORED,
     FOREIGN KEY (document_id, section_ord) REFERENCES sections (document_id, ord) ON DELETE CASCADE
 );
+-- Search reads a scope's chunks through chunks_document and matches each term against them, so
+-- its cost grows with the scope, not the database. No GIN index: the ranking query's per-term
+-- choice of vector cannot use one (r1 R9: EXPLAIN showed none used), so it would only cost writes.
 CREATE INDEX chunks_document ON chunks (document_id);
-CREATE INDEX chunks_tsv ON chunks USING gin (tsv);
-CREATE INDEX chunks_tsv_simple ON chunks USING gin (tsv_simple);

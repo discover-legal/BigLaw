@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 const xlsxBody = `## Sheet: Summary
@@ -89,5 +90,62 @@ func TestChunksCoverEveryWordOnce(t *testing.T) {
 	}
 	if !strings.HasSuffix(chunks[1].Text, ".") {
 		t.Errorf("a long clause is cut at a sentence end: %q", chunks[1].Text[len(chunks[1].Text)-20:])
+	}
+}
+
+// TestSectionTreeBounded (r1 reproducer R1): about 1 MB of each hostile shape (a huge heading
+// title over 40k items, a 1,500-deep decimal chain, 170k one-line items) keeps chunk text plus
+// section paths within 2.5× the input and at most MaxSections sections; one ingests end to end. v1's tree copied the full path into every chunk: 3,284× and
+// 168 s for the first shape.
+func TestSectionTreeBounded(t *testing.T) {
+	var chain strings.Builder
+	for n := "1"; chain.Len() < 1<<20; n += ".1" {
+		chain.WriteString(n + " Clause\n")
+	}
+	shapes := map[string]string{
+		"long title": "ARTICLE I " + strings.Repeat("word ", 200_000) + "\n" + strings.Repeat("(a) x\n", 40_000),
+		"deep chain": chain.String(),
+		"tiny items": strings.Repeat("(a) x\n", 170_000),
+	}
+	for name, text := range shapes {
+		start := time.Now()
+		secs := Parse(text)
+		chunks := Chunkify(text, secs)
+		took, size := time.Since(start), 0
+		for _, c := range chunks {
+			size += len(c.Locator) + len(c.Text)
+		}
+		t.Logf("%s: %d bytes in, %d sections, %d chunks, chunk text + paths %d bytes (%.2f×), %s", name, len(text), len(secs), len(chunks), size, float64(size)/float64(len(text)), took)
+		if size > len(text)*5/2 || len(secs) > MaxSections {
+			t.Errorf("%s: not bounded", name)
+		}
+	}
+	s := newService(t)
+	start := time.Now()
+	d, err := s.IngestText(t.Context(), "hostile.txt", shapes["long title"])
+	var stored int
+	if err == nil {
+		err = s.db.QueryRow(`SELECT sum(octet_length(locator) + octet_length(body) + octet_length(search_text)) FROM chunks WHERE document_id = $1`, d.ID).Scan(&stored)
+	}
+	t.Logf("ingested the long-title shape in %s: %d bytes stored in chunks", time.Since(start), stored)
+	if err != nil || stored > len(shapes["long title"])*5/2 || time.Since(start) > 15*time.Second {
+		t.Errorf("ingest: %v, %d bytes stored", err, stored)
+	}
+}
+
+// TestHeadingHeuristics (r1 reproducer R11): a figure at a line start followed by a lower-case word
+// is not a heading; titles lose bidi and control characters and are cut at maxTitle bytes; a
+// number of more than maxNumber bytes or six decimal levels is body text.
+func TestHeadingHeuristics(t *testing.T) {
+	for _, line := range []string{"100 dollars were paid", "1.5 million dollars", "3.14 is pi", "1.2.3.4.5.6 Deep", "ARTICLE " + strings.Repeat("I", 30) + " Long"} {
+		if s, ok := classify(line); ok {
+			t.Errorf("%q is a heading: %+v", line, s)
+		}
+	}
+	for line, want := range map[string]string{"1. Definitions": "Definitions", "1.2.3.4.5 Five levels": "Five levels", "ARTICLE I Fees \u202e5.0 GBP\x1b[31m": "Fees 5.0 GBP[31m",
+		"2. " + strings.Repeat("É", 100): strings.Repeat("É", 60) + "…"} {
+		if s, ok := classify(line); !ok || s.Title != want {
+			t.Errorf("%q: %+v %v, want title %q", line, s, ok, want)
+		}
 	}
 }

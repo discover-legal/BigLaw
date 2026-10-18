@@ -7,6 +7,7 @@
     {
       "id": "DD-01",
       "title": "Common stock count in SPA s.3.4 (6,250,000) contradicts cap table (6,412,500)",
+      "question": "How many shares of common stock are outstanding?",
       "category": "capitalization",
       "severity": "high",
       "documents": ["01-stock-purchase-agreement-draft.md", "07-cap-table.csv"],
@@ -17,6 +18,7 @@
     {
       "id": "DD-02",
       "title": "Options outstanding: SPA says 450,000, cap table shows 610,000",
+      "question": "How many stock options are outstanding?",
       "category": "capitalization",
       "severity": "high",
       "documents": ["01-stock-purchase-agreement-draft.md", "07-cap-table.csv"],
@@ -27,6 +29,7 @@
     {
       "id": "DD-03",
       "title": "Undisclosed Lakeside Venture Debt warrant for 85,000 shares contradicts the SPA's 'no warrants' rep",
+      "question": "Are there any warrants or other rights to acquire the Company's shares?",
       "category": "capitalization",
       "severity": "high",
       "documents": ["07-cap-table.csv", "01-stock-purchase-agreement-draft.md"],
@@ -37,6 +40,7 @@
     {
       "id": "DD-04",
       "title": "Series A protective provision: sale of >50% is a Deemed Liquidation Event requiring 60% Series A consent",
+      "question": "Does the Series A have protective provisions or consent rights over a sale of the Company?",
       "category": "charter",
       "severity": "high",
       "documents": ["02-certificate-of-incorporation.md"],
@@ -47,6 +51,7 @@
     {
       "id": "DD-05",
       "title": "Series A liquidation preference is 1.5x participating = $9,000,000 before common",
+      "question": "What liquidation preference do the Series A Preferred holders have?",
       "category": "charter",
       "severity": "medium",
       "documents": ["02-certificate-of-incorporation.md", "07-cap-table.csv"],
@@ -57,6 +62,7 @@
     {
       "id": "DD-06",
       "title": "Charter right of first refusal on all stock transfers must be waived (board + Series A director)",
+      "question": "Do the charter or bylaws restrict transfers of the Company's stock?",
       "category": "charter",
       "severity": "medium",
       "documents": ["02-certificate-of-incorporation.md"],
@@ -67,6 +73,7 @@
     {
       "id": "DD-07",
       "title": "Norrland (sole-source supplier): change of control lets Supplier terminate on 30 days' notice within 90 days",
+      "question": "What happens to the Norrland supply agreement on a change of control?",
       "category": "change_of_control",
       "severity": "high",
       "documents": ["03-supply-agreement-norrland.md"],
@@ -77,6 +84,7 @@
     {
       "id": "DD-08",
       "title": "Norrland take-or-pay minimum commitment of $2,400,000 per Contract Year",
+      "question": "Does the Norrland supply agreement contain a minimum purchase commitment?",
       "category": "commercial",
       "severity": "medium",
       "documents": ["03-supply-agreement-norrland.md"],
@@ -87,6 +95,7 @@
     {
       "id": "DD-09",
       "title": "Arcadia (31% customer) names Halberd as a Competitor: immediate termination + refund of $1,150,000 prepaid fees",
+      "question": "What rights does Arcadia have if the Company is acquired?",
       "category": "change_of_control",
       "severity": "high",
       "documents": ["04-customer-msa-arcadia.md"],
@@ -97,6 +106,7 @@
     {
       "id": "DD-10",
       "title": "Arcadia MSA requires prior written consent to a change of control (>40% threshold)",
+      "question": "Does the Arcadia MSA require consent to a change of control?",
       "category": "change_of_control",
       "severity": "high",
       "documents": ["04-customer-msa-arcadia.md"],
@@ -107,6 +117,7 @@
     {
       "id": "DD-11",
       "title": "Cobalt license: assignment by merger/change of control without consent is void and permits immediate termination",
+      "question": "Can the Cobalt license be assigned or transferred in a merger or change of control?",
       "category": "change_of_control",
       "severity": "high",
       "documents": ["05-software-license-cobalt.md"],
@@ -117,6 +128,7 @@
     {
       "id": "DD-12",
       "title": "Lease: transfer of >49% of Tenant's stock is a deemed assignment requiring landlord consent",
+      "question": "Does a sale of the Tenant's stock require the landlord's consent under the lease?",
       "category": "change_of_control",
       "severity": "medium",
       "documents": ["08-office-lease.md"],
@@ -127,6 +139,7 @@
     {
       "id": "DD-13",
       "title": "Lease renewal option lapsed: exercise deadline was September 30, 2026; lease expires June 30, 2027",
+      "question": "When does the lease expire, and is a renewal option still exercisable?",
       "category": "deadline",
       "severity": "high",
       "documents": ["08-office-lease.md"],
@@ -137,6 +150,7 @@
     {
       "id": "DD-14",
       "title": "CEO single-trigger Change in Control Payment of $770,000 (2.0x $385,000)",
+      "question": "What change in control payment is the CEO entitled to?",
       "category": "employment",
       "severity": "high",
       "documents": ["06-ceo-employment-agreement.md"],
@@ -147,6 +161,7 @@
     {
       "id": "DD-15",
       "title": "CEO 100% single-trigger equity acceleration and no 280G cutback",
+      "question": "What happens to the CEO's equity awards on a change in control, and is there a 280G provision?",
       "category": "employment",
       "severity": "medium",
       "documents": ["06-ceo-employment-agreement.md"],
@@ -157,6 +172,7 @@
     {
       "id": "DD-16",
       "title": "CEO 24-month non-compete governed by California law is likely unenforceable",
+      "question": "Is the CEO's non-compete enforceable?",
       "category": "employment",
       "severity": "medium",
       "documents": ["06-ceo-employment-agreement.md"],
@@ -167,6 +183,7 @@
     {
       "id": "DD-17",
       "title": "SPA s.6.5: third-party consents are not a closing condition",
+      "question": "Are third-party consents a condition to closing under the SPA?",
       "category": "spa_gap",
       "severity": "high",
       "documents": ["01-stock-purchase-agreement-draft.md"],
@@ -177,6 +194,7 @@
     {
       "id": "DD-18",
       "title": "Schedule 3.6 lists only the lease consent — omits Norrland, Arcadia and Cobalt",
+      "question": "Which consents does the disclosure schedule list?",
       "category": "spa_gap",
       "severity": "high",
       "documents": ["01-stock-purchase-agreement-draft.md"],
@@ -187,6 +205,7 @@
     {
       "id": "DD-19",
       "title": "SPA s.8.4: 10% cap ($8.4M) applies even to Fundamental Representations; 12-month survival",
+      "question": "What cap and survival period apply to indemnification under the SPA?",
       "category": "spa_gap",
       "severity": "medium",
       "documents": ["01-stock-purchase-agreement-draft.md"],

@@ -11,13 +11,9 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"os/exec"
-	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -85,9 +81,10 @@ type Extraction struct {
 
 const docxType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
-// textOf is the extraction of UTF-8 text, flagged when there is nothing in it.
+// textOf is the extraction of UTF-8 text (cleaned, as every extraction is), flagged when there is
+// nothing in it.
 func textOf(text string) Extraction {
-	x := Extraction{Text: text, Method: "text", ContentType: "text/plain; charset=utf-8"}
+	x := Extraction{Text: clean(text), Method: "text", ContentType: "text/plain; charset=utf-8"}
 	if strings.TrimSpace(text) == "" {
 		x.NoText, x.Notes = true, []string{"The document is empty or white space only."}
 	}
@@ -106,27 +103,41 @@ func clean(s string) string {
 }
 
 // Extract reads the text of a file by its content (magic bytes), never trusting the declared type.
-// A PDF is parsed in a child process (pdfChild), so a hostile file cannot crash or hang the server.
+// PDFs and .docx files are parsed in a child process (MaybeRunChild), so a hostile file cannot
+// crash the server, hang it, or take its memory.
 func Extract(ctx context.Context, data []byte) (Extraction, error) {
 	switch {
-	case bytes.HasPrefix(data, []byte("%PDF-")):
-		return extractPDFChild(ctx, data)
-	case bytes.HasPrefix(data, []byte("PK\x03\x04")):
-		d, err := ooxml.Open(data)
-		if errors.Is(err, ooxml.ErrNotDocx) {
-			return Extraction{}, fmt.Errorf("%w (a ZIP archive that is not a .docx: spreadsheets, slides and other archives are not read)", ErrUnsupported)
-		} else if err != nil {
-			return Extraction{}, fmt.Errorf("%w: %v", ErrUnreadable, err)
-		}
-		x := Extraction{Text: clean(d.Text()), Method: "text_layer", ContentType: docxType}
-		if strings.TrimSpace(x.Text) == "" {
-			x.NoText, x.Notes = true, []string{"This Word document has no text (it may hold only images); nothing in it can be searched or quoted."}
-		}
-		return x, nil
+	case bytes.HasPrefix(data, []byte("%PDF-")), bytes.HasPrefix(data, []byte("PK\x03\x04")):
+		return extractInChild(ctx, data)
 	case utf8.Valid(data) && bytes.IndexByte(data, 0) < 0:
 		return textOf(string(data)), nil
 	}
 	return Extraction{}, ErrUnsupported
+}
+
+// parse is what the child runs.
+func parse(data []byte) (Extraction, error) {
+	if bytes.HasPrefix(data, []byte("%PDF-")) {
+		return extractPDF(data)
+	}
+	d, err := ooxml.Open(data)
+	if errors.Is(err, ooxml.ErrNotDocx) {
+		return Extraction{}, fmt.Errorf("%w (a ZIP archive that is not a .docx: spreadsheets, slides and other archives are not read)", ErrUnsupported)
+	} else if err != nil {
+		return Extraction{}, fmt.Errorf("%w: %v", ErrUnreadable, err)
+	}
+	text, err := d.Text()
+	if err != nil {
+		return Extraction{}, fmt.Errorf("%w: %v", ErrUnreadable, err)
+	}
+	if len(text) > maxText { // 128 MiB of parts can hold more text than any stored document
+		return Extraction{}, fmt.Errorf("%w: the document's text is larger than %d bytes", ErrUnreadable, maxText)
+	}
+	x := Extraction{Text: clean(text), Method: "text_layer", ContentType: docxType}
+	if strings.TrimSpace(x.Text) == "" {
+		x.NoText, x.Notes = true, []string{"This Word document has no text (it may hold only images); nothing in it can be searched or quoted."}
+	}
+	return x, nil
 }
 
 func extractPDF(data []byte) (x Extraction, err error) {
@@ -159,86 +170,17 @@ func extractPDF(data []byte) (x Extraction, err error) {
 			blank = append(blank, strconv.Itoa(i+1))
 		}
 	}
-	switch {
-	case len(blank) == x.Pages:
+	switch n := len(blank); {
+	case n == x.Pages:
 		x.NoText, x.Notes = true, []string{fmt.Sprintf("This PDF has no text layer (%d scanned page(s)?): nothing in it can be searched or quoted. "+
 			"Re-export it with text, or transcribe it; this build has no vision model.", x.Pages)}
-	case len(blank) > 0:
-		if len(blank) > 10 {
+	case n > 0:
+		if n > 10 {
 			blank = append(blank[:10], "…")
 		}
-		x.Notes = []string{fmt.Sprintf("%d of %d pages have no text layer (scanned images?) and were not read: page %s.", len(blank), x.Pages, strings.Join(blank, ", "))}
+		x.Notes = []string{fmt.Sprintf("%d of %d pages have no text layer (scanned images?) and were not read: page %s.", n, x.Pages, strings.Join(blank, ", "))}
 	}
 	return x, nil
-}
-
-// pdfChild is the argument that makes the BigLaw binary (or a test binary, through its TestMain) a
-// PDF reader: MaybeRunChild. pdfTimeout bounds one PDF's extraction (a variable for tests).
-const pdfChild = "__biglaw-pdf-text"
-
-var (
-	pdfTimeout = 2 * time.Minute
-	maxText    = store.MaxFileSize // a PDF's extracted text (a variable for tests)
-)
-
-// MaybeRunChild turns this process into a PDF text reader and exits, when it was started as one:
-// it reads a PDF on stdin and writes its Extraction as JSON on stdout. The PDF parser
-// (ledongthuc/pdf) recurses on nested objects, and a deep enough nesting is a fatal stack overflow
-// that recover cannot catch, so it never runs in the server's own process. main, and the TestMain
-// of every package whose tests ingest a PDF, call this first.
-func MaybeRunChild() {
-	if len(os.Args) != 2 || os.Args[1] != pdfChild {
-		return
-	}
-	debug.SetMaxStack(64 << 20) // fail fast on hostile nesting
-	debug.SetMemoryLimit(1 << 30)
-	data, err := io.ReadAll(io.LimitReader(os.Stdin, store.MaxFileSize+1))
-	var out struct {
-		X          Extraction
-		Unreadable string
-	}
-	if err == nil {
-		if out.X, err = extractPDF(data); err != nil {
-			out.Unreadable = strings.TrimPrefix(err.Error(), ErrUnreadable.Error()+": ")
-		}
-	}
-	if err != nil && out.Unreadable == "" {
-		os.Exit(2)
-	}
-	if json.NewEncoder(os.Stdout).Encode(out) != nil {
-		os.Exit(2)
-	}
-	os.Exit(0)
-}
-
-// extractPDFChild runs extractPDF in a child process with no environment, killed at pdfTimeout or
-// when ctx ends. A crash, a timeout or garbage output is ErrUnreadable, never text.
-func extractPDFChild(ctx context.Context, data []byte) (Extraction, error) {
-	exe, err := os.Executable()
-	if err != nil {
-		return Extraction{}, fmt.Errorf("docs: pdf reader: %w", err)
-	}
-	cctx, cancel := context.WithTimeout(ctx, pdfTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(cctx, exe, pdfChild)
-	var stdout bytes.Buffer
-	cmd.Stdin, cmd.Stdout, cmd.Env = bytes.NewReader(data), &stdout, []string{}
-	err = cmd.Run()
-	var out struct {
-		X          Extraction
-		Unreadable string
-	}
-	switch {
-	case ctx.Err() != nil:
-		return Extraction{}, ctx.Err()
-	case cctx.Err() != nil:
-		return Extraction{}, fmt.Errorf("%w: reading the PDF took longer than %s", ErrUnreadable, pdfTimeout)
-	case err != nil || json.Unmarshal(stdout.Bytes(), &out) != nil:
-		return Extraction{}, fmt.Errorf("%w: the PDF reader failed on this file (it may be damaged or hostile)", ErrUnreadable)
-	case out.Unreadable != "":
-		return Extraction{}, fmt.Errorf("%w: %s", ErrUnreadable, out.Unreadable)
-	}
-	return out.X, nil
 }
 
 // Ingest stores r as a file (streamed: see store.PutFile), extracts its text and stores the
@@ -320,6 +262,9 @@ func (s *Service) insert(ctx context.Context, d Document, x Extraction) (Documen
 		var loc, body, search, about []string
 		for _, c := range chunks {
 			sec, bs, be = append(sec, int64(c.Section)), append(bs, int64(c.Start)), append(be, int64(c.End))
+			if c.Search == c.Text {
+				c.Search = "" // prose is indexed from body (the schema's coalesce): stored once
+			}
 			loc, body, search, about = append(loc, c.Locator), append(body, c.Text), append(search, c.Search), append(about, c.Context)
 		}
 		_, err := tx.ExecContext(ctx, `INSERT INTO chunks (document_id, section_ord, locator, body, search_text, context, byte_start, byte_end)
@@ -375,33 +320,51 @@ func (s *Service) Get(ctx context.Context, scope []string, id string) (Document,
 	return d, nil
 }
 
-// File returns a document's original file, only through a document in scope.
-func (s *Service) File(ctx context.Context, scope []string, id string) (store.File, error) {
-	d, err := s.Get(ctx, scope, id)
-	if err != nil {
-		return store.File{}, err
+// WriteFile writes a document's original file to w, only through a document in scope
+// (store.ReadFile: one chunk in memory at a time). head gets the detected content type and the
+// file's metadata before the first byte.
+func (s *Service) WriteFile(ctx context.Context, scope []string, id string, head func(contentType string, f store.File) error, w io.Writer) error {
+	if !inScope(scope, id) || !store.ValidID(id) {
+		return ErrNotFound
 	}
-	if d.FileID == "" {
-		return store.File{}, ErrNotFound
+	var ct string
+	var file sql.NullString
+	err := s.db.QueryRowContext(ctx, `SELECT content_type, file_id FROM documents WHERE id = $1`, id).Scan(&ct, &file)
+	if errors.Is(err, sql.ErrNoRows) || err == nil && !file.Valid {
+		return ErrNotFound
+	} else if err != nil {
+		return fmt.Errorf("docs: file: %w", err)
 	}
-	return s.st.GetFile(ctx, d.FileID)
+	_, err = s.st.ReadFile(ctx, file.String, func(f store.File) error { return head(ct, f) }, w)
+	return err
 }
 
-// Delete removes a document with its sections, chunks and original file, in one transaction.
+// Delete removes a document with its sections, chunks and original file (the schema's cascade and
+// trigger), in one statement.
 func (s *Service) Delete(ctx context.Context, id string) error {
 	if !store.ValidID(id) {
 		return ErrNotFound
 	}
-	return s.st.InTx(ctx, func(tx *sql.Tx) error {
-		var file sql.NullString
-		err := tx.QueryRowContext(ctx, `DELETE FROM documents WHERE id = $1 RETURNING file_id`, id).Scan(&file)
-		if errors.Is(err, sql.ErrNoRows) {
-			return ErrNotFound
-		} else if err == nil && file.Valid {
-			_, err = tx.ExecContext(ctx, `DELETE FROM files WHERE id = $1`, file.String)
-		}
-		return err
-	})
+	res, err := s.db.ExecContext(ctx, `DELETE FROM documents WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("docs: delete: %w", err)
+	} else if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SweepOrphanFiles deletes files no document references that are older than an hour: an upload
+// whose server died between storing the file and storing its document (Ingest removes the file
+// on every error it returns). serve runs it at startup. Every file is a document's until a later
+// PR stores other files, which must then teach this query about them.
+func (s *Service) SweepOrphanFiles(ctx context.Context) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM files f WHERE created_at < now() - interval '1 hour'
+		AND NOT EXISTS (SELECT 1 FROM documents d WHERE d.file_id = f.id)`)
+	if err != nil {
+		return 0, fmt.Errorf("docs: sweep orphan files: %w", err)
+	}
+	return res.RowsAffected()
 }
 
 // Resolve finds the document in scope that ref names: its id, or its name as a model cites it

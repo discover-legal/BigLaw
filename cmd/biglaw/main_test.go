@@ -14,8 +14,10 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -94,6 +96,11 @@ func TestServeEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
+	orphan, err := st.PutFile(t.Context(), "crashed.pdf", "application/pdf", strings.NewReader("%PDF-")) // an ingest a crash interrupted
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.DB().Exec(`UPDATE files SET created_at = now() - interval '2 hours'`)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -110,6 +117,9 @@ func TestServeEndToEnd(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != 200 || !strings.Contains(string(body), `"status":"ok"`) {
 		t.Fatalf("/health = %d %s", resp.StatusCode, body)
+	}
+	if _, err := st.GetFile(t.Context(), orphan.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("serve did not sweep the orphan file at startup: %v", err)
 	}
 	cancel()
 	select {
@@ -226,10 +236,10 @@ func TestBinaryIsItsOwnPDFReader(t *testing.T) {
 	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
 		t.Fatalf("go build: %v\n%s", err, out)
 	}
-	cmd := exec.Command(bin, "__biglaw-pdf-text")
+	cmd := exec.Command(bin, "__biglaw-extract", strconv.Itoa(os.Getpid()), "60000", "1073741824")
 	cmd.Stdin = strings.NewReader("%PDF-1.4 not really")
 	out, err := cmd.Output()
-	if err != nil || !strings.Contains(string(out), `"Unreadable":"the PDF is damaged or encrypted"`) {
+	if err != nil || !strings.Contains(string(out), `"Err":"docs: the file could not be read: the PDF is damaged or encrypted"`) {
 		t.Errorf("child answer: %s %v", out, err)
 	}
 }

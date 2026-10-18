@@ -7,6 +7,7 @@
     {
       "id": "LIT-D1",
       "title": "Answer due Thursday November 12, 2026 (21 days from 10/21 service lands on Veterans Day)",
+      "question": "When is Talbot's answer to the complaint due?",
       "category": "deadline",
       "severity": "high",
       "documents": [
@@ -29,6 +30,7 @@
     {
       "id": "LIT-D2",
       "title": "Joint initial status report due Wednesday November 25, 2026 (backward count skips Thanksgiving)",
+      "question": "When is the joint initial status report due?",
       "category": "deadline",
       "severity": "high",
       "documents": [
@@ -51,6 +53,7 @@
     {
       "id": "LIT-D3",
       "title": "Talbot's Rule 7.1 disclosure statement due with its first filing",
+      "question": "When must Talbot file its Rule 7.1 disclosure statement?",
       "category": "deadline",
       "severity": "low",
       "documents": [
@@ -74,6 +77,7 @@
     {
       "id": "LIT-D4",
       "title": "Suit filed 14 days into the 30-day negotiation period that ran to October 25, 2026",
+      "question": "When did Greystone file suit relative to the agreement's dispute-resolution period?",
       "category": "deadline",
       "severity": "medium",
       "documents": [
@@ -106,6 +110,7 @@
     {
       "id": "LIT-I1",
       "title": "Contract Year 2 claim ($612,400) is time-barred under the one-year contractual limitations period",
+      "question": "Is the Contract Year 2 claim timely under the agreement's limitations provision?",
       "category": "issue",
       "severity": "high",
       "documents": [
@@ -139,6 +144,7 @@
     {
       "id": "LIT-I2",
       "title": "Shortfall liability is capped at 35% of the shortfall (s.4.3) — complaint claims 100%",
+      "question": "Is liability for shortfall fees limited under the agreement?",
       "category": "issue",
       "severity": "high",
       "documents": [
@@ -163,6 +169,7 @@
     {
       "id": "LIT-I3",
       "title": "Recalculated maximum shortfall fees: $214,340 (Year 2) and $430,570 (Year 3)",
+      "question": "What are the maximum shortfall fees for Contract Years 2 and 3 under the agreement's formula?",
       "category": "issue",
       "severity": "medium",
       "documents": [
@@ -187,6 +194,7 @@
     {
       "id": "LIT-I4",
       "title": "Count II lost profits ($415,000) barred by the s.12.1 consequential-damages exclusion",
+      "question": "Are lost profits recoverable under the agreement?",
       "category": "issue",
       "severity": "high",
       "documents": [
@@ -218,6 +226,7 @@
     {
       "id": "LIT-I5",
       "title": "Greystone skipped the s.14 negotiation/mediation condition precedent — basis to stay or dismiss",
+      "question": "Did Greystone satisfy the dispute-resolution steps required before suing?",
       "category": "issue",
       "severity": "medium",
       "documents": [
@@ -257,6 +266,7 @@
     {
       "id": "LIT-I6",
       "title": "Termination for cause supported: Greystone admitted the Line 4 adhesive fault; defects persisted after the cure period",
+      "question": "Was the termination for cause supported by the record?",
       "category": "issue",
       "severity": "high",
       "documents": [
@@ -284,6 +294,7 @@
     {
       "id": "LIT-I7",
       "title": "s.9.4 extinguishes the Year 3 minimum after a valid for-cause termination",
+      "question": "What happens to the Year 3 minimum commitment after a termination for cause?",
       "category": "issue",
       "severity": "high",
       "documents": [
@@ -314,6 +325,7 @@
     {
       "id": "LIT-I8",
       "title": "Potential counterclaim / setoff for $286,900 of defect costs",
+      "question": "Does Talbot have any counterclaim or setoff for defect costs?",
       "category": "issue",
       "severity": "medium",
       "documents": [
@@ -343,6 +355,7 @@
     {
       "id": "LIT-C1",
       "title": "Chronology: Agreement dated March 1, 2023",
+      "question": "What is the date of the agreement?",
       "category": "chronology",
       "severity": "low",
       "documents": [
@@ -363,6 +376,7 @@
     {
       "id": "LIT-C2",
       "title": "Chronology: June 3, 2025 notice of material breach (11% delamination)",
+      "question": "When was notice of material breach given, and what defect did it describe?",
       "category": "chronology",
       "severity": "medium",
       "documents": [
@@ -389,6 +403,7 @@
     {
       "id": "LIT-C3",
       "title": "Chronology: June 20, 2025 Greystone admission",
+      "question": "Did Greystone admit the defect, and when?",
       "category": "chronology",
       "severity": "medium",
       "documents": [
@@ -409,6 +424,7 @@
     {
       "id": "LIT-C4",
       "title": "Chronology: August 15, 2025 termination for cause",
+      "question": "When was the agreement terminated?",
       "category": "chronology",
       "severity": "medium",
       "documents": [
@@ -432,6 +448,7 @@
     {
       "id": "LIT-C5",
       "title": "Chronology: September 25, 2026 Notice of Dispute",
+      "question": "When was the Notice of Dispute sent?",
       "category": "chronology",
       "severity": "low",
       "documents": [
@@ -452,6 +469,7 @@
     {
       "id": "LIT-C6",
       "title": "Chronology: October 21, 2026 service on registered agent",
+      "question": "When and how was Talbot served?",
       "category": "chronology",
       "severity": "medium",
       "documents": [

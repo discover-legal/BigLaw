@@ -275,6 +275,7 @@
     {
       "id": "NEG-01",
       "title": "Unmarked change: s.9.1 warranty period silently extended from 90 to 180 days",
+      "question": "What warranty period does the counterparty's latest draft of the MSA provide?",
       "category": "integrity",
       "severity": "high",
       "documents": [
@@ -314,6 +315,7 @@
     {
       "id": "NEG-02",
       "title": "Unmarked change must be reversed to 90 days and escalated per the playbook integrity rule",
+      "question": "What does the playbook require when the counterparty makes a change without marking it?",
       "category": "integrity",
       "severity": "medium",
       "documents": [

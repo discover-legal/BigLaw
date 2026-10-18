@@ -168,13 +168,14 @@ func TestFilesEdgeCases(t *testing.T) {
 		"a\u2028b.pdf", "a\u2029b.pdf", "invoice\u200b.pdf", "x\ufeff.exe", "pay\u00ad.pdf", "file.pdf\u180e.exe", "report.pdf ", " lead.pdf", "a.pdf\u3000",
 		// PR 3 (r3 reproducer R3-4): invisible characters outside Cf, joiner abuse, white-space runs.
 		"inv\u3164oice.pdf", "\u115fa.pdf", "a\u2800.pdf", "a\u034fb.pdf", "a\ufe0fb.pdf", "a\U000E0100b.pdf", "a\u200d\u200db.pdf", "\u200da.pdf", "a.pdf\u200d",
-		"a\u200d.pdf", "1\u200c2.pdf", "report.pdf\u00a0\u00a0\u00a0\u00a0.exe", "a  b.pdf", "a\u00a0 b.pdf", "a\u3000\u3000b.pdf", "\uffa0x.txt", "a\u17b4b.pdf"} {
+		"a\u200d.pdf", "1\u200c2.pdf", "report.pdf\u00a0\u00a0\u00a0\u00a0.exe", "a  b.pdf", "a\u00a0 b.pdf", "a\u3000\u3000b.pdf", "\uffa0x.txt", "a\u17b4b.pdf", "\u2764\ufe0f\ufe0f.txt", "\ufe0fa.txt"} {
 		if _, err := put(name, "text/plain", strings.NewReader("x")); !errors.Is(err, ErrBadName) {
 			t.Errorf("name %q: %v, want ErrBadName", name, err)
 		}
 	}
 	for _, name := range []string{"memo.docx", "Mémoire d'appel (v2).docx", "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645.pdf", "a..b.txt", strings.Repeat("n", MaxNameLen),
-		"a b.pdf", "a\u3000b.pdf", "\U0001F468\u200d\U0001F4BB notes.txt", "a\u00a0b.pdf", "c:evil.txt", "CON", "\u0915\u094d\u200d\u0937.txt"} {
+		"a b.pdf", "a\u3000b.pdf", "\U0001F468\u200d\U0001F4BB notes.txt", "a\u00a0b.pdf", "c:evil.txt", "CON", "\u0915\u094d\u200d\u0937.txt",
+		"\u2764\ufe0f notes.txt", "\U0001F468\u200d\u2764\ufe0f\u200d\U0001F468.txt", "\u2602\ufe0e.txt"} { // r1 L-4: emoji presentation sequences
 		if _, err := put(name, "text/plain", strings.NewReader("x")); err != nil {
 			t.Errorf("name %q refused: %v", name, err)
 		}

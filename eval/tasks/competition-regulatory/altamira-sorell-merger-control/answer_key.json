@@ -7,6 +7,7 @@
     {
       "id": "REG-01",
       "title": "HSR value aggregates the 8% stake already held: $212.5M + $16.0M = $228.5M",
+      "question": "What is the value of the transaction for HSR purposes?",
       "category": "hsr",
       "severity": "high",
       "documents": ["01-deal-summary.md", "04-threshold-reference-sheet.md"],
@@ -17,6 +18,7 @@
     {
       "id": "REG-02",
       "title": "Value exceeds $126.4M but not $505.8M, so the size-of-person test applies",
+      "question": "Which HSR size-of-transaction thresholds apply to this deal?",
       "category": "hsr",
       "severity": "medium",
       "documents": ["04-threshold-reference-sheet.md"],
@@ -27,6 +29,7 @@
     {
       "id": "REG-03",
       "title": "Size-of-person met: Altamira $3.1bn sales (>= $252.9M); Sorell $337M sales (>= $25.3M)",
+      "question": "What are the annual net sales of Altamira and of Sorell for the HSR size-of-person test?",
       "category": "hsr",
       "severity": "medium",
       "documents": ["02-financial-and-turnover-data.csv", "04-threshold-reference-sheet.md"],
@@ -37,6 +40,7 @@
     {
       "id": "REG-04",
       "title": "Foreign issuer exemption (802.51) unavailable: Sorell's US sales $138.0M exceed $126.4M",
+      "question": "Is the foreign issuer exemption available for the acquisition of Sorell?",
       "category": "hsr",
       "severity": "high",
       "documents": ["02-financial-and-turnover-data.csv", "04-threshold-reference-sheet.md"],
@@ -47,6 +51,7 @@
     {
       "id": "REG-05",
       "title": "HSR filing fee is $105,000 ($179.4M-$555.5M tier)",
+      "question": "What HSR filing fee is payable for this transaction?",
       "category": "hsr",
       "severity": "medium",
       "documents": ["04-threshold-reference-sheet.md"],
@@ -57,6 +62,7 @@
     {
       "id": "REG-06",
       "title": "Initial 30-day waiting period from an Oct 6, 2025 filing expires November 5, 2025",
+      "question": "When does the HSR waiting period expire?",
       "category": "hsr",
       "severity": "medium",
       "documents": ["01-deal-summary.md", "04-threshold-reference-sheet.md"],
@@ -67,6 +73,7 @@
     {
       "id": "REG-07",
       "title": "Gun-jumping: Altamira to control Sorell's US pricing and sales reps from signing",
+      "question": "What pre-closing conduct or integration steps does the deal allow Altamira before clearance?",
       "category": "conduct",
       "severity": "high",
       "documents": ["01-deal-summary.md", "04-threshold-reference-sheet.md"],
@@ -77,6 +84,7 @@
     {
       "id": "REG-08",
       "title": "EUMR Art. 1(2) not met: combined worldwide turnover EUR 3,120M is below EUR 5,000M",
+      "question": "What is the parties' combined worldwide turnover under the EU Merger Regulation?",
       "category": "eumr",
       "severity": "medium",
       "documents": ["02-financial-and-turnover-data.csv", "04-threshold-reference-sheet.md"],
@@ -87,6 +95,7 @@
     {
       "id": "REG-09",
       "title": "EUMR Art. 1(3) met via Germany, France and the Netherlands",
+      "question": "In which Member States do both parties exceed the turnover thresholds?",
       "category": "eumr",
       "severity": "high",
       "documents": ["02-financial-and-turnover-data.csv", "04-threshold-reference-sheet.md"],
@@ -97,6 +106,7 @@
     {
       "id": "REG-10",
       "title": "Italy does not count: Sorell's Italian turnover (EUR 9M) is below the EUR 25M per-party limb",
+      "question": "What is Sorell's turnover in Italy?",
       "category": "eumr",
       "severity": "medium",
       "documents": ["02-financial-and-turnover-data.csv"],
@@ -107,6 +117,7 @@
     {
       "id": "REG-11",
       "title": "Sorell EU-wide turnover EUR 164M (> EUR 100M); two-thirds rule not triggered",
+      "question": "What is Sorell's EU-wide turnover, and does either party achieve more than two-thirds of its EU turnover in one Member State?",
       "category": "eumr",
       "severity": "medium",
       "documents": ["02-financial-and-turnover-data.csv"],
@@ -117,6 +128,7 @@
     {
       "id": "REG-12",
       "title": "EU dimension: mandatory Commission notification, Art. 7 standstill, Phase I 25 working days",
+      "question": "Must the transaction be notified to the European Commission, and what standstill and review timetable applies?",
       "category": "eumr",
       "severity": "high",
       "documents": ["04-threshold-reference-sheet.md"],
@@ -127,6 +139,7 @@
     {
       "id": "REG-13",
       "title": "Combined EEA share of POC coagulation analyzers = 41% (24% + 17%), market leader",
+      "question": "What are the parties' market shares in point-of-care coagulation analyzers in the EEA?",
       "category": "substantive",
       "severity": "high",
       "documents": ["03-market-share-data.md"],
@@ -137,6 +150,7 @@
     {
       "id": "REG-14",
       "title": "Netherlands combined share 47% (Sorell 38% + Altamira 9%)",
+      "question": "What are the parties' market shares in the Netherlands?",
       "category": "substantive",
       "severity": "medium",
       "documents": ["03-market-share-data.md"],

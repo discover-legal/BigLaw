@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -46,22 +47,7 @@ func (s *Service) Search(ctx context.Context, scope []string, query string, k, o
 	if k < 1 || k > MaxK || offset < 0 || offset > 10000 || len(query) > MaxQuery || !utf8.ValidString(query) || strings.IndexByte(query, 0) >= 0 {
 		return nil, fmt.Errorf("%w: k is 1 to %d, offset 0 to 10000, the query at most %d bytes of UTF-8", ErrBadInput, MaxK, MaxQuery)
 	}
-	rows, err := s.db.QueryContext(ctx, `
-WITH s AS (SELECT id, tsv, tsv_simple FROM chunks WHERE document_id = ANY($1::uuid[])),
-n AS (SELECT count(*)::float8 AS n FROM s),
-terms AS (
-  SELECT DISTINCT true AS en, plainto_tsquery('simple', l) AS q FROM unnest(tsvector_to_array(to_tsvector('english', $2))) AS l
-  UNION
-  SELECT DISTINCT false, plainto_tsquery('simple', l) FROM unnest(tsvector_to_array(to_tsvector('simple', $2))) AS l),
-w AS (
-  SELECT t.en, t.q, ln(1 + n.n / (1 + count(s.id))) AS idf
-  FROM terms t CROSS JOIN n LEFT JOIN s ON (CASE WHEN t.en THEN s.tsv ELSE s.tsv_simple END) @@ t.q
-  WHERE numnode(t.q) > 0 GROUP BY t.en, t.q, n.n)
-SELECT c.id, c.document_id, c.section_ord, c.locator, c.body, c.context,
-  sum(ts_rank_cd(CASE WHEN w.en THEN c.tsv ELSE c.tsv_simple END, w.q, 32) * w.idf) AS rank
-FROM chunks c JOIN w ON (CASE WHEN w.en THEN c.tsv ELSE c.tsv_simple END) @@ w.q
-WHERE c.document_id = ANY($1::uuid[])
-GROUP BY c.id ORDER BY rank DESC, c.id LIMIT $3 OFFSET $4`, pq.Array(validIDs(scope)), query, k, offset)
+	rows, err := s.db.QueryContext(ctx, searchSQL, pq.Array(validIDs(scope)), query, k, offset)
 	if err != nil {
 		return nil, fmt.Errorf("docs: search: %w", err)
 	}
@@ -79,6 +65,23 @@ GROUP BY c.id ORDER BY rank DESC, c.id LIMIT $3 OFFSET $4`, pq.Array(validIDs(sc
 	}
 	return hits, rows.Err()
 }
+
+const searchSQL = `
+WITH s AS (SELECT id, tsv, tsv_simple FROM chunks WHERE document_id = ANY($1::uuid[])),
+n AS (SELECT count(*)::float8 AS n FROM s),
+terms AS (
+  SELECT DISTINCT true AS en, plainto_tsquery('simple', l) AS q FROM unnest(tsvector_to_array(to_tsvector('english', $2))) AS l
+  UNION
+  SELECT DISTINCT false, plainto_tsquery('simple', l) FROM unnest(tsvector_to_array(to_tsvector('simple', $2))) AS l),
+w AS (
+  SELECT t.en, t.q, ln(1 + n.n / (1 + count(s.id))) AS idf
+  FROM terms t CROSS JOIN n LEFT JOIN s ON (CASE WHEN t.en THEN s.tsv ELSE s.tsv_simple END) @@ t.q
+  WHERE numnode(t.q) > 0 GROUP BY t.en, t.q, n.n)
+SELECT c.id, c.document_id, c.section_ord, c.locator, c.body, c.context,
+  sum(ts_rank_cd(CASE WHEN w.en THEN c.tsv ELSE c.tsv_simple END, w.q, 32) * w.idf) AS rank
+FROM chunks c JOIN w ON (CASE WHEN w.en THEN c.tsv ELSE c.tsv_simple END) @@ w.q
+WHERE c.document_id = ANY($1::uuid[])
+GROUP BY c.id ORDER BY rank DESC, c.id LIMIT $3 OFFSET $4`
 
 func sectionID(ord int) string { return "s" + strconv.Itoa(ord) }
 
@@ -139,13 +142,13 @@ type SectionPage struct {
 // paged, never silently cut: Truncated and Next say there is more.
 func (s *Service) Section(ctx context.Context, scope []string, docID, sectionID string, offset, limit int) (SectionPage, error) {
 	ord, err := strconv.Atoi(strings.TrimPrefix(sectionID, "s"))
-	if !inScope(scope, docID) || !store.ValidID(docID) || err != nil || !strings.HasPrefix(sectionID, "s") || ord < 0 || sectionID != "s"+strconv.Itoa(ord) {
+	if !inScope(scope, docID) || !store.ValidID(docID) || err != nil || !strings.HasPrefix(sectionID, "s") || ord < 0 || ord > math.MaxInt32 || sectionID != "s"+strconv.Itoa(ord) {
 		return SectionPage{}, ErrNotFound
 	}
 	if limit == 0 {
 		limit = DefaultSectionTokens
 	}
-	if offset < 0 || limit < 1 || limit > MaxSectionTokens {
+	if offset < 0 || offset > math.MaxInt32 || limit < 1 || limit > MaxSectionTokens { // Postgres integers
 		return SectionPage{}, fmt.Errorf("%w: offset ≥ 0 and limit 1 to %d tokens", ErrBadInput, MaxSectionTokens)
 	}
 	p := SectionPage{SectionID: sectionID, Offset: offset}

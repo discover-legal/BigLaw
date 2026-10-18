@@ -106,20 +106,22 @@ func TestCitationFabricatedQuoteUnverified(t *testing.T) {
 }
 
 // TestCitationJudgeFailureIsAnError: v1's TestCitationJudgeFailureDegradesCitationOnly, changed
-// (G6): a judge failure is returned as the judge's error, never as an "unverified" verdict that
-// would look like a fabrication; only this quote is affected.
+// (G6): a judge failure, on the first call or on any ensemble vote, is returned as the judge's
+// error, never as an "unverified" verdict that would look like a fabrication (r1 prosecutor M-1:
+// [yes, no, failed] was a clean "unsupported, 1 of 2", though the lost vote could have verified
+// the quote); only this quote is affected.
 func TestCitationJudgeFailureIsAnError(t *testing.T) {
 	down := errors.New("model unavailable")
-	for _, j := range []*scriptedJudge{judgeOf(verdict{err: down}), judgeOf(verdict{true, 0.5, nil}, verdict{err: down}, verdict{err: down}, verdict{true, 1, nil})} {
-		v, err := Verify(t.Context(), citeDoc, paraphrase, j.judge)
+	unsure, yes, no, fail := verdict{true, 0.5, nil}, verdict{true, 1, nil}, verdict{false, 1, nil}, verdict{err: down}
+	for _, votes := range [][]verdict{{fail}, {unsure, fail, fail, yes}, {unsure, yes, no, fail}, {unsure, fail, yes, no}, {unsure, yes, yes, fail}, {unsure, no, no, fail}} {
+		v, err := Verify(t.Context(), citeDoc, paraphrase, judgeOf(votes...).judge)
 		if !errors.Is(err, down) || v.Verified || v.Method != "none" {
-			t.Errorf("judge failure: %+v %v", v, err)
+			t.Errorf("judge answers %v: %+v %v", votes, v, err)
 		}
 	}
-	// Two of three votes cast is enough to decide.
-	j := judgeOf(verdict{true, 0.5, nil}, verdict{err: down}, verdict{true, 1, nil}, verdict{true, 1, nil})
+	j := judgeOf(unsure, yes, no, yes)
 	if v, err := Verify(t.Context(), citeDoc, paraphrase, j.judge); err != nil || v.Method != "ensemble" || math.Abs(v.Confidence-0.5) > 1e-9 {
-		t.Errorf("2 votes cast, both supporting: %+v %v", v, err)
+		t.Errorf("2 of 3 votes supporting: %+v %v", v, err)
 	}
 }
 

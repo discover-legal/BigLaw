@@ -82,22 +82,17 @@ func Verify(ctx context.Context, text, quote string, judge Judge) (Verification,
 		}
 		return Verification{Verified: true, Method: "judge", Confidence: min(conf, JudgeCap), Start: start, End: end}, nil
 	}
-	votes, cast := 0, 0
+	votes := 0
 	for range ensembleVotes {
-		ok, _, verr := judge(ctx, quote, passage, true)
-		if verr != nil {
-			err = verr
-			continue
-		}
-		if cast++; ok {
+		ok, _, err := judge(ctx, quote, passage, true)
+		if err != nil { // any lost vote could have decided the majority: never a verdict on fewer
+			return none("an ensemble vote failed"), fmt.Errorf("docs: verify: judge: %w", err)
+		} else if ok {
 			votes++
 		}
 	}
-	if cast < 2 {
-		return none(fmt.Sprintf("only %d of %d ensemble votes were cast", cast, ensembleVotes)), fmt.Errorf("docs: verify: judge: %w", err)
-	}
-	if votes*2 <= cast {
-		return none(fmt.Sprintf("the ensemble found the quote unsupported (%d of %d votes)", votes, cast)), nil
+	if votes*2 <= ensembleVotes {
+		return none(fmt.Sprintf("the ensemble found the quote unsupported (%d of %d votes)", votes, ensembleVotes)), nil
 	}
 	return Verification{Verified: true, Method: "ensemble", Confidence: ensembleScale * float64(votes) / ensembleVotes, Start: start, End: end}, nil
 }

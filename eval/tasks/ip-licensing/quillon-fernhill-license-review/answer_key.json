@@ -7,6 +7,7 @@
     {
       "id": "IP-01",
       "title": "Field of use narrowed from 'agricultural and warehouse robotics' to 'autonomous agricultural harvesting robots'",
+      "question": "What field of use does the draft license grant?",
       "category": "term_sheet_deviation",
       "severity": "high",
       "documents": [
@@ -35,6 +36,7 @@
     {
       "id": "IP-02",
       "title": "Exclusivity lost: draft grants a non-exclusive worldwide license; term sheet = exclusive in North America",
+      "question": "Is the license grant exclusive, and in what territory?",
       "category": "term_sheet_deviation",
       "severity": "high",
       "documents": [
@@ -70,6 +72,7 @@
     {
       "id": "IP-03",
       "title": "Royalty rate 5.5% vs agreed 3.5%",
+      "question": "What royalty rate does the draft license set?",
       "category": "term_sheet_deviation",
       "severity": "high",
       "documents": [
@@ -97,6 +100,7 @@
     {
       "id": "IP-04",
       "title": "Royalty base: Gross Sales of the whole Licensed Product vs Net Sales of the gripper module only",
+      "question": "On what base are royalties calculated under the draft?",
       "category": "term_sheet_deviation",
       "severity": "high",
       "documents": [
@@ -127,6 +131,7 @@
     {
       "id": "IP-05",
       "title": "Royalties survive patent expiry (s.4.2) in a perpetual agreement — post-expiration royalties (Brulotte/Kimble) and contrary to term sheet",
+      "question": "How long are royalties payable, and do they continue after the licensed patents expire?",
       "category": "enforceability",
       "severity": "high",
       "documents": [
@@ -162,6 +167,7 @@
     {
       "id": "IP-06",
       "title": "P-3 lapsed for non-payment of maintenance fee — not a Valid Claim, must not bear royalties",
+      "question": "What is the status of patent P-3?",
       "category": "patent_schedule",
       "severity": "medium",
       "documents": [
@@ -189,6 +195,7 @@
     {
       "id": "IP-07",
       "title": "P-4 recorded owner is Quillon Labs GmbH — chain-of-title gap",
+      "question": "Who is the recorded owner of patent P-4?",
       "category": "patent_schedule",
       "severity": "high",
       "documents": [
@@ -215,6 +222,7 @@
     {
       "id": "IP-08",
       "title": "P-5 is only a pending application — not an enforceable patent",
+      "question": "What is the status of P-5?",
       "category": "patent_schedule",
       "severity": "low",
       "documents": [
@@ -242,6 +250,7 @@
     {
       "id": "IP-09",
       "title": "Improvements assigned to Licensor (s.6.1) vs agreed non-exclusive grant-back",
+      "question": "Who owns improvements under the draft license?",
       "category": "term_sheet_deviation",
       "severity": "high",
       "documents": [
@@ -273,6 +282,7 @@
     {
       "id": "IP-10",
       "title": "No-challenge termination right (s.10.2)",
+      "question": "What termination rights does the Licensor have under the draft?",
       "category": "enforceability",
       "severity": "medium",
       "documents": [
@@ -299,6 +309,7 @@
     {
       "id": "IP-11",
       "title": "Non-infringement disclaimer and no indemnity vs agreed IP indemnity capped at 24 months' royalties",
+      "question": "What warranties and indemnities does the Licensor give against infringement?",
       "category": "term_sheet_deviation",
       "severity": "high",
       "documents": [
@@ -329,6 +340,7 @@
     {
       "id": "IP-12",
       "title": "Licensee cannot assign even on change of control/sale of business (s.14.1) vs agreed successor assignment",
+      "question": "Can the Licensee assign the agreement, for example on a sale of its business?",
       "category": "term_sheet_deviation",
       "severity": "medium",
       "documents": [
@@ -357,6 +369,7 @@
     {
       "id": "IP-13",
       "title": "Minimum annual royalty $250,000 from year 1 vs agreed $150,000 from year 2",
+      "question": "Is there a minimum annual royalty, and from when?",
       "category": "term_sheet_deviation",
       "severity": "medium",
       "documents": [
@@ -382,6 +395,7 @@
     {
       "id": "IP-14",
       "title": "GPL-3.0 component statically linked into GraspCore contradicts s.8.2 warranty and s.2.2 object-code-only restriction",
+      "question": "Does the licensed GraspCore software include open-source components, and under what licenses?",
       "category": "open_source",
       "severity": "high",
       "documents": [
@@ -411,6 +425,7 @@
     {
       "id": "IP-15",
       "title": "Agreed source-code escrow omitted from the draft",
+      "question": "Does the draft provide for source-code escrow?",
       "category": "term_sheet_deviation",
       "severity": "medium",
       "documents": [

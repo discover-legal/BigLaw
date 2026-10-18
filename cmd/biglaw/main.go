@@ -143,8 +143,12 @@ type pinger interface{ Ping(context.Context) error }
 
 // serve serves HTTP on ln until ctx ends, then shuts down gracefully.
 func serve(ctx context.Context, st *store.Store, ln net.Listener, log *slog.Logger) error {
+	d := docs.New(st)
+	if n, err := d.SweepOrphanFiles(ctx); err != nil || n > 0 {
+		log.Warn("orphan files (uploads interrupted by a crash) swept", "files", n, "err", err)
+	}
 	srv := &http.Server{
-		Handler:           routes(st, docs.New(st), log),
+		Handler:           routes(st, d, log),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    64 << 10,

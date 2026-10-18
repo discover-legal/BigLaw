@@ -10,9 +10,11 @@ package ooxml
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 )
 
@@ -95,75 +97,109 @@ func (d *Document) Bytes() ([]byte, error) {
 	return buf.Bytes(), err
 }
 
-// Text is the visible text: the decoded content of every <w:t> in document order, with "\n"
-// after each paragraph. Deleted text (<w:delText>) is not visible and is left out.
-func (d *Document) Text() string {
+// wml is the WordprocessingML namespace: elements are matched by namespace URI, whatever prefix a
+// document binds it to. maxDepth bounds element nesting (the decoder keeps a stack per level).
+const (
+	wml      = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+	maxDepth = 256
+)
+
+// Text is the visible text, in one linear pass of an XML decoder: the content of every <w:t> in
+// document order (character references decoded), a tab for <w:tab/>, a line break for <w:br/> and
+// <w:cr/>, "\n" after each paragraph. A run's text counts when the run closes; hidden runs
+// (<w:vanish/>), deleted text (<w:delText>) and markup-compatibility fallbacks (a copy of the
+// choice) are left out. Footnotes and endnotes follow the body, each as "[id] text", under a
+// "Footnotes"/"Endnotes" line.
+func (d *Document) Text() (string, error) {
 	var b strings.Builder
-	xml := d.docXML
-	for i := 0; i < len(xml); {
-		r, p := nextRunOpen(xml, i), strings.Index(xml[i:], "</w:p>")
-		if p >= 0 {
-			p += i
-		}
-		if p >= 0 && (r < 0 || p < r) {
-			b.WriteByte('\n')
-			i = p + len("</w:p>")
-			continue
-		}
-		if r < 0 {
-			break
-		}
-		end := strings.Index(xml[r:], "</w:r>")
-		if end < 0 {
-			break
-		}
-		end += r + len("</w:r>")
-		b.WriteString(runText(xml[r:end]))
-		i = end
+	if err := text(&b, d.docXML); err != nil {
+		return "", err
 	}
-	return b.String()
+	for _, p := range d.parts {
+		label := map[string]string{"word/footnotes.xml": "Footnotes", "word/endnotes.xml": "Endnotes"}[p.name]
+		var notes strings.Builder
+		if label == "" {
+			continue
+		} else if err := text(&notes, string(p.data)); err != nil {
+			return "", err
+		}
+		if strings.TrimSpace(notes.String()) != "" {
+			b.WriteString("\n" + label + "\n" + notes.String())
+		}
+	}
+	return b.String(), nil
 }
 
-// nextRunOpen finds the next "<w:r>" or "<w:r …>" at or after from (not <w:rPr> or <w:r/>).
-func nextRunOpen(xml string, from int) int {
-	for i := from; ; {
-		j := strings.Index(xml[i:], "<w:r")
-		if j < 0 {
-			return -1
+func text(b *strings.Builder, src string) error {
+	dec := xml.NewDecoder(strings.NewReader(src))
+	dec.Strict = false // an undeclared entity stays literal text; entities are never expanded
+	var run strings.Builder
+	inRun, inT, hidden, depth := false, false, false, 0
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			return nil
+		} else if err != nil {
+			return fmt.Errorf("ooxml: the document XML is malformed: %w", err)
 		}
-		if k := i + j + len("<w:r"); k < len(xml) && (xml[k] == '>' || xml[k] == ' ') {
-			return i + j
+		switch t := tok.(type) {
+		case xml.StartElement:
+			if depth++; depth > maxDepth {
+				return fmt.Errorf("ooxml: the document XML nests deeper than %d elements", maxDepth)
+			}
+			id, idErr := strconv.Atoi(attr(t, "id"))
+			note := t.Name.Space == wml && (t.Name.Local == "footnote" || t.Name.Local == "endnote")
+			if note && (idErr != nil || id <= 0) || t.Name.Local == "Fallback" && t.Name.Space == "http://schemas.openxmlformats.org/markup-compatibility/2006" {
+				depth-- // a separator note, or the fallback copy of an mc:Choice
+				if err := dec.Skip(); err != nil {
+					return fmt.Errorf("ooxml: the document XML is malformed: %w", err)
+				}
+				continue
+			} else if note {
+				b.WriteString("[" + strconv.Itoa(id) + "] ")
+			} else if t.Name.Space != wml {
+				continue
+			}
+			switch val := attr(t, "val"); t.Name.Local {
+			case "r":
+				inRun, hidden = true, false
+				run.Reset()
+			case "t":
+				inT = inRun
+			case "tab", "br", "cr":
+				if inRun {
+					run.WriteString(map[string]string{"tab": "\t", "br": "\n", "cr": "\n"}[t.Name.Local])
+				}
+			case "vanish":
+				hidden = hidden || inRun && val != "0" && val != "false" && val != "off"
+			}
+		case xml.EndElement:
+			depth--
+			switch {
+			case t.Name.Space != wml:
+			case t.Name.Local == "t":
+				inT = false
+			case t.Name.Local == "r":
+				if inRun && !hidden {
+					b.WriteString(run.String())
+				}
+				inRun, inT = false, false
+			case t.Name.Local == "p":
+				b.WriteByte('\n')
+			}
+		case xml.CharData:
+			if inT {
+				run.Write(t)
+			}
 		}
-		i += j + 1
 	}
 }
 
-// runText concatenates and decodes the <w:t> elements of one run (not <w:tab/>, <w:t/>).
-func runText(run string) string {
-	var b strings.Builder
-	for i := 0; ; {
-		j := strings.Index(run[i:], "<w:t")
-		if j < 0 {
-			return b.String()
+func attr(e xml.StartElement, local string) string {
+	for _, a := range e.Attr {
+		if a.Name.Local == local && a.Name.Space == wml {
+			return a.Value
 		}
-		k := i + j + len("<w:t")
-		if k >= len(run) || run[k] != '>' && run[k] != ' ' {
-			i = k // a longer name such as <w:tab/>, or <w:t/>
-			continue
-		}
-		gt := strings.IndexByte(run[k:], '>')
-		if gt < 0 {
-			return b.String()
-		}
-		if gt += k; run[gt-1] == '/' { // <w:t attrs/>
-			i = gt + 1
-			continue
-		}
-		e := strings.Index(run[gt+1:], "</w:t>")
-		if e < 0 {
-			return b.String()
-		}
-		b.WriteString(Unescape(run[gt+1 : gt+1+e]))
-		i = gt + 1 + e + len("</w:t>")
 	}
+	return ""
 }

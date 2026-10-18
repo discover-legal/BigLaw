@@ -33,8 +33,9 @@ const (
 	// its slot stays taken.
 	MaxOpenConns         = 20
 	MaxConcurrentUploads = MaxOpenConns - 4
-	// MaxConcurrentReads bounds GetFile: each holds a whole file (≤ MaxFileSize, about twice that
-	// at peak with the default GOGC), so 4 reads stay near 512 MiB, inside a 4 GB Pi.
+	// MaxConcurrentReads bounds GetFile (each holds a whole file, ≤ MaxFileSize, about twice that
+	// at peak with the default GOGC, so 4 stay near 512 MiB, inside a 4 GB Pi) and ReadFile
+	// (one chunk each).
 	MaxConcurrentReads = 4
 )
 
@@ -170,8 +171,9 @@ func (s *Store) Close() error { return s.db.Close() }
 // DB is the pool, for packages that own their tables (docs). Files go through PutFile/GetFile.
 func (s *Store) DB() *sql.DB { return s.db }
 
-// Uploads is how many PutFile calls hold an upload slot now.
+// Uploads and Reads are how many PutFile and GetFile/ReadFile calls hold a slot now.
 func (s *Store) Uploads() int { return len(s.uploads) }
+func (s *Store) Reads() int   { return len(s.reads) }
 
 // Ping reports whether the database is reachable.
 func (s *Store) Ping(ctx context.Context) error { return s.db.PingContext(ctx) }

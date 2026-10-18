@@ -86,6 +86,9 @@ func TestExtractPlainText(t *testing.T) {
 			t.Errorf("Extract(%q) = %v, want ErrUnsupported (never an empty document)", bin, err)
 		}
 	}
+	if x, err := Extract(t.Context(), []byte("bell\a esc\x1b[31m red")); err != nil || x.Text != "bell  esc [31m red" { // r1 R11
+		t.Errorf("control characters in text are cleaned for storage: %q %v", x.Text, err)
+	}
 	if x, err := Extract(t.Context(), []byte(" \n\t")); err != nil || !x.NoText || len(x.Notes) == 0 {
 		t.Errorf("white space only is flagged: %+v %v", x, err)
 	}
@@ -121,6 +124,11 @@ func TestExtractPDFTextLayer(t *testing.T) {
 	if x, err := Extract(t.Context(), makePDF("Only this page has text.", "", "And this one.", "")); err != nil || x.NoText || len(x.Notes) != 1 ||
 		x.Notes[0] != "2 of 4 pages have no text layer (scanned images?) and were not read: page 2, 4." {
 		t.Errorf("a half-scanned PDF keeps its text and says some pages may be scans: %+v %v", x, err)
+	}
+	pages := append([]string{"Only the first page has text."}, make([]string, 12)...) // r1 R5: the count is every blank page
+	if x, err := Extract(t.Context(), makePDF(pages...)); err != nil || len(x.Notes) != 1 ||
+		x.Notes[0] != "12 of 13 pages have no text layer (scanned images?) and were not read: page 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, …." {
+		t.Errorf("12 blank pages: %q %v", x.Notes, err)
 	}
 	if x, err := Extract(t.Context(), makePDF(`NUL\000and\001controls \377`)); err != nil || strings.TrimSpace(x.Text) != "NUL and controls \u00ff" {
 		t.Errorf("control characters in a text layer are cleaned for storage: %q %v", x.Text, err)
@@ -167,21 +175,32 @@ func TestHostilePDFContained(t *testing.T) {
 	if _, err := Extract(t.Context(), pdfWith(deep)); !errors.Is(err, ErrUnreadable) || !strings.Contains(err.Error(), "hostile") {
 		t.Fatalf("a stack-overflow PDF: %v", err)
 	}
-	oldT := pdfTimeout
-	pdfTimeout = time.Millisecond
+	oldT := childTimeout
+	childTimeout = time.Millisecond
 	_, err := Extract(t.Context(), pdfWith("[]"))
-	pdfTimeout = oldT
+	childTimeout = oldT
 	if !errors.Is(err, ErrUnreadable) || !strings.Contains(err.Error(), "took longer") {
 		t.Errorf("a slow PDF: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond) // the request ends mid-parse
+	start := time.Now()
+	_, err = Extract(ctx, loopPDF())
+	cancel()
+	if !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > 1300*time.Millisecond {
+		t.Errorf("a looping PDF whose request ends: %v after %s, want the reader killed at once", err, time.Since(start))
 	}
 	old := maxText
 	maxText = 40
 	_, err = extractPDF(makePDF("twenty-five characters..", "twenty-five characters.."))
+	_, errDocx := parse(minimalDocx(strings.Repeat("x", 41))) // a .docx's text is capped too (red team r1)
 	maxText = old
+	if !errors.Is(errDocx, ErrUnreadable) || !strings.Contains(errDocx.Error(), "larger than 40 bytes") {
+		t.Errorf("a .docx whose text is past the cap: %v", errDocx)
+	}
 	if !errors.Is(err, ErrUnreadable) || !strings.Contains(err.Error(), "larger than 40 bytes") {
 		t.Errorf("a PDF whose text expands past the cap: %v", err)
 	}
-	ctx, cancel := context.WithCancel(t.Context())
+	ctx, cancel = context.WithCancel(t.Context())
 	cancel()
 	if _, err := Extract(ctx, pdfWith("[]")); !errors.Is(err, context.Canceled) {
 		t.Errorf("a cancelled request: %v", err)
@@ -204,7 +223,7 @@ func TestScannedPDFFlaggedNoText(t *testing.T) {
 	if err != nil || !got.NoText || len(got.Notes) != 1 || got.Notes[0] != d.Notes[0] || got.Pages != 2 || got.Method != "text_layer" {
 		t.Fatalf("stored: %+v %v", got, err)
 	}
-	if f, err := s.File(t.Context(), []string{d.ID}, d.ID); err != nil || !bytes.HasPrefix(f.Data, []byte("%PDF-")) {
+	if data, err := fileData(s, []string{d.ID}, d.ID); err != nil || !bytes.HasPrefix(data, []byte("%PDF-")) {
 		t.Errorf("the original is kept: %v", err)
 	}
 	text, err := s.Ingest(t.Context(), "lease.pdf", "application/pdf", bytes.NewReader(makePDF("The Lessee shall pay rent.")))

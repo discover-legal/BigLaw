@@ -14,15 +14,16 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/discover-legal/BigLaw/internal/store"
 )
 
-// Upload read bounds: a client must send at least minBytes in every window, and the whole body
-// within total, or the read fails and the upload's slot and pool connection are released at once.
-// Variables, not constants, so tests can shorten them.
+// Transfer bounds: an upload must send, and a download receive, at least uploadMinBytes in every
+// window and the whole file within uploadTotal, or the transfer fails and its slots and pool
+// connection are released at once. Variables, not constants, so tests can shorten them.
 var (
 	uploadWindow   = 30 * time.Second
 	uploadMinBytes = 64 << 10 // ≈ 2 KiB/s floor
@@ -42,28 +43,61 @@ func (s *Service) Routes(mux *http.ServeMux, log *slog.Logger) {
 		s.upload(w, r, log)
 	})
 	mux.HandleFunc("GET /documents/{id}/file", func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		d, err := s.Get(r.Context(), []string{id}, id)
-		var f store.File
-		if err == nil {
-			f, err = s.File(r.Context(), []string{id}, id)
-		}
-		if err != nil {
+		id, scope, none := r.PathValue("id"), []string{r.PathValue("id")}, func(string, store.File) error { return nil }
+		if err := s.WriteFile(r.Context(), scope, id, none, io.Discard); err != nil { // verify first: never send corrupt bytes
 			writeError(w, log, err)
 			return
 		}
-		w.Header().Set("Content-Type", d.ContentType) // detected, never the uploader's claim
-		w.Header().Set("Content-Disposition", ContentDisposition(f.Name))
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("Content-Security-Policy", "sandbox")
-		w.Write(f.Data)
+		err := s.WriteFile(r.Context(), scope, id, func(contentType string, f store.File) error {
+			w.Header().Set("Content-Type", contentType) // detected, never the uploader's claim
+			w.Header().Set("Content-Length", strconv.FormatInt(f.Size, 10))
+			w.Header().Set("Content-Disposition", ContentDisposition(f.Name))
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+			w.Header().Set("Content-Security-Policy", "sandbox")
+			return nil
+		}, floorWriter{w, http.NewResponseController(w), time.Now().Add(uploadTotal)})
+		if err != nil { // mid-body (a client below the floor, the file deleted meanwhile): cut the connection
+			log.Warn("document download cut", "err", err)
+			panic(http.ErrAbortHandler)
+		}
 	})
+}
+
+// floorWriter writes at most uploadMinBytes at a time, each under its own deadline (one
+// uploadWindow, never past end): a client that stops reading is cut within a window, so a
+// stalled download holds its read slot and one chunk for at most that long.
+type floorWriter struct {
+	w   io.Writer
+	rc  *http.ResponseController
+	end time.Time
+}
+
+func (f floorWriter) Write(b []byte) (n int, err error) {
+	for len(b) > 0 && err == nil {
+		if err = f.rc.SetWriteDeadline(windowEnd(f.end)); err != nil {
+			return n, err // a writer that cannot take a deadline (a wrapper without Unwrap): fail closed
+		}
+		k := min(len(b), uploadMinBytes)
+		k, err = f.w.Write(b[:k])
+		n, b = n+k, b[k:]
+	}
+	return n, err
+}
+
+func windowEnd(end time.Time) time.Time {
+	if d := time.Now().Add(uploadWindow); d.Before(end) {
+		return d
+	}
+	return end
 }
 
 func (s *Service) upload(w http.ResponseWriter, r *http.Request, log *slog.Logger) {
 	rc := http.NewResponseController(w)
 	pr := &progressReader{r: r.Body, rc: rc, end: time.Now().Add(uploadTotal)}
-	pr.extend()
+	if err := rc.SetReadDeadline(windowEnd(pr.end)); err != nil { // fail closed: never an upload without a deadline
+		writeError(w, log, fmt.Errorf("docs: upload: %w", err))
+		return
+	}
 	r.Body = http.MaxBytesReader(w, io.NopCloser(pr), store.MaxFileSize+1<<20) // the file plus multipart framing
 	mr, err := r.MultipartReader()
 	if err != nil {
@@ -79,8 +113,12 @@ func (s *Service) upload(w http.ResponseWriter, r *http.Request, log *slog.Logge
 		if p.FormName() != "file" {
 			continue
 		}
-		ct := p.Header.Get("Content-Type")
-		if ct == "" || strings.HasPrefix(ct, "multipart/") {
+		if p.FileName() == "" {
+			writeError(w, log, fmt.Errorf(`%w: the part named "file" has no file name`, ErrBadInput))
+			return
+		}
+		ct := p.Header.Get("Content-Type") // kept as metadata only: the served type is the detected one
+		if ct == "" || strings.HasPrefix(ct, "multipart/") || strings.Contains(ct, "*") {
 			ct = "application/octet-stream"
 		}
 		d, err := s.Ingest(r.Context(), p.FileName(), ct, p)
@@ -105,13 +143,7 @@ type progressReader struct {
 	timedOut bool // a read hit the deadline (the server then cancels the request, so later errors read "context canceled")
 }
 
-func (p *progressReader) extend() {
-	d := time.Now().Add(uploadWindow)
-	if d.After(p.end) {
-		d = p.end
-	}
-	_ = p.rc.SetReadDeadline(d)
-}
+func (p *progressReader) extend() { _ = p.rc.SetReadDeadline(windowEnd(p.end)) }
 
 func (p *progressReader) Read(b []byte) (int, error) {
 	n, err := p.r.Read(b)

@@ -17,6 +17,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/textproto"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -204,7 +206,8 @@ func TestUploadErrorsTyped(t *testing.T) {
 		{"photo.png", []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a}, 415, "unsupported_type"},
 		{"broken.pdf", []byte("%PDF-1.4 x"), 422, "unreadable"},
 		{"bad\u2066name.txt", []byte("x"), 400, "bad_name"},
-		{"", []byte("x"), 400, "bad_name"},
+		{"..", []byte("x"), 400, "bad_name"},
+		{"", []byte("x"), 400, "bad_request"}, // no file name: the client sent no file (r1 R12)
 	} {
 		resp, out := upload(t, srv.URL, c.name, c.data)
 		if resp.StatusCode != c.code || out["errorType"] != c.kind || out["error"] == "" {
@@ -241,9 +244,29 @@ func TestUploadErrorsTyped(t *testing.T) {
 	if resp, _ := http.Post(srv.URL+"/documents/upload", mw.FormDataContentType(), &body); resp.StatusCode != 400 {
 		t.Errorf("multipart without a file part: %d", resp.StatusCode)
 	}
-	if n := count(t, s, "files") + count(t, s, "documents"); n != 6 {
-		t.Errorf("%d rows after refused uploads, want the 3 same-origin uploads' 6", n)
+	for disposition, want := range map[string]int{`form-data; name="file"`: 400, `form-data; name="file"; filename="any.txt"`: 201} { // r1 R12
+		body.Reset()
+		mw = multipart.NewWriter(&body)
+		pw, _ := mw.CreatePart(textproto.MIMEHeader{"Content-Disposition": {disposition}, "Content-Type": {"*/*"}})
+		pw.Write([]byte("text"))
+		mw.Close()
+		resp, _ := http.Post(srv.URL+"/documents/upload", mw.FormDataContentType(), &body)
+		var out map[string]string
+		json.NewDecoder(resp.Body).Decode(&out)
+		if resp.StatusCode != want || want == 400 && !strings.Contains(out["error"], "no file name") {
+			t.Errorf("%s with a wildcard type: %d %v, want %d", disposition, resp.StatusCode, out, want)
+		}
 	}
+	if n := count(t, s, "files") + count(t, s, "documents"); n != 8 {
+		t.Errorf("%d rows after refused uploads, want the 4 accepted uploads' 8", n)
+	}
+}
+
+// fileData is a document's original file through WriteFile (nil when nothing was written).
+func fileData(s *Service, scope []string, id string) ([]byte, error) {
+	var b bytes.Buffer
+	err := s.WriteFile(context.Background(), scope, id, func(string, store.File) error { return nil }, &b)
+	return b.Bytes(), err
 }
 
 // TestFileNotReachableOutsideMatter: a file is read only through a document in scope.
@@ -259,22 +282,27 @@ func TestFileNotReachableOutsideMatter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if f, err := s.File(ctx, []string{a.ID}, a.ID); err != nil || string(f.Data) != "matter A" {
+	if data, err := fileData(s, []string{a.ID}, a.ID); err != nil || string(data) != "matter A" {
 		t.Fatalf("own file: %v", err)
 	}
 	for _, c := range []struct {
 		scope []string
 		id    string
 	}{{[]string{a.ID}, b.ID}, {nil, b.ID}, {[]string{b.FileID}, b.FileID}, {[]string{a.ID}, b.FileID}} {
-		if f, err := s.File(ctx, c.scope, c.id); !errors.Is(err, ErrNotFound) || f.Data != nil {
-			t.Errorf("File(%v, %s) = %q, %v; want not found", c.scope, c.id, f.Data, err)
+		if data, err := fileData(s, c.scope, c.id); !errors.Is(err, ErrNotFound) || data != nil {
+			t.Errorf("WriteFile(%v, %s) = %q, %v; want not found", c.scope, c.id, data, err)
 		}
 	}
 	text := ingestText(t, s, "posted.txt", "no original file")
-	if _, err := s.File(ctx, []string{text.ID}, text.ID); !errors.Is(err, ErrNotFound) {
+	if _, err := fileData(s, []string{text.ID}, text.ID); !errors.Is(err, ErrNotFound) {
 		t.Errorf("a posted-text document has no file: %v", err)
 	}
 	srv := serveDocs(t, s)
+	c, _ := s.Ingest(ctx, "c.txt", "text/plain", strings.NewReader("stored bytes that rot"))
+	s.db.Exec(`UPDATE file_chunks SET data = 'rotten bytes that rot'::bytea WHERE file_id = $1`, c.FileID)
+	if resp, err := http.Get(srv.URL + "/documents/" + c.ID + "/file"); err != nil || resp.StatusCode != 500 {
+		t.Errorf("a corrupt file is downloaded: %v %v, want 500 before any byte (verified first)", resp.StatusCode, err)
+	}
 	for id, want := range map[string]int{a.ID: 200, a.FileID: 404, "nope": 404, text.ID: 404} {
 		if resp, err := http.Get(srv.URL + "/documents/" + id + "/file"); err != nil || resp.StatusCode != want {
 			t.Errorf("GET /documents/%s/file: %v %v, want %d", id, resp.StatusCode, err, want)
@@ -314,6 +342,35 @@ func TestFileDeletedWithDocument(t *testing.T) {
 	if _, err := s.db.Exec(`DELETE FROM files WHERE id = $1`, e.FileID); err != nil || count(t, s, "documents") != 0 || count(t, s, "chunks") != 0 {
 		t.Errorf("a deleted file leaves its document: %v", err)
 	}
+	f, _ := s.Ingest(ctx, "f.txt", "text/plain", strings.NewReader("f")) // r1 auditor A6: a delete other than Delete
+	if _, err := s.db.Exec(`DELETE FROM documents WHERE id = $1`, f.ID); err != nil || count(t, s, "files") != 0 || count(t, s, "file_chunks") != 0 {
+		t.Errorf("a document deleted by SQL leaves its file: %v", err)
+	}
+}
+
+// TestOrphanFilesSwept (r1 reproducer R7): a file that no document references, left by a server
+// that died mid-ingest, is deleted by the sweep once it is an hour old; an owned file and a
+// fresh unowned one (an ingest in flight) are kept.
+func TestOrphanFilesSwept(t *testing.T) {
+	t.Parallel()
+	s := newService(t)
+	ctx := t.Context()
+	owned, _ := s.Ingest(ctx, "owned.txt", "text/plain", strings.NewReader("kept"))
+	var ids []string
+	for _, name := range []string{"old.pdf", "fresh.pdf"} {
+		f, err := s.st.PutFile(ctx, name, "application/pdf", strings.NewReader("%PDF-1.4 interrupted"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, f.ID)
+	}
+	s.db.Exec(`UPDATE files SET created_at = now() - interval '2 hours' WHERE id = $1 OR id = $2`, ids[0], owned.FileID)
+	if n, err := s.SweepOrphanFiles(ctx); err != nil || n != 1 || count(t, s, "files") != 2 {
+		t.Errorf("sweep: %d %v, %d files left", n, err, count(t, s, "files"))
+	}
+	if _, err := s.st.GetFile(ctx, ids[0]); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("the old orphan: %v", err)
+	}
 }
 
 // TestDownloadNameSafe: downloads carry RFC 6266 filename* with the stored name, and both forms
@@ -334,6 +391,15 @@ func TestDownloadNameSafe(t *testing.T) {
 		ascii, _, _ = strings.Cut(ascii, `"`)
 		if !strings.Contains(h, `filename="`) && !strings.Contains(h, "filename=") || strings.ContainsFunc(ascii, func(r rune) bool { return r > 0x7e }) {
 			t.Errorf("%q: the ASCII fallback is missing or not ASCII: %s", name, h)
+		}
+	}
+	for name, want := range map[string]string{ // r1 prosecutor L-3: both encodings exactly
+		"100%.txt": `attachment; filename=100_.txt; filename*=UTF-8''100%25.txt`,
+		`a;b".txt`: `attachment; filename="a;b_.txt"; filename*=UTF-8''a%3Bb_.txt`,
+		"née.pdf":  `attachment; filename=n_e.pdf; filename*=UTF-8''n%C3%A9e.pdf`,
+	} {
+		if got := ContentDisposition(name); got != want {
+			t.Errorf("ContentDisposition(%q) = %s, want %s", name, got, want)
 		}
 	}
 	s := newService(t)
@@ -378,6 +444,90 @@ func TestWriteErrorKinds(t *testing.T) {
 		}
 		if (c.code == 500) != strings.Contains(logs.String(), "secret-detail") {
 			t.Errorf("%v: logged %q", c.err, logs.String())
+		}
+	}
+}
+
+// TestDownloadBounded (r1 reproducer R6, prosecutor M-2, auditor A1/A8): 12 clients that send the
+// GET for an 8 MiB file and never read hold at most the read slots' chunks (v1 of this route held
+// one whole file per stalled client: +96 MiB here), each is cut within a few transfer windows and
+// its slot freed, and a client that reads gets the whole file.
+func TestDownloadBounded(t *testing.T) { // not parallel: it shortens the package's transfer window
+	s := newService(t)
+	data := bytes.Repeat([]byte("The Supplier shall deliver widgets. "), 8<<20/36)
+	d, err := s.Ingest(t.Context(), "big.txt", "text/plain", bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := uploadWindow
+	uploadWindow = 500 * time.Millisecond
+	t.Cleanup(func() { uploadWindow = old })
+	srv := serveDocs(t, s)
+	var m runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&m)
+	base := int64(m.HeapAlloc)
+	for range 12 {
+		c, err := net.Dial("tcp", srv.Listener.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { c.Close() })
+		c.(*net.TCPConn).SetReadBuffer(4096)
+		fmt.Fprintf(c, "GET /documents/%s/file HTTP/1.1\r\nHost: %s\r\n\r\n", d.ID, srv.Listener.Addr())
+	}
+	time.Sleep(300 * time.Millisecond)
+	runtime.GC()
+	runtime.ReadMemStats(&m)
+	grew := int64(m.HeapAlloc) - base
+	t.Logf("12 stalled downloads of an 8 MiB file: heap +%d MiB, read slots in use %d", grew>>20, s.st.Reads())
+	if grew > 24<<20 || s.st.Reads() > store.MaxConcurrentReads {
+		t.Errorf("stalled downloads hold %d MiB and %d read slots", grew>>20, s.st.Reads())
+	}
+	start := time.Now()
+	for s.st.Reads() != 0 || time.Since(start) < uploadWindow {
+		if time.Since(start) > 20*time.Second {
+			t.Fatalf("%d read slots still held by stalled downloads after 20 s", s.st.Reads())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Logf("every stalled download cut after %s", time.Since(start).Round(time.Millisecond))
+	resp, err := http.Get(srv.URL + "/documents/" + d.ID + "/file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil || !bytes.Equal(got, data) || resp.Header.Get("Content-Length") != fmt.Sprint(len(data)) {
+		t.Errorf("a reading client: %d of %d bytes, %v, Content-Length %q", len(got), len(data), err, resp.Header.Get("Content-Length"))
+	}
+}
+
+// plainWriter hides the connection from http.ResponseController, as a middleware wrapper without
+// Unwrap would.
+type plainWriter struct{ http.ResponseWriter }
+
+// TestTransferDeadlinesFailClosed (red team r1): where the read or write deadline cannot be set,
+// an upload is refused and a download is cut before its first byte, never run without a bound.
+func TestTransferDeadlinesFailClosed(t *testing.T) {
+	t.Parallel()
+	s := newService(t)
+	d, err := s.Ingest(t.Context(), "a.txt", "text/plain", strings.NewReader("bounded"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	s.Routes(mux, slog.New(slog.DiscardHandler))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { mux.ServeHTTP(plainWriter{w}, r) }))
+	t.Cleanup(srv.Close)
+	if resp, _ := upload(t, srv.URL, "b.txt", []byte("x")); resp.StatusCode != 500 || count(t, s, "documents") != 1 {
+		t.Errorf("an upload without a read deadline: %d", resp.StatusCode)
+	}
+	if resp, err := http.Get(srv.URL + "/documents/" + d.ID + "/file"); err == nil {
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err == nil && string(body) == "bounded" {
+			t.Errorf("a download without a write deadline was sent: %d %q", resp.StatusCode, body)
 		}
 	}
 }

@@ -66,7 +66,8 @@ func TestRetrieveNeverLeavesMatter(t *testing.T) {
 	if _, err := s.Outline(ctx, []string{strings.ToUpper(out.ID)}, out.ID); err != nil {
 		t.Errorf("an upper-case id names the same document for every read: %v", err)
 	}
-	for _, sc := range [][]string{scope, nil, {}, {"not-a-uuid"}, {out.ID[:35] + "0"}, {"' OR true --"}} {
+	nearMiss := out.ID[:35] + map[bool]string{true: "1", false: "0"}[out.ID[35] == '0'] // differs in the last hex digit, always (r1 M-3)
+	for _, sc := range [][]string{scope, nil, {}, {"not-a-uuid"}, {nearMiss}, {"' OR true --"}} {
 		if hits, err := s.Search(ctx, sc, "zanzibar", 8, 0); err != nil || len(hits) != 0 {
 			t.Errorf("scope %v: search leaked %v %v", sc, hitIDs(hits), err)
 		}
@@ -109,6 +110,23 @@ func TestSearchRareTermOutranksCommon(t *testing.T) {
 	}
 	if r := slices.IndexFunc(hits, func(h Hit) bool { return ids[h.DocumentID] == "common" }); r != 1 {
 		t.Errorf("the repeated common term should rank second, at %d", r)
+	}
+}
+
+// TestSearchRarityIsScoped (r1 prosecutor L-2): term rarity is counted over the scope only, so
+// another matter's documents cannot reorder this one's results (a cross-matter side channel):
+// "zeta" fills 20 out-of-scope documents, and inside the scope it ties with "omega".
+func TestSearchRarityIsScoped(t *testing.T) {
+	t.Parallel()
+	s := newService(t)
+	x := ingestText(t, s, "x.txt", "zeta report")
+	y := ingestText(t, s, "y.txt", "omega report")
+	for i := range 20 {
+		ingestText(t, s, fmt.Sprintf("other%d.txt", i), "zeta zeta zeta")
+	}
+	hits, err := s.Search(t.Context(), []string{x.ID, y.ID}, "zeta omega", 8, 0)
+	if err != nil || len(hits) != 2 || hits[0].DocumentID != x.ID || hits[0].Rank != hits[1].Rank {
+		t.Errorf("hits %v %v, want a tie broken by chunk id (x first)", hitIDs(hits), err)
 	}
 }
 
@@ -213,7 +231,7 @@ func TestOutlineHasNumbersTitlesTokens(t *testing.T) {
 	if out[1].Tokens <= out[2].Tokens {
 		t.Errorf("section 1 includes 1.1, so it has more tokens: %+v", out)
 	}
-	for _, id := range []string{"s4", "s-1", "s01", "x1", "", "s"} {
+	for _, id := range []string{"s4", "s-1", "s01", "x1", "", "s", "s2147483648", "s99999999999"} {
 		if _, err := s.Section(t.Context(), []string{d.ID}, d.ID, id, 0, 0); !errors.Is(err, ErrNotFound) {
 			t.Errorf("section %q: %v", id, err)
 		}
@@ -263,16 +281,18 @@ func TestSectionPaginates(t *testing.T) {
 	if !one.Truncated || tokens(one.Text) > DefaultSectionTokens {
 		t.Errorf("the default page is not truncated at %d tokens: %d", DefaultSectionTokens, tokens(one.Text))
 	}
-	for _, bad := range [][2]int{{-1, 10}, {0, -1}, {0, MaxSectionTokens + 1}, {len([]rune(text)) + 1, 10}} {
+	for _, bad := range [][2]int{{-1, 10}, {0, -1}, {0, MaxSectionTokens + 1}, {len([]rune(text)) + 1, 10}, {1 << 31, 10}} {
 		if _, err := s.Section(t.Context(), []string{d.ID}, d.ID, "s0", bad[0], bad[1]); !errors.Is(err, ErrBadInput) {
 			t.Errorf("section offset %d limit %d: %v", bad[0], bad[1], err)
 		}
 	}
 }
 
-// TestLexicalRecallProofRuns (gate E4): for each planted proof-run fact, a search with the fact's
-// title, restricted to its matter's documents, returns a chunk holding one of its evidence strings
-// in the top 8, for at least 95% of the facts. Per-matter recall is printed.
+// TestLexicalRecallProofRuns (gate E4): for each planted proof-run fact, a search restricted to its
+// matter's documents returns a chunk holding one of its evidence strings in the top 8. The gate
+// query is the fact's answer-free question (answer_key.json "question", written without its
+// figures or conclusion: r1 auditor A3); the fact's title, which states the answer, is measured
+// too and printed as an upper bound. Per-matter recall is printed.
 func TestLexicalRecallProofRuns(t *testing.T) {
 	t.Parallel()
 	s := newService(t)
@@ -282,12 +302,13 @@ func TestLexicalRecallProofRuns(t *testing.T) {
 	}
 	ws := regexp.MustCompile(`\s+`)
 	norm := func(x string) string { return strings.ToLower(ws.ReplaceAllString(strings.TrimSpace(x), " ")) }
-	total, found, allTotal, allFound := 0, 0, 0, 0
+	type tally struct{ facts, found, strings, stringsFound int }
+	var question, title tally
 	for _, key := range keys {
 		var ak struct {
 			Facts []struct {
-				ID, Title string
-				Evidence  []string
+				ID, Title, Question string
+				Evidence            []string
 			}
 		}
 		raw, err := os.ReadFile(key)
@@ -304,36 +325,59 @@ func TestLexicalRecallProofRuns(t *testing.T) {
 			}
 			scope = append(scope, ingestText(t, s, f.Name(), string(b)).ID)
 		}
-		n, hit := 0, 0
+		var matterQ, matterT tally
 		for _, f := range ak.Facts {
-			hits, err := s.Search(t.Context(), scope, f.Title, 8, 0)
-			if err != nil {
-				t.Fatal(err)
+			if f.Question == "" {
+				t.Fatalf("%s: fact %s has no answer-free question", key, f.ID)
 			}
-			any := false
-			for _, ev := range f.Evidence {
-				in := slices.ContainsFunc(hits, func(h Hit) bool { return strings.Contains(norm(h.Text), norm(ev)) })
-				allTotal++
-				if in {
-					allFound++
-					any = true
+			for _, run := range []struct {
+				query    string
+				into     *tally
+				logMiss  bool
+				variants string
+			}{{f.Question, &matterQ, true, "question"}, {f.Title, &matterT, false, "title"}} {
+				hits, err := s.Search(t.Context(), scope, run.query, 8, 0)
+				if err != nil {
+					t.Fatal(err)
+				}
+				any := false
+				for _, ev := range f.Evidence {
+					run.into.strings++
+					if slices.ContainsFunc(hits, func(h Hit) bool { return strings.Contains(norm(h.Text), norm(ev)) }) {
+						run.into.stringsFound++
+						any = true
+					}
+				}
+				if run.into.facts++; any {
+					run.into.found++
+				} else if run.logMiss {
+					t.Logf("  miss %s: %s", f.ID, f.Question)
 				}
 			}
-			if n++; any {
-				hit++
-			} else {
-				t.Logf("  miss %s: %s", f.ID, f.Title)
-			}
 		}
-		t.Logf("%s: recall@8 %d/%d", filepath.Base(filepath.Dir(key)), hit, n)
-		total, found = total+n, found+hit
+		t.Logf("%s: recall@8 %d/%d by question, %d/%d by title", filepath.Base(filepath.Dir(key)), matterQ.found, matterQ.facts, matterT.found, matterT.facts)
+		for _, p := range [][2]*tally{{&question, &matterQ}, {&title, &matterT}} {
+			p[0].facts, p[0].found, p[0].strings, p[0].stringsFound = p[0].facts+p[1].facts, p[0].found+p[1].found, p[0].strings+p[1].strings, p[0].stringsFound+p[1].stringsFound
+		}
 	}
-	t.Logf("E4 recall@8: %d/%d facts = %.3f (every evidence string: %d/%d = %.3f)", found, total, float64(found)/float64(total),
-		allFound, allTotal, float64(allFound)/float64(allTotal))
-	if total != 68 {
-		t.Errorf("%d planted facts, want 68", total)
+	for _, r := range []struct {
+		name string
+		t    tally
+	}{{"by answer-free question (the gate)", question}, {"by fact title (upper bound: titles state the answer)", title}} {
+		t.Logf("E4 recall@8 %s: %d/%d facts = %.3f (every evidence string: %d/%d = %.3f)", r.name, r.t.found, r.t.facts,
+			float64(r.t.found)/float64(r.t.facts), r.t.stringsFound, r.t.strings, float64(r.t.stringsFound)/float64(r.t.strings))
 	}
-	if float64(found) < 0.95*float64(total) {
-		t.Errorf("E4 failed: recall@8 %d/%d < 0.95", found, total)
+	if question.facts != 68 {
+		t.Errorf("%d planted facts, want 68", question.facts)
+	}
+	// E4 is NOT met: by answer-free question recall@8 is 60/68 = 0.882 < 0.95 (measured at the r1
+	// fix, questions written before the first run and not tuned since). Whether that means pgvector
+	// is the coordinator's decision (DESIGN § riskiest assumption); until then these floors only
+	// stop a regression, and the gate line below says plainly that it failed.
+	if float64(question.found) < 0.95*float64(question.facts) {
+		t.Logf("E4 GATE NOT MET: recall@8 by answer-free question %d/%d < 0.95", question.found, question.facts)
+	}
+	if question.found < 60 || float64(title.found) < 0.95*float64(title.facts) {
+		t.Errorf("E4 regressed: %d/%d by question (floor 60), %d/%d by title (floor 0.95)", question.found, question.facts, title.found, title.facts)
 	}
 }

@@ -6,6 +6,8 @@ package docs
 import (
 	"regexp"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Section is one node of a document's section tree, from its own numbering (ported from v1
@@ -21,6 +23,17 @@ type Section struct {
 	Start, BodyEnd, End int
 }
 
+// Bounds on the tree, so storage stays linear in the input (each chunk carries its section path):
+// at most MaxSections sections (later headings stay body text of the last one), a title of at most
+// maxTitle bytes (a longer heading line, usually a numbered paragraph, keeps its full text in the
+// body), and a number of at most maxNumber bytes and five decimal levels (deeper is body text),
+// so a path has at most six levels.
+const (
+	MaxSections = 10_000
+	maxTitle    = 120
+	maxNumber   = 24
+)
+
 // Parse builds the section tree of text. A document with no recognised heading is one level-0
 // section; text before the first heading is a level-0 preface section.
 func Parse(text string) []Section {
@@ -30,7 +43,7 @@ func Parse(text string) []Section {
 		if i := strings.IndexByte(text[start:], '\n'); i >= 0 {
 			end = start + i + 1
 		}
-		if s, ok := classify(strings.TrimSuffix(strings.TrimSuffix(text[start:end], "\n"), "\r")); ok {
+		if s, ok := classify(strings.TrimSuffix(strings.TrimSuffix(text[start:end], "\n"), "\r")); ok && len(secs) < MaxSections-1 {
 			if len(secs) == 0 && start > 0 {
 				secs = append(secs, Section{BodyEnd: start, End: start}) // the preface
 			}
@@ -62,7 +75,7 @@ func Parse(text string) []Section {
 
 var (
 	reMarkdown     = regexp.MustCompile(`^(#{1,6})\s+(.*?)\s*#*$`)
-	reDecimal      = regexp.MustCompile(`^(\d{1,3}(?:\.\d+)*)(?:\.|\s|$)\s*(.*)$`) // ≤ 3 digits: not a year or a figure
+	reDecimal      = regexp.MustCompile(`^(\d{1,3}(?:\.\d+)*)(?:\.|\s|$)\s*(.*)$`) // ≤ 3 digits: not a year; a lower-case title is a figure
 	reAlpha        = regexp.MustCompile(`^\(([a-zA-Z]{1,2})\)\s*(.*)$`)
 	reRoman        = regexp.MustCompile(`^\(([ivxlcdmIVXLCDM]+)\)\s*(.*)$`)
 	reArticle      = regexp.MustCompile(`^(?i:ARTICLE)\s+([IVXLCDM]+|\d+)\b\.?\s*(.*)$`)
@@ -85,7 +98,18 @@ func classify(line string) (Section, bool) {
 	}
 	s = strings.TrimSpace(strings.Trim(s, "*_")) // **1.2 Bold heading**
 	sec := func(scheme, number, title string, level int) (Section, bool) {
-		title = strings.Trim(strings.NewReplacer("**", "", "__", "").Replace(title), " \t*_—–-:.")
+		title = strings.Map(func(r rune) rune { // no bidi overrides or other invisible or control characters in a title
+			if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+				return -1
+			}
+			return r
+		}, strings.Trim(strings.NewReplacer("**", "", "__", "").Replace(title), " \t*_—–-:."))
+		if len(number) > maxNumber || scheme == "decimal" && (level > 6 || startsLower(title)) {
+			return Section{}, false // "1.2.3.4.5.6", "100 dollars were paid", "1.5 million"
+		}
+		if len(title) > maxTitle {
+			title = strings.ToValidUTF8(title[:maxTitle], "") + "…"
+		}
 		return Section{Number: number, Title: title, Scheme: scheme, Level: level, Defs: reDefinitions.MatchString(title)}, true
 	}
 	if m := reRecitals.FindStringSubmatch(s); m != nil {
@@ -111,6 +135,8 @@ func classify(line string) (Section, bool) {
 	}
 	return Section{}, false
 }
+
+func startsLower(s string) bool { r, _ := utf8.DecodeRuneInString(s); return unicode.IsLower(r) }
 
 // isRomanItem: "(i)", "(v)", "(x)" and multi-letter roman tokens ("ii", "iv") are roman; a single
 // c, d, l or m is far more likely an alpha enumerator.

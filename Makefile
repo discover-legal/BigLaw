@@ -30,8 +30,11 @@ mod-check:
 	$(GO) mod verify
 	$(GO) mod tidy -diff
 
+# The reader child's memory cap is off under the race detector (its shadow memory counts too),
+# so the child's bounds are also tested without -race.
 test:
 	$(GO) test -race -count=1 -shuffle=on -timeout 5m ./...
+	$(GO) test -count=1 -run '^TestChild' ./internal/docs
 
 loc:
 	python3 scripts/loc.py
