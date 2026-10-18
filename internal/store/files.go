@@ -4,6 +4,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -36,7 +37,8 @@ var (
 	ErrFileTooLarge = fmt.Errorf("store: file exceeds %d bytes", MaxFileSize)
 	ErrNotFound     = errors.New("store: not found")
 	ErrBadName      = errors.New(`store: file name must be 1-255 bytes of valid UTF-8, not "." or "..", with no path separator, ` +
-		"control or invisible format character (bidi controls, zero-width spaces), line separator, or leading/trailing space")
+		"control or invisible character (bidi controls, zero-width spaces, fillers, variation selectors; one zero-width joiner " +
+		"between two letters or emoji is allowed), line separator, run of two or more spaces, or leading/trailing space")
 	ErrBadType = errors.New("store: content type must be a concrete media type such as text/plain (no wildcard), in printable ASCII, at most 255 bytes in canonical form")
 	// ErrCorrupt means the stored bytes do not match the recorded size or
 	// SHA-256. The checksum detects storage corruption, not tampering:
@@ -62,7 +64,7 @@ type File struct {
 // slot or ctx, but a call whose reader blocks returns only when the reader
 // does). The content type is stored in canonical form.
 func (s *Store) PutFile(ctx context.Context, name, contentType string, r io.Reader) (File, error) {
-	if !validName(name) {
+	if !ValidName(name) {
 		return File{}, ErrBadName
 	}
 	mt, params, err := mime.ParseMediaType(contentType)
@@ -121,69 +123,115 @@ func (s *Store) PutFile(ctx context.Context, name, contentType string, r io.Read
 	return f, nil
 }
 
-// GetFile returns a file with its bytes. Unknown or malformed ids give
-// ErrNotFound. Metadata and chunks come from one statement (one snapshot).
-// The recorded size is checked against MaxFileSize before any content is
-// read, the buffer is allocated once at that size, and the size and SHA-256
-// are re-verified, so corruption is ErrCorrupt rather than a wrong document.
+// GetFile returns a file with its bytes (ReadFile into one buffer of the recorded size), so
+// corruption is ErrCorrupt rather than a wrong document. At most MaxConcurrentReads reads (GetFile
+// or ReadFile) run at once; a call over the cap waits for a slot or ctx.
 func (s *Store) GetFile(ctx context.Context, id string) (File, error) {
-	if !uuidRe.MatchString(id) {
-		return File{}, ErrNotFound
-	}
-	rows, err := s.db.QueryContext(ctx, `SELECT f.id, f.name, f.content_type, f.size, f.sha256, f.created_at, c.data
-		FROM files f LEFT JOIN file_chunks c ON c.file_id = f.id WHERE f.id = $1 ORDER BY c.seq`, id)
+	var buf bytes.Buffer
+	f, err := s.ReadFile(ctx, id, func(f File) error { buf.Grow(int(f.Size)); return nil }, &buf)
 	if err != nil {
-		return File{}, fmt.Errorf("store: get file: %w", err)
+		return File{}, err
 	}
-	defer rows.Close()
-	var f File
-	for first := true; rows.Next(); first = false {
-		var chunk sql.RawBytes // valid until the next Next; copied below
-		if first {
-			err = rows.Scan(&f.ID, &f.Name, &f.ContentType, &f.Size, &f.SHA256, &f.CreatedAt, &chunk)
-			if err == nil && (f.Size < 0 || f.Size > MaxFileSize) {
-				return File{}, fmt.Errorf("%w: file %s records size %d", ErrCorrupt, f.ID, f.Size)
-			}
-			f.Data = make([]byte, 0, f.Size)
-		} else {
-			var skip any
-			err = rows.Scan(&skip, &skip, &skip, &skip, &skip, &skip, &chunk)
-		}
-		if err != nil {
-			return File{}, fmt.Errorf("store: get file: %w", err)
-		}
-		if int64(len(f.Data)+len(chunk)) > f.Size {
-			return File{}, fmt.Errorf("%w: file %s holds more than its recorded %d bytes", ErrCorrupt, f.ID, f.Size)
-		}
-		f.Data = append(f.Data, chunk...)
-	}
-	if err := rows.Err(); err != nil {
-		return File{}, fmt.Errorf("store: get file: %w", err)
-	}
-	if f.ID == "" {
-		return File{}, ErrNotFound
-	}
-	sum := sha256.Sum256(f.Data)
-	if int64(len(f.Data)) != f.Size || !strings.EqualFold(hex.EncodeToString(sum[:]), f.SHA256) {
-		return File{}, fmt.Errorf("%w: file %s", ErrCorrupt, f.ID)
+	if f.Data = buf.Bytes(); f.Data == nil {
+		f.Data = []byte{} // an empty file
 	}
 	return f, nil
 }
 
-func validName(name string) bool {
-	if name == "" || len(name) > MaxNameLen || name == "." || name == ".." || !utf8.ValidString(name) {
-		return false
+// ReadFile writes a file to w one chunk at a time (one query per chunk, so it holds two chunks,
+// not the file) and returns its metadata; head, if not nil, gets the metadata before the first
+// byte. Unknown or malformed ids give ErrNotFound. The recorded size is checked against
+// MaxFileSize before any content is read, and the size and SHA-256 are verified before the last
+// chunk is written: on ErrCorrupt w has received at most all but the last chunk, never the whole
+// file, so a client given the recorded size as Content-Length sees a short body (r2 N3: rows
+// changed between a caller's verifying read and its streaming read). A read slot is held
+// throughout.
+func (s *Store) ReadFile(ctx context.Context, id string, head func(File) error, w io.Writer) (File, error) {
+	if !ValidID(id) {
+		return File{}, ErrNotFound
 	}
-	if strings.TrimFunc(name, unicode.IsSpace) != name { // "report.pdf " hides an extension or a trailing character
-		return false
+	select {
+	case s.reads <- struct{}{}:
+		defer func() { <-s.reads }()
+	case <-ctx.Done():
+		return File{}, fmt.Errorf("store: get file: waiting for a read slot: %w", ctx.Err())
 	}
-	// Cf: bidi controls ("a\u202Efdp.exe" shows as "aexe.pdf"), zero-width
-	// spaces, BOM. ZWNJ/ZWJ stay: Persian, Indic scripts and emoji need them.
-	return !strings.ContainsFunc(name, func(r rune) bool {
-		return r == '/' || r == '\\' || unicode.IsControl(r) || unicode.In(r, unicode.Zl, unicode.Zp) ||
-			unicode.Is(unicode.Cf, r) && r != '\u200c' && r != '\u200d'
-	})
+	var f File
+	var chunks int
+	err := s.db.QueryRowContext(ctx, `SELECT id, name, content_type, size, sha256, created_at,
+		(SELECT count(*) FROM file_chunks WHERE file_id = f.id) FROM files f WHERE id = $1`, id).
+		Scan(&f.ID, &f.Name, &f.ContentType, &f.Size, &f.SHA256, &f.CreatedAt, &chunks)
+	if errors.Is(err, sql.ErrNoRows) {
+		return File{}, ErrNotFound
+	} else if err != nil {
+		return File{}, fmt.Errorf("store: get file: %w", err)
+	} else if f.Size < 0 || f.Size > MaxFileSize {
+		return File{}, fmt.Errorf("%w: file %s records size %d", ErrCorrupt, f.ID, f.Size)
+	}
+	if head != nil {
+		if err := head(f); err != nil {
+			return File{}, err
+		}
+	}
+	h, n, seq, held := sha256.New(), int64(0), 0, []byte(nil)
+	for ; ; seq++ {
+		var chunk []byte
+		err := s.db.QueryRowContext(ctx, `SELECT data FROM file_chunks WHERE file_id = $1 AND seq = $2`, id, seq).Scan(&chunk)
+		if errors.Is(err, sql.ErrNoRows) {
+			break
+		} else if err != nil {
+			return File{}, fmt.Errorf("store: get file: %w", err)
+		}
+		if n += int64(len(chunk)); n > f.Size {
+			return File{}, fmt.Errorf("%w: file %s holds more than its recorded %d bytes", ErrCorrupt, f.ID, f.Size)
+		}
+		h.Write(chunk)
+		if _, err := w.Write(held); err != nil {
+			return File{}, fmt.Errorf("store: get file: write: %w", err)
+		}
+		held = chunk
+	}
+	if n != f.Size || seq != chunks || !strings.EqualFold(hex.EncodeToString(h.Sum(nil)), f.SHA256) {
+		return File{}, fmt.Errorf("%w: file %s", ErrCorrupt, f.ID)
+	}
+	if _, err := w.Write(held); err != nil {
+		return File{}, fmt.Errorf("store: get file: write: %w", err)
+	}
+	return f, nil
 }
+
+// ValidName is the file-name policy (README § Files): no path separator, control, line separator
+// or invisible character (Cf such as bidi controls and zero-width spaces, Unicode
+// Default_Ignorable_Code_Point such as Hangul fillers and variation selectors, the braille blank),
+// no run of white space and no white space at either end. ZWNJ/ZWJ stay allowed once between
+// two letters or emoji (Persian, Indic scripts and emoji sequences need them), and one
+// presentation selector (U+FE0E/U+FE0F) right after an emoji symbol.
+func ValidName(name string) bool {
+	if name == "" || len(name) > MaxNameLen || name == "." || name == ".." || !utf8.ValidString(name) ||
+		strings.TrimFunc(name, unicode.IsSpace) != name { // "report.pdf " hides an extension or a trailing character
+		return false
+	}
+	rs := []rune(name)
+	joins := func(i int) bool {
+		return i >= 0 && i < len(rs) && unicode.In(rs[i], unicode.L, unicode.M, unicode.So, unicode.Sk)
+	}
+	for i, r := range rs {
+		switch {
+		case (r == '\ufe0e' || r == '\ufe0f') && i > 0 && unicode.Is(unicode.So, rs[i-1]): // an emoji's presentation: "❤️"
+		case r == '\u200c' || r == '\u200d':
+			if !joins(i-1) || !joins(i+1) {
+				return false
+			}
+		case r == '/' || r == '\\' || unicode.IsControl(r) || unicode.In(r, unicode.Zl, unicode.Zp, unicode.Cf, unicode.Other_Default_Ignorable_Code_Point, unicode.Variation_Selector),
+			r == '\u2800', unicode.IsSpace(r) && unicode.IsSpace(rs[i-1]): // i > 0: no leading space
+			return false
+		}
+	}
+	return true
+}
+
+// ValidID reports whether id is a canonical uuid.
+func ValidID(id string) bool { return uuidRe.MatchString(id) }
 
 // uuidRe is the canonical 8-4-4-4-12 form: a malformed id is "not found"
 // instead of a Postgres cast error, and lookups use the index.

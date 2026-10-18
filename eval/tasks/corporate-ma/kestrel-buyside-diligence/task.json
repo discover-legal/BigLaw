@@ -1,0 +1,11 @@
+{
+  "id": "corporate-ma/kestrel-buyside-diligence",
+  "title": "Project Kestrel — buy-side red-flag due diligence on Brightwater Sensor Systems",
+  "practice_area": "corporate-ma",
+  "work_type": "review",
+  "jurisdiction": "US",
+  "as_of": "2026-10-15",
+  "synthetic": true,
+  "instructions": "We act for Halberd Industrial Holdings, Inc. (Buyer) on its proposed $84,000,000 acquisition of all outstanding shares of Brightwater Sensor Systems, Inc. under the Sellers' draft Stock Purchase Agreement (v3, 2 October 2026). Today is October 15, 2026. Review every document in the virtual data room and produce a buy-side red-flag due diligence report for the deal team.\n\nThe report must:\n1. Reconcile the capitalization representation in SPA Section 3.4 against the cap table and identify every discrepancy, giving the exact share numbers on each side.\n2. Identify every stockholder approval, consent, waiver or transfer restriction in the charter that must be dealt with before Closing, and quantify the Series A liquidation preference.\n3. For each material contract (supply, customer, license, lease, logistics, employment), state whether the transaction triggers a change-of-control or anti-assignment provision, what the counterparty's remedy is, and what consent or action Buyer should require. Expressly identify any contract that does NOT require consent.\n4. Identify time-sensitive items (deadlines that have passed or are imminent as of today).\n5. Identify executive compensation triggered by the transaction, with dollar amounts, and any enforceability concerns with restrictive covenants.\n6. Identify gaps in the SPA's protection of Buyer (closing conditions, disclosure schedules, indemnity limitations) and recommend specific fixes.\n\nFor every issue cite the document and quote the operative language verbatim. Rank issues High / Medium / Low.",
+  "deliverables": ["due_diligence_report.md"]
+}

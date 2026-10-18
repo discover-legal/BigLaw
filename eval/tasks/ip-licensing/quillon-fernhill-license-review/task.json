@@ -1,0 +1,11 @@
+{
+  "id": "ip-licensing/quillon-fernhill-license-review",
+  "title": "Fernhill Robotics — licensee-side review of Quillon's draft patent and software license against the signed term sheet",
+  "practice_area": "ip-licensing",
+  "work_type": "review",
+  "jurisdiction": "US",
+  "as_of": "2026-10-15",
+  "synthetic": true,
+  "instructions": "We act for Fernhill Robotics, Inc., the licensee. Quillon Technologies, Inc. has circulated its first draft of the Patent and Software License Agreement with Schedule A (licensed patents) and Schedule B (software components). Review the draft and schedules against the term sheet both parties initialled and produce a license review memo for Fernhill's General Counsel.\n\nThe memo must:\n1. Identify every place the draft departs from the agreed term sheet, quoting both the term sheet and the draft verbatim, and propose replacement language.\n2. Review Schedule A patent by patent: status, expiry, ownership/chain of title, and whether each should be royalty-bearing.\n3. Review Schedule B for open-source license risk and any conflict with the draft's warranties and restrictions.\n4. Identify provisions that raise patent-misuse or enforceability concerns under U.S. law.\n5. State expressly which draft provisions are consistent with the term sheet and need no change.\n\nRank each issue High / Medium / Low.",
+  "deliverables": ["license_review_memo.md"]
+}

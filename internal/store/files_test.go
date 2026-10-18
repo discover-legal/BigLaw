@@ -165,13 +165,17 @@ func TestFilesEdgeCases(t *testing.T) {
 
 	for _, name := range []string{"", ".", "..", "../../etc/passwd", `a\b`, "a/b", "a\x00b", "a\nb", "\xff\xfe", "invoice\u202Efdp.exe", "a\u2066b", strings.Repeat("n", MaxNameLen+1),
 		// r2 reproducer: invisible format characters, separators, edge spaces.
-		"a\u2028b.pdf", "a\u2029b.pdf", "invoice\u200b.pdf", "x\ufeff.exe", "pay\u00ad.pdf", "file.pdf\u180e.exe", "report.pdf ", " lead.pdf", "a.pdf\u3000"} {
+		"a\u2028b.pdf", "a\u2029b.pdf", "invoice\u200b.pdf", "x\ufeff.exe", "pay\u00ad.pdf", "file.pdf\u180e.exe", "report.pdf ", " lead.pdf", "a.pdf\u3000",
+		// PR 3 (r3 reproducer R3-4): invisible characters outside Cf, joiner abuse, white-space runs.
+		"inv\u3164oice.pdf", "\u115fa.pdf", "a\u2800.pdf", "a\u034fb.pdf", "a\ufe0fb.pdf", "a\U000E0100b.pdf", "a\u200d\u200db.pdf", "\u200da.pdf", "a.pdf\u200d",
+		"a\u200d.pdf", "1\u200c2.pdf", "report.pdf\u00a0\u00a0\u00a0\u00a0.exe", "a  b.pdf", "a\u00a0 b.pdf", "a\u3000\u3000b.pdf", "\uffa0x.txt", "a\u17b4b.pdf", "\u2764\ufe0f\ufe0f.txt", "\ufe0fa.txt"} {
 		if _, err := put(name, "text/plain", strings.NewReader("x")); !errors.Is(err, ErrBadName) {
 			t.Errorf("name %q: %v, want ErrBadName", name, err)
 		}
 	}
 	for _, name := range []string{"memo.docx", "Mémoire d'appel (v2).docx", "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645.pdf", "a..b.txt", strings.Repeat("n", MaxNameLen),
-		"a b.pdf", "a\u3000b.pdf", "\U0001F468\u200d\U0001F4BB notes.txt"} {
+		"a b.pdf", "a\u3000b.pdf", "\U0001F468\u200d\U0001F4BB notes.txt", "a\u00a0b.pdf", "c:evil.txt", "CON", "\u0915\u094d\u200d\u0937.txt",
+		"\u2764\ufe0f notes.txt", "\U0001F468\u200d\u2764\ufe0f\u200d\U0001F468.txt", "\u2602\ufe0e.txt"} { // r1 L-4: emoji presentation sequences
 		if _, err := put(name, "text/plain", strings.NewReader("x")); err != nil {
 			t.Errorf("name %q refused: %v", name, err)
 		}
@@ -284,6 +288,99 @@ func TestSlowUploadsLeaveConnections(t *testing.T) {
 	if n := count(t, s, "files"); n != 1 {
 		t.Errorf("%d files after the stalled uploads failed, want 1", n)
 	}
+}
+
+// TestConcurrentReadsBounded: at most MaxConcurrentReads GetFile calls hold a file at once; one
+// over the cap waits for a slot (or its context) and then succeeds.
+func TestConcurrentReadsBounded(t *testing.T) {
+	t.Parallel()
+	s := openStore(t, storetest.DSN(t))
+	f, err := s.PutFile(t.Context(), "a.txt", "text/plain", strings.NewReader("abc"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range MaxConcurrentReads { // the slots a running read holds while it holds a file
+		s.reads <- struct{}{}
+	}
+	wctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+	if _, err := s.GetFile(wctx, f.ID); !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "read slot") {
+		t.Fatalf("a read over the cap: %v, want a deadline while waiting for a slot", err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := s.GetFile(t.Context(), f.ID); done <- err }()
+	select {
+	case err := <-done:
+		t.Fatalf("a read ran with every slot taken: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	<-s.reads
+	if err := <-done; err != nil {
+		t.Fatalf("the waiting read after a slot freed: %v", err)
+	}
+	for range MaxConcurrentReads - 1 {
+		<-s.reads
+	}
+	if len(s.reads) != 0 {
+		t.Errorf("%d read slots still held after every read returned", len(s.reads))
+	}
+	// r2 prosecutor L-1: a read holds its slot while it writes (a slow download client).
+	release := make(chan struct{})
+	for range MaxConcurrentReads {
+		go s.ReadFile(t.Context(), f.ID, nil, blockedWriter(release))
+	}
+	time.Sleep(200 * time.Millisecond)
+	if got := s.Reads(); got != MaxConcurrentReads {
+		t.Errorf("%d read slots held by %d reads blocked in their writer", got, MaxConcurrentReads)
+	}
+	wctx, cancel = context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+	if _, err := s.GetFile(wctx, f.ID); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("a fifth read beside four blocked ones: %v, want it to wait", err)
+	}
+	close(release)
+}
+
+type blockedWriter chan struct{}
+
+func (b blockedWriter) Write(p []byte) (int, error) { <-b; return len(p), nil }
+
+// TestReadFileWithholdsUnverifiedTail (r2 reproducer N3): a file whose rows change while it is
+// read never reaches the writer whole: the last chunk is written only after the hash matches.
+func TestReadFileWithholdsUnverifiedTail(t *testing.T) {
+	t.Parallel()
+	s := openStore(t, storetest.DSN(t))
+	data := bytes.Repeat([]byte("0123456789"), (2*ChunkSize+ChunkSize/2)/10)
+	f, err := s.PutFile(t.Context(), "a.bin", "application/octet-stream", bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := &tamperWriter{tamper: func() error {
+		_, err := s.DB().Exec(`UPDATE file_chunks SET data = overlay(data placing 'XXXX'::bytea from 1) WHERE file_id = $1 AND seq = 2`, f.ID)
+		return err
+	}}
+	if _, err := s.ReadFile(t.Context(), f.ID, nil, w); !errors.Is(err, ErrCorrupt) || w.n >= len(data) {
+		t.Errorf("rows changed mid-read: %v after %d of %d bytes, want ErrCorrupt and a short write", err, w.n, len(data))
+	}
+	var all bytes.Buffer
+	if _, err := s.ReadFile(t.Context(), f.ID, nil, &all); !errors.Is(err, ErrCorrupt) || all.Len() != 2*ChunkSize {
+		t.Errorf("a corrupt last chunk: %v, %d bytes written, want ErrCorrupt after %d", err, all.Len(), 2*ChunkSize)
+	}
+}
+
+type tamperWriter struct {
+	tamper func() error
+	n      int
+}
+
+func (w *tamperWriter) Write(p []byte) (int, error) {
+	if w.n == 0 && len(p) > 0 {
+		if err := w.tamper(); err != nil {
+			return 0, err
+		}
+	}
+	w.n += len(p)
+	return len(p), nil
 }
 
 // TestFilesCorruptionDetected: storage corruption is ErrCorrupt, not a wrong
