@@ -1,0 +1,547 @@
+{
+  "matter": "litigation/greystone-v-talbot-defense",
+  "version": 1,
+  "as_of": "2026-10-26",
+  "notes": "Synthetic case. Deadlines computed under FRCP 6(a) as summarised in the matter's desk reference (05): answer = served 10/21/2026 + 21 days = 11/11/2026 (Veterans Day) -> Thursday 11/12/2026; joint status report = 7 days before 12/3/2026 = 11/26/2026 (Thanksgiving) -> counted backward under Rule 6(a)(5) -> Wednesday 11/25/2026. The Rule 4(d) waiver was NOT returned, so the 60-day waiver period (12/11/2026) does not apply. Contract: shortfall fee capped at 35% (s.4.3); one-year contractual limitations (s.15.3); lost profits excluded (s.12.1); 30-day negotiation + mediation before suit (s.14).",
+  "facts": [
+    {
+      "id": "LIT-D1",
+      "title": "Answer due Thursday November 12, 2026 (21 days from 10/21 service lands on Veterans Day)",
+      "category": "deadline",
+      "severity": "high",
+      "documents": [
+        "04-docket-sheet.md",
+        "05-federal-calendar-and-rules-excerpt.md"
+      ],
+      "evidence": [
+        "served on 10/21/2026 via its registered agent",
+        "| Veterans Day | Wednesday, November 11, 2026 |"
+      ],
+      "detect": {
+        "all": [
+          [
+            "$date:2026-11-12"
+          ]
+        ]
+      },
+      "model_answer": "Answer or Rule 12 motion due Thursday, November 12, 2026: service on October 21, 2026 + 21 days = November 11, 2026, which is Veterans Day, so the deadline rolls to the next day under Rule 6(a)(1)(C)."
+    },
+    {
+      "id": "LIT-D2",
+      "title": "Joint initial status report due Wednesday November 25, 2026 (backward count skips Thanksgiving)",
+      "category": "deadline",
+      "severity": "high",
+      "documents": [
+        "04-docket-sheet.md",
+        "05-federal-calendar-and-rules-excerpt.md"
+      ],
+      "evidence": [
+        "The parties shall file a joint initial status report no later than seven (7) days before the initial status hearing",
+        "The \"next day\" is determined by continuing to count forward when the period is measured after an event and backward when measured before an event."
+      ],
+      "detect": {
+        "all": [
+          [
+            "$date:2026-11-25"
+          ]
+        ]
+      },
+      "model_answer": "Joint initial status report due Wednesday, November 25, 2026: seven days before the December 3, 2026 hearing is November 26, 2026 (Thanksgiving), and because the period is measured before an event Rule 6(a)(5) counts backward to November 25."
+    },
+    {
+      "id": "LIT-D3",
+      "title": "Talbot's Rule 7.1 disclosure statement due with its first filing",
+      "category": "deadline",
+      "severity": "low",
+      "documents": [
+        "05-federal-calendar-and-rules-excerpt.md"
+      ],
+      "evidence": [
+        "A nongovernmental corporate party must file a disclosure statement with its first appearance"
+      ],
+      "detect": {
+        "all": [
+          [
+            "7.1"
+          ],
+          [
+            "disclosure"
+          ]
+        ]
+      },
+      "model_answer": "Talbot must file its Rule 7.1 disclosure statement with its first appearance or filing (i.e., with the answer or motion)."
+    },
+    {
+      "id": "LIT-D4",
+      "title": "Suit filed 14 days into the 30-day negotiation period that ran to October 25, 2026",
+      "category": "deadline",
+      "severity": "medium",
+      "documents": [
+        "03-key-correspondence.md",
+        "02-packaging-supply-agreement.md"
+      ],
+      "evidence": [
+        "**Date:** September 25, 2026",
+        "For thirty (30) days after delivery of a Notice of Dispute, senior executives of the parties with authority to settle shall meet and negotiate in good faith to resolve the dispute."
+      ],
+      "detect": {
+        "all": [
+          [
+            "$date:2026-10-25",
+            "14 days",
+            "fourteen days"
+          ],
+          [
+            "negotiat",
+            "notice of dispute",
+            "section 14",
+            "s. 14",
+            "s.14",
+            "mediation"
+          ]
+        ]
+      },
+      "model_answer": "The Section 14.2 negotiation period triggered by the September 25, 2026 Notice of Dispute ran until October 25, 2026; Greystone sued on October 9, 2026, only 14 days in, and never requested mediation."
+    },
+    {
+      "id": "LIT-I1",
+      "title": "Contract Year 2 claim ($612,400) is time-barred under the one-year contractual limitations period",
+      "category": "issue",
+      "severity": "high",
+      "documents": [
+        "02-packaging-supply-agreement.md",
+        "03-key-correspondence.md",
+        "01-complaint.md"
+      ],
+      "evidence": [
+        "No action arising out of this Agreement may be brought by either party more than one (1) year after the cause of action has accrued.",
+        "Greystone invoiced Talbot for the Contract Year 2 shortfall on March 31, 2025."
+      ],
+      "detect": {
+        "all": [
+          [
+            "time-bar",
+            "time bar",
+            "barred",
+            "expired",
+            "untimely",
+            "out of time"
+          ],
+          [
+            "year 2",
+            "contract year 2",
+            "$money:612400"
+          ]
+        ]
+      },
+      "model_answer": "The Contract Year 2 shortfall claim ($612,400) accrued no later than the March 31, 2025 invoice; under the one-year contractual limitations period in Section 15.3 it expired by March 31, 2026, long before the October 9, 2026 complaint, so it is time-barred."
+    },
+    {
+      "id": "LIT-I2",
+      "title": "Shortfall liability is capped at 35% of the shortfall (s.4.3) — complaint claims 100%",
+      "category": "issue",
+      "severity": "high",
+      "documents": [
+        "02-packaging-supply-agreement.md"
+      ],
+      "evidence": [
+        "Buyer's sole liability for the shortfall shall be a fee equal to thirty-five percent (35%) of the difference"
+      ],
+      "detect": {
+        "all": [
+          [
+            "$pct:35",
+            "thirty-five percent"
+          ],
+          [
+            "shortfall"
+          ]
+        ]
+      },
+      "model_answer": "Section 4.3 makes a Shortfall Fee of 35% of the shortfall Talbot's sole liability; the complaint's demand for the full $1,842,600 shortfall ignores it."
+    },
+    {
+      "id": "LIT-I3",
+      "title": "Recalculated maximum shortfall fees: $214,340 (Year 2) and $430,570 (Year 3)",
+      "category": "issue",
+      "severity": "medium",
+      "documents": [
+        "02-packaging-supply-agreement.md",
+        "01-complaint.md"
+      ],
+      "evidence": [
+        "leaving a shortfall of $612,400",
+        "leaving a shortfall of $1,230,200"
+      ],
+      "detect": {
+        "all": [
+          [
+            "$money:430570",
+            "$money:214340",
+            "$money:644910"
+          ]
+        ]
+      },
+      "model_answer": "Even on Greystone's figures the fee is at most 35% x $612,400 = $214,340 for Year 2 and 35% x $1,230,200 = $430,570 for Year 3 ($644,910 combined), before the limitations and Section 9.4 defenses."
+    },
+    {
+      "id": "LIT-I4",
+      "title": "Count II lost profits ($415,000) barred by the s.12.1 consequential-damages exclusion",
+      "category": "issue",
+      "severity": "high",
+      "documents": [
+        "02-packaging-supply-agreement.md",
+        "01-complaint.md"
+      ],
+      "evidence": [
+        "INCLUDING LOST PROFITS OR LOSS OF BUSINESS",
+        "lost profits on the business it had reserved for Talbot in the amount of $415,000"
+      ],
+      "detect": {
+        "all": [
+          [
+            "$money:415000",
+            "lost profit",
+            "count ii"
+          ],
+          [
+            "12.1",
+            "exclu",
+            "barred",
+            "consequential",
+            "not recoverable"
+          ]
+        ]
+      },
+      "model_answer": "Count II's $415,000 lost-profits claim is barred by Section 12.1, which excludes consequential damages including lost profits."
+    },
+    {
+      "id": "LIT-I5",
+      "title": "Greystone skipped the s.14 negotiation/mediation condition precedent — basis to stay or dismiss",
+      "category": "issue",
+      "severity": "medium",
+      "documents": [
+        "02-packaging-supply-agreement.md",
+        "01-complaint.md"
+      ],
+      "evidence": [
+        "No party may commence litigation concerning a dispute until the mediation has concluded or sixty (60) days have passed after the request for mediation",
+        "Greystone has performed all conditions precedent to the commencement of this action"
+      ],
+      "detect": {
+        "all": [
+          [
+            "mediation",
+            "condition precedent",
+            "section 14",
+            "s.14",
+            "s. 14",
+            "dispute resolution",
+            "dispute-resolution"
+          ],
+          [
+            "premature",
+            "not satisf",
+            "unsatisf",
+            "failed to",
+            "did not",
+            "never",
+            "stay",
+            "compel",
+            "dismiss"
+          ]
+        ]
+      },
+      "model_answer": "Greystone sued without completing Section 14's 30-day executive negotiation or mediation, contrary to its allegation that all conditions precedent were performed; Talbot can move to stay or dismiss pending mediation."
+    },
+    {
+      "id": "LIT-I6",
+      "title": "Termination for cause supported: Greystone admitted the Line 4 adhesive fault; defects persisted after the cure period",
+      "category": "issue",
+      "severity": "high",
+      "documents": [
+        "03-key-correspondence.md"
+      ],
+      "evidence": [
+        "our engineers have traced the delamination to an adhesive application fault on Line 4",
+        "18% of sampled pouches failed seal integrity testing"
+      ],
+      "detect": {
+        "all": [
+          [
+            "line 4",
+            "adhesive"
+          ],
+          [
+            "admi",
+            "conced",
+            "acknowledg"
+          ]
+        ]
+      },
+      "model_answer": "Greystone admitted in writing on June 20, 2025 that the delamination came from an adhesive application fault on Line 4; lots shipped in July still failed at 18%, after the cure period expired on July 3, 2025, supporting termination under Section 9.2."
+    },
+    {
+      "id": "LIT-I7",
+      "title": "s.9.4 extinguishes the Year 3 minimum after a valid for-cause termination",
+      "category": "issue",
+      "severity": "high",
+      "documents": [
+        "02-packaging-supply-agreement.md"
+      ],
+      "evidence": [
+        "Buyer shall have no further minimum purchase obligations under Section 4 for the Contract Year in which termination occurs or any later Contract Year"
+      ],
+      "detect": {
+        "all": [
+          [
+            "9.4"
+          ],
+          [
+            "no further minimum",
+            "no minimum",
+            "extinguish",
+            "no obligation",
+            "defeat",
+            "eliminat",
+            "not owe",
+            "no further"
+          ]
+        ]
+      },
+      "model_answer": "If the August 15, 2025 termination was valid, Section 9.4 means Talbot had no minimum purchase obligation for Contract Year 3, defeating the $1,230,200 Year 3 claim."
+    },
+    {
+      "id": "LIT-I8",
+      "title": "Potential counterclaim / setoff for $286,900 of defect costs",
+      "category": "issue",
+      "severity": "medium",
+      "documents": [
+        "03-key-correspondence.md"
+      ],
+      "evidence": [
+        "Our costs of rework, product write-offs and customer credits from the defective Greystone lots now total $286,900."
+      ],
+      "detect": {
+        "all": [
+          [
+            "$money:286900"
+          ],
+          [
+            "counterclaim",
+            "counter-claim",
+            "setoff",
+            "set-off",
+            "set off",
+            "recoup",
+            "offset"
+          ]
+        ]
+      },
+      "model_answer": "Talbot has a potential breach-of-warranty counterclaim (or at least setoff/recoupment) for $286,900 in rework, write-offs and customer credits; note the one-year clause may limit an affirmative counterclaim."
+    },
+    {
+      "id": "LIT-C1",
+      "title": "Chronology: Agreement dated March 1, 2023",
+      "category": "chronology",
+      "severity": "low",
+      "documents": [
+        "02-packaging-supply-agreement.md"
+      ],
+      "evidence": [
+        "This Packaging Supply Agreement (the \"Agreement\") is made as of March 1, 2023"
+      ],
+      "detect": {
+        "all": [
+          [
+            "$date:2023-03-01"
+          ]
+        ]
+      },
+      "model_answer": "March 1, 2023 — Greystone and Talbot enter into the Packaging Supply Agreement."
+    },
+    {
+      "id": "LIT-C2",
+      "title": "Chronology: June 3, 2025 notice of material breach (11% delamination)",
+      "category": "chronology",
+      "severity": "medium",
+      "documents": [
+        "03-key-correspondence.md"
+      ],
+      "evidence": [
+        "**Re:** Notice of material breach under Section 9.2 — laminate delamination"
+      ],
+      "detect": {
+        "all": [
+          [
+            "$date:2025-06-03"
+          ],
+          [
+            "breach",
+            "delaminat",
+            "defect",
+            "notice"
+          ]
+        ]
+      },
+      "model_answer": "June 3, 2025 — Talbot QA gives written notice of material breach under Section 9.2 (11% delamination vs 2% threshold)."
+    },
+    {
+      "id": "LIT-C3",
+      "title": "Chronology: June 20, 2025 Greystone admission",
+      "category": "chronology",
+      "severity": "medium",
+      "documents": [
+        "03-key-correspondence.md"
+      ],
+      "evidence": [
+        "**Date:** June 20, 2025"
+      ],
+      "detect": {
+        "all": [
+          [
+            "$date:2025-06-20"
+          ]
+        ]
+      },
+      "model_answer": "June 20, 2025 — Greystone's president admits an adhesive application fault on Line 4."
+    },
+    {
+      "id": "LIT-C4",
+      "title": "Chronology: August 15, 2025 termination for cause",
+      "category": "chronology",
+      "severity": "medium",
+      "documents": [
+        "03-key-correspondence.md"
+      ],
+      "evidence": [
+        "Talbot hereby terminates the Packaging Supply Agreement under Section 9.2, effective immediately."
+      ],
+      "detect": {
+        "all": [
+          [
+            "$date:2025-08-15"
+          ],
+          [
+            "terminat"
+          ]
+        ]
+      },
+      "model_answer": "August 15, 2025 — Talbot terminates the Agreement under Section 9.2."
+    },
+    {
+      "id": "LIT-C5",
+      "title": "Chronology: September 25, 2026 Notice of Dispute",
+      "category": "chronology",
+      "severity": "low",
+      "documents": [
+        "03-key-correspondence.md"
+      ],
+      "evidence": [
+        "This is Greystone's Notice of Dispute under Section 14.1 of the Packaging Supply Agreement"
+      ],
+      "detect": {
+        "all": [
+          [
+            "$date:2026-09-25"
+          ]
+        ]
+      },
+      "model_answer": "September 25, 2026 — Greystone serves its Notice of Dispute under Section 14.1."
+    },
+    {
+      "id": "LIT-C6",
+      "title": "Chronology: October 21, 2026 service on registered agent",
+      "category": "chronology",
+      "severity": "medium",
+      "documents": [
+        "04-docket-sheet.md"
+      ],
+      "evidence": [
+        "served on 10/21/2026 via its registered agent"
+      ],
+      "detect": {
+        "all": [
+          [
+            "$date:2026-10-21"
+          ],
+          [
+            "serv"
+          ]
+        ]
+      },
+      "model_answer": "October 21, 2026 — Talbot served with summons and complaint through its registered agent."
+    }
+  ],
+  "traps": [
+    {
+      "id": "TRAP-LIT-01",
+      "title": "Must not compute the answer deadline from the unreturned Rule 4(d) waiver (60 days -> Dec 11, 2026)",
+      "documents": [
+        "03-key-correspondence.md"
+      ],
+      "evidence": [
+        "Talbot did not sign or return the Rule 4(d) waiver."
+      ],
+      "forbid": {
+        "all": [
+          [
+            "$date:2026-12-11"
+          ],
+          [
+            "answer",
+            "respond",
+            "response"
+          ]
+        ]
+      },
+      "unless": [
+        "not apply",
+        "does not apply",
+        "inapplicable",
+        "not returned",
+        "did not sign",
+        "would have",
+        "had talbot",
+        "not available",
+        "only if",
+        "not waived"
+      ],
+      "model_violation": "Talbot's answer is due December 11, 2026, 60 days after the waiver request."
+    },
+    {
+      "id": "TRAP-LIT-02",
+      "title": "Must not state November 11, 2026 (Veterans Day) as the answer deadline without rolling it forward",
+      "documents": [
+        "05-federal-calendar-and-rules-excerpt.md"
+      ],
+      "evidence": [
+        "| Veterans Day | Wednesday, November 11, 2026 |"
+      ],
+      "forbid": {
+        "all": [
+          [
+            "$date:2026-11-11"
+          ],
+          [
+            "answer",
+            "responsive pleading",
+            "respond"
+          ]
+        ]
+      },
+      "unless": [
+        "veterans",
+        "holiday",
+        "rolls",
+        "next day",
+        "november 12",
+        "nov. 12",
+        "2026-11-12",
+        "11/12/2026",
+        "extends"
+      ],
+      "model_violation": "The answer is due November 11, 2026."
+    }
+  ]
+}

@@ -14,6 +14,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -37,7 +39,7 @@ func TestHealth(t *testing.T) {
 	}{{nil, 200, "ok"}, {errors.New("dial tcp 10.0.0.5:5432: secret-host"), 503, "database unavailable"}} {
 		var logs bytes.Buffer
 		rec := httptest.NewRecorder()
-		routes(fakeDB{tc.err}, slog.New(slog.NewTextHandler(&logs, nil))).ServeHTTP(rec, httptest.NewRequest("GET", "/health", nil))
+		routes(fakeDB{tc.err}, nil, slog.New(slog.NewTextHandler(&logs, nil))).ServeHTTP(rec, httptest.NewRequest("GET", "/health", nil))
 		var body map[string]string
 		json.Unmarshal(rec.Body.Bytes(), &body)
 		if rec.Code != tc.code || body["status"] != tc.status || strings.Contains(rec.Body.String(), "secret-host") {
@@ -49,7 +51,7 @@ func TestHealth(t *testing.T) {
 	}
 	for _, req := range []*http.Request{httptest.NewRequest("GET", "/", nil), httptest.NewRequest("POST", "/health", nil)} {
 		rec := httptest.NewRecorder()
-		routes(fakeDB{}, discard()).ServeHTTP(rec, req)
+		routes(fakeDB{}, nil, discard()).ServeHTTP(rec, req)
 		if rec.Code == 200 {
 			t.Errorf("%s %s = 200, want an error", req.Method, req.URL.Path)
 		}
@@ -213,5 +215,21 @@ func TestServeLogsModelSetup(t *testing.T) {
 	}
 	if strings.Contains(out, "SECRET") {
 		t.Errorf("serve logged the key:\n%s", out)
+	}
+}
+
+// TestBinaryIsItsOwnPDFReader: the built binary answers the PDF reader child protocol, so the
+// server's uploads parse PDFs out of process (docs.MaybeRunChild is wired into main).
+func TestBinaryIsItsOwnPDFReader(t *testing.T) {
+	t.Parallel()
+	bin := filepath.Join(t.TempDir(), "biglaw")
+	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+	cmd := exec.Command(bin, "__biglaw-pdf-text")
+	cmd.Stdin = strings.NewReader("%PDF-1.4 not really")
+	out, err := cmd.Output()
+	if err != nil || !strings.Contains(string(out), `"Unreadable":"the PDF is damaged or encrypted"`) {
+		t.Errorf("child answer: %s %v", out, err)
 	}
 }

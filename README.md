@@ -10,7 +10,7 @@ tables in which every factual statement cites a quote that the software has veri
 matter's own documents, with a lawyer approving every deliverable. It is one Go binary plus one
 PostgreSQL database. Licensed Apache-2.0 (`LICENSE`, `NOTICE`).
 
-## What exists today (PR 1: skeleton, config, store, CI; PR 2: model client)
+## What exists today (PR 1: skeleton, config, store, CI; PR 2: model client; PR 3a: documents)
 
 | Piece | Path | What it does |
 |---|---|---|
@@ -20,17 +20,22 @@ PostgreSQL database. Licensed Apache-2.0 (`LICENSE`, `NOTICE`).
 | Migrations | `internal/store/migrate.go`, `internal/store/migrations/NNNN_*.sql` | Embedded SQL files applied in order under an advisory lock; each file and its `schema_migrations` row in one transaction |
 | Files | `internal/store/files.go` | Binary files (uploads, generated `.docx`) stored in 1 MiB `bytea` chunks, streamed in, with size and SHA-256 checked on every read |
 | Model client | `internal/model/` (`client.go`, `errors.go`, `fake.go`, `pricing.go`, `prices.json`) | One OpenAI-compatible chat client with tool calls and image parts, typed failures with their HTTP mapping, at most 3 attempts per call, cache-aware pricing of every call from a built-in table plus `BIGLAW_PRICES` (the host never makes a call free), watt-hour metering when `BIGLAW_LOCAL_WATTS` is set, and `model.Fake` for tests (§ Model client). Nothing calls it yet: the agent loop that does arrives in PR 4a. |
+| Documents | `internal/docs/` (`ingest.go`, `pageindex.go`, `chunk.go`, `search.go`, `verify.go`, `http.go`) | Ingest of UTF-8 text, `.docx` and PDF text layers (PDFs parsed in a child process); the byte-exact section tree; search chunks; Postgres full-text search; the page reader (outline, paged sections); the quote-verification ladder; the upload and download routes. Every read is scoped to the caller's document ids (§ Documents) |
+| `.docx` reader | `internal/docs/ooxml/` | Opens a `.docx` (128 MiB decompression cap), its visible text, a part-preserving re-zip. The writer and tracked-change parse/apply are planned (PR 3c) |
+| Proof-run fixtures | `eval/tasks/` | The five synthetic proof-run matters (documents + answer keys), copied from `feat/proof-runs-multi-practice`; PR 3 reads them for gate E4, PR 4b adds the driver and scorer |
 | Test helper | `internal/store/storetest/` | Gives each DB test its own schema; skips without a DSN, fails if `BIGLAW_REQUIRE_DB` is set |
 | Budgets | `scripts/loc.py` (+ `scripts/test_loc.py`) | Fails CI if a size budget is exceeded (below) |
 | Build/deploy | `Makefile`, `Dockerfile`, `docker-compose.yml`, `render.yaml`, `.env.example` | `make ci`; `postgres:16-alpine` + biglaw under Compose; Render blueprint (inert until PR 8, see § Exposure) |
 | CI | `.github/workflows/ci.yml` | `make ci` against `postgres:14` and `postgres:16` service containers with `BIGLAW_REQUIRE_DB=1`; staticcheck + govulncheck; image build + Compose smoke test |
 
-HTTP surface today: `GET /health` only. It returns `{"status":"ok","version":"…"}` (200) or
-`{"status":"database unavailable",…}` (503; the cause is logged, not returned). Every other path
-is 404/405.
+HTTP surface today: `GET /health`, which returns `{"status":"ok","version":"…"}` (200) or
+`{"status":"database unavailable",…}` (503; the cause is logged, not returned), and the two
+document file routes of § Documents: `POST /documents/upload` and `GET /documents/{id}/file`.
+Every other path is 404/405. There is no authentication yet (§ Exposure).
 
-**Planned** (not built): document ingest/search/verification (PR 3), the
-engine and the memo workflow with its REST API (PR 4), diligence (PR 5), contract review (PR 6),
+**Planned** (not built): vision transcription of images and scanned PDFs, with one role-map
+variable replacing the three role variables (PR 3b); the `.docx` writer and tracked-change
+parse/apply (PR 3c); the engine and the memo workflow with its REST API (PR 4), diligence (PR 5), contract review (PR 6),
 MCP (PR 7), clients/conflicts and OIDC/session/token auth (PR 8), time and billing (PR 9), the
 UI (PR 11), jurisdiction and practice packs (PR 12), v1 import and docs (PR 13). The
 discover.legal intake module is **not** part of v2 (owner decision; it moves to a separate repo).
@@ -263,6 +268,89 @@ connection to the port is answered as soon as it is accepted.
   for example `docker compose exec postgres pg_dump -U biglaw -Fc biglaw > biglaw.dump`; restore
   with `pg_restore`.
 
+## Documents (`internal/docs`)
+
+**Scope (G1).** Every read takes a scope, the task's document ids: `Search`, `Outline`, `Section`,
+`VerifyQuote`, `Get`, `File` and `Resolve` treat a document outside it exactly as one that does not
+exist, and a file is reachable only through a document in scope (`TestRetrieveNeverLeavesMatter`,
+`TestFileNotReachableOutsideMatter`). Ids compare case-insensitively, as Postgres compares uuids.
+
+**Ingest.** The type is detected from the content, never from the name or the declared type:
+`%PDF-` is a PDF, a ZIP with `word/document.xml` is a `.docx`, valid UTF-8 without NUL is text.
+Anything else is refused with 415 `unsupported_type` (images included: transcription is PR 3b);
+a damaged, encrypted or over-2,000-page PDF and a damaged `.docx` are 422 `unreadable`. A refused
+upload leaves no row behind (`TestIngestRefusalLeavesNothing`). A document that has nothing
+readable (a scanned PDF, a `.docx` holding only images, an empty file) is stored with
+`noText: true` and a note saying so, never as a silently empty document
+(`TestScannedPDFFlaggedNoText`); a PDF with some blank pages keeps its text and its note lists the
+pages that were not read. PDF pages are joined with a form feed. The PDF parser runs in a child
+process of the same binary (`biglaw` re-executed with a private argument), killed
+after 2 minutes or when the request ends: the parser recurses on nested objects, and a few MB of
+nesting is a fatal stack overflow that would otherwise kill the server (`TestHostilePDFContained`).
+Extracted text has invalid UTF-8 replaced and control characters other than tab, newline, CR and
+form feed turned into spaces, so it can be stored.
+
+**Section tree and chunks.** v1's page index, rewritten: articles, sections (`Section 1`, `§ 1`),
+decimal clauses (`1`, `1.1`; at most three digits, so a year or a figure at a line start is not a
+heading), `(a)` and `(i)` items, schedules/exhibits/annexes, recitals, and Markdown `#` or bold
+headings. Joining every section's own text gives back the document byte for byte, so every
+section and chunk is a verbatim slice (`TestReconstruction`, `TestChunksCoverEveryWordOnce`).
+Chunks hold at most 400 tokens (3.5 characters per token), cut at a sentence end, else at white
+space; a tab-separated table becomes one chunk per row, indexed with its column headers
+(`TestTableRowChunking`).
+
+**Search.** Postgres full text, no vectors: each chunk has a stored English `tsvector` and a
+`simple` (unstemmed) one, both GIN-indexed. Every word of the query is a separate term (OR, not
+AND), scored as `ts_rank_cd` of that term (saturated) times its rarity in the scope
+(`ln(1 + N/(1 + df))`), on both vectors, summed; ties go to the lower chunk id. So a rare term
+outranks a repeated common one (`TestSearchRareTermOutranksCommon`), results are deterministic
+(`TestSearchTopKDeterministic`), and identifiers such as `s.9.4`, `C-13`, `FS-26-01234`,
+`Schedule A` or `Annex I` (whose letter is an English stop word) are found
+(`TestSearchExactIdentifier`). Queries are at most 1,024 bytes; `k` is 1–50. **Gate E4** passes:
+over the 68 planted proof-run facts, searching each fact's title within its matter returns a chunk
+containing one of its evidence strings in the top 8 for **67/68 (0.985)**; counting every
+evidence string separately, 101/106 (0.953) (`TestLexicalRecallProofRuns`, which prints both and
+per-matter recall). So there is no pgvector.
+
+**Page reader.** `Outline` lists every section in order as `{sectionId, number, title, level,
+tokens}`, where `tokens` estimates what `Section` returns for it: the section with its
+subsections. `Section` reads that text verbatim from a character `offset`, at most `limit` tokens
+(default 2,000, at most 8,000), cut at white space; a longer section comes back with
+`truncated: true` and `next`, never silently cut, and the pages join to the section exactly
+(`TestOutlineHasNumbersTitlesTokens`, `TestSectionPaginates`).
+
+**Verification ladder** (v1's `tabcite` ladder): exact substring, confidence 1.0; tolerant
+substring (curly quotes straightened, white space collapsed, case folded on both sides), 0.95; one
+paraphrase-judge call over the best-matching window of the document (at most about 3,000 bytes
+around the span holding most of the quote's words), capped at 0.8; when the judge is less than
+0.75 sure, three independent votes, a strict majority needed, confidence 0.75 × votes/3, below
+the judge's cap; otherwise `none` with a note (`TestLadderMethodsAndCaps` and the carried
+`TestCitation*` vectors). The judge is a function the caller supplies (the model wiring lands with
+the agent runtime, PR 4a). **A judge failure is returned as an error, never as "unverified"**
+(changed from v1, G6: `TestCitationJudgeFailureIsAnError`). `VerifyQuote` also names the deepest
+section holding the match. `Resolve` maps a model's citation by file name (any case, directory or
+extension) to the one document in scope with that name; an ambiguous name resolves to nothing.
+
+**Upload and download.** `POST /documents/upload` takes `multipart/form-data` with one part named
+`file`, streams it into the files table and ingests it: 201 with the document (`id`, `name`,
+`contentType` (detected), `fileId`, `method` `text`|`text_layer`, `noText`, `pages`, `notes`,
+`sections`, `chunks`, `createdAt`). Errors are `{error, errorType}`: 400 `bad_request`/`bad_name`/
+`bad_content_type`, 403 `cross_origin`, 408 `upload_timeout`, 413 `too_large`, 415, 422, 499
+`cancelled`, 500 `internal` (logged, fixed text). A client must send at least 64 KiB every 30
+seconds and the whole file within 15 minutes, or its read fails and its upload slot and pool
+connection are released at once (`TestUploadReadDeadline`: 16 stalled clients and one trickling
+client, then the slots are free, the pool is back to its baseline, a 17th upload succeeds and no
+file row persists; `TestUploadTotalDeadline`). A browser request from another site is refused
+(`Origin` other than the request's own host, or `Sec-Fetch-Site` other than `same-origin`/`none`),
+because `multipart/form-data` needs no CORS preflight. `GET /documents/{id}/file` returns the
+original with the **detected** content type (never the uploader's claim), `nosniff`,
+`Content-Security-Policy: sandbox` and an RFC 6266 attachment header: `filename*` carries the
+name (UTF-8), and both it and the ASCII `filename=` fallback are safe to save on Windows (`<>:"/\|?*`
+and controls become `_`, a device name such as `CON`, `aux.txt` or `COM1.tar.gz` gets a `_`
+prefix, trailing dots and spaces go: `TestDownloadNameSafe`). `Delete` removes a document with
+its sections, chunks and original file in one transaction, and a file deleted any other way takes
+its document along (`TestFileDeletedWithDocument`).
+
 ## Files
 
 Files are stored in `file_chunks` rows of at most 1 MiB (a `CHECK` in the schema refuses a
@@ -278,12 +366,19 @@ So at most 16 uploads (`MaxConcurrentUploads`) run at once, leaving 4 of the 20 
 `/health` and reads. Further uploads wait for a slot until their context ends. Nothing in the
 store ends a stalled upload: its slot and connection are freed when its reader returns (an error
 rolls the transaction back, leaving nothing behind). Bounding a stalled client is the caller's job;
-PR 3's HTTP read deadline does it.
+the upload route's read deadline does it (§ Documents). At most 4 reads (`MaxConcurrentReads`)
+hold a file at once; a read over the cap waits for a slot or its context
+(`TestConcurrentReadsBounded`), so concurrent reads of maximum-size files stay near 512 MiB.
 
 Names must be 1–255 bytes of UTF-8 and not `.` or `..`. They may not contain `/`, `\`, control
-characters, invisible format characters (bidi controls, zero-width spaces, the BOM, soft hyphens;
-ZWNJ/ZWJ are allowed for Persian, Indic scripts and emoji) or line/paragraph separators, and may
-not start or end with white space, any of which can disguise an extension. Content types must
+characters, invisible characters (category Cf such as bidi controls, zero-width spaces, the BOM
+and soft hyphens; Unicode Default_Ignorable_Code_Point such as the Hangul fillers U+3164/U+115F,
+the combining grapheme joiner and variation selectors; the braille blank U+2800), line/paragraph
+separators or a run of two or more white-space characters (no-break spaces included), and may not
+start or end with white space, any of which can disguise an extension. ZWNJ/ZWJ are allowed once
+between two letters, marks or emoji, as Persian, Indic scripts and emoji sequences need them.
+Names that are only unsafe on Windows (`CON`, `aux.txt`, `c:evil.txt`) are stored as given and
+made safe on download. Content types must
 be concrete media types (no `*` wildcard) in printable ASCII, at most 255 bytes in the canonical
 form they are stored in (`Text/HTML;  Charset=UTF-8` → `text/html; charset=UTF-8`).
 
@@ -341,13 +436,35 @@ prompt), `TestAnswerToolCallsChecked`, `TestPriceFileChecks` (a FIFO and a 1 MiB
 DNS phrase, `Fake`'s `Truncated`, a billed failure's duration and watt-hours, and the refusal of
 role ids that are URLs or credentials.
 
+Named tests (PLAN.md PR 3, slice 3a; DB tests need Postgres): the carried vectors of v1's
+`chunk_test` (`TestTableRowChunking`, `TestProseStillSectionChunked`), `pageindex_test`
+(`TestReconstruction`, `TestNumberedNesting`, `TestArticleAndRecitalNesting`, `TestFlatDocument`,
+`TestSchemes`), `tabcite_test` (`TestCitationExactAndTolerantNoJudge`,
+`TestCitationParaphraseJudgeOneCall`, `TestCitationUncertainJudgeTriggersEnsemble`,
+`TestCitationEnsembleMajorityUnsupported`, `TestCitationFabricatedQuoteUnverified`,
+`TestCitationJudgeFailureIsAnError` (changed: an error, not "unverified"),
+`TestCitationWindowLocatesRegion` (without its page variant); the two cell/tally vectors go with
+the diligence table, PR 5), the reader part of `ooxml_test` (`TestEscapeUnescapeRoundTrip`,
+`TestRoundTripPreservesPartsAndOrder`, `TestOpenRejectsNonDocx`,
+`TestTextJoinsRunsAndSeparatesParagraphs`), v1 `protocols` (`TestVerbatimContains`,
+`TestNormalizeSourceKey`, `TestResolvesByTitle`) and v1 `services` (`TestExtractPlainText`,
+`TestExtractDOCX`); `TestScannedPDFFlaggedNoText`, `TestOutlineHasNumbersTitlesTokens`,
+`TestSectionPaginates`, `TestRetrieveNeverLeavesMatter`, `TestSearchRareTermOutranksCommon`,
+`TestSearchTopKDeterministic`, `TestSearchExactIdentifier`, `TestLexicalRecallProofRuns` (E4),
+`TestLadderMethodsAndCaps`, `TestFileNotReachableOutsideMatter`, `TestFileDeletedWithDocument`,
+`TestConcurrentReadsBounded`, `TestUploadReadDeadline`, `TestDownloadNameSafe` and the extended
+`TestFilesEdgeCases`. Extra: `TestMarkdownHeadings`, `TestChunksCoverEveryWordOnce`,
+`TestExtractPDFTextLayer`, `TestHostilePDFContained`, `TestIngestRefusalLeavesNothing`,
+`TestUploadTotalDeadline`, `TestUploadErrorsTyped`, `TestWriteErrorKinds`,
+`TestOpenRefusesZipBomb` and, in `cmd/biglaw`, `TestBinaryIsItsOwnPDFReader`.
+
 ## Budgets (`scripts/loc.py`, run in CI)
 
 | Budget | Ceiling | Today |
 |---|---:|---:|
-| Go production lines (physical lines, non-`_test.go`, test-support packages included) | 14,500 | 1,903 |
-| Packages under `internal/`, test-support packages excluded | 12 | 2 (`model`, `store`; `store/storetest` is test support) |
-| Direct Go dependencies | 3 | 1 (`github.com/lib/pq`) |
+| Go production lines (physical lines, non-`_test.go`, test-support packages included) | 14,500 | 3,498 |
+| Packages under `internal/`, test-support packages excluded | 12 | 4 (`docs`, `docs/ooxml`, `model`, `store`; `store/storetest` is test support) |
+| Direct Go dependencies | 3 | 2 (`github.com/lib/pq`, `github.com/ledongthuc/pdf`) |
 | Runtime environment variables | 20 | 20 |
 | UI runtime dependencies | 2 | 0 (no UI yet) |
 | Packages without a `_test.go` | 0 | 0 |
@@ -365,8 +482,12 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
 
 ## Limitations
 
-- Nothing user-facing exists yet beyond `/health`; every workflow, the REST API, auth and the
-  UI are planned. The exposure rule above is the only protection until PR 8.
+- Nothing user-facing exists yet beyond `/health` and the two document file routes; every
+  workflow, the rest of the REST API, auth and the UI are planned. The exposure rule above is the
+  only protection until PR 8: anyone who can reach the port can upload and, knowing a document id,
+  download. The cross-origin check stops a web page from uploading through the lawyer's browser,
+  but not DNS rebinding (a page on a name that resolves to 127.0.0.1 is "same origin"); PR 8's
+  sessions and tokens close that.
 - The env-var budget is a static heuristic: code that reads the environment another way
   (`syscall.Getenv`, scanning `os.Environ()`, importing `os` under another name) would evade
   it. Review is the backstop.
@@ -388,18 +509,36 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
 - GitHub Actions and container images are pinned to tags (`@v4`, `golang:1.26.9-alpine`,
   `postgres:14`, `postgres:16`, `postgres:16-alpine`), not to SHAs/digests, so an upstream retag changes what CI
   runs.
-- Files: there is no per-matter scoping or owner yet (`GetFile` takes only an id; PR 3 adds the
-  document/matter reference and access checks), no delete, no quota, and no limit on concurrent
-  reads. Each concurrent read of a maximum-size file holds about 64 MiB live and peaks near
-  128 MiB at the default `GOGC`, so the API that exposes files (PR 3) must cap concurrent reads
-  on a 4 GB Pi or stream them (PLAN PR 3). Uploads are capped at 16 at once, but a reader that
-  blocks (or trickles) holds its slot and connection until it returns, so 16 stalled clients stop
-  further uploads (not `/health` or reads) until PR 3's per-request read deadline ends them.
-- The file-name policy is provisional: it has no production caller yet. PR 3 decides it with
-  the upload/download API. It still admits invisible characters outside category Cf (Hangul
-  filler U+3164, braille blank, combining grapheme joiner, variation selectors, ZWJ runs) and
-  interior runs of no-break spaces, which can push an extension out of view. Names such as `CON`, `aux.txt` or `c:evil.txt` are stored as given,
-  and PR 3 must make them safe on download (RFC 6266 `filename*`).
+- Files: no quota. `store.GetFile` itself takes only a file id; scoping is enforced by
+  `docs.File` (through a document in scope), and nothing yet stops another package calling the
+  store directly (PR 4a's `TestImportBoundaries` pins who may import `store`). Upload slots are
+  held only while the client keeps up the read floor, but the floor is low: 16 clients each
+  sending 64 KiB per 30 s (about 35 KiB/s in all) can hold every upload slot for the full 15
+  minutes. Uploads are buffered per extraction: two at a time (`ingestSlots`), each holding the
+  file (≤ 64 MiB) plus a `.docx`'s decompressed parts (≤ 128 MiB).
+- **Documents (PR 3a):**
+  - Images and scanned PDFs are refused or stored as `noText` until PR 3b's vision transcription;
+    there is no OCR. A text-layer PDF whose layer is wrong (a scan with an invisible, bad OCR
+    layer) is taken as is. Text that the PDF reader puts in an odd order (columns, tables) stays
+    in that order.
+  - A text upload that happens to start with `%PDF-` is read as a PDF and refused; posted text
+    (`IngestText`) is always text.
+  - Every package whose tests ingest a PDF needs a `TestMain` that calls `docs.MaybeRunChild()`
+    (the test binary is the PDF reader child), as `internal/docs` does; `cmd/biglaw`'s `main` calls
+    it first (`TestBinaryIsItsOwnPDFReader`). The child's memory is a soft limit (1 GiB
+    `SetMemoryLimit`), not a hard cap, and only the 2-minute timeout bounds its CPU.
+  - Section ids are positions in the section tree (`s0`, `s1`, …) of the text as ingested; a
+    change to the heading rules does not renumber stored documents, which keep the ids they were
+    ingested with. Re-ingest to pick up new rules.
+  - Search ranking is lexical: a paraphrase that shares no word with the passage is not found (the
+    one E4 miss, `REG-05`, is a fee-table row the fact's title does not name). The scope's document
+    frequencies are computed per query, so a very large scope makes each query slower; nothing
+    caps a scope's size.
+  - The judge's passage is document text: the judge prompt (PR 4a) must treat it as untrusted
+    data, since a document can contain text addressed to the judge.
+  - The tolerant rung folds case, so `ACME` verifies against `Acme` (at 0.95).
+  - `ledongthuc/pdf` is a small, lightly maintained library pinned at a 2025 pseudo-version; it
+    is the second of the three allowed dependencies.
 - Test schemas are dropped by `t.Cleanup`; a test binary that is killed (SIGKILL, timeout)
   leaves its `t_<hex>` schema behind. Drop them with
   `psql -c "select 'drop schema '||nspname||' cascade;' from pg_namespace where nspname like 't\_%'" -At | psql`.

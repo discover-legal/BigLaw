@@ -7,8 +7,15 @@ change. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`, not here.
 ## Built so far
 - `cmd/biglaw` — `serve [--allow-no-auth]`, `version [--config]`; `config.go` holds the complete
   env-var table (20 vars, each tagged with the PR that first reads it) and the vendor breakers.
-- `internal/store` — `Open` (check DSN, connect, migrate), `CheckDSN`, `InTx`, files (chunked
-  `bytea`, `PutFile` from an `io.Reader`, `GetFile`), migration runner.
+- `internal/store` — `Open` (check DSN, connect, migrate), `CheckDSN`, `InTx`, `DB`, files (chunked
+  `bytea`, `PutFile` from an `io.Reader` under 16 upload slots, `GetFile` under 4 read slots,
+  `ValidName` = the file-name policy, `ValidID`), migration runner.
+- `internal/docs` (PR 3a) — owns `documents`/`sections`/`chunks` (migration 0002). `Ingest`/
+  `IngestText`, `Extract` (type from content; PDFs in a child process), `Parse` (byte-exact
+  section tree), `Chunkify`, `Search`, `Outline`, `Section` (paged), `Verify`/`VerifyQuote` (the
+  ladder; the judge is a caller-supplied func), `Resolve`, `File`, `Delete`, and `Routes`
+  (`POST /documents/upload` with the read deadline, `GET /documents/{id}/file`). Every read takes
+  a scope (the task's document ids). `internal/docs/ooxml` — `.docx` reader.
 - `internal/store/storetest` — `storetest.DSN(t)` gives a test its own schema.
 - `internal/model` — `Client` (OpenAI-compatible chat + tool calls + image parts, typed errors,
   ≤ 3 attempts; a refused-but-billed 200 carries `Usage` on `*model.Error`), `HTTPStatus` (the one
@@ -17,11 +24,16 @@ change. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`, not here.
   the host, no row = unknown cost, never $0; `BIGLAW_LOCAL_WATTS` only adds watt-hours),
   `Fake` (scripts keyed by agent name; unscripted or exhausted is an error).
 
-Everything else in README is marked planned.
+Everything else in README is marked planned (next: PR 3b vision + the role map, PR 3c the
+`.docx` writer and tracked changes).
 
 ## Rules
-- Dependencies: `github.com/lib/pq` only (budget 3; planned second is `ledongthuc/pdf`). No ORM,
-  no web framework (stdlib `net/http`), no OIDC/JOSE library.
+- Dependencies: `github.com/lib/pq` and `github.com/ledongthuc/pdf` (budget 3). No ORM, no web
+  framework (stdlib `net/http`), no OIDC/JOSE library.
+- Never parse a PDF in the server's process: `docs.Extract` runs `ledongthuc/pdf` in a child (it
+  can die of a fatal stack overflow). `main` and the `TestMain` of every package whose tests
+  ingest a PDF call `docs.MaybeRunChild()` first.
+- Every `docs` read takes the caller's scope; never read `documents`/`chunks`/`files` around it.
 - New env var = add it to `envVars` in `cmd/biglaw/config.go` (with its PR), README's table and
   docker-compose; `TestEnvVarTablesAgree` fails otherwise. Validate a variable in the PR that
   first reads it, not before. Read env only through that table (literal names; `scripts/loc.py`

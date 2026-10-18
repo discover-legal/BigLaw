@@ -28,16 +28,21 @@ const (
 	ConnectTimeout = 30 * time.Second
 	// PutFile holds a connection for as long as its reader runs, so at most
 	// MaxConcurrentUploads of the MaxOpenConns run at once and the rest stay
-	// for /health and reads. Only the caller can end a stalled reader (PR 3:
-	// the HTTP read deadline); until it returns, its slot stays taken.
+	// for /health and reads. Only the caller can end a stalled reader (the
+	// upload route's read deadline, internal/docs/http.go); until it returns,
+	// its slot stays taken.
 	MaxOpenConns         = 20
 	MaxConcurrentUploads = MaxOpenConns - 4
+	// MaxConcurrentReads bounds GetFile: each holds a whole file (≤ MaxFileSize, about twice that
+	// at peak with the default GOGC), so 4 reads stay near 512 MiB, inside a 4 GB Pi.
+	MaxConcurrentReads = 4
 )
 
 // Store wraps the connection pool.
 type Store struct {
 	db      *sql.DB
 	uploads chan struct{} // PutFile slots (MaxConcurrentUploads)
+	reads   chan struct{} // GetFile slots (MaxConcurrentReads)
 }
 
 // Open checks dsn (CheckDSN), connects, and applies every pending embedded
@@ -67,7 +72,7 @@ func Open(ctx context.Context, dsn string, log *slog.Logger) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	return &Store{db: db, uploads: make(chan struct{}, MaxConcurrentUploads)}, nil
+	return &Store{db: db, uploads: make(chan struct{}, MaxConcurrentUploads), reads: make(chan struct{}, MaxConcurrentReads)}, nil
 }
 
 // CheckDSN reports whether lib/pq will read dsn the way it looks, without
@@ -161,6 +166,12 @@ func DescribeDSN(dsn string) string {
 
 // Close releases the pool.
 func (s *Store) Close() error { return s.db.Close() }
+
+// DB is the pool, for packages that own their tables (docs). Files go through PutFile/GetFile.
+func (s *Store) DB() *sql.DB { return s.db }
+
+// Uploads is how many PutFile calls hold an upload slot now.
+func (s *Store) Uploads() int { return len(s.uploads) }
 
 // Ping reports whether the database is reachable.
 func (s *Store) Ping(ctx context.Context) error { return s.db.PingContext(ctx) }

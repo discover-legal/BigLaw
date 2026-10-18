@@ -21,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/discover-legal/BigLaw/internal/docs"
 	"github.com/discover-legal/BigLaw/internal/model"
 	"github.com/discover-legal/BigLaw/internal/store"
 )
@@ -40,6 +41,7 @@ const usage = `usage: biglaw <command>
 `
 
 func main() {
+	docs.MaybeRunChild() // the PDF reader child (never returns when this process is one)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	os.Exit(run(ctx, os.Args[1:], os.Getenv, os.Environ(), os.Stdout, os.Stderr))
@@ -140,9 +142,9 @@ func run(ctx context.Context, args []string, getenv func(string) string, environ
 type pinger interface{ Ping(context.Context) error }
 
 // serve serves HTTP on ln until ctx ends, then shuts down gracefully.
-func serve(ctx context.Context, db pinger, ln net.Listener, log *slog.Logger) error {
+func serve(ctx context.Context, st *store.Store, ln net.Listener, log *slog.Logger) error {
 	srv := &http.Server{
-		Handler:           routes(db, log),
+		Handler:           routes(st, docs.New(st), log),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    64 << 10,
@@ -167,9 +169,13 @@ func serve(ctx context.Context, db pinger, ln net.Listener, log *slog.Logger) er
 	return nil
 }
 
-// routes is the PR 1 surface: only GET /health. Everything else is 404/405.
-func routes(db pinger, log *slog.Logger) http.Handler {
+// routes is GET /health and, with d, the document file routes (docs.Routes). Everything else is
+// 404/405 until the REST API lands (PR 4b).
+func routes(db pinger, d *docs.Service, log *slog.Logger) http.Handler {
 	mux := http.NewServeMux()
+	if d != nil {
+		d.Routes(mux, log)
+	}
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 		defer cancel()

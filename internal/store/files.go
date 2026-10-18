@@ -36,7 +36,8 @@ var (
 	ErrFileTooLarge = fmt.Errorf("store: file exceeds %d bytes", MaxFileSize)
 	ErrNotFound     = errors.New("store: not found")
 	ErrBadName      = errors.New(`store: file name must be 1-255 bytes of valid UTF-8, not "." or "..", with no path separator, ` +
-		"control or invisible format character (bidi controls, zero-width spaces), line separator, or leading/trailing space")
+		"control or invisible character (bidi controls, zero-width spaces, fillers, variation selectors; one zero-width joiner " +
+		"between two letters or emoji is allowed), line separator, run of two or more spaces, or leading/trailing space")
 	ErrBadType = errors.New("store: content type must be a concrete media type such as text/plain (no wildcard), in printable ASCII, at most 255 bytes in canonical form")
 	// ErrCorrupt means the stored bytes do not match the recorded size or
 	// SHA-256. The checksum detects storage corruption, not tampering:
@@ -62,7 +63,7 @@ type File struct {
 // slot or ctx, but a call whose reader blocks returns only when the reader
 // does). The content type is stored in canonical form.
 func (s *Store) PutFile(ctx context.Context, name, contentType string, r io.Reader) (File, error) {
-	if !validName(name) {
+	if !ValidName(name) {
 		return File{}, ErrBadName
 	}
 	mt, params, err := mime.ParseMediaType(contentType)
@@ -126,9 +127,16 @@ func (s *Store) PutFile(ctx context.Context, name, contentType string, r io.Read
 // The recorded size is checked against MaxFileSize before any content is
 // read, the buffer is allocated once at that size, and the size and SHA-256
 // are re-verified, so corruption is ErrCorrupt rather than a wrong document.
+// At most MaxConcurrentReads run at once; a call over the cap waits for a slot or ctx.
 func (s *Store) GetFile(ctx context.Context, id string) (File, error) {
-	if !uuidRe.MatchString(id) {
+	if !ValidID(id) {
 		return File{}, ErrNotFound
+	}
+	select {
+	case s.reads <- struct{}{}:
+		defer func() { <-s.reads }()
+	case <-ctx.Done():
+		return File{}, fmt.Errorf("store: get file: waiting for a read slot: %w", ctx.Err())
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT f.id, f.name, f.content_type, f.size, f.sha256, f.created_at, c.data
 		FROM files f LEFT JOIN file_chunks c ON c.file_id = f.id WHERE f.id = $1 ORDER BY c.seq`, id)
@@ -170,20 +178,36 @@ func (s *Store) GetFile(ctx context.Context, id string) (File, error) {
 	return f, nil
 }
 
-func validName(name string) bool {
-	if name == "" || len(name) > MaxNameLen || name == "." || name == ".." || !utf8.ValidString(name) {
+// ValidName is the file-name policy (README § Files): no path separator, control, line separator
+// or invisible character (Cf such as bidi controls and zero-width spaces, Unicode
+// Default_Ignorable_Code_Point such as Hangul fillers and variation selectors, the braille blank),
+// no run of white space and no white space at either end. ZWNJ/ZWJ stay allowed once between
+// two letters or emoji (Persian, Indic scripts and emoji sequences need them).
+func ValidName(name string) bool {
+	if name == "" || len(name) > MaxNameLen || name == "." || name == ".." || !utf8.ValidString(name) ||
+		strings.TrimFunc(name, unicode.IsSpace) != name { // "report.pdf " hides an extension or a trailing character
 		return false
 	}
-	if strings.TrimFunc(name, unicode.IsSpace) != name { // "report.pdf " hides an extension or a trailing character
-		return false
+	rs := []rune(name)
+	joins := func(i int) bool {
+		return i >= 0 && i < len(rs) && unicode.In(rs[i], unicode.L, unicode.M, unicode.So, unicode.Sk)
 	}
-	// Cf: bidi controls ("a\u202Efdp.exe" shows as "aexe.pdf"), zero-width
-	// spaces, BOM. ZWNJ/ZWJ stay: Persian, Indic scripts and emoji need them.
-	return !strings.ContainsFunc(name, func(r rune) bool {
-		return r == '/' || r == '\\' || unicode.IsControl(r) || unicode.In(r, unicode.Zl, unicode.Zp) ||
-			unicode.Is(unicode.Cf, r) && r != '\u200c' && r != '\u200d'
-	})
+	for i, r := range rs {
+		switch {
+		case r == '\u200c' || r == '\u200d':
+			if !joins(i-1) || !joins(i+1) {
+				return false
+			}
+		case r == '/' || r == '\\' || unicode.IsControl(r) || unicode.In(r, unicode.Zl, unicode.Zp, unicode.Cf, unicode.Other_Default_Ignorable_Code_Point, unicode.Variation_Selector),
+			r == '\u2800', unicode.IsSpace(r) && unicode.IsSpace(rs[i-1]): // i > 0: no leading space
+			return false
+		}
+	}
+	return true
 }
+
+// ValidID reports whether id is a canonical uuid.
+func ValidID(id string) bool { return uuidRe.MatchString(id) }
 
 // uuidRe is the canonical 8-4-4-4-12 form: a malformed id is "not found"
 // instead of a Postgres cast error, and lookups use the index.
