@@ -34,20 +34,25 @@ const (
 	Lead       Role = "lead"
 	Specialist Role = "specialist"
 	Critic     Role = "critic"
+	Vision     Role = "vision" // images and scanned pages (PR 3c)
+	Embed      Role = "embed"  // embeddings for hybrid search (Client.Embed)
 )
 
-// Roles is the model id per role, and the only way role bindings are read
-// (PR 3 swaps the three variables for BIGLAW_MODELS behind it).
-type Roles struct{ Lead, Specialist, Critic string }
+// Roles is the model id per role (BIGLAW_MODELS), and the only way role bindings are read.
+type Roles struct{ Lead, Specialist, Critic, Vision, Embed string }
 
-// Model is role's model id; an unset specialist or critic uses the lead's.
+// Model is role's model id. An unset specialist or critic uses the lead's; vision and embed have
+// no fallback (a text model is never sent images, and an unset embed role means lexical search).
 func (r Roles) Model(role Role) (string, error) {
-	m, ok := map[Role]string{Lead: r.Lead, Specialist: r.Specialist, Critic: r.Critic}[role]
+	m, ok := map[Role]string{Lead: r.Lead, Specialist: r.Specialist, Critic: r.Critic, Vision: r.Vision, Embed: r.Embed}[role]
 	if !ok {
 		return "", fail(ErrNotConfigured, "unknown model role "+strconv.Quote(string(role)))
 	}
-	if m = cmp.Or(m, r.Lead); m == "" {
-		return "", fail(ErrNotConfigured, "no model is set for the "+string(role)+" role (set BIGLAW_MODEL_LEAD)")
+	if role == Specialist || role == Critic {
+		m = cmp.Or(m, r.Lead)
+	}
+	if m == "" {
+		return "", fail(ErrNotConfigured, "no model is set for the "+string(role)+" role (set "+string(role)+"=<model id> in BIGLAW_MODELS)")
 	}
 	return m, nil
 }
@@ -191,6 +196,7 @@ type Options struct {
 // Client calls one OpenAI-compatible endpoint.
 type Client struct {
 	endpoint, key string
+	embeddings    string // the /embeddings URL
 	roles         Roles
 	prices        *Prices
 	watts         float64
@@ -220,8 +226,11 @@ func New(o Options) (*Client, error) {
 			return nil, errors.New("model: the endpoint must be an http(s) URL without credentials")
 		}
 		c.openAI = strings.EqualFold(u.Hostname(), "api.openai.com")
-		u.Path, u.RawPath = strings.TrimRight(u.Path, "/")+"/chat/completions", ""
+		base := strings.TrimRight(u.Path, "/")
+		u.Path, u.RawPath = base+"/chat/completions", ""
 		c.endpoint = u.String()
+		u.Path = base + "/embeddings"
+		c.embeddings = u.String()
 	}
 	return c, nil
 }
@@ -266,7 +275,7 @@ func (c *Client) Chat(ctx context.Context, req Request) (*Response, error) {
 	if err != nil {
 		return nil, fmt.Errorf("model: encode request: %w", err)
 	}
-	raw, took, err := c.send(ctx, req.Agent, body)
+	raw, took, err := c.send(ctx, req.Agent, c.endpoint, body)
 	if err != nil {
 		return nil, err
 	}
@@ -284,11 +293,11 @@ func (c *Client) Chat(ctx context.Context, req Request) (*Response, error) {
 
 // send POSTs body, retrying 429 and 500/502/503/504/529 (never a network error: the call may
 // have run) at most c.attempts times. It returns a 200's body and the attempts' total time.
-func (c *Client) send(ctx context.Context, agent string, body []byte) ([]byte, time.Duration, error) {
+func (c *Client) send(ctx context.Context, agent, endpoint string, body []byte) ([]byte, time.Duration, error) {
 	var took time.Duration
 	for attempt := 1; ; attempt++ {
 		t0 := time.Now()
-		hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
+		hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 		if err != nil {
 			return nil, 0, errors.New("model: cannot build the HTTP request")
 		}

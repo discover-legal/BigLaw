@@ -10,7 +10,7 @@ GOVULNCHECK ?= golang.org/x/vuln/cmd/govulncheck@v1.1.4
 # to ours: a tool built with an older Go cannot analyse this module.
 TOOLCHAIN = $(shell sed -n 's/^toolchain //p' go.mod)
 
-.PHONY: build static-check test fmt-check vet mod-check loc compose-check lint vuln ci clean
+.PHONY: e4-record e4-live build static-check test fmt-check vet mod-check loc compose-check lint vuln ci clean
 
 # A static binary: no cgo, so no libc to match on the target (Pi, distroless).
 build:
@@ -33,9 +33,24 @@ mod-check:
 # The reader child's memory cap is off under the race detector (its shadow memory counts too),
 # so the child's bounds are also tested without -race, and so is the server's ingest memory
 # (TestIngestMemoryBounded skips itself under -race).
+# The second pass runs -v and, where the database is required (CI), fails unless each guard it
+# exists for reports PASS: a renamed test must not silently run nowhere (PR 3a r4 L1).
+NONRACE = TestChildBoundsItself TestChildNearTextCap TestIngestMemoryBounded
 test:
 	$(GO) test -race -count=1 -shuffle=on -timeout 5m ./...
-	$(GO) test -count=1 -run '^(TestChild|TestIngestMemoryBounded$$)' ./internal/docs
+	@log=$$(mktemp); $(GO) test -count=1 -v -run '^(TestChild|TestIngestMemoryBounded$$)' ./internal/docs >$$log 2>&1; rc=$$?; \
+	cat $$log; test $$rc = 0 || { rm -f $$log; exit $$rc; }; \
+	if [ -n "$$BIGLAW_REQUIRE_DB" ]; then for t in $(NONRACE); do grep -q -- "^--- PASS: $$t " $$log || \
+		{ echo "make test: $$t did not PASS in the non-race pass"; rm -f $$log; exit 1; }; done; fi; rm -f $$log
+
+# Gate E4 (README § Search): record eval/e4/embeddings.json once with a real embedding model, or
+# measure live without writing it. Owner-run; both need BIGLAW_TEST_DSN (a Postgres with pgvector)
+# and, unless EMBED_MODEL=biglaw-selftest-hash (the offline self-test tape), BIGLAW_MODEL_URL and
+# BIGLAW_MODEL_KEY. Example: make e4-record EMBED_MODEL=text-embedding-3-small EMBED_DIMENSIONS=512
+e4-record e4-live:
+	@test -n "$(EMBED_MODEL)" || { echo "set EMBED_MODEL (and EMBED_DIMENSIONS)"; exit 2; }
+	BIGLAW_REQUIRE_DB=1 $(if $(filter e4-record,$@),E4_RECORD=1,E4_LIVE=1) EMBED_MODEL='$(EMBED_MODEL)' EMBED_DIMENSIONS='$(EMBED_DIMENSIONS)' \
+		$(GO) test -count=1 -v -timeout 30m -run '^TestHybridRecallProofRuns$$' ./internal/docs
 
 loc:
 	python3 scripts/loc.py

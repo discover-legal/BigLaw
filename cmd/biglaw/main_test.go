@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -47,7 +48,7 @@ func TestHealth(t *testing.T) {
 		routes(fakeDB{tc.err}, nil, slog.New(slog.NewTextHandler(&logs, nil))).ServeHTTP(rec, httptest.NewRequest("GET", "/health", nil))
 		var body map[string]string
 		json.Unmarshal(rec.Body.Bytes(), &body)
-		if rec.Code != tc.code || body["status"] != tc.status || strings.Contains(rec.Body.String(), "secret-host") {
+		if rec.Code != tc.code || body["status"] != tc.status || body["search"] != "lexical" || strings.Contains(rec.Body.String(), "secret-host") {
 			t.Errorf("health(%v) = %d %s", tc.err, rec.Code, rec.Body.String())
 		}
 		if tc.err != nil && !strings.Contains(logs.String(), "secret-host") {
@@ -131,7 +132,7 @@ func TestServeStopCancelsIngest(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() { done <- serve(ctx, st, ln, discard()) }()
+	go func() { done <- serve(ctx, st, docs.New(st), ln, discard()) }()
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
 	fw, _ := mw.CreateFormFile("file", "loop.pdf")
@@ -190,7 +191,7 @@ func TestServeEndToEnd(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() { done <- serve(ctx, st, ln, discard()) }()
+	go func() { done <- serve(ctx, st, docs.New(st), ln, discard()) }()
 
 	resp, err := http.Get("http://" + ln.Addr().String() + "/health") // ln is already accepting
 	if err != nil {
@@ -212,6 +213,83 @@ func TestServeEndToEnd(t *testing.T) {
 		}
 	case <-time.After(15 * time.Second):
 		t.Fatal("serve did not stop after cancel")
+	}
+}
+
+// TestServeHybridEndToEnd: with an embed role, `biglaw serve` embeds at ingest through
+// BIGLAW_MODEL_URL's /embeddings, backfills a document stored before the role was set, prices the
+// calls, says "hybrid" on /health, and stops cleanly with its backfill.
+func TestServeHybridEndToEnd(t *testing.T) {
+	dsn := storetest.DSN(t)
+	st, err := store.Open(t.Context(), dsn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	old, err := docs.New(st).IngestText(t.Context(), "old.txt", "Clause 1. The Supplier shall deliver.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls atomic.Int32
+	emb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct{ Input []string }
+		if r.URL.Path != "/v1/embeddings" || json.NewDecoder(r.Body).Decode(&req) != nil {
+			w.WriteHeader(404)
+			return
+		}
+		calls.Add(1)
+		var data []map[string]any
+		for i := range req.Input {
+			data = append(data, map[string]any{"index": i, "embedding": []float32{1, float32(i + 1)}})
+		}
+		json.NewEncoder(w).Encode(map[string]any{"data": data, "usage": map[string]int{"prompt_tokens": 1000}})
+	}))
+	defer emb.Close()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan int, 1)
+	var stderr bytes.Buffer
+	go func() {
+		done <- run(ctx, []string{"serve"}, env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_ADDR", addr, "BIGLAW_MODEL_URL", emb.URL+"/v1",
+			"BIGLAW_MODELS", "embed=text-embedding-3-small"), nil, io.Discard, &stderr)
+	}()
+	var body []byte
+	for i := 0; i < 100; i++ {
+		if resp, err := http.Get("http://" + addr + "/health"); err == nil {
+			body, _ = io.ReadAll(resp.Body)
+			resp.Body.Close()
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !strings.Contains(string(body), `"search":"hybrid"`) {
+		t.Fatalf("/health = %s", body)
+	}
+	var model sql.NullString
+	var cost sql.NullFloat64
+	for i := 0; i < 100 && !model.Valid; i++ {
+		st.DB().QueryRow(`SELECT embed_model, embed_cost_usd FROM documents WHERE id = $1`, old.ID).Scan(&model, &cost)
+		time.Sleep(50 * time.Millisecond)
+	}
+	if model.String != "text-embedding-3-small" || !cost.Valid || cost.Float64 != 1000*0.02/1e6 || calls.Load() == 0 {
+		t.Fatalf("backfill: model %v, cost %v, %d calls\n%s", model, cost, calls.Load(), stderr.String())
+	}
+	cancel()
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Fatalf("serve exited %d:\n%s", code, stderr.String())
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("serve did not stop")
+	}
+	if !strings.Contains(stderr.String(), "embedding backfill") {
+		t.Errorf("no backfill log line:\n%s", stderr.String())
 	}
 }
 
@@ -297,17 +375,22 @@ func TestServeLogsModelSetup(t *testing.T) {
 	cancel() // stop at store.Open: only the startup log matters here
 	var stderr bytes.Buffer
 	run(ctx, []string{"serve"}, env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_MODEL_URL", "http://localhost:4000/v1", "BIGLAW_MODEL_KEY", "sk-SECRET",
-		"BIGLAW_MODEL_LEAD", "claude-sonnet-4-6", "BIGLAW_MODEL_CRITIC", "qwen2.5:14b", "BIGLAW_MODEL_SPECIALIST", "my-finetune"), nil, io.Discard, &stderr)
+		"BIGLAW_MODELS", "lead=claude-sonnet-4-6,critic=qwen2.5:14b,specialist=my-finetune,embed=text-embedding-3-small"), nil, io.Discard, &stderr)
 	out := stderr.String()
 	for _, want := range []string{"BIGLAW_MODEL_KEY will be sent over plain http",
 		`role=lead model=claude-sonnet-4-6 price="$3 in / $15 out per 1M tokens"`, `role=specialist model=my-finetune price="unpriced: cost unknown`,
-		`role=critic model=qwen2.5:14b price="$1.6 in / $6.4 out per 1M tokens"`} {
+		`role=critic model=qwen2.5:14b price="$1.6 in / $6.4 out per 1M tokens"`, `role=embed model=text-embedding-3-small price="$0.02 in / $0 out per 1M tokens"`} {
 		if !strings.Contains(out, want) {
 			t.Errorf("serve log lacks %q:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, "SECRET") {
-		t.Errorf("serve logged the key:\n%s", out)
+	if strings.Contains(out, "SECRET") || strings.Contains(out, "lexical only") {
+		t.Errorf("serve logged the key, or called search lexical with an embed role:\n%s", out)
+	}
+	stderr.Reset()
+	run(ctx, []string{"serve"}, env("BIGLAW_DATABASE_URL", dsn), nil, io.Discard, &stderr)
+	if !strings.Contains(stderr.String(), "search is lexical only: BIGLAW_MODELS has no embed role") {
+		t.Errorf("no embed role, and serve does not say search is lexical only:\n%s", stderr.String())
 	}
 }
 

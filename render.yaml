@@ -27,7 +27,7 @@ services:
         sync: false
       - key: BIGLAW_MODEL_KEY
         sync: false
-      - key: BIGLAW_MODEL_LEAD
+      - key: BIGLAW_MODELS
         sync: false
       - key: BIGLAW_OIDC_ISSUER
         sync: false

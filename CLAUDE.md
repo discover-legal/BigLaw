@@ -6,11 +6,15 @@ change. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`, not here.
 
 ## Built so far
 - `cmd/biglaw` — `serve [--allow-no-auth]`, `version [--config]`; `config.go` holds the complete
-  env-var table (20 vars, each tagged with the PR that first reads it) and the vendor breakers.
+  env-var table (18 vars, each tagged with the PR that first reads it; `BIGLAW_MODELS` is the role
+  map `role=id,…`, ids refused if they hold `://`, `user:pw@`, white space, controls or `? = &`)
+  and the vendor breakers. `serve` gives `docs` the embedder when an `embed` role is set and runs
+  the embedding backfill at startup.
 - `internal/store` — `Open` (check DSN, connect, migrate), `CheckDSN`, `InTx`, `DB`, files (chunked
   `bytea`, `PutFile` from an `io.Reader` under 16 upload slots, `GetFile`/`ReadFile` (streams
   one chunk at a time) under 4 read slots,
-  `ValidName` = the file-name policy, `ValidID`), migration runner.
+  `ValidName` = the file-name policy, `ValidID`), migration runner. `Open` creates the pgvector
+  extension (`CREATE EXTENSION IF NOT EXISTS vector`, under an advisory lock) before migrating.
 - `internal/docs` (PR 3a) — owns `documents`/`sections`/`chunks` (migration 0002). `Ingest`/
   `IngestText`, `Extract` (type from content; PDFs and `.docx` in a bounded child process:
   `child.go`), `Parse` (byte-exact, bounded section tree), `Chunkify`, `Search`, `Outline`,
@@ -20,19 +24,30 @@ change. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`, not here.
   `GET /documents/{id}/file` streamed under a write deadline). Every read takes a scope (the
   task's document ids). Bounds to keep: document text ≤ 16 MiB (`maxText`), table chunks grouped
   (no per-row copy of the header), ≤ 32 query terms and a 10 s search timeout, chunks inserted by
-  `COPY`. `internal/docs/ooxml` — `.docx` reader (text parts only, linear XML pass).
-- `internal/store/storetest` — `storetest.DSN(t)` gives a test its own schema.
+  `COPY`. PR 3b (`embed.go`): `UseEmbedder` turns on hybrid search (RRF of the lexical ranking and
+  an exact cosine ranking of the scope's embedded chunks; no ANN index, it breaks scoped recall),
+  chunks embedded 64 per call at ingest outside the ingest slot (a failure leaves the document
+  lexical only with `EmbedNote`, never fails the ingest), `Backfill`; a document is in the vector
+  leg only when `embed_model` (set after all its chunks) is the current model. `internal/docs/ooxml` — `.docx` reader (text parts only, linear XML pass).
+- `internal/store/storetest` — `storetest.DSN(t)` gives a test its own schema, creates the
+  `vector` extension once per database and puts its schema on the test's `search_path`.
 - `internal/model` — `Client` (OpenAI-compatible chat + tool calls + image parts, typed errors,
   ≤ 3 attempts; a refused-but-billed 200 carries `Usage` on `*model.Error`), `HTTPStatus` (the one
-  failure→status mapping), `Roles` (the one role accessor), `Prices`/`LoadPrices`/`ParsePrices`
+  failure→status mapping), `Roles` (the one role accessor: lead/specialist/critic fall back to the
+  lead, vision/embed never), `Embed` (`embed.go`: `/embeddings`, ≤ 256 inputs, priced like chat), `Prices`/`LoadPrices`/`ParsePrices`
   (embedded `prices.json` + `BIGLAW_PRICES`, one parser; every call priced from the table whatever
   the host, no row = unknown cost, never $0; `BIGLAW_LOCAL_WATTS` only adds watt-hours),
-  `Fake` (scripts keyed by agent name; unscripted or exhausted is an error).
+  `Fake` (scripts keyed by agent name; unscripted or exhausted is an error; `Fake.Vectors` answers
+  `Embed`).
+- Gate E4: `eval/e4/embeddings.json` is replayed by `TestHybridRecallProofRuns`; the committed
+  tape is the offline self-test (hash embedder, model `biglaw-selftest-hash`) and the gate SKIPS
+  on it. Never present its numbers as the gate. The owner records a real one with `make e4-record`.
+  A chunker or fixture change makes the tape stale (`TestE4TapeReplays` fails): re-record the
+  self-test tape with `make e4-record EMBED_MODEL=biglaw-selftest-hash` and say so in the PR.
 
-Everything else in README is marked planned (next, owner decision 9: PR 3b the model role map
-(one variable) with an `embed` role, priced embeddings and pgvector hybrid search, where gate E4 is
-re-gated on a recorded embeddings tape; PR 3c vision; PR 3d the `.docx` writer and tracked
-changes). PR 3a is lexical-only: E4 measured 0.882, not met.
+Everything else in README is marked planned (next: PR 3c vision on the `vision` role; PR 3d the
+`.docx` writer and tracked changes). Lexical search alone measured E4 0.882; the hybrid gate is
+not yet judged (self-test tape).
 
 ## Rules
 - Dependencies: `github.com/lib/pq` and `github.com/ledongthuc/pdf` (budget 3). No ORM, no web
@@ -55,8 +70,9 @@ changes). PR 3a is lexical-only: E4 measured 0.882, not met.
   release, `0001_init.sql` may still be rewritten; say so in the PR and tell reviewers to
   recreate dev databases (README § Database). They are forward-only and each runs in a
   transaction: no `COMMIT`/`ROLLBACK`, no `CREATE INDEX CONCURRENTLY`. Extensions are
-  database-wide, which schema-per-test isolation cannot handle: an extension must be created once
-  outside the numbered migrations (and storetest taught to skip it) before any migration uses one.
+  database-wide, which schema-per-test isolation cannot handle: an extension is created once
+  outside the numbered migrations (`store.Open` and `storetest`, as `vector` is) before any
+  migration uses one.
 - No source file over 2,000 lines (`scripts/loc.py`). Every `.go`/`.py` file starts with the
   SPDX header.
 - Every package has a `_test.go`; DB tests use `storetest.DSN(t)` and `t.Parallel()`.
@@ -75,8 +91,9 @@ changes). PR 3a is lexical-only: E4 measured 0.882, not met.
 ```bash
 make ci     # gofmt, vet, mod verify/tidy, static build, go test -race -shuffle, loc.py + tests, compose config -q
 make lint vuln   # staticcheck, govulncheck (CI lint job)
-# DB tests: BIGLAW_TEST_DSN=postgres://…?sslmode=disable BIGLAW_REQUIRE_DB=1
+# DB tests: BIGLAW_TEST_DSN=postgres://…?sslmode=disable BIGLAW_REQUIRE_DB=1 (Postgres with pgvector)
+make e4-record EMBED_MODEL=… EMBED_DIMENSIONS=512   # owner-run: record the E4 tape (make e4-live: no tape)
 ```
 Budgets: Go prod LOC ≤ 15,500, final (owner decision 10; test-support packages such as `storetest` count), internal
-packages ≤ 12 (test-support packages do not count), direct deps ≤ 3, env vars ≤ 20, UI runtime
+packages ≤ 12 (test-support packages do not count), direct deps ≤ 3, env vars ≤ 20 (18 used), UI runtime
 deps ≤ 2, untested packages 0, longest source file ≤ 2,000 lines.

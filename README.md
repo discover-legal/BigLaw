@@ -10,32 +10,31 @@ tables in which every factual statement cites a quote that the software has veri
 matter's own documents, with a lawyer approving every deliverable. It is one Go binary plus one
 PostgreSQL database. Licensed Apache-2.0 (`LICENSE`, `NOTICE`).
 
-## What exists today (PR 1: skeleton, config, store, CI; PR 2: model client; PR 3a: documents)
+## What exists today (PR 1: skeleton, config, store, CI; PR 2: model client; PR 3a: documents; PR 3b: model roles, embeddings, hybrid search)
 
 | Piece | Path | What it does |
 |---|---|---|
 | Command | `cmd/biglaw/main.go` | `biglaw serve [--allow-no-auth]` (migrates the database, then serves HTTP) and `biglaw version [--config]` |
-| Configuration | `cmd/biglaw/config.go` | Declares all 20 runtime variables; validates the ones this build reads (all problems at once); vendor breakers ported from v1 |
+| Configuration | `cmd/biglaw/config.go` | Declares all 18 runtime variables (`BIGLAW_MODELS` is the role map); validates the ones this build reads (all problems at once); vendor breakers ported from v1 |
 | Store | `internal/store/store.go` | Postgres via `database/sql` + `github.com/lib/pq`; DSN check that matches lib/pq's reading; transaction helper |
-| Migrations | `internal/store/migrate.go`, `internal/store/migrations/NNNN_*.sql` | Embedded SQL files applied in order under an advisory lock; each file and its `schema_migrations` row in one transaction |
+| Migrations | `internal/store/migrate.go`, `internal/store/migrations/NNNN_*.sql` | Embedded SQL files applied in order under an advisory lock; each file and its `schema_migrations` row in one transaction. `store.Open` first creates the `vector` extension (pgvector), which is database-wide (§ Database) |
 | Files | `internal/store/files.go` | Binary files (uploads, generated `.docx`) stored in 1 MiB `bytea` chunks, streamed in and out, with size and SHA-256 checked on every read |
-| Model client | `internal/model/` (`client.go`, `errors.go`, `fake.go`, `pricing.go`, `prices.json`) | One OpenAI-compatible chat client with tool calls and image parts, typed failures with their HTTP mapping, at most 3 attempts per call, cache-aware pricing of every call from a built-in table plus `BIGLAW_PRICES` (the host never makes a call free), watt-hour metering when `BIGLAW_LOCAL_WATTS` is set, and `model.Fake` for tests (§ Model client). Nothing calls it yet: the agent loop that does arrives in PR 4a. |
-| Documents | `internal/docs/` (`ingest.go`, `child.go` + `child_linux.go`/`child_other.go`, `pageindex.go`, `chunk.go`, `search.go`, `verify.go`, `http.go`) | Ingest of UTF-8 text, `.docx` and PDF text layers (PDFs and `.docx` files parsed in a bounded child process); the byte-exact section tree; search chunks; Postgres full-text search; the page reader (outline, paged sections); the quote-verification ladder; the upload and download routes. Every read is scoped to the caller's document ids (§ Documents) |
+| Model client | `internal/model/` (`client.go`, `embed.go`, `errors.go`, `fake.go`, `pricing.go`, `prices.json`) | One OpenAI-compatible chat client with tool calls and image parts, an embeddings call (`Embed`) on the same transport, typed failures with their HTTP mapping, at most 3 attempts per call, cache-aware pricing of every call from a built-in table plus `BIGLAW_PRICES` (the host never makes a call free), watt-hour metering when `BIGLAW_LOCAL_WATTS` is set, and `model.Fake` for tests (§ Model client). Only `Embed` has a caller yet (documents, below); the agent loop that calls `Chat` arrives in PR 4a. |
+| Documents | `internal/docs/` (`ingest.go`, `child.go` + `child_linux.go`/`child_other.go`, `pageindex.go`, `chunk.go`, `search.go`, `embed.go`, `verify.go`, `http.go`) | Ingest of UTF-8 text, `.docx` and PDF text layers (PDFs and `.docx` files parsed in a bounded child process); the byte-exact section tree; search chunks; Postgres full-text search, fused with pgvector similarity when an `embed` role is set (chunk embedding at ingest, a startup backfill); the page reader (outline, paged sections); the quote-verification ladder; the upload and download routes. Every read is scoped to the caller's document ids (§ Documents) |
 | `.docx` reader | `internal/docs/ooxml/` | Opens a `.docx`'s text parts only (body, footnotes, endnotes; 128 MiB decompression cap) and reads its visible text in one linear XML pass. The writer, the XML escapers, the part-preserving re-zip and tracked-change parse/apply are planned (PR 3d) |
-| Proof-run fixtures | `eval/tasks/` | The five synthetic proof-run matters (documents + answer keys), copied from `feat/proof-runs-multi-practice`; PR 3 reads them for gate E4, PR 4b adds the driver and scorer |
+| Proof-run fixtures | `eval/tasks/`, `eval/e4/embeddings.json` | The five synthetic proof-run matters (documents + answer keys), copied from `feat/proof-runs-multi-practice`; PR 3 reads them for gate E4, PR 4b adds the driver and scorer. `eval/e4/embeddings.json` is E4's embeddings tape: today the **self-test** tape of a hash embedder, not a real model's (§ Documents, gate E4) |
 | Test helper | `internal/store/storetest/` | Gives each DB test its own schema; skips without a DSN, fails if `BIGLAW_REQUIRE_DB` is set |
 | Budgets | `scripts/loc.py` (+ `scripts/test_loc.py`) | Fails CI if a size budget is exceeded (below) |
-| Build/deploy | `Makefile`, `Dockerfile`, `docker-compose.yml`, `render.yaml`, `.env.example` | `make ci`; `postgres:16-alpine` + biglaw under Compose; Render blueprint (inert until PR 8, see § Exposure) |
-| CI | `.github/workflows/ci.yml` | `make ci` against `postgres:14` and `postgres:16` service containers with `BIGLAW_REQUIRE_DB=1`; staticcheck + govulncheck; image build + Compose smoke test |
+| Build/deploy | `Makefile`, `Dockerfile`, `docker-compose.yml`, `render.yaml`, `.env.example` | `make ci` (and the owner-run `make e4-record` / `make e4-live`); `pgvector/pgvector:0.8.6-pg16` + biglaw under Compose; Render blueprint (inert until PR 8, see § Exposure) |
+| CI | `.github/workflows/ci.yml` | `make ci` against `pgvector/pgvector:0.8.6-pg14` and `:0.8.6-pg16` service containers (pinned by digest) with `BIGLAW_REQUIRE_DB=1`; staticcheck + govulncheck; image build + Compose smoke test |
 
-HTTP surface today: `GET /health`, which returns `{"status":"ok","version":"…"}` (200) or
+HTTP surface today: `GET /health`, which returns `{"status":"ok","version":"…","search":"hybrid"}` (200;
+`"search":"lexical"` when `BIGLAW_MODELS` has no `embed` role) or
 `{"status":"database unavailable",…}` (503; the cause is logged, not returned), and the two
 document file routes of § Documents: `POST /documents/upload` and `GET /documents/{id}/file`.
 Every other path is 404/405. There is no authentication yet (§ Exposure).
 
-**Planned** (not built): one role-map variable replacing the three role
-variables, with an `embed` role, priced embedding calls and pgvector hybrid search (PR 3b; owner
-decision 9, because lexical search missed gate E4); vision transcription of images and scanned
+**Planned** (not built): vision transcription of images and scanned
 PDFs (PR 3c); the `.docx` writer and tracked-change parse/apply (PR 3d); the engine and the memo workflow with its REST API (PR 4), diligence (PR 5), contract review (PR 6),
 MCP (PR 7), clients/conflicts and OIDC/session/token auth (PR 8), time and billing (PR 9), the
 UI (PR 11), jurisdiction and practice packs (PR 12), v1 import and docs (PR 13). The
@@ -43,7 +42,8 @@ discover.legal intake module is **not** part of v2 (owner decision; it moves to 
 
 ## Configuration
 
-Environment variables only. All 20 are declared in `cmd/biglaw/config.go`; each is validated by
+Environment variables only. All 18 are declared in `cmd/biglaw/config.go` (20 until PR 3b, whose
+`BIGLAW_MODELS` replaced the three role variables); each is validated by
 the PR that first reads it ("Read from"). `biglaw version --config` prints every value and exits
 nonzero if what this build reads is invalid. `biglaw serve` warns about a variable that is set
 but not read yet, and about any unknown `BIGLAW_*` name (likely a typo).
@@ -63,6 +63,8 @@ whatever does not parse into a shape known to be safe is not shown.
   credential as the host and the rest as the path. The host is shown, so never put a key there.
   A Compose service name with `_` is a plain host. An OIDC preset (`google`,
   `microsoft:<tenant>`) is shown as is.
+- `BIGLAW_MODELS`: shown as set only if every entry parses as `role=<model id>` with a safe id
+  (below); otherwise "(set, not shown …)", so a key pasted into an id never reaches the output.
 - Anything else is shown as set (quoted if it contains a control character, so a newline cannot
   forge an output line), unless it contains `://` (then treated as a URL) or has the
   `user:password@` shape (then not shown).
@@ -72,9 +74,9 @@ whatever does not parse into a shape known to be safe is not shown.
 | `BIGLAW_DATABASE_URL` | — (required) | Postgres DSN: `postgres://user:password@host:5432/db?sslmode=disable`, or libpq `key=value` form. The scheme must be lowercase, and reserved characters in the password percent-encoded (`/`→`%2F`, `?`→`%3F`, `#`→`%23`, `%`→`%25`, `@`→`%40`). An `@` after the host (in the database name or a query value such as `application_name=ops@corp`) is refused too, because it cannot be told apart from a broken password; write `%40`. Anything else is refused with a message that never shows the password. lib/pq defaults to `sslmode=require`. | PR 1 |
 | `BIGLAW_ADDR` | `127.0.0.1:3101` | Listen address. Non-loopback needs `serve --allow-no-auth` (§ Exposure). | PR 1 |
 | `BIGLAW_PUBLIC_URL` | `http://127.0.0.1:3101` | External base URL (OIDC redirect, cookie `Secure`) | PR 8 |
-| `BIGLAW_MODEL_URL` | — | OpenAI-compatible API base, ending in its version (`http://localhost:11434/v1`); calls go to `<URL>/chat/completions`. http(s), a plain ASCII host with at least one letter or digit, a port up to 65535, no `@` anywhere (no credentials in the URL; write any other `@` as `%40`). Required when the key or a role is set. | PR 1 |
+| `BIGLAW_MODEL_URL` | — | OpenAI-compatible API base, ending in its version (`http://localhost:11434/v1`); calls go to `<URL>/chat/completions` and `<URL>/embeddings`. http(s), a plain ASCII host with at least one letter or digit, a port up to 65535, no `@` anywhere (no credentials in the URL; write any other `@` as `%40`). Required when the key or a role is set. | PR 1 |
 | `BIGLAW_MODEL_KEY` | — | API key for that URL, sent as `Authorization: Bearer`; no white space or control characters. `serve` warns if it would go over plain `http`. | PR 2 |
-| `BIGLAW_MODEL_LEAD` / `_SPECIALIST` / `_CRITIC` | — | Model id per role, as the endpoint names it (startup refuses only an id holding `://`, `user:password@` or a control character; a wrong id fails at its first call with 404 → `model_not_configured`). Unset specialist or critic use the lead's; setting either without the lead is refused. With no lead, model calls fail with 503 `model_not_configured`. | PR 2 |
+| `BIGLAW_MODELS` | — | Model id per role, as the endpoint names it: comma-separated `role=id`, roles `lead`, `specialist`, `critic`, `vision`, `embed`, each at most once (e.g. `lead=qwen2.5:14b,critic=glm-4.5-air,embed=nomic-embed-text`). Unset `specialist` or `critic` use the lead's; setting either without the lead is refused. `vision` and `embed` have **no** fallback: with no `embed` role search is lexical only (said at startup and on `/health`); `vision` is read from PR 3c (images are refused until then). An unknown role, a repeated one, an empty id, or an id holding `://`, `user:password@`, white space, a control character or `?` `=` `&` is a startup error that does not echo the value. A wrong id fails at its first call with 404 → `model_not_configured`; with no lead, chat calls fail with 503 `model_not_configured`. | PR 3 |
 | `BIGLAW_BUDGET_CALLS` | `150` | Model calls per task | PR 4 |
 | `BIGLAW_BUDGET_USD` | `5` | Dollar cap per task | PR 4 |
 | `BIGLAW_LOCAL_WATTS` | — | Power draw of the machine running the model; when set (above 0) every call records watts × duration as watt-hours, for reporting only (never a price). A number from 0 to 100000 | PR 2 |
@@ -89,13 +91,13 @@ whatever does not parse into a shape known to be safe is not shown.
 Tests use two more: `BIGLAW_TEST_DSN` and `BIGLAW_REQUIRE_DB` (turns a skipped DB test into a
 failure). `TestEnvVarTablesAgree` fails if this table or `docker-compose.yml` lacks a variable
 `config.go` declares, if `.env.example` or `render.yaml` sets other than its fixed list (the
-model URL/key/lead and the OIDC variables; Render adds the database URL and address), or if any
+model URL/key/models and the OIDC variables; Render adds the database URL and address), or if any
 of these files names a variable `config.go` does not declare.
 
 **libpq variables.** lib/pq also reads the standard libpq `PG*` variables (`PGHOST`, `PGPORT`,
 `PGUSER`, `PGPASSWORD`, `PGSSLMODE`, `PGPASSFILE`, …) as defaults for anything the DSN leaves
 out, and refuses to start if one it does not support (such as `PGGSSENCMODE`) is set. They are
-outside the 20-variable surface; `version --config` lists the names it sees, never their values.
+outside the 18-variable surface; `version --config` lists the names it sees, never their values.
 Compose uses `PGPASSWORD` on purpose (§ Run it).
 
 **Vendor breakers.** Ported from v1 `biglaw-go/internal/config/guard.go`: a `BIGLAW_MODEL_URL`
@@ -114,8 +116,8 @@ OpenRouter, LiteLLM or a cloud vendor's compatible endpoint. No test calls a rea
 caller is tested against `model.Fake` or an `httptest` server.
 
 - **Requests.** A request names its `Agent` (`lead` or the subagent tool's name), its `Role`
-  (`lead`, `specialist`, `critic`; resolved through `model.Roles`, the one accessor that PR 3's
-  single role-map variable will feed) or an explicit `Model`, the messages, the tools, and optionally
+  (`lead`, `specialist`, `critic`, `vision`; resolved through `model.Roles`, the one accessor,
+  fed by `BIGLAW_MODELS`) or an explicit `Model`, the messages, the tools, and optionally
   `tool_choice`, `parallel_tool_calls`, `max_tokens` (sent as `max_completion_tokens` to
   `api.openai.com`, which refuses `max_tokens` for reasoning models) and `temperature`. The same
   request encodes to identical bytes every call (a tool's JSON Schema is compacted, deterministically)
@@ -152,9 +154,11 @@ caller is tested against `model.Fake` or an `httptest` server.
   never the endpoint URL, host or port, the key, or anything the endpoint sent. A transport failure
   is one of "connection refused", "DNS lookup failed", a timeout, or "the connection failed or the
   answer is not valid HTTP" (Go's own error text can quote the bytes a server sent).
-  Role ids (`BIGLAW_MODEL_LEAD` etc.) reach the logs as written, so startup refuses an id that
-  holds `://`, `user:password@`, or a control character (so `name:tag@quant` is refused too;
-  LM Studio's `name@quant` and Ollama's `name:tag` are fine).
+  Role ids (`BIGLAW_MODELS`) reach the logs as written, so startup refuses an id that holds `://`,
+  `user:password@`, white space, a control character, or `?`, `=` or `&` (a query string such as
+  `gw.example.com/v1?key=…` could carry a key), and never echoes it (`TestRoleIDRefusesQueryCharacters`);
+  so `name:tag@quant` is refused too, while LM Studio's `name@quant`, Ollama's `name:tag`,
+  OpenRouter's `vendor/model` and Bedrock-style `us.anthropic.…-v1:0` are fine.
 - **Retries.** At most 3 attempts per call, only after 429, 500, 502, 503, 504 or 529. The wait
   is the provider's `Retry-After` in seconds, or 1 s then 2 s plus up to 25% jitter. A
   `Retry-After` over 30 s (however large: values past int64 too), or a wait that would outlast
@@ -186,6 +190,18 @@ caller is tested against `model.Fake` or an `httptest` server.
   `BIGLAW_PRICES='{"qwen2.5:14b": {"in": 0, "out": 0}}'` (or `{"qwen*": {"in": 0, "out": 0}}` for a
   family). `serve` logs each role's price once at startup (`model pricing role=lead model=…
   price="$3 in / $15 out per 1M tokens"`, or `price="unpriced: …"`).
+- **Embeddings.** `Embed` sends up to 256 non-blank UTF-8 texts (each at most 16 KiB) in one
+  OpenAI-compatible `POST <URL>/embeddings` (`"encoding_format": "float"`, and `dimensions` only
+  when the caller asks for it) on the `embed` role's model, with the same retries, redirect rule
+  and fixed-text typed failures as a chat call. It returns one vector per input in input order
+  (the answer's `index` decides, not its order). An answer without exactly one non-zero vector of
+  one length per input (or of the asked dimension) is `ErrUnavailable`; no vectors is
+  `ErrNoContent`; either way a billed answer keeps its usage on the error. **It is priced like
+  every call**: `prompt_tokens` at the model's input rate from the same table
+  (`text-embedding-3-small` $0.02 per million tokens; `nomic-embed-text` has no row, so its cost
+  is unknown, not $0, unless `BIGLAW_PRICES` sets it), with watt-hours when `BIGLAW_LOCAL_WATTS`
+  is set (`TestEmbeddingsPriced`, `TestEmbedTypedErrors`). No `embed` role is 503
+  `model_not_configured`.
 - **Watt-hours.** With `BIGLAW_LOCAL_WATTS` set, every call (successful or billed-but-refused)
   records `BIGLAW_LOCAL_WATTS` × its duration (all attempts) as watt-hours, beside its price. They
   report the energy of your own hardware; they never change the cost. Unset, none are recorded.
@@ -194,6 +210,8 @@ caller is tested against `model.Fake` or an `httptest` server.
   `ErrNoContent` and a malformed tool call `ErrUnavailable`, as from the real client; tool-call ids
   it fills in are `<agent>-<call>-<index>` (the agent's own call count), so runs are deterministic.
   It does not resolve roles: a request's `Role` only names its reply's model (`fake:<role>`).
+  `Fake.Embed` answers from a `Vectors(text)` function (unset: an error, never a default vector),
+  checks requests as the client does and records them (`EmbedCalls`).
 
 ## Exposure (there is no authentication yet)
 
@@ -222,7 +240,7 @@ that way:
 
 ```bash
 test -e .env || sed "s/^POSTGRES_PASSWORD=\$/POSTGRES_PASSWORD=$(openssl rand -hex 24)/" .env.example > .env
-docker compose up -d            # postgres:16-alpine + biglaw; host port 127.0.0.1:3101 only
+docker compose up -d            # Postgres 16 with pgvector + biglaw; host port 127.0.0.1:3101 only
 curl -s http://127.0.0.1:3101/health
 ```
 
@@ -234,12 +252,16 @@ Compose's own `.env` parsing does constrain it, though: unquoted, a value is cut
 `abc #def` becomes `abc`, on both the Postgres and the biglaw side). Use a hex password, or
 single-quote your own (`POSTGRES_PASSWORD='…'`) without a `'` in it.
 
-Without Docker (Go 1.26+, any supported Postgres ≥ 14):
+Without Docker (Go 1.26+, any supported Postgres ≥ 14 **with the pgvector extension installed**,
+e.g. the `postgresql-16-pgvector` package, or pgvector built from source; § Database):
 
 ```bash
 createdb biglaw
 make build                      # static binary: CGO_ENABLED=0, version stamped (no UI yet)
 BIGLAW_DATABASE_URL='postgres:///biglaw?sslmode=disable' ./biglaw serve
+# hybrid search: an embedding model on any OpenAI-compatible endpoint, e.g. Ollama's
+BIGLAW_MODEL_URL=http://localhost:11434/v1 BIGLAW_MODELS=embed=nomic-embed-text \
+  BIGLAW_DATABASE_URL='postgres:///biglaw?sslmode=disable' ./biglaw serve
 ```
 
 `postgres:///biglaw` uses the libpq defaults (a local socket or `PGHOST`, your OS user or
@@ -248,6 +270,18 @@ connection to the port is answered as soon as it is accepted.
 
 ## Database: migrations, backups, rollbacks
 
+- **pgvector.** Migration 0003 adds a `vector` column to the chunks, so the database needs the
+  pgvector extension. `store.Open` runs `CREATE EXTENSION IF NOT EXISTS vector` before migrating
+  (under an advisory lock: concurrent starts would collide). Extensions are database-wide, so this
+  is outside the numbered per-schema migrations. Creating it needs a superuser (pgvector is not a
+  trusted extension); a role that may not, in a database without it, gets a startup error naming
+  the fix: "the pgvector extension (vector) is missing and could not be created: use a Postgres
+  with pgvector (the pgvector/pgvector images) or have a superuser run CREATE EXTENSION vector in
+  this database". An extension that already exists needs no privilege (`TestOpenNeedsVector`).
+  Compose's `pgvector/pgvector` image and CI's carry it; whether Render's managed Postgres offers
+  `vector` is not verified here (`render.yaml` is inert until PR 8). The `vector` type
+  must be on the connection's `search_path` (it is when the extension sits in `public`, the
+  default).
 - Migrations run on every start. A process that finds another holding the migration lock logs
   "waiting for the migration lock" and waits until that one finishes or it is stopped (a signal
   then gives a clear "stopped … waiting for the migration lock" error). Connecting is bounded
@@ -359,8 +393,8 @@ and a chunk's `context` names the sheet and columns (at most 256 bytes; indexed 
 tabs is a table row, never a heading (a numeric row such as `1⇥2023⇥$400` used to become a
 section).
 
-**Search.** Postgres full text, no vectors in this PR (pgvector hybrid search is PR 3b): each
-chunk has a stored English `tsvector` and a `simple` (unstemmed) one. Search reads the scope's
+**Search.** Postgres full text (the lexical leg; with an `embed` role it is fused with vector
+similarity, below): each chunk has a stored English `tsvector` and a `simple` (unstemmed) one. Search reads the scope's
 chunks (by document) and matches each term against them once, so a query costs time in
 proportion to the scope's size times its terms; there is no GIN index, because this ranking
 query cannot use one (`EXPLAIN` showed none used, so it would only cost writes). The bound: at
@@ -377,20 +411,67 @@ outranks a repeated common one (`TestSearchRareTermOutranksCommon`), results are
 documents cannot reorder this one's results (`TestSearchRarityIsScoped`). Queries are at most
 1,024 bytes; `k` is 1–50.
 
-**Gate E4 is not met.** Over the 68 planted proof-run facts, a search within the fact's matter
-with an **answer-free question** (one per fact in `answer_key.json`, written without the fact's
-figures or conclusion, before the first measurement, not tuned since) returns a chunk holding one
-of its evidence strings in the top 8 for **60/68 = 0.882**, below the 0.95 gate (every evidence
-string counted separately: 86/106 = 0.811). Searching with the fact's **title**, which states the
-answer, gives **66/68 = 0.971** (100/106), an upper bound, not a measure of an agent's real query.
-Misses by question: `REG-05`, `REG-14`, `DD-06`, `DD-09`, `LIT-D1`, `LIT-I3`, `LIT-I6`, `LIT-C6`.
-`TestLexicalRecallProofRuns` prints both figures and per-matter recall, says that the gate is not
-met, and fails only on a regression (below 60/68 by question or 0.95 by title). Owner decision 9:
-pgvector is added in PR 3b, where E4 becomes a failing gate again, replayed in CI from a recorded
-embeddings tape (`TestHybridRecallProofRuns`, PLAN § PR 3 slices); gate A (PR 4b) measures recall
-through the agent's own queries. Scoring note (r2 auditor): for a few multi-hop facts (`DD-06`,
-`LIT-I3`, `LIT-D1`) the question retrieves the operative clause while the key designates only
-the other hop, so 2–3 misses are partly measurement; the gate is not moved for it.
+**Hybrid search (PR 3b; owner decision 9).** With an `embed` role in `BIGLAW_MODELS`, every
+chunk is embedded at ingest (its section path and search text, at most 4,096 characters, 64 chunks
+per call, after the ingest slot is released) and so is every query. The lexical ranking above is
+fused with the scope's embedded chunks ranked **exactly** by cosine distance to the query's vector:
+reciprocal-rank fusion, `1/(60 + lexical rank) + 1/(60 + vector rank)`, each leg's ties by chunk
+id, so `Rank` is the fused score and results are deterministic (`TestHybridFusion`). Every
+embedded chunk in scope is a candidate, so a hybrid search returns up to `k` hits even when no word
+matches. Both legs read only the scope's documents (G1, `TestHybridKeepsScope`). There is **no
+HNSW or IVFFlat index**: an approximate index filtered to one matter's documents returns fewer
+than `k` rows (measured at PR 3b: with the HNSW index forced, a scoped top-8 over 50,000 vectors of
+which 40 were in scope returned 0 rows; pgvector's iterative scan recovers that only up to its
+scan limit), so an index would cost writes and break scoped recall. A query costs scope ×
+dimensions: `TestSearchCost` measured 225 ms for a hybrid query over 12,426 chunks at 512
+dimensions (4 MiB; embedding them with the fake model took 3.3 s in 195 calls). The `vector`
+column has no fixed length: a document records the model that embedded **all** its chunks
+(`embedModel`, with the calls' `embedTokens` and `embedCostUsd`, null when unpriced), and the vector
+leg reads only documents of the current `embed` model whose vectors have the query's length, so a
+half-embedded document, or one embedded by a previous model, is searched lexically only. A failed
+or cancelled embedding call never fails an ingest: the document is stored lexical only with the
+note "Search over this document is lexical only: embedding its chunks failed or was cancelled …"
+(`TestEmbedFailureLeavesLexical`). `serve` runs a **backfill** at startup, one document at a time,
+for documents stored before the role was set, under another model, or whose embedding failed; it
+skips documents stored after it starts, stops with the server, and gives up after 3 documents in a
+row fail (`TestBackfillEmbedsOldDocuments`, `TestServeHybridEndToEnd`). A failed **query**
+embedding is returned as its model error (502/503/504), never a silent lexical answer. With no
+`embed` role, search is the lexical leg alone, as `serve`'s log and `/health` say.
+
+**Gate E4 (`TestHybridRecallProofRuns`): not yet judged.** Over the 68 planted proof-run facts, a
+search within the fact's matter with an **answer-free question** (one per fact in
+`answer_key.json`, written without the fact's figures or conclusion, before the first measurement,
+not tuned since) must return a chunk holding one of its evidence strings in the top 8 for ≥ 0.95
+(65/68). Lexical search alone gives **60/68 = 0.882** (every evidence string counted separately:
+86/106 = 0.811), and with the fact's **title**, which states the answer, 66/68 = 0.971 (100/106),
+an upper bound; `TestLexicalRecallProofRuns` prints both and fails only below those floors. Lexical
+misses by question: `REG-05`, `REG-14`, `DD-06`, `DD-09`, `LIT-D1`, `LIT-I3`, `LIT-I6`, `LIT-C6`.
+The hybrid gate runs in CI without a model key by replaying `eval/e4/embeddings.json`, a tape of
+`sha256(text) → vector` for every text the measurement embeds (the 355 proof-run chunks as the
+chunker cuts them, and the 68 questions and 68 titles: 491 vectors), with the model and dimensions
+that recorded it. **The committed tape is a self-test tape**, recorded offline by a bag-of-words
+hash embedder (`biglaw-selftest-hash`, 64 dimensions), because no embedding key exists where this
+was built. It proves the harness only (`TestE4TapeReplays`: every text is on the tape, replay
+leaves no document lexical, the vectors are the hash embedder's), and on it
+`TestHybridRecallProofRuns` **skips** with "E4 GATE NOT JUDGED". Its recall with that tape,
+50/68, is no gate result (a bag-of-words embedder fused with lexical search did worse than lexical
+alone). The owner records the real tape once, and from then on CI judges the gate (`t.Errorf`
+below 65/68) and fails if any text it embeds is missing from the tape (the chunker or the fixtures
+changed: re-record):
+
+```bash
+make e4-record EMBED_MODEL=text-embedding-3-small EMBED_DIMENSIONS=512 \
+  BIGLAW_MODEL_URL=https://api.openai.com/v1 BIGLAW_MODEL_KEY=sk-… \
+  BIGLAW_TEST_DSN='postgres://…?sslmode=disable'      # writes eval/e4/embeddings.json; commit it
+make e4-live EMBED_MODEL=… BIGLAW_MODEL_URL=… BIGLAW_MODEL_KEY=… BIGLAW_TEST_DSN=…   # live, no tape
+```
+
+Any model may be named; the tape records which. `make e4-record EMBED_MODEL=biglaw-selftest-hash`
+regenerates the self-test tape offline. Scoring note (r2 auditor): for a few multi-hop facts
+(`DD-06`, `LIT-I3`, `LIT-D1`) the question retrieves the operative clause while the key designates
+only the other hop, so 2–3 misses are partly measurement; the per-evidence-string figure is
+printed beside the gate figure and the gate is not moved for it. Gate A (PR 4b) measures recall
+through the agent's own queries.
 
 **Page reader.** `Outline` lists every section in order as `{sectionId, number, title, level,
 tokens}`, where `tokens` estimates what `Section` returns for it: the section with its
@@ -530,12 +611,15 @@ is two hostile files whose children die at their 1 GiB cap: about 2 GiB of child
 ```bash
 go test -race ./...             # unit tests; DB tests SKIP without a DSN
 # a throwaway Postgres for the DB tests:
-docker run -d --name biglaw-testdb -p 127.0.0.1:55432:5432 -e POSTGRES_PASSWORD=t postgres:16-alpine
+docker run -d --name biglaw-testdb -p 127.0.0.1:55432:5432 -e POSTGRES_PASSWORD=t pgvector/pgvector:0.8.6-pg16
 BIGLAW_TEST_DSN='postgres://postgres:t@127.0.0.1:55432/postgres?sslmode=disable' \
   BIGLAW_REQUIRE_DB=1 go test -race ./...   # DB tests too; each gets its own schema, dropped after
 make ci                         # gofmt, vet, go mod verify/tidy, static build, tests (-race, shuffled;
                                 # then the reader child's bounds again without -race, which turns
-                                # its memory cap off), loc.py + its tests, docker compose config
+                                # its memory cap off, with -v; where BIGLAW_REQUIRE_DB is set it
+                                # fails unless TestChildBoundsItself, TestChildNearTextCap and
+                                # TestIngestMemoryBounded each report PASS there), loc.py + its
+                                # tests, docker compose config
 make lint vuln                  # staticcheck and govulncheck (network needed; CI runs both)
 ```
 
@@ -612,17 +696,29 @@ sweep at startup). Review round 2 added `TestReadChildBounded`, `TestChildNearTe
 `TestTextJoinsRunsAndSeparatesParagraphs` expects a tab for `<w:tab/>`, which v1 dropped, and
 `TestTableRowChunking` expects rows grouped into one chunk, not one chunk per row.
 
+Named tests (PLAN.md PR 3, slice 3b; DB tests need Postgres with pgvector): in `cmd/biglaw`
+`TestModelsRoleMap` and `TestRoleIDRefusesQueryCharacters`; in `internal/model`
+`TestEmbeddingsPriced`; in `internal/docs` `TestEmbedFailureLeavesLexical`,
+`TestBackfillEmbedsOldDocuments`, `TestHybridKeepsScope` (G1 with vectors) and
+`TestHybridRecallProofRuns` (gate E4; it skips on the self-test tape, above). Extra:
+`TestEmbedTypedErrors`, `TestFakeEmbed`, `TestHybridFusion`, `TestEmbedBatchesAndUsage`, `TestEmbedWaitsBounded`,
+`TestE4TapeReplays` (the harness self-test), `TestOpenNeedsVector`, `TestVectorOncePerDatabase`
+(storetest creates the extension once per database, not per schema), `TestServeHybridEndToEnd`,
+the hybrid figures in `TestSearchCost`, the `embed`/`vision` cases of `TestRolesModel`, and the
+`search` field in `TestHealth`. `TestLexicalRecallProofRuns` now shares E4's scoring with the
+hybrid gate (`e4Measure`).
+
 ## Budgets (`scripts/loc.py`, run in CI)
 
 | Budget | Ceiling | Today |
 |---|---:|---:|
-| Go production lines (physical lines, non-`_test.go`, test-support packages included) | 15,500 | 3,894 |
+| Go production lines (physical lines, non-`_test.go`, test-support packages included) | 15,500 | 4,295 |
 | Packages under `internal/`, test-support packages excluded | 12 | 4 (`docs`, `docs/ooxml`, `model`, `store`; `store/storetest` is test support) |
 | Direct Go dependencies | 3 | 2 (`github.com/lib/pq`, `github.com/ledongthuc/pdf`) |
-| Runtime environment variables | 20 | 20 |
+| Runtime environment variables | 20 | 18 |
 | UI runtime dependencies | 2 | 0 (no UI yet) |
 | Packages without a `_test.go` | 0 | 0 |
-| Lines in any one source file (`.go`, `.py`, `.sql`, `.sh`, `.js`, `.ts`, `.css`; tests included) | 2,000 | 626 |
+| Lines in any one source file (`.go`, `.py`, `.sql`, `.sh`, `.js`, `.ts`, `.css`; tests included) | 2,000 | 634 |
 
 The line ceiling is 15,500, declared final (owner decisions: 14,000, then 14,250, then 14,500 during PR 2's review, then 15,000 at PR 3a's, with pgvector, then 15,500 at PR 3a's round 3, with no further rises). A **test-support package** is one
 whose directory name ends in `test` and that no production file outside it imports, such as
@@ -660,9 +756,10 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
   operator adds after checkout is outside the repository; publishing beyond loopback there is the
   operator's own act.
 - `govulncheck` runs only in CI: the build sandbox cannot reach `vuln.go.dev`.
-- GitHub Actions and container images are pinned to tags (`@v4`, `golang:1.26.9-alpine`,
-  `postgres:14`, `postgres:16`, `postgres:16-alpine`), not to SHAs/digests, so an upstream retag changes what CI
-  runs.
+- GitHub Actions and the build images are pinned to tags (`@v4`, `golang:1.26.9-alpine`), not to
+  SHAs/digests, so an upstream retag changes what CI runs. CI's Postgres service images are pinned
+  by tag and digest (`pgvector/pgvector:0.8.6-pg14@sha256:fb27…`, `…-pg16@sha256:ccc6…`, the
+  registry's index digests on 2026-10-18); Compose's is pinned by tag only.
 - Files: no quota. `store.GetFile` itself takes only a file id; scoping is enforced by
   `docs.WriteFile` (through a document in scope), and nothing yet stops another package calling the
   store directly (PR 4a's `TestImportBoundaries` pins who may import `store`). Upload slots are
@@ -712,11 +809,10 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
   - Section ids are positions in the section tree (`s0`, `s1`, …) of the text as ingested; a
     change to the heading rules does not renumber stored documents, which keep the ids they were
     ingested with. Re-ingest to pick up new rules.
-  - **Gate E4 is not met** by answer-free questions (0.882 < 0.95; § Documents); pgvector hybrid
-    search comes in PR 3b. Search ranking here is lexical: a question that shares no word with
-    the passage is not found (`REG-05`'s fee-table row by its title; most question misses ask
-    about a date or figure the passage states in other words). Each query scans the scope's
-    chunks once per term (at most 32), so a very large scope makes every query slower
+  - **Lexical search alone does not meet gate E4** (0.882 < 0.95; § Documents), and with no
+    `embed` role search is lexical only: a question that shares no word with the passage is not
+    found (`REG-05`'s fee-table row by its title; most question misses ask about a date or figure
+    the passage states in other words). Each query scans the scope's chunks once per term (at most 32), so a very large scope makes every query slower
     (`TestSearchCost` prints the figures; 32 terms on 4 MiB took about 0.5 s here) up to the 10 s
     timeout, which then refuses it; nothing caps a scope's size. Quoted phrases and `-exclusion`
     are not supported (their words are searched).
@@ -740,19 +836,85 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     refuses to start (checksum drift); recreate it.
   - `ledongthuc/pdf` is a small, lightly maintained library pinned at a 2025 pseudo-version; it
     is the second of the three allowed dependencies.
+- Heap-measuring tests share one test process: `TestDownloadBounded` (24 MiB bound) measured
+  +30 MiB once in a full `-race` run during PR 3b (10–19 MiB alone, 17 MiB on a rerun with the
+  same shuffle seed), so it can fail spuriously on a loaded machine; rerun before suspecting a leak.
 - Test schemas are dropped by `t.Cleanup`; a test binary that is killed (SIGKILL, timeout)
   leaves its `t_<hex>` schema behind. Drop them with
   `psql -c "select 'drop schema '||nspname||' cascade;' from pg_namespace where nspname like 't\_%'" -At | psql`.
-- Schema-per-test isolation cannot isolate Postgres extensions, which are database-wide; a
-  future migration that needs one must follow the rule in CLAUDE.md.
+- Schema-per-test isolation cannot isolate Postgres extensions, which are database-wide:
+  `storetest` creates `vector` once per database (outside any test schema, cached per DSN) and puts
+  its schema after the test's on the `search_path`, so a test's unqualified name that its schema
+  lacks would resolve in that schema (`public` by default) too. A future extension must follow
+  the rule in CLAUDE.md.
 - No healthcheck for the biglaw container (distroless has no shell); Compose reports it "Up"
   even when `/health` is 503. No access log; logs are text.
 - `/health` is unauthenticated and reports the version string. Images built by Compose report
   `2.0.0-dev` (no version is passed at build time).
 - Postgres is required, including on a Pi. There is no embedded-database mode.
+- **Hybrid search and embeddings (PR 3b):**
+  - **Gate E4 has not been judged.** The committed tape is the self-test hash embedder's
+    (§ Documents), so `TestHybridRecallProofRuns` skips, and whether hybrid search reaches 65/68
+    is unknown until the owner runs `make e4-record` with a real model. Fusion can also make recall
+    **worse** than lexical alone: with the bag-of-words self-test embedder it fell from 60/68 to
+    50/68. If the real tape misses the gate, the fusion constant or weights, not the gate, are the
+    next question (owner).
+  - The tape recipe asks for 512 dimensions (`EMBED_DIMENSIONS=512`), but `serve` never sends
+    `dimensions`, so production embeds at the model's own length (1,536 for
+    `text-embedding-3-small`): the gate then measures a smaller variant of the model than the
+    server runs. Record without `EMBED_DIMENSIONS` (a tape about 3× larger) to measure exactly
+    what runs.
+  - Every embedded chunk in scope is a vector candidate, so a hybrid search returns `k` hits even
+    for a query nothing matches; callers must not read "a hit" as "relevant". No index: each query
+    computes the distance to every embedded chunk in scope (225 ms for 12,426 chunks at 512
+    dimensions here; about 3× that at 1,536), under the same 10 s timeout.
+  - Embedding usage is priced on every call, but only an ingest's usage is recorded (on the
+    document, and only for a run that embedded every chunk: a failed run's billed calls are not
+    stored), and a search's query embedding is charged to no task until PR 4a's budget ledger
+    (`docs.Service` takes the embedder at `UseEmbedder`; 4a can wrap it per task). An endpoint
+    that reports no `usage` counts 0 tokens, so a priced model's call reads $0, as for chat.
+  - Embedding runs inside the upload request, after the ingest slot is released: a 16 MiB
+    document is about 190 calls of 64 chunks at the 1,400-character chunk size, up to about 780
+    for short clauses (`TestSearchCost`'s 4 MiB of them is 12,426 chunks), so its upload answers
+    only when they finish (or fails over to
+    lexical only, with the note, if the client goes away). The backfill runs only at startup: a
+    document whose embedding failed stays lexical until the next start. Two servers on one
+    database may both backfill the same old document (twice the cost, same result). Changing the
+    `embed` model makes every document lexical until the backfill re-embeds it. A half-embedded
+    document keeps the vectors it got (unused) until it is embedded again.
+  - Inputs are cut at 4,096 characters; an embedding model with a short context (some 512-token
+    BERT-style models) may refuse a 1,400-character chunk (HTTP 400 → `model_unavailable`), which
+    leaves that document lexical only.
+  - **Compose volume:** the Postgres image changed from `postgres:16-alpine` (musl) to
+    `pgvector/pgvector:0.8.6-pg16` (Debian, glibc). Collations differ between the two C
+    libraries, so a `pgdata` volume created by an earlier pre-release Compose stack should be
+    recreated (`docker compose down -v`; v2 has no release yet) rather than reused.
+  - **Line budget:** PR 3b adds 394 production lines (3,894 → 4,288) against DESIGN's 270–405
+    (§ PR 3b pgvector estimate), near its top: the embeddings call 112 (90–130), the role map's
+    embed/vision roles, the lexical log and `/health` 32 (10–20), the store's extension check 10
+    (10–20), ingest embedding, the time bounds, backfill and serve's backfill goroutine 153
+    (80–120), hybrid search 23 (40–60), `storetest` 28 (10–15) and `Fake.Embed` 36 (30–40). Plan
+    total 14,866–14,896 + 394 = 15,260–15,290, under the final 15,500 ceiling by 210–240.
+  - **Every chunk of every document goes to the embedding endpoint**, at ingest, and so does
+    every search query: with a hosted embedder (OpenAI, a gateway) the full text of privileged
+    matter documents leaves the machine, as the chat calls' prompts will. Setting the `embed`
+    role for the first time also sends **every stored document** to it (the startup backfill).
+    The embed role uses the same `BIGLAW_MODEL_URL` (and vendor breaker) as chat: embeddings
+    cannot go to a local endpoint while chat goes to a hosted one. Run a local embedder (Ollama's
+    `nomic-embed-text`) to keep the text on the machine.
+  - Until PR 8 there is no auth or quota: anyone who can reach the port can upload documents and
+    make the server pay to embed them (16 MiB of text is about 4.2M tokens at 4 bytes a token: $0.08 at
+    `text-embedding-3-small`'s rate, $0.55 at `-large`'s), and every search makes one call.
+  - A matter's own documents can steer the vector leg: a chunk written to sit near many queries
+    (a "hub") is returned for them, crowding out evidence (inside the scope only: G1 holds). Three
+    documents in a row that the endpoint always refuses stop the startup backfill early, so later
+    documents stay lexical until the next start.
+  - Time bounds: embedding one document stops after 10 minutes (then it is lexical only, with the
+    note), a query's embedding after 30 s (then 504 `model_timeout`; `TestEmbedWaitsBounded`), and
+    an answer with vectors over 16,000 dimensions (pgvector's limit) is refused.
 - **Model client (PR 2):**
-  - Nothing calls it yet; `serve` validates its configuration only. The agent loop (PR 4a) is
-    its first caller, so no real endpoint has been exercised: every test uses `httptest` or
+  - Only `Embed` has a caller yet (documents); `Chat`'s first caller is the agent loop (PR 4a),
+    so no real endpoint has been exercised: every test uses `httptest` or
     `model.Fake`. Behaviour against real Ollama, vLLM or vendor endpoints is unproven until the
     owner's gates run.
   - **Every call is charged, including on your own GPU** (owner decision). An Ollama model under

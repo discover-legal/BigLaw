@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/discover-legal/BigLaw/internal/model"
 	"github.com/discover-legal/BigLaw/internal/store"
 	"github.com/lib/pq"
 )
@@ -49,11 +50,24 @@ type Hit struct {
 // by how rare it is in the scope (idf = ln(1 + N/(1+df))) times ts_rank_cd of that term,
 // saturated (normalisation 32). Both the English (stemmed) and the simple (exact) vectors are
 // scored and summed, so an identifier such as FS-26-01234 counts even where stemming would mangle
-// it. Ties are broken by chunk id. A query with no searchable word returns no hits; one of more
-// than MaxTerms distinct words, or one that runs past searchTimeout, is ErrBadInput.
+// it. With an embedder (UseEmbedder) that ranking is fused with the scope's embedded chunks ranked
+// exactly by cosine distance to the query's embedding (reciprocal-rank fusion, 1/(60+rank) from
+// each; Rank is then the fused score); a failed query embedding is its model error, never a silent
+// lexical answer. Ties go to the lower chunk id. With no searchable word and no embedder there are
+// no hits; more than MaxTerms distinct words, or a statement past searchTimeout, is ErrBadInput.
 func (s *Service) Search(ctx context.Context, scope []string, query string, k, offset int) ([]Hit, error) {
 	if k < 1 || k > MaxK || offset < 0 || offset > 10000 || len(query) > MaxQuery || !utf8.ValidString(query) || strings.IndexByte(query, 0) >= 0 {
 		return nil, fmt.Errorf("%w: k is 1 to %d, offset 0 to 10000, the query at most %d bytes of UTF-8", ErrBadInput, MaxK, MaxQuery)
+	}
+	var qvec any // NULL: lexical only
+	if s.embedder != nil && strings.TrimSpace(query) != "" && len(validIDs(scope)) > 0 {
+		ectx, cancel := context.WithTimeout(ctx, queryWait)
+		e, err := s.embedder.Embed(ectx, model.EmbedRequest{Agent: "search", Inputs: []string{query}})
+		cancel()
+		if err != nil {
+			return nil, fmt.Errorf("docs: search: embed the query: %w", err)
+		}
+		qvec = vectorText(e.Vectors[0])
 	}
 	ctx, cancel := context.WithTimeout(ctx, searchTimeout)
 	defer cancel()
@@ -63,7 +77,7 @@ func (s *Service) Search(ctx context.Context, scope []string, query string, k, o
 	} else if terms > MaxTerms {
 		return nil, fmt.Errorf("%w: the query has %d distinct words; search with at most %d", ErrBadInput, terms, MaxTerms)
 	}
-	rows, err := s.db.QueryContext(ctx, searchSQL, pq.Array(validIDs(scope)), query, k, offset)
+	rows, err := s.db.QueryContext(ctx, searchSQL, pq.Array(validIDs(scope)), query, k, offset, qvec, s.embedModel)
 	if err != nil {
 		return nil, s.searchError(ctx, err)
 	}
@@ -93,7 +107,9 @@ func (s *Service) searchError(ctx context.Context, err error) error {
 }
 
 // searchSQL matches every term against the scope's chunks once (m), takes each term's rarity from
-// those matches (w), ranks, and only then reads the k bodies.
+// those matches (w), ranks (lex), fuses that with the vector ranking when $5 (the query's vector)
+// is set, and only then reads the k bodies. The vector leg reads the same scope ($1) and only
+// chunks of documents its model ($6) embedded completely.
 const searchSQL = `
 WITH s AS (SELECT id, tsv, tsv_simple FROM chunks WHERE document_id = ANY($1::uuid[])),
 terms AS (
@@ -104,8 +120,15 @@ m AS (
   SELECT s.id, t.en, t.q, ts_rank_cd(CASE WHEN t.en THEN s.tsv ELSE s.tsv_simple END, t.q, 32) AS r
   FROM s JOIN terms t ON numnode(t.q) > 0 AND (CASE WHEN t.en THEN s.tsv ELSE s.tsv_simple END) @@ t.q),
 w AS (SELECT en, q, ln(1 + (SELECT count(*) FROM s)::float8 / (1 + count(*))) AS idf FROM m GROUP BY en, q),
-top AS (SELECT m.id, sum(m.r * w.idf) AS rank FROM m JOIN w ON w.en = m.en AND w.q = m.q
-  GROUP BY m.id ORDER BY rank DESC, m.id LIMIT $3 OFFSET $4)
+lex AS (SELECT m.id, sum(m.r * w.idf) AS rank FROM m JOIN w ON w.en = m.en AND w.q = m.q GROUP BY m.id),
+vec AS (SELECT c.id, row_number() OVER (ORDER BY c.embedding <=> $5::vector, c.id) AS r
+  FROM chunks c JOIN documents d ON d.id = c.document_id
+  WHERE $5::vector IS NOT NULL AND c.document_id = ANY($1::uuid[]) AND d.embed_model = $6
+    AND c.embedding IS NOT NULL AND vector_dims(c.embedding) = vector_dims($5::vector)),
+fused AS (SELECT coalesce(l.id, v.id) AS id,
+    CASE WHEN $5::vector IS NULL THEN l.rank ELSE coalesce(1.0 / (60 + l.r), 0) + coalesce(1.0 / (60 + v.r), 0) END AS rank
+  FROM (SELECT id, rank, row_number() OVER (ORDER BY rank DESC, id) AS r FROM lex) l FULL JOIN vec v ON v.id = l.id),
+top AS (SELECT id, rank FROM fused ORDER BY rank DESC, id LIMIT $3 OFFSET $4)
 SELECT c.id, c.document_id, c.section_ord, c.locator, c.body, c.context, top.rank
 FROM top JOIN chunks c ON c.id = top.id ORDER BY top.rank DESC, c.id`
 

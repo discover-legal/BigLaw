@@ -21,10 +21,10 @@ import (
 )
 
 // builtPR is the last build PR whose variables this build reads.
-const builtPR = 2
+const builtPR = 3
 
 // envVar is one runtime environment variable; envVars is the complete surface (README § Configuration,
-// loc.py caps it at 20). A variable is validated by the PR that first reads it (pr), warned about before.
+// loc.py caps it at 20; 18 since PR 3's role map). A variable is validated by the PR that first reads it (pr), warned about before.
 type envVar struct {
 	name, def string
 	secret    bool // never printed by `biglaw version --config`
@@ -38,9 +38,7 @@ var envVars = []envVar{
 	{name: "BIGLAW_PUBLIC_URL", def: "http://127.0.0.1:3101", url: true, pr: 8},
 	{name: "BIGLAW_MODEL_URL", url: true, pr: 1}, // the vendor breaker (PR 1) and the model client (PR 2)
 	{name: "BIGLAW_MODEL_KEY", secret: true, pr: 2},
-	{name: "BIGLAW_MODEL_LEAD", pr: 2},
-	{name: "BIGLAW_MODEL_SPECIALIST", pr: 2},
-	{name: "BIGLAW_MODEL_CRITIC", pr: 2},
+	{name: "BIGLAW_MODELS", pr: 3}, // role=model id pairs: lead, specialist, critic, vision, embed
 	{name: "BIGLAW_BUDGET_CALLS", def: "150", pr: 4},
 	{name: "BIGLAW_BUDGET_USD", def: "5", pr: 4},
 	{name: "BIGLAW_LOCAL_WATTS", pr: 2},
@@ -62,7 +60,7 @@ type Config struct {
 	Addr           string
 	ModelURL       string
 	ModelKey       string
-	Roles          model.Roles // read only through roles(), so PR 3's BIGLAW_MODELS is a local change
+	Roles          model.Roles // BIGLAW_MODELS
 	LocalWatts     float64
 	Prices         *model.Prices
 	AllowAnthropic bool
@@ -103,7 +101,7 @@ func Load(getenv func(string) string) (Config, error) {
 	c.Roles, roleErrs = roles(get)
 	errs = append(errs, roleErrs...)
 	if c.ModelURL == "" && (c.ModelKey != "" || c.Roles != (model.Roles{})) {
-		bad("BIGLAW_MODEL_URL", "is required when BIGLAW_MODEL_KEY or a BIGLAW_MODEL_* role is set (the key and models need an endpoint)")
+		bad("BIGLAW_MODEL_URL", "is required when BIGLAW_MODEL_KEY or BIGLAW_MODELS is set (the key and models need an endpoint)")
 	}
 	if strings.ContainsFunc(c.ModelKey, func(r rune) bool { return r <= ' ' || r == 0x7f }) {
 		bad("BIGLAW_MODEL_KEY", "contains white space or a control character (value not shown)")
@@ -121,23 +119,37 @@ func Load(getenv func(string) string) (Config, error) {
 	return c, GuardVendors(c)
 }
 
-// roles reads the model id per role: an unset specialist or critic uses the lead's, so neither may
-// be set without it. Ids are otherwise unchecked: a wrong one fails at its first call (404).
+var roleNames = []model.Role{model.Lead, model.Specialist, model.Critic, model.Vision, model.Embed}
+
+// roles parses BIGLAW_MODELS: comma-separated role=id entries, each role at most once. An unset
+// specialist or critic uses the lead's, so neither may be set without it; vision and embed have no
+// fallback. Ids are otherwise unchecked: a wrong one fails at its first call (404).
 func roles(get func(string) string) (model.Roles, []error) {
-	r := model.Roles{Lead: get("BIGLAW_MODEL_LEAD"), Specialist: get("BIGLAW_MODEL_SPECIALIST"), Critic: get("BIGLAW_MODEL_CRITIC")}
+	ids := map[model.Role]string{}
 	var errs []error
-	if r.Lead == "" && (r.Specialist != "" || r.Critic != "") {
-		errs = append(errs, errors.New("BIGLAW_MODEL_LEAD: is required when BIGLAW_MODEL_SPECIALIST or _CRITIC is set (unset roles fall back to the lead)"))
-	}
-	for _, name := range []string{"BIGLAW_MODEL_LEAD", "BIGLAW_MODEL_SPECIALIST", "BIGLAW_MODEL_CRITIC"} {
-		if id, v := get(name), shown(name, get(name)); v != id || strings.Contains(id, "://") { // ids reach logs raw
-			if v == id {
-				v = "(set, not shown: a URL)"
+	bad := func(format string, a ...any) { errs = append(errs, fmt.Errorf("BIGLAW_MODELS: "+format, a...)) }
+	if v := get("BIGLAW_MODELS"); v != "" {
+		for i, entry := range strings.Split(v, ",") {
+			role, id, _ := strings.Cut(entry, "=")
+			r, id := model.Role(strings.TrimSpace(role)), strings.TrimSpace(id)
+			switch _, dup := ids[r]; {
+			case !slices.Contains(roleNames, r): // the text is not echoed: it may be anything
+				bad("entry %d is not role=<model id> with a role of lead, specialist, critic, vision or embed", i+1)
+			case dup:
+				bad("the %s role is set twice", r)
+			case id == "" || strings.Contains(id, "://") || userinfoShape.MatchString(id) || strings.ContainsAny(id, "?=&") ||
+				strings.ContainsFunc(id, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }): // ids reach logs raw (PR 2 L-1)
+				bad("the %s id is empty or not a model id (a URL, user:password@host, white space, a control character, or ? = &: value not shown)", r)
+			default:
+				ids[r] = id
 			}
-			errs = append(errs, fmt.Errorf("%s: %s is not a model id (a URL, user:password@host, or a control character)", name, v))
 		}
 	}
-	return r, errs
+	rs := model.Roles{Lead: ids[model.Lead], Specialist: ids[model.Specialist], Critic: ids[model.Critic], Vision: ids[model.Vision], Embed: ids[model.Embed]}
+	if rs.Lead == "" && (rs.Specialist != "" || rs.Critic != "") {
+		bad("lead is required when specialist or critic is set (unset roles fall back to the lead)")
+	}
+	return rs, errs
 }
 
 // value is getenv(name) trimmed, or the table default when empty.
@@ -276,6 +288,11 @@ func shown(name, val string) string {
 	case name == "BIGLAW_DATABASE_URL":
 		return store.DescribeDSN(val)
 	case name == "BIGLAW_OIDC_ISSUER" && oidcPreset.MatchString(val):
+		return val
+	case name == "BIGLAW_MODELS":
+		if _, errs := roles(func(string) string { return val }); errs != nil {
+			return "(set, not shown: not lead=<model id>,… with safe ids)"
+		}
 		return val
 	case e.url || strings.Contains(val, "://"):
 		if u := httpURL(val); u != nil {
