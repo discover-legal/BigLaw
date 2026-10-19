@@ -78,12 +78,8 @@ func pageNotes(x *Extraction) (notes []string) {
 // pageList is "1, 2, 3", the first ten pages then "…".
 func pageList(pages []int) string {
 	var s []string
-	for i, p := range pages {
-		if i == 10 {
-			s = append(s, "…")
-			break
-		}
+	for _, p := range pages[:min(10, len(pages))] {
 		s = append(s, strconv.Itoa(p))
 	}
-	return strings.Join(s, ", ")
+	return strings.Join(s, ", ") + map[bool]string{true: ", …"}[len(pages) > 10]
 }

@@ -42,7 +42,7 @@ var (
 	//go:embed vision_prompts.txt
 	prompts                string
 	readPrompts            = strings.Split(strings.TrimSpace(prompts), "\n") // two independent readings; a figure token keeps its separators (1.250 is not 1,250), a hyphenated word its hyphen (third-party, also broken at a line end)
-	markRe, tokenRe        = regexp.MustCompile(`(?i)\[(illegible|blank|unclear)\b[^\]]{0,200}\]|\((illegible|unclear)\)`), regexp.MustCompile(`(?i)\[(?:illegible|blank|unclear)\]|\p{L}+(?:-(?:[ \t]*\r?\n[ \t]*)?\p{L}+)+|[\p{L}\p{N}]+(?:[.,]\p{N}+)*`)
+	markRe, tokenRe, figRe = regexp.MustCompile(`(?i)\[(illegible|blank|unclear)\b[^\]]{0,200}\]|\((illegible|unclear)\)`), regexp.MustCompile(`(?i)\[(?:illegible|blank|unclear)\]|\p{L}+(?:-(?:[ \t]*\r?\n[ \t]*)?\p{L}+)+|[\p{L}\p{N}]+(?:[.,]\p{N}+)*`), regexp.MustCompile(`\p{N}+(?:[.,]\p{N}+)+|[\p{L}\p{N}]+`)
 	fold                   = strings.NewReplacer("ﬁ", "fi", "ﬂ", "fl", "ﬀ", "ff", "ﬃ", "ffi", "ﬄ", "ffl", " ", "", "\t", "", "\r", "", "\n", "") // a token as compared (never the text stored)
 	ErrVisionNotConfigured = errors.New("docs: no vision model is configured (set vision=<model id> in BIGLAW_MODELS): the original is stored with status needs_transcription and is transcribed once one is")
 	ErrUnreliable          = errors.New("docs: transcription unreliable")
@@ -88,10 +88,7 @@ func sniffImage(data []byte) string {
 			return m[1]
 		}
 	}
-	if len(data) >= 12 && string(data[:4]) == "RIFF" && string(data[8:12]) == "WEBP" {
-		return "image/webp"
-	}
-	return ""
+	return map[bool]string{true: "image/webp"}[len(data) >= 12 && string(data[:4]) == "RIFF" && string(data[8:12]) == "WEBP"]
 }
 
 // imageOf is an image file as one page to transcribe (a TIFF cannot be sent: no decoder or model takes it).
@@ -154,6 +151,8 @@ func (s *Service) readScans(ctx context.Context, data []byte, x *Extraction) (er
 			notes = append(notes, fmt.Sprintf("Page %d was not transcribed: %s.", sc.Page, strings.TrimPrefix(err.Error(), "docs: ")))
 		case size > maxText: // a runaway endpoint: stop before holding more
 			return textTooLarge()
+		case text == "" && strings.TrimSpace(pages[sc.Page-1]) != "": // the image read adds nothing to the text layer
+			pages[sc.Page-1], notes = strings.TrimSpace(pages[sc.Page-1]), append(notes, fmt.Sprintf("Page %d: its image was read and adds nothing beyond its text layer.", sc.Page))
 		case text != "": // what the reading adds; the text layer (a stamp, a legend, a short letter) is kept after it
 			p.End = len(text)
 			pages[sc.Page-1], read[sc.Page] = strings.TrimSuffix(text+"\n"+strings.TrimSpace(pages[sc.Page-1]), "\n"), p
@@ -182,13 +181,14 @@ func (s *Service) readScans(ctx context.Context, data []byte, x *Extraction) (er
 	return nil
 }
 
-// beyond is a reading's lines whose words do not run, in order, in the page's text layer, nor (8+) its letters and digits (case, spaces, hyphens ignored): what the image adds.
+// beyond is what the image adds: a reading's lines whose letters and digits (a figure with its separators), joined, are not whole words of the page's text layer joined.
 func beyond(reading, layer string) string {
-	w, _ := tokensOf(layer)
-	key, flat, keep := "\x00"+strings.Join(w, "\x00")+"\x00", strings.Join(wordRe.FindAllString(strings.ToLower(fold.Replace(layer)), -1), ""), []string{}
-	for _, l := range strings.Split(strings.ReplaceAll(reading, "\r", ""), "\n") {
-		w, _ := tokensOf(l)
-		if q := strings.Join(wordRe.FindAllString(strings.ToLower(fold.Replace(l)), -1), ""); len(w) > 0 && !strings.Contains(key, "\x00"+strings.Join(w, "\x00")+"\x00") && (len(q) < 8 || !strings.Contains(flat, q)) {
+	flat, at, keep := "", map[int]bool{0: true}, []string{}
+	for _, w := range figRe.FindAllString(strings.ToLower(layer), -1) {
+		flat, at[len(flat)+len(fold.Replace(w))] = flat+fold.Replace(w), true
+	}
+	for _, l := range strings.Split(strings.NewReplacer("\r\n", "\n", "\r", "\n").Replace(reading), "\n") {
+		if q := fold.Replace(strings.Join(figRe.FindAllString(strings.ToLower(l), -1), "")); q != "" && !slices.ContainsFunc(slices.Collect(maps.Keys(at)), func(i int) bool { return at[i+len(q)] && strings.HasPrefix(flat[i:], q) }) {
 			keep = append(keep, l)
 		}
 	}
@@ -308,9 +308,8 @@ func compare(a, b []string, p *PageRead) (mask []int) {
 		p.Disputed = append(p.Disputed, "(the order of its words: it differs, or the page is too long to compare)")
 	}
 	slices.SortFunc(p.Disputed, marksFirst)
-	if p.Disputed = slices.Compact(p.Disputed); len(p.Disputed) > 12 { // marks, the order flag, figures first: at most 12 are kept
-		p.Disputed = p.Disputed[:12]
-	}
+	p.Disputed = slices.Compact(p.Disputed)
+	p.Disputed = p.Disputed[:min(12, len(p.Disputed))] // marks, the order flag, figures first: at most 12 are kept
 	for i := 0; i < len(a) && marked; i++ {
 		if !in[i] {
 			mask = append(mask, i)

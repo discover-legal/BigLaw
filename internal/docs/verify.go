@@ -139,7 +139,7 @@ func normalize(s string) (string, []int) {
 	return b.String(), append(back, len(s))
 }
 
-var wordRe = regexp.MustCompile(`[\p{L}\p{N}]+`)
+var wordRe, edgeRe = regexp.MustCompile(`[\p{L}\p{N}]+`), regexp.MustCompile(`[\p{L}\p{N}]\x00|\x00[\p{L}\p{N}]`) // edgeRe: a letter or digit next to a quote's copy (marked by NUL)
 
 // bestSpan finds the run of the quote's length in words that holds the largest share of the
 // quote's distinct words (v1 protocols.repairQuote), as byte offsets of text.
@@ -209,8 +209,10 @@ func (s *Service) VerifyQuote(ctx context.Context, scope []string, docID, quote 
 	if err != nil || !v.Verified {
 		return VerifiedQuote{Verification: v}, err
 	}
-	for i := v.Start + 1; v.Method == "exact" && d.Transcript.covers(v.Start, v.End) != nil && strings.Contains(d.Text[i:], quote); i = v.Start + 1 { // a later copy outside the transcript (a text layer's)
-		v.Start, v.End = i+strings.Index(d.Text[i:], quote), i+strings.Index(d.Text[i:], quote)+len(quote)
+	for i := v.Start + 1; v.Method == "exact" && d.Transcript.covers(v.Start, v.End) != nil && strings.Contains(d.Text[i:], quote); i++ { // a later whole-word copy outside the transcript (a text layer's)
+		if i += strings.Index(d.Text[i:], quote); !edgeRe.MatchString(d.Text[max(0, i-4):i] + "\x00" + d.Text[i+len(quote):min(len(d.Text), i+len(quote)+4)]) {
+			v.Start, v.End = i, i+len(quote)
+		}
 	}
 	out, ord := VerifiedQuote{Verification: v}, 0
 	at := utf8.RuneCountInString(d.Text[:v.Start])
