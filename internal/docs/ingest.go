@@ -95,17 +95,17 @@ func New(st *store.Store) *Service {
 	return &Service{st: st, db: st.DB(), slots: make(chan struct{}, ingestSlots), readers: make(chan struct{}, ingestSlots), log: slog.New(slog.DiscardHandler)}
 }
 
-// Extraction is what Extract read from a file. Blank lists the pages with no text layer, or only a
-// stamp (under stampMax characters) beside page images; of those, Scans are images to transcribe (the
-// first maxVisionPages+1 of ScanPages) and Unsupported hold images BigLaw cannot send (scanpdf.go).
+// Extraction is what Extract read from a file. Blank lists the pages with no text layer, or a stamp
+// beside page images (scanpdf.go); of those, Scans are images to transcribe (the first maxVisionPages+1
+// of ScanPages), Unsupported hold images BigLaw cannot send. Imaged: other pages with images (not read).
 type Extraction struct {
-	Text, Method, ContentType string
-	NoText                    bool
-	Pages, ScanPages          int
-	Notes                     []string
-	Blank, Unsupported        []int
-	Scans                     []Scan
-	Transcript                *Transcript `json:"-"` // set by the vision read (vision.go)
+	Text, Method, ContentType  string
+	NoText                     bool
+	Pages, ScanPages           int
+	Notes                      []string
+	Blank, Unsupported, Imaged []int
+	Scans                      []Scan
+	Transcript                 *Transcript `json:"-"` // set by the vision read (vision.go)
 }
 
 const docxType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -204,8 +204,11 @@ func extractPDF(data []byte) (x Extraction, err error) {
 	}
 	x.Text = clean(strings.Join(pages, "\f")) // a form feed between pages
 	for i, p := range pages {
-		sc, bad := pageScan(r, r.Page(i+1), i+1, data)
-		if n := len(strings.TrimSpace(p)); n >= stampMax || n > 0 && !bad && len(sc.Images) == 0 { // a page of text
+		sc, bad, paged := pageScan(r, r.Page(i+1), i+1, data)
+		if n := utf8.RuneCountInString(strings.TrimSpace(p)); n >= stampMax && !(paged && n < 5*stampMax) || n > 0 && !bad && len(sc.Images) == 0 { // a page of text
+			if bad || len(sc.Images) > 0 {
+				x.Imaged = append(x.Imaged, i+1)
+			}
 			continue
 		}
 		if x.Blank = append(x.Blank, i+1); bad {

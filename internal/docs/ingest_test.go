@@ -116,7 +116,8 @@ func dctImage(jpg []byte, filter ...string) string {
 	if len(filter) > 0 {
 		f = filter[0]
 	}
-	return fmt.Sprintf("<< /Type /XObject /Subtype /Image /Width 8 /Height 8 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter %s /Length %d >>\nstream\n%s\nendstream", f, len(jpg), jpg)
+	c, _, _ := image.DecodeConfig(bytes.NewReader(jpg)) // as the JPEG declares it (0×0 when it is not one)
+	return fmt.Sprintf("<< /Type /XObject /Subtype /Image /Width %d /Height %d /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter %s /Length %d >>\nstream\n%s\nendstream", c.Width, c.Height, f, len(jpg), jpg)
 }
 
 // jpegOf is a w×h grey JPEG; seed varies its pixels, so two images differ.

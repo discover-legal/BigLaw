@@ -513,8 +513,12 @@ through the agent's own queries.
 bytes) and scanned PDF pages are sent to the model of the `vision` role in `BIGLAW_MODELS`, as
 base64 `image_url` parts through the same OpenAI-compatible client (every call priced like any
 other). A PDF page is scanned when it has no text layer, **or only a stamp** (under 80 characters of
-text layer, a Bates number or a header, beside a page image, as v1 counted): such a page is read and
-its stamp kept after the transcript, outside the transcript's span (`TestBatesStampedScanTranscribed`).
+text layer, a Bates number or a header, beside a page image, as v1 counted; under 400 beside a JPEG
+of the page's own shape, within 3% of its `/MediaBox`, as a scanner writes it, so a confidentiality
+legend and a Bates number too): such a page is read and its stamp kept after the transcript, outside
+the transcript's span (`TestBatesStampedScanTranscribed`, `TestLongLegendScanTranscribed`). Characters
+are counted, not bytes. Any other page holding images (an OCR'd scan, a logo, a legend beside an image
+of another shape) has only its text layer read, and a note names it (`TestLongLegendScanTranscribed`).
 There is no OCR engine and no rasteriser: a scanned PDF page is read only when it is one to four
 JPEG images stored whole (`/DCTDecode`), which the reader child finds by their offsets in the file
 and the server sends **as they are** (`TestScannedPDFDCTPagesExtracted`: the bytes sent are the
@@ -526,14 +530,20 @@ text layer or stamps such a page is noted as unread and the text stored (a one-l
 with a logo, a CCITT-scanned production with Bates stamps: `TestBatesStampedScanTranscribed`). Every image's header is checked
 (`image.DecodeConfig`; WebP by magic only) before it is stored or sent: a damaged one, or one
 declaring more than 12,000 pixels a side or 50 million in all (a decompression bomb for the model's
-server), is 422 `unreadable` (`TestImageDimensionsCapped`); a page's images may total 20 MiB, at most
+server), is 422 `unreadable` when the document has no text (`TestImageDimensionsCapped`); beside a
+text layer or stamps that page is noted as unread, nothing is sent for it and the text is stored
+(`TestMixedPDFDamagedImageNoted`); a page's images may total 20 MiB, at most
 4 per page (`TestChildScanLimits`). The server re-checks the reader child's answer (pages in range,
 in order, without a text layer; images inside the file and within 20 MiB): `TestServerRechecksChildAnswer`.
 - **Two independent readings.** Each page is read twice, by two different prompts
   (`vision_prompts.txt`; agents `transcribe-a`/`-b`, each at most 4,096 output tokens), each told to
-  write `[illegible]` rather than guess and `[blank]` for a page with no text. Agreement is Dice over
-  the readings' word multisets (case folded, marks left out, a guess inside a mark such as
-  `[illegible: five hundred?]` dropped): below **0.75** the page is refused, 422
+  write `[illegible]` rather than guess and `[blank]` for a page with no text. A reading's words
+  hyphenated across a line break are joined, and ligatures and curly quotes made plain, before the
+  readings are compared, in the text stored too (`TestBenignNoiseNotLow`); a figure is one token with
+  its inner `.` and `,` (so `1.250` is not `1,250`). Agreement is Dice over the readings' word
+  multisets (case folded, marks left out; `[illegible…]`, `[unclear…]`, `[blank…]` and `(illegible)`
+  are marks, and a guess inside one such as `[illegible: five hundred?]`, also across a line break,
+  is dropped): below **0.75** the page is refused, 422
   `transcription_unreliable` for an image or a fully scanned PDF, with nothing stored, no text, no
   chunk, no file (`TestUnreadableImageNotFabricated`: two plausible letters for a noise image); a
   blank reading beside a non-blank one is a disagreement. A stored page is **low confidence** when
@@ -543,15 +553,18 @@ in order, without a text layer; images inside the file and within 20 MiB): `Test
   and the other lacks; 5 or more words one reading lacks (a dropped or garbled line: every differing
   word counts); or the same words in a different order (swapped parties: a word-level LCS; readings
   whose token counts multiply past 4,000,000, about 2,000 words each, are not compared in order and
-  count as different). The page's `disputed` lists those tokens (at most 12: the order flag, figures
-  and marks first) and a note names them (`TestReadingsDisagreeOnWhatMatters`:
+  count as different). The page's `disputed` lists those tokens (at most 12: marks, the order flag
+  and figures first) and a note names them (`TestReadingsDisagreeOnWhatMatters`:
   $12,500 vs $125,000, FS-26-01234 vs FS-26-01284, "shall not assign" vs "shall assign", a dropped
-  line, payer and payee swapped, each in either order; one differing prose word is not low;
+  line, payer and payee swapped, $1.250 vs $1,250 million, 12.500,00 vs 12,500.00, each in either
+  order; one differing prose word is not low;
   `TestAgreementThresholdsPinned`: 0.74 refused, 0.75 stored, 0.889 low, 0.90 not). The first
   reading is kept (the other if it is blank), so which reading's figure is stored is arbitrary, and
-  that is why such a page is low confidence. Wherever the other reading has an `[illegible]` mark,
-  every word of the kept reading that the other lacks becomes `[illegible]`: a mark is never filled
-  in from either reading, also when each marks a different word (`TestIllegibleNeverFilled`,
+  that is why such a page is low confidence. Wherever the other reading has a mark, every word of
+  the kept reading outside the two readings' word alignment (their LCS) becomes `[illegible]`, so
+  the mark stays at its place even when its word repeats on the page (a payee, an amount); pages too
+  long to align mask every occurrence of each word the other reading has fewer of. A mark is never
+  filled in from either reading, also when each marks a different word (`TestIllegibleNeverFilled`,
   `TestIllegibleNeverFilledTwoSided`). An endpoint echoing the request's key into a reading has it
   replaced by `[redacted]` (`TestKeyEchoNeverStored`). Nothing readable on any page is 422
   `no_content` (`TestBlankImageNoContent`); a reading cut at the output limit, or longer than 64 KiB
@@ -590,9 +603,12 @@ in order, without a text layer; images inside the file and within 20 MiB): `Test
   end, `TestServeNeverSendsImagesToTheLead`). A mixed PDF is stored ready with its text layer and a
   note on its unread pages that says to upload it again once a vision role is set: the job does not
   read it later. A vision call's failure on an image or a fully scanned PDF is the model's G6 status
-  (502/503/504) and the upload stores nothing; an image the endpoint rejects (HTTP 400 and other
-  4xx but 401/403/404/408/429: damaged, animated, too large for it) is 422 `unreadable`, not an outage,
-  and is not retried (`TestVisionRefusalIs422`).
+  (502/503/504) and the upload stores nothing; a request the endpoint rejects (HTTP 400 and other
+  4xx but 401/403/404/408/429) is 422 `unreadable`, not an outage, and is not retried; its message
+  says the cause is the image (damaged, animated, too large) **or** the request (a text-only model
+  id, an exhausted account). A waiting document so refused spends one of its 3 attempts and ends the
+  job's run, so one refusal never fails the documents queued behind it (`TestVisionRefusalIs422`:
+  of 3 waiting documents only the first is tried until it fails at its third run).
 - **Reading slots.** A document's extraction holds one of the 2 ingest slots; its vision calls then
   wait for one of 2 reader slots of their own (holding the extracted text, not the file, while they
   wait; the file is read again), so slow or hung vision calls never hold up text, `.docx` or
@@ -1136,8 +1152,21 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     and modals can change meaning (a name, "Applicant" for "Respondent" in place): one such
     substitution alone is not caught. Pages over 2,000 words are not compared in order and are
     always low confidence.
-  - Masking is by multiset, not position: where the other reading has an `[illegible]` mark, every
-    word of the kept reading the other lacks becomes `[illegible]`, including harmless differences.
+  - Masking over-masks: where the other reading has a mark, every word of the kept reading outside
+    the alignment becomes `[illegible]`, including harmless differences and reordered words; on a
+    page too long to align (over about 2,000 words a reading), every occurrence of a word the other
+    reading has fewer of. Joining line-end hyphens also joins a real compound split at a line end
+    ("co-" / "owner" is stored "coowner").
+  - Benign differences still gate a page: on the round-2 verifier's synthetic Ontario order, 7 of 17
+    one-at-a-time harmless variants are low (a page footer, list numbers or cents one reading drops,
+    a signature read as `[illegible]`, a party block's or a date's word order, a court stamp only one
+    reading has; formerly 8, hyphenation now passing), and pairs carrying only formatting noise
+    (reflow, hyphenation, ligatures, quotes, markdown, one letter slip) 0 of 2,000 (formerly 1,042).
+    These are a model of noise, not a measurement of any vision model; low confidence only gates
+    quotes (PR 4b).
+  - A waiting document whose image the endpoint refuses holds the queue for 3 job runs (about 30
+    minutes) before it fails and the next is tried: a refusal cannot tell the image's fault from the
+    request's.
   - A model's **refusal or commentary** ("I can't transcribe this image") is not recognised: if
     both readings phrase it alike they agree, and it is stored as the page's transcript (capped and
     disclosed like any transcript). Telling commentary from text needs a judgement call BigLaw
@@ -1154,7 +1183,9 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     of its scanned pages are transcribed (the note still lists them). TIFF, BMP, HEIC and JPEG 2000
     are not read (no decoder without a dependency). A page with a short text layer and a small
     JPEG (a logo beside a one-line letter) counts as a scan and is read; a page with 80 or more
-    characters of text layer is never read, whatever images it holds.
+    characters of text layer is read only beside a page-shaped JPEG and under 400 characters (an
+    inherited `/MediaBox` is not looked up: such a page needs under 80); otherwise only its text layer
+    is read, with a note.
   - A mixed PDF stored while no vision role is set keeps its scanned pages unread for good: the job
     takes only documents with no text layer; its note says to upload it again.
   - **Images leave the machine** with a hosted vision model, as chat prompts will. Setting a vision
@@ -1189,6 +1220,10 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     are data (`vision_prompts.txt`, not counted, as `prices.json` is). Plan total 15,267–15,297 +
     572 − 310 = **15,529–15,559**: over the then-final 15,500 by 29–59, so it went to the owner, who
     raised the ceiling to 15,600 (decision 11; headroom 41–71, which PR 3e's embed endpoint must fit).
+    Round 2 adds 33 (4,867 → 4,900: `docs/vision.go` +25 for the positional mask `align` replacing
+    `lcs`, figure tokens, marks, line-end hyphens, a damaged page noted in a mixed PDF and the 4xx
+    wording; `docs/scanpdf.go` +5 and `docs/ingest.go` +3 for page-shaped legends and the unread-image
+    note; `docs/jobs.go` 0): plan **15,562–15,592**, headroom 8–38 for PR 3e's 30–40.
 - **Model client (PR 2):**
   - Only `Embed` has a caller yet (documents); `Chat`'s first caller is the agent loop (PR 4a),
     so no real endpoint has been exercised: every test uses `httptest` or

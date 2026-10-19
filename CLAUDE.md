@@ -34,16 +34,16 @@ change. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`, not here.
   lexical only with `EmbedNote`, never fails the ingest), `Backfill`; a document is in the vector
   leg only when `embed_model` (cleared first, set after all its chunks at one length) is the current model.
   PR 3c (`vision.go`, `scanpdf.go`, `jobs.go`): `UseVision` (the `vision` role only; never a text
-  role) transcribes images and PDF pages with no text layer, or only a stamp (< 80 chars, kept after
-  the transcript), whose images are whole JPEG streams (found by offset in the child, sent as they
+  role) transcribes images and PDF pages with no text layer, or only a stamp (< 80 chars, < 400 beside a
+  page-shaped JPEG; kept after the transcript; other pages with images get an unread-image note), whose images are whole JPEG streams (found by offset in the child, sent as they
   are, re-checked in the server, header dimensions capped); two readings per page by two prompts
   (`vision_prompts.txt`), agreement < 0.75 refuses (422 `transcription_unreliable`), < 0.9 is
   `lowConfidence`, and so is any page whose readings differ on what matters (`compare`: a mark, a
   figure, a negation/modal, ≥ 5 words, word order; `PageRead.Disputed`); `[illegible]` is never
-  filled (the kept reading is masked where the other has a mark); a mixed PDF's text-layer pages
+  filled (the kept reading is masked, by position via the LCS `align`, where the other has a mark); a mixed PDF's text-layer pages
   are never touched and its failed pages only noted; `Transcript` provenance on the document (byte
   spans per page, usage whenever a call was made, SQL NULL otherwise), `chunks.transcribed`,
-  citations `…@transcript` capped at `TranscriptCap` 0.85; a 4xx refusal is 422; vision calls run
+  citations `…@transcript` capped at `TranscriptCap` 0.85; a 4xx refusal is 422 (a waiting doc: one attempt, run ends); a damaged image in a doc with text is noted, never refusing it; vision calls run
   in 2 reader slots outside the ingest slots; no vision role → stored `needs_transcription` + 503,
   and `TranscribePending` (leased, serve: startup + every 15 min; stops, config errors, rate limits
   and busy readers spend no attempt) completes it later.
@@ -117,6 +117,6 @@ make lint vuln   # staticcheck, govulncheck (CI lint job)
 # DB tests: BIGLAW_TEST_DSN=postgres://…?sslmode=disable BIGLAW_REQUIRE_DB=1 (Postgres with pgvector)
 make e4-record EMBED_MODEL=…   # owner-run: record the E4 tape at the model's own length (make e4-live: no tape)
 ```
-Budgets: Go prod LOC ≤ 15,600 (owner decision 11; plan 15,529–15,559 after PR 3c, headroom 41–71, PR 3e must fit; test-support packages such as `storetest` count), internal
+Budgets: Go prod LOC ≤ 15,600 (owner decision 11; plan 15,562–15,592 after PR 3c round 2, headroom 8–38, PR 3e must fit; test-support packages such as `storetest` count), internal
 packages ≤ 12 (test-support packages do not count), direct deps ≤ 3, env vars ≤ 20 (18 used), UI runtime
 deps ≤ 2, untested packages 0, longest source file ≤ 2,000 lines.

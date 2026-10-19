@@ -22,8 +22,8 @@ var leaseFor = 40 * time.Minute
 // time under a lease (a job whose server died is taken again when it ends), until none is left or ctx
 // ends. One its reading refuses becomes failed, the reason in its notes. Any other failure ends the
 // run; the document waits for the next with a note: a stop, a wrong model setting, a rate limit or
-// busy readers spend none of its 3 attempts, an outage one (also a claim whose server died, so a
-// fourth claim fails it without a call). Minimal on purpose: PR 4b moves it onto the run lease.
+// busy readers spend none of its 3 attempts, an outage or a 4xx refusal (of the image, or of the model
+// id or account) one, as a claim whose server died does (a fourth fails it). PR 4b moves it onto the run lease.
 func (s *Service) TranscribePending(ctx context.Context) (done, failed int, err error) {
 	for s.vision != nil {
 		var id, fileID string
@@ -47,12 +47,12 @@ func (s *Service) TranscribePending(ctx context.Context) (done, failed int, err 
 		}
 		refused, free, status, note := false, ctx.Err() != nil, "failed", strings.TrimPrefix(err.Error(), "docs: ")
 		for i, kind := range []error{ErrUnreliable, ErrNoContent, ErrScanEncoding, ErrTooManyPages, ErrUnreadable, ErrUnsupported, model.ErrNotConfigured, model.ErrRateLimited, ErrBusy} {
-			refused, free = refused || i < 6 && errors.Is(err, kind), free || i >= 6 && errors.Is(err, kind) // the last 3 say nothing about the document
+			refused, free = refused || i < 6 && errors.Is(err, kind) && !errors.As(err, new(*model.Error)), free || i >= 6 && errors.Is(err, kind) // the last 3 say nothing about the document, nor a refused request
 		}
 		if !refused && (free || attempts < 3) {
 			status, note = "needs_transcription", "Waiting for transcription (its last attempt failed: "+note+"). The original is kept."
 		} else if !refused {
-			note = fmt.Sprintf("Transcription failed %d times (the vision model or the database was unavailable, or the server stopped).", min(attempts, 3))
+			note = fmt.Sprintf("Transcription failed %d times (the vision model or the database was unavailable or refused the request, or the server stopped; the last: %s).", min(attempts, 3), note)
 		}
 		uctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		_, uerr := s.db.ExecContext(uctx, `UPDATE documents SET status = $3, lease_until = NULL, notes = ARRAY[$2::text], attempts = attempts - $4::int

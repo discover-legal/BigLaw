@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -67,6 +68,8 @@ func TestReadingsDisagreeOnWhatMatters(t *testing.T) {
 		"dropped prose line":     {fig + " The parties agree that the landlord keeps the deposit.", fig, "shall pay the Applicant", true, "landlord"},
 		"parties swapped":        {"The Respondent shall pay the Applicant.", "The Applicant shall pay the Respondent.", "shall pay the", true, "(the order of its words"},
 		"one prose word":         {"The colour of the door is blue.", "The color of the door is blue.", "of the door is blue", false, ""},
+		"a separator (r2 M4)":    {"The fund holds $1,250 million.", "The fund holds $1.250 million.", "The fund holds", true, "1.250"},
+		"EU and US figures":      {"Total due: 12,500.00 by Friday.", "Total due: 12.500,00 by Friday.", "Total due", true, "12.500,00"},
 	} {
 		for _, swap := range []bool{false, true} {
 			a, b := page+c.a, page+c.b
@@ -92,9 +95,39 @@ func TestReadingsDisagreeOnWhatMatters(t *testing.T) {
 // TestIllegibleNeverFilledTwoSided (r1 prosecutor M2): when each reading marks a different word
 // [illegible], neither reading's guess for the other's mark is stored, whichever reading is kept; a
 // guess inside a mark ("[illegible: five hundred?]") is neither counted nor stored. Both are low.
+// r2 M1: the mark is masked at its place, even when its word repeats on the page; r2 L3: a guess split
+// by a line break, "(illegible)" and "[unclear]" are marks too; r2 L4: the mark is listed first.
 func TestIllegibleNeverFilledTwoSided(t *testing.T) {
 	t.Parallel()
 	page := strings.Join(filler(44, "w"), " ") + " "
+	for _, c := range [][2]string{ // the reading with the mark is what is stored, whichever is kept
+		{"The Applicant shall pay the Respondent; the Respondent consents.", "The Applicant shall pay the [illegible]; the Respondent consents."},
+		{"Payable: $500 by the tenant. Deposit: $500 held.", "Payable: $[illegible] by the tenant. Deposit: $500 held."},
+		{"Payer: Smith. Payee: Jones. Smith signs.", "Payer: [illegible]. Payee: Jones. Smith signs."},
+		{"the tenant is Smith here", "the tenant is [illegible: Smith\nor Smyth] here"},
+		{"the tenant is Smith here", "the tenant is (illegible) here"},
+		{"the tenant is Smith here", "the tenant is [unclear] here"},
+	} {
+		for _, r := range [][2]string{{c[0], c[1]}, {c[1], c[0]}} {
+			_, d := transcribe(t, page+r[0], page+r[1])
+			want := strings.NewReplacer("[illegible: Smith\nor Smyth]", "[illegible]", "(illegible)", "[illegible]").Replace(c[1])
+			if got := strings.TrimPrefix(d.Text, page); got != want && got != strings.Replace(want, "[unclear]", "[illegible]", 1) || !d.Transcript.LowConfidence {
+				t.Errorf("mark at its place: stored %q, want %q (low %v)", got, want, d.Transcript.LowConfidence)
+			}
+		}
+	}
+	long := strings.Join(filler(2001, "w"), " ") + " " // too long to align (over maxCompare² steps): every place of a word b lacks is masked
+	for _, r := range [][2]string{{"pay the Respondent; the Respondent consents.", "pay the [illegible]; the Respondent consents."}} {
+		for _, o := range [][2]string{r, {r[1], r[0]}} {
+			if _, d := transcribe(t, long+o[0], long+o[1]); strings.Contains(d.Text, "Respondent;") || !d.Transcript.LowConfidence {
+				t.Errorf("a long page: %q", strings.TrimPrefix(d.Text, long))
+			}
+		}
+	}
+	figures := strings.Join(filler(14, "1"), " ") // 14 figures one reading lacks, and a mark
+	if _, d := transcribe(t, page+page+"[illegible] "+figures, page+page+"words"); d.Transcript.Pages[0].Disputed[0] != "[illegible]" {
+		t.Errorf("the mark is listed first: %q", d.Transcript.Pages[0].Disputed)
+	}
 	a, b := page+"the deposit is [illegible] dollars and the rent is due on day 5", page+"the deposit is 9000 dollars and the rent is due on day [illegible] [illegible]"
 	for _, r := range [][2]string{{a, b}, {b, a}} {
 		_, d := transcribe(t, r[0], r[1])
@@ -230,10 +263,10 @@ func TestMixedPDFVisionFailureKeepsTextLayer(t *testing.T) {
 	c := 0.01
 	u := model.Usage{InputTokens: 1000, OutputTokens: 200, CostUSD: &c}
 	for want, replies := range map[string][2]model.Reply{
-		"Page 2 was not transcribed: model call failed":                                                                   {{Err: &model.Error{Kind: model.ErrUnavailable, Detail: "HTTP 502"}}},
-		"Page 2 was not transcribed: model not configured":                                                                {{Err: &model.Error{Kind: model.ErrNotConfigured, Detail: "HTTP 404"}}},
-		"Page 2 was not transcribed: the file could not be read: the vision model refused the image on page 2 (HTTP 400)": {{Err: &model.Error{Kind: model.ErrUnavailable, Detail: "HTTP 400", Status: 400}}},
-		"Page 2 was not transcribed: transcription unreliable":                                                            {{Text: "Signed by the Lessor", Usage: u}, {Text: "Totally different words here now", Usage: u}},
+		"Page 2 was not transcribed: model call failed":                                                                         {{Err: &model.Error{Kind: model.ErrUnavailable, Detail: "HTTP 502"}}},
+		"Page 2 was not transcribed: model not configured":                                                                      {{Err: &model.Error{Kind: model.ErrNotConfigured, Detail: "HTTP 404"}}},
+		"Page 2 was not transcribed: the file could not be read: the vision endpoint refused the request for page 2 (HTTP 400)": {{Err: &model.Error{Kind: model.ErrUnavailable, Detail: "HTTP 400", Status: 400}}},
+		"Page 2 was not transcribed: transcription unreliable":                                                                  {{Text: "Signed by the Lessor", Usage: u}, {Text: "Totally different words here now", Usage: u}},
 	} {
 		s, _ := visionService(t, []model.Reply{replies[0]}, []model.Reply{replies[1]})
 		resp, out := upload(t, serveDocs(t, s).URL, "lease.pdf", data)
@@ -258,9 +291,11 @@ func TestMixedPDFVisionFailureKeepsTextLayer(t *testing.T) {
 	}
 }
 
-// TestVisionRefusalIs422 (r1 reproducer M4, auditor A4): an endpoint that answers HTTP 400 to an image
-// (damaged, animated, too large for it) is 422 unreadable, not a 502 outage, and is not retried; a
-// waiting document it refuses is failed at once. A refusal's spend reaches the operator's log.
+// TestVisionRefusalIs422 (r1 reproducer M4, auditor A4; r2 M3): an endpoint that answers HTTP 400 to an
+// image (damaged, animated, too large for it) is 422 unreadable, not a 502 outage, and is not retried.
+// The 400 may be the request's (a text-only model id, an exhausted account), so a waiting document it
+// refuses spends one of its 3 attempts and ends the run: of 3 waiting documents only the first is
+// tried, and it fails at its third run. A refusal's spend reaches the operator's log.
 func TestVisionRefusalIs422(t *testing.T) {
 	t.Parallel()
 	var calls int
@@ -282,7 +317,7 @@ func TestVisionRefusalIs422(t *testing.T) {
 	resp, out := upload(t, serveDocs(t, s).URL, "anim.gif", pngOf(33))
 	mu.Lock()
 	defer mu.Unlock()
-	if resp.StatusCode != 422 || out["errorType"] != "unreadable" || !strings.Contains(out["error"].(string), "refused the image on page 1 (HTTP 400)") || calls != 1 {
+	if resp.StatusCode != 422 || out["errorType"] != "unreadable" || !strings.Contains(out["error"].(string), "refused the request for page 1 (HTTP 400): the image, or the vision model's id or account") || calls != 1 {
 		t.Errorf("HTTP 400: %d %v after %d calls", resp.StatusCode, out, calls)
 	}
 	mustBeEmpty(t, s)
@@ -291,16 +326,28 @@ func TestVisionRefusalIs422(t *testing.T) {
 		t.Errorf("HTTP 408 is a timeout, not a refusal: %v", err)
 	}
 	waiting := newService(t)
-	pending, _ := waiting.Ingest(t.Context(), "p.png", "image/png", bytes.NewReader(pngOf(34)))
+	var ids []string
+	for i := range 3 {
+		d, _ := waiting.Ingest(t.Context(), fmt.Sprintf("p%d.png", i), "image/png", bytes.NewReader(pngOf(34+i)))
+		ids = append(ids, d.ID)
+	}
 	var logged bytes.Buffer
 	c := 0.004
-	waiting.UseVision(model.NewFake(map[string][]model.Reply{"transcribe-a": {{Err: &model.Error{Kind: model.ErrUnavailable, Detail: "HTTP 400", Status: 400,
-		Usage: &model.Usage{InputTokens: 700, CostUSD: &c}}}}}), "fake-vl", "", slog.New(slog.NewTextHandler(&logged, nil)))
-	if _, failed, err := waiting.TranscribePending(t.Context()); failed != 1 || err != nil {
-		t.Errorf("a refused waiting document: failed %d, %v", failed, err)
+	refuse := model.Reply{Err: &model.Error{Kind: model.ErrUnavailable, Detail: "HTTP 400", Status: 400, Usage: &model.Usage{InputTokens: 700, CostUSD: &c}}}
+	f := model.NewFake(map[string][]model.Reply{"transcribe-a": {refuse, refuse, refuse, refuse}})
+	waiting.UseVision(f, "fake-vl", "", slog.New(slog.NewTextHandler(&logged, nil)))
+	for run, calls := range []int{1, 2, 4} { // the third: the first fails, the second is tried once
+		if _, failed, err := waiting.TranscribePending(t.Context()); failed != run/2 || err == nil || len(f.Calls()) != calls {
+			t.Errorf("run %d: failed %d, %v, %d calls", run+1, failed, err, len(f.Calls()))
+		}
 	}
-	if d, _ := waiting.Get(t.Context(), []string{pending.ID}, pending.ID); d.Status != "failed" || !strings.Contains(d.Notes[0], "refused the image") {
-		t.Errorf("refused job: %+v", d)
+	var attempts []int64
+	waiting.db.QueryRow(`SELECT array_agg(attempts ORDER BY created_at) FROM documents`).Scan(pq.Array(&attempts))
+	for i, id := range ids {
+		d, _ := waiting.Get(t.Context(), []string{id}, id)
+		if want := map[bool]string{true: "failed", false: "needs_transcription"}[i == 0]; d.Status != want || i == 0 && !strings.Contains(d.Notes[0], "refused the request") || !slices.Equal(attempts, []int64{3, 1, 0}) {
+			t.Errorf("document %d: %s %q", i, d.Status, d.Notes)
+		}
 	}
 	if l := logged.String(); !strings.Contains(l, "tokens=700") || !strings.Contains(l, "costUsd=0.004") {
 		t.Errorf("the operator's log: %q", l)
@@ -436,7 +483,8 @@ func TestImageDimensionsCapped(t *testing.T) {
 
 // TestServerRechecksChildAnswer (r1 prosecutor M5, L2): the server does not trust the file reader's
 // scans: an image outside the file, over maxImageBytes on one page, a page out of range or out of
-// order, or a page that has a text layer is 422 before any call.
+// order, or a page that has a text layer (legendMax characters: the server cannot see an image's shape) is
+// 422 before any call.
 func TestServerRechecksChildAnswer(t *testing.T) {
 	t.Parallel()
 	data, im, h := make([]byte, maxImageBytes+64), pngOf(1), maxImageBytes/2 // valid images at 0 and at h: only the bounds are wrong
@@ -450,7 +498,7 @@ func TestServerRechecksChildAnswer(t *testing.T) {
 		"page 0":           {Pages: 1, Blank: []int{1}, Scans: []Scan{{0, [][2]int{{0, n}}}}},
 		"page 2 of 1":      {Pages: 1, Blank: []int{1}, Scans: []Scan{{2, [][2]int{{0, n}}}}},
 		"a page twice":     {Pages: 2, Blank: []int{1, 2}, Text: "\f", Scans: []Scan{{1, [][2]int{{0, n}}}, {1, [][2]int{{h, n}}}}},
-		"a text page":      {Pages: 2, Blank: []int{2}, Text: strings.Repeat("The Lessee shall pay rent. ", 4) + "\f", Scans: []Scan{{1, [][2]int{{0, n}}}}},
+		"a text page":      {Pages: 2, Blank: []int{2}, Text: strings.Repeat("The Lessee shall pay rent. ", 15) + "\f", Scans: []Scan{{1, [][2]int{{0, n}}}}},
 	} {
 		if err := s.readScans(t.Context(), data, &x); !errors.Is(err, ErrUnreadable) || !strings.Contains(err.Error(), "misplaced them") {
 			t.Errorf("%s: %v", name, err)
@@ -490,6 +538,77 @@ func TestChildScanLimits(t *testing.T) {
 		x, err := extractPDF(buildPDF(1, c.page))
 		if err != nil || c.images == 0 && (len(x.Unsupported) != 1 || len(x.Scans) != 0) || c.images > 0 && (len(x.Scans) != 1 || len(x.Scans[0].Images) != c.images) {
 			t.Errorf("%s: %+v %v", name, x.Scans, err)
+		}
+	}
+}
+
+// TestMixedPDFDamagedImageNoted (r2 M2): in a PDF with a text layer, a stamped page whose JPEG is
+// damaged or declares over maxSide pixels is noted as not read and the text layer stored, with or
+// without a vision role, and nothing is sent; a damaged image file alone is 422 called damaged, not a
+// decompression bomb.
+func TestMixedPDFDamagedImageNoted(t *testing.T) {
+	t.Parallel()
+	long := "This page has a real text layer of many words, the body of a signed agreement between the parties. "
+	damaged := append(jpegOf(8, 8, 4)[:20:20], "garbage-not-jpeg-anymore"...)
+	for name, img := range map[string][]byte{"oversize": jpegSized(12001, 8), "damaged": damaged} {
+		for _, vision := range []bool{false, true} {
+			s, f := visionService(t, texts("x y z"), texts("x y z"))
+			if !vision {
+				s = newService(t)
+			}
+			d, err := s.Ingest(t.Context(), "mixed.pdf", "application/pdf", bytes.NewReader(buildPDF(2, pdfPage{Text: long}, pdfPage{Text: "ABC000002", Image: dctImage(img)})))
+			if err != nil || d.Status != "ready" || d.Method != "text_layer" || !strings.Contains(strings.Join(d.Notes, " "), "were not read: page 2") || len(f.Calls()) != 0 {
+				t.Errorf("%s (vision %v): %+v %v, %d calls", name, vision, d, err, len(f.Calls()))
+			}
+		}
+	}
+	s, _ := visionService(t, nil, nil)
+	if _, err := s.Ingest(t.Context(), "scan.jpg", "image/jpeg", bytes.NewReader(damaged)); !errors.Is(err, ErrUnreadable) || !strings.Contains(err.Error(), "page 1 is damaged") || strings.Contains(err.Error(), "bomb") {
+		t.Errorf("a damaged image: %v", err)
+	}
+}
+
+// TestLongLegendScanTranscribed (r2 M5): a scanned production whose text layer is a confidentiality
+// legend over stampMax characters beside a page-shaped JPEG is a scan, transcribed with the legend kept;
+// beside an image that is not page-shaped, or under a page of text (an OCR'd scan), only the text layer
+// is read and the page is noted, never silently complete. stampMax counts characters, not bytes.
+func TestLongLegendScanTranscribed(t *testing.T) {
+	t.Parallel()
+	legend := "HIGHLY CONFIDENTIAL - ATTORNEYS' EYES ONLY - SUBJECT TO PROTECTIVE ORDER  SMITH-000" // 84 characters with its digit
+	scan := func(w, h int, text string) []byte {
+		return buildPDF(2, pdfPage{Text: text + "1", Image: dctImage(jpegOf(w, h, 1))}, pdfPage{Text: text + "2", Image: dctImage(jpegOf(w, h, 2))})
+	}
+	p1, p2 := "The Respondent shall pay the Applicant monthly support", "Signed at Toronto by both parties before a witness"
+	s, f := visionService(t, texts(p1, p2), texts(p1, p2))
+	d, err := s.Ingest(t.Context(), "prod.pdf", "application/pdf", bytes.NewReader(scan(85, 110, legend))) // 612×792 within 3%
+	if err != nil || d.Method != "vision" || len(f.Calls()) != 4 || d.Text != p1+"\n"+legend+"1\f"+p2+"\n"+legend+"2" {
+		t.Errorf("a long legend beside a page scan: %q %v, %d calls", d.Text, err, len(f.Calls()))
+	}
+	ocr := strings.Repeat("The parties agree to every term of this order. ", 9) // 423 characters: a page of OCR text
+	accented := strings.Repeat("\xe9", 78)                                      // é in WinAnsi: with its digit 157 bytes of UTF-8, 79 characters
+	for name, c := range map[string]struct {
+		pdf  []byte
+		read bool
+	}{"logo-shaped": {scan(8, 8, legend), false}, "OCR'd scan": {scan(85, 110, ocr), false}, "accented stamp": {scan(8, 8, accented), true}} {
+		s, f := visionService(t, texts(p1, p2), texts(p1, p2))
+		d, err := s.Ingest(t.Context(), name+".pdf", "application/pdf", bytes.NewReader(c.pdf))
+		if noted := strings.Contains(strings.Join(d.Notes, " "), "Page 1, 2: an image on the page was not read, only its text layer"); err != nil || noted == c.read || (len(f.Calls()) == 4) != c.read {
+			t.Errorf("%s: %q %v, %d calls", name, d.Notes, err, len(f.Calls()))
+		}
+	}
+}
+
+// TestBenignNoiseNotLow (r2 L2): a word hyphenated across a line break, a ligature and curly quotes in
+// one reading are undone before the readings are compared and in the text stored; a parenthetical that
+// starts with "unclear" or a bracket that starts with "blank" is prose, not a mark (red team of L3).
+func TestBenignNoiseNotLow(t *testing.T) {
+	t.Parallel()
+	page := strings.Join(filler(60, "w"), " ") + " "
+	clean := `the home municipally known as 14 Elm Street under the Guidelines, "as filed", the officer's disbursements (unclear from the record) [blanket order]`
+	noisy := "the home munici-\npally known as 14 Elm Street under the Guide-\nlines, “as ﬁled”, the officer’s disburse- \n ments (unclear from the record) [blanket order]"
+	for _, r := range [][2]string{{clean, noisy}, {noisy, clean}} {
+		if _, d := transcribe(t, page+r[0], page+r[1]); d.Transcript.LowConfidence || d.Text != page+clean {
+			t.Errorf("benign noise: low %v %+v, stored %q", d.Transcript.LowConfidence, d.Transcript.Pages, strings.TrimPrefix(d.Text, page))
 		}
 	}
 }
