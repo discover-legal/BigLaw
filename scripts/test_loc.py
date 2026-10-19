@@ -62,7 +62,7 @@ class TestLocBudget(unittest.TestCase):
 
         over = {
             # 15,501 lines in total (a.go's 2 + 7 x 1,937 + 1,940), spread under the per-file cap
-            "go_prod_loc": lambda r: [write(r, f"internal/a/big{i}.go", HEADER + "package a\n" + "// x\n" * (1938 if i == 0 else 1935)) for i in range(8)],
+            "go_prod_loc": lambda r: [write(r, f"internal/a/big{i}.go", HEADER + "package a\n" + "// x\n" * (1940 if i == 0 else 1949)) for i in range(8)],
             "internal_packages": packages,
             "direct_go_deps": lambda r: write(r, "go.mod", "module x\n\ngo 1.25\n\nrequire (\n\ta.example/a v1.0.0\n\tb.example/b v1.0.0\n\tc.example/c v1.0.0 // indirect\n\td.example/d v1.0.0\n)\n\nrequire e.example/e v1.0.0\n"),
             "env_vars": env_vars,
@@ -87,17 +87,17 @@ class TestLocBudget(unittest.TestCase):
                 self.assertTrue(code != 0 and failed, f"{name}: exit {code}\n{out}")
 
     def test_loc_ceiling_boundary(self):
-        """15,500 lines pass, 15,501 fail (owner decision 2026-10-18: ceiling 15,500, declared final)."""
-        root = self.base()  # internal/a/a.go has 2 lines; big0 2 + 1,937, the other seven 2 + 1,935
+        """15,600 lines pass, 15,601 fail (owner decision 11, 2026-10-19: ceiling 15,600)."""
+        root = self.base()  # internal/a/a.go has 2 lines; big0 2 + 1,939, the other seven 2 + 1,949
         for i in range(8):
-            write(root, f"internal/a/big{i}.go", HEADER + "package a\n" + "// x\n" * (1937 if i == 0 else 1935))
+            write(root, f"internal/a/big{i}.go", HEADER + "package a\n" + "// x\n" * (1939 if i == 0 else 1949))
         code, out = run(root)
         self.assertEqual(code, 0, out)
-        self.assertIn("go_prod_loc           15500 / 15500   ok", out)
-        write(root, "internal/a/big0.go", HEADER + "package a\n" + "// x\n" * 1938)
+        self.assertIn("go_prod_loc           15600 / 15600   ok", out)
+        write(root, "internal/a/big0.go", HEADER + "package a\n" + "// x\n" * 1940)
         code, out = run(root)
         self.assertNotEqual(code, 0, out)
-        self.assertIn("go_prod_loc           15501 / 15500   OVER", out)
+        self.assertIn("go_prod_loc           15601 / 15600   OVER", out)
 
     def test_support_packages_count_lines_not_packages(self):
         """Coordinator ruling: a *test package no production code imports is out of the

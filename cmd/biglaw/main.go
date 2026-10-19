@@ -136,7 +136,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, environ
 				d.UseEmbedder(client, cfg.Roles.Embed)
 			}
 			if cfg.Roles.Vision != "" { // images go to this role only, never to a text model
-				d.UseVision(client, cfg.Roles.Vision)
+				d.UseVision(client, cfg.Roles.Vision, cfg.ModelKey, log)
 			}
 		}
 		if err := serve(ctx, st, d, ln, log); err != nil {

@@ -510,67 +510,110 @@ printed beside the gate figure and the gate is not moved for it. Gate A (PR 4b) 
 through the agent's own queries.
 
 **Vision transcription (PR 3c; DESIGN revision 5 § 4).** Images (PNG, JPEG, GIF, WebP, by magic
-bytes) and PDF pages that have no text layer are sent to the model of the `vision` role in
-`BIGLAW_MODELS`, as base64 `image_url` parts through the same OpenAI-compatible client (every call
-priced like any other). There is no OCR engine and no rasteriser: a scanned PDF page is read only
-when it is one to four JPEG images stored whole (`/DCTDecode`), which the reader child finds by
-their offsets in the file and the server sends **as they are** (`TestScannedPDFDCTPagesExtracted`:
-the bytes sent are the embedded JPEGs). A page whose images use another encoding (CCITT fax, JBIG2,
-Flate bitmaps, a JPEG under a second filter), a form XObject, an encrypted PDF, or a TIFF image is
-422 `scan_encoding_unsupported`, with advice to export as JPEG or from a phone scanner app
-(`TestScanEncodingUnsupportedTyped`). Every image's header is checked (`image.DecodeConfig`; WebP
-by magic only) before it is stored or sent, so a damaged one is 422 `unreadable`; a page's images
-may total 20 MiB.
+bytes) and scanned PDF pages are sent to the model of the `vision` role in `BIGLAW_MODELS`, as
+base64 `image_url` parts through the same OpenAI-compatible client (every call priced like any
+other). A PDF page is scanned when it has no text layer, **or only a stamp** (under 80 characters of
+text layer, a Bates number or a header, beside a page image, as v1 counted): such a page is read and
+its stamp kept after the transcript, outside the transcript's span (`TestBatesStampedScanTranscribed`).
+There is no OCR engine and no rasteriser: a scanned PDF page is read only when it is one to four
+JPEG images stored whole (`/DCTDecode`), which the reader child finds by their offsets in the file
+and the server sends **as they are** (`TestScannedPDFDCTPagesExtracted`: the bytes sent are the
+embedded JPEGs). A page whose images use another encoding (CCITT fax, JBIG2, Flate bitmaps, a JPEG
+under a second filter), a form XObject, an encrypted PDF, a JPEG stream whose `/Length` is wrong, or
+a TIFF image is 422 `scan_encoding_unsupported`, with advice to export as JPEG or from a phone
+scanner app, when the document has no text at all (`TestScanEncodingUnsupportedTyped`); beside a
+text layer or stamps such a page is noted as unread and the text stored (a one-line cover letter
+with a logo, a CCITT-scanned production with Bates stamps: `TestBatesStampedScanTranscribed`). Every image's header is checked
+(`image.DecodeConfig`; WebP by magic only) before it is stored or sent: a damaged one, or one
+declaring more than 12,000 pixels a side or 50 million in all (a decompression bomb for the model's
+server), is 422 `unreadable` (`TestImageDimensionsCapped`); a page's images may total 20 MiB, at most
+4 per page (`TestChildScanLimits`). The server re-checks the reader child's answer (pages in range,
+in order, without a text layer; images inside the file and within 20 MiB): `TestServerRechecksChildAnswer`.
 - **Two independent readings.** Each page is read twice, by two different prompts
-  (`vision_prompts.txt`; agents `transcribe-a`/`-b`), each told to write `[illegible]` rather than
-  guess and `[blank]` for a page with no text. The readings are compared on their words (case
-  folded, the marks left out; Dice over word multisets): below **0.75** the upload is 422
-  `transcription_unreliable` and nothing is stored, no text, no chunk, no file
-  (`TestUnreadableImageNotFabricated`: two plausible letters for a noise image); from 0.75 to 0.9
-  the page is stored as **low confidence**; a blank reading beside a non-blank one is a
-  disagreement. The reading with more `[illegible]` marks is the one stored, so a mark is never
-  filled in from the other reading (`TestIllegibleNeverFilled`). Nothing readable on any page is
-  422 `no_content` (`TestBlankImageNoContent`); an answer cut at the output limit (8,192 tokens) is
-  422 `transcription_unreliable`, never a silently short page. More than **20** scanned pages is
-  413 `too_many_pages` before any call (`TestTooManyPages413`). All of one document's vision calls
-  stop after 10 minutes, and their text after 16 MiB (`TestVisionFailuresTyped`).
-- **A mixed PDF keeps its text layer.** Only pages with no text are read; each transcript goes in
+  (`vision_prompts.txt`; agents `transcribe-a`/`-b`, each at most 4,096 output tokens), each told to
+  write `[illegible]` rather than guess and `[blank]` for a page with no text. Agreement is Dice over
+  the readings' word multisets (case folded, marks left out, a guess inside a mark such as
+  `[illegible: five hundred?]` dropped): below **0.75** the page is refused, 422
+  `transcription_unreliable` for an image or a fully scanned PDF, with nothing stored, no text, no
+  chunk, no file (`TestUnreadableImageNotFabricated`: two plausible letters for a noise image); a
+  blank reading beside a non-blank one is a disagreement. A stored page is **low confidence** when
+  its agreement is below **0.9**, **or**, however high its agreement, when the readings differ on what
+  matters: any `[illegible]` mark in either reading; a figure (a token with a digit), a negation or
+  modal (`not`, `no`, `nor`, `never`, `n't`, `cannot`, `shall`, `may`, `must`, `will`) one reading has
+  and the other lacks; 5 or more words one reading lacks (a dropped or garbled line: every differing
+  word counts); or the same words in a different order (swapped parties: a word-level LCS; readings
+  whose token counts multiply past 4,000,000, about 2,000 words each, are not compared in order and
+  count as different). The page's `disputed` lists those tokens (at most 12: the order flag, figures
+  and marks first) and a note names them (`TestReadingsDisagreeOnWhatMatters`:
+  $12,500 vs $125,000, FS-26-01234 vs FS-26-01284, "shall not assign" vs "shall assign", a dropped
+  line, payer and payee swapped, each in either order; one differing prose word is not low;
+  `TestAgreementThresholdsPinned`: 0.74 refused, 0.75 stored, 0.889 low, 0.90 not). The first
+  reading is kept (the other if it is blank), so which reading's figure is stored is arbitrary, and
+  that is why such a page is low confidence. Wherever the other reading has an `[illegible]` mark,
+  every word of the kept reading that the other lacks becomes `[illegible]`: a mark is never filled
+  in from either reading, also when each marks a different word (`TestIllegibleNeverFilled`,
+  `TestIllegibleNeverFilledTwoSided`). An endpoint echoing the request's key into a reading has it
+  replaced by `[redacted]` (`TestKeyEchoNeverStored`). Nothing readable on any page is 422
+  `no_content` (`TestBlankImageNoContent`); a reading cut at the output limit, or longer than 64 KiB
+  (16 bytes per token asked for), is 422 `transcription_unreliable`, never a silently short page.
+  More than **20** scanned pages is 413 `too_many_pages` before any call (`TestTooManyPages413`). All
+  of one document's vision calls stop after 10 minutes, and its text, counted over all its pages,
+  after 16 MiB (`TestVisionFailuresTyped`, `TestTextCapCumulative`). Notes round agreement down.
+- **A mixed PDF keeps its text layer.** Only its scanned pages are read; each transcript goes in
   its page's place and every text-layer page stays byte for byte (`TestMixedPDFTextLayerNotRewritten`:
-  the vision model "reading" different words for them changes nothing). A page there whose
-  readings disagree, or past the first 20 scanned pages, is left unread with a note, and the text
-  layer is still stored (v1's model merge of the two is dropped).
+  the vision model "reading" different words for them changes nothing). A page there that cannot be
+  read (its readings disagree, its vision call fails or is refused, or it is past the first 20
+  scanned pages) is left unread with a note naming why, and the text layer is still stored, 201
+  (`TestMixedPDFVisionFailureKeepsTextLayer`; v1's model merge of the two is dropped).
 - **Provenance.** A document's `transcript` names the model, each transcribed page with its byte
-  span in the text and its agreement, the least agreement, `lowConfidence`, `transcribedAt`, and
-  the calls' `tokens` and `costUsd` (null when the model is unpriced); `method` is `vision` (a mixed
-  PDF stays `text_layer`, its `transcript` listing the transcribed pages); a note names the model
-  and says to check quotes against the original, which is kept and downloadable. Each chunk that
-  overlaps a transcribed page is marked `transcribed` (search hits say so).
+  span in the text, its agreement and `disputed` tokens, the least agreement, `lowConfidence`,
+  `transcribedAt`, and the calls' `tokens` and `costUsd` (null when the model is unpriced), recorded
+  whenever a vision call was made, also when no page could be transcribed (it is SQL `NULL` only
+  when nothing was sent); `method` is `vision` (a mixed PDF stays `text_layer`, its `transcript`
+  listing the transcribed pages); a note names the model and says to check quotes against the
+  original, which is kept and downloadable. Each chunk that overlaps a transcribed page is marked
+  `transcribed` (search hits say so). An upload refused after its vision calls stores nothing, so
+  their tokens and cost go to the operator's log (`TestVisionRefusalIs422`).
 - **Citations into a transcript** (`VerifyQuote`): the method gets `@transcript`
   (`exact@transcript`, `tolerant@transcript`, `judge@transcript`, …), the confidence is capped at
   **0.85** (below text-exact 1.0 and tolerant 0.95, above the judge's 0.8), the result names the
   model (`transcribedBy`) with the note "machine transcription of an image (model): check against
-  the original", and `lowConfidence` is set when the match touches a page whose readings agreed
-  less than 0.9: per quote, so a finding resting on a good page is not flagged
+  the original", and `lowConfidence` is set when the match touches a low-confidence page: per
+  quote, so a finding resting on a good page is not flagged
   (`TestTranscriptCitationCappedAndDisclosed`, `TestLowAgreementFindingsGatedIndividually`; PR 4b's
   gate acts on the flag).
-- **No vision role.** An image or a fully scanned PDF is stored with `status: needs_transcription`
-  (no text, `noText: true`, a note) and the upload is **503 `vision_not_configured`** with the
-  document; the original is kept (`TestVisionNotConfiguredTyped503KeepsOriginal`,
-  `TestExtractImageWithoutVisionDegrades`). Nothing is sent to any model: no text role is ever used
-  for images (`TestTextModelNeverSentImages`; end to end, `TestServeNeverSendsImagesToTheLead`). A
-  mixed PDF is stored with its text layer and a note on its unread pages. Failures of a vision call
-  are the model's G6 status (502/503/504), and the upload stores nothing.
+- **No vision role.** An image or a fully scanned PDF (stamps included) is stored with
+  `status: needs_transcription` (no text beyond its stamps, a note) and the upload is **503
+  `vision_not_configured`** with the document; the original is kept
+  (`TestVisionNotConfiguredTyped503KeepsOriginal`, `TestExtractImageWithoutVisionDegrades`). Nothing
+  is sent to any model: no text role is ever used for images (`TestTextModelNeverSentImages`; end to
+  end, `TestServeNeverSendsImagesToTheLead`). A mixed PDF is stored ready with its text layer and a
+  note on its unread pages that says to upload it again once a vision role is set: the job does not
+  read it later. A vision call's failure on an image or a fully scanned PDF is the model's G6 status
+  (502/503/504) and the upload stores nothing; an image the endpoint rejects (HTTP 400 and other
+  4xx but 401/403/404/408/429: damaged, animated, too large for it) is 422 `unreadable`, not an outage,
+  and is not retried (`TestVisionRefusalIs422`).
+- **Reading slots.** A document's extraction holds one of the 2 ingest slots; its vision calls then
+  wait for one of 2 reader slots of their own (holding the extracted text, not the file, while they
+  wait; the file is read again), so slow or hung vision calls never hold up text, `.docx` or
+  text-layer PDF uploads (`TestVisionCallsDoNotHoldIngestSlots`). Each wait is bounded by 10 minutes
+  (503 `busy`).
 - **Transcription jobs** (`jobs.go`). With a vision role set, `serve` transcribes waiting
-  documents at startup and every 15 minutes, oldest first, one at a time, each under a 30-minute
+  documents at startup and every 15 minutes, oldest first, one at a time, each under a 40-minute
   lease in the database (two servers never take the same one; one whose server died mid-job is
   taken again when its lease ends), completing it under its own id with its original file. One its
-  reading refuses (unreliable, no content, unsupported, too many pages, damaged) becomes
-  `status: failed` with the reason as its note; a model or database failure ends that run and the
-  document is retried at the next one, then failed after its third attempt; a document whose
-  server died during three attempts (an OOM kill, say) is failed at its fourth claim without a
-  call, not retried forever (`TestTranscriptionJobResumesAfterRestart`). The run logs how many it transcribed and failed.
-  The contract v1 fields (`POST /documents` with `content` + `contentType` → 202 `transcribing`,
-  `GET /health` `capabilities`) are PR 8's (PLAN PR 8), not built here.
+  reading refuses (unreliable, no content, unsupported, too many pages, damaged, rejected by the
+  model) becomes `status: failed` with the reason as its note. Any other failure ends that run and
+  releases the lease, and the document waits for the next run with a note saying why: a stop
+  (SIGTERM), a wrong model setting (401/403/404 `model_not_configured`), a rate limit or busy reader
+  slots spend none of its attempts (`TestJobConfigErrorSpendsNoAttempt`); an outage (or a database
+  failure) spends one, and the third fails it; a document whose server died during three attempts
+  (an OOM kill, say) is failed at its fourth claim without a call, not retried forever
+  (`TestTranscriptionJobResumesAfterRestart`). The run logs how many it transcribed and failed. The
+  operator re-queues failed documents (after fixing the model setting, say) with
+  `UPDATE documents SET status = 'needs_transcription', attempts = 0, lease_until = NULL, notes = ARRAY['Waiting for transcription (re-queued by the operator). The original is kept.'] WHERE status = 'failed'`
+  (in `psql`; tested verbatim). The contract v1 fields (`POST /documents` with `content` +
+  `contentType` → 202 `transcribing`, `GET /health` `capabilities`) are PR 8's (PLAN PR 8), not built here.
 - **Live check (owner, no key here).** Every test runs on `model.Fake` or `httptest`. With a vision
   model on an OpenAI-compatible endpoint:
   ```bash
@@ -642,7 +685,7 @@ removes a document with its sections, chunks and original file in one statement;
 document or its file in any other way (SQL, a later cascade) takes the other along: a trigger and a
 cascade (`TestFileDeletedWithDocument`). A file left without a document by a server that died
 mid-ingest is deleted at the next `serve` start once it is an hour old (`TestOrphanFilesSwept`);
-no live upload is that old (15 minutes to upload + 10 to wait for a slot + 2 to read + 10 for the vision calls). A stop
+no live upload is that old (15 minutes to upload + 10 to wait for a slot + 2 to read + 10 to wait for a reader + 10 for the vision calls). A stop
 (SIGTERM) waits 10 s for requests in flight, then cancels them: an ingest still running answers
 503 `stopping` and removes its file, `serve` exits 0 with a warning, and connections still open
 after another 10 s are closed (`TestServeStopCancelsIngest`).
@@ -848,7 +891,7 @@ transcribe, never text).
 
 | Budget | Ceiling | Today |
 |---|---:|---:|
-| Go production lines (physical lines, non-`_test.go`, test-support packages included) | 15,500 | 4,777 |
+| Go production lines (physical lines, non-`_test.go`, test-support packages included) | 15,600 | 4,867 |
 | Packages under `internal/`, test-support packages excluded | 12 | 4 (`docs`, `docs/ooxml`, `model`, `store`; `store/storetest` is test support) |
 | Direct Go dependencies | 3 | 2 (`github.com/lib/pq`, `github.com/ledongthuc/pdf`) |
 | Runtime environment variables | 20 | 18 |
@@ -856,7 +899,7 @@ transcribe, never text).
 | Packages without a `_test.go` | 0 | 0 |
 | Lines in any one source file (`.go`, `.py`, `.sql`, `.sh`, `.js`, `.ts`, `.css`; tests included) | 2,000 | 634 |
 
-The line ceiling is 15,500, declared final (owner decisions: 14,000, then 14,250, then 14,500 during PR 2's review, then 15,000 at PR 3a's, with pgvector, then 15,500 at PR 3a's round 3, with no further rises). A **test-support package** is one
+The line ceiling is 15,600 (owner decisions: 14,000, then 14,250, then 14,500 during PR 2's review, then 15,000 at PR 3a's, with pgvector, then 15,500 at PR 3a's round 3, declared final, then 15,600 at PR 3c's round 1, decision 11). The plan totals 15,529–15,559 after PR 3c, headroom 41–71; PR 3e (an embed endpoint, about 30–40 lines) is next and must fit. A **test-support package** is one
 whose directory name ends in `test` and that no production file outside it imports, such as
 `storetest`. Under the coordinator's ruling it is left out of the package count, but its lines
 count toward the line ceiling like any other non-`_test.go` file. A `*test` package that
@@ -1079,18 +1122,28 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     (pgvector's limit) is refused.
 - **Vision transcription (PR 3c):**
   - **No vision model has been run.** There is no vision key in the build environment: every test
-    uses `model.Fake` or `httptest`, so the prompts, the 0.75/0.9 thresholds and the 8,192-token
-    output cap are not calibrated on any real model (owner's live check: § Vision transcription).
-  - Agreement compares the readings' words as **multisets**: two readings with the same words in
-    a different order agree fully, and two models that make the same mistake agree. It is a check
-    against invention, not proof of accuracy; the citation cap and the "check against the
-    original" note say so to the reader.
+    uses `model.Fake` or `httptest`, so the prompts, the 0.75/0.9 thresholds, the disagreement rule
+    and the 4,096-token output cap are not calibrated on any real model (owner's live check:
+    § Vision transcription).
+  - Agreement and the disagreement rule are checks against invention, not proof of accuracy: two
+    readings that make the **same** mistake (the same misread figure) agree and are stored at normal
+    confidence. Where the readings differ on a figure, a negation or modal, a dropped line or word
+    order, the page is low confidence and one reading's version is stored (the first), not a merge:
+    the note and `disputed` name what the other reading said differently, and PR 4b's gate must
+    route such quotes to a person. The rule is conservative: any 5 differing words, or any word
+    order difference (two columns read in another order), make a page low confidence, so a long
+    page with harmless differences is gated too. Words other than figures and the listed negations
+    and modals can change meaning (a name, "Applicant" for "Respondent" in place): one such
+    substitution alone is not caught. Pages over 2,000 words are not compared in order and are
+    always low confidence.
+  - Masking is by multiset, not position: where the other reading has an `[illegible]` mark, every
+    word of the kept reading the other lacks becomes `[illegible]`, including harmless differences.
   - A model's **refusal or commentary** ("I can't transcribe this image") is not recognised: if
     both readings phrase it alike they agree, and it is stored as the page's transcript (capped and
     disclosed like any transcript). Telling commentary from text needs a judgement call BigLaw
     does not make here.
   - A WebP image is checked by its magic bytes only (no decoder in the standard library), so a
-    damaged one is stored or sent and fails at the model instead (502, or disagreeing readings).
+    damaged one is stored or sent and fails at the model instead (422 when it answers 4xx).
   - **Prompt injection:** text in an image is read by the model like any instruction. A page that
     tells the model to write something else can be obeyed by both readings, which then agree; the
     result is stored as a machine transcription (capped, disclosed), never as text-layer truth, and
@@ -1099,32 +1152,43 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     images inside form XObjects, and pages drawn as vector paths read as blank or unsupported. A PDF
     page with a form feed inside its text layer makes a mixed PDF's pages unplaceable, and then none
     of its scanned pages are transcribed (the note still lists them). TIFF, BMP, HEIC and JPEG 2000
-    are not read (no decoder without a dependency).
+    are not read (no decoder without a dependency). A page with a short text layer and a small
+    JPEG (a logo beside a one-line letter) counts as a scan and is read; a page with 80 or more
+    characters of text layer is never read, whatever images it holds.
+  - A mixed PDF stored while no vision role is set keeps its scanned pages unread for good: the job
+    takes only documents with no text layer; its note says to upload it again.
   - **Images leave the machine** with a hosted vision model, as chat prompts will. Setting a vision
     role for the first time also sends every waiting document to it (the startup job run).
   - Until PR 8 there is no auth or quota: anyone who can reach the port can make the server pay for
-    up to 40 vision calls per upload (20 pages × 2 readings), each up to 8,192 output tokens plus
-    its image: at most 327,680 output tokens, $2.10 at `qwen-vl-max`'s output rate ($6.40/M), $3.28
+    up to 40 vision calls per upload (20 pages × 2 readings), each up to 4,096 output tokens plus
+    its image: at most 163,840 output tokens, $1.05 at `qwen-vl-max`'s output rate ($6.40/M), $1.64
     at `gpt-4o`'s ($10/M), before image input.
   - The calls of a refused transcription (422, or a model failure) are priced by the client but
-    recorded nowhere except the error text's token count (the document is not stored); a job's
-    are recorded only on success, in its `transcript`. PR 4a's ledger charges tasks.
-  - One page's two readings run one after the other, so a document takes up to 40 sequential calls
-    (bounded at 10 minutes in all, then 504 `model_timeout`);
-    the vision calls run inside the ingest slot, so two slow scans hold both slots meanwhile.
-    Memory per vision ingest: the file plus one page's images about three times over (base64 and
-    the JSON request), at most about 64 + 3 × 20 MiB.
+    stored nowhere (the document is not stored): the operator's log line carries their tokens and
+    cost; a failed job's are in the same log. PR 4a's ledger charges tasks.
+  - **An upload's vision read runs on its request** (DESIGN put it in the leased job; the async
+    202 path is PR 8's, PLAN PR 8): the client must keep the connection open for the whole read (up
+    to 40 sequential calls, bounded at 10 minutes, then 504 `model_timeout`). A client or proxy
+    timeout below that (a reverse proxy's 60 s default) cancels the upload, deletes the file and
+    discards the calls already paid; a retry pays again.
+  - Memory per vision ingest: the file plus one page's images about three times over (base64 and
+    the JSON request), at most about 64 + 3 × 20 MiB, for each of the 2 reader slots; a document
+    waiting for a reader holds its extracted text (≤ 16 MiB). Images near the 20 MiB cap exceed
+    some providers' own limits (OpenAI's 20 MB per image after base64): those are 422 when the
+    endpoint answers 4xx.
   - The job runs every 15 minutes and at startup, not when a role changes while serving (a role
-    change needs a restart anyway); a failed document stays failed (delete and upload again).
-    `lowConfidence` is only a flag until PR 4b's gate acts on it.
-  - **Line budget:** PR 3c adds 482 production lines (4,295 → 4,777) against DESIGN's 310 for it
-    (`docs` 300 + `cmd` 10; the `model` image parts landed in PR 2 and contract v1's `api` 40 is PR 8's):
-    **172 over**. Per file: `docs/vision.go` 255, `docs/scanpdf.go` 79 (with the page-note
-    helpers moved out of `ingest.go`), `docs/jobs.go` 66, `docs/ingest.go` +34 net, `docs/verify.go`
-    +10, `docs/http.go` +9 net, `docs/embed.go` +9 (the lexical-only count), `docs/search.go` +2,
-    `cmd/biglaw/main.go` +18. The prompts are data (`vision_prompts.txt`, not counted, as
-    `prices.json` is). Plan total 15,267–15,297 + 482 − 310 = **15,439–15,469, under the final
-    15,500 ceiling by 31–61** (DESIGN § PR 3c as built; a decision for the coordinator).
+    change needs a restart anyway); a failed document stays failed until the operator re-queues
+    it (the SQL above). `lowConfidence` is only a flag until PR 4b's gate acts on it.
+  - **Line budget:** PR 3c adds 572 production lines (4,295 → 4,867: 482 as built, then 90 in
+    the round-1 fixes) against DESIGN's 310 for it (`docs` 300 + `cmd` 10; the `model` image parts
+    landed in PR 2 and contract v1's `api` 40 is PR 8's): **262 over**. Round 1 per file:
+    `docs/vision.go` +68 (the disagreement rule `compare`/`diff`/`lcs` with masking, the 4xx
+    refusal, the key scrub, the dimension cap, mixed-PDF failure notes, usage always recorded, the
+    refused-spend log), `docs/ingest.go` +17 (reader slots, stamped scan pages, SQL `NULL`),
+    `docs/jobs.go` +2, `docs/child.go` +1, `docs/scanpdf.go` +1, `model/errors.go` +1. The prompts
+    are data (`vision_prompts.txt`, not counted, as `prices.json` is). Plan total 15,267–15,297 +
+    572 − 310 = **15,529–15,559**: over the then-final 15,500 by 29–59, so it went to the owner, who
+    raised the ceiling to 15,600 (decision 11; headroom 41–71, which PR 3e's embed endpoint must fit).
 - **Model client (PR 2):**
   - Only `Embed` has a caller yet (documents); `Chat`'s first caller is the agent loop (PR 4a),
     so no real endpoint has been exercised: every test uses `httptest` or

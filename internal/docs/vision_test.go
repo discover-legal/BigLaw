@@ -35,7 +35,7 @@ func visionService(t *testing.T, a, b []model.Reply) (*Service, *model.Fake) {
 	t.Helper()
 	s := newService(t)
 	f := model.NewFake(map[string][]model.Reply{"transcribe-a": a, "transcribe-b": b})
-	s.UseVision(f, "fake-vl")
+	s.UseVision(f, "fake-vl", "", nil)
 	return s, f
 }
 
@@ -145,7 +145,7 @@ func TestUnreadableImageNotFabricated(t *testing.T) {
 	s, f := visionService(t, texts("Dear Mr Smith, your lease of Unit 4 ends on 1 May 2026. Yours, J. Ortiz"),
 		texts("To whom it may concern: payment of the invoice is overdue by thirty days. Regards, Accounts"))
 	resp, out := upload(t, serveDocs(t, s).URL, "noise.png", pngOf(3))
-	if resp.StatusCode != 422 || out["errorType"] != "transcription_unreliable" || !strings.Contains(out["error"].(string), "nothing was stored") {
+	if resp.StatusCode != 422 || out["errorType"] != "transcription_unreliable" || !strings.Contains(out["error"].(string), "agree on 12% of their words (75% is needed)") {
 		t.Errorf("noise image: %d %v", resp.StatusCode, out)
 	}
 	mustBeEmpty(t, s)
@@ -208,7 +208,7 @@ func TestTranscriptCitationCappedAndDisclosed(t *testing.T) {
 	scope := []string{d.ID}
 	for quote, method := range map[string]string{"ends on 30 June 2026": "exact@transcript", "ENDS ON  30 june 2026": "tolerant@transcript"} {
 		v, err := s.VerifyQuote(t.Context(), scope, d.ID, quote, nil)
-		if err != nil || !v.Verified || v.Method != method || v.Confidence != TranscriptCap || v.TranscribedBy != "fake-vl" || v.LowConfidence ||
+		if err != nil || !v.Verified || v.Method != method || v.Confidence != 0.85 || v.TranscribedBy != "fake-vl" || v.LowConfidence ||
 			!strings.Contains(v.Note, "check against the original") {
 			t.Errorf("%q: %+v %v", quote, v, err)
 		}
@@ -351,7 +351,7 @@ func TestMixedPDFTextLayerNotRewritten(t *testing.T) {
 	}
 	s2, _ := visionService(t, texts("Signed by the Lessor"), texts("Totally different words here now"))
 	d2, err := s2.Ingest(t.Context(), "lease2.pdf", "application/pdf", bytes.NewReader(data))
-	if err != nil || d2.Text != plain.Text || d2.Transcript != nil || !strings.Contains(strings.Join(d2.Notes, " "), "disagreed") {
+	if err != nil || d2.Text != plain.Text || d2.Transcript == nil || len(d2.Transcript.Pages) != 0 || !strings.Contains(strings.Join(d2.Notes, " "), "Page 2 was not transcribed: transcription unreliable") {
 		t.Errorf("an unreliable page of a mixed PDF is noted, the text layer kept: %+v %v", d2, err)
 	}
 }
@@ -383,22 +383,29 @@ func TestTranscriptionJobResumesAfterRestart(t *testing.T) {
 	}
 	killed := New(s.st)
 	bc := blockingChat{make(chan struct{})}
-	killed.UseVision(bc, "fake-vl")
+	killed.UseVision(bc, "fake-vl", "", nil)
 	ctx, kill := context.WithCancel(t.Context())
 	go func() { <-bc.started; kill() }()
 	if _, _, err := killed.TranscribePending(ctx); !errors.Is(err, context.Canceled) {
-		t.Fatalf("killed job: %v", err)
+		t.Fatalf("stopped job: %v", err)
 	}
 	var status string
 	var leased bool
-	s.db.QueryRow(`SELECT status, lease_until > now() FROM documents WHERE id = $1`, pending.ID).Scan(&status, &leased)
-	if status != "needs_transcription" || !leased {
-		t.Fatalf("after the kill: %s leased=%v", status, leased)
+	var attempts int
+	state := func() {
+		s.db.QueryRow(`SELECT status, coalesce(lease_until > now(), false), attempts FROM documents WHERE id = $1`, pending.ID).Scan(&status, &leased, &attempts)
 	}
+	// A stop (SIGTERM, a deploy) says nothing about the document: no attempt is spent and the lease is
+	// released, so the next server takes it at once (reproducer L4).
+	if state(); status != "needs_transcription" || leased || attempts != 0 {
+		t.Fatalf("after a stop: %s leased=%v attempts=%d", status, leased, attempts)
+	}
+	// A server killed mid-job (kill -9, OOM) runs no code: its claim stays, leased, with the attempt.
+	s.db.Exec(`UPDATE documents SET lease_until = now() + interval '30 minutes', attempts = attempts + 1 WHERE id = $1`, pending.ID)
 	letter := "Dear Ms Rao, the hearing is adjourned to 4 March 2027."
 	restarted := New(s.st)
 	f := model.NewFake(map[string][]model.Reply{"transcribe-a": texts(letter, "A cat sat"), "transcribe-b": texts(letter, "Invoice overdue please pay")})
-	restarted.UseVision(f, "fake-vl")
+	restarted.UseVision(f, "fake-vl", "", nil)
 	if done, failed, err := restarted.TranscribePending(t.Context()); done+failed != 0 || err != nil {
 		t.Fatalf("a leased job is not taken: %d %d %v", done, failed, err)
 	}
@@ -420,7 +427,7 @@ func TestTranscriptionJobResumesAfterRestart(t *testing.T) {
 	down := model.NewFake(map[string][]model.Reply{"transcribe-a": {{Err: &model.Error{Kind: model.ErrUnavailable, Detail: "502"}}, {Err: &model.Error{Kind: model.ErrUnavailable, Detail: "502"}},
 		{Err: &model.Error{Kind: model.ErrUnavailable, Detail: "502"}}}})
 	outage := New(s.st)
-	outage.UseVision(down, "fake-vl")
+	outage.UseVision(down, "fake-vl", "", nil)
 	for attempt := 1; attempt <= 3; attempt++ {
 		_, failed, err := outage.TranscribePending(t.Context())
 		if attempt < 3 && (!errors.Is(err, model.ErrUnavailable) || failed != 0) || attempt == 3 && (err != nil || failed != 1) {
@@ -437,7 +444,7 @@ func TestTranscriptionJobResumesAfterRestart(t *testing.T) {
 	s.db.Exec(`UPDATE documents SET attempts = 3, lease_until = now() - interval '1 second' WHERE id = $1`, crasher.ID)
 	untouched := model.NewFake(nil)
 	last := New(s.st)
-	last.UseVision(untouched, "fake-vl")
+	last.UseVision(untouched, "fake-vl", "", nil)
 	if _, failed, err := last.TranscribePending(t.Context()); failed != 1 || err != nil || len(untouched.Calls()) != 0 {
 		t.Errorf("fourth claim: failed %d, %v, %d calls", failed, err, len(untouched.Calls()))
 	}
@@ -462,7 +469,7 @@ func TestVisionFailuresTyped(t *testing.T) { // not parallel: it shortens maxTex
 		{model.Reply{Err: &model.Error{Kind: model.ErrRateLimited, Detail: "429"}}, 503, "model_rate_limited"},
 		{model.Reply{Err: &model.Error{Kind: model.ErrTimeout, Detail: "timeout"}}, 504, "model_timeout"},
 		{model.Reply{Text: "The first half of the page", Truncated: true}, 422, "transcription_unreliable"},
-		{model.Reply{Text: strings.Repeat("runaway ", maxText/8+1)}, 422, "unreadable"}, // more text than a document holds: stopped
+		{model.Reply{Text: strings.Repeat("runaway ", 2*readTokens+1)}, 422, "transcription_unreliable"}, // past 16 bytes a token asked for (reproducer L2)
 	} {
 		s, _ := visionService(t, []model.Reply{c.reply}, texts("The first half of the page"))
 		resp, out := upload(t, serveDocs(t, s).URL, "p.png", pngOf(12))
@@ -471,11 +478,16 @@ func TestVisionFailuresTyped(t *testing.T) { // not parallel: it shortens maxTex
 		}
 		mustBeEmpty(t, s)
 	}
+	runaway := strings.Repeat("runaway ", 2*readTokens+1) // both readings alike: only the 16-bytes-a-token bound stops them
+	s, _ := visionService(t, texts(runaway), texts(runaway))
+	if _, err := s.Ingest(t.Context(), "p.png", "image/png", bytes.NewReader(pngOf(15))); !errors.Is(err, ErrUnreliable) || !strings.Contains(err.Error(), "ran past") {
+		t.Errorf("a runaway reading: %v", err)
+	}
 	old := visionWait
 	visionWait = 200 * time.Millisecond
 	defer func() { visionWait = old }()
-	s := newService(t)
-	s.UseVision(blockingChat{make(chan struct{})}, "fake-vl")
+	s = newService(t)
+	s.UseVision(blockingChat{make(chan struct{})}, "fake-vl", "", nil)
 	start := time.Now()
 	if _, err := s.Ingest(t.Context(), "slow.png", "image/png", bytes.NewReader(pngOf(13))); !errors.Is(err, model.ErrTimeout) || time.Since(start) > 5*time.Second {
 		t.Errorf("a hung vision call: %v after %s", err, time.Since(start))

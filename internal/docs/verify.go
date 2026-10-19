@@ -219,7 +219,7 @@ func (s *Service) VerifyQuote(ctx context.Context, scope []string, docID, quote 
 	out.SectionID = sectionID(ord)
 	if p := d.Transcript.covers(v.Start, v.End); p != nil {
 		out.Method, out.Confidence = v.Method+"@transcript", min(v.Confidence, TranscriptCap)
-		out.TranscribedBy, out.LowConfidence = d.Transcript.Model, p.Agreement < lowBelow
+		out.TranscribedBy, out.LowConfidence = d.Transcript.Model, p.low()
 		out.Note = "machine transcription of an image (" + d.Transcript.Model + "): check against the original"
 	}
 	return out, nil

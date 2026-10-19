@@ -11,20 +11,19 @@ import (
 	"strings"
 	"time"
 
+	"github.com/discover-legal/BigLaw/internal/model"
 	"github.com/discover-legal/BigLaw/internal/store"
 )
 
-// leaseFor outlasts one transcription job (slotWait + childTimeout + visionWait = 22 minutes).
-var leaseFor = 30 * time.Minute
+// leaseFor outlasts one transcription job (2 × slotWait + childTimeout + visionWait = 32 minutes).
+var leaseFor = 40 * time.Minute
 
 // TranscribePending transcribes the documents stored as needs_transcription, oldest first, one at a
-// time under a lease (two servers never take one; a job whose server died is taken again when its
-// lease ends), until none is left or ctx ends. One its reading refuses (unreliable, no content,
-// unsupported, too many pages, damaged) becomes failed, the reason in its notes, the original kept.
-// Any other failure (the model endpoint, the database) ends the run with its error; the document is
-// retried when its lease ends, and is failed after its third attempt (also when the server died
-// during each of them: a fourth claim fails it without a call). Minimal on purpose: PR 4b
-// moves it onto the engine's run lease (DESIGN revision 5, way 5).
+// time under a lease (a job whose server died is taken again when it ends), until none is left or ctx
+// ends. One its reading refuses becomes failed, the reason in its notes. Any other failure ends the
+// run; the document waits for the next with a note: a stop, a wrong model setting, a rate limit or
+// busy readers spend none of its 3 attempts, an outage one (also a claim whose server died, so a
+// fourth claim fails it without a call). Minimal on purpose: PR 4b moves it onto the run lease.
 func (s *Service) TranscribePending(ctx context.Context) (done, failed int, err error) {
 	for s.vision != nil {
 		var id, fileID string
@@ -41,24 +40,27 @@ func (s *Service) TranscribePending(ctx context.Context) (done, failed int, err 
 		if attempts <= 3 { // a document that takes its server down is not retried forever
 			d, err = s.ingestFile(ctx, store.File{ID: fileID}, id)
 		}
-		refused, note := false, strings.TrimPrefix(fmt.Sprint(err), "docs: ")
-		for _, kind := range []error{ErrUnreliable, ErrNoContent, ErrScanEncoding, ErrTooManyPages, ErrUnreadable, ErrUnsupported} {
-			refused = refused || errors.Is(err, kind)
-		}
-		switch {
-		case err == nil:
+		if err == nil {
 			done++
 			s.embedDoc(ctx, &d)
 			continue
-		case ctx.Err() != nil || !refused && attempts < 3:
-			return done, failed, fmt.Errorf("docs: a waiting document's transcription failed (it is retried): %w", err)
-		case !refused:
+		}
+		refused, free, status, note := false, ctx.Err() != nil, "failed", strings.TrimPrefix(err.Error(), "docs: ")
+		for i, kind := range []error{ErrUnreliable, ErrNoContent, ErrScanEncoding, ErrTooManyPages, ErrUnreadable, ErrUnsupported, model.ErrNotConfigured, model.ErrRateLimited, ErrBusy} {
+			refused, free = refused || i < 6 && errors.Is(err, kind), free || i >= 6 && errors.Is(err, kind) // the last 3 say nothing about the document
+		}
+		if !refused && (free || attempts < 3) {
+			status, note = "needs_transcription", "Waiting for transcription (its last attempt failed: "+note+"). The original is kept."
+		} else if !refused {
 			note = fmt.Sprintf("Transcription failed %d times (the vision model or the database was unavailable, or the server stopped).", min(attempts, 3))
 		}
 		uctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-		_, err = s.db.ExecContext(uctx, `UPDATE documents SET status = 'failed', lease_until = NULL, notes = ARRAY[$2::text] WHERE id = $1 AND status = 'needs_transcription'`, id, note)
-		if cancel(); err != nil {
-			return done, failed, fmt.Errorf("docs: transcription jobs: %w", err)
+		_, uerr := s.db.ExecContext(uctx, `UPDATE documents SET status = $3, lease_until = NULL, notes = ARRAY[$2::text], attempts = attempts - $4::int
+			WHERE id = $1 AND status = 'needs_transcription'`, id, note, status, map[bool]int{true: 1}[free])
+		if cancel(); uerr != nil {
+			return done, failed, fmt.Errorf("docs: transcription jobs: %w", uerr)
+		} else if status != "failed" {
+			return done, failed, fmt.Errorf("docs: a waiting document's transcription failed (it is retried at the next run): %w", err)
 		}
 		failed++
 	}

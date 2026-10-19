@@ -17,6 +17,7 @@ const (
 	maxVisionPages = 20       // scanned pages one document may send to the vision model (413 too_many_pages)
 	maxPageImages  = 4        // images on one scanned page
 	maxImageBytes  = 20 << 20 // a page's images, sent in one vision call
+	stampMax       = 80       // characters of text layer beside page images that make a page a scan (a Bates number, a header; as v1)
 )
 
 // Scan is a page to transcribe: its images as {offset, length} in the file, sent as they are.
@@ -28,7 +29,7 @@ type Scan struct {
 
 var streamAt = regexp.MustCompile(`@(\d+)$`) // ledongthuc/pdf prints a stream as <<dict>>@offset
 
-// pageScan reads the image XObjects of page n, which has no text layer: JPEG streams stored whole
+// pageScan reads the image XObjects of page n (no text layer, or a short one): JPEG streams stored whole
 // make it a scan; any other image encoding (CCITT, JBIG2, Flate bitmaps), a form XObject, more than
 // maxPageImages or maxImageBytes, or an encrypted file make it unsupported; no XObject leaves it blank.
 func pageScan(r *pdf.Reader, p pdf.Page, n int, data []byte) (sc Scan, unsupported bool) {
@@ -56,11 +57,11 @@ func pageScan(r *pdf.Reader, p pdf.Page, n int, data []byte) (sc Scan, unsupport
 // pageNotes says which pages have no text (scanned pages BigLaw did not read, or blank ones).
 func pageNotes(x *Extraction) []string {
 	switch n := len(x.Blank); {
-	case n > 0 && n == x.Pages:
+	case n > 0 && n == x.Pages && strings.TrimSpace(x.Text) == "":
 		return []string{fmt.Sprintf("This PDF has no text layer (%d scanned or blank page(s)): nothing in it can be searched or quoted. "+
 			"Re-export it with text, or as a JPEG-scanned PDF for the vision model.", x.Pages)}
 	case n > 0:
-		return []string{fmt.Sprintf("%d of %d pages have no text layer (scanned images?) and were not read: page %s.", n, x.Pages, pageList(x.Blank))}
+		return []string{fmt.Sprintf("%d of %d pages have no text layer, or only a stamp beside a page image, and were not read: page %s (with no vision role set, upload the file again once one is).", n, x.Pages, pageList(x.Blank))}
 	}
 	return nil
 }

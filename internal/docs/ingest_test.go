@@ -64,7 +64,10 @@ func makePDFCount(count int, pages ...string) []byte {
 
 // pdfPage is one page of buildPDF: Text drawn in Helvetica, and/or Image (an XObject's dictionary
 // and stream, e.g. dctImage) painted as /Im1.
-type pdfPage struct{ Text, Image string }
+type pdfPage struct {
+	Text, Image string
+	More        []string // further image XObjects on the page
+}
 
 func buildPDF(count int, pages ...pdfPage) []byte {
 	var objs []string
@@ -76,7 +79,11 @@ func buildPDF(count int, pages ...pdfPage) []byte {
 	for _, pg := range pages {
 		content, xo := "", ""
 		if pg.Image != "" {
-			content, xo = "q 612 0 0 792 0 0 cm /Im1 Do Q\n", fmt.Sprintf(" /XObject << /Im1 %d 0 R >>", add(pg.Image))
+			ims := ""
+			for i, im := range append([]string{pg.Image}, pg.More...) {
+				content, ims = content+fmt.Sprintf("q 612 0 0 792 0 0 cm /Im%d Do Q\n", i+1), ims+fmt.Sprintf(" /Im%d %d 0 R", i+1, add(im))
+			}
+			xo = " /XObject <<" + ims + " >>"
 		}
 		if pg.Text != "" {
 			content += "BT /F1 12 Tf 72 720 Td (" + pg.Text + ") Tj ET"
@@ -172,12 +179,12 @@ func TestExtractPDFTextLayer(t *testing.T) {
 		t.Fatalf("text PDF: %+v %v", x, err)
 	}
 	if x, err := Extract(t.Context(), makePDF("Only this page has text.", "", "And this one.", "")); err != nil || x.NoText || len(x.Notes) != 1 ||
-		x.Notes[0] != "2 of 4 pages have no text layer (scanned images?) and were not read: page 2, 4." {
+		x.Notes[0] != "2 of 4 pages have no text layer, or only a stamp beside a page image, and were not read: page 2, 4 (with no vision role set, upload the file again once one is)." {
 		t.Errorf("a half-scanned PDF keeps its text and says some pages may be scans: %+v %v", x, err)
 	}
 	pages := append([]string{"Only the first page has text."}, make([]string, 12)...) // r1 R5: the count is every blank page
 	if x, err := Extract(t.Context(), makePDF(pages...)); err != nil || len(x.Notes) != 1 ||
-		x.Notes[0] != "12 of 13 pages have no text layer (scanned images?) and were not read: page 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, …." {
+		x.Notes[0] != "12 of 13 pages have no text layer, or only a stamp beside a page image, and were not read: page 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, … (with no vision role set, upload the file again once one is)." {
 		t.Errorf("12 blank pages: %q %v", x.Notes, err)
 	}
 	if x, err := Extract(t.Context(), makePDF(`NUL\000and\001controls \377`)); err != nil || strings.TrimSpace(x.Text) != "NUL and controls \u00ff" {
@@ -226,12 +233,14 @@ func TestHostilePDFContained(t *testing.T) {
 		t.Fatalf("a stack-overflow PDF: %v", err)
 	}
 	oldT := childTimeout
-	childTimeout = time.Millisecond
-	_, err := Extract(t.Context(), pdfWith("[]"))
-	childTimeout = oldT
-	if !errors.Is(err, ErrUnreadable) || !strings.Contains(err.Error(), "took longer") {
-		t.Errorf("a slow PDF: %v", err)
+	var err error
+	for _, d := range []time.Duration{time.Millisecond, time.Nanosecond} { // 1 ns: the deadline passes before the child starts, as on a loaded machine (r1 reproducer L1)
+		childTimeout = d
+		if _, err = Extract(t.Context(), pdfWith("[]")); !errors.Is(err, ErrUnreadable) || !strings.Contains(err.Error(), "took longer") {
+			t.Errorf("a slow PDF (%s): %v", d, err)
+		}
 	}
+	childTimeout = oldT
 	ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond) // the request ends mid-parse
 	start := time.Now()
 	_, err = Extract(ctx, loopPDF())

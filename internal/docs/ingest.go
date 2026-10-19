@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"slices"
 	"strings"
 	"time"
@@ -47,9 +48,9 @@ var (
 	// stopped during the request (its ingest was cancelled and its file removed).
 	ErrBusy     = errors.New("docs: busy: other documents are being read; retry in a few minutes")
 	ErrStopping = errors.New("docs: the server is stopping; retry when it is back")
-	// slotWait bounds the wait for an ingest slot, so a stored upload is ingested or removed well
-	// within the hour after which SweepOrphanFiles takes it for a crash's leftover (uploadTotal +
-	// slotWait + childTimeout = 27 minutes).
+	// slotWait bounds the wait for an ingest or reader slot, so a stored upload is ingested or removed
+	// well within the hour after which SweepOrphanFiles takes it for a crash's leftover (uploadTotal +
+	// 2 × slotWait + childTimeout + visionWait = 47 minutes).
 	slotWait = 10 * time.Minute
 )
 
@@ -79,22 +80,24 @@ type Document struct {
 
 // Service reads and writes documents in the store.
 type Service struct {
-	st          *store.Store
-	db          *sql.DB
-	slots       chan struct{}
-	embedder    model.Embedder // nil: lexical search only (UseEmbedder)
-	embedModel  string
-	vision      model.Chatter // nil: images and scans wait (UseVision)
-	visionModel string
+	st                     *store.Store
+	db                     *sql.DB
+	slots                  chan struct{}
+	embedder               model.Embedder // nil: lexical search only (UseEmbedder)
+	embedModel             string
+	vision                 model.Chatter // nil: images and scans wait (UseVision)
+	visionModel, visionKey string
+	log                    *slog.Logger
+	readers                chan struct{} // documents reading scans with the vision model, outside the ingest slots
 }
 
 func New(st *store.Store) *Service {
-	return &Service{st: st, db: st.DB(), slots: make(chan struct{}, ingestSlots)}
+	return &Service{st: st, db: st.DB(), slots: make(chan struct{}, ingestSlots), readers: make(chan struct{}, ingestSlots), log: slog.New(slog.DiscardHandler)}
 }
 
-// Extraction is what Extract read from a file. Blank lists the pages with no text; of those, Scans
-// are images to transcribe (the first maxVisionPages+1 of ScanPages) and Unsupported hold images
-// BigLaw cannot send (scanpdf.go).
+// Extraction is what Extract read from a file. Blank lists the pages with no text layer, or only a
+// stamp (under stampMax characters) beside page images; of those, Scans are images to transcribe (the
+// first maxVisionPages+1 of ScanPages) and Unsupported hold images BigLaw cannot send (scanpdf.go).
 type Extraction struct {
 	Text, Method, ContentType string
 	NoText                    bool
@@ -201,11 +204,11 @@ func extractPDF(data []byte) (x Extraction, err error) {
 	}
 	x.Text = clean(strings.Join(pages, "\f")) // a form feed between pages
 	for i, p := range pages {
-		if strings.TrimSpace(p) != "" {
+		sc, bad := pageScan(r, r.Page(i+1), i+1, data)
+		if n := len(strings.TrimSpace(p)); n >= stampMax || n > 0 && !bad && len(sc.Images) == 0 { // a page of text
 			continue
 		}
-		x.Blank = append(x.Blank, i+1)
-		if sc, bad := pageScan(r, r.Page(i+1), i+1, data); bad {
+		if x.Blank = append(x.Blank, i+1); bad {
 			x.Unsupported = append(x.Unsupported, i+1)
 		} else if len(sc.Images) > 0 {
 			if x.ScanPages++; x.ScanPages <= maxVisionPages+1 {
@@ -213,7 +216,7 @@ func extractPDF(data []byte) (x Extraction, err error) {
 			}
 		}
 	}
-	x.NoText, x.Notes = len(x.Blank) == x.Pages, pageNotes(&x)
+	x.NoText, x.Notes = strings.TrimSpace(x.Text) == "", pageNotes(&x)
 	return x, nil
 }
 
@@ -236,20 +239,22 @@ func (s *Service) Ingest(ctx context.Context, name, contentType string, r io.Rea
 }
 
 // ingestFile reads file f into a new document, or into document id when it awaits transcription.
+// The ingest slot is held for the extraction only: vision calls wait for a reader slot (holding the
+// text, not the file), so slow model calls never hold up other uploads.
 func (s *Service) ingestFile(ctx context.Context, f store.File, id string) (Document, error) {
-	select {
-	case s.slots <- struct{}{}:
-		defer func() { <-s.slots }()
-	case <-ctx.Done():
-		return Document{}, ctx.Err()
-	case <-time.After(slotWait):
-		return Document{}, ErrBusy
-	}
-	f, err := s.st.GetFile(ctx, f.ID)
+	x, err := Extraction{}, take(ctx, s.slots)
 	if err != nil {
 		return Document{}, err
 	}
-	x, err := Extract(ctx, f.Data)
+	if f, err = s.st.GetFile(ctx, f.ID); err == nil {
+		x, err = Extract(ctx, f.Data)
+	}
+	if <-s.slots; err == nil && len(x.Scans) > 0 && s.vision != nil {
+		if f.Data, err = nil, take(ctx, s.readers); err == nil {
+			defer func() { <-s.readers }()
+			f, err = s.st.GetFile(ctx, f.ID)
+		}
+	}
 	if err == nil {
 		err = s.readScans(ctx, f.Data, &x)
 	}
@@ -262,6 +267,18 @@ func (s *Service) ingestFile(ctx context.Context, f store.File, id string) (Docu
 		return Document{}, err
 	}
 	return s.insert(ctx, d, x)
+}
+
+// take waits for one of slots, at most slotWait (ErrBusy).
+func take(ctx context.Context, slots chan struct{}) error {
+	select {
+	case slots <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(slotWait):
+		return ErrBusy
+	}
 }
 
 // IngestText stores a document given as text (no original file).
@@ -285,7 +302,7 @@ func (s *Service) IngestText(ctx context.Context, name, text string) (Document, 
 func (s *Service) insert(ctx context.Context, d Document, x Extraction) (Document, error) {
 	d.Text, d.Method, d.ContentType, d.NoText, d.Pages, d.Notes = x.Text, x.Method, x.ContentType, x.NoText, x.Pages, append([]string{}, x.Notes...)
 	d.Transcript = x.Transcript
-	transcript, err := json.Marshal(d.Transcript) // null when nothing was transcribed
+	transcript, err := json.Marshal(d.Transcript) // SQL NULL when nothing was sent to the vision model
 	if err != nil {
 		return Document{}, err
 	}
@@ -298,8 +315,8 @@ func (s *Service) insert(ctx context.Context, d Document, x Extraction) (Documen
 	d.Sections, d.Chunks = len(secs), len(chunks)
 	err = s.st.InTx(ctx, func(tx *sql.Tx) error { // a transcription job (d.ID set) completes only a document still waiting for it
 		if err := tx.QueryRowContext(ctx, `INSERT INTO documents (id, name, content_type, file_id, text, method, no_text, pages, notes, status, transcript)
-			VALUES (coalesce(NULLIF($1, '')::uuid, gen_random_uuid()), $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11)
-			ON CONFLICT (id) DO UPDATE SET text = $5, method = $6, no_text = $7, pages = $8, notes = $9, status = $10, transcript = $11, lease_until = NULL
+			VALUES (coalesce(NULLIF($1, '')::uuid, gen_random_uuid()), $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, NULLIF($11::jsonb, 'null'))
+			ON CONFLICT (id) DO UPDATE SET text = $5, method = $6, no_text = $7, pages = $8, notes = $9, status = $10, transcript = EXCLUDED.transcript, lease_until = NULL
 			WHERE documents.status = 'needs_transcription' RETURNING id, created_at`, d.ID, d.Name, d.ContentType, d.FileID, d.Text, d.Method, d.NoText,
 			d.Pages, pq.Array(d.Notes), d.Status, transcript).Scan(&d.ID, &d.CreatedAt); err != nil {
 			return err

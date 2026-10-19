@@ -140,14 +140,15 @@ func extractInChild(ctx context.Context, data []byte) (Extraction, error) {
 	if err == nil {
 		err = cmd.Start()
 	}
-	if err != nil {
+	out, ok := childOutput{}, false
+	if err != nil && cctx.Err() == nil { // a deadline that passed before the start (a loaded machine) is the timeout below
 		return Extraction{}, fmt.Errorf("docs: the file reader could not start: %w", err)
+	} else if err == nil {
+		if out, ok = readChild(stdout); !ok {
+			_ = cmd.Process.Kill() // it may be blocked writing more than was read
+		}
+		err = cmd.Wait()
 	}
-	out, ok := readChild(stdout)
-	if !ok {
-		_ = cmd.Process.Kill() // it may be blocked writing more than was read
-	}
-	err = cmd.Wait()
 	switch {
 	case ctx.Err() != nil:
 		return Extraction{}, ctx.Err()

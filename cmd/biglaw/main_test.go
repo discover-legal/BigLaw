@@ -125,7 +125,7 @@ func TestServeStopCancelsIngest(t *testing.T) {
 	}
 	defer st.Close()
 	old := shutdownGrace
-	shutdownGrace = 300 * time.Millisecond
+	shutdownGrace = 2 * time.Second // the cancelled handler's cleanup (kill the child, delete the file, answer) must fit in it on a loaded machine (r1 reproducer L1)
 	t.Cleanup(func() { shutdownGrace = old })
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
