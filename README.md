@@ -954,7 +954,7 @@ transcribe, never text).
 | Runtime environment variables | 20 | 18 |
 | UI runtime dependencies | 2 | 0 (no UI yet) |
 | Packages without a `_test.go` | 0 | 0 |
-| Lines in any one source file (`.go`, `.py`, `.sql`, `.sh`, `.js`, `.ts`, `.css`; tests included) | 2,000 | 964 (`internal/docs/vision_safety_test.go`) |
+| Lines in any one source file (`.go`, `.py`, `.sql`, `.sh`, `.js`, `.ts`, `.css`; tests included) | 2,000 | 968 (`internal/docs/vision_safety_test.go`) |
 
 The line ceiling is 15,650 (owner decisions: 14,000, then 14,250, then 14,500 during PR 2's review, then 15,000 at PR 3a's, with pgvector, then 15,500 at PR 3a's round 3, declared final, then 15,600 at PR 3c's round 1, decision 11, then 15,650 at PR 3c's round 4 to read long-legend scans, decision 12). The plan totals 15,581–15,611 after PR 3c (round 7), headroom 39–69; PR 3e (an embed endpoint, about 30–40 lines) is next and must fit (at most 39 in the worst case). A **test-support package** is one
 whose directory name ends in `test` and that no production file outside it imports, such as

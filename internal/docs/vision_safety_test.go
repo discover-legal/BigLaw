@@ -722,32 +722,34 @@ func TestShortTextOverPageImageMixed(t *testing.T) {
 		"short added word inside a layer word": {buildPDF(1, page(letter, 85, 110, 1)), texts("BARR\n" + wrapped), texts("BARR\n" + wrapped), true, 2, letter, "BARR\n" + salute, ""}, // inside "Barrister": not a whole layer word
 		"layer splits and glues words":         {buildPDF(1, page(kerned, 85, 110, 1)), priced("ACME LLP\r\n" + wrapped), priced("ACME LLP\r\n" + wrapped), true, 2, kerned, "ACME LLP\n" + salute, "consent orderdated October 2, 2026"},
 	} {
-		s, f := visionService(t, k.a, k.b)
-		if !k.vision {
-			s = newService(t)
-		}
-		d, err := s.Ingest(t.Context(), "letter.pdf", "application/pdf", bytes.NewReader(k.pdf))
-		notes, text := strings.Join(d.Notes, " "), strings.ReplaceAll(d.Text, "\n", "")
-		if err != nil || d.Status != "ready" || d.Method != "text_layer" || len(f.Calls()) != k.calls || text != strings.ReplaceAll(k.added+k.layer, "\n", "") ||
-			strings.Contains(notes, "an image on the page was not read") != (k.added == "") || (d.Transcript != nil) != (k.calls > 0) {
-			t.Errorf("%s: %v status %q method %q, %d calls, text %q, notes %q", name, err, d.Status, d.Method, len(f.Calls()), d.Text, d.Notes)
-			continue
-		}
-		if k.added == "" {
-			continue
-		} else if c := d.Transcript.CostUSD; strings.Contains(name, "agree") && (d.Transcript.Tokens != 2000 || c == nil || *c != 0.02) { // the mixed page's cost
-			t.Errorf("%s: usage not recorded: %+v", name, d.Transcript)
-		}
-		scope, first := []string{d.ID}, strings.SplitN(k.layer, " ", 4)[:3]
-		if p := d.Transcript.Pages; len(p) != 1 || d.Text[p[0].Start:p[0].End] != k.added || !strings.Contains(notes, "only lines a page's text layer lacks are kept") {
-			t.Errorf("%s: the transcript span is not the added lines: %+v in %q", name, p, d.Text)
-		} else if v, _ := s.VerifyQuote(t.Context(), scope, d.ID, strings.Join(first, " "), nil); v.Method != "exact" || v.Confidence != 1 {
-			t.Errorf("%s: the text layer is text-layer text: %+v", name, v)
-		} else if v, _ := s.VerifyQuote(t.Context(), scope, d.ID, k.quote, nil); k.quote != "" && (v.Method != "exact" || v.Confidence != 1 || d.Text[v.Start:v.End] != k.quote) {
-			t.Errorf("%s: the text layer is text-layer text: %+v", name, v)
-		} else if v, _ := s.VerifyQuote(t.Context(), scope, d.ID, strings.SplitN(k.added, "\n", 2)[0], nil); v.Method != "exact@transcript" || v.Confidence > TranscriptCap {
-			t.Errorf("%s: the added lines are transcript: %+v", name, v)
-		}
+		t.Run(name, func(t *testing.T) { // a subtest per row: its store (a connection pool) closes when the row ends
+			s, f := visionService(t, k.a, k.b)
+			if !k.vision {
+				s = newService(t)
+			}
+			d, err := s.Ingest(t.Context(), "letter.pdf", "application/pdf", bytes.NewReader(k.pdf))
+			notes, text := strings.Join(d.Notes, " "), strings.ReplaceAll(d.Text, "\n", "")
+			if err != nil || d.Status != "ready" || d.Method != "text_layer" || len(f.Calls()) != k.calls || text != strings.ReplaceAll(k.added+k.layer, "\n", "") ||
+				strings.Contains(notes, "an image on the page was not read") != (k.added == "") || (d.Transcript != nil) != (k.calls > 0) {
+				t.Errorf("%s: %v status %q method %q, %d calls, text %q, notes %q", name, err, d.Status, d.Method, len(f.Calls()), d.Text, d.Notes)
+				return
+			}
+			if k.added == "" {
+				return
+			} else if c := d.Transcript.CostUSD; strings.Contains(name, "agree") && (d.Transcript.Tokens != 2000 || c == nil || *c != 0.02) { // the mixed page's cost
+				t.Errorf("%s: usage not recorded: %+v", name, d.Transcript)
+			}
+			scope, first := []string{d.ID}, strings.SplitN(k.layer, " ", 4)[:3]
+			if p := d.Transcript.Pages; len(p) != 1 || d.Text[p[0].Start:p[0].End] != k.added || !strings.Contains(notes, "only lines a page's text layer lacks are kept") {
+				t.Errorf("%s: the transcript span is not the added lines: %+v in %q", name, p, d.Text)
+			} else if v, _ := s.VerifyQuote(t.Context(), scope, d.ID, strings.Join(first, " "), nil); v.Method != "exact" || v.Confidence != 1 {
+				t.Errorf("%s: the text layer is text-layer text: %+v", name, v)
+			} else if v, _ := s.VerifyQuote(t.Context(), scope, d.ID, k.quote, nil); k.quote != "" && (v.Method != "exact" || v.Confidence != 1 || d.Text[v.Start:v.End] != k.quote) {
+				t.Errorf("%s: the text layer is text-layer text: %+v", name, v)
+			} else if v, _ := s.VerifyQuote(t.Context(), scope, d.ID, strings.SplitN(k.added, "\n", 2)[0], nil); v.Method != "exact@transcript" || v.Confidence > TranscriptCap {
+				t.Errorf("%s: the added lines are transcript: %+v", name, v)
+			}
+		})
 	}
 	s, f := visionService(t, texts(""), texts("")) // a logo with no words: read, nothing added, no unread-image note
 	d, err := s.Ingest(t.Context(), "letter.pdf", "application/pdf", bytes.NewReader(buildPDF(1, page(letter, 8, 8, 1))))
@@ -929,14 +931,16 @@ func TestMixedPageKeepsWhatTheLayerLacks(t *testing.T) {
 		{"Letter re arrears. The Respondent has paid $500,000 to date." + pad, "paid $500", "paid $500"},
 		{"Letter re arrears. The Respondent has paid $1,500 to date." + pad, "500 to date", "500 to date"},
 	} {
-		s, _ := visionService(t, texts("Received Oct 3\n"+c.added+"\n"+c.layer), texts("Received Oct 8\n"+c.added+"\n"+c.layer)) // the readings dispute a figure: low
-		d, err := s.Ingest(t.Context(), "m.pdf", "application/pdf", bytes.NewReader(buildPDF(1, pdfPage{Text: c.layer, Image: dctImage(jpegOf(85, 110, 1))})))
-		if err != nil || d.Text != "Received Oct 3\n"+c.added+"\n"+c.layer || d.Transcript == nil || !d.Transcript.LowConfidence {
-			t.Fatalf("%q: %v stored %q, %+v", c.added, err, d.Text, d.Transcript)
-		}
-		if v, err := s.VerifyQuote(t.Context(), []string{d.ID}, d.ID, c.quote, nil); err != nil || v.Method != "exact@transcript" || v.Confidence != TranscriptCap || !v.LowConfidence || d.Text[v.Start:v.End] != c.quote {
-			t.Errorf("%q is transcript on a low page: %+v %v", c.quote, v, err)
-		}
+		t.Run(c.added, func(t *testing.T) { // a subtest per row: its store (a connection pool) closes when the row ends
+			s, _ := visionService(t, texts("Received Oct 3\n"+c.added+"\n"+c.layer), texts("Received Oct 8\n"+c.added+"\n"+c.layer)) // the readings dispute a figure: low
+			d, err := s.Ingest(t.Context(), "m.pdf", "application/pdf", bytes.NewReader(buildPDF(1, pdfPage{Text: c.layer, Image: dctImage(jpegOf(85, 110, 1))})))
+			if err != nil || d.Text != "Received Oct 3\n"+c.added+"\n"+c.layer || d.Transcript == nil || !d.Transcript.LowConfidence {
+				t.Fatalf("%q: %v stored %q, %+v", c.added, err, d.Text, d.Transcript)
+			}
+			if v, err := s.VerifyQuote(t.Context(), []string{d.ID}, d.ID, c.quote, nil); err != nil || v.Method != "exact@transcript" || v.Confidence != TranscriptCap || !v.LowConfidence || d.Text[v.Start:v.End] != c.quote {
+				t.Errorf("%q is transcript on a low page: %+v %v", c.quote, v, err)
+			}
+		})
 	}
 	layer := "Letter re arrears. The Respondent has paid $500 to date toward arrears; paid $5000 is denied." + pad
 	s, _ := visionService(t, texts("Note: paid $500\n"+layer), texts("Note: paid $500\n"+layer))
