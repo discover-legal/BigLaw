@@ -180,12 +180,12 @@ func TestExtractPDFTextLayer(t *testing.T) {
 		t.Fatalf("text PDF: %+v %v", x, err)
 	}
 	if x, err := Extract(t.Context(), makePDF("Only this page has text.", "", "And this one.", "")); err != nil || x.NoText || len(x.Notes) != 1 ||
-		x.Notes[0] != "2 of 4 pages have no text layer, or only a stamp beside a page image, and were not read: page 2, 4 (with no vision role set, upload the file again once one is)." {
+		x.Notes[0] != "2 of 4 pages have no text layer, or only a stamp beside a page image, and were not read: page 2, 4 (no vision role is set: upload the file again once one is)." {
 		t.Errorf("a half-scanned PDF keeps its text and says some pages may be scans: %+v %v", x, err)
 	}
 	pages := append([]string{"Only the first page has text."}, make([]string, 12)...) // r1 R5: the count is every blank page
 	if x, err := Extract(t.Context(), makePDF(pages...)); err != nil || len(x.Notes) != 1 ||
-		x.Notes[0] != "12 of 13 pages have no text layer, or only a stamp beside a page image, and were not read: page 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, … (with no vision role set, upload the file again once one is)." {
+		x.Notes[0] != "12 of 13 pages have no text layer, or only a stamp beside a page image, and were not read: page 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, … (no vision role is set: upload the file again once one is)." {
 		t.Errorf("12 blank pages: %q %v", x.Notes, err)
 	}
 	if x, err := Extract(t.Context(), makePDF(`NUL\000and\001controls \377`)); err != nil || strings.TrimSpace(x.Text) != "NUL and controls \u00ff" {

@@ -204,8 +204,8 @@ func extractPDF(data []byte) (x Extraction, err error) {
 	}
 	x.Text = clean(strings.Join(pages, "\f")) // a form feed between pages
 	for i, p := range pages {
-		sc, bad, paged := pageScan(r, r.Page(i+1), i+1, data)
-		if n := utf8.RuneCountInString(strings.TrimSpace(p)); n >= stampMax && !(paged && n < 5*stampMax) || n > 0 && !bad && len(sc.Images) == 0 { // a page of text
+		sc, bad := pageScan(r, r.Page(i+1), i+1, data)
+		if n := utf8.RuneCountInString(strings.TrimSpace(p)); n >= stampMax || n > 0 && !bad && len(sc.Images) == 0 { // a page of text (a letter on stationery too)
 			if bad || len(sc.Images) > 0 {
 				x.Imaged = append(x.Imaged, i+1)
 			}

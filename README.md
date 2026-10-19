@@ -513,12 +513,13 @@ through the agent's own queries.
 bytes) and scanned PDF pages are sent to the model of the `vision` role in `BIGLAW_MODELS`, as
 base64 `image_url` parts through the same OpenAI-compatible client (every call priced like any
 other). A PDF page is scanned when it has no text layer, **or only a stamp** (under 80 characters of
-text layer, a Bates number or a header, beside a page image, as v1 counted; under 400 beside a JPEG
-of the page's own shape, within 3% of its `/MediaBox`, as a scanner writes it, so a confidentiality
-legend and a Bates number too): such a page is read and its stamp kept after the transcript, outside
-the transcript's span (`TestBatesStampedScanTranscribed`, `TestLongLegendScanTranscribed`). Characters
-are counted, not bytes. Any other page holding images (an OCR'd scan, a logo, a legend beside an image
-of another shape) has only its text layer read, and a note names it (`TestLongLegendScanTranscribed`).
+text layer, a Bates number or a header, beside a page image, as v1 counted): such a page is read and
+its stamp kept after the transcript, outside the transcript's span (`TestBatesStampedScanTranscribed`).
+Characters are counted, not bytes. Any other page holding images (a letter on full-page letterhead, an
+OCR'd scan, a logo, a production page under a legend of 80 characters or more) is a page of text: its
+text layer is stored as it is, once, with no vision call, the document is never held or refused for
+its image, and a note names the page (`TestTextLayerOverPageImageKept`: a 185-character letter on a
+page-sized JPEG with no vision role, with disagreeing readings and with agreeing ones).
 There is no OCR engine and no rasteriser: a scanned PDF page is read only when it is one to four
 JPEG images stored whole (`/DCTDecode`), which the reader child finds by their offsets in the file
 and the server sends **as they are** (`TestScannedPDFDCTPagesExtracted`: the bytes sent are the
@@ -530,16 +531,18 @@ text layer or stamps such a page is noted as unread and the text stored (a one-l
 with a logo, a CCITT-scanned production with Bates stamps: `TestBatesStampedScanTranscribed`). Every image's header is checked
 (`image.DecodeConfig`; WebP by magic only) before it is stored or sent: a damaged one, or one
 declaring more than 12,000 pixels a side or 50 million in all (a decompression bomb for the model's
-server), is 422 `unreadable` when the document has no text (`TestImageDimensionsCapped`); beside a
-text layer or stamps that page is noted as unread, nothing is sent for it and the text is stored
-(`TestMixedPDFDamagedImageNoted`); a page's images may total 20 MiB, at most
+server), is 422 `unreadable`, with no call made, when every scanned page's image is such, stamps or not
+(`TestImageDimensionsCapped`, `TestMixedPDFDamagedImageNoted`); otherwise that page is noted as
+damaged and unread, nothing is sent for it, and the rest is read or stored (`TestMixedPDFDamagedImageNoted`;
+a note about unread pages says to upload again once a vision role is set only when none is); a page's images may total 20 MiB, at most
 4 per page (`TestChildScanLimits`). The server re-checks the reader child's answer (pages in range,
 in order, without a text layer; images inside the file and within 20 MiB): `TestServerRechecksChildAnswer`.
 - **Two independent readings.** Each page is read twice, by two different prompts
   (`vision_prompts.txt`; agents `transcribe-a`/`-b`, each at most 4,096 output tokens), each told to
-  write `[illegible]` rather than guess and `[blank]` for a page with no text. A reading's words
-  hyphenated across a line break are joined, and ligatures and curly quotes made plain, before the
-  readings are compared, in the text stored too (`TestBenignNoiseNotLow`); a figure is one token with
+  write `[illegible]` rather than guess and `[blank]` for a page with no text. The text stored is the
+  reading as returned (only its marks normalised); to compare the readings, ligatures are made plain
+  and a hyphenated word is one token with its hyphen, also when broken at a line end (`third-\nparty`
+  is `third-party`; `re-\nlease` is not `release`: `TestBenignNoiseNotLow`); a figure is one token with
   its inner `.` and `,` (so `1.250` is not `1,250`). Agreement is Dice over the readings' word
   multisets (case folded, marks left out; `[illegible…]`, `[unclear…]`, `[blank…]` and `(illegible)`
   are marks, and a guess inside one such as `[illegible: five hundred?]`, also across a line break,
@@ -560,10 +563,15 @@ in order, without a text layer; images inside the file and within 20 MiB): `Test
   order; one differing prose word is not low;
   `TestAgreementThresholdsPinned`: 0.74 refused, 0.75 stored, 0.889 low, 0.90 not). The first
   reading is kept (the other if it is blank), so which reading's figure is stored is arbitrary, and
-  that is why such a page is low confidence. Wherever the other reading has a mark, every word of
-  the kept reading outside the two readings' word alignment (their LCS) becomes `[illegible]`, so
-  the mark stays at its place even when its word repeats on the page (a payee, an amount); pages too
-  long to align mask every occurrence of each word the other reading has fewer of. A mark is never
+  that is why such a page is low confidence. Wherever the other reading has a mark, the readings'
+  words are aligned (their LCS, a mark standing for any one word) and every word of the kept reading
+  not surely aligned to a word the other read becomes `[illegible]`: one aligned to a mark, and one the
+  two tie-breaks of the alignment place differently (where a mark belongs is ambiguous: every
+  candidate is masked). So the mark stays at its place even when its word repeats on the page (a
+  payee, an amount) or anchors are few (`TestIllegibleMaskedAtItsPlace`: 10,000 random pages of five
+  repeating words, a substituted word masked exactly at its place; with words also inserted and
+  dropped, a word never kept more often than the marked reading has it); pages too long to align mask
+  every occurrence of each word the other reading has fewer of. A mark is never
   filled in from either reading, also when each marks a different word (`TestIllegibleNeverFilled`,
   `TestIllegibleNeverFilledTwoSided`). An endpoint echoing the request's key into a reading has it
   replaced by `[redacted]` (`TestKeyEchoNeverStored`). Nothing readable on any page is 422
@@ -915,7 +923,7 @@ transcribe, never text).
 | Packages without a `_test.go` | 0 | 0 |
 | Lines in any one source file (`.go`, `.py`, `.sql`, `.sh`, `.js`, `.ts`, `.css`; tests included) | 2,000 | 634 |
 
-The line ceiling is 15,600 (owner decisions: 14,000, then 14,250, then 14,500 during PR 2's review, then 15,000 at PR 3a's, with pgvector, then 15,500 at PR 3a's round 3, declared final, then 15,600 at PR 3c's round 1, decision 11). The plan totals 15,529–15,559 after PR 3c, headroom 41–71; PR 3e (an embed endpoint, about 30–40 lines) is next and must fit. A **test-support package** is one
+The line ceiling is 15,600 (owner decisions: 14,000, then 14,250, then 14,500 during PR 2's review, then 15,000 at PR 3a's, with pgvector, then 15,500 at PR 3a's round 3, declared final, then 15,600 at PR 3c's round 1, decision 11). The plan totals 15,560–15,590 after PR 3c (round 3), headroom 10–40; PR 3e (an embed endpoint, about 30–40 lines) is next and must fit. A **test-support package** is one
 whose directory name ends in `test` and that no production file outside it imports, such as
 `storetest`. Under the coordinator's ruling it is left out of the package count, but its lines
 count toward the line ceiling like any other non-`_test.go` file. A `*test` package that
@@ -1153,15 +1161,22 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     substitution alone is not caught. Pages over 2,000 words are not compared in order and are
     always low confidence.
   - Masking over-masks: where the other reading has a mark, every word of the kept reading outside
-    the alignment becomes `[illegible]`, including harmless differences and reordered words; on a
-    page too long to align (over about 2,000 words a reading), every occurrence of a word the other
-    reading has fewer of. Joining line-end hyphens also joins a real compound split at a line end
-    ("co-" / "owner" is stored "coowner").
+    the alignment becomes `[illegible]`, including harmless differences, reordered words and, where
+    the alignment is ambiguous, words the other reading did read ("John Smith pays John Smith Jr." vs
+    "John Smith pays [illegible] Jr." stores both of the second "John Smith" masked); on a page too
+    long to align (over about 2,000 words a reading), every occurrence of a word the other reading has
+    fewer of.
+  - The stored reading keeps the model's line-end hyphens, ligatures and quotes: a quote of
+    "release" does not verify against a stored "re-\nlease" (as with any PDF text layer). A word
+    hyphenated at a line end in one reading only ("munici-\npally" vs "municipally") is a differing
+    word, and a hyphen read in one reading only ("re-sign" vs "resign", "non-compete" vs "non
+    compete") is one too: like any single non-figure word, not low on its own.
   - Benign differences still gate a page: on the round-2 verifier's synthetic Ontario order, 7 of 17
     one-at-a-time harmless variants are low (a page footer, list numbers or cents one reading drops,
     a signature read as `[illegible]`, a party block's or a date's word order, a court stamp only one
-    reading has; formerly 8, hyphenation now passing), and pairs carrying only formatting noise
-    (reflow, hyphenation, ligatures, quotes, markdown, one letter slip) 0 of 2,000 (formerly 1,042).
+    reading has; formerly 8, hyphenation now passing), random pairs of those 88.7% (round 3, compare-only
+    folding; 88.1% in round 2), and pairs carrying only formatting noise (reflow, hyphenation,
+    ligatures, quotes, markdown, one letter slip) 0 of 2,000 (formerly 1,042).
     These are a model of noise, not a measurement of any vision model; low confidence only gates
     quotes (PR 4b).
   - A waiting document whose image the endpoint refuses holds the queue for 3 job runs (about 30
@@ -1182,10 +1197,14 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     page with a form feed inside its text layer makes a mixed PDF's pages unplaceable, and then none
     of its scanned pages are transcribed (the note still lists them). TIFF, BMP, HEIC and JPEG 2000
     are not read (no decoder without a dependency). A page with a short text layer and a small
-    JPEG (a logo beside a one-line letter) counts as a scan and is read; a page with 80 or more
-    characters of text layer is read only beside a page-shaped JPEG and under 400 characters (an
-    inherited `/MediaBox` is not looked up: such a page needs under 80); otherwise only its text layer
-    is read, with a note.
+    JPEG (a logo beside a one-line letter under 80 characters) counts as a scan and is read, its text
+    layer kept after the transcript (in a one-page document with no vision role it waits, 503). A page
+    with 80 or more characters of text layer is never read by the vision model, whatever image is
+    under it: a scanned production page whose legend and Bates number reach 80 characters is stored as
+    its legend only, with the note "an image on the page was not read … its text may be missing"
+    (round 3 withdrew round 2's page-shaped rule, which held, refused or doubled short letters on
+    letterhead; reading such a page and keeping the transcript only where it adds text did not fit
+    the round's line budget). Re-export such a production without the legend, or as images, to have it read.
   - A mixed PDF stored while no vision role is set keeps its scanned pages unread for good: the job
     takes only documents with no text layer; its note says to upload it again.
   - **Images leave the machine** with a hosted vision model, as chat prompts will. Setting a vision
@@ -1223,7 +1242,9 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     Round 2 adds 33 (4,867 → 4,900: `docs/vision.go` +25 for the positional mask `align` replacing
     `lcs`, figure tokens, marks, line-end hyphens, a damaged page noted in a mixed PDF and the 4xx
     wording; `docs/scanpdf.go` +5 and `docs/ingest.go` +3 for page-shaped legends and the unread-image
-    note; `docs/jobs.go` 0): plan **15,562–15,592**, headroom 8–38 for PR 3e's 30–40.
+    note; `docs/jobs.go` 0): plan **15,562–15,592**, headroom 8–38 for PR 3e's 30–40. Round 3
+    removes 2 (4,900 → 4,898: the page-shaped rule out, the alignment's wildcard and second walk and
+    the damaged-page note in): plan **15,560–15,590**, headroom 10–40.
 - **Model client (PR 2):**
   - Only `Embed` has a caller yet (documents); `Chat`'s first caller is the agent loop (PR 4a),
     so no real endpoint has been exercised: every test uses `httptest` or

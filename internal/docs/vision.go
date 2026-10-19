@@ -41,9 +41,9 @@ var (
 	visionWait = 10 * time.Minute // all the vision calls of one document
 	//go:embed vision_prompts.txt
 	prompts                string
-	readPrompts            = strings.Split(strings.TrimSpace(prompts), "\n") // two independent readings; a figure token keeps its separators (1.250 is not 1,250)
-	markRe, tokenRe        = regexp.MustCompile(`(?i)\[(illegible|blank|unclear)\b[^\]]{0,200}\]|\((illegible|unclear)\)`), regexp.MustCompile(`(?i)\[(?:illegible|blank|unclear)\]|[\p{L}\p{N}]+(?:[.,]\p{N}+)*`)
-	hyphenRe, typography   = regexp.MustCompile(`(\p{L})-[ \t]*\r?\n[ \t]*(\p{Ll})`), strings.NewReplacer("ﬁ", "fi", "ﬂ", "fl", "ﬀ", "ff", "ﬃ", "ffi", "ﬄ", "ffl", "‘", "'", "’", "'", "“", `"`, "”", `"`)
+	readPrompts            = strings.Split(strings.TrimSpace(prompts), "\n") // two independent readings; a figure token keeps its separators (1.250 is not 1,250), a hyphenated word its hyphen (third-party, also broken at a line end)
+	markRe, tokenRe        = regexp.MustCompile(`(?i)\[(illegible|blank|unclear)\b[^\]]{0,200}\]|\((illegible|unclear)\)`), regexp.MustCompile(`(?i)\[(?:illegible|blank|unclear)\]|\p{L}+(?:-(?:[ \t]*\r?\n[ \t]*)?\p{L}+)+|[\p{L}\p{N}]+(?:[.,]\p{N}+)*`)
+	fold                   = strings.NewReplacer("ﬁ", "fi", "ﬂ", "fl", "ﬀ", "ff", "ﬃ", "ffi", "ﬄ", "ffl", " ", "", "\t", "", "\r", "", "\n", "") // a token as compared (never the text stored)
 	ErrVisionNotConfigured = errors.New("docs: no vision model is configured (set vision=<model id> in BIGLAW_MODELS): the original is stored with status needs_transcription and is transcribed once one is")
 	ErrUnreliable          = errors.New("docs: transcription unreliable")
 	ErrNoContent           = errors.New("docs: no content: the vision model found no readable text")
@@ -119,24 +119,20 @@ func (s *Service) readScans(ctx context.Context, data []byte, x *Extraction) (er
 	for k, sc := range x.Scans { // the child's answer is checked: pages in order, without a text layer, images in the file
 		for i, total := 0, 0; i < len(sc.Images); i++ {
 			im := sc.Images[i]
-			if total += im[1]; sc.Page < 1 || sc.Page > x.Pages || k > 0 && sc.Page <= x.Scans[k-1].Page || len(pages) == x.Pages && len([]rune(strings.TrimSpace(pages[sc.Page-1]))) >= 5*stampMax ||
+			if total += im[1]; sc.Page < 1 || sc.Page > x.Pages || k > 0 && sc.Page <= x.Scans[k-1].Page || len(pages) == x.Pages && len([]rune(strings.TrimSpace(pages[sc.Page-1]))) >= stampMax ||
 				im[0] < 0 || im[1] < 1 || total > maxImageBytes || im[0] > len(data)-im[1] {
 				return fmt.Errorf("%w: page %d's images are over %d MiB in all (or the file reader misplaced them)", ErrUnreadable, sc.Page, maxImageBytes>>20)
-			} else if c, _, err := image.DecodeConfig(bytes.NewReader(data[im[0] : im[0]+im[1]])); err != nil && mime != "image/webp" || max(c.Width, c.Height) > maxSide || c.Width*c.Height > maxPixels {
-				if x.Scans[k].Images = nil; only && strings.TrimSpace(x.Text) == "" { // else, as above, pageNotes notes it
-					return fmt.Errorf("%w: the image on page %d is damaged, or declares over %d pixels a side or %d million in all (too large for the model's server to decode safely): BigLaw sends neither", ErrUnreadable, sc.Page, maxSide, maxPixels/1_000_000)
-				}
+			} else if c, _, bad := image.DecodeConfig(bytes.NewReader(data[im[0] : im[0]+im[1]])); bad != nil && mime != "image/webp" || max(c.Width, c.Height) > maxSide || c.Width*c.Height > maxPixels {
+				x.Scans[k].Images, x.Unsupported, err = nil, append(x.Unsupported, sc.Page), fmt.Errorf("%w: the image on page %d is damaged, or declares over %d pixels a side or %d million in all (too large for the model's server to decode safely): BigLaw sends neither", ErrUnreadable, sc.Page, maxSide, maxPixels/1_000_000)
 			}
 		}
 	}
-	x.Scans = slices.DeleteFunc(x.Scans, func(sc Scan) bool { return sc.Images == nil })
-	if only {
-		x.Method = "vision"
-	}
-	if s.vision == nil && only {
-		x.Notes = []string{pendingNote}
+	if x.Scans = slices.DeleteFunc(x.Scans, func(sc Scan) bool { return sc.Images == nil }); only && len(x.Scans) == 0 { // every image damaged: no call is made
+		return err
+	} else if only && s.vision == nil {
+		x.Method, x.Notes = "vision", []string{pendingNote}
 		return ErrVisionNotConfigured
-	} else if s.vision == nil || len(pages) != x.Pages { // no model (README: upload it again once one is set), or a form feed inside a page
+	} else if x.Notes = pageNotes(x); s.vision == nil || len(pages) != x.Pages { // no model (README: upload it again once one is set), or a form feed inside a page
 		return nil
 	}
 	wait, cancel := context.WithTimeout(ctx, visionWait)
@@ -174,8 +170,8 @@ func (s *Service) readScans(ctx context.Context, data []byte, x *Extraction) (er
 			t.Pages, t.Agreement, t.LowConfidence = append(t.Pages, r), min(t.Agreement, r.Agreement), t.LowConfidence || r.low()
 		}
 	}
-	x.Blank = slices.DeleteFunc(x.Blank, func(p int) bool { _, ok := read[p]; return ok })
-	x.Text, x.NoText, x.Transcript, x.Notes = strings.Join(pages, "\f"), false, t, pageNotes(x) // the usage is kept even when no page was read
+	x.Blank, x.Transcript = slices.DeleteFunc(x.Blank, func(p int) bool { _, ok := read[p]; return ok }), t // the usage is kept even when no page was read
+	x.Text, x.NoText, x.Notes, x.Method = strings.Join(pages, "\f"), false, pageNotes(x), map[bool]string{true: "vision", false: x.Method}[only]
 	if len(read) > 0 {
 		x.Notes = append(x.Notes, fmt.Sprintf("Page %s: machine transcription of an image by %s (its two readings agreed on at least %d%% of their words): check quotes against the original.",
 			pageList(slices.Sorted(maps.Keys(read))), t.Model, int(100*t.Agreement)))
@@ -226,8 +222,8 @@ func (s *Service) readPage(ctx context.Context, data []byte, mime string, sc Sca
 			return "", PageRead{}, err
 		case resp.Truncated || len(resp.Text) > 16*readTokens:
 			return "", PageRead{}, fmt.Errorf("%w: the reading of page %d stopped at, or ran past, the model's output limit", ErrUnreliable, sc.Page)
-		case wordRe.MatchString(markRe.ReplaceAllString(resp.Text, "")): // else a blank reading: no words but [blank] and [illegible] marks; a guess in a mark is dropped
-			reads = append(reads, hyphenRe.ReplaceAllString(typography.Replace(markRe.ReplaceAllString(strings.TrimSpace(resp.Text), "[$1$2]")), "$1$2"))
+		case wordRe.MatchString(markRe.ReplaceAllString(resp.Text, "")): // else blank: no words but marks. Stored as read but for its marks (a guess in one is dropped)
+			reads = append(reads, markRe.ReplaceAllString(strings.TrimSpace(resp.Text), "[$1$2]"))
 			if s.visionKey != "" { // an endpoint echoing the request
 				reads[len(reads)-1] = strings.ReplaceAll(reads[len(reads)-1], s.visionKey, "[redacted]")
 			}
@@ -241,8 +237,7 @@ func (s *Service) readPage(ctx context.Context, data []byte, mime string, sc Sca
 	if reads[0] != "" && p.Agreement < unreliableBelow {
 		return "", PageRead{}, fmt.Errorf("%w: the two readings of page %d agree on %d%% of their words (%.0f%% is needed)", ErrUnreliable, sc.Page, int(100*p.Agreement), 100*unreliableBelow)
 	}
-	var b strings.Builder
-	last := 0
+	b, last := strings.Builder{}, 0
 	for _, i := range mask {
 		b.WriteString(reads[0][last:at[i][0]] + "[illegible]")
 		last = at[i][1]
@@ -250,11 +245,11 @@ func (s *Service) readPage(ctx context.Context, data []byte, mime string, sc Sca
 	return clean(b.String() + reads[0][last:]), p, nil
 }
 
-// tokensOf are a reading's words, case folded, and its [illegible]/[blank] marks, with their places.
+// tokensOf are a reading's words, case and ligatures folded, and its [illegible]/[blank] marks, with their places.
 func tokensOf(s string) (w []string, at [][]int) {
 	at = tokenRe.FindAllStringIndex(s, -1)
 	for _, p := range at {
-		w = append(w, strings.ToLower(s[p[0]:p[1]]))
+		w = append(w, fold.Replace(strings.ToLower(s[p[0]:p[1]])))
 	}
 	return w, at
 }
@@ -276,7 +271,7 @@ func diff(a, b []string, left map[string]int) (only []int) {
 // common) and p.Disputed, what makes the page low confidence however high its agreement: a mark in
 // either reading; a figure, negation or modal one has and the other lacks (every word one lacks, if
 // 5 or more: a dropped line); the same words in another order (swapped parties: a word LCS, at most
-// maxCompare² steps). If b has a mark it returns a's places outside that LCS, to mask: never filled.
+// maxCompare² steps). If b has a mark it returns a's places align does not place, to mask: never filled.
 func compare(a, b []string, p *PageRead) (mask []int) {
 	wa, wb := slices.DeleteFunc(slices.Clone(a), isMark), slices.DeleteFunc(slices.Clone(b), isMark) // agreement counts words, not marks
 	p.Agreement = 2 * float64(len(wa)-len(diff(wa, wb, map[string]int{}))) / float64(max(1, len(wa)+len(wb)))
@@ -309,8 +304,8 @@ func compare(a, b []string, p *PageRead) (mask []int) {
 	return mask
 }
 
-// align is which of a's places are in a and b's longest common subsequence, and its length (-1, too
-// long to align: then a place is in unless a has more of its word than b, left from diff(a, b)).
+// align is which of a's places are surely in a and b's LCS (b's mark matches any one word; a place matched to a mark, or
+// placed apart by the two tie-breaks, is not) and its length (-1, too long: in unless a has more of its word, left from diff).
 func align(a, b []string, left map[string]int) (in []bool, n int) {
 	if in = make([]bool, len(a)); len(a)*len(b) > maxCompare*maxCompare {
 		for i := range a {
@@ -322,16 +317,18 @@ func align(a, b []string, left map[string]int) (in []bool, n int) {
 	t := make([]uint16, (len(a)+1)*w)
 	for i := len(a) - 1; i >= 0; i-- {
 		for j := len(b) - 1; j >= 0; j-- {
-			if t[i*w+j] = max(t[(i+1)*w+j], t[i*w+j+1]); a[i] == b[j] {
+			if t[i*w+j] = max(t[(i+1)*w+j], t[i*w+j+1]); a[i] == b[j] || isMark(b[j]) { // b's mark stands for one word
 				t[i*w+j] = t[(i+1)*w+j+1] + 1
 			}
 		}
 	}
-	for i, j := 0, 0; i < len(a) && j < len(b); { // an equal pair is in; else skip a's word unless b's loses less
-		if in[i] = a[i] == b[j]; !in[i] && t[(i+1)*w+j] < t[i*w+j+1] {
-			j++
-		} else if i++; in[i-1] {
-			j++
+	for k, m := 0, make([]int, len(a)); k < 2; k++ { // m: walk 0's match (j+1) for a's places. An equal pair is matched; else skip a's word, unless b's loses less (or, in walk 1, as little)
+		for i, j := 0, 0; i < len(a) && j < len(b); {
+			if eq := a[i] == b[j] || isMark(b[j]); !eq && (t[(i+1)*w+j] < t[i*w+j+1] || k == 1 && t[(i+1)*w+j] == t[i*w+j+1]) {
+				j++
+			} else if i++; eq { // in: both walks match it to the same place of b (else where it belongs is ambiguous: masked)
+				in[i-1], m[i-1], j = k == 1 && m[i-1] == j+1 && !isMark(b[j]), j+1, j+1
+			}
 		}
 	}
 	return in, int(t[0])

@@ -15,6 +15,7 @@ import (
 	"image/png"
 	"io"
 	"log/slog"
+	"math/rand"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -107,6 +108,8 @@ func TestIllegibleNeverFilledTwoSided(t *testing.T) {
 		{"the tenant is Smith here", "the tenant is [illegible: Smith\nor Smyth] here"},
 		{"the tenant is Smith here", "the tenant is (illegible) here"},
 		{"the tenant is Smith here", "the tenant is [unclear] here"},
+		{"Smith $500 Jones $500.", "[illegible] $500 [illegible] $[illegible]."}, // r3 L1: few anchors
+		{"the the the Respondent", "the [illegible] the Respondent"},
 	} {
 		for _, r := range [][2]string{{c[0], c[1]}, {c[1], c[0]}} {
 			_, d := transcribe(t, page+r[0], page+r[1])
@@ -136,10 +139,71 @@ func TestIllegibleNeverFilledTwoSided(t *testing.T) {
 			t.Errorf("two-sided marks: %q %+v", d.Text, d.Transcript.Pages)
 		}
 	}
+	a, b = "John Smith pays John Smith Jr.", "John Smith pays [illegible] Jr." // r3 L1: one mark for two words: both masked
+	if _, d := transcribe(t, page+a, page+b); d.Text != page+"John Smith pays [illegible] [illegible] Jr." {
+		t.Errorf("a mark for two words: stored %q", strings.TrimPrefix(d.Text, page))
+	}
+	for _, c := range [][3]string{ // r3 L1: the two tie-breaks place a word apart: it is masked (either alone keeps it)
+		{"Paid to Jones Smith.", "Paid to Smith [illegible].", "Paid to [illegible] [illegible]."},
+		{"Jones pays Smith.", "pays [illegible] Smith.", "[illegible] [illegible] [illegible]."},
+	} {
+		if _, d := transcribe(t, page+c[0], page+c[1]); d.Text != page+c[2] {
+			t.Errorf("an ambiguous mark: stored %q", strings.TrimPrefix(d.Text, page))
+		}
+	}
+	for _, r := range [][2]string{{"Pay [illegible] to Smith and Smith.", "Pay Smith to [illegible] and Smith."}, {"Pay Smith to [illegible] and Smith.", "Pay [illegible] to Smith and Smith."}} {
+		if _, d := transcribe(t, page+r[0], page+r[1]); d.Text != page+"Pay [illegible] to [illegible] and Smith." { // r3 L1: a mark in both
+			t.Errorf("marks in both: stored %q", strings.TrimPrefix(d.Text, page))
+		}
+	}
 	_, d := transcribe(t, page+"the rent is [illegible: five hundred?] dollars", page+"the rent is [Illegible] dollars")
 	if p := d.Transcript.Pages[0]; strings.Contains(d.Text, "five") || !strings.Contains(d.Text, "rent is [illegible] dollars") || p.Agreement != 1 ||
 		fmt.Sprint(p.Disputed) != "[[illegible]]" || !d.Transcript.LowConfidence {
 		t.Errorf("a guess inside a mark: %q %+v", d.Text, p)
+	}
+}
+
+// TestIllegibleMaskedAtItsPlace (r3 L1): over random pages of five repeating words, a mark that replaces a word in
+// one reading masks exactly that place in the other (no word it could not read is kept, none it read is lost);
+// with words also inserted or dropped, a word is never kept more often than the marked reading has it: where a
+// mark belongs is ambiguous, every candidate place is masked (over-masked, never filled).
+func TestIllegibleMaskedAtItsPlace(t *testing.T) {
+	t.Parallel()
+	r, vocab := rand.New(rand.NewSource(7)), []string{"smith", "jones", "500", "the", "pays"}
+	for n := range 10000 {
+		a := make([]string, 3+r.Intn(25))
+		for i := range a {
+			a[i] = vocab[r.Intn(len(vocab))]
+		}
+		b, marked := slices.Clone(a), map[int]bool{}
+		for range 1 + r.Intn(3) {
+			i := r.Intn(len(a))
+			b[i], marked[i] = "[illegible]", true
+		}
+		if n%2 == 1 { // a word inserted, and the word after a mark dropped (the mark stands for both): places shift
+			if j := slices.Index(b, "[illegible]") + 1; j < len(b) && !isMark(b[j]) {
+				b = slices.Delete(b, j, j+1)
+			}
+			b = slices.Insert(b, r.Intn(len(b)+1), vocab[r.Intn(len(vocab))])
+		}
+		mask := compare(a, b, &PageRead{})
+		kept, have := map[string]int{}, map[string]int{}
+		for i, w := range a {
+			if !slices.Contains(mask, i) {
+				kept[w]++
+			}
+			if n%2 == 0 && marked[i] == !slices.Contains(mask, i) {
+				t.Fatalf("substitution: %q vs %q masked %v", a, b, mask)
+			}
+		}
+		for _, w := range b {
+			have[w]++
+		}
+		for w, k := range kept {
+			if k > have[w] {
+				t.Fatalf("filled %q: %q vs %q masked %v", w, a, b, mask)
+			}
+		}
 	}
 }
 
@@ -498,7 +562,7 @@ func TestServerRechecksChildAnswer(t *testing.T) {
 		"page 0":           {Pages: 1, Blank: []int{1}, Scans: []Scan{{0, [][2]int{{0, n}}}}},
 		"page 2 of 1":      {Pages: 1, Blank: []int{1}, Scans: []Scan{{2, [][2]int{{0, n}}}}},
 		"a page twice":     {Pages: 2, Blank: []int{1, 2}, Text: "\f", Scans: []Scan{{1, [][2]int{{0, n}}}, {1, [][2]int{{h, n}}}}},
-		"a text page":      {Pages: 2, Blank: []int{2}, Text: strings.Repeat("The Lessee shall pay rent. ", 15) + "\f", Scans: []Scan{{1, [][2]int{{0, n}}}}},
+		"a text page":      {Pages: 2, Blank: []int{2}, Text: strings.Repeat("x", stampMax) + "\f", Scans: []Scan{{1, [][2]int{{0, n}}}}}, // stampMax characters
 	} {
 		if err := s.readScans(t.Context(), data, &x); !errors.Is(err, ErrUnreadable) || !strings.Contains(err.Error(), "misplaced them") {
 			t.Errorf("%s: %v", name, err)
@@ -557,58 +621,103 @@ func TestMixedPDFDamagedImageNoted(t *testing.T) {
 				s = newService(t)
 			}
 			d, err := s.Ingest(t.Context(), "mixed.pdf", "application/pdf", bytes.NewReader(buildPDF(2, pdfPage{Text: long}, pdfPage{Text: "ABC000002", Image: dctImage(img)})))
-			if err != nil || d.Status != "ready" || d.Method != "text_layer" || !strings.Contains(strings.Join(d.Notes, " "), "were not read: page 2") || len(f.Calls()) != 0 {
+			notes := strings.Join(d.Notes, " ")
+			if err != nil || d.Status != "ready" || d.Method != "text_layer" || !strings.Contains(notes, "were not read: page 2") || len(f.Calls()) != 0 ||
+				!strings.Contains(notes, "Page 2: its image is damaged") || strings.Contains(notes, "no vision role is set") == vision { // r3 L3: the remedy fits
 				t.Errorf("%s (vision %v): %+v %v, %d calls", name, vision, d, err, len(f.Calls()))
 			}
 		}
 	}
-	s, _ := visionService(t, nil, nil)
+	for _, vision := range []bool{false, true} { // r3 L3: a Bates stamp beside a damaged image: that error, no call, nothing kept
+		s, f := visionService(t, texts("x y z"), texts("x y z"))
+		if !vision {
+			s = newService(t)
+		}
+		if _, err := s.Ingest(t.Context(), "stamp.pdf", "application/pdf", bytes.NewReader(buildPDF(1, pdfPage{Text: "SMITH-0001", Image: dctImage(damaged)}))); !errors.Is(err, ErrUnreadable) ||
+			!strings.Contains(err.Error(), "page 1 is damaged") || len(f.Calls()) != 0 {
+			t.Errorf("a stamped damaged scan (vision %v): %v, %d calls", vision, err, len(f.Calls()))
+		}
+		mustBeEmpty(t, s)
+	}
+	s, f := visionService(t, texts("page two words"), texts("page two words")) // one of two scans damaged: the other is read
+	d, err := s.Ingest(t.Context(), "stamps.pdf", "application/pdf", bytes.NewReader(buildPDF(2, pdfPage{Text: "SMITH-0001", Image: dctImage(damaged)}, pdfPage{Text: "SMITH-0002", Image: dctImage(jpegOf(8, 8, 2))})))
+	if err != nil || d.Text != "\nSMITH-0001\fpage two words\nSMITH-0002" || len(f.Calls()) != 2 || !strings.Contains(strings.Join(d.Notes, " "), "Page 1: its image is damaged") {
+		t.Errorf("one damaged scan of two: %+v %v, %d calls", d, err, len(f.Calls()))
+	}
+	s, _ = visionService(t, nil, nil)
 	if _, err := s.Ingest(t.Context(), "scan.jpg", "image/jpeg", bytes.NewReader(damaged)); !errors.Is(err, ErrUnreadable) || !strings.Contains(err.Error(), "page 1 is damaged") || strings.Contains(err.Error(), "bomb") {
 		t.Errorf("a damaged image: %v", err)
 	}
 }
 
-// TestLongLegendScanTranscribed (r2 M5): a scanned production whose text layer is a confidentiality
-// legend over stampMax characters beside a page-shaped JPEG is a scan, transcribed with the legend kept;
-// beside an image that is not page-shaped, or under a page of text (an OCR'd scan), only the text layer
-// is read and the page is noted, never silently complete. stampMax counts characters, not bytes.
-func TestLongLegendScanTranscribed(t *testing.T) {
+// TestTextLayerOverPageImageKept (r3 N1, replacing r2 M5's page-shaped rule): a page with stampMax characters of
+// text layer or more is a page of text whatever image is under it. A short letter on full-page letterhead is
+// stored as its text layer, once, with no call and no hold, whatever a vision model would read (none, disagreeing
+// readings, or the letter again); a production page under a long legend is stored as the legend with the
+// unread-image note (README Limitations); a page of OCR text and a logo likewise. stampMax counts characters.
+func TestTextLayerOverPageImageKept(t *testing.T) {
 	t.Parallel()
-	legend := "HIGHLY CONFIDENTIAL - ATTORNEYS' EYES ONLY - SUBJECT TO PROTECTIVE ORDER  SMITH-000" // 84 characters with its digit
-	scan := func(w, h int, text string) []byte {
-		return buildPDF(2, pdfPage{Text: text + "1", Image: dctImage(jpegOf(w, h, 1))}, pdfPage{Text: text + "2", Image: dctImage(jpegOf(w, h, 2))})
-	}
-	p1, p2 := "The Respondent shall pay the Applicant monthly support", "Signed at Toronto by both parties before a witness"
-	s, f := visionService(t, texts(p1, p2), texts(p1, p2))
-	d, err := s.Ingest(t.Context(), "prod.pdf", "application/pdf", bytes.NewReader(scan(85, 110, legend))) // 612×792 within 3%
-	if err != nil || d.Method != "vision" || len(f.Calls()) != 4 || d.Text != p1+"\n"+legend+"1\f"+p2+"\n"+legend+"2" {
-		t.Errorf("a long legend beside a page scan: %q %v, %d calls", d.Text, err, len(f.Calls()))
-	}
-	ocr := strings.Repeat("The parties agree to every term of this order. ", 9) // 423 characters: a page of OCR text
-	accented := strings.Repeat("\xe9", 78)                                      // é in WinAnsi: with its digit 157 bytes of UTF-8, 79 characters
+	letter := "Dear Ms. Smith, Please find enclosed the signed consent order dated October 2, 2026. Kindly confirm receipt at your earliest convenience. Yours truly, A. Lawyer, Barrister and Solicitor" // 185 characters
+	legend := "HIGHLY CONFIDENTIAL - ATTORNEYS' EYES ONLY - SUBJECT TO PROTECTIVE ORDER  SMITH-000"                                                                                                       // 84 characters with its digit
+	page := func(text string, w, h, seed int) pdfPage {
+		return pdfPage{Text: text, Image: dctImage(jpegOf(w, h, seed))}
+	} // 85×110 is 612×792's shape
+	agree := texts("LETTERHEAD LLP " + letter)
 	for name, c := range map[string]struct {
-		pdf  []byte
-		read bool
-	}{"logo-shaped": {scan(8, 8, legend), false}, "OCR'd scan": {scan(85, 110, ocr), false}, "accented stamp": {scan(8, 8, accented), true}} {
-		s, f := visionService(t, texts(p1, p2), texts(p1, p2))
-		d, err := s.Ingest(t.Context(), name+".pdf", "application/pdf", bytes.NewReader(c.pdf))
-		if noted := strings.Contains(strings.Join(d.Notes, " "), "Page 1, 2: an image on the page was not read, only its text layer"); err != nil || noted == c.read || (len(f.Calls()) == 4) != c.read {
-			t.Errorf("%s: %q %v, %d calls", name, d.Notes, err, len(f.Calls()))
+		pdf    []byte
+		a, b   []model.Reply
+		vision bool
+		want   string
+	}{
+		"letter, no vision role":      {buildPDF(1, page(letter, 85, 110, 1)), nil, nil, false, letter},
+		"letter, readings disagree":   {buildPDF(1, page(letter, 85, 110, 1)), texts("alpha beta gamma delta"), texts("one two three four"), true, letter},
+		"letter, readings agree":      {buildPDF(1, page(letter, 85, 110, 1)), agree, agree, true, letter},
+		"2-page letter, short page 2": {buildPDF(2, page(letter+" "+letter, 85, 110, 1), page(letter, 85, 110, 2)), agree, agree, true, letter + " " + letter + "\f" + letter},
+		"production under a legend":   {buildPDF(1, page(legend+"1", 85, 110, 1)), texts("the order"), texts("the order"), true, legend + "1"},
+		"OCR'd scan":                  {buildPDF(1, page(strings.Repeat("The parties agree to every term. ", 13), 85, 110, 1)), agree, agree, true, strings.Repeat("The parties agree to every term. ", 13)},
+		"logo":                        {buildPDF(1, page(legend+"1", 8, 8, 1)), agree, agree, true, legend + "1"},
+	} {
+		s, f := visionService(t, c.a, c.b)
+		if !c.vision {
+			s = newService(t)
 		}
+		d, err := s.Ingest(t.Context(), "letter.pdf", "application/pdf", bytes.NewReader(c.pdf))
+		if err != nil || d.Status != "ready" || d.Method != "text_layer" || len(f.Calls()) != 0 || strings.ReplaceAll(d.Text, "\n", "") != c.want ||
+			!strings.Contains(strings.Join(d.Notes, " "), "an image on the page was not read, only its text layer") {
+			t.Errorf("%s: %v status %q method %q, %d calls, text %q, notes %q", name, err, d.Status, d.Method, len(f.Calls()), d.Text, d.Notes)
+		}
+	}
+	accented := strings.Repeat("\xe9", 78) // é in WinAnsi: with its digit 157 bytes of UTF-8, 79 characters: a stamp, the page a scan
+	s, f := visionService(t, texts("The Respondent shall pay"), texts("The Respondent shall pay"))
+	if d, err := s.Ingest(t.Context(), "stamp.pdf", "application/pdf", bytes.NewReader(buildPDF(1, page(accented+"1", 85, 110, 1)))); err != nil || d.Method != "vision" || len(f.Calls()) != 2 {
+		t.Errorf("a 79-character stamp: %+v %v, %d calls", d, err, len(f.Calls()))
 	}
 }
 
-// TestBenignNoiseNotLow (r2 L2): a word hyphenated across a line break, a ligature and curly quotes in
-// one reading are undone before the readings are compared and in the text stored; a parenthetical that
-// starts with "unclear" or a bracket that starts with "blank" is prose, not a mark (red team of L3).
+// TestBenignNoiseNotLow (r2 L2, r3 L2): a word hyphenated across a line break, a ligature and curly quotes in one
+// reading are folded only to compare the readings: the text stored is the reading as returned (the kept one, the
+// first). A hyphen is kept in the compared word, so "third-\nparty" is "third-party" and "re-\nlease" is not
+// "release" (one differing word: not low on its own). A parenthetical that starts with "unclear" or a bracket that
+// starts with "blank" is prose, not a mark (red team of L3).
 func TestBenignNoiseNotLow(t *testing.T) {
 	t.Parallel()
 	page := strings.Join(filler(60, "w"), " ") + " "
 	clean := `the home municipally known as 14 Elm Street under the Guidelines, "as filed", the officer's disbursements (unclear from the record) [blanket order]`
 	noisy := "the home munici-\npally known as 14 Elm Street under the Guide-\nlines, “as ﬁled”, the officer’s disburse- \n ments (unclear from the record) [blanket order]"
 	for _, r := range [][2]string{{clean, noisy}, {noisy, clean}} {
-		if _, d := transcribe(t, page+r[0], page+r[1]); d.Transcript.LowConfidence || d.Text != page+clean {
+		if _, d := transcribe(t, page+r[0], page+r[1]); d.Transcript.LowConfidence || d.Text != page+r[0] {
 			t.Errorf("benign noise: low %v %+v, stored %q", d.Transcript.LowConfidence, d.Transcript.Pages, strings.TrimPrefix(d.Text, page))
+		}
+	}
+	for _, c := range []struct {
+		a, b  string
+		agree float64
+	}{{"the third-\nparty co-\nowner signed", "the third-party co-owner signed", 1}, {"the landlord may re-\nlease the premises", "the landlord may release the premises", 1}} {
+		for _, r := range [][2]string{{c.a, c.b}, {c.b, c.a}} {
+			_, d := transcribe(t, page+r[0], page+r[1])
+			if p := d.Transcript.Pages[0]; d.Text != page+r[0] || (p.Agreement == 1) != strings.Contains(c.a, "third") || d.Transcript.LowConfidence {
+				t.Errorf("%q vs %q: stored %q, %+v", r[0], r[1], strings.TrimPrefix(d.Text, page), p)
+			}
 		}
 	}
 }
