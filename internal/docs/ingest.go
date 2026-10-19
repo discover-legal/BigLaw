@@ -205,15 +205,18 @@ func extractPDF(data []byte) (x Extraction, err error) {
 	x.Text = clean(strings.Join(pages, "\f")) // a form feed between pages
 	for i, p := range pages {
 		sc, bad := pageScan(r, r.Page(i+1), i+1, data)
-		if n := utf8.RuneCountInString(strings.TrimSpace(p)); n >= stampMax || n > 0 && !bad && len(sc.Images) == 0 { // a page of text (a letter on stationery too)
-			if bad || len(sc.Images) > 0 {
-				x.Imaged = append(x.Imaged, i+1)
-			}
-			continue
+		n := utf8.RuneCountInString(strings.TrimSpace(p))
+		if n >= stampMax && (bad || len(sc.Images) > 0) { // text over an image: noted unless a mixed page's image is read
+			x.Imaged = append(x.Imaged, i+1)
 		}
-		if x.Blank = append(x.Blank, i+1); bad {
-			x.Unsupported = append(x.Unsupported, i+1)
-		} else if len(sc.Images) > 0 {
+		if n >= mixedMax || n > 0 && !bad && len(sc.Images) == 0 { // a page of text (text over a damaged image: neither Blank nor a scan)
+			continue
+		} else if n < stampMax {
+			if x.Blank = append(x.Blank, i+1); bad {
+				x.Unsupported = append(x.Unsupported, i+1)
+			}
+		}
+		if !bad && len(sc.Images) > 0 { // a scan, or a mixed page (never in Blank: it never holds or refuses the document)
 			if x.ScanPages++; x.ScanPages <= maxVisionPages+1 {
 				x.Scans = append(x.Scans, sc)
 			}

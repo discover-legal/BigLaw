@@ -35,7 +35,9 @@ change. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`, not here.
   leg only when `embed_model` (cleared first, set after all its chunks at one length) is the current model.
   PR 3c (`vision.go`, `scanpdf.go`, `jobs.go`): `UseVision` (the `vision` role only; never a text
   role) transcribes images and PDF pages with no text layer, or only a stamp (< 80 chars; kept after the
-  transcript; a page with ≥ 80 chars over any image is text: stored as is, unread-image note, never held), whose images are whole JPEG streams (found by offset in the child, sent as they
+  transcript); a page with 80–399 chars over a page image is MIXED (`mixedMax`: read, the text layer stored
+  verbatim after only the reading's lines it lacks, `beyond`; never held or refused: no role or a failed read →
+  text layer + unread-image note); ≥ 400 chars over any image is text (no call, noted), whose images are whole JPEG streams (found by offset in the child, sent as they
   are, re-checked in the server, header dimensions capped); two readings per page by two prompts
   (`vision_prompts.txt`), agreement < 0.75 refuses (422 `transcription_unreliable`), < 0.9 is
   `lowConfidence`, and so is any page whose readings differ on what matters (`compare`: a mark, a
@@ -117,6 +119,6 @@ make lint vuln   # staticcheck, govulncheck (CI lint job)
 # DB tests: BIGLAW_TEST_DSN=postgres://…?sslmode=disable BIGLAW_REQUIRE_DB=1 (Postgres with pgvector)
 make e4-record EMBED_MODEL=…   # owner-run: record the E4 tape at the model's own length (make e4-live: no tape)
 ```
-Budgets: Go prod LOC ≤ 15,600 (owner decision 11; plan 15,560–15,590 after PR 3c round 3, headroom 10–40, PR 3e must fit; test-support packages such as `storetest` count), internal
+Budgets: Go prod LOC ≤ 15,650 (owner decision 12; plan 15,580–15,610 after PR 3c round 4, headroom 40–70, PR 3e must fit; test-support packages such as `storetest` count), internal
 packages ≤ 12 (test-support packages do not count), direct deps ≤ 3, env vars ≤ 20 (18 used), UI runtime
 deps ≤ 2, untested packages 0, longest source file ≤ 2,000 lines.

@@ -515,11 +515,22 @@ base64 `image_url` parts through the same OpenAI-compatible client (every call p
 other). A PDF page is scanned when it has no text layer, **or only a stamp** (under 80 characters of
 text layer, a Bates number or a header, beside a page image, as v1 counted): such a page is read and
 its stamp kept after the transcript, outside the transcript's span (`TestBatesStampedScanTranscribed`).
-Characters are counted, not bytes. Any other page holding images (a letter on full-page letterhead, an
-OCR'd scan, a logo, a production page under a legend of 80 characters or more) is a page of text: its
-text layer is stored as it is, once, with no vision call, the document is never held or refused for
-its image, and a note names the page (`TestTextLayerOverPageImageKept`: a 185-character letter on a
-page-sized JPEG with no vision role, with disagreeing readings and with agreeing ones).
+Characters are counted, not bytes. A page with **80 to 399 characters** of text layer over JPEG page
+images (a production page under a long legend, a short letter on letterhead, a title page with a logo)
+is **mixed** (owner decision 12): its images are read like a scan (two readings, every agreement,
+masking and low-confidence rule), its text layer is stored verbatim as the truth for its own words,
+and the page stored is only the reading's lines whose words do not run, in order, in the text layer,
+then the text layer (the added lines are the transcript span; the note says only lines a text layer
+lacks are kept). Such a page never holds or refuses the document: with no vision role, or when its
+reads fail or disagree, its text layer is stored with the note "an image on the page was not read"
+(`TestShortTextOverPageImageMixed`: the 185-character letter on a page-sized JPEG with no vision role,
+with disagreeing readings, with one reading carrying a 30-name partner sidebar, and with agreeing
+ones, stored once; a 133-character "HIGHLY CONFIDENTIAL – ATTORNEYS' EYES ONLY" legend whose
+readings repeat it, the body stored once with the legend; the cost of a mixed page recorded). The
+cut, 400 characters, is five lines of 80: a legend with its protective-order reference and Bates
+number runs 55–266 characters, a page of text about 3,700. A page with 400 characters or more over
+any image (a letter page, an OCR'd scan) is a page of text: stored as it is, with no call, never held
+or refused, and noted (a 2-page letter on letterhead makes 0 calls).
 There is no OCR engine and no rasteriser: a scanned PDF page is read only when it is one to four
 JPEG images stored whole (`/DCTDecode`), which the reader child finds by their offsets in the file
 and the server sends **as they are** (`TestScannedPDFDCTPagesExtracted`: the bytes sent are the
@@ -915,7 +926,7 @@ transcribe, never text).
 
 | Budget | Ceiling | Today |
 |---|---:|---:|
-| Go production lines (physical lines, non-`_test.go`, test-support packages included) | 15,600 | 4,867 |
+| Go production lines (physical lines, non-`_test.go`, test-support packages included) | 15,650 | 4,918 |
 | Packages under `internal/`, test-support packages excluded | 12 | 4 (`docs`, `docs/ooxml`, `model`, `store`; `store/storetest` is test support) |
 | Direct Go dependencies | 3 | 2 (`github.com/lib/pq`, `github.com/ledongthuc/pdf`) |
 | Runtime environment variables | 20 | 18 |
@@ -923,7 +934,7 @@ transcribe, never text).
 | Packages without a `_test.go` | 0 | 0 |
 | Lines in any one source file (`.go`, `.py`, `.sql`, `.sh`, `.js`, `.ts`, `.css`; tests included) | 2,000 | 634 |
 
-The line ceiling is 15,600 (owner decisions: 14,000, then 14,250, then 14,500 during PR 2's review, then 15,000 at PR 3a's, with pgvector, then 15,500 at PR 3a's round 3, declared final, then 15,600 at PR 3c's round 1, decision 11). The plan totals 15,560–15,590 after PR 3c (round 3), headroom 10–40; PR 3e (an embed endpoint, about 30–40 lines) is next and must fit. A **test-support package** is one
+The line ceiling is 15,650 (owner decisions: 14,000, then 14,250, then 14,500 during PR 2's review, then 15,000 at PR 3a's, with pgvector, then 15,500 at PR 3a's round 3, declared final, then 15,600 at PR 3c's round 1, decision 11, then 15,650 at PR 3c's round 4 to read long-legend scans, decision 12). The plan totals 15,580–15,610 after PR 3c (round 4), headroom 40–70; PR 3e (an embed endpoint, about 30–40 lines) is next and must fit. A **test-support package** is one
 whose directory name ends in `test` and that no production file outside it imports, such as
 `storetest`. Under the coordinator's ruling it is left out of the package count, but its lines
 count toward the line ceiling like any other non-`_test.go` file. A `*test` package that
@@ -1198,13 +1209,22 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     of its scanned pages are transcribed (the note still lists them). TIFF, BMP, HEIC and JPEG 2000
     are not read (no decoder without a dependency). A page with a short text layer and a small
     JPEG (a logo beside a one-line letter under 80 characters) counts as a scan and is read, its text
-    layer kept after the transcript (in a one-page document with no vision role it waits, 503). A page
-    with 80 or more characters of text layer is never read by the vision model, whatever image is
-    under it: a scanned production page whose legend and Bates number reach 80 characters is stored as
-    its legend only, with the note "an image on the page was not read … its text may be missing"
-    (round 3 withdrew round 2's page-shaped rule, which held, refused or doubled short letters on
-    letterhead; reading such a page and keeping the transcript only where it adds text did not fit
-    the round's line budget). Re-export such a production without the legend, or as images, to have it read.
+    layer kept after the transcript (in a one-page document with no vision role it waits, 503).
+    A page with 400 or more characters of text layer is never read, whatever image is under it: a
+    production page whose legend and Bates number reach 400 characters is stored as its legend only,
+    with the note "an image on the page was not read … its text may be missing"; re-export it without
+    the legend, or as images, to have it read.
+  - **Mixed pages (80–399 characters over an image)** are read even when the image is a logo or
+    stationery, not a scan: two vision calls per such page, the image sent off the machine, and a
+    logo's words (a firm name) are added as transcript lines. The text layer is subtracted by whole
+    lines: a reading line is dropped only when all its words run, in order, in the text layer, so a
+    line the reading changed (a figure misread, or rewritten by text in the image: prompt injection)
+    is kept beside the text layer's own (that line of the letter twice, once as transcript, capped and
+    disclosed); a line mixing a sidebar name with the letter's words (two columns read across) is kept
+    whole; a body line whose words are all a run of the legend (a heading "CONFIDENTIAL") is dropped,
+    its words staying on the page through the text layer. The added lines are stored before the text
+    layer whatever their place on the page. Reading only a mixed page's image cannot see text drawn
+    over it; a document over 20 such pages reads the first 20 and notes the rest.
   - A mixed PDF stored while no vision role is set keeps its scanned pages unread for good: the job
     takes only documents with no text layer; its note says to upload it again.
   - **Images leave the machine** with a hosted vision model, as chat prompts will. Setting a vision
@@ -1244,7 +1264,10 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     wording; `docs/scanpdf.go` +5 and `docs/ingest.go` +3 for page-shaped legends and the unread-image
     note; `docs/jobs.go` 0): plan **15,562–15,592**, headroom 8–38 for PR 3e's 30–40. Round 3
     removes 2 (4,900 → 4,898: the page-shaped rule out, the alignment's wildcard and second walk and
-    the damaged-page note in): plan **15,560–15,590**, headroom 10–40.
+    the damaged-page note in): plan **15,560–15,590**, headroom 10–40. Round 4 (owner decision 12:
+    ceiling 15,650, long-legend scans read now) adds 20 (4,898 → 4,918: `docs/vision.go` +14 for
+    `beyond` and the mixed page's notes, `docs/ingest.go` +3, `docs/scanpdf.go` +3 for `mixedMax`):
+    plan **15,580–15,610**, headroom 40–70; with PR 3e's 30–40, 15,610–15,650, inside 15,650.
 - **Model client (PR 2):**
   - Only `Embed` has a caller yet (documents); `Chat`'s first caller is the agent loop (PR 4a),
     so no real endpoint has been exercised: every test uses `httptest` or

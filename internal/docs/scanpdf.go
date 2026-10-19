@@ -19,6 +19,9 @@ const (
 	maxPageImages  = 4        // images on one scanned page
 	maxImageBytes  = 20 << 20 // a page's images, sent in one vision call
 	stampMax       = 80       // characters of text layer beside page images that make a page a scan (a Bates number, a header; as v1)
+	// mixedMax: under it (5 lines of 80), text over a page image is MIXED: the image is read and adds only what the text layer
+	// lacks. A legend with its protective order and Bates number runs 55–266 characters; a page of text, ~3,700.
+	mixedMax = 400
 )
 
 // Scan is a page to transcribe: its images as {offset, length} in the file, sent as they are.
@@ -66,7 +69,7 @@ func pageNotes(x *Extraction) (notes []string) {
 	if len(x.Unsupported) > 0 {
 		notes = append(notes, fmt.Sprintf("Page %s: its image is damaged, too large, or in an encoding BigLaw cannot send, and was not sent: export the page as a JPEG to have it read.", pageList(slices.Sorted(slices.Values(x.Unsupported)))))
 	}
-	if len(x.Imaged) > 0 { // a page image under a text layer: an OCR'd scan, a logo, letterhead, or a scan under a legend of stampMax characters or more
+	if len(x.Imaged) > 0 { // a page image under a text layer not read: an OCR'd scan, a logo, letterhead (mixedMax or more, or no vision)
 		notes = append(notes, fmt.Sprintf("Page %s: an image on the page was not read, only its text layer: if the page is a scan, its text may be missing: check it against the original.", pageList(x.Imaged)))
 	}
 	return notes

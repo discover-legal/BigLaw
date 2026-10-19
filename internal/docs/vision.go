@@ -104,8 +104,8 @@ func imageOf(data []byte, mime string) (Extraction, error) {
 
 // readScans transcribes x's scans (data is the file) into x. With no text layer but stamps the
 // transcript is the document: an unsupported page is 422, over maxVisionPages 413, an unreadable
-// page readPage's error, nothing readable ErrNoContent, no vision model ErrVisionNotConfigured. A
-// mixed PDF keeps its text layer verbatim; a scanned page there that cannot be read is noted.
+// page readPage's error, nothing readable ErrNoContent, no vision model ErrVisionNotConfigured. Text layers are
+// kept verbatim, a reading adds only its lines they lack (beyond); in a mixed PDF an unread page is only noted.
 func (s *Service) readScans(ctx context.Context, data []byte, x *Extraction) (err error) {
 	only, pages, mime := len(x.Blank) == x.Pages, strings.Split(x.Text, "\f"), strings.Replace(x.ContentType, "application/pdf", "image/jpeg", 1)
 	switch {
@@ -119,7 +119,7 @@ func (s *Service) readScans(ctx context.Context, data []byte, x *Extraction) (er
 	for k, sc := range x.Scans { // the child's answer is checked: pages in order, without a text layer, images in the file
 		for i, total := 0, 0; i < len(sc.Images); i++ {
 			im := sc.Images[i]
-			if total += im[1]; sc.Page < 1 || sc.Page > x.Pages || k > 0 && sc.Page <= x.Scans[k-1].Page || len(pages) == x.Pages && len([]rune(strings.TrimSpace(pages[sc.Page-1]))) >= stampMax ||
+			if total += im[1]; sc.Page < 1 || sc.Page > x.Pages || k > 0 && sc.Page <= x.Scans[k-1].Page || len(pages) == x.Pages && len([]rune(strings.TrimSpace(pages[sc.Page-1]))) >= mixedMax ||
 				im[0] < 0 || im[1] < 1 || total > maxImageBytes || im[0] > len(data)-im[1] {
 				return fmt.Errorf("%w: page %d's images are over %d MiB in all (or the file reader misplaced them)", ErrUnreadable, sc.Page, maxImageBytes>>20)
 			} else if c, _, bad := image.DecodeConfig(bytes.NewReader(data[im[0] : im[0]+im[1]])); bad != nil && mime != "image/webp" || max(c.Width, c.Height) > maxSide || c.Width*c.Height > maxPixels {
@@ -143,9 +143,10 @@ func (s *Service) readScans(ctx context.Context, data []byte, x *Extraction) (er
 			s.log.Warn("vision transcription refused or failed after its calls", "tokens", t.Tokens, "costUsd", string(cost), "err", err)
 		}
 	}()
-	read, notes, size := map[int]PageRead{}, []string{}, len(x.Text)
+	read, notes, size, seen := map[int]PageRead{}, []string{}, len(x.Text), map[int]bool{}
 	for _, sc := range x.Scans[:min(len(x.Scans), maxVisionPages)] {
 		text, p, err := s.readPage(wait, data, mime, sc, t)
+		text, seen[sc.Page] = beyond(text, pages[sc.Page-1]), err == nil // the text layer is the truth for its own words
 		switch size += len(text); {
 		case err != nil && (only || ctx.Err() != nil):
 			return err
@@ -153,7 +154,7 @@ func (s *Service) readScans(ctx context.Context, data []byte, x *Extraction) (er
 			notes = append(notes, fmt.Sprintf("Page %d was not transcribed: %s.", sc.Page, strings.TrimPrefix(err.Error(), "docs: ")))
 		case size > maxText: // a runaway endpoint: stop before holding more
 			return textTooLarge()
-		case text != "": // a stamp in the text layer is kept after the transcript
+		case text != "": // what the reading adds; the text layer (a stamp, a legend, a short letter) is kept after it
 			p.End = len(text)
 			pages[sc.Page-1], read[sc.Page] = strings.TrimSuffix(text+"\n"+strings.TrimSpace(pages[sc.Page-1]), "\n"), p
 			if len(p.Disputed) > 0 {
@@ -171,13 +172,26 @@ func (s *Service) readScans(ctx context.Context, data []byte, x *Extraction) (er
 		}
 	}
 	x.Blank, x.Transcript = slices.DeleteFunc(x.Blank, func(p int) bool { _, ok := read[p]; return ok }), t // the usage is kept even when no page was read
+	x.Imaged = slices.DeleteFunc(x.Imaged, func(p int) bool { return seen[p] })
 	x.Text, x.NoText, x.Notes, x.Method = strings.Join(pages, "\f"), false, pageNotes(x), map[bool]string{true: "vision", false: x.Method}[only]
 	if len(read) > 0 {
-		x.Notes = append(x.Notes, fmt.Sprintf("Page %s: machine transcription of an image by %s (its two readings agreed on at least %d%% of their words): check quotes against the original.",
+		x.Notes = append(x.Notes, fmt.Sprintf("Page %s: machine transcription of an image by %s (its two readings agreed on at least %d%% of their words; only lines a page's text layer lacks are kept): check quotes against the original.",
 			pageList(slices.Sorted(maps.Keys(read))), t.Model, int(100*t.Agreement)))
 	}
 	x.Notes = append(x.Notes, notes...)
 	return nil
+}
+
+// beyond is the lines of a reading whose words do not run, in order, in the page's text layer: what the image adds.
+func beyond(reading, layer string) string {
+	w, _ := tokensOf(layer)
+	key, keep := "\x00"+strings.Join(w, "\x00")+"\x00", []string{}
+	for _, l := range strings.Split(reading, "\n") {
+		if w, _ := tokensOf(l); len(w) > 0 && !strings.Contains(key, "\x00"+strings.Join(w, "\x00")+"\x00") {
+			keep = append(keep, l)
+		}
+	}
+	return strings.Join(keep, "\n")
 }
 
 // covers is the transcribed page that bytes [start, end) overlap (a low one, else the least agreeing, if several).

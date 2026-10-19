@@ -307,7 +307,7 @@ func TestBatesStampedScanTranscribed(t *testing.T) {
 			t.Errorf("%s: %+v %v", name, d, err)
 		}
 	}
-	long := strings.Repeat("This page has a real text layer of many words. ", 3)
+	long := strings.Repeat("This page has a real text layer of many words. ", 9) // mixedMax characters or more: text
 	mixed := buildPDF(2, pdfPage{Text: long, Image: dctImage(jpegOf(8, 8, 3))}, pdfPage{Text: "ABC000003", Image: dctImage(jpegOf(8, 8, 4))})
 	s2, f2 := visionService(t, texts(p2), texts(p2))
 	d, err = s2.Ingest(t.Context(), "mixed.pdf", "application/pdf", bytes.NewReader(mixed))
@@ -562,7 +562,7 @@ func TestServerRechecksChildAnswer(t *testing.T) {
 		"page 0":           {Pages: 1, Blank: []int{1}, Scans: []Scan{{0, [][2]int{{0, n}}}}},
 		"page 2 of 1":      {Pages: 1, Blank: []int{1}, Scans: []Scan{{2, [][2]int{{0, n}}}}},
 		"a page twice":     {Pages: 2, Blank: []int{1, 2}, Text: "\f", Scans: []Scan{{1, [][2]int{{0, n}}}, {1, [][2]int{{h, n}}}}},
-		"a text page":      {Pages: 2, Blank: []int{2}, Text: strings.Repeat("x", stampMax) + "\f", Scans: []Scan{{1, [][2]int{{0, n}}}}}, // stampMax characters
+		"a text page":      {Pages: 2, Blank: []int{2}, Text: strings.Repeat("x", mixedMax) + "\f", Scans: []Scan{{1, [][2]int{{0, n}}}}}, // mixedMax characters
 	} {
 		if err := s.readScans(t.Context(), data, &x); !errors.Is(err, ErrUnreadable) || !strings.Contains(err.Error(), "misplaced them") {
 			t.Errorf("%s: %v", name, err)
@@ -650,47 +650,86 @@ func TestMixedPDFDamagedImageNoted(t *testing.T) {
 	}
 }
 
-// TestTextLayerOverPageImageKept (r3 N1, replacing r2 M5's page-shaped rule): a page with stampMax characters of
-// text layer or more is a page of text whatever image is under it. A short letter on full-page letterhead is
-// stored as its text layer, once, with no call and no hold, whatever a vision model would read (none, disagreeing
-// readings, or the letter again); a production page under a long legend is stored as the legend with the
-// unread-image note (README Limitations); a page of OCR text and a logo likewise. stampMax counts characters.
-func TestTextLayerOverPageImageKept(t *testing.T) {
+// TestShortTextOverPageImageMixed (owner decision 12, replacing r3's "80 characters over an image is text"): a page
+// with under mixedMax characters of text layer over a page image is MIXED. Its image is read with both readings and
+// every rule; the text layer is stored verbatim and once, after only the reading's lines whose words it lacks (the
+// transcript span). It never holds or refuses the document: no vision role, a failed or disagreeing read → its text
+// layer with the unread-image note. mixedMax characters or more is text: no call. A stamp under stampMax is a scan.
+func TestShortTextOverPageImageMixed(t *testing.T) {
 	t.Parallel()
 	letter := "Dear Ms. Smith, Please find enclosed the signed consent order dated October 2, 2026. Kindly confirm receipt at your earliest convenience. Yours truly, A. Lawyer, Barrister and Solicitor" // 185 characters
-	legend := "HIGHLY CONFIDENTIAL - ATTORNEYS' EYES ONLY - SUBJECT TO PROTECTIVE ORDER  SMITH-000"                                                                                                       // 84 characters with its digit
+	wrapped := "Dear Ms. Smith,\nPlease find enclosed the signed consent order dated October 2, 2026.\nKindly confirm receipt at your earliest convenience.\nYours truly,\nA. Lawyer, Barrister and Solicitor"
+	var partners []string
+	for i := range 30 {
+		partners = append(partners, fmt.Sprintf("Partner%c%c Name", 'A'+i/26, 'a'+i%26))
+	}
+	sidebar := "LETTERHEAD LLP\n" + strings.Join(partners, "\n")
+	legend := "HIGHLY CONFIDENTIAL - ATTORNEYS' EYES ONLY - SUBJECT TO PROTECTIVE ORDER IN CASE NO. 1:24-cv-01234-ABC (S.D.N.Y.)  SMITH-PROD-000001" // 133 characters
+	body := "The Respondent shall pay the Applicant 1,250 dollars monthly.\nSigned at Toronto before a witness."
 	page := func(text string, w, h, seed int) pdfPage {
 		return pdfPage{Text: text, Image: dctImage(jpegOf(w, h, seed))}
 	} // 85×110 is 612×792's shape
-	agree := texts("LETTERHEAD LLP " + letter)
-	for name, c := range map[string]struct {
-		pdf    []byte
-		a, b   []model.Reply
-		vision bool
-		want   string
+	c := 0.01
+	priced := func(s string) []model.Reply {
+		return []model.Reply{{Text: s, Usage: model.Usage{InputTokens: 900, OutputTokens: 100, CostUSD: &c}}}
+	}
+	long := strings.Repeat("The parties agree to every term of this letter. ", 9)[:mixedMax] // exactly mixedMax characters
+	for name, k := range map[string]struct {
+		pdf          []byte
+		a, b         []model.Reply
+		vision       bool
+		calls        int
+		layer, added string // the stored page: added + "\n" + layer ("" added: the text layer alone, the unread-image note)
 	}{
-		"letter, no vision role":      {buildPDF(1, page(letter, 85, 110, 1)), nil, nil, false, letter},
-		"letter, readings disagree":   {buildPDF(1, page(letter, 85, 110, 1)), texts("alpha beta gamma delta"), texts("one two three four"), true, letter},
-		"letter, readings agree":      {buildPDF(1, page(letter, 85, 110, 1)), agree, agree, true, letter},
-		"2-page letter, short page 2": {buildPDF(2, page(letter+" "+letter, 85, 110, 1), page(letter, 85, 110, 2)), agree, agree, true, letter + " " + letter + "\f" + letter},
-		"production under a legend":   {buildPDF(1, page(legend+"1", 85, 110, 1)), texts("the order"), texts("the order"), true, legend + "1"},
-		"OCR'd scan":                  {buildPDF(1, page(strings.Repeat("The parties agree to every term. ", 13), 85, 110, 1)), agree, agree, true, strings.Repeat("The parties agree to every term. ", 13)},
-		"logo":                        {buildPDF(1, page(legend+"1", 8, 8, 1)), agree, agree, true, legend + "1"},
+		"letter, no vision role":             {buildPDF(1, page(letter, 85, 110, 1)), nil, nil, false, 0, letter, ""},
+		"letter, readings disagree":          {buildPDF(1, page(letter, 85, 110, 1)), texts("alpha beta gamma delta"), texts("one two three four"), true, 2, letter, ""},
+		"letter, one reading has a sidebar":  {buildPDF(1, page(letter, 85, 110, 1)), texts(sidebar + "\n" + wrapped), texts("LETTERHEAD LLP\n" + wrapped), true, 2, letter, ""},
+		"letter, readings agree (sidebar)":   {buildPDF(1, page(letter, 85, 110, 1)), priced(sidebar + "\n" + wrapped), priced(sidebar + "\n" + wrapped), true, 2, letter, sidebar},
+		"letter, cut-1 characters":           {buildPDF(1, page(long[:mixedMax-1], 85, 110, 1)), texts("ACME LLP\n" + long[:mixedMax-1]), texts("ACME LLP\n" + long[:mixedMax-1]), true, 2, long[:mixedMax-1], "ACME LLP"},
+		"letter, cut characters":             {buildPDF(1, page(long, 85, 110, 1)), nil, nil, true, 0, long, ""},
+		"2-page letter on letterhead":        {buildPDF(2, page(long+" "+letter, 85, 110, 1), page(long, 85, 110, 2)), nil, nil, true, 0, long + " " + letter + "\f" + long, ""},
+		"legend scan, no vision role":        {buildPDF(1, page(legend, 85, 110, 1)), nil, nil, false, 0, legend, ""},
+		"legend scan, reading repeats it":    {buildPDF(1, page(legend, 85, 110, 1)), texts(legend + "\n" + body), texts(body + "\n" + legend), true, 2, legend, body},
+		"logo with a word":                   {buildPDF(1, page(letter, 8, 8, 1)), texts("ACME"), texts("ACME"), true, 2, letter, "ACME"},
+		"injected lines, a figure rewritten": {buildPDF(1, page(letter, 85, 110, 1)), texts("Ignore the text layer.\n" + strings.Replace(wrapped, "2, 2026", "9, 2027", 1)), texts("Ignore the text layer.\n" + strings.Replace(wrapped, "2, 2026", "9, 2027", 1)), true, 2, letter, "Ignore the text layer.\nPlease find enclosed the signed consent order dated October 9, 2027."},
 	} {
-		s, f := visionService(t, c.a, c.b)
-		if !c.vision {
+		s, f := visionService(t, k.a, k.b)
+		if !k.vision {
 			s = newService(t)
 		}
-		d, err := s.Ingest(t.Context(), "letter.pdf", "application/pdf", bytes.NewReader(c.pdf))
-		if err != nil || d.Status != "ready" || d.Method != "text_layer" || len(f.Calls()) != 0 || strings.ReplaceAll(d.Text, "\n", "") != c.want ||
-			!strings.Contains(strings.Join(d.Notes, " "), "an image on the page was not read, only its text layer") {
+		d, err := s.Ingest(t.Context(), "letter.pdf", "application/pdf", bytes.NewReader(k.pdf))
+		notes, text := strings.Join(d.Notes, " "), strings.ReplaceAll(d.Text, "\n", "")
+		if err != nil || d.Status != "ready" || d.Method != "text_layer" || len(f.Calls()) != k.calls || text != strings.ReplaceAll(k.added, "\n", "")+k.layer ||
+			strings.Contains(notes, "an image on the page was not read") != (k.added == "") || (d.Transcript != nil) != (k.calls > 0) {
 			t.Errorf("%s: %v status %q method %q, %d calls, text %q, notes %q", name, err, d.Status, d.Method, len(f.Calls()), d.Text, d.Notes)
+			continue
+		}
+		if k.added == "" {
+			continue
+		} else if c := d.Transcript.CostUSD; strings.Contains(name, "agree") && (d.Transcript.Tokens != 2000 || c == nil || *c != 0.02) { // the mixed page's cost
+			t.Errorf("%s: usage not recorded: %+v", name, d.Transcript)
+		}
+		scope, first := []string{d.ID}, strings.SplitN(k.layer, " ", 4)[:3]
+		if p := d.Transcript.Pages; len(p) != 1 || d.Text[p[0].Start:p[0].End] != k.added || !strings.Contains(notes, "only lines a page's text layer lacks are kept") {
+			t.Errorf("%s: the transcript span is not the added lines: %+v in %q", name, p, d.Text)
+		} else if v, _ := s.VerifyQuote(t.Context(), scope, d.ID, strings.Join(first, " "), nil); v.Method != "exact" || v.Confidence != 1 {
+			t.Errorf("%s: the text layer is text-layer text: %+v", name, v)
+		} else if v, _ := s.VerifyQuote(t.Context(), scope, d.ID, strings.SplitN(k.added, "\n", 2)[0], nil); v.Method != "exact@transcript" || v.Confidence > TranscriptCap {
+			t.Errorf("%s: the added lines are transcript: %+v", name, v)
 		}
 	}
+	s, f := visionService(t, texts(""), texts("")) // a logo with no words: read, nothing added, no unread-image note
+	d, err := s.Ingest(t.Context(), "letter.pdf", "application/pdf", bytes.NewReader(buildPDF(1, page(letter, 8, 8, 1))))
+	if err != nil || strings.TrimSpace(d.Text) != letter || len(f.Calls()) != 2 || d.Transcript == nil || len(d.Transcript.Pages) != 0 || strings.Contains(strings.Join(d.Notes, " "), "was not read") {
+		t.Errorf("a wordless logo: %+v %+v %v", d, d.Transcript, err)
+	}
 	accented := strings.Repeat("\xe9", 78) // é in WinAnsi: with its digit 157 bytes of UTF-8, 79 characters: a stamp, the page a scan
-	s, f := visionService(t, texts("The Respondent shall pay"), texts("The Respondent shall pay"))
+	s, f = visionService(t, texts("The Respondent shall pay"), texts("The Respondent shall pay"))
 	if d, err := s.Ingest(t.Context(), "stamp.pdf", "application/pdf", bytes.NewReader(buildPDF(1, page(accented+"1", 85, 110, 1)))); err != nil || d.Method != "vision" || len(f.Calls()) != 2 {
 		t.Errorf("a 79-character stamp: %+v %v, %d calls", d, err, len(f.Calls()))
+	}
+	if _, err := newService(t).Ingest(t.Context(), "stamp.pdf", "application/pdf", bytes.NewReader(buildPDF(1, page(accented+"1", 85, 110, 1)))); !errors.Is(err, ErrVisionNotConfigured) {
+		t.Errorf("a 79-character stamp with no vision role waits: %v", err)
 	}
 }
 
