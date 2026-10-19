@@ -64,7 +64,7 @@ func pageNotes(x *Extraction) (notes []string) {
 		notes = []string{fmt.Sprintf("This PDF has no text layer (%d scanned or blank page(s)): nothing in it can be searched or quoted. "+
 			"Re-export it with text, or as a JPEG-scanned PDF for the vision model.", x.Pages)}
 	case n > 0:
-		notes = []string{fmt.Sprintf("%d of %d pages have no text layer, or only a stamp beside a page image, and were not read: page %s (%s).", n, x.Pages, pageList(x.Blank), map[bool]string{true: "no vision role is set: upload the file again once one is", false: "blank, or not transcribed: see the other notes"}[x.Transcript == nil])}
+		notes = []string{fmt.Sprintf("%d of %d pages have no text layer, or only a stamp beside a page image, and were not read: page %s (%s).", n, x.Pages, pageList(x.Blank), map[bool]string{true: "no vision role is set: upload the file again once one is", false: fmt.Sprintf("blank, not transcribed (see the other notes), or past the %d pages with an image read per document", maxVisionPages)}[x.Transcript == nil])}
 	}
 	if len(x.Unsupported) > 0 {
 		notes = append(notes, fmt.Sprintf("Page %s: its image is damaged, too large, or in an encoding BigLaw cannot send, and was not sent: export the page as a JPEG to have it read.", pageList(slices.Sorted(slices.Values(x.Unsupported)))))

@@ -178,16 +178,17 @@ func (s *Service) readScans(ctx context.Context, data []byte, x *Extraction) (er
 		x.Notes = append(x.Notes, fmt.Sprintf("Page %s: machine transcription of an image by %s (its two readings agreed on at least %d%% of their words; only lines a page's text layer lacks are kept): check quotes against the original.",
 			pageList(slices.Sorted(maps.Keys(read))), t.Model, int(100*t.Agreement)))
 	}
-	x.Notes = append(x.Notes, notes...)
+	x.Notes, x.Transcript = append(x.Notes, notes...), map[bool]*Transcript{true: t}[len(x.Scans) > 0] // no call (every image damaged), no Transcript
 	return nil
 }
 
-// beyond is the lines of a reading whose words do not run, in order, in the page's text layer: what the image adds.
+// beyond is a reading's lines whose words do not run, in order, in the page's text layer, nor (8+) its letters and digits (case, spaces, hyphens ignored): what the image adds.
 func beyond(reading, layer string) string {
 	w, _ := tokensOf(layer)
-	key, keep := "\x00"+strings.Join(w, "\x00")+"\x00", []string{}
-	for _, l := range strings.Split(reading, "\n") {
-		if w, _ := tokensOf(l); len(w) > 0 && !strings.Contains(key, "\x00"+strings.Join(w, "\x00")+"\x00") {
+	key, flat, keep := "\x00"+strings.Join(w, "\x00")+"\x00", strings.Join(wordRe.FindAllString(strings.ToLower(fold.Replace(layer)), -1), ""), []string{}
+	for _, l := range strings.Split(strings.ReplaceAll(reading, "\r", ""), "\n") {
+		w, _ := tokensOf(l)
+		if q := strings.Join(wordRe.FindAllString(strings.ToLower(fold.Replace(l)), -1), ""); len(w) > 0 && !strings.Contains(key, "\x00"+strings.Join(w, "\x00")+"\x00") && (len(q) < 8 || !strings.Contains(flat, q)) {
 			keep = append(keep, l)
 		}
 	}

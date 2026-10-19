@@ -206,11 +206,13 @@ func (s *Service) VerifyQuote(ctx context.Context, scope []string, docID, quote 
 		return VerifiedQuote{}, err
 	}
 	v, err := Verify(ctx, d.Text, quote, judge)
-	out := VerifiedQuote{Verification: v}
 	if err != nil || !v.Verified {
-		return out, err
+		return VerifiedQuote{Verification: v}, err
 	}
-	var ord int
+	for i := v.Start + 1; v.Method == "exact" && d.Transcript.covers(v.Start, v.End) != nil && strings.Contains(d.Text[i:], quote); i = v.Start + 1 { // a later copy outside the transcript (a text layer's)
+		v.Start, v.End = i+strings.Index(d.Text[i:], quote), i+strings.Index(d.Text[i:], quote)+len(quote)
+	}
+	out, ord := VerifiedQuote{Verification: v}, 0
 	at := utf8.RuneCountInString(d.Text[:v.Start])
 	if err := s.db.QueryRowContext(ctx, `SELECT ord, number FROM sections WHERE document_id = $1 AND char_start <= $2 AND $2 < greatest(char_end, char_start + 1)
 		ORDER BY level DESC, ord DESC LIMIT 1`, docID, at).Scan(&ord, &out.Number); err != nil {

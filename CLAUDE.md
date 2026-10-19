@@ -36,7 +36,7 @@ change. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`, not here.
   PR 3c (`vision.go`, `scanpdf.go`, `jobs.go`): `UseVision` (the `vision` role only; never a text
   role) transcribes images and PDF pages with no text layer, or only a stamp (< 80 chars; kept after the
   transcript); a page with 80–399 chars over a page image is MIXED (`mixedMax`: read, the text layer stored
-  verbatim after only the reading's lines it lacks, `beyond`; never held or refused: no role or a failed read →
+  verbatim after only the reading's lines it lacks, `beyond`: by words, or for 8+ letters and digits case/space/hyphen-blind; VerifyQuote prefers an exact copy outside the transcript; never held or refused: no role or a failed read →
   text layer + unread-image note); ≥ 400 chars over any image is text (no call, noted), whose images are whole JPEG streams (found by offset in the child, sent as they
   are, re-checked in the server, header dimensions capped); two readings per page by two prompts
   (`vision_prompts.txt`), agreement < 0.75 refuses (422 `transcription_unreliable`), < 0.9 is
