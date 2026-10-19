@@ -181,14 +181,15 @@ func (s *Service) readScans(ctx context.Context, data []byte, x *Extraction) (er
 	return nil
 }
 
-// beyond is what the image adds: a reading's lines whose letters and digits (a figure with its separators), joined, are not whole words of the page's text layer joined.
+// beyond is what the image adds: a reading's lines whose tokens joined are not whole layer words joined, or (a short line not ending in a hyphen: a stamp, signature, figure, mark) not a whole layer line.
 func beyond(reading, layer string) string {
-	flat, at, keep := "", map[int]bool{0: true}, []string{}
+	flat, at, keep, nl := "", map[int]bool{0: true}, []string{}, strings.NewReplacer("\r\n", "\n", "\r", "\n")
 	for _, w := range figRe.FindAllString(strings.ToLower(layer), -1) {
 		flat, at[len(flat)+len(fold.Replace(w))] = flat+fold.Replace(w), true
 	}
-	for _, l := range strings.Split(strings.NewReplacer("\r\n", "\n", "\r", "\n").Replace(reading), "\n") {
-		if q := fold.Replace(strings.Join(figRe.FindAllString(strings.ToLower(l), -1), "")); q != "" && !slices.ContainsFunc(slices.Collect(maps.Keys(at)), func(i int) bool { return at[i+len(q)] && strings.HasPrefix(flat[i:], q) }) {
+	for _, l := range strings.Split(nl.Replace(reading), "\n") {
+		if q := fold.Replace(strings.Join(figRe.FindAllString(strings.ToLower(l), -1), "")); strings.TrimSpace(l) != "" && (q == "" || !map[bool]bool{true: slices.ContainsFunc(strings.Split(nl.Replace(strings.ToLower(layer)), "\n"), func(m string) bool { return fold.Replace(strings.Join(figRe.FindAllString(m, -1), "")) == q }),
+			false: slices.ContainsFunc(slices.Collect(maps.Keys(at)), func(i int) bool { return at[i+len(q)] && strings.HasPrefix(flat[i:], q) })}[(len(figRe.FindAllString(l, -1)) < 3 || len(q) < 12) && !strings.HasSuffix(strings.TrimSpace(l), "-")]) {
 			keep = append(keep, l)
 		}
 	}

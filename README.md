@@ -527,7 +527,12 @@ subtracted only when its own words, joined the same way, occur in that string st
 word starts and ending where a layer word ends. A word the text layer splits ("D ear") or glues
 ("receiptat"), or a compound the reading breaks at a line end ("third-\nparty"), is the same line; a
 figure inside a longer one ("$125,000.00" beside "$1,250,000.00"), a stamp inside a word ("APPROVED"
-beside "unapproved", "PAID IN FULL" beside "unpaid in full") or a part of a word is kept. When in
+beside "unapproved", "PAID IN FULL" beside "unpaid in full") or a part of a word is kept. A short
+line (under 3 words or under 12 letters and digits, not ending in a hyphen: a stamp, a handwritten
+figure, a signature, a tick) is subtracted only when it is a whole line of the text layer: "PAID"
+beside "Amount paid: $0.00", "APPROVED" beside "to be approved", "$500" beside "Suite 500", "Smith"
+beside a "SMITH-0001" Bates number are kept; a stamp the layer itself carries as a line is not. A line
+with no letter or digit ("✓", "☒") is kept (a mark is information). When in
 doubt the line is kept: a duplicate is disclosed as transcript, a dropped image-only line would be
 lost (`TestBeyondWholeLayerWords`: every case above, and 3,000 random layer/reading pairs checked
 against the joins of every run of whole layer words). A CR, alone or before a line feed, ends a line.
@@ -541,7 +546,8 @@ readings repeat it, the body stored once with the legend; a reading identical to
 "third-\nparty" line break, or to a text layer that splits "D ear" and glues "orderdated", stored once
 with only "ACME LLP" added; the cost of a mixed page recorded). A quote found in a transcript line
 and again later verifies at the later copy when that one is outside every transcript span and is
-whole words (no letter or digit just before or after it: "paid $500" never moves into "paid $5000";
+whole words (no letter or digit just before or after it, nor a figure's separator: "paid $500" never
+moves into "paid $5000", "paid $500,000" or "$500.50", nor "500" into "12 500";
 a text layer's words stay `exact` 1.0 when an added line repeats them; `TestMixedPageKeepsWhatTheLayerLacks`). The
 cut, 400 characters, is five lines of 80: a legend with its protective-order reference and Bates
 number runs 55–266 characters, a page of text about 3,700. A page with 400 characters or more over
@@ -942,15 +948,15 @@ transcribe, never text).
 
 | Budget | Ceiling | Today |
 |---|---:|---:|
-| Go production lines (physical lines, non-`_test.go`, test-support packages included) | 15,650 | 4,918 |
+| Go production lines (physical lines, non-`_test.go`, test-support packages included) | 15,650 | 4,919 |
 | Packages under `internal/`, test-support packages excluded | 12 | 4 (`docs`, `docs/ooxml`, `model`, `store`; `store/storetest` is test support) |
 | Direct Go dependencies | 3 | 2 (`github.com/lib/pq`, `github.com/ledongthuc/pdf`) |
 | Runtime environment variables | 20 | 18 |
 | UI runtime dependencies | 2 | 0 (no UI yet) |
 | Packages without a `_test.go` | 0 | 0 |
-| Lines in any one source file (`.go`, `.py`, `.sql`, `.sh`, `.js`, `.ts`, `.css`; tests included) | 2,000 | 634 |
+| Lines in any one source file (`.go`, `.py`, `.sql`, `.sh`, `.js`, `.ts`, `.css`; tests included) | 2,000 | 964 (`internal/docs/vision_safety_test.go`) |
 
-The line ceiling is 15,650 (owner decisions: 14,000, then 14,250, then 14,500 during PR 2's review, then 15,000 at PR 3a's, with pgvector, then 15,500 at PR 3a's round 3, declared final, then 15,600 at PR 3c's round 1, decision 11, then 15,650 at PR 3c's round 4 to read long-legend scans, decision 12). The plan totals 15,580–15,610 after PR 3c (round 6), headroom 40–70; PR 3e (an embed endpoint, about 30–40 lines) is next and must fit (at most 40 in the worst case). A **test-support package** is one
+The line ceiling is 15,650 (owner decisions: 14,000, then 14,250, then 14,500 during PR 2's review, then 15,000 at PR 3a's, with pgvector, then 15,500 at PR 3a's round 3, declared final, then 15,600 at PR 3c's round 1, decision 11, then 15,650 at PR 3c's round 4 to read long-legend scans, decision 12). The plan totals 15,581–15,611 after PR 3c (round 7), headroom 39–69; PR 3e (an embed endpoint, about 30–40 lines) is next and must fit (at most 39 in the worst case). A **test-support package** is one
 whose directory name ends in `test` and that no production file outside it imports, such as
 `storetest`. Under the coordinator's ruling it is left out of the package count, but its lines
 count toward the line ceiling like any other non-`_test.go` file. A `*test` package that
@@ -1236,15 +1242,22 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     reading lines (§ Vision transcription gives the rule): a line is dropped only when its letters and
     digits are the layer's own whole words, so a line that differs only in spacing, hyphens,
     punctuation or case is dropped and the layer's version stored. Kept, by design, as a disclosed
-    duplicate (`exact@transcript`, capped): a figure whose separators differ from the layer's
+    duplicate (`exact@transcript`, capped): a short line (under 3 words or 12 letters and digits) that
+    is not a whole layer line, so a reading that wraps differently from the layer ("Applicant
+    monthly" across a layer line break, "Dear Ms. Smith" beside a longer layer line), a legend word or
+    Bates digits read alone ("CONFIDENTIAL", "0001") or a figure with a sign the layer lacks ("10.5%")
+    is stored twice; a figure whose separators differ from the layer's
     ("1250.00" for "1,250.00"); a reading line that breaks inside a word the text layer glued (a PDF
     whose lines are placed by text-positioning operators reads "consent orderdated"; a reading line
     ending "consent order" is kept, and a quote of it stays `exact@transcript` 0.85 because the layer
     copy is not whole words); a line the reading changed (a figure misread, or rewritten by text in
     the image: prompt injection) beside the text layer's own (that line of the letter twice, once as transcript, capped and
     disclosed); a line mixing a sidebar name with the letter's words (two columns read across) is kept
-    whole; a body line whose words are all a run of the legend (a heading "CONFIDENTIAL") is dropped,
-    its words staying on the page through the text layer. The added lines are stored before the text
+    whole; a longer body line whose words are all a run of the legend ("Subject to protective order")
+    is dropped, its words staying on the page through the text layer. A quote moves to a later layer
+    copy that a space and digits follow ("paid $500" into "paid $500 000", a space-grouped figure):
+    the right edge cannot refuse a space before a digit without refusing every "October 2, 2026"; it
+    needs a transcript figure whose longer, space-grouped form the layer holds later. The added lines are stored before the text
     layer whatever their place on the page. Reading only a mixed page's image cannot see text drawn
     over it; a document over 20 pages with an image reads the first 20 in page order, mixed pages
     included, so a text-less scan past them is not read even when a mixed page before it was: its note
@@ -1299,8 +1312,10 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     headroom 37–67; with PR 3e's 30–40, 15,613–15,653: PR 3e must stay at or under 37 lines. Round 6
     removes 3 (4,921 → 4,918: `beyond`'s whole-word rule replaces the word-run and 8-character rules,
     the "adds nothing" note and the whole-word quote move in, paid for by compacting `pageList`, the
-    WebP sniff and the disputed-word cap): plan **15,580–15,610**, headroom 40–70; PR 3e must stay at
-    or under 40 lines.
+    WebP sniff and the disputed-word cap): plan **15,580–15,610**, headroom 40–70. Round 7 adds 1
+    (4,918 → 4,919: `beyond`'s short-line rule, a short line subtracted only as a whole layer line;
+    the quote move's figure-separator edges 0): plan **15,581–15,611**, headroom 39–69; PR 3e must
+    stay at or under 39 lines.
 - **Model client (PR 2):**
   - Only `Embed` has a caller yet (documents); `Chat`'s first caller is the agent loop (PR 4a),
     so no real endpoint has been exercised: every test uses `httptest` or

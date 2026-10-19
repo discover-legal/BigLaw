@@ -139,7 +139,7 @@ func normalize(s string) (string, []int) {
 	return b.String(), append(back, len(s))
 }
 
-var wordRe, edgeRe = regexp.MustCompile(`[\p{L}\p{N}]+`), regexp.MustCompile(`[\p{L}\p{N}]\x00|\x00[\p{L}\p{N}]`) // edgeRe: a letter or digit next to a quote's copy (marked by NUL)
+var wordRe, edgeRe = regexp.MustCompile(`[\p{L}\p{N}]+`), regexp.MustCompile(`[\p{L}\p{N}]\x00|\x00[\p{L}\p{N}]|\x00[.,]\p{N}|\p{N}[., ]\x00`) // edgeRe: a letter or digit, or a figure's separator, next to a quote's copy (NUL)
 
 // bestSpan finds the run of the quote's length in words that holds the largest share of the
 // quote's distinct words (v1 protocols.repairQuote), as byte offsets of text.
