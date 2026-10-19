@@ -129,3 +129,12 @@ func (s *Service) Backfill(ctx context.Context) (done, failed int, err error) {
 	}
 	return done, failed, fmt.Errorf("docs: backfill stopped after 3 documents in a row failed to embed (%d embedded)", done)
 }
+
+// LexicalOnly counts the documents with chunks the embed model has not embedded (0 without one).
+func (s *Service) LexicalOnly(ctx context.Context) (n int, err error) {
+	if s.embedder != nil {
+		err = s.db.QueryRowContext(ctx, `SELECT count(*) FROM documents d WHERE embed_model IS DISTINCT FROM $1
+			AND EXISTS (SELECT 1 FROM chunks c WHERE c.document_id = d.id)`, s.embedModel).Scan(&n)
+	}
+	return n, err
+}

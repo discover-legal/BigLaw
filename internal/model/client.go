@@ -355,7 +355,7 @@ func (c *Client) answer(ctx context.Context, hresp *http.Response) (data []byte,
 	case code == 401 || code == 403 || code == 404:
 		return nil, false, fail(ErrNotConfigured, detail+": check BIGLAW_MODEL_KEY, that BIGLAW_MODEL_URL is the API base (usually ending in /v1), and the model id")
 	}
-	return nil, code == 500 || code == 502 || code == 503 || code == 504 || code == 529, fail(ErrUnavailable, detail)
+	return nil, code == 500 || code == 502 || code == 503 || code == 504 || code == 529, &Error{Kind: ErrUnavailable, Detail: detail, Status: code}
 }
 
 func ctxErr(ctx context.Context) error {

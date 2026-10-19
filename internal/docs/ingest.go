@@ -9,13 +9,15 @@ package docs
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -38,33 +40,36 @@ const (
 var (
 	ErrNotFound = store.ErrNotFound
 	// ErrUnsupported (415): a format BigLaw does not read.
-	ErrUnsupported = errors.New("docs: unsupported file: BigLaw reads UTF-8 text (.txt, .md, .csv, .json), .docx and PDFs with a text layer. " +
-		"Images and scanned pages need a vision model, which this build does not have yet")
+	ErrUnsupported = errors.New("docs: unsupported file: BigLaw reads UTF-8 text (.txt, .md, .csv, .json), .docx, PDFs, " +
+		"and PNG, JPEG, GIF or WebP images (transcribed by the vision model)")
 	// ErrUnreadable (422): a PDF or .docx that cannot be parsed (damaged, encrypted, or too large).
 	ErrUnreadable = errors.New("docs: the file could not be read")
 	// ErrBusy (503): every ingest slot stayed taken for slotWait. ErrStopping (503): the server
 	// stopped during the request (its ingest was cancelled and its file removed).
 	ErrBusy     = errors.New("docs: busy: other documents are being read; retry in a few minutes")
 	ErrStopping = errors.New("docs: the server is stopping; retry when it is back")
-	// slotWait bounds the wait for an ingest slot, so a stored upload is ingested or removed well
-	// within the hour after which SweepOrphanFiles takes it for a crash's leftover (uploadTotal +
-	// slotWait + childTimeout = 27 minutes).
+	// slotWait bounds the wait for an ingest or reader slot, so a stored upload is ingested or removed
+	// well within the hour after which SweepOrphanFiles takes it for a crash's leftover (uploadTotal +
+	// 2 × slotWait + childTimeout + visionWait = 47 minutes).
 	slotWait = 10 * time.Minute
 )
 
 // Document is one stored document. Text is what search, the reader and the ladder read.
 // ContentType is the type BigLaw detected from the content, not what the uploader declared.
 type Document struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	ContentType string   `json:"contentType"`
-	FileID      string   `json:"fileId"` // the original upload; "" for a document posted as text
-	Method      string   `json:"method"` // "text" (read as text) or "text_layer" (.docx, PDF text layer)
-	NoText      bool     `json:"noText"` // nothing readable: a scanned PDF, or a .docx with no text. Never silently empty.
-	Pages       int      `json:"pages"`
-	Notes       []string `json:"notes"`
-	Sections    int      `json:"sections"`
-	Chunks      int      `json:"chunks"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	ContentType string `json:"contentType"`
+	FileID      string `json:"fileId"` // the original upload; "" for a document posted as text
+	Method      string `json:"method"` // "text" (read as text), "text_layer" (.docx, PDF text layer) or "vision" (transcribed)
+	NoText      bool   `json:"noText"` // nothing readable: a blank PDF, a .docx with no text, a scan awaiting transcription. Never silently empty.
+	Status      string `json:"status"` // ready, needs_transcription (no vision model yet) or failed (its transcription; notes say why)
+	// Transcript is set when text was transcribed from images: by which model, where, how reliably.
+	Transcript *Transcript `json:"transcript,omitempty"`
+	Pages      int         `json:"pages"`
+	Notes      []string    `json:"notes"`
+	Sections   int         `json:"sections"`
+	Chunks     int         `json:"chunks"`
 	// EmbedModel embedded every chunk ("": lexical only); EmbedCostUSD nil: unpriced, unknown.
 	EmbedModel   string    `json:"embedModel,omitempty"`
 	EmbedTokens  int64     `json:"embedTokens"`
@@ -75,23 +80,32 @@ type Document struct {
 
 // Service reads and writes documents in the store.
 type Service struct {
-	st         *store.Store
-	db         *sql.DB
-	slots      chan struct{}
-	embedder   model.Embedder // nil: lexical search only (UseEmbedder)
-	embedModel string
+	st                     *store.Store
+	db                     *sql.DB
+	slots                  chan struct{}
+	embedder               model.Embedder // nil: lexical search only (UseEmbedder)
+	embedModel             string
+	vision                 model.Chatter // nil: images and scans wait (UseVision)
+	visionModel, visionKey string
+	log                    *slog.Logger
+	readers                chan struct{} // documents reading scans with the vision model, outside the ingest slots
 }
 
 func New(st *store.Store) *Service {
-	return &Service{st: st, db: st.DB(), slots: make(chan struct{}, ingestSlots)}
+	return &Service{st: st, db: st.DB(), slots: make(chan struct{}, ingestSlots), readers: make(chan struct{}, ingestSlots), log: slog.New(slog.DiscardHandler)}
 }
 
-// Extraction is what Extract read from a file.
+// Extraction is what Extract read from a file. Blank lists the pages with no text layer, or a stamp
+// beside page images (scanpdf.go); of those, Scans are images to transcribe (the first maxVisionPages+1
+// of ScanPages), Unsupported hold images BigLaw cannot send. Imaged: other pages with images (not read).
 type Extraction struct {
-	Text, Method, ContentType string
-	NoText                    bool
-	Pages                     int
-	Notes                     []string
+	Text, Method, ContentType  string
+	NoText                     bool
+	Pages, ScanPages           int
+	Notes                      []string
+	Blank, Unsupported, Imaged []int
+	Scans                      []Scan
+	Transcript                 *Transcript `json:"-"` // set by the vision read (vision.go)
 }
 
 const docxType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -128,6 +142,8 @@ func Extract(ctx context.Context, data []byte) (Extraction, error) {
 		return Extraction{}, textTooLarge()
 	case utf8.Valid(data) && bytes.IndexByte(data, 0) < 0:
 		return textOf(string(data)), nil
+	case sniffImage(data) != "":
+		return imageOf(data, sniffImage(data))
 	}
 	return Extraction{}, ErrUnsupported
 }
@@ -187,22 +203,26 @@ func extractPDF(data []byte) (x Extraction, err error) {
 		}
 	}
 	x.Text = clean(strings.Join(pages, "\f")) // a form feed between pages
-	var blank []string
 	for i, p := range pages {
-		if strings.TrimSpace(p) == "" {
-			blank = append(blank, strconv.Itoa(i+1))
+		sc, bad := pageScan(r, r.Page(i+1), i+1, data)
+		n := utf8.RuneCountInString(strings.TrimSpace(p))
+		if n >= stampMax && (bad || len(sc.Images) > 0) { // text over an image: noted unless a mixed page's image is read
+			x.Imaged = append(x.Imaged, i+1)
+		}
+		if n >= mixedMax || n > 0 && !bad && len(sc.Images) == 0 { // a page of text (text over a damaged image: neither Blank nor a scan)
+			continue
+		} else if n < stampMax {
+			if x.Blank = append(x.Blank, i+1); bad {
+				x.Unsupported = append(x.Unsupported, i+1)
+			}
+		}
+		if !bad && len(sc.Images) > 0 { // a scan, or a mixed page (never in Blank: it never holds or refuses the document)
+			if x.ScanPages++; x.ScanPages <= maxVisionPages+1 {
+				x.Scans = append(x.Scans, sc)
+			}
 		}
 	}
-	switch n := len(blank); {
-	case n == x.Pages:
-		x.NoText, x.Notes = true, []string{fmt.Sprintf("This PDF has no text layer (%d scanned page(s)?): nothing in it can be searched or quoted. "+
-			"Re-export it with text, or transcribe it; this build has no vision model.", x.Pages)}
-	case n > 0:
-		if n > 10 {
-			blank = append(blank[:10], "…")
-		}
-		x.Notes = []string{fmt.Sprintf("%d of %d pages have no text layer (scanned images?) and were not read: page %s.", n, x.Pages, strings.Join(blank, ", "))}
-	}
+	x.NoText, x.Notes = strings.TrimSpace(x.Text) == "", pageNotes(&x)
 	return x, nil
 }
 
@@ -213,35 +233,58 @@ func (s *Service) Ingest(ctx context.Context, name, contentType string, r io.Rea
 	if err != nil {
 		return Document{}, err
 	}
-	d, err := s.ingestFile(ctx, f)
-	if err != nil {
+	d, err := s.ingestFile(ctx, f, "")
+	if err != nil && !errors.Is(err, ErrVisionNotConfigured) { // that one keeps the original, to transcribe later
 		dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		defer cancel()
 		_, _ = s.db.ExecContext(dctx, `DELETE FROM files WHERE id = $1`, f.ID)
 		return d, err
 	}
-	s.embedDoc(ctx, &d) // outside the ingest slot
-	return d, nil
+	s.embedDoc(ctx, &d) // outside the ingest slot (nothing to embed while it waits)
+	return d, err
 }
 
-func (s *Service) ingestFile(ctx context.Context, f store.File) (Document, error) {
+// ingestFile reads file f into a new document, or into document id when it awaits transcription.
+// The ingest slot is held for the extraction only: vision calls wait for a reader slot (holding the
+// text, not the file), so slow model calls never hold up other uploads.
+func (s *Service) ingestFile(ctx context.Context, f store.File, id string) (Document, error) {
+	x, err := Extraction{}, take(ctx, s.slots)
+	if err != nil {
+		return Document{}, err
+	}
+	if f, err = s.st.GetFile(ctx, f.ID); err == nil {
+		x, err = Extract(ctx, f.Data)
+	}
+	if <-s.slots; err == nil && len(x.Scans) > 0 && s.vision != nil {
+		if f.Data, err = nil, take(ctx, s.readers); err == nil {
+			defer func() { <-s.readers }()
+			f, err = s.st.GetFile(ctx, f.ID)
+		}
+	}
+	if err == nil {
+		err = s.readScans(ctx, f.Data, &x)
+	}
+	d := Document{ID: id, Name: f.Name, FileID: f.ID, Status: "ready"}
+	if errors.Is(err, ErrVisionNotConfigured) && id == "" {
+		d.Status = "needs_transcription"
+		d, ierr := s.insert(ctx, d, x)
+		return d, cmp.Or(ierr, err)
+	} else if err != nil {
+		return Document{}, err
+	}
+	return s.insert(ctx, d, x)
+}
+
+// take waits for one of slots, at most slotWait (ErrBusy).
+func take(ctx context.Context, slots chan struct{}) error {
 	select {
-	case s.slots <- struct{}{}:
-		defer func() { <-s.slots }()
+	case slots <- struct{}{}:
+		return nil
 	case <-ctx.Done():
-		return Document{}, ctx.Err()
+		return ctx.Err()
 	case <-time.After(slotWait):
-		return Document{}, ErrBusy
+		return ErrBusy
 	}
-	f, err := s.st.GetFile(ctx, f.ID)
-	if err != nil {
-		return Document{}, err
-	}
-	x, err := Extract(ctx, f.Data)
-	if err != nil {
-		return Document{}, err
-	}
-	return s.insert(ctx, Document{Name: f.Name, FileID: f.ID}, x)
 }
 
 // IngestText stores a document given as text (no original file).
@@ -255,7 +298,7 @@ func (s *Service) IngestText(ctx context.Context, name, text string) (Document, 
 	if !utf8.ValidString(text) || strings.IndexByte(text, 0) >= 0 {
 		return Document{}, fmt.Errorf("%w (the text is not valid UTF-8, or holds a NUL)", ErrUnsupported)
 	}
-	d, err := s.insert(ctx, Document{Name: name}, textOf(text))
+	d, err := s.insert(ctx, Document{Name: name, Status: "ready"}, textOf(text))
 	if err == nil {
 		s.embedDoc(ctx, &d)
 	}
@@ -264,6 +307,11 @@ func (s *Service) IngestText(ctx context.Context, name, text string) (Document, 
 
 func (s *Service) insert(ctx context.Context, d Document, x Extraction) (Document, error) {
 	d.Text, d.Method, d.ContentType, d.NoText, d.Pages, d.Notes = x.Text, x.Method, x.ContentType, x.NoText, x.Pages, append([]string{}, x.Notes...)
+	d.Transcript = x.Transcript
+	transcript, err := json.Marshal(d.Transcript) // SQL NULL when nothing was sent to the vision model
+	if err != nil {
+		return Document{}, err
+	}
 	secs, capped := parseTree(d.Text)
 	if capped { // r2 auditor L3: the outline must not look complete
 		d.Notes = append(d.Notes, fmt.Sprintf("The outline lists the first %d headings only: later headings are text of section %s (search and quotes still cover all of it).",
@@ -271,10 +319,15 @@ func (s *Service) insert(ctx context.Context, d Document, x Extraction) (Documen
 	}
 	chunks := Chunkify(d.Text, secs)
 	d.Sections, d.Chunks = len(secs), len(chunks)
-	err := s.st.InTx(ctx, func(tx *sql.Tx) error {
-		if err := tx.QueryRowContext(ctx, `INSERT INTO documents (name, content_type, file_id, text, method, no_text, pages, notes)
-			VALUES ($1, $2, NULLIF($3, '')::uuid, $4, $5, $6, $7, $8) RETURNING id, created_at`,
-			d.Name, d.ContentType, d.FileID, d.Text, d.Method, d.NoText, d.Pages, pq.Array(d.Notes)).Scan(&d.ID, &d.CreatedAt); err != nil {
+	err = s.st.InTx(ctx, func(tx *sql.Tx) error { // a transcription job (d.ID set) completes only a document still waiting for it
+		if err := tx.QueryRowContext(ctx, `INSERT INTO documents (id, name, content_type, file_id, text, method, no_text, pages, notes, status, transcript)
+			VALUES (coalesce(NULLIF($1, '')::uuid, gen_random_uuid()), $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, NULLIF($11::jsonb, 'null'))
+			ON CONFLICT (id) DO UPDATE SET text = $5, method = $6, no_text = $7, pages = $8, notes = $9, status = $10, transcript = EXCLUDED.transcript, lease_until = NULL
+			WHERE documents.status = 'needs_transcription' RETURNING id, created_at`, d.ID, d.Name, d.ContentType, d.FileID, d.Text, d.Method, d.NoText,
+			d.Pages, pq.Array(d.Notes), d.Status, transcript).Scan(&d.ID, &d.CreatedAt); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM sections WHERE document_id = $1`, d.ID); err != nil {
 			return err
 		}
 		var at []int
@@ -295,7 +348,7 @@ func (s *Service) insert(ctx context.Context, d Document, x Extraction) (Documen
 		}
 		// COPY streams the chunks a row at a time (r2 N1: an array literal of every body was the
 		// largest of the server's copies of the text).
-		cp, err := tx.PrepareContext(ctx, `COPY chunks (document_id, section_ord, locator, body, search_text, context, byte_start, byte_end) FROM STDIN`)
+		cp, err := tx.PrepareContext(ctx, `COPY chunks (document_id, section_ord, locator, body, search_text, context, byte_start, byte_end, transcribed) FROM STDIN`)
 		if err != nil {
 			return err
 		}
@@ -304,7 +357,7 @@ func (s *Service) insert(ctx context.Context, d Document, x Extraction) (Documen
 			if c.Search == c.Text {
 				c.Search = "" // prose is indexed from body (the schema's coalesce): stored once
 			}
-			if _, err := cp.ExecContext(ctx, d.ID, c.Section, c.Locator, c.Text, c.Search, c.Context, c.Start, c.End); err != nil {
+			if _, err := cp.ExecContext(ctx, d.ID, c.Section, c.Locator, c.Text, c.Search, c.Context, c.Start, c.End, d.Transcript.covers(c.Start, c.End) != nil); err != nil {
 				return err
 			}
 		}
@@ -346,10 +399,14 @@ func (s *Service) Get(ctx context.Context, scope []string, id string) (Document,
 	}
 	var d Document
 	var file, embedModel sql.NullString
+	var transcript []byte
 	err := s.db.QueryRowContext(ctx, `SELECT id, name, content_type, file_id, text, method, no_text, coalesce(pages, 0), notes, created_at,
 		(SELECT count(*) FROM sections WHERE document_id = d.id), (SELECT count(*) FROM chunks WHERE document_id = d.id),
-		embed_model, embed_tokens, embed_cost_usd FROM documents d WHERE id = $1`, id).Scan(&d.ID, &d.Name, &d.ContentType, &file, &d.Text,
-		&d.Method, &d.NoText, &d.Pages, pq.Array(&d.Notes), &d.CreatedAt, &d.Sections, &d.Chunks, &embedModel, &d.EmbedTokens, &d.EmbedCostUSD)
+		embed_model, embed_tokens, embed_cost_usd, status, transcript FROM documents d WHERE id = $1`, id).Scan(&d.ID, &d.Name, &d.ContentType, &file, &d.Text,
+		&d.Method, &d.NoText, &d.Pages, pq.Array(&d.Notes), &d.CreatedAt, &d.Sections, &d.Chunks, &embedModel, &d.EmbedTokens, &d.EmbedCostUSD, &d.Status, &transcript)
+	if err == nil && transcript != nil {
+		err = json.Unmarshal(transcript, &d.Transcript)
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return Document{}, ErrNotFound
 	} else if err != nil {

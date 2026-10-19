@@ -205,7 +205,8 @@ func TestUploadErrorsTyped(t *testing.T) {
 		code int
 		kind string
 	}{
-		{"photo.png", []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a}, 415, "unsupported_type"},
+		{"photo.png", []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a}, 422, "unreadable"}, // a damaged image (PR 3c)
+		{"blob.bin", []byte{0, 1, 2, 3}, 415, "unsupported_type"},
 		{"broken.pdf", []byte("%PDF-1.4 x"), 422, "unreadable"},
 		{"bad\u2066name.txt", []byte("x"), 400, "bad_name"},
 		{"..", []byte("x"), 400, "bad_name"},

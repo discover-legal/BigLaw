@@ -27,6 +27,7 @@ type Error struct {
 	Detail     string
 	RetryAfter time.Duration // the provider's Retry-After on a 429; 0 if none
 	Usage      *Usage        // a 200 the provider billed but BigLaw refused: its usage and cost
+	Status     int           // the endpoint's HTTP status (0: none); a 4xx other than 401/403/404/429 refused this request
 }
 
 func (e *Error) Error() string { return e.Kind.Error() + ": " + e.Detail }

@@ -78,8 +78,12 @@ func e4Measure(t *testing.T, s *Service) e4Result {
 		var lexical int // (the lexical baseline, TestLexicalRecallProofRuns, has no embedder)
 		err = s.db.QueryRow(`SELECT count(*) FROM documents WHERE id = ANY($1::uuid[]) AND embed_model IS DISTINCT FROM $2`, pq.Array(scope), s.embedModel).Scan(&lexical)
 		if s.embedder != nil && (err != nil || lexical > 0) {
-			t.Fatalf("E4 NOT JUDGED: %d of %s's %d documents were not embedded by %s (%v; their EmbedNote says why: a failed embeddings call, or texts not on the tape): "+
-				"no recall is scored and no tape is written", lexical, filepath.Base(filepath.Dir(key)), len(scope), s.embedModel, err)
+			why := "their EmbedNote says why: a failed embeddings call, or texts not on the tape" // PR 3b r2: never "(<nil>; …)"
+			if err != nil {
+				why = "counting them failed: " + err.Error()
+			}
+			t.Fatalf("E4 NOT JUDGED: %d of %s's %d documents were not embedded by %s (%s): no recall is scored and no tape is written",
+				lexical, filepath.Base(filepath.Dir(key)), len(scope), s.embedModel, why)
 		}
 		var q, ti tally
 		for _, f := range ak.Facts {
