@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Discover Legal
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { nearest, rank, terms } from '../src/api/match.ts';
+import { nearest, rank, snippet, terms } from '../src/api/match.ts';
 
 const tasks = [
   { key: 'a', title: 'Deadlines', prompt: 'Compute every deadline under the rules', keywords: ['answer', 'due'] },
@@ -40,5 +40,24 @@ test('search ranks rare words higher and returns only chunks that match', () => 
   ];
   const hits = rank('shortfall fee', chunks);
   assert.deepEqual(hits.map((h) => h.sectionId), ['s1', 's0']);
-  assert.equal(rank('the and of', chunks).length, 0);
+  assert.deepEqual(rank('zebra', chunks), []);
+});
+
+test('like the server, an exact word counts in both legs and a stop word only in the exact one', () => {
+  const chunks = [
+    { documentId: 'd', sectionId: 's0', title: '', text: 'fees' },
+    { documentId: 'd', sectionId: 's1', title: '', text: 'fee' },
+    { documentId: 'd', sectionId: 's2', title: '', text: 'the end' },
+  ];
+  assert.deepEqual(rank('fee', chunks).map((h) => h.sectionId), ['s1', 's0']);
+  assert.deepEqual(rank('the', chunks).map((h) => h.sectionId), ['s2']);
+});
+
+test('a snippet is a verbatim window around the first query word, with the words to mark', () => {
+  const text = `${'filler words here '.repeat(30)}The Shortfall Fee is 35% of the difference. ${'more '.repeat(60)}`;
+  const s = snippet(text, 'shortfall fees');
+  assert.ok(text.includes(s.text));
+  assert.match(s.text, /Shortfall Fee/);
+  assert.deepEqual(s.cut, [true, true]);
+  assert.deepEqual(s.marks, ['Shortfall', 'Fee']);
 });

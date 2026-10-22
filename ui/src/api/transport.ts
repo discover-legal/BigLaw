@@ -4,7 +4,7 @@
 // The transport seam: every screen talks to BigLaw through this interface only. http.ts is the
 // real API (same origin); recorded.ts replays a recorded engine in the browser with no network.
 import type {
-  Client, Doc, Hit, NewTask, OutlineEntry, Playbook, Profile, RunEvent, SectionPage, Task, TaskCost, TimeEntry,
+  Client, Doc, Hit, NewTask, OutlineEntry, Playbook, Profile, RecordedSearch, RunEvent, SectionPage, Setting, Task, TaskCost, TimeEntry,
 } from './types.ts';
 
 /** What the recorded engine would replay for a prompt; live transports never match. */
@@ -14,23 +14,29 @@ export interface PromptMatch {
   prompt: string;
   score: number;
   onScript: boolean;
+  jurisdiction?: string;
 }
 
 export interface Transport {
   readonly mode: 'live' | 'recorded';
   /** Shown in the demo banner (recorded engine only). */
   readonly provenance: string | null;
+  /** The site the recorded demo is embedded in (recorded engine only): the banner links back to it. */
+  readonly home?: string;
   clients(): Promise<Client[]>;
   documents(matterNumber?: string): Promise<Doc[]>;
   outline(docId: string): Promise<OutlineEntry[]>;
   section(docId: string, sectionId: string, offset?: number): Promise<SectionPage>;
+  /** Where the document's original file opens (a scan, to check its transcript against); null: none. */
+  fileUrl(docId: string): string | null;
   search(q: string, ids: string[]): Promise<Hit[]>;
   tasks(): Promise<Task[]>;
   task(id: string): Promise<Task>;
   match(description: string, matterNumber: string): PromptMatch | null;
   submit(t: NewTask, replayKey?: string): Promise<Task>;
   cancel(id: string): Promise<Task>;
-  decideGate(id: string, gateId: string, approve: boolean): Promise<Task>;
+  /** Approve, or reject with a reason (required: the lead is told what to fix). */
+  decideGate(id: string, gateId: string, approve: boolean, reason?: string): Promise<Task>;
   cost(id: string): Promise<TaskCost>;
   /** Streams a task's steps; returns the unsubscribe function. */
   events(id: string, on: (e: RunEvent) => void): () => void;
@@ -38,6 +44,10 @@ export interface Transport {
   suggestions?(matterNumber: string): PromptMatch[];
   /** Recorded engine only: finish the replay now. */
   fastForward?(id: string): void;
+  /** Recorded engine only: searches whose hits v2's own Search computed when the run was recorded. */
+  recordedSearches?(matterNumber: string): RecordedSearch[];
+  /** Recorded engine only: this build's configuration defaults (read-only). */
+  settings?(): Promise<Setting[]>;
   playbooks(): Promise<Playbook[]>;
   timeEntries(): Promise<TimeEntry[]>;
   profiles(): Promise<Profile[]>;

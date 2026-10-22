@@ -5,7 +5,7 @@
 import { useState } from 'react';
 import type { PromptMatch } from '../api/transport.ts';
 import type { Client, Matter, Task } from '../api/types.ts';
-import { Failure, go, useApi, useLoad } from '../lib.tsx';
+import { Failure, go, plural, useApi, useLoad } from '../lib.tsx';
 
 export function StatusPill(props: { status: string }) {
   return <span className={`pill pill-${props.status}`}>{props.status.replace('_', ' ')}</span>;
@@ -20,6 +20,9 @@ export function Matters(props: { matter: string }) {
   return (
     <section>
       <h1>Matters</h1>
+      <p className="lede">{api.mode === 'recorded'
+        ? 'Three fictional sample matters. Pick one, then ask a question or replay one of its recorded tasks.'
+        : 'Pick a matter to start a task on its documents.'}</p>
       <Failure error={clients.error ?? tasks.error} />
       {clients.data && all.length === 0 && <p className="muted">No matters yet. Matters come from Clients (PR 8).</p>}
       <div className="cards">
@@ -27,7 +30,7 @@ export function Matters(props: { matter: string }) {
           <button key={m.number} className={`card matter ${picked?.number === m.number ? 'on' : ''}`} onClick={() => go('matters', { matter: m.number })}>
             <span className="eyebrow">{m.client} · {m.number}</span>
             <span className="card-title">{m.title}</span>
-            <span className="muted">{m.documentIds.length} documents · {(tasks.data ?? []).filter((t) => t.matterNumber === m.number).length} tasks</span>
+            <span className="muted">{plural(m.documentIds.length, 'document')} · {plural((tasks.data ?? []).filter((t) => t.matterNumber === m.number).length, 'task')}</span>
           </button>
         ))}
       </div>
@@ -42,15 +45,15 @@ export function Matters(props: { matter: string }) {
 function TaskList(props: { tasks: Task[] }) {
   if (props.tasks.length === 0) return null;
   return (
-    <table className="grid">
+    <table className="grid stack">
       <thead><tr><th>Task</th><th>Matter</th><th>Status</th><th>Findings</th></tr></thead>
       <tbody>
         {props.tasks.map((t) => (
           <tr key={t.id}>
-            <td><a href={`#/task/${encodeURIComponent(t.id)}`}>{t.replay?.title ?? t.description}</a></td>
+            <td className="wide"><a href={`#/task/${encodeURIComponent(t.id)}`}>{t.replay?.title ?? t.description}</a></td>
             <td>{t.matterNumber}</td>
             <td><StatusPill status={t.status} /></td>
-            <td>{t.findings.length}</td>
+            <td data-label="Findings">{t.findings.length}{t.findings.some((f) => f.status !== 'verified') ? ` (${t.findings.filter((f) => f.status !== 'verified').length} quarantined)` : ''}</td>
           </tr>
         ))}
       </tbody>
@@ -88,13 +91,13 @@ function NewTask(props: { matter: Matter & { client: string } }) {
   return (
     <form className="panel wizard" onSubmit={(e) => { e.preventDefault(); void start(); }}>
       <h2>New task · {props.matter.title}</h2>
-      <label htmlFor="prompt">What should BigLaw answer from this matter's {props.matter.documentIds.length} documents?</label>
+      <label htmlFor="prompt">What should BigLaw answer from this matter's {plural(props.matter.documentIds.length, 'document')}?</label>
       <textarea id="prompt" rows={3} value={prompt} onChange={(e) => { setPrompt(e.target.value); setOffScript(null); }}
         placeholder="e.g. When is our answer to the complaint due?" />
       {suggestions.length > 0 && (
         <div className="chips" aria-label="Recorded tasks">
           <span className="muted">Recorded tasks:</span>
-          {suggestions.map((s) => <button type="button" key={s.key} className="chip" onClick={() => { setPrompt(s.prompt); setOffScript(null); }}>{s.title}</button>)}
+          {suggestions.map((s) => <button type="button" key={s.key} className="chip" onClick={() => { setPrompt(s.prompt); setOffScript(null); if (s.jurisdiction) setJurisdiction(s.jurisdiction); }}>{s.title}</button>)}
         </div>
       )}
       <div className="row">

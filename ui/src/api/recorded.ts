@@ -6,7 +6,14 @@
 import recordingJson from '../recorded/recording.json' with { type: 'json' };
 import { nearest, rank } from './match.ts';
 import { ApiError, type Transport } from './transport.ts';
-import type { Client, Doc, Finding, Hit, OutlineEntry, Run, RunEvent, Step, Task, TaskCost } from './types.ts';
+import type {
+  Client, Doc, Finding, GateDecision, Hit, OutlineEntry, Playbook, Profile, RecordedSearch, Run, RunEvent, Setting, Step, Task, TaskCost, TimeEntry,
+} from './types.ts';
+
+/** The site the demo is published on (discover.legal/demo/biglaw/): the banner's way back. A link, not a request. */
+const HOME = 'https://discover.legal/';
+/** The one original file the recording bundles: the scanned exhibit, to check its transcript against. */
+const SCAN = new URL('../recorded/06-affidavit-of-service-scan.jpg', import.meta.url).href;
 
 export interface RecStep extends Step { at: number }
 export interface RecFinding extends Finding { atStep: number }
@@ -18,9 +25,12 @@ export interface RecTask {
 export interface RecDoc extends Doc {
   outline: OutlineEntry[];
   sectionText: Record<string, string>;
-  chunkList: { sectionId: string; title: string; text: string; context?: string }[];
+  chunkList: { sectionId: string; title: string; text: string; search?: string; context?: string; transcribed?: boolean }[];
 }
-export interface Recording { provenance: string; clients: Client[]; documents: RecDoc[]; tasks: RecTask[] }
+export interface Recording {
+  provenance: string; clients: Client[]; documents: RecDoc[]; tasks: RecTask[]; searches: RecordedSearch[];
+  profiles: Profile[]; playbooks: Playbook[]; timeEntries: TimeEntry[]; settings: Setting[];
+}
 
 export interface Clock {
   now(): number;
@@ -31,7 +41,7 @@ const realClock: Clock = {
   every(ms, fn) { const h = setInterval(fn, ms); return () => clearInterval(h); },
 };
 
-interface Live { id: string; rec: RecTask; description: string; started: number; createdAt: string; cut?: number; decided?: boolean }
+interface Live { id: string; rec: RecTask; description: string; started: number; createdAt: string; cut?: number; decision?: GateDecision }
 
 const BUDGET_CALLS = 150; // BIGLAW_BUDGET_CALLS' default; the recording spends none
 
@@ -46,10 +56,10 @@ export function createTransport(rec: Recording = recordingJson as unknown as Rec
   function runOf(l: Live): Run {
     const n = done(l);
     const status = l.cut !== undefined && n < l.rec.steps.length ? 'cancelled'
-      : finished(l) ? (l.decided ? 'complete' : 'awaiting_gate') : 'running';
+      : !finished(l) ? 'running' : l.decision?.decision === 'rejected' ? 'rejected' : l.decision ? 'complete' : 'awaiting_gate';
     return {
       status, step: n,
-      stopReason: status === 'cancelled' ? 'cancelled' : finished(l) ? 'finished' : null,
+      stopReason: status === 'cancelled' ? 'cancelled' : status === 'rejected' ? 'deliverable rejected' : finished(l) ? 'finished' : null,
       budget: { calls: 0, usd: 0, remaining: BUDGET_CALLS },
       openFindings: 0,
     };
@@ -61,8 +71,9 @@ export function createTransport(rec: Recording = recordingJson as unknown as Rec
       id: l.id, description: l.description, workflowType: l.rec.workflowType, jurisdiction: l.rec.jurisdiction,
       matterNumber: l.rec.matterNumber, documentIds: l.rec.documentIds, status: run.status, createdAt: l.createdAt, run,
       pendingGates: run.status === 'awaiting_gate' ? [{ gateId: `${l.id}-deliverable`, kind: 'deliverable' }] : [],
+      decidedGates: l.decision ? [l.decision] : [],
       findings: l.rec.findings.filter((f) => f.atStep <= run.step).map(strip),
-      output: run.status === 'awaiting_gate' || run.status === 'complete' ? l.rec.output : null,
+      output: finished(l) ? l.rec.output : null,
       groundingAlert: null,
       replay: { key: l.rec.key, title: l.rec.title, prompt: l.rec.prompt },
     };
@@ -73,6 +84,7 @@ export function createTransport(rec: Recording = recordingJson as unknown as Rec
   return {
     mode: 'recorded',
     provenance: rec.provenance,
+    home: HOME,
     clients: async () => rec.clients,
     documents: async (m) => rec.documents
       .filter((d) => !m || d.matterNumber === m)
@@ -84,15 +96,19 @@ export function createTransport(rec: Recording = recordingJson as unknown as Rec
       const text = d.sectionText[sid] ?? '';
       return { sectionId: sid, number: o.number, title: o.title, text, offset: 0, total: [...text].length, truncated: false };
     },
+    fileUrl: (id) => (docById.get(id)?.contentType.startsWith('image/') ? SCAN : null),
     async search(q, ids) {
+      const scope = new Set(ids);
+      const replay = rec.searches.find((s) => s.query === q.trim() && s.hits.every((h) => scope.has(h.documentId)));
+      if (replay) return replay.hits;
       const chunks = ids.flatMap((id) => (docById.get(id)?.chunkList ?? []).map((c) => ({ documentId: id, ...c })));
-      return rank(q, chunks) as Hit[];
+      return rank(q, chunks).map(({ search: _s, ...h }) => h as Hit);
     },
     tasks: async () => [...runs.values()].reverse().map(snapshot),
     task: async (id) => snapshot(get(id)),
     match(description, matter) {
       const m = nearest(description, rec.tasks.filter((t) => t.matterNumber === matter));
-      return m && { key: m.task.key, title: m.task.title, prompt: m.task.prompt, score: m.score, onScript: m.onScript };
+      return m && { key: m.task.key, title: m.task.title, prompt: m.task.prompt, score: m.score, onScript: m.onScript, jurisdiction: m.task.jurisdiction };
     },
     async submit(t, replayKey) {
       let r = rec.tasks.find((x) => x.key === replayKey && x.matterNumber === t.matterNumber);
@@ -107,11 +123,12 @@ export function createTransport(rec: Recording = recordingJson as unknown as Rec
       return snapshot(l);
     },
     async cancel(id) { const l = get(id); if (!finished(l) && l.cut === undefined) l.cut = done(l); return snapshot(l); },
-    async decideGate(id, gateId, approve) {
+    async decideGate(id, gateId, approve, reason) {
       const l = get(id);
-      if (snapshot(l).pendingGates[0]?.gateId !== gateId) throw new ApiError(409, 'that gate is not open');
-      if (!approve) throw new ApiError(409, 'The recording has no rejected branch: a live run would go back to the lead to fix what you reject. Approve, or start another task.');
-      l.decided = true;
+      if (snapshot(l).pendingGates[0]?.gateId !== gateId) throw new ApiError(409, 'That gate is not open.');
+      const why = reason?.trim() ?? '';
+      if (!approve && !why) throw new ApiError(400, 'Say why you reject the deliverable: the reason is what the lead is asked to fix.');
+      l.decision = { gateId, kind: 'deliverable', decision: approve ? 'approved' : 'rejected', ...(approve ? {} : { reason: why }), decidedAt: new Date(clock.now()).toISOString() };
       return snapshot(l);
     },
     async cost(id): Promise<TaskCost> {
@@ -119,7 +136,8 @@ export function createTransport(rec: Recording = recordingJson as unknown as Rec
       return { taskId: id, summary: { calls: 0, inputTokens: 0, outputTokens: 0, usd: 0, unpricedCalls: 0 }, entries: [] };
     },
     events(id, on) {
-      const l = get(id);
+      const l = runs.get(id);
+      if (!l) return () => {}; // task(id) reports the 404
       let sent = 0, stop = () => {};
       const tick = () => {
         const n = done(l);
@@ -132,10 +150,12 @@ export function createTransport(rec: Recording = recordingJson as unknown as Rec
       return () => stop();
     },
     suggestions: (matter) => rec.tasks.filter((t) => t.matterNumber === matter)
-      .map((t) => ({ key: t.key, title: t.title, prompt: t.prompt, score: 1, onScript: true })),
+      .map((t) => ({ key: t.key, title: t.title, prompt: t.prompt, score: 1, onScript: true, jurisdiction: t.jurisdiction })),
+    recordedSearches: (matter) => rec.searches.filter((s) => s.matterNumber === matter),
     fastForward(id) { const l = get(id); if (l.cut === undefined) l.started = clock.now() - l.rec.durationMs; },
-    playbooks: async () => [],
-    timeEntries: async () => [],
-    profiles: async () => [],
+    playbooks: async () => rec.playbooks,
+    timeEntries: async () => rec.timeEntries,
+    profiles: async () => rec.profiles,
+    settings: async () => rec.settings,
   };
 }

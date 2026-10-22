@@ -25,7 +25,7 @@ export function App(props: { api: Transport }) {
     return () => window.removeEventListener('hashchange', on);
   }, []);
   const [screen = 'matters', arg] = route.path;
-  const active = screen === 'task' ? 'matters' : screen;
+  const active = screen === 'task' || !NAV.some(([id]) => id === screen) ? 'matters' : screen;
   let body;
   switch (screen) {
     case 'task': body = <TaskScreen id={arg ?? ''} tab={route.q.get('tab') ?? 'run'} />; break;
@@ -40,9 +40,12 @@ export function App(props: { api: Transport }) {
     <Api.Provider value={props.api}>
       {props.api.provenance && (
         <div className="demo-banner" role="note">
-          <strong>Recorded run; not live.</strong> No model is called and nothing you do is saved. Fictional matters; not legal advice.{' '}
-          <button className="link" onClick={() => setAbout(!about)} aria-expanded={about}>{about ? 'Hide' : 'How this was recorded'}</button>
-          {about && <p className="provenance">{props.api.provenance}</p>}
+          <div className="demo-line">
+            {props.api.home && <a className="home" href={props.api.home}>← discover.legal</a>}
+            <span><strong>Recorded run; not live.</strong> No model is called and nothing is saved. Fictional matters; not legal advice.</span>
+            <button className="link" onClick={() => setAbout(!about)} aria-expanded={about} aria-controls="how">{about ? 'Hide' : 'How this demo works'}</button>
+          </div>
+          {about && <p id="how" className="provenance">{props.api.provenance}</p>}
         </div>
       )}
       <div className="shell">

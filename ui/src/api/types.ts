@@ -12,6 +12,7 @@ export interface Doc {
   contentType: string;
   method: string; // text | text_layer | vision
   status: string; // ready | transcribing | needs_transcription | failed
+  transcript?: { model: string; agreement: number; lowConfidence: boolean; pages: { page: number; agreement: number }[] };
   pages: number;
   notes: string[];
   sections: number;
@@ -93,7 +94,9 @@ export interface Step {
   source?: 'computed' | 'scripted'; // recorded engine only
 }
 
-export type TaskStatus = 'queued' | 'running' | 'awaiting_gate' | 'complete' | 'failed' | 'cancelled';
+// rejected: a lawyer rejected the deliverable (with a reason). Live (PR 4b) the lead resumes with that reason;
+// the recorded engine has no revised run, so its replay ends there.
+export type TaskStatus = 'queued' | 'running' | 'awaiting_gate' | 'complete' | 'failed' | 'cancelled' | 'rejected';
 
 export interface Run {
   status: TaskStatus;
@@ -109,6 +112,13 @@ export interface Gate {
   findingId?: string;
 }
 
+/** A closed gate: who decided is PR 8's (auth); a rejection always carries its reason. */
+export interface GateDecision extends Gate {
+  decision: 'approved' | 'rejected';
+  reason?: string;
+  decidedAt: string;
+}
+
 export interface Task {
   id: string;
   description: string;
@@ -120,6 +130,7 @@ export interface Task {
   createdAt: string;
   run: Run;
   pendingGates: Gate[];
+  decidedGates?: GateDecision[];
   findings: Finding[];
   output: string | null;
   groundingAlert: string | null;
@@ -153,5 +164,9 @@ export interface NewTask {
 export type RunEvent = { type: 'step'; step: Step } | { type: 'task' | 'done'; run: Run };
 
 export interface Profile { id: string; name: string; role: string }
+/** One row of the configuration table (cmd/biglaw/config.go): read-only, as `biglaw version --config` prints it. */
+export interface Setting { name: string; default: string; pr: number; secret?: boolean }
+/** A search the recorded engine offers, with the hits v2's own Search returned for it. */
+export interface RecordedSearch { matterNumber: string; query: string; hits: Hit[] }
 export interface Playbook { id: string; name: string; scope: string; clauses: number }
 export interface TimeEntry { id: string; date: string; matterNumber: string; hours: number; narrative: string; timekeeper: string }

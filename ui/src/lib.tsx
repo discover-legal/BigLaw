@@ -34,6 +34,9 @@ export function useLoad<T>(fn: () => Promise<T>, deps: unknown[]): { data: T | n
   return { data, error, reload: () => setN((x) => x + 1) };
 }
 
+/** plural: "1 task", "2 tasks". */
+export const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
 export function Failure(props: { error: string | null }) {
   return props.error ? <p className="error" role="alert">{props.error}</p> : null;
 }

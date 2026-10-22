@@ -4,10 +4,10 @@
 // Task: the live loop log (steps + SSE), findings with verification badges, the deliverable with
 // its Limitations and Evidence Note, the deliverable gate, and the cost ledger.
 import { useEffect, useState } from 'react';
-import type { Finding, Step, Task, TaskCost } from '../api/types.ts';
+import type { Doc, Finding, Gate, Step, Task, TaskCost } from '../api/types.ts';
 import { Badge } from '../components/badge.ts';
 import { Markdown } from '../components/Markdown.tsx';
-import { Failure, go, useApi } from '../lib.tsx';
+import { Failure, go, useApi, useLoad } from '../lib.tsx';
 import { StatusPill } from './Matters.tsx';
 
 const TABS: [string, string][] = [['run', 'Run log'], ['findings', 'Findings'], ['memo', 'Deliverable'], ['cost', 'Cost']];
@@ -18,6 +18,7 @@ export function TaskScreen(props: { id: string; tab: string }) {
   const [steps, setSteps] = useState<Step[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [focus, setFocus] = useState<string | null>(null);
+  const docs = useLoad(() => (task ? api.documents(task.matterNumber) : Promise.resolve([] as Doc[])), [task?.matterNumber]);
 
   useEffect(() => {
     let live = true;
@@ -32,10 +33,18 @@ export function TaskScreen(props: { id: string; tab: string }) {
     return () => { live = false; stop(); };
   }, [api, props.id]);
 
-  if (error) return <Failure error={error} />;
+  if (error && !task) {
+    return (
+      <section>
+        <h1>Task not found</h1>
+        {api.mode === 'live' && <Failure error={error} />}
+        {api.mode === 'recorded' && <p>The demo keeps nothing across a reload, so earlier tasks are gone. Start one again from <a href="#/matters">Matters</a>.</p>}
+      </section>
+    );
+  }
   if (!task) return <p className="muted">Loading…</p>;
   const tab = (id: string) => go(`task/${encodeURIComponent(task.id)}`, { tab: id });
-  const act = (p: Promise<Task>) => p.then(setTask, (e: Error) => setError(e.message));
+  const act = (p: Promise<Task>) => p.then((t) => { setError(null); setTask(t); }, (e: Error) => setError(e.message));
   const gate = task.pendingGates.find((g) => g.kind === 'deliverable');
   const quarantined = task.findings.filter((f) => f.status !== 'verified').length;
 
@@ -56,25 +65,58 @@ export function TaskScreen(props: { id: string; tab: string }) {
         {task.status === 'running' && api.fastForward && <button onClick={() => { api.fastForward?.(task.id); void api.task(task.id).then(setTask); }}>Skip to end</button>}
         {task.status === 'running' && <button className="danger" onClick={() => void act(api.cancel(task.id))}>Cancel</button>}
       </div>
-      {gate && (
-        <div className="panel gate">
-          <p><strong>Deliverable gate.</strong> The run has finished; no task is complete until a lawyer approves the deliverable.</p>
-          <button className="primary" onClick={() => void act(api.decideGate(task.id, gate.gateId, true))}>Approve deliverable</button>{' '}
-          <button onClick={() => void act(api.decideGate(task.id, gate.gateId, false))}>Reject</button>
+      {gate && <GatePanel gate={gate} decide={(approve, reason) => act(api.decideGate(task.id, gate.gateId, approve, reason))} />}
+      {task.decidedGates?.map((d) => (
+        <div key={d.gateId} className={`panel gate decided ${d.decision}`} role="status">
+          {d.decision === 'approved'
+            ? <p><strong>Deliverable approved.</strong> The task is complete.</p>
+            : <>
+              <p><strong>Deliverable rejected.</strong> Reason: “{d.reason}”</p>
+              <p className="muted">{api.mode === 'recorded'
+                ? 'A live run sends your reason back to the lead, which revises the deliverable and returns to this gate. The recording has no revised run, so the replay ends here; start the task again from its matter to see the other branch.'
+                : 'The lead has your reason and is revising the deliverable; it comes back to this gate.'}</p>
+            </>}
         </div>
-      )}
+      ))}
+      <Failure error={error} />
       <div className="tabs" role="tablist">
         {TABS.map(([id, label]) => (
           <button key={id} role="tab" aria-selected={props.tab === id} className={props.tab === id ? 'on' : ''} onClick={() => tab(id)}>{label}</button>
         ))}
       </div>
       {props.tab === 'run' && <RunLog steps={steps} running={task.status === 'running'} />}
-      {props.tab === 'findings' && <Findings findings={task.findings} focus={focus} running={task.status === 'running'} />}
+      {props.tab === 'findings' && <Findings findings={task.findings} docs={docs.data ?? []} focus={focus} running={task.status === 'running'} />}
       {props.tab === 'memo' && (task.output
         ? <article className="panel memo"><Markdown text={task.output} onFid={(f) => { setFocus(f); tab('findings'); }} /></article>
         : <p className="muted">The deliverable appears when the run finishes.</p>)}
       {props.tab === 'cost' && <Cost id={task.id} />}
     </section>
+  );
+}
+
+function GatePanel(props: { gate: Gate; decide: (approve: boolean, reason?: string) => Promise<unknown> }) {
+  const [rejecting, setRejecting] = useState(false);
+  const [reason, setReason] = useState('');
+  return (
+    <div className="panel gate">
+      <p><strong>Deliverable gate.</strong> The run has finished; no task is complete until a lawyer approves the deliverable.</p>
+      {!rejecting ? (
+        <div className="row">
+          <button className="primary" onClick={() => void props.decide(true)}>Approve deliverable</button>
+          <button onClick={() => setRejecting(true)}>Reject…</button>
+        </div>
+      ) : (
+        <form onSubmit={(e) => { e.preventDefault(); void props.decide(false, reason); }}>
+          <label htmlFor="reject-reason">What should the lead fix? Your reason goes back with the deliverable.</label>
+          <textarea id="reject-reason" rows={2} value={reason} onChange={(e) => setReason(e.target.value)} autoFocus
+            placeholder="e.g. Add the Rule 26(f) conference deadline." />
+          <div className="row">
+            <button className="danger" disabled={reason.trim() === ''}>Reject deliverable</button>
+            <button type="button" onClick={() => setRejecting(false)}>Cancel</button>
+          </div>
+        </form>
+      )}
+    </div>
   );
 }
 
@@ -94,13 +136,21 @@ function RunLog(props: { steps: Step[]; running: boolean }) {
   );
 }
 
-function Findings(props: { findings: Finding[]; focus: string | null; running: boolean }) {
+function Findings(props: { findings: Finding[]; docs: Doc[]; focus: string | null; running: boolean }) {
+  const api = useApi();
+  const name = (id: string) => props.docs.find((d) => d.id === id)?.name ?? '';
   useEffect(() => {
     if (props.focus) document.getElementById(`finding-${props.focus}`)?.scrollIntoView({ block: 'center' });
   }, [props.focus]);
   if (props.findings.length === 0) return <p className="muted">{props.running ? 'Findings appear as the run verifies them.' : 'No findings.'}</p>;
+  const methods = new Map<string, number>();
+  for (const c of props.findings.flatMap((f) => f.citations)) methods.set(c.method, (methods.get(c.method) ?? 0) + 1);
   return (
     <div className="findings">
+      <p className="ladder" aria-label="Citations by verification method">
+        {[...methods].map(([m, n]) => <span key={m}><Badge method={m} confidence={m === 'exact' ? 1 : m === 'tolerant' ? 0.95 : m.endsWith('@transcript') ? 0.85 : 0} /> ×{n}</span>)}
+        <span className="muted small">exact and tolerant: found in the source; @transcript: found in a scan's machine transcript (at most 85%, check the original); excluded: not found, kept out of the deliverable.</span>
+      </p>
       {props.findings.map((f) => (
         <article key={f.fid} id={`finding-${f.fid}`} className={`panel finding ${props.focus === f.fid ? 'focus' : ''} ${f.status}`}>
           <header><b>{f.fid}</b> <span className="muted">{f.question}</span> <span className={`sev sev-${f.severity}`}>{f.severity}</span>
@@ -113,7 +163,10 @@ function Findings(props: { findings: Finding[]; focus: string | null; running: b
                 {c.match
                   ? <a className="quote" href={`#/documents?doc=${encodeURIComponent(c.documentId)}&section=${encodeURIComponent(c.sectionId)}&hl=${encodeURIComponent(c.match)}`}>“{c.quote}”</a>
                   : <span className="quote">“{c.quote}”</span>}
-                <span className="muted loc">{c.locator}</span>
+                <span className="muted loc">{[name(c.documentId), c.locator].filter(Boolean).join(' · ')}</span>
+                {c.method === 'none'
+                  ? <span className="cite-note bad">Not found in the matter's documents, so excluded from the deliverable.{c.note ? ` Ladder: ${c.note}.` : ''}</span>
+                  : c.note && <span className="cite-note">{c.note}{c.method.endsWith('@transcript') && api.fileUrl(c.documentId) && <> · <a href={api.fileUrl(c.documentId) ?? ''} target="_blank" rel="noopener">open the scan</a></>}</span>}
               </li>
             ))}
           </ul>

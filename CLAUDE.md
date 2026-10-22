@@ -72,7 +72,10 @@ change. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`, not here.
   aliases the transport (vite.config.ts), so the recorded bundle has no network code
   (`test/offline.test.ts`). The recording is made by `eval/demo/record_test.go` (test-only, no Go
   prod lines) from v2's `internal/docs` over three `eval/tasks` matters; claims come from the answer
-  keys. `TestDemoRecording` (DB) fails when the committed recording is stale: `make demo-record`.
+  keys, plus a scanned exhibit (`ui/src/recorded/*.jpg`, drawn by `eval/demo/make_scan.py`) read through the
+  vision path by a scripted `model.Fake`, and a few quotes/one finding written for the demo (`demoQuotes`,
+  `demoFacts`) so every ladder rung but the judge's shows; sample playbooks/time/profiles are labelled as such.
+  `TestDemoRecording` (DB) fails when the committed recording is stale: `make demo-record`.
   The `//go:embed` of `ui/dist` waits for `internal/api` (PR 4b, its 30-line budget).
 
 Everything else in README is marked planned (next: PR 3d the `.docx` writer and tracked changes;
