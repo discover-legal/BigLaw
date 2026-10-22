@@ -8,6 +8,7 @@ import { snippet } from '../api/match.ts';
 import type { Doc, Hit } from '../api/types.ts';
 import { Empty, Failure, go, Loading, plural, useApi, useLoad } from '../lib.tsx';
 import { Icon } from '../components/icons.tsx';
+import { plainText } from '../components/quote.ts';
 
 /** split cuts text around the first occurrence of mark, for highlighting ("" or absent: no mark). */
 export function split(text: string, mark: string): [string, string, string] | null {
@@ -103,7 +104,7 @@ function Search(props: { matter: string; ids: string[]; docs: Doc[]; onOpen: (h:
               <li key={i}><button type="button" onClick={() => { setHits(null); props.onOpen(h, sn.text.length > 160 ? sn.text.slice(0, Math.max(sn.text.lastIndexOf(' ', 160), 80)) : sn.text); }}>
                 <span className="hit-doc"><Icon name={h.transcribed ? 'scan' : 'doc'} size={14} /><b>{name(h.documentId)}</b>{h.transcribed && <span className="badge badge-warn">transcript</span>}</span>
                 {h.title && <span className="hit-title">{h.title}</span>}
-                <span className="snippet">{sn.cut[0] && '…'}<Marked text={sn.text} marks={sn.marks} />{sn.cut[1] && '…'}</span>
+                <span className="snippet">{sn.cut[0] && '…'}<Marked text={plainText(sn.text)} marks={sn.marks} />{sn.cut[1] && '…'}</span>
               </button></li>
             );
           })}

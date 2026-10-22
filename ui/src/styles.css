@@ -229,6 +229,8 @@ a.num-tag { color: var(--accent-text); }
 .f-claim { margin: 0 0 0.85rem; font-size: 1.02rem; font-weight: 550; color: var(--ink); max-width: 60rem; }
 .quotes { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.6rem; }
 .qcard { border-left: 3px solid var(--rule-2); background: var(--sunken); border-radius: 0 var(--r-sm) var(--r-sm) 0; padding: 0.65rem 0.85rem; min-width: 0; }
+.qcell + .qcell::before { content: ""; display: inline-block; width: 1px; height: 0.9em; background: var(--rule-2); margin: 0 0.55rem; vertical-align: -0.1em; }
+.qrow { font: 550 0.72rem var(--sans); color: var(--muted); margin-left: 0.5rem; }
 .qcard.tone-ok { border-left-color: var(--ok); } .qcard.tone-near { border-left-color: var(--near); }
 .qcard.tone-warn { border-left-color: var(--warn); } .qcard.tone-bad { border-left-color: var(--bad); }
 .qcard blockquote { margin: 0 0 0.45rem; font: 1rem/1.55 var(--serif); color: var(--ink); overflow-wrap: anywhere; }

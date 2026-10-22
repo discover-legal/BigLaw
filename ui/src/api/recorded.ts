@@ -43,6 +43,11 @@ const realClock: Clock = {
 
 interface Live { id: string; rec: RecTask; description: string; started: number; createdAt: string; cut?: number; decision?: GateDecision }
 
+/** The recording names its scripted vision reader by its Go name; visitors read plain words. */
+const READER = 'a scripted stand-in for the vision reader';
+export const plain = (s: string) => s.replace('by model.Fake (scripted) (', `by ${READER} (demo only; `)
+  .replace('(model.Fake (scripted))', `(${READER}, demo only)`).replaceAll('model.Fake (scripted)', `${READER} (demo only)`);
+
 const BUDGET_CALLS = 150; // BIGLAW_BUDGET_CALLS' default; the recording spends none
 
 export function createTransport(rec: Recording = recordingJson as unknown as Recording, clock: Clock = realClock): Transport {
@@ -66,7 +71,7 @@ export function createTransport(rec: Recording = recordingJson as unknown as Rec
   }
   function snapshot(l: Live): Task {
     const run = runOf(l);
-    const strip = ({ atStep: _a, ...f }: RecFinding): Finding => f;
+    const strip = ({ atStep: _a, ...f }: RecFinding): Finding => ({ ...f, citations: f.citations.map((c) => (c.note ? { ...c, note: plain(c.note) } : c)) });
     return {
       id: l.id, description: l.description, workflowType: l.rec.workflowType, jurisdiction: l.rec.jurisdiction,
       matterNumber: l.rec.matterNumber, documentIds: l.rec.documentIds, status: run.status, createdAt: l.createdAt, run,
@@ -88,7 +93,9 @@ export function createTransport(rec: Recording = recordingJson as unknown as Rec
     clients: async () => rec.clients,
     documents: async (m) => rec.documents
       .filter((d) => !m || d.matterNumber === m)
-      .map(({ outline: _o, sectionText: _s, chunkList: _c, ...d }) => d),
+      .map(({ outline: _o, sectionText: _s, chunkList: _c, ...d }) => ({
+        ...d, notes: d.notes.map(plain), ...(d.transcript ? { transcript: { ...d.transcript, model: plain(d.transcript.model) } } : {}),
+      })),
     async outline(id) { const d = docById.get(id); if (!d) throw notFound('document'); return d.outline; },
     async section(id, sid) {
       const d = docById.get(id), o = d?.outline.find((x) => x.sectionId === sid);

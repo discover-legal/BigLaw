@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react';
 import type { Doc, Finding, Gate, Step, Task, TaskCost } from '../api/types.ts';
 import { Badge, badgeFor } from '../components/badge.ts';
 import { Icon, stepIcon } from '../components/icons.tsx';
+import { quoteCells } from '../components/quote.ts';
 import { Markdown } from '../components/Markdown.tsx';
 import { Empty, Failure, go, Loading, plural, useApi, useLoad } from '../lib.tsx';
 import { StatusPill } from './Matters.tsx';
@@ -217,7 +218,7 @@ function Findings(props: { findings: Finding[]; docs: Doc[]; focus: string | nul
               const file = c.method.endsWith('@transcript') ? api.fileUrl(c.documentId) : null;
               return (
                 <li key={i} className={`qcard tone-${tone}`}>
-                  <blockquote>“{c.quote}”</blockquote>
+                  <QuoteText quote={c.quote} />
                   <div className="qmeta">
                     <Badge method={c.method} confidence={c.confidence} />
                     {name(c.documentId) && <span className="qdoc"><Icon name={file ? 'scan' : 'doc'} size={13} />{name(c.documentId)}</span>}
@@ -237,6 +238,17 @@ function Findings(props: { findings: Finding[]; docs: Doc[]; focus: string | nul
   );
 }
 
+/** QuoteText shows a source quote without the source's markup; the tooltip keeps it verbatim. */
+function QuoteText(props: { quote: string }) {
+  const cells = quoteCells(props.quote);
+  const shown = cells.join(' ');
+  return (
+    <blockquote title={shown === props.quote ? undefined : `Verbatim, as verified: ${props.quote}`}>
+      {cells.length === 1 ? `“${cells[0]}”` : <>“{cells.map((c, i) => <span key={i} className="qcell">{c}</span>)}”<span className="qrow">table row</span></>}
+    </blockquote>
+  );
+}
+
 function Cost(props: { id: string }) {
   const api = useApi();
   const [c, setC] = useState<TaskCost | null>(null);
@@ -253,9 +265,8 @@ function Cost(props: { id: string }) {
       </div>
       {api.mode === 'recorded' && (
         <p className="muted prose">This recording made no model calls, so it cost nothing. A live run charges every call (lead, subagents,
-          critics, embeddings) to this ledger from the price table, against BIGLAW_BUDGET_CALLS (150) and BIGLAW_BUDGET_USD ($5).
-          For scale, v1's best recorded Haiku run on one Harvey LAB task (8 documents) used 8.3 million tokens and cost $11.52
-          (benchmarks/runs on archive/v1-final, haiku-v5b).</p>
+          critics, embeddings) to this ledger from the price table, against the default budget of 150 calls and $5 per task.
+          For scale, v1's best recorded Haiku run on one Harvey LAB task (8 documents) used 8.3 million tokens and cost $11.52.</p>
       )}
       {c.entries.length > 0 && (
         <div className="table-wrap"><table className="grid">

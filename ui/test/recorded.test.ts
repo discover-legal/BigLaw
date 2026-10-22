@@ -163,3 +163,14 @@ test('recorded search runs over the bundled chunks', async () => {
   assert.ok(hits.every((h) => lit.documentIds.includes(h.documentId)));
   assert.match(hits[0].text, /shortfall/i);
 });
+
+test('visitors never see the scripted reader\'s Go name', async () => {
+  const t = recorded(rec);
+  const docs = await t.documents();
+  const notes = docs.flatMap((d) => [...d.notes, d.transcript?.model ?? '']);
+  const task = await t.submit(newTask(''), 'lit-deadlines');
+  t.fastForward!(task.id);
+  const cites = (await t.task(task.id)).findings.flatMap((f) => f.citations.map((c) => c.note ?? ''));
+  for (const s of [...notes, ...cites]) assert.doesNotMatch(s, /model\.Fake|\.go\b/, s);
+  assert.ok(notes.some((n) => n.includes('a scripted stand-in for the vision reader (demo only; ')), notes.join(' / '));
+});

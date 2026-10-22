@@ -101,9 +101,9 @@ export function Settings() {
       {cfg.data && (
         <>
           <h2>Configuration</h2>
-          <p className="muted small">This build's environment variables and their defaults (cmd/biglaw/config.go, read when the demo was recorded).
-            A server prints its own with <code>biglaw version --config</code>; it is set by environment, not here.</p>
-          <table className="grid stack"><thead><tr><th>Variable</th><th>Default</th><th>First read in</th></tr></thead>
+          <p className="muted small">The settings this build reads from its environment, with their defaults as recorded for the demo.
+            An operator sets them on the server, not here; the server can print its own values.</p>
+          <table className="grid stack"><thead><tr><th>Environment variable</th><th>Default</th><th>First read in</th></tr></thead>
             <tbody>{cfg.data.map((c) => <tr key={c.name}><td className="wide"><code>{c.name}</code></td><td data-label="Default">{c.secret ? <span className="muted">secret, never shown</span> : c.default || <span className="muted">unset</span>}</td><td data-label="First read in">PR {c.pr}</td></tr>)}</tbody></table>
         </>
       )}
