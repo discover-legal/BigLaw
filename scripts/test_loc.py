@@ -67,6 +67,7 @@ class TestLocBudget(unittest.TestCase):
             "direct_go_deps": lambda r: write(r, "go.mod", "module x\n\ngo 1.25\n\nrequire (\n\ta.example/a v1.0.0\n\tb.example/b v1.0.0\n\tc.example/c v1.0.0 // indirect\n\td.example/d v1.0.0\n)\n\nrequire e.example/e v1.0.0\n"),
             "env_vars": env_vars,
             "ui_runtime_deps": lambda r: write(r, "ui/package.json", '{"dependencies":{"react":"18","react-dom":"18","left-pad":"1"}}'),
+            "ui_loc": lambda r: [write(r, f"ui/src/f{i}.tsx", "x\n" * 1201) for i in range(2)],  # 2,402 lines
             "untested_packages": lambda r: write(r, "internal/b/b.go", HEADER + "package b\n"),
             "non-literal": lambda r: write(r, "internal/a/dyn.go", HEADER + 'package a\n\nimport "os"\n\nfunc g(n string) string { return os.Getenv(n) }\n'),
             # r2 prosecutor F6: a concatenation of literals hid BIGLAW_SNEAK.
@@ -85,6 +86,17 @@ class TestLocBudget(unittest.TestCase):
                 code, out = run(root)
                 failed = [l for l in out.splitlines() if l.startswith("FAIL:") and name.split(" (")[0] in l]
                 self.assertTrue(code != 0 and failed, f"{name}: exit {code}\n{out}")
+
+    def test_build_output_is_not_source(self):
+        """PR 11: ui/dist and ui/dist-recorded (built bundles) are skipped; ui/src counts."""
+        root = self.base()
+        write(root, "ui/dist-recorded/assets/a.js", "x\n" * 3000)
+        write(root, "ui/dist/assets/a.js", "x\n" * 3000)
+        write(root, "ui/src/a.tsx", "x\n" * 1200)
+        write(root, "ui/src/b.css", "x\n" * 1200)
+        code, out = run(root)
+        self.assertEqual(code, 0, out)
+        self.assertIn("ui_loc                 2400 / 2400", out)
 
     def test_loc_ceiling_boundary(self):
         """15,650 lines pass, 15,651 fail (owner decision 12, 2026-10-19: ceiling 15,650)."""

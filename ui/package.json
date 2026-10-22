@@ -1,0 +1,29 @@
+{
+  "name": "biglaw-ui",
+  "private": true,
+  "version": "2.0.0-dev",
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "BigLaw 2 UI: the seven screens over the REST API, or over a recorded engine (VITE_ENGINE=recorded).",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "build": "tsc --noEmit -p tsconfig.json && vite build && VITE_ENGINE=recorded vite build --outDir dist-recorded",
+    "demo-bundle": "VITE_ENGINE=recorded UI_BASE=/demo/biglaw/ vite build --outDir dist-recorded && node scripts/offline-check.mjs dist-recorded",
+    "test": "node --test 'test/*.test.ts'"
+  },
+  "dependencies": {
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "typescript": "7.0.2",
+    "vite": "8.3.4"
+  },
+  "engines": {
+    "node": ">=22.18"
+  }
+}

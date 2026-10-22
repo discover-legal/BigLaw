@@ -1,0 +1,53 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (C) 2026 Discover Legal
+//
+// The transport seam: every screen talks to BigLaw through this interface only. http.ts is the
+// real API (same origin); recorded.ts replays a recorded engine in the browser with no network.
+import type {
+  Client, Doc, Hit, NewTask, OutlineEntry, Playbook, Profile, RunEvent, SectionPage, Task, TaskCost, TimeEntry,
+} from './types.ts';
+
+/** What the recorded engine would replay for a prompt; live transports never match. */
+export interface PromptMatch {
+  key: string;
+  title: string;
+  prompt: string;
+  score: number;
+  onScript: boolean;
+}
+
+export interface Transport {
+  readonly mode: 'live' | 'recorded';
+  /** Shown in the demo banner (recorded engine only). */
+  readonly provenance: string | null;
+  clients(): Promise<Client[]>;
+  documents(matterNumber?: string): Promise<Doc[]>;
+  outline(docId: string): Promise<OutlineEntry[]>;
+  section(docId: string, sectionId: string, offset?: number): Promise<SectionPage>;
+  search(q: string, ids: string[]): Promise<Hit[]>;
+  tasks(): Promise<Task[]>;
+  task(id: string): Promise<Task>;
+  match(description: string, matterNumber: string): PromptMatch | null;
+  submit(t: NewTask, replayKey?: string): Promise<Task>;
+  cancel(id: string): Promise<Task>;
+  decideGate(id: string, gateId: string, approve: boolean): Promise<Task>;
+  cost(id: string): Promise<TaskCost>;
+  /** Streams a task's steps; returns the unsubscribe function. */
+  events(id: string, on: (e: RunEvent) => void): () => void;
+  /** Recorded engine only: the matter's recorded tasks, offered as prompts. */
+  suggestions?(matterNumber: string): PromptMatch[];
+  /** Recorded engine only: finish the replay now. */
+  fastForward?(id: string): void;
+  playbooks(): Promise<Playbook[]>;
+  timeEntries(): Promise<TimeEntry[]>;
+  profiles(): Promise<Profile[]>;
+}
+
+/** A refusal carries BigLaw's reason and what to do next (README: actionable errors). */
+export class ApiError extends Error {
+  readonly status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}

@@ -10,7 +10,7 @@ tables in which every factual statement cites a quote that the software has veri
 matter's own documents, with a lawyer approving every deliverable. It is one Go binary plus one
 PostgreSQL database. Licensed Apache-2.0 (`LICENSE`, `NOTICE`).
 
-## What exists today (PR 1: skeleton, config, store, CI; PR 2: model client; PR 3a: documents; PR 3b: model roles, embeddings, hybrid search; PR 3c: vision transcription)
+## What exists today (PR 1: skeleton, config, store, CI; PR 2: model client; PR 3a: documents; PR 3b: model roles, embeddings, hybrid search; PR 3c: vision transcription; PR 11, pulled forward by owner decision 13: the UI and its recorded engine)
 
 | Piece | Path | What it does |
 |---|---|---|
@@ -23,6 +23,8 @@ PostgreSQL database. Licensed Apache-2.0 (`LICENSE`, `NOTICE`).
 | Documents | `internal/docs/` (`ingest.go`, `child.go` + `child_linux.go`/`child_other.go`, `pageindex.go`, `chunk.go`, `search.go`, `embed.go`, `verify.go`, `http.go`, `vision.go` + `vision_prompts.txt`, `scanpdf.go`, `jobs.go`) | Ingest of UTF-8 text, `.docx` and PDF text layers (PDFs and `.docx` files parsed in a bounded child process); images and JPEG-scanned PDF pages transcribed by the `vision` role, each page read twice and the readings compared, with provenance on every document, chunk and citation, and a leased job that transcribes what was stored before a vision role was set (§ Vision transcription); the byte-exact section tree; search chunks; Postgres full-text search, fused with pgvector similarity when an `embed` role is set (chunk embedding at ingest, a startup backfill); the page reader (outline, paged sections); the quote-verification ladder; the upload and download routes. Every read is scoped to the caller's document ids (§ Documents) |
 | `.docx` reader | `internal/docs/ooxml/` | Opens a `.docx`'s text parts only (body, footnotes, endnotes; 128 MiB decompression cap) and reads its visible text in one linear XML pass. The writer, the XML escapers, the part-preserving re-zip and tracked-change parse/apply are planned (PR 3d) |
 | Proof-run fixtures | `eval/tasks/`, `eval/e4/embeddings.json` | The five synthetic proof-run matters (documents + answer keys), copied from `feat/proof-runs-multi-practice`; PR 3 reads them for gate E4, PR 4b adds the driver and scorer. `eval/e4/embeddings.json` is E4's embeddings tape: today the **self-test** tape of a hash embedder, not a real model's (§ Documents, gate E4) |
+| UI | `ui/` (React 19 + Vite + TypeScript strict; runtime deps `react`, `react-dom` only) | The seven screens (§ UI) behind one transport seam, `ui/src/api/transport.ts`: `http.ts` talks to the Go API on the same origin (its routes are **planned**: PR 4 onward, so the live UI has nothing to talk to yet), `recorded.ts` replays a recorded engine in the browser with no network at all |
+| Recorded demo | `ui/src/recorded/recording.json`, `eval/demo/record_test.go` | Three synthetic matters (13 documents) and seven recorded memo tasks (47 findings, 74 citations); documents, outlines, sections, chunks, run-log search hits and every quote's verification computed by v2's `internal/docs`; claims from the answer keys (§ UI, provenance). `TestDemoRecording` fails when the committed recording no longer matches what v2's code computes |
 | Test helper | `internal/store/storetest/` | Gives each DB test its own schema; skips without a DSN, fails if `BIGLAW_REQUIRE_DB` is set |
 | Budgets | `scripts/loc.py` (+ `scripts/test_loc.py`) | Fails CI if a size budget is exceeded (below) |
 | Build/deploy | `Makefile`, `Dockerfile`, `docker-compose.yml`, `render.yaml`, `.env.example` | `make ci` (and the owner-run `make e4-record` / `make e4-live`); `pgvector/pgvector:0.8.6-pg16` + biglaw under Compose; Render blueprint (inert until PR 8, see § Exposure) |
@@ -36,7 +38,7 @@ Every other path is 404/405. There is no authentication yet (§ Exposure).
 
 **Planned** (not built): the `.docx` writer and tracked-change parse/apply (PR 3d); the engine and the memo workflow with its REST API (PR 4), diligence (PR 5), contract review (PR 6),
 MCP (PR 7), clients/conflicts and OIDC/session/token auth (PR 8), time and billing (PR 9), the
-UI (PR 11), jurisdiction and practice packs (PR 12), v1 import and docs (PR 13). The
+UI's embedding in the binary (`//go:embed`, with `internal/api` in PR 4b; § UI), jurisdiction and practice packs (PR 12), v1 import and docs (PR 13). The
 discover.legal intake module is **not** part of v2 (owner decision; it moves to a separate repo).
 
 ## Configuration
@@ -818,6 +820,67 @@ as above). So two ingests at once (`ingestSlots`) of successful files at the tex
 2 × (60 + 180 + 60) ≈ 0.6 GB above an idle server, plus up to 2 × 64 MiB of file; the worst case
 is two hostile files whose children die at their 1 GiB cap: about 2 GiB of children plus that.
 
+## UI (`ui/`; PR 11, pulled forward by owner decision 13)
+
+Owner decision 13 (2026-10-20): BigLaw needs a live, playable UI on discover.legal before the engine
+exists, run against a **recorded** engine, with no model calls. So the UI is built first and talks
+to BigLaw only through one interface (`ui/src/api/transport.ts`):
+
+- `http.ts` — the REST API on the same origin (README contract routes; the shapes the contract left
+  open are fixed in DESIGN § UI contract, PR 11, and typed in `ui/src/api/types.ts`). Those routes are **planned** (PR 4 onward):
+  today's server answers only `/health` and the two document file routes, so a live build has
+  nothing to show yet. `npm run dev` proxies the API paths to `UI_API` (default `http://127.0.0.1:3101`).
+- `recorded.ts` — replays recorded runs in the browser. A build with `VITE_ENGINE=recorded` aliases
+  the transport to it, so the bundle contains no HTTP code: `test/offline.test.ts` builds it and
+  fails on any `fetch`, `XMLHttpRequest`, `EventSource`, `WebSocket`, `sendBeacon`, worker, preload
+  link or absolute URL (`scripts/offline-check.mjs`; the same check flags the live bundle, proving it bites).
+
+**Screens** (hash routes, so a static bundle works under any base path): **Matters** (matter cards,
+tasks, the new-task wizard), **Task** (run bar with status, step, stop reason, budget, Cancel; the
+deliverable gate with Approve/Reject; tabs Run log (the steps, streamed), Findings (claims,
+severity, each citation with its verification badge: `exact`, `tolerant`, `judge`, `ensemble`,
+`… @transcript`, `excluded`; a verified quote links to its section with the matched text
+highlighted), Deliverable (the memo with `[F-id]` links, Limitations and Evidence Note) and Cost),
+**Documents** (library, outline, section reader with highlight, search), **Playbooks**, **Clients &
+Conflicts**, **Time & Billing**, **Settings**. The last four are read views over PR 6/8/9 routes;
+in the recorded demo only Clients has data (the sample matters). The Task screen's Table and
+Redline tabs (diligence, contract review) are **planned** with PRs 5 and 6, the Documents version
+timeline with PR 6, sign-in with PR 8.
+
+**The recorded demo.** A visitor picks one of three sample matters (Greystone v. Talbot litigation
+defense, Altamira/Sorell merger control, Quillon/Fernhill license review), types a prompt or picks
+a recorded task, and watches the run log replay (about 12–23 s; Skip to end). A prompt is matched
+to the matter's recorded tasks deterministically (`ui/src/api/match.ts`: the share of its content
+words a recorded task's prompt, title and keywords cover, ties to the earlier task; at least 30%
+or it is **off script**: the UI says no recorded run answers it and offers the nearest). Search runs
+client-side over the recorded chunks (idf-weighted terms, OR, like the server's lexical ranking;
+not its Postgres ranking). Nothing is saved; a reload starts over.
+
+**Provenance (exact).** No model has run on these matters (v1's proof-run harness says "no
+real-model scores have been recorded yet"; v1's real LAB runs used Harvey's documents, which are not
+in the repo; the family and employment drives' documents and outputs were never committed). So:
+the documents are `eval/tasks/{litigation,competition-regulatory,ip-licensing}` (synthetic,
+fictional); `eval/demo/record_test.go` ingests them with `docs.IngestText` and records each
+document's outline (`Outline`), section text (`Section`), chunks (`Parse` + `Chunkify`), the
+run-log search hits (`Search`, lexical) and every quote's verification (`VerifyQuote`, no judge) —
+all computed by v2 code. The plan, the claims and the memo text are the matters' answer keys
+(reference answers written by hand for scoring): each step is marked `computed` or `scripted`
+in the run log, and the banner and memo Limitations say so. Every recorded quote verified
+`exact` (74 citations across 47 findings); none is `tolerant`, `@transcript` or excluded, so those badges appear only
+in the badge tests. No committee step is recorded (critics are model calls). Costs are $0 because
+no call was made; the Cost tab quotes v1's best Haiku LAB run ($11.52, 8.3 M tokens) for scale.
+
+```bash
+make ui            # cd ui && npm ci && npm run build && npm test  (CI's ui job)
+make demo-bundle   # ui/dist-recorded: the static demo for https://discover.legal/demo/biglaw/
+                   # (VITE_ENGINE=recorded UI_BASE=/demo/biglaw/; then the no-network check)
+make demo-record   # re-record ui/src/recorded/recording.json (needs BIGLAW_TEST_DSN, Postgres + pgvector)
+```
+
+The demo bundle is three files (`index.html`, one JS and one CSS asset; about 550 KB, 116 KB
+gzipped) and needs no server logic: copy `ui/dist-recorded/` to the site's `/demo/biglaw/`. A
+build without `UI_BASE` uses relative asset paths, so it also works from any directory.
+
 ## Test it
 
 ```bash
@@ -952,7 +1015,8 @@ transcribe, never text).
 | Packages under `internal/`, test-support packages excluded | 12 | 4 (`docs`, `docs/ooxml`, `model`, `store`; `store/storetest` is test support) |
 | Direct Go dependencies | 3 | 2 (`github.com/lib/pq`, `github.com/ledongthuc/pdf`) |
 | Runtime environment variables | 20 | 18 |
-| UI runtime dependencies | 2 | 0 (no UI yet) |
+| UI runtime dependencies | 2 | 2 (`react`, `react-dom`) |
+| UI source lines (`ui/src` `.ts`/`.tsx`/`.css`; tests, config and `recording.json` not counted) | 2,400 | 1,275 |
 | Packages without a `_test.go` | 0 | 0 |
 | Lines in any one source file (`.go`, `.py`, `.sql`, `.sh`, `.js`, `.ts`, `.css`; tests included) | 2,000 | 968 (`internal/docs/vision_safety_test.go`) |
 
@@ -968,6 +1032,12 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
 
 ## Limitations
 
+- The UI's live mode has no API to talk to until PR 4b (tasks, steps, SSE, findings, cost) and
+  PRs 6/8/9 (playbooks, clients, time, profiles); only the recorded demo is usable. The binary
+  does not serve the UI yet: the `//go:embed` of `ui/dist` (`TestEmbeddedUIServesIndex`,
+  `TestBuildWithoutUIServesNotice`) lands with `internal/api` in PR 4b, inside its 30-line budget.
+- The recorded demo replays answer-key claims, not a model's work; its badges are all `exact`; its
+  search is a client-side lexical ranking, not the server's; it has no reject branch at the gate.
 - Nothing user-facing exists yet beyond `/health` and the two document file routes; every
   workflow, the rest of the REST API, auth and the UI are planned. The exposure rule above is the
   only protection until PR 8: anyone who can reach the port can upload and, knowing a document id,
