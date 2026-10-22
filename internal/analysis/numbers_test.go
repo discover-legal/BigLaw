@@ -226,3 +226,39 @@ func TestFigureSalienceRanking(t *testing.T) {
 		}
 	}
 }
+
+// r1: a money value in another currency is not dollars: it keeps its unit, so a sum across
+// currencies is refused instead of being labelled USD.
+func TestCalculateKeepsCurrency(t *testing.T) {
+	fs := append(ledger(), Finding{FID: "F5", Verified: true, Values: []Value{{Metric: "deposit", Value: "500,000", Unit: "GBP", Class: "Money"}}})
+	if w, err := Calc(fs, "sum", []Operand{{Ref: ref("F5.v1")}, {Ref: ref("F2.v1")}}, nil); err == nil {
+		t.Fatalf("GBP + USD = %s %s", w.Result, w.Unit)
+	}
+	if w, err := Calc(fs, "sum", []Operand{{Ref: ref("F5.v1")}, {Literal: ref("1"), Unit: ref("gbp")}}, nil); err != nil || w.Result != "500001" || w.Unit != "gbp" {
+		t.Fatalf("GBP + GBP = %q %q (%v)", w.Result, w.Unit, err)
+	}
+}
+
+// r1: a date difference over centuries (a 999-year lease) is exact, not a saturated duration.
+func TestCalculateDateDiffLongSpan(t *testing.T) {
+	w, err := Calc(nil, "date_diff", []Operand{{Literal: ref("1990-01-01"), Unit: ref("date")}, {Literal: ref("2989-01-01"), Unit: ref("date")}}, nil)
+	if err != nil || w.Result != "364878" {
+		t.Fatalf("date_diff = %q (%v), want 364878", w.Result, err)
+	}
+}
+
+// r1: a figure's codename does not depend on which findings a call named: {Zephyr} in one draft
+// section names the same figure as {Zephyr} in another.
+func TestHandlesStableAcrossCalls(t *testing.T) {
+	all := map[string]string{}
+	for _, h := range Handles(ledger(), nil, 0) {
+		all[h.Ref] = h.Handle
+	}
+	for _, sub := range [][]string{{"F2"}, {"F4"}, {"F4", "F2"}} {
+		for _, h := range Handles(ledger(), sub, 1) {
+			if all[h.Ref] != h.Handle {
+				t.Fatalf("fids %v: %s is %s, but %s over the whole ledger", sub, h.Ref, h.Handle, all[h.Ref])
+			}
+		}
+	}
+}

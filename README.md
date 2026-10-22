@@ -764,7 +764,8 @@ them are PR 4b. What PR 4a ships, all tested with `model.Fake` or no model:
   `additionalProperties: false`, every field required, optional fields nullable; in and out), a
   description under three sentences or without a "Do not use" line, and 1–3 `Example: {…}` lines
   that do not validate. Definitions are frozen when registered: the same bytes reach the model on
-  every turn (prompt cache), and no matter data can reach a schema. At most 14 tools are visible to
+  every turn (prompt cache), and no matter data can reach a schema. The definition sent leaves out
+  `minLength`/`maxLength` (strict mode refuses them); Go enforces them before a tool runs. At most 14 tools are visible to
   one agent. Specs are data: `internal/docs/specs/*.json`, `internal/analysis/specs/*.json`.
 - **One loop, two depths** (`Runtime.Run`). The lead (depth 0) and a subagent (depth 1, the
   `Subagent` tool: its own prompt, allowed tools, turn cap, grant and output schema; its transcript
@@ -792,13 +793,18 @@ them are PR 4b. What PR 4a ships, all tested with `model.Fake` or no model:
   `Off` sends no hint. Every tool result is recorded (refused or failed: reward 0).
 - **`retrieve`** (`op` search, outline, section; `k` ≤ 8; sections paged with `next`) and
   **`verify_quote`** (the ladder; the paraphrase judge runs on the `critic` role, at most 4 calls
-  from the caller's grant, with the passage fenced as untrusted text). A document outside the call's
+  from the caller's grant, each held and charged like the loop's own calls through
+  `Runtime.ChatWithin`, so it never spends past the grant's calls or USD; the quote and the passage
+  each fenced as untrusted text, fence markers inside them neutralised). A document outside the call's
   ids is "not found".
 - **`numbers`**: `calc` (exact decimals: `sum`, `diff`, `ratio`, `pct`, `date_add`, `date_diff`,
   `business_days` with the caller's holidays) over verified finding values (`F12.v1`) or literals; a
-  worksheet id is a hash of its steps; a quarantined or unknown finding is refused, never 0.
+  worksheet id is a hash of its steps; a quarantined or unknown finding is refused, never 0. Money is
+  USD only when its unit is empty, `$`, `usd` or `dollars`; another currency keeps its unit, so a sum
+  across currencies is refused. Date differences are exact over any span.
   `handles`: a `{Codename}` per distinct verified money, percentage, count or identifier value (never
-  a date), most salient first, 64 at most; `Substitute` puts the exact value in, and an unmapped
+  a date), most salient first, 64 at most, assigned over the whole verified ledger (a codename names
+  one figure whatever `fids` a call asks for); `Substitute` puts the exact value in, and an unmapped
   codename is an error. `table`: a key-figures table from verified values only.
 - **`join_discrepancies`**: cross-document conflicts between verified values that share a metric
   label, a quantity class (money is never compared with a share count) and an entity after the
@@ -824,13 +830,15 @@ Limitations of this layer:
   constants (β 0.5, γ 1, c 0.5) are uncalibrated; gate B measures it on and off.
 - Text inside a quote that happens to read `{Zephyr}` would be substituted by the renderer like a
   handle; PR 4b's renderer must substitute outside quoted spans only.
+- Codenames follow salience over the ledger as it stands: a later finding can renumber them, so PR
+  4b's renderer must substitute with the handle set the drafter was given, never a recomputed one.
 - `join_discrepancies` trusts the extracting model's metric labels: two labels for one metric are
   never compared (a missed conflict), one label for two metrics is compared (the lead must check the
   quotes). A value's document is the quote that holds its text, else the finding's first quote.
 - Calls in one turn run sequentially, not concurrently; `retrieve` and Go tools spend no calls, so a
   lead can issue up to 8 per turn for every turn its budget funds.
-- **Line budget:** `agent` 1,232 against 1,100, `analysis` 1,176 against 950, the `docs` adapters
-  147 against 50 (§ Budgets: accepted by owner decision 14, ceiling 16,100).
+- **Line budget:** `agent` 1,242 against 1,100, `analysis` 1,183 against 950, the `docs` adapters
+  153 against 50 (§ Budgets: accepted by owner decision 14, ceiling 16,100).
 
 ## Files
 
@@ -1116,7 +1124,7 @@ transcribe, never text).
 
 | Budget | Ceiling | Today |
 |---|---:|---:|
-| Go production lines (physical lines, non-`_test.go`, test-support packages included) | 16,100 | 7,476 |
+| Go production lines (physical lines, non-`_test.go`, test-support packages included) | 16,100 | 7,499 |
 | Packages under `internal/`, test-support packages excluded | 12 | 6 (`agent`, `analysis`, `docs`, `docs/ooxml`, `model`, `store`; `store/storetest` is test support) |
 | Direct Go dependencies | 3 | 2 (`github.com/lib/pq`, `github.com/ledongthuc/pdf`) |
 | Runtime environment variables | 20 | 18 |
@@ -1125,7 +1133,7 @@ transcribe, never text).
 | Packages without a `_test.go` | 0 | 0 |
 | Lines in any one source file (`.go`, `.py`, `.sql`, `.sh`, `.js`, `.ts`, `.css`; tests included) | 2,000 | 968 (`internal/docs/vision_safety_test.go`) |
 
-The line ceiling is 16,100 (owner decisions: 14,000, then 14,250, then 14,500 during PR 2's review, then 15,000 at PR 3a's, with pgvector, then 15,500 at PR 3a's round 3, declared final, then 15,600 at PR 3c's round 1, decision 11, then 15,650 at PR 3c's round 4 to read long-legend scans, decision 12, then 16,100 at PR 4a, decision 14). The plan totalled 15,581–15,611 after PR 3c (round 7); PR 4a measured 2,557 lines against the 2,100 its components carry, putting the plan at 16,038–16,068. **Owner decision 14 (2026-10-22): keep PR 4a as built and raise the ceiling to 16,100**, which leaves room for PR 3e (about 30–40 lines); the next breach goes back to the owner. A **test-support package** is one
+The line ceiling is 16,100 (owner decisions: 14,000, then 14,250, then 14,500 during PR 2's review, then 15,000 at PR 3a's, with pgvector, then 15,500 at PR 3a's round 3, declared final, then 15,600 at PR 3c's round 1, decision 11, then 15,650 at PR 3c's round 4 to read long-legend scans, decision 12, then 16,100 at PR 4a, decision 14). The plan totalled 15,581–15,611 after PR 3c (round 7); PR 4a measured 2,557 lines against the 2,100 its components carry, putting the plan at 16,038–16,068. **Owner decision 14 (2026-10-22): keep PR 4a as built and raise the ceiling to 16,100**, which leaves room for PR 3e (about 30–40 lines); the next breach goes back to the owner. PR 4a's committee round 1 fixes added 23 (7,476 → 7,499): plan **16,061–16,091**, headroom 9–39 for PR 3e. A **test-support package** is one
 whose directory name ends in `test` and that no production file outside it imports, such as
 `storetest`. Under the coordinator's ruling it is left out of the package count, but its lines
 count toward the line ceiling like any other non-`_test.go` file. A `*test` package that

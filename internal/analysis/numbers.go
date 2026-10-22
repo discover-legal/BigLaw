@@ -50,9 +50,10 @@ type operand struct {
 var refRe = regexp.MustCompile(`^(F\d+)\.v(\d+)$`)
 
 // resolve reads an operand: a verified finding's value (an unknown or quarantined finding is an
-// error, never zero) or a literal with its unit ("date" for a date).
+// error, never zero) or a literal with its unit ("date" for a date). Money is USD only when its
+// unit says so or says nothing; another currency keeps its own unit.
 func resolve(findings []Finding, o Operand) (operand, error) {
-	v, unit := Value{Value: deref(o.Literal), Unit: deref(o.Unit)}, strings.ToLower(deref(o.Unit))
+	v := Value{Value: deref(o.Literal), Unit: deref(o.Unit)}
 	if o.Ref != nil {
 		m := refRe.FindStringSubmatch(*o.Ref)
 		if m == nil {
@@ -69,9 +70,12 @@ func resolve(findings []Finding, o Operand) (operand, error) {
 			return operand{}, fmt.Errorf("%s has %d values, so %s does not exist", m[1], len(findings[i].Values), *o.Ref)
 		}
 		v = findings[i].Values[n-1]
-		unit = cmp.Or(map[Class]string{"Money": "USD", "Percentage": "%", "Date": "date"}[ClassOf(v)], strings.ToLower(v.Unit))
 	} else if o.Literal == nil {
 		return operand{}, errors.New("an operand needs ref or literal")
+	}
+	unit := cmp.Or(map[Class]string{"Percentage": "%", "Date": "date"}[ClassOf(v)], strings.ToLower(v.Unit))
+	if ClassOf(v) == "Money" && slices.Contains([]string{"", "$", "usd", "dollars"}, unit) {
+		unit = "USD"
 	}
 	x := operand{unit: unit, text: strings.TrimPrefix(deref(o.Ref)+" = "+v.Value, " = ")}
 	if d, ok := ParseDate(v.Value); unit == "date" {
@@ -151,7 +155,7 @@ func Calc(findings []Finding, fn string, ops []Operand, holidays []string) (Work
 	case "date_add":
 		w.Result, w.Unit = xs[0].date.time().AddDate(0, 0, int(xs[1].num.Num().Int64())).Format(time.DateOnly), "date"
 	case "date_diff":
-		w.Result, w.Unit = strconv.Itoa(int(xs[1].date.time().Sub(xs[0].date.time()).Hours()/24)), "days"
+		w.Result, w.Unit = strconv.FormatInt((xs[1].date.time().Unix()-xs[0].date.time().Unix())/86400, 10), "days"
 	default: // business_days
 		t := xs[0].date.time()
 		if shape == "dd" { // the working days after the first date, up to and including the second
@@ -226,12 +230,14 @@ func Salience(v string) int {
 }
 
 // Handles gives a codename to each distinct verified figure (money, percentages, counts,
-// identifiers; never a date) of fids (all findings when empty), the top most salient first.
+// identifiers; never a date), the most salient first, and returns those of fids (all findings when
+// empty), the top first. Codenames are assigned over the whole ledger, so one names one figure
+// whatever fids a call asked for.
 func Handles(findings []Finding, fids []string, top int) []Handle {
 	var hs []Handle
 	seen := map[string]bool{}
 	for _, f := range findings {
-		if !f.Verified || len(fids) > 0 && !slices.Contains(fids, f.FID) {
+		if !f.Verified {
 			continue
 		}
 		for i, v := range f.Values {
@@ -244,14 +250,15 @@ func Handles(findings []Finding, fids []string, top int) []Handle {
 		}
 	}
 	slices.SortStableFunc(hs, func(a, b Handle) int { return Salience(b.Value) - Salience(a.Value) })
-	if top <= 0 || top > MaxHandles {
-		top = MaxHandles
-	}
-	hs = hs[:min(len(hs), top)]
+	hs = hs[:min(len(hs), MaxHandles)]
 	for i := range hs {
 		hs[i].Handle = "{" + codenames[i] + "}"
 	}
-	return hs
+	hs = slices.DeleteFunc(hs, func(h Handle) bool { return len(fids) > 0 && !slices.Contains(fids, h.FID) })
+	if top <= 0 {
+		top = MaxHandles
+	}
+	return hs[:min(len(hs), top)]
 }
 
 var handleRe = regexp.MustCompile(`\{([A-Za-z]+)\}`)

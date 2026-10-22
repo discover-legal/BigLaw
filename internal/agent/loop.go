@@ -113,7 +113,7 @@ func (rt *Runtime) Run(ctx context.Context, a Agent, c Call, b *Budget) (Result,
 			}
 			step++
 			var u Usage
-			resp, u, err = rt.chat(ctx, req, b)
+			resp, u, err = rt.ChatWithin(ctx, req, b)
 			if lead {
 				st := Step{N: step, Kind: "lead_turn", Status: "committed", Usage: u}
 				if err != nil {
@@ -126,7 +126,7 @@ func (rt *Runtime) Run(ctx context.Context, a Agent, c Call, b *Budget) (Result,
 				}
 			}
 			if try == 0 && tooLong(err) { // compact every result but the latest turn's, and try once more
-				keep = 0
+				keep = 1
 				continue
 			}
 			break
@@ -202,16 +202,23 @@ func answer(text string, out *Schema) (json.RawMessage, error) {
 func shown(err error, log *slog.Logger) string {
 	var r *Refusal
 	var f *Failure
-	if errors.As(err, &r) || errors.As(err, &f) || errors.Is(err, ErrToolOutput) || errors.Is(err, ErrTurnCap) {
+	if errors.As(err, &r) || errors.As(err, &f) || errors.Is(err, ErrToolOutput) || errors.Is(err, ErrTurnCap) || errors.Is(err, ErrBudget) {
 		return err.Error()
 	}
 	cmp.Or(log, slog.Default()).Error("tool failed", "error", err)
 	return "internal error (logged); try a different call or continue without it"
 }
 
-// chat makes one model call within b: it holds one call and the call's worst-case cost, then
-// charges what the call spent (a refused-but-billed answer included).
-func (rt *Runtime) chat(ctx context.Context, req model.Request, b *Budget) (*model.Response, Usage, error) {
+// ChatWithin makes one model call within b: it holds one call and the call's worst-case cost, then
+// charges what the call spent (a refused-but-billed answer included). A Go tool that calls a model
+// (verify_quote's judge) uses it over a budget made from its grant; an unset Model is the Role's.
+func (rt *Runtime) ChatWithin(ctx context.Context, req model.Request, b *Budget) (*model.Response, Usage, error) {
+	var err error
+	if req.Model == "" {
+		if req.Model, err = rt.Roles.Model(req.Role); err != nil {
+			return nil, Usage{}, err
+		}
+	}
 	hold, err := b.Grant(1, rt.bound(req), false)
 	if err != nil {
 		return nil, Usage{}, err

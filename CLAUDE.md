@@ -66,12 +66,12 @@ change. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`, not here.
   validating `Example: {…}` lines), `Schema` (the subset: unknown keywords are errors), `Runtime.Run`
   (one loop, lead depth 0 / `Subagent` depth 1) and `Runtime.Invoke` (the single dispatch path:
   offered → no nesting → alone → input schema → `Policy` → grant), `Budget` (holds and charges; a
-  model call holds its worst-case cost; the root's floor only for `Final` tools), `Bandit` (hint line +
+  model call holds its worst-case cost, also a Go tool's through `Runtime.ChatWithin`; the root's floor only for `Final` tools), `Bandit` (hint line +
   subagent model pick; never refuses), `Journal`/`Step`, `LoadSubagents` (JSON spec + `.md` prompt).
   `internal/analysis` (PR 4a) — pure functions over `Finding`s: `Calc`, `Handles`/`Substitute`
   (`{Codename}`), `KeyFigures`, `Join`, `CheckCoverage`, normalisers, BELO-lite (`belo.json`), and the
-  `numbers`/`join_discrepancies` tools over a `Source`. `docs.Service.Tools(chat)` — `retrieve` and
-  `verify_quote` (judge on the critic role). Tool specs are JSON in `specs/` beside each package.
+  `numbers`/`join_discrepancies` tools over a `Source`. `docs.Service.Tools(rt)` — `retrieve` and
+  `verify_quote` (judge on the critic role, within the grant via `rt.ChatWithin`; quote and passage fenced). Tool specs are JSON in `specs/` beside each package.
 - Gate E4: `eval/e4/embeddings.json` is replayed by `TestHybridRecallProofRuns`; the committed
   tape is the offline self-test (hash embedder, model `biglaw-selftest-hash`) and the gate SKIPS
   on it. Never present its numbers as the gate. The owner records a real one with `make e4-record`.
@@ -156,6 +156,6 @@ make demo-bundle # ui/dist-recorded for discover.legal/demo/biglaw/; make demo-r
 # DB tests: BIGLAW_TEST_DSN=postgres://…?sslmode=disable BIGLAW_REQUIRE_DB=1 (Postgres with pgvector)
 make e4-record EMBED_MODEL=…   # owner-run: record the E4 tape at the model's own length (make e4-live: no tape)
 ```
-Budgets: Go prod LOC ≤ 16,100 (owner decision 14, raised from 15,650 to keep PR 4a as built; 7,476 used; plan 16,038–16,068 before PR 3e; the next breach goes back to the owner; test-support packages such as `storetest` count), internal
+Budgets: Go prod LOC ≤ 16,100 (owner decision 14, raised from 15,650 to keep PR 4a as built; 7,499 used; plan 16,061–16,091 before PR 3e; the next breach goes back to the owner; test-support packages such as `storetest` count), internal
 packages ≤ 12 (6 used; test-support packages do not count), direct deps ≤ 3, env vars ≤ 20 (18 used), UI runtime
 deps ≤ 2 (2 used), UI source lines (`ui/src`) ≤ 2,400, untested packages 0, longest source file ≤ 2,000 lines.

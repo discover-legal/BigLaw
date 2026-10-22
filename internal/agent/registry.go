@@ -41,6 +41,7 @@ var (
 	toolNameRe = regexp.MustCompile(`^[a-z][a-z0-9_]{1,63}$`)
 	sentenceRe = regexp.MustCompile(`[.!?](\s|$)`)
 	exampleRe  = regexp.MustCompile(`(?m)^Example: (\{.*\})\s*$`)
+	lengthKw   = regexp.MustCompile(`,"m(?:in|ax)Length":\d+|"m(?:in|ax)Length":\d+,`) // in compacted JSON; a string's quotes are escaped
 )
 
 // Register adds t after checking its spec: a unique name, compilable strict-shaped schemas, a
@@ -96,9 +97,11 @@ func (r *Registry) Register(t Tool) error {
 	case len(r.tools) >= MaxTools:
 		return bad("the registry holds its maximum of %d tools", MaxTools)
 	}
-	var params bytes.Buffer // frozen copies: later changes to the caller's Spec reach nothing
+	// Frozen copies: later changes to the caller's Spec reach nothing. The model is not sent
+	// string-length bounds (strict mode refuses them); Validate still enforces them.
+	var params bytes.Buffer
 	_ = json.Compact(&params, s.In)
-	e.def = model.Tool{Name: s.Name, Description: s.Description, Parameters: params.Bytes(), Strict: true}
+	e.def = model.Tool{Name: s.Name, Description: s.Description, Parameters: lengthKw.ReplaceAll(params.Bytes(), nil), Strict: true}
 	e.spec.In, e.spec.Out, e.spec.Allowed, e.spec.Solo = slices.Clone(s.In), slices.Clone(s.Out), slices.Clone(s.Allowed), slices.Clone(s.Solo)
 	r.tools[s.Name] = e
 	return nil

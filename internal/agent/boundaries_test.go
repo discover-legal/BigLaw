@@ -6,6 +6,7 @@ package agent_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -177,5 +178,52 @@ func TestToolSchemasContainNoMatterData(t *testing.T) {
 	}
 	if spec, _ := r.Spec("sneaky"); strings.Contains(string(spec.In), "Whitmore") {
 		t.Fatal("the registry's spec changed after registration")
+	}
+}
+
+// Definitions go out with strict: true (api.openai.com only), whose grammar refuses string-length
+// keywords: a definition carries only keywords strict mode accepts (r1), while Go still enforces
+// every keyword of the spec before a tool body runs.
+func TestStrictDefinitionsUseSupportedKeywords(t *testing.T) {
+	ok := []string{"type", "properties", "required", "additionalProperties", "enum", "items", "description", "minItems", "maxItems", "minimum", "maximum"}
+	var walk func(at string, s map[string]any)
+	walk = func(at string, s map[string]any) {
+		for k, v := range s {
+			switch {
+			case k == "properties":
+				for n, p := range v.(map[string]any) {
+					walk(at+"."+n, p.(map[string]any))
+				}
+			case k == "items":
+				walk(at+"[]", v.(map[string]any))
+			case !slices.Contains(ok, k):
+				t.Errorf("%s: keyword %q is not accepted by strict mode", at, k)
+			}
+		}
+	}
+	r := agent.NewRegistry()
+	for _, ts := range toolsets() {
+		for _, tl := range ts {
+			if err := r.Register(tl); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	defs, err := r.Defs(r.Names())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range defs {
+		var s map[string]any
+		if err := json.Unmarshal(d.Parameters, &s); err != nil {
+			t.Fatal(err)
+		}
+		walk(d.Name, s)
+	}
+	f := model.NewFake(nil)
+	rt := &agent.Runtime{Chat: f, Roles: model.Roles{Lead: "m"}, Reg: r}
+	in := `{"op":"search","query":"` + strings.Repeat("x", 1025) + `","documentId":null,"sectionId":null,"k":null,"offset":null,"limit":null}`
+	if _, err := rt.Invoke(context.Background(), agent.Agent{Name: "lead", Visible: []string{"retrieve"}}, agent.Call{}, "retrieve", json.RawMessage(in), agent.NewBudget(1, 1, 0), false, 0); !errors.Is(err, agent.ErrToolInput) {
+		t.Fatalf("an over-long query reached retrieve: %v", err)
 	}
 }

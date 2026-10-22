@@ -307,26 +307,51 @@ func TestSchemaValidatorRejectsBadInput(t *testing.T) {
 	}
 }
 
+// A context-length refusal compacts every tool result but the latest turn's and retries once; the
+// lead keeps seeing its newest results afterwards (r1: the retry compacted the latest turn too, for
+// the rest of the run, so the lead could never read a result again).
 func TestContextLengthRefusalCompacts(t *testing.T) {
 	var script []model.Reply
 	for i := 0; i < 5; i++ {
 		script = append(script, calls(call("echo", q)))
 	}
-	script = append(script, model.Reply{Err: &model.Error{Kind: model.ErrUnavailable, Detail: "HTTP 400", Status: 400}}, calls(call("finish", q)))
+	script = append(script, model.Reply{Err: &model.Error{Kind: model.ErrUnavailable, Detail: "HTTP 400", Status: 400}}, calls(call("echo", q)), calls(call("finish", q)))
 	rt, f := rig(t, map[string][]model.Reply{"lead": script}, &counter{s: goSpec("echo")}, newFinish())
 	if _, err := rt.Run(context.Background(), lead("echo", "finish"), Call{Input: json.RawMessage(`"go"`)}, NewBudget(50, 1, 0)); err != nil {
 		t.Fatalf("a context-length refusal failed the run: %v", err)
 	}
-	retry := f.Calls()[6]
-	for _, m := range retry.Messages {
-		if c, _ := m.Content.(string); m.Role == "tool" && !strings.HasPrefix(c, "[step ") {
-			t.Fatalf("the retry kept a full tool result: %q", c)
+	for _, i := range []int{6, 7} { // the retry, and the turn after it
+		var tools []string
+		for _, m := range f.Calls()[i].Messages {
+			if m.Role == "tool" {
+				tools = append(tools, m.Content.(string))
+			}
+		}
+		for k, c := range tools {
+			if full := !strings.HasPrefix(c, "[step "); full != (k == len(tools)-1) {
+				t.Fatalf("request %d, tool result %d of %d: %q (want only the latest turn's in full)", i+1, k+1, len(tools), c)
+			}
 		}
 	}
 	// An outage is not a refusal: no retry, the run fails with the typed error.
 	rt, _ = rig(t, map[string][]model.Reply{"lead": {{Err: &model.Error{Kind: model.ErrUnavailable, Detail: "HTTP 502", Status: 502}}, calls(call("finish", q))}}, newFinish())
 	if _, err := rt.Run(context.Background(), lead("finish"), Call{Input: json.RawMessage(`"go"`)}, NewBudget(50, 1, 0)); !errors.Is(err, model.ErrUnavailable) {
 		t.Fatalf("an outage: %v", err)
+	}
+}
+
+// A subagent whose grant runs out mid-run reports it actionably, never as "internal error".
+func TestSubagentOutOfBudgetIsActionable(t *testing.T) {
+	rt, _ := rig(t, map[string][]model.Reply{
+		"lead":          {calls(call("extract_facts", q))},
+		"extract_facts": {calls(call("retrieve", q)), calls(call("retrieve", q)), {Text: `{"ok":true}`}},
+	}, &counter{s: goSpec("retrieve")}, &Subagent{S: subSpec("extract_facts", "retrieve"), Prompt: "x"})
+	j := &journal{}
+	rt.Journal = j
+	_, err := rt.Run(context.Background(), lead("extract_facts"), Call{Input: json.RawMessage(`"go"`)}, NewBudget(3, 1, 0))
+	steps := j.final()
+	if st := steps[1]; !errors.Is(err, ErrBudget) || st.Tool != "extract_facts" || !strings.Contains(st.Note, "budget") || strings.Contains(st.Note, "internal error") {
+		t.Fatalf("run %v; the subagent's step: %+v", err, st)
 	}
 }
 

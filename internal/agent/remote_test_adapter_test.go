@@ -93,7 +93,7 @@ func TestToolsTransportAgnostic(t *testing.T) {
 	fs := ledger{{FID: "F1", Verified: true, Quotes: []analysis.Quote{{DocumentID: in.ID, Quote: "fees"}}, Values: []analysis.Value{{Metric: "fee", Value: "$1,200"}}},
 		{FID: "F2", Verified: true, Quotes: []analysis.Quote{{DocumentID: out.ID, Quote: "fees"}}, Values: []analysis.Value{{Metric: "fee", Value: "$1,500"}}}}
 	local := map[string]agent.Tool{}
-	for _, tl := range append(svc.Tools(model.NewFake(nil)), analysis.Tools(fs)...) {
+	for _, tl := range append(svc.Tools(&agent.Runtime{Chat: model.NewFake(nil)}), analysis.Tools(fs)...) {
 		local[tl.Spec().Name] = tl
 	}
 	srv := serve(local)
