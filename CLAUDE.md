@@ -61,6 +61,17 @@ change. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`, not here.
   the host, no row = unknown cost, never $0; `BIGLAW_LOCAL_WATTS` only adds watt-hours),
   `Fake` (scripts keyed by agent name; unscripted or exhausted is an error; `Fake.Vectors` answers
   `Embed`).
+- `internal/agent` (PR 4a) — the runtime: `Tool`/`Spec`/`Call`/`Result`, `Registry` (frozen,
+  strict-shaped definitions; ≤ 22 tools, ≤ 14 visible; descriptions ≥ 3 sentences + "Do not use" + 1–3
+  validating `Example: {…}` lines), `Schema` (the subset: unknown keywords are errors), `Runtime.Run`
+  (one loop, lead depth 0 / `Subagent` depth 1) and `Runtime.Invoke` (the single dispatch path:
+  offered → no nesting → alone → input schema → `Policy` → grant), `Budget` (holds and charges; a
+  model call holds its worst-case cost; the root's floor only for `Final` tools), `Bandit` (hint line +
+  subagent model pick; never refuses), `Journal`/`Step`, `LoadSubagents` (JSON spec + `.md` prompt).
+  `internal/analysis` (PR 4a) — pure functions over `Finding`s: `Calc`, `Handles`/`Substitute`
+  (`{Codename}`), `KeyFigures`, `Join`, `CheckCoverage`, normalisers, BELO-lite (`belo.json`), and the
+  `numbers`/`join_discrepancies` tools over a `Source`. `docs.Service.Tools(chat)` — `retrieve` and
+  `verify_quote` (judge on the critic role). Tool specs are JSON in `specs/` beside each package.
 - Gate E4: `eval/e4/embeddings.json` is replayed by `TestHybridRecallProofRuns`; the committed
   tape is the offline self-test (hash embedder, model `biglaw-selftest-hash`) and the gate SKIPS
   on it. Never present its numbers as the gate. The owner records a real one with `make e4-record`.
@@ -75,7 +86,7 @@ change. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`, not here.
   keys. `TestDemoRecording` (DB) fails when the committed recording is stale: `make demo-record`.
   The `//go:embed` of `ui/dist` waits for `internal/api` (PR 4b, its 30-line budget).
 
-Everything else in README is marked planned (next: PR 3d the `.docx` writer and tracked changes;
+Everything else in README is marked planned (next: PR 4b the memo workflow, PR 3d the `.docx` writer and tracked changes;
 contract v1's `content`/202/`capabilities` for vision intake are PR 8's). Lexical search alone measured E4 0.882; the hybrid gate is
 not yet judged (self-test tape).
 
@@ -110,6 +121,12 @@ not yet judged (self-test tape).
   `createElement`, like `badge.ts`). Never present the recording as a model's output: keep its provenance header,
   the banner and the step `source` marks true. A change to `internal/docs` output or `eval/tasks`
   makes the recording stale: re-record (`make demo-record`) and say so in the PR.
+- Agent runtime: every tool is registered (never called around `Runtime.Invoke`), its spec is data
+  (`specs/*.json`) and its schemas strict-shaped; a tool reports its usage in `Result` even when it fails;
+  errors the model may read are `agent.Fail(...)` in BigLaw's words (anything else shows as "internal
+  error"). `analysis` imports only `agent`; the allowed import table is `internal/agent/boundaries_test.go`
+  (`TestImportBoundaries`): add a row for a new package. No matter data in any schema
+  (`TestToolSchemasContainNoMatterData`), including description examples.
 - No source file over 2,000 lines (`scripts/loc.py`). Every `.go`/`.py` file starts with the
   SPDX header.
 - Every package has a `_test.go`; DB tests use `storetest.DSN(t)` and `t.Parallel()`.
@@ -136,6 +153,6 @@ make demo-bundle # ui/dist-recorded for discover.legal/demo/biglaw/; make demo-r
 # DB tests: BIGLAW_TEST_DSN=postgres://…?sslmode=disable BIGLAW_REQUIRE_DB=1 (Postgres with pgvector)
 make e4-record EMBED_MODEL=…   # owner-run: record the E4 tape at the model's own length (make e4-live: no tape)
 ```
-Budgets: Go prod LOC ≤ 15,650 (owner decision 12; plan 15,580–15,610 after PR 3c round 4, headroom 40–70, PR 3e must fit; test-support packages such as `storetest` count), internal
-packages ≤ 12 (test-support packages do not count), direct deps ≤ 3, env vars ≤ 20 (18 used), UI runtime
+Budgets: Go prod LOC ≤ 15,650 (owner decision 12; 7,476 used; PR 4a's overrun puts the plan at 16,038–16,068, over the ceiling: owner decision pending; test-support packages such as `storetest` count), internal
+packages ≤ 12 (6 used; test-support packages do not count), direct deps ≤ 3, env vars ≤ 20 (18 used), UI runtime
 deps ≤ 2 (2 used), UI source lines (`ui/src`) ≤ 2,400, untested packages 0, longest source file ≤ 2,000 lines.

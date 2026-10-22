@@ -1,0 +1,24 @@
+{
+  "name": "verify_quote",
+  "kind": "go",
+  "class": "free",
+  "maxTurns": 4,
+  "description": "Checks that a quote really is in one of this task's documents, climbing the verification ladder: exact match, then a tolerant match (quotes, spacing and case folded), then one paraphrase judge, and three independent votes when the judge is unsure. It returns whether the quote verified, the method, a confidence (exact 1.0, tolerant 0.95, judge at most 0.8, lower for a transcribed image) and where it is. A failed judge call is an error, never a verdict of unverified. Do not use it to search for evidence (use retrieve) or to judge whether a quote supports a legal conclusion: it only says whether the document says it.\nExample: {\"documentId\": \"3f6c2a9e-0b1d-4c2e-9a7f-5d8e1b2c4a6f\", \"quote\": \"The Supplier's aggregate liability shall not exceed the fees paid in the twelve months\", \"claim\": null}",
+  "in": {
+    "type": "object", "additionalProperties": false, "required": ["documentId", "quote", "claim"],
+    "properties": {
+      "documentId": {"type": "string", "maxLength": 64},
+      "quote": {"type": "string", "minLength": 1, "maxLength": 4000},
+      "claim": {"type": ["string", "null"], "maxLength": 2000}
+    }
+  },
+  "out": {
+    "type": "object", "additionalProperties": false,
+    "required": ["verified", "method", "confidence", "sectionId", "locator", "match", "lowConfidence", "note"],
+    "properties": {
+      "verified": {"type": "boolean"}, "method": {"type": "string"}, "confidence": {"type": "number"},
+      "sectionId": {"type": "string"}, "locator": {"type": "string"}, "match": {"type": "string"},
+      "lowConfidence": {"type": "boolean"}, "note": {"type": "string"}
+    }
+  }
+}

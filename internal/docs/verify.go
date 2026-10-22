@@ -197,6 +197,7 @@ type VerifiedQuote struct {
 	// readings agreed less than lowBelow (a finding resting only on it is gated, PR 4b).
 	TranscribedBy string `json:"transcribedBy,omitempty"`
 	LowConfidence bool   `json:"lowConfidence,omitempty"`
+	Match         string `json:"match,omitempty"` // the source text matched (exact, tolerant) or judged
 }
 
 // VerifyQuote runs the ladder on one document in scope.
@@ -214,7 +215,7 @@ func (s *Service) VerifyQuote(ctx context.Context, scope []string, docID, quote 
 			v.Start, v.End = i, i+len(quote)
 		}
 	}
-	out, ord := VerifiedQuote{Verification: v}, 0
+	out, ord := VerifiedQuote{Verification: v, Match: d.Text[v.Start:v.End]}, 0
 	at := utf8.RuneCountInString(d.Text[:v.Start])
 	if err := s.db.QueryRowContext(ctx, `SELECT ord, number FROM sections WHERE document_id = $1 AND char_start <= $2 AND $2 < greatest(char_end, char_start + 1)
 		ORDER BY level DESC, ord DESC LIMIT 1`, docID, at).Scan(&ord, &out.Number); err != nil {

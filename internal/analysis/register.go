@@ -1,0 +1,136 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (C) 2026 Discover Legal
+
+package analysis
+
+import (
+	"context"
+	"embed"
+	"encoding/json"
+	"slices"
+
+	"github.com/discover-legal/BigLaw/internal/agent"
+)
+
+// Finding is the common finding shape (README § Tools): a claim, its quotes, typed values,
+// entities and relations. Verified is false for a quarantined finding (G2, G3).
+type Finding struct {
+	FID       string     `json:"fid"`
+	IssueID   string     `json:"issueId"`
+	Claim     string     `json:"claim"`
+	Verified  bool       `json:"verified"`
+	Quotes    []Quote    `json:"quotes"`
+	Values    []Value    `json:"values"`
+	Entities  []Entity   `json:"entities"`
+	Relations []Relation `json:"relations"`
+}
+
+type Quote struct {
+	DocumentID string `json:"documentId"`
+	Quote      string `json:"quote"`
+	Locator    string `json:"locator"`
+}
+
+// Value is one typed figure; Class (a BELO-lite quantity class) may be empty, then it is inferred.
+type Value struct {
+	Entity string `json:"entity"`
+	Metric string `json:"metric"`
+	Value  string `json:"value"`
+	Unit   string `json:"unit"`
+	Date   string `json:"date"`
+	Class  string `json:"class"`
+}
+
+type Entity struct {
+	Name  string `json:"name"`
+	Class Class  `json:"class"`
+}
+
+type Relation struct {
+	Subject   string `json:"subject"`
+	Predicate string `json:"predicate"`
+	Object    string `json:"object"`
+}
+
+// Source is the task's matter ledger, as these tools read it (engine's ledger, PR 4b).
+type Source interface {
+	Findings(ctx context.Context, taskID string) ([]Finding, error)
+}
+
+//go:embed specs/*.json
+var specs embed.FS
+
+func spec(name string) agent.Spec {
+	var s agent.Spec
+	data, err := specs.ReadFile("specs/" + name + ".json")
+	if err == nil {
+		err = json.Unmarshal(data, &s)
+	}
+	if err != nil {
+		panic("analysis: specs/" + name + ".json: " + err.Error())
+	}
+	return s
+}
+
+// Tools are numbers and join_discrepancies over src.
+func Tools(src Source) []agent.Tool {
+	return []agent.Tool{
+		agent.GoTool{S: spec("numbers"), Fn: func(ctx context.Context, c agent.Call) (any, agent.Usage, error) {
+			var in struct {
+				Op, Fn     string
+				Operands   []Operand
+				Holidays   []string
+				FIDs       []string `json:"fids"`
+				SalientTop int
+			}
+			if err := agent.Decode(c, &in); err != nil {
+				return nil, agent.Usage{}, err
+			}
+			fs, err := src.Findings(ctx, c.TaskID)
+			if err != nil {
+				return nil, agent.Usage{}, err
+			}
+			out := map[string]any{"wid": nil, "result": nil, "unit": nil, "worksheet": nil, "literalOperands": nil, "handles": nil, "tableMarkdown": nil}
+			switch {
+			case in.Op == "calc" && (in.Fn == "" || len(in.Operands) == 0):
+				return nil, agent.Usage{}, agent.Fail(`numbers: op "calc" needs fn (sum, diff, ratio, pct, date_add, date_diff or business_days) and operands[] (the values to calculate on); send them and call again`)
+			case in.Op == "calc":
+				w, err := Calc(fs, in.Fn, in.Operands, in.Holidays)
+				if err != nil {
+					return nil, agent.Usage{}, agent.Fail("numbers: " + err.Error())
+				}
+				out["wid"], out["result"], out["unit"], out["worksheet"], out["literalOperands"] = w.WID, w.Result, w.Unit, w.Steps, w.LiteralOperands
+			case in.Op == "handles":
+				out["handles"] = Handles(fs, in.FIDs, in.SalientTop)
+			default:
+				out["tableMarkdown"] = KeyFigures(fs, in.FIDs)
+			}
+			return out, agent.Usage{}, nil
+		}},
+		agent.GoTool{S: spec("join_discrepancies"), Fn: func(ctx context.Context, c agent.Call) (any, agent.Usage, error) {
+			var in struct {
+				FIDs    []string `json:"fids"`
+				Aliases []Alias
+			}
+			if err := agent.Decode(c, &in); err != nil {
+				return nil, agent.Usage{}, err
+			}
+			fs, err := src.Findings(ctx, c.TaskID)
+			if err != nil {
+				return nil, agent.Usage{}, err
+			}
+			var picked []Finding
+			for _, id := range in.FIDs {
+				i := slices.IndexFunc(fs, func(f Finding) bool { return f.FID == id })
+				if i < 0 || !fs[i].Verified {
+					return nil, agent.Usage{}, agent.Fail("join_discrepancies: " + id + " is not a verified finding of this task; name only verified findings, or none for all")
+				}
+				picked = append(picked, fs[i])
+			}
+			if in.FIDs == nil {
+				picked = fs
+			}
+			return map[string]any{"conflicts": append([]Conflict{}, Join(picked, in.Aliases)...)}, agent.Usage{}, nil
+		}},
+	}
+}

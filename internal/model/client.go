@@ -264,6 +264,7 @@ func (c *Client) Chat(ctx context.Context, req Request) (*Response, error) {
 	}
 	tools := make([]map[string]any, len(req.Tools))
 	for i, t := range req.Tools {
+		t.Strict = t.Strict && c.openAI // strict mode only where it is known to be supported; Go validates everywhere
 		tools[i] = map[string]any{"type": "function", "function": t}
 	}
 	set("tools", len(tools) > 0, tools)
@@ -409,8 +410,8 @@ func parse(raw []byte) (*Response, error) {
 			CacheWrite int `json:"cache_creation_input_tokens"`
 		} `json:"usage"`
 	}
-	if json.Unmarshal(raw, &w) != nil {
-		return nil, fail(ErrUnavailable, "the answer is not OpenAI chat-completions JSON")
+	if json.Unmarshal(raw, &w) != nil { // Status 200: an answer arrived (and may be billed), its usage unreadable
+		return nil, &Error{Kind: ErrUnavailable, Detail: "the answer is not OpenAI chat-completions JSON", Status: 200}
 	}
 	u := w.Usage
 	r := &Response{Usage: Usage{InputTokens: max(0, u.Prompt-max(0, u.Details.Cached)-max(0, u.CacheWrite)), OutputTokens: max(0, u.Complete),
