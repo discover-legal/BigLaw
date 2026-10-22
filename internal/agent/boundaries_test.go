@@ -36,6 +36,7 @@ func root(t *testing.T) string {
 var allowedImports = map[string][]string{
 	"cmd/biglaw":               {"*"},
 	"eval/demo":                {"*"},
+	"eval":                     {"*"},
 	"internal/agent":           {"internal/model"},
 	"internal/analysis":        {"internal/agent"},
 	"internal/docs":            {"internal/agent", "internal/model", "internal/store", "internal/docs/ooxml"},
@@ -43,7 +44,7 @@ var allowedImports = map[string][]string{
 	"internal/model":           {},
 	"internal/store":           {},
 	"internal/store/storetest": {"internal/store"},
-	"internal/engine":          {"internal/agent", "internal/analysis", "internal/docs", "internal/docs/ooxml", "internal/contracts", "internal/store"},
+	"internal/engine":          {"internal/agent", "internal/analysis", "internal/docs", "internal/docs/ooxml", "internal/contracts", "internal/store", "internal/model"}, // model: its types (Chatter, Roles, Prices) and error kinds, and the meta call through agent.Runtime.ChatWithin
 	"internal/contracts":       {"internal/agent", "internal/docs", "internal/docs/ooxml", "internal/store"},
 	"internal/billing":         {"internal/store"},
 	"internal/clients":         {"internal/store"},

@@ -1,0 +1,61 @@
+{
+ "name": "draft_section",
+ "kind": "subagent",
+ "class": "draft",
+ "maxTurns": 3,
+ "role": "specialist",
+ "allowed": [
+  "ledger",
+  "numbers"
+ ],
+ "description": "Writes the deliverable's section for one plan issue from the verified findings you name, in clear legal prose: every factual sentence cites its finding as [F12], and every figure is written as its handle such as {Zephyr}, which Go replaces with the exact value. Go gives it the findings, their figure handles and the summaries of the sections already written (so it cross-references rather than repeats); it may read an earlier section in full with ledger op draft_get. Call it again with revise set to say what to change. It returns the section's version. Do not use it to add facts (quarantined or unnamed findings are never shown to it) or to write Limitations (finish does).\nExample: {\"issueId\": \"I2\", \"fids\": [\"F3\", \"F7\"], \"revise\": null}",
+ "in": {
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+   "issueId",
+   "fids",
+   "revise"
+  ],
+  "properties": {
+   "issueId": {
+    "type": "string",
+    "maxLength": 16
+   },
+   "fids": {
+    "type": "array",
+    "items": {
+     "type": "string",
+     "maxLength": 16
+    },
+    "maxItems": 60
+   },
+   "revise": {
+    "type": [
+     "string",
+     "null"
+    ],
+    "maxLength": 2000
+   }
+  }
+ },
+ "out": {
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+   "markdown",
+   "summary"
+  ],
+  "properties": {
+   "markdown": {
+    "type": "string",
+    "maxLength": 40000,
+    "minLength": 1
+   },
+   "summary": {
+    "type": "string",
+    "maxLength": 1600
+   }
+  }
+ }
+}

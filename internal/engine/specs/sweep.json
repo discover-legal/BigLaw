@@ -1,0 +1,77 @@
+{
+ "name": "sweep",
+ "kind": "fanout",
+ "class": "evidence",
+ "maxTurns": 1000,
+ "description": "Reads every section of every document of the task once, in order, running extract_facts on each page, and records the verified findings in the ledger. It is the retrieval floor: recall does not depend on which passages you think to search for. Calling it again skips sections it already read and returns their findings, so it never spends twice. If the budget runs out before every section is read it says incomplete and lists the uncovered sections, which go into Limitations. Do not use it to look up one fact (use retrieve or extract_facts with a query) and do not call it before a plan is recorded.\nExample: {\"over\": \"sections\", \"documentIds\": null}",
+ "in": {
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+   "over",
+   "documentIds"
+  ],
+  "properties": {
+   "over": {
+    "type": "string",
+    "enum": [
+     "sections"
+    ]
+   },
+   "documentIds": {
+    "type": [
+     "array",
+     "null"
+    ],
+    "items": {
+     "type": "string",
+     "maxLength": 64
+    },
+    "maxItems": 200
+   }
+  }
+ },
+ "out": {
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+   "visited",
+   "findings",
+   "incomplete",
+   "uncovered"
+  ],
+  "properties": {
+   "visited": {
+    "type": "integer"
+   },
+   "findings": {
+    "type": "array",
+    "items": {
+     "type": "string"
+    }
+   },
+   "incomplete": {
+    "type": "boolean"
+   },
+   "uncovered": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "additionalProperties": false,
+     "required": [
+      "documentId",
+      "sectionId"
+     ],
+     "properties": {
+      "documentId": {
+       "type": "string"
+      },
+      "sectionId": {
+       "type": "string"
+      }
+     }
+    }
+   }
+  }
+ }
+}

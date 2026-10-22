@@ -231,9 +231,9 @@ func TestParallelToolCallsEachAStep(t *testing.T) {
 	for _, s := range j.final() {
 		got = append(got, fmt.Sprintf("%d:%s:%s:%s", s.N, s.Kind, s.Tool, s.Status))
 	}
-	want := "1:lead_turn::committed 2:tool_call:echo:committed 3:tool_call:echo:committed 4:tool_call:echo:committed " +
-		"5:lead_turn::committed 6:tool_call:echo:committed 7:tool_call:finish:refused 8:lead_turn::committed 9:tool_call:ledger:refused " +
-		"10:tool_call:echo:committed 11:lead_turn::committed 12:tool_call:ledger:committed 13:tool_call:echo:committed 14:lead_turn::committed 15:tool_call:finish:committed"
+	want := "1:lead_turn:lead:committed 2:tool_call:echo:committed 3:tool_call:echo:committed 4:tool_call:echo:committed " +
+		"5:lead_turn:lead:committed 6:tool_call:echo:committed 7:tool_call:finish:refused 8:lead_turn:lead:committed 9:tool_call:ledger:refused " +
+		"10:tool_call:echo:committed 11:lead_turn:lead:committed 12:tool_call:ledger:committed 13:tool_call:echo:committed 14:lead_turn:lead:committed 15:tool_call:finish:committed"
 	if strings.Join(got, " ") != want {
 		t.Fatalf("steps:\n%s\nwant:\n%s", strings.Join(got, " "), want)
 	}

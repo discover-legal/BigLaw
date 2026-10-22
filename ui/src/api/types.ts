@@ -89,7 +89,7 @@ export interface Finding {
 
 export interface Step {
   step: number;
-  kind: 'lead_turn' | 'tool_call';
+  kind: 'lead_turn' | 'tool_call' | 'note'; // note: a lawyer's gate decision the lead reads when the run resumes
   tool: string;
   status: 'started' | 'committed' | 'refused' | 'failed';
   summary: string;

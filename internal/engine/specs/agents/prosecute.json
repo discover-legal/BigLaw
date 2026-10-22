@@ -1,0 +1,84 @@
+{
+ "name": "prosecute",
+ "kind": "subagent",
+ "class": "committee",
+ "maxTurns": 8,
+ "role": "critic",
+ "allowed": [
+  "verify_quote",
+  "ledger"
+ ],
+ "description": "Tests each claim of the draft against the quotes of the findings it cites: supported, overstated or unsupported, and why. It is a critic: it sees only the claims and may verify quotes and read the ledger. Overstated claims become MEDIUM and unsupported HIGH critic findings. Do not use it directly; committee runs it.\nExample: {\"claims\": [{\"text\": \"The notice period is thirty days [F3].\", \"fids\": [\"F3\"]}]}",
+ "in": {
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+   "claims"
+  ],
+  "properties": {
+   "claims": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "additionalProperties": false,
+     "required": [
+      "text",
+      "fids"
+     ],
+     "properties": {
+      "text": {
+       "type": "string",
+       "maxLength": 4000
+      },
+      "fids": {
+       "type": "array",
+       "items": {
+        "type": "string",
+        "maxLength": 16
+       },
+       "maxItems": 20
+      }
+     }
+    },
+    "maxItems": 80
+   }
+  }
+ },
+ "out": {
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+   "verdicts"
+  ],
+  "properties": {
+   "verdicts": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "additionalProperties": false,
+     "required": [
+      "claim",
+      "verdict",
+      "why"
+     ],
+     "properties": {
+      "claim": {
+       "type": "string"
+      },
+      "verdict": {
+       "type": "string",
+       "enum": [
+        "supported",
+        "overstated",
+        "unsupported"
+       ]
+      },
+      "why": {
+       "type": "string"
+      }
+     }
+    }
+   }
+  }
+ }
+}

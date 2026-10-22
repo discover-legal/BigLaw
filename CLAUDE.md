@@ -87,9 +87,24 @@ change. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`, not here.
   vision path by a scripted `model.Fake`, and a few quotes/one finding written for the demo (`demoQuotes`,
   `demoFacts`) so every ladder rung but the judge's shows; sample playbooks/time/profiles are labelled as such.
   `TestDemoRecording` (DB) fails when the committed recording is stale: `make demo-record`.
-  The `//go:embed` of `ui/dist` waits for `internal/api` (PR 4b, its 30-line budget).
+  `internal/api` embeds `ui/dist` (`make ui build` copies it into `internal/api/dist`; a build without
+  it serves a notice at `/`).
+- `internal/engine` (PR 4b) — the memo workflow: lead (`specs/lead.md`) over 11 tools (`MemoVisible`),
+  the ledger (one `ledger` table, JSON rows by kind/key, writes buffered in the running step),
+  evidence subagents whose findings Go verifies before admitting them (`register.go` `admit`: G2/G3,
+  values must be in their quote, currency from the quote, near-duplicates merged), `sweep`, `committee`
+  (3 context-free critics in parallel on explicit grants, delayed credit), `policy.go` (P1, P4,
+  `Allocate`), `finish` (check = dry run; lint G5/G8, coverage, P6/P7; render; gates G7), grounding
+  collapse G4, packs (`packs/*/*.md`, embedded, all candidate), and durable runs (`task_steps` +
+  ledger + `tool_stats` in one tx per step, lease/heartbeat, resume by replay, lost grants charged;
+  migration 0005). `views.go` is what the API shows (DESIGN § UI contract).
+- `internal/api` (PR 4b) — the REST surface (tasks, steps, SSE, gates, cancel, cost, clients) over
+  the engine plus `docs.Routes`; request bodies validated by the agent's schema subset.
+- `eval/` (PR 4b) — `run.py` (validate/selftest/score/compare/drive), `proofrun/`, `lab/` (Harvey LAB
+  driver), `tests/`; Go gates `TestProofRunsOracle` (E1), `TestProofRunsFabricator` (E2),
+  `TestLabRunnerSmoke`; `TestE2EServe` serves a scripted run for the browser when `E2E_ADDR` is set.
 
-Everything else in README is marked planned (next: PR 4b the memo workflow, PR 3d the `.docx` writer and tracked changes;
+Everything else in README is marked planned (next: PR 3d the `.docx` writer and tracked changes, PR 3e, PR 5 diligence;
 contract v1's `content`/202/`capabilities` for vision intake are PR 8's). Lexical search alone measured E4 0.882; the hybrid gate is
 not yet judged (self-test tape).
 
@@ -136,6 +151,11 @@ not yet judged (self-test tape).
 - Images and scans go only to the `vision` role (`docs.UseVision`); never wire another role's
   model there (`TestTextModelNeverSentImages`, `TestServeNeverSendsImagesToTheLead`). Text a model
   transcribed is evidence of a lower class: keep its provenance and the `@transcript` cap.
+- Engine: a lead step's ledger writes and bandit stats go through `e.write`/the step buffer and commit
+  with the step (never write the ledger around it); every run change checks the lease (`lease_owner`)
+  and status. The deliverable is rendered only by `finish`; findings that did not verify never reach
+  a drafter, a subagent's ledger read, or the memo (G3). A new tool or subagent spec goes in
+  `internal/engine/specs/` and must validate (`TestSpecsLoadAndValidate`).
 - No model calls in `go test`: only `model.Fake` or an `httptest` server. Model errors carry
   BigLaw's own fixed text only (never the URL, host, key or anything the endpoint sent, so never
   `err.Error()` of a transport error); map them with `model.HTTPStatus`.
@@ -149,13 +169,14 @@ not yet judged (self-test tape).
 
 ## Gates
 ```bash
-make ci     # gofmt, vet, mod verify/tidy, static build, go test -race -shuffle, loc.py + tests, compose config -q
+make ci     # gofmt, vet, mod verify/tidy, static build, go test -race -shuffle, make eval, loc.py + tests, compose config -q
+make ui build    # the binary with the web UI embedded (ui/dist → internal/api/dist)
 make lint vuln   # staticcheck, govulncheck (CI lint job)
 make ui          # cd ui && npm ci && npm run build && npm test (CI ui job, Node 22)
 make demo-bundle # ui/dist-recorded for discover.legal/demo/biglaw/; make demo-record re-records it
 # DB tests: BIGLAW_TEST_DSN=postgres://…?sslmode=disable BIGLAW_REQUIRE_DB=1 (Postgres with pgvector)
 make e4-record EMBED_MODEL=…   # owner-run: record the E4 tape at the model's own length (make e4-live: no tape)
 ```
-Budgets: Go prod LOC ≤ 16,100 (owner decision 14, raised from 15,650 to keep PR 4a as built; 7,499 used; plan 16,061–16,091 before PR 3e; the next breach goes back to the owner; test-support packages such as `storetest` count), internal
-packages ≤ 12 (6 used; test-support packages do not count), direct deps ≤ 3, env vars ≤ 20 (18 used), UI runtime
+Budgets: Go prod LOC ≤ 16,100 (owner decision 14, raised from 15,650 to keep PR 4a as built; 11,320 used; PR 4b measured 3,818 against ~3,060, plan 16,822–16,852: over, with the owner; test-support packages such as `storetest` count), internal
+packages ≤ 12 (8 used; test-support packages do not count), direct deps ≤ 3, env vars ≤ 20 (18 used), UI runtime
 deps ≤ 2 (2 used), UI source lines (`ui/src`) ≤ 2,400, untested packages 0, longest source file ≤ 2,000 lines.

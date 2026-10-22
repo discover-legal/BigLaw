@@ -21,7 +21,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/discover-legal/BigLaw/internal/api"
 	"github.com/discover-legal/BigLaw/internal/docs"
+	"github.com/discover-legal/BigLaw/internal/engine"
 	"github.com/discover-legal/BigLaw/internal/model"
 	"github.com/discover-legal/BigLaw/internal/store"
 )
@@ -126,12 +128,14 @@ func run(ctx context.Context, args []string, getenv func(string) string, environ
 			return 1
 		}
 		d := docs.New(st)
-		if cfg.Roles.Embed != "" || cfg.Roles.Vision != "" {
+		var chat model.Chatter
+		if cfg.ModelURL != "" {
 			client, err := model.New(model.Options{URL: cfg.ModelURL, Key: cfg.ModelKey, Roles: cfg.Roles, Prices: cfg.Prices, LocalWatts: cfg.LocalWatts, Log: log})
 			if err != nil {
 				fmt.Fprintf(stderr, "biglaw: %v\n", err)
 				return 1
 			}
+			chat = client
 			if cfg.Roles.Embed != "" {
 				d.UseEmbedder(client, cfg.Roles.Embed)
 			}
@@ -139,7 +143,8 @@ func run(ctx context.Context, args []string, getenv func(string) string, environ
 				d.UseVision(client, cfg.Roles.Vision, cfg.ModelKey, log)
 			}
 		}
-		if err := serve(ctx, st, d, ln, log); err != nil {
+		e := engine.New(st, d, chat, cfg.Roles, cfg.Prices, cfg.Engine, log)
+		if err := serve(ctx, st, d, e, ln, log); err != nil {
 			fmt.Fprintf(stderr, "biglaw: %v\n", err)
 			return 1
 		}
@@ -160,7 +165,7 @@ type pinger interface{ Ping(context.Context) error }
 var shutdownGrace, jobEvery = 10 * time.Second, 15 * time.Minute
 
 // serve serves HTTP on ln, and runs the embedding backfill, until ctx ends; then it shuts down gracefully.
-func serve(ctx context.Context, st *store.Store, d *docs.Service, ln net.Listener, log *slog.Logger) error {
+func serve(ctx context.Context, st *store.Store, d *docs.Service, e *engine.Engine, ln net.Listener, log *slog.Logger) error {
 	if n, err := d.SweepOrphanFiles(ctx); err != nil || n > 0 {
 		log.Warn("orphan files (uploads interrupted by a crash) swept", "files", n, "err", err)
 	}
@@ -188,11 +193,18 @@ func serve(ctx context.Context, st *store.Store, d *docs.Service, ln net.Listene
 			}
 		}
 	}()
+	if e != nil { // the task runner: queued tasks, and runs whose lease went stale (resume)
+		runner, stopRunner := context.WithCancel(ctx)
+		ran := make(chan struct{})
+		defer func() { stopRunner(); <-ran }()
+		go func() { defer close(ran); e.Start(runner) }()
+	}
 	base, stopRequests := context.WithCancelCause(context.Background())
 	defer stopRequests(nil)
 	srv := &http.Server{
 		BaseContext:       func(net.Listener) context.Context { return base },
-		Handler:           routes(st, d, log),
+		Handler:           routes(st, d, e, log),
+		ReadTimeout:       2 * time.Minute, // uploads set their own deadlines (docs)
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    64 << 10,
@@ -223,11 +235,13 @@ func serve(ctx context.Context, st *store.Store, d *docs.Service, ln net.Listene
 	return nil
 }
 
-// routes is GET /health and, with d, the document file routes (docs.Routes). Everything else is
-// 404/405 until the REST API lands (PR 4b).
-func routes(db pinger, d *docs.Service, log *slog.Logger) http.Handler {
+// routes is GET /health and, with an engine, the REST API and the UI (api.Handler); with only d,
+// the document routes.
+func routes(db pinger, d *docs.Service, e *engine.Engine, log *slog.Logger) http.Handler {
 	mux := http.NewServeMux()
-	if d != nil {
+	if e != nil {
+		mux = api.Handler(d, e, nil, log)
+	} else if d != nil {
 		d.Routes(mux, log)
 	}
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {

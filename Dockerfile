@@ -1,11 +1,20 @@
 # syntax=docker/dockerfile:1
 # BigLaw 2: one static binary. Postgres runs separately (docker-compose.yml).
 # The Go version matches go.mod's toolchain line and CI (TestGoVersionPinnedEverywhere).
+# The web UI (ui/, Node 22), embedded into the binary below.
+FROM node:22-alpine AS ui
+WORKDIR /ui
+COPY ui/package.json ui/package-lock.json ./
+RUN npm ci
+COPY ui/ ./
+RUN npm run build
+
 FROM golang:1.26.10-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download && go mod verify
 COPY . .
+COPY --from=ui /ui/dist/ internal/api/dist/
 ARG VERSION=2.0.0-dev
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/biglaw ./cmd/biglaw
 

@@ -109,6 +109,7 @@ var (
 	ErrPolicy     = errors.New("refused by the task policy")
 	ErrToolOutput = errors.New("tool output does not match its schema")
 	ErrTurnCap    = errors.New("turn cap reached without an answer")
+	ErrJournal    = errors.New("the step log refused a step") // ends the run (a lost lease, max steps, a database error)
 )
 
 // Refusal is a call that did not run: why, and what the agent should do next (README: actionable).

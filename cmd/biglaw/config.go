@@ -16,12 +16,13 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/discover-legal/BigLaw/internal/engine"
 	"github.com/discover-legal/BigLaw/internal/model"
 	"github.com/discover-legal/BigLaw/internal/store"
 )
 
 // builtPR is the last build PR whose variables this build reads.
-const builtPR = 3
+const builtPR = 4
 
 // envVar is one runtime environment variable; envVars is the complete surface (README § Configuration,
 // loc.py caps it at 20; 18 since PR 3's role map). A variable is validated by the PR that first reads it (pr), warned about before.
@@ -63,6 +64,7 @@ type Config struct {
 	Roles          model.Roles // BIGLAW_MODELS
 	LocalWatts     float64
 	Prices         *model.Prices
+	Engine         engine.Config // BIGLAW_BUDGET_CALLS/_USD, BIGLAW_COLLAPSE_THRESHOLD/_ACTION
 	AllowAnthropic bool
 	AllowAWS       bool
 }
@@ -113,11 +115,29 @@ func Load(getenv func(string) string) (Config, error) {
 	if c.Prices, err = model.LoadPrices(get("BIGLAW_PRICES")); err != nil {
 		bad("BIGLAW_PRICES", "%v", err)
 	}
+	c.Engine.BudgetCalls, err = strconv.Atoi(get("BIGLAW_BUDGET_CALLS"))
+	if err != nil || c.Engine.BudgetCalls < 1 || c.Engine.BudgetCalls > 100000 {
+		bad("BIGLAW_BUDGET_CALLS", "%s is not a whole number of model calls from 1 to 100000", shown("BIGLAW_BUDGET_CALLS", get("BIGLAW_BUDGET_CALLS")))
+	}
+	c.Engine.BudgetUSD, err = strconv.ParseFloat(get("BIGLAW_BUDGET_USD"), 64)
+	if !plainDecimal.MatchString(get("BIGLAW_BUDGET_USD")) || err != nil || !(c.Engine.BudgetUSD > 0 && c.Engine.BudgetUSD <= 1e6) {
+		bad("BIGLAW_BUDGET_USD", "%s is not a dollar amount above 0 (a plain decimal such as 5 or 2.50, at most 1000000; $0 would fail every task)", shown("BIGLAW_BUDGET_USD", get("BIGLAW_BUDGET_USD")))
+	}
+	c.Engine.CollapseThreshold, err = strconv.ParseFloat(get("BIGLAW_COLLAPSE_THRESHOLD"), 64)
+	if !plainDecimal.MatchString(get("BIGLAW_COLLAPSE_THRESHOLD")) || err != nil || !(c.Engine.CollapseThreshold >= 0.01 && c.Engine.CollapseThreshold <= 1) {
+		bad("BIGLAW_COLLAPSE_THRESHOLD", "%s is not a share of unverified findings from 0.01 to 1 (default 0.5)", shown("BIGLAW_COLLAPSE_THRESHOLD", get("BIGLAW_COLLAPSE_THRESHOLD")))
+	}
+	if c.Engine.CollapseAction = get("BIGLAW_COLLAPSE_ACTION"); c.Engine.CollapseAction != "strict" && c.Engine.CollapseAction != "warn" {
+		bad("BIGLAW_COLLAPSE_ACTION", "%s is not strict (the task fails) or warn (it goes on, alerted)", shown("BIGLAW_COLLAPSE_ACTION", c.Engine.CollapseAction))
+	}
 	if err := errors.Join(errs...); err != nil {
 		return c, err
 	}
 	return c, GuardVendors(c)
 }
+
+// plainDecimal is a plain decimal number: no sign, exponent, hex or infinity.
+var plainDecimal = regexp.MustCompile(`^\d+(\.\d+)?$`)
 
 var roleNames = []model.Role{model.Lead, model.Specialist, model.Critic, model.Vision, model.Embed}
 

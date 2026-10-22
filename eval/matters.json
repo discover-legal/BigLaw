@@ -1,0 +1,45 @@
+{
+  "description": "Proof-run matter registry. Each entry points at tasks/<id>/ (task.json + documents/ + answer_key.json, LAB-compatible layout). BigLaw v2 runs every matter as a memo task for now (PR 4b); nothing in the harness is matter-specific.",
+  "matters": [
+    {
+      "id": "corporate-ma/kestrel-buyside-diligence",
+      "slug": "ma-diligence",
+      "practice": "M&A due diligence",
+      "workflow": "memo",
+      "jurisdiction": "US",
+      "split_mode": "markers"
+    },
+    {
+      "id": "commercial-contracts/lumen-corvane-msa-negotiation",
+      "slug": "msa-negotiation",
+      "practice": "Commercial contract negotiation",
+      "workflow": "memo",
+      "jurisdiction": "US",
+      "split_mode": "markers"
+    },
+    {
+      "id": "competition-regulatory/altamira-sorell-merger-control",
+      "slug": "merger-control",
+      "practice": "Regulatory / competition (HSR + EUMR)",
+      "workflow": "memo",
+      "jurisdiction": "",
+      "split_mode": "markers"
+    },
+    {
+      "id": "litigation/greystone-v-talbot-defense",
+      "slug": "litigation",
+      "practice": "Litigation (chronology, issues, deadlines)",
+      "workflow": "memo",
+      "jurisdiction": "US",
+      "split_mode": "markers"
+    },
+    {
+      "id": "ip-licensing/quillon-fernhill-license-review",
+      "slug": "ip-license",
+      "practice": "IP licensing review",
+      "workflow": "memo",
+      "jurisdiction": "US",
+      "split_mode": "markers"
+    }
+  ]
+}

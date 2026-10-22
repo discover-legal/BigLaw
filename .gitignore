@@ -7,3 +7,5 @@ __pycache__/
 ui/node_modules/
 ui/dist/
 ui/dist-recorded/
+internal/api/dist/*
+!internal/api/dist/README.md

@@ -75,6 +75,7 @@ type Document struct {
 	EmbedTokens  int64     `json:"embedTokens"`
 	EmbedCostUSD *float64  `json:"embedCostUsd"`
 	CreatedAt    time.Time `json:"createdAt"`
+	MatterNumber string    `json:"matterNumber,omitempty"` // the matter it was filed under (POST /documents)
 	Text         string    `json:"-"`
 }
 
@@ -397,23 +398,52 @@ func (s *Service) Get(ctx context.Context, scope []string, id string) (Document,
 	if !inScope(scope, id) || !store.ValidID(id) {
 		return Document{}, ErrNotFound
 	}
-	var d Document
-	var file, embedModel sql.NullString
-	var transcript []byte
-	err := s.db.QueryRowContext(ctx, `SELECT id, name, content_type, file_id, text, method, no_text, coalesce(pages, 0), notes, created_at,
+	ds, err := s.list(ctx, `d.id = $1`, id, "text")
+	if err == nil && len(ds) == 0 {
+		err = ErrNotFound
+	}
+	if err != nil {
+		return Document{}, err
+	}
+	return ds[0], nil
+}
+
+// List returns the documents filed under matter ("" for all), oldest first, without their text.
+func (s *Service) List(ctx context.Context, matter string) ([]Document, error) {
+	return s.list(ctx, `$1 = '' OR d.matter_number = $1`, matter, "''")
+}
+
+func (s *Service) list(ctx context.Context, where string, arg any, text string) ([]Document, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, name, content_type, file_id, `+text+`, method, no_text, coalesce(pages, 0), notes, created_at,
 		(SELECT count(*) FROM sections WHERE document_id = d.id), (SELECT count(*) FROM chunks WHERE document_id = d.id),
-		embed_model, embed_tokens, embed_cost_usd, status, transcript FROM documents d WHERE id = $1`, id).Scan(&d.ID, &d.Name, &d.ContentType, &file, &d.Text,
-		&d.Method, &d.NoText, &d.Pages, pq.Array(&d.Notes), &d.CreatedAt, &d.Sections, &d.Chunks, &embedModel, &d.EmbedTokens, &d.EmbedCostUSD, &d.Status, &transcript)
-	if err == nil && transcript != nil {
-		err = json.Unmarshal(transcript, &d.Transcript)
+		embed_model, embed_tokens, embed_cost_usd, status, transcript, coalesce(matter_number, '') FROM documents d WHERE `+where+` ORDER BY created_at, id`, arg)
+	if err != nil {
+		return nil, fmt.Errorf("docs: get documents: %w", err)
 	}
-	if errors.Is(err, sql.ErrNoRows) {
-		return Document{}, ErrNotFound
-	} else if err != nil {
-		return Document{}, fmt.Errorf("docs: get document: %w", err)
+	defer rows.Close()
+	out := []Document{}
+	for rows.Next() {
+		var d Document
+		var file, embedModel sql.NullString
+		var transcript []byte
+		err := rows.Scan(&d.ID, &d.Name, &d.ContentType, &file, &d.Text, &d.Method, &d.NoText, &d.Pages, pq.Array(&d.Notes), &d.CreatedAt, &d.Sections, &d.Chunks,
+			&embedModel, &d.EmbedTokens, &d.EmbedCostUSD, &d.Status, &transcript, &d.MatterNumber)
+		if err == nil && transcript != nil {
+			err = json.Unmarshal(transcript, &d.Transcript)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("docs: get documents: %w", err)
+		}
+		d.FileID, d.EmbedModel = file.String, embedModel.String
+		out = append(out, d)
 	}
-	d.FileID, d.EmbedModel = file.String, embedModel.String
-	return d, nil
+	return out, rows.Err()
+}
+
+// File files a document under a matter number (the matter it belongs to).
+func (s *Service) File(ctx context.Context, id, matter string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE documents SET matter_number = nullif($2, '') WHERE id = $1`, id, matter)
+	return err
 }
 
 // WriteFile writes a document's original file to w, only through a document in scope

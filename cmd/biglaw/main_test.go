@@ -46,7 +46,7 @@ func TestHealth(t *testing.T) {
 	}{{nil, 200, "ok"}, {errors.New("dial tcp 10.0.0.5:5432: secret-host"), 503, "database unavailable"}} {
 		var logs bytes.Buffer
 		rec := httptest.NewRecorder()
-		routes(fakeDB{tc.err}, nil, slog.New(slog.NewTextHandler(&logs, nil))).ServeHTTP(rec, httptest.NewRequest("GET", "/health", nil))
+		routes(fakeDB{tc.err}, nil, nil, slog.New(slog.NewTextHandler(&logs, nil))).ServeHTTP(rec, httptest.NewRequest("GET", "/health", nil))
 		var body map[string]string
 		json.Unmarshal(rec.Body.Bytes(), &body)
 		if rec.Code != tc.code || body["status"] != tc.status || body["search"] != "lexical" || strings.Contains(rec.Body.String(), "secret-host") {
@@ -58,7 +58,7 @@ func TestHealth(t *testing.T) {
 	}
 	for _, req := range []*http.Request{httptest.NewRequest("GET", "/", nil), httptest.NewRequest("POST", "/health", nil)} {
 		rec := httptest.NewRecorder()
-		routes(fakeDB{}, nil, discard()).ServeHTTP(rec, req)
+		routes(fakeDB{}, nil, nil, discard()).ServeHTTP(rec, req)
 		if rec.Code == 200 {
 			t.Errorf("%s %s = 200, want an error", req.Method, req.URL.Path)
 		}
@@ -133,7 +133,7 @@ func TestServeStopCancelsIngest(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() { done <- serve(ctx, st, docs.New(st), ln, discard()) }()
+	go func() { done <- serve(ctx, st, docs.New(st), nil, ln, discard()) }()
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
 	fw, _ := mw.CreateFormFile("file", "loop.pdf")
@@ -192,7 +192,7 @@ func TestServeEndToEnd(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() { done <- serve(ctx, st, docs.New(st), ln, discard()) }()
+	go func() { done <- serve(ctx, st, docs.New(st), nil, ln, discard()) }()
 
 	resp, err := http.Get("http://" + ln.Addr().String() + "/health") // ln is already accepting
 	if err != nil {
