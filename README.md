@@ -10,37 +10,38 @@ tables in which every factual statement cites a quote that the software has veri
 matter's own documents, with a lawyer approving every deliverable. It is one Go binary plus one
 PostgreSQL database. Licensed Apache-2.0 (`LICENSE`, `NOTICE`).
 
-## What exists today (PR 1: skeleton, config, store, CI; PR 2: model client; PR 3a: documents; PR 3b: model roles, embeddings, hybrid search; PR 3c: vision transcription; PR 11, pulled forward by owner decision 13: the UI and its recorded engine; PR 4a: the agent runtime and the deterministic memo tools)
+## What exists today (PR 1: skeleton, config, store, CI; PR 2: model client; PR 3a: documents; PR 3b: model roles, embeddings, hybrid search; PR 3c: vision transcription; PR 11, pulled forward by owner decision 13: the UI and its recorded engine; PR 4a: the agent runtime and the deterministic memo tools; PR 4b: the memo workflow, durable runs and the REST API)
 
 | Piece | Path | What it does |
 |---|---|---|
-| Command | `cmd/biglaw/main.go` | `biglaw serve [--allow-no-auth]` (migrates the database, then serves HTTP) and `biglaw version [--config]` |
+| Command | `cmd/biglaw/main.go` | `biglaw serve [--allow-no-auth]` (migrates the database, then serves the API and the embedded UI and runs tasks) and `biglaw version [--config]` |
 | Configuration | `cmd/biglaw/config.go` | Declares all 18 runtime variables (`BIGLAW_MODELS` is the role map); validates the ones this build reads (all problems at once); vendor breakers ported from v1 |
 | Store | `internal/store/store.go` | Postgres via `database/sql` + `github.com/lib/pq`; DSN check that matches lib/pq's reading; transaction helper |
 | Migrations | `internal/store/migrate.go`, `internal/store/migrations/NNNN_*.sql` | Embedded SQL files applied in order under an advisory lock; each file and its `schema_migrations` row in one transaction. `store.Open` first creates the `vector` extension (pgvector), which is database-wide (§ Database) |
 | Files | `internal/store/files.go` | Binary files (uploads, generated `.docx`) stored in 1 MiB `bytea` chunks, streamed in and out, with size and SHA-256 checked on every read |
-| Model client | `internal/model/` (`client.go`, `embed.go`, `errors.go`, `fake.go`, `pricing.go`, `prices.json`) | One OpenAI-compatible chat client with tool calls and image parts, an embeddings call (`Embed`) on the same transport, typed failures with their HTTP mapping, at most 3 attempts per call, cache-aware pricing of every call from a built-in table plus `BIGLAW_PRICES` (the host never makes a call free), watt-hour metering when `BIGLAW_LOCAL_WATTS` is set, and `model.Fake` for tests (§ Model client). `Embed`'s caller is documents (below); `Chat`'s is the agent loop (below), which no workflow runs until PR 4b. |
+| Model client | `internal/model/` (`client.go`, `embed.go`, `errors.go`, `fake.go`, `pricing.go`, `prices.json`) | One OpenAI-compatible chat client with tool calls and image parts, an embeddings call (`Embed`) on the same transport, typed failures with their HTTP mapping, at most 3 attempts per call, cache-aware pricing of every call from a built-in table plus `BIGLAW_PRICES` (the host never makes a call free), watt-hour metering when `BIGLAW_LOCAL_WATTS` is set, and `model.Fake` for tests (§ Model client). `Embed`'s caller is documents (below); `Chat`'s is the agent loop (below), which the memo workflow drives. |
 | Documents | `internal/docs/` (`ingest.go`, `child.go` + `child_linux.go`/`child_other.go`, `pageindex.go`, `chunk.go`, `search.go`, `embed.go`, `verify.go`, `http.go`, `vision.go` + `vision_prompts.txt`, `scanpdf.go`, `jobs.go`) | Ingest of UTF-8 text, `.docx` and PDF text layers (PDFs and `.docx` files parsed in a bounded child process); images and JPEG-scanned PDF pages transcribed by the `vision` role, each page read twice and the readings compared, with provenance on every document, chunk and citation, and a leased job that transcribes what was stored before a vision role was set (§ Vision transcription); the byte-exact section tree; search chunks; Postgres full-text search, fused with pgvector similarity when an `embed` role is set (chunk embedding at ingest, a startup backfill); the page reader (outline, paged sections); the quote-verification ladder; the upload and download routes. Every read is scoped to the caller's document ids (§ Documents) |
-| Agent runtime | `internal/agent/` (`tool.go`, `registry.go`, `schema.go`, `loop.go`, `budget.go`, `policy.go`, `bandit.go`) | The `Tool` interface and its single registry (definitions frozen at registration), JSON-schema validation of every tool input and output, one bounded loop for the lead and its subagents, the budget ledger, and the tool bandit (§ Agent runtime). No workflow drives it yet (PR 4b) |
+| Agent runtime | `internal/agent/` (`tool.go`, `registry.go`, `schema.go`, `loop.go`, `budget.go`, `policy.go`, `bandit.go`) | The `Tool` interface and its single registry (definitions frozen at registration), JSON-schema validation of every tool input and output, one bounded loop for the lead and its subagents, the budget ledger, and the tool bandit (§ Agent runtime). The memo workflow drives it (below); a step log makes it resumable |
+| Engine | `internal/engine/` (+ `specs/`, `packs/`; migration `0005_runs.sql`) | The memo workflow: the lead agent and its 11 tools, the ledger, the evidence subagents with Go-side quote verification, the sweep, the three-critic committee, the policy, `finish` (lint, coverage, render), the human gates, grounding collapse, and durable runs (step log, lease and heartbeat, resume) (§ Memo workflow) |
+| API | `internal/api/` (+ `dist/`, the embedded UI) | The REST API (tasks, steps, SSE events, gates, cancel, cost, clients) over the engine and the document routes, and the web UI built into the binary (§ Memo workflow) |
 | Memo tools | `internal/analysis/` (+ `belo.json`, `specs/*.json`), `internal/docs/register.go` (+ `specs/*.json`) | Deterministic tools over verified findings: `numbers` (exact `calc`, figure handles, key-figures table), `join_discrepancies`, the coverage checks `finish{op:"check"}` will run, the value normalisers and BELO-lite; and the `retrieve` / `verify_quote` adapters over documents (§ Agent runtime) |
 | `.docx` reader | `internal/docs/ooxml/` | Opens a `.docx`'s text parts only (body, footnotes, endnotes; 128 MiB decompression cap) and reads its visible text in one linear XML pass. The writer, the XML escapers, the part-preserving re-zip and tracked-change parse/apply are planned (PR 3d) |
-| Proof-run fixtures | `eval/tasks/`, `eval/e4/embeddings.json` | The five synthetic proof-run matters (documents + answer keys), copied from `feat/proof-runs-multi-practice`; PR 3 reads them for gate E4, PR 4b adds the driver and scorer. `eval/e4/embeddings.json` is E4's embeddings tape: today the **self-test** tape of a hash embedder, not a real model's (§ Documents, gate E4) |
-| UI | `ui/` (React 19 + Vite + TypeScript strict; runtime deps `react`, `react-dom` only) | The seven screens (§ UI) behind one transport seam, `ui/src/api/transport.ts`: `http.ts` talks to the Go API on the same origin (its routes are **planned**: PR 4 onward, so the live UI has nothing to talk to yet), `recorded.ts` replays a recorded engine in the browser with no network at all |
+| Evaluation | `eval/` (`run.py`, `proofrun/`, `lab/`, `tests/`, `tasks/`, `e4/embeddings.json`) | The five synthetic proof-run matters (documents + answer keys), copied from `feat/proof-runs-multi-practice`, with their driver, scorer and the v1 comparison (`run.py`), the Harvey LAB driver (`lab/run.py`), and the Go gates E1/E2 that run them through the engine on a scripted model (§ Memo workflow). `eval/e4/embeddings.json` is E4's embeddings tape: today the **self-test** tape of a hash embedder, not a real model's (§ Documents, gate E4) |
+| UI | `ui/` (React 19 + Vite + TypeScript strict; runtime deps `react`, `react-dom` only) | The seven screens (§ UI) behind one transport seam, `ui/src/api/transport.ts`: `http.ts` talks to the Go API on the same origin (tasks, steps, findings, gates, cost and documents are served since PR 4b; playbooks, time and profiles are PRs 6/8/9), `recorded.ts` replays a recorded engine in the browser with no network at all |
 | Recorded demo | `ui/src/recorded/recording.json`, `eval/demo/record_test.go` | Three synthetic matters (13 documents plus one scanned exhibit, `ui/src/recorded/06-affidavit-of-service-scan.jpg`, drawn by `eval/demo/make_scan.py`) and seven recorded memo tasks (48 findings, 79 citations); documents, outlines, sections, chunks, the scan's transcript (v2's vision path with a scripted reader), run-log and offered search hits and every quote's verification computed by v2's `internal/docs`; claims from the answer keys; sample playbooks, time entries and profiles, and the configuration table read from `cmd/biglaw/config.go` (§ UI, provenance). `TestDemoRecording` fails when the committed recording no longer matches what v2's code computes |
 | Test helper | `internal/store/storetest/` | Gives each DB test its own schema; skips without a DSN, fails if `BIGLAW_REQUIRE_DB` is set |
 | Budgets | `scripts/loc.py` (+ `scripts/test_loc.py`) | Fails CI if a size budget is exceeded (below) |
 | Build/deploy | `Makefile`, `Dockerfile`, `docker-compose.yml`, `render.yaml`, `.env.example` | `make ci` (and the owner-run `make e4-record` / `make e4-live`); `pgvector/pgvector:0.8.6-pg16` + biglaw under Compose; Render blueprint (inert until PR 8, see § Exposure) |
 | CI | `.github/workflows/ci.yml` | `make ci` against `pgvector/pgvector:0.8.6-pg14` and `:0.8.6-pg16` service containers (pinned by digest) with `BIGLAW_REQUIRE_DB=1`; staticcheck + govulncheck; image build + Compose smoke test |
 
-HTTP surface today: `GET /health`, which returns `{"status":"ok","version":"…","search":"hybrid"}` (200;
+HTTP surface today: the REST API of § Memo workflow, the embedded UI at `/`, and `GET /health`, which returns `{"status":"ok","version":"…","search":"hybrid"}` (200;
 `"search":"lexical"` when `BIGLAW_MODELS` has no `embed` role) or
-`{"status":"database unavailable",…}` (503; the cause is logged, not returned), and the two
-document file routes of § Documents: `POST /documents/upload` and `GET /documents/{id}/file`.
-Every other path is 404/405. There is no authentication yet (§ Exposure).
+`{"status":"database unavailable",…}` (503; the cause is logged, not returned). Every other path
+is 404/405. There is no authentication yet (§ Exposure).
 
-**Planned** (not built): the `.docx` writer and tracked-change parse/apply (PR 3d); the engine and the memo workflow with its REST API, durable runs and the subagent specs (PR 4b), diligence (PR 5), contract review (PR 6),
+**Planned** (not built): the `.docx` writer and tracked-change parse/apply (PR 3d); diligence (PR 5), contract review (PR 6),
 MCP (PR 7), clients/conflicts and OIDC/session/token auth (PR 8), time and billing (PR 9), the
-UI's embedding in the binary (`//go:embed`, with `internal/api` in PR 4b; § UI), jurisdiction and practice packs (PR 12), v1 import and docs (PR 13). The
+the full jurisdiction and practice pack catalogue (PR 12; four candidate packs ship with PR 4b), v1 import and docs (PR 13). The
 discover.legal intake module is **not** part of v2 (owner decision; it moves to a separate repo).
 
 ## Configuration
@@ -246,6 +247,16 @@ that way:
   exposes the container refuses to start.
 - **Render** is public by nature, so `render.yaml` is inert until PR 8: the service fails its
   start on purpose.
+
+Two browser guards hold until then, because a page the lawyer visits can reach a loopback port.
+Every `POST` (documents, tasks, cancel, gate decisions) from another site is refused 403
+`cross_origin` (`Origin` other than the request's own host, or `Sec-Fetch-Site` other than
+`same-origin`/`none`; `text/plain` and `multipart/form-data` need no CORS preflight), so no site
+can spend the budget or decide a human gate (`TestWritesRefuseCrossOrigin`). Every request but
+`GET /health` addressed to a DNS name other than `localhost` is refused 403 `bad_host` (DNS
+rebinding would otherwise make another site BigLaw's own origin): address BigLaw by IP or
+`localhost` (`TestRefusesRebindingHosts`). The UI cannot be framed (`X-Frame-Options: DENY`,
+`frame-ancestors 'none'`: `TestUIRefusesFraming`).
 
 ## Run it
 
@@ -638,8 +649,8 @@ in order, without a text layer; images inside the file and within 20 MiB): `Test
   model (`transcribedBy`) with the note "machine transcription of an image (model): check against
   the original", and `lowConfidence` is set when the match touches a low-confidence page: per
   quote, so a finding resting on a good page is not flagged
-  (`TestTranscriptCitationCappedAndDisclosed`, `TestLowAgreementFindingsGatedIndividually`; PR 4b's
-  gate acts on the flag).
+  (`TestTranscriptCitationCappedAndDisclosed`, `TestLowAgreementFindingsGatedIndividually`; the
+  engine gates a finding resting only on such quotes for a lawyer, `TestLowAgreementFindingGated`).
 - **No vision role.** An image or a fully scanned PDF (stamps included) is stored with
   `status: needs_transcription` (no text beyond its stamps, a note) and the upload is **503
   `vision_not_configured`** with the document; the original is kept
@@ -753,8 +764,7 @@ after another 10 s are closed (`TestServeStopCancelsIngest`).
 
 ## Agent runtime and memo tools (`internal/agent`, `internal/analysis`; PR 4a)
 
-Nothing runs these yet: the memo workflow, the ledger, durable runs and the REST routes that drive
-them are PR 4b. What PR 4a ships, all tested with `model.Fake` or no model:
+The memo workflow (§ Memo workflow) drives these. What PR 4a ships, all tested with `model.Fake` or no model:
 
 - **Tools and the registry.** A `Tool` has a `Spec` (name, kind `go`/`subagent`/`fanout`, a
   description, input and output JSON Schemas, a budget class, a turn cap, allowed tools for a
@@ -828,17 +838,150 @@ Limitations of this layer:
 - The bandit's statistics are shared by every task with the same signature: one matter's documents
   can make a tool fail often and push it down another matter's hint (it never hides it). Its
   constants (β 0.5, γ 1, c 0.5) are uncalibrated; gate B measures it on and off.
-- Text inside a quote that happens to read `{Zephyr}` would be substituted by the renderer like a
-  handle; PR 4b's renderer must substitute outside quoted spans only.
-- Codenames follow salience over the ledger as it stands: a later finding can renumber them, so PR
-  4b's renderer must substitute with the handle set the drafter was given, never a recomputed one.
+- Codenames follow salience over the ledger as it stands: a later finding can renumber them, so the
+  renderer substitutes with the handle set the drafter was given (stored with the section), and only
+  outside quoted spans, never a recomputed set.
 - `join_discrepancies` trusts the extracting model's metric labels: two labels for one metric are
   never compared (a missed conflict), one label for two metrics is compared (the lead must check the
   quotes). A value's document is the quote that holds its text, else the finding's first quote.
 - Calls in one turn run sequentially, not concurrently; `retrieve` and Go tools spend no calls, so a
   lead can issue up to 8 per turn for every turn its budget funds.
 - **Line budget:** `agent` 1,242 against 1,100, `analysis` 1,183 against 950, the `docs` adapters
-  153 against 50 (§ Budgets: accepted by owner decision 14, ceiling 16,100).
+  153 against 50 (§ Budgets: accepted by owner decision 14; ceiling now 17,000, decision 15).
+
+## Memo workflow, durable runs and the REST API (`internal/engine`, `internal/api`; PR 4b)
+
+`POST /tasks` with `workflowType: "memo"` (the only workflow built; `diligence` and
+`contract_review` are 400 until PRs 5 and 6) stores a task and wakes the runner. The lead agent
+(role `lead`, prompt `internal/engine/specs/lead.md`) sees 11 tools in a fixed order: `retrieve`,
+`ledger`, `sweep`, `extract_facts`, `analyze_issue`, `check_deviation`, `numbers`,
+`join_discrepancies`, `draft_section`, `committee`, `finish`. Specs are data
+(`internal/engine/specs/*.json`, subagents `specs/agents/*.{json,md}`: the five above plus the
+critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with `model.Fake`.
+
+- **The ledger** (`ledger`; one Postgres table, a JSON row per kind and key): `plan` (the issues
+  the deliverable must answer, each typed by a BELO-lite class), `findings` / `get` (brief or full:
+  citations and value refs `F3.v1`), `resolve` (a critic finding fixed or disclosed, with a note),
+  `draft_get` (a finished section only: `not_drafted` otherwise) and `relations`. A subagent may only
+  read, and never sees a quarantined finding (G3).
+- **Evidence** (`extract_facts`, `analyze_issue`, `check_deviation`; subagents on the `specialist`
+  role). Go completes each call (the section's text, the packs) and checks every answer before it
+  reaches the ledger: each quote goes through the ladder (`VerifyQuote`, then the `verify_quote`
+  tool with its judge); a finding is verified only when every quote is (G2), else it is stored
+  quarantined (G3) and never drafted from; a typed value absent from its own quotes is dropped, and a
+  money value's currency is taken from the symbol beside it in its quote (£, €, ¥, CHF, C$, A$), not the model; a finding
+  nearly the same as a verified one already held on the same issue (3-word-shingle Jaccard ≥ 0.5)
+  merges into it, its quotes added. `check_deviation` keeps a deviation only when both sides' quotes verify, and an omission only
+  when the provision is verifiably absent (fewer than half its significant words in the reviewed
+  document). The subagent's reward for the bandit is the share of its quotes that verified.
+- **`sweep`** visits every section of the task's documents (or one document) once, in order,
+  calling `extract_facts` on each; a visit is keyed (document, section, offset) and never repeated;
+  it stops at its share of the budget and reports `incomplete` with the sections it did not reach,
+  which also go into Limitations. Never silently partial.
+- **Drafting** (`draft_section`, one issue per call): Go gives the drafter the issue, its named
+  verified findings with their quotes, figure handles (`{Zephyr}`) and the summaries of sections
+  already written, in plan order. The section is stored with the handle set its drafter was given.
+- **`committee`**: three context-free critics in parallel, each on its own explicit grant (the
+  cycle's 8/8/4 calls, the last taking the USD remainder): `prosecute` gets the claims and their
+  quotes, `reproduce` gets the issue questions only (never the draft) and its answers are compared
+  with the draft, `audit_gaps` gets the draft. Their findings are HIGH/MEDIUM/LOW, open until the
+  lead resolves them; a `prosecute` verdict credits or debits the arm that produced the finding
+  (delayed credit, ±0.5). A critic that fails leaves a MEDIUM "did not run" finding.
+- **Policy** (`policy.go`): P1 nothing but `retrieve`/`ledger` before a plan, and if the lead has
+  spent its plan share (7%, at least 3 calls) without one, the packs' checklist becomes the plan
+  (disclosed); P4 class shares of the call budget (evidence 50% of which sweep 35%, draft 15%,
+  committee cycles of 20 or 20% of a small budget, a reserve of 5 and meta 3 only `finish` spends).
+- **`finish`** (`op: "check"` is a dry run of `submit`): lint (every `[F-id]` names a usable
+  finding; every number in the draft is a handle, a `numbers` worksheet result or inside a cited
+  quote or value (G8, the "68.6% for 81.6%" trap); no unknown handle), coverage (plan issues
+  without a section, parties never named, salient figures never landing), and P6: a committee on
+  the current draft version, its HIGH/MEDIUM findings resolved while the budget can fund another
+  fix (cycle + 3 calls), every plan issue drafted or disclosed by issue id. P7: a `submit` within 2
+  calls of a committee whose HIGH/MEDIUM findings were resolved without new work is refused once
+  per cycle, while funded, with the instruction to fix properly and run the committee again. `submit` then renders: sections in plan order (summaries never), handles substituted
+  outside quotes only, process language and orphan fragments stripped, repeated blocks dropped,
+  external authorities (cases, statutes the record does not contain) marked inline and listed for
+  verification (G5), one-line Sources (a transcript citation badged "machine transcription (model)"
+  and linked to the original, G11), Limitations, an Evidence Note (verified vs quarantined,
+  and verified findings a lawyer rejected at a gate; transcript-only and low-confidence counts; a
+  grounding alert raised during the run) and one meta call's note to the reviewing lawyer. Text from
+  documents and models is neutralised where the memo prints it (`mdSafe`): one-line slots (Sources,
+  headings, list items) collapse white space; sections and the note keep their lines with `#`/`##`
+  demoted to `###`; `<` and fence openers are backslash-escaped. A quote cannot open a section.
+- **Gates** (G7): every deliverable opens a gate (`G-deliverable-N`); a finding resting only on
+  low-confidence transcript pages gets its own (`G-<fid>`). The run stops `awaiting_gate`; approving
+  the deliverable completes the task; rejecting it (a reason is required) puts the reason in the
+  lead's log as a note step and the run resumes. Once all finding gates are decided the run resumes
+  with the decisions; a rejected finding leaves the memo.
+- **Grounding collapse** (G4): from 8 findings on, if more than `BIGLAW_COLLAPSE_THRESHOLD` of them
+  are quarantined the task fails (`strict`, default) with a grounding alert, or (`warn`) carries the
+  alert into the Evidence Note.
+- **Model failures** (G6) end the run `failed` with the kind's fixed text (`model_rate_limited`,
+  …), never a finding, never the endpoint's words.
+
+**Durable runs.** Each lead turn and tool call is a step in `task_steps`: recorded `started`
+(with its grant) before it runs and `committed`/`refused`/`failed` after, together with the
+ledger rows and bandit statistics it wrote, in one transaction. A process claims a task with a
+lease (30 s, renewed every 10 s; `FOR UPDATE SKIP LOCKED`) and runs at most 4 at once; a stale
+lease (a crashed process) is taken over. On resume the committed steps are replayed from the log
+(their outputs reused, no model call repeated) and a step that was in flight is charged at its
+grant (`lost`, shown in the cost ledger) and issued again; a process that is stopped (SIGTERM, a
+deploy) first settles an in-flight tool step's grant to what the tool spent, its aborted model
+call at its worst case, so the resume is charged that rather than the tool's whole grant (every
+free dollar of the task; `TestResumeAfterStopMidToolChargesWhatItSpent`). A task whose document
+was deleted after submission fails (`bad_request`) instead of being claimed again forever. A run stops `finished` (gate open),
+`budget_exhausted` or `max_steps` (`finish` forced from the reserve, open findings disclosed),
+`awaiting_gate`, `cancelled` or `failed`. Tool-bandit statistics persist in `tool_stats`.
+
+**Packs** (`internal/engine/packs/{jurisdiction,practice}/*.md`, embedded): `us`, `us-ny`,
+`litigation`, `corporate-ma`, front matter plus a checklist, all `candidate` (no named lawyer has
+reviewed them, which every deliverable's Limitations says). A task's jurisdiction selects packs by
+prefix (`US-NY` → `us`, `us-ny`). The full catalogue is PR 12's.
+
+**REST API** (stdlib `net/http`; JSON; lists never `null`; errors `{error, errorType}`; shapes in
+DESIGN § UI contract):
+
+```
+GET    /health
+POST   /documents                     {name, text, matterNumber?} → Document (text only; files: /documents/upload)
+GET    /documents[?matter=N]          GET /documents/{id}   DELETE /documents/{id}
+GET    /documents/{id}/outline        GET /documents/{id}/sections/{sectionId}?offset=&limit=
+GET    /documents/search?q=&ids=a,b   POST /documents/upload   GET /documents/{id}/file
+GET    /clients                       matters derived from documents' matter numbers (clients: PR 8)
+POST   /tasks                         {description, workflowType, documentIds[], jurisdiction?, matterNumber?, maxSteps?, toolBandit?: on|off} → 201 Task
+GET    /tasks   GET /tasks/{id}       Task with run {status, step, stopReason, budget, openFindings}, gates, findings, output
+GET    /tasks/{id}/steps?after=N      the step log, paged
+GET    /tasks/{id}/events             SSE: step (each once, in order), task (run changed), done
+GET    /tasks/{id}/cost               per-step usage and USD (null when unpriced), lost grants
+GET    /tasks/{id}/deliverable.md     the rendered memo
+POST   /tasks/{id}/cancel
+POST   /tasks/{id}/gates/{gateId}/approve      POST /tasks/{id}/gates/{gateId}/reject {"reason": "…"}
+GET    /                              the web UI (embedded by `make ui build`), or a notice in a build without it
+```
+
+Model failures map to `model_not_configured` (503), `model_rate_limited` (503), `model_timeout`
+(504), `no_content` (422), `model_unavailable` (502), a cancelled request to 499; a grounding
+collapse is 422 `grounding_collapse`; an unknown task 404, a gate that is not open 409; a
+cross-site write 403 `cross_origin`, a request by DNS name 403 `bad_host` (§ Exposure).
+
+**Run it against a model** (owner; no key exists in the build environment):
+
+```bash
+BIGLAW_DATABASE_URL=… BIGLAW_MODEL_URL=https://…/v1 BIGLAW_MODEL_KEY=… BIGLAW_MODELS='lead=<C>' \
+  ./biglaw serve                                    # loopback :3101; make ui build first to embed the UI
+python3 eval/run.py drive --api http://127.0.0.1:3101 --model-dir v2-<C> --matter litigation --matter ma-diligence
+python3 eval/run.py compare eval/baselines/v1.json eval/results   # gate A (needs gate 0's baseline)
+python3 eval/lab/run.py --labs-dir ~/harvey-labs --api http://127.0.0.1:3101 --model-dir v2-<C> \
+  --task corporate-ma/review-data-room-red-flag-review [--tool-bandit on|off]
+```
+
+`eval/` (Python 3, stdlib only): `run.py` (`list`, `validate`, `selftest`, `score`, `compare`,
+`drive`), `proofrun/` (driver, scorer, mock), `lab/` (the Harvey LAB driver over this API),
+`tests/`. `make eval` runs E0 and E3 (fixtures, scorer tests, scorer self-test; no backend). In
+`go test ./eval`, `TestProofRunsOracle` (E1: an oracle `model.Fake` per matter through the real
+engine and API, scored by the Python scorer: 1.0, verified rate 1.0), `TestProofRunsFabricator`
+(E2: every matter fails with a grounding alert) and `TestLabRunnerSmoke` (the LAB driver against an
+`httptest` server) run with no model.
 
 ## Files
 
@@ -918,9 +1061,9 @@ exists, run against a **recorded** engine, with no model calls. So the UI is bui
 to BigLaw only through one interface (`ui/src/api/transport.ts`):
 
 - `http.ts` — the REST API on the same origin (README contract routes; the shapes the contract left
-  open are fixed in DESIGN § UI contract, PR 11, and typed in `ui/src/api/types.ts`). Those routes are **planned** (PR 4 onward):
-  today's server answers only `/health` and the two document file routes, so a live build has
-  nothing to show yet. `npm run dev` proxies the API paths to `UI_API` (default `http://127.0.0.1:3101`).
+  open are fixed in DESIGN § UI contract, PR 11, and typed in `ui/src/api/types.ts`). PR 4b serves the task, step, gate, cost, client and
+  document routes; `biglaw serve` serves the built UI at `/` (`make ui build` embeds `ui/dist`; a
+  build without it shows a notice there). Playbooks, time entries and profiles are 404 until PRs 6/8/9. `npm run dev` proxies the API paths to `UI_API` (default `http://127.0.0.1:3101`).
 - `recorded.ts` — replays recorded runs in the browser. A build with `VITE_ENGINE=recorded` aliases
   the transport to it, so the bundle contains no HTTP code: `test/offline.test.ts` builds it and
   fails on any `fetch`, `XMLHttpRequest`, `EventSource`, `WebSocket`, `sendBeacon`, worker, preload
@@ -939,8 +1082,8 @@ in the recorded demo Clients shows the sample matters, Playbooks, Time & Billing
 profiles show sample records written for the demo (labelled so on screen), and Settings also lists
 this build's configuration table, read-only. Rejecting the deliverable asks for a reason (sent as
 `{"reason"}` to `POST /tasks/{id}/gates/{gateId}/reject`, as v1's reject did) and closes the gate:
-the task is `rejected` with the decision in `decidedGates`; live (PR 4b) the lead resumes with the
-reason. The Task screen's Table and
+the decision is kept in `decidedGates`; live, the lead resumes with the reason (the task goes back to
+`running`; the recorded demo has no revised run, so there it stays `rejected`). The Task screen's Table and
 Redline tabs (diligence, contract review) are **planned** with PRs 5 and 6, the Documents version
 timeline with PR 6, sign-in with PR 8.
 
@@ -1006,8 +1149,9 @@ make ci                         # gofmt, vet, go mod verify/tidy, static build, 
                                 # then the reader child's bounds again without -race, which turns
                                 # its memory cap off, with -v; where BIGLAW_REQUIRE_DB is set it
                                 # fails unless TestChildBoundsItself, TestChildNearTextCap and
-                                # TestIngestMemoryBounded each report PASS there), loc.py + its
-                                # tests, docker compose config
+                                # TestIngestMemoryBounded each report PASS there), make eval (E0/E3),
+                                # loc.py + its tests, docker compose config
+make ui build                   # the binary with the web UI embedded (ui/dist → internal/api/dist)
 make lint vuln                  # staticcheck and govulncheck (network needed; CI runs both)
 ```
 
@@ -1120,12 +1264,44 @@ PDF with nothing on it is still `noText` with its note), `TestIngestRefusalLeave
 `scan_encoding_unsupported`, all leaving nothing), `TestExtractPlainText` (an image is a page to
 transcribe, never text).
 
+Named tests (PLAN.md PR 4b; DB tests need Postgres with pgvector; every model is `model.Fake` or an
+`httptest` server): specs `TestSpecsLoadAndValidate`, `TestExtractFactsTypedValues`; `TestModelErrorsAsJSON`,
+`TestConfigEngineVars`; policy `TestAllocationsMatchSpec`, `TestClassShareRefused`,
+`TestLedgerPlanRequiredFirst`, `TestPlanFallbackToChecklistDisclosed`, `TestCommitteeRepeatsWhileFunded`,
+`TestEscalationFiresOnFastFix`, `TestFinishRefusedWithoutCommittee`,
+`TestFinishRefusedWithOpenFindingsWhileFunded`, `TestFinishAcceptsWhenBudgetExhaustedWithDisclosure`,
+`TestFinishNeedsEverySuccessCriterion`; paged drafting `TestPagedDraftingLossless` (v1's
+`TestPagedBoard_CompactPagingIsLossless`), `TestPriorSummariesPassedInOrder`, `TestDraftGetOnlyFinishedSections`,
+`TestSummaryNeverRendered`; `TestFinishCheckIsDryRun`, `TestFinishSubmitRunsSameChecks`,
+`TestInjectedDocumentCannotSkipCommittee`, `TestLowAgreementFindingGated`,
+`TestDeliverableBadgesTranscriptCitations`, `TestEvidenceNoteCountsTranscriptOnlyFindings`;
+`TestLedgerBucketsFindingsByIssue`, `TestLedgerNearDuplicateMerged`, `TestSweepVisitsEverySectionOnce` (+ v1's
+three `sectionChunks` vectors), `TestSweepIdempotent`, `TestSweepReportsIncompleteWhenBudgetShort`,
+`TestCommitteeCriticsContextFree`, `TestCommitteeRunsThreeInParallel`; v1's 16 `deviations_test` vectors,
+`TestDeviationNeedsBothSidesVerified`, `TestOmissionRequiresVerifiedAbsence`; durable runs
+`TestResumeAfterKillMidRun`, `TestResumeDoesNotRepeatCommittedSteps`,
+`TestResumeChargesInFlightCallConservatively`, `TestRunLeaseSingleOwner`,
+`TestBudgetStopEndsRunWithDisclosure`, `TestMaxStepsStop`, `TestFinishRejectedByCriticContinuesLooping`,
+`TestAwaitingGatePausesAndResumes`, `TestCancelStopsRun`, `TestRunProgressAPI`; bandit
+`TestBanditStatsPersistAcrossTasks`, `TestBanditDelayedCriticCredit`; integrity
+`TestUnverifiedFindingNotInLedger`, `TestQuarantineExcludedFromDraft`, `TestFabricatingModelFailsTask`,
+`TestDeliverableLintRejectsUnknownFid`, `TestExternalAuthorityFlagged`, `TestModelFailureIsNotAFinding`,
+`TestEmptyModelReplyIsError`, `TestDeliverableGateBlocksCompletion`, `TestModelDigitsNotFromLedgerFlagged`,
+`TestRetrieveNeverLeavesMatter` (engine level); packs `TestPackSelectionByJurisdictionPrefix`,
+`TestCandidatePackDisclosed`; E1/E2 `TestProofRunsOracle`, `TestProofRunsFabricator`; UI embedding
+`TestEmbeddedUIServesIndex`, `TestBuildWithoutUIServesNotice`, `TestAPIListsNeverNull`; Python
+`test_compare_exit_codes`. Extra: `TestLabRunnerSmoke` (the LAB driver end to end against an
+`httptest` server), `TestSweepShareBounded`, `TestSubagentLedgerReadsSkipQuarantine`, `TestUSDBoundFinishDeliversWithoutMeta`, `TestCurrencyFromQuote`,
+`TestEventsStream`, `TestE2EServe` (not a check: with `E2E_ADDR` set it serves the API, engine and
+`ui/dist` over a scripted model for a browser run). Each guarded behaviour was broken once on purpose
+and its test failed (65 deliberate breaks, all caught).
+
 ## Budgets (`scripts/loc.py`, run in CI)
 
 | Budget | Ceiling | Today |
 |---|---:|---:|
-| Go production lines (physical lines, non-`_test.go`, test-support packages included) | 16,100 | 7,499 |
-| Packages under `internal/`, test-support packages excluded | 12 | 6 (`agent`, `analysis`, `docs`, `docs/ooxml`, `model`, `store`; `store/storetest` is test support) |
+| Go production lines (physical lines, non-`_test.go`, test-support packages included) | 17,000 | 11,394 |
+| Packages under `internal/`, test-support packages excluded | 12 | 8 (`agent`, `analysis`, `api`, `docs`, `docs/ooxml`, `engine`, `model`, `store`; `store/storetest` is test support) |
 | Direct Go dependencies | 3 | 2 (`github.com/lib/pq`, `github.com/ledongthuc/pdf`) |
 | Runtime environment variables | 20 | 18 |
 | UI runtime dependencies | 2 | 2 (`react`, `react-dom`) |
@@ -1133,7 +1309,7 @@ transcribe, never text).
 | Packages without a `_test.go` | 0 | 0 |
 | Lines in any one source file (`.go`, `.py`, `.sql`, `.sh`, `.js`, `.ts`, `.css`; tests included) | 2,000 | 968 (`internal/docs/vision_safety_test.go`) |
 
-The line ceiling is 16,100 (owner decisions: 14,000, then 14,250, then 14,500 during PR 2's review, then 15,000 at PR 3a's, with pgvector, then 15,500 at PR 3a's round 3, declared final, then 15,600 at PR 3c's round 1, decision 11, then 15,650 at PR 3c's round 4 to read long-legend scans, decision 12, then 16,100 at PR 4a, decision 14). The plan totalled 15,581–15,611 after PR 3c (round 7); PR 4a measured 2,557 lines against the 2,100 its components carry, putting the plan at 16,038–16,068. **Owner decision 14 (2026-10-22): keep PR 4a as built and raise the ceiling to 16,100**, which leaves room for PR 3e (about 30–40 lines); the next breach goes back to the owner. PR 4a's committee round 1 fixes added 23 (7,476 → 7,499): plan **16,061–16,091**, headroom 9–39 for PR 3e. A **test-support package** is one
+The line ceiling is 17,000 (owner decisions: 14,000, then 14,250, then 14,500 during PR 2's review, then 15,000 at PR 3a's, with pgvector, then 15,500 at PR 3a's round 3, declared final, then 15,600 at PR 3c's round 1, decision 11, then 15,650 at PR 3c's round 4 to read long-legend scans, decision 12, then 16,100 at PR 4a, decision 14, then 17,000 at PR 4b, decision 15). The plan totalled 15,581–15,611 after PR 3c (round 7); PR 4a measured 2,557 lines against the 2,100 its components carry, putting the plan at 16,038–16,068. **Owner decision 14 (2026-10-22): keep PR 4a as built and raise the ceiling to 16,100**, which leaves room for PR 3e (about 30–40 lines); the next breach goes back to the owner. PR 4a's committee round 1 fixes added 23 (7,476 → 7,499): plan **16,061–16,091**, headroom 9–39 for PR 3e (round 2 added 3: 7,502). **PR 4b measured 3,818 lines (7,502 → 11,320) against the about 3,060 its components carry** (engine memo part 2,340, api 660, documents routes 60), so the plan is **16,822–16,852**, over the then 16,100 ceiling by 722–752. **Owner decision 15 (2026-10-22): keep PR 4b as built and raise the ceiling to 17,000** (headroom 148–178 on the plan); the next breach goes to the owner. PR 4b's committee round 1 fixes added 74 (11,320 → 11,394): plan **16,896–16,926**, headroom 74–104. A **test-support package** is one
 whose directory name ends in `test` and that no production file outside it imports, such as
 `storetest`. Under the coordinator's ruling it is left out of the package count, but its lines
 count toward the line ceiling like any other non-`_test.go` file. A `*test` package that
@@ -1145,18 +1321,49 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
 
 ## Limitations
 
-- The UI's live mode has no API to talk to until PR 4b (tasks, steps, SSE, findings, cost) and
-  PRs 6/8/9 (playbooks, clients, time, profiles); only the recorded demo is usable. The binary
-  does not serve the UI yet: the `//go:embed` of `ui/dist` (`TestEmbeddedUIServesIndex`,
-  `TestBuildWithoutUIServesNotice`) lands with `internal/api` in PR 4b, inside its 30-line budget.
+- The UI's Playbooks, Time & Billing and profile views have no live routes until PRs 6/8/9 (404);
+  Clients shows matters derived from documents' matter numbers until PR 8's client roster.
+- **Memo workflow (PR 4b):**
+  - No model has run it: every test scripts the model. Whether it meets gate A (v1's criteria on
+    `litigation` and `ma-diligence`) is the owner's measurement (§ Memo workflow, run it).
+  - The deliverable is Markdown only (`GET /tasks/{id}/deliverable.md`); the `.docx` export waits for
+    PR 3d's writer.
+  - Quote verification proves a quote is in the document, not that the claim follows from it:
+    `prosecute` checks that, and a lawyer approves every deliverable. The G8 lint traces digits, not
+    words: a wrong party or a wrong verb with correct figures passes it.
+  - The SSE stream polls the database every 500 ms. Cancel stops a run at once in its own process
+    and at the next heartbeat (up to 10 s) in another; the call in flight is charged.
+  - A hard crash (kill -9, out of memory, power loss) during a tool call cannot settle its grant:
+    the resume charges the tool's whole grant, which can be every free dollar of the task, so the
+    resumed run may finish from its reserve (`budget_exhausted`, disclosed). A graceful stop
+    charges what the tool spent.
+  - A forced finish (budget or max steps) delivers a draft its lint refused, marked "Delivered with
+    an unresolved check"; a sentence citing a finding that is not usable (rejected at its gate or
+    quarantined) is removed and counted in Limitations (a citation after the full stop goes with the
+    sentence before it), the rest stands as drafted. An abbreviation mid-sentence (`Smith v.`) splits
+    the sentence, leaving a fragment, and a table row citing one is blanked, which ends the table.
+  - Until PR 8, BigLaw answers only requests addressed by IP or `localhost` (§ Exposure): a LAN or
+    proxy hostname gets 403 `bad_host`.
+  - Tool-bandit statistics are per signature across all matters; a run's practice is not yet part of
+    its signature (empty), so memo runs in one jurisdiction with the same lead model and document-count band share
+    one bandit row per tool.
+  - `/cost/summary` (all tasks, ingest-time embeddings and vision reads) is not built; costs are per
+    task (`/tasks/{id}/cost`) and per document.
+  - The transcription jobs keep their own loop (`docs/jobs.go`); moving them onto the run lease
+    (DESIGN way 5) is deferred.
+  - Packs are four `candidate` files; nothing checks a pack's legal content.
+  - **Line budget:** PR 4b adds 3,818 lines (7,502 → 11,320) against about 3,060 its components carry
+    (engine memo part 2,340, api 660, the documents routes 60): `engine` 3,406, `api` 248, the rest
+    in `agent` (resume), `docs` (routes), `cmd` (wiring). The plan after 4b (16,822–16,852) broke the
+    16,100 ceiling; owner decision 15 raised it to 17,000 (§ Budgets); the next breach goes to the owner.
+    Round 1's fixes added 74 (11,394; plan 16,896–16,926).
 - The recorded demo replays answer-key claims, not a model's work; its `@transcript` badges come
   from a scripted reader, not a vision model; it has no `judge`/`ensemble` badges (model calls); a
   query other than the offered searches is ranked in the browser, approximately; a rejected
   deliverable ends the replay (there is no revised run).
-- Nothing user-facing exists yet beyond `/health` and the two document file routes; every
-  workflow, the rest of the REST API, auth and the UI are planned. The exposure rule above is the
-  only protection until PR 8: anyone who can reach the port can upload and, knowing a document id,
-  download. The cross-origin check stops a web page from uploading through the lawyer's browser,
+- Only the memo workflow exists; diligence, contract review, MCP, billing and auth are planned.
+  The exposure rule above is the only protection until PR 8: anyone who can reach the port can
+  upload, list and read every document, and run, approve or cancel tasks. The cross-origin check stops a web page from uploading through the lawyer's browser,
   but not DNS rebinding (a page on a name that resolves to 127.0.0.1 is "same origin"); PR 8's
   sessions and tokens close that.
 - The env-var budget is a static heuristic: code that reads the environment another way
@@ -1371,8 +1578,8 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     readings that make the **same** mistake (the same misread figure) agree and are stored at normal
     confidence. Where the readings differ on a figure, a negation or modal, a dropped line or word
     order, the page is low confidence and one reading's version is stored (the first), not a merge:
-    the note and `disputed` name what the other reading said differently, and PR 4b's gate must
-    route such quotes to a person. The rule is conservative: any 5 differing words, or any word
+    the note and `disputed` name what the other reading said differently, and the engine's finding gate
+    routes such quotes to a person. The rule is conservative: any 5 differing words, or any word
     order difference (two columns read in another order), make a page low confidence, so a long
     page with harmless differences is gated too. Words other than figures and the listed negations
     and modals can change meaning (a name, "Applicant" for "Respondent" in place): one such
@@ -1396,7 +1603,7 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     folding; 88.1% in round 2), and pairs carrying only formatting noise (reflow, hyphenation,
     ligatures, quotes, markdown, one letter slip) 0 of 2,000 (formerly 1,042).
     These are a model of noise, not a measurement of any vision model; low confidence only gates
-    quotes (PR 4b).
+    quotes (the engine's finding gates).
   - A waiting document whose image the endpoint refuses holds the queue for 3 job runs (about 30
     minutes) before it fails and the next is tried: a refusal cannot tell the image's fault from the
     request's.
@@ -1473,7 +1680,7 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     endpoint answers 4xx.
   - The job runs every 15 minutes and at startup, not when a role changes while serving (a role
     change needs a restart anyway); a failed document stays failed until the operator re-queues
-    it (the SQL above). `lowConfidence` is only a flag until PR 4b's gate acts on it.
+    it (the SQL above). A finding resting only on `lowConfidence` quotes is gated for a lawyer (§ Memo workflow).
   - **Line budget:** PR 3c adds 572 production lines (4,295 → 4,867: 482 as built, then 90 in
     the round-1 fixes) against DESIGN's 310 for it (`docs` 300 + `cmd` 10; the `model` image parts
     landed in PR 2 and contract v1's `api` 40 is PR 8's): **262 over**. Round 1 per file:

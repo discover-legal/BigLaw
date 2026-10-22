@@ -31,18 +31,60 @@ var (
 	uploadTotal    = 15 * time.Minute
 )
 
-// Routes mounts the document file routes on mux: POST /documents/upload (multipart, one part
-// named "file") and GET /documents/{id}/file (the original, with a safe download name). There is
-// no authentication before PR 8; the caller is the single local partner, so the scope is the
-// requested document.
+// Routes mounts the document routes on mux: POST /documents (JSON {name, text, matterNumber}),
+// POST /documents/upload (multipart, one part named "file"), GET /documents (?matter=), GET
+// /documents/{id}, /outline, /sections/{sectionId} (?offset=&limit=), /file (the original, with a
+// safe download name), GET /documents/search (?q=&ids=a,b) and DELETE /documents/{id}. There is no
+// authentication before PR 8; the caller is the single local partner, so the scope is the
+// requested documents.
 func (s *Service) Routes(mux *http.ServeMux, log *slog.Logger) {
-	mux.HandleFunc("POST /documents/upload", func(w http.ResponseWriter, r *http.Request) {
-		if !sameOrigin(r) {
-			writeError(w, log, errCrossOrigin)
+	reply := func(w http.ResponseWriter, code int, v any, err error) {
+		if err != nil {
+			writeError(w, log, err)
 			return
 		}
-		s.upload(w, r, log)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(code)
+		json.NewEncoder(w).Encode(v)
+	}
+	mux.HandleFunc("POST /documents", Guard(log, func(w http.ResponseWriter, r *http.Request) {
+		var in struct{ Name, Text, MatterNumber string }
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, int64(maxText)+1<<20)).Decode(&in); err != nil {
+			writeError(w, log, fmt.Errorf("%w: send JSON {\"name\": …, \"text\": …, \"matterNumber\": …} (text at most %d MiB)", ErrBadInput, maxText>>20))
+			return
+		}
+		d, err := s.IngestText(r.Context(), in.Name, in.Text)
+		if err == nil && in.MatterNumber != "" {
+			d.MatterNumber, err = in.MatterNumber, s.File(r.Context(), d.ID, in.MatterNumber)
+		}
+		reply(w, http.StatusCreated, d, err)
+	}))
+	mux.HandleFunc("GET /documents", func(w http.ResponseWriter, r *http.Request) {
+		ds, err := s.List(r.Context(), r.URL.Query().Get("matter"))
+		reply(w, 200, ds, err)
 	})
+	mux.HandleFunc("GET /documents/{id}", func(w http.ResponseWriter, r *http.Request) {
+		d, err := s.Get(r.Context(), []string{r.PathValue("id")}, r.PathValue("id"))
+		reply(w, 200, d, err)
+	})
+	mux.HandleFunc("GET /documents/{id}/outline", func(w http.ResponseWriter, r *http.Request) {
+		o, err := s.Outline(r.Context(), []string{r.PathValue("id")}, r.PathValue("id"))
+		reply(w, 200, o, err)
+	})
+	mux.HandleFunc("GET /documents/{id}/sections/{sid}", func(w http.ResponseWriter, r *http.Request) {
+		off, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+		lim, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		p, err := s.Section(r.Context(), []string{r.PathValue("id")}, r.PathValue("id"), r.PathValue("sid"), off, lim)
+		reply(w, 200, p, err)
+	})
+	mux.HandleFunc("GET /documents/search", func(w http.ResponseWriter, r *http.Request) {
+		hits, err := s.Search(r.Context(), strings.Split(r.URL.Query().Get("ids"), ","), r.URL.Query().Get("q"), 8, 0)
+		reply(w, 200, append([]Hit{}, hits...), err)
+	})
+	mux.HandleFunc("DELETE /documents/{id}", func(w http.ResponseWriter, r *http.Request) {
+		reply(w, 200, map[string]bool{"deleted": true}, s.Delete(r.Context(), r.PathValue("id")))
+	})
+	mux.HandleFunc("POST /documents/upload", Guard(log, func(w http.ResponseWriter, r *http.Request) { s.upload(w, r, log) }))
 	mux.HandleFunc("GET /documents/{id}/file", func(w http.ResponseWriter, r *http.Request) {
 		id, scope, none := r.PathValue("id"), []string{r.PathValue("id")}, func(string, store.File) error { return nil }
 		if err := s.WriteFile(r.Context(), scope, id, none, io.Discard); err != nil { // verify first: never send corrupt bytes
@@ -183,9 +225,20 @@ func readError(err error, timedOut bool, missing string) error {
 	return err
 }
 
-// sameOrigin refuses a write a browser sends from another site (a page the lawyer visits could
-// otherwise POST uploads to a loopback BigLaw: multipart/form-data needs no CORS preflight).
-// Clients that send neither header (curl, the drivers) pass.
+// Guard refuses (403 cross_origin) a write a browser sends from another site: a page the lawyer
+// visits could otherwise POST to a loopback BigLaw (multipart/form-data and text/plain need no CORS
+// preflight) to file documents, spend the budget or decide a human gate. Every POST route wears it.
+func Guard(log *slog.Logger, h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !sameOrigin(r) {
+			writeError(w, log, errCrossOrigin)
+			return
+		}
+		h(w, r)
+	}
+}
+
+// sameOrigin: clients that send neither header (curl, the drivers) pass.
 func sameOrigin(r *http.Request) bool {
 	if site := r.Header.Get("Sec-Fetch-Site"); site != "" && site != "same-origin" && site != "none" {
 		return false
@@ -194,7 +247,7 @@ func sameOrigin(r *http.Request) bool {
 	return o == "" || o == "http://"+r.Host || o == "https://"+r.Host
 }
 
-var errCrossOrigin = errors.New("docs: cross-origin upload refused: upload from BigLaw's own pages or a non-browser client")
+var errCrossOrigin = errors.New("docs: cross-origin write refused: send it from BigLaw's own pages or a non-browser client")
 
 var errTimeout = fmt.Errorf("docs: the upload was too slow: send at least %d KiB every %s and the whole file within %s",
 	uploadMinBytes>>10, uploadWindow, uploadTotal)

@@ -42,9 +42,11 @@ type Step struct {
 	Grant  Grant           `json:"grant"`
 	Usage  Usage           `json:"usage"`
 	Note   string          `json:"note,omitempty"`
+	Model  string          `json:"model,omitempty"` // the model the step ran on (a lead turn, a subagent)
+	Final  bool            `json:"final,omitempty"` // a Final tool accepted: the run was done here
 }
 
-// Journal records the lead's steps (Postgres in engine, PR 4b). A Record error stops the run.
+// Journal records the lead's steps (Postgres in engine). A Record error stops the run (ErrJournal).
 type Journal interface {
 	Record(ctx context.Context, s Step) error
 }

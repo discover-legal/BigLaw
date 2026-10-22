@@ -42,11 +42,11 @@ func TestConfigDefaults(t *testing.T) {
 	for _, want := range []string{
 		"BIGLAW_ADDR                127.0.0.1:3101  [default]",
 		"BIGLAW_PUBLIC_URL          http://127.0.0.1:3101  [default, read from PR 8]",
-		"BIGLAW_BUDGET_CALLS        150  [default, read from PR 4]",
-		"BIGLAW_BUDGET_USD          5  [default, read from PR 4]",
+		"BIGLAW_BUDGET_CALLS        150  [default]",
+		"BIGLAW_BUDGET_USD          5  [default]",
 		"BIGLAW_LOCAL_WATTS         (unset)\n",
-		"BIGLAW_COLLAPSE_THRESHOLD  0.5  [default, read from PR 4]",
-		"BIGLAW_COLLAPSE_ACTION     strict  [default, read from PR 4]",
+		"BIGLAW_COLLAPSE_THRESHOLD  0.5  [default]",
+		"BIGLAW_COLLAPSE_ACTION     strict  [default]",
 		"BIGLAW_MODEL_KEY           (unset)\n",
 	} {
 		if !strings.Contains(out, want) {
@@ -98,7 +98,7 @@ func TestConfigRejectsBadValues(t *testing.T) {
 		}
 	}
 	// Variables a later PR reads are not validated yet (that PR validates them).
-	if _, err := Load(env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_BUDGET_CALLS", "abc", "BIGLAW_OIDC_ISSUER", "okta")); err != nil {
+	if _, err := Load(env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_AI_RATE", "abc", "BIGLAW_OIDC_ISSUER", "okta")); err != nil {
 		t.Errorf("a variable this build does not read was validated: %v", err)
 	}
 }
@@ -281,7 +281,7 @@ func TestUnknownAndNotYetReadVars(t *testing.T) {
 		t.Fatalf("UnknownVars = %v", got)
 	}
 	got = NotYetRead(env("BIGLAW_ADDR", "x", "BIGLAW_MODEL_KEY", "k", "BIGLAW_LOCAL_WATTS", "9", "BIGLAW_BUDGET_CALLS", "5", "BIGLAW_AI_RATE", "100", "ALLOW_AWS", "1"))
-	if strings.Join(got, ",") != "BIGLAW_BUDGET_CALLS,BIGLAW_AI_RATE" {
+	if strings.Join(got, ",") != "BIGLAW_AI_RATE" {
 		t.Fatalf("NotYetRead = %v", got)
 	}
 }
@@ -451,6 +451,32 @@ func TestRoleIDRefusesQueryCharacters(t *testing.T) {
 	for _, id := range []string{"qwen2.5:14b", "qwen2.5-14b-instruct@q4_k_m", "deepseek/deepseek-r1", "us.anthropic.claude-haiku-4-5-v1:0", "text-embedding-3-small"} {
 		if _, err := Load(env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_MODEL_URL", "http://ollama:11434/v1", "BIGLAW_MODELS", "lead="+id)); err != nil {
 			t.Errorf("%q refused: %v", id, err)
+		}
+	}
+}
+
+// TestConfigEngineVars (moved from PR 1): the budget and grounding-collapse variables join Config,
+// validated: whole calls 1–100000, a plain positive dollar amount (no $0, no hex, sign or
+// exponent), a threshold from 0.01 to 1 (1e-300 refused), strict or warn.
+func TestConfigEngineVars(t *testing.T) {
+	c, err := Load(env("BIGLAW_DATABASE_URL", dsn))
+	if err != nil || c.Engine.BudgetCalls != 150 || c.Engine.BudgetUSD != 5 || c.Engine.CollapseThreshold != 0.5 || c.Engine.CollapseAction != "strict" {
+		t.Fatalf("defaults: %+v, %v", c.Engine, err)
+	}
+	c, err = Load(env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_BUDGET_CALLS", "400", "BIGLAW_BUDGET_USD", "2.50", "BIGLAW_COLLAPSE_THRESHOLD", "0.3", "BIGLAW_COLLAPSE_ACTION", "warn"))
+	if err != nil || c.Engine.BudgetCalls != 400 || c.Engine.BudgetUSD != 2.5 || c.Engine.CollapseThreshold != 0.3 || c.Engine.CollapseAction != "warn" {
+		t.Fatalf("set: %+v, %v", c.Engine, err)
+	}
+	for name, values := range map[string][]string{
+		"BIGLAW_BUDGET_CALLS":       {"0", "-5", "100001", "1.5", "abc", "1e3"},
+		"BIGLAW_BUDGET_USD":         {"0", "0.00", "-1", "0x1p4", "+5", "1e2", "inf", "NaN", "abc", "2000000"},
+		"BIGLAW_COLLAPSE_THRESHOLD": {"0", "1e-300", "0.001", "1.5", "-0.5", "abc"},
+		"BIGLAW_COLLAPSE_ACTION":    {"fail", "STRICT", "off"},
+	} {
+		for _, v := range values {
+			if _, err := Load(env("BIGLAW_DATABASE_URL", dsn, name, v)); err == nil || !strings.Contains(err.Error(), name) {
+				t.Errorf("%s=%q: err = %v, want an error naming it", name, v, err)
+			}
 		}
 	}
 }

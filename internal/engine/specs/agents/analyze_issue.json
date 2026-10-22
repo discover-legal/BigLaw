@@ -1,0 +1,260 @@
+{
+ "name": "analyze_issue",
+ "kind": "subagent",
+ "class": "evidence",
+ "maxTurns": 6,
+ "role": "specialist",
+ "allowed": [
+  "retrieve",
+  "ledger",
+  "numbers"
+ ],
+ "description": "Applies the governing rule to the facts for one plan issue: the rule (from the jurisdiction and practice packs or the record), its application to the verified findings, a conclusion, any new findings with verbatim quotes, and the authorities it relied on, each marked in the record or not. New findings are verified by Go like any other; an authority not in the record is flagged in the deliverable. It returns new finding ids and the rule, application and conclusion as notes. Do not use it to gather raw facts (extract_facts, sweep) or to draft prose for the memo (draft_section).\nExample: {\"issueId\": \"I1\", \"question\": \"Is the claim time-barred?\", \"jurisdiction\": \"US\", \"packs\": [\"us\", \"litigation\"]}",
+ "in": {
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+   "issueId",
+   "question",
+   "jurisdiction",
+   "packs"
+  ],
+  "properties": {
+   "issueId": {
+    "type": "string",
+    "maxLength": 16
+   },
+   "question": {
+    "type": "string",
+    "maxLength": 2000,
+    "minLength": 1
+   },
+   "jurisdiction": {
+    "type": [
+     "string",
+     "null"
+    ],
+    "maxLength": 16
+   },
+   "packs": {
+    "type": [
+     "array",
+     "null"
+    ],
+    "items": {
+     "type": "string",
+     "maxLength": 40
+    },
+    "maxItems": 12
+   }
+  }
+ },
+ "out": {
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+   "rule",
+   "application",
+   "conclusion",
+   "findings",
+   "authorities"
+  ],
+  "properties": {
+   "rule": {
+    "type": "string",
+    "maxLength": 4000
+   },
+   "application": {
+    "type": "string",
+    "maxLength": 8000
+   },
+   "conclusion": {
+    "type": "string",
+    "maxLength": 4000
+   },
+   "findings": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "additionalProperties": false,
+     "required": [
+      "claim",
+      "quotes",
+      "values",
+      "entities",
+      "relations",
+      "confidence"
+     ],
+     "properties": {
+      "claim": {
+       "type": "string",
+       "maxLength": 4000,
+       "minLength": 1
+      },
+      "quotes": {
+       "type": "array",
+       "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+         "documentId",
+         "quote",
+         "locator"
+        ],
+        "properties": {
+         "documentId": {
+          "type": "string",
+          "maxLength": 64
+         },
+         "quote": {
+          "type": "string",
+          "maxLength": 4000,
+          "minLength": 1
+         },
+         "locator": {
+          "type": [
+           "string",
+           "null"
+          ],
+          "maxLength": 200
+         }
+        }
+       },
+       "maxItems": 8
+      },
+      "values": {
+       "type": "array",
+       "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+         "entity",
+         "metric",
+         "value",
+         "unit",
+         "date",
+         "class"
+        ],
+        "properties": {
+         "entity": {
+          "type": "string",
+          "maxLength": 200
+         },
+         "metric": {
+          "type": "string",
+          "maxLength": 200
+         },
+         "value": {
+          "type": "string",
+          "maxLength": 200
+         },
+         "unit": {
+          "type": [
+           "string",
+           "null"
+          ],
+          "maxLength": 40
+         },
+         "date": {
+          "type": [
+           "string",
+           "null"
+          ],
+          "maxLength": 40
+         },
+         "class": {
+          "type": [
+           "string",
+           "null"
+          ],
+          "maxLength": 40
+         }
+        }
+       },
+       "maxItems": 20
+      },
+      "entities": {
+       "type": "array",
+       "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+         "name",
+         "class"
+        ],
+        "properties": {
+         "name": {
+          "type": "string",
+          "maxLength": 200
+         },
+         "class": {
+          "type": [
+           "string",
+           "null"
+          ],
+          "maxLength": 40
+         }
+        }
+       },
+       "maxItems": 20
+      },
+      "relations": {
+       "type": "array",
+       "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+         "subject",
+         "predicate",
+         "object"
+        ],
+        "properties": {
+         "subject": {
+          "type": "string",
+          "maxLength": 200
+         },
+         "predicate": {
+          "type": "string",
+          "maxLength": 80
+         },
+         "object": {
+          "type": "string",
+          "maxLength": 200
+         }
+        }
+       },
+       "maxItems": 20
+      },
+      "confidence": {
+       "type": "number",
+       "minimum": 0,
+       "maximum": 1
+      }
+     }
+    },
+    "maxItems": 20
+   },
+   "authorities": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "additionalProperties": false,
+     "required": [
+      "cite",
+      "inRecord"
+     ],
+     "properties": {
+      "cite": {
+       "type": "string",
+       "maxLength": 400
+      },
+      "inRecord": {
+       "type": "boolean"
+      }
+     }
+    },
+    "maxItems": 40
+   }
+  }
+ }
+}

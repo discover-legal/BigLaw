@@ -46,7 +46,7 @@ func TestHealth(t *testing.T) {
 	}{{nil, 200, "ok"}, {errors.New("dial tcp 10.0.0.5:5432: secret-host"), 503, "database unavailable"}} {
 		var logs bytes.Buffer
 		rec := httptest.NewRecorder()
-		routes(fakeDB{tc.err}, nil, slog.New(slog.NewTextHandler(&logs, nil))).ServeHTTP(rec, httptest.NewRequest("GET", "/health", nil))
+		routes(fakeDB{tc.err}, nil, nil, slog.New(slog.NewTextHandler(&logs, nil))).ServeHTTP(rec, httptest.NewRequest("GET", "/health", nil))
 		var body map[string]string
 		json.Unmarshal(rec.Body.Bytes(), &body)
 		if rec.Code != tc.code || body["status"] != tc.status || body["search"] != "lexical" || strings.Contains(rec.Body.String(), "secret-host") {
@@ -58,7 +58,7 @@ func TestHealth(t *testing.T) {
 	}
 	for _, req := range []*http.Request{httptest.NewRequest("GET", "/", nil), httptest.NewRequest("POST", "/health", nil)} {
 		rec := httptest.NewRecorder()
-		routes(fakeDB{}, nil, discard()).ServeHTTP(rec, req)
+		routes(fakeDB{}, nil, nil, discard()).ServeHTTP(rec, req)
 		if rec.Code == 200 {
 			t.Errorf("%s %s = 200, want an error", req.Method, req.URL.Path)
 		}
@@ -133,7 +133,7 @@ func TestServeStopCancelsIngest(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() { done <- serve(ctx, st, docs.New(st), ln, discard()) }()
+	go func() { done <- serve(ctx, st, docs.New(st), nil, ln, discard()) }()
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
 	fw, _ := mw.CreateFormFile("file", "loop.pdf")
@@ -192,7 +192,7 @@ func TestServeEndToEnd(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() { done <- serve(ctx, st, docs.New(st), ln, discard()) }()
+	go func() { done <- serve(ctx, st, docs.New(st), nil, ln, discard()) }()
 
 	resp, err := http.Get("http://" + ln.Addr().String() + "/health") // ln is already accepting
 	if err != nil {
@@ -501,5 +501,29 @@ func TestServeNeverSendsImagesToTheLead(t *testing.T) {
 	if status != "ready" || text != "Notice of hearing on 3 May 2027." || len(models) != 2 || models[0] != "qwen2.5vl:7b" || models[1] != "qwen2.5vl:7b" ||
 		!strings.Contains(log, "transcription jobs") {
 		t.Errorf("waiting image after a vision role: %s %q, calls %v\n%s", status, text, models, log)
+	}
+}
+
+// TestRefusesRebindingHosts (PR 4b r1 M8): with no authentication before PR 8, a request
+// addressed to a DNS name other than localhost is refused (403 bad_host): a page the lawyer visits
+// could otherwise rebind its own name to 127.0.0.1 and read and write BigLaw as its own origin.
+// IP literals and localhost pass; /health stays open to probes.
+func TestRefusesRebindingHosts(t *testing.T) {
+	for host, refused := range map[string]bool{"attacker.example:3101": true, "attacker.example": true, "127.0.0.1.nip.io:3101": true,
+		"127.0.0.1:3101": false, "localhost:3102": false, "LOCALHOST": false, "[::1]:3101": false, "192.168.1.20:3101": false} {
+		req := httptest.NewRequest("GET", "/documents", nil)
+		req.Host = host
+		rec := httptest.NewRecorder()
+		routes(fakeDB{}, nil, nil, discard()).ServeHTTP(rec, req)
+		if got := rec.Code == 403 && strings.Contains(rec.Body.String(), `"errorType":"bad_host"`); got != refused {
+			t.Errorf("Host %s: %d %s", host, rec.Code, rec.Body.String())
+		}
+	}
+	req := httptest.NewRequest("GET", "/health", nil)
+	req.Host = "attacker.example"
+	rec := httptest.NewRecorder()
+	routes(fakeDB{}, nil, nil, discard()).ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Errorf("/health by name: %d", rec.Code)
 	}
 }

@@ -14,10 +14,12 @@ TOOLCHAIN = $(shell sed -n 's/^toolchain //p' go.mod)
 # demo under /demo/biglaw/ (ui/dist-recorded); `make demo-record` re-records it (needs BIGLAW_TEST_DSN).
 NPM ?= npm
 
-.PHONY: ui demo-bundle demo-record e4-record e4-live build static-check test fmt-check vet mod-check loc compose-check lint vuln ci clean
+.PHONY: eval ui-embed ui demo-bundle demo-record e4-record e4-live build static-check test fmt-check vet mod-check loc compose-check lint vuln ci clean
 
-# A static binary: no cgo, so no libc to match on the target (Pi, distroless).
-build:
+# A static binary: no cgo, so no libc to match on the target (Pi, distroless). It embeds the web
+# UI when one is built (`make ui build`): ui/dist is copied into internal/api/dist first; without
+# it, "/" explains how to build the UI and the API works as before.
+build: ui-embed
 	CGO_ENABLED=0 $(GO) build -trimpath -ldflags="-s -w -X main.version=$(VERSION)" -o biglaw ./cmd/biglaw
 
 static-check: build
@@ -64,6 +66,18 @@ e4-record e4-live:
 ui:
 	cd ui && $(NPM) ci && $(NPM) run build && $(NPM) test
 
+ui-embed:
+	@find internal/api/dist -mindepth 1 ! -name README.md -delete
+	@if [ -f ui/dist/index.html ]; then cp -R ui/dist/. internal/api/dist/ && echo "embedding ui/dist"; \
+	else echo "no ui/dist: building the API without the web UI (make ui first to embed it)"; fi
+
+# Gates E0 and E3 (PLAN § Eval gates): fixture/answer-key integrity, the scorer's unit tests, and
+# the scorer's self-test on synthetic oracle/degraded/empty runs. No backend, no model.
+eval:
+	python3 eval/run.py validate
+	python3 -m unittest discover -s eval/tests
+	python3 eval/run.py selftest
+
 demo-bundle:
 	cd ui && $(NPM) ci && $(NPM) run demo-bundle
 
@@ -88,7 +102,7 @@ lint:
 vuln:
 	GOTOOLCHAIN=$(TOOLCHAIN) $(GO) run $(GOVULNCHECK) ./...
 
-ci: fmt-check vet mod-check build static-check test loc compose-check
+ci: fmt-check vet mod-check build static-check test eval loc compose-check
 
 clean:
 	rm -f biglaw
