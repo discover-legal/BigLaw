@@ -33,13 +33,14 @@ export function createTransport(): Transport {
     documents: (m) => call('GET', m ? `/documents?matter=${enc(m)}` : '/documents'),
     outline: (id) => call('GET', `/documents/${enc(id)}/outline`),
     section: (id, sid, offset = 0) => call('GET', `/documents/${enc(id)}/sections/${enc(sid)}?offset=${offset}`),
+    fileUrl: (id) => `/documents/${enc(id)}/file`,
     search: (q, ids) => call('GET', `/documents/search?q=${enc(q)}&ids=${ids.map(enc).join(',')}`),
     tasks: () => call('GET', '/tasks'),
     task: (id) => call('GET', `/tasks/${enc(id)}`),
     match: () => null,
     submit: (t) => call('POST', '/tasks', t),
     cancel: (id) => call('POST', `/tasks/${enc(id)}/cancel`),
-    decideGate: (id, g, approve) => call('POST', `/tasks/${enc(id)}/gates/${enc(g)}/${approve ? 'approve' : 'reject'}`),
+    decideGate: (id, g, approve, reason) => call('POST', `/tasks/${enc(id)}/gates/${enc(g)}/${approve ? 'approve' : 'reject'}`, approve ? undefined : { reason }),
     cost: (id) => call('GET', `/tasks/${enc(id)}/cost`),
     events(id, on) {
       const es = new EventSource(`/tasks/${enc(id)}/events`);
