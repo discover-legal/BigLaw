@@ -26,7 +26,7 @@ PostgreSQL database. Licensed Apache-2.0 (`LICENSE`, `NOTICE`).
 | `.docx` reader | `internal/docs/ooxml/` | Opens a `.docx`'s text parts only (body, footnotes, endnotes; 128 MiB decompression cap) and reads its visible text in one linear XML pass. The writer, the XML escapers, the part-preserving re-zip and tracked-change parse/apply are planned (PR 3d) |
 | Proof-run fixtures | `eval/tasks/`, `eval/e4/embeddings.json` | The five synthetic proof-run matters (documents + answer keys), copied from `feat/proof-runs-multi-practice`; PR 3 reads them for gate E4, PR 4b adds the driver and scorer. `eval/e4/embeddings.json` is E4's embeddings tape: today the **self-test** tape of a hash embedder, not a real model's (§ Documents, gate E4) |
 | UI | `ui/` (React 19 + Vite + TypeScript strict; runtime deps `react`, `react-dom` only) | The seven screens (§ UI) behind one transport seam, `ui/src/api/transport.ts`: `http.ts` talks to the Go API on the same origin (its routes are **planned**: PR 4 onward, so the live UI has nothing to talk to yet), `recorded.ts` replays a recorded engine in the browser with no network at all |
-| Recorded demo | `ui/src/recorded/recording.json`, `eval/demo/record_test.go` | Three synthetic matters (13 documents) and seven recorded memo tasks (47 findings, 74 citations); documents, outlines, sections, chunks, run-log search hits and every quote's verification computed by v2's `internal/docs`; claims from the answer keys (§ UI, provenance). `TestDemoRecording` fails when the committed recording no longer matches what v2's code computes |
+| Recorded demo | `ui/src/recorded/recording.json`, `eval/demo/record_test.go` | Three synthetic matters (13 documents plus one scanned exhibit, `ui/src/recorded/06-affidavit-of-service-scan.jpg`, drawn by `eval/demo/make_scan.py`) and seven recorded memo tasks (48 findings, 79 citations); documents, outlines, sections, chunks, the scan's transcript (v2's vision path with a scripted reader), run-log and offered search hits and every quote's verification computed by v2's `internal/docs`; claims from the answer keys; sample playbooks, time entries and profiles, and the configuration table read from `cmd/biglaw/config.go` (§ UI, provenance). `TestDemoRecording` fails when the committed recording no longer matches what v2's code computes |
 | Test helper | `internal/store/storetest/` | Gives each DB test its own schema; skips without a DSN, fails if `BIGLAW_REQUIRE_DB` is set |
 | Budgets | `scripts/loc.py` (+ `scripts/test_loc.py`) | Fails CI if a size budget is exceeded (below) |
 | Build/deploy | `Makefile`, `Dockerfile`, `docker-compose.yml`, `render.yaml`, `.env.example` | `make ci` (and the owner-run `make e4-record` / `make e4-live`); `pgvector/pgvector:0.8.6-pg16` + biglaw under Compose; Render blueprint (inert until PR 8, see § Exposure) |
@@ -916,7 +916,8 @@ to BigLaw only through one interface (`ui/src/api/transport.ts`):
 - `recorded.ts` — replays recorded runs in the browser. A build with `VITE_ENGINE=recorded` aliases
   the transport to it, so the bundle contains no HTTP code: `test/offline.test.ts` builds it and
   fails on any `fetch`, `XMLHttpRequest`, `EventSource`, `WebSocket`, `sendBeacon`, worker, preload
-  link or absolute URL (`scripts/offline-check.mjs`; the same check flags the live bundle, proving it bites).
+  link or absolute URL (`scripts/offline-check.mjs`; the same check flags the live bundle, proving it bites). Two exact strings are
+  allowed because they are displayed, never requested: `https://discover.legal/` (the banner's way back) and `http://127.0.0.1:3101` (a default on Settings).
 
 **Screens** (hash routes, so a static bundle works under any base path): **Matters** (matter cards,
 tasks, the new-task wizard), **Task** (run bar with status, step, stop reason, budget, Cancel; the
@@ -926,7 +927,12 @@ severity, each citation with its verification badge: `exact`, `tolerant`, `judge
 highlighted), Deliverable (the memo with `[F-id]` links, Limitations and Evidence Note) and Cost),
 **Documents** (library, outline, section reader with highlight, search), **Playbooks**, **Clients &
 Conflicts**, **Time & Billing**, **Settings**. The last four are read views over PR 6/8/9 routes;
-in the recorded demo only Clients has data (the sample matters). The Task screen's Table and
+in the recorded demo Clients shows the sample matters, Playbooks, Time & Billing and Settings'
+profiles show sample records written for the demo (labelled so on screen), and Settings also lists
+this build's configuration table, read-only. Rejecting the deliverable asks for a reason (sent as
+`{"reason"}` to `POST /tasks/{id}/gates/{gateId}/reject`, as v1's reject did) and closes the gate:
+the task is `rejected` with the decision in `decidedGates`; live (PR 4b) the lead resumes with the
+reason. The Task screen's Table and
 Redline tabs (diligence, contract review) are **planned** with PRs 5 and 6, the Documents version
 timeline with PR 6, sign-in with PR 8.
 
@@ -935,23 +941,39 @@ defense, Altamira/Sorell merger control, Quillon/Fernhill license review), types
 a recorded task, and watches the run log replay (about 12–23 s; Skip to end). A prompt is matched
 to the matter's recorded tasks deterministically (`ui/src/api/match.ts`: the share of its content
 words a recorded task's prompt, title and keywords cover, ties to the earlier task; at least 30%
-or it is **off script**: the UI says no recorded run answers it and offers the nearest). Search runs
-client-side over the recorded chunks (idf-weighted terms, OR, like the server's lexical ranking;
-not its Postgres ranking). Nothing is saved; a reload starts over.
+or it is **off script**: the UI says no recorded run answers it and offers the nearest). Search
+offers four **recorded searches** per matter whose hits are v2's own `Search` results; any other
+query is ranked in the browser by a port of the server's lexical formula (two legs, stemmed and
+exact, `idf × tf/(tf+10)` per term; a plural-dropping stand-in for the English stemmer), labelled as
+such on screen; it puts the server's top hit first on every recorded search (`test/recorded.test.ts`).
+The banner is one line (`Recorded run; not live …`, a `← discover.legal` link to the site root, and
+a "How this demo works" toggle holding the provenance below); the link exists only in the recorded
+bundle (`test/offline.test.ts`). Nothing is saved; a reload starts over.
 
 **Provenance (exact).** No model has run on these matters (v1's proof-run harness says "no
 real-model scores have been recorded yet"; v1's real LAB runs used Harvey's documents, which are not
 in the repo; the family and employment drives' documents and outputs were never committed). So:
 the documents are `eval/tasks/{litigation,competition-regulatory,ip-licensing}` (synthetic,
-fictional); `eval/demo/record_test.go` ingests them with `docs.IngestText` and records each
-document's outline (`Outline`), section text (`Section`), chunks (`Parse` + `Chunkify`), the
-run-log search hits (`Search`, lexical) and every quote's verification (`VerifyQuote`, no judge) —
-all computed by v2 code. The plan, the claims and the memo text are the matters' answer keys
-(reference answers written by hand for scoring): each step is marked `computed` or `scripted`
-in the run log, and the banner and memo Limitations say so. Every recorded quote verified
-`exact` (74 citations across 47 findings); none is `tolerant`, `@transcript` or excluded, so those badges appear only
-in the badge tests. No committee step is recorded (critics are model calls). Costs are $0 because
-no call was made; the Cost tab quotes v1's best Haiku LAB run ($11.52, 8.3 M tokens) for scale.
+fictional), plus one scanned exhibit drawn for the demo (an affidavit of service in the Greystone
+matter, consistent with its docket; `eval/demo/make_scan.py` draws the JPEG from
+`eval/demo/testdata/06-affidavit-of-service-scan.txt`). `eval/demo/record_test.go` ingests the text
+documents with `docs.IngestText` and the scan with `docs.Ingest` through v2's vision path, whose
+reader is a `model.Fake` (named `model.Fake (scripted)` in the transcript provenance) returning that
+same text for both readings, so the transcript is what the image shows and no model read it. It
+records each document's outline (`Outline`), section text (`Section`), chunks (`Parse` +
+`Chunkify`), the run-log and offered search hits (`Search`, lexical) and every quote's verification
+(`VerifyQuote`, no judge) — all computed by v2 code. The plan, the claims and the memo text are the
+matters' answer keys (reference answers written by hand for scoring): each step is marked
+`computed` or `scripted` in the run log, and the banner and memo Limitations say so. To show the
+whole ladder, a few quotes and one finding were written for the demo (`demoQuotes`, `demoFacts`)
+and verified like the rest: of 79 citations across 48 findings, 74 are `exact`, 2 `tolerant`
+(curly quotes typed over straight ones), 1 `exact@transcript` and 1 `tolerant@transcript` (from
+the scan, capped at 0.85), and 1 is excluded: finding F5 of the deadlines task misquotes the rule's
+figure ("20 days"; the excerpt says 21), fails `VerifyQuote`, is quarantined, left out of the memo
+and named in its Evidence Note. The memo's Limitations name each of these. No judge or ensemble rung
+ran (they are model calls), and no committee step is recorded. Playbooks, time entries and profiles
+are sample records (fictional people). Costs are $0 because no call was made; the Cost tab quotes
+v1's best Haiku LAB run ($11.52, 8.3 M tokens) for scale.
 
 ```bash
 make ui            # cd ui && npm ci && npm run build && npm test  (CI's ui job)
@@ -960,8 +982,8 @@ make demo-bundle   # ui/dist-recorded: the static demo for https://discover.lega
 make demo-record   # re-record ui/src/recorded/recording.json (needs BIGLAW_TEST_DSN, Postgres + pgvector)
 ```
 
-The demo bundle is three files (`index.html`, one JS and one CSS asset; about 550 KB, 116 KB
-gzipped) and needs no server logic: copy `ui/dist-recorded/` to the site's `/demo/biglaw/`. A
+The demo bundle is four files (`index.html`, one JS and one CSS asset, and the scan; about 800 KB;
+the JS is 640 KB, 133 KB gzipped) and needs no server logic: copy `ui/dist-recorded/` to the site's `/demo/biglaw/`. A
 build without `UI_BASE` uses relative asset paths, so it also works from any directory.
 
 ## Test it
@@ -1099,7 +1121,7 @@ transcribe, never text).
 | Direct Go dependencies | 3 | 2 (`github.com/lib/pq`, `github.com/ledongthuc/pdf`) |
 | Runtime environment variables | 20 | 18 |
 | UI runtime dependencies | 2 | 2 (`react`, `react-dom`) |
-| UI source lines (`ui/src` `.ts`/`.tsx`/`.css`; tests, config and `recording.json` not counted) | 2,400 | 1,275 |
+| UI source lines (`ui/src` `.ts`/`.tsx`/`.css`; tests, config and `recording.json` not counted) | 2,400 | 1,902 |
 | Packages without a `_test.go` | 0 | 0 |
 | Lines in any one source file (`.go`, `.py`, `.sql`, `.sh`, `.js`, `.ts`, `.css`; tests included) | 2,000 | 968 (`internal/docs/vision_safety_test.go`) |
 
@@ -1119,8 +1141,10 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
   PRs 6/8/9 (playbooks, clients, time, profiles); only the recorded demo is usable. The binary
   does not serve the UI yet: the `//go:embed` of `ui/dist` (`TestEmbeddedUIServesIndex`,
   `TestBuildWithoutUIServesNotice`) lands with `internal/api` in PR 4b, inside its 30-line budget.
-- The recorded demo replays answer-key claims, not a model's work; its badges are all `exact`; its
-  search is a client-side lexical ranking, not the server's; it has no reject branch at the gate.
+- The recorded demo replays answer-key claims, not a model's work; its `@transcript` badges come
+  from a scripted reader, not a vision model; it has no `judge`/`ensemble` badges (model calls); a
+  query other than the offered searches is ranked in the browser, approximately; a rejected
+  deliverable ends the replay (there is no revised run).
 - Nothing user-facing exists yet beyond `/health` and the two document file routes; every
   workflow, the rest of the REST API, auth and the UI are planned. The exposure rule above is the
   only protection until PR 8: anyone who can reach the port can upload and, knowing a document id,
