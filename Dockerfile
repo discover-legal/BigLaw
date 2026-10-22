@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # BigLaw 2: one static binary. Postgres runs separately (docker-compose.yml).
 # The Go version matches go.mod's toolchain line and CI (TestGoVersionPinnedEverywhere).
-FROM golang:1.26.9-alpine AS build
+FROM golang:1.26.10-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download && go mod verify

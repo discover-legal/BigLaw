@@ -124,7 +124,7 @@ not yet judged (self-test tape).
   `shown` in `cmd/biglaw/config.go` (DSNs via `store.DescribeDSN`), never raw.
 - Until PR 8 there is no auth: only Compose (loopback-published) may pass `--allow-no-auth`, and
   every Compose port must name a loopback IP (`TestDeployFilesFollowExposureRule`).
-- One Go version (1.26.9): go.mod's `go`/`toolchain` lines, the Dockerfile `FROM`, CI's
+- One Go version (1.26.10): go.mod's `go`/`toolchain` lines, the Dockerfile `FROM`, CI's
   `go-version` and the README move together (`TestGoVersionPinnedEverywhere`).
 
 ## Gates

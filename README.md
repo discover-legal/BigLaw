@@ -1062,7 +1062,7 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
   operator adds after checkout is outside the repository; publishing beyond loopback there is the
   operator's own act.
 - `govulncheck` runs only in CI: the build sandbox cannot reach `vuln.go.dev`.
-- GitHub Actions and the build images are pinned to tags (`@v4`, `golang:1.26.9-alpine`), not to
+- GitHub Actions and the build images are pinned to tags (`@v4`, `golang:1.26.10-alpine`), not to
   SHAs/digests, so an upstream retag changes what CI runs. CI's Postgres service images are pinned
   by tag and digest (`pgvector/pgvector:0.8.6-pg14@sha256:fb27…`, `…-pg16@sha256:ccc6…`, the
   registry's index digests on 2026-10-18); Compose's is pinned by tag only.
