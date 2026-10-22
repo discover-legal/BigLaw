@@ -96,7 +96,7 @@ func Handler(d *docs.Service, e *engine.Engine, ui fs.FS, log *slog.Logger) *htt
 		}
 		reply(w, 200, out, err)
 	})
-	mux.HandleFunc("POST /tasks", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /tasks", docs.Guard(log, func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
 		if err == nil {
 			if err = taskIn.Validate(body); err != nil {
@@ -120,7 +120,7 @@ func Handler(d *docs.Service, e *engine.Engine, ui fs.FS, log *slog.Logger) *htt
 			v, err = e.Get(r.Context(), t.ID)
 		}
 		reply(w, http.StatusCreated, v, err)
-	})
+	}))
 	mux.HandleFunc("GET /tasks", func(w http.ResponseWriter, r *http.Request) {
 		ts, err := e.List(r.Context())
 		reply(w, 200, ts, err)
@@ -150,17 +150,17 @@ func Handler(d *docs.Service, e *engine.Engine, ui fs.FS, log *slog.Logger) *htt
 		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 		io.WriteString(w, *v.Output)
 	})
-	mux.HandleFunc("POST /tasks/{id}/cancel", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /tasks/{id}/cancel", docs.Guard(log, func(w http.ResponseWriter, r *http.Request) {
 		v, err := e.Cancel(r.Context(), r.PathValue("id"))
 		reply(w, 200, v, err)
-	})
+	}))
 	for _, op := range []string{"approve", "reject"} {
-		mux.HandleFunc("POST /tasks/{id}/gates/{gate}/"+op, func(w http.ResponseWriter, r *http.Request) {
+		mux.HandleFunc("POST /tasks/{id}/gates/{gate}/"+op, docs.Guard(log, func(w http.ResponseWriter, r *http.Request) {
 			var in struct{ Reason string }
 			_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&in) // approve has no body
 			v, err := e.Decide(r.Context(), r.PathValue("id"), r.PathValue("gate"), op == "approve", in.Reason)
 			reply(w, 200, v, err)
-		})
+		}))
 	}
 	mux.HandleFunc("GET /tasks/{id}/events", func(w http.ResponseWriter, r *http.Request) { events(w, r, e, reply) })
 	mux.Handle("GET /", uiHandler(cmp.Or[fs.FS](ui, mustSub(dist, "dist"))))
@@ -233,6 +233,8 @@ const noUI = `<!doctype html><meta charset="utf-8"><title>BigLaw</title><body st
 func uiHandler(ui fs.FS) http.Handler {
 	files := http.FileServerFS(ui)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Frame-Options", "DENY") // no framing: a gate's Approve cannot be clickjacked
+		w.Header().Set("Content-Security-Policy", "frame-ancestors 'none'")
 		if _, err := fs.Stat(ui, "index.html"); errors.Is(err, fs.ErrNotExist) {
 			if r.URL.Path != "/" {
 				http.NotFound(w, r)

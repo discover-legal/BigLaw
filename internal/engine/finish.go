@@ -91,7 +91,7 @@ func (f finish) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 	}
 	var flagged []string
 	if f.r.forced != "" {
-		flagged = append(rep.Lint, rep.OpenPreconditions...)
+		flagged = rep.OpenPreconditions // every lint line is one of them
 	}
 	d, err := f.e.render(ctx, f.r.t, rep.limits, meta, flagged)
 	if err == nil {

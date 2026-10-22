@@ -123,7 +123,7 @@ func (e *Engine) view(ctx context.Context, t Task) (TaskView, error) {
 	if t.Error != "" {
 		v.Error = &t.Error
 	}
-	steps, err := e.Steps(ctx, t.ID, 0)
+	steps, err := e.steps(ctx, t.ID, 0, 0)
 	issues, ierr := load[Issue](ctx, e, t.ID, kIssue)
 	fs, ferr := load[Finding](ctx, e, t.ID, kFinding)
 	gs, gerr := load[Gate](ctx, e, t.ID, kGate)
@@ -175,8 +175,15 @@ func (j jsonScan) Scan(src any) error {
 
 // Steps pages a task's step log after step after.
 func (e *Engine) Steps(ctx context.Context, id string, after int) ([]StepView, error) {
-	q, err := e.db.QueryContext(ctx, `SELECT step, kind, tool, status, coalesce(input, 'null'), coalesce(output, 'null'), usage, model, note FROM task_steps
-		WHERE task_id::text = $1 AND step > $2 ORDER BY step LIMIT 1000`, id, after)
+	return e.steps(ctx, id, after, 1000)
+}
+
+// steps reads up to limit steps after after; limit 0 reads every step, without inputs and outputs
+// (the run's budget and the cost ledger count them all).
+func (e *Engine) steps(ctx context.Context, id string, after, limit int) ([]StepView, error) {
+	q, err := e.db.QueryContext(ctx, `SELECT step, kind, tool, status, CASE WHEN $3 = 0 THEN 'null' ELSE coalesce(input, 'null') END,
+		CASE WHEN $3 = 0 THEN 'null' ELSE coalesce(output, 'null') END, usage, model, note FROM task_steps
+		WHERE task_id::text = $1 AND step > $2 ORDER BY step LIMIT nullif($3, 0)`, id, after, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -267,7 +274,7 @@ func (e *Engine) Cost(ctx context.Context, id string) (Cost, error) {
 	if err != nil {
 		return Cost{}, err
 	}
-	steps, err := e.Steps(ctx, id, 0)
+	steps, err := e.steps(ctx, id, 0, 0)
 	if err != nil {
 		return Cost{}, err
 	}

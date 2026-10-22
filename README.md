@@ -248,6 +248,16 @@ that way:
 - **Render** is public by nature, so `render.yaml` is inert until PR 8: the service fails its
   start on purpose.
 
+Two browser guards hold until then, because a page the lawyer visits can reach a loopback port.
+Every `POST` (documents, tasks, cancel, gate decisions) from another site is refused 403
+`cross_origin` (`Origin` other than the request's own host, or `Sec-Fetch-Site` other than
+`same-origin`/`none`; `text/plain` and `multipart/form-data` need no CORS preflight), so no site
+can spend the budget or decide a human gate (`TestWritesRefuseCrossOrigin`). Every request but
+`GET /health` addressed to a DNS name other than `localhost` is refused 403 `bad_host` (DNS
+rebinding would otherwise make another site BigLaw's own origin): address BigLaw by IP or
+`localhost` (`TestRefusesRebindingHosts`). The UI cannot be framed (`X-Frame-Options: DENY`,
+`frame-ancestors 'none'`: `TestUIRefusesFraming`).
+
 ## Run it
 
 ```bash
@@ -892,8 +902,9 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
   outside quotes only, process language and orphan fragments stripped, repeated blocks dropped,
   external authorities (cases, statutes the record does not contain) marked inline and listed for
   verification (G5), one-line Sources (a transcript citation badged "machine transcription (model)"
-  and linked to the original, G11), Limitations, an Evidence Note (verified vs quarantined;
-  transcript-only and low-confidence counts) and one meta call's note to the reviewing lawyer.
+  and linked to the original, G11), Limitations, an Evidence Note (verified vs quarantined,
+  and verified findings a lawyer rejected at a gate; transcript-only and low-confidence counts; a
+  grounding alert raised during the run) and one meta call's note to the reviewing lawyer.
 - **Gates** (G7): every deliverable opens a gate (`G-deliverable-N`); a finding resting only on
   low-confidence transcript pages gets its own (`G-<fid>`). The run stops `awaiting_gate`; approving
   the deliverable completes the task; rejecting it (a reason is required) puts the reason in the
@@ -911,7 +922,11 @@ ledger rows and bandit statistics it wrote, in one transaction. A process claims
 lease (30 s, renewed every 10 s; `FOR UPDATE SKIP LOCKED`) and runs at most 4 at once; a stale
 lease (a crashed process) is taken over. On resume the committed steps are replayed from the log
 (their outputs reused, no model call repeated) and a step that was in flight is charged at its
-grant (`lost`, shown in the cost ledger) and issued again. A run stops `finished` (gate open),
+grant (`lost`, shown in the cost ledger) and issued again; a process that is stopped (SIGTERM, a
+deploy) first settles an in-flight tool step's grant to what the tool spent, its aborted model
+call at its worst case, so the resume is charged that rather than the tool's whole grant (every
+free dollar of the task; `TestResumeAfterStopMidToolChargesWhatItSpent`). A task whose document
+was deleted after submission fails (`bad_request`) instead of being claimed again forever. A run stops `finished` (gate open),
 `budget_exhausted` or `max_steps` (`finish` forced from the reserve, open findings disclosed),
 `awaiting_gate`, `cancelled` or `failed`. Tool-bandit statistics persist in `tool_stats`.
 
@@ -943,7 +958,8 @@ GET    /                              the web UI (embedded by `make ui build`), 
 
 Model failures map to `model_not_configured` (503), `model_rate_limited` (503), `model_timeout`
 (504), `no_content` (422), `model_unavailable` (502), a cancelled request to 499; a grounding
-collapse is 422 `grounding_collapse`; an unknown task 404, a gate that is not open 409.
+collapse is 422 `grounding_collapse`; an unknown task 404, a gate that is not open 409; a
+cross-site write 403 `cross_origin`, a request by DNS name 403 `bad_host` (§ Exposure).
 
 **Run it against a model** (owner; no key exists in the build environment):
 
@@ -1281,7 +1297,7 @@ and its test failed (65 deliberate breaks, all caught).
 
 | Budget | Ceiling | Today |
 |---|---:|---:|
-| Go production lines (physical lines, non-`_test.go`, test-support packages included) | 17,000 | 11,320 |
+| Go production lines (physical lines, non-`_test.go`, test-support packages included) | 17,000 | 11,394 |
 | Packages under `internal/`, test-support packages excluded | 12 | 8 (`agent`, `analysis`, `api`, `docs`, `docs/ooxml`, `engine`, `model`, `store`; `store/storetest` is test support) |
 | Direct Go dependencies | 3 | 2 (`github.com/lib/pq`, `github.com/ledongthuc/pdf`) |
 | Runtime environment variables | 20 | 18 |
@@ -1290,7 +1306,7 @@ and its test failed (65 deliberate breaks, all caught).
 | Packages without a `_test.go` | 0 | 0 |
 | Lines in any one source file (`.go`, `.py`, `.sql`, `.sh`, `.js`, `.ts`, `.css`; tests included) | 2,000 | 968 (`internal/docs/vision_safety_test.go`) |
 
-The line ceiling is 17,000 (owner decisions: 14,000, then 14,250, then 14,500 during PR 2's review, then 15,000 at PR 3a's, with pgvector, then 15,500 at PR 3a's round 3, declared final, then 15,600 at PR 3c's round 1, decision 11, then 15,650 at PR 3c's round 4 to read long-legend scans, decision 12, then 16,100 at PR 4a, decision 14, then 17,000 at PR 4b, decision 15). The plan totalled 15,581–15,611 after PR 3c (round 7); PR 4a measured 2,557 lines against the 2,100 its components carry, putting the plan at 16,038–16,068. **Owner decision 14 (2026-10-22): keep PR 4a as built and raise the ceiling to 16,100**, which leaves room for PR 3e (about 30–40 lines); the next breach goes back to the owner. PR 4a's committee round 1 fixes added 23 (7,476 → 7,499): plan **16,061–16,091**, headroom 9–39 for PR 3e (round 2 added 3: 7,502). **PR 4b measured 3,818 lines (7,502 → 11,320) against the about 3,060 its components carry** (engine memo part 2,340, api 660, documents routes 60), so the plan is **16,822–16,852**, over the then 16,100 ceiling by 722–752. **Owner decision 15 (2026-10-22): keep PR 4b as built and raise the ceiling to 17,000** (headroom 148–178 on the plan); the next breach goes to the owner. A **test-support package** is one
+The line ceiling is 17,000 (owner decisions: 14,000, then 14,250, then 14,500 during PR 2's review, then 15,000 at PR 3a's, with pgvector, then 15,500 at PR 3a's round 3, declared final, then 15,600 at PR 3c's round 1, decision 11, then 15,650 at PR 3c's round 4 to read long-legend scans, decision 12, then 16,100 at PR 4a, decision 14, then 17,000 at PR 4b, decision 15). The plan totalled 15,581–15,611 after PR 3c (round 7); PR 4a measured 2,557 lines against the 2,100 its components carry, putting the plan at 16,038–16,068. **Owner decision 14 (2026-10-22): keep PR 4a as built and raise the ceiling to 16,100**, which leaves room for PR 3e (about 30–40 lines); the next breach goes back to the owner. PR 4a's committee round 1 fixes added 23 (7,476 → 7,499): plan **16,061–16,091**, headroom 9–39 for PR 3e (round 2 added 3: 7,502). **PR 4b measured 3,818 lines (7,502 → 11,320) against the about 3,060 its components carry** (engine memo part 2,340, api 660, documents routes 60), so the plan is **16,822–16,852**, over the then 16,100 ceiling by 722–752. **Owner decision 15 (2026-10-22): keep PR 4b as built and raise the ceiling to 17,000** (headroom 148–178 on the plan); the next breach goes to the owner. PR 4b's committee round 1 fixes added 74 (11,320 → 11,394): plan **16,896–16,926**, headroom 74–104. A **test-support package** is one
 whose directory name ends in `test` and that no production file outside it imports, such as
 `storetest`. Under the coordinator's ruling it is left out of the package count, but its lines
 count toward the line ceiling like any other non-`_test.go` file. A `*test` package that
@@ -1314,6 +1330,15 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     words: a wrong party or a wrong verb with correct figures passes it.
   - The SSE stream polls the database every 500 ms. Cancel stops a run at once in its own process
     and at the next heartbeat (up to 10 s) in another; the call in flight is charged.
+  - A hard crash (kill -9, out of memory, power loss) during a tool call cannot settle its grant:
+    the resume charges the tool's whole grant, which can be every free dollar of the task, so the
+    resumed run may finish from its reserve (`budget_exhausted`, disclosed). A graceful stop
+    charges what the tool spent.
+  - A forced finish (budget or max steps) delivers a draft its lint refused, marked "Delivered with
+    an unresolved check"; a sentence citing a finding that is not usable (rejected at its gate or
+    quarantined) is removed and counted in Limitations, the rest stands as drafted.
+  - Until PR 8, BigLaw answers only requests addressed by IP or `localhost` (§ Exposure): a LAN or
+    proxy hostname gets 403 `bad_host`.
   - Tool-bandit statistics are per signature across all matters; a run's practice is not yet part of
     its signature (empty), so memo runs in one jurisdiction with the same lead model and document-count band share
     one bandit row per tool.
@@ -1326,6 +1351,7 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     (engine memo part 2,340, api 660, the documents routes 60): `engine` 3,406, `api` 248, the rest
     in `agent` (resume), `docs` (routes), `cmd` (wiring). The plan after 4b (16,822–16,852) broke the
     16,100 ceiling; owner decision 15 raised it to 17,000 (§ Budgets); the next breach goes to the owner.
+    Round 1's fixes added 74 (11,394; plan 16,896–16,926).
 - The recorded demo replays answer-key claims, not a model's work; its `@transcript` badges come
   from a scripted reader, not a vision model; it has no `judge`/`ensemble` badges (model calls); a
   query other than the offered searches is ranked in the browser, approximately; a rejected

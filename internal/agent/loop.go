@@ -275,6 +275,9 @@ func (rt *Runtime) ChatWithin(ctx context.Context, req model.Request, b *Budget)
 	defer hold.Close()
 	resp, err := rt.Chat.Chat(ctx, req)
 	u := ModelUsage(err, resp)
+	if errors.Is(err, context.Canceled) && u.Calls == 0 { // an aborted call may still be billed: its worst case
+		u = Usage{Calls: 1, USD: hold.Value().USD}
+	}
 	hold.Charge(u)
 	return resp, u, err
 }
@@ -318,6 +321,10 @@ func (rt *Runtime) Invoke(ctx context.Context, a Agent, c Call, name string, inp
 				reward = *cmp.Or(res.Reward, new(1.0))
 			}
 			_ = rt.Bandit.Record(ctx, Arm{name, res.Model}, reward, err != nil, res.Usage)
+		}
+		if step > 0 && errors.Is(err, context.Canceled) && st.Grant != (Grant{}) { // a stopped process: what the tool spent, so a resume
+			st.Grant = Grant{res.Usage.Calls, res.Usage.USD} // charges that, not its whole grant (a hard crash leaves the grant)
+			_ = rt.record(context.WithoutCancel(ctx), st)
 		}
 		if step > 0 && !errors.Is(err, context.Canceled) {
 			st.Status, st.Output, st.Usage, st.Model, st.Final = "committed", res.Output, res.Usage, res.Model, res.Final && err == nil

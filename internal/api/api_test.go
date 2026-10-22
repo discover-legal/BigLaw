@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -307,5 +308,79 @@ func TestBuildWithoutUIServesNotice(t *testing.T) {
 	uiHandler(mustSub(dist, "dist")).ServeHTTP(rec, httptest.NewRequest("GET", "/assets/x.js", nil))
 	if rec.Code != 404 {
 		t.Fatalf("missing asset: %d", rec.Code)
+	}
+}
+
+// TestWritesRefuseCrossOrigin (PR 4b r1 H1): a page the lawyer visits cannot spend the budget
+// (POST /tasks), decide a human gate (G7), cancel a task or file a document through a loopback
+// BigLaw: a write a browser sends from another site is 403 cross_origin and changes nothing; the
+// UI (same origin) and non-browser clients (no Origin, no Sec-Fetch-Site) pass.
+func TestWritesRefuseCrossOrigin(t *testing.T) {
+	t.Parallel()
+	s, ids := newServer(t, memo, roles, doc1)
+	send := func(method, path string, body any, h ...string) (int, string) {
+		b, _ := json.Marshal(body)
+		req, _ := http.NewRequest(method, s.URL+path, bytes.NewReader(b))
+		req.Header.Set("Content-Type", "text/plain") // a "simple" request: no CORS preflight
+		for i := 0; i < len(h); i += 2 {
+			req.Header.Set(h[i], h[i+1])
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		out, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(out)
+	}
+	hostile := [][]string{{"Origin", "https://evil.example"}, {"Origin", "null"}, {"Sec-Fetch-Site", "cross-site"}, {"Sec-Fetch-Site", "same-site"}}
+	task := m{"description": "x", "workflowType": "memo", "documentIds": ids}
+	for _, h := range hostile {
+		for _, w := range []struct {
+			path string
+			body any
+		}{{"/tasks", task}, {"/documents", m{"name": "planted.md", "text": "Planted.", "matterNumber": "M-1"}}} {
+			if code, body := send("POST", w.path, w.body, h...); code != 403 || !strings.Contains(body, `"errorType":"cross_origin"`) {
+				t.Errorf("%v POST %s: %d %s", h, w.path, code, body)
+			}
+		}
+	}
+	if _, body := s.do("GET", "/tasks", nil); strings.TrimSpace(body) != "[]" {
+		t.Fatalf("a cross-site POST /tasks created a task: %s", body)
+	}
+	if _, body := s.do("GET", "/documents", nil); strings.Contains(body, "planted") {
+		t.Fatalf("a cross-site POST /documents filed a document: %s", body)
+	}
+	code, body := send("POST", "/tasks", task, "Origin", s.URL, "Sec-Fetch-Site", "same-origin")
+	var v engine.TaskView
+	if json.Unmarshal([]byte(body), &v); code != 201 {
+		t.Fatalf("same-origin submit: %d %s", code, body)
+	}
+	v = s.waitFor(v.ID, func(v engine.TaskView) bool { return v.Status == "awaiting_gate" })
+	gate := "/tasks/" + v.ID + "/gates/" + v.PendingGates[0].GateID
+	for _, h := range hostile {
+		for _, p := range []string{gate + "/approve", gate + "/reject", "/tasks/" + v.ID + "/cancel"} {
+			if code, body := send("POST", p, m{"reason": "forged"}, h...); code != 403 || !strings.Contains(body, `"errorType":"cross_origin"`) {
+				t.Errorf("%v POST %s: %d %s", h, p, code, body)
+			}
+		}
+	}
+	if v = s.waitFor(v.ID, func(engine.TaskView) bool { return true }); v.Status != "awaiting_gate" || len(v.DecidedGates) != 0 {
+		t.Fatalf("a cross-site request changed the task: %s %+v", v.Status, v.DecidedGates)
+	}
+	if code, body := send("POST", gate+"/approve", nil); code != 200 || !strings.Contains(body, `"status":"complete"`) {
+		t.Fatalf("a non-browser approve: %d %s", code, body)
+	}
+}
+
+// TestUIRefusesFraming (PR 4b r1 M7): another site cannot frame the UI and trick the lawyer into
+// clicking Approve on a gate (clickjacking): every UI response forbids framing.
+func TestUIRefusesFraming(t *testing.T) {
+	for _, ui := range []fs.FS{fstest.MapFS{"index.html": {Data: []byte("<!doctype html><title>BigLaw UI</title>")}}, fstest.MapFS{}} {
+		rec := httptest.NewRecorder()
+		uiHandler(ui).ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
+		if rec.Header().Get("X-Frame-Options") != "DENY" || rec.Header().Get("Content-Security-Policy") != "frame-ancestors 'none'" {
+			t.Errorf("headers %v", rec.Header())
+		}
 	}
 }

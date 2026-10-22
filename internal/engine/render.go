@@ -118,13 +118,14 @@ func (e *Engine) render(ctx context.Context, t Task, limits []string, meta strin
 	var b strings.Builder
 	title, _, _ := strings.Cut(strings.TrimSpace(t.Description), "\n")
 	fmt.Fprintf(&b, "# %s\n", truncate(title, 160))
-	cited := []string{}
+	cited, cut := []string{}, 0
 	for _, is := range issues {
 		k := slices.IndexFunc(secs, func(s Section) bool { return s.IssueID == is.ID })
 		if k < 0 {
 			continue
 		}
-		body := polishSection(is.Question, substituteOutsideQuotes(secs[k].Markdown, secs[k].Handles))
+		body, n := dropUnusable(polishSection(is.Question, substituteOutsideQuotes(secs[k].Markdown, secs[k].Handles)), use)
+		cut += n
 		fmt.Fprintf(&b, "\n## %s\n\n%s\n", is.Question, body)
 		for _, m := range fidRe.FindAllStringSubmatch(body, -1) {
 			if !slices.Contains(cited, m[1]) {
@@ -143,6 +144,10 @@ func (e *Engine) render(ctx context.Context, t Task, limits []string, meta strin
 	body, external := flagExternalAuthorities(dedupeDocBlocks(b.String()), corpus.String())
 	for _, f := range flagged {
 		limits = append(limits, "Delivered with an unresolved check: "+f)
+	}
+	if cut > 0 {
+		limits = append(limits, fmt.Sprintf("%d sentence%s citing a finding that is not usable (rejected at its gate or quarantined) %s removed from the memo.", cut,
+			map[bool]string{true: "", false: "s"}[cut == 1], map[bool]string{true: "was", false: "were"}[cut == 1]))
 	}
 	b.Reset()
 	b.WriteString(body)
@@ -177,7 +182,14 @@ func (e *Engine) render(ctx context.Context, t Task, limits []string, meta strin
 	}
 	limits = append(limits, "External authorities (cases, statutes) are flagged, not verified: BigLaw has no live citator.")
 	b.WriteString("\n## Limitations\n\n- " + strings.Join(limits, "\n- ") + "\n")
-	fmt.Fprintf(&b, "\n## Evidence Note\n\n%d findings were verified against the matter's documents and %d were quarantined because their quotes did not verify; quarantined findings were kept out of this memo.", len(use), len(all)-len(use))
+	verified := 0
+	for _, f := range all {
+		verified += btoi(f.Verified)
+	}
+	fmt.Fprintf(&b, "\n## Evidence Note\n\n%d findings were verified against the matter's documents and %d were quarantined because their quotes did not verify; quarantined findings were kept out of this memo.", verified, len(all)-verified)
+	if r := verified - len(use); r > 0 {
+		fmt.Fprintf(&b, " %d verified finding%s rejected by the lawyer at a gate %s kept out of it too.", r, map[bool]string{true: "", false: "s"}[r == 1], map[bool]string{true: "is", false: "are"}[r == 1])
+	}
 	if transcriptOnly > 0 || lowOnly > 0 {
 		fmt.Fprintf(&b, " %d findings rest only on machine transcriptions of images, %d of them on low-confidence pages (each gated for a lawyer).", transcriptOnly, lowOnly)
 	}
@@ -188,6 +200,25 @@ func (e *Engine) render(ctx context.Context, t Task, limits []string, meta strin
 		b.WriteString("\n\n## Note to the reviewing lawyer\n\n" + meta)
 	}
 	return deliverable{Markdown: b.String() + "\n", Limitations: limits}, nil
+}
+
+// dropUnusable removes the sentences that cite a finding that is not usable (rejected at its
+// gate, or quarantined): lint refuses such a draft, so only a forced finish renders one.
+func dropUnusable(md string, use []Finding) (string, int) {
+	bad := func(s string) bool {
+		return slices.ContainsFunc(fidRe.FindAllStringSubmatch(s, -1), func(m []string) bool {
+			return !slices.ContainsFunc(use, func(f Finding) bool { return f.FID == m[1] })
+		})
+	}
+	lines, n := strings.Split(md, "\n"), 0
+	for i, ln := range lines {
+		if bad(ln) {
+			kept := slices.DeleteFunc(splitSentences(ln), bad)
+			n += len(splitSentences(ln)) - len(kept)
+			lines[i] = strings.Join(kept, " ")
+		}
+	}
+	return strings.Join(lines, "\n"), n
 }
 
 func allCitations(f Finding, ok func(Citation) bool) bool {

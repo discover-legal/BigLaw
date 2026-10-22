@@ -367,3 +367,98 @@ func TestCancelStopsRun(t *testing.T) {
 		t.Fatalf("queued: %v %s", err, stop(v))
 	}
 }
+
+// subKiller stops the process at a subagent's first model call (the tool step is in flight).
+type subKiller struct {
+	*model.Fake
+	agent string
+	kill  func()
+}
+
+func (k *subKiller) Chat(ctx context.Context, req model.Request) (*model.Response, error) {
+	if req.Agent == k.agent && k.kill != nil {
+		k.kill()
+		return nil, context.Canceled
+	}
+	return k.Fake.Chat(ctx, req)
+}
+
+// TestResumeAfterStopMidToolChargesWhatItSpent (PR 4b r1 H2): a process stopped (SIGTERM, a
+// deploy) while a subagent tool is in flight records what the tool spent, its aborted call at
+// its worst-case bound, so the resumed run is charged that, not the tool's whole grant (every
+// free dollar of the task), and goes on to finish instead of finishing from its reserve.
+func TestResumeAfterStopMidToolChargesWhatItSpent(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	prices, err := model.LoadPrices(`{"lead-m": {"in": 1, "out": 5}, "spec-m": {"in": 1, "out": 5}, "crit-m": {"in": 1, "out": 5}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cost := 0.001
+	sc := f.happy()
+	for k := range sc {
+		for i := range sc[k] {
+			sc[k][i].Usage = model.Usage{InputTokens: 10, OutputTokens: 5, CostUSD: &cost}
+		}
+	}
+	k := &subKiller{Fake: model.NewFake(sc), agent: "extract_facts"}
+	e := f.reopen(k, prices)
+	task := f.submit(0)
+	k.kill = func() { e.active(task.ID).cancel() }
+	f.step(context.Background())
+	if st := f.steps(task.ID); !strings.HasSuffix(st, "4:tool_call:extract_facts:started") {
+		t.Fatalf("first process: %s", st)
+	}
+	k.kill = nil
+	f.reopen(k, prices)
+	f.stale(task.ID)
+	f.step(context.Background())
+	v := f.get(task.ID)
+	c, _ := f.e.Cost(context.Background(), task.ID)
+	var lost agent.Usage
+	f.st.DB().QueryRow(`SELECT lost FROM tasks WHERE id = $1`, task.ID).Scan(jsonScan{&lost})
+	if stop(v) != "awaiting_gate/finished" || lost.Calls != 1 || lost.USD <= 0 || lost.USD > 0.1 || c.Summary.USD == nil || *c.Summary.USD > 1 {
+		t.Fatalf("%s: lost %+v, cost %+v", stop(v), lost, c.Summary)
+	}
+}
+
+// TestRejectedFindingStaysOutOfForcedDeliverable (PR 4b r1 M4, M5): a finding the lawyer rejected
+// at its gate is out of the memo even when the run then finishes from its reserve with the
+// section still citing it (the sentence is dropped and disclosed), and the Evidence Note counts it
+// as rejected, not as a quote that failed verification.
+func TestRejectedFindingStaysOutOfForcedDeliverable(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	d1 := f.docs[0].ID
+	lead := []model.Reply{calls(plan(issue("I1", "What does Greystone claim?", "Conduct"))), calls(extract(d1, "damages", "I1")), calls(draft("I1", "F1")),
+		calls(committee()), calls(finishCall("submit"))}
+	for range 20 {
+		lead = append(lead, calls(finishCall("submit")))
+	}
+	f.engine(f.with(map[string][]model.Reply{
+		"lead":          lead,
+		"draft_section": {section("Greystone is the plaintiff. Greystone claims damages of {Zephyr} for unpaid invoices [F1].", "s")},
+		"prosecute":     {text(m{"verdicts": []m{{"claim": "c", "verdict": "unsupported", "why": "no"}}})},
+		"meta":          {metaNote, metaNote, metaNote},
+	}), Config{BudgetCalls: 24, BudgetUSD: 5, CollapseThreshold: 0.5, CollapseAction: "strict"})
+	task := f.submit(0)
+	ctx := context.Background()
+	f.step(ctx)
+	if v := f.get(task.ID); stop(v) != "awaiting_gate/awaiting_gate" || len(v.PendingGates) != 1 || v.PendingGates[0].GateID != "G-F1" {
+		t.Fatalf("paused: %s %+v", stop(v), v.PendingGates)
+	}
+	if _, err := f.e.Decide(ctx, task.ID, "G-F1", false, "The invoices are disputed."); err != nil {
+		t.Fatal(err)
+	}
+	f.step(ctx)
+	v := f.get(task.ID)
+	out := deref(v.Output)
+	body, _, _ := strings.Cut(out, "## Sources")
+	if v.Status != "awaiting_gate" || strings.Contains(body, "$644,910") || strings.Contains(body, "[F1]") || !strings.Contains(body, "Greystone is the plaintiff.") {
+		t.Fatalf("%s: the rejected finding reached the memo:\n%s", stop(v), out)
+	}
+	if strings.Contains(out, "0 findings were verified") || strings.Contains(out, "1 were quarantined") || !strings.Contains(out, "1 verified finding rejected by the lawyer at a gate is kept out of it too") ||
+		!strings.Contains(out, "1 sentence citing a finding that is not usable (rejected at its gate or quarantined) was removed") {
+		t.Fatalf("evidence note:\n%s", out)
+	}
+}

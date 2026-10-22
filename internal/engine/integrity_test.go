@@ -377,3 +377,26 @@ func TestAppendEvidenceNote(t *testing.T) {
 		t.Fatalf("%s", deref(v.Output))
 	}
 }
+
+// TestWarnCollapseDisclosedInDeliverable (PR 4b r1 M1): in warn mode a collapse raised during the
+// run reaches that run's deliverable (the Evidence Note), not only the task's groundingAlert.
+func TestWarnCollapseDisclosedInDeliverable(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	d1 := f.docs[0].ID
+	found := []m{fd("Greystone claims damages of $644,910.", d1, "Greystone claims damages of $644,910 for unpaid invoices")}
+	for _, q := range []string{"alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf"} {
+		found = append(found, fd("Invented fact "+q+".", d1, "the parties agreed that "+q+" consents were obtained in full"))
+	}
+	v := f.run(f.with(map[string][]model.Reply{
+		"extract_facts": {facts(found...)},
+		"draft_section": {section("Greystone claims damages of $644,910 for unpaid invoices [F1].", "Damages [F1].")},
+		"verify_quote":  {judgeNo, judgeNo},
+	}), Config{BudgetCalls: 150, BudgetUSD: 5, CollapseThreshold: 0.5, CollapseAction: "warn"})
+	if stop(v) != "awaiting_gate/finished" || v.GroundingAlert == nil || v.Output == nil {
+		t.Fatalf("%s alert %v error %v", stop(v), v.GroundingAlert, v.Error)
+	}
+	if !strings.Contains(*v.Output, "Grounding alert: grounding collapse: 7 of 8 findings") {
+		t.Fatalf("the deliverable does not disclose the run's grounding alert:\n%s", *v.Output)
+	}
+}

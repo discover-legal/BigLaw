@@ -503,3 +503,27 @@ func TestServeNeverSendsImagesToTheLead(t *testing.T) {
 		t.Errorf("waiting image after a vision role: %s %q, calls %v\n%s", status, text, models, log)
 	}
 }
+
+// TestRefusesRebindingHosts (PR 4b r1 M8): with no authentication before PR 8, a request
+// addressed to a DNS name other than localhost is refused (403 bad_host): a page the lawyer visits
+// could otherwise rebind its own name to 127.0.0.1 and read and write BigLaw as its own origin.
+// IP literals and localhost pass; /health stays open to probes.
+func TestRefusesRebindingHosts(t *testing.T) {
+	for host, refused := range map[string]bool{"attacker.example:3101": true, "attacker.example": true, "127.0.0.1.nip.io:3101": true,
+		"127.0.0.1:3101": false, "localhost:3102": false, "LOCALHOST": false, "[::1]:3101": false, "192.168.1.20:3101": false} {
+		req := httptest.NewRequest("GET", "/documents", nil)
+		req.Host = host
+		rec := httptest.NewRecorder()
+		routes(fakeDB{}, nil, nil, discard()).ServeHTTP(rec, req)
+		if got := rec.Code == 403 && strings.Contains(rec.Body.String(), `"errorType":"bad_host"`); got != refused {
+			t.Errorf("Host %s: %d %s", host, rec.Code, rec.Body.String())
+		}
+	}
+	req := httptest.NewRequest("GET", "/health", nil)
+	req.Host = "attacker.example"
+	rec := httptest.NewRecorder()
+	routes(fakeDB{}, nil, nil, discard()).ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Errorf("/health by name: %d", rec.Code)
+	}
+}

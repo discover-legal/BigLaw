@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/discover-legal/BigLaw/internal/agent"
+	"github.com/discover-legal/BigLaw/internal/docs"
 	"github.com/discover-legal/BigLaw/internal/model"
 )
 
@@ -74,7 +75,9 @@ func (e *Engine) execute(ctx context.Context, r *run) error {
 		return e.fail(ctx, r, "internal", err)
 	}
 	brief, err := e.brief(ctx, r.t)
-	if err != nil {
+	if errors.Is(err, docs.ErrNotFound) { // deleted since submission: fail, never re-claim forever
+		return e.fail(ctx, r, "", fmt.Errorf("%w: a document of this task no longer exists (deleted after the task was submitted)", ErrBadTask))
+	} else if err != nil {
 		return err
 	}
 	lead := agent.Agent{Name: "lead", Role: model.Lead, Model: r.t.LeadModel, Prompt: prompt("lead"), Visible: MemoVisible, MaxTurns: r.t.MaxSteps, Replay: replay}

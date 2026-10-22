@@ -56,7 +56,8 @@ func (e *Engine) active(taskID string) *run {
 }
 
 // Record is the run's Journal (agent.Journal): a started step is inserted with its grant while
-// the lease holds; any other status commits the step with the buffered writes in one transaction.
+// the lease holds (a second started record settles the grant to what a stopped step spent); any
+// other status commits the step with the buffered writes in one transaction.
 func (r *run) Record(ctx context.Context, s agent.Step) error {
 	if s.Status == "started" && s.N > r.t.MaxSteps && r.forced == "" {
 		return errMaxSteps
@@ -79,13 +80,14 @@ func (r *run) Record(ctx context.Context, s agent.Step) error {
 		}
 		res, err = tx.ExecContext(ctx, `INSERT INTO task_steps (task_id, step, kind, tool, status, input, output, grant_held, usage, model, final, note)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) ON CONFLICT (task_id, step) DO UPDATE SET status = EXCLUDED.status,
-			output = EXCLUDED.output, usage = EXCLUDED.usage, model = EXCLUDED.model, final = EXCLUDED.final, note = EXCLUDED.note
-			WHERE task_steps.status = 'started' AND EXCLUDED.status <> 'started'`,
+			output = EXCLUDED.output, usage = EXCLUDED.usage, model = EXCLUDED.model, final = EXCLUDED.final, note = EXCLUDED.note,
+			grant_held = CASE WHEN EXCLUDED.status = 'started' THEN EXCLUDED.grant_held ELSE task_steps.grant_held END
+			WHERE task_steps.status = 'started'`,
 			r.t.ID, s.N, s.Kind, s.Tool, s.Status, jsonb(s.Input), jsonb(s.Output), grant, usage, s.Model, s.Final, s.Note)
 		if err != nil {
 			return err
-		} else if n, _ := res.RowsAffected(); n == 0 {
-			return nil // the step was already recorded: a duplicate write is a no-op
+		} else if n, _ := res.RowsAffected(); n == 0 || s.Status == "started" {
+			return nil // already recorded (a duplicate write is a no-op), or only started: no writes yet
 		}
 		for _, o := range buf {
 			if o.stat != nil {
@@ -146,6 +148,9 @@ func (r *run) checkCollapse(ctx context.Context) error {
 		return errCollapse
 	}
 	_, err = r.e.db.ExecContext(ctx, `UPDATE tasks SET grounding_alert = $2 WHERE id = $1 AND grounding_alert IS NULL`, r.t.ID, alert)
+	if err == nil && r.t.GroundingAlert == "" {
+		r.t.GroundingAlert = alert // this run's deliverable discloses it (Evidence Note)
+	}
 	return err
 }
 

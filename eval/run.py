@@ -124,8 +124,11 @@ def latest_scores(results: Path, matter) -> dict | None:
 def compare(baseline: dict, results: Path, slack: int, min_verified: float) -> tuple[list[str], list[str]]:
     """Per-matter deltas against a v1 baseline ({"matters": {id or slug: {n_passed, citation_verified_rate,
     cost_usd}}}); a matter fails when v2 passes fewer than v1's n_passed − slack criteria, verifies under
-    min_verified of its citations, or has no scored run. Returns (lines, failures)."""
+    min_verified of its citations, or has no scored run; a baseline naming no registered matter fails.
+    Returns (lines, failures)."""
     lines, bad = [], []
+    if not any((baseline.get("matters") or {}).get(k) is not None for m in load_all() for k in (m.id, m.entry.get("slug"))):
+        bad.append("the baseline names no registered matter: nothing was compared")
     for m in load_all():
         base = baseline.get("matters", {}).get(m.id) or baseline.get("matters", {}).get(m.entry.get("slug"))
         if base is None:

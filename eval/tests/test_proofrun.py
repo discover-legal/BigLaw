@@ -162,6 +162,15 @@ class CompareTests(unittest.TestCase):
             base.write_text(json.dumps({"matters": {"ma-diligence": {"n_passed": 0}}}))
             self.assertEqual(cli.main(["compare", str(base), str(results)]), 1)  # no scored run for that matter
 
+    def test_compare_fails_when_baseline_names_no_matter(self):
+        """PR 4b r1 M6: a baseline that names no registered matter (empty, or mis-keyed) is a failed
+        gate, not a vacuous pass."""
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td) / "v1.json"
+            for doc in ({}, {"matters": {}}, {"matters": {"no-such-matter": {"n_passed": 0}}}):
+                base.write_text(json.dumps(doc))
+                self.assertEqual(cli.main(["compare", str(base), str(Path(td) / "results")]), 1, doc)
+
 
 if __name__ == "__main__":
     unittest.main()

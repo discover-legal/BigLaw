@@ -96,7 +96,7 @@ change. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`, not here.
   (3 context-free critics in parallel on explicit grants, delayed credit), `policy.go` (P1, P4,
   `Allocate`), `finish` (check = dry run; lint G5/G8, coverage, P6/P7; render; gates G7), grounding
   collapse G4, packs (`packs/*/*.md`, embedded, all candidate), and durable runs (`task_steps` +
-  ledger + `tool_stats` in one tx per step, lease/heartbeat, resume by replay, lost grants charged;
+  ledger + `tool_stats` in one tx per step, lease/heartbeat, resume by replay, lost grants charged (a graceful stop settles an in-flight tool's grant to its spend);
   migration 0005). `views.go` is what the API shows (DESIGN § UI contract).
 - `internal/api` (PR 4b) — the REST surface (tasks, steps, SSE, gates, cancel, cost, clients) over
   the engine plus `docs.Routes`; request bodies validated by the agent's schema subset.
@@ -164,6 +164,8 @@ not yet judged (self-test tape).
   `shown` in `cmd/biglaw/config.go` (DSNs via `store.DescribeDSN`), never raw.
 - Until PR 8 there is no auth: only Compose (loopback-published) may pass `--allow-no-auth`, and
   every Compose port must name a loopback IP (`TestDeployFilesFollowExposureRule`).
+  Every POST route wears `docs.Guard` (cross-site writes 403 `cross_origin`); `routes` refuses
+  requests by DNS name other than `localhost` (403 `bad_host`, DNS rebinding); the UI forbids framing.
 - One Go version (1.26.10): go.mod's `go`/`toolchain` lines, the Dockerfile `FROM`, CI's
   `go-version` and the README move together (`TestGoVersionPinnedEverywhere`).
 
@@ -177,6 +179,6 @@ make demo-bundle # ui/dist-recorded for discover.legal/demo/biglaw/; make demo-r
 # DB tests: BIGLAW_TEST_DSN=postgres://…?sslmode=disable BIGLAW_REQUIRE_DB=1 (Postgres with pgvector)
 make e4-record EMBED_MODEL=…   # owner-run: record the E4 tape at the model's own length (make e4-live: no tape)
 ```
-Budgets: Go prod LOC ≤ 17,000 (owner decision 15, raised from 16,100 to keep PR 4b as built; 11,320 used; PR 4b measured 3,818 against ~3,060, plan 16,822–16,852; the next breach goes to the owner; test-support packages such as `storetest` count), internal
+Budgets: Go prod LOC ≤ 17,000 (owner decision 15, raised from 16,100 to keep PR 4b as built; 11,394 used; PR 4b measured 3,818 against ~3,060, plan 16,822–16,852, 16,896–16,926 after its round 1 (+74); the next breach goes to the owner; test-support packages such as `storetest` count), internal
 packages ≤ 12 (8 used; test-support packages do not count), direct deps ≤ 3, env vars ≤ 20 (18 used), UI runtime
 deps ≤ 2 (2 used), UI source lines (`ui/src`) ≤ 2,400, untested packages 0, longest source file ≤ 2,000 lines.

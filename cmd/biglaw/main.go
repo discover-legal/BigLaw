@@ -261,5 +261,19 @@ func routes(db pinger, d *docs.Service, e *engine.Engine, log *slog.Logger) http
 		w.WriteHeader(code)
 		json.NewEncoder(w).Encode(map[string]string{"status": status, "version": version, "search": search})
 	})
-	return mux
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// No authentication before PR 8: a request addressed to a DNS name (not localhost) is refused,
+		// or a page the lawyer visits could rebind its name to 127.0.0.1 and use BigLaw as its own origin.
+		host, _, err := net.SplitHostPort(r.Host)
+		if err != nil {
+			host = r.Host
+		}
+		if r.URL.Path != "/health" && !strings.EqualFold(host, "localhost") && net.ParseIP(strings.Trim(host, "[]")) == nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			io.WriteString(w, `{"error":"address BigLaw by IP or localhost: names are refused until authentication lands (PR 8)","errorType":"bad_host"}`+"\n")
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
 }
