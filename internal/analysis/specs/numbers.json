@@ -1,0 +1,34 @@
+{
+  "name": "numbers",
+  "kind": "go",
+  "class": "free",
+  "maxTurns": 0,
+  "description": "Does exact arithmetic and figure handling over the matter's verified figures, so no model ever computes or types a number. op \"calc\" runs fn (sum, diff, ratio, pct, date_add, date_diff, business_days) over operands that are verified finding values such as {\"ref\": \"F12.v1\"} or literals with a unit, and returns a worksheet with an id (wid) the deliverable can cite; a total in the deliverable must be such a worksheet. op \"handles\" gives each verified figure of fids (all when null) a codename such as {Zephyr}; drafters write the codename and the renderer substitutes the exact value. op \"table\" returns a Markdown key-figures table built only from verified values. Do not use it to estimate, round or infer a figure the record does not state, and do not use a quarantined finding's value: it is refused, never treated as zero.\nExample: {\"op\": \"calc\", \"fn\": \"sum\", \"operands\": [{\"ref\": \"F3.v1\", \"literal\": null, \"unit\": null}, {\"ref\": \"F7.v2\", \"literal\": null, \"unit\": null}], \"holidays\": null, \"fids\": null, \"salientTop\": null}\nExample: {\"op\": \"calc\", \"fn\": \"business_days\", \"operands\": [{\"ref\": null, \"literal\": \"2026-11-12\", \"unit\": \"date\"}, {\"ref\": null, \"literal\": \"10\", \"unit\": \"days\"}], \"holidays\": [\"2026-11-26\"], \"fids\": null, \"salientTop\": null}\nExample: {\"op\": \"handles\", \"fn\": null, \"operands\": null, \"holidays\": null, \"fids\": null, \"salientTop\": 12}",
+  "in": {
+    "type": "object", "additionalProperties": false,
+    "required": ["op", "fn", "operands", "holidays", "fids", "salientTop"],
+    "properties": {
+      "op": {"type": "string", "enum": ["calc", "handles", "table"]},
+      "fn": {"type": ["string", "null"], "enum": ["sum", "diff", "ratio", "pct", "date_add", "date_diff", "business_days", null]},
+      "operands": {"type": ["array", "null"], "maxItems": 50, "items": {
+        "type": "object", "additionalProperties": false, "required": ["ref", "literal", "unit"],
+        "properties": {"ref": {"type": ["string", "null"], "maxLength": 32}, "literal": {"type": ["string", "null"], "maxLength": 64}, "unit": {"type": ["string", "null"], "maxLength": 32}}}},
+      "holidays": {"type": ["array", "null"], "maxItems": 400, "items": {"type": "string", "maxLength": 32}},
+      "fids": {"type": ["array", "null"], "maxItems": 500, "items": {"type": "string", "maxLength": 16}},
+      "salientTop": {"type": ["integer", "null"], "minimum": 1, "maximum": 64}
+    }
+  },
+  "out": {
+    "type": "object", "additionalProperties": false,
+    "required": ["wid", "result", "unit", "worksheet", "literalOperands", "handles", "tableMarkdown"],
+    "properties": {
+      "wid": {"type": ["string", "null"]}, "result": {"type": ["string", "null"]}, "unit": {"type": ["string", "null"]},
+      "worksheet": {"type": ["array", "null"], "items": {"type": "object", "additionalProperties": false, "required": ["step", "value"],
+        "properties": {"step": {"type": "string"}, "value": {"type": "string"}}}},
+      "literalOperands": {"type": ["boolean", "null"]},
+      "handles": {"type": ["array", "null"], "items": {"type": "object", "additionalProperties": false, "required": ["handle", "fid", "ref", "label"],
+        "properties": {"handle": {"type": "string"}, "fid": {"type": "string"}, "ref": {"type": "string"}, "label": {"type": "string"}}}},
+      "tableMarkdown": {"type": ["string", "null"]}
+    }
+  }
+}

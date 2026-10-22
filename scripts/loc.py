@@ -4,7 +4,7 @@
 """BigLaw 2 size budgets (README § What is on disk; PLAN.md "Rules for every PR").
 
 Fails (exit 1) when any budget is exceeded:
-  Go production lines   <= 15,650  physical lines of every non-_test .go file,
+  Go production lines   <= 16,100  physical lines of every non-_test .go file,
                                    test-support packages (storetest) included
   internal packages     <= 12      directories under internal/ holding non-test Go,
                                    except test-support packages (below)
@@ -22,7 +22,7 @@ A test-support package (coordinator ruling) is one whose directory name ends
 in "test" (storetest, modeltest) and that no non-_test.go file outside it
 imports. It is left out of the package count only: its lines count toward
 the LOC ceiling like any other non-_test.go file (owner decision: ceiling
-15,650, decision 12). A *test package that production code imports is an ordinary package.
+16,100, decision 14). A *test package that production code imports is an ordinary package.
 
 Env-var names are found statically: literal arguments of os.Getenv/LookupEnv
 (and of any getenv(...) call), every `name: "X"` entry of the config table,
@@ -42,7 +42,7 @@ import re
 import sys
 
 BUDGETS = {
-    "go_prod_loc": 15650,
+    "go_prod_loc": 16100,
     "internal_packages": 12,
     "direct_go_deps": 3,
     "env_vars": 20,

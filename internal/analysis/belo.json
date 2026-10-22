@@ -1,0 +1,23 @@
+{
+  "classes": {
+    "Party": "", "Person": "Party", "Firm": "Party", "Fund": "Party", "Account": "Party", "Client": "Party",
+    "Issue": "", "Conduct": "Issue", "Requirement": "Issue", "Clause": "Issue", "RedFlag": "Issue",
+    "Authority": "", "Instrument": "",
+    "Quantity": "", "Money": "Quantity", "Percentage": "Quantity", "Count": "Quantity", "Date": "Quantity", "Identifier": "Quantity",
+    "Event": ""
+  },
+  "issueClasses": ["Conduct", "Requirement", "Clause", "RedFlag"],
+  "predicates": [
+    {"name": "committedBy", "domain": ["Conduct"], "range": ["Party"], "aliases": ["committed by", "perpetrated by", "engaged in by", "responsible for"]},
+    {"name": "violates", "domain": ["Conduct"], "range": ["Authority"], "aliases": ["violates", "violation of", "in violation of", "breaches", "contravenes"]},
+    {"name": "requires", "domain": ["Issue", "Authority", "Instrument"], "aliases": ["requires", "mandates", "instructs that", "directs that", "calls for", "specifies that", "must provide", "shall provide", "stipulates"]},
+    {"name": "satisfiedBy", "domain": ["Issue"], "range": ["Instrument"], "aliases": ["satisfied by", "met by", "conforms via", "provided in", "addressed in", "implemented in", "reflected in"]},
+    {"name": "deviatesFrom", "domain": ["Issue", "Instrument"], "aliases": ["deviates from", "departs from", "conflicts with", "inconsistent with", "not met in", "omitted from", "absent from", "missing from"]},
+    {"name": "prohibits", "domain": ["Issue", "Authority", "Instrument"], "aliases": ["prohibits", "forbids", "bars", "restricts", "precludes"]},
+    {"name": "harmed", "domain": ["Conduct"], "range": ["Party"], "aliases": ["harmed", "caused harm to", "injured", "damaged", "victimized"]},
+    {"name": "quantifiedAs", "domain": ["Conduct", "Party", "Instrument"], "range": ["Quantity"], "aliases": ["quantified as", "amounts to", "estimated at", "totaling", "valued at", "has figure"]},
+    {"name": "ownsStakeIn", "domain": ["Party"], "range": ["Party"], "aliases": ["owns stake in", "holds interest in", "owns", "is owner of", "holds interest"]},
+    {"name": "receivedFrom", "domain": ["Party"], "range": ["Party"], "aliases": ["received from", "received compensation from", "received payment from", "paid by"]},
+    {"name": "occurredDuring", "domain": ["Conduct", "Event"], "range": ["Event", "Date"], "aliases": ["occurred during", "during", "in the period"]}
+  ]
+}

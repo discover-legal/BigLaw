@@ -82,8 +82,8 @@ func TestChatToolCallRoundTrip(t *testing.T) {
 	}
 	tools := got["tools"].([]any)
 	fn := tools[0].(map[string]any)["function"].(map[string]any)
-	if tools[0].(map[string]any)["type"] != "function" || fn["name"] != "retrieve" || fn["strict"] != true || tools[1].(map[string]any)["function"].(map[string]any)["strict"] != nil {
-		t.Errorf("tools = %v", tools)
+	if tools[0].(map[string]any)["type"] != "function" || fn["name"] != "retrieve" || fn["strict"] != nil || tools[1].(map[string]any)["function"].(map[string]any)["strict"] != nil {
+		t.Errorf("tools = %v (strict is sent only to api.openai.com: TestStrictOnlyWhereSupported)", tools)
 	}
 	msgs := got["messages"].([]any)
 	asst, tool := msgs[2].(map[string]any), msgs[3].(map[string]any)
@@ -630,5 +630,48 @@ func TestAnswerToolCallsChecked(t *testing.T) {
 		if _, err := f.Chat(context.Background(), userReq("hi")); !errors.Is(err, ErrUnavailable) {
 			t.Errorf("Fake accepted a call Client refuses: %v", err)
 		}
+	}
+}
+
+type captured struct{ body map[string]any }
+
+func (c *captured) RoundTrip(r *http.Request) (*http.Response, error) {
+	json.NewDecoder(r.Body).Decode(&c.body)
+	return &http.Response{StatusCode: 200, Header: http.Header{}, Request: r,
+		Body: io.NopCloser(strings.NewReader(`{"choices":[{"message":{"content":"ok"}}]}`))}, nil
+}
+
+// PR 4a (README § Tools): strict: true goes only to an endpoint known to support it; other
+// endpoints (local servers, gateways, Anthropic's OpenAI-compatible API) get the same strict-shaped
+// schema without the flag, and Go validation stays authoritative everywhere.
+func TestStrictOnlyWhereSupported(t *testing.T) {
+	for url, want := range map[string]any{"https://api.openai.com/v1": true, "https://api.anthropic.com/v1": nil, "http://127.0.0.1:11434/v1": nil} {
+		c, err := New(Options{URL: url, Roles: Roles{Lead: "m"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		tr := &captured{}
+		c.http.Transport = tr
+		req := userReq("x")
+		req.Tools = []Tool{{Name: "retrieve", Description: "d", Parameters: json.RawMessage(`{"type":"object"}`), Strict: true}}
+		if _, err := c.Chat(context.Background(), req); err != nil {
+			t.Fatal(err)
+		}
+		if got := tr.body["tools"].([]any)[0].(map[string]any)["function"].(map[string]any)["strict"]; got != want {
+			t.Errorf("%s: strict = %v, want %v", url, got, want)
+		}
+	}
+}
+
+// A 200 whose body cannot be read still arrived (and may be billed): Status 200 lets the ledger
+// count it as a call of unknown cost (PR 4a decision; README § Models).
+func TestUnreadable200CarriesStatus(t *testing.T) {
+	c, _ := endpoint(t, "", func(w http.ResponseWriter, r *http.Request) {
+		reply(w, `{"choices":[{"message":{"content":"x"}}],"usage":{"prompt_tokens":"12"}}`)
+	})
+	_, err := c.Chat(context.Background(), userReq("x"))
+	var me *Error
+	if !errors.As(err, &me) || me.Status != 200 || !errors.Is(err, ErrUnavailable) || me.Usage != nil {
+		t.Fatalf("err = %#v", err)
 	}
 }

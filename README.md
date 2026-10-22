@@ -10,7 +10,7 @@ tables in which every factual statement cites a quote that the software has veri
 matter's own documents, with a lawyer approving every deliverable. It is one Go binary plus one
 PostgreSQL database. Licensed Apache-2.0 (`LICENSE`, `NOTICE`).
 
-## What exists today (PR 1: skeleton, config, store, CI; PR 2: model client; PR 3a: documents; PR 3b: model roles, embeddings, hybrid search; PR 3c: vision transcription; PR 11, pulled forward by owner decision 13: the UI and its recorded engine)
+## What exists today (PR 1: skeleton, config, store, CI; PR 2: model client; PR 3a: documents; PR 3b: model roles, embeddings, hybrid search; PR 3c: vision transcription; PR 11, pulled forward by owner decision 13: the UI and its recorded engine; PR 4a: the agent runtime and the deterministic memo tools)
 
 | Piece | Path | What it does |
 |---|---|---|
@@ -19,8 +19,10 @@ PostgreSQL database. Licensed Apache-2.0 (`LICENSE`, `NOTICE`).
 | Store | `internal/store/store.go` | Postgres via `database/sql` + `github.com/lib/pq`; DSN check that matches lib/pq's reading; transaction helper |
 | Migrations | `internal/store/migrate.go`, `internal/store/migrations/NNNN_*.sql` | Embedded SQL files applied in order under an advisory lock; each file and its `schema_migrations` row in one transaction. `store.Open` first creates the `vector` extension (pgvector), which is database-wide (§ Database) |
 | Files | `internal/store/files.go` | Binary files (uploads, generated `.docx`) stored in 1 MiB `bytea` chunks, streamed in and out, with size and SHA-256 checked on every read |
-| Model client | `internal/model/` (`client.go`, `embed.go`, `errors.go`, `fake.go`, `pricing.go`, `prices.json`) | One OpenAI-compatible chat client with tool calls and image parts, an embeddings call (`Embed`) on the same transport, typed failures with their HTTP mapping, at most 3 attempts per call, cache-aware pricing of every call from a built-in table plus `BIGLAW_PRICES` (the host never makes a call free), watt-hour metering when `BIGLAW_LOCAL_WATTS` is set, and `model.Fake` for tests (§ Model client). Only `Embed` has a caller yet (documents, below); the agent loop that calls `Chat` arrives in PR 4a. |
+| Model client | `internal/model/` (`client.go`, `embed.go`, `errors.go`, `fake.go`, `pricing.go`, `prices.json`) | One OpenAI-compatible chat client with tool calls and image parts, an embeddings call (`Embed`) on the same transport, typed failures with their HTTP mapping, at most 3 attempts per call, cache-aware pricing of every call from a built-in table plus `BIGLAW_PRICES` (the host never makes a call free), watt-hour metering when `BIGLAW_LOCAL_WATTS` is set, and `model.Fake` for tests (§ Model client). `Embed`'s caller is documents (below); `Chat`'s is the agent loop (below), which no workflow runs until PR 4b. |
 | Documents | `internal/docs/` (`ingest.go`, `child.go` + `child_linux.go`/`child_other.go`, `pageindex.go`, `chunk.go`, `search.go`, `embed.go`, `verify.go`, `http.go`, `vision.go` + `vision_prompts.txt`, `scanpdf.go`, `jobs.go`) | Ingest of UTF-8 text, `.docx` and PDF text layers (PDFs and `.docx` files parsed in a bounded child process); images and JPEG-scanned PDF pages transcribed by the `vision` role, each page read twice and the readings compared, with provenance on every document, chunk and citation, and a leased job that transcribes what was stored before a vision role was set (§ Vision transcription); the byte-exact section tree; search chunks; Postgres full-text search, fused with pgvector similarity when an `embed` role is set (chunk embedding at ingest, a startup backfill); the page reader (outline, paged sections); the quote-verification ladder; the upload and download routes. Every read is scoped to the caller's document ids (§ Documents) |
+| Agent runtime | `internal/agent/` (`tool.go`, `registry.go`, `schema.go`, `loop.go`, `budget.go`, `policy.go`, `bandit.go`) | The `Tool` interface and its single registry (definitions frozen at registration), JSON-schema validation of every tool input and output, one bounded loop for the lead and its subagents, the budget ledger, and the tool bandit (§ Agent runtime). No workflow drives it yet (PR 4b) |
+| Memo tools | `internal/analysis/` (+ `belo.json`, `specs/*.json`), `internal/docs/register.go` (+ `specs/*.json`) | Deterministic tools over verified findings: `numbers` (exact `calc`, figure handles, key-figures table), `join_discrepancies`, the coverage checks `finish{op:"check"}` will run, the value normalisers and BELO-lite; and the `retrieve` / `verify_quote` adapters over documents (§ Agent runtime) |
 | `.docx` reader | `internal/docs/ooxml/` | Opens a `.docx`'s text parts only (body, footnotes, endnotes; 128 MiB decompression cap) and reads its visible text in one linear XML pass. The writer, the XML escapers, the part-preserving re-zip and tracked-change parse/apply are planned (PR 3d) |
 | Proof-run fixtures | `eval/tasks/`, `eval/e4/embeddings.json` | The five synthetic proof-run matters (documents + answer keys), copied from `feat/proof-runs-multi-practice`; PR 3 reads them for gate E4, PR 4b adds the driver and scorer. `eval/e4/embeddings.json` is E4's embeddings tape: today the **self-test** tape of a hash embedder, not a real model's (§ Documents, gate E4) |
 | UI | `ui/` (React 19 + Vite + TypeScript strict; runtime deps `react`, `react-dom` only) | The seven screens (§ UI) behind one transport seam, `ui/src/api/transport.ts`: `http.ts` talks to the Go API on the same origin (its routes are **planned**: PR 4 onward, so the live UI has nothing to talk to yet), `recorded.ts` replays a recorded engine in the browser with no network at all |
@@ -36,7 +38,7 @@ HTTP surface today: `GET /health`, which returns `{"status":"ok","version":"…"
 document file routes of § Documents: `POST /documents/upload` and `GET /documents/{id}/file`.
 Every other path is 404/405. There is no authentication yet (§ Exposure).
 
-**Planned** (not built): the `.docx` writer and tracked-change parse/apply (PR 3d); the engine and the memo workflow with its REST API (PR 4), diligence (PR 5), contract review (PR 6),
+**Planned** (not built): the `.docx` writer and tracked-change parse/apply (PR 3d); the engine and the memo workflow with its REST API, durable runs and the subagent specs (PR 4b), diligence (PR 5), contract review (PR 6),
 MCP (PR 7), clients/conflicts and OIDC/session/token auth (PR 8), time and billing (PR 9), the
 UI's embedding in the binary (`//go:embed`, with `internal/api` in PR 4b; § UI), jurisdiction and practice packs (PR 12), v1 import and docs (PR 13). The
 discover.legal intake module is **not** part of v2 (owner decision; it moves to a separate repo).
@@ -749,6 +751,95 @@ no live upload is that old (15 minutes to upload + 10 to wait for a slot + 2 to 
 503 `stopping` and removes its file, `serve` exits 0 with a warning, and connections still open
 after another 10 s are closed (`TestServeStopCancelsIngest`).
 
+## Agent runtime and memo tools (`internal/agent`, `internal/analysis`; PR 4a)
+
+Nothing runs these yet: the memo workflow, the ledger, durable runs and the REST routes that drive
+them are PR 4b. What PR 4a ships, all tested with `model.Fake` or no model:
+
+- **Tools and the registry.** A `Tool` has a `Spec` (name, kind `go`/`subagent`/`fanout`, a
+  description, input and output JSON Schemas, a budget class, a turn cap, allowed tools for a
+  subagent, ops that must be called alone, `Final` for `finish`) and `Call(ctx, Call) (Result,
+  error)`; a `Call` carries the task's document ids (G1), the input, a grant and the depth. The
+  registry refuses a duplicate name, a 23rd tool, a schema that is not strict-shaped (every object
+  `additionalProperties: false`, every field required, optional fields nullable; in and out), a
+  description under three sentences or without a "Do not use" line, and 1–3 `Example: {…}` lines
+  that do not validate. Definitions are frozen when registered: the same bytes reach the model on
+  every turn (prompt cache), and no matter data can reach a schema. The definition sent leaves out
+  `minLength`/`maxLength` (strict mode refuses them); Go enforces them before a tool runs. At most 14 tools are visible to
+  one agent. Specs are data: `internal/docs/specs/*.json`, `internal/analysis/specs/*.json`.
+- **One loop, two depths** (`Runtime.Run`). The lead (depth 0) and a subagent (depth 1, the
+  `Subagent` tool: its own prompt, allowed tools, turn cap, grant and output schema; its transcript
+  is discarded) run the same loop. Every tool call goes through `Runtime.Invoke`, in this order:
+  offered to that agent, no subagent or fan-out tool at depth 1, alone when it must be (`finish`,
+  `ledger{op:"plan"}`), input schema, the task's `Policy` (PR 4b), then a grant; the tool's usage is
+  charged even when it fails and its output must match its schema. A subagent's answer must validate
+  (one repair request, then `ErrToolOutput`). At most 8 tool calls run per turn. Tool results older
+  than four turns are replaced by a handle naming their step; an endpoint's 400/413/422 compacts all
+  but the latest turn's and retries once. Text in tool results is labelled untrusted matter data.
+  The model sees refusals (reason and next step) and tool failures in BigLaw's own words only; any
+  other error is logged and shown as "internal error". A model failure (G6) ends the run.
+- **Budget** (`Budget`). Calls and USD per task, held and charged in Go. A model call holds one call
+  and its worst-case cost (each request byte a token plus 1,000, as a cache write, plus `MaxTokens`
+  of output) and then charges what it spent, a refused-but-billed answer included; a tool's grant is
+  up to its turn cap, refused only when no call is free, and its unused part returns when it closes.
+  The task keeps a floor (reserve + meta) that only `finish` may spend. Query embeddings are charged
+  in USD and tokens; an unpriced model counts as a call of unknown cost.
+- **Tool bandit** (`Bandit`, `Stats`; `MemStats` here, Postgres in 4b). Per task signature
+  (workflow, practice, jurisdiction prefix, lead model, documents 1–3/4–9/10+), each tool's and each
+  subagent model binding's calls, reward, failures and spend; a reliability-aware UCB1 score; an
+  untried tool ranks first once. It adds one hint line to the latest tool result before a lead turn
+  (`retrieve`, `ledger`, `committee`, `finish` first, `verify_quote` never ranked), picks a
+  subagent's model only among the role's and the lead's, and never hides or refuses a tool.
+  `Off` sends no hint. Every tool result is recorded (refused or failed: reward 0).
+- **`retrieve`** (`op` search, outline, section; `k` ≤ 8; sections paged with `next`) and
+  **`verify_quote`** (the ladder; the paraphrase judge runs on the `critic` role, at most 4 calls
+  from the caller's grant, each held and charged like the loop's own calls through
+  `Runtime.ChatWithin`, so it never spends past the grant's calls or USD; the quote and the passage
+  each fenced as untrusted text, fence markers inside them neutralised). A document outside the call's
+  ids is "not found".
+- **`numbers`**: `calc` (exact decimals: `sum`, `diff`, `ratio`, `pct`, `date_add`, `date_diff`,
+  `business_days` with the caller's holidays) over verified finding values (`F12.v1`) or literals; a
+  worksheet id is a hash of its steps; a quarantined or unknown finding is refused, never 0. Money is
+  USD only when its unit is empty, `$`, `usd` or `dollars`; another currency keeps its unit, so a sum
+  across currencies is refused. Date differences are exact over any span.
+  `handles`: a `{Codename}` per distinct verified money, percentage, count or identifier value (never
+  a date), most salient first, 64 at most, assigned over the whole verified ledger (a codename names
+  one figure whatever `fids` a call asks for); `Substitute` puts the exact value in, and an unmapped
+  codename is an error. `table`: a key-figures table from verified values only.
+- **`join_discrepancies`**: cross-document conflicts between verified values that share a metric
+  label, a quantity class (money is never compared with a share count) and an entity after the
+  lead's aliases and name containment ("Ostrowski" in "Richard Ostrowski"); dates tie to one event by
+  label or two shared distinctive words and are compared at their common precision; a conflict needs
+  two documents with disjoint value sets. Durations and identifiers are not compared.
+- **Coverage** (`CheckCoverage`, for `finish{op:"check"}` in 4b): plan issues with no section;
+  parties in two or more verified findings, a Conduct issue's actor, or a roster name, that the draft
+  never mentions (a firm's name does not cover a person); salient figures that never land.
+- **BELO-lite** (`belo.json`): the classes and 11 predicates; `Relations` re-orients a reversed
+  triple and drops an ill-typed one.
+
+Limitations of this layer:
+- **The USD cap holds only if the endpoint bills within `max_tokens` and adds under 1,000 tokens of
+  its own** to a request (the worst-case bound); a provider that bills more is charged anyway, so the
+  cap can then be passed by that excess. Unpriced models are bounded by the call cap only.
+- A tool's grant takes all the free USD because calls run one at a time; a fan-out that runs
+  subagents in parallel (PR 4b's `committee`) must size its grants itself.
+- A remote tool that spends past its grant is charged what it reports (money already spent); in
+  process a grant cannot be exceeded.
+- The bandit's statistics are shared by every task with the same signature: one matter's documents
+  can make a tool fail often and push it down another matter's hint (it never hides it). Its
+  constants (β 0.5, γ 1, c 0.5) are uncalibrated; gate B measures it on and off.
+- Text inside a quote that happens to read `{Zephyr}` would be substituted by the renderer like a
+  handle; PR 4b's renderer must substitute outside quoted spans only.
+- Codenames follow salience over the ledger as it stands: a later finding can renumber them, so PR
+  4b's renderer must substitute with the handle set the drafter was given, never a recomputed one.
+- `join_discrepancies` trusts the extracting model's metric labels: two labels for one metric are
+  never compared (a missed conflict), one label for two metrics is compared (the lead must check the
+  quotes). A value's document is the quote that holds its text, else the finding's first quote.
+- Calls in one turn run sequentially, not concurrently; `retrieve` and Go tools spend no calls, so a
+  lead can issue up to 8 per turn for every turn its budget funds.
+- **Line budget:** `agent` 1,242 against 1,100, `analysis` 1,183 against 950, the `docs` adapters
+  153 against 50 (§ Budgets: accepted by owner decision 14, ceiling 16,100).
+
 ## Files
 
 Files are stored in `file_chunks` rows of at most 1 MiB (a `CHECK` in the schema refuses a
@@ -1033,8 +1124,8 @@ transcribe, never text).
 
 | Budget | Ceiling | Today |
 |---|---:|---:|
-| Go production lines (physical lines, non-`_test.go`, test-support packages included) | 15,650 | 4,919 |
-| Packages under `internal/`, test-support packages excluded | 12 | 4 (`docs`, `docs/ooxml`, `model`, `store`; `store/storetest` is test support) |
+| Go production lines (physical lines, non-`_test.go`, test-support packages included) | 16,100 | 7,499 |
+| Packages under `internal/`, test-support packages excluded | 12 | 6 (`agent`, `analysis`, `docs`, `docs/ooxml`, `model`, `store`; `store/storetest` is test support) |
 | Direct Go dependencies | 3 | 2 (`github.com/lib/pq`, `github.com/ledongthuc/pdf`) |
 | Runtime environment variables | 20 | 18 |
 | UI runtime dependencies | 2 | 2 (`react`, `react-dom`) |
@@ -1042,7 +1133,7 @@ transcribe, never text).
 | Packages without a `_test.go` | 0 | 0 |
 | Lines in any one source file (`.go`, `.py`, `.sql`, `.sh`, `.js`, `.ts`, `.css`; tests included) | 2,000 | 968 (`internal/docs/vision_safety_test.go`) |
 
-The line ceiling is 15,650 (owner decisions: 14,000, then 14,250, then 14,500 during PR 2's review, then 15,000 at PR 3a's, with pgvector, then 15,500 at PR 3a's round 3, declared final, then 15,600 at PR 3c's round 1, decision 11, then 15,650 at PR 3c's round 4 to read long-legend scans, decision 12). The plan totals 15,581–15,611 after PR 3c (round 7), headroom 39–69; PR 3e (an embed endpoint, about 30–40 lines) is next and must fit (at most 39 in the worst case). A **test-support package** is one
+The line ceiling is 16,100 (owner decisions: 14,000, then 14,250, then 14,500 during PR 2's review, then 15,000 at PR 3a's, with pgvector, then 15,500 at PR 3a's round 3, declared final, then 15,600 at PR 3c's round 1, decision 11, then 15,650 at PR 3c's round 4 to read long-legend scans, decision 12, then 16,100 at PR 4a, decision 14). The plan totalled 15,581–15,611 after PR 3c (round 7); PR 4a measured 2,557 lines against the 2,100 its components carry, putting the plan at 16,038–16,068. **Owner decision 14 (2026-10-22): keep PR 4a as built and raise the ceiling to 16,100**, which leaves room for PR 3e (about 30–40 lines); the next breach goes back to the owner. PR 4a's committee round 1 fixes added 23 (7,476 → 7,499): plan **16,061–16,091**, headroom 9–39 for PR 3e. A **test-support package** is one
 whose directory name ends in `test` and that no production file outside it imports, such as
 `storetest`. Under the coordinator's ruling it is left out of the package count, but its lines
 count toward the line ceiling like any other non-`_test.go` file. A `*test` package that
@@ -1149,8 +1240,8 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
   - Heading heuristics are guesses: `999 Main Street` or `10 May 2026 the parties met` at a line
     start (a wrapped PDF line) is still a decimal heading, and a sub-clause whose title starts in
     lower case (`1.1 the Supplier shall`) is now body text of its parent.
-  - The judge's passage is document text: the judge prompt (PR 4a) must treat it as untrusted
-    data, since a document can contain text addressed to the judge (`.docx` text hidden by
+  - The judge's passage is document text: `verify_quote`'s judge prompt (PR 4a) fences it and
+    declares it untrusted data, but a model can still be swayed by text addressed to the judge (`.docx` text hidden by
     formatting, not by `<w:vanish/>`, reaches it too).
   - The tolerant rung folds case, so `ACME` verifies against `Acme` (at 0.95).
   - **Line budget:** `internal/docs` measures 1,733 lines (1,471 plus `http.go` 262) against the
@@ -1220,8 +1311,8 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     because its timing would tell one user whether another just searched the same words.
   - Embedding usage is priced on every call, but only an ingest's usage is recorded (on the
     document, and only for a run that embedded every chunk: a failed run's billed calls are not
-    stored), and a search's query embedding is charged to no task until PR 4a's budget ledger
-    (`docs.Service` takes the embedder at `UseEmbedder`; 4a can wrap it per task). An embeddings
+    stored), and a search's query embedding is charged to the task through `retrieve`'s result
+    (PR 4a; a direct `docs.Search` call outside a task is charged to nothing). An embeddings
     answer with no `usage` has an unknown cost (nil); a **chat** answer without `usage` still
     counts 0 tokens and reads $0 for a priced model (PR 2's behaviour, unchanged here).
   - Embedding runs inside the upload request, after the ingest slot is released: a 16 MiB
@@ -1368,7 +1459,8 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     at `gpt-4o`'s ($10/M), before image input.
   - The calls of a refused transcription (422, or a model failure) are priced by the client but
     stored nowhere (the document is not stored): the operator's log line carries their tokens and
-    cost; a failed job's are in the same log. PR 4a's ledger charges tasks.
+    cost; a failed job's are in the same log. Ingest happens outside any task, so a task's
+    ledger never counts these (PR 4a decision; the document records them).
   - **An upload's vision read runs on its request** (DESIGN put it in the leased job; the async
     202 path is PR 8's, PLAN PR 8): the client must keep the connection open for the whole read (up
     to 40 sequential calls, bounded at 10 minutes, then 504 `model_timeout`). A client or proxy
@@ -1431,14 +1523,15 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     field keeps the last value; an exactly repeated id keeps the last
     entry (Go's JSON decoder), a case-variant repeat is refused. Errors name no id, so a typo in
     a long file is found by bisecting it.
-  - Upstream 400/413/422 (a context-length or schema refusal) is `ErrUnavailable` "HTTP 4xx", not
-    retried, and not yet a distinct kind: PR 4a must tell "compact the transcript" from an outage
-    (PLAN PR 4a). An answer's tool-call name is not checked against the tools offered; the agent
-    loop must (PR 4a).
+  - Upstream 400/413/422 (a context-length or schema refusal) is `ErrUnavailable` "HTTP 4xx" with
+    its `Status`, not retried by the client; the agent loop compacts the transcript and tries once
+    more (§ Agent runtime). Tool-call names are checked against the tools offered by the loop.
   - A 200 whose body is an error object (some gateways) is `ErrNoContent` "no choices", not
     retried, and an OpenAI `refusal` is reported as an answer with neither text nor tool calls (its
-    text is dropped). A 200 with one malformed `usage` field (a string or a fraction) is
-    `ErrUnavailable`: the billed answer is lost and its usage is not counted. An answer with no
+    text is dropped); both are 422 `no_content` and their usage, when the body gave one, is charged
+    (PR 4a decision). A 200 whose body cannot be read (one malformed `usage` field, a string or a
+    fraction, is enough) is `ErrUnavailable` with `Status: 200`: the answer is lost, and the task
+    ledger counts it as one call of unknown cost. An answer with no
     `usage` object counts as 0 tokens, so a priced model's call reads $0.
   - A call that fails outright (non-200, transport error) carries no usage or watt-hours: a local
     GPU's energy for a failed generation is not metered. Watt-hours assume one machine at a fixed
@@ -1450,8 +1543,8 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
   - Answers whose `content` is an array of parts, streaming, and `n > 1` are not supported (the
     first choice is used). The number and size of tool calls in an answer are bounded only by the
     32 MiB answer cap; the agent loop must cap what it executes.
-  - `Strict` and `parallel_tool_calls` are passed through as given; which tools may run in
-    parallel, and turning strict off where an endpoint refuses the combination, is PR 4a's policy.
+  - `strict: true` is sent only to `api.openai.com` (PR 4a); every other endpoint gets the same
+    strict-shaped schema without the flag. `parallel_tool_calls` is passed through as given.
   - `model.Fake` hands out an agent's replies in call order, so concurrent calls *for the same
     agent* get replies in a scheduling-dependent order; script those calls sequentially.
   - **Line budget:** `internal/model` measures 714 lines against the 610 the v2 design planned
