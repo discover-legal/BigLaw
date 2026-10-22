@@ -904,7 +904,10 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
   verification (G5), one-line Sources (a transcript citation badged "machine transcription (model)"
   and linked to the original, G11), Limitations, an Evidence Note (verified vs quarantined,
   and verified findings a lawyer rejected at a gate; transcript-only and low-confidence counts; a
-  grounding alert raised during the run) and one meta call's note to the reviewing lawyer.
+  grounding alert raised during the run) and one meta call's note to the reviewing lawyer. Text from
+  documents and models is neutralised where the memo prints it (`mdSafe`): one-line slots (Sources,
+  headings, list items) collapse white space; sections and the note keep their lines with `#`/`##`
+  demoted to `###`; `<` and fence openers are backslash-escaped. A quote cannot open a section.
 - **Gates** (G7): every deliverable opens a gate (`G-deliverable-N`); a finding resting only on
   low-confidence transcript pages gets its own (`G-<fid>`). The run stops `awaiting_gate`; approving
   the deliverable completes the task; rejecting it (a reason is required) puts the reason in the
@@ -1336,7 +1339,9 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     charges what the tool spent.
   - A forced finish (budget or max steps) delivers a draft its lint refused, marked "Delivered with
     an unresolved check"; a sentence citing a finding that is not usable (rejected at its gate or
-    quarantined) is removed and counted in Limitations, the rest stands as drafted.
+    quarantined) is removed and counted in Limitations (a citation after the full stop goes with the
+    sentence before it), the rest stands as drafted. An abbreviation mid-sentence (`Smith v.`) splits
+    the sentence, leaving a fragment, and a table row citing one is blanked, which ends the table.
   - Until PR 8, BigLaw answers only requests addressed by IP or `localhost` (§ Exposure): a LAN or
     proxy hostname gets 403 `bad_host`.
   - Tool-bandit statistics are per signature across all matters; a run's practice is not yet part of

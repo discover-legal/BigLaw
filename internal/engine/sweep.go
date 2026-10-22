@@ -130,7 +130,7 @@ func (e *Engine) sweepTool(rt *agent.Runtime, r *run) agent.Tool {
 		}
 		out["findings"], out["uncovered"], out["incomplete"] = fids, uncovered, len(uncovered) > 0
 		if len(uncovered) > 0 {
-			note := fmt.Sprintf("The evidence sweep ran out of budget: %d section page(s) were not read: ", len(uncovered))
+			note := fmt.Sprintf("The evidence sweep ran out of budget: %d section %s not read: ", len(uncovered), plural(len(uncovered), "page was", "pages were"))
 			for i, u := range uncovered {
 				note += map[bool]string{true: "", false: "; "}[i == 0] + u["documentId"] + " " + u["sectionId"]
 			}

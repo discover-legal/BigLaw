@@ -61,7 +61,11 @@ func flagExternalAuthorities(body, corpus string) (string, []string) {
 	if len(list) == 0 {
 		return body, nil
 	}
-	app := fmt.Sprintf("\n\n## Authorities Requiring Verification\n\nThe following %d legal authorit%s cited above do not appear in the matter record and were NOT verified by BigLaw. Confirm each against a citator before any reliance:\n\n",
-		len(list), map[bool]string{true: "y is", false: "ies"}[len(list) == 1])
-	return strings.TrimRight(body, "\n") + app + "- " + strings.Join(list, "\n- ") + "\n", list
+	n := len(list)
+	app := fmt.Sprintf("\n\n## Authorities Requiring Verification\n\nThe following %d legal %s cited above %s not appear in the matter record and %s NOT verified by BigLaw. Confirm each against a citator before any reliance:\n\n",
+		n, plural(n, "authority", "authorities"), plural(n, "does", "do"), plural(n, "was", "were"))
+	for _, d := range list {
+		app += "- " + mdSafe(d, true) + "\n"
+	}
+	return strings.TrimRight(body, "\n") + app, list
 }

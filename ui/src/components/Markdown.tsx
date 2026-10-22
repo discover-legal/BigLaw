@@ -2,11 +2,13 @@
 // Copyright (C) 2026 Discover Legal
 //
 // The small Markdown subset BigLaw deliverables use: #/## headings, "- " lists, paragraphs,
-// **bold**, and [F-id] citations rendered as buttons. Text is never injected as HTML.
+// **bold**, and [F-id] citations rendered as buttons. Text is never injected as HTML. The server
+// backslash-escapes "<" and fence openers in document text; they show as written.
 import type { ReactNode } from 'react';
 
 function inline(text: string, onFid: (fid: string) => void): ReactNode[] {
   const out: ReactNode[] = [];
+  text = text.replace(/\\([<`~])/g, '$1');
   const re = /\*\*([^*]+)\*\*|\[(F\d+)\]/g;
   let last = 0, k = 0;
   for (let m = re.exec(text); m; m = re.exec(text)) {

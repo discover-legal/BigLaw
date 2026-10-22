@@ -457,8 +457,57 @@ func TestRejectedFindingStaysOutOfForcedDeliverable(t *testing.T) {
 	if v.Status != "awaiting_gate" || strings.Contains(body, "$644,910") || strings.Contains(body, "[F1]") || !strings.Contains(body, "Greystone is the plaintiff.") {
 		t.Fatalf("%s: the rejected finding reached the memo:\n%s", stop(v), out)
 	}
-	if strings.Contains(out, "0 findings were verified") || strings.Contains(out, "1 were quarantined") || !strings.Contains(out, "1 verified finding rejected by the lawyer at a gate is kept out of it too") ||
+	if !strings.Contains(out, "1 finding was verified against the matter's documents and 0 were quarantined") || !strings.Contains(out, "1 verified finding rejected by the lawyer at a gate is kept out of it too") ||
 		!strings.Contains(out, "1 sentence citing a finding that is not usable (rejected at its gate or quarantined) was removed") {
 		t.Fatalf("evidence note:\n%s", out)
+	}
+}
+
+// TestDropUnusableCitationAfterStop (PR 4b r2 N1): a citation after the full stop, or after an
+// abbreviation that ends the sentence, belongs to the sentence before it, so the claim it cites is
+// dropped with it (not only the citation) and counted once.
+func TestDropUnusableCitationAfterStop(t *testing.T) {
+	t.Parallel()
+	use := []Finding{{}}
+	use[0].FID = "F1"
+	for _, md := range []string{
+		"Greystone is the plaintiff [F1]. Talbot owes $644,910 in unpaid invoices. [F2]",
+		"Greystone is the plaintiff [F1]. Talbot owes $644,910 to Greystone Packaging Co. [F2].",
+		"Greystone is the plaintiff [F1]. Talbot owes $644,910 in unpaid invoices. [F2] [F3].",
+	} {
+		if out, n := dropUnusable(md, use); strings.Contains(out, "644,910") || n != 1 || out != "Greystone is the plaintiff [F1]." {
+			t.Errorf("%q -> %q (%d dropped)", md, out, n)
+		}
+	}
+}
+
+// TestRejectedFindingCiteAfterStop (PR 4b r2 N1): TestRejectedFindingStaysOutOfForcedDeliverable
+// with the citation after the period.
+func TestRejectedFindingCiteAfterStop(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	d1 := f.docs[0].ID
+	lead := []model.Reply{calls(plan(issue("I1", "What does Greystone claim?", "Conduct"))), calls(extract(d1, "damages", "I1")), calls(draft("I1", "F1")),
+		calls(committee()), calls(finishCall("submit"))}
+	for range 20 {
+		lead = append(lead, calls(finishCall("submit")))
+	}
+	f.engine(f.with(map[string][]model.Reply{
+		"lead":          lead,
+		"draft_section": {section("Greystone is the plaintiff. Greystone claims damages of {Zephyr} for unpaid invoices. [F1]", "s")},
+		"prosecute":     {text(m{"verdicts": []m{{"claim": "c", "verdict": "unsupported", "why": "no"}}})},
+		"meta":          {metaNote, metaNote, metaNote},
+	}), Config{BudgetCalls: 24, BudgetUSD: 5, CollapseThreshold: 0.5, CollapseAction: "strict"})
+	task := f.submit(0)
+	ctx := context.Background()
+	f.step(ctx)
+	if _, err := f.e.Decide(ctx, task.ID, "G-F1", false, "The invoices are disputed."); err != nil {
+		t.Fatal(err)
+	}
+	f.step(ctx)
+	out := deref(f.get(task.ID).Output)
+	if body, _, _ := strings.Cut(out, "## Sources"); strings.Contains(body, "$644,910") || !strings.Contains(body, "Greystone is the plaintiff.") ||
+		!strings.Contains(out, "1 sentence citing a finding that is not usable (rejected at its gate or quarantined) was removed") {
+		t.Fatalf("the rejected finding's claim is in the memo body, uncited:\n%s", out)
 	}
 }
