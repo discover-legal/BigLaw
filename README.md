@@ -837,7 +837,7 @@ Limitations of this layer:
 - Calls in one turn run sequentially, not concurrently; `retrieve` and Go tools spend no calls, so a
   lead can issue up to 8 per turn for every turn its budget funds.
 - **Line budget:** `agent` 1,242 against 1,100, `analysis` 1,183 against 950, the `docs` adapters
-  153 against 50 (§ Budgets: accepted by owner decision 14, ceiling 16,100).
+  153 against 50 (§ Budgets: accepted by owner decision 14; ceiling now 17,000, decision 15).
 
 ## Memo workflow, durable runs and the REST API (`internal/engine`, `internal/api`; PR 4b)
 
@@ -1281,7 +1281,7 @@ and its test failed (65 deliberate breaks, all caught).
 
 | Budget | Ceiling | Today |
 |---|---:|---:|
-| Go production lines (physical lines, non-`_test.go`, test-support packages included) | 16,100 | 11,320 |
+| Go production lines (physical lines, non-`_test.go`, test-support packages included) | 17,000 | 11,320 |
 | Packages under `internal/`, test-support packages excluded | 12 | 8 (`agent`, `analysis`, `api`, `docs`, `docs/ooxml`, `engine`, `model`, `store`; `store/storetest` is test support) |
 | Direct Go dependencies | 3 | 2 (`github.com/lib/pq`, `github.com/ledongthuc/pdf`) |
 | Runtime environment variables | 20 | 18 |
@@ -1290,7 +1290,7 @@ and its test failed (65 deliberate breaks, all caught).
 | Packages without a `_test.go` | 0 | 0 |
 | Lines in any one source file (`.go`, `.py`, `.sql`, `.sh`, `.js`, `.ts`, `.css`; tests included) | 2,000 | 968 (`internal/docs/vision_safety_test.go`) |
 
-The line ceiling is 16,100 (owner decisions: 14,000, then 14,250, then 14,500 during PR 2's review, then 15,000 at PR 3a's, with pgvector, then 15,500 at PR 3a's round 3, declared final, then 15,600 at PR 3c's round 1, decision 11, then 15,650 at PR 3c's round 4 to read long-legend scans, decision 12, then 16,100 at PR 4a, decision 14). The plan totalled 15,581–15,611 after PR 3c (round 7); PR 4a measured 2,557 lines against the 2,100 its components carry, putting the plan at 16,038–16,068. **Owner decision 14 (2026-10-22): keep PR 4a as built and raise the ceiling to 16,100**, which leaves room for PR 3e (about 30–40 lines); the next breach goes back to the owner. PR 4a's committee round 1 fixes added 23 (7,476 → 7,499): plan **16,061–16,091**, headroom 9–39 for PR 3e (round 2 added 3: 7,502). **PR 4b measured 3,818 lines (7,502 → 11,320) against the about 3,060 its components carry** (engine memo part 2,340, api 660, documents routes 60), so the plan is **16,822–16,852, over the ceiling by 722–752**. The count itself (11,320) is far below the ceiling; the plan's later PRs are what no longer fit. Not cut: the breach goes back to the owner (trim options in DESIGN § PR 4b as built). A **test-support package** is one
+The line ceiling is 17,000 (owner decisions: 14,000, then 14,250, then 14,500 during PR 2's review, then 15,000 at PR 3a's, with pgvector, then 15,500 at PR 3a's round 3, declared final, then 15,600 at PR 3c's round 1, decision 11, then 15,650 at PR 3c's round 4 to read long-legend scans, decision 12, then 16,100 at PR 4a, decision 14, then 17,000 at PR 4b, decision 15). The plan totalled 15,581–15,611 after PR 3c (round 7); PR 4a measured 2,557 lines against the 2,100 its components carry, putting the plan at 16,038–16,068. **Owner decision 14 (2026-10-22): keep PR 4a as built and raise the ceiling to 16,100**, which leaves room for PR 3e (about 30–40 lines); the next breach goes back to the owner. PR 4a's committee round 1 fixes added 23 (7,476 → 7,499): plan **16,061–16,091**, headroom 9–39 for PR 3e (round 2 added 3: 7,502). **PR 4b measured 3,818 lines (7,502 → 11,320) against the about 3,060 its components carry** (engine memo part 2,340, api 660, documents routes 60), so the plan is **16,822–16,852**, over the then 16,100 ceiling by 722–752. **Owner decision 15 (2026-10-22): keep PR 4b as built and raise the ceiling to 17,000** (headroom 148–178 on the plan); the next breach goes to the owner. A **test-support package** is one
 whose directory name ends in `test` and that no production file outside it imports, such as
 `storetest`. Under the coordinator's ruling it is left out of the package count, but its lines
 count toward the line ceiling like any other non-`_test.go` file. A `*test` package that
@@ -1324,8 +1324,8 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
   - Packs are four `candidate` files; nothing checks a pack's legal content.
   - **Line budget:** PR 4b adds 3,818 lines (7,502 → 11,320) against about 3,060 its components carry
     (engine memo part 2,340, api 660, the documents routes 60): `engine` 3,406, `api` 248, the rest
-    in `agent` (resume), `docs` (routes), `cmd` (wiring). The plan after 4b is over the 16,100
-    ceiling (§ Budgets); this goes back to the owner.
+    in `agent` (resume), `docs` (routes), `cmd` (wiring). The plan after 4b (16,822–16,852) broke the
+    16,100 ceiling; owner decision 15 raised it to 17,000 (§ Budgets); the next breach goes to the owner.
 - The recorded demo replays answer-key claims, not a model's work; its `@transcript` badges come
   from a scripted reader, not a vision model; it has no `judge`/`ensemble` badges (model calls); a
   query other than the offered searches is ranked in the browser, approximately; a rejected
