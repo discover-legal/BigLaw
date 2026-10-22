@@ -66,6 +66,14 @@ change. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`, not here.
   on it. Never present its numbers as the gate. The owner records a real one with `make e4-record`.
   A chunker or fixture change makes the tape stale (`TestE4TapeReplays` fails): re-record the
   self-test tape with `make e4-record EMBED_MODEL=biglaw-selftest-hash` and say so in the PR.
+- `ui/` (PR 11, pulled forward by owner decision 13) — React 19 + Vite + TS strict, the seven
+  screens behind `ui/src/api/transport.ts`: `http.ts` (same-origin REST, routes planned from PR 4)
+  and `recorded.ts` (replays `ui/src/recorded/recording.json` in the browser). `VITE_ENGINE=recorded`
+  aliases the transport (vite.config.ts), so the recorded bundle has no network code
+  (`test/offline.test.ts`). The recording is made by `eval/demo/record_test.go` (test-only, no Go
+  prod lines) from v2's `internal/docs` over three `eval/tasks` matters; claims come from the answer
+  keys. `TestDemoRecording` (DB) fails when the committed recording is stale: `make demo-record`.
+  The `//go:embed` of `ui/dist` waits for `internal/api` (PR 4b, its 30-line budget).
 
 Everything else in README is marked planned (next: PR 3d the `.docx` writer and tracked changes;
 contract v1's `content`/202/`capabilities` for vision intake are PR 8's). Lexical search alone measured E4 0.882; the hybrid gate is
@@ -95,6 +103,13 @@ not yet judged (self-test tape).
   database-wide, which schema-per-test isolation cannot handle: an extension is created once
   outside the numbered migrations (`store.Open` and `storetest`, as `vector` is) before any
   migration uses one.
+- UI: runtime deps `react` + `react-dom` only (exact versions; dev deps exact too); every screen
+  talks through the `Transport` interface, never `fetch` directly; nothing in `recorded.ts` (or
+  what it imports) may use the network; tests are `node:test` over `.ts` (Node ≥ 22.18 strips
+  types; imports carry their `.ts` extension; a component a test renders is plain `.ts` with
+  `createElement`, like `badge.ts`). Never present the recording as a model's output: keep its provenance header,
+  the banner and the step `source` marks true. A change to `internal/docs` output or `eval/tasks`
+  makes the recording stale: re-record (`make demo-record`) and say so in the PR.
 - No source file over 2,000 lines (`scripts/loc.py`). Every `.go`/`.py` file starts with the
   SPDX header.
 - Every package has a `_test.go`; DB tests use `storetest.DSN(t)` and `t.Parallel()`.
@@ -109,16 +124,18 @@ not yet judged (self-test tape).
   `shown` in `cmd/biglaw/config.go` (DSNs via `store.DescribeDSN`), never raw.
 - Until PR 8 there is no auth: only Compose (loopback-published) may pass `--allow-no-auth`, and
   every Compose port must name a loopback IP (`TestDeployFilesFollowExposureRule`).
-- One Go version (1.26.9): go.mod's `go`/`toolchain` lines, the Dockerfile `FROM`, CI's
+- One Go version (1.26.10): go.mod's `go`/`toolchain` lines, the Dockerfile `FROM`, CI's
   `go-version` and the README move together (`TestGoVersionPinnedEverywhere`).
 
 ## Gates
 ```bash
 make ci     # gofmt, vet, mod verify/tidy, static build, go test -race -shuffle, loc.py + tests, compose config -q
 make lint vuln   # staticcheck, govulncheck (CI lint job)
+make ui          # cd ui && npm ci && npm run build && npm test (CI ui job, Node 22)
+make demo-bundle # ui/dist-recorded for discover.legal/demo/biglaw/; make demo-record re-records it
 # DB tests: BIGLAW_TEST_DSN=postgres://…?sslmode=disable BIGLAW_REQUIRE_DB=1 (Postgres with pgvector)
 make e4-record EMBED_MODEL=…   # owner-run: record the E4 tape at the model's own length (make e4-live: no tape)
 ```
 Budgets: Go prod LOC ≤ 15,650 (owner decision 12; plan 15,580–15,610 after PR 3c round 4, headroom 40–70, PR 3e must fit; test-support packages such as `storetest` count), internal
 packages ≤ 12 (test-support packages do not count), direct deps ≤ 3, env vars ≤ 20 (18 used), UI runtime
-deps ≤ 2, untested packages 0, longest source file ≤ 2,000 lines.
+deps ≤ 2 (2 used), UI source lines (`ui/src`) ≤ 2,400, untested packages 0, longest source file ≤ 2,000 lines.

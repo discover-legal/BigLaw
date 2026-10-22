@@ -4,3 +4,6 @@
 !.env.example
 __pycache__/
 .envrc
+ui/node_modules/
+ui/dist/
+ui/dist-recorded/

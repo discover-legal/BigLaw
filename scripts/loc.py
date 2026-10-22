@@ -11,6 +11,8 @@ Fails (exit 1) when any budget is exceeded:
   direct Go deps        <= 3       go.mod requires not marked // indirect
   runtime env vars      <= 20      distinct names read by production Go code
   UI runtime deps       <= 2       ui/package.json "dependencies"
+  UI source lines       <= 2,400   lines of ui/src .ts/.tsx/.css (DESIGN: UI ~2,400; tests,
+                                   config and the generated recording.json not counted)
   packages without tests == 0      every Go package directory has a *_test.go
   longest source file   <= 2,000   lines of any .go/.py/.sql/.sh/.js/.ts/.tsx/.css file (owner rule)
 It also fails when LICENSE or NOTICE is missing, or a .go/.py file lacks the
@@ -45,12 +47,13 @@ BUDGETS = {
     "direct_go_deps": 3,
     "env_vars": 20,
     "ui_runtime_deps": 2,
+    "ui_loc": 2400,
     "untested_packages": 0,
     "longest_source_file": 2000,
 }
 TEST_ONLY_VARS = {"BIGLAW_TEST_DSN", "BIGLAW_REQUIRE_DB"}
 TEST_ONLY_HOME = os.path.join("internal", "store", "storetest")
-SKIP_DIRS = {".git", "node_modules", "vendor", "testdata", "dist"}
+SKIP_DIRS = {".git", "node_modules", "vendor", "testdata", "dist", "dist-recorded"}  # build output is not source
 SOURCE_EXT = (".go", ".py", ".sql", ".sh", ".js", ".mjs", ".ts", ".tsx", ".css")
 SPDX = "SPDX-License-Identifier: Apache-2.0"
 
@@ -149,11 +152,14 @@ def lines(src):
 
 def measure(root):
     pkgs = go_packages(root)
-    loc, env, problems, longest = 0, set(), [], 0
+    loc, env, problems, longest, ui_loc = 0, set(), [], 0, 0
+    ui_src = os.path.join("ui", "src") + os.sep
     for path in source_files(root):
         src = open(path, encoding="utf-8", errors="replace").read()
         n, rel = lines(src), os.path.relpath(path, root)
         longest = max(longest, n)
+        if rel.startswith(ui_src) and rel.endswith((".ts", ".tsx", ".css")):
+            ui_loc += n
         if n > BUDGETS["longest_source_file"]:
             problems.append(f"{rel}: {n} lines exceeds the per-file cap of {BUDGETS['longest_source_file']} (longest_source_file); split it")
         if path.endswith((".go", ".py")) and SPDX not in "\n".join(src.splitlines()[:5]):
@@ -184,6 +190,7 @@ def measure(root):
         "direct_go_deps": len(deps),
         "env_vars": len(env),
         "ui_runtime_deps": len(ui),
+        "ui_loc": ui_loc,
         "untested_packages": len(untested),
         "longest_source_file": longest,
     }

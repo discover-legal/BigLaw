@@ -10,7 +10,11 @@ GOVULNCHECK ?= golang.org/x/vuln/cmd/govulncheck@v1.1.4
 # to ours: a tool built with an older Go cannot analyse this module.
 TOOLCHAIN = $(shell sed -n 's/^toolchain //p' go.mod)
 
-.PHONY: e4-record e4-live build static-check test fmt-check vet mod-check loc compose-check lint vuln ci clean
+# The UI (ui/, Node 22): `make ui` = what CI's ui job runs; `make demo-bundle` = the static recorded
+# demo under /demo/biglaw/ (ui/dist-recorded); `make demo-record` re-records it (needs BIGLAW_TEST_DSN).
+NPM ?= npm
+
+.PHONY: ui demo-bundle demo-record e4-record e4-live build static-check test fmt-check vet mod-check loc compose-check lint vuln ci clean
 
 # A static binary: no cgo, so no libc to match on the target (Pi, distroless).
 build:
@@ -56,6 +60,15 @@ e4-record e4-live:
 	@test -n "$(EMBED_MODEL)" || { echo "set EMBED_MODEL"; exit 2; }
 	BIGLAW_REQUIRE_DB=1 $(if $(filter e4-record,$@),E4_RECORD=1,E4_LIVE=1) EMBED_MODEL='$(EMBED_MODEL)' \
 		$(GO) test -count=1 -v -timeout 30m -run '^TestHybridRecallProofRuns$$' ./internal/docs
+
+ui:
+	cd ui && $(NPM) ci && $(NPM) run build && $(NPM) test
+
+demo-bundle:
+	cd ui && $(NPM) ci && $(NPM) run demo-bundle
+
+demo-record:
+	BIGLAW_REQUIRE_DB=1 DEMO_RECORD=1 $(GO) test -count=1 -run '^TestDemoRecording$$' ./eval/demo
 
 loc:
 	python3 scripts/loc.py

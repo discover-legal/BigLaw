@@ -3,8 +3,8 @@ name: CI
 # Adapted from v1's .github/workflows/ci.yml (fix/ci-and-citation-parse):
 # the Go module is now the repo root, Postgres (with pgvector) runs as a service
 # container, and BIGLAW_REQUIRE_DB=1 turns any skipped database test into a failure.
-# Three jobs run in parallel: go (make ci), lint (staticcheck + govulncheck)
-# and docker (image build + Compose smoke test).
+# Four jobs run in parallel: go (make ci), lint (staticcheck + govulncheck),
+# docker (image build + Compose smoke test) and ui (npm ci, build, test).
 on:
   pull_request:
   push:
@@ -54,7 +54,7 @@ jobs:
       # (TestGoVersionPinnedEverywhere checks all three agree).
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.26.9"
+          go-version: "1.26.10"
           cache-dependency-path: go.sum
 
       - uses: actions/setup-python@v5
@@ -73,12 +73,27 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.26.9"
+          go-version: "1.26.10"
           cache-dependency-path: go.sum
       - name: staticcheck
         run: make lint
       - name: govulncheck
         run: make vuln
+
+  ui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      # tsc strict + the live and recorded builds; node:test (transport seam, recorded engine,
+      # badges, and the recorded bundle has no network code).
+      - name: make ui
+        run: make ui
 
   docker:
     runs-on: ubuntu-latest

@@ -5,3 +5,6 @@
 .envrc
 biglaw
 __pycache__
+ui/node_modules
+ui/dist
+ui/dist-recorded
