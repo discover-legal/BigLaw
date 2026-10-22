@@ -2,9 +2,11 @@
 // Copyright (C) 2026 Discover Legal
 //
 // The verification-method badge (README G2/G3/G11). Plain createElement so node:test renders it.
+// Tones: ok = verbatim (green), near = verbatim once normalised (teal), warn = a lower class of
+// evidence (a transcript or a judge; amber), bad = excluded (red).
 import { createElement } from 'react';
 
-export interface BadgeView { label: string; tone: 'ok' | 'warn' | 'bad'; title: string }
+export interface BadgeView { label: string; tone: 'ok' | 'near' | 'warn' | 'bad'; title: string }
 
 /** badgeFor maps a ladder method to what a reviewing lawyer sees. Unknown methods are never shown as verified. */
 export function badgeFor(method: string, confidence = 0): BadgeView {
@@ -15,7 +17,7 @@ export function badgeFor(method: string, confidence = 0): BadgeView {
   }
   switch (method) {
     case 'exact': return { label: 'exact', tone: 'ok', title: `The quote appears verbatim in the source (confidence ${pct}).` };
-    case 'tolerant': return { label: 'tolerant', tone: 'ok', title: `The quote matches once quotes, case and white space are normalised (confidence ${pct}).` };
+    case 'tolerant': return { label: 'tolerant', tone: 'near', title: `The quote matches once quotes, case and white space are normalised (confidence ${pct}).` };
     case 'judge': return { label: 'judge', tone: 'warn', title: `A paraphrase judge found the quote supported (confidence ${pct}, capped at 80%).` };
     case 'ensemble': return { label: 'ensemble', tone: 'warn', title: `Three independent judge votes supported the quote (confidence ${pct}).` };
     default: return { label: 'excluded', tone: 'bad', title: 'Not verified against the source: quarantined and left out of the deliverable.' };

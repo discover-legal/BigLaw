@@ -5,9 +5,9 @@
 // 8 and 9 add. The recorded demo shows sample records written for it (recording.json, labelled).
 import type { ReactNode } from 'react';
 import type { Playbook } from '../api/types.ts';
-import { Failure, plural, useApi, useLoad } from '../lib.tsx';
+import { Empty, Failure, Loading, plural, useApi, useLoad } from '../lib.tsx';
 
-function Screen(props: { title: string; lede: string; sample?: string; error: string | null; children: ReactNode }) {
+function Screen(props: { title: string; lede: string; sample?: string; error: string | null; loading?: boolean; children: ReactNode }) {
   const api = useApi();
   return (
     <section>
@@ -15,7 +15,7 @@ function Screen(props: { title: string; lede: string; sample?: string; error: st
       <p className="lede">{props.lede}</p>
       {api.mode === 'recorded' && props.sample && <p className="sample small">{props.sample}</p>}
       <Failure error={props.error} />
-      {props.children}
+      {props.loading && !props.error ? <Loading label={`Loading ${props.title.toLowerCase()}`} /> : props.children}
     </section>
   );
 }
@@ -28,9 +28,9 @@ export function Playbooks() {
   const r = useLoad(() => api.playbooks(), []);
   const rows = [...(r.data ?? [])].sort((a, b) => TIERS.indexOf(a.scope) - TIERS.indexOf(b.scope));
   return (
-    <Screen title="Playbooks" error={r.error} sample={`${SAMPLE} Contract review that applies them arrives with PR 6.`}
+    <Screen title="Playbooks" error={r.error} loading={!r.data} sample={`${SAMPLE} Contract review that applies them arrives with PR 6.`}
       lede="Negotiation positions BigLaw reviews contracts against. When two playbooks cover the same clause, the narrower wins: client, then matter, then personal, then firm.">
-      {r.data && rows.length === 0 && <p className="muted">No playbooks yet.</p>}
+      {r.data && rows.length === 0 && <Empty icon="ledger" title="No playbooks yet">Playbooks hold the positions contract review checks clauses against.</Empty>}
       {rows.length > 0 && (
         <div className="table-wrap"><table className="grid"><thead><tr><th>Playbook</th><th>Tier</th><th>Positions</th></tr></thead>
           <tbody>{rows.map((p) => <tr key={p.id}><td>{p.name}</td><td><span className={`pill tier-${p.scope}`}>{p.scope}</span></td><td>{plural(p.clauses, 'clause')}</td></tr>)}</tbody></table></div>
@@ -43,17 +43,17 @@ export function Clients() {
   const api = useApi();
   const r = useLoad(() => api.clients(), []);
   return (
-    <Screen title="Clients & Conflicts" error={r.error}
+    <Screen title="Clients & Conflicts" error={r.error} loading={!r.data}
       lede={api.mode === 'recorded'
         ? 'The three sample clients and their matters. Conflict checks against adverse parties arrive with PR 8.'
         : 'Conflict checks run on every new client and matter.'}>
-      {r.data?.length === 0 && <p className="muted">No clients yet.</p>}
+      {r.data?.length === 0 && <Empty icon="doc" title="No clients yet">Clients and their matters appear here once added.</Empty>}
       {r.data?.map((c) => (
-        <div key={c.id} className="panel">
+        <div key={c.id} className="panel client">
           <h2>{c.name}</h2>
           <ul className="plain">{c.matters.map((m) => (
-            <li key={m.number}><a href={`#/matters?matter=${encodeURIComponent(m.number)}`}>{m.number}</a> {m.title}
-              <span className="muted"> · <a href={`#/documents?matter=${encodeURIComponent(m.number)}`}>{plural(m.documentIds.length, 'document')}</a></span></li>
+            <li key={m.number}><a className="num-tag" href={`#/matters?matter=${encodeURIComponent(m.number)}`}>{m.number}</a> <span>{m.title}</span>
+              <a className="small" href={`#/documents?matter=${encodeURIComponent(m.number)}`}>{plural(m.documentIds.length, 'document')}</a></li>
           ))}</ul>
         </div>
       ))}
@@ -68,16 +68,16 @@ export function Billing() {
   const byMatter = new Map<string, number>();
   for (const e of rows) byMatter.set(e.matterNumber, (byMatter.get(e.matterNumber) ?? 0) + e.hours);
   return (
-    <Screen title="Time & Billing" error={r.error} sample={`${SAMPLE} Pre-bills and LEDES export arrive with PR 9.`}
+    <Screen title="Time & Billing" error={r.error} loading={!r.data} sample={`${SAMPLE} Pre-bills and LEDES export arrive with PR 9.`}
       lede="Time recorded against each matter, in tenths of an hour.">
-      {r.data && rows.length === 0 && <p className="muted">No time entries yet.</p>}
+      {r.data && rows.length === 0 && <Empty icon="ledger" title="No time entries yet">Time recorded against a matter appears here.</Empty>}
       {byMatter.size > 0 && (
-        <div className="stats panel">{[...byMatter].map(([m, h]) => <div key={m}><b>{h.toFixed(1)} h</b><span>{m}</span></div>)}</div>
+        <div className="stats">{[...byMatter].map(([m, h]) => <div key={m}><b>{h.toFixed(1)} h</b><span>{m}</span></div>)}</div>
       )}
       {rows.length > 0 && (
-        <table className="grid stack"><thead><tr><th>Date</th><th>Matter</th><th>Hours</th><th>Timekeeper</th><th>Narrative</th></tr></thead>
+        <table className="grid stack"><thead><tr><th>Date</th><th>Matter</th><th className="num">Hours</th><th>Timekeeper</th><th>Narrative</th></tr></thead>
           <tbody>{rows.map((e) => (
-            <tr key={e.id}><td className="nowrap">{e.date}</td><td className="nowrap">{e.matterNumber}</td><td data-label="Hours">{e.hours.toFixed(1)}</td>
+            <tr key={e.id}><td className="nowrap">{e.date}</td><td className="nowrap"><span className="num-tag">{e.matterNumber}</span></td><td data-label="Hours" className="num">{e.hours.toFixed(1)}</td>
               <td>{e.timekeeper}</td><td className="wide">{e.narrative}</td></tr>
           ))}</tbody></table>
       )}
@@ -90,13 +90,13 @@ export function Settings() {
   const r = useLoad(() => api.profiles(), []);
   const cfg = useLoad(() => api.settings?.() ?? Promise.resolve(null), []);
   return (
-    <Screen title="Settings" error={r.error ?? cfg.error} sample="Read-only. The profiles are sample records written for this demo (fictional people); sign-in and tokens arrive with PR 8."
+    <Screen title="Settings" error={r.error ?? cfg.error} loading={!r.data} sample="Read-only. The profiles are sample records written for this demo (fictional people); sign-in and tokens arrive with PR 8."
       lede="Who can work on matters, and how this BigLaw is configured.">
       <h2>Profiles</h2>
-      {r.data && r.data.length === 0 && <p className="muted">No profiles yet.</p>}
+      {r.data && r.data.length === 0 && <Empty icon="doc" title="No profiles yet">Profiles arrive with sign-in (PR 8).</Empty>}
       {r.data && r.data.length > 0 && (
         <div className="table-wrap"><table className="grid"><thead><tr><th>Name</th><th>Role</th></tr></thead>
-          <tbody>{r.data.map((p) => <tr key={p.id}><td>{p.name}</td><td>{p.role}</td></tr>)}</tbody></table></div>
+          <tbody>{r.data.map((p) => <tr key={p.id}><td>{p.name}</td><td><span className={`pill role-${p.role}`}>{p.role}</span></td></tr>)}</tbody></table></div>
       )}
       {cfg.data && (
         <>

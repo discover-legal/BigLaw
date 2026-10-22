@@ -4,14 +4,18 @@
 // The REST contract's JSON shapes as the UI reads them (README § REST API; the shapes the
 // contract left open are written down in DESIGN § UI contract, PR 11). Readers ignore unknown fields.
 
-export type Method = 'exact' | 'tolerant' | 'judge' | 'ensemble' | 'none' | `${'exact' | 'tolerant'}@transcript`;
+type Rung = 'exact' | 'tolerant' | 'judge' | 'ensemble';
+/** A ladder method (docs.VerifyQuote): a rung, the rung on a machine transcript, or none (excluded). */
+export type Method = Rung | `${Rung}@transcript` | 'none';
 
 export interface Doc {
   id: string;
   name: string;
   contentType: string;
+  fileId: string; // the original upload; "" for a document posted as text
   method: string; // text | text_layer | vision
-  status: string; // ready | transcribing | needs_transcription | failed
+  noText: boolean;
+  status: string; // ready | needs_transcription | failed (+ transcribing: contract v1, PR 8)
   transcript?: { model: string; agreement: number; lowConfidence: boolean; pages: { page: number; agreement: number }[] };
   pages: number;
   notes: string[];
@@ -97,11 +101,13 @@ export interface Step {
 // rejected: a lawyer rejected the deliverable (with a reason). Live (PR 4b) the lead resumes with that reason;
 // the recorded engine has no revised run, so its replay ends there.
 export type TaskStatus = 'queued' | 'running' | 'awaiting_gate' | 'complete' | 'failed' | 'cancelled' | 'rejected';
+/** Why the run stopped (README § Stop conditions); a rejection is a gate decision, not a stop reason. */
+export type StopReason = 'finished' | 'budget_exhausted' | 'max_steps' | 'awaiting_gate' | 'cancelled' | 'failed';
 
 export interface Run {
   status: TaskStatus;
   step: number;
-  stopReason: string | null;
+  stopReason: StopReason | null;
   budget: { calls: number; usd: number | null; remaining: number };
   openFindings: number;
 }
@@ -112,7 +118,7 @@ export interface Gate {
   findingId?: string;
 }
 
-/** A closed gate: who decided is PR 8's (auth); a rejection always carries its reason. */
+/** A closed gate: who decided is PR 8's (auth); a rejection always carries its (non-empty) reason. */
 export interface GateDecision extends Gate {
   decision: 'approved' | 'rejected';
   reason?: string;
@@ -130,7 +136,7 @@ export interface Task {
   createdAt: string;
   run: Run;
   pendingGates: Gate[];
-  decidedGates?: GateDecision[];
+  decidedGates: GateDecision[];
   findings: Finding[];
   output: string | null;
   groundingAlert: string | null;
@@ -168,5 +174,5 @@ export interface Profile { id: string; name: string; role: string }
 export interface Setting { name: string; default: string; pr: number; secret?: boolean }
 /** A search the recorded engine offers, with the hits v2's own Search returned for it. */
 export interface RecordedSearch { matterNumber: string; query: string; hits: Hit[] }
-export interface Playbook { id: string; name: string; scope: string; clauses: number }
+export interface Playbook { id: string; name: string; scope: 'client' | 'matter' | 'personal' | 'firm'; clauses: number }
 export interface TimeEntry { id: string; date: string; matterNumber: string; hours: number; narrative: string; timekeeper: string }

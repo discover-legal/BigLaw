@@ -1038,7 +1038,7 @@ transcribe, never text).
 | Direct Go dependencies | 3 | 2 (`github.com/lib/pq`, `github.com/ledongthuc/pdf`) |
 | Runtime environment variables | 20 | 18 |
 | UI runtime dependencies | 2 | 2 (`react`, `react-dom`) |
-| UI source lines (`ui/src` `.ts`/`.tsx`/`.css`; tests, config and `recording.json` not counted) | 2,400 | 1,275 |
+| UI source lines (`ui/src` `.ts`/`.tsx`/`.css`; tests, config and `recording.json` not counted) | 2,400 | 1,862 |
 | Packages without a `_test.go` | 0 | 0 |
 | Lines in any one source file (`.go`, `.py`, `.sql`, `.sh`, `.js`, `.ts`, `.css`; tests included) | 2,000 | 968 (`internal/docs/vision_safety_test.go`) |
 

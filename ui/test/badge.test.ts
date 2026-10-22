@@ -10,7 +10,7 @@ const html = (method: string, confidence?: number) => renderToStaticMarkup(creat
 
 test('each ladder method renders its badge', () => {
   assert.match(html('exact', 1), /class="badge badge-ok"[^>]*>exact</);
-  assert.match(html('tolerant', 0.95), /badge-ok[^>]*>tolerant</);
+  assert.match(html('tolerant', 0.95), /badge-near[^>]*>tolerant</);
   assert.match(html('exact@transcript', 0.85), /badge-warn[^>]*>exact @transcript</);
   assert.match(html('tolerant@transcript', 0.85), /badge-warn[^>]*>tolerant @transcript</);
   assert.match(html('judge', 0.8), /badge-warn[^>]*>judge</);

@@ -6,6 +6,7 @@
 import { useEffect, useState } from 'react';
 import type { Transport } from './api/transport.ts';
 import { Api, parseRoute } from './lib.tsx';
+import { Icon } from './components/icons.tsx';
 import { Matters } from './screens/Matters.tsx';
 import { TaskScreen } from './screens/Task.tsx';
 import { Documents } from './screens/Documents.tsx';
@@ -41,24 +42,27 @@ export function App(props: { api: Transport }) {
       {props.api.provenance && (
         <div className="demo-banner" role="note">
           <div className="demo-line">
-            {props.api.home && <a className="home" href={props.api.home}>← discover.legal</a>}
-            <span><strong>Recorded run; not live.</strong> No model is called and nothing is saved. Fictional matters; not legal advice.</span>
+            {props.api.home && <a className="home" href={props.api.home}><Icon name="back" size={13} />discover.legal</a>}
+            <span><span className="rec-dot" aria-hidden="true" /><strong>Recorded run; not live.</strong> No model is called and nothing is saved. Fictional matters; not legal advice.</span>
             <button className="link" onClick={() => setAbout(!about)} aria-expanded={about} aria-controls="how">{about ? 'Hide' : 'How this demo works'}</button>
           </div>
           {about && <p id="how" className="provenance">{props.api.provenance}</p>}
         </div>
       )}
-      <div className="shell">
-        <header className="top">
-          <a className="brand" href="#/matters">BigLaw<span>2</span></a>
+      <header className="top">
+        <div className="top-in">
+          <a className="brand" href="#/matters" aria-label="BigLaw 2, Matters">
+            <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><rect width="24" height="24" rx="6" fill="currentColor" /><path d="M7 7v10h5.5a3 3 0 0 0 0-6H7m0 0h4.5a2 2 0 0 0 0-4H7" fill="none" stroke="var(--accent-ink)" strokeWidth="2" strokeLinejoin="round" /></svg>
+            BigLaw<sup>2</sup>
+          </a>
           <nav aria-label="Screens">
             {NAV.map(([id, label]) => (
               <a key={id} href={`#/${id}`} className={active === id ? 'on' : ''} aria-current={active === id ? 'page' : undefined}>{label}</a>
             ))}
           </nav>
-        </header>
-        <main>{body}</main>
-      </div>
+        </div>
+      </header>
+      <main className="shell">{body}</main>
     </Api.Provider>
   );
 }

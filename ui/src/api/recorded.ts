@@ -59,7 +59,7 @@ export function createTransport(rec: Recording = recordingJson as unknown as Rec
       : !finished(l) ? 'running' : l.decision?.decision === 'rejected' ? 'rejected' : l.decision ? 'complete' : 'awaiting_gate';
     return {
       status, step: n,
-      stopReason: status === 'cancelled' ? 'cancelled' : status === 'rejected' ? 'deliverable rejected' : finished(l) ? 'finished' : null,
+      stopReason: status === 'cancelled' ? 'cancelled' : finished(l) ? 'finished' : null,
       budget: { calls: 0, usd: 0, remaining: BUDGET_CALLS },
       openFindings: 0,
     };

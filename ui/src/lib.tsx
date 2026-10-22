@@ -2,7 +2,8 @@
 // Copyright (C) 2026 Discover Legal
 //
 // Shared by every screen: the transport context, hash routes and the load hook.
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { Icon } from './components/icons.tsx';
 import type { Transport } from './api/transport.ts';
 
 export const Api = createContext<Transport>(null as unknown as Transport);
@@ -39,4 +40,26 @@ export const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' :
 
 export function Failure(props: { error: string | null }) {
   return props.error ? <p className="error" role="alert">{props.error}</p> : null;
+}
+
+/** Loading: a quiet skeleton with its label for screen readers (and as a caption). */
+export function Loading(props: { label: string }) {
+  return (
+    <div className="loading" role="status" aria-live="polite">
+      <span className="sk" /><span className="sk" /><span className="sk short" />
+      <p className="muted small">{props.label}…</p>
+    </div>
+  );
+}
+
+/** Empty: what is missing and what to do about it. */
+export function Empty(props: { icon: string; title: string; children?: ReactNode; action?: ReactNode }) {
+  return (
+    <div className="empty">
+      <span className="empty-icon"><Icon name={props.icon} size={20} /></span>
+      <p className="empty-title">{props.title}</p>
+      {props.children && <div className="muted">{props.children}</div>}
+      {props.action}
+    </div>
+  );
 }

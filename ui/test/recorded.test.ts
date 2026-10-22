@@ -80,10 +80,10 @@ test('rejecting the deliverable needs a reason, closes the gate and ends the rep
   await assert.rejects(t.decideGate(task.id, gate.gateId, false, '  '), /Say why/);
   const r = await t.decideGate(task.id, gate.gateId, false, 'Add the Rule 26(f) deadline.');
   assert.equal(r.status, 'rejected');
-  assert.equal(r.run.stopReason, 'deliverable rejected');
+  assert.equal(r.run.stopReason, 'finished'); // the run finished; the rejection is the gate's decision
   assert.deepEqual(r.pendingGates, []);
-  assert.equal(r.decidedGates?.[0].decision, 'rejected');
-  assert.equal(r.decidedGates?.[0].reason, 'Add the Rule 26(f) deadline.');
+  assert.equal(r.decidedGates[0].decision, 'rejected');
+  assert.equal(r.decidedGates[0].reason, 'Add the Rule 26(f) deadline.');
   assert.match(r.output ?? '', /## Evidence Note/);
   await assert.rejects(t.decideGate(task.id, gate.gateId, true), /not open/);
 });
