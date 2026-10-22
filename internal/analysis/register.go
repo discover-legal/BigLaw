@@ -127,7 +127,7 @@ func Tools(src Source) []agent.Tool {
 				}
 				picked = append(picked, fs[i])
 			}
-			if in.FIDs == nil {
+			if len(in.FIDs) == 0 { // null and [] both mean every finding, as in numbers
 				picked = fs
 			}
 			return map[string]any{"conflicts": append([]Conflict{}, Join(picked, in.Aliases)...)}, agent.Usage{}, nil

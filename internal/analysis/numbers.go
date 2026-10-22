@@ -160,6 +160,9 @@ func Calc(findings []Finding, fn string, ops []Operand, holidays []string) (Work
 		t := xs[0].date.time()
 		if shape == "dd" { // the working days after the first date, up to and including the second
 			n, end := 0, xs[1].date.time()
+			if end.Before(t) {
+				return Worksheet{}, errors.New("business_days: the second date is before the first; put the earlier date first")
+			}
 			for t = t.AddDate(0, 0, 1); !t.After(end) && n < 1e6; t = t.AddDate(0, 0, 1) {
 				n += map[bool]int{true: 1}[workday(t)]
 			}

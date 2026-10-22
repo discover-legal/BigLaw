@@ -262,3 +262,12 @@ func TestHandlesStableAcrossCalls(t *testing.T) {
 		}
 	}
 }
+
+// r2 verifier N2: business_days with the dates reversed is refused (it once counted 0 days).
+func TestCalculateBusinessDaysRefusesReversedDates(t *testing.T) {
+	date := ref("date")
+	_, err := Calc(ledger(), "business_days", []Operand{{Literal: ref("2026-11-27"), Unit: date}, {Literal: ref("2026-11-12"), Unit: date}}, nil)
+	if err == nil || !strings.Contains(err.Error(), "earlier date first") {
+		t.Fatalf("reversed dates: %v", err)
+	}
+}
