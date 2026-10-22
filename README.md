@@ -830,7 +830,7 @@ Limitations of this layer:
 - Calls in one turn run sequentially, not concurrently; `retrieve` and Go tools spend no calls, so a
   lead can issue up to 8 per turn for every turn its budget funds.
 - **Line budget:** `agent` 1,232 against 1,100, `analysis` 1,176 against 950, the `docs` adapters
-  147 against 50 (§ Budgets: over the ceiling's plan; owner decision).
+  147 against 50 (§ Budgets: accepted by owner decision 14, ceiling 16,100).
 
 ## Files
 
@@ -1116,7 +1116,7 @@ transcribe, never text).
 
 | Budget | Ceiling | Today |
 |---|---:|---:|
-| Go production lines (physical lines, non-`_test.go`, test-support packages included) | 15,650 | 7,476 |
+| Go production lines (physical lines, non-`_test.go`, test-support packages included) | 16,100 | 7,476 |
 | Packages under `internal/`, test-support packages excluded | 12 | 6 (`agent`, `analysis`, `docs`, `docs/ooxml`, `model`, `store`; `store/storetest` is test support) |
 | Direct Go dependencies | 3 | 2 (`github.com/lib/pq`, `github.com/ledongthuc/pdf`) |
 | Runtime environment variables | 20 | 18 |
@@ -1125,7 +1125,7 @@ transcribe, never text).
 | Packages without a `_test.go` | 0 | 0 |
 | Lines in any one source file (`.go`, `.py`, `.sql`, `.sh`, `.js`, `.ts`, `.css`; tests included) | 2,000 | 968 (`internal/docs/vision_safety_test.go`) |
 
-The line ceiling is 15,650 (owner decisions: 14,000, then 14,250, then 14,500 during PR 2's review, then 15,000 at PR 3a's, with pgvector, then 15,500 at PR 3a's round 3, declared final, then 15,600 at PR 3c's round 1, decision 11, then 15,650 at PR 3c's round 4 to read long-legend scans, decision 12). The plan totalled 15,581–15,611 after PR 3c (round 7); **PR 4a measured 2,557 lines against the 2,100 its components carry, so the plan is now 16,038–16,068: over the ceiling by 388–418 before PR 3e (about 30–40 lines). That is the owner's decision** (a ceiling rise or the trims DESIGN § PR 4a as built lists); nothing was cut. A **test-support package** is one
+The line ceiling is 16,100 (owner decisions: 14,000, then 14,250, then 14,500 during PR 2's review, then 15,000 at PR 3a's, with pgvector, then 15,500 at PR 3a's round 3, declared final, then 15,600 at PR 3c's round 1, decision 11, then 15,650 at PR 3c's round 4 to read long-legend scans, decision 12, then 16,100 at PR 4a, decision 14). The plan totalled 15,581–15,611 after PR 3c (round 7); PR 4a measured 2,557 lines against the 2,100 its components carry, putting the plan at 16,038–16,068. **Owner decision 14 (2026-10-22): keep PR 4a as built and raise the ceiling to 16,100**, which leaves room for PR 3e (about 30–40 lines); the next breach goes back to the owner. A **test-support package** is one
 whose directory name ends in `test` and that no production file outside it imports, such as
 `storetest`. Under the coordinator's ruling it is left out of the package count, but its lines
 count toward the line ceiling like any other non-`_test.go` file. A `*test` package that
