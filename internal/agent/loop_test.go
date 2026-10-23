@@ -490,3 +490,27 @@ func TestToolCallsPerTurnCapped(t *testing.T) {
 		t.Fatalf("ran %d of 50 calls; history holds %d; note %q", echo.runs, len(req.Messages[2].ToolCalls), lastContent(req))
 	}
 }
+
+// A real model may wrap its JSON answer in prose or a fence after a line of prose; the object is
+// still taken, and an answer with no valid object is still refused.
+func TestAnswerToleratesProseAroundJSON(t *testing.T) {
+	out, err := Compile(testOut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, text := range []string{
+		`{"ok":true}`,
+		"```json\n{\"ok\":true}\n```",
+		"Here is my review.\n\n```json\n{\"ok\":true}\n```\nDone.",
+		`My answer: {"ok":true} (end)`,
+	} {
+		if got, err := answer(text, out); err != nil || string(got) != `{"ok":true}` && strings.TrimSpace(string(got)) != `{"ok":true}` {
+			t.Errorf("%q: %s, %v", text, got, err)
+		}
+	}
+	for _, text := range []string{"no json here", `prose {"ok":"yes"}`, "```json\n{\"bad\":1}\n```"} {
+		if _, err := answer(text, out); err == nil {
+			t.Errorf("%q: accepted", text)
+		}
+	}
+}

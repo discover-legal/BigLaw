@@ -248,10 +248,26 @@ func answer(text string, out *Schema) (json.RawMessage, error) {
 	if strings.HasPrefix(t, "```") {
 		t = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(t, "```json"), "```"), "```"))
 	}
-	if err := out.Validate(json.RawMessage(t)); err != nil {
-		return nil, err
+	err := out.Validate(json.RawMessage(t))
+	if err == nil {
+		return json.RawMessage(t), nil
 	}
-	return json.RawMessage(t), nil
+	// Real models often wrap the object in a line of prose or a fence after one: try the fenced
+	// block, then the outermost braces. The first error is the one the repair note reports.
+	var alts []string
+	if _, body, ok := strings.Cut(text, "```"); ok {
+		body, _, _ = strings.Cut(strings.TrimPrefix(body, "json"), "```")
+		alts = append(alts, strings.TrimSpace(body))
+	}
+	if i, j := strings.Index(text, "{"), strings.LastIndex(text, "}"); i >= 0 && j > i {
+		alts = append(alts, text[i:j+1])
+	}
+	for _, a := range alts {
+		if out.Validate(json.RawMessage(a)) == nil {
+			return json.RawMessage(a), nil
+		}
+	}
+	return nil, err
 }
 
 // shown is an error as the model may see it: BigLaw's own words only. Anything else (a database
