@@ -277,10 +277,10 @@ func TestSweepReportsIncompleteWhenBudgetShort(t *testing.T) {
 	v := f.run(f.with(map[string][]model.Reply{
 		"lead":          {calls(plan(issue("I1", "Damages?", "Conduct"))), calls(sweep)},
 		"extract_facts": {facts(), facts(), facts(), facts()},
-	}), Config{BudgetCalls: 12, BudgetUSD: 5, CollapseThreshold: 0.5, CollapseAction: "strict"}) // 2 calls free for the sweep
+	}), Config{BudgetCalls: 20, BudgetUSD: 5, CollapseThreshold: 0.5, CollapseAction: "strict"}) // 3 calls free for the sweep (15 kept for later phases)
 	out := strings.Join(f.outputs(v.ID, "sweep"), "")
 	notes, _ := f.e.rows(context.Background(), v.ID, kNote)
-	if !strings.Contains(out, `"incomplete":true`) || !strings.Contains(out, f.docs[1].ID) || len(notes) == 0 || !strings.Contains(string(notes[0].Data), "were not read") {
+	if !strings.Contains(out, `"incomplete":true`) || !strings.Contains(out, f.docs[1].ID) || len(notes) == 0 || !strings.Contains(string(notes[0].Data), "not read") {
 		t.Fatalf("sweep %s notes %v", out, notes)
 	}
 }

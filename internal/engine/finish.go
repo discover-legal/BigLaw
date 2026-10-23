@@ -219,7 +219,7 @@ func (f finish) escalate(ctx context.Context) (*finishErr, error) {
 	last := cyc[len(cyc)-1]
 	open := slices.ContainsFunc(crit, func(x Critic) bool { return x.Cycle == last.N && (x.Severity == "HIGH" || x.Severity == "MEDIUM") })
 	done, _ := e.rows(ctx, id, kEscalate)
-	if !open || f.r.b != nil && !f.r.funded(f.r.b) || spent["*"]-last.Calls > 2 || slices.ContainsFunc(done, func(r row) bool { return r.Key == fmt.Sprint(last.N) }) {
+	if !open || f.r.b != nil && !f.r.funded(f.r.b) || spent["*"].Calls-last.Calls > 2 || slices.ContainsFunc(done, func(r row) bool { return r.Key == fmt.Sprint(last.N) }) {
 		return nil, nil
 	}
 	if err := e.write(ctx, id, kEscalate, fmt.Sprint(last.N), true, false); err != nil {

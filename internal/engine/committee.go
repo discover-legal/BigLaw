@@ -72,16 +72,17 @@ func (e *Engine) committeeTool(rt *agent.Runtime, r *run) agent.Tool {
 		}
 		inputs := []any{map[string]any{"claims": claims(secs)}, map[string]any{"questions": qs},
 			map[string]any{"plan": plan, "headings": append([]string{}, heads...), "checklist": append([]string{}, Checklist(r.t.Jurisdiction, practiceOf(issues))...)}}
-		a := Allocate(e.cfg.BudgetCalls)
-		b := agent.NewBudget(c.Budget.Calls, c.Budget.USD, 0)
+		a := Allocate(e.cfg.BudgetCalls, e.cfg.BudgetUSD)
+		limit := min(c.Budget.USD, a.CycleUSD) // a cycle's share, never the whole free USD (DESIGN § Budgets)
+		b := agent.NewBudget(c.Budget.Calls, limit, 0)
 		outs, errs := make([]agent.Result, 3), make([]error, 3)
 		var wg sync.WaitGroup
 		for i, name := range critics {
-			usd := c.Budget.USD * float64(a.Critics[i]) / float64(max(a.Cycle, 1))
+			usd := limit * float64(a.Critics[i]) / float64(max(a.Cycle, 1))
 			if i == len(critics)-1 {
 				usd = -1 // the rest (shares computed in floating point need not add up exactly)
 			}
-			g, err := b.Grant(min(a.Critics[i], c.Budget.Calls), usd, false)
+			g, err := b.Grant(min(a.Critics[i], c.Budget.Calls), usd, agent.LevelWork)
 			if err != nil {
 				errs[i] = err
 				continue
@@ -165,7 +166,7 @@ func (e *Engine) committeeTool(rt *agent.Runtime, r *run) agent.Tool {
 			}
 		}
 		spent, _ := e.classSpend(ctx, id)
-		cy := Cycle{N: n, Version: version(secs), Calls: spent["*"] + b.Spent().Calls}
+		cy := Cycle{N: n, Version: version(secs), Calls: spent["*"].Calls + b.Spent().Calls}
 		if err := e.write(ctx, id, kCycle, fmt.Sprint(n), cy, false); err != nil {
 			return nil, b.Spent(), err
 		}

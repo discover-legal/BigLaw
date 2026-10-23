@@ -19,11 +19,11 @@ func TestAllocationsMatchSpec(t *testing.T) {
 		calls int
 		want  Allocation
 	}{
-		{30, Allocation{Plan: 3, Evidence: 15, Sweep: 10, Draft: 4, Cycle: 6, Critics: [3]int{2, 2, 2}, Reserve: 5, Meta: 3, FixMin: 3}},
-		{150, Allocation{Plan: 10, Evidence: 75, Sweep: 52, Draft: 22, Cycle: 20, Critics: [3]int{8, 8, 4}, Reserve: 5, Meta: 3, FixMin: 3}},
-		{400, Allocation{Plan: 28, Evidence: 200, Sweep: 140, Draft: 60, Cycle: 20, Critics: [3]int{8, 8, 4}, Reserve: 5, Meta: 3, FixMin: 3}},
+		{30, Allocation{Plan: 3, Evidence: 15, Sweep: 10, Draft: 4, Cycle: 6, Critics: [3]int{2, 2, 2}, Reserve: 5, Meta: 3, FixMin: 3, Calls: 30, USD: 5, CycleUSD: 1}},
+		{150, Allocation{Plan: 10, Evidence: 75, Sweep: 52, Draft: 22, Cycle: 20, Critics: [3]int{8, 8, 4}, Reserve: 5, Meta: 3, FixMin: 3, Calls: 150, USD: 5, CycleUSD: 1}},
+		{400, Allocation{Plan: 28, Evidence: 200, Sweep: 140, Draft: 60, Cycle: 20, Critics: [3]int{8, 8, 4}, Reserve: 5, Meta: 3, FixMin: 3, Calls: 400, USD: 5, CycleUSD: 1}},
 	} {
-		a := Allocate(c.calls)
+		a := Allocate(c.calls, 5)
 		if a != c.want {
 			t.Errorf("Allocate(%d) = %+v, want %+v", c.calls, a, c.want)
 		}
@@ -326,23 +326,23 @@ func TestClassShareRefused(t *testing.T) {
 func TestSweepShareBounded(t *testing.T) {
 	t.Parallel()
 	var doc strings.Builder
-	for i := 1; i <= 10; i++ {
+	for i := 1; i <= 20; i++ {
 		fmt.Fprintf(&doc, "%d. Clause %d\nThe supplier shall deliver lot %d on time.\n\n", i, i, i)
 	}
 	f := newFixture(t, doc.String())
 	sweep := tc("sweep", m{"over": "sections", "documentIds": nil})
 	reps := []model.Reply{}
-	for range 10 {
+	for range 20 {
 		reps = append(reps, facts())
 	}
 	v := f.run(f.with(map[string][]model.Reply{"lead": {calls(plan(issue("I1", "Deliveries?", "Requirement"))), calls(sweep), calls(sweep)}, "extract_facts": reps}),
-		Config{BudgetCalls: 24, BudgetUSD: 5, CollapseThreshold: 0.5, CollapseAction: "strict"}) // sweep share 8, 14 calls free
+		Config{BudgetCalls: 40, BudgetUSD: 5, CollapseThreshold: 0.5, CollapseAction: "strict"}) // sweep share 14; 16 free at the evidence level (22 kept)
 	out := f.outputs(v.ID, "sweep")
-	if len(out) != 2 || !strings.Contains(out[0], `"visited":8`) || !strings.Contains(out[0], `"incomplete":true`) || !strings.HasPrefix(out[1], "refused") {
+	if len(out) != 2 || !strings.Contains(out[0], `"visited":14`) || !strings.Contains(out[0], `"incomplete":true`) || !strings.HasPrefix(out[1], "refused") {
 		t.Fatalf("sweeps %q", out)
 	}
-	// sweep's share is its own: 16 calls of direct extraction (evidence, under its 20) leave the
-	// sweep's 14 untouched, so a sweep still runs.
+	// sweep's share is its own: 16 calls of direct extraction (evidence, under its 30) leave the
+	// sweep's 21 untouched, so a sweep still runs.
 	f = newFixture(t, "1. Clause\nThe supplier shall deliver on time.\n\n2. Other\nThe buyer shall pay.\n")
 	eight := []model.ToolCall{}
 	for range 8 {
@@ -353,8 +353,80 @@ func TestSweepShareBounded(t *testing.T) {
 		reps = append(reps, facts())
 	}
 	v = f.run(f.with(map[string][]model.Reply{"lead": {calls(plan(issue("I1", "Deliveries?", "Requirement"))), calls(eight...), calls(eight...), calls(sweep)}, "extract_facts": reps}),
-		Config{BudgetCalls: 40, BudgetUSD: 5, CollapseThreshold: 0.5, CollapseAction: "strict"})
+		Config{BudgetCalls: 60, BudgetUSD: 5, CollapseThreshold: 0.5, CollapseAction: "strict"})
 	if out := f.outputs(v.ID, "sweep"); len(out) != 1 || strings.HasPrefix(out[0], "refused") {
 		t.Fatalf("sweep after direct extraction %q", out)
+	}
+}
+
+// costly is r billed at usd (the bench's real calls cost about $0.02–0.10 each).
+func costly(r model.Reply, usd float64) model.Reply {
+	r.Usage = model.Usage{InputTokens: 1000, OutputTokens: 100, CostUSD: &usd}
+	return r
+}
+
+// TestPhaseSharesHoldInUSD (bench: a $1 run's sweep spent the whole budget before drafting, so the
+// forced finish delivered no section): on a USD-bound run the sweep stops at its 35% of the USD,
+// and the drafting share and the committee cycle stay funded.
+func TestPhaseSharesHoldInUSD(t *testing.T) {
+	t.Parallel()
+	var doc strings.Builder
+	for i := 1; i <= 30; i++ {
+		fmt.Fprintf(&doc, "%d. Clause %d\nThe supplier shall deliver lot %d on time.\n\n", i, i, i)
+	}
+	f := newFixture(t, doc.String())
+	prices, err := model.LoadPrices(`{"lead-m": {"in": 1, "out": 5}, "spec-m": {"in": 1, "out": 5}, "crit-m": {"in": 1, "out": 5}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d1 := f.docs[0].ID
+	ex := []model.Reply{costly(facts(fd("The supplier shall deliver lot 1 on time.", d1, "The supplier shall deliver lot 1 on time")), 0.1)}
+	for range 29 {
+		ex = append(ex, costly(facts(), 0.1))
+	}
+	scripts := f.with(map[string][]model.Reply{
+		"lead": {calls(plan(issue("I1", "Deliveries?", "Requirement"))), calls(tc("sweep", m{"over": "sections", "documentIds": nil})),
+			calls(draft("I1", "F1")), calls(committee()), calls(finishCall("submit"))},
+		"extract_facts": ex,
+		"draft_section": {costly(section("The supplier must deliver lot 1 on time [F1].", "Delivery duty [F1]."), 0.05)},
+	})
+	f.e = New(f.st, f.d, model.NewFake(scripts), testRoles, prices, Config{BudgetCalls: 150, BudgetUSD: 2, CollapseThreshold: 0.5, CollapseAction: "strict"}, nil)
+	task := f.submit(0)
+	f.step(context.Background())
+	v := f.get(task.ID)
+	sw, ds, cm := f.outputs(v.ID, "sweep"), f.outputs(v.ID, "draft_section"), f.outputs(v.ID, "committee")
+	if len(sw) != 1 || !strings.Contains(sw[0], `"visited":7`) || !strings.Contains(sw[0], `"incomplete":true`) {
+		t.Fatalf("sweep %q", sw)
+	}
+	if len(ds) != 1 || !strings.HasPrefix(ds[0], "committed") || len(cm) != 1 || strings.Contains(cm[0], "did not return") || stop(v) != "awaiting_gate/finished" {
+		t.Fatalf("%s: draft %q committee %q\n%s", stop(v), ds, cm, f.steps(v.ID))
+	}
+}
+
+// TestCommitteeAlwaysReviewsTheLastDraft (bench: critics ran unfunded late in a run, "0 calls ...
+// are free"): lead turns cannot spend the committee cycle the budget keeps back, so when the lead
+// runs out without reviewing its draft, Go runs the committee on it before the forced finish, and
+// all three critics are funded.
+func TestCommitteeAlwaysReviewsTheLastDraft(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	d1 := f.docs[0].ID
+	search := calls(tc("retrieve", m{"op": "search", "query": "damages", "documentId": nil, "sectionId": nil, "k": nil, "offset": nil, "limit": nil}))
+	lead := []model.Reply{calls(plan(issue("I1", "What does Greystone claim?", "Conduct"))), calls(extract(d1, "damages", "I1")), calls(draft("I1", "F1"))}
+	for range 12 {
+		lead = append(lead, search)
+	}
+	fake := model.NewFake(f.with(map[string][]model.Reply{"lead": append(lead, calls(committee()), calls(finishCall("submit")))}))
+	f.e = New(f.st, f.d, fake, testRoles, nil, Config{BudgetCalls: 30, BudgetUSD: 5, CollapseThreshold: 0.5, CollapseAction: "strict"}, nil)
+	task := f.submit(0)
+	f.step(context.Background())
+	v := f.get(task.ID)
+	cm := f.outputs(v.ID, "committee")
+	critics := 0
+	for _, c := range fake.Calls() {
+		critics += btoi(c.Agent == "prosecute" || c.Agent == "reproduce" || c.Agent == "audit_gaps")
+	}
+	if stop(v) != "awaiting_gate/budget_exhausted" || len(cm) != 1 || strings.Contains(cm[0], "did not return") || critics != 3 || v.Run.Budget.Calls > 30 {
+		t.Fatalf("%s: committee %q, %d critic calls, spent %+v\n%s", stop(v), cm, critics, v.Run.Budget, f.steps(v.ID))
 	}
 }

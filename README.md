@@ -83,7 +83,7 @@ whatever does not parse into a shape known to be safe is not shown.
 | `BIGLAW_MODEL_URL` | — | OpenAI-compatible API base, ending in its version (`http://localhost:11434/v1`); calls go to `<URL>/chat/completions` and `<URL>/embeddings`. http(s), a plain ASCII host with at least one letter or digit, a port up to 65535, no `@` anywhere (no credentials in the URL; write any other `@` as `%40`). Required when the key or a role is set. | PR 1 |
 | `BIGLAW_MODEL_KEY` | — | API key for that URL, sent as `Authorization: Bearer`; no white space or control characters. `serve` warns if it would go over plain `http`. | PR 2 |
 | `BIGLAW_MODELS` | — | Model id per role, as the endpoint names it: comma-separated `role=id`, roles `lead`, `specialist`, `critic`, `vision`, `embed`, each at most once (e.g. `lead=qwen2.5:14b,critic=glm-4.5-air,embed=nomic-embed-text`). Unset `specialist` or `critic` use the lead's; setting either without the lead is refused. `vision` and `embed` have **no** fallback: with no `embed` role search is lexical only (`/health` says `"search":"lexical"`); `vision` names the model images and scanned pages are sent to; without it they are stored as `needs_transcription` (503 `vision_not_configured`) and never sent to another role's model (§ Vision transcription). An unknown role, a repeated one, an empty id, an id over 200 bytes, or an id holding `://`, `user:password@`, white space, a control or invisible (format) character, `?` `=` `&`, or a key's shape (`sk-`, `sk_`, `AKIA`, `ASIA`, `AIza`, `xox?-`, `gh?_` prefixes, or 24 letters and digits in a row) is a startup error that does not echo the value. A wrong id fails at its first call with 404 → `model_not_configured`; with no lead, chat calls fail with 503 `model_not_configured`. | PR 3 |
-| `BIGLAW_BUDGET_CALLS` | `150` | Model calls per task | PR 4 |
+| `BIGLAW_BUDGET_CALLS` | `400` | Model calls per task (lead turns included; with the default USD cap a real matter usually stops on dollars first) | PR 4 |
 | `BIGLAW_BUDGET_USD` | `5` | Dollar cap per task | PR 4 |
 | `BIGLAW_LOCAL_WATTS` | — | Power draw of the machine running the model; when set (above 0) every call records watts × duration as watt-hours, for reporting only (never a price). A number from 0 to 100000 | PR 2 |
 | `BIGLAW_PRICES` | built-in | Model rates overriding the built-in table: the JSON itself (a value starting with `{`) or a path to a regular file of at most 1 MiB holding it (§ Model client) | PR 2 |
@@ -792,7 +792,9 @@ The memo workflow (§ Memo workflow) drives these. What PR 4a ships, all tested 
   and its worst-case cost (each request byte a token plus 1,000, as a cache write, plus `MaxTokens`
   of output) and then charges what it spent, a refused-but-billed answer included; a tool's grant is
   up to its turn cap, refused only when no call is free, and its unused part returns when it closes.
-  The task keeps a floor (reserve + meta) that only `finish` may spend. Query embeddings are charged
+  The task keeps back, in calls and USD, what its later phases need (`Keep`, by level: evidence <
+  work (lead turns, drafting, free tools) < review (the committee) < final): a grant never takes what
+  a higher level keeps, so only `finish` spends the reserve + meta. Query embeddings are charged
   in USD and tokens; an unpriced model counts as a call of unknown cost.
 - **Tool bandit** (`Bandit`, `Stats`; `MemStats` here, Postgres in 4b). Per task signature
   (workflow, practice, jurisdiction prefix, lead model, documents 1–3/4–9/10+), each tool's and each
@@ -889,14 +891,20 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
   (delayed credit, ±0.5). A critic that fails leaves a MEDIUM "did not run" finding.
 - **Policy** (`policy.go`): P1 nothing but `retrieve`/`ledger` before a plan, and if the lead has
   spent its plan share (7%, at least 3 calls) without one, the packs' checklist becomes the plan
-  (disclosed); P4 class shares of the call budget (evidence 50% of which sweep 35%, draft 15%,
-  committee cycles of 20 or 20% of a small budget, a reserve of 5 and meta 3 only `finish` spends).
+  (disclosed); P4 class shares, each on calls **and** USD (evidence 50% of which sweep 35%, draft
+  15%, committee cycles of 20 calls or 20% of a small budget with a fifth of the USD, a reserve of 5
+  and meta 3 only `finish` spends). The root budget keeps back the unspent drafting share from
+  evidence, one committee cycle from everything below the committee (lead turns included), and the
+  reserve from all but `finish`, so evidence can never spend the draft's budget and the last draft can
+  always be reviewed: when the lead runs out with a draft no committee has read, Go runs the
+  committee on it from that cycle before the forced finish (`TestPhaseSharesHoldInUSD`,
+  `TestCommitteeAlwaysReviewsTheLastDraft`). `sweep` stops at its USD share as at its calls.
 - **`finish`** (`op: "check"` is a dry run of `submit`): lint (every `[F-id]` names a usable
   finding; every number in the draft is a handle, a `numbers` worksheet result or inside a cited
   quote or value (G8, the "68.6% for 81.6%" trap); no unknown handle), coverage (plan issues
   without a section, parties never named, salient figures never landing), and P6: a committee on
   the current draft version, its HIGH/MEDIUM findings resolved while the budget can fund another
-  fix (cycle + 3 calls), every plan issue drafted or disclosed by issue id. P7: a `submit` within 2
+  fix (3 calls and their USD beside the kept cycle and reserve), every plan issue drafted or disclosed by issue id. P7: a `submit` within 2
   calls of a committee whose HIGH/MEDIUM findings were resolved without new work is refused once
   per cycle, while funded, with the instruction to fix properly and run the committee again. `submit` then renders: sections in plan order (summaries never), handles substituted
   outside quotes only, process language and orphan fragments stripped, repeated blocks dropped,
@@ -930,7 +938,9 @@ deploy) first settles an in-flight tool step's grant to what the tool spent, its
 call at its worst case, so the resume is charged that rather than the tool's whole grant (every
 free dollar of the task; `TestResumeAfterStopMidToolChargesWhatItSpent`). A task whose document
 was deleted after submission fails (`bad_request`) instead of being claimed again forever. A run stops `finished` (gate open),
-`budget_exhausted` or `max_steps` (`finish` forced from the reserve, open findings disclosed),
+`budget_exhausted` or `max_steps` (a draft changed since its last review gets one committee from the
+kept cycle, then `finish` is forced from the reserve, open findings disclosed; `maxSteps` defaults to
+twice the call budget, at least 400),
 `awaiting_gate`, `cancelled` or `failed`. Tool-bandit statistics persist in `tool_stats`.
 
 **Packs** (`internal/engine/packs/{jurisdiction,practice}/*.md`, embedded): `us`, `us-ny`,

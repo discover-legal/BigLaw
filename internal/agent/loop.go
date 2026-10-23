@@ -299,7 +299,7 @@ func (rt *Runtime) ChatWithin(ctx context.Context, req model.Request, b *Budget)
 			return nil, Usage{}, err
 		}
 	}
-	hold, err := b.Grant(1, rt.bound(req), false)
+	hold, err := b.Grant(1, rt.bound(req), LevelWork)
 	if err != nil {
 		return nil, Usage{}, err
 	}
@@ -386,7 +386,7 @@ func (rt *Runtime) Invoke(ctx context.Context, a Agent, c Call, name string, inp
 			return res, r
 		}
 	}
-	g, gerr := b.Grant(e.spec.MaxTurns, -1, e.spec.Final)
+	g, gerr := b.Grant(e.spec.MaxTurns, -1, Level(e.spec))
 	if gerr != nil {
 		next := map[bool]string{true: "call finish to end the run with what you have", false: "answer now with what you have"}[c.Depth == 0]
 		return res, refuse(ErrBudget, next, gerr.Error())

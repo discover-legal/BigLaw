@@ -185,7 +185,7 @@ def main(argv=None) -> int:
         sp.add_argument("--api", default="http://127.0.0.1:3101", help="BigLaw v2 API (serve's BIGLAW_ADDR)")
         sp.add_argument("--model-dir", default="biglaw", help="run-id model segment, e.g. v2-haiku / v2-qwen14b")
         sp.add_argument("--tool-bandit", choices=["on", "off"], default="on", help="the tasks' toolBandit option (gate B runs both)")
-        sp.add_argument("--max-steps", type=int, help="the tasks' maxSteps (default: BigLaw's 400)")
+        sp.add_argument("--max-steps", type=int, help="the tasks' maxSteps (default: BigLaw's, twice the call budget and at least 400)")
         sp.add_argument("--results-dir", default=str(HERE / "results"))
         sp.add_argument("--workflow", choices=["memo", "diligence", "contract_review"], help="override the workflow (default memo)")
         sp.add_argument("--jurisdiction", help="override the matter's jurisdiction tag")

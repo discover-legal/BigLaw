@@ -92,9 +92,10 @@ func (e *Engine) sweepTool(rt *agent.Runtime, r *run) agent.Tool {
 		if err != nil {
 			return nil, agent.Usage{}, err
 		}
-		b := agent.NewBudget(min(c.Budget.Calls, Allocate(e.cfg.BudgetCalls).Sweep-spent["sweep"]), c.Budget.USD, 0)
+		a, sw := Allocate(e.cfg.BudgetCalls, e.cfg.BudgetUSD), spent["sweep"]
+		b := agent.NewBudget(min(c.Budget.Calls, a.Sweep-sw.Calls), min(c.Budget.USD, a.dollars(a.Sweep)-sw.USD), 0)
 		out := map[string]any{"visited": 0, "findings": []string{}, "incomplete": false, "uncovered": []map[string]string{}}
-		fids, uncovered := []string{}, []map[string]string{}
+		fids, uncovered, broke := []string{}, []map[string]string{}, false
 		q, _ := json.Marshal(r.t.Description)
 		for _, v := range visits {
 			if i := slices.IndexFunc(done, func(x row) bool { return x.Key == v.key() }); i >= 0 {
@@ -103,7 +104,7 @@ func (e *Engine) sweepTool(rt *agent.Runtime, r *run) agent.Tool {
 				fids = append(fids, got...)
 				continue
 			}
-			if calls, _ := b.Remaining(); calls == 0 {
+			if calls, _ := b.Remaining(); calls == 0 || broke {
 				uncovered = append(uncovered, map[string]string{"documentId": v.DocumentID, "sectionId": v.SectionID})
 				continue
 			}
@@ -111,6 +112,9 @@ func (e *Engine) sweepTool(rt *agent.Runtime, r *run) agent.Tool {
 			res, err := rt.Invoke(ctx, agent.Agent{Name: "sweep", Visible: []string{"extract_facts"}}, agent.Call{TaskID: c.TaskID, DocumentIDs: c.DocumentIDs}, "extract_facts", json.RawMessage(in), b, false, 0)
 			if modelOrJournal(err) {
 				return nil, b.Spent(), err
+			} else if broke = errors.Is(err, agent.ErrBudget); broke { // its USD share is spent: the rest is uncovered, not tried
+				uncovered = append(uncovered, map[string]string{"documentId": v.DocumentID, "sectionId": v.SectionID})
+				continue
 			}
 			var got hookResult
 			_ = json.Unmarshal(res.Output, &got)

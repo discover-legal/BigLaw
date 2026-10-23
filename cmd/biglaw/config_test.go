@@ -42,7 +42,7 @@ func TestConfigDefaults(t *testing.T) {
 	for _, want := range []string{
 		"BIGLAW_ADDR                127.0.0.1:3101  [default]",
 		"BIGLAW_PUBLIC_URL          http://127.0.0.1:3101  [default, read from PR 8]",
-		"BIGLAW_BUDGET_CALLS        150  [default]",
+		"BIGLAW_BUDGET_CALLS        400  [default]",
 		"BIGLAW_BUDGET_USD          5  [default]",
 		"BIGLAW_LOCAL_WATTS         (unset)\n",
 		"BIGLAW_COLLAPSE_THRESHOLD  0.5  [default]",
@@ -460,7 +460,7 @@ func TestRoleIDRefusesQueryCharacters(t *testing.T) {
 // exponent), a threshold from 0.01 to 1 (1e-300 refused), strict or warn.
 func TestConfigEngineVars(t *testing.T) {
 	c, err := Load(env("BIGLAW_DATABASE_URL", dsn))
-	if err != nil || c.Engine.BudgetCalls != 150 || c.Engine.BudgetUSD != 5 || c.Engine.CollapseThreshold != 0.5 || c.Engine.CollapseAction != "strict" {
+	if err != nil || c.Engine.BudgetCalls != 400 || c.Engine.BudgetUSD != 5 || c.Engine.CollapseThreshold != 0.5 || c.Engine.CollapseAction != "strict" {
 		t.Fatalf("defaults: %+v, %v", c.Engine, err)
 	}
 	c, err = Load(env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_BUDGET_CALLS", "400", "BIGLAW_BUDGET_USD", "2.50", "BIGLAW_COLLAPSE_THRESHOLD", "0.3", "BIGLAW_COLLAPSE_ACTION", "warn"))
