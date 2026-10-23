@@ -139,12 +139,13 @@ func TestTextLinearAndBounded(t *testing.T) {
 		}
 		return best
 	}
-	// 4× the runs: linear work takes ~4× as long, quadratic ~16×. The 8× bound leaves room for
-	// wall-clock noise under -race on a shared CI runner (a 2× step with a 3× bound did not).
-	small, large := read(50_000), read(200_000)
-	t.Logf("50k runs %s, 200k runs %s (ratio %.2f)", small, large, float64(large)/float64(small))
-	if float64(large) > 8*float64(small) {
-		t.Errorf("4× the runs took %.1f× as long: not linear", float64(large)/float64(small))
+	// 16× the runs: linear work takes ~16× as long, quadratic ~256×. The 48× bound leaves room
+	// for wall-clock noise under -race on a shared CI runner, where 4× with an 8× bound once
+	// measured 8.9× (and 2× with a 3× bound failed before that); quadratic still fails by 5×.
+	small, large := read(10_000), read(160_000)
+	t.Logf("10k runs %s, 160k runs %s (ratio %.2f)", small, large, float64(large)/float64(small))
+	if float64(large) > 48*float64(small) {
+		t.Errorf("16× the runs took %.1f× as long: not linear", float64(large)/float64(small))
 	}
 	for _, bad := range []string{strings.Repeat("<w:p>", maxDepth+1), "<w:p><w:r><w:t>a</w:t></w:r></w:p><"} {
 		if _, err := docWithBody(t, bad).Text(); err == nil {
