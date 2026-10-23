@@ -522,3 +522,58 @@ func TestCandidatePackDisclosed(t *testing.T) {
 		t.Fatal("a reviewed pack was disclosed")
 	}
 }
+
+// TestSweepUncoveredNamesTheWholeBatch (r2 M-1): a batched visit that is not read is disclosed as
+// its whole run of sections, not as its first section alone.
+func TestSweepUncoveredNamesTheWholeBatch(t *testing.T) {
+	t.Parallel()
+	var b strings.Builder
+	for i := 1; i <= 40; i++ {
+		fmt.Fprintf(&b, "%d. The Division alleges fact number %d about the trade allocations of the Firm in the review period.\n\n", i, i)
+	}
+	f := newFixture(t, b.String())
+	visits, err := f.e_(t).plan(context.Background(), f.ids(), f.ids())
+	if err != nil || len(visits) != 2 || visits[0].Through == "" {
+		t.Fatalf("plan %+v %v", visits, err)
+	}
+	bad := model.Reply{Text: "not json"}
+	sweep := tc("sweep", m{"over": "sections", "documentIds": nil})
+	v := f.run(f.with(map[string][]model.Reply{"lead": {calls(plan(issue("I1", "Allegations?", "Conduct"))), calls(sweep)},
+		"extract_facts": {bad, bad, bad, bad}}), Config{})
+	out := strings.Join(f.outputs(v.ID, "sweep"), "")
+	notes, _ := f.e.rows(context.Background(), v.ID, kNote)
+	note := ""
+	for _, n := range notes {
+		note += string(n.Data)
+	}
+	for _, x := range visits {
+		if !strings.Contains(out, `"through":"`+x.Through+`"`) || !strings.Contains(note, x.SectionID+" to "+x.Through) {
+			t.Fatalf("unread batch %s–%s not disclosed whole: sweep %s note %s", x.SectionID, x.Through, out, note)
+		}
+	}
+}
+
+// TestExtractFactsRefusesABadThrough (r2 M-2): a through that is not a run of top-level sections
+// from sectionId fails the call; it never reads sectionId alone as if it had read the run.
+func TestExtractFactsRefusesABadThrough(t *testing.T) {
+	t.Parallel()
+	var b strings.Builder
+	for i := 1; i <= 40; i++ {
+		fmt.Fprintf(&b, "%d. The Division alleges fact number %d about the trade allocations of the Firm in the review period.\n\n", i, i)
+	}
+	f := newFixture(t, b.String())
+	visits, err := f.e_(t).plan(context.Background(), f.ids(), f.ids())
+	if err != nil || len(visits) != 2 {
+		t.Fatalf("plan %+v %v", visits, err)
+	}
+	back := tc("extract_facts", m{"question": "q", "documentId": f.docs[0].ID, "sectionId": visits[1].SectionID, "through": visits[0].SectionID, "offset": nil, "query": nil, "issueId": "I1"})
+	v := f.run(f.with(map[string][]model.Reply{"lead": {calls(plan(issue("I1", "Allegations?", "Conduct"))), calls(back)}, "extract_facts": {facts()}}), Config{})
+	for _, c := range f.e.chat.(*model.Fake).Calls() {
+		if c.Agent == "extract_facts" {
+			t.Fatalf("a backwards through ran extract_facts on sectionId alone: %s", strings.Join(f.outputs(v.ID, "extract_facts"), ""))
+		}
+	}
+	if out := strings.Join(f.outputs(v.ID, "extract_facts"), ""); !strings.Contains(out, "through") {
+		t.Fatalf("extract_facts %s", out)
+	}
+}

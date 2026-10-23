@@ -896,9 +896,11 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
   shorter than 600 tokens are batched into one visit of at most 600 (`through`; sized by the
   answer: a subagent writes five to seven tokens of findings per token of dense text, so a full page
   overflows its 8,192-token answer): a document numbered by paragraph is read a few paragraphs at a
-  time, not one subagent run per paragraph (`TestSweepBatchesShortSections`); a visit is
-  keyed (document, section, offset[, through]) and never repeated;
-  it stops at its share of the budget and reports `incomplete` with the sections it did not reach,
+  time, not one subagent run per paragraph (`TestSweepBatchesShortSections`); a `through` that is
+  not such a run from `sectionId` (with offset 0) fails the call, never reads `sectionId` alone
+  (`TestExtractFactsRefusesABadThrough`); a visit is keyed (document, section, offset[, through]) and never repeated;
+  it stops at its share of the budget and reports `incomplete` with the sections it did not reach
+  (a batch as its whole run, "s3 to s9": `TestSweepUncoveredNamesTheWholeBatch`),
   which also go into Limitations. Never silently partial.
 - **Drafting** (`draft_section`, one issue per call): Go gives the drafter the issue, its named
   verified findings with their quotes (each naming its document, so the drafter can say which

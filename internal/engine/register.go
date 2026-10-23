@@ -16,6 +16,7 @@ import (
 
 	"github.com/discover-legal/BigLaw/internal/agent"
 	"github.com/discover-legal/BigLaw/internal/analysis"
+	"github.com/discover-legal/BigLaw/internal/docs"
 )
 
 //go:embed specs
@@ -170,11 +171,11 @@ func (h hooked) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 	case "extract_facts":
 		if str("documentId") != "" && str("sectionId") != "" {
 			off, _ := in["offset"].(float64)
-			text, ok := "", false
-			if str("through") != "" && off == 0 {
-				text, ok = h.e.runText(ctx, c.DocumentIDs, str("documentId"), str("sectionId"), str("through"))
-			}
-			if ok {
+			if str("through") != "" {
+				text, ok := h.e.runText(ctx, c.DocumentIDs, str("documentId"), str("sectionId"), str("through"))
+				if !ok || off != 0 {
+					return agent.Result{}, agent.Fail(fmt.Sprintf("extract_facts: through must be a top-level section at or after sectionId, the run at most %d tokens, with offset 0 or null", docs.MaxSectionTokens))
+				}
 				in["sectionText"], in["truncated"], in["next"] = text, false, 0
 			} else if p, err := h.e.docs.Section(ctx, c.DocumentIDs, str("documentId"), str("sectionId"), int(off), 0); err == nil {
 				in["sectionText"], in["truncated"], in["next"] = p.Text, p.Truncated, p.Next

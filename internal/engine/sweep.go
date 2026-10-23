@@ -24,6 +24,15 @@ type Visit struct {
 	Through    string `json:"through,omitempty"`
 }
 
+// unread is the visit as sweep reports it not read: a batch names its whole run (through).
+func (v Visit) unread() map[string]string {
+	u := map[string]string{"documentId": v.DocumentID, "sectionId": v.SectionID}
+	if v.Through != "" {
+		u["through"] = v.Through
+	}
+	return u
+}
+
 func (v Visit) key() string {
 	k := fmt.Sprintf("%s|%s|%d", v.DocumentID, v.SectionID, v.Offset)
 	if v.Through != "" {
@@ -176,7 +185,7 @@ func (e *Engine) sweepTool(rt *agent.Runtime, r *run) agent.Tool {
 				continue
 			}
 			if calls, _ := b.Remaining(); calls == 0 || broke {
-				uncovered = append(uncovered, map[string]string{"documentId": v.DocumentID, "sectionId": v.SectionID})
+				uncovered = append(uncovered, v.unread())
 				continue
 			}
 			through := "null"
@@ -188,7 +197,7 @@ func (e *Engine) sweepTool(rt *agent.Runtime, r *run) agent.Tool {
 			if modelOrJournal(err) {
 				return nil, b.Spent(), err
 			} else if broke = errors.Is(err, agent.ErrBudget); broke { // its USD share is spent: the rest is uncovered, not tried
-				uncovered = append(uncovered, map[string]string{"documentId": v.DocumentID, "sectionId": v.SectionID})
+				uncovered = append(uncovered, v.unread())
 				continue
 			}
 			var got hookResult
@@ -202,7 +211,7 @@ func (e *Engine) sweepTool(rt *agent.Runtime, r *run) agent.Tool {
 					return nil, b.Spent(), err
 				}
 			} else {
-				uncovered = append(uncovered, map[string]string{"documentId": v.DocumentID, "sectionId": v.SectionID})
+				uncovered = append(uncovered, v.unread())
 			}
 			out["visited"] = out["visited"].(int) + 1
 			fids = append(fids, ids...)
@@ -211,7 +220,7 @@ func (e *Engine) sweepTool(rt *agent.Runtime, r *run) agent.Tool {
 		if len(uncovered) > 0 {
 			note := fmt.Sprintf("The evidence sweep ran out of budget: %d section %s not read: ", len(uncovered), plural(len(uncovered), "page was", "pages were"))
 			for i, u := range uncovered {
-				note += map[bool]string{true: "", false: "; "}[i == 0] + u["documentId"] + " " + u["sectionId"]
+				note += map[bool]string{true: "", false: "; "}[i == 0] + u["documentId"] + " " + u["sectionId"] + cmpStr(u["through"] != "", " to "+u["through"], "")
 			}
 			if err := e.write(ctx, c.TaskID, kNote, "sweep", note, true); err != nil {
 				return nil, b.Spent(), err
