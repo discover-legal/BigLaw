@@ -87,7 +87,7 @@ func (e *Engine) runtime(r *run) (*agent.Runtime, error) {
 		BudgetCalls: e.cfg.BudgetCalls, Off: !r.t.ToolBandit}
 	tools := e.docs.Tools(rt)
 	an := analysis.Tools(e)
-	tools = append(tools, sheets{an[0], e}, an[1], e.ledgerTool(), e.sweepTool(rt, r), e.committeeTool(rt, r), e.finishTool(rt, r))
+	tools = append(tools, sheets{an[0], e}, an[1], e.ledgerTool(), e.sweepTool(rt, r), e.committeeTool(rt, r), e.finishTool(rt, r), e.coverTool(rt, r))
 	sub, _ := fs.Sub(specFS, "specs/agents")
 	subs, err := rt.LoadSubagents(sub)
 	if err != nil {
@@ -242,6 +242,9 @@ func (h hooked) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 			}
 		}
 		out, reward, err = h.e.admit(ctx, h.rt, c, b, name, str("issueId"), res.Model, ans.Findings, notes)
+		if err == nil && name == "analyze_issue" && strings.TrimSpace(ans.Conclusion) != "" && str("issueId") != "" { // for the issue's drafter (cover.go)
+			err = h.e.write(ctx, c.TaskID, kAnalysis, str("issueId"), Analysis{truncate(ans.Rule, 1500), truncate(ans.Application, 3000), truncate(ans.Conclusion, 1000)}, true)
+		}
 	}
 	res.Usage.Add(b.Spent())
 	if err != nil {

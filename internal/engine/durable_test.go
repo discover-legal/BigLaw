@@ -149,7 +149,8 @@ func TestResumeDoesNotRepeatCommittedSteps(t *testing.T) {
 	for _, c := range k.Fake.Calls() {
 		per[c.Agent]++
 	}
-	if want := map[string]int{"lead": 5, "extract_facts": 1, "draft_section": 1, "prosecute": 1, "reproduce": 1, "audit_gaps": 1, "meta": 1}; !reflect.DeepEqual(per, want) {
+	// analyze_issue: the coverage pass's one try at the Conduct issue (unscripted here, so it is disclosed)
+	if want := map[string]int{"lead": 5, "extract_facts": 1, "draft_section": 1, "prosecute": 1, "reproduce": 1, "audit_gaps": 1, "meta": 1, "analyze_issue": 1}; !reflect.DeepEqual(per, want) {
 		t.Fatalf("calls per agent %v, want %v", per, want)
 	}
 }
@@ -260,7 +261,8 @@ func TestUSDBoundFinishDeliversWithoutMeta(t *testing.T) {
 }
 
 // TestMaxStepsStop: at maxSteps the run finishes from the reserve (max_steps) with a disclosure;
-// the draft no committee read is reviewed first, from the cycle the budget kept back.
+// the coverage pass runs, then the draft no committee read is reviewed, from the cycle the budget
+// kept back.
 func TestMaxStepsStop(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
@@ -270,8 +272,8 @@ func TestMaxStepsStop(t *testing.T) {
 	task := f.submit(6)
 	f.step(context.Background())
 	v := f.get(task.ID)
-	if v.Run.StopReason == nil || *v.Run.StopReason != "max_steps" || !strings.Contains(deref(v.Output), "step limit") || v.Run.Step != 8 ||
-		!strings.Contains(f.steps(task.ID), "7:tool_call:committee:committed 8:tool_call:finish:committed") {
+	if v.Run.StopReason == nil || *v.Run.StopReason != "max_steps" || !strings.Contains(deref(v.Output), "step limit") || v.Run.Step != 9 ||
+		!strings.Contains(f.steps(task.ID), "7:tool_call:cover:committed 8:tool_call:committee:committed 9:tool_call:finish:committed") { // the coverage pass first (I1 is a Conduct issue with no analysis)
 		t.Fatalf("%s step %d:\n%s\n%s", stop(v), v.Run.Step, f.steps(task.ID), deref(v.Output))
 	}
 }

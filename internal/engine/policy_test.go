@@ -13,15 +13,16 @@ import (
 )
 
 // TestAllocationsMatchSpec: the shares at 30, 150 and 400 calls (DESIGN § Budgets: at 150, plan ≤
-// 10 with 3 the usual, sweep 52, targeted evidence 23, draft 22, two cycles of 20, reserve + meta 8).
+// 10 with 3 the usual, sweep 52, targeted evidence 14 and the coverage pass 9 of the evidence share,
+// draft 22, two cycles of 20, reserve + meta 8).
 func TestAllocationsMatchSpec(t *testing.T) {
 	for _, c := range []struct {
 		calls int
 		want  Allocation
 	}{
-		{30, Allocation{Plan: 3, Evidence: 15, Sweep: 10, Draft: 4, Cycle: 6, Critics: [3]int{2, 2, 2}, Reserve: 5, Meta: 3, FixMin: 3, Calls: 30, USD: 5, CycleUSD: 1}},
-		{150, Allocation{Plan: 10, Evidence: 75, Sweep: 52, Draft: 22, Cycle: 20, Critics: [3]int{8, 8, 4}, Reserve: 5, Meta: 3, FixMin: 3, Calls: 150, USD: 5, CycleUSD: 1}},
-		{400, Allocation{Plan: 28, Evidence: 200, Sweep: 140, Draft: 60, Cycle: 20, Critics: [3]int{8, 8, 4}, Reserve: 5, Meta: 3, FixMin: 3, Calls: 400, USD: 5, CycleUSD: 1}},
+		{30, Allocation{Plan: 3, Evidence: 15, Sweep: 10, Cover: 1, Draft: 4, Cycle: 6, Critics: [3]int{2, 2, 2}, Reserve: 5, Meta: 3, FixMin: 3, Calls: 30, USD: 5, CycleUSD: 1}},
+		{150, Allocation{Plan: 10, Evidence: 75, Sweep: 52, Cover: 9, Draft: 22, Cycle: 20, Critics: [3]int{8, 8, 4}, Reserve: 5, Meta: 3, FixMin: 3, Calls: 150, USD: 5, CycleUSD: 1}},
+		{400, Allocation{Plan: 28, Evidence: 200, Sweep: 140, Cover: 24, Draft: 60, Cycle: 20, Critics: [3]int{8, 8, 4}, Reserve: 5, Meta: 3, FixMin: 3, Calls: 400, USD: 5, CycleUSD: 1}},
 	} {
 		a := Allocate(c.calls, 5)
 		if a != c.want {

@@ -20,7 +20,7 @@ change. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`, not here.
 - `internal/docs` (PR 3a) — owns `documents`/`sections`/`chunks` (migration 0002). `Ingest`/
   `IngestText`, `Extract` (type from content; PDFs and `.docx` in a bounded child process:
   `child.go`), `Parse` (byte-exact, bounded section tree), `Chunkify`, `Search`, `Outline`,
-  `Section` (paged), `Verify`/`VerifyQuote` (the ladder; the judge is a caller-supplied func),
+  `Section` (paged; a table in whole rows, `TablePageRows`, with its header row by reference), `Verify`/`VerifyQuote` (the ladder; the judge is a caller-supplied func),
   `Resolve`, `WriteFile` (streams a document's original), `Delete`, `SweepOrphanFiles` (serve runs
   it at startup), and `Routes` (`POST /documents/upload` with the read deadline,
   `GET /documents/{id}/file` streamed under a write deadline). Every read takes a scope (the
@@ -92,7 +92,12 @@ change. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`, not here.
 - `internal/engine` (PR 4b) — the memo workflow: lead (`specs/lead.md`) over 11 tools (`MemoVisible`),
   the ledger (one `ledger` table, JSON rows by kind/key, writes buffered in the running step),
   evidence subagents whose findings Go verifies before admitting them (`register.go` `admit`: G2/G3,
-  values must be in their quote, currency from the quote, near-duplicates merged), `sweep`, `committee`
+  values must be in their quote, currency from the quote, near-duplicates merged), `sweep` (answer-sized
+  pages, `sweepTokens`; up to `sweepWorkers` visits at once with timing-free grants and admission in plan
+  order: a visit's `extract_facts` waits for its turn via `awaitTurn`), `check_deviation` (the requirement
+  is verified in `requirementDocId` before the subagent runs; omissions confirmed by the judge), the
+  coverage pass (`cover.go`: touched issues get one `analyze_issue` + redraft from `Allocation.Cover`,
+  inside a passing submit or as a step before the forced finish's review), `committee`
   (3 context-free critics in parallel on explicit grants, delayed credit), `policy.go` (P1, P4,
   `Allocate`), `finish` (check = dry run; lint G5/G8, coverage, P6/P7; render; gates G7), grounding
   collapse G4, packs (`packs/*/*.md`, embedded, all candidate), and durable runs (`task_steps` +

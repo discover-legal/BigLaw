@@ -29,6 +29,8 @@ const (
 	kNote     = "note"     // key: a fixed name; a Limitations line Go wrote (plan fallback, uncovered)
 	kEscalate = "escalate" // key: cycle number; P7 fired for it
 	kHandle   = "handle"   // key: codename; the Fig it names for the whole run
+	kAnalysis = "analysis" // key: issue id; Analysis, analyze_issue's latest for the issue
+	kCover    = "cover"    // key: "pass"; Cover, the coverage pass's outcome (it runs once)
 )
 
 // Issue is one plan issue (the deliverable's spine), typed by a BELO-lite issue class.
@@ -56,6 +58,20 @@ type Finding struct {
 	Citations []Citation `json:"citations"`
 	Severity  string     `json:"severity"`
 	Arm       agent.Arm  `json:"arm"` // the tool and model that produced it (delayed critic credit)
+}
+
+// Analysis is analyze_issue's answer on one issue (rule, application, conclusion): it goes to the
+// issue's drafter, and it is what makes a Conduct or Requirement issue analysed (cover.go).
+type Analysis struct {
+	Rule        string `json:"rule"`
+	Application string `json:"application"`
+	Conclusion  string `json:"conclusion"`
+}
+
+// Cover is the coverage pass's outcome: the touched issues it analysed and those still missing.
+type Cover struct {
+	Analysed []string `json:"analysed"`
+	Missing  []string `json:"missing"`
 }
 
 // Critic is one committee finding, open until the lead resolves it (fixed or disclosed).

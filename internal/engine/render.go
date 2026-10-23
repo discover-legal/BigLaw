@@ -89,6 +89,11 @@ func (e *Engine) draftRequest(ctx context.Context, taskID string, scope []string
 	}
 	d.request = map[string]any{"issue": map[string]string{"id": issueID, "question": issues[i].Question}, "findings": fs, "handles": hs,
 		"priorSections": prior, "revise": in.Revise}
+	if as, err := e.analyses(ctx, taskID); err != nil {
+		return draftReq{}, err
+	} else if a, ok := as[issueID]; ok {
+		d.request["analysis"] = a // the issue's legal analysis (analyze_issue): rule, application, conclusion
+	}
 	if len(omitted) > 0 {
 		d.request["omitted"] = "not verified findings of this task, so not shown: " + strings.Join(omitted, ", ")
 	}

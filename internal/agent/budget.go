@@ -43,7 +43,7 @@ func Level(s Spec) int {
 		return LevelFinal
 	case s.Class == "evidence" || s.Class == "plan":
 		return LevelEvidence
-	case s.Class == "committee":
+	case s.Class == "committee" || s.Class == "cover":
 		return LevelReview
 	}
 	return LevelWork
@@ -67,8 +67,11 @@ func (b *Budget) Keep(level int, g Grant) {
 }
 
 // free is what a new grant at level may take: unspent and unheld, less what higher levels keep.
-func (b *Budget) free(level int) (int, float64) {
-	rc, ru := b.calls-b.spent.Calls-b.heldCalls, b.usd-b.spent.USD-b.heldUSD
+func (b *Budget) free(level int) (int, float64) { return b.freeBeside(level, Grant{}) }
+
+// freeBeside is free as if g of what b holds were not held.
+func (b *Budget) freeBeside(level int, g Grant) (int, float64) {
+	rc, ru := b.calls-b.spent.Calls-b.heldCalls+g.Calls, b.usd-b.spent.USD-b.heldUSD+g.USD
 	for _, k := range b.keep[level+1:] {
 		rc, ru = rc-k.Calls, ru-k.USD
 	}
@@ -85,6 +88,14 @@ func (b *Budget) RemainingAt(level int) (calls int, usd float64) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.free(level)
+}
+
+// RemainingBeside is RemainingAt as if g of what b holds were not held: what a holder (finish,
+// whose grant holds every free call) sees the run could fund besides itself.
+func (b *Budget) RemainingBeside(level int, g Grant) (calls int, usd float64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.freeBeside(level, g)
 }
 
 // Spent is everything charged to b, nested grants included.
