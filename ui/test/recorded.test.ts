@@ -118,7 +118,7 @@ test('the other screens have sample records', async () => {
   const t = recorded(rec);
   assert.ok((await t.playbooks()).length > 0);
   assert.ok((await t.profiles()).length > 0);
-  assert.ok((await t.settings!()).some((s) => s.name === 'BIGLAW_BUDGET_CALLS' && s.default === '150'));
+  assert.ok((await t.settings!()).some((s) => s.name === 'BIGLAW_BUDGET_CALLS' && s.default === '400'));
   const matters = new Set(rec.clients.flatMap((c) => c.matters.map((m) => m.number)));
   for (const e of await t.timeEntries()) assert.ok(matters.has(e.matterNumber), e.id);
 });
