@@ -73,7 +73,11 @@ func (e *Engine) execute(ctx context.Context, r *run) error {
 	if err != nil {
 		return err
 	}
-	r.keep(Allocate(e.cfg.BudgetCalls, e.cfg.BudgetUSD), cs)
+	covered, err := e.covered(ctx, r.t.ID)
+	if err != nil {
+		return err
+	}
+	r.keep(Allocate(e.cfg.BudgetCalls, e.cfg.BudgetUSD), cs, covered)
 	rt, err := e.runtime(r)
 	if err != nil {
 		return e.fail(ctx, r, "internal", err)
@@ -99,6 +103,11 @@ func (e *Engine) execute(ctx context.Context, r *run) error {
 		var last int
 		if err := e.db.QueryRowContext(ctx, `SELECT coalesce(max(step), 0) FROM task_steps WHERE task_id = $1`, r.t.ID).Scan(&last); err != nil {
 			return err
+		}
+		if last, err = e.coverPass(ctx, rt, call, r, last); ctx.Err() != nil || errors.Is(err, errLease) {
+			return err
+		} else if err != nil {
+			return e.fail(ctx, r, "", err)
 		}
 		if last, err = e.review(ctx, rt, lead, call, r, last); ctx.Err() != nil || errors.Is(err, errLease) {
 			return err

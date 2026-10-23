@@ -28,6 +28,9 @@ const (
 	// DefaultSectionTokens / MaxSectionTokens bound one page of a section.
 	DefaultSectionTokens = 2000
 	MaxSectionTokens     = 8000
+	// TablePageRows caps the rows of one page of a table (a spreadsheet's sheet, a .docx table): a
+	// row is dense (a trade, a payment), so a page is sized in rows, cut at a row's end.
+	TablePageRows = 25
 )
 
 // ErrBadInput (400): a search or section request outside its bounds.
@@ -190,11 +193,52 @@ type SectionPage struct {
 	Total     int    `json:"total"`
 	Truncated bool   `json:"truncated"`
 	Next      int    `json:"next,omitempty"`
+	// Header is, on a page of a table after its first, the table's header row (its column names),
+	// read where the table starts, HeaderAt characters into the section: a reference to that row,
+	// not part of Text, so the page stays verbatim and the header is never copied into it.
+	Header   string `json:"header,omitempty"`
+	HeaderAt int    `json:"headerAt,omitempty"`
+}
+
+// headerWindow is the first window header reads before a page; it doubles until the page's table
+// starts inside it or it reaches the section's start.
+const headerWindow = 64 << 10
+
+// header is the header row of the table whose row lead ends before (tableHeader over the section's
+// text before the page plus lead, the page's text before its first table row), and its offset:
+// read in a window before the page that doubles until the table's start is inside it, bounded by
+// the section, so the header is the page's own table's however far back that table starts.
+func (s *Service) header(ctx context.Context, docID string, ord, offset int, lead string) (string, int, error) {
+	for w := headerWindow; ; w *= 2 {
+		start := max(0, offset-w)
+		var tail string
+		if err := s.db.QueryRowContext(ctx, `SELECT substr(d.text, x.char_start + 1 + $3::int, $4::int - $3::int)
+			FROM sections x JOIN documents d ON d.id = x.document_id WHERE x.document_id = $1 AND x.ord = $2`, docID, ord, start, offset).Scan(&tail); err != nil {
+			return "", 0, fmt.Errorf("docs: section: %w", err)
+		}
+		base := start
+		if start > 0 { // the window's first line may be cut
+			i := strings.IndexByte(tail, '\n')
+			if i < 0 {
+				continue // one line longer than the window: widen it
+			}
+			base, tail = base+utf8.RuneCountInString(tail[:i+1]), tail[i+1:]
+		}
+		row, at, ok, bounded := tableHeader(tail + lead)
+		if ok && !bounded && start > 0 {
+			continue // the table may start before the window
+		}
+		if !ok {
+			return "", 0, nil
+		}
+		return row, base + at, nil
+	}
 }
 
 // Section reads a section with its subsections, verbatim, from offset (characters), at most limit
-// tokens (0 means DefaultSectionTokens), cut at white space where possible. A long section is
-// paged, never silently cut: Truncated and Next say there is more.
+// tokens (0 means DefaultSectionTokens), cut at white space where possible; a table's page is
+// whole rows, at most TablePageRows, and past the table's start names its header row (Header). A
+// long section is paged, never silently cut: Truncated and Next say there is more.
 func (s *Service) Section(ctx context.Context, scope []string, docID, sectionID string, offset, limit int) (SectionPage, error) {
 	ord, err := strconv.Atoi(strings.TrimPrefix(sectionID, "s"))
 	if !inScope(scope, docID) || !store.ValidID(docID) || err != nil || !strings.HasPrefix(sectionID, "s") || ord < 0 || ord > math.MaxInt32 || sectionID != "s"+strconv.Itoa(ord) {
@@ -219,16 +263,38 @@ func (s *Service) Section(ctx context.Context, scope []string, docID, sectionID 
 	if offset > p.Total {
 		return SectionPage{}, fmt.Errorf("%w: offset %d is past the section's end (%d characters)", ErrBadInput, offset, p.Total)
 	}
-	if utf8.RuneCountInString(p.Text) > limit*7/2 { // one character more than a page was read
+	if cut, ok := tablePage(p.Text, limit*7/2); ok { // whole rows, at most TablePageRows of them
+		p.Text, p.Truncated = cut, len(cut) < len(p.Text)
+	} else if utf8.RuneCountInString(p.Text) > limit*7/2 { // one character more than a page was read
 		cut := p.Text[:len(string([]rune(p.Text)[:limit*7/2]))]
 		if j := strings.LastIndexAny(cut, " \n\t\f"); j > len(cut)/2 {
 			cut = cut[:j+1]
 		}
 		p.Text, p.Truncated = cut, true
 	}
+	if lead, ok := beforeRow(p.Text); offset > 0 && ok { // a page of a table past its start: name its header
+		if p.Header, p.HeaderAt, err = s.header(ctx, docID, ord, offset, lead); err != nil {
+			return SectionPage{}, err
+		}
+	}
 	p.Next = offset + utf8.RuneCountInString(p.Text)
 	if !p.Truncated {
 		p.Next = 0
 	}
 	return p, nil
+}
+
+// beforeRow is text up to the start of its first whole table row line, and whether it has one.
+func beforeRow(text string) (string, bool) {
+	for at := 0; at < len(text); {
+		end := len(text)
+		if i := strings.IndexByte(text[at:], '\n'); i >= 0 {
+			end = at + i + 1
+		}
+		if isTableRow(text[at:end]) {
+			return text[:at], true
+		}
+		at = end
+	}
+	return "", false
 }

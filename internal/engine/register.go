@@ -87,7 +87,7 @@ func (e *Engine) runtime(r *run) (*agent.Runtime, error) {
 		BudgetCalls: e.cfg.BudgetCalls, Off: !r.t.ToolBandit}
 	tools := e.docs.Tools(rt)
 	an := analysis.Tools(e)
-	tools = append(tools, sheets{an[0], e}, an[1], e.ledgerTool(), e.sweepTool(rt, r), e.committeeTool(rt, r), e.finishTool(rt, r))
+	tools = append(tools, sheets{an[0], e}, an[1], e.ledgerTool(), e.sweepTool(rt, r), e.committeeTool(rt, r), e.finishTool(rt, r), e.coverTool(rt, r))
 	sub, _ := fs.Sub(specFS, "specs/agents")
 	subs, err := rt.LoadSubagents(sub)
 	if err != nil {
@@ -177,14 +177,23 @@ func (h hooked) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 					return agent.Result{}, agent.Fail(fmt.Sprintf("extract_facts: through must be a top-level section at or after sectionId, the run at most %d tokens, with offset 0 or null", docs.MaxSectionTokens))
 				}
 				in["sectionText"], in["truncated"], in["next"] = text, false, 0
-			} else if p, err := h.e.docs.Section(ctx, c.DocumentIDs, str("documentId"), str("sectionId"), int(off), 0); err == nil {
+			} else if p, err := h.e.docs.Section(ctx, c.DocumentIDs, str("documentId"), str("sectionId"), int(off), sweepTokens); err == nil {
 				in["sectionText"], in["truncated"], in["next"] = p.Text, p.Truncated, p.Next
+				if p.Header != "" { // a later page of a table: its columns, by reference to the header row
+					in["header"] = p.Header
+				}
 			}
 		}
 	case "analyze_issue":
 		for _, p := range SelectPacks(str("jurisdiction"), "") {
 			in["packText"] = str("packText") + "\n\n" + p.Body
 		}
+	case "check_deviation":
+		src, err := h.e.quotedRequirement(ctx, c)
+		if err != nil {
+			return agent.Result{}, err
+		}
+		in["requirement"] = src
 	case "draft_section":
 		var err error
 		if draft, err = h.e.draftRequest(ctx, c.TaskID, c.DocumentIDs, str("issueId"), c.Input); err != nil {
@@ -194,6 +203,9 @@ func (h hooked) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 	}
 	c.Input, _ = json.Marshal(in)
 	res, err := h.Tool.Call(ctx, c)
+	if err == nil {
+		err = awaitTurn(ctx) // a parallel sweep's visit admits in plan order
+	}
 	if err != nil {
 		return res, err
 	}
@@ -230,6 +242,9 @@ func (h hooked) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 			}
 		}
 		out, reward, err = h.e.admit(ctx, h.rt, c, b, name, str("issueId"), res.Model, ans.Findings, notes)
+		if err == nil && name == "analyze_issue" && strings.TrimSpace(ans.Conclusion) != "" && str("issueId") != "" { // for the issue's drafter (cover.go)
+			err = h.e.write(ctx, c.TaskID, kAnalysis, str("issueId"), Analysis{truncate(ans.Rule, 1500), truncate(ans.Application, 3000), truncate(ans.Conclusion, 1000)}, true)
+		}
 	}
 	res.Usage.Add(b.Spent())
 	if err != nil {

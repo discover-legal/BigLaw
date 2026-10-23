@@ -110,7 +110,8 @@ func (s *Service) Tools(rt *agent.Runtime) []agent.Tool {
 					return nil, m.u, failure(err)
 				}
 				out["section"] = map[string]any{"sectionId": p.SectionID, "number": p.Number, "title": p.Title, "text": p.Text,
-					"offset": p.Offset, "total": p.Total, "truncated": p.Truncated, "next": map[bool]any{true: p.Next, false: nil}[p.Truncated]}
+					"offset": p.Offset, "total": p.Total, "truncated": p.Truncated, "next": map[bool]any{true: p.Next, false: nil}[p.Truncated],
+					"header": map[bool]any{true: p.Header, false: nil}[p.Header != ""]}
 			}
 			return out, m.u, nil
 		}},

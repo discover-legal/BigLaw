@@ -16,6 +16,7 @@ import (
 // committee cycle, whose critics read the whole draft, which may spend a fifth of the USD.
 type Allocation struct {
 	Plan, Evidence, Sweep, Draft int // the most each class may spend (plan: before a plan exists)
+	Cover                        int // the coverage pass's part of the evidence share, kept back for it
 	Cycle                        int // one committee cycle: prosecute + reproduce + audit_gaps
 	Critics                      [3]int
 	Reserve, Meta                int     // kept for finish and its meta note (the root budget's floor)
@@ -24,10 +25,11 @@ type Allocation struct {
 	USD, CycleUSD                float64 // CycleUSD: what one committee cycle may spend
 }
 
-// Allocate splits a budget: plan ≤ 7% (min 3), evidence ≤ 50% of which sweep ≤ 35%, draft ≤ 15%,
-// a committee cycle of 20 calls (8/8/4) or 20% of a smaller budget, reserve 5 and meta 3.
+// Allocate splits a budget: plan ≤ 7% (min 3), evidence ≤ 50% of which sweep ≤ 35% and the
+// coverage pass 6% (kept for it; the lead's evidence calls may spend the rest), draft ≤ 15%, a
+// committee cycle of 20 calls (8/8/4) or 20% of a smaller budget, reserve 5 and meta 3.
 func Allocate(calls int, usd float64) Allocation {
-	a := Allocation{Plan: max(3, calls*7/100), Evidence: calls / 2, Sweep: calls * 35 / 100, Draft: calls * 15 / 100,
+	a := Allocation{Plan: max(3, calls*7/100), Evidence: calls / 2, Sweep: calls * 35 / 100, Cover: calls * 6 / 100, Draft: calls * 15 / 100,
 		Cycle: min(20, calls/5), Reserve: 5, Meta: 3, FixMin: 3, Calls: calls, USD: usd, CycleUSD: usd / 5}
 	a.Critics[0] = a.Cycle * 2 / 5
 	a.Critics[1] = a.Critics[0]
@@ -39,22 +41,27 @@ func Allocate(calls int, usd float64) Allocation {
 func (a Allocation) dollars(n int) float64 { return a.USD * float64(n) / float64(max(a.Calls, 1)) }
 
 // keep holds back from the root budget, in calls and USD, what the later phases need (DESIGN §
-// Budgets): the reserve and meta from all but finish, one committee cycle from everything below the
-// committee (so the last draft can always be reviewed), and the unspent drafting share from evidence.
-func (r *run) keep(a Allocation, spent map[string]agent.Usage) {
-	d := spent["draft"]
+// Budgets): the reserve and meta from all but finish, one committee cycle and (until it has run)
+// the coverage pass from everything below the committee (so the last draft can always be checked
+// and reviewed), and the unspent drafting share from evidence.
+func (r *run) keep(a Allocation, spent map[string]agent.Usage, covered bool) {
+	d, cover := spent["draft"], a.Cover
+	if covered {
+		cover = 0
+	}
 	r.b.Keep(agent.LevelFinal, agent.Grant{Calls: a.Reserve + a.Meta, USD: a.dollars(a.Reserve + a.Meta)})
-	r.b.Keep(agent.LevelReview, agent.Grant{Calls: a.Cycle, USD: a.CycleUSD})
+	r.b.Keep(agent.LevelReview, agent.Grant{Calls: a.Cycle + cover, USD: a.CycleUSD + a.dollars(cover)})
 	r.b.Keep(agent.LevelWork, agent.Grant{Calls: max(0, a.Draft-d.Calls), USD: max(0, a.dollars(a.Draft)-d.USD)})
 }
 
-// share is the most a class may spend; 0 means the class has no share (free, committee, plan).
+// share is the most a class may spend; 0 means the class has no share (free, committee, plan,
+// cover: the coverage pass sizes its own work).
 func (a Allocation) share(tool, class string) int {
 	switch {
 	case tool == "sweep":
 		return a.Sweep
 	case class == "evidence":
-		return a.Evidence
+		return a.Evidence - a.Cover
 	case class == "draft":
 		return a.Draft
 	}
@@ -75,7 +82,11 @@ func (p policy) Allow(ctx context.Context, x agent.Pending) *agent.Refusal {
 	if err != nil {
 		return &agent.Refusal{Kind: agent.ErrPolicy, Reason: "the task's spend could not be read", Next: "try again"}
 	}
-	p.r.keep(a, spent)
+	covered, err := e.covered(ctx, id)
+	if err != nil {
+		return &agent.Refusal{Kind: agent.ErrPolicy, Reason: "the task's ledger could not be read", Next: "try again"}
+	}
+	p.r.keep(a, spent, covered)
 	issues, err := load[Issue](ctx, e, id, kIssue)
 	if err == nil && len(issues) == 0 && x.Spec.Name != "retrieve" && x.Spec.Name != "ledger" && x.Spec.Name != "finish" {
 		if spent["*"].Calls < a.Plan {
@@ -147,10 +158,12 @@ func (r *run) fallbackPlan(ctx context.Context) error {
 	return r.e.write(ctx, r.t.ID, kNote, "plan", "The lead recorded no plan within its plan budget, so the practice packs' checklist was used as the plan.", false)
 }
 
-// funded reports whether the run can still pay for a fix stretch beside the committee cycle and
-// reserve it keeps back, in calls and in USD (unspent: finish's own grant holds all the free USD).
-func (r *run) funded(b *agent.Budget) bool {
-	calls, _ := b.Remaining()
+// funded reports whether the run can still pay for a fix stretch beside the committee cycle,
+// reserve and (until it has run) coverage pass it keeps back, in calls and in USD (unspent: finish's
+// own grant holds all the free USD, and held of its calls, which count as free).
+func (r *run) funded(b *agent.Budget, held int, covered bool) bool {
+	calls, _ := b.RemainingBeside(agent.LevelWork, agent.Grant{Calls: held})
 	a := Allocate(r.e.cfg.BudgetCalls, r.e.cfg.BudgetUSD)
-	return calls >= a.FixMin && a.USD-b.Spent().USD-a.CycleUSD-a.dollars(a.Reserve+a.Meta) >= a.dollars(a.FixMin)
+	cover := map[bool]float64{false: a.dollars(a.Cover)}[covered]
+	return calls >= a.FixMin && a.USD-b.Spent().USD-a.CycleUSD-cover-a.dollars(a.Reserve+a.Meta) >= a.dollars(a.FixMin)
 }

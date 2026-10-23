@@ -411,7 +411,7 @@ func (rt *Runtime) Invoke(ctx context.Context, a Agent, c Call, name string, inp
 			return res, fmt.Errorf("%w: %w", ErrJournal, err)
 		}
 	}
-	res, err = e.tool.Call(ctx, Call{TaskID: c.TaskID, DocumentIDs: c.DocumentIDs, Input: input, Budget: g.Value(), Depth: c.Depth})
+	res, err = e.tool.Call(ctx, Call{TaskID: c.TaskID, DocumentIDs: c.DocumentIDs, Input: input, Budget: g.Value(), Depth: c.Depth, Model: c.Model})
 	g.Charge(res.Usage)
 	g.Close()
 	if err == nil {
@@ -426,6 +426,17 @@ func opOf(input json.RawMessage) string {
 	var v struct{ Op string }
 	_ = json.Unmarshal(input, &v)
 	return v.Op
+}
+
+// Candidates is the configured models a subagent of role may run on: the role's own, then the lead's.
+func (rt *Runtime) Candidates(role model.Role) []string {
+	var models []string
+	for _, r := range []model.Role{role, model.Lead} {
+		if m, err := rt.Roles.Model(r); err == nil && !slices.Contains(models, m) {
+			models = append(models, m)
+		}
+	}
+	return models
 }
 
 // Subagent is a tool that runs its own bounded loop at depth 1: a fresh, context-free model call
@@ -443,17 +454,15 @@ func (s *Subagent) Call(ctx context.Context, c Call) (Result, error) {
 	if c.Depth > 0 {
 		return Result{}, refuse(ErrNesting, "answer with what you have", s.S.Name, " is a subagent, and a subagent cannot call one")
 	}
-	var models []string // the configured models for its role: the role's own, then the lead's
-	for _, r := range []model.Role{s.S.Role, model.Lead} {
-		if m, err := s.RT.Roles.Model(r); err == nil && !slices.Contains(models, m) {
-			models = append(models, m)
-		}
-	}
+	models := s.RT.Candidates(s.S.Role)
 	if len(models) == 0 {
 		_, err := s.RT.Roles.Model(model.Lead)
 		return Result{}, err
 	}
-	m := s.RT.Bandit.PickModel(ctx, s.S.Name, models)
+	m := c.Model // a fan-out tool's pick for all its calls (sweep: one decision, made in order)
+	if !slices.Contains(models, m) {
+		m = s.RT.Bandit.PickModel(ctx, s.S.Name, models)
+	}
 	out, err := Compile(s.S.Out)
 	if err != nil {
 		return Result{}, err

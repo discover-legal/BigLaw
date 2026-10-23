@@ -20,14 +20,22 @@ import (
 // (lint, coverage, the P6 preconditions); submit renders and opens the gates only when they pass,
 // or when the run is finishing from its reserve (budget or max steps), which discloses instead.
 type finish struct {
-	e  *Engine
-	rt *agent.Runtime
-	r  *run
+	e       *Engine
+	rt      *agent.Runtime
+	r       *run
+	held    int  // calls this finish call's own grant holds beyond its meta call: free for the run's checks
+	covered bool // the coverage pass has run (its kept share is free again)
 }
 
-func (e *Engine) finishTool(rt *agent.Runtime, r *run) agent.Tool { return finish{e, rt, r} }
+func (e *Engine) finishTool(rt *agent.Runtime, r *run) agent.Tool { return finish{e: e, rt: rt, r: r} }
 
-func (f finish) Spec() agent.Spec { return spec("finish") }
+// Spec is finish's spec with the calls one submit may spend: its meta call, plus the coverage pass
+// and the review of its redrafts (the shares kept for them), so a crash mid-finish loses no more.
+func (f finish) Spec() agent.Spec {
+	s, a := spec("finish"), Allocate(f.e.cfg.BudgetCalls, f.e.cfg.BudgetUSD)
+	s.MaxTurns += a.Cover + a.Cycle
+	return s
+}
 
 type finishErr struct {
 	Code   string `json:"code"`
@@ -53,6 +61,11 @@ type limitation struct {
 }
 
 func (f finish) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
+	f.held = max(0, c.Budget.Calls-1) // its grant holds the coverage pass's and the review's calls too
+	var err error
+	if f.covered, err = f.e.covered(ctx, c.TaskID); err != nil {
+		return agent.Result{}, err
+	}
 	var in struct {
 		Op          string
 		Limitations []limitation
@@ -74,14 +87,33 @@ func (f finish) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 	if !rep.Ready && f.r.forced == "" {
 		return out(rep, agent.Usage{}, false)
 	}
+	var spent agent.Usage
+	if f.r.forced == "" { // the coverage pass, once, before a deliverable (a forced finish ran it as a step)
+		done, err := f.e.covered(ctx, c.TaskID)
+		todo, terr := f.e.touched(ctx, c.TaskID)
+		if err = cmpErr(err, terr); err != nil {
+			return agent.Result{}, err
+		}
+		if !done && len(todo) > 0 {
+			if spent, err = f.cover(ctx, c); err != nil {
+				return agent.Result{Usage: spent}, err
+			}
+			f.held, f.covered = max(0, c.Budget.Calls-spent.Calls-1), true
+			if rep, err = f.check(ctx, in.Limitations); err != nil {
+				return agent.Result{Usage: spent}, err
+			} else if !rep.Ready {
+				return out(rep, spent, false)
+			}
+		}
+	}
 	if esc, err := f.escalate(ctx); err != nil || esc != nil {
 		if esc != nil {
 			rep.Errors = append(rep.Errors, *esc)
 		}
-		return out(rep, agent.Usage{}, false)
+		return out(rep, spent, false)
 	}
 	rep.Accepted = true
-	b := agent.NewBudget(c.Budget.Calls, c.Budget.USD, 0)
+	b := agent.NewBudget(c.Budget.Calls-spent.Calls, c.Budget.USD-spent.USD, 0)
 	meta, err := f.meta(ctx, b)
 	if errors.Is(err, agent.ErrBudget) { // a USD-bound run's floor may not fund it (4a r2 L8): deliver without
 		meta, err, rep.limits = "", nil, append(rep.limits, "The note to the reviewing lawyer was not written: the budget left could not fund its call.")
@@ -103,7 +135,27 @@ func (f finish) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 	if err != nil {
 		return agent.Result{Usage: b.Spent()}, err
 	}
-	return out(rep, b.Spent(), true)
+	spent.Add(b.Spent())
+	return out(rep, spent, true)
+}
+
+// cover runs the coverage pass inside a submit, from the share kept for it, and, when it redrafted
+// a section, the committee on the changed draft (from the cycle kept for the last review), so the
+// delivered draft is always the one the critics read; its findings go through the usual checks.
+func (f finish) cover(ctx context.Context, c agent.Call) (agent.Usage, error) {
+	b := agent.NewBudget(c.Budget.Calls, c.Budget.USD, 0)
+	me, call := agent.Agent{Name: "finish", Visible: []string{"cover", "committee"}}, agent.Call{TaskID: c.TaskID, DocumentIDs: c.DocumentIDs}
+	if _, err := f.rt.Invoke(ctx, me, call, "cover", json.RawMessage(`{}`), b, false, 0); modelOrJournal(err) {
+		return b.Spent(), err
+	}
+	pass, err := f.e.coverRow(ctx, c.TaskID)
+	if err != nil || pass == nil || len(pass.Analysed) == 0 {
+		return b.Spent(), err
+	}
+	if _, err := f.rt.Invoke(ctx, me, call, "committee", json.RawMessage(`{}`), b, false, 0); modelOrJournal(err) {
+		return b.Spent(), err
+	}
+	return b.Spent(), nil
 }
 
 // check runs every finish check without changing anything.
@@ -172,6 +224,17 @@ func (f finish) check(ctx context.Context, limits []limitation) (report, error) 
 			bad("lint", l)
 		}
 	}
+	pass, err := e.coverRow(ctx, id)
+	left, lerr := e.touched(ctx, id)
+	if err = cmpErr(err, lerr); err != nil {
+		return report{}, err
+	}
+	for _, is := range left { // after the coverage pass (or from the reserve): what it could not analyse
+		if (pass != nil || f.r.forced != "") && !disclosed[is.ID] {
+			rep.limits = append(rep.limits, fmt.Sprintf("Coverage: %s (%s) was not analysed: %s.", is.ID, is.Question,
+				cmpStr(slices.ContainsFunc(secs, func(s Section) bool { return s.IssueID == is.ID }), "its section states facts without an analysis of the issue (rule, application, conclusion)", "it has no section resting on a verified finding")))
+		}
+	}
 	cov := analysis.CheckCoverage(ais, texts, an, nil)
 	rep.MissingIssues, rep.UncoveredParties, rep.MissingFigures = cov.MissingIssues, cov.UncoveredParties, cov.MissingFigures
 	for _, p := range cov.UncoveredParties {
@@ -180,7 +243,7 @@ func (f finish) check(ctx context.Context, limits []limitation) (report, error) 
 	for _, h := range cov.MissingFigures {
 		rep.limits = append(rep.limits, fmt.Sprintf("Coverage: the figure %s (%s, %s) never appears in the memo.", h.Value, h.Label, h.FID))
 	}
-	funded := f.r.b == nil || f.r.funded(f.r.b)
+	funded := f.funded()
 	switch {
 	case len(cyc) == 0 && len(secs) > 0:
 		bad("no_committee", "no committee has reviewed the draft: run committee")
@@ -205,6 +268,9 @@ func (f finish) check(ctx context.Context, limits []limitation) (report, error) 
 	return rep, nil
 }
 
+// funded is the run's funded (P6, P7) as if this finish call held only its own call.
+func (f finish) funded() bool { return f.r.b == nil || f.r.funded(f.r.b, f.held, f.covered) }
+
 // escalate is P7: a submit within 2 calls of a committee that left HIGH/MEDIUM findings open is
 // refused once per cycle with the uncompromising instruction.
 func (f finish) escalate(ctx context.Context) (*finishErr, error) {
@@ -218,7 +284,7 @@ func (f finish) escalate(ctx context.Context) (*finishErr, error) {
 	last := cyc[len(cyc)-1]
 	open := slices.ContainsFunc(crit, func(x Critic) bool { return x.Cycle == last.N && (x.Severity == "HIGH" || x.Severity == "MEDIUM") })
 	done, _ := e.rows(ctx, id, kEscalate)
-	if !open || f.r.b != nil && !f.r.funded(f.r.b) || spent["*"].Calls-last.Calls > 2 || slices.ContainsFunc(done, func(r row) bool { return r.Key == fmt.Sprint(last.N) }) {
+	if !open || !f.funded() || spent["*"].Calls-last.Calls > 2 || slices.ContainsFunc(done, func(r row) bool { return r.Key == fmt.Sprint(last.N) }) {
 		return nil, nil
 	}
 	if err := e.write(ctx, id, kEscalate, fmt.Sprint(last.N), true, false); err != nil {

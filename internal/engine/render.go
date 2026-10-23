@@ -89,6 +89,11 @@ func (e *Engine) draftRequest(ctx context.Context, taskID string, scope []string
 	}
 	d.request = map[string]any{"issue": map[string]string{"id": issueID, "question": issues[i].Question}, "findings": fs, "handles": hs,
 		"priorSections": prior, "revise": in.Revise}
+	if as, err := e.analyses(ctx, taskID); err != nil {
+		return draftReq{}, err
+	} else if a, ok := as[issueID]; ok {
+		d.request["analysis"] = a // the issue's legal analysis (analyze_issue): rule, application, conclusion
+	}
 	if len(omitted) > 0 {
 		d.request["omitted"] = "not verified findings of this task, so not shown: " + strings.Join(omitted, ", ")
 	}
@@ -117,11 +122,30 @@ func (e *Engine) saveSection(ctx context.Context, taskID string, d draftReq, ans
 	if err != nil {
 		return nil, err
 	}
-	s := Section{IssueID: d.issueID, Markdown: a.Markdown, Summary: a.Summary, Handles: d.figs, Version: version(secs) + 1}
+	s := Section{IssueID: d.issueID, Markdown: splitCites(a.Markdown), Summary: splitCites(a.Summary), Handles: d.figs, Version: version(secs) + 1}
 	if err := e.write(ctx, taskID, kSection, d.issueID, s, true); err != nil {
 		return nil, err
 	}
 	return map[string]any{"issueId": d.issueID, "version": s.Version, "words": len(strings.Fields(a.Markdown))}, nil
+}
+
+// citeGroup is a drafter's bracket of several finding ids or value refs ("[F304, F305]",
+// "[F288.v2, F288.v1]"): the memo's citation is one [F-id] per bracket (lint, Sources, coverage).
+var citeGroup, citeID = regexp.MustCompile(`\[\s*F\d+(?:\.v\d+)?(?:\s*[,;]\s*F\d+(?:\.v\d+)?)*\s*\]`), regexp.MustCompile(`F\d+`)
+
+// splitCites rewrites each citation group as single citations, one per finding, in order: "[F3,
+// F3.v1, F7]" is "[F3] [F7]". Read as a group, its ids were no citation at all and its digits were
+// figures G8 flagged (bench: most of a run's lint lines were "the figure 304", from "[F304, F305]").
+func splitCites(md string) string {
+	return citeGroup.ReplaceAllStringFunc(md, func(g string) string {
+		var out []string
+		for _, id := range citeID.FindAllString(g, -1) {
+			if c := "[" + id + "]"; !slices.Contains(out, c) {
+				out = append(out, c)
+			}
+		}
+		return strings.Join(out, " ")
+	})
 }
 
 // deliverable is a run's rendered memo and what it disclosed.

@@ -33,7 +33,8 @@ type verdict struct {
 }
 
 // absent reports whether a requirement's words are missing from a document: fewer than half of
-// its significant words (four letters or more) occur anywhere in it, and no exact or tolerant copy.
+// its significant words (four letters or more) occur anywhere in it, and no exact or tolerant copy
+// (the fallback when no judge can rule: it keeps a gap only when the document hardly names it).
 func absent(requirement, doc string) bool {
 	if v, _ := docs.Verify(context.Background(), doc, requirement, nil); v.Verified {
 		return false
@@ -51,17 +52,79 @@ func absent(requirement, doc string) bool {
 	return len(words) == 0 || float64(n) < 0.5*float64(len(words))
 }
 
-// deviations turns check_deviation's verdicts into findings (G2 for both sides).
-func (e *Engine) deviations(ctx context.Context, rt *agent.Runtime, c agent.Call, b *agent.Budget, res agent.Result) (hookResult, float64, error) {
-	var in struct {
-		ControllingDocIDs, ReviewedDocIDs []string
-		IssueID                           string
+// devInput is check_deviation's request.
+type devInput struct {
+	Requirement, RequirementDocID, IssueID string
+	ControllingDocIDs, ReviewedDocIDs      []string
+}
+
+// quotedRequirement checks check_deviation's requirement before its subagent runs: the words of a
+// controlling document (requirementDocId, one of controllingDocIds), verified like any quote, and
+// returns them as that document has them. A paraphrase (bench: the lead's restatement of the
+// requirement, which the subagent then quoted as the source) is refused with the passage to quote.
+func (e *Engine) quotedRequirement(ctx context.Context, c agent.Call) (string, error) {
+	var in devInput
+	_ = json.Unmarshal(c.Input, &in)
+	if !slices.Contains(in.ControllingDocIDs, in.RequirementDocID) {
+		return "", agent.Fail("check_deviation: requirementDocId must be one of controllingDocIds: the controlling document the requirement is quoted from")
 	}
+	d, err := e.docs.Get(ctx, c.DocumentIDs, in.RequirementDocID)
+	if err != nil {
+		return "", agent.Fail("check_deviation: requirementDocId is not one of this task's documents")
+	}
+	v, err := e.docs.VerifyQuote(ctx, c.DocumentIDs, d.ID, in.Requirement, nil)
+	if err != nil {
+		return "", err
+	} else if v.Verified {
+		return v.Match, nil
+	}
+	msg := "check_deviation: the requirement is not quoted from " + d.Name + ", so it would be checked as a paraphrase: pass the controlling document's own words, copied from retrieve op section, and call again"
+	if sid, num, ok, err := e.docs.Nearest(ctx, c.DocumentIDs, d.ID, in.Requirement); err != nil {
+		return "", err
+	} else if ok { // where to read them: never the document's text in an error (BigLaw's own words only)
+		msg += fmt.Sprintf("; the words it restates are closest in section %s%s", sid, cmpStr(num != "", " ("+num+")", ""))
+	}
+	return "", agent.Fail(msg)
+}
+
+// present reports whether a required provision is in a reviewed document: it verifies there like
+// any quote (string match, then, while the grant has calls, the paraphrase judge on its closest
+// passage). Without a judge, the word test (absent) decides, conservatively.
+func (e *Engine) present(ctx context.Context, rt *agent.Runtime, c agent.Call, b *agent.Budget, docID, provision string) (bool, error) {
+	d, err := e.docs.Get(ctx, c.DocumentIDs, docID)
+	if err != nil {
+		return true, nil // not this task's document: nothing is confirmed absent
+	}
+	if calls, _ := b.Remaining(); calls > 0 && rt != nil {
+		cit, err := e.verify(ctx, rt, c, b, "check_deviation", quoteOf(docID, provision))
+		if err != nil || !strings.HasPrefix(cit.Note, "not verified: ") { // the judge ruled
+			return cit.Method != "none", err
+		}
+	}
+	return !absent(provision, d.Text), nil
+}
+
+// restates reports whether a verdict's controlling "quote" is the requirement in other words: most
+// of its words are the requirement's and it states no figure the requirement does not. A quote of
+// some other requirement, or one with a figure of its own, is not rescued (it is dropped).
+func restates(quote, requirement string) bool {
+	return len(Untraced(quote, requirement, false)) == 0 && !absent(quote, requirement)
+}
+
+// deviations turns check_deviation's verdicts into findings (G2 for both sides). A verdict that
+// restated its requirement instead of quoting it (restates) stands on the request's verified
+// requirement.
+func (e *Engine) deviations(ctx context.Context, rt *agent.Runtime, c agent.Call, b *agent.Budget, res agent.Result) (hookResult, float64, error) {
+	var in devInput
 	_ = json.Unmarshal(c.Input, &in)
 	var ans struct{ Verdicts []verdict }
 	_ = json.Unmarshal(res.Output, &ans)
 	out := hookResult{Findings: []map[string]any{}, Notes: []string{}}
 	all, err := load[Finding](ctx, e, c.TaskID, kFinding)
+	if err != nil {
+		return out, 0, err
+	}
+	req, err := e.verify(ctx, nil, c, b, "check_deviation", quoteOf(in.RequirementDocID, in.Requirement))
 	if err != nil {
 		return out, 0, err
 	}
@@ -83,11 +146,15 @@ func (e *Engine) deviations(ctx context.Context, rt *agent.Runtime, c agent.Call
 			continue
 		}
 		checked++
-		docOK := slices.Contains(in.ReviewedDocIDs, v.Document) && slices.Contains(in.ControllingDocIDs, v.Controlling.DocumentID)
 		ctrl, err := e.verify(ctx, nil, c, b, "check_deviation", quoteOf(v.Controlling.DocumentID, v.Controlling.Quote))
 		if err != nil {
 			return out, 0, err
 		}
+		if ctrl.Method == "none" && req.Method != "none" && restates(v.Controlling.Quote, in.Requirement) { // restated, not quoted (bench: two real deviations dropped)
+			out.Notes = append(out.Notes, fmt.Sprintf("the %s verdict on %q restated its requirement instead of quoting it: the requirement quoted from %s stands for it", v.Verdict, v.Part, name(in.RequirementDocID)))
+			ctrl, v.Controlling.DocumentID, v.Controlling.Quote = req, in.RequirementDocID, in.Requirement
+		}
+		docOK := slices.Contains(in.ReviewedDocIDs, v.Document) && slices.Contains(in.ControllingDocIDs, v.Controlling.DocumentID)
 		f := Finding{Finding: analysis.Finding{IssueID: in.IssueID}, Severity: strings.ToLower(v.Severity), Arm: agent.Arm{Tool: "check_deviation", Model: res.Model}}
 		f.Citations = []Citation{ctrl}
 		ground := v.Controlling.Quote
@@ -109,10 +176,19 @@ func (e *Engine) deviations(ctx context.Context, rt *agent.Runtime, c agent.Call
 			} else if conformsRe.MatchString(v.Correction) {
 				reason = "it says the document conforms"
 			}
-		default: // omitted: Go confirms the provision is absent from that document only
-			d, err := e.docs.Get(ctx, c.DocumentIDs, v.Document)
-			if err != nil || !absent(v.Controlling.Quote, d.Text) {
+		default: // omitted: the provision must not verify in that document (bench: a word count dropped eight real omissions)
+			if here, err := e.present(ctx, rt, c, b, v.Document, v.Controlling.Quote); err != nil {
+				return out, 0, err
+			} else if here {
 				reason = "the provision is present in " + name(v.Document)
+			} else if r := deref(v.Reviewed); r != "" { // the passage where it belongs, when it verifies
+				if rev, err := e.verify(ctx, nil, c, b, "check_deviation", quoteOf(v.Document, r)); err != nil {
+					return out, 0, err
+				} else if rev.Method != "none" {
+					f.Citations, ground = append(f.Citations, rev), ground+"\n"+r
+				} else {
+					v.Reviewed = nil
+				}
 			}
 		}
 		if reason != "" {
@@ -130,6 +206,8 @@ func (e *Engine) deviations(ctx context.Context, rt *agent.Runtime, c agent.Call
 			map[bool]string{true: "omits a provision required by", false: "deviates from"}[v.Verdict == "omitted"], name(v.Controlling.DocumentID), v.Controlling.Quote)
 		if v.Verdict == "deviate" {
 			f.Claim += fmt.Sprintf("; it reads “%s”", deref(v.Reviewed))
+		} else if deref(v.Reviewed) != "" {
+			f.Claim += fmt.Sprintf("; the closest provision reads “%s”", deref(v.Reviewed))
 		}
 		f.Claim += ". Correction: " + corr
 		if len(conform) > 0 {

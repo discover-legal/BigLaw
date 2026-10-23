@@ -178,6 +178,33 @@ func bestSpan(text, quote string) (start, end int, overlap float64) {
 	return start, end, overlap
 }
 
+// Nearest is the section holding the passage of a document that best matches quote (the run of the
+// quote's length in words with most of its words): where to read the words a paraphrase restates.
+// ok is false when no word of quote is in the document.
+func (s *Service) Nearest(ctx context.Context, scope []string, docID, quote string) (sectionID, number string, ok bool, err error) {
+	d, err := s.Get(ctx, scope, docID)
+	if err != nil {
+		return "", "", false, err
+	}
+	start, _, overlap := bestSpan(d.Text, quote)
+	if overlap == 0 {
+		return "", "", false, nil
+	}
+	sectionID, number, err = s.locate(ctx, docID, utf8.RuneCountInString(d.Text[:start]))
+	return sectionID, number, err == nil, err
+}
+
+// locate is the innermost section holding character at of a document.
+func (s *Service) locate(ctx context.Context, docID string, at int) (string, string, error) {
+	var ord int
+	var number string
+	if err := s.db.QueryRowContext(ctx, `SELECT ord, number FROM sections WHERE document_id = $1 AND char_start <= $2 AND $2 < greatest(char_end, char_start + 1)
+		ORDER BY level DESC, ord DESC LIMIT 1`, docID, at).Scan(&ord, &number); err != nil {
+		return "", "", fmt.Errorf("docs: verify: locate: %w", err)
+	}
+	return sectionID(ord), number, nil
+}
+
 // runeStart clamps i into text and moves it back to a rune boundary.
 func runeStart(text string, i int) int {
 	i = min(max(i, 0), len(text))
@@ -215,13 +242,10 @@ func (s *Service) VerifyQuote(ctx context.Context, scope []string, docID, quote 
 			v.Start, v.End = i, i+len(quote)
 		}
 	}
-	out, ord := VerifiedQuote{Verification: v, Match: d.Text[v.Start:v.End]}, 0
-	at := utf8.RuneCountInString(d.Text[:v.Start])
-	if err := s.db.QueryRowContext(ctx, `SELECT ord, number FROM sections WHERE document_id = $1 AND char_start <= $2 AND $2 < greatest(char_end, char_start + 1)
-		ORDER BY level DESC, ord DESC LIMIT 1`, docID, at).Scan(&ord, &out.Number); err != nil {
-		return VerifiedQuote{}, fmt.Errorf("docs: verify: locate: %w", err)
+	out := VerifiedQuote{Verification: v, Match: d.Text[v.Start:v.End]}
+	if out.SectionID, out.Number, err = s.locate(ctx, docID, utf8.RuneCountInString(d.Text[:v.Start])); err != nil {
+		return VerifiedQuote{}, err
 	}
-	out.SectionID = sectionID(ord)
 	if p := d.Transcript.covers(v.Start, v.End); p != nil {
 		out.Method, out.Confidence = v.Method+"@transcript", min(v.Confidence, TranscriptCap)
 		out.TranscribedBy, out.LowConfidence = d.Transcript.Model, p.low()

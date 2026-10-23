@@ -366,3 +366,156 @@ func TestSearchCost(t *testing.T) {
 		t.Errorf("a search past its timeout: %v", err)
 	}
 }
+
+// TestTablePagedByRows (bench: a spreadsheet exhibit read as one 2,000-token page of dense rows):
+// a sheet's pages are whole rows, at most TablePageRows each, that join to the section verbatim; a
+// page after the first names the sheet's header row by reference (Header, HeaderAt), never inside
+// its Text; past headerWindow the header is still the sheet's own (the window doubles back to it).
+func TestTablePagedByRows(t *testing.T) {
+	t.Parallel()
+	s := newService(t)
+	for _, rows := range []int{60, 2200} { // 2,200 rows of ~40 characters: pages past the 64 KiB window
+		var b strings.Builder
+		b.WriteString("## Sheet: Trades\n")
+		head := "Date\tAccount\tShares\tProfit"
+		b.WriteString(head + "\n")
+		for i := range rows {
+			fmt.Fprintf(&b, "2023-%02d-%02d\tOceanic-%d\t%d\t$%d.00\n", 1+i%12, 1+i%28, i, 100+i, 7*i)
+		}
+		text := b.String()
+		d := ingestText(t, s, fmt.Sprintf("trades-%d.txt", rows), text)
+		var got strings.Builder
+		offset, pages := 0, 0
+		for {
+			p, err := s.Section(t.Context(), []string{d.ID}, d.ID, "s0", offset, 600)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pages++
+			n := strings.Count(p.Text, "\t") / 3
+			if n > TablePageRows || !strings.HasSuffix(p.Text, "\n") || tokens(p.Text) > 600 {
+				t.Fatalf("%d rows, page %d: %d rows, %d tokens, ends %q", rows, pages, n, tokens(p.Text), p.Text[max(0, len(p.Text)-12):])
+			}
+			if offset > 0 && (p.Header != head || p.HeaderAt != len("## Sheet: Trades\n") || strings.Contains(p.Text, head)) {
+				t.Fatalf("%d rows, page %d at %d: header %q at %d", rows, pages, offset, p.Header, p.HeaderAt)
+			}
+			got.WriteString(p.Text)
+			if !p.Truncated {
+				break
+			}
+			offset = p.Next
+		}
+		if got.String() != text || pages < (rows+1)/TablePageRows {
+			t.Fatalf("%d rows: %d pages did not join to the sheet (%d of %d bytes)", rows, pages, got.Len(), len(text))
+		}
+	}
+}
+
+// TestTableHeaderIsThePagesOwn (lab-improve r2 verifier M3): a page's Header is the header row of
+// the table the page is in, also when that table starts more than a window back after prose.
+func TestTableHeaderIsThePagesOwn(t *testing.T) {
+	t.Parallel()
+	s := newService(t)
+	table := func(b *strings.Builder, head string, rows int, tag string) {
+		b.WriteString(head + "\n")
+		for i := range rows {
+			fmt.Fprintf(b, "2023-%02d-%02d\t%s-%d\t%d\t$%d.00\n", 1+i%12, 1+i%28, tag, i, 100+i, 7*i)
+		}
+	}
+	cases := map[string]func() (string, []string){
+		"two sheets": func() (string, []string) {
+			var b strings.Builder
+			b.WriteString("## Sheet: Trades\n")
+			table(&b, "Date\tAccount\tShares\tProfit", 2200, "Oceanic")
+			b.WriteString("\n## Sheet: Payments\n")
+			table(&b, "Paid\tPayee\tInvoice\tAmount", 2200, "Vendor")
+			return b.String(), []string{"Date\tAccount\tShares\tProfit", "Paid\tPayee\tInvoice\tAmount"}
+		},
+		"prose then table": func() (string, []string) {
+			var b strings.Builder
+			b.WriteString("Schedule A\n")
+			for i := range 1200 {
+				fmt.Fprintf(&b, "Paragraph %d of the narrative describes the allocation process in some detail.\n", i)
+			}
+			table(&b, "Paid\tPayee\tInvoice\tAmount", 2200, "Vendor")
+			return b.String(), []string{"Paid\tPayee\tInvoice\tAmount"}
+		},
+	}
+	for name, mk := range cases {
+		text, heads := mk()
+		d := ingestText(t, s, strings.ReplaceAll(name, " ", "-")+".txt", text)
+		o, err := s.Outline(t.Context(), []string{d.ID}, d.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bad := 0
+		for _, sec := range o {
+			for offset := 0; ; {
+				p, err := s.Section(t.Context(), []string{d.ID}, d.ID, sec.SectionID, offset, 600)
+				if err != nil {
+					t.Fatal(err)
+				}
+				// which table is this page in? the last header that starts before the page
+				want := ""
+				at := strings.Index(text, p.Text)
+				for _, h := range heads {
+					if i := strings.Index(text, h+"\n"); i >= 0 && i < at {
+						want = h
+					}
+				}
+				if p.Header == "" && offset > 0 && want != "" && strings.Contains(p.Text, "\t") && !strings.Contains(p.Text, want) {
+					if bad++; bad <= 3 {
+						t.Errorf("%s: %s page at %d names no header, want %q", name, sec.SectionID, offset, want)
+					}
+				}
+				if p.Header != "" && p.Header != want {
+					if bad++; bad <= 3 {
+						t.Errorf("%s: %s page at %d: header %q, want %q", name, sec.SectionID, offset, p.Header, want)
+					}
+				}
+				if !p.Truncated {
+					break
+				}
+				offset = p.Next
+			}
+		}
+		if bad > 0 {
+			t.Errorf("%s: %d pages carry another table's or a data row as header (sections %d)", name, bad, len(o))
+		}
+	}
+}
+
+// TestTableHeaderOfASecondTable (lab-improve r2 verifier M3): two tables of one section separated
+// by a blank line (a .docx's empty paragraph): the second table's pages name its own header.
+func TestTableHeaderOfASecondTable(t *testing.T) {
+	t.Parallel()
+	s := newService(t)
+	var b strings.Builder
+	b.WriteString("Schedule 2. Accounts\n")
+	b.WriteString("Account\tOwner\tOpened\tBalance\n")
+	for i := range 5 {
+		fmt.Fprintf(&b, "A-%d\tOwner %d\t2020-01-0%d\t$%d.00\n", i, i, 1+i, 1000*i)
+	}
+	b.WriteString("\n")
+	b.WriteString("Trade date\tTicker\tShares\tPrice\n")
+	for i := range 300 {
+		fmt.Fprintf(&b, "2023-%02d-%02d\tXYZ\t%d\t$%d.25\n", 1+i%12, 1+i%28, 100+i, 10+i)
+	}
+	text := b.String()
+	d := ingestText(t, s, "two-tables.txt", text)
+	o, _ := s.Outline(t.Context(), []string{d.ID}, d.ID)
+	t.Logf("sections: %d", len(o))
+	for offset := 0; ; {
+		p, err := s.Section(t.Context(), []string{d.ID}, d.ID, o[0].SectionID, offset, 600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(p.Text, "\tXYZ\t") && !strings.Contains(p.Text, "Trade date") && p.Header != "Trade date\tTicker\tShares\tPrice" {
+			t.Fatalf("a page of the trades table at %d names header %q", offset, p.Header)
+		}
+		if !p.Truncated {
+			break
+		}
+		offset = p.Next
+	}
+}

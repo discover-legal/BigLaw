@@ -66,8 +66,8 @@ func (r *Registry) Register(t Tool) error {
 		return bad("the name is not 2–64 lower-case letters, digits and _")
 	case !slices.Contains([]string{"go", "subagent", "fanout"}, s.Kind):
 		return bad("kind is go, subagent or fanout")
-	case !slices.Contains([]string{"plan", "evidence", "draft", "committee", "free"}, s.Class):
-		return bad("class is plan, evidence, draft, committee or free")
+	case !slices.Contains([]string{"plan", "evidence", "draft", "committee", "cover", "free"}, s.Class):
+		return bad("class is plan, evidence, draft, committee, cover or free")
 	case e.in.Strict("in") != "" || e.out.Strict("out") != "":
 		return bad("schema not strict-shaped: %s%s", e.in.Strict("in"), e.out.Strict("out"))
 	case len(sentenceRe.FindAllString(exampleRe.ReplaceAllString(s.Description, ""), -1)) < 3:

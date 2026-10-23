@@ -193,6 +193,62 @@ func tableRows(text string, from, to int, add func(start, end int, search, conte
 	flush(to)
 }
 
+// tablePage is the page of text (read one character past a page of max characters) that a table
+// holds: whole lines up to TablePageRows table rows and max characters. ok is false when text is
+// not a table, or its first line alone is longer than a page (paged as prose).
+func tablePage(text string, max int) (string, bool) {
+	if !isTabular(text) {
+		return "", false
+	}
+	total, rows, runes, end := utf8.RuneCountInString(text), 0, 0, 0
+	for end < len(text) && rows < TablePageRows {
+		next, whole := len(text), total <= max // the last line is whole only when the read ended the section
+		if i := strings.IndexByte(text[end:], '\n'); i >= 0 {
+			next, whole = end+i+1, true
+		}
+		n := utf8.RuneCountInString(text[end:next])
+		if !whole || runes+n > max {
+			break
+		}
+		runes, rows, end = runes+n, rows+btoi(isTableRow(text[end:next])), next
+	}
+	return text[:end], end > 0
+}
+
+// tableHeader is the header row of the table that text (a section's text before a page's first
+// table row) ends inside: the first row of the run of table rows the text's last line is in, and
+// its offset in characters. A table starts after the section's start, a blank line, prose or a
+// "#" marker, so two tables of one section each name their own header. A last line with no
+// newline (a page that starts mid-line) is ignored. bounded is false when the run starts at the
+// text's first line, so it may have begun before the text.
+func tableHeader(text string) (row string, at int, ok, bounded bool) {
+	if i := strings.LastIndexByte(text, '\n'); i >= 0 {
+		text = text[:i+1]
+	} else {
+		return "", 0, false, false
+	}
+	chars, first := 0, true
+	for ln := range strings.SplitSeq(text[:len(text)-1], "\n") {
+		if isTableRow(ln) {
+			if !ok {
+				row, at, ok, bounded = strings.TrimRight(ln, "\r"), chars, true, !first
+			}
+		} else {
+			row, at, ok = "", 0, false
+		}
+		chars += utf8.RuneCountInString(ln) + 1
+		first = false
+	}
+	return row, at, ok, bounded
+}
+
+func btoi(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
 // headerCells is the header row's first maxColumns cells, split without a slice of every tab.
 func headerCells(line string) []string {
 	header := []string{}

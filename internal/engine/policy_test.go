@@ -9,19 +9,21 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/discover-legal/BigLaw/internal/agent"
 	"github.com/discover-legal/BigLaw/internal/model"
 )
 
 // TestAllocationsMatchSpec: the shares at 30, 150 and 400 calls (DESIGN § Budgets: at 150, plan ≤
-// 10 with 3 the usual, sweep 52, targeted evidence 23, draft 22, two cycles of 20, reserve + meta 8).
+// 10 with 3 the usual, sweep 52, targeted evidence 14 and the coverage pass 9 of the evidence share,
+// draft 22, two cycles of 20, reserve + meta 8).
 func TestAllocationsMatchSpec(t *testing.T) {
 	for _, c := range []struct {
 		calls int
 		want  Allocation
 	}{
-		{30, Allocation{Plan: 3, Evidence: 15, Sweep: 10, Draft: 4, Cycle: 6, Critics: [3]int{2, 2, 2}, Reserve: 5, Meta: 3, FixMin: 3, Calls: 30, USD: 5, CycleUSD: 1}},
-		{150, Allocation{Plan: 10, Evidence: 75, Sweep: 52, Draft: 22, Cycle: 20, Critics: [3]int{8, 8, 4}, Reserve: 5, Meta: 3, FixMin: 3, Calls: 150, USD: 5, CycleUSD: 1}},
-		{400, Allocation{Plan: 28, Evidence: 200, Sweep: 140, Draft: 60, Cycle: 20, Critics: [3]int{8, 8, 4}, Reserve: 5, Meta: 3, FixMin: 3, Calls: 400, USD: 5, CycleUSD: 1}},
+		{30, Allocation{Plan: 3, Evidence: 15, Sweep: 10, Cover: 1, Draft: 4, Cycle: 6, Critics: [3]int{2, 2, 2}, Reserve: 5, Meta: 3, FixMin: 3, Calls: 30, USD: 5, CycleUSD: 1}},
+		{150, Allocation{Plan: 10, Evidence: 75, Sweep: 52, Cover: 9, Draft: 22, Cycle: 20, Critics: [3]int{8, 8, 4}, Reserve: 5, Meta: 3, FixMin: 3, Calls: 150, USD: 5, CycleUSD: 1}},
+		{400, Allocation{Plan: 28, Evidence: 200, Sweep: 140, Cover: 24, Draft: 60, Cycle: 20, Critics: [3]int{8, 8, 4}, Reserve: 5, Meta: 3, FixMin: 3, Calls: 400, USD: 5, CycleUSD: 1}},
 	} {
 		a := Allocate(c.calls, 5)
 		if a != c.want {
@@ -360,7 +362,7 @@ func TestSweepShareBounded(t *testing.T) {
 }
 
 // filler makes a clause over half a sweep batch, so the sweep reads each clause in a visit of its
-// own (it batches shorter consecutive sections, up to sweepBatchTokens).
+// own (it batches shorter consecutive sections, up to sweepTokens).
 var filler = strings.Repeat("Further delivery terms apply. ", 40)
 
 // costly is r billed at usd (the bench's real calls cost about $0.02–0.10 each).
@@ -433,5 +435,30 @@ func TestCommitteeAlwaysReviewsTheLastDraft(t *testing.T) {
 	}
 	if stop(v) != "awaiting_gate/budget_exhausted" || len(cm) != 1 || strings.Contains(cm[0], "did not return") || critics != 3 || v.Run.Budget.Calls > 30 {
 		t.Fatalf("%s: committee %q, %d critic calls, spent %+v\n%s", stop(v), cm, critics, v.Run.Budget, f.steps(v.ID))
+	}
+}
+
+// TestCoverageShareKept: the coverage pass's share (6%) is part of the evidence share the lead may
+// not spend, and is held back from everything below the committee until the pass has run (then it
+// is free again); funded() counts it as kept too.
+func TestCoverageShareKept(t *testing.T) {
+	a := Allocate(150, 5)
+	if a.Cover != 9 || a.share("extract_facts", "evidence") != 75-9 || a.share("sweep", "evidence") != 52 {
+		t.Fatalf("cover %d, lead evidence %d", a.Cover, a.share("extract_facts", "evidence"))
+	}
+	r := &run{e: &Engine{cfg: Config{BudgetCalls: 150, BudgetUSD: 5}}, b: agent.NewBudget(150, 5, 0)}
+	r.keep(a, map[string]agent.Usage{}, false)
+	work, _ := r.b.RemainingAt(agent.LevelWork)
+	review, _ := r.b.RemainingAt(agent.LevelReview)
+	if work != 150-8-20-9 || review != 150-8 {
+		t.Fatalf("before the pass: work %d, review %d", work, review)
+	}
+	r.keep(a, map[string]agent.Usage{}, true)
+	if work, _ = r.b.RemainingAt(agent.LevelWork); work != 150-8-20 {
+		t.Fatalf("after the pass: work %d", work)
+	}
+	r.b.Charge(agent.Usage{Calls: 100, USD: 5 - 1 - a.dollars(8) - a.dollars(3) - a.dollars(9)/2}) // USD left: a cycle, the reserve, a fix, half the pass
+	if !r.funded(r.b, 0, true) || r.funded(r.b, 0, false) {
+		t.Fatal("funded does not keep the coverage pass's USD back until it has run")
 	}
 }
