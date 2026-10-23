@@ -4,6 +4,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -76,7 +77,13 @@ func (rt *Runtime) LoadSubagents(fsys fs.FS) ([]Tool, error) {
 		case s.Name+".json" != path.Base(f) || s.Kind != "subagent":
 			return nil, fmt.Errorf("agent: spec %s: the name must match the file and the kind be subagent", f)
 		}
-		out = append(out, &Subagent{S: s, Prompt: string(prompt), RT: rt})
+		var schema bytes.Buffer // the model must see its output schema: the prompt alone can omit a required field
+		if err := json.Compact(&schema, s.Out); err != nil {
+			return nil, fmt.Errorf("agent: spec %s: output schema: %v", f, err)
+		}
+		out = append(out, &Subagent{S: s, RT: rt, Prompt: string(prompt) + "\n\nYour answer is one JSON object valid " +
+			"against this JSON Schema. Every property a \"required\" list names must be present, even when empty; use null " +
+			"only where the type allows null, [] for an empty array:\n" + schema.String()})
 	}
 	return out, nil
 }

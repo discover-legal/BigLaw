@@ -118,6 +118,11 @@ func (rt *Runtime) Run(ctx context.Context, a Agent, c Call, b *Budget) (Result,
 				msgs[last].Content = msgs[last].Content.(string) + "\n\n" + h
 			}
 		}
+		// A subagent's last turn can no longer use a tool's result: ask for its answer, without tools.
+		last := a.Out != nil && turn == a.MaxTurns && turn > 1 && len(defs) > 0
+		if last {
+			add(model.Message{Role: "user", Content: "This is your last turn: no more tool calls. Answer now with only the JSON object."}, turn, "")
+		}
 		var resp *model.Response
 		for try := 0; ; try++ {
 			view := slices.Clone(msgs)
@@ -129,6 +134,9 @@ func (rt *Runtime) Run(ctx context.Context, a Agent, c Call, b *Budget) (Result,
 			req := model.Request{Agent: a.Name, Role: a.Role, Model: a.Model, Messages: view, Tools: defs, MaxTokens: cmp.Or(a.MaxTokens, 4096)}
 			if len(defs) > 0 {
 				req.ToolChoice = "auto"
+				if last {
+					req.ToolChoice = "none"
+				}
 			}
 			step++
 			if r := replayed(step); r != nil { // a recorded turn: its answer, or the refusal it compacted for

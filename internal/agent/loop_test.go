@@ -4,6 +4,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -107,6 +108,10 @@ func TestSubagentTurnCap(t *testing.T) {
 	}
 	if n := len(byAgent(f, "extract_facts")); n != 2 {
 		t.Fatalf("the subagent made %d model calls, want its cap of 2", n)
+	}
+	// Its last turn cannot use a tool's result, so it is asked for the answer without tools.
+	if reqs := byAgent(f, "extract_facts"); reqs[0].ToolChoice != "auto" || reqs[1].ToolChoice != "none" || !strings.Contains(lastContent(reqs[1]), "last turn") {
+		t.Fatalf("tool choice %q then %q; last turn's note %q", reqs[0].ToolChoice, reqs[1].ToolChoice, lastContent(reqs[1]))
 	}
 	steps := j.final()
 	if st := steps[len(steps)-1]; st.Tool != "extract_facts" || st.Status != "failed" || !strings.Contains(st.Note, "turn cap") {
@@ -451,6 +456,12 @@ func TestLoadSubagents(t *testing.T) {
 	tools, err := rt.LoadSubagents(fstest.MapFS{"extract_facts.json": {Data: spec}, "extract_facts.md": {Data: []byte("You extract facts.")}})
 	if err != nil || len(tools) != 1 || rt.Reg.Register(tools[0]) != nil {
 		t.Fatalf("load: %v", err)
+	}
+	// A real model sees only the prompt: it must carry the output schema, or the model omits required fields.
+	var out bytes.Buffer
+	_ = json.Compact(&out, subSpec("extract_facts", "retrieve").Out)
+	if p := tools[0].(*Subagent).Prompt; !strings.HasPrefix(p, "You extract facts.") || !strings.Contains(p, out.String()) {
+		t.Fatalf("prompt lacks the output schema: %q", p)
 	}
 	for name, fs := range map[string]fstest.MapFS{
 		"no prompt":     {"extract_facts.json": {Data: spec}},
