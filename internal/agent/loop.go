@@ -29,6 +29,10 @@ type Runtime struct {
 	Log     *slog.Logger
 }
 
+// subagentMaxTokens bounds a subagent's answer: a critic's verdicts on up to 80 claims do not fit
+// in the 4,096 a lead turn gets.
+const subagentMaxTokens = 8192
+
 // Agent is one loop's configuration: the lead's (no Out: it ends through a Final tool) or a
 // subagent's (its answer is a JSON object matching Out).
 type Agent struct {
@@ -186,7 +190,10 @@ func (rt *Runtime) Run(ctx context.Context, a Agent, c Call, b *Budget) (Result,
 				out, verr := answer(resp.Text, a.Out)
 				if verr == nil {
 					return Result{Output: out}, nil
-				} else if repaired {
+				} else if resp.Truncated {
+					verr = fmt.Errorf("%w (the answer was cut off at its %d-token limit: make it shorter)", verr, cmp.Or(a.MaxTokens, 4096))
+				}
+				if repaired {
 					return Result{}, fmt.Errorf("%w: %s: %v", ErrToolOutput, a.Name, verr)
 				}
 				repaired, note = true, "Your answer does not match the output schema: "+verr.Error()+". Reply with only the JSON object."
@@ -439,7 +446,7 @@ func (s *Subagent) Call(ctx context.Context, c Call) (Result, error) {
 		return Result{}, err
 	}
 	b := NewBudget(c.Budget.Calls, c.Budget.USD, 0)
-	res, err := s.RT.Run(ctx, Agent{Name: s.S.Name, Role: s.S.Role, Model: m, Prompt: s.Prompt, Visible: s.S.Allowed, MaxTurns: s.S.MaxTurns, Out: out},
+	res, err := s.RT.Run(ctx, Agent{Name: s.S.Name, Role: s.S.Role, Model: m, Prompt: s.Prompt, Visible: s.S.Allowed, MaxTurns: s.S.MaxTurns, Out: out, MaxTokens: subagentMaxTokens},
 		Call{TaskID: c.TaskID, DocumentIDs: c.DocumentIDs, Input: c.Input, Depth: 1}, b)
 	res.Usage, res.Model = b.Spent(), m
 	return res, err

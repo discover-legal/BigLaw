@@ -514,3 +514,19 @@ func TestAnswerToleratesProseAroundJSON(t *testing.T) {
 		}
 	}
 }
+
+// A subagent's answer cut off at its token limit says so in the repair note (so the model can
+// shorten it), and subagents get a larger limit than a lead turn.
+func TestSubagentTruncatedAnswerSaysSo(t *testing.T) {
+	rt, f := rig(t, map[string][]model.Reply{
+		"lead":          {calls(call("extract_facts", q))},
+		"extract_facts": {{Text: `{"ok":tr`, Truncated: true}, {Text: `{"ok":true}`}},
+	}, &counter{s: goSpec("retrieve")}, &Subagent{S: subSpec("extract_facts", "retrieve"), Prompt: "x"})
+	l := lead("extract_facts")
+	l.MaxTurns = 1
+	_, _ = rt.Run(context.Background(), l, Call{Input: json.RawMessage(`"go"`)}, NewBudget(50, 1, 0))
+	reqs := byAgent(f, "extract_facts")
+	if len(reqs) != 2 || reqs[0].MaxTokens != subagentMaxTokens || !strings.Contains(lastContent(reqs[1]), "cut off at its 8192-token limit") {
+		t.Fatalf("%d calls, max tokens %d; repair note %q", len(reqs), reqs[0].MaxTokens, lastContent(reqs[len(reqs)-1]))
+	}
+}
