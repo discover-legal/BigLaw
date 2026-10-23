@@ -180,6 +180,19 @@ func (rt *Runtime) Run(ctx context.Context, a Agent, c Call, b *Budget) (Result,
 			}
 			break
 		}
+		var me *model.Error
+		if !lead && a.Out != nil && errors.As(err, &me) && me.Truncated {
+			// A subagent's answer cut off before any text or whole tool call (a long critique, an
+			// oversized tool call) is a bad answer, not a model failure: one shorter try, then the
+			// tool fails (ErrToolOutput) and the run goes on without it (bench: a critic's cut-off
+			// answer ended a $7.76 run with no deliverable).
+			if repaired {
+				return Result{}, fmt.Errorf("%w: %s: %v", ErrToolOutput, a.Name, err)
+			}
+			repaired = true
+			add(model.Message{Role: "user", Content: fmt.Sprintf("Your answer was cut off at its %d-token limit before it held any text or a whole tool call. Answer again, much shorter: fewer and shorter items, only the JSON object.", cmp.Or(a.MaxTokens, 4096))}, turn, "")
+			continue
+		}
 		if err != nil {
 			return Result{}, err
 		}

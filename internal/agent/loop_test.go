@@ -530,3 +530,28 @@ func TestSubagentTruncatedAnswerSaysSo(t *testing.T) {
 		t.Fatalf("%d calls, max tokens %d; repair note %q", len(reqs), reqs[0].MaxTokens, lastContent(reqs[len(reqs)-1]))
 	}
 }
+
+// A subagent's answer cut off before any text or whole tool call (bench: a critic's, which ended a
+// $7.76 run with no deliverable) is a bad answer, not a model failure (G6): one shorter try, and a
+// second cut-off fails the tool (ErrToolOutput), never the run (ErrNoContent).
+func TestSubagentCutOffEmptyAnswerIsNotAModelFailure(t *testing.T) {
+	rt, f := rig(t, map[string][]model.Reply{
+		"extract_facts": {{Truncated: true}, {Text: `{"ok":true}`}},
+	}, &counter{s: goSpec("retrieve")}, &Subagent{S: subSpec("extract_facts", "retrieve"), Prompt: "x"})
+	res, err := rt.Invoke(context.Background(), lead("extract_facts"), Call{}, "extract_facts", json.RawMessage(q), NewBudget(10, 1, 0), false, 0)
+	reqs := byAgent(f, "extract_facts")
+	if err != nil || string(res.Output) != `{"ok":true}` || len(reqs) != 2 || !strings.Contains(lastContent(reqs[1]), "cut off at its 8192-token limit before it held any text") {
+		t.Fatalf("%s, %v after %d calls", res.Output, err, len(reqs))
+	}
+	rt, _ = rig(t, map[string][]model.Reply{
+		"extract_facts": {{Truncated: true}, {Truncated: true}},
+	}, &counter{s: goSpec("retrieve")}, &Subagent{S: subSpec("extract_facts", "retrieve"), Prompt: "x"})
+	_, err = rt.Invoke(context.Background(), lead("extract_facts"), Call{}, "extract_facts", json.RawMessage(q), NewBudget(10, 1, 0), false, 0)
+	if !errors.Is(err, ErrToolOutput) || errors.Is(err, model.ErrNoContent) {
+		t.Fatalf("two cut-off answers: %v", err)
+	}
+	rt, _ = rig(t, map[string][]model.Reply{"extract_facts": {{}}}, &counter{s: goSpec("retrieve")}, &Subagent{S: subSpec("extract_facts", "retrieve"), Prompt: "x"})
+	if _, err = rt.Invoke(context.Background(), lead("extract_facts"), Call{}, "extract_facts", json.RawMessage(q), NewBudget(10, 1, 0), false, 0); !errors.Is(err, model.ErrNoContent) {
+		t.Fatalf("an empty answer that was not cut off is still a model failure: %v", err)
+	}
+}

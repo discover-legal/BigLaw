@@ -787,7 +787,9 @@ The memo workflow (§ Memo workflow) drives these. What PR 4a ships, all tested 
   than four turns are replaced by a handle naming their step; an endpoint's 400/413/422 compacts all
   but the latest turn's and retries once. Text in tool results is labelled untrusted matter data.
   The model sees refusals (reason and next step) and tool failures in BigLaw's own words only; any
-  other error is logged and shown as "internal error". A model failure (G6) ends the run.
+  other error is logged and shown as "internal error". A model failure (G6) ends the run, except a
+  subagent's answer cut off at its token limit before any text or whole tool call: that is a bad
+  answer (one shorter try, then `ErrToolOutput`), not a failure (`TestSubagentCutOffEmptyAnswerIsNotAModelFailure`).
 - **Budget** (`Budget`). Calls and USD per task, held and charged in Go. A model call holds one call
   and its worst-case cost (each request byte a token plus 1,000, as a cache write, plus `MaxTokens`
   of output) and then charges what it spent, a refused-but-billed answer included; a tool's grant is
