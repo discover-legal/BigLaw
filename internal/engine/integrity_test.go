@@ -6,9 +6,11 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/discover-legal/BigLaw/internal/analysis"
 	"github.com/discover-legal/BigLaw/internal/model"
 )
 
@@ -186,7 +188,7 @@ func TestModelDigitsNotFromLedgerFlagged(t *testing.T) {
 	lead := []model.Reply{calls(plan(issue("I1", "Who got the allocations?", "Conduct"))), calls(extract(d1, "allocations", "I1")), calls(draft("I1", "F1")), calls(committee()), calls(finishCall("submit"))}
 	v := f.run(f.with(map[string][]model.Reply{"lead": lead, "extract_facts": {ex}, "draft_section": {section("Chao received 68.6% of the profitable allocations [F1].", "s")}}), Config{})
 	fin := f.outputs(v.ID, "finish")
-	if len(fin) != 1 || !strings.Contains(fin[0], "the figure 68.6 is not a handle") {
+	if len(fin) != 1 || !strings.Contains(fin[0], "the figure 68.6 is not traced (G8)") {
 		t.Fatalf("finish %q", fin)
 	}
 	g := newFixture(t, "1. Allocations\nChao's account received 81.6% of the profitable allocations.\n")
@@ -442,5 +444,83 @@ func TestMarkdownNeutralised(t *testing.T) {
 	want := "Para.\n### Limitations\n### Top\n### Sub\n\\```\n  \\~~~go\n\\<script>x\\</script>\n| a | b |"
 	if got := mdSafe(in, false); got != want {
 		t.Errorf("block:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestLintSaysHowToFix (bench: the lead spent ~15 calls on "the figure N is not a handle"): rule
+// and section numbers are locators, not figures; a worksheet's result and inputs trace; and each
+// untraced figure names its fix: the handle to write and the finding to cite, the finding that
+// states it, or the numbers call that computes it.
+func TestLintSaysHowToFix(t *testing.T) {
+	cite := func(q string) []Citation { return []Citation{{Quote: q, Method: "exact"}} }
+	use := map[string]Finding{
+		"F1": {Finding: analysis.Finding{FID: "F1", Values: []analysis.Value{{Value: "10/21/2026"}}}, Citations: cite("served on 10/21/2026 via its registered agent")},
+		"F2": {Finding: analysis.Finding{FID: "F2", Values: []analysis.Value{{Value: "$612,400"}}}, Citations: cite("leaving a shortfall of $612,400")},
+		"F3": {Finding: analysis.Finding{FID: "F3"}, Citations: cite("a fee equal to thirty-five percent (35%) of the shortfall")},
+	}
+	w := analysis.Worksheet{WID: "W0123456789", Result: "2026-11-12", Unit: "date", Steps: []analysis.SheetStep{{Step: "operand 1", Value: "F1.v1 = 10/21/2026 date"},
+		{Step: "operand 2", Value: "21 days"}, {Step: "raw date", Value: "2026-11-11 (Wednesday, a holiday)"}, {Step: "rolled forward", Value: "2026-11-12 (Thursday)"}, {Step: "date_add", Value: "2026-11-12 date"}}}
+	figs := []Fig{{"{Zephyr}", "F2", "$612,400"}, {"{W0123456789}", "", "November 12, 2026"}}
+	sec := Section{Handles: figs, Markdown: "Talbot was served on 10/21/2026 [F1]. Under Rule 12(a)(1)(A)(i) and Fed. R. Civ. P. 6(a)(1)(C), 21 days later is " +
+		"November 11, 2026, Veterans Day, so the answer is due {W0123456789} [F1]. Section 4.3 and § 9.2 cap the fee [F3]; Rule 7.1 applies [F1]. " +
+		"Greystone invoiced $612,400 [F1]. The cap is $214,340 [F3]. The status report is due November 25, 2026 [F1]."}
+	got := strings.Join(lint("I1", sec, use, []analysis.Worksheet{w}), "\n")
+	for _, want := range []string{
+		"the figure 612400 is not traced (G8): write its handle {Zephyr} and cite [F2]",
+		"the figure 214340 is not traced (G8): no cited finding, handle or worksheet states it: if it is computed",
+		"fn product of F3.v1",
+		"the figure 2026-11-25 is not traced (G8): no cited quote states this date: if it is computed (a deadline), compute it with numbers op calc fn date_add",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+	if n := strings.Count(got, "\n") + 1; n != 3 || strings.Contains(got, "figure 12 ") || strings.Contains(got, "figure 7.1") || strings.Contains(got, "figure 4.3") ||
+		strings.Contains(got, "figure 21 ") || strings.Contains(got, "2026-11-11") {
+		t.Errorf("want exactly the three untraced figures, got %d:\n%s", n, got)
+	}
+	sec.Markdown = "Greystone invoiced $612,400 [F1]."
+	if got := lint("I1", sec, map[string]Finding{"F1": use["F1"], "F4": {Finding: analysis.Finding{FID: "F4"}, Citations: cite("invoiced $612,400")}}, nil); len(got) != 1 ||
+		!strings.Contains(got[0], "write its handle {Zephyr} and cite [F2]") {
+		t.Errorf("%q", got)
+	}
+	delete(use, "F2")
+	sec.Handles = nil
+	if got := lint("I1", sec, map[string]Finding{"F1": use["F1"], "F4": {Finding: analysis.Finding{FID: "F4"}, Citations: cite("invoiced $612,400")}}, nil); len(got) != 1 ||
+		!strings.Contains(got[0], "it is stated by [F4]: cite [F4]") {
+		t.Errorf("%q", got)
+	}
+}
+
+// TestFigureLintIsBounded (bench: the lead redrafted for the same G8 line again and again): a
+// redraft request carries the checks the section fails, and after two finish calls that reported
+// lint problems the next one discloses them instead of refusing, so the lint cannot consume the run.
+func TestFigureLintIsBounded(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, "1. Allocations\nChao's account received 81.6% of the profitable allocations.\n")
+	d1 := f.docs[0].ID
+	ex := facts(fd("Chao received 81.6% of profitable allocations.", d1, "Chao's account received 81.6% of the profitable allocations", val("Chao", "profitable allocations", "81.6%", "Percentage")))
+	revise := tc("draft_section", m{"issueId": "I1", "fids": []string{"F1"}, "revise": "fix the lint"})
+	lead := []model.Reply{calls(plan(issue("I1", "Who got the allocations?", "Conduct"))), calls(extract(d1, "allocations", "I1")), calls(draft("I1", "F1")), calls(committee()),
+		calls(finishCall("submit")), calls(revise), calls(committee()), calls(finishCall("submit")), calls(revise), calls(committee()), calls(finishCall("submit"))}
+	bad := section("Chao received 68.6% of the profitable allocations [F1].", "s")
+	e, fake := f.engine(f.with(map[string][]model.Reply{"lead": lead, "extract_facts": {ex}, "draft_section": {bad, bad, bad},
+		"prosecute": {supported, supported, supported}, "reproduce": {noAnswers, noAnswers, noAnswers}, "audit_gaps": {noGaps, noGaps, noGaps}}), Config{})
+	task := f.submit(0)
+	f.step(context.Background())
+	v, _ := e.Get(context.Background(), task.ID)
+	fin := f.outputs(v.ID, "finish")
+	if len(fin) != 3 || !strings.Contains(fin[1], `"code":"lint"`) || !strings.Contains(fin[2], `"accepted":true`) || stop(v) != "awaiting_gate/finished" ||
+		!strings.Contains(deref(v.Output), "Delivered with an unresolved check after 2 rounds of fixes: I1: the figure 68.6 is not traced (G8)") {
+		t.Fatalf("%s %q\n%s", stop(v), fin, deref(v.Output))
+	}
+	var reqs []string
+	for _, c := range fake.Calls() {
+		if c.Agent == "draft_section" {
+			reqs = append(reqs, fmt.Sprint(c.Messages[1].Content))
+		}
+	}
+	if len(reqs) != 3 || strings.Contains(reqs[0], `"checks"`) || !strings.Contains(reqs[1], `"checks":["I1: the figure 68.6 is not traced (G8)`) {
+		t.Fatalf("draft requests %q", reqs)
 	}
 }

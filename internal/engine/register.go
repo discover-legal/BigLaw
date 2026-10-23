@@ -4,6 +4,7 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"embed"
 	"encoding/json"
@@ -105,18 +106,37 @@ func (e *Engine) runtime(r *run) (*agent.Runtime, error) {
 	return rt, nil
 }
 
-// sheets keeps every numbers{op:"calc"} worksheet in the ledger: the deliverable's totals and
-// computed dates trace to one (G8).
+// sheets keeps every numbers{op:"calc"} worksheet in the ledger (the deliverable's totals and
+// computed dates trace to one, G8, and a drafter writes it as {W…}), and answers op "handles" from
+// the run's kept codenames, so the lead and the drafters see one codename per figure.
 type sheets struct {
 	agent.Tool
 	e *Engine
 }
 
 func (s sheets) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
+	var in struct {
+		Op         string
+		FIDs       []string `json:"fids"`
+		SalientTop int
+	}
+	if json.Unmarshal(c.Input, &in) == nil && in.Op == "handles" {
+		use, err := s.e.usable(ctx, c.TaskID)
+		hs, herr := s.e.handleSet(ctx, c.TaskID, use)
+		if err = cmpErr(err, herr); err != nil {
+			return agent.Result{}, err
+		}
+		hs = slices.DeleteFunc(hs, func(h analysis.Handle) bool {
+			return h.FID == "" || len(in.FIDs) > 0 && !slices.Contains(in.FIDs, h.FID)
+		})
+		out, _ := json.Marshal(map[string]any{"wid": nil, "result": nil, "unit": nil, "worksheet": nil, "literalOperands": nil, "tableMarkdown": nil,
+			"handles": append([]analysis.Handle{}, hs[:min(len(hs), cmp.Or(in.SalientTop, len(hs)))]...)})
+		return agent.Result{Output: out}, nil
+	}
 	res, err := s.Tool.Call(ctx, c)
-	var w struct{ WID, Result, Unit *string }
-	if err == nil && json.Unmarshal(res.Output, &w) == nil && w.WID != nil {
-		err = s.e.write(ctx, c.TaskID, kSheet, *w.WID, map[string]string{"result": *w.Result, "unit": *w.Unit}, false)
+	var w analysis.Worksheet
+	if err == nil && json.Unmarshal(res.Output, &w) == nil && w.WID != "" {
+		err = s.e.write(ctx, c.TaskID, kSheet, w.WID, w, false)
 	}
 	return res, err
 }

@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	"github.com/discover-legal/BigLaw/internal/agent"
-	"github.com/discover-legal/BigLaw/internal/analysis"
 )
 
 // draftReq is a draft_section request as Go completed it, with the handle set the drafter got.
@@ -23,8 +22,9 @@ type draftReq struct {
 }
 
 // draftRequest completes a draft_section call (paged drafting): the issue, its named findings
-// (verified and not rejected only: G3), their figure handles, and the summaries of the sections
-// already written, in plan order.
+// (verified and not rejected only: G3), their figure handles and every worksheet's, the summaries
+// of the sections already written, in plan order, and on a redraft the checks the current version
+// fails (lint), so the drafter fixes exactly those.
 func (e *Engine) draftRequest(ctx context.Context, taskID, issueID string, input json.RawMessage) (draftReq, error) {
 	var in struct {
 		FIDs   []string `json:"fids"`
@@ -43,10 +43,6 @@ func (e *Engine) draftRequest(ctx context.Context, taskID, issueID string, input
 	}
 	var fs []map[string]any
 	var omitted []string
-	var an []analysis.Finding
-	for _, f := range use {
-		an = append(an, f.Finding)
-	}
 	for _, id := range in.FIDs {
 		j := slices.IndexFunc(use, func(f Finding) bool { return f.FID == id })
 		if j < 0 {
@@ -63,10 +59,16 @@ func (e *Engine) draftRequest(ctx context.Context, taskID, issueID string, input
 		return draftReq{}, agent.Fail("draft_section: none of fids is a verified finding of this task; name verified findings (ledger op findings)")
 	}
 	d := draftReq{issueID: issueID}
-	var hs []map[string]string
-	for _, h := range analysis.Handles(an, in.FIDs, 0) {
+	all, err := e.handleSet(ctx, taskID, use)
+	if err != nil {
+		return draftReq{}, err
+	}
+	hs := []map[string]string{}
+	for _, h := range all { // the drafter sees its findings' handles and every worksheet's; Go substitutes the run's set
 		d.figs = append(d.figs, Fig{h.Handle, h.FID, h.Value})
-		hs = append(hs, map[string]string{"handle": h.Handle, "fid": h.FID, "label": h.Label})
+		if h.FID == "" || slices.Contains(in.FIDs, h.FID) {
+			hs = append(hs, map[string]string{"handle": h.Handle, "fid": cmpStr(h.FID != "", h.FID, "worksheet "+h.Ref), "label": h.Label})
+		}
 	}
 	var prior []map[string]string
 	for _, is := range issues {
@@ -78,6 +80,19 @@ func (e *Engine) draftRequest(ctx context.Context, taskID, issueID string, input
 		"priorSections": prior, "revise": in.Revise}
 	if len(omitted) > 0 {
 		d.request["omitted"] = "not verified findings of this task, so not shown: " + strings.Join(omitted, ", ")
+	}
+	if k := slices.IndexFunc(secs, func(s Section) bool { return s.IssueID == issueID }); k >= 0 {
+		ws, err := e.worksheets(ctx, taskID)
+		if err != nil {
+			return draftReq{}, err
+		}
+		byFID := map[string]Finding{}
+		for _, f := range use {
+			byFID[f.FID] = f
+		}
+		if checks := lint(issueID, secs[k], byFID, ws); len(checks) > 0 {
+			d.request["checks"] = checks
+		}
 	}
 	return d, nil
 }

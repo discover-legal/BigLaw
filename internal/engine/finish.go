@@ -114,9 +114,10 @@ func (f finish) check(ctx context.Context, limits []limitation) (report, error) 
 	use, uerr := e.usable(ctx, id)
 	cyc, cerr := load[Cycle](ctx, e, id, kCycle)
 	crit, rerr := load[Critic](ctx, e, id, kCritic)
-	sheetRows, herr := e.rows(ctx, id, kSheet)
+	sheets, herr := e.worksheets(ctx, id)
 	notes, nerr := e.rows(ctx, id, kNote)
-	if err = cmpErr(err, serr, uerr, cerr, rerr, herr, nerr); err != nil {
+	rounds, lerr := e.lintRounds(ctx, id)
+	if err = cmpErr(err, serr, uerr, cerr, rerr, herr, nerr, lerr); err != nil {
 		return report{}, err
 	}
 	rep := report{Errors: []finishErr{}, Lint: []string{}, OpenPreconditions: []string{}}
@@ -128,12 +129,6 @@ func (f finish) check(ctx context.Context, limits []limitation) (report, error) 
 	var an []analysis.Finding
 	for _, x := range use {
 		byFID[x.FID], an = x, append(an, x.Finding)
-	}
-	var sheets []string
-	for _, s := range sheetRows {
-		var w map[string]string
-		_ = json.Unmarshal(s.Data, &w)
-		sheets = append(sheets, w["result"])
 	}
 	disclosed := map[string]bool{}
 	for _, l := range limits {
@@ -170,8 +165,12 @@ func (f finish) check(ctx context.Context, limits []limitation) (report, error) 
 			bad("criterion_unmet", is.ID+" has no drafted section citing a verified finding: draft it from verified findings, or disclose it in limitations with its issueId")
 		}
 	}
-	for _, l := range rep.Lint {
-		bad("lint", l)
+	for _, l := range rep.Lint { // after maxLintRounds reports, disclosed: redrafting for the lint is bounded
+		if rounds >= maxLintRounds {
+			rep.limits = append(rep.limits, fmt.Sprintf("Delivered with an unresolved check after %d rounds of fixes: %s", rounds, l))
+		} else {
+			bad("lint", l)
+		}
 	}
 	cov := analysis.CheckCoverage(ais, texts, an, nil)
 	rep.MissingIssues, rep.UncoveredParties, rep.MissingFigures = cov.MissingIssues, cov.UncoveredParties, cov.MissingFigures

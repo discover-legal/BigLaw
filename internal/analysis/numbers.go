@@ -160,7 +160,7 @@ func deref(p *string) string {
 
 // takes says what each fn accepts, and shows a call that works, for the error that names it.
 var takes = map[string]string{"sum": "two or more numbers in one unit", "diff": "two numbers in one unit", "ratio": "two numbers", "pct": "two numbers",
-	"product":  "two or more numbers, at most one of them not a percentage (35% times $612,400 is $214,340)",
+	"product":  "two or more numbers, at most one of them not a percentage (35% times $100,000 is $35,000)",
 	"date_add": "a full date and a whole number of days (negative counts back)", "date_diff": "two full dates",
 	"business_days": "two full dates, or a full date and a whole number of days (negative counts back)"}
 
@@ -337,8 +337,10 @@ func Salience(v string) int {
 // Handles gives a codename to each distinct verified figure (money, percentages, counts,
 // identifiers; never a date), the most salient first, and returns those of fids (all findings when
 // empty), the top first. Codenames are assigned over the whole ledger, so one names one figure
-// whatever fids a call asked for.
-func Handles(findings []Finding, fids []string, top int) []Handle {
+// whatever fids a call asked for; kept are codenames given before (a run's), which keep their
+// figures, a new figure taking the next codename none has used, so a codename never changes meaning
+// as the ledger grows.
+func Handles(findings []Finding, fids []string, top int, kept ...Handle) []Handle {
 	var hs []Handle
 	seen := map[string]bool{}
 	for _, f := range findings {
@@ -355,21 +357,39 @@ func Handles(findings []Finding, fids []string, top int) []Handle {
 		}
 	}
 	slices.SortStableFunc(hs, func(a, b Handle) int { return Salience(b.Value) - Salience(a.Value) })
-	hs = hs[:min(len(hs), MaxHandles)]
-	for i := range hs {
-		hs[i].Handle = "{" + codenames[i] + "}"
+	name, used, next := map[string]string{}, map[string]bool{}, 0
+	for _, k := range kept {
+		name[k.Value], used[k.Handle] = k.Handle, true
 	}
-	hs = slices.DeleteFunc(hs, func(h Handle) bool { return len(fids) > 0 && !slices.Contains(fids, h.FID) })
+	var named []Handle
+	for _, h := range hs {
+		if h.Handle = name[h.Value]; h.Handle == "" {
+			for next < len(codenames) && used["{"+codenames[next]+"}"] {
+				next++
+			}
+			if next == len(codenames) { // the pool is spent: the figure gets no handle
+				continue
+			}
+			h.Handle, used["{"+codenames[next]+"}"] = "{"+codenames[next]+"}", true
+		}
+		named = append(named, h)
+	}
+	hs = slices.DeleteFunc(named, func(h Handle) bool { return len(fids) > 0 && !slices.Contains(fids, h.FID) })
 	if top <= 0 {
 		top = MaxHandles
 	}
 	return hs[:min(len(hs), top)]
 }
 
-var handleRe = regexp.MustCompile(`\{([A-Za-z]+)\}`)
+// handleRe matches a {Codename} or a worksheet's {W0123456789} (its wid).
+var (
+	handleRe = regexp.MustCompile(`\{([A-Za-z]+|W[0-9a-f]{10})\}`)
+	widRe    = regexp.MustCompile(`^\{W[0-9a-f]{10}\}$`)
+)
 
-// Substitute replaces every {Codename} with its figure's exact value, literally (a "$7" is data,
-// never a template). A codename with no figure is an error, never a guess; other braces are text.
+// Substitute replaces every {Codename} and {W…} with its figure's exact value, literally (a "$7" is
+// data, never a template). A handle with no figure is left as written and reported, never guessed;
+// other braces are text.
 func Substitute(text string, hs []Handle) (string, error) {
 	var unknown []string
 	out := handleRe.ReplaceAllStringFunc(text, func(m string) string {
@@ -378,13 +398,13 @@ func Substitute(text string, hs []Handle) (string, error) {
 				return h.Value
 			}
 		}
-		if slices.ContainsFunc(codenames, func(c string) bool { return strings.EqualFold("{"+c+"}", m) }) {
+		if widRe.MatchString(m) || slices.ContainsFunc(codenames, func(c string) bool { return strings.EqualFold("{"+c+"}", m) }) {
 			unknown = append(unknown, m)
 		}
 		return m
 	})
 	if len(unknown) > 0 {
-		return text, fmt.Errorf("unknown figure handle %s: it names no verified figure", strings.Join(unknown, ", "))
+		return out, fmt.Errorf("unknown figure handle %s: it names no verified figure or worksheet", strings.Join(unknown, ", "))
 	}
 	return out, nil
 }

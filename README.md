@@ -810,7 +810,7 @@ The memo workflow (§ Memo workflow) drives these. What PR 4a ships, all tested 
   each fenced as untrusted text, fence markers inside them neutralised). A document outside the call's
   ids is "not found".
 - **`numbers`**: `calc` (exact decimals: `sum`, `diff`, `ratio`, `pct`, `product` (a percentage
-  counts as its fraction: 35% of $612,400 is $214,340), `date_add`, `date_diff`, `business_days`
+  counts as its fraction: 35% of $100,000 is $35,000), `date_add`, `date_diff`, `business_days`
   with the caller's holidays; a negative day count counts back; `date_add` with holidays set, even
   `[]`, rolls a result on a weekend or holiday to the next day that is not, backward for a negative
   count, as FRCP 6(a)(1)(C) and 6(a)(5) do, the worksheet showing the raw date) over verified finding
@@ -824,8 +824,11 @@ The memo workflow (§ Memo workflow) drives these. What PR 4a ships, all tested 
   across currencies is refused. Date differences are exact over any span.
   `handles`: a `{Codename}` per distinct verified money, percentage, count or identifier value (never
   a date), most salient first, 64 at most, assigned over the whole verified ledger (a codename names
-  one figure whatever `fids` a call asks for); `Substitute` puts the exact value in, and an unmapped
-  codename is an error. `table`: a key-figures table from verified values only.
+  one figure whatever `fids` a call asks for); codenames given before (`kept`) keep their figures
+  and a new figure takes the next unused one, so in a run (where the engine keeps them in the
+  ledger) a codename never changes meaning; `Substitute` puts the exact value in for a codename or a
+  worksheet's `{W…}` (its wid), and an unmapped one is left as written and reported. `table`: a
+  key-figures table from verified values only.
 - **`join_discrepancies`**: cross-document conflicts between verified values that share a metric
   label, a quantity class (money is never compared with a share count) and an entity after the
   lead's aliases and name containment ("Ostrowski" in "Richard Ostrowski"); dates tie to one event by
@@ -848,9 +851,11 @@ Limitations of this layer:
 - The bandit's statistics are shared by every task with the same signature: one matter's documents
   can make a tool fail often and push it down another matter's hint (it never hides it). Its
   constants (β 0.5, γ 1, c 0.5) are uncalibrated; gate B measures it on and off.
-- Codenames follow salience over the ledger as it stands: a later finding can renumber them, so the
-  renderer substitutes with the handle set the drafter was given (stored with the section), and only
-  outside quoted spans, never a recomputed set.
+- Codenames are kept for the run (ledger kind `handle`): one names one figure from its first use,
+  also in the summaries later drafters read; the renderer substitutes with the set stored with the
+  section, only outside quoted spans. The 64-name pool is the limit: a run with more distinct figures
+  leaves the least salient late ones without a handle (a drafter may still state them inside a
+  cited quote).
 - `join_discrepancies` trusts the extracting model's metric labels: two labels for one metric are
   never compared (a missed conflict), one label for two metrics is compared (the lead must check the
   quotes). A value's document is the quote that holds its text, else the finding's first quote.
@@ -889,8 +894,11 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
   it stops at its share of the budget and reports `incomplete` with the sections it did not reach,
   which also go into Limitations. Never silently partial.
 - **Drafting** (`draft_section`, one issue per call): Go gives the drafter the issue, its named
-  verified findings with their quotes, figure handles (`{Zephyr}`) and the summaries of sections
-  already written, in plan order. The section is stored with the handle set its drafter was given.
+  verified findings with their quotes, their figure handles (`{Zephyr}`), a `{W…}` handle per
+  `numbers` worksheet (labelled with what it computes; rendered as a date in words, `$214,340`,
+  `35%` or `14 days`), the summaries of sections already written, in plan order, and on a redraft
+  the `checks` (lint lines) its current version fails. The section is stored with the run's handle
+  set at that point.
 - **`committee`**: three context-free critics in parallel, each on its own explicit grant (the
   cycle's 8/8/4 calls, the last taking the USD remainder): `prosecute` gets the claims and their
   quotes, `reproduce` gets the issue questions only (never the draft) and its answers are compared
@@ -908,8 +916,14 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
   committee on it from that cycle before the forced finish (`TestPhaseSharesHoldInUSD`,
   `TestCommitteeAlwaysReviewsTheLastDraft`). `sweep` stops at its USD share as at its calls.
 - **`finish`** (`op: "check"` is a dry run of `submit`): lint (every `[F-id]` names a usable
-  finding; every number in the draft is a handle, a `numbers` worksheet result or inside a cited
-  quote or value (G8, the "68.6% for 81.6%" trap); no unknown handle), coverage (plan issues
+  finding; every number and date in the draft is a handle, a `numbers` worksheet's result or one of
+  its inputs, or inside a cited finding's quote or value (G8, the "68.6% for 81.6%" trap), rule and
+  section numbers (`Rule 6(a)(1)(C)`, `Section 4.3`, `§ 9.2`) being locators, not figures; each
+  untraced figure says how to fix it: the handle to write and the finding to cite, the uncited
+  finding that states it, or the `numbers` call that computes it (`TestLintSaysHowToFix`); no
+  unknown handle. After two `finish` calls that reported lint problems, the next discloses them in
+  Limitations ("Delivered with an unresolved check after 2 rounds of fixes") instead of refusing,
+  so redrafting for the lint is bounded (`TestFigureLintIsBounded`)), coverage (plan issues
   without a section, parties never named, salient figures never landing), and P6: a committee on
   the current draft version, its HIGH/MEDIUM findings resolved while the budget can fund another
   fix (3 calls and their USD beside the kept cycle and reserve), every plan issue drafted or disclosed by issue id. P7: a `submit` within 2
@@ -1312,7 +1326,12 @@ three `sectionChunks` vectors), `TestSweepIdempotent`, `TestSweepReportsIncomple
 `httptest` server), `TestSweepShareBounded`, `TestSubagentLedgerReadsSkipQuarantine`, `TestUSDBoundFinishDeliversWithoutMeta`, `TestCurrencyFromQuote`,
 `TestEventsStream`, `TestE2EServe` (not a check: with `E2E_ADDR` set it serves the API, engine and
 `ui/dist` over a scripted model for a browser run). Each guarded behaviour was broken once on purpose
-and its test failed (65 deliberate breaks, all caught).
+and its test failed (65 deliberate breaks, all caught). Bench fixes (after the first real-model
+bench; each scripted with `model.Fake` from the logged behaviour, each failing without its fix):
+`TestPhaseSharesHoldInUSD`, `TestCommitteeAlwaysReviewsTheLastDraft`, `TestBudgetKeepsLaterPhases`,
+`TestCalcAcceptsWhatModelsSend`, `TestLintSaysHowToFix`, `TestFigureLintIsBounded`,
+`TestRendererUsesDrafterHandleSet` (codenames kept for the run) and `TestDeadlinesMeetTheAnswerKey`
+(the litigation matter's four deadline criteria, from `eval/tasks`, met by a scripted run).
 
 ## Budgets (`scripts/loc.py`, run in CI)
 

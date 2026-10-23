@@ -28,6 +28,7 @@ const (
 	kCycle    = "cycle"    // key: cycle number; Cycle
 	kNote     = "note"     // key: a fixed name; a Limitations line Go wrote (plan fallback, uncovered)
 	kEscalate = "escalate" // key: cycle number; P7 fired for it
+	kHandle   = "handle"   // key: codename; the Fig it names for the whole run
 )
 
 // Issue is one plan issue (the deliverable's spine), typed by a BELO-lite issue class.
