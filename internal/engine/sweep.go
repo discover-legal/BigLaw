@@ -51,11 +51,17 @@ func roots(outline []docs.OutlineEntry) []docs.OutlineEntry {
 	return out
 }
 
+// sweepBatchTokens bounds a batch of short top-level sections. It is set by the answer, not the
+// page: a subagent writes about five to seven tokens of findings per token of dense text (Haiku 4.5
+// on the SEC referral), so batches of a full page (2,000) overflowed the 8,192-token answer and
+// most of their visits failed; 600 keeps the answer near 4,000.
+const sweepBatchTokens = 600
+
 // plan lists the sweep's visits over docIDs, in order: every page of every top-level section
-// (pages as the page reader cuts them, so extract_facts reads exactly one each). Consecutive short
-// top-level sections are batched into one visit of at most a page (docs.DefaultSectionTokens): a
+// (pages as the page reader cuts them, so extract_facts reads exactly one each). Consecutive
+// top-level sections shorter than sweepBatchTokens are batched into one visit of at most that: a
 // document numbered by paragraph has a hundred roots of a few hundred characters each, and one
-// visit (a subagent run) per paragraph spent the sweep's share on a tenth of the pages it plans for.
+// visit (a subagent run) per paragraph spent the sweep's share on a quarter of what it planned.
 func (e *Engine) plan(ctx context.Context, scope, docIDs []string) ([]Visit, error) {
 	var out []Visit
 	for _, id := range docIDs {
@@ -75,8 +81,8 @@ func (e *Engine) plan(ctx context.Context, scope, docIDs []string) ([]Visit, err
 			}
 		}
 		for _, s := range roots(o) {
-			if s.Tokens < docs.DefaultSectionTokens {
-				if size+s.Tokens > docs.DefaultSectionTokens {
+			if s.Tokens < sweepBatchTokens {
+				if size+s.Tokens > sweepBatchTokens {
 					flush()
 				}
 				run, size = append(run, s), size+s.Tokens

@@ -258,13 +258,13 @@ func TestSectionChunks_SectionAligned(t *testing.T) {
 }
 
 // TestSweepBatchesShortSections (real-model bench, SEC referral): a document numbered by paragraph
-// (a hundred top-level sections of a few hundred characters) is read a page at a time, not one
-// subagent run per paragraph; the batched visit's sectionText holds every paragraph of its run,
-// verbatim, and the sweep completes.
+// (a hundred top-level sections of a few hundred characters) is read in batches of consecutive
+// paragraphs of at most sweepBatchTokens, not one subagent run per paragraph; each batched visit's
+// sectionText holds its run verbatim, the batches rebuild the document, and the sweep completes.
 func TestSweepBatchesShortSections(t *testing.T) {
 	t.Parallel()
 	var b strings.Builder
-	for i := 1; i <= 40; i++ {
+	for i := 1; i <= 40; i++ { // ~29 tokens each: about 1,160 in all
 		fmt.Fprintf(&b, "%d. The Division alleges fact number %d about the trade allocations of the Firm in the review period.\n\n", i, i)
 	}
 	f := newFixture(t, b.String())
@@ -272,11 +272,11 @@ func TestSweepBatchesShortSections(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(visits) != 1 || visits[0].Through == "" {
-		t.Fatalf("40 short paragraphs planned as %d visits: %+v", len(visits), visits)
+	if len(visits) != 2 || visits[0].Through == "" || visits[1].Through == "" {
+		t.Fatalf("40 short paragraphs planned as %d visits (want 2 batches of at most %d tokens): %+v", len(visits), sweepBatchTokens, visits)
 	}
 	sweep := tc("sweep", m{"over": "sections", "documentIds": nil})
-	v := f.run(f.with(map[string][]model.Reply{"lead": {calls(plan(issue("I1", "Allegations?", "Conduct"))), calls(sweep)}, "extract_facts": {facts()}}), Config{})
+	v := f.run(f.with(map[string][]model.Reply{"lead": {calls(plan(issue("I1", "Allegations?", "Conduct"))), calls(sweep)}, "extract_facts": {facts(), facts()}}), Config{})
 	var texts []string
 	for _, c := range f.e.chat.(*model.Fake).Calls() {
 		if c.Agent == "extract_facts" {
@@ -286,8 +286,8 @@ func TestSweepBatchesShortSections(t *testing.T) {
 		}
 	}
 	out := strings.Join(f.outputs(v.ID, "sweep"), "")
-	if len(texts) != 1 || texts[0] != b.String() || !strings.Contains(out, `"visited":1`) || !strings.Contains(out, `"incomplete":false`) {
-		t.Fatalf("%d extract_facts runs (want 1 holding the whole run verbatim); sweep %s", len(texts), out)
+	if len(texts) != 2 || strings.Join(texts, "") != b.String() || !strings.Contains(out, `"visited":2`) || !strings.Contains(out, `"incomplete":false`) {
+		t.Fatalf("%d extract_facts runs (want 2 that rebuild the document); sweep %s", len(texts), out)
 	}
 }
 

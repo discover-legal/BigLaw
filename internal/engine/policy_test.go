@@ -359,9 +359,9 @@ func TestSweepShareBounded(t *testing.T) {
 	}
 }
 
-// filler makes a clause over half a page, so the sweep reads each clause in a visit of its own
-// (it batches shorter consecutive sections into one page).
-var filler = strings.Repeat("Further delivery terms apply. ", 140)
+// filler makes a clause over half a sweep batch, so the sweep reads each clause in a visit of its
+// own (it batches shorter consecutive sections, up to sweepBatchTokens).
+var filler = strings.Repeat("Further delivery terms apply. ", 40)
 
 // costly is r billed at usd (the bench's real calls cost about $0.02–0.10 each).
 func costly(r model.Reply, usd float64) model.Reply {

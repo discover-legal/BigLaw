@@ -892,9 +892,11 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
   when the provision is verifiably absent (fewer than half its significant words in the reviewed
   document). The subagent's reward for the bandit is the share of its quotes that verified.
 - **`sweep`** visits every section of the task's documents (or one document) once, in order,
-  calling `extract_facts` on each page of a top-level section; consecutive short top-level sections
-  are batched into one visit of at most a page (`through`: a document numbered by paragraph is read a
-  page at a time, not one subagent run per paragraph, `TestSweepBatchesShortSections`); a visit is
+  calling `extract_facts` on each page of a top-level section; consecutive top-level sections
+  shorter than 600 tokens are batched into one visit of at most 600 (`through`; sized by the
+  answer: a subagent writes five to seven tokens of findings per token of dense text, so a full page
+  overflows its 8,192-token answer): a document numbered by paragraph is read a few paragraphs at a
+  time, not one subagent run per paragraph (`TestSweepBatchesShortSections`); a visit is
   keyed (document, section, offset[, through]) and never repeated;
   it stops at its share of the budget and reports `incomplete` with the sections it did not reach,
   which also go into Limitations. Never silently partial.
