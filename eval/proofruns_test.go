@@ -130,7 +130,7 @@ func oracle(mt matter, ids map[string]string) map[string][]model.Reply {
 				}
 			}
 		}
-		extracts = append(extracts, call("extract_facts", m{"question": it.Question, "documentId": nil, "sectionId": nil, "offset": nil, "query": it.Question, "issueId": iid}))
+		extracts = append(extracts, call("extract_facts", m{"question": it.Question, "documentId": nil, "sectionId": nil, "through": nil, "offset": nil, "query": it.Question, "issueId": iid}))
 		sc["extract_facts"] = append(sc["extract_facts"], reply(m{"findings": []m{{"claim": it.ModelAnswer, "quotes": quotes, "values": []m{}, "entities": []m{},
 			"relations": []m{}, "confidence": 1}}, "gaps": []string{}}))
 		for _, x := range engine.Untraced(it.ModelAnswer, strings.Join(it.Evidence, "\n"), false) {
@@ -165,7 +165,7 @@ func fabricator(mt matter, ids map[string]string) map[string][]model.Reply {
 	no := reply(m{"supported": false, "confidence": 0.9})
 	plan := call("ledger", m{"op": "plan", "issues": []m{{"id": "I1", "question": "What happened?", "class": "RedFlag", "practice": nil}}, "issueId": nil, "fid": nil, "detail": nil, "criticId": nil, "resolution": nil, "note": nil, "entity": nil})
 	return map[string][]model.Reply{
-		"lead":          {{ToolCalls: []model.ToolCall{plan}}, {ToolCalls: []model.ToolCall{call("extract_facts", m{"question": "q", "documentId": nil, "sectionId": nil, "offset": nil, "query": "consent", "issueId": "I1"})}}},
+		"lead":          {{ToolCalls: []model.ToolCall{plan}}, {ToolCalls: []model.ToolCall{call("extract_facts", m{"question": "q", "documentId": nil, "sectionId": nil, "through": nil, "offset": nil, "query": "consent", "issueId": "I1"})}}},
 		"extract_facts": {reply(m{"findings": fs, "gaps": []string{}})},
 		"verify_quote":  {no, no},
 	}
@@ -343,7 +343,7 @@ func TestLabRunnerSmoke(t *testing.T) {
 	os.WriteFile(filepath.Join(task, "documents", "docket.md"), []byte("Docket\nTalbot was served on 10/21/2026 via its registered agent.\n"), 0o644)
 	plan := call("ledger", m{"op": "plan", "issues": []m{{"id": "I1", "question": "When was Talbot served?", "class": "Requirement", "practice": nil}}, "issueId": nil, "fid": nil, "detail": nil, "criticId": nil, "resolution": nil, "note": nil, "entity": nil})
 	sc := map[string][]model.Reply{
-		"lead": {{ToolCalls: []model.ToolCall{plan}}, {ToolCalls: []model.ToolCall{call("extract_facts", m{"question": "q", "documentId": nil, "sectionId": nil, "offset": nil, "query": "served", "issueId": "I1"})}},
+		"lead": {{ToolCalls: []model.ToolCall{plan}}, {ToolCalls: []model.ToolCall{call("extract_facts", m{"question": "q", "documentId": nil, "sectionId": nil, "through": nil, "offset": nil, "query": "served", "issueId": "I1"})}},
 			{ToolCalls: []model.ToolCall{call("draft_section", m{"issueId": "I1", "fids": []string{"F1"}, "revise": nil})}},
 			{ToolCalls: []model.ToolCall{call("committee", m{})}}, {ToolCalls: []model.ToolCall{call("finish", m{"op": "submit", "limitations": nil})}}},
 		"extract_facts": {reply(m{"findings": []m{{"claim": "Talbot was served on 10/21/2026.", "quotes": []m{{"documentId": "docket.md", "quote": "Talbot was served on 10/21/2026 via its registered agent", "locator": nil}},

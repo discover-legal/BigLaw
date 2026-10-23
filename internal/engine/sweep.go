@@ -9,19 +9,28 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/discover-legal/BigLaw/internal/agent"
 	"github.com/discover-legal/BigLaw/internal/docs"
 )
 
-// Visit is one unit of the sweep: a page of a top-level section of a document.
+// Visit is one unit of the sweep: a page of a top-level section of a document, or (Through set) a
+// run of consecutive short top-level sections, SectionID to Through, that fits in one page.
 type Visit struct {
 	DocumentID string `json:"documentId"`
 	SectionID  string `json:"sectionId"`
 	Offset     int    `json:"offset"`
+	Through    string `json:"through,omitempty"`
 }
 
-func (v Visit) key() string { return fmt.Sprintf("%s|%s|%d", v.DocumentID, v.SectionID, v.Offset) }
+func (v Visit) key() string {
+	k := fmt.Sprintf("%s|%s|%d", v.DocumentID, v.SectionID, v.Offset)
+	if v.Through != "" {
+		k += "|" + v.Through
+	}
+	return k
+}
 
 // roots are a document's top-level sections in order: those no other section contains (a level-0
 // preface contains nothing). The section tree is byte-exact, so the roots cover the text once.
@@ -43,7 +52,10 @@ func roots(outline []docs.OutlineEntry) []docs.OutlineEntry {
 }
 
 // plan lists the sweep's visits over docIDs, in order: every page of every top-level section
-// (pages as the page reader cuts them, so extract_facts reads exactly one each).
+// (pages as the page reader cuts them, so extract_facts reads exactly one each). Consecutive short
+// top-level sections are batched into one visit of at most a page (docs.DefaultSectionTokens): a
+// document numbered by paragraph has a hundred roots of a few hundred characters each, and one
+// visit (a subagent run) per paragraph spent the sweep's share on a tenth of the pages it plans for.
 func (e *Engine) plan(ctx context.Context, scope, docIDs []string) ([]Visit, error) {
 	var out []Visit
 	for _, id := range docIDs {
@@ -51,9 +63,28 @@ func (e *Engine) plan(ctx context.Context, scope, docIDs []string) ([]Visit, err
 		if err != nil {
 			return nil, err
 		}
+		var run []docs.OutlineEntry // short roots not yet planned
+		size := 0
+		flush := func() {
+			if len(run) > 0 {
+				v := Visit{DocumentID: id, SectionID: run[0].SectionID}
+				if len(run) > 1 {
+					v.Through = run[len(run)-1].SectionID
+				}
+				out, run, size = append(out, v), nil, 0
+			}
+		}
 		for _, s := range roots(o) {
+			if s.Tokens < docs.DefaultSectionTokens {
+				if size+s.Tokens > docs.DefaultSectionTokens {
+					flush()
+				}
+				run, size = append(run, s), size+s.Tokens
+				continue
+			}
+			flush()
 			for off := 0; ; {
-				out = append(out, Visit{id, s.SectionID, off})
+				out = append(out, Visit{DocumentID: id, SectionID: s.SectionID, Offset: off})
 				p, err := e.docs.Section(ctx, scope, id, s.SectionID, off, 0)
 				if err != nil {
 					return nil, err
@@ -64,8 +95,42 @@ func (e *Engine) plan(ctx context.Context, scope, docIDs []string) ([]Visit, err
 				off = p.Next
 			}
 		}
+		flush()
 	}
 	return out, nil
+}
+
+// runText is the text of the run of top-level sections from first to through of one document,
+// verbatim (roots are contiguous, so the run is one span of the text); ok is false when the run
+// is not one (through before first, or either is not a top-level section), and the caller reads
+// first alone.
+func (e *Engine) runText(ctx context.Context, scope []string, docID, first, through string) (text string, ok bool) {
+	o, err := e.docs.Outline(ctx, scope, docID)
+	if err != nil {
+		return "", false
+	}
+	rs := roots(o)
+	i := slices.IndexFunc(rs, func(s docs.OutlineEntry) bool { return s.SectionID == first })
+	j := slices.IndexFunc(rs, func(s docs.OutlineEntry) bool { return s.SectionID == through })
+	if i < 0 || j < i {
+		return "", false
+	}
+	size := 0
+	for _, s := range rs[i : j+1] {
+		size += s.Tokens
+	}
+	if size > docs.MaxSectionTokens {
+		return "", false
+	}
+	var b strings.Builder
+	for _, s := range rs[i : j+1] {
+		p, err := e.docs.Section(ctx, scope, docID, s.SectionID, 0, docs.MaxSectionTokens)
+		if err != nil || p.Truncated {
+			return "", false
+		}
+		b.WriteString(p.Text)
+	}
+	return b.String(), true
 }
 
 // sweepTool is the retrieval floor (P8: idempotent): extract_facts over every visit not yet
@@ -108,7 +173,11 @@ func (e *Engine) sweepTool(rt *agent.Runtime, r *run) agent.Tool {
 				uncovered = append(uncovered, map[string]string{"documentId": v.DocumentID, "sectionId": v.SectionID})
 				continue
 			}
-			in := fmt.Sprintf(`{"question":%s,"documentId":%q,"sectionId":%q,"offset":%d,"query":null,"issueId":null}`, q, v.DocumentID, v.SectionID, v.Offset)
+			through := "null"
+			if v.Through != "" {
+				through = fmt.Sprintf("%q", v.Through)
+			}
+			in := fmt.Sprintf(`{"question":%s,"documentId":%q,"sectionId":%q,"through":%s,"offset":%d,"query":null,"issueId":null}`, q, v.DocumentID, v.SectionID, through, v.Offset)
 			res, err := rt.Invoke(ctx, agent.Agent{Name: "sweep", Visible: []string{"extract_facts"}}, agent.Call{TaskID: c.TaskID, DocumentIDs: c.DocumentIDs}, "extract_facts", json.RawMessage(in), b, false, 0)
 			if modelOrJournal(err) {
 				return nil, b.Spent(), err

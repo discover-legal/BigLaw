@@ -166,7 +166,7 @@ func TestMergeNearDuplicatesDeterministicOrdering(t *testing.T) {
 }
 
 // TestSweepVisitsEverySectionOnce: the sweep runs extract_facts once per page of every top-level
-// section of every document, in order (with the carried sectionChunks vectors).
+// section of every document, in order, short sections batched (with the carried sectionChunks vectors).
 func TestSweepVisitsEverySectionOnce(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
@@ -174,7 +174,7 @@ func TestSweepVisitsEverySectionOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(visits) != 4 { // complaint: three sections; docket: one
+	if len(visits) != 2 { // complaint: its three short sections in one visit; docket: one
 		t.Fatalf("visits %+v", visits)
 	}
 	reps := []model.Reply{}
@@ -187,14 +187,14 @@ func TestSweepVisitsEverySectionOnce(t *testing.T) {
 	for _, c := range f.e.chat.(*model.Fake).Calls() {
 		if c.Agent == "extract_facts" {
 			var in struct {
-				DocumentID, SectionID string
-				Offset                int
+				DocumentID, SectionID, Through string
+				Offset                         int
 			}
 			jsonDecode(c.Messages[1].Content.(string), &in)
-			got = append(got, Visit{in.DocumentID, in.SectionID, in.Offset})
+			got = append(got, Visit{in.DocumentID, in.SectionID, in.Offset, in.Through})
 		}
 	}
-	if !reflect.DeepEqual(got, visits) || !strings.Contains(strings.Join(f.outputs(v.ID, "sweep"), ""), `"visited":4`) {
+	if !reflect.DeepEqual(got, visits) || !strings.Contains(strings.Join(f.outputs(v.ID, "sweep"), ""), `"visited":2`) {
 		t.Fatalf("visited %+v, want %+v", got, visits)
 	}
 }
@@ -226,6 +226,14 @@ func TestSectionChunks_FullCover(t *testing.T) {
 	visits, _ := f.e_(t).plan(context.Background(), f.ids(), f.ids())
 	var b strings.Builder
 	for _, v := range visits {
+		if v.Through != "" {
+			run, ok := f.e.runText(context.Background(), f.ids(), v.DocumentID, v.SectionID, v.Through)
+			if !ok {
+				t.Fatalf("%+v is not a run", v)
+			}
+			b.WriteString(run)
+			continue
+		}
 		p, err := f.d.Section(context.Background(), f.ids(), v.DocumentID, v.SectionID, v.Offset, 0)
 		if err != nil {
 			t.Fatal(err)
@@ -249,6 +257,40 @@ func TestSectionChunks_SectionAligned(t *testing.T) {
 	}
 }
 
+// TestSweepBatchesShortSections (real-model bench, SEC referral): a document numbered by paragraph
+// (a hundred top-level sections of a few hundred characters) is read a page at a time, not one
+// subagent run per paragraph; the batched visit's sectionText holds every paragraph of its run,
+// verbatim, and the sweep completes.
+func TestSweepBatchesShortSections(t *testing.T) {
+	t.Parallel()
+	var b strings.Builder
+	for i := 1; i <= 40; i++ {
+		fmt.Fprintf(&b, "%d. The Division alleges fact number %d about the trade allocations of the Firm in the review period.\n\n", i, i)
+	}
+	f := newFixture(t, b.String())
+	visits, err := f.e_(t).plan(context.Background(), f.ids(), f.ids())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(visits) != 1 || visits[0].Through == "" {
+		t.Fatalf("40 short paragraphs planned as %d visits: %+v", len(visits), visits)
+	}
+	sweep := tc("sweep", m{"over": "sections", "documentIds": nil})
+	v := f.run(f.with(map[string][]model.Reply{"lead": {calls(plan(issue("I1", "Allegations?", "Conduct"))), calls(sweep)}, "extract_facts": {facts()}}), Config{})
+	var texts []string
+	for _, c := range f.e.chat.(*model.Fake).Calls() {
+		if c.Agent == "extract_facts" {
+			var in struct{ SectionText string }
+			jsonDecode(c.Messages[1].Content.(string), &in)
+			texts = append(texts, in.SectionText)
+		}
+	}
+	out := strings.Join(f.outputs(v.ID, "sweep"), "")
+	if len(texts) != 1 || texts[0] != b.String() || !strings.Contains(out, `"visited":1`) || !strings.Contains(out, `"incomplete":false`) {
+		t.Fatalf("%d extract_facts runs (want 1 holding the whole run verbatim); sweep %s", len(texts), out)
+	}
+}
+
 // TestSweepIdempotent (P8): a second sweep reads nothing again and returns the same findings.
 func TestSweepIdempotent(t *testing.T) {
 	t.Parallel()
@@ -257,7 +299,7 @@ func TestSweepIdempotent(t *testing.T) {
 	sweep := tc("sweep", m{"over": "sections", "documentIds": nil})
 	v := f.run(f.with(map[string][]model.Reply{
 		"lead":          {calls(plan(issue("I1", "Damages?", "Conduct"))), calls(sweep), calls(sweep)},
-		"extract_facts": {facts(fd("Suit filed.", d1, "sued Talbot Fresh Foods, Inc. on October 9, 2026")), facts(fd("Damages claimed.", d1, "Greystone claims damages of $644,910")), facts()},
+		"extract_facts": {facts(fd("Suit filed.", d1, "sued Talbot Fresh Foods, Inc. on October 9, 2026"), fd("Damages claimed.", d1, "Greystone claims damages of $644,910"))},
 	}), Config{})
 	out := f.outputs(v.ID, "sweep")
 	if len(out) != 2 || !strings.Contains(out[1], `"visited":0`) || !strings.Contains(out[1], `"findings":["F1","F2"]`) {
@@ -267,8 +309,8 @@ func TestSweepIdempotent(t *testing.T) {
 	for _, c := range f.e.chat.(*model.Fake).Calls() {
 		n += btoi(c.Agent == "extract_facts")
 	}
-	if n != 3 {
-		t.Fatalf("%d extract_facts calls, want 3", n)
+	if n != 1 { // the complaint's three short sections are one visit
+		t.Fatalf("%d extract_facts calls, want 1", n)
 	}
 }
 
@@ -276,7 +318,11 @@ func TestSweepIdempotent(t *testing.T) {
 // incomplete, lists the uncovered sections, and Limitations names them; never silently partial.
 func TestSweepReportsIncompleteWhenBudgetShort(t *testing.T) {
 	t.Parallel()
-	f := newFixture(t, complaintText, docketText)
+	var doc strings.Builder
+	for i := 1; i <= 4; i++ {
+		fmt.Fprintf(&doc, "%d. Clause %d\nThe supplier shall deliver lot %d on time.\n%s\n\n", i, i, i, filler)
+	}
+	f := newFixture(t, doc.String(), docketText)
 	sweep := tc("sweep", m{"over": "sections", "documentIds": nil})
 	v := f.run(f.with(map[string][]model.Reply{
 		"lead":          {calls(plan(issue("I1", "Damages?", "Conduct"))), calls(sweep)},

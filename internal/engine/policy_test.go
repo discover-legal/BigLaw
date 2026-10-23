@@ -327,7 +327,7 @@ func TestSweepShareBounded(t *testing.T) {
 	t.Parallel()
 	var doc strings.Builder
 	for i := 1; i <= 20; i++ {
-		fmt.Fprintf(&doc, "%d. Clause %d\nThe supplier shall deliver lot %d on time.\n\n", i, i, i)
+		fmt.Fprintf(&doc, "%d. Clause %d\nThe supplier shall deliver lot %d on time.\n%s\n\n", i, i, i, filler)
 	}
 	f := newFixture(t, doc.String())
 	sweep := tc("sweep", m{"over": "sections", "documentIds": nil})
@@ -346,7 +346,7 @@ func TestSweepShareBounded(t *testing.T) {
 	f = newFixture(t, "1. Clause\nThe supplier shall deliver on time.\n\n2. Other\nThe buyer shall pay.\n")
 	eight := []model.ToolCall{}
 	for range 8 {
-		eight = append(eight, tc("extract_facts", m{"question": "q", "documentId": nil, "sectionId": nil, "offset": nil, "query": "deliver", "issueId": "I1"}))
+		eight = append(eight, tc("extract_facts", m{"question": "q", "documentId": nil, "sectionId": nil, "through": nil, "offset": nil, "query": "deliver", "issueId": "I1"}))
 	}
 	reps = []model.Reply{}
 	for range 20 {
@@ -358,6 +358,10 @@ func TestSweepShareBounded(t *testing.T) {
 		t.Fatalf("sweep after direct extraction %q", out)
 	}
 }
+
+// filler makes a clause over half a page, so the sweep reads each clause in a visit of its own
+// (it batches shorter consecutive sections into one page).
+var filler = strings.Repeat("Further delivery terms apply. ", 140)
 
 // costly is r billed at usd (the bench's real calls cost about $0.02–0.10 each).
 func costly(r model.Reply, usd float64) model.Reply {
@@ -372,7 +376,7 @@ func TestPhaseSharesHoldInUSD(t *testing.T) {
 	t.Parallel()
 	var doc strings.Builder
 	for i := 1; i <= 30; i++ {
-		fmt.Fprintf(&doc, "%d. Clause %d\nThe supplier shall deliver lot %d on time.\n\n", i, i, i)
+		fmt.Fprintf(&doc, "%d. Clause %d\nThe supplier shall deliver lot %d on time.\n%s\n\n", i, i, i, filler)
 	}
 	f := newFixture(t, doc.String())
 	prices, err := model.LoadPrices(`{"lead-m": {"in": 1, "out": 5}, "spec-m": {"in": 1, "out": 5}, "crit-m": {"in": 1, "out": 5}}`)

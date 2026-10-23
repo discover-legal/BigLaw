@@ -170,7 +170,13 @@ func (h hooked) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 	case "extract_facts":
 		if str("documentId") != "" && str("sectionId") != "" {
 			off, _ := in["offset"].(float64)
-			if p, err := h.e.docs.Section(ctx, c.DocumentIDs, str("documentId"), str("sectionId"), int(off), 0); err == nil {
+			text, ok := "", false
+			if str("through") != "" && off == 0 {
+				text, ok = h.e.runText(ctx, c.DocumentIDs, str("documentId"), str("sectionId"), str("through"))
+			}
+			if ok {
+				in["sectionText"], in["truncated"], in["next"] = text, false, 0
+			} else if p, err := h.e.docs.Section(ctx, c.DocumentIDs, str("documentId"), str("sectionId"), int(off), 0); err == nil {
 				in["sectionText"], in["truncated"], in["next"] = p.Text, p.Truncated, p.Next
 			}
 		}

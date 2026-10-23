@@ -110,7 +110,7 @@ func memo(ids []string) map[string][]model.Reply {
 		"detail": nil, "criticId": nil, "resolution": nil, "note": nil, "entity": nil}
 	return map[string][]model.Reply{
 		"lead": {{ToolCalls: []model.ToolCall{call("ledger", ledger)}},
-			{ToolCalls: []model.ToolCall{call("extract_facts", m{"question": "q", "documentId": ids[0], "sectionId": nil, "offset": nil, "query": "damages", "issueId": "I1"})}},
+			{ToolCalls: []model.ToolCall{call("extract_facts", m{"question": "q", "documentId": ids[0], "sectionId": nil, "through": nil, "offset": nil, "query": "damages", "issueId": "I1"})}},
 			{ToolCalls: []model.ToolCall{call("draft_section", m{"issueId": "I1", "fids": []string{"F1"}, "revise": nil})}},
 			{ToolCalls: []model.ToolCall{call("committee", m{})}},
 			{ToolCalls: []model.ToolCall{call("finish", m{"op": "submit", "limitations": nil})}},
