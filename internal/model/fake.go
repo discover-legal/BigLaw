@@ -33,6 +33,9 @@ type Reply struct {
 type Fake struct {
 	// Vectors answers Embed, one input at a time (nil: Embed is unscripted). Set it before use.
 	Vectors func(text string) ([]float32, error)
+	// Route names the script a request is answered from (nil: its agent's), so a test can answer by
+	// what a request holds when calls arrive in any order (a parallel sweep). Set it before use.
+	Route func(Request) string
 
 	mu      sync.Mutex
 	embeds  []EmbedRequest
@@ -63,17 +66,21 @@ func (f *Fake) Chat(ctx context.Context, req Request) (*Response, error) {
 	if ctx.Err() != nil {
 		return nil, ctxErr(ctx)
 	}
+	key := req.Agent
+	if f.Route != nil {
+		key = f.Route(req)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, req)
-	f.n[req.Agent]++
-	n := f.n[req.Agent] // this agent's call number
-	script, ok := f.scripts[req.Agent]
+	f.n[key]++
+	n := f.n[key] // this script's call number
+	script, ok := f.scripts[key]
 	switch {
 	case !ok:
-		return nil, fmt.Errorf("%w %q", ErrUnscripted, req.Agent)
+		return nil, fmt.Errorf("%w %q", ErrUnscripted, key)
 	case n > len(script):
-		return nil, fmt.Errorf("%w: agent %q made call %d of a %d-reply script", ErrScriptExhausted, req.Agent, n, len(script))
+		return nil, fmt.Errorf("%w: script %q got call %d of a %d-reply script", ErrScriptExhausted, key, n, len(script))
 	}
 	r := script[n-1]
 	if r.Err != nil {
@@ -86,7 +93,7 @@ func (f *Fake) Chat(ctx context.Context, req Request) (*Response, error) {
 	}
 	resp := &Response{Model: cmp.Or(req.Model, "fake:"+string(req.Role)), Text: r.Text, Truncated: r.Truncated, Usage: r.Usage}
 	for i, tc := range r.ToolCalls {
-		tc.ID = cmp.Or(tc.ID, req.Agent+"-"+strconv.Itoa(n)+"-"+strconv.Itoa(i))
+		tc.ID = cmp.Or(tc.ID, key+"-"+strconv.Itoa(n)+"-"+strconv.Itoa(i))
 		tc.Type, tc.Function.Arguments = "function", cmp.Or(strings.TrimSpace(tc.Function.Arguments), "{}")
 		resp.ToolCalls = append(resp.ToolCalls, tc)
 	}

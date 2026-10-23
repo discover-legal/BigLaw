@@ -366,3 +366,47 @@ func TestSearchCost(t *testing.T) {
 		t.Errorf("a search past its timeout: %v", err)
 	}
 }
+
+// TestTablePagedByRows (bench: a spreadsheet exhibit read as one 2,000-token page of dense rows):
+// a sheet's pages are whole rows, at most TablePageRows each, that join to the section verbatim; a
+// page after the first names the sheet's header row by reference (Header, HeaderAt), never inside
+// its Text; past headerWindow the header is still the sheet's own (read from its first window).
+func TestTablePagedByRows(t *testing.T) {
+	t.Parallel()
+	s := newService(t)
+	for _, rows := range []int{60, 2200} { // 2,200 rows of ~40 characters: pages past the 64 KiB window
+		var b strings.Builder
+		b.WriteString("## Sheet: Trades\n")
+		head := "Date\tAccount\tShares\tProfit"
+		b.WriteString(head + "\n")
+		for i := range rows {
+			fmt.Fprintf(&b, "2023-%02d-%02d\tOceanic-%d\t%d\t$%d.00\n", 1+i%12, 1+i%28, i, 100+i, 7*i)
+		}
+		text := b.String()
+		d := ingestText(t, s, fmt.Sprintf("trades-%d.txt", rows), text)
+		var got strings.Builder
+		offset, pages := 0, 0
+		for {
+			p, err := s.Section(t.Context(), []string{d.ID}, d.ID, "s0", offset, 600)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pages++
+			n := strings.Count(p.Text, "\t") / 3
+			if n > TablePageRows || !strings.HasSuffix(p.Text, "\n") || tokens(p.Text) > 600 {
+				t.Fatalf("%d rows, page %d: %d rows, %d tokens, ends %q", rows, pages, n, tokens(p.Text), p.Text[max(0, len(p.Text)-12):])
+			}
+			if offset > 0 && (p.Header != head || p.HeaderAt != len("## Sheet: Trades\n") || strings.Contains(p.Text, head)) {
+				t.Fatalf("%d rows, page %d at %d: header %q at %d", rows, pages, offset, p.Header, p.HeaderAt)
+			}
+			got.WriteString(p.Text)
+			if !p.Truncated {
+				break
+			}
+			offset = p.Next
+		}
+		if got.String() != text || pages < (rows+1)/TablePageRows {
+			t.Fatalf("%d rows: %d pages did not join to the sheet (%d of %d bytes)", rows, pages, got.Len(), len(text))
+		}
+	}
+}

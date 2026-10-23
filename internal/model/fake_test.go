@@ -112,3 +112,22 @@ func TestFakeRoutesByAgentName(t *testing.T) {
 	var _ Chatter = f // the fake and the client are interchangeable
 	var _ Chatter = (*Client)(nil)
 }
+
+// TestFakeRouteAnswersByContent: with Route set, a request is answered from the script Route names,
+// each script in its own order, whatever order the requests arrive in.
+func TestFakeRouteAnswersByContent(t *testing.T) {
+	f := NewFake(map[string][]Reply{"a": {{Text: "a1"}, {Text: "a2"}}, "b": {{Text: "b1"}}})
+	f.Route = func(r Request) string { return r.Messages[0].Content.(string) }
+	for _, c := range [][2]string{{"b", "b1"}, {"a", "a1"}, {"a", "a2"}} {
+		req := call("x")
+		req.Messages[0].Content = c[0]
+		if r, err := f.Chat(context.Background(), req); err != nil || r.Text != c[1] {
+			t.Fatalf("%s: %+v, %v; want %s", c[0], r, err, c[1])
+		}
+	}
+	req := call("x")
+	req.Messages[0].Content = "b"
+	if _, err := f.Chat(context.Background(), req); !errors.Is(err, ErrScriptExhausted) {
+		t.Fatalf("b's second call: %v", err)
+	}
+}

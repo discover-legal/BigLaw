@@ -177,8 +177,11 @@ func (h hooked) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 					return agent.Result{}, agent.Fail(fmt.Sprintf("extract_facts: through must be a top-level section at or after sectionId, the run at most %d tokens, with offset 0 or null", docs.MaxSectionTokens))
 				}
 				in["sectionText"], in["truncated"], in["next"] = text, false, 0
-			} else if p, err := h.e.docs.Section(ctx, c.DocumentIDs, str("documentId"), str("sectionId"), int(off), 0); err == nil {
+			} else if p, err := h.e.docs.Section(ctx, c.DocumentIDs, str("documentId"), str("sectionId"), int(off), sweepTokens); err == nil {
 				in["sectionText"], in["truncated"], in["next"] = p.Text, p.Truncated, p.Next
+				if p.Header != "" { // a later page of a table: its columns, by reference to the header row
+					in["header"] = p.Header
+				}
 			}
 		}
 	case "analyze_issue":
@@ -194,6 +197,9 @@ func (h hooked) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 	}
 	c.Input, _ = json.Marshal(in)
 	res, err := h.Tool.Call(ctx, c)
+	if err == nil {
+		err = awaitTurn(ctx) // a parallel sweep's visit admits in plan order
+	}
 	if err != nil {
 		return res, err
 	}

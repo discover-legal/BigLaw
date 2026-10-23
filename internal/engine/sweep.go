@@ -60,17 +60,19 @@ func roots(outline []docs.OutlineEntry) []docs.OutlineEntry {
 	return out
 }
 
-// sweepBatchTokens bounds a batch of short top-level sections. It is set by the answer, not the
-// page: a subagent writes about five to seven tokens of findings per token of dense text (Haiku 4.5
-// on the SEC referral), so batches of a full page (2,000) overflowed the 8,192-token answer and
-// most of their visits failed; 600 keeps the answer near 4,000.
-const sweepBatchTokens = 600
+// sweepTokens bounds what one extract_facts call reads: a batch of short top-level sections, or a
+// page of a long one (the lead's direct section reads too). It is set by the answer, not the page:
+// a subagent writes about five to seven tokens of findings per token of dense text (Haiku 4.5 on
+// the SEC referral), so a full page (2,000) overflowed the 8,192-token answer and most of its
+// visits failed; 600 keeps the answer near 4,000. A table's page is also at most
+// docs.TablePageRows rows (a row is a trade or a payment: a finding each).
+const sweepTokens = 600
 
 // plan lists the sweep's visits over docIDs, in order: every page of every top-level section
-// (pages as the page reader cuts them, so extract_facts reads exactly one each). Consecutive
-// top-level sections shorter than sweepBatchTokens are batched into one visit of at most that: a
-// document numbered by paragraph has a hundred roots of a few hundred characters each, and one
-// visit (a subagent run) per paragraph spent the sweep's share on a quarter of what it planned.
+// (pages of sweepTokens as the page reader cuts them, so extract_facts reads exactly one each).
+// Consecutive top-level sections shorter than sweepTokens are batched into one visit of at most
+// that: a document numbered by paragraph has a hundred roots of a few hundred characters each, and
+// one visit (a subagent run) per paragraph spent the sweep's share on a quarter of what it planned.
 func (e *Engine) plan(ctx context.Context, scope, docIDs []string) ([]Visit, error) {
 	var out []Visit
 	for _, id := range docIDs {
@@ -90,8 +92,8 @@ func (e *Engine) plan(ctx context.Context, scope, docIDs []string) ([]Visit, err
 			}
 		}
 		for _, s := range roots(o) {
-			if s.Tokens < sweepBatchTokens {
-				if size+s.Tokens > sweepBatchTokens {
+			if s.Tokens < sweepTokens {
+				if size+s.Tokens > sweepTokens {
 					flush()
 				}
 				run, size = append(run, s), size+s.Tokens
@@ -100,7 +102,7 @@ func (e *Engine) plan(ctx context.Context, scope, docIDs []string) ([]Visit, err
 			flush()
 			for off := 0; ; {
 				out = append(out, Visit{DocumentID: id, SectionID: s.SectionID, Offset: off})
-				p, err := e.docs.Section(ctx, scope, id, s.SectionID, off, 0)
+				p, err := e.docs.Section(ctx, scope, id, s.SectionID, off, sweepTokens)
 				if err != nil {
 					return nil, err
 				}
@@ -148,6 +150,135 @@ func (e *Engine) runText(ctx context.Context, scope []string, docID, first, thro
 	return b.String(), true
 }
 
+// sweepWorkers is how many visits a sweep reads at once (bench: 51 visits one at a time took 40 to
+// 55 minutes of a run).
+const sweepWorkers = 4
+
+// turnKey carries a parallel sweep's turn (sweepVisits): extract_facts admits its findings only
+// once the channel is closed, when every earlier visit has ended.
+type turnKey struct{}
+
+// awaitTurn waits for the caller's turn to admit findings, if a sweep gave it one.
+func awaitTurn(ctx context.Context) error {
+	if prev, ok := ctx.Value(turnKey{}).(chan struct{}); ok {
+		select {
+		case <-prev:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
+}
+
+// visitRun is one visit's outcome: the fids it produced, whether it ran, and its error.
+type visitRun struct {
+	ids        []string
+	ran, broke bool // ran: a read was tried; broke: the share's money ran out on it
+	err        error
+}
+
+// sweepVisits reads visits with up to sweepWorkers at once, within b, and returns each one's
+// outcome, in plan order. It is deterministic and the shares hold exactly, as one at a time:
+//   - grants: a visit starts with a full grant (the subagent's turns and a worker's share of the
+//     USD) while one is free, else only when no visit is in flight, with what is left (as a
+//     sequential sweep would give it); so a visit's grant never depends on timing;
+//   - order: findings are admitted (fids, near-duplicate merges) and visits recorded in plan
+//     order: each visit waits, after its subagent ran, for the one before it to end;
+//   - stops: when the money runs out on a visit that had all that was left, or a model or journal
+//     failure ends the run (the in-flight visits are cancelled; the earliest error is returned).
+func (e *Engine) sweepVisits(ctx context.Context, rt *agent.Runtime, c agent.Call, b *agent.Budget, visits []Visit, todo []bool, question string) ([]visitRun, error) {
+	out := make([]visitRun, len(visits))
+	cctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ef := spec("extract_facts")
+	turns, share := ef.MaxTurns, b.Value().USD/sweepWorkers
+	model := rt.Bandit.PickModel(ctx, ef.Name, rt.Candidates(ef.Role)) // one pick for the sweep, so no visit's model depends on timing
+	fin := make(chan int)
+	prev := make(chan struct{})
+	close(prev)
+	inflight, stop, failed := 0, false, -1
+	settle := func() { // one visit ended
+		i := <-fin
+		inflight--
+		switch r := out[i]; {
+		case errors.Is(r.err, context.Canceled) && ctx.Err() == nil: // cancelled by a failure settled before it
+		case modelOrJournal(r.err):
+			if failed < 0 || i < failed {
+				failed = i
+			}
+			stop = true
+			cancel()
+		case r.broke:
+			stop = true
+		}
+	}
+	q, _ := json.Marshal(question)
+	for i, v := range visits {
+		if !todo[i] {
+			continue
+		}
+		var calls int
+		var usd float64
+		for !stop {
+			fc, fu := b.Remaining()
+			if full := fc >= turns && fu >= share; inflight < sweepWorkers && (full || inflight == 0) {
+				calls, usd = min(turns, fc), min(share, fu)
+				break
+			}
+			settle()
+		}
+		if stop || calls == 0 {
+			stop = true
+			continue
+		}
+		g, err := b.Grant(calls, usd, agent.LevelEvidence)
+		if err != nil {
+			return nil, err
+		}
+		through := "null"
+		if v.Through != "" {
+			through = fmt.Sprintf("%q", v.Through)
+		}
+		in := fmt.Sprintf(`{"question":%s,"documentId":%q,"sectionId":%q,"through":%s,"offset":%d,"query":null,"issueId":null}`, q, v.DocumentID, v.SectionID, through, v.Offset)
+		next, tail := make(chan struct{}), calls < turns || usd < share
+		inflight++
+		go func(i int, v Visit, wait, next chan struct{}) {
+			res, err := rt.Invoke(context.WithValue(cctx, turnKey{}, wait), agent.Agent{Name: "sweep", Visible: []string{"extract_facts"}},
+				agent.Call{TaskID: c.TaskID, DocumentIDs: c.DocumentIDs, Model: model}, "extract_facts", json.RawMessage(in), g, false, 0)
+			g.Close()
+			select { // the visit before this one has ended (its findings and its record are in)
+			case <-wait:
+			case <-cctx.Done():
+			}
+			r := visitRun{ids: []string{}, ran: true, err: err}
+			if errors.Is(err, agent.ErrBudget) && tail { // its USD share is spent: the rest is uncovered, not tried
+				r.ran, r.broke = false, true
+			}
+			var got hookResult
+			_ = json.Unmarshal(res.Output, &got)
+			for _, f := range got.Findings {
+				if id, ok := f["fid"].(string); ok { // a failed visit's output may be its raw answer
+					r.ids = append(r.ids, id)
+				}
+			}
+			if err == nil && cctx.Err() == nil { // a failed visit (bad output, its grant spent) is read again by a later sweep
+				r.err = e.write(ctx, c.TaskID, kVisit, v.key(), r.ids, false)
+			}
+			out[i] = r
+			close(next)
+			fin <- i
+		}(i, v, prev, next)
+		prev = next
+	}
+	for inflight > 0 {
+		settle()
+	}
+	if failed >= 0 {
+		return out, out[failed].err
+	}
+	return out, nil
+}
+
 // sweepTool is the retrieval floor (P8: idempotent): extract_facts over every visit not yet
 // made, within the sweep's share; what the budget cannot reach is reported, never skipped silently.
 func (e *Engine) sweepTool(rt *agent.Runtime, r *run) agent.Tool {
@@ -174,49 +305,32 @@ func (e *Engine) sweepTool(rt *agent.Runtime, r *run) agent.Tool {
 		}
 		a, sw := Allocate(e.cfg.BudgetCalls, e.cfg.BudgetUSD), spent["sweep"]
 		b := agent.NewBudget(min(c.Budget.Calls, a.Sweep-sw.Calls), min(c.Budget.USD, a.dollars(a.Sweep)-sw.USD), 0)
-		out := map[string]any{"visited": 0, "findings": []string{}, "incomplete": false, "uncovered": []map[string]string{}}
-		fids, uncovered, broke := []string{}, []map[string]string{}, false
-		q, _ := json.Marshal(r.t.Description)
-		for _, v := range visits {
-			if i := slices.IndexFunc(done, func(x row) bool { return x.Key == v.key() }); i >= 0 {
-				var got []string
-				_ = json.Unmarshal(done[i].Data, &got)
-				fids = append(fids, got...)
-				continue
-			}
-			if calls, _ := b.Remaining(); calls == 0 || broke {
-				uncovered = append(uncovered, v.unread())
-				continue
-			}
-			through := "null"
-			if v.Through != "" {
-				through = fmt.Sprintf("%q", v.Through)
-			}
-			in := fmt.Sprintf(`{"question":%s,"documentId":%q,"sectionId":%q,"through":%s,"offset":%d,"query":null,"issueId":null}`, q, v.DocumentID, v.SectionID, through, v.Offset)
-			res, err := rt.Invoke(ctx, agent.Agent{Name: "sweep", Visible: []string{"extract_facts"}}, agent.Call{TaskID: c.TaskID, DocumentIDs: c.DocumentIDs}, "extract_facts", json.RawMessage(in), b, false, 0)
-			if modelOrJournal(err) {
-				return nil, b.Spent(), err
-			} else if broke = errors.Is(err, agent.ErrBudget); broke { // its USD share is spent: the rest is uncovered, not tried
-				uncovered = append(uncovered, v.unread())
-				continue
-			}
-			var got hookResult
-			_ = json.Unmarshal(res.Output, &got)
-			ids := []string{}
-			for _, f := range got.Findings {
-				ids = append(ids, f["fid"].(string))
-			}
-			if err == nil { // a failed visit (bad output, its grant spent) is read again by a later sweep
-				if err := e.write(ctx, c.TaskID, kVisit, v.key(), ids, false); err != nil {
-					return nil, b.Spent(), err
-				}
+		todo, prior := make([]bool, len(visits)), make([][]string, len(visits))
+		for i, v := range visits {
+			if j := slices.IndexFunc(done, func(x row) bool { return x.Key == v.key() }); j >= 0 {
+				_ = json.Unmarshal(done[j].Data, &prior[i])
 			} else {
+				todo[i] = true
+			}
+		}
+		runs, err := e.sweepVisits(ctx, rt, c, b, visits, todo, r.t.Description)
+		if err != nil {
+			return nil, b.Spent(), err
+		}
+		fids, uncovered, visited := []string{}, []map[string]string{}, 0
+		for i, v := range visits {
+			fids = append(fids, prior[i]...)
+			if !todo[i] {
+				continue
+			}
+			x := runs[i]
+			visited += btoi(x.ran)
+			fids = append(fids, x.ids...)
+			if !x.ran || x.err != nil {
 				uncovered = append(uncovered, v.unread())
 			}
-			out["visited"] = out["visited"].(int) + 1
-			fids = append(fids, ids...)
 		}
-		out["findings"], out["uncovered"], out["incomplete"] = fids, uncovered, len(uncovered) > 0
+		out := map[string]any{"visited": visited, "findings": fids, "incomplete": len(uncovered) > 0, "uncovered": uncovered}
 		if len(uncovered) > 0 {
 			note := fmt.Sprintf("The evidence sweep ran out of budget: %d section %s not read: ", len(uncovered), plural(len(uncovered), "page was", "pages were"))
 			for i, u := range uncovered {

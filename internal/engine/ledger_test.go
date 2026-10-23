@@ -166,7 +166,9 @@ func TestMergeNearDuplicatesDeterministicOrdering(t *testing.T) {
 }
 
 // TestSweepVisitsEverySectionOnce: the sweep runs extract_facts once per page of every top-level
-// section of every document, in order, short sections batched (with the carried sectionChunks vectors).
+// section of every document, short sections batched (with the carried sectionChunks vectors);
+// visits run in parallel, so they are compared as a set (TestSweepReadsInParallelInPlanOrder: the
+// ledger is in plan order).
 func TestSweepVisitsEverySectionOnce(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
@@ -194,6 +196,9 @@ func TestSweepVisitsEverySectionOnce(t *testing.T) {
 			got = append(got, Visit{in.DocumentID, in.SectionID, in.Offset, in.Through})
 		}
 	}
+	key := func(a, b Visit) int { return strings.Compare(a.key(), b.key()) }
+	slices.SortFunc(got, key)
+	slices.SortFunc(visits, key)
 	if !reflect.DeepEqual(got, visits) || !strings.Contains(strings.Join(f.outputs(v.ID, "sweep"), ""), `"visited":2`) {
 		t.Fatalf("visited %+v, want %+v", got, visits)
 	}
@@ -234,7 +239,7 @@ func TestSectionChunks_FullCover(t *testing.T) {
 			b.WriteString(run)
 			continue
 		}
-		p, err := f.d.Section(context.Background(), f.ids(), v.DocumentID, v.SectionID, v.Offset, 0)
+		p, err := f.d.Section(context.Background(), f.ids(), v.DocumentID, v.SectionID, v.Offset, sweepTokens)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -259,7 +264,7 @@ func TestSectionChunks_SectionAligned(t *testing.T) {
 
 // TestSweepBatchesShortSections (real-model bench, SEC referral): a document numbered by paragraph
 // (a hundred top-level sections of a few hundred characters) is read in batches of consecutive
-// paragraphs of at most sweepBatchTokens, not one subagent run per paragraph; each batched visit's
+// paragraphs of at most sweepTokens, not one subagent run per paragraph; each batched visit's
 // sectionText holds its run verbatim, the batches rebuild the document, and the sweep completes.
 func TestSweepBatchesShortSections(t *testing.T) {
 	t.Parallel()
@@ -273,7 +278,7 @@ func TestSweepBatchesShortSections(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(visits) != 2 || visits[0].Through == "" || visits[1].Through == "" {
-		t.Fatalf("40 short paragraphs planned as %d visits (want 2 batches of at most %d tokens): %+v", len(visits), sweepBatchTokens, visits)
+		t.Fatalf("40 short paragraphs planned as %d visits (want 2 batches of at most %d tokens): %+v", len(visits), sweepTokens, visits)
 	}
 	sweep := tc("sweep", m{"over": "sections", "documentIds": nil})
 	v := f.run(f.with(map[string][]model.Reply{"lead": {calls(plan(issue("I1", "Allegations?", "Conduct"))), calls(sweep)}, "extract_facts": {facts(), facts()}}), Config{})
@@ -285,6 +290,7 @@ func TestSweepBatchesShortSections(t *testing.T) {
 			texts = append(texts, in.SectionText)
 		}
 	}
+	slices.SortFunc(texts, func(x, y string) int { return strings.Index(b.String(), x) - strings.Index(b.String(), y) }) // read in parallel
 	out := strings.Join(f.outputs(v.ID, "sweep"), "")
 	if len(texts) != 2 || strings.Join(texts, "") != b.String() || !strings.Contains(out, `"visited":2`) || !strings.Contains(out, `"incomplete":false`) {
 		t.Fatalf("%d extract_facts runs (want 2 that rebuild the document); sweep %s", len(texts), out)

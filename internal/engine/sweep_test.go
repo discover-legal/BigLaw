@@ -1,0 +1,257 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (C) 2026 Discover Legal
+
+package engine
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"regexp"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/discover-legal/BigLaw/internal/docs"
+	"github.com/discover-legal/BigLaw/internal/model"
+)
+
+// sweepReq is an extract_facts request as the subagent got it.
+func sweepReq(req model.Request) (in struct{ SectionText, Header, SectionID string }) {
+	jsonDecode(fmt.Sprint(req.Messages[1].Content), &in)
+	return in
+}
+
+var lotRe = regexp.MustCompile(`deliver lot (\d+)`)
+
+// byLot answers each extract_facts visit from the script of the lot its page states ("lot3"), so
+// the replies do not depend on the order visits arrive in.
+func byLot(req model.Request) string {
+	if req.Agent != "extract_facts" {
+		return req.Agent
+	}
+	if m := lotRe.FindStringSubmatch(sweepReq(req).SectionText); m != nil {
+		return "lot" + m[1]
+	}
+	return req.Agent
+}
+
+// lots is a document of n clauses, each over half a sweep batch (a visit of its own), and the
+// scripts that answer each clause's visit with its one finding (reps times).
+func lots(n, reps int) (string, func(docID string) map[string][]model.Reply) {
+	var b strings.Builder
+	for i := 1; i <= n; i++ {
+		fmt.Fprintf(&b, "%d. Clause %d\nThe supplier shall deliver lot %d on time.\n%s\n\n", i, i, i, filler)
+	}
+	return b.String(), func(docID string) map[string][]model.Reply {
+		out := map[string][]model.Reply{}
+		for i := 1; i <= n; i++ {
+			for range reps {
+				out[fmt.Sprintf("lot%d", i)] = append(out[fmt.Sprintf("lot%d", i)], facts(fd(fmt.Sprintf("Lot %d is due on time.", i), docID, fmt.Sprintf("The supplier shall deliver lot %d on time", i))))
+			}
+		}
+		return out
+	}
+}
+
+// TestSweepPagesFitTheAnswer (bench FOLLOWUPS L-1, real Haiku on the SEC referral: a 2,000-token
+// page of dense text overflowed the 8,192-token answer, so the visit failed and its section went
+// unread): long sections are paged at sweepTokens, a sheet in whole rows (at most
+// docs.TablePageRows) with its header row by reference, so every visit's answer fits and the sweep
+// completes. The scripted model answers like the real one: a page over ~650 tokens is cut off.
+func TestSweepPagesFitTheAnswer(t *testing.T) {
+	t.Parallel()
+	var prose, sheet strings.Builder
+	prose.WriteString("1. Allegations\n")
+	for i := range 90 {
+		fmt.Fprintf(&prose, "On day %d the Firm allocated block trade %d to Oceanic Fund I LP at a profit of $%d. ", i, i, 1000+i)
+	}
+	head := "Date\tAccount\tShares\tProfit"
+	sheet.WriteString("## Sheet: Trades\n" + head + "\n")
+	for i := range 150 {
+		fmt.Fprintf(&sheet, "2023-%02d-%02d\tOceanic-%d\t%d\t$%d.00\n", 1+i%12, 1+i%28, i, 100+i, 7*i)
+	}
+	f := newFixture(t, prose.String(), sheet.String())
+	over := []model.Reply{}
+	for range 40 {
+		over = append(over, model.Reply{Truncated: true}) // the answer cut off before any text
+	}
+	pages := []model.Reply{}
+	for range 40 {
+		pages = append(pages, facts())
+	}
+	e, fake := f.engine(f.with(map[string][]model.Reply{"lead": {calls(plan(issue("I1", "Allegations?", "Conduct"))), calls(tc("sweep", m{"over": "sections", "documentIds": nil}))},
+		"extract_facts": pages, "overflow": over}), Config{})
+	fake.Route = func(req model.Request) string {
+		if req.Agent == "extract_facts" && strings.Count(sweepReq(req).SectionText, "")*2/7 > sweepTokens+50 {
+			return "overflow"
+		}
+		return req.Agent
+	}
+	task := f.submit(0)
+	f.step(context.Background())
+	out := strings.Join(f.outputs(task.ID, "sweep"), "")
+	if !strings.Contains(out, `"incomplete":false`) {
+		t.Fatalf("sweep %s", out)
+	}
+	headed := 0
+	for _, c := range fake.Calls() {
+		if c.Agent != "extract_facts" {
+			continue
+		}
+		in := sweepReq(c)
+		if rows := strings.Count(in.SectionText, "\t") / 3; rows > docs.TablePageRows {
+			t.Errorf("a page of %d rows", rows)
+		}
+		if in.Header != "" {
+			headed++
+			if in.Header != head || strings.Contains(in.SectionText, head) {
+				t.Errorf("header %q on a page starting %q", in.Header, in.SectionText[:20])
+			}
+		}
+	}
+	if headed < 2 || e == nil {
+		t.Fatalf("%d later sheet pages named the header row", headed)
+	}
+}
+
+// pool is test plumbing around model.Fake: the first sweepWorkers extract_facts calls wait until
+// they are all in flight at once (or fail after two seconds), the visit of lot 1 answers last, and
+// the most calls in flight at once is kept.
+type pool struct {
+	*model.Fake
+	mu            sync.Mutex
+	now, peak, in int
+	all           chan struct{}
+}
+
+func (p *pool) Chat(ctx context.Context, req model.Request) (*model.Response, error) {
+	if req.Agent != "extract_facts" {
+		return p.Fake.Chat(ctx, req)
+	}
+	p.mu.Lock()
+	p.now++
+	p.peak = max(p.peak, p.now)
+	if p.in++; p.in == sweepWorkers {
+		close(p.all)
+	}
+	p.mu.Unlock()
+	defer func() { p.mu.Lock(); p.now--; p.mu.Unlock() }()
+	select {
+	case <-p.all:
+	case <-time.After(2 * time.Second):
+		return nil, errors.New("the sweep's visits ran one at a time")
+	}
+	if byLot(req) == "lot1" {
+		time.Sleep(150 * time.Millisecond)
+	}
+	return p.Fake.Chat(ctx, req)
+}
+
+// TestSweepReadsInParallelInPlanOrder (bench: 51 visits one at a time took 40–55 minutes): the
+// sweep reads sweepWorkers visits at once, never more, yet the ledger is a sequential sweep's: the
+// slowest visit (lot 1, answering last) still holds F1, every finding and visit record is in plan
+// order, and the sweep's output lists the fids in plan order.
+func TestSweepReadsInParallelInPlanOrder(t *testing.T) {
+	t.Parallel()
+	doc, scripts := lots(8, 1)
+	f := newFixture(t, doc)
+	sc := f.with(map[string][]model.Reply{"lead": {calls(plan(issue("I1", "Deliveries?", "Requirement"))), calls(tc("sweep", m{"over": "sections", "documentIds": nil}))}})
+	for k, v := range scripts(f.docs[0].ID) {
+		sc[k] = v
+	}
+	p := &pool{Fake: model.NewFake(sc), all: make(chan struct{})}
+	p.Route = byLot
+	f.e = New(f.st, f.d, p, testRoles, nil, Config{BudgetCalls: 150, BudgetUSD: 5, CollapseThreshold: 0.5, CollapseAction: "strict"}, nil)
+	task := f.submit(0)
+	f.step(context.Background())
+	out := strings.Join(f.outputs(task.ID, "sweep"), "")
+	if !strings.Contains(out, `"visited":8,"findings":["F1","F2","F3","F4","F5","F6","F7","F8"]`) || !strings.Contains(out, `"incomplete":false`) || p.peak != sweepWorkers || sweepWorkers < 2 {
+		t.Fatalf("peak %d; sweep %s", p.peak, out)
+	}
+	fs, _ := load[Finding](context.Background(), f.e, task.ID, kFinding)
+	vs, _ := f.e.rows(context.Background(), task.ID, kVisit)
+	visits, _ := f.e.plan(context.Background(), f.ids(), f.ids())
+	for i := range 8 {
+		if fs[i].FID != fmt.Sprintf("F%d", i+1) || fs[i].Claim != fmt.Sprintf("Lot %d is due on time.", i+1) || vs[i].Key != visits[i].key() {
+			t.Fatalf("finding %d is %s %q, visit record %s (want %s)", i+1, fs[i].FID, fs[i].Claim, vs[i].Key, visits[i].key())
+		}
+	}
+}
+
+// countKill is test plumbing around model.Fake: the kill-th extract_facts call stops the process
+// (it never reaches the Fake).
+type countKill struct {
+	*model.Fake
+	mu    sync.Mutex
+	n, at int
+	kill  func()
+}
+
+func (k *countKill) Chat(ctx context.Context, req model.Request) (*model.Response, error) {
+	k.mu.Lock()
+	k.n += btoi(req.Agent == "extract_facts")
+	hit := req.Agent == "extract_facts" && k.n == k.at && k.kill != nil
+	k.mu.Unlock()
+	if hit {
+		k.kill()
+		return nil, context.Canceled
+	}
+	return k.Fake.Chat(ctx, req)
+}
+
+// TestSweepResumesAfterKillMidSweep (G10): a process stopped in the middle of a parallel sweep
+// commits none of it; the next process re-issues the sweep, and the run's ledger equals an
+// uninterrupted run's.
+func TestSweepResumesAfterKillMidSweep(t *testing.T) {
+	t.Parallel()
+	doc, scripts := lots(8, 2)
+	runIt := func(killAt int) (*fixture, Task) {
+		f := newFixture(t, doc)
+		d1 := f.docs[0].ID
+		sc := f.with(map[string][]model.Reply{"lead": {calls(plan(issue("I1", "Deliveries?", "Requirement"))), calls(tc("sweep", m{"over": "sections", "documentIds": nil})),
+			calls(draft("I1", "F1")), calls(committee()), calls(finishCall("submit"))},
+			"draft_section": {section("Lot 1 is due on time [F1].", "s")}})
+		for k, v := range scripts(d1) {
+			sc[k] = v
+		}
+		k := &countKill{Fake: model.NewFake(sc), at: killAt}
+		k.Route = byLot
+		e := f.reopen(k, nil)
+		task := f.submit(0)
+		if killAt > 0 {
+			k.kill = func() { e.active(task.ID).cancel() }
+			f.step(context.Background())
+			if st := f.steps(task.ID); !strings.HasSuffix(st, "4:tool_call:sweep:started") {
+				t.Fatalf("first process: %s", st)
+			}
+			k.kill = nil
+			f.reopen(k, nil)
+			f.stale(task.ID)
+		}
+		f.step(context.Background())
+		return f, task
+	}
+	ref, want := runIt(0)
+	f, task := runIt(3)
+	v := f.get(task.ID)
+	norm := func(f *fixture, id string) string {
+		var b strings.Builder
+		for _, r := range f.ledger(id) {
+			if r.Kind == kFinding || r.Kind == kVisit {
+				b.WriteString(r.Kind + " " + r.Key + " " + strings.ReplaceAll(r.Data, f.docs[0].ID, "D1") + "\n")
+			}
+		}
+		return strings.ReplaceAll(b.String(), f.docs[0].ID, "D1")
+	}
+	if stop(v) != "awaiting_gate/finished" || norm(f, task.ID) != norm(ref, want.ID) {
+		t.Fatalf("%s: resumed ledger\n%s\nwant\n%s", stop(v), norm(f, task.ID), norm(ref, want.ID))
+	}
+	var lost json.RawMessage
+	f.st.DB().QueryRow(`SELECT lost FROM tasks WHERE id = $1`, task.ID).Scan(&lost)
+	if !strings.Contains(string(lost), `"calls"`) {
+		t.Fatalf("the stopped sweep's spend was not charged: %s", lost)
+	}
+}

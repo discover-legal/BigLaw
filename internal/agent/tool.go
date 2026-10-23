@@ -37,6 +37,9 @@ type Call struct {
 	Input       json.RawMessage `json:"input"`
 	Budget      Grant           `json:"budget"`
 	Depth       int             `json:"depth"` // 0: the lead called it; 1: a subagent did
+	// Model is a subagent's model chosen by its caller, a fan-out tool that picked once for all its
+	// calls (one of the subagent's candidates; "" or another model: the bandit picks per call).
+	Model string `json:"model,omitempty"`
 }
 
 // Grant is what one call may spend: model calls and USD (priced calls only).
