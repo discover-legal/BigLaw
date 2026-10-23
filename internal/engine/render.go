@@ -25,7 +25,7 @@ type draftReq struct {
 // (verified and not rejected only: G3), their figure handles and every worksheet's, the summaries
 // of the sections already written, in plan order, and on a redraft the checks the current version
 // fails (lint), so the drafter fixes exactly those.
-func (e *Engine) draftRequest(ctx context.Context, taskID, issueID string, input json.RawMessage) (draftReq, error) {
+func (e *Engine) draftRequest(ctx context.Context, taskID string, scope []string, issueID string, input json.RawMessage) (draftReq, error) {
 	var in struct {
 		FIDs   []string `json:"fids"`
 		Revise *string
@@ -43,6 +43,17 @@ func (e *Engine) draftRequest(ctx context.Context, taskID, issueID string, input
 	}
 	var fs []map[string]any
 	var omitted []string
+	names := map[string]string{} // documentId → its name, so the drafter can say which document states what
+	name := func(id string) string {
+		if _, ok := names[id]; !ok {
+			if d, err := e.docs.Get(ctx, scope, id); err == nil {
+				names[id] = d.Name
+			} else {
+				names[id] = ""
+			}
+		}
+		return names[id]
+	}
 	for _, id := range in.FIDs {
 		j := slices.IndexFunc(use, func(f Finding) bool { return f.FID == id })
 		if j < 0 {
@@ -51,7 +62,7 @@ func (e *Engine) draftRequest(ctx context.Context, taskID, issueID string, input
 		}
 		var qs []map[string]string
 		for _, c := range use[j].Citations {
-			qs = append(qs, map[string]string{"documentId": c.DocumentID, "quote": c.Quote, "locator": c.Locator})
+			qs = append(qs, map[string]string{"documentId": c.DocumentID, "document": name(c.DocumentID), "quote": c.Quote, "locator": c.Locator})
 		}
 		fs = append(fs, map[string]any{"fid": id, "claim": use[j].Claim, "quotes": qs})
 	}

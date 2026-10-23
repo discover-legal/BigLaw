@@ -901,7 +901,8 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
   it stops at its share of the budget and reports `incomplete` with the sections it did not reach,
   which also go into Limitations. Never silently partial.
 - **Drafting** (`draft_section`, one issue per call): Go gives the drafter the issue, its named
-  verified findings with their quotes, their figure handles (`{Zephyr}`), a `{W…}` handle per
+  verified findings with their quotes (each naming its document, so the drafter can say which
+  document states what: `TestDraftQuotesNameTheirDocument`), their figure handles (`{Zephyr}`), a `{W…}` handle per
   `numbers` worksheet (labelled with what it computes; rendered as a date in words, `$214,340`,
   `35%` or `14 days`), the summaries of sections already written, in plan order, and on a redraft
   the `checks` (lint lines) its current version fails. The section is stored with the run's handle

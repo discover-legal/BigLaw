@@ -186,7 +186,7 @@ func (h hooked) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 		}
 	case "draft_section":
 		var err error
-		if draft, err = h.e.draftRequest(ctx, c.TaskID, str("issueId"), c.Input); err != nil {
+		if draft, err = h.e.draftRequest(ctx, c.TaskID, c.DocumentIDs, str("issueId"), c.Input); err != nil {
 			return agent.Result{}, err
 		}
 		in = draft.request

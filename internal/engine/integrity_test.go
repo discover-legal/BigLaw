@@ -62,6 +62,45 @@ func TestQuarantineExcludedFromDraft(t *testing.T) {
 	}
 }
 
+// TestDraftQuotesNameTheirDocument (real-model bench, trust compare: the drafter wrote "the draft
+// incorporates" a provision quoted only from the client's instruction memo, as it saw document ids
+// and no names): every quote in a draft request names its document.
+func TestDraftQuotesNameTheirDocument(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	d1, d2 := f.docs[0].ID, f.docs[1].ID
+	f.engine(f.with(map[string][]model.Reply{
+		"lead": {calls(plan(issue("I1", "What does Greystone claim?", "Conduct"))), calls(extract(d1, "damages", "I1")), calls(draft("I1", "F1", "F2"))},
+		"extract_facts": {facts(fd("Greystone claims damages of $644,910.", d1, "Greystone claims damages of $644,910 for unpaid invoices"),
+			fd("Talbot was served on 10/21/2026.", d2, "Talbot was served on 10/21/2026 via its registered agent"))},
+	}), Config{})
+	f.submit(0)
+	f.step(context.Background())
+	var req struct {
+		Findings []struct {
+			FID    string
+			Quotes []struct{ DocumentID, Document string }
+		}
+	}
+	for _, c := range f.e.chat.(*model.Fake).Calls() {
+		if c.Agent == "draft_section" {
+			jsonDecode(c.Messages[1].Content.(string), &req)
+		}
+	}
+	want := map[string]string{d1: f.docs[0].Name, d2: f.docs[1].Name}
+	n := 0
+	for _, fd := range req.Findings {
+		for _, q := range fd.Quotes {
+			if n++; q.Document == "" || q.Document != want[q.DocumentID] {
+				t.Fatalf("%s quote from %s names %q, want %q", fd.FID, q.DocumentID, q.Document, want[q.DocumentID])
+			}
+		}
+	}
+	if n != 2 {
+		t.Fatalf("%d quotes in the draft request, want 2", n)
+	}
+}
+
 // TestFabricatingModelFailsTask (G4): a run whose findings mostly fail verification fails (strict),
 // with the grounding alert, rather than deliver.
 func TestFabricatingModelFailsTask(t *testing.T) {
