@@ -94,7 +94,7 @@ change. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`, not here.
   evidence subagents whose findings Go verifies before admitting them (`register.go` `admit`: G2/G3,
   values must be in their quote, currency from the quote, near-duplicates merged), `sweep` (answer-sized
   pages, `sweepTokens`; up to `sweepWorkers` visits at once with timing-free grants and admission in plan
-  order: a visit's `extract_facts` waits for its turn via `awaitTurn`), `check_deviation` (the requirement
+  order: a visit's `extract_facts` waits for its turn via `awaitTurn`; a visit a worker's share cannot fund is read again serially), `check_deviation` (the requirement
   is verified in `requirementDocId` before the subagent runs; omissions confirmed by the judge), the
   coverage pass (`cover.go`: touched issues get one `analyze_issue` + redraft from `Allocation.Cover`,
   inside a passing submit or as a step before the forced finish's review), `committee`
@@ -184,6 +184,6 @@ make demo-bundle # ui/dist-recorded for discover.legal/demo/biglaw/; make demo-r
 # DB tests: BIGLAW_TEST_DSN=postgres://…?sslmode=disable BIGLAW_REQUIRE_DB=1 (Postgres with pgvector)
 make e4-record EMBED_MODEL=…   # owner-run: record the E4 tape at the model's own length (make e4-live: no tape)
 ```
-Budgets: Go prod LOC reported with no limit (owner decision 17: the total ceiling is dropped; 12,728 used; each PR reports its lines vs its DESIGN budget; test-support packages such as `storetest` count), internal
+Budgets: Go prod LOC reported with no limit (owner decision 17: the total ceiling is dropped; 12,821 used; each PR reports its lines vs its DESIGN budget; test-support packages such as `storetest` count), internal
 packages ≤ 12 (8 used; test-support packages do not count), direct deps ≤ 3, env vars ≤ 20 (18 used), UI runtime
 deps ≤ 2 (2 used), UI source lines (`ui/src`) ≤ 2,400, untested packages 0, longest source file ≤ 2,000 lines.

@@ -172,9 +172,9 @@ func awaitTurn(ctx context.Context) error {
 
 // visitRun is one visit's outcome: the fids it produced, whether it ran, and its error.
 type visitRun struct {
-	ids        []string
-	ran, broke bool // ran: a read was tried; broke: the share's money ran out on it
-	err        error
+	ids                 []string
+	ran, broke, refused bool // ran: it made a model call; broke: all that was left ran out on it; refused: a worker's share could not fund it
+	err                 error
 }
 
 // sweepVisits reads visits with up to sweepWorkers at once, within b, and returns each one's
@@ -184,6 +184,10 @@ type visitRun struct {
 //     sequential sweep would give it); so a visit's grant never depends on timing;
 //   - order: findings are admitted (fids, near-duplicate merges) and visits recorded in plan
 //     order: each visit waits, after its subagent ran, for the one before it to end;
+//   - serial fallback: a visit a worker's share could not fund (a call's worst case over what the
+//     share had left) is read again once nothing is in flight, one at a time with all that is left,
+//     as a sequential sweep would, so parallelism never reads less (its findings are admitted after
+//     the parallel visits', still in plan order among themselves);
 //   - stops: when the money runs out on a visit that had all that was left, or a model or journal
 //     failure ends the run (the in-flight visits are cancelled; the earliest error is returned).
 func (e *Engine) sweepVisits(ctx context.Context, rt *agent.Runtime, c agent.Call, b *agent.Budget, visits []Visit, todo []bool, question string) ([]visitRun, error) {
@@ -213,15 +217,16 @@ func (e *Engine) sweepVisits(ctx context.Context, rt *agent.Runtime, c agent.Cal
 		}
 	}
 	q, _ := json.Marshal(question)
-	for i, v := range visits {
-		if !todo[i] {
-			continue
-		}
+	launch := func(i int, v Visit, serial bool) error {
 		var calls int
 		var usd float64
 		for !stop {
 			fc, fu := b.Remaining()
-			if full := fc >= turns && fu >= share; inflight < sweepWorkers && (full || inflight == 0) {
+			if serial && inflight == 0 {
+				calls, usd = min(turns, fc), fu
+				break
+			}
+			if full := fc >= turns && fu >= share; !serial && inflight < sweepWorkers && (full || inflight == 0) {
 				calls, usd = min(turns, fc), min(share, fu)
 				break
 			}
@@ -229,20 +234,20 @@ func (e *Engine) sweepVisits(ctx context.Context, rt *agent.Runtime, c agent.Cal
 		}
 		if stop || calls == 0 {
 			stop = true
-			continue
+			return nil
 		}
 		g, err := b.Grant(calls, usd, agent.LevelEvidence)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		through := "null"
 		if v.Through != "" {
 			through = fmt.Sprintf("%q", v.Through)
 		}
 		in := fmt.Sprintf(`{"question":%s,"documentId":%q,"sectionId":%q,"through":%s,"offset":%d,"query":null,"issueId":null}`, q, v.DocumentID, v.SectionID, through, v.Offset)
-		next, tail := make(chan struct{}), calls < turns || usd < share
+		next, tail := make(chan struct{}), calls < turns || usd < share || serial
 		inflight++
-		go func(i int, v Visit, wait, next chan struct{}) {
+		go func(wait chan struct{}) {
 			res, err := rt.Invoke(context.WithValue(cctx, turnKey{}, wait), agent.Agent{Name: "sweep", Visible: []string{"extract_facts"}},
 				agent.Call{TaskID: c.TaskID, DocumentIDs: c.DocumentIDs, Model: model}, "extract_facts", json.RawMessage(in), g, false, 0)
 			g.Close()
@@ -250,9 +255,9 @@ func (e *Engine) sweepVisits(ctx context.Context, rt *agent.Runtime, c agent.Cal
 			case <-wait:
 			case <-cctx.Done():
 			}
-			r := visitRun{ids: []string{}, ran: true, err: err}
-			if errors.Is(err, agent.ErrBudget) && tail { // its USD share is spent: the rest is uncovered, not tried
-				r.ran, r.broke = false, true
+			r := visitRun{ids: []string{}, ran: res.Usage.Calls > 0, err: err}
+			if errors.Is(err, agent.ErrBudget) { // tail: the money left is spent, the rest is uncovered; else the serial fallback reads it
+				r.broke, r.refused = tail, !tail
 			}
 			var got hookResult
 			_ = json.Unmarshal(res.Output, &got)
@@ -267,8 +272,26 @@ func (e *Engine) sweepVisits(ctx context.Context, rt *agent.Runtime, c agent.Cal
 			out[i] = r
 			close(next)
 			fin <- i
-		}(i, v, prev, next)
+		}(prev)
 		prev = next
+		return nil
+	}
+	for i, v := range visits {
+		if todo[i] {
+			if err := launch(i, v, false); err != nil {
+				return nil, err
+			}
+		}
+	}
+	for inflight > 0 {
+		settle()
+	}
+	for i, v := range visits { // the serial fallback, in plan order
+		if out[i].refused {
+			if err := launch(i, v, true); err != nil {
+				return nil, err
+			}
+		}
 	}
 	for inflight > 0 {
 		settle()

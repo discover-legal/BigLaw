@@ -110,10 +110,14 @@ const coverRevise = "Coverage pass: this section touched its issue without analy
 
 // coverTool is the coverage pass (a Go fan-out the engine runs, never the lead): for each touched
 // issue, in plan order, analyze_issue and then draft_section with the issue's findings and the
-// analysis, within Allocation.Cover. It runs once per run (its kCover row marks it done).
+// analysis, within Allocation.Cover. It runs once per run (its kCover row marks it done, also when
+// a model failure ends it, so a retried run does not spend a second share on it). Its spec's turns
+// are its share's calls, so its grant (what a crash charges as lost) is no more than its share.
 func (e *Engine) coverTool(rt *agent.Runtime, r *run) agent.Tool {
-	return agent.GoTool{S: spec("cover"), Fn: func(ctx context.Context, c agent.Call) (any, agent.Usage, error) {
-		a := Allocate(e.cfg.BudgetCalls, e.cfg.BudgetUSD)
+	a := Allocate(e.cfg.BudgetCalls, e.cfg.BudgetUSD)
+	s := spec("cover")
+	s.MaxTurns = a.Cover
+	return agent.GoTool{S: s, Fn: func(ctx context.Context, c agent.Call) (any, agent.Usage, error) {
 		b := agent.NewBudget(min(c.Budget.Calls, a.Cover), min(c.Budget.USD, a.dollars(a.Cover)), 0)
 		todo, err := e.touched(ctx, c.TaskID)
 		if err != nil {
@@ -121,6 +125,7 @@ func (e *Engine) coverTool(rt *agent.Runtime, r *run) agent.Tool {
 		}
 		me := agent.Agent{Name: "cover", Visible: []string{"analyze_issue", "draft_section"}}
 		call := agent.Call{TaskID: c.TaskID, DocumentIDs: c.DocumentIDs}
+		var failed error // a model failure: the pass is recorded as run, then the run ends
 		for _, is := range todo {
 			if calls, _ := b.Remaining(); calls == 0 {
 				break
@@ -128,7 +133,8 @@ func (e *Engine) coverTool(rt *agent.Runtime, r *run) agent.Tool {
 			in, _ := json.Marshal(map[string]any{"issueId": is.ID, "question": is.Question, "jurisdiction": r.t.Jurisdiction, "packs": nil})
 			_, err := rt.Invoke(ctx, me, call, "analyze_issue", in, b, false, 0)
 			if modelOrJournal(err) {
-				return nil, b.Spent(), err
+				failed = err
+				break
 			} else if errors.Is(err, agent.ErrBudget) {
 				break
 			} else if err != nil { // no analysis to redraft with: it stays touched, and is disclosed
@@ -143,8 +149,12 @@ func (e *Engine) coverTool(rt *agent.Runtime, r *run) agent.Tool {
 			}
 			in, _ = json.Marshal(map[string]any{"issueId": is.ID, "fids": fids, "revise": coverRevise})
 			if _, err := rt.Invoke(ctx, me, call, "draft_section", in, b, false, 0); modelOrJournal(err) {
-				return nil, b.Spent(), err
+				failed = err
+				break
 			}
+		}
+		if errors.Is(failed, agent.ErrJournal) {
+			return nil, b.Spent(), failed
 		}
 		left, err := e.touched(ctx, c.TaskID)
 		if err != nil {
@@ -158,7 +168,10 @@ func (e *Engine) coverTool(rt *agent.Runtime, r *run) agent.Tool {
 				res.Analysed = append(res.Analysed, is.ID)
 			}
 		}
-		return map[string]any{"analysed": res.Analysed, "missing": res.Missing}, b.Spent(), e.write(ctx, c.TaskID, kCover, "pass", res, false)
+		if err := e.write(ctx, c.TaskID, kCover, "pass", res, false); err != nil || failed != nil {
+			return nil, b.Spent(), cmpErr(failed, err)
+		}
+		return map[string]any{"analysed": res.Analysed, "missing": res.Missing}, b.Spent(), nil
 	}}
 }
 
@@ -171,7 +184,14 @@ func (e *Engine) coverPass(ctx context.Context, rt *agent.Runtime, call agent.Ca
 	if err = cmpErr(err, terr); err != nil || done || len(todo) == 0 {
 		return last, err
 	}
-	_, err = rt.Invoke(ctx, agent.Agent{Name: "cover", Visible: []string{"cover"}}, call, "cover", json.RawMessage(`{}`), r.b, false, last+1)
+	b, a := r.b, Allocate(e.cfg.BudgetCalls, e.cfg.BudgetUSD) // its grant is its share, not all the review level's free budget
+	if _, fu := r.b.RemainingAt(agent.LevelReview); a.Cover > 0 {
+		if g, gerr := r.b.Grant(a.Cover, min(fu, a.dollars(a.Cover)), agent.LevelReview); gerr == nil {
+			defer g.Close()
+			b = g
+		}
+	}
+	_, err = rt.Invoke(ctx, agent.Agent{Name: "cover", Visible: []string{"cover"}}, call, "cover", json.RawMessage(`{}`), b, false, last+1)
 	if ctx.Err() != nil || errors.Is(err, errLease) || modelOrJournal(err) {
 		return last, cmpErr(ctx.Err(), err)
 	}

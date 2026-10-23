@@ -5,10 +5,12 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/discover-legal/BigLaw/internal/agent"
 	"github.com/discover-legal/BigLaw/internal/model"
 )
 
@@ -99,5 +101,60 @@ func TestCoveragePassOnSubmit(t *testing.T) {
 	}
 	if touched, _ := e.touched(context.Background(), task.ID); len(touched) != 0 {
 		t.Fatalf("still touched: %+v", touched)
+	}
+}
+
+// TestCoverStepGrantIsItsShare (lab-improve r2 verifier M4): the coverage pass's journalled grant
+// (what a hard crash charges as lost) is the share kept for it, not the review level's whole free
+// budget.
+func TestCoverStepGrantIsItsShare(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, referralText)
+	d1 := f.docs[0].ID
+	bad := model.Reply{Text: "not json"}
+	e, _ := f.engine(f.with(map[string][]model.Reply{
+		"lead": {calls(plan(issue("I1", "Is the 2021 conduct time-barred?", "Requirement"), issue("I2", "Is the Firm liable for failure to supervise?", "Conduct"))),
+			calls(extract(d1, "2021", "I1")), calls(draft("I1", "F1"))},
+		"extract_facts": {facts(fd("The Firm allocated profitable trades to Oceanic in 2021.", d1, "In 2021 the Firm allocated profitable trades to Oceanic Fund I LP"))},
+		"analyze_issue": {analysed(limitsRule, "The 2021 allocations [F1] fall outside five years of a 2026 action.", limitsConc), bad, bad},
+		"draft_section": {section("In 2021 the Firm allocated profitable trades to Oceanic [F1].", "s"),
+			section("In 2021 the Firm allocated profitable trades to Oceanic [F1]. Under 28 U.S.C. § 2462 penalties for that conduct may be time-barred.", "s")},
+	}), Config{})
+	task := f.submit(6)
+	f.step(context.Background())
+	var raw []byte
+	if err := f.st.DB().QueryRow(`SELECT grant_held FROM task_steps WHERE task_id = $1 AND tool = 'cover'`, task.ID).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	var g agent.Grant
+	_ = json.Unmarshal(raw, &g)
+	a := Allocate(e.cfg.BudgetCalls, e.cfg.BudgetUSD)
+	if g.Calls > a.Cover || g.USD > a.dollars(a.Cover)+1e-9 {
+		t.Fatalf("cover step holds %d calls ($%.4f); its share is %d calls ($%.4f)", g.Calls, g.USD, a.Cover, a.dollars(a.Cover))
+	}
+}
+
+// TestCoveragePassRecordedWhenAModelFails (lab-improve r2 verifier L5): a pass that a model
+// failure ends is still recorded as run, so a retried run does not spend a fresh share on it.
+func TestCoveragePassRecordedWhenAModelFails(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, referralText)
+	d1 := f.docs[0].ID
+	down := model.Reply{Err: model.ErrUnavailable}
+	_, _ = f.engine(f.with(map[string][]model.Reply{
+		"lead": {calls(plan(issue("I1", "Is the 2021 conduct time-barred?", "Requirement"))),
+			calls(extract(d1, "2021", "I1")), calls(draft("I1", "F1"))},
+		"extract_facts": {facts(fd("The Firm allocated profitable trades to Oceanic in 2021.", d1, "In 2021 the Firm allocated profitable trades to Oceanic Fund I LP"))},
+		"analyze_issue": {down, down, down, down},
+		"draft_section": {section("In 2021 the Firm allocated profitable trades to Oceanic [F1].", "s")},
+	}), Config{})
+	task := f.submit(4)
+	f.step(context.Background())
+	steps := f.steps(task.ID)
+	if !strings.Contains(steps, "tool_call:cover:failed") {
+		t.Fatalf("the pass did not fail on the model error:\n%s", steps)
+	}
+	if rows, err := f.e.rows(context.Background(), task.ID, kCover); err != nil || len(rows) != 1 {
+		t.Fatalf("cover rows %d (%v), want the pass recorded once\n%s", len(rows), err, steps)
 	}
 }

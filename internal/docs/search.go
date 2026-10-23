@@ -200,34 +200,39 @@ type SectionPage struct {
 	HeaderAt int    `json:"headerAt,omitempty"`
 }
 
-// headerWindow bounds what header reads before a page: the run of rows the page continues, from at
-// most this many characters back, else the run the section's first window ends in.
+// headerWindow is the first window header reads before a page; it doubles until the page's table
+// starts inside it or it reaches the section's start.
 const headerWindow = 64 << 10
 
-// header is the header row of the table a page at offset continues, and its offset (tableHeader):
-// read in the window before the page and, when the run of rows starts before that window, in
-// the section's first window, so a page never costs a read of the whole section before it.
-func (s *Service) header(ctx context.Context, docID string, ord, offset int) (string, int, error) {
-	var head, tail string
-	if err := s.db.QueryRowContext(ctx, `SELECT substr(d.text, x.char_start + 1, least($3::int, $4::int)), substr(d.text, x.char_start + 1 + greatest(0, $3::int - $4::int), least($3::int, $4::int))
-		FROM sections x JOIN documents d ON d.id = x.document_id WHERE x.document_id = $1 AND x.ord = $2`, docID, ord, offset, headerWindow).Scan(&head, &tail); err != nil {
-		return "", 0, fmt.Errorf("docs: section: %w", err)
-	}
-	base := 0 // where tail starts, in characters
-	if offset > headerWindow {
-		base = offset - headerWindow
-		if i := strings.IndexByte(tail, '\n'); i >= 0 { // the window's first line may be cut
+// header is the header row of the table whose row lead ends before (tableHeader over the section's
+// text before the page plus lead, the page's text before its first table row), and its offset:
+// read in a window before the page that doubles until the table's start is inside it, bounded by
+// the section, so the header is the page's own table's however far back that table starts.
+func (s *Service) header(ctx context.Context, docID string, ord, offset int, lead string) (string, int, error) {
+	for w := headerWindow; ; w *= 2 {
+		start := max(0, offset-w)
+		var tail string
+		if err := s.db.QueryRowContext(ctx, `SELECT substr(d.text, x.char_start + 1 + $3::int, $4::int - $3::int)
+			FROM sections x JOIN documents d ON d.id = x.document_id WHERE x.document_id = $1 AND x.ord = $2`, docID, ord, start, offset).Scan(&tail); err != nil {
+			return "", 0, fmt.Errorf("docs: section: %w", err)
+		}
+		base := start
+		if start > 0 { // the window's first line may be cut
+			i := strings.IndexByte(tail, '\n')
+			if i < 0 {
+				continue // one line longer than the window: widen it
+			}
 			base, tail = base+utf8.RuneCountInString(tail[:i+1]), tail[i+1:]
 		}
-		head = head[:strings.LastIndexByte(head, '\n')+1] // and the first window's last
-	}
-	row, at, ok, bounded := tableHeader(tail)
-	if hrow, hat, hok, _ := tableHeader(head); ok && !bounded && base > 0 && hok {
-		return hrow, hat, nil
-	} else if ok {
+		row, at, ok, bounded := tableHeader(tail + lead)
+		if ok && !bounded && start > 0 {
+			continue // the table may start before the window
+		}
+		if !ok {
+			return "", 0, nil
+		}
 		return row, base + at, nil
 	}
-	return "", 0, nil
 }
 
 // Section reads a section with its subsections, verbatim, from offset (characters), at most limit
@@ -267,8 +272,8 @@ func (s *Service) Section(ctx context.Context, scope []string, docID, sectionID 
 		}
 		p.Text, p.Truncated = cut, true
 	}
-	if offset > 0 && hasTableRow(p.Text) { // a page of a table past its start: name its header
-		if p.Header, p.HeaderAt, err = s.header(ctx, docID, ord, offset); err != nil {
+	if lead, ok := beforeRow(p.Text); offset > 0 && ok { // a page of a table past its start: name its header
+		if p.Header, p.HeaderAt, err = s.header(ctx, docID, ord, offset, lead); err != nil {
 			return SectionPage{}, err
 		}
 	}
@@ -277,4 +282,19 @@ func (s *Service) Section(ctx context.Context, scope []string, docID, sectionID 
 		p.Next = 0
 	}
 	return p, nil
+}
+
+// beforeRow is text up to the start of its first whole table row line, and whether it has one.
+func beforeRow(text string) (string, bool) {
+	for at := 0; at < len(text); {
+		end := len(text)
+		if i := strings.IndexByte(text[at:], '\n'); i >= 0 {
+			end = at + i + 1
+		}
+		if isTableRow(text[at:end]) {
+			return text[:at], true
+		}
+		at = end
+	}
+	return "", false
 }

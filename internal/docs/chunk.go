@@ -215,34 +215,31 @@ func tablePage(text string, max int) (string, bool) {
 	return text[:end], end > 0
 }
 
-// tableHeader is the header row of the table that text (a section's text before a page) ends
-// inside: the first row of the run of table rows the text ends in (blank lines do not end a run;
-// prose or a "#" marker does), and its offset in characters. bounded is false when the run starts
-// at the text's first line, so it may have begun before the text.
+// tableHeader is the header row of the table that text (a section's text before a page's first
+// table row) ends inside: the first row of the run of table rows the text's last line is in, and
+// its offset in characters. A table starts after the section's start, a blank line, prose or a
+// "#" marker, so two tables of one section each name their own header. A last line with no
+// newline (a page that starts mid-line) is ignored. bounded is false when the run starts at the
+// text's first line, so it may have begun before the text.
 func tableHeader(text string) (row string, at int, ok, bounded bool) {
-	chars, in, seen := 0, false, false // seen: a line that is not a table row came first
-	for ln := range strings.SplitSeq(text, "\n") {
-		switch {
-		case isTableRow(ln):
-			if !in {
-				row, at, ok, in, bounded = strings.TrimRight(ln, "\r"), chars, true, true, seen
+	if i := strings.LastIndexByte(text, '\n'); i >= 0 {
+		text = text[:i+1]
+	} else {
+		return "", 0, false, false
+	}
+	chars, first := 0, true
+	for ln := range strings.SplitSeq(text[:len(text)-1], "\n") {
+		if isTableRow(ln) {
+			if !ok {
+				row, at, ok, bounded = strings.TrimRight(ln, "\r"), chars, true, !first
 			}
-		case strings.TrimSpace(ln) != "":
-			ok, in, seen = false, false, true
+		} else {
+			row, at, ok = "", 0, false
 		}
 		chars += utf8.RuneCountInString(ln) + 1
+		first = false
 	}
 	return row, at, ok, bounded
-}
-
-// hasTableRow reports whether text holds a table row.
-func hasTableRow(text string) bool {
-	for ln := range strings.SplitSeq(text, "\n") {
-		if isTableRow(ln) {
-			return true
-		}
-	}
-	return false
 }
 
 func btoi(b bool) int {

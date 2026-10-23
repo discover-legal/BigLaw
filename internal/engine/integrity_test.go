@@ -606,3 +606,22 @@ func TestFigureLintSkipsLocatorLists(t *testing.T) {
 		}
 	}
 }
+
+// TestFigureLintTracesCountAfterLocatorList (lab-improve r2 verifier M1): a plural locator list
+// ends at its last locator; a count after it ("37 trades", "; 30 days", "& 300", ", 250
+// employees", "14 million") is a figure, so a made-up one is flagged.
+func TestFigureLintTracesCountAfterLocatorList(t *testing.T) {
+	t.Parallel()
+	ground := "Section 7.3 of the Manual"
+	for text, want := range map[string]string{
+		"In paragraphs 12 and 14, 37 trades were allocated to the favoured account.": "37",
+		"See Sections 4 and 5; 30 days after the notice the cure period ended.":      "30",
+		"Exhibits 4 and 5 & 300 trades":                                              "300",
+		"Under Sections 3 and 4, 250 employees were affected.":                       "250",
+		"Sections 3 and 14 million in fees":                                          "14",
+	} {
+		if got := Untraced(maskRefs(text), ground, false); len(got) != 1 || got[0] != want {
+			t.Errorf("%q: untraced %q, want %s (masked: %q)", text, got, want, maskRefs(text))
+		}
+	}
+}

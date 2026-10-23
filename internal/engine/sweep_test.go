@@ -255,3 +255,38 @@ func TestSweepResumesAfterKillMidSweep(t *testing.T) {
 		t.Fatalf("the stopped sweep's spend was not charged: %s", lost)
 	}
 }
+
+// TestSweepFallsBackToSerialWhenAShareCannotFundACall (lab-improve r2 verifier M2): on a USD-bound
+// run whose extractor's worst-case call costs more than a worker's quarter of the sweep's USD (but
+// less than all of it), the sweep reads every page one at a time, as a serial sweep would, and
+// counts only the visits that ran.
+func TestSweepFallsBackToSerialWhenAShareCannotFundACall(t *testing.T) {
+	t.Parallel()
+	var doc strings.Builder
+	for i := 1; i <= 8; i++ {
+		fmt.Fprintf(&doc, "%d. Clause %d\nThe supplier shall deliver lot %d on time.\n%s\n\n", i, i, i, filler)
+	}
+	f := newFixture(t, doc.String())
+	prices, err := model.LoadPrices(`{"lead-m": {"in": 3, "out": 15}, "spec-m": {"in": 3, "out": 15}, "crit-m": {"in": 3, "out": 15}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ex []model.Reply
+	for range 8 {
+		ex = append(ex, costly(facts(), 0.01))
+	}
+	scripts := f.with(map[string][]model.Reply{
+		"lead":          {calls(plan(issue("I1", "Deliveries?", "Requirement"))), calls(tc("sweep", m{"over": "sections", "documentIds": nil}))},
+		"extract_facts": ex,
+	})
+	f.e = New(f.st, f.d, model.NewFake(scripts), testRoles, prices, Config{BudgetCalls: 150, BudgetUSD: 1, CollapseThreshold: 0.5, CollapseAction: "strict"}, nil)
+	task := f.submit(0)
+	f.step(context.Background())
+	sw := strings.Join(f.outputs(task.ID, "sweep"), "")
+	if !strings.Contains(sw, `"visited":8,`) || !strings.Contains(sw, `"incomplete":false`) {
+		t.Fatalf("sweep %s", sw)
+	}
+	if vs, _ := f.e.rows(context.Background(), task.ID, kVisit); len(vs) != 8 {
+		t.Fatalf("%d visit records, want 8", len(vs))
+	}
+}

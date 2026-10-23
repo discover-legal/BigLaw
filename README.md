@@ -705,8 +705,10 @@ subsections. `Section` reads that text verbatim from a character `offset`, at mo
 (`TestOutlineHasNumbersTitlesTokens`, `TestSectionPaginates`). A table's page (a sheet, a `.docx`
 table: two or more tab-delimited rows) is whole rows, at most `TablePageRows` (25), and a page after
 the table's first names its header row in `header` (with `headerAt`, where it starts): a reference to
-the row, read where the table starts (from the 64 KiB before the page, else the section's first
-64 KiB), never copied into the page's text, which stays verbatim (`TestTablePagedByRows`). An offset past 2^31 − 1 is 400 and a
+the row, read where the page's own table starts (a table starts after the section's start, a blank
+line, prose or a `#` marker; looked for in a window before the page that doubles from 64 KiB until
+the table's start is in it, bounded by the section: `TestTableHeaderIsThePagesOwn`,
+`TestTableHeaderOfASecondTable`), never copied into the page's text, which stays verbatim (`TestTablePagedByRows`). An offset past 2^31 − 1 is 400 and a
 section id past it is 404, never a database error.
 
 **Verification ladder** (v1's `tabcite` ladder): exact substring, confidence 1.0; tolerant
@@ -922,7 +924,11 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
   quarter of the sweep's USD) while one is free, else only once nothing is in flight, with what is
   left, so no grant depends on timing and the shares hold exactly as one at a time; findings are
   admitted (fids, near-duplicate merges) and visits recorded in plan order (each visit waits, after
-  its subagent ran, for the one before it); its model is the bandit's one pick for the sweep
+  its subagent ran, for the one before it); a visit a worker's quarter could not fund (a call's
+  worst case over it: a pricier model on a small budget) is read again once nothing is in flight,
+  one at a time with all that is left, so parallelism never reads less than a one-at-a-time sweep
+  (`TestSweepFallsBackToSerialWhenAShareCannotFundACall`), and `visited` counts only visits that
+  made a model call; its model is the bandit's one pick for the sweep
   (`agent.Call.Model`); a model or journal failure cancels the rest (`TestSweepReadsInParallelInPlanOrder`).
   The sweep is one step: a process stopped mid-sweep commits none of it and the next re-issues it
   (`TestSweepResumesAfterKillMidSweep`).
@@ -957,7 +963,11 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
   its inputs, or inside a cited finding's quote or value (G8, the "68.6% for 81.6%" trap), rule and
   section numbers (`Rule 6(a)(1)(C)`, `Section 4.3`, `§ 9.2`) being locators, not figures, also in
   lists and ranges (`Sections 7.3 and 9.1`, `§§ 4.2–4.5`, `clauses 3(a) and 3(b)`, `paragraphs 12,
-  14 and 17`; a figure after a list still counts: `TestFigureLintSkipsLocatorLists`); each
+  14 and 17`; a figure after a list still counts: `TestFigureLintSkipsLocatorLists`): a list ends at
+its last locator, and goes on over "and", "," or "–" only to a number that is itself locator-shaped
+(`9.1`, `206(2)`) or followed by punctuation, the end or a word a locator takes ("of", "are"), never
+to one followed by a noun or unit or after a "," or ";" once "and"/"or" closed the list
+("paragraphs 12 and 14, 37 trades" traces 37: `TestFigureLintTracesCountAfterLocatorList`); each
   untraced figure says how to fix it: the handle to write and the finding to cite, the uncited
   finding that states it, or the `numbers` call that computes it (`TestLintSaysHowToFix`); no
   unknown handle, and none inside a quotation (Go never substitutes there, so the quote would show
@@ -977,7 +987,10 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
   finishing from its reserve runs the pass as a step before its last review), and each issue still
   touched is disclosed in Limitations ("Coverage: I6 (…) was not analysed: …";
   `TestCoveragePassFromTheReserve`, `TestCoveragePassOnSubmit`). `finish`'s grant holds its meta
-  call plus the pass's and one review's calls (so a crash mid-finish loses no more), and P6/P7's
+  call plus the pass's and one review's calls (so a crash mid-finish loses no more), the pass's own
+step (from the reserve) holds only its share's calls and USD (`TestCoverStepGrantIsItsShare`), a
+pass a model failure ends is still recorded as run, so a retry does not spend a second share on it
+(`TestCoveragePassRecordedWhenAModelFails`), and P6/P7's
   "funded" counts them, and the pass's USD until it has run, as kept (`TestCoverageShareKept`). P7: a `submit` within 2
   calls of a committee whose HIGH/MEDIUM findings were resolved without new work is refused once
   per cycle, while funded, with the instruction to fix properly and run the committee again. `submit` then renders: sections in plan order (summaries never), handles substituted
@@ -1394,7 +1407,7 @@ improvements (after the real Haiku LAB rerun; scripted the same way): `TestSweep
 
 | Budget | Ceiling | Today |
 |---|---:|---:|
-| Go production lines (physical lines, non-`_test.go`, test-support packages included) | reported, no limit (owner decision 17) | 12,728 |
+| Go production lines (physical lines, non-`_test.go`, test-support packages included) | reported, no limit (owner decision 17) | 12,821 |
 | Packages under `internal/`, test-support packages excluded | 12 | 8 (`agent`, `analysis`, `api`, `docs`, `docs/ooxml`, `engine`, `model`, `store`; `store/storetest` is test support) |
 | Direct Go dependencies | 3 | 2 (`github.com/lib/pq`, `github.com/ledongthuc/pdf`) |
 | Runtime environment variables | 20 | 18 |
@@ -1403,7 +1416,7 @@ improvements (after the real Haiku LAB rerun; scripted the same way): `TestSweep
 | Packages without a `_test.go` | 0 | 0 |
 | Lines in any one source file (`.go`, `.py`, `.sql`, `.sh`, `.js`, `.ts`, `.css`; tests included) | 2,000 | 968 (`internal/docs/vision_safety_test.go`) |
 
-**There is no total line ceiling (owner decision 17, 2026-10-23).** `scripts/loc.py` reports the Go production total (12,728) and fails only on the budgets that bound bloat directly: no file over 2,000 lines, ≤ 3 direct deps, ≤ 20 env vars, ≤ 12 internal packages, ≤ 2,400 UI source lines, no untested package. Each PR still reports its lines against its DESIGN budget in its notes. (The ceiling's history, 14,000 → 17,500 through owner decisions 7–16, is in PLAN.) A **test-support package** is one
+**There is no total line ceiling (owner decision 17, 2026-10-23).** `scripts/loc.py` reports the Go production total (12,821) and fails only on the budgets that bound bloat directly: no file over 2,000 lines, ≤ 3 direct deps, ≤ 20 env vars, ≤ 12 internal packages, ≤ 2,400 UI source lines, no untested package. Each PR still reports its lines against its DESIGN budget in its notes. (The ceiling's history, 14,000 → 17,500 through owner decisions 7–16, is in PLAN.) A **test-support package** is one
 whose directory name ends in `test` and that no production file outside it imports, such as
 `storetest`. Under the coordinator's ruling it is left out of the package count, but its lines
 count toward the reported Go total like any other non-`_test.go` file. A `*test` package that
@@ -1498,13 +1511,18 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
   - Answer-sized pages cost about three times the visits of 2,000-token pages on long documents;
     the parallel sweep pays that in time, not budget. No real model has run them yet: the LAB rerun is
     the owner's.
-  - A parallel visit holds a quarter of the sweep's USD (its worst case is a few cents); a visit whose
-    calls' worst-case cost exceeds that fails where a one-at-a-time sweep would have funded it. A
+  - A parallel visit holds a quarter of the sweep's USD. One call's worst case (8,192 output tokens)
+    is a few cents on a small model but about $0.13 on a mid-priced one, so on a small budget a
+    quarter may not fund one call: such a visit is refused, then read in the serial fallback with
+    all that is left (its findings admitted after the parallel visits'); what the refused attempt
+    spent before its refusal is spent twice. A
     call billed above its own worst-case bound (a pricing anomaly) can make which later visits get a
     full grant depend on timing. The sweep is one step: a process stopped mid-sweep re-reads it all.
-  - A table page's header is the run of rows the page continues, looked for in the 64 KiB before the
-    page and then in the section's first 64 KiB: two tables back to back with no line between them
-    read as one (their header is the first's), as the chunker reads them.
+  - A table page's header is the first row of the run of rows the page continues, ended by a blank
+    line, prose or a `#` marker: two tables back to back with no line between them read as one
+    (their header is the first's), as the chunker reads them, and a table with a blank line inside it
+    reads as two. A page deep in a long table reads back to the table's start (doubling windows):
+    a 16 MiB section's last page reads up to the whole section once.
   - The coverage pass judges "analysed" by the issue's class (Conduct and Requirement need an
     analysis); an analysis is the model's reasoning, not a verified quote: its facts still cite
     verified findings, and its rules are flagged as external authorities when the record lacks them.
