@@ -4,6 +4,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -107,6 +108,10 @@ func TestSubagentTurnCap(t *testing.T) {
 	}
 	if n := len(byAgent(f, "extract_facts")); n != 2 {
 		t.Fatalf("the subagent made %d model calls, want its cap of 2", n)
+	}
+	// Its last turn cannot use a tool's result, so it is asked for the answer without tools.
+	if reqs := byAgent(f, "extract_facts"); reqs[0].ToolChoice != "auto" || reqs[1].ToolChoice != "none" || !strings.Contains(lastContent(reqs[1]), "last turn") {
+		t.Fatalf("tool choice %q then %q; last turn's note %q", reqs[0].ToolChoice, reqs[1].ToolChoice, lastContent(reqs[1]))
 	}
 	steps := j.final()
 	if st := steps[len(steps)-1]; st.Tool != "extract_facts" || st.Status != "failed" || !strings.Contains(st.Note, "turn cap") {
@@ -452,6 +457,12 @@ func TestLoadSubagents(t *testing.T) {
 	if err != nil || len(tools) != 1 || rt.Reg.Register(tools[0]) != nil {
 		t.Fatalf("load: %v", err)
 	}
+	// A real model sees only the prompt: it must carry the output schema, or the model omits required fields.
+	var out bytes.Buffer
+	_ = json.Compact(&out, subSpec("extract_facts", "retrieve").Out)
+	if p := tools[0].(*Subagent).Prompt; !strings.HasPrefix(p, "You extract facts.") || !strings.Contains(p, out.String()) {
+		t.Fatalf("prompt lacks the output schema: %q", p)
+	}
 	for name, fs := range map[string]fstest.MapFS{
 		"no prompt":     {"extract_facts.json": {Data: spec}},
 		"name mismatch": {"other.json": {Data: spec}, "other.md": {Data: []byte("x")}},
@@ -477,5 +488,70 @@ func TestToolCallsPerTurnCapped(t *testing.T) {
 	req := f.Calls()[1]
 	if echo.runs != maxCallsInTurn || len(req.Messages[2].ToolCalls) != maxCallsInTurn || !strings.Contains(lastContent(req), "42 were dropped") {
 		t.Fatalf("ran %d of 50 calls; history holds %d; note %q", echo.runs, len(req.Messages[2].ToolCalls), lastContent(req))
+	}
+}
+
+// A real model may wrap its JSON answer in prose or a fence after a line of prose; the object is
+// still taken, and an answer with no valid object is still refused.
+func TestAnswerToleratesProseAroundJSON(t *testing.T) {
+	out, err := Compile(testOut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, text := range []string{
+		`{"ok":true}`,
+		"```json\n{\"ok\":true}\n```",
+		"Here is my review.\n\n```json\n{\"ok\":true}\n```\nDone.",
+		`My answer: {"ok":true} (end)`,
+	} {
+		if got, err := answer(text, out); err != nil || string(got) != `{"ok":true}` && strings.TrimSpace(string(got)) != `{"ok":true}` {
+			t.Errorf("%q: %s, %v", text, got, err)
+		}
+	}
+	for _, text := range []string{"no json here", `prose {"ok":"yes"}`, "```json\n{\"bad\":1}\n```"} {
+		if _, err := answer(text, out); err == nil {
+			t.Errorf("%q: accepted", text)
+		}
+	}
+}
+
+// A subagent's answer cut off at its token limit says so in the repair note (so the model can
+// shorten it), and subagents get a larger limit than a lead turn.
+func TestSubagentTruncatedAnswerSaysSo(t *testing.T) {
+	rt, f := rig(t, map[string][]model.Reply{
+		"lead":          {calls(call("extract_facts", q))},
+		"extract_facts": {{Text: `{"ok":tr`, Truncated: true}, {Text: `{"ok":true}`}},
+	}, &counter{s: goSpec("retrieve")}, &Subagent{S: subSpec("extract_facts", "retrieve"), Prompt: "x"})
+	l := lead("extract_facts")
+	l.MaxTurns = 1
+	_, _ = rt.Run(context.Background(), l, Call{Input: json.RawMessage(`"go"`)}, NewBudget(50, 1, 0))
+	reqs := byAgent(f, "extract_facts")
+	if len(reqs) != 2 || reqs[0].MaxTokens != subagentMaxTokens || !strings.Contains(lastContent(reqs[1]), "cut off at its 8192-token limit") {
+		t.Fatalf("%d calls, max tokens %d; repair note %q", len(reqs), reqs[0].MaxTokens, lastContent(reqs[len(reqs)-1]))
+	}
+}
+
+// A subagent's answer cut off before any text or whole tool call (bench: a critic's, which ended a
+// $7.76 run with no deliverable) is a bad answer, not a model failure (G6): one shorter try, and a
+// second cut-off fails the tool (ErrToolOutput), never the run (ErrNoContent).
+func TestSubagentCutOffEmptyAnswerIsNotAModelFailure(t *testing.T) {
+	rt, f := rig(t, map[string][]model.Reply{
+		"extract_facts": {{Truncated: true}, {Text: `{"ok":true}`}},
+	}, &counter{s: goSpec("retrieve")}, &Subagent{S: subSpec("extract_facts", "retrieve"), Prompt: "x"})
+	res, err := rt.Invoke(context.Background(), lead("extract_facts"), Call{}, "extract_facts", json.RawMessage(q), NewBudget(10, 1, 0), false, 0)
+	reqs := byAgent(f, "extract_facts")
+	if err != nil || string(res.Output) != `{"ok":true}` || len(reqs) != 2 || !strings.Contains(lastContent(reqs[1]), "cut off at its 8192-token limit before it held any text") {
+		t.Fatalf("%s, %v after %d calls", res.Output, err, len(reqs))
+	}
+	rt, _ = rig(t, map[string][]model.Reply{
+		"extract_facts": {{Truncated: true}, {Truncated: true}},
+	}, &counter{s: goSpec("retrieve")}, &Subagent{S: subSpec("extract_facts", "retrieve"), Prompt: "x"})
+	_, err = rt.Invoke(context.Background(), lead("extract_facts"), Call{}, "extract_facts", json.RawMessage(q), NewBudget(10, 1, 0), false, 0)
+	if !errors.Is(err, ErrToolOutput) || errors.Is(err, model.ErrNoContent) {
+		t.Fatalf("two cut-off answers: %v", err)
+	}
+	rt, _ = rig(t, map[string][]model.Reply{"extract_facts": {{}}}, &counter{s: goSpec("retrieve")}, &Subagent{S: subSpec("extract_facts", "retrieve"), Prompt: "x"})
+	if _, err = rt.Invoke(context.Background(), lead("extract_facts"), Call{}, "extract_facts", json.RawMessage(q), NewBudget(10, 1, 0), false, 0); !errors.Is(err, model.ErrNoContent) {
+		t.Fatalf("an empty answer that was not cut off is still a model failure: %v", err)
 	}
 }

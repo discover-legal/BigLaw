@@ -29,6 +29,10 @@ type Runtime struct {
 	Log     *slog.Logger
 }
 
+// subagentMaxTokens bounds a subagent's answer: a critic's verdicts on up to 80 claims do not fit
+// in the 4,096 a lead turn gets.
+const subagentMaxTokens = 8192
+
 // Agent is one loop's configuration: the lead's (no Out: it ends through a Final tool) or a
 // subagent's (its answer is a JSON object matching Out).
 type Agent struct {
@@ -118,6 +122,11 @@ func (rt *Runtime) Run(ctx context.Context, a Agent, c Call, b *Budget) (Result,
 				msgs[last].Content = msgs[last].Content.(string) + "\n\n" + h
 			}
 		}
+		// A subagent's last turn can no longer use a tool's result: ask for its answer, without tools.
+		last := a.Out != nil && turn == a.MaxTurns && turn > 1 && len(defs) > 0
+		if last {
+			add(model.Message{Role: "user", Content: "This is your last turn: no more tool calls. Answer now with only the JSON object."}, turn, "")
+		}
 		var resp *model.Response
 		for try := 0; ; try++ {
 			view := slices.Clone(msgs)
@@ -129,6 +138,9 @@ func (rt *Runtime) Run(ctx context.Context, a Agent, c Call, b *Budget) (Result,
 			req := model.Request{Agent: a.Name, Role: a.Role, Model: a.Model, Messages: view, Tools: defs, MaxTokens: cmp.Or(a.MaxTokens, 4096)}
 			if len(defs) > 0 {
 				req.ToolChoice = "auto"
+				if last {
+					req.ToolChoice = "none"
+				}
 			}
 			step++
 			if r := replayed(step); r != nil { // a recorded turn: its answer, or the refusal it compacted for
@@ -168,6 +180,19 @@ func (rt *Runtime) Run(ctx context.Context, a Agent, c Call, b *Budget) (Result,
 			}
 			break
 		}
+		var me *model.Error
+		if !lead && a.Out != nil && errors.As(err, &me) && me.Truncated {
+			// A subagent's answer cut off before any text or whole tool call (a long critique, an
+			// oversized tool call) is a bad answer, not a model failure: one shorter try, then the
+			// tool fails (ErrToolOutput) and the run goes on without it (bench: a critic's cut-off
+			// answer ended a $7.76 run with no deliverable).
+			if repaired {
+				return Result{}, fmt.Errorf("%w: %s: %v", ErrToolOutput, a.Name, err)
+			}
+			repaired = true
+			add(model.Message{Role: "user", Content: fmt.Sprintf("Your answer was cut off at its %d-token limit before it held any text or a whole tool call. Answer again, much shorter: fewer and shorter items, only the JSON object.", cmp.Or(a.MaxTokens, 4096))}, turn, "")
+			continue
+		}
 		if err != nil {
 			return Result{}, err
 		}
@@ -178,7 +203,10 @@ func (rt *Runtime) Run(ctx context.Context, a Agent, c Call, b *Budget) (Result,
 				out, verr := answer(resp.Text, a.Out)
 				if verr == nil {
 					return Result{Output: out}, nil
-				} else if repaired {
+				} else if resp.Truncated {
+					verr = fmt.Errorf("%w (the answer was cut off at its %d-token limit: make it shorter)", verr, cmp.Or(a.MaxTokens, 4096))
+				}
+				if repaired {
 					return Result{}, fmt.Errorf("%w: %s: %v", ErrToolOutput, a.Name, verr)
 				}
 				repaired, note = true, "Your answer does not match the output schema: "+verr.Error()+". Reply with only the JSON object."
@@ -240,10 +268,26 @@ func answer(text string, out *Schema) (json.RawMessage, error) {
 	if strings.HasPrefix(t, "```") {
 		t = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(t, "```json"), "```"), "```"))
 	}
-	if err := out.Validate(json.RawMessage(t)); err != nil {
-		return nil, err
+	err := out.Validate(json.RawMessage(t))
+	if err == nil {
+		return json.RawMessage(t), nil
 	}
-	return json.RawMessage(t), nil
+	// Real models often wrap the object in a line of prose or a fence after one: try the fenced
+	// block, then the outermost braces. The first error is the one the repair note reports.
+	var alts []string
+	if _, body, ok := strings.Cut(text, "```"); ok {
+		body, _, _ = strings.Cut(strings.TrimPrefix(body, "json"), "```")
+		alts = append(alts, strings.TrimSpace(body))
+	}
+	if i, j := strings.Index(text, "{"), strings.LastIndex(text, "}"); i >= 0 && j > i {
+		alts = append(alts, text[i:j+1])
+	}
+	for _, a := range alts {
+		if out.Validate(json.RawMessage(a)) == nil {
+			return json.RawMessage(a), nil
+		}
+	}
+	return nil, err
 }
 
 // shown is an error as the model may see it: BigLaw's own words only. Anything else (a database
@@ -268,7 +312,7 @@ func (rt *Runtime) ChatWithin(ctx context.Context, req model.Request, b *Budget)
 			return nil, Usage{}, err
 		}
 	}
-	hold, err := b.Grant(1, rt.bound(req), false)
+	hold, err := b.Grant(1, rt.bound(req), LevelWork)
 	if err != nil {
 		return nil, Usage{}, err
 	}
@@ -355,7 +399,7 @@ func (rt *Runtime) Invoke(ctx context.Context, a Agent, c Call, name string, inp
 			return res, r
 		}
 	}
-	g, gerr := b.Grant(e.spec.MaxTurns, -1, e.spec.Final)
+	g, gerr := b.Grant(e.spec.MaxTurns, -1, Level(e.spec))
 	if gerr != nil {
 		next := map[bool]string{true: "call finish to end the run with what you have", false: "answer now with what you have"}[c.Depth == 0]
 		return res, refuse(ErrBudget, next, gerr.Error())
@@ -415,7 +459,7 @@ func (s *Subagent) Call(ctx context.Context, c Call) (Result, error) {
 		return Result{}, err
 	}
 	b := NewBudget(c.Budget.Calls, c.Budget.USD, 0)
-	res, err := s.RT.Run(ctx, Agent{Name: s.S.Name, Role: s.S.Role, Model: m, Prompt: s.Prompt, Visible: s.S.Allowed, MaxTurns: s.S.MaxTurns, Out: out},
+	res, err := s.RT.Run(ctx, Agent{Name: s.S.Name, Role: s.S.Role, Model: m, Prompt: s.Prompt, Visible: s.S.Allowed, MaxTurns: s.S.MaxTurns, Out: out, MaxTokens: subagentMaxTokens},
 		Call{TaskID: c.TaskID, DocumentIDs: c.DocumentIDs, Input: c.Input, Depth: 1}, b)
 	res.Usage, res.Model = b.Spent(), m
 	return res, err

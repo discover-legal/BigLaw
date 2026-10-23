@@ -259,7 +259,8 @@ func TestUSDBoundFinishDeliversWithoutMeta(t *testing.T) {
 	}
 }
 
-// TestMaxStepsStop: at maxSteps the run finishes from the reserve (max_steps) with a disclosure.
+// TestMaxStepsStop: at maxSteps the run finishes from the reserve (max_steps) with a disclosure;
+// the draft no committee read is reviewed first, from the cycle the budget kept back.
 func TestMaxStepsStop(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
@@ -269,7 +270,8 @@ func TestMaxStepsStop(t *testing.T) {
 	task := f.submit(6)
 	f.step(context.Background())
 	v := f.get(task.ID)
-	if v.Run.StopReason == nil || *v.Run.StopReason != "max_steps" || !strings.Contains(deref(v.Output), "step limit") || v.Run.Step != 7 {
+	if v.Run.StopReason == nil || *v.Run.StopReason != "max_steps" || !strings.Contains(deref(v.Output), "step limit") || v.Run.Step != 8 ||
+		!strings.Contains(f.steps(task.ID), "7:tool_call:committee:committed 8:tool_call:finish:committed") {
 		t.Fatalf("%s step %d:\n%s\n%s", stop(v), v.Run.Step, f.steps(task.ID), deref(v.Output))
 	}
 }
@@ -315,7 +317,7 @@ func TestAwaitingGatePausesAndResumes(t *testing.T) {
 	f.step(ctx)
 	v := f.get(task.ID)
 	if stop(v) != "awaiting_gate/awaiting_gate" || len(v.PendingGates) != 1 || v.PendingGates[0].GateID != "G-F1" {
-		t.Fatalf("paused: %s %+v", stop(v), v.PendingGates)
+		t.Fatalf("paused: %s %+v %v %s", stop(v), v.PendingGates, deref(v.Error), f.steps(task.ID))
 	}
 	if v, err := f.e.Decide(ctx, task.ID, "G-F1", true, ""); err != nil || v.Status != "running" {
 		t.Fatalf("decide: %v %s", err, v.Status)
@@ -334,7 +336,9 @@ func TestAwaitingGatePausesAndResumes(t *testing.T) {
 	f.step(ctx)
 	v = f.get(task.ID)
 	ss, _ := f.e.Steps(ctx, task.ID, 0)
-	if stop(v) != "awaiting_gate/finished" || v.PendingGates[0].GateID != "G-deliverable-2" || len(v.DecidedGates) != 2 || !strings.Contains(ss[len(ss)-3].Summary, "Add the answer deadline.") {
+	// The reason reaches the lead's transcript; at 24 calls its next turn cannot take the committee
+	// cycle the budget keeps back, so the run finishes from its reserve at the next deliverable gate.
+	if stop(v) != "awaiting_gate/budget_exhausted" || v.PendingGates[0].GateID != "G-deliverable-2" || len(v.DecidedGates) != 2 || !strings.Contains(ss[len(ss)-3].Summary, "Add the answer deadline.") {
 		t.Fatalf("after rejection: %s %+v %+v", stop(v), v.PendingGates, v.DecidedGates)
 	}
 	if v, err := f.e.Decide(ctx, task.ID, "G-deliverable-2", true, ""); err != nil || v.Status != "complete" {
@@ -445,7 +449,7 @@ func TestRejectedFindingStaysOutOfForcedDeliverable(t *testing.T) {
 	ctx := context.Background()
 	f.step(ctx)
 	if v := f.get(task.ID); stop(v) != "awaiting_gate/awaiting_gate" || len(v.PendingGates) != 1 || v.PendingGates[0].GateID != "G-F1" {
-		t.Fatalf("paused: %s %+v", stop(v), v.PendingGates)
+		t.Fatalf("paused: %s %+v %v %s", stop(v), v.PendingGates, deref(v.Error), f.steps(task.ID))
 	}
 	if _, err := f.e.Decide(ctx, task.ID, "G-F1", false, "The invoices are disputed."); err != nil {
 		t.Fatal(err)

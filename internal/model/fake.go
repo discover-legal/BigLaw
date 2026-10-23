@@ -80,7 +80,9 @@ func (f *Fake) Chat(ctx context.Context, req Request) (*Response, error) {
 		return nil, r.Err
 	}
 	if strings.TrimSpace(r.Text) == "" && len(r.ToolCalls) == 0 {
-		return nil, fail(ErrNoContent, "the scripted reply has neither text nor tool calls")
+		e := fail(ErrNoContent, "the scripted reply has neither text nor tool calls")
+		e.Truncated = r.Truncated
+		return nil, e
 	}
 	resp := &Response{Model: cmp.Or(req.Model, "fake:"+string(req.Role)), Text: r.Text, Truncated: r.Truncated, Usage: r.Usage}
 	for i, tc := range r.ToolCalls {

@@ -93,7 +93,7 @@ func Tools(src Source) []agent.Tool {
 			out := map[string]any{"wid": nil, "result": nil, "unit": nil, "worksheet": nil, "literalOperands": nil, "handles": nil, "tableMarkdown": nil}
 			switch {
 			case in.Op == "calc" && (in.Fn == "" || len(in.Operands) == 0):
-				return nil, agent.Usage{}, agent.Fail(`numbers: op "calc" needs fn (sum, diff, ratio, pct, date_add, date_diff or business_days) and operands[] (the values to calculate on); send them and call again`)
+				return nil, agent.Usage{}, agent.Fail(`numbers: op "calc" needs fn (sum, diff, ratio, pct, product, date_add, date_diff or business_days) and operands[] (the values to calculate on); send them and call again, e.g. ` + cmpExample("date_add"))
 			case in.Op == "calc":
 				w, err := Calc(fs, in.Fn, in.Operands, in.Holidays)
 				if err != nil {

@@ -83,7 +83,7 @@ whatever does not parse into a shape known to be safe is not shown.
 | `BIGLAW_MODEL_URL` | — | OpenAI-compatible API base, ending in its version (`http://localhost:11434/v1`); calls go to `<URL>/chat/completions` and `<URL>/embeddings`. http(s), a plain ASCII host with at least one letter or digit, a port up to 65535, no `@` anywhere (no credentials in the URL; write any other `@` as `%40`). Required when the key or a role is set. | PR 1 |
 | `BIGLAW_MODEL_KEY` | — | API key for that URL, sent as `Authorization: Bearer`; no white space or control characters. `serve` warns if it would go over plain `http`. | PR 2 |
 | `BIGLAW_MODELS` | — | Model id per role, as the endpoint names it: comma-separated `role=id`, roles `lead`, `specialist`, `critic`, `vision`, `embed`, each at most once (e.g. `lead=qwen2.5:14b,critic=glm-4.5-air,embed=nomic-embed-text`). Unset `specialist` or `critic` use the lead's; setting either without the lead is refused. `vision` and `embed` have **no** fallback: with no `embed` role search is lexical only (`/health` says `"search":"lexical"`); `vision` names the model images and scanned pages are sent to; without it they are stored as `needs_transcription` (503 `vision_not_configured`) and never sent to another role's model (§ Vision transcription). An unknown role, a repeated one, an empty id, an id over 200 bytes, or an id holding `://`, `user:password@`, white space, a control or invisible (format) character, `?` `=` `&`, or a key's shape (`sk-`, `sk_`, `AKIA`, `ASIA`, `AIza`, `xox?-`, `gh?_` prefixes, or 24 letters and digits in a row) is a startup error that does not echo the value. A wrong id fails at its first call with 404 → `model_not_configured`; with no lead, chat calls fail with 503 `model_not_configured`. | PR 3 |
-| `BIGLAW_BUDGET_CALLS` | `150` | Model calls per task | PR 4 |
+| `BIGLAW_BUDGET_CALLS` | `400` | Model calls per task, lead turns included (at the first bench's $0.012–0.020 a call, 400 calls cost $4.80–8.00, so the default $5 usually binds first; every share holds on both) | PR 4 |
 | `BIGLAW_BUDGET_USD` | `5` | Dollar cap per task | PR 4 |
 | `BIGLAW_LOCAL_WATTS` | — | Power draw of the machine running the model; when set (above 0) every call records watts × duration as watt-hours, for reporting only (never a price). A number from 0 to 100000 | PR 2 |
 | `BIGLAW_PRICES` | built-in | Model rates overriding the built-in table: the JSON itself (a value starting with `{`) or a path to a regular file of at most 1 MiB holding it (§ Model client) | PR 2 |
@@ -787,12 +787,16 @@ The memo workflow (§ Memo workflow) drives these. What PR 4a ships, all tested 
   than four turns are replaced by a handle naming their step; an endpoint's 400/413/422 compacts all
   but the latest turn's and retries once. Text in tool results is labelled untrusted matter data.
   The model sees refusals (reason and next step) and tool failures in BigLaw's own words only; any
-  other error is logged and shown as "internal error". A model failure (G6) ends the run.
+  other error is logged and shown as "internal error". A model failure (G6) ends the run, except a
+  subagent's answer cut off at its token limit before any text or whole tool call: that is a bad
+  answer (one shorter try, then `ErrToolOutput`), not a failure (`TestSubagentCutOffEmptyAnswerIsNotAModelFailure`).
 - **Budget** (`Budget`). Calls and USD per task, held and charged in Go. A model call holds one call
   and its worst-case cost (each request byte a token plus 1,000, as a cache write, plus `MaxTokens`
   of output) and then charges what it spent, a refused-but-billed answer included; a tool's grant is
   up to its turn cap, refused only when no call is free, and its unused part returns when it closes.
-  The task keeps a floor (reserve + meta) that only `finish` may spend. Query embeddings are charged
+  The task keeps back, in calls and USD, what its later phases need (`Keep`, by level: evidence <
+  work (lead turns, drafting, free tools) < review (the committee) < final): a grant never takes what
+  a higher level keeps, so only `finish` spends the reserve + meta. Query embeddings are charged
   in USD and tokens; an unpriced model counts as a call of unknown cost.
 - **Tool bandit** (`Bandit`, `Stats`; `MemStats` here, Postgres in 4b). Per task signature
   (workflow, practice, jurisdiction prefix, lead model, documents 1–3/4–9/10+), each tool's and each
@@ -807,15 +811,26 @@ The memo workflow (§ Memo workflow) drives these. What PR 4a ships, all tested 
   `Runtime.ChatWithin`, so it never spends past the grant's calls or USD; the quote and the passage
   each fenced as untrusted text, fence markers inside them neutralised). A document outside the call's
   ids is "not found".
-- **`numbers`**: `calc` (exact decimals: `sum`, `diff`, `ratio`, `pct`, `date_add`, `date_diff`,
-  `business_days` with the caller's holidays) over verified finding values (`F12.v1`) or literals; a
+- **`numbers`**: `calc` (exact decimals: `sum`, `diff`, `ratio`, `pct`, `product` (a percentage
+  counts as its fraction: 35% of $100,000 is $35,000), `date_add`, `date_diff`, `business_days`
+  with the caller's holidays; a negative day count counts back; `date_add` with holidays set, even
+  `[]`, rolls a result on a weekend or holiday to the next day that is not, backward for a negative
+  count, as FRCP 6(a)(1)(C) and 6(a)(5) do, the worksheet showing the raw date) over verified finding
+  values (`F12.v1`, the form extraction results, `ledger` and `handles` show; also read: `[F12].v1`,
+  `f12.V1`, `F12 v1`, `F12.d1` = its first date value, a bare `F12` = its only value) or literals (a
+  literal that is plainly a full date or "21 days" needs no unit; a count before a date is swapped).
+  What cannot be read is an error listing the finding's values by ref, with a call that works
+  (`TestCalcAcceptsWhatModelsSend`); a
   worksheet id is a hash of its steps; a quarantined or unknown finding is refused, never 0. Money is
   USD only when its unit is empty, `$`, `usd` or `dollars`; another currency keeps its unit, so a sum
   across currencies is refused. Date differences are exact over any span.
   `handles`: a `{Codename}` per distinct verified money, percentage, count or identifier value (never
   a date), most salient first, 64 at most, assigned over the whole verified ledger (a codename names
-  one figure whatever `fids` a call asks for); `Substitute` puts the exact value in, and an unmapped
-  codename is an error. `table`: a key-figures table from verified values only.
+  one figure whatever `fids` a call asks for); codenames given before (`kept`) keep their figures
+  and a new figure takes the next unused one, so in a run (where the engine keeps them in the
+  ledger) a codename never changes meaning; `Substitute` puts the exact value in for a codename or a
+  worksheet's `{W…}` (its wid), and an unmapped one is left as written and reported. `table`: a
+  key-figures table from verified values only.
 - **`join_discrepancies`**: cross-document conflicts between verified values that share a metric
   label, a quantity class (money is never compared with a share count) and an entity after the
   lead's aliases and name containment ("Ostrowski" in "Richard Ostrowski"); dates tie to one event by
@@ -838,16 +853,18 @@ Limitations of this layer:
 - The bandit's statistics are shared by every task with the same signature: one matter's documents
   can make a tool fail often and push it down another matter's hint (it never hides it). Its
   constants (β 0.5, γ 1, c 0.5) are uncalibrated; gate B measures it on and off.
-- Codenames follow salience over the ledger as it stands: a later finding can renumber them, so the
-  renderer substitutes with the handle set the drafter was given (stored with the section), and only
-  outside quoted spans, never a recomputed set.
+- Codenames are kept for the run (ledger kind `handle`): one names one figure from its first use,
+  also in the summaries later drafters read; the renderer substitutes with the set stored with the
+  section, only outside quoted spans. The 64-name pool is the limit: a run with more distinct figures
+  leaves the least salient late ones without a handle (a drafter may still state them inside a
+  cited quote).
 - `join_discrepancies` trusts the extracting model's metric labels: two labels for one metric are
   never compared (a missed conflict), one label for two metrics is compared (the lead must check the
   quotes). A value's document is the quote that holds its text, else the finding's first quote.
 - Calls in one turn run sequentially, not concurrently; `retrieve` and Go tools spend no calls, so a
   lead can issue up to 8 per turn for every turn its budget funds.
 - **Line budget:** `agent` 1,242 against 1,100, `analysis` 1,183 against 950, the `docs` adapters
-  153 against 50 (§ Budgets: accepted by owner decision 14; ceiling now 17,000, decision 15).
+  153 against 50 (§ Budgets: accepted by owner decision 14; no total ceiling since decision 17).
 
 ## Memo workflow, durable runs and the REST API (`internal/engine`, `internal/api`; PR 4b)
 
@@ -875,12 +892,23 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
   when the provision is verifiably absent (fewer than half its significant words in the reviewed
   document). The subagent's reward for the bandit is the share of its quotes that verified.
 - **`sweep`** visits every section of the task's documents (or one document) once, in order,
-  calling `extract_facts` on each; a visit is keyed (document, section, offset) and never repeated;
-  it stops at its share of the budget and reports `incomplete` with the sections it did not reach,
+  calling `extract_facts` on each page of a top-level section; consecutive top-level sections
+  shorter than 600 tokens are batched into one visit of at most 600 (`through`; sized by the
+  answer: a subagent writes five to seven tokens of findings per token of dense text, so a full page
+  overflows its 8,192-token answer): a document numbered by paragraph is read a few paragraphs at a
+  time, not one subagent run per paragraph (`TestSweepBatchesShortSections`); a `through` that is
+  not such a run from `sectionId` (with offset 0) fails the call, never reads `sectionId` alone
+  (`TestExtractFactsRefusesABadThrough`); a visit is keyed (document, section, offset[, through]) and never repeated;
+  it stops at its share of the budget and reports `incomplete` with the sections it did not reach
+  (a batch as its whole run, "s3 to s9": `TestSweepUncoveredNamesTheWholeBatch`),
   which also go into Limitations. Never silently partial.
 - **Drafting** (`draft_section`, one issue per call): Go gives the drafter the issue, its named
-  verified findings with their quotes, figure handles (`{Zephyr}`) and the summaries of sections
-  already written, in plan order. The section is stored with the handle set its drafter was given.
+  verified findings with their quotes (each naming its document, so the drafter can say which
+  document states what: `TestDraftQuotesNameTheirDocument`), their figure handles (`{Zephyr}`), a `{W…}` handle per
+  `numbers` worksheet (labelled with what it computes; rendered as a date in words, `$214,340`,
+  `35%` or `14 days`), the summaries of sections already written, in plan order, and on a redraft
+  the `checks` (lint lines) its current version fails. The section is stored with the run's handle
+  set at that point.
 - **`committee`**: three context-free critics in parallel, each on its own explicit grant (the
   cycle's 8/8/4 calls, the last taking the USD remainder): `prosecute` gets the claims and their
   quotes, `reproduce` gets the issue questions only (never the draft) and its answers are compared
@@ -889,14 +917,28 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
   (delayed credit, ±0.5). A critic that fails leaves a MEDIUM "did not run" finding.
 - **Policy** (`policy.go`): P1 nothing but `retrieve`/`ledger` before a plan, and if the lead has
   spent its plan share (7%, at least 3 calls) without one, the packs' checklist becomes the plan
-  (disclosed); P4 class shares of the call budget (evidence 50% of which sweep 35%, draft 15%,
-  committee cycles of 20 or 20% of a small budget, a reserve of 5 and meta 3 only `finish` spends).
+  (disclosed); P4 class shares, each on calls **and** USD (evidence 50% of which sweep 35%, draft
+  15%, committee cycles of 20 calls or 20% of a small budget with a fifth of the USD, a reserve of 5
+  and meta 3 only `finish` spends). The root budget keeps back the unspent drafting share from
+  evidence, one committee cycle from everything below the committee (lead turns included), and the
+  reserve from all but `finish`, so evidence can never spend the draft's budget and the last draft can
+  always be reviewed: when the lead runs out with a draft no committee has read, Go runs the
+  committee on it from that cycle before the forced finish (`TestPhaseSharesHoldInUSD`,
+  `TestCommitteeAlwaysReviewsTheLastDraft`). `sweep` stops at its USD share as at its calls.
 - **`finish`** (`op: "check"` is a dry run of `submit`): lint (every `[F-id]` names a usable
-  finding; every number in the draft is a handle, a `numbers` worksheet result or inside a cited
-  quote or value (G8, the "68.6% for 81.6%" trap); no unknown handle), coverage (plan issues
+  finding; every number and date in the draft is a handle, a `numbers` worksheet's result or one of
+  its inputs, or inside a cited finding's quote or value (G8, the "68.6% for 81.6%" trap), rule and
+  section numbers (`Rule 6(a)(1)(C)`, `Section 4.3`, `§ 9.2`) being locators, not figures; each
+  untraced figure says how to fix it: the handle to write and the finding to cite, the uncited
+  finding that states it, or the `numbers` call that computes it (`TestLintSaysHowToFix`); no
+  unknown handle, and none inside a quotation (Go never substitutes there, so the quote would show
+  `{Heron}`). A memo citing a `{W…}` worksheet with typed inputs (a period, a rate) says so in
+  Limitations, with what it computes from what. After two `finish` calls that reported lint problems, the next discloses them in
+  Limitations ("Delivered with an unresolved check after 2 rounds of fixes") instead of refusing,
+  so redrafting for the lint is bounded (`TestFigureLintIsBounded`)), coverage (plan issues
   without a section, parties never named, salient figures never landing), and P6: a committee on
   the current draft version, its HIGH/MEDIUM findings resolved while the budget can fund another
-  fix (cycle + 3 calls), every plan issue drafted or disclosed by issue id. P7: a `submit` within 2
+  fix (3 calls and their USD beside the kept cycle and reserve), every plan issue drafted or disclosed by issue id. P7: a `submit` within 2
   calls of a committee whose HIGH/MEDIUM findings were resolved without new work is refused once
   per cycle, while funded, with the instruction to fix properly and run the committee again. `submit` then renders: sections in plan order (summaries never), handles substituted
   outside quotes only, process language and orphan fragments stripped, repeated blocks dropped,
@@ -930,7 +972,9 @@ deploy) first settles an in-flight tool step's grant to what the tool spent, its
 call at its worst case, so the resume is charged that rather than the tool's whole grant (every
 free dollar of the task; `TestResumeAfterStopMidToolChargesWhatItSpent`). A task whose document
 was deleted after submission fails (`bad_request`) instead of being claimed again forever. A run stops `finished` (gate open),
-`budget_exhausted` or `max_steps` (`finish` forced from the reserve, open findings disclosed),
+`budget_exhausted` or `max_steps` (a draft changed since its last review gets one committee from the
+kept cycle, then `finish` is forced from the reserve, open findings disclosed; `maxSteps` defaults to
+twice the call budget, at least 400),
 `awaiting_gate`, `cancelled` or `failed`. Tool-bandit statistics persist in `tool_stats`.
 
 **Packs** (`internal/engine/packs/{jurisdiction,practice}/*.md`, embedded): `us`, `us-ny`,
@@ -1294,13 +1338,18 @@ three `sectionChunks` vectors), `TestSweepIdempotent`, `TestSweepReportsIncomple
 `httptest` server), `TestSweepShareBounded`, `TestSubagentLedgerReadsSkipQuarantine`, `TestUSDBoundFinishDeliversWithoutMeta`, `TestCurrencyFromQuote`,
 `TestEventsStream`, `TestE2EServe` (not a check: with `E2E_ADDR` set it serves the API, engine and
 `ui/dist` over a scripted model for a browser run). Each guarded behaviour was broken once on purpose
-and its test failed (65 deliberate breaks, all caught).
+and its test failed (65 deliberate breaks, all caught). Bench fixes (after the first real-model
+bench; each scripted with `model.Fake` from the logged behaviour, each failing without its fix):
+`TestPhaseSharesHoldInUSD`, `TestCommitteeAlwaysReviewsTheLastDraft`, `TestBudgetKeepsLaterPhases`,
+`TestCalcAcceptsWhatModelsSend`, `TestLintSaysHowToFix`, `TestFigureLintIsBounded`,
+`TestRendererUsesDrafterHandleSet` (codenames kept for the run) and `TestDeadlinesMeetTheAnswerKey`
+(the litigation matter's four deadline criteria, from `eval/tasks`, met by a scripted run).
 
 ## Budgets (`scripts/loc.py`, run in CI)
 
 | Budget | Ceiling | Today |
 |---|---:|---:|
-| Go production lines (physical lines, non-`_test.go`, test-support packages included) | 17,000 | 11,394 |
+| Go production lines (physical lines, non-`_test.go`, test-support packages included) | reported, no limit (owner decision 17) | 12,013 |
 | Packages under `internal/`, test-support packages excluded | 12 | 8 (`agent`, `analysis`, `api`, `docs`, `docs/ooxml`, `engine`, `model`, `store`; `store/storetest` is test support) |
 | Direct Go dependencies | 3 | 2 (`github.com/lib/pq`, `github.com/ledongthuc/pdf`) |
 | Runtime environment variables | 20 | 18 |
@@ -1309,10 +1358,10 @@ and its test failed (65 deliberate breaks, all caught).
 | Packages without a `_test.go` | 0 | 0 |
 | Lines in any one source file (`.go`, `.py`, `.sql`, `.sh`, `.js`, `.ts`, `.css`; tests included) | 2,000 | 968 (`internal/docs/vision_safety_test.go`) |
 
-The line ceiling is 17,000 (owner decisions: 14,000, then 14,250, then 14,500 during PR 2's review, then 15,000 at PR 3a's, with pgvector, then 15,500 at PR 3a's round 3, declared final, then 15,600 at PR 3c's round 1, decision 11, then 15,650 at PR 3c's round 4 to read long-legend scans, decision 12, then 16,100 at PR 4a, decision 14, then 17,000 at PR 4b, decision 15). The plan totalled 15,581–15,611 after PR 3c (round 7); PR 4a measured 2,557 lines against the 2,100 its components carry, putting the plan at 16,038–16,068. **Owner decision 14 (2026-10-22): keep PR 4a as built and raise the ceiling to 16,100**, which leaves room for PR 3e (about 30–40 lines); the next breach goes back to the owner. PR 4a's committee round 1 fixes added 23 (7,476 → 7,499): plan **16,061–16,091**, headroom 9–39 for PR 3e (round 2 added 3: 7,502). **PR 4b measured 3,818 lines (7,502 → 11,320) against the about 3,060 its components carry** (engine memo part 2,340, api 660, documents routes 60), so the plan is **16,822–16,852**, over the then 16,100 ceiling by 722–752. **Owner decision 15 (2026-10-22): keep PR 4b as built and raise the ceiling to 17,000** (headroom 148–178 on the plan); the next breach goes to the owner. PR 4b's committee round 1 fixes added 74 (11,320 → 11,394): plan **16,896–16,926**, headroom 74–104. A **test-support package** is one
+**There is no total line ceiling (owner decision 17, 2026-10-23).** `scripts/loc.py` reports the Go production total (12,013) and fails only on the budgets that bound bloat directly: no file over 2,000 lines, ≤ 3 direct deps, ≤ 20 env vars, ≤ 12 internal packages, ≤ 2,400 UI source lines, no untested package. Each PR still reports its lines against its DESIGN budget in its notes. (The ceiling's history, 14,000 → 17,500 through owner decisions 7–16, is in PLAN.) A **test-support package** is one
 whose directory name ends in `test` and that no production file outside it imports, such as
 `storetest`. Under the coordinator's ruling it is left out of the package count, but its lines
-count toward the line ceiling like any other non-`_test.go` file. A `*test` package that
+count toward the reported Go total like any other non-`_test.go` file. A `*test` package that
 production code imports is an ordinary package. loc.py also fails if `LICENSE` or `NOTICE` is
 missing or a `.go`/`.py` file lacks its SPDX header. Env-var names are found statically (literal
 `os.Getenv`/`LookupEnv`/`getenv` arguments, the config table, and `BIGLAW_*`/`ALLOW_*` literals).
@@ -1355,7 +1404,7 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
   - **Line budget:** PR 4b adds 3,818 lines (7,502 → 11,320) against about 3,060 its components carry
     (engine memo part 2,340, api 660, the documents routes 60): `engine` 3,406, `api` 248, the rest
     in `agent` (resume), `docs` (routes), `cmd` (wiring). The plan after 4b (16,822–16,852) broke the
-    16,100 ceiling; owner decision 15 raised it to 17,000 (§ Budgets); the next breach goes to the owner.
+    16,100 ceiling; owner decision 15 raised it to 17,000, decision 16 (bench fixes) to 17,500, and decision 17 dropped the total ceiling (§ Budgets).
     Round 1's fixes added 74 (11,394; plan 16,896–16,926).
 - The recorded demo replays answer-key claims, not a model's work; its `@transcript` badges come
   from a scripted reader, not a vision model; it has no `judge`/`ensemble` badges (model calls); a

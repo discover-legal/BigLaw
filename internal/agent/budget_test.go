@@ -17,32 +17,38 @@ import (
 // 500 seeded random sequences of grants (nested to depth 3), well-behaved charges (a callee
 // spends at most its grant, as the loop guarantees with each call's worst-case bound) and closes:
 // no level ever spends past its cap, the root never holds and spends more than it has, the floor
-// is only spent by final grants, and once every grant is closed nothing stays held.
+// is only spent by final grants, no grant takes what is kept for a level above its own, and once
+// every grant is closed nothing stays held.
 func TestLedgerNeverExceedsCaps(t *testing.T) {
 	for seed := uint64(1); seed <= 500; seed++ {
 		r := rand.New(rand.NewPCG(seed, 99))
 		root := NewBudget(20+r.IntN(200), 1+r.Float64()*10, r.IntN(10))
+		root.Keep(LevelReview, Grant{r.IntN(20), r.Float64()})
+		root.Keep(LevelWork, Grant{r.IntN(20), r.Float64()})
 		open := []*Budget{root}
 		var all []*Budget
 		for op := 0; op < 300; op++ {
 			b := open[r.IntN(len(open))]
 			switch k := r.IntN(10); {
 			case k < 4 && len(open) < 12: // grant
-				final := b == root && r.IntN(5) == 0
+				level := LevelWork
+				if b == root {
+					level = r.IntN(LevelFinal + 1)
+				}
 				usd := -1.0
 				if r.IntN(2) == 0 {
 					usd = r.Float64() * 2
 				}
-				before, _ := b.Remaining()
-				g, err := b.Grant(1+r.IntN(8), usd, final)
+				before, beforeUSD := b.RemainingAt(level)
+				g, err := b.Grant(1+r.IntN(8), usd, level)
 				if err != nil {
 					if !errors.Is(err, ErrBudget) {
 						t.Fatal(err)
 					}
 					continue
 				}
-				if !final && g.calls > before {
-					t.Fatalf("seed %d: a non-final grant of %d calls took the floor (%d were free)", seed, g.calls, before)
+				if g.calls > before || g.usd > beforeUSD+1e-9 {
+					t.Fatalf("seed %d: a level-%d grant of %d calls/$%.4f took what a higher level keeps (%d/$%.4f were free)", seed, level, g.calls, g.usd, before, beforeUSD)
 				}
 				open, all = append(open, g), append(all, g)
 			case k < 8: // charge within what b has left
@@ -101,8 +107,34 @@ func TestGrantReleasedOnSubagentReturn(t *testing.T) {
 		t.Fatalf("after a failed subagent: held %d/$%f, spent %+v", b.heldCalls, b.heldUSD, b.Spent())
 	}
 	// A partial grant: the turn cap is a maximum, not a need.
-	g, err := NewBudget(2, 1, 0).Grant(3, -1, false)
+	g, err := NewBudget(2, 1, 0).Grant(3, -1, LevelWork)
 	if err != nil || g.calls != 2 {
 		t.Fatalf("partial grant: %v %+v", err, g)
+	}
+}
+
+// TestBudgetKeepsLaterPhases: each level's grant leaves what the higher levels keep, in calls and
+// USD: evidence leaves drafting, the committee cycle and the reserve; work (a lead turn) leaves the
+// cycle and the reserve; the committee leaves the reserve; finish may take everything.
+func TestBudgetKeepsLaterPhases(t *testing.T) {
+	b := NewBudget(30, 3, 8) // reserve 8 calls / $0.80
+	b.Keep(LevelReview, Grant{6, 1})
+	b.Keep(LevelWork, Grant{4, 0.5})
+	for level, want := range []Grant{{12, 0.7}, {16, 1.2}, {22, 2.2}, {30, 3}} {
+		if c, u := b.RemainingAt(level); c != want.Calls || u < want.USD-1e-9 || u > want.USD+1e-9 {
+			t.Errorf("level %d: %d calls / $%.2f free, want %+v", level, c, u, want)
+		}
+	}
+	g, err := b.Grant(20, -1, LevelEvidence)
+	if err != nil || g.calls != 12 || g.usd > 0.7+1e-9 {
+		t.Fatalf("evidence grant %+v %v", g, err)
+	}
+	g.Charge(Usage{Calls: 12, USD: 0.7})
+	g.Close()
+	if _, err := b.Grant(1, 0, LevelEvidence); !errors.Is(err, ErrBudget) {
+		t.Fatalf("evidence ran into the drafting share: %v", err)
+	}
+	if c, _ := b.RemainingAt(LevelWork); c != 4 {
+		t.Fatalf("drafting share left %d, want 4", c)
 	}
 }

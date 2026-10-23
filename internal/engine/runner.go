@@ -115,7 +115,7 @@ func (e *Engine) Submit(ctx context.Context, t Task) (Task, error) {
 			return Task{}, fmt.Errorf("%w: document %s does not exist", ErrBadTask, id)
 		}
 	}
-	t.MaxSteps = cmp.Or(t.MaxSteps, 400)
+	t.MaxSteps = cmp.Or(t.MaxSteps, max(400, 2*e.cfg.BudgetCalls)) // steps count Go tools too, which spend no call
 	row := e.db.QueryRowContext(ctx, `INSERT INTO tasks (description, workflow_type, jurisdiction, matter_number, document_ids, max_steps, tool_bandit, lead_model)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING `+taskCols, t.Description, t.WorkflowType, t.Jurisdiction, t.MatterNumber, pq.Array(t.DocumentIDs), t.MaxSteps, t.ToolBandit, lead)
 	if t, err = scanTask(row); err != nil {

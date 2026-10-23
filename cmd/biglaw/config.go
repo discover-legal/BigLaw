@@ -40,7 +40,7 @@ var envVars = []envVar{
 	{name: "BIGLAW_MODEL_URL", url: true, pr: 1}, // the vendor breaker (PR 1) and the model client (PR 2)
 	{name: "BIGLAW_MODEL_KEY", secret: true, pr: 2},
 	{name: "BIGLAW_MODELS", pr: 3}, // role=model id pairs: lead, specialist, critic, vision, embed
-	{name: "BIGLAW_BUDGET_CALLS", def: "150", pr: 4},
+	{name: "BIGLAW_BUDGET_CALLS", def: "400", pr: 4},
 	{name: "BIGLAW_BUDGET_USD", def: "5", pr: 4},
 	{name: "BIGLAW_LOCAL_WATTS", pr: 2},
 	{name: "BIGLAW_PRICES", pr: 2},

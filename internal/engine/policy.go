@@ -11,24 +11,41 @@ import (
 	"github.com/discover-legal/BigLaw/internal/analysis"
 )
 
-// Allocation is the task's call budget split by class (README § The engine, DESIGN § Budgets).
+// Allocation is the task's budget split by phase (README § The engine, DESIGN § Budgets), in calls
+// and in USD alike: each share's USD is its fraction of the calls applied to the USD cap, except a
+// committee cycle, whose critics read the whole draft, which may spend a fifth of the USD.
 type Allocation struct {
 	Plan, Evidence, Sweep, Draft int // the most each class may spend (plan: before a plan exists)
 	Cycle                        int // one committee cycle: prosecute + reproduce + audit_gaps
 	Critics                      [3]int
-	Reserve, Meta                int // kept for finish and its meta note (the root budget's floor)
-	FixMin                       int // calls a fix stretch needs, beside a cycle, to count as funded
+	Reserve, Meta                int     // kept for finish and its meta note (the root budget's floor)
+	FixMin                       int     // calls a fix stretch needs, beside a cycle, to count as funded
+	Calls                        int     // the task's caps
+	USD, CycleUSD                float64 // CycleUSD: what one committee cycle may spend
 }
 
-// Allocate splits a call budget: plan ≤ 7% (min 3), evidence ≤ 50% of which sweep ≤ 35%, draft
-// ≤ 15%, a committee cycle of 20 (8/8/4) or 20% of a smaller budget, reserve 5 and meta 3.
-func Allocate(calls int) Allocation {
+// Allocate splits a budget: plan ≤ 7% (min 3), evidence ≤ 50% of which sweep ≤ 35%, draft ≤ 15%,
+// a committee cycle of 20 calls (8/8/4) or 20% of a smaller budget, reserve 5 and meta 3.
+func Allocate(calls int, usd float64) Allocation {
 	a := Allocation{Plan: max(3, calls*7/100), Evidence: calls / 2, Sweep: calls * 35 / 100, Draft: calls * 15 / 100,
-		Cycle: min(20, calls/5), Reserve: 5, Meta: 3, FixMin: 3}
+		Cycle: min(20, calls/5), Reserve: 5, Meta: 3, FixMin: 3, Calls: calls, USD: usd, CycleUSD: usd / 5}
 	a.Critics[0] = a.Cycle * 2 / 5
 	a.Critics[1] = a.Critics[0]
 	a.Critics[2] = a.Cycle - 2*a.Critics[0]
 	return a
+}
+
+// dollars is the USD share of n calls.
+func (a Allocation) dollars(n int) float64 { return a.USD * float64(n) / float64(max(a.Calls, 1)) }
+
+// keep holds back from the root budget, in calls and USD, what the later phases need (DESIGN §
+// Budgets): the reserve and meta from all but finish, one committee cycle from everything below the
+// committee (so the last draft can always be reviewed), and the unspent drafting share from evidence.
+func (r *run) keep(a Allocation, spent map[string]agent.Usage) {
+	d := spent["draft"]
+	r.b.Keep(agent.LevelFinal, agent.Grant{Calls: a.Reserve + a.Meta, USD: a.dollars(a.Reserve + a.Meta)})
+	r.b.Keep(agent.LevelReview, agent.Grant{Calls: a.Cycle, USD: a.CycleUSD})
+	r.b.Keep(agent.LevelWork, agent.Grant{Calls: max(0, a.Draft-d.Calls), USD: max(0, a.dollars(a.Draft)-d.USD)})
 }
 
 // share is the most a class may spend; 0 means the class has no share (free, committee, plan).
@@ -53,14 +70,15 @@ func (p policy) Allow(ctx context.Context, x agent.Pending) *agent.Refusal {
 		return nil
 	}
 	e, id := p.r.e, p.r.t.ID
-	a := Allocate(e.cfg.BudgetCalls)
+	a := Allocate(e.cfg.BudgetCalls, e.cfg.BudgetUSD)
 	spent, err := e.classSpend(ctx, id)
 	if err != nil {
 		return &agent.Refusal{Kind: agent.ErrPolicy, Reason: "the task's spend could not be read", Next: "try again"}
 	}
+	p.r.keep(a, spent)
 	issues, err := load[Issue](ctx, e, id, kIssue)
 	if err == nil && len(issues) == 0 && x.Spec.Name != "retrieve" && x.Spec.Name != "ledger" && x.Spec.Name != "finish" {
-		if spent["*"] < a.Plan {
+		if spent["*"].Calls < a.Plan {
 			return &agent.Refusal{Kind: agent.ErrPolicy, Reason: "no plan is recorded yet: until it is, only retrieve and ledger run",
 				Next: `call ledger {"op":"plan","issues":[{"id":"I1","question":"…","class":"Conduct","practice":"litigation"}, …]} with the questions the deliverable must answer`}
 		}
@@ -69,13 +87,10 @@ func (p policy) Allow(ctx context.Context, x agent.Pending) *agent.Refusal {
 		}
 	}
 	if sh := a.share(x.Spec.Name, x.Spec.Class); sh > 0 {
-		used := spent[x.Spec.Class]
-		if x.Spec.Name == "sweep" {
-			used = spent["sweep"]
-		}
-		if x.Spec.Kind == "subagent" && used+x.Spec.MaxTurns > sh || used >= sh {
-			return &agent.Refusal{Kind: agent.ErrPolicy, Reason: fmt.Sprintf("%s's budget class (%s) has spent %d of its %d calls", x.Spec.Name, cmpStr(x.Spec.Name == "sweep", "sweep", x.Spec.Class), used, sh),
-				Next: "work with what the ledger holds: draft, run committee, or finish"}
+		used := spent[cmpStr(x.Spec.Name == "sweep", "sweep", x.Spec.Class)]
+		if x.Spec.Kind == "subagent" && used.Calls+x.Spec.MaxTurns > sh || used.Calls >= sh || a.USD > 0 && used.USD >= a.dollars(sh) {
+			return &agent.Refusal{Kind: agent.ErrPolicy, Reason: fmt.Sprintf("%s's budget class (%s) has spent %d of its %d calls ($%.2f of $%.2f)", x.Spec.Name,
+				cmpStr(x.Spec.Name == "sweep", "sweep", x.Spec.Class), used.Calls, sh, used.USD, a.dollars(sh)), Next: "work with what the ledger holds: draft, run committee, or finish"}
 		}
 	}
 	return nil
@@ -88,26 +103,30 @@ func cmpStr(c bool, a, b string) string {
 	return b
 }
 
-// classSpend is the calls the task's lead steps spent, by tool class ("sweep" for sweep alone,
-// "*" for all), from the step log.
-func (e *Engine) classSpend(ctx context.Context, taskID string) (map[string]int, error) {
-	q, err := e.db.QueryContext(ctx, `SELECT tool, coalesce(sum((usage->>'calls')::int), 0) FROM task_steps WHERE task_id = $1 AND status <> 'started' GROUP BY tool`, taskID)
+// classSpend is what the task's lead steps spent (calls and USD), by tool class ("sweep" for sweep
+// alone, "*" for all, lead turns included), from the step log.
+func (e *Engine) classSpend(ctx context.Context, taskID string) (map[string]agent.Usage, error) {
+	q, err := e.db.QueryContext(ctx, `SELECT tool, coalesce(sum((usage->>'calls')::int), 0), coalesce(sum((usage->>'usd')::float8), 0)
+		FROM task_steps WHERE task_id = $1 AND status <> 'started' GROUP BY tool`, taskID)
 	if err != nil {
 		return nil, err
 	}
 	defer q.Close()
-	out := map[string]int{}
+	out := map[string]agent.Usage{}
 	for q.Next() {
 		var tool string
-		var n int
-		if err := q.Scan(&tool, &n); err != nil {
+		var u agent.Usage
+		if err := q.Scan(&tool, &u.Calls, &u.USD); err != nil {
 			return nil, err
 		}
-		s := specs[tool]
-		out[s.Class] += n
-		out["*"] += n
+		keys := []string{specs[tool].Class, "*"}
 		if tool == "sweep" {
-			out["sweep"] += n
+			keys = append(keys, "sweep")
+		}
+		for _, k := range keys {
+			v := out[k]
+			v.Add(u)
+			out[k] = v
 		}
 	}
 	return out, q.Err()
@@ -128,9 +147,10 @@ func (r *run) fallbackPlan(ctx context.Context) error {
 	return r.e.write(ctx, r.t.ID, kNote, "plan", "The lead recorded no plan within its plan budget, so the practice packs' checklist was used as the plan.", false)
 }
 
-// funded reports whether the run can still pay for a fix stretch and another committee cycle.
+// funded reports whether the run can still pay for a fix stretch beside the committee cycle and
+// reserve it keeps back, in calls and in USD (unspent: finish's own grant holds all the free USD).
 func (r *run) funded(b *agent.Budget) bool {
 	calls, _ := b.Remaining()
-	a := Allocate(r.e.cfg.BudgetCalls)
-	return calls >= a.Cycle+a.FixMin
+	a := Allocate(r.e.cfg.BudgetCalls, r.e.cfg.BudgetUSD)
+	return calls >= a.FixMin && a.USD-b.Spent().USD-a.CycleUSD-a.dollars(a.Reserve+a.Meta) >= a.dollars(a.FixMin)
 }

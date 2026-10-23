@@ -163,7 +163,7 @@ func ledgerOp(op string, kv ...any) model.ToolCall {
 }
 
 func extract(doc, query, issue string) model.ToolCall {
-	return tc("extract_facts", m{"question": "What happened?", "documentId": doc, "sectionId": nil, "offset": nil, "query": query, "issueId": issue})
+	return tc("extract_facts", m{"question": "What happened?", "documentId": doc, "sectionId": nil, "through": nil, "offset": nil, "query": query, "issueId": issue})
 }
 
 func draft(issue string, fids ...string) model.ToolCall {

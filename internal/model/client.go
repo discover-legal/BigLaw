@@ -438,7 +438,9 @@ func parse(raw []byte) (*Response, error) {
 		return bad(e)
 	}
 	if strings.TrimSpace(r.Text) == "" && len(r.ToolCalls) == 0 {
-		return bad(fail(ErrNoContent, "the answer has neither text nor tool calls"+map[bool]string{true: " (cut off at max_tokens)"}[r.Truncated]))
+		e := fail(ErrNoContent, "the answer has neither text nor tool calls"+map[bool]string{true: " (cut off at max_tokens)"}[r.Truncated])
+		e.Truncated = r.Truncated
+		return bad(e)
 	}
 	return r, nil
 }

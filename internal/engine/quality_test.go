@@ -4,6 +4,8 @@
 package engine
 
 import (
+	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -70,22 +72,39 @@ func TestHandlesSubstitutedOutsideQuotesOnly(t *testing.T) {
 	if out != `Greystone claims $644,910; the record says “the {Zephyr} code is reserved” and "{Zephyr} stays".` {
 		t.Fatalf("%s", out)
 	}
+	// An unknown handle beside a known one: the known one is still substituted (critics read it).
+	if out := substituteOutsideQuotes("Greystone claims {Zephyr}, not {Quasar}.", figs); out != "Greystone claims $644,910, not {Quasar}." {
+		t.Fatalf("%s", out)
+	}
 }
 
 func TestRendererUsesDrafterHandleSet(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, "2. Damages\nGreystone claims damages of $64,491 for unpaid invoices.\n", "1. Bond\nTalbot posted a bond of $9,000,000 with the court.\n")
 	d1, d2 := f.docs[0].ID, f.docs[1].ID
-	// F1 ($64,491) gets {Zephyr} when I1 is drafted; a later, more salient one ($9,000,000) takes
-	// {Zephyr} in a recomputed set. The memo must still say $644,910 where the drafter wrote it.
-	v := f.run(f.with(map[string][]model.Reply{
+	// F1 ($64,491) gets {Zephyr} when I1 is drafted; a later, more salient figure ($9,000,000) would
+	// take {Zephyr} in a recomputed set, but a codename keeps its figure for the run (it may sit in
+	// I1's summary, which I2's drafter reads): F2 gets the next free one, {Quasar}.
+	e, fake := f.engine(f.with(map[string][]model.Reply{
 		"lead": {calls(plan(issue("I1", "Damages?", "Conduct"), issue("I2", "Bond?", "RedFlag"))), calls(extract(d1, "damages", "I1")), calls(draft("I1", "F1")),
 			calls(extract(d2, "bond", "I2")), calls(draft("I2", "F2")), calls(committee()), calls(finishCall("submit"))},
 		"extract_facts": {facts(fd("Greystone claims damages of $64,491.", d1, "Greystone claims damages of $64,491 for unpaid invoices", val("Greystone", "damages", "$64,491", "Money"))),
 			facts(fd("Talbot posted a $9,000,000 bond.", d2, "Talbot posted a bond of $9,000,000", val("Talbot", "bond", "$9,000,000", "Money")))},
-		"draft_section": {section("Greystone claims {Zephyr} [F1].", "s1"), section("Talbot posted a bond of {Zephyr} [F2].", "s2")},
+		"draft_section": {section("Greystone claims {Zephyr} [F1].", "Damages {Zephyr} [F1]."), section("Talbot posted a bond of {Quasar} [F2], against the {Zephyr} claimed [F1].", "s2")},
 	}), Config{})
-	if !strings.Contains(deref(v.Output), "Greystone claims $64,491 [F1].") || !strings.Contains(deref(v.Output), "bond of $9,000,000 [F2].") {
+	task := f.submit(0)
+	f.step(context.Background())
+	v, _ := e.Get(context.Background(), task.ID)
+	var second string
+	for _, c := range fake.Calls() {
+		if c.Agent == "draft_section" {
+			second = fmt.Sprint(c.Messages[1].Content)
+		}
+	}
+	if !strings.Contains(second, `{"fid":"F2","handle":"{Quasar}"`) || !strings.Contains(second, "Damages {Zephyr} [F1].") {
+		t.Fatalf("the second drafter's request: %s", second)
+	}
+	if !strings.Contains(deref(v.Output), "Greystone claims $64,491 [F1].") || !strings.Contains(deref(v.Output), "bond of $9,000,000 [F2], against the $64,491 claimed [F1].") {
 		t.Fatalf("%s\n%s\n%q", deref(v.Output), f.steps(v.ID), f.outputs(v.ID, "finish"))
 	}
 }
@@ -98,6 +117,16 @@ func TestCurrencyFromQuote(t *testing.T) {
 	for _, c := range [][2]string{{"1,200", "EUR"}, {"5", ""}, {"40", "CHF"}, {"£30", "GBP"}, {"7", ""}} {
 		if got := currencyOf(c[0], q); got != c[1] {
 			t.Errorf("currencyOf(%q) = %q, want %q", c[0], got, c[1])
+		}
+	}
+}
+
+// TestSheetValueAsTheMemoStatesIt: a worksheet result reads as the memo would state it.
+func TestSheetValueAsTheMemoStatesIt(t *testing.T) {
+	for in, want := range map[[2]string]string{{"2026-11-12", "date"}: "November 12, 2026", {"214340", "USD"}: "$214,340", {"-1234.5", "USD"}: "-$1,234.5",
+		{"17.5", "%"}: "17.5%", {"14", "days"}: "14 days", {"1000", ""}: "1,000", {"1250", "GBP"}: "1,250 GBP"} {
+		if got := sheetValue(in[0], in[1]); got != want {
+			t.Errorf("sheetValue%q = %q, want %q", in, got, want)
 		}
 	}
 }

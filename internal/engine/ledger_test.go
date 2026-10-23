@@ -77,6 +77,10 @@ func TestExtractFactsTypedValues(t *testing.T) {
 	if len(fs) != 1 || len(fs[0].Values) != 1 || fs[0].Values[0].Value != "$644,910" {
 		t.Fatalf("values %+v", fs)
 	}
+	// The lead sees each kept value under the ref numbers takes (bench: it guessed "F30.d1").
+	if ex := f.outputs(v.ID, "extract_facts"); len(ex) != 1 || !strings.Contains(ex[0], `"values":[{"ref":"F1.v1","value":"$644,910"}]`) {
+		t.Fatalf("extract_facts result %q", ex)
+	}
 }
 
 // TestLedgerBucketsFindingsByIssue: a finding belongs to the issue whose call produced it, and
@@ -162,7 +166,7 @@ func TestMergeNearDuplicatesDeterministicOrdering(t *testing.T) {
 }
 
 // TestSweepVisitsEverySectionOnce: the sweep runs extract_facts once per page of every top-level
-// section of every document, in order (with the carried sectionChunks vectors).
+// section of every document, in order, short sections batched (with the carried sectionChunks vectors).
 func TestSweepVisitsEverySectionOnce(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
@@ -170,7 +174,7 @@ func TestSweepVisitsEverySectionOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(visits) != 4 { // complaint: three sections; docket: one
+	if len(visits) != 2 { // complaint: its three short sections in one visit; docket: one
 		t.Fatalf("visits %+v", visits)
 	}
 	reps := []model.Reply{}
@@ -183,14 +187,14 @@ func TestSweepVisitsEverySectionOnce(t *testing.T) {
 	for _, c := range f.e.chat.(*model.Fake).Calls() {
 		if c.Agent == "extract_facts" {
 			var in struct {
-				DocumentID, SectionID string
-				Offset                int
+				DocumentID, SectionID, Through string
+				Offset                         int
 			}
 			jsonDecode(c.Messages[1].Content.(string), &in)
-			got = append(got, Visit{in.DocumentID, in.SectionID, in.Offset})
+			got = append(got, Visit{in.DocumentID, in.SectionID, in.Offset, in.Through})
 		}
 	}
-	if !reflect.DeepEqual(got, visits) || !strings.Contains(strings.Join(f.outputs(v.ID, "sweep"), ""), `"visited":4`) {
+	if !reflect.DeepEqual(got, visits) || !strings.Contains(strings.Join(f.outputs(v.ID, "sweep"), ""), `"visited":2`) {
 		t.Fatalf("visited %+v, want %+v", got, visits)
 	}
 }
@@ -222,6 +226,14 @@ func TestSectionChunks_FullCover(t *testing.T) {
 	visits, _ := f.e_(t).plan(context.Background(), f.ids(), f.ids())
 	var b strings.Builder
 	for _, v := range visits {
+		if v.Through != "" {
+			run, ok := f.e.runText(context.Background(), f.ids(), v.DocumentID, v.SectionID, v.Through)
+			if !ok {
+				t.Fatalf("%+v is not a run", v)
+			}
+			b.WriteString(run)
+			continue
+		}
 		p, err := f.d.Section(context.Background(), f.ids(), v.DocumentID, v.SectionID, v.Offset, 0)
 		if err != nil {
 			t.Fatal(err)
@@ -245,6 +257,40 @@ func TestSectionChunks_SectionAligned(t *testing.T) {
 	}
 }
 
+// TestSweepBatchesShortSections (real-model bench, SEC referral): a document numbered by paragraph
+// (a hundred top-level sections of a few hundred characters) is read in batches of consecutive
+// paragraphs of at most sweepBatchTokens, not one subagent run per paragraph; each batched visit's
+// sectionText holds its run verbatim, the batches rebuild the document, and the sweep completes.
+func TestSweepBatchesShortSections(t *testing.T) {
+	t.Parallel()
+	var b strings.Builder
+	for i := 1; i <= 40; i++ { // ~29 tokens each: about 1,160 in all
+		fmt.Fprintf(&b, "%d. The Division alleges fact number %d about the trade allocations of the Firm in the review period.\n\n", i, i)
+	}
+	f := newFixture(t, b.String())
+	visits, err := f.e_(t).plan(context.Background(), f.ids(), f.ids())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(visits) != 2 || visits[0].Through == "" || visits[1].Through == "" {
+		t.Fatalf("40 short paragraphs planned as %d visits (want 2 batches of at most %d tokens): %+v", len(visits), sweepBatchTokens, visits)
+	}
+	sweep := tc("sweep", m{"over": "sections", "documentIds": nil})
+	v := f.run(f.with(map[string][]model.Reply{"lead": {calls(plan(issue("I1", "Allegations?", "Conduct"))), calls(sweep)}, "extract_facts": {facts(), facts()}}), Config{})
+	var texts []string
+	for _, c := range f.e.chat.(*model.Fake).Calls() {
+		if c.Agent == "extract_facts" {
+			var in struct{ SectionText string }
+			jsonDecode(c.Messages[1].Content.(string), &in)
+			texts = append(texts, in.SectionText)
+		}
+	}
+	out := strings.Join(f.outputs(v.ID, "sweep"), "")
+	if len(texts) != 2 || strings.Join(texts, "") != b.String() || !strings.Contains(out, `"visited":2`) || !strings.Contains(out, `"incomplete":false`) {
+		t.Fatalf("%d extract_facts runs (want 2 that rebuild the document); sweep %s", len(texts), out)
+	}
+}
+
 // TestSweepIdempotent (P8): a second sweep reads nothing again and returns the same findings.
 func TestSweepIdempotent(t *testing.T) {
 	t.Parallel()
@@ -253,7 +299,7 @@ func TestSweepIdempotent(t *testing.T) {
 	sweep := tc("sweep", m{"over": "sections", "documentIds": nil})
 	v := f.run(f.with(map[string][]model.Reply{
 		"lead":          {calls(plan(issue("I1", "Damages?", "Conduct"))), calls(sweep), calls(sweep)},
-		"extract_facts": {facts(fd("Suit filed.", d1, "sued Talbot Fresh Foods, Inc. on October 9, 2026")), facts(fd("Damages claimed.", d1, "Greystone claims damages of $644,910")), facts()},
+		"extract_facts": {facts(fd("Suit filed.", d1, "sued Talbot Fresh Foods, Inc. on October 9, 2026"), fd("Damages claimed.", d1, "Greystone claims damages of $644,910"))},
 	}), Config{})
 	out := f.outputs(v.ID, "sweep")
 	if len(out) != 2 || !strings.Contains(out[1], `"visited":0`) || !strings.Contains(out[1], `"findings":["F1","F2"]`) {
@@ -263,8 +309,8 @@ func TestSweepIdempotent(t *testing.T) {
 	for _, c := range f.e.chat.(*model.Fake).Calls() {
 		n += btoi(c.Agent == "extract_facts")
 	}
-	if n != 3 {
-		t.Fatalf("%d extract_facts calls, want 3", n)
+	if n != 1 { // the complaint's three short sections are one visit
+		t.Fatalf("%d extract_facts calls, want 1", n)
 	}
 }
 
@@ -272,15 +318,19 @@ func TestSweepIdempotent(t *testing.T) {
 // incomplete, lists the uncovered sections, and Limitations names them; never silently partial.
 func TestSweepReportsIncompleteWhenBudgetShort(t *testing.T) {
 	t.Parallel()
-	f := newFixture(t, complaintText, docketText)
+	var doc strings.Builder
+	for i := 1; i <= 4; i++ {
+		fmt.Fprintf(&doc, "%d. Clause %d\nThe supplier shall deliver lot %d on time.\n%s\n\n", i, i, i, filler)
+	}
+	f := newFixture(t, doc.String(), docketText)
 	sweep := tc("sweep", m{"over": "sections", "documentIds": nil})
 	v := f.run(f.with(map[string][]model.Reply{
 		"lead":          {calls(plan(issue("I1", "Damages?", "Conduct"))), calls(sweep)},
 		"extract_facts": {facts(), facts(), facts(), facts()},
-	}), Config{BudgetCalls: 12, BudgetUSD: 5, CollapseThreshold: 0.5, CollapseAction: "strict"}) // 2 calls free for the sweep
+	}), Config{BudgetCalls: 20, BudgetUSD: 5, CollapseThreshold: 0.5, CollapseAction: "strict"}) // 3 calls free for the sweep (15 kept for later phases)
 	out := strings.Join(f.outputs(v.ID, "sweep"), "")
 	notes, _ := f.e.rows(context.Background(), v.ID, kNote)
-	if !strings.Contains(out, `"incomplete":true`) || !strings.Contains(out, f.docs[1].ID) || len(notes) == 0 || !strings.Contains(string(notes[0].Data), "were not read") {
+	if !strings.Contains(out, `"incomplete":true`) || !strings.Contains(out, f.docs[1].ID) || len(notes) == 0 || !strings.Contains(string(notes[0].Data), "not read") {
 		t.Fatalf("sweep %s notes %v", out, notes)
 	}
 }
@@ -470,5 +520,60 @@ func TestCandidatePackDisclosed(t *testing.T) {
 	}
 	if candidates([]Pack{{Code: "x", Status: "reviewed"}}) != "" {
 		t.Fatal("a reviewed pack was disclosed")
+	}
+}
+
+// TestSweepUncoveredNamesTheWholeBatch (r2 M-1): a batched visit that is not read is disclosed as
+// its whole run of sections, not as its first section alone.
+func TestSweepUncoveredNamesTheWholeBatch(t *testing.T) {
+	t.Parallel()
+	var b strings.Builder
+	for i := 1; i <= 40; i++ {
+		fmt.Fprintf(&b, "%d. The Division alleges fact number %d about the trade allocations of the Firm in the review period.\n\n", i, i)
+	}
+	f := newFixture(t, b.String())
+	visits, err := f.e_(t).plan(context.Background(), f.ids(), f.ids())
+	if err != nil || len(visits) != 2 || visits[0].Through == "" {
+		t.Fatalf("plan %+v %v", visits, err)
+	}
+	bad := model.Reply{Text: "not json"}
+	sweep := tc("sweep", m{"over": "sections", "documentIds": nil})
+	v := f.run(f.with(map[string][]model.Reply{"lead": {calls(plan(issue("I1", "Allegations?", "Conduct"))), calls(sweep)},
+		"extract_facts": {bad, bad, bad, bad}}), Config{})
+	out := strings.Join(f.outputs(v.ID, "sweep"), "")
+	notes, _ := f.e.rows(context.Background(), v.ID, kNote)
+	note := ""
+	for _, n := range notes {
+		note += string(n.Data)
+	}
+	for _, x := range visits {
+		if !strings.Contains(out, `"through":"`+x.Through+`"`) || !strings.Contains(note, x.SectionID+" to "+x.Through) {
+			t.Fatalf("unread batch %s–%s not disclosed whole: sweep %s note %s", x.SectionID, x.Through, out, note)
+		}
+	}
+}
+
+// TestExtractFactsRefusesABadThrough (r2 M-2): a through that is not a run of top-level sections
+// from sectionId fails the call; it never reads sectionId alone as if it had read the run.
+func TestExtractFactsRefusesABadThrough(t *testing.T) {
+	t.Parallel()
+	var b strings.Builder
+	for i := 1; i <= 40; i++ {
+		fmt.Fprintf(&b, "%d. The Division alleges fact number %d about the trade allocations of the Firm in the review period.\n\n", i, i)
+	}
+	f := newFixture(t, b.String())
+	visits, err := f.e_(t).plan(context.Background(), f.ids(), f.ids())
+	if err != nil || len(visits) != 2 {
+		t.Fatalf("plan %+v %v", visits, err)
+	}
+	back := tc("extract_facts", m{"question": "q", "documentId": f.docs[0].ID, "sectionId": visits[1].SectionID, "through": visits[0].SectionID, "offset": nil, "query": nil, "issueId": "I1"})
+	v := f.run(f.with(map[string][]model.Reply{"lead": {calls(plan(issue("I1", "Allegations?", "Conduct"))), calls(back)}, "extract_facts": {facts()}}), Config{})
+	for _, c := range f.e.chat.(*model.Fake).Calls() {
+		if c.Agent == "extract_facts" {
+			t.Fatalf("a backwards through ran extract_facts on sectionId alone: %s", strings.Join(f.outputs(v.ID, "extract_facts"), ""))
+		}
+	}
+	if out := strings.Join(f.outputs(v.ID, "extract_facts"), ""); !strings.Contains(out, "through") {
+		t.Fatalf("extract_facts %s", out)
 	}
 }

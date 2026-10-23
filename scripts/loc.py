@@ -3,9 +3,10 @@
 # Copyright (C) 2026 Discover Legal
 """BigLaw 2 size budgets (README § What is on disk; PLAN.md "Rules for every PR").
 
-Fails (exit 1) when any budget is exceeded:
-  Go production lines   <= 17,000  physical lines of every non-_test .go file,
+Reports, with no limit (owner decision 17, 2026-10-23: the total ceiling is dropped):
+  Go production lines              physical lines of every non-_test .go file,
                                    test-support packages (storetest) included
+Fails (exit 1) when any budget is exceeded:
   internal packages     <= 12      directories under internal/ holding non-test Go,
                                    except test-support packages (below)
   direct Go deps        <= 3       go.mod requires not marked // indirect
@@ -21,8 +22,7 @@ SPDX-License-Identifier: Apache-2.0 header in its first five lines.
 A test-support package (coordinator ruling) is one whose directory name ends
 in "test" (storetest, modeltest) and that no non-_test.go file outside it
 imports. It is left out of the package count only: its lines count toward
-the LOC ceiling like any other non-_test.go file (owner decision: ceiling
-17,000, decision 15). A *test package that production code imports is an ordinary package.
+the reported Go total like any other non-_test.go file. A *test package that production code imports is an ordinary package.
 
 Env-var names are found statically: literal arguments of os.Getenv/LookupEnv
 (and of any getenv(...) call), every `name: "X"` entry of the config table,
@@ -42,7 +42,7 @@ import re
 import sys
 
 BUDGETS = {
-    "go_prod_loc": 17000,
+    "go_prod_loc": None,  # reported, not limited (owner decision 17)
     "internal_packages": 12,
     "direct_go_deps": 3,
     "env_vars": 20,
@@ -205,13 +205,16 @@ def main(argv=None):
     a = ap.parse_args(argv)
     m, detail, problems = measure(os.path.abspath(a.root))
     for k, limit in BUDGETS.items():
-        if m[k] > limit:
+        if limit is not None and m[k] > limit:
             problems.append(f"{k} = {m[k]} exceeds the budget of {limit}")
     if a.json:
         print(json.dumps({"measured": m, "budgets": BUDGETS, "detail": detail, "problems": problems}, indent=1))
     else:
         for k, limit in BUDGETS.items():
-            print(f"{k:19} {m[k]:>7} / {limit:<7} {'ok' if m[k] <= limit else 'OVER'}")
+            if limit is None:
+                print(f"{k:19} {m[k]:>7}   (reported, no limit)")
+            else:
+                print(f"{k:19} {m[k]:>7} / {limit:<7} {'ok' if m[k] <= limit else 'OVER'}")
         print("env vars:", ", ".join(detail["env"]) or "-")
         print("direct deps:", ", ".join(detail["deps"]) or "-")
         print("internal packages:", ", ".join(detail["internal"]) or "-")

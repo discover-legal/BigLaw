@@ -4,16 +4,19 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"slices"
 	"strings"
 
 	"github.com/discover-legal/BigLaw/internal/agent"
 	"github.com/discover-legal/BigLaw/internal/analysis"
+	"github.com/discover-legal/BigLaw/internal/docs"
 )
 
 //go:embed specs
@@ -55,11 +58,26 @@ func prompt(name string) string {
 // MemoVisible is the memo lead's tool list (README § Tools): 11 tools, in a fixed order.
 var MemoVisible = []string{"retrieve", "ledger", "sweep", "extract_facts", "analyze_issue", "check_deviation", "numbers", "join_discrepancies", "draft_section", "committee", "finish"}
 
-// hookOut is what an evidence subagent returns to its caller once Go has verified its findings.
+// hookOut is what an evidence subagent returns to its caller once Go has verified its findings,
+// each kept value under the ref numbers takes ("F3.v1").
 var hookOut = json.RawMessage(`{"type":"object","additionalProperties":false,"required":["findings","dropped","notes"],"properties":{
- "findings":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["fid","issueId","claim","verified","methods"],
-  "properties":{"fid":{"type":"string"},"issueId":{"type":"string"},"claim":{"type":"string"},"verified":{"type":"boolean"},"methods":{"type":"array","items":{"type":"string"}}}}},
+ "findings":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["fid","issueId","claim","verified","methods","values"],
+  "properties":{"fid":{"type":"string"},"issueId":{"type":"string"},"claim":{"type":"string"},"verified":{"type":"boolean"},"methods":{"type":"array","items":{"type":"string"}},
+   "values":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["ref","value"],"properties":{"ref":{"type":"string"},"value":{"type":"string"}}}}}}},
  "dropped":{"type":"integer"},"notes":{"type":"array","items":{"type":"string"}}}}`)
+
+// admitted is a recorded finding as its caller sees it: what it claims, how its quotes verified,
+// and its values by ref.
+func admitted(f Finding) map[string]any {
+	methods, values := []string{}, []map[string]string{}
+	for _, c := range f.Citations {
+		methods = append(methods, c.Method)
+	}
+	for i, v := range f.Values {
+		values = append(values, map[string]string{"ref": fmt.Sprintf("%s.v%d", f.FID, i+1), "value": v.Value})
+	}
+	return map[string]any{"fid": f.FID, "issueId": f.IssueID, "claim": f.Claim, "verified": f.Verified, "methods": methods, "values": values}
+}
 
 // runtime builds the run's registry and runtime: the docs and analysis tools, the engine's Go
 // tools, and the subagents from their specs; evidence subagents and draft_section behind Go hooks.
@@ -89,18 +107,37 @@ func (e *Engine) runtime(r *run) (*agent.Runtime, error) {
 	return rt, nil
 }
 
-// sheets keeps every numbers{op:"calc"} worksheet in the ledger: the deliverable's totals and
-// computed dates trace to one (G8).
+// sheets keeps every numbers{op:"calc"} worksheet in the ledger (the deliverable's totals and
+// computed dates trace to one, G8, and a drafter writes it as {W…}), and answers op "handles" from
+// the run's kept codenames, so the lead and the drafters see one codename per figure.
 type sheets struct {
 	agent.Tool
 	e *Engine
 }
 
 func (s sheets) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
+	var in struct {
+		Op         string
+		FIDs       []string `json:"fids"`
+		SalientTop int
+	}
+	if json.Unmarshal(c.Input, &in) == nil && in.Op == "handles" {
+		use, err := s.e.usable(ctx, c.TaskID)
+		hs, herr := s.e.handleSet(ctx, c.TaskID, use)
+		if err = cmpErr(err, herr); err != nil {
+			return agent.Result{}, err
+		}
+		hs = slices.DeleteFunc(hs, func(h analysis.Handle) bool {
+			return h.FID == "" || len(in.FIDs) > 0 && !slices.Contains(in.FIDs, h.FID)
+		})
+		out, _ := json.Marshal(map[string]any{"wid": nil, "result": nil, "unit": nil, "worksheet": nil, "literalOperands": nil, "tableMarkdown": nil,
+			"handles": append([]analysis.Handle{}, hs[:min(len(hs), cmp.Or(in.SalientTop, len(hs)))]...)})
+		return agent.Result{Output: out}, nil
+	}
 	res, err := s.Tool.Call(ctx, c)
-	var w struct{ WID, Result, Unit *string }
-	if err == nil && json.Unmarshal(res.Output, &w) == nil && w.WID != nil {
-		err = s.e.write(ctx, c.TaskID, kSheet, *w.WID, map[string]string{"result": *w.Result, "unit": *w.Unit}, false)
+	var w analysis.Worksheet
+	if err == nil && json.Unmarshal(res.Output, &w) == nil && w.WID != "" {
+		err = s.e.write(ctx, c.TaskID, kSheet, w.WID, w, false)
 	}
 	return res, err
 }
@@ -134,7 +171,13 @@ func (h hooked) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 	case "extract_facts":
 		if str("documentId") != "" && str("sectionId") != "" {
 			off, _ := in["offset"].(float64)
-			if p, err := h.e.docs.Section(ctx, c.DocumentIDs, str("documentId"), str("sectionId"), int(off), 0); err == nil {
+			if str("through") != "" {
+				text, ok := h.e.runText(ctx, c.DocumentIDs, str("documentId"), str("sectionId"), str("through"))
+				if !ok || off != 0 {
+					return agent.Result{}, agent.Fail(fmt.Sprintf("extract_facts: through must be a top-level section at or after sectionId, the run at most %d tokens, with offset 0 or null", docs.MaxSectionTokens))
+				}
+				in["sectionText"], in["truncated"], in["next"] = text, false, 0
+			} else if p, err := h.e.docs.Section(ctx, c.DocumentIDs, str("documentId"), str("sectionId"), int(off), 0); err == nil {
 				in["sectionText"], in["truncated"], in["next"] = p.Text, p.Truncated, p.Next
 			}
 		}
@@ -144,7 +187,7 @@ func (h hooked) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 		}
 	case "draft_section":
 		var err error
-		if draft, err = h.e.draftRequest(ctx, c.TaskID, str("issueId"), c.Input); err != nil {
+		if draft, err = h.e.draftRequest(ctx, c.TaskID, c.DocumentIDs, str("issueId"), c.Input); err != nil {
 			return agent.Result{}, err
 		}
 		in = draft.request
@@ -333,11 +376,7 @@ func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 		if err := e.write(ctx, c.TaskID, kFinding, f.FID, f, false); err != nil {
 			return out, 0, err
 		}
-		methods := []string{}
-		for _, c := range f.Citations {
-			methods = append(methods, c.Method)
-		}
-		out.Findings = append(out.Findings, map[string]any{"fid": f.FID, "issueId": f.IssueID, "claim": f.Claim, "verified": f.Verified, "methods": methods})
+		out.Findings = append(out.Findings, admitted(f))
 		if !f.Verified {
 			out.Dropped++
 		}

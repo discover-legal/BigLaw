@@ -7,7 +7,7 @@
  "allowed": [
   "retrieve"
  ],
- "description": "Reads one section page (documentId and sectionId, from offset) or the passages a query finds, and returns every fact relevant to the question as findings: a claim, its verbatim quotes with their documentId, typed values (each must appear in its own quote), typed entities and relations. Go verifies every quote against the document before a finding enters the ledger; an unverified finding is quarantined and never drafted from. It returns the findings' ids (F1, F2, …) and whether each verified. Do not use it to analyse the law (analyze_issue) or to compare documents (check_deviation), and prefer sweep for reading every section.\nExample: {\"question\": \"What notice period does the termination clause set?\", \"documentId\": \"3f6c2a9e-0b1d-4c2e-9a7f-5d8e1b2c4a6f\", \"sectionId\": \"s7\", \"offset\": null, \"query\": null, \"issueId\": \"I2\"}",
+ "description": "Reads one section page (documentId and sectionId, from offset; with through, the run of consecutive top-level sections from sectionId to through, as sweep batches short sections) or the passages a query finds, and returns every fact relevant to the question as findings: a claim, its verbatim quotes with their documentId, typed values (each must appear in its own quote), typed entities and relations. Go verifies every quote against the document before a finding enters the ledger; an unverified finding is quarantined and never drafted from. It returns the findings' ids (F1, F2, …) and whether each verified. Do not use it to analyse the law (analyze_issue) or to compare documents (check_deviation), and prefer sweep for reading every section.\nExample: {\"question\": \"What notice period does the termination clause set?\", \"documentId\": \"3f6c2a9e-0b1d-4c2e-9a7f-5d8e1b2c4a6f\", \"sectionId\": \"s7\", \"through\": null, \"offset\": null, \"query\": null, \"issueId\": \"I2\"}",
  "in": {
   "type": "object",
   "additionalProperties": false,
@@ -15,6 +15,7 @@
    "question",
    "documentId",
    "sectionId",
+   "through",
    "offset",
    "query",
    "issueId"
@@ -33,6 +34,13 @@
     "maxLength": 64
    },
    "sectionId": {
+    "type": [
+     "string",
+     "null"
+    ],
+    "maxLength": 16
+   },
+   "through": {
     "type": [
      "string",
      "null"

@@ -67,9 +67,13 @@ func (e *Engine) execute(ctx context.Context, r *run) error {
 	if err != nil {
 		return err
 	}
-	a := Allocate(e.cfg.BudgetCalls)
-	r.b = agent.NewBudget(e.cfg.BudgetCalls, e.cfg.BudgetUSD, a.Reserve+a.Meta)
+	r.b = agent.NewBudget(e.cfg.BudgetCalls, e.cfg.BudgetUSD, 0)
 	r.b.Charge(spent)
+	cs, err := e.classSpend(ctx, r.t.ID)
+	if err != nil {
+		return err
+	}
+	r.keep(Allocate(e.cfg.BudgetCalls, e.cfg.BudgetUSD), cs)
 	rt, err := e.runtime(r)
 	if err != nil {
 		return e.fail(ctx, r, "internal", err)
@@ -96,6 +100,11 @@ func (e *Engine) execute(ctx context.Context, r *run) error {
 		if err := e.db.QueryRowContext(ctx, `SELECT coalesce(max(step), 0) FROM task_steps WHERE task_id = $1`, r.t.ID).Scan(&last); err != nil {
 			return err
 		}
+		if last, err = e.review(ctx, rt, lead, call, r, last); ctx.Err() != nil || errors.Is(err, errLease) {
+			return err
+		} else if err != nil {
+			return e.fail(ctx, r, "", err)
+		}
 		res, err = rt.Invoke(ctx, lead, call, "finish", json.RawMessage(`{"op":"submit","limitations":null}`), r.b, false, last+1)
 		if err == nil && res.Final {
 			return e.finished(ctx, r)
@@ -108,11 +117,28 @@ func (e *Engine) execute(ctx context.Context, r *run) error {
 	return e.fail(ctx, r, "", err)
 }
 
+// review runs the committee from the cycle the budget kept back when a stopped run's draft has
+// changed since its last review (or was never reviewed), so the delivered draft is always the one
+// the critics read; their open findings reach Limitations through finish. It returns the last step.
+func (e *Engine) review(ctx context.Context, rt *agent.Runtime, lead agent.Agent, call agent.Call, r *run, last int) (int, error) {
+	secs, err := load[Section](ctx, e, r.t.ID, kSection)
+	cyc, cerr := load[Cycle](ctx, e, r.t.ID, kCycle)
+	if err = cmpErr(err, cerr); err != nil || len(secs) == 0 || len(cyc) > 0 && cyc[len(cyc)-1].Version == version(secs) {
+		return last, err
+	}
+	_, err = rt.Invoke(ctx, lead, call, "committee", json.RawMessage(`{}`), r.b, false, last+1)
+	if ctx.Err() != nil || errors.Is(err, errLease) || modelOrJournal(err) {
+		return last, cmpErr(ctx.Err(), err)
+	}
+	return last + 1, nil // a refused or failed committee is in the step log; finish discloses the unreviewed draft
+}
+
 // brief is the lead's first message: the request, the matter's documents and the packs.
 func (e *Engine) brief(ctx context.Context, t Task) (json.RawMessage, error) {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Request from the lawyer:\n%s\n\nJurisdiction: %s. Matter: %s. Budget: %d model calls.\n\nThe matter's documents (use these ids):\n",
-		t.Description, cmpStr(t.Jurisdiction != "", t.Jurisdiction, "not stated"), t.MatterNumber, e.cfg.BudgetCalls)
+	fmt.Fprintf(&b, "Request from the lawyer:\n%s\n\nJurisdiction: %s. Matter: %s. Budget: %d model calls or $%.2f, whichever runs out first; "+
+		"evidence may spend half, and Go keeps back the drafting share, one committee review and finish.\n\nThe matter's documents (use these ids):\n",
+		t.Description, cmpStr(t.Jurisdiction != "", t.Jurisdiction, "not stated"), t.MatterNumber, e.cfg.BudgetCalls, e.cfg.BudgetUSD)
 	for _, id := range t.DocumentIDs {
 		d, err := e.docs.Get(ctx, t.DocumentIDs, id)
 		if err != nil {
