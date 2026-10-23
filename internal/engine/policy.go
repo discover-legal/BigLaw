@@ -158,11 +158,12 @@ func (r *run) fallbackPlan(ctx context.Context) error {
 	return r.e.write(ctx, r.t.ID, kNote, "plan", "The lead recorded no plan within its plan budget, so the practice packs' checklist was used as the plan.", false)
 }
 
-// funded reports whether the run can still pay for a fix stretch beside the committee cycle and
-// reserve it keeps back, in calls and in USD (unspent: finish's own grant holds all the free USD,
-// and held of its calls, which count as free).
-func (r *run) funded(b *agent.Budget, held int) bool {
+// funded reports whether the run can still pay for a fix stretch beside the committee cycle,
+// reserve and (until it has run) coverage pass it keeps back, in calls and in USD (unspent: finish's
+// own grant holds all the free USD, and held of its calls, which count as free).
+func (r *run) funded(b *agent.Budget, held int, covered bool) bool {
 	calls, _ := b.RemainingBeside(agent.LevelWork, agent.Grant{Calls: held})
 	a := Allocate(r.e.cfg.BudgetCalls, r.e.cfg.BudgetUSD)
-	return calls >= a.FixMin && a.USD-b.Spent().USD-a.CycleUSD-a.dollars(a.Reserve+a.Meta) >= a.dollars(a.FixMin)
+	cover := map[bool]float64{false: a.dollars(a.Cover)}[covered]
+	return calls >= a.FixMin && a.USD-b.Spent().USD-a.CycleUSD-cover-a.dollars(a.Reserve+a.Meta) >= a.dollars(a.FixMin)
 }

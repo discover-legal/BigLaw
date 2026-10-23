@@ -976,7 +976,9 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
   share kept for it; then the committee reviews the changed draft (inside a passing `submit`; a run
   finishing from its reserve runs the pass as a step before its last review), and each issue still
   touched is disclosed in Limitations ("Coverage: I6 (…) was not analysed: …";
-  `TestCoveragePassFromTheReserve`, `TestCoveragePassOnSubmit`). P7: a `submit` within 2
+  `TestCoveragePassFromTheReserve`, `TestCoveragePassOnSubmit`). `finish`'s grant holds its meta
+  call plus the pass's and one review's calls (so a crash mid-finish loses no more), and P6/P7's
+  "funded" counts them, and the pass's USD until it has run, as kept (`TestCoverageShareKept`). P7: a `submit` within 2
   calls of a committee whose HIGH/MEDIUM findings were resolved without new work is refused once
   per cycle, while funded, with the instruction to fix properly and run the committee again. `submit` then renders: sections in plan order (summaries never), handles substituted
   outside quotes only, process language and orphan fragments stripped, repeated blocks dropped,

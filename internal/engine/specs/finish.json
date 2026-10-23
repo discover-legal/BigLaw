@@ -2,7 +2,7 @@
  "name": "finish",
  "kind": "go",
  "class": "free",
- "maxTurns": 1000,
+ "maxTurns": 1,
  "final": true,
  "solo": [
   "*"

@@ -20,15 +20,22 @@ import (
 // (lint, coverage, the P6 preconditions); submit renders and opens the gates only when they pass,
 // or when the run is finishing from its reserve (budget or max steps), which discloses instead.
 type finish struct {
-	e    *Engine
-	rt   *agent.Runtime
-	r    *run
-	held int // calls this finish call's own grant holds beyond its meta call: free for the run's checks
+	e       *Engine
+	rt      *agent.Runtime
+	r       *run
+	held    int  // calls this finish call's own grant holds beyond its meta call: free for the run's checks
+	covered bool // the coverage pass has run (its kept share is free again)
 }
 
 func (e *Engine) finishTool(rt *agent.Runtime, r *run) agent.Tool { return finish{e: e, rt: rt, r: r} }
 
-func (f finish) Spec() agent.Spec { return spec("finish") }
+// Spec is finish's spec with the calls one submit may spend: its meta call, plus the coverage pass
+// and the review of its redrafts (the shares kept for them), so a crash mid-finish loses no more.
+func (f finish) Spec() agent.Spec {
+	s, a := spec("finish"), Allocate(f.e.cfg.BudgetCalls, f.e.cfg.BudgetUSD)
+	s.MaxTurns += a.Cover + a.Cycle
+	return s
+}
 
 type finishErr struct {
 	Code   string `json:"code"`
@@ -54,7 +61,11 @@ type limitation struct {
 }
 
 func (f finish) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
-	f.held = max(0, c.Budget.Calls-1) // its grant holds every free call (the coverage pass's, the review's)
+	f.held = max(0, c.Budget.Calls-1) // its grant holds the coverage pass's and the review's calls too
+	var err error
+	if f.covered, err = f.e.covered(ctx, c.TaskID); err != nil {
+		return agent.Result{}, err
+	}
 	var in struct {
 		Op          string
 		Limitations []limitation
@@ -87,7 +98,7 @@ func (f finish) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 			if spent, err = f.cover(ctx, c); err != nil {
 				return agent.Result{Usage: spent}, err
 			}
-			f.held = max(0, c.Budget.Calls-spent.Calls-1)
+			f.held, f.covered = max(0, c.Budget.Calls-spent.Calls-1), true
 			if rep, err = f.check(ctx, in.Limitations); err != nil {
 				return agent.Result{Usage: spent}, err
 			} else if !rep.Ready {
@@ -258,7 +269,7 @@ func (f finish) check(ctx context.Context, limits []limitation) (report, error) 
 }
 
 // funded is the run's funded (P6, P7) as if this finish call held only its own call.
-func (f finish) funded() bool { return f.r.b == nil || f.r.funded(f.r.b, f.held) }
+func (f finish) funded() bool { return f.r.b == nil || f.r.funded(f.r.b, f.held, f.covered) }
 
 // escalate is P7: a submit within 2 calls of a committee that left HIGH/MEDIUM findings open is
 // refused once per cycle with the uncompromising instruction.
