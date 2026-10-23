@@ -809,8 +809,16 @@ The memo workflow (§ Memo workflow) drives these. What PR 4a ships, all tested 
   `Runtime.ChatWithin`, so it never spends past the grant's calls or USD; the quote and the passage
   each fenced as untrusted text, fence markers inside them neutralised). A document outside the call's
   ids is "not found".
-- **`numbers`**: `calc` (exact decimals: `sum`, `diff`, `ratio`, `pct`, `date_add`, `date_diff`,
-  `business_days` with the caller's holidays) over verified finding values (`F12.v1`) or literals; a
+- **`numbers`**: `calc` (exact decimals: `sum`, `diff`, `ratio`, `pct`, `product` (a percentage
+  counts as its fraction: 35% of $612,400 is $214,340), `date_add`, `date_diff`, `business_days`
+  with the caller's holidays; a negative day count counts back; `date_add` with holidays set, even
+  `[]`, rolls a result on a weekend or holiday to the next day that is not, backward for a negative
+  count, as FRCP 6(a)(1)(C) and 6(a)(5) do, the worksheet showing the raw date) over verified finding
+  values (`F12.v1`, the form extraction results, `ledger` and `handles` show; also read: `[F12].v1`,
+  `f12.V1`, `F12 v1`, `F12.d1` = its first date value, a bare `F12` = its only value) or literals (a
+  literal that is plainly a full date or "21 days" needs no unit; a count before a date is swapped).
+  What cannot be read is an error listing the finding's values by ref, with a call that works
+  (`TestCalcAcceptsWhatModelsSend`); a
   worksheet id is a hash of its steps; a quarantined or unknown finding is refused, never 0. Money is
   USD only when its unit is empty, `$`, `usd` or `dollars`; another currency keeps its unit, so a sum
   across currencies is refused. Date differences are exact over any span.

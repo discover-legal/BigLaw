@@ -271,3 +271,68 @@ func TestCalculateBusinessDaysRefusesReversedDates(t *testing.T) {
 		t.Fatalf("reversed dates: %v", err)
 	}
 }
+
+// TestCalcAcceptsWhatModelsSend (bench: the lead sent "F30.d1"-style refs, a negative day count
+// and a deadline that lands on a holiday, and every call failed or was wrong): unambiguous forms
+// are read, a court deadline rolls off weekends and holidays (forward after an event, back before
+// one), "35% of" multiplies, and what cannot be read says how to send it.
+func TestCalcAcceptsWhatModelsSend(t *testing.T) {
+	fs := []Finding{
+		{FID: "F30", Verified: true, Values: []Value{{Metric: "served", Value: "10/21/2026"}}},
+		{FID: "F31", Verified: true, Values: []Value{{Metric: "hearing", Value: "December 3, 2026"}, {Metric: "report lead time", Value: "7 days"}}},
+		{FID: "F32", Verified: true, Values: []Value{{Metric: "shortfall", Value: "$612,400"}, {Metric: "cap", Value: "35%"}}},
+	}
+	holidays := []string{"2026-11-11", "2026-11-26"}
+	days, date := ref("days"), ref("date")
+	for _, c := range []struct {
+		name, fn string
+		ops      []Operand
+		hol      []string
+		want     string
+	}{
+		{"F30.d1 is the date", "date_add", []Operand{{Ref: ref("F30.d1")}, {Literal: ref("21"), Unit: days}}, nil, "2026-11-11"},
+		{"[F30].v1, a literal \"21 days\"", "date_add", []Operand{{Ref: ref("[F30].v1")}, {Literal: ref("21 days")}}, nil, "2026-11-11"},
+		{"a bare ref names a finding's only value", "date_diff", []Operand{{Literal: ref("2026-10-09")}, {Ref: ref("f30")}}, nil, "12"},
+		{"answer: 21 days lands on Veterans Day, rolls to Thursday", "date_add", []Operand{{Ref: ref("F30.v1")}, {Literal: ref("21"), Unit: days}}, holidays, "2026-11-12"},
+		{"count then date", "date_add", []Operand{{Literal: ref("21"), Unit: days}, {Ref: ref("F30.v1")}}, holidays, "2026-11-12"},
+		{"report: 7 days before the hearing is Thanksgiving, rolls back", "date_add", []Operand{{Ref: ref("F31.v1")}, {Literal: ref("-7"), Unit: days}}, holidays, "2026-11-25"},
+		{"a value of days by ref", "business_days", []Operand{{Ref: ref("F31.d1")}, {Ref: ref("F31.v2")}}, holidays, "2026-12-14"},
+		{"35% of the shortfall", "product", []Operand{{Ref: ref("F32.v1")}, {Ref: ref("F32 v2")}}, nil, "214340"},
+		{"a typed date without its unit", "date_add", []Operand{{Literal: ref("2026-09-25")}, {Literal: ref("30"), Unit: days}}, nil, "2026-10-25"},
+	} {
+		w, err := Calc(fs, c.fn, c.ops, c.hol)
+		if err != nil || w.Result != c.want {
+			t.Errorf("%s: %q %v, want %s", c.name, w.Result, err, c.want)
+		}
+	}
+	w, _ := Calc(fs, "date_add", []Operand{{Ref: ref("F30.v1")}, {Literal: ref("21"), Unit: days}}, holidays)
+	if len(w.Steps) != 5 || w.Steps[2] != (SheetStep{"raw date", "2026-11-11 (Wednesday, a holiday)"}) || w.Steps[3].Step != "rolled forward" {
+		t.Errorf("the worksheet shows the raw date and the roll: %+v", w.Steps)
+	}
+	if w, _ := Calc(fs, "product", []Operand{{Ref: ref("F32.v1")}, {Ref: ref("F32.v2")}}, nil); w.Unit != "USD" {
+		t.Errorf("35%% of dollars is dollars: %+v", w)
+	}
+	for _, c := range []struct {
+		fn   string
+		ops  []Operand
+		want []string
+	}{
+		{"date_add", []Operand{{Ref: ref("F32.d1")}, {Literal: ref("1"), Unit: days}}, []string{"F32 has 2 values", "F32.v1 = $612,400", `{"ref": "F32.v1"`}},
+		{"date_add", []Operand{{Literal: ref("2026-11-12"), Unit: date}, {Literal: ref("2026-11-13"), Unit: date}}, []string{"it got a date, a date", `"fn": "date_add"`, `"unit": "days"`}},
+		{"product", []Operand{{Ref: ref("F32.v1")}, {Ref: ref("F32.v1")}}, []string{"at most one of them not a percentage"}},
+		{"sum", []Operand{{}}, []string{`{"ref": "F12.v1"`}},
+	} {
+		if _, err := Calc(fs, c.fn, c.ops, nil); err == nil || !containsAll(err.Error(), c.want) {
+			t.Errorf("%s %+v: %v, want %q", c.fn, c.ops, err, c.want)
+		}
+	}
+}
+
+func containsAll(s string, subs []string) bool {
+	for _, x := range subs {
+		if !strings.Contains(s, x) {
+			return false
+		}
+	}
+	return true
+}

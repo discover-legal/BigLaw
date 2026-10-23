@@ -8,6 +8,7 @@ import (
 	"embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"slices"
 	"strings"
@@ -55,11 +56,26 @@ func prompt(name string) string {
 // MemoVisible is the memo lead's tool list (README § Tools): 11 tools, in a fixed order.
 var MemoVisible = []string{"retrieve", "ledger", "sweep", "extract_facts", "analyze_issue", "check_deviation", "numbers", "join_discrepancies", "draft_section", "committee", "finish"}
 
-// hookOut is what an evidence subagent returns to its caller once Go has verified its findings.
+// hookOut is what an evidence subagent returns to its caller once Go has verified its findings,
+// each kept value under the ref numbers takes ("F3.v1").
 var hookOut = json.RawMessage(`{"type":"object","additionalProperties":false,"required":["findings","dropped","notes"],"properties":{
- "findings":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["fid","issueId","claim","verified","methods"],
-  "properties":{"fid":{"type":"string"},"issueId":{"type":"string"},"claim":{"type":"string"},"verified":{"type":"boolean"},"methods":{"type":"array","items":{"type":"string"}}}}},
+ "findings":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["fid","issueId","claim","verified","methods","values"],
+  "properties":{"fid":{"type":"string"},"issueId":{"type":"string"},"claim":{"type":"string"},"verified":{"type":"boolean"},"methods":{"type":"array","items":{"type":"string"}},
+   "values":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["ref","value"],"properties":{"ref":{"type":"string"},"value":{"type":"string"}}}}}}},
  "dropped":{"type":"integer"},"notes":{"type":"array","items":{"type":"string"}}}}`)
+
+// admitted is a recorded finding as its caller sees it: what it claims, how its quotes verified,
+// and its values by ref.
+func admitted(f Finding) map[string]any {
+	methods, values := []string{}, []map[string]string{}
+	for _, c := range f.Citations {
+		methods = append(methods, c.Method)
+	}
+	for i, v := range f.Values {
+		values = append(values, map[string]string{"ref": fmt.Sprintf("%s.v%d", f.FID, i+1), "value": v.Value})
+	}
+	return map[string]any{"fid": f.FID, "issueId": f.IssueID, "claim": f.Claim, "verified": f.Verified, "methods": methods, "values": values}
+}
 
 // runtime builds the run's registry and runtime: the docs and analysis tools, the engine's Go
 // tools, and the subagents from their specs; evidence subagents and draft_section behind Go hooks.
@@ -333,11 +349,7 @@ func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 		if err := e.write(ctx, c.TaskID, kFinding, f.FID, f, false); err != nil {
 			return out, 0, err
 		}
-		methods := []string{}
-		for _, c := range f.Citations {
-			methods = append(methods, c.Method)
-		}
-		out.Findings = append(out.Findings, map[string]any{"fid": f.FID, "issueId": f.IssueID, "claim": f.Claim, "verified": f.Verified, "methods": methods})
+		out.Findings = append(out.Findings, admitted(f))
 		if !f.Verified {
 			out.Dropped++
 		}

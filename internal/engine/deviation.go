@@ -144,7 +144,7 @@ func (e *Engine) deviations(ctx context.Context, rt *agent.Runtime, c agent.Call
 		if err := e.write(ctx, c.TaskID, kFinding, f.FID, f, false); err != nil {
 			return out, 0, err
 		}
-		out.Findings = append(out.Findings, map[string]any{"fid": f.FID, "issueId": f.IssueID, "claim": f.Claim, "verified": true, "methods": []string{ctrl.Method}})
+		out.Findings = append(out.Findings, admitted(f))
 	}
 	if checked == 0 {
 		return out, 1, nil

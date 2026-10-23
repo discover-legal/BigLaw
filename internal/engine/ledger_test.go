@@ -77,6 +77,10 @@ func TestExtractFactsTypedValues(t *testing.T) {
 	if len(fs) != 1 || len(fs[0].Values) != 1 || fs[0].Values[0].Value != "$644,910" {
 		t.Fatalf("values %+v", fs)
 	}
+	// The lead sees each kept value under the ref numbers takes (bench: it guessed "F30.d1").
+	if ex := f.outputs(v.ID, "extract_facts"); len(ex) != 1 || !strings.Contains(ex[0], `"values":[{"ref":"F1.v1","value":"$644,910"}]`) {
+		t.Fatalf("extract_facts result %q", ex)
+	}
 }
 
 // TestLedgerBucketsFindingsByIssue: a finding belongs to the issue whose call produced it, and
