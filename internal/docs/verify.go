@@ -178,6 +178,17 @@ func bestSpan(text, quote string) (start, end int, overlap float64) {
 	return start, end, overlap
 }
 
+// Closest is the passage of text that best matches quote (the run of the quote's length in words
+// holding most of its words), at most max bytes, or "" when no word matches: what to quote instead
+// of a paraphrase.
+func Closest(text, quote string, max int) string {
+	start, end, overlap := bestSpan(text, quote)
+	if overlap == 0 {
+		return ""
+	}
+	return strings.ToValidUTF8(text[start:min(end, start+max)], "")
+}
+
 // runeStart clamps i into text and moves it back to a rune boundary.
 func runeStart(text string, i int) int {
 	i = min(max(i, 0), len(text))

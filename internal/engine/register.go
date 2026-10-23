@@ -188,6 +188,12 @@ func (h hooked) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 		for _, p := range SelectPacks(str("jurisdiction"), "") {
 			in["packText"] = str("packText") + "\n\n" + p.Body
 		}
+	case "check_deviation":
+		src, err := h.e.quotedRequirement(ctx, c)
+		if err != nil {
+			return agent.Result{}, err
+		}
+		in["requirement"] = src
 	case "draft_section":
 		var err error
 		if draft, err = h.e.draftRequest(ctx, c.TaskID, c.DocumentIDs, str("issueId"), c.Input); err != nil {
