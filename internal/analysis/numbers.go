@@ -96,9 +96,6 @@ func valueOf(findings []Finding, ref string) (Value, string, error) {
 	for j, v := range vs {
 		list = append(list, fmt.Sprintf("%s.v%d = %s", fid, j+1, v.Value)+map[bool]string{true: " (as of " + v.Date + ")"}[v.Date != ""])
 	}
-	if len(list) == 0 {
-		return Value{}, "", fmt.Errorf("%s has no values: cite its quote, or give the figure as a literal with its unit", fid)
-	}
 	return Value{}, "", fmt.Errorf("%q is not a value reference here: %s has %d values, %s; send one of those refs, e.g. {\"ref\": \"%s.v1\", \"literal\": null, \"unit\": null} (an as-of date is not a value: give it as a literal with unit \"date\")",
 		ref, fid, len(vs), strings.Join(list, ", "), fid)
 }
@@ -120,6 +117,9 @@ func resolve(findings []Finding, o Operand) (operand, error) {
 	unit := cmp.Or(map[Class]string{"Percentage": "%", "Date": "date"}[ClassOf(v)], strings.ToLower(v.Unit))
 	if ClassOf(v) == "Money" && slices.Contains([]string{"", "$", "usd", "dollars"}, unit) {
 		unit = "USD"
+	}
+	if strings.Contains(unit, "day") { // "calendar days", "day"
+		unit = "days"
 	}
 	if m := daysRe.FindStringSubmatch(strings.TrimSpace(v.Value)); m != nil && (unit == "" || unit == "days" || unit == "count") {
 		v.Value, unit = m[1], "days"
@@ -240,6 +240,9 @@ func Calc(findings []Finding, fn string, ops []Operand, holidays []string) (Work
 			if x.unit != "%" {
 				w.Unit = x.unit
 			}
+		}
+		if w.Unit == "%" { // percentages only: the product is a percentage again
+			r.Mul(r, big.NewRat(100, 1))
 		}
 		w.Result = Decimal(r)
 	case "date_add":

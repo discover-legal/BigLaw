@@ -386,7 +386,7 @@ func TestPhaseSharesHoldInUSD(t *testing.T) {
 	}
 	scripts := f.with(map[string][]model.Reply{
 		"lead": {calls(plan(issue("I1", "Deliveries?", "Requirement"))), calls(tc("sweep", m{"over": "sections", "documentIds": nil})),
-			calls(draft("I1", "F1")), calls(committee()), calls(finishCall("submit"))},
+			calls(tc("sweep", m{"over": "sections", "documentIds": nil})), calls(draft("I1", "F1")), calls(committee()), calls(finishCall("submit"))},
 		"extract_facts": ex,
 		"draft_section": {costly(section("The supplier must deliver lot 1 on time [F1].", "Delivery duty [F1]."), 0.05)},
 	})
@@ -395,7 +395,8 @@ func TestPhaseSharesHoldInUSD(t *testing.T) {
 	f.step(context.Background())
 	v := f.get(task.ID)
 	sw, ds, cm := f.outputs(v.ID, "sweep"), f.outputs(v.ID, "draft_section"), f.outputs(v.ID, "committee")
-	if len(sw) != 1 || !strings.Contains(sw[0], `"visited":7`) || !strings.Contains(sw[0], `"incomplete":true`) {
+	if len(sw) != 2 || !strings.Contains(sw[0], `"visited":7`) || !strings.Contains(sw[0], `"incomplete":true`) ||
+		!strings.HasPrefix(sw[1], "refused") || !strings.Contains(sw[1], "of its 52 calls ($0.70 of $0.69)") { // P4 refuses on USD: 7 of 52 calls spent
 		t.Fatalf("sweep %q", sw)
 	}
 	if len(ds) != 1 || !strings.HasPrefix(ds[0], "committed") || len(cm) != 1 || strings.Contains(cm[0], "did not return") || stop(v) != "awaiting_gate/finished" {

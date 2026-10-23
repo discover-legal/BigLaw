@@ -72,6 +72,10 @@ func TestHandlesSubstitutedOutsideQuotesOnly(t *testing.T) {
 	if out != `Greystone claims $644,910; the record says “the {Zephyr} code is reserved” and "{Zephyr} stays".` {
 		t.Fatalf("%s", out)
 	}
+	// An unknown handle beside a known one: the known one is still substituted (critics read it).
+	if out := substituteOutsideQuotes("Greystone claims {Zephyr}, not {Quasar}.", figs); out != "Greystone claims $644,910, not {Quasar}." {
+		t.Fatalf("%s", out)
+	}
 }
 
 func TestRendererUsesDrafterHandleSet(t *testing.T) {
@@ -113,6 +117,16 @@ func TestCurrencyFromQuote(t *testing.T) {
 	for _, c := range [][2]string{{"1,200", "EUR"}, {"5", ""}, {"40", "CHF"}, {"£30", "GBP"}, {"7", ""}} {
 		if got := currencyOf(c[0], q); got != c[1] {
 			t.Errorf("currencyOf(%q) = %q, want %q", c[0], got, c[1])
+		}
+	}
+}
+
+// TestSheetValueAsTheMemoStatesIt: a worksheet result reads as the memo would state it.
+func TestSheetValueAsTheMemoStatesIt(t *testing.T) {
+	for in, want := range map[[2]string]string{{"2026-11-12", "date"}: "November 12, 2026", {"214340", "USD"}: "$214,340", {"-1234.5", "USD"}: "-$1,234.5",
+		{"17.5", "%"}: "17.5%", {"14", "days"}: "14 days", {"1000", ""}: "1,000", {"1250", "GBP"}: "1,250 GBP"} {
+		if got := sheetValue(in[0], in[1]); got != want {
+			t.Errorf("sheetValue%q = %q, want %q", in, got, want)
 		}
 	}
 }

@@ -17,8 +17,9 @@ import (
 
 var (
 	// refCite is a rule, section, paragraph or exhibit number ("Rule 6(a)(1)(C)", "Section 4.3",
-	// "Fed. R. Civ. P. 7.1", "§ 9.2"): a locator, not a figure (G8 traces quantities and dates).
-	refCite = regexp.MustCompile(`(?i)(?:\b(?:rules?|sections?|secs?\.|articles?|arts?\.|paragraphs?|paras?\.|clauses?|schedules?|exhibits?)\s+|§+\s*|¶+\s*|\bR\.\s*(?:Civ|Crim|App|Evid|Bankr)\.\s*P\.\s*)\d+[\w.()\-]*`)
+	// "Fed. R. Civ. P. 7.1", "§ 9.2"): a locator, not a figure (G8 traces quantities and dates). At
+	// most four digits a part, so no amount hides behind "Rule 214340".
+	refCite = regexp.MustCompile(`(?i)(?:\b(?:rules?|sections?|secs?\.|articles?|arts?\.|paragraphs?|paras?\.|clauses?|schedules?|exhibits?)\s+|§+\s*|¶+\s*|\bR\.\s*(?:Civ|Crim|App|Evid|Bankr)\.\s*P\.\s*)\d{1,4}(?:\.\d{1,4})*\b(?:\([0-9A-Za-z]{1,4}\))*`)
 	numRe   = regexp.MustCompile(`\d[\d,]*(?:\.\d+)?`)
 	dateRe  = regexp.MustCompile(`(?i)\b(?:\d{1,2}\s+)?(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?(?:\s+\d{1,2},?)?\s+(?:19|20)\d\d\b|\b(?:19|20)\d\d-\d\d(?:-\d\d)?\b|\b\d{1,2}/\d{1,2}/(?:19|20)\d\d\b|(?:§\s*)?\b(?:19|20)\d\d\b`)
 )
@@ -160,10 +161,7 @@ func handlesOf(figs []Fig) []analysis.Handle {
 // from the handle set the drafter was given; an unknown handle stays as written (the lint names it).
 func substituteOutsideQuotes(text string, figs []Fig) string {
 	return outsideQuotes(text, func(s string) string {
-		out, err := analysis.Substitute(s, handlesOf(figs))
-		if err != nil {
-			return s
-		}
+		out, _ := analysis.Substitute(s, handlesOf(figs)) // an unknown handle stays as written; the rest are substituted
 		return out
 	})
 }
@@ -189,6 +187,12 @@ func lint(issueID string, s Section, usable map[string]Finding, sheets []analysi
 		}
 		return x
 	})
+	for _, q := range quotedRe.FindAllString(s.Markdown, -1) { // bench: "administered by {Heron} in {Indigo}" in a verbatim quote
+		if i := slices.IndexFunc(s.Handles, func(f Fig) bool { return strings.Contains(q, f.Handle) }); i >= 0 {
+			out = append(out, issueID+": "+s.Handles[i].Handle+" is inside a quotation, where Go never substitutes it: quote the document's own words there, or move the handle outside the quotation marks")
+			break
+		}
+	}
 	var ground strings.Builder
 	for fid := range cited {
 		f := usable[fid]
@@ -226,11 +230,8 @@ func hint(n string, hs []Fig, usable map[string]Finding, cited map[string]bool) 
 		d, isDate := analysis.ParseDate(n)
 		return !isDate && slices.Contains(ns, n) || isDate && strings.Contains(n, "-") && slices.ContainsFunc(ds, func(k string) bool { x, _ := analysis.ParseDate(k); return x == d })
 	}
-	for _, h := range hs {
-		switch {
-		case h.FID == "" && states(h.Value):
-			return "write the worksheet handle " + h.Handle + " that computes it instead of typing it"
-		case h.FID != "" && states(h.Value):
+	for _, h := range hs { // a worksheet's value is traced already, so this is a finding's handle
+		if h.FID != "" && states(h.Value) {
 			return "write its handle " + h.Handle + " and cite [" + h.FID + "], the verified finding that states it"
 		}
 	}
@@ -301,16 +302,21 @@ func (e *Engine) handleSet(ctx context.Context, taskID string, use []Finding) ([
 		}
 	}
 	for _, w := range ws {
-		label := ""
-		for _, st := range w.Steps[:max(0, len(w.Steps)-1)] {
-			label += "; " + strings.TrimPrefix(st.Step+" ", "operand ") + st.Value
-		}
-		if len(w.Steps) > 0 {
-			label = w.Steps[len(w.Steps)-1].Step + ": " + strings.TrimPrefix(label, "; ")
-		}
-		hs = append(hs, analysis.Handle{Handle: "{" + w.WID + "}", Ref: w.WID, Label: label, Value: sheetValue(w.Result, w.Unit)})
+		hs = append(hs, analysis.Handle{Handle: "{" + w.WID + "}", Ref: w.WID, Label: sheetLabel(w), Value: sheetValue(w.Result, w.Unit)})
 	}
 	return hs, nil
+}
+
+// sheetLabel says what a worksheet computes from what: "date_add: 1 F1.v1 = … date; 2 21 days".
+func sheetLabel(w analysis.Worksheet) string {
+	if len(w.Steps) == 0 {
+		return ""
+	}
+	var parts []string
+	for _, st := range w.Steps[:len(w.Steps)-1] {
+		parts = append(parts, strings.TrimPrefix(st.Step+" ", "operand ")+st.Value)
+	}
+	return w.Steps[len(w.Steps)-1].Step + ": " + strings.Join(parts, "; ")
 }
 
 // sheetValue is a worksheet result as the memo states it: a date in words, money with its sign

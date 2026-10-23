@@ -128,8 +128,14 @@ func (e *Engine) render(ctx context.Context, t Task, limits []string, meta strin
 	secs, serr := load[Section](ctx, e, t.ID, kSection)
 	all, ferr := load[Finding](ctx, e, t.ID, kFinding)
 	use, uerr := e.usable(ctx, t.ID)
-	if err = cmpErr(err, serr, ferr, uerr); err != nil {
+	ws, werr := e.worksheets(ctx, t.ID)
+	if err = cmpErr(err, serr, ferr, uerr, werr); err != nil {
 		return deliverable{}, err
+	}
+	for _, w := range ws { // a calculation over typed inputs (a period, a rate) rests on the lead's figures too
+		if w.LiteralOperands && slices.ContainsFunc(secs, func(s Section) bool { return strings.Contains(s.Markdown, "{"+w.WID+"}") }) {
+			limits = append(limits, fmt.Sprintf("%s is a calculation from typed inputs as well as verified values (%s): check those inputs.", sheetValue(w.Result, w.Unit), sheetLabel(w)))
+		}
 	}
 	var b strings.Builder
 	title, _, _ := strings.Cut(strings.TrimSpace(t.Description), "\n")

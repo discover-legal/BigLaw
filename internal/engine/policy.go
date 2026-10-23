@@ -119,7 +119,11 @@ func (e *Engine) classSpend(ctx context.Context, taskID string) (map[string]agen
 		if err := q.Scan(&tool, &u.Calls, &u.USD); err != nil {
 			return nil, err
 		}
-		for _, k := range []string{specs[tool].Class, "*", cmpStr(tool == "sweep", "sweep", "-")} {
+		keys := []string{specs[tool].Class, "*"}
+		if tool == "sweep" {
+			keys = append(keys, "sweep")
+		}
+		for _, k := range keys {
 			v := out[k]
 			v.Add(u)
 			out[k] = v

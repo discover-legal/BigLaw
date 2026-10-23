@@ -298,7 +298,8 @@ func TestCalcAcceptsWhatModelsSend(t *testing.T) {
 		{"report: 7 days before the hearing is Thanksgiving, rolls back", "date_add", []Operand{{Ref: ref("F31.v1")}, {Literal: ref("-7"), Unit: days}}, holidays, "2026-11-25"},
 		{"a value of days by ref", "business_days", []Operand{{Ref: ref("F31.d1")}, {Ref: ref("F31.v2")}}, holidays, "2026-12-14"},
 		{"35% of the shortfall", "product", []Operand{{Ref: ref("F32.v1")}, {Ref: ref("F32 v2")}}, nil, "214340"},
-		{"a typed date without its unit", "date_add", []Operand{{Literal: ref("2026-09-25")}, {Literal: ref("30"), Unit: days}}, nil, "2026-10-25"},
+		{"a typed date without its unit", "date_add", []Operand{{Literal: ref("2026-09-25")}, {Literal: ref("30"), Unit: ref("calendar days")}}, nil, "2026-10-25"},
+		{"a percentage of a percentage", "product", []Operand{{Ref: ref("F32.v2")}, {Literal: ref("50"), Unit: ref("%")}}, nil, "17.5"},
 	} {
 		w, err := Calc(fs, c.fn, c.ops, c.hol)
 		if err != nil || w.Result != c.want {
