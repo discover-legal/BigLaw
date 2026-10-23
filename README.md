@@ -1394,7 +1394,7 @@ improvements (after the real Haiku LAB rerun; scripted the same way): `TestSweep
 
 | Budget | Ceiling | Today |
 |---|---:|---:|
-| Go production lines (physical lines, non-`_test.go`, test-support packages included) | reported, no limit (owner decision 17) | 12,013 |
+| Go production lines (physical lines, non-`_test.go`, test-support packages included) | reported, no limit (owner decision 17) | 12,728 |
 | Packages under `internal/`, test-support packages excluded | 12 | 8 (`agent`, `analysis`, `api`, `docs`, `docs/ooxml`, `engine`, `model`, `store`; `store/storetest` is test support) |
 | Direct Go dependencies | 3 | 2 (`github.com/lib/pq`, `github.com/ledongthuc/pdf`) |
 | Runtime environment variables | 20 | 18 |
@@ -1403,7 +1403,7 @@ improvements (after the real Haiku LAB rerun; scripted the same way): `TestSweep
 | Packages without a `_test.go` | 0 | 0 |
 | Lines in any one source file (`.go`, `.py`, `.sql`, `.sh`, `.js`, `.ts`, `.css`; tests included) | 2,000 | 968 (`internal/docs/vision_safety_test.go`) |
 
-**There is no total line ceiling (owner decision 17, 2026-10-23).** `scripts/loc.py` reports the Go production total (12,013) and fails only on the budgets that bound bloat directly: no file over 2,000 lines, ≤ 3 direct deps, ≤ 20 env vars, ≤ 12 internal packages, ≤ 2,400 UI source lines, no untested package. Each PR still reports its lines against its DESIGN budget in its notes. (The ceiling's history, 14,000 → 17,500 through owner decisions 7–16, is in PLAN.) A **test-support package** is one
+**There is no total line ceiling (owner decision 17, 2026-10-23).** `scripts/loc.py` reports the Go production total (12,728) and fails only on the budgets that bound bloat directly: no file over 2,000 lines, ≤ 3 direct deps, ≤ 20 env vars, ≤ 12 internal packages, ≤ 2,400 UI source lines, no untested package. Each PR still reports its lines against its DESIGN budget in its notes. (The ceiling's history, 14,000 → 17,500 through owner decisions 7–16, is in PLAN.) A **test-support package** is one
 whose directory name ends in `test` and that no production file outside it imports, such as
 `storetest`. Under the coordinator's ruling it is left out of the package count, but its lines
 count toward the reported Go total like any other non-`_test.go` file. A `*test` package that
