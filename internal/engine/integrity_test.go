@@ -567,3 +567,42 @@ func TestFigureLintIsBounded(t *testing.T) {
 		t.Fatalf("draft requests %q", reqs)
 	}
 }
+
+// TestFigureLintSkipsLocatorLists (bench, SEC referral: "the figure 9.1 is not traced" for
+// "Sections 7.3 and 9.1", "the figure 206" for "Sections 206(1) and 206(2)", and on the trust task
+// "the figure 304" for "[F304, F305]"): every locator of a list or range is a locator, and a
+// drafter's citation group is split into single citations, so it cites and is no figure; a figure
+// after a list still counts.
+func TestFigureLintSkipsLocatorLists(t *testing.T) {
+	t.Parallel()
+	doc := "1. Trade Allocation\nSection 7.3 of the Manual describes a \"rotation\" methodology for allocating trades.\n\n" +
+		"2. Personal Trading\nEmployees must pre-clear trades in individual securities.\n"
+	f := newFixture(t, doc)
+	d1 := f.docs[0].ID
+	ex := facts(fd("Section 7.3 describes a rotation methodology.", d1, "Section 7.3 of the Manual describes a \"rotation\" methodology for allocating trades"),
+		fd("Employees must pre-clear trades.", d1, "Employees must pre-clear trades in individual securities"))
+	md := "Sections 7.3 and 9.1 of the Manual are deficient [F1, F2]. The Division cites Sections 206(1) and 206(2) and Rules 204-2(a)(3) and 204-2(a)(7) [F1]. " +
+		"§§ 4.2–4.5, clauses 3(a) and 3(b) and paragraphs 12, 14 and 17 are not engaged [F2.v1, F1]."
+	lead := []model.Reply{calls(plan(issue("I1", "What do the compliance policies require?", "RedFlag"))), calls(extract(d1, "allocation", "I1")),
+		calls(draft("I1", "F1", "F2")), calls(committee()), calls(finishCall("submit"))}
+	v := f.run(f.with(map[string][]model.Reply{"lead": lead, "extract_facts": {ex}, "draft_section": {section(md, "s")}}), Config{})
+	fin := strings.Join(f.outputs(v.ID, "finish"), "")
+	out := deref(v.Output)
+	if !strings.Contains(fin, `"lint":[]`) || !strings.Contains(fin, `"accepted":true`) || !strings.Contains(out, "Sections 7.3 and 9.1 of the Manual are deficient [F1] [F2].") ||
+		!strings.Contains(out, "- [F2] Employees must pre-clear trades.") {
+		t.Fatalf("finish %s\n%s", fin, out)
+	}
+	ground := "Section 7.3 of the Manual"
+	for text, want := range map[string]string{
+		"Sections 7.3 and 2,000 shares":             "2000", // a figure after a list is a figure
+		"Section 12 and 500 employees":              "500",  // a singular head has no list
+		"paragraphs 12, 14 and 17 and $9,000":       "9000",
+		"§§ 4.2–4.5 at 2.5% interest":               "2.5",
+		"Section 2,000 of nothing":                  "2000", // a locator is never a figure's head
+		"clauses 3(a) and 3(b) or 3(c); 1,200 rows": "1200",
+	} {
+		if got := Untraced(maskRefs(text), ground, false); len(got) != 1 || got[0] != want {
+			t.Errorf("%q: untraced %q, want only %s", text, got, want)
+		}
+	}
+}
