@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/discover-legal/BigLaw/internal/model"
 )
@@ -55,7 +56,24 @@ const (
 	keepTurns      = 4    // tool results older than this many turns are compacted to a handle
 	maxCallsInTurn = 8    // tool calls run per turn; the rest of a longer answer are dropped, with a note
 	overheadTokens = 1000 // what an endpoint may add around a request (tool formatting) when bounding its cost
+	// maxResult bounds one tool result in a transcript (bench4, SEC: a 682 KB ledger result overflowed
+	// the lead's 200k-token context and the run failed); shrunk is what an over-long retry cuts the
+	// newest results to when compacting the older ones was not enough.
+	maxResult = 100_000
+	shrunk    = 16_000
 )
+
+// clip cuts a tool result to at most n bytes (at a rune boundary) with a note on how to read the rest.
+func clip(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	cut := n
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + fmt.Sprintf("\n[result cut at %d of %d bytes: ask for less at a time (ledger findings: an issueId, or the offset the result names in next; retrieve or extract_facts: a narrower query or one section)]", cut, len(s))
+}
 
 // modelFailure reports a G6 model failure (or a cancellation): it ends the run, never "no finding".
 func modelFailure(err error) bool {
@@ -95,7 +113,7 @@ func (rt *Runtime) Run(ctx context.Context, a Agent, c Call, b *Budget) (Result,
 	msgs := []model.Message{{Role: "system", Content: a.Prompt}, {Role: "user", Content: input}}
 	handles := []string{"", ""} // per message: what an old tool result is compacted to
 	turnOf := []int{0, 0}
-	keep, repaired, step := keepTurns, false, 0
+	keep, repaired, step, shrink := keepTurns, false, 0, false
 	add := func(m model.Message, turn int, handle string) {
 		msgs, turnOf, handles = append(msgs, m), append(turnOf, turn), append(handles, handle)
 	}
@@ -134,6 +152,8 @@ func (rt *Runtime) Run(ctx context.Context, a Agent, c Call, b *Budget) (Result,
 			for i, h := range handles {
 				if h != "" && turnOf[i] <= turn-1-keep {
 					view[i].Content = h
+				} else if text, ok := view[i].Content.(string); ok && shrink && view[i].Role == "tool" {
+					view[i].Content = clip(text, shrunk)
 				}
 			}
 			req := model.Request{Agent: a.Name, Role: a.Role, Model: a.Model, Messages: view, Tools: defs, MaxTokens: cmp.Or(a.MaxTokens, 4096)}
@@ -175,8 +195,8 @@ func (rt *Runtime) Run(ctx context.Context, a Agent, c Call, b *Budget) (Result,
 					}
 				}
 			}
-			if try == 0 && tooLong(err) { // compact every result but the latest turn's, and try once more
-				keep = 1
+			if try < 2 && tooLong(err) { // compact every result but the latest turn's, then cut those too, and try again
+				keep, shrink = 1, try == 1
 				continue
 			}
 			break
@@ -244,7 +264,7 @@ func (rt *Runtime) Run(ctx context.Context, a Agent, c Call, b *Budget) (Result,
 			if err != nil {
 				content = tc.Function.Name + " did not run or failed: " + shown(err, rt.Log)
 			}
-			add(model.Message{Role: "tool", ToolCallID: tc.ID, Content: content}, turn,
+			add(model.Message{Role: "tool", ToolCallID: tc.ID, Content: clip(content, maxResult)}, turn,
 				"[step "+strconv.Itoa(n)+": "+tc.Function.Name+" result compacted ("+strconv.Itoa(len(res.Output))+" bytes); its findings are in the ledger]")
 			if res.Final && err == nil {
 				return res, nil

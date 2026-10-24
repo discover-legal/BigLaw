@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/discover-legal/BigLaw/internal/agent"
 	"github.com/discover-legal/BigLaw/internal/analysis"
@@ -108,6 +109,45 @@ func (e *Engine) quotedRequirement(ctx context.Context, c agent.Call) (string, e
 	}
 	return "", agent.Fail(msg)
 }
+
+// reviewedPassages are the passages of check_deviation's reviewed documents most like its
+// requirement (lexical or hybrid search, at most reviewedMax bytes in all), handed to the subagent
+// so it answers from them instead of spending its turns retrieving them (bench4, trust: all seven
+// calls used their five turns; two ended at the cap without an answer).
+func (e *Engine) reviewedPassages(ctx context.Context, c agent.Call, requirement string) []map[string]string {
+	var in devInput
+	_ = json.Unmarshal(c.Input, &in)
+	var scope []string
+	for _, id := range in.ReviewedDocIDs {
+		if slices.Contains(c.DocumentIDs, id) {
+			scope = append(scope, id)
+		}
+	}
+	out := []map[string]string{}
+	if len(scope) == 0 {
+		return out
+	}
+	q := requirement
+	for len(q) > docs.MaxQuery { // the search's bound is bytes
+		_, n := utf8.DecodeLastRuneInString(q)
+		q = q[:len(q)-n]
+	}
+	hits, err := e.docs.Search(ctx, scope, q, 12, 0)
+	if err != nil {
+		return out // the subagent can still retrieve
+	}
+	size := 0
+	for _, h := range hits {
+		if size += len(h.Text); size > reviewedMax && len(out) > 0 {
+			break
+		}
+		out = append(out, map[string]string{"documentId": h.DocumentID, "sectionId": h.SectionID, "text": h.Text})
+	}
+	return out
+}
+
+// reviewedMax bounds the reviewed passages check_deviation is handed (bytes of text).
+const reviewedMax = 16_000
 
 // nearestMax bounds the passage a refusal quotes: enough to copy a clause, never a page.
 const nearestMax = 300

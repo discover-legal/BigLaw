@@ -232,16 +232,20 @@ func nextID(prefix string, n int) string { return prefix + strconv.Itoa(n+1) }
 
 // ledgerTool is the lead's matter memory: plan, findings, get, resolve, draft_get, relations. A
 // subagent may only read (plan and resolve are the lead's).
+// ledgerPage bounds one page of op findings (bytes of its findings): a page, never the ledger.
+const ledgerPage = 60_000
+
 func (e *Engine) ledgerTool() agent.Tool {
 	return agent.GoTool{S: spec("ledger"), Fn: func(ctx context.Context, c agent.Call) (any, agent.Usage, error) {
 		var in struct {
 			Op, IssueID, FID, Detail, CriticID, Resolution, Note, Entity string
 			Issues                                                       []Issue
+			Offset                                                       int
 		}
 		if err := agent.Decode(c, &in); err != nil {
 			return nil, agent.Usage{}, err
 		}
-		out := map[string]any{"ok": nil, "findings": nil, "finding": nil, "markdown": nil, "relations": nil}
+		out := map[string]any{"ok": nil, "findings": nil, "finding": nil, "markdown": nil, "relations": nil, "next": nil}
 		if c.Depth > 0 && (in.Op == "plan" || in.Op == "resolve") {
 			return nil, agent.Usage{}, agent.Fail("ledger: op " + in.Op + " is the lead's; a subagent may only read (findings, get, draft_get, relations)")
 		}
@@ -277,12 +281,22 @@ func (e *Engine) ledgerTool() agent.Tool {
 				}
 			}
 			out["ok"] = true
-		case "findings":
-			list := []any{}
+		case "findings": // a page at a time (bench4, SEC: 892 findings in full were 682 KB in one result, past the lead's context)
+			list, size, n := []any{}, 0, 0
 			for _, f := range fs {
-				if in.IssueID == "" || f.IssueID == in.IssueID {
-					list = append(list, brief(f))
+				if in.IssueID != "" && f.IssueID != in.IssueID {
+					continue
 				}
+				if n++; n <= in.Offset {
+					continue
+				}
+				b := brief(f)
+				j, _ := json.Marshal(b)
+				if size += len(j); len(list) > 0 && size > ledgerPage {
+					out["next"] = n - 1
+					break
+				}
+				list = append(list, b)
 			}
 			out["findings"] = list
 		case "get":

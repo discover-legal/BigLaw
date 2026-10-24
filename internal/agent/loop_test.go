@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"unicode/utf8"
 
 	"github.com/discover-legal/BigLaw/internal/model"
 )
@@ -593,5 +594,38 @@ func TestToolStepJournalsEachModelCall(t *testing.T) {
 	want := []string{"started 5 1.000", fmt.Sprintf("started 1 %.3f", worst), "started 1 0.004", fmt.Sprintf("started 2 %.3f", 0.004+worst), "started 2 0.008"}
 	if len(got) != 6 || strings.Join(got[:5], "|") != strings.Join(want, "|") || !strings.HasPrefix(got[5], "committed") {
 		t.Fatalf("journal %q, want %q then committed", got, want)
+	}
+}
+
+// TestOversizedResultCappedAndShrunk (bench4, SEC: ledger findings in full were one 682 KB result;
+// the lead's next request overflowed its context, and the over-long retry kept that newest result
+// whole, so the run failed): a tool result is cut to maxResult bytes in the transcript with a note on
+// how to page, and a second context-length refusal cuts the newest results to shrunk before the
+// last try, so the run goes on.
+func TestOversizedResultCappedAndShrunk(t *testing.T) {
+	big := json.RawMessage(`{"findings":"` + strings.Repeat("é", 341_000) + `"}`) // 682 KB
+	refused := model.Reply{Err: &model.Error{Kind: model.ErrUnavailable, Detail: "HTTP 400", Status: 400}}
+	rt, f := rig(t, map[string][]model.Reply{"lead": {calls(call("echo", q)), refused, refused, calls(call("finish", q))}},
+		&counter{s: Spec{Name: "echo", Kind: "go", Description: testDesc, In: testIn, Class: "free",
+			Out: json.RawMessage(`{"type":"object","additionalProperties":false,"required":["findings"],"properties":{"findings":{"type":"string"}}}`)}, out: big}, newFinish())
+	if _, err := rt.Run(context.Background(), lead("echo", "finish"), Call{Input: json.RawMessage(`"go"`)}, NewBudget(50, 1, 0)); err != nil {
+		t.Fatalf("an oversized result failed the run: %v", err)
+	}
+	result := func(i int) string {
+		for _, m := range f.Calls()[i].Messages {
+			if m.Role == "tool" {
+				return m.Content.(string)
+			}
+		}
+		return ""
+	}
+	if r := result(1); len(r) > 100_000+400 || !strings.Contains(r, "[result cut at") || !strings.Contains(r, "offset") || !utf8.ValidString(r) {
+		t.Errorf("the first request after the tool holds a %d-byte result: %.80q…%.200q", len(r), r, r[max(0, len(r)-200):])
+	}
+	if r := result(2); len(r) > 100_000+400 {
+		t.Errorf("the first retry holds a %d-byte result (compaction keeps the latest turn)", len(r))
+	}
+	if r := result(3); len(r) > 16_000+400 || !strings.Contains(r, "[result cut at") {
+		t.Errorf("the second retry holds a %d-byte result, want it cut", len(r))
 	}
 }

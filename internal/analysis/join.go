@@ -5,6 +5,8 @@ package analysis
 
 import (
 	"cmp"
+	"math/big"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -43,6 +45,46 @@ type entry struct {
 	doc    string
 	words  map[string]bool // the distinctive words of its quotes
 	quotes []string
+	scaled bool // a scale word (million, thousand…) is stated for it: in its value, unit or quote
+}
+
+// scaleWord is a scale stated after a figure: "$92 million", "310 million dollars".
+var scaleWord = regexp.MustCompile(`(?i)^\s*(million|billion|thousand|mm|bn)\b`)
+
+// rescale applies the scale a finding states for a quantity outside its value (bench4, SEC: "92"
+// with unit "million" against "$92 million", "310" with unit "million dollars" against "310
+// million": two conflicts that were one figure): its unit's first word, else the word after the
+// value in a quote. scaled reports whether any scale is stated, the value's own included; a value
+// whose scale nothing states is never compared with one whose scale is stated.
+func rescale(class Class, canon string, v Value, quotes []string) (string, bool) {
+	if class != "Money" && class != "Count" {
+		return canon, false
+	}
+	if m := reMoneyVal.FindStringSubmatch(strings.TrimSpace(v.Value)); m != nil && m[2] != "" {
+		return canon, true // the value states it ("$92 million"): Canon applied it
+	}
+	word := ""
+	if m := scaleWord.FindStringSubmatch(v.Unit); m != nil {
+		word = m[1]
+	}
+	for _, q := range quotes { // every copy of the value that is a whole figure ("92" in "$92 million", not in "1992")
+		for i := 0; word == "" && v.Value != "" && i < len(q); i++ {
+			j := strings.Index(q[i:], v.Value)
+			if j < 0 {
+				break
+			}
+			i += j
+			if m := scaleWord.FindStringSubmatch(q[i+len(v.Value):]); m != nil && (i == 0 || !strings.ContainsRune("0123456789.,", rune(q[i-1]))) {
+				word = m[1]
+			}
+		}
+	}
+	prefix, num, _ := strings.Cut(canon, ":")
+	r, ok := new(big.Rat).SetString(num)
+	if word == "" || !ok {
+		return canon, false
+	}
+	return prefix + ":" + Decimal(r.Mul(r, new(big.Rat).SetInt64(scale[strings.ToLower(word)]))), true
 }
 
 // row reports whether a value is stated only in table rows (tab-separated): one row of an
@@ -81,7 +123,8 @@ func Join(findings []Finding, aliases []Alias) []Conflict {
 				for _, q := range f.Quotes {
 					qs = append(qs, q.Quote)
 				}
-				es = append(es, entry{v, f.FID, class, canon, d, docOf(f, v.Value), referents(f, v.Value), qs})
+				canon, scaled := rescale(class, canon, v, qs)
+				es = append(es, entry{v, f.FID, class, canon, d, docOf(f, v.Value), referents(f, v.Value), qs, scaled})
 				if n := key(v.Entity); n != "" && !slices.Contains(names, n) {
 					names = append(names, n)
 				}
@@ -139,7 +182,7 @@ func Join(findings []Finding, aliases []Alias) []Conflict {
 			byEnt[r], roots = append(byEnt[r], loose...), []string{r}
 		}
 		for _, r := range roots {
-			try(byEnt[r], "numeric", func(a, b entry) bool { return a.canon != b.canon })
+			try(byEnt[r], "numeric", func(a, b entry) bool { return a.canon != b.canon && a.scaled == b.scaled })
 		}
 	}
 	byEvent, roots := map[string][]int{}, []string{}
@@ -255,7 +298,7 @@ func near(es []entry, found []Conflict, sameEntity func(a, b entry) bool) []Conf
 		for _, b := range es[i+1:] {
 			if a.class != b.class || a.doc == b.doc || a.doc == "" || b.doc == "" || held[a.fid+"|"+a.canon] && held[b.fid+"|"+b.canon] ||
 				a.class != "Date" && (Salience(a.v.Value) < nearSalience || Salience(b.v.Value) < nearSalience) || a.row() && b.row() ||
-				perDoc[a.doc][b.canon] || perDoc[b.doc][a.canon] || !close(a, b) || shared(a.words, b.words) < 3 || !sameEntity(a, b) || !sameMetric(a, b) {
+				perDoc[a.doc][b.canon] || perDoc[b.doc][a.canon] || a.scaled != b.scaled || !close(a, b) || shared(a.words, b.words) < 3 || !sameEntity(a, b) || !sameMetric(a, b) {
 				continue
 			}
 			k := min(a.canon, b.canon) + "|" + max(a.canon, b.canon)

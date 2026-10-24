@@ -194,6 +194,7 @@ func (h hooked) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 			return agent.Result{}, err
 		}
 		in["requirement"] = src
+		in["reviewedPassages"] = h.e.reviewedPassages(ctx, c, src) // bench4, trust: every call spent its five turns searching and checking quotes
 	case "draft_section":
 		var err error
 		if draft, err = h.e.draftRequest(ctx, c.TaskID, c.DocumentIDs, str("issueId"), c.Input); err != nil {

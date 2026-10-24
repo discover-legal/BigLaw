@@ -293,3 +293,39 @@ func TestJoinRefusesDifferentFacts(t *testing.T) {
 		}
 	}
 }
+
+// TestJoinComparesScaledFigures (bench4, SEC: "92" with unit "million" against "$92 million", and
+// "310" with unit "million dollars" against "310 million", were two conflicts the memo would have had
+// to state): values are compared after their stated scale (the value's, its unit's, or the word after
+// it in its quote), and a figure whose scale nothing states never pairs with a scaled one.
+func TestJoinComparesScaledFigures(t *testing.T) {
+	f := func(fid, doc, quote string, v Value) Finding {
+		return Finding{FID: fid, Verified: true, Quotes: []Quote{{DocumentID: doc, Quote: quote}}, Values: []Value{v}}
+	}
+	oceanic := func(fid, doc, quote, value, unit string) Finding {
+		return f(fid, doc, quote, Value{Entity: "Oceanic Offshore Fund Ltd.", Metric: "net assets", Value: value, Unit: unit, Class: "Money"})
+	}
+	crescent := func(fid, doc, quote, value, unit string) Finding {
+		return f(fid, doc, quote, Value{Entity: "Crescent Bay Pension Fund", Metric: "assets under management", Value: value, Unit: unit, Class: "Money"})
+	}
+	for _, c := range []struct {
+		name     string
+		a, b     Finding
+		conflict bool
+	}{
+		{"unit million", oceanic("F107", "referral", "Oceanic Offshore Fund Ltd. is a Cayman Islands exempted company formed in 2018 with approximately $92 million in net assets as of December 31, 2023.", "92", "million"),
+			oceanic("F603", "summary", "As of December 31, 2022, Oceanic Offshore Fund Ltd. had approximately $92 million in net assets.", "$92 million", "USD"), false},
+		{"unit million dollars", crescent("F326", "referral", "The Crescent Bay Pension Fund has approximately $310 million in AUM managed by WCA as of December 31, 2023.", "310 million", "USD"),
+			crescent("F518", "stats", "Account data for the Crescent Bay Municipal Pension Fund (approximately $310 million AUM managed by WCA) was also obtained.", "310", "million dollars"), false},
+		{"scale from the quote", oceanic("F1", "referral", "Formed in 1992, the fund held approximately $92 million in net assets.", "92", ""),
+			oceanic("F2", "summary", "Oceanic Offshore Fund Ltd. had approximately $92 million in net assets.", "$92 million", ""), false},
+		{"no scale stated", oceanic("F3", "referral", "Net assets\t92", "92", ""),
+			oceanic("F4", "summary", "Oceanic Offshore Fund Ltd. had approximately $92 million in net assets.", "$92 million", ""), false},
+		{"a real difference, scaled", oceanic("F5", "referral", "The fund held approximately $92 million in net assets.", "92", "million"),
+			oceanic("F6", "summary", "The fund held approximately $97 million in net assets.", "$97 million", ""), true},
+	} {
+		if cs := Join([]Finding{c.a, c.b}, nil); (len(cs) > 0) != c.conflict {
+			t.Errorf("%s: conflicts %+v, want conflict=%v", c.name, cs, c.conflict)
+		}
+	}
+}

@@ -147,7 +147,7 @@ func text(v any) model.Reply {
 type m = map[string]any
 
 func plan(issues ...m) model.ToolCall {
-	return tc("ledger", m{"op": "plan", "issues": issues, "issueId": nil, "fid": nil, "detail": nil, "criticId": nil, "resolution": nil, "note": nil, "entity": nil})
+	return tc("ledger", m{"op": "plan", "issues": issues, "issueId": nil, "fid": nil, "detail": nil, "criticId": nil, "resolution": nil, "note": nil, "entity": nil, "offset": nil})
 }
 
 func issue(id, q, class string) m {
@@ -155,7 +155,7 @@ func issue(id, q, class string) m {
 }
 
 func ledgerOp(op string, kv ...any) model.ToolCall {
-	a := m{"op": op, "issues": nil, "issueId": nil, "fid": nil, "detail": nil, "criticId": nil, "resolution": nil, "note": nil, "entity": nil}
+	a := m{"op": op, "issues": nil, "issueId": nil, "fid": nil, "detail": nil, "criticId": nil, "resolution": nil, "note": nil, "entity": nil, "offset": nil}
 	for i := 0; i < len(kv); i += 2 {
 		a[kv[i].(string)] = kv[i+1]
 	}

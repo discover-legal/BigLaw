@@ -792,8 +792,10 @@ The memo workflow (§ Memo workflow) drives these. What PR 4a ships, all tested 
   `ledger{op:"plan"}`), input schema, the task's `Policy` (PR 4b), then a grant; the tool's usage is
   charged even when it fails and its output must match its schema. A subagent's answer must validate
   (one repair request, then `ErrToolOutput`). At most 8 tool calls run per turn. Tool results older
-  than four turns are replaced by a handle naming their step; an endpoint's 400/413/422 compacts all
-  but the latest turn's and retries once. Text in tool results is labelled untrusted matter data.
+  than four turns are replaced by a handle naming their step, and any one result is cut to 100 KB
+  in the transcript with a note on how to page (`TestOversizedResultCappedAndShrunk`; bench4: a
+  682 KB ledger result overflowed the lead's context); an endpoint's 400/413/422 compacts all
+  but the latest turn's and retries, then cuts the latest results to 16 KB and retries once more. Text in tool results is labelled untrusted matter data.
   The model sees refusals (reason and next step) and tool failures in BigLaw's own words only; any
   other error is logged and shown as "internal error". A model failure (G6) ends the run, except a
   subagent's answer cut off at its token limit before any text or whole tool call: that is a bad
@@ -873,7 +875,9 @@ Limitations of this layer:
   cited quote).
 - `join_discrepancies` trusts the extracting model's metric labels for the label join: one label
   for two metrics is compared (the lead must check the quotes). The near join finds two labels for
-  one metric only when the values are close (an eighth; a month for dates), of one entity, their
+  one metric only when the values are close (an eighth; a month for dates), of one entity,
+  compared after their stated scale (the value's, its unit's, or the word after it in its quote; a
+  figure whose scale nothing states never pairs with a scaled one: `TestJoinComparesScaledFigures`), their
   labels not naming two things (`sameMetric`) and the quotes share their words: a conflict between
   far-apart values under different labels is still missed, and two close figures about different
   things that share words and label words can still be reported (`TestJoinRefusesDifferentFacts`). A value's document is the quote that holds its text, else the finding's first quote.
@@ -894,7 +898,8 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
 
 - **The ledger** (`ledger`; one Postgres table, a JSON row per kind and key): `plan` (the issues
   the deliverable must answer, each typed by a BELO-lite class), `findings` / `get` (brief or full:
-  citations and value refs `F3.v1`), `resolve` (a critic finding fixed or disclosed, with a note),
+  citations and value refs `F3.v1`; `findings` a page of about 60 KB at a time, `offset` from the
+  result's `next`, `TestLedgerFindingsPage`), `resolve` (a critic finding fixed or disclosed, with a note),
   `draft_get` (a finished section only: `not_drafted` otherwise) and `relations`. A subagent may only
   read, and never sees a quarantined finding (G3).
 - **Evidence** (`extract_facts`, `analyze_issue`, `check_deviation`; subagents on the `specialist`
@@ -906,7 +911,9 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
   nearly the same as a verified one already held on the same issue (3-word-shingle Jaccard ≥ 0.5)
   merges into it, its quotes added. `check_deviation`'s requirement is the controlling document's own
   words: Go verifies it in `requirementDocId` (one of `controllingDocIds`) like any quote before the
-  subagent runs and hands the subagent the document's text: JSON escape artefacts (`\"Tommy\"`) are
+  subagent runs and hands the subagent the document's text, with the reviewed documents' passages
+  most like it (`reviewedPassages`, ≤ 16 KB, so it answers at once: `TestDeviationGetsReviewedPassages`;
+  its only tool is `retrieve`, as Go verifies every quote it gives): JSON escape artefacts (`\"Tommy\"`) are
   undone, and a requirement joined from several passages (a heading and its list, two sentences from
   two paragraphs) verifies part by part, split where the model joined them (at most 12 joins; its
   ellipses stripped from the parts' edges; one normalised index of the document, the caller's ctx),
@@ -1465,7 +1472,7 @@ improvements (after the real Haiku LAB rerun; scripted the same way): `TestSweep
 
 | Budget | Ceiling | Today |
 |---|---:|---:|
-| Go production lines (physical lines, non-`_test.go`, test-support packages included) | reported, no limit (owner decision 17) | 14,161 |
+| Go production lines (physical lines, non-`_test.go`, test-support packages included) | reported, no limit (owner decision 17) | 14,279 |
 | Packages under `internal/`, test-support packages excluded | 12 | 8 (`agent`, `analysis`, `api`, `docs`, `docs/ooxml`, `engine`, `model`, `store`; `store/storetest` is test support) |
 | Direct Go dependencies | 3 | 2 (`github.com/lib/pq`, `github.com/ledongthuc/pdf`) |
 | Runtime environment variables | 20 | 18 |
@@ -1474,7 +1481,7 @@ improvements (after the real Haiku LAB rerun; scripted the same way): `TestSweep
 | Packages without a `_test.go` | 0 | 0 |
 | Lines in any one source file (`.go`, `.py`, `.sql`, `.sh`, `.js`, `.ts`, `.css`; tests included) | 2,000 | 968 (`internal/docs/vision_safety_test.go`) |
 
-**There is no total line ceiling (owner decision 17, 2026-10-23).** `scripts/loc.py` reports the Go production total (14,161) and fails only on the budgets that bound bloat directly: no file over 2,000 lines, ≤ 3 direct deps, ≤ 20 env vars, ≤ 12 internal packages, ≤ 2,400 UI source lines, no untested package. Each PR still reports its lines against its DESIGN budget in its notes. (The ceiling's history, 14,000 → 17,500 through owner decisions 7–16, is in PLAN.) A **test-support package** is one
+**There is no total line ceiling (owner decision 17, 2026-10-23).** `scripts/loc.py` reports the Go production total (14,279) and fails only on the budgets that bound bloat directly: no file over 2,000 lines, ≤ 3 direct deps, ≤ 20 env vars, ≤ 12 internal packages, ≤ 2,400 UI source lines, no untested package. Each PR still reports its lines against its DESIGN budget in its notes. (The ceiling's history, 14,000 → 17,500 through owner decisions 7–16, is in PLAN.) A **test-support package** is one
 whose directory name ends in `test` and that no production file outside it imports, such as
 `storetest`. Under the coordinator's ruling it is left out of the package count, but its lines
 count toward the reported Go total like any other non-`_test.go` file. A `*test` package that
@@ -1960,8 +1967,8 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     entry (Go's JSON decoder), a case-variant repeat is refused. Errors name no id, so a typo in
     a long file is found by bisecting it.
   - Upstream 400/413/422 (a context-length or schema refusal) is `ErrUnavailable` "HTTP 4xx" with
-    its `Status`, not retried by the client; the agent loop compacts the transcript and tries once
-    more (§ Agent runtime). Tool-call names are checked against the tools offered by the loop.
+    its `Status`, not retried by the client; the agent loop compacts the transcript and tries
+    again, twice at most (§ Agent runtime). Tool-call names are checked against the tools offered by the loop.
   - A 200 whose body is an error object (some gateways) is `ErrNoContent` "no choices", not
     retried, and an OpenAI `refusal` is reported as an answer with neither text nor tool calls (its
     text is dropped); both are 422 `no_content` and their usage, when the body gave one, is charged

@@ -5,8 +5,7 @@
  "maxTurns": 5,
  "role": "specialist",
  "allowed": [
-  "retrieve",
-  "verify_quote"
+  "retrieve"
  ],
  "description": "Checks one requirement of a controlling document (instructions, a term sheet, a playbook) against the documents under review, part by part: conform, deviate or omitted, with a severity and a correction. The requirement is the controlling document's own words, quoted verbatim from requirementDocId (one of controllingDocIds) and verified like any quote; a paraphrase is refused with the closest passage to quote instead. Each deviation must quote both sides verbatim; an omission is kept only when the provision does not verify in the named reviewed document (string match, then the paraphrase judge on its closest passage). Values in a correction must come from the quotes (or simple sums and differences of them); others are withheld and flagged. It returns the resulting finding ids. Do not use it for facts in one document (extract_facts) or for numeric conflicts across documents (join_discrepancies).\nExample: {\"requirement\": \"The residuary estate shall be divided equally among the three children.\", \"requirementDocId\": \"3f6c2a9e-0b1d-4c2e-9a7f-5d8e1b2c4a6f\", \"controllingDocIds\": [\"3f6c2a9e-0b1d-4c2e-9a7f-5d8e1b2c4a6f\"], \"reviewedDocIds\": [\"7a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d\"], \"issueId\": \"I4\"}",
  "in": {

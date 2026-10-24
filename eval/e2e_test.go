@@ -58,7 +58,7 @@ func TestE2EServe(t *testing.T) {
 		d.File(context.Background(), doc.ID, "M-1")
 	}
 	plan := call("ledger", m{"op": "plan", "issues": []m{{"id": "I1", "question": "What does Greystone claim?", "class": "Conduct", "practice": "litigation"},
-		{"id": "I2", "question": "When was Talbot served?", "class": "Requirement", "practice": "litigation"}}, "issueId": nil, "fid": nil, "detail": nil, "criticId": nil, "resolution": nil, "note": nil, "entity": nil})
+		{"id": "I2", "question": "When was Talbot served?", "class": "Requirement", "practice": "litigation"}}, "issueId": nil, "fid": nil, "detail": nil, "criticId": nil, "resolution": nil, "note": nil, "entity": nil, "offset": nil})
 	ex := func(q, issue string) model.ToolCall {
 		return call("extract_facts", m{"question": q, "documentId": nil, "sectionId": nil, "through": nil, "offset": nil, "query": q, "issueId": issue})
 	}

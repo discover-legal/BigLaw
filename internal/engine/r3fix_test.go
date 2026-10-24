@@ -6,7 +6,10 @@ package engine
 import (
 	"context"
 	"encoding/json"
+
 	"fmt"
+	"github.com/discover-legal/BigLaw/internal/agent"
+	"github.com/discover-legal/BigLaw/internal/analysis"
 	"slices"
 	"strings"
 	"testing"
@@ -212,5 +215,99 @@ func TestOnePartFragmentRefused(t *testing.T) {
 		!strings.Contains(seen, "<<<CRITICAL NOTE — Do NOT name Sophia Davenport-Chen as a successor trustee in any capacity.>>>") ||
 		!strings.Contains(seen, "<<<The following persons shall NOT serve as Trustee in any capacity:") {
 		t.Errorf("check_deviation %q, findings %d; the lead read %.4000s", out, len(v.Findings), seen)
+	}
+}
+
+// TestLedgerFindingsPage (bench4, SEC: ledger op findings detail full returned all 892 findings,
+// 682 KB, in one result, which overflowed the lead's context): the list comes a page at a time
+// (ledgerPage bytes), next names the offset of the following page, and the pages hold every
+// finding once, by issue too.
+func TestLedgerFindingsPage(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, "1. Terms\nThe Seller shall deliver the goods.\n")
+	f.engine(map[string][]model.Reply{}, Config{})
+	task := f.submit(0)
+	quote := strings.Repeat("The Seller shall deliver the goods on time and in full under the Agreement. ", 8)
+	for i := range 900 {
+		x := Finding{Finding: analysis.Finding{FID: fmt.Sprintf("F%d", i+1), IssueID: fmt.Sprintf("I%d", i%3+1), Claim: "The Seller must deliver.", Verified: true}}
+		x.Citations = []Citation{{DocumentID: f.docs[0].ID, Quote: quote, Method: "exact", Confidence: 1}}
+		if err := f.e.write(context.Background(), task.ID, kFinding, x.FID, x, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page := func(issue any, offset any) (fids []string, next *int, size int) {
+		in, _ := json.Marshal(m{"op": "findings", "issues": nil, "issueId": issue, "fid": nil, "detail": "full", "criticId": nil, "resolution": nil, "note": nil, "entity": nil, "offset": offset})
+		res, err := f.e.ledgerTool().Call(context.Background(), agent.Call{TaskID: task.ID, Input: in})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out struct {
+			Findings []struct{ FID string }
+			Next     *int
+		}
+		_ = json.Unmarshal(res.Output, &out)
+		for _, x := range out.Findings {
+			fids = append(fids, x.FID)
+		}
+		return fids, out.Next, len(res.Output)
+	}
+	for _, issue := range []any{nil, "I2"} {
+		seen, pages := map[string]int{}, 0
+		var off any
+		for {
+			fids, next, size := page(issue, off)
+			if pages++; size > 65_000 || len(fids) == 0 || pages > 100 {
+				t.Fatalf("issue %v page %d: %d bytes, %d findings", issue, pages, size, len(fids))
+			}
+			for _, x := range fids {
+				seen[x]++
+			}
+			if next == nil {
+				break
+			}
+			off = *next
+		}
+		if want := map[bool]int{true: 900, false: 300}[issue == nil]; len(seen) != want || pages < 2 {
+			t.Errorf("issue %v: %d findings over %d pages, want %d over several", issue, len(seen), pages, want)
+		}
+		for x, n := range seen {
+			if n != 1 {
+				t.Errorf("%s listed %d times", x, n)
+			}
+		}
+	}
+}
+
+// TestDeviationGetsReviewedPassages (bench4, trust: all seven check_deviation calls used their five
+// turns retrieving the reviewed text and checking quotes Go verifies anyway; two ended at the turn
+// cap with no answer): the subagent is handed the reviewed documents' passages most like the
+// requirement and offered only retrieve, so it can answer at once, in one model call.
+func TestDeviationGetsReviewedPassages(t *testing.T) {
+	t.Parallel()
+	d := newDev(t)
+	call := tc("check_deviation", m{"requirement": devReq, "requirementDocId": d.memo, "controllingDocIds": []string{d.memo}, "reviewedDocIds": []string{d.trust}, "issueId": "I1"})
+	v := d.run(d.with(map[string][]model.Reply{
+		"lead":            {calls(plan(issue("I1", "Does the draft follow the memo?", "Requirement"))), calls(call)},
+		"check_deviation": {text(m{"verdicts": []m{d.verdict("Sophia's residuary share", "deviate", d.trust, qSophiaMemo, qSophiaTrust, "Change Sophia's share to Thirty-Five Percent (35%).")}})},
+	}), Config{})
+	var reqs []model.Request
+	for _, c := range d.e.chat.(*model.Fake).Calls() {
+		if c.Agent == "check_deviation" {
+			reqs = append(reqs, c)
+		}
+	}
+	if len(reqs) != 1 || len(v.Findings) != 1 {
+		t.Fatalf("%d subagent calls, %d findings", len(reqs), len(v.Findings))
+	}
+	var in struct {
+		ReviewedPassages []struct{ DocumentID, Text string }
+	}
+	jsonDecode(reqs[0].Messages[1].Content.(string), &in)
+	var tools []string
+	for _, x := range reqs[0].Tools {
+		tools = append(tools, x.Name)
+	}
+	if len(in.ReviewedPassages) == 0 || in.ReviewedPassages[0].DocumentID != d.trust || !strings.Contains(in.ReviewedPassages[0].Text, qSophiaTrust) || !slices.Equal(tools, []string{"retrieve"}) {
+		t.Errorf("passages %+v; tools %v", in.ReviewedPassages, tools)
 	}
 }
