@@ -102,18 +102,13 @@ func TestV3LongIntroductionLosesItsHead(t *testing.T) {
 	}
 }
 
-// TestSectionContextIsTheTreesSection: the context is the section of docs.Parse's tree that holds
-// the requirement, whole, with the headings of the sections above it; a lettered item is read in
-// the clause that holds its list; a list with no enclosing clause is read with the text that
-// introduces it.
-func TestSectionContextIsTheTreesSection(t *testing.T) {
+// TestContextIsTheTextAroundIt (lab-r3 r4, coordinator decision): the context is the document's text
+// around the requirement, cut at sentence or line ends, whatever docs.Parse makes of its headings; a
+// heading path above the window is a label only; a short document is read whole.
+func TestContextIsTheTextAroundIt(t *testing.T) {
 	for _, c := range []struct{ name, doc, req, want string }{
-		{"heading path", "ARTICLE IV TRUSTEES\nSection 4.1 Appointment\nThe following persons shall NOT serve:\n(a) Sophia Davenport-Chen.\n(b) Martin Hale.\nSection 4.2 Removal\nThe Trust Protector may remove a corporate trustee.\n", "Martin Hale.",
-			"ARTICLE IV TRUSTEES\nSection 4.1 Appointment\nThe following persons shall NOT serve:\n(a) Sophia Davenport-Chen.\n(b) ⟦Martin Hale.⟧"},
-		{"numbered list under a preface introduction", "The following persons shall NOT serve as Trustee:\n1. Martin Hale\n2. Sophia Davenport-Chen\n", "Sophia Davenport-Chen",
-			"The following persons shall NOT serve as Trustee:\n1. Martin Hale\n2. ⟦Sophia Davenport-Chen⟧"},
-		{"a clause without an introduction is its own section", "4. Sale\nThe Trustee shall not sell the residence.\n5. Distributions\nThe Trustee shall distribute the income quarterly.\n", "The Trustee shall distribute the income quarterly.",
-			"5. Distributions\n⟦The Trustee shall distribute the income quarterly.⟧"},
+		{"short document read whole", "ARTICLE IV TRUSTEES\nSection 4.1 Appointment\nThe following persons shall NOT serve:\n(a) Sophia Davenport-Chen.\n(b) Martin Hale.\nSection 4.2 Removal\nThe Trust Protector may remove a corporate trustee.\n", "Martin Hale.",
+			"ARTICLE IV TRUSTEES\nSection 4.1 Appointment\nThe following persons shall NOT serve:\n(a) Sophia Davenport-Chen.\n(b) ⟦Martin Hale.⟧\nSection 4.2 Removal\nThe Trust Protector may remove a corporate trustee."},
 		{"full-width colon", "The following persons may never act as Trustee：\n(a) Martin Hale\n(b) Sophia Davenport-Chen\n", "Sophia Davenport-Chen",
 			"The following persons may never act as Trustee：\n(a) Martin Hale\n(b) ⟦Sophia Davenport-Chen⟧"},
 	} {
@@ -127,25 +122,31 @@ func TestSectionContextIsTheTreesSection(t *testing.T) {
 			t.Errorf("%s: context %q (truncated %v), want %q", c.name, got, r.Truncated, c.want)
 		}
 	}
-}
-
-// TestSectionContextTrimsAroundTheRequirement: a section over ctxMax keeps the requirement, the text
-// before it up to the nearest colon-ending line above it (never cut, even past the bound), then what
-// the bound allows before it and then after it, cut at the far ends, and is marked truncated.
-func TestSectionContextTrimsAroundTheRequirement(t *testing.T) {
-	long := strings.Repeat("The Trustee shall keep accurate records of every transaction and report them annually. ", 60) // ~5 KB
-	doc := "9. Records\n" + long + "\nSubject to the foregoing, the Trustee shall not:\n" + long + "\nsell the family residence at 12 Elm Street.\n" + long + "\n"
-	spans, _, _ := placeRequirement(context.Background(), doc, "sell the family residence at 12 Elm Street.")
+	pad := strings.Repeat("The Trustee shall keep accurate records of every transaction and report them annually. ", 50) // ~4.4 KB
+	doc := "9. Records\n\n" + pad + "\n\nThe Trustee shall not sell the family residence at 12 Elm Street.\n\n" + pad + "\n"
+	spans, _, _ := placeRequirement(context.Background(), doc, "The Trustee shall not sell the family residence at 12 Elm Street.")
 	r := newReq(doc, spans)
 	got := r.Context()
-	if !r.Truncated || len(got) > ctxMax+200 || !strings.HasPrefix(got, "9. Records\n…\n") || !strings.Contains(got, "Subject to the foregoing, the Trustee shall not:\n") ||
-		!strings.Contains(got, "⟦sell the family residence at 12 Elm Street.⟧") {
-		t.Errorf("truncated %v, %d bytes: %.300q … %.200q", r.Truncated, len(got), got, got[max(0, len(got)-200):])
+	if r.Truncated || len(got) > ctxMax || !strings.HasPrefix(got, "[headings above it, a label read from the document's numbering, not part of its text: 9. Records]\n") ||
+		strings.Contains(got, "9. Records\n") || !strings.Contains(got, "⟦The Trustee shall not sell the family residence at 12 Elm Street.⟧") || !strings.HasSuffix(got, "annually. …") {
+		t.Errorf("a paragraph of its own in a long section: truncated %v, %d bytes: %.300q … %.120q", r.Truncated, len(got), got, got[max(0, len(got)-120):])
 	}
+}
+
+// TestContextTruncatedWhenTheSentenceStartsBefore: a requirement whose paragraph starts more than the
+// window above it, or whose sentence does, is read in a bounded window marked truncated (no colon line
+// is kept past the bound any more: the verdict is admitted only at low confidence).
+func TestContextTruncatedWhenTheSentenceStartsBefore(t *testing.T) {
+	long := strings.Repeat("The Trustee shall keep accurate records of every transaction and report them annually. ", 60) // ~5 KB
 	far := "9. Records\nThe Trustee shall not:\n" + long + long + "sell the family residence at 12 Elm Street.\n" + long
-	spans, _, _ = placeRequirement(context.Background(), far, "sell the family residence at 12 Elm Street.")
-	if r := newReq(far, spans); !r.Truncated || !strings.Contains(r.Context(), "The Trustee shall not:\n") {
-		t.Errorf("the colon-ending line 10 KB above the requirement was cut: %.200q", r.Context())
+	spans, _, _ := placeRequirement(context.Background(), far, "sell the family residence at 12 Elm Street.")
+	if r := newReq(far, spans); !r.Truncated || len(r.Context()) > ctxMax || strings.Contains(r.Context(), "The Trustee shall not:") {
+		t.Errorf("a paragraph starting 10 KB above: truncated %v, %d bytes", r.Truncated, len(r.Context()))
+	}
+	run := "Do NOT, " + strings.Repeat("whether acting alone or jointly with any co-trustee, agent or fiduciary, ", 60) + "name Sophia Davenport-Chen as a successor trustee.\n"
+	spans, _, _ = placeRequirement(context.Background(), run, "name Sophia Davenport-Chen as a successor trustee.")
+	if r := newReq(run, spans); !r.Truncated || len(r.Context()) > ctxMax || !strings.HasPrefix(r.Context(), "… ") {
+		t.Errorf("a 4 KB sentence: truncated %v, %d bytes: %.120q", r.Truncated, len(r.Context()), r.Context())
 	}
 }
 
@@ -215,7 +216,8 @@ func TestSectionCheckYesAdmitsBenchRequirements(t *testing.T) {
 		f, v := r4Dev(t, trustMemoExcerpt, c.req, c.ctrl, []model.Reply{text(m{"answer": "yes", "reason": "the section states the requirement as quoted"})})
 		fs := ledgerFindings(t, f, v.ID)
 		if len(fs) != 1 || fs[0].Check == nil || fs[0].Check.Answer != "yes" || fs[0].Low ||
-			!strings.Contains(fs[0].Claim, "Confirmed against the whole section by an independent check: the section states the requirement as quoted") {
+			!strings.Contains(fs[0].Claim, "An independent check read the surrounding text (") ||
+			!strings.Contains(fs[0].Claim, "bytes) and agreed. The checker's reasoning (not a quotation): the section states the requirement as quoted") {
 			t.Errorf("%s: findings %+v; %q", c.name, fs, f.outputs(v.ID, "check_deviation"))
 		}
 	}
@@ -233,7 +235,7 @@ func TestSectionCheckUnclearOrCutIsLow(t *testing.T) {
 	}
 	big := "Note\n" + strings.Repeat("The settlor has considered the family's circumstances and the views of the family council. ", 120) + "\nDo NOT name Sophia Davenport-Chen as a successor trustee.\n"
 	f, v = r4Dev(t, big, req, req, []model.Reply{text(m{"answer": "yes", "reason": "it says so"})})
-	if fs := ledgerFindings(t, f, v.ID); len(fs) != 1 || !fs[0].Low || !fs[0].Check.Truncated || !strings.Contains(fs[0].Claim, "the section was cut to its bound") {
+	if fs := ledgerFindings(t, f, v.ID); len(fs) != 1 || !fs[0].Low || !fs[0].Check.Truncated || !strings.Contains(fs[0].Claim, "that text begins after the requirement's sentence or paragraph does") {
 		t.Errorf("cut section: %+v", fs)
 	}
 	if !gated(Finding{Low: true, Citations: []Citation{{Method: "exact"}}}, false) || gated(Finding{Citations: []Citation{{Method: "exact"}}}, false) {

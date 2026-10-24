@@ -52,7 +52,17 @@ type report struct {
 	UncoveredParties  []analysis.PartyGap `json:"uncoveredParties"`
 	MissingFigures    []analysis.Handle   `json:"missingFigures"`
 	OpenPreconditions []string            `json:"openPreconditions"`
+	Truncated         bool                `json:"truncated"` // the lists hold their first items: fix those and check again
 	limits            []string
+}
+
+// page is the report as finish returns it: one page, the first items of each list by priority.
+func (rep report) page() report {
+	pg := agent.NewPage()
+	rep.Errors, rep.MissingIssues, rep.OpenPreconditions = agent.Take(pg, rep.Errors), agent.Take(pg, rep.MissingIssues), agent.Take(pg, rep.OpenPreconditions)
+	rep.Lint, rep.MissingFigures, rep.UncoveredParties = agent.Take(pg, rep.Lint), agent.Take(pg, rep.MissingFigures), agent.Take(pg, rep.UncoveredParties)
+	rep.Truncated = pg.Truncated
+	return rep
 }
 
 type limitation struct {
@@ -78,7 +88,7 @@ func (f finish) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 		return agent.Result{}, err
 	}
 	out := func(rep report, u agent.Usage, final bool) (agent.Result, error) {
-		data, err := json.Marshal(rep)
+		data, err := json.Marshal(rep.page())
 		return agent.Result{Output: data, Usage: u, Final: final}, err
 	}
 	if in.Op == "check" {

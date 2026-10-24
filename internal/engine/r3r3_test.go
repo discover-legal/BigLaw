@@ -64,8 +64,8 @@ func TestR2VProbesReadInContext(t *testing.T) {
 	if _, bad, _ := placeRequirement(context.Background(), cases[14].doc, "Do NOT, in any capacity, name Sophia Davenport-Chen as a successor trustee."); bad != "" {
 		t.Errorf("format characters are not folded: bad %q", bad)
 	}
-	// a sibling of the item under a nested introduction is read in its clause's whole section (lab-r3
-	// r3 design: whether "(a) The Trustee shall not:" governs "(b)" is the section check's reading)
+	// a sibling of the item under a nested introduction is read with the text around it (whether
+	// "(a) The Trustee shall not:" governs "(b)" is the section check's reading)
 	doc := cases[2].doc
 	spans, _, _ := placeRequirement(context.Background(), doc, "The Trustee shall invest prudently.")
 	if got := newReq(doc, spans).Context(); got != "7. Restrictions\n(a) The Trustee shall not:\n(i) sell the family residence at 12 Elm Street;\n(ii) borrow against the trust assets;\n(b) ⟦The Trustee shall invest prudently.⟧" {
@@ -134,8 +134,9 @@ func TestR2VFragmentsQuotedInContext(t *testing.T) {
 // the memo requires.
 func TestR2VVerdictQuoteOutsideContextRefused(t *testing.T) {
 	t.Parallel()
-	f, v := r2vDev(t, trustMemoExcerpt, "CRITICAL NOTE — Do NOT name Sophia Davenport-Chen as a successor trustee in any capacity.",
-		"Peggy wants Martin to serve as an administrative safety valve")
+	memo := trustMemoExcerpt + "\n\n" + strings.Repeat("The settlor has considered the family's circumstances and the views of the family council. ", 50) + "\n\nPeggy wants Martin to serve as an administrative safety valve far from here.\n"
+	f, v := r2vDev(t, memo, "CRITICAL NOTE — Do NOT name Sophia Davenport-Chen as a successor trustee in any capacity.",
+		"Peggy wants Martin to serve as an administrative safety valve far from here.")
 	if out := strings.Join(f.outputs(v.ID, "check_deviation"), ""); len(v.Findings) != 0 || !strings.Contains(out, "its controlling quote is not in the requirement's passage") {
 		t.Errorf("findings %+v; %s", v.Findings, out)
 	}
@@ -163,7 +164,7 @@ func TestBenchRequirementsReadInContext(t *testing.T) {
 }
 
 // TestContextIsBounded: a requirement in a long paragraph under a long introduction is quoted with
-// about ctxMax bytes, the requirement whole and marked, the introduction's end (its colon) kept.
+// at most ctxMax bytes, the requirement whole and marked, the introduction within the window kept.
 func TestContextIsBounded(t *testing.T) {
 	long := strings.Repeat("The Trustee shall keep accurate records of every transaction and report them annually. ", 30)
 	doc := "9. Records\n" + long + "Subject to the foregoing, the Trustee shall not:\n" + long + "sell the family residence at 12 Elm Street. " + long + "\n"
@@ -173,7 +174,7 @@ func TestContextIsBounded(t *testing.T) {
 	}
 	r := newReq(doc, spans)
 	got := r.Context()
-	if len(got) > ctxMax+100 || !strings.Contains(got, "⟦sell the family residence at 12 Elm Street.⟧") || !strings.Contains(got, "the Trustee shall not:") || !strings.HasPrefix(got, "9. Records") {
+	if len(got) > ctxMax || !strings.Contains(got, "⟦sell the family residence at 12 Elm Street.⟧") || !strings.Contains(got, "the Trustee shall not:") || !strings.HasPrefix(got, "[headings above it") {
 		t.Errorf("%d bytes: %q", len(got), got)
 	}
 }

@@ -417,7 +417,7 @@ func (e *Engine) sweepTool(rt *agent.Runtime, r *run) agent.Tool {
 		if err := e.write(ctx, c.TaskID, kSwept, "sweep", swept, true); err != nil {
 			return nil, b.Spent(), err
 		}
-		out := map[string]any{"visited": visited, "findings": fids, "incomplete": len(uncovered) > 0, "uncovered": uncovered, "skipped": skipped, "unreadDocuments": unread}
+		out := sweepPage(visited, fids, uncovered, skipped, unread)
 		note := ""
 		if len(uncovered) > 0 {
 			note = fmt.Sprintf("The evidence sweep ran out of budget: %d of %d pages were not read (it read those most relevant to the plan's issues first): ", len(uncovered), len(visits))
@@ -445,6 +445,16 @@ func (e *Engine) sweepTool(rt *agent.Runtime, r *run) agent.Tool {
 		}
 		return out, b.Spent(), nil
 	}}
+}
+
+// sweepPage is sweep's answer: one page, its lists in order of use (truncated: all the findings are
+// in the ledger, and a later sweep reads the uncovered pages).
+func sweepPage(visited int, fids []string, uncovered, skipped, unread []map[string]any) map[string]any {
+	pg := agent.NewPage()
+	out := map[string]any{"visited": visited, "incomplete": len(uncovered) > 0, "unreadDocuments": agent.Take(pg, unread), "uncovered": agent.Take(pg, uncovered),
+		"findings": agent.Take(pg, fids), "skipped": agent.Take(pg, skipped)}
+	out["truncated"] = pg.Truncated
+	return out
 }
 
 // skippedNote is the Limitations line for the pages the sweeps skipped (lab-r3 verifier M3: the
@@ -489,7 +499,7 @@ func (e *Engine) unswept(ctx context.Context, taskID string) ([]SweptDoc, error)
 
 // modelOrJournal: errors that end the run, never "no finding" (G6) or a lost step.
 func modelOrJournal(err error) bool {
-	return err != nil && (errors.Is(err, agent.ErrJournal) || modelFailed(err))
+	return err != nil && (errors.Is(err, agent.ErrJournal) || errors.Is(err, agent.ErrPanic) || modelFailed(err))
 }
 
 // Unread is the documents a sweep left partly unread (analysis.Unswept, for join_discrepancies).

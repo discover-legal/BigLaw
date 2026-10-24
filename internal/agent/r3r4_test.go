@@ -6,46 +6,51 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/discover-legal/BigLaw/internal/model"
 )
 
-// TestClipJSONMeasuresEncodedBytes (lab-r3 r3 verifier L4): a string of characters JSON escapes is
-// cut by its encoded size, not emptied; a one-item array over the cut keeps its item, cut; "&" and
-// "<" stay as the tool wrote them; and no cut result passes its bound, the note included.
-func TestClipJSONMeasuresEncodedBytes(t *testing.T) {
-	esc := strings.Repeat("<>&\"\n", 6_000) // 30 KB raw, about 60 KB encoded
-	raw, _ := json.Marshal(map[string]any{"text": esc, "next": 3})
-	got := clipResult(toolOut{"r:\n", raw}, 16_000)
-	body, _, _ := strings.Cut(strings.TrimPrefix(got, "r:\n"), "\n[result cut")
-	var o struct {
-		Text string
-		Next int
-	}
-	if len(got) > 16_000 || json.Unmarshal([]byte(body), &o) != nil || o.Next != 3 || len(o.Text) < 6_000 || strings.Contains(body, `\u0026`) {
-		t.Errorf("escaped string: %d bytes, kept %d raw bytes, next %d: %.120q", len(got), len(o.Text), o.Next, got)
-	}
-	one, _ := json.Marshal(map[string]any{"findings": []string{strings.Repeat("a & b ", 5_000)}, "next": nil})
-	got = clipResult(toolOut{"r:\n", one}, 8_000)
-	body, _, _ = strings.Cut(strings.TrimPrefix(got, "r:\n"), "\n[result cut")
-	var p struct{ Findings []string }
-	if len(got) > 8_000 || json.Unmarshal([]byte(body), &p) != nil || len(p.Findings) != 1 || len(p.Findings[0]) < 5_000 || !strings.Contains(p.Findings[0], "a & b") {
-		t.Errorf("one-item array: %d bytes, %d items: %.160q", len(got), len(p.Findings), got)
-	}
-	var many []map[string]string
-	for i := range 300 { // several fields cut, so several notes
-		many = append(many, map[string]string{"claim": strings.Repeat("x", 40+i%7)})
-	}
-	nested, _ := json.Marshal(map[string]any{"a": many, "b": many, "c": strings.Repeat("y", 9_000), "d": many})
-	for _, n := range []int{2_000, 5_000, 16_000} {
-		if got := clipResult(toolOut{"Result of ledger (step 9):\n", nested}, n); len(got) > n {
-			t.Errorf("cut to %d: %d bytes", n, len(got))
+// TestV4EscapedResultsNeverPanic (lab-r3 r4 verifier H1, the three repros; panicked on 89229c9): a
+// tool result json.Marshal wrote (HTML-escaped, "&" as a 6-byte escape) is shown whole when it fits and
+// otherwise refused as typed, valid JSON; nothing is cut, so nothing can index past a string's end.
+func TestV4EscapedResultsNeverPanic(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		v    any
+		n    int
+	}{
+		{"string field, 16 KB retry", map[string]any{"text": strings.Repeat("Smith & Jones LLP ", 700), "next": 3}, ShrunkResult},
+		{"one-item array, 16 KB retry", map[string]any{"passages": []string{strings.Repeat("From: A <a@x.com> ", 700)}}, ShrunkResult},
+		{"string field, 100 KB transcript cap", map[string]any{"text": strings.Repeat("Procter & Gamble <PG> ", 4300)}, maxResult},
+		{"fits", map[string]any{"text": "Smith & Jones <x>"}, maxResult},
+	} {
+		raw, _ := json.Marshal(c.v) // as tools write their output
+		got := content(toolOut{"Result of retrieve (step 4):\n", "retrieve", raw}, c.n)
+		body := strings.TrimPrefix(got, "Result of retrieve (step 4):\n")
+		switch {
+		case len(got) > c.n:
+			t.Errorf("%s: %d bytes > %d", c.name, len(got), c.n)
+		case len(raw)+29 <= c.n && body != string(raw):
+			t.Errorf("%s: a result that fits was changed", c.name)
+		case len(raw)+29 > c.n && ErrorSchema.Validate(json.RawMessage(body)) != nil:
+			t.Errorf("%s: the refusal does not match the error schema: %q", c.name, body)
 		}
-		if got := clip(strings.Repeat("z", 3*n), n); len(got) > n {
-			t.Errorf("clip to %d: %d bytes", n, len(got))
-		}
+	}
+}
+
+// TestPanickingToolFailsOnlyItsRun (lab-r3 r4 H1): a tool that panics ends its run with ErrPanic (the
+// engine fails that task as internal); the process and another run on the same runtime go on.
+func TestPanickingToolFailsOnlyItsRun(t *testing.T) {
+	boom := GoTool{S: goSpec("boom"), Fn: func(context.Context, Call) (any, Usage, error) { panic("index out of range") }}
+	rt, _ := rig(t, map[string][]model.Reply{"lead": {calls(call("boom", q)), calls(call("finish", q))}}, boom, newFinish())
+	if _, err := rt.Run(context.Background(), lead("boom", "finish"), Call{Input: json.RawMessage(`"go"`)}, NewBudget(50, 1, 0)); !errors.Is(err, ErrPanic) {
+		t.Fatalf("a panicking tool's run ended with %v, want ErrPanic", err)
+	}
+	if res, err := rt.Run(context.Background(), lead("boom", "finish"), Call{Input: json.RawMessage(`"go"`)}, NewBudget(50, 1, 0)); err != nil || !res.Final {
+		t.Fatalf("the next run on the same runtime: %v", err)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/discover-legal/BigLaw/internal/docs"
 )
@@ -26,7 +27,7 @@ const (
 	maxPlaces  = 8       // occurrences of one part tried for one whose gap from the part before is allowed
 	maxGap     = 400     // bytes of the document between two parts
 	maxSkipped = 2       // whole sentences two parts may skip between them
-	ctxMax     = 8 << 10 // bytes of a requirement's section it is read in, at most (its heading path aside)
+	ctxMax     = 8 << 10 // bytes of the text a requirement is read in, at most (its heading-path label aside)
 )
 
 // joins are where a model joins passages of a requirement: after a colon, semicolon, sentence end
@@ -215,161 +216,111 @@ func lineOf(text string, i int) span {
 	return span{s, i + e}
 }
 
-// colonEnd reports whether a line, closing quotes and brackets aside, ends with a colon (also a
-// full-width one): it introduces what follows it.
-func colonEnd(line string) bool {
-	t := strings.TrimRight(strings.TrimSpace(foldCf(line)), closers)
-	return strings.HasSuffix(t, ":") || strings.HasSuffix(t, "：")
-}
+// sentenceGap is where a sentence or clause ends and the next begins (an end mark, closers, white
+// space), or a line break; blankLine is a paragraph break.
+var (
+	sentenceGap  = regexp.MustCompile(`[.!?;:：](?:["”’)\]]*)[ \t\r]*\n?[ \t]*|\n[ \t]*`)
+	sentenceStop = regexp.MustCompile(`[.!?](?:["”’)\]]*)\s`)
+	blankLine    = regexp.MustCompile(`\n[ \t\r]*\n`)
+)
 
-// item is a section that is an item of a list rather than a clause of its own: lettered or roman.
-func item(x docs.Section) bool { return x.Scheme == "alpha" || x.Scheme == "roman" }
-
-// parent is section i's nearest enclosing numbered section in the pre-order list, or -1 (a preface
-// or flat document's level-0 section encloses nothing).
-func parent(secs []docs.Section, i int) int {
-	for j := i - 1; j >= 0; j-- {
-		if secs[j].Level > 0 && secs[j].Level < secs[i].Level && secs[j].End >= secs[i].End {
-			return j
-		}
-	}
-	return -1
-}
-
-// introduced reports whether the last non-blank line before byte at ends with a colon.
-func introduced(text string, at int) bool {
-	t := strings.TrimRight(text[:at], " \t\r\n")
-	return t != "" && colonEnd(text[lineOf(text, len(t)-1).s:len(t)])
-}
-
-// sectionOf is the section a requirement at text[s:e] is read in, from the document's own section
-// tree (docs.Parse, the tree retrieve and the outline show): the deepest section holding the
-// requirement; for a lettered or roman item, the clause that holds its list (so a sibling such as
-// "(b) Paragraph (a) shall not apply" is read with it); and for a list with no enclosing clause, or a
-// clause introduced by a colon line before it, the whole run of its sibling items with the text that
-// introduces them. lo..hi is that text, whole; root is the section whose heading path governs it.
-func sectionOf(secs []docs.Section, text string, s, e int) (lo, hi, root int) {
-	n := -1
-	for i, x := range secs {
-		if x.Start <= s && e <= x.End {
-			n = i
-		}
-	}
-	if n < 0 { // across the preface and a heading: the whole document
-		return 0, len(text), -1
-	}
-	for item(secs[n]) {
-		p := parent(secs, n)
-		if p < 0 {
-			break
-		}
-		n = p
-	}
-	x := secs[n]
-	if x.Level == 0 {
-		return x.Start, x.End, n
-	}
-	first, last := n, n
-	for j := n - 1; j >= 0 && secs[j].Level >= x.Level; j-- {
-		if secs[j].Level == x.Level {
-			if secs[j].Scheme != x.Scheme {
-				break
-			}
-			first = j
-		}
-	}
-	if !item(x) && !introduced(text, secs[first].Start) {
-		return x.Start, x.End, n
-	}
-	for j := n + 1; j < len(secs) && secs[j].Level >= x.Level; j++ {
-		if secs[j].Level == x.Level {
-			if secs[j].Scheme != x.Scheme {
-				break
-			}
-			last = j
-		}
-	}
-	lo, root = 0, -1
-	if at := secs[first].Start; at > 0 { // the section whose own text the list follows: its introduction
-		for i, y := range secs {
-			if y.Start < at && at <= y.BodyEnd {
-				lo, root = y.Start, i
-			}
-		}
-	}
-	return lo, secs[last].End, root
-}
+// Window bounds (lab-r3 r4, coordinator decision): a requirement is read in the document's text around
+// it, not in a section of docs.Parse's tree, whose heading guesses are not reliable enough for a safety
+// check (a wrapped cross-reference read as a heading split the requirement's sentence, verifier H2).
+const (
+	ctxSide  = 3 << 10 // bytes of text read before the requirement and after it
+	ctxReach = 256     // how far an edge may move outward to a sentence or line end
+	maxPath  = 512     // bytes of the heading-path label
+)
 
 // contextOf is a verified requirement's context (spans in document order, the first part's start to
-// the last part's end as one requirement): the heading lines of the sections that enclose its
-// section, then its section (sectionOf), whole, before and after the requirement, so introductions
-// and overrides below it ("Notwithstanding the foregoing …", "(b) Paragraph (a) shall not apply") are
-// in it. No layout is guessed: the structure is the document's section tree. A section over ctxMax
-// bytes keeps the requirement, then the text before it up to the nearest colon-ending line above it
-// (never cut), then as much of the section's text before and after as the bound allows, cut only at
-// its far ends; truncated reports that anything was cut (the verdict on it is then admitted only at
-// low confidence, for a lawyer's review).
-func contextOf(text string, spans [][2]int) (ps []span, truncated bool) {
+// the last part's end as one requirement): the requirement with about ctxSide bytes of the document
+// before and after it, each edge moved to a sentence or line end (outward within ctxReach, else
+// inward), at most ctxMax bytes whatever docs.Parse makes of the document (M2). An introduction or
+// lead-in without a colon and a sibling's override within that reach are in it (M1); an override
+// farther away, or in another clause or definition, is not (README discloses it). truncated reports
+// that the requirement's sentence or paragraph starts before the window, or an edge cut a sentence:
+// the verdict on it is then admitted only at low confidence, for a lawyer's review. path is the
+// heading path above the requirement, from docs.Parse: a label only, never a boundary.
+func contextOf(text string, spans [][2]int) (ps []span, path string, truncated bool) {
 	s, e := spans[0][0], spans[len(spans)-1][1]
-	secs := docs.Parse(text)
-	lo, hi, root := sectionOf(secs, text, s, e)
-	a, b := lo, hi
-	if hi-lo > ctxMax {
-		truncated = true
-		keep := s
-		for l := lineOf(text, s); l.s > lo; { // the nearest colon-ending line above the requirement
-			l = lineOf(text, l.s-1)
-			if colonEnd(text[l.s:l.e]) {
-				keep = l.s
-				break
-			}
+	side := max(0, min(ctxSide, (ctxMax-2*ctxReach-(e-s))/2))
+	a, b := 0, len(text)
+	if s-side > 0 {
+		a = edgeBefore(text, s-side, s)
+		if a < 0 {
+			a, truncated = -a, true
 		}
-		rem := max(0, ctxMax-(e-keep))
-		a = keep - min(keep-lo, rem)
-		b = e + min(hi-e, max(0, rem-(keep-a)))
-		if a > lo { // start after white space
-			if k := strings.IndexFunc(text[a:keep], unicode.IsSpace); k >= 0 {
-				a += k + 1
-			} else {
-				a = keep
-			}
-		}
-		if b < hi { // end before white space
-			if k := strings.LastIndexFunc(text[e:b], unicode.IsSpace); k >= 0 {
-				b = e + k
-			} else {
-				b = e
-			}
+		at := text[max(0, a-4):s] // a break just before the edge counts
+		para := blankLine.MatchString(at)
+		truncated = truncated || !para || !sentenceStop.MatchString(at) // the requirement's paragraph or sentence starts before the window
+	}
+	if e+side < len(text) {
+		b = edgeAfter(text, e+side, e)
+		if b < 0 {
+			b, truncated = -b, true
 		}
 	}
-	var path []int // the enclosing sections' headings, outermost first, and the root's own when it was cut
-	if root >= 0 {
-		if a > secs[root].Start {
-			path = append(path, root)
-		}
-		for p := parent(secs, root); p >= 0; p = parent(secs, p) {
-			path = append([]int{p}, path...)
-		}
-	}
-	for _, i := range path {
-		if l := lineOf(text, secs[i].Start); l.e <= a && strings.TrimSpace(text[l.s:l.e]) != "" {
-			ps = append(ps, l)
-		}
-	}
-	return merged(text, append(ps, span{a, b})), truncated
+	return []span{{a, b}}, headingPath(text, a, s), truncated
 }
 
-// merged joins pieces that only white space separates (one citation for one run of the text).
-func merged(text string, ps []span) []span {
-	var out []span
-	for _, p := range ps {
-		if n := len(out); n > 0 && p.s >= out[n-1].e && strings.TrimSpace(text[out[n-1].e:p.s]) == "" {
-			out[n-1].e = p.e
+// edgeBefore moves a window's start at i to the nearest sentence or line end: outward within ctxReach,
+// else inward (never past limit). Negative: no such end, so the edge (at white space) cuts a sentence.
+func edgeBefore(text string, i, limit int) int {
+	if ms := sentenceGap.FindAllStringIndex(text[max(0, i-ctxReach):i], -1); len(ms) > 0 {
+		return max(0, i-ctxReach) + ms[len(ms)-1][1]
+	}
+	if m := sentenceGap.FindStringIndex(text[i:limit]); m != nil {
+		return i + m[1]
+	}
+	for i < limit && !utf8.RuneStart(text[i]) {
+		i++
+	}
+	if k := strings.IndexFunc(text[i:limit], unicode.IsSpace); k >= 0 {
+		i += k + 1
+	}
+	return -i
+}
+
+// edgeAfter moves a window's end at i to the nearest sentence or line end: outward within ctxReach,
+// else inward (never before limit). Negative: no such end, so the edge cuts a sentence.
+func edgeAfter(text string, i, limit int) int {
+	end := func(m []int, at int) int { // after the end mark and its closers, before the white space
+		return at + m[0] + len(strings.TrimRight(text[at+m[0]:at+m[1]], " \t\r\n"))
+	}
+	if m := sentenceGap.FindStringIndex(text[i:min(len(text), i+ctxReach)]); m != nil {
+		return end(m, i)
+	}
+	if ms := sentenceGap.FindAllStringIndex(text[limit:i], -1); len(ms) > 0 {
+		return end(ms[len(ms)-1], limit)
+	}
+	for i > limit && !utf8.RuneStart(text[i]) {
+		i--
+	}
+	if k := strings.LastIndexFunc(text[limit:i], unicode.IsSpace); k >= 0 {
+		i = limit + k
+	}
+	return -i
+}
+
+// headingPath is the heading lines of docs.Parse's sections that hold byte at and start before the
+// window's start a (the window shows the others), outermost first, joined by " › " (each at most 120
+// bytes, all at most maxPath): a label for where the text is, never a boundary of what is read.
+func headingPath(text string, a, at int) string {
+	var hs []string
+	n := 0
+	for _, x := range docs.Parse(text) {
+		l := lineOf(text, x.Start)
+		if x.Level == 0 || x.Start > at || at >= x.End || l.e > a {
 			continue
 		}
-		out = append(out, p)
+		h := truncate(strings.Join(strings.Fields(text[l.s:l.e]), " "), 120)
+		if n += len(h) + 5; h == "" || n > maxPath {
+			break
+		}
+		hs = append(hs, h)
 	}
-	return out
+	return strings.Join(hs, " › ")
 }
 
 // blankRun is a line break with any blank lines after it.

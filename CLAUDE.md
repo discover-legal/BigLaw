@@ -99,7 +99,7 @@ change. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`, not here.
   visits at once with timing-free grants and admission in reading order: a visit's `extract_facts` waits
   for its turn via `awaitTurn`; a visit a worker's share cannot fund is read again serially), `check_deviation` (the requirement
   is verified in `requirementDocId` before the subagent runs, JSON escapes undone and a joined requirement
-  part by part, `placeRequirement` (`requirement.go`: the document's words, in order, one passage), then read in its section (`contextOf`: the leaf section of `docs.Parse`'s tree, a lettered/roman item widened to the clause holding its list, a list with no clause to its run and introduction, whole, plus the heading path; ≤ 8 KB trimmed around the requirement only, the nearest colon line above never cut, `Truncated`): the subagent judges against it, its controlling quote must lie in it, the finding quotes it; before admission one critic call inside the grant (`checkSection`, `rt.ChatWithin`, section fenced) answers yes/no/unclear whether the whole section imposes it as the verdict states: no drops, unclear or truncated admits `Low` (gated), no grant drops; never add word-list refusals or layout walks; a refusal quotes the nearest exact passage, bounded and fenced;
+  part by part, `placeRequirement` (`requirement.go`: the document's words, in order, one passage), then read in a bounded window of the text around it (`contextOf`: ~3 KB before and after, edges at sentence/line ends, ≤ 8 KB whatever `docs.Parse` says, the heading path a label only, never a boundary; `Truncated` when the requirement's sentence or paragraph starts before the window or an edge cuts a sentence): the subagent judges against it, its controlling quote must lie in it, the finding quotes it; before admission one critic call inside the grant (`checkSection`, `rt.ChatWithin`, text fenced; answer from one strict JSON object, `checkAnswer`) answers yes/no/unclear whether the text imposes it as the verdict states: no drops, unclear or truncated admits `Low` (gated), no grant drops; an override > ~3 KB away or in another clause is not seen (README); never add word-list refusals or layout walks; a refusal quotes the nearest exact passage, bounded and fenced;
   omissions confirmed by the judge), the
   coverage pass (`cover.go`: touched issues get one `analyze_issue` + redraft from `Allocation.Cover`, then
   salient verified findings no section cites and figure conflicts the memo does not state get one redraft
@@ -152,7 +152,11 @@ not yet judged (self-test tape).
   the banner and the step `source` marks true. A change to `internal/docs` output or `eval/tasks`
   makes the recording stale: re-record (`make demo-record`) and say so in the PR.
 - Agent runtime: every tool is registered (never called around `Runtime.Invoke`), its spec is data
-  (`specs/*.json`) and its schemas strict-shaped; a tool reports its usage in `Result` even when it fails;
+  (`specs/*.json`) and its schemas strict-shaped; tool outputs are bounded by type and never trimmed: a
+  list or long text is one page of `agent.PageBytes` (`agent.Page`/`Take`/`TakeText`) with `next` or
+  `truncated` in its output schema, and a test that fills it past the page; the runtime refuses a result
+  over its cap with the typed `TooLarge` error (`agent.ErrorSchema`), never cuts one; a tool panic is
+  `ErrPanic` and fails only its task; a tool reports its usage in `Result` even when it fails;
   errors the model may read are `agent.Fail(...)` in BigLaw's words (anything else shows as "internal
   error"). `analysis` imports only `agent`; the allowed import table is `internal/agent/boundaries_test.go`
   (`TestImportBoundaries`): add a row for a new package. No matter data in any schema
@@ -191,6 +195,6 @@ make demo-bundle # ui/dist-recorded for discover.legal/demo/biglaw/; make demo-r
 # DB tests: BIGLAW_TEST_DSN=postgres://…?sslmode=disable BIGLAW_REQUIRE_DB=1 (Postgres with pgvector)
 make e4-record EMBED_MODEL=…   # owner-run: record the E4 tape at the model's own length (make e4-live: no tape)
 ```
-Budgets: Go prod LOC reported with no limit (owner decision 17: the total ceiling is dropped; 14,776 used; each PR reports its lines vs its DESIGN budget; test-support packages such as `storetest` count), internal
+Budgets: Go prod LOC reported with no limit (owner decision 17: the total ceiling is dropped; 14,883 used; each PR reports its lines vs its DESIGN budget; test-support packages such as `storetest` count), internal
 packages ≤ 12 (8 used; test-support packages do not count), direct deps ≤ 3, env vars ≤ 20 (18 used), UI runtime
 deps ≤ 2 (2 used), UI source lines (`ui/src`) ≤ 2,400, untested packages 0, longest source file ≤ 2,000 lines.

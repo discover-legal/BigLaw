@@ -108,14 +108,16 @@ func classify(line string) (Section, bool) {
 	}
 	s = strings.TrimSpace(strings.Trim(s, "*_")) // **1.2 Bold heading**
 	sec := func(scheme, number, title string, level int) (Section, bool) {
-		title = strings.Map(func(r rune) rune { // no bidi overrides or other invisible or control characters in a title
+		raw := strings.TrimLeft(strings.NewReplacer("**", "", "__", "").Replace(title), " \t*_") // the title as it follows the number
+		title = strings.Map(func(r rune) rune {                                                  // no bidi overrides or other invisible or control characters in a title
 			if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
 				return -1
 			}
 			return r
 		}, strings.Trim(strings.NewReplacer("**", "", "__", "").Replace(title), " \t*_—–-:."))
-		if len(number) > maxNumber || scheme == "decimal" && (level > 6 || startsLower(title)) {
-			return Section{}, false // "1.2.3.4.5.6", "100 dollars were paid", "1.5 million"
+		if len(number) > maxNumber || scheme == "decimal" && (level > 6 || startsLower(title)) ||
+			(scheme == "article" || scheme == "section" || scheme == "schedule") && (startsLower(raw) || startsPunct(raw)) {
+			return Section{}, false // "1.2.3.4.5.6", "100 dollars were paid", "1.5 million"; a wrapped cross-reference: "Article 4 of the Trust, …", "Section 9, …" (lab-r3 r4 H2)
 		}
 		return Section{Number: number, Title: clip(title, maxTitle), Scheme: scheme, Level: level, Defs: reDefinitions.MatchString(clip(title, maxTitle))}, true
 	}
@@ -135,7 +137,7 @@ func classify(line string) (Section, bool) {
 		return sec("roman", "("+m[1]+")", m[2], 5)
 	} else if m := reAlpha.FindStringSubmatch(s); m != nil {
 		return sec("alpha", "("+m[1]+")", m[2], 4)
-	} else if m := reDecimal.FindStringSubmatch(s); m != nil {
+	} else if m := reDecimal.FindStringSubmatch(s); m != nil && !(len(s) > len(m[1]) && s[len(m[1])] != '.' && !strings.Contains(m[1], ".") && address(m[2])) {
 		return sec("decimal", m[1], m[2], strings.Count(m[1], ".")+2)
 	} else if md != nil && s != "" {
 		return sec("heading", "", s, len(md[1]))
@@ -144,6 +146,19 @@ func classify(line string) (Section, bool) {
 }
 
 func startsLower(s string) bool { r, _ := utf8.DecodeRuneInString(s); return unicode.IsLower(r) }
+
+// startsPunct: a title that runs on from its number with punctuation (", name …"), not a separator
+// ("—", ":", ".") or an opening bracket or quote.
+func startsPunct(s string) bool {
+	r, _ := utf8.DecodeRuneInString(s)
+	return unicode.IsPunct(r) && !strings.ContainsRune("([\"“‘'—–-:.", r)
+}
+
+// reStreet is a street word: "12 Elm Street, …" after a bare number is an address on a wrapped line,
+// not a heading (lab-r3 r4 H2).
+var reStreet = regexp.MustCompile(`^(?:\S+\s+){1,3}(?i:street|st|avenue|ave|road|rd|lane|ln|drive|dr|boulevard|blvd|way|place|pl|court|ct|terrace|highway|hwy|parkway|square|suite|floor)\b\.?(?:,|\s|$)`)
+
+func address(title string) bool { return reStreet.MatchString(title) }
 
 // isRomanItem: "(i)", "(v)", "(x)" and multi-letter roman tokens ("ii", "iv") are roman; a single
 // c, d, l or m is far more likely an alpha enumerator.

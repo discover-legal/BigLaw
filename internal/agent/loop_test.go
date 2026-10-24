@@ -12,7 +12,6 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
-	"unicode/utf8"
 
 	"github.com/discover-legal/BigLaw/internal/model"
 )
@@ -597,35 +596,51 @@ func TestToolStepJournalsEachModelCall(t *testing.T) {
 	}
 }
 
-// TestOversizedResultCappedAndShrunk (bench4, SEC: ledger findings in full were one 682 KB result;
-// the lead's next request overflowed its context, and the over-long retry kept that newest result
-// whole, so the run failed): a tool result is cut to maxResult bytes in the transcript with a note on
-// how to page, and a second context-length refusal cuts the newest results to shrunk before the
-// last try, so the run goes on.
-func TestOversizedResultCappedAndShrunk(t *testing.T) {
+// TestOversizedResultRefusedAndShrunk (bench4, SEC: ledger findings in full were one 682 KB result;
+// the lead's next request overflowed its context): a tool result over maxResult reaches the model as
+// the typed refusal (never cut), and a second context-length refusal replaces a newest result over
+// shrunk by the same refusal before the last try, so the run goes on.
+func TestOversizedResultRefusedAndShrunk(t *testing.T) {
+	mid := json.RawMessage(`{"findings":"` + strings.Repeat("é", 20_000) + `"}`)  // 40 KB: under the cap, over shrunk
 	big := json.RawMessage(`{"findings":"` + strings.Repeat("é", 341_000) + `"}`) // 682 KB
 	refused := model.Reply{Err: &model.Error{Kind: model.ErrUnavailable, Detail: "HTTP 400", Status: 400}}
-	rt, f := rig(t, map[string][]model.Reply{"lead": {calls(call("echo", q)), refused, refused, calls(call("finish", q))}},
-		&counter{s: Spec{Name: "echo", Kind: "go", Description: testDesc, In: testIn, Class: "free",
-			Out: json.RawMessage(`{"type":"object","additionalProperties":false,"required":["findings"],"properties":{"findings":{"type":"string"}}}`)}, out: big}, newFinish())
-	if _, err := rt.Run(context.Background(), lead("echo", "finish"), Call{Input: json.RawMessage(`"go"`)}, NewBudget(50, 1, 0)); err != nil {
+	out := json.RawMessage(`{"type":"object","additionalProperties":false,"required":["findings"],"properties":{"findings":{"type":"string"}}}`)
+	rt, f := rig(t, map[string][]model.Reply{"lead": {calls(call("big", q)), calls(call("mid", q)), refused, refused, calls(call("finish", q))}},
+		&counter{s: Spec{Name: "big", Kind: "go", Description: testDesc, In: testIn, Class: "free", Out: out}, out: big},
+		&counter{s: Spec{Name: "mid", Kind: "go", Description: testDesc, In: testIn, Class: "free", Out: out}, out: mid}, newFinish())
+	if _, err := rt.Run(context.Background(), lead("big", "mid", "finish"), Call{Input: json.RawMessage(`"go"`)}, NewBudget(50, 1, 0)); err != nil {
 		t.Fatalf("an oversized result failed the run: %v", err)
 	}
-	result := func(i int) string {
+	newest := func(i int) string {
+		var s string
 		for _, m := range f.Calls()[i].Messages {
 			if m.Role == "tool" {
-				return m.Content.(string)
+				s = m.Content.(string)
 			}
 		}
-		return ""
+		return s
 	}
-	if r := result(1); len(r) > 100_000+400 || !strings.Contains(r, "[result cut ") || !strings.Contains(r, "offset") || !utf8.ValidString(r) {
-		t.Errorf("the first request after the tool holds a %d-byte result: %.80q…%.200q", len(r), r, r[max(0, len(r)-200):])
+	refusal := func(s string, tool string, limit int) bool {
+		_, body, _ := strings.Cut(s, "\n")
+		var e struct {
+			Error struct {
+				Code, Tool string
+				Limit      int
+			}
+		}
+		return len(s) <= limit && ErrorSchema.Validate(json.RawMessage(body)) == nil && json.Unmarshal([]byte(body), &e) == nil &&
+			e.Error.Code == "result_too_large" && e.Error.Tool == tool && e.Error.Limit == limit
 	}
-	if r := result(2); len(r) > 100_000+400 {
-		t.Errorf("the first retry holds a %d-byte result (compaction keeps the latest turn)", len(r))
+	if r := newest(1); !refusal(r, "big", maxResult) {
+		t.Errorf("the 682 KB result reached the lead as %d bytes, not the typed refusal: %.300q", len(r), r)
 	}
-	if r := result(3); len(r) > 16_000+400 || !strings.Contains(r, "[result cut ") {
-		t.Errorf("the second retry holds a %d-byte result, want it cut", len(r))
+	if r := newest(2); len(r) < 40_000 || !strings.HasSuffix(r, `"}`) {
+		t.Errorf("a 40 KB result under the cap was not shown whole: %d bytes", len(r))
+	}
+	if r := newest(3); len(r) < 40_000 {
+		t.Errorf("the first retry changed the newest result (compaction keeps the latest turn): %d bytes", len(r))
+	}
+	if r := newest(4); !refusal(r, "mid", shrunk) {
+		t.Errorf("the second retry holds a %d-byte newest result, want the typed refusal: %.300q", len(r), r)
 	}
 }

@@ -59,7 +59,7 @@ func TestJoinRefusesUnverifiedInputs(t *testing.T) {
 		t.Fatalf("a quarantined finding was joined: %v", err)
 	}
 	res, err := invoke(t, "join_discrepancies", `{"fids":null,"aliases":null}`)
-	if err != nil || string(res.Output) != `{"conflicts":[],"unreadDocuments":[]}` {
+	if err != nil || string(res.Output) != `{"conflicts":[],"truncated":false,"unreadDocuments":[]}` {
 		t.Fatalf("all verified: %s %v", res.Output, err)
 	}
 }

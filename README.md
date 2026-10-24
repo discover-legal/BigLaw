@@ -386,8 +386,11 @@ other than tab, newline, CR and form feed turned into spaces, so it can be store
 **Section tree and chunks.** v1's page index, rewritten: articles, sections (`Section 1`, `§ 1`),
 decimal clauses (`1`, `1.1`; the first number at most three digits, so a year is not a heading,
 and a number followed by a lower-case word, such as `100 dollars were paid` or `1.5 million`, is
-body text), `(a)` and `(i)` items, schedules/exhibits/annexes, recitals, and Markdown `#` or bold
-headings. The tree is bounded so storage stays linear in the input (each chunk carries its
+body text, and so is a bare number before a street word, `12 Elm Street, …`), `(a)` and `(i)` items,
+schedules/exhibits/annexes, recitals, and Markdown `#` or bold headings. An article, section, `§` or
+schedule line whose title runs on from its number in lower case or with punctuation (`Article 4 of the
+Trust, …`, `Section 9, …`, a PDF-wrapped cross-reference) is body text; a separator (`—`, `:`, `.`)
+before the title keeps it a heading (`TestWrappedLinesAreNotHeadings`). The tree is bounded so storage stays linear in the input (each chunk carries its
 section path): at most 10,000 sections per document (later headings stay body text of the last
 one, and the document's `notes` say so, so an outline never looks complete when it is not),
 titles cut at 120 bytes, numbers of at most 24 bytes and five decimal levels, so a path has at
@@ -792,10 +795,26 @@ The memo workflow (§ Memo workflow) drives these. What PR 4a ships, all tested 
   `ledger{op:"plan"}`), input schema, the task's `Policy` (PR 4b), then a grant; the tool's usage is
   charged even when it fails and its output must match its schema. A subagent's answer must validate
   (one repair request, then `ErrToolOutput`). At most 8 tool calls run per turn. Tool results older
-  than four turns are replaced by a handle naming their step, and any one result is cut to 100 KB
-  in the transcript with a note on how to page (`TestOversizedResultCappedAndShrunk`; bench4: a
-  682 KB ledger result overflowed the lead's context); an endpoint's 400/413/422 compacts all
-  but the latest turn's and retries, then cuts the latest results to 16 KB and retries once more; the cut is for that request only, and it is structure-aware: a JSON object loses trailing array items (or the tail of its largest string) and stays valid JSON with its scalar fields such as `next` (`TestR2VShrinkSticksAndHidesNext`, `TestClipJSONDropsTrailingItems`). Text in tool results is labelled untrusted matter data.
+  than four turns are replaced by a handle naming their step. **Tool outputs are bounded by type and
+  never trimmed** (owner decision, lab-r3 r4: a byte cut of JSON panicked on escaped text and showed a
+  part as if whole): every tool output that holds a list or long text is one page of at most
+  `agent.PageBytes` (12 KB, under the 16 KB retry bound, so a page always reaches the model whole),
+  filled by `agent.Page` (`Take` keeps the leading items that fit, at least one; `TakeText` a page of
+  text), and says how to get the rest in its schema: `next` (an offset: `retrieve` search, outline and
+  section; `ledger` findings, relations, critics and `draft_get`) or `truncated: true` with a narrower
+  call (`numbers` handles and table, whole rows; `join_discrepancies`; `finish`'s lists, by priority;
+  `committee`, the rest from `ledger` op `critics`; `sweep`, the findings in the ledger and the uncovered
+  pages for a later sweep). The other outputs are bounded by their input or answer: `verify_quote` (one
+  match), `cover` (≤ 40 issue ids), a subagent's answer (its schema's `maxItems`/`maxLength` and its
+  8,192-token answer cap) (`TestRetrievePagesByType`, `TestLedgerPagesByType`, `TestReportsPageByType`,
+  `TestAnalysisToolsPageByType`). The runtime's last guard refuses rather than trims: a result over
+  100 KB reaches the model as a typed refusal, `{"error":{"code":"result_too_large","message":…,"tool",
+  "bytes","limit","next"}}` (`agent.ErrorSchema`, `TooLarge`; `TestOversizedResultRefusedAndShrunk`,
+  `TestV4EscapedResultsNeverPanic`); an endpoint's 400/413/422 compacts all but the latest turn's and
+  retries, then replaces a latest result over 16 KB by the same refusal and retries once more, for that
+  request only (`TestR2VShrinkSticksAndHidesNext`). A tool that panics ends its run with `ErrPanic` (its
+  stack logged), and the engine fails that task as an internal error; the task goroutine recovers too,
+  so a panic never stops `serve` (`TestPanickingToolFailsOnlyItsRun`). Text in tool results is labelled untrusted matter data.
   The model sees refusals (reason and next step) and tool failures in BigLaw's own words only; any
   other error is logged and shown as "internal error". A model failure (G6) ends the run, except a
   subagent's answer cut off at its token limit before any text or whole tool call: that is a bad
@@ -898,9 +917,10 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
 
 - **The ledger** (`ledger`; one Postgres table, a JSON row per kind and key): `plan` (the issues
   the deliverable must answer, each typed by a BELO-lite class), `findings` / `get` (brief or full:
-  citations and value refs `F3.v1`; `findings` a page of about 12 KB at a time (under the 16 KB over-long cut), `offset` from the
+  citations and value refs `F3.v1`; `findings` a page of about 12 KB at a time (under the 16 KB over-long bound), `offset` from the
   result's `next`, `TestLedgerFindingsPage`), `resolve` (a critic finding fixed or disclosed, with a note),
-  `draft_get` (a finished section only: `not_drafted` otherwise) and `relations`. A subagent may only
+  `draft_get` (a finished section only: `not_drafted` otherwise; paged by byte `offset`), `relations` and
+  `critics` (the committee's findings with their status), each paged the same way (`TestLedgerPagesByType`). A subagent may only
   read, and never sees a quarantined finding (G3).
 - **Evidence** (`extract_facts`, `analyze_issue`, `check_deviation`; subagents on the `specialist`
   role). Go completes each call (the section's text, the packs) and checks every answer before it
@@ -919,24 +939,30 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
   ellipses stripped from the parts' edges; one normalised index of the document, the caller's ctx),
   every part the document's own words, the parts in the
   document's order, one passage (§ Limitations, LAB round 3); a part under four words only as a
-  heading line before another. The verified requirement is then read in its section (`requirement.go`
-  `contextOf`): the section of the document's own section tree (`docs.Parse`, byte-exact, the tree the
-  outline shows) that holds it, whole, before and after the requirement, so introductions and overrides
-  below it ("Notwithstanding the foregoing …", "(b) Paragraph (a) shall not apply") are in it; a lettered
-  or roman item is read in the clause that holds its list, and a list with no enclosing clause (or a clause
-  a colon line introduces) with its whole run of items and the text before it; plus the heading lines of
-  the sections above. No layout is guessed. A section over 8 KB is cut around the requirement only: the
-  requirement, the text before it up to the nearest colon-ending line above it (never cut), then what the
-  bound allows before and after it, cut at the far ends; the context is then marked truncated. The
-  subagent judges against that section (`requirementContext`, the requirement marked ⟦ ⟧), its verdict's
+  heading line before another. The verified requirement is then read in a bounded window of the text around
+  it (`requirement.go` `contextOf`; lab-r3 r4, coordinator decision: `docs.Parse`'s heading guesses are
+  not reliable enough for a safety check, and a wrapped cross-reference read as a heading split a
+  requirement's sentence): the requirement plus about 3 KB of the document before it and 3 KB after it,
+  each edge moved to a sentence or line end (outward up to 256 bytes, else inward), at most 8 KB
+  whatever Parse makes of the document, so introductions, lead-ins without a colon ("The Trustee shall
+  not—"), and overrides or sibling sub-clauses nearby ("5.2 Clause 5.1 shall not apply", "Notwithstanding
+  the foregoing …") are in it; the heading path above the window (`docs.Parse`'s sections that hold it) is
+  shown as a bracketed label only, never a boundary. The window is marked truncated when the requirement's
+  sentence or paragraph starts before it, or an edge found no sentence or line end and cuts a sentence
+  (`TestContextIsTheTextAroundIt`, `TestContextTruncatedWhenTheSentenceStartsBefore`,
+  `TestV4WrappedLineSplitsTheSentence`, `TestV4DecimalSiblingsAndChapeau`, `TestV4ContextBoundHolds`). The
+  subagent judges against that text (`requirementContext`, the requirement marked ⟦ ⟧), its verdict's
   controlling quote must lie in it (else the verdict is dropped), and before a verdict is admitted one
-  bounded call on the `critic` role, inside the tool's grant (`rt.ChatWithin`), with the section fenced as
-  document text, answers whether the section, read as a whole, imposes the requirement as the verdict
-  states it (`checkSection`, prompt `specs/section_check.md`): yes admits it, its answer and reason on the
-  finding ("Confirmed against the whole section by an independent check: …"); no (negated or overridden)
-  drops it; unclear, or a yes on a truncated section, admits it at low confidence, labelled for a lawyer's
-  review and gated at finish like a low-confidence transcript (`lowConfidence`); no grant left drops it
-  with a note. The finding quotes the section verbatim as its controlling citation, the requirement
+  bounded call on the `critic` role, inside the tool's grant (`rt.ChatWithin`), with the text fenced as
+  document text, answers whether the text, read as a whole, imposes the requirement as the verdict
+  states it (`checkSection`, prompt `specs/section_check.md`). Its answer is read from one strict JSON
+  object only: exactly one `answer` key, spelled so, `yes`/`no`/`unclear` in any case, any other wording
+  ("Yes, but …") unclear; prose around it, a duplicated or differently spelled key drop the verdict
+  (`TestCheckAnswerStrict`). Yes admits it, the claim saying "An independent check read the surrounding
+  text (N bytes) and agreed", with the checker's reasoning labelled "not a quotation"; no (negated or
+  overridden) drops it; unclear, or a yes on a truncated window, admits it at low confidence, labelled
+  for a lawyer's review and gated at finish like a low-confidence transcript (`lowConfidence`); no grant
+  left drops it with a note. The finding quotes the window verbatim as its controlling citation, the requirement
   marked, with the part and the correction given as the analyst's words, not quotations; prosecute checks
   them against it (`TestV3BlankSeparatedListLosesIntroduction`, `TestV3OverrideBelowNotInContext`,
   `TestSectionCheckNegatedDropsVerdict`, `TestSectionCheckYesAdmitsBenchRequirements`,
@@ -1495,7 +1521,7 @@ improvements (after the real Haiku LAB rerun; scripted the same way): `TestSweep
 
 | Budget | Ceiling | Today |
 |---|---:|---:|
-| Go production lines (physical lines, non-`_test.go`, test-support packages included) | reported, no limit (owner decision 17) | 14,776 |
+| Go production lines (physical lines, non-`_test.go`, test-support packages included) | reported, no limit (owner decision 17) | 14,883 |
 | Packages under `internal/`, test-support packages excluded | 12 | 8 (`agent`, `analysis`, `api`, `docs`, `docs/ooxml`, `engine`, `model`, `store`; `store/storetest` is test support) |
 | Direct Go dependencies | 3 | 2 (`github.com/lib/pq`, `github.com/ledongthuc/pdf`) |
 | Runtime environment variables | 20 | 18 |
@@ -1504,7 +1530,7 @@ improvements (after the real Haiku LAB rerun; scripted the same way): `TestSweep
 | Packages without a `_test.go` | 0 | 0 |
 | Lines in any one source file (`.go`, `.py`, `.sql`, `.sh`, `.js`, `.ts`, `.css`; tests included) | 2,000 | 968 (`internal/docs/vision_safety_test.go`) |
 
-**There is no total line ceiling (owner decision 17, 2026-10-23).** `scripts/loc.py` reports the Go production total (14,776) and fails only on the budgets that bound bloat directly: no file over 2,000 lines, ≤ 3 direct deps, ≤ 20 env vars, ≤ 12 internal packages, ≤ 2,400 UI source lines, no untested package. Each PR still reports its lines against its DESIGN budget in its notes. (The ceiling's history, 14,000 → 17,500 through owner decisions 7–16, is in PLAN.) A **test-support package** is one
+**There is no total line ceiling (owner decision 17, 2026-10-23).** `scripts/loc.py` reports the Go production total (14,883) and fails only on the budgets that bound bloat directly: no file over 2,000 lines, ≤ 3 direct deps, ≤ 20 env vars, ≤ 12 internal packages, ≤ 2,400 UI source lines, no untested package. Each PR still reports its lines against its DESIGN budget in its notes. (The ceiling's history, 14,000 → 17,500 through owner decisions 7–16, is in PLAN.) A **test-support package** is one
 whose directory name ends in `test` and that no production file outside it imports, such as
 `storetest`. Under the coordinator's ruling it is left out of the package count, but its lines
 count toward the reported Go total like any other non-`_test.go` file. A `*test` package that
@@ -1617,23 +1643,29 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
   - A requirement's parts must be the document's words, in its order, one passage: only white space
     and list markers between them, or, after a sentence, at most two whole sentences (400 bytes); never
     a heading or a list's introduction between them. A fragment is not refused: it is read and quoted
-    in its section of the document's section tree (`docs.Parse`), so a document whose numbering the tree
-    does not recognise (unmarked headings, "B. Successor Trustees", a PDF text layer) is one section, and
-    its requirement is read in the whole of it, up to the 8 KB bound. An override in a later top-level
-    clause ("6. Notwithstanding clause 5 …") is in another section and is not read with it. A section over
-    the bound is cut around the requirement, the text before it first: what follows a long requirement's
-    section may be left out, and such a verdict is admitted only at low confidence, for a lawyer's review.
-    Whether the section imposes the requirement as a verdict states it (a negation, an override) is the
-    section check's judgment, one critic call per admitted verdict: the context makes the governing words
-    visible and the check reads them, which does not make the verdict right.
+    in about 3 KB of the text before and after it (at most 8 KB). **An override or a governing
+    introduction more than about 3 KB away, or in another clause, a definition or a schedule elsewhere in
+    the document ("9. Clause 4 shall not apply …" pages later, a defined term's meaning), is not seen.**
+    A requirement whose sentence or paragraph starts before the window is admitted only at low
+    confidence, for a lawyer's review, so a requirement in a long paragraph (over 3 KB above it with no
+    blank line) is always gated. Whether the text imposes the requirement as a verdict states it (a
+    negation, an override) is the section check's judgment, one critic call per admitted verdict: the
+    context makes the governing words visible and the check reads them, which does not make the verdict
+    right.
   - The near join pairs only one entity's values (alias-unified, or both with none), within an eighth
     of each other, and not when each label names a thing its own quote states and the other side
     never mentions (a fee and an allocation, a notice and a demand); dates joined by shared words take
     the same label test. It is a word test: a part of a figure is told apart from it only when its
-    quote frames that value as one: "of/toward/against the <label>" right after it, or a portion word
+    quote frames that value as one: "of/toward/against the <label>" right after it; a portion word
     (a deposit, instalment, holdback …) that is not the other's label as the word it is stated under ("a
-    deposit of $950,000"); a portion word merely nearby does not; a part described otherwise is told
-    apart only by the eighth.
+    deposit of $950,000", not "total payments of"); "less / net of / minus" after it in its clause
+    ("$950,000 …, being the Purchase Price less the Holdback"); a sum "held back / in escrow / holdback"
+    in its sentence; or a "payable as follows:" / "payable in instalments:" frame before it. A value the
+    quote states as the other's label ("the Purchase Price is $1,200,000, less the deposit", "shall be a
+    balance of", "being total payments of") is never a part, whatever follows it (`TestPartOfWordings`).
+    Both the label join and the near join apply this test; a part described otherwise pairs under the
+    same label (the label join applies no eighth) and is told apart under different labels only by the
+    eighth.
   - The raw-date rule is paragraph-wide: a list that states the raw date and the rolled deadline on
     separate lines without a blank line between is one paragraph and passes; one with a blank line is
     flagged.

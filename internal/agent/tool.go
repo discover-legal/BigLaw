@@ -116,6 +116,7 @@ var (
 	ErrToolOutput = errors.New("tool output does not match its schema")
 	ErrTurnCap    = errors.New("turn cap reached without an answer")
 	ErrJournal    = errors.New("the step log refused a step") // ends the run (a lost lease, max steps, a database error)
+	ErrPanic      = errors.New("a tool panicked")             // ends the run as an internal error (logged with its stack)
 )
 
 // Refusal is a call that did not run: why, and what the agent should do next (README: actionable).

@@ -82,13 +82,28 @@ var ofLabel = regexp.MustCompile(`(?i)^\s*(?:of|out of|from|towards?|against|on 
 // "payments totaling $92,600" states the whole).
 var portionBefore = regexp.MustCompile(`(?i)\b(portion|part|instal(?:l)?ments?|payments?|deposits?|tranches?|holdbacks?|escrow|balance|advance|retention)\s*(?:of|:|=|is|was|in the amount of|equal to)?\s*(?:the sum of\s*)?$`)
 
-// partOf reports whether x's quote frames x itself as a component or portion of y's quantity: the
-// words right after x's value name y's label ("$950,000 of the Purchase Price", "toward the Purchase
-// Price"), or a portion word that is not y's label's own is the word x is stated under ("a deposit
-// of $950,000"). A portion word merely near the value, or in a label ("grand total of payments"),
-// does not frame it ("Payment of the Purchase Price of $1,200,000", "is $1,200,000, in two
-// instalments": lab-r3 r3 verifier M3); a closing payment net of a holdback is still not the price
-// misstated (r2 M3).
+// statedAs is the text between a label and a value that states the value as the label itself: "the
+// Purchase Price is", "shall be a balance of", ", being total payments of", "payable by Buyer is", "of".
+var statedAs = regexp.MustCompile(`(?i)^(?:\s+payable by [\w ]{1,40}?)?\s*,?\s*(?:being|is|shall be|will be|was|equals|of|:)\s+(?:(?:a|an|the)\s+)?(?:(?:balance|sum|total|amount|aggregate)\s+(?:payments?\s+)?of\s+)?$`)
+
+// Framings of a value as a part (lab-r3 r4 verifier M3): a deduction after it in its clause ("$950,000
+// …, being the Purchase Price less the Holdback", "net of", "minus"), a sum held back or in escrow in
+// its sentence, or a "payable as follows:" / "in instalments:" frame before it.
+var (
+	deductionAfter = regexp.MustCompile(`(?i)^[^.;]*\b(?:less|net of|minus)\b`)
+	heldBack       = regexp.MustCompile(`(?i)\b(?:held (?:back|in escrow)|holdback|into escrow|in escrow)\b`)
+	payableFrame   = regexp.MustCompile(`(?i)\b(?:payable|paid|due)\s+(?:as follows|in (?:\w+ )?instal(?:l)?ments)\s*:`)
+	wholeBefore    = regexp.MustCompile(`(?i)\b(?:total|aggregate|combined|all)\s+$`)
+)
+
+// partOf reports whether x's quote frames x itself as a component or portion of y's quantity. A value
+// the quote states as y's label ("the Purchase Price is $1,200,000, less the deposit", "shall be a
+// balance of", "being total payments of": statedAs) is never a part, whatever follows it. Otherwise it
+// is when the words right after it name y's label ("$950,000 of the Purchase Price", "toward the
+// Purchase Price"), a portion word that is not y's label's own is the word it is stated under ("a
+// deposit of $950,000", not "total payments of"), a deduction follows it in its clause ("…, being the
+// Purchase Price less the Holdback", "net of", "minus"), its sentence holds a sum back or in escrow, or
+// a "payable as follows:" frame comes before it (lab-r3 r3 M3, r4 M3 and L5).
 func partOf(x, y entry) bool {
 	label := norm(y.v.Metric)
 	if label == "" || x.v.Value == "" {
@@ -103,15 +118,36 @@ func partOf(x, y entry) bool {
 		if i < 0 {
 			continue
 		}
+		before := strings.ToLower(strings.Join(strings.Fields(q[:i]), " ")) + map[bool]string{true: " ", false: ""}[i > 0 && q[i-1] == ' ']
+		if k := strings.LastIndex(before, label); k >= 0 && statedAs.MatchString(before[k+len(label):]) {
+			continue
+		}
 		after := q[i+len(x.v.Value) : min(len(q), i+len(x.v.Value)+80)]
 		if m := ofLabel.FindStringIndex(after); m != nil && strings.HasPrefix(norm(after[m[1]:]), label) {
 			return true
 		}
-		if m := portionBefore.FindStringSubmatch(strings.TrimRight(q[max(0, i-40):i], "$£€¥ \t")); m != nil && foreign(m[1]) {
+		head := strings.TrimRight(q[max(0, i-40):i], "$£€¥ \t")
+		if m := portionBefore.FindStringSubmatchIndex(head); m != nil && foreign(head[m[2]:m[3]]) && !wholeBefore.MatchString(head[:m[2]]) {
+			return true
+		}
+		if deductionAfter.MatchString(after) || heldBack.MatchString(sentenceOf(q, i)) || payableFrame.MatchString(q[max(0, i-80):i]) {
 			return true
 		}
 	}
 	return false
+}
+
+// sentenceOf is the sentence of q holding byte i (between the end marks around it).
+func sentenceOf(q string, i int) string {
+	s := strings.LastIndexAny(q[:i], ".;!?") + 1
+	e := strings.IndexAny(q[i:], ";!?")
+	if d := strings.Index(q[i:], ". "); d >= 0 && (e < 0 || d < e) {
+		e = d
+	}
+	if e < 0 {
+		return q[s:]
+	}
+	return q[s : i+e]
 }
 
 // scaleWord is a scale stated after a figure: "$92 million", "310 million dollars".

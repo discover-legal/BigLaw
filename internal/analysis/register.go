@@ -8,6 +8,7 @@ import (
 	"embed"
 	"encoding/json"
 	"slices"
+	"strings"
 
 	"github.com/discover-legal/BigLaw/internal/agent"
 )
@@ -96,7 +97,7 @@ func Tools(src Source) []agent.Tool {
 			if err != nil {
 				return nil, agent.Usage{}, err
 			}
-			out := map[string]any{"wid": nil, "result": nil, "unit": nil, "worksheet": nil, "literalOperands": nil, "handles": nil, "tableMarkdown": nil}
+			out, pg := map[string]any{"wid": nil, "result": nil, "unit": nil, "worksheet": nil, "literalOperands": nil, "handles": nil, "tableMarkdown": nil}, agent.NewPage()
 			switch {
 			case in.Op == "calc" && (in.Fn == "" || len(in.Operands) == 0):
 				return nil, agent.Usage{}, agent.Fail(`numbers: op "calc" needs fn (sum, diff, ratio, pct, product, date_add, date_diff or business_days) and operands[] (the values to calculate on); send them and call again, e.g. ` + cmpExample("date_add"))
@@ -107,10 +108,11 @@ func Tools(src Source) []agent.Tool {
 				}
 				out["wid"], out["result"], out["unit"], out["worksheet"], out["literalOperands"] = w.WID, w.Result, w.Unit, w.Steps, w.LiteralOperands
 			case in.Op == "handles":
-				out["handles"] = Handles(fs, in.FIDs, in.SalientTop)
-			default:
-				out["tableMarkdown"] = KeyFigures(fs, in.FIDs)
+				out["handles"] = agent.Take(pg, Handles(fs, in.FIDs, in.SalientTop))
+			default: // whole rows: a page of the table (truncated: name fewer fids)
+				out["tableMarkdown"] = strings.Join(agent.Take(pg, strings.SplitAfter(KeyFigures(fs, in.FIDs), "\n")), "")
 			}
+			out["truncated"] = pg.Truncated
 			return out, agent.Usage{}, nil
 		}},
 		agent.GoTool{S: spec("join_discrepancies"), Fn: func(ctx context.Context, c agent.Call) (any, agent.Usage, error) {
@@ -142,7 +144,9 @@ func Tools(src Source) []agent.Tool {
 					return nil, agent.Usage{}, err
 				}
 			}
-			return map[string]any{"conflicts": append([]Conflict{}, Join(picked, in.Aliases)...), "unreadDocuments": append([]string{}, unread...)}, agent.Usage{}, nil
+			pg := agent.NewPage() // one page (truncated: name fewer fids)
+			return map[string]any{"conflicts": agent.Take(pg, append([]Conflict{}, Join(picked, in.Aliases)...)), "unreadDocuments": agent.Take(pg, append([]string{}, unread...)),
+				"truncated": pg.Truncated}, agent.Usage{}, nil
 		}},
 	}
 }

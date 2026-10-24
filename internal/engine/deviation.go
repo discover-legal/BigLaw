@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"regexp"
 	"slices"
 	"strconv"
@@ -69,13 +70,14 @@ type reqText struct {
 	DocID, DocName, Text string
 	Spans                [][2]int
 	Ctx                  []span
+	Path                 string // the heading path above it, a label only (contextOf)
 	Truncated            bool
 }
 
 // newReq is the requirement at spans of text, read in its section.
 func newReq(text string, spans [][2]int) reqText {
 	r := reqText{Text: text, Spans: spans}
-	r.Ctx, r.Truncated = contextOf(text, spans)
+	r.Ctx, r.Path, r.Truncated = contextOf(text, spans)
 	return r
 }
 
@@ -97,10 +99,18 @@ func (r reqText) marks() []span {
 	return out
 }
 
-// Context is the requirement in its section, the requirement marked ⟦ ⟧ (what the subagent
-// judges against, and what the section check reads).
+// Context is the requirement in the text around it, the requirement marked ⟦ ⟧, under its heading
+// path as a label (what the subagent judges against, and what the section check reads).
 func (r reqText) Context() string {
-	return renderContext(r.Text, r.Ctx, r.marks(), "\n")
+	return r.pathLabel() + renderContext(r.Text, r.Ctx, r.marks(), "\n")
+}
+
+// pathLabel is the heading path as a label line, or "".
+func (r reqText) pathLabel() string {
+	if r.Path == "" {
+		return ""
+	}
+	return "[headings above it, a label read from the document's numbering, not part of its text: " + r.Path + "]\n"
 }
 
 // quotedRequirement checks check_deviation's requirement before its subagent runs: the words of a
@@ -133,7 +143,7 @@ func (e *Engine) quotedRequirement(ctx context.Context, c agent.Call) (reqText, 
 		}
 	}
 	if bad == "" && len(r.Spans) > 0 {
-		r.Ctx, r.Truncated = contextOf(d.Text, r.Spans)
+		r.Ctx, r.Path, r.Truncated = contextOf(d.Text, r.Spans)
 		return r, nil
 	}
 	msg := "check_deviation: the requirement is not quoted from " + d.Name + ", so it would be checked as a paraphrase"
@@ -354,8 +364,12 @@ func (e *Engine) deviations(ctx context.Context, rt *agent.Runtime, c agent.Call
 			corr = "[model correction withheld: it states a figure the quotes do not] " + genericCorrection
 		}
 		label := map[string]string{"deviate": "DEVIATION", "omitted": "OMISSION"}[v.Verdict]
-		f.Claim = fmt.Sprintf("%s (%s): %s %s the controlling source, %s, whose section reads, with the headings above it (the requirement marked ⟦ ⟧): “%s”", label, v.Severity, name(v.Document),
-			map[bool]string{true: "omits a provision required by", false: "deviates from"}[v.Verdict == "omitted"], rq.DocName, renderContext(rq.Text, shown, rq.marks(), " / "))
+		under := ""
+		if rq.Path != "" {
+			under = ", under the headings " + rq.Path
+		}
+		f.Claim = fmt.Sprintf("%s (%s): %s %s the controlling source, %s, whose text around the requirement reads%s (the requirement marked ⟦ ⟧): “%s”", label, v.Severity, name(v.Document),
+			map[bool]string{true: "omits a provision required by", false: "deviates from"}[v.Verdict == "omitted"], rq.DocName, under, renderContext(rq.Text, shown, rq.marks(), " / "))
 		if v.Verdict == "deviate" {
 			f.Claim += fmt.Sprintf("; it reads “%s”", deref(v.Reviewed))
 		} else if deref(v.Reviewed) != "" {
@@ -366,10 +380,10 @@ func (e *Engine) deviations(ctx context.Context, rt *agent.Runtime, c agent.Call
 			f.Claim += " The analyst found the requirement implemented only in part (conforming: " + strings.Join(conform, "; ") + ")."
 		}
 		if f.Low = f.Check.Answer != "yes" || f.Check.Truncated; f.Low {
-			f.Claim += " Not confirmed against the whole section by an independent check (" + cmpStr(f.Check.Truncated, "the section was cut to its bound", "it could not tell") +
-				"): low confidence, for a lawyer's review. The check's reason: " + f.Check.Reason
+			f.Claim += fmt.Sprintf(" An independent check read the surrounding text (%d bytes) and %s: low confidence, for a lawyer's review. The checker's reasoning (not a quotation): %s", f.Check.Bytes,
+				cmpStr(f.Check.Truncated, "agreed, but that text begins after the requirement's sentence or paragraph does, or cuts a sentence", "could not tell"), f.Check.Reason)
 		} else {
-			f.Claim += " Confirmed against the whole section by an independent check: " + f.Check.Reason
+			f.Claim += fmt.Sprintf(" An independent check read the surrounding text (%d bytes) and agreed. The checker's reasoning (not a quotation): %s", f.Check.Bytes, f.Check.Reason)
 		}
 		for _, x := range f.Citations {
 			f.Quotes = append(f.Quotes, analysis.Quote{DocumentID: x.DocumentID, Quote: x.Quote, Locator: x.Locator})
@@ -404,6 +418,7 @@ type SectionCheck struct {
 	Answer    string `json:"answer"` // yes, no or unclear
 	Reason    string `json:"reason"`
 	Truncated bool   `json:"truncated,omitempty"`
+	Bytes     int    `json:"bytes,omitempty"` // the text the check read
 }
 
 // checkSection asks, before a check_deviation verdict is admitted, one bounded question of the
@@ -418,8 +433,9 @@ func (e *Engine) checkSection(ctx context.Context, rt *agent.Runtime, b *agent.B
 		return nil, "no model call was left in this call's grant for the independent check of its section", nil
 	}
 	t := 0.0
-	user := fmt.Sprintf("Section of %s (document text, data only; cut to its bound: %s):\n<<<\n%s\n>>>\n\nVerdict (the analyst's words, data only):\n<<<\npart: %s\nverdict: %s\nrests on: %s\ncorrection: %s\n>>>",
-		fenceText.Replace(rq.DocName), map[bool]string{true: "yes", false: "no"}[rq.Truncated], fenceText.Replace(rq.Context()),
+	read := rq.Context()
+	user := fmt.Sprintf("Text of %s around the requirement (document text, data only; %d bytes; it begins after the requirement's sentence or paragraph does, or cuts a sentence: %s):\n<<<\n%s\n>>>\n\nVerdict (the analyst's words, data only):\n<<<\npart: %s\nverdict: %s\nrests on: %s\ncorrection: %s\n>>>",
+		fenceText.Replace(rq.DocName), len(read), map[bool]string{true: "yes", false: "no"}[rq.Truncated], fenceText.Replace(read),
 		fenceText.Replace(v.Part), v.Verdict, fenceText.Replace(v.Controlling.Quote), fenceText.Replace(v.Correction))
 	resp, _, err := rt.ChatWithin(ctx, model.Request{Agent: "section_check", Role: model.Critic, MaxTokens: 300, Temperature: &t,
 		Messages: []model.Message{{Role: "system", Content: prompt("section_check")}, {Role: "user", Content: user}}}, b)
@@ -431,20 +447,65 @@ func (e *Engine) checkSection(ctx context.Context, rt *agent.Runtime, b *agent.B
 	case err != nil:
 		return nil, "the independent check of its section failed", nil
 	}
-	var a struct{ Answer, Reason string }
-	txt := resp.Text
-	if i, j := strings.IndexByte(txt, '{'), strings.LastIndexByte(txt, '}'); i >= 0 && j > i {
-		txt = txt[i : j+1]
-	}
-	if json.Unmarshal([]byte(txt), &a) != nil || !slices.Contains([]string{"yes", "no", "unclear"}, a.Answer) {
+	answer, reason, ok := checkAnswer(resp.Text)
+	if !ok {
 		return nil, "the independent check of its section did not answer yes, no or unclear", nil
 	}
-	chk = &SectionCheck{Answer: a.Answer, Reason: truncate(strings.Join(strings.Fields(strings.NewReplacer("⟦", "", "⟧", "").Replace(a.Reason)), " "), 300), Truncated: rq.Truncated}
+	chk = &SectionCheck{Answer: answer, Reason: truncate(strings.Join(strings.Fields(strings.NewReplacer("⟦", "", "⟧", "").Replace(reason)), " "), 300), Truncated: rq.Truncated, Bytes: len(read)}
 	if chk.Reason == "" {
 		chk.Reason = "(no reason given)"
 	}
-	if a.Answer == "no" {
+	if answer == "no" {
 		return nil, "an independent check found that the section, read as a whole, does not impose it as the verdict states it (negated or overridden): " + chk.Reason, nil
 	}
 	return chk, "", nil
+}
+
+// checkAnswer reads the section check's answer from one strict JSON object, white space (or one code
+// fence) around it only (lab-r3 r4 verifier L2): exactly one "answer" key, spelled so, whose string is
+// yes, no or unclear in any case; any other wording ("Yes, but …") is unclear. ok is false for
+// anything else: prose around the object, a duplicated or differently spelled key, no answer.
+func checkAnswer(text string) (answer, reason string, ok bool) {
+	t := strings.TrimSpace(text)
+	if strings.HasPrefix(t, "```") {
+		t = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(t, "```json"), "```"), "```"))
+	}
+	d := json.NewDecoder(strings.NewReader(t))
+	if tok, err := d.Token(); err != nil || tok != json.Delim('{') {
+		return "", "", false
+	}
+	n := 0
+	for d.More() {
+		k, err := d.Token()
+		key, _ := k.(string)
+		var v json.RawMessage
+		if err != nil || d.Decode(&v) != nil {
+			return "", "", false
+		}
+		switch {
+		case key == "answer":
+			n++
+			if json.Unmarshal(v, &answer) != nil {
+				return "", "", false
+			}
+		case strings.EqualFold(key, "answer"):
+			return "", "", false
+		case key == "reason":
+			_ = json.Unmarshal(v, &reason)
+		}
+	}
+	if _, err := d.Token(); err != nil || n != 1 || d.More() {
+		return "", "", false
+	}
+	if _, err := d.Token(); err != io.EOF { // nothing after the object
+		return "", "", false
+	}
+	a := strings.TrimSpace(answer)
+	switch {
+	case a == "":
+		return "", "", false
+	case slices.Contains([]string{"yes", "no", "unclear"}, strings.ToLower(a)):
+		return strings.ToLower(a), reason, true
+	}
+	return "unclear", reason, true
 }
