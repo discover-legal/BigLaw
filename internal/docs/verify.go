@@ -132,8 +132,8 @@ func (t *Text) Find(quote string, from, to int) (start, end int, ok bool) {
 	return start, end, start >= 0
 }
 
-// normalize straightens curly quotes and hyphens, folds case and collapses each white-space run to
-// one space.
+// normalize straightens curly quotes and hyphens, folds case, drops format characters (zero-width
+// spaces and joiners, bidi marks, soft hyphens) and collapses each white-space run to one space.
 // back maps every byte of the result (and one past its end) to a byte offset in s.
 func normalize(s string) (string, []int) {
 	var b strings.Builder
@@ -152,6 +152,10 @@ func normalize(s string) (string, []int) {
 			b.WriteByte(' ')
 			back = append(back, i)
 			i = j
+			continue
+		}
+		if unicode.Is(unicode.Cf, r) { // a zero-width or format character renders as nothing: "N\u200bOT" is "NOT"
+			i += n
 			continue
 		}
 		switch r {

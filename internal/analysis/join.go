@@ -46,6 +46,69 @@ type entry struct {
 	words  map[string]bool // the distinctive words of its quotes
 	quotes []string
 	scaled bool // a scale word (million, thousand…) is stated for it: in its value, unit or quote
+	whole  bool // its own digits carry its magnitude: grouped thousands ("$92,000,000") or seven digits or more
+}
+
+// grouped is a figure written with its thousands grouped ("92,000,000", "4,217").
+var grouped = regexp.MustCompile(`\d{1,3}(?:,\d{3})+`)
+
+// wholeFigure reports whether a value's digits carry its magnitude: no scale word could be implied.
+func wholeFigure(value string) bool {
+	if grouped.MatchString(value) {
+		return true
+	}
+	n := 0
+	for _, r := range strings.SplitN(value, ".", 2)[0] {
+		if r >= '0' && r <= '9' {
+			n++
+		}
+	}
+	return n >= 7
+}
+
+// pairable reports whether two quantities' scales are both known, so their normalised magnitudes
+// compare: both stated with a scale word, both without one, or one with it and the other written in
+// full ("$92,000,000" against "$95 million": lab-r3 r2 verifier M2). A bare "92" against "$95 million"
+// is not compared: its scale may be a column's ("$ millions"), which nothing states.
+func pairable(a, b entry) bool {
+	return a.scaled == b.scaled || a.scaled && b.whole || b.scaled && a.whole
+}
+
+// portionWord frames a value as a component of a larger quantity.
+var portionWord = regexp.MustCompile(`(?i)\b(?:portion|part|instal(?:l)?ments?|payments?|deposits?|tranches?|holdbacks?|escrow(?:ed)?|balance|advance|retention|retained)\b`)
+
+// ofLabel is a value followed by "of (the)" or "toward(s)/against/on account of (the)" and then a label.
+var ofLabel = regexp.MustCompile(`(?i)^\s*(?:of|out of|from|towards?|against|on account of)\s+(?:the\s+)?`)
+
+// partOf reports whether x's quote frames x as a component or portion of y's quantity: right after
+// x's value it names y's label ("$950,000 of the Purchase Price"), or near the value a portion word
+// that is not y's label's own ("a deposit", "the first instalment", "a payment of … toward") stands
+// with y's label (lab-r3 r2 verifier M3: a closing payment net of a holdback is not the purchase
+// price misstated).
+func partOf(x, y entry) bool {
+	label := norm(y.v.Metric)
+	if label == "" || x.v.Value == "" {
+		return false
+	}
+	for _, q := range x.quotes {
+		i := strings.Index(q, x.v.Value)
+		if i < 0 {
+			continue
+		}
+		lo, hi := max(0, i-80), min(len(q), i+len(x.v.Value)+80)
+		after, win := q[i+len(x.v.Value):hi], norm(q[lo:hi])
+		if m := ofLabel.FindStringIndex(after); m != nil && strings.HasPrefix(norm(after[m[1]:]), label) {
+			return true
+		}
+		if strings.Contains(win, label) {
+			for _, w := range portionWord.FindAllString(win, -1) {
+				if !tokens(label)[strings.TrimSuffix(strings.ToLower(w), "s")] && !tokens(label)[strings.ToLower(w)] {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // scaleWord is a scale stated after a figure: "$92 million", "310 million dollars".
@@ -124,7 +187,7 @@ func Join(findings []Finding, aliases []Alias) []Conflict {
 					qs = append(qs, q.Quote)
 				}
 				canon, scaled := rescale(class, canon, v, qs)
-				es = append(es, entry{v, f.FID, class, canon, d, docOf(f, v.Value), referents(f, v.Value), qs, scaled})
+				es = append(es, entry{v, f.FID, class, canon, d, docOf(f, v.Value), referents(f, v.Value), qs, scaled, (class == "Money" || class == "Count") && wholeFigure(v.Value)})
 				if n := key(v.Entity); n != "" && !slices.Contains(names, n) {
 					names = append(names, n)
 				}
@@ -182,7 +245,7 @@ func Join(findings []Finding, aliases []Alias) []Conflict {
 			byEnt[r], roots = append(byEnt[r], loose...), []string{r}
 		}
 		for _, r := range roots {
-			try(byEnt[r], "numeric", func(a, b entry) bool { return a.canon != b.canon && a.scaled == b.scaled })
+			try(byEnt[r], "numeric", func(a, b entry) bool { return a.canon != b.canon && pairable(a, b) && !partOf(a, b) && !partOf(b, a) })
 		}
 	}
 	byEvent, roots := map[string][]int{}, []string{}
@@ -298,7 +361,7 @@ func near(es []entry, found []Conflict, sameEntity func(a, b entry) bool) []Conf
 		for _, b := range es[i+1:] {
 			if a.class != b.class || a.doc == b.doc || a.doc == "" || b.doc == "" || held[a.fid+"|"+a.canon] && held[b.fid+"|"+b.canon] ||
 				a.class != "Date" && (Salience(a.v.Value) < nearSalience || Salience(b.v.Value) < nearSalience) || a.row() && b.row() ||
-				perDoc[a.doc][b.canon] || perDoc[b.doc][a.canon] || a.scaled != b.scaled || !close(a, b) || shared(a.words, b.words) < 3 || !sameEntity(a, b) || !sameMetric(a, b) {
+				perDoc[a.doc][b.canon] || perDoc[b.doc][a.canon] || !pairable(a, b) || partOf(a, b) || partOf(b, a) || !close(a, b) || shared(a.words, b.words) < 3 || !sameEntity(a, b) || !sameMetric(a, b) {
 				continue
 			}
 			k := min(a.canon, b.canon) + "|" + max(a.canon, b.canon)

@@ -69,7 +69,15 @@ func (d devFix) check(t *testing.T, verdicts ...m) ([]FindingView, string) {
 }
 
 func (d devFix) checkJudged(t *testing.T, judge []model.Reply, verdicts ...m) ([]FindingView, string) {
-	call := tc("check_deviation", m{"requirement": devReq, "requirementDocId": d.memo, "controllingDocIds": []string{d.memo}, "reviewedDocIds": []string{d.trust, d.will}, "issueId": "I1"})
+	req := devReq // the memo line the verdicts quote (lab-r3 r3: a controlling quote must lie in the requirement's context)
+	for _, v := range verdicts {
+		if q, _ := v["controlling"].(m)["quote"].(string); v["verdict"] != "conform" && strings.Contains(devMemoText, q) {
+			i := strings.Index(devMemoText, q)
+			req = devMemoText[strings.LastIndexByte(devMemoText[:i], '\n')+1 : i+strings.IndexByte(devMemoText[i:], '\n')]
+			break
+		}
+	}
+	call := tc("check_deviation", m{"requirement": req, "requirementDocId": d.memo, "controllingDocIds": []string{d.memo}, "reviewedDocIds": []string{d.trust, d.will}, "issueId": "I1"})
 	if judge == nil {
 		judge = []model.Reply{judged(false), judged(false), judged(false), judged(false)}
 	}
@@ -386,7 +394,7 @@ func TestDevRestatedControllingQuoteRescued(t *testing.T) {
 		}})},
 	}), Config{})
 	out := strings.Join(d.outputs(v.ID, "check_deviation"), "")
-	if len(v.Findings) != 1 || !strings.Contains(v.Findings[0].Claim, "which requires “"+req+"”") || v.Findings[0].Citations[0].Method != "exact" ||
+	if len(v.Findings) != 1 || !strings.Contains(v.Findings[0].Claim, "⟦"+req+"⟧") || v.Findings[0].Citations[0].Method != "exact" ||
 		!strings.Contains(out, "restated its requirement instead of quoting it") || !strings.Contains(out, `"dropped":1`) {
 		t.Fatalf("findings %+v\n%s", v.Findings, out)
 	}

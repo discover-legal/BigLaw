@@ -46,8 +46,8 @@ func TestStitchedRequirementMakesNoDeviation(t *testing.T) {
 			seen = fmt.Sprint(c.Messages)
 		}
 	}
-	if len(out) != 1 || !strings.HasPrefix(out[0], "failed") || !strings.Contains(seen, "<<<Upon Peggy's death, incapacity, resignation, or inability to serve, the following individuals and entities shall serve as successor Trustee, in the following order of priority:>>>") {
-		t.Errorf("check_deviation %q: want a refusal quoting the whole sentence; the lead read %.3000s", out, seen)
+	if len(out) != 1 || !strings.HasPrefix(out[0], "failed") || !strings.Contains(seen, "<<<CRITICAL NOTE — Do NOT name Sophia Davenport-Chen as a successor trustee in any capacity.") {
+		t.Errorf("check_deviation %q: want a refusal quoting the negated sentence; the lead read %.3000s", out, seen)
 	}
 }
 
@@ -116,7 +116,7 @@ func TestDistinctPagesAreRead(t *testing.T) {
 
 // TestDataTableIsNotBoilerplate (H3): a trade blotter (tab-separated, a share count last), a payment
 // schedule with PDF spacing (a year last) and an amortization page with no words are read; a real
-// table of contents (a Contents heading, or dot leaders, or page numbers that rise) is skipped.
+// table of contents (a Contents heading, or dot-leadered entries) is skipped; r3: rising numbers alone are read.
 func TestDataTableIsNotBoilerplate(t *testing.T) {
 	var tab, sp, nums, pipes, lead, rise strings.Builder
 	tab.WriteString("Trade Date\tAccount\tSecurity\tSide\tShares\n")
@@ -128,13 +128,13 @@ func TestDataTableIsNotBoilerplate(t *testing.T) {
 		fmt.Fprintf(&lead, "Article %d Definitions and interpretation ........ %d\n", i, 3)
 		fmt.Fprintf(&rise, "Article %d Definitions and interpretation\t%d\n", i, 2*i+1)
 	}
-	for name, text := range map[string]string{"trade blotter": tab.String(), "payment schedule (PDF spacing)": sp.String(), "amortization page with no words": nums.String(), "a |-table": pipes.String(),
+	for name, text := range map[string]string{"trade blotter": tab.String(), "payment schedule (PDF spacing)": sp.String(), "amortization page with no words": nums.String(), "a |-table": pipes.String(), "rising numbers, no Contents heading (r3: M4)": rise.String(),
 		"a short contents batched with a clause": "Contents\n" + lead.String()[:300] + "\n2. Price\nThe price for the goods is $100,000, payable within thirty days of delivery.\n"} {
 		if why, _ := skipWhy(Visit{DocumentID: "d", SectionID: "s9", text: text}, nil); why != "" {
 			t.Errorf("%s skipped as %s", name, why)
 		}
 	}
-	for name, text := range map[string]string{"dot leaders": lead.String(), "rising page numbers": rise.String(), "Contents heading": "Contents\nDefinitions\t1\nThe Loan\t4\nRepayment\t4\n", "blank": " — \n · \n"} {
+	for name, text := range map[string]string{"dot leaders": lead.String(), "Contents heading": "Contents\nDefinitions\t1\nThe Loan\t4\nRepayment\t4\n", "blank": " — \n · \n"} {
 		if why, _ := skipWhy(Visit{DocumentID: "d", SectionID: "s9", text: text}, nil); why != "boilerplate" {
 			t.Errorf("%s: %q, want boilerplate", name, why)
 		}
@@ -189,35 +189,6 @@ func TestSkippedPagesReachLimitations(t *testing.T) {
 	}
 }
 
-// TestOnePartFragmentRefused (lab-r3 r2, end to end): an exact fragment that drops its negation is
-// refused before the subagent runs, with the whole sentence to copy; a list item quoted without the
-// introduction that negates it is refused with the introduction in the passage to copy.
-func TestOnePartFragmentRefused(t *testing.T) {
-	t.Parallel()
-	f := newFixture(t, trustMemoExcerpt+"\n"+trusteeList, "Article 4. Successor Trustees.\nIf Peggy ceases to serve, Martin Hale shall serve as successor Trustee.\n")
-	memo, trust := f.docs[0].ID, f.docs[1].ID
-	dev := func(req string) model.ToolCall {
-		return tc("check_deviation", m{"requirement": req, "requirementDocId": memo, "controllingDocIds": []string{memo}, "reviewedDocIds": []string{trust}, "issueId": "I1"})
-	}
-	v := f.run(f.with(map[string][]model.Reply{
-		"lead": {calls(plan(issue("I1", "Does the draft follow the memo?", "Requirement"))),
-			calls(dev("name Sophia Davenport-Chen as a successor trustee in any capacity.")), calls(dev("Martin Hale, the settlor's former business partner."))},
-	}), Config{})
-	out := f.outputs(v.ID, "check_deviation")
-	var seen string
-	for _, c := range f.e.chat.(*model.Fake).Calls() {
-		if c.Agent == "lead" {
-			seen = fmt.Sprint(c.Messages)
-		}
-	}
-	if len(out) != 2 || !strings.HasPrefix(out[0], "failed") || !strings.HasPrefix(out[1], "failed") || len(v.Findings) != 0 ||
-		!strings.Contains(seen, "is a fragment of") ||
-		!strings.Contains(seen, "<<<CRITICAL NOTE — Do NOT name Sophia Davenport-Chen as a successor trustee in any capacity.>>>") ||
-		!strings.Contains(seen, "<<<The following persons shall NOT serve as Trustee in any capacity:") {
-		t.Errorf("check_deviation %q, findings %d; the lead read %.4000s", out, len(v.Findings), seen)
-	}
-}
-
 // TestLedgerFindingsPage (bench4, SEC: ledger op findings detail full returned all 892 findings,
 // 682 KB, in one result, which overflowed the lead's context): the list comes a page at a time
 // (ledgerPage bytes), next names the offset of the following page, and the pages hold every
@@ -256,7 +227,7 @@ func TestLedgerFindingsPage(t *testing.T) {
 		var off any
 		for {
 			fids, next, size := page(issue, off)
-			if pages++; size > 65_000 || len(fids) == 0 || pages > 100 {
+			if pages++; size > agent.ShrunkResult-1000 || len(fids) == 0 || pages > 100 {
 				t.Fatalf("issue %v page %d: %d bytes, %d findings", issue, pages, size, len(fids))
 			}
 			for _, x := range fids {

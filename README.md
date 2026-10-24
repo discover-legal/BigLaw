@@ -795,7 +795,7 @@ The memo workflow (§ Memo workflow) drives these. What PR 4a ships, all tested 
   than four turns are replaced by a handle naming their step, and any one result is cut to 100 KB
   in the transcript with a note on how to page (`TestOversizedResultCappedAndShrunk`; bench4: a
   682 KB ledger result overflowed the lead's context); an endpoint's 400/413/422 compacts all
-  but the latest turn's and retries, then cuts the latest results to 16 KB and retries once more. Text in tool results is labelled untrusted matter data.
+  but the latest turn's and retries, then cuts the latest results to 16 KB and retries once more; the cut is for that request only, and it is structure-aware: a JSON object loses trailing array items (or the tail of its largest string) and stays valid JSON with its scalar fields such as `next` (`TestR2VShrinkSticksAndHidesNext`, `TestClipJSONDropsTrailingItems`). Text in tool results is labelled untrusted matter data.
   The model sees refusals (reason and next step) and tool failures in BigLaw's own words only; any
   other error is logged and shown as "internal error". A model failure (G6) ends the run, except a
   subagent's answer cut off at its token limit before any text or whole tool call: that is a bad
@@ -877,7 +877,7 @@ Limitations of this layer:
   for two metrics is compared (the lead must check the quotes). The near join finds two labels for
   one metric only when the values are close (an eighth; a month for dates), of one entity,
   compared after their stated scale (the value's, its unit's, or the word after it in its quote; a
-  figure whose scale nothing states never pairs with a scaled one: `TestJoinComparesScaledFigures`), their
+  bare figure whose scale nothing states never pairs with a scaled one, while a figure written in full, grouped or seven digits, does: `TestJoinComparesScaledFigures`, `TestR2VScaledVsWholeFigure`), a value its quote frames as a part of the other's quantity ("$950,000 of the Purchase Price", a deposit or instalment toward it) never paired with it (`TestR2VHoldbackNearFalsePair`), their
   labels not naming two things (`sameMetric`) and the quotes share their words: a conflict between
   far-apart values under different labels is still missed, and two close figures about different
   things that share words and label words can still be reported (`TestJoinRefusesDifferentFacts`). A value's document is the quote that holds its text, else the finding's first quote.
@@ -898,7 +898,7 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
 
 - **The ledger** (`ledger`; one Postgres table, a JSON row per kind and key): `plan` (the issues
   the deliverable must answer, each typed by a BELO-lite class), `findings` / `get` (brief or full:
-  citations and value refs `F3.v1`; `findings` a page of about 60 KB at a time, `offset` from the
+  citations and value refs `F3.v1`; `findings` a page of about 12 KB at a time (under the 16 KB over-long cut), `offset` from the
   result's `next`, `TestLedgerFindingsPage`), `resolve` (a critic finding fixed or disclosed, with a note),
   `draft_get` (a finished section only: `not_drafted` otherwise) and `relations`. A subagent may only
   read, and never sees a quarantined finding (G3).
@@ -917,11 +917,19 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
   undone, and a requirement joined from several passages (a heading and its list, two sentences from
   two paragraphs) verifies part by part, split where the model joined them (at most 12 joins; its
   ellipses stripped from the parts' edges; one normalised index of the document, the caller's ctx),
-  every part (a one-part requirement too) the document's own words and whole: it starts and ends at a sentence, clause or line
-  boundary, never a tail that drops a negation, modal, exception or condition, nor a list item that
-  drops its governing introduction (`TestOnePartRequirementIsWhole`, `TestOnePartFragmentRefused`); the parts in the
+  every part the document's own words, the parts in the
   document's order, one passage (§ Limitations, LAB round 3); a part under four words only as a
-  heading line before another; the parts handed on joined
+  heading line before another. The verified requirement is then read in its context (`requirement.go`
+  `reqContext`, by structure: markers, colons, blank lines, headings, never word lists): the paragraph or
+  list item that holds it, every introduction that governs it (a unit above ending with a colon, the line
+  that opens its list; an earlier item of the same list passed over) and its section heading, about 1,500
+  bytes with the requirement marked ⟦ ⟧. The subagent judges against that context (`requirementContext`),
+  its verdict's controlling quote must lie in it (else the verdict is dropped), and the finding quotes it
+  verbatim as its controlling citation, the verdict's words marked, with the part and the correction given
+  as the analyst's words, not quotations; prosecute checks them against it (`TestR2VProbesReadInContext`,
+  `TestR2VFragmentsQuotedInContext`, `TestR2VVerdictQuoteOutsideContextRefused`, `TestOnePartFragmentReadInContext`,
+  `TestBenchRequirementsReadInContext`, `TestContextIsBounded`). Format characters (zero-width spaces,
+  bidi marks) are folded before any match; the parts handed on joined
   by " … " (`TestRequirementPartsVerify`, `TestDevMultiPartRequirementRuns`, `TestStitchedRequirementRefused`,
   `TestEllipsisJoinVerifies`, `TestStitchedRequirementMakesNoDeviation`); a paraphrase or a stitched
   requirement is refused, before any model call, with the nearest exact passage (its whole sentences
@@ -940,8 +948,9 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
   the pages no issue's words reach, in document order (`TestSweepReadsRelevantPagesFirst`); a page
   that is an exact copy of an earlier read one (case and white space folded, or the same table rows
   in another order; across documents only a page of 40 words or more) or is pure boilerplate (no
-  letter or digit; a table of contents: its Contents heading or dot-leadered or rising page numbers,
-  no table row, no sentence) is skipped and listed under `skipped`
+  letter or digit; a table of contents: its Contents heading over entries, or dot-leadered entries with
+  heading-like titles and page numbers that never fall, no table row, no sentence; a tab or space-aligned
+  list of figures is read: `TestR2VRealTablesNotBoilerplate`) is skipped and listed under `skipped`
   (`TestSweepSkipsDuplicatesAndBoilerplate`, `TestDataTableIsNotBoilerplate`, `TestDistinctPagesAreRead`);
   a copy of a page the sweep did not read counts unread (`TestSkipOfUnreadPageIsUnread`), and the
   skipped pages are a Limitations line (`TestSkippedPagesReachLimitations`); each document's coverage (planned, read, skipped) is
@@ -1472,7 +1481,7 @@ improvements (after the real Haiku LAB rerun; scripted the same way): `TestSweep
 
 | Budget | Ceiling | Today |
 |---|---:|---:|
-| Go production lines (physical lines, non-`_test.go`, test-support packages included) | reported, no limit (owner decision 17) | 14,279 |
+| Go production lines (physical lines, non-`_test.go`, test-support packages included) | reported, no limit (owner decision 17) | 14,745 |
 | Packages under `internal/`, test-support packages excluded | 12 | 8 (`agent`, `analysis`, `api`, `docs`, `docs/ooxml`, `engine`, `model`, `store`; `store/storetest` is test support) |
 | Direct Go dependencies | 3 | 2 (`github.com/lib/pq`, `github.com/ledongthuc/pdf`) |
 | Runtime environment variables | 20 | 18 |
@@ -1481,7 +1490,7 @@ improvements (after the real Haiku LAB rerun; scripted the same way): `TestSweep
 | Packages without a `_test.go` | 0 | 0 |
 | Lines in any one source file (`.go`, `.py`, `.sql`, `.sh`, `.js`, `.ts`, `.css`; tests included) | 2,000 | 968 (`internal/docs/vision_safety_test.go`) |
 
-**There is no total line ceiling (owner decision 17, 2026-10-23).** `scripts/loc.py` reports the Go production total (14,279) and fails only on the budgets that bound bloat directly: no file over 2,000 lines, ≤ 3 direct deps, ≤ 20 env vars, ≤ 12 internal packages, ≤ 2,400 UI source lines, no untested package. Each PR still reports its lines against its DESIGN budget in its notes. (The ceiling's history, 14,000 → 17,500 through owner decisions 7–16, is in PLAN.) A **test-support package** is one
+**There is no total line ceiling (owner decision 17, 2026-10-23).** `scripts/loc.py` reports the Go production total (14,745) and fails only on the budgets that bound bloat directly: no file over 2,000 lines, ≤ 3 direct deps, ≤ 20 env vars, ≤ 12 internal packages, ≤ 2,400 UI source lines, no untested package. Each PR still reports its lines against its DESIGN budget in its notes. (The ceiling's history, 14,000 → 17,500 through owner decisions 7–16, is in PLAN.) A **test-support package** is one
 whose directory name ends in `test` and that no production file outside it imports, such as
 `storetest`. Under the coordinator's ruling it is left out of the package count, but its lines
 count toward the reported Go total like any other non-`_test.go` file. A `*test` package that
@@ -1583,32 +1592,31 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     nothing. Only an exact copy (case and white space folded, or the same lines of a table in another
     order) is skipped as a duplicate, and its coverage follows the page it copies (a copy of a page
     the sweep did not read is unread too); a page is boilerplate only with no letter or digit, or as
-    a table of contents with no table row and no sentence. The count of skipped pages and their
+    a table of contents (a Contents heading, or dot-leadered heading-like entries with page numbers that
+    never fall) with no table row and no sentence. The count of skipped pages and their
     documents is a Limitations line.
   - One call a visit is an inference from the bench's token counts (about 26,000 input tokens a
     visit, three calls), not a measured split; the 39% share's reach is estimated from it.
   - A salient finding is judged by its tool, severity, typed relations, figures or the words of its
     claim ("deviates", "does not", "fails to"): a left-out finding stated otherwise is not placed, and
     a claim that merely says "does not" is. The pass places at most 40, one redraft per issue.
-  - A requirement's parts must each be a whole sentence, clause or line of the document (a part may
-    start after a comma, colon or dash only when the words it drops hold no negation, modal,
-    exception or condition), in the document's order, one passage: only white space and list
-    markers between them, or, after a sentence, at most two whole sentences (400 bytes) that hold no
-    qualifier ("except", "however", "the foregoing"); never a heading or a list's introduction. The
-    bench's two-paragraph requirement (step 76) needs that skip. Which sentences may be skipped is a
-    word test, not a reading: a skipped sentence can still qualify its neighbour in other words. A
-    one-part requirement must be whole too (an exact fragment such as "name Sophia … as a successor
-    trustee" out of "Do NOT name Sophia …" is refused), and a line governed by a list introduction
-    that ends in a colon and holds a guard ("The following persons shall NOT serve:") verifies only
-    with that introduction; the refusal's passage then starts at the introduction. Which lines are a
-    list's items is read from markers: a marked line whose predecessor marker (B. for C.) is the
-    nearest marker above the introduction is a sibling heading, and an unmarked line counts only
-    right after the introduction. A short heading part stands for context only.
+  - A requirement's parts must be the document's words, in its order, one passage: only white space
+    and list markers between them, or, after a sentence, at most two whole sentences (400 bytes); never
+    a heading or a list's introduction between them. A fragment is not refused: it is read and quoted
+    in its context, which is found by structure, so a document whose structure the text does not show
+    (a PDF that wraps lines without blank lines or markers) gives a coarser context: a wrapped
+    paragraph's lines are one unit, an unmarked heading needs a blank line above it, and a run-on line
+    can be taken for a heading or an item. Over-inclusion is the chosen failure: a sibling's colon line or
+    a preceding list's opener may be quoted as context. The context is bounded at about 1,500 bytes
+    (an introduction keeps its last 300 bytes); the requirement is always whole. Whether the subagent
+    and prosecute read the context correctly is the model's judgment: the context makes the governing
+    words visible, it does not make the verdict right.
   - The near join pairs only one entity's values (alias-unified, or both with none), within an eighth
     of each other, and not when each label names a thing its own quote states and the other side
     never mentions (a fee and an allocation, a notice and a demand); dates joined by shared words take
-    the same label test. It is a word test: two facts whose quotes share their labels' words (a
-    deposit "of the Purchase Price") are told apart only by the eighth.
+    the same label test. It is a word test: a part of a figure is told apart from it only when its
+    quote frames it as one ("of the Purchase Price", a deposit, instalment or holdback beside the
+    other's label); a part described otherwise is told apart only by the eighth.
   - The raw-date rule is paragraph-wide: a list that states the raw date and the rolled deadline on
     separate lines without a blank line between is one paragraph and passes; one with a blank line is
     flagged.

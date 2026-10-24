@@ -232,8 +232,10 @@ func nextID(prefix string, n int) string { return prefix + strconv.Itoa(n+1) }
 
 // ledgerTool is the lead's matter memory: plan, findings, get, resolve, draft_get, relations. A
 // subagent may only read (plan and resolve are the lead's).
-// ledgerPage bounds one page of op findings (bytes of its findings): a page, never the ledger.
-const ledgerPage = 60_000
+// ledgerPage bounds one page of op findings (bytes of its findings): a page, never the ledger, and
+// under the size an over-long retry cuts results to, so a page always reaches the lead whole with
+// its next (lab-r3 r2 verifier M5).
+const ledgerPage = agent.ShrunkResult * 3 / 4
 
 func (e *Engine) ledgerTool() agent.Tool {
 	return agent.GoTool{S: spec("ledger"), Fn: func(ctx context.Context, c agent.Call) (any, agent.Usage, error) {

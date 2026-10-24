@@ -152,10 +152,17 @@ func tableRow(l string) bool {
 	return len(cs) >= 3 && num >= 2
 }
 
+// tocTitleFigure is what a table of contents' entry title never holds: an amount, a percentage, a
+// figure of three or more digits (a TOC title names a heading, not a quantity).
+var tocTitleFigure = regexp.MustCompile(`[$€£¥%]|\d{3,}`)
+
 // toc reports whether a page reads as a table of contents and nothing else: no table row, no
-// sentence (every other line a short heading), and its own Contents heading over entries, or five or more lines, 70% of them entries whose numbers have dot
-// leaders (most of them) or increase down the page (lab-r3 verifier H3: a trade blotter, a payment
-// schedule and an amortization page were skipped as contents).
+// sentence (every other line a short heading), and either its own Contents (Table of Contents,
+// Index) heading over entries, or five or more lines, 70% of them entries that are all dot-leadered
+// (". . ." or "…"), with heading-like titles (no amount or figure) and page numbers (at most three
+// digits) that never fall down the page. A tab or space-aligned list of figures (a two-column
+// allocation, a chronology of years, a damages schedule, rising numbers) is read (lab-r3 r2
+// verifier M4): when in doubt a page is read.
 func toc(lines []string) bool {
 	if slices.ContainsFunc(lines, tableRow) {
 		return false
@@ -164,7 +171,9 @@ func toc(lines []string) bool {
 	for _, l := range lines {
 		if m := tocEntry.FindStringSubmatch(l); m != nil {
 			n, _ := strconv.Atoi(m[3])
-			entries, leaders, rising, last = entries+1, leaders+btoi(m[2] != "\t" && strings.TrimSpace(m[2]) != ""), rising && n > last, n
+			dots := m[2] != "\t" && strings.TrimSpace(m[2]) != ""
+			entries, leaders = entries+1, leaders+btoi(dots && !tocTitleFigure.MatchString(m[1]))
+			rising, last = rising && n >= last && len(m[3]) <= 3, n
 		} else if t := strings.TrimSpace(l); len(strings.Fields(t)) > 8 || endsWith(t, ".!?") && len(strings.Fields(t)) > 2 {
 			return false // prose: a page that holds a sentence is read, whatever else it holds
 		}
@@ -172,7 +181,7 @@ func toc(lines []string) bool {
 	if len(lines) > 1 && tocHeading.MatchString(lines[0]) && 2*entries >= len(lines)-1 && entries > 0 {
 		return true
 	}
-	return len(lines) >= 5 && float64(entries) >= 0.7*float64(len(lines)) && (2*leaders >= entries || rising)
+	return len(lines) >= 5 && float64(entries) >= 0.7*float64(len(lines)) && leaders == entries && rising
 }
 
 // skipWhy says why a visit is not worth a subagent, "" when it is, and which earlier visit it

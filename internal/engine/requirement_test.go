@@ -97,7 +97,11 @@ func TestDevMultiPartRequirementRuns(t *testing.T) {
 		!strings.Contains(reqs[0], "Tommy's Share — Twenty-Five Percent (25%) … Twenty-five percent (25%) of the residuary estate") {
 		t.Fatalf("check_deviation %q\nsubagent got %q", out, reqs)
 	}
-	if len(v.Findings) != 1 || len(v.Findings[0].Citations) != 3 {
+	if !strings.Contains(reqs[0], `"requirementContext":"C. ⟦Tommy's Share — Twenty-Five Percent (25%)⟧\n⟦Twenty-five percent (25%)`) {
+		t.Fatalf("the subagent did not get the requirement in context: %q", reqs[0])
+	}
+	if len(v.Findings) != 1 || len(v.Findings[0].Citations) != 2 || !strings.HasPrefix(v.Findings[0].Citations[0].Quote, "C. Tommy's Share — Twenty-Five Percent (25%)\nTwenty-five percent") ||
+		!strings.Contains(v.Findings[0].Claim, "“C. ⟦Tommy's Share — Twenty-Five Percent (25%) / Twenty-five percent (25%)") {
 		t.Fatalf("findings %+v", v.Findings)
 	}
 	for _, c := range v.Findings[0].Citations {
@@ -108,8 +112,10 @@ func TestDevMultiPartRequirementRuns(t *testing.T) {
 }
 
 // TestStitchedRequirementRefused (lab-r3 verifier H1): a requirement stitched from real fragments is
-// refused when a part is not a whole sentence, clause or line (a tail that drops "Do NOT", "shall
-// NOT", "except" or a condition), or when its parts are not one passage in the document's order.
+// refused when its parts are not one passage in the document's order: a later part that starts
+// inside a sentence the gap leaves out (dropping "Do NOT", "shall NOT", "except" or a condition), a
+// gap over a heading or a list's introduction, or parts out of order. (r3: a fragment of one passage
+// verifies and is read in its context: TestOnePartFragmentReadInContext.)
 // On 1814a6a the first three verified and the third became a verified HIGH deviation telling the
 // lawyer to name Sophia as successor trustee, the opposite of the memo.
 func TestStitchedRequirementRefused(t *testing.T) {
@@ -132,14 +138,17 @@ func TestStitchedRequirementRefused(t *testing.T) {
 		{contract, "The Buyer may assign this Agreement to an affiliate on notice. … assign this Agreement to any person."},
 		{contract, "8. Fees … within thirty days of invoice."},
 		{contract, "9. Licence … sublicense the Software. Licensee shall pay the licence fees quarterly in advance."},
-		// a part that ends before what qualifies it
-		{contract, "8. Fees … All fees are payable in cash"},
+		// a short part that is not a line of its own
 		{contract, "Licensee shall … sublicense the Software."},
 	} {
 		parts, bad, err := requirementParts(context.Background(), c.doc, c.req)
 		if err != nil || bad == "" {
 			t.Errorf("stitched requirement verified as the document's words: %q (parts %q, err %v)", c.req, parts, err)
 		}
+	}
+	if spans, bad, _ := placeRequirement(context.Background(), contract, "8. Fees … All fees are payable in cash"); bad != "" ||
+		!strings.Contains(renderContext(contract, contextOf(contract, spans), nil, "\n"), "unless the Buyer elects otherwise in writing") {
+		t.Errorf("a part that ends before its qualifier: bad %q, or its context drops the qualifier", bad)
 	}
 	for _, req := range []string{ // whole sentences and lines of one passage still verify
 		"7. Assignment … The Seller shall not, except with the Buyer's prior written consent, assign this Agreement to any person.",
@@ -199,35 +208,29 @@ func TestRequirementPartsBounded(t *testing.T) {
 // trusteeList is a list whose introduction carries the negation its items do not.
 const trusteeList = "4. Trustees\nThe following persons shall NOT serve as Trustee in any capacity:\n(a) Sophia Davenport-Chen, the settlor's daughter.\n(b) Martin Hale, the settlor's former business partner.\nThe Trustee shall not:\nsell the family home without the consent of all beneficiaries.\n5. Distributions\nThe Trustee shall distribute the income quarterly.\n"
 
-// TestOnePartRequirementIsWhole (lab-r3 r2): a one-part requirement gets the whole-part rules too. An
-// exact fragment that drops its sentence's negation ("name Sophia …" out of "Do NOT name Sophia …"),
-// a list item quoted without the introduction that negates it, and a line under "The Trustee shall
-// not:" are refused; a whole sentence, a whole line, and an item quoted with its introduction verify.
-func TestOnePartRequirementIsWhole(t *testing.T) {
-	for _, c := range []struct{ doc, req string }{
-		{trustMemoExcerpt, "name Sophia Davenport-Chen as a successor trustee in any capacity."},
-		{trustMemoExcerpt, "Sophia should not serve in any fiduciary capacity with respect to trust assets"}, // the tail of "Peggy is firm … that Sophia should not serve …"
-		{trusteeList, "(b) Martin Hale, the settlor's former business partner."},
-		{trusteeList, "Martin Hale, the settlor's former business partner."},
-		{trusteeList, "Sophia Davenport-Chen, the settlor's daughter."},
-		{trusteeList, "sell the family home without the consent of all beneficiaries."},
+// TestOnePartFragmentReadInContext (lab-r3 r3, replacing r2's whole-part refusals): a fragment that
+// drops its sentence's negation, a list item without its negating introduction, and a line under
+// "The Trustee shall not:" verify, and each is read in a context that holds what governs it; a whole
+// sentence's context is its paragraph and heading.
+func TestOnePartFragmentReadInContext(t *testing.T) {
+	for _, c := range []struct{ doc, req, want string }{
+		{trustMemoExcerpt, "name Sophia Davenport-Chen as a successor trustee in any capacity.", "CRITICAL NOTE — Do NOT ⟦name Sophia"},
+		{trustMemoExcerpt, "Sophia should not serve in any fiduciary capacity with respect to trust assets", "Peggy is firm and clear in her decision that ⟦Sophia should not"},
+		{trusteeList, "(b) Martin Hale, the settlor's former business partner.", "The following persons shall NOT serve as Trustee in any capacity:"},
+		{trusteeList, "Martin Hale, the settlor's former business partner.", "4. Trustees\nThe following persons shall NOT serve as Trustee in any capacity:"},
+		{trusteeList, "Sophia Davenport-Chen, the settlor's daughter.", "The following persons shall NOT serve as Trustee in any capacity:\n(a) ⟦Sophia"},
+		{trusteeList, "sell the family home without the consent of all beneficiaries.", "The Trustee shall not:\n⟦sell the family home"},
+		{trustMemoExcerpt, "CRITICAL NOTE — Do NOT name Sophia Davenport-Chen as a successor trustee in any capacity.", "B. Successor Trustees\nUpon Peggy's death"},
+		{trusteeList, "The Trustee shall distribute the income quarterly.", "5. Distributions\n⟦The Trustee shall distribute"},
 	} {
-		if parts, bad, err := requirementParts(context.Background(), c.doc, c.req); err != nil || bad == "" {
-			t.Errorf("a fragment verified as a whole requirement: %q (parts %q)", c.req, parts)
+		spans, bad, err := placeRequirement(context.Background(), c.doc, c.req)
+		if err != nil || bad != "" {
+			t.Errorf("%q: bad %q, err %v", c.req, bad, err)
+			continue
 		}
-	}
-	for _, c := range []struct {
-		doc, req string
-		parts    int
-	}{
-		{trustMemoExcerpt, "CRITICAL NOTE — Do NOT name Sophia Davenport-Chen as a successor trustee in any capacity.", 1},
-		{trustMemoExcerpt, "Peggy and I discussed this matter at length during our November 2024 meeting.", 1},
-		{trusteeList, "The Trustee shall distribute the income quarterly.", 1},
-		{trusteeList, "The following persons shall NOT serve as Trustee in any capacity: … (a) Sophia Davenport-Chen, the settlor's daughter.", 2},
-		{trusteeList, "The Trustee shall not: sell the family home without the consent of all beneficiaries.", 1}, // one passage, the line break as a space
-	} {
-		if parts, bad, err := requirementParts(context.Background(), c.doc, c.req); err != nil || bad != "" || len(parts) != c.parts {
-			t.Errorf("%q: parts %q, bad %q, err %v", c.req, parts, bad, err)
+		r := reqText{Text: c.doc, Spans: spans, Ctx: contextOf(c.doc, spans)}
+		if got := r.Context(); !strings.Contains(got, c.want) {
+			t.Errorf("%q: context %q lacks %q", c.req, got, c.want)
 		}
 	}
 }

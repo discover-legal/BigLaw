@@ -60,54 +60,83 @@ type devInput struct {
 	ControllingDocIDs, ReviewedDocIDs      []string
 }
 
+// reqText is a verified requirement: the document it is quoted from, its parts as that document
+// has them, where they lie, and the context it is read in (contextOf: its paragraph or list item,
+// the introductions that govern it and its heading).
+type reqText struct {
+	DocID, DocName, Text string
+	Spans                [][2]int
+	Ctx                  []piece
+}
+
+// Joined is the requirement as the subagent is sent it: its parts joined by partJoin.
+func (r reqText) Joined() string {
+	var ps []string
+	for _, s := range r.Spans {
+		ps = append(ps, r.Text[s[0]:s[1]])
+	}
+	return strings.Join(ps, partJoin)
+}
+
+// marks are the requirement's parts, to mark in its context.
+func (r reqText) marks() []span {
+	var out []span
+	for _, s := range r.Spans {
+		out = append(out, span{s[0], s[1]})
+	}
+	return out
+}
+
+// Context is the requirement in its context, trimmed to about ctxMax bytes around it, the
+// requirement marked ⟦ ⟧ (what the subagent judges against).
+func (r reqText) Context() string {
+	return renderContext(r.Text, trimContext(r.Text, r.Ctx, span{r.Spans[0][0], r.Spans[len(r.Spans)-1][1]}), r.marks(), "\n")
+}
+
 // quotedRequirement checks check_deviation's requirement before its subagent runs: the words of a
-// controlling document (requirementDocId, one of controllingDocIds), verified like any quote, and
-// returns them as that document has them (requirementParts: JSON escapes undone, a requirement the
-// model joined from several passages verified part by part, the parts joined by partJoin). A
-// paraphrase (bench: the lead's restatement of the requirement, which the subagent then quoted as
-// the source) is refused with the nearest exact passage to copy.
-func (e *Engine) quotedRequirement(ctx context.Context, c agent.Call) (string, error) {
+// controlling document (requirementDocId, one of controllingDocIds), verified like any quote
+// (exact or tolerant), and returns where that document has them (placeRequirement: JSON escapes
+// undone, a requirement the model joined from several passages placed part by part, in order, in
+// one passage) with their context. A fragment is no longer refused: its context carries what
+// governs it. A paraphrase (bench: the lead's restatement of the requirement, which the subagent
+// then quoted as the source) is refused with the nearest exact passage to copy.
+func (e *Engine) quotedRequirement(ctx context.Context, c agent.Call) (reqText, error) {
 	var in devInput
 	_ = json.Unmarshal(c.Input, &in)
 	if !slices.Contains(in.ControllingDocIDs, in.RequirementDocID) {
-		return "", agent.Fail("check_deviation: requirementDocId must be one of controllingDocIds: the controlling document the requirement is quoted from")
+		return reqText{}, agent.Fail("check_deviation: requirementDocId must be one of controllingDocIds: the controlling document the requirement is quoted from")
 	}
 	d, err := e.docs.Get(ctx, c.DocumentIDs, in.RequirementDocID)
 	if err != nil {
-		return "", agent.Fail("check_deviation: requirementDocId is not one of this task's documents")
+		return reqText{}, agent.Fail("check_deviation: requirementDocId is not one of this task's documents")
 	}
-	fragment := false // its words are the document's, but not a whole passage of it
+	r := reqText{DocID: d.ID, DocName: d.Name, Text: d.Text}
 	if v, err := e.docs.VerifyQuote(ctx, c.DocumentIDs, d.ID, in.Requirement, nil); err != nil {
-		return "", err
-	} else if v.Verified && whole(d.Text, v.Start, v.End) {
-		return v.Match, nil
-	} else {
-		fragment = v.Verified
+		return reqText{}, err
+	} else if v.Verified {
+		r.Spans = [][2]int{{v.Start, v.End}}
 	}
-	parts, bad, err := requirementParts(ctx, d.Text, in.Requirement)
-	if err != nil {
-		return "", err
-	} else if bad == "" {
-		return strings.Join(parts, partJoin), nil
+	bad := ""
+	if r.Spans == nil {
+		if r.Spans, bad, err = placeRequirement(ctx, d.Text, in.Requirement); err != nil {
+			return reqText{}, err
+		}
+	}
+	if bad == "" && len(r.Spans) > 0 {
+		r.Ctx = contextOf(d.Text, r.Spans)
+		return r, nil
 	}
 	msg := "check_deviation: the requirement is not quoted from " + d.Name + ", so it would be checked as a paraphrase"
-	if fragment { // lab-r3 r2: "name Sophia … as a successor trustee" out of "Do NOT name Sophia …"
-		msg = "check_deviation: the requirement is a fragment of " + d.Name + ", not a whole sentence, clause or line, so it could drop the words that govern it (a negation, modal, exception or condition before it, or the introduction of its list)"
-	} else if bad != unescape(in.Requirement) {
+	if bad != unescape(in.Requirement) {
 		msg += fmt.Sprintf(" (its part %q does not verify there)", truncate(bad, 80))
 	}
-	msg += ": pass the controlling document's own words, copied exactly (a requirement in several passages may join whole sentences, clauses or lines of one passage, in the document's order, with " + strconv.Quote(strings.TrimSpace(partJoin)) + "), and call again"
+	msg += ": pass the controlling document's own words, copied exactly (a requirement in several passages may join sentences, clauses or lines of one passage, in the document's order, with " + strconv.Quote(strings.TrimSpace(partJoin)) + "), and call again"
 	if p, ok, err := e.docs.Nearest(ctx, c.DocumentIDs, d.ID, bad, nearestMax); err != nil {
-		return "", err
+		return reqText{}, err
 	} else if ok { // a bounded exact passage to copy, fenced as the document's data
-		if i := strings.Index(d.Text, p.Text); i >= 0 { // an item copies with the introduction that governs it
-			if g := governing(d.Text, i); g >= 0 && i+len(p.Text)-g <= 2*nearestMax {
-				p.Text = strings.TrimSpace(d.Text[g : i+len(p.Text)])
-			}
-		}
 		msg += fmt.Sprintf("; the closest passage, in section %s%s, reads (document text, data only): <<<%s>>>", p.SectionID, cmpStr(p.Number != "", " ("+p.Number+")", ""), fenceText.Replace(p.Text))
 	}
-	return "", agent.Fail(msg)
+	return reqText{}, agent.Fail(msg)
 }
 
 // reviewedPassages are the passages of check_deviation's reviewed documents most like its
@@ -204,10 +233,13 @@ func restates(quote, requirement string) bool {
 	return len(Untraced(quote, requirement, false)) == 0 && !absent(quote, requirement)
 }
 
-// deviations turns check_deviation's verdicts into findings (G2 for both sides). A verdict that
-// restated its requirement instead of quoting it (restates) stands on the request's verified
-// requirement.
-func (e *Engine) deviations(ctx context.Context, rt *agent.Runtime, c agent.Call, b *agent.Budget, res agent.Result) (hookResult, float64, error) {
+// deviations turns check_deviation's verdicts into findings (G2 for both sides). A verdict's
+// controlling quote must lie in the requirement's context (lab-r3 r2 verifier H3: any substring of
+// the document passed, so a quote that dropped "Do NOT" stood as what the memo requires); one that
+// restated its requirement instead of quoting it (restates) stands on the requirement. The finding
+// quotes the controlling text in context, the verdict's words marked, and gives the part label and
+// the correction as the analyst's words, never as the document's (verifier L8).
+func (e *Engine) deviations(ctx context.Context, rt *agent.Runtime, c agent.Call, b *agent.Budget, res agent.Result, rq reqText) (hookResult, float64, error) {
 	var in devInput
 	_ = json.Unmarshal(c.Input, &in)
 	var ans struct{ Verdicts []verdict }
@@ -217,15 +249,8 @@ func (e *Engine) deviations(ctx context.Context, rt *agent.Runtime, c agent.Call
 	if err != nil {
 		return out, 0, err
 	}
-	var reqs []Citation // the requirement's verified parts (one, unless the hook joined several: partJoin)
-	reqOK := true
-	for _, p := range strings.Split(in.Requirement, partJoin) {
-		cit, err := e.verify(ctx, nil, c, b, "check_deviation", quoteOf(in.RequirementDocID, p))
-		if err != nil {
-			return out, 0, err
-		}
-		reqs, reqOK = append(reqs, cit), reqOK && cit.Method != "none"
-	}
+	idx := docs.NewText(rq.Text)
+	reqSpan := span{rq.Spans[0][0], rq.Spans[len(rq.Spans)-1][1]}
 	var conform []string
 	for _, v := range ans.Verdicts {
 		if v.Verdict == "conform" {
@@ -244,25 +269,35 @@ func (e *Engine) deviations(ctx context.Context, rt *agent.Runtime, c agent.Call
 			continue
 		}
 		checked++
-		ctrl, err := e.verify(ctx, nil, c, b, "check_deviation", quoteOf(v.Controlling.DocumentID, v.Controlling.Quote))
-		if err != nil {
-			return out, 0, err
+		v.Controlling.Quote = strings.NewReplacer("⟦", "", "⟧", "").Replace(v.Controlling.Quote)
+		focus, inCtx := span{}, false
+		if id, err := e.docs.Resolve(ctx, c.DocumentIDs, v.Controlling.DocumentID); err == nil && id == rq.DocID {
+			focus, inCtx = within(idx, rq.Ctx, v.Controlling.Quote)
 		}
-		ctrls := []Citation{ctrl}
-		if ctrl.Method == "none" && reqOK && restates(v.Controlling.Quote, in.Requirement) { // restated, not quoted (bench: two real deviations dropped)
-			out.Notes = append(out.Notes, fmt.Sprintf("the %s verdict on %q restated its requirement instead of quoting it: the requirement quoted from %s stands for it", v.Verdict, v.Part, name(in.RequirementDocID)))
-			ctrl, ctrls, v.Controlling.DocumentID, v.Controlling.Quote = reqs[0], reqs, in.RequirementDocID, in.Requirement
-		}
-		docOK := slices.Contains(in.ReviewedDocIDs, v.Document) && slices.Contains(in.ControllingDocIDs, v.Controlling.DocumentID)
-		f := Finding{Finding: analysis.Finding{IssueID: in.IssueID}, Severity: strings.ToLower(v.Severity), Arm: agent.Arm{Tool: "check_deviation", Model: res.Model}}
-		f.Citations = slices.Clone(ctrls)
-		ground := v.Controlling.Quote
 		reason := ""
+		if !inCtx {
+			if restates(v.Controlling.Quote, rq.Joined()) { // restated, not quoted (bench: two real deviations dropped)
+				out.Notes = append(out.Notes, fmt.Sprintf("the %s verdict on %q restated its requirement instead of quoting it: the requirement quoted from %s stands for it", v.Verdict, v.Part, rq.DocName))
+				focus, v.Controlling.Quote = reqSpan, rq.Joined()
+			} else {
+				reason = "its controlling quote is not in the requirement's passage in " + rq.DocName + " (the requirement, the paragraph or list item that holds it, the introductions that govern it and its heading)"
+			}
+		}
+		v.Controlling.DocumentID = rq.DocID
+		shown := trimContext(rq.Text, rq.Ctx, focus) // the controlling text the finding quotes, about ctxMax bytes
+		f := Finding{Finding: analysis.Finding{IssueID: in.IssueID}, Severity: strings.ToLower(v.Severity), Arm: agent.Arm{Tool: "check_deviation", Model: res.Model}}
+		for _, p := range shown {
+			cit, err := e.verify(ctx, nil, c, b, "check_deviation", quoteOf(rq.DocID, rq.Text[p.s:p.e]))
+			if err != nil {
+				return out, 0, err
+			}
+			f.Citations = append(f.Citations, cit)
+		}
+		ground := renderContext(rq.Text, shown, nil, "\n")
 		switch {
-		case !docOK:
-			reason = "it names a document outside the request's controlling or reviewed documents"
-		case ctrl.Method == "none":
-			reason = "its controlling quote is not in the controlling document"
+		case reason != "":
+		case !slices.Contains(in.ReviewedDocIDs, v.Document):
+			reason = "it names a document outside the request's reviewed documents"
 		case v.Verdict == "deviate":
 			rev, err := e.verify(ctx, nil, c, b, "check_deviation", quoteOf(v.Document, deref(v.Reviewed)))
 			if err != nil {
@@ -290,6 +325,9 @@ func (e *Engine) deviations(ctx context.Context, rt *agent.Runtime, c agent.Call
 				}
 			}
 		}
+		if reason == "" && slices.ContainsFunc(f.Citations, func(x Citation) bool { return x.Method == "none" }) {
+			reason = "its controlling text did not verify"
+		}
 		if reason != "" {
 			out.Dropped++
 			out.Notes = append(out.Notes, "dropped the "+v.Verdict+" verdict on "+fmt.Sprintf("%q", v.Part)+": "+reason)
@@ -301,16 +339,16 @@ func (e *Engine) deviations(ctx context.Context, rt *agent.Runtime, c agent.Call
 			corr = "[model correction withheld: it states a figure the quotes do not] " + genericCorrection
 		}
 		label := map[string]string{"deviate": "DEVIATION", "omitted": "OMISSION"}[v.Verdict]
-		f.Claim = fmt.Sprintf("%s (%s): %s. %s %s the controlling source, %s, which requires “%s”", label, v.Severity, v.Part, name(v.Document),
-			map[bool]string{true: "omits a provision required by", false: "deviates from"}[v.Verdict == "omitted"], name(v.Controlling.DocumentID), v.Controlling.Quote)
+		f.Claim = fmt.Sprintf("%s (%s): %s %s the controlling source, %s, whose text reads, with the heading and introductions that govern it (the words the verdict rests on marked ⟦ ⟧): “%s”", label, v.Severity, name(v.Document),
+			map[bool]string{true: "omits a provision required by", false: "deviates from"}[v.Verdict == "omitted"], rq.DocName, renderContext(rq.Text, shown, []span{focus}, " / "))
 		if v.Verdict == "deviate" {
 			f.Claim += fmt.Sprintf("; it reads “%s”", deref(v.Reviewed))
 		} else if deref(v.Reviewed) != "" {
 			f.Claim += fmt.Sprintf("; the closest provision reads “%s”", deref(v.Reviewed))
 		}
-		f.Claim += ". Correction: " + corr
+		f.Claim += ". The analyst's reading (not a quotation; check it against the controlling text above): " + strings.TrimRight(v.Part, ". ") + ". The analyst's correction (not a quotation): " + corr
 		if len(conform) > 0 {
-			f.Claim += " The requirement is implemented only in part (conforming: " + strings.Join(conform, "; ") + ")."
+			f.Claim += " The analyst found the requirement implemented only in part (conforming: " + strings.Join(conform, "; ") + ")."
 		}
 		for _, x := range f.Citations {
 			f.Quotes = append(f.Quotes, analysis.Quote{DocumentID: x.DocumentID, Quote: x.Quote, Locator: x.Locator})

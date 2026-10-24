@@ -619,13 +619,13 @@ func TestOversizedResultCappedAndShrunk(t *testing.T) {
 		}
 		return ""
 	}
-	if r := result(1); len(r) > 100_000+400 || !strings.Contains(r, "[result cut at") || !strings.Contains(r, "offset") || !utf8.ValidString(r) {
+	if r := result(1); len(r) > 100_000+400 || !strings.Contains(r, "[result cut ") || !strings.Contains(r, "offset") || !utf8.ValidString(r) {
 		t.Errorf("the first request after the tool holds a %d-byte result: %.80q…%.200q", len(r), r, r[max(0, len(r)-200):])
 	}
 	if r := result(2); len(r) > 100_000+400 {
 		t.Errorf("the first retry holds a %d-byte result (compaction keeps the latest turn)", len(r))
 	}
-	if r := result(3); len(r) > 16_000+400 || !strings.Contains(r, "[result cut at") {
+	if r := result(3); len(r) > 16_000+400 || !strings.Contains(r, "[result cut ") {
 		t.Errorf("the second retry holds a %d-byte result, want it cut", len(r))
 	}
 }
