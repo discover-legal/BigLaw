@@ -183,7 +183,7 @@ func TestCoverageDraftsLeftOutEvidence(t *testing.T) {
 			calls(tc("extract_facts", m{"question": "Recordkeeping?", "documentId": d1, "sectionId": nil, "through": nil, "offset": nil, "query": "records", "issueId": nil})),
 			calls(draft("I1", "F1")), calls(committee()), calls(finishCall("submit")),
 			calls(tc("draft_section", m{"issueId": "I1", "fids": []string{"F1", "F2"}, "revise": "state both counts"})), calls(committee()), calls(finishCall("submit"))},
-		"extract_facts": {facts(fd("OQR analyzed 4,217 omnibus equity trades.", d1, q1, val("OQR", "trades analyzed", "4,217", "Count"))),
+		"extract_facts": {facts(fd("OQR analyzed 4,217 omnibus equity trades.", d1, q1, val("WCA", "trades analyzed", "4,217", "Count"))),
 			facts(fd("The statistical summary counts 4,312 omnibus equity trades analyzed.", d2, q2, val("WCA", "total omnibus equity trades", "4,312", "Count"))), sweep},
 		"draft_section": {section("OQR analyzed 4,217 omnibus trades [F1].", "s"),
 			section("OQR analyzed 4,217 omnibus trades [F1], while the statistical summary counts 4,312 [F2]: the record does not explain the difference.", "s"),

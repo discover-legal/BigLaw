@@ -873,9 +873,10 @@ Limitations of this layer:
   cited quote).
 - `join_discrepancies` trusts the extracting model's metric labels for the label join: one label
   for two metrics is compared (the lead must check the quotes). The near join finds two labels for
-  one metric only when the values are close and the quotes share their words: a conflict between
+  one metric only when the values are close (an eighth; a month for dates), of one entity, their
+  labels not naming two things (`sameMetric`) and the quotes share their words: a conflict between
   far-apart values under different labels is still missed, and two close figures about different
-  things that share words are reported (a lead to check, never adjudicated). A value's document is the quote that holds its text, else the finding's first quote.
+  things that share words and label words can still be reported (`TestJoinRefusesDifferentFacts`). A value's document is the quote that holds its text, else the finding's first quote.
 - Calls in one turn run sequentially, not concurrently; `retrieve` and Go tools spend no calls, so a
   lead can issue up to 8 per turn for every turn its budget funds.
 - **Line budget:** `agent` 1,242 against 1,100, `analysis` 1,183 against 950, the `docs` adapters
@@ -907,11 +908,17 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
   words: Go verifies it in `requirementDocId` (one of `controllingDocIds`) like any quote before the
   subagent runs and hands the subagent the document's text: JSON escape artefacts (`\"Tommy\"`) are
   undone, and a requirement joined from several passages (a heading and its list, two sentences from
-  two paragraphs) verifies part by part, split where the model joined them, every part the
-  document's own words (a part under four words only as a heading line), the parts handed on joined
-  by " … " (`TestRequirementPartsVerify`, `TestDevMultiPartRequirementRuns`); a paraphrase is
-  refused, before any model call, with the nearest exact passage (at most 300 bytes, fenced as
-  document data) to copy (`TestDevParaphrasedRequirementRefused`). It keeps a
+  two paragraphs) verifies part by part, split where the model joined them (at most 12 joins; its
+  ellipses stripped from the parts' edges; one normalised index of the document, the caller's ctx),
+  every part the document's own words and whole: it starts and ends at a sentence, clause or line
+  boundary, never a tail that drops a negation, modal, exception or condition; the parts in the
+  document's order, one passage (§ Limitations, LAB round 3); a part under four words only as a
+  heading line before another; the parts handed on joined
+  by " … " (`TestRequirementPartsVerify`, `TestDevMultiPartRequirementRuns`, `TestStitchedRequirementRefused`,
+  `TestEllipsisJoinVerifies`, `TestStitchedRequirementMakesNoDeviation`); a paraphrase or a stitched
+  requirement is refused, before any model call, with the nearest exact passage (its whole sentences
+  or lines when they fit in 300 bytes, else at most 300 bytes; fenced as document data) to copy
+  (`TestDevParaphrasedRequirementRefused`). It keeps a
   deviation only when both sides' quotes verify (a verdict that restated the requirement, its words
   and no figure of its own, stands on the verified requirement: `TestDevRestatedControllingQuoteRescued`),
   and an omission only when the provision does not verify in the reviewed document: string match,
@@ -923,10 +930,13 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
   visit, where a visit that searched with `retrieve` took about three), most relevant first: each
   plan issue's pages ranked by the BM25 score of its question, taken in turn across the issues, then
   the pages no issue's words reach, in document order (`TestSweepReadsRelevantPagesFirst`); a page
-  that repeats an earlier one (folded text inside it in the same document, or 90% of its five-word
-  runs with the same figures; a whole page of 40 words or more another document holds) or is pure
-  boilerplate (no word, a table of contents) is skipped and listed under `skipped`
-  (`TestSweepSkipsDuplicatesAndBoilerplate`); each document's coverage (planned, read, skipped) is
+  that is an exact copy of an earlier read one (case and white space folded, or the same table rows
+  in another order; across documents only a page of 40 words or more) or is pure boilerplate (no
+  letter or digit; a table of contents: its Contents heading or dot-leadered or rising page numbers,
+  no table row, no sentence) is skipped and listed under `skipped`
+  (`TestSweepSkipsDuplicatesAndBoilerplate`, `TestDataTableIsNotBoilerplate`, `TestDistinctPagesAreRead`);
+  a copy of a page the sweep did not read counts unread (`TestSkipOfUnreadPageIsUnread`), and the
+  skipped pages are a Limitations line (`TestSkippedPagesReachLimitations`); each document's coverage (planned, read, skipped) is
   kept in the ledger (`swept`) and its partly unread documents are reported (`unreadDocuments`, also
   in `join_discrepancies`' output and in Limitations); every read is sized by the answer,
   not the page (`sweepTokens`, 600: a subagent writes five to seven tokens of findings per token of
@@ -1454,7 +1464,7 @@ improvements (after the real Haiku LAB rerun; scripted the same way): `TestSweep
 
 | Budget | Ceiling | Today |
 |---|---:|---:|
-| Go production lines (physical lines, non-`_test.go`, test-support packages included) | reported, no limit (owner decision 17) | 13,722 |
+| Go production lines (physical lines, non-`_test.go`, test-support packages included) | reported, no limit (owner decision 17) | 14,082 |
 | Packages under `internal/`, test-support packages excluded | 12 | 8 (`agent`, `analysis`, `api`, `docs`, `docs/ooxml`, `engine`, `model`, `store`; `store/storetest` is test support) |
 | Direct Go dependencies | 3 | 2 (`github.com/lib/pq`, `github.com/ledongthuc/pdf`) |
 | Runtime environment variables | 20 | 18 |
@@ -1463,7 +1473,7 @@ improvements (after the real Haiku LAB rerun; scripted the same way): `TestSweep
 | Packages without a `_test.go` | 0 | 0 |
 | Lines in any one source file (`.go`, `.py`, `.sql`, `.sh`, `.js`, `.ts`, `.css`; tests included) | 2,000 | 968 (`internal/docs/vision_safety_test.go`) |
 
-**There is no total line ceiling (owner decision 17, 2026-10-23).** `scripts/loc.py` reports the Go production total (13,722) and fails only on the budgets that bound bloat directly: no file over 2,000 lines, ≤ 3 direct deps, ≤ 20 env vars, ≤ 12 internal packages, ≤ 2,400 UI source lines, no untested package. Each PR still reports its lines against its DESIGN budget in its notes. (The ceiling's history, 14,000 → 17,500 through owner decisions 7–16, is in PLAN.) A **test-support package** is one
+**There is no total line ceiling (owner decision 17, 2026-10-23).** `scripts/loc.py` reports the Go production total (14,082) and fails only on the budgets that bound bloat directly: no file over 2,000 lines, ≤ 3 direct deps, ≤ 20 env vars, ≤ 12 internal packages, ≤ 2,400 UI source lines, no untested package. Each PR still reports its lines against its DESIGN budget in its notes. (The ceiling's history, 14,000 → 17,500 through owner decisions 7–16, is in PLAN.) A **test-support package** is one
 whose directory name ends in `test` and that no production file outside it imports, such as
 `storetest`. Under the coordinator's ruling it is left out of the package count, but its lines
 count toward the reported Go total like any other non-`_test.go` file. A `*test` package that
@@ -1562,15 +1572,30 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     allegations are made") rank weakly, and a page that matters for a reason its words do not
     share (a summary sheet whose figure contradicts another document) can come late. Its skips are
     conservative: no page of the SEC or trust sets is a duplicate or boilerplate, so there they save
-    nothing; a near-duplicate page with a different section number is still read.
+    nothing. Only an exact copy (case and white space folded, or the same lines of a table in another
+    order) is skipped as a duplicate, and its coverage follows the page it copies (a copy of a page
+    the sweep did not read is unread too); a page is boilerplate only with no letter or digit, or as
+    a table of contents with no table row and no sentence. The count of skipped pages and their
+    documents is a Limitations line.
   - One call a visit is an inference from the bench's token counts (about 26,000 input tokens a
     visit, three calls), not a measured split; the 39% share's reach is estimated from it.
   - A salient finding is judged by its tool, severity, typed relations, figures or the words of its
     claim ("deviates", "does not", "fails to"): a left-out finding stated otherwise is not placed, and
     a claim that merely says "does not" is. The pass places at most 40, one redraft per issue.
-  - A requirement's parts must each be in the document, but nothing checks that their order or
-    juxtaposition says what the model meant by joining them; a two-word heading part stands for
-    context only.
+  - A requirement's parts must each be a whole sentence, clause or line of the document (a part may
+    start after a comma, colon or dash only when the words it drops hold no negation, modal,
+    exception or condition), in the document's order, one passage: only white space and list
+    markers between them, or, after a sentence, at most two whole sentences (400 bytes) that hold no
+    qualifier ("except", "however", "the foregoing"); never a heading or a list's introduction. The
+    bench's two-paragraph requirement (step 76) needs that skip. Which sentences may be skipped is a
+    word test, not a reading: a skipped sentence can still qualify its neighbour in other words. A
+    single-passage requirement is checked as before: an exact fragment, or a list item without its
+    introduction, verifies. A short heading part stands for context only.
+  - The near join pairs only one entity's values (alias-unified, or both with none), within an eighth
+    of each other, and not when each label names a thing its own quote states and the other side
+    never mentions (a fee and an allocation, a notice and a demand); dates joined by shared words take
+    the same label test. It is a word test: two facts whose quotes share their labels' words (a
+    deposit "of the Purchase Price") are told apart only by the eighth.
   - The raw-date rule is paragraph-wide: a list that states the raw date and the rolled deadline on
     separate lines without a blank line between is one paragraph and passes; one with a blank line is
     flagged.

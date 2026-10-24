@@ -108,7 +108,7 @@ func Join(findings []Finding, aliases []Alias) []Conflict {
 	for i, e := range es {
 		if e.class == "Date" {
 			for j := range i {
-				if es[j].class == "Date" && (norm(e.v.Metric) != "" && norm(e.v.Metric) == norm(es[j].v.Metric) || !(e.row() && es[j].row()) && shared(e.words, es[j].words) >= 2) {
+				if es[j].class == "Date" && (norm(e.v.Metric) != "" && norm(e.v.Metric) == norm(es[j].v.Metric) || !(e.row() && es[j].row()) && shared(e.words, es[j].words) >= 2 && sameMetric(e, es[j])) {
 					events.union(strconv.Itoa(i), strconv.Itoa(j))
 				}
 			}
@@ -154,26 +154,70 @@ func Join(findings []Finding, aliases []Alias) []Conflict {
 	for _, r := range roots {
 		try(byEvent[r], "date", func(a, b entry) bool { return !a.date.Compatible(b.date) })
 	}
-	return append(out, near(es, out)...)
+	sameEntity := func(a, b entry) bool { return ents.find(key(a.v.Entity)) == ents.find(key(b.v.Entity)) }
+	return append(out, near(es, out, sameEntity)...)
+}
+
+// generic are metric words that name no quantity of their own ("grand total of payments" is payments).
+var generic = map[string]bool{"total": true, "grand": true, "aggregate": true, "overall": true, "amount": true, "sum": true, "value": true,
+	"number": true, "count": true, "figure": true, "percentage": true, "percent": true}
+
+// sameMetric reports whether two values, labelled differently, can be one quantity: not both labels
+// name a thing of their own, a word of the label that its own quote states and that neither the
+// other's label nor its quotes mention (lab-r3 verifier: a management fee and an incentive
+// allocation, a termination notice and a cure demand, are two facts). A label its quote does not
+// state ("email sent" over an e-mail's headers) names nothing of its own.
+func sameMetric(a, b entry) bool {
+	own := func(x, y entry) bool {
+		for w := range tokens(x.v.Metric) {
+			if !generic[w] && stemIn(x.words, w) && !stemIn(tokens(y.v.Metric), w) && !stemIn(y.words, w) {
+				return true
+			}
+		}
+		return false
+	}
+	return !own(a, b) || !own(b, a)
+}
+
+// stemIn reports whether set holds w or a word of its stem (one is the other plus at most three letters,
+// sharing five: "instructed", "instruction").
+func stemIn(set map[string]bool, w string) bool {
+	if set[w] {
+		return true
+	}
+	for x := range set {
+		n := 0
+		for n < min(len(x), len(w)) && x[n] == w[n] {
+			n++
+		}
+		if n >= 5 && n >= max(len(x), len(w))-3 {
+			return true
+		}
+	}
+	return false
 }
 
 // maxNear bounds the near conflicts one join reports: they are leads to check, not a column dump.
 // nearSalience is the least salient quantity compared (any percentage, money from $1,000, a count
 // of thousands): a share price or a day count is too common for nearness to mean one fact.
+// nearShare: two quantities are near when they differ by at most an eighth of the larger (a price
+// and its 20% deposit, a 2% fee and a 2.5% one, are not one figure misstated).
 const (
 	maxNear      = 20
 	nearSalience = 45
+	nearShare    = 8
 )
 
 // near finds the conflicts the label join cannot see (bench r3, SEC: 4,217 vs 4,312 trades
 // analysed, $92,600 vs $103,800 paid to the club, 73% vs 78% of volume, April 22 vs April 15, each
 // labelled differently in its document's finding): two values of one class from two documents that
-// are near each other (within a quarter for a quantity; a month for a full date) and whose quotes
-// share at least three distinctive words, when neither document states the other's value anywhere
+// are near each other (within an eighth for a quantity; a month for a full date), of one entity
+// (alias-unified, or both of none) and possibly one metric (sameMetric), and whose quotes share at
+// least three distinctive words, when neither document states the other's value anywhere
 // (so a total restated beside its parts is not one). Quantities must be salient (nearSalience), and two
 // values each only in table rows are never paired (rows of two tables are enumerations, not one fact
 // restated). It skips pairs a found conflict already holds.
-func near(es []entry, found []Conflict) []Conflict {
+func near(es []entry, found []Conflict, sameEntity func(a, b entry) bool) []Conflict {
 	perDoc := map[string]map[string]bool{}
 	for _, e := range es {
 		if perDoc[e.doc] == nil {
@@ -203,7 +247,7 @@ func near(es []entry, found []Conflict) []Conflict {
 		fx, _ := x.Float64()
 		fy, _ := y.Float64()
 		hi := max(fx, fy, -fx, -fy)
-		return hi > 0 && fx != fy && (fx-fy <= hi/4 && fy-fx <= hi/4)
+		return hi > 0 && fx != fy && (fx-fy <= hi/nearShare && fy-fx <= hi/nearShare)
 	}
 	var out []Conflict
 	seen := map[string]bool{}
@@ -211,7 +255,7 @@ func near(es []entry, found []Conflict) []Conflict {
 		for _, b := range es[i+1:] {
 			if a.class != b.class || a.doc == b.doc || a.doc == "" || b.doc == "" || held[a.fid+"|"+a.canon] && held[b.fid+"|"+b.canon] ||
 				a.class != "Date" && (Salience(a.v.Value) < nearSalience || Salience(b.v.Value) < nearSalience) || a.row() && b.row() ||
-				perDoc[a.doc][b.canon] || perDoc[b.doc][a.canon] || !close(a, b) || shared(a.words, b.words) < 3 {
+				perDoc[a.doc][b.canon] || perDoc[b.doc][a.canon] || !close(a, b) || shared(a.words, b.words) < 3 || !sameEntity(a, b) || !sameMetric(a, b) {
 				continue
 			}
 			k := min(a.canon, b.canon) + "|" + max(a.canon, b.canon)
@@ -294,14 +338,23 @@ var stop = map[string]bool{"the": true, "and": true, "for": true, "that": true, 
 func referents(f Finding, value string) map[string]bool {
 	out := map[string]bool{}
 	for _, q := range f.Quotes {
-		for _, t := range strings.Fields(strings.ToLower(strings.ReplaceAll(q.Quote, value, " "))) {
-			t = strings.TrimSuffix(strings.Trim(t, ".,;:()[]{}\"'`|—–"), "'s")
-			if len(t) > 3 && strings.HasSuffix(t, "s") && !strings.HasSuffix(t, "ss") {
-				t = t[:len(t)-1]
-			}
-			if len(t) >= 3 && !strings.ContainsAny(t, "0123456789") && !stop[t] {
-				out[t] = true
-			}
+		for t := range tokens(strings.ReplaceAll(q.Quote, value, " ")) {
+			out[t] = true
+		}
+	}
+	return out
+}
+
+// tokens are the distinctive words of s: folded, a plural or possessive trimmed, no digits or stop words.
+func tokens(s string) map[string]bool {
+	out := map[string]bool{}
+	for _, t := range strings.Fields(strings.ToLower(s)) {
+		t = strings.TrimSuffix(strings.Trim(t, ".,;:()[]{}\"'`|—–"), "'s")
+		if len(t) > 3 && strings.HasSuffix(t, "s") && !strings.HasSuffix(t, "ss") {
+			t = t[:len(t)-1]
+		}
+		if len(t) >= 3 && !strings.ContainsAny(t, "0123456789") && !stop[t] {
+			out[t] = true
 		}
 	}
 	return out

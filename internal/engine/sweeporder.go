@@ -7,6 +7,7 @@ import (
 	"math"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -130,56 +131,84 @@ func cmpFloat(a, b float64) int {
 	return 0
 }
 
-// tocLine is a table-of-contents line: a title, then dot leaders or a tab, then a page number.
-var tocLine = regexp.MustCompile(`(?:\.{3,}|…|\t| {3,})\s*\d{1,4}\s*$`)
+// tocEntry is a table-of-contents line: a title, then dot leaders, a tab or a run of spaces, then a
+// page number; tocHeading is a table of contents' own heading; cells split a table row.
+var (
+	tocEntry   = regexp.MustCompile(`^(.*\pL.*?)\s*(\.{3,}|…+|\t| {3,})\s*(\d{1,4})\s*$`)
+	tocHeading = regexp.MustCompile(`(?i)^\s*(?:table of contents|contents|index)\s*$`)
+	cells      = regexp.MustCompile(`\t| {3,}`)
+)
 
-// skipWhy says why a visit is not worth a subagent, "" when it is: "duplicate" when its text (case
-// and white space folded) is inside an earlier read visit's of the same document, or nearly the same
-// words (90% of its five-word runs) with exactly the same figures, or, across documents, a whole
-// page of at least 40 words another document already holds; "boilerplate" when it holds no word at
-// all, or is a table of contents (five or more lines, 70% of them a title and a page number). A page
-// that differs from another only by a figure is read: a figure is what the joins compare.
-func skipWhy(v Visit, earlier []Visit) string {
-	lines := strings.FieldsFunc(v.text, func(r rune) bool { return r == '\n' })
-	toc := 0
+// tableRow reports whether a line is a row of a data table: a |-table's, or one of three or more
+// tab- or space-aligned cells, at least two of them figures. A table is evidence, never boilerplate.
+func tableRow(l string) bool {
+	if strings.Count(l, "|") >= 2 {
+		return true
+	}
+	cs, num := cells.Split(strings.TrimSpace(l), -1), 0
+	for _, c := range cs {
+		num += btoi(strings.ContainsFunc(c, unicode.IsDigit))
+	}
+	return len(cs) >= 3 && num >= 2
+}
+
+// toc reports whether a page reads as a table of contents and nothing else: no table row, no
+// sentence (every other line a short heading), and its own Contents heading over entries, or five or more lines, 70% of them entries whose numbers have dot
+// leaders (most of them) or increase down the page (lab-r3 verifier H3: a trade blotter, a payment
+// schedule and an amortization page were skipped as contents).
+func toc(lines []string) bool {
+	if slices.ContainsFunc(lines, tableRow) {
+		return false
+	}
+	entries, leaders, rising, last := 0, 0, true, -1
 	for _, l := range lines {
-		toc += btoi(tocLine.MatchString(l))
-	}
-	if !strings.ContainsFunc(v.text, unicode.IsLetter) || len(lines) >= 5 && float64(toc) >= 0.7*float64(len(lines)) {
-		return "boilerplate"
-	}
-	folded, words := fold(v.text), strings.Fields(strings.ToLower(v.text))
-	ds, ns := figures(v.text, true)
-	for _, x := range earlier {
-		same := x.DocumentID == v.DocumentID
-		if (same || len(words) >= 40) && strings.Contains(fold(x.text), folded) {
-			return "duplicate"
-		}
-		if xd, xn := figures(x.text, true); same && slices.Equal(ds, xd) && slices.Equal(ns, xn) && shingleShare(words, strings.Fields(strings.ToLower(x.text))) >= 0.9 {
-			return "duplicate"
+		if m := tocEntry.FindStringSubmatch(l); m != nil {
+			n, _ := strconv.Atoi(m[3])
+			entries, leaders, rising, last = entries+1, leaders+btoi(m[2] != "\t" && strings.TrimSpace(m[2]) != ""), rising && n > last, n
+		} else if t := strings.TrimSpace(l); len(strings.Fields(t)) > 8 || endsWith(t, ".!?") && len(strings.Fields(t)) > 2 {
+			return false // prose: a page that holds a sentence is read, whatever else it holds
 		}
 	}
-	return ""
+	if len(lines) > 1 && tocHeading.MatchString(lines[0]) && 2*entries >= len(lines)-1 && entries > 0 {
+		return true
+	}
+	return len(lines) >= 5 && float64(entries) >= 0.7*float64(len(lines)) && (2*leaders >= entries || rising)
+}
+
+// skipWhy says why a visit is not worth a subagent, "" when it is, and which earlier visit it
+// repeats (src, -1 when none): "duplicate" when its text, case and white space folded, is exactly an
+// earlier read visit's of the same document (or, across documents, a page of at least 40 words), or
+// holds exactly the same lines (table rows) in another order; "boilerplate" when it holds no letter
+// or digit at all, or is a table of contents (toc). A page that differs from another in anything, a
+// figure, a name or a "not", is read (lab-r3 verifier M1).
+func skipWhy(v Visit, earlier []Visit) (why string, src int) {
+	lines := strings.FieldsFunc(v.text, func(r rune) bool { return r == '\n' })
+	if !strings.ContainsFunc(v.text, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }) || toc(lines) {
+		return "boilerplate", -1
+	}
+	folded, words, rows := fold(v.text), len(strings.Fields(v.text)), sortedLines(lines)
+	for i, x := range earlier {
+		if x.DocumentID != v.DocumentID && words < 40 {
+			continue
+		}
+		if xl := strings.FieldsFunc(x.text, func(r rune) bool { return r == '\n' }); fold(x.text) == folded ||
+			slices.ContainsFunc(lines, tableRow) && slices.Equal(sortedLines(xl), rows) {
+			return "duplicate", i
+		}
+	}
+	return "", -1
+}
+
+// sortedLines are a page's non-empty lines folded and sorted (a table's rows as a set).
+func sortedLines(lines []string) []string {
+	var out []string
+	for _, l := range lines {
+		if l = fold(l); l != "" {
+			out = append(out, l)
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 func fold(s string) string { return strings.Join(strings.Fields(strings.ToLower(s)), " ") }
-
-// shingleShare is the share of a's five-word runs that b also has (a's words if it has fewer than five).
-func shingleShare(a, b []string) float64 {
-	runs := func(w []string) map[string]bool {
-		m := map[string]bool{}
-		for i := 0; i+5 <= len(w); i++ {
-			m[strings.Join(w[i:i+5], " ")] = true
-		}
-		if len(w) < 5 {
-			m[strings.Join(w, " ")] = true
-		}
-		return m
-	}
-	ra, rb := runs(a), runs(b)
-	hit := 0
-	for r := range ra {
-		hit += btoi(rb[r])
-	}
-	return float64(hit) / float64(max(1, len(ra)))
-}

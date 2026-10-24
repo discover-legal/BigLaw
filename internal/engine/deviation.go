@@ -80,15 +80,17 @@ func (e *Engine) quotedRequirement(ctx context.Context, c agent.Call) (string, e
 	} else if v.Verified {
 		return v.Match, nil
 	}
-	parts, bad := requirementParts(d.Text, in.Requirement)
-	if bad == "" {
+	parts, bad, err := requirementParts(ctx, d.Text, in.Requirement)
+	if err != nil {
+		return "", err
+	} else if bad == "" {
 		return strings.Join(parts, partJoin), nil
 	}
 	msg := "check_deviation: the requirement is not quoted from " + d.Name + ", so it would be checked as a paraphrase"
 	if bad != unescape(in.Requirement) {
 		msg += fmt.Sprintf(" (its part %q does not verify there)", truncate(bad, 80))
 	}
-	msg += ": pass the controlling document's own words, copied exactly (a requirement in several passages may join them with " + strconv.Quote(strings.TrimSpace(partJoin)) + "), and call again"
+	msg += ": pass the controlling document's own words, copied exactly (a requirement in several passages may join whole sentences, clauses or lines of one passage, in the document's order, with " + strconv.Quote(strings.TrimSpace(partJoin)) + "), and call again"
 	if p, ok, err := e.docs.Nearest(ctx, c.DocumentIDs, d.ID, bad, nearestMax); err != nil {
 		return "", err
 	} else if ok { // a bounded exact passage to copy, fenced as the document's data
@@ -126,56 +128,6 @@ func unescape(s string) string {
 		}
 		return m[1:]
 	})
-}
-
-// joins are where a model joins passages of a requirement: after a colon, semicolon, sentence end
-// or ellipsis followed by white space, at a line break, and at an ellipsis it wrote.
-var joins = regexp.MustCompile(`[:;.!?](?:["”’)]*)\s+|\s*(?:…|\.\.\.)\s*|\s*\n\s*`)
-
-// requirementParts verifies a requirement in a document's text and returns the document's words for
-// it: the whole, as sent or with its JSON escapes undone, else part by part (bench: a heading
-// joined to its list, "Successor Trustees: … First Successor Trustee: …"; two sentences from two
-// paragraphs). The requirement is split at its joins and each part is the longest run of pieces
-// that verifies (exact or tolerant; a trailing colon or semicolon dropped); every part must verify,
-// and a part of fewer than four words only as the first and only when it ends a line of the
-// document (a heading), so a paraphrase stays refused even when its words occur in pieces. bad is the first part that does not verify ("" when all do).
-func requirementParts(text, req string) (parts []string, bad string) {
-	find := func(q string) (string, bool) {
-		for _, x := range []string{q, strings.TrimRight(q, ":;, ")} {
-			if v, _ := docs.Verify(context.Background(), text, x, nil); v.Verified && strings.TrimSpace(x) != "" {
-				return text[v.Start:v.End], true
-			}
-		}
-		return "", false
-	}
-	req = unescape(req)
-	if m, ok := find(req); ok {
-		return []string{m}, ""
-	}
-	var cuts []int // piece boundaries in req: 0, each join's end, len(req); no piece is only white space or joins
-	cuts = append(cuts, 0)
-	for _, loc := range joins.FindAllStringIndex(req, 40) {
-		if loc[1] < len(req) && strings.TrimSpace(strings.Trim(req[cuts[len(cuts)-1]:loc[1]], ":;.!?…\"”’) \t\n")) != "" {
-			cuts = append(cuts, loc[1])
-		}
-	}
-	cuts = append(cuts, len(req))
-	for i := 0; i+1 < len(cuts); {
-		j := len(cuts) - 1
-		var m string
-		for ; j > i; j-- {
-			if x, ok := find(strings.TrimSpace(req[cuts[i]:cuts[j]])); ok {
-				m = x
-				break
-			}
-		}
-		piece := cmpStr(strings.TrimSpace(req[cuts[i]:cuts[max(j, i+1)]]) != "", strings.TrimSpace(req[cuts[i]:cuts[max(j, i+1)]]), req)
-		if short := len(strings.Fields(m)) < 4; j == i || short && (len(parts) > 0 || !strings.Contains(text+"\n", m+"\n")) {
-			return nil, piece // a short part only as a heading: the first, and a line of the document's own; never "" (that is success)
-		}
-		parts, i = append(parts, m), j
-	}
-	return parts, ""
 }
 
 // present reports whether a required provision is in a reviewed document: it verifies there like

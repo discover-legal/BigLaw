@@ -4,8 +4,11 @@
 package engine
 
 import (
+	"context"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/discover-legal/BigLaw/internal/model"
 )
@@ -43,7 +46,7 @@ func TestRequirementPartsVerify(t *testing.T) {
 		name, req string
 		parts     int
 	}{{"heading joined", reqHeadingJoined, 2}, {"escaped", reqEscaped, 2}, {"escaped sophia", reqEscapedSophia, 2}, {"two paragraphs", reqTwoParagraphs, 2}} {
-		parts, bad := requirementParts(trustMemoExcerpt, c.req)
+		parts, bad, _ := requirementParts(context.Background(), trustMemoExcerpt, c.req)
 		if bad != "" || len(parts) != c.parts {
 			t.Errorf("%s: parts %q, bad %q", c.name, parts, bad)
 		}
@@ -53,11 +56,11 @@ func TestRequirementPartsVerify(t *testing.T) {
 			}
 		}
 	}
-	if parts, bad := requirementParts(trustMemoExcerpt, reqParaphrase); bad == "" || !strings.Contains(bad, "shall NOT have the power to remove or replace individual trustees") {
+	if parts, bad, _ := requirementParts(context.Background(), trustMemoExcerpt, reqParaphrase); bad == "" || !strings.Contains(bad, "shall NOT have the power to remove or replace individual trustees") {
 		t.Errorf("paraphrase: parts %q, bad %q", parts, bad)
 	}
 	for _, p := range []string{"Sophia: 35%", "Tommy: outright and free of trust", "Trust Protector. Accelerate. Corporate trustee. Remove.", " … … ", ". . .", "Successor Trustees: … … …"} {
-		if _, bad := requirementParts(trustMemoExcerpt, p); bad == "" { // words of the memo, in pieces: still a paraphrase
+		if _, bad, _ := requirementParts(context.Background(), trustMemoExcerpt, p); bad == "" { // words of the memo, in pieces: still a paraphrase
 			t.Errorf("%q verified as the memo's words", p)
 		}
 	}
@@ -101,5 +104,94 @@ func TestDevMultiPartRequirementRuns(t *testing.T) {
 		if c.Method == "none" {
 			t.Fatalf("citation %+v did not verify", c)
 		}
+	}
+}
+
+// TestStitchedRequirementRefused (lab-r3 verifier H1): a requirement stitched from real fragments is
+// refused when a part is not a whole sentence, clause or line (a tail that drops "Do NOT", "shall
+// NOT", "except" or a condition), or when its parts are not one passage in the document's order.
+// On 1814a6a the first three verified and the third became a verified HIGH deviation telling the
+// lawyer to name Sophia as successor trustee, the opposite of the memo.
+func TestStitchedRequirementRefused(t *testing.T) {
+	const contract = "7. Assignment\nThe Seller shall not, except with the Buyer's prior written consent, assign this Agreement to any person. The Buyer may assign this Agreement to an affiliate on notice.\n8. Fees\nAll fees are payable in cash, unless the Buyer elects otherwise in writing, within thirty days of invoice. Late fees accrue at one percent per month.\n9. Licence\nLicensee shall not sublicense the Software. Licensee shall pay the licence fees quarterly in advance.\n"
+	for _, c := range []struct{ doc, req string }{
+		// memo: "Do NOT name Sophia Davenport-Chen as a successor trustee in any capacity."
+		{trustMemoExcerpt, "the following individuals and entities shall serve as successor Trustee … Sophia Davenport-Chen as a successor trustee in any capacity."},
+		// memo: Sophia's 35% "shall NOT be distributed outright"
+		{trustMemoExcerpt, "Thirty-five percent (35%) of the residuary estate shall … be distributed outright and free of trust to Thomas"},
+		// the colon join of two fragments that names Sophia as successor trustee
+		{trustMemoExcerpt, "the following individuals and entities shall serve as successor Trustee, in the following order of priority: Sophia Davenport-Chen as a successor trustee in any capacity."},
+		// the whole intro sentence, then the tail of the CRITICAL NOTE: still a tail, and lines apart
+		{trustMemoExcerpt, "Upon Peggy's death, incapacity, resignation, or inability to serve, the following individuals and entities shall serve as successor Trustee, in the following order of priority: … Sophia Davenport-Chen as a successor trustee in any capacity."},
+		// out of the document's order
+		{trustMemoExcerpt, "Like David's share, Tommy's share is to be distributed without any continuing trust restrictions. … Twenty-five percent (25%) of the residuary estate shall be distributed outright and free of trust to Thomas \"Tommy\" Davenport-Chen."},
+		// two sections apart (a heading and a list's introduction between them)
+		{trustMemoExcerpt, "Thirty-five percent (35%) of the residuary estate shall NOT be distributed outright. … Like David's share, Tommy's share is to be distributed without any continuing trust restrictions."},
+		// clause tails that drop a negation, an exception, a condition
+		{contract, "7. Assignment … assign this Agreement to any person."},
+		{contract, "The Buyer may assign this Agreement to an affiliate on notice. … assign this Agreement to any person."},
+		{contract, "8. Fees … within thirty days of invoice."},
+		{contract, "9. Licence … sublicense the Software. Licensee shall pay the licence fees quarterly in advance."},
+		// a part that ends before what qualifies it
+		{contract, "8. Fees … All fees are payable in cash"},
+		{contract, "Licensee shall … sublicense the Software."},
+	} {
+		parts, bad, err := requirementParts(context.Background(), c.doc, c.req)
+		if err != nil || bad == "" {
+			t.Errorf("stitched requirement verified as the document's words: %q (parts %q, err %v)", c.req, parts, err)
+		}
+	}
+	for _, req := range []string{ // whole sentences and lines of one passage still verify
+		"7. Assignment … The Seller shall not, except with the Buyer's prior written consent, assign this Agreement to any person.",
+		"Licensee shall not sublicense the Software. … Licensee shall pay the licence fees quarterly in advance.",
+		"All fees are payable in cash, unless the Buyer elects otherwise in writing, within thirty days of invoice. … Late fees accrue at one percent per month.",
+	} {
+		if parts, bad, err := requirementParts(context.Background(), contract, req); err != nil || bad != "" || len(parts) != 2 {
+			t.Errorf("%q: parts %q, bad %q, err %v", req, parts, bad, err)
+		}
+	}
+}
+
+// TestEllipsisJoinVerifies (lab-r3 verifier H4): the " … " join the refusal and check_deviation.md
+// invite verifies for two whole sentences of one passage, written ". … ", " … " or " ... " (it was
+// always refused: the cut kept the ellipsis on the part).
+func TestEllipsisJoinVerifies(t *testing.T) {
+	req := "Twenty-five percent (25%) of the residuary estate shall be distributed outright and free of trust to Thomas \"Tommy\" Davenport-Chen. … Like David's share, Tommy's share is to be distributed without any continuing trust restrictions."
+	for _, r := range []string{req, strings.ReplaceAll(req, ". … ", " … "), strings.ReplaceAll(req, ". … ", ". ... "), strings.ReplaceAll(req, ". … ", " ... ")} {
+		if parts, bad, err := requirementParts(context.Background(), trustMemoExcerpt, r); err != nil || bad != "" || len(parts) != 2 {
+			t.Errorf("an ellipsis join of two exact sentences: %q: parts %q, bad %q, err %v", r, parts, bad, err)
+		}
+	}
+}
+
+// TestRequirementPartsBounded (lab-r3 verifier L1): a 600 KB controlling document and a requirement
+// of 41 sentences that each verify alone: the joins are capped (refused as a whole, at once), a
+// capped requirement over that document is placed by one index, and a cancelled ctx stops it.
+func TestRequirementPartsBounded(t *testing.T) {
+	var doc strings.Builder
+	var sent []string
+	for i := 0; doc.Len() < 600_000; i++ {
+		s := fmt.Sprintf("Clause %d: the borrower shall maintain covenant number %d at all times.", i, i)
+		doc.WriteString(s + "\n\n")
+		if i%97 == 0 && len(sent) < 41 {
+			sent = append(sent, s)
+		}
+	}
+	text := doc.String()
+	t0 := time.Now()
+	if _, bad, _ := requirementParts(context.Background(), text, strings.Join(sent, " ")); bad == "" {
+		t.Error("41 sentences from all over the document verified as one requirement")
+	}
+	near := strings.Join([]string{"Clause 500: the borrower shall maintain covenant number 500 at all times.", "Clause 501: the borrower shall maintain covenant number 501 at all times."}, " … ")
+	if parts, bad, err := requirementParts(context.Background(), text, near); bad != "" || err != nil || len(parts) != 2 {
+		t.Errorf("two adjacent clauses: parts %q, bad %q, err %v", parts, bad, err)
+	}
+	if d := time.Since(t0); d > 5*time.Second {
+		t.Errorf("requirementParts took %v over 600 KB", d)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, err := requirementParts(ctx, text, near); err == nil {
+		t.Error("a cancelled ctx did not stop requirementParts")
 	}
 }

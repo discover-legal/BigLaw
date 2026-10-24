@@ -120,8 +120,8 @@ func TestCrossDocAliasUnificationDeterministicGraphTie(t *testing.T) {
 	if c := has(Join(fs, []Alias{{"Ostrowski", []string{"Bayshore Palms LLC"}}}), "$92,600", "$103,800"); c == nil {
 		t.Fatal("the aliased pair was not flagged")
 	}
-	if cs := Join(fs, nil); len(cs) != 1 || cs[0].Entity != "Ostrowski" || cs[0].Metric != "undisclosed compensation total" || has(cs, "$92,600", "$103,800") == nil {
-		t.Fatalf("without the alias: %+v (r3: the near join finds the pair, its quotes sharing their words)", cs)
+	if cs := Join(fs, nil); len(cs) != 0 {
+		t.Fatalf("without the alias the pair unified: %+v (the near join pairs only one entity: lab-r3 verifier M4)", cs)
 	}
 }
 
@@ -263,5 +263,33 @@ func TestJoinComparesOnlySameQuantityClass(t *testing.T) {
 	}, nil)
 	if len(cs) != 0 {
 		t.Fatalf("money compared with a share count: %+v", cs)
+	}
+}
+
+// TestJoinRefusesDifferentFacts (lab-r3 verifier H2/M4): two values near each other in two
+// documents, about one party, whose quotes share words, are still two facts when each label names a
+// thing its quote states and the other side never mentions: a management fee and an incentive
+// allocation, a termination notice and a cure demand two weeks later, a purchase price and the escrow
+// deposit paid towards it. On 1814a6a each was a conflict that finish forced the memo to state.
+func TestJoinRefusesDifferentFacts(t *testing.T) {
+	f := func(fid, doc, quote string, v Value) Finding {
+		return Finding{FID: fid, Verified: true, Quotes: []Quote{{DocumentID: doc, Quote: quote}}, Values: []Value{v}}
+	}
+	for _, c := range []struct {
+		name string
+		a, b Finding
+	}{
+		{"two different fees", f("F1", "lpa", "The Management Fee shall equal 2% per annum of the Fund's net asset value, payable quarterly in advance.", Value{Entity: "Fund", Metric: "management fee", Value: "2%", Class: "Percentage"}),
+			f("F2", "ppm", "The Incentive Allocation equals 2.5% of the Fund's net asset value appreciation, payable quarterly.", Value{Entity: "Fund", Metric: "incentive allocation", Value: "2.5%", Class: "Percentage"})},
+		{"two letters a fortnight apart", f("F3", "complaint", "On March 3, 2024, Defendant Acme Corp. sent Plaintiff Baker a written notice of termination of the Supply Agreement.", Value{Entity: "Acme", Metric: "termination notice", Value: "March 3, 2024", Class: "Date"}),
+			f("F4", "letter", "Acme Corp. hereby demands that Baker cure the default under the Supply Agreement; dated March 18, 2024.", Value{Entity: "Acme", Metric: "cure demand", Value: "March 18, 2024", Class: "Date"})},
+		{"deposit and price", f("F5", "spa", "Buyer shall pay the Purchase Price of $1,000,000 to Seller at Closing under this Purchase Agreement.", Value{Entity: "Buyer", Metric: "purchase price", Value: "$1,000,000", Class: "Money"}),
+			f("F6", "escrow", "Buyer shall deposit $800,000 of the Purchase Price with the Escrow Agent under the Purchase Agreement.", Value{Entity: "Buyer", Metric: "escrow deposit", Value: "$800,000", Class: "Money"})},
+		{"two parties' prices", f("F7", "spa", "Buyer shall pay the Purchase Price of $1,000,000 to Seller at Closing under this Purchase Agreement.", Value{Entity: "Buyer", Metric: "purchase price", Value: "$1,000,000", Class: "Money"}),
+			f("F8", "spa2", "Guarantor shall pay the Purchase Price of $1,050,000 to Seller at Closing under this Purchase Agreement.", Value{Entity: "Guarantor", Metric: "price", Value: "$1,050,000", Class: "Money"})},
+	} {
+		if cs := Join([]Finding{c.a, c.b}, nil); len(cs) > 0 {
+			t.Errorf("%s: reported as a conflict the memo must address: %+v", c.name, cs)
+		}
 	}
 }

@@ -346,16 +346,20 @@ func (e *Engine) sweepTool(rt *agent.Runtime, r *run) agent.Tool {
 		}
 		a, sw := Allocate(e.cfg.BudgetCalls, e.cfg.BudgetUSD), spent["sweep"]
 		b := agent.NewBudget(min(c.Budget.Calls, a.Sweep-sw.Calls), min(c.Budget.USD, a.dollars(a.Sweep)-sw.USD), 0)
-		todo, prior, why := make([]bool, len(visits)), make([][]string, len(visits)), make([]string, len(visits))
+		todo, prior, why, src := make([]bool, len(visits)), make([][]string, len(visits)), make([]string, len(visits)), make([]int, len(visits))
 		var kept []Visit // the read (or to be read) visits so far, in reading order: what a later one may repeat
+		var keptAt []int // their indexes in visits
 		for i, v := range visits {
+			src[i] = -1
 			if j := slices.IndexFunc(done, func(x row) bool { return x.Key == v.key() }); j >= 0 {
 				_ = json.Unmarshal(done[j].Data, &prior[i])
-			} else if why[i] = skipWhy(v, kept); why[i] == "" {
+			} else if why[i], src[i] = skipWhy(v, kept); why[i] == "" {
 				todo[i] = true
+			} else if src[i] >= 0 {
+				src[i] = keptAt[src[i]]
 			}
 			if why[i] == "" {
-				kept = append(kept, v)
+				kept, keptAt = append(kept, v), append(keptAt, i)
 			}
 		}
 		runs, err := e.sweepVisits(ctx, rt, c, b, visits, todo, r.t.Description)
@@ -373,14 +377,17 @@ func (e *Engine) sweepTool(rt *agent.Runtime, r *run) agent.Tool {
 			}
 			d.Planned++
 			fids = append(fids, prior[i]...)
+			unread := func(j int) bool { return todo[j] && (!runs[j].ran || runs[j].err != nil) }
 			switch x := runs[i]; {
+			case why[i] != "" && src[i] >= 0 && unread(src[i]): // a copy of a page the sweep did not read is not read either (lab-r3 verifier M2)
+				uncovered = append(uncovered, v.unread())
 			case why[i] != "":
 				u := v.unread()
 				u["reason"] = why[i]
 				skipped, d.Skipped = append(skipped, u), d.Skipped+1
 			case !todo[i]:
 				d.Read++
-			case !x.ran || x.err != nil:
+			case unread(i):
 				uncovered = append(uncovered, v.unread())
 			default:
 				visited, d.Read = visited+1, d.Read+1
@@ -433,8 +440,28 @@ func (e *Engine) sweepTool(rt *agent.Runtime, r *run) agent.Tool {
 		if err := e.write(ctx, c.TaskID, kNote, "sweep", note, true); err != nil {
 			return nil, b.Spent(), err
 		}
+		if err := e.write(ctx, c.TaskID, kNote, "sweep-skipped", skippedNote(swept), true); err != nil {
+			return nil, b.Spent(), err
+		}
 		return out, b.Spent(), nil
 	}}
+}
+
+// skippedNote is the Limitations line for the pages the sweeps skipped (lab-r3 verifier M3: the
+// lawyer is told, not only the lead): how many, and in which documents.
+func skippedNote(swept []SweptDoc) string {
+	n, docs := 0, []string{}
+	for _, d := range swept {
+		if d.Skipped > 0 {
+			n += d.Skipped
+			docs = append(docs, fmt.Sprintf("%s (%d of %d)", cmpStr(d.Name != "", d.Name, d.DocumentID), d.Skipped, d.Planned))
+		}
+	}
+	if n == 0 {
+		return ""
+	}
+	return fmt.Sprintf("The evidence sweep did not read %d %s it judged exact duplicates of pages it read or boilerplate (no text, or a table of contents): %s.",
+		n, plural(n, "page", "pages"), strings.Join(docs, "; "))
 }
 
 // SweptDoc is one document's sweep coverage: pages planned, read and skipped (duplicate or boilerplate).

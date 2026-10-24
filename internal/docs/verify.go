@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -97,6 +98,40 @@ func Verify(ctx context.Context, text, quote string, judge Judge) (Verification,
 	return Verification{Verified: true, Method: "ensemble", Confidence: ensembleScale * float64(votes) / ensembleVotes, Start: start, End: end}, nil
 }
 
+// Text is a document's text prepared for many quote searches: normalised once (Verify's tolerant
+// rung), so a caller placing several quotes in one document does not normalise it for each.
+type Text struct {
+	raw, norm string
+	back      []int
+}
+
+// NewText prepares s for Find.
+func NewText(s string) *Text {
+	n, b := normalize(s)
+	return &Text{s, n, b}
+}
+
+// Find is Verify's string rungs (exact, tolerant) for quote within text[from:to]: the byte offsets of
+// the earliest match (the exact one when both start at the same byte). ok is false when neither holds it.
+func (t *Text) Find(quote string, from, to int) (start, end int, ok bool) {
+	from, to = max(from, 0), min(to, len(t.raw))
+	if from > to || strings.TrimSpace(quote) == "" {
+		return 0, 0, false
+	}
+	start = -1
+	if i := strings.Index(t.raw[from:to], quote); i >= 0 {
+		start, end = from+i, from+i+len(quote)
+	}
+	nq, _ := normalize(strings.TrimSpace(quote))
+	lo, hi := sort.SearchInts(t.back, from), sort.SearchInts(t.back, to) // t.back is non-decreasing
+	if nq = strings.TrimSpace(nq); nq != "" && lo <= hi && hi <= len(t.norm) {
+		if i := strings.Index(t.norm[lo:hi], nq); i >= 0 && (start < 0 || t.back[lo+i] < start) {
+			start, end = t.back[lo+i], t.back[lo+i+len(nq)]
+		}
+	}
+	return start, end, start >= 0
+}
+
 // normalize straightens curly quotes and hyphens, folds case and collapses each white-space run to
 // one space.
 // back maps every byte of the result (and one past its end) to a byte offset in s.
@@ -184,8 +219,8 @@ type Passage struct {
 }
 
 // Nearest is the passage of a document that best matches quote (the run of the quote's length in
-// words with most of its words), as the document has it, cut at a word boundary to at most max
-// bytes, and the section that holds it: the words a paraphrase restates, to copy instead. ok is
+// words with most of its words), as the document has it: the whole sentences or lines that hold it
+// when they fit in max bytes, else cut at a word boundary to at most max bytes, and the section that holds it: the words a paraphrase restates, to copy instead. ok is
 // false when no word of quote is in the document.
 func (s *Service) Nearest(ctx context.Context, scope []string, docID, quote string, max int) (p Passage, ok bool, err error) {
 	d, err := s.Get(ctx, scope, docID)
@@ -196,7 +231,9 @@ func (s *Service) Nearest(ctx context.Context, scope []string, docID, quote stri
 	if overlap == 0 {
 		return Passage{}, false, nil
 	}
-	if end-start > max {
+	if ls, le := sentenceStart(d.Text, start), sentenceEnd(d.Text, end); le-ls <= max { // the whole sentences or lines that hold it
+		start, end = ls, le
+	} else if end-start > max {
 		cut := strings.LastIndexFunc(d.Text[start:start+max+1], unicode.IsSpace)
 		end = start + cmpInt(cut > 0, cut, max)
 		end = runeStart(d.Text, end)
@@ -204,6 +241,32 @@ func (s *Service) Nearest(ctx context.Context, scope []string, docID, quote stri
 	p.Text = strings.TrimSpace(d.Text[start:end])
 	p.SectionID, p.Number, err = s.locate(ctx, docID, utf8.RuneCountInString(d.Text[:start]))
 	return p, err == nil, err
+}
+
+// sentenceStart is where the sentence or line holding byte i of text begins: after the last line
+// break, or sentence end (. ! ? and white space), before it.
+func sentenceStart(text string, i int) int {
+	i = runeStart(text, i)
+	for j := i; j > 0; j-- {
+		if text[j-1] == '\n' || j >= 2 && strings.ContainsRune(".!?", rune(text[j-2])) && (text[j-1] == ' ' || text[j-1] == '\t') {
+			return j
+		}
+	}
+	return 0
+}
+
+// sentenceEnd is where the sentence or line holding the byte before i of text ends: at the next line
+// break, or just after the next sentence end (. ! ? before white space or the end).
+func sentenceEnd(text string, i int) int {
+	for j := max(runeStart(text, i), 1); j < len(text); j++ {
+		if text[j] == '\n' {
+			return j
+		}
+		if strings.ContainsRune(".!?", rune(text[j-1])) && (text[j] == ' ' || text[j] == '\t') {
+			return j
+		}
+	}
+	return len(text)
 }
 
 func cmpInt(c bool, a, b int) int {
