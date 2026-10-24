@@ -6,6 +6,7 @@ package engine
 import (
 	"context"
 	"hash/fnv"
+	"strings"
 	"sync"
 	"testing"
 
@@ -119,5 +120,85 @@ func TestKillDuringCommitteeChargesMeteredSpend(t *testing.T) {
 	}
 	if v := f.get(task.ID); stop(v) != "awaiting_gate/finished" {
 		t.Fatalf("%s\n%s", stop(v), f.steps(task.ID))
+	}
+}
+
+// The bench5 trust incapacity standard, verbatim: the instruction memo's requirement and the text
+// around it, and the draft trust's section 5.1.
+const (
+	incapMemo = `V. Incapacity / Disability Provisions
+A. Standard for Determining Incapacity
+This is a provision that Peggy feels strongly about, and she was very specific during our meetings regarding the standard she wants applied. Peggy shall be deemed incapacitated or unable to manage her financial affairs if, and only if, two (2) licensed physicians independently examine her and provide written certifications that she is unable to manage her financial affairs. Both physicians must be licensed to practice medicine in the state where Peggy then resides.
+I want to emphasize this point: two licensed physicians. Peggy was adamant during our October and November meetings that she does not want a single doctor's opinion — or the opinion of any non-physician clinical professional — to be sufficient to trigger loss of control over her trust assets. She views this as a critical safeguard against premature or erroneous determinations of incapacity. The trust should clearly state that two licensed physicians (i.e., individuals holding an M.D. or D.O. degree and licensed to practice medicine) must independently examine and certify incapacity. Please draft this provision with precision and do not deviate from the two-physician standard.
+B. Effect of Incapacity
+Upon a proper determination of incapacity in accordance with the two-physician standard described above, Dr. David Chen shall assume the role of acting Trustee and shall manage the trust and its assets on Peggy's behalf.
+`
+	incapTrust = `ARTICLE V — DETERMINATION OF INCAPACITY
+Section 5.1 — Standard for Incapacity
+The Settlor shall be deemed to be incapacitated for purposes of this Trust Agreement if, in the written opinion of one (1) licensed physician and one (1) licensed clinical psychologist, each of whom has personally examined the Settlor within the preceding thirty (30) days, the Settlor is unable to effectively manage her financial affairs by reason of mental illness.
+`
+	incapReq     = "Peggy shall be deemed incapacitated or unable to manage her financial affairs if, and only if, two (2) licensed physicians independently examine her and provide written certifications that she is unable to manage her financial affairs. Both physicians must be licensed to practice medicine in the state where Peggy then resides."
+	incapReview  = "The Settlor shall be deemed to be incapacitated for purposes of this Trust Agreement if, in the written opinion of one (1) licensed physician and one (1) licensed clinical psychologist"
+	incapCorrect = "Require two licensed physicians to examine the Settlor and certify incapacity in writing, replacing the physician-and-psychologist standard."
+)
+
+// incapacity runs bench5 trust step 67's call (the requirement verbatim, a deviate verdict on the
+// two-physician standard) with the section check's scripted replies.
+func incapacity(t *testing.T, check []model.Reply) (*fixture, TaskView) {
+	t.Helper()
+	f := newFixture(t, incapMemo, incapTrust)
+	memo, trust := f.docs[0].ID, f.docs[1].ID
+	dev := tc("check_deviation", m{"requirement": incapReq, "requirementDocId": memo, "controllingDocIds": []string{memo}, "reviewedDocIds": []string{trust}, "issueId": "I1"})
+	verdict := m{"part": "Number and type of professionals required to certify incapacity", "verdict": "deviate", "severity": "HIGH", "correction": incapCorrect, "document": trust,
+		"controlling": m{"documentId": memo, "quote": incapReq}, "reviewed": incapReview}
+	v := f.run(f.with(map[string][]model.Reply{
+		"lead":            {calls(plan(issue("I1", "Does the draft trust follow the instruction memo?", "Requirement"))), calls(dev)},
+		"check_deviation": {text(m{"verdicts": []m{verdict}})},
+		"section_check":   check,
+	}), Config{})
+	return f, v
+}
+
+// TestSectionCheckAsksAboutTheRequirement (bench5 trust step 67: the check was handed the analyst's
+// verdict and correction, judged the correction "removes the state-licensing requirement" and
+// dropped the real incapacity-standard deviation): the check is asked only whether the memo imposes
+// the requirement as quoted, from the text around it; it is never shown the verdict, its correction
+// or the reviewed document, and the deviation is admitted on its "yes".
+func TestSectionCheckAsksAboutTheRequirement(t *testing.T) {
+	t.Parallel()
+	f, v := incapacity(t, []model.Reply{text(m{"answer": "yes", "reason": "the memo requires two licensed physicians, if and only if"})})
+	req, ok := sectionCheckRequest(f)
+	body := ""
+	if ok {
+		body = req.Messages[1].Content.(string)
+	}
+	if !ok || !strings.Contains(body, "⟦"+incapReq+"⟧") || strings.Contains(body, incapCorrect) || strings.Contains(body, "Number and type of professionals") ||
+		strings.Contains(body, "clinical psychologist, each") || strings.Contains(body, "Verdict") {
+		t.Errorf("the check was not asked about the requirement alone: %q", body)
+	}
+	fs := ledgerFindings(t, f, v.ID)
+	if len(fs) != 1 || fs[0].Low || fs[0].Check == nil || fs[0].Check.Answer != "yes" || !strings.Contains(fs[0].Claim, "found that it imposes the requirement as quoted") {
+		t.Fatalf("findings %+v; %q", fs, f.outputs(v.ID, "check_deviation"))
+	}
+}
+
+// TestSectionCheckNotHadAdmitsLowGated (bench5 trust step 25: three deviations dropped because "no
+// model call or budget was left in this call's grant" for their checks): the check runs first, out of
+// the call's grant, once per requirement; when it cannot be had (unfunded, failed, malformed) the
+// deviation is admitted at low confidence and gated for a lawyer, never dropped.
+func TestSectionCheckNotHadAdmitsLowGated(t *testing.T) {
+	t.Parallel()
+	for name, rep := range map[string]model.Reply{"failed": {Err: &model.Error{Kind: model.ErrUnavailable}}, "malformed": {Text: "I think yes."}} {
+		f, v := incapacity(t, []model.Reply{rep})
+		fs := ledgerFindings(t, f, v.ID)
+		if len(fs) != 1 || !fs[0].Low || fs[0].Check != nil || !gated(fs[0], false) || !strings.Contains(fs[0].Claim, "did not run (") {
+			t.Errorf("%s: findings %+v; %q", name, fs, f.outputs(v.ID, "check_deviation"))
+		}
+	}
+	fake := model.NewFake(nil) // an unfunded grant makes no call
+	spans, _, _ := placeRequirement(context.Background(), incapMemo, incapReq)
+	chk, why, err := (&Engine{}).checkSection(context.Background(), &agent.Runtime{Chat: fake, Roles: testRoles}, agent.NewBudget(0, 0, 0), newReq(incapMemo, spans))
+	if err != nil || chk != nil || !strings.Contains(why, "could not fund") || len(fake.Calls()) != 0 {
+		t.Errorf("no grant: check %+v, why %q, err %v, calls %d", chk, why, err, len(fake.Calls()))
 	}
 }

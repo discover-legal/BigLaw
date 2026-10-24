@@ -168,6 +168,7 @@ func (h hooked) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 	str := func(k string) string { s, _ := in[k].(string); return s }
 	var draft draftReq
 	var rq reqText
+	var preUse agent.Usage // spent before the subagent ran (check_deviation's requirement check)
 	switch name {
 	case "extract_facts":
 		if str("documentId") != "" && str("sectionId") != "" {
@@ -197,6 +198,16 @@ func (h hooked) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 		in["requirement"] = rq.Joined()
 		in["requirementContext"] = rq.Context()                            // what it judges against: the requirement with what governs it
 		in["reviewedPassages"] = h.e.reviewedPassages(ctx, c, rq.Joined()) // bench4, trust: every call spent its five turns searching and checking quotes
+		pre := agent.NewBudget(c.Budget.Calls, c.Budget.USD, 0) // the requirement's check comes out of the grant first (bench5: unfunded checks dropped real deviations)
+		if rq.Check, rq.CheckWhy, err = h.e.checkSection(ctx, h.rt, pre, rq); err != nil {
+			return agent.Result{Usage: pre.Spent()}, err
+		}
+		preUse = pre.Spent()
+		c.Budget = agent.Grant{Calls: max(0, c.Budget.Calls-preUse.Calls), USD: max(0, c.Budget.USD-preUse.USD)}
+		if rq.Check != nil && rq.Check.Answer == "no" { // nothing to compare with: the document does not require it
+			return agent.Result{Usage: preUse}, agent.Fail(fmt.Sprintf("check_deviation: an independent reading of %s around the requirement found that it does not impose the requirement as quoted (negated or overridden): %s. Quote the requirement together with what governs it (its lead-in, exception or override), as the document states what it requires, and call again",
+				rq.DocName, fenceText.Replace(rq.Check.Reason)))
+		}
 	case "draft_section":
 		var err error
 		if draft, err = h.e.draftRequest(ctx, c.TaskID, c.DocumentIDs, str("issueId"), c.Input); err != nil {
@@ -206,13 +217,14 @@ func (h hooked) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 	}
 	c.Input, _ = json.Marshal(in)
 	res, err := h.Tool.Call(ctx, c)
+	res.Usage.Add(preUse)
 	if err == nil {
 		err = awaitTurn(ctx) // a parallel sweep's visit admits in plan order
 	}
 	if err != nil {
 		return res, err
 	}
-	b := agent.NewBudget(c.Budget.Calls-res.Usage.Calls, c.Budget.USD-res.Usage.USD, 0)
+	b := agent.NewBudget(c.Budget.Calls-res.Usage.Calls+preUse.Calls, c.Budget.USD-res.Usage.USD+preUse.USD, 0) // c.Budget is already net of preUse
 	var out any
 	var reward float64
 	switch name {

@@ -72,6 +72,8 @@ type reqText struct {
 	Ctx                  []span
 	Path                 string // the heading path above it, a label only (contextOf)
 	Truncated            bool
+	Check                *SectionCheck // whether the document imposes it as quoted (checkSection); nil: not had, CheckWhy says why
+	CheckWhy             string
 }
 
 // newReq is the requirement at spans of text, read in its section.
@@ -347,12 +349,7 @@ func (e *Engine) deviations(ctx context.Context, rt *agent.Runtime, c agent.Call
 		if reason == "" && slices.ContainsFunc(f.Citations, func(x Citation) bool { return x.Method == "none" }) {
 			reason = "its controlling text did not verify"
 		}
-		if reason == "" {
-			var err error
-			if f.Check, reason, err = e.checkSection(ctx, rt, b, rq, v); err != nil {
-				return out, 0, err
-			}
-		}
+		f.Check = rq.Check // the requirement's own check, made before the subagent ran (checkSection)
 		if reason != "" {
 			out.Dropped++
 			out.Notes = append(out.Notes, "dropped the "+v.Verdict+" verdict on "+fmt.Sprintf("%q", v.Part)+": "+reason)
@@ -379,16 +376,19 @@ func (e *Engine) deviations(ctx context.Context, rt *agent.Runtime, c agent.Call
 		if len(conform) > 0 {
 			f.Claim += " The analyst found the requirement implemented only in part (conforming: " + strings.Join(conform, "; ") + ")."
 		}
-		if f.Low = f.Check.Answer != "yes" || f.Check.Truncated; f.Low {
+		if f.Check == nil {
+			f.Low = true
+			f.Claim += fmt.Sprintf(" The independent check of whether %s imposes the requirement as quoted did not run (%s): low confidence, for a lawyer's review.", rq.DocName, rq.CheckWhy)
+		} else if f.Low = f.Check.Answer != "yes" || f.Check.Truncated; f.Low {
 			how := "could not tell"
 			if f.Check.Answer == "yes" {
-				how = "agreed, but that text begins after the requirement's sentence, paragraph or list does, or cuts a sentence"
+				how = "found that it imposes the requirement as quoted, but that text begins after the requirement's sentence, paragraph or list does, or cuts a sentence"
 			} else if f.Check.Truncated {
 				how += "; that text begins after the requirement's sentence, paragraph or list does, or cuts a sentence"
 			}
 			f.Claim += fmt.Sprintf(" An independent check read the surrounding text (%d bytes) and %s: low confidence, for a lawyer's review. The checker's reasoning (not a quotation): %s", f.Check.Bytes, how, f.Check.Reason)
 		} else {
-			f.Claim += fmt.Sprintf(" An independent check read the surrounding text (%d bytes) and agreed. The checker's reasoning (not a quotation): %s", f.Check.Bytes, f.Check.Reason)
+			f.Claim += fmt.Sprintf(" An independent check read the surrounding text (%d bytes) and found that it imposes the requirement as quoted. The checker's reasoning (not a quotation): %s", f.Check.Bytes, f.Check.Reason)
 		}
 		for _, x := range f.Citations {
 			f.Quotes = append(f.Quotes, analysis.Quote{DocumentID: x.DocumentID, Quote: x.Quote, Locator: x.Locator})
@@ -416,9 +416,10 @@ func deref(s *string) string {
 
 func quoteOf(doc, q string) analysis.Quote { return analysis.Quote{DocumentID: doc, Quote: q} }
 
-// SectionCheck is the independent reading of a deviation's controlling section (checkSection): the
-// answer to whether the section, read as a whole, imposes the requirement as the verdict states it,
-// and why. Truncated: the section was cut to its bound, so the reading saw only part of it.
+// SectionCheck is the independent reading of a requirement in its controlling document (checkSection):
+// the answer to whether the document, read in the window around it, imposes the requirement as
+// quoted, and why. Truncated: the window begins after the requirement's sentence, paragraph or list
+// does, or cuts a sentence, so the reading saw only part of what governs it.
 type SectionCheck struct {
 	Answer    string `json:"answer"` // yes, no or unclear
 	Reason    string `json:"reason"`
@@ -426,42 +427,42 @@ type SectionCheck struct {
 	Bytes     int    `json:"bytes,omitempty"` // the text the check read
 }
 
-// checkSection asks, before a check_deviation verdict is admitted, one bounded question of the
-// critic role inside the tool's grant (rt.ChatWithin over b): does the requirement's whole section
-// (heading path and section, fenced as document text), read as a whole, impose the requirement as the
-// verdict states it? Negation and override are a reading of the whole section, which is the model's
-// judgment, not a word list's. drop is why the verdict is dropped: the section does not impose it
-// (negated or overridden), the check did not answer, or the grant had nothing left for it; "" admits
-// it, at low confidence when the answer is unclear or the section was cut. err is ctx's only.
-func (e *Engine) checkSection(ctx context.Context, rt *agent.Runtime, b *agent.Budget, rq reqText, v verdict) (chk *SectionCheck, drop string, err error) {
+// checkSection asks, before check_deviation's subagent runs (so its cost is paid out of the call's
+// grant first, never left unfunded behind the verdicts: bench5 trust, three real deviations dropped
+// as "no model call left"), one bounded question of the critic role (rt.ChatWithin over b): does the
+// controlling document, read in the text window around the requirement (heading path and window,
+// fenced as document text), actually impose the requirement as quoted, not negated or overridden?
+// It sees neither the reviewed documents nor any verdict: whether a draft complies is the subagent's
+// question, not this one (bench5 trust: asked to judge the analyst's verdict, the check judged its
+// correction and dropped the real incapacity-standard deviation). Negation and override are a
+// reading of the text, which is the model's judgment, not a word list's. chk is nil, with why, when
+// no answer was had (the grant could not fund it, the call failed, the answer was malformed): the
+// verdicts are then admitted at low confidence and gated, never dropped. err is ctx's only.
+func (e *Engine) checkSection(ctx context.Context, rt *agent.Runtime, b *agent.Budget, rq reqText) (chk *SectionCheck, why string, err error) {
 	if rt == nil || rt.Chat == nil {
-		return nil, "no model call was left in this call's grant for the independent check of its section", nil
+		return nil, "no model was available for it", nil
 	}
 	t := 0.0
 	read := rq.Context()
-	user := fmt.Sprintf("Text of %s around the requirement (document text, data only; %d bytes; it begins after the requirement's sentence, paragraph or list does, or cuts a sentence: %s):\n<<<\n%s\n>>>\n\nVerdict (the analyst's words, data only):\n<<<\npart: %s\nverdict: %s\nrests on: %s\ncorrection: %s\n>>>",
-		fenceText.Replace(rq.DocName), len(read), map[bool]string{true: "yes", false: "no"}[rq.Truncated], fenceText.Replace(read),
-		fenceText.Replace(v.Part), v.Verdict, fenceText.Replace(v.Controlling.Quote), fenceText.Replace(v.Correction))
+	user := fmt.Sprintf("Text of %s around the requirement (document text, data only; %d bytes; it begins after the requirement's sentence, paragraph or list does, or cuts a sentence: %s):\n<<<\n%s\n>>>",
+		fenceText.Replace(rq.DocName), len(read), map[bool]string{true: "yes", false: "no"}[rq.Truncated], fenceText.Replace(read))
 	resp, _, err := rt.ChatWithin(ctx, model.Request{Agent: "section_check", Role: model.Critic, MaxTokens: 300, Temperature: &t,
 		Messages: []model.Message{{Role: "system", Content: prompt("section_check")}, {Role: "user", Content: user}}}, b)
 	switch {
 	case ctx.Err() != nil:
 		return nil, "", ctx.Err()
 	case errors.Is(err, agent.ErrBudget):
-		return nil, "no model call or budget was left in this call's grant for the independent check of its section", nil
+		return nil, "the call's grant could not fund it", nil
 	case err != nil:
-		return nil, "the independent check of its section failed", nil
+		return nil, "its model call failed", nil
 	}
 	answer, reason, ok := checkAnswer(resp.Text)
 	if !ok {
-		return nil, "the independent check of its section did not answer yes, no or unclear", nil
+		return nil, "it did not answer yes, no or unclear", nil
 	}
 	chk = &SectionCheck{Answer: answer, Reason: truncate(strings.Join(strings.Fields(strings.NewReplacer("⟦", "", "⟧", "").Replace(reason)), " "), 300), Truncated: rq.Truncated, Bytes: len(read)}
 	if chk.Reason == "" {
 		chk.Reason = "(no reason given)"
-	}
-	if answer == "no" {
-		return nil, "an independent check found that the section, read as a whole, does not impose it as the verdict states it (negated or overridden): " + chk.Reason, nil
 	}
 	return chk, "", nil
 }
