@@ -32,7 +32,7 @@ func TestSpecsLoadAndValidate(t *testing.T) {
 		t.Fatal(err)
 	}
 	names := rt.Reg.Names()
-	want := []string{"analyze_issue", "audit_gaps", "check_deviation", "committee", "cover", "draft_section", "exact_calc", "extract_facts", "figure_context", "finish", "join_discrepancies",
+	want := []string{"analyze_issue", "audit_gaps", "check_deviation", "committee", "cover", "draft_section", "exact_calc", "extract_facts", "figure_context", "finish", "join_discrepancies", "judge_figures",
 		"ledger", "numbers", "prosecute", "read_figures", "reproduce", "retrieve", "sweep", "verify_quote"}
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("registry %v", names)

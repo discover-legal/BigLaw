@@ -2,22 +2,159 @@
   "name": "join_discrepancies",
   "kind": "go",
   "class": "free",
-  "maxTurns": 0,
-  "description": "Finds where the matter's documents state the same figure or date differently, using only verified finding values and no model. Two values are compared when they measure the same thing: the same metric label, the same quantity class (money is never compared with a share count) and the same party once aliases are unified, or, whatever their labels, values of one class from two documents near each other whose quotes share their distinctive words; dates are compared at their coarsest common precision. A conflict needs two documents whose value sets are disjoint, so a list both documents restate is not a conflict. It also lists the documents the evidence sweep left partly unread, whose figures may be missing from the findings. The join always runs over every verified finding; fids only choose which conflicts are reported (those holding a named finding), so a conflict across issues is found from either side. The result is one page of about 12 KB: when it says truncated, call again naming fewer fids for the rest. Pass aliases when the record calls one party by several names (a person and the company that paid them): they are kept for the run, and finish's own check of the memo's conflicts uses them too. Do not use it to adjudicate which value is right, or on quarantined findings: naming one is refused.\nExample: {\"fids\": null, \"aliases\": null}\nExample: {\"fids\": [\"F3\", \"F9\", \"F14\"], \"aliases\": [{\"name\": \"A. Person\", \"aliases\": [\"Example Holdings LLC\"]}]}",
+  "maxTurns": 16,
+  "description": "Finds where the matter's documents state the same figure or date differently, from verified finding values only. Go proposes candidate pairs (two values the figure reader read clearly as one kind and currency, from two findings in two documents, with different values) and a judge reads both values' passages and decides each pair: only a pair it judges to be one quantity stated two ways is a conflict, a pair it cannot tell is listed as unclear, and pairs past the cap or that the budget could not judge are counted as notJudged. It also lists the documents the evidence sweep left partly unread, whose figures may be missing from the findings. The join always runs over every verified finding; fids only choose which conflicts are reported (those holding a named finding), so a conflict across issues is found from either side. The result is one page of about 12 KB: when it says truncated, call again naming fewer fids for the rest. Pass aliases when the record calls one party by several names (a person and the company that paid them): they are kept for the run and given to the judge as context. Do not use it to adjudicate which value is right, or on quarantined findings: naming one is refused.\nExample: {\"fids\": null, \"aliases\": null}\nExample: {\"fids\": [\"F3\", \"F9\", \"F14\"], \"aliases\": [{\"name\": \"A. Person\", \"aliases\": [\"Example Holdings LLC\"]}]}",
   "in": {
-    "type": "object", "additionalProperties": false, "required": ["fids", "aliases"],
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "fids",
+      "aliases"
+    ],
     "properties": {
-      "fids": {"type": ["array", "null"], "maxItems": 500, "items": {"type": "string", "maxLength": 16}},
-      "aliases": {"type": ["array", "null"], "maxItems": 50, "items": {"type": "object", "additionalProperties": false, "required": ["name", "aliases"],
-        "properties": {"name": {"type": "string", "maxLength": 200}, "aliases": {"type": "array", "maxItems": 20, "items": {"type": "string", "maxLength": 200}}}}}
+      "fids": {
+        "type": [
+          "array",
+          "null"
+        ],
+        "maxItems": 500,
+        "items": {
+          "type": "string",
+          "maxLength": 16
+        }
+      },
+      "aliases": {
+        "type": [
+          "array",
+          "null"
+        ],
+        "maxItems": 50,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "aliases"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "aliases": {
+              "type": "array",
+              "maxItems": 20,
+              "items": {
+                "type": "string",
+                "maxLength": 200
+              }
+            }
+          }
+        }
+      }
     }
   },
   "out": {
-    "type": "object", "additionalProperties": false, "required": ["conflicts", "unreadDocuments", "truncated"],
-    "properties": {"truncated": {"type": "boolean"},"conflicts": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["entity", "metric", "kind", "values"],
-      "properties": {"entity": {"type": "string"}, "metric": {"type": "string"}, "kind": {"type": "string", "enum": ["numeric", "date"]},
-        "values": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["value", "canon", "documentId", "fid"],
-          "properties": {"value": {"type": "string"}, "canon": {"type": "string"}, "documentId": {"type": "string"}, "fid": {"type": "string"}}}}}}},
-      "unreadDocuments": {"type": "array", "items": {"type": "string"}}}
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "conflicts",
+      "unclear",
+      "notJudged",
+      "unreadDocuments",
+      "truncated"
+    ],
+    "properties": {
+      "truncated": {
+        "type": "boolean"
+      },
+      "conflicts": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "entity",
+            "metric",
+            "kind",
+            "values",
+            "reason"
+          ],
+          "properties": {
+            "entity": {
+              "type": "string"
+            },
+            "metric": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "numeric",
+                "date"
+              ]
+            },
+            "values": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "value",
+                  "canon",
+                  "documentId",
+                  "fid"
+                ],
+                "properties": {
+                  "value": {
+                    "type": "string"
+                  },
+                  "canon": {
+                    "type": "string"
+                  },
+                  "documentId": {
+                    "type": "string"
+                  },
+                  "fid": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "reason": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "unreadDocuments": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "unclear": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "a",
+            "b"
+          ],
+          "properties": {
+            "a": {
+              "type": "string"
+            },
+            "b": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "notJudged": {
+        "type": "integer"
+      }
+    }
   }
 }

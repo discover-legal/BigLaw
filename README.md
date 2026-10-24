@@ -864,18 +864,34 @@ The memo workflow (§ Memo workflow) drives these. What PR 4a ships, all tested 
   ledger) a codename never changes meaning; `Substitute` puts the exact value in for a codename or a
   worksheet's `{W…}` (its wid), and an unmapped one is left as written and reported. `table`: a
   key-figures table from verified values only.
-- **`join_discrepancies`**: cross-document conflicts between verified values the figure reader read as
-  one quantity: one kind (money is never compared with a share count), one party (after the lead's
-  aliases), one measure for one period, typed entities not naming two others (§ Limitations); dates of one
-  event are compared at their common precision; a conflict needs two documents with disjoint value sets.
-  Durations and identifiers are not compared. Under any extractor labels, values the reader reads as one
-  measure are compared (4,217 vs 4,312 trades analysed, $92,600 vs $103,800, 73% vs 78%, April 22 vs April
-  15: `TestJoinReadsMeasuresAcrossLabels`, and over bench5's own
-  ledger rows `TestJoinPairsBench5Conflicts`). The join runs over every verified finding;
-  `fids` only choose which conflicts are reported (those holding a named finding), so a cross-issue pair
-  is found from either side (`TestJoinDiscrepanciesFidsDoNotScopeTheJoin`), and the lead's aliases are
-  kept for the run (ledger kind `alias`) for `finish`'s own join (`TestJoinAliasesReachFinish`). Its
-  output also names the documents the sweep left partly unread (`unreadDocuments`).
+- **`join_discrepancies`**: cross-document conflicts between verified values, Go's candidates and a
+  judge's verdicts (lab-r4 r7, owner decision: whether two figures are one quantity is the agent's, never a
+  rule in Go). `analysis.Candidates` proposes the pairs: two values the figure reader read clearly as one
+  kind in one currency (money is never compared with a share count; durations and identifiers, kind
+  other, are not compared), from two findings in two documents, their values different (dates: not
+  compatible at their common precision); two values in two documents are asked once however many findings
+  repeat them; the reader's measures alike come first, then the closest values, at most
+  `MaxCandidates` (120), the rest counted. The engine's `judge_figures` subagent (critic role, its tool
+  `figure_context`; `internal/engine/judge.go`) gets both values' quotes, claims, the analyst's entity and
+  metric, the reader's labels (party, counterparty, measure, period, typed entity) and the lead's aliases,
+  and answers per pair `yes`, `no` or `unclear` with a reason quoting both passages. Go checks every
+  verdict (`CheckVerdicts`: one for a pair it did not propose is rejected, so a "yes" on non-spans or on
+  two kinds asserts nothing; a second verdict for one pair, an unknown answer or a "yes" with no reason is
+  unclear). Only "yes" is a conflict (with its reason); "unclear" is a low-confidence Limitations line
+  naming the pair; pairs the cap or an unfunded judge left out are counted in a Limitations line
+  (`TestJoinAssertsOnlyTheJudgesYes`, `TestJoinRejectsVerdictsGoDidNotPropose`, `TestJoinScenarios`,
+  `TestJoinLabelsAreContextNotKeys`, `TestJoinBenchLedgers`). The judge is called like the reader:
+  batched (15 pairs, 32 KB a call), on one bandit-picked model, metered and journaled through `Invoke` out
+  of its caller's grant (`join_discrepancies`' own 16 turns; finish judges first from at most a quarter of
+  its grant; the coverage pass from its share), and its yes and no answers are cached across a matter's
+  runs (`figure_reads`, keyed by the judge's spec hash, the model, the matter, the aliases and the pair's
+  content: `TestJoinVerdictsCachedAcrossRuns`); every verdict is kept in the task's ledger (kind
+  `verdict`), so `finish` and the coverage pass read the verdicts the tool got. The join runs over every
+  verified finding; `fids` only choose which conflicts are reported (those holding a named finding), so a
+  cross-issue pair is found from either side (`TestJoinDiscrepanciesFidsDoNotScopeTheJoin`), and the
+  lead's aliases are kept for the run (ledger kind `alias`) and given to every judge call
+  (`TestJoinAliasesReachFinish`). Its output also names the documents the sweep left partly unread
+  (`unreadDocuments`).
 - **Coverage** (`CheckCoverage`, for `finish{op:"check"}` in 4b): plan issues with no section;
   parties in two or more verified findings, a Conduct issue's actor, or a roster name, that the draft
   never mentions (a firm's name does not cover a person); salient figures that never land.
@@ -898,27 +914,15 @@ Limitations of this layer:
   section, only outside quoted spans. The 64-name pool is the limit: a run with more distinct figures
   leaves the least salient late ones without a handle (a drafter may still state them inside a
   cited quote).
-- `join_discrepancies` compares only what the figure reader read (`Value.Fig`, lab-r4 r5 L2): two values
-  are one quantity only when both are read clearly as one kind of one party's same measure (what the
-  figure is an amount of: "initial deposit", "annual revenue") for the same period ("fiscal 2023"), in one
-  currency, their amounts exact with their scale applied; who else is named must agree (`oneQuantity`):
-  the extractor's typed entities must not name two others (r5 M4: a payer read as the party of two
-  employees' salaries is no conflict between them), nor the figures' other parties (the reader's
-  `counterparty`, or a typed entity it calls another party: the payer of a payee's compensation, r6 M1:
-  bench6 SEC's $92,600 vs $103,800, typed once under the payee and once under the payer, is one
-  discrepancy), and an other party never contradicts the other figure's typed entity the reader said
-  nothing about; a typed entity the reader says names its party or no party at all ("Email", a table's
-  title) is not compared; party labels unify only by the lead's aliases or that label
-  (`TestJoinBench6TrustNamesPairwise`, `TestR5LabelJoinRespectsTypedEntity`,
-  `TestR6OtherTypedEntityKeepsR4FalseConflictsClosed`, `TestR6WrongLabelsAssertNoConflict`). A period is
-  compared only as the reader states it absolutely, with its year ("FY2023", "2024-Q2"), or as "none" (a
-  price, a deposit); a figure with no period, or one with no year ("the second quarter"), is never part of a
-  conflict (`TestR6PeriodTextCollides`). The measure is free text folded only for case, punctuation and a
-  leading article, so a reader
-  that names one measure two ways ("annual base salary", "base salary") misses a conflict, and one that
-  names two things alike makes one; no Go word rule decides what a figure measures or whether it is a
-  part of another (`TestR5JoinOnMeasureAndPeriod`, `TestR2VHoldbackNearFalsePair`). A value's document is
-  the quote that holds its text, else the finding's first quote.
+- `join_discrepancies` proposes only what the figure reader read clearly (`Value.Fig`) and asserts only
+  what the judge says is one quantity: a judge that calls two different quantities one makes a false
+  conflict (shown with its reason, for the lawyer to check), and one that calls one quantity two, or a
+  reader that reads one figure unclearly, misses one. No rule in Go decides whose figure it is, what it
+  measures, for which period or who else is named (r7: the party, counterparty, period and typed-entity
+  matching rules, `oneQuantity` and `periodOf`, were deleted; prompt-faithful role-name labels, "the
+  Executive" for two people, had made false conflicts of correct readings). Past `MaxCandidates` pairs a
+  matter's join is incomplete and says how many it did not judge. A value's document is the quote that
+  holds its text, else the finding's first quote.
 - Calls in one turn run sequentially, not concurrently; `retrieve` and Go tools spend no calls, so a
   lead can issue up to 8 per turn for every turn its budget funds.
 - **Line budget:** `agent` 1,242 against 1,100, `analysis` 1,183 against 950, the `docs` adapters
@@ -1296,10 +1300,14 @@ python3 eval/lab/run.py --labs-dir ~/harvey-labs --api http://127.0.0.1:3101 --m
 `drive`), `proofrun/` (driver, scorer, mock), `lab/` (the Harvey LAB driver over this API),
 `tests/`. `make eval` runs E0 and E3 (fixtures, scorer tests, scorer self-test; no backend). In
 `go test ./eval`, `TestProofRunsOracle` (E1: an oracle `model.Fake` per matter through the real
-engine and API, scored by the Python scorer: 1.0, verified rate 1.0; its drafter cites the document
-lines that state its answers' figures and computes the rest only from cited figures, so a figure no cited
-span states or computes, such as a product of two counts or a table's figure restated at a scale, is
-flagged by G8 and, after its rounds, delivered as an unresolved check: 26 across the five matters),
+engine and API, scored by the Python scorer: 1.0, verified rate 1.0; its drafter cites another item's
+finding or a document line (sharing the memo's words) that states a figure as the memo reads it, and
+computes the rest only from cited figures with their units (sums, differences, products of up to three
+with one money factor, percentages, days between cited dates, a cited date shifted by a cited period,
+rolled past a cited holiday); the lawyer approves each gate. A figure it can neither cite nor compute is
+flagged by G8 and, after its rounds, delivered as an unresolved check, pinned per matter as a ratchet
+(`unresolvedG8`: 5 across the five matters, from 26 at the r7 review: a date one year on, two bare
+figures the stand-in reads as counts, two code sections written without "Section")),
 `TestProofRunsFabricator`
 (E2: every matter fails with a grounding alert) and `TestLabRunnerSmoke` (the LAB driver against an
 `httptest` server) run with no model.
@@ -1767,12 +1775,25 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     the context makes the governing words visible and the check reads them, which does not make a
     verdict right (an analyst who misreads a requirement the document does impose is checked only by
     the claim's quoted window and prosecute).
-  - The joins compare what the figure reader says a figure measures and for when; a reader that names one
-    figure's measure two ways across calls misses its conflict, and the reader is a model: its labels are
-    checked for form (`ReadLabels`), not for truth: two consistent wrong labels (one party named for two
-    payees, the same counterparty for two payers) make a conflict, one wrong label does not
-    (`TestR6WrongLabelsAssertNoConflict`). Two payments in opposite directions read with the same party for
-    both are told apart only by their counterparties.
+  - The join asserts what the figure judge says (r7): its verdicts are a model's, checked for form
+    (`CheckVerdicts`: a verdict only for a pair Go proposed, one per pair, a reason for a yes), not for
+    truth. A judge that calls two quantities one makes a conflict the memo is asked to state (its reason
+    shown); "unclear" is disclosed as a low-confidence pair for the lawyer; pairs past the cap or that
+    the budget could not judge are counted, not judged.
+  - Worksheets (r7 H1, M1): an operand traces only as a cited value's ref, a traced worksheet's result
+    in its unit, or a literal the cited quotes state as its unit says (money in its currency, a
+    percentage, a plain number read as a count or other number, a date they state, a day count they
+    state as a period or that is the days between two dates they state); a result traces a memo figure
+    only of its own kind and currency (a day count by its amount never). A period the record does not
+    state (a court rule not among the cited quotes) leaves its deadline untraced: cite the rule.
+    `product` takes any numbers with at most one amount of money, `ratio` two in at most one currency.
+    A date one year on is not expressible (`date_add` counts days), and stays untraced.
+  - A figure written at one scale beside a cited one at another (the memo's "$5M" for a cited
+    "$5,000,000", or its "$5,000,000" for a cited "$5 million", or "$5 per share" scaled from "per
+    share") is limited, not traced: disclosed in Limitations and its citing findings gated for a
+    lawyer (r7 M4, L2). A scale's words must be adjacent to the figure (right after it or after its
+    currency code, earlier in its sentence, or its passage's first line over a later row), with a
+    letter or a "000" ("($000)"; a bare "$" is none: r7 M2, L1).
   - The raw-date rule is paragraph-wide: a list that states the raw date and the rolled deadline on
     separate lines without a blank line between is one paragraph and passes; one with a blank line is
     flagged.

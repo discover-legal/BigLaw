@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -70,9 +71,21 @@ type limitation struct {
 	Text    string  `json:"text"`
 }
 
-func (f finish) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
+// judgeShare bounds what finish's own join may spend of its grant on the figure judge (judge.go):
+// pairs it leaves unjudged are disclosed, and the rest stays for the coverage pass and the meta call.
+const judgeShare = 0.25
+
+func (f finish) Call(ctx context.Context, c agent.Call) (res agent.Result, err error) {
+	// the join's pairs not yet judged are judged first, so check and submit report every conflict
+	// the judge finds; what it spends comes out of the grant before anything else
+	jb := agent.NewBudget(max(0, min(c.Budget.Calls-1, 2*(analysis.MaxCandidates/maxJudgePairs+1))), judgeShare*c.Budget.USD, 0)
+	if err := f.e.judgeJoin(ctx, f.rt, c, jb, "finish"); err != nil {
+		return agent.Result{Usage: jb.Spent()}, err
+	}
+	pre := jb.Spent()
+	c.Budget.Calls, c.Budget.USD = c.Budget.Calls-pre.Calls, max(0, c.Budget.USD-pre.USD)
+	defer func() { res.Usage.Add(pre) }()
 	f.held = max(0, c.Budget.Calls-1) // its grant holds the coverage pass's and the review's calls too
-	var err error
 	if f.covered, err = f.e.covered(ctx, c.TaskID); err != nil {
 		return agent.Result{}, err
 	}
@@ -231,10 +244,11 @@ func (f finish) check(ctx context.Context, limits []limitation) (report, error) 
 			texts[is.ID] = substituteOutsideQuotes(secs[k].Markdown, secs[k].Handles)
 			lines, limited, gate := lintLimited(is.ID, secs[k], byFID, sheets)
 			rep.Lint = append(rep.Lint, lines...)
-			for _, fid := range gate { // a memo figure traced only as written to its never-read quote: a lawyer confirms it (r6 M2)
+			for _, fid := range slices.Sorted(maps.Keys(gate)) { // a memo figure traced only as written to its never-read quote, or at another scale: a lawyer confirms it (r6 M2, r7 M4)
 				if x := byFID[fid]; !x.Low {
 					x.Low = true
-					x.ValueNotes = append(x.ValueNotes, "gated for a lawyer: a memo figure traces only as written to this finding's quotes, which the figure reader never read")
+					x.ValueNotes = append(x.ValueNotes, map[string]string{limitedUnread: "gated for a lawyer: a memo figure traces only as written to this finding's quotes, which the figure reader never read",
+						limitedScale: "gated for a lawyer: a memo figure states this finding's figure at another scale (one side written out, the other read at a scale from its words), the same figure only by the figure reader's reading of those words"}[gate[fid]])
 					byFID[fid] = x
 					if err := e.write(ctx, id, kFinding, fid, x, true); err != nil {
 						return report{}, err
@@ -246,8 +260,8 @@ func (f finish) check(ctx context.Context, limits []limitation) (report, error) 
 					is.ID, strings.Join(l, ", "), plural(len(l), "is", "are"), plural(len(l), "it", "them"), plural(len(l), "it means", "they mean")))
 			}
 			if l := limited[limitedScale]; len(l) > 0 {
-				rep.limits = append(rep.limits, fmt.Sprintf("Figures: in the section on %s, %s %s written at a scale where the cited findings state every digit: %s the same figure only by the figure reader's reading of the scale's words; confirm %s against the cited quotes.",
-					is.ID, strings.Join(l, ", "), plural(len(l), "is", "are"), plural(len(l), "it is", "they are"), plural(len(l), "it", "them")))
+				rep.limits = append(rep.limits, fmt.Sprintf("Figures: in the section on %s, %s %s written at another scale than the cited findings state %s (one written out digit for digit, the other read at a scale from its words): %s the same figure only by the figure reader's reading of those words, and the findings are gated; confirm %s against the cited quotes.",
+					is.ID, strings.Join(l, ", "), plural(len(l), "is", "are"), plural(len(l), "it", "them"), plural(len(l), "it is", "they are"), plural(len(l), "it", "them")))
 			}
 			if r := secs[k].Read; r != nil && r.Unread != "" { // lab-r4 r5 L4: a section G8 could not trace by its readings
 				rep.limits = append(rep.limits, fmt.Sprintf("Figures: in the section on %s, %s: G8 traces only figures the figure reader read clearly, so each of them that the drafter wrote out (not as a handle) was flagged as not traced rather than checked.", is.ID, r.Unread))
@@ -258,10 +272,11 @@ func (f finish) check(ctx context.Context, limits []limitation) (report, error) 
 			bad("criterion_unmet", is.ID+" has no drafted section citing a verified finding: draft it from verified findings, or disclose it in limitations with its issueId")
 		}
 	}
-	if _, open, err := e.discrepancies(ctx, id); err != nil { // every figure conflict is stated in the memo (bench r3)
+	if j, err := e.joined(ctx, id); err != nil { // every figure conflict is stated in the memo (bench r3)
 		return report{}, err
 	} else {
-		for _, x := range open {
+		rep.limits = append(rep.limits, j.lines()...) // what the judge could not decide, or did not judge (judge.go)
+		for _, x := range j.open {
 			var vs []string
 			for _, v := range x.Values {
 				vs = append(vs, "["+v.FID+"] "+v.Value)

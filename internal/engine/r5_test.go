@@ -68,9 +68,9 @@ func TestR5ScaleSmuggleReachesMemo(t *testing.T) {
 	if len(fs) == 1 && len(fs[0].Values) == 1 && !fs[0].Low {
 		t.Errorf("typed $500,000 verified (not gated) from a quote stating $500: %+v", fs[0].Values[0].Fig)
 	}
-	fin := strings.Join(f.outputs(v.ID, "finish"), "\n")
-	if strings.Contains(deref(v.Output), "$500,000") && !strings.Contains(fin, "not traced") {
-		t.Errorf("memo states $500,000 from a $500 quote; stop %s, no G8 line", stop(v))
+	fin := strings.Join(f.outputs(v.ID, "finish"), "\n") // flagged, or (r7 M4: the scaled-cited direction as the other) limited, disclosed and gated
+	if strings.Contains(deref(v.Output), "$500,000") && !strings.Contains(fin, "not traced") && !strings.Contains(deref(v.Output), "written at another scale") {
+		t.Errorf("memo states $500,000 from a $500 quote; stop %s, no G8 line, no Limitations line", stop(v))
 	}
 }
 
@@ -260,13 +260,13 @@ func TestR5CacheKeyAndScope(t *testing.T) {
 		}
 		fsys[name] = &fstest.MapFile{Data: data}
 	}
-	if readerSpecHash(fsys) != readerSpec {
+	if specHash(fsys, readerSpecFiles) != readerSpec {
 		t.Fatal("the spec hash is not the embedded specs'")
 	}
 	for _, name := range readerSpecFiles {
 		edited := maps.Clone(fsys)
 		edited[name] = &fstest.MapFile{Data: append(slices.Clone(fsys[name].Data), ' ')}
-		if readerSpecHash(edited) == readerSpec {
+		if specHash(edited, readerSpecFiles) == readerSpec {
 			t.Errorf("editing %s leaves the cache key as it was", name)
 		}
 	}

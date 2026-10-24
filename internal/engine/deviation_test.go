@@ -4,10 +4,12 @@
 package engine
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/discover-legal/BigLaw/internal/agent"
 	"github.com/discover-legal/BigLaw/internal/analysis"
 	"github.com/discover-legal/BigLaw/internal/model"
 )
@@ -274,9 +276,10 @@ func devFindings(trustQuote string, verified bool, trustMetric string) []analysi
 	return fs
 }
 
+// The join proposes the two documents' shares to the judge (who decides: judge.go), one from each.
 func TestDevNumericJoinBothQuotes(t *testing.T) {
-	cs := analysis.Join(devFindings(qSophiaTrust, true, "residuary share"), nil)
-	if len(cs) != 1 || len(cs[0].Values) != 2 || cs[0].Values[0].DocumentID == cs[0].Values[1].DocumentID {
+	cs, _ := analysis.Candidates(devFindings(qSophiaTrust, true, "residuary share"))
+	if len(cs) != 1 || cs[0].A.DocumentID == cs[0].B.DocumentID {
 		t.Fatalf("%+v", cs)
 	}
 }
@@ -285,22 +288,23 @@ func TestDevNumericJoinEnumerationGuard(t *testing.T) {
 	fs := devFindings(qSophiaTrust, true, "residuary share")
 	fs[1].Values[0].Value, fs[1].Values[0].Fig = "35%", read(analysis.KindPercent, "", "35", "Sophia")
 	fs[1].Values[0].Fig.Measures = "residuary share"
-	if cs := analysis.Join(fs, nil); len(cs) != 0 {
+	if cs, _ := analysis.Candidates(fs); len(cs) != 0 {
 		t.Fatalf("a matching value is conformance: %+v", cs)
 	}
 }
 
 func TestDevNumericJoinSubstringLock(t *testing.T) {
-	if cs := analysis.Join(devFindings("a fabricated quote that appears nowhere", false, "residuary share"), nil); len(cs) != 0 {
+	if cs, _ := analysis.Candidates(devFindings("a fabricated quote that appears nowhere", false, "residuary share")); len(cs) != 0 {
 		t.Fatalf("a quarantined finding joined: %+v", cs)
 	}
 }
 
-// Changed: v2 has no judge here and no referent floor for numbers; metric identity is the figure
-// reader's label of what each measures, so values it reads as two measures never join.
+// Changed again (lab-r4 r7): whether two figures are one quantity is the figure judge's verdict, so
+// values read as two measures are still put to it; with no verdict, nothing is asserted.
 func TestDevNumericJoinNoJudgeConservative(t *testing.T) {
-	if cs := analysis.Join(devFindings(qSophiaTrust, true, "sophia trust allocation"), nil); len(cs) != 0 {
-		t.Fatalf("%+v", cs)
+	cs, _, unjudged, _, err := analysis.Join(context.Background(), agent.Call{}, devFindings(qSophiaTrust, true, "sophia trust allocation"), nil)
+	if err != nil || len(cs) != 0 || unjudged != 1 {
+		t.Fatalf("%+v (%d not judged, %v)", cs, unjudged, err)
 	}
 }
 

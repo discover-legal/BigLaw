@@ -7,7 +7,6 @@ import (
 	"compress/gzip"
 	"encoding/json"
 	"io"
-	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -60,50 +59,3 @@ var bench6SECLabels = func() map[string]relabel {
 		"F83/7,912": {wca, all, "", "none"}, "F246/7,412": {wca, all, "", "party"}, "F269/$103,800.00": {bellini, comp, "", "other"},
 		"F539/$92,600": {bellini, comp, "", "party"}, "F144/April 22, 2024": {whitmore, instr, "", "none"}, "F547/15 Apr 2024 09:23:47": {whitmore, instr, "", "none"}}
 }()
-
-// TestJoinBench6SECPairsAcrossLabels (bench6 SEC): the three bench5 pairs were verified this time but
-// typed "OQR" vs "Whitmore Capital Advisors LLC" (4,217 vs 4,312 trades), "Bellini" vs "Kevin
-// Ostrowski" ($92,600 vs $103,800) and "Email transmission" vs "deletion instruction" (April 15 vs April
-// 22). Read as one measure of one party each, all three pair, and so do 7,912 vs 7,412 equity trades,
-// and nothing else over the whole ledger does. $103,800 is typed under its payer, Kevin Ostrowski: the
-// reader calls that typed entity another party, which makes it the figure's other party, not a second
-// payee (lab-r4 r6 M1: LAB ISSUE_003 asks for this discrepancy by name).
-func TestJoinBench6SECPairsAcrossLabels(t *testing.T) {
-	got := pairs(Join(readAs(bench6Ledger(t, "sec"), bench6SECLabels), nil))
-	want := []string{"F144/F547", "F178/F246", "F246/F83", "F269/F539"}
-	if !slices.Equal(got, want) {
-		t.Errorf("SEC conflicts %v, want %v", got, want)
-	}
-	for name, e := range map[string]string{"typed under another other party than F269's": "other", "its typed Bellini unexplained": ""} {
-		ls := maps.Clone(bench6SECLabels)
-		ls["F539/$92,600"] = relabel{"Marcus T. Bellini", "undisclosed compensation paid for Bellini", "", e}
-		if got := pairs(Join(readAs(bench6Ledger(t, "sec"), ls), nil)); slices.Contains(got, "F269/F539") {
-			t.Errorf("%s: the payer Kevin Ostrowski contradicted by the other figure's typed Bellini, still paired: %v", name, got)
-		}
-	}
-}
-
-// TestJoinBench6TrustNamesPairwise (bench6 trust: "Sophia Davenport-Chen age 44 [F148] vs 71 [F107]"
-// was false, F107's 71 is Margaret's: token containment chained the Davenport-Chen names through a
-// shared surname). Whose figure each is, is the figure reader's now (lab-r4 r4): Sophia's share of the
-// residuary estate (35% in the instructions, 30% in the draft) stays, and with the protected trust's
-// termination date read as the trust's (not, as before, joined to Sophia's own date of birth, which
-// both documents state, so neither side was disjoint) the documents' termination ages (sixty, October
-// 8, 2040, against fifty-five, October 8, 2035) are a conflict too.
-func TestJoinBench6TrustNamesPairwise(t *testing.T) {
-	got := pairs(Join(readAs(bench6Ledger(t, "trust"), map[string]relabel{"F67/35": {party: "Sophia Davenport-Chen"}, "F170/30%": {party: "Sophia Davenport-Chen", entity: "party"}}), nil))
-	if want := []string{"F117/F471", "F170/F67"}; !slices.Equal(got, want) {
-		t.Errorf("trust conflicts %v, want %v", got, want)
-	}
-	age := func(fid, doc, who, v, quote string) Finding {
-		return Finding{FID: fid, Verified: true, Quotes: []Quote{{DocumentID: doc, Quote: quote}}, Values: []Value{{Entity: who, Metric: "age", Value: v, Class: "Count"}}}
-	}
-	fs := []Finding{
-		age("F1", "decl", "Sophia Davenport-Chen", "44", "Sophia Davenport-Chen, age forty-four (44), resides in Portland."),
-		age("F2", "trust", "Margaret Davenport-Chen", "71", "The Settlor, Margaret Davenport-Chen, is seventy-one (71) years of age."),
-		age("F3", "memo", "Davenport-Chen", "70", "Mrs. Davenport-Chen is 70."),
-	}
-	if cs := joinRead(fs, nil); len(cs) > 0 {
-		t.Errorf("two people's ages compared through their surname: %+v", cs)
-	}
-}

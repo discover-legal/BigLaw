@@ -351,14 +351,15 @@ func TestSectionCheckLeavesTheSubagentItsTurns(t *testing.T) {
 
 // TestPlacementsStrongestFirst: the coverage pass places an issue with a figure conflict, then the
 // issues by their strongest left-out finding, not in plan order, so a pass whose share runs out has
-// placed the most salient evidence.
+// placed the most salient evidence. (The conflict is the figure judge's verdict, which join_discrepancies
+// asks for.)
 func TestPlacementsStrongestFirst(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, "1. Fees\nThe Firm failed to disclose the fee. The fee was $291,400 in 2023.\n", "Schedule\nThe fee was $310,000 in 2023.\n")
 	d1, d2 := f.docs[0].ID, f.docs[1].ID
 	v := f.run(f.with(map[string][]model.Reply{
 		"lead": {calls(plan(issue("I1", "Was the fee disclosed?", "RedFlag"), issue("I2", "What was the fee?", "RedFlag"))),
-			calls(extract(d1, "disclose", "I1")), calls(extract(d1, "fee", "I2")), calls(extract(d2, "fee", "I2"))},
+			calls(extract(d1, "disclose", "I1")), calls(extract(d1, "fee", "I2")), calls(extract(d2, "fee", "I2")), calls(tc("join_discrepancies", m{"fids": nil, "aliases": nil}))},
 		"extract_facts": {facts(fd("The Firm failed to disclose the fee.", d1, "The Firm failed to disclose the fee")),
 			facts(fd("The fee was $291,400.", d1, "The fee was $291,400 in 2023", val("Firm", "fee", "$291,400", "Money"))),
 			facts(fd("The fee was $310,000.", d2, "The fee was $310,000 in 2023", val("Firm", "fee", "$310,000", "Money")))},

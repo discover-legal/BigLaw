@@ -1,0 +1,359 @@
+{
+ "name": "judge_figures",
+ "kind": "subagent",
+ "class": "free",
+ "maxTurns": 2,
+ "role": "critic",
+ "allowed": [
+  "figure_context"
+ ],
+ "description": "Decides, for each pair of figures it is given, whether the two are one quantity stated two ways (the same thing measured for the same party, other party and period, so the documents disagree about it) or two different quantities. Go proposes the pairs: two verified findings' values from two documents that the figure reader read clearly as one kind and currency with different amounts. For each pair it gets both values, the quotes they are stated in, their findings' claims, the analyst's entity and metric, the figure reader's labels (party, other party, what it measures, period) and the names the record gives one party. It answers yes, no or unclear per pair, with one sentence quoting both passages. Only yes reports a conflict; unclear is shown to a lawyer as a possible one. It may read more of a quote's document around it. Do not use it to decide which figure is right: it says only whether they are one quantity.\nExample: {\"pairs\": [{\"id\": \"F3.v1|F9.v1\", \"kind\": \"numeric\", \"a\": {\"ref\": \"F3.v1\", \"documentId\": \"3f6c2a9e-0b1d-4c2e-9a7f-5d8e1b2c4a6f\", \"value\": \"$92,600\", \"entity\": \"Acme LLC\", \"metric\": \"consulting fees\", \"claim\": \"Acme LLC was paid $92,600 in consulting fees.\", \"quotes\": [\"Acme LLC received consulting fees of $92,600 in 2023.\"], \"reading\": {\"kind\": \"money\", \"currency\": \"USD\", \"amount\": \"92600\", \"scale\": \"1\", \"party\": \"Acme LLC\", \"counterparty\": null, \"measures\": \"consulting fees\", \"period\": \"FY2023\", \"typedEntity\": \"party\"}}, \"b\": {\"ref\": \"F9.v1\", \"documentId\": \"8b1e4d2a-6c3f-4a9e-b7d1-2e5f8c9a0b3d\", \"value\": \"$103,800\", \"entity\": \"Acme LLC\", \"metric\": \"consulting fees\", \"claim\": \"The ledger shows $103,800 paid to Acme LLC for consulting in 2023.\", \"quotes\": [\"Acme LLC consulting, 2023: $103,800\"], \"reading\": {\"kind\": \"money\", \"currency\": \"USD\", \"amount\": \"103800\", \"scale\": \"1\", \"party\": \"Acme LLC\", \"counterparty\": null, \"measures\": \"consulting fees\", \"period\": \"FY2023\", \"typedEntity\": \"party\"}}}], \"aliases\": []}",
+ "in": {
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+   "pairs",
+   "aliases"
+  ],
+  "properties": {
+   "pairs": {
+    "type": "array",
+    "minItems": 1,
+    "maxItems": 15,
+    "items": {
+     "type": "object",
+     "additionalProperties": false,
+     "required": [
+      "id",
+      "kind",
+      "a",
+      "b"
+     ],
+     "properties": {
+      "id": {
+       "type": "string",
+       "maxLength": 80
+      },
+      "kind": {
+       "type": "string",
+       "enum": [
+        "numeric",
+        "date"
+       ]
+      },
+      "a": {
+       "type": "object",
+       "additionalProperties": false,
+       "required": [
+        "ref",
+        "documentId",
+        "value",
+        "entity",
+        "metric",
+        "claim",
+        "quotes",
+        "reading"
+       ],
+       "properties": {
+        "ref": {
+         "type": "string",
+         "maxLength": 32
+        },
+        "documentId": {
+         "type": "string",
+         "maxLength": 64
+        },
+        "value": {
+         "type": "string",
+         "maxLength": 200
+        },
+        "entity": {
+         "type": [
+          "string",
+          "null"
+         ],
+         "maxLength": 300
+        },
+        "metric": {
+         "type": [
+          "string",
+          "null"
+         ],
+         "maxLength": 300
+        },
+        "claim": {
+         "type": "string",
+         "maxLength": 4000
+        },
+        "quotes": {
+         "type": "array",
+         "maxItems": 12,
+         "items": {
+          "type": "string",
+          "maxLength": 20000
+         }
+        },
+        "reading": {
+         "type": "object",
+         "additionalProperties": false,
+         "required": [
+          "kind",
+          "currency",
+          "amount",
+          "scale",
+          "party",
+          "counterparty",
+          "measures",
+          "period",
+          "typedEntity"
+         ],
+         "properties": {
+          "kind": {
+           "type": "string",
+           "maxLength": 16
+          },
+          "currency": {
+           "type": "string",
+           "maxLength": 8
+          },
+          "amount": {
+           "type": "string",
+           "maxLength": 64
+          },
+          "scale": {
+           "type": "string",
+           "maxLength": 24
+          },
+          "party": {
+           "type": [
+            "string",
+            "null"
+           ],
+           "maxLength": 300
+          },
+          "counterparty": {
+           "type": [
+            "string",
+            "null"
+           ],
+           "maxLength": 300
+          },
+          "measures": {
+           "type": [
+            "string",
+            "null"
+           ],
+           "maxLength": 120
+          },
+          "period": {
+           "type": [
+            "string",
+            "null"
+           ],
+           "maxLength": 80
+          },
+          "typedEntity": {
+           "type": [
+            "string",
+            "null"
+           ],
+           "maxLength": 16
+          }
+         }
+        }
+       }
+      },
+      "b": {
+       "type": "object",
+       "additionalProperties": false,
+       "required": [
+        "ref",
+        "documentId",
+        "value",
+        "entity",
+        "metric",
+        "claim",
+        "quotes",
+        "reading"
+       ],
+       "properties": {
+        "ref": {
+         "type": "string",
+         "maxLength": 32
+        },
+        "documentId": {
+         "type": "string",
+         "maxLength": 64
+        },
+        "value": {
+         "type": "string",
+         "maxLength": 200
+        },
+        "entity": {
+         "type": [
+          "string",
+          "null"
+         ],
+         "maxLength": 300
+        },
+        "metric": {
+         "type": [
+          "string",
+          "null"
+         ],
+         "maxLength": 300
+        },
+        "claim": {
+         "type": "string",
+         "maxLength": 4000
+        },
+        "quotes": {
+         "type": "array",
+         "maxItems": 12,
+         "items": {
+          "type": "string",
+          "maxLength": 20000
+         }
+        },
+        "reading": {
+         "type": "object",
+         "additionalProperties": false,
+         "required": [
+          "kind",
+          "currency",
+          "amount",
+          "scale",
+          "party",
+          "counterparty",
+          "measures",
+          "period",
+          "typedEntity"
+         ],
+         "properties": {
+          "kind": {
+           "type": "string",
+           "maxLength": 16
+          },
+          "currency": {
+           "type": "string",
+           "maxLength": 8
+          },
+          "amount": {
+           "type": "string",
+           "maxLength": 64
+          },
+          "scale": {
+           "type": "string",
+           "maxLength": 24
+          },
+          "party": {
+           "type": [
+            "string",
+            "null"
+           ],
+           "maxLength": 300
+          },
+          "counterparty": {
+           "type": [
+            "string",
+            "null"
+           ],
+           "maxLength": 300
+          },
+          "measures": {
+           "type": [
+            "string",
+            "null"
+           ],
+           "maxLength": 120
+          },
+          "period": {
+           "type": [
+            "string",
+            "null"
+           ],
+           "maxLength": 80
+          },
+          "typedEntity": {
+           "type": [
+            "string",
+            "null"
+           ],
+           "maxLength": 16
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   },
+   "aliases": {
+    "type": "array",
+    "maxItems": 50,
+    "items": {
+     "type": "object",
+     "additionalProperties": false,
+     "required": [
+      "name",
+      "aliases"
+     ],
+     "properties": {
+      "name": {
+       "type": "string",
+       "maxLength": 200
+      },
+      "aliases": {
+       "type": "array",
+       "maxItems": 20,
+       "items": {
+        "type": "string",
+        "maxLength": 200
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ "out": {
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+   "verdicts"
+  ],
+  "properties": {
+   "verdicts": {
+    "type": "array",
+    "maxItems": 30,
+    "items": {
+     "type": "object",
+     "additionalProperties": false,
+     "required": [
+      "pair",
+      "sameQuantity",
+      "reason"
+     ],
+     "properties": {
+      "pair": {
+       "type": "string",
+       "maxLength": 80
+      },
+      "sameQuantity": {
+       "type": "string",
+       "enum": [
+        "yes",
+        "no",
+        "unclear"
+       ]
+      },
+      "reason": {
+       "type": "string",
+       "maxLength": 600
+      }
+     }
+    }
+   }
+  }
+ }
+}

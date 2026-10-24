@@ -67,7 +67,7 @@ func TestR6ScaleSmuggleWithAScaledValueReachesMemo(t *testing.T) {
 		t.Errorf("typed $500 thousand verified (not gated) from a quote stating $500: %+v", fs[0].Values[0].Fig)
 	}
 	fin := strings.Join(f.outputs(v.ID, "finish"), "\n")
-	if strings.Contains(deref(v.Output), "$500 thousand") && !strings.Contains(fin, "not traced") && !strings.Contains(deref(v.Output), "written at a scale") {
+	if strings.Contains(deref(v.Output), "$500 thousand") && !strings.Contains(fin, "not traced") && !strings.Contains(deref(v.Output), "written at another scale") {
 		t.Errorf("memo states $500 thousand from a $500 quote; stop %s, no G8 line, no Limitations line", stop(v))
 	}
 }

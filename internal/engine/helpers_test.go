@@ -15,6 +15,7 @@ import (
 
 	"github.com/discover-legal/BigLaw/internal/analysis"
 	"github.com/discover-legal/BigLaw/internal/docs"
+	"github.com/discover-legal/BigLaw/internal/engine/figtest"
 	"github.com/discover-legal/BigLaw/internal/model"
 	"github.com/discover-legal/BigLaw/internal/store"
 	"github.com/discover-legal/BigLaw/internal/store/storetest"
@@ -44,6 +45,9 @@ type fixture struct {
 	// measures are what the stand-in reads spans written so as measuring (its own reading is the
 	// analyst's metric for a value's digits): a test's right labels for one figure typed two ways.
 	measures map[string]string
+	// judge decides the figure judge's stand-in's pairs where it answers (judge.go; "" leaves the
+	// stand-in's own verdict): a test about the join's verdicts.
+	judge func(a, b figtest.JudgeSide) string
 }
 
 const complaintText = `1. Parties
@@ -98,6 +102,15 @@ func (f *fixture) engine(scripts map[string][]model.Reply, cfg Config) (*Engine,
 	fake := newFake(scripts)
 	if fake.Respond != nil && (f.parties != nil || f.reads != nil || f.measures != nil) {
 		fake.Respond = oracleWith(f.parties, f.reads, f.measures)
+	}
+	if f.judge != nil && fake.Respond != nil {
+		read, judge := fake.Respond, figtest.Judge(f.judge)
+		fake.Respond = func(req model.Request) (model.Reply, bool) {
+			if r, ok := judge(req); ok {
+				return r, ok
+			}
+			return read(req)
+		}
 	}
 	f.e = New(f.st, f.d, fake, testRoles, nil, cfg, nil)
 	return f.e, fake

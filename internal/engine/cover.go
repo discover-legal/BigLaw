@@ -137,6 +137,9 @@ func (e *Engine) coverTool(rt *agent.Runtime, r *run) agent.Tool {
 		}
 		me := agent.Agent{Name: "cover", Visible: []string{"analyze_issue", "draft_section"}}
 		call := agent.Call{TaskID: c.TaskID, DocumentIDs: c.DocumentIDs}
+		if err := e.judgeJoin(ctx, rt, call, b, "cover"); err != nil { // the conflicts it must place (judge.go)
+			return nil, b.Spent(), err
+		}
 		due, _, err := e.placements(ctx, c.TaskID)
 		if err != nil {
 			return nil, agent.Usage{}, err
@@ -171,6 +174,11 @@ func (e *Engine) coverTool(rt *agent.Runtime, r *run) agent.Tool {
 			if _, err := rt.Invoke(context.WithValue(ctx, coverDraft{}, true), me, call, "draft_section", in, b, false, 0); modelOrJournal(err) {
 				failed = err
 				break
+			}
+		}
+		if failed == nil { // the analyses' new findings' pairs
+			if err := e.judgeJoin(ctx, rt, call, b, "cover"); err != nil {
+				return nil, b.Spent(), err
 			}
 		}
 		for round := 0; failed == nil && round < placeRounds; round++ { // then the left-out evidence: one redraft per issue that has some, a round at a time
@@ -425,27 +433,42 @@ func memoReadings(secs []Section, use []Finding) []analysis.Reading {
 	return out
 }
 
-// discrepancies is the cross-document join over every usable finding (analysis.Join, labels and
-// near values alike, with the aliases the lead gave join_discrepancies), and those the memo does not
-// yet address.
+// discrepancies is the cross-document join over every usable finding as the task's verdicts decide
+// it (judge.go: the pairs analysis.Candidates proposes, judged yes by judge_figures; a pair not yet
+// judged asserts nothing), and those the memo does not yet address.
 func (e *Engine) discrepancies(ctx context.Context, taskID string) (all, open []analysis.Conflict, err error) {
+	j, err := e.joined(ctx, taskID)
+	return j.all, j.open, err
+}
+
+// joined is the join with what it could not decide.
+func (e *Engine) joined(ctx context.Context, taskID string) (joined, error) {
 	use, err := e.usable(ctx, taskID)
 	secs, serr := load[Section](ctx, e, taskID, kSection)
-	aliases, aerr := load[analysis.Alias](ctx, e, taskID, kAlias) // the lead's, from join_discrepancies
-	if err = cmpErr(err, serr, aerr); err != nil {
-		return nil, nil, err
+	if err = cmpErr(err, serr); err != nil {
+		return joined{}, err
 	}
-	an := make([]analysis.Finding, 0, len(use))
-	for _, f := range use {
-		an = append(an, f.Finding)
+	cands, dropped := joinCands(use)
+	vs, err := e.verdicts(ctx, taskID, cands)
+	if err != nil {
+		return joined{}, err
 	}
-	for _, c := range analysis.Join(an, aliases) {
-		all = append(all, c)
-		if !addressed(c, secs, use) {
-			open = append(open, c)
+	j := joined{unjudged: dropped}
+	for _, x := range cands {
+		switch v, ok := vs[x.ID]; {
+		case !ok:
+			j.unjudged++
+		case v.SameQuantity == "unclear":
+			j.unclear = append(j.unclear, x)
 		}
 	}
-	return all, open, nil
+	for _, c := range analysis.Conflicts(cands, vs) {
+		j.all = append(j.all, c)
+		if !addressed(c, secs, use) {
+			j.open = append(j.open, c)
+		}
+	}
+	return j, nil
 }
 
 // leftOut is the salient usable findings no section cites, strongest first (salienceRank), else in

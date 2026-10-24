@@ -114,7 +114,7 @@ func TestFabricatingModelFailsTask(t *testing.T) {
 	v := f.run(f.with(map[string][]model.Reply{
 		"lead":          {calls(plan(issue("I1", "What does Greystone claim?", "Conduct"))), calls(extract(d1, "damages", "I1")), calls(draft("I1", "F1"))},
 		"extract_facts": {facts(fake...)},
-		"verify_quote":  {judgeNo, judgeNo},
+		"verify_quote":  {judgeNo, judgeNo, judgeNo}, // no quote states a number: the judges may spend the reader's call too (r7 L4)
 	}), Config{})
 	if stop(v) != "failed/failed" || v.GroundingAlert == nil || !strings.Contains(*v.GroundingAlert, "8 of 8") || v.Output != nil {
 		t.Fatalf("%s alert %v error %v\n%s\n%q", stop(v), v.GroundingAlert, deref(v.Error), f.steps(v.ID), f.outputs(v.ID, "extract_facts"))
@@ -493,7 +493,8 @@ func TestMarkdownNeutralised(t *testing.T) {
 func TestLintSaysHowToFix(t *testing.T) {
 	cite := func(q string) []Citation { return []Citation{{Quote: q, Method: "exact"}} }
 	use := map[string]Finding{
-		"F1": {Finding: analysis.Finding{FID: "F1", Values: []analysis.Value{{Value: "10/21/2026"}}}, Citations: cite("served on 10/21/2026 via its registered agent")},
+		"F1": {Finding: analysis.Finding{FID: "F1", Values: []analysis.Value{{Value: "10/21/2026"}}}, Citations: cite("served on 10/21/2026 via its registered agent; an answer is due within 21 days"),
+			Figures: []analysis.Reading{{Span: "q1.s4", Text: "21", Kind: analysis.KindOther, Amount: "21"}}}, // the rule's period the worksheet's day count traces to (r7 M1)
 		"F2": {Finding: analysis.Finding{FID: "F2", Values: []analysis.Value{{Value: "$612,400"}}}, Citations: cite("leaving a shortfall of $612,400")},
 		"F3": {Finding: analysis.Finding{FID: "F3"}, Citations: cite("a fee equal to thirty-five percent (35%) of the shortfall")},
 	}
@@ -601,7 +602,7 @@ func TestFigureLintSkipsLocatorLists(t *testing.T) {
 		"Section 2,000 of nothing":                  "2000", // a locator is never a figure's head
 		"clauses 3(a) and 3(b) or 3(c); 1,200 rows": "1200",
 	} {
-		if got := Untraced(maskRefs(text), ground, false); len(got) != 1 || got[0] != want {
+		if got := Untraced(analysis.MaskLocators(text), ground, false); len(got) != 1 || got[0] != want {
 			t.Errorf("%q: untraced %q, want only %s", text, got, want)
 		}
 	}
@@ -620,8 +621,8 @@ func TestFigureLintTracesCountAfterLocatorList(t *testing.T) {
 		"Under Sections 3 and 4, 250 employees were affected.":                       "250",
 		"Sections 3 and 14 million in fees":                                          "14", // as written: what it means is the figure reader's (lint's labelled check)
 	} {
-		if got := Untraced(maskRefs(text), ground, false); len(got) != 1 || got[0] != want {
-			t.Errorf("%q: untraced %q, want %s (masked: %q)", text, got, want, maskRefs(text))
+		if got := Untraced(analysis.MaskLocators(text), ground, false); len(got) != 1 || got[0] != want {
+			t.Errorf("%q: untraced %q, want %s (masked: %q)", text, got, want, analysis.MaskLocators(text))
 		}
 	}
 }

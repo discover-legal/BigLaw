@@ -45,14 +45,15 @@ import (
 // specs, so an edit to any of them reads every figure again (lab-r4 r5 M3; derived, never bumped by
 // hand). The key also holds the model the reader runs on, the matter (and, for a drafted section, the
 // task) it read for, and exactly what it was sent.
-var readerSpec = readerSpecHash(specFS)
+var readerSpec = specHash(specFS, readerSpecFiles)
 
 // readerSpecFiles are the files the reader's behaviour comes from.
 var readerSpecFiles = []string{"specs/agents/read_figures.json", "specs/agents/read_figures.md", "specs/figure_context.json", "specs/exact_calc.json"}
 
-func readerSpecHash(fsys fs.FS) string {
+// specHash is the hash of files (an agent's spec, prompt and tools' specs): part of its cache keys.
+func specHash(fsys fs.FS, files []string) string {
 	h := sha256.New()
-	for _, f := range readerSpecFiles {
+	for _, f := range files {
 		data, err := fs.ReadFile(fsys, f)
 		if err != nil {
 			panic("engine: " + err.Error())
@@ -457,10 +458,18 @@ func (e *Engine) cacheReading(ctx context.Context, pt *part, taskID, scope, mode
 		}
 	}
 	data, err := json.Marshal(labels)
-	if err == nil {
-		_, err = e.db.ExecContext(ctx, `INSERT INTO figure_reads (key, labels, model, task_id, matter_number, document_ids) VALUES ($1, $2, $3, $4, $5, $6)
-			ON CONFLICT (key) DO NOTHING`, pt.key, data, model, taskID, strings.TrimPrefix(scope, "matter:"), pq.Array(docs))
+	if err != nil {
+		return err
 	}
+	return e.storeRead(ctx, pt.key, data, model, taskID, scope, docs)
+}
+
+// storeRead stores one cached answer (figure_reads) under the task that asked and the documents it
+// read (deleted with the task or any of them).
+func (e *Engine) storeRead(ctx context.Context, key string, data []byte, model, taskID, scope string, docs []string) error {
+	docs = slices.DeleteFunc(slices.Clone(docs), func(d string) bool { return !store.ValidID(d) })
+	_, err := e.db.ExecContext(ctx, `INSERT INTO figure_reads (key, labels, model, task_id, matter_number, document_ids) VALUES ($1, $2, $3, $4, $5, $6)
+		ON CONFLICT (key) DO NOTHING`, key, data, model, taskID, strings.TrimPrefix(scope, "matter:"), pq.Array(docs))
 	return err
 }
 

@@ -116,6 +116,10 @@ func (r Reading) Rat() *big.Rat {
 
 var codeRe = regexp.MustCompile(`^[A-Z]{3}$`)
 
+// IsCurrency reports whether code is written as an ISO 4217 code is (three capital letters), as a
+// reading's currency and a worksheet's money unit are.
+func IsCurrency(code string) bool { return codeRe.MatchString(code) }
+
 // ReadLabels checks the reader's labels against the passages it was given and returns one reading per
 // span (by span id) and notes on what was refused: a label for a span not given (rejected), a second
 // label for one span (both unclear). A span with no label is unclear (not read).
@@ -249,16 +253,21 @@ func check(p Passage, s Span, l Label, known func(string) bool) Reading {
 }
 
 // statesScale reports whether from is words text states, outside the span s and at word boundaries,
-// before the span (a heading, a table header, a lead-in) or right after its digits: where a figure's
-// scale may come from (lab-r4 r5 H1, r6 H1). Not a span id, not a part of a word ("e" of "fee"), not
-// the span's own digits, never another passage's words nor words later in its own passage than the
-// figure that follows it ("$500 per application. Costs (in thousands): 1,200"); at least one letter
-// or sign. Which words are a scale is the reader's; SameFigure compares them (scaleWords).
+// adjacent to the span: right after its digits, or after the currency code written there ("4.2
+// million", "2810,EUR million"); earlier in its own line with no sentence end between (a lead-in:
+// "costs (in thousands): 1,200"); or in the passage's first line when the span is on a later one (a
+// table's header over its rows): where a figure's scale may come from (lab-r4 r5 H1, r6
+// H1, r7 M2). Not a span id, not a part of a word ("e" of "fee"), not the span's own digits, never
+// another passage's words, nor words of another sentence ("Costs (in thousands): 1,200. The fee is
+// $500", "$500 per application. Costs (in thousands): 1,200"); at least one letter, or
+// a "000" ("($000)": a bare "$" is no scale, r7 L1). Which words are a scale is the reader's;
+// SameFigure compares them (scaleWords).
 func statesScale(text string, s Span, end int, from string) bool {
-	if from == "" || !strings.ContainsFunc(from, func(r rune) bool { return !unicode.IsDigit(r) && !unicode.IsSpace(r) }) {
+	if from == "" || !strings.ContainsFunc(from, unicode.IsLetter) && !strings.Contains(from, "000") {
 		return false
 	}
-	low, f := strings.ToLower(text), strings.ToLower(from)
+	low, f := asciiLower(text), asciiLower(from) // byte for byte, so offsets in low are offsets in text
+	header := strings.IndexByte(text, '\n')      // the first line's end; -1: one line
 	for i := 0; i+len(f) <= len(low); {
 		k := strings.Index(low[i:], f)
 		if k < 0 {
@@ -272,8 +281,22 @@ func statesScale(text string, s Span, end int, from string) bool {
 		edge := func(r rune, word bool) bool { return !word || !isWordRune(r) }
 		before := a == 0 || a == s.End || edge(lastRune(low[:a]), isWordRune(firstRune(f))) // glued to its own span: "$5M", "4.2bn"
 		after := b == len(low) || b == s.Start || edge(firstRune(low[b:]), isWordRune(lastRune(f)))
-		adjacent := a >= end && strings.Trim(low[end:a], " \t(") == "" // right after its digits (or its range's far end): "4.2 million", "$5M", "4,000 (in thousands)"
-		if before && after && (b <= s.Start || adjacent) {             // before them (a heading, a table header, a lead-in), or right after
+		gap := strings.Trim(text[min(end, a):a], " \t(,") // after its digits (or its range's far end), or a currency code written after them: "4.2 million", "$5M", "4,000 (in thousands)", "2810,EUR million"
+		adjacent := a >= end && (gap == "" || IsCurrency(gap))
+		leadIn := b <= s.Start && !strings.ContainsRune(text[b:s.Start], '\n') && !sentenceEnd(text[b:s.Start])
+		heading := header >= 0 && b <= header && s.Start > header
+		if before && after && (adjacent || leadIn || heading) {
+			return true
+		}
+	}
+	return false
+}
+
+// sentenceEnd reports whether text holds the end of a sentence: a full stop, question or exclamation
+// mark followed by a space (not a decimal point, "1.5").
+func sentenceEnd(text string) bool {
+	for i := 0; i+1 < len(text); i++ {
+		if strings.ContainsRune(".?!", rune(text[i])) && unicode.IsSpace(rune(text[i+1])) {
 			return true
 		}
 	}
@@ -281,6 +304,17 @@ func statesScale(text string, s Span, end int, from string) bool {
 }
 
 func firstRune(s string) rune { r, _ := utf8.DecodeRuneInString(s); return r }
+
+// asciiLower is s with its ASCII capitals lowered, every other byte as it is (its length unchanged).
+func asciiLower(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if 'A' <= c && c <= 'Z' {
+			b[i] = c + ('a' - 'A')
+		}
+	}
+	return string(b)
+}
 
 // powerOfTen reports whether r is 10^k for -3 ≤ k ≤ 15: the only scales a figure is read with
 // (thousands, millions, lakhs, per mille), so a reading's amount is always its written digits shifted,

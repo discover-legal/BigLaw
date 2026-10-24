@@ -4,7 +4,6 @@
 package analysis
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -54,9 +53,9 @@ func TestR5ScaleSourceIsItsOwnWords(t *testing.T) {
 	}
 }
 
-// The measure, period and typed-entity labels are kept as given (folded), and a range's other end
-// must be a span of the same passage.
-func TestR5LabelsCarryMeasureAndPeriod(t *testing.T) {
+// The measure, period and typed-entity labels are kept as given (folded): context the join's judge
+// reads, never a key. A range's other end must be a span of the same passage.
+func TestLabelsCarryMeasureAndPeriod(t *testing.T) {
 	ps := []Passage{PassageOf("q1", "between 3 and 5 per cent for fiscal 2024"), PassageOf("q2", "7")}
 	l := lbl("q1.s1", KindPercent, "none", "1", nil, "none", "positive")
 	l.Measures, l.Period, l.TypedEntity, l.RangeWith = str("  management   fee "), str("fiscal 2024"), str("party"), str("q2.s1")
@@ -68,69 +67,5 @@ func TestR5LabelsCarryMeasureAndPeriod(t *testing.T) {
 	}
 	if r := rs["q1.s2"]; r.RangeWith != "q1.s1" || r.TypedEntity != "" {
 		t.Errorf("a range's end of its own passage, an unknown typed-entity answer: %+v", r)
-	}
-}
-
-// M4: the label join keys on the reader's party, and the extractor's typed entities still stand: a
-// payer read as the party of two employees' salaries is no conflict between them.
-func TestR5LabelJoinRespectsTypedEntity(t *testing.T) {
-	salary := func(fid, doc, quote, who, amount, value string) Finding {
-		return fnd(fid, doc, quote, nil, Value{Entity: who, Metric: "annual base salary", Value: value, Class: "Money", Fig: figOf(KindMoney, "USD", amount, "Acme Corp", "annual base salary", "none")})
-	}
-	fs := []Finding{
-		salary("F1", "hr", "Acme Corp shall pay the Chief Executive Officer an annual base salary of $410,000.", "Jane Moss", "410000", "$410,000"),
-		salary("F2", "comp", "Acme Corp shall pay the Chief Financial Officer an annual base salary of $395,000.", "Raj Patel", "395000", "$395,000"),
-	}
-	if cs := Join(fs, nil); len(cs) > 0 {
-		t.Errorf("two employees' salaries (typed entities differ) joined as one: %v", pairs(cs))
-	}
-	fs[1].Values[0].Fig.TypedEntity = "other" // the reader says Raj Patel is not its party
-	if cs := Join(fs, nil); len(cs) > 0 {
-		t.Errorf("a figure whose typed entity the reader calls another party joined: %v", pairs(cs))
-	}
-	fs[1].Values[0].Entity = "Jane Moss" // one employee's salary in two documents
-	fs[1].Values[0].Fig.TypedEntity = ""
-	if cs := Join(fs, nil); len(cs) != 1 {
-		t.Errorf("one employee's salary stated two ways: %v", pairs(cs))
-	}
-}
-
-// L2: what a figure measures and the period it is for are the reader's labels: one party's two
-// deposits, or one revenue line's two fiscal years, are not one figure stated twice; the same measure
-// for the same period is.
-func TestR5JoinOnMeasureAndPeriod(t *testing.T) {
-	rev := func(fid, doc, period, amount, value string) Finding {
-		return fnd(fid, doc, "Alpha Corp reported annual revenue of "+value+" for "+period+".", nil,
-			Value{Entity: "Alpha Corp", Metric: "annual revenue", Value: value, Class: "Money", Fig: figOf(KindMoney, "USD", amount, "Alpha Corp", "annual revenue", period)})
-	}
-	if cs := Join([]Finding{rev("F1", "10k", "fiscal 2023", "12300000", "$12,300,000"), rev("F2", "deck", "fiscal 2024", "12800000", "$12,800,000")}, nil); len(cs) > 0 {
-		t.Errorf("two fiscal years' revenue joined as one: %v", pairs(cs))
-	}
-	if cs := Join([]Finding{rev("F1", "10k", "fiscal 2024", "12300000", "$12,300,000"), rev("F2", "deck", "Fiscal 2024", "12800000", "$12,800,000")}, nil); len(cs) != 1 {
-		t.Errorf("one year's revenue stated two ways: %v", pairs(cs))
-	}
-	if cs := Join([]Finding{rev("F1", "10k", "fiscal 2024", "12300000", "$12,300,000"), rev("F2", "deck", "", "12800000", "$12,800,000")}, nil); len(cs) > 0 {
-		t.Errorf("a figure whose period one side does not state asserted a conflict: %v", pairs(cs))
-	}
-	dep := func(fid, doc, quote, measures, amount, value string) Finding {
-		return fnd(fid, doc, quote, nil, Value{Entity: "Buyer", Metric: "deposit", Value: value, Class: "Money", Fig: figOf(KindMoney, "USD", amount, "Buyer", measures, "none")})
-	}
-	two := []Finding{
-		dep("F1", "spa", "The Buyer paid an initial deposit of $250,000 on signing.", "initial deposit", "250000", "$250,000"),
-		dep("F2", "amendment", "The Buyer paid an additional deposit of $260,000 on extension.", "additional deposit", "260000", "$260,000"),
-	}
-	if cs := Join(two, nil); len(cs) > 0 {
-		t.Errorf("two deposits of one party under one extractor label asserted as a conflict: %v", pairs(cs))
-	}
-	two[1].Values[0].Fig.Measures = "Initial Deposit"
-	if cs := Join(two, nil); len(cs) != 1 {
-		t.Errorf("one deposit stated two ways: %v", pairs(cs))
-	}
-	two[1].Values[0].Fig.Measures = ""
-	if cs := Join(two, nil); len(cs) > 0 {
-		t.Errorf("a figure the reader did not say the measure of joined: %v", pairs(cs))
-	}
-	if !strings.Contains(fold("The  Initial-Deposit"), "initial deposit") {
-		t.Error(fold("The  Initial-Deposit"))
 	}
 }

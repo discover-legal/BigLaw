@@ -86,7 +86,7 @@ func (e *Engine) runtime(r *run) (*agent.Runtime, error) {
 	rt.Bandit = &agent.Bandit{Stats: stats{r}, Sig: agent.Signature(r.t.WorkflowType, "", r.t.Jurisdiction, r.t.LeadModel, len(r.t.DocumentIDs)),
 		BudgetCalls: e.cfg.BudgetCalls, Off: !r.t.ToolBandit}
 	tools := e.docs.Tools(rt)
-	an := analysis.Tools(e)
+	an := analysis.Tools(judging{e, rt})
 	tools = append(tools, sheets{an[0], e}, aliasJoin{an[1], e}, e.ledgerTool(), e.sweepTool(rt, r), e.committeeTool(rt, r), e.finishTool(rt, r), e.coverTool(rt, r),
 		e.figureContextTool(), exactCalc{})
 	sub, _ := fs.Sub(specFS, "specs/agents")
@@ -444,8 +444,13 @@ func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 		it   *reading
 	}
 	var pend []pending
-	vb := b // the quotes' judges spend all but the figure reader's reserve (lab-r4 r5 L4: the reader is never what they left)
-	if rc, ru := b.Remaining(); reserve.Calls > 0 && rc > reserve.Calls {
+	// the quotes' judges spend all but the figure reader's reserve (lab-r4 r5 L4: the reader is never
+	// what they left), unless no finding states a number, when the reader makes no call (r7 L4)
+	numbers := slices.ContainsFunc(drafts, func(d draftFinding) bool {
+		return len(findingReading(Finding{Finding: analysis.Finding{Claim: d.Claim, Entities: d.Entities}}, d.Quotes, d.Values).ps) > 0
+	})
+	vb := b
+	if rc, ru := b.Remaining(); numbers && reserve.Calls > 0 && rc > reserve.Calls {
 		if g, err := b.Grant(rc-reserve.Calls, max(0, ru-reserve.USD), agent.LevelWork); err == nil {
 			vb = g
 			defer g.Close()

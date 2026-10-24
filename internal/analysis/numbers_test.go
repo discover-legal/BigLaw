@@ -320,7 +320,7 @@ func TestCalcAcceptsWhatModelsSend(t *testing.T) {
 	}{
 		{"date_add", []Operand{{Ref: ref("F32.d1")}, {Literal: ref("1"), Unit: days}}, []string{"F32 has 2 values", "F32.v1 = $612,400", `{"ref": "F32.v1"`}},
 		{"date_add", []Operand{{Literal: ref("2026-11-12"), Unit: date}, {Literal: ref("2026-11-13"), Unit: date}}, []string{"it got a date, a date", `"fn": "date_add"`, `"unit": "days"`}},
-		{"product", []Operand{{Ref: ref("F32.v1")}, {Ref: ref("F32.v1")}}, []string{"at most one of them not a percentage"}},
+		{"product", []Operand{{Ref: ref("F32.v1")}, {Ref: ref("F32.v1")}}, []string{"at most one of them an amount of money"}},
 		{"sum", []Operand{{}}, []string{`{"ref": "F12.v1"`}},
 	} {
 		if _, err := Calc(fs, c.fn, c.ops, nil); err == nil || !containsAll(err.Error(), c.want) {
@@ -336,4 +336,47 @@ func containsAll(s string, subs []string) bool {
 		}
 	}
 	return true
+}
+
+// r7 M4: product and ratio take any numbers with at most one amount of money (a ratio: one
+// currency), exact: shares × price × multiple is money, two amounts of money multiplied or two
+// currencies divided are refused, and an amount over a count is per unit.
+func TestCalcProductsAndRatiosOfOneCurrency(t *testing.T) {
+	lit := func(x, unit string) Operand {
+		o := Operand{Literal: &x}
+		if unit != "" {
+			o.Unit = &unit
+		}
+		return o
+	}
+	for _, c := range []struct {
+		fn           string
+		ops          []Operand
+		result, unit string
+	}{
+		{"product", []Operand{lit("1,200,000", ""), lit("5.00", "USD"), lit("1.5", "")}, "9000000", "USD"},
+		{"product", []Operand{lit("2.0", ""), lit("385000", "USD")}, "770000", "USD"},
+		{"product", []Operand{lit("10", "%"), lit("84000000", "USD")}, "8400000", "USD"},
+		{"product", []Operand{lit("1,200,000", "shares"), lit("2", "")}, "2400000", ""},
+		{"product", []Operand{lit("1,200,000", "shares"), lit("50", "%")}, "600000", "shares"},
+		{"ratio", []Operand{lit("9,000,000", "USD"), lit("1,200,000", "")}, "7.5", "USD"},
+		{"ratio", []Operand{lit("9,000,000", "USD"), lit("3,000,000", "USD")}, "3", ""},
+	} {
+		w, err := Calc(nil, c.fn, c.ops, nil)
+		if err != nil || w.Result != c.result || w.Unit != c.unit {
+			t.Errorf("%s %v: %s %q (%v), want %s %q", c.fn, w.Steps, w.Result, w.Unit, err, c.result, c.unit)
+		}
+	}
+	for _, c := range []struct {
+		fn  string
+		ops []Operand
+	}{
+		{"product", []Operand{lit("5", "USD"), lit("2", "USD")}},
+		{"product", []Operand{lit("5", "USD"), lit("2", "EUR"), lit("3", "")}},
+		{"ratio", []Operand{lit("5", "USD"), lit("2", "EUR")}},
+	} {
+		if _, err := Calc(nil, c.fn, c.ops, nil); err == nil || !strings.Contains(err.Error(), "money") && !strings.Contains(err.Error(), "currency") {
+			t.Errorf("%s %+v: %v, want a refusal naming the money rule", c.fn, c.ops, err)
+		}
+	}
 }

@@ -26,6 +26,14 @@ func newFake(scripts map[string][]model.Reply) *model.Fake {
 	if _, scripted := scripts["read_figures"]; !scripted {
 		f.Respond = readerOracle
 	}
+	if _, scripted := scripts["judge_figures"]; scripted && f.Respond != nil { // a test's own verdicts
+		f.Respond = func(req model.Request) (model.Reply, bool) {
+			if req.Agent == "judge_figures" {
+				return model.Reply{}, false
+			}
+			return readerOracle(req)
+		}
+	}
 	return f
 }
 

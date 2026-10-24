@@ -32,6 +32,11 @@ func (d Date) Compatible(e Date) bool {
 	return d.Year == e.Year && (d.Month == 0 || e.Month == 0 || d.Month == e.Month && (d.Day == 0 || e.Day == 0 || d.Day == e.Day))
 }
 
+// DaysBetween is the number of days between two full dates (never negative), as date_diff counts.
+func DaysBetween(a, b Date) int64 {
+	return abs((b.time().Unix() - a.time().Unix()) / 86400)
+}
+
 func (d Date) time() time.Time {
 	return time.Date(d.Year, time.Month(d.Month), d.Day, 0, 0, 0, 0, time.UTC)
 }

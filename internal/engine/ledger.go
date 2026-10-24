@@ -35,6 +35,7 @@ const (
 	kSwept    = "swept"    // key: "sweep"; []SweptDoc, each document's sweep coverage (the latest sweep's)
 	kAlias    = "alias"    // key: a party's folded name; analysis.Alias, the names join_discrepancies was told it goes by
 	kRead     = "figread"  // key: "draft"; the calls drafted sections' figure readers made (not the drafters')
+	kVerdict  = "verdict"  // key: judgeKey of a candidate pair's content and the run's aliases; analysis.Verdict, the figure judge's (judge.go)
 )
 
 // Issue is one plan issue (the deliverable's spine), typed by a BELO-lite issue class.

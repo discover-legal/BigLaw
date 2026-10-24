@@ -48,7 +48,7 @@ func deref(s *string) string {
 func With(parties map[string]string, reads map[string]analysis.Label, measures map[string]string) func(model.Request) (model.Reply, bool) {
 	return func(req model.Request) (model.Reply, bool) {
 		r, ok := Reader(req)
-		if !ok {
+		if !ok || req.Agent != "read_figures" {
 			return r, ok
 		}
 		var in Request
@@ -92,8 +92,12 @@ type Request struct {
 	}
 }
 
-// Reader answers every read_figures request (fake.Respond); other agents use their scripts.
+// Reader answers every read_figures request (fake.Respond), and every judge_figures request as
+// Judge does; other agents use their scripts.
 func Reader(req model.Request) (model.Reply, bool) {
+	if req.Agent == "judge_figures" {
+		return Judge(nil)(req)
+	}
 	if req.Agent != "read_figures" {
 		return model.Reply{}, false
 	}
@@ -193,7 +197,11 @@ func oracleLabel(p Passage, s analysis.Span, all []Passage, parties []string) an
 			cur = strings.ToUpper(w)
 		}
 	}
-	if m := oracleScale.FindStringSubmatch(after); m != nil && (cur != "" || !strings.EqualFold(m[1], "m") && !strings.EqualFold(m[1], "k") && !strings.EqualFold(m[1], "mm")) {
+	scaleAt := after
+	if m := oracleAfter.FindStringSubmatchIndex(after); m != nil && oracleCode.MatchString(" "+after[m[2]:m[3]]) { // a code then its scale: "2810,EUR million"
+		scaleAt = after[m[1]:]
+	}
+	if m := oracleScale.FindStringSubmatch(scaleAt); m != nil && (cur != "" || !strings.EqualFold(m[1], "m") && !strings.EqualFold(m[1], "k") && !strings.EqualFold(m[1], "mm")) {
 		l.Scale = map[string]string{"million": "1000000", "mm": "1000000", "m": "1000000", "billion": "1000000000", "bn": "1000000000", "thousand": "1000", "k": "1000"}[strings.ToLower(m[1])]
 		from := m[1]
 		l.ScaleFrom = &from
@@ -277,4 +285,94 @@ func oracleDecimal(text string) string {
 		return ","
 	}
 	return "none"
+}
+
+// JudgeSide is one figure of a judge_figures pair, as the stand-in reads it.
+type JudgeSide struct {
+	Ref, DocumentID, Value string
+	Entity, Metric         *string
+	Claim                  string
+	Quotes                 []string
+	Reading                struct {
+		Kind, Currency, Amount, Scale                      string
+		Party, Counterparty, Measures, Period, TypedEntity *string
+	}
+}
+
+// JudgeRequest is the figure judge's request.
+type JudgeRequest struct {
+	Pairs []struct {
+		ID, Kind string
+		A, B     JudgeSide
+	}
+	Aliases []analysis.Alias
+}
+
+// Judge answers judge_figures requests (fake.Respond) as a careful judge would on plain fixtures:
+// yes when both figures are one party's (the reader's party, else the analyst's entity, a name and
+// its aliases one party) and measure
+// the same thing (the reader's measures, else the metric) for the same period, no otherwise.
+// decide, when it returns an answer, overrides that for a pair (a test about the join's verdicts).
+func Judge(decide func(a, b JudgeSide) string) func(model.Request) (model.Reply, bool) {
+	return func(req model.Request) (model.Reply, bool) {
+		if req.Agent != "judge_figures" {
+			return model.Reply{}, false
+		}
+		var in JudgeRequest
+		if !RequestOf(req, &in) {
+			return model.Reply{}, false
+		}
+		verdicts := []map[string]string{}
+		for _, p := range in.Pairs {
+			ans := ""
+			if decide != nil {
+				ans = decide(p.A, p.B)
+			}
+			if ans == "" {
+				ans = "no"
+				if party(in.Aliases, or(p.A.Reading.Party, p.A.Entity)) == party(in.Aliases, or(p.B.Reading.Party, p.B.Entity)) && fold(or(p.A.Reading.Measures, p.A.Metric)) == fold(or(p.B.Reading.Measures, p.B.Metric)) &&
+					fold(deref(p.A.Reading.Period)) == fold(deref(p.B.Reading.Period)) {
+					ans = "yes"
+				}
+			}
+			verdicts = append(verdicts, map[string]string{"pair": p.ID, "sameQuantity": ans,
+				"reason": "A says \"" + first(p.A.Quotes) + "\"; B says \"" + first(p.B.Quotes) + "\"."})
+		}
+		data, _ := json.Marshal(map[string]any{"verdicts": verdicts})
+		return model.Reply{Text: string(data), Usage: model.Usage{InputTokens: 10, OutputTokens: 5, CostUSD: &Cost}}, true
+	}
+}
+
+// party is a name as the stand-in judges it: an alias as the name it is an alias of.
+func party(aliases []analysis.Alias, name string) string {
+	for _, a := range aliases {
+		for _, o := range a.Aliases {
+			if fold(o) == fold(name) {
+				return fold(a.Name)
+			}
+		}
+	}
+	return fold(name)
+}
+
+func or(a, b *string) string {
+	if a != nil && *a != "" {
+		return *a
+	}
+	return deref(b)
+}
+
+func first(qs []string) string {
+	if len(qs) == 0 {
+		return ""
+	}
+	return qs[0]
+}
+
+func fold(s string) string {
+	s = strings.Join(strings.Fields(strings.ToLower(s)), " ")
+	for _, a := range []string{"the ", "a ", "an "} {
+		s = strings.TrimPrefix(s, a)
+	}
+	return s
 }

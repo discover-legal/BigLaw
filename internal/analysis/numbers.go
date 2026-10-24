@@ -176,8 +176,8 @@ func deref(p *string) string {
 }
 
 // takes says what each fn accepts, and shows a call that works, for the error that names it.
-var takes = map[string]string{"sum": "two or more numbers in one unit", "diff": "two numbers in one unit", "ratio": "two numbers", "pct": "two numbers",
-	"product":  "two or more numbers, at most one of them not a percentage (35% times $100,000 is $35,000)",
+var takes = map[string]string{"sum": "two or more numbers in one unit", "diff": "two numbers in one unit", "ratio": "two numbers, in at most one currency", "pct": "two numbers",
+	"product":  "two or more numbers, at most one of them an amount of money (1,200,000 shares times $5.00 times 1.5 is $9,000,000; 35% times $100,000 is $35,000)",
 	"date_add": "a full date and a whole number of days (negative counts back)", "date_diff": "two full dates",
 	"business_days": "two full dates, or a full date and a whole number of days (negative counts back)"}
 
@@ -206,12 +206,14 @@ func Calc(findings []Finding, fn string, ops []Operand, holidays []string) (Work
 	}
 	days := len(xs) == 2 && xs[1].num != nil && xs[1].num.IsInt() && xs[1].num.Num().IsInt64() && abs(xs[1].num.Num().Int64()) <= 10000 &&
 		(xs[1].unit == "" || xs[1].unit == "days")
-	pcts := 0
+	var curs []string // the operands' currencies: a product has at most one amount of money, a ratio is in one currency (exact arithmetic, r7 M4)
 	for _, x := range xs {
-		pcts += map[bool]int{true: 1}[x.unit == "%"]
+		if IsCurrency(x.unit) {
+			curs = append(curs, x.unit)
+		}
 	}
-	if !map[string]bool{"sum": same && len(shape) >= 2 && !strings.Contains(shape, "d"), "diff": same && shape == "nn", "ratio": shape == "nn", "pct": shape == "nn",
-		"product":  len(shape) >= 2 && !strings.Contains(shape, "d") && pcts >= len(xs)-1,
+	if !map[string]bool{"sum": same && len(shape) >= 2 && !strings.Contains(shape, "d"), "diff": same && shape == "nn", "ratio": shape == "nn" && len(slices.Compact(slices.Clone(curs))) <= 1, "pct": shape == "nn",
+		"product":  len(shape) >= 2 && !strings.Contains(shape, "d") && len(curs) <= 1,
 		"date_add": shape == "dn" && days, "date_diff": shape == "dd", "business_days": shape == "dd" || shape == "dn" && days}[fn] {
 		if takes[fn] == "" {
 			return Worksheet{}, fmt.Errorf("unknown fn %q", fn)
@@ -245,6 +247,8 @@ func Calc(findings []Finding, fn string, ops []Operand, holidays []string) (Work
 		if fn == "pct" {
 			r.Mul(r, big.NewRat(100, 1))
 			w.Unit = "%"
+		} else if IsCurrency(xs[0].unit) && !IsCurrency(xs[1].unit) { // an amount per unit: $9,000,000 over 1,200,000 shares is $7.50
+			w.Unit = xs[0].unit
 		}
 		w.Result = Decimal(r)
 	case "product":
@@ -252,14 +256,20 @@ func Calc(findings []Finding, fn string, ops []Operand, holidays []string) (Work
 		for _, x := range xs {
 			r.Mul(r, map[bool]*big.Rat{true: new(big.Rat).Quo(x.num, big.NewRat(100, 1)), false: x.num}[x.unit == "%"])
 		}
-		w.Unit = "%"
+		var units []string // what the product is in: its currency, else the one unit of its other factors, else none
 		for _, x := range xs {
-			if x.unit != "%" {
-				w.Unit = x.unit
+			if x.unit != "%" && !slices.Contains(units, x.unit) {
+				units = append(units, x.unit)
 			}
 		}
-		if w.Unit == "%" { // percentages only: the product is a percentage again
+		switch {
+		case len(curs) == 1:
+			w.Unit = curs[0]
+		case len(units) == 0: // percentages only: the product is a percentage again
+			w.Unit = "%"
 			r.Mul(r, big.NewRat(100, 1))
+		case len(units) == 1:
+			w.Unit = units[0]
 		}
 		w.Result = Decimal(r)
 	case "date_add":

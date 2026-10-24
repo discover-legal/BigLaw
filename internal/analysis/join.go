@@ -5,19 +5,32 @@ package analysis
 
 import (
 	"cmp"
-	"regexp"
+	"context"
+	"fmt"
+	"math/big"
 	"slices"
 	"strings"
 	"unicode"
+
+	"github.com/discover-legal/BigLaw/internal/agent"
 )
 
-// Conflict is one cross-document discrepancy: one metric, values from at least two documents
-// whose value sets do not overlap.
+// The cross-document join (lab-r4 r7, owner decision: meaning comes from the agent): Go only
+// proposes candidate pairs, two figures the figure reader read clearly as one kind in one currency,
+// from two findings in two documents, whose values differ (Candidates); whether they are one quantity
+// stated two ways is a judge's verdict per pair (the engine's judge_figures: yes, no or unclear, with
+// a reason quoting the passages), and only "yes" asserts a conflict (Conflicts). No rule in Go
+// decides whose figure it is, what it measures, for which period or who else is named: the reader's
+// party, counterparty, measure and period labels are context the judge reads, never a key.
+
+// Conflict is one cross-document discrepancy: two figures a judge read as one quantity, stated
+// differently in two documents.
 type Conflict struct {
 	Entity string        `json:"entity"`
 	Metric string        `json:"metric"`
 	Kind   string        `json:"kind"` // numeric or date
 	Values []ConflictVal `json:"values"`
+	Reason string        `json:"reason"` // the judge's, quoting the passages
 }
 
 type ConflictVal struct {
@@ -27,184 +40,207 @@ type ConflictVal struct {
 	FID        string `json:"fid"`
 }
 
-// Alias names one party and the other names the record uses for it (the lead supplies these).
+// Alias names one party and the other names the record uses for it (the lead supplies these): context
+// the judge reads.
 type Alias struct {
 	Name    string   `json:"name"`
 	Aliases []string `json:"aliases"`
 }
 
-const maxValuesPerMetric = 6 // a longer column under one label is an enumeration, not a conflict
+// MaxCandidates bounds the pairs one join puts to the judge; past it, the pairs left out are counted
+// (a Limitations line says how many).
+const MaxCandidates = 120
 
-type entry struct {
-	v      Value
-	fid    string
-	class  Class
-	canon  string
-	date   Date
-	doc    string
-	party  string // the alias-unified party the figure reader read its figure as belonging to
-	entity string // the alias-unified entity the extractor typed ("" when none)
-	other  string // the figure's other party: the reader's counterparty, else a typed entity it calls another party
-	unk    string // the typed entity when the reader did not say what it is to the figure
+// Side is one figure of a candidate pair: its value, where it is stated and how it was read.
+type Side struct {
+	Ref        string   `json:"ref"` // "F3.v1"
+	FID        string   `json:"fid"`
+	DocumentID string   `json:"documentId"`
+	Value      string   `json:"value"`
+	Canon      string   `json:"canon"`
+	Entity     string   `json:"entity"`
+	Metric     string   `json:"metric"`
+	Claim      string   `json:"claim"`
+	Quotes     []string `json:"quotes"`
+	Fig        Reading  `json:"reading"`
 }
 
-// sets is a union-find over names.
-type sets map[string]string
+// Candidate is one pair the judge decides.
+type Candidate struct {
+	ID   string `json:"id"`   // "F3.v1|F9.v2"
+	Kind string `json:"kind"` // numeric or date
+	A, B Side
+}
 
-func (s sets) find(x string) string {
-	for s[x] != "" && s[x] != x {
-		x = s[x]
+// Verdict is the judge's answer for one pair.
+type Verdict struct {
+	Pair         string `json:"pair"`
+	SameQuantity string `json:"sameQuantity"` // yes, no or unclear
+	Reason       string `json:"reason"`
+}
+
+// Judge decides candidate pairs (the engine's judge_figures, out of the call's grant); a pair it
+// could not judge has no verdict.
+type Judge interface {
+	Judge(ctx context.Context, c agent.Call, cands []Candidate) (map[string]Verdict, agent.Usage, error)
+}
+
+// Candidates are the pairs of verified findings' values that could be one quantity stated two ways:
+// both read clearly (Canon: the reader's kind, currency and exact amount; a date as written, its
+// reading not unclear), of one kind and currency, from two findings in two documents, their values
+// different (a date: not compatible at its precision). Two values in two documents are asked once,
+// however many findings repeat them. They come in a fixed order (the reader's measures alike first,
+// then the closest values, then by ref) and at most MaxCandidates; dropped is how many more there were. Nothing else is filtered: whether a pair is one quantity is the judge's.
+func Candidates(findings []Finding) (cands []Candidate, dropped int) {
+	var sides []Side
+	var dates []Date
+	for _, f := range findings {
+		if !f.Verified {
+			continue
+		}
+		var qs []string
+		for _, q := range f.Quotes {
+			qs = append(qs, q.Quote)
+		}
+		for j, v := range f.Values {
+			_, canon, d, ok := Canon(v)
+			if !ok || v.Fig == nil || v.Fig.Unclear || v.Fig.Kind == KindOther {
+				continue
+			}
+			sides = append(sides, Side{Ref: fmt.Sprintf("%s.v%d", f.FID, j+1), FID: f.FID, DocumentID: docOf(f, v.Value), Value: v.Value, Canon: canon,
+				Entity: v.Entity, Metric: v.Metric, Claim: f.Claim, Quotes: qs, Fig: *v.Fig})
+			dates = append(dates, d)
+		}
 	}
-	return x
-}
-
-func (s sets) union(a, b string) { s[s.find(a)] = s.find(b) }
-
-// absolute is a period as the reader must state one to compare it: with its year ("FY2023",
-// "2024-Q2", "2024-01-01/2024-03-31"); "the second quarter" is no period two figures can share.
-var absolute = regexp.MustCompile(`\b(?:19|20)\d\d\b`)
-
-// periodOf is a figure's period as the join compares it (lab-r4 r5 L2, r6 L2): "none" when the
-// reader says it is for no period (a price, a deposit), the folded period when it states its year;
-// known is false otherwise (no period given, or one with no year): an unknown period never matches
-// another unknown one, so such a figure is never part of a conflict.
-func periodOf(v Value) (period string, known bool) {
-	if v.Fig == nil {
-		return "", false
+	type scored struct {
+		c          Candidate
+		same, dist *big.Rat
+		key        [4]string
 	}
-	p := fold(v.Fig.Period)
-	if p == "none" || absolute.MatchString(p) {
-		return p, true
+	var all []scored
+	for i, a := range sides {
+		for k := i + 1; k < len(sides); k++ {
+			b := sides[k]
+			ka, _, _ := strings.Cut(a.Canon, ":")
+			kb, _, _ := strings.Cut(b.Canon, ":")
+			if ka != kb || a.FID == b.FID || a.DocumentID == b.DocumentID || a.DocumentID == "" || b.DocumentID == "" || a.Canon == b.Canon {
+				continue
+			}
+			kind, dist := "numeric", big.NewRat(0, 1)
+			if ka == "date" {
+				if dates[i].Compatible(dates[k]) {
+					continue
+				}
+				kind = "date"
+				dist = big.NewRat(abs(int64(dates[i].time().Sub(dates[k].time()).Hours()/24)), 1)
+			} else if _, x, okx := CanonAmount(a.Canon); okx {
+				_, y, _ := CanonAmount(b.Canon)
+				hi := new(big.Rat).Abs(x)
+				if new(big.Rat).Abs(y).Cmp(hi) > 0 {
+					hi = new(big.Rat).Abs(y)
+				}
+				if hi.Sign() > 0 {
+					dist = new(big.Rat).Quo(new(big.Rat).Abs(new(big.Rat).Sub(x, y)), hi)
+				}
+			}
+			same := big.NewRat(1, 1)
+			if fold(a.Fig.Measures) != "" && fold(a.Fig.Measures) == fold(b.Fig.Measures) { // an order, never a filter
+				same = big.NewRat(0, 1)
+			}
+			x, y := a, b
+			if y.Ref < x.Ref {
+				x, y = y, x
+			}
+			key := [4]string{x.Canon, x.DocumentID, y.Canon, y.DocumentID}
+			if x.Canon > y.Canon || x.Canon == y.Canon && x.DocumentID > y.DocumentID {
+				key = [4]string{y.Canon, y.DocumentID, x.Canon, x.DocumentID}
+			}
+			all = append(all, scored{Candidate{ID: x.Ref + "|" + y.Ref, Kind: kind, A: x, B: y}, same, dist, key})
+		}
 	}
-	return "", false
+	slices.SortStableFunc(all, func(p, q scored) int {
+		return cmp.Or(p.same.Cmp(q.same), p.dist.Cmp(q.dist), strings.Compare(p.c.ID, q.c.ID))
+	})
+	asked := map[[4]string]bool{} // one question per two values in two documents, however many findings repeat them
+	for _, s := range all {
+		if asked[s.key] {
+			continue
+		}
+		asked[s.key] = true
+		if len(cands) == MaxCandidates {
+			dropped++
+			continue
+		}
+		cands = append(cands, s.c)
+	}
+	return cands, dropped
 }
 
-// oneQuantity reports whether two figures of one party, measure and period can be one quantity by
-// who else is named (lab-r4 r5 M4, r6 M1): their typed entities agree (or one has none), their other
-// parties agree (or one has none), and one's other party is never contradicted by the other's typed
-// entity the reader said nothing about. Two employees under one payer, two tenants of one landlord,
-// a payer's and a payee's figures are two quantities; one payee's compensation typed once under the
-// payee and once under its payer is one.
-func oneQuantity(a, b entry) bool {
-	agree := func(x, y string) bool { return x == y || x == "" || y == "" }
-	return agree(a.entity, b.entity) && agree(a.other, b.other) && (a.other == "" || agree(a.other, b.unk)) && (b.other == "" || agree(b.other, a.unk))
+// CheckVerdicts keeps the judge's verdicts for pairs it was given: one for an id it was not given is
+// rejected (a note), a second for one pair makes it unclear, an answer other than yes, no or unclear
+// is unclear.
+func CheckVerdicts(cands []Candidate, raw []Verdict) (map[string]Verdict, []string) {
+	out := map[string]Verdict{}
+	var notes []string
+	for _, v := range raw {
+		if !slices.ContainsFunc(cands, func(c Candidate) bool { return c.ID == v.Pair }) {
+			notes = append(notes, fmt.Sprintf("a verdict for %q was rejected: no such pair was given", v.Pair))
+			continue
+		}
+		if !slices.Contains([]string{"yes", "no", "unclear"}, v.SameQuantity) {
+			v.SameQuantity = "unclear"
+		}
+		if _, twice := out[v.Pair]; twice {
+			v.SameQuantity, v.Reason = "unclear", "judged twice"
+		}
+		out[v.Pair] = v
+	}
+	return out, notes
 }
 
-// fold is a reader's label as the join compares it: lower case, words only, no leading article.
+// Conflicts are the candidates the judge said are one quantity ("yes"), each with its reason; a pair
+// judged no, unclear or not at all asserts nothing.
+func Conflicts(cands []Candidate, verdicts map[string]Verdict) []Conflict {
+	var out []Conflict
+	for _, c := range cands {
+		v, ok := verdicts[c.ID]
+		if !ok || v.SameQuantity != "yes" {
+			continue
+		}
+		out = append(out, Conflict{Entity: cmp.Or(c.A.Entity, c.B.Entity, c.A.Fig.Party, c.B.Fig.Party), Metric: cmp.Or(c.A.Metric, c.B.Metric, c.A.Fig.Measures, c.B.Fig.Measures),
+			Kind: c.Kind, Values: []ConflictVal{{c.A.Value, c.A.Canon, c.A.DocumentID, c.A.FID}, {c.B.Value, c.B.Canon, c.B.DocumentID, c.B.FID}}, Reason: v.Reason})
+	}
+	return out
+}
+
+// Join is Candidates judged by j (nil: none judged, so no conflict is asserted): the conflicts, the
+// pairs judged unclear (a LOW note each) and the pairs a cap or the judge left out.
+func Join(ctx context.Context, c agent.Call, findings []Finding, j Judge) (conflicts []Conflict, unclear []Candidate, unjudged int, u agent.Usage, err error) {
+	cands, dropped := Candidates(findings)
+	verdicts := map[string]Verdict{}
+	if j != nil && len(cands) > 0 {
+		if verdicts, u, err = j.Judge(ctx, c, cands); err != nil {
+			return nil, nil, 0, u, err
+		}
+	}
+	for _, x := range cands {
+		switch v, ok := verdicts[x.ID]; {
+		case !ok:
+			unjudged++
+		case v.SameQuantity == "unclear":
+			unclear = append(unclear, x)
+		}
+	}
+	return Conflicts(cands, verdicts), unclear, unjudged + dropped, u, nil
+}
+
+// fold is a reader's label as candidates are ordered by it: lower case, words only, no leading article.
 func fold(s string) string {
 	s = strings.Join(strings.FieldsFunc(strings.ToLower(s), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '%' }), " ")
 	for _, a := range []string{"the ", "a ", "an "} {
 		s = strings.TrimPrefix(s, a)
 	}
 	return s
-}
-
-// Join finds the discrepancies among verified findings (v1's cross-document join, model-free). What a
-// figure is, whose, of what and for when are the figure reader's labels (Value.Fig: its kind,
-// currency and exact amount, scale applied, in Canon; its party unified by the lead's aliases; what it
-// measures and the period it is for, lab-r4 r5 L2): two figures are one quantity only when the
-// reader read both as one kind of one party's same measure for the same period, and the extractor's
-// typed entities do not name two others (r5 M4: a payer read as the party of two employees'
-// salaries), unless the reader says a typed entity is the party itself, or no party at all ("Email",
-// a table's title); a figure whose typed entity the reader says is another party joins nothing. A figure with no reading, an unclear one, or no party or measure is never part of a
-// conflict: no word test in Go decides whose figure it is or what it measures. A conflict needs two
-// documents whose value sets are disjoint, so a list restated in both is not one. Durations and
-// identifiers (kind other) are never compared, and a quarantined finding never joins.
-func Join(findings []Finding, aliases []Alias) []Conflict {
-	key := func(s string) string { return strings.TrimPrefix(norm(s), "the ") }
-	parties := sets{}
-	for _, a := range aliases {
-		for _, o := range a.Aliases {
-			if key(a.Name) != "" && key(o) != "" {
-				parties.union(key(a.Name), key(o))
-			}
-		}
-	}
-	var es []entry
-	groups := map[string][]int{}
-	var order []string
-	for _, f := range findings {
-		for _, v := range f.Values {
-			class, canon, d, ok := Canon(v)
-			period, known := periodOf(v)
-			if !ok || !f.Verified || v.Fig == nil || key(v.Fig.Party) == "" || fold(v.Fig.Measures) == "" || !known { // no reading, party, measure or known period: no conflict is asserted on it
-				continue
-			}
-			e := entry{v, f.FID, class, canon, d, docOf(f, v.Value), parties.find(key(v.Fig.Party)), "", "", ""}
-			if key(v.Fig.Counterparty) != "" {
-				e.other = parties.find(key(v.Fig.Counterparty))
-			}
-			switch {
-			case v.Fig.TypedEntity == "other" && key(v.Entity) != "": // another party than the figure's: its counterparty (a payer), unless the reader named one
-				e.other = cmp.Or(e.other, parties.find(key(v.Entity)))
-			case v.Fig.TypedEntity == "party": // the reader says the typed entity names its party
-				e.entity = e.party
-			case key(v.Entity) != "" && v.Fig.TypedEntity == "": // the typed entity stands beside the reader's party
-				e.entity = parties.find(key(v.Entity))
-				e.unk = e.entity
-			}
-			k := string(class) + "|" + e.party + "|" + fold(v.Fig.Measures) + "|" + period
-			if groups[k] == nil {
-				order = append(order, k)
-			}
-			groups[k] = append(groups[k], len(es))
-			es = append(es, e)
-		}
-	}
-	var out []Conflict
-	for _, k := range order {
-		idx := groups[k]
-		kind, differ := "numeric", func(a, b entry) bool { return a.canon != b.canon }
-		if es[idx[0]].class == "Date" {
-			kind, differ = "date", func(a, b entry) bool { return !a.date.Compatible(b.date) }
-		}
-		if c, ok := conflict(es, idx, kind, func(a, b entry) bool { return oneQuantity(a, b) && differ(a, b) }); ok {
-			out = append(out, c)
-		}
-	}
-	return out
-}
-
-// conflict applies the rule to one group: 2–6 distinct values from ≥ 2 documents, and a pair of
-// documents with disjoint value sets holding a pair of values that differ.
-func conflict(es []entry, idx []int, kind string, differ func(a, b entry) bool) (Conflict, bool) {
-	perDoc := map[string]map[string]bool{}
-	var docs, canons []string
-	for _, i := range idx {
-		e := es[i]
-		if perDoc[e.doc] == nil {
-			perDoc[e.doc] = map[string]bool{}
-			docs = append(docs, e.doc)
-		}
-		perDoc[e.doc][e.canon] = true
-		if !slices.Contains(canons, e.canon) {
-			canons = append(canons, e.canon)
-		}
-	}
-	if len(docs) < 2 || len(canons) < 2 || len(canons) > maxValuesPerMetric {
-		return Conflict{}, false
-	}
-	slices.Sort(docs)
-	for x := range docs {
-		for y := x + 1; y < len(docs); y++ {
-			disjoint := true
-			for c := range perDoc[docs[x]] {
-				disjoint = disjoint && !perDoc[docs[y]][c]
-			}
-			for _, i := range idx {
-				for _, j := range idx {
-					if a, b := es[i], es[j]; disjoint && a.doc == docs[x] && b.doc == docs[y] && differ(a, b) {
-						if j < i { // in the findings' order, whatever the documents' ids
-							a, b = b, a
-						}
-						return Conflict{cmp.Or(a.v.Entity, b.v.Entity), cmp.Or(a.v.Metric, b.v.Metric), kind,
-							[]ConflictVal{{a.v.Value, a.canon, a.doc, a.fid}, {b.v.Value, b.canon, b.doc, b.fid}}}, true
-					}
-				}
-			}
-		}
-	}
-	return Conflict{}, false
 }
 
 // docOf is the document of the quote that holds the value (else the finding's first quote).

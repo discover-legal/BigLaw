@@ -5,9 +5,13 @@ package analysis
 
 import (
 	"cmp"
+	"context"
 	"math/big"
 	"regexp"
+	"slices"
 	"strings"
+
+	"github.com/discover-legal/BigLaw/internal/agent"
 )
 
 // What a number means is the figure reader's (the engine's read_figures); in these tests a typed
@@ -129,20 +133,49 @@ func read(fs []Finding) []Finding {
 	return out
 }
 
-// joinRead is Join over fs with the stand-in's readings.
-func joinRead(fs []Finding, aliases []Alias) []Conflict { return Join(read(fs), aliases) }
+// scripted is a judge whose verdicts a test gives: yes for the pairs of values it lists (by their
+// text, either order), answer for every other pair it is asked about; calls counts its calls.
+type scripted struct {
+	yes    [][2]string
+	answer string
+	calls  *int
+}
+
+func (s scripted) Judge(_ context.Context, _ agent.Call, cands []Candidate) (map[string]Verdict, agent.Usage, error) {
+	if s.calls != nil {
+		*s.calls++
+	}
+	var raw []Verdict
+	for _, c := range cands {
+		v := Verdict{Pair: c.ID, SameQuantity: cmp.Or(s.answer, "no"), Reason: "scripted"}
+		if slices.ContainsFunc(s.yes, func(p [2]string) bool {
+			return p == [2]string{c.A.Value, c.B.Value} || p == [2]string{c.B.Value, c.A.Value}
+		}) {
+			v.SameQuantity = "yes"
+		}
+		raw = append(raw, v)
+	}
+	out, _ := CheckVerdicts(cands, raw)
+	return out, agent.Usage{}, nil
+}
+
+// judged is the join over fs (the stand-in's readings) with a judge saying yes to the pairs listed
+// and no to every other.
+func judged(fs []Finding, yes ...[2]string) []Conflict {
+	cs, _, _, _, _ := Join(context.Background(), agent.Call{}, read(fs), scripted{yes: yes})
+	return cs
+}
+
+// seen reports whether the join puts the pair of values a, b to the judge.
+func seen(fs []Finding, a, b string) bool {
+	cands, _ := Candidates(read(fs))
+	return slices.ContainsFunc(cands, func(c Candidate) bool { return c.A.Value == a && c.B.Value == b || c.A.Value == b && c.B.Value == a })
+}
 
 // fig is a given clear reading: kind, currency ("" when not money), exact amount, party (what it
 // measures: the value's metric, as Value.Fig is given in fnd).
 func fig(kind, cur, amount, party string) *Reading {
 	return &Reading{Kind: kind, Currency: cur, Amount: amount, Party: party, Period: "none"}
-}
-
-// figOf is fig with what it measures and the period it is for.
-func figOf(kind, cur, amount, party, measures, period string) *Reading {
-	r := fig(kind, cur, amount, party)
-	r.Measures, r.Period = measures, period
-	return r
 }
 
 // relabel is a test's right label for a value's reading where the stand-in's would be wrong: whose

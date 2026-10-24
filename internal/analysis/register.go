@@ -137,11 +137,26 @@ func Tools(src Source) []agent.Tool {
 			}
 			// the join runs over every verified finding, so a conflict between one issue's finding and
 			// another's is found when either is named (bench5 SEC: per-issue fids split each pair); fids
-			// only choose which conflicts to report: those holding a named finding (null or []: all)
-			conflicts := []Conflict{}
-			for _, x := range Join(fs, in.Aliases) {
-				if len(in.FIDs) == 0 || slices.ContainsFunc(x.Values, func(v ConflictVal) bool { return slices.Contains(in.FIDs, v.FID) }) {
+			// only choose which conflicts to report: those holding a named finding (null or []: all).
+			// Go proposes the candidate pairs; the source's judge (the engine's judge_figures) decides
+			// them, and only its "yes" is a conflict (lab-r4 r7).
+			j, _ := src.(Judge)
+			all, unclearAll, unjudged, u, err := Join(ctx, c, fs, j)
+			if err != nil {
+				return nil, u, err
+			}
+			named := func(vs ...string) bool {
+				return len(in.FIDs) == 0 || slices.ContainsFunc(vs, func(fid string) bool { return slices.Contains(in.FIDs, fid) })
+			}
+			conflicts, unclear := []Conflict{}, []map[string]string{}
+			for _, x := range all {
+				if named(x.Values[0].FID, x.Values[1].FID) {
 					conflicts = append(conflicts, x)
+				}
+			}
+			for _, x := range unclearAll {
+				if named(x.A.FID, x.B.FID) {
+					unclear = append(unclear, map[string]string{"a": x.A.Ref + " " + x.A.Value, "b": x.B.Ref + " " + x.B.Value})
 				}
 			}
 			unread := []string{}
@@ -151,8 +166,8 @@ func Tools(src Source) []agent.Tool {
 				}
 			}
 			pg := agent.NewPage() // one page (truncated: name fewer fids)
-			return map[string]any{"conflicts": agent.Take(pg, conflicts), "unreadDocuments": agent.Take(pg, append([]string{}, unread...)),
-				"truncated": pg.Truncated}, agent.Usage{}, nil
+			return map[string]any{"conflicts": agent.Take(pg, conflicts), "unclear": agent.Take(pg, unclear), "notJudged": unjudged,
+				"unreadDocuments": agent.Take(pg, append([]string{}, unread...)), "truncated": pg.Truncated}, u, nil
 		}},
 	}
 }

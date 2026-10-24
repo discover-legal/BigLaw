@@ -49,32 +49,13 @@ var bench5Labels = func() map[string]relabel {
 		"F96/April 22, 2024": {whitmore, instr, "", "party"}, "F805/15 Apr 2024": {whitmore, instr, "", "none"}, "F934/15 Apr 2024": {whitmore, instr, "", "party"}}
 }()
 
-// TestJoinPairsBench5Conflicts (bench5 SEC, C-032 C-035 C-041: 4,217 vs 4,312 trades, $92,600 vs
-// $103,800, April 22 vs April 15 were never paired although each value was in the ledger): over the
-// run's own ledger rows, with the reader's labels of whose figure each is and what it measures, the
-// join pairs all three; a part against the whole, and two events, it does not.
-func TestJoinPairsBench5Conflicts(t *testing.T) {
-	fs := readAs(bench5Findings(t), bench5Labels)
-	cs := Join(fs, nil)
-	for _, p := range [][2]string{{"4,217", "4,312"}, {"$92,600", "$103,800.00"}, {"April 22, 2024", "15 Apr 2024"}} {
-		if !pairOf(cs, p[0], p[1]) {
-			t.Errorf("%s vs %s not paired: %+v", p[0], p[1], cs)
-		}
-	}
-	for _, p := range [][2]string{{"$47,600", "$103,800.00"}, {"March 11, 2024", "15 Apr 2024"}} { // a part against the whole; two events
-		if pairOf(cs, p[0], p[1]) {
-			t.Errorf("%s vs %s paired: %+v", p[0], p[1], cs)
-		}
-	}
-}
-
 // TestJoinDiscrepanciesFidsDoNotScopeTheJoin (bench5: per-issue fids split each pair across issues):
 // naming one side's findings still finds the conflict with the other side's, and only conflicts
 // holding a named finding are reported.
 func TestJoinDiscrepanciesFidsDoNotScopeTheJoin(t *testing.T) {
 	fs := readAs(bench5Findings(t), bench5Labels)
 	rt := &agent.Runtime{Reg: agent.NewRegistry()}
-	for _, tool := range Tools(memSource(fs)) {
+	for _, tool := range Tools(judgingSource{memSource(fs), scripted{yes: [][2]string{{"4,217", "4,312"}}}}) {
 		if err := rt.Reg.Register(tool); err != nil {
 			t.Fatal(err)
 		}
@@ -95,5 +76,11 @@ func TestJoinDiscrepanciesFidsDoNotScopeTheJoin(t *testing.T) {
 }
 
 type memSource []Finding
+
+// judgingSource is a memSource whose join a scripted judge decides.
+type judgingSource struct {
+	memSource
+	scripted
+}
 
 func (m memSource) Findings(context.Context, string) ([]Finding, error) { return m, nil }

@@ -22,6 +22,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 
 	"github.com/discover-legal/BigLaw/internal/analysis"
 	"github.com/discover-legal/BigLaw/internal/api"
@@ -110,7 +111,7 @@ func batches(cs []model.ToolCall) (out []model.Reply) {
 }
 
 var critics = map[string][]model.Reply{"prosecute": {reply(m{"verdicts": []m{}})}, "reproduce": {reply(m{"answers": []m{}})},
-	"audit_gaps": {reply(m{"gaps": []m{}})}, "meta": {{Text: "Every planted fact was drafted from a verified quote."}}}
+	"audit_gaps": {reply(m{"gaps": []m{}})}, "meta": {{Text: "Every planted fact was drafted from a verified quote."}, {Text: "Every planted fact was drafted from a verified quote."}}}
 
 // oracle scripts a perfect model over a matter: one plan issue, one verified finding (the answer
 // key's evidence, verbatim) and one drafted section (its model answer) per planted fact; every
@@ -137,9 +138,9 @@ func oracle(mt matter, ids map[string]string) map[string][]model.Reply {
 		extracts = append(extracts, call("extract_facts", m{"question": it.Question, "documentId": nil, "sectionId": nil, "through": nil, "offset": nil, "query": it.Question, "issueId": iid}))
 		sc["extract_facts"] = append(sc["extract_facts"], reply(m{"findings": []m{{"issueId": nil, "claim": it.ModelAnswer, "quotes": quotes, "values": []m{}, "entities": []m{},
 			"relations": []m{}, "confidence": 1}}, "gaps": []string{}}))
-		extra, calcs := traceable(mt, it.ModelAnswer, it.Evidence)
-		for _, q := range extra { // the documents' lines that state the answer's other figures: cited too
-			for _, d := range names(mt) {
+		extra, calcs, also := traceable(mt, i)
+		for _, q := range extra { // the item's documents' lines that state the answer's other figures: cited too
+			for _, d := range append(append([]string{}, it.Documents...), names(mt)...) {
 				if strings.Contains(mt.Docs[d], q) {
 					quotes = append(quotes, m{"documentId": ids[d], "quote": q, "locator": nil})
 					break
@@ -149,16 +150,20 @@ func oracle(mt matter, ids map[string]string) map[string][]model.Reply {
 		sc["extract_facts"][len(sc["extract_facts"])-1] = reply(m{"findings": []m{{"issueId": nil, "claim": it.ModelAnswer, "quotes": quotes, "values": []m{}, "entities": []m{},
 			"relations": []m{}, "confidence": 1}}, "gaps": []string{}})
 		for _, c := range calcs {
-			sheets = append(sheets, call("numbers", m{"op": "calc", "fn": c.fn, "operands": c.ops, "holidays": nil, "fids": nil, "salientTop": nil}))
+			sheets = append(sheets, call("numbers", m{"op": "calc", "fn": c.fn, "operands": c.ops, "holidays": c.holidays, "fids": nil, "salientTop": nil}))
 		}
-		drafts = append(drafts, call("draft_section", m{"issueId": iid, "fids": []string{fid}, "revise": nil}))
-		sc["draft_section"] = append(sc["draft_section"], reply(m{"markdown": it.ModelAnswer + " [" + fid + "]", "summary": "s"}))
+		fids, cites := []string{fid}, " ["+fid+"]"
+		for _, k := range also { // another item's finding that states one of its figures (a cross-issue citation)
+			fids, cites = append(fids, fmt.Sprintf("F%d", k+1)), cites+fmt.Sprintf(" [F%d]", k+1)
+		}
+		drafts = append(drafts, call("draft_section", m{"issueId": iid, "fids": fids, "revise": nil}))
+		sc["draft_section"] = append(sc["draft_section"], reply(m{"markdown": it.ModelAnswer + cites, "summary": "s"}))
 	}
 	plan := call("ledger", m{"op": "plan", "issues": issues, "issueId": nil, "fid": nil, "detail": nil, "criticId": nil, "resolution": nil, "note": nil, "entity": nil, "offset": nil})
 	lead := []model.Reply{{ToolCalls: []model.ToolCall{plan}}}
 	lead = append(append(append(lead, batches(extracts)...), batches(sheets)...), batches(drafts)...)
-	submit := model.Reply{ToolCalls: []model.ToolCall{call("finish", m{"op": "submit", "limitations": nil})}} // a figure no cited span computes is flagged, then disclosed (maxLintRounds)
-	sc["lead"] = append(lead, model.Reply{ToolCalls: []model.ToolCall{call("committee", m{})}}, submit, submit, submit)
+	submit := model.Reply{ToolCalls: []model.ToolCall{call("finish", m{"op": "submit", "limitations": nil})}}                   // a figure no cited span computes is flagged, then disclosed (maxLintRounds)
+	sc["lead"] = append(lead, model.Reply{ToolCalls: []model.ToolCall{call("committee", m{})}}, submit, submit, submit, submit) // the last after a lawyer decides gated findings
 	return sc
 }
 
@@ -237,8 +242,18 @@ func drive(t *testing.T, mt matter, scripts func(matter, map[string]string) map[
 			}
 		}
 	}
-	if v.Status == "awaiting_gate" && len(v.PendingGates) == 1 {
+	for range 50 { // the reviewing lawyer approves each gate (a finding gated for a lawyer, then the deliverable)
+		if v.Status != "awaiting_gate" || len(v.PendingGates) == 0 {
+			break
+		}
 		v, _ = e.Decide(ctx, task.ID, v.PendingGates[0].GateID, true, "")
+		for range 400 {
+			if v.Status != "queued" && v.Status != "running" {
+				break
+			}
+			time.Sleep(20 * time.Millisecond)
+			v, _ = e.Get(ctx, task.ID)
+		}
 	}
 	dir := t.TempDir()
 	os.MkdirAll(filepath.Join(dir, "output"), 0o755)
@@ -283,8 +298,15 @@ func score(t *testing.T, mt matter, dir string) scores {
 	return s
 }
 
-// TestProofRunsOracle (E1): the five matters, the oracle model, the Python scorer: 1.0, and every
-// citation verified.
+// unresolvedG8 pins E1's figure checks the oracle's memo is delivered with unresolved, per matter: a
+// ratchet that may only fall (lab-r4 r7 M4: 26 at the r7 review). What is left is what no tool or the
+// stand-in reader expresses: a date one year on (date_add counts days), a memo's bare "(2,810 + 310)"
+// the stand-in reads as counts beside the record's EUR millions, and a code section written without
+// its "Section" ("280G", "s.16600") the stand-in reads as a count.
+var unresolvedG8 = map[string]int{"msa-negotiation": 0, "merger-control": 2, "ma-diligence": 2, "litigation": 1, "ip-license": 0}
+
+// TestProofRunsOracle (E1): the five matters, the oracle model, the Python scorer: 1.0, every
+// citation verified, and no more unresolved figure checks than pinned.
 func TestProofRunsOracle(t *testing.T) {
 	for _, mt := range loadMatters(t) {
 		t.Run(mt.Slug, func(t *testing.T) {
@@ -292,6 +314,17 @@ func TestProofRunsOracle(t *testing.T) {
 			v, dir := drive(t, mt, oracle)
 			if v.Status != "complete" {
 				t.Fatalf("%s %s", v.Status, deref(v.Error))
+			}
+			var lines []string
+			for _, l := range strings.Split(deref(v.Output), "\n") {
+				if strings.Contains(l, "Delivered with an unresolved check") {
+					lines = append(lines, l)
+				}
+			}
+			if want, ok := unresolvedG8[mt.Slug]; !ok || len(lines) > want {
+				t.Errorf("%d unresolved figure checks, pinned at %d (a ratchet: fix the regression):\n%s", len(lines), want, strings.Join(lines, "\n"))
+			} else if len(lines) < want {
+				t.Logf("%d unresolved figure checks, below the pinned %d: lower the pin", len(lines), want)
 			}
 			s := score(t, mt, dir)
 			if s.Score != 1 || s.Grounding.CitationVerifiedRate == nil || *s.Grounding.CitationVerifiedRate != 1 {
@@ -432,118 +465,332 @@ func readAs(kind, text string) []analysis.Reading {
 	return out
 }
 
-// calc is one numbers call the oracle makes: fn over operands.
+// calc is one numbers call the oracle makes: fn over operands (holidays: a deadline's roll).
 type calc struct {
-	fn  string
-	ops []m
+	fn       string
+	ops      []m
+	holidays []string
 }
 
-// traceable is what a perfect drafter cites and computes so that every figure of answer traces (G8,
-// lab-r4 r6 M3): the document lines that state a figure the evidence does not (quoted too), and calcs
-// over cited figures only (literals as the cited text writes them; a date shifted by a count of days)
-// for a figure that is the sum, difference or percentage of cited ones or a date's deadline. A figure
-// it can neither cite nor compute stays untraced: the run flags it, then discloses it.
-func traceable(mt matter, answer string, evidence []string) (extra []string, calcs []calc) {
-	stated := strings.Join(evidence, "\n")
-	known := func() []analysis.Reading {
-		var out []analysis.Reading
-		for _, ev := range append(slices.Clone(evidence), extra...) {
-			out = append(out, readAs("quote", ev)...)
+// traceable is what a perfect drafter of item i cites and computes so that every figure of its answer
+// traces (G8, lab-r4 r6 M3, r7): another item's finding whose evidence states a figure as the memo
+// reads it (also: a cross-issue citation; the same kind, currency and amount, or a number of another
+// kind as written), else the document line that does and shares the memo's words around it (extra:
+// cited too), and calcs over cited figures only (literals with their units: the reading's currency,
+// "%", or none): a sum, difference, product of up to three (at most one of them money) or percentage
+// of cited figures (one of them maybe from a document line, cited too), the days between two cited
+// dates, or a cited date shifted by a period the evidence states (rolled past a cited holiday). A
+// figure it can neither cite nor compute stays untraced: the run flags it, then discloses it.
+func traceable(mt matter, i int) (extra []string, calcs []calc, also []int) {
+	it := mt.Items[i]
+	answer := analysis.MaskLocators(it.ModelAnswer)
+	type src struct {
+		r    analysis.Reading
+		item int    // the item whose evidence states it (-1: a document line)
+		line string // the line, for -1
+	}
+	var results []analysis.Reading
+	cite := func(k int) {
+		if k != i && k >= 0 && !slices.Contains(also, k) {
+			also = append(also, k)
+		}
+	}
+	pool := func() (out []src) { // the cited figures: the item's evidence and lines, then every other item's evidence
+		for _, ev := range append(slices.Clone(it.Evidence), extra...) {
+			for _, r := range readAs("quote", ev) {
+				out = append(out, src{r, i, ""})
+			}
+		}
+		for k, x := range mt.Items {
+			for _, ev := range x.Evidence {
+				for _, r := range readAs("quote", ev) {
+					out = append(out, src{r, k, ""})
+				}
+			}
 		}
 		return out
 	}
-	traced := func(r analysis.Reading, ks []analysis.Reading) bool {
+	states := func(r, k analysis.Reading) bool { // k states r as the memo reads it
 		if !r.Clear() {
-			_, ss := analysis.Literal(stated + "\n" + strings.Join(extra, "\n"))
-			return slices.ContainsFunc(ss, func(s analysis.Span) bool { return s.Text == r.Text })
+			return !k.Clear() && k.Kind == r.Kind && k.Text == r.Text
 		}
-		return slices.ContainsFunc(ks, func(k analysis.Reading) bool {
-			same, soft := analysis.SameFigure(r, k)
-			return same || soft && k.Clear() && k.Scale == "" && r.Scale != ""
-		})
+		same, soft := analysis.SameFigure(r, k)
+		return same || soft && k.Clear() && (k.Scale == "") != (r.Scale == "") // limited and disclosed, not untraced
 	}
-	lines := func(f func(string) bool) string { // the shortest document line that does
-		best := ""
-		for _, d := range names(mt) {
-			for _, line := range strings.Split(mt.Docs[d], "\n") {
-				if line = strings.TrimSpace(line); line != "" && len(line) < 1500 && (best == "" || len(line) < len(best)) && f(line) {
-					best = line
+	context := func(r analysis.Reading) []string { // the memo's words around a figure
+		lo, hi := max(0, r.Start-40), min(len(answer), r.End+40)
+		var ws []string
+		for _, w := range strings.FieldsFunc(strings.ToLower(answer[lo:hi]), func(c rune) bool { return !unicode.IsLetter(c) }) {
+			if len(w) > 3 && !slices.Contains(ws, w) {
+				ws = append(ws, w)
+			}
+		}
+		return ws
+	}
+	docLines := func() (out []string) { // the item's documents' lines first, then the others'
+		for _, d := range append(slices.Clone(it.Documents), names(mt)...) {
+			for _, l := range strings.Split(mt.Docs[d], "\n") {
+				if l = strings.TrimSpace(l); l != "" && len(l) < 1500 && !slices.Contains(out, l) {
+					out = append(out, l)
 				}
+			}
+		}
+		return out
+	}
+	line := func(ws []string, f func(string) bool) string { // the line that does and shares the most of the memo's words ws (at least one)
+		best, score := "", 0
+		for _, l := range docLines() {
+			n := 0
+			for _, w := range ws {
+				n += map[bool]int{true: 1}[strings.Contains(strings.ToLower(l), w)]
+			}
+			if n > score && f(l) {
+				best, score = l, n
 			}
 		}
 		return best
 	}
-	results := []analysis.Reading{}
-	for _, r := range readAs("memo", engine.MaskRefs(answer)) {
-		ks := known()
-		if traced(r, ks) || traced(r, results) {
+	lit := func(k analysis.Reading) m {
+		unit := any(nil)
+		switch k.Kind {
+		case analysis.KindMoney:
+			unit = k.Currency
+		case analysis.KindPercent:
+			unit = "%"
+		}
+		return m{"ref": nil, "literal": k.Amount, "unit": unit}
+	}
+	memo := readAs("memo", answer)
+	for _, r := range memo {
+		if r.Kind == analysis.KindDate || slices.ContainsFunc(results, func(k analysis.Reading) bool { return states(r, k) }) {
 			continue
 		}
-		if l := lines(func(line string) bool { // a line stating it as the memo reads it
-			return slices.ContainsFunc(readAs("quote", line), func(k analysis.Reading) bool {
-				return traced(r, []analysis.Reading{k}) && (r.Clear() || k.Text == r.Text)
-			})
-		}); l != "" && !slices.Contains(extra, l) {
+		if k := slices.IndexFunc(pool(), func(x src) bool { return states(r, x.r) }); k >= 0 {
+			cite(pool()[k].item)
+			continue
+		}
+		if l := line(context(r), func(l string) bool {
+			return slices.ContainsFunc(readAs("quote", l), func(k analysis.Reading) bool { return states(r, k) })
+		}); l != "" {
 			extra = append(extra, l)
 			continue
 		}
 		if !r.Clear() {
 			continue
 		}
-		lit := func(k analysis.Reading) m {
-			return m{"ref": nil, "literal": k.Text, "unit": map[bool]any{true: "%", false: nil}[k.Kind == analysis.KindPercent]}
+		var ks []analysis.Reading
+		from := map[int]int{} // the pool index of each operand
+		for _, x := range pool() {
+			ks = append(ks, x.r)
 		}
-		want := r.Rat()
-		var amounts []analysis.Reading
-		for _, k := range append(ks, results...) {
-			if k.Clear() && k.Scale == "" && len(analysis.PassageOf("x", k.Text).Spans) == 1 {
-				amounts = append(amounts, k)
-			}
-		}
-		found := false
-		for i, x := range amounts {
-			for j, y := range amounts {
-				if i == j || found {
-					continue
+		c, used, ok := compute(r, ks, results, lit)
+		if !ok { // operands from document lines too (cited with it)
+			all, of := slices.Clone(ks), map[int]string{}
+			for _, l := range docLines() {
+				for _, x := range readAs("quote", l) {
+					of[len(all)] = l
+					all = append(all, x)
 				}
-				a, b := x.Rat(), y.Rat()
-				switch {
-				case x.Kind == y.Kind && x.Kind != analysis.KindPercent && new(big.Rat).Add(a, b).Cmp(want) == 0 && i < j:
-					calcs, found = append(calcs, calc{"sum", []m{lit(x), lit(y)}}), true
-				case x.Kind == y.Kind && x.Kind != analysis.KindPercent && new(big.Rat).Sub(a, b).Cmp(want) == 0:
-					calcs, found = append(calcs, calc{"diff", []m{lit(x), lit(y)}}), true
-				case x.Kind == y.Kind && x.Kind == analysis.KindPercent && new(big.Rat).Add(a, b).Cmp(want) == 0 && i < j:
-					calcs, found = append(calcs, calc{"sum", []m{lit(x), lit(y)}}), true
-				case y.Kind == analysis.KindPercent && x.Kind != analysis.KindPercent && new(big.Rat).Mul(a, new(big.Rat).Quo(b, big.NewRat(100, 1))).Cmp(want) == 0:
-					calcs, found = append(calcs, calc{"product", []m{lit(x), lit(y)}}), true
+			}
+			if c, used, ok = compute(r, all, results, lit); ok {
+				for _, u := range used {
+					if l, from := of[u]; from && !slices.Contains(extra, l) {
+						extra = append(extra, l)
+					}
 				}
 			}
 		}
-		if found {
-			results = append(results, analysis.Reading{Kind: r.Kind, Currency: r.Currency, Amount: r.Amount, Text: r.Amount})
+		if ok {
+			for _, u := range used {
+				if u < len(ks) {
+					from[u] = pool()[u].item
+					cite(from[u])
+				}
+			}
+			calcs = append(calcs, c)
+			results = append(results, analysis.Reading{Kind: r.Kind, Currency: r.Currency, Amount: r.Amount, Text: r.Text})
 		}
 	}
-	dates, _ := analysis.Literal(answer)
-	cited, _ := analysis.Literal(stated)
-	for _, k := range dates {
+	cited := func() []analysis.Date { // the full dates the cited evidence states
+		evs := append(slices.Clone(it.Evidence), extra...)
+		for _, k := range also {
+			evs = append(evs, mt.Items[k].Evidence...)
+		}
+		ds, _ := analysis.Literal(strings.Join(evs, "\n"))
+		var out []analysis.Date
+		for _, k := range ds {
+			if d, _ := analysis.ParseDate(k); d.Day != 0 {
+				out = append(out, d)
+			}
+		}
+		return out
+	}
+	dates, _ := analysis.Literal(it.ModelAnswer)
+	var due []analysis.Date
+	for _, k := range dates { // a date another item's evidence or a line states, else a deadline (below)
 		d, _ := analysis.ParseDate(k)
-		if d.Day == 0 || slices.ContainsFunc(cited, func(c string) bool { x, _ := analysis.ParseDate(c); return x.Compatible(d) }) {
+		if d.Day == 0 || slices.ContainsFunc(cited(), func(x analysis.Date) bool { return x.Compatible(d) }) {
 			continue
 		}
-		if l := lines(func(line string) bool { // a line stating the date
-			ds, _ := analysis.Literal(line)
+		states := func(text string) bool {
+			ds, _ := analysis.Literal(text)
 			return slices.ContainsFunc(ds, func(c string) bool { x, _ := analysis.ParseDate(c); return x.Compatible(d) })
-		}); l != "" && !slices.Contains(extra, l) {
+		}
+		if k := slices.IndexFunc(mt.Items, func(x item) bool { return states(strings.Join(x.Evidence, "\n")) }); k >= 0 {
+			cite(k)
+			continue
+		}
+		if l := line(append(context(analysis.Reading{Start: len(answer) / 2, End: len(answer) / 2}), ""), states); l != "" { // "": a line that states it may share no word
 			extra = append(extra, l)
 			continue
 		}
-		for _, c := range cited { // a deadline: a cited date shifted by a count of days
-			if x, _ := analysis.ParseDate(c); x.Day != 0 {
-				n := int(time.Date(d.Year, time.Month(d.Month), d.Day, 0, 0, 0, 0, time.UTC).Sub(time.Date(x.Year, time.Month(x.Month), x.Day, 0, 0, 0, 0, time.UTC)).Hours() / 24)
-				calcs = append(calcs, calc{"date_add", []m{{"ref": nil, "literal": c, "unit": "date"}, {"ref": nil, "literal": strconv.Itoa(n), "unit": "days"}}})
-				break
+		due = append(due, d)
+	}
+	for _, r := range memo { // a number of days: the days between two cited dates
+		if r.Kind != analysis.KindOther || slices.ContainsFunc(results, func(k analysis.Reading) bool { return states(r, k) }) ||
+			slices.ContainsFunc(pool(), func(x src) bool { return states(r, x.r) }) {
+			continue
+		}
+		ds := cited()
+	pairs:
+		for a, x := range ds {
+			for _, y := range ds[a+1:] {
+				if n := analysis.DaysBetween(x, y); r.Rat() != nil && r.Rat().Cmp(big.NewRat(n, 1)) == 0 {
+					calcs = append(calcs, calc{fn: "date_diff", ops: []m{{"ref": nil, "literal": x.Key(), "unit": "date"}, {"ref": nil, "literal": y.Key(), "unit": "date"}}})
+					results = append(results, r)
+					break pairs
+				}
 			}
 		}
 	}
-	return extra, calcs
+	for _, d := range due {
+		var ks []analysis.Reading
+		for _, x := range pool() {
+			if x.item == i || slices.Contains(also, x.item) {
+				ks = append(ks, x.r)
+			}
+		}
+		if c, ok := deadline(d, cited(), ks); ok {
+			calcs = append(calcs, c)
+		}
+	}
+	return extra, calcs, also
+}
+
+// compute is a calc over clear cited amounts ks (and earlier results) whose result is r's amount, of
+// r's kind: a sum or difference of two of one kind, a product of two or three with at most one money
+// factor (a percentage as a fraction); used are the ks indexes of its operands (one past ks: a result).
+func compute(r analysis.Reading, ks, results []analysis.Reading, lit func(analysis.Reading) m) (calc, []int, bool) {
+	want := r.Rat()
+	type opnd struct {
+		k analysis.Reading
+		i int
+	}
+	var xs []opnd
+	for i, k := range append(slices.Clone(ks), results...) {
+		if k.Clear() && !slices.ContainsFunc(xs, func(x opnd) bool { return x.k.Kind == k.Kind && x.k.Currency == k.Currency && x.k.Amount == k.Amount }) {
+			xs = append(xs, opnd{k, i})
+		}
+	}
+	frac := func(k analysis.Reading) *big.Rat {
+		if k.Kind == analysis.KindPercent {
+			return new(big.Rat).Quo(k.Rat(), big.NewRat(100, 1))
+		}
+		return k.Rat()
+	}
+	kindOf := func(fs ...opnd) (string, string) { // a product's kind: its money factor's, else a count's, else a percentage
+		kind := analysis.KindPercent
+		for _, f := range fs {
+			if f.k.Kind == analysis.KindMoney {
+				return f.k.Kind, f.k.Currency
+			}
+			if f.k.Kind == analysis.KindCount {
+				kind = analysis.KindCount
+			}
+		}
+		return kind, ""
+	}
+	money := func(fs ...opnd) int {
+		n := 0
+		for _, f := range fs {
+			n += map[bool]int{true: 1}[f.k.Kind == analysis.KindMoney]
+		}
+		return n
+	}
+	idx := func(fs ...opnd) (out []int) {
+		for _, f := range fs {
+			out = append(out, f.i)
+		}
+		return out
+	}
+	for a, x := range xs {
+		for b, y := range xs {
+			if a == b || x.k.Kind != y.k.Kind || x.k.Currency != y.k.Currency || x.k.Kind != r.Kind || x.k.Currency != r.Currency {
+				continue
+			}
+			if a < b && new(big.Rat).Add(x.k.Rat(), y.k.Rat()).Cmp(want) == 0 {
+				return calc{fn: "sum", ops: []m{lit(x.k), lit(y.k)}}, idx(x, y), true
+			}
+			if new(big.Rat).Sub(x.k.Rat(), y.k.Rat()).Cmp(want) == 0 {
+				return calc{fn: "diff", ops: []m{lit(x.k), lit(y.k)}}, idx(x, y), true
+			}
+		}
+	}
+	target := map[bool]*big.Rat{true: frac(r), false: want}[r.Kind == analysis.KindPercent]
+	for a, x := range xs {
+		for b, y := range xs {
+			if a >= b || money(x, y) > 1 {
+				continue
+			}
+			if k, c := kindOf(x, y); k == r.Kind && c == r.Currency && new(big.Rat).Mul(frac(x.k), frac(y.k)).Cmp(target) == 0 {
+				return calc{fn: "product", ops: []m{lit(x.k), lit(y.k)}}, idx(x, y), true
+			}
+		}
+	}
+	if len(xs) <= 150 { // three factors (shares × price × multiple), over a small pool
+		for a, x := range xs {
+			for b := a + 1; b < len(xs); b++ {
+				for c := b + 1; c < len(xs); c++ {
+					y, z := xs[b], xs[c]
+					if money(x, y, z) > 1 {
+						continue
+					}
+					if k, cur := kindOf(x, y, z); k == r.Kind && cur == r.Currency && k != analysis.KindPercent && new(big.Rat).Mul(new(big.Rat).Mul(frac(x.k), frac(y.k)), frac(z.k)).Cmp(want) == 0 {
+						return calc{fn: "product", ops: []m{lit(x.k), lit(y.k), lit(z.k)}}, idx(x, y, z), true
+					}
+				}
+			}
+		}
+	}
+	return calc{}, nil, false
+}
+
+// deadline is a date_add from a cited date by a period the evidence states (a number it reads as
+// neither money, a count nor a percentage: "21 days"), forward or back, rolled past the cited dates
+// as holidays when the raw date is one of them; none when no cited date and period reach d.
+func deadline(d analysis.Date, dates []analysis.Date, ks []analysis.Reading) (calc, bool) {
+	var holidays []string
+	for _, x := range dates {
+		holidays = append(holidays, x.Key())
+	}
+	for _, x := range dates {
+		for _, k := range ks {
+			if k.Kind != analysis.KindOther || k.Unclear || k.Rat() == nil || !k.Rat().IsInt() {
+				continue
+			}
+			n := new(big.Rat).Abs(k.Rat()).Num().Int64()
+			for _, sign := range []int64{1, -1} {
+				for _, hol := range [][]string{nil, holidays} {
+					ops := []m{{"ref": nil, "literal": x.Key(), "unit": "date"}, {"ref": nil, "literal": strconv.FormatInt(sign*n, 10), "unit": "days"}}
+					var o []analysis.Operand
+					data, _ := json.Marshal(ops)
+					_ = json.Unmarshal(data, &o)
+					if w, err := analysis.Calc(nil, "date_add", o, hol); err == nil && w.Result == d.Key() {
+						return calc{fn: "date_add", ops: ops, holidays: hol}, true
+					}
+				}
+			}
+		}
+	}
+	return calc{}, false
 }
