@@ -131,7 +131,7 @@ func readSection(s Section) Section {
 
 // read is a clear reading (a typed value's Fig, as admission sets it from the figure reader's labels).
 func read(kind, cur, amount, party string) *analysis.Reading {
-	return &analysis.Reading{Kind: kind, Currency: cur, Amount: amount, Party: party}
+	return &analysis.Reading{Kind: kind, Currency: cur, Amount: amount, Party: party, Period: "none"}
 }
 
 // agentCall is a Go tool's call with input in.

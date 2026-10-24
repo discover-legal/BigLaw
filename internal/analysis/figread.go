@@ -70,6 +70,9 @@ type Label struct {
 	// "party" (it names the figure's party), "other" (another party: a payer, not the payee), "none"
 	// (not a party at all: "Email", a table's title); null elsewhere or when it cannot tell.
 	TypedEntity *string `json:"typedEntity"`
+	// Counterparty is the figure's other party, when the passage names one: the payer of a payee's
+	// compensation, the landlord of a tenant's rent, the recipient of a payment (null when none).
+	Counterparty *string `json:"counterparty"`
 }
 
 // Reading is a checked label: what one span states. It is what consumers read (admission, claimSums,
@@ -90,9 +93,11 @@ type Reading struct {
 	// TypedEntity is what the reader says the typed value's entity is to the figure (party, other,
 	// none; "" when it did not say).
 	TypedEntity string `json:"typedEntity,omitempty"`
-	RangeWith   string `json:"rangeWith,omitempty"`
-	Unclear     bool   `json:"unclear,omitempty"`
-	Why         string `json:"why,omitempty"` // what made it unclear
+	// Counterparty is the figure's other party as the reader names it ("" when none or not said).
+	Counterparty string `json:"counterparty,omitempty"`
+	RangeWith    string `json:"rangeWith,omitempty"`
+	Unclear      bool   `json:"unclear,omitempty"`
+	Why          string `json:"why,omitempty"` // what made it unclear
 }
 
 // Clear reports whether the reading is a quantity read with no doubt (money, a count, a percentage).
@@ -176,6 +181,9 @@ func check(p Passage, s Span, l Label, known func(string) bool) Reading {
 	if l.Party != nil && strings.TrimSpace(*l.Party) != "" {
 		r.Party = strings.Join(strings.Fields(*l.Party), " ")
 	}
+	if l.Counterparty != nil && strings.TrimSpace(*l.Counterparty) != "" {
+		r.Counterparty = strings.Join(strings.Fields(*l.Counterparty), " ")
+	}
 	if l.RangeWith != nil && *l.RangeWith != l.Span && strings.HasPrefix(*l.RangeWith, p.ID+".s") && known(*l.RangeWith) { // the other end of its own passage's range
 		r.RangeWith = *l.RangeWith
 	}
@@ -201,7 +209,13 @@ func check(p Passage, s Span, l Label, known func(string) bool) Reading {
 		if l.ScaleFrom != nil {
 			from = strings.TrimSpace(*l.ScaleFrom)
 		}
-		if !statesScale(p.Text, s, from) { // never applied from nothing (lab-r4 r5 M2)
+		end := s.End // a range's scale follows its far end: "$5-10 million"
+		for i, x := range p.Spans {
+			if r.RangeWith != "" && SpanID(p.ID, i) == r.RangeWith {
+				end = max(end, x.End)
+			}
+		}
+		if !statesScale(p.Text, s, end, from) { // never applied from nothing (lab-r4 r5 M2)
 			unclear("its scale is not stated by words of its own passage")
 			scale = one
 			break
@@ -234,10 +248,13 @@ func check(p Passage, s Span, l Label, known func(string) bool) Reading {
 	return r
 }
 
-// statesScale reports whether from is words text states, outside the span s and at word boundaries:
-// where a figure's scale may come from (lab-r4 r5 H1). Not a span id, not a part of a word ("e" of
-// "fee"), not the span's own digits, never another passage's words; at least one letter or sign.
-func statesScale(text string, s Span, from string) bool {
+// statesScale reports whether from is words text states, outside the span s and at word boundaries,
+// before the span (a heading, a table header, a lead-in) or right after its digits: where a figure's
+// scale may come from (lab-r4 r5 H1, r6 H1). Not a span id, not a part of a word ("e" of "fee"), not
+// the span's own digits, never another passage's words nor words later in its own passage than the
+// figure that follows it ("$500 per application. Costs (in thousands): 1,200"); at least one letter
+// or sign. Which words are a scale is the reader's; SameFigure compares them (scaleWords).
+func statesScale(text string, s Span, end int, from string) bool {
 	if from == "" || !strings.ContainsFunc(from, func(r rune) bool { return !unicode.IsDigit(r) && !unicode.IsSpace(r) }) {
 		return false
 	}
@@ -255,7 +272,8 @@ func statesScale(text string, s Span, from string) bool {
 		edge := func(r rune, word bool) bool { return !word || !isWordRune(r) }
 		before := a == 0 || a == s.End || edge(lastRune(low[:a]), isWordRune(firstRune(f))) // glued to its own span: "$5M", "4.2bn"
 		after := b == len(low) || b == s.Start || edge(firstRune(low[b:]), isWordRune(lastRune(f)))
-		if before && after {
+		adjacent := a >= end && strings.Trim(low[end:a], " \t(") == "" // right after its digits (or its range's far end): "4.2 million", "$5M", "4,000 (in thousands)"
+		if before && after && (b <= s.Start || adjacent) {             // before them (a heading, a table header, a lead-in), or right after
 			return true
 		}
 	}
@@ -297,8 +315,9 @@ func exactDecimal(r *big.Rat) string {
 }
 
 // SameFigure reports whether two readings state one figure: the same kind, currency and amount, at
-// the same scale (a "$500" read in thousands is $500,000 only beside another figure read in thousands,
-// never beside a "$500,000": lab-r4 r5 H1). unclear is true when they agree only on what can be read and one of them is unclear,
+// the same scale from equivalent words (a "$500" read in thousands is $500,000 only beside another
+// figure read in thousands from words that say so, never beside a "$500,000", and never when one
+// side's scale came from "fee": lab-r4 r5 H1, r6 H1). unclear is true when they agree only on what can be read and one of them is unclear,
 // or on their amounts at two scales (a match a lawyer must confirm).
 func SameFigure(a, b Reading) (same, unclear bool) {
 	x, y := a.Rat(), b.Rat()
@@ -307,8 +326,8 @@ func SameFigure(a, b Reading) (same, unclear bool) {
 	}
 	if a.Clear() && b.Clear() {
 		same = a.Kind == b.Kind && a.Currency == b.Currency && x.Cmp(y) == 0
-		if same && a.Scale != b.Scale {
-			return false, true // one amount at two scales: the same figure only if a lawyer says so
+		if same && (a.Scale != b.Scale || a.Scale != "" && !sameScaleWords(a.ScaleFrom, b.ScaleFrom)) {
+			return false, true // one amount at two scales, or one scale from two different words: the same figure only if a lawyer says so
 		}
 		return same, false
 	}
@@ -316,6 +335,43 @@ func SameFigure(a, b Reading) (same, unclear bool) {
 	curs := a.Currency == b.Currency || a.Currency == "" && a.Kind != b.Kind || b.Currency == "" && b.Kind != a.Kind || a.Kind == KindUnclear || b.Kind == KindUnclear
 	amounts := new(big.Rat).Abs(x).Cmp(new(big.Rat).Abs(y)) == 0
 	return false, kinds && curs && amounts
+}
+
+// scaleWords are a scale source's words as two texts may write one scale: case-folded, letters only
+// (punctuation, parentheses, "$" and digits dropped), a simple plural folded ("(In Millions)" → in,
+// million). No word is known to be a scale: two sources are compared only with each other.
+func scaleWords(from string) []string {
+	ws := strings.FieldsFunc(strings.ToLower(from), func(r rune) bool { return !unicode.IsLetter(r) })
+	for i, w := range ws {
+		if len(w) > 3 && strings.HasSuffix(w, "s") && !strings.HasSuffix(w, "ss") {
+			ws[i] = w[:len(w)-1]
+		}
+	}
+	return ws
+}
+
+// sameScaleWords reports whether two scale sources write one scale: the same folded words, or the
+// words of one all among the other's ("(In Millions)" and "million"); none on both sides ("($000)"
+// and "$000") is the same, none on one side never is.
+func sameScaleWords(a, b string) bool {
+	x, y := scaleWords(a), scaleWords(b)
+	if len(x) > len(y) {
+		x, y = y, x
+	}
+	if len(x) == 0 {
+		bare := func(s string) string {
+			return strings.Map(func(r rune) rune {
+				return map[bool]rune{true: -1, false: r}[unicode.IsSpace(r) || strings.ContainsRune("()[]", r)]
+			}, s)
+		}
+		return len(y) == 0 && bare(a) == bare(b)
+	}
+	for _, w := range x {
+		if !slices.Contains(y, w) {
+			return false
+		}
+	}
+	return true
 }
 
 // KindOf is the reading kind a typed value's class asks for ("" for a date or any other class).

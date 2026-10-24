@@ -11,12 +11,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -135,27 +137,19 @@ func oracle(mt matter, ids map[string]string) map[string][]model.Reply {
 		extracts = append(extracts, call("extract_facts", m{"question": it.Question, "documentId": nil, "sectionId": nil, "through": nil, "offset": nil, "query": it.Question, "issueId": iid}))
 		sc["extract_facts"] = append(sc["extract_facts"], reply(m{"findings": []m{{"issueId": nil, "claim": it.ModelAnswer, "quotes": quotes, "values": []m{}, "entities": []m{},
 			"relations": []m{}, "confidence": 1}}, "gaps": []string{}}))
-		untraced := engine.Untraced(it.ModelAnswer, strings.Join(it.Evidence, "\n"), false)
-		var known []analysis.Reading
-		for _, ev := range it.Evidence {
-			known = append(known, readAs("quote", ev)...)
-		}
-		var amounts []string // what G8 reads the answer's figures as (lab-r4 r5: by the reader's readings), computed
-		for _, r := range readAs("memo", it.ModelAnswer) {
-			if r.Clear() && !slices.ContainsFunc(known, func(k analysis.Reading) bool { same, _ := analysis.SameFigure(r, k); return same }) && !slices.Contains(untraced, r.Amount) {
-				amounts = append(amounts, r.Amount)
-			}
-		}
-		for i, x := range append(untraced, amounts...) {
-			op := []m{{"ref": nil, "literal": x, "unit": nil}, {"ref": nil, "literal": "0", "unit": nil}}
-			fn := "sum"
-			if i < len(untraced) && (strings.Contains(x, "-") || len(x) == 4 && strings.HasPrefix(x, "20")) {
-				fn, op[0]["literal"], op[0]["unit"] = "date_add", (x + "-01-01")[:10], "date"
-				if len(x) == 7 {
-					op[0]["literal"] = x + "-01"
+		extra, calcs := traceable(mt, it.ModelAnswer, it.Evidence)
+		for _, q := range extra { // the documents' lines that state the answer's other figures: cited too
+			for _, d := range names(mt) {
+				if strings.Contains(mt.Docs[d], q) {
+					quotes = append(quotes, m{"documentId": ids[d], "quote": q, "locator": nil})
+					break
 				}
 			}
-			sheets = append(sheets, call("numbers", m{"op": "calc", "fn": fn, "operands": op, "holidays": nil, "fids": nil, "salientTop": nil}))
+		}
+		sc["extract_facts"][len(sc["extract_facts"])-1] = reply(m{"findings": []m{{"issueId": nil, "claim": it.ModelAnswer, "quotes": quotes, "values": []m{}, "entities": []m{},
+			"relations": []m{}, "confidence": 1}}, "gaps": []string{}})
+		for _, c := range calcs {
+			sheets = append(sheets, call("numbers", m{"op": "calc", "fn": c.fn, "operands": c.ops, "holidays": nil, "fids": nil, "salientTop": nil}))
 		}
 		drafts = append(drafts, call("draft_section", m{"issueId": iid, "fids": []string{fid}, "revise": nil}))
 		sc["draft_section"] = append(sc["draft_section"], reply(m{"markdown": it.ModelAnswer + " [" + fid + "]", "summary": "s"}))
@@ -163,7 +157,8 @@ func oracle(mt matter, ids map[string]string) map[string][]model.Reply {
 	plan := call("ledger", m{"op": "plan", "issues": issues, "issueId": nil, "fid": nil, "detail": nil, "criticId": nil, "resolution": nil, "note": nil, "entity": nil, "offset": nil})
 	lead := []model.Reply{{ToolCalls: []model.ToolCall{plan}}}
 	lead = append(append(append(lead, batches(extracts)...), batches(sheets)...), batches(drafts)...)
-	sc["lead"] = append(lead, model.Reply{ToolCalls: []model.ToolCall{call("committee", m{})}}, model.Reply{ToolCalls: []model.ToolCall{call("finish", m{"op": "submit", "limitations": nil})}})
+	submit := model.Reply{ToolCalls: []model.ToolCall{call("finish", m{"op": "submit", "limitations": nil})}} // a figure no cited span computes is flagged, then disclosed (maxLintRounds)
+	sc["lead"] = append(lead, model.Reply{ToolCalls: []model.ToolCall{call("committee", m{})}}, submit, submit, submit)
 	return sc
 }
 
@@ -435,4 +430,120 @@ func readAs(kind, text string) []analysis.Reading {
 		out = append(out, rs[analysis.SpanID("p", i)])
 	}
 	return out
+}
+
+// calc is one numbers call the oracle makes: fn over operands.
+type calc struct {
+	fn  string
+	ops []m
+}
+
+// traceable is what a perfect drafter cites and computes so that every figure of answer traces (G8,
+// lab-r4 r6 M3): the document lines that state a figure the evidence does not (quoted too), and calcs
+// over cited figures only (literals as the cited text writes them; a date shifted by a count of days)
+// for a figure that is the sum, difference or percentage of cited ones or a date's deadline. A figure
+// it can neither cite nor compute stays untraced: the run flags it, then discloses it.
+func traceable(mt matter, answer string, evidence []string) (extra []string, calcs []calc) {
+	stated := strings.Join(evidence, "\n")
+	known := func() []analysis.Reading {
+		var out []analysis.Reading
+		for _, ev := range append(slices.Clone(evidence), extra...) {
+			out = append(out, readAs("quote", ev)...)
+		}
+		return out
+	}
+	traced := func(r analysis.Reading, ks []analysis.Reading) bool {
+		if !r.Clear() {
+			_, ss := analysis.Literal(stated + "\n" + strings.Join(extra, "\n"))
+			return slices.ContainsFunc(ss, func(s analysis.Span) bool { return s.Text == r.Text })
+		}
+		return slices.ContainsFunc(ks, func(k analysis.Reading) bool {
+			same, soft := analysis.SameFigure(r, k)
+			return same || soft && k.Clear() && k.Scale == "" && r.Scale != ""
+		})
+	}
+	lines := func(f func(string) bool) string { // the shortest document line that does
+		best := ""
+		for _, d := range names(mt) {
+			for _, line := range strings.Split(mt.Docs[d], "\n") {
+				if line = strings.TrimSpace(line); line != "" && len(line) < 1500 && (best == "" || len(line) < len(best)) && f(line) {
+					best = line
+				}
+			}
+		}
+		return best
+	}
+	results := []analysis.Reading{}
+	for _, r := range readAs("memo", engine.MaskRefs(answer)) {
+		ks := known()
+		if traced(r, ks) || traced(r, results) {
+			continue
+		}
+		if l := lines(func(line string) bool { // a line stating it as the memo reads it
+			return slices.ContainsFunc(readAs("quote", line), func(k analysis.Reading) bool {
+				return traced(r, []analysis.Reading{k}) && (r.Clear() || k.Text == r.Text)
+			})
+		}); l != "" && !slices.Contains(extra, l) {
+			extra = append(extra, l)
+			continue
+		}
+		if !r.Clear() {
+			continue
+		}
+		lit := func(k analysis.Reading) m {
+			return m{"ref": nil, "literal": k.Text, "unit": map[bool]any{true: "%", false: nil}[k.Kind == analysis.KindPercent]}
+		}
+		want := r.Rat()
+		var amounts []analysis.Reading
+		for _, k := range append(ks, results...) {
+			if k.Clear() && k.Scale == "" && len(analysis.PassageOf("x", k.Text).Spans) == 1 {
+				amounts = append(amounts, k)
+			}
+		}
+		found := false
+		for i, x := range amounts {
+			for j, y := range amounts {
+				if i == j || found {
+					continue
+				}
+				a, b := x.Rat(), y.Rat()
+				switch {
+				case x.Kind == y.Kind && x.Kind != analysis.KindPercent && new(big.Rat).Add(a, b).Cmp(want) == 0 && i < j:
+					calcs, found = append(calcs, calc{"sum", []m{lit(x), lit(y)}}), true
+				case x.Kind == y.Kind && x.Kind != analysis.KindPercent && new(big.Rat).Sub(a, b).Cmp(want) == 0:
+					calcs, found = append(calcs, calc{"diff", []m{lit(x), lit(y)}}), true
+				case x.Kind == y.Kind && x.Kind == analysis.KindPercent && new(big.Rat).Add(a, b).Cmp(want) == 0 && i < j:
+					calcs, found = append(calcs, calc{"sum", []m{lit(x), lit(y)}}), true
+				case y.Kind == analysis.KindPercent && x.Kind != analysis.KindPercent && new(big.Rat).Mul(a, new(big.Rat).Quo(b, big.NewRat(100, 1))).Cmp(want) == 0:
+					calcs, found = append(calcs, calc{"product", []m{lit(x), lit(y)}}), true
+				}
+			}
+		}
+		if found {
+			results = append(results, analysis.Reading{Kind: r.Kind, Currency: r.Currency, Amount: r.Amount, Text: r.Amount})
+		}
+	}
+	dates, _ := analysis.Literal(answer)
+	cited, _ := analysis.Literal(stated)
+	for _, k := range dates {
+		d, _ := analysis.ParseDate(k)
+		if d.Day == 0 || slices.ContainsFunc(cited, func(c string) bool { x, _ := analysis.ParseDate(c); return x.Compatible(d) }) {
+			continue
+		}
+		if l := lines(func(line string) bool { // a line stating the date
+			ds, _ := analysis.Literal(line)
+			return slices.ContainsFunc(ds, func(c string) bool { x, _ := analysis.ParseDate(c); return x.Compatible(d) })
+		}); l != "" && !slices.Contains(extra, l) {
+			extra = append(extra, l)
+			continue
+		}
+		for _, c := range cited { // a deadline: a cited date shifted by a count of days
+			if x, _ := analysis.ParseDate(c); x.Day != 0 {
+				n := int(time.Date(d.Year, time.Month(d.Month), d.Day, 0, 0, 0, 0, time.UTC).Sub(time.Date(x.Year, time.Month(x.Month), x.Day, 0, 0, 0, 0, time.UTC)).Hours() / 24)
+				calcs = append(calcs, calc{"date_add", []m{{"ref": nil, "literal": c, "unit": "date"}, {"ref": nil, "literal": strconv.Itoa(n), "unit": "days"}}})
+				break
+			}
+		}
+	}
+	return extra, calcs
 }

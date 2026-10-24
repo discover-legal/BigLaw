@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -430,25 +431,33 @@ func TestServeNeverSendsImagesToTheLead(t *testing.T) {
 			"usage": map[string]int{"prompt_tokens": 800, "completion_tokens": 12}})
 	}))
 	defer chat.Close()
-	serveWith := func(roles string, while func(addr string)) string {
-		ln, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
-		}
-		addr := ln.Addr().String()
-		ln.Close()
+	serveWith := func(roles string, while func(addr string)) string { // serve binds port 0 itself: no port to lose between picking and binding
 		ctx, cancel := context.WithCancel(t.Context())
 		done := make(chan int, 1)
 		var stderr syncBuffer
 		go func() {
-			done <- run(ctx, []string{"serve"}, env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_ADDR", addr, "BIGLAW_MODEL_URL", chat.URL+"/v1", "BIGLAW_MODELS", roles), nil, io.Discard, &stderr)
+			done <- run(ctx, []string{"serve"}, env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_ADDR", "127.0.0.1:0", "BIGLAW_MODEL_URL", chat.URL+"/v1", "BIGLAW_MODELS", roles), nil, io.Discard, &stderr)
 		}()
-		for i := 0; i < 100; i++ {
-			if resp, err := http.Get("http://" + addr + "/health"); err == nil {
-				resp.Body.Close()
-				break
+		addr, listening := "", regexp.MustCompile(`biglaw listening.*addr=(127\.0\.0\.1:\d+)`)
+		for deadline := time.Now().Add(60 * time.Second); addr == ""; time.Sleep(20 * time.Millisecond) {
+			select {
+			case code := <-done:
+				cancel()
+				t.Fatalf("serve exited %d before listening:\n%s", code, stderr.String())
+			default:
 			}
-			time.Sleep(50 * time.Millisecond)
+			if m := listening.FindStringSubmatch(stderr.String()); m != nil {
+				addr = m[1]
+			} else if time.Now().After(deadline) {
+				cancel()
+				t.Fatalf("serve did not listen within 60 s:\n%s", stderr.String())
+			}
+		}
+		if resp, err := http.Get("http://" + addr + "/health"); err != nil || resp.StatusCode != 200 {
+			cancel()
+			t.Fatalf("serve listens on %s but /health fails (%v):\n%s", addr, err, stderr.String())
+		} else {
+			resp.Body.Close()
 		}
 		while(addr)
 		cancel()

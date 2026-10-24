@@ -5,6 +5,7 @@ package analysis
 
 import (
 	"cmp"
+	"regexp"
 	"slices"
 	"strings"
 	"unicode"
@@ -43,6 +44,8 @@ type entry struct {
 	doc    string
 	party  string // the alias-unified party the figure reader read its figure as belonging to
 	entity string // the alias-unified entity the extractor typed ("" when none)
+	other  string // the figure's other party: the reader's counterparty, else a typed entity it calls another party
+	unk    string // the typed entity when the reader did not say what it is to the figure
 }
 
 // sets is a union-find over names.
@@ -56,6 +59,36 @@ func (s sets) find(x string) string {
 }
 
 func (s sets) union(a, b string) { s[s.find(a)] = s.find(b) }
+
+// absolute is a period as the reader must state one to compare it: with its year ("FY2023",
+// "2024-Q2", "2024-01-01/2024-03-31"); "the second quarter" is no period two figures can share.
+var absolute = regexp.MustCompile(`\b(?:19|20)\d\d\b`)
+
+// periodOf is a figure's period as the join compares it (lab-r4 r5 L2, r6 L2): "none" when the
+// reader says it is for no period (a price, a deposit), the folded period when it states its year;
+// known is false otherwise (no period given, or one with no year): an unknown period never matches
+// another unknown one, so such a figure is never part of a conflict.
+func periodOf(v Value) (period string, known bool) {
+	if v.Fig == nil {
+		return "", false
+	}
+	p := fold(v.Fig.Period)
+	if p == "none" || absolute.MatchString(p) {
+		return p, true
+	}
+	return "", false
+}
+
+// oneQuantity reports whether two figures of one party, measure and period can be one quantity by
+// who else is named (lab-r4 r5 M4, r6 M1): their typed entities agree (or one has none), their other
+// parties agree (or one has none), and one's other party is never contradicted by the other's typed
+// entity the reader said nothing about. Two employees under one payer, two tenants of one landlord,
+// a payer's and a payee's figures are two quantities; one payee's compensation typed once under the
+// payee and once under its payer is one.
+func oneQuantity(a, b entry) bool {
+	agree := func(x, y string) bool { return x == y || x == "" || y == "" }
+	return agree(a.entity, b.entity) && agree(a.other, b.other) && (a.other == "" || agree(a.other, b.unk)) && (b.other == "" || agree(b.other, a.unk))
+}
 
 // fold is a reader's label as the join compares it: lower case, words only, no leading article.
 func fold(s string) string {
@@ -93,20 +126,24 @@ func Join(findings []Finding, aliases []Alias) []Conflict {
 	for _, f := range findings {
 		for _, v := range f.Values {
 			class, canon, d, ok := Canon(v)
-			if !ok || !f.Verified || v.Fig == nil || key(v.Fig.Party) == "" || fold(v.Fig.Measures) == "" { // no reading, party or measure: no conflict is asserted on it
+			period, known := periodOf(v)
+			if !ok || !f.Verified || v.Fig == nil || key(v.Fig.Party) == "" || fold(v.Fig.Measures) == "" || !known { // no reading, party, measure or known period: no conflict is asserted on it
 				continue
 			}
-			if v.Fig.TypedEntity == "other" { // the reader's party is not the typed entity's: two parties, no conflict asserted (r5 M4)
-				continue
+			e := entry{v, f.FID, class, canon, d, docOf(f, v.Value), parties.find(key(v.Fig.Party)), "", "", ""}
+			if key(v.Fig.Counterparty) != "" {
+				e.other = parties.find(key(v.Fig.Counterparty))
 			}
-			e := entry{v, f.FID, class, canon, d, docOf(f, v.Value), parties.find(key(v.Fig.Party)), ""}
 			switch {
+			case v.Fig.TypedEntity == "other" && key(v.Entity) != "": // another party than the figure's: its counterparty (a payer), unless the reader named one
+				e.other = cmp.Or(e.other, parties.find(key(v.Entity)))
 			case v.Fig.TypedEntity == "party": // the reader says the typed entity names its party
 				e.entity = e.party
 			case key(v.Entity) != "" && v.Fig.TypedEntity == "": // the typed entity stands beside the reader's party
 				e.entity = parties.find(key(v.Entity))
+				e.unk = e.entity
 			}
-			k := string(class) + "|" + e.party + "|" + fold(v.Fig.Measures) + "|" + fold(v.Fig.Period)
+			k := string(class) + "|" + e.party + "|" + fold(v.Fig.Measures) + "|" + period
 			if groups[k] == nil {
 				order = append(order, k)
 			}
@@ -121,9 +158,7 @@ func Join(findings []Finding, aliases []Alias) []Conflict {
 		if es[idx[0]].class == "Date" {
 			kind, differ = "date", func(a, b entry) bool { return !a.date.Compatible(b.date) }
 		}
-		if c, ok := conflict(es, idx, kind, func(a, b entry) bool {
-			return (a.entity == b.entity || a.entity == "" || b.entity == "") && differ(a, b) // two typed entities: two figures
-		}); ok {
+		if c, ok := conflict(es, idx, kind, func(a, b entry) bool { return oneQuantity(a, b) && differ(a, b) }); ok {
 			out = append(out, c)
 		}
 	}

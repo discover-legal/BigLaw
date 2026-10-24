@@ -31,18 +31,18 @@ func valueOracle(v Value) *Reading {
 		return nil
 	} else if ParseClass(v.Class) == "Date" || ParseClass(v.Class) == "" && c == "Date" {
 		if _, ok := ParseDate(v.Value); ok || ParseClass(v.Class) == "Date" {
-			return &Reading{Kind: KindDate, Text: v.Value, Party: strings.TrimSpace(v.Entity), Measures: v.Metric}
+			return &Reading{Kind: KindDate, Text: v.Value, Party: strings.TrimSpace(v.Entity), Measures: v.Metric, Period: "none"}
 		}
 	}
 	_, ss := Literal(v.Value)
 	if len(ss) == 0 {
 		if ParseClass(v.Class) == "Date" && v.Entity != "" {
-			return &Reading{Kind: KindDate, Text: v.Value, Party: v.Entity, Measures: v.Metric}
+			return &Reading{Kind: KindDate, Text: v.Value, Party: v.Entity, Measures: v.Metric, Period: "none"}
 		}
 		return nil
 	}
 	s := ss[0]
-	r := &Reading{Span: "v1.s1", Text: s.Text, Start: s.Start, End: s.End, Party: strings.TrimSpace(v.Entity), Measures: v.Metric}
+	r := &Reading{Span: "v1.s1", Text: s.Text, Start: s.Start, End: s.End, Party: strings.TrimSpace(v.Entity), Measures: v.Metric, Period: "none"}
 	switch ParseClass(v.Class) {
 	case "Money":
 		r.Kind = KindMoney
@@ -135,7 +135,7 @@ func joinRead(fs []Finding, aliases []Alias) []Conflict { return Join(read(fs), 
 // fig is a given clear reading: kind, currency ("" when not money), exact amount, party (what it
 // measures: the value's metric, as Value.Fig is given in fnd).
 func fig(kind, cur, amount, party string) *Reading {
-	return &Reading{Kind: kind, Currency: cur, Amount: amount, Party: party}
+	return &Reading{Kind: kind, Currency: cur, Amount: amount, Party: party, Period: "none"}
 }
 
 // figOf is fig with what it measures and the period it is for.

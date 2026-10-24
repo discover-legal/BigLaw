@@ -168,7 +168,7 @@ func (e *Engine) coverTool(rt *agent.Runtime, r *run) agent.Tool {
 				continue
 			}
 			in, _ = json.Marshal(map[string]any{"issueId": is.ID, "fids": fids, "revise": coverRevise})
-			if _, err := rt.Invoke(ctx, me, call, "draft_section", in, b, false, 0); modelOrJournal(err) {
+			if _, err := rt.Invoke(context.WithValue(ctx, coverDraft{}, true), me, call, "draft_section", in, b, false, 0); modelOrJournal(err) {
 				failed = err
 				break
 			}
@@ -198,7 +198,7 @@ func (e *Engine) coverTool(rt *agent.Runtime, r *run) agent.Tool {
 					continue
 				}
 				in, _ := json.Marshal(map[string]any{"issueId": id, "fids": fids, "revise": placeRevise(place[id])})
-				if _, err := rt.Invoke(ctx, me, call, "draft_section", in, b, false, 0); modelOrJournal(err) {
+				if _, err := rt.Invoke(context.WithValue(ctx, coverDraft{}, true), me, call, "draft_section", in, b, false, 0); modelOrJournal(err) {
 					failed = err
 					break
 				} else if errors.Is(err, agent.ErrBudget) {
@@ -254,6 +254,10 @@ func (e *Engine) coverTool(rt *agent.Runtime, r *run) agent.Tool {
 		return map[string]any{"analysed": res.Analysed, "missing": res.Missing}, b.Spent(), nil
 	}}
 }
+
+// coverDraft marks a coverage pass's redraft in its context: its figure reader's calls are the pass's,
+// not the lead's draft class's (saveSection, lab-r4 r6 L1).
+type coverDraft struct{}
 
 // coverPass runs the coverage pass as a step of its own (a run finishing from its reserve) when it
 // has work (coverDue) and has not run, before the last review; it returns the last step. A refused or

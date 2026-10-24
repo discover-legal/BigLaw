@@ -165,7 +165,8 @@ func Labels(p Passage, all []Passage, parties []string) []analysis.Label {
 
 func oracleLabel(p Passage, s analysis.Span, all []Passage, parties []string) analysis.Label {
 	before, after := strings.TrimRight(p.Text[:s.Start], " "), p.Text[s.End:]
-	l := analysis.Label{Kind: analysis.KindOther, Currency: "none", Scale: "1", Decimal: oracleDecimal(s.Text), Sign: "positive"}
+	none := "none" // a fixture's figures are for no period unless a test says so
+	l := analysis.Label{Kind: analysis.KindOther, Currency: "none", Scale: "1", Decimal: oracleDecimal(s.Text), Sign: "positive", Period: &none}
 	if s.Neg() || strings.HasSuffix(before, "(") && strings.HasPrefix(after, ")") && strings.ContainsAny(p.Text[:s.Start], ":\t") ||
 		p.Kind == "value" && (strings.HasPrefix(strings.TrimSpace(p.Text), "-") || strings.HasPrefix(strings.TrimSpace(p.Text), "−")) {
 		l.Sign = "negative"

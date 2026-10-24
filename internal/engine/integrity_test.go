@@ -117,7 +117,7 @@ func TestFabricatingModelFailsTask(t *testing.T) {
 		"verify_quote":  {judgeNo, judgeNo},
 	}), Config{})
 	if stop(v) != "failed/failed" || v.GroundingAlert == nil || !strings.Contains(*v.GroundingAlert, "8 of 8") || v.Output != nil {
-		t.Fatalf("%s alert %v error %v", stop(v), v.GroundingAlert, v.Error)
+		t.Fatalf("%s alert %v error %v\n%s\n%q", stop(v), v.GroundingAlert, deref(v.Error), f.steps(v.ID), f.outputs(v.ID, "extract_facts"))
 	}
 	if strings.Contains(f.steps(v.ID), "draft_section") {
 		t.Fatal("the run went on after the collapse")

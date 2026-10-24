@@ -75,7 +75,7 @@ func TestR5LabelsCarryMeasureAndPeriod(t *testing.T) {
 // payer read as the party of two employees' salaries is no conflict between them.
 func TestR5LabelJoinRespectsTypedEntity(t *testing.T) {
 	salary := func(fid, doc, quote, who, amount, value string) Finding {
-		return fnd(fid, doc, quote, nil, Value{Entity: who, Metric: "annual base salary", Value: value, Class: "Money", Fig: figOf(KindMoney, "USD", amount, "Acme Corp", "annual base salary", "")})
+		return fnd(fid, doc, quote, nil, Value{Entity: who, Metric: "annual base salary", Value: value, Class: "Money", Fig: figOf(KindMoney, "USD", amount, "Acme Corp", "annual base salary", "none")})
 	}
 	fs := []Finding{
 		salary("F1", "hr", "Acme Corp shall pay the Chief Executive Officer an annual base salary of $410,000.", "Jane Moss", "410000", "$410,000"),
@@ -113,7 +113,7 @@ func TestR5JoinOnMeasureAndPeriod(t *testing.T) {
 		t.Errorf("a figure whose period one side does not state asserted a conflict: %v", pairs(cs))
 	}
 	dep := func(fid, doc, quote, measures, amount, value string) Finding {
-		return fnd(fid, doc, quote, nil, Value{Entity: "Buyer", Metric: "deposit", Value: value, Class: "Money", Fig: figOf(KindMoney, "USD", amount, "Buyer", measures, "")})
+		return fnd(fid, doc, quote, nil, Value{Entity: "Buyer", Metric: "deposit", Value: value, Class: "Money", Fig: figOf(KindMoney, "USD", amount, "Buyer", measures, "none")})
 	}
 	two := []Finding{
 		dep("F1", "spa", "The Buyer paid an initial deposit of $250,000 on signing.", "initial deposit", "250000", "$250,000"),

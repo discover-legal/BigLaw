@@ -63,28 +63,33 @@ func fourPlanted() []Finding {
 		fh("73%", qRateReferral, "referral", "Ostrowski", "profitable omnibus allocation rate"),
 		fh("78%", qRateExhibit, "exhibit-f", "", "profitable omnibus allocation rate"),
 	}, map[string]relabel{"4,312": {party: "Ostrowski"}, "78%": {party: "Ostrowski"},
-		"Mon, 15 Apr 2024 09:23:47 -0400": {party: "Ostrowski", measures: instruction, entity: "other"}, "April 22, 2024": {measures: instruction}})
+		"Mon, 15 Apr 2024 09:23:47 -0400": {party: "Ostrowski", measures: instruction, entity: "other"}, "April 22, 2024": {measures: instruction, entity: "party"}})
 }
 
-// The planted numeric discrepancies are found; the dates are one event's, but the e-mail's typed
-// entity is another party than the reader's (its recipient), so no conflict is asserted on it (lab-r4
-// r5 M4: the reader's party never overrides the analyst's entity); read with the e-mail's entity as no
-// party at all, they are a date conflict.
+// The four planted discrepancies are found (lab-r4 r6 M1): the e-mail date is typed under its
+// recipient, Chen, which the reader calls another party (the instruction's other party), and the
+// referral's April 22 under Ostrowski, which it calls the party; read with Chen's name unexplained,
+// the dates are not asserted as one event's.
 func TestCrossDocAllFourPlantedDiscrepancies(t *testing.T) {
 	cs := joinRead(fourPlanted(), []Alias{{"Ostrowski", []string{"Bayshore Palms LLC"}}})
-	if len(cs) != 3 {
-		t.Fatalf("want 3 discrepancies, got %d: %+v", len(cs), cs)
+	if len(cs) != 4 {
+		t.Fatalf("want 4 discrepancies, got %d: %+v", len(cs), cs)
 	}
-	for _, p := range [][2]string{{"4,217", "4,312"}, {"$92,600", "$103,800"}, {"73%", "78%"}} {
+	for _, p := range [][2]string{{"4,217", "4,312"}, {"$92,600", "$103,800"}, {"73%", "78%"}, {"15 Apr 2024", "April 22, 2024"}} {
 		c := has(cs, p[0], p[1])
 		if c == nil || c.Values[0].DocumentID == c.Values[1].DocumentID || c.Values[0].FID == "" {
 			t.Errorf("%s vs %s: %+v", p[0], p[1], c)
 		}
 	}
-	fs := fourPlanted()
-	fs[4].Values[0].Fig.TypedEntity = "none"
-	if c := has(Join(fs, nil), "15 Apr", "April 22"); c == nil || c.Kind != "date" {
+	if c := has(cs, "15 Apr", "April 22"); c == nil || c.Kind != "date" {
 		t.Error("the e-mail header date did not join the instruction date as one event")
+	}
+	fs := fourPlanted()
+	fs[5].Values[0].Fig.TypedEntity = "" // Ostrowski typed beside the reader's party, unexplained: Chen as the other party contradicts nothing it says, but cannot be checked
+	fs[4].Values[0].Entity = "Delgado"
+	fs[5].Values[0].Entity = "Chen"
+	if c := has(Join(fs, nil), "15 Apr", "April 22"); c != nil {
+		t.Errorf("an other party (Delgado) contradicting the other figure's typed entity (Chen) still joined: %+v", c)
 	}
 	// Without the lead's alias, Ostrowski and Bayshore Palms LLC stay separate parties.
 	if c := has(joinRead(fourPlanted(), nil), "$92,600", "$103,800"); c != nil {

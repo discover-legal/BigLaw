@@ -901,12 +901,20 @@ Limitations of this layer:
 - `join_discrepancies` compares only what the figure reader read (`Value.Fig`, lab-r4 r5 L2): two values
   are one quantity only when both are read clearly as one kind of one party's same measure (what the
   figure is an amount of: "initial deposit", "annual revenue") for the same period ("fiscal 2023"), in one
-  currency, their amounts exact with their scale applied; the extractor's typed entities must not name two
-  others (r5 M4: a payer read as the party of two employees' salaries is no conflict between them) unless
-  the reader says a typed entity names its party or no party at all ("Email", a table's title), and a value
-  whose typed entity the reader calls another party joins nothing; party labels unify only by the lead's
-  aliases or that label (`TestJoinBench6TrustNamesPairwise`, `TestR5LabelJoinRespectsTypedEntity`). The
-  measure and period are free text folded only for case, punctuation and a leading article, so a reader
+  currency, their amounts exact with their scale applied; who else is named must agree (`oneQuantity`):
+  the extractor's typed entities must not name two others (r5 M4: a payer read as the party of two
+  employees' salaries is no conflict between them), nor the figures' other parties (the reader's
+  `counterparty`, or a typed entity it calls another party: the payer of a payee's compensation, r6 M1:
+  bench6 SEC's $92,600 vs $103,800, typed once under the payee and once under the payer, is one
+  discrepancy), and an other party never contradicts the other figure's typed entity the reader said
+  nothing about; a typed entity the reader says names its party or no party at all ("Email", a table's
+  title) is not compared; party labels unify only by the lead's aliases or that label
+  (`TestJoinBench6TrustNamesPairwise`, `TestR5LabelJoinRespectsTypedEntity`,
+  `TestR6OtherTypedEntityKeepsR4FalseConflictsClosed`, `TestR6WrongLabelsAssertNoConflict`). A period is
+  compared only as the reader states it absolutely, with its year ("FY2023", "2024-Q2"), or as "none" (a
+  price, a deposit); a figure with no period, or one with no year ("the second quarter"), is never part of a
+  conflict (`TestR6PeriodTextCollides`). The measure is free text folded only for case, punctuation and a
+  leading article, so a reader
   that names one measure two ways ("annual base salary", "base salary") misses a conflict, and one that
   names two things alike makes one; no Go word rule decides what a figure measures or whether it is a
   part of another (`TestR5JoinOnMeasureAndPeriod`, `TestR2VHoldbackNearFalsePair`). A value's document is
@@ -957,23 +965,29 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
   a range's end and its sign, what it measures and the period it is for, and for a typed value what its
   typed entity is to it. Go checks every label (`analysis.ReadLabels`): a label for a span it was not given
   is rejected and noted; a scale must be a power of ten whose source is the exact words of the span's own
-  passage, whole words outside the span itself (never another passage's words or a span id), or it is not
-  applied: the figure reads at scale 1, unclear (`TestR5ScaleSourceIsItsOwnWords`); a decimal mark must fit
+  passage, whole words outside the span itself, before it (a heading, a table header, a lead-in) or right
+  after its digits or its range's far end (never another passage's words, a span id, or words after the
+  figure that follows it), or it is not applied: the figure reads at scale 1, unclear
+  (`TestR5ScaleSourceIsItsOwnWords`, `TestR6ScaleWordsAndPlace`); a decimal mark must fit
   the digits; a sign may not contradict a written minus; what it cannot check, or what the reader says is
   unclear, is an unclear reading, and the amount is exact arithmetic on the written digits (reading ×
   scale × sign), so no label makes a figure the text does not state (`TestReadLabelsChecksEveryLabel`,
   `TestR4V4ReaderCannotInventSpansOrFigures`). A scaled reading states the same figure as another clearly
-  only when the other is read at the same scale, written in the same words (folded: "In Millions" and
-  "million"); otherwise a match is at best unclear, gated (`SameFigure`; a "$500" read "in thousands" never
-  verifies a typed "$500,000" or traces a memo's: `TestR5ScaleSmuggleReachesMemo`). The reader runs once
+  only when the other is read at the same scale from equivalent words (folded for case, punctuation and a
+  plural, one side's words all among the other's: "(In Millions)" and "million"; no word is known to be a
+  scale); otherwise a match is at best unclear, gated (`SameFigure`; a "$500" read "in thousands" never
+  verifies a typed "$500,000" or traces a memo's, and a "$500" scaled from "fee" never verifies a typed
+  "$500 thousand": `TestR5ScaleSmuggleReachesMemo`, `TestR6ScaleSmuggleWithAScaledValueReachesMemo`). The reader runs once
   per admission (the call's findings batched; an item over a call's bounds, 80 spans or 32 KB, is read in
   parts, a passage's spans split between them, and a span over 64 characters or a passage over 32 KB is not
   sent and stays unread: `TestR5OversizeInputIsSplit`) over each finding's verified quotes, typed values
   (with their class, unit, entity and metric) and claim, and once per drafted section over the figures its
-  drafter wrote (handle values are Go's), metered and journaled like any call: at admission out of what the
-  evidence subagent's grant leaves, for a section out of a call `draft_section`'s grant holds back for it
-  before the drafter runs (`TestR5ReaderReservedBeforeDrafting`; P4's draft share counts the drafters' calls, not the readers', ledger kind `figread`). Its complete answers (one accepted label
-  for every span it was sent) are cached (`figure_reads`, migrations 0006 and 0007) under a key derived from
+  drafter wrote (handle values are Go's), metered and journaled like any call, out of a call the subagent's
+  grant holds back for it before the subagent runs and the quotes' judges cannot spend (`extract_facts`,
+  `analyze_issue`, `draft_section`: `goTurns`, `TestR5ReaderReservedBeforeDrafting`; P4's class shares count
+  the subagents' turns, and the draft share the lead's drafters' calls, not their readers' nor a coverage
+  redraft's, ledger kind `figread`: `TestR6CoverReaderCallsLeaveTheDraftShare`). Its complete answers (one
+  accepted label for every span it was sent, not unclear throughout: `TestR6AllUnclearAnswerIsNotCached`) are cached (`figure_reads`, migrations 0006 and 0007) under a key derived from
   the reader's spec, prompt and tools' specs, the model, the matter and what it was sent (a section's also
   its task), so a run read again gets the same labels and an edited prompt reads again; a row goes with its
   task and its documents (`TestR4V4ReadingIsCachedByContent`, `TestR5CacheStoresOnlyCompleteAnswers`,
@@ -1282,7 +1296,11 @@ python3 eval/lab/run.py --labs-dir ~/harvey-labs --api http://127.0.0.1:3101 --m
 `drive`), `proofrun/` (driver, scorer, mock), `lab/` (the Harvey LAB driver over this API),
 `tests/`. `make eval` runs E0 and E3 (fixtures, scorer tests, scorer self-test; no backend). In
 `go test ./eval`, `TestProofRunsOracle` (E1: an oracle `model.Fake` per matter through the real
-engine and API, scored by the Python scorer: 1.0, verified rate 1.0), `TestProofRunsFabricator`
+engine and API, scored by the Python scorer: 1.0, verified rate 1.0; its drafter cites the document
+lines that state its answers' figures and computes the rest only from cited figures, so a figure no cited
+span states or computes, such as a product of two counts or a table's figure restated at a scale, is
+flagged by G8 and, after its rounds, delivered as an unresolved check: 26 across the five matters),
+`TestProofRunsFabricator`
 (E2: every matter fails with a grounding alert) and `TestLabRunnerSmoke` (the LAB driver against an
 `httptest` server) run with no model.
 
@@ -1642,7 +1660,7 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
   - The deliverable is Markdown only (`GET /tasks/{id}/deliverable.md`); the `.docx` export waits for
     PR 3d's writer.
   - Quote verification proves a quote is in the document, not that the claim follows from it:
-    `prosecute` checks that, and a lawyer approves every deliverable. The G8 lint traces figures (a figure the drafter wrote by the figure reader's reading of it, to a cited span or value read clearly as the same kind, currency, scale and amount, never to one read unclearly or as another kind; a date's part or an identifier as written, digit for digit; a handle's value by construction; a figure the reader did not read clearly, or a section it did not read, is flagged, never traced, and the section disclosed in Limitations; a clear figure whose cited quote the reader never read (its admission's call unfunded or failed) is traced only as written and disclosed, and so is one the drafter wrote at a scale where the cited figure states every digit ("$5M" for "$5,000,000"), which only the reader's scale makes the same figure; a cited figure read at a scale never traces one written without it: lab-r4 r5 H1, H2, M1, `TestR5G8SkipsUnreadSingleDigit`, `TestR5UnclearQuoteTracesUngated`, `TestR5NoReaderBudget`), not
+    `prosecute` checks that, and a lawyer approves every deliverable. The G8 lint traces figures (a figure the drafter wrote by the figure reader's reading of it, to a cited span or value read clearly as the same kind, currency, scale and amount, never to one read unclearly or as another kind; a date's part or an identifier as written, digit for digit; a handle's value by construction; a figure the reader did not read clearly, or a section it did not read, is flagged, never traced, and the section disclosed in Limitations; a clear figure whose cited quote the reader never read (its admission's call unfunded or failed) is traced only as written, disclosed, and its finding gated for a lawyer (`TestR6UnreadQuoteTracesAsWritten`); one the drafter wrote at a sourced scale where the cited figure states every digit ("$5M" for "$5,000,000") is disclosed, since only the reader's scale makes it the same figure; a cited figure read at a scale never traces one written without it or from other words; a worksheet traces only when its operands are cited values, literals the cited quotes state, traced worksheets' results or counts of days (`tracedSheets`, `TestR6LiteralWorksheetLaundersAFigure`): lab-r4 r5 H1, H2, M1, r6 H1, M2, M3, `TestR5G8SkipsUnreadSingleDigit`, `TestR5UnclearQuoteTracesUngated`, `TestR5NoReaderBudget`), not
     words: a wrong party or a wrong verb with correct figures passes it.
   - The SSE stream polls the database every 500 ms. Cancel stops a run at once in its own process
     and at the next heartbeat (up to 10 s) in another; the call in flight is charged.
@@ -1751,9 +1769,10 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     the claim's quoted window and prosecute).
   - The joins compare what the figure reader says a figure measures and for when; a reader that names one
     figure's measure two ways across calls misses its conflict, and the reader is a model: its labels are
-    checked for form (`ReadLabels`), not for truth. A figure typed under its payer while the reader reads it
-    as the payee's is never part of a conflict (r5 M4: bench6 SEC's $92,600 vs $103,800, typed "Kevin
-    Ostrowski" against the reader's Bellini, is not asserted: `TestJoinBench6SECPairsAcrossLabels`).
+    checked for form (`ReadLabels`), not for truth: two consistent wrong labels (one party named for two
+    payees, the same counterparty for two payers) make a conflict, one wrong label does not
+    (`TestR6WrongLabelsAssertNoConflict`). Two payments in opposite directions read with the same party for
+    both are told apart only by their counterparties.
   - The raw-date rule is paragraph-wide: a list that states the raw date and the rolled deadline on
     separate lines without a blank line between is one paragraph and passes; one with a blank line is
     flagged.

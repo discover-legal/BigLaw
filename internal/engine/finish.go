@@ -229,8 +229,18 @@ func (f finish) check(ctx context.Context, limits []limitation) (report, error) 
 		met := false
 		if k >= 0 {
 			texts[is.ID] = substituteOutsideQuotes(secs[k].Markdown, secs[k].Handles)
-			lines, limited := lintLimited(is.ID, secs[k], byFID, sheets)
+			lines, limited, gate := lintLimited(is.ID, secs[k], byFID, sheets)
 			rep.Lint = append(rep.Lint, lines...)
+			for _, fid := range gate { // a memo figure traced only as written to its never-read quote: a lawyer confirms it (r6 M2)
+				if x := byFID[fid]; !x.Low {
+					x.Low = true
+					x.ValueNotes = append(x.ValueNotes, "gated for a lawyer: a memo figure traces only as written to this finding's quotes, which the figure reader never read")
+					byFID[fid] = x
+					if err := e.write(ctx, id, kFinding, fid, x, true); err != nil {
+						return report{}, err
+					}
+				}
+			}
 			if l := limited[limitedUnread]; len(l) > 0 {
 				rep.limits = append(rep.limits, fmt.Sprintf("Figures: in the section on %s, %s %s traced only as written: the figure reader never read the cited quotes that state %s (its call was unfunded or failed), so what %s is unchecked.",
 					is.ID, strings.Join(l, ", "), plural(len(l), "is", "are"), plural(len(l), "it", "them"), plural(len(l), "it means", "they mean")))

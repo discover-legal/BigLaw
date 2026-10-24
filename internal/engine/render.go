@@ -134,7 +134,7 @@ func (e *Engine) saveSection(ctx context.Context, rt *agent.Runtime, c agent.Cal
 		if err := e.readFigures(ctx, rt, c, b, "draft_section", []*reading{it}); err != nil {
 			return nil, err
 		}
-		if n := b.Spent().Calls - before; n > 0 { // the reader's calls are not the drafter's: P4's draft share counts only these (policy.go)
+		if n := b.Spent().Calls - before; n > 0 && ctx.Value(coverDraft{}) == nil { // the reader's calls are not the lead's drafter's: P4's draft share leaves them out (policy.go); a coverage redraft's are its finish step's
 			prior, err := load[int](ctx, e, taskID, kRead)
 			if err != nil {
 				return nil, err

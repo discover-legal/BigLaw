@@ -194,7 +194,8 @@ func (pt *part) passages() []analysis.Passage {
 }
 
 // complete reports whether labels are an answer for exactly the part's spans: one accepted label for
-// each span id it was sent, none for any other. Only a complete answer is cached (r5 M3).
+// each span id it was sent, none for any other, and not unclear throughout. Only a complete answer is
+// cached (r5 M3, r6 L3).
 func (pt *part) complete(labels []analysis.Label) bool {
 	if len(labels) != len(pt.ids) {
 		return false
@@ -206,8 +207,12 @@ func (pt *part) complete(labels []analysis.Label) bool {
 		}
 		seen[l.Span] = true
 	}
-	_, notes := analysis.ReadLabels(pt.passages(), labels)
-	return len(notes) == 0
+	rs, notes := analysis.ReadLabels(pt.passages(), labels)
+	someRead := false // an answer that reads nothing clearly (unclear throughout) is this run's only: a later run may read it (r6 L3)
+	for _, id := range pt.ids {
+		someRead = someRead || !rs[id].Unclear
+	}
+	return len(notes) == 0 && someRead
 }
 
 // readings is the item's checked readings by span id, and the reader's refused labels.

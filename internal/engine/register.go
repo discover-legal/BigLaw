@@ -192,10 +192,11 @@ type hooked struct {
 }
 
 // goTurns are the calls Go makes after a hooked subagent out of its grant, held back from it: the
-// figure reader of a drafted section (lab-r4 r5 L4: reserved before the drafter runs, never what it
-// left). They are not the subagent's turns: P4's class share counts only those.
+// figure reader of a drafted section or of an evidence call's findings (lab-r4 r5 L4: reserved before
+// the subagent runs, and from the quotes' judges, never what they left). They are not the
+// subagent's turns: P4's class share does not count them against the subagent.
 func goTurns(name string) int {
-	if name == "draft_section" {
+	if name == "draft_section" || name == "extract_facts" || name == "analyze_issue" {
 		return 1
 	}
 	return 0
@@ -289,9 +290,9 @@ func (h hooked) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 			return agent.Result{}, err
 		}
 		in = draft.request
-		if r := readerReserve(ctx, h.rt); c.Budget.Calls > r.Calls && (r.USD == 0 || c.Budget.USD > r.USD) { // the figure reader of its draft, held back from the drafter (lab-r4 r5 L4)
-			held, c.Budget = r, agent.Grant{Calls: c.Budget.Calls - r.Calls, USD: c.Budget.USD - r.USD}
-		}
+	}
+	if r := readerReserve(ctx, h.rt); goTurns(name) > 0 && c.Budget.Calls > r.Calls && (r.USD == 0 || c.Budget.USD > r.USD) { // the figure reader of its answer, held back from the subagent (lab-r4 r5 L4)
+		held, c.Budget = r, agent.Grant{Calls: c.Budget.Calls - r.Calls, USD: c.Budget.USD - r.USD}
 	}
 	c.Input, _ = json.Marshal(in)
 	res, err := h.Tool.Call(ctx, c)
@@ -334,7 +335,7 @@ func (h hooked) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 				notes = append(notes, "authority not in the record (flagged if cited): "+a.Cite)
 			}
 		}
-		out, reward, err = h.e.admit(ctx, h.rt, c, b, name, str("issueId"), res.Model, ans.Findings, notes)
+		out, reward, err = h.e.admit(ctx, h.rt, c, b, held, name, str("issueId"), res.Model, ans.Findings, notes)
 		if err == nil && name == "analyze_issue" && strings.TrimSpace(ans.Conclusion) != "" && str("issueId") != "" { // for the issue's drafter (cover.go)
 			err = h.e.write(ctx, c.TaskID, kAnalysis, str("issueId"), Analysis{truncate(ans.Rule, 1500), truncate(ans.Application, 3000), truncate(ans.Conclusion, 1000)}, true)
 		}
@@ -419,7 +420,7 @@ func (e *Engine) verify(ctx context.Context, rt *agent.Runtime, c agent.Call, b 
 // finding verifies only when all of them do; otherwise it is quarantined), each value kept only
 // when its own quote states it, each relation typed by BELO-lite, near-duplicates merged into the
 // first. The reward is the share of quotes that verified.
-func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *agent.Budget, tool, issueID, model string, drafts []draftFinding, notes []string) (hookResult, float64, error) {
+func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *agent.Budget, reserve agent.Grant, tool, issueID, model string, drafts []draftFinding, notes []string) (hookResult, float64, error) {
 	out := hookResult{Findings: []map[string]any{}, Notes: append([]string{}, notes...)}
 	all, err := load[Finding](ctx, e, c.TaskID, kFinding)
 	if err != nil {
@@ -443,6 +444,13 @@ func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 		it   *reading
 	}
 	var pend []pending
+	vb := b // the quotes' judges spend all but the figure reader's reserve (lab-r4 r5 L4: the reader is never what they left)
+	if rc, ru := b.Remaining(); reserve.Calls > 0 && rc > reserve.Calls {
+		if g, err := b.Grant(rc-reserve.Calls, max(0, ru-reserve.USD), agent.LevelWork); err == nil {
+			vb = g
+			defer g.Close()
+		}
+	}
 	for _, d := range drafts {
 		fi := issueID
 		if scoped { // a fact on none of the plan's issues is not admitted
@@ -455,7 +463,7 @@ func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 		var text strings.Builder
 		var vq []analysis.Quote
 		for _, q := range d.Quotes {
-			cit, err := e.verify(ctx, rt, c, b, tool, q)
+			cit, err := e.verify(ctx, rt, c, vb, tool, q)
 			if err != nil {
 				return out, 0, err
 			}
@@ -469,6 +477,9 @@ func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 		}
 		f.Verified = len(f.Citations) > 0 && !slices.ContainsFunc(f.Citations, func(c Citation) bool { return c.Method == "none" })
 		pend = append(pend, pending{f, d, text.String(), findingReading(f, vq, d.Values)})
+	}
+	if vb != b {
+		vb.Close() // its unspent part back to the call's grant, for the reader
 	}
 	var items []*reading // one figure reading for the call's findings (cached by content), out of the call's grant
 	for _, p := range pend {

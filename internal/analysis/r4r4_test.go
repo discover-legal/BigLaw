@@ -64,19 +64,22 @@ var bench6SECLabels = func() map[string]relabel {
 // TestJoinBench6SECPairsAcrossLabels (bench6 SEC): the three bench5 pairs were verified this time but
 // typed "OQR" vs "Whitmore Capital Advisors LLC" (4,217 vs 4,312 trades), "Bellini" vs "Kevin
 // Ostrowski" ($92,600 vs $103,800) and "Email transmission" vs "deletion instruction" (April 15 vs April
-// 22). Read as one measure of one party each, the trades and the dates pair, and so do 7,912 vs 7,412
-// equity trades, and nothing else over the whole ledger does. $103,800 is typed under its payer, Kevin
-// Ostrowski, another party than the reader's (Bellini): no conflict is asserted on it (lab-r4 r5 M4).
+// 22). Read as one measure of one party each, all three pair, and so do 7,912 vs 7,412 equity trades,
+// and nothing else over the whole ledger does. $103,800 is typed under its payer, Kevin Ostrowski: the
+// reader calls that typed entity another party, which makes it the figure's other party, not a second
+// payee (lab-r4 r6 M1: LAB ISSUE_003 asks for this discrepancy by name).
 func TestJoinBench6SECPairsAcrossLabels(t *testing.T) {
 	got := pairs(Join(readAs(bench6Ledger(t, "sec"), bench6SECLabels), nil))
-	want := []string{"F144/F547", "F178/F246", "F246/F83"}
+	want := []string{"F144/F547", "F178/F246", "F246/F83", "F269/F539"}
 	if !slices.Equal(got, want) {
 		t.Errorf("SEC conflicts %v, want %v", got, want)
 	}
-	ls := maps.Clone(bench6SECLabels)
-	ls["F269/$103,800.00"] = relabel{"Marcus T. Bellini", "undisclosed compensation paid for Bellini", "", "none"}
-	if got := pairs(Join(readAs(bench6Ledger(t, "sec"), ls), nil)); !slices.Contains(got, "F269/F539") {
-		t.Errorf("read with no other party typed, $92,600 vs $103,800 is not a conflict: %v", got)
+	for name, e := range map[string]string{"typed under another other party than F269's": "other", "its typed Bellini unexplained": ""} {
+		ls := maps.Clone(bench6SECLabels)
+		ls["F539/$92,600"] = relabel{"Marcus T. Bellini", "undisclosed compensation paid for Bellini", "", e}
+		if got := pairs(Join(readAs(bench6Ledger(t, "sec"), ls), nil)); slices.Contains(got, "F269/F539") {
+			t.Errorf("%s: the payer Kevin Ostrowski contradicted by the other figure's typed Bellini, still paired: %v", name, got)
+		}
 	}
 }
 

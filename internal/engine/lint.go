@@ -38,6 +38,9 @@ var (
 // locator is one rule, section or clause number: "7.3", "206(4)", "3(b)".
 const locator = `\d{1,4}(?:\.\d{1,4})*(?:(?:\([0-9A-Za-z]{1,4}\))+|\b)`
 
+// MaskRefs is text as G8 reads it, its locators masked (maskRefs): what eval's oracle drafter traces.
+func MaskRefs(text string) string { return maskRefs(text) }
+
 // maskRefs blanks the locators in text (refCite), each with the rest of its list or range: a plural
 // head ("Sections", "§§", "clauses") continues over ", 9.1", "and 3(b)", "or 17" and "–4.5"; a
 // singular one only over a range. The list ends at its last locator item (listItem): a number that
@@ -246,14 +249,15 @@ func substituteOutsideQuotes(text string, figs []Fig) string {
 // values, its handle, or a calc worksheet (its result or its inputs). A rule or section number is
 // a locator, not a figure. Each untraced figure says how to fix it (hint).
 func lint(issueID string, s Section, usable map[string]Finding, sheets []analysis.Worksheet) []string {
-	out, _ := lintLimited(issueID, s, usable, sheets)
+	out, _, _ := lintLimited(issueID, s, usable, sheets)
 	return out
 }
 
-// lintLimited is lint and the figures it limited (by why: limitedUnread, limitedScale) instead of
-// tracing them: finish discloses those in Limitations (lab-r4 r5 H2: a figure no clear reading
-// verifies is flagged or limited, never silently traced).
-func lintLimited(issueID string, s Section, usable map[string]Finding, sheets []analysis.Worksheet) (out []string, limited map[string][]string) {
+// lintLimited is lint, the figures it limited (by why: limitedUnread, limitedScale) instead of
+// tracing them, and the cited findings to gate for them: finish discloses the figures in Limitations
+// and gates each finding whose never-read quote is all a figure traces to (lab-r4 r5 H2, r6 M2: a
+// figure no clear reading verifies is flagged, or limited and gated, never silently traced).
+func lintLimited(issueID string, s Section, usable map[string]Finding, sheets []analysis.Worksheet) (out []string, limited map[string][]string, gate []string) {
 	limited = map[string][]string{}
 	cited := map[string]bool{}
 	for _, m := range fidRe.FindAllStringSubmatch(s.Markdown, -1) {
@@ -287,9 +291,14 @@ func lintLimited(issueID string, s Section, usable map[string]Finding, sheets []
 		}
 	}
 	rolled := rolledDates(sheets)
+	sheets = tracedSheets(sheets, ground.String(), cited) // a worksheet traces only from what the section cites (lab-r4 r6 M3)
+	wids := map[string]bool{}
+	for _, w := range sheets {
+		wids["{"+w.WID+"}"] = true
+	}
 	for _, f := range s.Handles {
 		ds, _ := figures(f.Value, true)
-		if _, raw := rolled[strings.Join(ds, "")]; f.FID == "" && !raw || cited[f.FID] { // a worksheet's (not a raw date's), or a cited finding's
+		if _, raw := rolled[strings.Join(ds, "")]; f.FID == "" && wids[f.Handle] && !raw || cited[f.FID] { // a traced worksheet's (not a raw date's), or a cited finding's
 			ground.WriteString(f.Value + "\n")
 		}
 	}
@@ -304,6 +313,9 @@ func lintLimited(issueID string, s Section, usable map[string]Finding, sheets []
 		}
 	}
 	body, regs := memoBody(s)
+	for i, r := range regs { // what Go wrote for a handle traces by construction: a cited finding's value, or a traced worksheet's result
+		regs[i].ok = r.fig.FID == "" && wids[r.fig.Handle] && !rawDate(r.fig.Value, rolled) || cited[r.fig.FID]
+	}
 	read := map[int]analysis.Reading{} // the figure reader's readings of the section's own figures, when it read this text
 	if s.Read != nil && s.Read.Hash == textHash(body) {
 		for _, r := range s.Read.Figs {
@@ -312,20 +324,22 @@ func lintLimited(issueID string, s Section, usable map[string]Finding, sheets []
 	}
 	var known []analysis.Reading // what the cited findings' quotes and values were read as
 	var unread []analysis.Span   // and their quotes' numbers the figure reader never read (not read at all: not unclear, not another kind)
+	unreadBy := map[string][]analysis.Span{}
 	for fid := range cited {
 		f := usable[fid]
 		known = append(known, f.Figures...)
 		for _, r := range f.Figures {
 			if r.Kind == analysis.KindUnclear && strings.HasPrefix(r.Why, "not read") {
-				unread = append(unread, analysis.Span{Text: r.Text})
+				unreadBy[fid] = append(unreadBy[fid], analysis.Span{Text: r.Text})
 			}
 		}
 		if len(f.Figures) == 0 {
 			for _, c := range f.Citations {
 				_, ns := figures(c.Quote, true)
-				unread = append(unread, ns...)
+				unreadBy[fid] = append(unreadBy[fid], ns...)
 			}
 		}
+		unread = append(unread, unreadBy[fid]...)
 		for _, v := range f.Values {
 			if v.Fig != nil {
 				known = append(known, *v.Fig)
@@ -351,6 +365,13 @@ func lintLimited(issueID string, s Section, usable map[string]Finding, sheets []
 			seen[n.figure] = true
 			if n.limited != "" {
 				limited[n.limited] = append(limited[n.limited], n.figure)
+				if n.limited == limitedUnread { // the cited findings whose unread quotes state it: gated for a lawyer (r6 M2)
+					for fid, ns := range unreadBy {
+						if _, ss := analysis.Literal(n.figure); len(ss) > 0 && spanStated(ss[0], ns) && !slices.Contains(gate, fid) {
+							gate = append(gate, fid)
+						}
+					}
+				}
 				continue
 			}
 			if w, raw := rolled[n.figure]; raw {
@@ -362,7 +383,8 @@ func lintLimited(issueID string, s Section, usable map[string]Finding, sheets []
 				cmpStr(n.hint != "", n.hint, hint(n.figure, s.Handles, usable, cited)))
 		}
 	}
-	return out, limited
+	slices.Sort(gate)
+	return out, limited, gate
 }
 
 // untraced is one figure G8 could not trace: as a lint line names it, how to fix it ("" for hint's),
@@ -409,7 +431,7 @@ func g8(para, ground string, at0 int, regs []region, read map[int]analysis.Readi
 	for _, n := range tn {
 		at := at0 + n.Start
 		if i := slices.IndexFunc(regs, func(r region) bool { return r.start <= at && at < r.end }); i >= 0 {
-			if f := regs[i].fig; f.FID == "" && !rawDate(f.Value, rolled) || cited[f.FID] {
+			if regs[i].ok {
 				continue
 			}
 			if !spanStated(n, gn) { // an uncited finding's handle: its value as written in what is cited
@@ -458,6 +480,45 @@ func g8(para, ground string, at0 int, regs []region, read map[int]analysis.Readi
 // unsigned is a span's text without a minus written before it ("-7 days" states the memo's "7 days").
 func unsigned(s string) string { return strings.TrimLeft(s, "-−–—") }
 
+// tracedSheets are the worksheets a section's figures may trace to (lab-r4 r6 M3): every operand a
+// cited finding's value (its ref), a literal the cited quotes and values state (ground), a traced
+// worksheet's result, or a count of days (a rule's period: "21 days"); a worksheet over a literal
+// the record does not state ("sum 9000000000 and 0") computes nothing from the evidence and traces
+// nothing.
+func tracedSheets(sheets []analysis.Worksheet, ground string, cited map[string]bool) []analysis.Worksheet {
+	var out []analysis.Worksheet
+	results := ""
+	for changed := true; changed; {
+		changed = false
+		for _, w := range sheets {
+			if slices.ContainsFunc(out, func(x analysis.Worksheet) bool { return x.WID == w.WID }) {
+				continue
+			}
+			ok := true
+			for _, st := range w.Steps {
+				if !strings.HasPrefix(st.Step, "operand") {
+					continue
+				}
+				ref, _, isRef := strings.Cut(st.Value, " = ")
+				switch {
+				case isRef && refRe.MatchString(ref):
+					ok = ok && cited[strings.SplitN(ref, ".", 2)[0]]
+				case strings.HasSuffix(st.Value, " days"):
+				default:
+					lit := strings.TrimSuffix(strings.TrimSuffix(st.Value, " date"), " %")
+					ok = ok && (covered(lit, ground) || covered(lit, results))
+				}
+			}
+			if ok {
+				out, results, changed = append(out, w), results+w.Result+"\n", true
+			}
+		}
+	}
+	return out
+}
+
+var refRe = regexp.MustCompile(`^F\d+\.v\d+$`)
+
 // rawDate reports whether a handle's value is a deadline's raw date (rolledDates).
 func rawDate(value string, rolled map[string]analysis.Worksheet) bool {
 	ds, _ := figures(value, true)
@@ -477,10 +538,12 @@ func sheetAmount(w analysis.Worksheet) *big.Rat {
 	return r
 }
 
-// region is where Go wrote a handle's value into a section's text.
+// region is where Go wrote a handle's value into a section's text, and whether that value traces
+// (ok: a cited finding's value, or a traced worksheet's result; lint sets it).
 type region struct {
 	start, end int
 	fig        Fig
+	ok         bool
 }
 
 var handleTok = regexp.MustCompile(`\{([A-Za-z]+|W[0-9a-f]{10})\}`)
@@ -499,7 +562,7 @@ func memoBody(s Section) (string, []region) {
 				continue // an unknown handle stays as written (the lint names it)
 			}
 			b.WriteString(x[last:m[0]])
-			regs = append(regs, region{b.Len(), b.Len() + len(s.Handles[i].Value), s.Handles[i]})
+			regs = append(regs, region{b.Len(), b.Len() + len(s.Handles[i].Value), s.Handles[i], false})
 			b.WriteString(s.Handles[i].Value)
 			last = m[1]
 		}
