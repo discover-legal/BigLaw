@@ -3,7 +3,7 @@
   "kind": "go",
   "class": "free",
   "maxTurns": 0,
-  "description": "Finds where the matter's documents state the same figure or date differently, using only verified finding values and no model. Two values are compared only when they measure the same thing: the same metric label, the same quantity class (money is never compared with a share count) and the same party once aliases are unified; dates are compared at their coarsest common precision. A conflict needs two documents whose value sets are disjoint, so a list both documents restate is not a conflict. Pass aliases when the record calls one party by several names (a person and the company that paid them). Do not use it to adjudicate which value is right, or on quarantined findings: naming one is refused.\nExample: {\"fids\": null, \"aliases\": null}\nExample: {\"fids\": [\"F3\", \"F9\", \"F14\"], \"aliases\": [{\"name\": \"A. Person\", \"aliases\": [\"Example Holdings LLC\"]}]}",
+  "description": "Finds where the matter's documents state the same figure or date differently, using only verified finding values and no model. Two values are compared when they measure the same thing: the same metric label, the same quantity class (money is never compared with a share count) and the same party once aliases are unified, or, whatever their labels, values of one class from two documents near each other whose quotes share their distinctive words; dates are compared at their coarsest common precision. A conflict needs two documents whose value sets are disjoint, so a list both documents restate is not a conflict. It also lists the documents the evidence sweep left partly unread, whose figures may be missing from the findings. Pass aliases when the record calls one party by several names (a person and the company that paid them). Do not use it to adjudicate which value is right, or on quarantined findings: naming one is refused.\nExample: {\"fids\": null, \"aliases\": null}\nExample: {\"fids\": [\"F3\", \"F9\", \"F14\"], \"aliases\": [{\"name\": \"A. Person\", \"aliases\": [\"Example Holdings LLC\"]}]}",
   "in": {
     "type": "object", "additionalProperties": false, "required": ["fids", "aliases"],
     "properties": {
@@ -13,10 +13,11 @@
     }
   },
   "out": {
-    "type": "object", "additionalProperties": false, "required": ["conflicts"],
+    "type": "object", "additionalProperties": false, "required": ["conflicts", "unreadDocuments"],
     "properties": {"conflicts": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["entity", "metric", "kind", "values"],
       "properties": {"entity": {"type": "string"}, "metric": {"type": "string"}, "kind": {"type": "string", "enum": ["numeric", "date"]},
         "values": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["value", "canon", "documentId", "fid"],
-          "properties": {"value": {"type": "string"}, "canon": {"type": "string"}, "documentId": {"type": "string"}, "fid": {"type": "string"}}}}}}}}
+          "properties": {"value": {"type": "string"}, "canon": {"type": "string"}, "documentId": {"type": "string"}, "fid": {"type": "string"}}}}}}},
+      "unreadDocuments": {"type": "array", "items": {"type": "string"}}}
   }
 }

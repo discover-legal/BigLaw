@@ -31,6 +31,7 @@ const (
 	kHandle   = "handle"   // key: codename; the Fig it names for the whole run
 	kAnalysis = "analysis" // key: issue id; Analysis, analyze_issue's latest for the issue
 	kCover    = "cover"    // key: "pass"; Cover, the coverage pass's outcome (it runs once)
+	kSwept    = "swept"    // key: "sweep"; []SweptDoc, each document's sweep coverage (the latest sweep's)
 )
 
 // Issue is one plan issue (the deliverable's spine), typed by a BELO-lite issue class.
@@ -68,10 +69,13 @@ type Analysis struct {
 	Conclusion  string `json:"conclusion"`
 }
 
-// Cover is the coverage pass's outcome: the touched issues it analysed and those still missing.
+// Cover is the coverage pass's outcome: the touched issues it analysed and those still missing, the
+// salient findings still left out of the memo after it, and the figure conflicts still unaddressed.
 type Cover struct {
-	Analysed []string `json:"analysed"`
-	Missing  []string `json:"missing"`
+	Analysed    []string `json:"analysed"`
+	Missing     []string `json:"missing"`
+	LeftOut     []string `json:"leftOut"`
+	Unaddressed int      `json:"unaddressed"`
 }
 
 // Critic is one committee finding, open until the lead resolves it (fixed or disclosed).

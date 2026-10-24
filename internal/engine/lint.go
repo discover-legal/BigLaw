@@ -277,21 +277,65 @@ func lint(issueID string, s Section, usable map[string]Finding, sheets []analysi
 			ground.WriteString(v.Value + "\n")
 		}
 	}
+	rolled := rolledDates(sheets)
 	for _, f := range s.Handles {
-		if f.FID == "" || cited[f.FID] { // a worksheet's, or a cited finding's
+		ds, _ := figures(f.Value, true)
+		if _, raw := rolled[strings.Join(ds, "")]; f.FID == "" && !raw || cited[f.FID] { // a worksheet's (not a raw date's), or a cited finding's
 			ground.WriteString(f.Value + "\n")
 		}
 	}
-	for _, w := range sheets {
-		ground.WriteString(w.Result + "\n")
+	for _, w := range sheets { // a raw date before its roll is no deadline: it traces only beside the rolled one (below)
+		if _, raw := rolled[w.Result]; !raw || w.Unit != "date" {
+			ground.WriteString(w.Result + "\n")
+		}
 		for _, st := range w.Steps {
-			ground.WriteString(st.Value + "\n")
+			if _, raw := rolled[strings.Fields(st.Value + " x")[0]]; st.Step != "raw date" && !raw {
+				ground.WriteString(st.Value + "\n")
+			}
 		}
 	}
 	body := fidRe.ReplaceAllString(substituteOutsideQuotes(s.Markdown, s.Handles), " ")
 	body = statuteCite.ReplaceAllString(caseCite.ReplaceAllString(body, " "), " ") // an authority's numbers are G5's (flagged), not figures
-	for _, n := range Untraced(maskRefs(body), ground.String(), false) {
-		out = append(out, issueID+": the figure "+n+" is not traced (G8): "+hint(n, s.Handles, usable, cited))
+	seen := map[string]bool{}
+	for _, para := range strings.Split(body, "\n\n") { // a paragraph that states a rolled deadline may name its raw date
+		g := ground.String()
+		pd, _ := figures(para, true)
+		for raw, w := range rolled {
+			if slices.Contains(pd, w.Result) {
+				g += raw + "\n"
+			}
+		}
+		for _, n := range Untraced(maskRefs(para), g, false) {
+			if seen[n] {
+				continue
+			}
+			seen[n] = true
+			if w, raw := rolled[n]; raw {
+				out = append(out, issueID+": the date "+n+" is a deadline's raw date, before Rule 6(a)'s roll past a weekend or holiday (G8): the deadline is {"+w.WID+"} ("+
+					sheetValue(w.Result, w.Unit)+"): write that handle, and state the raw date only in the sentence that gives the rolled deadline")
+				continue
+			}
+			out = append(out, issueID+": the figure "+n+" is not traced (G8): "+hint(n, s.Handles, usable, cited))
+		}
+	}
+	return out
+}
+
+// rolledDates maps each raw date a date_add worksheet rolled past a weekend or holiday to that
+// worksheet (bench r3, gate A: a drafter computed the answer date with no holidays, got the raw
+// November 11 (Veterans Day), and G8 traced it to that worksheet and to the rolled one's raw-date
+// step, so the memo stated it as the deadline). A raw date and any worksheet result equal to it
+// trace only beside the rolled deadline; the first worksheet to roll a date names it.
+func rolledDates(sheets []analysis.Worksheet) map[string]analysis.Worksheet {
+	out := map[string]analysis.Worksheet{}
+	for _, w := range sheets {
+		for _, st := range w.Steps {
+			if f := strings.Fields(st.Value); st.Step == "raw date" && len(f) > 0 {
+				if _, ok := out[f[0]]; !ok {
+					out[f[0]] = w
+				}
+			}
+		}
 	}
 	return out
 }

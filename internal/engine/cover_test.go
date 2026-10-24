@@ -158,3 +158,57 @@ func TestCoveragePassRecordedWhenAModelFails(t *testing.T) {
 		t.Fatalf("cover rows %d (%v), want the pass recorded once\n%s", len(rows), err, steps)
 	}
 }
+
+// TestCoverageDraftsLeftOutEvidence (bench r3: the trust memo never cited the verified findings on
+// the incapacity standard, the disinheritance clause, the contingent guardian and the no-contest
+// clause; the SEC memo stated 4,217 trades but never the statistical exhibit's 4,312): a figure two
+// documents state differently is a finish check until the memo states both, and a salient verified
+// finding no section cites is placed by the coverage pass, which redrafts its issue with it; the
+// redraft is reviewed before the deliverable.
+func TestCoverageDraftsLeftOutEvidence(t *testing.T) {
+	t.Parallel()
+	referral := "1. Analysis\nThe Division's Office of Quantitative Research analyzed 4,217 equity trades executed through the omnibus account during the Review Period.\n\n" +
+		"2. Recordkeeping\nThe Firm did not retain allocation records for 2,614 of the omnibus trades executed during the Review Period.\n"
+	stats := "Total Omnibus Equity Trades Analyzed\t4,312\tTrades executed through WCA omnibus account at Meridian Clearing Corp. during Review Period\n"
+	f := newFixture(t, referral, stats)
+	d1, d2 := f.docs[0].ID, f.docs[1].ID
+	q1 := "The Division's Office of Quantitative Research analyzed 4,217 equity trades executed through the omnibus account during the Review Period"
+	q2 := "Total Omnibus Equity Trades Analyzed\t4,312\tTrades executed through WCA omnibus account at Meridian Clearing Corp. during Review Period"
+	q3 := "The Firm did not retain allocation records for 2,614 of the omnibus trades executed during the Review Period"
+	sweep := facts(fd("The Firm did not retain allocation records for 2,614 omnibus trades.", d1, q3)) // a sweep finding: no issue
+	three := func(r model.Reply) []model.Reply { return []model.Reply{r, r, r} }
+	e, fake := f.engine(f.with(map[string][]model.Reply{
+		"lead": {calls(plan(issue("I1", "What did the Division's analysis of the omnibus trades find?", "Clause"))),
+			calls(extract(d1, "trades analyzed", "I1"), extract(d2, "trades analyzed", "I1")),
+			calls(tc("extract_facts", m{"question": "Recordkeeping?", "documentId": d1, "sectionId": nil, "through": nil, "offset": nil, "query": "records", "issueId": nil})),
+			calls(draft("I1", "F1")), calls(committee()), calls(finishCall("submit")),
+			calls(tc("draft_section", m{"issueId": "I1", "fids": []string{"F1", "F2"}, "revise": "state both counts"})), calls(committee()), calls(finishCall("submit"))},
+		"extract_facts": {facts(fd("OQR analyzed 4,217 omnibus equity trades.", d1, q1, val("OQR", "trades analyzed", "4,217", "Count"))),
+			facts(fd("The statistical summary counts 4,312 omnibus equity trades analyzed.", d2, q2, val("WCA", "total omnibus equity trades", "4,312", "Count"))), sweep},
+		"draft_section": {section("OQR analyzed 4,217 omnibus trades [F1].", "s"),
+			section("OQR analyzed 4,217 omnibus trades [F1], while the statistical summary counts 4,312 [F2]: the record does not explain the difference.", "s"),
+			section("OQR analyzed 4,217 omnibus trades [F1], while the statistical summary counts 4,312 [F2]. The Firm kept no allocation records for 2,614 omnibus trades [F3].", "s")},
+		"prosecute": three(supported), "reproduce": three(noAnswers), "audit_gaps": three(noGaps),
+	}), Config{})
+	task := f.submit(0)
+	f.step(context.Background())
+	v, _ := e.Get(context.Background(), task.ID)
+	fin := f.outputs(v.ID, "finish")
+	out := deref(v.Output)
+	if len(fin) != 2 || !strings.Contains(fin[0], "memo: the documents state") || !strings.Contains(fin[0], "[F1] 4,217 vs [F2] 4,312") {
+		t.Fatalf("finish %q\n%s", fin, f.steps(v.ID))
+	}
+	var placed string
+	for _, c := range fake.Calls() {
+		if c.Agent == "draft_section" {
+			placed = fmt.Sprint(c.Messages[1].Content)
+		}
+	}
+	if stop(v) != "awaiting_gate/finished" || !strings.Contains(placed, "These findings never reached the memo: F3") || !strings.Contains(out, "2,614 omnibus trades [F3]") ||
+		!strings.Contains(out, "4,312") || strings.Count(f.steps(v.ID), "tool_call:committee") != 2 {
+		t.Fatalf("%s: last drafter request %.300q\n%s\n%s", stop(v), placed, f.steps(v.ID), out)
+	}
+	if strings.Contains(out, "never reached the memo") {
+		t.Fatalf("a placed finding was disclosed as left out:\n%s", out)
+	}
+}

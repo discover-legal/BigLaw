@@ -7,9 +7,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"regexp"
 	"slices"
+	"strings"
 
 	"github.com/discover-legal/BigLaw/internal/agent"
+	"github.com/discover-legal/BigLaw/internal/analysis"
 )
 
 // The coverage pass (bench, SEC referral: the memo touched scienter under 206(1)/(2), the § 2462
@@ -153,6 +157,40 @@ func (e *Engine) coverTool(rt *agent.Runtime, r *run) agent.Tool {
 				break
 			}
 		}
+		if failed == nil { // then the left-out evidence: one redraft per issue that has some
+			ids, place, perr := e.placements(ctx, c.TaskID)
+			if perr != nil {
+				return nil, b.Spent(), perr
+			}
+			for _, id := range ids {
+				if calls, _ := b.Remaining(); calls == 0 {
+					break
+				}
+				base, ferr := e.coverFIDs(ctx, c.TaskID, id)
+				if ferr != nil {
+					return nil, b.Spent(), ferr
+				}
+				fids := slices.Clone(place[id].FIDs)
+				for _, x := range place[id].Conflicts {
+					for _, v := range x.Values {
+						fids = append(fids, v.FID)
+					}
+				}
+				fids = slices.Compact(append(fids, base...))
+				for i := len(fids) - 1; i >= 0; i-- { // a finding named twice: once, where it first appears
+					if slices.Index(fids, fids[i]) < i {
+						fids = slices.Delete(fids, i, i+1)
+					}
+				}
+				in, _ := json.Marshal(map[string]any{"issueId": id, "fids": fids[:min(60, len(fids))], "revise": placeRevise(place[id])})
+				if _, err := rt.Invoke(ctx, me, call, "draft_section", in, b, false, 0); modelOrJournal(err) {
+					failed = err
+					break
+				} else if errors.Is(err, agent.ErrBudget) {
+					break
+				}
+			}
+		}
 		if errors.Is(failed, agent.ErrJournal) {
 			return nil, b.Spent(), failed
 		}
@@ -160,7 +198,19 @@ func (e *Engine) coverTool(rt *agent.Runtime, r *run) agent.Tool {
 		if err != nil {
 			return nil, b.Spent(), err
 		}
-		res := Cover{Analysed: []string{}, Missing: []string{}}
+		res := Cover{Analysed: []string{}, Missing: []string{}, LeftOut: []string{}} // what is still to disclose after it
+		if lo, err := e.leftOut(ctx, c.TaskID); err != nil {
+			return nil, b.Spent(), err
+		} else {
+			for _, f := range lo {
+				res.LeftOut = append(res.LeftOut, f.FID)
+			}
+		}
+		if _, open, err := e.discrepancies(ctx, c.TaskID); err != nil {
+			return nil, b.Spent(), err
+		} else {
+			res.Unaddressed = len(open)
+		}
 		for _, is := range todo {
 			if slices.ContainsFunc(left, func(x Issue) bool { return x.ID == is.ID }) {
 				res.Missing = append(res.Missing, is.ID)
@@ -175,13 +225,13 @@ func (e *Engine) coverTool(rt *agent.Runtime, r *run) agent.Tool {
 	}}
 }
 
-// coverPass runs the coverage pass as a step of its own (a run finishing from its reserve) when a
-// plan issue is only touched and the pass has not run, before the last review; it returns the last
-// step. A refused or failed pass is in the step log, and finish discloses what is still touched.
+// coverPass runs the coverage pass as a step of its own (a run finishing from its reserve) when it
+// has work (coverDue) and has not run, before the last review; it returns the last step. A refused or
+// failed pass is in the step log, and finish discloses what is still touched or left out.
 func (e *Engine) coverPass(ctx context.Context, rt *agent.Runtime, call agent.Call, r *run, last int) (int, error) {
 	done, err := e.covered(ctx, r.t.ID)
-	todo, terr := e.touched(ctx, r.t.ID)
-	if err = cmpErr(err, terr); err != nil || done || len(todo) == 0 {
+	due, derr := e.coverDue(ctx, r.t.ID)
+	if err = cmpErr(err, derr); err != nil || done || !due {
 		return last, err
 	}
 	b, a := r.b, Allocate(e.cfg.BudgetCalls, e.cfg.BudgetUSD) // its grant is its share, not all the review level's free budget
@@ -196,4 +246,228 @@ func (e *Engine) coverPass(ctx context.Context, rt *agent.Runtime, call agent.Ca
 		return last, cmpErr(ctx.Err(), err)
 	}
 	return last + 1, nil
+}
+
+// The coverage pass's second job (bench r3): what the record proves must reach the memo. Two kinds of
+// verified evidence were lost between the ledger and the deliverable: salient findings no section
+// ever cited (trust: the incapacity standard, the disinheritance clause, the contingent guardian,
+// the no-contest clause), and figures two documents state differently (SEC: 4,217 vs 4,312 trades,
+// $92,600 vs $103,800, April 22 vs April 15, 73% vs 78%). The pass redrafts the issue each belongs to
+// with them; a conflict the memo still does not state is a finish check (lint, bounded like G8's),
+// and a salient finding still left out is disclosed.
+
+// coverDue reports whether the coverage pass has work: a touched issue, a salient finding no section
+// cites, or a figure conflict the memo does not address.
+func (e *Engine) coverDue(ctx context.Context, taskID string) (bool, error) {
+	todo, err := e.touched(ctx, taskID)
+	ids, _, perr := e.placements(ctx, taskID)
+	return len(todo) > 0 || len(ids) > 0, cmpErr(err, perr)
+}
+
+// placement is the evidence one issue's redraft must carry.
+type placement struct {
+	FIDs      []string
+	Conflicts []analysis.Conflict
+}
+
+// breachRe is a claim that says a document departs from what it should be (a deviation, an
+// omission, a violation): with a breach relation, a severity or a deviation check, a salient finding.
+var breachRe = regexp.MustCompile(`(?i)\b(deviat\w*|omit\w*|omission|does not|do not|did not|fails? to|failed to|inconsistent|contrary to|instead of|rather than|missing|absent|lacks?|prohibit\w*|violat\w*|breach\w*|discrepan\w*|conflicts? with)\b`)
+
+// salientFinding is a verified finding the memo must not leave out: a deviation check's, one rated
+// high or critical, one whose typed relations say a breach (deviatesFrom, violates, prohibits,
+// harmed), one stating a salient figure, or one whose claim says a document departs from another.
+func salientFinding(f Finding) bool {
+	if f.Arm.Tool == "check_deviation" || f.Severity == "high" || f.Severity == "critical" || breachRe.MatchString(f.Claim) {
+		return true
+	}
+	for _, r := range f.Relations {
+		if r.Predicate == "deviatesFrom" || r.Predicate == "violates" || r.Predicate == "prohibits" || r.Predicate == "harmed" {
+			return true
+		}
+	}
+	return slices.ContainsFunc(f.Values, func(v analysis.Value) bool { return analysis.Salience(v.Value) >= 55 })
+}
+
+// maxPlaced bounds the left-out findings the pass places (it redrafts each issue once) and lists;
+// one issue's redraft takes at most maxPlacedPerIssue of them.
+const (
+	maxPlaced         = 40
+	maxPlacedPerIssue = 12
+)
+
+// salienceRank orders left-out findings, strongest evidence first: a deviation check's or a high
+// one, then a typed breach, then a claim that says so, then a salient figure alone.
+func salienceRank(f Finding) int {
+	switch {
+	case f.Arm.Tool == "check_deviation" || f.Severity == "high" || f.Severity == "critical":
+		return 0
+	case slices.ContainsFunc(f.Relations, func(r analysis.Relation) bool {
+		return r.Predicate == "deviatesFrom" || r.Predicate == "violates" || r.Predicate == "prohibits" || r.Predicate == "harmed"
+	}):
+		return 1
+	case breachRe.MatchString(f.Claim):
+		return 2
+	}
+	return 3
+}
+
+// memoText is the drafted sections as the memo will state them (handles substituted).
+func memoText(secs []Section) string {
+	var b strings.Builder
+	for _, s := range secs {
+		b.WriteString(substituteOutsideQuotes(s.Markdown, s.Handles) + "\n\n")
+	}
+	return b.String()
+}
+
+// addressed reports whether the memo states both of a conflict's values.
+func addressed(c analysis.Conflict, memo string) bool {
+	ds, ns := figures(memo, true)
+	for _, v := range c.Values {
+		kind, canon, _ := strings.Cut(v.Canon, ":")
+		if kind == "date" {
+			d, _ := analysis.ParseDate(canon)
+			if !slices.ContainsFunc(ds, func(k string) bool { x, _ := analysis.ParseDate(k); return x == d }) {
+				return false
+			}
+		} else if !slices.Contains(ns, canon) {
+			return false
+		}
+	}
+	return true
+}
+
+// discrepancies is the cross-document join over every usable finding (analysis.Join, labels and
+// near values alike), and those the memo does not yet address.
+func (e *Engine) discrepancies(ctx context.Context, taskID string) (all, open []analysis.Conflict, err error) {
+	use, err := e.usable(ctx, taskID)
+	secs, serr := load[Section](ctx, e, taskID, kSection)
+	if err = cmpErr(err, serr); err != nil {
+		return nil, nil, err
+	}
+	an := make([]analysis.Finding, 0, len(use))
+	for _, f := range use {
+		an = append(an, f.Finding)
+	}
+	memo := memoText(secs)
+	for _, c := range analysis.Join(an, nil) {
+		all = append(all, c)
+		if !addressed(c, memo) {
+			open = append(open, c)
+		}
+	}
+	return all, open, nil
+}
+
+// leftOut is the salient usable findings no section cites, strongest first (salienceRank), else in
+// ledger order.
+func (e *Engine) leftOut(ctx context.Context, taskID string) ([]Finding, error) {
+	use, err := e.usable(ctx, taskID)
+	secs, serr := load[Section](ctx, e, taskID, kSection)
+	if err = cmpErr(err, serr); err != nil {
+		return nil, err
+	}
+	cited := map[string]bool{}
+	for _, s := range secs {
+		for _, m := range fidRe.FindAllStringSubmatch(s.Markdown, -1) {
+			cited[m[1]] = true
+		}
+	}
+	var out []Finding
+	for _, f := range use {
+		if !cited[f.FID] && salientFinding(f) {
+			out = append(out, f)
+		}
+	}
+	slices.SortStableFunc(out, func(a, b Finding) int { return salienceRank(a) - salienceRank(b) })
+	return out, nil
+}
+
+// placements assigns the left-out findings and the unaddressed conflicts to plan issues: a finding
+// to its own issue, else to the issue whose question its claim matches best (BM25; the first issue
+// when none matches); a conflict to the issue of a section citing either value's finding, else to
+// either finding's issue, else as its metric matches. It returns them by issue, in plan order.
+func (e *Engine) placements(ctx context.Context, taskID string) ([]string, map[string]*placement, error) {
+	issues, err := load[Issue](ctx, e, taskID, kIssue)
+	secs, serr := load[Section](ctx, e, taskID, kSection)
+	left, lerr := e.leftOut(ctx, taskID)
+	_, open, oerr := e.discrepancies(ctx, taskID)
+	use, uerr := e.usable(ctx, taskID)
+	if err = cmpErr(err, serr, lerr, oerr, uerr); err != nil || len(issues) == 0 {
+		return nil, nil, err
+	}
+	qs := make([][]string, len(issues))
+	for i, is := range issues {
+		qs[i] = terms(is.Question)
+	}
+	best := func(text string) string {
+		sc := bm25(qs, terms(text)) // the questions as the corpus, the text as the query
+		k := 0
+		for i := range sc {
+			if sc[i] > sc[k] {
+				k = i
+			}
+		}
+		return issues[k].ID
+	}
+	inPlan := func(id string) bool { return slices.ContainsFunc(issues, func(is Issue) bool { return is.ID == id }) }
+	out := map[string]*placement{}
+	at := func(id string) *placement {
+		if out[id] == nil {
+			out[id] = &placement{}
+		}
+		return out[id]
+	}
+	for _, f := range left[:min(maxPlaced, len(left))] {
+		id := cmpStr(inPlan(f.IssueID), f.IssueID, "")
+		if id == "" {
+			id = best(f.Claim)
+		}
+		if p := at(id); len(p.FIDs) < maxPlacedPerIssue {
+			p.FIDs = append(p.FIDs, f.FID)
+		}
+	}
+	for _, c := range open {
+		id := ""
+		for _, s := range secs {
+			if id == "" && slices.ContainsFunc(c.Values, func(v analysis.ConflictVal) bool { return strings.Contains(s.Markdown, "["+v.FID+"]") }) {
+				id = s.IssueID
+			}
+		}
+		for _, v := range c.Values {
+			if i := slices.IndexFunc(use, func(f Finding) bool { return f.FID == v.FID }); id == "" && i >= 0 && inPlan(use[i].IssueID) {
+				id = use[i].IssueID
+			}
+		}
+		if id == "" || !inPlan(id) {
+			id = best(c.Entity + " " + c.Metric)
+		}
+		at(id).Conflicts = append(at(id).Conflicts, c)
+	}
+	var order []string
+	for _, is := range issues {
+		if out[is.ID] != nil {
+			order = append(order, is.ID)
+		}
+	}
+	return order, out, nil
+}
+
+// placeRevise is the redraft instruction for one issue's placement.
+func placeRevise(p *placement) string {
+	var b strings.Builder
+	b.WriteString("Coverage pass: the memo leaves out verified evidence that bears on this issue. Keep what the section says and add it.")
+	if len(p.FIDs) > 0 {
+		b.WriteString(" These findings never reached the memo: " + strings.Join(p.FIDs, ", ") + ". State each one that bears on the question (a deviation, an omission, a violation or a key fact), citing it.")
+	}
+	for _, c := range p.Conflicts {
+		var vs []string
+		for _, v := range c.Values {
+			vs = append(vs, fmt.Sprintf("[%s] states %s", v.FID, v.Value))
+		}
+		fmt.Fprintf(&b, " The documents disagree on %s: %s. State both figures, cite both findings, and say what the difference means for the matter.",
+			cmpStr(strings.TrimSpace(c.Entity+" "+c.Metric) != "", strings.TrimSpace(c.Entity+" "+c.Metric), "one figure"), strings.Join(vs, "; "))
+	}
+	return b.String()
 }

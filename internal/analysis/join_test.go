@@ -120,8 +120,50 @@ func TestCrossDocAliasUnificationDeterministicGraphTie(t *testing.T) {
 	if c := has(Join(fs, []Alias{{"Ostrowski", []string{"Bayshore Palms LLC"}}}), "$92,600", "$103,800"); c == nil {
 		t.Fatal("the aliased pair was not flagged")
 	}
-	if cs := Join(fs, nil); len(cs) != 0 {
-		t.Fatalf("without the alias the pair unified: %+v", cs)
+	if cs := Join(fs, nil); len(cs) != 1 || cs[0].Entity != "Ostrowski" || cs[0].Metric != "undisclosed compensation total" || has(cs, "$92,600", "$103,800") == nil {
+		t.Fatalf("without the alias: %+v (r3: the near join finds the pair, its quotes sharing their words)", cs)
+	}
+}
+
+// TestNearConflictsAcrossLabels (bench r3, SEC: the lead's join found nothing, though the record
+// states 4,217 vs 4,312 trades analysed, $92,600 vs $103,800 paid to the club, 73% vs 78% of volume
+// and April 22 vs April 15 for the deletion instruction): values of one class from two documents,
+// near each other, whose quotes share three distinctive words are a conflict whatever their labels;
+// a figure restated in the other document, far apart values, or quotes about other things are not.
+func TestNearConflictsAcrossLabels(t *testing.T) {
+	v := func(value, class, metric string) Value {
+		return Value{Entity: "WCA", Metric: metric, Value: value, Class: class}
+	}
+	f := func(fid, doc, quote string, vals ...Value) Finding {
+		return Finding{FID: fid, Verified: true, Quotes: []Quote{{DocumentID: doc, Quote: quote}}, Values: vals}
+	}
+	fs := []Finding{
+		f("F1", "referral", "The Division's Office of Quantitative Research (\"OQR\") analyzed 4,217 equity trades executed through the omnibus account during the Review Period.", v("4,217", "Count", "trades analyzed by OQR")),
+		f("F2", "stats", "Total Omnibus Equity Trades Analyzed\t4,312\tTrades executed through WCA omnibus account at Meridian Clearing Corp. during Review Period", v("4,312", "Count", "total omnibus equity trades")),
+		f("F3", "referral", "The total undisclosed compensation received by Bellini, in the form of payments made by Ostrowski to Bayshore Palms Golf & Country Club for Bellini's benefit, was approximately $92,600", v("$92,600", "Money", "undisclosed compensation")),
+		f("F4", "bank", "GRAND TOTAL\tTotal of all payments from Ostrowski personal account to Bayshore Palms Golf & Country Club on behalf of Marcus T. Bellini\t05/03/2022 – 01/02/2024\t22\t\t$103,800.00", v("$103,800.00", "Money", "grand total of payments")),
+		f("F5", "referral", "WCA executed 5,776 equity trades through the omnibus account out of a total of 7,912 equity trades during the Review Period, representing approximately 73% of total equity trading volume.", v("73%", "Percentage", "omnibus share of equity trades")),
+		f("F6", "stats", "Omnibus Trades as % of Total Equity Trading Volume\tApproximately 78%\t5,776 omnibus trades out of total equity trading volume", v("78%", "Percentage", "omnibus trades percentage")),
+		f("F7", "referral", "On or about April 22, 2024, during the pendency of the SEC examination of WCA (which had commenced on March 11, 2024), Whitmore instructed WCA's IT Administrator, Tomás Delgado (\"Delgado\"), to \"clean up the shared drive\"", v("April 22, 2024", "Date", "deletion instruction")),
+		f("F8", "email", "From: Gerald R. Whitmore <gwhitmore@whitmorecapital.com>\nTo: Tomás Delgado <tdelgado@whitmorecapital.com>\nDate: Mon, 15 Apr 2024 09:23:47 -0400", v("Mon, 15 Apr 2024", "Date", "email sent")),
+		// not conflicts: the same figure in both, a far value, unrelated quotes
+		f("F9", "stats", "WCA executed 5,776 omnibus trades out of 7,912 equity trades.", v("5,776", "Count", "omnibus trades")),
+		f("F10", "bank", "Initiation fee paid to Bayshore Palms Golf & Country Club for Bellini: $45,000.00", v("$45,000.00", "Money", "initiation fee")),
+		f("F11", "manual", "Access persons file quarterly reports of personal securities transactions within 30 days.", v("4,400", "Count", "reports filed")),
+		// rows of two tables (a trade each), and small figures, are not compared by nearness
+		f("F12", "stats", "OMN-2021-00142\t2021-02-17\tXYZ Corp (XYZ)\tBuy\t25,000\t$48.32\t$1,208,000\tOceanic Fund I LP", v("$1,208,000", "Money", "notional"), v("2021-02-17", "Date", "trade date")),
+		f("F13", "log", "2021-02-24\tXYZ Corp (XYZ)\tBuy\t26,000\t$48.90\t$1,271,400\tOceanic Fund I LP", v("$1,271,400", "Money", "trade value"), v("2021-02-24", "Date", "executed")),
+		f("F14", "bank", "Monthly dues for Bellini at Bayshore Palms Golf & Country Club were $2,800 per month for 21 months", v("21", "Count", "months of dues")),
+		f("F15", "referral", "Monthly membership dues for Bellini at Bayshore Palms Golf & Country Club of $2,800 per month for a period of 17 months", v("17", "Count", "months")),
+	}
+	cs := Join(fs, nil)
+	for _, p := range [][2]string{{"4,217", "4,312"}, {"$92,600", "$103,800.00"}, {"73%", "78%"}, {"April 22, 2024", "Mon, 15 Apr 2024"}} {
+		if has(cs, p[0], p[1]) == nil {
+			t.Errorf("%s vs %s not found: %+v", p[0], p[1], cs)
+		}
+	}
+	if len(cs) != 4 {
+		t.Errorf("%d conflicts, want the 4: %+v", len(cs), cs)
 	}
 }
 

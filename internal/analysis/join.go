@@ -35,13 +35,20 @@ type Alias struct {
 const maxValuesPerMetric = 6 // a longer column under one label is an enumeration, not a conflict
 
 type entry struct {
-	v     Value
-	fid   string
-	class Class
-	canon string
-	date  Date
-	doc   string
-	words map[string]bool // the distinctive words of its quotes
+	v      Value
+	fid    string
+	class  Class
+	canon  string
+	date   Date
+	doc    string
+	words  map[string]bool // the distinctive words of its quotes
+	quotes []string
+}
+
+// row reports whether a value is stated only in table rows (tab-separated): one row of an
+// enumeration (a trade, a payment), never by itself the same fact as another table's row.
+func (e entry) row() bool {
+	return !slices.ContainsFunc(e.quotes, func(q string) bool { return strings.Contains(q, e.v.Value) && !strings.Contains(q, "\t") })
 }
 
 // sets is a union-find over names.
@@ -59,9 +66,10 @@ func (s sets) union(a, b string) { s[s.find(a)] = s.find(b) }
 // Join finds the discrepancies among verified findings (v1's cross-document join, model-free).
 // Numeric values share a metric identity when their metric label, quantity class and alias-unified
 // entity match (a value with no entity joins its metric's one entity, if there is one); dates are
-// one event when their labels match or their quotes share two distinctive words. A conflict needs
-// two documents whose value sets are disjoint, so a list restated in both is not one. Durations and
-// identifiers are never compared, and a quarantined finding never joins.
+// one event when their labels match or their quotes share two distinctive words (two table rows only
+// by label: r3). A conflict needs two documents whose value sets are disjoint, so a list restated in
+// both is not one. Durations and identifiers are never compared, and a quarantined finding never
+// joins. Then near (labels aside, close values whose quotes share words).
 func Join(findings []Finding, aliases []Alias) []Conflict {
 	key := func(s string) string { return strings.TrimPrefix(norm(s), "the ") }
 	var es []entry
@@ -69,7 +77,11 @@ func Join(findings []Finding, aliases []Alias) []Conflict {
 	for _, f := range findings {
 		for _, v := range f.Values {
 			if class, canon, d, ok := Canon(v); ok && f.Verified {
-				es = append(es, entry{v, f.FID, class, canon, d, docOf(f, v.Value), referents(f, v.Value)})
+				var qs []string
+				for _, q := range f.Quotes {
+					qs = append(qs, q.Quote)
+				}
+				es = append(es, entry{v, f.FID, class, canon, d, docOf(f, v.Value), referents(f, v.Value), qs})
 				if n := key(v.Entity); n != "" && !slices.Contains(names, n) {
 					names = append(names, n)
 				}
@@ -96,7 +108,7 @@ func Join(findings []Finding, aliases []Alias) []Conflict {
 	for i, e := range es {
 		if e.class == "Date" {
 			for j := range i {
-				if es[j].class == "Date" && (norm(e.v.Metric) != "" && norm(e.v.Metric) == norm(es[j].v.Metric) || shared(e.words, es[j].words) >= 2) {
+				if es[j].class == "Date" && (norm(e.v.Metric) != "" && norm(e.v.Metric) == norm(es[j].v.Metric) || !(e.row() && es[j].row()) && shared(e.words, es[j].words) >= 2) {
 					events.union(strconv.Itoa(i), strconv.Itoa(j))
 				}
 			}
@@ -141,6 +153,76 @@ func Join(findings []Finding, aliases []Alias) []Conflict {
 	}
 	for _, r := range roots {
 		try(byEvent[r], "date", func(a, b entry) bool { return !a.date.Compatible(b.date) })
+	}
+	return append(out, near(es, out)...)
+}
+
+// maxNear bounds the near conflicts one join reports: they are leads to check, not a column dump.
+// nearSalience is the least salient quantity compared (any percentage, money from $1,000, a count
+// of thousands): a share price or a day count is too common for nearness to mean one fact.
+const (
+	maxNear      = 20
+	nearSalience = 45
+)
+
+// near finds the conflicts the label join cannot see (bench r3, SEC: 4,217 vs 4,312 trades
+// analysed, $92,600 vs $103,800 paid to the club, 73% vs 78% of volume, April 22 vs April 15, each
+// labelled differently in its document's finding): two values of one class from two documents that
+// are near each other (within a quarter for a quantity; a month for a full date) and whose quotes
+// share at least three distinctive words, when neither document states the other's value anywhere
+// (so a total restated beside its parts is not one). Quantities must be salient (nearSalience), and two
+// values each only in table rows are never paired (rows of two tables are enumerations, not one fact
+// restated). It skips pairs a found conflict already holds.
+func near(es []entry, found []Conflict) []Conflict {
+	perDoc := map[string]map[string]bool{}
+	for _, e := range es {
+		if perDoc[e.doc] == nil {
+			perDoc[e.doc] = map[string]bool{}
+		}
+		perDoc[e.doc][e.canon] = true
+	}
+	held := map[string]bool{}
+	for _, c := range found {
+		for _, v := range c.Values {
+			held[v.FID+"|"+v.Canon] = true
+		}
+	}
+	close := func(a, b entry) bool {
+		if a.class == "Date" {
+			if a.date.Day == 0 || b.date.Day == 0 {
+				return false
+			}
+			d := a.date.time().Sub(b.date.time()).Hours() / 24
+			return d != 0 && d <= 31 && d >= -31
+		}
+		x, okx := Number(strings.SplitN(a.canon, ":", 2)[1])
+		y, oky := Number(strings.SplitN(b.canon, ":", 2)[1])
+		if !okx || !oky {
+			return false
+		}
+		fx, _ := x.Float64()
+		fy, _ := y.Float64()
+		hi := max(fx, fy, -fx, -fy)
+		return hi > 0 && fx != fy && (fx-fy <= hi/4 && fy-fx <= hi/4)
+	}
+	var out []Conflict
+	seen := map[string]bool{}
+	for i, a := range es {
+		for _, b := range es[i+1:] {
+			if a.class != b.class || a.doc == b.doc || a.doc == "" || b.doc == "" || held[a.fid+"|"+a.canon] && held[b.fid+"|"+b.canon] ||
+				a.class != "Date" && (Salience(a.v.Value) < nearSalience || Salience(b.v.Value) < nearSalience) || a.row() && b.row() ||
+				perDoc[a.doc][b.canon] || perDoc[b.doc][a.canon] || !close(a, b) || shared(a.words, b.words) < 3 {
+				continue
+			}
+			k := min(a.canon, b.canon) + "|" + max(a.canon, b.canon)
+			if seen[k] || len(out) == maxNear {
+				continue
+			}
+			seen[k] = true
+			kind := map[bool]string{true: "date", false: "numeric"}[a.class == "Date"]
+			out = append(out, Conflict{cmp.Or(a.v.Entity, b.v.Entity), cmp.Or(a.v.Metric, b.v.Metric), kind,
+				[]ConflictVal{{a.v.Value, a.canon, a.doc, a.fid}, {b.v.Value, b.canon, b.doc, b.fid}}})
+		}
 	}
 	return out
 }

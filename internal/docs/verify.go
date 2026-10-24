@@ -178,20 +178,39 @@ func bestSpan(text, quote string) (start, end int, overlap float64) {
 	return start, end, overlap
 }
 
-// Nearest is the section holding the passage of a document that best matches quote (the run of the
-// quote's length in words with most of its words): where to read the words a paraphrase restates.
-// ok is false when no word of quote is in the document.
-func (s *Service) Nearest(ctx context.Context, scope []string, docID, quote string) (sectionID, number string, ok bool, err error) {
+// Passage is where a document best matches a quote: the section holding it and its exact text.
+type Passage struct {
+	SectionID, Number, Text string
+}
+
+// Nearest is the passage of a document that best matches quote (the run of the quote's length in
+// words with most of its words), as the document has it, cut at a word boundary to at most max
+// bytes, and the section that holds it: the words a paraphrase restates, to copy instead. ok is
+// false when no word of quote is in the document.
+func (s *Service) Nearest(ctx context.Context, scope []string, docID, quote string, max int) (p Passage, ok bool, err error) {
 	d, err := s.Get(ctx, scope, docID)
 	if err != nil {
-		return "", "", false, err
+		return Passage{}, false, err
 	}
-	start, _, overlap := bestSpan(d.Text, quote)
+	start, end, overlap := bestSpan(d.Text, quote)
 	if overlap == 0 {
-		return "", "", false, nil
+		return Passage{}, false, nil
 	}
-	sectionID, number, err = s.locate(ctx, docID, utf8.RuneCountInString(d.Text[:start]))
-	return sectionID, number, err == nil, err
+	if end-start > max {
+		cut := strings.LastIndexFunc(d.Text[start:start+max+1], unicode.IsSpace)
+		end = start + cmpInt(cut > 0, cut, max)
+		end = runeStart(d.Text, end)
+	}
+	p.Text = strings.TrimSpace(d.Text[start:end])
+	p.SectionID, p.Number, err = s.locate(ctx, docID, utf8.RuneCountInString(d.Text[:start]))
+	return p, err == nil, err
+}
+
+func cmpInt(c bool, a, b int) int {
+	if c {
+		return a
+	}
+	return b
 }
 
 // locate is the innermost section holding character at of a document.

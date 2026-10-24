@@ -57,6 +57,12 @@ type Source interface {
 	Findings(ctx context.Context, taskID string) ([]Finding, error)
 }
 
+// Unswept is a Source that also knows which documents the evidence sweep left partly unread: their
+// figures can be missing from the findings, so join_discrepancies names them (bench r3).
+type Unswept interface {
+	Unread(ctx context.Context, taskID string) ([]string, error)
+}
+
 //go:embed specs/*.json
 var specs embed.FS
 
@@ -130,7 +136,13 @@ func Tools(src Source) []agent.Tool {
 			if len(in.FIDs) == 0 { // null and [] both mean every finding, as in numbers
 				picked = fs
 			}
-			return map[string]any{"conflicts": append([]Conflict{}, Join(picked, in.Aliases)...)}, agent.Usage{}, nil
+			unread := []string{}
+			if u, ok := src.(Unswept); ok {
+				if unread, err = u.Unread(ctx, c.TaskID); err != nil {
+					return nil, agent.Usage{}, err
+				}
+			}
+			return map[string]any{"conflicts": append([]Conflict{}, Join(picked, in.Aliases)...), "unreadDocuments": append([]string{}, unread...)}, agent.Usage{}, nil
 		}},
 	}
 }

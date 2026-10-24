@@ -22,11 +22,13 @@ type Visit struct {
 	SectionID  string `json:"sectionId"`
 	Offset     int    `json:"offset"`
 	Through    string `json:"through,omitempty"`
+	text       string // what it reads: the sweep orders and skips visits by it
 }
 
-// unread is the visit as sweep reports it not read: a batch names its whole run (through).
-func (v Visit) unread() map[string]string {
-	u := map[string]string{"documentId": v.DocumentID, "sectionId": v.SectionID}
+// unread is the visit as sweep reports it (not read, or skipped): a batch names its whole run
+// (through), any other visit has through null (sweep.json: strict-shaped, every field present).
+func (v Visit) unread() map[string]any {
+	u := map[string]any{"documentId": v.DocumentID, "sectionId": v.SectionID, "through": nil}
 	if v.Through != "" {
 		u["through"] = v.Through
 	}
@@ -68,11 +70,12 @@ func roots(outline []docs.OutlineEntry) []docs.OutlineEntry {
 // docs.TablePageRows rows (a row is a trade or a payment: a finding each).
 const sweepTokens = 600
 
-// plan lists the sweep's visits over docIDs, in order: every page of every top-level section
-// (pages of sweepTokens as the page reader cuts them, so extract_facts reads exactly one each).
-// Consecutive top-level sections shorter than sweepTokens are batched into one visit of at most
-// that: a document numbered by paragraph has a hundred roots of a few hundred characters each, and
-// one visit (a subagent run) per paragraph spent the sweep's share on a quarter of what it planned.
+// plan lists the sweep's visits over docIDs, in document order, each with its text: every page of
+// every top-level section (pages of sweepTokens as the page reader cuts them, so extract_facts reads
+// exactly one each). Consecutive top-level sections shorter than sweepTokens are batched into one
+// visit of at most that: a document numbered by paragraph has a hundred roots of a few hundred
+// characters each, and one visit (a subagent run) per paragraph spent the sweep's share on a quarter
+// of what it planned.
 func (e *Engine) plan(ctx context.Context, scope, docIDs []string) ([]Visit, error) {
 	var out []Visit
 	for _, id := range docIDs {
@@ -81,14 +84,16 @@ func (e *Engine) plan(ctx context.Context, scope, docIDs []string) ([]Visit, err
 			return nil, err
 		}
 		var run []docs.OutlineEntry // short roots not yet planned
+		var text strings.Builder
 		size := 0
 		flush := func() {
 			if len(run) > 0 {
-				v := Visit{DocumentID: id, SectionID: run[0].SectionID}
+				v := Visit{DocumentID: id, SectionID: run[0].SectionID, text: text.String()}
 				if len(run) > 1 {
 					v.Through = run[len(run)-1].SectionID
 				}
 				out, run, size = append(out, v), nil, 0
+				text.Reset()
 			}
 		}
 		for _, s := range roots(o) {
@@ -96,16 +101,21 @@ func (e *Engine) plan(ctx context.Context, scope, docIDs []string) ([]Visit, err
 				if size+s.Tokens > sweepTokens {
 					flush()
 				}
+				p, err := e.docs.Section(ctx, scope, id, s.SectionID, 0, sweepTokens)
+				if err != nil {
+					return nil, err
+				}
 				run, size = append(run, s), size+s.Tokens
+				text.WriteString(p.Text)
 				continue
 			}
 			flush()
 			for off := 0; ; {
-				out = append(out, Visit{DocumentID: id, SectionID: s.SectionID, Offset: off})
 				p, err := e.docs.Section(ctx, scope, id, s.SectionID, off, sweepTokens)
 				if err != nil {
 					return nil, err
 				}
+				out = append(out, Visit{DocumentID: id, SectionID: s.SectionID, Offset: off, text: p.Header + "\n" + p.Text})
 				if !p.Truncated {
 					break
 				}
@@ -178,16 +188,16 @@ type visitRun struct {
 }
 
 // sweepVisits reads visits with up to sweepWorkers at once, within b, and returns each one's
-// outcome, in plan order. It is deterministic and the shares hold exactly, as one at a time:
+// outcome, in the order given (the reading order: order). It is deterministic and the shares hold exactly, as one at a time:
 //   - grants: a visit starts with a full grant (the subagent's turns and a worker's share of the
 //     USD) while one is free, else only when no visit is in flight, with what is left (as a
 //     sequential sweep would give it); so a visit's grant never depends on timing;
-//   - order: findings are admitted (fids, near-duplicate merges) and visits recorded in plan
+//   - order: findings are admitted (fids, near-duplicate merges) and visits recorded in reading
 //     order: each visit waits, after its subagent ran, for the one before it to end;
 //   - serial fallback: a visit a worker's share could not fund (a call's worst case over what the
 //     share had left) is read again once nothing is in flight, one at a time with all that is left,
 //     as a sequential sweep would, so parallelism never reads less (its findings are admitted after
-//     the parallel visits', still in plan order among themselves);
+//     the parallel visits', still in reading order among themselves);
 //   - stops: when the money runs out on a visit that had all that was left, or a model or journal
 //     failure ends the run (the in-flight visits are cancelled; the earliest error is returned).
 func (e *Engine) sweepVisits(ctx context.Context, rt *agent.Runtime, c agent.Call, b *agent.Budget, visits []Visit, todo []bool, question string) ([]visitRun, error) {
@@ -249,7 +259,7 @@ func (e *Engine) sweepVisits(ctx context.Context, rt *agent.Runtime, c agent.Cal
 		inflight++
 		go func(wait chan struct{}) {
 			res, err := rt.Invoke(context.WithValue(cctx, turnKey{}, wait), agent.Agent{Name: "sweep", Visible: []string{"extract_facts"}},
-				agent.Call{TaskID: c.TaskID, DocumentIDs: c.DocumentIDs, Model: model}, "extract_facts", json.RawMessage(in), g, false, 0)
+				agent.Call{TaskID: c.TaskID, DocumentIDs: c.DocumentIDs, Model: model, NoTools: true}, "extract_facts", json.RawMessage(in), g, false, 0)
 			g.Close()
 			select { // the visit before this one has ended (its findings and its record are in)
 			case <-wait:
@@ -286,7 +296,7 @@ func (e *Engine) sweepVisits(ctx context.Context, rt *agent.Runtime, c agent.Cal
 	for inflight > 0 {
 		settle()
 	}
-	for i, v := range visits { // the serial fallback, in plan order
+	for i, v := range visits { // the serial fallback, in reading order
 		if out[i].refused {
 			if err := launch(i, v, true); err != nil {
 				return nil, err
@@ -303,7 +313,9 @@ func (e *Engine) sweepVisits(ctx context.Context, rt *agent.Runtime, c agent.Cal
 }
 
 // sweepTool is the retrieval floor (P8: idempotent): extract_facts over every visit not yet
-// made, within the sweep's share; what the budget cannot reach is reported, never skipped silently.
+// made, within the sweep's share, most relevant to the plan's issues first (order); a duplicate or
+// boilerplate page is skipped (skipWhy). What the budget cannot reach is reported, never skipped
+// silently, and each document's coverage is recorded (kSwept) for the cross-document checks.
 func (e *Engine) sweepTool(rt *agent.Runtime, r *run) agent.Tool {
 	return agent.GoTool{S: spec("sweep"), Fn: func(ctx context.Context, c agent.Call) (any, agent.Usage, error) {
 		var in struct{ DocumentIDs []string }
@@ -314,62 +326,151 @@ func (e *Engine) sweepTool(rt *agent.Runtime, r *run) agent.Tool {
 		if len(ids) == 0 {
 			ids = c.DocumentIDs
 		}
-		visits, err := e.plan(ctx, c.DocumentIDs, ids)
+		planned, err := e.plan(ctx, c.DocumentIDs, ids)
 		if err != nil {
 			return nil, agent.Usage{}, agent.Fail("sweep: a document is not one of this task's documents")
 		}
 		done, err := e.rows(ctx, c.TaskID, kVisit)
-		if err != nil {
+		issues, ierr := load[Issue](ctx, e, c.TaskID, kIssue)
+		spent, serr := e.classSpend(ctx, c.TaskID)
+		if err = cmpErr(err, ierr, serr); err != nil {
 			return nil, agent.Usage{}, err
 		}
-		spent, err := e.classSpend(ctx, c.TaskID)
-		if err != nil {
-			return nil, agent.Usage{}, err
+		qs := []string{}
+		for _, is := range issues {
+			qs = append(qs, is.Question)
+		}
+		visits := make([]Visit, 0, len(planned))
+		for _, i := range order(planned, qs) {
+			visits = append(visits, planned[i])
 		}
 		a, sw := Allocate(e.cfg.BudgetCalls, e.cfg.BudgetUSD), spent["sweep"]
 		b := agent.NewBudget(min(c.Budget.Calls, a.Sweep-sw.Calls), min(c.Budget.USD, a.dollars(a.Sweep)-sw.USD), 0)
-		todo, prior := make([]bool, len(visits)), make([][]string, len(visits))
+		todo, prior, why := make([]bool, len(visits)), make([][]string, len(visits)), make([]string, len(visits))
+		var kept []Visit // the read (or to be read) visits so far, in reading order: what a later one may repeat
 		for i, v := range visits {
 			if j := slices.IndexFunc(done, func(x row) bool { return x.Key == v.key() }); j >= 0 {
 				_ = json.Unmarshal(done[j].Data, &prior[i])
-			} else {
+			} else if why[i] = skipWhy(v, kept); why[i] == "" {
 				todo[i] = true
+			}
+			if why[i] == "" {
+				kept = append(kept, v)
 			}
 		}
 		runs, err := e.sweepVisits(ctx, rt, c, b, visits, todo, r.t.Description)
 		if err != nil {
 			return nil, b.Spent(), err
 		}
-		fids, uncovered, visited := []string{}, []map[string]string{}, 0
+		fids, uncovered, skipped, visited := []string{}, []map[string]any{}, []map[string]any{}, 0
+		cov := map[string]*SweptDoc{}
+		var docOrder []string
 		for i, v := range visits {
-			fids = append(fids, prior[i]...)
-			if !todo[i] {
-				continue
+			d := cov[v.DocumentID]
+			if d == nil {
+				d = &SweptDoc{DocumentID: v.DocumentID}
+				cov[v.DocumentID], docOrder = d, append(docOrder, v.DocumentID)
 			}
-			x := runs[i]
-			visited += btoi(x.ran)
-			fids = append(fids, x.ids...)
-			if !x.ran || x.err != nil {
+			d.Planned++
+			fids = append(fids, prior[i]...)
+			switch x := runs[i]; {
+			case why[i] != "":
+				u := v.unread()
+				u["reason"] = why[i]
+				skipped, d.Skipped = append(skipped, u), d.Skipped+1
+			case !todo[i]:
+				d.Read++
+			case !x.ran || x.err != nil:
 				uncovered = append(uncovered, v.unread())
+			default:
+				visited, d.Read = visited+1, d.Read+1
+				fids = append(fids, x.ids...)
 			}
 		}
-		out := map[string]any{"visited": visited, "findings": fids, "incomplete": len(uncovered) > 0, "uncovered": uncovered}
+		swept, unread := []SweptDoc{}, []map[string]any{}
+		for _, id := range docOrder {
+			d := *cov[id]
+			if dd, err := e.docs.Get(ctx, c.DocumentIDs, id); err == nil {
+				d.Name = dd.Name
+			}
+			swept = append(swept, d)
+			if d.Read+d.Skipped < d.Planned {
+				unread = append(unread, map[string]any{"documentId": id, "read": d.Read, "planned": d.Planned})
+			}
+		}
+		if was, err := load[[]SweptDoc](ctx, e, c.TaskID, kSwept); err != nil {
+			return nil, b.Spent(), err
+		} else if len(was) > 0 { // a sweep over some documents keeps the others' coverage
+			for _, d := range was[0] {
+				if !slices.Contains(docOrder, d.DocumentID) {
+					swept = append(swept, d)
+				}
+			}
+		}
+		if err := e.write(ctx, c.TaskID, kSwept, "sweep", swept, true); err != nil {
+			return nil, b.Spent(), err
+		}
+		out := map[string]any{"visited": visited, "findings": fids, "incomplete": len(uncovered) > 0, "uncovered": uncovered, "skipped": skipped, "unreadDocuments": unread}
+		note := ""
 		if len(uncovered) > 0 {
-			note := fmt.Sprintf("The evidence sweep ran out of budget: %d section %s not read: ", len(uncovered), plural(len(uncovered), "page was", "pages were"))
-			for i, u := range uncovered {
-				note += map[bool]string{true: "", false: "; "}[i == 0] + u["documentId"] + " " + u["sectionId"] + cmpStr(u["through"] != "", " to "+u["through"], "")
+			note = fmt.Sprintf("The evidence sweep ran out of budget: %d of %d pages were not read (it read those most relevant to the plan's issues first): ", len(uncovered), len(visits))
+			k := 0
+			for _, d := range swept {
+				var pages []string
+				for _, u := range uncovered {
+					if u["documentId"] == d.DocumentID {
+						pages = append(pages, fmt.Sprint(u["sectionId"])+cmpStr(u["through"] != nil, fmt.Sprint(" to ", u["through"]), ""))
+					}
+				}
+				if len(pages) > 0 {
+					more := cmpStr(len(pages) > 8, fmt.Sprintf(" and %d more", len(pages)-8), "")
+					note += cmpStr(k > 0, "; ", "") + fmt.Sprintf("%s, %d of %d pages (%s%s)", cmpStr(d.Name != "", d.Name, d.DocumentID), len(pages), d.Planned, strings.Join(pages[:min(8, len(pages))], ", "), more)
+					k++
+				}
 			}
-			if err := e.write(ctx, c.TaskID, kNote, "sweep", note, true); err != nil {
-				return nil, b.Spent(), err
-			}
-		} else if err := e.write(ctx, c.TaskID, kNote, "sweep", "", true); err != nil {
+			note += ". Facts and figures on those pages are not in the findings, so the cross-document comparison could not see them."
+		}
+		if err := e.write(ctx, c.TaskID, kNote, "sweep", note, true); err != nil {
 			return nil, b.Spent(), err
 		}
 		return out, b.Spent(), nil
 	}}
 }
 
+// SweptDoc is one document's sweep coverage: pages planned, read and skipped (duplicate or boilerplate).
+type SweptDoc struct {
+	DocumentID string `json:"documentId"`
+	Name       string `json:"name"`
+	Planned    int    `json:"planned"`
+	Read       int    `json:"read"`
+	Skipped    int    `json:"skipped"`
+}
+
+// unswept is the documents a sweep left partly unread (none when no sweep ran).
+func (e *Engine) unswept(ctx context.Context, taskID string) ([]SweptDoc, error) {
+	rs, err := load[[]SweptDoc](ctx, e, taskID, kSwept)
+	var out []SweptDoc
+	for _, r := range rs {
+		for _, d := range r {
+			if d.Read+d.Skipped < d.Planned {
+				out = append(out, d)
+			}
+		}
+	}
+	return out, err
+}
+
 // modelOrJournal: errors that end the run, never "no finding" (G6) or a lost step.
 func modelOrJournal(err error) bool {
 	return err != nil && (errors.Is(err, agent.ErrJournal) || modelFailed(err))
+}
+
+// Unread is the documents a sweep left partly unread (analysis.Unswept, for join_discrepancies).
+func (e *Engine) Unread(ctx context.Context, taskID string) ([]string, error) {
+	ds, err := e.unswept(ctx, taskID)
+	out := []string{}
+	for _, d := range ds {
+		out = append(out, d.DocumentID)
+	}
+	return out, err
 }

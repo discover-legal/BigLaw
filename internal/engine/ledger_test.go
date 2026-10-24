@@ -193,12 +193,15 @@ func TestSweepVisitsEverySectionOnce(t *testing.T) {
 				Offset                         int
 			}
 			jsonDecode(c.Messages[1].Content.(string), &in)
-			got = append(got, Visit{in.DocumentID, in.SectionID, in.Offset, in.Through})
+			got = append(got, Visit{DocumentID: in.DocumentID, SectionID: in.SectionID, Offset: in.Offset, Through: in.Through})
 		}
 	}
 	key := func(a, b Visit) int { return strings.Compare(a.key(), b.key()) }
 	slices.SortFunc(got, key)
 	slices.SortFunc(visits, key)
+	for i := range visits {
+		visits[i].text = ""
+	}
 	if !reflect.DeepEqual(got, visits) || !strings.Contains(strings.Join(f.outputs(v.ID, "sweep"), ""), `"visited":2`) {
 		t.Fatalf("visited %+v, want %+v", got, visits)
 	}
@@ -529,8 +532,10 @@ func TestCandidatePackDisclosed(t *testing.T) {
 	}
 }
 
-// TestSweepUncoveredNamesTheWholeBatch (r2 M-1): a batched visit that is not read is disclosed as
-// its whole run of sections, not as its first section alone.
+// TestSweepUncoveredNamesTheWholeBatch (r2 M-1, r3): a batched visit that is not read is disclosed as
+// its whole run of sections, not as its first section alone, through the real output schema check
+// (bench r3: sweep.json lacked through, so every incomplete sweep failed validation and the lead
+// never saw what was unread).
 func TestSweepUncoveredNamesTheWholeBatch(t *testing.T) {
 	t.Parallel()
 	var b strings.Builder
@@ -552,8 +557,17 @@ func TestSweepUncoveredNamesTheWholeBatch(t *testing.T) {
 	for _, n := range notes {
 		note += string(n.Data)
 	}
+	seen := "" // what the lead read of the sweep (r3: the output failed its schema on through, so it read only the failure)
+	for _, c := range f.e.chat.(*model.Fake).Calls() {
+		if c.Agent == "lead" {
+			seen = fmt.Sprint(c.Messages[len(c.Messages)-1].Content)
+		}
+	}
+	if !strings.HasPrefix(out, "committed") || !strings.Contains(seen, `"uncovered":[`) {
+		t.Fatalf("the incomplete sweep's output did not pass its schema: %s; the lead read %q", out, seen)
+	}
 	for _, x := range visits {
-		if !strings.Contains(out, `"through":"`+x.Through+`"`) || !strings.Contains(note, x.SectionID+" to "+x.Through) {
+		if !strings.Contains(out, `"through":"`+x.Through+`"`) || !strings.Contains(seen, `"through":"`+x.Through+`"`) || !strings.Contains(note, x.SectionID+" to "+x.Through) {
 			t.Fatalf("unread batch %s–%s not disclosed whole: sweep %s note %s", x.SectionID, x.Through, out, note)
 		}
 	}

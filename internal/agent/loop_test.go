@@ -555,3 +555,43 @@ func TestSubagentCutOffEmptyAnswerIsNotAModelFailure(t *testing.T) {
 		t.Fatalf("an empty answer that was not cut off is still a model failure: %v", err)
 	}
 }
+
+// TestToolStepJournalsEachModelCall (bench r3: a hard crash mid-tool was charged the tool's whole
+// grant): inside a journaled tool step, each model call is recorded before it is sent (the spend so
+// far plus its worst case) and after it returns (what it spent), so the started record always holds
+// what a resume must charge; a tool that has made no call keeps its whole grant.
+func TestToolStepJournalsEachModelCall(t *testing.T) {
+	xReq := model.Request{Agent: "x", Role: model.Lead, MaxTokens: 1000, Messages: []model.Message{{Role: "user", Content: "hi"}}}
+	usd := 0.004
+	reply := model.Reply{Text: "ok", Usage: model.Usage{InputTokens: 10, OutputTokens: 10, CostUSD: &usd}}
+	var rt *Runtime
+	fan := GoTool{S: Spec{Name: "fan", Kind: "go", Description: testDesc, In: testIn, Out: testOut, Class: "evidence", MaxTurns: 5}, Fn: func(ctx context.Context, c Call) (any, Usage, error) {
+		b := NewBudget(c.Budget.Calls, c.Budget.USD, 0)
+		for range 2 {
+			if _, _, err := rt.ChatWithin(ctx, xReq, b); err != nil {
+				return nil, b.Spent(), err
+			}
+		}
+		return map[string]any{"ok": true}, b.Spent(), nil
+	}}
+	rt, _ = rig(t, map[string][]model.Reply{"x": {reply, reply}}, fan)
+	prices, err := model.LoadPrices(`{"m-lead": {"in": 1, "out": 5}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j := &journal{}
+	rt.Prices, rt.Journal = prices, j
+	if _, err := rt.Invoke(context.Background(), lead("fan"), Call{TaskID: "t"}, "fan", json.RawMessage(`{"q":null,"op":null}`), NewBudget(10, 1, 0), false, 5); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, s := range j.steps {
+		got = append(got, fmt.Sprintf("%s %d %.3f", s.Status, s.Grant.Calls, s.Grant.USD))
+	}
+	xReq.Model = "m-lead"
+	worst := rt.bound(xReq)
+	want := []string{"started 5 1.000", fmt.Sprintf("started 1 %.3f", worst), "started 1 0.004", fmt.Sprintf("started 2 %.3f", 0.004+worst), "started 2 0.008"}
+	if len(got) != 6 || strings.Join(got[:5], "|") != strings.Join(want, "|") || !strings.HasPrefix(got[5], "committed") {
+		t.Fatalf("journal %q, want %q then committed", got, want)
+	}
+}

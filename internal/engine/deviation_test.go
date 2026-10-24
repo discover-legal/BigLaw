@@ -293,8 +293,9 @@ func TestDevNumericJoinNoJudgeConservative(t *testing.T) {
 
 // TestDevParaphrasedRequirementRefused (bench, both LAB tasks: the lead passed its own restatement
 // of the requirement, and the subagent quoted that as the controlling source): a requirement that
-// is not the controlling document's own words is refused before any model call, naming the section
-// to quote from; the same check with the memo's words runs, and its subagent gets them.
+// is not the controlling document's own words is refused before any model call, with the nearest
+// exact passage (bounded, fenced) to copy; the same check with the memo's words runs, and its
+// subagent gets them.
 func TestDevParaphrasedRequirementRefused(t *testing.T) {
 	t.Parallel()
 	d := newDev(t)
@@ -319,8 +320,10 @@ func TestDevParaphrasedRequirementRefused(t *testing.T) {
 	if len(out) != 2 || !strings.HasPrefix(out[0], "failed") || !strings.HasPrefix(out[1], "committed") || len(v.Findings) != 1 {
 		t.Fatalf("check_deviation %q, findings %+v", out, v.Findings)
 	}
-	if !strings.Contains(seen, "the requirement is not quoted from doc1.md") || !strings.Contains(seen, "the words it restates are closest in section s0 (Section 1)") ||
-		strings.Contains(seen, "David shall receive") { // where to read them, never the document's text in an error
+	_, passage, _ := strings.Cut(seen, "<<<")
+	passage, _, fenced := strings.Cut(passage, ">>>")
+	if !strings.Contains(seen, "the requirement is not quoted from doc1.md") || !strings.Contains(seen, "the closest passage, in section s0 (Section 1)") ||
+		!fenced || len(passage) > nearestMax || !strings.Contains(devMemoText, passage) || !strings.Contains(passage, "David shall receive") { // a bounded exact passage to copy (r3)
 		t.Fatalf("the lead read %q", seen)
 	}
 	if len(reqs) != 1 || !strings.Contains(reqs[0], "The residuary estate shall be divided as follows: David") { // as the memo has it (tolerant match, case and spacing)

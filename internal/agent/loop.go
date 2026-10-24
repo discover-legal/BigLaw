@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/discover-legal/BigLaw/internal/model"
 )
@@ -317,13 +318,50 @@ func (rt *Runtime) ChatWithin(ctx context.Context, req model.Request, b *Budget)
 		return nil, Usage{}, err
 	}
 	defer hold.Close()
+	worst := Grant{1, hold.Value().USD}
+	m, _ := ctx.Value(meterKey{}).(*meter)
+	if err := m.note(ctx, Usage{}, worst); err != nil { // never a call a crash could not account for
+		return nil, Usage{}, fmt.Errorf("%w: %w", ErrJournal, err)
+	}
 	resp, err := rt.Chat.Chat(ctx, req)
 	u := ModelUsage(err, resp)
 	if errors.Is(err, context.Canceled) && u.Calls == 0 { // an aborted call may still be billed: its worst case
-		u = Usage{Calls: 1, USD: hold.Value().USD}
+		u = Usage{Calls: 1, USD: worst.USD}
 	}
 	hold.Charge(u)
+	_ = m.note(ctx, u, Grant{-worst.Calls, -worst.USD}) // unrecorded, the step stays charged at the worst case: never less than spent
 	return resp, u, err
+}
+
+// meterKey carries a journaled tool step's meter through its tool's context.
+type meterKey struct{}
+
+// meter journals a running tool step's spend as it happens (G10, a hard crash): every model call made
+// inside the step (a subagent's turns, a judge's votes, a sweep's visits) is recorded before it is sent,
+// at its worst case, and again when it returns, at what it spent. The step's started record then holds
+// the spend so far plus the worst case of the calls in flight, which is what a resume charges as
+// lost, instead of the step's whole grant (bench: a crash mid-sweep charged $6.37 for a few dollars of
+// work and left the run no evidence budget). A step that has made no call yet keeps its whole grant.
+type meter struct {
+	mu    sync.Mutex
+	rt    *Runtime
+	st    Step
+	spent Usage
+	held  Grant // the worst cases of the calls in flight
+}
+
+// note adds to the step's spend and in-flight holds and records them; a nil meter records nothing.
+func (m *meter) note(ctx context.Context, spent Usage, held Grant) error {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.spent.Add(spent)
+	m.held.Calls, m.held.USD = m.held.Calls+held.Calls, max(0, m.held.USD+held.USD)
+	s := m.st
+	s.Grant, s.Usage = Grant{m.spent.Calls + m.held.Calls, m.spent.USD + m.held.USD}, m.spent
+	return m.rt.record(context.WithoutCancel(ctx), s)
 }
 
 // bound is a call's worst-case cost: every request byte a token (plus overhead), all of it billed
@@ -404,14 +442,16 @@ func (rt *Runtime) Invoke(ctx context.Context, a Agent, c Call, name string, inp
 		next := map[bool]string{true: "call finish to end the run with what you have", false: "answer now with what you have"}[c.Depth == 0]
 		return res, refuse(ErrBudget, next, gerr.Error())
 	}
+	tctx := ctx
 	if step > 0 {
 		st.Grant = g.Value()
 		if err := rt.record(ctx, st); err != nil {
 			g.Close()
 			return res, fmt.Errorf("%w: %w", ErrJournal, err)
 		}
+		tctx = context.WithValue(ctx, meterKey{}, &meter{rt: rt, st: st})
 	}
-	res, err = e.tool.Call(ctx, Call{TaskID: c.TaskID, DocumentIDs: c.DocumentIDs, Input: input, Budget: g.Value(), Depth: c.Depth, Model: c.Model})
+	res, err = e.tool.Call(tctx, Call{TaskID: c.TaskID, DocumentIDs: c.DocumentIDs, Input: input, Budget: g.Value(), Depth: c.Depth, Model: c.Model, NoTools: c.NoTools})
 	g.Charge(res.Usage)
 	g.Close()
 	if err == nil {
@@ -468,7 +508,11 @@ func (s *Subagent) Call(ctx context.Context, c Call) (Result, error) {
 		return Result{}, err
 	}
 	b := NewBudget(c.Budget.Calls, c.Budget.USD, 0)
-	res, err := s.RT.Run(ctx, Agent{Name: s.S.Name, Role: s.S.Role, Model: m, Prompt: s.Prompt, Visible: s.S.Allowed, MaxTurns: s.S.MaxTurns, Out: out, MaxTokens: subagentMaxTokens},
+	visible := s.S.Allowed
+	if c.NoTools {
+		visible = nil
+	}
+	res, err := s.RT.Run(ctx, Agent{Name: s.S.Name, Role: s.S.Role, Model: m, Prompt: s.Prompt, Visible: visible, MaxTurns: s.S.MaxTurns, Out: out, MaxTokens: subagentMaxTokens},
 		Call{TaskID: c.TaskID, DocumentIDs: c.DocumentIDs, Input: c.Input, Depth: 1}, b)
 	res.Usage, res.Model = b.Spent(), m
 	return res, err
