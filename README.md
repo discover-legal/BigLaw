@@ -963,7 +963,7 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
   from a bare grouped or scaled figure with no count noun in a quote that names no other currency ("1,200,000
   annually"); an ambiguous figure admits nothing (`TestFigureAdmission`, `TestTypedValuesNeedTheirScaleInTheQuote`).
   A money value's unit is the currency its figure states. Only an
-  exact duplicate of a verified finding merges into it (`restated`: the same issue, the same quotes in the same documents with case and white
+  exact duplicate of a verified finding merges into it, its dropped values' notes with it (`TestR4V4DuplicateKeepsValueNotes`; `restated`: the same issue, the same quotes in the same documents with case and white
   space folded, the same typed values with their entity and metric, never a breach folded
   into a finding that states none); a near restatement (a reversed term, a mirrored party's clause) is a finding of its own
   (`TestRestatedNeverMergesANegatedTerm`, `TestRestatedNeverMergesMirroredParties`); a sum of money the claim states is
@@ -1103,10 +1103,12 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
   committee on it from that cycle before the forced finish (`TestPhaseSharesHoldInUSD`,
   `TestCommitteeAlwaysReviewsTheLastDraft`). The lead runs at most three committee cycles (`maxCycles`; bench6 SEC ran
   nine, $4.16, while verified findings stayed uncited): a fourth is refused with what to do instead, finish no longer asks
-  for a review of a draft changed after the capped cycles (a Limitations line says so), and the coverage pass, whose own
+  for a review of a draft changed after the capped cycles (a Limitations line says so, naming the critic findings resolved
+  as fixed after the last cycle: `TestR4V4UnreviewedFixesNamed`), and the coverage pass, whose own
   re-review of its redrafts is beyond the cap, may spend half of what is free beside one more cycle and the reserve when
   that is more than its share, placing left-out findings in up to three rounds of one redraft per issue, at most 16 each,
-  60 in all, a request naming at most 100 findings (`TestBench6SECCommitteeCapped`). The cycle it keeps is a fifth of the USD until a cycle
+  60 per round, a request naming at most 100 findings, the section's own citations and its conflicts' findings never cut
+  (a section citing more is not redrafted: `TestR4V4PlacementKeepsCitations`; `TestBench6SECCommitteeCapped`). The cycle it keeps is a fifth of the USD until a cycle
   has run, then 1.5 times the costliest cycle so far (`cycleKeep`; bench5's cycles cost $0.30–0.48 of
   the $2.20 kept). `sweep` stops at its USD share as at its calls. The shares are sized from bench5 at
   $11 (lab-r4): a visit cost $0.012–0.014, so the 142-page SEC set needs about $2 of sweep (18%; 30%

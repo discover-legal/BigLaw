@@ -100,6 +100,7 @@ type Critic struct {
 	Text     string   `json:"text"`
 	Status   string   `json:"status"` // open, fixed or disclosed
 	Note     string   `json:"note,omitempty"`
+	Resolved int      `json:"resolved,omitempty"` // the committee cycles run when it was resolved
 }
 
 // Fig is a figure handle as given to a drafter: kept with its section, so the renderer substitutes
@@ -324,7 +325,11 @@ func (e *Engine) ledgerTool() agent.Tool {
 			case in.Resolution != "fixed" && in.Resolution != "disclosed" || strings.TrimSpace(in.Note) == "":
 				return nil, agent.Usage{}, agent.Fail("ledger: op resolve needs resolution fixed or disclosed and a note saying what was done (a disclosed note goes into Limitations)")
 			}
-			cs[i].Status, cs[i].Note = in.Resolution, in.Note
+			cyc, err := load[Cycle](ctx, e, c.TaskID, kCycle)
+			if err != nil {
+				return nil, agent.Usage{}, err
+			}
+			cs[i].Status, cs[i].Note, cs[i].Resolved = in.Resolution, in.Note, len(cyc)
 			out["ok"] = true
 			return out, agent.Usage{}, e.write(ctx, c.TaskID, kCritic, cs[i].ID, cs[i], true)
 		case "draft_get":

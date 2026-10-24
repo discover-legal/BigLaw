@@ -187,23 +187,17 @@ func (e *Engine) coverTool(rt *agent.Runtime, r *run) agent.Tool {
 				if serr != nil {
 					return nil, b.Spent(), serr
 				}
-				fids := slices.Clone(place[id].FIDs) // the left-out ones first, then the conflicts', then what the section cites
-				for _, x := range place[id].Conflicts {
-					for _, v := range x.Values {
-						fids = append(fids, v.FID)
-					}
-				}
+				var cites []string
 				if k := slices.IndexFunc(secs, func(s Section) bool { return s.IssueID == id }); k >= 0 {
 					for _, m := range fidRe.FindAllStringSubmatch(secs[k].Markdown, -1) {
-						fids = append(fids, m[1])
+						cites = append(cites, m[1])
 					}
 				}
-				for i := len(fids) - 1; i >= 0; i-- { // a finding named twice: once, where it first appears
-					if slices.Index(fids, fids[i]) < i {
-						fids = slices.Delete(fids, i, i+1)
-					}
+				fids, ok := placeFIDs(place[id], cites)
+				if !ok { // a redraft from fewer would drop citations: this issue's left-out findings stay left out (and disclosed)
+					continue
 				}
-				in, _ := json.Marshal(map[string]any{"issueId": id, "fids": fids[:min(maxDraftFIDs, len(fids))], "revise": placeRevise(place[id])})
+				in, _ := json.Marshal(map[string]any{"issueId": id, "fids": fids, "revise": placeRevise(place[id])})
 				if _, err := rt.Invoke(ctx, me, call, "draft_section", in, b, false, 0); modelOrJournal(err) {
 					failed = err
 					break
@@ -330,10 +324,11 @@ func salientFinding(f Finding) bool {
 // with a worst case near $0.17 that must fit before it is sent.
 const placeShare = 0.4
 
-// maxPlaced bounds the left-out findings the pass places (it redrafts each issue once) and lists;
-// one issue's redraft takes at most maxPlacedPerIssue of them.
+// maxPlaced bounds the left-out findings the pass places in one round and lists; one issue's
+// redraft takes at most maxPlacedPerIssue of them.
 // placeRounds is how many redrafts per issue the pass may spend placing (each round recomputes what
-// is still left out), and maxDraftFIDs the most findings one draft_section request names (its schema).
+// is still left out), and maxDraftFIDs the most findings one draft_section request names (its
+// schema): a section's own citations and its conflicts' findings always fit, or it is not redrafted.
 const (
 	maxPlaced         = 60
 	maxPlacedPerIssue = 16
@@ -522,6 +517,40 @@ func (e *Engine) placements(ctx context.Context, taskID string) ([]string, map[s
 	}
 	slices.SortStableFunc(order, func(a, b string) int { return rank(a) - rank(b) })
 	return order, out, nil
+}
+
+// placeFIDs are the findings one placement redraft names: the left-out ones first, then the
+// conflicts' and what the section cites, each once, within maxDraftFIDs. A section's citations and
+// its conflicts' findings are never cut (the drafter would drop them, lab-r4 r4 verifier L8): left-out
+// ones are, last first; ok is false when those alone are over the cap.
+func placeFIDs(p *placement, cites []string) (fids []string, ok bool) {
+	keep := slices.Clone(cites)
+	for _, x := range p.Conflicts {
+		for _, v := range x.Values {
+			keep = append(keep, v.FID)
+		}
+	}
+	if keep = uniq(keep); len(keep) > maxDraftFIDs {
+		return nil, false
+	}
+	fids = uniq(append(slices.Clone(p.FIDs), keep...))
+	for i := len(fids) - 1; i >= 0 && len(fids) > maxDraftFIDs; i-- {
+		if !slices.Contains(keep, fids[i]) {
+			fids = slices.Delete(fids, i, i+1)
+		}
+	}
+	return fids, true
+}
+
+// uniq is xs with each string once, where it first appears.
+func uniq(xs []string) []string {
+	var out []string
+	for _, x := range xs {
+		if !slices.Contains(out, x) {
+			out = append(out, x)
+		}
+	}
+	return out
 }
 
 // placeRevise is the redraft instruction for one issue's placement.

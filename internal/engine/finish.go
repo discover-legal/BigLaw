@@ -298,7 +298,7 @@ func (f finish) check(ctx context.Context, limits []limitation) (report, error) 
 	case len(cyc) > 0 && cyc[len(cyc)-1].Version != version(secs) && funded && len(cyc) < maxCycles:
 		bad("committee_stale", "the draft changed after the last committee: run committee on the current draft")
 	case len(cyc) >= maxCycles && cyc[len(cyc)-1].Version != version(secs):
-		rep.limits = append(rep.limits, fmt.Sprintf("Review: the committee reviewed the draft %d times (the run's cap); the changes after its last cycle were not reviewed again.", len(cyc)))
+		rep.limits = append(rep.limits, fmt.Sprintf("Review: the committee reviewed the draft %d times (the run's cap); the changes after its last cycle were not reviewed again.%s", len(cyc), unreviewedFixes(crit, len(cyc))))
 	}
 	for _, x := range crit {
 		switch {
@@ -431,6 +431,26 @@ func unadmittedLine(fids []string, use map[string]Finding) string {
 	return fmt.Sprintf("Evidence: %d verified %s a typed value that admission dropped because %s quotes did not state it as typed (each finding's value notes say why): %s%s.",
 		len(ids), plural(len(ids), "finding had", "findings had"), plural(len(ids), "its", "their"), strings.Join(ids[:min(maxListed, len(ids))], ", "),
 		cmpStr(len(ids) > maxListed, fmt.Sprintf(" and %d more", len(ids)-maxListed), ""))
+}
+
+// unreviewedFixes names the critic findings resolved "fixed" after the committee's last cycle (or
+// raised by it): no critic read those fixes, so they are what a reader must check again (lab-r4 r4
+// verifier L7).
+func unreviewedFixes(crit []Critic, cycles int) string {
+	var ls []string
+	for _, x := range crit {
+		if x.Status == "fixed" && (x.Cycle == cycles || x.Resolved >= cycles) {
+			t := x.Text
+			if r := []rune(t); len(r) > 240 {
+				t = string(r[:240]) + "…"
+			}
+			ls = append(ls, fmt.Sprintf("%s (%s, %s): %s", x.ID, x.Severity, x.Critic, t))
+		}
+	}
+	if len(ls) == 0 {
+		return ""
+	}
+	return " Resolved as fixed after it, unreviewed: " + strings.Join(ls[:min(maxListed, len(ls))], "; ") + cmpStr(len(ls) > maxListed, fmt.Sprintf("; and %d more", len(ls)-maxListed), "") + "."
 }
 
 // partyLine is the Limitations line for the parties the findings name and the memo never does.

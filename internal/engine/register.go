@@ -466,6 +466,11 @@ func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 					all[i].Quotes = append(all[i].Quotes, analysis.Quote{DocumentID: c.DocumentID, Quote: c.Quote, Locator: c.Locator})
 				}
 			}
+			for _, n := range f.ValueNotes { // the duplicate's dropped values are the kept finding's (shown with it, disclosed)
+				if !slices.Contains(all[i].ValueNotes, n) {
+					all[i].ValueNotes = append(all[i].ValueNotes, n)
+				}
+			}
 			if err := e.write(ctx, c.TaskID, kFinding, all[i].FID, all[i], true); err != nil {
 				return out, 0, err
 			}
