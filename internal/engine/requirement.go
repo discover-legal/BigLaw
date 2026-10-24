@@ -217,11 +217,14 @@ func lineOf(text string, i int) span {
 }
 
 // sentenceGap is where a sentence or clause ends and the next begins (an end mark, closers, white
-// space), or a line break; blankLine is a paragraph break.
+// space), or a line break; sentenceStop is a sentence end.
 var (
 	sentenceGap  = regexp.MustCompile(`[.!?;:：](?:["”’)\]]*)[ \t\r]*\n?[ \t]*|\n[ \t]*`)
 	sentenceStop = regexp.MustCompile(`[.!?](?:["”’)\]]*)\s`)
-	blankLine    = regexp.MustCompile(`\n[ \t\r]*\n`)
+	// paraBreak is a paragraph start: a blank line, or a line break after a sentence or clause end
+	// before a capital, an opening quote or bracket, or a list marker. A .docx reader (and any reader
+	// whose lines are paragraphs) ends a paragraph with one line break (lab-r3 r5 verifier M2).
+	paraBreak = regexp.MustCompile(`\n[ \t\r]*\n|[.!?:;：]["”’)\]]*[ \t\r]*\n[ \t]*(?:\p{Lu}|["“‘(\[]|[0-9]{1,3}[.)]|[•*–-][ \t])`)
 )
 
 // Window bounds (lab-r3 r4, coordinator decision): a requirement is read in the document's text around
@@ -251,9 +254,8 @@ func contextOf(text string, spans [][2]int) (ps []span, path string, truncated b
 		if a < 0 {
 			a, truncated = -a, true
 		}
-		at := text[max(0, a-4):s] // a break just before the edge counts
-		para := blankLine.MatchString(at)
-		truncated = truncated || !para || !sentenceStop.MatchString(at) // the requirement's paragraph or sentence starts before the window
+		at := text[max(0, a-8):min(len(text), s+1)]                                                                // a break just before the edge counts
+		truncated = truncated || !paraBreak.MatchString(at) || !sentenceStop.MatchString(at) || listStart(text, a) // the requirement's paragraph or sentence, or its list, starts before the window
 	}
 	if e+side < len(text) {
 		b = edgeAfter(text, e+side, e)
@@ -262,6 +264,14 @@ func contextOf(text string, spans [][2]int) (ps []span, path string, truncated b
 		}
 	}
 	return []span{{a, b}}, headingPath(text, a, s), truncated
+}
+
+// listStart reports whether the window's first line, at a, is a list item: the list's introduction (a
+// "shall not:" chapeau) may then be above the window (lab-r3 r5 verifier L1). Whether it is the list's
+// first item cannot be told ("(i)" after "(h)"), so any item counts.
+func listStart(text string, a int) bool {
+	l := lineOf(text, a)
+	return strings.TrimSpace(text[l.s:a]) == "" && listMarker.MatchString(text[a:l.e])
 }
 
 // edgeBefore moves a window's start at i to the nearest sentence or line end: outward within ctxReach,

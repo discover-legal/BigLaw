@@ -84,3 +84,32 @@ func TestCompactionRelaxesAfterRetry(t *testing.T) {
 		t.Errorf("results in full: %d the turn after the retry (want 1), %d at the end (want %d)", a, b, keepTurns)
 	}
 }
+
+// TestPanickedStepKeepsItsUsage (lab-r3 r5 verifier L6): a tool that made a model call and then
+// panicked is journaled failed with that call's usage, never 0, and its grant is charged for it.
+func TestPanickedStepKeepsItsUsage(t *testing.T) {
+	var rt *Runtime
+	s := goSpec("boom")
+	s.MaxTurns = 2 // a grant of model calls
+	boom := GoTool{S: s, Fn: func(ctx context.Context, c Call) (any, Usage, error) {
+		if _, _, err := rt.ChatWithin(ctx, model.Request{Agent: "boom", Role: model.Lead, MaxTokens: 10, Messages: []model.Message{{Role: "user", Content: "x"}}}, NewBudget(c.Budget.Calls, c.Budget.USD, 0)); err != nil {
+			t.Errorf("the tool's call: %v", err)
+		}
+		panic("after a call")
+	}}
+	rt, _ = rig(t, map[string][]model.Reply{"lead": {calls(call("boom", q))}, "boom": {{Text: "x"}}}, boom, newFinish())
+	j := &journal{}
+	rt.Journal = j
+	b := NewBudget(50, 1, 0)
+	if _, err := rt.Run(context.Background(), lead("boom", "finish"), Call{Input: json.RawMessage(`"go"`)}, b); !errors.Is(err, ErrPanic) {
+		t.Fatalf("run: %v", err)
+	}
+	for _, s := range j.final() {
+		if s.Tool == "boom" && (s.Status != "failed" || s.Usage.Calls != 1) {
+			t.Errorf("the panicked step was journaled %s with usage %+v", s.Status, s.Usage)
+		}
+	}
+	if b.Spent().Calls != 2 { // the lead's turn and the tool's call
+		t.Errorf("the budget was charged %d calls, want 2", b.Spent().Calls)
+	}
+}

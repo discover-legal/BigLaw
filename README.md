@@ -813,7 +813,7 @@ The memo workflow (§ Memo workflow) drives these. What PR 4a ships, all tested 
   `TestV4EscapedResultsNeverPanic`); an endpoint's 400/413/422 compacts all but the latest turn's and
   retries, then replaces a latest result over 16 KB by the same refusal and retries once more, for that
   request only (`TestR2VShrinkSticksAndHidesNext`). A tool that panics ends its run with `ErrPanic` (its
-  stack logged), and the engine fails that task as an internal error; the task goroutine recovers too,
+  stack logged; its step keeps the usage its meter recorded: `TestPanickedStepKeepsItsUsage`), and the engine fails that task as an internal error; the task goroutine recovers too,
   so a panic never stops `serve` (`TestPanickingToolFailsOnlyItsRun`). Text in tool results is labelled untrusted matter data.
   The model sees refusals (reason and next step) and tool failures in BigLaw's own words only; any
   other error is logged and shown as "internal error". A model failure (G6) ends the run, except a
@@ -948,7 +948,11 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
   not—"), and overrides or sibling sub-clauses nearby ("5.2 Clause 5.1 shall not apply", "Notwithstanding
   the foregoing …") are in it; the heading path above the window (`docs.Parse`'s sections that hold it) is
   shown as a bracketed label only, never a boundary. The window is marked truncated when the requirement's
-  sentence or paragraph starts before it, or an edge found no sentence or line end and cuts a sentence
+  sentence or paragraph starts before it (a paragraph starts after a blank line, or at a line break after
+  a sentence or clause end before a capital, a quote or bracket or a list marker, so a `.docx`'s
+  one-line-break paragraphs count: `TestV5DocxParagraphNotTruncated`), when its first line is a list item
+  (the list's "shall not:" introduction may be above it: `TestV5LongListChapeauConfirmed`), or when an
+  edge found no sentence or line end and cuts a sentence
   (`TestContextIsTheTextAroundIt`, `TestContextTruncatedWhenTheSentenceStartsBefore`,
   `TestV4WrappedLineSplitsTheSentence`, `TestV4DecimalSiblingsAndChapeau`, `TestV4ContextBoundHolds`). The
   subagent judges against that text (`requirementContext`, the requirement marked ⟦ ⟧), its verdict's
@@ -956,11 +960,12 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
   bounded call on the `critic` role, inside the tool's grant (`rt.ChatWithin`), with the text fenced as
   document text, answers whether the text, read as a whole, imposes the requirement as the verdict
   states it (`checkSection`, prompt `specs/section_check.md`). Its answer is read from one strict JSON
-  object only: exactly one `answer` key, spelled so, `yes`/`no`/`unclear` in any case, any other wording
-  ("Yes, but …") unclear; prose around it, a duplicated or differently spelled key drop the verdict
+  object only: exactly one `answer` key, spelled so, `yes`/`no`/`unclear` in any case, a trailing "." or "!" aside ("No."), any other
+  wording ("Yes, but …") unclear; a code fence around it, its tag in any case, is allowed; prose around it, a duplicated or differently spelled key drop the verdict
   (`TestCheckAnswerStrict`). Yes admits it, the claim saying "An independent check read the surrounding
   text (N bytes) and agreed", with the checker's reasoning labelled "not a quotation"; no (negated or
-  overridden) drops it; unclear, or a yes on a truncated window, admits it at low confidence, labelled
+  overridden) drops it; unclear ("could not tell"), or a yes on a truncated window ("agreed, but that
+  text begins after …"), admits it at low confidence, labelled
   for a lawyer's review and gated at finish like a low-confidence transcript (`lowConfidence`); no grant
   left drops it with a note. The finding quotes the window verbatim as its controlling citation, the requirement
   marked, with the part and the correction given as the analyst's words, not quotations; prosecute checks
@@ -1521,7 +1526,7 @@ improvements (after the real Haiku LAB rerun; scripted the same way): `TestSweep
 
 | Budget | Ceiling | Today |
 |---|---:|---:|
-| Go production lines (physical lines, non-`_test.go`, test-support packages included) | reported, no limit (owner decision 17) | 14,883 |
+| Go production lines (physical lines, non-`_test.go`, test-support packages included) | reported, no limit (owner decision 17) | 14961 |
 | Packages under `internal/`, test-support packages excluded | 12 | 8 (`agent`, `analysis`, `api`, `docs`, `docs/ooxml`, `engine`, `model`, `store`; `store/storetest` is test support) |
 | Direct Go dependencies | 3 | 2 (`github.com/lib/pq`, `github.com/ledongthuc/pdf`) |
 | Runtime environment variables | 20 | 18 |
@@ -1530,7 +1535,7 @@ improvements (after the real Haiku LAB rerun; scripted the same way): `TestSweep
 | Packages without a `_test.go` | 0 | 0 |
 | Lines in any one source file (`.go`, `.py`, `.sql`, `.sh`, `.js`, `.ts`, `.css`; tests included) | 2,000 | 968 (`internal/docs/vision_safety_test.go`) |
 
-**There is no total line ceiling (owner decision 17, 2026-10-23).** `scripts/loc.py` reports the Go production total (14,883) and fails only on the budgets that bound bloat directly: no file over 2,000 lines, ≤ 3 direct deps, ≤ 20 env vars, ≤ 12 internal packages, ≤ 2,400 UI source lines, no untested package. Each PR still reports its lines against its DESIGN budget in its notes. (The ceiling's history, 14,000 → 17,500 through owner decisions 7–16, is in PLAN.) A **test-support package** is one
+**There is no total line ceiling (owner decision 17, 2026-10-23).** `scripts/loc.py` reports the Go production total (14961) and fails only on the budgets that bound bloat directly: no file over 2,000 lines, ≤ 3 direct deps, ≤ 20 env vars, ≤ 12 internal packages, ≤ 2,400 UI source lines, no untested package. Each PR still reports its lines against its DESIGN budget in its notes. (The ceiling's history, 14,000 → 17,500 through owner decisions 7–16, is in PLAN.) A **test-support package** is one
 whose directory name ends in `test` and that no production file outside it imports, such as
 `storetest`. Under the coordinator's ruling it is left out of the package count, but its lines
 count toward the reported Go total like any other non-`_test.go` file. A `*test` package that
@@ -1646,9 +1651,9 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     in about 3 KB of the text before and after it (at most 8 KB). **An override or a governing
     introduction more than about 3 KB away, or in another clause, a definition or a schedule elsewhere in
     the document ("9. Clause 4 shall not apply …" pages later, a defined term's meaning), is not seen.**
-    A requirement whose sentence or paragraph starts before the window is admitted only at low
-    confidence, for a lawyer's review, so a requirement in a long paragraph (over 3 KB above it with no
-    blank line) is always gated. Whether the text imposes the requirement as a verdict states it (a
+    A requirement whose sentence or paragraph starts before the window, or whose window starts at a list
+    item, is admitted only at low confidence, for a lawyer's review, so a requirement in a long paragraph
+    (over 3 KB above it) or deep in a long list is always gated. Whether the text imposes the requirement as a verdict states it (a
     negation, an override) is the section check's judgment, one critic call per admitted verdict: the
     context makes the governing words visible and the check reads them, which does not make the verdict
     right.
@@ -1656,13 +1661,19 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     of each other, and not when each label names a thing its own quote states and the other side
     never mentions (a fee and an allocation, a notice and a demand); dates joined by shared words take
     the same label test. It is a word test: a part of a figure is told apart from it only when its
-    quote frames that value as one: "of/toward/against the <label>" right after it; a portion word
+    quote frames that value itself as one: "of/toward/against the <label>" right after it; a portion word
     (a deposit, instalment, holdback …) that is not the other's label as the word it is stated under ("a
-    deposit of $950,000", not "total payments of"); "less / net of / minus" after it in its clause
-    ("$950,000 …, being the Purchase Price less the Holdback"); a sum "held back / in escrow / holdback"
-    in its sentence; or a "payable as follows:" / "payable in instalments:" frame before it. A value the
-    quote states as the other's label ("the Purchase Price is $1,200,000, less the deposit", "shall be a
-    balance of", "being total payments of") is never a part, whatever follows it (`TestPartOfWordings`).
+    deposit of $950,000", not "total payments of"); a portion of the label before it ("the cash portion
+    of the Purchase Price is"); the value itself held back or in escrow ("$950,000 to be held in escrow");
+    the label less a deduction restated right after it ("$950,000 to Seller, being the Purchase Price less
+    the Holdback") or right before it ("the Purchase Price less the Holdback, being $950,000"); another sum
+    stated as "of the <label>" in its sentence ("with $50,000 of the Purchase Price held in escrow"); or a
+    "payable as follows:" / "payable in instalments:" frame before it. A holdback or deduction elsewhere in
+    the sentence does not ("Buyer will pay $1,200,000 for the Shares …, of which $100,000 will be held in
+    escrow", "$1,200,000 at Closing as the Purchase Price, less the Deposit"), and a value the quote states
+    as the other's label ("the Purchase Price is $1,200,000, less the deposit", "shall equal", "shall be a
+    balance of", "being total payments of", "the Purchase Price, $1,200,000,") is never a part, whatever
+    follows it (`TestPartOfWordings`).
     Both the label join and the near join apply this test; a part described otherwise pairs under the
     same label (the label join applies no eighth) and is told apart under different labels only by the
     eighth.

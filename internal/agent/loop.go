@@ -507,15 +507,24 @@ func (rt *Runtime) Invoke(ctx context.Context, a Agent, c Call, name string, inp
 		return res, refuse(ErrBudget, next, gerr.Error())
 	}
 	tctx := ctx
+	var mt *meter
 	if step > 0 {
 		st.Grant = g.Value()
 		if err := rt.record(ctx, st); err != nil {
 			g.Close()
 			return res, fmt.Errorf("%w: %w", ErrJournal, err)
 		}
-		tctx = context.WithValue(ctx, meterKey{}, &meter{rt: rt, st: st})
+		mt = &meter{rt: rt, st: st}
+		tctx = context.WithValue(ctx, meterKey{}, mt)
 	}
 	res, err = rt.call(tctx, e, Call{TaskID: c.TaskID, DocumentIDs: c.DocumentIDs, Input: input, Budget: g.Value(), Depth: c.Depth, Model: c.Model, NoTools: c.NoTools})
+	if errors.Is(err, ErrPanic) && mt != nil { // a panicked tool returned no usage: keep what its step recorded (lab-r3 r5 verifier L6)
+		mt.mu.Lock()
+		if mt.spent.Calls > res.Usage.Calls || mt.spent.USD > res.Usage.USD {
+			res.Usage = mt.spent
+		}
+		mt.mu.Unlock()
+	}
 	g.Charge(res.Usage)
 	g.Close()
 	if err == nil {

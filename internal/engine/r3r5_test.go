@@ -86,7 +86,7 @@ func TestV4ContextBoundHolds(t *testing.T) {
 	for _, x := range fs {
 		claim = max(claim, len(x.Claim))
 	}
-	if sub > 4*ctxMax || n > 4*ctxMax || claim > 4*ctxMax || n == 0 || len(fs) != 1 || !fs[0].Low {
+	if sub > 4*ctxMax || n > 4*ctxMax || claim > 4*ctxMax || n == 0 || len(fs) != 1 {
 		t.Errorf("the %d-byte context bound does not hold: subagent request %d bytes, section check %d, claim %d; %d findings", ctxMax, sub, n, claim, len(fs))
 	}
 }
@@ -102,6 +102,11 @@ func TestCheckAnswerStrict(t *testing.T) {
 		{`{"answer":"Yes","reason":"r"}`, "yes", true},
 		{`{"answer":"No"}`, "no", true},
 		{`{"answer":"Yes, but only in part","reason":"r"}`, "unclear", true},
+		{`{"answer":"No.","reason":"r"}`, "no", true},
+		{`{"answer":"NO!"}`, "no", true},
+		{`{"answer":"Yes."}`, "yes", true},
+		{"```JSON\n{\"answer\":\"no\"}\n```", "no", true},
+		{"```\n{\"answer\":\"unclear\"}\n```", "unclear", true},
 		{`{"answer":"no","reason":"r","answer":"yes"}`, "", false},
 		{`{"Answer":"yes"}`, "", false},
 		{`{"reason":"r"}`, "", false},

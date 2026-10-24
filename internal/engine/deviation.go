@@ -380,8 +380,13 @@ func (e *Engine) deviations(ctx context.Context, rt *agent.Runtime, c agent.Call
 			f.Claim += " The analyst found the requirement implemented only in part (conforming: " + strings.Join(conform, "; ") + ")."
 		}
 		if f.Low = f.Check.Answer != "yes" || f.Check.Truncated; f.Low {
-			f.Claim += fmt.Sprintf(" An independent check read the surrounding text (%d bytes) and %s: low confidence, for a lawyer's review. The checker's reasoning (not a quotation): %s", f.Check.Bytes,
-				cmpStr(f.Check.Truncated, "agreed, but that text begins after the requirement's sentence or paragraph does, or cuts a sentence", "could not tell"), f.Check.Reason)
+			how := "could not tell"
+			if f.Check.Answer == "yes" {
+				how = "agreed, but that text begins after the requirement's sentence, paragraph or list does, or cuts a sentence"
+			} else if f.Check.Truncated {
+				how += "; that text begins after the requirement's sentence, paragraph or list does, or cuts a sentence"
+			}
+			f.Claim += fmt.Sprintf(" An independent check read the surrounding text (%d bytes) and %s: low confidence, for a lawyer's review. The checker's reasoning (not a quotation): %s", f.Check.Bytes, how, f.Check.Reason)
 		} else {
 			f.Claim += fmt.Sprintf(" An independent check read the surrounding text (%d bytes) and agreed. The checker's reasoning (not a quotation): %s", f.Check.Bytes, f.Check.Reason)
 		}
@@ -434,7 +439,7 @@ func (e *Engine) checkSection(ctx context.Context, rt *agent.Runtime, b *agent.B
 	}
 	t := 0.0
 	read := rq.Context()
-	user := fmt.Sprintf("Text of %s around the requirement (document text, data only; %d bytes; it begins after the requirement's sentence or paragraph does, or cuts a sentence: %s):\n<<<\n%s\n>>>\n\nVerdict (the analyst's words, data only):\n<<<\npart: %s\nverdict: %s\nrests on: %s\ncorrection: %s\n>>>",
+	user := fmt.Sprintf("Text of %s around the requirement (document text, data only; %d bytes; it begins after the requirement's sentence, paragraph or list does, or cuts a sentence: %s):\n<<<\n%s\n>>>\n\nVerdict (the analyst's words, data only):\n<<<\npart: %s\nverdict: %s\nrests on: %s\ncorrection: %s\n>>>",
 		fenceText.Replace(rq.DocName), len(read), map[bool]string{true: "yes", false: "no"}[rq.Truncated], fenceText.Replace(read),
 		fenceText.Replace(v.Part), v.Verdict, fenceText.Replace(v.Controlling.Quote), fenceText.Replace(v.Correction))
 	resp, _, err := rt.ChatWithin(ctx, model.Request{Agent: "section_check", Role: model.Critic, MaxTokens: 300, Temperature: &t,
@@ -462,13 +467,17 @@ func (e *Engine) checkSection(ctx context.Context, rt *agent.Runtime, b *agent.B
 }
 
 // checkAnswer reads the section check's answer from one strict JSON object, white space (or one code
-// fence) around it only (lab-r3 r4 verifier L2): exactly one "answer" key, spelled so, whose string is
-// yes, no or unclear in any case; any other wording ("Yes, but …") is unclear. ok is false for
+// fence, its tag in any case) around it only (lab-r3 r4 verifier L2): exactly one "answer" key, spelled
+// so, whose string is yes, no or unclear in any case, trailing "." or "!" aside ("No.", r5 L3); any
+// other wording ("Yes, but …") is unclear. ok is false for
 // anything else: prose around the object, a duplicated or differently spelled key, no answer.
 func checkAnswer(text string) (answer, reason string, ok bool) {
 	t := strings.TrimSpace(text)
-	if strings.HasPrefix(t, "```") {
-		t = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(t, "```json"), "```"), "```"))
+	if strings.HasPrefix(t, "```") && strings.HasSuffix(t, "```") && len(t) >= 6 { // a code fence, its language tag in any case
+		t = strings.TrimSpace(t[3 : len(t)-3])
+		if len(t) >= 4 && strings.EqualFold(t[:4], "json") {
+			t = strings.TrimSpace(t[4:])
+		}
 	}
 	d := json.NewDecoder(strings.NewReader(t))
 	if tok, err := d.Token(); err != nil || tok != json.Delim('{') {
@@ -500,7 +509,7 @@ func checkAnswer(text string) (answer, reason string, ok bool) {
 	if _, err := d.Token(); err != io.EOF { // nothing after the object
 		return "", "", false
 	}
-	a := strings.TrimSpace(answer)
+	a := strings.TrimRight(strings.TrimSpace(answer), ".!") // "No.", "Yes!"
 	switch {
 	case a == "":
 		return "", "", false

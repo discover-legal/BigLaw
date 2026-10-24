@@ -233,9 +233,9 @@ func TestSectionCheckUnclearOrCutIsLow(t *testing.T) {
 	if fs := ledgerFindings(t, f, v.ID); len(fs) != 1 || !fs[0].Low || fs[0].Check.Answer != "unclear" || !strings.Contains(fs[0].Claim, "low confidence, for a lawyer's review") {
 		t.Errorf("unclear: %+v", fs)
 	}
-	big := "Note\n" + strings.Repeat("The settlor has considered the family's circumstances and the views of the family council. ", 120) + "\nDo NOT name Sophia Davenport-Chen as a successor trustee.\n"
+	big := "Note\n" + strings.Repeat("The settlor has considered the family's circumstances and the views of the family council. ", 120) + "Do NOT name Sophia Davenport-Chen as a successor trustee.\n" // in a 11 KB paragraph
 	f, v = r4Dev(t, big, req, req, []model.Reply{text(m{"answer": "yes", "reason": "it says so"})})
-	if fs := ledgerFindings(t, f, v.ID); len(fs) != 1 || !fs[0].Low || !fs[0].Check.Truncated || !strings.Contains(fs[0].Claim, "that text begins after the requirement's sentence or paragraph does") {
+	if fs := ledgerFindings(t, f, v.ID); len(fs) != 1 || !fs[0].Low || !fs[0].Check.Truncated || !strings.Contains(fs[0].Claim, "that text begins after the requirement's sentence, paragraph or list does") {
 		t.Errorf("cut section: %+v", fs)
 	}
 	if !gated(Finding{Low: true, Citations: []Citation{{Method: "exact"}}}, false) || gated(Finding{Citations: []Citation{{Method: "exact"}}}, false) {
