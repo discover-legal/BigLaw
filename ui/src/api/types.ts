@@ -85,6 +85,7 @@ export interface Finding {
   severity: string;
   status: 'verified' | 'quarantined';
   citations: Citation[];
+  valueNotes?: string[]; // typed values admission dropped, and why (absent in the recording)
 }
 
 export interface Step {

@@ -20,7 +20,7 @@ import (
 func TestAnalysisToolsPageByType(t *testing.T) {
 	var fs []Finding
 	for i := range 300 {
-		for _, d := range []struct{ doc, v string }{{"a", fmt.Sprintf("$%d,000", 1000+i)}, {"b", fmt.Sprintf("$%d,500", 3000+i)}} {
+		for _, d := range []struct{ doc, v string }{{"a", fmt.Sprintf("$%d,000", 100+i)}, {"b", fmt.Sprintf("$%d,500", 600+i)}} {
 			metric := fmt.Sprintf("fee number %d for Smith & Jones <LLP> %s", i, strings.Repeat("under the engagement letter ", 6))
 			fs = append(fs, Finding{FID: fmt.Sprintf("F%d", len(fs)+1), Verified: true,
 				Quotes: []Quote{{DocumentID: d.doc, Quote: "The " + metric + " is " + d.v + " payable by Buyer."}},

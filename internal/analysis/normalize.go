@@ -4,9 +4,11 @@
 package analysis
 
 import (
+	"cmp"
 	"fmt"
 	"math/big"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -37,7 +39,7 @@ func (d Date) time() time.Time {
 }
 
 var (
-	dateLayouts = []string{"Mon, 2 Jan 2006 15:04:05 -0700", "Mon, 2 Jan 2006 15:04:05 MST", "2 Jan 2006 15:04:05 -0700", "Mon, 2 Jan 2006",
+	dateLayouts = []string{"Mon, 2 Jan 2006 15:04:05 -0700", "Mon, 2 Jan 2006 15:04:05 MST", "2 Jan 2006 15:04:05 -0700", "2 Jan 2006 15:04:05", "Mon, 2 Jan 2006",
 		"2 Jan 2006", "2 January 2006", "January 2, 2006", "Jan 2, 2006", "Jan. 2, 2006", "January 2 2006", "2006-01-02", "01/02/2006", "1/2/2006"}
 	monthLayouts = []string{"January 2006", "Jan 2006", "Jan. 2006", "01/2006", "1/2006", "2006-01"}
 	reYear       = regexp.MustCompile(`(?i)^(?:early|late|mid)?[ -]?((?:19|20)\d{2})$`)
@@ -99,42 +101,6 @@ func DatesIn(text string) []DateToken {
 	return out
 }
 
-var (
-	reMoneyVal = regexp.MustCompile(`(?i)^~?(?:approximately\s+)?(?:usd\s*)?\$?\s*([\d,]*\.?\d+)\s*(million|billion|thousand|mm|bn|[kmb])?$`)
-	rePctVal   = regexp.MustCompile(`^~?(?:approximately\s+)?(-?[\d,]*\.?\d+)\s*(%|percent)$`)
-	reNumVal   = regexp.MustCompile(`^~?(?:approximately\s+)?-?[\d,]*\.?\d+$`)
-	scale      = map[string]int64{"k": 1e3, "thousand": 1e3, "m": 1e6, "mm": 1e6, "million": 1e6, "b": 1e9, "bn": 1e9, "billion": 1e9}
-)
-
-// Number parses a plain or scaled decimal exactly ("4,217", "$9.0 million" → 9000000).
-func Number(s string) (*big.Rat, bool) {
-	t := strings.TrimSpace(s)
-	if m := reMoneyVal.FindStringSubmatch(t); m != nil && (strings.Contains(t, "$") || m[2] != "" || strings.HasPrefix(strings.ToLower(t), "usd")) {
-		r, ok := new(big.Rat).SetString(strings.ReplaceAll(m[1], ",", ""))
-		if ok && m[2] != "" {
-			r.Mul(r, new(big.Rat).SetInt64(scale[strings.ToLower(m[2])]))
-		}
-		return r, ok
-	}
-	if m := rePctVal.FindStringSubmatch(t); m != nil {
-		return new(big.Rat).SetString(strings.ReplaceAll(m[1], ",", ""))
-	}
-	if reNumVal.MatchString(t) {
-		return new(big.Rat).SetString(strings.ReplaceAll(strings.TrimLeft(strings.TrimPrefix(t, "approximately "), "~"), ",", ""))
-	}
-	return nil, false
-}
-
-// MoneyCents is a money value in cents ("$22.2 million" → 2,220,000,000).
-func MoneyCents(s string) (int64, bool) {
-	r, ok := Number(s)
-	if !ok {
-		return 0, false
-	}
-	r.Mul(r, big.NewRat(100, 1))
-	return new(big.Int).Quo(r.Num(), r.Denom()).Int64(), r.IsInt()
-}
-
 // Decimal prints r exactly when it has at most 6 decimal places, else rounded to 6.
 func Decimal(r *big.Rat) string {
 	s := r.FloatString(6)
@@ -163,15 +129,24 @@ func ClassOf(v Value) Class {
 	return ClassifyLiteral(v.Value)
 }
 
-// Canon is a value's comparable form within its class ("usd:9000000", "pct:73", "n:4217",
-// "date:2024-04-15"); ok is false for a value that is not a comparable quantity (a duration, an
-// identifier, a name).
+// Canon is a value's comparable form within its class ("usd:9000000", "eur:3500000", "pct:73",
+// "n:4217", "date:2024-04-15"), read by the figure parser (ValueFigure): a money value's prefix is
+// its currency, the unit's when the text names none, US dollars when neither does. ok is false for a
+// value that is not a comparable quantity (a duration, an identifier, a name, an ambiguous figure).
 func Canon(v Value) (class Class, canon string, d Date, ok bool) {
 	class = ClassOf(v)
 	switch class {
 	case "Money", "Percentage", "Count":
-		if r, ok := Number(v.Value); ok && !(class == "Count" && strings.ContainsAny(v.Value, "$%")) {
-			return class, map[Class]string{"Money": "usd:", "Percentage": "pct:", "Count": "n:"}[class] + Decimal(r), d, true
+		if f, why := ValueFigure(v); why == "" && !duration(f) {
+			r := new(big.Rat).Set(f.Amount)
+			if f.Neg {
+				r.Neg(r)
+			}
+			prefix := map[Class]string{"Percentage": "pct:", "Count": "n:"}[class]
+			if class == "Money" {
+				prefix = strings.ToLower(cmp.Or(f.Cur, "USD")) + ":"
+			}
+			return class, prefix + Decimal(r), d, true
 		}
 	case "Date":
 		if d, ok := ParseDate(v.Value); ok {
@@ -179,4 +154,18 @@ func Canon(v Value) (class Class, canon string, d Date, ok bool) {
 		}
 	}
 	return class, "", d, false
+}
+
+// duration reports whether a count is a span of time ("10 days"): never compared (a deadline in one
+// document is not the same obligation's deadline in another).
+func duration(f Figure) bool {
+	return f.Class == CountFig && slices.Contains([]string{"day", "week", "month", "year", "hour", "minute", "quarter"}, strings.TrimSuffix(f.Noun, "s"))
+}
+
+// CanonAmount decodes Canon's own output (never text a person wrote): its kind ("usd", "pct",
+// "n", "date"…) and, for a quantity, its signed amount.
+func CanonAmount(canon string) (kind string, r *big.Rat, ok bool) {
+	kind, num, _ := strings.Cut(canon, ":")
+	r, ok = new(big.Rat).SetString(num)
+	return kind, r, ok && kind != "date"
 }

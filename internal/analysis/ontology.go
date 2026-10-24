@@ -125,12 +125,10 @@ func Normalize(s string, sc Class, rel, o string, oc Class) (subj string, sClass
 }
 
 var (
-	reMoney = regexp.MustCompile(`(?i)^\$|\bmillion\b|\bbillion\b|\busd\b`)
-	rePct   = regexp.MustCompile(`(?i)%|\bpercent\b|\bbasis points?\b|\bbps\b`)
-	reAuth  = regexp.MustCompile(`(?i)\bsection\b|\brule\b|\bitem\b|u\.s\.c|c\.f\.r|§|\bact\b|\d+\([a-z0-9]+\)`)
-	reDate  = regexp.MustCompile(`(?i)\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.? \d|\b(19|20)\d\d\b|\d{1,2}/\d{1,2}/\d{2,4}`)
-	reFund  = regexp.MustCompile(`(?i)\b(fund|lp|l\.p\.)\b`)
-	reCount = regexp.MustCompile(`^\d[\d,]*(\.\d+)?$`)
+	rePct  = regexp.MustCompile(`(?i)\bbasis points?\b|\bbps\b`)
+	reAuth = regexp.MustCompile(`(?i)\bsection\b|\brule\b|\bitem\b|u\.s\.c|c\.f\.r|§|\bact\b|\d+\([a-z0-9]+\)`)
+	reDate = regexp.MustCompile(`(?i)\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.? \d|\b(19|20)\d\d\b|\d{1,2}/\d{1,2}/\d{2,4}`)
+	reFund = regexp.MustCompile(`(?i)\b(fund|lp|l\.p\.)\b`)
 )
 
 // ClassifyLiteral guesses the class of an untyped value or name from its text, conservatively:
@@ -140,16 +138,26 @@ func ClassifyLiteral(s string) Class {
 	switch {
 	case reAuth.MatchString(t):
 		return "Authority"
-	case reMoney.MatchString(t):
-		return "Money"
 	case rePct.MatchString(t):
 		return "Percentage"
+	}
+	if _, fs := Figures(t); len(fs) == 1 { // the figure parser reads the quantity: "$2000", "1,5 %", "4,217"
+		switch f := fs[0]; {
+		case f.Class == MoneyFig || f.Class == UnknownFig && f.Scaled:
+			return "Money"
+		case f.Class == PercentFig:
+			return "Percentage"
+		case f.Class == CountFig || f.Class == UnknownFig && f.Start == 0 && f.End == len(t):
+			if !reDate.MatchString(t) {
+				return "Count"
+			}
+		}
+	}
+	switch {
 	case reDate.MatchString(t):
 		return "Date"
 	case reFund.MatchString(t):
 		return "Fund"
-	case reCount.MatchString(t):
-		return "Count"
 	}
 	return ""
 }

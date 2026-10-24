@@ -205,7 +205,7 @@ const passageTerms = 24
 func passageQuery(requirement string) string {
 	var ws []string
 	seen, key := map[string]bool{}, map[string]bool{}
-	start, prev := true, "" // whether the next word starts a sentence; the word before
+	start, prev, ref := true, "", false // whether the next word starts a sentence; the word before; inside a clause reference
 	for i := 0; i < len(requirement); {
 		r, n := utf8.DecodeRuneInString(requirement[i:])
 		if !unicode.IsLetter(r) && !unicode.IsDigit(r) {
@@ -225,6 +225,16 @@ func passageQuery(requirement string) string {
 		}
 		raw := requirement[i:j]
 		w := strings.ToLower(raw)
+		if refWord[w] || unicode.IsDigit(r) && (ref || clauseDigits(requirement, i, j)) { // "Sections 7.3(a), 8.1 and 12.4": a locator, no search term
+			ref = refWord[w] || ref
+			start, i, prev = false, j, raw
+			continue
+		}
+		if ref && (len(w) <= 2 || w == "and" || w == "or" || w == "to") { // the list goes on: "7.3(a) and (b)"
+			start, i, prev = false, j, raw
+			continue
+		}
+		ref = false
 		proper := unicode.IsUpper(r) && (!start || len(raw) > 1 && strings.ToUpper(raw) == raw)
 		number := unicode.IsDigit(r) || numberWord[w]
 		if !seen[w] && !stopWord[w] && (len(w) > 2 || number || proper && len(w) == 2) {
@@ -257,10 +267,35 @@ func passageQuery(requirement string) string {
 	return q
 }
 
-// abbrev reports whether a word before a full stop is a title or short abbreviation ("Dr", "Mr", "No").
+// abbrev reports whether a word before a full stop is a title, an initial or a short abbreviation
+// ("Dr", "T", "No"), from a closed list: "due to Lee. Payment shall" ends a sentence (lab-r4 r3 L10).
 func abbrev(w string) bool {
 	r, _ := utf8.DecodeRuneInString(w)
-	return len(w) > 0 && len(w) <= 3 && unicode.IsUpper(r)
+	return utf8.RuneCountInString(w) == 1 && unicode.IsUpper(r) || abbrevs[strings.ToLower(w)]
+}
+
+var abbrevs = map[string]bool{}
+
+// refWord are the words that open a clause reference; their numbers are locators, not search terms.
+var refWord = map[string]bool{}
+
+func init() {
+	for _, w := range strings.Fields(`dr mr mrs ms mx prof rev hon st jr sr no nos co inc ltd corp llc plc bros gen col capt lt sgt mt ft art arts sec secs cl
+		para paras pp vs v cf al fig figs approx dept est govt jan feb mar apr jun jul aug sep sept oct nov dec`) {
+		abbrevs[w] = true
+	}
+	for _, w := range strings.Fields(`section sections clause clauses article articles schedule schedules rule rules item items paragraph paragraphs
+		para paras part parts exhibit exhibits annex annexes appendix appendices subsection subsections regulation regulations sec secs art arts cl`) {
+		refWord[w] = true
+	}
+}
+
+// clauseDigits reports whether the digits s[i:j] are a clause number: written with an outline dot or
+// a lettered subclause ("7.3", "12.4(b)", "§ 4"), not a figure.
+func clauseDigits(s string, i, j int) bool {
+	before := strings.TrimRight(s[:i], " ")
+	return strings.HasSuffix(before, "§") || j < len(s) && s[j] == '(' || j+1 < len(s) && s[j] == '.' && s[j+1] >= '0' && s[j+1] <= '9' ||
+		i > 1 && s[i-1] == '.' && s[i-2] >= '0' && s[i-2] <= '9'
 }
 
 // numberWord are written numbers, kept first in a passage query beside digits.

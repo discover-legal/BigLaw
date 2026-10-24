@@ -120,7 +120,7 @@ func TestDeadlinesMeetTheAnswerKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, _ := dates(out)
+	got, _ := figuresIn(out)
 	checked := 0
 	for _, c := range key.Facts {
 		if c.Category != "deadline" {

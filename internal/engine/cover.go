@@ -122,7 +122,15 @@ func (e *Engine) coverTool(rt *agent.Runtime, r *run) agent.Tool {
 	s := spec("cover")
 	s.MaxTurns = a.Cover
 	return agent.GoTool{S: s, Fn: func(ctx context.Context, c agent.Call) (any, agent.Usage, error) {
-		b := agent.NewBudget(min(c.Budget.Calls, a.Cover), min(c.Budget.USD, a.dollars(a.Cover)), 0)
+		// its share, or half of what the run has free beside the last review and the reserve when that
+		// is more (bench6 SEC: the committee's cycles spent what placing the left-out findings needed);
+		// the other half stays for the review of its redrafts and the fixes a re-check may ask for
+		spent, err := e.classSpend(ctx, c.TaskID)
+		if err != nil {
+			return nil, agent.Usage{}, err
+		}
+		free := c.Budget.USD - a.cycleKeep(spent[costliest+"committee"].USD) - a.dollars(a.Reserve+a.Meta)
+		b := agent.NewBudget(min(c.Budget.Calls, a.Cover), min(c.Budget.USD, max(a.dollars(a.Cover), free/2)), 0)
 		todo, err := e.touched(ctx, c.TaskID)
 		if err != nil {
 			return nil, agent.Usage{}, err
@@ -165,38 +173,49 @@ func (e *Engine) coverTool(rt *agent.Runtime, r *run) agent.Tool {
 				break
 			}
 		}
-		if failed == nil { // then the left-out evidence: one redraft per issue that has some
+		for round := 0; failed == nil && round < placeRounds; round++ { // then the left-out evidence: one redraft per issue that has some, a round at a time
 			ids, place, perr := e.placements(ctx, c.TaskID)
 			if perr != nil {
 				return nil, b.Spent(), perr
 			}
+			placed := 0
 			for _, id := range ids {
 				if calls, _ := b.Remaining(); calls == 0 {
 					break
 				}
-				base, ferr := e.coverFIDs(ctx, c.TaskID, id)
-				if ferr != nil {
-					return nil, b.Spent(), ferr
+				secs, serr := load[Section](ctx, e, c.TaskID, kSection)
+				if serr != nil {
+					return nil, b.Spent(), serr
 				}
-				fids := slices.Clone(place[id].FIDs)
+				fids := slices.Clone(place[id].FIDs) // the left-out ones first, then the conflicts', then what the section cites
 				for _, x := range place[id].Conflicts {
 					for _, v := range x.Values {
 						fids = append(fids, v.FID)
 					}
 				}
-				fids = slices.Compact(append(fids, base...))
+				if k := slices.IndexFunc(secs, func(s Section) bool { return s.IssueID == id }); k >= 0 {
+					for _, m := range fidRe.FindAllStringSubmatch(secs[k].Markdown, -1) {
+						fids = append(fids, m[1])
+					}
+				}
 				for i := len(fids) - 1; i >= 0; i-- { // a finding named twice: once, where it first appears
 					if slices.Index(fids, fids[i]) < i {
 						fids = slices.Delete(fids, i, i+1)
 					}
 				}
-				in, _ := json.Marshal(map[string]any{"issueId": id, "fids": fids[:min(60, len(fids))], "revise": placeRevise(place[id])})
+				in, _ := json.Marshal(map[string]any{"issueId": id, "fids": fids[:min(maxDraftFIDs, len(fids))], "revise": placeRevise(place[id])})
 				if _, err := rt.Invoke(ctx, me, call, "draft_section", in, b, false, 0); modelOrJournal(err) {
 					failed = err
 					break
 				} else if errors.Is(err, agent.ErrBudget) {
+					round = placeRounds
 					break
+				} else if err == nil {
+					placed++
 				}
+			}
+			if placed == 0 {
+				break
 			}
 		}
 		if errors.Is(failed, agent.ErrJournal) {
@@ -313,9 +332,13 @@ const placeShare = 0.4
 
 // maxPlaced bounds the left-out findings the pass places (it redrafts each issue once) and lists;
 // one issue's redraft takes at most maxPlacedPerIssue of them.
+// placeRounds is how many redrafts per issue the pass may spend placing (each round recomputes what
+// is still left out), and maxDraftFIDs the most findings one draft_section request names (its schema).
 const (
-	maxPlaced         = 40
-	maxPlacedPerIssue = 12
+	maxPlaced         = 60
+	maxPlacedPerIssue = 16
+	placeRounds       = 3
+	maxDraftFIDs      = 100
 )
 
 // salienceRank orders left-out findings, strongest evidence first: a deviation check's or a high
@@ -356,14 +379,16 @@ func addressed(c analysis.Conflict, memo string) bool {
 			}
 			continue
 		}
-		want := figure{class: map[string]figClass{"usd": moneyFig, "n": countFig, "pct": percentFig}[kind]}
-		r, ok := analysis.Number(strings.TrimPrefix(canon, "-")) // the canon has the join's scale applied
+		_, r, ok := analysis.CanonAmount(v.Canon) // the canon has the join's scale applied
 		if !ok {
 			return false
 		}
-		want.amount = r
-		if _, vf := figuresIn(v.Value); len(vf) == 1 && !vf[0].amb {
-			want.cur = vf[0].cur
+		want := figure{Class: analysis.MoneyFig, Cur: strings.ToUpper(kind), Amount: r.Abs(r)}
+		switch kind {
+		case "n":
+			want.Class, want.Cur = analysis.CountFig, ""
+		case "pct":
+			want.Class, want.Cur = analysis.PercentFig, ""
 		}
 		if !figureStated(want, ns) {
 			return false

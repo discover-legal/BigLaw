@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode"
 )
 
 // Conflict is one cross-document discrepancy: one metric, values from at least two documents
@@ -50,21 +51,15 @@ type entry struct {
 	whole  bool // its own digits carry its magnitude: grouped thousands ("$92,000,000") or seven digits or more
 }
 
-// grouped is a figure written with its thousands grouped ("92,000,000", "4,217").
-var grouped = regexp.MustCompile(`\d{1,3}(?:,\d{3})+`)
-
-// wholeFigure reports whether a value's digits carry its magnitude: no scale word could be implied.
-func wholeFigure(value string) bool {
-	if grouped.MatchString(value) {
-		return true
+// wholeFigure reports whether a value's digits carry its magnitude: no scale word could be implied
+// (grouped thousands, or seven digits or more before any decimals), as the figure parser reads it.
+func wholeFigure(v Value) bool {
+	f, why := ValueFigure(v)
+	if why != "" {
+		return false
 	}
-	n := 0
-	for _, r := range strings.SplitN(value, ".", 2)[0] {
-		if r >= '0' && r <= '9' {
-			n++
-		}
-	}
-	return n >= 7
+	intPart, _, _ := strings.Cut(Decimal(f.raw), ".")
+	return f.Grouped || len(strings.TrimPrefix(intPart, "-")) >= 7
 }
 
 // pairable reports whether two quantities' scales are both known, so their normalised magnitudes
@@ -101,7 +96,6 @@ var (
 	heldOwn      = regexp.MustCompile(`(?i)^\s*(?:(?:shall|will|is|are|to)\s+)?(?:be\s+)?(?:held (?:back|in escrow)|(?:deposited|paid|placed) (?:into|in) escrow|into escrow|in escrow)\b`)
 	payableFrame = regexp.MustCompile(`(?i)\b(?:payable|paid|due)\s+(?:as follows|in (?:\w+ )?instal(?:l)?ments)\s*:`)
 	wholeBefore  = regexp.MustCompile(`(?i)\b(?:total|aggregate|combined|all)\s+$`)
-	moneyAmount  = regexp.MustCompile(`[$£€¥]\s?\d[\d,.]*(?:\s*(?:million|billion))?`)
 	spaces       = regexp.MustCompile(`\s+`)
 )
 
@@ -147,8 +141,9 @@ func partOf(x, y entry) bool {
 			return true
 		}
 		sent, at := sentenceOf(q, i)
-		for _, m := range moneyAmount.FindAllStringIndex(sent, -1) { // another sum of the label: this value is the rest
-			if at+m[0] != i && sibling.MatchString(spaces.ReplaceAllString(sent[m[1]:min(len(sent), m[1]+60)], " ")) {
+		_, sums := Figures(sent)
+		for _, m := range sums { // another sum of the label: this value is the rest
+			if m.Class == MoneyFig && at+m.Start != i && at+m.numStart != i && sibling.MatchString(spaces.ReplaceAllString(sent[m.End:min(len(sent), m.End+60)], " ")) {
 				return true
 			}
 		}
@@ -200,43 +195,38 @@ func sentenceOf(q string, i int) (string, int) {
 	return q[s : i+e], s
 }
 
-// scaleWord is a scale stated after a figure: "$92 million", "310 million dollars".
-var scaleWord = regexp.MustCompile(`(?i)^\s*(million|billion|thousand|mm|bn)\b`)
-
 // rescale applies the scale a finding states for a quantity outside its value (bench4, SEC: "92"
 // with unit "million" against "$92 million", "310" with unit "million dollars" against "310
-// million": two conflicts that were one figure): its unit's first word, else the word after the
-// value in a quote. scaled reports whether any scale is stated, the value's own included; a value
-// whose scale nothing states is never compared with one whose scale is stated.
+// million": two conflicts that were one figure): its unit's first word, else the scale the figure
+// parser reads on a copy of the value in a quote. scaled reports whether any scale is stated, the
+// value's own included; a value whose scale nothing states is never compared with one whose scale is
+// stated.
 func rescale(class Class, canon string, v Value, quotes []string) (string, bool) {
 	if class != "Money" && class != "Count" {
 		return canon, false
 	}
-	if m := reMoneyVal.FindStringSubmatch(strings.TrimSpace(v.Value)); m != nil && m[2] != "" {
+	if f, why := ValueFigure(v); why == "" && f.Scaled {
 		return canon, true // the value states it ("$92 million"): Canon applied it
 	}
-	word := ""
-	if m := scaleWord.FindStringSubmatch(v.Unit); m != nil {
-		word = m[1]
-	}
-	for _, q := range quotes { // every copy of the value that is a whole figure ("92" in "$92 million", not in "1992")
-		for i := 0; word == "" && v.Value != "" && i < len(q); i++ {
-			j := strings.Index(q[i:], v.Value)
-			if j < 0 {
+	mul, _ := ScaleWord(v.Unit)
+	val := strings.TrimSpace(v.Value)
+	for _, q := range quotes { // a copy of the value that is a whole figure ("92" in "$92 million", not in "1992")
+		if mul > 0 || val == "" {
+			break
+		}
+		_, fs := Figures(q)
+		for _, f := range fs {
+			if f.Scaled && f.mul > 1 && q[f.numStart:f.numEnd] == val {
+				mul = f.mul
 				break
-			}
-			i += j
-			if m := scaleWord.FindStringSubmatch(q[i+len(v.Value):]); m != nil && (i == 0 || !strings.ContainsRune("0123456789.,", rune(q[i-1]))) {
-				word = m[1]
 			}
 		}
 	}
-	prefix, num, _ := strings.Cut(canon, ":")
-	r, ok := new(big.Rat).SetString(num)
-	if word == "" || !ok {
+	kind, r, ok := CanonAmount(canon)
+	if mul == 0 || !ok {
 		return canon, false
 	}
-	return prefix + ":" + Decimal(r.Mul(r, new(big.Rat).SetInt64(scale[strings.ToLower(word)]))), true
+	return kind + ":" + Decimal(r.Mul(r, new(big.Rat).SetInt64(mul))), true
 }
 
 // row reports whether a value is stated only in table rows (tab-separated): one row of an
@@ -276,7 +266,7 @@ func Join(findings []Finding, aliases []Alias) []Conflict {
 					qs = append(qs, q.Quote)
 				}
 				canon, scaled := rescale(class, canon, v, qs)
-				es = append(es, entry{v, f.FID, class, canon, d, docOf(f, v.Value), referents(f, v.Value), qs, scaled, (class == "Money" || class == "Count") && wholeFigure(v.Value)})
+				es = append(es, entry{v, f.FID, class, canon, d, docOf(f, v.Value), referents(f, v.Value), qs, scaled, (class == "Money" || class == "Count") && wholeFigure(v)})
 				if n := key(v.Entity); n != "" && !slices.Contains(names, n) {
 					names = append(names, n)
 				}
@@ -291,11 +281,9 @@ func Join(findings []Finding, aliases []Alias) []Conflict {
 			}
 		}
 	}
-	for i, a := range names { // token containment: "Ostrowski" is "Richard Ostrowski"
-		for _, b := range names[i+1:] {
-			if contains(a, b) || contains(b, a) {
-				ents.union(a, b)
-			}
+	for _, a := range names { // token containment, pairwise: "Ostrowski" is "Richard Ostrowski"
+		if b, ok := fullName(a, names); ok {
+			ents.union(a, b)
 		}
 	}
 	metrics := map[string][]int{}
@@ -350,7 +338,7 @@ func Join(findings []Finding, aliases []Alias) []Conflict {
 		try(byEvent[r], "date", func(a, b entry) bool { return !a.date.Compatible(b.date) })
 	}
 	sameEntity := func(a, b entry) bool { return ents.find(key(a.v.Entity)) == ents.find(key(b.v.Entity)) }
-	return append(out, near(es, out, sameEntity)...)
+	return append(out, near(es, out, sameEntity, partiesOf(findings))...)
 }
 
 // generic are metric words that name no quantity of their own ("grand total of payments" is payments).
@@ -439,7 +427,7 @@ const (
 // (so a total restated beside its parts is not one). Quantities must be salient (nearSalience), and two
 // values each only in table rows are never paired (rows of two tables are enumerations, not one fact
 // restated). It skips pairs a found conflict already holds.
-func near(es []entry, found []Conflict, sameEntity func(a, b entry) bool) []Conflict {
+func near(es []entry, found []Conflict, sameEntity func(a, b entry) bool, pc partyContext) []Conflict {
 	perDoc := map[string]map[string]bool{}
 	for _, e := range es {
 		if perDoc[e.doc] == nil {
@@ -461,8 +449,8 @@ func near(es []entry, found []Conflict, sameEntity func(a, b entry) bool) []Conf
 			d := a.date.time().Sub(b.date.time()).Hours() / 24
 			return d != 0 && d <= 31 && d >= -31
 		}
-		x, okx := Number(strings.SplitN(a.canon, ":", 2)[1])
-		y, oky := Number(strings.SplitN(b.canon, ":", 2)[1])
+		_, x, okx := CanonAmount(a.canon)
+		_, y, oky := CanonAmount(b.canon)
 		if !okx || !oky {
 			return false
 		}
@@ -476,8 +464,13 @@ func near(es []entry, found []Conflict, sameEntity func(a, b entry) bool) []Conf
 	for i, a := range es {
 		for _, b := range es[i+1:] {
 			if a.class != b.class || a.doc == b.doc || a.doc == "" || b.doc == "" || held[a.fid+"|"+a.canon] && held[b.fid+"|"+b.canon] ||
-				a.class != "Date" && (Salience(a.v.Value) < nearSalience || Salience(b.v.Value) < nearSalience) || a.row() && b.row() ||
-				perDoc[a.doc][b.canon] || perDoc[b.doc][a.canon] || !pairable(a, b) || partOf(a, b) || partOf(b, a) || !close(a, b) || shared(a.words, b.words) < 3 || !sameEntity(a, b) && (a.class == "Date" || !oneWay(a, b) && !oneWay(b, a)) || !sameMetric(a, b) {
+				a.class != "Date" && (Salience(a.v.Value) < nearSalience || Salience(b.v.Value) < nearSalience) ||
+				perDoc[a.doc][b.canon] || perDoc[b.doc][a.canon] || !pairable(a, b) || partOf(a, b) || partOf(b, a) || !close(a, b) {
+				continue
+			}
+			labelled := shared(a.words, b.words) >= 3 && !(a.row() && b.row()) && sameMetric(a, b) &&
+				(sameEntity(a, b) || a.class != "Date" && (oneWay(a, b) || oneWay(b, a)))
+			if !labelled && (sameEntity(a, b) || !pc.onePair(a, b)) {
 				continue
 			}
 			k := min(a.canon, b.canon) + "|" + max(a.canon, b.canon)
@@ -491,6 +484,202 @@ func near(es []entry, found []Conflict, sameEntity func(a, b entry) bool) []Conf
 		}
 	}
 	return out
+}
+
+// partyContext is what the near join's context pairing reads of the whole ledger: the parties its
+// findings name (typed entities that are persons, firms or funds, not authorities or instruments)
+// and each document's verified quotes.
+type partyContext struct {
+	parties []string            // normalised party names
+	docText map[string][]string // a document's verified quotes
+}
+
+// nonParty are entity classes that name no party to a figure.
+var nonParty = map[string]bool{"authority": true, "instrument": true, "class": true, "account": true, "document": true, "rule": true,
+	"statute": true, "regulation": true, "section": true, "court": true, "date": true, "money": true, "count": true, "percentage": true}
+
+func partiesOf(findings []Finding) partyContext {
+	pc := partyContext{docText: map[string][]string{}}
+	for _, f := range findings {
+		if !f.Verified {
+			continue
+		}
+		for _, q := range f.Quotes {
+			pc.docText[q.DocumentID] = append(pc.docText[q.DocumentID], q.Quote)
+		}
+		names := []string{}
+		for _, e := range f.Entities {
+			if !nonParty[strings.ToLower(string(e.Class))] {
+				names = append(names, e.Name)
+			}
+		}
+		for _, v := range f.Values { // a label written as a name ("Buyer", "Kevin Ostrowski"; not "deletion instruction")
+			if ws := strings.Fields(v.Entity); len(ws) > 0 && !slices.ContainsFunc(ws, func(w string) bool { return len(w) >= 3 && !unicode.IsUpper([]rune(w)[0]) }) {
+				names = append(names, v.Entity)
+			}
+		}
+		for _, name := range names {
+			if n := norm(name); n != "" && len(tokens(n)) > 0 && !slices.Contains(pc.parties, n) {
+				pc.parties = append(pc.parties, n)
+			}
+		}
+	}
+	return pc
+}
+
+// party reports whether a value's entity label is a party the ledger names (not "Email
+// transmission", "deletion instruction", "omnibus equity trades").
+func (pc partyContext) party(label string) bool {
+	l := norm(label)
+	return l != "" && slices.ContainsFunc(pc.parties, func(p string) bool { return sameParty(p, l) })
+}
+
+// content is a metric label's words that name a quantity of their own (not "total", "date").
+func content(metric string) []string {
+	var out []string
+	for w := range tokens(metric) {
+		if !generic[w] && w != "time" {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+// sameParty: one name is part of the other ("Kevin Ostrowski" of "Kevin D. Ostrowski"; one word only
+// as the other's last, a surname: "Ostrowski", never "Whitmore" of "Whitmore Capital Advisors LLC"),
+// or one is the other's initials ("WCA", "Whitmore Capital Advisors LLC").
+func sameParty(a, b string) bool {
+	a, b = norm(a), norm(b)
+	part := func(short, long string) bool {
+		if f := strings.Fields(short); len(f) == 1 {
+			lf := strings.Fields(long)
+			return len(lf) > 1 && strings.Trim(lf[len(lf)-1], ".,") == f[0]
+		}
+		return contains(short, long)
+	}
+	if a == b || part(a, b) || part(b, a) {
+		return true
+	}
+	initials := func(s string) string {
+		var out []rune
+		for _, w := range strings.Fields(s) {
+			if w = strings.Trim(w, ".,()&"); w != "" && !slices.Contains([]string{"llc", "inc", "ltd", "lp", "llp", "corp", "co", "n.a.", "plc", "of", "the", "and"}, w) {
+				out = append(out, []rune(w)[0])
+			}
+		}
+		return string(out)
+	}
+	return len(a) >= 2 && len(strings.Fields(a)) == 1 && a == initials(b) || len(b) >= 2 && len(strings.Fields(b)) == 1 && b == initials(a)
+}
+
+// named lists the parties text names (every distinctive word of the name, or its initials as a word).
+func (pc partyContext) named(text string) []string {
+	ws := tokens(text)
+	var out []string
+	for _, p := range pc.parties {
+		pw := tokens(p)
+		all := len(pw) > 0
+		for w := range pw {
+			all = all && ws[w]
+		}
+		if all && !slices.ContainsFunc(out, func(o string) bool { return sameParty(o, p) }) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// clause is the part of x's quotes that states its value: the value's sentence, or its table row;
+// all of its quotes when no quote holds the value's text (a date written another way).
+func clause(x entry) string {
+	for _, q := range x.quotes {
+		if i := strings.Index(q, x.v.Value); i >= 0 && x.v.Value != "" {
+			if strings.ContainsAny(q, "\t|") {
+				s := strings.LastIndexByte(q[:i], '\n') + 1
+				e := strings.IndexByte(q[i:], '\n')
+				if e < 0 {
+					return q[s:]
+				}
+				return q[s : i+e]
+			}
+			sent, _ := sentenceOf(q, i)
+			return sent
+		}
+	}
+	return strings.Join(x.quotes, "\n")
+}
+
+// source is the party a payment or transfer comes from in s, when it says ("from Ostrowski",
+// "by Acme", "Acme Corp paid"): "" when it does not.
+var sourceRe = regexp.MustCompile(`\bfrom\s+(?:the\s+)?(\p{Lu}[\p{L}.&'’-]*(?:\s+\p{Lu}[\p{L}.&'’-]*){0,3})|(\p{Lu}[\p{L}.&'’-]*(?:\s+\p{Lu}[\p{L}.&'’-]*){0,3})\s+(?:paid|pays|wired|transferred|sent|remitted|advanced)\b`)
+
+func source(s string) string {
+	if m := sourceRe.FindStringSubmatch(s); m != nil {
+		return m[1] + m[2]
+	}
+	return ""
+}
+
+// onePair is the near join's context pairing (bench6, SEC: the extractor labelled 4,217 trades "OQR"
+// and 4,312 "Whitmore Capital Advisors LLC", $92,600 "Bellini" and $103,800 "Kevin Ostrowski", April
+// 15 "Email transmission" and April 22 "deletion instruction", so the labels kept all three bench5
+// pairs apart): two close values whose labels disagree are one figure when their metric and quote
+// context agree and neither side's quote names a different party for it. Concretely:
+//   - the context: at least two distinctive words (by stem) of the values' quotes are shared (three of
+//     the dates' own clauses), and the labels can be one metric (sameMetric, and a content word of the
+//     labels shared, or one label with none and three words shared), or both are totals;
+//   - two table rows pair only when both state a total (rows are otherwise an enumeration);
+//   - parties: the parties each clause names (partiesOf) share one, or one side names none, or one
+//     side's party label is named in the other's document (a matter's principal party, named
+//     throughout); two party labels each foreign to the other's document are two parties
+//     ("Buyer"'s price and "Guarantor"'s);
+//   - a flow keeps its direction: when both clauses say whom it is from, it is from one party
+//     (Acme's payment to Baker is not Baker's to Acme).
+func (pc partyContext) onePair(a, b entry) bool {
+	total := func(x entry) bool {
+		t := strings.ToLower(x.v.Metric + " " + clause(x))
+		return strings.Contains(t, "total") || strings.Contains(t, "aggregate")
+	}
+	totals := total(a) && total(b)
+	if a.row() && b.row() && !totals {
+		return false
+	}
+	wa, wb := a.words, b.words
+	if a.class == "Date" { // a matter's dated passages share its parties and its vocabulary: only the dates' own clauses count
+		wa, wb = tokens(clause(a)), tokens(clause(b))
+		for _, m := range strings.Fields("january february march april may june july august september october november december jan feb mar apr jun jul aug sep sept oct nov dec mon tue wed thu fri sat sun") {
+			delete(wa, m) // a date's own words are not its context
+		}
+	}
+	n := 0
+	for w := range wa {
+		if stemIn(wb, w) {
+			n++
+		}
+	}
+	if a.class == "Date" && n < 3 {
+		return false
+	}
+	ma, mb := content(a.v.Metric), content(b.v.Metric)
+	metric := totals || len(ma) == 0 && n >= 3 || len(mb) == 0 && n >= 3 ||
+		slices.ContainsFunc(ma, func(w string) bool { return stemIn(tokens(b.v.Metric), w) })
+	if n < 2 || !metric || !sameMetric(a, b) && !totals {
+		return false
+	}
+	ca, cb := clause(a), clause(b)
+	if sa, sb := source(ca), source(cb); sa != "" && sb != "" && !sameParty(sa, sb) {
+		return false
+	}
+	known := func(x, y entry) bool { // x's party label is named in y's document
+		return pc.party(x.v.Entity) && len(pc.named(strings.Join(pc.docText[y.doc], "\n"))) > 0 &&
+			slices.ContainsFunc(pc.named(strings.Join(pc.docText[y.doc], "\n")), func(p string) bool { return sameParty(p, x.v.Entity) })
+	}
+	if pc.party(a.v.Entity) && pc.party(b.v.Entity) && !known(a, b) && !known(b, a) {
+		return false
+	}
+	pa, pb := pc.named(ca), pc.named(cb)
+	return len(pa) == 0 || len(pb) == 0 || known(a, b) || known(b, a) ||
+		slices.ContainsFunc(pa, func(p string) bool { return slices.ContainsFunc(pb, func(q string) bool { return sameParty(p, q) }) })
 }
 
 // conflict applies the rule to one group: 2–6 distinct values from ≥ 2 documents, and a pair of
@@ -530,6 +719,27 @@ func conflict(es []entry, idx []int, kind string, differ func(a, b entry) bool) 
 		}
 	}
 	return Conflict{}, false
+}
+
+// fullName is the one longer name that short is part of ("Ostrowski" of "Richard Ostrowski"). Names
+// are compared pairwise, never chained: two different full names are two parties whatever they share,
+// and a fragment that is part of two of them ("Davenport-Chen" of "Margaret Davenport-Chen" and
+// "Sophia Davenport-Chen", "Bayshore" of two Bayshore companies) names neither (bench6, trust:
+// Margaret's age 71 was compared with Sophia's 44 through a shared surname).
+func fullName(short string, names []string) (string, bool) {
+	var longer []string
+	for _, n := range names {
+		if n != short && contains(short, n) {
+			longer = append(longer, n)
+		}
+	}
+	top := slices.DeleteFunc(slices.Clone(longer), func(n string) bool { // the longest: not part of another of them
+		return slices.ContainsFunc(longer, func(o string) bool { return o != n && contains(n, o) })
+	})
+	if len(top) != 1 {
+		return "", false
+	}
+	return top[0], true
 }
 
 // contains: every word of short is in long, one of them at least four letters long.

@@ -333,7 +333,7 @@ func answer(text string, out *Schema) (json.RawMessage, error) {
 	if strings.HasPrefix(t, "```") {
 		t = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(t, "```json"), "```"), "```"))
 	}
-	err := out.Validate(json.RawMessage(t))
+	err := out.ValidateOutput(json.RawMessage(t))
 	if err == nil {
 		return json.RawMessage(t), nil
 	}
@@ -348,7 +348,7 @@ func answer(text string, out *Schema) (json.RawMessage, error) {
 		alts = append(alts, text[i:j+1])
 	}
 	for _, a := range alts {
-		if out.Validate(json.RawMessage(a)) == nil {
+		if out.ValidateOutput(json.RawMessage(a)) == nil {
 			return json.RawMessage(a), nil
 		}
 	}
@@ -537,7 +537,7 @@ func (rt *Runtime) Invoke(ctx context.Context, a Agent, c Call, name string, inp
 	g.Charge(res.Usage)
 	g.Close()
 	if err == nil {
-		if verr := e.out.Validate(res.Output); verr != nil {
+		if verr := e.out.ValidateOutput(res.Output); verr != nil {
 			err = fmt.Errorf("%w: %s: %v", ErrToolOutput, name, verr)
 		}
 	}

@@ -211,10 +211,10 @@ func TestParseRecDates(t *testing.T) {
 	}
 }
 
-func TestParseMoneyCents(t *testing.T) {
-	for in, want := range map[string]int64{"$7,800,000": 780_000_000, "$438,000.00": 43_800_000, "$22.2 million": 2_220_000_000, "$1,234.56": 123_456} {
-		if got, ok := MoneyCents(in); !ok || got != want {
-			t.Errorf("MoneyCents(%q) = %d,%v want %d", in, got, ok, want)
+func TestCanonReadsMoney(t *testing.T) {
+	for in, want := range map[string]string{"$7,800,000": "usd:7800000", "$438,000.00": "usd:438000", "$22.2 million": "usd:22200000", "$1,234.56": "usd:1234.56"} {
+		if _, got, _, ok := Canon(Value{Value: in, Class: "Money"}); !ok || got != want {
+			t.Errorf("Canon(%q) = %s,%v want %s", in, got, ok, want)
 		}
 	}
 }

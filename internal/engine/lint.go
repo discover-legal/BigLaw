@@ -29,7 +29,6 @@ var (
 	// …", "Sections 7 and 9 of the Manual"); any other word makes the number a count ("37 trades").
 	listWord = regexp.MustCompile(`(?i)^\s+(?:and|or|of|to|through|in|under|is|are|was|were|be|do|does|did|not|also|each|both|which|that|as|may|must|shall|apply|applies|provide|provides|require|requires|state|states|set|sets)\b`)
 	refRange = regexp.MustCompile(`^\s*[–—-]\s*` + locator)
-	dateRe   = regexp.MustCompile(`(?i)\b(?:\d{1,2}\s+)?(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?(?:\s+\d{1,2},?)?\s+(?:19|20)\d\d\b|\b(?:19|20)\d\d-\d\d(?:-\d\d)?\b|\b\d{1,2}/\d{1,2}/(?:19|20)\d\d\b|(?:§\s*)?\b(?:19|20)\d\d\b`)
 )
 
 // locator is one rule, section or clause number: "7.3", "206(4)", "3(b)".
@@ -97,28 +96,13 @@ func figureAfter(text string, i int) bool {
 	return i+1 < len(text) && (text[i] == ',' || text[i] == '.') && text[i+1] >= '0' && text[i+1] <= '9'
 }
 
-// dates finds the dates in text with their spans (month names, ISO, m/d/y and bare years; a
-// statute section such as "§ 2462" is not a year).
-func dates(text string) (keys []string, spans [][]int) {
-	for _, loc := range dateRe.FindAllStringIndex(text, -1) {
-		raw := text[loc[0]:loc[1]]
-		if strings.HasPrefix(raw, "§") {
-			continue
-		}
-		if d, ok := analysis.ParseDate(raw); ok {
-			keys, spans = append(keys, d.Key()), append(spans, loc)
-		}
-	}
-	return keys, spans
-}
-
 // figures lists the dates (as date keys) and numbers (exact decimals) text states. Dates come
 // first and their digits are not read again as numbers. Single-digit integers ("Rule 6(a)(1)",
 // "paragraph 3") count only when all is set.
 func figures(text string, all bool) (ds []string, nums []figure) {
 	ds, fs := figuresIn(text) // the figure parser: scale, currency, class and ranges read
 	for _, f := range fs {
-		if !all && f.single {
+		if !all && f.Single {
 			continue
 		}
 		nums = append(nums, f)
@@ -141,8 +125,8 @@ func Untraced(text, ground string, derived bool) []string {
 	}
 	vals := make([]float64, 0, len(gn))
 	for _, g := range gn {
-		if len(vals) < 60 && !g.amb {
-			f, _ := g.amount.Float64()
+		if len(vals) < 60 && !g.Amb {
+			f, _ := g.Amount.Float64()
 			vals = append(vals, f)
 		}
 	}
@@ -150,9 +134,9 @@ func Untraced(text, ground string, derived bool) []string {
 		if figureStated(n, gn) {
 			continue
 		}
-		f, _ := n.amount.Float64()
-		if !derived || n.amb || !derivable(f, vals) {
-			out = append(out, analysis.Decimal(n.amount))
+		f, _ := n.Amount.Float64()
+		if !derived || n.Amb || !derivable(f, vals) {
+			out = append(out, analysis.Decimal(n.Amount))
 		}
 	}
 	return out
@@ -335,7 +319,7 @@ func hint(n string, hs []Fig, usable map[string]Finding, cited map[string]bool) 
 	states := func(text string) bool {
 		ds, ns := figures(text, true)
 		d, isDate := analysis.ParseDate(n)
-		return !isDate && slices.ContainsFunc(ns, func(f figure) bool { return !f.amb && analysis.Decimal(f.amount) == n }) || isDate && strings.Contains(n, "-") && slices.ContainsFunc(ds, func(k string) bool { x, _ := analysis.ParseDate(k); return x == d })
+		return !isDate && slices.ContainsFunc(ns, func(f figure) bool { return !f.Amb && analysis.Decimal(f.Amount) == n }) || isDate && strings.Contains(n, "-") && slices.ContainsFunc(ds, func(k string) bool { x, _ := analysis.ParseDate(k); return x == d })
 	}
 	for _, h := range hs { // a worksheet's value is traced already, so this is a finding's handle
 		if h.FID != "" && states(h.Value) {

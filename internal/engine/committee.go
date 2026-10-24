@@ -140,17 +140,6 @@ func (e *Engine) committeeTool(rt *agent.Runtime, r *run) agent.Tool {
 				add("prosecute", sev, first(fids), fmt.Sprintf("%s: %q. %s", v.Verdict, v.Claim, v.Why))
 			}
 		}
-		noted := map[string]bool{} // a cited finding's typed values admission dropped, one LOW line each (lab-r4 r3)
-		for _, x := range cl {
-			for _, fid := range x["fids"].([]string) {
-				if j := slices.IndexFunc(fs, func(f Finding) bool { return f.FID == fid }); j >= 0 && !noted[fid] {
-					noted[fid] = true
-					for _, note := range fs[j].ValueNotes {
-						add("admission", "LOW", fid, note)
-					}
-				}
-			}
-		}
 		var rep struct {
 			Answers []struct{ Question, Value, DocumentID, Quote string }
 		}
@@ -171,6 +160,10 @@ func (e *Engine) committeeTool(rt *agent.Runtime, r *run) agent.Tool {
 		for _, g := range aud.Gaps {
 			add("audit_gaps", g.Severity, "", g.Item+": "+g.Why)
 		}
+		if line, fids := admissionLine(cl, fs, old); line != "" { // after the other critics, one line, once per finding per run
+			add("admission", "LOW", fids[0], line)
+			found[len(found)-1].FIDs = fids
+		}
 		for _, f := range found {
 			if err := e.write(ctx, id, kCritic, f.ID, f, false); err != nil {
 				return nil, b.Spent(), err
@@ -185,9 +178,61 @@ func (e *Engine) committeeTool(rt *agent.Runtime, r *run) agent.Tool {
 	}}
 }
 
-// criticPage is committee's answer: one page of the cycle's findings (the rest: ledger op critics).
+// maxAdmissionLine bounds the committee's one admission line (lab-r4 r3 M7: 80 notes, one LOW line
+// each, pushed a HIGH audit gap off the committee's page).
+const maxAdmissionLine = 600
+
+// admissionLine is the committee's one LOW line for the cited findings whose typed values admission
+// dropped (Finding.ValueNotes) and no earlier cycle raised: their ids, the first notes while the
+// line has room, and how many more.
+func admissionLine(claims []map[string]any, fs []Finding, old []Critic) (string, []string) {
+	raised := map[string]bool{}
+	for _, c := range old {
+		if c.Critic == "admission" {
+			for _, fid := range append(c.FIDs, c.FID) {
+				raised[fid] = true
+			}
+		}
+	}
+	var fids, notes []string
+	for _, x := range claims {
+		for _, fid := range x["fids"].([]string) {
+			if j := slices.IndexFunc(fs, func(f Finding) bool { return f.FID == fid }); j >= 0 && !raised[fid] && len(fs[j].ValueNotes) > 0 {
+				raised[fid] = true
+				fids = append(fids, fid)
+				for _, n := range fs[j].ValueNotes {
+					notes = append(notes, fid+": "+n)
+				}
+			}
+		}
+	}
+	if len(fids) == 0 {
+		return "", nil
+	}
+	line := fmt.Sprintf("%d cited %s typed values admission dropped (%s)", len(fids), plural(len(fids), "finding has", "findings have"), strings.Join(fids, ", "))
+	shown := 0
+	for _, n := range notes {
+		if len(line)+len(n)+2 > maxAdmissionLine {
+			break
+		}
+		line, shown = line+cmpStr(shown == 0, ": ", "; ")+n, shown+1
+	}
+	if shown < len(notes) {
+		line += fmt.Sprintf(" (and %d more %s: ledger op get)", len(notes)-shown, plural(len(notes)-shown, "note", "notes"))
+	}
+	if len(line) > maxAdmissionLine+200 { // very many ids: count them only
+		line = fmt.Sprintf("%d cited findings have typed values admission dropped (first %s; ledger op get lists the notes)", len(fids), strings.Join(fids[:min(maxListed, len(fids))], ", "))
+	}
+	return line, fids
+}
+
+// criticPage is committee's answer: one page of the cycle's findings, the most severe first (the
+// rest: ledger op critics), so no LOW line ever pushes a HIGH or MEDIUM one off the page.
 func criticPage(n int, found []Critic) map[string]any {
 	list := []map[string]any{}
+	found = slices.Clone(found)
+	rank := map[string]int{"HIGH": 0, "MEDIUM": 1, "LOW": 2}
+	slices.SortStableFunc(found, func(a, b Critic) int { return rank[a.Severity] - rank[b.Severity] })
 	for _, f := range found {
 		list = append(list, map[string]any{"id": f.ID, "critic": f.Critic, "severity": f.Severity, "fid": nilIf(f.FID), "text": f.Text})
 	}

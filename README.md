@@ -900,7 +900,9 @@ Limitations of this layer:
   leaves the least salient late ones without a handle (a drafter may still state them inside a
   cited quote).
 - `join_discrepancies` trusts the extracting model's metric labels for the label join: one label
-  for two metrics is compared (the lead must check the quotes). The near join finds two labels for
+  for two metrics is compared (the lead must check the quotes). Entity names unify by alias, and by token containment
+  pairwise only, never chained: a name that is part of two longer names ("Davenport-Chen" of Margaret's and Sophia's)
+  names neither (`TestJoinBench6TrustNamesPairwise`). The near join finds two labels for
   one metric only when the values are close (an eighth; a month for dates), of one entity,
   compared after their stated scale (the value's, its unit's, or the word after it in its quote; a
   bare figure whose scale nothing states never pairs with a scaled one, while a figure written in full, grouped or seven digits, does: `TestJoinComparesScaledFigures`, `TestR2VScaledVsWholeFigure`), a value its quote frames as a part of the other's quantity ("$950,000 of the Purchase Price", a deposit or instalment toward it) never paired with it (`TestR2VHoldbackNearFalsePair`), their
@@ -936,15 +938,28 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
   ones); no per-call cap drops a page's facts: `TestSweepAdmitsOnlyThePlansFindingsOnce`, `TestTablePageKeepsARowEach`, `TestSweepCapNeverDropsProseFacts`) and checks every answer before it
   reaches the ledger: each quote goes through the ladder (`VerifyQuote`, then the `verify_quote`
   tool with its judge); a finding is verified only when every quote is (G2), else it is stored
-  quarantined (G3) and never drafted from; a typed value absent from its own quotes is dropped, with a note on its finding that the committee
-  (a LOW line) and coverage (`unadmitted`) see. Every figure check (typed values, `claimSums`, G8, the committee, coverage's
-  `addressed`) reads text through one figure parser (`figures.go`, specified by the corpus in `figures_test.go`): a
-  figure's sign (a leading minus, accounting parentheses in a statement's column), currency (a sign or ISO code before or
-  after it, or "dollars", "US dollars", "euros", "pounds"…), scale (million/billion/thousand/mn/bn; "m", "k", "b" and
-  "mm" only after a currency, so "5 mm" is a measurement), separators (a decimal comma "3,5", dot grouping
-  "1.200.000"; "1,200" on a line that writes decimal commas is ambiguous), ranges ("$3–5 million": both ends, the scale
-  carried back) and class (money, percent, a count by a closed list of count nouns or "N of the Company's M shares",
-  else unknown). A typed value is admitted only from a figure of its class, currency, sign and amount; a typed sum also
+  quarantined (G3) and never drafted from; a typed value absent from its own quotes is dropped, with a note on its finding
+  (`valueNotes`, shown in the API's finding view and the UI), in the sweep's and `extract_facts`'s `notes`, as one LOW
+  committee line per run listing the cited findings not raised before (after the other critics' lines, capped, and the
+  committee's page puts HIGH and MEDIUM lines first: `TestR4V3AdmissionNotesFloodCommittee`), and as one Limitations
+  line from the coverage pass's `unadmitted` list. Every number read from text (typed values, `claimSums`, G8, the
+  committee, coverage's `addressed`, and in `analysis` `Canon`, the joins, `Calc`'s operands, `Salience`, BELO-lite's
+  literal classes) goes through one figure parser (`internal/analysis/figures.go`, specified by the corpus in its
+  `figures_test.go`, with a generated property test and a fuzz test: no panic, spans never overlap, parse → render →
+  parse is stable): a figure's sign (a leading or spaced minus "-", "−", "–", "—", "minus"/"negative" where no
+  subtraction is meant, accounting parentheses before or after its currency and a trailing minus in a statement's
+  column, never a prose parenthesis), currency (a sign, glued prefixes "CAD$", "Cdn$", "R$", "NT$", the active ISO 4217
+  codes, "Rs.", "kr", "zł", "Fr.", or a currency word: "dollars", "euros", "yen", "rupees", "dirhams", "kronor"…; a
+  currency-like token it does not know makes the figure ambiguous, never US dollars; a currency token between two figures
+  belongs to one of them), scale (million/billion/thousand/mn/bn/mio/mrd/lakh/crore…, "m", "k", "b" and "mm" only after a
+  currency, a table header's "(in thousands)" applied to its block, or ambiguous when it says "except"), separators
+  decided by the figure's own form (a decimal comma "3,5", dot grouping "1.200.000", "1,200,000" always grouped, lakh
+  groups "1,00,000" for rupees, apostrophes, NBSP and, beside a currency, spaces; a single "1,200" on a line that writes
+  decimal commas is ambiguous; a leading ".5"; other scripts' digits), years only when bare (never "$2000",
+  "CHF 2093.25" or "2000 employees"; "1.5.2024" is a date), written-out numbers with a scale, currency or percent ("three
+  million dollars"), ranges ("$3–5 million": both ends, the scale carried back) and class (money, percent or per mille,
+  a count by a closed list of count nouns after it, or labelling it from before, "Shares outstanding: 3,000,000", or "N
+  of the Company's M shares", else unknown). A typed value is admitted only from a figure of its class, currency, sign and amount; a typed sum also
   from a bare grouped or scaled figure with no count noun in a quote that names no other currency ("1,200,000
   annually"); an ambiguous figure admits nothing (`TestFigureAdmission`, `TestTypedValuesNeedTheirScaleInTheQuote`).
   A money value's unit is the currency its figure states. Only an
@@ -1086,7 +1101,12 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
   reserve from all but `finish`, so evidence can never spend the draft's budget and the last draft can
   always be reviewed: when the lead runs out with a draft no committee has read, Go runs the
   committee on it from that cycle before the forced finish (`TestPhaseSharesHoldInUSD`,
-  `TestCommitteeAlwaysReviewsTheLastDraft`). The cycle it keeps is a fifth of the USD until a cycle
+  `TestCommitteeAlwaysReviewsTheLastDraft`). The lead runs at most three committee cycles (`maxCycles`; bench6 SEC ran
+  nine, $4.16, while verified findings stayed uncited): a fourth is refused with what to do instead, finish no longer asks
+  for a review of a draft changed after the capped cycles (a Limitations line says so), and the coverage pass, whose own
+  re-review of its redrafts is beyond the cap, may spend half of what is free beside one more cycle and the reserve when
+  that is more than its share, placing left-out findings in up to three rounds of one redraft per issue, at most 16 each,
+  60 in all, a request naming at most 100 findings (`TestBench6SECCommitteeCapped`). The cycle it keeps is a fifth of the USD until a cycle
   has run, then 1.5 times the costliest cycle so far (`cycleKeep`; bench5's cycles cost $0.30–0.48 of
   the $2.20 kept). `sweep` stops at its USD share as at its calls. The shares are sized from bench5 at
   $11 (lab-r4): a visit cost $0.012–0.014, so the 142-page SEC set needs about $2 of sweep (18%; 30%
@@ -1597,7 +1617,7 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
   - The deliverable is Markdown only (`GET /tasks/{id}/deliverable.md`); the `.docx` export waits for
     PR 3d's writer.
   - Quote verification proves a quote is in the document, not that the claim follows from it:
-    `prosecute` checks that, and a lawyer approves every deliverable. The G8 lint traces figures (read by the figure parser: amount, class and currency, ranges expanded; not the sign), not
+    `prosecute` checks that, and a lawyer approves every deliverable. The G8 lint traces figures (read by the figure parser: amount, class and currency, ranges expanded; the sign only when the memo writes a minus the ground does not), not
     words: a wrong party or a wrong verb with correct figures passes it.
   - The SSE stream polls the database every 500 ms. Cancel stops a run at once in its own process
     and at the next heartbeat (up to 10 s) in another; the call in flight is charged.
@@ -1708,7 +1728,11 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     one side's quotes naming every word of the other's entity: `mentions`, bench5's "Office of
     Quantitative Research" count of trades "through the omnibus account" against "Omnibus Equity
     Trades"; one way only: when each side's quotes name both entities, a flow between two parties, the typed
-    labels decide, so a payment one way never pairs with one the other way, `TestNearNeverPairsOppositePayments`), within an eighth
+    labels decide, so a payment one way never pairs with one the other way, `TestNearNeverPairsOppositePayments`; or, when
+    the labels disagree, by metric and quote context: two distinctive words shared (three of a date's own clause), a
+    label content word shared or both totals, the parties each clause names compatible, a flow's source one party, and
+    two party labels each foreign to the other's document never paired: `onePair`, `TestJoinBench6SECPairsAcrossLabels`
+    over the bench6 SEC ledger verbatim), within an eighth
     of each other, and not when each label names a thing its own quote states and the other side
     never mentions (a fee and an allocation, a notice and a demand); dates joined by shared words take
     the same label test. It is a word test: a part of a figure is told apart from it only when its

@@ -10,118 +10,6 @@ import (
 	"github.com/discover-legal/BigLaw/internal/analysis"
 )
 
-// figureCorpus specifies the figure parser (figures.go, lab-r4 r3): each input and every figure it
-// states, as "class:[-]amount [CUR] [(ambiguous)]" (figure.String). It holds the lab-r4 r2
-// verifier's probes and the earlier rounds' cases (lab-r4 H1/M3, the r2 typed-value and G8 tests,
-// the 4a currency test, the bench5 SEC sums, the deviation and locator-list grounds).
-var figureCorpus = []struct {
-	in   string
-	want []string
-}{
-	{"Section 3 provides that the principal, in the amount of one million, is due.", []string{"unknown:3"}},
-	{"The fee is $3 and the deposit is million.", []string{"money:3 USD"}},
-	{"The Purchaser shall pay EUR 3,5 million on Closing.", []string{"money:3500000 EUR"}},
-	{"Interest accrues at 1,5 % per annum.", []string{"percent:1.5"}},
-	{"Damages are estimated at $3–5 million.", []string{"money:3000000 USD", "money:5000000 USD"}},
-	{"Damages are estimated at between $3 and $5 million.", []string{"money:3000000 USD", "money:5000000 USD"}},
-	{"Damages are estimated at $3 million to $5 million.", []string{"money:3000000 USD", "money:5000000 USD"}},
-	{"Net income (loss) for the period: (3,000).", []string{"unknown:-3000"}},
-	{"Net income for the period: $3,000.", []string{"money:3000 USD"}},
-	{"-$3,000", []string{"money:-3000 USD"}},
-	{"a fee of 3% of $1 million", []string{"percent:3", "money:1000000 USD"}},
-	{"The Purchase Price is €3,000,000.", []string{"money:3000000 EUR"}},
-	{"The Purchase Price is 3,000,000 €.", []string{"money:3000000 EUR"}},
-	{"The Purchase Price is 3,000,000 GBP.", []string{"money:3000000 GBP"}},
-	{"The Purchase Price is $3,000,000.", []string{"money:3000000 USD"}},
-	{"The Purchase Price is USD 3 mn.", []string{"money:3000000 USD"}},
-	{"The Purchase Price is USD 3mn.", []string{"money:3000000 USD"}},
-	{"The Purchase Price is three million dollars.", []string{}},
-	{"The Purchase Price is $3,000,000¹.", []string{"money:3000000 USD"}},
-	{"The Purchase Price is $3\u00a0000\u00a0000.", []string{"money:3 USD", "unknown:0", "unknown:0"}},
-	{"The gap between panels shall not exceed 5 mm in any direction.", []string{"count:5"}},
-	{"steel plate of 12 mm and", []string{"count:12"}},
-	{"Rent is $500 per month.", []string{"money:500 USD"}},
-	{"Rent is 500 dollars per month.", []string{"money:500 USD"}},
-	{"Rent is USD 500 per month.", []string{"money:500 USD"}},
-	{"The fee is EUR 1.2 million.", []string{"money:1200000 EUR"}},
-	{"pay 1,200,000 to the Seller", []string{"unknown:1200000"}},
-	{"3,000,000 in cash", []string{"unknown:3000000"}},
-	{"pay 1,200,000 Canadian dollars", []string{"money:1200000 CAD"}},
-	{"The Buyer shall pay 1,200,000 US dollars at Closing.", []string{"money:1200000 USD"}},
-	{"The Executive's salary is 100,000 annually.", []string{"unknown:100000"}},
-	{"a fee of 50,000 CAD", []string{"money:50000 CAD"}},
-	{"ten percent of the price", []string{}},
-	{"Interest accrues at 5 per cent per annum.", []string{"percent:5"}},
-	{"5 percent of the price", []string{"percent:5"}},
-	{"1,200,000 USD", []string{"money:1200000 USD"}},
-	{"The price is €1.200.000.", []string{"money:1200000 EUR"}},
-	{"EUR 1.234,56", []string{"money:1234.56 EUR"}},
-	{"€1.200", []string{"money:1.2 EUR (ambiguous)"}},
-	{"an aggregate of $3 million", []string{"money:3000000 USD"}},
-	{"2,500 Euro", []string{"money:2500 EUR"}},
-	{"1,000 pounds", []string{"money:1000 GBP"}},
-	{"1,000 pound", []string{"money:1000 GBP"}},
-	{"The Company issued 3,000,000 shares.", []string{"count:3000000"}},
-	{"2m shares", []string{"count:2"}},
-	{"$2m", []string{"money:2000000 USD"}},
-	{"$2.5mm", []string{"money:2500000 USD"}},
-	{"$2,500K", []string{"money:2500000 USD"}},
-	{"١٠٠ dollars", []string{}},
-	{"$3,000,000.\u200b", []string{"money:3000000 USD"}},
-	{"＄3,000,000", []string{"money:3000000 USD"}},
-	{"The Seller shall transfer 1,200,000 of the Company's 3,000,000 Shares to the Buyer.", []string{"count:1200000", "count:3000000"}},
-	{"37 of the 120 trades", []string{"count:37", "count:120"}},
-	{"Rule 12b-1 fees of $4,000.", []string{"unknown:12", "unknown:1", "money:4000 USD"}},
-	{"Rule 10b-5 applies.", []string{"unknown:10", "unknown:5"}},
-	{"Principal: $3m.", []string{"money:3000000 USD"}},
-	{"Principal: USD 3,000,000.", []string{"money:3000000 USD"}},
-	{"Within 3 days the Company shall pay 3 instalments.", []string{"count:3", "count:3"}},
-	{"The Company shall pay 3 million instalments.", []string{"count:3000000"}},
-	{"Greystone claims damages of $644,910 for unpaid invoices", []string{"money:644910 USD"}},
-	{"payments totaling $103,800.00", []string{"money:103800 USD"}},
-	{"WCA's account took 73% of volume.", []string{"percent:73"}},
-	{"WCA made 73 trades.", []string{"count:73"}},
-	{"Forty Percent (40%) … Thirty-Five Percent (35%) … Serial #612847 … $92,600", []string{"percent:40", "percent:35", "unknown:612847", "money:92600 USD"}},
-	{"the sum of Three Million Dollars ($3,000,000)", []string{"money:3000000 USD"}},
-	{"thirty (30) days", []string{"count:30"}},
-	{"Revenue\t(1,250)\t4,000", []string{"unknown:-1250", "unknown:4000"}},
-	{"A fee of €1,200 and $5 per page, or 40 CHF, plus £30.", []string{"money:1200 EUR", "money:5 USD", "money:40 CHF", "money:30 GBP"}},
-	{"$3,000 CAD", []string{"money:3000 CAD"}},
-	{"Sections 3 and 14 million in fees", []string{"unknown:3", "unknown:14000000"}},
-	{"clauses 3(a) and 3(b) or 3(c); 1,200 rows", []string{"unknown:3", "unknown:3", "unknown:3", "count:1200"}},
-	{"Section 7.3.1 of the Manual", []string{}},
-	{"The fee is EUR 3,5 million and the cap is 1,200.", []string{"money:3500000 EUR", "unknown:1200 (ambiguous)"}},
-	{"pay $500 to 3 creditors", []string{"money:500 USD", "unknown:3"}},
-	{"3-5 days", []string{"count:3", "count:5"}},
-	{"from 3 to 5 per cent", []string{"percent:3", "percent:5"}},
-	{"The fee is 3,5 Mio. EUR.", []string{"money:3500000 EUR"}},
-	{"US$ 2,000 and C$1,500 and A$10", []string{"money:2000 USD", "money:1500 CAD", "money:10 AUD"}},
-	{"rates of 1.5% to 2.5%", []string{"percent:1.5", "percent:2.5"}},
-	{"a 25 basis points rise", []string{"count:25"}},
-	{"500 full-time employees", []string{"count:500"}},
-	{"1,000,000 Class A Shares", []string{"count:1000000"}},
-	{"The cap is −€5,000.", []string{"money:-5000 EUR"}},
-	{"($3,000,000)", []string{"money:-3000000 USD"}},
-	{"1,200", []string{"unknown:1200"}},
-	{"103,800.00", []string{"unknown:103800"}},
-}
-
-func TestFigureCorpus(t *testing.T) {
-	for _, c := range figureCorpus {
-		_, fs := figuresIn(c.in)
-		got := []string{}
-		for _, f := range fs {
-			got = append(got, f.String())
-		}
-		if !slices.Equal(got, c.want) {
-			t.Errorf("%q: got %q, want %q", c.in, got, c.want)
-		}
-	}
-	if len(figureCorpus) < 80 {
-		t.Errorf("the corpus shrank to %d cases", len(figureCorpus))
-	}
-}
-
 // TestFigureAdmission is the admission rule over the corpus's quotes: a typed value verifies only
 // from a figure of its class, currency, sign and amount; a typed sum also from a bare grouped or
 // scaled figure with no count noun in a quote naming no other currency; never from an ambiguous one.
@@ -187,6 +75,46 @@ func TestFigureAdmission(t *testing.T) {
 		{mv("$3,000,000", "Money"), "the sum of Three Million Dollars ($3,000,000)", true},
 		{mv("30", "Count"), "thirty (30) days", true},
 		{mv("$12 billion", "Money"), "Rule 12b-1 applies.", false},
+		// lab-r4 r4 (the r3 verifier's findings, one row each)
+		{mv("$1,000", "Money"), "Fees 1,000 USD 2,000 USD per seat", true},                            // H1
+		{mv("$2,000", "Money"), "Fees 1,000 USD 2,000 USD per seat", true},                            // H1
+		{mv("5%", "Percentage"), "Interest accrues at .5% per month.", false},                         // H2
+		{mv("0.5%", "Percentage"), "Interest accrues at .5% per month.", true},                        // H2
+		{mv("$500,000", "Money"), "a break fee of $.5 million", true},                                 // H2
+		{mv("$5 million", "Money"), "a break fee of $.5 million", false},                              // H2
+		{mv("$1,200,000", "Money"), "The fee is CAD$1,200,000.", false},                               // M1
+		{mv("CAD 1,200,000", "Money"), "The fee is Cdn$1,200,000.", true},                             // M1
+		{mv("$1,200,000", "Money"), "The fee is R$1,200,000.", false},                                 // M1
+		{mv("$1,200,000", "Money"), "The fee is Rs. 1,200,000.", false},                               // M1
+		{mv("INR 1,200,000", "Money"), "The fee is Rs. 1,200,000.", true},                             // M1
+		{mv("$1,200,000", "Money"), "The fee is XYZ 1,200,000.", false},                               // M1
+		{mv("$1,200,000", "Money"), "The fee is 1,200,000 dirhams.", false},                           // M1
+		{mv("$1,200,000", "Money"), "The fee is 1,200,000円.", false},                                  // M1
+		{mv("-$3,000", "Money"), "Net loss for the period: $(3,000)", true},                           // M2
+		{mv("$3,000", "Money"), "Net loss for the period: USD (3,000)", false},                        // M2
+		{mv("-$3,000", "Money"), "Net loss for the period: –3,000", true},                             // M2
+		{mv("-$5,000", "Money"), "Adjustment: - $5,000", true},                                        // M2
+		{mv("-12%", "Percentage"), "Change in revenue\t(12%)", true},                                  // M2
+		{mv("-$5,000", "Money"), "The balance was minus $5,000.", true},                               // M2
+		{mv("$5,000", "Money"), "the Purchase Price minus $5,000", true},                              // M2
+		{mv("-$3,000", "Money"), "Net\t3,000-", true},                                                 // M2
+		{mv("€1,200,000", "Money"), "The fee is EUR 3,5 million and the cap is EUR 1,200,000.", true}, // M3
+		{mv("₹1,00,000", "Money"), "a fee of ₹1,00,000 and a deposit of INR 12,50,000", true},         // M4
+		{mv("INR 1,250,000", "Money"), "a fee of ₹1,00,000 and a deposit of INR 12,50,000", true},     // M4
+		{mv("$2,000", "Money"), "Rent is $2000 per month.", true},                                     // M5
+		{mv("CHF 2,093.25", "Money"), "The fee is CHF 2093.25.", true},                                // M5
+		{mv("3,000,000", "Count"), "Shares outstanding: 3,000,000", true},                             // M6
+		{mv("73", "Count"), "The number of trades executed was 73.", true},                            // M6
+		{mv("$5,000", "Money"), "Payment\t5,000", true},                                               // M6: a payment label names an amount
+		{mv("CHF 1,200,000", "Money"), "CHF 1'200'000", true},                                         // L4
+		{mv("$3,000,000", "Money"), "The Purchase Price is $3 000 000.", true},                        // L4
+		{mv("$3,000,000", "Money"), "The Purchase Price is three million dollars.", true},             // L1 (r3)
+		{mv("€5,000,000", "Money"), "5 Millionen EUR", true},                                          // L5
+		{mv("$4,000", "Money"), "Revenue (in thousands): $4,000", false},                              // L7
+		{mv("$4,000,000", "Money"), "Revenue (in thousands): $4,000", true},                           // L7
+		{mv("$3,500", "Money"), "(USD 3,500) shall be paid as a deposit", true},                       // L3
+		{mv("1,000", "Count"), "1.000 shares", false},                                                 // L6
+		{mv("0.5%", "Percentage"), "a fee of 5‰", true},                                               // L8
 	} {
 		if got := valueInQuote(c.v, c.q); got != c.want {
 			t.Errorf("%s %q from %q: %v, want %v", c.v.Class, c.v.Value, c.q, got, c.want)
@@ -227,6 +155,17 @@ func TestFigureG8(t *testing.T) {
 		{"He paid $2,500K", "$2,500,000", nil},
 		{"The cap is $1,200.", "The fee is EUR 3,5 million and the cap is 1,200.", []string{"1200"}},
 		{"The cap is $1,200.", "The fee is EUR 3,5 million.\nThe cap is 1,200.", nil}, // the convention is read per line
+		// lab-r4 r4
+		{"The fee is 5%.", "Interest accrues at .5% per month.", []string{"5"}},                                                        // H2
+		{"The fee is $1,200,000.", "The fee is CAD$1,200,000.", []string{"1200000"}},                                                   // M1
+		{"The cap is €1,200,000.", "The fee is EUR 3,5 million and the cap is EUR 1,200,000.", nil},                                    // M3
+		{"The Loan of $1,200,000 bears interest at 1,5 % per annum.", "Interest at 1,5 % per annum.\nThe Loan is USD 1,200,000.", nil}, // M3
+		{"The fee is ₹1,00,000.", "a fee of ₹1,00,000", nil},                                                                           // M4
+		{"The rent is $2,000.", "Rent is $2000 per month.", nil},                                                                       // M5
+		{"The loss was −$3,000.", "Net income: $3,000.", []string{"3000"}},                                                             // L1: an explicit opposite sign
+		{"A loss of $3,000.", "Net income (loss):\t(3,000)", nil},                                                                      // prose states a loss unsigned
+		{"The price is $3 million.", "three million dollars", nil},                                                                     // written numbers
+		{"Revenue was $4 million.", "Revenue (in thousands): $4,000", nil},                                                             // L7
 	} {
 		if got := Untraced(c.memo, c.ground, false); !slices.Equal(got, c.untraced) {
 			t.Errorf("memo %q, ground %q: untraced %q, want %q", c.memo, c.ground, got, c.untraced)

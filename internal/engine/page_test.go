@@ -51,7 +51,7 @@ func TestReportsPageByType(t *testing.T) {
 	for _, p := range pages {
 		skipped = append(skipped, map[string]any{"documentId": p["documentId"], "sectionId": p["sectionId"], "through": nil, "reason": "duplicate"})
 	}
-	pageOK(t, "sweep", sweepPage(3, fids, pages, skipped, []map[string]any{{"documentId": "d", "read": 1, "planned": 400}}))
+	pageOK(t, "sweep", sweepPage(3, fids, fids, pages, skipped, []map[string]any{{"documentId": "d", "read": 1, "planned": 400}}))
 }
 
 // TestLedgerPagesByType: relations, critics and draft_get past their budget come a page at a time

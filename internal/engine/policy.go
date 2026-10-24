@@ -48,6 +48,12 @@ func Allocate(calls int, usd float64) Allocation {
 	return a
 }
 
+// maxCycles caps the committee cycles the lead may run (bench6 SEC: nine cycles, $4.16, while the
+// Bellini block's verified findings were never drafted): after them the lead fixes, discloses and
+// finishes, and the money they would have spent is the coverage pass's to place left-out evidence
+// with. The coverage pass's own re-review of a draft it changed is beyond the cap.
+const maxCycles = 3
+
 // cycleKeep is the USD the root keeps for one more committee cycle: CycleUSD until a cycle has run,
 // then 1.5 times the costliest cycle so far (bench5: cycles cost a fifth of the 20% kept for them, which
 // the run never got to spend), at most CycleUSD.
@@ -117,6 +123,14 @@ func (p policy) Allow(ctx context.Context, x agent.Pending) *agent.Refusal {
 		}
 		if err := p.r.fallbackPlan(ctx); err != nil {
 			return &agent.Refusal{Kind: agent.ErrPolicy, Reason: "the checklist plan could not be recorded", Next: "record a plan with ledger op plan"}
+		}
+	}
+	if x.Spec.Name == "committee" && p.r.forced == "" { // bench6 SEC: 9 cycles ($4.16) while drafting starved
+		if cyc, err := load[Cycle](ctx, e, id, kCycle); err != nil {
+			return &agent.Refusal{Kind: agent.ErrPolicy, Reason: "the task's ledger could not be read", Next: "try again"}
+		} else if len(cyc) >= maxCycles {
+			return &agent.Refusal{Kind: agent.ErrPolicy, Reason: fmt.Sprintf("the committee has reviewed the draft %d times, this run's cap", len(cyc)),
+				Next: "resolve its open findings (fix them and resolve as fixed, or resolve as disclosed), place the evidence it raised, and finish: the coverage pass reviews a changed draft once more"}
 		}
 	}
 	if sh := a.share(x.Spec.Name, x.Spec.Class); sh > 0 {

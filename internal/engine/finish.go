@@ -278,6 +278,11 @@ func (f finish) check(ctx context.Context, limits []limitation) (report, error) 
 				len(lo), plural(len(lo), "finding that states", "findings that state"), strings.Join(ids, ", "), cmpStr(len(lo) > maxPlaced, fmt.Sprintf(" and %d more", len(lo)-maxPlaced), "")))
 		}
 	}
+	if pass != nil { // the coverage pass's list of usable findings with a dropped typed value (lab-r4 r3 M7): one line
+		if line := unadmittedLine(pass.Unadmitted, byFID); line != "" {
+			rep.limits = append(rep.limits, line)
+		}
+	}
 	cov := analysis.CheckCoverage(ais, texts, an, nil)
 	rep.MissingIssues, rep.UncoveredParties, rep.MissingFigures = cov.MissingIssues, cov.UncoveredParties, cov.MissingFigures
 	if line := partyLine(cov.UncoveredParties); line != "" { // one line each, not one per party (bench5 SEC: 101 "Coverage:" lines)
@@ -290,8 +295,10 @@ func (f finish) check(ctx context.Context, limits []limitation) (report, error) 
 	switch {
 	case len(cyc) == 0 && len(secs) > 0:
 		bad("no_committee", "no committee has reviewed the draft: run committee")
-	case len(cyc) > 0 && cyc[len(cyc)-1].Version != version(secs) && funded:
+	case len(cyc) > 0 && cyc[len(cyc)-1].Version != version(secs) && funded && len(cyc) < maxCycles:
 		bad("committee_stale", "the draft changed after the last committee: run committee on the current draft")
+	case len(cyc) >= maxCycles && cyc[len(cyc)-1].Version != version(secs):
+		rep.limits = append(rep.limits, fmt.Sprintf("Review: the committee reviewed the draft %d times (the run's cap); the changes after its last cycle were not reviewed again.", len(cyc)))
 	}
 	for _, x := range crit {
 		switch {
@@ -408,6 +415,23 @@ func gated(x Finding, unsupported bool) bool {
 
 // maxListed bounds the names a summarised Coverage line lists before "and N more".
 const maxListed = 12
+
+// unadmittedLine is the Limitations line for the usable findings that kept fewer typed values than
+// their subagent gave: each dropped value's note is on the finding (the API's finding view).
+func unadmittedLine(fids []string, use map[string]Finding) string {
+	var ids []string
+	for _, fid := range fids {
+		if _, ok := use[fid]; ok {
+			ids = append(ids, fid)
+		}
+	}
+	if len(ids) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("Evidence: %d verified %s a typed value that admission dropped because %s quotes did not state it as typed (each finding's value notes say why): %s%s.",
+		len(ids), plural(len(ids), "finding had", "findings had"), plural(len(ids), "its", "their"), strings.Join(ids[:min(maxListed, len(ids))], ", "),
+		cmpStr(len(ids) > maxListed, fmt.Sprintf(" and %d more", len(ids)-maxListed), ""))
+}
 
 // partyLine is the Limitations line for the parties the findings name and the memo never does.
 func partyLine(ps []analysis.PartyGap) string {

@@ -130,8 +130,10 @@ func (s sheets) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 		hs = slices.DeleteFunc(hs, func(h analysis.Handle) bool {
 			return h.FID == "" || len(in.FIDs) > 0 && !slices.Contains(in.FIDs, h.FID)
 		})
+		pg := agent.NewPage() // one page, saying truncated (bench6: the answer lacked the schema's truncated key)
+		list := agent.Take(pg, append([]analysis.Handle{}, hs[:min(len(hs), cmp.Or(in.SalientTop, len(hs)))]...))
 		out, _ := json.Marshal(map[string]any{"wid": nil, "result": nil, "unit": nil, "worksheet": nil, "literalOperands": nil, "tableMarkdown": nil,
-			"handles": append([]analysis.Handle{}, hs[:min(len(hs), cmp.Or(in.SalientTop, len(hs)))]...)})
+			"handles": list, "truncated": pg.Truncated})
 		return agent.Result{Output: out}, nil
 	}
 	res, err := s.Tool.Call(ctx, c)
@@ -445,8 +447,7 @@ func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 			ok, cur, why := valueStated(v, text.String())
 			if !ok {
 				note := fmt.Sprintf("value %q (%s) not admitted: %s", v.Value, cmpStr(v.Metric != "", v.Metric, "no metric"), why)
-				f.ValueNotes = append(f.ValueNotes, note)
-				out.Notes = append(out.Notes, note)
+				f.ValueNotes = append(f.ValueNotes, note) // into out.Notes with its finding's id, below
 				continue
 			}
 			if analysis.ClassOf(v) == "Money" && v.Unit == "" && cur != "USD" {
@@ -469,6 +470,9 @@ func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 				return out, 0, err
 			}
 			out.Notes = append(out.Notes, "merged into "+all[i].FID+" (an exact duplicate): "+f.Claim)
+			for _, n := range f.ValueNotes {
+				out.Notes = append(out.Notes, all[i].FID+": "+n)
+			}
 			continue
 		}
 		f.FID = nextID("F", len(all))
@@ -477,6 +481,9 @@ func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 			return out, 0, err
 		}
 		out.Findings = append(out.Findings, admitted(f))
+		for _, n := range f.ValueNotes {
+			out.Notes = append(out.Notes, f.FID+": "+n)
+		}
 		if !f.Verified {
 			out.Dropped++
 		}
@@ -537,15 +544,15 @@ func claimSums(claim, quotes string, have []analysis.Value) []analysis.Value {
 		seen[canon(v)] = true
 	}
 	_, qs := figuresIn(quotes)
-	named := currenciesNamed(quotes)
+	named := analysis.CurrenciesNamed(quotes)
 	_, cs := figuresIn(claim)
 	for _, f := range cs {
-		if f.class != moneyFig || f.cur != "USD" || f.amb {
+		if f.Class != analysis.MoneyFig || f.Cur != "USD" || f.Amb {
 			continue
 		}
-		v := analysis.Value{Value: strings.TrimSpace(claim[f.start:f.end]), Class: "Money"}
+		v := analysis.Value{Value: strings.TrimSpace(claim[f.Start:f.End]), Class: "Money"}
 		c := canon(v)
-		if c == "" || seen[c] || !slices.ContainsFunc(qs, func(q figure) bool { _, ok, _ := admits(f, moneyFig, q, named); return ok }) {
+		if c == "" || seen[c] || !slices.ContainsFunc(qs, func(q figure) bool { _, ok, _ := analysis.Admits(f, analysis.MoneyFig, q, named); return ok }) {
 			continue
 		}
 		seen[c] = true

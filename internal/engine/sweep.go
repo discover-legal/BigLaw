@@ -217,7 +217,8 @@ type issuesKey struct{}
 // visitRun is one visit's outcome: the fids it produced, whether it ran, and its error.
 type visitRun struct {
 	ids                 []string
-	ran, broke, refused bool // ran: it made a model call; broke: all that was left ran out on it; refused: a worker's share could not fund it
+	notes               []string // admission's notes (a dropped value, a merge), kept for the lead
+	ran, broke, refused bool     // ran: it made a model call; broke: all that was left ran out on it; refused: a worker's share could not fund it
 	err                 error
 }
 
@@ -318,6 +319,9 @@ func (e *Engine) sweepVisits(ctx context.Context, rt *agent.Runtime, c agent.Cal
 					r.ids = append(r.ids, id)
 				}
 			}
+			if err == nil {
+				r.notes = got.Notes
+			}
 			if err == nil && cctx.Err() == nil { // a failed visit (bad output, its grant spent) is read again by a later sweep
 				rec := visitRec{FIDs: append(slices.Clone(was[i].FIDs), r.ids...), Issues: append(slices.Clone(was[i].Issues), read...)}
 				if rec.Issues == nil {
@@ -416,7 +420,7 @@ func (e *Engine) sweepTool(rt *agent.Runtime, r *run) agent.Tool {
 		if err != nil {
 			return nil, b.Spent(), err
 		}
-		fids, uncovered, skipped, visited := []string{}, []map[string]any{}, []map[string]any{}, 0
+		fids, notes, uncovered, skipped, visited := []string{}, []string{}, []map[string]any{}, []map[string]any{}, 0
 		cov := map[string]*SweptDoc{}
 		var docOrder []string
 		for i, v := range visits {
@@ -441,7 +445,7 @@ func (e *Engine) sweepTool(rt *agent.Runtime, r *run) agent.Tool {
 				uncovered = append(uncovered, v.unread())
 			default:
 				visited, d.Read = visited+1, d.Read+1
-				fids = append(fids, x.ids...)
+				fids, notes = append(fids, x.ids...), append(notes, x.notes...)
 			}
 		}
 		swept, unread := []SweptDoc{}, []map[string]any{}
@@ -467,7 +471,7 @@ func (e *Engine) sweepTool(rt *agent.Runtime, r *run) agent.Tool {
 		if err := e.write(ctx, c.TaskID, kSwept, "sweep", swept, true); err != nil {
 			return nil, b.Spent(), err
 		}
-		out := sweepPage(visited, fids, uncovered, skipped, unread)
+		out := sweepPage(visited, fids, notes, uncovered, skipped, unread)
 		note := ""
 		if len(uncovered) > 0 {
 			note = fmt.Sprintf("The evidence sweep ran out of budget: %d of %d pages were not read (it read those most relevant to the plan's issues first): ", len(uncovered), len(visits))
@@ -499,10 +503,10 @@ func (e *Engine) sweepTool(rt *agent.Runtime, r *run) agent.Tool {
 
 // sweepPage is sweep's answer: one page, its lists in order of use (truncated: all the findings are
 // in the ledger, and a later sweep reads the uncovered pages).
-func sweepPage(visited int, fids []string, uncovered, skipped, unread []map[string]any) map[string]any {
+func sweepPage(visited int, fids, notes []string, uncovered, skipped, unread []map[string]any) map[string]any {
 	pg := agent.NewPage()
 	out := map[string]any{"visited": visited, "incomplete": len(uncovered) > 0, "unreadDocuments": agent.Take(pg, unread), "uncovered": agent.Take(pg, uncovered),
-		"findings": agent.Take(pg, fids), "skipped": agent.Take(pg, skipped)}
+		"findings": agent.Take(pg, fids), "skipped": agent.Take(pg, skipped), "notes": agent.Take(pg, notes)}
 	out["truncated"] = pg.Truncated
 	return out
 }

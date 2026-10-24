@@ -91,14 +91,15 @@ type Cover struct {
 
 // Critic is one committee finding, open until the lead resolves it (fixed or disclosed).
 type Critic struct {
-	ID       string `json:"id"`
-	Cycle    int    `json:"cycle"`
-	Critic   string `json:"critic"`
-	Severity string `json:"severity"` // HIGH, MEDIUM or LOW
-	FID      string `json:"fid,omitempty"`
-	Text     string `json:"text"`
-	Status   string `json:"status"` // open, fixed or disclosed
-	Note     string `json:"note,omitempty"`
+	ID       string   `json:"id"`
+	Cycle    int      `json:"cycle"`
+	Critic   string   `json:"critic"`
+	Severity string   `json:"severity"` // HIGH, MEDIUM or LOW
+	FID      string   `json:"fid,omitempty"`
+	FIDs     []string `json:"fids,omitempty"` // an admission line's findings (each raised once per run)
+	Text     string   `json:"text"`
+	Status   string   `json:"status"` // open, fixed or disclosed
+	Note     string   `json:"note,omitempty"`
 }
 
 // Fig is a figure handle as given to a drafter: kept with its section, so the renderer substitutes

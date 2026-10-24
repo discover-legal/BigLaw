@@ -51,8 +51,7 @@ type operand struct {
 // also [F12].v1, f12.V1, F12 v1, F12.value1; F12.d1 is F12's first date value; a bare F12 is its
 // only value.
 var (
-	refRe  = regexp.MustCompile(`(?i)^\[?(F\d+)\]?(?:[.\s_-]*(v|value|d|date)\s*(\d+))?$`)
-	daysRe = regexp.MustCompile(`(?i)^(-?\d+)\s*(?:calendar\s+)?days?$`)
+	refRe = regexp.MustCompile(`(?i)^\[?(F\d+)\]?(?:[.\s_-]*(v|value|d|date)\s*(\d+))?$`)
 )
 
 // valueOf finds the value a reference names; a reference that names none is an error that lists
@@ -115,16 +114,23 @@ func resolve(findings []Finding, o Operand) (operand, error) {
 		return operand{}, errors.New(`an operand needs ref or literal, e.g. {"ref": "F12.v1", "literal": null, "unit": null} or {"ref": null, "literal": "21", "unit": "days"}`)
 	}
 	unit := cmp.Or(map[Class]string{"Percentage": "%", "Date": "date"}[ClassOf(v)], strings.ToLower(v.Unit))
-	if ClassOf(v) == "Money" && slices.Contains([]string{"", "$", "usd", "dollars"}, unit) {
-		unit = "USD"
+	if ClassOf(v) == "Money" { // the currency the figure parser reads (the value's, else its unit's), else US dollars
+		f, why := ValueFigure(v)
+		cur := cmp.Or(map[bool]string{true: f.Cur}[why == ""], UnitCur(v.Unit))
+		switch {
+		case cur == "USD" || cur == "" && slices.Contains([]string{"", "$", "usd", "dollars"}, unit):
+			unit = "USD"
+		case cur != "":
+			unit = strings.ToLower(cur) // another currency keeps its own unit ("gbp", as a literal's unit is written)
+		}
 	}
 	if strings.Contains(unit, "day") { // "calendar days", "day"
 		unit = "days"
 	}
-	if m := daysRe.FindStringSubmatch(strings.TrimSpace(v.Value)); m != nil && (unit == "" || unit == "days" || unit == "count") {
-		v.Value, unit = m[1], "days"
+	if f, n, ok := number(v.Value); ok && f.Class == CountFig && strings.TrimSuffix(f.Noun, "s") == "day" && n.IsInt() && (unit == "" || unit == "days" || unit == "count") {
+		v.Value, unit = n.RatString(), "days" // "21 days", "21 calendar days", read by the figure parser
 	}
-	if _, isNum := Number(v.Value); unit == "" && !isNum {
+	if _, _, isNum := number(v.Value); unit == "" && !isNum {
 		if d, ok := ParseDate(v.Value); ok && d.Day != 0 {
 			unit = "date"
 		}
@@ -135,7 +141,7 @@ func resolve(findings []Finding, o Operand) (operand, error) {
 			return x, fmt.Errorf("%q is not a full date (write it as 2026-11-12)", v.Value)
 		}
 		x.date = &d
-	} else if x.num, ok = Number(v.Value); !ok {
+	} else if _, x.num, ok = number(v.Value); !ok {
 		return x, fmt.Errorf("%q is not a number (give a date with unit \"date\", a number of days as \"21\" with unit \"days\")", v.Value)
 	}
 	return x, nil
@@ -310,16 +316,16 @@ var MaxHandles = len(codenames)
 // Salience ranks a figure for the key-figures guarantee: big money, large counts and major rates
 // first; small bare numbers (exhibit noise) last (v1's figureSalience).
 func Salience(v string) int {
-	x, _ := Number(v)
+	fig, x, ok := number(v) // the figure parser: any currency is money, a decimal comma is no grouping
 	f := 0.0
-	if x != nil {
-		f, _ = x.Float64()
+	if ok {
+		f, _ = new(big.Rat).Abs(x).Float64()
 	}
-	dollar, pct := strings.Contains(v, "$"), strings.Contains(v, "%")
+	dollar, pct := ok && fig.Class == MoneyFig, ok && fig.Class == PercentFig
 	switch {
 	case dollar && f >= 100000:
 		return 100
-	case strings.Contains(v, ",") && !dollar && f >= 1000:
+	case ok && fig.Grouped && !dollar && f >= 1000:
 		return 95
 	case dollar && f >= 10000:
 		return 90
