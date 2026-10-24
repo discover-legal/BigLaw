@@ -198,7 +198,7 @@ func (h hooked) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 		in["requirement"] = rq.Joined()
 		in["requirementContext"] = rq.Context()                            // what it judges against: the requirement with what governs it
 		in["reviewedPassages"] = h.e.reviewedPassages(ctx, c, rq.Joined()) // bench4, trust: every call spent its five turns searching and checking quotes
-		pre := agent.NewBudget(c.Budget.Calls, c.Budget.USD, 0) // the requirement's check comes out of the grant first (bench5: unfunded checks dropped real deviations)
+		pre := agent.NewBudget(c.Budget.Calls, c.Budget.USD, 0)            // the requirement's check comes out of the grant first (bench5: unfunded checks dropped real deviations)
 		if rq.Check, rq.CheckWhy, err = h.e.checkSection(ctx, h.rt, pre, rq); err != nil {
 			return agent.Result{Usage: pre.Spent()}, err
 		}
