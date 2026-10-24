@@ -18,7 +18,7 @@ import (
 const (
 	ExactConfidence    = 1.0
 	TolerantConfidence = 0.95
-	CellConfidence     = 0.9 // tolerant, a table row's cells matched with their separators set aside
+	CellConfidence     = 0.9  // tolerant, a table row's cells matched with their separators set aside
 	JudgeCap           = 0.8  // a single judge's confidence is capped here
 	ensembleBand       = 0.75 // a judge less sure than this escalates to the ensemble
 	ensembleVotes      = 3
