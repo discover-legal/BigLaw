@@ -267,9 +267,10 @@ func TestJoinAliasesReachFinish(t *testing.T) {
 
 // TestSweepAdmitsOnlyThePlansFindingsOnce (bench5 SEC: 896 findings from 142 pages, 177 from one
 // brochure section of generic process text, figures restated page after page): a visit is sent the
-// plan's issues; a finding that names none is not admitted, one call admits at most maxFactsPerCall,
-// and a later page's restatement of an admitted figure (same values, its quote inside the first's) is
-// merged into it, across issues.
+// plan's issues; a finding that names none is not admitted, findings repeating one admitted in the
+// same issue (the same quote and values) merge into it, and a later page's restatement in another
+// issue stays a finding of its own (lab-r4 verifier H2: only exact duplicates merge, never across
+// issues; no per-call cap, M2).
 func TestSweepAdmitsOnlyThePlansFindingsOnce(t *testing.T) {
 	t.Parallel()
 	doc := "1. Fees\nThe fee of $5,000 is due on March 1, 2026.\n" + filler + "\n\n2. Summary\nAs stated above, the fee of $5,000 is due on March 1, 2026.\n" + filler + "\n"
@@ -296,7 +297,8 @@ func TestSweepAdmitsOnlyThePlansFindingsOnce(t *testing.T) {
 	task := f.submit(0)
 	f.step(context.Background())
 	fs := ledgerFindings(t, f, task.ID)
-	if len(fs) != 12 || fs[0].IssueID != "I1" || fs[1].IssueID != "I2" || len(fs[0].Citations) != 2 || slices.ContainsFunc(fs, func(x Finding) bool { return x.Claim == "Further delivery terms apply." }) {
+	if len(fs) != 3 || fs[0].IssueID != "I1" || fs[1].IssueID != "I2" || fs[2].IssueID != "I2" || len(fs[0].Citations) != 1 || !strings.Contains(fs[2].Claim, "summary restates") ||
+		slices.ContainsFunc(fs, func(x Finding) bool { return x.Claim == "Further delivery terms apply." }) {
 		t.Fatalf("%d findings: %+v", len(fs), fs)
 	}
 	for _, c := range fake.Calls() {
@@ -390,7 +392,7 @@ func TestTablePageKeepsARowEach(t *testing.T) {
 }
 
 // TestRestatedNeverMergesTwoRows: two rows of one table share most of their words and the same
-// amount, and are two payments; only a quote inside another's is a restatement of it.
+// amount, and are two payments; only an exact duplicate merges.
 func TestRestatedNeverMergesTwoRows(t *testing.T) {
 	row := func(month string) Finding {
 		q := "Monthly Dues — 2022\tMonthly membership dues paid to Bayshore Palms Golf & Country Club on behalf of Marcus T. Bellini (" + month + " 2022)\t1\t$2,800.00"
@@ -406,8 +408,8 @@ func TestRestatedNeverMergesTwoRows(t *testing.T) {
 	p := func(s string) Finding {
 		return Finding{Finding: analysis.Finding{Verified: true, Claim: s, Quotes: []analysis.Quote{{Quote: s}}, Values: []analysis.Value{{Value: "$438,000", Class: "Money"}}}}
 	}
-	if !restated(p("The Division estimates that excess profits in the personal account totaled approximately $438,000 over the Review Period."),
+	if restated(p("The Division estimates that excess profits in the personal account totaled approximately $438,000 over the Review Period."),
 		p("The Division estimates that excess profits in the personal account totaled approximately $438,000 over the Review Period (2021-2023).")) {
-		t.Error("a prose restatement is not merged")
+		t.Error("a near restatement is merged (lab-r4 verifier H2: only exact duplicates merge)")
 	}
 }

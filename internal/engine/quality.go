@@ -11,7 +11,7 @@ import (
 
 // The authorship checks carried from v1's writer (authorship.go, dedup.go): process language
 // never reaches the client, a section never ends mid-sentence, orphan fragments and repeated
-// blocks are dropped, and near-duplicate findings merge into the first.
+// blocks are dropped.
 
 var processRe = regexp.MustCompile(`(?i)(` +
 	`\b(must|should|need(s)?\s+to|remain(s)?\s+to|have\s+to)\s+be\s+(extracted|verified|cross-?referenced|confirmed|obtained|determined)\b` +
@@ -146,46 +146,3 @@ func dedupeDocBlocks(doc string) string {
 	}
 	return strings.Join(out, "\n\n")
 }
-
-// dupThreshold is the Jaccard cutoff over 3-word shingles of two claims (v1's 0.5): a rephrased
-// restatement scores above it, distinct facts on one topic far below.
-const dupThreshold = 0.5
-
-func shingles(s string) map[string]bool {
-	var toks []string
-	for _, w := range strings.Fields(strings.ToLower(s)) {
-		if w = strings.Map(func(r rune) rune {
-			if unicode.IsLetter(r) || unicode.IsDigit(r) {
-				return r
-			}
-			return -1
-		}, w); w != "" {
-			toks = append(toks, w)
-		}
-	}
-	out := map[string]bool{}
-	if len(toks) < 3 {
-		out[strings.Join(toks, " ")] = true
-	}
-	for i := 0; i+3 <= len(toks); i++ {
-		out[strings.Join(toks[i:i+3], " ")] = true
-	}
-	return out
-}
-
-// similarity is the shingle Jaccard of two texts.
-func similarity(a, b string) float64 {
-	x, y := shingles(a), shingles(b)
-	in := 0
-	for k := range x {
-		if y[k] {
-			in++
-		}
-	}
-	if u := len(x) + len(y) - in; u > 0 {
-		return float64(in) / float64(u)
-	}
-	return 0
-}
-
-func nearDuplicate(a, b string) bool { return similarity(a, b) >= dupThreshold }

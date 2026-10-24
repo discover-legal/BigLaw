@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/discover-legal/BigLaw/internal/agent"
 	"github.com/discover-legal/BigLaw/internal/analysis"
@@ -217,9 +218,12 @@ func (h hooked) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 			if err != nil {
 				return agent.Result{}, err
 			}
+			only, part := ctx.Value(issuesKey{}).([]string) // a page read again for the issues added since: only those
 			var list []map[string]string
 			for _, is := range issues {
-				list = append(list, map[string]string{"id": is.ID, "question": is.Question})
+				if !part || slices.Contains(only, is.ID) {
+					list = append(list, map[string]string{"id": is.ID, "question": is.Question})
+				}
 			}
 			if len(list) > 0 {
 				in["issues"] = list
@@ -250,13 +254,17 @@ func (h hooked) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 			return agent.Result{}, err
 		}
 		in["requirement"] = rq.Joined()
-		in["requirementContext"] = rq.Context()                            // what it judges against: the requirement with what governs it
-		in["reviewedPassages"] = h.e.reviewedPassages(ctx, c, rq.Joined()) // bench4, trust: every call spent its five turns searching and checking quotes
-		pre := agent.NewBudget(c.Budget.Calls, c.Budget.USD, 0)            // the requirement's check comes out of the grant first (bench5: unfunded checks dropped real deviations)
+		in["requirementContext"] = rq.Context()                                // what it judges against: the requirement with what governs it
+		var su agent.Usage                                                     // the passages' query embedding, metered (lab-r4 verifier L3)
+		in["reviewedPassages"], su = h.e.reviewedPassages(ctx, c, rq.Joined()) // bench4, trust: every call spent its five turns searching and checking quotes
+		pre := agent.NewBudget(c.Budget.Calls, max(0, c.Budget.USD-su.USD), 0) // the requirement's check comes out of the grant first (bench5: unfunded checks dropped real deviations)
 		if rq.Check, rq.CheckWhy, err = h.e.checkSection(ctx, h.rt, pre, rq); err != nil {
-			return agent.Result{Usage: pre.Spent()}, err
+			u := pre.Spent()
+			u.Add(su)
+			return agent.Result{Usage: u}, err
 		}
 		preUse = pre.Spent()
+		preUse.Add(su)
 		c.Budget = agent.Grant{Calls: max(0, c.Budget.Calls-preUse.Calls), USD: max(0, c.Budget.USD-preUse.USD)}
 		if rq.Check != nil && rq.Check.Answer == "no" { // nothing to compare with: the document does not require it
 			return agent.Result{Usage: preUse}, agent.Fail(fmt.Sprintf("check_deviation: an independent reading of %s around the requirement found that it does not impose the requirement as quoted (negated or overridden): %s. Quote the requirement together with what governs it (its lead-in, exception or override), as the document states what it requires, and call again",
@@ -310,15 +318,7 @@ func (h hooked) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 				notes = append(notes, "authority not in the record (flagged if cited): "+a.Cite)
 			}
 		}
-		limit := 0 // findings one call may admit (admit): a page's own table rows are facts each, so a table page keeps one per row
-		if name == "extract_facts" {
-			rows := 0
-			for _, l := range strings.Split(str("sectionText"), "\n") {
-				rows += btoi(tableRow(l))
-			}
-			limit = max(maxFactsPerCall, rows)
-		}
-		out, reward, err = h.e.admit(ctx, h.rt, c, b, name, str("issueId"), res.Model, ans.Findings, notes, limit)
+		out, reward, err = h.e.admit(ctx, h.rt, c, b, name, str("issueId"), res.Model, ans.Findings, notes)
 		if err == nil && name == "analyze_issue" && strings.TrimSpace(ans.Conclusion) != "" && str("issueId") != "" { // for the issue's drafter (cover.go)
 			err = h.e.write(ctx, c.TaskID, kAnalysis, str("issueId"), Analysis{truncate(ans.Rule, 1500), truncate(ans.Application, 3000), truncate(ans.Conclusion, 1000)}, true)
 		}
@@ -417,7 +417,7 @@ func currencyOf(value, quote string) string {
 // finding verifies only when all of them do; otherwise it is quarantined), each value kept only
 // when its own quote states it, each relation typed by BELO-lite, near-duplicates merged into the
 // first. The reward is the share of quotes that verified.
-func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *agent.Budget, tool, issueID, model string, drafts []draftFinding, notes []string, limit int) (hookResult, float64, error) {
+func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *agent.Budget, tool, issueID, model string, drafts []draftFinding, notes []string) (hookResult, float64, error) {
 	out := hookResult{Findings: []map[string]any{}, Notes: append([]string{}, notes...)}
 	all, err := load[Finding](ctx, e, c.TaskID, kFinding)
 	if err != nil {
@@ -429,18 +429,18 @@ func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 			return out, 0, err
 		}
 	}
-	quotes, ok, off, over := 0, 0, 0, 0
-	for k, d := range drafts {
+	scoped := len(plan) > 0
+	if only, ok := ctx.Value(issuesKey{}).([]string); ok && scoped { // a page read again: the issues added since
+		plan = slices.DeleteFunc(plan, func(is Issue) bool { return !slices.Contains(only, is.ID) })
+	}
+	quotes, ok, off := 0, 0, 0
+	for _, d := range drafts {
 		fi := issueID
-		if len(plan) > 0 { // a fact on none of the plan's issues is not admitted
+		if scoped { // a fact on none of the plan's issues is not admitted
 			if fi = deref(d.IssueID); !slices.ContainsFunc(plan, func(is Issue) bool { return is.ID == fi }) {
 				off++
 				continue
 			}
-		}
-		if limit > 0 && k-off >= limit {
-			over++
-			continue
 		}
 		f := Finding{Finding: analysis.Finding{IssueID: fi, Claim: strings.TrimSpace(d.Claim), Quotes: d.Quotes, Entities: d.Entities}, Severity: "medium", Arm: agent.Arm{Tool: tool, Model: model}}
 		var text strings.Builder
@@ -468,7 +468,7 @@ func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 		f.Values = append(f.Values, claimSums(f.Claim, text.String(), f.Values)...)
 		f.Relations, _ = analysis.Relations(d.Entities, d.Relations)
 		if i := slices.IndexFunc(all, func(x Finding) bool {
-			return x.Verified && f.Verified && (x.IssueID == f.IssueID && nearDuplicate(x.Claim, f.Claim) || restated(x, f))
+			return x.Verified && f.Verified && samePolarity(x, f) && restated(x, f)
 		}); i >= 0 {
 			for _, c := range f.Citations {
 				if !slices.ContainsFunc(all[i].Citations, func(x Citation) bool { return x.DocumentID == c.DocumentID && x.Quote == c.Quote }) {
@@ -479,7 +479,7 @@ func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 			if err := e.write(ctx, c.TaskID, kFinding, all[i].FID, all[i], true); err != nil {
 				return out, 0, err
 			}
-			out.Notes = append(out.Notes, "merged into "+all[i].FID+" (a near-duplicate): "+f.Claim)
+			out.Notes = append(out.Notes, "merged into "+all[i].FID+" (an exact duplicate): "+f.Claim)
 			continue
 		}
 		f.FID = nextID("F", len(all))
@@ -495,66 +495,78 @@ func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 	if off > 0 {
 		out.Notes = append(out.Notes, fmt.Sprintf("dropped %d %s that named none of the plan's issues", off, plural(off, "finding", "findings")))
 	}
-	if over > 0 {
-		out.Notes = append(out.Notes, fmt.Sprintf("dropped %d %s past the first %d of one call", over, plural(over, "finding", "findings"), limit))
-	}
 	if quotes == 0 {
 		return out, map[bool]float64{true: 1, false: 0}[len(drafts) == 0], nil
 	}
 	return out, float64(ok) / float64(quotes), nil
 }
 
-// maxFactsPerCall bounds the findings one extract_facts call (a sweep's page) admits, in the order the
-// subagent gave them, most important first (a table page: one per row it holds, if more: a row is a
-// trade or a payment) (bench5 SEC: 896 findings from 142 pages, up to 177 from one
-// section, an investment-process brochure's; the run's committee and drafters then read a ledger most
-// of which no issue needed). Twelve is about twice the bench's mean per page.
-const maxFactsPerCall = 12
-
-// restated reports whether f restates the admitted x (bench5: the referral's figures restated page after
-// page, and the lead's extract_facts re-extracting what the sweep had): the same typed figures and
-// dates, at least one, and the same words (each of f's quotes inside one of x's, or the quotes' 3-word
-// shingles at least half shared), across pages and issues. A finding that says a breach is never
-// folded into one that does not (it would lose its claim: "Item 11 failed to disclose" the stake
-// another finding merely states).
+// restated reports whether f is an exact duplicate of the admitted x (bench5: the referral's
+// figures restated page after page, and the lead's extract_facts re-extracting what the sweep had):
+// one issue, the same quotes (normalised: case and white space), and the same typed values (entity,
+// metric and figure, each normalised). Nothing else merges: a near restatement (a reversed term, a
+// mirrored party's clause, an amendment) stays a finding of its own, which coverage and the drafters
+// can cite beside the first (lab-r4 verifier H2, M1).
 func restated(x, f Finding) bool {
 	key := func(vs []analysis.Value) []string {
 		var out []string
 		for _, v := range vs {
-			if _, c, _, ok := analysis.Canon(v); ok {
-				out = append(out, c)
-			} else {
-				out = append(out, strings.ToLower(norm(v.Value)))
+			c := strings.ToLower(norm(v.Value))
+			if _, k, _, ok := analysis.Canon(v); ok {
+				c = k
+			}
+			out = append(out, strings.ToLower(norm(v.Entity))+"|"+strings.ToLower(norm(v.Metric))+"|"+c)
+		}
+		slices.Sort(out)
+		return slices.Compact(out)
+	}
+	quotes := func(f Finding) []string {
+		var out []string
+		for _, q := range f.Quotes {
+			out = append(out, strings.ToLower(norm(q.Quote)))
+		}
+		slices.Sort(out)
+		return slices.Compact(out)
+	}
+	return x.IssueID == f.IssueID && len(f.Quotes) > 0 && slices.Equal(quotes(x), quotes(f)) && slices.Equal(key(x.Values), key(f.Values)) &&
+		!(salientFinding(f) && !salientFinding(x)) // a finding that says a breach is never folded into one that does not
+}
+
+// samePolarity reports whether two findings' quotes hold the same negations and modals: a merge never
+// folds "shall be non-refundable" into "shall be refundable", or "may" into "shall".
+func samePolarity(x, f Finding) bool {
+	words := func(f Finding) []string {
+		var out []string
+		for _, q := range f.Quotes {
+			for _, w := range strings.FieldsFunc(strings.ToLower(q.Quote), func(r rune) bool { return !unicode.IsLetter(r) }) {
+				if polar[w] {
+					out = append(out, w)
+				}
 			}
 		}
 		slices.Sort(out)
 		return slices.Compact(out)
 	}
-	if len(f.Values) == 0 || !slices.Equal(key(x.Values), key(f.Values)) || salientFinding(f) && !salientFinding(x) {
-		return false
-	}
-	var xq, fq []string
-	for _, q := range x.Quotes {
-		xq = append(xq, strings.ToLower(norm(q.Quote)))
-	}
-	for _, q := range f.Quotes {
-		fq = append(fq, strings.ToLower(norm(q.Quote)))
-	}
-	inside := len(fq) > 0
-	for _, q := range fq {
-		inside = inside && slices.ContainsFunc(xq, func(y string) bool { return strings.Contains(y, q) })
-	}
-	rows := slices.ContainsFunc(append(slices.Clone(x.Quotes), f.Quotes...), func(q analysis.Quote) bool { return slices.ContainsFunc(strings.Split(q.Quote, "\n"), tableRow) })
-	return inside || !rows && similarity(strings.Join(xq, " "), strings.Join(fq, " ")) >= dupThreshold // two rows of one table share most words and are two facts
+	return slices.Equal(words(x), words(f))
 }
+
+// polar are the negations and modals (a word's letters: "non-refundable" holds "non", "doesn't" "t").
+var polar = map[string]bool{"not": true, "no": true, "nor": true, "never": true, "none": true, "neither": true, "without": true, "cannot": true, "t": true, "non": true,
+	"shall": true, "may": true, "must": true, "will": true, "should": true, "would": true, "could": true, "might": true}
 
 // claimMoney is a sum of money as a claim states it: a currency sign and a figure, an optional scale.
 var claimMoney = regexp.MustCompile(`[$£€¥]\s?\d[\d,]*(?:\.\d+)?(?:\s+(?:million|billion))?`)
 
+// quoteMoney is a figure as a quote may state a sum: an optional currency (a sign or code), the
+// digits, an optional scale word ("$3 million", "3,000,000", "$3m", "USD 3.2 million").
+var quoteMoney = regexp.MustCompile(`(?i)(US\$|USD\s?|[$£€¥]\s?)?(\d[\d,]*(?:\.\d+)?)((?:\s*(?:million|billion|thousand)|\s?(?:mm|bn)|[mkb])\b)?`)
+
 // claimSums are the sums of money a claim states and its verified quotes state too, which no typed
 // value carries (bench5 SEC F388: "payments totaling $103,800.00", the figure in its own quote, typed
 // nowhere, so the $92,600 vs $103,800 conflict had nothing to pair). Each is kept untyped: no entity,
-// no metric (so the label join never compares it; the near join does, by its quotes' words).
+// no metric (so the label join never compares it; the near join does, by its quotes' words). A sum is
+// kept only when a quote states it as a sum, its scale and currency with it (quoteSums): a bare "3"
+// ("Section 3") never stands for "$3 million" (lab-r4 verifier H1).
 func claimSums(claim, quotes string, have []analysis.Value) []analysis.Value {
 	var out []analysis.Value
 	canon := func(v analysis.Value) string { _, c, _, _ := analysis.Canon(v); return c }
@@ -562,16 +574,36 @@ func claimSums(claim, quotes string, have []analysis.Value) []analysis.Value {
 	for _, v := range have {
 		seen[canon(v)] = true
 	}
+	stated := quoteSums(quotes)
 	for _, s := range claimMoney.FindAllString(claim, -1) {
 		v := analysis.Value{Value: s, Class: "Money"}
-		if c := canon(v); c != "" && !seen[c] && inQuote(s, quotes) {
+		if c := canon(v); c != "" && !seen[c] && stated[c] {
 			seen[c] = true
-			v.Unit = currencyOf(s, quotes)
 			out = append(out, v)
 		}
 	}
 	return out
 }
+
+// quoteSums are the US-dollar sums the quotes state, by Canon: a figure with a dollar sign or code,
+// a scale word, or its thousands grouped ("3,000,000"); another currency's sum, or a bare number
+// ("Section 3", "30 days"), is none.
+func quoteSums(quotes string) map[string]bool {
+	out := map[string]bool{}
+	for _, m := range quoteMoney.FindAllStringSubmatch(quotes, -1) {
+		cur, num, sc := strings.ToUpper(strings.TrimSpace(m[1])), strings.TrimRight(m[2], ",."), strings.TrimSpace(m[3])
+		if cur != "" && cur != "$" && cur != "US$" && cur != "USD" || cur == "" && sc == "" && !groupedFigure.MatchString(num) {
+			continue
+		}
+		if _, c, _, ok := analysis.Canon(analysis.Value{Value: strings.TrimSpace("$" + num + " " + sc), Class: "Money"}); ok {
+			out[c] = true
+		}
+	}
+	return out
+}
+
+// groupedFigure is a figure written with its thousands grouped, whole ("4,217", "103,800.00").
+var groupedFigure = regexp.MustCompile(`^\d{1,3}(?:,\d{3})+(?:\.\d+)?$`)
 
 // inQuote reports whether a value is stated in the quotes: as text, or as the same number or date.
 func inQuote(v, quotes string) bool {

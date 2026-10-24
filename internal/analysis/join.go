@@ -412,6 +412,13 @@ func mentions(x, y entry) bool {
 	return true
 }
 
+// oneWay reports whether x's quotes name y's entity and y's quotes do not name x's. When each side's
+// quotes name both entities they state a flow between two parties (a payment from one to the other)
+// and the entity each finding typed is its role in it, so two labels are two roles: Acme's $50,000 to
+// Baker is not Baker's $47,000 to Acme (lab-r4 verifier M4). Only the labels decide such a pair: a
+// payer→payee figure pairs only with one its finding gave the same entity.
+func oneWay(x, y entry) bool { return mentions(x, y) && !mentions(y, x) }
+
 // maxNear bounds the near conflicts one join reports: they are leads to check, not a column dump.
 // nearSalience is the least salient quantity compared (any percentage, money from $1,000, a count
 // of thousands): a share price or a day count is too common for nearness to mean one fact.
@@ -470,7 +477,7 @@ func near(es []entry, found []Conflict, sameEntity func(a, b entry) bool) []Conf
 		for _, b := range es[i+1:] {
 			if a.class != b.class || a.doc == b.doc || a.doc == "" || b.doc == "" || held[a.fid+"|"+a.canon] && held[b.fid+"|"+b.canon] ||
 				a.class != "Date" && (Salience(a.v.Value) < nearSalience || Salience(b.v.Value) < nearSalience) || a.row() && b.row() ||
-				perDoc[a.doc][b.canon] || perDoc[b.doc][a.canon] || !pairable(a, b) || partOf(a, b) || partOf(b, a) || !close(a, b) || shared(a.words, b.words) < 3 || !sameEntity(a, b) && (a.class == "Date" || !mentions(a, b) && !mentions(b, a)) || !sameMetric(a, b) {
+				perDoc[a.doc][b.canon] || perDoc[b.doc][a.canon] || !pairable(a, b) || partOf(a, b) || partOf(b, a) || !close(a, b) || shared(a.words, b.words) < 3 || !sameEntity(a, b) && (a.class == "Date" || !oneWay(a, b) && !oneWay(b, a)) || !sameMetric(a, b) {
 				continue
 			}
 			k := min(a.canon, b.canon) + "|" + max(a.canon, b.canon)

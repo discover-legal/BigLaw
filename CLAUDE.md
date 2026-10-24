@@ -92,9 +92,9 @@ change. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`, not here.
 - `internal/engine` (PR 4b) — the memo workflow: lead (`specs/lead.md`) over 11 tools (`MemoVisible`),
   the ledger (one `ledger` table, JSON rows by kind/key, writes buffered in the running step),
   evidence subagents whose findings Go verifies before admitting them (`register.go` `admit`: G2/G3,
-  values must be in their quote, currency from the quote, near-duplicates and restatements (`restated`: same figures, same words, any page or issue) merged; an `extract_facts` call with no issueId is sent the plan's issues and admits only findings naming one, at most `maxFactsPerCall` (12, or one per table row of its page); a claim's untyped sums kept, `claimSums`), `sweep` (answer-sized
+  values must be in their quote, currency from the quote, only exact duplicates merged (`restated`: one issue, the same normalised quotes, the same values with entity and metric, the same negations/modals (`samePolarity`); never a similarity merge); an `extract_facts` call with no issueId is sent the plan's issues and admits only findings naming one, no per-call cap; a claim's untyped sums kept only when a quote states the sum with its sign, scale or grouping, `claimSums`/`quoteSums`), `sweep` (answer-sized
   pages, `sweepTokens`; read most relevant first, `sweeporder.go`: BM25 of the plan's questions, taken in
-  turn across issues; exact-duplicate and boilerplate pages skipped, reported and disclosed in Limitations (a copy of an unread page is unread; a table row is never boilerplate); each visit a single call on
+  turn across issues; a visit's record (`visitRec`) holds the plan's issues it was read for: a page is read again for issues `op plan` added since, only those (`issuesKey`), and a page never read again for them is a Limitations line (`staleLine`); exact-duplicate and boilerplate pages skipped, reported and disclosed in Limitations (a copy of an unread page is unread; a table row is never boilerplate); each visit a single call on
   its page, `agent.Call.NoTools`; each document's coverage in the ledger, kind `swept`; up to `sweepWorkers`
   visits at once with timing-free grants and admission in reading order: a visit's `extract_facts` waits
   for its turn via `awaitTurn`; a visit a worker's share cannot fund is read again serially), `check_deviation` (the requirement
@@ -108,7 +108,7 @@ change. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`, not here.
   (3 context-free critics in parallel on explicit grants, delayed credit), `policy.go` (P1, P4,
   `Allocate`), `finish` (check = dry run; lint G5/G8, coverage, P6/P7; render; gates G7), grounding
   collapse G4, packs (`packs/*/*.md`, embedded, all candidate), and durable runs (`task_steps` +
-  ledger + `tool_stats` in one tx per step, lease/heartbeat, resume by replay, lost grants charged (a graceful stop settles an in-flight tool's grant to its spend; every model call inside a journaled tool step is journaled as it happens, `agent` `meter` (query embeddings too, `agent.Meter`), so a hard crash charges the recorded spend plus the in-flight calls' worst cases);
+  ledger + `tool_stats` in one tx per step, lease/heartbeat, resume by replay, lost grants charged (a graceful stop settles an in-flight tool's grant to its spend; every model call inside a journaled tool step is journaled as it happens, `agent` `meter` (query embeddings too, `agent.Meter`; a Go-side search uses `docs.SearchMetered`), so a hard crash charges the recorded spend plus the in-flight calls' worst cases);
   migration 0005). `views.go` is what the API shows (DESIGN § UI contract).
 - `internal/api` (PR 4b) — the REST surface (tasks, steps, SSE, gates, cancel, cost, clients) over
   the engine plus `docs.Routes`; request bodies validated by the agent's schema subset.
@@ -195,6 +195,6 @@ make demo-bundle # ui/dist-recorded for discover.legal/demo/biglaw/; make demo-r
 # DB tests: BIGLAW_TEST_DSN=postgres://…?sslmode=disable BIGLAW_REQUIRE_DB=1 (Postgres with pgvector)
 make e4-record EMBED_MODEL=…   # owner-run: record the E4 tape at the model's own length (make e4-live: no tape)
 ```
-Budgets: Go prod LOC reported with no limit (owner decision 17: the total ceiling is dropped; 15290 used; each PR reports its lines vs its DESIGN budget; test-support packages such as `storetest` count), internal
+Budgets: Go prod LOC reported with no limit (owner decision 17: the total ceiling is dropped; 15381 used; each PR reports its lines vs its DESIGN budget; test-support packages such as `storetest` count), internal
 packages ≤ 12 (8 used; test-support packages do not count), direct deps ≤ 3, env vars ≤ 20 (18 used), UI runtime
 deps ≤ 2 (2 used), UI source lines (`ui/src`) ≤ 2,400, untested packages 0, longest source file ≤ 2,000 lines.

@@ -932,18 +932,19 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
 - **Evidence** (`extract_facts`, `analyze_issue`, `check_deviation`; subagents on the `specialist`
   role). Go completes each call (the section's text, the packs, and for an `extract_facts` call that
   names no issue, a sweep visit's, the plan's issues: each finding names the issue it bears on, and one
-  that names none of the plan's is not admitted; one call admits at most 12, `maxFactsPerCall`, or one per table row on a page with more rows, in the
-  subagent's order: `TestSweepAdmitsOnlyThePlansFindingsOnce`, `TestTablePageKeepsARowEach`) and checks every answer before it
+  that names none of the plan's is not admitted (a page read again after `op plan` added issues is sent, and admits, only the new
+  ones); no per-call cap drops a page's facts: `TestSweepAdmitsOnlyThePlansFindingsOnce`, `TestTablePageKeepsARowEach`, `TestSweepCapNeverDropsProseFacts`) and checks every answer before it
   reaches the ledger: each quote goes through the ladder (`VerifyQuote`, then the `verify_quote`
   tool with its judge); a finding is verified only when every quote is (G2), else it is stored
   quarantined (G3) and never drafted from; a typed value absent from its own quotes is dropped, and a
-  money value's currency is taken from the symbol beside it in its quote (£, €, ¥, CHF, C$, A$), not the model; a finding
-  nearly the same as a verified one already held on the same issue (3-word-shingle Jaccard ≥ 0.5),
-  or restating one on any page or issue (`restated`: the same typed figures and dates, at least one,
-  its quotes inside the other's or sharing half their shingles; never a breach folded into a finding
-  that states none), merges into it, its quotes added; a sum of money the claim and a verified quote
-  both state but no typed value carries is kept as an untyped value (`claimSums`: no entity or
-  metric, so only the near join compares it). `check_deviation`'s requirement is the controlling document's own
+  money value's currency is taken from the symbol beside it in its quote (£, €, ¥, CHF, C$, A$), not the model; only an
+  exact duplicate of a verified finding merges into it (`restated`: the same issue, the same quotes with case and white
+  space folded, the same typed values with their entity and metric, the same negations and modals, never a breach folded
+  into a finding that states none); a near restatement (a reversed term, a mirrored party's clause) is a finding of its own
+  (`TestRestatedNeverMergesANegatedTerm`, `TestRestatedNeverMergesMirroredParties`); a sum of money the claim states is
+  kept as an untyped value only when a verified quote states the same US-dollar sum with its sign or code, scale word or
+  grouped thousands ("$3 million", "3,000,000", "$3m"; never a bare "3" of "Section 3": `claimSums`,
+  `TestClaimSumsNeedTheSumInTheQuote`): no entity or metric, so only the near join compares it. `check_deviation`'s requirement is the controlling document's own
   words: Go verifies it in `requirementDocId` (one of `controllingDocIds`) like any quote before the
   subagent runs and hands the subagent the document's text, with the reviewed documents' passages
   most like it (`reviewedPassages`, ≤ 16 KB, so it answers at once: `TestDeviationGetsReviewedPassages`;
@@ -1030,14 +1031,16 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
   600 (`through`): a document numbered by paragraph is read a few paragraphs at a
   time, not one subagent run per paragraph (`TestSweepBatchesShortSections`); a `through` that is
   not such a run from `sectionId` (with offset 0) fails the call, never reads `sectionId` alone
-  (`TestExtractFactsRefusesABadThrough`); a visit is keyed (document, section, offset[, through]) and never repeated;
+  (`TestExtractFactsRefusesABadThrough`); a visit is keyed (document, section, offset[, through]) with the plan's issues it was read for, and is
+  repeated only for issues `op plan` added since, sent and admitting only those (`TestIssueAddedAfterSweepGetsItsFacts`); a page
+  no sweep read again for them is a Limitations line (`TestIssueAddedAfterSweepNeverReadAgainIsDisclosed`);
   it stops at its share of the budget and reports `incomplete` with the sections it did not reach
   (a batch as its whole run, "s3 to s9": `TestSweepUncoveredNamesTheWholeBatch`),
   which also go into Limitations. Never silently partial. It reads up to `sweepWorkers` (4) visits at
   once and is still deterministic: a visit starts with a full grant (the subagent's turns and a
   quarter of the sweep's USD) while one is free, else only once nothing is in flight, with what is
   left, so no grant depends on timing and the shares hold exactly as one at a time; findings are
-  admitted (fids, near-duplicate merges) and visits recorded in reading order (each visit waits, after
+  admitted (fids, exact-duplicate merges) and visits recorded in reading order (each visit waits, after
   its subagent ran, for the one before it); a visit a worker's quarter could not fund (a call's
   worst case over it: a pricier model on a small budget) is read again once nothing is in flight,
   one at a time with all that is left, so parallelism never reads less than a one-at-a-time sweep
@@ -1694,7 +1697,8 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
   - The near join pairs only one entity's values (alias-unified, or both with none, or, for quantities,
     one side's quotes naming every word of the other's entity: `mentions`, bench5's "Office of
     Quantitative Research" count of trades "through the omnibus account" against "Omnibus Equity
-    Trades"; a party named in both quotes can so pair two close figures about different things), within an eighth
+    Trades"; one way only: when each side's quotes name both entities, a flow between two parties, the typed
+    labels decide, so a payment one way never pairs with one the other way, `TestNearNeverPairsOppositePayments`), within an eighth
     of each other, and not when each label names a thing its own quote states and the other side
     never mentions (a fee and an allocation, a notice and a demand); dates joined by shared words take
     the same label test. It is a word test: a part of a figure is told apart from it only when its

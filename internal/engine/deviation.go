@@ -165,7 +165,7 @@ func (e *Engine) quotedRequirement(ctx context.Context, c agent.Call) (reqText, 
 // requirement (lexical or hybrid search, at most reviewedMax bytes in all), handed to the subagent
 // so it answers from them instead of spending its turns retrieving them (bench4, trust: all seven
 // calls used their five turns; two ended at the cap without an answer).
-func (e *Engine) reviewedPassages(ctx context.Context, c agent.Call, requirement string) []map[string]string {
+func (e *Engine) reviewedPassages(ctx context.Context, c agent.Call, requirement string) ([]map[string]string, agent.Usage) {
 	var in devInput
 	_ = json.Unmarshal(c.Input, &in)
 	var scope []string
@@ -176,16 +176,16 @@ func (e *Engine) reviewedPassages(ctx context.Context, c agent.Call, requirement
 	}
 	out := []map[string]string{}
 	if len(scope) == 0 {
-		return out
+		return out, agent.Usage{}
 	}
 	q := requirement
 	for len(q) > docs.MaxQuery { // the search's bound is bytes
 		_, n := utf8.DecodeLastRuneInString(q)
 		q = q[:len(q)-n]
 	}
-	hits, err := e.docs.Search(ctx, scope, q, 12, 0)
+	hits, u, err := e.docs.SearchMetered(ctx, scope, q, 12, 0)
 	if err != nil {
-		return out // the subagent can still retrieve
+		return out, u // the subagent can still retrieve
 	}
 	size := 0
 	for _, h := range hits {
@@ -194,7 +194,7 @@ func (e *Engine) reviewedPassages(ctx context.Context, c agent.Call, requirement
 		}
 		out = append(out, map[string]string{"documentId": h.DocumentID, "sectionId": h.SectionID, "text": h.Text})
 	}
-	return out
+	return out, u
 }
 
 // reviewedMax bounds the reviewed passages check_deviation is handed (bytes of text).

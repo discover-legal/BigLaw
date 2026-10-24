@@ -104,64 +104,21 @@ func TestLedgerBucketsFindingsByIssue(t *testing.T) {
 	}
 }
 
-// TestLedgerNearDuplicateMerged: a restated finding in the same issue merges into the first, its
-// citation added (v1 dedup vectors below).
-func TestLedgerNearDuplicateMerged(t *testing.T) {
+// TestLedgerExactDuplicateMerged: a finding that repeats an admitted one in the same issue (the
+// same quote, the same values) merges into the first, its citation kept once; a restatement in other
+// words (here, a part of the first's quote) stays a finding of its own (lab-r4 verifier H2).
+func TestLedgerExactDuplicateMerged(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
 	d1 := f.docs[0].ID
 	v := f.run(f.with(map[string][]model.Reply{
-		"lead": {calls(plan(issue("I1", "Damages?", "Conduct"))), calls(extract(d1, "damages", "I1")), calls(extract(d1, "invoices", "I1"))},
+		"lead": {calls(plan(issue("I1", "Damages?", "Conduct"))), calls(extract(d1, "damages", "I1")), calls(extract(d1, "invoices", "I1")), calls(extract(d1, "part", "I1"))},
 		"extract_facts": {facts(fd("Greystone claims damages of $644,910 for unpaid invoices from Talbot.", d1, "Greystone claims damages of $644,910 for unpaid invoices")),
+			facts(fd("Greystone claims damages of $644,910 for the unpaid invoices from Talbot.", d1, "Greystone claims damages of $644,910 for unpaid invoices")),
 			facts(fd("Greystone claims damages of $644,910 for the unpaid invoices from Talbot.", d1, "damages of $644,910"))},
 	}), Config{})
-	if len(v.Findings) != 1 || len(v.Findings[0].Citations) != 2 {
+	if len(v.Findings) != 2 || len(v.Findings[0].Citations) != 1 {
 		t.Fatalf("%+v", v.Findings)
-	}
-}
-
-const (
-	dupA = "Marc transferred $40,000 from the joint TFSA to his personal account shortly before separation, which Danielle may trace and claim in equalization."
-	dupB = "Marc transferred $40,000 from the joint TFSA to his personal account shortly before the separation, which Danielle may trace and claim in the equalization."
-	dupC = "Marc's disputed RSUs vested after the date of separation and their treatment in income for support purposes remains contested."
-)
-
-// Carried (v1 writer/dedup_test.go): the shingle Jaccard merges restatements, keeps distinct facts
-// apart, merges exact copies at any threshold, and is deterministic.
-func TestMergeNearDuplicatesUnionsCitationsAndDropsCount(t *testing.T) {
-	if !nearDuplicate(dupA, dupB) || nearDuplicate(dupA, dupC) {
-		t.Fatalf("%.2f %.2f", similarity(dupA, dupB), similarity(dupA, dupC))
-	}
-}
-
-func TestMergeNearDuplicatesDistinctSurvive(t *testing.T) {
-	in := []string{"The matrimonial home at 41 Fernwood Crescent is valued at $1,640,000 with an RBC mortgage of $412,000.",
-		"Danielle seeks occupancy of the home until June 2029 when Sam finishes elementary school.",
-		"Harwood proposes monthly child support of $1,150 based on a shared-parenting set-off."}
-	for i := range in {
-		for j := i + 1; j < len(in); j++ {
-			if nearDuplicate(in[i], in[j]) {
-				t.Errorf("%d and %d merged", i, j)
-			}
-		}
-	}
-}
-
-func TestMergeNearDuplicatesThresholdRespected(t *testing.T) {
-	if s := similarity(dupA, dupB); s >= 0.99 || s < dupThreshold {
-		t.Fatalf("slight variants %.3f", s)
-	}
-	if similarity(dupA, dupA) != 1 {
-		t.Fatal("exact copies must score 1")
-	}
-}
-
-func TestMergeNearDuplicatesDeterministicOrdering(t *testing.T) {
-	first := similarity(dupA, dupB)
-	for range 10 {
-		if similarity(dupA, dupB) != first || similarity(dupB, dupA) != first {
-			t.Fatal("similarity is not deterministic or symmetric")
-		}
 	}
 }
 

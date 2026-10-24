@@ -211,6 +211,11 @@ func (f finish) check(ctx context.Context, limits []limitation) (report, error) 
 			rep.limits = append(rep.limits, s)
 		}
 	}
+	if l, err := e.staleLine(ctx, id, issues); err != nil {
+		return report{}, err
+	} else if l != "" {
+		rep.limits = append(rep.limits, l)
+	}
 	if len(issues) == 0 {
 		bad("no_plan", "no plan is recorded: record one with ledger op plan")
 	}
@@ -269,8 +274,8 @@ func (f finish) check(ctx context.Context, limits []limitation) (report, error) 
 			for _, x := range lo[:min(maxPlaced, len(lo))] {
 				ids = append(ids, x.FID)
 			}
-			rep.limits = append(rep.limits, fmt.Sprintf("Coverage: %d verified %s that state a deviation, omission, violation or salient figure never reached the memo: %s%s.",
-				len(lo), plural(len(lo), "finding", "findings"), strings.Join(ids, ", "), cmpStr(len(lo) > maxPlaced, fmt.Sprintf(" and %d more", len(lo)-maxPlaced), "")))
+			rep.limits = append(rep.limits, fmt.Sprintf("Coverage: %d verified %s a deviation, omission, violation or salient figure never reached the memo: %s%s.",
+				len(lo), plural(len(lo), "finding that states", "findings that state"), strings.Join(ids, ", "), cmpStr(len(lo) > maxPlaced, fmt.Sprintf(" and %d more", len(lo)-maxPlaced), "")))
 		}
 	}
 	cov := analysis.CheckCoverage(ais, texts, an, nil)
@@ -413,7 +418,7 @@ func partyLine(ps []analysis.PartyGap) string {
 	for _, p := range ps[:min(maxListed, len(ps))] {
 		names = append(names, fmt.Sprintf("%s (%s)", p.Name, strings.Join(p.FIDs[:min(3, len(p.FIDs))], ", ")))
 	}
-	return fmt.Sprintf("Coverage: %d %s named in verified findings never appear in the memo: %s%s.", len(ps), plural(len(ps), "party", "parties"),
+	return fmt.Sprintf("Coverage: %d %s named in verified findings never %s in the memo: %s%s.", len(ps), plural(len(ps), "party", "parties"), plural(len(ps), "appears", "appear"),
 		strings.Join(names, "; "), cmpStr(len(ps) > maxListed, fmt.Sprintf(" and %d more", len(ps)-maxListed), ""))
 }
 
@@ -424,8 +429,8 @@ func figureLine(hs []analysis.Handle) string {
 	}
 	var figs []string
 	for _, h := range hs[:min(maxListed, len(hs))] {
-		figs = append(figs, fmt.Sprintf("%s (%s, %s)", h.Value, h.Label, h.FID))
+		figs = append(figs, fmt.Sprintf("%s (%s)", h.Value, strings.Join(slices.DeleteFunc([]string{h.Label, h.FID}, func(s string) bool { return s == "" }), ", ")))
 	}
-	return fmt.Sprintf("Coverage: %d salient %s never appear in the memo: %s%s.", len(hs), plural(len(hs), "figure", "figures"),
+	return fmt.Sprintf("Coverage: %d salient %s never %s in the memo: %s%s.", len(hs), plural(len(hs), "figure", "figures"), plural(len(hs), "appears", "appear"),
 		strings.Join(figs, "; "), cmpStr(len(hs) > maxListed, fmt.Sprintf(" and %d more", len(hs)-maxListed), ""))
 }

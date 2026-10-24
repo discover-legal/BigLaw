@@ -56,6 +56,17 @@ func (m *meter) Embed(ctx context.Context, r model.EmbedRequest) (*model.Embeddi
 	return e, err
 }
 
+// SearchMetered is Search with its query embedding metered: journaled as it happens inside a running
+// tool step (agent.Meter) and returned, for a Go caller that charges it to its step.
+func (s *Service) SearchMetered(ctx context.Context, scope []string, query string, k, offset int) ([]Hit, agent.Usage, error) {
+	svc, m := *s, &meter{e: s.embedder}
+	if s.embedder != nil {
+		svc.embedder = m
+	}
+	hits, err := svc.Search(ctx, scope, query, k, offset)
+	return hits, m.u, err
+}
+
 // failure turns the reader's own errors (BigLaw's words) into a failure the model may read.
 func failure(err error) error {
 	switch {
