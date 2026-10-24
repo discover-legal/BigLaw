@@ -458,7 +458,7 @@ func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 		}
 		f.Verified = len(f.Citations) > 0 && !slices.ContainsFunc(f.Citations, func(c Citation) bool { return c.Method == "none" })
 		for _, v := range d.Values {
-			if inQuote(v.Value, text.String()) {
+			if valueInQuote(v, text.String()) {
 				if analysis.ClassOf(v) == "Money" && v.Unit == "" {
 					v.Unit = currencyOf(v.Value, text.String())
 				}
@@ -557,10 +557,6 @@ var polar = map[string]bool{"not": true, "no": true, "nor": true, "never": true,
 // claimMoney is a sum of money as a claim states it: a currency sign and a figure, an optional scale.
 var claimMoney = regexp.MustCompile(`[$£€¥]\s?\d[\d,]*(?:\.\d+)?(?:\s+(?:million|billion))?`)
 
-// quoteMoney is a figure as a quote may state a sum: an optional currency (a sign or code), the
-// digits, an optional scale word ("$3 million", "3,000,000", "$3m", "USD 3.2 million").
-var quoteMoney = regexp.MustCompile(`(?i)(US\$|USD\s?|[$£€¥]\s?)?(\d[\d,]*(?:\.\d+)?)((?:\s*(?:million|billion|thousand)|\s?(?:mm|bn)|[mkb])\b)?`)
-
 // claimSums are the sums of money a claim states and its verified quotes state too, which no typed
 // value carries (bench5 SEC F388: "payments totaling $103,800.00", the figure in its own quote, typed
 // nowhere, so the $92,600 vs $103,800 conflict had nothing to pair). Each is kept untyped: no entity,
@@ -585,18 +581,15 @@ func claimSums(claim, quotes string, have []analysis.Value) []analysis.Value {
 	return out
 }
 
-// quoteSums are the US-dollar sums the quotes state, by Canon: a figure with a dollar sign or code,
-// a scale word, or its thousands grouped ("3,000,000"); another currency's sum, or a bare number
-// ("Section 3", "30 days"), is none.
+// quoteSums are the US-dollar sums the quotes state, by Canon (figure.money: a dollar sign or code,
+// a scale word, or its thousands grouped with no noun of another unit after it); another currency's
+// sum, a bare number ("Section 3", "30 days") or a count ("3,000,000 shares") is none.
 func quoteSums(quotes string) map[string]bool {
 	out := map[string]bool{}
-	for _, m := range quoteMoney.FindAllStringSubmatch(quotes, -1) {
-		cur, num, sc := strings.ToUpper(strings.TrimSpace(m[1])), strings.TrimRight(m[2], ",."), strings.TrimSpace(m[3])
-		if cur != "" && cur != "$" && cur != "US$" && cur != "USD" || cur == "" && sc == "" && !groupedFigure.MatchString(num) {
-			continue
-		}
-		if _, c, _, ok := analysis.Canon(analysis.Value{Value: strings.TrimSpace("$" + num + " " + sc), Class: "Money"}); ok {
-			out[c] = true
+	_, fs := figuresIn(quotes)
+	for _, f := range fs {
+		if f.money() && (f.cur == "" || f.cur == "USD") {
+			out["usd:"+analysis.Decimal(f.amount)] = true
 		}
 	}
 	return out
@@ -604,17 +597,5 @@ func quoteSums(quotes string) map[string]bool {
 
 // groupedFigure is a figure written with its thousands grouped, whole ("4,217", "103,800.00").
 var groupedFigure = regexp.MustCompile(`^\d{1,3}(?:,\d{3})+(?:\.\d+)?$`)
-
-// inQuote reports whether a value is stated in the quotes: as text, or as the same number or date.
-func inQuote(v, quotes string) bool {
-	v = strings.TrimSpace(v)
-	if v == "" {
-		return false
-	}
-	if strings.Contains(strings.ToLower(norm(quotes)), strings.ToLower(norm(v))) {
-		return true
-	}
-	return covered(v, quotes)
-}
 
 func norm(s string) string { return strings.Join(strings.Fields(s), " ") }

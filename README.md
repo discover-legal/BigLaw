@@ -936,7 +936,9 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
   ones); no per-call cap drops a page's facts: `TestSweepAdmitsOnlyThePlansFindingsOnce`, `TestTablePageKeepsARowEach`, `TestSweepCapNeverDropsProseFacts`) and checks every answer before it
   reaches the ledger: each quote goes through the ladder (`VerifyQuote`, then the `verify_quote`
   tool with its judge); a finding is verified only when every quote is (G2), else it is stored
-  quarantined (G3) and never drafted from; a typed value absent from its own quotes is dropped, and a
+  quarantined (G3) and never drafted from; a typed value absent from its own quotes is dropped (a quantity needs a figure
+  of its class and amount with its scale read, `figuresIn`: "$3 million" never from the "3" of "Section 3", a sum never from
+  "3,000,000 shares", a count never from a sum: `TestTypedValuesNeedTheirScaleInTheQuote`), and a
   money value's currency is taken from the symbol beside it in its quote (£, €, ¥, CHF, C$, A$), not the model; only an
   exact duplicate of a verified finding merges into it (`restated`: the same issue, the same quotes with case and white
   space folded, the same typed values with their entity and metric, the same negations and modals, never a breach folded
@@ -947,7 +949,7 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
   `TestClaimSumsNeedTheSumInTheQuote`): no entity or metric, so only the near join compares it. `check_deviation`'s requirement is the controlling document's own
   words: Go verifies it in `requirementDocId` (one of `controllingDocIds`) like any quote before the
   subagent runs and hands the subagent the document's text, with the reviewed documents' passages
-  most like it (`reviewedPassages`, ≤ 16 KB, so it answers at once: `TestDeviationGetsReviewedPassages`;
+  most like it (`reviewedPassages`, ≤ 16 KB, searched by the requirement's 24 longest distinct content words, `passageQuery`, under the search's 32, a failed search logged, so it answers at once: `TestDeviationGetsReviewedPassages`;
   its only tool is `retrieve`, as Go verifies every quote it gives): JSON escape artefacts (`\"Tommy\"`) are
   undone, and a requirement joined from several passages (a heading and its list, two sentences from
   two paragraphs) verifies part by part, split where the model joined them (at most 12 joins; its
@@ -1587,7 +1589,7 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
   - The deliverable is Markdown only (`GET /tasks/{id}/deliverable.md`); the `.docx` export waits for
     PR 3d's writer.
   - Quote verification proves a quote is in the document, not that the claim follows from it:
-    `prosecute` checks that, and a lawyer approves every deliverable. The G8 lint traces digits, not
+    `prosecute` checks that, and a lawyer approves every deliverable. The G8 lint traces figures (their scale read: "$3 million" is 3,000,000), not
     words: a wrong party or a wrong verb with correct figures passes it.
   - The SSE stream polls the database every 500 ms. Cancel stops a run at once in its own process
     and at the next heartbeat (up to 10 s) in another; the call in flight is charged.

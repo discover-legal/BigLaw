@@ -178,14 +178,10 @@ func (e *Engine) reviewedPassages(ctx context.Context, c agent.Call, requirement
 	if len(scope) == 0 {
 		return out, agent.Usage{}
 	}
-	q := requirement
-	for len(q) > docs.MaxQuery { // the search's bound is bytes
-		_, n := utf8.DecodeLastRuneInString(q)
-		q = q[:len(q)-n]
-	}
-	hits, u, err := e.docs.SearchMetered(ctx, scope, q, 12, 0)
-	if err != nil {
-		return out, u // the subagent can still retrieve
+	hits, u, err := e.docs.SearchMetered(ctx, scope, passageQuery(requirement), 12, 0)
+	if err != nil { // the subagent can still retrieve; never silently
+		e.log.Warn("engine: check_deviation: reviewed passages", "task", c.TaskID, "err", err)
+		return out, u
 	}
 	size := 0
 	for _, h := range hits {
@@ -196,6 +192,44 @@ func (e *Engine) reviewedPassages(ctx context.Context, c agent.Call, requirement
 	}
 	return out, u
 }
+
+// passageTerms caps the words of reviewedPassages' query, under docs.MaxTerms (a requirement of
+// more distinct words was refused by the search, so every long requirement got no passages: lab-r4 r2).
+const passageTerms = 24
+
+// passageQuery is a requirement's search query: its content words (letters and digits; hyphenated
+// parts apart), each once, in order; past passageTerms, the longest of them (a long word is the more
+// distinctive), still in order. Within docs.MaxQuery bytes.
+func passageQuery(requirement string) string {
+	var ws []string
+	seen := map[string]bool{}
+	for _, w := range strings.FieldsFunc(strings.ToLower(requirement), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) }) {
+		if !seen[w] && !stopWord[w] && (len(w) > 2 || unicode.IsDigit(rune(w[0]))) {
+			seen[w], ws = true, append(ws, w)
+		}
+	}
+	if len(ws) > passageTerms {
+		byLen := slices.Clone(ws)
+		slices.SortStableFunc(byLen, func(a, b string) int { return len(b) - len(a) })
+		keep := map[string]bool{}
+		for _, w := range byLen[:passageTerms] {
+			keep[w] = true
+		}
+		ws = slices.DeleteFunc(ws, func(w string) bool { return !keep[w] })
+	}
+	q := strings.Join(ws, " ")
+	for len(q) > docs.MaxQuery { // the search's bound is bytes
+		_, n := utf8.DecodeLastRuneInString(q)
+		q = q[:len(q)-n]
+	}
+	return q
+}
+
+// stopWord are words too common to find a passage by.
+var stopWord = map[string]bool{"the": true, "and": true, "for": true, "that": true, "with": true, "this": true, "was": true, "are": true, "from": true,
+	"shall": true, "will": true, "must": true, "may": true, "any": true, "all": true, "has": true, "have": true, "had": true, "her": true, "his": true,
+	"its": true, "their": true, "she": true, "they": true, "who": true, "which": true, "such": true, "not": true, "but": true, "into": true, "then": true,
+	"than": true, "upon": true, "each": true, "only": true, "both": true, "under": true, "been": true, "being": true, "were": true, "there": true}
 
 // reviewedMax bounds the reviewed passages check_deviation is handed (bytes of text).
 const reviewedMax = 16_000

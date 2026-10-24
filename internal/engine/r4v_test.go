@@ -11,6 +11,7 @@ import (
 
 	"github.com/discover-legal/BigLaw/internal/agent"
 	"github.com/discover-legal/BigLaw/internal/analysis"
+	"github.com/discover-legal/BigLaw/internal/docs"
 	"github.com/discover-legal/BigLaw/internal/model"
 )
 
@@ -33,7 +34,8 @@ func TestClaimSumsNeedTheSumInTheQuote(t *testing.T) {
 			t.Errorf("%q: %+v", q, got)
 		}
 	}
-	for _, q := range []string{"The Company shall pay £3 million on demand.", "Within 3 days the Company shall pay 3 instalments.", "The Company shall pay $3,000 on demand."} {
+	for _, q := range []string{"The Company shall pay £3 million on demand.", "Within 3 days the Company shall pay 3 instalments.", "The Company shall pay $3,000 on demand.",
+		"The Company issued 3,000,000 shares.", "The Company shall pay 3 million instalments."} {
 		if got := claimSums(claim, q, nil); len(got) > 0 {
 			t.Errorf("%q typed %+v", q, got)
 		}
@@ -200,8 +202,10 @@ func TestIssueAddedAfterSweepNeverReadAgainIsDisclosed(t *testing.T) {
 	}
 }
 
-// TestReviewedPassagesEmbeddingMetered (verifier L3): check_deviation's reviewed-passage search
-// embeds its query through the meter, so its cost is charged to the step.
+// TestReviewedPassagesEmbeddingMetered (verifier L3; lab-r4 r2): check_deviation's reviewed-passage
+// search embeds its query through the meter, so its cost is charged to the step, and a requirement of
+// more distinct words than a search takes (bench5 trust's two-physician standard) still finds the
+// reviewed passages: its query is its most distinctive words.
 func TestReviewedPassagesEmbeddingMetered(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, incapMemo, incapTrust)
@@ -212,7 +216,7 @@ func TestReviewedPassagesEmbeddingMetered(t *testing.T) {
 	memo, trust := f.docs[0].ID, f.docs[1].ID
 	c := agent.Call{TaskID: "t", DocumentIDs: f.ids(), Input: []byte(fmt.Sprintf(`{"reviewedDocIds":[%q]}`, trust))}
 	f.e = New(f.st, f.d, model.NewFake(nil), testRoles, nil, Config{BudgetCalls: 150, BudgetUSD: 5}, nil)
-	ps, u := f.e.reviewedPassages(context.Background(), c, "one licensed physician and one licensed clinical psychologist")
+	ps, u := f.e.reviewedPassages(context.Background(), c, incapReq) // bench5's full requirement: over docs.MaxTerms distinct words
 	if len(ps) == 0 || u.USD < 0.05 || memo == "" {
 		t.Errorf("passages %d, usage %+v", len(ps), u)
 	}
@@ -226,5 +230,91 @@ func TestLimitationsGrammar(t *testing.T) {
 	}
 	if p := partyLine([]analysis.PartyGap{{Name: "Acme", FIDs: []string{"F1"}}}); p != "Coverage: 1 party named in verified findings never appears in the memo: Acme (F1)." {
 		t.Errorf("%q", p)
+	}
+}
+
+// TestPassageQueryFitsTheSearch (lab-r4 r2): the query is at most passageTerms distinct content words
+// (under docs.MaxTerms), in the requirement's order, its longest words kept.
+func TestPassageQueryFitsTheSearch(t *testing.T) {
+	q := passageQuery(incapReq + " " + incapMemo)
+	ws := strings.Fields(q)
+	if len(ws) == 0 || len(ws) > passageTerms || len(q) > docs.MaxQuery || !strings.Contains(q, "physicians") || !strings.Contains(q, "certifications") || strings.Contains(q, " the ") {
+		t.Errorf("%d words: %q", len(ws), q)
+	}
+	if q := passageQuery("Both physicians must be licensed."); q != "physicians licensed" {
+		t.Errorf("%q", q)
+	}
+}
+
+// TestTypedValuesNeedTheirScaleInTheQuote (lab-r4 r2: the typed-value check was as scale-blind as
+// H1): a typed quantity is kept only when a quote states a figure of its class and amount, its scale
+// read; a sum never from a count of something ("3,000,000 shares"), a count never from a sum.
+func TestTypedValuesNeedTheirScaleInTheQuote(t *testing.T) {
+	money := func(v string) analysis.Value {
+		return analysis.Value{Entity: "Company", Metric: "principal", Value: v, Class: "Money"}
+	}
+	count := func(v string) analysis.Value {
+		return analysis.Value{Entity: "Company", Metric: "shares", Value: v, Class: "Count"}
+	}
+	pct := analysis.Value{Value: "73%", Class: "Percentage"}
+	for _, c := range []struct {
+		v     analysis.Value
+		quote string
+		want  bool
+	}{
+		{money("$3 million"), "Section 3. Payment. The Company shall pay the outstanding principal on demand.", false},
+		{money("$3 million"), "The principal of $3,000,000 is due.", true},
+		{money("$3 million"), "The principal of 3,000,000 is due.", true},
+		{money("$3 million"), "Principal: $3m.", true},
+		{money("$3 million"), "The principal is $3 million.", true},
+		{money("$3,000,000"), "The Company issued 3,000,000 shares.", false},
+		{money("$3,000,000"), "The Company paid 3,000,000 dollars.", true},
+		{money("$500"), "Rule 500 applies.", false},
+		{money("$12 billion"), "Rule 12b-1 applies.", false},
+		{money("$644,910"), "Greystone claims damages of $644,910 for unpaid invoices", true},
+		{count("3,000,000"), "The Company issued 3,000,000 shares.", true},
+		{count("3 million"), "Section 3 of the Note.", false},
+		{count("3,000,000"), "The Company paid $3,000,000.", false},
+		{pct, "WCA's account took 73% of volume.", true},
+		{pct, "WCA made 73 trades.", false},
+		{analysis.Value{Value: "March 1, 2026", Class: "Date"}, "The fee is due on March 1, 2026.", true},
+	} {
+		if got := valueInQuote(c.v, c.quote); got != c.want {
+			t.Errorf("%s %q in %q: %v, want %v", c.v.Class, c.v.Value, c.quote, got, c.want)
+		}
+	}
+}
+
+// TestG8TracesScale (lab-r4 r2): the figure lint reads a figure's scale, so "$3 million" is not
+// traced by the "3" of "Section 3", and is traced by "$3,000,000".
+func TestG8TracesScale(t *testing.T) {
+	if got := Untraced("The Company owes $3 million.", "Section 3. Payment. The Company shall pay on demand.", false); len(got) != 1 || got[0] != "3000000" {
+		t.Errorf("untraced %q", got)
+	}
+	if got := Untraced("The Company owes $3 million.", "The principal of $3,000,000 is due.", false); len(got) != 0 {
+		t.Errorf("untraced %q", got)
+	}
+	if got := Untraced("Under Rule 12b-1 the fee is $4,000.", "Rule 12b-1 fees of $4,000.", false); len(got) != 0 {
+		t.Errorf("untraced %q", got)
+	}
+}
+
+// TestTypedSumNeverReachesTheDeliverable (lab-r4 r2): a typed "$3 million" over a quote that states
+// only "Section 3" is not admitted as a value: the finding is admitted without it, and the
+// deliverable never states it.
+func TestTypedSumNeverReachesTheDeliverable(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, "1. Damages\nGreystone claims damages of $644,910 for unpaid invoices.\n\n2. Note\nSection 3. Payment. The Company shall pay the outstanding principal on demand.\n")
+	d1 := f.docs[0].ID
+	v := f.run(f.with(map[string][]model.Reply{
+		"extract_facts": {facts(fd("Greystone claims damages of $644,910.", d1, "Greystone claims damages of $644,910 for unpaid invoices", val("Greystone", "damages", "$644,910", "Money")),
+			fd("The Company owes the principal under Section 3 of the Note.", d1, "Section 3. Payment. The Company shall pay the outstanding principal on demand.", val("Company", "principal", "$3 million", "Money")))},
+	}), Config{})
+	fs := ledgerFindings(t, f, v.ID)
+	if len(fs) != 2 || !fs[1].Verified || len(fs[1].Values) != 0 || len(fs[0].Values) != 1 {
+		t.Fatalf("%+v", fs)
+	}
+	if out := deref(v.Output); strings.Contains(out, "$3 million") || strings.Contains(out, "$3,000,000") {
+		t.Errorf("the deliverable states a sum no document states:\n%s", out)
 	}
 }

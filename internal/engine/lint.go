@@ -29,7 +29,6 @@ var (
 	// …", "Sections 7 and 9 of the Manual"); any other word makes the number a count ("37 trades").
 	listWord = regexp.MustCompile(`(?i)^\s+(?:and|or|of|to|through|in|under|is|are|was|were|be|do|does|did|not|also|each|both|which|that|as|may|must|shall|apply|applies|provide|provides|require|requires|state|states|set|sets)\b`)
 	refRange = regexp.MustCompile(`^\s*[–—-]\s*` + locator)
-	numRe    = regexp.MustCompile(`\d[\d,]*(?:\.\d+)?`)
 	dateRe   = regexp.MustCompile(`(?i)\b(?:\d{1,2}\s+)?(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?(?:\s+\d{1,2},?)?\s+(?:19|20)\d\d\b|\b(?:19|20)\d\d-\d\d(?:-\d\d)?\b|\b\d{1,2}/\d{1,2}/(?:19|20)\d\d\b|(?:§\s*)?\b(?:19|20)\d\d\b`)
 )
 
@@ -117,21 +116,12 @@ func dates(text string) (keys []string, spans [][]int) {
 // first and their digits are not read again as numbers. Single-digit integers ("Rule 6(a)(1)",
 // "paragraph 3") count only when all is set.
 func figures(text string, all bool) (ds, nums []string) {
-	ds, spans := dates(text)
-	masked := []byte(text)
-	for _, loc := range spans {
-		for i := loc[0]; i < loc[1]; i++ {
-			masked[i] = ' '
-		}
-	}
-	for _, m := range numRe.FindAllString(string(masked), -1) {
-		m = strings.TrimRight(m, ",.")
-		if !all && len(m) == 1 {
+	ds, fs := figuresIn(text) // scale read: "$3 million" is 3000000, never 3
+	for _, f := range fs {
+		if !all && f.single {
 			continue
 		}
-		if r, ok := analysis.Number(m); ok {
-			nums = append(nums, analysis.Decimal(r))
-		}
+		nums = append(nums, analysis.Decimal(f.amount))
 	}
 	return ds, nums
 }
