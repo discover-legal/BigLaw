@@ -7,6 +7,7 @@ import (
 	"compress/gzip"
 	"encoding/json"
 	"io"
+	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -48,21 +49,34 @@ func pairs(cs []Conflict) []string {
 	return out
 }
 
-// bench6SECParties are the SEC pairs' values as the figure reader reads them (the right labels).
-var bench6SECParties = map[string]string{"F178/4,217": "Whitmore Capital Advisors LLC", "F246/4,312": "Whitmore Capital Advisors LLC",
-	"F83/7,912": "Whitmore Capital Advisors LLC", "F246/7,412": "Whitmore Capital Advisors LLC", "F269/$103,800.00": "Marcus T. Bellini",
-	"F539/$92,600": "Marcus T. Bellini", "F144/April 22, 2024": "Gerald R. Whitmore", "F547/15 Apr 2024 09:23:47": "Gerald R. Whitmore"}
+// bench6SECLabels are the SEC pairs' values as the figure reader reads them (the right labels): whose
+// figure, what it measures, and what the typed entity is to it ("OQR", "Email transmission", "deletion
+// instruction", "total equity trades": no party; Kevin Ostrowski: the payer of Bellini's compensation,
+// another party).
+var bench6SECLabels = func() map[string]relabel {
+	wca, bellini, whitmore := "Whitmore Capital Advisors LLC", "Marcus T. Bellini", "Gerald R. Whitmore"
+	trades, all, comp, instr := "omnibus equity trades analysed", "equity trades during the review period", "undisclosed compensation paid for Bellini", "instruction to clean up the shared drive"
+	return map[string]relabel{"F178/4,217": {wca, trades, "", "none"}, "F246/4,312": {wca, trades, "", "party"},
+		"F83/7,912": {wca, all, "", "none"}, "F246/7,412": {wca, all, "", "party"}, "F269/$103,800.00": {bellini, comp, "", "other"},
+		"F539/$92,600": {bellini, comp, "", "party"}, "F144/April 22, 2024": {whitmore, instr, "", "none"}, "F547/15 Apr 2024 09:23:47": {whitmore, instr, "", "none"}}
+}()
 
 // TestJoinBench6SECPairsAcrossLabels (bench6 SEC): the three bench5 pairs were verified this time but
-// labelled "OQR" vs "Whitmore Capital Advisors LLC" (4,217 vs 4,312 trades), "Bellini" vs "Kevin
+// typed "OQR" vs "Whitmore Capital Advisors LLC" (4,217 vs 4,312 trades), "Bellini" vs "Kevin
 // Ostrowski" ($92,600 vs $103,800) and "Email transmission" vs "deletion instruction" (April 15 vs April
-// 22), so the near join paired none of them. Paired by metric and quote context now, and nothing else
-// over the whole ledger is (the label join's 7,912 vs 7,412 stays).
+// 22). Read as one measure of one party each, the trades and the dates pair, and so do 7,912 vs 7,412
+// equity trades, and nothing else over the whole ledger does. $103,800 is typed under its payer, Kevin
+// Ostrowski, another party than the reader's (Bellini): no conflict is asserted on it (lab-r4 r5 M4).
 func TestJoinBench6SECPairsAcrossLabels(t *testing.T) {
-	got := pairs(Join(readParties(bench6Ledger(t, "sec"), bench6SECParties), nil))
-	want := []string{"F144/F547", "F178/F246", "F246/F83", "F269/F539"}
+	got := pairs(Join(readAs(bench6Ledger(t, "sec"), bench6SECLabels), nil))
+	want := []string{"F144/F547", "F178/F246", "F246/F83"}
 	if !slices.Equal(got, want) {
 		t.Errorf("SEC conflicts %v, want %v", got, want)
+	}
+	ls := maps.Clone(bench6SECLabels)
+	ls["F269/$103,800.00"] = relabel{"Marcus T. Bellini", "undisclosed compensation paid for Bellini", "", "none"}
+	if got := pairs(Join(readAs(bench6Ledger(t, "sec"), ls), nil)); !slices.Contains(got, "F269/F539") {
+		t.Errorf("read with no other party typed, $92,600 vs $103,800 is not a conflict: %v", got)
 	}
 }
 
@@ -74,7 +88,7 @@ func TestJoinBench6SECPairsAcrossLabels(t *testing.T) {
 // both documents state, so neither side was disjoint) the documents' termination ages (sixty, October
 // 8, 2040, against fifty-five, October 8, 2035) are a conflict too.
 func TestJoinBench6TrustNamesPairwise(t *testing.T) {
-	got := pairs(Join(readParties(bench6Ledger(t, "trust"), map[string]string{"F67/35": "Sophia Davenport-Chen", "F170/30%": "Sophia Davenport-Chen"}), nil))
+	got := pairs(Join(readAs(bench6Ledger(t, "trust"), map[string]relabel{"F67/35": {party: "Sophia Davenport-Chen"}, "F170/30%": {party: "Sophia Davenport-Chen", entity: "party"}}), nil))
 	if want := []string{"F117/F471", "F170/F67"}; !slices.Equal(got, want) {
 		t.Errorf("trust conflicts %v, want %v", got, want)
 	}

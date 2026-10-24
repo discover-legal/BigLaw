@@ -36,18 +36,26 @@ func TestR2VScaledVsWholeFigure(t *testing.T) {
 	}
 }
 
-// TestR2VHoldbackNearFalsePair (M3): part of a figure, labelled with the figure's own name in its
-// quote (a closing payment net of a 5% holdback, a deposit toward the price), never pairs with it; a
-// real misstatement of the price still does.
+// TestR2VHoldbackNearFalsePair (M3): part of a figure, labelled with the figure's own name by the
+// extractor (a closing payment net of a 5% holdback, a deposit toward the price), never pairs with it:
+// the figure reader names a part as the part it is (lab-r4 r5 L2: what a figure measures is its label,
+// not a Go word rule); a real misstatement of the price still conflicts, and so do two deposits the
+// reader reads as one deposit stated differently.
 func TestR2VHoldbackNearFalsePair(t *testing.T) {
 	a := r2vF("F1", "spa", "The Purchase Price is $1,000,000, payable by Buyer to Seller at the Closing.", Value{Entity: "Buyer", Metric: "purchase price", Value: "$1,000,000", Class: "Money"})
-	for _, b := range []Finding{
-		r2vF("F2", "funds-flow", "At the Closing, Buyer shall wire $950,000 of the Purchase Price to Seller; the balance is held back.", Value{Entity: "Buyer", Metric: "closing payment", Value: "$950,000", Class: "Money"}),
-		r2vF("F2", "funds-flow", "At the Closing, Buyer shall wire $950,000 of the Purchase Price to Seller; the balance is held back.", Value{Entity: "Buyer", Metric: "purchase price", Value: "$950,000", Class: "Money"}),
-		r2vF("F2", "escrow", "Buyer shall pay a deposit of $950,000 toward the Purchase Price into escrow.", Value{Entity: "Buyer", Metric: "purchase price", Value: "$950,000", Class: "Money"}),
+	for _, c := range []struct {
+		b        Finding
+		measures string
+	}{
+		{r2vF("F2", "funds-flow", "At the Closing, Buyer shall wire $950,000 of the Purchase Price to Seller; the balance is held back.", Value{Entity: "Buyer", Metric: "closing payment", Value: "$950,000", Class: "Money"}), "closing payment of the purchase price"},
+		{r2vF("F2", "funds-flow", "At the Closing, Buyer shall wire $950,000 of the Purchase Price to Seller; the balance is held back.", Value{Entity: "Buyer", Metric: "purchase price", Value: "$950,000", Class: "Money"}), "part of the purchase price wired at closing"},
+		{r2vF("F2", "escrow", "Buyer shall pay a deposit of $950,000 toward the Purchase Price into escrow.", Value{Entity: "Buyer", Metric: "purchase price", Value: "$950,000", Class: "Money"}), "deposit toward the purchase price"},
 	} {
-		if cs := joinRead([]Finding{a, b}, nil); len(cs) > 0 {
-			t.Errorf("a part of the price is reported as the price stated differently: %q: %+v", b.Quotes[0].Quote, cs)
+		if cs := Join(readAs([]Finding{a, c.b}, map[string]relabel{"$950,000": {measures: c.measures}}), nil); len(cs) > 0 {
+			t.Errorf("a part of the price is reported as the price stated differently: %q: %+v", c.b.Quotes[0].Quote, cs)
+		}
+		if cs := joinRead([]Finding{a, c.b}, nil); c.b.Values[0].Metric == "purchase price" && len(cs) != 1 {
+			t.Errorf("read as the price itself (the stand-in's label), it is no conflict: %+v", cs)
 		}
 	}
 	real := r2vF("F3", "board", "The Board approved the Purchase Price of $950,000 payable by Buyer to Seller at the Closing.", Value{Entity: "Buyer", Metric: "purchase price", Value: "$950,000", Class: "Money"})

@@ -246,7 +246,15 @@ func substituteOutsideQuotes(text string, figs []Fig) string {
 // values, its handle, or a calc worksheet (its result or its inputs). A rule or section number is
 // a locator, not a figure. Each untraced figure says how to fix it (hint).
 func lint(issueID string, s Section, usable map[string]Finding, sheets []analysis.Worksheet) []string {
-	var out []string
+	out, _ := lintLimited(issueID, s, usable, sheets)
+	return out
+}
+
+// lintLimited is lint and the figures it limited (by why: limitedUnread, limitedScale) instead of
+// tracing them: finish discloses those in Limitations (lab-r4 r5 H2: a figure no clear reading
+// verifies is flagged or limited, never silently traced).
+func lintLimited(issueID string, s Section, usable map[string]Finding, sheets []analysis.Worksheet) (out []string, limited map[string][]string) {
+	limited = map[string][]string{}
 	cited := map[string]bool{}
 	for _, m := range fidRe.FindAllStringSubmatch(s.Markdown, -1) {
 		if _, ok := usable[m[1]]; !ok && !cited[m[1]] {
@@ -303,12 +311,12 @@ func lint(issueID string, s Section, usable map[string]Finding, sheets []analysi
 		}
 	}
 	var known []analysis.Reading // what the cited findings' quotes and values were read as
-	var unread []analysis.Span   // and their numbers the figure reader did not read, or not clearly: those trace as written
+	var unread []analysis.Span   // and their quotes' numbers the figure reader never read (not read at all: not unclear, not another kind)
 	for fid := range cited {
 		f := usable[fid]
 		known = append(known, f.Figures...)
 		for _, r := range f.Figures {
-			if !r.Clear() {
+			if r.Kind == analysis.KindUnclear && strings.HasPrefix(r.Why, "not read") {
 				unread = append(unread, analysis.Span{Text: r.Text})
 			}
 		}
@@ -321,9 +329,6 @@ func lint(issueID string, s Section, usable map[string]Finding, sheets []analysi
 		for _, v := range f.Values {
 			if v.Fig != nil {
 				known = append(known, *v.Fig)
-			} else {
-				_, ns := figures(v.Value, true)
-				unread = append(unread, ns...)
 			}
 		}
 	}
@@ -344,27 +349,53 @@ func lint(issueID string, s Section, usable map[string]Finding, sheets []analysi
 				continue
 			}
 			seen[n.figure] = true
+			if n.limited != "" {
+				limited[n.limited] = append(limited[n.limited], n.figure)
+				continue
+			}
 			if w, raw := rolled[n.figure]; raw {
 				out = append(out, issueID+": the date "+n.figure+" is a deadline's raw date, before Rule 6(a)'s roll past a weekend or holiday (G8): the deadline is {"+w.WID+"} ("+
 					sheetValue(w.Result, w.Unit)+"): write that handle, and state the raw date only in the sentence that gives the rolled deadline")
 				continue
 			}
-			out = append(out, issueID+": the figure "+n.figure+" is not traced (G8): "+cmpStr(n.hint != "", n.hint, hint(n.figure, s.Handles, usable, cited)))
+			out = append(out, issueID+": the figure "+n.figure+" is not traced (G8): "+cmpStr(n.unread != "", "the figure reader did not read it clearly ("+n.unread+"), so it is flagged, never traced; ", "")+
+				cmpStr(n.hint != "", n.hint, hint(n.figure, s.Handles, usable, cited)))
 		}
 	}
-	return out
+	return out, limited
 }
 
-// untraced is one figure G8 could not trace: as a lint line names it, and how to fix it ("" for hint's).
-type untraced struct{ figure, hint string }
+// untraced is one figure G8 could not trace: as a lint line names it, how to fix it ("" for hint's),
+// and why the figure reader did not read it clearly ("" when it did).
+type untraced struct {
+	figure, hint, unread string
+	limited              string // why it is limited, not flagged: limitedUnread or limitedScale ("" flagged)
+}
+
+// Why a figure G8 does not trace clearly is limited (disclosed in Limitations, for the reviewing
+// lawyer at the deliverable's gate) rather than flagged: its cited quote was never read (it traces
+// only as written), or the drafter wrote a scale where the cited figure states every digit ("$5M"
+// for "$5,000,000"), which only the reader's scale of the drafter's words makes the same figure.
+const (
+	limitedUnread = "unread"
+	limitedScale  = "scale"
+)
 
 // g8 traces one paragraph (its locators masked; it starts at at0 in the section's body): its dates
 // literally against ground's; each number Go wrote for a handle whose value is ground (a cited
-// finding's, a worksheet's) by construction; each number the figure reader read clearly as money, a
-// count or a percentage only to a cited finding's quote span or value it read as the same kind,
-// currency and amount, to a worksheet's result, or as written to a cited number it did not read
-// clearly (lab-r4 r4: "$2,000,000" never traces to digits it read as a share count); any other number (a date's part, an identifier, one the reader did not read or
-// read as unclear) literally, as written in ground.
+// finding's, a worksheet's) by construction; each number the drafter wrote by the figure reader's
+// reading of it. A number it read clearly as money, a count or a percentage traces only to a cited
+// finding's quote span or value it read clearly as the same kind, currency, scale and amount, or
+// (at scale 1) to a worksheet's result: never to digits read as something else, read unclearly or
+// not read (lab-r4 r4: "$2,000,000" never traces to a share count; r5 M1). A number it read clearly as
+// a date's part or an identifier traces only as written, digit for digit, in ground. A number it did
+// not read clearly, or did not read at all (the reader unfunded, failed or unsure), is flagged: G8
+// fails closed, it never traces a figure it cannot read (r5 H2: "$9 billion" beside a "$9,000"). A
+// clear figure whose cited quote the reader never read (unread: its admission's call unfunded or
+// failed) is limited when that quote states it as written, and so is a figure the drafter wrote at a
+// scale beside a cited one read at scale 1 (or a worksheet's result) with the same amount: kept, and
+// disclosed in Limitations; a cited figure read at a scale never traces one written at another (r5
+// H1: a "$500" read "in thousands" is flagged beside a memo's "$500,000").
 func g8(para, ground string, at0 int, regs []region, read map[int]analysis.Reading, known []analysis.Reading, unread []analysis.Span, sheets []analysis.Worksheet, cited map[string]bool, rolled map[string]analysis.Worksheet) []untraced {
 	gd, gn := figures(ground, true)
 	td, tn := figures(para, true)
@@ -372,38 +403,60 @@ func g8(para, ground string, at0 int, regs []region, read map[int]analysis.Readi
 	for _, k := range td {
 		d, _ := analysis.ParseDate(k)
 		if !slices.ContainsFunc(gd, func(g string) bool { x, _ := analysis.ParseDate(g); return x.Compatible(d) }) {
-			out = append(out, untraced{k, ""})
+			out = append(out, untraced{figure: k})
 		}
 	}
 	for _, n := range tn {
 		at := at0 + n.Start
-		if r, ok := read[at]; n.Single() && (!ok || !r.Clear()) { // one bare digit ("paragraph 3"): a locator unless read as a figure
-			continue
-		}
 		if i := slices.IndexFunc(regs, func(r region) bool { return r.start <= at && at < r.end }); i >= 0 {
 			if f := regs[i].fig; f.FID == "" && !rawDate(f.Value, rolled) || cited[f.FID] {
 				continue
 			}
-		} else if r, ok := read[at]; ok && r.Clear() {
+			if !spanStated(n, gn) { // an uncited finding's handle: its value as written in what is cited
+				out = append(out, untraced{figure: decimalOf(n)})
+			}
+			continue
+		}
+		r, ok := read[at]
+		switch {
+		case !ok || r.Unclear || r.Kind == analysis.KindUnclear:
+			why := "it was not read"
+			if ok && r.Why != "" {
+				why = r.Why
+			}
+			out = append(out, untraced{figure: decimalOf(n), unread: why})
+		case r.Clear():
 			if slices.ContainsFunc(known, func(k analysis.Reading) bool { same, _ := analysis.SameFigure(r, k); return same }) ||
-				slices.ContainsFunc(sheets, func(w analysis.Worksheet) bool { x := sheetAmount(w); return x != nil && x.Cmp(r.Rat()) == 0 }) ||
-				spanStated(n, unread) { // a cited number no reading contradicts traces as written
+				r.Scale == "" && slices.ContainsFunc(sheets, func(w analysis.Worksheet) bool { x := sheetAmount(w); return x != nil && x.Cmp(r.Rat()) == 0 }) {
+				continue
+			}
+			if spanStated(n, unread) && !slices.ContainsFunc(known, func(k analysis.Reading) bool { return k.Text == n.Text && !k.Unclear }) {
+				out = append(out, untraced{figure: n.Text, limited: limitedUnread}) // only as written: limited, disclosed
+				continue
+			}
+			if r.Scale != "" && (slices.ContainsFunc(known, func(k analysis.Reading) bool { // the drafter's "$5M" for a cited "$5,000,000"
+				_, soft := analysis.SameFigure(r, k)
+				return soft && k.Clear() && k.Scale == ""
+			}) || slices.ContainsFunc(sheets, func(w analysis.Worksheet) bool { x := sheetAmount(w); return x != nil && x.Cmp(r.Rat()) == 0 })) {
+				out = append(out, untraced{figure: written(para, analysis.Reading{Start: n.Start, End: n.End, ScaleFrom: r.ScaleFrom}), limited: limitedScale})
 				continue
 			}
 			h := ""
 			if k := slices.IndexFunc(known, func(k analysis.Reading) bool { return k.Amount == r.Amount && !k.Unclear }); k >= 0 {
 				h = "the cited findings state " + r.Amount + " only as " + article(known[k].Kind) + cmpStr(known[k].Currency != "", " in "+known[k].Currency, "") +
-					" (the figure reader's reading), not as the " + describe(r) + " this sentence states: state what they state, or remove it"
+					cmpStr(known[k].Scale != r.Scale, " at another scale", "") + " (the figure reader's reading), not as the " + describe(r) + " this sentence states: state what they state, or remove it"
 			}
-			out = append(out, untraced{r.Amount, h})
-			continue
-		}
-		if !spanStated(n, gn) && !yearOf(n, gd) {
-			out = append(out, untraced{decimalOf(n), ""})
+			out = append(out, untraced{figure: r.Amount, hint: h})
+		case r.Kind == analysis.KindDate && yearOf(n, gd):
+		case !slices.ContainsFunc(gn, func(g analysis.Span) bool { return unsigned(g.Text) == unsigned(n.Text) }): // an identifier or a date's part: as written
+			out = append(out, untraced{figure: n.Text})
 		}
 	}
 	return out
 }
+
+// unsigned is a span's text without a minus written before it ("-7 days" states the memo's "7 days").
+func unsigned(s string) string { return strings.TrimLeft(s, "-−–—") }
 
 // rawDate reports whether a handle's value is a deadline's raw date (rolledDates).
 func rawDate(value string, rolled map[string]analysis.Worksheet) bool {

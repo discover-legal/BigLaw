@@ -406,7 +406,7 @@ func TestPhaseSharesHoldInUSD(t *testing.T) {
 		t.Fatalf("sweep %q", sw)
 	}
 	if len(ds) != 1 || !strings.HasPrefix(ds[0], "committed") || len(cm) != 1 || strings.Contains(cm[0], "did not return") || stop(v) != "awaiting_gate/finished" {
-		t.Fatalf("%s: draft %q committee %q\n%s", stop(v), ds, cm, f.steps(v.ID))
+		t.Fatalf("%s: draft %q committee %q\n%s\n%q", stop(v), ds, cm, f.steps(v.ID), f.outputs(v.ID, "finish"))
 	}
 }
 

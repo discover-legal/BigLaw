@@ -22,7 +22,7 @@ PostgreSQL database. Licensed Apache-2.0 (`LICENSE`, `NOTICE`).
 | Model client | `internal/model/` (`client.go`, `embed.go`, `errors.go`, `fake.go`, `pricing.go`, `prices.json`) | One OpenAI-compatible chat client with tool calls and image parts, an embeddings call (`Embed`) on the same transport, typed failures with their HTTP mapping, at most 3 attempts per call, cache-aware pricing of every call from a built-in table plus `BIGLAW_PRICES` (the host never makes a call free), watt-hour metering when `BIGLAW_LOCAL_WATTS` is set, and `model.Fake` for tests (§ Model client). `Embed`'s caller is documents (below); `Chat`'s is the agent loop (below), which the memo workflow drives. |
 | Documents | `internal/docs/` (`ingest.go`, `child.go` + `child_linux.go`/`child_other.go`, `pageindex.go`, `chunk.go`, `search.go`, `embed.go`, `verify.go`, `http.go`, `vision.go` + `vision_prompts.txt`, `scanpdf.go`, `jobs.go`) | Ingest of UTF-8 text (a plain-text e-mail whose headers say quoted-printable is stored decoded, headers verbatim: `TestEmailBodyDecodedFromQuotedPrintable`), `.docx` and PDF text layers (PDFs and `.docx` files parsed in a bounded child process); images and JPEG-scanned PDF pages transcribed by the `vision` role, each page read twice and the readings compared, with provenance on every document, chunk and citation, and a leased job that transcribes what was stored before a vision role was set (§ Vision transcription); the byte-exact section tree; search chunks; Postgres full-text search, fused with pgvector similarity when an `embed` role is set (chunk embedding at ingest, a startup backfill); the page reader (outline, paged sections); the quote-verification ladder; the upload and download routes. Every read is scoped to the caller's document ids (§ Documents) |
 | Agent runtime | `internal/agent/` (`tool.go`, `registry.go`, `schema.go`, `loop.go`, `budget.go`, `policy.go`, `bandit.go`) | The `Tool` interface and its single registry (definitions frozen at registration), JSON-schema validation of every tool input and output, one bounded loop for the lead and its subagents, the budget ledger, and the tool bandit (§ Agent runtime). The memo workflow drives it (below); a step log makes it resumable |
-| Engine | `internal/engine/` (+ `specs/`, `packs/`; migrations `0005_runs.sql`, `0006_figure_reads.sql`) | The memo workflow: the lead agent and its 11 tools, the ledger, the evidence subagents with Go-side quote verification, the figure reader, the sweep, the three-critic committee, the policy, `finish` (lint, coverage, render), the human gates, grounding collapse, and durable runs (step log, lease and heartbeat, resume) (§ Memo workflow) |
+| Engine | `internal/engine/` (+ `specs/`, `packs/`; migrations `0005_runs.sql`, `0006_figure_reads.sql`, `0007_figure_reads_scope.sql`) | The memo workflow: the lead agent and its 11 tools, the ledger, the evidence subagents with Go-side quote verification, the figure reader, the sweep, the three-critic committee, the policy, `finish` (lint, coverage, render), the human gates, grounding collapse, and durable runs (step log, lease and heartbeat, resume) (§ Memo workflow) |
 | API | `internal/api/` (+ `dist/`, the embedded UI) | The REST API (tasks, steps, SSE events, gates, cancel, cost, clients) over the engine and the document routes, and the web UI built into the binary (§ Memo workflow) |
 | Memo tools | `internal/analysis/` (+ `belo.json`, `specs/*.json`), `internal/docs/register.go` (+ `specs/*.json`) | Deterministic tools over verified findings: `numbers` (exact `calc`, figure handles, key-figures table), `join_discrepancies`, the coverage checks `finish{op:"check"}` will run, the value normalisers and BELO-lite; and the `retrieve` / `verify_quote` adapters over documents (§ Agent runtime) |
 | `.docx` reader | `internal/docs/ooxml/` | Opens a `.docx`'s text parts only (body, footnotes, endnotes; 128 MiB decompression cap) and reads its visible text in one linear XML pass. The writer, the XML escapers, the part-preserving re-zip and tracked-change parse/apply are planned (PR 3d) |
@@ -30,6 +30,7 @@ PostgreSQL database. Licensed Apache-2.0 (`LICENSE`, `NOTICE`).
 | UI | `ui/` (React 19 + Vite + TypeScript strict; runtime deps `react`, `react-dom` only) | The seven screens (§ UI) behind one transport seam, `ui/src/api/transport.ts`: `http.ts` talks to the Go API on the same origin (tasks, steps, findings, gates, cost and documents are served since PR 4b; playbooks, time and profiles are PRs 6/8/9), `recorded.ts` replays a recorded engine in the browser with no network at all |
 | Recorded demo | `ui/src/recorded/recording.json`, `eval/demo/record_test.go` | Three synthetic matters (13 documents plus one scanned exhibit, `ui/src/recorded/06-affidavit-of-service-scan.jpg`, drawn by `eval/demo/make_scan.py`) and seven recorded memo tasks (48 findings, 79 citations); documents, outlines, sections, chunks, the scan's transcript (v2's vision path with a scripted reader), run-log and offered search hits and every quote's verification computed by v2's `internal/docs`; claims from the answer keys; sample playbooks, time entries and profiles, and the configuration table read from `cmd/biglaw/config.go` (§ UI, provenance). `TestDemoRecording` fails when the committed recording no longer matches what v2's code computes |
 | Test helper | `internal/store/storetest/` | Gives each DB test its own schema; skips without a DSN, fails if `BIGLAW_REQUIRE_DB` is set |
+| Test helper | `internal/engine/figtest/` | The figure reader's stand-in for tests (`figtest.Reader`, a `model.Fake` `Respond` hook): labels plain fixture texts so tests not about figure reading run unscripted (engine, API and eval tests) |
 | Budgets | `scripts/loc.py` (+ `scripts/test_loc.py`) | Fails CI if a size budget is exceeded (below) |
 | Build/deploy | `Makefile`, `Dockerfile`, `docker-compose.yml`, `render.yaml`, `.env.example` | `make ci` (and the owner-run `make e4-record` / `make e4-live`); `pgvector/pgvector:0.8.6-pg16` + biglaw under Compose; Render blueprint (inert until PR 8, see § Exposure) |
 | CI | `.github/workflows/ci.yml` | `make ci` against `pgvector/pgvector:0.8.6-pg14` and `:0.8.6-pg16` service containers (pinned by digest) with `BIGLAW_REQUIRE_DB=1`; staticcheck + govulncheck; image build + Compose smoke test |
@@ -863,16 +864,14 @@ The memo workflow (§ Memo workflow) drives these. What PR 4a ships, all tested 
   ledger) a codename never changes meaning; `Substitute` puts the exact value in for a codename or a
   worksheet's `{W…}` (its wid), and an unmapped one is left as written and reported. `table`: a
   key-figures table from verified values only.
-- **`join_discrepancies`**: cross-document conflicts between verified values that share a metric
-  label, a quantity class (money is never compared with a share count) and an entity after the
-  lead's aliases and name containment ("Ostrowski" in "Richard Ostrowski"); dates tie to one event by
-  label or two shared distinctive words and are compared at their common precision; a conflict needs
-  two documents with disjoint value sets. Durations and identifiers are not compared. Whatever their
-  labels, two values of one class from two documents that are near each other (a quantity within a
-  quarter, a full date within a month), whose quotes share three distinctive words, are also a
-  conflict when neither document states the other's value (4,217 vs 4,312 trades analysed, $92,600
-  vs $103,800, 73% vs 78%, April 22 vs April 15: `TestNearConflictsAcrossLabels`, and over bench5's own
-  ledger rows `TestJoinPairsBench5Conflicts`; at most 20). The join runs over every verified finding;
+- **`join_discrepancies`**: cross-document conflicts between verified values the figure reader read as
+  one quantity: one kind (money is never compared with a share count), one party (after the lead's
+  aliases), one measure for one period, typed entities not naming two others (§ Limitations); dates of one
+  event are compared at their common precision; a conflict needs two documents with disjoint value sets.
+  Durations and identifiers are not compared. Under any extractor labels, values the reader reads as one
+  measure are compared (4,217 vs 4,312 trades analysed, $92,600 vs $103,800, 73% vs 78%, April 22 vs April
+  15: `TestJoinReadsMeasuresAcrossLabels`, and over bench5's own
+  ledger rows `TestJoinPairsBench5Conflicts`). The join runs over every verified finding;
   `fids` only choose which conflicts are reported (those holding a named finding), so a cross-issue pair
   is found from either side (`TestJoinDiscrepanciesFidsDoNotScopeTheJoin`), and the lead's aliases are
   kept for the run (ledger kind `alias`) for `finish`'s own join (`TestJoinAliasesReachFinish`). Its
@@ -899,16 +898,19 @@ Limitations of this layer:
   section, only outside quoted spans. The 64-name pool is the limit: a run with more distinct figures
   leaves the least salient late ones without a handle (a drafter may still state them inside a
   cited quote).
-- `join_discrepancies` trusts the extracting model's metric labels for the label join: one label
-  for two metrics is compared (the lead must check the quotes). Whose figure a value is, and what it measures, is the
-  figure reader's reading of it (`Value.Fig`): two values are compared only when both are read clearly as one kind of
-  one party, in one currency, their amounts exact with their scale applied; party labels unify only by the lead's
-  aliases (`TestJoinBench6TrustNamesPairwise`: two people sharing a surname are two parties). The near join finds two labels for
-  one metric only when the values are close (an eighth; a month for dates), of one party, a bare figure whose
-  scale or currency the reader could not tell never compared (`TestJoinComparesScaledFigures`, `TestR2VScaledVsWholeFigure`), a value its quote frames as a part of the other's quantity ("$950,000 of the Purchase Price", a deposit or instalment toward it) never paired with it (`TestR2VHoldbackNearFalsePair`), their
-  labels not naming two things (`sameMetric`) and the quotes share their words: a conflict between
-  far-apart values under different labels is still missed, and two close figures about different
-  things that share words and label words can still be reported (`TestJoinRefusesDifferentFacts`). A value's document is the quote that holds its text, else the finding's first quote.
+- `join_discrepancies` compares only what the figure reader read (`Value.Fig`, lab-r4 r5 L2): two values
+  are one quantity only when both are read clearly as one kind of one party's same measure (what the
+  figure is an amount of: "initial deposit", "annual revenue") for the same period ("fiscal 2023"), in one
+  currency, their amounts exact with their scale applied; the extractor's typed entities must not name two
+  others (r5 M4: a payer read as the party of two employees' salaries is no conflict between them) unless
+  the reader says a typed entity names its party or no party at all ("Email", a table's title), and a value
+  whose typed entity the reader calls another party joins nothing; party labels unify only by the lead's
+  aliases or that label (`TestJoinBench6TrustNamesPairwise`, `TestR5LabelJoinRespectsTypedEntity`). The
+  measure and period are free text folded only for case, punctuation and a leading article, so a reader
+  that names one measure two ways ("annual base salary", "base salary") misses a conflict, and one that
+  names two things alike makes one; no Go word rule decides what a figure measures or whether it is a
+  part of another (`TestR5JoinOnMeasureAndPeriod`, `TestR2VHoldbackNearFalsePair`). A value's document is
+  the quote that holds its text, else the finding's first quote.
 - Calls in one turn run sequentially, not concurrently; `retrieve` and Go tools spend no calls, so a
   lead can issue up to 8 per turn for every turn its budget funds.
 - **Line budget:** `agent` 1,242 against 1,100, `analysis` 1,183 against 950, the `docs` adapters
@@ -952,19 +954,31 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
   `figure_context`, the document around a quote, bounded and paged, and `exact_calc`, exact decimal
   arithmetic) labels each span by id: money, count, percent, date, other or unclear; its currency, its
   scale and the span or words that state it, which mark is its decimal point, its party, whether it is
-  a range's end and its sign. Go checks every label (`analysis.ReadLabels`): a label for a span it was
-  not given is rejected and noted, a scale must be a power of ten from a span or words the passage
-  states, a decimal mark must fit the digits, a sign may not contradict a written minus; what it cannot
-  check, or what the reader says is unclear, is an unclear reading, and the amount is exact arithmetic on
-  the written digits (reading × scale × sign), so no label makes a figure the text does not state
-  (`TestReadLabelsChecksEveryLabel`, `TestR4V4ReaderCannotInventSpansOrFigures`). The reader runs once
-  per admission (the call's findings batched, up to 80 spans a call) over each finding's verified quotes,
-  typed values (with their class, unit, entity and metric) and claim, and once per drafted section over
-  the figures its drafter wrote (handle values are Go's), out of the calling tool's grant, metered and
-  journaled like any call, and its answers are cached by the hash of what it read (`figure_reads`,
-  migration 0006), so a run read again gets the same labels (`TestR4V4ReadingIsCachedByContent`); a
-  finding it could not read (no budget, a failed call) keeps no reading, and its values are dropped
-  with a note. A typed quantity is admitted only when a span of its quotes reads as the same kind,
+  a range's end and its sign, what it measures and the period it is for, and for a typed value what its
+  typed entity is to it. Go checks every label (`analysis.ReadLabels`): a label for a span it was not given
+  is rejected and noted; a scale must be a power of ten whose source is the exact words of the span's own
+  passage, whole words outside the span itself (never another passage's words or a span id), or it is not
+  applied: the figure reads at scale 1, unclear (`TestR5ScaleSourceIsItsOwnWords`); a decimal mark must fit
+  the digits; a sign may not contradict a written minus; what it cannot check, or what the reader says is
+  unclear, is an unclear reading, and the amount is exact arithmetic on the written digits (reading ×
+  scale × sign), so no label makes a figure the text does not state (`TestReadLabelsChecksEveryLabel`,
+  `TestR4V4ReaderCannotInventSpansOrFigures`). A scaled reading states the same figure as another clearly
+  only when the other is read at the same scale, written in the same words (folded: "In Millions" and
+  "million"); otherwise a match is at best unclear, gated (`SameFigure`; a "$500" read "in thousands" never
+  verifies a typed "$500,000" or traces a memo's: `TestR5ScaleSmuggleReachesMemo`). The reader runs once
+  per admission (the call's findings batched; an item over a call's bounds, 80 spans or 32 KB, is read in
+  parts, a passage's spans split between them, and a span over 64 characters or a passage over 32 KB is not
+  sent and stays unread: `TestR5OversizeInputIsSplit`) over each finding's verified quotes, typed values
+  (with their class, unit, entity and metric) and claim, and once per drafted section over the figures its
+  drafter wrote (handle values are Go's), metered and journaled like any call: at admission out of what the
+  evidence subagent's grant leaves, for a section out of a call `draft_section`'s grant holds back for it
+  before the drafter runs (`TestR5ReaderReservedBeforeDrafting`; P4's draft share counts the drafters' calls, not the readers', ledger kind `figread`). Its complete answers (one accepted label
+  for every span it was sent) are cached (`figure_reads`, migrations 0006 and 0007) under a key derived from
+  the reader's spec, prompt and tools' specs, the model, the matter and what it was sent (a section's also
+  its task), so a run read again gets the same labels and an edited prompt reads again; a row goes with its
+  task and its documents (`TestR4V4ReadingIsCachedByContent`, `TestR5CacheStoresOnlyCompleteAnswers`,
+  `TestR5CacheKeyAndScope`). A finding it could not read (no budget, a failed call) keeps no reading, and its
+  values are dropped with a note. A typed quantity is admitted only when a span of its quotes reads as the same kind,
   currency and exact amount as the value's own span (`valueStated`; a share count is never dollars, one
   quote's table header never scales another's figure: `TestR4V4SharesAreNoSum`,
   `TestR4V4HeaderScaleIsTheReadersPerQuote`, `TestR4V4RangeIsTheReaders`); when either reading is unclear
@@ -978,7 +992,7 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
   (`TestRestatedNeverMergesANegatedTerm`, `TestRestatedNeverMergesMirroredParties`); a sum of money the claim states is
   kept as an untyped value only when the figure reader read the claim's span and a verified quote's span as the same
   money, clearly (`claimSums`; never a share count, never a bare "3" of "Section 3": `TestR4V4SharesAreNoSum`): no
-  entity or metric, so only the near join compares it. `check_deviation`'s requirement is the controlling document's own
+  entity or metric, compared by the reader's measure and party of its claim span. `check_deviation`'s requirement is the controlling document's own
   words: Go verifies it in `requirementDocId` (one of `controllingDocIds`) like any quote before the
   subagent runs and hands the subagent the document's text, with the reviewed documents' passages
   most like it (`reviewedPassages`, ≤ 16 KB, searched by 24 of the requirement's distinct content words, its names, defined terms and numbers first, then its longest, `passageQuery`, under the search's 32, a failed search logged, so it answers at once: `TestDeviationGetsReviewedPassages`;
@@ -1600,7 +1614,7 @@ improvements (after the real Haiku LAB rerun; scripted the same way): `TestSweep
 | Budget | Ceiling | Today |
 |---|---:|---:|
 | Go production lines (physical lines, non-`_test.go`, test-support packages included) | reported, no limit (owner decision 17) | 15290 |
-| Packages under `internal/`, test-support packages excluded | 12 | 8 (`agent`, `analysis`, `api`, `docs`, `docs/ooxml`, `engine`, `model`, `store`; `store/storetest` is test support) |
+| Packages under `internal/`, test-support packages excluded | 12 | 8 (`agent`, `analysis`, `api`, `docs`, `docs/ooxml`, `engine`, `model`, `store`; `store/storetest` and `engine/figtest` are test support) |
 | Direct Go dependencies | 3 | 2 (`github.com/lib/pq`, `github.com/ledongthuc/pdf`) |
 | Runtime environment variables | 20 | 18 |
 | UI runtime dependencies | 2 | 2 (`react`, `react-dom`) |
@@ -1628,7 +1642,7 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
   - The deliverable is Markdown only (`GET /tasks/{id}/deliverable.md`); the `.docx` export waits for
     PR 3d's writer.
   - Quote verification proves a quote is in the document, not that the claim follows from it:
-    `prosecute` checks that, and a lawyer approves every deliverable. The G8 lint traces figures (a figure the drafter wrote by the figure reader's reading of it, to a cited span or value read as the same kind, currency and amount; a handle's value by construction; anything the reader did not read clearly as written), not
+    `prosecute` checks that, and a lawyer approves every deliverable. The G8 lint traces figures (a figure the drafter wrote by the figure reader's reading of it, to a cited span or value read clearly as the same kind, currency, scale and amount, never to one read unclearly or as another kind; a date's part or an identifier as written, digit for digit; a handle's value by construction; a figure the reader did not read clearly, or a section it did not read, is flagged, never traced, and the section disclosed in Limitations; a clear figure whose cited quote the reader never read (its admission's call unfunded or failed) is traced only as written and disclosed, and so is one the drafter wrote at a scale where the cited figure states every digit ("$5M" for "$5,000,000"), which only the reader's scale makes the same figure; a cited figure read at a scale never traces one written without it: lab-r4 r5 H1, H2, M1, `TestR5G8SkipsUnreadSingleDigit`, `TestR5UnclearQuoteTracesUngated`, `TestR5NoReaderBudget`), not
     words: a wrong party or a wrong verb with correct figures passes it.
   - The SSE stream polls the database every 500 ms. Cancel stops a run at once in its own process
     and at the next heartbeat (up to 10 s) in another; the call in flight is charged.
@@ -1735,32 +1749,11 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     the context makes the governing words visible and the check reads them, which does not make a
     verdict right (an analyst who misreads a requirement the document does impose is checked only by
     the claim's quoted window and prosecute).
-  - The near join, like the label join, pairs only values the figure reader read as one party's (its
-    party label, unified only by the lead's aliases; a value whose party it could not tell is never part
-    of a conflict, and no name containment or mention in Go makes two labels one party:
-    `TestR4V4NearJoinPartiesFromTheReader`, `TestCrossDocAliasTokenContainment`); under two extractor labels
-    by metric and quote context: two distinctive words shared (three of a date's own clause), a label
-    content word shared or both totals (`onePair`, `TestJoinBench6SECPairsAcrossLabels` over the bench6 SEC
-    ledger with the pairs' right labels, `TestJoinBench6GateANoConflicts`), within an eighth
-    of each other, and not when each label names a thing its own quote states and the other side
-    never mentions (a fee and an allocation, a notice and a demand); dates are one event by their label,
-    or by near's context test. It is a word test: a part of a figure is told apart from it only when its
-    quote frames that value itself as one: "of/toward/against the <label>" right after it; a portion word
-    (a deposit, instalment, holdback …) that is not the other's label as the word it is stated under ("a
-    deposit of $950,000", not "total payments of"); a portion of the label before it ("the cash portion
-    of the Purchase Price is"); the value itself held back or in escrow ("$950,000 to be held in escrow");
-    the label less a deduction restated right after it ("$950,000 to Seller, being the Purchase Price less
-    the Holdback") or right before it ("the Purchase Price less the Holdback, being $950,000"); another sum
-    stated as "of the <label>" in its sentence ("with $50,000 of the Purchase Price held in escrow"); or a
-    "payable as follows:" / "payable in instalments:" frame before it. A holdback or deduction elsewhere in
-    the sentence does not ("Buyer will pay $1,200,000 for the Shares …, of which $100,000 will be held in
-    escrow", "$1,200,000 at Closing as the Purchase Price, less the Deposit"), and a value the quote states
-    as the other's label ("the Purchase Price is $1,200,000, less the deposit", "shall equal", "shall be a
-    balance of", "being total payments of", "the Purchase Price, $1,200,000,") is never a part, whatever
-    follows it (`TestPartOfWordings`).
-    Both the label join and the near join apply this test; a part described otherwise pairs under the
-    same label (the label join applies no eighth) and is told apart under different labels only by the
-    eighth.
+  - The joins compare what the figure reader says a figure measures and for when; a reader that names one
+    figure's measure two ways across calls misses its conflict, and the reader is a model: its labels are
+    checked for form (`ReadLabels`), not for truth. A figure typed under its payer while the reader reads it
+    as the payee's is never part of a conflict (r5 M4: bench6 SEC's $92,600 vs $103,800, typed "Kevin
+    Ostrowski" against the reader's Bellini, is not asserted: `TestJoinBench6SECPairsAcrossLabels`).
   - The raw-date rule is paragraph-wide: a list that states the raw date and the rolled deadline on
     separate lines without a blank line between is one paragraph and passes; one with a blank line is
     flagged.

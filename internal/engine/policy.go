@@ -135,7 +135,7 @@ func (p policy) Allow(ctx context.Context, x agent.Pending) *agent.Refusal {
 	}
 	if sh := a.share(x.Spec.Name, x.Spec.Class); sh > 0 {
 		used := spent[cmpStr(x.Spec.Name == "sweep", "sweep", x.Spec.Class)]
-		if x.Spec.Kind == "subagent" && used.Calls+x.Spec.MaxTurns > sh || used.Calls >= sh || a.USD > 0 && used.USD >= a.dollars(sh) {
+		if x.Spec.Kind == "subagent" && used.Calls+x.Spec.MaxTurns-goTurns(x.Spec.Name) > sh || used.Calls >= sh || a.USD > 0 && used.USD >= a.dollars(sh) {
 			return &agent.Refusal{Kind: agent.ErrPolicy, Reason: fmt.Sprintf("%s's budget class (%s) has spent %d of its %d calls ($%.2f of $%.2f)", x.Spec.Name,
 				cmpStr(x.Spec.Name == "sweep", "sweep", x.Spec.Class), used.Calls, sh, used.USD, a.dollars(sh)), Next: "work with what the ledger holds: draft, run committee, or finish"}
 		}
@@ -154,7 +154,8 @@ func cmpStr(c bool, a, b string) string {
 const costliest = "max:"
 
 // classSpend is what the task's lead steps spent (calls and USD), by tool class ("sweep" for sweep
-// alone, "*" for all, lead turns included; costliest+tool: its costliest step's USD), from the step log.
+// alone, "*" for all, lead turns included; costliest+tool: its costliest step's USD), from the step log;
+// the draft class's calls are its drafters', not its sections' figure readers' (kRead, lab-r4 r5 L4).
 func (e *Engine) classSpend(ctx context.Context, taskID string) (map[string]agent.Usage, error) {
 	q, err := e.db.QueryContext(ctx, `SELECT tool, coalesce(sum((usage->>'calls')::int), 0), coalesce(sum((usage->>'usd')::float8), 0),
 		coalesce(max((usage->>'usd')::float8), 0) FROM task_steps WHERE task_id = $1 AND status <> 'started' GROUP BY tool`, taskID)
@@ -181,7 +182,19 @@ func (e *Engine) classSpend(ctx context.Context, taskID string) (map[string]agen
 			out[k] = v
 		}
 	}
-	return out, q.Err()
+	if err := q.Err(); err != nil {
+		return nil, err
+	}
+	read, err := load[int](ctx, e, taskID, kRead) // a drafted section's figure reader is not its drafter: not the draft class's
+	if err != nil {
+		return nil, err
+	}
+	for _, n := range read {
+		d := out["draft"]
+		d.Calls = max(0, d.Calls-n)
+		out["draft"] = d
+	}
+	return out, nil
 }
 
 // fallbackPlan records the packs' checklist as the plan and says so in Limitations (P1).

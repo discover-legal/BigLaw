@@ -10,16 +10,21 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // The meaning half of figure reading (lab-r4 r4, owner decision): the figure-reading agent (the
 // engine's read_figures) labels each span code found (Spans) with what it measures, and ReadLabels
 // checks the labels mechanically before anything reads them: a label may name only a span it was
-// given, a scale must come from a span or from text the passage literally holds, a decimal mark must
-// fit the span's form, a scale is a power of ten, and anything it cannot check, or that the agent says
-// is unclear, is an unclear reading (low confidence: gated to a lawyer, never verifying by itself).
-// The amount is exact arithmetic on the span's digits: reading × scale × sign, so a reading never
-// states digits the text does not.
+// given; a scale is a power of ten and comes from words its own passage states, whole words outside
+// the span itself (never another passage, never a span id: lab-r4 r5 H1), or it is not applied (the
+// figure is read at scale 1, unclear: r5 M2); a decimal mark must fit the span's form; and anything it
+// cannot check, or that the agent says is unclear, is an unclear reading (low confidence: gated to a
+// lawyer, never verifying by itself). The amount is exact arithmetic on the span's digits: reading ×
+// scale × sign, so a reading never states digits the text does not. A scaled reading states the same
+// figure as another clearly only when the other carries the same scale (SameFigure): a "$500" read
+// "in thousands" never verifies a typed "$500,000" or traces a memo's by itself.
 
 // Kinds a figure can be read as; "unclear" is always allowed.
 const (
@@ -58,7 +63,13 @@ type Label struct {
 	Party     *string `json:"party"`
 	IsRange   bool    `json:"isRange"`
 	RangeWith *string `json:"rangeWith"`
-	Sign      string  `json:"sign"` // positive, negative or unclear
+	Sign      string  `json:"sign"`     // positive, negative or unclear
+	Measures  *string `json:"measures"` // what the figure is an amount of ("initial deposit", "annual revenue")
+	Period    *string `json:"period"`   // the period or date it is for ("fiscal 2023"), null when it states none
+	// TypedEntity is, for a typed value's span, what the analyst's typed entity is to the figure:
+	// "party" (it names the figure's party), "other" (another party: a payer, not the payee), "none"
+	// (not a party at all: "Email", a table's title); null elsewhere or when it cannot tell.
+	TypedEntity *string `json:"typedEntity"`
 }
 
 // Reading is a checked label: what one span states. It is what consumers read (admission, claimSums,
@@ -72,10 +83,16 @@ type Reading struct {
 	Currency  string `json:"currency,omitempty"`
 	Amount    string `json:"amount,omitempty"`
 	Party     string `json:"party,omitempty"`
-	ScaleFrom string `json:"scaleFrom,omitempty"` // the words or span its scale comes from
-	RangeWith string `json:"rangeWith,omitempty"`
-	Unclear   bool   `json:"unclear,omitempty"`
-	Why       string `json:"why,omitempty"` // what made it unclear
+	Scale     string `json:"scale,omitempty"`     // the scale applied ("1000"; "" is 1)
+	ScaleFrom string `json:"scaleFrom,omitempty"` // the words of its passage its scale comes from
+	Measures  string `json:"measures,omitempty"`  // what it is an amount of, as the reader names it
+	Period    string `json:"period,omitempty"`    // the period it is for, as the reader names it
+	// TypedEntity is what the reader says the typed value's entity is to the figure (party, other,
+	// none; "" when it did not say).
+	TypedEntity string `json:"typedEntity,omitempty"`
+	RangeWith   string `json:"rangeWith,omitempty"`
+	Unclear     bool   `json:"unclear,omitempty"`
+	Why         string `json:"why,omitempty"` // what made it unclear
 }
 
 // Clear reports whether the reading is a quantity read with no doubt (money, a count, a percentage).
@@ -159,22 +176,37 @@ func check(p Passage, s Span, l Label, known func(string) bool) Reading {
 	if l.Party != nil && strings.TrimSpace(*l.Party) != "" {
 		r.Party = strings.Join(strings.Fields(*l.Party), " ")
 	}
-	if l.RangeWith != nil && *l.RangeWith != l.Span && known(*l.RangeWith) {
+	if l.RangeWith != nil && *l.RangeWith != l.Span && strings.HasPrefix(*l.RangeWith, p.ID+".s") && known(*l.RangeWith) { // the other end of its own passage's range
 		r.RangeWith = *l.RangeWith
 	}
+	for _, x := range []struct {
+		to *string
+		l  *string
+	}{{&r.Measures, l.Measures}, {&r.Period, l.Period}} {
+		if x.l != nil {
+			*x.to = strings.Join(strings.Fields(*x.l), " ")
+		}
+	}
+	if l.TypedEntity != nil && slices.Contains([]string{"party", "other", "none"}, *l.TypedEntity) {
+		r.TypedEntity = *l.TypedEntity
+	}
 	scale, ok := new(big.Rat).SetString(strings.TrimSpace(l.Scale))
-	if !ok || !powerOfTen(scale) {
+	one := big.NewRat(1, 1)
+	switch {
+	case !ok || !powerOfTen(scale):
 		unclear("its scale is not a power of ten") // a thousand, a million, a lakh: never a factor that makes up digits
-		scale = big.NewRat(1, 1)
-	} else if scale.Cmp(big.NewRat(1, 1)) != 0 {
+		scale = one
+	case scale.Cmp(one) != 0:
 		from := ""
 		if l.ScaleFrom != nil {
 			from = strings.TrimSpace(*l.ScaleFrom)
 		}
-		if from == "" || !known(from) && !strings.Contains(strings.ToLower(p.Text), strings.ToLower(from)) {
-			unclear("its scale comes from nothing the passage states")
+		if !statesScale(p.Text, s, from) { // never applied from nothing (lab-r4 r5 M2)
+			unclear("its scale is not stated by words of its own passage")
+			scale = one
+			break
 		}
-		r.ScaleFrom = from
+		r.Scale, r.ScaleFrom = exactDecimal(scale), from
 	}
 	dec := map[string]byte{".": '.', ",": ','}[l.Decimal]
 	if l.Decimal != "none" && l.Decimal != "" && dec == 0 {
@@ -202,6 +234,36 @@ func check(p Passage, s Span, l Label, known func(string) bool) Reading {
 	return r
 }
 
+// statesScale reports whether from is words text states, outside the span s and at word boundaries:
+// where a figure's scale may come from (lab-r4 r5 H1). Not a span id, not a part of a word ("e" of
+// "fee"), not the span's own digits, never another passage's words; at least one letter or sign.
+func statesScale(text string, s Span, from string) bool {
+	if from == "" || !strings.ContainsFunc(from, func(r rune) bool { return !unicode.IsDigit(r) && !unicode.IsSpace(r) }) {
+		return false
+	}
+	low, f := strings.ToLower(text), strings.ToLower(from)
+	for i := 0; i+len(f) <= len(low); {
+		k := strings.Index(low[i:], f)
+		if k < 0 {
+			return false
+		}
+		a, b := i+k, i+k+len(f)
+		i = a + 1
+		if a < s.End && s.Start < b { // the span itself
+			continue
+		}
+		edge := func(r rune, word bool) bool { return !word || !isWordRune(r) }
+		before := a == 0 || a == s.End || edge(lastRune(low[:a]), isWordRune(firstRune(f))) // glued to its own span: "$5M", "4.2bn"
+		after := b == len(low) || b == s.Start || edge(firstRune(low[b:]), isWordRune(lastRune(f)))
+		if before && after {
+			return true
+		}
+	}
+	return false
+}
+
+func firstRune(s string) rune { r, _ := utf8.DecodeRuneInString(s); return r }
+
 // powerOfTen reports whether r is 10^k for -3 ≤ k ≤ 15: the only scales a figure is read with
 // (thousands, millions, lakhs, per mille), so a reading's amount is always its written digits shifted,
 // never digits the text does not state.
@@ -216,26 +278,39 @@ func powerOfTen(r *big.Rat) bool {
 	return false
 }
 
-// exactDecimal prints a terminating decimal with every digit (a figure's amount is never rounded).
+// exactDecimal prints a terminating decimal with every digit (a figure's amount is never rounded):
+// its places are the larger power of 2 or 5 in its denominator; a non-terminating one is a fraction.
 func exactDecimal(r *big.Rat) string {
-	for p := 0; p <= 40; p++ {
-		if s := r.FloatString(p); func() bool { x, _ := new(big.Rat).SetString(s); return x.Cmp(r) == 0 }() {
-			return s
+	d := new(big.Int).Set(r.Denom())
+	places := 0
+	for _, f := range []int64{2, 5} {
+		n, m := 0, new(big.Int)
+		for q, rem := new(big.Int).QuoRem(d, big.NewInt(f), m); rem.Sign() == 0; q, rem = new(big.Int).QuoRem(d, big.NewInt(f), m) {
+			d, n = q, n+1
 		}
+		places = max(places, n)
 	}
-	return r.RatString()
+	if d.Cmp(big.NewInt(1)) != 0 {
+		return r.RatString()
+	}
+	return r.FloatString(places)
 }
 
-// SameFigure reports whether two readings state one figure: the same kind, currency and amount.
-// unclear is true when they agree only on what can be read and one of them is unclear (a match a
-// lawyer must confirm).
+// SameFigure reports whether two readings state one figure: the same kind, currency and amount, at
+// the same scale (a "$500" read in thousands is $500,000 only beside another figure read in thousands,
+// never beside a "$500,000": lab-r4 r5 H1). unclear is true when they agree only on what can be read and one of them is unclear,
+// or on their amounts at two scales (a match a lawyer must confirm).
 func SameFigure(a, b Reading) (same, unclear bool) {
 	x, y := a.Rat(), b.Rat()
 	if x == nil || y == nil {
 		return false, false
 	}
 	if a.Clear() && b.Clear() {
-		return a.Kind == b.Kind && a.Currency == b.Currency && x.Cmp(y) == 0, false
+		same = a.Kind == b.Kind && a.Currency == b.Currency && x.Cmp(y) == 0
+		if same && a.Scale != b.Scale {
+			return false, true // one amount at two scales: the same figure only if a lawyer says so
+		}
+		return same, false
 	}
 	kinds := a.Kind == b.Kind || a.Kind == KindUnclear || b.Kind == KindUnclear
 	curs := a.Currency == b.Currency || a.Currency == "" && a.Kind != b.Kind || b.Currency == "" && b.Kind != a.Kind || a.Kind == KindUnclear || b.Kind == KindUnclear

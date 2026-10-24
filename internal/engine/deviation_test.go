@@ -264,10 +264,14 @@ func TestOmissionRequiresVerifiedAbsence(t *testing.T) {
 
 // The mechanical numeric join (v1's deviationNumericJoin → join_discrepancies over the findings).
 func devFindings(trustQuote string, verified bool, trustMetric string) []analysis.Finding {
-	return []analysis.Finding{
+	fs := []analysis.Finding{
 		{FID: "F1", Verified: true, Quotes: []analysis.Quote{{DocumentID: "memo", Quote: qSophiaMemo}}, Values: []analysis.Value{{Entity: "Sophia", Metric: "residuary share", Value: "35%", Fig: read(analysis.KindPercent, "", "35", "Sophia")}}},
 		{FID: "F2", Verified: verified, Quotes: []analysis.Quote{{DocumentID: "trust", Quote: trustQuote}}, Values: []analysis.Value{{Entity: "Sophia", Metric: trustMetric, Value: "30%", Fig: read(analysis.KindPercent, "", "30", "Sophia")}}},
 	}
+	for _, f := range fs { // what each measures: the reader's label, here the analyst's metric
+		f.Values[0].Fig.Measures = f.Values[0].Metric
+	}
+	return fs
 }
 
 func TestDevNumericJoinBothQuotes(t *testing.T) {
@@ -280,6 +284,7 @@ func TestDevNumericJoinBothQuotes(t *testing.T) {
 func TestDevNumericJoinEnumerationGuard(t *testing.T) {
 	fs := devFindings(qSophiaTrust, true, "residuary share")
 	fs[1].Values[0].Value, fs[1].Values[0].Fig = "35%", read(analysis.KindPercent, "", "35", "Sophia")
+	fs[1].Values[0].Fig.Measures = "residuary share"
 	if cs := analysis.Join(fs, nil); len(cs) != 0 {
 		t.Fatalf("a matching value is conformance: %+v", cs)
 	}
@@ -291,8 +296,8 @@ func TestDevNumericJoinSubstringLock(t *testing.T) {
 	}
 }
 
-// Changed: v2 has no judge here and no referent floor for numbers; metric identity is the label,
-// so differently labelled values never join.
+// Changed: v2 has no judge here and no referent floor for numbers; metric identity is the figure
+// reader's label of what each measures, so values it reads as two measures never join.
 func TestDevNumericJoinNoJudgeConservative(t *testing.T) {
 	if cs := analysis.Join(devFindings(qSophiaTrust, true, "sophia trust allocation"), nil); len(cs) != 0 {
 		t.Fatalf("%+v", cs)

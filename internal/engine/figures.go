@@ -12,14 +12,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"slices"
 	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/lib/pq"
+
 	"github.com/discover-legal/BigLaw/internal/agent"
 	"github.com/discover-legal/BigLaw/internal/analysis"
+	"github.com/discover-legal/BigLaw/internal/store"
 )
 
 // Figure reading (lab-r4 r4, owner decision): what a number means is decided by a small agent,
@@ -27,24 +31,49 @@ import (
 // exact_calc), never by a word list in Go. Go finds the spans (analysis.Spans: digits exactly as
 // written), asks the reader to label each by id, checks every label (analysis.ReadLabels), and then
 // only compares: a typed value is admitted when one of its quotes' spans reads as the same kind,
-// currency and exact amount (valueStated); a claim's sum when one does (claimSums); a memo figure
-// traces when a cited span or value reads as it does (G8, lint.go); two figures conflict only when
-// both read as one kind of one party (analysis.Join). An unclear reading is low confidence: its
-// finding is gated for a lawyer, and it never verifies a figure by itself. The reader is called once
-// per admission (a finding's quotes, values and claim batched; one call holds up to maxReadSpans
-// spans) and once per drafted section, out of the calling tool's grant (metered and journaled like any
-// call), and its answers are cached by the hash of what it read (figure_reads), so a run read again
-// gets the same reading.
+// currency, scale and exact amount (valueStated); a claim's sum when one does (claimSums); a memo
+// figure traces only when the reader read it clearly and a cited span or value reads as it does, and
+// a figure it did not read clearly is flagged, never traced (G8, lint.go: fails closed, r5 H2); two
+// figures conflict only when both read as one kind of one party's same measure for the same period
+// (analysis.Join). An unclear reading is low confidence: its finding is gated for a lawyer, and it
+// never verifies a figure by itself. The reader is called once per admission (the findings' quotes,
+// values and claims batched, in parts of at most maxReadSpans spans) and once per drafted section
+// (its worst case reserved before the drafter runs, r5 L4), metered and journaled like any call, and
+// its complete answers are cached (figure_reads), so a run read again gets the same reading.
 
-// readerVersion is part of every cached reading's key: a change to the reader's prompt or request
-// reads every figure again.
-const readerVersion = "read_figures/1"
+// readerSpec is part of every cached reading's key: the hash of the reader's spec, prompt and tools'
+// specs, so an edit to any of them reads every figure again (lab-r4 r5 M3; derived, never bumped by
+// hand). The key also holds the model the reader runs on, the matter (and, for a drafted section, the
+// task) it read for, and exactly what it was sent.
+var readerSpec = readerSpecHash(specFS)
 
-// maxReadSpans and maxReadBytes bound one reader call (its answer is a label per span).
+// readerSpecFiles are the files the reader's behaviour comes from.
+var readerSpecFiles = []string{"specs/agents/read_figures.json", "specs/agents/read_figures.md", "specs/figure_context.json", "specs/exact_calc.json"}
+
+func readerSpecHash(fsys fs.FS) string {
+	h := sha256.New()
+	for _, f := range readerSpecFiles {
+		data, err := fs.ReadFile(fsys, f)
+		if err != nil {
+			panic("engine: " + err.Error())
+		}
+		fmt.Fprintf(h, "%s %d\n", f, len(data))
+		h.Write(data)
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// The bounds of one reader call (its answer is a label per span), below its input schema's: a call
+// holds at most maxReadItems parts of maxReadSpans spans and maxReadBytes of text in all, a part at
+// most maxReadPassages passages. A finding or section over them is read in several parts (a passage's
+// spans split between parts); a span over maxSpanText characters or a passage over maxReadBytes is
+// not sent at all (it stays unread, unclear), so one oversized item never sinks the others (r5 L1).
 const (
-	maxReadSpans = 80
-	maxReadBytes = 32_000
-	maxReadItems = 40
+	maxReadSpans    = 80
+	maxReadBytes    = 32_000
+	maxReadItems    = 40
+	maxReadPassages = 60
+	maxSpanText     = 64
 )
 
 type spanIn struct {
@@ -69,12 +98,13 @@ type passageIn struct {
 // reading is one item of the reader's work: a finding's passages, or a section's.
 type reading struct {
 	ps      []analysis.Passage
-	in      []passageIn
+	in      []passageIn // what is sent of each passage: its spans that fit
 	parties []string
-	key     string
+	memo    bool // a drafted section: its cached reading is the task's own (r5 L3)
 	labels  []analysis.Label
-	read    bool   // the reader answered for it, or the cache held its answer
-	why     string // why it was not read
+	read    bool              // the reader answered for all of it (or the cache held its answers)
+	why     string            // why some of it was not read
+	unread  map[string]string // span id → why it was not read (not sent, or its part was not read)
 }
 
 func strp(s string) *string {
@@ -84,36 +114,112 @@ func strp(s string) *string {
 	return &s
 }
 
-// newReading is a reading item over ps (each with its spans) and what the reader is told of each.
+// newReading is a reading item over ps (each with its spans) and what the reader is told of each:
+// every span that fits (maxSpanText) of every passage that fits (maxReadBytes).
 func newReading(parties []string, ps []analysis.Passage, in []passageIn) *reading {
-	r := &reading{ps: ps, in: in, parties: parties}
+	r := &reading{ps: ps, in: in, parties: parties, unread: map[string]string{}}
 	for i := range in {
 		in[i].Spans = []spanIn{}
 		for k, s := range ps[i].Spans {
-			in[i].Spans = append(in[i].Spans, spanIn{analysis.SpanID(ps[i].ID, k), s.Text})
+			id := analysis.SpanID(ps[i].ID, k)
+			switch {
+			case len(in[i].Text) > maxReadBytes:
+				r.unread[id] = "its passage is too long for the figure reader"
+			case len(s.Text) > maxSpanText:
+				r.unread[id] = "it is too long for the figure reader (an identifier)"
+			default:
+				in[i].Spans = append(in[i].Spans, spanIn{id, s.Text})
+			}
 		}
 	}
-	data, _ := json.Marshal(map[string]any{"v": readerVersion, "parties": parties, "passages": in})
-	sum := sha256.Sum256(data)
-	r.key = hex.EncodeToString(sum[:])
 	return r
 }
 
-func (r *reading) spans() (n, bytes int) {
-	for i, p := range r.ps {
-		n, bytes = n+len(p.Spans), bytes+len(r.in[i].Text)
+// part is one call's share of an item: some of its passages, each with some of its spans.
+type part struct {
+	it    *reading
+	in    []passageIn
+	ids   []string
+	bytes int
+	key   string
+}
+
+// parts splits an item into parts within the call bounds, in passage and span order.
+func (r *reading) parts() []*part {
+	var out []*part
+	cur := &part{it: r}
+	flush := func() {
+		if len(cur.ids) > 0 {
+			out = append(out, cur)
+		}
+		cur = &part{it: r}
 	}
-	return n, bytes
+	for _, p := range r.in {
+		for len(p.Spans) > 0 {
+			if len(cur.in) == maxReadPassages || len(cur.ids) == maxReadSpans || cur.bytes+len(p.Text) > maxReadBytes {
+				flush()
+			}
+			n := min(len(p.Spans), maxReadSpans-len(cur.ids))
+			q := p
+			q.Spans = slices.Clone(p.Spans[:n])
+			p.Spans = p.Spans[n:]
+			cur.in, cur.bytes = append(cur.in, q), cur.bytes+len(q.Text)
+			for _, s := range q.Spans {
+				cur.ids = append(cur.ids, s.ID)
+			}
+		}
+	}
+	flush()
+	return out
+}
+
+// passages are the checked passages a part was sent (for checking its answer is complete).
+func (pt *part) passages() []analysis.Passage {
+	var out []analysis.Passage
+	for _, p := range pt.in {
+		i := slices.IndexFunc(pt.it.ps, func(x analysis.Passage) bool { return x.ID == p.ID })
+		x := pt.it.ps[i]
+		var ss []analysis.Span
+		for k, s := range x.Spans {
+			if slices.ContainsFunc(p.Spans, func(y spanIn) bool { return y.ID == analysis.SpanID(x.ID, k) }) {
+				ss = append(ss, s)
+			} else {
+				ss = append(ss, analysis.Span{Start: -1, End: -1}) // keeps the ids of the spans it was sent
+			}
+		}
+		x.Spans = ss
+		out = append(out, x)
+	}
+	return out
+}
+
+// complete reports whether labels are an answer for exactly the part's spans: one accepted label for
+// each span id it was sent, none for any other. Only a complete answer is cached (r5 M3).
+func (pt *part) complete(labels []analysis.Label) bool {
+	if len(labels) != len(pt.ids) {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, l := range labels {
+		if !slices.Contains(pt.ids, l.Span) || seen[l.Span] {
+			return false
+		}
+		seen[l.Span] = true
+	}
+	_, notes := analysis.ReadLabels(pt.passages(), labels)
+	return len(notes) == 0
 }
 
 // readings is the item's checked readings by span id, and the reader's refused labels.
 func (r *reading) readings() (map[string]analysis.Reading, []string) {
 	rs, notes := analysis.ReadLabels(r.ps, r.labels)
-	if !r.read {
-		for id, x := range rs {
+	for id, x := range rs {
+		if why, ok := r.unread[id]; ok {
+			x.Unclear, x.Why = true, "not read: "+why
+		} else if !r.read && x.Why == "not read" {
 			x.Why = "not read: " + r.why
-			rs[id] = x
 		}
+		rs[id] = x
 	}
 	return rs, notes
 }
@@ -154,59 +260,109 @@ func findingReading(f Finding, quotes []analysis.Quote, vals []analysis.Value) *
 }
 
 // readFigures has the reader label every item's spans: from the cache, else in calls of up to
-// maxReadSpans spans out of b. An item it could not read (no model, the grant could not fund it, the
-// call failed or answered off its schema) keeps why; only a stop or a journal failure is an error.
+// maxReadItems parts out of b, on one model (picked before the calls, so it is part of the cache key).
+// An item it could not read in full (no model, the grant could not fund it, a call failed or answered
+// off its schema) keeps why, for the spans it was not read for; only a stop or a journal or database
+// failure is an error.
 func (e *Engine) readFigures(ctx context.Context, rt *agent.Runtime, c agent.Call, b *agent.Budget, caller string, items []*reading) error {
-	var todo []*reading
+	model, models := "", []string(nil)
+	if rt != nil && rt.Chat != nil && rt.Reg != nil {
+		models = rt.Candidates(spec("read_figures").Role)
+		model = rt.Bandit.PickModel(ctx, "read_figures", models)
+	}
+	models = append([]string{model}, slices.DeleteFunc(models, func(m string) bool { return m == model })...) // a reading any candidate model made is reused before another call
+	scope, err := e.readScope(ctx, c.TaskID)
+	if err != nil {
+		return err
+	}
+	var todo []*part
 	for _, it := range items {
-		if n, _ := it.spans(); n == 0 {
-			it.read = true
-			continue
+		it.read = true
+	parts:
+		for _, pt := range it.parts() {
+			for _, m := range models {
+				labels, ok, err := e.cachedReading(ctx, readKey(m, scope, cmpStr(it.memo, c.TaskID, ""), it.parties, pt.in), m, scope != "")
+				if err != nil {
+					return err
+				}
+				if ok {
+					it.labels = append(it.labels, labels...)
+					continue parts
+				}
+			}
+			pt.key = readKey(model, scope, cmpStr(it.memo, c.TaskID, ""), it.parties, pt.in)
+			todo = append(todo, pt)
 		}
-		labels, ok, err := e.cachedReading(ctx, it.key)
-		if err != nil {
-			return err
-		}
-		if ok {
-			it.labels, it.read = labels, true
-			continue
-		}
-		todo = append(todo, it)
 	}
 	for len(todo) > 0 {
-		k, spans, bytes := 0, 0, 0
-		for k < len(todo) && k < maxReadItems {
-			n, by := todo[k].spans()
-			if k > 0 && (spans+n > maxReadSpans || bytes+by > maxReadBytes) {
-				break
-			}
-			k, spans, bytes = k+1, spans+n, bytes+by
+		k, bytes := 0, 0
+		for k < len(todo) && k < maxReadItems && (k == 0 || bytes+todo[k].bytes <= maxReadBytes) {
+			k, bytes = k+1, bytes+todo[k].bytes
 		}
 		chunk := todo[:k]
 		todo = todo[k:]
-		why, err := e.readChunk(ctx, rt, c, b, caller, chunk)
+		why, err := e.readChunk(ctx, rt, c, b, caller, model, scope, chunk)
 		if err != nil {
 			return err
 		}
-		for _, it := range chunk {
-			if !it.read {
-				it.why = why
+		if why == "" {
+			continue
+		}
+		for _, pt := range chunk {
+			pt.it.read, pt.it.why = false, why
+			for _, id := range pt.ids {
+				pt.it.unread[id] = why
 			}
 		}
 	}
 	return nil
 }
 
-// readChunk is one reader call over chunk: span ids prefixed by the item's number in the call.
-func (e *Engine) readChunk(ctx context.Context, rt *agent.Runtime, c agent.Call, b *agent.Budget, caller string, chunk []*reading) (string, error) {
+// readerReserve is the worst case of the figure reader's answer over a drafted section (one turn, at
+// most maxReadBytes of text and maxReadSpans spans), on the model it would run on: held back from the
+// drafter's grant (which holds the call beside the drafter's own turns, goTurns) when the grant
+// holds more than that.
+func readerReserve(ctx context.Context, rt *agent.Runtime) agent.Grant {
 	if rt == nil || rt.Chat == nil || rt.Reg == nil {
+		return agent.Grant{}
+	}
+	s := spec("read_figures")
+	s.MaxTurns = 1
+	return rt.WorstCase(s, prompt("agents/read_figures"), rt.Bandit.PickModel(ctx, "read_figures", rt.Candidates(s.Role)), maxReadBytes+maxReadSpans*(maxSpanText+32))
+}
+
+// readScope is the matter a task reads for ("" outside a task: nothing is cached).
+func (e *Engine) readScope(ctx context.Context, taskID string) (string, error) {
+	if taskID == "" || e.db == nil {
+		return "", nil
+	}
+	var matter string
+	err := e.db.QueryRowContext(ctx, `SELECT matter_number FROM tasks WHERE id = $1`, taskID).Scan(&matter)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return "matter:" + matter, err
+}
+
+// readKey is a part's cache key: the reader's spec, the model, the matter (and a section's task), the
+// parties it was told and exactly what it was sent.
+func readKey(model, scope, task string, parties []string, in []passageIn) string {
+	data, _ := json.Marshal(map[string]any{"spec": readerSpec, "model": model, "scope": scope, "task": task, "parties": parties, "passages": in})
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+// readChunk is one reader call over chunk: span ids prefixed by the part's number in the call. A
+// part's answer is used as given (an unlabelled span stays unclear) and cached only when complete.
+func (e *Engine) readChunk(ctx context.Context, rt *agent.Runtime, c agent.Call, b *agent.Budget, caller, model, scope string, chunk []*part) (string, error) {
+	if model == "" {
 		return "no model was available for it", nil
 	}
 	var findings []map[string]any
-	for i, it := range chunk {
+	for i, pt := range chunk {
 		pre := strconv.Itoa(i+1) + "."
-		ps := make([]passageIn, len(it.in))
-		for j, p := range it.in {
+		ps := make([]passageIn, len(pt.in))
+		for j, p := range pt.in {
 			p.ID = pre + p.ID
 			p.Spans = slices.Clone(p.Spans)
 			for k := range p.Spans {
@@ -214,10 +370,10 @@ func (e *Engine) readChunk(ctx context.Context, rt *agent.Runtime, c agent.Call,
 			}
 			ps[j] = p
 		}
-		findings = append(findings, map[string]any{"id": strconv.Itoa(i + 1), "parties": append([]string{}, it.parties...), "passages": ps})
+		findings = append(findings, map[string]any{"id": strconv.Itoa(i + 1), "parties": append([]string{}, pt.it.parties...), "passages": ps})
 	}
 	input, _ := json.Marshal(map[string]any{"findings": findings})
-	res, err := rt.Invoke(ctx, agent.Agent{Name: caller, Visible: []string{"read_figures"}}, agent.Call{TaskID: c.TaskID, DocumentIDs: c.DocumentIDs}, "read_figures", input, b, false, 0)
+	res, err := rt.Invoke(ctx, agent.Agent{Name: caller, Visible: []string{"read_figures"}}, agent.Call{TaskID: c.TaskID, DocumentIDs: c.DocumentIDs, Model: model}, "read_figures", input, b, false, 0)
 	switch {
 	case ctx.Err() != nil:
 		return "", ctx.Err()
@@ -248,17 +404,30 @@ func (e *Engine) readChunk(ctx context.Context, rt *agent.Runtime, c agent.Call,
 		}
 		by[i-1] = append(by[i-1], l)
 	}
-	for i, it := range chunk {
-		it.labels, it.read = by[i], true
-		if err := e.cacheReading(ctx, it.key, res.Model, by[i]); err != nil {
-			return "", err
+	for i, pt := range chunk {
+		pt.it.labels = append(pt.it.labels, by[i]...)
+		if !pt.complete(by[i]) { // an empty, partial or refused answer is this run's only: never cached
+			for _, id := range pt.ids {
+				if !slices.ContainsFunc(by[i], func(l analysis.Label) bool { return l.Span == id }) {
+					pt.it.unread[id] = "the figure reader gave it no label"
+				}
+			}
+			continue
+		}
+		if scope != "" {
+			if err := e.cacheReading(ctx, pt, c.TaskID, scope, model, by[i]); err != nil {
+				return "", err
+			}
 		}
 	}
 	return "", nil
 }
 
-// cachedReading is the reader's stored answer for key (figure_reads).
-func (e *Engine) cachedReading(ctx context.Context, key string) ([]analysis.Label, bool, error) {
+// cachedReading is the reader's stored answer for key (figure_reads), when caching is on.
+func (e *Engine) cachedReading(ctx context.Context, key, model string, on bool) ([]analysis.Label, bool, error) {
+	if !on || model == "" {
+		return nil, false, nil
+	}
 	var data []byte
 	err := e.db.QueryRowContext(ctx, `SELECT labels FROM figure_reads WHERE key = $1`, key).Scan(&data)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -273,12 +442,19 @@ func (e *Engine) cachedReading(ctx context.Context, key string) ([]analysis.Labe
 	return labels, true, nil
 }
 
-// cacheReading stores the reader's answer for key; the first answer stored is the one every later
-// reading of the same passages gets.
-func (e *Engine) cacheReading(ctx context.Context, key, model string, labels []analysis.Label) error {
-	data, err := json.Marshal(append([]analysis.Label{}, labels...))
+// cacheReading stores a part's complete answer, under the task that read it (deleted with it) and
+// the documents its quotes are from (deleted with any of them).
+func (e *Engine) cacheReading(ctx context.Context, pt *part, taskID, scope, model string, labels []analysis.Label) error {
+	docs := []string{}
+	for _, p := range pt.in {
+		if p.DocumentID != nil && store.ValidID(*p.DocumentID) && !slices.Contains(docs, *p.DocumentID) {
+			docs = append(docs, *p.DocumentID)
+		}
+	}
+	data, err := json.Marshal(labels)
 	if err == nil {
-		_, err = e.db.ExecContext(ctx, `INSERT INTO figure_reads (key, labels, model) VALUES ($1, $2, $3) ON CONFLICT (key) DO NOTHING`, key, data, model)
+		_, err = e.db.ExecContext(ctx, `INSERT INTO figure_reads (key, labels, model, task_id, matter_number, document_ids) VALUES ($1, $2, $3, $4, $5, $6)
+			ON CONFLICT (key) DO NOTHING`, pt.key, data, model, taskID, strings.TrimPrefix(scope, "matter:"), pq.Array(docs))
 	}
 	return err
 }
@@ -339,7 +515,7 @@ func valueStated(v analysis.Value, j int, rs map[string]analysis.Reading, quotes
 		if analysis.ParseClass(v.Class) == "Date" {
 			for _, r := range own {
 				if r.Party != "" && !r.Unclear {
-					return &analysis.Reading{Kind: analysis.KindDate, Text: v.Value, Party: r.Party}, true, false, ""
+					return &analysis.Reading{Kind: analysis.KindDate, Text: v.Value, Party: r.Party, Measures: r.Measures, Period: r.Period}, true, false, ""
 				}
 			}
 		}
@@ -381,7 +557,11 @@ func valueStated(v analysis.Value, j int, rs map[string]analysis.Reading, quotes
 		}
 	}
 	if soft != nil {
-		vr.Unclear, vr.Why = true, cmpStr(vr.Unclear, vr.Why, soft.Why)
+		why := cmpStr(vr.Unclear, vr.Why, soft.Why)
+		if why == "" { // both clear, at two scales (lab-r4 r5 H1): the same figure only if a lawyer says so
+			why = "its quote states " + cmpStr(soft.ScaleFrom != "", soft.Text+" "+soft.ScaleFrom, soft.Text) + ", at another scale than the value"
+		}
+		vr.Unclear, vr.Why = true, why
 		return &vr, true, true, ""
 	}
 	if vr.Unclear && why != "" {

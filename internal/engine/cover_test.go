@@ -171,6 +171,7 @@ func TestCoverageDraftsLeftOutEvidence(t *testing.T) {
 		"2. Recordkeeping\nThe Firm did not retain allocation records for 2,614 of the omnibus trades executed during the Review Period.\n"
 	stats := "Total Omnibus Equity Trades Analyzed\t4,312\tTrades executed through WCA omnibus account at Meridian Clearing Corp. during Review Period\n"
 	f := newFixture(t, referral, stats)
+	f.measures = map[string]string{"4,217": "omnibus equity trades analysed", "4,312": "omnibus equity trades analysed"} // the right labels: one count typed two ways
 	d1, d2 := f.docs[0].ID, f.docs[1].ID
 	q1 := "The Division's Office of Quantitative Research analyzed 4,217 equity trades executed through the omnibus account during the Review Period"
 	q2 := "Total Omnibus Equity Trades Analyzed\t4,312\tTrades executed through WCA omnibus account at Meridian Clearing Corp. during Review Period"

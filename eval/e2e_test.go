@@ -79,7 +79,7 @@ func TestE2EServe(t *testing.T) {
 		sc[k] = v
 	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	e := engine.New(st, d, slow{model.NewFake(sc)}, model.Roles{Lead: "fake-lead"}, nil, engine.Config{BudgetCalls: 150, BudgetUSD: 5, CollapseThreshold: 0.5, CollapseAction: "strict"}, log)
+	e := engine.New(st, d, slow{readerFake(sc)}, model.Roles{Lead: "fake-lead"}, nil, engine.Config{BudgetCalls: 150, BudgetUSD: 5, CollapseThreshold: 0.5, CollapseAction: "strict"}, log)
 	mux := api.Handler(d, e, os.DirFS("../ui/dist"), log)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`{"status":"ok"}`)) })
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)

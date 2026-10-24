@@ -48,9 +48,12 @@ const (
 )
 
 // fourPlanted is the four planted discrepancies, each value read as the record has it: the exhibit
-// rows and the e-mail name no party, the reader reads them as Ostrowski's (the right labels).
+// rows name no party, the reader reads them as Ostrowski's, and it reads the e-mail's date and the
+// instruction's as one event's, the instruction to clean up the shared drive (the right labels); the
+// e-mail's typed entity, Chen, is its recipient, another party than the reader's.
 func fourPlanted() []Finding {
-	return readParties([]Finding{
+	instruction := "instruction to clean up the shared drive"
+	return readAs([]Finding{
 		fh("4,217", qTradesReferral, "referral", "Ostrowski", "omnibus trade count"),
 		fh("4,312", qTradesExhibit, "exhibit-c", "", "omnibus trade count"),
 		fh("$92,600", qCompReferral, "referral", "Ostrowski", "undisclosed compensation total"),
@@ -59,21 +62,28 @@ func fourPlanted() []Finding {
 		fh("April 22, 2024", qDateReferral, "referral", "Ostrowski", "obstruction instruction date"),
 		fh("73%", qRateReferral, "referral", "Ostrowski", "profitable omnibus allocation rate"),
 		fh("78%", qRateExhibit, "exhibit-f", "", "profitable omnibus allocation rate"),
-	}, map[string]string{"4,312": "Ostrowski", "78%": "Ostrowski", "Mon, 15 Apr 2024 09:23:47 -0400": "Ostrowski"})
+	}, map[string]relabel{"4,312": {party: "Ostrowski"}, "78%": {party: "Ostrowski"},
+		"Mon, 15 Apr 2024 09:23:47 -0400": {party: "Ostrowski", measures: instruction, entity: "other"}, "April 22, 2024": {measures: instruction}})
 }
 
+// The planted numeric discrepancies are found; the dates are one event's, but the e-mail's typed
+// entity is another party than the reader's (its recipient), so no conflict is asserted on it (lab-r4
+// r5 M4: the reader's party never overrides the analyst's entity); read with the e-mail's entity as no
+// party at all, they are a date conflict.
 func TestCrossDocAllFourPlantedDiscrepancies(t *testing.T) {
 	cs := joinRead(fourPlanted(), []Alias{{"Ostrowski", []string{"Bayshore Palms LLC"}}})
-	if len(cs) != 4 {
-		t.Fatalf("want 4 discrepancies, got %d: %+v", len(cs), cs)
+	if len(cs) != 3 {
+		t.Fatalf("want 3 discrepancies, got %d: %+v", len(cs), cs)
 	}
-	for _, p := range [][2]string{{"4,217", "4,312"}, {"$92,600", "$103,800"}, {"73%", "78%"}, {"15 Apr 2024", "April 22, 2024"}} {
+	for _, p := range [][2]string{{"4,217", "4,312"}, {"$92,600", "$103,800"}, {"73%", "78%"}} {
 		c := has(cs, p[0], p[1])
 		if c == nil || c.Values[0].DocumentID == c.Values[1].DocumentID || c.Values[0].FID == "" {
 			t.Errorf("%s vs %s: %+v", p[0], p[1], c)
 		}
 	}
-	if c := has(cs, "15 Apr", "April 22"); c == nil || c.Kind != "date" {
+	fs := fourPlanted()
+	fs[4].Values[0].Fig.TypedEntity = "none"
+	if c := has(Join(fs, nil), "15 Apr", "April 22"); c == nil || c.Kind != "date" {
 		t.Error("the e-mail header date did not join the instruction date as one event")
 	}
 	// Without the lead's alias, Ostrowski and Bayshore Palms LLC stay separate parties.
@@ -127,12 +137,13 @@ func TestCrossDocAliasUnificationDeterministicGraphTie(t *testing.T) {
 	}
 }
 
-// TestNearConflictsAcrossLabels (bench r3, SEC: the lead's join found nothing, though the record
+// TestJoinReadsMeasuresAcrossLabels (bench r3, SEC: the lead's join found nothing, though the record
 // states 4,217 vs 4,312 trades analysed, $92,600 vs $103,800 paid to the club, 73% vs 78% of volume
-// and April 22 vs April 15 for the deletion instruction): values of one class from two documents,
-// near each other, whose quotes share three distinctive words are a conflict whatever their labels;
-// a figure restated in the other document, far apart values, or quotes about other things are not.
-func TestNearConflictsAcrossLabels(t *testing.T) {
+// and April 22 vs April 15 for the deletion instruction, each typed under another metric label): what
+// each figure measures is the figure reader's label (lab-r4 r5 L2), so values the reader reads as one
+// measure of one party are compared whatever the extractor's labels; the same figure in both, other
+// measures, table rows of other things and small counts of other things are not conflicts.
+func TestJoinReadsMeasuresAcrossLabels(t *testing.T) {
 	v := func(value, class, metric string) Value {
 		return Value{Entity: "WCA", Metric: metric, Value: value, Class: class}
 	}
@@ -148,17 +159,19 @@ func TestNearConflictsAcrossLabels(t *testing.T) {
 		f("F6", "stats", "Omnibus Trades as % of Total Equity Trading Volume\tApproximately 78%\t5,776 omnibus trades out of total equity trading volume", v("78%", "Percentage", "omnibus trades percentage")),
 		f("F7", "referral", "On or about April 22, 2024, during the pendency of the SEC examination of WCA (which had commenced on March 11, 2024), Whitmore instructed WCA's IT Administrator, Tomás Delgado (\"Delgado\"), to \"clean up the shared drive\"", v("April 22, 2024", "Date", "deletion instruction")),
 		f("F8", "email", "From: Gerald R. Whitmore <gwhitmore@whitmorecapital.com>\nTo: Tomás Delgado <tdelgado@whitmorecapital.com>\nDate: Mon, 15 Apr 2024 09:23:47 -0400", v("Mon, 15 Apr 2024", "Date", "email sent")),
-		// not conflicts: the same figure in both, a far value, unrelated quotes
+		// not conflicts: the same figure in both, a far value of another measure, unrelated quotes
 		f("F9", "stats", "WCA executed 5,776 omnibus trades out of 7,912 equity trades.", v("5,776", "Count", "omnibus trades")),
 		f("F10", "bank", "Initiation fee paid to Bayshore Palms Golf & Country Club for Bellini: $45,000.00", v("$45,000.00", "Money", "initiation fee")),
 		f("F11", "manual", "Access persons file quarterly reports of personal securities transactions within 30 days.", v("4,400", "Count", "reports filed")),
-		// rows of two tables (a trade each), and small figures, are not compared by nearness
 		f("F12", "stats", "OMN-2021-00142\t2021-02-17\tXYZ Corp (XYZ)\tBuy\t25,000\t$48.32\t$1,208,000\tOceanic Fund I LP", v("$1,208,000", "Money", "notional"), v("2021-02-17", "Date", "trade date")),
 		f("F13", "log", "2021-02-24\tXYZ Corp (XYZ)\tBuy\t26,000\t$48.90\t$1,271,400\tOceanic Fund I LP", v("$1,271,400", "Money", "trade value"), v("2021-02-24", "Date", "executed")),
 		f("F14", "bank", "Monthly dues for Bellini at Bayshore Palms Golf & Country Club were $2,800 per month for 21 months", v("21", "Count", "months of dues")),
 		f("F15", "referral", "Monthly membership dues for Bellini at Bayshore Palms Golf & Country Club of $2,800 per month for a period of 17 months", v("17", "Count", "months")),
 	}
-	cs := joinRead(fs, nil)
+	trades, paid, share, instr := relabel{measures: "omnibus equity trades analysed"}, relabel{measures: "payments to Bayshore Palms for Bellini"},
+		relabel{measures: "omnibus share of equity trading volume"}, relabel{measures: "instruction to clean up the shared drive"}
+	cs := Join(readAs(fs, map[string]relabel{"4,217": trades, "4,312": trades, "$92,600": paid, "$103,800.00": paid, "73%": share, "78%": share,
+		"April 22, 2024": instr, "Mon, 15 Apr 2024": instr}), nil)
 	for _, p := range [][2]string{{"4,217", "4,312"}, {"$92,600", "$103,800.00"}, {"73%", "78%"}, {"April 22, 2024", "Mon, 15 Apr 2024"}} {
 		if has(cs, p[0], p[1]) == nil {
 			t.Errorf("%s vs %s not found: %+v", p[0], p[1], cs)
@@ -167,32 +180,44 @@ func TestNearConflictsAcrossLabels(t *testing.T) {
 	if len(cs) != 4 {
 		t.Errorf("%d conflicts, want the 4: %+v", len(cs), cs)
 	}
+	if cs := joinRead(fs, nil); len(cs) != 0 { // read under the extractor's own labels, they are other measures
+		t.Errorf("figures the reader reads as other measures compared: %+v", cs)
+	}
 }
 
-// Whose figure a value is, is the figure reader's: two labels of one person ("Ostrowski", "Richard
-// Ostrowski") are one party when it reads them so, and no name containment in Go makes them one (lab-r4
-// r4, owner decision: no party-label heuristics).
+// Whose figure a value is, is the figure reader's, and two typed names of one person ("Ostrowski",
+// "Richard Ostrowski") are one party only by the lead's alias or the reader's saying the typed entity
+// names its party: no name containment in Go makes them one (lab-r4 r4), and the reader's party alone
+// does not override the analyst's entity (r5 M4).
 func TestCrossDocAliasTokenContainment(t *testing.T) {
 	fs := []Finding{
 		fh("4,217", "Ostrowski reviewed a total of 4,217 omnibus equity trades in the sample.", "referral", "Ostrowski", "omnibus trade count"),
 		fh("4,312", "Richard Ostrowski analyzed 4,312 omnibus equity trades across the sample.", "exhibit-c", "Richard Ostrowski", "omnibus trade count"),
 	}
-	if cs := Join(readParties(fs, map[string]string{"4,217": "Richard Ostrowski"}), nil); has(cs, "4,217", "4,312") == nil {
+	if cs := Join(readAs(fs, map[string]relabel{"4,217": {party: "Richard Ostrowski", entity: "party"}}), nil); has(cs, "4,217", "4,312") == nil {
 		t.Fatalf("one party's figures under two labels did not pair: %+v", cs)
+	}
+	if cs := Join(readAs(fs, map[string]relabel{"4,217": {party: "Richard Ostrowski"}}), nil); len(cs) != 0 {
+		t.Fatalf("the reader's party overrode two typed names: %+v", cs)
+	}
+	if cs := Join(readAs(fs, nil), []Alias{{"Richard Ostrowski", []string{"Ostrowski"}}}); has(cs, "4,217", "4,312") == nil {
+		t.Fatalf("the lead's alias did not unify the typed names: %+v", cs)
 	}
 	if cs := joinRead(fs, nil); len(cs) != 0 {
 		t.Fatalf("two party labels unified by name containment: %+v", cs)
 	}
 }
 
-// v1's no-provider path is v2's only path: numeric and date conflicts survive without a model.
+// v1's no-provider path is v2's only path: numeric and date conflicts survive without a model in
+// the join (the figure reader's labels are its only input).
 func TestCrossDocNoProviderDegradation(t *testing.T) {
-	cs := Join(readParties([]Finding{
+	instr := relabel{party: "Ostrowski", measures: "instruction to clean up the shared drive", entity: "none"}
+	cs := Join(readAs([]Finding{
 		fh("4,217", qTradesReferral, "referral", "Ostrowski", "omnibus trade count"),
 		fh("4,312", qTradesExhibit, "exhibit-c", "", "omnibus trade count"),
-		fh("Mon, 15 Apr 2024 09:23:47 -0400", qDateEmail, "exhibit-e", "Chen", "email sent date"),
+		fh("Mon, 15 Apr 2024 09:23:47 -0400", qDateEmail, "exhibit-e", "", "email sent date"),
 		fh("April 22, 2024", qDateReferral, "referral", "Ostrowski", "obstruction instruction date"),
-	}, map[string]string{"4,312": "Ostrowski", "Mon, 15 Apr 2024 09:23:47 -0400": "Ostrowski"}), nil)
+	}, map[string]relabel{"4,312": {party: "Ostrowski"}, "Mon, 15 Apr 2024 09:23:47 -0400": instr, "April 22, 2024": instr}), nil)
 	if has(cs, "4,217", "4,312") == nil || has(cs, "15 Apr", "April 22") == nil {
 		t.Fatalf("conflicts lost: %+v", cs)
 	}

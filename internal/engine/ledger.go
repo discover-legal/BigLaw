@@ -34,6 +34,7 @@ const (
 	kCover    = "cover"    // key: "pass"; Cover, the coverage pass's outcome (it runs once)
 	kSwept    = "swept"    // key: "sweep"; []SweptDoc, each document's sweep coverage (the latest sweep's)
 	kAlias    = "alias"    // key: a party's folded name; analysis.Alias, the names join_discrepancies was told it goes by
+	kRead     = "figread"  // key: "draft"; the calls drafted sections' figure readers made (not the drafters')
 )
 
 // Issue is one plan issue (the deliverable's spine), typed by a BELO-lite issue class.
@@ -126,10 +127,13 @@ type Section struct {
 	Read *SectionRead `json:"read,omitempty"`
 }
 
-// SectionRead is a section's figure reading: the hash of the text read and its readings (offsets in it).
+// SectionRead is a section's figure reading: the hash of the text read and its readings (offsets in
+// it), and why the reader did not read all of it ("" when it did): Limitations discloses that, and
+// G8 flags every figure it did not read (lab-r4 r5 L4).
 type SectionRead struct {
-	Hash string             `json:"hash"`
-	Figs []analysis.Reading `json:"figs"`
+	Hash   string             `json:"hash"`
+	Figs   []analysis.Reading `json:"figs"`
+	Unread string             `json:"unread,omitempty"`
 }
 
 // Cycle is one committee run: on which draft version, after how many calls, finding what.

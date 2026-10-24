@@ -191,11 +191,22 @@ type hooked struct {
 	rt *agent.Runtime
 }
 
+// goTurns are the calls Go makes after a hooked subagent out of its grant, held back from it: the
+// figure reader of a drafted section (lab-r4 r5 L4: reserved before the drafter runs, never what it
+// left). They are not the subagent's turns: P4's class share counts only those.
+func goTurns(name string) int {
+	if name == "draft_section" {
+		return 1
+	}
+	return 0
+}
+
 func (h hooked) Spec() agent.Spec {
 	s := h.Tool.Spec()
 	if s.Name == "check_deviation" { // its grant holds the requirement's check beside the subagent's own turns
 		s.MaxTurns++
 	}
+	s.MaxTurns += goTurns(s.Name)
 	if s.Name == "draft_section" {
 		s.Out = json.RawMessage(`{"type":"object","additionalProperties":false,"required":["issueId","version","words"],"properties":{"issueId":{"type":"string"},"version":{"type":"integer"},"words":{"type":"integer"}}}`)
 	} else {
@@ -212,6 +223,7 @@ func (h hooked) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 	var draft draftReq
 	var rq reqText
 	var preUse agent.Usage // spent before the subagent ran (check_deviation's requirement check)
+	var held agent.Grant   // kept from the subagent for Go's calls after it (draft_section's figure reader)
 	switch name {
 	case "extract_facts":
 		if str("issueId") == "" { // the plan's issues: each finding names the one it bears on (bench5 SEC: 896 findings, most on none)
@@ -277,6 +289,9 @@ func (h hooked) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 			return agent.Result{}, err
 		}
 		in = draft.request
+		if r := readerReserve(ctx, h.rt); c.Budget.Calls > r.Calls && (r.USD == 0 || c.Budget.USD > r.USD) { // the figure reader of its draft, held back from the drafter (lab-r4 r5 L4)
+			held, c.Budget = r, agent.Grant{Calls: c.Budget.Calls - r.Calls, USD: c.Budget.USD - r.USD}
+		}
 	}
 	c.Input, _ = json.Marshal(in)
 	res, err := h.Tool.Call(ctx, c)
@@ -287,7 +302,7 @@ func (h hooked) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 	if err != nil {
 		return res, err
 	}
-	b := agent.NewBudget(c.Budget.Calls-res.Usage.Calls+preUse.Calls, c.Budget.USD-res.Usage.USD+preUse.USD, 0) // c.Budget is already net of preUse
+	b := agent.NewBudget(c.Budget.Calls-res.Usage.Calls+preUse.Calls+held.Calls, c.Budget.USD-res.Usage.USD+preUse.USD+held.USD, 0) // c.Budget is already net of preUse and held
 	var out any
 	var reward float64
 	switch name {

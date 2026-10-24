@@ -229,7 +229,19 @@ func (f finish) check(ctx context.Context, limits []limitation) (report, error) 
 		met := false
 		if k >= 0 {
 			texts[is.ID] = substituteOutsideQuotes(secs[k].Markdown, secs[k].Handles)
-			rep.Lint = append(rep.Lint, lint(is.ID, secs[k], byFID, sheets)...)
+			lines, limited := lintLimited(is.ID, secs[k], byFID, sheets)
+			rep.Lint = append(rep.Lint, lines...)
+			if l := limited[limitedUnread]; len(l) > 0 {
+				rep.limits = append(rep.limits, fmt.Sprintf("Figures: in the section on %s, %s %s traced only as written: the figure reader never read the cited quotes that state %s (its call was unfunded or failed), so what %s is unchecked.",
+					is.ID, strings.Join(l, ", "), plural(len(l), "is", "are"), plural(len(l), "it", "them"), plural(len(l), "it means", "they mean")))
+			}
+			if l := limited[limitedScale]; len(l) > 0 {
+				rep.limits = append(rep.limits, fmt.Sprintf("Figures: in the section on %s, %s %s written at a scale where the cited findings state every digit: %s the same figure only by the figure reader's reading of the scale's words; confirm %s against the cited quotes.",
+					is.ID, strings.Join(l, ", "), plural(len(l), "is", "are"), plural(len(l), "it is", "they are"), plural(len(l), "it", "them")))
+			}
+			if r := secs[k].Read; r != nil && r.Unread != "" { // lab-r4 r5 L4: a section G8 could not trace by its readings
+				rep.limits = append(rep.limits, fmt.Sprintf("Figures: in the section on %s, %s: G8 traces only figures the figure reader read clearly, so each of them that the drafter wrote out (not as a handle) was flagged as not traced rather than checked.", is.ID, r.Unread))
+			}
 			met = slices.ContainsFunc(fidRe.FindAllStringSubmatch(secs[k].Markdown, -1), func(m []string) bool { _, ok := byFID[m[1]]; return ok })
 		}
 		if !met && !disclosed[is.ID] {

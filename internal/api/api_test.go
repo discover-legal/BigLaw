@@ -23,6 +23,7 @@ import (
 
 	"github.com/discover-legal/BigLaw/internal/docs"
 	"github.com/discover-legal/BigLaw/internal/engine"
+	"github.com/discover-legal/BigLaw/internal/engine/figtest"
 	"github.com/discover-legal/BigLaw/internal/model"
 	"github.com/discover-legal/BigLaw/internal/store"
 	"github.com/discover-legal/BigLaw/internal/store/storetest"
@@ -62,7 +63,7 @@ func newServer(t *testing.T, scripts func(docIDs []string) map[string][]model.Re
 	if scripts != nil {
 		sc = scripts(ids)
 	}
-	e := engine.New(st, d, model.NewFake(sc), roles, nil, engine.Config{BudgetCalls: 150, BudgetUSD: 5, CollapseThreshold: 0.5, CollapseAction: "strict"}, slog.New(slog.DiscardHandler))
+	e := engine.New(st, d, readerFake(sc), roles, nil, engine.Config{BudgetCalls: 150, BudgetUSD: 5, CollapseThreshold: 0.5, CollapseAction: "strict"}, slog.New(slog.DiscardHandler))
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { defer close(done); e.Start(ctx) }()
@@ -139,7 +140,8 @@ func (s *server) waitFor(id string, ok func(engine.TaskView) bool) engine.TaskVi
 }
 
 // TestRunProgressAPI: POST /tasks, then GET /tasks/{id} carries run {status, step, stopReason,
-// budget, openFindings}, gates and findings; /steps?after=N pages the log; gates decide; cost.
+// budget, openFindings}, gates and findings; /steps?after=N pages the log; gates decide; cost. The
+// run's 13 calls include the figure reader's two (its finding's, its section's: figtest.Reader).
 func TestRunProgressAPI(t *testing.T) {
 	t.Parallel()
 	s, ids := newServer(t, memo, roles, doc1)
@@ -149,7 +151,7 @@ func TestRunProgressAPI(t *testing.T) {
 		t.Fatalf("%d %s", code, body)
 	}
 	v = s.waitFor(v.ID, func(v engine.TaskView) bool { return v.Status == "awaiting_gate" })
-	if v.Run.StopReason == nil || *v.Run.StopReason != "finished" || v.Run.Step != 10 || v.Run.Budget.Calls != 11 || v.Run.Budget.USD != nil || len(v.Findings) != 1 || v.Output == nil {
+	if v.Run.StopReason == nil || *v.Run.StopReason != "finished" || v.Run.Step != 10 || v.Run.Budget.Calls != 13 || v.Run.Budget.USD != nil || len(v.Findings) != 1 || v.Output == nil {
 		t.Fatalf("%+v", v)
 	}
 	_, body = s.do("GET", "/tasks/"+v.ID+"/steps?after=8", nil)
@@ -177,7 +179,7 @@ func TestRunProgressAPI(t *testing.T) {
 	}
 	_, body = s.do("GET", "/tasks/"+v.ID+"/cost", nil)
 	var c engine.Cost
-	if json.Unmarshal([]byte(body), &c); c.Summary.Calls != 13 || c.Summary.UnpricedCalls != 13 || c.Summary.USD != nil || len(c.Entries) == 0 {
+	if json.Unmarshal([]byte(body), &c); c.Summary.Calls != 15 || c.Summary.UnpricedCalls != 13 || c.Summary.USD != nil || len(c.Entries) == 0 {
 		t.Fatalf("cost %s", body)
 	}
 	if code, body := s.do("GET", "/tasks/"+v.ID+"/deliverable.md", nil); code != 200 || !strings.Contains(body, "$644,910 [F1]") {
@@ -383,4 +385,12 @@ func TestUIRefusesFraming(t *testing.T) {
 			t.Errorf("headers %v", rec.Header())
 		}
 	}
+}
+
+// readerFake is a scripted model whose figure reader is the stand-in (figtest.Reader), so a run's
+// figures are read as the engine's tests read them.
+func readerFake(sc map[string][]model.Reply) *model.Fake {
+	f := model.NewFake(sc)
+	f.Respond = figtest.Reader
+	return f
 }

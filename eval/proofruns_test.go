@@ -21,9 +21,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/discover-legal/BigLaw/internal/analysis"
 	"github.com/discover-legal/BigLaw/internal/api"
 	"github.com/discover-legal/BigLaw/internal/docs"
 	"github.com/discover-legal/BigLaw/internal/engine"
+	"github.com/discover-legal/BigLaw/internal/engine/figtest"
 	"github.com/discover-legal/BigLaw/internal/model"
 	"github.com/discover-legal/BigLaw/internal/store"
 	"github.com/discover-legal/BigLaw/internal/store/storetest"
@@ -133,10 +135,21 @@ func oracle(mt matter, ids map[string]string) map[string][]model.Reply {
 		extracts = append(extracts, call("extract_facts", m{"question": it.Question, "documentId": nil, "sectionId": nil, "through": nil, "offset": nil, "query": it.Question, "issueId": iid}))
 		sc["extract_facts"] = append(sc["extract_facts"], reply(m{"findings": []m{{"issueId": nil, "claim": it.ModelAnswer, "quotes": quotes, "values": []m{}, "entities": []m{},
 			"relations": []m{}, "confidence": 1}}, "gaps": []string{}}))
-		for _, x := range engine.Untraced(it.ModelAnswer, strings.Join(it.Evidence, "\n"), false) {
+		untraced := engine.Untraced(it.ModelAnswer, strings.Join(it.Evidence, "\n"), false)
+		var known []analysis.Reading
+		for _, ev := range it.Evidence {
+			known = append(known, readAs("quote", ev)...)
+		}
+		var amounts []string // what G8 reads the answer's figures as (lab-r4 r5: by the reader's readings), computed
+		for _, r := range readAs("memo", it.ModelAnswer) {
+			if r.Clear() && !slices.ContainsFunc(known, func(k analysis.Reading) bool { same, _ := analysis.SameFigure(r, k); return same }) && !slices.Contains(untraced, r.Amount) {
+				amounts = append(amounts, r.Amount)
+			}
+		}
+		for i, x := range append(untraced, amounts...) {
 			op := []m{{"ref": nil, "literal": x, "unit": nil}, {"ref": nil, "literal": "0", "unit": nil}}
 			fn := "sum"
-			if strings.Contains(x, "-") || len(x) == 4 && strings.HasPrefix(x, "20") {
+			if i < len(untraced) && (strings.Contains(x, "-") || len(x) == 4 && strings.HasPrefix(x, "20")) {
 				fn, op[0]["literal"], op[0]["unit"] = "date_add", (x + "-01-01")[:10], "date"
 				if len(x) == 7 {
 					op[0]["literal"] = x + "-01"
@@ -196,7 +209,7 @@ func drive(t *testing.T, mt matter, scripts func(matter, map[string]string) map[
 		ids[name], names[doc.ID] = doc.ID, name
 		docIDs = append(docIDs, doc.ID)
 	}
-	fake := model.NewFake(scripts(mt, ids))
+	fake := readerFake(scripts(mt, ids))
 	t.Cleanup(func() {
 		for _, c := range fake.Calls() {
 			if c.Agent == "extract_facts" && len(c.Messages) > 3 && t.Failed() {
@@ -353,7 +366,7 @@ func TestLabRunnerSmoke(t *testing.T) {
 	for k, v := range critics {
 		sc[k] = v
 	}
-	e := engine.New(st, d, model.NewFake(sc), model.Roles{Lead: "lead-m"}, nil, engine.Config{BudgetCalls: 150, BudgetUSD: 5, CollapseThreshold: 0.5, CollapseAction: "strict"}, slog.New(slog.DiscardHandler))
+	e := engine.New(st, d, readerFake(sc), model.Roles{Lead: "lead-m"}, nil, engine.Config{BudgetCalls: 150, BudgetUSD: 5, CollapseThreshold: 0.5, CollapseAction: "strict"}, slog.New(slog.DiscardHandler))
 	mux := api.Handler(d, e, nil, slog.New(slog.DiscardHandler))
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`{"status":"ok"}`)) })
 	srv := httptest.NewServer(mux)
@@ -395,5 +408,31 @@ func names(mt matter) (out []string) {
 		out = append(out, n)
 	}
 	slices.Sort(out)
+	return out
+}
+
+// readerFake is a scripted model whose figure reader is the stand-in (figtest.Reader), so a run's
+// figures are read as the engine's tests read them.
+func readerFake(sc map[string][]model.Reply) *model.Fake {
+	f := model.NewFake(sc)
+	f.Respond = figtest.Reader
+	return f
+}
+
+// readAs is the stand-in reader's reading of one passage of kind ("quote", "memo") over text.
+func readAs(kind, text string) []analysis.Reading {
+	p := analysis.PassageOf("p", text)
+	fp := figtest.Passage{ID: "p", Kind: kind, Text: text}
+	for i, s := range p.Spans {
+		fp.Spans = append(fp.Spans, struct {
+			ID   string `json:"id"`
+			Text string `json:"text"`
+		}{analysis.SpanID("p", i), s.Text})
+	}
+	rs, _ := analysis.ReadLabels([]analysis.Passage{p}, figtest.Labels(fp, nil, nil))
+	var out []analysis.Reading
+	for i := range p.Spans {
+		out = append(out, rs[analysis.SpanID("p", i)])
+	}
 	return out
 }

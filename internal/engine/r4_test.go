@@ -220,6 +220,7 @@ func TestBench5CompensationConflictReachesFinish(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, compRef, compRows)
 	f.parties = map[string]string{"92,600": "Marcus T. Bellini", "103,800.00": "Marcus T. Bellini"} // the right labels: both are Bellini's compensation
+	f.measures = map[string]string{"92,600": "undisclosed compensation paid for Bellini", "103,800.00": "undisclosed compensation paid for Bellini"}
 	d1, d2 := f.docs[0].ID, f.docs[1].ID
 	f752 := fd("Bellini received undisclosed compensation from Ostrowski totaling approximately $92,600 in connection with a directed brokerage arrangement with Lakeshore Trading.", d1,
 		"The total undisclosed compensation received by Bellini, in the form of payments made by Ostrowski to Bayshore Palms Golf & Country Club for Bellini's benefit, was approximately $92,600 ($45,000 initiation fee + $47,600 in monthly dues = $92,600).",

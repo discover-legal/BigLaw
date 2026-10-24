@@ -41,6 +41,9 @@ type fixture struct {
 	// reads are the figure reader's labels for spans, by "<passage kind>:<span text>" ("quote:4,000"):
 	// a test's right labels where the stand-in would read otherwise (its Span is set by the stand-in).
 	reads map[string]analysis.Label
+	// measures are what the stand-in reads spans written so as measuring (its own reading is the
+	// analyst's metric for a value's digits): a test's right labels for one figure typed two ways.
+	measures map[string]string
 }
 
 const complaintText = `1. Parties
@@ -93,8 +96,8 @@ func (f *fixture) engine(scripts map[string][]model.Reply, cfg Config) (*Engine,
 		cfg = Config{BudgetCalls: 150, BudgetUSD: 5, CollapseThreshold: 0.5, CollapseAction: "strict"}
 	}
 	fake := newFake(scripts)
-	if fake.Respond != nil && (f.parties != nil || f.reads != nil) {
-		fake.Respond = oracleWith(f.parties, f.reads)
+	if fake.Respond != nil && (f.parties != nil || f.reads != nil || f.measures != nil) {
+		fake.Respond = oracleWith(f.parties, f.reads, f.measures)
 	}
 	f.e = New(f.st, f.d, fake, testRoles, nil, cfg, nil)
 	return f.e, fake

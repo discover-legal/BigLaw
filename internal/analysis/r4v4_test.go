@@ -54,15 +54,19 @@ func TestR4V4NearJoinPartiesFromTheReader(t *testing.T) {
 			t.Errorf("%s: false conflicts %v (%+v)", name, pairs(cs), cs[0].Values)
 		}
 	}
-	// one party's figure under two extractor labels pairs when the reader reads both as its own
+	// one party's figure stated twice pairs when the reader reads both as its own; a typed entity that
+	// is another party, or a party the reader could not tell, asserts no conflict (lab-r4 r5 M4)
 	two := []Finding{
 		fnd("F1", "spa", "The Buyer shall pay an escrow deposit of $2,400,000 at signing.", []Entity{firm("Buyer")}, Value{Entity: "Buyer", Metric: "escrow deposit", Value: "$2,400,000", Class: "Money"}),
 		fnd("F2", "letter", "The escrow deposit the Buyer funded at signing was $2,600,000.", nil, Value{Entity: "Escrow Agent account", Metric: "escrow deposit", Value: "$2,600,000", Class: "Money"}),
 	}
-	if got := pairs(Join(readParties(two, map[string]string{"$2,600,000": "Buyer"}), nil)); len(got) != 1 {
+	if got := pairs(Join(readAs(two, map[string]relabel{"$2,600,000": {party: "Buyer", entity: "none"}}), nil)); len(got) != 1 {
 		t.Errorf("one party's escrow deposit stated two ways is no conflict: %v", got)
 	}
-	unknown := readParties(two, map[string]string{"$2,600,000": "Buyer"})
+	if got := pairs(Join(readAs(two, map[string]relabel{"$2,600,000": {party: "Buyer"}}), nil)); len(got) != 0 {
+		t.Errorf("the reader's party overrode the typed entity: %v", got)
+	}
+	unknown := readAs(two, map[string]relabel{"$2,600,000": {party: "Buyer", entity: "none"}})
 	unknown[1].Values[0].Fig.Party = ""
 	if got := pairs(Join(unknown, nil)); len(got) != 0 {
 		t.Errorf("a figure whose party the reader could not tell is part of a conflict: %v", got)

@@ -503,7 +503,7 @@ func TestLintSaysHowToFix(t *testing.T) {
 	sec := Section{Handles: figs, Markdown: "Talbot was served on 10/21/2026 [F1]. Under Rule 12(a)(1)(A)(i) and Fed. R. Civ. P. 6(a)(1)(C), 21 days later is " +
 		"November 11, 2026, Veterans Day, so the answer is due {W0123456789} [F1]. Section 4.3 and § 9.2 cap the fee [F3]; Rule 7.1 applies [F1]. " +
 		"Greystone invoiced $612,400 [F1]. The cap is $214,340 [F3]. The status report is due November 25, 2026 [F1]. Rule 98765 is no hiding place [F1]."}
-	got := strings.Join(lint("I1", sec, use, []analysis.Worksheet{w}), "\n")
+	got := strings.Join(lint("I1", readSection(sec), use, []analysis.Worksheet{w}), "\n")
 	for _, want := range []string{
 		"the figure 612400 is not traced (G8): write its handle {Zephyr} and cite [F2]",
 		"the figure 214340 is not traced (G8): no cited finding, handle or worksheet states it: if it is computed",
@@ -519,17 +519,17 @@ func TestLintSaysHowToFix(t *testing.T) {
 		t.Errorf("want exactly the four untraced figures, got %d:\n%s", n, got)
 	}
 	sec.Markdown = `The fee is "a fee equal to {Zephyr} of the shortfall" [F3].`
-	if got := lint("I1", sec, use, nil); len(got) != 1 || !strings.Contains(got[0], "{Zephyr} is inside a quotation, where Go never substitutes it") {
+	if got := lint("I1", readSection(sec), use, nil); len(got) != 1 || !strings.Contains(got[0], "{Zephyr} is inside a quotation, where Go never substitutes it") {
 		t.Errorf("a handle inside a quote: %q", got)
 	}
 	sec.Markdown = "Greystone invoiced $612,400 [F1]."
-	if got := lint("I1", sec, map[string]Finding{"F1": use["F1"], "F4": {Finding: analysis.Finding{FID: "F4"}, Citations: cite("invoiced $612,400")}}, nil); len(got) != 1 ||
+	if got := lint("I1", readSection(sec), map[string]Finding{"F1": use["F1"], "F4": {Finding: analysis.Finding{FID: "F4"}, Citations: cite("invoiced $612,400")}}, nil); len(got) != 1 ||
 		!strings.Contains(got[0], "write its handle {Zephyr} and cite [F2]") {
 		t.Errorf("%q", got)
 	}
 	delete(use, "F2")
 	sec.Handles = nil
-	if got := lint("I1", sec, map[string]Finding{"F1": use["F1"], "F4": {Finding: analysis.Finding{FID: "F4"}, Citations: cite("invoiced $612,400")}}, nil); len(got) != 1 ||
+	if got := lint("I1", readSection(sec), map[string]Finding{"F1": use["F1"], "F4": {Finding: analysis.Finding{FID: "F4"}, Citations: cite("invoiced $612,400")}}, nil); len(got) != 1 ||
 		!strings.Contains(got[0], "it is stated by [F4]: cite [F4]") {
 		t.Errorf("%q", got)
 	}

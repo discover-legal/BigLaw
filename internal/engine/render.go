@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -128,12 +129,27 @@ func (e *Engine) saveSection(ctx context.Context, rt *agent.Runtime, c agent.Cal
 	body, regs := memoBody(s) // the figures the drafter wrote (not Go's handle values), read for G8 and the coverage pass
 	if spans := memoSpans(body, regs); len(spans) > 0 {
 		it := newReading(nil, []analysis.Passage{{ID: "m", Text: body, Spans: spans}}, []passageIn{{ID: "m", Kind: "memo", Text: body}})
+		it.memo = true
+		before := b.Spent().Calls
 		if err := e.readFigures(ctx, rt, c, b, "draft_section", []*reading{it}); err != nil {
 			return nil, err
 		}
-		if it.read {
-			rs, _ := it.readings()
-			s.Read = &SectionRead{Hash: textHash(body), Figs: ofPassage(rs, "m")}
+		if n := b.Spent().Calls - before; n > 0 { // the reader's calls are not the drafter's: P4's draft share counts only these (policy.go)
+			prior, err := load[int](ctx, e, taskID, kRead)
+			if err != nil {
+				return nil, err
+			}
+			for _, p := range prior {
+				n += p
+			}
+			if err := e.write(ctx, taskID, kRead, "draft", n, true); err != nil {
+				return nil, err
+			}
+		}
+		rs, _ := it.readings()
+		s.Read = &SectionRead{Hash: textHash(body), Figs: ofPassage(rs, "m")}
+		if whys := slices.Sorted(maps.Values(it.unread)); len(whys) > 0 {
+			s.Read.Unread = fmt.Sprintf("%d of its %d figures were not read (%s)", len(it.unread), len(spans), strings.Join(slices.Compact(whys), "; "))
 		}
 	}
 	if err := e.write(ctx, taskID, kSection, d.issueID, s, true); err != nil {

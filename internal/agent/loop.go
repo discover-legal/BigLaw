@@ -454,6 +454,23 @@ func (rt *Runtime) bound(req model.Request) float64 {
 	return (1.25*float64(len(body)+overheadTokens)*r.In + float64(req.MaxTokens)*r.Out) / 1e6
 }
 
+// WorstCase is what one call of subagent s on model m may spend with an input of up to inputBytes:
+// each of its turns a request of its prompt, that input and its earlier turns' whole answers, and a
+// whole answer (a caller that must fund it later holds this back first: the figure reader after a
+// drafter, lab-r4 r5 L4).
+func (rt *Runtime) WorstCase(s Spec, prompt, m string, inputBytes int) Grant {
+	g := Grant{Calls: s.MaxTurns}
+	var defs []model.Tool
+	if rt.Reg != nil {
+		defs, _ = rt.Reg.Defs(s.Allowed)
+	}
+	for t := range s.MaxTurns {
+		g.USD += rt.bound(model.Request{Model: m, MaxTokens: subagentMaxTokens, Tools: defs, Messages: []model.Message{{Role: "system", Content: prompt},
+			{Role: "user", Content: strings.Repeat("x", inputBytes+t*4*subagentMaxTokens)}}})
+	}
+	return g
+}
+
 func (rt *Runtime) record(ctx context.Context, s Step) error {
 	if rt.Journal == nil {
 		return nil
