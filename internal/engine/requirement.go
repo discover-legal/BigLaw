@@ -21,6 +21,7 @@ const (
 	maxPlaces  = 8   // occurrences of one part tried for one whose edges are whole
 	maxGap     = 400 // bytes of the document between two parts
 	maxSkipped = 2   // whole sentences two parts may skip between them
+	maxLines   = 200 // lines walked back for a list item's introduction
 )
 
 // joins are where a model joins passages of a requirement: after a colon, semicolon, sentence end
@@ -66,7 +67,7 @@ func hasWord(s string, set map[string]bool) bool {
 // than four words is a heading: only the first of several, and a line of its own. bad is the first part that does not verify ("" when all do); err is ctx's.
 func requirementParts(ctx context.Context, text, req string) (parts []string, bad string, err error) {
 	req, idx := unescape(req), docs.NewText(text)
-	if s, e, ok := idx.Find(strings.TrimSpace(req), 0, len(text)); ok {
+	if s, e, ok := place(idx, text, strings.TrimSpace(req), -1); ok { // one part: whole too (lab-r3 r2)
 		return []string{text[s:e]}, "", nil
 	}
 	locs := joins.FindAllStringIndex(req, maxJoins+1)
@@ -175,14 +176,15 @@ func endsWith(s, chars string) bool {
 // sentenceEnds finds the sentence ends in a line: . ! ? (and closers) before white space or its end.
 var sentenceEnds = regexp.MustCompile(`[.!?]["”’')\]]*(?:\s|$)`)
 
-// wholeStart: the first part starts a line (after a list marker), a sentence, or a clause (after
-// , ; : or a dash) whose sentence's earlier words hold no guard: never a tail that drops "Do NOT",
-// "shall not", "except" or a condition.
+// wholeStart: the first part (or a one-part requirement) starts a line (after a list marker) that
+// no list introduction governs, a sentence, or a clause (after , ; : or a dash) whose sentence's
+// earlier words hold no guard: never a tail that drops "Do NOT", "shall not", "except" or a
+// condition, nor an item that drops "The following shall NOT serve:".
 func wholeStart(text string, s int) bool {
 	before := text[:s]
 	line := before[strings.LastIndexByte(before, '\n')+1:]
 	if strings.TrimSpace(line) == "" || listMarker.FindString(line) == line {
-		return true
+		return governing(text, s) < 0 // a line: unless it is an item of a list whose introduction governs it
 	}
 	t := strings.TrimRight(line, " \t")
 	if t != line && endsWith(t, ".!?") {
@@ -234,3 +236,70 @@ func partGap(text string, prev, s int) bool {
 	}
 	return n <= maxSkipped
 }
+
+// governing is where the list introduction that governs the line starting at byte s begins, -1 when
+// none does: walking back over the list's earlier items (marked lines; an unmarked line only right
+// after its introduction), the first other non-empty
+// line, when it ends with a colon and holds a guard (a negation, modal, exception or condition:
+// "The following shall NOT serve as Trustee:"). When a marked line on the way (or the line itself)
+// has its predecessor marker (B. for C.) on the nearest marked line above that introduction, it is
+// a sibling heading, not an item of it (bench: "C. Tommy's Share" after
+// Sophia's "…with the following terms and conditions:").
+func governing(text string, s int) int {
+	ls := strings.LastIndexByte(text[:s], '\n') + 1
+	markers := []string{listMarker.FindString(text[ls:min(len(text), ls+16)])} // of the line and the items between it and the introduction
+	for end, n := ls-1, 0; end > 0 && n < maxLines; n++ {
+		start := strings.LastIndexByte(text[:end], '\n') + 1
+		l := strings.TrimSpace(text[start:end])
+		switch {
+		case l == "":
+		case listMarker.MatchString(l):
+			if markers[0] == "" {
+				return -1 // an unmarked line after a list's items is past the list
+			}
+			markers = append(markers, listMarker.FindString(l))
+		case endsWith(l, ":") && hasWord(l, guards):
+			above := lastMarker(text[:start])
+			for _, m := range markers {
+				if p := predecessor(m); p != "" && strings.TrimSpace(above) == p {
+					return -1
+				}
+			}
+			return start
+		default:
+			return -1
+		}
+		end = start - 1
+	}
+	return -1
+}
+
+// lastMarker is the list marker of the last marked line of text ("" when none).
+func lastMarker(text string) string {
+	for end, n := len(text), 0; end > 0 && n < maxLines; n++ {
+		start := strings.LastIndexByte(text[:end-1], '\n') + 1
+		if m := listMarker.FindString(strings.TrimSpace(text[start:end])); m != "" {
+			return m
+		}
+		end = start
+	}
+	return ""
+}
+
+// predecessor is the marker before a one-letter or one-number marker in its style ("B. " for
+// "C. ", "(1)" for "(2)"), "" when there is none.
+func predecessor(marker string) string {
+	m := strings.TrimSpace(marker)
+	for i, r := range m {
+		if r >= 'b' && r <= 'z' || r >= 'B' && r <= 'Z' || r >= '2' && r <= '9' {
+			if p := m[:i] + string(r-1) + m[i+1:]; len(m) <= 4 && !strings.ContainsAny(m[i+1:], "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789") {
+				return p
+			}
+			return ""
+		}
+	}
+	return ""
+}
+
+// whole reports whether text[s:e] is a whole passage: wholeStart and wholeEnd.
+func whole(text string, s, e int) bool { return wholeStart(text, s) && wholeEnd(text, e) }

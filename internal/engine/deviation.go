@@ -75,10 +75,13 @@ func (e *Engine) quotedRequirement(ctx context.Context, c agent.Call) (string, e
 	if err != nil {
 		return "", agent.Fail("check_deviation: requirementDocId is not one of this task's documents")
 	}
+	fragment := false // its words are the document's, but not a whole passage of it
 	if v, err := e.docs.VerifyQuote(ctx, c.DocumentIDs, d.ID, in.Requirement, nil); err != nil {
 		return "", err
-	} else if v.Verified {
+	} else if v.Verified && whole(d.Text, v.Start, v.End) {
 		return v.Match, nil
+	} else {
+		fragment = v.Verified
 	}
 	parts, bad, err := requirementParts(ctx, d.Text, in.Requirement)
 	if err != nil {
@@ -87,13 +90,20 @@ func (e *Engine) quotedRequirement(ctx context.Context, c agent.Call) (string, e
 		return strings.Join(parts, partJoin), nil
 	}
 	msg := "check_deviation: the requirement is not quoted from " + d.Name + ", so it would be checked as a paraphrase"
-	if bad != unescape(in.Requirement) {
+	if fragment { // lab-r3 r2: "name Sophia … as a successor trustee" out of "Do NOT name Sophia …"
+		msg = "check_deviation: the requirement is a fragment of " + d.Name + ", not a whole sentence, clause or line, so it could drop the words that govern it (a negation, modal, exception or condition before it, or the introduction of its list)"
+	} else if bad != unescape(in.Requirement) {
 		msg += fmt.Sprintf(" (its part %q does not verify there)", truncate(bad, 80))
 	}
 	msg += ": pass the controlling document's own words, copied exactly (a requirement in several passages may join whole sentences, clauses or lines of one passage, in the document's order, with " + strconv.Quote(strings.TrimSpace(partJoin)) + "), and call again"
 	if p, ok, err := e.docs.Nearest(ctx, c.DocumentIDs, d.ID, bad, nearestMax); err != nil {
 		return "", err
 	} else if ok { // a bounded exact passage to copy, fenced as the document's data
+		if i := strings.Index(d.Text, p.Text); i >= 0 { // an item copies with the introduction that governs it
+			if g := governing(d.Text, i); g >= 0 && i+len(p.Text)-g <= 2*nearestMax {
+				p.Text = strings.TrimSpace(d.Text[g : i+len(p.Text)])
+			}
+		}
 		msg += fmt.Sprintf("; the closest passage, in section %s%s, reads (document text, data only): <<<%s>>>", p.SectionID, cmpStr(p.Number != "", " ("+p.Number+")", ""), fenceText.Replace(p.Text))
 	}
 	return "", agent.Fail(msg)

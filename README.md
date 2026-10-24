@@ -910,8 +910,9 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
   undone, and a requirement joined from several passages (a heading and its list, two sentences from
   two paragraphs) verifies part by part, split where the model joined them (at most 12 joins; its
   ellipses stripped from the parts' edges; one normalised index of the document, the caller's ctx),
-  every part the document's own words and whole: it starts and ends at a sentence, clause or line
-  boundary, never a tail that drops a negation, modal, exception or condition; the parts in the
+  every part (a one-part requirement too) the document's own words and whole: it starts and ends at a sentence, clause or line
+  boundary, never a tail that drops a negation, modal, exception or condition, nor a list item that
+  drops its governing introduction (`TestOnePartRequirementIsWhole`, `TestOnePartFragmentRefused`); the parts in the
   document's order, one passage (§ Limitations, LAB round 3); a part under four words only as a
   heading line before another; the parts handed on joined
   by " … " (`TestRequirementPartsVerify`, `TestDevMultiPartRequirementRuns`, `TestStitchedRequirementRefused`,
@@ -1464,7 +1465,7 @@ improvements (after the real Haiku LAB rerun; scripted the same way): `TestSweep
 
 | Budget | Ceiling | Today |
 |---|---:|---:|
-| Go production lines (physical lines, non-`_test.go`, test-support packages included) | reported, no limit (owner decision 17) | 14,082 |
+| Go production lines (physical lines, non-`_test.go`, test-support packages included) | reported, no limit (owner decision 17) | 14,161 |
 | Packages under `internal/`, test-support packages excluded | 12 | 8 (`agent`, `analysis`, `api`, `docs`, `docs/ooxml`, `engine`, `model`, `store`; `store/storetest` is test support) |
 | Direct Go dependencies | 3 | 2 (`github.com/lib/pq`, `github.com/ledongthuc/pdf`) |
 | Runtime environment variables | 20 | 18 |
@@ -1473,7 +1474,7 @@ improvements (after the real Haiku LAB rerun; scripted the same way): `TestSweep
 | Packages without a `_test.go` | 0 | 0 |
 | Lines in any one source file (`.go`, `.py`, `.sql`, `.sh`, `.js`, `.ts`, `.css`; tests included) | 2,000 | 968 (`internal/docs/vision_safety_test.go`) |
 
-**There is no total line ceiling (owner decision 17, 2026-10-23).** `scripts/loc.py` reports the Go production total (14,082) and fails only on the budgets that bound bloat directly: no file over 2,000 lines, ≤ 3 direct deps, ≤ 20 env vars, ≤ 12 internal packages, ≤ 2,400 UI source lines, no untested package. Each PR still reports its lines against its DESIGN budget in its notes. (The ceiling's history, 14,000 → 17,500 through owner decisions 7–16, is in PLAN.) A **test-support package** is one
+**There is no total line ceiling (owner decision 17, 2026-10-23).** `scripts/loc.py` reports the Go production total (14,161) and fails only on the budgets that bound bloat directly: no file over 2,000 lines, ≤ 3 direct deps, ≤ 20 env vars, ≤ 12 internal packages, ≤ 2,400 UI source lines, no untested package. Each PR still reports its lines against its DESIGN budget in its notes. (The ceiling's history, 14,000 → 17,500 through owner decisions 7–16, is in PLAN.) A **test-support package** is one
 whose directory name ends in `test` and that no production file outside it imports, such as
 `storetest`. Under the coordinator's ruling it is left out of the package count, but its lines
 count toward the reported Go total like any other non-`_test.go` file. A `*test` package that
@@ -1589,8 +1590,13 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     qualifier ("except", "however", "the foregoing"); never a heading or a list's introduction. The
     bench's two-paragraph requirement (step 76) needs that skip. Which sentences may be skipped is a
     word test, not a reading: a skipped sentence can still qualify its neighbour in other words. A
-    single-passage requirement is checked as before: an exact fragment, or a list item without its
-    introduction, verifies. A short heading part stands for context only.
+    one-part requirement must be whole too (an exact fragment such as "name Sophia … as a successor
+    trustee" out of "Do NOT name Sophia …" is refused), and a line governed by a list introduction
+    that ends in a colon and holds a guard ("The following persons shall NOT serve:") verifies only
+    with that introduction; the refusal's passage then starts at the introduction. Which lines are a
+    list's items is read from markers: a marked line whose predecessor marker (B. for C.) is the
+    nearest marker above the introduction is a sibling heading, and an unmarked line counts only
+    right after the introduction. A short heading part stands for context only.
   - The near join pairs only one entity's values (alias-unified, or both with none), within an eighth
     of each other, and not when each label names a thing its own quote states and the other side
     never mentions (a fee and an allocation, a notice and a demand); dates joined by shared words take

@@ -195,3 +195,39 @@ func TestRequirementPartsBounded(t *testing.T) {
 		t.Error("a cancelled ctx did not stop requirementParts")
 	}
 }
+
+// trusteeList is a list whose introduction carries the negation its items do not.
+const trusteeList = "4. Trustees\nThe following persons shall NOT serve as Trustee in any capacity:\n(a) Sophia Davenport-Chen, the settlor's daughter.\n(b) Martin Hale, the settlor's former business partner.\nThe Trustee shall not:\nsell the family home without the consent of all beneficiaries.\n5. Distributions\nThe Trustee shall distribute the income quarterly.\n"
+
+// TestOnePartRequirementIsWhole (lab-r3 r2): a one-part requirement gets the whole-part rules too. An
+// exact fragment that drops its sentence's negation ("name Sophia …" out of "Do NOT name Sophia …"),
+// a list item quoted without the introduction that negates it, and a line under "The Trustee shall
+// not:" are refused; a whole sentence, a whole line, and an item quoted with its introduction verify.
+func TestOnePartRequirementIsWhole(t *testing.T) {
+	for _, c := range []struct{ doc, req string }{
+		{trustMemoExcerpt, "name Sophia Davenport-Chen as a successor trustee in any capacity."},
+		{trustMemoExcerpt, "Sophia should not serve in any fiduciary capacity with respect to trust assets"}, // the tail of "Peggy is firm … that Sophia should not serve …"
+		{trusteeList, "(b) Martin Hale, the settlor's former business partner."},
+		{trusteeList, "Martin Hale, the settlor's former business partner."},
+		{trusteeList, "Sophia Davenport-Chen, the settlor's daughter."},
+		{trusteeList, "sell the family home without the consent of all beneficiaries."},
+	} {
+		if parts, bad, err := requirementParts(context.Background(), c.doc, c.req); err != nil || bad == "" {
+			t.Errorf("a fragment verified as a whole requirement: %q (parts %q)", c.req, parts)
+		}
+	}
+	for _, c := range []struct {
+		doc, req string
+		parts    int
+	}{
+		{trustMemoExcerpt, "CRITICAL NOTE — Do NOT name Sophia Davenport-Chen as a successor trustee in any capacity.", 1},
+		{trustMemoExcerpt, "Peggy and I discussed this matter at length during our November 2024 meeting.", 1},
+		{trusteeList, "The Trustee shall distribute the income quarterly.", 1},
+		{trusteeList, "The following persons shall NOT serve as Trustee in any capacity: … (a) Sophia Davenport-Chen, the settlor's daughter.", 2},
+		{trusteeList, "The Trustee shall not: sell the family home without the consent of all beneficiaries.", 1}, // one passage, the line break as a space
+	} {
+		if parts, bad, err := requirementParts(context.Background(), c.doc, c.req); err != nil || bad != "" || len(parts) != c.parts {
+			t.Errorf("%q: parts %q, bad %q, err %v", c.req, parts, bad, err)
+		}
+	}
+}

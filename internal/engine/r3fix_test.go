@@ -185,3 +185,32 @@ func TestSkippedPagesReachLimitations(t *testing.T) {
 		t.Errorf("skipped pages not disclosed: %q", lim)
 	}
 }
+
+// TestOnePartFragmentRefused (lab-r3 r2, end to end): an exact fragment that drops its negation is
+// refused before the subagent runs, with the whole sentence to copy; a list item quoted without the
+// introduction that negates it is refused with the introduction in the passage to copy.
+func TestOnePartFragmentRefused(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, trustMemoExcerpt+"\n"+trusteeList, "Article 4. Successor Trustees.\nIf Peggy ceases to serve, Martin Hale shall serve as successor Trustee.\n")
+	memo, trust := f.docs[0].ID, f.docs[1].ID
+	dev := func(req string) model.ToolCall {
+		return tc("check_deviation", m{"requirement": req, "requirementDocId": memo, "controllingDocIds": []string{memo}, "reviewedDocIds": []string{trust}, "issueId": "I1"})
+	}
+	v := f.run(f.with(map[string][]model.Reply{
+		"lead": {calls(plan(issue("I1", "Does the draft follow the memo?", "Requirement"))),
+			calls(dev("name Sophia Davenport-Chen as a successor trustee in any capacity.")), calls(dev("Martin Hale, the settlor's former business partner."))},
+	}), Config{})
+	out := f.outputs(v.ID, "check_deviation")
+	var seen string
+	for _, c := range f.e.chat.(*model.Fake).Calls() {
+		if c.Agent == "lead" {
+			seen = fmt.Sprint(c.Messages)
+		}
+	}
+	if len(out) != 2 || !strings.HasPrefix(out[0], "failed") || !strings.HasPrefix(out[1], "failed") || len(v.Findings) != 0 ||
+		!strings.Contains(seen, "is a fragment of") ||
+		!strings.Contains(seen, "<<<CRITICAL NOTE — Do NOT name Sophia Davenport-Chen as a successor trustee in any capacity.>>>") ||
+		!strings.Contains(seen, "<<<The following persons shall NOT serve as Trustee in any capacity:") {
+		t.Errorf("check_deviation %q, findings %d; the lead read %.4000s", out, len(v.Findings), seen)
+	}
+}

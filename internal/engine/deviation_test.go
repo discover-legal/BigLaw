@@ -301,7 +301,7 @@ func TestDevParaphrasedRequirementRefused(t *testing.T) {
 	d := newDev(t)
 	para := tc("check_deviation", m{"requirement": "Residuary estate distribution shall be 40% to David, 35% to Sophia and 25% to Tommy.", "requirementDocId": d.memo,
 		"controllingDocIds": []string{d.memo}, "reviewedDocIds": []string{d.trust}, "issueId": "I1"})
-	quoted := tc("check_deviation", m{"requirement": "the residuary estate  shall be divided as follows: David shall receive Forty Percent (40%), Sophia shall receive Thirty-Five Percent (35%)", "requirementDocId": d.memo,
+	quoted := tc("check_deviation", m{"requirement": "the residuary estate  shall be divided as follows: David shall receive Forty Percent (40%), Sophia shall receive Thirty-Five Percent (35%), and Tommy shall receive Twenty-Five Percent (25%).", "requirementDocId": d.memo,
 		"controllingDocIds": []string{d.memo}, "reviewedDocIds": []string{d.trust}, "issueId": "I1"})
 	v := d.run(d.with(map[string][]model.Reply{
 		"lead":            {calls(plan(issue("I1", "Does the draft follow the memo?", "Requirement"))), calls(para), calls(quoted)},
@@ -376,7 +376,7 @@ func TestDevRealOmissionsKept(t *testing.T) {
 func TestDevRestatedControllingQuoteRescued(t *testing.T) {
 	t.Parallel()
 	d := newDev(t)
-	req := "David shall receive Forty Percent (40%), Sophia shall receive Thirty-Five Percent (35%), and Tommy shall receive Twenty-Five Percent (25%)"
+	req := "The residuary estate shall be divided as follows: David shall receive Forty Percent (40%), Sophia shall receive Thirty-Five Percent (35%), and Tommy shall receive Twenty-Five Percent (25%)." // a whole sentence (lab-r3 r2: a clause that drops "shall be divided as follows" is refused)
 	call := tc("check_deviation", m{"requirement": req, "requirementDocId": d.memo, "controllingDocIds": []string{d.memo}, "reviewedDocIds": []string{d.trust}, "issueId": "I1"})
 	v := d.run(d.with(map[string][]model.Reply{
 		"lead": {calls(plan(issue("I1", "Does the draft follow the memo?", "Requirement"))), calls(call)},

@@ -191,6 +191,6 @@ make demo-bundle # ui/dist-recorded for discover.legal/demo/biglaw/; make demo-r
 # DB tests: BIGLAW_TEST_DSN=postgres://…?sslmode=disable BIGLAW_REQUIRE_DB=1 (Postgres with pgvector)
 make e4-record EMBED_MODEL=…   # owner-run: record the E4 tape at the model's own length (make e4-live: no tape)
 ```
-Budgets: Go prod LOC reported with no limit (owner decision 17: the total ceiling is dropped; 14,082 used; each PR reports its lines vs its DESIGN budget; test-support packages such as `storetest` count), internal
+Budgets: Go prod LOC reported with no limit (owner decision 17: the total ceiling is dropped; 14,161 used; each PR reports its lines vs its DESIGN budget; test-support packages such as `storetest` count), internal
 packages ≤ 12 (8 used; test-support packages do not count), direct deps ≤ 3, env vars ≤ 20 (18 used), UI runtime
 deps ≤ 2 (2 used), UI source lines (`ui/src`) ≤ 2,400, untested packages 0, longest source file ≤ 2,000 lines.
