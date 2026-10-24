@@ -20,9 +20,9 @@ PostgreSQL database. Licensed Apache-2.0 (`LICENSE`, `NOTICE`).
 | Migrations | `internal/store/migrate.go`, `internal/store/migrations/NNNN_*.sql` | Embedded SQL files applied in order under an advisory lock; each file and its `schema_migrations` row in one transaction. `store.Open` first creates the `vector` extension (pgvector), which is database-wide (§ Database) |
 | Files | `internal/store/files.go` | Binary files (uploads, generated `.docx`) stored in 1 MiB `bytea` chunks, streamed in and out, with size and SHA-256 checked on every read |
 | Model client | `internal/model/` (`client.go`, `embed.go`, `errors.go`, `fake.go`, `pricing.go`, `prices.json`) | One OpenAI-compatible chat client with tool calls and image parts, an embeddings call (`Embed`) on the same transport, typed failures with their HTTP mapping, at most 3 attempts per call, cache-aware pricing of every call from a built-in table plus `BIGLAW_PRICES` (the host never makes a call free), watt-hour metering when `BIGLAW_LOCAL_WATTS` is set, and `model.Fake` for tests (§ Model client). `Embed`'s caller is documents (below); `Chat`'s is the agent loop (below), which the memo workflow drives. |
-| Documents | `internal/docs/` (`ingest.go`, `child.go` + `child_linux.go`/`child_other.go`, `pageindex.go`, `chunk.go`, `search.go`, `embed.go`, `verify.go`, `http.go`, `vision.go` + `vision_prompts.txt`, `scanpdf.go`, `jobs.go`) | Ingest of UTF-8 text, `.docx` and PDF text layers (PDFs and `.docx` files parsed in a bounded child process); images and JPEG-scanned PDF pages transcribed by the `vision` role, each page read twice and the readings compared, with provenance on every document, chunk and citation, and a leased job that transcribes what was stored before a vision role was set (§ Vision transcription); the byte-exact section tree; search chunks; Postgres full-text search, fused with pgvector similarity when an `embed` role is set (chunk embedding at ingest, a startup backfill); the page reader (outline, paged sections); the quote-verification ladder; the upload and download routes. Every read is scoped to the caller's document ids (§ Documents) |
+| Documents | `internal/docs/` (`ingest.go`, `child.go` + `child_linux.go`/`child_other.go`, `pageindex.go`, `chunk.go`, `search.go`, `embed.go`, `verify.go`, `http.go`, `vision.go` + `vision_prompts.txt`, `scanpdf.go`, `jobs.go`) | Ingest of UTF-8 text (a plain-text e-mail whose headers say quoted-printable is stored decoded, headers verbatim: `TestEmailBodyDecodedFromQuotedPrintable`), `.docx` and PDF text layers (PDFs and `.docx` files parsed in a bounded child process); images and JPEG-scanned PDF pages transcribed by the `vision` role, each page read twice and the readings compared, with provenance on every document, chunk and citation, and a leased job that transcribes what was stored before a vision role was set (§ Vision transcription); the byte-exact section tree; search chunks; Postgres full-text search, fused with pgvector similarity when an `embed` role is set (chunk embedding at ingest, a startup backfill); the page reader (outline, paged sections); the quote-verification ladder; the upload and download routes. Every read is scoped to the caller's document ids (§ Documents) |
 | Agent runtime | `internal/agent/` (`tool.go`, `registry.go`, `schema.go`, `loop.go`, `budget.go`, `policy.go`, `bandit.go`) | The `Tool` interface and its single registry (definitions frozen at registration), JSON-schema validation of every tool input and output, one bounded loop for the lead and its subagents, the budget ledger, and the tool bandit (§ Agent runtime). The memo workflow drives it (below); a step log makes it resumable |
-| Engine | `internal/engine/` (+ `specs/`, `packs/`; migration `0005_runs.sql`) | The memo workflow: the lead agent and its 11 tools, the ledger, the evidence subagents with Go-side quote verification, the sweep, the three-critic committee, the policy, `finish` (lint, coverage, render), the human gates, grounding collapse, and durable runs (step log, lease and heartbeat, resume) (§ Memo workflow) |
+| Engine | `internal/engine/` (+ `specs/`, `packs/`; migrations `0005_runs.sql`, `0006_figure_reads.sql`) | The memo workflow: the lead agent and its 11 tools, the ledger, the evidence subagents with Go-side quote verification, the figure reader, the sweep, the three-critic committee, the policy, `finish` (lint, coverage, render), the human gates, grounding collapse, and durable runs (step log, lease and heartbeat, resume) (§ Memo workflow) |
 | API | `internal/api/` (+ `dist/`, the embedded UI) | The REST API (tasks, steps, SSE events, gates, cancel, cost, clients) over the engine and the document routes, and the web UI built into the binary (§ Memo workflow) |
 | Memo tools | `internal/analysis/` (+ `belo.json`, `specs/*.json`), `internal/docs/register.go` (+ `specs/*.json`) | Deterministic tools over verified findings: `numbers` (exact `calc`, figure handles, key-figures table), `join_discrepancies`, the coverage checks `finish{op:"check"}` will run, the value normalisers and BELO-lite; and the `retrieve` / `verify_quote` adapters over documents (§ Agent runtime) |
 | `.docx` reader | `internal/docs/ooxml/` | Opens a `.docx`'s text parts only (body, footnotes, endnotes; 128 MiB decompression cap) and reads its visible text in one linear XML pass. The writer, the XML escapers, the part-preserving re-zip and tracked-change parse/apply are planned (PR 3d) |
@@ -715,7 +715,10 @@ the table's start is in it, bounded by the section: `TestTableHeaderIsThePagesOw
 section id past it is 404, never a database error.
 
 **Verification ladder** (v1's `tabcite` ladder): exact substring, confidence 1.0; tolerant
-substring (curly quotes straightened, U+2010/U+2011 hyphens read as `-`, white space collapsed, case folded on both sides; `TestToleranceFoldsHyphens`), 0.95; one
+substring (curly quotes straightened, U+2010/U+2011 hyphens read as `-`, white space collapsed, case folded on both sides; `TestToleranceFoldsHyphens`), 0.95;
+a quote with `|` between table cells where the document separates them with tabs (an `.xlsx` row) is
+matched with its separators set aside, still `tolerant` but at 0.9 (`CellConfidence`,
+`TestTableRowQuotedWithPipesVerifies`); one
 paraphrase-judge call over the best-matching window of the document (at most about 3,000 bytes
 around the span holding most of the quote's words), capped at 0.8; when the judge is less than
 0.75 sure, three independent votes, a strict majority needed, confidence 0.75 × votes/3, below
@@ -868,7 +871,11 @@ The memo workflow (§ Memo workflow) drives these. What PR 4a ships, all tested 
   labels, two values of one class from two documents that are near each other (a quantity within a
   quarter, a full date within a month), whose quotes share three distinctive words, are also a
   conflict when neither document states the other's value (4,217 vs 4,312 trades analysed, $92,600
-  vs $103,800, 73% vs 78%, April 22 vs April 15: `TestNearConflictsAcrossLabels`; at most 20). Its
+  vs $103,800, 73% vs 78%, April 22 vs April 15: `TestNearConflictsAcrossLabels`, and over bench5's own
+  ledger rows `TestJoinPairsBench5Conflicts`; at most 20). The join runs over every verified finding;
+  `fids` only choose which conflicts are reported (those holding a named finding), so a cross-issue pair
+  is found from either side (`TestJoinDiscrepanciesFidsDoNotScopeTheJoin`), and the lead's aliases are
+  kept for the run (ledger kind `alias`) for `finish`'s own join (`TestJoinAliasesReachFinish`). Its
   output also names the documents the sweep left partly unread (`unreadDocuments`).
 - **Coverage** (`CheckCoverage`, for `finish{op:"check"}` in 4b): plan issues with no section;
   parties in two or more verified findings, a Conduct issue's actor, or a roster name, that the draft
@@ -893,10 +900,12 @@ Limitations of this layer:
   leaves the least salient late ones without a handle (a drafter may still state them inside a
   cited quote).
 - `join_discrepancies` trusts the extracting model's metric labels for the label join: one label
-  for two metrics is compared (the lead must check the quotes). The near join finds two labels for
-  one metric only when the values are close (an eighth; a month for dates), of one entity,
-  compared after their stated scale (the value's, its unit's, or the word after it in its quote; a
-  bare figure whose scale nothing states never pairs with a scaled one, while a figure written in full, grouped or seven digits, does: `TestJoinComparesScaledFigures`, `TestR2VScaledVsWholeFigure`), a value its quote frames as a part of the other's quantity ("$950,000 of the Purchase Price", a deposit or instalment toward it) never paired with it (`TestR2VHoldbackNearFalsePair`), their
+  for two metrics is compared (the lead must check the quotes). Whose figure a value is, and what it measures, is the
+  figure reader's reading of it (`Value.Fig`): two values are compared only when both are read clearly as one kind of
+  one party, in one currency, their amounts exact with their scale applied; party labels unify only by the lead's
+  aliases (`TestJoinBench6TrustNamesPairwise`: two people sharing a surname are two parties). The near join finds two labels for
+  one metric only when the values are close (an eighth; a month for dates), of one party, a bare figure whose
+  scale or currency the reader could not tell never compared (`TestJoinComparesScaledFigures`, `TestR2VScaledVsWholeFigure`), a value its quote frames as a part of the other's quantity ("$950,000 of the Purchase Price", a deposit or instalment toward it) never paired with it (`TestR2VHoldbackNearFalsePair`), their
   labels not naming two things (`sameMetric`) and the quotes share their words: a conflict between
   far-apart values under different labels is still missed, and two close figures about different
   things that share words and label words can still be reported (`TestJoinRefusesDifferentFacts`). A value's document is the quote that holds its text, else the finding's first quote.
@@ -923,16 +932,56 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
   `critics` (the committee's findings with their status), each paged the same way (`TestLedgerPagesByType`). A subagent may only
   read, and never sees a quarantined finding (G3).
 - **Evidence** (`extract_facts`, `analyze_issue`, `check_deviation`; subagents on the `specialist`
-  role). Go completes each call (the section's text, the packs) and checks every answer before it
+  role). Go completes each call (the section's text, the packs, and for an `extract_facts` call that
+  names no issue, a sweep visit's, the plan's issues: each finding names the issue it bears on, and one
+  that names none of the plan's is not admitted (a page read again after `op plan` added issues is sent, and admits, only the new
+  ones); no per-call cap drops a page's facts: `TestSweepAdmitsOnlyThePlansFindingsOnce`, `TestTablePageKeepsARowEach`, `TestSweepCapNeverDropsProseFacts`) and checks every answer before it
   reaches the ledger: each quote goes through the ladder (`VerifyQuote`, then the `verify_quote`
   tool with its judge); a finding is verified only when every quote is (G2), else it is stored
-  quarantined (G3) and never drafted from; a typed value absent from its own quotes is dropped, and a
-  money value's currency is taken from the symbol beside it in its quote (£, €, ¥, CHF, C$, A$), not the model; a finding
-  nearly the same as a verified one already held on the same issue (3-word-shingle Jaccard ≥ 0.5)
-  merges into it, its quotes added. `check_deviation`'s requirement is the controlling document's own
+  quarantined (G3) and never drafted from; a typed value absent from its own quotes is dropped, with a note on its finding
+  (`valueNotes`, shown in the API's finding view and the UI), in the sweep's and `extract_facts`'s `notes`, as one LOW
+  committee line per run listing the cited findings not raised before (after the other critics' lines, capped, and the
+  committee's page puts HIGH and MEDIUM lines first: `TestR4V3AdmissionNotesFloodCommittee`), and as one Limitations
+  line from the coverage pass's `unadmitted` list. What a number means is read by a model, never by
+  a word list in Go (lab-r4 r4, owner decision): code finds the number spans of a text and reads their
+  digits exactly as written (`internal/analysis/figures.go`: digits, separators, a decimal mark, a minus
+  written right before them; a span's readings are what its form allows, "1,200" reading 1200 or 1.2;
+  dates found by their form; specified by the literal corpus in `figures_test.go`, a generated property
+  test and a fuzz test: no panic, spans in bounds and never overlapping, every reading round-trips),
+  and the figure reader (`read_figures`, `specs/agents/read_figures.md`, critic role, with its own tools
+  `figure_context`, the document around a quote, bounded and paged, and `exact_calc`, exact decimal
+  arithmetic) labels each span by id: money, count, percent, date, other or unclear; its currency, its
+  scale and the span or words that state it, which mark is its decimal point, its party, whether it is
+  a range's end and its sign. Go checks every label (`analysis.ReadLabels`): a label for a span it was
+  not given is rejected and noted, a scale must be a power of ten from a span or words the passage
+  states, a decimal mark must fit the digits, a sign may not contradict a written minus; what it cannot
+  check, or what the reader says is unclear, is an unclear reading, and the amount is exact arithmetic on
+  the written digits (reading × scale × sign), so no label makes a figure the text does not state
+  (`TestReadLabelsChecksEveryLabel`, `TestR4V4ReaderCannotInventSpansOrFigures`). The reader runs once
+  per admission (the call's findings batched, up to 80 spans a call) over each finding's verified quotes,
+  typed values (with their class, unit, entity and metric) and claim, and once per drafted section over
+  the figures its drafter wrote (handle values are Go's), out of the calling tool's grant, metered and
+  journaled like any call, and its answers are cached by the hash of what it read (`figure_reads`,
+  migration 0006), so a run read again gets the same labels (`TestR4V4ReadingIsCachedByContent`); a
+  finding it could not read (no budget, a failed call) keeps no reading, and its values are dropped
+  with a note. A typed quantity is admitted only when a span of its quotes reads as the same kind,
+  currency and exact amount as the value's own span (`valueStated`; a share count is never dollars, one
+  quote's table header never scales another's figure: `TestR4V4SharesAreNoSum`,
+  `TestR4V4HeaderScaleIsTheReadersPerQuote`, `TestR4V4RangeIsTheReaders`); when either reading is unclear
+  but they agree on what can be read, it is admitted at low confidence and its finding is gated for a
+  lawyer (`TestR4V4UnclearReadingGates`); its reading (`Value.Fig`) is what `Canon`, the joins, `Calc`'s
+  operands and `Salience` read; a value with none is never compared, summed or ranked as a quantity.
+  A money value's unit is the currency its figure states. Only an
+  exact duplicate of a verified finding merges into it, its dropped values' notes with it (`TestR4V4DuplicateKeepsValueNotes`; `restated`: the same issue, the same quotes in the same documents with case and white
+  space folded, the same typed values with their entity and metric, never a breach folded
+  into a finding that states none); a near restatement (a reversed term, a mirrored party's clause) is a finding of its own
+  (`TestRestatedNeverMergesANegatedTerm`, `TestRestatedNeverMergesMirroredParties`); a sum of money the claim states is
+  kept as an untyped value only when the figure reader read the claim's span and a verified quote's span as the same
+  money, clearly (`claimSums`; never a share count, never a bare "3" of "Section 3": `TestR4V4SharesAreNoSum`): no
+  entity or metric, so only the near join compares it. `check_deviation`'s requirement is the controlling document's own
   words: Go verifies it in `requirementDocId` (one of `controllingDocIds`) like any quote before the
   subagent runs and hands the subagent the document's text, with the reviewed documents' passages
-  most like it (`reviewedPassages`, ≤ 16 KB, so it answers at once: `TestDeviationGetsReviewedPassages`;
+  most like it (`reviewedPassages`, ≤ 16 KB, searched by 24 of the requirement's distinct content words, its names, defined terms and numbers first, then its longest, `passageQuery`, under the search's 32, a failed search logged, so it answers at once: `TestDeviationGetsReviewedPassages`;
   its only tool is `retrieve`, as Go verifies every quote it gives): JSON escape artefacts (`\"Tommy\"`) are
   undone, and a requirement joined from several passages (a heading and its list, two sentences from
   two paragraphs) verifies part by part, split where the model joined them (at most 12 joins; its
@@ -956,18 +1005,25 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
   (`TestContextIsTheTextAroundIt`, `TestContextTruncatedWhenTheSentenceStartsBefore`,
   `TestV4WrappedLineSplitsTheSentence`, `TestV4DecimalSiblingsAndChapeau`, `TestV4ContextBoundHolds`). The
   subagent judges against that text (`requirementContext`, the requirement marked ⟦ ⟧), its verdict's
-  controlling quote must lie in it (else the verdict is dropped), and before a verdict is admitted one
-  bounded call on the `critic` role, inside the tool's grant (`rt.ChatWithin`), with the text fenced as
-  document text, answers whether the text, read as a whole, imposes the requirement as the verdict
-  states it (`checkSection`, prompt `specs/section_check.md`). Its answer is read from one strict JSON
+  controlling quote must lie in it (else the verdict is dropped). Before the subagent runs, out of the
+  call's grant first (so its cost is never left unfunded behind the verdicts), one bounded call on the
+  `critic` role (`rt.ChatWithin`), with the window fenced as document text and nothing else (no verdict,
+  correction or reviewed document: bench5 trust, handed the analyst's correction the check judged it and
+  dropped the real incapacity-standard deviation), answers whether the controlling document actually
+  imposes the requirement as quoted, not negated or overridden (`checkSection`, prompt
+  `specs/section_check.md`; `TestSectionCheckAsksAboutTheRequirement`). Whether a reviewed document
+  complies is the subagent's question, never the check's. Its answer is read from one strict JSON
   object only: exactly one `answer` key, spelled so, `yes`/`no`/`unclear` in any case, a trailing "." or "!" aside ("No."), any other
-  wording ("Yes, but …") unclear; a code fence around it, its tag in any case, is allowed; prose around it, a duplicated or differently spelled key drop the verdict
-  (`TestCheckAnswerStrict`). Yes admits it, the claim saying "An independent check read the surrounding
-  text (N bytes) and agreed", with the checker's reasoning labelled "not a quotation"; no (negated or
-  overridden) drops it; unclear ("could not tell"), or a yes on a truncated window ("agreed, but that
-  text begins after …"), admits it at low confidence, labelled
-  for a lawyer's review and gated at finish like a low-confidence transcript (`lowConfidence`); no grant
-  left drops it with a note. The finding quotes the window verbatim as its controlling citation, the requirement
+  wording ("Yes, but …") unclear; a code fence around it, its tag in any case, is allowed (`TestCheckAnswerStrict`).
+  No (negated or overridden) fails the call before the subagent runs, with the checker's reason, so the
+  lead quotes the requirement with what governs it; yes admits each verdict, the claim saying "An
+  independent check read the surrounding text (N bytes) and found that it imposes the requirement as
+  quoted", with the checker's reasoning labelled "not a quotation"; unclear ("could not tell"), or a yes
+  on a truncated window, admits it at low confidence, labelled
+  for a lawyer's review and gated at finish like a low-confidence transcript (`lowConfidence`); a check
+  not had (the grant could not fund it, its call failed, its answer was malformed) admits the verdicts at
+  low confidence and gated too, never drops them (`TestSectionCheckNotHadAdmitsLowGated`; bench5 trust
+  dropped three real deviations as unfunded). The finding quotes the window verbatim as its controlling citation, the requirement
   marked, with the part and the correction given as the analyst's words, not quotations; prosecute checks
   them against it (`TestV3BlankSeparatedListLosesIntroduction`, `TestV3OverrideBelowNotInContext`,
   `TestSectionCheckNegatedDropsVerdict`, `TestSectionCheckYesAdmitsBenchRequirements`,
@@ -1009,14 +1065,16 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
   600 (`through`): a document numbered by paragraph is read a few paragraphs at a
   time, not one subagent run per paragraph (`TestSweepBatchesShortSections`); a `through` that is
   not such a run from `sectionId` (with offset 0) fails the call, never reads `sectionId` alone
-  (`TestExtractFactsRefusesABadThrough`); a visit is keyed (document, section, offset[, through]) and never repeated;
+  (`TestExtractFactsRefusesABadThrough`); a visit is keyed (document, section, offset[, through]) with the plan's issues it was read for, and is
+  repeated only for issues `op plan` added since, sent and admitting only those (`TestIssueAddedAfterSweepGetsItsFacts`); a page
+  no sweep read again for them is a Limitations line (`TestIssueAddedAfterSweepNeverReadAgainIsDisclosed`);
   it stops at its share of the budget and reports `incomplete` with the sections it did not reach
   (a batch as its whole run, "s3 to s9": `TestSweepUncoveredNamesTheWholeBatch`),
   which also go into Limitations. Never silently partial. It reads up to `sweepWorkers` (4) visits at
   once and is still deterministic: a visit starts with a full grant (the subagent's turns and a
   quarter of the sweep's USD) while one is free, else only once nothing is in flight, with what is
   left, so no grant depends on timing and the shares hold exactly as one at a time; findings are
-  admitted (fids, near-duplicate merges) and visits recorded in reading order (each visit waits, after
+  admitted (fids, exact-duplicate merges) and visits recorded in reading order (each visit waits, after
   its subagent ran, for the one before it); a visit a worker's quarter could not fund (a call's
   worst case over it: a pricier model on a small budget) is read again once nothing is in flight,
   one at a time with all that is left, so parallelism never reads less than a one-at-a-time sweep
@@ -1042,8 +1100,8 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
   (delayed credit, ±0.5). A critic that fails leaves a MEDIUM "did not run" finding.
 - **Policy** (`policy.go`): P1 nothing but `retrieve`/`ledger` before a plan, and if the lead has
   spent its plan share (7%, at least 3 calls) without one, the packs' checklist becomes the plan
-  (disclosed); P4 class shares, each on calls **and** USD (evidence 50% of which sweep 39% and the
-  coverage pass 6%, kept for it, so the lead's own evidence calls may spend 44%, at least 5% beside a
+  (disclosed); P4 class shares, each on calls **and** USD (evidence 45% of which sweep 30% and the
+  coverage pass 10%, kept for it, so the lead's own evidence calls may spend 35%, at least 5% beside a
   full sweep; draft
   15%, committee cycles of 20 calls or 20% of a small budget with a fifth of the USD, a reserve of 5
   and meta 3 only `finish` spends). The root budget keeps back the unspent drafting share from
@@ -1052,12 +1110,22 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
   reserve from all but `finish`, so evidence can never spend the draft's budget and the last draft can
   always be reviewed: when the lead runs out with a draft no committee has read, Go runs the
   committee on it from that cycle before the forced finish (`TestPhaseSharesHoldInUSD`,
-  `TestCommitteeAlwaysReviewsTheLastDraft`). `sweep` stops at its USD share as at its calls. The
-  sweep's 39% (35% before r3) is sized from the bench: at about $0.035 a one-call visit, 39% of $11
-  is about 120 pages, so the trust compare set (86 pages) is read whole and the SEC referral set
-  (142 pages as the LAB driver converts it) to about five sixths, its least relevant pages last;
-  reading all of it needs about $5 of sweep, more than the evidence share at $11 (an estimate from
-  bench costs, not yet measured on a rerun).
+  `TestCommitteeAlwaysReviewsTheLastDraft`). The lead runs at most three committee cycles (`maxCycles`; bench6 SEC ran
+  nine, $4.16, while verified findings stayed uncited): a fourth is refused with what to do instead, finish no longer asks
+  for a review of a draft changed after the capped cycles (a Limitations line says so, naming the critic findings resolved
+  as fixed after the last cycle: `TestR4V4UnreviewedFixesNamed`), and the coverage pass, whose own
+  re-review of its redrafts is beyond the cap, may spend half of what is free beside one more cycle and the reserve when
+  that is more than its share, placing left-out findings in up to three rounds of one redraft per issue, at most 16 each,
+  60 per round, a request naming at most 100 findings, the section's own citations and its conflicts' findings never cut
+  (a section citing more is not redrafted: `TestR4V4PlacementKeepsCitations`; `TestBench6SECCommitteeCapped`). The cycle it keeps is a fifth of the USD until a cycle
+  has run, then 1.5 times the costliest cycle so far (`cycleKeep`; bench5's cycles cost $0.30–0.48 of
+  the $2.20 kept). `sweep` stops at its USD share as at its calls. The shares are sized from bench5 at
+  $11 (lab-r4): a visit cost $0.012–0.014, so the 142-page SEC set needs about $2 of sweep (18%; 30%
+  leaves room for half as many pages again); the coverage pass spent about $0.15 an issue on an analysis
+  and its redraft, and at 6% had nothing left to place a finding; a SEC-shaped scripted run at bench
+  costs per call (`TestSECShapedRunAnalysesAndPlacesWithin11`: 142 pages, six issues, a lead that loops
+  drafting and the committee until the budget stops it) analyses every law issue, places the left-out
+  findings and spends under $11.
 - **`finish`** (`op: "check"` is a dry run of `submit`): lint (every `[F-id]` names a usable
   finding; every number and date in the draft is a handle, a `numbers` worksheet's result or one of
   its inputs, or inside a cited finding's quote or value (G8, the "68.6% for 81.6%" trap; a deadline's
@@ -1097,7 +1165,8 @@ to one followed by a noun or unit or after a "," or ";" once "and"/"or" closed t
   issue, else the issue whose question its claim matches best, and each cross-document figure
   conflict the memo does not state both sides of goes to the issue citing either finding; each such
   issue gets one redraft with them, the committee reviews it, and what is still left out is
-  disclosed ("Coverage: N verified findings … never reached the memo"). Every figure conflict the
+  disclosed ("Coverage: N verified findings … never reached the memo"; the parties and the salient
+  figures the memo never names are one line each, at most 12 listed: `TestCoverageLinesSummarised`). Every figure conflict the
   memo does not address is also a `finish` lint line ("memo: the documents state … differently"),
   bounded and disclosed like G8's (`TestCoverageDraftsLeftOutEvidence`). `finish`'s grant holds its meta
   call plus the pass's and one review's calls (so a crash mid-finish loses no more), the pass's own
@@ -1142,7 +1211,11 @@ tool's step is journaled as it happens: before it is sent its worst case is adde
 step's grant, and when it returns it is replaced by what it spent; the resume charges that, the spend
 so far plus the worst case of the calls in flight (at most one per sweep worker), not the tool's
 whole grant (`TestHardCrashChargesOnlyRecordedSpend`; a tool that has made no model call yet keeps
-its whole grant). A task whose document
+its whole grant). That holds for every model call inside the step: a committee's three parallel
+critics' turns, and the query embeddings their (or any subagent's) `retrieve` makes (`agent.Meter`:
+`TestKillDuringCommitteeChargesMeteredSpend`; bench5 trust's $0.5078 lost at a restart mid-committee
+was its 15 metered calls, $0.205, plus two critic calls in flight at their worst case, about $0.15 each,
+not the committee's grant). A task whose document
 was deleted after submission fails (`bad_request`) instead of being claimed again forever. A run stops `finished` (gate open),
 `budget_exhausted` or `max_steps` (a draft changed since its last review gets one committee from the
 kept cycle, then `finish` is forced from the reserve, open findings disclosed; `maxSteps` defaults to
@@ -1507,7 +1580,7 @@ three `sectionChunks` vectors), `TestSweepIdempotent`, `TestSweepReportsIncomple
 `TestCandidatePackDisclosed`; E1/E2 `TestProofRunsOracle`, `TestProofRunsFabricator`; UI embedding
 `TestEmbeddedUIServesIndex`, `TestBuildWithoutUIServesNotice`, `TestAPIListsNeverNull`; Python
 `test_compare_exit_codes`. Extra: `TestLabRunnerSmoke` (the LAB driver end to end against an
-`httptest` server), `TestSweepShareBounded`, `TestSubagentLedgerReadsSkipQuarantine`, `TestUSDBoundFinishDeliversWithoutMeta`, `TestCurrencyFromQuote`,
+`httptest` server), `TestSweepShareBounded`, `TestSubagentLedgerReadsSkipQuarantine`, `TestUSDBoundFinishDeliversWithoutMeta`,
 `TestEventsStream`, `TestE2EServe` (not a check: with `E2E_ADDR` set it serves the API, engine and
 `ui/dist` over a scripted model for a browser run). Each guarded behaviour was broken once on purpose
 and its test failed (65 deliberate breaks, all caught). Bench fixes (after the first real-model
@@ -1526,7 +1599,7 @@ improvements (after the real Haiku LAB rerun; scripted the same way): `TestSweep
 
 | Budget | Ceiling | Today |
 |---|---:|---:|
-| Go production lines (physical lines, non-`_test.go`, test-support packages included) | reported, no limit (owner decision 17) | 14961 |
+| Go production lines (physical lines, non-`_test.go`, test-support packages included) | reported, no limit (owner decision 17) | 15290 |
 | Packages under `internal/`, test-support packages excluded | 12 | 8 (`agent`, `analysis`, `api`, `docs`, `docs/ooxml`, `engine`, `model`, `store`; `store/storetest` is test support) |
 | Direct Go dependencies | 3 | 2 (`github.com/lib/pq`, `github.com/ledongthuc/pdf`) |
 | Runtime environment variables | 20 | 18 |
@@ -1535,7 +1608,7 @@ improvements (after the real Haiku LAB rerun; scripted the same way): `TestSweep
 | Packages without a `_test.go` | 0 | 0 |
 | Lines in any one source file (`.go`, `.py`, `.sql`, `.sh`, `.js`, `.ts`, `.css`; tests included) | 2,000 | 968 (`internal/docs/vision_safety_test.go`) |
 
-**There is no total line ceiling (owner decision 17, 2026-10-23).** `scripts/loc.py` reports the Go production total (14961) and fails only on the budgets that bound bloat directly: no file over 2,000 lines, ≤ 3 direct deps, ≤ 20 env vars, ≤ 12 internal packages, ≤ 2,400 UI source lines, no untested package. Each PR still reports its lines against its DESIGN budget in its notes. (The ceiling's history, 14,000 → 17,500 through owner decisions 7–16, is in PLAN.) A **test-support package** is one
+**There is no total line ceiling (owner decision 17, 2026-10-23).** `scripts/loc.py` reports the Go production total (15290) and fails only on the budgets that bound bloat directly: no file over 2,000 lines, ≤ 3 direct deps, ≤ 20 env vars, ≤ 12 internal packages, ≤ 2,400 UI source lines, no untested package. Each PR still reports its lines against its DESIGN budget in its notes. (The ceiling's history, 14,000 → 17,500 through owner decisions 7–16, is in PLAN.) A **test-support package** is one
 whose directory name ends in `test` and that no production file outside it imports, such as
 `storetest`. Under the coordinator's ruling it is left out of the package count, but its lines
 count toward the reported Go total like any other non-`_test.go` file. A `*test` package that
@@ -1555,7 +1628,7 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
   - The deliverable is Markdown only (`GET /tasks/{id}/deliverable.md`); the `.docx` export waits for
     PR 3d's writer.
   - Quote verification proves a quote is in the document, not that the claim follows from it:
-    `prosecute` checks that, and a lawyer approves every deliverable. The G8 lint traces digits, not
+    `prosecute` checks that, and a lawyer approves every deliverable. The G8 lint traces figures (a figure the drafter wrote by the figure reader's reading of it, to a cited span or value read as the same kind, currency and amount; a handle's value by construction; anything the reader did not read clearly as written), not
     words: a wrong party or a wrong verb with correct figures passes it.
   - The SSE stream polls the database every 500 ms. Cancel stops a run at once in its own process
     and at the next heartbeat (up to 10 s) in another; the call in flight is charged.
@@ -1641,10 +1714,14 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     never fall) with no table row and no sentence. The count of skipped pages and their
     documents is a Limitations line.
   - One call a visit is an inference from the bench's token counts (about 26,000 input tokens a
-    visit, three calls), not a measured split; the 39% share's reach is estimated from it.
+    visit, three calls), not a measured split. The lab-r4 shares are sized from bench5's costs per
+    call (a visit $0.012–0.014, a committee cycle $0.30–0.48, an analysis and its redraft about $0.15)
+    and are not yet measured on a rerun.
   - A salient finding is judged by its tool, severity, typed relations, figures or the words of its
     claim ("deviates", "does not", "fails to"): a left-out finding stated otherwise is not placed, and
-    a claim that merely says "does not" is. The pass places at most 40, one redraft per issue.
+    a claim that merely says "does not" is. The pass places at most 40, one redraft per issue, the
+    issues with a conflict or the strongest left-out finding first, from the 40% of its USD its
+    analyses leave for it (`placeShare`); what it cannot place is one Limitations line.
   - A requirement's parts must be the document's words, in its order, one passage: only white space
     and list markers between them, or, after a sentence, at most two whole sentences (400 bytes); never
     a heading or a list's introduction between them. A fragment is not refused: it is read and quoted
@@ -1653,14 +1730,21 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     the document ("9. Clause 4 shall not apply …" pages later, a defined term's meaning), is not seen.**
     A requirement whose sentence or paragraph starts before the window, or whose window starts at a list
     item, is admitted only at low confidence, for a lawyer's review, so a requirement in a long paragraph
-    (over 3 KB above it) or deep in a long list is always gated. Whether the text imposes the requirement as a verdict states it (a
-    negation, an override) is the section check's judgment, one critic call per admitted verdict: the
-    context makes the governing words visible and the check reads them, which does not make the verdict
-    right.
-  - The near join pairs only one entity's values (alias-unified, or both with none), within an eighth
+    (over 3 KB above it) or deep in a long list is always gated. Whether the text imposes the requirement as quoted (a
+    negation, an override) is the section check's judgment, one critic call per `check_deviation` call:
+    the context makes the governing words visible and the check reads them, which does not make a
+    verdict right (an analyst who misreads a requirement the document does impose is checked only by
+    the claim's quoted window and prosecute).
+  - The near join, like the label join, pairs only values the figure reader read as one party's (its
+    party label, unified only by the lead's aliases; a value whose party it could not tell is never part
+    of a conflict, and no name containment or mention in Go makes two labels one party:
+    `TestR4V4NearJoinPartiesFromTheReader`, `TestCrossDocAliasTokenContainment`); under two extractor labels
+    by metric and quote context: two distinctive words shared (three of a date's own clause), a label
+    content word shared or both totals (`onePair`, `TestJoinBench6SECPairsAcrossLabels` over the bench6 SEC
+    ledger with the pairs' right labels, `TestJoinBench6GateANoConflicts`), within an eighth
     of each other, and not when each label names a thing its own quote states and the other side
-    never mentions (a fee and an allocation, a notice and a demand); dates joined by shared words take
-    the same label test. It is a word test: a part of a figure is told apart from it only when its
+    never mentions (a fee and an allocation, a notice and a demand); dates are one event by their label,
+    or by near's context test. It is a word test: a part of a figure is told apart from it only when its
     quote frames that value itself as one: "of/toward/against the <label>" right after it; a portion word
     (a deposit, instalment, holdback …) that is not the other's label as the word it is stated under ("a
     deposit of $950,000", not "total payments of"); a portion of the label before it ("the cash portion

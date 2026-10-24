@@ -5,11 +5,15 @@ package engine
 
 import (
 	"math"
+	"math/big"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
+
+	"github.com/discover-legal/BigLaw/internal/analysis"
 )
 
 // The sweep's reading order and its skips (bench r3, SEC referral: 169 planned visits, the sweep's
@@ -152,9 +156,17 @@ func tableRow(l string) bool {
 	return len(cs) >= 3 && num >= 2
 }
 
-// tocTitleFigure is what a table of contents' entry title never holds: an amount, a percentage, a
-// figure of three or more digits (a TOC title names a heading, not a quantity).
-var tocTitleFigure = regexp.MustCompile(`[$€£¥%]|\d{3,}`)
+// tocTitleFigure reports whether a table of contents' entry title holds what a title never does:
+// a date, a number of a hundred or more, a grouped or decimal number, or one written beside a
+// currency symbol or a percent sign, as written (a TOC title names a heading, not a quantity).
+func tocTitleFigure(title string) bool {
+	ds, fs := analysis.Literal(title)
+	return len(ds) > 0 || slices.ContainsFunc(fs, func(f analysis.Span) bool {
+		before, after := strings.TrimRight(title[:f.Start], " "), strings.TrimLeft(title[f.End:], " ")
+		r, _ := utf8.DecodeLastRuneInString(before)
+		return f.Grouped() || f.Readings()[0].Cmp(big.NewRat(100, 1)) >= 0 || unicode.Is(unicode.Sc, r) || strings.HasPrefix(after, "%")
+	})
+}
 
 // toc reports whether a page reads as a table of contents and nothing else: no table row, no
 // sentence (every other line a short heading), and either its own Contents (Table of Contents,
@@ -172,7 +184,7 @@ func toc(lines []string) bool {
 		if m := tocEntry.FindStringSubmatch(l); m != nil {
 			n, _ := strconv.Atoi(m[3])
 			dots := m[2] != "\t" && strings.TrimSpace(m[2]) != ""
-			entries, leaders = entries+1, leaders+btoi(dots && !tocTitleFigure.MatchString(m[1]))
+			entries, leaders = entries+1, leaders+btoi(dots && !tocTitleFigure(m[1]))
 			rising, last = rising && n >= last && len(m[3]) <= 3, n
 		} else if t := strings.TrimSpace(l); len(strings.Fields(t)) > 8 || endsWith(t, ".!?") && len(strings.Fields(t)) > 2 {
 			return false // prose: a page that holds a sentence is read, whatever else it holds

@@ -28,7 +28,7 @@
      "type": "string",
      "maxLength": 16
     },
-    "maxItems": 60
+    "maxItems": 100
    },
    "revise": {
     "type": [

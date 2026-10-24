@@ -95,7 +95,7 @@ func TestDeadlinesMeetTheAnswerKey(t *testing.T) {
 				q("An answer is due 21 days after service.", rules, "A defendant must serve an answer within 21 days after being served with the summons and complaint")),
 		},
 	})
-	fake := model.NewFake(scripts)
+	fake := newFake(scripts)
 	f.e = New(f.st, f.d, handleDrafter{fake}, testRoles, nil, Config{BudgetCalls: 150, BudgetUSD: 5, CollapseThreshold: 0.5, CollapseAction: "strict"}, nil)
 	task := f.submit(0)
 	f.step(context.Background())
@@ -120,7 +120,7 @@ func TestDeadlinesMeetTheAnswerKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, _ := dates(out)
+	got, _ := analysis.Literal(out)
 	checked := 0
 	for _, c := range key.Facts {
 		if c.Category != "deadline" {

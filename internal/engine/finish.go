@@ -211,6 +211,11 @@ func (f finish) check(ctx context.Context, limits []limitation) (report, error) 
 			rep.limits = append(rep.limits, s)
 		}
 	}
+	if l, err := e.staleLine(ctx, id, issues); err != nil {
+		return report{}, err
+	} else if l != "" {
+		rep.limits = append(rep.limits, l)
+	}
 	if len(issues) == 0 {
 		bad("no_plan", "no plan is recorded: record one with ledger op plan")
 	}
@@ -269,24 +274,31 @@ func (f finish) check(ctx context.Context, limits []limitation) (report, error) 
 			for _, x := range lo[:min(maxPlaced, len(lo))] {
 				ids = append(ids, x.FID)
 			}
-			rep.limits = append(rep.limits, fmt.Sprintf("Coverage: %d verified %s that state a deviation, omission, violation or salient figure never reached the memo: %s%s.",
-				len(lo), plural(len(lo), "finding", "findings"), strings.Join(ids, ", "), cmpStr(len(lo) > maxPlaced, fmt.Sprintf(" and %d more", len(lo)-maxPlaced), "")))
+			rep.limits = append(rep.limits, fmt.Sprintf("Coverage: %d verified %s a deviation, omission, violation or salient figure never reached the memo: %s%s.",
+				len(lo), plural(len(lo), "finding that states", "findings that state"), strings.Join(ids, ", "), cmpStr(len(lo) > maxPlaced, fmt.Sprintf(" and %d more", len(lo)-maxPlaced), "")))
+		}
+	}
+	if pass != nil { // the coverage pass's list of usable findings with a dropped typed value (lab-r4 r3 M7): one line
+		if line := unadmittedLine(pass.Unadmitted, byFID); line != "" {
+			rep.limits = append(rep.limits, line)
 		}
 	}
 	cov := analysis.CheckCoverage(ais, texts, an, nil)
 	rep.MissingIssues, rep.UncoveredParties, rep.MissingFigures = cov.MissingIssues, cov.UncoveredParties, cov.MissingFigures
-	for _, p := range cov.UncoveredParties {
-		rep.limits = append(rep.limits, "Coverage: "+p.Note)
+	if line := partyLine(cov.UncoveredParties); line != "" { // one line each, not one per party (bench5 SEC: 101 "Coverage:" lines)
+		rep.limits = append(rep.limits, line)
 	}
-	for _, h := range cov.MissingFigures {
-		rep.limits = append(rep.limits, fmt.Sprintf("Coverage: the figure %s (%s, %s) never appears in the memo.", h.Value, h.Label, h.FID))
+	if line := figureLine(cov.MissingFigures); line != "" {
+		rep.limits = append(rep.limits, line)
 	}
 	funded := f.funded()
 	switch {
 	case len(cyc) == 0 && len(secs) > 0:
 		bad("no_committee", "no committee has reviewed the draft: run committee")
-	case len(cyc) > 0 && cyc[len(cyc)-1].Version != version(secs) && funded:
+	case len(cyc) > 0 && cyc[len(cyc)-1].Version != version(secs) && funded && len(cyc) < maxCycles:
 		bad("committee_stale", "the draft changed after the last committee: run committee on the current draft")
+	case len(cyc) >= maxCycles && cyc[len(cyc)-1].Version != version(secs):
+		rep.limits = append(rep.limits, fmt.Sprintf("Review: the committee reviewed the draft %d times (the run's cap); the changes after its last cycle were not reviewed again.%s", len(cyc), unreviewedFixes(crit, len(cyc))))
 	}
 	for _, x := range crit {
 		switch {
@@ -399,4 +411,70 @@ func (f finish) gates(ctx context.Context, md string) error {
 // transcript pages.
 func gated(x Finding, unsupported bool) bool {
 	return unsupported || x.Low || allCitations(x, func(c Citation) bool { return c.Low })
+}
+
+// maxListed bounds the names a summarised Coverage line lists before "and N more".
+const maxListed = 12
+
+// unadmittedLine is the Limitations line for the usable findings that kept fewer typed values than
+// their subagent gave: each dropped value's note is on the finding (the API's finding view).
+func unadmittedLine(fids []string, use map[string]Finding) string {
+	var ids []string
+	for _, fid := range fids {
+		if _, ok := use[fid]; ok {
+			ids = append(ids, fid)
+		}
+	}
+	if len(ids) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("Evidence: %d verified %s a typed value that admission dropped because %s quotes did not state it as typed (each finding's value notes say why): %s%s.",
+		len(ids), plural(len(ids), "finding had", "findings had"), plural(len(ids), "its", "their"), strings.Join(ids[:min(maxListed, len(ids))], ", "),
+		cmpStr(len(ids) > maxListed, fmt.Sprintf(" and %d more", len(ids)-maxListed), ""))
+}
+
+// unreviewedFixes names the critic findings resolved "fixed" after the committee's last cycle (or
+// raised by it): no critic read those fixes, so they are what a reader must check again (lab-r4 r4
+// verifier L7).
+func unreviewedFixes(crit []Critic, cycles int) string {
+	var ls []string
+	for _, x := range crit {
+		if x.Status == "fixed" && (x.Cycle == cycles || x.Resolved >= cycles) {
+			t := x.Text
+			if r := []rune(t); len(r) > 240 {
+				t = string(r[:240]) + "…"
+			}
+			ls = append(ls, fmt.Sprintf("%s (%s, %s): %s", x.ID, x.Severity, x.Critic, t))
+		}
+	}
+	if len(ls) == 0 {
+		return ""
+	}
+	return " Resolved as fixed after it, unreviewed: " + strings.Join(ls[:min(maxListed, len(ls))], "; ") + cmpStr(len(ls) > maxListed, fmt.Sprintf("; and %d more", len(ls)-maxListed), "") + "."
+}
+
+// partyLine is the Limitations line for the parties the findings name and the memo never does.
+func partyLine(ps []analysis.PartyGap) string {
+	if len(ps) == 0 {
+		return ""
+	}
+	var names []string
+	for _, p := range ps[:min(maxListed, len(ps))] {
+		names = append(names, fmt.Sprintf("%s (%s)", p.Name, strings.Join(p.FIDs[:min(3, len(p.FIDs))], ", ")))
+	}
+	return fmt.Sprintf("Coverage: %d %s named in verified findings never %s in the memo: %s%s.", len(ps), plural(len(ps), "party", "parties"), plural(len(ps), "appears", "appear"),
+		strings.Join(names, "; "), cmpStr(len(ps) > maxListed, fmt.Sprintf(" and %d more", len(ps)-maxListed), ""))
+}
+
+// figureLine is the Limitations line for the salient figures that never reach the memo.
+func figureLine(hs []analysis.Handle) string {
+	if len(hs) == 0 {
+		return ""
+	}
+	var figs []string
+	for _, h := range hs[:min(maxListed, len(hs))] {
+		figs = append(figs, fmt.Sprintf("%s (%s)", h.Value, strings.Join(slices.DeleteFunc([]string{h.Label, h.FID}, func(s string) bool { return s == "" }), ", ")))
+	}
+	return fmt.Sprintf("Coverage: %d salient %s never %s in the memo: %s%s.", len(hs), plural(len(hs), "figure", "figures"), plural(len(hs), "appears", "appear"),
+		strings.Join(figs, "; "), cmpStr(len(hs) > maxListed, fmt.Sprintf(" and %d more", len(hs)-maxListed), ""))
 }

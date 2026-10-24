@@ -109,18 +109,6 @@ func TestRendererUsesDrafterHandleSet(t *testing.T) {
 	}
 }
 
-// TestCurrencyFromQuote (4a r2 L2): a money value's currency is the symbol its quote puts beside
-// it, not another figure's; none shown is "" (USD).
-func TestCurrencyFromQuote(t *testing.T) {
-	t.Parallel()
-	q := "A fee of €1,200 and $5 per page, or 40 CHF, plus £30."
-	for _, c := range [][2]string{{"1,200", "EUR"}, {"5", ""}, {"40", "CHF"}, {"£30", "GBP"}, {"7", ""}} {
-		if got := currencyOf(c[0], q); got != c[1] {
-			t.Errorf("currencyOf(%q) = %q, want %q", c[0], got, c[1])
-		}
-	}
-}
-
 // TestSheetValueAsTheMemoStatesIt: a worksheet result reads as the memo would state it.
 func TestSheetValueAsTheMemoStatesIt(t *testing.T) {
 	for in, want := range map[[2]string]string{{"2026-11-12", "date"}: "November 12, 2026", {"214340", "USD"}: "$214,340", {"-1234.5", "USD"}: "-$1,234.5",

@@ -67,10 +67,10 @@ func TestJoinRefusesUnverifiedInputs(t *testing.T) {
 // r2 verifier N1: an empty fids list means every finding, as null does (and as in numbers);
 // [] once picked nothing and silently reported no discrepancy.
 func TestJoinEmptyFidsMeansAll(t *testing.T) {
-	fs := src{
+	fs := src(read([]Finding{
 		fh("$9.0 million", "Respondent paid $9.0 million in fees.", "docA", "Acme", "fees paid"),
 		fh("$9.4 million", "Acme paid $9.4 million in fees.", "docB", "Acme", "fees paid"),
-	}
+	}))
 	rt := &agent.Runtime{Chat: model.NewFake(nil), Reg: agent.NewRegistry()}
 	for _, tl := range Tools(fs) {
 		if err := rt.Reg.Register(tl); err != nil {

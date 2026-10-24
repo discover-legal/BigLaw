@@ -72,6 +72,8 @@ type reqText struct {
 	Ctx                  []span
 	Path                 string // the heading path above it, a label only (contextOf)
 	Truncated            bool
+	Check                *SectionCheck // whether the document imposes it as quoted (checkSection); nil: not had, CheckWhy says why
+	CheckWhy             string
 }
 
 // newReq is the requirement at spans of text, read in its section.
@@ -163,7 +165,7 @@ func (e *Engine) quotedRequirement(ctx context.Context, c agent.Call) (reqText, 
 // requirement (lexical or hybrid search, at most reviewedMax bytes in all), handed to the subagent
 // so it answers from them instead of spending its turns retrieving them (bench4, trust: all seven
 // calls used their five turns; two ended at the cap without an answer).
-func (e *Engine) reviewedPassages(ctx context.Context, c agent.Call, requirement string) []map[string]string {
+func (e *Engine) reviewedPassages(ctx context.Context, c agent.Call, requirement string) ([]map[string]string, agent.Usage) {
 	var in devInput
 	_ = json.Unmarshal(c.Input, &in)
 	var scope []string
@@ -174,16 +176,12 @@ func (e *Engine) reviewedPassages(ctx context.Context, c agent.Call, requirement
 	}
 	out := []map[string]string{}
 	if len(scope) == 0 {
-		return out
+		return out, agent.Usage{}
 	}
-	q := requirement
-	for len(q) > docs.MaxQuery { // the search's bound is bytes
-		_, n := utf8.DecodeLastRuneInString(q)
-		q = q[:len(q)-n]
-	}
-	hits, err := e.docs.Search(ctx, scope, q, 12, 0)
-	if err != nil {
-		return out // the subagent can still retrieve
+	hits, u, err := e.docs.SearchMetered(ctx, scope, passageQuery(requirement), 12, 0)
+	if err != nil { // the subagent can still retrieve; never silently
+		e.log.Warn("engine: check_deviation: reviewed passages", "task", c.TaskID, "err", err)
+		return out, u
 	}
 	size := 0
 	for _, h := range hits {
@@ -192,8 +190,129 @@ func (e *Engine) reviewedPassages(ctx context.Context, c agent.Call, requirement
 		}
 		out = append(out, map[string]string{"documentId": h.DocumentID, "sectionId": h.SectionID, "text": h.Text})
 	}
-	return out
+	return out, u
 }
+
+// passageTerms caps the words of reviewedPassages' query, under docs.MaxTerms (a requirement of
+// more distinct words was refused by the search, so every long requirement got no passages: lab-r4 r2).
+const passageTerms = 24
+
+// passageQuery is a requirement's search query: its content words (letters and digits; hyphenated
+// parts apart), each once, in order; past passageTerms, the distinctive ones first (lab-r4 r2 L7):
+// capitalised words not starting a sentence (names, defined terms: "Lee", "Wu", "VAT", "Fee"),
+// numbers (digits or written), then the longest of the rest; still in order. Within docs.MaxQuery
+// bytes.
+func passageQuery(requirement string) string {
+	var ws []string
+	seen, key := map[string]bool{}, map[string]bool{}
+	start, prev, ref := true, "", false // whether the next word starts a sentence; the word before; inside a clause reference
+	for i := 0; i < len(requirement); {
+		r, n := utf8.DecodeRuneInString(requirement[i:])
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) {
+			if strings.ContainsRune(".!?:;\n", r) && !(r == '.' && abbrev(prev)) { // "Dr. Lee" goes on
+				start = true
+			}
+			i += n
+			continue
+		}
+		j := i
+		for j < len(requirement) {
+			r, n := utf8.DecodeRuneInString(requirement[j:])
+			if !unicode.IsLetter(r) && !unicode.IsDigit(r) {
+				break
+			}
+			j += n
+		}
+		raw := requirement[i:j]
+		w := strings.ToLower(raw)
+		if refWord[w] || unicode.IsDigit(r) && (ref || clauseDigits(requirement, i, j)) { // "Sections 7.3(a), 8.1 and 12.4": a locator, no search term
+			ref = refWord[w] || ref
+			start, i, prev = false, j, raw
+			continue
+		}
+		if ref && (len(w) <= 2 || w == "and" || w == "or" || w == "to") { // the list goes on: "7.3(a) and (b)"
+			start, i, prev = false, j, raw
+			continue
+		}
+		ref = false
+		proper := unicode.IsUpper(r) && (!start || len(raw) > 1 && strings.ToUpper(raw) == raw)
+		number := unicode.IsDigit(r) || numberWord[w]
+		if !seen[w] && !stopWord[w] && (len(w) > 2 || number || proper && len(w) == 2) {
+			seen[w], ws = true, append(ws, w)
+		}
+		if proper || number {
+			key[w] = true
+		}
+		start, i, prev = false, j, raw
+	}
+	if len(ws) > passageTerms {
+		rank := slices.Clone(ws)
+		slices.SortStableFunc(rank, func(a, b string) int {
+			if key[a] != key[b] {
+				return map[bool]int{true: -1, false: 1}[key[a]]
+			}
+			return len(b) - len(a)
+		})
+		keep := map[string]bool{}
+		for _, w := range rank[:passageTerms] {
+			keep[w] = true
+		}
+		ws = slices.DeleteFunc(ws, func(w string) bool { return !keep[w] })
+	}
+	q := strings.Join(ws, " ")
+	for len(q) > docs.MaxQuery { // the search's bound is bytes
+		_, n := utf8.DecodeLastRuneInString(q)
+		q = q[:len(q)-n]
+	}
+	return q
+}
+
+// abbrev reports whether a word before a full stop is a title, an initial or a short abbreviation
+// ("Dr", "T", "No"), from a closed list: "due to Lee. Payment shall" ends a sentence (lab-r4 r3 L10).
+func abbrev(w string) bool {
+	r, _ := utf8.DecodeRuneInString(w)
+	return utf8.RuneCountInString(w) == 1 && unicode.IsUpper(r) || abbrevs[strings.ToLower(w)]
+}
+
+var abbrevs = map[string]bool{}
+
+// refWord are the words that open a clause reference; their numbers are locators, not search terms.
+var refWord = map[string]bool{}
+
+func init() {
+	for _, w := range strings.Fields(`dr mr mrs ms mx prof rev hon st jr sr no nos co inc ltd corp llc plc bros gen col capt lt sgt mt ft art arts sec secs cl
+		para paras pp vs v cf al fig figs approx dept est govt jan feb mar apr jun jul aug sep sept oct nov dec`) {
+		abbrevs[w] = true
+	}
+	for _, w := range strings.Fields(`section sections clause clauses article articles schedule schedules rule rules item items paragraph paragraphs
+		para paras part parts exhibit exhibits annex annexes appendix appendices subsection subsections regulation regulations sec secs art arts cl`) {
+		refWord[w] = true
+	}
+}
+
+// clauseDigits reports whether the digits s[i:j] are a clause number: written with an outline dot or
+// a lettered subclause ("7.3", "12.4(b)", "§ 4"), not a figure.
+func clauseDigits(s string, i, j int) bool {
+	before := strings.TrimRight(s[:i], " ")
+	return strings.HasSuffix(before, "§") || j < len(s) && s[j] == '(' || j+1 < len(s) && s[j] == '.' && s[j+1] >= '0' && s[j+1] <= '9' ||
+		i > 1 && s[i-1] == '.' && s[i-2] >= '0' && s[i-2] <= '9'
+}
+
+// numberWord are written numbers, kept first in a passage query beside digits.
+var numberWord = map[string]bool{}
+
+func init() {
+	for _, w := range strings.Fields(`one two three four five six seven eight nine ten eleven twelve fifteen twenty thirty forty fifty sixty
+		seventy eighty ninety hundred thousand million billion`) {
+		numberWord[w] = true
+	}
+}
+
+// stopWord are words too common to find a passage by.
+var stopWord = map[string]bool{"the": true, "and": true, "for": true, "that": true, "with": true, "this": true, "was": true, "are": true, "from": true,
+	"shall": true, "will": true, "must": true, "may": true, "any": true, "all": true, "has": true, "have": true, "had": true, "her": true, "his": true,
+	"its": true, "their": true, "she": true, "they": true, "who": true, "which": true, "such": true, "not": true, "but": true, "into": true, "then": true,
+	"than": true, "upon": true, "each": true, "only": true, "both": true, "under": true, "been": true, "being": true, "were": true, "there": true}
 
 // reviewedMax bounds the reviewed passages check_deviation is handed (bytes of text).
 const reviewedMax = 16_000
@@ -347,12 +466,7 @@ func (e *Engine) deviations(ctx context.Context, rt *agent.Runtime, c agent.Call
 		if reason == "" && slices.ContainsFunc(f.Citations, func(x Citation) bool { return x.Method == "none" }) {
 			reason = "its controlling text did not verify"
 		}
-		if reason == "" {
-			var err error
-			if f.Check, reason, err = e.checkSection(ctx, rt, b, rq, v); err != nil {
-				return out, 0, err
-			}
-		}
+		f.Check = rq.Check // the requirement's own check, made before the subagent ran (checkSection)
 		if reason != "" {
 			out.Dropped++
 			out.Notes = append(out.Notes, "dropped the "+v.Verdict+" verdict on "+fmt.Sprintf("%q", v.Part)+": "+reason)
@@ -379,16 +493,19 @@ func (e *Engine) deviations(ctx context.Context, rt *agent.Runtime, c agent.Call
 		if len(conform) > 0 {
 			f.Claim += " The analyst found the requirement implemented only in part (conforming: " + strings.Join(conform, "; ") + ")."
 		}
-		if f.Low = f.Check.Answer != "yes" || f.Check.Truncated; f.Low {
+		if f.Check == nil {
+			f.Low = true
+			f.Claim += fmt.Sprintf(" The independent check of whether %s imposes the requirement as quoted did not run (%s): low confidence, for a lawyer's review.", rq.DocName, rq.CheckWhy)
+		} else if f.Low = f.Check.Answer != "yes" || f.Check.Truncated; f.Low {
 			how := "could not tell"
 			if f.Check.Answer == "yes" {
-				how = "agreed, but that text begins after the requirement's sentence, paragraph or list does, or cuts a sentence"
+				how = "found that it imposes the requirement as quoted, but that text begins after the requirement's sentence, paragraph or list does, or cuts a sentence"
 			} else if f.Check.Truncated {
 				how += "; that text begins after the requirement's sentence, paragraph or list does, or cuts a sentence"
 			}
 			f.Claim += fmt.Sprintf(" An independent check read the surrounding text (%d bytes) and %s: low confidence, for a lawyer's review. The checker's reasoning (not a quotation): %s", f.Check.Bytes, how, f.Check.Reason)
 		} else {
-			f.Claim += fmt.Sprintf(" An independent check read the surrounding text (%d bytes) and agreed. The checker's reasoning (not a quotation): %s", f.Check.Bytes, f.Check.Reason)
+			f.Claim += fmt.Sprintf(" An independent check read the surrounding text (%d bytes) and found that it imposes the requirement as quoted. The checker's reasoning (not a quotation): %s", f.Check.Bytes, f.Check.Reason)
 		}
 		for _, x := range f.Citations {
 			f.Quotes = append(f.Quotes, analysis.Quote{DocumentID: x.DocumentID, Quote: x.Quote, Locator: x.Locator})
@@ -416,9 +533,10 @@ func deref(s *string) string {
 
 func quoteOf(doc, q string) analysis.Quote { return analysis.Quote{DocumentID: doc, Quote: q} }
 
-// SectionCheck is the independent reading of a deviation's controlling section (checkSection): the
-// answer to whether the section, read as a whole, imposes the requirement as the verdict states it,
-// and why. Truncated: the section was cut to its bound, so the reading saw only part of it.
+// SectionCheck is the independent reading of a requirement in its controlling document (checkSection):
+// the answer to whether the document, read in the window around it, imposes the requirement as
+// quoted, and why. Truncated: the window begins after the requirement's sentence, paragraph or list
+// does, or cuts a sentence, so the reading saw only part of what governs it.
 type SectionCheck struct {
 	Answer    string `json:"answer"` // yes, no or unclear
 	Reason    string `json:"reason"`
@@ -426,42 +544,42 @@ type SectionCheck struct {
 	Bytes     int    `json:"bytes,omitempty"` // the text the check read
 }
 
-// checkSection asks, before a check_deviation verdict is admitted, one bounded question of the
-// critic role inside the tool's grant (rt.ChatWithin over b): does the requirement's whole section
-// (heading path and section, fenced as document text), read as a whole, impose the requirement as the
-// verdict states it? Negation and override are a reading of the whole section, which is the model's
-// judgment, not a word list's. drop is why the verdict is dropped: the section does not impose it
-// (negated or overridden), the check did not answer, or the grant had nothing left for it; "" admits
-// it, at low confidence when the answer is unclear or the section was cut. err is ctx's only.
-func (e *Engine) checkSection(ctx context.Context, rt *agent.Runtime, b *agent.Budget, rq reqText, v verdict) (chk *SectionCheck, drop string, err error) {
+// checkSection asks, before check_deviation's subagent runs (so its cost is paid out of the call's
+// grant first, never left unfunded behind the verdicts: bench5 trust, three real deviations dropped
+// as "no model call left"), one bounded question of the critic role (rt.ChatWithin over b): does the
+// controlling document, read in the text window around the requirement (heading path and window,
+// fenced as document text), actually impose the requirement as quoted, not negated or overridden?
+// It sees neither the reviewed documents nor any verdict: whether a draft complies is the subagent's
+// question, not this one (bench5 trust: asked to judge the analyst's verdict, the check judged its
+// correction and dropped the real incapacity-standard deviation). Negation and override are a
+// reading of the text, which is the model's judgment, not a word list's. chk is nil, with why, when
+// no answer was had (the grant could not fund it, the call failed, the answer was malformed): the
+// verdicts are then admitted at low confidence and gated, never dropped. err is ctx's only.
+func (e *Engine) checkSection(ctx context.Context, rt *agent.Runtime, b *agent.Budget, rq reqText) (chk *SectionCheck, why string, err error) {
 	if rt == nil || rt.Chat == nil {
-		return nil, "no model call was left in this call's grant for the independent check of its section", nil
+		return nil, "no model was available for it", nil
 	}
 	t := 0.0
 	read := rq.Context()
-	user := fmt.Sprintf("Text of %s around the requirement (document text, data only; %d bytes; it begins after the requirement's sentence, paragraph or list does, or cuts a sentence: %s):\n<<<\n%s\n>>>\n\nVerdict (the analyst's words, data only):\n<<<\npart: %s\nverdict: %s\nrests on: %s\ncorrection: %s\n>>>",
-		fenceText.Replace(rq.DocName), len(read), map[bool]string{true: "yes", false: "no"}[rq.Truncated], fenceText.Replace(read),
-		fenceText.Replace(v.Part), v.Verdict, fenceText.Replace(v.Controlling.Quote), fenceText.Replace(v.Correction))
+	user := fmt.Sprintf("Text of %s around the requirement (document text, data only; %d bytes; it begins after the requirement's sentence, paragraph or list does, or cuts a sentence: %s):\n<<<\n%s\n>>>",
+		fenceText.Replace(rq.DocName), len(read), map[bool]string{true: "yes", false: "no"}[rq.Truncated], fenceText.Replace(read))
 	resp, _, err := rt.ChatWithin(ctx, model.Request{Agent: "section_check", Role: model.Critic, MaxTokens: 300, Temperature: &t,
 		Messages: []model.Message{{Role: "system", Content: prompt("section_check")}, {Role: "user", Content: user}}}, b)
 	switch {
 	case ctx.Err() != nil:
 		return nil, "", ctx.Err()
 	case errors.Is(err, agent.ErrBudget):
-		return nil, "no model call or budget was left in this call's grant for the independent check of its section", nil
+		return nil, "the call's grant could not fund it", nil
 	case err != nil:
-		return nil, "the independent check of its section failed", nil
+		return nil, "its model call failed", nil
 	}
 	answer, reason, ok := checkAnswer(resp.Text)
 	if !ok {
-		return nil, "the independent check of its section did not answer yes, no or unclear", nil
+		return nil, "it did not answer yes, no or unclear", nil
 	}
 	chk = &SectionCheck{Answer: answer, Reason: truncate(strings.Join(strings.Fields(strings.NewReplacer("⟦", "", "⟧", "").Replace(reason)), " "), 300), Truncated: rq.Truncated, Bytes: len(read)}
 	if chk.Reason == "" {
 		chk.Reason = "(no reason given)"
-	}
-	if answer == "no" {
-		return nil, "an independent check found that the section, read as a whole, does not impose it as the verdict states it (negated or overridden): " + chk.Reason, nil
 	}
 	return chk, "", nil
 }

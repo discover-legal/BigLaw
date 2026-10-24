@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/discover-legal/BigLaw/internal/agent"
 	"github.com/discover-legal/BigLaw/internal/model"
 )
 
@@ -185,16 +184,21 @@ func sectionCheckRequest(f *fixture) (model.Request, bool) {
 	return model.Request{}, false
 }
 
-// TestSectionCheckNegatedDropsVerdict: an inverted verdict (the memo forbids naming Sophia; the
-// verdict asks the draft to name her) is dropped when the check answers that the section negates it.
+// TestSectionCheckNegatedDropsVerdict: a requirement the memo negates (it forbids naming Sophia) fails
+// the call before its subagent runs, when the check answers that the text does not impose it as quoted.
 func TestSectionCheckNegatedDropsVerdict(t *testing.T) {
 	t.Parallel()
 	memo := "B. Successor Trustees\n\nThe following persons shall NOT serve as successor trustee in any capacity:\n\nMartin Hale, the settlor's former business partner.\n\nSophia Davenport-Chen, the settlor's daughter, as a successor trustee.\n"
 	req := "Sophia Davenport-Chen, the settlor's daughter, as a successor trustee."
 	f, v := r4Dev(t, memo, req, req, []model.Reply{text(m{"answer": "no", "reason": "the introduction says these persons shall NOT serve"})})
 	out := strings.Join(f.outputs(v.ID, "check_deviation"), "")
-	if len(v.Findings) != 0 || !strings.Contains(out, "does not impose it as the verdict states it (negated or overridden): the introduction says these persons shall NOT serve") {
-		t.Errorf("findings %+v; %s", v.Findings, out)
+	sub := 0
+	for _, c := range f.e.chat.(*model.Fake).Calls() {
+		sub += btoi(c.Agent == "check_deviation")
+	}
+	if len(v.Findings) != 0 || !strings.HasPrefix(out, "failed") || sub != 0 ||
+		!strings.Contains(out, "does not impose the requirement as quoted (negated or overridden): the introduction says") {
+		t.Errorf("findings %+v; %d subagent calls; %s", v.Findings, sub, out)
 	}
 	req2, ok := sectionCheckRequest(f)
 	if !ok || req2.Role != model.Critic || !strings.Contains(req2.Messages[1].Content.(string), "<<<\nB. Successor Trustees\n\nThe following persons shall NOT serve") ||
@@ -217,7 +221,7 @@ func TestSectionCheckYesAdmitsBenchRequirements(t *testing.T) {
 		fs := ledgerFindings(t, f, v.ID)
 		if len(fs) != 1 || fs[0].Check == nil || fs[0].Check.Answer != "yes" || fs[0].Low ||
 			!strings.Contains(fs[0].Claim, "An independent check read the surrounding text (") ||
-			!strings.Contains(fs[0].Claim, "bytes) and agreed. The checker's reasoning (not a quotation): the section states the requirement as quoted") {
+			!strings.Contains(fs[0].Claim, "bytes) and found that it imposes the requirement as quoted. The checker's reasoning (not a quotation): the section states the requirement as quoted") {
 			t.Errorf("%s: findings %+v; %q", c.name, fs, f.outputs(v.ID, "check_deviation"))
 		}
 	}
@@ -244,8 +248,7 @@ func TestSectionCheckUnclearOrCutIsLow(t *testing.T) {
 }
 
 // TestSectionCheckChargedWithinGrant: the check is one model call charged to check_deviation's grant
-// (its step's usage holds it), and with nothing left in the grant the verdict is dropped with a note,
-// no call made.
+// (its step's usage holds it); TestSectionCheckNotHadAdmitsLowGated covers an unfunded one.
 func TestSectionCheckChargedWithinGrant(t *testing.T) {
 	t.Parallel()
 	cost, sub := 0.0123, 0.01
@@ -277,20 +280,6 @@ func TestSectionCheckChargedWithinGrant(t *testing.T) {
 	if !found || len(v.Findings) != 1 {
 		t.Fatalf("steps %s; findings %+v", f.steps(v.ID), v.Findings)
 	}
-	// no grant left: dropped with a note, no call
-	fake := model.NewFake(nil)
-	rt := &agent.Runtime{Chat: fake, Roles: testRoles}
-	spans, _, _ := placeRequirement(context.Background(), memo, req)
-	chk2, drop, err := (&Engine{}).checkSection(context.Background(), rt, agent.NewBudget(0, 0, 0), newReq(memo, spans), verdictOf(req))
-	if err != nil || chk2 != nil || !strings.Contains(drop, "no model call or budget was left") || len(fake.Calls()) != 0 {
-		t.Errorf("no grant: check %+v, drop %q, err %v, calls %d", chk2, drop, err, len(fake.Calls()))
-	}
-}
-
-func verdictOf(quote string) verdict {
-	v := verdict{Part: "the instruction", Verdict: "deviate", Severity: "HIGH", Correction: "Omit Sophia."}
-	v.Controlling.Quote = quote
-	return v
 }
 
 // TestContextRendersBlankLinesOnce (lab-r3 r3 verifier L3): a blank line inside a section renders as

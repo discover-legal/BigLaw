@@ -5,7 +5,6 @@ package analysis
 
 import (
 	"cmp"
-	"math/big"
 	"regexp"
 	"slices"
 	"strconv"
@@ -46,33 +45,7 @@ type entry struct {
 	doc    string
 	words  map[string]bool // the distinctive words of its quotes
 	quotes []string
-	scaled bool // a scale word (million, thousand…) is stated for it: in its value, unit or quote
-	whole  bool // its own digits carry its magnitude: grouped thousands ("$92,000,000") or seven digits or more
-}
-
-// grouped is a figure written with its thousands grouped ("92,000,000", "4,217").
-var grouped = regexp.MustCompile(`\d{1,3}(?:,\d{3})+`)
-
-// wholeFigure reports whether a value's digits carry its magnitude: no scale word could be implied.
-func wholeFigure(value string) bool {
-	if grouped.MatchString(value) {
-		return true
-	}
-	n := 0
-	for _, r := range strings.SplitN(value, ".", 2)[0] {
-		if r >= '0' && r <= '9' {
-			n++
-		}
-	}
-	return n >= 7
-}
-
-// pairable reports whether two quantities' scales are both known, so their normalised magnitudes
-// compare: both stated with a scale word, both without one, or one with it and the other written in
-// full ("$92,000,000" against "$95 million": lab-r3 r2 verifier M2). A bare "92" against "$95 million"
-// is not compared: its scale may be a column's ("$ millions"), which nothing states.
-func pairable(a, b entry) bool {
-	return a.scaled == b.scaled || a.scaled && b.whole || b.scaled && a.whole
+	party  string // the alias-unified party the figure reader read its figure as belonging to
 }
 
 // ofLabel is a value followed by "of (the)" or "toward(s)/against/on account of (the)" and then a label.
@@ -101,7 +74,6 @@ var (
 	heldOwn      = regexp.MustCompile(`(?i)^\s*(?:(?:shall|will|is|are|to)\s+)?(?:be\s+)?(?:held (?:back|in escrow)|(?:deposited|paid|placed) (?:into|in) escrow|into escrow|in escrow)\b`)
 	payableFrame = regexp.MustCompile(`(?i)\b(?:payable|paid|due)\s+(?:as follows|in (?:\w+ )?instal(?:l)?ments)\s*:`)
 	wholeBefore  = regexp.MustCompile(`(?i)\b(?:total|aggregate|combined|all)\s+$`)
-	moneyAmount  = regexp.MustCompile(`[$£€¥]\s?\d[\d,.]*(?:\s*(?:million|billion))?`)
 	spaces       = regexp.MustCompile(`\s+`)
 )
 
@@ -147,8 +119,8 @@ func partOf(x, y entry) bool {
 			return true
 		}
 		sent, at := sentenceOf(q, i)
-		for _, m := range moneyAmount.FindAllStringIndex(sent, -1) { // another sum of the label: this value is the rest
-			if at+m[0] != i && sibling.MatchString(spaces.ReplaceAllString(sent[m[1]:min(len(sent), m[1]+60)], " ")) {
+		for _, m := range Spans(sent) { // another figure of the label in its sentence: this value is the rest
+			if (at+m.End <= i || at+m.Start >= i+len(x.v.Value)) && sibling.MatchString(spaces.ReplaceAllString(sent[m.End:min(len(sent), m.End+60)], " ")) {
 				return true
 			}
 		}
@@ -200,45 +172,6 @@ func sentenceOf(q string, i int) (string, int) {
 	return q[s : i+e], s
 }
 
-// scaleWord is a scale stated after a figure: "$92 million", "310 million dollars".
-var scaleWord = regexp.MustCompile(`(?i)^\s*(million|billion|thousand|mm|bn)\b`)
-
-// rescale applies the scale a finding states for a quantity outside its value (bench4, SEC: "92"
-// with unit "million" against "$92 million", "310" with unit "million dollars" against "310
-// million": two conflicts that were one figure): its unit's first word, else the word after the
-// value in a quote. scaled reports whether any scale is stated, the value's own included; a value
-// whose scale nothing states is never compared with one whose scale is stated.
-func rescale(class Class, canon string, v Value, quotes []string) (string, bool) {
-	if class != "Money" && class != "Count" {
-		return canon, false
-	}
-	if m := reMoneyVal.FindStringSubmatch(strings.TrimSpace(v.Value)); m != nil && m[2] != "" {
-		return canon, true // the value states it ("$92 million"): Canon applied it
-	}
-	word := ""
-	if m := scaleWord.FindStringSubmatch(v.Unit); m != nil {
-		word = m[1]
-	}
-	for _, q := range quotes { // every copy of the value that is a whole figure ("92" in "$92 million", not in "1992")
-		for i := 0; word == "" && v.Value != "" && i < len(q); i++ {
-			j := strings.Index(q[i:], v.Value)
-			if j < 0 {
-				break
-			}
-			i += j
-			if m := scaleWord.FindStringSubmatch(q[i+len(v.Value):]); m != nil && (i == 0 || !strings.ContainsRune("0123456789.,", rune(q[i-1]))) {
-				word = m[1]
-			}
-		}
-	}
-	prefix, num, _ := strings.Cut(canon, ":")
-	r, ok := new(big.Rat).SetString(num)
-	if word == "" || !ok {
-		return canon, false
-	}
-	return prefix + ":" + Decimal(r.Mul(r, new(big.Rat).SetInt64(scale[strings.ToLower(word)]))), true
-}
-
 // row reports whether a value is stated only in table rows (tab-separated): one row of an
 // enumeration (a trade, a payment), never by itself the same fact as another table's row.
 func (e entry) row() bool {
@@ -257,45 +190,39 @@ func (s sets) find(x string) string {
 
 func (s sets) union(a, b string) { s[s.find(a)] = s.find(b) }
 
-// Join finds the discrepancies among verified findings (v1's cross-document join, model-free).
-// Numeric values share a metric identity when their metric label, quantity class and alias-unified
-// entity match (a value with no entity joins its metric's one entity, if there is one); dates are
-// one event when their labels match or their quotes share two distinctive words (two table rows only
-// by label: r3). A conflict needs two documents whose value sets are disjoint, so a list restated in
-// both is not one. Durations and identifiers are never compared, and a quarantined finding never
-// joins. Then near (labels aside, close values whose quotes share words).
+// Join finds the discrepancies among verified findings (v1's cross-document join, model-free). It
+// compares two figures only when the figure reader read both as one kind of quantity of one party
+// (Value.Fig: its kind, currency and exact amount, scale applied, in Canon; its party unified by the
+// lead's aliases): a figure with no reading, an unclear one or no party is never part of a conflict
+// (lab-r4 r4, owner decision: no word test decides whose figure it is). Numeric values share a
+// metric identity when their metric label, quantity class and party match; dates of one party are one
+// event when their labels match (dates under two labels pair only by near's context test: gate A, a
+// service date and a termination notice of one party shared two words). A conflict needs two
+// documents whose value sets are disjoint, so a list restated in
+// both is not one. Durations and identifiers (kind other) are never compared, and a quarantined
+// finding never joins. Then near (labels aside, close values of one party whose quotes share words).
 func Join(findings []Finding, aliases []Alias) []Conflict {
 	key := func(s string) string { return strings.TrimPrefix(norm(s), "the ") }
-	var es []entry
-	var names []string
-	for _, f := range findings {
-		for _, v := range f.Values {
-			if class, canon, d, ok := Canon(v); ok && f.Verified {
-				var qs []string
-				for _, q := range f.Quotes {
-					qs = append(qs, q.Quote)
-				}
-				canon, scaled := rescale(class, canon, v, qs)
-				es = append(es, entry{v, f.FID, class, canon, d, docOf(f, v.Value), referents(f, v.Value), qs, scaled, (class == "Money" || class == "Count") && wholeFigure(v.Value)})
-				if n := key(v.Entity); n != "" && !slices.Contains(names, n) {
-					names = append(names, n)
-				}
-			}
-		}
-	}
-	ents, events := sets{}, sets{}
+	parties, events := sets{}, sets{}
 	for _, a := range aliases {
 		for _, o := range a.Aliases {
 			if key(a.Name) != "" && key(o) != "" {
-				ents.union(key(a.Name), key(o))
+				parties.union(key(a.Name), key(o))
 			}
 		}
 	}
-	for i, a := range names { // token containment: "Ostrowski" is "Richard Ostrowski"
-		for _, b := range names[i+1:] {
-			if contains(a, b) || contains(b, a) {
-				ents.union(a, b)
+	var es []entry
+	for _, f := range findings {
+		for _, v := range f.Values {
+			class, canon, d, ok := Canon(v)
+			if !ok || !f.Verified || v.Fig == nil || key(v.Fig.Party) == "" { // no reading, or no party: no conflict is asserted on it
+				continue
 			}
+			var qs []string
+			for _, q := range f.Quotes {
+				qs = append(qs, q.Quote)
+			}
+			es = append(es, entry{v, f.FID, class, canon, d, docOf(f, v.Value), referents(f, v.Value), qs, parties.find(key(v.Fig.Party))})
 		}
 	}
 	metrics := map[string][]int{}
@@ -303,11 +230,11 @@ func Join(findings []Finding, aliases []Alias) []Conflict {
 	for i, e := range es {
 		if e.class == "Date" {
 			for j := range i {
-				if es[j].class == "Date" && (norm(e.v.Metric) != "" && norm(e.v.Metric) == norm(es[j].v.Metric) || !(e.row() && es[j].row()) && shared(e.words, es[j].words) >= 2 && sameMetric(e, es[j])) {
+				if es[j].class == "Date" && es[j].party == e.party && norm(e.v.Metric) != "" && norm(e.v.Metric) == norm(es[j].v.Metric) {
 					events.union(strconv.Itoa(i), strconv.Itoa(j))
 				}
 			}
-		} else if k := norm(e.v.Metric) + "|" + string(e.class); norm(e.v.Metric) != "" { // a bare number is never compared
+		} else if k := norm(e.v.Metric) + "|" + string(e.class) + "|" + e.party; norm(e.v.Metric) != "" { // a bare number is never compared
 			if metrics[k] == nil {
 				order = append(order, k)
 			}
@@ -321,21 +248,7 @@ func Join(findings []Finding, aliases []Alias) []Conflict {
 		}
 	}
 	for _, k := range order {
-		byEnt, roots := map[string][]int{}, []string{}
-		for _, i := range metrics[k] {
-			r := ents.find(key(es[i].v.Entity)) // "" when it names no entity
-			if byEnt[r] == nil {
-				roots = append(roots, r)
-			}
-			byEnt[r] = append(byEnt[r], i)
-		}
-		if loose := byEnt[""]; loose != nil && len(roots) == 2 { // the unattributed join the one entity
-			r := roots[0] + roots[1]
-			byEnt[r], roots = append(byEnt[r], loose...), []string{r}
-		}
-		for _, r := range roots {
-			try(byEnt[r], "numeric", func(a, b entry) bool { return a.canon != b.canon && pairable(a, b) && !partOf(a, b) && !partOf(b, a) })
-		}
+		try(metrics[k], "numeric", func(a, b entry) bool { return a.canon != b.canon && !partOf(a, b) && !partOf(b, a) })
 	}
 	byEvent, roots := map[string][]int{}, []string{}
 	for i, e := range es {
@@ -349,8 +262,7 @@ func Join(findings []Finding, aliases []Alias) []Conflict {
 	for _, r := range roots {
 		try(byEvent[r], "date", func(a, b entry) bool { return !a.date.Compatible(b.date) })
 	}
-	sameEntity := func(a, b entry) bool { return ents.find(key(a.v.Entity)) == ents.find(key(b.v.Entity)) }
-	return append(out, near(es, out, sameEntity)...)
+	return append(out, near(es, out)...)
 }
 
 // generic are metric words that name no quantity of their own ("grand total of payments" is payments).
@@ -405,14 +317,14 @@ const (
 
 // near finds the conflicts the label join cannot see (bench r3, SEC: 4,217 vs 4,312 trades
 // analysed, $92,600 vs $103,800 paid to the club, 73% vs 78% of volume, April 22 vs April 15, each
-// labelled differently in its document's finding): two values of one class from two documents that
-// are near each other (within an eighth for a quantity; a month for a full date), of one entity
-// (alias-unified, or both of none) and possibly one metric (sameMetric), and whose quotes share at
-// least three distinctive words, when neither document states the other's value anywhere
+// labelled differently in its document's finding): two values of one class and one party (the figure
+// reader's) from two documents that are near each other (within an eighth for a quantity; a month for
+// a full date), possibly of one metric (sameMetric), whose quotes share at least three distinctive
+// words (or, under two extractor labels, whose context agrees: onePair), when neither document states the other's value anywhere
 // (so a total restated beside its parts is not one). Quantities must be salient (nearSalience), and two
 // values each only in table rows are never paired (rows of two tables are enumerations, not one fact
 // restated). It skips pairs a found conflict already holds.
-func near(es []entry, found []Conflict, sameEntity func(a, b entry) bool) []Conflict {
+func near(es []entry, found []Conflict) []Conflict {
 	perDoc := map[string]map[string]bool{}
 	for _, e := range es {
 		if perDoc[e.doc] == nil {
@@ -434,8 +346,8 @@ func near(es []entry, found []Conflict, sameEntity func(a, b entry) bool) []Conf
 			d := a.date.time().Sub(b.date.time()).Hours() / 24
 			return d != 0 && d <= 31 && d >= -31
 		}
-		x, okx := Number(strings.SplitN(a.canon, ":", 2)[1])
-		y, oky := Number(strings.SplitN(b.canon, ":", 2)[1])
+		_, x, okx := CanonAmount(a.canon)
+		_, y, oky := CanonAmount(b.canon)
 		if !okx || !oky {
 			return false
 		}
@@ -449,8 +361,12 @@ func near(es []entry, found []Conflict, sameEntity func(a, b entry) bool) []Conf
 	for i, a := range es {
 		for _, b := range es[i+1:] {
 			if a.class != b.class || a.doc == b.doc || a.doc == "" || b.doc == "" || held[a.fid+"|"+a.canon] && held[b.fid+"|"+b.canon] ||
-				a.class != "Date" && (Salience(a.v.Value) < nearSalience || Salience(b.v.Value) < nearSalience) || a.row() && b.row() ||
-				perDoc[a.doc][b.canon] || perDoc[b.doc][a.canon] || !pairable(a, b) || partOf(a, b) || partOf(b, a) || !close(a, b) || shared(a.words, b.words) < 3 || !sameEntity(a, b) || !sameMetric(a, b) {
+				a.class != "Date" && (Salience(a.v) < nearSalience || Salience(b.v) < nearSalience) ||
+				a.party != b.party || perDoc[a.doc][b.canon] || perDoc[b.doc][a.canon] || partOf(a, b) || partOf(b, a) || !close(a, b) {
+				continue
+			}
+			labelled := shared(a.words, b.words) >= 3 && !(a.row() && b.row()) && sameMetric(a, b)
+			if !labelled && (norm(a.v.Entity) == norm(b.v.Entity) || !onePair(a, b)) { // two extractor labels: the context decides
 				continue
 			}
 			k := min(a.canon, b.canon) + "|" + max(a.canon, b.canon)
@@ -464,6 +380,77 @@ func near(es []entry, found []Conflict, sameEntity func(a, b entry) bool) []Conf
 		}
 	}
 	return out
+}
+
+// content is a metric label's words that name a quantity of their own (not "total", "date").
+func content(metric string) []string {
+	var out []string
+	for w := range tokens(metric) {
+		if !generic[w] && w != "time" {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+// clause is the part of x's quotes that states its value: the value's sentence, or its table row;
+// all of its quotes when no quote holds the value's text (a date written another way).
+func clause(x entry) string {
+	for _, q := range x.quotes {
+		if i := strings.Index(q, x.v.Value); i >= 0 && x.v.Value != "" {
+			if strings.ContainsAny(q, "\t|") {
+				s := strings.LastIndexByte(q[:i], '\n') + 1
+				e := strings.IndexByte(q[i:], '\n')
+				if e < 0 {
+					return q[s:]
+				}
+				return q[s : i+e]
+			}
+			sent, _ := sentenceOf(q, i)
+			return sent
+		}
+	}
+	return strings.Join(x.quotes, "\n")
+}
+
+// onePair is the near join's context pairing (bench6, SEC: the extractor labelled 4,217 trades "OQR"
+// and 4,312 "Whitmore Capital Advisors LLC", $92,600 "Bellini" and $103,800 "Kevin Ostrowski", April
+// 15 "Email transmission" and April 22 "deletion instruction", so the labels kept all three bench5
+// pairs apart): two close values of one party (the figure reader's, checked by near) whose extractor
+// labels disagree are one figure when their metric and quote context agree:
+//   - the context: at least two distinctive words (by stem) of the values' quotes are shared (three of
+//     the dates' own clauses), and the labels can be one metric (sameMetric, and a content word of the
+//     labels shared, or one label with none and three words shared), or both are totals;
+//   - two table rows pair only when both state a total (rows are otherwise an enumeration).
+func onePair(a, b entry) bool {
+	total := func(x entry) bool {
+		t := strings.ToLower(x.v.Metric + " " + clause(x))
+		return strings.Contains(t, "total") || strings.Contains(t, "aggregate")
+	}
+	totals := total(a) && total(b)
+	if a.row() && b.row() && !totals {
+		return false
+	}
+	wa, wb := a.words, b.words
+	if a.class == "Date" { // a matter's dated passages share its parties and its vocabulary: only the dates' own clauses count
+		wa, wb = tokens(clause(a)), tokens(clause(b))
+		for _, m := range strings.Fields("january february march april may june july august september october november december jan feb mar apr jun jul aug sep sept oct nov dec mon tue wed thu fri sat sun") {
+			delete(wa, m) // a date's own words are not its context
+		}
+	}
+	n := 0
+	for w := range wa {
+		if stemIn(wb, w) {
+			n++
+		}
+	}
+	if a.class == "Date" && n < 3 {
+		return false
+	}
+	ma, mb := content(a.v.Metric), content(b.v.Metric)
+	metric := totals || len(ma) == 0 && n >= 3 || len(mb) == 0 && n >= 3 ||
+		slices.ContainsFunc(ma, func(w string) bool { return stemIn(tokens(b.v.Metric), w) })
+	return n >= 2 && metric && (sameMetric(a, b) || totals)
 }
 
 // conflict applies the rule to one group: 2–6 distinct values from ≥ 2 documents, and a pair of
@@ -503,12 +490,6 @@ func conflict(es []entry, idx []int, kind string, differ func(a, b entry) bool) 
 		}
 	}
 	return Conflict{}, false
-}
-
-// contains: every word of short is in long, one of them at least four letters long.
-func contains(short, long string) bool {
-	st, lt := strings.Fields(short), strings.Fields(long)
-	return len(st) <= len(lt) && allIn(st, lt) && slices.ContainsFunc(st, func(w string) bool { return len(w) >= 4 })
 }
 
 // docOf is the document of the quote that holds the value (else the finding's first quote).

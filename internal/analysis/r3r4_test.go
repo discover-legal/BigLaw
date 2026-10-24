@@ -33,7 +33,7 @@ func TestV3RealConflictsFound(t *testing.T) {
 		{"loan advance", v3F("F1", "credit", "The Lender's commitment to Borrower is $10,000,000.", mv("Borrower", "commitment", "$10,000,000")),
 			v3F("F2", "memo", "The Lender's commitment to Borrower is $12,000,000, available by advance.", mv("Borrower", "commitment", "$12,000,000"))},
 	} {
-		if cs := Join([]Finding{c.a, c.b}, nil); len(cs) == 0 {
+		if cs := joinRead([]Finding{c.a, c.b}, nil); len(cs) == 0 {
 			t.Errorf("missed %s", c.name)
 		}
 	}

@@ -232,6 +232,7 @@ function Findings(props: { findings: Finding[]; docs: Doc[]; focus: string | nul
               );
             })}
           </ul>
+          {f.valueNotes?.length ? <ul className="value-notes muted small">{f.valueNotes.map((n, i) => <li key={i}>Value dropped: {n}</li>)}</ul> : null}
         </article>
       ))}
     </div>

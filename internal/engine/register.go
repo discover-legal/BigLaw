@@ -87,7 +87,8 @@ func (e *Engine) runtime(r *run) (*agent.Runtime, error) {
 		BudgetCalls: e.cfg.BudgetCalls, Off: !r.t.ToolBandit}
 	tools := e.docs.Tools(rt)
 	an := analysis.Tools(e)
-	tools = append(tools, sheets{an[0], e}, an[1], e.ledgerTool(), e.sweepTool(rt, r), e.committeeTool(rt, r), e.finishTool(rt, r), e.coverTool(rt, r))
+	tools = append(tools, sheets{an[0], e}, aliasJoin{an[1], e}, e.ledgerTool(), e.sweepTool(rt, r), e.committeeTool(rt, r), e.finishTool(rt, r), e.coverTool(rt, r),
+		e.figureContextTool(), exactCalc{})
 	sub, _ := fs.Sub(specFS, "specs/agents")
 	subs, err := rt.LoadSubagents(sub)
 	if err != nil {
@@ -130,8 +131,10 @@ func (s sheets) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 		hs = slices.DeleteFunc(hs, func(h analysis.Handle) bool {
 			return h.FID == "" || len(in.FIDs) > 0 && !slices.Contains(in.FIDs, h.FID)
 		})
+		pg := agent.NewPage() // one page, saying truncated (bench6: the answer lacked the schema's truncated key)
+		list := agent.Take(pg, append([]analysis.Handle{}, hs[:min(len(hs), cmp.Or(in.SalientTop, len(hs)))]...))
 		out, _ := json.Marshal(map[string]any{"wid": nil, "result": nil, "unit": nil, "worksheet": nil, "literalOperands": nil, "tableMarkdown": nil,
-			"handles": append([]analysis.Handle{}, hs[:min(len(hs), cmp.Or(in.SalientTop, len(hs)))]...)})
+			"handles": list, "truncated": pg.Truncated})
 		return agent.Result{Output: out}, nil
 	}
 	res, err := s.Tool.Call(ctx, c)
@@ -140,6 +143,43 @@ func (s sheets) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 		err = s.e.write(ctx, c.TaskID, kSheet, w.WID, w, false)
 	}
 	return res, err
+}
+
+// aliasJoin keeps the aliases the lead passes join_discrepancies for the run (kAlias), so finish's and
+// the coverage pass's own join (discrepancies) unify the same parties (bench r3: aliases were the
+// lead's only way to pair one firm's figures under two names, and finish never saw them).
+type aliasJoin struct {
+	agent.Tool
+	e *Engine
+}
+
+func (j aliasJoin) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
+	var in struct{ Aliases []analysis.Alias }
+	_ = json.Unmarshal(c.Input, &in)
+	if len(in.Aliases) > 0 { // the call itself uses its own and the run's
+		was, err := load[analysis.Alias](ctx, j.e, c.TaskID, kAlias)
+		if err != nil {
+			return agent.Result{}, err
+		}
+		for _, a := range in.Aliases {
+			key := strings.ToLower(norm(a.Name))
+			if key == "" {
+				continue
+			}
+			if i := slices.IndexFunc(was, func(x analysis.Alias) bool { return strings.ToLower(norm(x.Name)) == key }); i >= 0 {
+				for _, o := range a.Aliases {
+					if !slices.Contains(was[i].Aliases, o) {
+						was[i].Aliases = append(was[i].Aliases, o)
+					}
+				}
+				a = was[i]
+			}
+			if err := j.e.write(ctx, c.TaskID, kAlias, key, a, true); err != nil {
+				return agent.Result{}, err
+			}
+		}
+	}
+	return j.Tool.Call(ctx, c)
 }
 
 // hooked is a subagent behind Go: its request is completed (a section's text, a drafter's
@@ -153,6 +193,9 @@ type hooked struct {
 
 func (h hooked) Spec() agent.Spec {
 	s := h.Tool.Spec()
+	if s.Name == "check_deviation" { // its grant holds the requirement's check beside the subagent's own turns
+		s.MaxTurns++
+	}
 	if s.Name == "draft_section" {
 		s.Out = json.RawMessage(`{"type":"object","additionalProperties":false,"required":["issueId","version","words"],"properties":{"issueId":{"type":"string"},"version":{"type":"integer"},"words":{"type":"integer"}}}`)
 	} else {
@@ -168,8 +211,25 @@ func (h hooked) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 	str := func(k string) string { s, _ := in[k].(string); return s }
 	var draft draftReq
 	var rq reqText
+	var preUse agent.Usage // spent before the subagent ran (check_deviation's requirement check)
 	switch name {
 	case "extract_facts":
+		if str("issueId") == "" { // the plan's issues: each finding names the one it bears on (bench5 SEC: 896 findings, most on none)
+			issues, err := load[Issue](ctx, h.e, c.TaskID, kIssue)
+			if err != nil {
+				return agent.Result{}, err
+			}
+			only, part := ctx.Value(issuesKey{}).([]string) // a page read again for the issues added since: only those
+			var list []map[string]string
+			for _, is := range issues {
+				if !part || slices.Contains(only, is.ID) {
+					list = append(list, map[string]string{"id": is.ID, "question": is.Question})
+				}
+			}
+			if len(list) > 0 {
+				in["issues"] = list
+			}
+		}
 		if str("documentId") != "" && str("sectionId") != "" {
 			off, _ := in["offset"].(float64)
 			if str("through") != "" {
@@ -195,8 +255,22 @@ func (h hooked) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 			return agent.Result{}, err
 		}
 		in["requirement"] = rq.Joined()
-		in["requirementContext"] = rq.Context()                            // what it judges against: the requirement with what governs it
-		in["reviewedPassages"] = h.e.reviewedPassages(ctx, c, rq.Joined()) // bench4, trust: every call spent its five turns searching and checking quotes
+		in["requirementContext"] = rq.Context()                                // what it judges against: the requirement with what governs it
+		var su agent.Usage                                                     // the passages' query embedding, metered (lab-r4 verifier L3)
+		in["reviewedPassages"], su = h.e.reviewedPassages(ctx, c, rq.Joined()) // bench4, trust: every call spent its five turns searching and checking quotes
+		pre := agent.NewBudget(c.Budget.Calls, max(0, c.Budget.USD-su.USD), 0) // the requirement's check comes out of the grant first (bench5: unfunded checks dropped real deviations)
+		if rq.Check, rq.CheckWhy, err = h.e.checkSection(ctx, h.rt, pre, rq); err != nil {
+			u := pre.Spent()
+			u.Add(su)
+			return agent.Result{Usage: u}, err
+		}
+		preUse = pre.Spent()
+		preUse.Add(su)
+		c.Budget = agent.Grant{Calls: max(0, c.Budget.Calls-preUse.Calls), USD: max(0, c.Budget.USD-preUse.USD)}
+		if rq.Check != nil && rq.Check.Answer == "no" { // nothing to compare with: the document does not require it
+			return agent.Result{Usage: preUse}, agent.Fail(fmt.Sprintf("check_deviation: an independent reading of %s around the requirement found that it does not impose the requirement as quoted (negated or overridden): %s. Quote the requirement together with what governs it (its lead-in, exception or override), as the document states what it requires, and call again",
+				rq.DocName, fenceText.Replace(rq.Check.Reason)))
+		}
 	case "draft_section":
 		var err error
 		if draft, err = h.e.draftRequest(ctx, c.TaskID, c.DocumentIDs, str("issueId"), c.Input); err != nil {
@@ -206,18 +280,19 @@ func (h hooked) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 	}
 	c.Input, _ = json.Marshal(in)
 	res, err := h.Tool.Call(ctx, c)
+	res.Usage.Add(preUse)
 	if err == nil {
 		err = awaitTurn(ctx) // a parallel sweep's visit admits in plan order
 	}
 	if err != nil {
 		return res, err
 	}
-	b := agent.NewBudget(c.Budget.Calls-res.Usage.Calls, c.Budget.USD-res.Usage.USD, 0)
+	b := agent.NewBudget(c.Budget.Calls-res.Usage.Calls+preUse.Calls, c.Budget.USD-res.Usage.USD+preUse.USD, 0) // c.Budget is already net of preUse
 	var out any
 	var reward float64
 	switch name {
 	case "draft_section":
-		out, err = h.e.saveSection(ctx, c.TaskID, draft, res.Output)
+		out, err = h.e.saveSection(ctx, h.rt, c, b, draft, res.Output)
 		reward = 1
 	case "check_deviation":
 		out, reward, err = h.e.deviations(ctx, h.rt, c, b, res, rq)
@@ -260,6 +335,7 @@ func (h hooked) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 
 // draftFinding is a subagent's finding before Go has checked it.
 type draftFinding struct {
+	IssueID    *string // the plan issue it bears on (extract_facts without an issueId of its own)
 	Claim      string
 	Quotes     []analysis.Quote
 	Values     []analysis.Value
@@ -324,20 +400,6 @@ func (e *Engine) verify(ctx context.Context, rt *agent.Runtime, c agent.Call, b 
 	return cit, nil
 }
 
-var currencyIn = [][2]string{{"£", "GBP"}, {"€", "EUR"}, {"¥", "JPY"}, {"CHF", "CHF"}, {"C$", "CAD"}, {"A$", "AUD"}}
-
-// currencyOf is a money value's currency as its quote shows it: a symbol in the value, else just
-// before or after the value where the quote states it; "" (USD) when the quote shows none.
-func currencyOf(value, quote string) string {
-	at := strings.Index(quote, value)
-	for _, c := range currencyIn {
-		if strings.Contains(value, c[0]) || at >= 0 && strings.Contains(quote[max(0, at-4):min(len(quote), at+len(value)+4)], c[0]) {
-			return c[1]
-		}
-	}
-	return ""
-}
-
 // admit checks a subagent's findings and records them (G2): every quote through the ladder (the
 // finding verifies only when all of them do; otherwise it is quarantined), each value kept only
 // when its own quote states it, each relation typed by BELO-lite, near-duplicates merged into the
@@ -348,10 +410,35 @@ func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 	if err != nil {
 		return out, 0, err
 	}
-	quotes, ok := 0, 0
+	var plan []Issue
+	if tool == "extract_facts" && issueID == "" {
+		if plan, err = load[Issue](ctx, e, c.TaskID, kIssue); err != nil {
+			return out, 0, err
+		}
+	}
+	scoped := len(plan) > 0
+	if only, ok := ctx.Value(issuesKey{}).([]string); ok && scoped { // a page read again: the issues added since
+		plan = slices.DeleteFunc(plan, func(is Issue) bool { return !slices.Contains(only, is.ID) })
+	}
+	quotes, ok, off := 0, 0, 0
+	type pending struct {
+		f    Finding
+		d    draftFinding
+		text string
+		it   *reading
+	}
+	var pend []pending
 	for _, d := range drafts {
-		f := Finding{Finding: analysis.Finding{IssueID: issueID, Claim: strings.TrimSpace(d.Claim), Quotes: d.Quotes, Entities: d.Entities}, Severity: "medium", Arm: agent.Arm{Tool: tool, Model: model}}
+		fi := issueID
+		if scoped { // a fact on none of the plan's issues is not admitted
+			if fi = deref(d.IssueID); !slices.ContainsFunc(plan, func(is Issue) bool { return is.ID == fi }) {
+				off++
+				continue
+			}
+		}
+		f := Finding{Finding: analysis.Finding{IssueID: fi, Claim: strings.TrimSpace(d.Claim), Quotes: d.Quotes, Entities: d.Entities}, Severity: "medium", Arm: agent.Arm{Tool: tool, Model: model}}
 		var text strings.Builder
+		var vq []analysis.Quote
 		for _, q := range d.Quotes {
 			cit, err := e.verify(ctx, rt, c, b, tool, q)
 			if err != nil {
@@ -362,20 +449,49 @@ func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 			if cit.Method != "none" {
 				ok++
 				text.WriteString(q.Quote + "\n")
+				vq = append(vq, analysis.Quote{DocumentID: cit.DocumentID, Quote: q.Quote, Locator: q.Locator})
 			}
 		}
 		f.Verified = len(f.Citations) > 0 && !slices.ContainsFunc(f.Citations, func(c Citation) bool { return c.Method == "none" })
-		for _, v := range d.Values {
-			if inQuote(v.Value, text.String()) {
-				if analysis.ClassOf(v) == "Money" && v.Unit == "" {
-					v.Unit = currencyOf(v.Value, text.String())
-				}
-				f.Values = append(f.Values, v)
-			}
+		pend = append(pend, pending{f, d, text.String(), findingReading(f, vq, d.Values)})
+	}
+	var items []*reading // one figure reading for the call's findings (cached by content), out of the call's grant
+	for _, p := range pend {
+		if len(p.text) > 0 {
+			items = append(items, p.it)
 		}
+	}
+	if err := e.readFigures(ctx, rt, c, b, tool, items); err != nil {
+		return out, 0, err
+	}
+	for _, p := range pend {
+		f, d := p.f, p.d
+		rs, refused := p.it.readings()
+		for _, n := range refused {
+			f.ValueNotes = append(f.ValueNotes, "figure reader: "+n)
+		}
+		f.Figures = quoteReadings(rs) // what G8 traces a memo figure citing it to
+		for j, v := range d.Values {  // a value its quotes do not state is dropped, never silently (lab-r4 r3)
+			fig, ok, low, why := valueStated(v, j, rs, p.text)
+			if !ok {
+				note := fmt.Sprintf("value %q (%s) not admitted: %s", v.Value, cmpStr(v.Metric != "", v.Metric, "no metric"), why)
+				f.ValueNotes = append(f.ValueNotes, note) // into out.Notes with its finding's id, below
+				continue
+			}
+			v.Fig = fig
+			if fig != nil && fig.Kind == analysis.KindMoney && v.Unit == "" && fig.Currency != "USD" && fig.Currency != "" {
+				v.Unit = fig.Currency // the currency the reader read it in; "" is USD
+			}
+			if low { // admitted, gated for a lawyer: the reader could not read it with no doubt
+				f.Low = true
+				f.ValueNotes = append(f.ValueNotes, lowNote(v, fig))
+			}
+			f.Values = append(f.Values, v)
+		}
+		f.Values = append(f.Values, claimSums(f.Claim, rs, f.Values)...)
 		f.Relations, _ = analysis.Relations(d.Entities, d.Relations)
 		if i := slices.IndexFunc(all, func(x Finding) bool {
-			return x.Verified && f.Verified && x.IssueID == f.IssueID && nearDuplicate(x.Claim, f.Claim)
+			return x.Verified && f.Verified && restated(x, f)
 		}); i >= 0 {
 			for _, c := range f.Citations {
 				if !slices.ContainsFunc(all[i].Citations, func(x Citation) bool { return x.DocumentID == c.DocumentID && x.Quote == c.Quote }) {
@@ -383,10 +499,18 @@ func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 					all[i].Quotes = append(all[i].Quotes, analysis.Quote{DocumentID: c.DocumentID, Quote: c.Quote, Locator: c.Locator})
 				}
 			}
+			for _, n := range f.ValueNotes { // the duplicate's dropped values are the kept finding's (shown with it, disclosed)
+				if !slices.Contains(all[i].ValueNotes, n) {
+					all[i].ValueNotes = append(all[i].ValueNotes, n)
+				}
+			}
 			if err := e.write(ctx, c.TaskID, kFinding, all[i].FID, all[i], true); err != nil {
 				return out, 0, err
 			}
-			out.Notes = append(out.Notes, "merged into "+all[i].FID+" (a near-duplicate): "+f.Claim)
+			out.Notes = append(out.Notes, "merged into "+all[i].FID+" (an exact duplicate): "+f.Claim)
+			for _, n := range f.ValueNotes {
+				out.Notes = append(out.Notes, all[i].FID+": "+n)
+			}
 			continue
 		}
 		f.FID = nextID("F", len(all))
@@ -395,9 +519,15 @@ func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 			return out, 0, err
 		}
 		out.Findings = append(out.Findings, admitted(f))
+		for _, n := range f.ValueNotes {
+			out.Notes = append(out.Notes, f.FID+": "+n)
+		}
 		if !f.Verified {
 			out.Dropped++
 		}
+	}
+	if off > 0 {
+		out.Notes = append(out.Notes, fmt.Sprintf("dropped %d %s that named none of the plan's issues", off, plural(off, "finding", "findings")))
 	}
 	if quotes == 0 {
 		return out, map[bool]float64{true: 1, false: 0}[len(drafts) == 0], nil
@@ -405,16 +535,36 @@ func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 	return out, float64(ok) / float64(quotes), nil
 }
 
-// inQuote reports whether a value is stated in the quotes: as text, or as the same number or date.
-func inQuote(v, quotes string) bool {
-	v = strings.TrimSpace(v)
-	if v == "" {
-		return false
+// restated reports whether f is an exact duplicate of the admitted x (bench5: the referral's
+// figures restated page after page, and the lead's extract_facts re-extracting what the sweep had):
+// one issue, the same quotes in the same documents (normalised: case and white space; identical
+// lines of two invoices are two findings, lab-r4 r2 L4), and the same typed values (entity,
+// metric and figure, each normalised). Nothing else merges: a near restatement (a reversed term, a
+// mirrored party's clause, an amendment) stays a finding of its own, which coverage and the drafters
+// can cite beside the first (lab-r4 verifier H2, M1).
+func restated(x, f Finding) bool {
+	key := func(vs []analysis.Value) []string {
+		var out []string
+		for _, v := range vs {
+			c := strings.ToLower(norm(v.Value))
+			if _, k, _, ok := analysis.Canon(v); ok {
+				c = k
+			}
+			out = append(out, strings.ToLower(norm(v.Entity))+"|"+strings.ToLower(norm(v.Metric))+"|"+c)
+		}
+		slices.Sort(out)
+		return slices.Compact(out)
 	}
-	if strings.Contains(strings.ToLower(norm(quotes)), strings.ToLower(norm(v))) {
-		return true
+	quotes := func(f Finding) []string {
+		var out []string
+		for _, q := range f.Quotes {
+			out = append(out, q.DocumentID+"|"+strings.ToLower(norm(q.Quote)))
+		}
+		slices.Sort(out)
+		return slices.Compact(out)
 	}
-	return covered(v, quotes)
+	return x.IssueID == f.IssueID && len(f.Quotes) > 0 && slices.Equal(quotes(x), quotes(f)) && slices.Equal(key(x.Values), key(f.Values)) &&
+		!(salientFinding(f) && !salientFinding(x)) // a finding that says a breach is never folded into one that does not
 }
 
 func norm(s string) string { return strings.Join(strings.Fields(s), " ") }

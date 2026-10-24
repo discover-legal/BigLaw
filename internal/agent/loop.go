@@ -333,7 +333,7 @@ func answer(text string, out *Schema) (json.RawMessage, error) {
 	if strings.HasPrefix(t, "```") {
 		t = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(t, "```json"), "```"), "```"))
 	}
-	err := out.Validate(json.RawMessage(t))
+	err := out.ValidateOutput(json.RawMessage(t))
 	if err == nil {
 		return json.RawMessage(t), nil
 	}
@@ -348,7 +348,7 @@ func answer(text string, out *Schema) (json.RawMessage, error) {
 		alts = append(alts, text[i:j+1])
 	}
 	for _, a := range alts {
-		if out.Validate(json.RawMessage(a)) == nil {
+		if out.ValidateOutput(json.RawMessage(a)) == nil {
 			return json.RawMessage(a), nil
 		}
 	}
@@ -412,6 +412,15 @@ type meter struct {
 	st    Step
 	spent Usage
 	held  Grant // the worst cases of the calls in flight
+}
+
+// Meter records spend a Go tool made inside a running journaled step without ChatWithin (a query
+// embedding inside retrieve, also a subagent's retrieve inside a committee or sweep step), so a hard
+// crash charges it too (lab-r4: every model call inside a journaled step is metered). Outside a
+// journaled step it records nothing.
+func Meter(ctx context.Context, spent Usage) error {
+	m, _ := ctx.Value(meterKey{}).(*meter)
+	return m.note(ctx, spent, Grant{})
 }
 
 // note adds to the step's spend and in-flight holds and records them; a nil meter records nothing.
@@ -528,7 +537,7 @@ func (rt *Runtime) Invoke(ctx context.Context, a Agent, c Call, name string, inp
 	g.Charge(res.Usage)
 	g.Close()
 	if err == nil {
-		if verr := e.out.Validate(res.Output); verr != nil {
+		if verr := e.out.ValidateOutput(res.Output); verr != nil {
 			err = fmt.Errorf("%w: %s: %v", ErrToolOutput, name, verr)
 		}
 	}

@@ -85,7 +85,7 @@ func TestResumeAfterKillMidRun(t *testing.T) {
 	f := newFixture(t)
 	// Same document ids in both (the scripts name them): copy ref's ids into f's ledger comparison by
 	// rebuilding the scripts over f's documents.
-	k := &killer{Fake: model.NewFake(f.happy())}
+	k := &killer{Fake: newFake(f.happy())}
 	e := f.reopen(k, nil)
 	task := f.submit(0)
 	const after = 4 // extract_facts' step
@@ -133,7 +133,7 @@ func TestResumeAfterKillMidRun(t *testing.T) {
 func TestResumeDoesNotRepeatCommittedSteps(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
-	k := &killer{Fake: model.NewFake(f.happy())}
+	k := &killer{Fake: newFake(f.happy())}
 	e := f.reopen(k, nil)
 	task := f.submit(0)
 	e.afterCommit = func(id string, n int) {
@@ -149,8 +149,9 @@ func TestResumeDoesNotRepeatCommittedSteps(t *testing.T) {
 	for _, c := range k.Fake.Calls() {
 		per[c.Agent]++
 	}
-	// analyze_issue: the coverage pass's one try at the Conduct issue (unscripted here, so it is disclosed)
-	if want := map[string]int{"lead": 5, "extract_facts": 1, "draft_section": 1, "prosecute": 1, "reproduce": 1, "audit_gaps": 1, "meta": 1, "analyze_issue": 1}; !reflect.DeepEqual(per, want) {
+	// analyze_issue: the coverage pass's one try at the Conduct issue (unscripted here, so it is disclosed);
+	// read_figures: the figure reading of extract_facts' finding
+	if want := map[string]int{"lead": 5, "extract_facts": 1, "read_figures": 1, "draft_section": 1, "prosecute": 1, "reproduce": 1, "audit_gaps": 1, "meta": 1, "analyze_issue": 1}; !reflect.DeepEqual(per, want) {
 		t.Fatalf("calls per agent %v, want %v", per, want)
 	}
 }
@@ -171,7 +172,7 @@ func TestResumeChargesInFlightCallConservatively(t *testing.T) {
 			sc[k][i].Usage = model.Usage{InputTokens: 10, OutputTokens: 5, CostUSD: &cost}
 		}
 	}
-	k := &killer{Fake: model.NewFake(sc), killAt: 2, stop: true}
+	k := &killer{Fake: newFake(sc), killAt: 2, stop: true}
 	e := f.reopen(k, prices)
 	task := f.submit(0)
 	k.kill = func() { e.active(task.ID).cancel() }
@@ -189,7 +190,7 @@ func TestResumeChargesInFlightCallConservatively(t *testing.T) {
 	f.step(context.Background())
 	v := f.get(task.ID)
 	c, _ := f.e.Cost(context.Background(), task.ID)
-	if stop(v) != "awaiting_gate/finished" || v.Run.Budget.Calls != 12 || c.Summary.Calls != 12 || c.Summary.USD == nil || *c.Summary.USD < 11*cost+held.USD-1e-9 {
+	if stop(v) != "awaiting_gate/finished" || v.Run.Budget.Calls != 13 || c.Summary.Calls != 13 || c.Summary.USD == nil || *c.Summary.USD < 12*cost+held.USD-1e-9 { // 13: the figure reading's call too
 		t.Fatalf("%s: run budget %+v, cost %+v (lost grant %+v)", stop(v), v.Run.Budget, c.Summary, held)
 	}
 }
@@ -200,7 +201,7 @@ func TestRunLeaseSingleOwner(t *testing.T) {
 	f := newFixture(t)
 	f.engine(f.happy(), Config{})
 	task := f.submit(0)
-	e1, e2 := f.e, f.reopen(model.NewFake(nil), nil)
+	e1, e2 := f.e, f.reopen(newFake(nil), nil)
 	ctx := context.Background()
 	var wg sync.WaitGroup
 	got := make([]*run, 2)
@@ -251,7 +252,7 @@ func TestUSDBoundFinishDeliversWithoutMeta(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.e = New(f.st, f.d, model.NewFake(map[string][]model.Reply{}), testRoles, prices, Config{BudgetCalls: 150, BudgetUSD: 0.001, CollapseThreshold: 0.5, CollapseAction: "strict"}, nil)
+	f.e = New(f.st, f.d, newFake(map[string][]model.Reply{}), testRoles, prices, Config{BudgetCalls: 150, BudgetUSD: 0.001, CollapseThreshold: 0.5, CollapseAction: "strict"}, nil)
 	task := f.submit(0)
 	f.step(context.Background())
 	v := f.get(task.ID)
@@ -313,7 +314,7 @@ func TestAwaitingGatePausesAndResumes(t *testing.T) {
 			calls(committee()), calls(finishCall("submit")), calls(finishCall("submit")), calls(finishCall("submit"))},
 		"prosecute": {text(m{"verdicts": []m{{"claim": "c", "verdict": "unsupported", "why": "no"}}})},
 		"meta":      {metaNote, metaNote, metaNote},
-	}), Config{BudgetCalls: 24, BudgetUSD: 5, CollapseThreshold: 0.5, CollapseAction: "strict"})
+	}), Config{BudgetCalls: 26, BudgetUSD: 5, CollapseThreshold: 0.5, CollapseAction: "strict"}) // 26: 24 and the figure readings' calls
 	task := f.submit(0)
 	ctx := context.Background()
 	f.step(ctx)
@@ -355,7 +356,7 @@ func TestAwaitingGatePausesAndResumes(t *testing.T) {
 func TestCancelStopsRun(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
-	k := &killer{Fake: model.NewFake(f.happy()), killAt: 3}
+	k := &killer{Fake: newFake(f.happy()), killAt: 3}
 	e := f.reopen(k, nil)
 	task := f.submit(0)
 	other := New(f.st, f.d, k, testRoles, nil, Config{BudgetCalls: 150}, nil) // the cancel arrives through another process
@@ -407,7 +408,7 @@ func TestResumeAfterStopMidToolChargesWhatItSpent(t *testing.T) {
 			sc[k][i].Usage = model.Usage{InputTokens: 10, OutputTokens: 5, CostUSD: &cost}
 		}
 	}
-	k := &subKiller{Fake: model.NewFake(sc), agent: "extract_facts"}
+	k := &subKiller{Fake: newFake(sc), agent: "extract_facts"}
 	e := f.reopen(k, prices)
 	task := f.submit(0)
 	k.kill = func() { e.active(task.ID).cancel() }

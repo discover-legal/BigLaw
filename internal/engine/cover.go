@@ -122,16 +122,32 @@ func (e *Engine) coverTool(rt *agent.Runtime, r *run) agent.Tool {
 	s := spec("cover")
 	s.MaxTurns = a.Cover
 	return agent.GoTool{S: s, Fn: func(ctx context.Context, c agent.Call) (any, agent.Usage, error) {
-		b := agent.NewBudget(min(c.Budget.Calls, a.Cover), min(c.Budget.USD, a.dollars(a.Cover)), 0)
+		// its share, or half of what the run has free beside the last review and the reserve when that
+		// is more (bench6 SEC: the committee's cycles spent what placing the left-out findings needed);
+		// the other half stays for the review of its redrafts and the fixes a re-check may ask for
+		spent, err := e.classSpend(ctx, c.TaskID)
+		if err != nil {
+			return nil, agent.Usage{}, err
+		}
+		free := c.Budget.USD - a.cycleKeep(spent[costliest+"committee"].USD) - a.dollars(a.Reserve+a.Meta)
+		b := agent.NewBudget(min(c.Budget.Calls, a.Cover), min(c.Budget.USD, max(a.dollars(a.Cover), free/2)), 0)
 		todo, err := e.touched(ctx, c.TaskID)
 		if err != nil {
 			return nil, agent.Usage{}, err
 		}
 		me := agent.Agent{Name: "cover", Visible: []string{"analyze_issue", "draft_section"}}
 		call := agent.Call{TaskID: c.TaskID, DocumentIDs: c.DocumentIDs}
+		due, _, err := e.placements(ctx, c.TaskID)
+		if err != nil {
+			return nil, agent.Usage{}, err
+		}
+		keep := 0.0 // what the analyses leave for placing the left-out evidence (bench5 SEC: they spent all but $0.14, and nothing was placed)
+		if len(due) > 0 {
+			keep = placeShare * b.Value().USD
+		}
 		var failed error // a model failure: the pass is recorded as run, then the run ends
 		for _, is := range todo {
-			if calls, _ := b.Remaining(); calls == 0 {
+			if calls, usd := b.Remaining(); calls == 0 || usd <= keep {
 				break
 			}
 			in, _ := json.Marshal(map[string]any{"issueId": is.ID, "question": is.Question, "jurisdiction": r.t.Jurisdiction, "packs": nil})
@@ -157,38 +173,43 @@ func (e *Engine) coverTool(rt *agent.Runtime, r *run) agent.Tool {
 				break
 			}
 		}
-		if failed == nil { // then the left-out evidence: one redraft per issue that has some
+		for round := 0; failed == nil && round < placeRounds; round++ { // then the left-out evidence: one redraft per issue that has some, a round at a time
 			ids, place, perr := e.placements(ctx, c.TaskID)
 			if perr != nil {
 				return nil, b.Spent(), perr
 			}
+			placed := 0
 			for _, id := range ids {
 				if calls, _ := b.Remaining(); calls == 0 {
 					break
 				}
-				base, ferr := e.coverFIDs(ctx, c.TaskID, id)
-				if ferr != nil {
-					return nil, b.Spent(), ferr
+				secs, serr := load[Section](ctx, e, c.TaskID, kSection)
+				if serr != nil {
+					return nil, b.Spent(), serr
 				}
-				fids := slices.Clone(place[id].FIDs)
-				for _, x := range place[id].Conflicts {
-					for _, v := range x.Values {
-						fids = append(fids, v.FID)
+				var cites []string
+				if k := slices.IndexFunc(secs, func(s Section) bool { return s.IssueID == id }); k >= 0 {
+					for _, m := range fidRe.FindAllStringSubmatch(secs[k].Markdown, -1) {
+						cites = append(cites, m[1])
 					}
 				}
-				fids = slices.Compact(append(fids, base...))
-				for i := len(fids) - 1; i >= 0; i-- { // a finding named twice: once, where it first appears
-					if slices.Index(fids, fids[i]) < i {
-						fids = slices.Delete(fids, i, i+1)
-					}
+				fids, ok := placeFIDs(place[id], cites)
+				if !ok { // a redraft from fewer would drop citations: this issue's left-out findings stay left out (and disclosed)
+					continue
 				}
-				in, _ := json.Marshal(map[string]any{"issueId": id, "fids": fids[:min(60, len(fids))], "revise": placeRevise(place[id])})
+				in, _ := json.Marshal(map[string]any{"issueId": id, "fids": fids, "revise": placeRevise(place[id])})
 				if _, err := rt.Invoke(ctx, me, call, "draft_section", in, b, false, 0); modelOrJournal(err) {
 					failed = err
 					break
 				} else if errors.Is(err, agent.ErrBudget) {
+					round = placeRounds
 					break
+				} else if err == nil {
+					placed++
 				}
+			}
+			if placed == 0 {
+				break
 			}
 		}
 		if errors.Is(failed, agent.ErrJournal) {
@@ -204,6 +225,15 @@ func (e *Engine) coverTool(rt *agent.Runtime, r *run) agent.Tool {
 		} else {
 			for _, f := range lo {
 				res.LeftOut = append(res.LeftOut, f.FID)
+			}
+		}
+		if use, err := e.usable(ctx, c.TaskID); err != nil {
+			return nil, b.Spent(), err
+		} else {
+			for _, f := range use {
+				if len(f.ValueNotes) > 0 {
+					res.Unadmitted = append(res.Unadmitted, f.FID)
+				}
 			}
 		}
 		if _, open, err := e.discrepancies(ctx, c.TaskID); err != nil {
@@ -286,14 +316,24 @@ func salientFinding(f Finding) bool {
 			return true
 		}
 	}
-	return slices.ContainsFunc(f.Values, func(v analysis.Value) bool { return analysis.Salience(v.Value) >= 55 })
+	return slices.ContainsFunc(f.Values, func(v analysis.Value) bool { return analysis.Salience(v) >= 55 })
 }
 
-// maxPlaced bounds the left-out findings the pass places (it redrafts each issue once) and lists;
-// one issue's redraft takes at most maxPlacedPerIssue of them.
+// placeShare is the part of the coverage pass's USD its analyses leave for placing left-out evidence,
+// when there is some: bench5's analyses cost about $0.15 an issue and a placement redraft about $0.03–0.05,
+// with a worst case near $0.17 that must fit before it is sent.
+const placeShare = 0.4
+
+// maxPlaced bounds the left-out findings the pass places in one round and lists; one issue's
+// redraft takes at most maxPlacedPerIssue of them.
+// placeRounds is how many redrafts per issue the pass may spend placing (each round recomputes what
+// is still left out), and maxDraftFIDs the most findings one draft_section request names (its
+// schema): a section's own citations and its conflicts' findings always fit, or it is not redrafted.
 const (
-	maxPlaced         = 40
-	maxPlacedPerIssue = 12
+	maxPlaced         = 60
+	maxPlacedPerIssue = 16
+	placeRounds       = 3
+	maxDraftFIDs      = 100
 )
 
 // salienceRank orders left-out findings, strongest evidence first: a deviation check's or a high
@@ -321,9 +361,13 @@ func memoText(secs []Section) string {
 	return b.String()
 }
 
-// addressed reports whether the memo states both of a conflict's values.
-func addressed(c analysis.Conflict, memo string) bool {
-	ds, ns := figures(memo, true)
+// addressed reports whether the memo states both of a conflict's values: a date as written, a
+// quantity as a figure of the memo's read as the conflict's kind, currency and amount (the figure
+// reader's reading of what the drafter wrote, or the value a handle wrote: a memo's "3,000,000
+// shares" never states a usd:3000000 side).
+func addressed(c analysis.Conflict, secs []Section, use []Finding) bool {
+	ds, _ := figures(memoText(secs), true)
+	figs := memoReadings(secs, use)
 	for _, v := range c.Values {
 		kind, canon, _ := strings.Cut(v.Canon, ":")
 		if kind == "date" {
@@ -331,29 +375,69 @@ func addressed(c analysis.Conflict, memo string) bool {
 			if !slices.ContainsFunc(ds, func(k string) bool { x, _ := analysis.ParseDate(k); return x == d }) {
 				return false
 			}
-		} else if !slices.Contains(ns, canon) {
+			continue
+		}
+		_, r, ok := analysis.CanonAmount(v.Canon) // the canon is the reading's exact amount, scale applied
+		if !ok {
+			return false
+		}
+		want := analysis.Reading{Kind: analysis.KindMoney, Currency: strings.ToUpper(kind), Amount: analysis.Decimal(r.Abs(r))}
+		switch kind {
+		case "n":
+			want.Kind, want.Currency = analysis.KindCount, ""
+		case "pct":
+			want.Kind, want.Currency = analysis.KindPercent, ""
+		}
+		if !slices.ContainsFunc(figs, func(m analysis.Reading) bool {
+			x := m.Rat()
+			return m.Clear() && m.Kind == want.Kind && m.Currency == want.Currency && x != nil && x.Abs(x).Cmp(want.Rat()) == 0
+		}) {
 			return false
 		}
 	}
 	return true
 }
 
+// memoReadings are the memo's figures as read: the figure reader's readings of what each section's
+// drafter wrote (when it read the section's current text) and, for each handle Go wrote, its value's
+// reading.
+func memoReadings(secs []Section, use []Finding) []analysis.Reading {
+	var out []analysis.Reading
+	for _, s := range secs {
+		body, regs := memoBody(s)
+		if s.Read != nil && s.Read.Hash == textHash(body) {
+			out = append(out, s.Read.Figs...)
+		}
+		for _, r := range regs {
+			if i := slices.IndexFunc(use, func(f Finding) bool { return f.FID == r.fig.FID }); i >= 0 {
+				for _, v := range use[i].Values {
+					if v.Value == r.fig.Value && v.Fig != nil {
+						out = append(out, *v.Fig)
+					}
+				}
+			}
+		}
+	}
+	return out
+}
+
 // discrepancies is the cross-document join over every usable finding (analysis.Join, labels and
-// near values alike), and those the memo does not yet address.
+// near values alike, with the aliases the lead gave join_discrepancies), and those the memo does not
+// yet address.
 func (e *Engine) discrepancies(ctx context.Context, taskID string) (all, open []analysis.Conflict, err error) {
 	use, err := e.usable(ctx, taskID)
 	secs, serr := load[Section](ctx, e, taskID, kSection)
-	if err = cmpErr(err, serr); err != nil {
+	aliases, aerr := load[analysis.Alias](ctx, e, taskID, kAlias) // the lead's, from join_discrepancies
+	if err = cmpErr(err, serr, aerr); err != nil {
 		return nil, nil, err
 	}
 	an := make([]analysis.Finding, 0, len(use))
 	for _, f := range use {
 		an = append(an, f.Finding)
 	}
-	memo := memoText(secs)
-	for _, c := range analysis.Join(an, nil) {
+	for _, c := range analysis.Join(an, aliases) {
 		all = append(all, c)
-		if !addressed(c, memo) {
+		if !addressed(c, secs, use) {
 			open = append(open, c)
 		}
 	}
@@ -387,7 +471,9 @@ func (e *Engine) leftOut(ctx context.Context, taskID string) ([]Finding, error) 
 // placements assigns the left-out findings and the unaddressed conflicts to plan issues: a finding
 // to its own issue, else to the issue whose question its claim matches best (BM25; the first issue
 // when none matches); a conflict to the issue of a section citing either value's finding, else to
-// either finding's issue, else as its metric matches. It returns them by issue, in plan order.
+// either finding's issue, else as its metric matches. It returns them by issue, strongest first (an
+// issue with a conflict, then by its strongest left-out finding), so a pass whose share runs out has
+// placed the most salient evidence.
 func (e *Engine) placements(ctx context.Context, taskID string) ([]string, map[string]*placement, error) {
 	issues, err := load[Issue](ctx, e, taskID, kIssue)
 	secs, serr := load[Section](ctx, e, taskID, kSection)
@@ -445,13 +531,54 @@ func (e *Engine) placements(ctx context.Context, taskID string) ([]string, map[s
 		}
 		at(id).Conflicts = append(at(id).Conflicts, c)
 	}
-	var order []string
+	var order []string // strongest evidence first: an issue with a conflict, then by its strongest left-out finding (left is ranked)
 	for _, is := range issues {
 		if out[is.ID] != nil {
 			order = append(order, is.ID)
 		}
 	}
+	rank := func(id string) int {
+		if len(out[id].Conflicts) > 0 {
+			return -1
+		}
+		return slices.IndexFunc(left, func(f Finding) bool { return slices.Contains(out[id].FIDs, f.FID) })
+	}
+	slices.SortStableFunc(order, func(a, b string) int { return rank(a) - rank(b) })
 	return order, out, nil
+}
+
+// placeFIDs are the findings one placement redraft names: the left-out ones first, then the
+// conflicts' and what the section cites, each once, within maxDraftFIDs. A section's citations and
+// its conflicts' findings are never cut (the drafter would drop them, lab-r4 r4 verifier L8): left-out
+// ones are, last first; ok is false when those alone are over the cap.
+func placeFIDs(p *placement, cites []string) (fids []string, ok bool) {
+	keep := slices.Clone(cites)
+	for _, x := range p.Conflicts {
+		for _, v := range x.Values {
+			keep = append(keep, v.FID)
+		}
+	}
+	if keep = uniq(keep); len(keep) > maxDraftFIDs {
+		return nil, false
+	}
+	fids = uniq(append(slices.Clone(p.FIDs), keep...))
+	for i := len(fids) - 1; i >= 0 && len(fids) > maxDraftFIDs; i-- {
+		if !slices.Contains(keep, fids[i]) {
+			fids = slices.Delete(fids, i, i+1)
+		}
+	}
+	return fids, true
+}
+
+// uniq is xs with each string once, where it first appears.
+func uniq(xs []string) []string {
+	var out []string
+	for _, x := range xs {
+		if !slices.Contains(out, x) {
+			out = append(out, x)
+		}
+	}
+	return out
 }
 
 // placeRevise is the redraft instruction for one issue's placement.

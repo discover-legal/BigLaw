@@ -75,11 +75,11 @@ func TestIssueKindsDeclaredInSpec(t *testing.T) {
 
 func TestClassifyLiteral(t *testing.T) {
 	for in, want := range map[string]Class{
-		"$438,000":                  "Money",
-		"81.6%":                     "Percentage",
+		"$438,000":                  "", // what a number measures is the figure reader's (Value.Fig), never guessed from its text
+		"81.6%":                     "",
 		"Section 206(1)":            "Authority",
 		"Oceanic Fund I LP":         "Fund",
-		"4,312":                     "Count",
+		"4,312":                     "",
 		"Whitmore Capital Advisors": "", // a party name — don't guess
 	} {
 		if got := ClassifyLiteral(in); got != want {
