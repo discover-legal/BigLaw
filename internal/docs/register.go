@@ -44,12 +44,14 @@ type meter struct {
 func (m *meter) Embed(ctx context.Context, r model.EmbedRequest) (*model.Embeddings, error) {
 	e, err := m.e.Embed(ctx, r)
 	if e != nil {
-		m.u.InputTokens += e.Usage.InputTokens
+		u := agent.Usage{InputTokens: e.Usage.InputTokens}
 		if e.Usage.CostUSD == nil {
-			m.u.Unpriced++
+			u.Unpriced++
 		} else {
-			m.u.USD += *e.Usage.CostUSD
+			u.USD = *e.Usage.CostUSD
 		}
+		m.u.Add(u)
+		_ = agent.Meter(ctx, u) // journaled as it happens inside a tool step (a crash charges it); unrecorded, the step still charges it when it ends
 	}
 	return e, err
 }
