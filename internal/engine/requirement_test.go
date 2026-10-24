@@ -97,11 +97,11 @@ func TestDevMultiPartRequirementRuns(t *testing.T) {
 		!strings.Contains(reqs[0], "Tommy's Share — Twenty-Five Percent (25%) … Twenty-five percent (25%) of the residuary estate") {
 		t.Fatalf("check_deviation %q\nsubagent got %q", out, reqs)
 	}
-	if !strings.Contains(reqs[0], `"requirementContext":"C. ⟦Tommy's Share — Twenty-Five Percent (25%)⟧\n⟦Twenty-five percent (25%)`) {
+	if !strings.Contains(reqs[0], `\nC. ⟦Tommy's Share — Twenty-Five Percent (25%)⟧\n⟦Twenty-five percent (25%)`) {
 		t.Fatalf("the subagent did not get the requirement in context: %q", reqs[0])
 	}
-	if len(v.Findings) != 1 || len(v.Findings[0].Citations) != 2 || !strings.HasPrefix(v.Findings[0].Citations[0].Quote, "C. Tommy's Share — Twenty-Five Percent (25%)\nTwenty-five percent") ||
-		!strings.Contains(v.Findings[0].Claim, "“C. ⟦Tommy's Share — Twenty-Five Percent (25%) / Twenty-five percent (25%)") {
+	if len(v.Findings) != 1 || len(v.Findings[0].Citations) != 2 || !strings.Contains(v.Findings[0].Citations[0].Quote, "C. Tommy's Share — Twenty-Five Percent (25%)\nTwenty-five percent") ||
+		!strings.Contains(v.Findings[0].Claim, "C. ⟦Tommy's Share — Twenty-Five Percent (25%)⟧ / ⟦Twenty-five percent (25%)") {
 		t.Fatalf("findings %+v", v.Findings)
 	}
 	for _, c := range v.Findings[0].Citations {
@@ -147,7 +147,7 @@ func TestStitchedRequirementRefused(t *testing.T) {
 		}
 	}
 	if spans, bad, _ := placeRequirement(context.Background(), contract, "8. Fees … All fees are payable in cash"); bad != "" ||
-		!strings.Contains(renderContext(contract, contextOf(contract, spans), nil, "\n"), "unless the Buyer elects otherwise in writing") {
+		!strings.Contains(newReq(contract, spans).Context(), "unless the Buyer elects otherwise in writing") {
 		t.Errorf("a part that ends before its qualifier: bad %q, or its context drops the qualifier", bad)
 	}
 	for _, req := range []string{ // whole sentences and lines of one passage still verify
@@ -228,7 +228,7 @@ func TestOnePartFragmentReadInContext(t *testing.T) {
 			t.Errorf("%q: bad %q, err %v", c.req, bad, err)
 			continue
 		}
-		r := reqText{Text: c.doc, Spans: spans, Ctx: contextOf(c.doc, spans)}
+		r := newReq(c.doc, spans)
 		if got := r.Context(); !strings.Contains(got, c.want) {
 			t.Errorf("%q: context %q lacks %q", c.req, got, c.want)
 		}

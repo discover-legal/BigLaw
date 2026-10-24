@@ -919,14 +919,28 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
   ellipses stripped from the parts' edges; one normalised index of the document, the caller's ctx),
   every part the document's own words, the parts in the
   document's order, one passage (§ Limitations, LAB round 3); a part under four words only as a
-  heading line before another. The verified requirement is then read in its context (`requirement.go`
-  `reqContext`, by structure: markers, colons, blank lines, headings, never word lists): the paragraph or
-  list item that holds it, every introduction that governs it (a unit above ending with a colon, the line
-  that opens its list; an earlier item of the same list passed over) and its section heading, about 1,500
-  bytes with the requirement marked ⟦ ⟧. The subagent judges against that context (`requirementContext`),
-  its verdict's controlling quote must lie in it (else the verdict is dropped), and the finding quotes it
-  verbatim as its controlling citation, the verdict's words marked, with the part and the correction given
-  as the analyst's words, not quotations; prosecute checks them against it (`TestR2VProbesReadInContext`,
+  heading line before another. The verified requirement is then read in its section (`requirement.go`
+  `contextOf`): the section of the document's own section tree (`docs.Parse`, byte-exact, the tree the
+  outline shows) that holds it, whole, before and after the requirement, so introductions and overrides
+  below it ("Notwithstanding the foregoing …", "(b) Paragraph (a) shall not apply") are in it; a lettered
+  or roman item is read in the clause that holds its list, and a list with no enclosing clause (or a clause
+  a colon line introduces) with its whole run of items and the text before it; plus the heading lines of
+  the sections above. No layout is guessed. A section over 8 KB is cut around the requirement only: the
+  requirement, the text before it up to the nearest colon-ending line above it (never cut), then what the
+  bound allows before and after it, cut at the far ends; the context is then marked truncated. The
+  subagent judges against that section (`requirementContext`, the requirement marked ⟦ ⟧), its verdict's
+  controlling quote must lie in it (else the verdict is dropped), and before a verdict is admitted one
+  bounded call on the `critic` role, inside the tool's grant (`rt.ChatWithin`), with the section fenced as
+  document text, answers whether the section, read as a whole, imposes the requirement as the verdict
+  states it (`checkSection`, prompt `specs/section_check.md`): yes admits it, its answer and reason on the
+  finding ("Confirmed against the whole section by an independent check: …"); no (negated or overridden)
+  drops it; unclear, or a yes on a truncated section, admits it at low confidence, labelled for a lawyer's
+  review and gated at finish like a low-confidence transcript (`lowConfidence`); no grant left drops it
+  with a note. The finding quotes the section verbatim as its controlling citation, the requirement
+  marked, with the part and the correction given as the analyst's words, not quotations; prosecute checks
+  them against it (`TestV3BlankSeparatedListLosesIntroduction`, `TestV3OverrideBelowNotInContext`,
+  `TestSectionCheckNegatedDropsVerdict`, `TestSectionCheckYesAdmitsBenchRequirements`,
+  `TestSectionCheckUnclearOrCutIsLow`, `TestSectionCheckChargedWithinGrant`, `TestR2VProbesReadInContext`,
   `TestR2VFragmentsQuotedInContext`, `TestR2VVerdictQuoteOutsideContextRefused`, `TestOnePartFragmentReadInContext`,
   `TestBenchRequirementsReadInContext`, `TestContextIsBounded`). Format characters (zero-width spaces,
   bidi marks) are folded before any match; the parts handed on joined
@@ -1481,7 +1495,7 @@ improvements (after the real Haiku LAB rerun; scripted the same way): `TestSweep
 
 | Budget | Ceiling | Today |
 |---|---:|---:|
-| Go production lines (physical lines, non-`_test.go`, test-support packages included) | reported, no limit (owner decision 17) | 14,745 |
+| Go production lines (physical lines, non-`_test.go`, test-support packages included) | reported, no limit (owner decision 17) | 14,776 |
 | Packages under `internal/`, test-support packages excluded | 12 | 8 (`agent`, `analysis`, `api`, `docs`, `docs/ooxml`, `engine`, `model`, `store`; `store/storetest` is test support) |
 | Direct Go dependencies | 3 | 2 (`github.com/lib/pq`, `github.com/ledongthuc/pdf`) |
 | Runtime environment variables | 20 | 18 |
@@ -1490,7 +1504,7 @@ improvements (after the real Haiku LAB rerun; scripted the same way): `TestSweep
 | Packages without a `_test.go` | 0 | 0 |
 | Lines in any one source file (`.go`, `.py`, `.sql`, `.sh`, `.js`, `.ts`, `.css`; tests included) | 2,000 | 968 (`internal/docs/vision_safety_test.go`) |
 
-**There is no total line ceiling (owner decision 17, 2026-10-23).** `scripts/loc.py` reports the Go production total (14,745) and fails only on the budgets that bound bloat directly: no file over 2,000 lines, ≤ 3 direct deps, ≤ 20 env vars, ≤ 12 internal packages, ≤ 2,400 UI source lines, no untested package. Each PR still reports its lines against its DESIGN budget in its notes. (The ceiling's history, 14,000 → 17,500 through owner decisions 7–16, is in PLAN.) A **test-support package** is one
+**There is no total line ceiling (owner decision 17, 2026-10-23).** `scripts/loc.py` reports the Go production total (14,776) and fails only on the budgets that bound bloat directly: no file over 2,000 lines, ≤ 3 direct deps, ≤ 20 env vars, ≤ 12 internal packages, ≤ 2,400 UI source lines, no untested package. Each PR still reports its lines against its DESIGN budget in its notes. (The ceiling's history, 14,000 → 17,500 through owner decisions 7–16, is in PLAN.) A **test-support package** is one
 whose directory name ends in `test` and that no production file outside it imports, such as
 `storetest`. Under the coordinator's ruling it is left out of the package count, but its lines
 count toward the reported Go total like any other non-`_test.go` file. A `*test` package that
@@ -1603,20 +1617,23 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
   - A requirement's parts must be the document's words, in its order, one passage: only white space
     and list markers between them, or, after a sentence, at most two whole sentences (400 bytes); never
     a heading or a list's introduction between them. A fragment is not refused: it is read and quoted
-    in its context, which is found by structure, so a document whose structure the text does not show
-    (a PDF that wraps lines without blank lines or markers) gives a coarser context: a wrapped
-    paragraph's lines are one unit, an unmarked heading needs a blank line above it, and a run-on line
-    can be taken for a heading or an item. Over-inclusion is the chosen failure: a sibling's colon line or
-    a preceding list's opener may be quoted as context. The context is bounded at about 1,500 bytes
-    (an introduction keeps its last 300 bytes); the requirement is always whole. Whether the subagent
-    and prosecute read the context correctly is the model's judgment: the context makes the governing
-    words visible, it does not make the verdict right.
+    in its section of the document's section tree (`docs.Parse`), so a document whose numbering the tree
+    does not recognise (unmarked headings, "B. Successor Trustees", a PDF text layer) is one section, and
+    its requirement is read in the whole of it, up to the 8 KB bound. An override in a later top-level
+    clause ("6. Notwithstanding clause 5 …") is in another section and is not read with it. A section over
+    the bound is cut around the requirement, the text before it first: what follows a long requirement's
+    section may be left out, and such a verdict is admitted only at low confidence, for a lawyer's review.
+    Whether the section imposes the requirement as a verdict states it (a negation, an override) is the
+    section check's judgment, one critic call per admitted verdict: the context makes the governing words
+    visible and the check reads them, which does not make the verdict right.
   - The near join pairs only one entity's values (alias-unified, or both with none), within an eighth
     of each other, and not when each label names a thing its own quote states and the other side
     never mentions (a fee and an allocation, a notice and a demand); dates joined by shared words take
     the same label test. It is a word test: a part of a figure is told apart from it only when its
-    quote frames it as one ("of the Purchase Price", a deposit, instalment or holdback beside the
-    other's label); a part described otherwise is told apart only by the eighth.
+    quote frames that value as one: "of/toward/against the <label>" right after it, or a portion word
+    (a deposit, instalment, holdback …) that is not the other's label as the word it is stated under ("a
+    deposit of $950,000"); a portion word merely nearby does not; a part described otherwise is told
+    apart only by the eighth.
   - The raw-date rule is paragraph-wide: a list that states the raw date and the rolled deadline on
     separate lines without a blank line between is one paragraph and passes; one with a blank line is
     flagged.

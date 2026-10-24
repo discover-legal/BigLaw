@@ -4,6 +4,7 @@
 package agent
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -83,14 +84,53 @@ func clipResult(t toolOut, n int) string {
 	if len(whole) <= n {
 		return whole
 	}
-	if out, note, ok := clipJSON(t.out, n-len(t.prefix)-400); ok {
-		return t.prefix + string(out) + fmt.Sprintf("\n[result cut to %d of %d bytes (%s); its other fields are whole: ask for less at a time (ledger findings: an issueId, or the offset the result names in next; retrieve or extract_facts: a narrower query or one section)]", len(out), len(t.out), note)
+	for budget, try := n-len(t.prefix)-400, 0; try < 3; try++ { // the note's length is known only after the cut
+		out, note, ok := clipJSON(t.out, budget)
+		if !ok {
+			break
+		}
+		s := t.prefix + string(out) + fmt.Sprintf("\n[result cut to %d of %d bytes (%s); its other fields are whole: ask for less at a time (ledger findings: an issueId, or the offset the result names in next; retrieve or extract_facts: a narrower query or one section)]", len(out), len(t.out), note)
+		if len(s) <= n {
+			return s
+		}
+		budget -= len(s) - n
 	}
 	return clip(whole, n)
 }
 
+// marshal is json.Marshal without HTML escaping: a cut result reads as the tool wrote it, "&" not
+// "\u0026" (lab-r3 r3 verifier L4).
+func marshal(v any) []byte {
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	if enc.Encode(v) != nil {
+		return nil
+	}
+	return bytes.TrimSuffix(b.Bytes(), []byte("\n"))
+}
+
+// cutString is the longest prefix of str (at a rune boundary, with "…") whose JSON encoding is at
+// most n bytes: escapes are measured as encoded, not as raw bytes (verifier L4).
+func cutString(str string, n int) (json.RawMessage, int) {
+	lo, hi := 0, len(str)
+	for lo < hi { // the largest cut that fits
+		mid := (lo + hi + 1) / 2
+		if len(marshal(str[:mid]+"…")) <= n {
+			lo = mid
+		} else {
+			hi = mid - 1
+		}
+	}
+	for lo > 0 && !utf8.RuneStart(str[lo]) {
+		lo--
+	}
+	return marshal(str[:lo] + "…"), lo
+}
+
 // clipJSON shrinks a JSON object to at most n bytes by dropping trailing items of its largest array
-// fields, or cutting its largest string field, largest first; ok is false for anything else.
+// fields (an array of one item over the cut keeps that item, itself cut when it is a string or an
+// object), or cutting its largest string field, largest first; ok is false for anything else.
 func clipJSON(raw json.RawMessage, n int) (json.RawMessage, string, bool) {
 	var obj map[string]json.RawMessage
 	if n <= 0 || json.Unmarshal(raw, &obj) != nil {
@@ -98,8 +138,8 @@ func clipJSON(raw json.RawMessage, n int) (json.RawMessage, string, bool) {
 	}
 	var notes []string
 	for range 8 {
-		b, err := json.Marshal(obj)
-		if err != nil {
+		b := marshal(obj)
+		if b == nil {
 			return nil, "", false
 		} else if len(b) <= n {
 			return b, strings.Join(notes, "; "), true
@@ -113,45 +153,61 @@ func clipJSON(raw json.RawMessage, n int) (json.RawMessage, string, bool) {
 		if k == "" {
 			return nil, "", false
 		}
-		excess := len(b) - n
-		if v := obj[k]; v[0] == '[' {
+		v := marshal(obj[k]) // as it is encoded in b
+		target := len(v) - (len(b) - n)
+		if v[0] == '[' {
 			var items []json.RawMessage
 			if json.Unmarshal(v, &items) != nil || len(items) == 0 {
 				return nil, "", false
 			}
-			keep, cut := len(items), 0
-			for keep > 0 && cut < excess {
-				keep--
-				cut += len(items[keep]) + 1
+			keep, size, sep := 0, 2, 0 // the brackets, then each item and its comma
+			for keep < len(items) && size+sep+len(marshal(items[keep])) <= target {
+				size, sep = size+sep+len(marshal(items[keep])), 1
+				keep++
 			}
-			obj[k], _ = json.Marshal(items[:keep])
+			if keep == 0 { // the first item alone is over: cut it rather than empty the array
+				var str string
+				if json.Unmarshal(items[0], &str) == nil {
+					first, cut := cutString(str, target-2)
+					obj[k] = marshal([]json.RawMessage{first})
+					notes = append(notes, fmt.Sprintf("%s: the first of %d items, its first %d of %d bytes", k, len(items), cut, len(str)))
+					continue
+				}
+				if first, note, ok := clipJSON(items[0], target-2); ok {
+					obj[k] = marshal([]json.RawMessage{first})
+					notes = append(notes, fmt.Sprintf("%s: the first of %d items, cut (%s)", k, len(items), note))
+					continue
+				}
+			}
+			obj[k] = marshal(items[:keep])
 			notes = append(notes, fmt.Sprintf("%s: the first %d of %d items", k, keep, len(items)))
 		} else {
 			var str string
 			if json.Unmarshal(v, &str) != nil {
 				return nil, "", false
 			}
-			cut := max(0, len(str)-excess-8)
-			for cut > 0 && !utf8.RuneStart(str[cut]) {
-				cut--
-			}
-			obj[k], _ = json.Marshal(str[:cut] + "…")
+			var cut int
+			obj[k], cut = cutString(str, target)
 			notes = append(notes, fmt.Sprintf("%s: its first %d of %d bytes", k, cut, len(str)))
 		}
 	}
 	return nil, "", false
 }
 
-// clip cuts a tool result to at most n bytes (at a rune boundary) with a note on how to read the rest.
+// clip cuts a tool result to at most n bytes (at a rune boundary) with a note on how to read the
+// rest, the note included in the n.
 func clip(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	cut := n
+	note := func(cut int) string {
+		return fmt.Sprintf("\n[result cut at %d of %d bytes: ask for less at a time (ledger findings: an issueId, or the offset the result names in next; retrieve or extract_facts: a narrower query or one section)]", cut, len(s))
+	}
+	cut := max(0, n-len(note(n)))
 	for cut > 0 && !utf8.RuneStart(s[cut]) {
 		cut--
 	}
-	return s[:cut] + fmt.Sprintf("\n[result cut at %d of %d bytes: ask for less at a time (ledger findings: an issueId, or the offset the result names in next; retrieve or extract_facts: a narrower query or one section)]", cut, len(s))
+	return s[:cut] + note(cut)
 }
 
 // modelFailure reports a G6 model failure (or a cancellation): it ends the run, never "no finding".
@@ -193,6 +249,7 @@ func (rt *Runtime) Run(ctx context.Context, a Agent, c Call, b *Budget) (Result,
 	handles := []string{"", ""} // per message: what an old tool result is compacted to
 	turnOf := []int{0, 0}
 	keep, repaired, step, shrink := keepTurns, false, 0, false
+	cutTurn := 0              // the last turn whose request was refused as too long
 	outs := map[int]toolOut{} // per tool message: its result, for a structure-aware cut
 	add := func(m model.Message, turn int, handle string) {
 		msgs, turnOf, handles = append(msgs, m), append(turnOf, turn), append(handles, handle)
@@ -280,11 +337,14 @@ func (rt *Runtime) Run(ctx context.Context, a Agent, c Call, b *Budget) (Result,
 				}
 			}
 			if try < 2 && tooLong(err) { // compact every result but the latest turn's, then cut those too, and try again
-				keep, shrink = 1, try == 1
+				keep, shrink, cutTurn = 1, try == 1, turn
 				continue
 			}
 			if err == nil { // the cut was for this request: later results reach the model whole (verifier M5)
 				shrink = false
+				if turn > cutTurn && keep < keepTurns { // and the compaction relaxes a turn at a time, from the turn after the retry (r3 L5)
+					keep++
+				}
 			}
 			break
 		}

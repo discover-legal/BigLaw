@@ -221,7 +221,17 @@ func (f *fixture) happy() map[string][]model.Reply {
 		"reproduce":     {noAnswers},
 		"audit_gaps":    {noGaps},
 		"meta":          {metaNote},
+		"section_check": checks("yes", 24),
 	}
+}
+
+// checks is n scripted section-check answers (deviation.go checkSection).
+func checks(answer string, n int) []model.Reply {
+	var out []model.Reply
+	for range n {
+		out = append(out, text(m{"answer": answer, "reason": "the section's words impose it as stated"}))
+	}
+	return out
 }
 
 // with returns the happy scripts with lead (and any other agents) replaced.

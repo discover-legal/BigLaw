@@ -74,38 +74,41 @@ func pairable(a, b entry) bool {
 	return a.scaled == b.scaled || a.scaled && b.whole || b.scaled && a.whole
 }
 
-// portionWord frames a value as a component of a larger quantity.
-var portionWord = regexp.MustCompile(`(?i)\b(?:portion|part|instal(?:l)?ments?|payments?|deposits?|tranches?|holdbacks?|escrow(?:ed)?|balance|advance|retention|retained)\b`)
-
 // ofLabel is a value followed by "of (the)" or "toward(s)/against/on account of (the)" and then a label.
 var ofLabel = regexp.MustCompile(`(?i)^\s*(?:of|out of|from|towards?|against|on account of)\s+(?:the\s+)?`)
 
-// partOf reports whether x's quote frames x as a component or portion of y's quantity: right after
-// x's value it names y's label ("$950,000 of the Purchase Price"), or near the value a portion word
-// that is not y's label's own ("a deposit", "the first instalment", "a payment of … toward") stands
-// with y's label (lab-r3 r2 verifier M3: a closing payment net of a holdback is not the purchase
-// price misstated).
+// portionBefore is a portion word as the label a value is stated under, right before it: "a deposit
+// of $50,000", "the first instalment: $200,000", "a payment in the amount of $950,000" (not a total:
+// "payments totaling $92,600" states the whole).
+var portionBefore = regexp.MustCompile(`(?i)\b(portion|part|instal(?:l)?ments?|payments?|deposits?|tranches?|holdbacks?|escrow|balance|advance|retention)\s*(?:of|:|=|is|was|in the amount of|equal to)?\s*(?:the sum of\s*)?$`)
+
+// partOf reports whether x's quote frames x itself as a component or portion of y's quantity: the
+// words right after x's value name y's label ("$950,000 of the Purchase Price", "toward the Purchase
+// Price"), or a portion word that is not y's label's own is the word x is stated under ("a deposit
+// of $950,000"). A portion word merely near the value, or in a label ("grand total of payments"),
+// does not frame it ("Payment of the Purchase Price of $1,200,000", "is $1,200,000, in two
+// instalments": lab-r3 r3 verifier M3); a closing payment net of a holdback is still not the price
+// misstated (r2 M3).
 func partOf(x, y entry) bool {
 	label := norm(y.v.Metric)
 	if label == "" || x.v.Value == "" {
 		return false
+	}
+	foreign := func(w string) bool { // a portion word that is not one of y's label's own words
+		w = strings.ToLower(w)
+		return !tokens(label)[strings.TrimSuffix(w, "s")] && !tokens(label)[w]
 	}
 	for _, q := range x.quotes {
 		i := strings.Index(q, x.v.Value)
 		if i < 0 {
 			continue
 		}
-		lo, hi := max(0, i-80), min(len(q), i+len(x.v.Value)+80)
-		after, win := q[i+len(x.v.Value):hi], norm(q[lo:hi])
+		after := q[i+len(x.v.Value) : min(len(q), i+len(x.v.Value)+80)]
 		if m := ofLabel.FindStringIndex(after); m != nil && strings.HasPrefix(norm(after[m[1]:]), label) {
 			return true
 		}
-		if strings.Contains(win, label) {
-			for _, w := range portionWord.FindAllString(win, -1) {
-				if !tokens(label)[strings.TrimSuffix(strings.ToLower(w), "s")] && !tokens(label)[strings.ToLower(w)] {
-					return true
-				}
-			}
+		if m := portionBefore.FindStringSubmatch(strings.TrimRight(q[max(0, i-40):i], "$£€¥ \t")); m != nil && foreign(m[1]) {
+			return true
 		}
 	}
 	return false

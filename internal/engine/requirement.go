@@ -6,31 +6,27 @@ package engine
 import (
 	"context"
 	"regexp"
-	"slices"
 	"strings"
 	"unicode"
 
 	"github.com/discover-legal/BigLaw/internal/docs"
 )
 
-// A requirement is verified where the document has it (requirementParts), then read in its context
-// (reqContext): the paragraph or list item that holds it, every introduction that governs it, and
-// its section heading, found by the document's structure (markers, colons, blank lines), never by
-// word lists. The subagent judges against that context and the finding quotes it, so a fragment can
-// no longer invert what the document says: "name Sophia … as a successor trustee" is read, and
-// quoted, inside "Do NOT name Sophia …" (lab-r3 verifier, rounds 1 and 2: every guard-word list left
-// holes, an abbreviation, a numbered introduction, a missing exception word, a zero-width character).
+// A requirement is verified where the document has it (requirementParts), then read in its section
+// (contextOf): the leaf section of the document's own section tree (docs.Parse, byte-exact) that holds
+// it, whole, with the heading path of the sections that enclose it. Structure is the tree's, never a
+// guess at layout (lab-r3 r3 verifier: walking lines upward missed blank-line lists, read a name as a
+// heading, trimmed around the wrong quote, never saw an override below the requirement). Whether the
+// section, read as a whole, imposes the requirement as a verdict states it (a negation, an override)
+// is a question for a model, not for code: check_deviation asks it (deviation.go checkSection).
 // Parts joined from several passages must still be one passage in the document's order: stitching
 // across a heading, a list's introduction or a section stays refused.
 const (
-	maxJoins   = 12   // joins a requirement is cut at; more is refused as a whole (each part is searched)
-	maxPlaces  = 8    // occurrences of one part tried for one whose gap from the part before is allowed
-	maxGap     = 400  // bytes of the document between two parts
-	maxSkipped = 2    // whole sentences two parts may skip between them
-	maxLines   = 200  // lines walked back for a requirement's governing introductions and heading
-	ctxMax     = 1500 // bytes of context a requirement is quoted with (about)
-	ctxTail    = 300  // bytes of a long introduction kept: its end, where it introduces
-	maxHeading = 120  // a heading line's length at most
+	maxJoins   = 12      // joins a requirement is cut at; more is refused as a whole (each part is searched)
+	maxPlaces  = 8       // occurrences of one part tried for one whose gap from the part before is allowed
+	maxGap     = 400     // bytes of the document between two parts
+	maxSkipped = 2       // whole sentences two parts may skip between them
+	ctxMax     = 8 << 10 // bytes of a requirement's section it is read in, at most (its heading path aside)
 )
 
 // joins are where a model joins passages of a requirement: after a colon, semicolon, sentence end
@@ -39,12 +35,6 @@ var joins = regexp.MustCompile(`[:;.!?](?:["”’)]*)\s+|\s*(?:…|\.\.\.)\s*|\
 
 // listMarker is a list item's or heading's marker at the start of a line: 1. (a) ii) B. - •
 var listMarker = regexp.MustCompile(`^[ \t]*(?:\(?[0-9]{1,3}[.)]|\(?[A-Za-z]{1,4}[.)]|[-•*–])[ \t]+`)
-
-// strongHeading opens a heading line whatever its case: Markdown, or an article, section or schedule.
-var strongHeading = regexp.MustCompile(`^(?:#{1,6}\s|(?i:article|section|schedule|exhibit|appendix|annex|part)\s+[0-9IVXLCDMivxlcdmA-Z]|§)`)
-
-// itemEnd is how a list item ends that runs on to the next one: a semicolon, perhaps "and" or "or".
-var itemEnd = regexp.MustCompile(`;\s*(?:and|or)?$`)
 
 // foldCf drops format characters (zero-width spaces and joiners, bidi marks, soft hyphens): they
 // render as nothing, so structure is read without them (lab-r3 r2 verifier L3: "N​OT").
@@ -214,11 +204,7 @@ func partGap(text string, prev, s int) bool {
 // span is a byte range of a document's text.
 type span struct{ s, e int }
 
-// piece is one passage of a requirement's context: its range, and the anchor inside it that a
-// trim keeps whole (the requirement, an introduction's end, a heading).
-type piece struct{ s, e, as, ae int }
-
-// lines over a document's text: line(i) is the line holding byte i, without its line break.
+// lineOf is the line holding byte i of text, without its line break.
 func lineOf(text string, i int) span {
 	i = min(max(i, 0), len(text))
 	s := strings.LastIndexByte(text[:i], '\n') + 1
@@ -229,267 +215,156 @@ func lineOf(text string, i int) span {
 	return span{s, i + e}
 }
 
-// above is the line before l (ok false at the start of the text).
-func above(text string, l span) (span, bool) {
-	if l.s == 0 {
-		return span{}, false
-	}
-	return lineOf(text, l.s-1), true
+// colonEnd reports whether a line, closing quotes and brackets aside, ends with a colon (also a
+// full-width one): it introduces what follows it.
+func colonEnd(line string) bool {
+	t := strings.TrimRight(strings.TrimSpace(foldCf(line)), closers)
+	return strings.HasSuffix(t, ":") || strings.HasSuffix(t, "：")
 }
 
-// below is the line after l (ok false at the end of the text).
-func below(text string, l span) (span, bool) {
-	if l.e >= len(text) {
-		return span{}, false
+// item is a section that is an item of a list rather than a clause of its own: lettered or roman.
+func item(x docs.Section) bool { return x.Scheme == "alpha" || x.Scheme == "roman" }
+
+// parent is section i's nearest enclosing numbered section in the pre-order list, or -1 (a preface
+// or flat document's level-0 section encloses nothing).
+func parent(secs []docs.Section, i int) int {
+	for j := i - 1; j >= 0; j-- {
+		if secs[j].Level > 0 && secs[j].Level < secs[i].Level && secs[j].End >= secs[i].End {
+			return j
+		}
 	}
-	return lineOf(text, l.e+1), true
+	return -1
 }
 
-func clean(text string, l span) string { return strings.TrimSpace(foldCf(text[l.s:l.e])) }
-func blank(text string, l span) bool   { return clean(text, l) == "" }
-func marked(text string, l span) bool  { return listMarker.MatchString(clean(text, l)) }
-func colon(text string, l span) bool   { return endsWith(clean(text, l), ":") }
-
-// heading reports whether a line is a heading: short, not a clause that runs on (no , ; : at its
-// end), and Markdown, an article/section/schedule line, or title-cased (every word of four letters
-// or more capitalised, at most twelve words), and not the first line under an introduction
-// ("…shall NOT serve:" over "Sophia Davenport-Chen" is an item, not a heading), unless it is a
-// marked line over prose (headsProse); an unmarked one only after a blank line or at the start.
-func heading(text string, l span) bool {
-	t := clean(text, l)
-	if t == "" || len(t) > maxHeading || endsWith(t, ",;:") {
-		return false
-	}
-	if p, ok := above(text, l); ok && colon(text, p) && !headsProse(text, l) {
-		return false
-	}
-	if strongHeading.MatchString(t) {
-		return true
-	}
-	if p, ok := above(text, l); ok && !blank(text, p) && !marked(text, l) {
-		return false // an unmarked heading stands after a blank line or at the start: else it is a run-on line or an item
-	}
-	words := strings.Fields(listMarker.ReplaceAllString(t, ""))
-	if len(words) == 0 || len(words) > 12 {
-		return false
-	}
-	letters := false
-	for _, w := range words {
-		run := []rune(w)
-		if k := strings.IndexFunc(w, func(r rune) bool { return !unicode.IsLetter(r) }); k >= 0 {
-			run = []rune(w[:k])
-		}
-		if len(run) > 0 {
-			letters = true
-			if len(run) >= 4 && unicode.IsLower(run[0]) {
-				return false // a sentence's word, not a title's
-			}
-		}
-	}
-	return letters
+// introduced reports whether the last non-blank line before byte at ends with a colon.
+func introduced(text string, at int) bool {
+	t := strings.TrimRight(text[:at], " \t\r\n")
+	return t != "" && colonEnd(text[lineOf(text, len(t)-1).s:len(t)])
 }
 
-// headsProse: a marked line followed by an unmarked, non-blank line (a lettered heading over its
-// body, "C. Tommy's Share" over its paragraph), not an item of a list of short items.
-func headsProse(text string, l span) bool {
-	n, ok := below(text, l)
-	return ok && marked(text, l) && !blank(text, n) && !marked(text, n)
-}
-
-// shape is a list marker's style (its letters, numbers and roman numerals generalised, with its
-// indentation), "" for an unmarked line: two items of one list have one shape.
-func shape(text string, l span) string {
-	raw := foldCf(text[l.s:l.e])
-	m := listMarker.FindString(raw)
-	if m == "" {
-		return ""
+// sectionOf is the section a requirement at text[s:e] is read in, from the document's own section
+// tree (docs.Parse, the tree retrieve and the outline show): the deepest section holding the
+// requirement; for a lettered or roman item, the clause that holds its list (so a sibling such as
+// "(b) Paragraph (a) shall not apply" is read with it); and for a list with no enclosing clause, or a
+// clause introduced by a colon line before it, the whole run of its sibling items with the text that
+// introduces them. lo..hi is that text, whole; root is the section whose heading path governs it.
+func sectionOf(secs []docs.Section, text string, s, e int) (lo, hi, root int) {
+	n := -1
+	for i, x := range secs {
+		if x.Start <= s && e <= x.End {
+			n = i
+		}
 	}
-	indent := len(m) - len(strings.TrimLeft(m, " \t"))
-	var b strings.Builder
-	b.WriteString(strings.Repeat(" ", indent))
-	tok := strings.TrimSpace(m)
-	for i := 0; i < len(tok); {
-		j := i
-		for j < len(tok) && (tok[j] >= 'a' && tok[j] <= 'z' || tok[j] >= 'A' && tok[j] <= 'Z') {
-			j++
-		}
-		if j > i {
-			run := tok[i:j]
-			switch {
-			case strings.Trim(run, "ivxlcdm") == "" && (len(run) > 1 || strings.Contains("ivx", run)):
-				b.WriteByte('i')
-			case strings.Trim(run, "IVXLCDM") == "" && (len(run) > 1 || strings.Contains("IVX", run)):
-				b.WriteByte('I')
-			case run == strings.ToLower(run):
-				b.WriteByte('a')
-			default:
-				b.WriteByte('A')
-			}
-			i = j
-			continue
-		}
-		for j < len(tok) && tok[j] >= '0' && tok[j] <= '9' {
-			j++
-		}
-		if j > i {
-			b.WriteByte('1')
-			i = j
-			continue
-		}
-		b.WriteByte(tok[i])
-		i++
+	if n < 0 { // across the preface and a heading: the whole document
+		return 0, len(text), -1
 	}
-	return b.String()
-}
-
-// unit is the paragraph or list item holding lines first..last: up to a blank line, a marked line
-// (an item starts there), a heading (kept as its top) or a line that introduces it (ends with a
-// colon); down to a blank line, a marked line or a strong heading.
-func unit(text string, first, last span) span {
-	x := first
-	for !marked(text, x) && !heading(text, x) {
-		p, ok := above(text, x)
-		if !ok || blank(text, p) || colon(text, p) {
+	for item(secs[n]) {
+		p := parent(secs, n)
+		if p < 0 {
 			break
 		}
-		x = p
+		n = p
 	}
-	y := last
-	for {
-		n, ok := below(text, y)
-		if !ok || blank(text, n) || marked(text, n) || strongHeading.MatchString(clean(text, n)) {
-			break
-		}
-		y = n
+	x := secs[n]
+	if x.Level == 0 {
+		return x.Start, x.End, n
 	}
-	return span{x.s, y.e}
-}
-
-// reqContext is the context of the requirement at text[s:e], in document order: the unit holding it
-// (a paragraph or list item), each introduction that governs it (a unit above that ends with a
-// colon, or the unmarked line that opens its list), and its heading. Walking up a unit at a time:
-// an item of the same list (same marker shape, or a run-on item ending with a semicolon) is passed
-// over, as are a sibling's nested items; an introduction is taken and the walk goes on from its
-// level; a heading is taken and ends the walk; a plain paragraph ends the governing chain, and only
-// a heading is looked for above it. Bounded by maxLines.
-func reqContext(text string, s, e int) []piece {
-	own := unit(text, lineOf(text, s), lineOf(text, max(s, e-1)))
-	first := lineOf(text, own.s)
-	if heading(text, first) && first.e < own.e { // the unit opens with its heading: a piece of its own unless the requirement holds it
-		if s < first.e {
-			return []piece{{own.s, own.e, s, e}}
-		}
-		return []piece{{first.s, first.e, first.s, first.e}, {first.e + 1, own.e, s, e}}
-	}
-	out := []piece{{own.s, own.e, s, e}}
-	cur, plain := shape(text, first), false
-	x := first
-	for n := 0; n < maxLines; n++ {
-		p, ok := above(text, x)
-		if !ok {
-			break
-		}
-		if x = p; blank(text, p) {
-			continue
-		}
-		u := span{unit(text, p, p).s, p.e} // a unit above ends where the walk came from
-		top := lineOf(text, u.s)
-		x = top
-		n += strings.Count(text[u.s:u.e], "\n")
-		switch sh := shape(text, top); {
-		case plain:
-			if heading(text, top) {
-				return append(out, piece{top.s, top.e, top.s, top.e})
+	first, last := n, n
+	for j := n - 1; j >= 0 && secs[j].Level >= x.Level; j-- {
+		if secs[j].Level == x.Level {
+			if secs[j].Scheme != x.Scheme {
+				break
 			}
-		case colon(text, p): // an introduction: governs what follows it
-			if heading(text, top) && top.e < u.e { // under its own heading
-				return append(out, piece{top.e + 1, u.e, max(top.e+1, u.e-ctxTail), u.e}, piece{top.s, top.e, top.s, top.e})
-			}
-			out = append(out, piece{u.s, u.e, max(u.s, u.e-ctxTail), u.e})
-			if heading(text, top) {
-				return out
-			}
-			cur = sh
-		case cur != "" && sh == cur, itemEnd.MatchString(clean(text, p)): // an earlier item of the same list
-		case heading(text, top):
-			return append(out, piece{top.s, top.e, top.s, top.e})
-		case cur != "" && sh != "": // a nested item of an earlier sibling
-		case cur != "": // the line that opens the list
-			out = append(out, piece{u.s, u.e, max(u.s, u.e-ctxTail), u.e})
-			cur = ""
-		default:
-			plain = true
+			first = j
 		}
 	}
-	return out
+	if !item(x) && !introduced(text, secs[first].Start) {
+		return x.Start, x.End, n
+	}
+	for j := n + 1; j < len(secs) && secs[j].Level >= x.Level; j++ {
+		if secs[j].Level == x.Level {
+			if secs[j].Scheme != x.Scheme {
+				break
+			}
+			last = j
+		}
+	}
+	lo, root = 0, -1
+	if at := secs[first].Start; at > 0 { // the section whose own text the list follows: its introduction
+		for i, y := range secs {
+			if y.Start < at && at <= y.BodyEnd {
+				lo, root = y.Start, i
+			}
+		}
+	}
+	return lo, secs[last].End, root
 }
 
 // contextOf is a verified requirement's context (spans in document order, the first part's start to
-// the last part's end as one requirement), its pieces in document order.
-func contextOf(text string, spans [][2]int) []piece {
-	ps := reqContext(text, spans[0][0], spans[len(spans)-1][1])
-	slices.SortFunc(ps, func(a, b piece) int { return a.s - b.s })
-	return ps
-}
-
-// trimContext cuts a context to about ctxMax bytes: each piece keeps its anchor whole (widened to
-// focus where focus lies in it), then context around the anchors while the budget lasts, the pieces
-// that hold focus first; cuts fall at white space.
-func trimContext(text string, ps []piece, focus span) []piece {
-	out := slices.Clone(ps)
-	total, anchors := 0, 0
-	for i, p := range out {
-		if focus.s >= p.s && focus.e <= p.e {
-			out[i].as, out[i].ae = min(p.as, focus.s), max(p.ae, focus.e)
-		}
-		total, anchors = total+p.e-p.s, anchors+out[i].ae-out[i].as
-	}
-	if total <= ctxMax {
-		return merged(text, out)
-	}
-	rem := max(0, ctxMax-anchors)
-	var order []int // the piece holding focus first, then the rest from the requirement up
-	for i := len(out) - 1; i >= 0; i-- {
-		if focus.s >= out[i].s && focus.e <= out[i].e {
-			order = append([]int{i}, order...)
-		} else {
-			order = append(order, i)
-		}
-	}
-	for _, i := range order {
-		p := out[i]
-		before, after := p.as-p.s, p.e-p.ae
-		take := min(rem, before+after)
-		rem -= take
-		b := min(before, take/2)
-		a := min(after, take-b)
-		b = min(before, take-a)
-		lo, hi := p.as-b, p.ae+a
-		if lo > p.s { // start after white space
-			if k := strings.IndexFunc(text[lo:p.as], unicode.IsSpace); k >= 0 {
-				lo += k + 1
-			} else {
-				lo = p.as
+// the last part's end as one requirement): the heading lines of the sections that enclose its
+// section, then its section (sectionOf), whole, before and after the requirement, so introductions
+// and overrides below it ("Notwithstanding the foregoing …", "(b) Paragraph (a) shall not apply") are
+// in it. No layout is guessed: the structure is the document's section tree. A section over ctxMax
+// bytes keeps the requirement, then the text before it up to the nearest colon-ending line above it
+// (never cut), then as much of the section's text before and after as the bound allows, cut only at
+// its far ends; truncated reports that anything was cut (the verdict on it is then admitted only at
+// low confidence, for a lawyer's review).
+func contextOf(text string, spans [][2]int) (ps []span, truncated bool) {
+	s, e := spans[0][0], spans[len(spans)-1][1]
+	secs := docs.Parse(text)
+	lo, hi, root := sectionOf(secs, text, s, e)
+	a, b := lo, hi
+	if hi-lo > ctxMax {
+		truncated = true
+		keep := s
+		for l := lineOf(text, s); l.s > lo; { // the nearest colon-ending line above the requirement
+			l = lineOf(text, l.s-1)
+			if colonEnd(text[l.s:l.e]) {
+				keep = l.s
+				break
 			}
 		}
-		if hi < p.e { // end before white space
-			if k := strings.LastIndexFunc(text[p.ae:hi], unicode.IsSpace); k >= 0 {
-				hi = p.ae + k
+		rem := max(0, ctxMax-(e-keep))
+		a = keep - min(keep-lo, rem)
+		b = e + min(hi-e, max(0, rem-(keep-a)))
+		if a > lo { // start after white space
+			if k := strings.IndexFunc(text[a:keep], unicode.IsSpace); k >= 0 {
+				a += k + 1
 			} else {
-				hi = p.ae
+				a = keep
 			}
 		}
-		out[i].s, out[i].e = lo, hi
+		if b < hi { // end before white space
+			if k := strings.LastIndexFunc(text[e:b], unicode.IsSpace); k >= 0 {
+				b = e + k
+			} else {
+				b = e
+			}
+		}
 	}
-	return merged(text, out)
+	var path []int // the enclosing sections' headings, outermost first, and the root's own when it was cut
+	if root >= 0 {
+		if a > secs[root].Start {
+			path = append(path, root)
+		}
+		for p := parent(secs, root); p >= 0; p = parent(secs, p) {
+			path = append([]int{p}, path...)
+		}
+	}
+	for _, i := range path {
+		if l := lineOf(text, secs[i].Start); l.e <= a && strings.TrimSpace(text[l.s:l.e]) != "" {
+			ps = append(ps, l)
+		}
+	}
+	return merged(text, append(ps, span{a, b})), truncated
 }
 
 // merged joins pieces that only white space separates (one citation for one run of the text).
-func merged(text string, ps []piece) []piece {
-	var out []piece
+func merged(text string, ps []span) []span {
+	var out []span
 	for _, p := range ps {
 		if n := len(out); n > 0 && p.s >= out[n-1].e && strings.TrimSpace(text[out[n-1].e:p.s]) == "" {
-			out[n-1].e, out[n-1].ae = p.e, p.ae
+			out[n-1].e = p.e
 			continue
 		}
 		out = append(out, p)
@@ -497,14 +372,17 @@ func merged(text string, ps []piece) []piece {
 	return out
 }
 
+// blankRun is a line break with any blank lines after it.
+var blankRun = regexp.MustCompile(`[ \t\r]*\n(?:[ \t\r]*\n)*`)
+
 // renderContext is a context as text: its pieces with an ellipsis where text is left out, each mark
-// set in ⟦ ⟧, and line breaks written as nl.
-func renderContext(text string, ps []piece, marks []span, nl string) string {
+// set in ⟦ ⟧, and line breaks written as nl (blank lines as one; lab-r3 r3 verifier L3).
+func renderContext(text string, ps []span, marks []span, nl string) string {
 	var b strings.Builder
 	for i, p := range ps {
 		if i > 0 {
-			b.WriteString(nl + "…" + nl)
-		} else if lineOf(text, p.s).s < p.s && strings.TrimSpace(text[lineOf(text, p.s).s:p.s]) != "" {
+			b.WriteString("\n…\n")
+		} else if l := lineOf(text, p.s); l.s < p.s && strings.TrimSpace(text[l.s:p.s]) != "" {
 			b.WriteString("… ")
 		}
 		for at := p.s; at < p.e; {
@@ -521,7 +399,7 @@ func renderContext(text string, ps []piece, marks []span, nl string) string {
 					b.WriteString("⟦")
 				}
 			}
-			b.WriteString(strings.ReplaceAll(strings.TrimRight(text[at:next], "\r"), "\n", nl))
+			b.WriteString(text[at:next])
 			at = next
 			for _, m := range marks {
 				if m.e == at && m.e > m.s && m.s >= p.s && m.e <= p.e {
@@ -533,14 +411,18 @@ func renderContext(text string, ps []piece, marks []span, nl string) string {
 			b.WriteString(" …")
 		}
 	}
-	return b.String()
+	out := strings.TrimRight(b.String(), " \t\r\n")
+	if nl == "\n" {
+		return strings.ReplaceAll(out, "\r", "")
+	}
+	return blankRun.ReplaceAllString(out, nl)
 }
 
 // within reports where quote lies in the context (exact or tolerant, format characters folded,
 // marks and a " … " join allowed): every part inside one piece, in order. ok is false when any
 // part lies outside it (lab-r3 r2 verifier H3: a verdict's controlling quote is held to the
 // requirement's context, never any substring of the document).
-func within(idx *docs.Text, ps []piece, quote string) (span, bool) {
+func within(idx *docs.Text, ps []span, quote string) (span, bool) {
 	q := strings.NewReplacer("⟦", "", "⟧", "").Replace(foldCf(quote))
 	at, prev := span{-1, -1}, -1
 	for _, part := range strings.Split(q, strings.TrimSpace(partJoin)) {

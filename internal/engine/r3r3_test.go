@@ -35,7 +35,7 @@ func TestR2VProbesReadInContext(t *testing.T) {
 		{"semicolon proviso", "5. Sale\nThe Trustee may sell the family residence; provided that Sophia consents in writing.\n", "The Trustee may sell the family residence", "⟦The Trustee may sell the family residence⟧; provided that Sophia consents in writing."},
 		{"colon proviso", "5. Sale\nThe Trustee may sell the family residence: provided, however, that Sophia consents in writing.\n", "The Trustee may sell the family residence", "⟦The Trustee may sell the family residence⟧: provided, however, that Sophia consents"},
 		{"unmarked list past first line", "The Trustee shall not:\nborrow against the trust assets;\nsell the family residence at 12 Elm Street;\npledge the shares.\n", "sell the family residence at 12 Elm Street", "The Trustee shall not:\nborrow against the trust assets;\n⟦sell"},
-		{"unmarked list, blank lines", "The Trustee shall not:\n\nborrow against the trust assets;\n\nsell the family residence at 12 Elm Street.\n", "sell the family residence at 12 Elm Street.", "The Trustee shall not:\n…\n⟦sell"},
+		{"unmarked list, blank lines", "The Trustee shall not:\n\nborrow against the trust assets;\n\nsell the family residence at 12 Elm Street.\n", "sell the family residence at 12 Elm Street.", "The Trustee shall not:\n\nborrow against the trust assets;\n\n⟦sell"},
 		{"heading two lines up", "Prohibited Instructions\n\nThe Trustee shall sell the family residence at 12 Elm Street.\n", "The Trustee shall sell the family residence at 12 Elm Street.", "Prohibited Instructions\n\n⟦The Trustee"},
 		{"zero-width in NOT", "Note\nDo N\u200bOT, in any capacity, name Sophia Davenport-Chen as a successor trustee.\n", "name Sophia Davenport-Chen as a successor trustee.", "Do N\u200bOT, in any capacity, ⟦name"},
 		{"neither nor", "Note\nNeither David nor Sophia, nor any spouse of theirs, shall serve as Trustee.\n", "shall serve as Trustee.", "Neither David nor Sophia, nor any spouse of theirs, ⟦shall"},
@@ -46,7 +46,7 @@ func TestR2VProbesReadInContext(t *testing.T) {
 		{"sibling heading dodge", "A. General\nB. Trustees\nThe following shall NOT serve as Trustee:\nC. Sophia Davenport-Chen, the settlor's daughter.\n", "Sophia Davenport-Chen, the settlor's daughter.", "The following shall NOT serve as Trustee:\nC. ⟦Sophia"},
 		{"smart quote join", "Note\nThe Trustee shall “never” sell the residence. The Trustee shall invest.\n", "sell the residence.", "The Trustee shall “never” ⟦sell"},
 		{"negating heading, no colon", "Prohibited Instructions\nThe Trustee shall sell the family residence at 12 Elm Street.\n", "The Trustee shall sell the family residence at 12 Elm Street.", "Prohibited Instructions\n⟦The Trustee"},
-		{"list opened without a colon", "The following persons shall NOT serve as Trustee\n(a) Sophia Davenport-Chen;\n(b) Martin Hale.\n", "Martin Hale.", "The following persons shall NOT serve as Trustee\n…\n(b) ⟦Martin"},
+		{"list opened without a colon", "The following persons shall NOT serve as Trustee\n(a) Sophia Davenport-Chen;\n(b) Martin Hale.\n", "Martin Hale.", "The following persons shall NOT serve as Trustee\n(a) Sophia Davenport-Chen;\n(b) ⟦Martin"},
 		{"short unmarked items", "4. Trustees\nThe following shall NOT serve as Trustee:\nSophia Davenport-Chen\nMartin Hale\n", "Martin Hale", "The following shall NOT serve as Trustee:\nSophia Davenport-Chen\n⟦Martin Hale⟧"},
 	}
 	for _, c := range cases {
@@ -55,7 +55,7 @@ func TestR2VProbesReadInContext(t *testing.T) {
 			t.Errorf("%s: %q did not verify (bad %q, err %v)", c.name, c.req, bad, err)
 			continue
 		}
-		r := reqText{Text: c.doc, Spans: spans, Ctx: contextOf(c.doc, spans)}
+		r := newReq(c.doc, spans)
 		if got := r.Context(); !strings.Contains(got, c.want) {
 			t.Errorf("%s: %q is read in %q, which lacks %q", c.name, c.req, got, c.want)
 		}
@@ -64,11 +64,11 @@ func TestR2VProbesReadInContext(t *testing.T) {
 	if _, bad, _ := placeRequirement(context.Background(), cases[14].doc, "Do NOT, in any capacity, name Sophia Davenport-Chen as a successor trustee."); bad != "" {
 		t.Errorf("format characters are not folded: bad %q", bad)
 	}
-	// a sibling of the item under a nested introduction is not governed by it, and the list's
-	// other items are passed over
+	// a sibling of the item under a nested introduction is read in its clause's whole section (lab-r3
+	// r3 design: whether "(a) The Trustee shall not:" governs "(b)" is the section check's reading)
 	doc := cases[2].doc
 	spans, _, _ := placeRequirement(context.Background(), doc, "The Trustee shall invest prudently.")
-	if got := (reqText{Text: doc, Spans: spans, Ctx: contextOf(doc, spans)}).Context(); strings.Contains(got, "borrow") || !strings.HasPrefix(got, "7. Restrictions") {
+	if got := newReq(doc, spans).Context(); got != "7. Restrictions\n(a) The Trustee shall not:\n(i) sell the family residence at 12 Elm Street;\n(ii) borrow against the trust assets;\n(b) ⟦The Trustee shall invest prudently.⟧" {
 		t.Errorf("(b) read as %q", got)
 	}
 }
@@ -110,7 +110,7 @@ func TestR2VFragmentsQuotedInContext(t *testing.T) {
 		{"H2 marked introduction", "7. Restrictions\n(a) The following persons shall NOT serve as successor trustee:\n(i) Sophia Davenport-Chen, the settlor's daughter, as a successor trustee in any capacity;\n(ii) Martin Hale, the settlor's former business partner;\n(b) The Trustee shall invest prudently.\n",
 			"Sophia Davenport-Chen, the settlor's daughter, as a successor trustee in any capacity", "Sophia Davenport-Chen, the settlor's daughter, as a successor trustee in any capacity", "(a) The following persons shall NOT serve as successor trustee:"},
 		{"H3 the verdict's own fragment", trustMemoExcerpt, "CRITICAL NOTE — Do NOT name Sophia Davenport-Chen as a successor trustee in any capacity.",
-			"name Sophia Davenport-Chen as a successor trustee in any capacity", "Do NOT ⟦name Sophia Davenport-Chen as a successor trustee in any capacity⟧"},
+			"name Sophia Davenport-Chen as a successor trustee in any capacity", "⟦CRITICAL NOTE — Do NOT name Sophia Davenport-Chen as a successor trustee in any capacity.⟧"},
 	} {
 		f, v := r2vDev(t, c.memo, c.req, c.ctrl)
 		guard := strings.ReplaceAll(c.want, "⟦", "")
@@ -155,7 +155,7 @@ func TestBenchRequirementsReadInContext(t *testing.T) {
 			t.Errorf("%s: spans %v, bad %q, err %v", c.name, spans, bad, err)
 			continue
 		}
-		r := reqText{Text: trustMemoExcerpt, Spans: spans, Ctx: contextOf(trustMemoExcerpt, spans)}
+		r := newReq(trustMemoExcerpt, spans)
 		if got := r.Context(); !strings.Contains(got, c.want) || len(got) > ctxMax+200 {
 			t.Errorf("%s: context (%d bytes) %q lacks %q", c.name, len(got), got, c.want)
 		}
@@ -171,7 +171,7 @@ func TestContextIsBounded(t *testing.T) {
 	if bad != "" {
 		t.Fatalf("bad %q", bad)
 	}
-	r := reqText{Text: doc, Spans: spans, Ctx: contextOf(doc, spans)}
+	r := newReq(doc, spans)
 	got := r.Context()
 	if len(got) > ctxMax+100 || !strings.Contains(got, "⟦sell the family residence at 12 Elm Street.⟧") || !strings.Contains(got, "the Trustee shall not:") || !strings.HasPrefix(got, "9. Records") {
 		t.Errorf("%d bytes: %q", len(got), got)

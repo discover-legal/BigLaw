@@ -349,7 +349,8 @@ func (f finish) meta(ctx context.Context, b *agent.Budget) (string, error) {
 }
 
 // gates opens the human gates for a rendered deliverable (G7): one per cited finding resting only
-// on low-confidence transcript pages or marked unsupported by the prosecutor and still open; while
+// on low-confidence transcript pages, admitted at low confidence (a deviation its section check
+// could not confirm) or marked unsupported by the prosecutor and still open; while
 // any is undecided the run pauses there, otherwise the deliverable's gate opens.
 func (f finish) gates(ctx context.Context, md string) error {
 	e, id := f.e, f.r.t.ID
@@ -362,7 +363,7 @@ func (f finish) gates(ctx context.Context, md string) error {
 	pending := false
 	for _, x := range use {
 		unsupported := slices.ContainsFunc(crit, func(c Critic) bool { return c.FID == x.FID && c.Severity == "HIGH" && c.Status == "open" })
-		if !strings.Contains(md, "["+x.FID+"]") || !unsupported && !allCitations(x, func(c Citation) bool { return c.Low }) {
+		if !strings.Contains(md, "["+x.FID+"]") || !gated(x, unsupported) {
 			continue
 		}
 		g := Gate{GateID: "G-" + x.FID, Kind: "finding", FindingID: x.FID}
@@ -381,4 +382,11 @@ func (f finish) gates(ctx context.Context, md string) error {
 	n := 1 + len(slices.DeleteFunc(slices.Clone(gs), func(g Gate) bool { return g.Kind != "deliverable" }))
 	g := Gate{GateID: fmt.Sprintf("G-deliverable-%d", n), Kind: "deliverable"}
 	return e.write(ctx, id, kGate, g.GateID, g, false)
+}
+
+// gated reports whether a cited finding needs a lawyer's decision at its own gate: marked
+// unsupported by the prosecutor, admitted at low confidence, or resting only on low-confidence
+// transcript pages.
+func gated(x Finding, unsupported bool) bool {
+	return unsupported || x.Low || allCitations(x, func(c Citation) bool { return c.Low })
 }

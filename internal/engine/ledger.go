@@ -59,6 +59,11 @@ type Finding struct {
 	Citations []Citation `json:"citations"`
 	Severity  string     `json:"severity"`
 	Arm       agent.Arm  `json:"arm"` // the tool and model that produced it (delayed critic credit)
+	// Check is a deviation's independent section check (deviation.go checkSection); Low marks a
+	// finding admitted at low confidence (the check could not tell, or read a cut section): it is
+	// gated for a lawyer's review like a low-confidence transcript.
+	Check *SectionCheck `json:"sectionCheck,omitempty"`
+	Low   bool          `json:"lowConfidence,omitempty"`
 }
 
 // Analysis is analyze_issue's answer on one issue (rule, application, conclusion): it goes to the
