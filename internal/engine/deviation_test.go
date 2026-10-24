@@ -69,7 +69,15 @@ func (d devFix) check(t *testing.T, verdicts ...m) ([]FindingView, string) {
 }
 
 func (d devFix) checkJudged(t *testing.T, judge []model.Reply, verdicts ...m) ([]FindingView, string) {
-	call := tc("check_deviation", m{"requirement": devReq, "requirementDocId": d.memo, "controllingDocIds": []string{d.memo}, "reviewedDocIds": []string{d.trust, d.will}, "issueId": "I1"})
+	req := devReq // the memo line the verdicts quote (lab-r3 r3: a controlling quote must lie in the requirement's context)
+	for _, v := range verdicts {
+		if q, _ := v["controlling"].(m)["quote"].(string); v["verdict"] != "conform" && strings.Contains(devMemoText, q) {
+			i := strings.Index(devMemoText, q)
+			req = devMemoText[strings.LastIndexByte(devMemoText[:i], '\n')+1 : i+strings.IndexByte(devMemoText[i:], '\n')]
+			break
+		}
+	}
+	call := tc("check_deviation", m{"requirement": req, "requirementDocId": d.memo, "controllingDocIds": []string{d.memo}, "reviewedDocIds": []string{d.trust, d.will}, "issueId": "I1"})
 	if judge == nil {
 		judge = []model.Reply{judged(false), judged(false), judged(false), judged(false)}
 	}
@@ -293,14 +301,15 @@ func TestDevNumericJoinNoJudgeConservative(t *testing.T) {
 
 // TestDevParaphrasedRequirementRefused (bench, both LAB tasks: the lead passed its own restatement
 // of the requirement, and the subagent quoted that as the controlling source): a requirement that
-// is not the controlling document's own words is refused before any model call, naming the section
-// to quote from; the same check with the memo's words runs, and its subagent gets them.
+// is not the controlling document's own words is refused before any model call, with the nearest
+// exact passage (bounded, fenced) to copy; the same check with the memo's words runs, and its
+// subagent gets them.
 func TestDevParaphrasedRequirementRefused(t *testing.T) {
 	t.Parallel()
 	d := newDev(t)
 	para := tc("check_deviation", m{"requirement": "Residuary estate distribution shall be 40% to David, 35% to Sophia and 25% to Tommy.", "requirementDocId": d.memo,
 		"controllingDocIds": []string{d.memo}, "reviewedDocIds": []string{d.trust}, "issueId": "I1"})
-	quoted := tc("check_deviation", m{"requirement": "the residuary estate  shall be divided as follows: David shall receive Forty Percent (40%), Sophia shall receive Thirty-Five Percent (35%)", "requirementDocId": d.memo,
+	quoted := tc("check_deviation", m{"requirement": "the residuary estate  shall be divided as follows: David shall receive Forty Percent (40%), Sophia shall receive Thirty-Five Percent (35%), and Tommy shall receive Twenty-Five Percent (25%).", "requirementDocId": d.memo,
 		"controllingDocIds": []string{d.memo}, "reviewedDocIds": []string{d.trust}, "issueId": "I1"})
 	v := d.run(d.with(map[string][]model.Reply{
 		"lead":            {calls(plan(issue("I1", "Does the draft follow the memo?", "Requirement"))), calls(para), calls(quoted)},
@@ -319,8 +328,10 @@ func TestDevParaphrasedRequirementRefused(t *testing.T) {
 	if len(out) != 2 || !strings.HasPrefix(out[0], "failed") || !strings.HasPrefix(out[1], "committed") || len(v.Findings) != 1 {
 		t.Fatalf("check_deviation %q, findings %+v", out, v.Findings)
 	}
-	if !strings.Contains(seen, "the requirement is not quoted from doc1.md") || !strings.Contains(seen, "the words it restates are closest in section s0 (Section 1)") ||
-		strings.Contains(seen, "David shall receive") { // where to read them, never the document's text in an error
+	_, passage, _ := strings.Cut(seen, "<<<")
+	passage, _, fenced := strings.Cut(passage, ">>>")
+	if !strings.Contains(seen, "the requirement is not quoted from doc1.md") || !strings.Contains(seen, "the closest passage, in section s0 (Section 1)") ||
+		!fenced || len(passage) > nearestMax || !strings.Contains(devMemoText, passage) || !strings.Contains(passage, "David shall receive") { // a bounded exact passage to copy (r3)
 		t.Fatalf("the lead read %q", seen)
 	}
 	if len(reqs) != 1 || !strings.Contains(reqs[0], "The residuary estate shall be divided as follows: David") { // as the memo has it (tolerant match, case and spacing)
@@ -373,7 +384,7 @@ func TestDevRealOmissionsKept(t *testing.T) {
 func TestDevRestatedControllingQuoteRescued(t *testing.T) {
 	t.Parallel()
 	d := newDev(t)
-	req := "David shall receive Forty Percent (40%), Sophia shall receive Thirty-Five Percent (35%), and Tommy shall receive Twenty-Five Percent (25%)"
+	req := "The residuary estate shall be divided as follows: David shall receive Forty Percent (40%), Sophia shall receive Thirty-Five Percent (35%), and Tommy shall receive Twenty-Five Percent (25%)." // a whole sentence (lab-r3 r2: a clause that drops "shall be divided as follows" is refused)
 	call := tc("check_deviation", m{"requirement": req, "requirementDocId": d.memo, "controllingDocIds": []string{d.memo}, "reviewedDocIds": []string{d.trust}, "issueId": "I1"})
 	v := d.run(d.with(map[string][]model.Reply{
 		"lead": {calls(plan(issue("I1", "Does the draft follow the memo?", "Requirement"))), calls(call)},
@@ -383,7 +394,7 @@ func TestDevRestatedControllingQuoteRescued(t *testing.T) {
 		}})},
 	}), Config{})
 	out := strings.Join(d.outputs(v.ID, "check_deviation"), "")
-	if len(v.Findings) != 1 || !strings.Contains(v.Findings[0].Claim, "which requires “"+req+"”") || v.Findings[0].Citations[0].Method != "exact" ||
+	if len(v.Findings) != 1 || !strings.Contains(v.Findings[0].Claim, "⟦"+req+"⟧") || v.Findings[0].Citations[0].Method != "exact" ||
 		!strings.Contains(out, "restated its requirement instead of quoting it") || !strings.Contains(out, `"dropped":1`) {
 		t.Fatalf("findings %+v\n%s", v.Findings, out)
 	}

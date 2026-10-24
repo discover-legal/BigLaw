@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/discover-legal/BigLaw/internal/agent"
 	"github.com/discover-legal/BigLaw/internal/analysis"
@@ -31,6 +32,7 @@ const (
 	kHandle   = "handle"   // key: codename; the Fig it names for the whole run
 	kAnalysis = "analysis" // key: issue id; Analysis, analyze_issue's latest for the issue
 	kCover    = "cover"    // key: "pass"; Cover, the coverage pass's outcome (it runs once)
+	kSwept    = "swept"    // key: "sweep"; []SweptDoc, each document's sweep coverage (the latest sweep's)
 )
 
 // Issue is one plan issue (the deliverable's spine), typed by a BELO-lite issue class.
@@ -58,6 +60,11 @@ type Finding struct {
 	Citations []Citation `json:"citations"`
 	Severity  string     `json:"severity"`
 	Arm       agent.Arm  `json:"arm"` // the tool and model that produced it (delayed critic credit)
+	// Check is a deviation's independent section check (deviation.go checkSection); Low marks a
+	// finding admitted at low confidence (the check could not tell, or read a cut section): it is
+	// gated for a lawyer's review like a low-confidence transcript.
+	Check *SectionCheck `json:"sectionCheck,omitempty"`
+	Low   bool          `json:"lowConfidence,omitempty"`
 }
 
 // Analysis is analyze_issue's answer on one issue (rule, application, conclusion): it goes to the
@@ -68,10 +75,13 @@ type Analysis struct {
 	Conclusion  string `json:"conclusion"`
 }
 
-// Cover is the coverage pass's outcome: the touched issues it analysed and those still missing.
+// Cover is the coverage pass's outcome: the touched issues it analysed and those still missing, the
+// salient findings still left out of the memo after it, and the figure conflicts still unaddressed.
 type Cover struct {
-	Analysed []string `json:"analysed"`
-	Missing  []string `json:"missing"`
+	Analysed    []string `json:"analysed"`
+	Missing     []string `json:"missing"`
+	LeftOut     []string `json:"leftOut"`
+	Unaddressed int      `json:"unaddressed"`
 }
 
 // Critic is one committee finding, open until the lead resolves it (fixed or disclosed).
@@ -226,18 +236,26 @@ func cmpErr(errs ...error) error {
 
 func nextID(prefix string, n int) string { return prefix + strconv.Itoa(n+1) }
 
-// ledgerTool is the lead's matter memory: plan, findings, get, resolve, draft_get, relations. A
-// subagent may only read (plan and resolve are the lead's).
+// ledgerTool is the lead's matter memory: plan, findings, get, resolve, draft_get, relations,
+// critics. A subagent may only read (plan and resolve are the lead's). Every list and a section's text
+// is one page of agent.PageBytes with next (bench4, SEC: 892 findings in full were 682 KB in one
+// result, past the lead's context; owner decision: bounded by type, never trimmed).
 func (e *Engine) ledgerTool() agent.Tool {
 	return agent.GoTool{S: spec("ledger"), Fn: func(ctx context.Context, c agent.Call) (any, agent.Usage, error) {
 		var in struct {
 			Op, IssueID, FID, Detail, CriticID, Resolution, Note, Entity string
 			Issues                                                       []Issue
+			Offset                                                       int
 		}
 		if err := agent.Decode(c, &in); err != nil {
 			return nil, agent.Usage{}, err
 		}
-		out := map[string]any{"ok": nil, "findings": nil, "finding": nil, "markdown": nil, "relations": nil}
+		out, pg := map[string]any{"ok": nil, "findings": nil, "finding": nil, "markdown": nil, "relations": nil, "critics": nil, "next": nil}, agent.NewPage()
+		page := func(n, total int) { // a list's page from in.Offset: next names the rest
+			if in.Offset+n < total {
+				out["next"] = in.Offset + n
+			}
+		}
 		if c.Depth > 0 && (in.Op == "plan" || in.Op == "resolve") {
 			return nil, agent.Usage{}, agent.Fail("ledger: op " + in.Op + " is the lead's; a subagent may only read (findings, get, draft_get, relations)")
 		}
@@ -280,7 +298,9 @@ func (e *Engine) ledgerTool() agent.Tool {
 					list = append(list, brief(f))
 				}
 			}
-			out["findings"] = list
+			in.Offset = min(in.Offset, len(list))
+			out["findings"] = agent.Take(pg, list[in.Offset:])
+			page(len(out["findings"].([]any)), len(list))
 		case "get":
 			i := slices.IndexFunc(fs, func(f Finding) bool { return f.FID == in.FID })
 			if i < 0 {
@@ -309,7 +329,25 @@ func (e *Engine) ledgerTool() agent.Tool {
 			} else if i < 0 {
 				return nil, agent.Usage{}, agent.Fail("not_drafted: issue " + in.IssueID + " has no finished section yet; draft it with draft_section first")
 			}
-			out["markdown"] = ss[i].Markdown
+			md := ss[i].Markdown
+			if in.Offset > len(md) || in.Offset < len(md) && !utf8.RuneStart(md[in.Offset]) {
+				return nil, agent.Usage{}, agent.Fail(fmt.Sprintf("ledger: offset %d is not a page start of this %d-byte section; pass 0 or the result's next", in.Offset, len(md)))
+			}
+			text := agent.TakeText(pg, md[in.Offset:])
+			out["markdown"] = text
+			page(len(text), len(md))
+		case "critics":
+			cs, err := load[Critic](ctx, e, c.TaskID, kCritic)
+			if err != nil {
+				return nil, agent.Usage{}, err
+			}
+			list := []map[string]any{}
+			for _, x := range cs {
+				list = append(list, map[string]any{"id": x.ID, "cycle": x.Cycle, "critic": x.Critic, "severity": x.Severity, "fid": nilIf(x.FID), "text": x.Text, "status": x.Status})
+			}
+			in.Offset = min(in.Offset, len(list))
+			out["critics"] = agent.Take(pg, list[in.Offset:])
+			page(len(out["critics"].([]map[string]any)), len(list))
 		default: // relations
 			rels := []map[string]string{}
 			for _, f := range fs {
@@ -320,7 +358,9 @@ func (e *Engine) ledgerTool() agent.Tool {
 					}
 				}
 			}
-			out["relations"] = rels
+			in.Offset = min(in.Offset, len(rels))
+			out["relations"] = agent.Take(pg, rels[in.Offset:])
+			page(len(out["relations"].([]map[string]string)), len(rels))
 		}
 		return out, agent.Usage{}, nil
 	}}

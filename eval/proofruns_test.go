@@ -147,7 +147,7 @@ func oracle(mt matter, ids map[string]string) map[string][]model.Reply {
 		drafts = append(drafts, call("draft_section", m{"issueId": iid, "fids": []string{fid}, "revise": nil}))
 		sc["draft_section"] = append(sc["draft_section"], reply(m{"markdown": it.ModelAnswer + " [" + fid + "]", "summary": "s"}))
 	}
-	plan := call("ledger", m{"op": "plan", "issues": issues, "issueId": nil, "fid": nil, "detail": nil, "criticId": nil, "resolution": nil, "note": nil, "entity": nil})
+	plan := call("ledger", m{"op": "plan", "issues": issues, "issueId": nil, "fid": nil, "detail": nil, "criticId": nil, "resolution": nil, "note": nil, "entity": nil, "offset": nil})
 	lead := []model.Reply{{ToolCalls: []model.ToolCall{plan}}}
 	lead = append(append(append(lead, batches(extracts)...), batches(sheets)...), batches(drafts)...)
 	sc["lead"] = append(lead, model.Reply{ToolCalls: []model.ToolCall{call("committee", m{})}}, model.Reply{ToolCalls: []model.ToolCall{call("finish", m{"op": "submit", "limitations": nil})}})
@@ -163,7 +163,7 @@ func fabricator(mt matter, ids map[string]string) map[string][]model.Reply {
 			"values": []m{}, "entities": []m{}, "relations": []m{}, "confidence": 0.9})
 	}
 	no := reply(m{"supported": false, "confidence": 0.9})
-	plan := call("ledger", m{"op": "plan", "issues": []m{{"id": "I1", "question": "What happened?", "class": "RedFlag", "practice": nil}}, "issueId": nil, "fid": nil, "detail": nil, "criticId": nil, "resolution": nil, "note": nil, "entity": nil})
+	plan := call("ledger", m{"op": "plan", "issues": []m{{"id": "I1", "question": "What happened?", "class": "RedFlag", "practice": nil}}, "issueId": nil, "fid": nil, "detail": nil, "criticId": nil, "resolution": nil, "note": nil, "entity": nil, "offset": nil})
 	return map[string][]model.Reply{
 		"lead":          {{ToolCalls: []model.ToolCall{plan}}, {ToolCalls: []model.ToolCall{call("extract_facts", m{"question": "q", "documentId": nil, "sectionId": nil, "through": nil, "offset": nil, "query": "consent", "issueId": "I1"})}}},
 		"extract_facts": {reply(m{"findings": fs, "gaps": []string{}})},
@@ -341,7 +341,7 @@ func TestLabRunnerSmoke(t *testing.T) {
 	os.MkdirAll(filepath.Join(task, "documents"), 0o755)
 	os.WriteFile(filepath.Join(task, "task.json"), []byte(`{"title": "Smoke", "work_type": "analyze", "instructions": "When is the answer due?", "deliverables": ["memo.md"]}`), 0o644)
 	os.WriteFile(filepath.Join(task, "documents", "docket.md"), []byte("Docket\nTalbot was served on 10/21/2026 via its registered agent.\n"), 0o644)
-	plan := call("ledger", m{"op": "plan", "issues": []m{{"id": "I1", "question": "When was Talbot served?", "class": "Requirement", "practice": nil}}, "issueId": nil, "fid": nil, "detail": nil, "criticId": nil, "resolution": nil, "note": nil, "entity": nil})
+	plan := call("ledger", m{"op": "plan", "issues": []m{{"id": "I1", "question": "When was Talbot served?", "class": "Requirement", "practice": nil}}, "issueId": nil, "fid": nil, "detail": nil, "criticId": nil, "resolution": nil, "note": nil, "entity": nil, "offset": nil})
 	sc := map[string][]model.Reply{
 		"lead": {{ToolCalls: []model.ToolCall{plan}}, {ToolCalls: []model.ToolCall{call("extract_facts", m{"question": "q", "documentId": nil, "sectionId": nil, "through": nil, "offset": nil, "query": "served", "issueId": "I1"})}},
 			{ToolCalls: []model.ToolCall{call("draft_section", m{"issueId": "I1", "fids": []string{"F1"}, "revise": nil})}},

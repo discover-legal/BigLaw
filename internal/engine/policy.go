@@ -25,11 +25,19 @@ type Allocation struct {
 	USD, CycleUSD                float64 // CycleUSD: what one committee cycle may spend
 }
 
-// Allocate splits a budget: plan ≤ 7% (min 3), evidence ≤ 50% of which sweep ≤ 35% and the
-// coverage pass 6% (kept for it; the lead's evidence calls may spend the rest), draft ≤ 15%, a
-// committee cycle of 20 calls (8/8/4) or 20% of a smaller budget, reserve 5 and meta 3.
+// Allocate splits a budget: plan ≤ 7% (min 3), evidence ≤ 50% of which sweep ≤ 39% and the
+// coverage pass 6% (kept for it; the lead's evidence calls may spend the rest, at least 5%), draft ≤
+// 15%, a committee cycle of 20 calls (8/8/4) or 20% of a smaller budget, reserve 5 and meta 3.
+//
+// The sweep's share is the evidence share less the coverage pass and a floor for the lead's own
+// evidence calls (bench r3 at $11: the lead's extract_facts, analyze_issue and check_deviation spent
+// $0.5–0.7, under 5%). It was 35%, which read 60 of 169 SEC pages and 63 of 98 trust pages at about
+// $0.06 a page (a page's visit then searched with retrieve: about three calls). A visit now reads its
+// page alone (one call, about $0.035): 39% of $11 is about 120 pages, so the trust set (86 pages)
+// is read whole and the SEC set (142) to about five sixths, its least relevant pages last; a full
+// SEC read needs about $5, more than evidence can take beside drafting, the committee and finish.
 func Allocate(calls int, usd float64) Allocation {
-	a := Allocation{Plan: max(3, calls*7/100), Evidence: calls / 2, Sweep: calls * 35 / 100, Cover: calls * 6 / 100, Draft: calls * 15 / 100,
+	a := Allocation{Plan: max(3, calls*7/100), Evidence: calls / 2, Sweep: calls * 39 / 100, Cover: calls * 6 / 100, Draft: calls * 15 / 100,
 		Cycle: min(20, calls/5), Reserve: 5, Meta: 3, FixMin: 3, Calls: calls, USD: usd, CycleUSD: usd / 5}
 	a.Critics[0] = a.Cycle * 2 / 5
 	a.Critics[1] = a.Critics[0]

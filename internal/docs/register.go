@@ -81,7 +81,7 @@ func (s *Service) Tools(rt *agent.Runtime) []agent.Tool {
 			if err := agent.Decode(c, &in); err != nil {
 				return nil, agent.Usage{}, err
 			}
-			out := map[string]any{"hits": nil, "outline": nil, "section": nil}
+			out, pg := map[string]any{"hits": nil, "outline": nil, "section": nil, "truncated": false, "next": nil}, agent.NewPage()
 			svc, m := *s, &meter{e: s.embedder}
 			if s.embedder != nil {
 				svc.embedder = m
@@ -97,22 +97,37 @@ func (s *Service) Tools(rt *agent.Runtime) []agent.Tool {
 					list = append(list, map[string]any{"documentId": h.DocumentID, "sectionId": h.SectionID, "title": h.Title, "text": h.Text,
 						"context": h.Context, "rank": h.Rank, "transcribed": h.Transcribed})
 				}
-				out["hits"] = list
+				out["hits"] = agent.Take(pg, list)
+				if pg.Truncated { // a page of hits: the rest from next (search's offset)
+					out["next"] = in.Offset + len(out["hits"].([]map[string]any))
+				}
 			case "outline":
 				o, err := s.Outline(ctx, c.DocumentIDs, in.DocumentID)
 				if err != nil {
 					return nil, m.u, failure(err)
 				}
-				out["outline"] = o
+				page := agent.Take(pg, o[min(in.Offset, len(o)):])
+				if out["outline"] = page; pg.Truncated {
+					out["next"] = min(in.Offset, len(o)) + len(page)
+				}
 			default:
-				p, err := s.Section(ctx, c.DocumentIDs, in.DocumentID, in.SectionID, in.Offset, in.Limit)
-				if err != nil {
-					return nil, m.u, failure(err)
+				limit := cmp.Or(in.Limit, DefaultSectionTokens)
+				var p SectionPage
+				for { // a page of text that fits the tool's budget, whatever its encoding: a smaller limit, never a cut
+					var err error
+					if p, err = s.Section(ctx, c.DocumentIDs, in.DocumentID, in.SectionID, in.Offset, limit); err != nil {
+						return nil, m.u, failure(err)
+					}
+					if b, _ := json.Marshal(p); len(b) <= pg.Left || limit == 1 {
+						break
+					}
+					limit /= 2
 				}
 				out["section"] = map[string]any{"sectionId": p.SectionID, "number": p.Number, "title": p.Title, "text": p.Text,
 					"offset": p.Offset, "total": p.Total, "truncated": p.Truncated, "next": map[bool]any{true: p.Next, false: nil}[p.Truncated],
 					"header": map[bool]any{true: p.Header, false: nil}[p.Header != ""]}
 			}
+			out["truncated"] = pg.Truncated
 			return out, m.u, nil
 		}},
 		agent.GoTool{S: toolSpec("verify_quote"), Fn: func(ctx context.Context, c agent.Call) (any, agent.Usage, error) {

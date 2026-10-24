@@ -3,7 +3,7 @@
  "kind": "fanout",
  "class": "committee",
  "maxTurns": 20,
- "description": "Runs the three critics in parallel on the current draft: prosecute checks each cited claim against its quotes, reproduce re-derives the plan's answers from the documents without seeing the draft, and audit_gaps lists what a specialist would expect and cannot find. Each critic is context-free: it sees only its own typed request. It returns the cycle number and the critics' findings with severities (C1, C2, …); resolve each HIGH or MEDIUM one with ledger op resolve, by fixing it (redraft, more evidence) or disclosing it. finish needs a committee on the current draft while the budget can still fund a fix. Do not use it before every plan issue has a drafted section, and do not call it again without changing the draft.\nExample: {}",
+ "description": "Runs the three critics in parallel on the current draft: prosecute checks each cited claim against its quotes, reproduce re-derives the plan's answers from the documents without seeing the draft, and audit_gaps lists what a specialist would expect and cannot find. Each critic is context-free: it sees only its own typed request. It returns the cycle number and the critics' findings with severities (C1, C2, …), one page of about 12 KB (truncated: list the rest with ledger op critics); resolve each HIGH or MEDIUM one with ledger op resolve, by fixing it (redraft, more evidence) or disclosing it. finish needs a committee on the current draft while the budget can still fund a fix. Do not use it before every plan issue has a drafted section, and do not call it again without changing the draft.\nExample: {}",
  "in": {
   "type": "object",
   "additionalProperties": false,
@@ -15,7 +15,8 @@
   "additionalProperties": false,
   "required": [
    "cycle",
-   "findings"
+   "findings",
+   "truncated"
   ],
   "properties": {
    "cycle": {
@@ -54,6 +55,9 @@
       }
      }
     }
+   },
+   "truncated": {
+    "type": "boolean"
    }
   }
  }

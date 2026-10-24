@@ -555,3 +555,92 @@ func TestSubagentCutOffEmptyAnswerIsNotAModelFailure(t *testing.T) {
 		t.Fatalf("an empty answer that was not cut off is still a model failure: %v", err)
 	}
 }
+
+// TestToolStepJournalsEachModelCall (bench r3: a hard crash mid-tool was charged the tool's whole
+// grant): inside a journaled tool step, each model call is recorded before it is sent (the spend so
+// far plus its worst case) and after it returns (what it spent), so the started record always holds
+// what a resume must charge; a tool that has made no call keeps its whole grant.
+func TestToolStepJournalsEachModelCall(t *testing.T) {
+	xReq := model.Request{Agent: "x", Role: model.Lead, MaxTokens: 1000, Messages: []model.Message{{Role: "user", Content: "hi"}}}
+	usd := 0.004
+	reply := model.Reply{Text: "ok", Usage: model.Usage{InputTokens: 10, OutputTokens: 10, CostUSD: &usd}}
+	var rt *Runtime
+	fan := GoTool{S: Spec{Name: "fan", Kind: "go", Description: testDesc, In: testIn, Out: testOut, Class: "evidence", MaxTurns: 5}, Fn: func(ctx context.Context, c Call) (any, Usage, error) {
+		b := NewBudget(c.Budget.Calls, c.Budget.USD, 0)
+		for range 2 {
+			if _, _, err := rt.ChatWithin(ctx, xReq, b); err != nil {
+				return nil, b.Spent(), err
+			}
+		}
+		return map[string]any{"ok": true}, b.Spent(), nil
+	}}
+	rt, _ = rig(t, map[string][]model.Reply{"x": {reply, reply}}, fan)
+	prices, err := model.LoadPrices(`{"m-lead": {"in": 1, "out": 5}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j := &journal{}
+	rt.Prices, rt.Journal = prices, j
+	if _, err := rt.Invoke(context.Background(), lead("fan"), Call{TaskID: "t"}, "fan", json.RawMessage(`{"q":null,"op":null}`), NewBudget(10, 1, 0), false, 5); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, s := range j.steps {
+		got = append(got, fmt.Sprintf("%s %d %.3f", s.Status, s.Grant.Calls, s.Grant.USD))
+	}
+	xReq.Model = "m-lead"
+	worst := rt.bound(xReq)
+	want := []string{"started 5 1.000", fmt.Sprintf("started 1 %.3f", worst), "started 1 0.004", fmt.Sprintf("started 2 %.3f", 0.004+worst), "started 2 0.008"}
+	if len(got) != 6 || strings.Join(got[:5], "|") != strings.Join(want, "|") || !strings.HasPrefix(got[5], "committed") {
+		t.Fatalf("journal %q, want %q then committed", got, want)
+	}
+}
+
+// TestOversizedResultRefusedAndShrunk (bench4, SEC: ledger findings in full were one 682 KB result;
+// the lead's next request overflowed its context): a tool result over maxResult reaches the model as
+// the typed refusal (never cut), and a second context-length refusal replaces a newest result over
+// shrunk by the same refusal before the last try, so the run goes on.
+func TestOversizedResultRefusedAndShrunk(t *testing.T) {
+	mid := json.RawMessage(`{"findings":"` + strings.Repeat("é", 20_000) + `"}`)  // 40 KB: under the cap, over shrunk
+	big := json.RawMessage(`{"findings":"` + strings.Repeat("é", 341_000) + `"}`) // 682 KB
+	refused := model.Reply{Err: &model.Error{Kind: model.ErrUnavailable, Detail: "HTTP 400", Status: 400}}
+	out := json.RawMessage(`{"type":"object","additionalProperties":false,"required":["findings"],"properties":{"findings":{"type":"string"}}}`)
+	rt, f := rig(t, map[string][]model.Reply{"lead": {calls(call("big", q)), calls(call("mid", q)), refused, refused, calls(call("finish", q))}},
+		&counter{s: Spec{Name: "big", Kind: "go", Description: testDesc, In: testIn, Class: "free", Out: out}, out: big},
+		&counter{s: Spec{Name: "mid", Kind: "go", Description: testDesc, In: testIn, Class: "free", Out: out}, out: mid}, newFinish())
+	if _, err := rt.Run(context.Background(), lead("big", "mid", "finish"), Call{Input: json.RawMessage(`"go"`)}, NewBudget(50, 1, 0)); err != nil {
+		t.Fatalf("an oversized result failed the run: %v", err)
+	}
+	newest := func(i int) string {
+		var s string
+		for _, m := range f.Calls()[i].Messages {
+			if m.Role == "tool" {
+				s = m.Content.(string)
+			}
+		}
+		return s
+	}
+	refusal := func(s string, tool string, limit int) bool {
+		_, body, _ := strings.Cut(s, "\n")
+		var e struct {
+			Error struct {
+				Code, Tool string
+				Limit      int
+			}
+		}
+		return len(s) <= limit && ErrorSchema.Validate(json.RawMessage(body)) == nil && json.Unmarshal([]byte(body), &e) == nil &&
+			e.Error.Code == "result_too_large" && e.Error.Tool == tool && e.Error.Limit == limit
+	}
+	if r := newest(1); !refusal(r, "big", maxResult) {
+		t.Errorf("the 682 KB result reached the lead as %d bytes, not the typed refusal: %.300q", len(r), r)
+	}
+	if r := newest(2); len(r) < 40_000 || !strings.HasSuffix(r, `"}`) {
+		t.Errorf("a 40 KB result under the cap was not shown whole: %d bytes", len(r))
+	}
+	if r := newest(3); len(r) < 40_000 {
+		t.Errorf("the first retry changed the newest result (compaction keeps the latest turn): %d bytes", len(r))
+	}
+	if r := newest(4); !refusal(r, "mid", shrunk) {
+		t.Errorf("the second retry holds a %d-byte newest result, want the typed refusal: %.300q", len(r), r)
+	}
+}

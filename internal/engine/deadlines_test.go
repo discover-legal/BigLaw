@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/discover-legal/BigLaw/internal/analysis"
 	"github.com/discover-legal/BigLaw/internal/model"
 )
 
@@ -142,5 +143,42 @@ func TestDeadlinesMeetTheAnswerKey(t *testing.T) {
 	}
 	if t.Failed() {
 		t.Logf("memo:\n%s", out)
+	}
+}
+
+// TestRawDeadlineNeedsItsRoll (bench r3, gate A: the memo said the answer was due November 11,
+// Veterans Day, though the lead's worksheet rolled it to November 12, while TestDeadlinesMeetTheAnswerKey
+// passed): a drafter computed the date again with no holidays and wrote the raw date, and G8 traced
+// it to that worksheet and to the rolled worksheet's raw-date step. A deadline's raw date now traces
+// only in a paragraph that states the rolled deadline, and the lint names the handle to write.
+func TestRawDeadlineNeedsItsRoll(t *testing.T) {
+	served := "served on 10/21/2026 via its registered agent"
+	f1 := Finding{Finding: analysis.Finding{FID: "F1", Verified: true, Values: []analysis.Value{{Entity: "Talbot", Metric: "served", Value: "10/21/2026", Class: "Date"}}},
+		Citations: []Citation{{Quote: served, Method: "exact"}}}
+	fs := []analysis.Finding{f1.Finding}
+	ops := func() []analysis.Operand {
+		ref, n, u := "F1.v1", "21", "days"
+		return []analysis.Operand{{Ref: &ref}, {Literal: &n, Unit: &u}}
+	}
+	rolled, err := analysis.Calc(fs, "date_add", ops(), []string{"2026-11-11"})
+	raw, err2 := analysis.Calc(fs, "date_add", ops(), nil) // the drafter's own, with no holidays
+	if err != nil || err2 != nil || rolled.Result != "2026-11-12" || raw.Result != "2026-11-11" {
+		t.Fatalf("worksheets %+v %+v (%v %v)", rolled, raw, err, err2)
+	}
+	figs := []Fig{{"{" + rolled.WID + "}", "", sheetValue(rolled.Result, rolled.Unit)}, {"{" + raw.WID + "}", "", sheetValue(raw.Result, raw.Unit)}}
+	use := map[string]Finding{"F1": f1}
+	for _, c := range []struct {
+		md   string
+		lint bool
+	}{
+		{"The raw deadline falls on November 11, 2026, which is Veterans Day [F1]. Talbot must serve its answer by November 11, 2026. [F1]", true}, // the bench memo
+		{"Talbot was served on 10/21/2026 [F1] and must answer by {" + raw.WID + "}.", true},
+		{"Talbot was served on 10/21/2026 [F1]; the raw date, November 11, 2026, is Veterans Day, so the answer is due {" + rolled.WID + "}.", false},
+		{"Talbot was served on 10/21/2026 [F1] and must answer by {" + rolled.WID + "}.\n\nNovember 11, 2026 is Veterans Day.", true}, // the raw date apart from its roll
+	} {
+		got := lint("I1", Section{Markdown: c.md, Handles: figs}, use, []analysis.Worksheet{rolled, raw})
+		if c.lint != (len(got) > 0) || c.lint && !strings.Contains(strings.Join(got, ""), "the deadline is {"+rolled.WID+"} (November 12, 2026)") {
+			t.Errorf("%q: lint %q", c.md, got)
+		}
 	}
 }

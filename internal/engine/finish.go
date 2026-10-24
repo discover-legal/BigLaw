@@ -52,7 +52,17 @@ type report struct {
 	UncoveredParties  []analysis.PartyGap `json:"uncoveredParties"`
 	MissingFigures    []analysis.Handle   `json:"missingFigures"`
 	OpenPreconditions []string            `json:"openPreconditions"`
+	Truncated         bool                `json:"truncated"` // the lists hold their first items: fix those and check again
 	limits            []string
+}
+
+// page is the report as finish returns it: one page, the first items of each list by priority.
+func (rep report) page() report {
+	pg := agent.NewPage()
+	rep.Errors, rep.MissingIssues, rep.OpenPreconditions = agent.Take(pg, rep.Errors), agent.Take(pg, rep.MissingIssues), agent.Take(pg, rep.OpenPreconditions)
+	rep.Lint, rep.MissingFigures, rep.UncoveredParties = agent.Take(pg, rep.Lint), agent.Take(pg, rep.MissingFigures), agent.Take(pg, rep.UncoveredParties)
+	rep.Truncated = pg.Truncated
+	return rep
 }
 
 type limitation struct {
@@ -78,7 +88,7 @@ func (f finish) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 		return agent.Result{}, err
 	}
 	out := func(rep report, u agent.Usage, final bool) (agent.Result, error) {
-		data, err := json.Marshal(rep)
+		data, err := json.Marshal(rep.page())
 		return agent.Result{Output: data, Usage: u, Final: final}, err
 	}
 	if in.Op == "check" {
@@ -90,11 +100,11 @@ func (f finish) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 	var spent agent.Usage
 	if f.r.forced == "" { // the coverage pass, once, before a deliverable (a forced finish ran it as a step)
 		done, err := f.e.covered(ctx, c.TaskID)
-		todo, terr := f.e.touched(ctx, c.TaskID)
-		if err = cmpErr(err, terr); err != nil {
+		due, derr := f.e.coverDue(ctx, c.TaskID)
+		if err = cmpErr(err, derr); err != nil {
 			return agent.Result{}, err
 		}
-		if !done && len(todo) > 0 {
+		if !done && due {
 			if spent, err = f.cover(ctx, c); err != nil {
 				return agent.Result{Usage: spent}, err
 			}
@@ -145,11 +155,15 @@ func (f finish) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 func (f finish) cover(ctx context.Context, c agent.Call) (agent.Usage, error) {
 	b := agent.NewBudget(c.Budget.Calls, c.Budget.USD, 0)
 	me, call := agent.Agent{Name: "finish", Visible: []string{"cover", "committee"}}, agent.Call{TaskID: c.TaskID, DocumentIDs: c.DocumentIDs}
+	before, err := load[Section](ctx, f.e, c.TaskID, kSection)
+	if err != nil {
+		return b.Spent(), err
+	}
 	if _, err := f.rt.Invoke(ctx, me, call, "cover", json.RawMessage(`{}`), b, false, 0); modelOrJournal(err) {
 		return b.Spent(), err
 	}
-	pass, err := f.e.coverRow(ctx, c.TaskID)
-	if err != nil || pass == nil || len(pass.Analysed) == 0 {
+	after, err := load[Section](ctx, f.e, c.TaskID, kSection)
+	if err != nil || version(after) == version(before) { // nothing redrafted: the last review still holds
 		return b.Spent(), err
 	}
 	if _, err := f.rt.Invoke(ctx, me, call, "committee", json.RawMessage(`{}`), b, false, 0); modelOrJournal(err) {
@@ -217,6 +231,18 @@ func (f finish) check(ctx context.Context, limits []limitation) (report, error) 
 			bad("criterion_unmet", is.ID+" has no drafted section citing a verified finding: draft it from verified findings, or disclose it in limitations with its issueId")
 		}
 	}
+	if _, open, err := e.discrepancies(ctx, id); err != nil { // every figure conflict is stated in the memo (bench r3)
+		return report{}, err
+	} else {
+		for _, x := range open {
+			var vs []string
+			for _, v := range x.Values {
+				vs = append(vs, "["+v.FID+"] "+v.Value)
+			}
+			rep.Lint = append(rep.Lint, fmt.Sprintf("memo: the documents state %s differently (%s), and the memo does not state both: redraft the section it bears on to state both figures, cite both findings and say what the difference means",
+				cmpStr(strings.TrimSpace(x.Entity+" "+x.Metric) != "", strings.TrimSpace(x.Entity+" "+x.Metric), "a figure"), strings.Join(vs, " vs ")))
+		}
+	}
 	for _, l := range rep.Lint { // after maxLintRounds reports, disclosed: redrafting for the lint is bounded
 		if rounds >= maxLintRounds {
 			rep.limits = append(rep.limits, fmt.Sprintf("Delivered with an unresolved check after %d rounds of fixes: %s", rounds, l))
@@ -233,6 +259,18 @@ func (f finish) check(ctx context.Context, limits []limitation) (report, error) 
 		if (pass != nil || f.r.forced != "") && !disclosed[is.ID] {
 			rep.limits = append(rep.limits, fmt.Sprintf("Coverage: %s (%s) was not analysed: %s.", is.ID, is.Question,
 				cmpStr(slices.ContainsFunc(secs, func(s Section) bool { return s.IssueID == is.ID }), "its section states facts without an analysis of the issue (rule, application, conclusion)", "it has no section resting on a verified finding")))
+		}
+	}
+	if pass != nil || f.r.forced != "" { // what the pass could not place: disclosed
+		if lo, err := e.leftOut(ctx, id); err != nil {
+			return report{}, err
+		} else if len(lo) > 0 {
+			var ids []string
+			for _, x := range lo[:min(maxPlaced, len(lo))] {
+				ids = append(ids, x.FID)
+			}
+			rep.limits = append(rep.limits, fmt.Sprintf("Coverage: %d verified %s that state a deviation, omission, violation or salient figure never reached the memo: %s%s.",
+				len(lo), plural(len(lo), "finding", "findings"), strings.Join(ids, ", "), cmpStr(len(lo) > maxPlaced, fmt.Sprintf(" and %d more", len(lo)-maxPlaced), "")))
 		}
 	}
 	cov := analysis.CheckCoverage(ais, texts, an, nil)
@@ -321,7 +359,8 @@ func (f finish) meta(ctx context.Context, b *agent.Budget) (string, error) {
 }
 
 // gates opens the human gates for a rendered deliverable (G7): one per cited finding resting only
-// on low-confidence transcript pages or marked unsupported by the prosecutor and still open; while
+// on low-confidence transcript pages, admitted at low confidence (a deviation its section check
+// could not confirm) or marked unsupported by the prosecutor and still open; while
 // any is undecided the run pauses there, otherwise the deliverable's gate opens.
 func (f finish) gates(ctx context.Context, md string) error {
 	e, id := f.e, f.r.t.ID
@@ -334,7 +373,7 @@ func (f finish) gates(ctx context.Context, md string) error {
 	pending := false
 	for _, x := range use {
 		unsupported := slices.ContainsFunc(crit, func(c Critic) bool { return c.FID == x.FID && c.Severity == "HIGH" && c.Status == "open" })
-		if !strings.Contains(md, "["+x.FID+"]") || !unsupported && !allCitations(x, func(c Citation) bool { return c.Low }) {
+		if !strings.Contains(md, "["+x.FID+"]") || !gated(x, unsupported) {
 			continue
 		}
 		g := Gate{GateID: "G-" + x.FID, Kind: "finding", FindingID: x.FID}
@@ -353,4 +392,11 @@ func (f finish) gates(ctx context.Context, md string) error {
 	n := 1 + len(slices.DeleteFunc(slices.Clone(gs), func(g Gate) bool { return g.Kind != "deliverable" }))
 	g := Gate{GateID: fmt.Sprintf("G-deliverable-%d", n), Kind: "deliverable"}
 	return e.write(ctx, id, kGate, g.GateID, g, false)
+}
+
+// gated reports whether a cited finding needs a lawyer's decision at its own gate: marked
+// unsupported by the prosecutor, admitted at low confidence, or resting only on low-confidence
+// transcript pages.
+func gated(x Finding, unsupported bool) bool {
+	return unsupported || x.Low || allCitations(x, func(c Citation) bool { return c.Low })
 }

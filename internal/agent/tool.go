@@ -40,6 +40,9 @@ type Call struct {
 	// Model is a subagent's model chosen by its caller, a fan-out tool that picked once for all its
 	// calls (one of the subagent's candidates; "" or another model: the bandit picks per call).
 	Model string `json:"model,omitempty"`
+	// NoTools runs a subagent on its request alone, offered none of its tools: a fan-out's visit that
+	// carries all the text it reads (sweep: a page each, so a visit is one call, not a search loop).
+	NoTools bool `json:"noTools,omitempty"`
 }
 
 // Grant is what one call may spend: model calls and USD (priced calls only).
@@ -113,6 +116,7 @@ var (
 	ErrToolOutput = errors.New("tool output does not match its schema")
 	ErrTurnCap    = errors.New("turn cap reached without an answer")
 	ErrJournal    = errors.New("the step log refused a step") // ends the run (a lost lease, max steps, a database error)
+	ErrPanic      = errors.New("a tool panicked")             // ends the run as an internal error (logged with its stack)
 )
 
 // Refusal is a call that did not run: why, and what the agent should do next (README: actionable).

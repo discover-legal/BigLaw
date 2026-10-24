@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -209,6 +210,11 @@ func (e *Engine) drive(ctx context.Context, r *run) {
 			if n, _ := res.RowsAffected(); n == 0 { // cancelled, or another process took it
 				r.cancel()
 			}
+		}
+	}()
+	defer func() { // a panic fails this task as an internal error, never the process (lab-r3 r4 H1)
+		if p := recover(); p != nil {
+			_ = e.fail(ctx, r, "", fmt.Errorf("engine: the run panicked: %v\n%s", p, debug.Stack()))
 		}
 	}()
 	if err := e.execute(ctx, r); err != nil && ctx.Err() == nil {

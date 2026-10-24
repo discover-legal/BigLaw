@@ -167,6 +167,7 @@ func (h hooked) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 	_ = json.Unmarshal(c.Input, &in)
 	str := func(k string) string { s, _ := in[k].(string); return s }
 	var draft draftReq
+	var rq reqText
 	switch name {
 	case "extract_facts":
 		if str("documentId") != "" && str("sectionId") != "" {
@@ -189,11 +190,13 @@ func (h hooked) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 			in["packText"] = str("packText") + "\n\n" + p.Body
 		}
 	case "check_deviation":
-		src, err := h.e.quotedRequirement(ctx, c)
-		if err != nil {
+		var err error
+		if rq, err = h.e.quotedRequirement(ctx, c); err != nil {
 			return agent.Result{}, err
 		}
-		in["requirement"] = src
+		in["requirement"] = rq.Joined()
+		in["requirementContext"] = rq.Context()                            // what it judges against: the requirement with what governs it
+		in["reviewedPassages"] = h.e.reviewedPassages(ctx, c, rq.Joined()) // bench4, trust: every call spent its five turns searching and checking quotes
 	case "draft_section":
 		var err error
 		if draft, err = h.e.draftRequest(ctx, c.TaskID, c.DocumentIDs, str("issueId"), c.Input); err != nil {
@@ -217,7 +220,7 @@ func (h hooked) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 		out, err = h.e.saveSection(ctx, c.TaskID, draft, res.Output)
 		reward = 1
 	case "check_deviation":
-		out, reward, err = h.e.deviations(ctx, h.rt, c, b, res)
+		out, reward, err = h.e.deviations(ctx, h.rt, c, b, res, rq)
 	default:
 		var ans struct {
 			Findings                      []draftFinding

@@ -51,7 +51,13 @@ func TestRetrieveToolStaysInScope(t *testing.T) {
 		}
 	}
 	res, err = r.Call(t.Context(), agent.Call{DocumentIDs: []string{mine.ID}, Input: json.RawMessage(`{"op":"section","query":null,"documentId":"` + mine.ID + `","sectionId":"s0","k":null,"offset":0,"limit":3}`)})
-	if err != nil || !strings.Contains(string(res.Output), `"truncated":true`) || strings.Contains(string(res.Output), `"next":null`) {
+	var page struct {
+		Section struct {
+			Truncated bool
+			Next      *int
+		}
+	}
+	if err != nil || json.Unmarshal(res.Output, &page) != nil || !page.Section.Truncated || page.Section.Next == nil {
 		t.Fatalf("a long section is paged with next: %s %v", res.Output, err)
 	}
 }

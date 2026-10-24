@@ -107,7 +107,7 @@ type m = map[string]any
 // memo is a complete scripted memo run over one document.
 func memo(ids []string) map[string][]model.Reply {
 	ledger := m{"op": "plan", "issues": []m{{"id": "I1", "question": "What is claimed?", "class": "Conduct", "practice": "litigation"}}, "issueId": nil, "fid": nil,
-		"detail": nil, "criticId": nil, "resolution": nil, "note": nil, "entity": nil}
+		"detail": nil, "criticId": nil, "resolution": nil, "note": nil, "entity": nil, "offset": nil}
 	return map[string][]model.Reply{
 		"lead": {{ToolCalls: []model.ToolCall{call("ledger", ledger)}},
 			{ToolCalls: []model.ToolCall{call("extract_facts", m{"question": "q", "documentId": ids[0], "sectionId": nil, "through": nil, "offset": nil, "query": "damages", "issueId": "I1"})}},

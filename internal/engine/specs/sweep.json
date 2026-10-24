@@ -3,7 +3,7 @@
  "kind": "fanout",
  "class": "evidence",
  "maxTurns": 1000,
- "description": "Reads every section of every document of the task once, in order, running extract_facts on each page, and records the verified findings in the ledger. It is the retrieval floor: recall does not depend on which passages you think to search for. Calling it again skips sections it already read and returns their findings, so it never spends twice. If the budget runs out before every section is read it says incomplete and lists the uncovered sections, which go into Limitations. Do not use it to look up one fact (use retrieve or extract_facts with a query) and do not call it before a plan is recorded.\nExample: {\"over\": \"sections\", \"documentIds\": null}",
+ "description": "Reads every section of every document of the task once, running extract_facts on each page, most relevant to the plan's issues first, and records the verified findings in the ledger. It is the retrieval floor: recall does not depend on which passages you think to search for. A page that only repeats another, or holds no text (a table of contents), is skipped and listed as skipped. Calling it again skips sections it already read and returns their findings, so it never spends twice. If the budget runs out before every page is read it says incomplete, lists the uncovered pages (a batch of short sections from sectionId through its last) and the documents left partly unread, which go into Limitations. The result is one page of about 12 KB: when it says truncated, its lists hold their first items (all the findings are in the ledger, op findings; a later sweep reads the uncovered pages). Do not use it to look up one fact (use retrieve or extract_facts with a query) and do not call it before a plan is recorded.\nExample: {\"over\": \"sections\", \"documentIds\": null}",
  "in": {
   "type": "object",
   "additionalProperties": false,
@@ -38,7 +38,10 @@
    "visited",
    "findings",
    "incomplete",
-   "uncovered"
+   "uncovered",
+   "skipped",
+   "unreadDocuments",
+   "truncated"
   ],
   "properties": {
    "visited": {
@@ -60,7 +63,8 @@
      "additionalProperties": false,
      "required": [
       "documentId",
-      "sectionId"
+      "sectionId",
+      "through"
      ],
      "properties": {
       "documentId": {
@@ -68,9 +72,75 @@
       },
       "sectionId": {
        "type": "string"
+      },
+      "through": {
+       "type": [
+        "string",
+        "null"
+       ]
       }
      }
     }
+   },
+   "skipped": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "additionalProperties": false,
+     "required": [
+      "documentId",
+      "sectionId",
+      "through",
+      "reason"
+     ],
+     "properties": {
+      "documentId": {
+       "type": "string"
+      },
+      "sectionId": {
+       "type": "string"
+      },
+      "through": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "reason": {
+       "type": "string",
+       "enum": [
+        "duplicate",
+        "boilerplate"
+       ]
+      }
+     }
+    }
+   },
+   "unreadDocuments": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "additionalProperties": false,
+     "required": [
+      "documentId",
+      "read",
+      "planned"
+     ],
+     "properties": {
+      "documentId": {
+       "type": "string"
+      },
+      "read": {
+       "type": "integer"
+      },
+      "planned": {
+       "type": "integer"
+      }
+     }
+    }
+   },
+   "truncated": {
+    "type": "boolean"
    }
   }
  }

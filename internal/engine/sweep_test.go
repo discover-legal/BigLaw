@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/discover-legal/BigLaw/internal/agent"
 	"github.com/discover-legal/BigLaw/internal/docs"
 	"github.com/discover-legal/BigLaw/internal/model"
 )
@@ -288,5 +289,147 @@ func TestSweepFallsBackToSerialWhenAShareCannotFundACall(t *testing.T) {
 	}
 	if vs, _ := f.e.rows(context.Background(), task.ID, kVisit); len(vs) != 8 {
 		t.Fatalf("%d visit records, want 8", len(vs))
+	}
+}
+
+// TestHardCrashChargesOnlyRecordedSpend (bench r3: a container restart mid-sweep charged the
+// sweep's whole $6.37 grant as lost, so the resumed run had no evidence budget and the re-issued
+// sweep was refused): each model call inside a tool's step is journaled as it happens, so a process
+// that dies without a word (its lease gone, its last writes refused) is charged only what its calls
+// spent plus the worst case of those in flight; the next process re-issues the sweep and reads
+// every page.
+func TestHardCrashChargesOnlyRecordedSpend(t *testing.T) {
+	t.Parallel()
+	doc, scripts := lots(8, 2)
+	f := newFixture(t, doc)
+	sc := f.with(map[string][]model.Reply{"lead": {calls(plan(issue("I1", "Deliveries?", "Requirement"))), calls(tc("sweep", m{"over": "sections", "documentIds": nil})),
+		calls(draft("I1", "F1")), calls(committee()), calls(finishCall("submit"))},
+		"draft_section": {section("Lot 1 is due on time [F1].", "s")}})
+	for k, v := range scripts(f.docs[0].ID) {
+		for i := range v {
+			v[i] = costly(v[i], 0.01)
+		}
+		sc[k] = v
+	}
+	prices, err := model.LoadPrices(`{"lead-m": {"in": 1, "out": 1}, "spec-m": {"in": 1, "out": 1}, "crit-m": {"in": 1, "out": 1}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{BudgetCalls: 150, BudgetUSD: 1, CollapseThreshold: 0.5, CollapseAction: "strict"}
+	k := &countKill{Fake: model.NewFake(sc), at: 3}
+	k.Route = byLot
+	f.e = New(f.st, f.d, k, testRoles, prices, cfg, nil)
+	task := f.submit(0)
+	k.kill = func() { // the process dies: another holds the lease, so nothing it says is recorded
+		if _, err := f.st.DB().Exec(`UPDATE tasks SET lease_owner = 'dead' WHERE id = $1`, task.ID); err != nil {
+			t.Error(err)
+		}
+		f.e.active(task.ID).cancel()
+	}
+	f.step(context.Background())
+	var held agent.Grant
+	if err := f.st.DB().QueryRow(`SELECT grant_held FROM task_steps WHERE task_id = $1 AND tool = 'sweep' AND status = 'started'`, task.ID).Scan(jsonScan{&held}); err != nil {
+		t.Fatalf("the crashed sweep's started step: %v (%s)", err, f.steps(task.ID))
+	}
+	k.kill = nil
+	f.e = New(f.st, f.d, k, testRoles, prices, cfg, nil)
+	f.stale(task.ID)
+	f.step(context.Background())
+	var lost agent.Usage
+	f.st.DB().QueryRow(`SELECT lost FROM tasks WHERE id = $1`, task.ID).Scan(jsonScan{&lost})
+	a := Allocate(cfg.BudgetCalls, cfg.BudgetUSD)
+	worst := 0.03 // one visit's worst case at these prices is about $0.02
+	v := f.get(task.ID)
+	sw := strings.Join(f.outputs(task.ID, "sweep"), "")
+	if lost != (agent.Usage{Calls: held.Calls, USD: held.USD}) || lost.Calls < 2 || lost.Calls > 2+sweepWorkers || lost.USD < 0.02 || lost.USD > 0.02+sweepWorkers*worst ||
+		lost.USD >= a.dollars(a.Sweep)/2 {
+		t.Fatalf("lost %+v (journaled %+v; the sweep's share is $%.2f)", lost, held, a.dollars(a.Sweep))
+	}
+	if !strings.Contains(sw, `"visited":8`) || !strings.Contains(sw, `"incomplete":false`) || stop(v) != "awaiting_gate/finished" {
+		t.Fatalf("%s: resumed sweep %s\n%s", stop(v), sw, f.steps(task.ID))
+	}
+}
+
+// TestSweepReadsRelevantPagesFirst (bench r3, SEC: the share ran out a third of the way through 169
+// pages read in document order): the sweep reads the pages the plan's issues name first, so a
+// budget that funds a few visits of eight reads the one page about the issue (document order
+// would have read lots 1 to 4); each visit is one call
+// on its page alone (no tools offered), and the unread pages and their document are reported.
+func TestSweepReadsRelevantPagesFirst(t *testing.T) {
+	t.Parallel()
+	var doc strings.Builder
+	for i := 1; i <= 8; i++ {
+		body := fmt.Sprintf("The supplier shall deliver lot %d on time.", i)
+		if i == 7 {
+			body = "Lot 7 ships by barge from the Rotterdam terminal under the barge charter."
+		}
+		fmt.Fprintf(&doc, "%d. Clause %d\n%s\n%s\n\n", i, i, body, filler)
+	}
+	f := newFixture(t, doc.String())
+	prices, err := model.LoadPrices(`{"lead-m": {"in": 1, "out": 5}, "spec-m": {"in": 1, "out": 5}, "crit-m": {"in": 1, "out": 5}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ex []model.Reply
+	for range 8 {
+		ex = append(ex, costly(facts(), 0.3))
+	}
+	fake := model.NewFake(f.with(map[string][]model.Reply{"lead": {calls(plan(issue("I1", "Which lot ships by barge, and from which terminal?", "Conduct"))),
+		calls(tc("sweep", m{"over": "sections", "documentIds": nil}))}, "extract_facts": ex}))
+	f.e = New(f.st, f.d, fake, testRoles, prices, Config{BudgetCalls: 150, BudgetUSD: 2, CollapseThreshold: 0.5, CollapseAction: "strict"}, nil)
+	task := f.submit(0)
+	f.step(context.Background())
+	var read []string
+	for _, c := range fake.Calls() {
+		if c.Agent == "extract_facts" {
+			read = append(read, sweepReq(c).SectionText)
+			if len(c.Tools) != 0 {
+				t.Errorf("a sweep visit was offered %d tools", len(c.Tools))
+			}
+		}
+	}
+	sw := strings.Join(f.outputs(task.ID, "sweep"), "")
+	if len(read) == 0 || len(read) > 4 || !strings.Contains(strings.Join(read, ""), "barge") || !strings.Contains(sw, `"incomplete":true`) ||
+		!strings.Contains(sw, `"planned":8,"documentId":"`+f.docs[0].ID+`"`) {
+		t.Fatalf("read %d pages (%.60q); sweep %s", len(read), read, sw)
+	}
+	unswept, err := f.e.unswept(context.Background(), task.ID)
+	ids, uerr := f.e.Unread(context.Background(), task.ID) // what join_discrepancies names
+	if err != nil || uerr != nil || len(unswept) != 1 || unswept[0].Planned != 8 || unswept[0].Read != len(read) || len(ids) != 1 || ids[0] != f.docs[0].ID {
+		t.Fatalf("recorded coverage %+v %v", unswept, err)
+	}
+}
+
+// TestSweepSkipsDuplicatesAndBoilerplate: a table of contents and a page another document already
+// holds word for word are not read, and are reported as skipped; a page that differs from another
+// only by a figure is read (a figure is what the cross-document checks compare).
+func TestSweepSkipsDuplicatesAndBoilerplate(t *testing.T) {
+	t.Parallel()
+	var toc strings.Builder
+	toc.WriteString("Contents\n")
+	for i := 1; i <= 40; i++ {
+		fmt.Fprintf(&toc, "Terms of the agreement, part %d ........ %d\n", i, i+2)
+	}
+	price := func(n int, amount string) string {
+		return fmt.Sprintf("%d. Price\nThe price for the goods is %s, payable within thirty days of delivery.\n%s\n\n", n, amount, filler)
+	}
+	f := newFixture(t, toc.String()+"\n"+price(2, "$100,000"), price(2, "$100,000")+price(3, "$120,000"))
+	var ex []model.Reply
+	for range 8 {
+		ex = append(ex, facts())
+	}
+	v := f.run(f.with(map[string][]model.Reply{"lead": {calls(plan(issue("I1", "What is the price?", "Clause"))), calls(tc("sweep", m{"over": "sections", "documentIds": nil}))},
+		"extract_facts": ex}), Config{})
+	var read []string
+	for _, c := range f.e.chat.(*model.Fake).Calls() {
+		if c.Agent == "extract_facts" {
+			read = append(read, sweepReq(c).SectionText)
+		}
+	}
+	sw := strings.Join(f.outputs(v.ID, "sweep"), "")
+	joined := strings.Join(read, "\n")
+	if len(read) != 2 || strings.Contains(joined, "........") || strings.Count(joined, "$100,000") != 1 || !strings.Contains(joined, "$120,000") ||
+		strings.Count(sw, `"reason":"boilerplate"`) != 1 || strings.Count(sw, `"reason":"duplicate"`) != 1 || !strings.Contains(sw, `"incomplete":false`) || strings.Contains(sw, `"unreadDocuments":[{`) {
+		t.Fatalf("read %q; sweep %s", read, sw)
 	}
 }

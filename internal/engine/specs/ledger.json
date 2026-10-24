@@ -6,7 +6,7 @@
  "solo": [
   "plan"
  ],
- "description": "Reads and writes the matter's ledger: the plan, the verified findings, critic findings and drafted sections. op \"plan\" records the issues the deliverable must answer (each with an id, its question, a BELO-lite class: Conduct, Requirement, Clause or RedFlag, and a practice area); it must be the only call in its turn, and until a plan exists only retrieve and ledger run. op \"findings\" lists findings (of one issueId, or all), op \"get\" reads one by fid, with detail brief or full; op \"resolve\" marks a committee finding fixed or disclosed with a note (a disclosed note goes into Limitations); op \"draft_get\" returns a finished section in full; op \"relations\" lists who did, owns or received what for an entity. Findings are grouped by the issue whose tool call produced them, and that order is the deliverable's spine. Do not use it to add findings (only extract_facts, analyze_issue, check_deviation and sweep add verified findings) or to edit a section (call draft_section again).\nExample: {\"op\": \"plan\", \"issues\": [{\"id\": \"I1\", \"question\": \"When is the answer to the complaint due?\", \"class\": \"Requirement\", \"practice\": \"litigation\"}], \"issueId\": null, \"fid\": null, \"detail\": null, \"criticId\": null, \"resolution\": null, \"note\": null, \"entity\": null}\nExample: {\"op\": \"findings\", \"issues\": null, \"issueId\": \"I1\", \"fid\": null, \"detail\": \"brief\", \"criticId\": null, \"resolution\": null, \"note\": null, \"entity\": null}\nExample: {\"op\": \"resolve\", \"issues\": null, \"issueId\": null, \"fid\": null, \"detail\": null, \"criticId\": \"C2\", \"resolution\": \"fixed\", \"note\": \"Redrafted I1 to cite the served date.\", \"entity\": null}",
+ "description": "Reads and writes the matter's ledger: the plan, the verified findings, critic findings and drafted sections. op \"plan\" records the issues the deliverable must answer (each with an id, its question, a BELO-lite class: Conduct, Requirement, Clause or RedFlag, and a practice area); it must be the only call in its turn, and until a plan exists only retrieve and ledger run. op \"findings\" lists findings (of one issueId, or all), op \"get\" reads one by fid, with detail brief or full; op \"resolve\" marks a committee finding fixed or disclosed with a note (a disclosed note goes into Limitations); op \"draft_get\" returns a finished section's text; op \"relations\" lists who did, owns or received what for an entity; op \"critics\" lists the committee's findings (C1, C2, \u2026) with their status. findings, draft_get, relations and critics return one page of about 12 KB: when next is not null, call again with offset set to next for the rest (next is null on the last page). Findings are grouped by the issue whose tool call produced them, and that order is the deliverable's spine. Do not use it to add findings (only extract_facts, analyze_issue, check_deviation and sweep add verified findings) or to edit a section (call draft_section again).\nExample: {\"op\": \"plan\", \"issues\": [{\"id\": \"I1\", \"question\": \"When is the answer to the complaint due?\", \"class\": \"Requirement\", \"practice\": \"litigation\"}], \"issueId\": null, \"fid\": null, \"detail\": null, \"criticId\": null, \"resolution\": null, \"note\": null, \"entity\": null, \"offset\": null}\nExample: {\"op\": \"findings\", \"issues\": null, \"issueId\": \"I1\", \"fid\": null, \"detail\": \"brief\", \"criticId\": null, \"resolution\": null, \"note\": null, \"entity\": null, \"offset\": null}\nExample: {\"op\": \"resolve\", \"issues\": null, \"issueId\": null, \"fid\": null, \"detail\": null, \"criticId\": \"C2\", \"resolution\": \"fixed\", \"note\": \"Redrafted I1 to cite the served date.\", \"entity\": null, \"offset\": null}",
  "in": {
   "type": "object",
   "additionalProperties": false,
@@ -19,7 +19,8 @@
    "criticId",
    "resolution",
    "note",
-   "entity"
+   "entity",
+   "offset"
   ],
   "properties": {
    "op": {
@@ -30,7 +31,8 @@
      "get",
      "resolve",
      "draft_get",
-     "relations"
+     "relations",
+     "critics"
     ]
    },
    "issues": {
@@ -134,6 +136,14 @@
      "null"
     ],
     "maxLength": 200
+   },
+   "offset": {
+    "type": [
+     "integer",
+     "null"
+    ],
+    "minimum": 0,
+    "maximum": 100000
    }
   }
  },
@@ -145,7 +155,9 @@
    "findings",
    "finding",
    "markdown",
-   "relations"
+   "relations",
+   "critics",
+   "next"
   ],
   "properties": {
    "ok": {
@@ -394,6 +406,57 @@
       }
      }
     }
+   },
+   "critics": {
+    "type": [
+     "array",
+     "null"
+    ],
+    "items": {
+     "type": "object",
+     "additionalProperties": false,
+     "required": [
+      "id",
+      "cycle",
+      "critic",
+      "severity",
+      "fid",
+      "text",
+      "status"
+     ],
+     "properties": {
+      "id": {
+       "type": "string"
+      },
+      "cycle": {
+       "type": "integer"
+      },
+      "critic": {
+       "type": "string"
+      },
+      "severity": {
+       "type": "string"
+      },
+      "fid": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "text": {
+       "type": "string"
+      },
+      "status": {
+       "type": "string"
+      }
+     }
+    }
+   },
+   "next": {
+    "type": [
+     "integer",
+     "null"
+    ]
    }
   }
  }

@@ -170,12 +170,18 @@ func (e *Engine) committeeTool(rt *agent.Runtime, r *run) agent.Tool {
 		if err := e.write(ctx, id, kCycle, fmt.Sprint(n), cy, false); err != nil {
 			return nil, b.Spent(), err
 		}
-		list := []map[string]any{}
-		for _, f := range found {
-			list = append(list, map[string]any{"id": f.ID, "critic": f.Critic, "severity": f.Severity, "fid": nilIf(f.FID), "text": f.Text})
-		}
-		return map[string]any{"cycle": n, "findings": list}, b.Spent(), nil
+		return criticPage(n, found), b.Spent(), nil
 	}}
+}
+
+// criticPage is committee's answer: one page of the cycle's findings (the rest: ledger op critics).
+func criticPage(n int, found []Critic) map[string]any {
+	list := []map[string]any{}
+	for _, f := range found {
+		list = append(list, map[string]any{"id": f.ID, "critic": f.Critic, "severity": f.Severity, "fid": nilIf(f.FID), "text": f.Text})
+	}
+	pg := agent.NewPage()
+	return map[string]any{"cycle": n, "findings": agent.Take(pg, list), "truncated": pg.Truncated}
 }
 
 func first(s []string) string {

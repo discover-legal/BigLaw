@@ -14,16 +14,16 @@ import (
 )
 
 // TestAllocationsMatchSpec: the shares at 30, 150 and 400 calls (DESIGN § Budgets: at 150, plan ≤
-// 10 with 3 the usual, sweep 52, targeted evidence 14 and the coverage pass 9 of the evidence share,
+// 10 with 3 the usual, sweep 58, targeted evidence 8 and the coverage pass 9 of the evidence share,
 // draft 22, two cycles of 20, reserve + meta 8).
 func TestAllocationsMatchSpec(t *testing.T) {
 	for _, c := range []struct {
 		calls int
 		want  Allocation
 	}{
-		{30, Allocation{Plan: 3, Evidence: 15, Sweep: 10, Cover: 1, Draft: 4, Cycle: 6, Critics: [3]int{2, 2, 2}, Reserve: 5, Meta: 3, FixMin: 3, Calls: 30, USD: 5, CycleUSD: 1}},
-		{150, Allocation{Plan: 10, Evidence: 75, Sweep: 52, Cover: 9, Draft: 22, Cycle: 20, Critics: [3]int{8, 8, 4}, Reserve: 5, Meta: 3, FixMin: 3, Calls: 150, USD: 5, CycleUSD: 1}},
-		{400, Allocation{Plan: 28, Evidence: 200, Sweep: 140, Cover: 24, Draft: 60, Cycle: 20, Critics: [3]int{8, 8, 4}, Reserve: 5, Meta: 3, FixMin: 3, Calls: 400, USD: 5, CycleUSD: 1}},
+		{30, Allocation{Plan: 3, Evidence: 15, Sweep: 11, Cover: 1, Draft: 4, Cycle: 6, Critics: [3]int{2, 2, 2}, Reserve: 5, Meta: 3, FixMin: 3, Calls: 30, USD: 5, CycleUSD: 1}},
+		{150, Allocation{Plan: 10, Evidence: 75, Sweep: 58, Cover: 9, Draft: 22, Cycle: 20, Critics: [3]int{8, 8, 4}, Reserve: 5, Meta: 3, FixMin: 3, Calls: 150, USD: 5, CycleUSD: 1}},
+		{400, Allocation{Plan: 28, Evidence: 200, Sweep: 156, Cover: 24, Draft: 60, Cycle: 20, Critics: [3]int{8, 8, 4}, Reserve: 5, Meta: 3, FixMin: 3, Calls: 400, USD: 5, CycleUSD: 1}},
 	} {
 		a := Allocate(c.calls, 5)
 		if a != c.want {
@@ -372,7 +372,7 @@ func costly(r model.Reply, usd float64) model.Reply {
 }
 
 // TestPhaseSharesHoldInUSD (bench: a $1 run's sweep spent the whole budget before drafting, so the
-// forced finish delivered no section): on a USD-bound run the sweep stops at its 35% of the USD,
+// forced finish delivered no section): on a USD-bound run the sweep stops at its 39% of the USD,
 // and the drafting share and the committee cycle stay funded.
 func TestPhaseSharesHoldInUSD(t *testing.T) {
 	t.Parallel()
@@ -401,8 +401,8 @@ func TestPhaseSharesHoldInUSD(t *testing.T) {
 	f.step(context.Background())
 	v := f.get(task.ID)
 	sw, ds, cm := f.outputs(v.ID, "sweep"), f.outputs(v.ID, "draft_section"), f.outputs(v.ID, "committee")
-	if len(sw) != 2 || !strings.Contains(sw[0], `"visited":7`) || !strings.Contains(sw[0], `"incomplete":true`) ||
-		!strings.HasPrefix(sw[1], "refused") || !strings.Contains(sw[1], "of its 52 calls ($0.70 of $0.69)") { // P4 refuses on USD: 7 of 52 calls spent
+	if len(sw) != 2 || !strings.Contains(sw[0], `"visited":8`) || !strings.Contains(sw[0], `"incomplete":true`) ||
+		!strings.HasPrefix(sw[1], "refused") || !strings.Contains(sw[1], "of its 58 calls ($0.80 of $0.77)") { // P4 refuses on USD: 8 of 58 calls spent
 		t.Fatalf("sweep %q", sw)
 	}
 	if len(ds) != 1 || !strings.HasPrefix(ds[0], "committed") || len(cm) != 1 || strings.Contains(cm[0], "did not return") || stop(v) != "awaiting_gate/finished" {
@@ -443,7 +443,7 @@ func TestCommitteeAlwaysReviewsTheLastDraft(t *testing.T) {
 // is free again); funded() counts it as kept too.
 func TestCoverageShareKept(t *testing.T) {
 	a := Allocate(150, 5)
-	if a.Cover != 9 || a.share("extract_facts", "evidence") != 75-9 || a.share("sweep", "evidence") != 52 {
+	if a.Cover != 9 || a.share("extract_facts", "evidence") != 75-9 || a.share("sweep", "evidence") != 58 {
 		t.Fatalf("cover %d, lead evidence %d", a.Cover, a.share("extract_facts", "evidence"))
 	}
 	r := &run{e: &Engine{cfg: Config{BudgetCalls: 150, BudgetUSD: 5}}, b: agent.NewBudget(150, 5, 0)}
