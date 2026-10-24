@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/discover-legal/BigLaw/internal/analysis"
 	"github.com/discover-legal/BigLaw/internal/model"
 )
 
@@ -109,14 +110,19 @@ func TestRendererUsesDrafterHandleSet(t *testing.T) {
 	}
 }
 
-// TestCurrencyFromQuote (4a r2 L2): a money value's currency is the symbol its quote puts beside
-// it, not another figure's; none shown is "" (USD).
+// TestCurrencyFromQuote (4a r2 L2): a money value's currency is the one its quote states with that
+// figure, not another figure's (lab-r4 r3: read by the figure parser); a figure it does not state
+// is not admitted.
 func TestCurrencyFromQuote(t *testing.T) {
 	t.Parallel()
 	q := "A fee of €1,200 and $5 per page, or 40 CHF, plus £30."
-	for _, c := range [][2]string{{"1,200", "EUR"}, {"5", ""}, {"40", "CHF"}, {"£30", "GBP"}, {"7", ""}} {
-		if got := currencyOf(c[0], q); got != c[1] {
-			t.Errorf("currencyOf(%q) = %q, want %q", c[0], got, c[1])
+	for _, c := range [][2]string{{"1,200", "EUR"}, {"5", "USD"}, {"40", "CHF"}, {"£30", "GBP"}, {"7", "-"}} {
+		ok, got, _ := valueStated(analysis.Value{Value: c[0], Class: "Money"}, q)
+		if !ok {
+			got = "-"
+		}
+		if got != c[1] {
+			t.Errorf("currency of %q = %q, want %q", c[0], got, c[1])
 		}
 	}
 }

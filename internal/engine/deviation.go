@@ -198,21 +198,53 @@ func (e *Engine) reviewedPassages(ctx context.Context, c agent.Call, requirement
 const passageTerms = 24
 
 // passageQuery is a requirement's search query: its content words (letters and digits; hyphenated
-// parts apart), each once, in order; past passageTerms, the longest of them (a long word is the more
-// distinctive), still in order. Within docs.MaxQuery bytes.
+// parts apart), each once, in order; past passageTerms, the distinctive ones first (lab-r4 r2 L7):
+// capitalised words not starting a sentence (names, defined terms: "Lee", "Wu", "VAT", "Fee"),
+// numbers (digits or written), then the longest of the rest; still in order. Within docs.MaxQuery
+// bytes.
 func passageQuery(requirement string) string {
 	var ws []string
-	seen := map[string]bool{}
-	for _, w := range strings.FieldsFunc(strings.ToLower(requirement), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) }) {
-		if !seen[w] && !stopWord[w] && (len(w) > 2 || unicode.IsDigit(rune(w[0]))) {
+	seen, key := map[string]bool{}, map[string]bool{}
+	start, prev := true, "" // whether the next word starts a sentence; the word before
+	for i := 0; i < len(requirement); {
+		r, n := utf8.DecodeRuneInString(requirement[i:])
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) {
+			if strings.ContainsRune(".!?:;\n", r) && !(r == '.' && abbrev(prev)) { // "Dr. Lee" goes on
+				start = true
+			}
+			i += n
+			continue
+		}
+		j := i
+		for j < len(requirement) {
+			r, n := utf8.DecodeRuneInString(requirement[j:])
+			if !unicode.IsLetter(r) && !unicode.IsDigit(r) {
+				break
+			}
+			j += n
+		}
+		raw := requirement[i:j]
+		w := strings.ToLower(raw)
+		proper := unicode.IsUpper(r) && (!start || len(raw) > 1 && strings.ToUpper(raw) == raw)
+		number := unicode.IsDigit(r) || numberWord[w]
+		if !seen[w] && !stopWord[w] && (len(w) > 2 || number || proper && len(w) == 2) {
 			seen[w], ws = true, append(ws, w)
 		}
+		if proper || number {
+			key[w] = true
+		}
+		start, i, prev = false, j, raw
 	}
 	if len(ws) > passageTerms {
-		byLen := slices.Clone(ws)
-		slices.SortStableFunc(byLen, func(a, b string) int { return len(b) - len(a) })
+		rank := slices.Clone(ws)
+		slices.SortStableFunc(rank, func(a, b string) int {
+			if key[a] != key[b] {
+				return map[bool]int{true: -1, false: 1}[key[a]]
+			}
+			return len(b) - len(a)
+		})
 		keep := map[string]bool{}
-		for _, w := range byLen[:passageTerms] {
+		for _, w := range rank[:passageTerms] {
 			keep[w] = true
 		}
 		ws = slices.DeleteFunc(ws, func(w string) bool { return !keep[w] })
@@ -223,6 +255,22 @@ func passageQuery(requirement string) string {
 		q = q[:len(q)-n]
 	}
 	return q
+}
+
+// abbrev reports whether a word before a full stop is a title or short abbreviation ("Dr", "Mr", "No").
+func abbrev(w string) bool {
+	r, _ := utf8.DecodeRuneInString(w)
+	return len(w) > 0 && len(w) <= 3 && unicode.IsUpper(r)
+}
+
+// numberWord are written numbers, kept first in a passage query beside digits.
+var numberWord = map[string]bool{}
+
+func init() {
+	for _, w := range strings.Fields(`one two three four five six seven eight nine ten eleven twelve fifteen twenty thirty forty fifty sixty
+		seventy eighty ninety hundred thousand million billion`) {
+		numberWord[w] = true
+	}
 }
 
 // stopWord are words too common to find a passage by.

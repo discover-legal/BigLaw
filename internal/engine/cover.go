@@ -214,6 +214,15 @@ func (e *Engine) coverTool(rt *agent.Runtime, r *run) agent.Tool {
 				res.LeftOut = append(res.LeftOut, f.FID)
 			}
 		}
+		if use, err := e.usable(ctx, c.TaskID); err != nil {
+			return nil, b.Spent(), err
+		} else {
+			for _, f := range use {
+				if len(f.ValueNotes) > 0 {
+					res.Unadmitted = append(res.Unadmitted, f.FID)
+				}
+			}
+		}
 		if _, open, err := e.discrepancies(ctx, c.TaskID); err != nil {
 			return nil, b.Spent(), err
 		} else {
@@ -334,7 +343,8 @@ func memoText(secs []Section) string {
 	return b.String()
 }
 
-// addressed reports whether the memo states both of a conflict's values.
+// addressed reports whether the memo states both of a conflict's values: each as the figure parser
+// reads it, of the conflict's kind (a memo's "3,000,000 shares" never states a usd:3000000 side).
 func addressed(c analysis.Conflict, memo string) bool {
 	ds, ns := figures(memo, true)
 	for _, v := range c.Values {
@@ -344,7 +354,18 @@ func addressed(c analysis.Conflict, memo string) bool {
 			if !slices.ContainsFunc(ds, func(k string) bool { x, _ := analysis.ParseDate(k); return x == d }) {
 				return false
 			}
-		} else if !slices.Contains(ns, canon) {
+			continue
+		}
+		want := figure{class: map[string]figClass{"usd": moneyFig, "n": countFig, "pct": percentFig}[kind]}
+		r, ok := analysis.Number(strings.TrimPrefix(canon, "-")) // the canon has the join's scale applied
+		if !ok {
+			return false
+		}
+		want.amount = r
+		if _, vf := figuresIn(v.Value); len(vf) == 1 && !vf[0].amb {
+			want.cur = vf[0].cur
+		}
+		if !figureStated(want, ns) {
 			return false
 		}
 	}

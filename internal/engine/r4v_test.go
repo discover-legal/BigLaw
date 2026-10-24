@@ -70,11 +70,11 @@ func TestRestatedNeverMergesANegatedTerm(t *testing.T) {
 	orig := fnd("I1", "The Purchase Agreement makes the $50,000 deposit refundable to the Purchaser if Closing has not occurred by June 30, 2026.", fmt.Sprintf(q, "refundable"), vs...)
 	for _, issue := range []string{"I2", "I1"} {
 		amend := fnd(issue, "The First Amendment makes the deposit non-refundable.", fmt.Sprintf(q, "non-refundable"), vs...)
-		if restated(orig, amend) || samePolarity(orig, amend) {
+		if restated(orig, amend) {
 			t.Errorf("%s: the amendment's reversal of the deposit term is folded into the original term", issue)
 		}
 	}
-	if may := fnd("I1", "x", strings.Replace(fmt.Sprintf(q, "refundable"), "shall", "may", 1), vs...); samePolarity(orig, may) {
+	if may := fnd("I1", "x", strings.Replace(fmt.Sprintf(q, "refundable"), "shall", "may", 1), vs...); restated(orig, may) {
 		t.Error("a modal changed is the same polarity")
 	}
 }

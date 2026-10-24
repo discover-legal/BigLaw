@@ -140,6 +140,17 @@ func (e *Engine) committeeTool(rt *agent.Runtime, r *run) agent.Tool {
 				add("prosecute", sev, first(fids), fmt.Sprintf("%s: %q. %s", v.Verdict, v.Claim, v.Why))
 			}
 		}
+		noted := map[string]bool{} // a cited finding's typed values admission dropped, one LOW line each (lab-r4 r3)
+		for _, x := range cl {
+			for _, fid := range x["fids"].([]string) {
+				if j := slices.IndexFunc(fs, func(f Finding) bool { return f.FID == fid }); j >= 0 && !noted[fid] {
+					noted[fid] = true
+					for _, note := range fs[j].ValueNotes {
+						add("admission", "LOW", fid, note)
+					}
+				}
+			}
+		}
 		var rep struct {
 			Answers []struct{ Question, Value, DocumentID, Quote string }
 		}

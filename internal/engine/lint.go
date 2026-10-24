@@ -115,19 +115,19 @@ func dates(text string) (keys []string, spans [][]int) {
 // figures lists the dates (as date keys) and numbers (exact decimals) text states. Dates come
 // first and their digits are not read again as numbers. Single-digit integers ("Rule 6(a)(1)",
 // "paragraph 3") count only when all is set.
-func figures(text string, all bool) (ds, nums []string) {
-	ds, fs := figuresIn(text) // scale read: "$3 million" is 3000000, never 3
+func figures(text string, all bool) (ds []string, nums []figure) {
+	ds, fs := figuresIn(text) // the figure parser: scale, currency, class and ranges read
 	for _, f := range fs {
 		if !all && f.single {
 			continue
 		}
-		nums = append(nums, analysis.Decimal(f.amount))
+		nums = append(nums, f)
 	}
 	return ds, nums
 }
 
 // Untraced lists what text states that ground does not: dates no ground date matches at their
-// common precision, and numbers no ground number equals. derived also accepts a sum or difference
+// common precision, and figures no ground figure traces (traces: amount, class and currency). derived also accepts a sum or difference
 // of two ground numbers, or a sum of three (a total or delta of stated figures, not a new one).
 func Untraced(text, ground string, derived bool) []string {
 	gd, gn := figures(ground, true)
@@ -141,19 +141,18 @@ func Untraced(text, ground string, derived bool) []string {
 	}
 	vals := make([]float64, 0, len(gn))
 	for _, g := range gn {
-		if r, ok := analysis.Number(g); ok && len(vals) < 60 {
-			f, _ := r.Float64()
+		if len(vals) < 60 && !g.amb {
+			f, _ := g.amount.Float64()
 			vals = append(vals, f)
 		}
 	}
 	for _, n := range tn {
-		if slices.Contains(gn, n) {
+		if figureStated(n, gn) {
 			continue
 		}
-		r, _ := analysis.Number(n)
-		f, _ := r.Float64()
-		if !derived || !derivable(f, vals) {
-			out = append(out, n)
+		f, _ := n.amount.Float64()
+		if !derived || n.amb || !derivable(f, vals) {
+			out = append(out, analysis.Decimal(n.amount))
 		}
 	}
 	return out
@@ -190,7 +189,7 @@ func covered(value, ground string) bool {
 		}
 	}
 	for _, n := range vn {
-		if !slices.Contains(gn, n) {
+		if !figureStated(n, gn) {
 			return false
 		}
 	}
@@ -336,7 +335,7 @@ func hint(n string, hs []Fig, usable map[string]Finding, cited map[string]bool) 
 	states := func(text string) bool {
 		ds, ns := figures(text, true)
 		d, isDate := analysis.ParseDate(n)
-		return !isDate && slices.Contains(ns, n) || isDate && strings.Contains(n, "-") && slices.ContainsFunc(ds, func(k string) bool { x, _ := analysis.ParseDate(k); return x == d })
+		return !isDate && slices.ContainsFunc(ns, func(f figure) bool { return !f.amb && analysis.Decimal(f.amount) == n }) || isDate && strings.Contains(n, "-") && slices.ContainsFunc(ds, func(k string) bool { x, _ := analysis.ParseDate(k); return x == d })
 	}
 	for _, h := range hs { // a worksheet's value is traced already, so this is a finding's handle
 		if h.FID != "" && states(h.Value) {

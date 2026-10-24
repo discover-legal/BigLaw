@@ -11,10 +11,8 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"regexp"
 	"slices"
 	"strings"
-	"unicode"
 
 	"github.com/discover-legal/BigLaw/internal/agent"
 	"github.com/discover-legal/BigLaw/internal/analysis"
@@ -399,20 +397,6 @@ func (e *Engine) verify(ctx context.Context, rt *agent.Runtime, c agent.Call, b 
 	return cit, nil
 }
 
-var currencyIn = [][2]string{{"£", "GBP"}, {"€", "EUR"}, {"¥", "JPY"}, {"CHF", "CHF"}, {"C$", "CAD"}, {"A$", "AUD"}}
-
-// currencyOf is a money value's currency as its quote shows it: a symbol in the value, else just
-// before or after the value where the quote states it; "" (USD) when the quote shows none.
-func currencyOf(value, quote string) string {
-	at := strings.Index(quote, value)
-	for _, c := range currencyIn {
-		if strings.Contains(value, c[0]) || at >= 0 && strings.Contains(quote[max(0, at-4):min(len(quote), at+len(value)+4)], c[0]) {
-			return c[1]
-		}
-	}
-	return ""
-}
-
 // admit checks a subagent's findings and records them (G2): every quote through the ladder (the
 // finding verifies only when all of them do; otherwise it is quarantined), each value kept only
 // when its own quote states it, each relation typed by BELO-lite, near-duplicates merged into the
@@ -457,18 +441,23 @@ func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 			}
 		}
 		f.Verified = len(f.Citations) > 0 && !slices.ContainsFunc(f.Citations, func(c Citation) bool { return c.Method == "none" })
-		for _, v := range d.Values {
-			if valueInQuote(v, text.String()) {
-				if analysis.ClassOf(v) == "Money" && v.Unit == "" {
-					v.Unit = currencyOf(v.Value, text.String())
-				}
-				f.Values = append(f.Values, v)
+		for _, v := range d.Values { // a value its quotes do not state is dropped, never silently (lab-r4 r3)
+			ok, cur, why := valueStated(v, text.String())
+			if !ok {
+				note := fmt.Sprintf("value %q (%s) not admitted: %s", v.Value, cmpStr(v.Metric != "", v.Metric, "no metric"), why)
+				f.ValueNotes = append(f.ValueNotes, note)
+				out.Notes = append(out.Notes, note)
+				continue
 			}
+			if analysis.ClassOf(v) == "Money" && v.Unit == "" && cur != "USD" {
+				v.Unit = cur // the currency the quote states it in; "" is USD
+			}
+			f.Values = append(f.Values, v)
 		}
 		f.Values = append(f.Values, claimSums(f.Claim, text.String(), f.Values)...)
 		f.Relations, _ = analysis.Relations(d.Entities, d.Relations)
 		if i := slices.IndexFunc(all, func(x Finding) bool {
-			return x.Verified && f.Verified && samePolarity(x, f) && restated(x, f)
+			return x.Verified && f.Verified && restated(x, f)
 		}); i >= 0 {
 			for _, c := range f.Citations {
 				if !slices.ContainsFunc(all[i].Citations, func(x Citation) bool { return x.DocumentID == c.DocumentID && x.Quote == c.Quote }) {
@@ -503,7 +492,8 @@ func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 
 // restated reports whether f is an exact duplicate of the admitted x (bench5: the referral's
 // figures restated page after page, and the lead's extract_facts re-extracting what the sweep had):
-// one issue, the same quotes (normalised: case and white space), and the same typed values (entity,
+// one issue, the same quotes in the same documents (normalised: case and white space; identical
+// lines of two invoices are two findings, lab-r4 r2 L4), and the same typed values (entity,
 // metric and figure, each normalised). Nothing else merges: a near restatement (a reversed term, a
 // mirrored party's clause, an amendment) stays a finding of its own, which coverage and the drafters
 // can cite beside the first (lab-r4 verifier H2, M1).
@@ -523,7 +513,7 @@ func restated(x, f Finding) bool {
 	quotes := func(f Finding) []string {
 		var out []string
 		for _, q := range f.Quotes {
-			out = append(out, strings.ToLower(norm(q.Quote)))
+			out = append(out, q.DocumentID+"|"+strings.ToLower(norm(q.Quote)))
 		}
 		slices.Sort(out)
 		return slices.Compact(out)
@@ -532,37 +522,13 @@ func restated(x, f Finding) bool {
 		!(salientFinding(f) && !salientFinding(x)) // a finding that says a breach is never folded into one that does not
 }
 
-// samePolarity reports whether two findings' quotes hold the same negations and modals: a merge never
-// folds "shall be non-refundable" into "shall be refundable", or "may" into "shall".
-func samePolarity(x, f Finding) bool {
-	words := func(f Finding) []string {
-		var out []string
-		for _, q := range f.Quotes {
-			for _, w := range strings.FieldsFunc(strings.ToLower(q.Quote), func(r rune) bool { return !unicode.IsLetter(r) }) {
-				if polar[w] {
-					out = append(out, w)
-				}
-			}
-		}
-		slices.Sort(out)
-		return slices.Compact(out)
-	}
-	return slices.Equal(words(x), words(f))
-}
-
-// polar are the negations and modals (a word's letters: "non-refundable" holds "non", "doesn't" "t").
-var polar = map[string]bool{"not": true, "no": true, "nor": true, "never": true, "none": true, "neither": true, "without": true, "cannot": true, "t": true, "non": true,
-	"shall": true, "may": true, "must": true, "will": true, "should": true, "would": true, "could": true, "might": true}
-
-// claimMoney is a sum of money as a claim states it: a currency sign and a figure, an optional scale.
-var claimMoney = regexp.MustCompile(`[$£€¥]\s?\d[\d,]*(?:\.\d+)?(?:\s+(?:million|billion))?`)
-
 // claimSums are the sums of money a claim states and its verified quotes state too, which no typed
 // value carries (bench5 SEC F388: "payments totaling $103,800.00", the figure in its own quote, typed
 // nowhere, so the $92,600 vs $103,800 conflict had nothing to pair). Each is kept untyped: no entity,
 // no metric (so the label join never compares it; the near join does, by its quotes' words). A sum is
-// kept only when a quote states it as a sum, its scale and currency with it (quoteSums): a bare "3"
-// ("Section 3") never stands for "$3 million" (lab-r4 verifier H1).
+// a US-dollar figure of the claim's (the join's canon), kept only when a quote figure admits it under
+// the typed-value rule (admits): its currency, sign and amount, scale read; a bare "3" ("Section 3")
+// never stands for "$3 million" (lab-r4 verifier H1), a euro sum or a share count never for dollars.
 func claimSums(claim, quotes string, have []analysis.Value) []analysis.Value {
 	var out []analysis.Value
 	canon := func(v analysis.Value) string { _, c, _, _ := analysis.Canon(v); return c }
@@ -570,32 +536,22 @@ func claimSums(claim, quotes string, have []analysis.Value) []analysis.Value {
 	for _, v := range have {
 		seen[canon(v)] = true
 	}
-	stated := quoteSums(quotes)
-	for _, s := range claimMoney.FindAllString(claim, -1) {
-		v := analysis.Value{Value: s, Class: "Money"}
-		if c := canon(v); c != "" && !seen[c] && stated[c] {
-			seen[c] = true
-			out = append(out, v)
+	_, qs := figuresIn(quotes)
+	named := currenciesNamed(quotes)
+	_, cs := figuresIn(claim)
+	for _, f := range cs {
+		if f.class != moneyFig || f.cur != "USD" || f.amb {
+			continue
 		}
+		v := analysis.Value{Value: strings.TrimSpace(claim[f.start:f.end]), Class: "Money"}
+		c := canon(v)
+		if c == "" || seen[c] || !slices.ContainsFunc(qs, func(q figure) bool { _, ok, _ := admits(f, moneyFig, q, named); return ok }) {
+			continue
+		}
+		seen[c] = true
+		out = append(out, v)
 	}
 	return out
 }
-
-// quoteSums are the US-dollar sums the quotes state, by Canon (figure.money: a dollar sign or code,
-// a scale word, or its thousands grouped with no noun of another unit after it); another currency's
-// sum, a bare number ("Section 3", "30 days") or a count ("3,000,000 shares") is none.
-func quoteSums(quotes string) map[string]bool {
-	out := map[string]bool{}
-	_, fs := figuresIn(quotes)
-	for _, f := range fs {
-		if f.money() && (f.cur == "" || f.cur == "USD") {
-			out["usd:"+analysis.Decimal(f.amount)] = true
-		}
-	}
-	return out
-}
-
-// groupedFigure is a figure written with its thousands grouped, whole ("4,217", "103,800.00").
-var groupedFigure = regexp.MustCompile(`^\d{1,3}(?:,\d{3})+(?:\.\d+)?$`)
 
 func norm(s string) string { return strings.Join(strings.Fields(s), " ") }

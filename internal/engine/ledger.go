@@ -66,6 +66,9 @@ type Finding struct {
 	// gated for a lawyer's review like a low-confidence transcript.
 	Check *SectionCheck `json:"sectionCheck,omitempty"`
 	Low   bool          `json:"lowConfidence,omitempty"`
+	// ValueNotes are the typed values admission dropped, and why (valueStated): the committee and
+	// coverage see them (lab-r4 r3: a dropped value is never silent).
+	ValueNotes []string `json:"valueNotes,omitempty"`
 }
 
 // Analysis is analyze_issue's answer on one issue (rule, application, conclusion): it goes to the
@@ -83,6 +86,7 @@ type Cover struct {
 	Missing     []string `json:"missing"`
 	LeftOut     []string `json:"leftOut"`
 	Unaddressed int      `json:"unaddressed"`
+	Unadmitted  []string `json:"unadmitted,omitempty"` // usable findings with a typed value admission dropped (Finding.ValueNotes)
 }
 
 // Critic is one committee finding, open until the lead resolves it (fixed or disclosed).
