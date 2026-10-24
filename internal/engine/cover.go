@@ -137,16 +137,22 @@ func (e *Engine) coverTool(rt *agent.Runtime, r *run) agent.Tool {
 		}
 		me := agent.Agent{Name: "cover", Visible: []string{"analyze_issue", "draft_section"}}
 		call := agent.Call{TaskID: c.TaskID, DocumentIDs: c.DocumentIDs}
-		calls, usd := b.Remaining() // the figure judge's share of the pass (lab-r4 r8 L3), for the conflicts it must place (judge.go)
-		jg, jerr := b.Grant(judgeCalls(calls), judgeShare*usd, agent.LevelWork)
+		calls, usd := b.Remaining() // the figure judge's share of the pass (lab-r4 r8 L3), granted only for the pairs it has to judge (r9 L4)
+		jcalls, jusd := judgeCalls(calls), judgeShare*usd
 		judge := func() error {
+			n, err := e.pendingPairs(ctx, c.TaskID, analysis.CandidateLimit(jcalls))
+			if err != nil || n == 0 || jcalls == 0 {
+				return err
+			}
+			jg, jerr := b.Grant(min(jcalls, (n+analysis.JudgePairs-1)/analysis.JudgePairs), jusd, agent.LevelWork)
 			if jerr != nil {
 				return nil
 			}
-			return e.judgeJoin(ctx, rt, call, jg, "cover")
-		}
-		if jerr == nil {
 			defer jg.Close()
+			err = e.judgeJoin(ctx, rt, call, jg, "cover")
+			sp := jg.Spent()
+			jcalls, jusd = max(0, jcalls-sp.Calls), max(0, jusd-sp.USD)
+			return err
 		}
 		if err := judge(); err != nil {
 			return nil, b.Spent(), err
@@ -191,9 +197,6 @@ func (e *Engine) coverTool(rt *agent.Runtime, r *run) agent.Tool {
 			if err := judge(); err != nil {
 				return nil, b.Spent(), err
 			}
-		}
-		if jerr == nil {
-			jg.Close() // what it left, back for the placements
 		}
 		for round := 0; failed == nil && round < placeRounds; round++ { // then the left-out evidence: one redraft per issue that has some, a round at a time
 			ids, place, perr := e.placements(ctx, c.TaskID)
@@ -466,12 +469,12 @@ func (e *Engine) joined(ctx context.Context, taskID string) (joined, error) {
 	if err != nil {
 		return joined{}, err
 	}
-	cands, dropped := joinCands(use, e.judgeLimit(), judged)
+	cands, dropped, uncovered := joinCands(use, e.judgeLimit(), judged)
 	vs, err := e.verdicts(ctx, taskID, cands)
 	if err != nil {
 		return joined{}, err
 	}
-	j := joined{beyond: dropped}
+	j := joined{beyond: dropped, uncovered: uncovered}
 	for _, x := range cands {
 		switch v, ok := vs[x.ID]; {
 		case !ok:

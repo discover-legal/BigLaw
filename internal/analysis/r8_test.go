@@ -106,10 +106,12 @@ func TestHeaderScaleOnlyOverTableRows(t *testing.T) {
 		applied    bool
 	}{
 		{"Segment revenue (in millions)\nNorth\t4.2\nSouth\t3.9", "in millions", 2, true},
-		{"Segment revenue (in millions)\n| North | 4.2 |", "in millions", 1, true},
-		{"Revenue grew to $4.2 million in 2023.\nThe filing fee is $500 per application.", "million", 3, false}, // a sentence
-		{"Revenue grew to $4.2 million\nFee\t500", "million", 2, false},                                         // the first line's own figure's scale
-		{"Amounts in millions\nThe filing fee is 500 per application.", "in millions", 1, false},                // a prose line below
+		{"Segment revenue (in millions)\n| North | 4.2 |\n| South | 3.9 |", "in millions", 1, true},
+		{"Segment revenue (in millions)\nNorth\t4.2", "in millions", 1, false},                                                                              // one row is no table
+		{"Amounts in millions\nThe filing fee, payable on filing, is $500 per application.\nThe late fee, payable later, is $50.", "in millions", 1, false}, // prose with commas (r9 L3)
+		{"Revenue grew to $4.2 million in 2023.\nThe filing fee is $500 per application.", "million", 3, false},                                             // a sentence
+		{"Revenue grew to $4.2 million\nFee\t500", "million", 2, false},                                                                                     // the first line's own figure's scale
+		{"Amounts in millions\nThe filing fee is 500 per application.", "in millions", 1, false},                                                            // a prose line below
 	} {
 		if r := read(c.text, c.from, c.span); (r.Scale == "1000000" && !r.Unclear) != c.applied {
 			t.Errorf("%q span %d: %+v, applied want %v", c.text, c.span, r, c.applied)
@@ -117,36 +119,52 @@ func TestHeaderScaleOnlyOverTableRows(t *testing.T) {
 	}
 }
 
-// H1: a duration carries its unit, a number is a bare number or multiple; a duration with no unit, or
-// a unit on another kind, is unclear.
+// H1 (r8, r9): a duration carries its unit and a number its multiple's sign, each with the words beside
+// it that state them; a duration with no unit, a unit on another kind, or a unit or sign no adjacent
+// words state ("Section 30" read as 30 days, "Section 12" as a multiple) is unclear.
 func TestDurationAndNumberLabels(t *testing.T) {
-	ps := []Passage{PassageOf("q1", "within 21 days, at 1.5x, under Section 30")}
-	days, none := "days", "fortnights"
-	l1 := lbl("q1.s1", KindDuration, "none", "1", nil, "none", "positive")
-	l1.Unit = &days
-	l2 := lbl("q1.s2", KindNumber, "none", "1", nil, ".", "positive")
-	l3 := lbl("q1.s3", KindDuration, "none", "1", nil, "none", "positive")
-	l3.Unit = &none
-	rs, _ := ReadLabels(ps, []Label{l1, l2, l3})
-	if r := rs["q1.s1"]; r.Kind != KindDuration || r.Unit != "days" || r.Unclear {
-		t.Errorf("21 days: %+v", r)
+	ps := []Passage{PassageOf("q1", "within 21 days, at 1.5x, under Section 30, thirty (30) days, a 21-day period, x 2")}
+	label := func(span, kind, unit, from string) Label {
+		l := lbl(span, kind, "none", "1", nil, map[bool]string{true: ".", false: "none"}[span == "q1.s2"], "positive")
+		if unit != "" {
+			l.Unit = &unit
+		}
+		if from != "" {
+			l.UnitFrom = &from
+		}
+		return l
 	}
-	if r := rs["q1.s2"]; r.Kind != KindNumber || !r.Clear() || r.Amount != "1.5" {
-		t.Errorf("1.5x: %+v", r)
-	}
-	if r := rs["q1.s3"]; !r.Unclear {
-		t.Errorf("a duration in an unknown unit: %+v", r)
-	}
-	l2.Unit = &days
-	if rs, _ := ReadLabels(ps, []Label{l2}); !rs["q1.s2"].Unclear {
-		t.Errorf("a unit on a number: %+v", rs["q1.s2"])
+	for _, c := range []struct {
+		l     Label
+		clear bool
+	}{
+		{label("q1.s1", KindDuration, "days", "days"), true},
+		{label("q1.s2", KindNumber, "", "x"), true},
+		{label("q1.s3", KindDuration, "days", "days"), false},       // "Section 30": the words after it are "thirty"
+		{label("q1.s3", KindNumber, "", "Section"), false},          // a word before it is no sign
+		{label("q1.s4", KindDuration, "days", "days"), true},        // "(30) days"
+		{label("q1.s5", KindDuration, "days", "day"), true},         // "21-day"
+		{label("q1.s6", KindNumber, "", "x"), true},                 // "x 2"
+		{label("q1.s1", KindDuration, "fortnights", "days"), false}, // no such unit
+		{label("q1.s1", KindDuration, "days", ""), false},           // no words
+		{label("q1.s2", KindNumber, "days", "x"), false},            // a unit on a number
+	} {
+		rs, _ := ReadLabels(ps, []Label{c.l})
+		r := rs[c.l.Span]
+		if r.Unclear == c.clear {
+			t.Errorf("%s %s %v from %v: %+v", c.l.Span, c.l.Kind, deref(c.l.Unit), deref(c.l.UnitFrom), r)
+		}
+		if c.clear && (r.UnitFrom == "" || c.l.Kind == KindDuration && r.Unit == "") {
+			t.Errorf("%s: unit or its words not kept: %+v", c.l.Span, r)
+		}
 	}
 }
 
 // H1 (E1's one-year check): date_add takes a period in weeks, months or years.
 func TestDateAddPeriods(t *testing.T) {
 	lit := func(x, unit string) Operand { return Operand{Literal: &x, Unit: &unit} }
-	for _, c := range []struct{ n, unit, want string }{{"1", "years", "2026-03-31"}, {"1", "year", "2026-03-31"}, {"2", "months", "2025-05-31"}, {"-2", "weeks", "2025-03-17"}, {"21", "days", "2025-04-21"}} {
+	for _, c := range []struct{ n, unit, want string }{{"1", "years", "2026-03-31"}, {"1", "year", "2026-03-31"}, {"2", "months", "2025-05-31"}, {"-2", "weeks", "2025-03-17"}, {"21", "days", "2025-04-21"},
+		{"1", "months", "2025-04-30"}, {"-1", "months", "2025-02-28"}, {"11", "months", "2026-02-28"}, {"-13", "months", "2024-02-29"}} {
 		w, err := Calc(nil, "date_add", []Operand{lit("2025-03-31", "date"), lit(c.n, c.unit)}, nil)
 		if err != nil || w.Result != c.want {
 			t.Errorf("%s %s: %s (%v), want %s", c.n, c.unit, w.Result, err, c.want)
@@ -154,5 +172,19 @@ func TestDateAddPeriods(t *testing.T) {
 	}
 	if _, err := Calc(nil, "business_days", []Operand{lit("2025-03-31", "date"), lit("1", "years")}, nil); err == nil {
 		t.Error("business_days of years")
+	}
+}
+
+// r9 M1: a month or year on from a day the target month lacks is that month's last day, never an
+// overflow into the next (Go's AddDate gave March 2 for a month on from January 31, 2024).
+func TestDateAddClampsToMonthEnd(t *testing.T) {
+	lit := func(x, unit string) Operand { return Operand{Literal: &x, Unit: &unit} }
+	for _, c := range []struct{ from, n, unit, want string }{
+		{"2024-01-31", "1", "months", "2024-02-29"}, {"2023-01-31", "1", "months", "2023-02-28"}, {"2024-02-29", "1", "years", "2025-02-28"},
+		{"2024-02-29", "4", "years", "2028-02-29"}, {"2024-03-31", "-1", "months", "2024-02-29"}, {"2024-01-15", "1", "months", "2024-02-15"}, {"2024-12-31", "2", "months", "2025-02-28"},
+	} {
+		if w, err := Calc(nil, "date_add", []Operand{lit(c.from, "date"), lit(c.n, c.unit)}, nil); err != nil || w.Result != c.want {
+			t.Errorf("%s + %s %s: %s (%v), want %s", c.from, c.n, c.unit, w.Result, err, c.want)
+		}
 	}
 }

@@ -238,7 +238,10 @@ func (f finish) check(ctx context.Context, limits []limitation) (report, error) 
 		met := false
 		if k >= 0 {
 			texts[is.ID] = substituteOutsideQuotes(secs[k].Markdown, secs[k].Handles)
-			lines, limited, gate := lintLimited(is.ID, secs[k], byFID, sheets)
+			lines, limited, gate, computed := lintLimited(is.ID, secs[k], byFID, sheets)
+			if len(computed) > 0 { // every written-out figure a worksheet over typed inputs traces, with the words its inputs rest on (lab-r4 r9 H1)
+				rep.limits = append(rep.limits, fmt.Sprintf("Figures: in the section on %s, computed from typed inputs: %s; check each input against the cited words it rests on.", is.ID, strings.Join(computed, "; ")))
+			}
 			rep.Lint = append(rep.Lint, lines...)
 			for _, fid := range slices.Sorted(maps.Keys(gate)) { // a memo figure traced only as written to its never-read quote, or at another scale: a lawyer confirms it (r6 M2, r7 M4)
 				if x := byFID[fid]; !x.Low {

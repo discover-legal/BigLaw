@@ -220,10 +220,15 @@ func oracleLabel(p Passage, s analysis.Span, all []Passage, parties []string) an
 		}
 		l.Kind = analysis.KindOther // hours: no duration unit
 		if u != "" {
-			l.Kind, l.Unit = analysis.KindDuration, &u
+			from := strings.TrimSpace(m[1] + m[2]) // the words beside it, as written
+			l.Kind, l.Unit, l.UnitFrom = analysis.KindDuration, &u, &from
 		}
-	case oracleMult.MatchString(after) || oracleTimes.MatchString(before):
-		l.Kind = analysis.KindNumber
+	case oracleMult.MatchString(after):
+		from := strings.TrimSpace(strings.TrimLeft(oracleMult.FindString(after), ")"))
+		l.Kind, l.UnitFrom = analysis.KindNumber, &from
+	case oracleTimes.MatchString(before):
+		from := strings.TrimSpace(oracleTimes.FindString(before))
+		l.Kind, l.UnitFrom = analysis.KindNumber, &from
 	case oracleNoun.MatchString(after):
 		l.Kind = analysis.KindCount
 	case oracleMonth.MatchString(before) || oracleYear.MatchString(s.Text) && !strings.HasSuffix(before, "$"):

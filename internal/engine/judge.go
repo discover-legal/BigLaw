@@ -346,17 +346,18 @@ type joined struct {
 	all, open []analysis.Conflict
 	unclear   []analysis.Candidate
 	unjudged  int
-	beyond    int
+	beyond    int // pairs never put to the judge
+	uncovered int // figures none of whose counterparts were
 }
 
 // joinCands are the join's candidates over usable findings: those judged already, then up to limit
 // in analysis.Candidates' order.
-func joinCands(use []Finding, limit int, judged func(analysis.Candidate) bool) ([]analysis.Candidate, int) {
+func joinCands(use []Finding, limit int, judged func(analysis.Candidate) bool) ([]analysis.Candidate, int, int) {
 	an := make([]analysis.Finding, 0, len(use))
 	for _, f := range use {
 		an = append(an, f.Finding)
 	}
-	return analysis.Candidates(an, limit, judged)
+	return analysis.CandidatesCover(an, limit, judged)
 }
 
 // judgeShare is the part of finish's grant, and of the coverage pass's share, its own join may spend
@@ -382,10 +383,28 @@ func (e *Engine) judgeJoin(ctx context.Context, rt *agent.Runtime, c agent.Call,
 		return err
 	}
 	calls, _ := b.Remaining()
-	if cands, _ := joinCands(use, analysis.CandidateLimit(calls), judged); len(cands) > 0 {
+	if cands, _, _ := joinCands(use, analysis.CandidateLimit(calls), judged); len(cands) > 0 {
 		_, err = e.judge(ctx, rt, c, b, caller, cands)
 	}
 	return err
+}
+
+// pendingPairs is how many of the task's first limit candidates have no verdict yet: what a judge
+// call would be granted for.
+func (e *Engine) pendingPairs(ctx context.Context, taskID string, limit int) (int, error) {
+	use, err := e.usable(ctx, taskID)
+	judged, jerr := e.judgedSet(ctx, taskID)
+	if err = cmpErr(err, jerr); err != nil {
+		return 0, err
+	}
+	cands, _, _ := joinCands(use, limit, judged)
+	n := 0
+	for _, c := range cands {
+		if !judged(c) {
+			n++
+		}
+	}
+	return n, nil
 }
 
 // lines are the join's disclosures: possible conflicts the judge could not decide (low confidence,
@@ -405,9 +424,9 @@ func (j joined) lines() []string {
 		out = append(out, fmt.Sprintf("Figures: %d %s of figures that two documents state differently, among those the join puts to the figure judge first (each figure's most alike and closest counterparts), %s not judged (the budget could not fund the judge, or its answer was unusable), so a conflict among them may be missing.",
 			j.unjudged, plural(j.unjudged, "pair", "pairs"), plural(j.unjudged, "was", "were")))
 	}
-	if j.beyond > 0 {
-		out = append(out, fmt.Sprintf("Figures: past the pairs its budget judges, %d more %s of differing figures in two documents %s never put to the figure judge (each figure's most alike and closest counterparts were asked first).",
-			j.beyond, plural(j.beyond, "pair", "pairs"), plural(j.beyond, "was", "were")))
+	if j.uncovered > 0 { // lab-r4 r9 residual a: the figures left out, not the pairs
+		out = append(out, fmt.Sprintf("Figures: %d %s with a differing figure of the same kind in another document had none of %s counterparts put to the figure judge (%d %s never asked), so a conflict involving %s may be missing.",
+			j.uncovered, plural(j.uncovered, "figure", "figures"), plural(j.uncovered, "its", "their"), j.beyond, plural(j.beyond, "pair was", "pairs were"), plural(j.uncovered, "it", "them")))
 	}
 	return out
 }

@@ -8,7 +8,7 @@
   "figure_context",
   "exact_calc"
  ],
- "description": "Reads what each number in a set of passages measures: for every span id Go found (the digits exactly as written), whether it is money, a count, a percentage, a date, a duration (with its unit), a bare number or multiple, or something else, its currency, the scale stated for it and where, which mark is its decimal point, its sign, whether it is one end of a range, the party it belongs to and its other party (a payer, a landlord, a recipient), what it measures and the period it is for. Go runs it on each finding's verified quotes, typed values and claim, and on each drafted section, and checks every label it gives: a label for a span it was not given is rejected, a scale must come from words of the span's own passage (else it is not applied), and unclear means low confidence, gated for a lawyer. It may read more of a quote's document around it and do exact decimal arithmetic. Do not use it to decide whether a figure is true or to add figures: it labels only the spans it was given.\nExample: {\"findings\": [{\"id\": \"1\", \"parties\": [\"Buyer\", \"Seller\"], \"passages\": [{\"id\": \"1.q1\", \"kind\": \"quote\", \"documentId\": \"3f6c2a9e-0b1d-4c2e-9a7f-5d8e1b2c4a6f\", \"text\": \"The Buyer shall pay a deposit of $250,000 (in thousands: 250).\", \"class\": null, \"unit\": null, \"entity\": null, \"metric\": null, \"spans\": [{\"id\": \"1.q1.s1\", \"text\": \"250,000\"}, {\"id\": \"1.q1.s2\", \"text\": \"250\"}]}, {\"id\": \"1.v1\", \"kind\": \"value\", \"documentId\": null, \"text\": \"$250,000\", \"class\": \"Money\", \"unit\": null, \"entity\": \"Buyer\", \"metric\": \"deposit\", \"spans\": [{\"id\": \"1.v1.s1\", \"text\": \"250,000\"}]}]}]}",
+ "description": "Reads what each number in a set of passages measures: for every span id Go found (the digits exactly as written), whether it is money, a count, a percentage, a date, a duration (with its unit), a bare number or multiple, or something else, its currency, the scale stated for it and where, which mark is its decimal point, its sign, whether it is one end of a range, the party it belongs to and its other party (a payer, a landlord, a recipient), what it measures and the period it is for. Go runs it on each finding's verified quotes, typed values and claim, and on each drafted section, and checks every label it gives: a label for a span it was not given is rejected, a scale must come from words of the span's own passage, and a duration's unit or a multiple's sign from the words beside the span (else the label is unclear), and unclear means low confidence, gated for a lawyer. It may read more of a quote's document around it and do exact decimal arithmetic. Do not use it to decide whether a figure is true or to add figures: it labels only the spans it was given.\nExample: {\"findings\": [{\"id\": \"1\", \"parties\": [\"Buyer\", \"Seller\"], \"passages\": [{\"id\": \"1.q1\", \"kind\": \"quote\", \"documentId\": \"3f6c2a9e-0b1d-4c2e-9a7f-5d8e1b2c4a6f\", \"text\": \"The Buyer shall pay a deposit of $250,000 (in thousands: 250).\", \"class\": null, \"unit\": null, \"entity\": null, \"metric\": null, \"spans\": [{\"id\": \"1.q1.s1\", \"text\": \"250,000\"}, {\"id\": \"1.q1.s2\", \"text\": \"250\"}]}, {\"id\": \"1.v1\", \"kind\": \"value\", \"documentId\": null, \"text\": \"$250,000\", \"class\": \"Money\", \"unit\": null, \"entity\": \"Buyer\", \"metric\": \"deposit\", \"spans\": [{\"id\": \"1.v1.s1\", \"text\": \"250,000\"}]}]}]}",
  "in": {
   "type": "object",
   "additionalProperties": false,
@@ -170,7 +170,8 @@
       "period",
       "typedEntity",
       "counterparty",
-      "unit"
+      "unit",
+      "unitFrom"
      ],
      "properties": {
       "span": {
@@ -284,6 +285,13 @@
         "years",
         null
        ]
+      },
+      "unitFrom": {
+       "type": [
+        "string",
+        "null"
+       ],
+       "maxLength": 40
       }
      }
     }

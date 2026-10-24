@@ -84,6 +84,9 @@ type Label struct {
 	Counterparty *string `json:"counterparty"`
 	// Unit is a duration's unit (one of DurationUnits); null for every other kind.
 	Unit *string `json:"unit"`
+	// UnitFrom is the exact words beside the span that state a duration's unit ("days", "business
+	// days", "year") or make a number a multiple ("x", "times"); null for every other kind.
+	UnitFrom *string `json:"unitFrom"`
 }
 
 // Reading is a checked label: what one span states. It is what consumers read (admission, claimSums,
@@ -106,7 +109,8 @@ type Reading struct {
 	TypedEntity string `json:"typedEntity,omitempty"`
 	// Counterparty is the figure's other party as the reader names it ("" when none or not said).
 	Counterparty string `json:"counterparty,omitempty"`
-	Unit         string `json:"unit,omitempty"` // a duration's unit (DurationUnits)
+	Unit         string `json:"unit,omitempty"`     // a duration's unit (DurationUnits)
+	UnitFrom     string `json:"unitFrom,omitempty"` // the words beside it its unit or multiple comes from
 	RangeWith    string `json:"rangeWith,omitempty"`
 	Unclear      bool   `json:"unclear,omitempty"`
 	Why          string `json:"why,omitempty"` // what made it unclear
@@ -185,15 +189,24 @@ func check(p Passage, s Span, l Label, known func(string) bool) Reading {
 	if r.Kind == KindUnclear {
 		unclear("its kind is unclear")
 	}
-	u := ""
+	u, from := "", ""
 	if l.Unit != nil {
 		u = *l.Unit
 	}
-	switch {
-	case r.Kind == KindDuration && slices.Contains(DurationUnits, u):
-		r.Unit = u
-	case r.Kind == KindDuration:
+	if l.UnitFrom != nil {
+		from = strings.TrimSpace(*l.UnitFrom)
+	}
+	switch { // a duration's unit and a multiple's sign are a number's meaning: cited words beside it, as a scale's (lab-r4 r9 H1)
+	case r.Kind == KindDuration && !slices.Contains(DurationUnits, u):
 		unclear("a duration with no unit")
+	case r.Kind == KindNumber && u != "":
+		unclear("a unit on a figure that is no duration")
+	case r.Kind == KindDuration || r.Kind == KindNumber:
+		if !statesUnit(p.Text, s, from) {
+			unclear("its " + map[bool]string{true: "unit", false: "multiple"}[r.Kind == KindDuration] + " is not stated by words beside it")
+			break
+		}
+		r.Unit, r.UnitFrom = map[bool]string{true: u}[r.Kind == KindDuration], from
 	case u != "":
 		unclear("a unit on a figure that is no duration")
 	}
@@ -317,6 +330,41 @@ func statesScale(text string, s Span, end int, from string) bool {
 	return false
 }
 
+// statesUnit reports whether from is words of text right beside the span s, at word boundaries and
+// not the span itself: right after its digits, past a closing parenthesis or a hyphen ("21 days",
+// "thirty (30) days", "21-day", "1.5x"), or a one-character sign right before them ("x 1.5", "× 1.5"). That is where a
+// duration's unit or a multiple's sign is written; with no such words a reader's duration or number
+// label is unclear (lab-r4 r9 H1: "Section 30" states no unit, "Section 12" no multiple). Which words
+// state which unit is the reader's: Go checks only where they are.
+func statesUnit(text string, s Span, from string) bool {
+	if from == "" || !strings.ContainsFunc(from, func(r rune) bool {
+		return !unicode.IsDigit(r) && !unicode.IsSpace(r) && !unicode.IsPunct(r) || r == '×'
+	}) {
+		return false
+	}
+	low, f := asciiLower(text), asciiLower(from)
+	for i := 0; i+len(f) <= len(low); {
+		k := strings.Index(low[i:], f)
+		if k < 0 {
+			return false
+		}
+		a, b := i+k, i+k+len(f)
+		i = a + 1
+		if a < s.End && s.Start < b {
+			continue
+		}
+		edge := func(r rune, word bool) bool { return !word || !isWordRune(r) }
+		before := a == 0 || a == s.End || edge(lastRune(low[:a]), isWordRune(firstRune(f)))
+		after := b == len(low) || b == s.Start || edge(firstRune(low[b:]), isWordRune(lastRune(f)))
+		right := a >= s.End && strings.Trim(text[s.End:a], " \t()-") == ""
+		left := b <= s.Start && strings.Trim(text[b:s.Start], " \t(") == "" && utf8.RuneCountInString(f) == 1 // a sign before a factor: "x 1.5", "× 1.5", never a word ("Section 12")
+		if before && after && (right || left) {
+			return true
+		}
+	}
+	return false
+}
+
 // headerLine reports whether a passage's first line (ending at end) is a header whose words at a give
 // the rows below it their scale (lab-r4 r8 M2): no sentence in it (no sentence end, not ending in a
 // full stop), and the words not a figure's own scale on that line ("grew to $4.2 million").
@@ -332,16 +380,28 @@ func headerLine(text string, end, a int) bool {
 	})
 }
 
-// tableRow reports whether the line holding offset at is a table's row: cells split by tabs, "|" or
-// commas (two or more), as a header's scale governs.
+// tableRow reports whether the line holding offset at is a table's row (lab-r4 r8 M2, r9 L3): it and
+// a row next to it (not the passage's first line, the header) split into cells the same way, by as
+// many tabs, as many "|", or as many commas (two or more), neither of them a sentence.
 func tableRow(text string, at int) bool {
-	lo := strings.LastIndexByte(text[:at], '\n') + 1
-	hi := len(text)
-	if i := strings.IndexByte(text[at:], '\n'); i >= 0 {
-		hi = at + i
+	lines := strings.Split(text, "\n")
+	n := strings.Count(text[:at], "\n")
+	prose := func(l string) bool { return sentenceEnd(l+" ") || strings.HasSuffix(strings.TrimSpace(l), ".") }
+	cells := func(a, b string) bool {
+		for _, sep := range []string{"\t", "|"} {
+			if k := strings.Count(a, sep); k > 0 && k == strings.Count(b, sep) {
+				return true
+			}
+		}
+		k := strings.Count(a, ",")
+		return k >= 2 && k == strings.Count(b, ",") && !prose(a) && !prose(b)
 	}
-	line := text[lo:hi]
-	return strings.ContainsAny(line, "\t|") || strings.Count(line, ",") >= 2
+	for _, m := range []int{n - 1, n + 1} {
+		if m >= 1 && m < len(lines) && n >= 1 && cells(lines[n], lines[m]) {
+			return true
+		}
+	}
+	return false
 }
 
 // sentenceEnd reports whether text holds the end of a sentence: a full stop, question or exclamation

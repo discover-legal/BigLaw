@@ -7,6 +7,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"maps"
 	"math"
 	"slices"
 	"strings"
@@ -106,6 +107,14 @@ type Prior interface {
 // never falls out of the join as more findings arrive (r8 M1); then the rest in rankPairs' order, up
 // to limit pairs in all; dropped is how many more there were.
 func Candidates(findings []Finding, limit int, judged func(Candidate) bool) (cands []Candidate, dropped int) {
+	cands, dropped, _ = CandidatesCover(findings, limit, judged)
+	return cands, dropped
+}
+
+// CandidatesCover is Candidates and how many values (one value in one document, however many
+// findings state it) that have a counterpart to compare with have none among the candidates: the
+// figures whose conflicts a join this size cannot find (lab-r4 r9 residual a).
+func CandidatesCover(findings []Finding, limit int, judged func(Candidate) bool) (cands []Candidate, dropped, uncovered int) {
 	ranked := rankPairs(findings)
 	var rest []Candidate
 	for _, c := range ranked {
@@ -122,14 +131,22 @@ func Candidates(findings []Finding, limit int, judged func(Candidate) bool) (can
 		}
 		cands = append(cands, c)
 	}
-	return cands, dropped
+	at := func(s Side) string { return s.Canon + "@" + s.DocumentID }
+	all, in := map[string]bool{}, map[string]bool{}
+	for _, c := range ranked {
+		all[at(c.A)], all[at(c.B)] = true, true
+	}
+	for _, c := range cands {
+		in[at(c.A)], in[at(c.B)] = true, true
+	}
+	return cands, dropped, len(all) - len(in)
 }
 
 // side is one comparable value with what it is compared by.
 type side struct {
 	Side
 	date Date
-	ctx  map[string]float64 // its context's words, tf-idf weighted (norm 1)
+	ctx  []term // its context's words, tf-idf weighted (norm 1), in word order
 }
 
 // rankPairs are every candidate pair, in a fixed order that never depends on two labels being worded
@@ -200,7 +217,7 @@ func rankPairs(findings []Finding) []Candidate {
 			}
 			p := pair{c: Candidate{ID: x.Ref + "|" + y.Ref, Kind: kind, A: x.Side, B: y.Side}, sim: cosine(a.ctx, b.ctx), dist: dist, key: key, ia: ix, ib: iy}
 			if at, ok := seen[key]; ok {
-				if p.sim > all[at].sim || p.sim == all[at].sim && p.c.ID < all[at].c.ID {
+				if q := all[at]; rankScore(p.sim, p.dist) > rankScore(q.sim, q.dist) || rankScore(p.sim, p.dist) == rankScore(q.sim, q.dist) && p.c.ID < q.c.ID {
 					all[at] = p
 				}
 				continue
@@ -234,9 +251,22 @@ func rankPairs(findings []Finding) []Candidate {
 	return out
 }
 
-var rankScore = func(sim, dist float64) float64 { return sim * (1 - math.Min(dist, 1)) }
+// rankScore orders a value's counterparts: how alike their contexts are, plus a floor, times how close
+// their amounts or dates are, so closeness orders pairs whose contexts share no word too (lab-r4 r9
+// L2). Rounded to 1e-9, so float noise never reorders (r9 M2).
+func rankScore(sim, dist float64) float64 {
+	return math.Round((sim+0.05)*(1-math.Min(dist, 1))*1e9) / 1e9
+}
 
-// weigh gives each side its context's tf-idf weights (norm 1).
+// term is one context word and its weight.
+type term struct {
+	w string
+	x float64
+}
+
+// weigh gives each side its context's tf-idf weights (norm 1), as terms in word order: every sum runs
+// in a fixed order, so the ranking is the same on every call (lab-r4 r9 M2: summing over a map's order
+// changed the last bits, and the order at the cap).
 func weigh(sides []side) {
 	df := map[string]int{}
 	bags := make([]map[string]int, len(sides))
@@ -253,25 +283,32 @@ func weigh(sides []side) {
 		}
 	}
 	for i := range sides {
-		v, norm := map[string]float64{}, 0.0
-		for w, n := range bags[i] {
-			x := float64(n) * math.Log(float64(1+len(sides))/float64(df[w]))
-			v[w], norm = x, norm+x*x
+		var v []term
+		norm := 0.0
+		for _, w := range slices.Sorted(maps.Keys(bags[i])) {
+			x := float64(bags[i][w]) * math.Log(float64(1+len(sides))/float64(df[w]))
+			v, norm = append(v, term{w, x}), norm+x*x
 		}
-		for w := range v {
-			v[w] /= math.Sqrt(norm)
+		for k := range v {
+			v[k].x /= math.Sqrt(norm)
 		}
 		sides[i].ctx = v
 	}
 }
 
-func cosine(a, b map[string]float64) float64 {
-	if len(b) < len(a) {
-		a, b = b, a
-	}
+// cosine is the dot product of two sorted term lists.
+func cosine(a, b []term) float64 {
 	s := 0.0
-	for w, x := range a {
-		s += x * b[w]
+	for i, k := 0, 0; i < len(a) && k < len(b); {
+		switch c := strings.Compare(a[i].w, b[k].w); {
+		case c == 0:
+			s += a[i].x * b[k].x
+			i, k = i+1, k+1
+		case c < 0:
+			i++
+		default:
+			k++
+		}
 	}
 	return s
 }
@@ -306,9 +343,11 @@ func CheckVerdicts(cands []Candidate, raw []Verdict) (map[string]Verdict, []stri
 // (all of them, for a shorter text).
 const quoteRun = 4
 
-// quoted reports whether a reason quotes both sides (lab-r4 r8 L1): it repeats a run of quoteRun
-// words of one of each side's quotes or its claim, as written (case, punctuation and white space
-// aside). A reason that quotes neither passage, or only one, is no reading of both.
+// quoted reports whether a reason quotes both sides (lab-r4 r8 L1, r9 L1): it repeats, for each
+// side, a run of quoteRun words of that side's quotes or claim as written (case, punctuation and white
+// space aside) that the other side's texts do not hold, so words both passages share ("in accordance
+// with the Agreement") quote neither. A reason that quotes neither passage, or only one, is no
+// reading of both.
 func quoted(reason string, c Candidate) bool {
 	words := func(x string) []string {
 		var out []string
@@ -319,20 +358,24 @@ func quoted(reason string, c Candidate) bool {
 		}
 		return out
 	}
+	flat := func(s Side) string {
+		return " " + strings.Join(words(strings.Join(append(slices.Clone(s.Quotes), s.Claim), "\n")), " ") + " "
+	}
 	said := " " + strings.Join(words(reason), " ") + " "
-	quotes := func(s Side) bool {
+	quotes := func(s Side, other string) bool {
 		for _, t := range append(slices.Clone(s.Quotes), s.Claim) {
 			ws := words(t)
 			n := min(quoteRun, len(ws))
 			for i := 0; n > 0 && i+n <= len(ws); i++ {
-				if strings.Contains(said, " "+strings.Join(ws[i:i+n], " ")+" ") {
+				run := " " + strings.Join(ws[i:i+n], " ") + " "
+				if strings.Contains(said, run) && !strings.Contains(other, run) {
 					return true
 				}
 			}
 		}
 		return false
 	}
-	return quotes(c.A) && quotes(c.B)
+	return quotes(c.A, flat(c.B)) && quotes(c.B, flat(c.A))
 }
 
 // Conflicts are the candidates the judge said are one quantity ("yes"), each with its reason; a pair

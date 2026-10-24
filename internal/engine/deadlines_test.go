@@ -154,7 +154,7 @@ func TestDeadlinesMeetTheAnswerKey(t *testing.T) {
 func TestRawDeadlineNeedsItsRoll(t *testing.T) {
 	served, rule := "served on 10/21/2026 via its registered agent", "A defendant must serve an answer within 21 days after being served" // the period a day count traces to (r7 M1)
 	f1 := Finding{Finding: analysis.Finding{FID: "F1", Verified: true, Values: []analysis.Value{{Entity: "Talbot", Metric: "served", Value: "10/21/2026", Class: "Date"}}},
-		Citations: []Citation{{Quote: served, Method: "exact"}, {Quote: rule, Method: "exact"}}, Figures: []analysis.Reading{{Span: "q2.s1", Text: "21", Kind: analysis.KindDuration, Unit: "days", Amount: "21"}}}
+		Citations: []Citation{{Quote: served, Method: "exact"}, {Quote: rule, Method: "exact"}}, Figures: []analysis.Reading{{Span: "q2.s1", Text: "21", Kind: analysis.KindDuration, Unit: "days", UnitFrom: "days", Amount: "21"}}}
 	fs := []analysis.Finding{f1.Finding}
 	ops := func() []analysis.Operand {
 		ref, n, u := "F1.v1", "21", "days"

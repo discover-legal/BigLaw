@@ -185,7 +185,7 @@ func deref(p *string) string {
 // takes says what each fn accepts, and shows a call that works, for the error that names it.
 var takes = map[string]string{"sum": "two or more numbers in one unit", "diff": "two numbers in one unit", "ratio": "two numbers, in at most one currency", "pct": "two numbers",
 	"product":  "two or more numbers, at most one of them an amount of money (1,200,000 shares times $5.00 times 1.5 is $9,000,000; 35% times $100,000 is $35,000)",
-	"date_add": "a full date and a whole number of days, weeks, months or years (negative counts back; a month on from the 31st runs into the next month, as Go's AddDate)", "date_diff": "two full dates",
+	"date_add": "a full date and a whole number of days, weeks, months or years (negative counts back; a month or year on from a day the target month lacks is its last day)", "date_diff": "two full dates",
 	"business_days": "two full dates, or a full date and a whole number of days (negative counts back)"}
 
 // Calc runs one calculation exactly (decimal, never floating point): sum, diff, ratio, pct,
@@ -293,7 +293,11 @@ func Calc(findings []Finding, fn string, ops []Operand, holidays []string) (Work
 		default:
 			d = int(n)
 		}
-		t := xs[0].date.time().AddDate(y, mo, d)
+		t := xs[0].date.time().AddDate(0, 0, d)
+		if y != 0 || mo != 0 { // a month or year on: the same day of the target month, else its last day (Jan 31 + 1 month is Feb 29, 2024; Feb 29, 2024 + 1 year is Feb 28, 2025: lab-r4 r9 M1)
+			first := time.Date(t.Year()+y, t.Month()+time.Month(mo), 1, 0, 0, 0, 0, time.UTC)
+			t = first.AddDate(0, 0, min(t.Day(), first.AddDate(0, 1, -1).Day())-1)
+		}
 		if holidays != nil && !workday(t) {
 			w.Steps = append(w.Steps, SheetStep{"raw date", t.Format(time.DateOnly) + " (" + t.Weekday().String() + map[bool]string{true: ", a weekend day)", false: ", a holiday)"}[t.Weekday()%6 == 0]})
 			for step := map[bool]int{true: -1, false: 1}[n < 0]; !workday(t); t = t.AddDate(0, 0, step) {

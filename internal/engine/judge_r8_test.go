@@ -23,8 +23,8 @@ import (
 func TestSectionNumberIsNoDayCount(t *testing.T) {
 	ground := "Under Section 30 of the Agreement, the complaint was served on March 1, 2024. An answer is due within 21 days.\n"
 	known := []analysis.Reading{
-		{Kind: analysis.KindOther, Amount: "30", Text: "30"},                  // "Section 30": a section number, kind other
-		{Kind: analysis.KindDuration, Unit: "days", Amount: "21", Text: "21"}, // "21 days": the period
+		{Kind: analysis.KindOther, Amount: "30", Text: "30"},                                    // "Section 30": a section number, kind other
+		{Kind: analysis.KindDuration, Unit: "days", UnitFrom: "days", Amount: "21", Text: "21"}, // "21 days": the period
 	}
 	w := sheet(t, "date_add", [2]string{"2024-03-01", "date"}, [2]string{"30", "days"})
 	if got := tracedSheets([]analysis.Worksheet{w}, ground, nil, known); len(got) == 1 {

@@ -340,6 +340,15 @@ func TestProofRunsOracle(t *testing.T) {
 			} else if len(lines) < want {
 				t.Logf("%d unresolved figure checks, below the pinned %d: lower the pin", len(lines), want)
 			}
+			disclosed := map[string]int{}
+			for _, l := range strings.Split(deref(v.Output), "\n") {
+				for _, k := range []string{"computed from typed inputs", "Figures (low confidence)", "counterparts put to the figure judge", "written at another scale"} {
+					if strings.Contains(l, k) {
+						disclosed[k]++
+					}
+				}
+			}
+			t.Logf("%s: figure disclosures %v, gates %v", mt.Slug, disclosed, gates)
 			found := slices.DeleteFunc(slices.Clone(gates), func(g string) bool { return !strings.HasPrefix(g, "finding:") })
 			if want, ok := findingGates[mt.Slug]; !ok || len(found) > want {
 				t.Errorf("%s: %d findings gated for a lawyer (%v), pinned at %d (a ratchet: fix the regression)", mt.Slug, len(found), found, want)

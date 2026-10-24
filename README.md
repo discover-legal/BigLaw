@@ -872,16 +872,21 @@ The memo workflow (§ Memo workflow) drives these. What PR 4a ships, all tested 
   compatible at their common precision); two values in two documents are asked once however many findings
   repeat them. Pairs already judged come first whatever the cap (a "yes" never falls out as findings
   arrive); then every value's three most alike, closest counterparts (`rankPairs`: tf-idf cosine of each
-  value's entity, metric, reader labels and claim, times the closeness of the amounts or dates; no exact
-  label match), then the rest; the cap is the judge's budget (`CandidateLimit`: 20 pairs a funded call),
-  the rest counted (lab-r4 r8 M1: on bench6's ledgers, with each side's measure worded differently, every
-  true find ranks within the first 82 of 13,037 SEC pairs and 7 of 1,022 trust pairs). The engine's `judge_figures` subagent (critic role, its tool
+  value's entity, metric, reader labels and claim, plus a floor, times the closeness of the amounts or
+  dates, so closeness orders pairs that share no word too; no exact label match; summed in a fixed order
+  and rounded, so the same input ranks the same way on every call: `TestRankPairsDeterministic`), then
+  the rest; the cap is the judge's budget (`CandidateLimit`: 20 pairs a funded call), the rest counted
+  (lab-r4 r8 M1, r9: on bench6's ledgers, under the stand-in's, reworded, sparse or synonym labels,
+  every true find ranks within the first 94 of 13,037 SEC pairs and 8 of 1,022 trust pairs). A join
+  that leaves figures with none of their counterparts asked says how many in Limitations (at the
+  default finish budget, 73 of bench6 SEC's figures). The engine's `judge_figures` subagent (critic role, its tool
   `figure_context`; `internal/engine/judge.go`) gets both values' quotes, claims, the analyst's entity and
   metric, the reader's labels (party, counterparty, measure, period, typed entity) and the lead's aliases,
   and answers per pair `yes`, `no` or `unclear` with a reason quoting both passages. Go checks every
   verdict (`CheckVerdicts`: one for a pair it did not propose is rejected, so a "yes" on non-spans or on
   two kinds asserts nothing; a second verdict for one pair or an unknown answer is unclear, and so is a
-  yes or no whose reason does not repeat four words in a row of each side's quote or claim: r8 L1). Only "yes" is a conflict (with its reason); "unclear" is a low-confidence Limitations line
+  yes or no whose reason does not repeat, for each side, four words in a row of that side's quote or
+  claim that the other side's texts do not hold: r8 L1, r9 L1). Only "yes" is a conflict (with its reason); "unclear" is a low-confidence Limitations line
   naming the pair; pairs the cap or an unfunded judge left out are counted in a Limitations line
   (`TestJoinAssertsOnlyTheJudgesYes`, `TestJoinRejectsVerdictsGoDidNotPropose`, `TestJoinScenarios`,
   `TestJoinLabelsAreContextNotKeys`, `TestJoinBenchLedgers`). The judge is called like the reader:
@@ -928,8 +933,9 @@ Limitations of this layer:
   measures, for which period or who else is named (r7: the party, counterparty, period and typed-entity
   matching rules, `oneQuantity` and `periodOf`, were deleted; prompt-faithful role-name labels, "the
   Executive" for two people, had made false conflicts of correct readings). Past the pairs its budget
-  judges a matter's join is incomplete and says how many it did not judge; a true conflict whose two
-  values' contexts share no rare word and whose amounts are far apart ranks late. A value's document is the quote that
+  judges a matter's join is incomplete and says how many figures it left without any counterpart judged;
+  a true conflict whose two values' contexts share no rare word and whose amounts are far apart ranks
+  late. A value's document is the quote that
   holds its text, else the finding's first quote.
 - Calls in one turn run sequentially, not concurrently; `retrieve` and Go tools spend no calls, so a
   lead can issue up to 8 per turn for every turn its budget funds.
@@ -1488,7 +1494,10 @@ make ci                         # gofmt, vet, go mod verify/tidy, static build, 
                                 # its memory cap off, with -v; where BIGLAW_REQUIRE_DB is set it
                                 # fails unless TestChildBoundsItself, TestChildNearTextCap and
                                 # TestIngestMemoryBounded each report PASS there), make eval (E0/E3),
-                                # loc.py + its tests, docker compose config
+                                # loc.py + its tests, docker compose config. Its race pass runs at
+                                # -p 4 -parallel 4 (TEST_P, TEST_PARALLEL): each DB test holds a few
+                                # connections, so the peak stays near 50 whatever the cores, under
+                                # Postgres's default max_connections of 100 (lab-r4 r9 L5)
 make ui build                   # the binary with the web UI embedded (ui/dist → internal/api/dist)
 make lint vuln                  # staticcheck and govulncheck (network needed; CI runs both)
 ```
@@ -1798,13 +1807,21 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     currency (a period by its amount never). A period the record does not state (a court rule not among
     the cited quotes) leaves its deadline untraced: cite the rule. `product` takes any numbers with at
     most one amount of money, `ratio` two in at most one currency, `date_add` days, weeks, months or
-    years (a month on from the 31st runs into the next month, as Go's `AddDate`).
+    years (a month or year on from a day the target month lacks is its last day: January 31 + 1 month
+    is February 29, 2024; r9 M1). A duration's unit and a multiple's sign must cite the words beside
+    the span that state them (`unitFrom`, checked like a scale's: r9 H1), and every figure a section
+    writes out that a worksheet over typed literals computes is listed in Limitations, one line a
+    section, with its computation and the words each literal rests on ("March 22, 2024 = date_add(…; 21
+    days (“business days”))"), so one wrong unit label is seen by the lawyer. A memo's period (read as a
+    duration) traces only to a cited duration of that amount and unit, a worksheet's period, or the
+    days between two cited dates, never to the digits of a section number (r9 H2).
   - A figure written at one scale beside a cited one at another (the memo's "$5M" for a cited
     "$5,000,000", or its "$5,000,000" for a cited "$5 million", or "$5 per share" scaled from "per
     share") is limited, not traced: disclosed in Limitations and its citing findings gated for a
     lawyer (r7 M4, L2). A scale's words must be adjacent to the figure (right after it or after its
     currency code, earlier in its sentence, or its passage's first line when that is a header, no
-    sentence and no figure of its own the words scale, over a table row: tabs, "|" or commas; r8 M2),
+    sentence and no figure of its own the words scale, over a table row: a line split by as many tabs,
+    "|" or commas (two or more, neither line a sentence) as a row next to it; r8 M2, r9 L3),
     with a letter or a "000" ("($000)"; a bare "$" is none: r7 M2, L1). A caption over prose ("Amounts
     in millions" above a sentence) is no header: such a figure is unclear, gated.
   - The raw-date rule is paragraph-wide: a list that states the raw date and the rolled deadline on

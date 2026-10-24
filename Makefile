@@ -43,8 +43,14 @@ mod-check:
 # exists for reports PASS: a renamed test must not silently run nowhere (PR 3a r4 L1). It also
 # prints gate E4's verdict, and there requires a PASS or the "E4 GATE NOT JUDGED" skip (r1 L-6).
 NONRACE = TestChildBoundsItself TestChildNearTextCap TestIngestMemoryBounded
+# Database tests hold a few connections each (a store's pool and its schema's admin connection), and
+# go test runs -p packages at once with -parallel tests each, both GOMAXPROCS by default: on a many-core
+# machine that passes Postgres's default max_connections of 100 (lab-r4 r9 L5). Capped so the peak
+# stays near 50 whatever the cores; raise both on a server whose max_connections allows it.
+TEST_P ?= 4
+TEST_PARALLEL ?= 4
 test:
-	$(GO) test -race -count=1 -shuffle=on -timeout 5m ./...
+	$(GO) test -race -count=1 -shuffle=on -timeout 5m -p $(TEST_P) -parallel $(TEST_PARALLEL) ./...
 	@log=$$(mktemp); $(GO) test -count=1 -v -run '^(TestChild|TestIngestMemoryBounded$$|TestHybridRecallProofRuns$$)' ./internal/docs >$$log 2>&1; rc=$$?; \
 	cat $$log; test $$rc = 0 || { rm -f $$log; exit $$rc; }; \
 	echo "make test: $$(grep -o -m1 'E4 GATE NOT JUDGED: [^;]*\|E4 gate met with .*' $$log || echo 'E4: no verdict line (no database, or the gate did not run)')"; \

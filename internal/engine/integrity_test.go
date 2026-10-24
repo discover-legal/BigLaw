@@ -494,7 +494,7 @@ func TestLintSaysHowToFix(t *testing.T) {
 	cite := func(q string) []Citation { return []Citation{{Quote: q, Method: "exact"}} }
 	use := map[string]Finding{
 		"F1": {Finding: analysis.Finding{FID: "F1", Values: []analysis.Value{{Value: "10/21/2026"}}}, Citations: cite("served on 10/21/2026 via its registered agent; an answer is due within 21 days"),
-			Figures: []analysis.Reading{{Span: "q1.s4", Text: "21", Kind: analysis.KindDuration, Unit: "days", Amount: "21"}}}, // the rule's period the worksheet's day count traces to (r7 M1)
+			Figures: []analysis.Reading{{Span: "q1.s4", Text: "21", Kind: analysis.KindDuration, Unit: "days", UnitFrom: "days", Amount: "21"}}}, // the rule's period the worksheet's day count traces to (r7 M1)
 		"F2": {Finding: analysis.Finding{FID: "F2", Values: []analysis.Value{{Value: "$612,400"}}}, Citations: cite("leaving a shortfall of $612,400")},
 		"F3": {Finding: analysis.Finding{FID: "F3"}, Citations: cite("a fee equal to thirty-five percent (35%) of the shortfall")},
 	}
