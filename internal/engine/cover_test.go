@@ -175,7 +175,7 @@ func TestCoverageDraftsLeftOutEvidence(t *testing.T) {
 	q1 := "The Division's Office of Quantitative Research analyzed 4,217 equity trades executed through the omnibus account during the Review Period"
 	q2 := "Total Omnibus Equity Trades Analyzed\t4,312\tTrades executed through WCA omnibus account at Meridian Clearing Corp. during Review Period"
 	q3 := "The Firm did not retain allocation records for 2,614 of the omnibus trades executed during the Review Period"
-	sweep := facts(fd("The Firm did not retain allocation records for 2,614 omnibus trades.", d1, q3)) // a sweep finding: no issue
+	sweep := facts(on("I1", fd("The Firm did not retain allocation records for 2,614 omnibus trades.", d1, q3))) // a finding the call named no issue for
 	three := func(r model.Reply) []model.Reply { return []model.Reply{r, r, r} }
 	e, fake := f.engine(f.with(map[string][]model.Reply{
 		"lead": {calls(plan(issue("I1", "What did the Division's analysis of the omnibus trades find?", "Clause"))),

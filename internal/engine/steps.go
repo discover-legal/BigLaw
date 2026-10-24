@@ -44,6 +44,7 @@ type run struct {
 	mu       sync.Mutex
 	buf      []op
 	b        *agent.Budget // the task's budget (root)
+	cycleUSD float64       // what the root keeps for one committee cycle (keep: Allocation.cycleKeep)
 	cancel   context.CancelFunc
 	forced   string // finish from the reserve: budget_exhausted or max_steps
 	collapse string // the G4 alert that failed the run (strict)

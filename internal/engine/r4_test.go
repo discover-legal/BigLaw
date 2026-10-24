@@ -5,6 +5,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"hash/fnv"
 	"slices"
 	"strings"
@@ -261,5 +262,152 @@ func TestJoinAliasesReachFinish(t *testing.T) {
 	}
 	if fin := strings.Join(f.outputs(v.ID, "finish"), ""); !strings.Contains(fin, "commissions differently ([F2] $310,000 vs [F1] $291,400)") && !strings.Contains(fin, "commissions differently ([F1] $291,400 vs [F2] $310,000)") {
 		t.Fatalf("finish %s\n%s", fin, f.steps(v.ID))
+	}
+}
+
+// TestSweepAdmitsOnlyThePlansFindingsOnce (bench5 SEC: 896 findings from 142 pages, 177 from one
+// brochure section of generic process text, figures restated page after page): a visit is sent the
+// plan's issues; a finding that names none is not admitted, one call admits at most maxFactsPerCall,
+// and a later page's restatement of an admitted figure (same values, its quote inside the first's) is
+// merged into it, across issues.
+func TestSweepAdmitsOnlyThePlansFindingsOnce(t *testing.T) {
+	t.Parallel()
+	doc := "1. Fees\nThe fee of $5,000 is due on March 1, 2026.\n" + filler + "\n\n2. Summary\nAs stated above, the fee of $5,000 is due on March 1, 2026.\n" + filler + "\n"
+	f := newFixture(t, doc)
+	d1 := f.docs[0].ID
+	first := []m{on("I1", fd("The fee of $5,000 is due on March 1, 2026.", d1, "The fee of $5,000 is due on March 1, 2026", val("Buyer", "fee", "$5,000", "Money"), val("Buyer", "fee due", "March 1, 2026", "Date"))),
+		fd("Further delivery terms apply.", d1, "Further delivery terms apply.")} // names no issue: boilerplate
+	for i := range 13 {
+		first = append(first, on("I2", fd(fmt.Sprintf("Delivery term %d applies.", i), d1, "Further delivery terms apply.")))
+	}
+	again := facts(on("I2", fd("The summary restates that the $5,000 fee falls due on March 1, 2026.", d1, "the fee of $5,000 is due on March 1, 2026",
+		val("Buyer", "fee amount", "$5,000", "Money"), val("Buyer", "due date", "March 1, 2026", "Date"))))
+	fake := model.NewFake(f.with(map[string][]model.Reply{
+		"lead":  {calls(plan(issue("I1", "When is the fee due?", "Clause"), issue("I2", "What delivery terms apply?", "Clause"))), calls(tc("sweep", m{"over": "sections", "documentIds": nil}))},
+		"page1": {facts(first...)}, "page2": {again},
+	}))
+	fake.Route = func(r model.Request) string {
+		if r.Agent != "extract_facts" {
+			return r.Agent
+		}
+		return map[bool]string{true: "page2", false: "page1"}[strings.Contains(sweepReq(r).SectionText, "As stated above")]
+	}
+	f.e = New(f.st, f.d, fake, testRoles, nil, Config{BudgetCalls: 150, BudgetUSD: 5, CollapseThreshold: 0.5, CollapseAction: "strict"}, nil)
+	task := f.submit(0)
+	f.step(context.Background())
+	fs := ledgerFindings(t, f, task.ID)
+	if len(fs) != 12 || fs[0].IssueID != "I1" || fs[1].IssueID != "I2" || len(fs[0].Citations) != 2 || slices.ContainsFunc(fs, func(x Finding) bool { return x.Claim == "Further delivery terms apply." }) {
+		t.Fatalf("%d findings: %+v", len(fs), fs)
+	}
+	for _, c := range fake.Calls() {
+		if c.Agent == "extract_facts" && !strings.Contains(fmt.Sprint(c.Messages[1].Content), `"issues":[{"id":"I1","question":"When is the fee due?"},{"id":"I2","question":"What delivery terms apply?"}]`) {
+			t.Errorf("a visit was not sent the plan's issues: %s", c.Messages[1].Content)
+		}
+	}
+}
+
+// TestCoverageLinesSummarised (bench5 SEC: 101 "Coverage:" lines in Limitations, one per party and
+// figure): the parties the memo never names are one line and the missing figures another, each
+// listing at most maxListed and counting the rest.
+func TestCoverageLinesSummarised(t *testing.T) {
+	var ps []analysis.PartyGap
+	var hs []analysis.Handle
+	for i := range 30 {
+		ps = append(ps, analysis.PartyGap{Name: fmt.Sprintf("Party %d", i), FIDs: []string{fmt.Sprintf("F%d", i), "F99", "F100", "F101"}})
+		hs = append(hs, analysis.Handle{FID: fmt.Sprintf("F%d", i), Label: "fee", Value: fmt.Sprintf("$%d,000", i+1)})
+	}
+	p, h := partyLine(ps), figureLine(hs)
+	if !strings.HasPrefix(p, "Coverage: 30 parties named in verified findings never appear in the memo: Party 0 (F0, F99, F100); ") || !strings.HasSuffix(p, " and 18 more.") ||
+		!strings.HasPrefix(h, "Coverage: 30 salient figures never appear in the memo: $1,000 (fee, F0); ") || !strings.HasSuffix(h, " and 18 more.") ||
+		partyLine(nil) != "" || figureLine(nil) != "" {
+		t.Fatalf("%q\n%q", p, h)
+	}
+}
+
+// TestSectionCheckLeavesTheSubagentItsTurns: the requirement's check is one call of the grant beside
+// the subagent's own turns, so a subagent that needs all five (four searches, then its answer) still
+// answers.
+func TestSectionCheckLeavesTheSubagentItsTurns(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, incapMemo, incapTrust)
+	memo, trust := f.docs[0].ID, f.docs[1].ID
+	dev := tc("check_deviation", m{"requirement": incapReq, "requirementDocId": memo, "controllingDocIds": []string{memo}, "reviewedDocIds": []string{trust}, "issueId": "I1"})
+	verdict := m{"part": "the incapacity standard", "verdict": "deviate", "severity": "HIGH", "correction": incapCorrect, "document": trust,
+		"controlling": m{"documentId": memo, "quote": incapReq}, "reviewed": incapReview}
+	search := calls(tc("retrieve", m{"op": "search", "query": "incapacity", "documentId": nil, "sectionId": nil, "k": nil, "offset": nil, "limit": nil}))
+	v := f.run(f.with(map[string][]model.Reply{
+		"lead":            {calls(plan(issue("I1", "Does the draft trust follow the instruction memo?", "Requirement"))), calls(dev)},
+		"check_deviation": {search, search, search, search, text(m{"verdicts": []m{verdict}})},
+		"section_check":   checks("yes", 1),
+	}), Config{})
+	if fs := ledgerFindings(t, f, v.ID); len(fs) != 1 {
+		t.Fatalf("findings %+v; %q", fs, f.outputs(v.ID, "check_deviation"))
+	}
+}
+
+// TestPlacementsStrongestFirst: the coverage pass places an issue with a figure conflict, then the
+// issues by their strongest left-out finding, not in plan order, so a pass whose share runs out has
+// placed the most salient evidence.
+func TestPlacementsStrongestFirst(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, "1. Fees\nThe Firm failed to disclose the fee. The fee was $291,400 in 2023.\n", "Schedule\nThe fee was $310,000 in 2023.\n")
+	d1, d2 := f.docs[0].ID, f.docs[1].ID
+	v := f.run(f.with(map[string][]model.Reply{
+		"lead": {calls(plan(issue("I1", "Was the fee disclosed?", "RedFlag"), issue("I2", "What was the fee?", "RedFlag"))),
+			calls(extract(d1, "disclose", "I1")), calls(extract(d1, "fee", "I2")), calls(extract(d2, "fee", "I2"))},
+		"extract_facts": {facts(fd("The Firm failed to disclose the fee.", d1, "The Firm failed to disclose the fee")),
+			facts(fd("The fee was $291,400.", d1, "The fee was $291,400 in 2023", val("Firm", "fee", "$291,400", "Money"))),
+			facts(fd("The fee was $310,000.", d2, "The fee was $310,000 in 2023", val("Firm", "fee", "$310,000", "Money")))},
+	}), Config{})
+	order, place, err := f.e.placements(context.Background(), v.ID)
+	if err != nil || strings.Join(order, ",") != "I2,I1" || len(place["I2"].Conflicts) != 1 || !slices.Contains(place["I1"].FIDs, "F1") {
+		t.Fatalf("order %v, %+v, %v", order, place, err)
+	}
+}
+
+// TestTablePageKeepsARowEach: on a table page each row is a fact (a trade, a payment), so the cap is
+// one finding per row when the page has more rows than maxFactsPerCall.
+func TestTablePageKeepsARowEach(t *testing.T) {
+	t.Parallel()
+	var doc strings.Builder
+	doc.WriteString("Trades\nTrade\tDate\tShares\tPrice\n")
+	for i := range 20 {
+		fmt.Fprintf(&doc, "T-%d\t2023-01-%02d\t%d00\t%d.50\n", i, i+1, i+1, 40+i)
+	}
+	f := newFixture(t, doc.String())
+	d1 := f.docs[0].ID
+	var rows []m
+	for i := range 20 {
+		rows = append(rows, on("I1", fd(fmt.Sprintf("Trade T-%d was allocated.", i), d1, fmt.Sprintf("T-%d\t2023-01-%02d\t%d00\t%d.50", i, i+1, i+1, 40+i))))
+	}
+	v := f.run(f.with(map[string][]model.Reply{
+		"lead":          {calls(plan(issue("I1", "Which trades were allocated?", "RedFlag"))), calls(tc("sweep", m{"over": "sections", "documentIds": nil}))},
+		"extract_facts": {facts(rows...)},
+	}), Config{})
+	if fs := ledgerFindings(t, f, v.ID); len(fs) != 20 {
+		t.Fatalf("%d findings of a 20-row page", len(fs))
+	}
+}
+
+// TestRestatedNeverMergesTwoRows: two rows of one table share most of their words and the same
+// amount, and are two payments; only a quote inside another's is a restatement of it.
+func TestRestatedNeverMergesTwoRows(t *testing.T) {
+	row := func(month string) Finding {
+		q := "Monthly Dues — 2022\tMonthly membership dues paid to Bayshore Palms Golf & Country Club on behalf of Marcus T. Bellini (" + month + " 2022)\t1\t$2,800.00"
+		return Finding{Finding: analysis.Finding{Verified: true, Claim: "A dues payment of $2,800.00 was made in " + month + " 2022.", Quotes: []analysis.Quote{{Quote: q}},
+			Values: []analysis.Value{{Value: "$2,800.00", Class: "Money"}}}}
+	}
+	if restated(row("May"), row("Jun")) {
+		t.Error("two rows merged")
+	}
+	if a, b := row("May"), row("May"); !restated(a, b) {
+		t.Error("a row restated is not merged")
+	}
+	p := func(s string) Finding {
+		return Finding{Finding: analysis.Finding{Verified: true, Claim: s, Quotes: []analysis.Quote{{Quote: s}}, Values: []analysis.Value{{Value: "$438,000", Class: "Money"}}}}
+	}
+	if !restated(p("The Division estimates that excess profits in the personal account totaled approximately $438,000 over the Review Period."),
+		p("The Division estimates that excess profits in the personal account totaled approximately $438,000 over the Review Period (2021-2023).")) {
+		t.Error("a prose restatement is not merged")
 	}
 }

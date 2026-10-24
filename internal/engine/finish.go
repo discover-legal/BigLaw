@@ -275,11 +275,11 @@ func (f finish) check(ctx context.Context, limits []limitation) (report, error) 
 	}
 	cov := analysis.CheckCoverage(ais, texts, an, nil)
 	rep.MissingIssues, rep.UncoveredParties, rep.MissingFigures = cov.MissingIssues, cov.UncoveredParties, cov.MissingFigures
-	for _, p := range cov.UncoveredParties {
-		rep.limits = append(rep.limits, "Coverage: "+p.Note)
+	if line := partyLine(cov.UncoveredParties); line != "" { // one line each, not one per party (bench5 SEC: 101 "Coverage:" lines)
+		rep.limits = append(rep.limits, line)
 	}
-	for _, h := range cov.MissingFigures {
-		rep.limits = append(rep.limits, fmt.Sprintf("Coverage: the figure %s (%s, %s) never appears in the memo.", h.Value, h.Label, h.FID))
+	if line := figureLine(cov.MissingFigures); line != "" {
+		rep.limits = append(rep.limits, line)
 	}
 	funded := f.funded()
 	switch {
@@ -399,4 +399,33 @@ func (f finish) gates(ctx context.Context, md string) error {
 // transcript pages.
 func gated(x Finding, unsupported bool) bool {
 	return unsupported || x.Low || allCitations(x, func(c Citation) bool { return c.Low })
+}
+
+// maxListed bounds the names a summarised Coverage line lists before "and N more".
+const maxListed = 12
+
+// partyLine is the Limitations line for the parties the findings name and the memo never does.
+func partyLine(ps []analysis.PartyGap) string {
+	if len(ps) == 0 {
+		return ""
+	}
+	var names []string
+	for _, p := range ps[:min(maxListed, len(ps))] {
+		names = append(names, fmt.Sprintf("%s (%s)", p.Name, strings.Join(p.FIDs[:min(3, len(p.FIDs))], ", ")))
+	}
+	return fmt.Sprintf("Coverage: %d %s named in verified findings never appear in the memo: %s%s.", len(ps), plural(len(ps), "party", "parties"),
+		strings.Join(names, "; "), cmpStr(len(ps) > maxListed, fmt.Sprintf(" and %d more", len(ps)-maxListed), ""))
+}
+
+// figureLine is the Limitations line for the salient figures that never reach the memo.
+func figureLine(hs []analysis.Handle) string {
+	if len(hs) == 0 {
+		return ""
+	}
+	var figs []string
+	for _, h := range hs[:min(maxListed, len(hs))] {
+		figs = append(figs, fmt.Sprintf("%s (%s, %s)", h.Value, h.Label, h.FID))
+	}
+	return fmt.Sprintf("Coverage: %d salient %s never appear in the memo: %s%s.", len(hs), plural(len(hs), "figure", "figures"),
+		strings.Join(figs, "; "), cmpStr(len(hs) > maxListed, fmt.Sprintf(" and %d more", len(hs)-maxListed), ""))
 }

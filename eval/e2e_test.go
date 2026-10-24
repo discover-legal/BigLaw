@@ -63,7 +63,7 @@ func TestE2EServe(t *testing.T) {
 		return call("extract_facts", m{"question": q, "documentId": nil, "sectionId": nil, "through": nil, "offset": nil, "query": q, "issueId": issue})
 	}
 	fd := func(claim, doc, quote string, values ...m) m {
-		return m{"claim": claim, "quotes": []m{{"documentId": doc, "quote": quote, "locator": nil}}, "values": append([]m{}, values...), "entities": []m{}, "relations": []m{}, "confidence": 1}
+		return m{"issueId": nil, "claim": claim, "quotes": []m{{"documentId": doc, "quote": quote, "locator": nil}}, "values": append([]m{}, values...), "entities": []m{}, "relations": []m{}, "confidence": 1}
 	}
 	sc := map[string][]model.Reply{
 		"lead": {{ToolCalls: []model.ToolCall{plan}}, {ToolCalls: []model.ToolCall{ex("damages claimed", "I1"), ex("service date", "I2")}},

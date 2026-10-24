@@ -185,7 +185,13 @@ func fd(claim, doc, quote string, values ...m) m {
 	if values == nil {
 		values = []m{}
 	}
-	return m{"claim": claim, "quotes": []m{{"documentId": doc, "quote": quote, "locator": nil}}, "values": values, "entities": []m{}, "relations": []m{}, "confidence": 0.9}
+	return m{"issueId": nil, "claim": claim, "quotes": []m{{"documentId": doc, "quote": quote, "locator": nil}}, "values": values, "entities": []m{}, "relations": []m{}, "confidence": 0.9}
+}
+
+// on is f naming the plan issue it bears on (a sweep visit's finding names one; the call names none).
+func on(issue string, f m) m {
+	f["issueId"] = issue
+	return f
 }
 
 func val(entity, metric, value, class string) m {

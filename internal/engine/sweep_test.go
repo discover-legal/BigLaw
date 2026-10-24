@@ -50,7 +50,7 @@ func lots(n, reps int) (string, func(docID string) map[string][]model.Reply) {
 		out := map[string][]model.Reply{}
 		for i := 1; i <= n; i++ {
 			for range reps {
-				out[fmt.Sprintf("lot%d", i)] = append(out[fmt.Sprintf("lot%d", i)], facts(fd(fmt.Sprintf("Lot %d is due on time.", i), docID, fmt.Sprintf("The supplier shall deliver lot %d on time", i))))
+				out[fmt.Sprintf("lot%d", i)] = append(out[fmt.Sprintf("lot%d", i)], facts(on("I1", fd(fmt.Sprintf("Lot %d is due on time.", i), docID, fmt.Sprintf("The supplier shall deliver lot %d on time", i)))))
 			}
 		}
 		return out

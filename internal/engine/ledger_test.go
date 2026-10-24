@@ -308,7 +308,7 @@ func TestSweepIdempotent(t *testing.T) {
 	sweep := tc("sweep", m{"over": "sections", "documentIds": nil})
 	v := f.run(f.with(map[string][]model.Reply{
 		"lead":          {calls(plan(issue("I1", "Damages?", "Conduct"))), calls(sweep), calls(sweep)},
-		"extract_facts": {facts(fd("Suit filed.", d1, "sued Talbot Fresh Foods, Inc. on October 9, 2026"), fd("Damages claimed.", d1, "Greystone claims damages of $644,910"))},
+		"extract_facts": {facts(on("I1", fd("Suit filed.", d1, "sued Talbot Fresh Foods, Inc. on October 9, 2026")), on("I1", fd("Damages claimed.", d1, "Greystone claims damages of $644,910")))},
 	}), Config{})
 	out := f.outputs(v.ID, "sweep")
 	if len(out) != 2 || !strings.Contains(out[1], `"visited":0`) || !strings.Contains(out[1], `"findings":["F1","F2"]`) {

@@ -129,9 +129,17 @@ func (e *Engine) coverTool(rt *agent.Runtime, r *run) agent.Tool {
 		}
 		me := agent.Agent{Name: "cover", Visible: []string{"analyze_issue", "draft_section"}}
 		call := agent.Call{TaskID: c.TaskID, DocumentIDs: c.DocumentIDs}
+		due, _, err := e.placements(ctx, c.TaskID)
+		if err != nil {
+			return nil, agent.Usage{}, err
+		}
+		keep := 0.0 // what the analyses leave for placing the left-out evidence (bench5 SEC: they spent all but $0.14, and nothing was placed)
+		if len(due) > 0 {
+			keep = placeShare * b.Value().USD
+		}
 		var failed error // a model failure: the pass is recorded as run, then the run ends
 		for _, is := range todo {
-			if calls, _ := b.Remaining(); calls == 0 {
+			if calls, usd := b.Remaining(); calls == 0 || usd <= keep {
 				break
 			}
 			in, _ := json.Marshal(map[string]any{"issueId": is.ID, "question": is.Question, "jurisdiction": r.t.Jurisdiction, "packs": nil})
@@ -289,6 +297,11 @@ func salientFinding(f Finding) bool {
 	return slices.ContainsFunc(f.Values, func(v analysis.Value) bool { return analysis.Salience(v.Value) >= 55 })
 }
 
+// placeShare is the part of the coverage pass's USD its analyses leave for placing left-out evidence,
+// when there is some: bench5's analyses cost about $0.15 an issue and a placement redraft about $0.03–0.05,
+// with a worst case near $0.17 that must fit before it is sent.
+const placeShare = 0.4
+
 // maxPlaced bounds the left-out findings the pass places (it redrafts each issue once) and lists;
 // one issue's redraft takes at most maxPlacedPerIssue of them.
 const (
@@ -389,7 +402,9 @@ func (e *Engine) leftOut(ctx context.Context, taskID string) ([]Finding, error) 
 // placements assigns the left-out findings and the unaddressed conflicts to plan issues: a finding
 // to its own issue, else to the issue whose question its claim matches best (BM25; the first issue
 // when none matches); a conflict to the issue of a section citing either value's finding, else to
-// either finding's issue, else as its metric matches. It returns them by issue, in plan order.
+// either finding's issue, else as its metric matches. It returns them by issue, strongest first (an
+// issue with a conflict, then by its strongest left-out finding), so a pass whose share runs out has
+// placed the most salient evidence.
 func (e *Engine) placements(ctx context.Context, taskID string) ([]string, map[string]*placement, error) {
 	issues, err := load[Issue](ctx, e, taskID, kIssue)
 	secs, serr := load[Section](ctx, e, taskID, kSection)
@@ -447,12 +462,19 @@ func (e *Engine) placements(ctx context.Context, taskID string) ([]string, map[s
 		}
 		at(id).Conflicts = append(at(id).Conflicts, c)
 	}
-	var order []string
+	var order []string // strongest evidence first: an issue with a conflict, then by its strongest left-out finding (left is ranked)
 	for _, is := range issues {
 		if out[is.ID] != nil {
 			order = append(order, is.ID)
 		}
 	}
+	rank := func(id string) int {
+		if len(out[id].Conflicts) > 0 {
+			return -1
+		}
+		return slices.IndexFunc(left, func(f Finding) bool { return slices.Contains(out[id].FIDs, f.FID) })
+	}
+	slices.SortStableFunc(order, func(a, b string) int { return rank(a) - rank(b) })
 	return order, out, nil
 }
 

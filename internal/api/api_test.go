@@ -115,7 +115,7 @@ func memo(ids []string) map[string][]model.Reply {
 			{ToolCalls: []model.ToolCall{call("committee", m{})}},
 			{ToolCalls: []model.ToolCall{call("finish", m{"op": "submit", "limitations": nil})}},
 			{ToolCalls: []model.ToolCall{call("finish", m{"op": "submit", "limitations": nil})}}},
-		"extract_facts": {reply(m{"findings": []m{{"claim": "Greystone claims $644,910.", "quotes": []m{{"documentId": ids[0], "quote": "Greystone claims damages of $644,910 for unpaid invoices", "locator": nil}},
+		"extract_facts": {reply(m{"findings": []m{{"issueId": nil, "claim": "Greystone claims $644,910.", "quotes": []m{{"documentId": ids[0], "quote": "Greystone claims damages of $644,910 for unpaid invoices", "locator": nil}},
 			"values": []m{}, "entities": []m{}, "relations": []m{}, "confidence": 0.9}}, "gaps": []string{}})},
 		"draft_section": {reply(m{"markdown": "Greystone claims damages of $644,910 [F1].", "summary": "s"})},
 		"prosecute":     {reply(m{"verdicts": []m{}})}, "reproduce": {reply(m{"answers": []m{}})}, "audit_gaps": {reply(m{"gaps": []m{}})},

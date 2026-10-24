@@ -131,7 +131,7 @@ func oracle(mt matter, ids map[string]string) map[string][]model.Reply {
 			}
 		}
 		extracts = append(extracts, call("extract_facts", m{"question": it.Question, "documentId": nil, "sectionId": nil, "through": nil, "offset": nil, "query": it.Question, "issueId": iid}))
-		sc["extract_facts"] = append(sc["extract_facts"], reply(m{"findings": []m{{"claim": it.ModelAnswer, "quotes": quotes, "values": []m{}, "entities": []m{},
+		sc["extract_facts"] = append(sc["extract_facts"], reply(m{"findings": []m{{"issueId": nil, "claim": it.ModelAnswer, "quotes": quotes, "values": []m{}, "entities": []m{},
 			"relations": []m{}, "confidence": 1}}, "gaps": []string{}}))
 		for _, x := range engine.Untraced(it.ModelAnswer, strings.Join(it.Evidence, "\n"), false) {
 			op := []m{{"ref": nil, "literal": x, "unit": nil}, {"ref": nil, "literal": "0", "unit": nil}}
@@ -159,7 +159,7 @@ func oracle(mt matter, ids map[string]string) map[string][]model.Reply {
 func fabricator(mt matter, ids map[string]string) map[string][]model.Reply {
 	var fs []m
 	for i := range 8 {
-		fs = append(fs, m{"claim": fmt.Sprintf("Invented fact %d.", i), "quotes": []m{{"documentId": ids[firstDoc(mt)], "quote": fmt.Sprintf("the parties agreed in writing that consent number %d was obtained in full", i), "locator": nil}},
+		fs = append(fs, m{"issueId": nil, "claim": fmt.Sprintf("Invented fact %d.", i), "quotes": []m{{"documentId": ids[firstDoc(mt)], "quote": fmt.Sprintf("the parties agreed in writing that consent number %d was obtained in full", i), "locator": nil}},
 			"values": []m{}, "entities": []m{}, "relations": []m{}, "confidence": 0.9})
 	}
 	no := reply(m{"supported": false, "confidence": 0.9})
@@ -346,7 +346,7 @@ func TestLabRunnerSmoke(t *testing.T) {
 		"lead": {{ToolCalls: []model.ToolCall{plan}}, {ToolCalls: []model.ToolCall{call("extract_facts", m{"question": "q", "documentId": nil, "sectionId": nil, "through": nil, "offset": nil, "query": "served", "issueId": "I1"})}},
 			{ToolCalls: []model.ToolCall{call("draft_section", m{"issueId": "I1", "fids": []string{"F1"}, "revise": nil})}},
 			{ToolCalls: []model.ToolCall{call("committee", m{})}}, {ToolCalls: []model.ToolCall{call("finish", m{"op": "submit", "limitations": nil})}}},
-		"extract_facts": {reply(m{"findings": []m{{"claim": "Talbot was served on 10/21/2026.", "quotes": []m{{"documentId": "docket.md", "quote": "Talbot was served on 10/21/2026 via its registered agent", "locator": nil}},
+		"extract_facts": {reply(m{"findings": []m{{"issueId": nil, "claim": "Talbot was served on 10/21/2026.", "quotes": []m{{"documentId": "docket.md", "quote": "Talbot was served on 10/21/2026 via its registered agent", "locator": nil}},
 			"values": []m{}, "entities": []m{}, "relations": []m{}, "confidence": 1}}, "gaps": []string{}})},
 		"draft_section": {reply(m{"markdown": "Talbot was served on 10/21/2026 via its registered agent [F1].", "summary": "s"})},
 	}

@@ -191,6 +191,9 @@ type hooked struct {
 
 func (h hooked) Spec() agent.Spec {
 	s := h.Tool.Spec()
+	if s.Name == "check_deviation" { // its grant holds the requirement's check beside the subagent's own turns
+		s.MaxTurns++
+	}
 	if s.Name == "draft_section" {
 		s.Out = json.RawMessage(`{"type":"object","additionalProperties":false,"required":["issueId","version","words"],"properties":{"issueId":{"type":"string"},"version":{"type":"integer"},"words":{"type":"integer"}}}`)
 	} else {
@@ -209,6 +212,19 @@ func (h hooked) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 	var preUse agent.Usage // spent before the subagent ran (check_deviation's requirement check)
 	switch name {
 	case "extract_facts":
+		if str("issueId") == "" { // the plan's issues: each finding names the one it bears on (bench5 SEC: 896 findings, most on none)
+			issues, err := load[Issue](ctx, h.e, c.TaskID, kIssue)
+			if err != nil {
+				return agent.Result{}, err
+			}
+			var list []map[string]string
+			for _, is := range issues {
+				list = append(list, map[string]string{"id": is.ID, "question": is.Question})
+			}
+			if len(list) > 0 {
+				in["issues"] = list
+			}
+		}
 		if str("documentId") != "" && str("sectionId") != "" {
 			off, _ := in["offset"].(float64)
 			if str("through") != "" {
@@ -294,7 +310,15 @@ func (h hooked) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 				notes = append(notes, "authority not in the record (flagged if cited): "+a.Cite)
 			}
 		}
-		out, reward, err = h.e.admit(ctx, h.rt, c, b, name, str("issueId"), res.Model, ans.Findings, notes)
+		limit := 0 // findings one call may admit (admit): a page's own table rows are facts each, so a table page keeps one per row
+		if name == "extract_facts" {
+			rows := 0
+			for _, l := range strings.Split(str("sectionText"), "\n") {
+				rows += btoi(tableRow(l))
+			}
+			limit = max(maxFactsPerCall, rows)
+		}
+		out, reward, err = h.e.admit(ctx, h.rt, c, b, name, str("issueId"), res.Model, ans.Findings, notes, limit)
 		if err == nil && name == "analyze_issue" && strings.TrimSpace(ans.Conclusion) != "" && str("issueId") != "" { // for the issue's drafter (cover.go)
 			err = h.e.write(ctx, c.TaskID, kAnalysis, str("issueId"), Analysis{truncate(ans.Rule, 1500), truncate(ans.Application, 3000), truncate(ans.Conclusion, 1000)}, true)
 		}
@@ -310,6 +334,7 @@ func (h hooked) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 
 // draftFinding is a subagent's finding before Go has checked it.
 type draftFinding struct {
+	IssueID    *string // the plan issue it bears on (extract_facts without an issueId of its own)
 	Claim      string
 	Quotes     []analysis.Quote
 	Values     []analysis.Value
@@ -392,15 +417,32 @@ func currencyOf(value, quote string) string {
 // finding verifies only when all of them do; otherwise it is quarantined), each value kept only
 // when its own quote states it, each relation typed by BELO-lite, near-duplicates merged into the
 // first. The reward is the share of quotes that verified.
-func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *agent.Budget, tool, issueID, model string, drafts []draftFinding, notes []string) (hookResult, float64, error) {
+func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *agent.Budget, tool, issueID, model string, drafts []draftFinding, notes []string, limit int) (hookResult, float64, error) {
 	out := hookResult{Findings: []map[string]any{}, Notes: append([]string{}, notes...)}
 	all, err := load[Finding](ctx, e, c.TaskID, kFinding)
 	if err != nil {
 		return out, 0, err
 	}
-	quotes, ok := 0, 0
-	for _, d := range drafts {
-		f := Finding{Finding: analysis.Finding{IssueID: issueID, Claim: strings.TrimSpace(d.Claim), Quotes: d.Quotes, Entities: d.Entities}, Severity: "medium", Arm: agent.Arm{Tool: tool, Model: model}}
+	var plan []Issue
+	if tool == "extract_facts" && issueID == "" {
+		if plan, err = load[Issue](ctx, e, c.TaskID, kIssue); err != nil {
+			return out, 0, err
+		}
+	}
+	quotes, ok, off, over := 0, 0, 0, 0
+	for k, d := range drafts {
+		fi := issueID
+		if len(plan) > 0 { // a fact on none of the plan's issues is not admitted
+			if fi = deref(d.IssueID); !slices.ContainsFunc(plan, func(is Issue) bool { return is.ID == fi }) {
+				off++
+				continue
+			}
+		}
+		if limit > 0 && k-off >= limit {
+			over++
+			continue
+		}
+		f := Finding{Finding: analysis.Finding{IssueID: fi, Claim: strings.TrimSpace(d.Claim), Quotes: d.Quotes, Entities: d.Entities}, Severity: "medium", Arm: agent.Arm{Tool: tool, Model: model}}
 		var text strings.Builder
 		for _, q := range d.Quotes {
 			cit, err := e.verify(ctx, rt, c, b, tool, q)
@@ -426,7 +468,7 @@ func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 		f.Values = append(f.Values, claimSums(f.Claim, text.String(), f.Values)...)
 		f.Relations, _ = analysis.Relations(d.Entities, d.Relations)
 		if i := slices.IndexFunc(all, func(x Finding) bool {
-			return x.Verified && f.Verified && x.IssueID == f.IssueID && nearDuplicate(x.Claim, f.Claim)
+			return x.Verified && f.Verified && (x.IssueID == f.IssueID && nearDuplicate(x.Claim, f.Claim) || restated(x, f))
 		}); i >= 0 {
 			for _, c := range f.Citations {
 				if !slices.ContainsFunc(all[i].Citations, func(x Citation) bool { return x.DocumentID == c.DocumentID && x.Quote == c.Quote }) {
@@ -450,10 +492,60 @@ func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 			out.Dropped++
 		}
 	}
+	if off > 0 {
+		out.Notes = append(out.Notes, fmt.Sprintf("dropped %d %s that named none of the plan's issues", off, plural(off, "finding", "findings")))
+	}
+	if over > 0 {
+		out.Notes = append(out.Notes, fmt.Sprintf("dropped %d %s past the first %d of one call", over, plural(over, "finding", "findings"), limit))
+	}
 	if quotes == 0 {
 		return out, map[bool]float64{true: 1, false: 0}[len(drafts) == 0], nil
 	}
 	return out, float64(ok) / float64(quotes), nil
+}
+
+// maxFactsPerCall bounds the findings one extract_facts call (a sweep's page) admits, in the order the
+// subagent gave them, most important first (a table page: one per row it holds, if more: a row is a
+// trade or a payment) (bench5 SEC: 896 findings from 142 pages, up to 177 from one
+// section, an investment-process brochure's; the run's committee and drafters then read a ledger most
+// of which no issue needed). Twelve is about twice the bench's mean per page.
+const maxFactsPerCall = 12
+
+// restated reports whether f restates the admitted x (bench5: the referral's figures restated page after
+// page, and the lead's extract_facts re-extracting what the sweep had): the same typed figures and
+// dates, at least one, and the same words (each of f's quotes inside one of x's, or the quotes' 3-word
+// shingles at least half shared), across pages and issues. A finding that says a breach is never
+// folded into one that does not (it would lose its claim: "Item 11 failed to disclose" the stake
+// another finding merely states).
+func restated(x, f Finding) bool {
+	key := func(vs []analysis.Value) []string {
+		var out []string
+		for _, v := range vs {
+			if _, c, _, ok := analysis.Canon(v); ok {
+				out = append(out, c)
+			} else {
+				out = append(out, strings.ToLower(norm(v.Value)))
+			}
+		}
+		slices.Sort(out)
+		return slices.Compact(out)
+	}
+	if len(f.Values) == 0 || !slices.Equal(key(x.Values), key(f.Values)) || salientFinding(f) && !salientFinding(x) {
+		return false
+	}
+	var xq, fq []string
+	for _, q := range x.Quotes {
+		xq = append(xq, strings.ToLower(norm(q.Quote)))
+	}
+	for _, q := range f.Quotes {
+		fq = append(fq, strings.ToLower(norm(q.Quote)))
+	}
+	inside := len(fq) > 0
+	for _, q := range fq {
+		inside = inside && slices.ContainsFunc(xq, func(y string) bool { return strings.Contains(y, q) })
+	}
+	rows := slices.ContainsFunc(append(slices.Clone(x.Quotes), f.Quotes...), func(q analysis.Quote) bool { return slices.ContainsFunc(strings.Split(q.Quote, "\n"), tableRow) })
+	return inside || !rows && similarity(strings.Join(xq, " "), strings.Join(fq, " ")) >= dupThreshold // two rows of one table share most words and are two facts
 }
 
 // claimMoney is a sum of money as a claim states it: a currency sign and a figure, an optional scale.
