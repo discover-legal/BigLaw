@@ -127,16 +127,19 @@ func Tools(src Source) []agent.Tool {
 			if err != nil {
 				return nil, agent.Usage{}, err
 			}
-			var picked []Finding
 			for _, id := range in.FIDs {
-				i := slices.IndexFunc(fs, func(f Finding) bool { return f.FID == id })
-				if i < 0 || !fs[i].Verified {
+				if i := slices.IndexFunc(fs, func(f Finding) bool { return f.FID == id }); i < 0 || !fs[i].Verified {
 					return nil, agent.Usage{}, agent.Fail("join_discrepancies: " + id + " is not a verified finding of this task; name only verified findings, or none for all")
 				}
-				picked = append(picked, fs[i])
 			}
-			if len(in.FIDs) == 0 { // null and [] both mean every finding, as in numbers
-				picked = fs
+			// the join runs over every verified finding, so a conflict between one issue's finding and
+			// another's is found when either is named (bench5 SEC: per-issue fids split each pair); fids
+			// only choose which conflicts to report: those holding a named finding (null or []: all)
+			conflicts := []Conflict{}
+			for _, x := range Join(fs, in.Aliases) {
+				if len(in.FIDs) == 0 || slices.ContainsFunc(x.Values, func(v ConflictVal) bool { return slices.Contains(in.FIDs, v.FID) }) {
+					conflicts = append(conflicts, x)
+				}
 			}
 			unread := []string{}
 			if u, ok := src.(Unswept); ok {
@@ -145,7 +148,7 @@ func Tools(src Source) []agent.Tool {
 				}
 			}
 			pg := agent.NewPage() // one page (truncated: name fewer fids)
-			return map[string]any{"conflicts": agent.Take(pg, append([]Conflict{}, Join(picked, in.Aliases)...)), "unreadDocuments": agent.Take(pg, append([]string{}, unread...)),
+			return map[string]any{"conflicts": agent.Take(pg, conflicts), "unreadDocuments": agent.Take(pg, append([]string{}, unread...)),
 				"truncated": pg.Truncated}, agent.Usage{}, nil
 		}},
 	}

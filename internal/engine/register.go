@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -87,7 +88,7 @@ func (e *Engine) runtime(r *run) (*agent.Runtime, error) {
 		BudgetCalls: e.cfg.BudgetCalls, Off: !r.t.ToolBandit}
 	tools := e.docs.Tools(rt)
 	an := analysis.Tools(e)
-	tools = append(tools, sheets{an[0], e}, an[1], e.ledgerTool(), e.sweepTool(rt, r), e.committeeTool(rt, r), e.finishTool(rt, r), e.coverTool(rt, r))
+	tools = append(tools, sheets{an[0], e}, aliasJoin{an[1], e}, e.ledgerTool(), e.sweepTool(rt, r), e.committeeTool(rt, r), e.finishTool(rt, r), e.coverTool(rt, r))
 	sub, _ := fs.Sub(specFS, "specs/agents")
 	subs, err := rt.LoadSubagents(sub)
 	if err != nil {
@@ -140,6 +141,43 @@ func (s sheets) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 		err = s.e.write(ctx, c.TaskID, kSheet, w.WID, w, false)
 	}
 	return res, err
+}
+
+// aliasJoin keeps the aliases the lead passes join_discrepancies for the run (kAlias), so finish's and
+// the coverage pass's own join (discrepancies) unify the same parties (bench r3: aliases were the
+// lead's only way to pair one firm's figures under two names, and finish never saw them).
+type aliasJoin struct {
+	agent.Tool
+	e *Engine
+}
+
+func (j aliasJoin) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
+	var in struct{ Aliases []analysis.Alias }
+	_ = json.Unmarshal(c.Input, &in)
+	if len(in.Aliases) > 0 { // the call itself uses its own and the run's
+		was, err := load[analysis.Alias](ctx, j.e, c.TaskID, kAlias)
+		if err != nil {
+			return agent.Result{}, err
+		}
+		for _, a := range in.Aliases {
+			key := strings.ToLower(norm(a.Name))
+			if key == "" {
+				continue
+			}
+			if i := slices.IndexFunc(was, func(x analysis.Alias) bool { return strings.ToLower(norm(x.Name)) == key }); i >= 0 {
+				for _, o := range a.Aliases {
+					if !slices.Contains(was[i].Aliases, o) {
+						was[i].Aliases = append(was[i].Aliases, o)
+					}
+				}
+				a = was[i]
+			}
+			if err := j.e.write(ctx, c.TaskID, kAlias, key, a, true); err != nil {
+				return agent.Result{}, err
+			}
+		}
+	}
+	return j.Tool.Call(ctx, c)
 }
 
 // hooked is a subagent behind Go: its request is completed (a section's text, a drafter's
@@ -385,6 +423,7 @@ func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 				f.Values = append(f.Values, v)
 			}
 		}
+		f.Values = append(f.Values, claimSums(f.Claim, text.String(), f.Values)...)
 		f.Relations, _ = analysis.Relations(d.Entities, d.Relations)
 		if i := slices.IndexFunc(all, func(x Finding) bool {
 			return x.Verified && f.Verified && x.IssueID == f.IssueID && nearDuplicate(x.Claim, f.Claim)
@@ -415,6 +454,31 @@ func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 		return out, map[bool]float64{true: 1, false: 0}[len(drafts) == 0], nil
 	}
 	return out, float64(ok) / float64(quotes), nil
+}
+
+// claimMoney is a sum of money as a claim states it: a currency sign and a figure, an optional scale.
+var claimMoney = regexp.MustCompile(`[$£€¥]\s?\d[\d,]*(?:\.\d+)?(?:\s+(?:million|billion))?`)
+
+// claimSums are the sums of money a claim states and its verified quotes state too, which no typed
+// value carries (bench5 SEC F388: "payments totaling $103,800.00", the figure in its own quote, typed
+// nowhere, so the $92,600 vs $103,800 conflict had nothing to pair). Each is kept untyped: no entity,
+// no metric (so the label join never compares it; the near join does, by its quotes' words).
+func claimSums(claim, quotes string, have []analysis.Value) []analysis.Value {
+	var out []analysis.Value
+	canon := func(v analysis.Value) string { _, c, _, _ := analysis.Canon(v); return c }
+	seen := map[string]bool{}
+	for _, v := range have {
+		seen[canon(v)] = true
+	}
+	for _, s := range claimMoney.FindAllString(claim, -1) {
+		v := analysis.Value{Value: s, Class: "Money"}
+		if c := canon(v); c != "" && !seen[c] && inQuote(s, quotes) {
+			seen[c] = true
+			v.Unit = currencyOf(s, quotes)
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // inQuote reports whether a value is stated in the quotes: as text, or as the same number or date.

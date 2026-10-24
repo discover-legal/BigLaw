@@ -33,6 +33,7 @@ const (
 	kAnalysis = "analysis" // key: issue id; Analysis, analyze_issue's latest for the issue
 	kCover    = "cover"    // key: "pass"; Cover, the coverage pass's outcome (it runs once)
 	kSwept    = "swept"    // key: "sweep"; []SweptDoc, each document's sweep coverage (the latest sweep's)
+	kAlias    = "alias"    // key: a party's folded name; analysis.Alias, the names join_discrepancies was told it goes by
 )
 
 // Issue is one plan issue (the deliverable's spine), typed by a BELO-lite issue class.

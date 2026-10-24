@@ -392,6 +392,26 @@ func stemIn(set map[string]bool, w string) bool {
 	return false
 }
 
+// mentions reports whether x's quotes name y's entity: every distinctive word of it (a stem match:
+// "trades", "traded"). Extracting models label one figure's entity inconsistently, the actor in one
+// finding and the thing counted in another (bench5 SEC: "Office of Quantitative Research" analysed
+// 4,217 trades "through the omnibus account", where the other document's 4,312 is entity "Omnibus
+// Equity Trades"; "Bellini" against a payment row that names "Marcus T. Bellini"), so a near quantity pair whose
+// entities differ is still one entity's figure when one side's quotes name the other's entity. Not for dates:
+// a party's name is in most of a matter's dated passages (a notice to Talbot and Talbot's service).
+func mentions(x, y entry) bool {
+	ws := tokens(y.v.Entity)
+	if len(ws) == 0 {
+		return false
+	}
+	for w := range ws {
+		if !stemIn(x.words, w) {
+			return false
+		}
+	}
+	return true
+}
+
 // maxNear bounds the near conflicts one join reports: they are leads to check, not a column dump.
 // nearSalience is the least salient quantity compared (any percentage, money from $1,000, a count
 // of thousands): a share price or a day count is too common for nearness to mean one fact.
@@ -450,7 +470,7 @@ func near(es []entry, found []Conflict, sameEntity func(a, b entry) bool) []Conf
 		for _, b := range es[i+1:] {
 			if a.class != b.class || a.doc == b.doc || a.doc == "" || b.doc == "" || held[a.fid+"|"+a.canon] && held[b.fid+"|"+b.canon] ||
 				a.class != "Date" && (Salience(a.v.Value) < nearSalience || Salience(b.v.Value) < nearSalience) || a.row() && b.row() ||
-				perDoc[a.doc][b.canon] || perDoc[b.doc][a.canon] || !pairable(a, b) || partOf(a, b) || partOf(b, a) || !close(a, b) || shared(a.words, b.words) < 3 || !sameEntity(a, b) || !sameMetric(a, b) {
+				perDoc[a.doc][b.canon] || perDoc[b.doc][a.canon] || !pairable(a, b) || partOf(a, b) || partOf(b, a) || !close(a, b) || shared(a.words, b.words) < 3 || !sameEntity(a, b) && (a.class == "Date" || !mentions(a, b) && !mentions(b, a)) || !sameMetric(a, b) {
 				continue
 			}
 			k := min(a.canon, b.canon) + "|" + max(a.canon, b.canon)

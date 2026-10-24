@@ -339,11 +339,13 @@ func addressed(c analysis.Conflict, memo string) bool {
 }
 
 // discrepancies is the cross-document join over every usable finding (analysis.Join, labels and
-// near values alike), and those the memo does not yet address.
+// near values alike, with the aliases the lead gave join_discrepancies), and those the memo does not
+// yet address.
 func (e *Engine) discrepancies(ctx context.Context, taskID string) (all, open []analysis.Conflict, err error) {
 	use, err := e.usable(ctx, taskID)
 	secs, serr := load[Section](ctx, e, taskID, kSection)
-	if err = cmpErr(err, serr); err != nil {
+	aliases, aerr := load[analysis.Alias](ctx, e, taskID, kAlias) // the lead's, from join_discrepancies
+	if err = cmpErr(err, serr, aerr); err != nil {
 		return nil, nil, err
 	}
 	an := make([]analysis.Finding, 0, len(use))
@@ -351,7 +353,7 @@ func (e *Engine) discrepancies(ctx context.Context, taskID string) (all, open []
 		an = append(an, f.Finding)
 	}
 	memo := memoText(secs)
-	for _, c := range analysis.Join(an, nil) {
+	for _, c := range analysis.Join(an, aliases) {
 		all = append(all, c)
 		if !addressed(c, memo) {
 			open = append(open, c)

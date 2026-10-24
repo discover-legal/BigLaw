@@ -6,11 +6,13 @@ package engine
 import (
 	"context"
 	"hash/fnv"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/discover-legal/BigLaw/internal/agent"
+	"github.com/discover-legal/BigLaw/internal/analysis"
 	"github.com/discover-legal/BigLaw/internal/docs"
 	"github.com/discover-legal/BigLaw/internal/model"
 	"github.com/discover-legal/BigLaw/internal/store"
@@ -200,5 +202,64 @@ func TestSectionCheckNotHadAdmitsLowGated(t *testing.T) {
 	chk, why, err := (&Engine{}).checkSection(context.Background(), &agent.Runtime{Chat: fake, Roles: testRoles}, agent.NewBudget(0, 0, 0), newReq(incapMemo, spans))
 	if err != nil || chk != nil || !strings.Contains(why, "could not fund") || len(fake.Calls()) != 0 {
 		t.Errorf("no grant: check %+v, why %q, err %v, calls %d", chk, why, err, len(fake.Calls()))
+	}
+}
+
+// bench5 SEC: the referral's compensation paragraph and the bank-records exhibit's last rows, verbatim.
+const (
+	compRef  = "The Division alleges that Bellini received undisclosed compensation from Ostrowski in connection with the directed brokerage arrangement.\nThe total undisclosed compensation received by Bellini, in the form of payments made by Ostrowski to Bayshore Palms Golf & Country Club for Bellini's benefit, was approximately $92,600 ($45,000 initiation fee + $47,600 in monthly dues = $92,600). The Division alleges that these payments constituted compensation to Bellini for directing client trades to Lakeshore Trading and were not disclosed to WCA, its compliance personnel, or any affected client.\n"
+	compRows = "Total Monthly Dues\tSum of all monthly membership dues payments (2022 + 2023 + 2024)\t05/03/2022 – 01/02/2024\t21\t$2,800.00\t$58,800.00\nGRAND TOTAL\tTotal of all payments from Ostrowski personal account to Bayshore Palms Golf & Country Club on behalf of Marcus T. Bellini\t05/03/2022 – 01/02/2024\t22\t\t$103,800.00\n"
+)
+
+// TestBench5CompensationConflictReachesFinish (bench5 SEC C-035/C-036: $92,600 vs $103,800 never
+// paired): F388 as the run extracted it, verbatim (its row quoted with " | " for the exhibit's tabs, its
+// $103,800.00 stated in its claim and quote but typed nowhere), now verifies, keeps the sum as an
+// untyped value, and finish's own join over all verified findings asks the memo to state both figures.
+func TestBench5CompensationConflictReachesFinish(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, compRef, compRows)
+	d1, d2 := f.docs[0].ID, f.docs[1].ID
+	f752 := fd("Bellini received undisclosed compensation from Ostrowski totaling approximately $92,600 in connection with a directed brokerage arrangement with Lakeshore Trading.", d1,
+		"The total undisclosed compensation received by Bellini, in the form of payments made by Ostrowski to Bayshore Palms Golf & Country Club for Bellini's benefit, was approximately $92,600 ($45,000 initiation fee + $47,600 in monthly dues = $92,600).",
+		val("Bellini", "total undisclosed compensation", "$92,600", "Money"), val("Ostrowski", "initiation fee payment", "$45,000", "Money"), val("Ostrowski", "total monthly dues for period", "$47,600", "Money"))
+	f388 := fd("Kevin Ostrowski's personal checking account at Coastal Commerce Bank was used to make payments totaling $103,800.00 to Bayshore Palms Golf & Country Club on behalf of Marcus T. Bellini between May 3, 2022 and January 2, 2024.", d2,
+		"Total of all payments from Ostrowski personal account to Bayshore Palms Golf & Country Club on behalf of Marcus T. Bellini | 05/03/2022 – 01/02/2024 | 22 | | $103,800.00",
+		val("Marcus T. Bellini", "CRD Number", "5098321", "Identifier"), val("payments from Ostrowski", "count", "22", "Count"), val("monthly dues payments", "count", "21", "Count"))
+	v := f.run(f.with(map[string][]model.Reply{
+		"lead": {calls(plan(issue("I1", "What compensation did Bellini receive?", "RedFlag"))), calls(extract(d1, "compensation", "I1")), calls(extract(d2, "payments", "I1")),
+			calls(draft("I1", "F1")), calls(committee()), calls(finishCall("check"))},
+		"extract_facts": {facts(f752), facts(f388)},
+		"draft_section": {section("Bellini received about $92,600 [F1].", "s")},
+	}), Config{})
+	fs := ledgerFindings(t, f, v.ID)
+	if len(fs) != 2 || !fs[1].Verified || !slices.ContainsFunc(fs[1].Values, func(x analysis.Value) bool { return x.Value == "$103,800.00" && x.Metric == "" }) {
+		t.Fatalf("F2 %+v", fs)
+	}
+	fin := strings.Join(f.outputs(v.ID, "finish"), "")
+	if !strings.Contains(fin, "[F1] $92,600 vs [F2] $103,800.00") || !strings.Contains(fin, "the memo does not state both") {
+		t.Fatalf("finish %s\n%s", fin, f.steps(v.ID))
+	}
+}
+
+// TestJoinAliasesReachFinish: aliases the lead gives join_discrepancies are kept for the run, so
+// finish's own join of the memo's conflicts unifies the same parties (it ran with none before).
+func TestJoinAliasesReachFinish(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, "1. Fees\nThe Adviser paid commissions of $291,400 to Lakeshore Trading LLC.\n", "Schedule\nOstrowski received commissions of $310,000 in the period.\n")
+	d1, d2 := f.docs[0].ID, f.docs[1].ID
+	join := tc("join_discrepancies", m{"fids": nil, "aliases": []m{{"name": "Lakeshore Trading LLC", "aliases": []string{"Ostrowski"}}}})
+	v := f.run(f.with(map[string][]model.Reply{
+		"lead": {calls(plan(issue("I1", "What commissions were paid?", "RedFlag"))), calls(extract(d1, "commissions", "I1")), calls(extract(d2, "commissions", "I1")),
+			calls(join), calls(draft("I1", "F1")), calls(committee()), calls(finishCall("check"))},
+		"extract_facts": {facts(fd("The Adviser paid commissions of $291,400 to Lakeshore Trading LLC.", d1, "The Adviser paid commissions of $291,400 to Lakeshore Trading LLC",
+			val("Lakeshore Trading LLC", "commissions", "$291,400", "Money"))),
+			facts(fd("Ostrowski received commissions of $310,000.", d2, "Ostrowski received commissions of $310,000 in the period", val("Ostrowski", "commissions", "$310,000", "Money")))},
+		"draft_section": {section("The Adviser paid $291,400 in commissions [F1].", "s")},
+	}), Config{})
+	if j := strings.Join(f.outputs(v.ID, "join_discrepancies"), ""); !strings.Contains(j, "$310,000") {
+		t.Fatalf("join %s", j)
+	}
+	if fin := strings.Join(f.outputs(v.ID, "finish"), ""); !strings.Contains(fin, "commissions differently ([F2] $310,000 vs [F1] $291,400)") && !strings.Contains(fin, "commissions differently ([F1] $291,400 vs [F2] $310,000)") {
+		t.Fatalf("finish %s\n%s", fin, f.steps(v.ID))
 	}
 }
