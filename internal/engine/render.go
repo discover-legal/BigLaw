@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/discover-legal/BigLaw/internal/agent"
+	"github.com/discover-legal/BigLaw/internal/analysis"
 )
 
 // draftReq is a draft_section request as Go completed it, with the handle set the drafter got.
@@ -115,7 +116,8 @@ func (e *Engine) draftRequest(ctx context.Context, taskID string, scope []string
 
 // saveSection records a drafted section with the handle set its drafter was given; the draft's
 // version moves on.
-func (e *Engine) saveSection(ctx context.Context, taskID string, d draftReq, answer json.RawMessage) (any, error) {
+func (e *Engine) saveSection(ctx context.Context, rt *agent.Runtime, c agent.Call, b *agent.Budget, d draftReq, answer json.RawMessage) (any, error) {
+	taskID := c.TaskID
 	var a struct{ Markdown, Summary string }
 	_ = json.Unmarshal(answer, &a)
 	secs, err := load[Section](ctx, e, taskID, kSection)
@@ -123,6 +125,17 @@ func (e *Engine) saveSection(ctx context.Context, taskID string, d draftReq, ans
 		return nil, err
 	}
 	s := Section{IssueID: d.issueID, Markdown: splitCites(a.Markdown), Summary: splitCites(a.Summary), Handles: d.figs, Version: version(secs) + 1}
+	body, regs := memoBody(s) // the figures the drafter wrote (not Go's handle values), read for G8 and the coverage pass
+	if spans := memoSpans(body, regs); len(spans) > 0 {
+		it := newReading(nil, []analysis.Passage{{ID: "m", Text: body, Spans: spans}}, []passageIn{{ID: "m", Kind: "memo", Text: body}})
+		if err := e.readFigures(ctx, rt, c, b, "draft_section", []*reading{it}); err != nil {
+			return nil, err
+		}
+		if it.read {
+			rs, _ := it.readings()
+			s.Read = &SectionRead{Hash: textHash(body), Figs: ofPassage(rs, "m")}
+		}
+	}
 	if err := e.write(ctx, taskID, kSection, d.issueID, s, true); err != nil {
 		return nil, err
 	}

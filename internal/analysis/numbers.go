@@ -114,23 +114,17 @@ func resolve(findings []Finding, o Operand) (operand, error) {
 		return operand{}, errors.New(`an operand needs ref or literal, e.g. {"ref": "F12.v1", "literal": null, "unit": null} or {"ref": null, "literal": "21", "unit": "days"}`)
 	}
 	unit := cmp.Or(map[Class]string{"Percentage": "%", "Date": "date"}[ClassOf(v)], strings.ToLower(v.Unit))
-	if ClassOf(v) == "Money" { // the currency the figure parser reads (the value's, else its unit's), else US dollars
-		f, why := ValueFigure(v)
-		cur := cmp.Or(map[bool]string{true: f.Cur}[why == ""], UnitCur(v.Unit))
-		switch {
-		case cur == "USD" || cur == "" && slices.Contains([]string{"", "$", "usd", "dollars"}, unit):
-			unit = "USD"
-		case cur != "":
-			unit = strings.ToLower(cur) // another currency keeps its own unit ("gbp", as a literal's unit is written)
-		}
+	if len(unit) == 3 && strings.IndexFunc(unit, func(r rune) bool { return r < 'a' || r > 'z' }) < 0 {
+		unit = strings.ToUpper(unit) // a currency code, however written ("usd")
+	}
+	num, why := operandNumber(v, o.Ref != nil)
+	if o.Ref != nil && ClassOf(v) == "Money" && v.Fig != nil && v.Fig.Currency != "" {
+		unit = v.Fig.Currency // the currency the figure reader read the value in
 	}
 	if strings.Contains(unit, "day") { // "calendar days", "day"
 		unit = "days"
 	}
-	if f, n, ok := number(v.Value); ok && f.Class == CountFig && strings.TrimSuffix(f.Noun, "s") == "day" && n.IsInt() && (unit == "" || unit == "days" || unit == "count") {
-		v.Value, unit = n.RatString(), "days" // "21 days", "21 calendar days", read by the figure parser
-	}
-	if _, _, isNum := number(v.Value); unit == "" && !isNum {
+	if unit == "" && num == nil {
 		if d, ok := ParseDate(v.Value); ok && d.Day != 0 {
 			unit = "date"
 		}
@@ -141,10 +135,27 @@ func resolve(findings []Finding, o Operand) (operand, error) {
 			return x, fmt.Errorf("%q is not a full date (write it as 2026-11-12)", v.Value)
 		}
 		x.date = &d
-	} else if _, x.num, ok = number(v.Value); !ok {
-		return x, fmt.Errorf("%q is not a number (give a date with unit \"date\", a number of days as \"21\" with unit \"days\")", v.Value)
+	} else if x.num = num; num == nil {
+		return x, fmt.Errorf("%q is not a number: %s (give a date with unit \"date\", a number of days as \"21\" with unit \"days\")", v.Value, why)
 	}
 	return x, nil
+}
+
+// operandNumber is an operand's exact amount: a finding's value as the figure reader read it (its
+// scale and sign applied; a value it did not read, or read as unclear, is no operand), a literal as
+// written (one number, whose form reads one way).
+func operandNumber(v Value, ref bool) (*big.Rat, string) {
+	if ref {
+		if v.Fig == nil || v.Fig.Unclear || v.Fig.Rat() == nil || v.Fig.Kind == KindDate {
+			return nil, "the figure reader did not read it as a number with no doubt"
+		}
+		return v.Fig.Rat(), ""
+	}
+	_, ss := Literal(v.Value)
+	if len(ss) != 1 || len(ss[0].Readings()) != 1 {
+		return nil, "a literal is one number written so that it reads one way"
+	}
+	return ss[0].Readings()[0], ""
 }
 
 func abs(n int64) int64 { return max(n, -n) }
@@ -303,6 +314,7 @@ type Handle struct {
 	Ref    string `json:"ref"`
 	Label  string `json:"label"`
 	Value  string `json:"-"`
+	v      Value  // the value it names (Salience)
 }
 
 var codenames = strings.Fields(`Zephyr Quasar Nimbus Halcyon Obsidian Saffron Tundra Vesper Cobalt Juniper Marigold Onyx
@@ -315,17 +327,20 @@ var MaxHandles = len(codenames)
 
 // Salience ranks a figure for the key-figures guarantee: big money, large counts and major rates
 // first; small bare numbers (exhibit noise) last (v1's figureSalience).
-func Salience(v string) int {
-	fig, x, ok := number(v) // the figure parser: any currency is money, a decimal comma is no grouping
-	f := 0.0
+// A value's figure is the figure reader's clear reading of it (Value.Fig); one it did not read ranks last.
+func Salience(v Value) int {
+	ok := v.Fig != nil && v.Fig.Clear()
+	f, grouped := 0.0, false
 	if ok {
-		f, _ = new(big.Rat).Abs(x).Float64()
+		f, _ = new(big.Rat).Abs(v.Fig.Rat()).Float64()
+		_, ss := Literal(v.Value)
+		grouped = slices.ContainsFunc(ss, func(s Span) bool { return s.Grouped() })
 	}
-	dollar, pct := ok && fig.Class == MoneyFig, ok && fig.Class == PercentFig
+	dollar, pct := ok && v.Fig.Kind == KindMoney, ok && v.Fig.Kind == KindPercent
 	switch {
 	case dollar && f >= 100000:
 		return 100
-	case ok && fig.Grouped && !dollar && f >= 1000:
+	case ok && grouped && !dollar && f >= 1000:
 		return 95
 	case dollar && f >= 10000:
 		return 90
@@ -362,10 +377,10 @@ func Handles(findings []Finding, fids []string, top int, kept ...Handle) []Handl
 				continue
 			}
 			seen[v.Value] = true
-			hs = append(hs, Handle{FID: f.FID, Ref: fmt.Sprintf("%s.v%d", f.FID, i+1), Label: strings.TrimSpace(v.Entity + " " + v.Metric), Value: v.Value})
+			hs = append(hs, Handle{FID: f.FID, Ref: fmt.Sprintf("%s.v%d", f.FID, i+1), Label: strings.TrimSpace(v.Entity + " " + v.Metric), Value: v.Value, v: v})
 		}
 	}
-	slices.SortStableFunc(hs, func(a, b Handle) int { return Salience(b.Value) - Salience(a.Value) })
+	slices.SortStableFunc(hs, func(a, b Handle) int { return Salience(b.v) - Salience(a.v) })
 	name, used, next := map[string]string{}, map[string]bool{}, 0
 	for _, k := range kept {
 		name[k.Value], used[k.Handle] = k.Handle, true

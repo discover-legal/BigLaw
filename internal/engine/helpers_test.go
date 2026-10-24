@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/discover-legal/BigLaw/internal/analysis"
 	"github.com/discover-legal/BigLaw/internal/docs"
 	"github.com/discover-legal/BigLaw/internal/model"
 	"github.com/discover-legal/BigLaw/internal/store"
@@ -34,6 +35,12 @@ type fixture struct {
 	st   *store.Store
 	d    *docs.Service
 	docs []docs.Document
+	// parties are the parties the figure reader's stand-in gives spans written so (figreader_test.go):
+	// a test's "right labels" for whose figure a number is.
+	parties map[string]string
+	// reads are the figure reader's labels for spans, by "<passage kind>:<span text>" ("quote:4,000"):
+	// a test's right labels where the stand-in would read otherwise (its Span is set by the stand-in).
+	reads map[string]analysis.Label
 }
 
 const complaintText = `1. Parties
@@ -85,7 +92,10 @@ func (f *fixture) engine(scripts map[string][]model.Reply, cfg Config) (*Engine,
 	if cfg.BudgetCalls == 0 {
 		cfg = Config{BudgetCalls: 150, BudgetUSD: 5, CollapseThreshold: 0.5, CollapseAction: "strict"}
 	}
-	fake := model.NewFake(scripts)
+	fake := newFake(scripts)
+	if fake.Respond != nil && (f.parties != nil || f.reads != nil) {
+		fake.Respond = oracleWith(f.parties, f.reads)
+	}
 	f.e = New(f.st, f.d, fake, testRoles, nil, cfg, nil)
 	return f.e, fake
 }

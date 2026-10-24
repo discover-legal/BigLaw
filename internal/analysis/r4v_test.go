@@ -17,12 +17,12 @@ func TestNearNeverPairsOppositePayments(t *testing.T) {
 			Quotes: []Quote{{DocumentID: "bank", Quote: "On March 10, 2024, Baker LLC paid Acme Corp $47,000 by wire for used equipment."}},
 			Values: []Value{{Entity: "Baker LLC", Metric: "payment", Value: "$47,000", Class: "Money"}}},
 	}
-	if cs := Join(fs, nil); len(cs) > 0 {
+	if cs := joinRead(fs, nil); len(cs) > 0 {
 		t.Errorf("two different payments paired as one figure stated differently: %+v", cs)
 	}
 	fs[1].Quotes[0].Quote = "On March 10, 2024, Acme Corp paid Baker LLC $47,000 by wire for consulting services."
 	fs[1].Values[0].Entity = "Acme Corp"
-	if cs := Join(fs, nil); len(cs) != 1 {
+	if cs := joinRead(fs, nil); len(cs) != 1 {
 		t.Errorf("one payment stated differently, the same payer typed, not paired: %+v", cs)
 	}
 }

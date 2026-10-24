@@ -206,7 +206,7 @@ func TestCoverageDraftsLeftOutEvidence(t *testing.T) {
 	}
 	if stop(v) != "awaiting_gate/finished" || !strings.Contains(placed, "These findings never reached the memo: F3") || !strings.Contains(out, "2,614 omnibus trades [F3]") ||
 		!strings.Contains(out, "4,312") || strings.Count(f.steps(v.ID), "tool_call:committee") != 2 {
-		t.Fatalf("%s: last drafter request %.300q\n%s\n%s", stop(v), placed, f.steps(v.ID), out)
+		t.Fatalf("%s: last drafter request %.300q\n%s\n%s\n%q", stop(v), placed, f.steps(v.ID), out, f.outputs(v.ID, "finish"))
 	}
 	if strings.Contains(out, "never reached the memo") {
 		t.Fatalf("a placed finding was disclosed as left out:\n%s", out)

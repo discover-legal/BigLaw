@@ -41,7 +41,7 @@ func (s *secShaped) Chat(ctx context.Context, req model.Request) (*model.Respons
 	s.reqs = append(s.reqs, req)
 	s.mu.Unlock()
 	usd := map[string]float64{"lead": 0.026, "extract_facts": 0.014, "draft_section": 0.026, "analyze_issue": 0.15, "prosecute": 0.14, "reproduce": 0.14,
-		"audit_gaps": 0.13, "meta": 0.002, "section_check": 0.005}[req.Agent]
+		"audit_gaps": 0.13, "meta": 0.002, "section_check": 0.005, "read_figures": 0.003}[req.Agent]
 	body := fmt.Sprint(req.Messages[len(req.Messages)-1].Content)
 	var r model.Reply
 	switch req.Agent {
@@ -80,6 +80,8 @@ func (s *secShaped) Chat(ctx context.Context, req model.Request) (*model.Respons
 		r = noAnswers
 	case "audit_gaps":
 		r = noGaps
+	case "read_figures": // the figure reader's stand-in (figreader_test.go), at a small critic call's cost
+		r, _ = readerOracle(req)
 	default:
 		r = metaNote
 	}

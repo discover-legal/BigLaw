@@ -396,7 +396,7 @@ func TestPhaseSharesHoldInUSD(t *testing.T) {
 		"extract_facts": ex,
 		"draft_section": {costly(section("The supplier must deliver lot 1 on time [F1].", "Delivery duty [F1]."), 0.05)},
 	})
-	f.e = New(f.st, f.d, model.NewFake(scripts), testRoles, prices, Config{BudgetCalls: 150, BudgetUSD: 2, CollapseThreshold: 0.5, CollapseAction: "strict"}, nil)
+	f.e = New(f.st, f.d, newFake(scripts), testRoles, prices, Config{BudgetCalls: 150, BudgetUSD: 2, CollapseThreshold: 0.5, CollapseAction: "strict"}, nil)
 	task := f.submit(0)
 	f.step(context.Background())
 	v := f.get(task.ID)
@@ -423,7 +423,7 @@ func TestCommitteeAlwaysReviewsTheLastDraft(t *testing.T) {
 	for range 12 {
 		lead = append(lead, search)
 	}
-	fake := model.NewFake(f.with(map[string][]model.Reply{"lead": append(lead, calls(committee()), calls(finishCall("submit")))}))
+	fake := newFake(f.with(map[string][]model.Reply{"lead": append(lead, calls(committee()), calls(finishCall("submit")))}))
 	f.e = New(f.st, f.d, fake, testRoles, nil, Config{BudgetCalls: 30, BudgetUSD: 5, CollapseThreshold: 0.5, CollapseAction: "strict"}, nil)
 	task := f.submit(0)
 	f.step(context.Background())

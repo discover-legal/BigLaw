@@ -4,11 +4,9 @@
 package analysis
 
 import (
-	"cmp"
 	"fmt"
 	"math/big"
 	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -113,40 +111,35 @@ func Decimal(r *big.Rat) string {
 	return s
 }
 
-// ClassOf is a value's quantity class: the one stated, else from its unit, else from its text.
+// ClassOf is a value's quantity class: the one stated, else the kind its figure was read as, else
+// from its text (a date, an authority).
 func ClassOf(v Value) Class {
 	if c := ParseClass(v.Class); c != "" {
 		return c
 	}
-	switch u := strings.ToLower(strings.TrimSpace(v.Unit)); {
-	case u == "usd" || u == "$" || u == "dollars":
-		return "Money"
-	case u == "%" || u == "percent":
-		return "Percentage"
-	case u != "" && u != "days" && u != "years" && u != "months":
-		return "Count"
+	if v.Fig != nil && !v.Fig.Unclear {
+		if c := (map[string]Class{KindMoney: "Money", KindPercent: "Percentage", KindCount: "Count", KindDate: "Date"})[v.Fig.Kind]; c != "" {
+			return c
+		}
 	}
 	return ClassifyLiteral(v.Value)
 }
 
 // Canon is a value's comparable form within its class ("usd:9000000", "eur:3500000", "pct:73",
-// "n:4217", "date:2024-04-15"), read by the figure parser (ValueFigure): a money value's prefix is
-// its currency, the unit's when the text names none, US dollars when neither does. ok is false for a
-// value that is not a comparable quantity (a duration, an identifier, a name, an ambiguous figure).
+// "n:4217", "date:2024-04-15"): a quantity's from the figure reader's clear reading of it (its kind,
+// currency and exact amount: Value.Fig), a date's from its text. ok is false for a value that is not
+// a comparable quantity (no reading, an unclear one, a kind other than its class, a duration or an
+// identifier: kind other).
 func Canon(v Value) (class Class, canon string, d Date, ok bool) {
 	class = ClassOf(v)
 	switch class {
 	case "Money", "Percentage", "Count":
-		if f, why := ValueFigure(v); why == "" && !duration(f) {
-			r := new(big.Rat).Set(f.Amount)
-			if f.Neg {
-				r.Neg(r)
-			}
+		if f := v.Fig; f != nil && f.Clear() && f.Kind == KindOf(Value{Class: string(class)}) {
 			prefix := map[Class]string{"Percentage": "pct:", "Count": "n:"}[class]
 			if class == "Money" {
-				prefix = strings.ToLower(cmp.Or(f.Cur, "USD")) + ":"
+				prefix = strings.ToLower(f.Currency) + ":"
 			}
-			return class, prefix + Decimal(r), d, true
+			return class, prefix + f.Amount, d, true
 		}
 	case "Date":
 		if d, ok := ParseDate(v.Value); ok {
@@ -154,12 +147,6 @@ func Canon(v Value) (class Class, canon string, d Date, ok bool) {
 		}
 	}
 	return class, "", d, false
-}
-
-// duration reports whether a count is a span of time ("10 days"): never compared (a deadline in one
-// document is not the same obligation's deadline in another).
-func duration(f Figure) bool {
-	return f.Class == CountFig && slices.Contains([]string{"day", "week", "month", "year", "hour", "minute", "quarter"}, strings.TrimSuffix(f.Noun, "s"))
 }
 
 // CanonAmount decodes Canon's own output (never text a person wrote): its kind ("usd", "pct",

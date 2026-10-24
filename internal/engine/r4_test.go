@@ -95,7 +95,7 @@ func TestKillDuringCommitteeChargesMeteredSpend(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := Config{BudgetCalls: 150, BudgetUSD: 5, CollapseThreshold: 0.5, CollapseAction: "strict"}
-	k := &agentKill{Fake: model.NewFake(sc), agent: "reproduce", at: 2}
+	k := &agentKill{Fake: newFake(sc), agent: "reproduce", at: 2}
 	f.e = New(f.st, f.d, k, testRoles, prices, cfg, nil)
 	task := f.submit(0)
 	k.kill = func() { // the process dies: another holds the lease, so nothing it says is recorded
@@ -198,7 +198,7 @@ func TestSectionCheckNotHadAdmitsLowGated(t *testing.T) {
 			t.Errorf("%s: findings %+v; %q", name, fs, f.outputs(v.ID, "check_deviation"))
 		}
 	}
-	fake := model.NewFake(nil) // an unfunded grant makes no call
+	fake := newFake(nil) // an unfunded grant makes no call
 	spans, _, _ := placeRequirement(context.Background(), incapMemo, incapReq)
 	chk, why, err := (&Engine{}).checkSection(context.Background(), &agent.Runtime{Chat: fake, Roles: testRoles}, agent.NewBudget(0, 0, 0), newReq(incapMemo, spans))
 	if err != nil || chk != nil || !strings.Contains(why, "could not fund") || len(fake.Calls()) != 0 {
@@ -219,6 +219,7 @@ const (
 func TestBench5CompensationConflictReachesFinish(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, compRef, compRows)
+	f.parties = map[string]string{"92,600": "Marcus T. Bellini", "103,800.00": "Marcus T. Bellini"} // the right labels: both are Bellini's compensation
 	d1, d2 := f.docs[0].ID, f.docs[1].ID
 	f752 := fd("Bellini received undisclosed compensation from Ostrowski totaling approximately $92,600 in connection with a directed brokerage arrangement with Lakeshore Trading.", d1,
 		"The total undisclosed compensation received by Bellini, in the form of payments made by Ostrowski to Bayshore Palms Golf & Country Club for Bellini's benefit, was approximately $92,600 ($45,000 initiation fee + $47,600 in monthly dues = $92,600).",
@@ -283,7 +284,7 @@ func TestSweepAdmitsOnlyThePlansFindingsOnce(t *testing.T) {
 	}
 	again := facts(on("I2", fd("The summary restates that the $5,000 fee falls due on March 1, 2026.", d1, "the fee of $5,000 is due on March 1, 2026",
 		val("Buyer", "fee amount", "$5,000", "Money"), val("Buyer", "due date", "March 1, 2026", "Date"))))
-	fake := model.NewFake(f.with(map[string][]model.Reply{
+	fake := newFake(f.with(map[string][]model.Reply{
 		"lead":  {calls(plan(issue("I1", "When is the fee due?", "Clause"), issue("I2", "What delivery terms apply?", "Clause"))), calls(tc("sweep", m{"over": "sections", "documentIds": nil}))},
 		"page1": {facts(first...)}, "page2": {again},
 	}))

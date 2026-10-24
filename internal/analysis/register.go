@@ -40,6 +40,9 @@ type Value struct {
 	Unit   string `json:"unit"`
 	Date   string `json:"date"`
 	Class  string `json:"class"`
+	// Fig is what the figure reader read the value as (figread.go), set by admission: a value with
+	// none, or an unclear one, is never compared, summed or ranked as a quantity.
+	Fig *Reading `json:"figure,omitempty"`
 }
 
 type Entity struct {

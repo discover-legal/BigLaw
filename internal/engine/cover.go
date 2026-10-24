@@ -316,7 +316,7 @@ func salientFinding(f Finding) bool {
 			return true
 		}
 	}
-	return slices.ContainsFunc(f.Values, func(v analysis.Value) bool { return analysis.Salience(v.Value) >= 55 })
+	return slices.ContainsFunc(f.Values, func(v analysis.Value) bool { return analysis.Salience(v) >= 55 })
 }
 
 // placeShare is the part of the coverage pass's USD its analyses leave for placing left-out evidence,
@@ -361,10 +361,13 @@ func memoText(secs []Section) string {
 	return b.String()
 }
 
-// addressed reports whether the memo states both of a conflict's values: each as the figure parser
-// reads it, of the conflict's kind (a memo's "3,000,000 shares" never states a usd:3000000 side).
-func addressed(c analysis.Conflict, memo string) bool {
-	ds, ns := figures(memo, true)
+// addressed reports whether the memo states both of a conflict's values: a date as written, a
+// quantity as a figure of the memo's read as the conflict's kind, currency and amount (the figure
+// reader's reading of what the drafter wrote, or the value a handle wrote: a memo's "3,000,000
+// shares" never states a usd:3000000 side).
+func addressed(c analysis.Conflict, secs []Section, use []Finding) bool {
+	ds, _ := figures(memoText(secs), true)
+	figs := memoReadings(secs, use)
 	for _, v := range c.Values {
 		kind, canon, _ := strings.Cut(v.Canon, ":")
 		if kind == "date" {
@@ -374,22 +377,48 @@ func addressed(c analysis.Conflict, memo string) bool {
 			}
 			continue
 		}
-		_, r, ok := analysis.CanonAmount(v.Canon) // the canon has the join's scale applied
+		_, r, ok := analysis.CanonAmount(v.Canon) // the canon is the reading's exact amount, scale applied
 		if !ok {
 			return false
 		}
-		want := figure{Class: analysis.MoneyFig, Cur: strings.ToUpper(kind), Amount: r.Abs(r)}
+		want := analysis.Reading{Kind: analysis.KindMoney, Currency: strings.ToUpper(kind), Amount: analysis.Decimal(r.Abs(r))}
 		switch kind {
 		case "n":
-			want.Class, want.Cur = analysis.CountFig, ""
+			want.Kind, want.Currency = analysis.KindCount, ""
 		case "pct":
-			want.Class, want.Cur = analysis.PercentFig, ""
+			want.Kind, want.Currency = analysis.KindPercent, ""
 		}
-		if !figureStated(want, ns) {
+		if !slices.ContainsFunc(figs, func(m analysis.Reading) bool {
+			x := m.Rat()
+			return m.Clear() && m.Kind == want.Kind && m.Currency == want.Currency && x != nil && x.Abs(x).Cmp(want.Rat()) == 0
+		}) {
 			return false
 		}
 	}
 	return true
+}
+
+// memoReadings are the memo's figures as read: the figure reader's readings of what each section's
+// drafter wrote (when it read the section's current text) and, for each handle Go wrote, its value's
+// reading.
+func memoReadings(secs []Section, use []Finding) []analysis.Reading {
+	var out []analysis.Reading
+	for _, s := range secs {
+		body, regs := memoBody(s)
+		if s.Read != nil && s.Read.Hash == textHash(body) {
+			out = append(out, s.Read.Figs...)
+		}
+		for _, r := range regs {
+			if i := slices.IndexFunc(use, func(f Finding) bool { return f.FID == r.fig.FID }); i >= 0 {
+				for _, v := range use[i].Values {
+					if v.Value == r.fig.Value && v.Fig != nil {
+						out = append(out, *v.Fig)
+					}
+				}
+			}
+		}
+	}
+	return out
 }
 
 // discrepancies is the cross-document join over every usable finding (analysis.Join, labels and
@@ -406,10 +435,9 @@ func (e *Engine) discrepancies(ctx context.Context, taskID string) (all, open []
 	for _, f := range use {
 		an = append(an, f.Finding)
 	}
-	memo := memoText(secs)
 	for _, c := range analysis.Join(an, aliases) {
 		all = append(all, c)
-		if !addressed(c, memo) {
+		if !addressed(c, secs, use) {
 			open = append(open, c)
 		}
 	}

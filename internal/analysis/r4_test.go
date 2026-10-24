@@ -38,6 +38,12 @@ func pairOf(cs []Conflict, a, b string) bool {
 	})
 }
 
+// bench5Parties are the bench5 pairs' values as the figure reader reads them (the right labels): the
+// extractor typed them under other labels ("Office of Quantitative Research", "Omnibus Equity Trades",
+// "Email"), the record says whose figures they are.
+var bench5Parties = map[string]string{"F80/4,217": "Whitmore Capital Advisors LLC", "F170/4,312": "Whitmore Capital Advisors LLC",
+	"F752/$92,600": "Marcus T. Bellini", "F388/$103,800.00": "Marcus T. Bellini", "F96/April 22, 2024": "Gerald R. Whitmore", "F805/15 Apr 2024": "Gerald R. Whitmore", "F934/15 Apr 2024": "Gerald R. Whitmore"}
+
 // TestJoinPairsBench5Conflicts (bench5 SEC, C-032 C-035 C-041: 4,217 vs 4,312 trades, $92,600 vs
 // $103,800, April 22 vs April 15 were never paired although each value was in the ledger): over the
 // run's own ledger rows, the join pairs all three. 4,217 is the "Office of Quantitative Research"'s
@@ -45,7 +51,7 @@ func pairOf(cs []Conflict, a, b string) bool {
 // one figure's two entity labels, joined because one side's quotes name the other's entity
 // (mentions). $103,800 and the April 15 e-mail are the rows the verifier fixes now admit.
 func TestJoinPairsBench5Conflicts(t *testing.T) {
-	fs := bench5Findings(t)
+	fs := readParties(bench5Findings(t), bench5Parties) // the right labels: whose figure each pair's values are
 	cs := Join(fs, nil)
 	for _, p := range [][2]string{{"4,217", "4,312"}, {"$92,600", "$103,800.00"}, {"April 22, 2024", "15 Apr 2024"}} {
 		if !pairOf(cs, p[0], p[1]) {
@@ -63,7 +69,7 @@ func TestJoinPairsBench5Conflicts(t *testing.T) {
 // naming one side's findings still finds the conflict with the other side's, and only conflicts
 // holding a named finding are reported.
 func TestJoinDiscrepanciesFidsDoNotScopeTheJoin(t *testing.T) {
-	fs := bench5Findings(t)
+	fs := readParties(bench5Findings(t), bench5Parties)
 	rt := &agent.Runtime{Reg: agent.NewRegistry()}
 	for _, tool := range Tools(memSource(fs)) {
 		if err := rt.Reg.Register(tool); err != nil {

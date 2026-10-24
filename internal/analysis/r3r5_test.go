@@ -58,7 +58,7 @@ func TestPartOfWordings(t *testing.T) {
 		{"remaining portion of the price, X,", p950("The remaining portion of the Purchase Price, $950,000, is payable by Buyer at Closing."), false},
 		{"X held in escrow", p950("Buyer shall deposit $950,000 to be held in escrow until Closing."), false},
 	} {
-		if got := len(Join([]Finding{price, c.b}, nil)) > 0; got != c.want {
+		if got := len(joinRead([]Finding{price, c.b}, nil)) > 0; got != c.want {
 			t.Errorf("%s: conflict %v, want %v", c.name, got, c.want)
 		}
 	}

@@ -32,8 +32,8 @@ func TestSpecsLoadAndValidate(t *testing.T) {
 		t.Fatal(err)
 	}
 	names := rt.Reg.Names()
-	want := []string{"analyze_issue", "audit_gaps", "check_deviation", "committee", "cover", "draft_section", "extract_facts", "finish", "join_discrepancies",
-		"ledger", "numbers", "prosecute", "reproduce", "retrieve", "sweep", "verify_quote"}
+	want := []string{"analyze_issue", "audit_gaps", "check_deviation", "committee", "cover", "draft_section", "exact_calc", "extract_facts", "figure_context", "finish", "join_discrepancies",
+		"ledger", "numbers", "prosecute", "read_figures", "reproduce", "retrieve", "sweep", "verify_quote"}
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("registry %v", names)
 	}
@@ -331,7 +331,7 @@ func (b *barrier) Chat(ctx context.Context, req model.Request) (*model.Response,
 func TestCommitteeRunsThreeInParallel(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
-	b := &barrier{Fake: model.NewFake(f.happy()), all: make(chan struct{})}
+	b := &barrier{Fake: newFake(f.happy()), all: make(chan struct{})}
 	f.reopen(b, nil)
 	task := f.submit(0)
 	f.step(context.Background())

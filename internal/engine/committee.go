@@ -30,6 +30,9 @@ func modelFailed(err error) bool {
 
 var fidRe = regexp.MustCompile(`\[(F\d+)\]`)
 
+// maxClaimFIDs is the most findings one claim names (prosecute's input schema).
+const maxClaimFIDs = 20
+
 // claims splits the drafted sections into the sentences that cite findings, for prosecute.
 func claims(sections []Section) []map[string]any {
 	out := []map[string]any{}
@@ -41,8 +44,10 @@ func claims(sections []Section) []map[string]any {
 					fids = append(fids, m[1])
 				}
 			}
-			if len(fids) > 0 && len(out) < 80 {
-				out = append(out, map[string]any{"text": substituteOutsideQuotes(sent, s.Handles), "fids": fids})
+			for len(fids) > 0 && len(out) < 80 { // at most 20 findings a claim (prosecute's schema): a longer list is checked in parts
+				k := min(len(fids), maxClaimFIDs)
+				out = append(out, map[string]any{"text": substituteOutsideQuotes(sent, s.Handles), "fids": fids[:k]})
+				fids = fids[k:]
 			}
 		}
 	}

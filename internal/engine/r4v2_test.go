@@ -60,101 +60,17 @@ func TestR4V2DecimalCommaReachesLedger(t *testing.T) {
 	}
 }
 
-// M1: "mm" (millimetres) after a bare figure is read as a scale: "5 mm" is $5,000,000.
-func TestR4V2MillimetresAreMillions(t *testing.T) {
-	q := "The gap between panels shall not exceed 5 mm in any direction."
-	if valueInQuote(mv2("$5 million", "Money"), q) {
-		t.Errorf("$5 million verified from %q", q)
-	}
-	if got := claimSums("The Contractor owes $5 million in liquidated damages.", q, nil); len(got) > 0 {
-		t.Errorf("claimSums typed %+v", got)
-	}
-	if got := Untraced("Liquidated damages are $5 million.", q, false); len(got) == 0 {
-		t.Errorf("G8 traces $5 million to %q", q)
-	}
-}
-
-// M2: parentheses (accounting negatives) and signs are dropped: a loss verifies as a gain.
-func TestR4V2SignDropped(t *testing.T) {
-	if valueInQuote(mv2("$3,000", "Money"), "Net income (loss) for the period: (3,000).") {
-		t.Error("a positive $3,000 verified from an accounting negative (3,000)")
-	}
-	if valueInQuote(mv2("-$3,000", "Money"), "Net income for the period: $3,000.") {
-		t.Error("-$3,000 verified from a positive $3,000")
-	}
-}
-
-// M3: the currency is read and then ignored: a dollar value verifies from a euro or pound sum,
-// claimSums promotes a sum whose currency follows it, and G8 traces £ to $.
-func TestR4V2CurrencyIgnored(t *testing.T) {
-	if valueInQuote(mv2("$3,000,000", "Money"), "The Purchase Price is €3,000,000.") {
-		t.Error("$3,000,000 verified from €3,000,000")
-	}
-	if valueInQuote(mv2("£3,000,000", "Money"), "The Purchase Price is $3,000,000.") {
-		t.Error("£3,000,000 verified from $3,000,000")
-	}
-	if got := claimSums("The Buyer pays $3,000,000.", "The Purchase Price is 3,000,000 €.", nil); len(got) > 0 {
-		t.Errorf("claimSums typed %+v as US dollars from a euro sum", got)
-	}
-	if got := Untraced("The purchase price is £3 million.", "The Purchase Price is $3,000,000.", false); len(got) == 0 {
-		t.Error("G8 traces £3 million to $3,000,000")
-	}
-}
-
-// M4 (regression from 091bcfc): G8 flags a correct memo whose ground writes the scale once for a
-// range, "mn", or European grouping.
-func TestR4V2G8FlagsCorrectMemo(t *testing.T) {
-	for memo, ground := range map[string]string{
-		"Damages are estimated at $3 million to $5 million.": "Damages are estimated at $3–5 million.",
-		"Damages are between $3 million and $5 million.":     "Damages are estimated at between $3 and $5 million.",
-		"The fee is $3 million.":                             "The fee is USD 3 mn.",
-		"The price is €1.2 million.":                         "The price is €1.200.000.",
-	} {
-		if got := Untraced(memo, ground, false); len(got) > 0 {
-			t.Errorf("memo %q, ground %q: untraced %v", memo, ground, got)
-		}
-	}
-}
-
-// M5 (regression from 091bcfc): real values silently dropped at admission.
-func TestR4V2ValuesSilentlyLost(t *testing.T) {
-	for _, c := range []struct {
-		v analysis.Value
-		q string
-	}{
-		{mv2("$1,200,000", "Money"), "The Buyer shall pay 1,200,000 US dollars at Closing."},
-		{mv2("$100,000", "Money"), "The Executive's salary is 100,000 annually."},
-		{mv2("5%", "Percentage"), "Interest accrues at 5 per cent per annum."},
-		{mv2("$3 million", "Money"), "Damages are estimated at $3–5 million."},
-	} {
-		if !valueInQuote(c.v, c.q) {
-			t.Errorf("%s dropped from %q", c.v.Value, c.q)
-		}
-	}
-}
-
-// M6: the count guard ("3,000,000 shares is never $3,000,000") is bypassed by any notUnit word.
-func TestR4V2CountGuardBypassed(t *testing.T) {
-	q := "The Seller shall transfer 1,200,000 of the Company's 3,000,000 Shares to the Buyer."
-	if valueInQuote(mv2("$1,200,000", "Money"), q) {
-		t.Errorf("$1,200,000 verified from a share count in %q", q)
-	}
-	if got := claimSums("The Seller transfers $1,200,000 of shares.", q, nil); len(got) > 0 {
-		t.Errorf("claimSums typed %+v", got)
-	}
-}
-
 // L3: a conflict's sides are addressed only by figures of their kind: a memo's "3,000,000 shares"
 // never states a usd:3000000 side.
 func TestR4V2AddressedReadsKind(t *testing.T) {
 	c := analysis.Conflict{Kind: "numeric", Values: []analysis.ConflictVal{{Value: "$3,000,000", Canon: "usd:3000000"}, {Value: "$2,500,000", Canon: "usd:2500000"}}}
-	if addressed(c, "The Company issued 3,000,000 shares and paid $2,500,000.") {
+	if addressed(c, oracleSections("The Company issued 3,000,000 shares and paid $2,500,000."), nil) {
 		t.Error("a share count addresses a dollar side")
 	}
-	if !addressed(c, "The records differ: $3 million against $2,500,000.") {
+	if !addressed(c, oracleSections("The records differ: $3 million against $2,500,000."), nil) {
 		t.Error("both sides stated, not addressed")
 	}
-	if addressed(c, "The records differ: €3 million against $2,500,000.") {
+	if addressed(c, oracleSections("The records differ: €3 million against $2,500,000."), nil) {
 		t.Error("a euro sum addresses a dollar side")
 	}
 }

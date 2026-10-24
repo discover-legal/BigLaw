@@ -47,8 +47,10 @@ const (
 	qDateReferral   = "On or about April 22, 2024, Ostrowski instructed Chen to \"clean up the shared drive\"."
 )
 
+// fourPlanted is the four planted discrepancies, each value read as the record has it: the exhibit
+// rows and the e-mail name no party, the reader reads them as Ostrowski's (the right labels).
 func fourPlanted() []Finding {
-	return []Finding{
+	return readParties([]Finding{
 		fh("4,217", qTradesReferral, "referral", "Ostrowski", "omnibus trade count"),
 		fh("4,312", qTradesExhibit, "exhibit-c", "", "omnibus trade count"),
 		fh("$92,600", qCompReferral, "referral", "Ostrowski", "undisclosed compensation total"),
@@ -57,11 +59,11 @@ func fourPlanted() []Finding {
 		fh("April 22, 2024", qDateReferral, "referral", "Ostrowski", "obstruction instruction date"),
 		fh("73%", qRateReferral, "referral", "Ostrowski", "profitable omnibus allocation rate"),
 		fh("78%", qRateExhibit, "exhibit-f", "", "profitable omnibus allocation rate"),
-	}
+	}, map[string]string{"4,312": "Ostrowski", "78%": "Ostrowski", "Mon, 15 Apr 2024 09:23:47 -0400": "Ostrowski"})
 }
 
 func TestCrossDocAllFourPlantedDiscrepancies(t *testing.T) {
-	cs := Join(fourPlanted(), []Alias{{"Ostrowski", []string{"Bayshore Palms LLC"}}})
+	cs := joinRead(fourPlanted(), []Alias{{"Ostrowski", []string{"Bayshore Palms LLC"}}})
 	if len(cs) != 4 {
 		t.Fatalf("want 4 discrepancies, got %d: %+v", len(cs), cs)
 	}
@@ -75,7 +77,7 @@ func TestCrossDocAllFourPlantedDiscrepancies(t *testing.T) {
 		t.Error("the e-mail header date did not join the instruction date as one event")
 	}
 	// Without the lead's alias, Ostrowski and Bayshore Palms LLC stay separate parties.
-	if c := has(Join(fourPlanted(), nil), "$92,600", "$103,800"); c != nil {
+	if c := has(joinRead(fourPlanted(), nil), "$92,600", "$103,800"); c != nil {
 		t.Error("parties were unified on a guess")
 	}
 }
@@ -84,7 +86,7 @@ func TestCrossDocAllFourPlantedDiscrepancies(t *testing.T) {
 func TestCrossDocVintageEnumerationNotFlagged(t *testing.T) {
 	qRef := "The deleted spreadsheets had been created in 2021 and early 2022."
 	qFor := "Recovered file fragments bore creation dates in 2021 and early 2022."
-	cs := Join([]Finding{
+	cs := joinRead([]Finding{
 		fh("2021", qRef, "referral", "Ostrowski", "deleted spreadsheet vintage"),
 		fh("early 2022", qRef, "referral", "Ostrowski", "deleted spreadsheet vintage"),
 		fh("2021", qFor, "forensic", "Ostrowski", "deleted spreadsheet vintage"),
@@ -101,7 +103,7 @@ func TestCrossDocDifferentObligationsNotFlagged(t *testing.T) {
 	qInitial := "Each access person shall file an initial holdings report within 10 days of becoming an access person."
 	qAnnual := "The referral notes annual holdings reports were due within 45 days of the fiscal year end."
 	for _, labels := range [][2]string{{"initial holdings report deadline", "annual holdings report deadline"}, {"holdings report deadline", "holdings report deadline"}} {
-		cs := Join([]Finding{
+		cs := joinRead([]Finding{
 			fh("10 days", qInitial, "code", "access persons", labels[0]),
 			fh("45 days", qAnnual, "referral", "access persons", labels[1]),
 		}, nil)
@@ -117,10 +119,10 @@ func TestCrossDocAliasUnificationDeterministicGraphTie(t *testing.T) {
 		fh("$92,600", "¶56. Ostrowski received undisclosed compensation payments totaling $92,600 from Bayshore Palms.", "referral", "Ostrowski", "undisclosed compensation total"),
 		fh("$103,800", "Grand total of undisclosed compensation payments received: $103,800", "exhibit-d", "Bayshore Palms LLC", "undisclosed compensation total"),
 	}
-	if c := has(Join(fs, []Alias{{"Ostrowski", []string{"Bayshore Palms LLC"}}}), "$92,600", "$103,800"); c == nil {
+	if c := has(joinRead(fs, []Alias{{"Ostrowski", []string{"Bayshore Palms LLC"}}}), "$92,600", "$103,800"); c == nil {
 		t.Fatal("the aliased pair was not flagged")
 	}
-	if cs := Join(fs, nil); len(cs) != 0 {
+	if cs := joinRead(fs, nil); len(cs) != 0 {
 		t.Fatalf("without the alias the pair unified: %+v (the near join pairs only one entity: lab-r3 verifier M4)", cs)
 	}
 }
@@ -156,7 +158,7 @@ func TestNearConflictsAcrossLabels(t *testing.T) {
 		f("F14", "bank", "Monthly dues for Bellini at Bayshore Palms Golf & Country Club were $2,800 per month for 21 months", v("21", "Count", "months of dues")),
 		f("F15", "referral", "Monthly membership dues for Bellini at Bayshore Palms Golf & Country Club of $2,800 per month for a period of 17 months", v("17", "Count", "months")),
 	}
-	cs := Join(fs, nil)
+	cs := joinRead(fs, nil)
 	for _, p := range [][2]string{{"4,217", "4,312"}, {"$92,600", "$103,800.00"}, {"73%", "78%"}, {"April 22, 2024", "Mon, 15 Apr 2024"}} {
 		if has(cs, p[0], p[1]) == nil {
 			t.Errorf("%s vs %s not found: %+v", p[0], p[1], cs)
@@ -167,24 +169,30 @@ func TestNearConflictsAcrossLabels(t *testing.T) {
 	}
 }
 
+// Whose figure a value is, is the figure reader's: two labels of one person ("Ostrowski", "Richard
+// Ostrowski") are one party when it reads them so, and no name containment in Go makes them one (lab-r4
+// r4, owner decision: no party-label heuristics).
 func TestCrossDocAliasTokenContainment(t *testing.T) {
-	cs := Join([]Finding{
+	fs := []Finding{
 		fh("4,217", "Ostrowski reviewed a total of 4,217 omnibus equity trades in the sample.", "referral", "Ostrowski", "omnibus trade count"),
 		fh("4,312", "Richard Ostrowski analyzed 4,312 omnibus equity trades across the sample.", "exhibit-c", "Richard Ostrowski", "omnibus trade count"),
-	}, nil)
-	if has(cs, "4,217", "4,312") == nil {
-		t.Fatalf("token-contained entities did not unify: %+v", cs)
+	}
+	if cs := Join(readParties(fs, map[string]string{"4,217": "Richard Ostrowski"}), nil); has(cs, "4,217", "4,312") == nil {
+		t.Fatalf("one party's figures under two labels did not pair: %+v", cs)
+	}
+	if cs := joinRead(fs, nil); len(cs) != 0 {
+		t.Fatalf("two party labels unified by name containment: %+v", cs)
 	}
 }
 
 // v1's no-provider path is v2's only path: numeric and date conflicts survive without a model.
 func TestCrossDocNoProviderDegradation(t *testing.T) {
-	cs := Join([]Finding{
+	cs := Join(readParties([]Finding{
 		fh("4,217", qTradesReferral, "referral", "Ostrowski", "omnibus trade count"),
 		fh("4,312", qTradesExhibit, "exhibit-c", "", "omnibus trade count"),
 		fh("Mon, 15 Apr 2024 09:23:47 -0400", qDateEmail, "exhibit-e", "Chen", "email sent date"),
 		fh("April 22, 2024", qDateReferral, "referral", "Ostrowski", "obstruction instruction date"),
-	}, nil)
+	}, map[string]string{"4,312": "Ostrowski", "Mon, 15 Apr 2024 09:23:47 -0400": "Ostrowski"}), nil)
 	if has(cs, "4,217", "4,312") == nil || has(cs, "15 Apr", "April 22") == nil {
 		t.Fatalf("conflicts lost: %+v", cs)
 	}
@@ -194,13 +202,13 @@ func TestCrossDocNoProviderDegradation(t *testing.T) {
 func TestCrossDocSubstringLockDropsFabricatedQuote(t *testing.T) {
 	fake := fh("4,312", "a fabricated quote that appears nowhere", "exhibit-c", "", "omnibus trade count")
 	fake.Verified = false
-	if cs := Join([]Finding{fh("4,217", qTradesReferral, "referral", "Ostrowski", "omnibus trade count"), fake}, nil); len(cs) != 0 {
+	if cs := joinRead([]Finding{fh("4,217", qTradesReferral, "referral", "Ostrowski", "omnibus trade count"), fake}, nil); len(cs) != 0 {
 		t.Fatalf("a quarantined value joined: %+v", cs)
 	}
 }
 
 func TestCrossDocCanonicalValueEquality(t *testing.T) {
-	cs := Join([]Finding{
+	cs := joinRead([]Finding{
 		fh("4,217", "The staff reviewed 4,217 omnibus equity trades in total.", "referral", "Ostrowski", "omnibus trade count"),
 		fh("4217", "A population of 4217 omnibus equity trades was reviewed.", "exhibit-c", "Ostrowski", "omnibus trade count"),
 	}, nil)
@@ -210,7 +218,7 @@ func TestCrossDocCanonicalValueEquality(t *testing.T) {
 }
 
 func TestCrossDocDatePrecisionNotAConflict(t *testing.T) {
-	cs := Join([]Finding{
+	cs := joinRead([]Finding{
 		fh("April 2024", "In April 2024 Ostrowski instructed Chen to clean up the shared drive.", "memo", "Ostrowski", "obstruction instruction date"),
 		fh("April 22, 2024", qDateReferral, "referral", "Ostrowski", "obstruction instruction date"),
 	}, nil)
@@ -233,7 +241,7 @@ func TestParseCrossDocDate(t *testing.T) {
 }
 
 func TestJoinNumericNormalization(t *testing.T) {
-	cs := Join([]Finding{
+	cs := joinRead([]Finding{
 		fh("$9.0 million", "Proceeds were $9.0 million.", "a", "Fund", "sale proceeds"),
 		{FID: "Fx", Verified: true, Quotes: []Quote{{DocumentID: "b", Quote: "Proceeds: 9,000,000 (USD)"}}, Values: []Value{{Entity: "Fund", Metric: "sale proceeds", Value: "9,000,000", Unit: "USD"}}},
 		fh("Nov. 12, 2026", "Closing on Nov. 12, 2026.", "a", "Fund", "closing date"),
@@ -249,14 +257,14 @@ func TestJoinAliasMap(t *testing.T) {
 		fh("$1,000", "Smithers paid $1,000.", "a", "J. Smithers", "fee paid"),
 		fh("$1,500", "Acme Holdings paid $1,500.", "b", "Acme Holdings", "fee paid"),
 	}
-	if len(Join(fs, nil)) != 0 || len(Join(fs, []Alias{{"acme holdings", []string{"J.  Smithers"}}})) != 1 {
+	if len(joinRead(fs, nil)) != 0 || len(joinRead(fs, []Alias{{"acme holdings", []string{"J.  Smithers"}}})) != 1 {
 		t.Fatal("the alias map is not applied (case and spacing folded)")
 	}
 }
 
 // Trap: $9,000,000 versus 9,000,000 shares of one metric is not a conflict.
 func TestJoinComparesOnlySameQuantityClass(t *testing.T) {
-	cs := Join([]Finding{
+	cs := joinRead([]Finding{
 		fh("$9,000,000", "The stake is worth $9,000,000.", "a", "Fund", "stake"),
 		{FID: "Fs", Verified: true, Quotes: []Quote{{DocumentID: "b", Quote: "The stake is 9,000,000 shares."}}, Values: []Value{{Entity: "Fund", Metric: "stake", Value: "9,000,000", Unit: "shares"}}},
 		{FID: "Fy", Verified: true, Quotes: []Quote{{DocumentID: "c", Quote: "A stake of $9,000,000."}}, Values: []Value{{Entity: "Fund", Metric: "stake", Value: "$9,000,000", Class: "Count"}}},
@@ -288,7 +296,7 @@ func TestJoinRefusesDifferentFacts(t *testing.T) {
 		{"two parties' prices", f("F7", "spa", "Buyer shall pay the Purchase Price of $1,000,000 to Seller at Closing under this Purchase Agreement.", Value{Entity: "Buyer", Metric: "purchase price", Value: "$1,000,000", Class: "Money"}),
 			f("F8", "spa2", "Guarantor shall pay the Purchase Price of $1,050,000 to Seller at Closing under this Purchase Agreement.", Value{Entity: "Guarantor", Metric: "price", Value: "$1,050,000", Class: "Money"})},
 	} {
-		if cs := Join([]Finding{c.a, c.b}, nil); len(cs) > 0 {
+		if cs := joinRead([]Finding{c.a, c.b}, nil); len(cs) > 0 {
 			t.Errorf("%s: reported as a conflict the memo must address: %+v", c.name, cs)
 		}
 	}
@@ -324,7 +332,7 @@ func TestJoinComparesScaledFigures(t *testing.T) {
 		{"a real difference, scaled", oceanic("F5", "referral", "The fund held approximately $92 million in net assets.", "92", "million"),
 			oceanic("F6", "summary", "The fund held approximately $97 million in net assets.", "$97 million", ""), true},
 	} {
-		if cs := Join([]Finding{c.a, c.b}, nil); (len(cs) > 0) != c.conflict {
+		if cs := joinRead([]Finding{c.a, c.b}, nil); (len(cs) > 0) != c.conflict {
 			t.Errorf("%s: conflicts %+v, want conflict=%v", c.name, cs, c.conflict)
 		}
 	}

@@ -27,6 +27,7 @@ func TestAnalysisToolsPageByType(t *testing.T) {
 				Values: []Value{{Entity: "Buyer", Metric: metric, Value: d.v, Class: "Money"}}})
 		}
 	}
+	fs = read(fs)
 	rt := &agent.Runtime{Chat: model.NewFake(nil), Reg: agent.NewRegistry()}
 	for _, tl := range Tools(src(fs)) {
 		if err := rt.Reg.Register(tl); err != nil {

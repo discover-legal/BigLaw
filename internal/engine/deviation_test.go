@@ -265,8 +265,8 @@ func TestOmissionRequiresVerifiedAbsence(t *testing.T) {
 // The mechanical numeric join (v1's deviationNumericJoin → join_discrepancies over the findings).
 func devFindings(trustQuote string, verified bool, trustMetric string) []analysis.Finding {
 	return []analysis.Finding{
-		{FID: "F1", Verified: true, Quotes: []analysis.Quote{{DocumentID: "memo", Quote: qSophiaMemo}}, Values: []analysis.Value{{Entity: "Sophia", Metric: "residuary share", Value: "35%"}}},
-		{FID: "F2", Verified: verified, Quotes: []analysis.Quote{{DocumentID: "trust", Quote: trustQuote}}, Values: []analysis.Value{{Entity: "Sophia", Metric: trustMetric, Value: "30%"}}},
+		{FID: "F1", Verified: true, Quotes: []analysis.Quote{{DocumentID: "memo", Quote: qSophiaMemo}}, Values: []analysis.Value{{Entity: "Sophia", Metric: "residuary share", Value: "35%", Fig: read(analysis.KindPercent, "", "35", "Sophia")}}},
+		{FID: "F2", Verified: verified, Quotes: []analysis.Quote{{DocumentID: "trust", Quote: trustQuote}}, Values: []analysis.Value{{Entity: "Sophia", Metric: trustMetric, Value: "30%", Fig: read(analysis.KindPercent, "", "30", "Sophia")}}},
 	}
 }
 
@@ -279,7 +279,7 @@ func TestDevNumericJoinBothQuotes(t *testing.T) {
 
 func TestDevNumericJoinEnumerationGuard(t *testing.T) {
 	fs := devFindings(qSophiaTrust, true, "residuary share")
-	fs[1].Values[0].Value = "35%"
+	fs[1].Values[0].Value, fs[1].Values[0].Fig = "35%", read(analysis.KindPercent, "", "35", "Sophia")
 	if cs := analysis.Join(fs, nil); len(cs) != 0 {
 		t.Fatalf("a matching value is conformance: %+v", cs)
 	}

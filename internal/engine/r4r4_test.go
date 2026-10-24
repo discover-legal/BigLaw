@@ -176,7 +176,8 @@ func TestBench6SECCommitteeCapped(t *testing.T) {
 	}
 	if c.Summary.USD == nil || *c.Summary.USD > 11 || cov == nil || placed <= 6 || v.Output == nil {
 		cs, _ := json.Marshal(cov)
-		t.Fatalf("%s: cost %+v, cover %s, %d placement redrafts\n%s", stop(v), c.Summary, cs, placed, f.steps(task.ID))
+		fin := f.outputs(task.ID, "finish")
+		t.Fatalf("%s: cost %+v, cover %s, %d placement redrafts\n%s\n%.3000s", stop(v), c.Summary, cs, placed, f.steps(task.ID), fin[len(fin)-1])
 	}
 	t.Logf("spent $%.2f in %d calls; %d cycles; %d placement redrafts; %d left out after cover", *c.Summary.USD, c.Summary.Calls, len(cyc), placed, len(cov.LeftOut))
 }

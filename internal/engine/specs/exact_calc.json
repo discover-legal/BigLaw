@@ -1,0 +1,50 @@
+{
+ "name": "exact_calc",
+ "kind": "go",
+ "class": "free",
+ "maxTurns": 0,
+ "description": "Does one exact decimal operation on two numbers, with no rounding: add, sub, mul, div, or cmp (which says -1, 0 or 1 as a is less than, equal to or greater than b). Use it to check a scale, a sum or a range before you label a span, for example whether 4217 times 1000 is the 4217000 another passage states. Write each number as plain digits with an optional sign and one decimal point, no separators. Do not use it to compute figures for a memo: it checks your reading only.\nExample: {\"op\": \"mul\", \"a\": \"4217\", \"b\": \"1000\"}\nExample: {\"op\": \"cmp\", \"a\": \"92600\", \"b\": \"103800.00\"}",
+ "in": {
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+   "op",
+   "a",
+   "b"
+  ],
+  "properties": {
+   "op": {
+    "type": "string",
+    "enum": [
+     "add",
+     "sub",
+     "mul",
+     "div",
+     "cmp"
+    ]
+   },
+   "a": {
+    "type": "string",
+    "minLength": 1,
+    "maxLength": 64
+   },
+   "b": {
+    "type": "string",
+    "minLength": 1,
+    "maxLength": 64
+   }
+  }
+ },
+ "out": {
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+   "result"
+  ],
+  "properties": {
+   "result": {
+    "type": "string"
+   }
+  }
+ }
+}

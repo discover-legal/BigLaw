@@ -69,6 +69,9 @@ type Finding struct {
 	// ValueNotes are the typed values admission dropped, and why (valueStated): the committee and
 	// coverage see them (lab-r4 r3: a dropped value is never silent).
 	ValueNotes []string `json:"valueNotes,omitempty"`
+	// Figures are its verified quotes' numbers as the figure reader read them (figures.go): what G8
+	// traces a memo figure that cites it to.
+	Figures []analysis.Reading `json:"figures,omitempty"`
 }
 
 // Analysis is analyze_issue's answer on one issue (rule, application, conclusion): it goes to the
@@ -118,6 +121,15 @@ type Section struct {
 	Summary  string `json:"summary"`
 	Handles  []Fig  `json:"handles"`
 	Version  int    `json:"version"`
+	// Read is the figure reader's reading of the numbers the drafter wrote (not Go's handle values),
+	// over the text G8 reads (memoBody), by its hash: a changed text is read again or read literally.
+	Read *SectionRead `json:"read,omitempty"`
+}
+
+// SectionRead is a section's figure reading: the hash of the text read and its readings (offsets in it).
+type SectionRead struct {
+	Hash string             `json:"hash"`
+	Figs []analysis.Reading `json:"figs"`
 }
 
 // Cycle is one committee run: on which draft version, after how many calls, finding what.

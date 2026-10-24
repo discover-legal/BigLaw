@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/discover-legal/BigLaw/internal/analysis"
 )
@@ -155,13 +156,15 @@ func tableRow(l string) bool {
 	return len(cs) >= 3 && num >= 2
 }
 
-// tocTitleFigure reports whether a table of contents' entry title holds what a title never does: an
-// amount, a percentage, a date or a figure of a hundred or more, as the figure parser reads it (a TOC
-// title names a heading, not a quantity).
+// tocTitleFigure reports whether a table of contents' entry title holds what a title never does:
+// a date, a number of a hundred or more, a grouped or decimal number, or one written beside a
+// currency symbol or a percent sign, as written (a TOC title names a heading, not a quantity).
 func tocTitleFigure(title string) bool {
-	ds, fs := analysis.Figures(title)
-	return len(ds) > 0 || slices.ContainsFunc(fs, func(f analysis.Figure) bool {
-		return f.Class == analysis.MoneyFig || f.Class == analysis.PercentFig || f.Amount.Cmp(big.NewRat(100, 1)) >= 0
+	ds, fs := analysis.Literal(title)
+	return len(ds) > 0 || slices.ContainsFunc(fs, func(f analysis.Span) bool {
+		before, after := strings.TrimRight(title[:f.Start], " "), strings.TrimLeft(title[f.End:], " ")
+		r, _ := utf8.DecodeLastRuneInString(before)
+		return f.Grouped() || f.Readings()[0].Cmp(big.NewRat(100, 1)) >= 0 || unicode.Is(unicode.Sc, r) || strings.HasPrefix(after, "%")
 	})
 }
 

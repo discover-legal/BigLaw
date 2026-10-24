@@ -618,7 +618,7 @@ func TestFigureLintTracesCountAfterLocatorList(t *testing.T) {
 		"See Sections 4 and 5; 30 days after the notice the cure period ended.":      "30",
 		"Exhibits 4 and 5 & 300 trades":                                              "300",
 		"Under Sections 3 and 4, 250 employees were affected.":                       "250",
-		"Sections 3 and 14 million in fees":                                          "14000000", // its scale read (lab-r4 r2)
+		"Sections 3 and 14 million in fees":                                          "14", // as written: what it means is the figure reader's (lint's labelled check)
 	} {
 		if got := Untraced(maskRefs(text), ground, false); len(got) != 1 || got[0] != want {
 			t.Errorf("%q: untraced %q, want %s (masked: %q)", text, got, want, maskRefs(text))

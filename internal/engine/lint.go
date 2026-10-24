@@ -6,9 +6,13 @@ package engine
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"math/big"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -96,23 +100,42 @@ func figureAfter(text string, i int) bool {
 	return i+1 < len(text) && (text[i] == ',' || text[i] == '.') && text[i+1] >= '0' && text[i+1] <= '9'
 }
 
-// figures lists the dates (as date keys) and numbers (exact decimals) text states. Dates come
-// first and their digits are not read again as numbers. Single-digit integers ("Rule 6(a)(1)",
-// "paragraph 3") count only when all is set.
-func figures(text string, all bool) (ds []string, nums []figure) {
-	ds, fs := figuresIn(text) // the figure parser: scale, currency, class and ranges read
-	for _, f := range fs {
-		if !all && f.Single {
-			continue
+// figures lists the dates (as date keys) and numbers (spans as written) text states, as code reads
+// them literally (analysis.Literal): dates first, their digits no numbers. Single digits ("Rule
+// 6(a)(1)", "paragraph 3") count only when all is set.
+func figures(text string, all bool) (ds []string, nums []analysis.Span) {
+	ds, ss := analysis.Literal(text)
+	for _, s := range ss {
+		if all || !s.Single() {
+			nums = append(nums, s)
 		}
-		nums = append(nums, f)
 	}
 	return ds, nums
 }
 
-// Untraced lists what text states that ground does not: dates no ground date matches at their
-// common precision, and figures no ground figure traces (traces: amount, class and currency). derived also accepts a sum or difference
-// of two ground numbers, or a sum of three (a total or delta of stated figures, not a new one).
+// spanStated reports whether a ground span states n as written: one of n's readings is one of the
+// ground span's, and a minus n writes is written there too (a memo's positive figure may state a
+// ground "(3,000)"; the figure reader's labels decide what either means, lint's labelled check).
+func spanStated(n analysis.Span, gn []analysis.Span) bool {
+	for _, g := range gn {
+		for _, x := range n.Readings() {
+			for _, y := range g.Readings() {
+				if x.Cmp(y) == 0 || !n.Neg() && new(big.Rat).Neg(x).Cmp(y) == 0 {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// decimalOf is a span's first reading as a decimal ("4217", "-3000"), how a lint line names it.
+func decimalOf(n analysis.Span) string { return analysis.Decimal(n.Readings()[0]) }
+
+// Untraced lists what text states that ground does not, literally: dates no ground date matches at
+// their common precision (a ground date's year also states that year), and numbers no ground span
+// states as written (spanStated). derived also accepts a sum or difference of two ground numbers,
+// or a sum of three (a total or delta of stated figures, not a new one).
 func Untraced(text, ground string, derived bool) []string {
 	gd, gn := figures(ground, true)
 	td, tn := figures(text, false)
@@ -125,21 +148,26 @@ func Untraced(text, ground string, derived bool) []string {
 	}
 	vals := make([]float64, 0, len(gn))
 	for _, g := range gn {
-		if len(vals) < 60 && !g.Amb {
-			f, _ := g.Amount.Float64()
+		if len(vals) < 60 {
+			f, _ := g.Readings()[0].Float64()
 			vals = append(vals, f)
 		}
 	}
 	for _, n := range tn {
-		if figureStated(n, gn) {
+		if spanStated(n, gn) || yearOf(n, gd) {
 			continue
 		}
-		f, _ := n.Amount.Float64()
-		if !derived || n.Amb || !derivable(f, vals) {
-			out = append(out, analysis.Decimal(n.Amount))
+		f, _ := n.Readings()[0].Float64()
+		if !derived || !derivable(f, vals) {
+			out = append(out, decimalOf(n))
 		}
 	}
 	return out
+}
+
+// yearOf reports whether n is the year of one of the dates ds ("in 2024" beside "March 3, 2024").
+func yearOf(n analysis.Span, ds []string) bool {
+	return slices.ContainsFunc(ds, func(k string) bool { d, _ := analysis.ParseDate(k); return n.Text == strconv.Itoa(d.Year) })
 }
 
 func derivable(want float64, vals []float64) bool {
@@ -159,7 +187,7 @@ func derivable(want float64, vals []float64) bool {
 	return false
 }
 
-// covered reports whether ground states every figure in value (at least one).
+// covered reports whether ground states every date and number in value as written (at least one).
 func covered(value, ground string) bool {
 	vd, vn := figures(value, true)
 	gd, gn := figures(ground, true)
@@ -173,7 +201,7 @@ func covered(value, ground string) bool {
 		}
 	}
 	for _, n := range vn {
-		if !figureStated(n, gn) {
+		if !spanStated(n, gn) && !yearOf(n, gd) {
 			return false
 		}
 	}
@@ -267,10 +295,43 @@ func lint(issueID string, s Section, usable map[string]Finding, sheets []analysi
 			}
 		}
 	}
-	body := fidRe.ReplaceAllString(substituteOutsideQuotes(s.Markdown, s.Handles), " ")
-	body = statuteCite.ReplaceAllString(caseCite.ReplaceAllString(body, " "), " ") // an authority's numbers are G5's (flagged), not figures
+	body, regs := memoBody(s)
+	read := map[int]analysis.Reading{} // the figure reader's readings of the section's own figures, when it read this text
+	if s.Read != nil && s.Read.Hash == textHash(body) {
+		for _, r := range s.Read.Figs {
+			read[r.Start] = r
+		}
+	}
+	var known []analysis.Reading // what the cited findings' quotes and values were read as
+	var unread []analysis.Span   // and their numbers the figure reader did not read, or not clearly: those trace as written
+	for fid := range cited {
+		f := usable[fid]
+		known = append(known, f.Figures...)
+		for _, r := range f.Figures {
+			if !r.Clear() {
+				unread = append(unread, analysis.Span{Text: r.Text})
+			}
+		}
+		if len(f.Figures) == 0 {
+			for _, c := range f.Citations {
+				_, ns := figures(c.Quote, true)
+				unread = append(unread, ns...)
+			}
+		}
+		for _, v := range f.Values {
+			if v.Fig != nil {
+				known = append(known, *v.Fig)
+			} else {
+				_, ns := figures(v.Value, true)
+				unread = append(unread, ns...)
+			}
+		}
+	}
 	seen := map[string]bool{}
+	off := 0
 	for _, para := range strings.Split(body, "\n\n") { // a paragraph that states a rolled deadline may name its raw date
+		at0 := off
+		off += len(para) + 2
 		g := ground.String()
 		pd, _ := figures(para, true)
 		for raw, w := range rolled {
@@ -278,18 +339,154 @@ func lint(issueID string, s Section, usable map[string]Finding, sheets []analysi
 				g += raw + "\n"
 			}
 		}
-		for _, n := range Untraced(maskRefs(para), g, false) {
-			if seen[n] {
+		for _, n := range g8(maskRefs(para), g, at0, regs, read, known, unread, sheets, cited, rolled) {
+			if seen[n.figure] {
 				continue
 			}
-			seen[n] = true
-			if w, raw := rolled[n]; raw {
-				out = append(out, issueID+": the date "+n+" is a deadline's raw date, before Rule 6(a)'s roll past a weekend or holiday (G8): the deadline is {"+w.WID+"} ("+
+			seen[n.figure] = true
+			if w, raw := rolled[n.figure]; raw {
+				out = append(out, issueID+": the date "+n.figure+" is a deadline's raw date, before Rule 6(a)'s roll past a weekend or holiday (G8): the deadline is {"+w.WID+"} ("+
 					sheetValue(w.Result, w.Unit)+"): write that handle, and state the raw date only in the sentence that gives the rolled deadline")
 				continue
 			}
-			out = append(out, issueID+": the figure "+n+" is not traced (G8): "+hint(n, s.Handles, usable, cited))
+			out = append(out, issueID+": the figure "+n.figure+" is not traced (G8): "+cmpStr(n.hint != "", n.hint, hint(n.figure, s.Handles, usable, cited)))
 		}
+	}
+	return out
+}
+
+// untraced is one figure G8 could not trace: as a lint line names it, and how to fix it ("" for hint's).
+type untraced struct{ figure, hint string }
+
+// g8 traces one paragraph (its locators masked; it starts at at0 in the section's body): its dates
+// literally against ground's; each number Go wrote for a handle whose value is ground (a cited
+// finding's, a worksheet's) by construction; each number the figure reader read clearly as money, a
+// count or a percentage only to a cited finding's quote span or value it read as the same kind,
+// currency and amount, to a worksheet's result, or as written to a cited number it did not read
+// clearly (lab-r4 r4: "$2,000,000" never traces to digits it read as a share count); any other number (a date's part, an identifier, one the reader did not read or
+// read as unclear) literally, as written in ground.
+func g8(para, ground string, at0 int, regs []region, read map[int]analysis.Reading, known []analysis.Reading, unread []analysis.Span, sheets []analysis.Worksheet, cited map[string]bool, rolled map[string]analysis.Worksheet) []untraced {
+	gd, gn := figures(ground, true)
+	td, tn := figures(para, true)
+	var out []untraced
+	for _, k := range td {
+		d, _ := analysis.ParseDate(k)
+		if !slices.ContainsFunc(gd, func(g string) bool { x, _ := analysis.ParseDate(g); return x.Compatible(d) }) {
+			out = append(out, untraced{k, ""})
+		}
+	}
+	for _, n := range tn {
+		at := at0 + n.Start
+		if r, ok := read[at]; n.Single() && (!ok || !r.Clear()) { // one bare digit ("paragraph 3"): a locator unless read as a figure
+			continue
+		}
+		if i := slices.IndexFunc(regs, func(r region) bool { return r.start <= at && at < r.end }); i >= 0 {
+			if f := regs[i].fig; f.FID == "" && !rawDate(f.Value, rolled) || cited[f.FID] {
+				continue
+			}
+		} else if r, ok := read[at]; ok && r.Clear() {
+			if slices.ContainsFunc(known, func(k analysis.Reading) bool { same, _ := analysis.SameFigure(r, k); return same }) ||
+				slices.ContainsFunc(sheets, func(w analysis.Worksheet) bool { x := sheetAmount(w); return x != nil && x.Cmp(r.Rat()) == 0 }) ||
+				spanStated(n, unread) { // a cited number no reading contradicts traces as written
+				continue
+			}
+			h := ""
+			if k := slices.IndexFunc(known, func(k analysis.Reading) bool { return k.Amount == r.Amount && !k.Unclear }); k >= 0 {
+				h = "the cited findings state " + r.Amount + " only as " + article(known[k].Kind) + cmpStr(known[k].Currency != "", " in "+known[k].Currency, "") +
+					" (the figure reader's reading), not as the " + describe(r) + " this sentence states: state what they state, or remove it"
+			}
+			out = append(out, untraced{r.Amount, h})
+			continue
+		}
+		if !spanStated(n, gn) && !yearOf(n, gd) {
+			out = append(out, untraced{decimalOf(n), ""})
+		}
+	}
+	return out
+}
+
+// rawDate reports whether a handle's value is a deadline's raw date (rolledDates).
+func rawDate(value string, rolled map[string]analysis.Worksheet) bool {
+	ds, _ := figures(value, true)
+	_, raw := rolled[strings.Join(ds, "")]
+	return raw
+}
+
+// sheetAmount is a worksheet's numeric result (nil for a date).
+func sheetAmount(w analysis.Worksheet) *big.Rat {
+	if w.Unit == "date" {
+		return nil
+	}
+	r, ok := new(big.Rat).SetString(w.Result)
+	if !ok {
+		return nil
+	}
+	return r
+}
+
+// region is where Go wrote a handle's value into a section's text.
+type region struct {
+	start, end int
+	fig        Fig
+}
+
+var handleTok = regexp.MustCompile(`\{([A-Za-z]+|W[0-9a-f]{10})\}`)
+
+// memoBody is a section as G8 reads it: its handles substituted outside quotations (and where each
+// value went), its citations and authorities blanked byte for byte (offsets hold, and an
+// authority's numbers are G5's, flagged, not figures).
+func memoBody(s Section) (string, []region) {
+	var b strings.Builder
+	var regs []region
+	sub := func(x string) {
+		last := 0
+		for _, m := range handleTok.FindAllStringIndex(x, -1) {
+			i := slices.IndexFunc(s.Handles, func(f Fig) bool { return strings.EqualFold(f.Handle, x[m[0]:m[1]]) })
+			if i < 0 {
+				continue // an unknown handle stays as written (the lint names it)
+			}
+			b.WriteString(x[last:m[0]])
+			regs = append(regs, region{b.Len(), b.Len() + len(s.Handles[i].Value), s.Handles[i]})
+			b.WriteString(s.Handles[i].Value)
+			last = m[1]
+		}
+		b.WriteString(x[last:])
+	}
+	last := 0
+	for _, loc := range quotedRe.FindAllStringIndex(s.Markdown, -1) {
+		sub(s.Markdown[last:loc[0]])
+		b.WriteString(s.Markdown[loc[0]:loc[1]])
+		last = loc[1]
+	}
+	sub(s.Markdown[last:])
+	return blank(statuteCite, blank(caseCite, blank(fidRe, b.String()))), regs
+}
+
+func blank(re *regexp.Regexp, s string) string {
+	return re.ReplaceAllStringFunc(s, func(m string) string { return strings.Repeat(" ", len(m)) })
+}
+
+func textHash(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
+}
+
+// memoSpans are the numbers of a section's body G8 reads (each paragraph's, its locators masked,
+// single digits included: "$3 million"), those Go did not write for a handle: the figures the
+// drafter wrote, which the figure reader reads.
+func memoSpans(body string, regs []region) []analysis.Span {
+	var out []analysis.Span
+	off := 0
+	for _, para := range strings.Split(body, "\n\n") {
+		_, ns := figures(maskRefs(para), true)
+		for _, n := range ns {
+			n.Start, n.End = n.Start+off, n.End+off
+			n.Text = body[n.Start:n.End]
+			if !slices.ContainsFunc(regs, func(r region) bool { return r.start <= n.Start && n.Start < r.end }) {
+				out = append(out, n)
+			}
+		}
+		off += len(para) + 2
 	}
 	return out
 }
@@ -319,7 +516,7 @@ func hint(n string, hs []Fig, usable map[string]Finding, cited map[string]bool) 
 	states := func(text string) bool {
 		ds, ns := figures(text, true)
 		d, isDate := analysis.ParseDate(n)
-		return !isDate && slices.ContainsFunc(ns, func(f figure) bool { return !f.Amb && analysis.Decimal(f.Amount) == n }) || isDate && strings.Contains(n, "-") && slices.ContainsFunc(ds, func(k string) bool { x, _ := analysis.ParseDate(k); return x == d })
+		return !isDate && slices.ContainsFunc(ns, func(f analysis.Span) bool { return decimalOf(f) == n }) || isDate && strings.Contains(n, "-") && slices.ContainsFunc(ds, func(k string) bool { x, _ := analysis.ParseDate(k); return x == d })
 	}
 	for _, h := range hs { // a worksheet's value is traced already, so this is a finding's handle
 		if h.FID != "" && states(h.Value) {

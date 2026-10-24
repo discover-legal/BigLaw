@@ -87,7 +87,8 @@ func (e *Engine) runtime(r *run) (*agent.Runtime, error) {
 		BudgetCalls: e.cfg.BudgetCalls, Off: !r.t.ToolBandit}
 	tools := e.docs.Tools(rt)
 	an := analysis.Tools(e)
-	tools = append(tools, sheets{an[0], e}, aliasJoin{an[1], e}, e.ledgerTool(), e.sweepTool(rt, r), e.committeeTool(rt, r), e.finishTool(rt, r), e.coverTool(rt, r))
+	tools = append(tools, sheets{an[0], e}, aliasJoin{an[1], e}, e.ledgerTool(), e.sweepTool(rt, r), e.committeeTool(rt, r), e.finishTool(rt, r), e.coverTool(rt, r),
+		e.figureContextTool(), exactCalc{})
 	sub, _ := fs.Sub(specFS, "specs/agents")
 	subs, err := rt.LoadSubagents(sub)
 	if err != nil {
@@ -291,7 +292,7 @@ func (h hooked) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 	var reward float64
 	switch name {
 	case "draft_section":
-		out, err = h.e.saveSection(ctx, c.TaskID, draft, res.Output)
+		out, err = h.e.saveSection(ctx, h.rt, c, b, draft, res.Output)
 		reward = 1
 	case "check_deviation":
 		out, reward, err = h.e.deviations(ctx, h.rt, c, b, res, rq)
@@ -420,6 +421,13 @@ func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 		plan = slices.DeleteFunc(plan, func(is Issue) bool { return !slices.Contains(only, is.ID) })
 	}
 	quotes, ok, off := 0, 0, 0
+	type pending struct {
+		f    Finding
+		d    draftFinding
+		text string
+		it   *reading
+	}
+	var pend []pending
 	for _, d := range drafts {
 		fi := issueID
 		if scoped { // a fact on none of the plan's issues is not admitted
@@ -430,6 +438,7 @@ func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 		}
 		f := Finding{Finding: analysis.Finding{IssueID: fi, Claim: strings.TrimSpace(d.Claim), Quotes: d.Quotes, Entities: d.Entities}, Severity: "medium", Arm: agent.Arm{Tool: tool, Model: model}}
 		var text strings.Builder
+		var vq []analysis.Quote
 		for _, q := range d.Quotes {
 			cit, err := e.verify(ctx, rt, c, b, tool, q)
 			if err != nil {
@@ -440,22 +449,46 @@ func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 			if cit.Method != "none" {
 				ok++
 				text.WriteString(q.Quote + "\n")
+				vq = append(vq, analysis.Quote{DocumentID: cit.DocumentID, Quote: q.Quote, Locator: q.Locator})
 			}
 		}
 		f.Verified = len(f.Citations) > 0 && !slices.ContainsFunc(f.Citations, func(c Citation) bool { return c.Method == "none" })
-		for _, v := range d.Values { // a value its quotes do not state is dropped, never silently (lab-r4 r3)
-			ok, cur, why := valueStated(v, text.String())
+		pend = append(pend, pending{f, d, text.String(), findingReading(f, vq, d.Values)})
+	}
+	var items []*reading // one figure reading for the call's findings (cached by content), out of the call's grant
+	for _, p := range pend {
+		if len(p.text) > 0 {
+			items = append(items, p.it)
+		}
+	}
+	if err := e.readFigures(ctx, rt, c, b, tool, items); err != nil {
+		return out, 0, err
+	}
+	for _, p := range pend {
+		f, d := p.f, p.d
+		rs, refused := p.it.readings()
+		for _, n := range refused {
+			f.ValueNotes = append(f.ValueNotes, "figure reader: "+n)
+		}
+		f.Figures = quoteReadings(rs) // what G8 traces a memo figure citing it to
+		for j, v := range d.Values {  // a value its quotes do not state is dropped, never silently (lab-r4 r3)
+			fig, ok, low, why := valueStated(v, j, rs, p.text)
 			if !ok {
 				note := fmt.Sprintf("value %q (%s) not admitted: %s", v.Value, cmpStr(v.Metric != "", v.Metric, "no metric"), why)
 				f.ValueNotes = append(f.ValueNotes, note) // into out.Notes with its finding's id, below
 				continue
 			}
-			if analysis.ClassOf(v) == "Money" && v.Unit == "" && cur != "USD" {
-				v.Unit = cur // the currency the quote states it in; "" is USD
+			v.Fig = fig
+			if fig != nil && fig.Kind == analysis.KindMoney && v.Unit == "" && fig.Currency != "USD" && fig.Currency != "" {
+				v.Unit = fig.Currency // the currency the reader read it in; "" is USD
+			}
+			if low { // admitted, gated for a lawyer: the reader could not read it with no doubt
+				f.Low = true
+				f.ValueNotes = append(f.ValueNotes, lowNote(v, fig))
 			}
 			f.Values = append(f.Values, v)
 		}
-		f.Values = append(f.Values, claimSums(f.Claim, text.String(), f.Values)...)
+		f.Values = append(f.Values, claimSums(f.Claim, rs, f.Values)...)
 		f.Relations, _ = analysis.Relations(d.Entities, d.Relations)
 		if i := slices.IndexFunc(all, func(x Finding) bool {
 			return x.Verified && f.Verified && restated(x, f)
@@ -532,38 +565,6 @@ func restated(x, f Finding) bool {
 	}
 	return x.IssueID == f.IssueID && len(f.Quotes) > 0 && slices.Equal(quotes(x), quotes(f)) && slices.Equal(key(x.Values), key(f.Values)) &&
 		!(salientFinding(f) && !salientFinding(x)) // a finding that says a breach is never folded into one that does not
-}
-
-// claimSums are the sums of money a claim states and its verified quotes state too, which no typed
-// value carries (bench5 SEC F388: "payments totaling $103,800.00", the figure in its own quote, typed
-// nowhere, so the $92,600 vs $103,800 conflict had nothing to pair). Each is kept untyped: no entity,
-// no metric (so the label join never compares it; the near join does, by its quotes' words). A sum is
-// a US-dollar figure of the claim's (the join's canon), kept only when a quote figure admits it under
-// the typed-value rule (admits): its currency, sign and amount, scale read; a bare "3" ("Section 3")
-// never stands for "$3 million" (lab-r4 verifier H1), a euro sum or a share count never for dollars.
-func claimSums(claim, quotes string, have []analysis.Value) []analysis.Value {
-	var out []analysis.Value
-	canon := func(v analysis.Value) string { _, c, _, _ := analysis.Canon(v); return c }
-	seen := map[string]bool{}
-	for _, v := range have {
-		seen[canon(v)] = true
-	}
-	_, qs := figuresIn(quotes)
-	named := analysis.CurrenciesNamed(quotes)
-	_, cs := figuresIn(claim)
-	for _, f := range cs {
-		if f.Class != analysis.MoneyFig || f.Cur != "USD" || f.Amb {
-			continue
-		}
-		v := analysis.Value{Value: strings.TrimSpace(claim[f.Start:f.End]), Class: "Money"}
-		c := canon(v)
-		if c == "" || seen[c] || !slices.ContainsFunc(qs, func(q figure) bool { _, ok, _ := analysis.Admits(f, analysis.MoneyFig, q, named); return ok }) {
-			continue
-		}
-		seen[c] = true
-		out = append(out, v)
-	}
-	return out
 }
 
 func norm(s string) string { return strings.Join(strings.Fields(s), " ") }
