@@ -104,7 +104,8 @@ func TestDeadlinesMeetTheAnswerKey(t *testing.T) {
 	if fin := f.outputs(v.ID, "finish"); stop(v) != "awaiting_gate/finished" || len(fin) != 1 || !strings.Contains(fin[0], `"lint":[]`) {
 		t.Fatalf("%s %q\n%s\n%q", stop(v), fin, f.steps(v.ID), f.outputs(v.ID, "numbers"))
 	}
-	if !strings.Contains(out, "November 12, 2026 is a calculation from typed inputs as well as verified values (date_add: 1 F1.v1 = 10/21/2026 date; 2 21 days;") {
+	if !strings.Contains(out, "- November 12, 2026 = 10/21/2026 [F1] + 21 days [F8] “…serve an answer within 21 days after being…”, read in days from “days”, rolled past a weekend or holiday (I1)") ||
+		!strings.Contains(out, "- November 25, 2026 = December 3, 2026 [F2] − 7 days [F2]") {
 		t.Errorf("a calculation over typed inputs is not disclosed")
 	}
 	var key struct {

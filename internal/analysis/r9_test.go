@@ -111,3 +111,37 @@ func TestJoinCountsUncoveredValues(t *testing.T) {
 		t.Errorf("every pair asked, %d values uncovered", u)
 	}
 }
+
+// r10 M2: a grant sized to the pending pairs asks every one of them, however many pairs are judged
+// already: the limit counts the pairs to judge, not the judged ones kept ahead of it (bench6 SEC, as
+// the coverage pass sizes its judge grant: pending among CandidateLimit(jcalls), then ceil(n/20)).
+func TestPendingSizedGrantAsksAllPending(t *testing.T) {
+	fs := read(bench6Ledger(t, "sec"))
+	ranked := rankPairs(fs)
+	for _, j := range []int{0, 10, 20, 40, 100} {
+		done := map[string]bool{}
+		for _, c := range ranked[:j] {
+			done[c.ID] = true
+		}
+		judged := func(c Candidate) bool { return done[c.ID] }
+		jcalls := 10
+		cands, _ := Candidates(fs, CandidateLimit(jcalls), judged)
+		n := 0
+		for _, c := range cands {
+			if !judged(c) {
+				n++
+			}
+		}
+		grant := min(jcalls, (n+JudgePairs-1)/JudgePairs)
+		got, _ := Candidates(fs, CandidateLimit(grant), judged)
+		asked := 0
+		for _, c := range got {
+			if !judged(c) {
+				asked++
+			}
+		}
+		if asked < n {
+			t.Errorf("judged %d: %d of %d pending pairs the grant was sized for are never asked", j, n-asked, n)
+		}
+	}
+}

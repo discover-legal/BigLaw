@@ -55,20 +55,28 @@ func TestMislabelledSectionIsNoMultiplier(t *testing.T) {
 	}
 }
 
-// H1: "21 business days" read in calendar days (its words "days" are beside it) still traces a
-// calendar deadline, so every written-out figure computed over typed inputs is disclosed with the words
-// its inputs rest on: the lawyer sees "2024-03-22 = date_add(…; 21 days (“business days”))".
+// H1 (r9, r10): "21 business days" read in calendar days (its words "days" are beside it) still
+// traces a calendar deadline, so every figure of a section that traces only through a worksheet over
+// typed inputs is in the Computed figures block, whatever form the memo writes it in (G8 itself
+// decides: lintLimited traces the section again without those worksheets), with the words its inputs
+// rest on, the unit whose words are not its name marked.
 func TestComputedFigureDisclosedWithItsWords(t *testing.T) {
-	ground := "The complaint was served on March 1, 2024. An answer is due within 21 business days.\n"
-	known := []analysis.Reading{{Kind: analysis.KindDuration, Unit: "days", UnitFrom: "business days", Amount: "21", Text: "21"}} // the wrong unit
+	quote := "The complaint was served on March 1, 2024. An answer is due within 21 business days."
+	f1 := Finding{Finding: analysis.Finding{FID: "F1", Verified: true}, Citations: []Citation{{Quote: quote, Method: "exact"}},
+		Figures: []analysis.Reading{{Span: "q1.s3", Text: "21", Start: 60, End: 62, Kind: analysis.KindDuration, Unit: "days", UnitFrom: "business days", Amount: "21"}}} // the wrong unit
 	w := sheet(t, "date_add", [2]string{"2024-03-01", "date"}, [2]string{"21", "days"})
-	sheets := tracedSheets([]analysis.Worksheet{w}, ground, map[string]bool{"F1": true}, known)
-	got := computedFigures("The answer is due March 22, 2024 [F1].", nil, nil, sheets, ground, known)
-	if len(got) != 1 || !strings.Contains(got[0], "March 22, 2024 = date_add(2024-03-01 date; 21 days (“business days”))") {
-		t.Errorf("the computed deadline is not disclosed with its words: %q", got)
+	use := map[string]Finding{"F1": f1}
+	for _, memo := range []string{"The answer is due March 22, 2024 [F1].", "The answer is due March 22 [F1].", "The answer is due March 22nd, 2024 [F1].", "The answer is due 22 March 2024 [F1].",
+		"The answer is due {" + w.WID + "} [F1]."} {
+		sec := readSection(Section{Markdown: memo, Handles: []Fig{{"{" + w.WID + "}", "", sheetValue(w.Result, w.Unit)}}})
+		lines, _, _, computed := lintLimited("I1", sec, use, []analysis.Worksheet{w})
+		if len(lines) == 0 && (len(computed) != 1 || !computed[0].Mismatch || !strings.HasPrefix(computed[0].Text, "⚠ March 22, 2024 = March 1, 2024 [F1] “") || !strings.Contains(computed[0].Text, "” + 21 days [F1] “…2024. An answer is due within 21 business days.”") ||
+			!strings.HasSuffix(computed[0].Text, ", read in days from “business days”: the cited words “business days” are not its unit (days)")) {
+			t.Errorf("%q: traced, but not disclosed with its words: %+v", memo, computed)
+		}
 	}
-	if got := computedFigures("The answer is due {W0123456789} [F1].", []region{{start: 18, end: 31}}, nil, sheets, ground, known); len(got) != 0 {
-		t.Errorf("a handle's figure is the deliverable's own line, not this one: %q", got)
+	if _, _, _, computed := lintLimited("I1", readSection(Section{Markdown: "The complaint was served on March 1, 2024 [F1]."}), use, []analysis.Worksheet{w}); len(computed) != 0 {
+		t.Errorf("a section that states no computed figure lists one: %+v", computed)
 	}
 }
 
@@ -164,7 +172,7 @@ func TestBusinessDaysReadAsDaysDisclosed(t *testing.T) {
 			"The complaint was served on March 1, 2024. An answer is due within 21 business days"))},
 		"draft_section": {section("The answer is due March 22, 2024 [F1].", "Due [F1].")},
 	}), Config{})
-	if out := deref(v.Output); !strings.Contains(out, "March 22, 2024") || !strings.Contains(out, "21 days (“business days”)") {
+	if out := deref(v.Output); !strings.Contains(out, "March 22, 2024") || !strings.Contains(out, "⚠ March 22, 2024 = March 1, 2024 [F1]") || !strings.Contains(out, "the cited words “business days” are not its unit (days)") {
 		t.Errorf("the calendar deadline from \"21 business days\" is delivered without its computation; stop %s\n%s", stop(v), out)
 	}
 }

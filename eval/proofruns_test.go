@@ -340,9 +340,19 @@ func TestProofRunsOracle(t *testing.T) {
 			} else if len(lines) < want {
 				t.Logf("%d unresolved figure checks, below the pinned %d: lower the pin", len(lines), want)
 			}
-			disclosed := map[string]int{}
+			disclosed, tier := map[string]int{}, ""
 			for _, l := range strings.Split(deref(v.Output), "\n") {
-				for _, k := range []string{"computed from typed inputs", "Figures (low confidence)", "counterparts put to the figure judge", "written at another scale"} {
+				switch {
+				case strings.HasPrefix(l, "Check first"):
+					tier = "check first"
+				case strings.HasPrefix(l, "Arithmetic over"):
+					tier = "arithmetic"
+				case strings.HasPrefix(l, "## "):
+					tier = ""
+				case tier != "" && strings.HasPrefix(l, "- "):
+					disclosed[tier]++
+				}
+				for _, k := range []string{"Figures (low confidence)", "counterparts put to the figure judge", "written at another scale"} {
 					if strings.Contains(l, k) {
 						disclosed[k]++
 					}

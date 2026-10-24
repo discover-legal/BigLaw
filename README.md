@@ -1189,8 +1189,9 @@ to one followed by a noun or unit or after a "," or ";" once "and"/"or" closed t
   untraced figure says how to fix it: the handle to write and the finding to cite, the uncited
   finding that states it, or the `numbers` call that computes it (`TestLintSaysHowToFix`); no
   unknown handle, and none inside a quotation (Go never substitutes there, so the quote would show
-  `{Heron}`). A memo citing a `{W…}` worksheet with typed inputs (a period, a rate) says so in
-  Limitations, with what it computes from what. After two `finish` calls that reported lint problems, the next discloses them in
+  `{Heron}`). A memo stating a figure a worksheet with typed inputs (a period, a rate) computes, by
+  its `{W…}` handle or written out, lists it in Limitations' Computed figures block, with what it
+  computes from what. After two `finish` calls that reported lint problems, the next discloses them in
   Limitations ("Delivered with an unresolved check after 2 rounds of fixes") instead of refusing,
   so redrafting for the lint is bounded (`TestFigureLintIsBounded`)), coverage (plan issues
   without a section, parties never named, salient figures never landing), and P6: a committee on
@@ -1809,12 +1810,28 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     most one amount of money, `ratio` two in at most one currency, `date_add` days, weeks, months or
     years (a month or year on from a day the target month lacks is its last day: January 31 + 1 month
     is February 29, 2024; r9 M1). A duration's unit and a multiple's sign must cite the words beside
-    the span that state them (`unitFrom`, checked like a scale's: r9 H1), and every figure a section
-    writes out that a worksheet over typed literals computes is listed in Limitations, one line a
-    section, with its computation and the words each literal rests on ("March 22, 2024 = date_add(…; 21
-    days (“business days”))"), so one wrong unit label is seen by the lawyer. A memo's period (read as a
-    duration) traces only to a cited duration of that amount and unit, a worksheet's period, or the
-    days between two cited dates, never to the digits of a section number (r9 H2).
+    the span that state them (`unitFrom`, r9 H1), checked by position and shape only (`statesUnit`, r10
+    L2): a unit's words start at the first word right after the digits (only spaces, ")" or "-"
+    between, never "(": "Rule 12(b)" states nothing) and that word has two or more letters; a
+    multiple's sign is one character right against the digits or a space away ("1.5x", "x 1.5"); no
+    word list, so "of" in "Section 30 of" can be cited, and is caught where the words are compared or
+    shown. A memo's period (read as a duration) traces only to a cited duration of that amount and
+    unit whose words agree with the memo's as written (case, punctuation and a plural aside), a
+    worksheet's period, or the days between two cited dates, never to a section number's digits (r9
+    H2); a cited period whose words differ ("days" against "business days" or "of") makes it limited:
+    listed first in the block below and its findings gated (r10 M1).
+  - The Computed figures block (`computed.go`, r10): one block at the end of Limitations lists, once
+    each with the sections that state it, every figure a section states that traces only through a
+    worksheet over typed literals, whatever form it is written in (G8 decides: the section is traced a
+    second time without those worksheets, and a figure that then fails is listed; a `{W…}` handle's
+    worksheet is listed too), and every memo figure that traces only by a reader's label (a period
+    whose words differ from the record's, an identifier with a cited quantity's digits, r10 L5). Each
+    input is written as the memo writes figures with its finding and a short quote ("$212,500,000
+    [F1] “…purchase price of $212,500,000”"). Items resting on a unit, multiple or scale the figure
+    reader read from words, or on the days between two cited dates, come first ("Check first"), a unit
+    whose cited words are not its name marked ⚠ at the top; plain sums and products of figures the
+    quotes write out follow ("Arithmetic"). So every figure one wrong unit label could change is
+    shown to the lawyer with the words it rests on.
   - A figure written at one scale beside a cited one at another (the memo's "$5M" for a cited
     "$5,000,000", or its "$5,000,000" for a cited "$5 million", or "$5 per share" scaled from "per
     share") is limited, not traced: disclosed in Limitations and its citing findings gated for a

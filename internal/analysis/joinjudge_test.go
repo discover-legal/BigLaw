@@ -222,8 +222,8 @@ func TestJoinCandidatesCappedAndOrdered(t *testing.T) {
 	}
 	last := cands[len(cands)-1]
 	kept, _ := Candidates(read(fs), 1, func(c Candidate) bool { return c.ID == last.ID })
-	if len(kept) != 1 || kept[0].ID != last.ID {
-		t.Errorf("a pair judged already is not kept ahead of the cap: %v", kept)
+	if len(kept) != 2 || kept[0].ID != last.ID || kept[1].ID != cands[0].ID {
+		t.Errorf("a pair judged already is not kept ahead of the cap, beside the one pair the limit asks: %v", kept)
 	}
 }
 

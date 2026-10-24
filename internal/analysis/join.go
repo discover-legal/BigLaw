@@ -104,8 +104,9 @@ type Prior interface {
 // different (a date: not compatible at its precision). Two values in two documents are asked once,
 // however many findings repeat them. Nothing else is filtered: whether a pair is one quantity is the
 // judge's. Pairs judged already (judged; nil: none) come first, whatever the limit, so a verdict
-// never falls out of the join as more findings arrive (r8 M1); then the rest in rankPairs' order, up
-// to limit pairs in all; dropped is how many more there were.
+// never falls out of the join as more findings arrive (r8 M1); then up to limit pairs not yet judged,
+// in rankPairs' order (the limit is what a grant of judge calls asks: r10 M2); dropped is how many
+// more there were.
 func Candidates(findings []Finding, limit int, judged func(Candidate) bool) (cands []Candidate, dropped int) {
 	cands, dropped, _ = CandidatesCover(findings, limit, judged)
 	return cands, dropped
@@ -124,12 +125,13 @@ func CandidatesCover(findings []Finding, limit int, judged func(Candidate) bool)
 			rest = append(rest, c)
 		}
 	}
+	asked := 0 // the limit counts the pairs to judge, never those judged already (lab-r4 r10 M2)
 	for _, c := range rest {
-		if len(cands) >= limit {
+		if asked >= limit {
 			dropped++
 			continue
 		}
-		cands = append(cands, c)
+		cands, asked = append(cands, c), asked+1
 	}
 	at := func(s Side) string { return s.Canon + "@" + s.DocumentID }
 	all, in := map[string]bool{}, map[string]bool{}

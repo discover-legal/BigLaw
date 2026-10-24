@@ -202,7 +202,7 @@ func check(p Passage, s Span, l Label, known func(string) bool) Reading {
 	case r.Kind == KindNumber && u != "":
 		unclear("a unit on a figure that is no duration")
 	case r.Kind == KindDuration || r.Kind == KindNumber:
-		if !statesUnit(p.Text, s, from) {
+		if !statesUnit(p.Text, s, from, r.Kind == KindNumber) {
 			unclear("its " + map[bool]string{true: "unit", false: "multiple"}[r.Kind == KindDuration] + " is not stated by words beside it")
 			break
 		}
@@ -330,39 +330,46 @@ func statesScale(text string, s Span, end int, from string) bool {
 	return false
 }
 
-// statesUnit reports whether from is words of text right beside the span s, at word boundaries and
-// not the span itself: right after its digits, past a closing parenthesis or a hyphen ("21 days",
-// "thirty (30) days", "21-day", "1.5x"), or a one-character sign right before them ("x 1.5", "× 1.5"). That is where a
-// duration's unit or a multiple's sign is written; with no such words a reader's duration or number
-// label is unclear (lab-r4 r9 H1: "Section 30" states no unit, "Section 12" no multiple). Which words
-// state which unit is the reader's: Go checks only where they are.
-func statesUnit(text string, s Span, from string) bool {
-	if from == "" || !strings.ContainsFunc(from, func(r rune) bool {
-		return !unicode.IsDigit(r) && !unicode.IsSpace(r) && !unicode.IsPunct(r) || r == '×'
-	}) {
+// statesUnit reports whether from is words of text right beside the span s that can state a
+// duration's unit or a multiple's sign (lab-r4 r9 H1, r10 L2), checked by position and shape, never by
+// a word list:
+//   - words right after the digits: only spaces, a closing parenthesis or a hyphen between ("21 days",
+//     "thirty (30) days", "21-day"), never an opening parenthesis ("12(b)" states no unit), the
+//     source starting at the first word there, of two or more letters;
+//   - or, for a multiple, one sign right against the digits or a space away, either side ("1.5x",
+//     "x 1.5", "× 1.5").
+//
+// A source with no letter (and no "×") is none, and so is a lone letter that is no multiple's sign.
+// Which words state which unit is the reader's: a word that is no unit ("of" in "Section 30 of") is
+// caught where the words are compared (G8's periods, durationStated) or shown (the computed figures).
+func statesUnit(text string, s Span, from string, multiple bool) bool {
+	f := asciiLower(strings.TrimSpace(from))
+	sign := utf8.RuneCountInString(f) == 1
+	if f == "" || !strings.ContainsFunc(f, unicode.IsLetter) && f != "×" || sign && !multiple {
 		return false
 	}
-	low, f := asciiLower(text), asciiLower(from)
-	for i := 0; i+len(f) <= len(low); {
-		k := strings.Index(low[i:], f)
-		if k < 0 {
-			return false
-		}
-		a, b := i+k, i+k+len(f)
-		i = a + 1
-		if a < s.End && s.Start < b {
-			continue
-		}
-		edge := func(r rune, word bool) bool { return !word || !isWordRune(r) }
-		before := a == 0 || a == s.End || edge(lastRune(low[:a]), isWordRune(firstRune(f)))
-		after := b == len(low) || b == s.Start || edge(firstRune(low[b:]), isWordRune(lastRune(f)))
-		right := a >= s.End && strings.Trim(text[s.End:a], " \t()-") == ""
-		left := b <= s.Start && strings.Trim(text[b:s.Start], " \t(") == "" && utf8.RuneCountInString(f) == 1 // a sign before a factor: "x 1.5", "× 1.5", never a word ("Section 12")
-		if before && after && (right || left) {
-			return true
-		}
+	low := asciiLower(text)
+	if sign { // "1.5x", "1.5 x", "x 1.5", "×1.5"
+		after, before := strings.TrimPrefix(low[s.End:], " "), strings.TrimSuffix(low[:s.Start], " ")
+		edge := func(x string) bool { r, _ := utf8.DecodeRuneInString(x); return x == "" || !isWordRune(r) }
+		return strings.HasPrefix(after, f) && edge(after[len(f):]) || strings.HasSuffix(before, f) && edge(lastString(before[:len(before)-len(f)]))
 	}
-	return false
+	rest := strings.TrimLeft(low[s.End:], " \t)-")
+	if !strings.HasPrefix(rest, f) || strings.ContainsRune(low[s.End:len(low)-len(rest)], '(') {
+		return false
+	}
+	first := strings.FieldsFunc(f, func(r rune) bool { return !unicode.IsLetter(r) })
+	tail := rest[len(f):]
+	r, _ := utf8.DecodeRuneInString(tail)
+	return len(first) > 0 && utf8.RuneCountInString(first[0]) >= 2 && strings.IndexFunc(f, unicode.IsLetter) == 0 && (tail == "" || !isWordRune(r))
+}
+
+func lastString(x string) string {
+	if x == "" {
+		return ""
+	}
+	_, n := utf8.DecodeLastRuneInString(x)
+	return x[len(x)-n:]
 }
 
 // headerLine reports whether a passage's first line (ending at end) is a header whose words at a give

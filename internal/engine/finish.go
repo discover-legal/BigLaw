@@ -55,6 +55,7 @@ type report struct {
 	OpenPreconditions []string            `json:"openPreconditions"`
 	Truncated         bool                `json:"truncated"` // the lists hold their first items: fix those and check again
 	limits            []string
+	computed          []computedFig // the Computed figures block's items, by section
 }
 
 // page is the report as finish returns it: one page, the first items of each list by priority.
@@ -144,7 +145,7 @@ func (f finish) Call(ctx context.Context, c agent.Call) (res agent.Result, err e
 	if f.r.forced != "" {
 		flagged = rep.OpenPreconditions // every lint line is one of them
 	}
-	d, err := f.e.render(ctx, f.r.t, rep.limits, meta, flagged)
+	d, err := f.e.render(ctx, f.r.t, rep.limits, blockOf(rep.computed), meta, flagged)
 	if err == nil {
 		err = f.e.write(ctx, c.TaskID, kNote, "deliverable", d.Markdown, true)
 	}
@@ -239,14 +240,16 @@ func (f finish) check(ctx context.Context, limits []limitation) (report, error) 
 		if k >= 0 {
 			texts[is.ID] = substituteOutsideQuotes(secs[k].Markdown, secs[k].Handles)
 			lines, limited, gate, computed := lintLimited(is.ID, secs[k], byFID, sheets)
-			if len(computed) > 0 { // every written-out figure a worksheet over typed inputs traces, with the words its inputs rest on (lab-r4 r9 H1)
-				rep.limits = append(rep.limits, fmt.Sprintf("Figures: in the section on %s, computed from typed inputs: %s; check each input against the cited words it rests on.", is.ID, strings.Join(computed, "; ")))
+			for _, c := range computed { // every figure the section states that a worksheet over typed inputs computes, or a reader's label alone traces: one block (lab-r4 r9 H1, r10)
+				c.Section = is.ID
+				rep.computed = append(rep.computed, c)
 			}
 			rep.Lint = append(rep.Lint, lines...)
 			for _, fid := range slices.Sorted(maps.Keys(gate)) { // a memo figure traced only as written to its never-read quote, or at another scale: a lawyer confirms it (r6 M2, r7 M4)
 				if x := byFID[fid]; !x.Low {
 					x.Low = true
 					x.ValueNotes = append(x.ValueNotes, map[string]string{limitedUnread: "gated for a lawyer: a memo figure traces only as written to this finding's quotes, which the figure reader never read",
+						limitedUnit:  "gated for a lawyer: a memo period is this finding's only by the figure reader's unit label: the memo's unit words differ from the words it read here",
 						limitedScale: "gated for a lawyer: a memo figure states this finding's figure at another scale (one side written out, the other read at a scale from its words), the same figure only by the figure reader's reading of those words"}[gate[fid]])
 					byFID[fid] = x
 					if err := e.write(ctx, id, kFinding, fid, x, true); err != nil {
