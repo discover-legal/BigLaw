@@ -19,7 +19,7 @@
    "pairs": {
     "type": "array",
     "minItems": 1,
-    "maxItems": 15,
+    "maxItems": 20,
     "items": {
      "type": "object",
      "additionalProperties": false,
@@ -325,7 +325,7 @@
   "properties": {
    "verdicts": {
     "type": "array",
-    "maxItems": 30,
+    "maxItems": 40,
     "items": {
      "type": "object",
      "additionalProperties": false,

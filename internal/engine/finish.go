@@ -71,14 +71,10 @@ type limitation struct {
 	Text    string  `json:"text"`
 }
 
-// judgeShare bounds what finish's own join may spend of its grant on the figure judge (judge.go):
-// pairs it leaves unjudged are disclosed, and the rest stays for the coverage pass and the meta call.
-const judgeShare = 0.25
-
 func (f finish) Call(ctx context.Context, c agent.Call) (res agent.Result, err error) {
 	// the join's pairs not yet judged are judged first, so check and submit report every conflict
 	// the judge finds; what it spends comes out of the grant before anything else
-	jb := agent.NewBudget(max(0, min(c.Budget.Calls-1, 2*(analysis.MaxCandidates/maxJudgePairs+1))), judgeShare*c.Budget.USD, 0)
+	jb := agent.NewBudget(judgeCalls(c.Budget.Calls), judgeShare*c.Budget.USD, 0) // a quarter of its calls and USD (judge.go, lab-r4 r8 L3)
 	if err := f.e.judgeJoin(ctx, f.rt, c, jb, "finish"); err != nil {
 		return agent.Result{Usage: jb.Spent()}, err
 	}

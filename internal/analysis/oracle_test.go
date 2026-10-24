@@ -133,8 +133,14 @@ func read(fs []Finding) []Finding {
 	return out
 }
 
+// testLimit is the candidates a join of six judge calls asks (the cap the scenarios were written for).
+var testLimit = CandidateLimit(6)
+
+// testCall is a join's call with a grant of six judge calls.
+var testCall = agent.Call{Budget: agent.Grant{Calls: 6}}
+
 // scripted is a judge whose verdicts a test gives: yes for the pairs of values it lists (by their
-// text, either order), answer for every other pair it is asked about; calls counts its calls.
+// text or their canons, either order), answer for every other pair it is asked about; calls counts its calls.
 type scripted struct {
 	yes    [][2]string
 	answer string
@@ -147,9 +153,9 @@ func (s scripted) Judge(_ context.Context, _ agent.Call, cands []Candidate) (map
 	}
 	var raw []Verdict
 	for _, c := range cands {
-		v := Verdict{Pair: c.ID, SameQuantity: cmp.Or(s.answer, "no"), Reason: "scripted"}
+		v := Verdict{Pair: c.ID, SameQuantity: cmp.Or(s.answer, "no"), Reason: `A says "` + c.A.Quotes[0] + `"; B says "` + c.B.Quotes[0] + `".`}
 		if slices.ContainsFunc(s.yes, func(p [2]string) bool {
-			return p == [2]string{c.A.Value, c.B.Value} || p == [2]string{c.B.Value, c.A.Value}
+			return p == [2]string{c.A.Value, c.B.Value} || p == [2]string{c.B.Value, c.A.Value} || p == [2]string{c.A.Canon, c.B.Canon} || p == [2]string{c.B.Canon, c.A.Canon}
 		}) {
 			v.SameQuantity = "yes"
 		}
@@ -162,13 +168,13 @@ func (s scripted) Judge(_ context.Context, _ agent.Call, cands []Candidate) (map
 // judged is the join over fs (the stand-in's readings) with a judge saying yes to the pairs listed
 // and no to every other.
 func judged(fs []Finding, yes ...[2]string) []Conflict {
-	cs, _, _, _, _ := Join(context.Background(), agent.Call{}, read(fs), scripted{yes: yes})
+	cs, _, _, _, _ := Join(context.Background(), testCall, read(fs), scripted{yes: yes})
 	return cs
 }
 
 // seen reports whether the join puts the pair of values a, b to the judge.
 func seen(fs []Finding, a, b string) bool {
-	cands, _ := Candidates(read(fs))
+	cands, _ := Candidates(read(fs), testLimit, nil)
 	return slices.ContainsFunc(cands, func(c Candidate) bool { return c.A.Value == a && c.B.Value == b || c.A.Value == b && c.B.Value == a })
 }
 

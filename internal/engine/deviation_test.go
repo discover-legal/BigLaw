@@ -278,7 +278,7 @@ func devFindings(trustQuote string, verified bool, trustMetric string) []analysi
 
 // The join proposes the two documents' shares to the judge (who decides: judge.go), one from each.
 func TestDevNumericJoinBothQuotes(t *testing.T) {
-	cs, _ := analysis.Candidates(devFindings(qSophiaTrust, true, "residuary share"))
+	cs, _ := analysis.Candidates(devFindings(qSophiaTrust, true, "residuary share"), 100, nil)
 	if len(cs) != 1 || cs[0].A.DocumentID == cs[0].B.DocumentID {
 		t.Fatalf("%+v", cs)
 	}
@@ -288,13 +288,13 @@ func TestDevNumericJoinEnumerationGuard(t *testing.T) {
 	fs := devFindings(qSophiaTrust, true, "residuary share")
 	fs[1].Values[0].Value, fs[1].Values[0].Fig = "35%", read(analysis.KindPercent, "", "35", "Sophia")
 	fs[1].Values[0].Fig.Measures = "residuary share"
-	if cs, _ := analysis.Candidates(fs); len(cs) != 0 {
+	if cs, _ := analysis.Candidates(fs, 100, nil); len(cs) != 0 {
 		t.Fatalf("a matching value is conformance: %+v", cs)
 	}
 }
 
 func TestDevNumericJoinSubstringLock(t *testing.T) {
-	if cs, _ := analysis.Candidates(devFindings("a fabricated quote that appears nowhere", false, "residuary share")); len(cs) != 0 {
+	if cs, _ := analysis.Candidates(devFindings("a fabricated quote that appears nowhere", false, "residuary share"), 100, nil); len(cs) != 0 {
 		t.Fatalf("a quarantined finding joined: %+v", cs)
 	}
 }

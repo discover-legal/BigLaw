@@ -32,9 +32,18 @@ const (
 	KindCount   = "count"
 	KindPercent = "percent"
 	KindDate    = "date"
-	KindOther   = "other" // an identifier, a duration, a section number: never a quantity compared or summed
+	// KindDuration is a period of time with its unit (Reading.Unit: DurationUnits): "21 days", "one
+	// (1) year". It is a worksheet's day count or a date's offset only when read so (lab-r4 r8 H1).
+	KindDuration = "duration"
+	// KindNumber is a bare number or a multiple ("1.5x", "two times", a ratio): a plain operand of a
+	// product, never money, a count of things or an identifier.
+	KindNumber  = "number"
+	KindOther   = "other" // an identifier, a section, clause or rule number: never a quantity compared, summed or counted
 	KindUnclear = "unclear"
 )
+
+// DurationUnits are the units a duration is read in.
+var DurationUnits = []string{"days", "business days", "weeks", "months", "years"}
 
 // Passage is one text the figure reader reads: a quote, a typed value or a claim, with its spans.
 type Passage struct {
@@ -73,6 +82,8 @@ type Label struct {
 	// Counterparty is the figure's other party, when the passage names one: the payer of a payee's
 	// compensation, the landlord of a tenant's rent, the recipient of a payment (null when none).
 	Counterparty *string `json:"counterparty"`
+	// Unit is a duration's unit (one of DurationUnits); null for every other kind.
+	Unit *string `json:"unit"`
 }
 
 // Reading is a checked label: what one span states. It is what consumers read (admission, claimSums,
@@ -95,14 +106,16 @@ type Reading struct {
 	TypedEntity string `json:"typedEntity,omitempty"`
 	// Counterparty is the figure's other party as the reader names it ("" when none or not said).
 	Counterparty string `json:"counterparty,omitempty"`
+	Unit         string `json:"unit,omitempty"` // a duration's unit (DurationUnits)
 	RangeWith    string `json:"rangeWith,omitempty"`
 	Unclear      bool   `json:"unclear,omitempty"`
 	Why          string `json:"why,omitempty"` // what made it unclear
 }
 
-// Clear reports whether the reading is a quantity read with no doubt (money, a count, a percentage).
+// Clear reports whether the reading is a quantity read with no doubt (money, a count, a percentage, a
+// bare number or multiple).
 func (r Reading) Clear() bool {
-	return !r.Unclear && r.Amount != "" && (r.Kind == KindMoney || r.Kind == KindCount || r.Kind == KindPercent)
+	return !r.Unclear && r.Amount != "" && (r.Kind == KindMoney || r.Kind == KindCount || r.Kind == KindPercent || r.Kind == KindNumber)
 }
 
 // Rat is the reading's amount (nil when it has none).
@@ -166,11 +179,23 @@ func check(p Passage, s Span, l Label, known func(string) bool) Reading {
 			r.Unclear, r.Why = true, why
 		}
 	}
-	if !slices.Contains([]string{KindMoney, KindCount, KindPercent, KindDate, KindOther, KindUnclear}, l.Kind) {
+	if !slices.Contains([]string{KindMoney, KindCount, KindPercent, KindDate, KindDuration, KindNumber, KindOther, KindUnclear}, l.Kind) {
 		r.Kind = KindUnclear
 	}
 	if r.Kind == KindUnclear {
 		unclear("its kind is unclear")
+	}
+	u := ""
+	if l.Unit != nil {
+		u = *l.Unit
+	}
+	switch {
+	case r.Kind == KindDuration && slices.Contains(DurationUnits, u):
+		r.Unit = u
+	case r.Kind == KindDuration:
+		unclear("a duration with no unit")
+	case u != "":
+		unclear("a unit on a figure that is no duration")
 	}
 	switch {
 	case l.Currency == "unclear":
@@ -255,8 +280,8 @@ func check(p Passage, s Span, l Label, known func(string) bool) Reading {
 // statesScale reports whether from is words text states, outside the span s and at word boundaries,
 // adjacent to the span: right after its digits, or after the currency code written there ("4.2
 // million", "2810,EUR million"); earlier in its own line with no sentence end between (a lead-in:
-// "costs (in thousands): 1,200"); or in the passage's first line when the span is on a later one (a
-// table's header over its rows): where a figure's scale may come from (lab-r4 r5 H1, r6
+// "costs (in thousands): 1,200"); or in the passage's first line when that is a header (headerLine)
+// and the span is in a table row below it (tableRow): where a figure's scale may come from (lab-r4 r5 H1, r6
 // H1, r7 M2). Not a span id, not a part of a word ("e" of "fee"), not the span's own digits, never
 // another passage's words, nor words of another sentence ("Costs (in thousands): 1,200. The fee is
 // $500", "$500 per application. Costs (in thousands): 1,200"); at least one letter, or
@@ -284,12 +309,39 @@ func statesScale(text string, s Span, end int, from string) bool {
 		gap := strings.Trim(text[min(end, a):a], " \t(,") // after its digits (or its range's far end), or a currency code written after them: "4.2 million", "$5M", "4,000 (in thousands)", "2810,EUR million"
 		adjacent := a >= end && (gap == "" || IsCurrency(gap))
 		leadIn := b <= s.Start && !strings.ContainsRune(text[b:s.Start], '\n') && !sentenceEnd(text[b:s.Start])
-		heading := header >= 0 && b <= header && s.Start > header
+		heading := header >= 0 && b <= header && s.Start > header && headerLine(text, header, a) && tableRow(text, s.Start)
 		if before && after && (adjacent || leadIn || heading) {
 			return true
 		}
 	}
 	return false
+}
+
+// headerLine reports whether a passage's first line (ending at end) is a header whose words at a give
+// the rows below it their scale (lab-r4 r8 M2): no sentence in it (no sentence end, not ending in a
+// full stop), and the words not a figure's own scale on that line ("grew to $4.2 million").
+func headerLine(text string, end, a int) bool {
+	line := text[:end]
+	if sentenceEnd(line+" ") || strings.HasSuffix(strings.TrimSpace(line), ".") {
+		return false
+	}
+	_, ss := Literal(line)
+	return !slices.ContainsFunc(ss, func(n Span) bool {
+		gap := strings.Trim(line[min(n.End, a):a], " \t(,")
+		return n.End <= a && (gap == "" || IsCurrency(gap))
+	})
+}
+
+// tableRow reports whether the line holding offset at is a table's row: cells split by tabs, "|" or
+// commas (two or more), as a header's scale governs.
+func tableRow(text string, at int) bool {
+	lo := strings.LastIndexByte(text[:at], '\n') + 1
+	hi := len(text)
+	if i := strings.IndexByte(text[at:], '\n'); i >= 0 {
+		hi = at + i
+	}
+	line := text[lo:hi]
+	return strings.ContainsAny(line, "\t|") || strings.Count(line, ",") >= 2
 }
 
 // sentenceEnd reports whether text holds the end of a sentence: a full stop, question or exclamation

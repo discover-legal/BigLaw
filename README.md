@@ -870,23 +870,30 @@ The memo workflow (§ Memo workflow) drives these. What PR 4a ships, all tested 
   kind in one currency (money is never compared with a share count; durations and identifiers, kind
   other, are not compared), from two findings in two documents, their values different (dates: not
   compatible at their common precision); two values in two documents are asked once however many findings
-  repeat them; the reader's measures alike come first, then the closest values, at most
-  `MaxCandidates` (120), the rest counted. The engine's `judge_figures` subagent (critic role, its tool
+  repeat them. Pairs already judged come first whatever the cap (a "yes" never falls out as findings
+  arrive); then every value's three most alike, closest counterparts (`rankPairs`: tf-idf cosine of each
+  value's entity, metric, reader labels and claim, times the closeness of the amounts or dates; no exact
+  label match), then the rest; the cap is the judge's budget (`CandidateLimit`: 20 pairs a funded call),
+  the rest counted (lab-r4 r8 M1: on bench6's ledgers, with each side's measure worded differently, every
+  true find ranks within the first 82 of 13,037 SEC pairs and 7 of 1,022 trust pairs). The engine's `judge_figures` subagent (critic role, its tool
   `figure_context`; `internal/engine/judge.go`) gets both values' quotes, claims, the analyst's entity and
   metric, the reader's labels (party, counterparty, measure, period, typed entity) and the lead's aliases,
   and answers per pair `yes`, `no` or `unclear` with a reason quoting both passages. Go checks every
   verdict (`CheckVerdicts`: one for a pair it did not propose is rejected, so a "yes" on non-spans or on
-  two kinds asserts nothing; a second verdict for one pair, an unknown answer or a "yes" with no reason is
-  unclear). Only "yes" is a conflict (with its reason); "unclear" is a low-confidence Limitations line
+  two kinds asserts nothing; a second verdict for one pair or an unknown answer is unclear, and so is a
+  yes or no whose reason does not repeat four words in a row of each side's quote or claim: r8 L1). Only "yes" is a conflict (with its reason); "unclear" is a low-confidence Limitations line
   naming the pair; pairs the cap or an unfunded judge left out are counted in a Limitations line
   (`TestJoinAssertsOnlyTheJudgesYes`, `TestJoinRejectsVerdictsGoDidNotPropose`, `TestJoinScenarios`,
   `TestJoinLabelsAreContextNotKeys`, `TestJoinBenchLedgers`). The judge is called like the reader:
-  batched (15 pairs, 32 KB a call), on one bandit-picked model, metered and journaled through `Invoke` out
-  of its caller's grant (`join_discrepancies`' own 16 turns; finish judges first from at most a quarter of
-  its grant; the coverage pass from its share), and its yes and no answers are cached across a matter's
-  runs (`figure_reads`, keyed by the judge's spec hash, the model, the matter, the aliases and the pair's
-  content: `TestJoinVerdictsCachedAcrossRuns`); every verdict is kept in the task's ledger (kind
-  `verdict`), so `finish` and the coverage pass read the verdicts the tool got. The join runs over every
+  batched (20 pairs, 32 KB a call), on one bandit-picked model, metered and journaled through `Invoke` out
+  of its caller's grant (`join_discrepancies`' own 16 turns; finish judges first from a quarter of its
+  grant's calls and USD; the coverage pass from a quarter of its share: r8 L3), and its yes and no answers
+  are cached across a matter's runs (`figure_reads`, keyed by the judge's spec hash, the model, the matter
+  (a task with no matter number: the task alone), the task's documents, the aliases naming either side
+  and the pair's content: `TestJoinVerdictsCachedAcrossRuns`, `TestNoMatterTasksDoNotShareVerdicts`,
+  `TestVerdictKeysScopeAliasesAndDocuments`); every verdict is kept in the task's ledger (kind `verdict`,
+  keyed by the two values in their two documents and the aliases naming them), so `finish` and the
+  coverage pass read the verdicts the tool got. The join runs over every
   verified finding; `fids` only choose which conflicts are reported (those holding a named finding), so a
   cross-issue pair is found from either side (`TestJoinDiscrepanciesFidsDoNotScopeTheJoin`), and the
   lead's aliases are kept for the run (ledger kind `alias`) and given to every judge call
@@ -920,8 +927,9 @@ Limitations of this layer:
   reader that reads one figure unclearly, misses one. No rule in Go decides whose figure it is, what it
   measures, for which period or who else is named (r7: the party, counterparty, period and typed-entity
   matching rules, `oneQuantity` and `periodOf`, were deleted; prompt-faithful role-name labels, "the
-  Executive" for two people, had made false conflicts of correct readings). Past `MaxCandidates` pairs a
-  matter's join is incomplete and says how many it did not judge. A value's document is the quote that
+  Executive" for two people, had made false conflicts of correct readings). Past the pairs its budget
+  judges a matter's join is incomplete and says how many it did not judge; a true conflict whose two
+  values' contexts share no rare word and whose amounts are far apart ranks late. A value's document is the quote that
   holds its text, else the finding's first quote.
 - Calls in one turn run sequentially, not concurrently; `retrieve` and Go tools spend no calls, so a
   lead can issue up to 8 per turn for every turn its budget funds.
@@ -1306,8 +1314,9 @@ computes the rest only from cited figures with their units (sums, differences, p
 with one money factor, percentages, days between cited dates, a cited date shifted by a cited period,
 rolled past a cited holiday); the lawyer approves each gate. A figure it can neither cite nor compute is
 flagged by G8 and, after its rounds, delivered as an unresolved check, pinned per matter as a ratchet
-(`unresolvedG8`: 5 across the five matters, from 26 at the r7 review: a date one year on, two bare
-figures the stand-in reads as counts, two code sections written without "Section")),
+(`unresolvedG8`: 4 across the five matters, from 26 at the r7 review and 5 at r8: two bare figures the
+stand-in reads as counts, two code sections written without "Section"; and the findings it gates for the
+lawyer, `findingGates`: 4, scale-limited figures), both ratchets),
 `TestProofRunsFabricator`
 (E2: every matter fails with a grounding alert) and `TestLabRunnerSmoke` (the LAB driver against an
 `httptest` server) run with no model.
@@ -1776,24 +1785,28 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     verdict right (an analyst who misreads a requirement the document does impose is checked only by
     the claim's quoted window and prosecute).
   - The join asserts what the figure judge says (r7): its verdicts are a model's, checked for form
-    (`CheckVerdicts`: a verdict only for a pair Go proposed, one per pair, a reason for a yes), not for
-    truth. A judge that calls two quantities one makes a conflict the memo is asked to state (its reason
+    (`CheckVerdicts`: a verdict only for a pair Go proposed, one per pair, a reason that quotes both
+    passages), not for truth. A judge that calls two quantities one makes a conflict the memo is asked to state (its reason
     shown); "unclear" is disclosed as a low-confidence pair for the lawyer; pairs past the cap or that
     the budget could not judge are counted, not judged.
   - Worksheets (r7 H1, M1): an operand traces only as a cited value's ref, a traced worksheet's result
-    in its unit, or a literal the cited quotes state as its unit says (money in its currency, a
-    percentage, a plain number read as a count or other number, a date they state, a day count they
-    state as a period or that is the days between two dates they state); a result traces a memo figure
-    only of its own kind and currency (a day count by its amount never). A period the record does not
-    state (a court rule not among the cited quotes) leaves its deadline untraced: cite the rule.
-    `product` takes any numbers with at most one amount of money, `ratio` two in at most one currency.
-    A date one year on is not expressible (`date_add` counts days), and stays untraced.
+    in its unit, or a literal the cited quotes state as its unit says, by the figure reader's kind
+    (money in its currency, a percentage, a plain number read as a count or a bare number or multiple,
+    a date they state, a period read as a duration in that unit, or a day count that is the days between
+    two dates they state); never a number read as other, an identifier (r8 H1: "Section 30" is no
+    30-day period, "Section 12" no multiplier). A result traces a memo figure only of its own kind and
+    currency (a period by its amount never). A period the record does not state (a court rule not among
+    the cited quotes) leaves its deadline untraced: cite the rule. `product` takes any numbers with at
+    most one amount of money, `ratio` two in at most one currency, `date_add` days, weeks, months or
+    years (a month on from the 31st runs into the next month, as Go's `AddDate`).
   - A figure written at one scale beside a cited one at another (the memo's "$5M" for a cited
     "$5,000,000", or its "$5,000,000" for a cited "$5 million", or "$5 per share" scaled from "per
     share") is limited, not traced: disclosed in Limitations and its citing findings gated for a
     lawyer (r7 M4, L2). A scale's words must be adjacent to the figure (right after it or after its
-    currency code, earlier in its sentence, or its passage's first line over a later row), with a
-    letter or a "000" ("($000)"; a bare "$" is none: r7 M2, L1).
+    currency code, earlier in its sentence, or its passage's first line when that is a header, no
+    sentence and no figure of its own the words scale, over a table row: tabs, "|" or commas; r8 M2),
+    with a letter or a "000" ("($000)"; a bare "$" is none: r7 M2, L1). A caption over prose ("Amounts
+    in millions" above a sentence) is no header: such a figure is unclear, gated.
   - The raw-date rule is paragraph-wide: a list that states the raw date and the rolled deadline on
     separate lines without a blank line between is one paragraph and passes; one with a blank line is
     flagged.

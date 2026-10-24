@@ -29,7 +29,7 @@ func TestReaderLabelsEverySpanItWasGiven(t *testing.T) {
 	if l := out.Labels[0]; l["kind"] != "money" || l["currency"] != "USD" || l["party"] != "Greystone" {
 		t.Errorf("$644,910: %v", l)
 	}
-	if l := out.Labels[2]; l["span"] != "1.m.s1" || l["kind"] != "other" { // "21 days", not the date's 21
+	if l := out.Labels[2]; l["span"] != "1.m.s1" || l["kind"] != "duration" || l["unit"] != "days" { // "21 days", not the date's 21
 		t.Errorf("21 days: %v", l)
 	}
 	r, _ = With(map[string]string{"3": "Talbot"}, nil, map[string]string{"644,910": "damages claimed"})(req)

@@ -115,7 +115,7 @@ func TestTypedDayCountTracesNoDate(t *testing.T) {
 // two dates they state.
 func TestDayCountFromTheRecord(t *testing.T) {
 	ground := "The complaint was served on March 1, 2024. An answer is due within 21 days. The hearing is on March 29, 2024.\n"
-	known := []analysis.Reading{{Kind: analysis.KindOther, Amount: "21", Text: "21"}}
+	known := []analysis.Reading{{Kind: analysis.KindDuration, Unit: "days", Amount: "21", Text: "21"}}
 	for days, want := range map[string]bool{"21": true, "28": true, "-21": true, "30": false} {
 		w := sheet(t, "date_add", [2]string{"2024-03-01", "date"}, [2]string{days, "days"})
 		if got := len(tracedSheets([]analysis.Worksheet{w}, ground, nil, known)) == 1; got != want {
@@ -176,7 +176,7 @@ func TestDollarSignIsNoScaleSource(t *testing.T) {
 	if fig, ok, low, _ := valueStated(mv3("$500", "Money"), 0, rs, q); ok && !low && fig != nil && fig.Amount == "500000" {
 		t.Errorf("typed \"$500\" verified as %s (scale from %q)", fig.Amount, fig.ScaleFrom)
 	}
-	rs, _ = analysis.ReadLabels([]analysis.Passage{analysis.PassageOf("q1", "Revenue ($000)\n4,200")}, []analysis.Label{lab("q1.s2", analysis.KindMoney, "USD", "1000", "($000)", "", "")})
+	rs, _ = analysis.ReadLabels([]analysis.Passage{analysis.PassageOf("q1", "Revenue ($000)\nTotal\t4,200")}, []analysis.Label{lab("q1.s2", analysis.KindMoney, "USD", "1000", "($000)", "", "")})
 	if r := rs["q1.s2"]; r.Amount != "4200000" || r.Unclear {
 		t.Errorf("a header's ($000) is a scale's words: %+v", r)
 	}

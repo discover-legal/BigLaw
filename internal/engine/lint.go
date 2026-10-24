@@ -439,15 +439,17 @@ func g8(para, ground string, at0 int, regs []region, read map[int]analysis.Readi
 // unsigned is a span's text without a minus written before it ("-7 days" states the memo's "7 days").
 func unsigned(s string) string { return strings.TrimLeft(s, "-−–—") }
 
-// tracedSheets are the worksheets a section's figures may trace to (lab-r4 r6 M3, r7 H1): every
-// operand a cited finding's value (its ref), a traced worksheet's result in the same unit, or a
-// literal the cited quotes state as the same kind: an amount in a currency one the figure reader read
-// clearly as money in it, a percentage one it read as a percentage, a plain number (no unit, or a
-// unit that is no currency) one it read as a count or a number of something else, a date one the
-// cited quotes and values state, and a number of days the difference of two dates they state or a
-// period it read in them (a number it read as neither money, a count nor a percentage: "21 days").
-// A worksheet over a literal the record does not state so ("sum 9000000000 and 0", "9000000000
-// days", "2,000,000 USD" from a share count) computes nothing from the evidence and traces nothing.
+// tracedSheets are the worksheets a section's figures may trace to (lab-r4 r6 M3, r7 H1, r8 H1):
+// every operand a cited finding's value (its ref), a traced worksheet's result in the same unit, or a
+// literal the cited quotes state as its unit says, by the figure reader's kind: an amount in a
+// currency one it read clearly as money in it, a percentage one it read as a percentage, a plain
+// number (no unit, or a unit that is no currency or period) one it read as a count or a bare number
+// or multiple, a date one the cited quotes and values state, and a period one it read as a duration
+// in that unit (calendar days for date_add, business days for business_days), or, in days, the
+// difference of two dates they state. Never a number it read as other (a section, rule or docket
+// number: "Section 30" is no 30-day period, "Section 12" no multiplier). A worksheet over a literal
+// the record does not state so ("sum 9000000000 and 0", "9000000000 days", "2,000,000 USD" from a
+// share count) computes nothing from the evidence and traces nothing.
 func tracedSheets(sheets []analysis.Worksheet, ground string, cited map[string]bool, quoted []analysis.Reading) []analysis.Worksheet {
 	gd, _ := figures(ground, true)
 	var spans []int64 // the days between two dates the cited quotes and values state
@@ -466,6 +468,10 @@ func tracedSheets(sheets []analysis.Worksheet, ground string, cited map[string]b
 			if slices.ContainsFunc(out, func(x analysis.Worksheet) bool { return x.WID == w.WID }) {
 				continue
 			}
+			fn := ""
+			if len(w.Steps) > 0 {
+				fn = w.Steps[len(w.Steps)-1].Step
+			}
 			ok := true
 			for _, st := range w.Steps {
 				if !strings.HasPrefix(st.Step, "operand") {
@@ -476,7 +482,7 @@ func tracedSheets(sheets []analysis.Worksheet, ground string, cited map[string]b
 					ok = ok && cited[strings.SplitN(ref, ".", 2)[0]]
 					continue
 				}
-				ok = ok && literalTraced(st.Value, ground, quoted, spans, out)
+				ok = ok && literalTraced(fn, st.Value, ground, quoted, spans, out)
 			}
 			if ok {
 				out, changed = append(out, w), true
@@ -487,8 +493,8 @@ func tracedSheets(sheets []analysis.Worksheet, ground string, cited map[string]b
 }
 
 // literalTraced reports whether a worksheet's literal operand (its step's value: the literal as
-// typed, then its unit) is stated by the evidence as its unit says it is (tracedSheets).
-func literalTraced(step, ground string, quoted []analysis.Reading, spans []int64, traced []analysis.Worksheet) bool {
+// typed, then its unit) of a calc fn is stated by the evidence as its unit says it is (tracedSheets).
+func literalTraced(fn, step, ground string, quoted []analysis.Reading, spans []int64, traced []analysis.Worksheet) bool {
 	lit, unit := sheetOperand(step)
 	if unit == "date" {
 		return covered(lit, ground)
@@ -504,40 +510,42 @@ func literalTraced(step, ground string, quoted []analysis.Reading, spans []int64
 	}) {
 		return true
 	}
-	if unit == "days" {
-		if n.IsInt() && slices.ContainsFunc(spans, func(d int64) bool { return n.Num().IsInt64() && abs64(n.Num().Int64()) == d }) {
+	kind := unitKind(unit)
+	if kind == analysis.KindDuration { // a period counted back ("-7 days") is the period the record states ("seven (7) days before")
+		n = new(big.Rat).Abs(n)
+		if unit == "days" && fn != "business_days" && n.IsInt() && slices.ContainsFunc(spans, func(d int64) bool { return n.Num().IsInt64() && n.Num().Int64() == d }) {
 			return true
 		}
 	}
-	if unit == "days" { // a period counted back ("-7 days") is the period the record states ("seven (7) days before")
-		n = new(big.Rat).Abs(n)
-	}
 	return slices.ContainsFunc(quoted, func(k analysis.Reading) bool {
 		x := k.Rat()
-		if x != nil && unit == "days" {
+		if x != nil && kind == analysis.KindDuration {
 			x.Abs(x)
 		}
 		if k.Unclear || x == nil || x.Cmp(n) != 0 {
 			return false
 		}
-		switch kind := unitKind(unit); kind {
+		switch kind {
 		case analysis.KindMoney:
 			return k.Kind == analysis.KindMoney && k.Currency == unit
-		case "days":
-			return k.Kind == analysis.KindOther
-		default: // a percentage, or a plain number
-			return k.Kind == kind || kind == analysis.KindCount && k.Kind == analysis.KindOther
+		case analysis.KindDuration:
+			want := unit
+			if unit == "days" && fn == "business_days" {
+				want = "business days"
+			}
+			return k.Kind == analysis.KindDuration && k.Unit == want
+		case analysis.KindPercent:
+			return k.Kind == analysis.KindPercent
 		}
+		return k.Kind == analysis.KindCount || k.Kind == analysis.KindNumber // a plain number: never an identifier (other)
 	})
 }
 
-func abs64(n int64) int64 { return max(n, -n) }
-
 // sheetOperand splits a worksheet's literal operand step (analysis.Calc: the literal as typed, then
-// its unit) into the literal and the unit: "date", "days", "%", a currency code, or "" for a plain
-// number (a unit that is none of those: "shares").
+// its unit) into the literal and the unit: "date", a period's ("days", "weeks", "months", "years"),
+// "%", a currency code, or "" for a plain number (a unit that is none of those: "shares").
 func sheetOperand(step string) (lit, unit string) {
-	for _, u := range []string{" date", " days", " %"} {
+	for _, u := range []string{" date", " days", " weeks", " months", " years", " %"} {
 		if strings.HasSuffix(step, u) {
 			return strings.TrimSuffix(step, u), u[1:]
 		}
@@ -552,15 +560,15 @@ func sheetOperand(step string) (lit, unit string) {
 }
 
 // unitKind is the reading kind a worksheet unit is: money for a currency code, a percentage for
-// "%", days, or a count (a plain number).
+// "%", a duration for a period's unit, a date, or a count (a plain number).
 func unitKind(unit string) string {
 	switch {
 	case unit == "%":
 		return analysis.KindPercent
-	case unit == "days" || unit == "business days":
-		return "days"
+	case slices.Contains([]string{"days", "business days", "weeks", "months", "years"}, unit):
+		return analysis.KindDuration
 	case unit == "date":
-		return "date"
+		return analysis.KindDate
 	case analysis.IsCurrency(unit):
 		return analysis.KindMoney
 	}
@@ -568,11 +576,17 @@ func unitKind(unit string) string {
 }
 
 // sheetKind reports whether a worksheet's result is of the memo reading's kind: money in the
-// reading's currency, a percentage, or a count (r7 H1: a sum of share counts never traces a
-// "$2,000,000"; a count of days traces no figure by its amount).
+// reading's currency, a percentage, or a plain number (a count or a bare number) (r7 H1: a sum of
+// share counts never traces a "$2,000,000"; a count of days traces no figure by its amount).
 func sheetKind(w analysis.Worksheet, r analysis.Reading) bool {
-	k := unitKind(w.Unit)
-	return k == r.Kind && (k != analysis.KindMoney || w.Unit == r.Currency)
+	switch k := unitKind(w.Unit); k {
+	case analysis.KindCount:
+		return r.Kind == analysis.KindCount || r.Kind == analysis.KindNumber
+	case analysis.KindMoney:
+		return r.Kind == k && w.Unit == r.Currency
+	default:
+		return r.Kind == k
+	}
 }
 
 var refRe = regexp.MustCompile(`^F\d+\.v\d+$`)
@@ -586,7 +600,7 @@ func rawDate(value string, rolled map[string]analysis.Worksheet) bool {
 
 // sheetAmount is a worksheet's numeric result (nil for a date or a count of days).
 func sheetAmount(w analysis.Worksheet) *big.Rat {
-	if k := unitKind(w.Unit); k == "date" || k == "days" {
+	if k := unitKind(w.Unit); k == analysis.KindDate || k == analysis.KindDuration {
 		return nil
 	}
 	r, ok := new(big.Rat).SetString(w.Result)

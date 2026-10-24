@@ -121,8 +121,15 @@ func resolve(findings []Finding, o Operand) (operand, error) {
 	if o.Ref != nil && ClassOf(v) == "Money" && v.Fig != nil && v.Fig.Currency != "" {
 		unit = v.Fig.Currency // the currency the figure reader read the value in
 	}
-	if strings.Contains(unit, "day") { // "calendar days", "day"
+	switch { // "calendar days", "day", "year": a period's unit
+	case strings.Contains(unit, "day"):
 		unit = "days"
+	case strings.Contains(unit, "week"):
+		unit = "weeks"
+	case strings.Contains(unit, "month"):
+		unit = "months"
+	case strings.Contains(unit, "year"):
+		unit = "years"
 	}
 	if unit == "" && num == nil {
 		if d, ok := ParseDate(v.Value); ok && d.Day != 0 {
@@ -178,7 +185,7 @@ func deref(p *string) string {
 // takes says what each fn accepts, and shows a call that works, for the error that names it.
 var takes = map[string]string{"sum": "two or more numbers in one unit", "diff": "two numbers in one unit", "ratio": "two numbers, in at most one currency", "pct": "two numbers",
 	"product":  "two or more numbers, at most one of them an amount of money (1,200,000 shares times $5.00 times 1.5 is $9,000,000; 35% times $100,000 is $35,000)",
-	"date_add": "a full date and a whole number of days (negative counts back)", "date_diff": "two full dates",
+	"date_add": "a full date and a whole number of days, weeks, months or years (negative counts back; a month on from the 31st runs into the next month, as Go's AddDate)", "date_diff": "two full dates",
 	"business_days": "two full dates, or a full date and a whole number of days (negative counts back)"}
 
 // Calc runs one calculation exactly (decimal, never floating point): sum, diff, ratio, pct,
@@ -204,9 +211,10 @@ func Calc(findings []Finding, fn string, ops []Operand, holidays []string) (Work
 	if shape == "nd" && (fn == "date_add" || fn == "business_days") { // a count then a date: unambiguous
 		xs[0], xs[1], shape = xs[1], xs[0], "dn"
 	}
-	days := len(xs) == 2 && xs[1].num != nil && xs[1].num.IsInt() && xs[1].num.Num().IsInt64() && abs(xs[1].num.Num().Int64()) <= 10000 &&
-		(xs[1].unit == "" || xs[1].unit == "days")
-	var curs []string // the operands' currencies: a product has at most one amount of money, a ratio is in one currency (exact arithmetic, r7 M4)
+	whole := len(xs) == 2 && xs[1].num != nil && xs[1].num.IsInt() && xs[1].num.Num().IsInt64() && abs(xs[1].num.Num().Int64()) <= 10000
+	days := whole && (xs[1].unit == "" || xs[1].unit == "days")
+	period := whole && (days || xs[1].unit == "weeks" || xs[1].unit == "months" || xs[1].unit == "years") // date_add's offset (lab-r4 r8 H1)
+	var curs []string                                                                                     // the operands' currencies: a product has at most one amount of money, a ratio is in one currency (exact arithmetic, r7 M4)
 	for _, x := range xs {
 		if IsCurrency(x.unit) {
 			curs = append(curs, x.unit)
@@ -214,7 +222,7 @@ func Calc(findings []Finding, fn string, ops []Operand, holidays []string) (Work
 	}
 	if !map[string]bool{"sum": same && len(shape) >= 2 && !strings.Contains(shape, "d"), "diff": same && shape == "nn", "ratio": shape == "nn" && len(slices.Compact(slices.Clone(curs))) <= 1, "pct": shape == "nn",
 		"product":  len(shape) >= 2 && !strings.Contains(shape, "d") && len(curs) <= 1,
-		"date_add": shape == "dn" && days, "date_diff": shape == "dd", "business_days": shape == "dd" || shape == "dn" && days}[fn] {
+		"date_add": shape == "dn" && period, "date_diff": shape == "dd", "business_days": shape == "dd" || shape == "dn" && days}[fn] {
 		if takes[fn] == "" {
 			return Worksheet{}, fmt.Errorf("unknown fn %q", fn)
 		}
@@ -274,7 +282,18 @@ func Calc(findings []Finding, fn string, ops []Operand, holidays []string) (Work
 		w.Result = Decimal(r)
 	case "date_add":
 		n := xs[1].num.Num().Int64()
-		t := xs[0].date.time().AddDate(0, 0, int(n))
+		y, mo, d := 0, 0, 0
+		switch xs[1].unit {
+		case "weeks":
+			d = 7 * int(n)
+		case "months":
+			mo = int(n)
+		case "years":
+			y = int(n)
+		default:
+			d = int(n)
+		}
+		t := xs[0].date.time().AddDate(y, mo, d)
 		if holidays != nil && !workday(t) {
 			w.Steps = append(w.Steps, SheetStep{"raw date", t.Format(time.DateOnly) + " (" + t.Weekday().String() + map[bool]string{true: ", a weekend day)", false: ", a holiday)"}[t.Weekday()%6 == 0]})
 			for step := map[bool]int{true: -1, false: 1}[n < 0]; !workday(t); t = t.AddDate(0, 0, step) {

@@ -26,13 +26,12 @@ import (
 // a pair it did not propose is rejected, so a "yes" on two non-spans or two kinds asserts nothing;
 // a "yes" without a reason is unclear) and keeps it in the task's ledger (kVerdict) under the pair's
 // content and the run's aliases, so finish and the coverage pass read the same verdicts the join
-// tool got. The judge is called like the reader: batched (maxJudgePairs pairs, maxJudgeBytes of
+// tool got. The judge is called like the reader: batched (analysis.JudgePairs pairs, maxJudgeBytes of
 // text a call), on one model picked before the calls, metered and journaled through Invoke out of
 // its caller's grant, and its yes and no answers are cached across runs of a matter (figure_reads,
 // under the judge's own spec hash: an edit to its spec or prompt judges every pair again).
 
 const (
-	maxJudgePairs = 15
 	maxJudgeBytes = 32_000
 	maxJudgeQuote = 4_000 // a quote over it is sent cut around its value
 )
@@ -105,10 +104,12 @@ func pairIn(c analysis.Candidate) judgePair {
 	return judgePair{ID: c.ID, Kind: c.Kind, A: sideIn(c.A), B: sideIn(c.B)}
 }
 
-// judgeKey is a pair's key: the judge's spec, the model ("" for the task's ledger, which holds the
-// run's verdict whichever model gave it), the matter, the aliases and the pair's content (both sides
-// without their refs, in a fixed order), so a pair restated by other findings is the same question.
-func judgeKey(model, scope string, aliases []analysis.Alias, p judgePair) string {
+// judgeKey is a pair's key in the cross-run cache: the judge's spec, the model, the matter and the task's documents (a verdict's reason may
+// quote a document only that set holds: lab-r4 r8 L2), the aliases that name either side (r8 L4: an
+// alias of another party judges nothing again) and the pair's content (both sides without their
+// refs, in a fixed order), so a pair restated by other findings is the same question.
+func judgeKey(model, scope string, docs []string, aliases []analysis.Alias, x analysis.Candidate) string {
+	p := pairIn(x)
 	a, b := p.A, p.B
 	a.Ref, b.Ref = "", ""
 	ja, _ := json.Marshal(a)
@@ -116,17 +117,53 @@ func judgeKey(model, scope string, aliases []analysis.Alias, p judgePair) string
 	if string(jb) < string(ja) {
 		ja, jb = jb, ja
 	}
-	data, _ := json.Marshal(map[string]any{"spec": judgeSpec, "model": model, "scope": scope, "aliases": aliases, "kind": p.Kind, "a": json.RawMessage(ja), "b": json.RawMessage(jb)})
+	docs = slices.Sorted(slices.Values(docs))
+	data, _ := json.Marshal(map[string]any{"spec": judgeSpec, "model": model, "scope": scope, "docs": docs, "aliases": pairAliases(aliases, x), "kind": p.Kind,
+		"a": json.RawMessage(ja), "b": json.RawMessage(jb)})
 	sum := sha256.Sum256(data)
 	return "judge:" + hex.EncodeToString(sum[:])
 }
 
-// verdicts are the task's verdicts on cands (its ledger), by candidate id.
-func (e *Engine) verdicts(ctx context.Context, taskID string, cands []analysis.Candidate) (map[string]analysis.Verdict, error) {
+// pairAliases are the aliases that name one of a pair's sides: its typed entity, or the reader's party
+// or counterparty for it (case and spacing aside).
+func pairAliases(aliases []analysis.Alias, cands ...analysis.Candidate) []analysis.Alias {
+	fold := func(x string) string { return strings.ToLower(strings.Join(strings.Fields(x), " ")) }
+	names := map[string]bool{}
+	for _, c := range cands {
+		for _, s := range []analysis.Side{c.A, c.B} {
+			for _, n := range []string{s.Entity, s.Fig.Party, s.Fig.Counterparty} {
+				if n = fold(n); n != "" {
+					names[n] = true
+				}
+			}
+		}
+	}
+	out := []analysis.Alias{}
+	for _, a := range aliases {
+		if names[fold(a.Name)] || slices.ContainsFunc(a.Aliases, func(o string) bool { return names[fold(o)] }) {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// ledgerKey is a pair's verdict's key in the task's ledger: the two values (canons) in their two
+// documents, whichever findings state them (so a verdict holds as later findings restate a pair:
+// lab-r4 r8 M1), and the aliases naming either side.
+func ledgerKey(aliases []analysis.Alias, x analysis.Candidate) string {
+	sides := []string{x.A.Canon + "@" + x.A.DocumentID, x.B.Canon + "@" + x.B.DocumentID}
+	slices.Sort(sides)
+	data, _ := json.Marshal(map[string]any{"sides": sides, "aliases": pairAliases(aliases, x)})
+	sum := sha256.Sum256(data)
+	return "pair:" + hex.EncodeToString(sum[:])
+}
+
+// verdictSet is the task's verdicts (its ledger) by ledgerKey, and the run's aliases.
+func (e *Engine) verdictSet(ctx context.Context, taskID string) (map[string]analysis.Verdict, []analysis.Alias, error) {
 	aliases, err := load[analysis.Alias](ctx, e, taskID, kAlias)
 	rows, rerr := e.rows(ctx, taskID, kVerdict)
 	if err = cmpErr(err, rerr); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	have := map[string]analysis.Verdict{}
 	for _, r := range rows {
@@ -135,14 +172,29 @@ func (e *Engine) verdicts(ctx context.Context, taskID string, cands []analysis.C
 			have[r.Key] = v
 		}
 	}
+	return have, aliases, nil
+}
+
+// verdicts are the task's verdicts on cands (its ledger), by candidate id.
+func (e *Engine) verdicts(ctx context.Context, taskID string, cands []analysis.Candidate) (map[string]analysis.Verdict, error) {
+	have, aliases, err := e.verdictSet(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
 	out := map[string]analysis.Verdict{}
 	for _, c := range cands {
-		if v, ok := have[judgeKey("", "", aliases, pairIn(c))]; ok {
+		if v, ok := have[ledgerKey(aliases, c)]; ok {
 			v.Pair = c.ID
 			out[c.ID] = v
 		}
 	}
 	return out, nil
+}
+
+// judgedSet reports which pairs the task has a verdict for (analysis.Candidates keeps them first).
+func (e *Engine) judgedSet(ctx context.Context, taskID string) (func(analysis.Candidate) bool, error) {
+	have, aliases, err := e.verdictSet(ctx, taskID)
+	return func(c analysis.Candidate) bool { _, ok := have[ledgerKey(aliases, c)]; return ok }, err
 }
 
 // judge has judge_figures decide every candidate the task has no verdict for: from the cross-run
@@ -165,7 +217,7 @@ func (e *Engine) judge(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 	keep := func(x analysis.Candidate, v analysis.Verdict) error {
 		v.Pair = x.ID
 		out[x.ID] = v
-		return e.write(ctx, c.TaskID, kVerdict, judgeKey("", "", aliases, pairIn(x)), v, true)
+		return e.write(ctx, c.TaskID, kVerdict, ledgerKey(aliases, x), v, true)
 	}
 	var todo []analysis.Candidate
 next:
@@ -174,7 +226,7 @@ next:
 			continue
 		}
 		for _, m := range models {
-			v, ok, err := e.cachedVerdict(ctx, judgeKey(m, scope, aliases, pairIn(x)), m, scope != "")
+			v, ok, err := e.cachedVerdict(ctx, judgeKey(m, scope, c.DocumentIDs, aliases, x), m, scope != "")
 			if err != nil {
 				return nil, err
 			}
@@ -193,7 +245,7 @@ next:
 	for len(todo) > 0 {
 		var chunk []analysis.Candidate
 		bytes := 0
-		for len(todo) > 0 && len(chunk) < maxJudgePairs {
+		for len(todo) > 0 && len(chunk) < analysis.JudgePairs {
 			p, _ := json.Marshal(pairIn(todo[0]))
 			if len(chunk) > 0 && bytes+len(p) > maxJudgeBytes {
 				break
@@ -213,7 +265,7 @@ next:
 				return nil, err
 			}
 			if v.SameQuantity != "unclear" && scope != "" {
-				if err := e.cacheVerdict(ctx, judgeKey(model, scope, aliases, pairIn(x)), c.TaskID, scope, model, x, v); err != nil {
+				if err := e.cacheVerdict(ctx, judgeKey(model, scope, c.DocumentIDs, aliases, x), c.TaskID, scope, model, x, v); err != nil {
 					return nil, err
 				}
 			}
@@ -225,14 +277,14 @@ next:
 	return out, nil
 }
 
-// judgeChunk is one judge call over chunk: its checked verdicts (a "yes" with no reason is unclear),
-// and whether the grant is spent.
+// judgeChunk is one judge call over chunk: its checked verdicts (analysis.CheckVerdicts: a yes or no
+// whose reason does not quote both passages is unclear), and whether the grant is spent.
 func (e *Engine) judgeChunk(ctx context.Context, rt *agent.Runtime, c agent.Call, b *agent.Budget, caller, model string, aliases []analysis.Alias, chunk []analysis.Candidate) (map[string]analysis.Verdict, bool, error) {
 	ps := make([]judgePair, len(chunk))
 	for i, x := range chunk {
 		ps[i] = pairIn(x)
 	}
-	input, _ := json.Marshal(map[string]any{"pairs": ps, "aliases": append([]analysis.Alias{}, aliases...)})
+	input, _ := json.Marshal(map[string]any{"pairs": ps, "aliases": pairAliases(aliases, chunk...)})
 	res, err := rt.Invoke(ctx, agent.Agent{Name: caller, Visible: []string{"judge_figures"}}, agent.Call{TaskID: c.TaskID, DocumentIDs: c.DocumentIDs, Model: model}, "judge_figures", input, b, false, 0)
 	switch {
 	case ctx.Err() != nil:
@@ -252,12 +304,6 @@ func (e *Engine) judgeChunk(ctx context.Context, rt *agent.Runtime, c agent.Call
 	vs, notes := analysis.CheckVerdicts(chunk, out.Verdicts)
 	for _, n := range notes {
 		e.log.Warn("figure judge", "task", c.TaskID, "note", n)
-	}
-	for id, v := range vs {
-		if v.SameQuantity == "yes" && strings.TrimSpace(v.Reason) == "" {
-			v.SameQuantity, v.Reason = "unclear", "the judge gave no reason"
-			vs[id] = v
-		}
 	}
 	return vs, false, nil
 }
@@ -294,34 +340,56 @@ func (e *Engine) cacheVerdict(ctx context.Context, key, taskID, scope, model str
 }
 
 // joined is the cross-document join as the task's verdicts decide it: the conflicts ("yes"), the
-// pairs judged unclear, and how many the cap or the judge left without a verdict.
+// pairs judged unclear, how many of the pairs a finish judges first (judgeLimit) have no verdict, and
+// how many more pairs of differing figures were never put to the judge.
 type joined struct {
 	all, open []analysis.Conflict
 	unclear   []analysis.Candidate
 	unjudged  int
+	beyond    int
 }
 
-// joinCands are the join's candidates over usable findings.
-func joinCands(use []Finding) ([]analysis.Candidate, int) {
+// joinCands are the join's candidates over usable findings: those judged already, then up to limit
+// in analysis.Candidates' order.
+func joinCands(use []Finding, limit int, judged func(analysis.Candidate) bool) ([]analysis.Candidate, int) {
 	an := make([]analysis.Finding, 0, len(use))
 	for _, f := range use {
 		an = append(an, f.Finding)
 	}
-	return analysis.Candidates(an)
+	return analysis.Candidates(an, limit, judged)
 }
 
-// judgeJoin judges the task's candidates out of b (finish's and the coverage pass's own join); its
-// usage is b's.
+// judgeShare is the part of finish's grant, and of the coverage pass's share, its own join may spend
+// on the figure judge, in calls and USD alike (lab-r4 r8 L3): what it leaves unjudged is disclosed.
+const judgeShare = 0.25
+
+// judgeCalls are the calls a grant of calls gives the figure judge (at least one when it has two).
+func judgeCalls(calls int) int { return min(max(calls-1, 0), max(1, int(judgeShare*float64(calls)))) }
+
+// judgeLimit is how many pairs a finish of this engine's budget judges: the pairs a run's join
+// discloses as unjudged are counted among those.
+func (e *Engine) judgeLimit() int {
+	a := Allocate(e.cfg.BudgetCalls, e.cfg.BudgetUSD)
+	return analysis.CandidateLimit(judgeCalls(1 + a.Cover + a.Cycle))
+}
+
+// judgeJoin judges the task's candidates out of b (finish's and the coverage pass's own join), as
+// many as its calls fund; its usage is b's.
 func (e *Engine) judgeJoin(ctx context.Context, rt *agent.Runtime, c agent.Call, b *agent.Budget, caller string) error {
 	use, err := e.usable(ctx, c.TaskID)
-	if cands, _ := joinCands(use); err == nil && len(cands) > 0 {
+	judged, jerr := e.judgedSet(ctx, c.TaskID)
+	if err = cmpErr(err, jerr); err != nil {
+		return err
+	}
+	calls, _ := b.Remaining()
+	if cands, _ := joinCands(use, analysis.CandidateLimit(calls), judged); len(cands) > 0 {
 		_, err = e.judge(ctx, rt, c, b, caller, cands)
 	}
 	return err
 }
 
-// unclearLine and unjudgedLine are the join's disclosures: possible conflicts the judge could not
-// decide (low confidence, for a lawyer), and pairs no verdict covers.
+// lines are the join's disclosures: possible conflicts the judge could not decide (low confidence,
+// for a lawyer), and pairs no verdict covers.
 func (j joined) lines() []string {
 	var out []string
 	if len(j.unclear) > 0 {
@@ -334,8 +402,12 @@ func (j joined) lines() []string {
 			strings.Join(ps, "; "), cmpStr(len(j.unclear) > 20, fmt.Sprintf(" and %d more", len(j.unclear)-20), "")))
 	}
 	if j.unjudged > 0 {
-		out = append(out, fmt.Sprintf("Figures: %d %s of figures that two documents state differently %s not judged (past the join's cap of %d pairs, or the budget could not fund the figure judge), so a conflict among them may be missing.",
-			j.unjudged, plural(j.unjudged, "pair", "pairs"), plural(j.unjudged, "was", "were"), analysis.MaxCandidates))
+		out = append(out, fmt.Sprintf("Figures: %d %s of figures that two documents state differently, among those the join puts to the figure judge first (each figure's most alike and closest counterparts), %s not judged (the budget could not fund the judge, or its answer was unusable), so a conflict among them may be missing.",
+			j.unjudged, plural(j.unjudged, "pair", "pairs"), plural(j.unjudged, "was", "were")))
+	}
+	if j.beyond > 0 {
+		out = append(out, fmt.Sprintf("Figures: past the pairs its budget judges, %d more %s of differing figures in two documents %s never put to the figure judge (each figure's most alike and closest counterparts were asked first).",
+			j.beyond, plural(j.beyond, "pair", "pairs"), plural(j.beyond, "was", "were")))
 	}
 	return out
 }
@@ -351,4 +423,9 @@ func (j judging) Judge(ctx context.Context, c agent.Call, cands []analysis.Candi
 	b := agent.NewBudget(c.Budget.Calls, c.Budget.USD, 0)
 	vs, err := j.judge(ctx, j.rt, c, b, "join_discrepancies", cands)
 	return vs, b.Spent(), err
+}
+
+// Judged reports the pairs the task has verdicts for: join_discrepancies keeps them ahead of its cap.
+func (j judging) Judged(ctx context.Context, c agent.Call) (func(analysis.Candidate) bool, error) {
+	return j.judgedSet(ctx, c.TaskID)
 }

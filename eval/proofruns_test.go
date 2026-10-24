@@ -7,6 +7,7 @@
 package eval
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -192,7 +193,7 @@ func firstDoc(mt matter) string {
 }
 
 // drive runs one matter through the engine on scripts and writes a run dir the scorer reads.
-func drive(t *testing.T, mt matter, scripts func(matter, map[string]string) map[string][]model.Reply) (engine.TaskView, string) {
+func drive(t *testing.T, mt matter, scripts func(matter, map[string]string) map[string][]model.Reply) (engine.TaskView, string, []string) {
 	st, err := store.Open(context.Background(), storetest.DSN(t), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -211,6 +212,11 @@ func drive(t *testing.T, mt matter, scripts func(matter, map[string]string) map[
 	}
 	fake := readerFake(scripts(mt, ids))
 	t.Cleanup(func() {
+		per := map[string]int{}
+		for _, c := range fake.Calls() {
+			per[c.Agent]++
+		}
+		t.Logf("%s: %d model calls, %d figure reader, %d figure judge", mt.Slug, len(fake.Calls()), per["read_figures"], per["judge_figures"])
 		for _, c := range fake.Calls() {
 			if c.Agent == "extract_facts" && len(c.Messages) > 3 && t.Failed() {
 				t.Logf("repair: %v", c.Messages[len(c.Messages)-1].Content)
@@ -242,11 +248,14 @@ func drive(t *testing.T, mt matter, scripts func(matter, map[string]string) map[
 			}
 		}
 	}
-	for range 50 { // the reviewing lawyer approves each gate (a finding gated for a lawyer, then the deliverable)
+	var gates []string // what the reviewing lawyer approved, in order
+	for range 50 {     // the reviewing lawyer approves each gate (a finding gated for a lawyer, then the deliverable)
 		if v.Status != "awaiting_gate" || len(v.PendingGates) == 0 {
 			break
 		}
-		v, _ = e.Decide(ctx, task.ID, v.PendingGates[0].GateID, true, "")
+		g := v.PendingGates[0]
+		gates = append(gates, g.Kind+":"+cmp.Or(g.FindingID, g.GateID))
+		v, _ = e.Decide(ctx, task.ID, g.GateID, true, "")
 		for range 400 {
 			if v.Status != "queued" && v.Status != "running" {
 				break
@@ -268,7 +277,7 @@ func drive(t *testing.T, mt matter, scripts func(matter, map[string]string) map[
 	write("biglaw_tasks.json", []any{v})
 	write("documents.json", names)
 	write("metrics.json", m{"completed": v.Status == "complete", "error": v.Error})
-	return v, dir
+	return v, dir, gates
 }
 
 type scores struct {
@@ -299,11 +308,16 @@ func score(t *testing.T, mt matter, dir string) scores {
 }
 
 // unresolvedG8 pins E1's figure checks the oracle's memo is delivered with unresolved, per matter: a
-// ratchet that may only fall (lab-r4 r7 M4: 26 at the r7 review). What is left is what no tool or the
-// stand-in reader expresses: a date one year on (date_add counts days), a memo's bare "(2,810 + 310)"
+// ratchet that may only fall (lab-r4 r7 M4: 26 at the r7 review, 5 at r8; the one-year date closed by
+// date_add's years, r8). What is left is what the stand-in reader cannot read: a memo's bare "(2,810 + 310)"
 // the stand-in reads as counts beside the record's EUR millions, and a code section written without
 // its "Section" ("280G", "s.16600") the stand-in reads as a count.
-var unresolvedG8 = map[string]int{"msa-negotiation": 0, "merger-control": 2, "ma-diligence": 2, "litigation": 1, "ip-license": 0}
+var unresolvedG8 = map[string]int{"msa-negotiation": 0, "merger-control": 2, "ma-diligence": 2, "litigation": 0, "ip-license": 0}
+
+// findingGates pins the findings E1's run gates for the reviewing lawyer (every one approved by the
+// driver), per matter: a ratchet like unresolvedG8 (lab-r4 r8 L5), so a regression that gates every
+// finding fails E1.
+var findingGates = map[string]int{"msa-negotiation": 1, "merger-control": 3, "ma-diligence": 0, "litigation": 0, "ip-license": 0}
 
 // TestProofRunsOracle (E1): the five matters, the oracle model, the Python scorer: 1.0, every
 // citation verified, and no more unresolved figure checks than pinned.
@@ -311,7 +325,7 @@ func TestProofRunsOracle(t *testing.T) {
 	for _, mt := range loadMatters(t) {
 		t.Run(mt.Slug, func(t *testing.T) {
 			t.Parallel()
-			v, dir := drive(t, mt, oracle)
+			v, dir, gates := drive(t, mt, oracle)
 			if v.Status != "complete" {
 				t.Fatalf("%s %s", v.Status, deref(v.Error))
 			}
@@ -325,6 +339,15 @@ func TestProofRunsOracle(t *testing.T) {
 				t.Errorf("%d unresolved figure checks, pinned at %d (a ratchet: fix the regression):\n%s", len(lines), want, strings.Join(lines, "\n"))
 			} else if len(lines) < want {
 				t.Logf("%d unresolved figure checks, below the pinned %d: lower the pin", len(lines), want)
+			}
+			found := slices.DeleteFunc(slices.Clone(gates), func(g string) bool { return !strings.HasPrefix(g, "finding:") })
+			if want, ok := findingGates[mt.Slug]; !ok || len(found) > want {
+				t.Errorf("%s: %d findings gated for a lawyer (%v), pinned at %d (a ratchet: fix the regression)", mt.Slug, len(found), found, want)
+			} else if len(found) < want {
+				t.Logf("%s: %d findings gated (%v), below the pinned %d: lower the pin", mt.Slug, len(found), found, want)
+			}
+			if len(gates) == 0 || !strings.HasPrefix(gates[len(gates)-1], "deliverable:") {
+				t.Errorf("gates approved %v: the deliverable's gate last", gates)
 			}
 			s := score(t, mt, dir)
 			if s.Score != 1 || s.Grounding.CitationVerifiedRate == nil || *s.Grounding.CitationVerifiedRate != 1 {
@@ -346,7 +369,7 @@ func TestProofRunsFabricator(t *testing.T) {
 	for _, mt := range loadMatters(t) {
 		t.Run(mt.Slug, func(t *testing.T) {
 			t.Parallel()
-			v, dir := drive(t, mt, fabricator)
+			v, dir, _ := drive(t, mt, fabricator)
 			if v.Status != "failed" || v.GroundingAlert == nil || v.Output != nil {
 				t.Fatalf("%s alert %v", v.Status, v.GroundingAlert)
 			}
@@ -647,7 +670,7 @@ func traceable(mt matter, i int) (extra []string, calcs []calc, also []int) {
 		due = append(due, d)
 	}
 	for _, r := range memo { // a number of days: the days between two cited dates
-		if r.Kind != analysis.KindOther || slices.ContainsFunc(results, func(k analysis.Reading) bool { return states(r, k) }) ||
+		if r.Kind != analysis.KindDuration || r.Unit != "days" || slices.ContainsFunc(results, func(k analysis.Reading) bool { return states(r, k) }) ||
 			slices.ContainsFunc(pool(), func(x src) bool { return states(r, x.r) }) {
 			continue
 		}
@@ -765,8 +788,8 @@ func compute(r analysis.Reading, ks, results []analysis.Reading, lit func(analys
 	return calc{}, nil, false
 }
 
-// deadline is a date_add from a cited date by a period the evidence states (a number it reads as
-// neither money, a count nor a percentage: "21 days"), forward or back, rolled past the cited dates
+// deadline is a date_add from a cited date by a period the evidence states (a duration the reader
+// reads in calendar days, weeks, months or years: "21 days", "one (1) year"), forward or back, rolled past the cited dates
 // as holidays when the raw date is one of them; none when no cited date and period reach d.
 func deadline(d analysis.Date, dates []analysis.Date, ks []analysis.Reading) (calc, bool) {
 	var holidays []string
@@ -775,13 +798,13 @@ func deadline(d analysis.Date, dates []analysis.Date, ks []analysis.Reading) (ca
 	}
 	for _, x := range dates {
 		for _, k := range ks {
-			if k.Kind != analysis.KindOther || k.Unclear || k.Rat() == nil || !k.Rat().IsInt() {
+			if k.Kind != analysis.KindDuration || k.Unit == "business days" || k.Unclear || k.Rat() == nil || !k.Rat().IsInt() {
 				continue
 			}
 			n := new(big.Rat).Abs(k.Rat()).Num().Int64()
 			for _, sign := range []int64{1, -1} {
 				for _, hol := range [][]string{nil, holidays} {
-					ops := []m{{"ref": nil, "literal": x.Key(), "unit": "date"}, {"ref": nil, "literal": strconv.FormatInt(sign*n, 10), "unit": "days"}}
+					ops := []m{{"ref": nil, "literal": x.Key(), "unit": "date"}, {"ref": nil, "literal": strconv.FormatInt(sign*n, 10), "unit": k.Unit}}
 					var o []analysis.Operand
 					data, _ := json.Marshal(ops)
 					_ = json.Unmarshal(data, &o)

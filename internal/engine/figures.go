@@ -337,15 +337,19 @@ func readerReserve(ctx context.Context, rt *agent.Runtime) agent.Grant {
 	return rt.WorstCase(s, prompt("agents/read_figures"), rt.Bandit.PickModel(ctx, "read_figures", rt.Candidates(s.Role)), maxReadBytes+maxReadSpans*(maxSpanText+32))
 }
 
-// readScope is the matter a task reads for ("" outside a task: nothing is cached).
+// readScope is the matter a task reads for ("" outside a task: nothing is cached); a task with no
+// matter number reads for itself alone (lab-r4 r8 L2: never one bucket for every such task).
 func (e *Engine) readScope(ctx context.Context, taskID string) (string, error) {
 	if taskID == "" || e.db == nil {
 		return "", nil
 	}
 	var matter string
 	err := e.db.QueryRowContext(ctx, `SELECT matter_number FROM tasks WHERE id = $1`, taskID).Scan(&matter)
-	if errors.Is(err, sql.ErrNoRows) {
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
 		return "", nil
+	case err == nil && strings.TrimSpace(matter) == "":
+		return "task:" + taskID, nil
 	}
 	return "matter:" + matter, err
 }

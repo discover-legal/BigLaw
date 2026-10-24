@@ -133,7 +133,9 @@ var (
 	oracleAfter = regexp.MustCompile(`^[\s,\t]?(USD|EUR|GBP|CHF|CAD|JPY|INR|AUD|dollars?|euros?)\b`)
 	oracleScale = regexp.MustCompile(`(?i)^\s?(million|billion|thousand|mm|m|bn|k)\b`)
 	oracleNoun  = regexp.MustCompile(`(?i)^\)?\s?(?:[a-z-]+\s){0,2}?(shares?|units?|trades?|employees?|people|persons?|transactions?|accounts?|votes?|options?|items?|copies|pages?|instalments?|installments?)\b`)
-	oracleTime  = regexp.MustCompile(`(?i)^\)?[\s-]?(?:calendar\s|business\s)?(days?|weeks?|months?|years?|hours?)\b`)
+	oracleTime  = regexp.MustCompile(`(?i)^\)?[\s-]?(calendar\s|business\s)?(days?|weeks?|months?|years?|hours?)\b`)
+	oracleMult  = regexp.MustCompile(`(?i)^\)?\s?(?:x\b|×|times\b)`) // a multiple: "1.5x", "2.0 times"
+	oracleTimes = regexp.MustCompile(`(?:\s|^)[x×]\s?$`)             // a factor after a times sign: "shares x 1.5"
 	oracleMonth = regexp.MustCompile(`(?i)(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s*\d{0,2},?\s*$`)
 	oracleYear  = regexp.MustCompile(`^(19|20)\d\d$`)
 	oracleRef   = regexp.MustCompile(`(?i)(section|rule|clause|paragraph|item|exhibit|schedule|article|§|no\.|#)\s*$`)
@@ -211,7 +213,17 @@ func oracleLabel(p Passage, s analysis.Span, all []Passage, parties []string) an
 	case cur != "":
 		l.Kind, l.Currency = analysis.KindMoney, cur
 	case oracleTime.MatchString(after):
-		l.Kind = analysis.KindOther
+		m := oracleTime.FindStringSubmatch(after)
+		u := map[string]string{"day": "days", "week": "weeks", "month": "months", "year": "years"}[strings.TrimSuffix(strings.ToLower(m[2]), "s")]
+		if strings.EqualFold(strings.TrimSpace(m[1]), "business") && u == "days" {
+			u = "business days"
+		}
+		l.Kind = analysis.KindOther // hours: no duration unit
+		if u != "" {
+			l.Kind, l.Unit = analysis.KindDuration, &u
+		}
+	case oracleMult.MatchString(after) || oracleTimes.MatchString(before):
+		l.Kind = analysis.KindNumber
 	case oracleNoun.MatchString(after):
 		l.Kind = analysis.KindCount
 	case oracleMonth.MatchString(before) || oracleYear.MatchString(s.Text) && !strings.HasSuffix(before, "$"):

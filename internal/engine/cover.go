@@ -137,12 +137,23 @@ func (e *Engine) coverTool(rt *agent.Runtime, r *run) agent.Tool {
 		}
 		me := agent.Agent{Name: "cover", Visible: []string{"analyze_issue", "draft_section"}}
 		call := agent.Call{TaskID: c.TaskID, DocumentIDs: c.DocumentIDs}
-		if err := e.judgeJoin(ctx, rt, call, b, "cover"); err != nil { // the conflicts it must place (judge.go)
+		calls, usd := b.Remaining() // the figure judge's share of the pass (lab-r4 r8 L3), for the conflicts it must place (judge.go)
+		jg, jerr := b.Grant(judgeCalls(calls), judgeShare*usd, agent.LevelWork)
+		judge := func() error {
+			if jerr != nil {
+				return nil
+			}
+			return e.judgeJoin(ctx, rt, call, jg, "cover")
+		}
+		if jerr == nil {
+			defer jg.Close()
+		}
+		if err := judge(); err != nil {
 			return nil, b.Spent(), err
 		}
 		due, _, err := e.placements(ctx, c.TaskID)
 		if err != nil {
-			return nil, agent.Usage{}, err
+			return nil, b.Spent(), err
 		}
 		keep := 0.0 // what the analyses leave for placing the left-out evidence (bench5 SEC: they spent all but $0.14, and nothing was placed)
 		if len(due) > 0 {
@@ -177,9 +188,12 @@ func (e *Engine) coverTool(rt *agent.Runtime, r *run) agent.Tool {
 			}
 		}
 		if failed == nil { // the analyses' new findings' pairs
-			if err := e.judgeJoin(ctx, rt, call, b, "cover"); err != nil {
+			if err := judge(); err != nil {
 				return nil, b.Spent(), err
 			}
+		}
+		if jerr == nil {
+			jg.Close() // what it left, back for the placements
 		}
 		for round := 0; failed == nil && round < placeRounds; round++ { // then the left-out evidence: one redraft per issue that has some, a round at a time
 			ids, place, perr := e.placements(ctx, c.TaskID)
@@ -448,12 +462,16 @@ func (e *Engine) joined(ctx context.Context, taskID string) (joined, error) {
 	if err = cmpErr(err, serr); err != nil {
 		return joined{}, err
 	}
-	cands, dropped := joinCands(use)
+	judged, err := e.judgedSet(ctx, taskID)
+	if err != nil {
+		return joined{}, err
+	}
+	cands, dropped := joinCands(use, e.judgeLimit(), judged)
 	vs, err := e.verdicts(ctx, taskID, cands)
 	if err != nil {
 		return joined{}, err
 	}
-	j := joined{unjudged: dropped}
+	j := joined{beyond: dropped}
 	for _, x := range cands {
 		switch v, ok := vs[x.ID]; {
 		case !ok:

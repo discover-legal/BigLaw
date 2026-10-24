@@ -9,8 +9,6 @@ import (
 	"maps"
 	"slices"
 	"testing"
-
-	"github.com/discover-legal/BigLaw/internal/agent"
 )
 
 // The cross-document join as Go candidates and a judge's verdicts (lab-r4 r7, owner decision). Every
@@ -42,7 +40,7 @@ func (c joinCase) check(t *testing.T, name string) {
 		t.Errorf("%s: %d conflicts, want the %d judged so: %v", name, len(got), len(c.same), pairs(got))
 	}
 	for _, answer := range []string{"no", "unclear"} {
-		cs, unclear, _, _, _ := Join(context.Background(), agent.Call{}, read(c.fs), scripted{answer: answer})
+		cs, unclear, _, _, _ := Join(context.Background(), testCall, read(c.fs), scripted{answer: answer})
 		if len(cs) > 0 || answer == "unclear" && len(c.same)+len(c.not) > 0 && len(unclear) == 0 {
 			t.Errorf("%s: judged %s throughout, %d conflicts and %d unclear", name, answer, len(cs), len(unclear))
 		}
@@ -154,7 +152,7 @@ func TestJoinNeverProposes(t *testing.T) {
 			r2vF("F4", "board", "The Board approved a Purchase Price of $95 million payable by Buyer.", Value{Entity: "Buyer", Metric: "purchase price", Value: "$95 million", Class: "Money"})},
 		"one document": {fh("$50,000", "A deposit of $50,000; a second deposit of $60,000.", "spa", "Buyer", "deposit"), fh("$60,000", "A deposit of $50,000; a second deposit of $60,000.", "spa", "Buyer", "deposit")},
 	} {
-		if cands, _ := Candidates(read(fs)); len(cands) > 0 {
+		if cands, _ := Candidates(read(fs), testLimit, nil); len(cands) > 0 {
 			t.Errorf("%s: put to the judge: %v", name, cands[0].ID)
 		}
 	}
@@ -170,7 +168,7 @@ func TestJoinVerdictsAreChecked(t *testing.T) {
 		fh("$103,800", qCompExhibit, "exhibit-d", "Ostrowski", "compensation"),
 		{FID: "Fs", Verified: true, Quotes: []Quote{{DocumentID: "b", Quote: "The stake is 9,000,000 shares."}}, Values: []Value{{Entity: "Ostrowski", Metric: "compensation", Value: "9,000,000", Unit: "shares"}}},
 	})
-	cands, _ := Candidates(fs)
+	cands, _ := Candidates(fs, testLimit, nil)
 	if len(cands) != 1 {
 		t.Fatalf("candidates %+v", cands)
 	}
@@ -186,65 +184,94 @@ func TestJoinVerdictsAreChecked(t *testing.T) {
 	if vs, _ := CheckVerdicts(cands, []Verdict{{Pair: id, SameQuantity: "probably"}}); vs[id].SameQuantity != "unclear" {
 		t.Errorf("an unknown answer: %+v", vs)
 	}
-	cs, unclear, unjudged, _, err := Join(context.Background(), agent.Call{}, fs, nil)
+	cs, unclear, unjudged, _, err := Join(context.Background(), testCall, fs, nil)
 	if err != nil || len(cs) != 0 || len(unclear) != 0 || unjudged != 1 {
 		t.Errorf("no judge: %d conflicts, %d unclear, %d not judged (%v)", len(cs), len(unclear), unjudged, err)
 	}
 }
 
-// The candidates are capped (the rest counted for Limitations) and ordered the same way every time:
-// the reader's measures alike first, then the closest values.
+// The candidates are capped by the judge's budget (the rest counted for Limitations) and ordered the
+// same way every time: each value's most alike, closest counterparts first, so every value gets its
+// nearest before any value gets more (lab-r4 r8 M1); pairs judged already come first whatever the cap,
+// so a "yes" never falls out as findings arrive.
 func TestJoinCandidatesCappedAndOrdered(t *testing.T) {
 	var fs []Finding
 	for i := range 20 {
-		fs = append(fs, fh(fmt.Sprintf("$%d,000", 100+i), fmt.Sprintf("A fee of $%d,000.", 100+i), fmt.Sprintf("doc%d", i), "Acme", fmt.Sprintf("fee %d", i%3)))
+		fs = append(fs, fh(fmt.Sprintf("$%d,000", 100+i), fmt.Sprintf("A fee of $%d,000.", 100+i), fmt.Sprintf("doc%d", i), "Acme", []string{"legal fee", "audit fee", "filing fee"}[i%3]))
 	}
-	cands, dropped := Candidates(read(fs))
-	if len(cands) != MaxCandidates || dropped != 20*19/2-MaxCandidates {
+	cands, dropped := Candidates(read(fs), testLimit, nil)
+	if len(cands) != testLimit || dropped != 20*19/2-testLimit {
 		t.Fatalf("%d candidates, %d dropped", len(cands), dropped)
 	}
-	again, _ := Candidates(read(slices.Clone(fs)))
+	again, _ := Candidates(read(slices.Clone(fs)), testLimit, nil)
 	if !slices.EqualFunc(cands, again, func(a, b Candidate) bool { return a.ID == b.ID }) {
 		t.Error("the order is not fixed")
 	}
-	if fold(cands[0].A.Fig.Measures) != fold(cands[0].B.Fig.Measures) {
+	if cands[0].A.Fig.Measures != cands[0].B.Fig.Measures {
 		t.Errorf("first candidate %s is not of one measure", cands[0].ID)
+	}
+	first := map[string]bool{} // within the first pairs, every value already has a counterpart
+	for _, c := range cands[:20] {
+		first[c.A.Ref], first[c.B.Ref] = true, true
+	}
+	if len(first) < 15 {
+		t.Errorf("the first 20 pairs cover %d values: each value's nearest come first", len(first))
+	}
+	if c, d := Candidates(read(fs), 0, nil); len(c) != 0 || d != 190 {
+		t.Errorf("no judge budget: %d candidates, %d dropped", len(c), d)
+	}
+	last := cands[len(cands)-1]
+	kept, _ := Candidates(read(fs), 1, func(c Candidate) bool { return c.ID == last.ID })
+	if len(kept) != 1 || kept[0].ID != last.ID {
+		t.Errorf("a pair judged already is not kept ahead of the cap: %v", kept)
 	}
 }
 
-// The ledgers of real runs: every true find is put to the judge within the cap, whatever the reader's
-// party, counterparty, period or typed-entity labels (r7 M3: prompt-faithful labels lost them under
-// rules), and judged so it is reported.
+// The ledgers of real runs: every true find is put to the judge within a six-call join's cap, under
+// the stand-in reader's labels, the right labels, prompt-faithful ones, and (lab-r4 r8 M1) measures
+// worded differently on each side, as each side's own reader call words them; and judged so it is
+// reported. Pairs are named by their canons (one question per two values in two documents: which
+// findings' refs stand for it is the ranking's).
 func TestJoinBenchLedgers(t *testing.T) {
 	bench6 := func(name string, ls map[string]relabel) []Finding { return readAs(bench6Ledger(t, name), ls) }
 	prompted := maps.Clone(bench6SECLabels) // a prompt-faithful reader: counterparties from each passage, a period on one side
 	prompted["F269/$103,800.00"] = relabel{"Marcus T. Bellini", "undisclosed compensation paid for Bellini", "2022-05-03/2024-01-02", "other"}
 	prompted["F539/$92,600"] = relabel{"Marcus T. Bellini", "undisclosed compensation paid for Bellini", "", "party"}
+	wca, bellini, whitmore := "Whitmore Capital Advisors LLC", "Marcus T. Bellini", "Gerald R. Whitmore"
+	reworded := map[string]relabel{"F178/4,217": {wca, "equity trades analyzed by OQR", "", "none"}, "F246/4,312": {wca, "total omnibus equity trades", "", "party"},
+		"F83/7,912": {wca, "total equity trades in the review period", "", "none"}, "F246/7,412": {wca, "equity trades executed", "", "party"},
+		"F269/$103,800.00": {bellini, "grand total of payments on behalf of Bellini", "", "other"}, "F539/$92,600": {bellini, "undisclosed compensation received", "", "party"},
+		"F144/April 22, 2024": {whitmore, "date of the instruction to clean up the drive", "", "none"}, "F547/15 Apr 2024 09:23:47": {whitmore, "email sent", "", "none"}}
+	sec := [][2]string{{"n:4217", "n:4312"}, {"n:7912", "n:7412"}, {"usd:92600", "usd:103800"}, {"date:2024-04-22", "date:2024-04-15"}}
 	for name, c := range map[string]struct {
 		fs   []Finding
 		same [][2]string
 	}{
-		"bench5 SEC":                         {readAs(bench5Findings(t), bench5Labels), [][2]string{{"4,217", "4,312"}, {"$92,600", "$103,800.00"}, {"April 22, 2024", "15 Apr 2024"}}},
-		"bench6 SEC":                         {bench6("sec", bench6SECLabels), [][2]string{{"4,217", "4,312"}, {"7,912", "7,412"}, {"$92,600", "$103,800.00"}, {"April 22, 2024", "15 Apr 2024 09:23:47"}}},
-		"bench6 SEC, prompt-faithful labels": {bench6("sec", prompted), [][2]string{{"$92,600", "$103,800.00"}}},
+		"bench5 SEC":                         {readAs(bench5Findings(t), bench5Labels), [][2]string{{"n:4217", "n:4312"}, {"usd:92600", "usd:103800"}, {"date:2024-04-22", "date:2024-04-15"}}},
+		"bench6 SEC":                         {bench6("sec", bench6SECLabels), sec},
+		"bench6 SEC, the stand-in's labels":  {read(bench6Ledger(t, "sec")), sec},
+		"bench6 SEC, measures reworded":      {bench6("sec", reworded), sec},
+		"bench6 SEC, prompt-faithful labels": {bench6("sec", prompted), [][2]string{{"usd:92600", "usd:103800"}}},
 		"bench6 trust": {bench6("trust", map[string]relabel{"F67/35": {party: "Sophia Davenport-Chen"}, "F170/30%": {party: "Sophia Davenport-Chen", entity: "party"}}),
-			[][2]string{{"35", "30%"}, {"October 8, 2040", "October 8, 2035"}}},
+			[][2]string{{"pct:35", "pct:30"}, {"date:2040-10-08", "date:2035-10-08"}}},
+		"bench6 trust, the stand-in's labels": {read(bench6Ledger(t, "trust")), [][2]string{{"date:2040-10-08", "date:2035-10-08"}}},
 	} {
-		cands, _ := Candidates(c.fs)
+		cands, dropped := Candidates(c.fs, testLimit, nil)
+		t.Logf("%s: %d candidates, %d dropped", name, len(cands), dropped)
 		for _, p := range c.same {
 			if !slices.ContainsFunc(cands, func(x Candidate) bool {
-				return x.A.Value == p[0] && x.B.Value == p[1] || x.A.Value == p[1] && x.B.Value == p[0]
+				return x.A.Canon == p[0] && x.B.Canon == p[1] || x.A.Canon == p[1] && x.B.Canon == p[0]
 			}) {
-				t.Errorf("%s: %s vs %s not put to the judge (%d candidates)", name, p[0], p[1], len(cands))
+				t.Errorf("%s: %s vs %s not put to the judge (%d candidates, %d dropped)", name, p[0], p[1], len(cands), dropped)
 			}
 		}
-		cs, _, _, _, _ := Join(context.Background(), agent.Call{}, c.fs, scripted{yes: c.same})
+		cs, _, _, _, _ := Join(context.Background(), testCall, c.fs, scripted{yes: c.same})
 		if len(cs) < len(c.same) {
 			t.Errorf("%s: %d conflicts judged, want %d: %v", name, len(cs), len(c.same), pairs(cs))
 		}
 	}
 	for _, name := range []string{"gatea"} { // gate A: whatever is put to the judge, "no" asserts nothing
-		if cs, _, _, _, _ := Join(context.Background(), agent.Call{}, read(bench6Ledger(t, name)), scripted{}); len(cs) > 0 {
+		if cs, _, _, _, _ := Join(context.Background(), testCall, read(bench6Ledger(t, name)), scripted{}); len(cs) > 0 {
 			t.Errorf("%s: %v", name, pairs(cs))
 		}
 	}
@@ -299,7 +326,7 @@ func TestJoinLabelsAreContextNotKeys(t *testing.T) {
 		"two tenants by role names, one rent roll naming none":              {leases, nil, [][2]string{{"$18,500", "$19,250"}, {"$19,250", "$19,900"}}},
 		"one FY2023 revenue stated two ways":                                {fy, [][2]string{{"$12,300,000", "$12,800,000"}}, nil},
 	} {
-		cands, _ := Candidates(c.fs)
+		cands, _ := Candidates(c.fs, testLimit, nil)
 		for _, p := range append(slices.Clone(c.same), c.not...) {
 			if !slices.ContainsFunc(cands, func(x Candidate) bool {
 				return x.A.Value == p[0] && x.B.Value == p[1] || x.A.Value == p[1] && x.B.Value == p[0]
@@ -307,7 +334,7 @@ func TestJoinLabelsAreContextNotKeys(t *testing.T) {
 				t.Errorf("%s: %s vs %s not put to the judge", name, p[0], p[1])
 			}
 		}
-		cs, _, _, _, _ := Join(context.Background(), agent.Call{}, c.fs, scripted{yes: c.same})
+		cs, _, _, _, _ := Join(context.Background(), testCall, c.fs, scripted{yes: c.same})
 		for _, p := range c.same {
 			if has(cs, p[0], p[1]) == nil {
 				t.Errorf("%s: %s vs %s judged one quantity, not reported: %v", name, p[0], p[1], pairs(cs))
