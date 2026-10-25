@@ -43,9 +43,9 @@ func (e *Error) Unwrap() error { return e.Kind }
 func fail(kind error, detail string) *Error { return &Error{Kind: kind, Detail: detail} }
 
 // providerError is an error answer's type and message as the provider states them (OpenAI's
-// {"error": {"type", "message"}} or Anthropic's {"type": "error", "error": {...}}), at most 200
-// bytes of message, its control characters dropped, and the key and anything shaped like a key, a
-// token, a bearer header or a URL replaced by "[redacted]"; "" when the body states neither.
+// {"error": {"type", "message"}} or Anthropic's {"type": "error", "error": {...}}), its control
+// characters dropped, the whole of it redacted (redact) and then cut to 240 bytes; "" when the body
+// states neither.
 func providerError(body io.Reader, key string) string {
 	var e struct {
 		Error struct {
@@ -73,22 +73,28 @@ func providerError(body io.Reader, key string) string {
 		}
 		return r
 	}, e.Error.Message)
+	out := redact(strings.TrimSpace(strings.Trim(typ+": "+strings.Join(strings.Fields(msg), " "), ": ")), key) // one redactor over all of it, type and code too (r1 LOW-1), before it is cut
+	if len(out) > 240 {
+		out = strings.ToValidUTF8(out[:240], "") + "…"
+	}
+	return out
+}
+
+// redact replaces in s the key, and anything shaped like a key, a token (a long run of key or base64
+// characters, a masked key's tail), a bearer value, a URL or a host name, with "[redacted]".
+func redact(s, key string) string {
 	if key != "" {
-		msg = strings.ReplaceAll(msg, key, "[redacted]")
+		s = strings.ReplaceAll(s, key, "[redacted]")
 	}
-	msg = secretish.ReplaceAllString(msg, "[redacted]")
-	if len(msg) > 200 {
-		msg = strings.ToValidUTF8(msg[:200], "") + "…"
-	}
-	msg = strings.Join(strings.Fields(msg), " ")
-	return strings.TrimSpace(strings.Trim(typ+": "+msg, ": "))
+	return secretish.ReplaceAllString(s, "[redacted]")
 }
 
 var (
 	errType = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
-	// secretish is what an error message may hold that must never be logged: a URL, a bearer value,
-	// and any long run of key or token characters (sk-…, 32+ letters, digits and -_).
-	secretish = regexp.MustCompile(`(?i)https?://\S+|bearer\s+\S+|\b(?:sk|pk|rk|ak)-[A-Za-z0-9_-]+|[A-Za-z0-9_\-]{32,}`)
+	// secretish is what an error message may hold that must never be logged: a URL, a bearer value, a
+	// masked key and its tail ("sk-…****wxyz"), any long run of key, token or base64 characters, and a
+	// host name with or without a scheme or port ("gpu-7.internal.corp:8443").
+	secretish = regexp.MustCompile(`(?i)https?://\S+|bearer\s+\S+|\b(?:sk|pk|rk|ak)-[A-Za-z0-9_*-]+|[A-Za-z0-9_-]*\*{3,}[A-Za-z0-9_*-]*|[A-Za-z0-9_+/=-]{32,}|\b(?:[a-z0-9-]+\.)+[a-z][a-z0-9-]+(?::\d+)?\b`)
 )
 
 // HTTPStatus maps a model failure to its HTTP status (500 if none); the API (PR 4b) owns the rest.

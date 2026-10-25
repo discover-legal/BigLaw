@@ -394,51 +394,87 @@ func quoted(reason string, c Candidate) bool {
 	return quotes(c.A, flat(c.B)) && quotes(c.B, flat(c.A))
 }
 
-// namesValues reports whether a yes's reason, outside its quotations, writes each side's own figure as
-// written (its span's digits: "4,217" and "4,312"), digits at the edges whole (bench7: "both state the
-// same count of 2,614" for 2,614 against 5,776, "the same hurdle rate of 6%" for 6% against 20%: the
-// judge read the passages' shared figure, not the pair's two). A yes is that the two documents state
-// one quantity as two figures: its reason names both.
+// namesValues reports whether a yes's reason, outside its quotations, writes each side's own figure
+// (bench7: "both state the same count of 2,614" for 2,614 against 5,776, "the same hurdle rate of 6%"
+// for 6% against 20%: the judge read the passages' shared figure, not the pair's two). Its quotations
+// are the runs of four or more of its words, opened by a quote mark, that either side's quotes or
+// claim hold (as quoted reads them), never what sits between the next two quote marks, which a quoted
+// passage's own quote marks would turn inside out (r1 LOW-3); a figure counts as named when a number written outside them reads as the
+// side's figure as written does ("$103,800" names "103,800.00").
 func namesValues(reason string, c Candidate) bool {
-	var outside strings.Builder
-	in := false
-	for _, r := range reason {
-		switch {
-		case r == '"' || r == '“' || r == '”':
-			in = !in
-		case !in:
-			outside.WriteRune(r)
+	ws := strings.Fields(reason)
+	key := func(w string) string {
+		return strings.ToLower(strings.TrimFunc(w, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) }))
+	}
+	var passages []string
+	for _, sd := range []Side{c.A, c.B} {
+		for _, t := range append(slices.Clone(sd.Quotes), sd.Claim) {
+			var ks []string
+			for _, w := range strings.Fields(t) {
+				if k := key(w); k != "" {
+					ks = append(ks, k)
+				}
+			}
+			passages = append(passages, " "+strings.Join(ks, " ")+" ")
 		}
 	}
-	return writes(outside.String(), c.A) && writes(outside.String(), c.B)
-}
-
-// writes reports whether text writes a side's figure as written: its reading's span text, else its
-// value, with no digit (or a digit's decimal or group mark) glued to either end.
-func writes(text string, s Side) bool {
-	n := strings.TrimSpace(s.Fig.Text)
-	if n == "" {
-		n = strings.TrimSpace(s.Value)
+	keys := make([]string, len(ws))
+	for i, w := range ws {
+		keys[i] = key(w)
 	}
-	if n == "" {
-		return false
-	}
-	for i := 0; i+len(n) <= len(text); {
-		k := strings.Index(text[i:], n)
-		if k < 0 {
-			return false
+	inside := make([]bool, len(ws))
+	for i := 0; i < len(ws); i++ {
+		if !strings.ContainsAny(ws[i][:min(len(ws[i]), 4)], "\"“«") { // a quotation opens with a quote mark; the reason's own words naming a figure do not
+			continue
 		}
-		a, b := i+k, i+k+len(n)
-		i = a + 1
-		digit := func(at int) bool { return at >= 0 && at < len(text) && text[at] >= '0' && text[at] <= '9' }
-		mark := func(at int) bool { return at >= 0 && at < len(text) && (text[at] == ',' || text[at] == '.') }
-		left := digit(a-1) || mark(a-1) && digit(a-2) // "12,614" holds no 2,614
-		right := digit(b) || mark(b) && digit(b+1)    // "2,6140" or "2,614.5"
-		if !left && !right {
-			return true
+		best := 0
+		for j := i; j < len(ws); j++ { // the longest run from i that a passage holds
+			var run []string
+			for _, k := range keys[i : j+1] {
+				if k != "" {
+					run = append(run, k)
+				}
+			}
+			r := " " + strings.Join(run, " ") + " "
+			if slices.ContainsFunc(passages, func(p string) bool { return strings.Contains(p, r) }) {
+				best = j - i + 1
+			} else {
+				break
+			}
+		}
+		if best >= quoteRun {
+			for k := i; k < i+best; k++ {
+				inside[k] = true
+			}
+			i += best - 1
 		}
 	}
-	return false
+	var outside []string
+	for i, w := range ws {
+		if !inside[i] {
+			outside = append(outside, w)
+		}
+	}
+	saidDates, said := Literal(strings.Join(outside, " "))
+	names := func(sd Side) bool {
+		if k, ok := strings.CutPrefix(sd.Canon, "date:"); ok { // a date is named by any form of it ("Mon, 15 Apr 2024" by "April 15, 2024")
+			d, _ := ParseDate(k)
+			return slices.ContainsFunc(saidDates, func(x string) bool { y, _ := ParseDate(x); return y.Compatible(d) && y.Day == d.Day })
+		}
+		text := strings.TrimSpace(sd.Fig.Text)
+		if text == "" {
+			text = sd.Value
+		}
+		_, own := Literal(text)
+		return slices.ContainsFunc(own, func(o Span) bool {
+			return slices.ContainsFunc(said, func(x Span) bool {
+				return slices.ContainsFunc(o.Readings(), func(a *big.Rat) bool {
+					return slices.ContainsFunc(x.Readings(), func(b *big.Rat) bool { return new(big.Rat).Abs(a).Cmp(new(big.Rat).Abs(b)) == 0 })
+				})
+			})
+		})
+	}
+	return names(c.A) && names(c.B)
 }
 
 // Conflicts are the candidates the judge said are one quantity ("yes"), each with its reason; a pair

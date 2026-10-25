@@ -79,3 +79,29 @@ func TestBench7TrueTargetsReachAYes(t *testing.T) {
 		}
 	}
 }
+
+// bench7 r1 (verifier LOW-3): a yes's quotations are the runs its passages hold, not what sits between
+// quote marks: a passage that quotes a figure itself never turns that figure into the reason's own
+// words; and a figure is named by its amount ("$103,800" names "103,800.00").
+func TestNamesValuesReadsQuotationsByPassage(t *testing.T) {
+	a := fh("5,776", "WCA executed 5,776 omnibus equity trades during the Review Period", "referral", "WCA", "total omnibus equity trades")
+	b := fh("2,614", `the review lists "2,614" omnibus equity trades with no allocation record`, "review", "WCA", "trades without allocation records")
+	x, ok := candidateOf(t, a, b)
+	if !ok {
+		t.Fatal("not proposed")
+	}
+	reason := `A says "WCA executed 5,776 omnibus equity trades"; B says "the review lists "2,614" omnibus equity trades with no allocation record": both state the same count of 5,776 trades.`
+	if vs, _ := CheckVerdicts([]Candidate{x}, []Verdict{{Pair: x.ID, SameQuantity: "yes", Reason: reason}}); vs[x.ID].SameQuantity == "yes" {
+		t.Errorf("a yes naming only 5,776 in its own words passed: %+v", vs[x.ID])
+	}
+	c := fh("$92,600", "payments made by Ostrowski to Bayshore Palms for Bellini's benefit were approximately $92,600", "referral", "Bellini", "undisclosed compensation")
+	d := fh("$103,800.00", "Total of all payments from Ostrowski personal account to Bayshore Palms on behalf of Bellini $103,800.00", "bank", "Bellini", "payments on behalf of Bellini")
+	y, ok := candidateOf(t, c, d)
+	if !ok {
+		t.Fatal("not proposed")
+	}
+	reason = `A says "payments made by Ostrowski to Bayshore Palms"; B says "Total of all payments from Ostrowski personal account": one total stated as $92,600 and as $103,800.`
+	if vs, _ := CheckVerdicts([]Candidate{y}, []Verdict{{Pair: y.ID, SameQuantity: "yes", Reason: reason}}); vs[y.ID].SameQuantity != "yes" {
+		t.Errorf("$103,800 does not name 103,800.00: %+v", vs[y.ID])
+	}
+}

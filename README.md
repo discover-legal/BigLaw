@@ -891,14 +891,16 @@ The memo workflow (§ Memo workflow) drives these. What PR 4a ships, all tested 
   two kinds asserts nothing; a second verdict for one pair or an unknown answer is unclear, and so is a
   yes or no whose reason does not repeat, for each side, four words in a row of that side's quote or
   claim that the other side's texts do not hold: r8 L1, r9 L1; and a yes whose reason does not write both
-  figures as written beside its quotations, digit edges whole: bench7, `TestBench7FalseYesesAreNotConflicts`,
+  figures beside its quotations, by amount ("$103,800" names "103,800.00"), its quotations the runs a quote
+  mark opens that a side's passages hold, so a passage's own quote marks never turn its figure into the
+  reason's words: bench7, `TestBench7FalseYesesAreNotConflicts`, `TestNamesValuesReadsQuotationsByPassage`,
   `TestBench7TrueTargetsReachAYes`). Only "yes" is a conflict (with its reason); "unclear" is a low-confidence Limitations line
   naming the pair; pairs the cap or an unfunded judge left out are counted in a Limitations line
   (`TestJoinAssertsOnlyTheJudgesYes`, `TestJoinRejectsVerdictsGoDidNotPropose`, `TestJoinScenarios`,
   `TestJoinLabelsAreContextNotKeys`, `TestJoinBenchLedgers`). The judge is called like the reader:
   batched (20 pairs, 32 KB a call), on one bandit-picked model, metered and journaled through `Invoke` out
   of its caller's grant (`join_discrepancies`' own 16 turns; finish judges first from a quarter of its
-  grant's calls and USD; the coverage pass from a quarter of its share: r8 L3), and its yes and no answers
+  grant's calls and USD, after its reads and beside the drafting share's keep, at least a quarter of 4 calls when the root is below that keep: `TestFinishJudgeHasAFloor`; the coverage pass from a quarter of its share: r8 L3), and its yes and no answers
   are cached across a matter's runs (`figure_reads`, keyed by the judge's spec hash, the model, the matter
   (a task with no matter number: the task alone), the task's documents, the aliases naming either side
   and the pair's content: `TestJoinVerdictsCachedAcrossRuns`, `TestNoMatterTasksDoNotShareVerdicts`,
@@ -999,9 +1001,13 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
   `TestR4V4ReaderCannotInventSpansOrFigures`). Three label shapes a real reader gives are read as it
   meant them (bench7, `TestBench7LabelChecks`): a count given a period's unit whose words lie right
   after its digits ("21 months") is that period; money or a rate given the unit of its period ("$2,800
-  per month") keeps its amount, the unit dropped; a scale cited from the figure's own trailing zeros
-  ("000" of "$8,238,000") is no scale, the digits read at scale 1 (any other scale with no words of its
-  passage is still not applied and unclear). A count value the reader reads as a period ("18 months") is
+  per month") keeps its amount, the unit dropped (a unit that is no period's is unclear); a scale cited
+  from the figure's own trailing zeros ("000" of "$8,238,000"), words its passage states nowhere else, is
+  no scale: the digits read as written at scale 1, clear (so a table cell whose "($000)" header lies
+  outside the passage reads as written, unscaled; when the passage states the cited zeros elsewhere too,
+  a header's "($000)", it is unclear, and any other scale with no words of its passage is still not
+  applied and unclear); a decimal mark the label leaves empty or names otherwise is unclear wherever the
+  digits read two ways ("1.200"). A count value the reader reads as a period ("18 months") is
   admitted as that period when a quote span states it in its unit. A scaled reading states the same figure as another clearly
   only when the other is read at the same scale from equivalent words (folded for case, punctuation and a
   plural, one side's words all among the other's: "(In Millions)" and "million"; no word is known to be a
@@ -1021,7 +1027,10 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
   bench7's 491 SEC findings through admission takes 17 calls, 87 at a call a page:
   `TestSweepReadsItsFindingsTogether`); a finding that states no typed value is read only when a drafted
   section first cites it, in the section's own call (`Finding.Unread` until then; G8 treats its quotes as
-  never read: `TestUncitedFindingReadWhenCited`); the lead's own `extract_facts`, `analyze_issue` and
+  never read: `TestUncitedFindingReadWhenCited`), or, when its claim states a figure, by `finish`
+  before its judge from the judge's share, so the join sees its claim's sums (`TestValuelessClaimSumReachesTheJoin`;
+  what that cannot fund is counted in Limitations: `TestUnreadClaimsDisclosed`); a sweep that stops on an
+  error drops the values of the findings it never read, each with a note (`TestFailedSweepDropsUncheckedValues`); the lead's own `extract_facts`, `analyze_issue` and
   `check_deviation` admissions read at once, out of a call the subagent's grant holds back for it before
   the subagent runs and the quotes' judges cannot spend (`goTurns`, `TestR5ReaderReservedBeforeDrafting`),
   held only when a finding states a typed value; and `finish` reads first, before its judge spends
@@ -1030,7 +1039,8 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
   (its reader's are the `read` share's), and the draft share the lead's drafters' calls, not their
   readers' nor a coverage redraft's, ledger kind `figread`: `TestR6CoverReaderCallsLeaveTheDraftShare`. Every
   reader call that fails is logged with its step and why (cut off or off its schema, out of turns,
-  unfunded) and counted, ledger kind `figstats`; the task's cost shows the reader's calls, failures by
+  unfunded) and counted, ledger kind `figstats`; a batch that fails (not for want of budget or a model)
+  is read again in halves, once, so one failure never drops all its findings (`TestFailedReaderBatchSplitInHalves`); a finding whose read failed stays unread, its values dropped with why, and is read again where it is next needed; the task's cost shows the reader's calls, failures by
   why and failure rate (`TestReaderFailuresCounted`). Its answer schema takes any kind, unit, sign or
   decimal as text (ReadLabels reads one off its words as unclear), so one bad label never sinks a call;
   `figure_context` finds a quote as the ladder matched it (tolerantly: `TestFigureContextFindsATolerantQuote`). Its complete answers (one
@@ -1270,9 +1280,11 @@ pass a model failure ends is still recorded as run, so a retry does not spend a 
   are quarantined the task fails (`strict`, default) with a grounding alert, or (`warn`) carries the
   alert into the Evidence Note.
 - **Model failures** (G6) end the run `failed` with the kind's fixed text (`model_rate_limited`,
-  …), never a finding; of the endpoint's words only an error answer's type and message, bounded to 200
-  bytes with the key and anything key-, bearer- or URL-shaped redacted ("the model endpoint failed: HTTP
-  400 (invalid_request_error: Your credit balance is too low …)", bench7; `TestProviderErrorTypeAndMessage`).
+  …), never a finding; of the endpoint's words only an error answer's type (or code) and message, the
+  whole of it redacted (the key, and anything key-, token-, base64-, masked-key-, bearer-, URL- or
+  host-shaped) and then cut to 240 bytes ("the model endpoint failed: HTTP 400 (invalid_request_error:
+  Your credit balance is too low …)", bench7; `TestProviderErrorTypeAndMessage`,
+  `TestProviderErrorRedactsTypeCodeTailsAndHosts`).
 
 **Durable runs.** Each lead turn and tool call is a step in `task_steps`: recorded `started`
 (with its grant) before it runs and `committed`/`refused`/`failed` after, together with the
@@ -1718,7 +1730,7 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
   - The deliverable is Markdown only (`GET /tasks/{id}/deliverable.md`); the `.docx` export waits for
     PR 3d's writer.
   - Quote verification proves a quote is in the document, not that the claim follows from it:
-    `prosecute` checks that, and a lawyer approves every deliverable. The G8 lint traces figures (a figure the drafter wrote by the figure reader's reading of it, to a cited span or value read clearly as the same kind, currency, scale and amount, never to one read unclearly or as another kind; a date's part or an identifier as written, digit for digit; a handle's value by construction; a figure the reader read unclearly is flagged, never traced; one it never read (its call unfunded or failed, bench7) that a cited finding's quotes or values state as written is listed check-first in the Computed figures block, traced only as written, and its findings gated, never a blocking lint line that strips figures from a redraft (a figure none states as written is still flagged), and the section disclosed in Limitations; a clear figure whose cited quote the reader never read (its admission's call unfunded or failed) is traced only as written, disclosed, and its finding gated for a lawyer (`TestR6UnreadQuoteTracesAsWritten`); one the drafter wrote at a sourced scale where the cited figure states every digit ("$5M" for "$5,000,000") is disclosed, since only the reader's scale makes it the same figure; a cited figure read at a scale never traces one written without it or from other words; a worksheet traces only when its operands are cited values, literals the cited quotes state, traced worksheets' results or counts of days (`tracedSheets`, `TestR6LiteralWorksheetLaundersAFigure`): lab-r4 r5 H1, H2, M1, r6 H1, M2, M3, `TestR5G8SkipsUnreadSingleDigit`, `TestR5UnclearQuoteTracesUngated`, `TestR5NoReaderBudget`), not
+    `prosecute` checks that, and a lawyer approves every deliverable. The G8 lint traces figures (a figure the drafter wrote by the figure reader's reading of it, to a cited span or value read clearly as the same kind, currency, scale and amount, never to one read unclearly or as another kind; a date's part or an identifier as written, digit for digit; a handle's value by construction; a figure the reader read unclearly, or left unlabelled in an answer, is flagged, never traced; one its call never read (no model, unfunded, failed, cut off or malformed: bench7) that a cited finding's own verified quotes or values state as written is listed check-first in the Computed figures block, naming those findings and why, traced only as written, and those findings gated, never a blocking lint line that strips figures from a redraft (one that only a worksheet or a handle states, or none, is still flagged: `TestUnreadMemoScaledSumNeverUngated`, `TestUnreadMemoWorksheetOnlyIsFlagged`, `TestUnlabelledMemoSpanIsNoCallFailure`), and the section disclosed in Limitations; a clear figure whose cited quote the reader never read (its admission's call unfunded or failed) is traced only as written, disclosed, and its finding gated for a lawyer (`TestR6UnreadQuoteTracesAsWritten`); one the drafter wrote at a sourced scale where the cited figure states every digit ("$5M" for "$5,000,000") is disclosed, since only the reader's scale makes it the same figure; a cited figure read at a scale never traces one written without it or from other words; a worksheet traces only when its operands are cited values, literals the cited quotes state, traced worksheets' results or counts of days (`tracedSheets`, `TestR6LiteralWorksheetLaundersAFigure`): lab-r4 r5 H1, H2, M1, r6 H1, M2, M3, `TestR5G8SkipsUnreadSingleDigit`, `TestR5UnclearQuoteTracesUngated`, `TestR5NoReaderBudget`), not
     words: a wrong party or a wrong verb with correct figures passes it.
   - The SSE stream polls the database every 500 ms. Cancel stops a run at once in its own process
     and at the next heartbeat (up to 10 s) in another; the call in flight is charged.

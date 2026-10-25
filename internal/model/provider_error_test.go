@@ -35,3 +35,25 @@ func TestProviderErrorTypeAndMessage(t *testing.T) {
 		}
 	}
 }
+
+// bench7 r1 (verifier LOW-1): one redactor over all of what is surfaced: a key echoed as the error's
+// type or code, a masked key's tail, a host with no scheme, base64 key material.
+func TestProviderErrorRedactsTypeCodeTailsAndHosts(t *testing.T) {
+	const key = "a1b2c3d4e5f60718293a4b5c6d7e8f90" // 32 lowercase hex, starts with a letter
+	for _, c := range []struct{ name, body, leak string }{
+		{"key as type", `{"error":{"type":"` + key + `","message":"denied"}}`, key},
+		{"key as code", `{"error":{"code":"` + key + `","message":"denied"}}`, key},
+		{"masked tail", `{"error":{"message":"Incorrect API key provided: sk-proj-abc1********************wxyz. You can find your API key at https://platform.openai.com/account/api-keys.","type":"invalid_request_error"}}`, "wxyz"},
+		{"host without scheme", `{"error":{"type":"proxy_error","message":"upstream gpu-7.internal.corp:8443 refused"}}`, "gpu-7.internal.corp"},
+		{"base64", `{"error":{"type":"auth_error","message":"token dGhpcyBpcyBhIHNlY3JldCBrZXk+/forbidden/9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b rejected"}}`, "dGhpcyBpcyBhIHNlY3JldCBrZXk"},
+	} {
+		cl, _ := endpoint(t, key, func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(403)
+			w.Write([]byte(c.body))
+		})
+		_, err := cl.Chat(context.Background(), Request{Agent: "lead", Role: Lead, Messages: []Message{{Role: "user", Content: "hi"}}})
+		if err == nil || strings.Contains(err.Error(), c.leak) {
+			t.Errorf("%s: %v", c.name, err)
+		}
+	}
+}

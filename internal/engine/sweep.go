@@ -423,12 +423,20 @@ func (e *Engine) sweepTool(rt *agent.Runtime, r *run) agent.Tool {
 			}
 		}
 		runs, err := e.sweepVisits(ctx, rt, c, b, visits, todo, was, cur, r.t.Description)
-		if err != nil {
+		if err != nil { // its findings stay unread, their values never checked: none is kept as if it were (r1 LOW-4)
+			if uerr := e.uncheck(ctx, c.TaskID, queue.fids); uerr != nil {
+				err = uerr
+			}
 			return nil, b.Spent(), err
 		}
 		used := b.Spent()
 		rb := agent.NewBudget(max(0, min(c.Budget.Calls-used.Calls, a.Read-rd.Calls)), max(0, min(c.Budget.USD-used.USD, a.ReadUSD-rd.USD)), 0)
 		readNotes, err := e.readFindings(ctx, rt, c, rb, "sweep", queue.fids)
+		if err != nil {
+			if uerr := e.uncheck(ctx, c.TaskID, queue.fids); uerr != nil {
+				err = uerr
+			}
+		}
 		spentAll := func() agent.Usage { u := b.Spent(); u.Add(rb.Spent()); return u }
 		if err == nil {
 			err = e.countRead(ctx, c.TaskID, 0, 0, "", false, rb.Spent()) // the reader's own share's spend (classSpend)
@@ -516,6 +524,28 @@ func (e *Engine) sweepTool(rt *agent.Runtime, r *run) agent.Tool {
 		}
 		return out, spentAll(), nil
 	}}
+}
+
+// uncheck drops the typed values of findings a sweep admitted but never read (it stopped on an
+// error first), each with a note: a value is never kept unchecked by the figure reader.
+func (e *Engine) uncheck(ctx context.Context, taskID string, fids []string) error {
+	all, err := load[Finding](ctx, e, taskID, kFinding)
+	if err != nil {
+		return err
+	}
+	for _, f := range all {
+		if !f.Unread || len(f.Values) == 0 || !slices.Contains(fids, f.FID) {
+			continue
+		}
+		for _, v := range f.Values {
+			f.ValueNotes = append(f.ValueNotes, fmt.Sprintf("value %q (%s) not admitted: the sweep stopped before the figure reader read it", v.Value, cmpStr(v.Metric != "", v.Metric, "no metric")))
+		}
+		f.Values = nil
+		if err := e.write(ctx, taskID, kFinding, f.FID, f, true); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // sweepPage is sweep's answer: one page, its lists in order of use (truncated: all the findings are

@@ -349,10 +349,10 @@ func lintSection(issueID string, s Section, usable map[string]Finding, sheets []
 		return m
 	}
 	seen := map[string]bool{}
-	var memoUnread, memoUnreadBy []string // the section's figures the reader never read, and the findings stating them as written
-	hit := map[string][]untraced{}        // the memo figures each worksheet is listed for (r10 H1: G8 itself decides, whatever form the figure is written in)
-	memoAs := map[string][]untraced{}     // a scaled memo figure a worksheet computes, listed with it (r11 L5)
-	handled := map[string]bool{}          // the worksheets the section states by their handles
+	var memoUnread, memoUnreadBy, memoWhy []string // the section's figures the reader never read, the findings stating them as written, and why
+	hit := map[string][]untraced{}                 // the memo figures each worksheet is listed for (r10 H1: G8 itself decides, whatever form the figure is written in)
+	memoAs := map[string][]untraced{}              // a scaled memo figure a worksheet computes, listed with it (r11 L5)
+	handled := map[string]bool{}                   // the worksheets the section states by their handles
 	off := 0
 	for _, para := range strings.Split(body, "\n\n") {
 		at0 := off
@@ -395,7 +395,7 @@ func lintSection(issueID string, s Section, usable map[string]Finding, sheets []
 			seen[n.figure] = true
 			switch n.limited {
 			case limitedMemoUnread: // one check-first item for the section's unread figures (below), its findings gated
-				memoUnread = append(memoUnread, n.figure)
+				var by []string // the cited findings whose own verified quotes or values state it as written
 				for _, fid := range fids {
 					f := usable[fid]
 					text, _ := verifiedText(f)
@@ -404,12 +404,23 @@ func lintSection(issueID string, s Section, usable map[string]Finding, sheets []
 					}
 					_, gn := figures(text, true)
 					if _, ss := analysis.Literal(n.figure); len(ss) > 0 && spanStated(ss[0], gn) {
-						if gate[fid] == "" {
-							gate[fid] = limitedMemoUnread
-						}
-						if !slices.Contains(memoUnreadBy, fid) {
-							memoUnreadBy = append(memoUnreadBy, fid)
-						}
+						by = append(by, fid)
+					}
+				}
+				if len(by) == 0 { // none does (a cited handle or worksheet alone): flagged, as any unread figure (HIGH-1)
+					out = append(out, issueID+": the figure "+n.figure+" is not traced (G8): the figure reader did not read it clearly ("+n.unread+"), so it is flagged, never traced; "+hint(n.figure, s.Handles, usable, cited))
+					continue
+				}
+				memoUnread = append(memoUnread, n.figure)
+				if why := strings.TrimPrefix(n.unread, "not read: "); !slices.Contains(memoWhy, why) {
+					memoWhy = append(memoWhy, why)
+				}
+				for _, fid := range by {
+					if gate[fid] == "" {
+						gate[fid] = limitedMemoUnread
+					}
+					if !slices.Contains(memoUnreadBy, fid) {
+						memoUnreadBy = append(memoUnreadBy, fid)
 					}
 				}
 				continue
@@ -475,8 +486,8 @@ func lintSection(issueID string, s Section, usable map[string]Finding, sheets []
 	if len(memoUnread) > 0 {
 		limited[limitedMemoUnread] = memoUnread
 		computed = append(computed, computedFig{Key: "memo-unread:" + issueID, Check: true,
-			Text: fmt.Sprintf("%s in the memo %s not read by the figure reader (its call could not be funded or failed): %s only as written, digit for digit, to %s, whose findings are gated; check %s against the cited quotes",
-				strings.Join(memoUnread, ", "), plural(len(memoUnread), "was", "were"), plural(len(memoUnread), "it traces", "they trace"),
+			Text: fmt.Sprintf("%s in the memo %s not read by the figure reader (%s): %s only as written, digit for digit, to %s, whose findings are gated; check %s against the cited quotes",
+				strings.Join(memoUnread, ", "), plural(len(memoUnread), "was", "were"), strings.Join(memoWhy, "; "), plural(len(memoUnread), "it traces", "they trace"),
 				"["+strings.Join(memoUnreadBy, "] [")+"]", plural(len(memoUnread), "it", "each"))})
 	}
 	if !attribute {
@@ -597,7 +608,7 @@ func g8In(para string, td []string, tn []analysis.Span, g traceGround, at0 int, 
 		}
 		r, ok := read[at]
 		switch {
-		case ok && strings.HasPrefix(r.Why, "not read") && spanStated(n, gn): // the reader never read it (unfunded, failed, not sent; bench7: every figure of an unfunded memo, years too, blocked finish)
+		case ok && neverRead(r.Why) && spanStated(n, g.cited): // the reader's call never ran or failed (unfunded, failed; bench7: every figure of an unfunded memo, years too, blocked finish), and a cited finding states it as written (never a worksheet alone: its gate is the worksheet's)
 			out = append(out, untraced{figure: n.Text, limited: limitedMemoUnread, unread: r.Why, at: at}) // as written only: listed check-first, its findings gated
 		case !ok || r.Unclear || r.Kind == analysis.KindUnclear:
 			why := "it was not read"
@@ -750,9 +761,15 @@ type traceGround struct {
 	dates []analysis.Date
 	nums  []analysis.Span
 	spans []int64
+	cited []analysis.Span // the numbers of what the section cites alone (its findings' quotes and values), never a worksheet's
 }
 
-func groundOf(text string) traceGround { return traceGround{}.plus(text) }
+// groundOf is text parsed as a ground, all of it cited.
+func groundOf(text string) traceGround {
+	g := traceGround{}.plus(text)
+	g.cited = g.nums
+	return g
+}
 
 // plus is g with text added: only text is parsed, and the day spans between its dates and g's added.
 func (g traceGround) plus(text string) traceGround {
@@ -773,7 +790,7 @@ func (g traceGround) plus(text string) traceGround {
 			}
 		}
 	}
-	return traceGround{g.text + text, slices.Concat(g.dates, ds), slices.Concat(g.nums, ns), spans}
+	return traceGround{g.text + text, slices.Concat(g.dates, ds), slices.Concat(g.nums, ns), spans, g.cited}
 }
 
 // literalTraced reports whether a worksheet's literal operand (its step's value: the literal as

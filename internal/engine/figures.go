@@ -338,10 +338,23 @@ func (e *Engine) readFigures(ctx context.Context, rt *agent.Runtime, c agent.Cal
 		if err != nil {
 			return err
 		}
-		if why == "" {
-			continue
+		failed := []*part(nil)
+		if why != "" {
+			failed = chunk
 		}
-		for _, pt := range chunk {
+		if why != "" && why != whyUnfunded && why != whyNoModel && len(chunk) > 1 { // a batch that failed is read again in halves, once (r1 LOW-2: one failure dropped 40 findings)
+			failed = nil
+			for _, half := range [][]*part{chunk[:len(chunk)/2], chunk[len(chunk)/2:]} {
+				hw, err := e.readChunk(ctx, rt, c, b, caller, model, scope, half)
+				if err != nil {
+					return err
+				}
+				if hw != "" {
+					failed, why = append(failed, half...), hw
+				}
+			}
+		}
+		for _, pt := range failed {
 			pt.it.read, pt.it.why = false, why
 			for _, id := range pt.ids {
 				pt.it.unread[id] = why
@@ -393,7 +406,7 @@ func readKey(model, scope, task string, parties []string, in []passageIn) string
 // part's answer is used as given (an unlabelled span stays unclear) and cached only when complete.
 func (e *Engine) readChunk(ctx context.Context, rt *agent.Runtime, c agent.Call, b *agent.Budget, caller, model, scope string, chunk []*part) (string, error) {
 	if model == "" {
-		return "no model was available for it", nil
+		return whyNoModel, nil
 	}
 	var findings []map[string]any
 	for i, pt := range chunk {
@@ -425,17 +438,17 @@ func (e *Engine) readChunk(ctx context.Context, rt *agent.Runtime, c agent.Call,
 	case errors.Is(err, agent.ErrJournal):
 		return "", err
 	case errors.Is(err, agent.ErrBudget):
-		return failed("the budget could not fund the figure reader", true)
+		return failed(whyUnfunded, true)
 	case errors.Is(err, agent.ErrToolOutput):
-		return failed("the figure reader's answer was cut off or off its schema", false)
+		return failed(whyCutOff, false)
 	case errors.Is(err, agent.ErrTurnCap):
-		return failed("the figure reader used its turns without answering", false)
+		return failed(whyTurns, false)
 	case err != nil:
-		return failed("the figure reader's call failed", false)
+		return failed(whyFailed, false)
 	}
 	var out struct{ Labels []analysis.Label }
 	if json.Unmarshal(res.Output, &out) != nil {
-		return failed("the figure reader's answer was malformed", false)
+		return failed(whyMalformed, false)
 	}
 	labelled := map[string]bool{}
 	for _, l := range out.Labels {
@@ -765,6 +778,23 @@ func (e *Engine) countRead(ctx context.Context, taskID string, spans, unread int
 	}
 	st.Sweep.Add(sweep)
 	return e.write(ctx, taskID, kReadStat, "reader", st, true)
+}
+
+// Why a reader call read nothing: it never ran (no model, no budget) or failed. A span its answer left
+// unlabelled, or one not sent, is not among them (MEDIUM-1: unclear, blocking, never a call failure).
+const (
+	whyUnfunded  = "the budget could not fund the figure reader"
+	whyCutOff    = "the figure reader's answer was cut off or off its schema"
+	whyTurns     = "the figure reader used its turns without answering"
+	whyFailed    = "the figure reader's call failed"
+	whyMalformed = "the figure reader's answer was malformed"
+	whyNoModel   = "no model was available for it"
+)
+
+// neverRead reports whether a reading's why is a reader call that never ran or failed.
+func neverRead(why string) bool {
+	r, ok := strings.CutPrefix(why, "not read: ")
+	return ok && slices.Contains([]string{whyUnfunded, whyCutOff, whyTurns, whyFailed, whyMalformed, whyNoModel}, r)
 }
 
 // readQueueKey carries a sweep's readQueue: its visits' admissions leave their findings unread, and

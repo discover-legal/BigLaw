@@ -181,7 +181,7 @@ func TestR5NoReaderBudget(t *testing.T) {
 		t.Fatalf("reader failing: %+v", fs)
 	}
 	out0 := deref(v.Output)
-	if !strings.Contains(out0, "- 644,910 in the memo was not read by the figure reader (its call could not be funded or failed): it traces only as written, digit for digit, to [F1], whose findings are gated") ||
+	if !strings.Contains(out0, "- 644,910 in the memo was not read by the figure reader (the figure reader's call failed): it traces only as written, digit for digit, to [F1], whose findings are gated") ||
 		!slices.ContainsFunc(v.PendingGates, func(g Gate) bool { return g.GateID == "G-F1" }) && !slices.ContainsFunc(v.DecidedGates, func(g Gate) bool { return g.GateID == "G-F1" }) {
 		t.Errorf("the memo's unread figure is not listed and gated (%s):\n%s", stop(v), out0)
 	}
@@ -365,20 +365,19 @@ func TestR5OversizeInputIsSplit(t *testing.T) {
 		t.Parallel()
 		f := newFixture(t, "1. Schedule\n"+quote+".\n\n2. Damages\nGreystone claims damages of $644,910 for unpaid invoices.\n")
 		d1 := f.docs[0].ID
-		v := f.run(f.with(map[string][]model.Reply{"extract_facts": {facts(fd("The schedule prices 150 items.", d1, quote, val("Schedule", "first item price", "$1,000", "Money")), // a typed value: read at admission
+		v := f.run(f.with(map[string][]model.Reply{"extract_facts": {facts(fd("The schedule prices 150 items.", d1, quote),
 			fd("Greystone claims damages of $644,910.", d1, "Greystone claims damages of $644,910 for unpaid invoices", val("Greystone", "damages", "$644,910", "Money")))}}), Config{})
 		fs := ledgerFindings(t, f, v.ID)
 		if len(fs) != 2 {
 			t.Fatalf("%d findings (%s)\n%s\n%q", len(fs), stop(v), f.steps(v.ID), f.outputs(v.ID, "extract_facts"))
 		}
-		// bench7: a call labels at most maxCallSpans spans (its answer must fit its cap), so the long
-		// schedule is several calls; the smaller finding is read first, and what the grant cannot fund
-		// of the schedule stays unread with why, never lost silently, never sinking the other finding
-		read := slices.IndexFunc(fs[0].Figures, func(r analysis.Reading) bool { return !r.Unclear }) >= 0
+		// the long schedule states no typed value: admission reads only the damages finding, never
+		// sunk by it; the section citing the schedule reads it in calls of at most maxCallSpans spans,
+		// and what its grant cannot fund stays unread with why (bench7)
 		unfunded := !slices.ContainsFunc(fs[0].Figures, func(r analysis.Reading) bool {
 			return strings.HasPrefix(r.Why, "not read") && r.Why != "not read: the budget could not fund the figure reader"
 		})
-		if len(fs[1].Values) != 1 || len(fs[0].Figures) != 300 || !read || !unfunded {
+		if len(fs[1].Values) != 1 || fs[1].Unread || fs[0].Unread || len(fs[0].Figures) != 300 || !unfunded {
 			t.Fatalf("an oversized finding sank its call: %d findings, values %v, %d figures; notes %q %q", len(fs), fs[min(1, len(fs)-1)].Values, len(fs[0].Figures), fs[0].ValueNotes, fs[1].ValueNotes)
 		}
 	})

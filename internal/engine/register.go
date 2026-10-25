@@ -561,7 +561,7 @@ func applyReading(f *Finding, vals []analysis.Value, it *reading, text string) {
 	for _, n := range refused {
 		f.ValueNotes = append(f.ValueNotes, "figure reader: "+n)
 	}
-	f.Figures, f.Values, f.Unread = quoteReadings(rs), nil, false
+	f.Figures, f.Values, f.Unread = quoteReadings(rs), nil, !it.read // a call that failed or went unfunded leaves it unread: read again when funded, counted until then (r1 MEDIUM-3)
 	for j, v := range vals {
 		fig, ok, low, why := valueStated(v, j, rs, text)
 		if !ok {
