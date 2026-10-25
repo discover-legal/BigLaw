@@ -413,7 +413,8 @@ function RuleFields(props: { text: string; set: (text: string) => void }) {
       {act.webhook && <p className={`small ${act.webhook.sendContent ? 'error' : 'muted'}`}>{act.webhook.sendContent
         ? 'Matter content leaves BigLaw: every matching event sends this host the call\'s input or answer, the finding\'s claim and quotes, or the draft\'s text (up to 8,000 characters), for every client and matter.'
         : 'The body is metadata only: the rule, event, task, tool or finding and sizes. Tick "Send matter content" only for a host the firm trusts with privileged text.'}</p>}
-      {act.type === 'approve' && <p className="small muted">Approve holds one tool the lead calls: the run pauses until a lawyer decides, and an approval covers exactly that input, once.</p>}
+      {act.type === 'approve' && <p className="small muted">Approve holds one tool the lead calls: the run pauses until a lawyer decides, and an approval covers exactly that input, once.
+        Calls of the same tool that Go or a subagent makes (a sweep's visits, the coverage pass's drafts) cannot be approved, so they are blocked: saving lists which.</p>}
       <label className="block">Message (the refusal, gate or Limitations line)<textarea rows={3} value={act.message} onChange={(e) => putAct({ message: e.target.value })} /></label>
     </div>
   );

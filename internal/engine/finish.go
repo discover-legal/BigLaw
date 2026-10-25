@@ -309,6 +309,11 @@ func (f finish) check(ctx context.Context, limits []limitation) (report, error) 
 	} else if l := hookQuarantined(all); l != "" {
 		rep.limits = append(rep.limits, l)
 	}
+	if os, err := load[HookOutcome](ctx, e, id, kHookRun); err != nil {
+		return report{}, err
+	} else if l := leadOnlyLine(os); l != "" {
+		rep.limits = append(rep.limits, l)
+	}
 	if l, err := e.staleLine(ctx, id, issues); err != nil {
 		return report{}, err
 	} else if l != "" {

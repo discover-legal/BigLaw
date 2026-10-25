@@ -250,9 +250,11 @@ func upsertSQL(update bool) string {
 // Findings is the task's findings as analysis reads them (numbers, join_discrepancies).
 func (e *Engine) Findings(ctx context.Context, taskID string) ([]analysis.Finding, error) {
 	fs, err := load[Finding](ctx, e, taskID, kFinding)
-	out := make([]analysis.Finding, len(fs))
-	for i, f := range fs {
-		out[i] = f.Finding
+	out := []analysis.Finding{}
+	for _, f := range fs {
+		if f.HookBlocked == "" { // quarantined by a hook: no analysis reads it (#58 r2 N2)
+			out = append(out, f.Finding)
+		}
 	}
 	return out, err
 }

@@ -358,6 +358,49 @@ func modelErr(err error) bool {
 	return code != 500 && code != 499
 }
 
+// leadOnlyBlocked is the outcome of an approve rule on a call the lead did not make.
+const leadOnlyBlocked = "blocked (needs lead approval)"
+
+// leadOnlyLine is the Limitations line for calls approve rules blocked because the lead did not make
+// them (sweep's, cover's, the committee's, a subagent's), by rule ("" when none were).
+func leadOnlyLine(os []HookOutcome) string {
+	by := map[string]int{}
+	for _, o := range os {
+		if o.Outcome == leadOnlyBlocked {
+			by[o.Rule+" on "+o.Subject]++
+		}
+	}
+	if len(by) == 0 {
+		return ""
+	}
+	var parts []string
+	n := 0
+	for _, k := range slices.Sorted(maps.Keys(by)) {
+		parts, n = append(parts, fmt.Sprintf("%s: %d", k, by[k])), n+by[k]
+	}
+	return fmt.Sprintf("%d %s that Go or a subagent made (not the lead) %s blocked by approve rules, which only the lead's own calls can pass (%s); what %s would have found is not in this memo.",
+		n, plural(n, "call", "calls"), plural(n, "was", "were"), strings.Join(parts, ", "), plural(n, "it", "they"))
+}
+
+// approveCallers says, for an approve rule, which callers of its tool other than the lead it will
+// block (Go's fan-out calls and subagents whose allowed lists name it): the admin is told at save.
+func approveCallers(sp *Specs, name string) []string {
+	r, ok := sp.hookRules[name]
+	if !ok || r.Action.Type != "approve" || r.Event != "before_call" {
+		return nil
+	}
+	by := slices.Clone(goCallers[r.Match])
+	for _, n := range slices.Sorted(maps.Keys(sp.specs)) {
+		if slices.Contains(sp.specs[n].Allowed, r.Match) {
+			by = append(by, "subagent "+n)
+		}
+	}
+	if len(by) == 0 {
+		return nil
+	}
+	return []string{fmt.Sprintf("this rule also blocks the calls of %s that the lead does not make, which cannot be approved: %s", r.Match, strings.Join(by, "; "))}
+}
+
 // approveID is the base of the gates for one call: the rule, the tool and a 128-bit hash of the
 // call's whole input in canonical form (keys sorted), so an approval is of exactly that input.
 func approveID(rule, subject string, input json.RawMessage) string {
@@ -381,8 +424,9 @@ func (h hookRunner) approve(ctx context.Context, rule HookRule, ev event, taskID
 		v.gated = msg
 		return "gated", "its finding gate opens when a section cites it", nil
 	}
-	if !ev.lead {
-		return "skipped", "approve holds only the lead's own calls (this one is Go's or a subagent's)", nil
+	if !ev.lead { // Go's or a subagent's call: it cannot be made again once approved, so it fails closed
+		v.blocked, v.blockedBy = "blocked by hook "+rule.Name+": only the lead's own calls of "+ev.subject+" can be approved, and this one is Go's or a subagent's ("+msg+")", rule.Name
+		return leadOnlyBlocked, "needs lead approval", nil
 	}
 	base := approveID(rule.Name, ev.subject, ev.input)
 	gs, err := load[Gate](ctx, h.e, taskID, kGate)

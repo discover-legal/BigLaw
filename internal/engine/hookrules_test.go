@@ -515,3 +515,55 @@ func TestHookDecideNotesListNewDecisions(t *testing.T) {
 		t.Fatalf("notes: %v", ns)
 	}
 }
+
+// TestHookApproveBlocksCallsTheLeadDidNotMake (#58 r2 N1, TestMHV7): an approve rule on
+// extract_facts blocks a sweep's visits (they cannot be approved): nothing is extracted unapproved,
+// each is recorded as blocked (needs lead approval), the save says which callers it blocks, and the
+// deliverable's Limitations count them.
+func TestHookApproveBlocksCallsTheLeadDidNotMake(t *testing.T) {
+	t.Parallel()
+	text := "1. Background\nAlpha signed the lease with Beta in the spring.\nBeta delivered the goods to the warehouse late.\n"
+	f := newFixture(t, text)
+	d := f.docs[0].ID
+	var ex []model.Reply
+	for range 4 {
+		ex = append(ex, facts(on("I1", fd("Alpha signed the lease with Beta.", d, "Alpha signed the lease with Beta"))))
+	}
+	sc := f.with(map[string][]model.Reply{"lead": {calls(plan(issue("I1", "What happened?", "Conduct"))), calls(tc("sweep", m{"over": "sections", "documentIds": nil}))},
+		"extract_facts": ex})
+	e, fake := f.engine(sc, Config{})
+	_, notes, err := e.Save(context.Background(), "rule.partner_ok", SaveIn{Files: ruleFile(rule("partner_ok", 0, "before_call", "extract_facts", nil,
+		HookAction{Type: "approve", Message: "A partner approves every extraction."}, "closed"))}, "Ada")
+	if err != nil || len(notes) != 1 || !strings.Contains(notes[0], "sweep") {
+		t.Fatalf("save: %v %v", notes, err)
+	}
+	task := f.submit(0)
+	f.step(context.Background())
+	fs, _ := load[Finding](context.Background(), e, task.ID, kFinding)
+	got := outcomes(t, e, task.ID)
+	if len(fs) != 0 || !slices.Contains(got, "partner_ok:"+leadOnlyBlocked) || slices.ContainsFunc(fake.Calls(), func(r model.Request) bool { return r.Agent == "extract_facts" }) {
+		t.Fatalf("findings %d, outcomes %v", len(fs), got)
+	}
+	os, _ := load[HookOutcome](context.Background(), e, task.ID, kHookRun)
+	if l := leadOnlyLine(os); !strings.Contains(l, "blocked by approve rules") || !strings.Contains(l, "partner_ok on extract_facts") {
+		t.Fatalf("the Limitations line: %q", l)
+	}
+}
+
+// TestHookQuarantinedFindingNotInNumbers (#58 r2 N2, TestMHV6): a finding a hook quarantined is
+// read by no analysis tool: numbers' table does not show its figure.
+func TestHookQuarantinedFindingNotInNumbers(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	num := tc("numbers", m{"op": "table", "fn": nil, "operands": nil, "holidays": nil, "fids": nil, "salientTop": nil})
+	sc := f.with(map[string][]model.Reply{"lead": {calls(plan(issue("I1", "What does Greystone claim?", "Conduct"))), calls(extract(f.docs[0].ID, "damages", "I1")), calls(num)}})
+	e, _ := f.engine(sc, Config{})
+	save(t, e, "rule.privileged", 0, ruleFile(rule("privileged", 0, "finding_admitted", "*", nil, HookAction{Type: "block", Message: "Quarantined."}, "closed")))
+	task := f.submit(0)
+	f.step(context.Background())
+	outs := f.outputs(task.ID, "numbers")
+	fs, _ := load[Finding](context.Background(), e, task.ID, kFinding)
+	if len(outs) != 1 || strings.Contains(outs[0], "644,910") || len(fs) != 1 || fs[0].HookBlocked != "privileged" {
+		t.Fatalf("numbers: %v; findings %+v", outs, fs)
+	}
+}

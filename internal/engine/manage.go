@@ -289,7 +289,7 @@ func describeItem(sp *Specs, id string, row Override, use map[string]ItemUsage) 
 	case "rule":
 		it.Kind = "configurable hook"
 		if r, ok := sp.hookRules[name]; ok {
-			it.Status, it.Summary = map[bool]string{true: "enabled", false: "disabled"}[r.Enabled], r.summary()
+			it.Status, it.Summary = map[bool]string{true: "enabled", false: "disabled"}[r.Enabled], strings.Join(append([]string{r.summary()}, approveCallers(sp, name)...), " Note: ")
 			if r.Match != "" && r.Match != "*" && !strings.HasSuffix(r.Match, "*") && r.Event != "task_finish" {
 				it.Uses = append(it.Uses, r.Match)
 			}
@@ -637,6 +637,9 @@ func (e *Engine) save(ctx context.Context, tx *sql.Tx, id string, in SaveIn, aut
 	}
 	if err := secretOrigins(ctx, tx, files); err != nil {
 		return Version{}, nil, err
+	}
+	if sp, err := newSpecs(next); err == nil && kind == "rule" {
+		notes = append(notes, approveCallers(sp, name)...)
 	}
 	v, err := e.insertVersion(ctx, tx, id, in.Base+1, action, files, rows[id].Version, nil, author, in.Note)
 	return v, notes, err
