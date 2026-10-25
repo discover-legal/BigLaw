@@ -53,9 +53,7 @@ func admin(log *slog.Logger, who Who, h func(http.ResponseWriter, *http.Request,
 	return docs.Guard(log, func(w http.ResponseWriter, r *http.Request) {
 		p := who(r)
 		if !p.Admin {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusForbidden)
-			json.NewEncoder(w).Encode(map[string]string{"error": "only an admin may change what BigLaw's agents use; everyone may view it. This server runs without sign-in (--allow-no-auth), so Manage is read-only unless its operator starts it with --admin-without-auth (README § Exposure)", "errorType": "forbidden"})
+			docs.WriteJSON(w, http.StatusForbidden, map[string]string{"error": "only an admin may change what BigLaw's agents use; everyone may view it. This server runs without sign-in (--allow-no-auth), so Manage is read-only unless its operator starts it with --admin-without-auth (README § Exposure)", "errorType": "forbidden"})
 			return
 		}
 		h(w, r, p)
@@ -67,9 +65,7 @@ func manageRoutes(mux *http.ServeMux, e *engine.Engine, who Who, log *slog.Logge
 	answer := func(w http.ResponseWriter, code int, v any, err error) {
 		var inv *engine.InvalidError
 		if errors.As(err, &inv) { // every problem, by file, for the editor to show beside its field
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnprocessableEntity)
-			json.NewEncoder(w).Encode(map[string]any{"error": strings.TrimPrefix(err.Error(), "engine: "), "errorType": "invalid", "problems": inv.Problems})
+			docs.WriteJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": strings.TrimPrefix(err.Error(), "engine: "), "errorType": "invalid", "problems": inv.Problems})
 			return
 		}
 		reply(w, code, v, err)

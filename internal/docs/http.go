@@ -43,9 +43,7 @@ func (s *Service) Routes(mux *http.ServeMux, log *slog.Logger) {
 			writeError(w, log, err)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(code)
-		json.NewEncoder(w).Encode(v)
+		WriteJSON(w, code, v)
 	}
 	mux.HandleFunc("POST /documents", Guard(log, func(w http.ResponseWriter, r *http.Request) {
 		var in struct{ Name, Text, MatterNumber string }
@@ -169,17 +167,13 @@ func (s *Service) upload(w http.ResponseWriter, r *http.Request, log *slog.Logge
 			err = ErrStopping
 		}
 		if errors.Is(err, ErrVisionNotConfigured) { // stored, to be transcribed: 503 with the document
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusServiceUnavailable)
-			json.NewEncoder(w).Encode(map[string]any{"error": strings.TrimPrefix(err.Error(), "docs: "), "errorType": "vision_not_configured", "document": d})
+			WriteJSON(w, http.StatusServiceUnavailable, map[string]any{"error": strings.TrimPrefix(err.Error(), "docs: "), "errorType": "vision_not_configured", "document": d})
 			return
 		} else if err != nil {
 			writeError(w, log, readError(err, pr.timedOut, ""))
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(d)
+		WriteJSON(w, http.StatusCreated, d)
 		return
 	}
 }
@@ -284,9 +278,14 @@ func writeError(w http.ResponseWriter, log *slog.Logger, err error) {
 	if code == http.StatusInternalServerError {
 		log.Error("documents request failed", "err", err)
 	}
+	WriteJSON(w, code, map[string]string{"error": msg, "errorType": kind})
+}
+
+// WriteJSON answers v as JSON with status code.
+func WriteJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	json.NewEncoder(w).Encode(map[string]string{"error": msg, "errorType": kind})
+	json.NewEncoder(w).Encode(v)
 }
 
 // ContentDisposition is an RFC 6266 attachment header for a stored name: filename* carries the

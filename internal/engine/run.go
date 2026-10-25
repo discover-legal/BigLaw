@@ -263,8 +263,7 @@ func ErrorType(err error) (int, string, string) {
 	return 500, "internal", "internal error (logged)"
 }
 
-// pauseForGate parks a run a hook's approve gate holds (awaiting_gate, its lease released) until
-// Decide resumes it.
+// pauseForGate parks a run a hook's gate holds (awaiting_gate, lease released) until Decide resumes it.
 func (e *Engine) pauseForGate(ctx context.Context, r *run) error {
 	_, err := e.db.ExecContext(ctx, `UPDATE tasks SET status = 'awaiting_gate', stop_reason = 'awaiting_gate', lease_owner = NULL, lease_until = NULL, updated_at = now()
 		WHERE id = $1 AND lease_owner = $2 AND status = 'running'`, r.t.ID, e.owner)
