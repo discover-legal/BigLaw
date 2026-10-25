@@ -2,10 +2,11 @@
 # Set the model and OIDC variables in the dashboard (sync: false).
 #
 # INERT UNTIL SIGN-IN IS SET (by design): a Render web service is public, so the
-# image's default `serve` refuses to listen on 0.0.0.0 until BIGLAW_OIDC_ISSUER,
-# BIGLAW_OIDC_CLIENT_ID (and _SECRET), BIGLAW_PUBLIC_URL (the service's https
-# URL) and BIGLAW_ADMINS are set; then every request needs a session (README
-# § Sign-in). Do not add --allow-no-auth here (README § Exposure). It has never
+# image's default `serve` refuses to listen on 0.0.0.0 until BIGLAW_OIDC_ISSUER
+# and BIGLAW_OIDC_CLIENT_ID (and _SECRET) are set; then every request needs a
+# session (README § Sign-in). Set BIGLAW_PUBLIC_URL to the service's https URL
+# and BIGLAW_ADMINS with them: left at its loopback default, the service starts
+# but no sign-in can complete. Do not add --allow-no-auth here (README § Exposure). It has never
 # been deployed and its instance plans are not pinned (README § Limitations).
 services:
   - type: web

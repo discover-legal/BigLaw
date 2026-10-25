@@ -100,7 +100,10 @@ func manageRoutes(mux *http.ServeMux, e *engine.Engine, who Who, log *slog.Logge
 	})
 	get("GET /manage/items", func(r *http.Request) (any, error) { return e.Items(r.Context()) })
 	get("GET /manage/items/{id}", func(r *http.Request) (any, error) { return e.ItemDetail(r.Context(), r.PathValue("id")) })
-	get("GET /manage/items/{id}/history", func(r *http.Request) (any, error) { return e.History(r.Context(), r.PathValue("id")) })
+	get("GET /manage/items/{id}/history", func(r *http.Request) (any, error) {
+		vs, err := e.History(r.Context(), r.PathValue("id"))
+		return authors(who(r), vs), err
+	})
 	get("GET /manage/items/{id}/diff", func(r *http.Request) (any, error) {
 		from, err := version(r, "from", 0)
 		to, terr := version(r, "to", -1)
@@ -130,11 +133,19 @@ func manageRoutes(mux *http.ServeMux, e *engine.Engine, who Who, log *slog.Logge
 	mux.HandleFunc("GET /manage/changes", func(w http.ResponseWriter, r *http.Request) {
 		n, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 		vs, err := e.Changes(r.Context(), cmp.Or(n, 200))
-		reply(w, 200, vs, err)
+		reply(w, 200, authors(who(r), vs), err)
 	})
 	mux.HandleFunc("GET /manage/export", func(w http.ResponseWriter, r *http.Request) { export(w, r, e, reply) })
 	// Custom tools: secrets (names only, ever), an MCP server's tools, and the Test call.
-	get("GET /manage/secrets", func(r *http.Request) (any, error) { return e.Secrets(r.Context()) })
+	get("GET /manage/secrets", func(r *http.Request) (any, error) {
+		ss, err := e.Secrets(r.Context())
+		if p := who(r); p.SignedIn && !p.Admin {
+			for i := range ss {
+				ss[i].UpdatedBy = shortLabel(ss[i].UpdatedBy)
+			}
+		}
+		return ss, err
+	})
 	handle(ws, "POST /manage/secrets", http.StatusCreated, func(r *http.Request, p Principal, in struct{ Name, Value, Origin string }) (any, error) {
 		return map[string]string{"name": in.Name}, e.SetSecret(r.Context(), in.Name, in.Value, in.Origin, p.Label()) // never the value
 	})
@@ -257,4 +268,24 @@ func nonNil(s []string) []string {
 		return []string{}
 	}
 	return s
+}
+
+// shortLabel is an author as a member sees it: the display name without the admin's email or sub.
+func shortLabel(s string) string {
+	for _, open := range []string{" <", " ("} {
+		if i := strings.LastIndex(s, open); i > 0 && strings.HasSuffix(s, map[string]string{" <": ">", " (": ")"}[open]) {
+			return s[:i]
+		}
+	}
+	return s
+}
+
+// authors is vs as p may see them: under sign-in a member sees authors' display names only.
+func authors(p Principal, vs []engine.Version) []engine.Version {
+	if p.SignedIn && !p.Admin {
+		for i := range vs {
+			vs[i].Author = shortLabel(vs[i].Author)
+		}
+	}
+	return vs
 }

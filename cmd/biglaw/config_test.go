@@ -522,6 +522,7 @@ func TestConfigSignInVars(t *testing.T) {
 		{"default public URL off loopback", with("BIGLAW_PUBLIC_URL", "http://0.0.0.0:3101"), "BIGLAW_PUBLIC_URL"},
 		{"admins without sign-in", env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_ADMINS", "ada@firm.example"), "needs sign-in"},
 		{"admin with a space", with("BIGLAW_ADMINS", "ada lovelace"), "entry 1"},
+		{"admin email not ASCII", with("BIGLAW_ADMINS", "u-root,\u212Aate@firm.example"), "entry 2"},
 		{"secret with a space", with("BIGLAW_OIDC_CLIENT_SECRET", "s3cret VALUE"), "white space"},
 	} {
 		_, err := Load(c.env)

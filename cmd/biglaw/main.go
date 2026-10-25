@@ -345,7 +345,7 @@ func routes(db pinger, d *docs.Service, e *engine.Engine, log *slog.Logger, who 
 		json.NewEncoder(w).Encode(map[string]string{"status": status, "version": version, "search": search})
 	})
 	h, named := http.Handler(mux), ""
-	if signIn != nil && e != nil {
+	if signIn != nil { // whatever is mounted (fails closed: no mode serves routes around sign-in)
 		h, named = api.RequireSignIn(mux, signIn, log), signIn.Host()
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

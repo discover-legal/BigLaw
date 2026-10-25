@@ -6,7 +6,12 @@ package auth
 import (
 	"bytes"
 	"context"
+	"crypto"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -177,7 +182,7 @@ func TestSignInHappyPath(t *testing.T) {
 	}
 	// ES256, a member (no admin entry matches), a name from preferred_username
 	r.idp.Alg = "ES256"
-	r.idp.User = map[string]any{"sub": "u-bob", "email": "bob@firm.example", "email_verified": "true", "preferred_username": "bob"}
+	r.idp.User = map[string]any{"sub": "u-bob", "email": "bob@firm.example", "email_verified": true, "preferred_username": "bob"}
 	b := authtest.Browser(t)
 	if code, body := r.signIn(t, b); code != 303 {
 		t.Fatalf("ES256 sign-in: %d %s", code, body)
@@ -557,5 +562,200 @@ func TestSignInNeverLogsSecrets(t *testing.T) {
 				t.Errorf("secret %d (%s…) appears in a log or an answer", i, fmt.Sprint(part[:6]))
 			}
 		}
+	}
+}
+
+// signRaw signs a hand-written claims payload with the issuer's RSA key (rsa-1).
+func signRaw(i *authtest.IdP, claims string) string {
+	in := authtest.Segment(map[string]any{"alg": "RS256", "kid": "rsa-1", "typ": "JWT"}) + "." + base64.RawURLEncoding.EncodeToString([]byte(claims))
+	d := sha256.Sum256([]byte(in))
+	sig, _ := rsa.SignPKCS1v15(rand.Reader, i.RSA, crypto.SHA256, d[:])
+	return in + "." + base64.RawURLEncoding.EncodeToString(sig)
+}
+
+// TestAdminMatchIsExactlyWhatTheIssuerVerified (review r1 M-2, its repro): an email entry matches
+// only the address the issuer signed and verified, byte for byte after ASCII lowercasing: a soft
+// hyphen or zero-width space inside it, a KELVIN SIGN or LONG S that Unicode folds to k or s, or
+// email_verified as the string "true" is a member; plain ASCII in other case is the admin.
+func TestAdminMatchIsExactlyWhatTheIssuerVerified(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, "ada@firm.example", "kate@firm.example", "sam@firm.example")
+	for _, c := range []struct {
+		email    string
+		verified any
+		admin    bool
+	}{
+		{"a\u00adda@firm.example", true, false}, {"ada@firm.example\u200b", true, false}, {"\u212Aate@firm.example", true, false},
+		{"\u017Fam@firm.example", true, false}, {"ada@firm.example", "true", false}, {"ada@firm.example", 1, false},
+		{"ADA@Firm.Example", true, true}, {"kate@firm.example", true, true},
+	} {
+		var email string
+		json.Unmarshal([]byte(`"`+c.email+`"`), &email)
+		r.idp.User = map[string]any{"sub": "u-x", "email": email, "email_verified": c.verified, "name": "X"}
+		b := authtest.Browser(t)
+		if code, body := r.signIn(t, b); code != 303 {
+			t.Fatalf("%q: sign-in %d %s", c.email, code, body)
+		}
+		if u, ok := r.whoami(t, b); !ok || u.Admin != c.admin {
+			t.Errorf("%q (email_verified %v): admin %v, want %v", c.email, c.verified, u.Admin, c.admin)
+		}
+	}
+	for _, c := range []struct {
+		admins []string
+		email  string
+	}{{[]string{"ada@firm.example"}, "ada@firm.example "}, {[]string{"\u212Aate@firm.example"}, "kate@firm.example"}} {
+		if IsAdmin(c.admins, "u", c.email, true) {
+			t.Errorf("IsAdmin(%q, %q)", c.admins, c.email)
+		}
+	}
+}
+
+// TestClaimsDecodedStrictly (review r1 M-2, its second repro): claims are read by their exact
+// names: a claim named like a read one in other case ("Email", "EMAIL_VERIFIED", "SUB") or a
+// repeated claim refuses the token instead of overriding the standard one; so does a read claim of
+// the wrong type.
+func TestClaimsDecodedStrictly(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, "ada@firm.example", "u-root")
+	for name, tail := range map[string]string{
+		"case override":   `"sub":"u-mallory","email":"mallory@elsewhere.example","email_verified":false,"Email":"ada@firm.example","EMAIL_VERIFIED":true`,
+		"sub override":    `"sub":"u-mallory","SUB":"u-root"`,
+		"repeated claim":  `"sub":"u-mallory","email":"mallory@elsewhere.example","email_verified":true,"email":"ada@firm.example"`,
+		"sub not string":  `"sub":7`,
+		"aud not strings": `"sub":"u-x","aud":[1]`,
+		"exp not number":  `"sub":"u-x","exp":"soon"`,
+	} {
+		tail := tail
+		r.idp.Raw = func(nonce string) string {
+			now := r.clk.now().Unix()
+			return signRaw(r.idp, fmt.Sprintf(`{"iss":%q,"aud":%q,"exp":%d,"iat":%d,"nonce":%q,%s}`, r.idp.URL, r.idp.ClientID, now+300, now, nonce, tail))
+		}
+		b := authtest.Browser(t)
+		if code, body := r.signIn(t, b); code != 401 {
+			t.Errorf("%s: %d %s", name, code, body)
+		}
+	}
+	if n := r.sessions(t); n != 0 {
+		t.Fatalf("%d sessions", n)
+	}
+}
+
+// TestNbfChecked (review r1 L-2): a token not valid yet (nbf beyond the skew) is refused; one valid since a minute ago is not.
+func TestNbfChecked(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	r.idp.Edit = func(c map[string]any) { c["nbf"] = r.clk.now().Add(24 * time.Hour).Unix() }
+	if code, body := r.signIn(t, authtest.Browser(t)); code != 401 || !strings.Contains(body, "nbf") {
+		t.Fatalf("nbf tomorrow: %d %s", code, body)
+	}
+	r.idp.Edit = func(c map[string]any) { c["nbf"] = r.clk.now().Add(-time.Minute).Unix() }
+	if code, body := r.signIn(t, authtest.Browser(t)); code != 303 {
+		t.Fatalf("nbf a minute ago: %d %s", code, body)
+	}
+}
+
+// TestLoginsBounded (review r1 M-1, its repro): anonymous sign-ins cannot load the database: next
+// over 512 bytes is stored as "/", pending sign-ins are capped per client and in all (429), ended
+// ones are swept by created_at's index, and the count and sweep read that index.
+func TestLoginsBounded(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	c := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	login := func() int {
+		t.Helper()
+		resp, err := c.Get(r.srv.URL + "/auth/login?next=/" + strings.Repeat("x", 2000))
+		if err != nil {
+			t.Fatal(err)
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if code := login(); code != 302 {
+		t.Fatalf("login: %d", code)
+	}
+	var next string
+	r.db.QueryRow(`SELECT next FROM auth_logins`).Scan(&next)
+	if next != "/" {
+		t.Fatalf("a 2 KB next was stored (%d bytes)", len(next))
+	}
+	fill := func(n int, client string, at time.Time) {
+		t.Helper()
+		if _, err := r.db.Exec(`INSERT INTO auth_logins (state_hash, nonce, verifier, next, client, created_at)
+			SELECT sha256((g::text || $2)::bytea), 'n', 'v', '/', $2, $3 FROM generate_series(1, $1) g`, n, client, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fill(maxPendingPerClient, "127.0.0.1", r.clk.now())
+	if code := login(); code != 429 {
+		t.Fatalf("past the per-client cap: %d", code)
+	}
+	r.db.Exec(`DELETE FROM auth_logins`)
+	fill(maxPending, "192.0.2.1", r.clk.now())
+	if code := login(); code != 429 {
+		t.Fatalf("past the global cap: %d", code)
+	}
+	r.db.Exec(`UPDATE auth_logins SET created_at = created_at - interval '11 minutes'`) // ended: they no longer count
+	r.clk.add(2 * time.Minute)                                                          // and the next login sweeps them
+	if code := login(); code != 302 {
+		t.Fatalf("after the window: %d", code)
+	}
+	var n int
+	r.db.QueryRow(`SELECT count(*) FROM auth_logins`).Scan(&n)
+	if n != 1 {
+		t.Fatalf("%d sign-ins left after the sweep, want 1", n)
+	}
+	var plan string
+	r.db.Exec(`ANALYZE auth_logins`)
+	r.db.QueryRow(`EXPLAIN (COSTS OFF) DELETE FROM auth_logins WHERE created_at < now()`).Scan(&plan)
+	tx, _ := r.db.Begin()
+	defer tx.Rollback()
+	tx.Exec(`SET LOCAL enable_seqscan = off`)
+	tx.QueryRow(`EXPLAIN (COSTS OFF) DELETE FROM auth_logins WHERE created_at < now()`).Scan(&plan)
+	if !strings.Contains(plan, "auth_logins_created") && !strings.Contains(plan, "Index") {
+		rows, _ := tx.Query(`EXPLAIN (COSTS OFF) DELETE FROM auth_logins WHERE created_at < now()`)
+		for rows.Next() {
+			var l string
+			rows.Scan(&l)
+			plan += "\n" + l
+		}
+		if !strings.Contains(plan, "auth_logins_created") {
+			t.Fatalf("the sweep does not use created_at's index: %s", plan)
+		}
+	}
+}
+
+// TestIssuerFetchesCoalesced (review r1 L-5): concurrent sign-ins against a slow issuer make one
+// discovery request, a caller that gives up returns at once (no lock held across the fetch), and a
+// failed discovery is answered from memory for a few seconds.
+func TestIssuerFetchesCoalesced(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	r.idp.SetSlow(300 * time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	start := time.Now()
+	if err := r.s.Discover(ctx); err == nil || time.Since(start) > 200*time.Millisecond {
+		t.Fatalf("a caller that gives up waited %s (%v)", time.Since(start), err)
+	}
+	cancel()
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() { defer wg.Done(); r.s.Discover(context.Background()) }()
+	}
+	wg.Wait()
+	if n := r.idp.Discovered(); n != 1 {
+		t.Fatalf("%d discovery requests for 9 concurrent callers, want 1", n)
+	}
+	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(503) }))
+	defer down.Close()
+	s, _ := New(nil, Config{Issuer: down.URL, ClientID: "c", PublicURL: "http://127.0.0.1:1", Now: r.clk.now})
+	for range 3 {
+		if err := s.Discover(context.Background()); err == nil {
+			t.Fatal("a down issuer discovered")
+		}
+	}
+	if s.p.discErr == nil {
+		t.Fatal("the failure is not remembered")
 	}
 }

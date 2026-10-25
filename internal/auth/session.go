@@ -14,9 +14,11 @@ import (
 	"fmt"
 	"html"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -51,7 +53,18 @@ type Service struct {
 	secure                bool
 	cookie, loginCookie   string
 	idle, maxAge, loginIn time.Duration
+	swept                 atomic.Int64 // unix seconds of the last sweep of ended sign-ins and sessions
 }
+
+// Bounds on sign-ins in flight (an anonymous GET /auth/login stores one): at most maxPending in all
+// and maxPendingPerClient per client address (behind a reverse proxy every client shares the proxy's
+// address, so it is a second global cap there); beyond, 429. next is at most maxNext bytes.
+var (
+	maxPending          = 2000
+	maxPendingPerClient = 100
+)
+
+const maxNext = 512
 
 // User is a signed-in person: the issuer's sub, their email (Verified as the issuer says), a
 // display name, and whether BIGLAW_ADMINS names them.
@@ -104,14 +117,43 @@ func (s *Service) Host() string { return s.host }
 func (s *Service) Discover(ctx context.Context) error { _, err := s.p.discover(ctx); return err }
 
 // IsAdmin reports whether admins names u: an entry with an @ by u's email, only when the issuer
-// verified it (case-insensitive), any other entry by u's sub exactly.
+// verified it and both are plain ASCII (plainEmail), compared byte for byte after ASCII-only
+// lowercasing (no Unicode folding: U+212A is never "k"); any other entry by u's sub exactly.
 func IsAdmin(admins []string, sub, email string, verified bool) bool {
 	for _, a := range admins {
-		if strings.Contains(a, "@") && verified && email != "" && strings.EqualFold(a, email) || !strings.Contains(a, "@") && a == sub {
+		if strings.Contains(a, "@") {
+			if verified && plainEmail(email) && plainEmail(a) && asciiLower(a) == asciiLower(email) {
+				return true
+			}
+		} else if a == sub {
 			return true
 		}
 	}
 	return false
+}
+
+// plainEmail is an address of printable ASCII only (no space, control, format or non-ASCII
+// character), 3 to 320 bytes, with an @: the only kind an admin entry matches.
+func plainEmail(e string) bool {
+	if len(e) < 3 || len(e) > 320 || !strings.Contains(e, "@") {
+		return false
+	}
+	for i := 0; i < len(e); i++ {
+		if e[i] <= ' ' || e[i] >= 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+func asciiLower(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if 'A' <= c && c <= 'Z' {
+			b[i] = c + 'a' - 'A'
+		}
+	}
+	return string(b)
 }
 
 func random() string {
@@ -188,7 +230,7 @@ func (s *Service) Routes(mux *http.ServeMux) {
 
 // next is where a sign-in returns: a path on this server only (never //host or /\host), else "/".
 func next(v string) string {
-	if !strings.HasPrefix(v, "/") || strings.HasPrefix(v, "//") || strings.HasPrefix(v, "/\\") || len(v) > 2048 ||
+	if !strings.HasPrefix(v, "/") || strings.HasPrefix(v, "//") || strings.HasPrefix(v, "/\\") || len(v) > maxNext ||
 		strings.ContainsFunc(v, func(r rune) bool { return r < ' ' || r == 0x7f || r == '\\' }) {
 		return "/"
 	}
@@ -202,9 +244,23 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	state, nonce, verifier, now := random(), random(), random(), s.p.now()
-	_, err = s.db.ExecContext(r.Context(), `WITH gone AS (DELETE FROM auth_logins WHERE created_at < $5)
-		INSERT INTO auth_logins (state_hash, nonce, verifier, next, created_at) VALUES ($1, $2, $3, $4, $6)`,
-		hash(state), nonce, verifier, next(r.URL.Query().Get("next")), now.Add(-s.loginIn), now)
+	s.sweep(r.Context(), now)
+	client, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		client = r.RemoteAddr
+	}
+	var all, mine int
+	if err = s.db.QueryRowContext(r.Context(), `SELECT count(*), count(*) FILTER (WHERE client = $2) FROM auth_logins WHERE created_at >= $1`,
+		now.Add(-s.loginIn), client).Scan(&all, &mine); err == nil && (all >= maxPending || mine >= maxPendingPerClient) {
+		s.log.Warn("auth: sign-in refused: too many sign-ins in progress", "pending", all, "fromClient", mine)
+		w.Header().Set("Retry-After", "60")
+		s.fail(w, http.StatusTooManyRequests, errors.New("auth: too many sign-ins are in progress; try again in a few minutes"))
+		return
+	}
+	if err == nil {
+		_, err = s.db.ExecContext(r.Context(), `INSERT INTO auth_logins (state_hash, nonce, verifier, next, client, created_at) VALUES ($1, $2, $3, $4, $5, $6)`,
+			hash(state), nonce, verifier, next(r.URL.Query().Get("next")), client, now)
+	}
 	if err != nil {
 		s.fail(w, http.StatusServiceUnavailable, fmt.Errorf("auth: sign-in could not be stored: %w", err))
 		return
@@ -262,16 +318,16 @@ func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
 			name = clean(alt)
 		}
 	}
-	email, verified := clean(cl.Email), cl.verified()
+	email, verified := cl.Email, cl.EmailVerified && plainEmail(cl.Email) // an address with anything but plain ASCII is shown, never matched
+	if !plainEmail(email) {
+		email = clean(email)
+	}
 	id, now := random(), s.p.now()
 	err = s.inTx(ctx, func(tx *sql.Tx) error {
 		if old, err := r.Cookie(s.cookie); err == nil { // a new id at every sign-in: a planted or old session never carries over
 			if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE id_hash = $1`, hash(old.Value)); err != nil {
 				return err
 			}
-		}
-		if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE expires_at <= $1 OR seen_at <= $2`, now, now.Add(-s.idle)); err != nil {
-			return err
 		}
 		_, err := tx.ExecContext(ctx, `INSERT INTO sessions (id_hash, sub, email, email_verified, name, created_at, seen_at, expires_at) VALUES ($1, $2, $3, $4, $5, $6, $6, $7)`,
 			hash(id), cl.Sub, email, verified, name, now, now.Add(s.maxAge))
@@ -284,6 +340,34 @@ func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
 	s.setCookie(w, s.cookie, id, s.maxAge)
 	s.log.Info("auth: signed in", "sub", clean(cl.Sub), "email", email, "emailVerified", verified, "admin", IsAdmin(s.admins, cl.Sub, email, verified))
 	http.Redirect(w, r, to, http.StatusSeeOther)
+}
+
+// sweep deletes ended sign-ins and sessions, at most once a minute (both by indexed times).
+func (s *Service) sweep(ctx context.Context, now time.Time) {
+	if last := s.swept.Load(); now.Unix()-last < 60 || !s.swept.CompareAndSwap(last, now.Unix()) {
+		return
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM auth_logins WHERE created_at < $1`, now.Add(-s.loginIn)); err != nil {
+		s.log.Warn("auth: sweep of ended sign-ins failed", "err", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE expires_at <= $1 OR seen_at <= $2`, now, now.Add(-s.idle)); err != nil {
+		s.log.Warn("auth: sweep of ended sessions failed", "err", err)
+	}
+}
+
+// Revoke ends every session of user: an issuer subject exactly, or (with an @) an email, case-insensitively.
+// It is how an admin signs out someone who left (README § Sign-in): the issuer is not asked again before a session ends.
+func (s *Service) Revoke(ctx context.Context, user string) (int64, error) {
+	if user = strings.TrimSpace(user); user == "" {
+		return 0, errors.New("auth: name a user: their sub, or their email")
+	}
+	res, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE sub = $1 OR (strpos($1, '@') > 0 AND lower(email) = lower($1))`, user)
+	if err != nil {
+		return 0, fmt.Errorf("auth: revoke: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	s.log.Info("auth: sessions revoked", "user", clean(user), "sessions", n)
+	return n, nil
 }
 
 func (s *Service) inTx(ctx context.Context, fn func(*sql.Tx) error) error {

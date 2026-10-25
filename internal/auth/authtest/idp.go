@@ -40,12 +40,14 @@ type IdP struct {
 	Edit             func(map[string]any)      // changes the claims before signing (wrong iss, aud, exp, nonce…)
 	Raw              func(nonce string) string // replaces the whole id_token (a crafted one)
 	Now              func() time.Time
+	Slow             time.Duration // discovery and the JWKS answer this late (a slow issuer)
 
 	mu          sync.Mutex
 	rsaKid      string
 	keys        []map[string]any // the JWKS served
 	grants      map[string]grant
 	JWKSFetches int
+	Discoveries int
 	Tokens      []url.Values // every token request's form, as sent
 	TokenAuth   []string     // its Authorization header
 }
@@ -72,10 +74,19 @@ func New(t testing.TB) *IdP {
 	i.Server = httptest.NewServer(mux)
 	t.Cleanup(i.Close)
 	mux.HandleFunc("GET /.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
+		i.mu.Lock()
+		i.Discoveries++
+		slow := i.Slow
+		i.mu.Unlock()
+		time.Sleep(slow)
 		json.NewEncoder(w).Encode(map[string]any{"issuer": i.URL, "authorization_endpoint": i.URL + "/authorize", "token_endpoint": i.URL + "/token",
 			"jwks_uri": i.URL + "/jwks", "code_challenge_methods_supported": []string{"S256"}, "token_endpoint_auth_methods_supported": []string{"client_secret_basic"}})
 	})
 	mux.HandleFunc("GET /jwks", func(w http.ResponseWriter, r *http.Request) {
+		i.mu.Lock()
+		slow := i.Slow
+		i.mu.Unlock()
+		time.Sleep(slow)
 		i.mu.Lock()
 		defer i.mu.Unlock()
 		i.JWKSFetches++
@@ -212,6 +223,12 @@ func (i *IdP) Rotate(t testing.TB, kid string) {
 	i.RSA, i.rsaKid = rk, kid
 	i.keys = []map[string]any{RSAJWK(&rk.PublicKey, kid), ECJWK(&i.EC.PublicKey, "ec-1")}
 }
+
+// Discovered is how often the discovery document has been fetched.
+func (i *IdP) Discovered() int { i.mu.Lock(); defer i.mu.Unlock(); return i.Discoveries }
+
+// SetSlow makes discovery and the JWKS answer d late.
+func (i *IdP) SetSlow(d time.Duration) { i.mu.Lock(); i.Slow = d; i.mu.Unlock() }
 
 // Fetches is how often the JWKS has been fetched.
 func (i *IdP) Fetches() int { i.mu.Lock(); defer i.mu.Unlock(); return i.JWKSFetches }

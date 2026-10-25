@@ -62,6 +62,7 @@ export function TaskScreen(props: { id: string; tab: string }) {
       <div className="runbar" aria-live="polite">
         <dl className="runstats">
           <div><dt>Status</dt><dd><StatusPill status={task.status} /></dd></div>
+          {task.submittedBy && <div><dt>Submitted by</dt><dd title={task.submittedBy.email ?? task.submittedBy.id}>{task.submittedBy.name}</dd></div>}
           <div><dt>Step</dt><dd>{task.run.step}</dd></div>
           {task.run.stopReason && <div><dt>Stopped</dt><dd>{task.run.stopReason.replace('_', ' ')}</dd></div>}
           <div><dt>Budget spent</dt><dd>{plural(task.run.budget.calls, 'call')}, ${(task.run.budget.usd ?? 0).toFixed(2)}{task.run.budget.usd === null ? ' + unpriced' : ''}</dd></div>

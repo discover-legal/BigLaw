@@ -29,6 +29,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/discover-legal/BigLaw/internal/auth"
 	"github.com/discover-legal/BigLaw/internal/auth/authtest"
 	"github.com/discover-legal/BigLaw/internal/docs"
 	"github.com/discover-legal/BigLaw/internal/store"
@@ -688,3 +689,20 @@ func (l *lockedBuf) Write(p []byte) (int, error) {
 func (l *lockedBuf) String() string { l.mu.Lock(); defer l.mu.Unlock(); return l.b.String() }
 
 func mustURL(s string) *url.URL { u, _ := url.Parse(s); return u }
+
+// TestSignInWrapsEveryMode (review r1 Info): sign-in wraps whatever routes serves, engine or not,
+// so a mode without the engine fails closed instead of serving around it.
+func TestSignInWrapsEveryMode(t *testing.T) {
+	s, err := auth.New(nil, auth.Config{Issuer: "https://idp.example", ClientID: "c", PublicURL: "https://biglaw.example"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]int{"/documents": 401, "/health": 200} {
+		rec, req := httptest.NewRecorder(), httptest.NewRequest("GET", path, nil)
+		req.Host = "127.0.0.1"
+		routes(fakeDB{}, nil, nil, discard(), nil, s).ServeHTTP(rec, req)
+		if rec.Code != want {
+			t.Errorf("GET %s with sign-in and no engine: %d, want %d", path, rec.Code, want)
+		}
+	}
+}

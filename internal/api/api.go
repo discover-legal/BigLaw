@@ -115,6 +115,8 @@ func handler(d *docs.Service, e *engine.Engine, ui fs.FS, log *slog.Logger, who 
 		if err == nil {
 			err = json.Unmarshal(body, &in)
 			in.Task.ToolBandit = in.ToolBandit == nil || *in.ToolBandit == "on"
+			p := who(r)
+			in.Task.SubmittedBy = &engine.Person{ID: p.ID, Name: p.Name, Email: p.Email}
 		}
 		var t engine.Task
 		if err == nil {
@@ -189,7 +191,7 @@ func events(w http.ResponseWriter, r *http.Request, e *engine.Engine, reply func
 		data, _ := json.Marshal(v)
 		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data)
 	}
-	after, last := 0, engine.Run{}
+	after, last, polls := 0, engine.Run{}, 0
 	for {
 		steps, err := e.Steps(r.Context(), id, after)
 		v, gerr := e.Get(r.Context(), id)
@@ -212,6 +214,12 @@ func events(w http.ResponseWriter, r *http.Request, e *engine.Engine, reply func
 			rc.Flush()
 			return
 		}
+		if live, ok := r.Context().Value(liveKey{}).(func() bool); ok && polls%10 == 9 && !live() { // the session ended (logout, revoke, expiry): so does the stream
+			send("signedOut", map[string]bool{"signedOut": true})
+			rc.Flush()
+			return
+		}
+		polls++
 		if rc.Flush() != nil {
 			return
 		}

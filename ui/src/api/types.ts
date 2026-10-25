@@ -126,11 +126,14 @@ export interface Gate {
 }
 
 /** A closed gate: who decided is PR 8's (auth); a rejection always carries its (non-empty) reason. */
+/** Who did something: the issuer's subject, a display name and (shown on hover) the email. */
+export interface Person { id: string; name: string; email?: string }
+
 export interface GateDecision extends Gate {
   decision: 'approved' | 'rejected';
   reason?: string;
   decidedAt: string;
-  decidedBy?: { id: string; name: string; email?: string };
+  decidedBy?: Person;
 }
 
 export interface Task {
@@ -142,6 +145,8 @@ export interface Task {
   documentIds: string[];
   status: TaskStatus;
   createdAt: string;
+  /** Who submitted it (live: the signed-in user, or the local user). */
+  submittedBy?: Person;
   run: Run;
   pendingGates: Gate[];
   decidedGates: GateDecision[];

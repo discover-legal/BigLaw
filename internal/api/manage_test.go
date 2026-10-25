@@ -33,7 +33,7 @@ func manageServer(t *testing.T, who Who) *server {
 	e := engine.New(st, d, nil, roles, nil, engine.Config{BudgetCalls: 150, BudgetUSD: 5, CollapseThreshold: 0.5, CollapseAction: "strict"}, slog.New(slog.DiscardHandler))
 	srv := httptest.NewServer(handler(d, e, nil, slog.New(slog.DiscardHandler), who))
 	t.Cleanup(srv.Close)
-	return &server{srv, t, e, nil}
+	return &server{srv, t, e, nil, st}
 }
 
 const leadPath = "internal/engine/specs/lead.md"

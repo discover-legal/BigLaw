@@ -55,6 +55,7 @@ export function createTransport(): Transport {
           if (type === 'done') es.close();
         });
       }
+      es.addEventListener('signedOut', () => { es.close(); window.location.reload(); }); // the session ended: the shell shows sign-in
       return () => es.close();
     },
     playbooks: () => call('GET', '/playbooks'),

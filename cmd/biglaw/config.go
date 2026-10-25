@@ -187,8 +187,8 @@ func signIn(get func(string) string) (OIDC, []error) {
 		for _, a := range strings.Split(v, ",") {
 			if a = strings.TrimSpace(a); a == "" {
 				continue
-			} else if !plain(a) || len(a) > 255 {
-				bad("BIGLAW_ADMINS", "entry %d is not an email or a subject (white space, a control character, or over 255 bytes)", len(o.Admins)+1)
+			} else if !plain(a) || len(a) > 255 || strings.Contains(a, "@") && strings.ContainsFunc(a, func(r rune) bool { return r > 0x7e }) {
+				bad("BIGLAW_ADMINS", "entry %d is not an email or a subject (white space, a control character, over 255 bytes, or an email that is not plain ASCII)", len(o.Admins)+1)
 			} else {
 				o.Admins = append(o.Admins, a)
 			}

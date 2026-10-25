@@ -9,6 +9,7 @@
 package auth
 
 import (
+	"bytes"
 	"context"
 	"crypto"
 	"crypto/ecdsa"
@@ -59,17 +60,62 @@ type key struct {
 	alg string
 }
 
-// provider is the issuer: discovered once (a failure is retried at the next sign-in) and its keys,
-// fetched at first use and again for an unknown kid, at most once a refetchEvery.
+// provider is the issuer: discovered once (a failure is retried after failBackoff) and its keys,
+// fetched at first use and again for an unknown kid, at most once a refetchEvery. No lock is held
+// across network I/O: concurrent callers share one fetch (shared), bounded by fetchTimeout.
 type provider struct {
 	issuer, clientID, secret string
 	http                     *http.Client
 	now                      func() time.Time
 
-	mu      sync.Mutex
-	meta    *metadata
-	keys    map[string]key
-	fetched time.Time
+	mu         sync.Mutex
+	meta       *metadata
+	discErr    error // the last failed discovery, returned until failBackoff has passed
+	discAt     time.Time
+	keys       map[string]key
+	fetched    time.Time // the last JWKS fetch started (failed ones too)
+	disc, jwks *flight
+}
+
+// Fetch bounds: one issuer request at a time per kind, each within fetchTimeout; a failure is
+// answered from memory for failBackoff, so a flood during an outage makes no requests.
+const (
+	fetchTimeout = 10 * time.Second
+	failBackoff  = 5 * time.Second
+)
+
+// flight is one fetch in progress that every concurrent caller waits for (singleflight).
+type flight struct {
+	done chan struct{}
+	err  error
+}
+
+// shared runs fn once for every caller that arrives while it runs (slot names the kind), outside
+// p.mu and detached from any one caller's cancellation, within fetchTimeout; each caller waits at
+// most until its own ctx ends. fn stores its result under p.mu itself.
+func (p *provider) shared(ctx context.Context, slot **flight, fn func(context.Context) error) error {
+	p.mu.Lock()
+	f := *slot
+	if f == nil {
+		f = &flight{done: make(chan struct{})}
+		*slot = f
+		go func() {
+			fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), fetchTimeout)
+			defer cancel()
+			err := fn(fctx)
+			p.mu.Lock()
+			f.err, *slot = err, nil
+			p.mu.Unlock()
+			close(f.done)
+		}()
+	}
+	p.mu.Unlock()
+	select {
+	case <-f.done:
+		return f.err
+	case <-ctx.Done():
+		return errors.New("auth: the issuer did not answer in time")
+	}
 }
 
 // loopbackHTTP reports whether u is plain http to a loopback address (local development and tests only).
@@ -133,10 +179,31 @@ func (e *statusError) Error() string {
 // the configured one, its endpoints https, and S256 among its PKCE methods when it lists any.
 func (p *provider) discover(ctx context.Context) (*metadata, error) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.meta != nil {
-		return p.meta, nil
+	if m, err := p.meta, p.discErr; m != nil || err != nil && p.now().Sub(p.discAt) < failBackoff {
+		p.mu.Unlock()
+		return m, err
 	}
+	p.mu.Unlock()
+	err := p.shared(ctx, &p.disc, func(ctx context.Context) error {
+		m, err := p.fetchMeta(ctx)
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		if err != nil {
+			p.discErr, p.discAt = err, p.now()
+			return err
+		}
+		p.meta, p.discErr = m, nil
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.meta, nil
+}
+
+func (p *provider) fetchMeta(ctx context.Context) (*metadata, error) {
 	var m metadata
 	if err := p.getJSON(ctx, "discovery document", strings.TrimSuffix(p.issuer, "/")+"/.well-known/openid-configuration", &m); err != nil {
 		return nil, err
@@ -152,16 +219,15 @@ func (p *provider) discover(ctx context.Context) (*metadata, error) {
 	if len(m.PKCE) > 0 && !slices.Contains(m.PKCE, "S256") {
 		return nil, errors.New("auth: the issuer does not support PKCE with S256, which BigLaw requires")
 	}
-	p.meta = &m
-	return p.meta, nil
+	return &m, nil
 }
 
-// keyFor is the key a token's header names: by kid (refetching the set once for an unknown one, at
-// most once a refetchEvery), or the only key that fits alg when the token names none.
+// keyFor is the key a token's header names: by kid (refetching the set for an unknown one, at
+// most once a refetchEvery, a failed fetch included), or the only key that fits alg when the token names none.
 func (p *provider) keyFor(ctx context.Context, m *metadata, kid, alg string) (key, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
 	find := func() (key, bool) {
+		p.mu.Lock()
+		defer p.mu.Unlock()
 		if kid != "" {
 			k, ok := p.keys[kid]
 			return k, ok && fits(k, alg)
@@ -178,17 +244,33 @@ func (p *provider) keyFor(ctx context.Context, m *metadata, kid, alg string) (ke
 	if k, ok := find(); ok {
 		return k, nil
 	}
-	if p.keys != nil && p.now().Sub(p.fetched) < refetchEvery {
+	p.mu.Lock()
+	recent := !p.fetched.IsZero() && p.now().Sub(p.fetched) < refetchEvery && p.jwks == nil
+	p.mu.Unlock()
+	if recent {
 		return key{}, fmt.Errorf("%w: no signing key of the issuer matches the token's key id", ErrToken)
 	}
+	if err := p.shared(ctx, &p.jwks, func(ctx context.Context) error { return p.fetchKeys(ctx, m) }); err != nil {
+		return key{}, err
+	}
+	if k, ok := find(); ok {
+		return k, nil
+	}
+	return key{}, fmt.Errorf("%w: no signing key of the issuer matches the token's key id", ErrToken)
+}
+
+// fetchKeys reads the JWKS: RSA (≥ 2048 bits) and EC (P-256, P-384, on the curve) signing keys only.
+func (p *provider) fetchKeys(ctx context.Context, m *metadata) error {
+	p.mu.Lock()
+	p.fetched = p.now()
+	p.mu.Unlock()
 	var set struct {
 		Keys []struct {
 			Kty, Kid, Use, Alg, N, E, Crv, X, Y string
 		} `json:"keys"`
 	}
-	p.fetched = p.now()
 	if err := p.getJSON(ctx, "JWKS", m.JWKS, &set); err != nil {
-		return key{}, err
+		return err
 	}
 	keys := map[string]key{}
 	for _, j := range set.Keys {
@@ -224,11 +306,10 @@ func (p *provider) keyFor(ctx context.Context, m *metadata, kid, alg string) (ke
 		}
 		keys[j.Kid] = key{pub, j.Alg}
 	}
+	p.mu.Lock()
 	p.keys = keys
-	if k, ok := find(); ok {
-		return k, nil
-	}
-	return key{}, fmt.Errorf("%w: no signing key of the issuer matches the token's key id", ErrToken)
+	p.mu.Unlock()
+	return nil
 }
 
 // fits reports whether k may check a signature of alg: the alg's key type and curve, and the set's own alg when it pins one.
@@ -270,43 +351,82 @@ func digest(h crypto.Hash, data []byte) []byte {
 	return d[:]
 }
 
-// Claims are the ID token's claims BigLaw reads.
+// Claims are the ID token's claims BigLaw reads, decoded strictly (decodeClaims).
 type Claims struct {
-	Iss               string   `json:"iss"`
-	Sub               string   `json:"sub"`
-	Aud               audience `json:"aud"`
-	Azp               string   `json:"azp"`
-	Exp               *float64 `json:"exp"`
-	Iat               *float64 `json:"iat"`
-	Nonce             string   `json:"nonce"`
-	Email             string   `json:"email"`
-	EmailVerified     any      `json:"email_verified"` // true, or "true" from some issuers
-	Name              string   `json:"name"`
-	PreferredUsername string   `json:"preferred_username"`
+	Iss, Sub, Azp, Nonce, Email, Name, PreferredUsername string
+	Aud                                                  []string
+	Exp, Iat, Nbf                                        *float64
+	EmailVerified                                        bool // only the JSON boolean true
 }
 
-// audience is aud: one string or a list of them.
-type audience []string
+// claimNames are the claims BigLaw reads, by their exact names.
+var claimNames = []string{"iss", "sub", "aud", "azp", "exp", "iat", "nbf", "nonce", "email", "email_verified", "name", "preferred_username"}
 
-func (a *audience) UnmarshalJSON(b []byte) error {
-	var one string
-	if json.Unmarshal(b, &one) == nil {
-		*a = audience{one}
-		return nil
+// decodeClaims reads the payload as one JSON object by exact names only (encoding/json would match
+// "Email" or "EMAIL_VERIFIED" to a struct field, case-insensitively, the last one winning). A key
+// repeated, or one that equals a read claim under case folding without being it, refuses the token;
+// a read claim of the wrong JSON type refuses it too.
+func decodeClaims(b []byte) (Claims, error) {
+	var c Claims
+	d := json.NewDecoder(bytes.NewReader(b))
+	if t, err := d.Token(); err != nil || t != json.Delim('{') {
+		return c, errors.New("the claims are not a JSON object")
 	}
-	var many []string
-	if err := json.Unmarshal(b, &many); err != nil {
-		return err
+	raw := map[string]json.RawMessage{}
+	for d.More() {
+		t, err := d.Token()
+		k, ok := t.(string)
+		var v json.RawMessage
+		if err != nil || !ok || d.Decode(&v) != nil {
+			return c, errors.New("the claims are not a JSON object")
+		}
+		if _, dup := raw[k]; dup {
+			return c, errors.New("a claim is repeated")
+		}
+		for _, n := range claimNames {
+			if k != n && strings.EqualFold(k, n) {
+				return c, fmt.Errorf("a claim's name differs from %s only by case", n)
+			}
+		}
+		raw[k] = v
 	}
-	*a = many
-	return nil
+	if t, err := d.Token(); err != nil || t != json.Delim('}') {
+		return c, errors.New("the claims are not a JSON object")
+	}
+	if _, err := d.Token(); err != io.EOF {
+		return c, errors.New("data after the claims")
+	}
+	str := map[string]*string{"iss": &c.Iss, "sub": &c.Sub, "azp": &c.Azp, "nonce": &c.Nonce, "email": &c.Email, "name": &c.Name, "preferred_username": &c.PreferredUsername}
+	num := map[string]**float64{"exp": &c.Exp, "iat": &c.Iat, "nbf": &c.Nbf}
+	for k, v := range raw {
+		var err error
+		switch {
+		case str[k] != nil:
+			err = json.Unmarshal(v, str[k])
+		case num[k] != nil:
+			var f float64
+			if err = json.Unmarshal(v, &f); err == nil {
+				*num[k] = &f
+			}
+		case k == "aud":
+			var one string
+			if json.Unmarshal(v, &one) == nil {
+				c.Aud = []string{one}
+			} else {
+				err = json.Unmarshal(v, &c.Aud)
+			}
+		case k == "email_verified":
+			c.EmailVerified = string(bytes.TrimSpace(v)) == "true"
+		}
+		if err != nil || string(bytes.TrimSpace(v)) == "null" && k != "email_verified" {
+			return c, fmt.Errorf("the %s claim has the wrong type", k)
+		}
+	}
+	return c, nil
 }
-
-// verified reports whether the issuer says it verified the email address.
-func (c Claims) verified() bool { return c.EmailVerified == true || c.EmailVerified == "true" }
 
 // verify checks a compact-serialised ID token: an accepted alg and no crit, the signature by the
-// issuer's key, then iss, aud (with azp), exp and iat within clockSkew, the sign-in's nonce and a sub.
+// issuer's key, then iss, aud (with azp), exp, iat and nbf within clockSkew, the sign-in's nonce and a sub.
 func (p *provider) verify(ctx context.Context, m *metadata, raw, nonce string) (Claims, error) {
 	var c Claims
 	bad := func(why string) (Claims, error) { return Claims{}, fmt.Errorf("%w: %s", ErrToken, why) }
@@ -352,8 +472,11 @@ func (p *provider) verify(ctx context.Context, m *metadata, raw, nonce string) (
 		return bad("the signature does not verify with the issuer's key")
 	}
 	pb, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil || json.Unmarshal(pb, &c) != nil {
+	if err != nil {
 		return bad("the claims are not base64url JSON")
+	}
+	if c, err = decodeClaims(pb); err != nil {
+		return bad(err.Error())
 	}
 	now := p.now()
 	switch {
@@ -367,6 +490,8 @@ func (p *provider) verify(ctx context.Context, m *metadata, raw, nonce string) (
 		return bad("it has expired")
 	case c.Iat == nil || unix(*c.Iat).After(now.Add(clockSkew)):
 		return bad("it is issued in the future")
+	case c.Nbf != nil && unix(*c.Nbf).After(now.Add(clockSkew)):
+		return bad("it is not valid yet (nbf)")
 	case nonce == "" || subtle.ConstantTimeCompare([]byte(c.Nonce), []byte(nonce)) != 1:
 		return bad("its nonce is not this sign-in's")
 	case c.Sub == "" || len(c.Sub) > 255:

@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -13,7 +14,10 @@ import (
 	"github.com/discover-legal/BigLaw/internal/docs"
 )
 
-type principalKey struct{}
+type (
+	principalKey struct{}
+	liveKey      struct{} // func() bool: whether the request's session still exists (an SSE stream ends when it does not)
+)
 
 // SessionUser is Who under sign-in: the principal RequireSignIn put on the request (none: a
 // principal that is nobody and no admin).
@@ -22,10 +26,15 @@ func SessionUser(r *http.Request) Principal {
 	return p
 }
 
-// public is what a browser with no session may reach: the UI's files (so it can show its sign-in
-// page), GET /health and sign-in itself.
+// public is what a browser with no session may reach, by exact pattern (a new route is behind the
+// session unless it is added here with its reason): the UI's files (so it can show its sign-in page),
+// GET /health (probes) and sign-in's three routes.
 func public(pattern string) bool {
-	return pattern == "GET /" || pattern == "GET /health" || strings.HasPrefix(pattern, "GET /auth/") || pattern == "POST /auth/logout"
+	switch pattern {
+	case "GET /", "GET /health", "GET /auth/login", "GET /auth/callback", "POST /auth/logout":
+		return true
+	}
+	return false
 }
 
 // RequireSignIn mounts sign-in's routes on mux and puts every other route behind a session: no
@@ -34,6 +43,23 @@ func public(pattern string) bool {
 // cookie is SameSite=Lax as well). A database failure looking the session up is 503, never 401.
 func RequireSignIn(mux *http.ServeMux, s *auth.Service, log *slog.Logger) http.Handler {
 	s.Routes(mux)
+	mux.HandleFunc("POST /manage/sessions/revoke", admin(log, SessionUser, func(w http.ResponseWriter, r *http.Request, p Principal) {
+		var in struct{ User string }
+		d := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10))
+		d.DisallowUnknownFields()
+		if err := d.Decode(&in); err != nil || strings.TrimSpace(in.User) == "" {
+			docs.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "the body is {\"user\": a sub or an email}", "errorType": "bad_request"})
+			return
+		}
+		n, err := s.Revoke(r.Context(), in.User)
+		if err != nil {
+			log.Error("api: revoke failed", "err", err)
+			docs.WriteJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "the sessions could not be revoked (logged)", "errorType": "unavailable"})
+			return
+		}
+		log.Info("api: sessions revoked by an admin", "admin", p.Label(), "sessions", n)
+		docs.WriteJSON(w, 200, map[string]int64{"revoked": n})
+	}))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" && r.Method != "HEAD" && r.Method != "OPTIONS" {
 			same := false
@@ -61,6 +87,7 @@ func RequireSignIn(mux *http.ServeMux, s *auth.Service, log *slog.Logger) http.H
 		if !u.Verified {
 			p.Email = "" // an address the issuer did not verify is no identity
 		}
-		mux.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), principalKey{}, p)))
+		ctx := context.WithValue(context.WithValue(r.Context(), principalKey{}, p), liveKey{}, func() bool { _, ok, err := s.User(r); return ok || err != nil })
+		mux.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

@@ -4,14 +4,18 @@
 package api
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/discover-legal/BigLaw/internal/auth"
 	"github.com/discover-legal/BigLaw/internal/auth/authtest"
@@ -217,5 +221,131 @@ func TestGateDecisionRecordsUser(t *testing.T) {
 	}
 	if strings.Contains(body, "Local user") {
 		t.Errorf("a signed-in decision names the local user: %s", body)
+	}
+}
+
+// TestEveryRouteNeedsASession (review r1, its route probe kept as a regression test): every route,
+// method and path spelling sent raw without a session is 401, or a 404/405/400 or redirect that serves
+// nothing; only the UI's files answer 200, and /auth/ is public for its three routes alone.
+func TestEveryRouteNeedsASession(t *testing.T) {
+	t.Parallel()
+	s, ids := signedServer(t, nil, doc1)
+	d := ids[0]
+	routes := []string{
+		"GET /clients", "POST /tasks", "GET /tasks", "GET /tasks/x", "GET /tasks/x/steps", "GET /tasks/x/cost", "GET /tasks/x/deliverable.md",
+		"POST /tasks/x/cancel", "POST /tasks/x/gates/g/approve", "POST /tasks/x/gates/g/reject", "GET /tasks/x/events",
+		"GET /me", "GET /manage/items", "GET /manage/items/prompt.lead", "GET /manage/items/prompt.lead/history", "GET /manage/items/prompt.lead/diff",
+		"POST /manage/items/prompt.lead/versions", "POST /manage/items/prompt.lead/revert", "POST /manage/items/prompt.lead/delete",
+		"GET /manage/changes", "GET /manage/export", "GET /manage/export?format=zip", "GET /manage/secrets", "POST /manage/secrets",
+		"POST /manage/secrets/k/delete", "POST /manage/items/server.x/discover", "POST /manage/items/server.x/import", "POST /manage/items/tool.x/test",
+		"POST /manage/sessions/revoke", "POST /documents", "GET /documents", "GET /documents/" + d, "GET /documents/" + d + "/outline",
+		"GET /documents/" + d + "/sections/s1", "GET /documents/search?q=x", "DELETE /documents/" + d, "POST /documents/upload", "GET /documents/" + d + "/file",
+		"HEAD /tasks", "HEAD /documents/" + d + "/file", "PUT /tasks", "PATCH /documents/" + d, "OPTIONS /tasks", "get /tasks",
+		"GET /x/../tasks", "GET /./documents", "GET //tasks", "GET /tasks/x/../../documents", "GET /documents/" + d + "%2Ffile",
+		"GET /Tasks", "GET /manage/secrets/", "GET /auth/../manage/secrets", "GET /auth/%2e%2e/manage/secrets", "GET /auth/other",
+	}
+	for _, rt := range routes {
+		method, path, _ := strings.Cut(rt, " ")
+		code, loc, body := rawRequest(t, s.URL, method, path)
+		ui := code == 200 && method == "GET" && strings.Contains(strings.ToLower(body), "<!doctype html")
+		redirect := (code == 301 || code == 307 || code == 308) && !strings.HasPrefix(loc, "//")
+		if strings.Contains(body, d) || !(code == 401 || code == 404 || code == 405 || code == 400 || redirect || ui) {
+			t.Errorf("%s without a session: %d %.90s", rt, code, body)
+		}
+	}
+	for _, p := range []string{"GET /auth/other", "POST /auth/login", "GET /auth/", "GET /healthz"} { // exact patterns only
+		if public(p) {
+			t.Errorf("%s is public", p)
+		}
+	}
+}
+
+// rawRequest sends the request line exactly as written (no client-side cleaning).
+func rawRequest(t *testing.T, base, method, path string) (int, string, string) {
+	t.Helper()
+	u, _ := url.Parse(base)
+	c, err := net.Dial("tcp", u.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	fmt.Fprintf(c, "%s %s HTTP/1.1\r\nHost: %s\r\nContent-Length: 2\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n{}", method, path, u.Host)
+	resp, err := http.ReadResponse(bufio.NewReader(c), nil)
+	if err != nil {
+		return 0, "", ""
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+	return resp.StatusCode, resp.Header.Get("Location"), string(b)
+}
+
+// TestRevokeSessions (review r1 L-3): an admin ends a user's sessions by sub or email (a member may
+// not), the user is signed out at once, and an open event stream of theirs ends too.
+func TestRevokeSessions(t *testing.T) {
+	t.Parallel()
+	s, ids := signedServer(t, memo, doc1)
+	member, admin := s.browser(t, bob), s.browser(t, ada)
+	if code, body := member.do("POST", "/manage/sessions/revoke", m{"user": "u-ada"}); code != 403 {
+		t.Fatalf("a member's revoke: %d %s", code, body)
+	}
+	if code, body := admin.do("POST", "/manage/sessions/revoke", m{}); code != 400 {
+		t.Fatalf("a revoke naming no one: %d %s", code, body)
+	}
+	code, body := member.do("POST", "/tasks", m{"description": "What is claimed?", "workflowType": "memo", "documentIds": ids})
+	var v engine.TaskView
+	if json.Unmarshal([]byte(body), &v); code != 201 || v.SubmittedBy == nil || *v.SubmittedBy != (engine.Person{ID: "u-bob", Name: "Bob Member", Email: "bob@firm.example"}) {
+		t.Fatalf("a member's task records its submitter: %d %s", code, body)
+	}
+	member.waitFor(v.ID, func(v engine.TaskView) bool { return v.Status == "awaiting_gate" })
+	// an open stream on a task another process holds running (it would not end by itself)
+	if _, err := s.st.DB().Exec(`UPDATE tasks SET status = 'running', lease_owner = 'elsewhere', lease_until = now() + interval '1 hour' WHERE id = $1`, v.ID); err != nil {
+		t.Fatal(err)
+	}
+	req, _ := http.NewRequest("GET", s.URL+"/tasks/"+v.ID+"/events", nil)
+	resp, err := member.client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	ended := make(chan string, 1)
+	go func() { b, _ := io.ReadAll(resp.Body); ended <- string(b) }()
+	if code, body := admin.do("POST", "/manage/sessions/revoke", m{"user": "BOB@firm.example"}); code != 200 || !strings.Contains(body, `"revoked":1`) {
+		t.Fatalf("revoke by email: %d %s", code, body)
+	}
+	if code, _ := member.do("GET", "/me", nil); code != 401 {
+		t.Fatalf("a revoked member: %d", code)
+	}
+	select {
+	case b := <-ended:
+		if !strings.Contains(b, "event: signedOut") {
+			t.Fatalf("the stream ended without saying why: %s", b)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the revoked member's stream is still open")
+	}
+	if code, _ := admin.do("GET", "/me", nil); code != 200 {
+		t.Fatal("revoking bob signed the admin out")
+	}
+	if code, body := admin.do("POST", "/manage/sessions/revoke", m{"user": "u-ada"}); code != 200 || !strings.Contains(body, `"revoked":1`) {
+		t.Fatalf("revoke by sub: %d %s", code, body)
+	}
+}
+
+// TestMembersSeeAuthorsByName (review r1 Info): admins' emails in the change log, history and
+// secrets' updatedBy are shown to admins only; a member sees the display name.
+func TestMembersSeeAuthorsByName(t *testing.T) {
+	t.Parallel()
+	s, _ := signedServer(t, nil)
+	member, admin := s.browser(t, bob), s.browser(t, ada)
+	if code, body := admin.do("POST", "/manage/secrets", m{"name": "k1", "value": "a-long-value", "origin": "https://api.example.com"}); code != 201 {
+		t.Fatalf("secret: %d %s", code, body)
+	}
+	for _, p := range []string{"/manage/secrets", "/manage/changes"} {
+		if _, body := admin.do("GET", p, nil); !strings.Contains(body, `"Ada Lovelace \u003cada@firm.example\u003e"`) {
+			t.Errorf("an admin's %s lacks the full author: %s", p, body)
+		}
+		if _, body := member.do("GET", p, nil); strings.Contains(body, "ada@firm.example") || !strings.Contains(body, "Ada Lovelace") {
+			t.Errorf("a member's %s: %s", p, body)
+		}
 	}
 }

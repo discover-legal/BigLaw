@@ -160,12 +160,18 @@ change. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`, not here.
   through `SetRemotePolicy` (never set by `cmd/biglaw`).
 - `internal/auth` (PR 8) — sign-in: OIDC code flow + PKCE S256 (`oidc.go`: discovery, JWKS cache with a
   rate-limited refetch for an unknown kid, ID-token verification RS256/384/512 + ES256/384 with `none`/`HS*`
-  refused before key lookup, iss/aud/azp/exp/iat/nonce), server-side sessions (`session.go`, migration 0011:
-  only SHA-256 of the cookie id stored, idle 8 h / absolute 7 d, rotated at sign-in, logout deletes),
-  `IsAdmin` (verified email or sub). Stdlib only; never log or return a token, code, verifier, state,
-  cookie or the client secret. `internal/api/signin.go` `RequireSignIn` puts every route but `GET /`,
-  `/health` and `/auth/*` behind a session (401 `unauthenticated`) and `docs.Guard` on every unsafe
-  method. Under sign-in `--allow-no-auth` is ignored (warned), `--admin-without-auth` refused, the remote
+  refused before key lookup, iss/aud/azp/exp/iat/nbf/nonce; claims decoded by exact name only,
+  `decodeClaims`: never `json.Unmarshal` claims into a struct, its case-insensitive matching lets
+  `"Email"` override `"email"`; fetches coalesced by `shared`, no lock across network I/O),
+  server-side sessions (`session.go`, migration 0011: only SHA-256 of the cookie id stored, idle 8 h /
+  absolute 7 d, rotated at sign-in, logout deletes, `Revoke`; sign-ins in flight capped 2,000 / 100
+  per client → 429, `next` ≤ 512 bytes, swept by index), `IsAdmin` (sub exactly, or a verified plain-ASCII
+  email byte-exact after ASCII lowercasing: never Unicode folding or a cleaned address). Stdlib only;
+  never log or return a token, code, verifier, state, cookie or the client secret.
+  `internal/api/signin.go` `RequireSignIn` puts every route but the exact patterns in `api.public`
+  (`GET /`, `/health`, the three `/auth` routes) behind a session (401 `unauthenticated`), `docs.Guard`
+  on every unsafe method, mounts `POST /manage/sessions/revoke` (admin) and gives SSE streams a
+  liveness check (`liveKey`). Tasks record `submittedBy` (migration 0012). Under sign-in `--allow-no-auth` is ignored (warned), `--admin-without-auth` refused, the remote
   policy is on, and `bad_host` also admits `BIGLAW_PUBLIC_URL`'s host. Gate decisions record
   `Gate.DecidedBy` (`engine.Person`). `internal/auth/authtest` is the fake OpenID provider for tests.
 - `internal/api` (PR 4b) — the REST surface (tasks, steps, SSE, gates, cancel, cost, clients) over
@@ -260,6 +266,6 @@ make demo-bundle # ui/dist-recorded for discover.legal/demo/biglaw/; make demo-r
 # DB tests: BIGLAW_TEST_DSN=postgres://…?sslmode=disable BIGLAW_REQUIRE_DB=1 (Postgres with pgvector)
 make e4-record EMBED_MODEL=…   # owner-run: record the E4 tape at the model's own length (make e4-live: no tape)
 ```
-Budgets: Go prod LOC reported with no limit (owner decision 17: the total ceiling is dropped; 26756 used; each PR reports its lines vs its DESIGN budget; test-support packages such as `storetest` count), internal
+Budgets: Go prod LOC reported with no limit (owner decision 17: the total ceiling is dropped; 27056 used; each PR reports its lines vs its DESIGN budget; test-support packages such as `storetest` count), internal
 packages ≤ 12 (9 used; test-support packages do not count), direct deps ≤ 3, env vars ≤ 20 (19 used), UI runtime
 deps ≤ 2 (2 used), UI source lines (`ui/src`) ≤ 3,200 (raised from 2,400 for Manage), untested packages 0, longest source file ≤ 2,000 lines.

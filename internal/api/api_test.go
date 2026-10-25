@@ -37,9 +37,10 @@ func TestMain(m *testing.M) {
 
 type server struct {
 	*httptest.Server
-	t *testing.T
-	e *engine.Engine
-	c *http.Client // the browser requests go from (nil: http.DefaultClient)
+	t  *testing.T
+	e  *engine.Engine
+	c  *http.Client // the browser requests go from (nil: http.DefaultClient)
+	st *store.Store
 }
 
 // as is s with requests from browser c (a signed-in user's cookie jar).
@@ -90,7 +91,7 @@ func newServerWith(t *testing.T, wrap func(url string, st *store.Store, d *docs.
 		srv.Config.Handler = wrap(srv.URL, st, d, e)
 	}
 	t.Cleanup(func() { srv.Close(); cancel(); <-done })
-	return &server{srv, t, e, nil}, ids
+	return &server{srv, t, e, nil, st}, ids
 }
 
 func (s *server) do(method, path string, body any) (int, string) {

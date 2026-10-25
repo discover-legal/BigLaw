@@ -30,7 +30,7 @@ PostgreSQL database. Licensed Apache-2.0 (`LICENSE`, `NOTICE`).
 | Evaluation | `eval/` (`run.py`, `proofrun/`, `lab/`, `tests/`, `tasks/`, `e4/embeddings.json`) | The five synthetic proof-run matters (documents + answer keys), copied from `feat/proof-runs-multi-practice`, with their driver, scorer and the v1 comparison (`run.py`), the Harvey LAB driver (`lab/run.py`), and the Go gates E1/E2 that run them through the engine on a scripted model (§ Memo workflow). `eval/e4/embeddings.json` is E4's embeddings tape: today the **self-test** tape of a hash embedder, not a real model's (§ Documents, gate E4) |
 | UI | `ui/` (React 19 + Vite + TypeScript strict; runtime deps `react`, `react-dom` only) | The seven screens (§ UI) behind one transport seam, `ui/src/api/transport.ts`: `http.ts` talks to the Go API on the same origin (tasks, steps, findings, gates, cost and documents are served since PR 4b; playbooks, time and profiles are PRs 6/8/9), `recorded.ts` replays a recorded engine in the browser with no network at all |
 | Recorded demo | `ui/src/recorded/recording.json`, `eval/demo/record_test.go` | Three synthetic matters (13 documents plus one scanned exhibit, `ui/src/recorded/06-affidavit-of-service-scan.jpg`, drawn by `eval/demo/make_scan.py`) and seven recorded memo tasks (48 findings, 79 citations); documents, outlines, sections, chunks, the scan's transcript (v2's vision path with a scripted reader), run-log and offered search hits and every quote's verification computed by v2's `internal/docs`; claims from the answer keys; sample playbooks, time entries and profiles, and the configuration table read from `cmd/biglaw/config.go` (§ UI, provenance). `TestDemoRecording` fails when the committed recording no longer matches what v2's code computes |
-| Sign-in | `internal/auth/` (`oidc.go`, `session.go`; migration `0011_sessions.sql`), `internal/api/signin.go` | OpenID Connect code flow with PKCE against one issuer, ID tokens verified with the standard library (discovery, JWKS, RS/ES signatures, claims), server-side sessions behind an opaque cookie, admins by `BIGLAW_ADMINS`, and the API behind a session (§ Sign-in) |
+| Sign-in | `internal/auth/` (`oidc.go`, `session.go`; migration `0011_sessions.sql`), `internal/api/signin.go`; `0012_task_submitter.sql` | OpenID Connect code flow with PKCE against one issuer, ID tokens verified with the standard library (discovery, JWKS, RS/ES signatures, claims), server-side sessions behind an opaque cookie, admins by `BIGLAW_ADMINS`, and the API behind a session (§ Sign-in) |
 | Test helper | `internal/auth/authtest/` | A local OpenID provider (httptest: discovery, JWKS, PKCE-checking token endpoint, RSA and EC keys, key rotation) and the helpers to craft refused tokens and walk a browser through sign-in |
 | Test helper | `internal/store/storetest/` | Gives each DB test its own schema; skips without a DSN, fails if `BIGLAW_REQUIRE_DB` is set |
 | Test helper | `internal/engine/figtest/` | The figure reader's stand-in for tests (`figtest.Reader`, a `model.Fake` `Respond` hook): labels plain fixture texts so tests not about figure reading run unscripted (engine, API and eval tests) |
@@ -255,8 +255,10 @@ rule, and `TestDeployFilesFollowExposureRule` keeps them that way:
   get past earlier checks.
 - **The image's default command** is plain `serve`, so `docker run -p …` or any platform that
   exposes the container refuses to start unless sign-in is configured.
-- **Render** is public by nature, so `render.yaml` is inert until its sign-in variables are set
-  in the dashboard: until then the service fails its start on purpose.
+- **Render** is public by nature, so `render.yaml` is inert until its OIDC variables are set in
+  the dashboard: until then the service fails its start on purpose. Set `BIGLAW_PUBLIC_URL` to the
+  service's https URL with them: with it left at its loopback default the service starts, but no
+  sign-in can complete (it fails closed).
 - **Manage under `--allow-no-auth` is read-only** (without sign-in). Reaching the port is not proof of being an admin,
   and an edit in Manage changes every later task of every matter, so with `--allow-no-auth` nobody may
   edit there (403 `forbidden`; the screen says why). An operator who accepts that anyone who can reach
@@ -301,10 +303,22 @@ service, a corporate directory). It is built on the Go standard library alone (n
   JWKS (RS256, RS384, RS512, ES256, ES384; `none`, `HS*` and any other alg refused before a key is
   looked up, a key used only for its own type and curve and its JWKS `alg`, `oct` keys never
   loaded, RSA keys of at least 2048 bits), `iss`, `aud` (with `azp`: present, it must be the client;
-  several audiences need it), `exp` and `iat` within 60 s of skew, the sign-in's `nonce`, a `sub`.
-  The JWKS is cached and fetched again for a `kid` it lacks (key rotation), at most once a minute.
-  `next` is a path on this server only. Redirects from the issuer's endpoints are not followed and
-  answers are capped at 1 MiB.
+  several audiences need it), `exp`, `iat` and `nbf` (when present) within 60 s of skew, the
+  sign-in's `nonce`, a `sub`. **Claims are decoded strictly**, by their exact names: a token that
+  repeats a claim, holds a claim named like one BigLaw reads in other case (`Email`,
+  `EMAIL_VERIFIED`, `SUB`: Go's JSON decoder would otherwise let it override the real one) or one of
+  the wrong JSON type is refused; `email_verified` counts only as the JSON boolean `true`.
+  The JWKS is cached and fetched again for a `kid` it lacks (key rotation), at most once a minute
+  (a failed fetch too). Discovery and JWKS fetches are shared by every caller waiting for them
+  (one request at a time per kind, 10 s, no lock held across it; a failed discovery is answered
+  from memory for 5 s), so a slow or down issuer neither queues sign-ins nor is flooded.
+  `next` is a path on this server only, at most 512 bytes (longer: `/`). Redirects from the
+  issuer's endpoints are not followed and answers are capped at 1 MiB.
+- **Sign-ins in flight are bounded** (`GET /auth/login` is anonymous): at most 2,000 in all and 100
+  per client address within their 10 minutes, beyond which it answers 429 (behind a reverse proxy
+  every client shares the proxy's address, so the second cap is global there too); they are counted
+  and swept (at most once a minute, with ended sessions) through `created_at`'s index, so a flood
+  can neither grow the table nor make the next sign-in dearer (`TestLoginsBounded`).
 - **Sessions** (migration `0011_sessions.sql`). A sign-in creates a server-side session row; the
   cookie holds only its random 256-bit id (opaque, `HttpOnly`, `SameSite=Lax`, `Path=/`; `Secure`
   and named `__Host-biglaw_session` when `BIGLAW_PUBLIC_URL` is https, `biglaw_session` on loopback
@@ -312,22 +326,42 @@ service, a corporate directory). It is built on the Go standard library alone (n
   days after sign-in, whichever is first; `POST /auth/logout` deletes the row, so a copied cookie
   dies with it. Every sign-in issues a new id and deletes the browser's previous session (no
   fixation). `GET /me` is the session's user `{id: sub, name, email, admin, authEnabled: true}`.
+  **The issuer is not asked again during a session**: disabling an account there ends its BigLaw
+  sessions only at their idle or absolute end. To end them now, an admin calls
+  `POST /manage/sessions/revoke {"user": "<sub or email>"}` (every session of that sub, or of that
+  email case-insensitively; `{"revoked": n}`); an open event stream (`/tasks/{id}/events`) checks its
+  session every 10 polls (about 5 s) and ends with `event: signedOut` once it is gone (logout,
+  revoke or expiry).
 - **Every API route needs a session**: without one it is 401 `unauthenticated`; only `GET /health`,
-  the UI's own files (so it can show its sign-in page) and `/auth/*` are open. A database failure
-  reading a session is 503, never a sign-out.
+  the UI's own files (so it can show its sign-in page) and the three sign-in routes are open, by
+  exact pattern (`api.public`: a new route, under `/auth/` or not, is behind the session unless it
+  is added there). `serve` puts whatever it mounts behind sign-in when sign-in is configured. A
+  database failure reading a session is 503, never a sign-out (`TestEveryRouteNeedsASession` sends
+  every route and spelling raw).
 - **Roles.** **Admins** are the accounts `BIGLAW_ADMINS` names (a verified email, or a `sub`); they
-  edit Manage, set secrets, import and enable custom tools and webhooks, and press Test. Everyone
-  else the issuer signs in to this client is a **member**: they submit tasks, read everything, and
-  decide gates (lawyer review); every Manage write is 403 `forbidden` for them. An email entry
-  matches only when the issuer says `email_verified` (an unverified claim of an admin's address is a
-  member, and its address is not shown). Admin is decided on each request from the session's
-  identity, so a restart with a shorter list demotes at once. Chosen over a configurable claim
-  because it needs no issuer-side group or role mapping, works the same with every issuer, and
-  cannot be widened by a claim a user can edit at the issuer.
+  edit Manage, set secrets, import and enable custom tools and webhooks, press Test and revoke
+  sessions. Everyone else the issuer signs in to this client is a **member**: they submit tasks,
+  read everything, and decide gates (lawyer review); every Manage write is 403 `forbidden` for them.
+  An email entry matches only the address the issuer signed, as it signed it: `email_verified` the
+  JSON boolean `true`, the address plain printable ASCII (one with a space, a control or format
+  character such as a soft hyphen or zero-width space, or any non-ASCII character never matches, and
+  `BIGLAW_ADMINS` refuses such an entry), compared byte for byte after ASCII-only lowercasing (no
+  Unicode folding: KELVIN SIGN is not `k`). An unverified claim of an admin's address is a member,
+  and its address is not shown. Admin is decided on each request from the session's identity, so a
+  restart with a shorter list demotes at once. Chosen over a configurable claim because it needs no
+  issuer-side group or role mapping and works the same with every issuer. **Prefer `sub` entries**
+  where the issuer lets users, or an upstream provider it brokers, set an email it then marks
+  verified: a `sub` is the issuer's own identifier for the account, an email only as trustworthy as
+  the issuer's verification of it.
 - **Turned on with it:** Manage is writable by admins, and secrets, custom MCP/HTTP tools and
   webhooks work for them under Compose and in containers (`RemotePolicy` is on; the admin guard keeps
   members out). Change-log entries, secrets' "set by", an accepted tool's `acceptedBy`, Test calls
-  and gate decisions record the user (`Name <email>`, or `Name (sub)`), never "Local user".
+  and gate decisions record the user (`Name <email>`, or `Name (sub)`), never "Local user", and
+  every task records who submitted it (`submittedBy`, migration `0012_task_submitter.sql`; the Task
+  screen shows the name, with the email on hover). Members see the change log's, history's and
+  secrets' authors by display name only (an admin's email is shown to admins). Display names are the
+  issuer's `name` claim, which a user may be able to edit there: the stored sub and email are what
+  identify them.
 - **Who may sign in is the issuer's decision**: BigLaw admits every account the issuer
   authenticates for this client id as a member. Use an issuer (a realm, an application) whose
   sign-in is limited to your firm; a consumer or multi-tenant issuer would let anyone in.
@@ -350,7 +384,11 @@ service, a corporate directory). It is built on the Go standard library alone (n
    Sign out.
 
 Locally, an issuer on loopback (`BIGLAW_OIDC_ISSUER=http://127.0.0.1:8080/realms/dev`) and the
-default `BIGLAW_PUBLIC_URL` work over plain http, with cookies that are not `Secure`.
+default `BIGLAW_PUBLIC_URL` work over plain http, with cookies that are not `Secure` and have no
+`__Host-` prefix. Browsers do not separate cookies by port, so **every other service on
+`localhost:*` / `127.0.0.1:*` receives BigLaw's loopback session cookie** and can set its login
+cookie: use loopback sign-in for development only, never with other untrusted local services, and
+https for anything real.
 
 ## Run it
 
@@ -1432,6 +1470,7 @@ POST   /tasks/{id}/cancel
 POST   /tasks/{id}/gates/{gateId}/approve      POST /tasks/{id}/gates/{gateId}/reject {"reason": "…"}
 GET    /me                            {id, name, email, admin, authEnabled}: the signed-in user, or without sign-in the local user
 GET    /auth/login?next=   GET /auth/callback   POST /auth/logout     sign-in (§ Sign-in; only with BIGLAW_OIDC_ISSUER)
+POST   /manage/sessions/revoke {user}   (admin, sign-in only) end every session of a sub or an email → {revoked}
 GET    /manage/items                  the catalogue (§ Manage)   GET /manage/items/{id}: with its files now and built in
 GET    /manage/items/{id}/history     its versions, each with its files    GET /manage/items/{id}/diff?from=&to= (a number or builtin)
 POST   /manage/items/{id}/versions    {base, files, note} → 201 (admin; 422 invalid with problems[], 409 stale base)
@@ -2088,16 +2127,16 @@ improvements (after the real Haiku LAB rerun; scripted the same way): `TestSweep
 
 | Budget | Ceiling | Today |
 |---|---:|---:|
-| Go production lines (physical lines, non-`_test.go`, test-support packages included) | reported, no limit (owner decision 17) | 26756 |
+| Go production lines (physical lines, non-`_test.go`, test-support packages included) | reported, no limit (owner decision 17) | 27056 |
 | Packages under `internal/`, test-support packages excluded | 12 | 9 (`agent`, `analysis`, `api`, `auth`, `docs`, `docs/ooxml`, `engine`, `model`, `store`; `store/storetest`, `engine/figtest` and `auth/authtest` are test support) |
 | Direct Go dependencies | 3 | 2 (`github.com/lib/pq`, `github.com/ledongthuc/pdf`) |
 | Runtime environment variables | 20 | 19 |
 | UI runtime dependencies | 2 | 2 (`react`, `react-dom`) |
-| UI source lines (`ui/src` `.ts`/`.tsx`/`.css`; tests, config, `recording.json` and `manage.json` not counted) | 3,200 (raised from 2,400 for Manage, owner decision) | 2,828 |
+| UI source lines (`ui/src` `.ts`/`.tsx`/`.css`; tests, config, `recording.json` and `manage.json` not counted) | 3,200 (raised from 2,400 for Manage, owner decision) | 2,835 |
 | Packages without a `_test.go` | 0 | 0 |
 | Lines in any one source file (`.go`, `.py`, `.sql`, `.sh`, `.js`, `.ts`, `.css`; tests included) | 2,000 | 968 (`internal/docs/vision_safety_test.go`) |
 
-**There is no total line ceiling (owner decision 17, 2026-10-23).** `scripts/loc.py` reports the Go production total (26756) and fails only on the budgets that bound bloat directly: no file over 2,000 lines, ≤ 3 direct deps, ≤ 20 env vars, ≤ 12 internal packages, ≤ 3,200 UI source lines, no untested package. Each PR still reports its lines against its DESIGN budget in its notes. (The ceiling's history, 14,000 → 17,500 through owner decisions 7–16, is in PLAN.) A **test-support package** is one
+**There is no total line ceiling (owner decision 17, 2026-10-23).** `scripts/loc.py` reports the Go production total (27056) and fails only on the budgets that bound bloat directly: no file over 2,000 lines, ≤ 3 direct deps, ≤ 20 env vars, ≤ 12 internal packages, ≤ 3,200 UI source lines, no untested package. Each PR still reports its lines against its DESIGN budget in its notes. (The ceiling's history, 14,000 → 17,500 through owner decisions 7–16, is in PLAN.) A **test-support package** is one
 whose directory name ends in `test` and that no production file outside it imports, such as
 `storetest`. Under the coordinator's ruling it is left out of the package count, but its lines
 count toward the reported Go total like any other non-`_test.go` file. A `*test` package that
@@ -2109,7 +2148,7 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
 
 ## Limitations
 
-- Without sign-in Manage has no per-person admin: the local user is an admin on loopback, read-only under `--allow-no-auth`, and anyone who can reach the server under `--admin-without-auth`; the change log's author is "Local user" (§ Manage, Who). Sign-in has two roles only (admin, member); every signed-in user sees every matter (per-matter access, an approve rule's role, API tokens for scripts and the clients roster are not built), and sessions are revoked one at a time (by logout or expiry; there is no "sign out everywhere" or admin revoke, and removing an account at the issuer ends its BigLaw sessions only when they expire: delete its `sessions` rows to end them now).
+- Without sign-in Manage has no per-person admin: the local user is an admin on loopback, read-only under `--allow-no-auth`, and anyone who can reach the server under `--admin-without-auth`; the change log's author is "Local user" (§ Manage, Who). Sign-in has two roles only (admin, member); every signed-in user sees every matter (per-matter access, an approve rule's role, API tokens for scripts and the clients roster are not built), and the issuer is not asked again during a session (removing an account there ends its BigLaw sessions at their idle or absolute end; an admin ends them now with `POST /manage/sessions/revoke`, which has no screen yet). There is no member allowlist on BigLaw's side: who may sign in is the issuer's decision (§ Sign-in).
 - The engine's tests write their own skills: an export that deletes a starter skill only makes `ui/src/recorded/manage.json` stale (re-record it).
 - Manage creates skills, subagents, MCP and HTTP tools and MCP servers, not packs; the compatibility check's limits are in § Manage. A remote call in flight when a process dies is made again on resume (its step had not committed): remote tools should be safe to repeat. MCP tools: text content only (other parts are noted, not shown), one session per call, no server-initiated requests; the HTTP and MCP answers are one page (truncated, never paged by a second call).
 - The UI's Playbooks, Time & Billing and profile views have no live routes until PRs 6/8/9 (404);
