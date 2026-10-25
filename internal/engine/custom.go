@@ -13,7 +13,6 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
-	"path"
 	"reflect"
 	"regexp"
 	"slices"
@@ -298,11 +297,7 @@ type SecretView struct {
 
 // Secrets lists the secrets (names, who set them, when, and the items naming them).
 func (e *Engine) Secrets(ctx context.Context) ([]SecretView, error) {
-	snap, _, err := e.current(ctx, e.db)
-	if err != nil {
-		return nil, err
-	}
-	sp, err := newSpecs(snap)
+	sp, _, _, err := e.currentSpecs(ctx, e.db)
 	if err != nil {
 		return nil, err
 	}
@@ -447,11 +442,7 @@ func (e *Engine) Discover(ctx context.Context, id string) (Discovery, error) {
 }
 
 func (e *Engine) serverOf(ctx context.Context, id string) (Server, *Specs, error) {
-	snap, _, err := e.current(ctx, e.db)
-	if err != nil {
-		return Server{}, nil, err
-	}
-	sp, err := newSpecs(snap)
+	sp, _, _, err := e.currentSpecs(ctx, e.db)
 	if err != nil {
 		return Server{}, nil, err
 	}
@@ -655,11 +646,7 @@ func (e *Engine) TestCall(ctx context.Context, id string, in TestIn, author stri
 			return TestResult{}, invalid("", "document %s does not exist", d)
 		}
 	}
-	snap, _, err := e.current(ctx, e.db)
-	if err != nil {
-		return TestResult{}, err
-	}
-	sp, err := newSpecs(snap)
+	sp, _, _, err := e.currentSpecs(ctx, e.db)
 	if err != nil {
 		return TestResult{}, err
 	}
@@ -758,15 +745,13 @@ func (j testJournal) Record(ctx context.Context, s agent.Step) error {
 
 func (e *Engine) validateCustomTool(f, text string, bad func(string, string, ...any)) {
 	var t CustomTool
-	d := json.NewDecoder(strings.NewReader(text))
-	d.DisallowUnknownFields()
-	if err := d.Decode(&t); err != nil || d.More() {
-		bad(f, "not one well-formed custom tool (fields: name, kind, enabled, offerToLead, class, description, in, mcp or http, imported): %v", cmpErr(err, errors.New("more after the object")))
+	if err := strictDecode(text, &t); err != nil {
+		bad(f, "not one well-formed custom tool (fields: name, kind, enabled, offerToLead, class, description, in, mcp or http, imported): %v", err)
 		return
 	}
 	switch {
-	case t.Name != strings.TrimSuffix(path.Base(f), ".json"):
-		bad(f, "name: must be %q (the file's)", strings.TrimSuffix(path.Base(f), ".json"))
+	case t.Name != fileStem(f):
+		bad(f, "name: must be %q (the file's)", fileStem(f))
 	case t.Kind == "mcp" && (t.MCP == nil || t.HTTP != nil || t.MCP.Server == "" || t.MCP.Tool == ""):
 		bad(f, "an mcp tool names its server and the server's tool (mcp.server, mcp.tool) and has no http")
 	case t.Kind == "http" && (t.HTTP == nil || t.MCP != nil):
@@ -804,14 +789,12 @@ func (e *Engine) validateCustomTool(f, text string, bad func(string, string, ...
 
 func (e *Engine) validateServer(f, text string, bad func(string, string, ...any)) {
 	var v Server
-	d := json.NewDecoder(strings.NewReader(text))
-	d.DisallowUnknownFields()
-	if err := d.Decode(&v); err != nil || d.More() {
-		bad(f, "not one well-formed MCP server (fields: name, url, enabled, secret, header, prefix): %v", cmpErr(err, errors.New("more after the object")))
+	if err := strictDecode(text, &v); err != nil {
+		bad(f, "not one well-formed MCP server (fields: name, url, enabled, secret, header, prefix): %v", err)
 		return
 	}
-	if v.Name != strings.TrimSuffix(path.Base(f), ".json") {
-		bad(f, "name: must be %q (the file's)", strings.TrimSuffix(path.Base(f), ".json"))
+	if v.Name != fileStem(f) {
+		bad(f, "name: must be %q (the file's)", fileStem(f))
 	}
 	if err := e.remote.checkURL(v.URL); err != nil {
 		bad(f, "url: %s", strings.TrimPrefix(err.Error(), "remote: "))

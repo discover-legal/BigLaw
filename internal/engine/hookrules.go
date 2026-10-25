@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
-	"path"
 	"regexp"
 	"slices"
 	"strconv"
@@ -634,13 +633,11 @@ func (h hookRunner) finishHooks(ctx context.Context, taskID string, b *agent.Bud
 // validateHookRefs once the set loads).
 func (e *Engine) validateHookRule(f, text string, bad func(string, string, ...any)) {
 	var r HookRule
-	d := json.NewDecoder(strings.NewReader(text))
-	d.DisallowUnknownFields()
-	if err := d.Decode(&r); err != nil || d.More() {
-		bad(f, "not one well-formed hook (fields: name, enabled, order, event, match, when, action, failure): %v", cmpErr(err, errors.New("more after the object")))
+	if err := strictDecode(text, &r); err != nil {
+		bad(f, "not one well-formed hook (fields: name, enabled, order, event, match, when, action, failure): %v", err)
 		return
 	}
-	name := strings.TrimSuffix(path.Base(f), ".json")
+	name := fileStem(f)
 	switch {
 	case r.Name != name:
 		bad(f, "name: must be %q (the file's)", name)

@@ -334,13 +334,13 @@ func (s *Specs) skillIndex() string {
 func itemOf(f string) string {
 	switch rest, _ := strings.CutPrefix(f, engineDir); {
 	case strings.HasPrefix(f, toolsDir) && strings.HasSuffix(f, ".json"):
-		return "tool." + strings.TrimSuffix(path.Base(f), ".json")
+		return "tool." + fileStem(f)
 	case strings.HasPrefix(f, serversDir) && strings.HasSuffix(f, ".json"):
-		return "server." + strings.TrimSuffix(path.Base(f), ".json")
+		return "server." + fileStem(f)
 	case strings.HasPrefix(f, hooksDir) && strings.HasSuffix(f, ".json"):
-		return "rule." + strings.TrimSuffix(path.Base(f), ".json")
+		return "rule." + fileStem(f)
 	case strings.HasPrefix(f, agentsDir):
-		return "agent." + strings.TrimSuffix(strings.TrimSuffix(path.Base(f), ".json"), ".md")
+		return "agent." + strings.TrimSuffix(fileStem(f), ".md")
 	case strings.HasPrefix(f, skillsDir):
 		return "skill." + strings.SplitN(strings.TrimPrefix(f, skillsDir), "/", 2)[0]
 	case strings.HasPrefix(rest, "packs/") && strings.HasSuffix(f, ".md"):
@@ -348,7 +348,7 @@ func itemOf(f string) string {
 	case strings.HasPrefix(rest, "specs/") && strings.HasSuffix(f, ".md"):
 		return "prompt." + strings.TrimSuffix(path.Base(f), ".md")
 	case strings.HasSuffix(f, ".json") && strings.Contains(f, "/specs/"):
-		name := strings.TrimSuffix(path.Base(f), ".json")
+		name := fileStem(f)
 		if slices.Contains(passes, name) {
 			return "pass." + name
 		}

@@ -161,21 +161,32 @@ func (e *Engine) current(ctx context.Context, db querier) (Snapshot, map[string]
 	return snap, rows, err
 }
 
-// Items is the catalogue: every built-in item, every item an admin created, and deleted skills.
-func (e *Engine) Items(ctx context.Context) ([]Item, error) {
-	snap, rows, err := e.current(ctx, e.db)
+// currentSpecs is current's snapshot parsed as the set a task submitted now would run on.
+func (e *Engine) currentSpecs(ctx context.Context, db querier) (*Specs, Snapshot, map[string]Override, error) {
+	snap, rows, err := e.current(ctx, db)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 	sp, err := newSpecs(snap)
+	return sp, snap, rows, err
+}
+
+// Items is the catalogue: every built-in item, every item an admin created, and deleted skills.
+func (e *Engine) Items(ctx context.Context) ([]Item, error) {
+	items, _, err := e.items(ctx)
+	return items, err
+}
+
+func (e *Engine) items(ctx context.Context) ([]Item, *Specs, error) {
+	sp, _, rows, err := e.currentSpecs(ctx, e.db)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	use, err := e.usage(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return catalog(sp, rows, use), nil
+	return catalog(sp, rows, use), sp, nil
 }
 
 // catalog lists sp's items (rows: each item's latest version; use: recent usage by tool name).
@@ -250,23 +261,23 @@ func describeItem(sp *Specs, id string, row Override, use map[string]ItemUsage) 
 		s := sp.Spec(name)
 		it.Summary, it.Uses, it.UsedBy = firstSentence(s.Description), append(it.Uses, s.Allowed...), callers(name)
 		if t, ok := sp.tools[name]; ok {
-			it.Kind, it.Status = t.Kind+" tool", map[bool]string{true: "enabled", false: "disabled"}[t.Enabled]
+			it.Kind, it.Status = t.Kind+" tool", onOff(t.Enabled)
 			if t.MCP != nil {
 				it.Uses = append(it.Uses, "server."+t.MCP.Server)
 			}
 		} else if s.Name == "" && row.Version > 0 {
-			it.Deleted, it.Summary = true, "Deleted (revert to restore it)."
+			it.Deleted, it.Summary = true, deletedSummary
 		}
 	case "server":
 		if v, ok := sp.servers[name]; ok {
-			it.Kind, it.Status, it.Summary = "MCP server", map[bool]string{true: "enabled", false: "disabled"}[v.Enabled], "MCP server at "+hostOf(v.URL)+"."
+			it.Kind, it.Status, it.Summary = "MCP server", onOff(v.Enabled), "MCP server at "+hostOf(v.URL)+"."
 			for _, n := range slices.Sorted(maps.Keys(sp.tools)) {
 				if m := sp.tools[n].MCP; m != nil && m.Server == name {
 					it.UsedBy = append(it.UsedBy, n)
 				}
 			}
 		} else {
-			it.Kind, it.Deleted, it.Summary = "MCP server", true, "Deleted (revert to restore it)."
+			it.Kind, it.Deleted, it.Summary = "MCP server", true, deletedSummary
 		}
 	case "pack":
 		dir, code, _ := strings.Cut(name, ".")
@@ -280,7 +291,7 @@ func describeItem(sp *Specs, id string, row Override, use map[string]ItemUsage) 
 		if k, ok := sp.skill(name); ok {
 			it.Summary, it.Status, it.Uses = k.Description, k.Status, append(it.Uses, k.Tools...)
 		} else {
-			it.Deleted, it.Summary = true, "Deleted (revert to restore it)."
+			it.Deleted, it.Summary = true, deletedSummary
 		}
 		it.UsedBy = callers("use_skill")
 	case "hook":
@@ -289,7 +300,7 @@ func describeItem(sp *Specs, id string, row Override, use map[string]ItemUsage) 
 	case "rule":
 		it.Kind = "configurable hook"
 		if r, ok := sp.hookRules[name]; ok {
-			it.Status, it.Summary = map[bool]string{true: "enabled", false: "disabled"}[r.Enabled], strings.Join(append([]string{r.summary()}, approveCallers(sp, name)...), " Note: ")
+			it.Status, it.Summary = onOff(r.Enabled), strings.Join(append([]string{r.summary()}, approveCallers(sp, name)...), " Note: ")
 			if r.Match != "" && r.Match != "*" && !strings.HasSuffix(r.Match, "*") && r.Event != "task_finish" {
 				it.Uses = append(it.Uses, r.Match)
 			}
@@ -299,11 +310,15 @@ func describeItem(sp *Specs, id string, row Override, use map[string]ItemUsage) 
 			it.UsedBy = append(it.UsedBy, map[string]string{"before_call": "every call (Runtime.Invoke)", "after_call": "every call (Runtime.Invoke)",
 				"finding_admitted": "admit (each new finding)", "task_finish": "finish (before the deliverable)"}[r.Event])
 		} else {
-			it.Deleted, it.Summary = true, "Deleted (revert to restore it)."
+			it.Deleted, it.Summary = true, deletedSummary
 		}
 	}
 	return it
 }
+
+const deletedSummary = "Deleted (revert to restore it)."
+
+func onOff(on bool) string { return map[bool]string{true: "enabled", false: "disabled"}[on] }
 
 func hostOf(raw string) string {
 	if u, err := url.Parse(raw); err == nil {
@@ -344,7 +359,7 @@ func (e *Engine) usage(ctx context.Context) (map[string]ItemUsage, error) {
 
 // ItemDetail is one item with its contents.
 func (e *Engine) ItemDetail(ctx context.Context, id string) (ItemDetail, error) {
-	items, err := e.Items(ctx)
+	items, sp, err := e.items(ctx)
 	if err != nil {
 		return ItemDetail{}, err
 	}
@@ -352,20 +367,17 @@ func (e *Engine) ItemDetail(ctx context.Context, id string) (ItemDetail, error) 
 	if i < 0 {
 		return ItemDetail{}, fmt.Errorf("%w: no item %s", ErrNotFound, id)
 	}
-	snap, _, err := e.current(ctx, e.db)
-	if err != nil {
-		return ItemDetail{}, err
-	}
-	sp, err := newSpecs(snap)
-	if err != nil {
-		return ItemDetail{}, err
-	}
-	d := ItemDetail{Item: items[i], Content: fileMap(sp.files, id), Original: fileMap(builtin, id), Callers: skillCallable(sp)}
-	if d.Kind == "hook" {
-		h := hookNamed(d.Name)
+	return detail(sp, items[i]), nil
+}
+
+// detail is it with its contents in sp.
+func detail(sp *Specs, it Item) ItemDetail {
+	d := ItemDetail{Item: it, Content: fileMap(sp.files, it.ID), Original: fileMap(builtin, it.ID), Callers: skillCallable(sp)}
+	if it.Kind == "hook" {
+		h := hookNamed(it.Name)
 		d.Hook = &h
 	}
-	return d, nil
+	return d
 }
 
 func fileMap(files map[string][]byte, id string) map[string]string {
@@ -465,18 +477,30 @@ func (e *Engine) filesAt(ctx context.Context, id string, n int) (map[string]stri
 	if n == 0 {
 		return fileMap(builtin, id), nil
 	}
-	var raw []byte
-	err := e.db.QueryRowContext(ctx, `SELECT files FROM spec_versions WHERE item = $1 AND version = $2`, id, n).Scan(&raw)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("%w: %s has no version %d", ErrNotFound, id, n)
-	} else if err != nil {
-		return nil, err
-	}
-	if raw == nil {
+	files, err := versionFiles(ctx, e.db, id, n)
+	if err == nil && files == nil {
 		return fileMap(builtin, id), nil
 	}
-	out := map[string]string{}
-	return out, json.Unmarshal(raw, &out)
+	return files, err
+}
+
+// versionFiles is version n's files (nil: the built-in's, its files column NULL).
+func versionFiles(ctx context.Context, q querier, id string, n int) (map[string]string, error) {
+	files, err := rowFiles(q.QueryRowContext(ctx, `SELECT files FROM spec_versions WHERE item = $1 AND version = $2`, id, n))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("%w: %s has no version %d", ErrNotFound, id, n)
+	}
+	return files, err
+}
+
+// rowFiles is a spec_versions row's files (nil: NULL, the built-in's).
+func rowFiles(row *sql.Row) (map[string]string, error) {
+	var raw []byte
+	if err := row.Scan(&raw); err != nil || raw == nil {
+		return nil, err
+	}
+	files := map[string]string{}
+	return files, json.Unmarshal(raw, &files)
 }
 
 // FileDiff is one file's unified diff between two versions of an item.
@@ -571,23 +595,16 @@ func (e *Engine) locked(ctx context.Context, fn func(tx *sql.Tx) error) error {
 // Save stores an admin's new version of an item after validate accepts it. A skill that does not
 // exist is created (base 0). notes say what Go changed (a pack's or skill's status reset to candidate).
 func (e *Engine) Save(ctx context.Context, id string, in SaveIn, author string) (v Version, notes []string, err error) {
-	err = e.locked(ctx, func(tx *sql.Tx) error {
-		v, notes, err = e.save(ctx, tx, id, in, author)
-		return err
-	})
+	err = e.locked(ctx, func(tx *sql.Tx) error { v, notes, err = e.save(ctx, tx, id, in, author); return err })
 	return v, notes, err
 }
 
 func (e *Engine) save(ctx context.Context, tx *sql.Tx, id string, in SaveIn, author string) (Version, []string, error) {
-	snap, rows, err := e.current(ctx, tx)
+	before, snap, rows, err := e.currentSpecs(ctx, tx)
 	if err != nil {
 		return Version{}, nil, err
 	}
 	kind, name, _ := strings.Cut(id, ".")
-	before, err := newSpecs(snap)
-	if err != nil {
-		return Version{}, nil, err
-	}
 	exists := len(itemFiles(before.files, id)) > 0
 	action := "save"
 	switch {
@@ -649,18 +666,11 @@ func (e *Engine) save(ctx context.Context, tx *sql.Tx, id string, in SaveIn, aut
 // that version restored it, none when it never had any): what a re-created skill is reviewed
 // against, so a deletion and a re-creation never carry a reviewer over to changed content.
 func lastContent(ctx context.Context, tx *sql.Tx, id string) (map[string]string, error) {
-	var raw []byte
-	err := tx.QueryRowContext(ctx, `SELECT files FROM spec_versions WHERE item = $1 AND (files IS NULL OR files <> '{}'::jsonb) ORDER BY version DESC LIMIT 1`, id).Scan(&raw)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return fileMap(builtin, id), nil
-	case err != nil:
-		return nil, err
-	case raw == nil:
+	files, err := rowFiles(tx.QueryRowContext(ctx, `SELECT files FROM spec_versions WHERE item = $1 AND (files IS NULL OR files <> '{}'::jsonb) ORDER BY version DESC LIMIT 1`, id))
+	if errors.Is(err, sql.ErrNoRows) || err == nil && files == nil {
 		return fileMap(builtin, id), nil
 	}
-	files := map[string]string{}
-	return files, json.Unmarshal(raw, &files)
+	return files, err
 }
 
 // acceptRule: an imported tool's third-party text is accepted by the admin whose save names an
@@ -706,27 +716,7 @@ func cmpOr[T any](p *T, def *T) *T {
 // again (value and all) for the new one. A secret not set yet is the Secrets panel's to set.
 func secretOrigins(ctx context.Context, tx *sql.Tx, files map[string]string) error {
 	for _, f := range slices.Sorted(maps.Keys(files)) {
-		var a Auth
-		var u string
-		if strings.HasPrefix(f, toolsDir) {
-			var t CustomTool
-			if json.Unmarshal([]byte(files[f]), &t) != nil || t.HTTP == nil {
-				continue
-			}
-			a, u = t.HTTP.Auth, t.HTTP.URL
-		} else if strings.HasPrefix(f, serversDir) {
-			var v Server
-			if json.Unmarshal([]byte(files[f]), &v) != nil {
-				continue
-			}
-			a, u = v.Auth, v.URL
-		} else if strings.HasPrefix(f, hooksDir) {
-			var r HookRule
-			if json.Unmarshal([]byte(files[f]), &r) != nil || r.Action.Webhook == nil {
-				continue
-			}
-			a, u = r.Action.Webhook.Auth, r.Action.Webhook.URL
-		}
+		a, u := remoteOf(f, files[f])
 		if a.Secret == "" {
 			continue
 		}
@@ -745,13 +735,27 @@ func secretOrigins(ctx context.Context, tx *sql.Tx, files map[string]string) err
 	return nil
 }
 
+// remoteOf is the secret and URL an HTTP tool's, a server's or a webhook rule's file names (none for
+// any other file, or one that does not decode).
+func remoteOf(f, text string) (Auth, string) {
+	var t CustomTool
+	var v Server
+	var r HookRule
+	switch {
+	case strings.HasPrefix(f, toolsDir) && json.Unmarshal([]byte(text), &t) == nil && t.HTTP != nil:
+		return t.HTTP.Auth, t.HTTP.URL
+	case strings.HasPrefix(f, serversDir) && json.Unmarshal([]byte(text), &v) == nil:
+		return v.Auth, v.URL
+	case strings.HasPrefix(f, hooksDir) && json.Unmarshal([]byte(text), &r) == nil && r.Action.Webhook != nil:
+		return r.Action.Webhook.Auth, r.Action.Webhook.URL
+	}
+	return Auth{}, ""
+}
+
 // Revert stores a version that restores version to (0: the built-in; for a skill an admin
 // created, its absence) after validate accepts the set it makes.
 func (e *Engine) Revert(ctx context.Context, id string, to, base int, note, author string) (v Version, err error) {
-	err = e.locked(ctx, func(tx *sql.Tx) error {
-		v, err = e.revert(ctx, tx, id, to, base, note, author)
-		return err
-	})
+	err = e.locked(ctx, func(tx *sql.Tx) error { v, err = e.revert(ctx, tx, id, to, base, note, author); return err })
 	return v, err
 }
 
@@ -771,18 +775,8 @@ func (e *Engine) revert(ctx context.Context, tx *sql.Tx, id string, to, base int
 	}
 	var files map[string]string // nil: the built-in again
 	if to > 0 {
-		var raw []byte
-		err := tx.QueryRowContext(ctx, `SELECT files FROM spec_versions WHERE item = $1 AND version = $2`, id, to).Scan(&raw)
-		if errors.Is(err, sql.ErrNoRows) {
-			return Version{}, fmt.Errorf("%w: %s has no version %d", ErrNotFound, id, to)
-		} else if err != nil {
+		if files, err = versionFiles(ctx, tx, id, to); err != nil {
 			return Version{}, err
-		}
-		if raw != nil {
-			files = map[string]string{}
-			if err := json.Unmarshal(raw, &files); err != nil {
-				return Version{}, err
-			}
 		}
 	}
 	if files == nil && len(itemFiles(builtin, id)) == 0 {
@@ -801,10 +795,7 @@ func (e *Engine) revert(ctx context.Context, tx *sql.Tx, id string, to, base int
 
 // Delete deletes a skill (a tombstone version: revertable, like any other).
 func (e *Engine) Delete(ctx context.Context, id string, base int, note, author string) (v Version, err error) {
-	err = e.locked(ctx, func(tx *sql.Tx) error {
-		v, err = e.delete(ctx, tx, id, base, note, author)
-		return err
-	})
+	err = e.locked(ctx, func(tx *sql.Tx) error { v, err = e.delete(ctx, tx, id, base, note, author); return err })
 	return v, err
 }
 
@@ -818,11 +809,7 @@ func (e *Engine) delete(ctx context.Context, tx *sql.Tx, id string, base int, no
 			return Version{}, invalid("", "%s cannot be deleted or disabled: %s. Edit or revert it instead", id, why)
 		}
 	}
-	snap, rows, err := e.current(ctx, tx)
-	if err != nil {
-		return Version{}, err
-	}
-	sp, err := newSpecs(snap)
+	sp, snap, rows, err := e.currentSpecs(ctx, tx)
 	if err != nil {
 		return Version{}, err
 	}
@@ -1070,10 +1057,8 @@ func (e *Engine) validate(snap Snapshot, id string) error {
 
 func validateSpec(f, text string, bad func(string, string, ...any)) {
 	var s agent.Spec
-	d := json.NewDecoder(strings.NewReader(text))
-	d.DisallowUnknownFields()
-	if err := d.Decode(&s); err != nil || d.More() {
-		bad(f, "not one well-formed spec object (fields: name, kind, class, maxTurns, role, allowed, description, in, out, solo, final): %v", cmpErr(err, errors.New("more after the object")))
+	if err := strictDecode(text, &s); err != nil {
+		bad(f, "not one well-formed spec object (fields: name, kind, class, maxTurns, role, allowed, description, in, out, solo, final): %v", err)
 		return
 	}
 	var was agent.Spec
@@ -1081,8 +1066,8 @@ func validateSpec(f, text string, bad func(string, string, ...any)) {
 		was = agent.Spec{Name: s.Name, Kind: "subagent"}
 	}
 	switch {
-	case s.Name != strings.TrimSuffix(path.Base(f), ".json"):
-		bad(f, "name: must stay %q (Go and the other specs call it by name)", strings.TrimSuffix(path.Base(f), ".json"))
+	case s.Name != fileStem(f):
+		bad(f, "name: must stay %q (Go and the other specs call it by name)", fileStem(f))
 	case s.Kind != was.Kind:
 		bad(f, "kind: must stay %q (Go implements it as one)", was.Kind)
 	case s.Final != was.Final:
@@ -1112,6 +1097,19 @@ func validateSpec(f, text string, bad func(string, string, ...any)) {
 	}
 }
 
+// strictDecode decodes text as exactly one JSON object holding only v's fields.
+func strictDecode(text string, v any) error {
+	d := json.NewDecoder(strings.NewReader(text))
+	d.DisallowUnknownFields()
+	if err := d.Decode(v); err != nil || d.More() {
+		return cmpErr(err, errors.New("more after the object"))
+	}
+	return nil
+}
+
+// fileStem is a .json file's name without its directory and extension.
+func fileStem(f string) string { return strings.TrimSuffix(path.Base(f), ".json") }
+
 // validateDescription bounds any spec's description (a model reads it in every prompt that offers
 // the tool): at most maxDescBytes, no control or format characters but line breaks.
 func validateDescription(f, d string, bad func(string, string, ...any)) {
@@ -1129,11 +1127,7 @@ func validatePack(f, text string, bad func(string, string, ...any)) {
 		bad(f, "%v", err)
 		return
 	}
-	for k := range fields {
-		if !slices.Contains([]string{"code", "status", "reviewedBy", "checklist"}, k) {
-			bad(f, "front matter: unknown key %q (code, status, reviewedBy, checklist)", k)
-		}
-	}
+	knownKeys(f, fields, bad, "code", "status", "reviewedBy", "checklist")
 	code := strings.TrimSuffix(path.Base(f), ".md")
 	switch {
 	case fields["code"] != code:
@@ -1146,6 +1140,15 @@ func validatePack(f, text string, bad func(string, string, ...any)) {
 		bad(f, "the body (after the front matter) is empty")
 	case len(text) > maxPromptBytes:
 		bad(f, "over %d KiB", maxPromptBytes>>10)
+	}
+}
+
+// knownKeys reports each front matter key that is not one of known.
+func knownKeys(f string, fields map[string]string, bad func(string, string, ...any), known ...string) {
+	for k := range fields {
+		if !slices.Contains(known, k) {
+			bad(f, "front matter: unknown key %q (%s)", k, strings.Join(known, ", "))
+		}
 	}
 }
 
@@ -1171,11 +1174,7 @@ func validateSkillFile(f, name, text string, bad func(string, string, ...any)) {
 		bad(f, "%v", err)
 		return
 	}
-	for k := range fields {
-		if !slices.Contains([]string{"name", "description", "status", "reviewedBy", "tools"}, k) {
-			bad(f, "front matter: unknown key %q (name, description, status, reviewedBy, tools)", k)
-		}
-	}
+	knownKeys(f, fields, bad, "name", "description", "status", "reviewedBy", "tools")
 	desc := fields["description"]
 	switch {
 	case fields["name"] != name:
@@ -1311,12 +1310,7 @@ func typeList(s *agent.Schema) string {
 func Builtins() []ItemDetail {
 	var out []ItemDetail
 	for _, it := range catalog(builtinSpecs, nil, nil) {
-		d := ItemDetail{Item: it, Content: fileMap(builtinSpecs.files, it.ID), Original: fileMap(builtin, it.ID), Callers: skillCallable(builtinSpecs)}
-		if it.Kind == "hook" {
-			h := hookNamed(it.Name)
-			d.Hook = &h
-		}
-		out = append(out, d)
+		out = append(out, detail(builtinSpecs, it))
 	}
 	return out
 }
