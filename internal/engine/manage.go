@@ -204,7 +204,7 @@ func catalog(sp *Specs, rows map[string]Override, use map[string]ItemUsage) []It
 }
 
 // sectionOf maps an item kind to its catalogue section.
-var sectionOf = map[string]string{"prompt": "agents", "agent": "agents", "pass": "agents", "tool": "tools", "server": "tools", "pack": "packs", "skill": "skills", "hook": "hooks"}
+var sectionOf = map[string]string{"prompt": "agents", "agent": "agents", "pass": "agents", "tool": "tools", "server": "tools", "pack": "packs", "skill": "skills", "hook": "hooks", "rule": "hooks"}
 
 // goCallers are the engine's own calls of a tool or subagent (rt.Invoke in Go, and the Go code a
 // prompt or pack feeds), shown as "where it is used" beside the agents whose allowed lists name it.
@@ -286,6 +286,21 @@ func describeItem(sp *Specs, id string, row Override, use map[string]ItemUsage) 
 	case "hook":
 		h := hookNamed(name)
 		it.Summary, it.Uses, it.UsedBy = h.What, []string{h.Wraps}, callers(h.Wraps)
+	case "rule":
+		it.Kind = "configurable hook"
+		if r, ok := sp.hookRules[name]; ok {
+			it.Status, it.Summary = map[bool]string{true: "enabled", false: "disabled"}[r.Enabled], strings.Join(append([]string{r.summary()}, approveCallers(sp, name)...), " Note: ")
+			if r.Match != "" && r.Match != "*" && !strings.HasSuffix(r.Match, "*") && r.Event != "task_finish" {
+				it.Uses = append(it.Uses, r.Match)
+			}
+			if r.Action.Agent != "" {
+				it.Uses = append(it.Uses, r.Action.Agent)
+			}
+			it.UsedBy = append(it.UsedBy, map[string]string{"before_call": "every call (Runtime.Invoke)", "after_call": "every call (Runtime.Invoke)",
+				"finding_admitted": "admit (each new finding)", "task_finish": "finish (before the deliverable)"}[r.Event])
+		} else {
+			it.Deleted, it.Summary = true, "Deleted (revert to restore it)."
+		}
 	}
 	return it
 }
@@ -578,7 +593,7 @@ func (e *Engine) save(ctx context.Context, tx *sql.Tx, id string, in SaveIn, aut
 	switch {
 	case kind == "hook":
 		return Version{}, nil, invalid("", "hooks are Go code: view only")
-	case !exists && !slices.Contains([]string{"skill", "agent", "tool", "server"}, kind):
+	case !exists && !slices.Contains([]string{"skill", "agent", "tool", "server", "rule"}, kind):
 		if _, ok := rows[id]; !ok && len(itemFiles(builtin, id)) == 0 {
 			return Version{}, nil, fmt.Errorf("%w: no item %s", ErrNotFound, id)
 		}
@@ -622,6 +637,9 @@ func (e *Engine) save(ctx context.Context, tx *sql.Tx, id string, in SaveIn, aut
 	}
 	if err := secretOrigins(ctx, tx, files); err != nil {
 		return Version{}, nil, err
+	}
+	if sp, err := newSpecs(next); err == nil && kind == "rule" {
+		notes = append(notes, approveCallers(sp, name)...)
 	}
 	v, err := e.insertVersion(ctx, tx, id, in.Base+1, action, files, rows[id].Version, nil, author, in.Note)
 	return v, notes, err
@@ -702,6 +720,12 @@ func secretOrigins(ctx context.Context, tx *sql.Tx, files map[string]string) err
 				continue
 			}
 			a, u = v.Auth, v.URL
+		} else if strings.HasPrefix(f, hooksDir) {
+			var r HookRule
+			if json.Unmarshal([]byte(files[f]), &r) != nil || r.Action.Webhook == nil {
+				continue
+			}
+			a, u = r.Action.Webhook.Auth, r.Action.Webhook.URL
 		}
 		if a.Secret == "" {
 			continue
@@ -939,7 +963,7 @@ func (e *Engine) validate(snap Snapshot, id string) error {
 		bad("", "the files must be exactly the item's own: %s", strings.Join(want, ", "))
 	}
 	if len(want) == 0 && len(files) > 0 { // an item an admin creates: its files where the engine loads them
-		need := map[string][]string{"agent": {agentsDir + name + ".json", agentsDir + name + ".md"}, "tool": {toolsDir + name + ".json"}, "server": {serversDir + name + ".json"}}[kind]
+		need := map[string][]string{"agent": {agentsDir + name + ".json", agentsDir + name + ".md"}, "tool": {toolsDir + name + ".json"}, "server": {serversDir + name + ".json"}, "rule": {hooksDir + name + ".json"}}[kind]
 		if need != nil && !slices.Equal(slices.Sorted(maps.Keys(files)), need) {
 			bad("", "a new %s is exactly these files: %s", kind, strings.Join(need, ", "))
 		}
@@ -976,6 +1000,8 @@ func (e *Engine) validate(snap Snapshot, id string) error {
 			e.validateCustomTool(f, text, bad)
 		case strings.HasPrefix(f, serversDir):
 			e.validateServer(f, text, bad)
+		case strings.HasPrefix(f, hooksDir):
+			e.validateHookRule(f, text, bad)
 		case kind == "pack":
 			validatePack(f, text, bad)
 		case strings.HasSuffix(f, ".md"):
@@ -1021,6 +1047,7 @@ func (e *Engine) validate(snap Snapshot, id string) error {
 			}
 		}
 	}
+	validateHookRefs(sp, bad)
 	callable := skillCallable(sp)
 	for _, k := range sp.skills {
 		for _, t := range k.Tools {

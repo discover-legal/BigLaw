@@ -153,6 +153,27 @@ func (f finish) Call(ctx context.Context, c agent.Call) (res agent.Result, err e
 		}
 		return out(rep, spent, false)
 	}
+	if h, ok := f.rt.Hooks.(hookRunner); ok { // task_finish's rules, before the deliverable is rendered
+		hb := agent.NewBudget(c.Budget.Calls-spent.Calls, max(0, c.Budget.USD-spent.USD), 0)
+		v, err := h.finishHooks(ctx, c.TaskID, hb, cmpStr(f.r.forced != "", f.r.forced, "finish"))
+		spent.Add(hb.Spent())
+		if err != nil {
+			return agent.Result{Usage: spent}, err
+		}
+		for _, n := range v.notes {
+			if !slices.Contains(rep.limits, n) {
+				rep.limits = append(rep.limits, n)
+			}
+		}
+		switch {
+		case v.blocked != "" && f.r.forced == "":
+			rep.Errors = append(rep.Errors, finishErr{"hook_blocked", v.blocked})
+			rep.OpenPreconditions = append(rep.OpenPreconditions, v.blocked)
+			return out(rep, spent, false)
+		case v.blocked != "": // a forced finish delivers what there is: the refusal is disclosed instead
+			rep.limits = append(rep.limits, "A configurable hook would have refused this deliverable, which was forced ("+f.r.forced+"): "+v.blocked)
+		}
+	}
 	rep.Accepted = true
 	b := agent.NewBudget(c.Budget.Calls-spent.Calls, c.Budget.USD-spent.USD, 0)
 	meta, err := f.meta(ctx, b)
@@ -282,6 +303,16 @@ func (f finish) check(ctx context.Context, limits []limitation) (report, error) 
 		if json.Unmarshal(n.Data, &s) == nil && s != "" && n.Key != "deliverable" {
 			rep.limits = append(rep.limits, s)
 		}
+	}
+	if all, err := load[Finding](ctx, e, id, kFinding); err != nil {
+		return report{}, err
+	} else if l := hookQuarantined(all); l != "" {
+		rep.limits = append(rep.limits, l)
+	}
+	if os, err := load[HookOutcome](ctx, e, id, kHookRun); err != nil {
+		return report{}, err
+	} else if l := leadOnlyLine(os); l != "" {
+		rep.limits = append(rep.limits, l)
 	}
 	if l, err := e.staleLine(ctx, id, issues); err != nil {
 		return report{}, err
@@ -463,7 +494,7 @@ func (f finish) meta(ctx context.Context, b *agent.Budget) (string, error) {
 	}
 	ok, open := 0, 0
 	for _, x := range all {
-		ok += btoi(x.Verified)
+		ok += btoi(x.ok())
 	}
 	for _, x := range crit {
 		open += btoi(x.Status == "open")
@@ -505,6 +536,9 @@ func (f finish) gates(ctx context.Context, md string) error {
 		if err := e.write(ctx, id, kGate, g.GateID, g, false); err != nil {
 			return err
 		}
+	}
+	if slices.ContainsFunc(gs, func(g Gate) bool { return g.Kind == "hook" && g.Decision == "" }) { // a call a hook holds for a lawyer
+		pending = true
 	}
 	if pending || slices.ContainsFunc(gs, func(g Gate) bool { return g.Kind == "deliverable" && g.Decision == "" }) {
 		return nil

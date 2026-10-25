@@ -36,6 +36,7 @@ var (
 	errLease    = errors.New("engine: the run's lease was lost (cancelled, or another process took it)")
 	errMaxSteps = errors.New("engine: the run reached its maxSteps")
 	errCollapse = errors.New("engine: grounding collapse")
+	errHeld     = errors.New("engine: the run waits at a configurable hook's gate for a lawyer")
 )
 
 // run is one task's run held by this process: its step buffer and what stopped it.
@@ -51,6 +52,14 @@ type run struct {
 	collapse string       // the G4 alert that failed the run (strict)
 	step     atomic.Int64 // the lead step that is running (the logs' step of a call inside it)
 	specs    *Specs       // the spec set of its task's snapshot (nil: the built-ins)
+	held     string       // a hook gate this run opened: its next step pauses the run there (hookrules.go approve)
+}
+
+// hold pauses the run at gate id once the step that opened it commits (Record refuses the next).
+func (r *run) hold(id string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.held = cmpStr(r.held == "", id, r.held)
 }
 
 // stepOf is the lead step running in a task's run (0: none here), for a log line.
@@ -71,6 +80,12 @@ func (e *Engine) active(taskID string) *run {
 // the lease holds (a second started record settles the grant to what a stopped step spent); any
 // other status commits the step with the buffered writes in one transaction.
 func (r *run) Record(ctx context.Context, s agent.Step) error {
+	r.mu.Lock()
+	held := r.held
+	r.mu.Unlock()
+	if s.Status == "started" && held != "" {
+		return errHeld
+	}
 	if s.Status == "started" && s.N > r.t.MaxSteps && r.forced == "" {
 		return errMaxSteps
 	}
@@ -148,13 +163,15 @@ func (r *run) checkCollapse(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	bad := 0
+	bad, total := 0, 0
 	for _, f := range fs {
-		if !f.Verified {
-			bad++
+		if f.HookBlocked != "" { // a policy quarantine, not a quote that failed verification
+			continue
 		}
+		total++
+		bad += btoi(!f.Verified)
 	}
-	alert, fail := Collapse(len(fs)-bad, len(fs), r.e.cfg.CollapseThreshold, r.e.cfg.CollapseAction)
+	alert, fail := Collapse(total-bad, total, r.e.cfg.CollapseThreshold, r.e.cfg.CollapseAction)
 	if alert == "" {
 		return nil
 	}

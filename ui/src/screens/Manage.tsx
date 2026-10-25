@@ -17,7 +17,7 @@ const SECTIONS: [ManageSection | 'changes', string, string][] = [
   ['tools', 'Tools', 'The typed tools agents call: built-in Go tools (their specs are editable), and an admin\'s MCP and HTTP tools, whose answers are untrusted data from outside the matter.'],
   ['packs', 'Packs', 'Packs: jurisdiction and practice guidance the lead, analyze_issue and the committee read. Candidate until a named lawyer reviews one.'],
   ['skills', 'Skills', 'Process guidance the lead reads with use_skill: the brief lists names and descriptions only. A skill points at tools; it never grants one.'],
-  ['hooks', 'Hooks', 'Go code around some tools and subagents (quote verification, the figure reader, the section check). Compiled code: view only.'],
+  ['hooks', 'Hooks', 'Configurable hooks an admin writes (before or after a call, on an admitted finding, at finish: block, a lawyer\'s approval, a checking subagent, a webhook or a Limitations line, in order, failing closed or open), and the Go code around some tools and subagents (quote verification, the figure reader, the section check: view only).'],
   ['changes', 'Change log', 'Every change, newest first: who, when, and from which version to which.'],
 ];
 const CLASSES = ['plan', 'evidence', 'draft', 'committee', 'cover', 'free'];
@@ -74,7 +74,8 @@ export function Manage(props: { section: string; item: string; tab: string }) {
   );
 }
 
-const NEW: Record<string, [string, string][]> = { agents: [['agent', 'New subagent']], tools: [['tool', 'New HTTP tool'], ['server', 'New MCP server']], skills: [['skill', 'New skill']] };
+const NEW: Record<string, [string, string][]> = { agents: [['agent', 'New subagent']], tools: [['tool', 'New HTTP tool'], ['server', 'New MCP server']], skills: [['skill', 'New skill']],
+  hooks: [['rule', 'New configurable hook']] };
 
 function ItemBadges(props: { item: ManageItem }) {
   const i = props.item;
@@ -177,6 +178,7 @@ function Editor(props: { item: ManageDetail; saved: () => void; create?: string 
           {at(path).map((p, k) => <p key={k} className="error small" role="alert">{p.message}</p>)}
           {raw ? <textarea rows={16} className="mono" value={files[path]} onChange={(e) => set(path, e.target.value)} aria-label={path} />
             : /\/specs\/(tools|servers)\//.test(path) ? <RemoteFields text={files[path]} set={(t) => set(path, t)} />
+            : /\/specs\/hooks\//.test(path) ? <RuleFields text={files[path]} set={(t) => set(path, t)} />
             : isSpec(path) ? <SpecFields text={files[path]} tools={tools.data ?? []} set={(t) => set(path, t)} />
               : parseFront(files[path]) && !(skillDir && !path.endsWith('/SKILL.md')) ? <FrontFields text={files[path]} skill={!!skillDir} callers={it.callers} set={(t) => set(path, t)} />
                 : <textarea rows={14} value={files[path]} onChange={(e) => set(path, e.target.value)} aria-label={path} />}
@@ -290,6 +292,8 @@ const TEMPLATES: Record<string, { section: ManageSection; label: string; files: 
     description: 'Say what it returns. It runs outside the matter: its answer is untrusted data. It is never a citation.\nDo not use it for facts the documents state: use retrieve.\nExample: {"query": "example"}',
     in: { type: 'object', additionalProperties: false, required: ['query'], properties: { query: { type: 'string', maxLength: 500 } } },
     http: { url: '', method: 'POST', secret: '', header: '', prefix: '' } }, null, 1)}\n` }) },
+  rule: { section: 'hooks', label: 'configurable hook', files: (n) => ({ [`internal/engine/specs/hooks/${n}.json`]: `${JSON.stringify({ name: n, enabled: false, order: 0,
+    event: 'before_call', match: 'retrieve', when: null, action: { type: 'limitation', message: 'Say what the Limitations line or the refusal says.' }, failure: 'closed' }, null, 1)}\n` }) },
   server: { section: 'tools', label: 'MCP server', files: (n) => ({ [`internal/engine/specs/servers/${n}.json`]: `${JSON.stringify({ name: n, url: '', enabled: true, secret: '', header: '', prefix: '' }, null, 1)}\n` }) },
 };
 
@@ -348,6 +352,70 @@ function RemoteFields(props: { text: string; set: (text: string) => void }) {
       {'description' in v && <label className="block">Description (the model reads it: 3+ sentences, a "Do not use" line, 1–3 Example lines)
         <textarea rows={6} value={v.description ?? ''} onChange={(e) => put({ description: e.target.value })} /></label>}
       {'in' in v && <SchemaField label="Input schema" value={v.in} set={(x) => put({ in: x })} />}
+    </div>
+  );
+}
+
+interface Rule {
+  enabled?: boolean; order?: number; event?: string; match?: string; failure?: string;
+  when?: { field: string; op: string; value: unknown } | null;
+  action?: { type: string; message: string; agent?: string; webhook?: { url: string; wait: boolean; sendContent?: boolean; secret?: string; header?: string; prefix?: string } };
+}
+
+const HOOK_ACTIONS: Record<string, string[]> = { before_call: ['block', 'approve', 'check', 'webhook', 'limitation'], after_call: ['block', 'check', 'webhook', 'limitation'],
+  finding_admitted: ['block', 'approve', 'check', 'webhook', 'limitation'], task_finish: ['block', 'check', 'webhook', 'limitation'] };
+
+/** RuleFields edits a configurable hook: when it runs, on what, under which condition, and what it does. */
+function RuleFields(props: { text: string; set: (text: string) => void }) {
+  let v: Rule;
+  try { v = JSON.parse(props.text) as Rule; } catch { return <p className="error small">Not well-formed JSON: edit the raw file.</p>; }
+  const put = (patch: Partial<Rule>) => props.set(writeJSON(props.text, { ...v, ...patch }));
+  const act = v.action ?? { type: 'block', message: '' };
+  const putAct = (patch: Partial<NonNullable<Rule['action']>>) => {
+    const a = { ...act, ...patch };
+    if (a.type !== 'check') delete a.agent;
+    if (a.type !== 'webhook') delete a.webhook; else a.webhook = a.webhook ?? { url: '', wait: false, secret: '', header: '', prefix: '' };
+    put({ action: a });
+  };
+  const ev = v.event ?? 'before_call';
+  const calls = ev === 'before_call' || ev === 'after_call';
+  return (
+    <div className="fields">
+      <div className="row">
+        <label><input type="checkbox" checked={v.enabled ?? false} onChange={(e) => put({ enabled: e.target.checked })} /> Enabled</label>
+        <label>Order <input type="number" min={-1000} max={1000} value={v.order ?? 0} onChange={(e) => put({ order: Number(e.target.value) })} /></label>
+        <label>Event <select value={ev} onChange={(e) => put({ event: e.target.value, match: e.target.value === 'task_finish' ? '*' : v.match })}>
+          {Object.keys(HOOK_ACTIONS).map((x) => <option key={x}>{x}</option>)}</select></label>
+        {calls && <label>Match <input value={v.match ?? ''} onChange={(e) => put({ match: e.target.value })} placeholder="retrieve, web_*, or *" /></label>}
+        <label>If it fails <select value={v.failure ?? 'closed'} onChange={(e) => put({ failure: e.target.value })}><option value="closed">closed (block)</option><option value="open">open (let it through)</option></select></label>
+      </div>
+      <div className="row">
+        <label><input type="checkbox" checked={!!v.when} onChange={(e) => put({ when: e.target.checked ? { field: '', op: 'eq', value: '' } : null })} /> Only when</label>
+        {v.when && <>
+          <input aria-label="field" value={v.when.field} onChange={(e) => put({ when: { ...v.when!, field: e.target.value } })} placeholder={calls ? 'op, or output.text' : ev === 'task_finish' ? 'stop' : 'claim'} />
+          <select aria-label="op" value={v.when.op} onChange={(e) => put({ when: { ...v.when!, op: e.target.value } })}>{['eq', 'ne', 'contains', 'exists', 'absent', 'gt', 'lt'].map((o) => <option key={o}>{o}</option>)}</select>
+          <input aria-label="value" value={String(v.when.value ?? '')} onChange={(e) => put({ when: { ...v.when!, value: e.target.value } })} />
+        </>}
+      </div>
+      <div className="row">
+        <label>Action <select value={act.type} onChange={(e) => putAct({ type: e.target.value })}>{HOOK_ACTIONS[ev].map((x) => <option key={x}>{x}</option>)}</select></label>
+        {act.type === 'check' && <label>Checking subagent <input value={act.agent ?? ''} onChange={(e) => putAct({ agent: e.target.value })} placeholder="its name" /></label>}
+      </div>
+      {act.webhook && (
+        <div className="row">
+          <label>Webhook URL (https, public) <input size={40} value={act.webhook.url} onChange={(e) => putAct({ webhook: { ...act.webhook!, url: e.target.value } })} /></label>
+          <label><input type="checkbox" checked={act.webhook.wait} onChange={(e) => putAct({ webhook: { ...act.webhook!, wait: e.target.checked } })} /> Wait for a 2xx</label>
+          <label><input type="checkbox" checked={act.webhook.sendContent ?? false} onChange={(e) => putAct({ webhook: { ...act.webhook!, sendContent: e.target.checked } })} /> Send matter content</label>
+          <label>Secret <input value={act.webhook.secret ?? ''} onChange={(e) => putAct({ webhook: { ...act.webhook!, secret: e.target.value } })} /></label>
+          <label>Header <input value={act.webhook.header ?? ''} onChange={(e) => putAct({ webhook: { ...act.webhook!, header: e.target.value } })} /></label>
+        </div>
+      )}
+      {act.webhook && <p className={`small ${act.webhook.sendContent ? 'error' : 'muted'}`}>{act.webhook.sendContent
+        ? 'Matter content leaves BigLaw: every matching event sends this host the call\'s input or answer, the finding\'s claim and quotes, or the draft\'s text (up to 8,000 characters), for every client and matter.'
+        : 'The body is metadata only: the rule, event, task, tool or finding and sizes. Tick "Send matter content" only for a host the firm trusts with privileged text.'}</p>}
+      {act.type === 'approve' && <p className="small muted">Approve holds one tool the lead calls: the run pauses until a lawyer decides, and an approval covers exactly that input, once.
+        Calls of the same tool that Go or a subagent makes (a sweep's visits, the coverage pass's drafts) cannot be approved, so they are blocked: saving lists which.</p>}
+      <label className="block">Message (the refusal, gate or Limitations line)<textarea rows={3} value={act.message} onChange={(e) => putAct({ message: e.target.value })} /></label>
     </div>
   );
 }
@@ -521,7 +589,7 @@ function Changes() {
         <tr key={i}>
           <td className="nowrap">{new Date(v.createdAt).toLocaleString()}</td>
           <td>{v.item.startsWith('secret.') ? <code>{v.item}</code> : <a href={`#/manage?section=${sectionOf(v.item)}&item=${encodeURIComponent(v.item)}&tab=history`}>{v.item}</a>}</td>
-          <td data-label="Change">{v.event ? v.action : <>{v.action}: {v.from ? `v${v.from}` : 'built-in'} → {v.builtin ? 'built-in' : `v${v.version}`}{v.deleted ? ' (deleted)' : ''}</>}</td>
+          <td data-label="Change">{v.event ? v.action : <>{v.action}: {v.from ? `v${v.from}` : v.action === 'create' ? 'new' : 'built-in'} → {v.builtin ? 'built-in' : `v${v.version}`}{v.deleted ? ' (deleted)' : ''}</>}</td>
           <td data-label="Who">{v.author}</td><td className="wide">{v.note}</td>
         </tr>
       ))}</tbody>
@@ -534,7 +602,7 @@ const canon = (v: unknown): unknown => (Array.isArray(v) ? v.map(canon)
   : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v as object).sort().map((k) => [k, canon((v as Record<string, unknown>)[k])])) : v);
 const pretty = (v: unknown) => (v === undefined || v === null ? '' : JSON.stringify(canon(v), null, 1));
 
-const sectionOf = (id: string) => ({ prompt: 'agents', agent: 'agents', pass: 'agents', tool: 'tools', server: 'tools', pack: 'packs', skill: 'skills' } as Record<string, string>)[id.split('.')[0]] ?? 'agents';
+const sectionOf = (id: string) => ({ prompt: 'agents', agent: 'agents', pass: 'agents', tool: 'tools', server: 'tools', pack: 'packs', skill: 'skills', rule: 'hooks' } as Record<string, string>)[id.split('.')[0]] ?? 'agents';
 
 /** Accept shows an imported tool's third-party text and lets an admin accept it (the save records who). */
 function Accept(props: { imported: { text: string; acceptedBy: string }; accept: (by: string) => void }) {

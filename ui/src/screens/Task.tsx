@@ -47,6 +47,7 @@ export function TaskScreen(props: { id: string; tab: string }) {
   const tab = (id: string) => go(`task/${encodeURIComponent(task.id)}`, { tab: id });
   const act = (p: Promise<Task>) => p.then((t) => { setError(null); setTask(t); }, (e: Error) => setError(e.message));
   const gate = task.pendingGates.find((g) => g.kind === 'deliverable');
+  const held = task.pendingGates.filter((g) => g.kind !== 'deliverable');
   const quarantined = task.findings.filter((f) => f.status !== 'verified').length;
 
   return (
@@ -75,7 +76,11 @@ export function TaskScreen(props: { id: string; tab: string }) {
         )}
       </div>
       {gate && <GatePanel gate={gate} read={() => tab('memo')} decide={(approve, reason) => act(api.decideGate(task.id, gate.gateId, approve, reason))} />}
-      {task.decidedGates.map((d) => (
+      {held.length > 0 && <HeldGates gates={held} open={task.status === 'awaiting_gate'} decide={(id, approve, reason) => act(api.decideGate(task.id, id, approve, reason))} />}
+      {task.decidedGates.filter((d) => d.kind !== 'deliverable').map((d) => (
+        <p key={d.gateId} className="small muted">{d.kind === 'hook' ? `The call of ${d.subject} held by hook ${d.hook}` : `Finding ${d.findingId}`}: {d.decision}{d.reason ? ` (“${d.reason}”)` : ''}.</p>
+      ))}
+      {task.decidedGates.filter((d) => d.kind === 'deliverable').map((d) => (
         <div key={d.gateId} className={`gate decided ${d.decision}`} role="status">
           <span className="gate-icon"><Icon name={d.decision === 'approved' ? 'check' : 'x'} size={18} /></span>
           {d.decision === 'approved'
@@ -104,6 +109,32 @@ export function TaskScreen(props: { id: string; tab: string }) {
         : <Empty icon="draft_section" title="No deliverable yet">The memo appears here when the run finishes; every factual sentence in it cites a verified finding.</Empty>)}
       {props.tab === 'cost' && <Cost id={task.id} />}
     </section>
+  );
+}
+
+/** HeldGates are the finding and hook gates a lawyer decides before the deliverable's own gate opens. */
+function HeldGates(props: { gates: Gate[]; open: boolean; decide: (id: string, approve: boolean, reason?: string) => Promise<unknown> }) {
+  const [reasons, setReasons] = useState<Record<string, string>>({});
+  return (
+    <div className="gate open">
+      <span className="gate-icon"><Icon name="gate" size={18} /></span>
+      <div>
+        <p><strong>{plural(props.gates.length, 'decision')} needed.</strong> {props.open ? 'Decide each; the lead then goes on with your decisions.' : 'You can decide them when the run pauses at its gates.'}</p>
+        {props.gates.map((g) => (
+          <div key={g.gateId} className="held">
+            <p>{g.kind === 'hook' ? <>Hook <code>{g.hook}</code> holds a call of <code>{g.subject}</code> for a lawyer's approval.</> : <>Finding <code>{g.findingId}</code> is cited at low confidence or was marked unsupported.</>}</p>
+            {g.detail && <p className="small">{g.detail}</p>}
+            {g.input !== undefined && <details open={JSON.stringify(g.input).length < 1500}><summary className="small">The call's whole input ({JSON.stringify(g.input).length} characters): an approval covers exactly this, once</summary>
+              <pre className="small">{JSON.stringify(g.input, null, 1)}</pre></details>}
+            {props.open && <div className="row">
+              <button className="primary small" onClick={() => void props.decide(g.gateId, true)}>Approve</button>
+              <input aria-label={`reason for ${g.gateId}`} placeholder="Reason (needed to reject)" value={reasons[g.gateId] ?? ''} onChange={(e) => setReasons({ ...reasons, [g.gateId]: e.target.value })} />
+              <button className="small" disabled={!(reasons[g.gateId] ?? '').trim()} onClick={() => void props.decide(g.gateId, false, reasons[g.gateId])}>Reject</button>
+            </div>}
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 

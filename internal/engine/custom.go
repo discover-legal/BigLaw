@@ -109,8 +109,14 @@ func customSpec(t CustomTool) agent.Spec {
 // (an admin's), then the enabled custom tools offered to the lead.
 func leadVisible(sp *Specs) []string {
 	out := slices.Clone(MemoVisible)
+	checks := map[string]bool{} // a hook's check agent is the hook's, never offered to the lead
+	for _, r := range sp.hookRules {
+		if r.Action.Type == "check" {
+			checks[r.Action.Agent] = true
+		}
+	}
 	for _, n := range slices.Sorted(maps.Keys(sp.specs)) {
-		if s := sp.specs[n]; s.Kind == "subagent" && !slices.Contains(out, n) && goCallers[n] == nil {
+		if s := sp.specs[n]; s.Kind == "subagent" && !slices.Contains(out, n) && goCallers[n] == nil && !checks[n] {
 			out = append(out, n)
 		}
 	}
@@ -679,7 +685,7 @@ func (e *Engine) TestCall(ctx context.Context, id string, in TestIn, author stri
 	if err != nil {
 		return TestResult{}, invalid("", "%s", strings.TrimPrefix(err.Error(), "agent: "))
 	}
-	rt.Policy, rt.Journal = nil, testJournal{e, t.ID}
+	rt.Policy, rt.Journal, rt.Hooks = nil, testJournal{e, t.ID}, nil // a Test call is the item alone: no configurable hooks
 	ctx, cancel := context.WithTimeout(withSpecs(ctx, sp), 2*time.Minute)
 	defer cancel()
 	start := time.Now()

@@ -13,6 +13,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"sync/atomic"
 
 	"github.com/discover-legal/BigLaw/internal/agent"
 	"github.com/discover-legal/BigLaw/internal/analysis"
@@ -87,6 +88,9 @@ func (e *Engine) runtime(r *run) (*agent.Runtime, error) {
 		if err := rt.Reg.Register(t); err != nil {
 			return nil, err
 		}
+	}
+	if len(sp.hookRules) > 0 {
+		rt.Hooks = hookRunner{e: e, r: r, rt: rt, sp: sp, seq: &atomic.Int64{}}
 	}
 	return rt, nil
 }
@@ -201,6 +205,7 @@ func (h hooked) Spec() agent.Spec {
 
 func (h hooked) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 	name := h.Tool.Spec().Name
+	orig := c.Input // what the caller sent (after_call's rules read it)
 	var in map[string]any
 	_ = json.Unmarshal(c.Input, &in)
 	str := func(k string) string { s, _ := in[k].(string); return s }
@@ -287,6 +292,19 @@ func (h hooked) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 		return res, err
 	}
 	b := agent.NewBudget(c.Budget.Calls-res.Usage.Calls+preUse.Calls+held.Calls, c.Budget.USD-res.Usage.USD+preUse.USD+held.USD, 0) // c.Budget is already net of preUse and held
+	// after_call's rules on the subagent's own answer, before Go records anything from it (#58 r1 H1):
+	// blocked, nothing is admitted or saved and the answer is withheld; a sweep's visit is still done
+	if v, err := afterHooked(ctx, h.rt, c, name, orig, res.Output, b); err != nil {
+		res.Usage.Add(b.Spent())
+		return res, err
+	} else if v.blocked != "" {
+		res.Usage.Add(b.Spent())
+		if name == "draft_section" {
+			return agent.Result{Usage: res.Usage, Model: res.Model}, agent.Fail("draft_section's draft was withheld and not saved: " + v.blocked)
+		}
+		out, _ := json.Marshal(hookResult{Findings: []map[string]any{}, Notes: []string{"withheld, nothing admitted: " + v.blocked}})
+		return agent.Result{Output: out, Usage: res.Usage, Model: res.Model}, nil
+	}
 	var out any
 	var reward float64
 	switch name {
@@ -347,6 +365,27 @@ type hookResult struct {
 	Findings []map[string]any `json:"findings"`
 	Dropped  int              `json:"dropped"`
 	Notes    []string         `json:"notes"`
+}
+
+// recordFinding is the one way a new finding enters the ledger (admit's evidence findings,
+// check_deviation's deviations): finding_admitted's rules run on it first (quarantine, gate, check,
+// webhook, limitation), then it is written with the step. TestFindingWritesGoThroughRecord keeps every
+// other write of a finding an update of one already recorded.
+func (e *Engine) recordFinding(ctx context.Context, rt *agent.Runtime, c agent.Call, b *agent.Budget, f *Finding) error {
+	if h, ok := hooksOf(rt); ok {
+		if _, err := h.findingHooks(ctx, c, b, f); err != nil {
+			return err
+		}
+	}
+	return e.write(ctx, c.TaskID, kFinding, f.FID, *f, false)
+}
+
+func hooksOf(rt *agent.Runtime) (hookRunner, bool) {
+	if rt == nil {
+		return hookRunner{}, false
+	}
+	h, ok := rt.Hooks.(hookRunner)
+	return h, ok
 }
 
 // verify runs the ladder on one quote: exact and tolerant in Go, then (while the grant has calls)
@@ -488,7 +527,7 @@ func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 		}
 		f.Relations, _ = analysis.Relations(d.Entities, d.Relations)
 		if i := slices.IndexFunc(all, func(x Finding) bool {
-			return x.Verified && f.Verified && restated(x, f)
+			return x.ok() && f.ok() && restated(x, f)
 		}); i >= 0 {
 			for _, c := range f.Citations {
 				if !slices.ContainsFunc(all[i].Citations, func(x Citation) bool { return x.DocumentID == c.DocumentID && x.Quote == c.Quote }) {
@@ -511,12 +550,12 @@ func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 			continue
 		}
 		f.FID = nextID("F", len(all))
-		all = append(all, f)
-		if deferred && f.Unread && len(f.Values) > 0 {
-			queue.add(f.FID)
-		}
-		if err := e.write(ctx, c.TaskID, kFinding, f.FID, f, false); err != nil {
+		if err := e.recordFinding(ctx, rt, c, b, &f); err != nil { // finding_admitted's rules, then the ledger
 			return out, 0, err
+		}
+		all = append(all, f)
+		if deferred && f.Unread && len(f.Values) > 0 && f.HookBlocked == "" {
+			queue.add(f.FID)
 		}
 		out.Findings = append(out.Findings, admitted(f))
 		for _, n := range f.ValueNotes {

@@ -29,6 +29,16 @@ type Runtime struct {
 	Bandit  *Bandit
 	Journal Journal // the lead's steps (depth 0)
 	Log     *slog.Logger
+	Hooks   Hooks // configurable checks around every call (nil: none)
+}
+
+// Hooks are an admin's checks around every call Invoke makes (engine hookrules.go): Before may
+// refuse a call (after its input validates and the policy allows it), After may withhold its answer
+// by returning an error in its place. Each spends from the caller's budget (p.Budget) through its
+// own grants and returns what it spent, which the call's step records with the tool's own usage.
+type Hooks interface {
+	Before(ctx context.Context, p Pending) (*Refusal, Usage, error)
+	After(ctx context.Context, p Pending, res Result, err error) (Usage, error)
 }
 
 // subagentMaxTokens bounds a subagent's answer: a critic's verdicts on up to 80 claims do not fit
@@ -527,6 +537,19 @@ func (rt *Runtime) Invoke(ctx context.Context, a Agent, c Call, name string, inp
 			return res, r
 		}
 	}
+	var hooked Usage // what the hooks spent: the step records it beside the tool's own
+	if rt.Hooks != nil {
+		r, u, herr := rt.Hooks.Before(ctx, Pending{c.TaskID, a.Name, c.Depth, e.spec, input, b})
+		if hooked = u; herr != nil { // a hook that could not record or was stopped fails the call, never lets it through
+			res.Usage = hooked
+			return res, herr
+		}
+		if r != nil {
+			res.Usage = hooked
+			return res, r
+		}
+		defer func() { res.Usage.Add(hooked) }()
+	}
 	g, gerr := b.Grant(e.spec.MaxTurns, -1, Level(e.spec))
 	if gerr != nil {
 		next := map[bool]string{true: "call finish to end the run with what you have", false: "answer now with what you have"}[c.Depth == 0]
@@ -557,6 +580,15 @@ func (rt *Runtime) Invoke(ctx context.Context, a Agent, c Call, name string, inp
 		if verr := e.out.ValidateOutput(res.Output); verr != nil {
 			err = fmt.Errorf("%w: %s: %v", ErrToolOutput, name, verr)
 		}
+	}
+	if rt.Hooks != nil {
+		var u Usage
+		was := err
+		u, err = rt.Hooks.After(ctx, Pending{c.TaskID, a.Name, c.Depth, e.spec, input, b}, res, err)
+		if err != nil && was == nil { // withheld: the answer reaches neither the caller nor the journal
+			res.Output, res.Final = nil, false
+		}
+		hooked.Add(u)
 	}
 	return res, err
 }
