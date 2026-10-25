@@ -4,12 +4,16 @@
 package engine
 
 import (
+	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 )
 
 // A line diff for Manage (history, revert previews, the export patch): the longest common
-// subsequence of two texts' lines, printed as a unified diff that git apply and patch accept.
+// subsequence of two texts' lines, printed as a unified diff that git apply and patch accept; and an
+// item's diff between versions and the export of the overrides over it (Diff, Export, Patch).
 
 // diffContext is the unchanged lines a hunk shows around a change.
 const diffContext = 3
@@ -151,4 +155,72 @@ func filePatch(p, a, b string, aExists, bExists bool) string {
 		head, to = head+"deleted file mode 100644\n", "/dev/null"
 	}
 	return head + "--- " + from + "\n+++ " + to + "\n" + h
+}
+
+// FileDiff is one file's unified diff between two versions of an item.
+type FileDiff struct {
+	Path  string `json:"path"`
+	Patch string `json:"patch"`
+}
+
+// Diff is an item's diff from version from to version to (0: the built-in; to < 0: the current).
+func (e *Engine) Diff(ctx context.Context, id string, from, to int) ([]FileDiff, error) {
+	if to < 0 {
+		_, rows, err := e.current(ctx, e.db)
+		if err != nil {
+			return nil, err
+		}
+		to = rows[id].Version
+	}
+	a, err := e.filesAt(ctx, id, from)
+	if err != nil {
+		return nil, err
+	}
+	b, err := e.filesAt(ctx, id, to)
+	if err != nil {
+		return nil, err
+	}
+	return diffFiles(a, b), nil
+}
+
+func diffFiles(a, b map[string]string) []FileDiff {
+	out, paths := []FileDiff{}, map[string]string{} // either side may be nil (Patch's built)
+	maps.Copy(paths, a)
+	maps.Copy(paths, b)
+	for _, p := range slices.Sorted(maps.Keys(paths)) {
+		x, inA := a[p]
+		y, inB := b[p]
+		if d := filePatch(p, x, y, inA, inB); d != "" {
+			out = append(out, FileDiff{p, d})
+		}
+	}
+	return out
+}
+
+// Export is the files of the overridden items (all of them, or those in ids) as they are now and
+// as built in, by repo path: what a patch against the repository, or a zip of the tuned files, holds.
+// A deleted skill's files are absent from now; a created skill's from built.
+func (e *Engine) Export(ctx context.Context, ids []string) (now, built map[string]string, err error) {
+	snap, _, err := e.current(ctx, e.db)
+	if err != nil {
+		return nil, nil, err
+	}
+	now, built = map[string]string{}, map[string]string{}
+	for _, id := range slices.Sorted(maps.Keys(snap)) {
+		if len(ids) > 0 && !slices.Contains(ids, id) {
+			continue
+		}
+		maps.Copy(now, snap[id].Files)
+		maps.Copy(built, fileMap(builtin, id))
+	}
+	return now, built, nil
+}
+
+// Patch is the export as one git-style patch against the repository (git apply, patch -p1).
+func Patch(now, built map[string]string) string {
+	var b strings.Builder
+	for _, d := range diffFiles(built, now) {
+		b.WriteString(d.Patch)
+	}
+	return b.String()
 }
