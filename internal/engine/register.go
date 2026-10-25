@@ -291,7 +291,7 @@ func (h hooked) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 		}
 		in = draft.request
 	}
-	if r := readerReserve(ctx, h.rt); goTurns(name) > 0 && ctx.Value(readQueueKey{}) == nil && c.Budget.Calls > r.Calls && (r.USD == 0 || c.Budget.USD > r.USD) { // a sweep's visit reads nothing itself (readFindings) // the figure reader of its answer, held back from the subagent (lab-r4 r5 L4)
+	if r := readerReserve(ctx, h.rt); goTurns(name) > 0 && ctx.Value(readQueueKey{}) == nil && c.Budget.Calls > r.Calls && (r.USD == 0 || c.Budget.USD > r.USD) { // the figure reader of its answer, held back from the subagent (lab-r4 r5 L4); a sweep's visit reads nothing itself (readFindings)
 		held, c.Budget = r, agent.Grant{Calls: c.Budget.Calls - r.Calls, USD: c.Budget.USD - r.USD}
 	}
 	c.Input, _ = json.Marshal(in)
