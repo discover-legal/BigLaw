@@ -147,7 +147,7 @@ func TestSkipOfUnreadPageIsUnread(t *testing.T) {
 	t.Parallel()
 	shared := "The Seller represents that the warehouse lease expires on June 30, 2027, that no default has occurred under it, that the landlord has consented to the assignment, that the security deposit of $250,000 is held by the landlord, and that no amendment has been made to the lease since it was signed by both parties."
 	f := newFixture(t, "1. Lease\n"+shared+"\n\n2. Other\nFurther text of the disclosure schedule follows here.\n", "1. Lease\n"+shared+"\n")
-	fake := model.NewFake(f.with(map[string][]model.Reply{"lead": {calls(plan(issue("I1", "Is anything unusual?", "Conduct"))),
+	fake := newFake(f.with(map[string][]model.Reply{"lead": {calls(plan(issue("I1", "Is anything unusual?", "Conduct"))),
 		calls(tc("sweep", m{"over": "sections", "documentIds": nil}))}, "extract_facts": {{Text: "not json"}, {Text: "not json"}, {Text: "not json"}, {Text: "not json"}}}))
 	f.e = New(f.st, f.d, fake, testRoles, nil, Config{BudgetCalls: 150, CollapseThreshold: 0.5, CollapseAction: "strict"}, nil)
 	task := f.submit(0)

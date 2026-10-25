@@ -13,7 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/discover-legal/BigLaw/internal/analysis"
 	"github.com/discover-legal/BigLaw/internal/docs"
+	"github.com/discover-legal/BigLaw/internal/engine/figtest"
 	"github.com/discover-legal/BigLaw/internal/model"
 	"github.com/discover-legal/BigLaw/internal/store"
 	"github.com/discover-legal/BigLaw/internal/store/storetest"
@@ -34,6 +36,18 @@ type fixture struct {
 	st   *store.Store
 	d    *docs.Service
 	docs []docs.Document
+	// parties are the parties the figure reader's stand-in gives spans written so (figreader_test.go):
+	// a test's "right labels" for whose figure a number is.
+	parties map[string]string
+	// reads are the figure reader's labels for spans, by "<passage kind>:<span text>" ("quote:4,000"):
+	// a test's right labels where the stand-in would read otherwise (its Span is set by the stand-in).
+	reads map[string]analysis.Label
+	// measures are what the stand-in reads spans written so as measuring (its own reading is the
+	// analyst's metric for a value's digits): a test's right labels for one figure typed two ways.
+	measures map[string]string
+	// judge decides the figure judge's stand-in's pairs where it answers (judge.go; "" leaves the
+	// stand-in's own verdict): a test about the join's verdicts.
+	judge func(a, b figtest.JudgeSide) string
 }
 
 const complaintText = `1. Parties
@@ -85,7 +99,19 @@ func (f *fixture) engine(scripts map[string][]model.Reply, cfg Config) (*Engine,
 	if cfg.BudgetCalls == 0 {
 		cfg = Config{BudgetCalls: 150, BudgetUSD: 5, CollapseThreshold: 0.5, CollapseAction: "strict"}
 	}
-	fake := model.NewFake(scripts)
+	fake := newFake(scripts)
+	if fake.Respond != nil && (f.parties != nil || f.reads != nil || f.measures != nil) {
+		fake.Respond = oracleWith(f.parties, f.reads, f.measures)
+	}
+	if f.judge != nil && fake.Respond != nil {
+		read, judge := fake.Respond, figtest.Judge(f.judge)
+		fake.Respond = func(req model.Request) (model.Reply, bool) {
+			if r, ok := judge(req); ok {
+				return r, ok
+			}
+			return read(req)
+		}
+	}
 	f.e = New(f.st, f.d, fake, testRoles, nil, cfg, nil)
 	return f.e, fake
 }
@@ -185,7 +211,13 @@ func fd(claim, doc, quote string, values ...m) m {
 	if values == nil {
 		values = []m{}
 	}
-	return m{"claim": claim, "quotes": []m{{"documentId": doc, "quote": quote, "locator": nil}}, "values": values, "entities": []m{}, "relations": []m{}, "confidence": 0.9}
+	return m{"issueId": nil, "claim": claim, "quotes": []m{{"documentId": doc, "quote": quote, "locator": nil}}, "values": values, "entities": []m{}, "relations": []m{}, "confidence": 0.9}
+}
+
+// on is f naming the plan issue it bears on (a sweep visit's finding names one; the call names none).
+func on(issue string, f m) m {
+	f["issueId"] = issue
+	return f
 }
 
 func val(entity, metric, value, class string) m {

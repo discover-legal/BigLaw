@@ -51,8 +51,7 @@ type operand struct {
 // also [F12].v1, f12.V1, F12 v1, F12.value1; F12.d1 is F12's first date value; a bare F12 is its
 // only value.
 var (
-	refRe  = regexp.MustCompile(`(?i)^\[?(F\d+)\]?(?:[.\s_-]*(v|value|d|date)\s*(\d+))?$`)
-	daysRe = regexp.MustCompile(`(?i)^(-?\d+)\s*(?:calendar\s+)?days?$`)
+	refRe = regexp.MustCompile(`(?i)^\[?(F\d+)\]?(?:[.\s_-]*(v|value|d|date)\s*(\d+))?$`)
 )
 
 // valueOf finds the value a reference names; a reference that names none is an error that lists
@@ -115,16 +114,26 @@ func resolve(findings []Finding, o Operand) (operand, error) {
 		return operand{}, errors.New(`an operand needs ref or literal, e.g. {"ref": "F12.v1", "literal": null, "unit": null} or {"ref": null, "literal": "21", "unit": "days"}`)
 	}
 	unit := cmp.Or(map[Class]string{"Percentage": "%", "Date": "date"}[ClassOf(v)], strings.ToLower(v.Unit))
-	if ClassOf(v) == "Money" && slices.Contains([]string{"", "$", "usd", "dollars"}, unit) {
-		unit = "USD"
+	if len(unit) == 3 && strings.IndexFunc(unit, func(r rune) bool { return r < 'a' || r > 'z' }) < 0 {
+		unit = strings.ToUpper(unit) // a currency code, however written ("usd")
 	}
-	if strings.Contains(unit, "day") { // "calendar days", "day"
+	num, why := operandNumber(v, o.Ref != nil)
+	if o.Ref != nil && ClassOf(v) == "Money" && v.Fig != nil && v.Fig.Currency != "" {
+		unit = v.Fig.Currency // the currency the figure reader read the value in
+	}
+	switch { // "calendar days", "day", "year": a period's unit; business days stay business days (lab-r4 r11 H)
+	case strings.Contains(unit, "business"):
+		unit = "business days"
+	case strings.Contains(unit, "day"):
 		unit = "days"
+	case strings.Contains(unit, "week"):
+		unit = "weeks"
+	case strings.Contains(unit, "month"):
+		unit = "months"
+	case strings.Contains(unit, "year"):
+		unit = "years"
 	}
-	if m := daysRe.FindStringSubmatch(strings.TrimSpace(v.Value)); m != nil && (unit == "" || unit == "days" || unit == "count") {
-		v.Value, unit = m[1], "days"
-	}
-	if _, isNum := Number(v.Value); unit == "" && !isNum {
+	if unit == "" && num == nil {
 		if d, ok := ParseDate(v.Value); ok && d.Day != 0 {
 			unit = "date"
 		}
@@ -135,10 +144,27 @@ func resolve(findings []Finding, o Operand) (operand, error) {
 			return x, fmt.Errorf("%q is not a full date (write it as 2026-11-12)", v.Value)
 		}
 		x.date = &d
-	} else if x.num, ok = Number(v.Value); !ok {
-		return x, fmt.Errorf("%q is not a number (give a date with unit \"date\", a number of days as \"21\" with unit \"days\")", v.Value)
+	} else if x.num = num; num == nil {
+		return x, fmt.Errorf("%q is not a number: %s (give a date with unit \"date\", a number of days as \"21\" with unit \"days\")", v.Value, why)
 	}
 	return x, nil
+}
+
+// operandNumber is an operand's exact amount: a finding's value as the figure reader read it (its
+// scale and sign applied; a value it did not read, or read as unclear, is no operand), a literal as
+// written (one number, whose form reads one way).
+func operandNumber(v Value, ref bool) (*big.Rat, string) {
+	if ref {
+		if v.Fig == nil || v.Fig.Unclear || v.Fig.Rat() == nil || v.Fig.Kind == KindDate {
+			return nil, "the figure reader did not read it as a number with no doubt"
+		}
+		return v.Fig.Rat(), ""
+	}
+	_, ss := Literal(v.Value)
+	if len(ss) != 1 || len(ss[0].Readings()) != 1 {
+		return nil, "a literal is one number written so that it reads one way"
+	}
+	return ss[0].Readings()[0], ""
 }
 
 func abs(n int64) int64 { return max(n, -n) }
@@ -159,9 +185,9 @@ func deref(p *string) string {
 }
 
 // takes says what each fn accepts, and shows a call that works, for the error that names it.
-var takes = map[string]string{"sum": "two or more numbers in one unit", "diff": "two numbers in one unit", "ratio": "two numbers", "pct": "two numbers",
-	"product":  "two or more numbers, at most one of them not a percentage (35% times $100,000 is $35,000)",
-	"date_add": "a full date and a whole number of days (negative counts back)", "date_diff": "two full dates",
+var takes = map[string]string{"sum": "two or more numbers in one unit", "diff": "two numbers in one unit", "ratio": "two numbers, in at most one currency", "pct": "two numbers",
+	"product":  "two or more numbers, at most one of them an amount of money (1,200,000 shares times $5.00 times 1.5 is $9,000,000; 35% times $100,000 is $35,000)",
+	"date_add": "a full date and a whole number of days, weeks, months or years (negative counts back; a month or year on from a day the target month lacks is its last day)", "date_diff": "two full dates",
 	"business_days": "two full dates, or a full date and a whole number of days (negative counts back)"}
 
 // Calc runs one calculation exactly (decimal, never floating point): sum, diff, ratio, pct,
@@ -187,17 +213,24 @@ func Calc(findings []Finding, fn string, ops []Operand, holidays []string) (Work
 	if shape == "nd" && (fn == "date_add" || fn == "business_days") { // a count then a date: unambiguous
 		xs[0], xs[1], shape = xs[1], xs[0], "dn"
 	}
-	days := len(xs) == 2 && xs[1].num != nil && xs[1].num.IsInt() && xs[1].num.Num().IsInt64() && abs(xs[1].num.Num().Int64()) <= 10000 &&
-		(xs[1].unit == "" || xs[1].unit == "days")
-	pcts := 0
+	whole := len(xs) == 2 && xs[1].num != nil && xs[1].num.IsInt() && xs[1].num.Num().IsInt64() && abs(xs[1].num.Num().Int64()) <= 10000
+	days := whole && (xs[1].unit == "" || xs[1].unit == "days")
+	bdays := days || whole && xs[1].unit == "business days"                                               // business_days' count; date_add takes no business days
+	period := whole && (days || xs[1].unit == "weeks" || xs[1].unit == "months" || xs[1].unit == "years") // date_add's offset (lab-r4 r8 H1)
+	var curs []string                                                                                     // the operands' currencies: a product has at most one amount of money, a ratio is in one currency (exact arithmetic, r7 M4)
 	for _, x := range xs {
-		pcts += map[bool]int{true: 1}[x.unit == "%"]
+		if IsCurrency(x.unit) {
+			curs = append(curs, x.unit)
+		}
 	}
-	if !map[string]bool{"sum": same && len(shape) >= 2 && !strings.Contains(shape, "d"), "diff": same && shape == "nn", "ratio": shape == "nn", "pct": shape == "nn",
-		"product":  len(shape) >= 2 && !strings.Contains(shape, "d") && pcts >= len(xs)-1,
-		"date_add": shape == "dn" && days, "date_diff": shape == "dd", "business_days": shape == "dd" || shape == "dn" && days}[fn] {
+	if !map[string]bool{"sum": same && len(shape) >= 2 && !strings.Contains(shape, "d"), "diff": same && shape == "nn", "ratio": shape == "nn" && len(slices.Compact(slices.Clone(curs))) <= 1, "pct": shape == "nn",
+		"product":  len(shape) >= 2 && !strings.Contains(shape, "d") && len(curs) <= 1,
+		"date_add": shape == "dn" && period, "date_diff": shape == "dd", "business_days": shape == "dd" || shape == "dn" && bdays}[fn] {
 		if takes[fn] == "" {
 			return Worksheet{}, fmt.Errorf("unknown fn %q", fn)
+		}
+		if fn == "date_add" && len(xs) == 2 && xs[1].unit == "business days" {
+			return Worksheet{}, errors.New("date_add counts calendar days, and this period is in business days: count it with fn business_days (the date, then the number of business days)")
 		}
 		got := strings.NewReplacer("d", " a date,", "n", " a number,").Replace(shape)
 		return Worksheet{}, fmt.Errorf("%s takes %s; it got%s so send, e.g., %s", fn, takes[fn], strings.TrimSuffix(cmp.Or(got, " no operands,"), ","),
@@ -228,6 +261,8 @@ func Calc(findings []Finding, fn string, ops []Operand, holidays []string) (Work
 		if fn == "pct" {
 			r.Mul(r, big.NewRat(100, 1))
 			w.Unit = "%"
+		} else if IsCurrency(xs[0].unit) && !IsCurrency(xs[1].unit) { // an amount per unit: $9,000,000 over 1,200,000 shares is $7.50
+			w.Unit = xs[0].unit
 		}
 		w.Result = Decimal(r)
 	case "product":
@@ -235,19 +270,40 @@ func Calc(findings []Finding, fn string, ops []Operand, holidays []string) (Work
 		for _, x := range xs {
 			r.Mul(r, map[bool]*big.Rat{true: new(big.Rat).Quo(x.num, big.NewRat(100, 1)), false: x.num}[x.unit == "%"])
 		}
-		w.Unit = "%"
+		var units []string // what the product is in: its currency, else the one unit of its other factors, else none
 		for _, x := range xs {
-			if x.unit != "%" {
-				w.Unit = x.unit
+			if x.unit != "%" && !slices.Contains(units, x.unit) {
+				units = append(units, x.unit)
 			}
 		}
-		if w.Unit == "%" { // percentages only: the product is a percentage again
+		switch {
+		case len(curs) == 1:
+			w.Unit = curs[0]
+		case len(units) == 0: // percentages only: the product is a percentage again
+			w.Unit = "%"
 			r.Mul(r, big.NewRat(100, 1))
+		case len(units) == 1:
+			w.Unit = units[0]
 		}
 		w.Result = Decimal(r)
 	case "date_add":
 		n := xs[1].num.Num().Int64()
-		t := xs[0].date.time().AddDate(0, 0, int(n))
+		y, mo, d := 0, 0, 0
+		switch xs[1].unit {
+		case "weeks":
+			d = 7 * int(n)
+		case "months":
+			mo = int(n)
+		case "years":
+			y = int(n)
+		default:
+			d = int(n)
+		}
+		t := xs[0].date.time().AddDate(0, 0, d)
+		if y != 0 || mo != 0 { // a month or year on: the same day of the target month, else its last day (Jan 31 + 1 month is Feb 29, 2024; Feb 29, 2024 + 1 year is Feb 28, 2025: lab-r4 r9 M1)
+			first := time.Date(t.Year()+y, t.Month()+time.Month(mo), 1, 0, 0, 0, 0, time.UTC)
+			t = first.AddDate(0, 0, min(t.Day(), first.AddDate(0, 1, -1).Day())-1)
+		}
 		if holidays != nil && !workday(t) {
 			w.Steps = append(w.Steps, SheetStep{"raw date", t.Format(time.DateOnly) + " (" + t.Weekday().String() + map[bool]string{true: ", a weekend day)", false: ", a holiday)"}[t.Weekday()%6 == 0]})
 			for step := map[bool]int{true: -1, false: 1}[n < 0]; !workday(t); t = t.AddDate(0, 0, step) {
@@ -297,6 +353,7 @@ type Handle struct {
 	Ref    string `json:"ref"`
 	Label  string `json:"label"`
 	Value  string `json:"-"`
+	v      Value  // the value it names (Salience)
 }
 
 var codenames = strings.Fields(`Zephyr Quasar Nimbus Halcyon Obsidian Saffron Tundra Vesper Cobalt Juniper Marigold Onyx
@@ -309,17 +366,20 @@ var MaxHandles = len(codenames)
 
 // Salience ranks a figure for the key-figures guarantee: big money, large counts and major rates
 // first; small bare numbers (exhibit noise) last (v1's figureSalience).
-func Salience(v string) int {
-	x, _ := Number(v)
-	f := 0.0
-	if x != nil {
-		f, _ = x.Float64()
+// A value's figure is the figure reader's clear reading of it (Value.Fig); one it did not read ranks last.
+func Salience(v Value) int {
+	ok := v.Fig != nil && v.Fig.Clear()
+	f, grouped := 0.0, false
+	if ok {
+		f, _ = new(big.Rat).Abs(v.Fig.Rat()).Float64()
+		_, ss := Literal(v.Value)
+		grouped = slices.ContainsFunc(ss, func(s Span) bool { return s.Grouped() })
 	}
-	dollar, pct := strings.Contains(v, "$"), strings.Contains(v, "%")
+	dollar, pct := ok && v.Fig.Kind == KindMoney, ok && v.Fig.Kind == KindPercent
 	switch {
 	case dollar && f >= 100000:
 		return 100
-	case strings.Contains(v, ",") && !dollar && f >= 1000:
+	case ok && grouped && !dollar && f >= 1000:
 		return 95
 	case dollar && f >= 10000:
 		return 90
@@ -356,10 +416,10 @@ func Handles(findings []Finding, fids []string, top int, kept ...Handle) []Handl
 				continue
 			}
 			seen[v.Value] = true
-			hs = append(hs, Handle{FID: f.FID, Ref: fmt.Sprintf("%s.v%d", f.FID, i+1), Label: strings.TrimSpace(v.Entity + " " + v.Metric), Value: v.Value})
+			hs = append(hs, Handle{FID: f.FID, Ref: fmt.Sprintf("%s.v%d", f.FID, i+1), Label: strings.TrimSpace(v.Entity + " " + v.Metric), Value: v.Value, v: v})
 		}
 	}
-	slices.SortStableFunc(hs, func(a, b Handle) int { return Salience(b.Value) - Salience(a.Value) })
+	slices.SortStableFunc(hs, func(a, b Handle) int { return Salience(b.v) - Salience(a.v) })
 	name, used, next := map[string]string{}, map[string]bool{}, 0
 	for _, k := range kept {
 		name[k.Value], used[k.Handle] = k.Handle, true

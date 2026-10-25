@@ -46,6 +46,8 @@ type FindingView struct {
 	Severity  string     `json:"severity"`
 	Status    string     `json:"status"` // verified or quarantined
 	Citations []Citation `json:"citations"`
+	// ValueNotes are the typed values admission dropped from it, and why (lab-r4 r3 M7: shown, never only stored).
+	ValueNotes []string `json:"valueNotes"`
 }
 
 type TaskView struct {
@@ -159,7 +161,7 @@ func (e *Engine) view(ctx context.Context, t Task) (TaskView, error) {
 			q = issues[i].Question
 		}
 		v.Findings = append(v.Findings, FindingView{f.FID, f.IssueID, q, f.Claim, cmpStr(f.Severity != "", f.Severity, "medium"),
-			map[bool]string{true: "verified", false: "quarantined"}[f.Verified], append([]Citation{}, f.Citations...)})
+			map[bool]string{true: "verified", false: "quarantined"}[f.Verified], append([]Citation{}, f.Citations...), append([]string{}, f.ValueNotes...)})
 	}
 	return v, nil
 }

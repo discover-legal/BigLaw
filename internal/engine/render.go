@@ -7,11 +7,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
 
 	"github.com/discover-legal/BigLaw/internal/agent"
+	"github.com/discover-legal/BigLaw/internal/analysis"
 )
 
 // draftReq is a draft_section request as Go completed it, with the handle set the drafter got.
@@ -115,7 +117,8 @@ func (e *Engine) draftRequest(ctx context.Context, taskID string, scope []string
 
 // saveSection records a drafted section with the handle set its drafter was given; the draft's
 // version moves on.
-func (e *Engine) saveSection(ctx context.Context, taskID string, d draftReq, answer json.RawMessage) (any, error) {
+func (e *Engine) saveSection(ctx context.Context, rt *agent.Runtime, c agent.Call, b *agent.Budget, d draftReq, answer json.RawMessage) (any, error) {
+	taskID := c.TaskID
 	var a struct{ Markdown, Summary string }
 	_ = json.Unmarshal(answer, &a)
 	secs, err := load[Section](ctx, e, taskID, kSection)
@@ -123,6 +126,32 @@ func (e *Engine) saveSection(ctx context.Context, taskID string, d draftReq, ans
 		return nil, err
 	}
 	s := Section{IssueID: d.issueID, Markdown: splitCites(a.Markdown), Summary: splitCites(a.Summary), Handles: d.figs, Version: version(secs) + 1}
+	body, regs := memoBody(s) // the figures the drafter wrote (not Go's handle values), read for G8 and the coverage pass
+	if spans := memoSpans(body, regs); len(spans) > 0 {
+		it := newReading(nil, []analysis.Passage{{ID: "m", Text: body, Spans: spans}}, []passageIn{{ID: "m", Kind: "memo", Text: body}})
+		it.memo = true
+		before := b.Spent().Calls
+		if err := e.readFigures(ctx, rt, c, b, "draft_section", []*reading{it}); err != nil {
+			return nil, err
+		}
+		if n := b.Spent().Calls - before; n > 0 && ctx.Value(coverDraft{}) == nil { // the reader's calls are not the lead's drafter's: P4's draft share leaves them out (policy.go); a coverage redraft's are its finish step's
+			prior, err := load[int](ctx, e, taskID, kRead)
+			if err != nil {
+				return nil, err
+			}
+			for _, p := range prior {
+				n += p
+			}
+			if err := e.write(ctx, taskID, kRead, "draft", n, true); err != nil {
+				return nil, err
+			}
+		}
+		rs, _ := it.readings()
+		s.Read = &SectionRead{Hash: textHash(body), Figs: ofPassage(rs, "m")}
+		if whys := slices.Sorted(maps.Values(it.unread)); len(whys) > 0 {
+			s.Read.Unread = fmt.Sprintf("%d of its %d figures were not read (%s)", len(it.unread), len(spans), strings.Join(slices.Compact(whys), "; "))
+		}
+	}
 	if err := e.write(ctx, taskID, kSection, d.issueID, s, true); err != nil {
 		return nil, err
 	}
@@ -158,19 +187,13 @@ type deliverable struct {
 // handles substituted outside quotes, then Sources (transcript citations badged, G11),
 // Limitations, the Evidence Note and the note to the reviewing lawyer; external authorities are
 // flagged (G5). flagged lists lint problems a forced finish delivers with (marked inline).
-func (e *Engine) render(ctx context.Context, t Task, limits []string, meta string, flagged []string) (deliverable, error) {
+func (e *Engine) render(ctx context.Context, t Task, limits []string, computed computedBlock, meta string, flagged []string) (deliverable, error) {
 	issues, err := load[Issue](ctx, e, t.ID, kIssue)
 	secs, serr := load[Section](ctx, e, t.ID, kSection)
 	all, ferr := load[Finding](ctx, e, t.ID, kFinding)
 	use, uerr := e.usable(ctx, t.ID)
-	ws, werr := e.worksheets(ctx, t.ID)
-	if err = cmpErr(err, serr, ferr, uerr, werr); err != nil {
+	if err = cmpErr(err, serr, ferr, uerr); err != nil {
 		return deliverable{}, err
-	}
-	for _, w := range ws { // a calculation over typed inputs (a period, a rate) rests on the lead's figures too
-		if w.LiteralOperands && slices.ContainsFunc(secs, func(s Section) bool { return strings.Contains(s.Markdown, "{"+w.WID+"}") }) {
-			limits = append(limits, fmt.Sprintf("%s is a calculation from typed inputs as well as verified values (%s): check those inputs.", sheetValue(w.Result, w.Unit), sheetLabel(w)))
-		}
 	}
 	var b strings.Builder
 	title, _, _ := strings.Cut(strings.TrimSpace(t.Description), "\n")
@@ -244,6 +267,7 @@ func (e *Engine) render(ctx context.Context, t Task, limits []string, meta strin
 	for _, l := range limits {
 		b.WriteString("- " + mdSafe(l, true) + "\n")
 	}
+	b.WriteString(computed.markdown()) // the figures computed over typed inputs, with their sources (lab-r4 r10)
 	verified := 0
 	for _, f := range all {
 		verified += btoi(f.Verified)

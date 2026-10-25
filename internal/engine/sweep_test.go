@@ -50,7 +50,7 @@ func lots(n, reps int) (string, func(docID string) map[string][]model.Reply) {
 		out := map[string][]model.Reply{}
 		for i := 1; i <= n; i++ {
 			for range reps {
-				out[fmt.Sprintf("lot%d", i)] = append(out[fmt.Sprintf("lot%d", i)], facts(fd(fmt.Sprintf("Lot %d is due on time.", i), docID, fmt.Sprintf("The supplier shall deliver lot %d on time", i))))
+				out[fmt.Sprintf("lot%d", i)] = append(out[fmt.Sprintf("lot%d", i)], facts(on("I1", fd(fmt.Sprintf("Lot %d is due on time.", i), docID, fmt.Sprintf("The supplier shall deliver lot %d on time", i)))))
 			}
 		}
 		return out
@@ -163,7 +163,7 @@ func TestSweepReadsInParallelInPlanOrder(t *testing.T) {
 	for k, v := range scripts(f.docs[0].ID) {
 		sc[k] = v
 	}
-	p := &pool{Fake: model.NewFake(sc), all: make(chan struct{})}
+	p := &pool{Fake: newFake(sc), all: make(chan struct{})}
 	p.Route = byLot
 	f.e = New(f.st, f.d, p, testRoles, nil, Config{BudgetCalls: 150, BudgetUSD: 5, CollapseThreshold: 0.5, CollapseAction: "strict"}, nil)
 	task := f.submit(0)
@@ -218,7 +218,7 @@ func TestSweepResumesAfterKillMidSweep(t *testing.T) {
 		for k, v := range scripts(d1) {
 			sc[k] = v
 		}
-		k := &countKill{Fake: model.NewFake(sc), at: killAt}
+		k := &countKill{Fake: newFake(sc), at: killAt}
 		k.Route = byLot
 		e := f.reopen(k, nil)
 		task := f.submit(0)
@@ -280,7 +280,7 @@ func TestSweepFallsBackToSerialWhenAShareCannotFundACall(t *testing.T) {
 		"lead":          {calls(plan(issue("I1", "Deliveries?", "Requirement"))), calls(tc("sweep", m{"over": "sections", "documentIds": nil}))},
 		"extract_facts": ex,
 	})
-	f.e = New(f.st, f.d, model.NewFake(scripts), testRoles, prices, Config{BudgetCalls: 150, BudgetUSD: 1, CollapseThreshold: 0.5, CollapseAction: "strict"}, nil)
+	f.e = New(f.st, f.d, newFake(scripts), testRoles, prices, Config{BudgetCalls: 150, BudgetUSD: 1, CollapseThreshold: 0.5, CollapseAction: "strict"}, nil)
 	task := f.submit(0)
 	f.step(context.Background())
 	sw := strings.Join(f.outputs(task.ID, "sweep"), "")
@@ -316,7 +316,7 @@ func TestHardCrashChargesOnlyRecordedSpend(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := Config{BudgetCalls: 150, BudgetUSD: 1, CollapseThreshold: 0.5, CollapseAction: "strict"}
-	k := &countKill{Fake: model.NewFake(sc), at: 3}
+	k := &countKill{Fake: newFake(sc), at: 3}
 	k.Route = byLot
 	f.e = New(f.st, f.d, k, testRoles, prices, cfg, nil)
 	task := f.submit(0)
@@ -374,7 +374,7 @@ func TestSweepReadsRelevantPagesFirst(t *testing.T) {
 	for range 8 {
 		ex = append(ex, costly(facts(), 0.3))
 	}
-	fake := model.NewFake(f.with(map[string][]model.Reply{"lead": {calls(plan(issue("I1", "Which lot ships by barge, and from which terminal?", "Conduct"))),
+	fake := newFake(f.with(map[string][]model.Reply{"lead": {calls(plan(issue("I1", "Which lot ships by barge, and from which terminal?", "Conduct"))),
 		calls(tc("sweep", m{"over": "sections", "documentIds": nil}))}, "extract_facts": ex}))
 	f.e = New(f.st, f.d, fake, testRoles, prices, Config{BudgetCalls: 150, BudgetUSD: 2, CollapseThreshold: 0.5, CollapseAction: "strict"}, nil)
 	task := f.submit(0)

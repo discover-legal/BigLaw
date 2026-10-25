@@ -171,11 +171,12 @@ func TestCoverageDraftsLeftOutEvidence(t *testing.T) {
 		"2. Recordkeeping\nThe Firm did not retain allocation records for 2,614 of the omnibus trades executed during the Review Period.\n"
 	stats := "Total Omnibus Equity Trades Analyzed\t4,312\tTrades executed through WCA omnibus account at Meridian Clearing Corp. during Review Period\n"
 	f := newFixture(t, referral, stats)
+	f.measures = map[string]string{"4,217": "omnibus equity trades analysed", "4,312": "omnibus equity trades analysed"} // the right labels: one count typed two ways
 	d1, d2 := f.docs[0].ID, f.docs[1].ID
 	q1 := "The Division's Office of Quantitative Research analyzed 4,217 equity trades executed through the omnibus account during the Review Period"
 	q2 := "Total Omnibus Equity Trades Analyzed\t4,312\tTrades executed through WCA omnibus account at Meridian Clearing Corp. during Review Period"
 	q3 := "The Firm did not retain allocation records for 2,614 of the omnibus trades executed during the Review Period"
-	sweep := facts(fd("The Firm did not retain allocation records for 2,614 omnibus trades.", d1, q3)) // a sweep finding: no issue
+	sweep := facts(on("I1", fd("The Firm did not retain allocation records for 2,614 omnibus trades.", d1, q3))) // a finding the call named no issue for
 	three := func(r model.Reply) []model.Reply { return []model.Reply{r, r, r} }
 	e, fake := f.engine(f.with(map[string][]model.Reply{
 		"lead": {calls(plan(issue("I1", "What did the Division's analysis of the omnibus trades find?", "Clause"))),
@@ -206,7 +207,7 @@ func TestCoverageDraftsLeftOutEvidence(t *testing.T) {
 	}
 	if stop(v) != "awaiting_gate/finished" || !strings.Contains(placed, "These findings never reached the memo: F3") || !strings.Contains(out, "2,614 omnibus trades [F3]") ||
 		!strings.Contains(out, "4,312") || strings.Count(f.steps(v.ID), "tool_call:committee") != 2 {
-		t.Fatalf("%s: last drafter request %.300q\n%s\n%s", stop(v), placed, f.steps(v.ID), out)
+		t.Fatalf("%s: last drafter request %.300q\n%s\n%s\n%q", stop(v), placed, f.steps(v.ID), out, f.outputs(v.ID, "finish"))
 	}
 	if strings.Contains(out, "never reached the memo") {
 		t.Fatalf("a placed finding was disclosed as left out:\n%s", out)

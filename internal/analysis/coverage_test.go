@@ -89,7 +89,7 @@ func TestCoverageConductNeedsActor(t *testing.T) {
 }
 
 func TestCoverageSalientFigureMissing(t *testing.T) {
-	fs := []Finding{{FID: "F1", Verified: true, Values: []Value{{Metric: "profit", Value: "$8,238,000"}, {Metric: "loss", Value: "$1,200,000"}, {Metric: "fee", Value: "$40"}}}}
+	fs := read([]Finding{{FID: "F1", Verified: true, Values: []Value{{Metric: "profit", Value: "$8,238,000"}, {Metric: "loss", Value: "$1,200,000"}, {Metric: "fee", Value: "$40"}}}})
 	hs := Handles(fs, nil, 0)
 	c := CheckCoverage([]Issue{{"I1", "q", "Conduct"}}, map[string]string{"I1": "Profits were $8,238,000; see also " + hs[1].Handle + "."}, fs, nil)
 	if len(c.MissingFigures) != 0 {

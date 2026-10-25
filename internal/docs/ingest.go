@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"mime/quotedprintable"
 	"slices"
 	"strings"
 	"time"
@@ -114,11 +115,47 @@ const docxType = "application/vnd.openxmlformats-officedocument.wordprocessingml
 // textOf is the extraction of UTF-8 text (cleaned, as every extraction is), flagged when there is
 // nothing in it.
 func textOf(text string) Extraction {
+	text, decoded := unQP(text)
 	x := Extraction{Text: clean(text), Method: "text", ContentType: "text/plain; charset=utf-8"}
+	if decoded {
+		x.Notes = append(x.Notes, "This e-mail's body was stored decoded from its quoted-printable transfer encoding (soft line breaks joined, =XX bytes undone), as a reader sees it; its headers are verbatim.")
+	}
 	if strings.TrimSpace(text) == "" {
 		x.NoText, x.Notes = true, []string{"The document is empty or white space only."}
 	}
 	return x
+}
+
+// unQP decodes a plain-text e-mail whose top header block says Content-Transfer-Encoding:
+// quoted-printable: everything after that block, as the transfer encoding wraps it (bench5 SEC: an
+// .eml stored encoded, "s=\nhared drive", "=E2=\n=80=94", so no quote of its body could verify and the
+// April 15 vs April 22 conflict was never paired). The header block (lines up to the first blank
+// line) is kept verbatim; a body that does not decode, or text that is not such an e-mail, is
+// returned unchanged.
+func unQP(text string) (string, bool) {
+	head, body, ok := strings.Cut(strings.ReplaceAll(text, "\r\n", "\n"), "\n\n")
+	if !ok || strings.HasPrefix(head, " ") {
+		return text, false
+	}
+	qp := false
+	for _, l := range strings.Split(head, "\n") {
+		if strings.HasPrefix(l, " ") || strings.HasPrefix(l, "\t") { // a folded header line
+			continue
+		}
+		k, v, isHeader := strings.Cut(l, ":")
+		if !isHeader || k == "" || strings.ContainsAny(k, " \t") {
+			return text, false // not a header block
+		}
+		qp = qp || strings.EqualFold(k, "Content-Transfer-Encoding") && strings.EqualFold(strings.TrimSpace(v), "quoted-printable")
+	}
+	if !qp {
+		return text, false
+	}
+	dec, err := io.ReadAll(quotedprintable.NewReader(strings.NewReader(body)))
+	if err != nil || !utf8.Valid(dec) {
+		return text, false
+	}
+	return head + "\n\n" + string(dec), true
 }
 
 // clean makes extracted text storable: invalid UTF-8 becomes U+FFFD and control characters other

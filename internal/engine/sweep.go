@@ -180,10 +180,45 @@ func awaitTurn(ctx context.Context) error {
 	return nil
 }
 
+// visitRec is a visit's record (kVisit): the fids it produced and the plan's issues it was read for.
+// When the plan gains issues a page is read again, for the new ones only (lab-r4 verifier M3: a fact
+// on an issue the lead added after the sweep was dropped at the visit, and the page never read again).
+type visitRec struct {
+	FIDs   []string `json:"fids"`
+	Issues []string `json:"issues"`
+}
+
+// decodeVisit reads a visit record; one kept before records held issues (the fids alone) counts as
+// read for the plan's issues cur.
+func decodeVisit(data json.RawMessage, cur []string) visitRec {
+	var r visitRec
+	if json.Unmarshal(data, &r) != nil {
+		_ = json.Unmarshal(data, &r.FIDs)
+		r.Issues = cur
+	}
+	return r
+}
+
+// missing is the issues of cur that read does not hold, in cur's order.
+func missing(cur, read []string) []string {
+	var out []string
+	for _, id := range cur {
+		if !slices.Contains(read, id) {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// issuesKey carries the plan issues one visit is read for, when only some (a page read again for
+// the issues added since): extract_facts is sent only those and admits only findings naming one.
+type issuesKey struct{}
+
 // visitRun is one visit's outcome: the fids it produced, whether it ran, and its error.
 type visitRun struct {
 	ids                 []string
-	ran, broke, refused bool // ran: it made a model call; broke: all that was left ran out on it; refused: a worker's share could not fund it
+	notes               []string // admission's notes (a dropped value, a merge), kept for the lead
+	ran, broke, refused bool     // ran: it made a model call; broke: all that was left ran out on it; refused: a worker's share could not fund it
 	err                 error
 }
 
@@ -200,7 +235,10 @@ type visitRun struct {
 //     the parallel visits', still in reading order among themselves);
 //   - stops: when the money runs out on a visit that had all that was left, or a model or journal
 //     failure ends the run (the in-flight visits are cancelled; the earliest error is returned).
-func (e *Engine) sweepVisits(ctx context.Context, rt *agent.Runtime, c agent.Call, b *agent.Budget, visits []Visit, todo []bool, question string) ([]visitRun, error) {
+//
+// A visit with a record (was[i].Issues set) is read for the issues of cur it was not read for, and its
+// record then holds both.
+func (e *Engine) sweepVisits(ctx context.Context, rt *agent.Runtime, c agent.Call, b *agent.Budget, visits []Visit, todo []bool, was []visitRec, cur []string, question string) ([]visitRun, error) {
 	out := make([]visitRun, len(visits))
 	cctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -257,8 +295,13 @@ func (e *Engine) sweepVisits(ctx context.Context, rt *agent.Runtime, c agent.Cal
 		in := fmt.Sprintf(`{"question":%s,"documentId":%q,"sectionId":%q,"through":%s,"offset":%d,"query":null,"issueId":null}`, q, v.DocumentID, v.SectionID, through, v.Offset)
 		next, tail := make(chan struct{}), calls < turns || usd < share || serial
 		inflight++
+		vctx, read := context.WithValue(cctx, turnKey{}, prev), cur
+		if was[i].Issues != nil {
+			read = missing(cur, was[i].Issues)
+			vctx = context.WithValue(vctx, issuesKey{}, read)
+		}
 		go func(wait chan struct{}) {
-			res, err := rt.Invoke(context.WithValue(cctx, turnKey{}, wait), agent.Agent{Name: "sweep", Visible: []string{"extract_facts"}},
+			res, err := rt.Invoke(vctx, agent.Agent{Name: "sweep", Visible: []string{"extract_facts"}},
 				agent.Call{TaskID: c.TaskID, DocumentIDs: c.DocumentIDs, Model: model, NoTools: true}, "extract_facts", json.RawMessage(in), g, false, 0)
 			g.Close()
 			select { // the visit before this one has ended (its findings and its record are in)
@@ -276,8 +319,15 @@ func (e *Engine) sweepVisits(ctx context.Context, rt *agent.Runtime, c agent.Cal
 					r.ids = append(r.ids, id)
 				}
 			}
+			if err == nil {
+				r.notes = got.Notes
+			}
 			if err == nil && cctx.Err() == nil { // a failed visit (bad output, its grant spent) is read again by a later sweep
-				r.err = e.write(ctx, c.TaskID, kVisit, v.key(), r.ids, false)
+				rec := visitRec{FIDs: append(slices.Clone(was[i].FIDs), r.ids...), Issues: append(slices.Clone(was[i].Issues), read...)}
+				if rec.Issues == nil {
+					rec.Issues = []string{}
+				}
+				r.err = e.write(ctx, c.TaskID, kVisit, v.key(), rec, true)
 			}
 			out[i] = r
 			close(next)
@@ -336,9 +386,9 @@ func (e *Engine) sweepTool(rt *agent.Runtime, r *run) agent.Tool {
 		if err = cmpErr(err, ierr, serr); err != nil {
 			return nil, agent.Usage{}, err
 		}
-		qs := []string{}
+		qs, cur := []string{}, []string{}
 		for _, is := range issues {
-			qs = append(qs, is.Question)
+			qs, cur = append(qs, is.Question), append(cur, is.ID)
 		}
 		visits := make([]Visit, 0, len(planned))
 		for _, i := range order(planned, qs) {
@@ -346,13 +396,17 @@ func (e *Engine) sweepTool(rt *agent.Runtime, r *run) agent.Tool {
 		}
 		a, sw := Allocate(e.cfg.BudgetCalls, e.cfg.BudgetUSD), spent["sweep"]
 		b := agent.NewBudget(min(c.Budget.Calls, a.Sweep-sw.Calls), min(c.Budget.USD, a.dollars(a.Sweep)-sw.USD), 0)
-		todo, prior, why, src := make([]bool, len(visits)), make([][]string, len(visits)), make([]string, len(visits)), make([]int, len(visits))
+		todo, was, why, src := make([]bool, len(visits)), make([]visitRec, len(visits)), make([]string, len(visits)), make([]int, len(visits))
 		var kept []Visit // the read (or to be read) visits so far, in reading order: what a later one may repeat
 		var keptAt []int // their indexes in visits
 		for i, v := range visits {
 			src[i] = -1
 			if j := slices.IndexFunc(done, func(x row) bool { return x.Key == v.key() }); j >= 0 {
-				_ = json.Unmarshal(done[j].Data, &prior[i])
+				was[i] = decodeVisit(done[j].Data, cur)
+				if was[i].Issues == nil {
+					was[i].Issues = []string{}
+				}
+				todo[i] = len(missing(cur, was[i].Issues)) > 0 // read again for the issues added since
 			} else if why[i], src[i] = skipWhy(v, kept); why[i] == "" {
 				todo[i] = true
 			} else if src[i] >= 0 {
@@ -362,11 +416,11 @@ func (e *Engine) sweepTool(rt *agent.Runtime, r *run) agent.Tool {
 				kept, keptAt = append(kept, v), append(keptAt, i)
 			}
 		}
-		runs, err := e.sweepVisits(ctx, rt, c, b, visits, todo, r.t.Description)
+		runs, err := e.sweepVisits(ctx, rt, c, b, visits, todo, was, cur, r.t.Description)
 		if err != nil {
 			return nil, b.Spent(), err
 		}
-		fids, uncovered, skipped, visited := []string{}, []map[string]any{}, []map[string]any{}, 0
+		fids, notes, uncovered, skipped, visited := []string{}, []string{}, []map[string]any{}, []map[string]any{}, 0
 		cov := map[string]*SweptDoc{}
 		var docOrder []string
 		for i, v := range visits {
@@ -376,7 +430,7 @@ func (e *Engine) sweepTool(rt *agent.Runtime, r *run) agent.Tool {
 				cov[v.DocumentID], docOrder = d, append(docOrder, v.DocumentID)
 			}
 			d.Planned++
-			fids = append(fids, prior[i]...)
+			fids = append(fids, was[i].FIDs...)
 			unread := func(j int) bool { return todo[j] && (!runs[j].ran || runs[j].err != nil) }
 			switch x := runs[i]; {
 			case why[i] != "" && src[i] >= 0 && unread(src[i]): // a copy of a page the sweep did not read is not read either (lab-r3 verifier M2)
@@ -391,7 +445,7 @@ func (e *Engine) sweepTool(rt *agent.Runtime, r *run) agent.Tool {
 				uncovered = append(uncovered, v.unread())
 			default:
 				visited, d.Read = visited+1, d.Read+1
-				fids = append(fids, x.ids...)
+				fids, notes = append(fids, x.ids...), append(notes, x.notes...)
 			}
 		}
 		swept, unread := []SweptDoc{}, []map[string]any{}
@@ -417,7 +471,7 @@ func (e *Engine) sweepTool(rt *agent.Runtime, r *run) agent.Tool {
 		if err := e.write(ctx, c.TaskID, kSwept, "sweep", swept, true); err != nil {
 			return nil, b.Spent(), err
 		}
-		out := sweepPage(visited, fids, uncovered, skipped, unread)
+		out := sweepPage(visited, fids, notes, uncovered, skipped, unread)
 		note := ""
 		if len(uncovered) > 0 {
 			note = fmt.Sprintf("The evidence sweep ran out of budget: %d of %d pages were not read (it read those most relevant to the plan's issues first): ", len(uncovered), len(visits))
@@ -449,10 +503,10 @@ func (e *Engine) sweepTool(rt *agent.Runtime, r *run) agent.Tool {
 
 // sweepPage is sweep's answer: one page, its lists in order of use (truncated: all the findings are
 // in the ledger, and a later sweep reads the uncovered pages).
-func sweepPage(visited int, fids []string, uncovered, skipped, unread []map[string]any) map[string]any {
+func sweepPage(visited int, fids, notes []string, uncovered, skipped, unread []map[string]any) map[string]any {
 	pg := agent.NewPage()
 	out := map[string]any{"visited": visited, "incomplete": len(uncovered) > 0, "unreadDocuments": agent.Take(pg, unread), "uncovered": agent.Take(pg, uncovered),
-		"findings": agent.Take(pg, fids), "skipped": agent.Take(pg, skipped)}
+		"findings": agent.Take(pg, fids), "skipped": agent.Take(pg, skipped), "notes": agent.Take(pg, notes)}
 	out["truncated"] = pg.Truncated
 	return out
 }
@@ -472,6 +526,35 @@ func skippedNote(swept []SweptDoc) string {
 	}
 	return fmt.Sprintf("The evidence sweep did not read %d %s it judged exact duplicates of pages it read or boilerplate (no text, or a table of contents): %s.",
 		n, plural(n, "page", "pages"), strings.Join(docs, "; "))
+}
+
+// staleLine is the Limitations line for the pages a sweep read before the plan gained issues and no
+// sweep read again for them ("" when none): facts there on only those issues may be missing.
+func (e *Engine) staleLine(ctx context.Context, taskID string, issues []Issue) (string, error) {
+	rs, err := e.rows(ctx, taskID, kVisit)
+	if err != nil {
+		return "", err
+	}
+	var cur []string
+	for _, is := range issues {
+		cur = append(cur, is.ID)
+	}
+	n, gone := 0, map[string]bool{}
+	for _, r := range rs {
+		if m := missing(cur, decodeVisit(r.Data, cur).Issues); len(m) > 0 {
+			n++
+			for _, id := range m {
+				gone[id] = true
+			}
+		}
+	}
+	if n == 0 {
+		return "", nil
+	}
+	ids := slices.DeleteFunc(slices.Clone(cur), func(id string) bool { return !gone[id] })
+	list := strings.Join(ids, ", ")
+	return fmt.Sprintf("Coverage: %d %s the evidence sweep read before %s %s joined the plan %s not read again for %s, so facts there that bear only on %s may be missing.",
+		n, plural(n, "page", "pages"), plural(len(ids), "issue", "issues"), list, plural(n, "was", "were"), plural(len(ids), "it", "them"), list), nil
 }
 
 // SweptDoc is one document's sweep coverage: pages planned, read and skipped (duplicate or boilerplate).

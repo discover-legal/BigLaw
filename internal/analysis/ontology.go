@@ -125,31 +125,23 @@ func Normalize(s string, sc Class, rel, o string, oc Class) (subj string, sClass
 }
 
 var (
-	reMoney = regexp.MustCompile(`(?i)^\$|\bmillion\b|\bbillion\b|\busd\b`)
-	rePct   = regexp.MustCompile(`(?i)%|\bpercent\b|\bbasis points?\b|\bbps\b`)
-	reAuth  = regexp.MustCompile(`(?i)\bsection\b|\brule\b|\bitem\b|u\.s\.c|c\.f\.r|§|\bact\b|\d+\([a-z0-9]+\)`)
-	reDate  = regexp.MustCompile(`(?i)\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.? \d|\b(19|20)\d\d\b|\d{1,2}/\d{1,2}/\d{2,4}`)
-	reFund  = regexp.MustCompile(`(?i)\b(fund|lp|l\.p\.)\b`)
-	reCount = regexp.MustCompile(`^\d[\d,]*(\.\d+)?$`)
+	reAuth = regexp.MustCompile(`(?i)\bsection\b|\brule\b|\bitem\b|u\.s\.c|c\.f\.r|§|\bact\b|\d+\([a-z0-9]+\)`)
+	reDate = regexp.MustCompile(`(?i)\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.? \d|\b(19|20)\d\d\b|\d{1,2}/\d{1,2}/\d{2,4}`)
+	reFund = regexp.MustCompile(`(?i)\b(fund|lp|l\.p\.)\b`)
 )
 
 // ClassifyLiteral guesses the class of an untyped value or name from its text, conservatively:
-// a party name it cannot place is unknown, never a guess.
+// a party name it cannot place is unknown, never a guess. What a number measures is never guessed
+// from its text: that is the figure reader's (Value.Fig, ClassOf).
 func ClassifyLiteral(s string) Class {
 	t := strings.TrimSpace(s)
 	switch {
 	case reAuth.MatchString(t):
 		return "Authority"
-	case reMoney.MatchString(t):
-		return "Money"
-	case rePct.MatchString(t):
-		return "Percentage"
 	case reDate.MatchString(t):
 		return "Date"
 	case reFund.MatchString(t):
 		return "Fund"
-	case reCount.MatchString(t):
-		return "Count"
 	}
 	return ""
 }

@@ -44,6 +44,7 @@ var allowedImports = map[string][]string{
 	"internal/model":           {},
 	"internal/store":           {},
 	"internal/store/storetest": {"internal/store"},
+	"internal/engine/figtest":  {"internal/analysis", "internal/model"},                                                                                                   // test support: the figure reader's stand-in
 	"internal/engine":          {"internal/agent", "internal/analysis", "internal/docs", "internal/docs/ooxml", "internal/contracts", "internal/store", "internal/model"}, // model: its types (Chatter, Roles, Prices) and error kinds, and the meta call through agent.Runtime.ChatWithin
 	"internal/contracts":       {"internal/agent", "internal/docs", "internal/docs/ooxml", "internal/store"},
 	"internal/billing":         {"internal/store"},

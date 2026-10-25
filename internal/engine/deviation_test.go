@@ -4,10 +4,12 @@
 package engine
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/discover-legal/BigLaw/internal/agent"
 	"github.com/discover-legal/BigLaw/internal/analysis"
 	"github.com/discover-legal/BigLaw/internal/model"
 )
@@ -264,38 +266,45 @@ func TestOmissionRequiresVerifiedAbsence(t *testing.T) {
 
 // The mechanical numeric join (v1's deviationNumericJoin → join_discrepancies over the findings).
 func devFindings(trustQuote string, verified bool, trustMetric string) []analysis.Finding {
-	return []analysis.Finding{
-		{FID: "F1", Verified: true, Quotes: []analysis.Quote{{DocumentID: "memo", Quote: qSophiaMemo}}, Values: []analysis.Value{{Entity: "Sophia", Metric: "residuary share", Value: "35%"}}},
-		{FID: "F2", Verified: verified, Quotes: []analysis.Quote{{DocumentID: "trust", Quote: trustQuote}}, Values: []analysis.Value{{Entity: "Sophia", Metric: trustMetric, Value: "30%"}}},
+	fs := []analysis.Finding{
+		{FID: "F1", Verified: true, Quotes: []analysis.Quote{{DocumentID: "memo", Quote: qSophiaMemo}}, Values: []analysis.Value{{Entity: "Sophia", Metric: "residuary share", Value: "35%", Fig: read(analysis.KindPercent, "", "35", "Sophia")}}},
+		{FID: "F2", Verified: verified, Quotes: []analysis.Quote{{DocumentID: "trust", Quote: trustQuote}}, Values: []analysis.Value{{Entity: "Sophia", Metric: trustMetric, Value: "30%", Fig: read(analysis.KindPercent, "", "30", "Sophia")}}},
 	}
+	for _, f := range fs { // what each measures: the reader's label, here the analyst's metric
+		f.Values[0].Fig.Measures = f.Values[0].Metric
+	}
+	return fs
 }
 
+// The join proposes the two documents' shares to the judge (who decides: judge.go), one from each.
 func TestDevNumericJoinBothQuotes(t *testing.T) {
-	cs := analysis.Join(devFindings(qSophiaTrust, true, "residuary share"), nil)
-	if len(cs) != 1 || len(cs[0].Values) != 2 || cs[0].Values[0].DocumentID == cs[0].Values[1].DocumentID {
+	cs, _ := analysis.Candidates(devFindings(qSophiaTrust, true, "residuary share"), 100, nil)
+	if len(cs) != 1 || cs[0].A.DocumentID == cs[0].B.DocumentID {
 		t.Fatalf("%+v", cs)
 	}
 }
 
 func TestDevNumericJoinEnumerationGuard(t *testing.T) {
 	fs := devFindings(qSophiaTrust, true, "residuary share")
-	fs[1].Values[0].Value = "35%"
-	if cs := analysis.Join(fs, nil); len(cs) != 0 {
+	fs[1].Values[0].Value, fs[1].Values[0].Fig = "35%", read(analysis.KindPercent, "", "35", "Sophia")
+	fs[1].Values[0].Fig.Measures = "residuary share"
+	if cs, _ := analysis.Candidates(fs, 100, nil); len(cs) != 0 {
 		t.Fatalf("a matching value is conformance: %+v", cs)
 	}
 }
 
 func TestDevNumericJoinSubstringLock(t *testing.T) {
-	if cs := analysis.Join(devFindings("a fabricated quote that appears nowhere", false, "residuary share"), nil); len(cs) != 0 {
+	if cs, _ := analysis.Candidates(devFindings("a fabricated quote that appears nowhere", false, "residuary share"), 100, nil); len(cs) != 0 {
 		t.Fatalf("a quarantined finding joined: %+v", cs)
 	}
 }
 
-// Changed: v2 has no judge here and no referent floor for numbers; metric identity is the label,
-// so differently labelled values never join.
+// Changed again (lab-r4 r7): whether two figures are one quantity is the figure judge's verdict, so
+// values read as two measures are still put to it; with no verdict, nothing is asserted.
 func TestDevNumericJoinNoJudgeConservative(t *testing.T) {
-	if cs := analysis.Join(devFindings(qSophiaTrust, true, "sophia trust allocation"), nil); len(cs) != 0 {
-		t.Fatalf("%+v", cs)
+	cs, _, unjudged, _, err := analysis.Join(context.Background(), agent.Call{}, devFindings(qSophiaTrust, true, "sophia trust allocation"), nil)
+	if err != nil || len(cs) != 0 || unjudged != 1 {
+		t.Fatalf("%+v (%d not judged, %v)", cs, unjudged, err)
 	}
 }
 

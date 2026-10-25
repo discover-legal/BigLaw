@@ -33,6 +33,9 @@ const (
 	kAnalysis = "analysis" // key: issue id; Analysis, analyze_issue's latest for the issue
 	kCover    = "cover"    // key: "pass"; Cover, the coverage pass's outcome (it runs once)
 	kSwept    = "swept"    // key: "sweep"; []SweptDoc, each document's sweep coverage (the latest sweep's)
+	kAlias    = "alias"    // key: a party's folded name; analysis.Alias, the names join_discrepancies was told it goes by
+	kRead     = "figread"  // key: "draft"; the calls drafted sections' figure readers made (not the drafters')
+	kVerdict  = "verdict"  // key: judgeKey of a candidate pair's content and the run's aliases; analysis.Verdict, the figure judge's (judge.go)
 )
 
 // Issue is one plan issue (the deliverable's spine), typed by a BELO-lite issue class.
@@ -65,6 +68,12 @@ type Finding struct {
 	// gated for a lawyer's review like a low-confidence transcript.
 	Check *SectionCheck `json:"sectionCheck,omitempty"`
 	Low   bool          `json:"lowConfidence,omitempty"`
+	// ValueNotes are the typed values admission dropped, and why (valueStated): the committee and
+	// coverage see them (lab-r4 r3: a dropped value is never silent).
+	ValueNotes []string `json:"valueNotes,omitempty"`
+	// Figures are its verified quotes' numbers as the figure reader read them (figures.go): what G8
+	// traces a memo figure that cites it to.
+	Figures []analysis.Reading `json:"figures,omitempty"`
 }
 
 // Analysis is analyze_issue's answer on one issue (rule, application, conclusion): it goes to the
@@ -82,18 +91,21 @@ type Cover struct {
 	Missing     []string `json:"missing"`
 	LeftOut     []string `json:"leftOut"`
 	Unaddressed int      `json:"unaddressed"`
+	Unadmitted  []string `json:"unadmitted,omitempty"` // usable findings with a typed value admission dropped (Finding.ValueNotes)
 }
 
 // Critic is one committee finding, open until the lead resolves it (fixed or disclosed).
 type Critic struct {
-	ID       string `json:"id"`
-	Cycle    int    `json:"cycle"`
-	Critic   string `json:"critic"`
-	Severity string `json:"severity"` // HIGH, MEDIUM or LOW
-	FID      string `json:"fid,omitempty"`
-	Text     string `json:"text"`
-	Status   string `json:"status"` // open, fixed or disclosed
-	Note     string `json:"note,omitempty"`
+	ID       string   `json:"id"`
+	Cycle    int      `json:"cycle"`
+	Critic   string   `json:"critic"`
+	Severity string   `json:"severity"` // HIGH, MEDIUM or LOW
+	FID      string   `json:"fid,omitempty"`
+	FIDs     []string `json:"fids,omitempty"` // an admission line's findings (each raised once per run)
+	Text     string   `json:"text"`
+	Status   string   `json:"status"` // open, fixed or disclosed
+	Note     string   `json:"note,omitempty"`
+	Resolved int      `json:"resolved,omitempty"` // the committee cycles run when it was resolved
 }
 
 // Fig is a figure handle as given to a drafter: kept with its section, so the renderer substitutes
@@ -111,6 +123,18 @@ type Section struct {
 	Summary  string `json:"summary"`
 	Handles  []Fig  `json:"handles"`
 	Version  int    `json:"version"`
+	// Read is the figure reader's reading of the numbers the drafter wrote (not Go's handle values),
+	// over the text G8 reads (memoBody), by its hash: a changed text is read again or read literally.
+	Read *SectionRead `json:"read,omitempty"`
+}
+
+// SectionRead is a section's figure reading: the hash of the text read and its readings (offsets in
+// it), and why the reader did not read all of it ("" when it did): Limitations discloses that, and
+// G8 flags every figure it did not read (lab-r4 r5 L4).
+type SectionRead struct {
+	Hash   string             `json:"hash"`
+	Figs   []analysis.Reading `json:"figs"`
+	Unread string             `json:"unread,omitempty"`
 }
 
 // Cycle is one committee run: on which draft version, after how many calls, finding what.
@@ -318,7 +342,11 @@ func (e *Engine) ledgerTool() agent.Tool {
 			case in.Resolution != "fixed" && in.Resolution != "disclosed" || strings.TrimSpace(in.Note) == "":
 				return nil, agent.Usage{}, agent.Fail("ledger: op resolve needs resolution fixed or disclosed and a note saying what was done (a disclosed note goes into Limitations)")
 			}
-			cs[i].Status, cs[i].Note = in.Resolution, in.Note
+			cyc, err := load[Cycle](ctx, e, c.TaskID, kCycle)
+			if err != nil {
+				return nil, agent.Usage{}, err
+			}
+			cs[i].Status, cs[i].Note, cs[i].Resolved = in.Resolution, in.Note, len(cyc)
 			out["ok"] = true
 			return out, agent.Usage{}, e.write(ctx, c.TaskID, kCritic, cs[i].ID, cs[i], true)
 		case "draft_get":

@@ -1,0 +1,61 @@
+{
+ "name": "figure_context",
+ "kind": "go",
+ "class": "free",
+ "maxTurns": 0,
+ "description": "Returns the text of a document right before or right after one of the quotes you are reading, so you can see a table header, a column's unit or an exception that governs a figure. Give the quote's documentId and the quote exactly as you were given it, which side to read, and an offset to read further out (the next it returned). It returns at most about 1,500 bytes of the document's own text per call, as data. Do not use it to search a document or to read text unrelated to a span you must label.\nExample: {\"documentId\": \"3f6c2a9e-0b1d-4c2e-9a7f-5d8e1b2c4a6f\", \"quote\": \"Revenue 4,000 3,850\", \"side\": \"before\", \"offset\": null}",
+ "in": {
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+   "documentId",
+   "quote",
+   "side",
+   "offset"
+  ],
+  "properties": {
+   "documentId": {
+    "type": "string",
+    "maxLength": 64
+   },
+   "quote": {
+    "type": "string",
+    "minLength": 1,
+    "maxLength": 20000
+   },
+   "side": {
+    "type": "string",
+    "enum": [
+     "before",
+     "after"
+    ]
+   },
+   "offset": {
+    "type": [
+     "integer",
+     "null"
+    ],
+    "minimum": 0
+   }
+  }
+ },
+ "out": {
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+   "text",
+   "next"
+  ],
+  "properties": {
+   "text": {
+    "type": "string"
+   },
+   "next": {
+    "type": [
+     "integer",
+     "null"
+    ]
+   }
+  }
+ }
+}

@@ -99,15 +99,22 @@ func (s *Schema) Strict(at string) string {
 	return ""
 }
 
-// Validate checks data against s. The error names the first offending path and what it needs.
-func (s *Schema) Validate(data json.RawMessage) error {
+// Validate checks data (a tool's input or a request body) against s. The error names the first
+// offending path ("input.…") and what it needs.
+func (s *Schema) Validate(data json.RawMessage) error { return s.validateAt(data, "input") }
+
+// ValidateOutput checks a tool's output against s: its paths are named "output.…" (bench6: an
+// output's missing key read as "input.truncated is missing").
+func (s *Schema) ValidateOutput(data json.RawMessage) error { return s.validateAt(data, "output") }
+
+func (s *Schema) validateAt(data json.RawMessage, root string) error {
 	var v any
 	d := json.NewDecoder(bytes.NewReader(data))
 	d.UseNumber()
 	if err := d.Decode(&v); err != nil || d.More() {
 		return fmt.Errorf("not one JSON value")
 	}
-	return s.validate(v, "input")
+	return s.validate(v, root)
 }
 
 func (s *Schema) validate(v any, at string) error {

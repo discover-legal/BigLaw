@@ -18,6 +18,11 @@ type src []Finding
 
 func (s src) Findings(context.Context, string) ([]Finding, error) { return s, nil }
 
+// Judge says every candidate pair is one quantity (the join's own checks are what these tests drive).
+func (s src) Judge(ctx context.Context, c agent.Call, cands []Candidate) (map[string]Verdict, agent.Usage, error) {
+	return scripted{answer: "yes"}.Judge(ctx, c, cands)
+}
+
 // invoke runs one tool through the runtime's dispatch path (schema checks included).
 func invoke(t *testing.T, name, input string) (agent.Result, error) {
 	t.Helper()
@@ -59,7 +64,7 @@ func TestJoinRefusesUnverifiedInputs(t *testing.T) {
 		t.Fatalf("a quarantined finding was joined: %v", err)
 	}
 	res, err := invoke(t, "join_discrepancies", `{"fids":null,"aliases":null}`)
-	if err != nil || string(res.Output) != `{"conflicts":[],"truncated":false,"unreadDocuments":[]}` {
+	if err != nil || string(res.Output) != `{"conflicts":[],"notJudged":0,"truncated":false,"unclear":[],"unreadDocuments":[]}` {
 		t.Fatalf("all verified: %s %v", res.Output, err)
 	}
 }
@@ -67,10 +72,10 @@ func TestJoinRefusesUnverifiedInputs(t *testing.T) {
 // r2 verifier N1: an empty fids list means every finding, as null does (and as in numbers);
 // [] once picked nothing and silently reported no discrepancy.
 func TestJoinEmptyFidsMeansAll(t *testing.T) {
-	fs := src{
+	fs := src(read([]Finding{
 		fh("$9.0 million", "Respondent paid $9.0 million in fees.", "docA", "Acme", "fees paid"),
 		fh("$9.4 million", "Acme paid $9.4 million in fees.", "docB", "Acme", "fees paid"),
-	}
+	}))
 	rt := &agent.Runtime{Chat: model.NewFake(nil), Reg: agent.NewRegistry()}
 	for _, tl := range Tools(fs) {
 		if err := rt.Reg.Register(tl); err != nil {

@@ -85,7 +85,7 @@ func TestDeadlinesMeetTheAnswerKey(t *testing.T) {
 		"lead": lead,
 		"extract_facts": {
 			facts(q("Talbot was served on 10/21/2026.", dkt, "served on 10/21/2026 via its registered agent", val("Talbot", "served", "10/21/2026", "Date")),
-				q("A joint status report is due seven days before the December 3, 2026 hearing.", dkt, "Initial status hearing set for December 3, 2026 at 9:30 a.m.",
+				q("A joint status report is due seven days before the December 3, 2026 hearing.", dkt, "Initial status hearing set for December 3, 2026 at 9:30 a.m. in Courtroom 1925. The parties shall file a joint initial status report no later than seven (7) days before the initial status hearing",
 					val("court", "initial status hearing", "December 3, 2026", "Date")),
 				q("The complaint was filed on 10/09/2026.", dkt, "Date Filed: 10/09/2026", val("Greystone", "filed", "10/09/2026", "Date"))),
 			facts(q("Greystone's Notice of Dispute is dated September 25, 2026.", cor, "Greystone Notice of Dispute, September 25, 2026", val("Greystone", "notice of dispute", "September 25, 2026", "Date"))),
@@ -95,7 +95,7 @@ func TestDeadlinesMeetTheAnswerKey(t *testing.T) {
 				q("An answer is due 21 days after service.", rules, "A defendant must serve an answer within 21 days after being served with the summons and complaint")),
 		},
 	})
-	fake := model.NewFake(scripts)
+	fake := newFake(scripts)
 	f.e = New(f.st, f.d, handleDrafter{fake}, testRoles, nil, Config{BudgetCalls: 150, BudgetUSD: 5, CollapseThreshold: 0.5, CollapseAction: "strict"}, nil)
 	task := f.submit(0)
 	f.step(context.Background())
@@ -104,7 +104,9 @@ func TestDeadlinesMeetTheAnswerKey(t *testing.T) {
 	if fin := f.outputs(v.ID, "finish"); stop(v) != "awaiting_gate/finished" || len(fin) != 1 || !strings.Contains(fin[0], `"lint":[]`) {
 		t.Fatalf("%s %q\n%s\n%q", stop(v), fin, f.steps(v.ID), f.outputs(v.ID, "numbers"))
 	}
-	if !strings.Contains(out, "November 12, 2026 is a calculation from typed inputs as well as verified values (date_add: 1 F1.v1 = 10/21/2026 date; 2 21 days;") {
+	if !strings.Contains(out, "- November 12, 2026 = October 21, 2026 [F1] “served on 10/21/2026 via its registered…” + 21 days [F8] “…serve an answer within 21 days after being…”, rolled past a weekend or holiday (I1)") ||
+		!strings.Contains(out, "- November 25, 2026 = December 3, 2026 [F2] “…status hearing set for December 3, 2026 at 9:30 a.m. in…” − 7 days [F2]") ||
+		!strings.Contains(out, "- 14 days = days from September 25, 2026 [F4] “…Notice of Dispute, September 25, 2026” to October 9, 2026 [F3] “Date Filed: 10/09/2026” (I1)") {
 		t.Errorf("a calculation over typed inputs is not disclosed")
 	}
 	var key struct {
@@ -120,7 +122,7 @@ func TestDeadlinesMeetTheAnswerKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, _ := dates(out)
+	got, _ := analysis.Literal(out)
 	checked := 0
 	for _, c := range key.Facts {
 		if c.Category != "deadline" {
@@ -152,9 +154,9 @@ func TestDeadlinesMeetTheAnswerKey(t *testing.T) {
 // it to that worksheet and to the rolled worksheet's raw-date step. A deadline's raw date now traces
 // only in a paragraph that states the rolled deadline, and the lint names the handle to write.
 func TestRawDeadlineNeedsItsRoll(t *testing.T) {
-	served := "served on 10/21/2026 via its registered agent"
+	served, rule := "served on 10/21/2026 via its registered agent", "A defendant must serve an answer within 21 days after being served" // the period a day count traces to (r7 M1)
 	f1 := Finding{Finding: analysis.Finding{FID: "F1", Verified: true, Values: []analysis.Value{{Entity: "Talbot", Metric: "served", Value: "10/21/2026", Class: "Date"}}},
-		Citations: []Citation{{Quote: served, Method: "exact"}}}
+		Citations: []Citation{{Quote: served, Method: "exact"}, {Quote: rule, Method: "exact"}}, Figures: []analysis.Reading{{Span: "q2.s1", Text: "21", Kind: analysis.KindDuration, Unit: "days", UnitFrom: "days", Amount: "21"}}}
 	fs := []analysis.Finding{f1.Finding}
 	ops := func() []analysis.Operand {
 		ref, n, u := "F1.v1", "21", "days"

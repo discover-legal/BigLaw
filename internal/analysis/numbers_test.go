@@ -11,12 +11,12 @@ import (
 func ref(s string) *string { return &s }
 
 func ledger() []Finding {
-	return []Finding{
+	return read([]Finding{
 		{FID: "F1", Verified: true, Values: []Value{{Entity: "Oceanic Fund I LP", Metric: "excess profits", Value: "$7,800,000"}, {Metric: "rate", Value: "81.6%"}}},
 		{FID: "F2", Verified: true, Values: []Value{{Entity: "Diana L. Chao", Metric: "excess profits", Value: "$438,000"}, {Metric: "trades", Value: "4,217", Unit: "trades"}}},
 		{FID: "F3", Verified: false, Values: []Value{{Metric: "excess profits", Value: "$9,999,999"}}},
 		{FID: "F4", Verified: true, Values: []Value{{Metric: "notice date", Value: "November 12, 2026"}, {Metric: "a", Value: "0.1"}, {Metric: "b", Value: "0.2"}, {Metric: "cite", Value: "Section 9.1"}}},
-	}
+	})
 }
 
 func TestCalculateDecimalExact(t *testing.T) {
@@ -138,7 +138,7 @@ func TestAssignHandlesSurfacesSalient(t *testing.T) {
 		vals = append(vals, Value{Metric: "figure", Value: v})
 	}
 	got := map[string]bool{}
-	for _, h := range Handles([]Finding{{FID: "F1", Verified: true, Values: vals}}, nil, 12) {
+	for _, h := range Handles(read([]Finding{{FID: "F1", Verified: true, Values: vals}}), nil, 12) {
 		got[h.Value] = true
 	}
 	for _, want := range []string{"$8,238,000", "$438,000", "4,217"} {
@@ -182,7 +182,7 @@ func TestKeyFiguresTableOnlyVerified(t *testing.T) {
 	if !strings.Contains(tab, "| Oceanic Fund I LP excess profits | $7,800,000 | [F1] |") || strings.Contains(tab, "9,999,999") || strings.Contains(tab, "[F3]") {
 		t.Fatalf("table:\n%s", tab)
 	}
-	if tab := KeyFigures([]Finding{{FID: "F1", Verified: true, Values: []Value{{Metric: "a|b", Value: "$1"}}}}, nil); !strings.Contains(tab, `a\|b`) {
+	if tab := KeyFigures(read([]Finding{{FID: "F1", Verified: true, Values: []Value{{Metric: "a|b", Value: "$1"}}}}), nil); !strings.Contains(tab, `a\|b`) {
 		t.Fatalf("pipe not escaped: %s", tab)
 	}
 }
@@ -211,17 +211,17 @@ func TestParseRecDates(t *testing.T) {
 	}
 }
 
-func TestParseMoneyCents(t *testing.T) {
-	for in, want := range map[string]int64{"$7,800,000": 780_000_000, "$438,000.00": 43_800_000, "$22.2 million": 2_220_000_000, "$1,234.56": 123_456} {
-		if got, ok := MoneyCents(in); !ok || got != want {
-			t.Errorf("MoneyCents(%q) = %d,%v want %d", in, got, ok, want)
+func TestCanonReadsMoney(t *testing.T) {
+	for in, want := range map[string]string{"$7,800,000": "usd:7800000", "$438,000.00": "usd:438000", "$22.2 million": "usd:22200000", "$1,234.56": "usd:1234.56"} {
+		if _, got, _, ok := Canon(withFig(Value{Value: in, Class: "Money"})); !ok || got != want { // the figure reader's reading (its stand-in here)
+			t.Errorf("Canon(%q) = %s,%v want %s", in, got, ok, want)
 		}
 	}
 }
 
 func TestFigureSalienceRanking(t *testing.T) {
 	for _, c := range [][2]string{{"$8,238,000", "$185"}, {"4,217", "3"}, {"$438,000", "12%"}, {"81.6%", "3"}, {"$92,290.00", "$40"}} {
-		if Salience(c[0]) <= Salience(c[1]) {
+		if Salience(withFig(Value{Value: c[0]})) <= Salience(withFig(Value{Value: c[1]})) {
 			t.Errorf("salience(%q) should exceed salience(%q)", c[0], c[1])
 		}
 	}
@@ -230,11 +230,11 @@ func TestFigureSalienceRanking(t *testing.T) {
 // r1: a money value in another currency is not dollars: it keeps its unit, so a sum across
 // currencies is refused instead of being labelled USD.
 func TestCalculateKeepsCurrency(t *testing.T) {
-	fs := append(ledger(), Finding{FID: "F5", Verified: true, Values: []Value{{Metric: "deposit", Value: "500,000", Unit: "GBP", Class: "Money"}}})
+	fs := append(ledger(), read([]Finding{{FID: "F5", Verified: true, Values: []Value{{Metric: "deposit", Value: "500,000", Unit: "GBP", Class: "Money"}}}})...)
 	if w, err := Calc(fs, "sum", []Operand{{Ref: ref("F5.v1")}, {Ref: ref("F2.v1")}}, nil); err == nil {
 		t.Fatalf("GBP + USD = %s %s", w.Result, w.Unit)
 	}
-	if w, err := Calc(fs, "sum", []Operand{{Ref: ref("F5.v1")}, {Literal: ref("1"), Unit: ref("gbp")}}, nil); err != nil || w.Result != "500001" || w.Unit != "gbp" {
+	if w, err := Calc(fs, "sum", []Operand{{Ref: ref("F5.v1")}, {Literal: ref("1"), Unit: ref("gbp")}}, nil); err != nil || w.Result != "500001" || w.Unit != "GBP" { // a currency code, however its unit is written
 		t.Fatalf("GBP + GBP = %q %q (%v)", w.Result, w.Unit, err)
 	}
 }
@@ -277,11 +277,11 @@ func TestCalculateBusinessDaysRefusesReversedDates(t *testing.T) {
 // are read, a court deadline rolls off weekends and holidays (forward after an event, back before
 // one), "35% of" multiplies, and what cannot be read says how to send it.
 func TestCalcAcceptsWhatModelsSend(t *testing.T) {
-	fs := []Finding{
+	fs := read([]Finding{
 		{FID: "F30", Verified: true, Values: []Value{{Metric: "served", Value: "10/21/2026"}}},
-		{FID: "F31", Verified: true, Values: []Value{{Metric: "hearing", Value: "December 3, 2026"}, {Metric: "report lead time", Value: "7 days"}}},
+		{FID: "F31", Verified: true, Values: []Value{{Metric: "hearing", Value: "December 3, 2026"}, {Metric: "report lead time", Value: "7 days", Fig: fig(KindOther, "", "7", "")}}},
 		{FID: "F32", Verified: true, Values: []Value{{Metric: "shortfall", Value: "$612,400"}, {Metric: "cap", Value: "35%"}}},
-	}
+	})
 	holidays := []string{"2026-11-11", "2026-11-26"}
 	days, date := ref("days"), ref("date")
 	for _, c := range []struct {
@@ -320,7 +320,7 @@ func TestCalcAcceptsWhatModelsSend(t *testing.T) {
 	}{
 		{"date_add", []Operand{{Ref: ref("F32.d1")}, {Literal: ref("1"), Unit: days}}, []string{"F32 has 2 values", "F32.v1 = $612,400", `{"ref": "F32.v1"`}},
 		{"date_add", []Operand{{Literal: ref("2026-11-12"), Unit: date}, {Literal: ref("2026-11-13"), Unit: date}}, []string{"it got a date, a date", `"fn": "date_add"`, `"unit": "days"`}},
-		{"product", []Operand{{Ref: ref("F32.v1")}, {Ref: ref("F32.v1")}}, []string{"at most one of them not a percentage"}},
+		{"product", []Operand{{Ref: ref("F32.v1")}, {Ref: ref("F32.v1")}}, []string{"at most one of them an amount of money"}},
 		{"sum", []Operand{{}}, []string{`{"ref": "F12.v1"`}},
 	} {
 		if _, err := Calc(fs, c.fn, c.ops, nil); err == nil || !containsAll(err.Error(), c.want) {
@@ -336,4 +336,47 @@ func containsAll(s string, subs []string) bool {
 		}
 	}
 	return true
+}
+
+// r7 M4: product and ratio take any numbers with at most one amount of money (a ratio: one
+// currency), exact: shares × price × multiple is money, two amounts of money multiplied or two
+// currencies divided are refused, and an amount over a count is per unit.
+func TestCalcProductsAndRatiosOfOneCurrency(t *testing.T) {
+	lit := func(x, unit string) Operand {
+		o := Operand{Literal: &x}
+		if unit != "" {
+			o.Unit = &unit
+		}
+		return o
+	}
+	for _, c := range []struct {
+		fn           string
+		ops          []Operand
+		result, unit string
+	}{
+		{"product", []Operand{lit("1,200,000", ""), lit("5.00", "USD"), lit("1.5", "")}, "9000000", "USD"},
+		{"product", []Operand{lit("2.0", ""), lit("385000", "USD")}, "770000", "USD"},
+		{"product", []Operand{lit("10", "%"), lit("84000000", "USD")}, "8400000", "USD"},
+		{"product", []Operand{lit("1,200,000", "shares"), lit("2", "")}, "2400000", ""},
+		{"product", []Operand{lit("1,200,000", "shares"), lit("50", "%")}, "600000", "shares"},
+		{"ratio", []Operand{lit("9,000,000", "USD"), lit("1,200,000", "")}, "7.5", "USD"},
+		{"ratio", []Operand{lit("9,000,000", "USD"), lit("3,000,000", "USD")}, "3", ""},
+	} {
+		w, err := Calc(nil, c.fn, c.ops, nil)
+		if err != nil || w.Result != c.result || w.Unit != c.unit {
+			t.Errorf("%s %v: %s %q (%v), want %s %q", c.fn, w.Steps, w.Result, w.Unit, err, c.result, c.unit)
+		}
+	}
+	for _, c := range []struct {
+		fn  string
+		ops []Operand
+	}{
+		{"product", []Operand{lit("5", "USD"), lit("2", "USD")}},
+		{"product", []Operand{lit("5", "USD"), lit("2", "EUR"), lit("3", "")}},
+		{"ratio", []Operand{lit("5", "USD"), lit("2", "EUR")}},
+	} {
+		if _, err := Calc(nil, c.fn, c.ops, nil); err == nil || !strings.Contains(err.Error(), "money") && !strings.Contains(err.Error(), "currency") {
+			t.Errorf("%s %+v: %v, want a refusal naming the money rule", c.fn, c.ops, err)
+		}
+	}
 }

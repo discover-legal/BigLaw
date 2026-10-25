@@ -36,6 +36,9 @@ type Fake struct {
 	// Route names the script a request is answered from (nil: its agent's), so a test can answer by
 	// what a request holds when calls arrive in any order (a parallel sweep). Set it before use.
 	Route func(Request) string
+	// Respond answers a request itself when it returns true (a test's stand-in for a model whose answer
+	// depends on what the request holds, such as the figure reader's labels); otherwise the scripts do.
+	Respond func(Request) (Reply, bool)
 
 	mu      sync.Mutex
 	embeds  []EmbedRequest
@@ -76,13 +79,19 @@ func (f *Fake) Chat(ctx context.Context, req Request) (*Response, error) {
 	f.n[key]++
 	n := f.n[key] // this script's call number
 	script, ok := f.scripts[key]
+	r, answered := Reply{}, false
+	if f.Respond != nil {
+		r, answered = f.Respond(req)
+	}
 	switch {
+	case answered:
 	case !ok:
 		return nil, fmt.Errorf("%w %q", ErrUnscripted, key)
 	case n > len(script):
 		return nil, fmt.Errorf("%w: script %q got call %d of a %d-reply script", ErrScriptExhausted, key, n, len(script))
+	default:
+		r = script[n-1]
 	}
-	r := script[n-1]
 	if r.Err != nil {
 		return nil, r.Err
 	}

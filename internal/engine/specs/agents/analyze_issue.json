@@ -78,6 +78,7 @@
      "type": "object",
      "additionalProperties": false,
      "required": [
+      "issueId",
       "claim",
       "quotes",
       "values",
@@ -86,6 +87,13 @@
       "confidence"
      ],
      "properties": {
+      "issueId": {
+       "type": [
+        "string",
+        "null"
+       ],
+       "maxLength": 16
+      },
       "claim": {
        "type": "string",
        "maxLength": 4000,

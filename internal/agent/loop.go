@@ -333,7 +333,7 @@ func answer(text string, out *Schema) (json.RawMessage, error) {
 	if strings.HasPrefix(t, "```") {
 		t = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(t, "```json"), "```"), "```"))
 	}
-	err := out.Validate(json.RawMessage(t))
+	err := out.ValidateOutput(json.RawMessage(t))
 	if err == nil {
 		return json.RawMessage(t), nil
 	}
@@ -348,7 +348,7 @@ func answer(text string, out *Schema) (json.RawMessage, error) {
 		alts = append(alts, text[i:j+1])
 	}
 	for _, a := range alts {
-		if out.Validate(json.RawMessage(a)) == nil {
+		if out.ValidateOutput(json.RawMessage(a)) == nil {
 			return json.RawMessage(a), nil
 		}
 	}
@@ -414,6 +414,15 @@ type meter struct {
 	held  Grant // the worst cases of the calls in flight
 }
 
+// Meter records spend a Go tool made inside a running journaled step without ChatWithin (a query
+// embedding inside retrieve, also a subagent's retrieve inside a committee or sweep step), so a hard
+// crash charges it too (lab-r4: every model call inside a journaled step is metered). Outside a
+// journaled step it records nothing.
+func Meter(ctx context.Context, spent Usage) error {
+	m, _ := ctx.Value(meterKey{}).(*meter)
+	return m.note(ctx, spent, Grant{})
+}
+
 // note adds to the step's spend and in-flight holds and records them; a nil meter records nothing.
 func (m *meter) note(ctx context.Context, spent Usage, held Grant) error {
 	if m == nil {
@@ -443,6 +452,23 @@ func (rt *Runtime) bound(req model.Request) float64 {
 		T []model.Tool
 	}{req.Messages, req.Tools})
 	return (1.25*float64(len(body)+overheadTokens)*r.In + float64(req.MaxTokens)*r.Out) / 1e6
+}
+
+// WorstCase is what one call of subagent s on model m may spend with an input of up to inputBytes:
+// each of its turns a request of its prompt, that input and its earlier turns' whole answers, and a
+// whole answer (a caller that must fund it later holds this back first: the figure reader after a
+// drafter, lab-r4 r5 L4).
+func (rt *Runtime) WorstCase(s Spec, prompt, m string, inputBytes int) Grant {
+	g := Grant{Calls: s.MaxTurns}
+	var defs []model.Tool
+	if rt.Reg != nil {
+		defs, _ = rt.Reg.Defs(s.Allowed)
+	}
+	for t := range s.MaxTurns {
+		g.USD += rt.bound(model.Request{Model: m, MaxTokens: subagentMaxTokens, Tools: defs, Messages: []model.Message{{Role: "system", Content: prompt},
+			{Role: "user", Content: strings.Repeat("x", inputBytes+t*4*subagentMaxTokens)}}})
+	}
+	return g
 }
 
 func (rt *Runtime) record(ctx context.Context, s Step) error {
@@ -528,7 +554,7 @@ func (rt *Runtime) Invoke(ctx context.Context, a Agent, c Call, name string, inp
 	g.Charge(res.Usage)
 	g.Close()
 	if err == nil {
-		if verr := e.out.Validate(res.Output); verr != nil {
+		if verr := e.out.ValidateOutput(res.Output); verr != nil {
 			err = fmt.Errorf("%w: %s: %v", ErrToolOutput, name, verr)
 		}
 	}

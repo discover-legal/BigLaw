@@ -106,7 +106,7 @@ func CheckCoverage(issues []Issue, sections map[string]string, findings []Findin
 		}
 	}
 	for _, h := range Handles(findings, nil, 0) {
-		if Salience(h.Value) >= salientFloor && !strings.Contains(text, h.Value) && !strings.Contains(strings.ToLower(text), strings.ToLower(h.Handle)) {
+		if Salience(h.v) >= salientFloor && !strings.Contains(text, h.Value) && !strings.Contains(strings.ToLower(text), strings.ToLower(h.Handle)) {
 			c.MissingFigures = append(c.MissingFigures, h)
 		}
 	}

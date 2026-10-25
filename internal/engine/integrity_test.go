@@ -114,10 +114,10 @@ func TestFabricatingModelFailsTask(t *testing.T) {
 	v := f.run(f.with(map[string][]model.Reply{
 		"lead":          {calls(plan(issue("I1", "What does Greystone claim?", "Conduct"))), calls(extract(d1, "damages", "I1")), calls(draft("I1", "F1"))},
 		"extract_facts": {facts(fake...)},
-		"verify_quote":  {judgeNo, judgeNo},
+		"verify_quote":  {judgeNo, judgeNo, judgeNo}, // no quote states a number: the judges may spend the reader's call too (r7 L4)
 	}), Config{})
 	if stop(v) != "failed/failed" || v.GroundingAlert == nil || !strings.Contains(*v.GroundingAlert, "8 of 8") || v.Output != nil {
-		t.Fatalf("%s alert %v error %v", stop(v), v.GroundingAlert, v.Error)
+		t.Fatalf("%s alert %v error %v\n%s\n%q", stop(v), v.GroundingAlert, deref(v.Error), f.steps(v.ID), f.outputs(v.ID, "extract_facts"))
 	}
 	if strings.Contains(f.steps(v.ID), "draft_section") {
 		t.Fatal("the run went on after the collapse")
@@ -493,7 +493,8 @@ func TestMarkdownNeutralised(t *testing.T) {
 func TestLintSaysHowToFix(t *testing.T) {
 	cite := func(q string) []Citation { return []Citation{{Quote: q, Method: "exact"}} }
 	use := map[string]Finding{
-		"F1": {Finding: analysis.Finding{FID: "F1", Values: []analysis.Value{{Value: "10/21/2026"}}}, Citations: cite("served on 10/21/2026 via its registered agent")},
+		"F1": {Finding: analysis.Finding{FID: "F1", Values: []analysis.Value{{Value: "10/21/2026"}}}, Citations: cite("served on 10/21/2026 via its registered agent; an answer is due within 21 days"),
+			Figures: []analysis.Reading{{Span: "q1.s4", Text: "21", Kind: analysis.KindDuration, Unit: "days", UnitFrom: "days", Amount: "21"}}}, // the rule's period the worksheet's day count traces to (r7 M1)
 		"F2": {Finding: analysis.Finding{FID: "F2", Values: []analysis.Value{{Value: "$612,400"}}}, Citations: cite("leaving a shortfall of $612,400")},
 		"F3": {Finding: analysis.Finding{FID: "F3"}, Citations: cite("a fee equal to thirty-five percent (35%) of the shortfall")},
 	}
@@ -503,7 +504,7 @@ func TestLintSaysHowToFix(t *testing.T) {
 	sec := Section{Handles: figs, Markdown: "Talbot was served on 10/21/2026 [F1]. Under Rule 12(a)(1)(A)(i) and Fed. R. Civ. P. 6(a)(1)(C), 21 days later is " +
 		"November 11, 2026, Veterans Day, so the answer is due {W0123456789} [F1]. Section 4.3 and § 9.2 cap the fee [F3]; Rule 7.1 applies [F1]. " +
 		"Greystone invoiced $612,400 [F1]. The cap is $214,340 [F3]. The status report is due November 25, 2026 [F1]. Rule 98765 is no hiding place [F1]."}
-	got := strings.Join(lint("I1", sec, use, []analysis.Worksheet{w}), "\n")
+	got := strings.Join(lint("I1", readSection(sec), use, []analysis.Worksheet{w}), "\n")
 	for _, want := range []string{
 		"the figure 612400 is not traced (G8): write its handle {Zephyr} and cite [F2]",
 		"the figure 214340 is not traced (G8): no cited finding, handle or worksheet states it: if it is computed",
@@ -519,17 +520,17 @@ func TestLintSaysHowToFix(t *testing.T) {
 		t.Errorf("want exactly the four untraced figures, got %d:\n%s", n, got)
 	}
 	sec.Markdown = `The fee is "a fee equal to {Zephyr} of the shortfall" [F3].`
-	if got := lint("I1", sec, use, nil); len(got) != 1 || !strings.Contains(got[0], "{Zephyr} is inside a quotation, where Go never substitutes it") {
+	if got := lint("I1", readSection(sec), use, nil); len(got) != 1 || !strings.Contains(got[0], "{Zephyr} is inside a quotation, where Go never substitutes it") {
 		t.Errorf("a handle inside a quote: %q", got)
 	}
 	sec.Markdown = "Greystone invoiced $612,400 [F1]."
-	if got := lint("I1", sec, map[string]Finding{"F1": use["F1"], "F4": {Finding: analysis.Finding{FID: "F4"}, Citations: cite("invoiced $612,400")}}, nil); len(got) != 1 ||
+	if got := lint("I1", readSection(sec), map[string]Finding{"F1": use["F1"], "F4": {Finding: analysis.Finding{FID: "F4"}, Citations: cite("invoiced $612,400")}}, nil); len(got) != 1 ||
 		!strings.Contains(got[0], "write its handle {Zephyr} and cite [F2]") {
 		t.Errorf("%q", got)
 	}
 	delete(use, "F2")
 	sec.Handles = nil
-	if got := lint("I1", sec, map[string]Finding{"F1": use["F1"], "F4": {Finding: analysis.Finding{FID: "F4"}, Citations: cite("invoiced $612,400")}}, nil); len(got) != 1 ||
+	if got := lint("I1", readSection(sec), map[string]Finding{"F1": use["F1"], "F4": {Finding: analysis.Finding{FID: "F4"}, Citations: cite("invoiced $612,400")}}, nil); len(got) != 1 ||
 		!strings.Contains(got[0], "it is stated by [F4]: cite [F4]") {
 		t.Errorf("%q", got)
 	}
@@ -601,7 +602,7 @@ func TestFigureLintSkipsLocatorLists(t *testing.T) {
 		"Section 2,000 of nothing":                  "2000", // a locator is never a figure's head
 		"clauses 3(a) and 3(b) or 3(c); 1,200 rows": "1200",
 	} {
-		if got := Untraced(maskRefs(text), ground, false); len(got) != 1 || got[0] != want {
+		if got := Untraced(analysis.MaskLocators(text), ground, false); len(got) != 1 || got[0] != want {
 			t.Errorf("%q: untraced %q, want only %s", text, got, want)
 		}
 	}
@@ -618,10 +619,10 @@ func TestFigureLintTracesCountAfterLocatorList(t *testing.T) {
 		"See Sections 4 and 5; 30 days after the notice the cure period ended.":      "30",
 		"Exhibits 4 and 5 & 300 trades":                                              "300",
 		"Under Sections 3 and 4, 250 employees were affected.":                       "250",
-		"Sections 3 and 14 million in fees":                                          "14",
+		"Sections 3 and 14 million in fees":                                          "14", // as written: what it means is the figure reader's (lint's labelled check)
 	} {
-		if got := Untraced(maskRefs(text), ground, false); len(got) != 1 || got[0] != want {
-			t.Errorf("%q: untraced %q, want %s (masked: %q)", text, got, want, maskRefs(text))
+		if got := Untraced(analysis.MaskLocators(text), ground, false); len(got) != 1 || got[0] != want {
+			t.Errorf("%q: untraced %q, want %s (masked: %q)", text, got, want, analysis.MaskLocators(text))
 		}
 	}
 }

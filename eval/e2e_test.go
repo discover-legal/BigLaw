@@ -63,7 +63,7 @@ func TestE2EServe(t *testing.T) {
 		return call("extract_facts", m{"question": q, "documentId": nil, "sectionId": nil, "through": nil, "offset": nil, "query": q, "issueId": issue})
 	}
 	fd := func(claim, doc, quote string, values ...m) m {
-		return m{"claim": claim, "quotes": []m{{"documentId": doc, "quote": quote, "locator": nil}}, "values": append([]m{}, values...), "entities": []m{}, "relations": []m{}, "confidence": 1}
+		return m{"issueId": nil, "claim": claim, "quotes": []m{{"documentId": doc, "quote": quote, "locator": nil}}, "values": append([]m{}, values...), "entities": []m{}, "relations": []m{}, "confidence": 1}
 	}
 	sc := map[string][]model.Reply{
 		"lead": {{ToolCalls: []model.ToolCall{plan}}, {ToolCalls: []model.ToolCall{ex("damages claimed", "I1"), ex("service date", "I2")}},
@@ -79,7 +79,7 @@ func TestE2EServe(t *testing.T) {
 		sc[k] = v
 	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	e := engine.New(st, d, slow{model.NewFake(sc)}, model.Roles{Lead: "fake-lead"}, nil, engine.Config{BudgetCalls: 150, BudgetUSD: 5, CollapseThreshold: 0.5, CollapseAction: "strict"}, log)
+	e := engine.New(st, d, slow{readerFake(sc)}, model.Roles{Lead: "fake-lead"}, nil, engine.Config{BudgetCalls: 150, BudgetUSD: 5, CollapseThreshold: 0.5, CollapseAction: "strict"}, log)
 	mux := api.Handler(d, e, os.DirFS("../ui/dist"), log)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`{"status":"ok"}`)) })
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)

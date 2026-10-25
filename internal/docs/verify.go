@@ -18,6 +18,7 @@ import (
 const (
 	ExactConfidence    = 1.0
 	TolerantConfidence = 0.95
+	CellConfidence     = 0.9  // tolerant, a table row's cells matched with their separators set aside
 	JudgeCap           = 0.8  // a single judge's confidence is capped here
 	ensembleBand       = 0.75 // a judge less sure than this escalates to the ensemble
 	ensembleVotes      = 3
@@ -61,6 +62,16 @@ func Verify(ctx context.Context, text, quote string, judge Judge) (Verification,
 	if nq = strings.TrimSpace(nq); nq != "" {
 		if i := strings.Index(nt, nq); i >= 0 {
 			return Verification{Verified: true, Method: "tolerant", Confidence: TolerantConfidence, Start: back[i], End: back[i+len(nq)]}, nil
+		}
+	}
+	if strings.Contains(quote, "|") { // a table row quoted with "|" between its cells, which the document separates otherwise (bench5 SEC: an .xlsx row's tabs, so its $103,800 total never verified)
+		ct, cback := normalizeCells(text, true)
+		cq, _ := normalizeCells(strings.TrimSpace(quote), true)
+		if cq = strings.TrimSpace(cq); cq != "" && strings.ContainsFunc(cq, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }) {
+			if i := strings.Index(ct, cq); i >= 0 {
+				return Verification{Verified: true, Method: "tolerant", Confidence: CellConfidence, Start: cback[i], End: cback[i+len(cq)],
+					Note: "matched as table cells (the quote's \"|\" separators stand for the document's)"}, nil
+			}
 		}
 	}
 	if judge == nil {
@@ -135,16 +146,20 @@ func (t *Text) Find(quote string, from, to int) (start, end int, ok bool) {
 // normalize straightens curly quotes and hyphens, folds case, drops format characters (zero-width
 // spaces and joiners, bidi marks, soft hyphens) and collapses each white-space run to one space.
 // back maps every byte of the result (and one past its end) to a byte offset in s.
-func normalize(s string) (string, []int) {
+func normalize(s string) (string, []int) { return normalizeCells(s, false) }
+
+// normalizeCells is normalize, with cells set also counting "|" as white space (a table's cell
+// separator: a run of tabs, spaces and pipes is one separator).
+func normalizeCells(s string, cells bool) (string, []int) {
 	var b strings.Builder
 	back := make([]int, 0, len(s)+1)
 	for i := 0; i < len(s); {
 		r, n := utf8.DecodeRuneInString(s[i:])
-		if unicode.IsSpace(r) {
+		if unicode.IsSpace(r) || cells && r == '|' {
 			j := i
 			for j < len(s) {
 				r2, n2 := utf8.DecodeRuneInString(s[j:])
-				if !unicode.IsSpace(r2) {
+				if !unicode.IsSpace(r2) && !(cells && r2 == '|') {
 					break
 				}
 				j += n2
