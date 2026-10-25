@@ -22,11 +22,16 @@ import (
 // contextBytes is what one figure_context call returns at most.
 const contextBytes = 1500
 
-type figureContext struct{ e *Engine }
+type figureContext struct {
+	e *Engine
+	s agent.Spec
+}
 
-func (e *Engine) figureContextTool() agent.Tool { return figureContext{e} }
+func (e *Engine) figureContextTool(sp *Specs) agent.Tool {
+	return figureContext{e, sp.Spec("figure_context")}
+}
 
-func (figureContext) Spec() agent.Spec { return spec("figure_context") }
+func (f figureContext) Spec() agent.Spec { return f.s }
 
 // Call returns the document's text right before or after the quote's first exact occurrence in it,
 // from offset bytes out, cut at rune boundaries, in the task's scope only.
@@ -106,9 +111,9 @@ func headOf(s string, n int) string {
 	return s[:n]
 }
 
-type exactCalc struct{}
+type exactCalc struct{ s agent.Spec }
 
-func (exactCalc) Spec() agent.Spec { return spec("exact_calc") }
+func (x exactCalc) Spec() agent.Spec { return x.s }
 
 var plainNumber = regexp.MustCompile(`^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$`)
 

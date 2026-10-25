@@ -242,7 +242,7 @@ func (e *Engine) sweepVisits(ctx context.Context, rt *agent.Runtime, c agent.Cal
 	out := make([]visitRun, len(visits))
 	cctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	ef := spec("extract_facts")
+	ef := spec(ctx, "extract_facts")
 	turns, share := ef.MaxTurns, b.Value().USD/sweepWorkers
 	model := rt.Bandit.PickModel(ctx, ef.Name, rt.Candidates(ef.Role)) // one pick for the sweep, so no visit's model depends on timing
 	fin := make(chan int)
@@ -367,7 +367,7 @@ func (e *Engine) sweepVisits(ctx context.Context, rt *agent.Runtime, c agent.Cal
 // boilerplate page is skipped (skipWhy). What the budget cannot reach is reported, never skipped
 // silently, and each document's coverage is recorded (kSwept) for the cross-document checks.
 func (e *Engine) sweepTool(rt *agent.Runtime, r *run) agent.Tool {
-	return agent.GoTool{S: spec("sweep"), Fn: func(ctx context.Context, c agent.Call) (any, agent.Usage, error) {
+	return agent.GoTool{S: r.sp().Spec("sweep"), Fn: func(ctx context.Context, c agent.Call) (any, agent.Usage, error) {
 		var in struct{ DocumentIDs []string }
 		if err := agent.Decode(c, &in); err != nil {
 			return nil, agent.Usage{}, err

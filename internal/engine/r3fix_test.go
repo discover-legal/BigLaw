@@ -208,7 +208,7 @@ func TestLedgerFindingsPage(t *testing.T) {
 	}
 	page := func(issue any, offset any) (fids []string, next *int, size int) {
 		in, _ := json.Marshal(m{"op": "findings", "issues": nil, "issueId": issue, "fid": nil, "detail": "full", "criticId": nil, "resolution": nil, "note": nil, "entity": nil, "offset": offset})
-		res, err := f.e.ledgerTool().Call(context.Background(), agent.Call{TaskID: task.ID, Input: in})
+		res, err := f.e.ledgerTool(builtinSpecs).Call(context.Background(), agent.Call{TaskID: task.ID, Input: in})
 		if err != nil {
 			t.Fatal(err)
 		}

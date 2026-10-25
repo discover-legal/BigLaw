@@ -1,0 +1,4 @@
+{
+ "dateAdd": {"op": "calc", "fn": "date_add", "operands": [{"ref": "F12.v1", "literal": null, "unit": null}, {"ref": null, "literal": "21", "unit": "days"}], "holidays": ["2026-11-11", "2026-11-26"], "fids": null, "salientTop": null},
+ "product": {"op": "calc", "fn": "product", "operands": [{"ref": "F3.v1", "literal": null, "unit": null}, {"ref": null, "literal": "35", "unit": "%"}], "holidays": null, "fids": null, "salientTop": null}
+}

@@ -145,10 +145,10 @@ func TestVerdictKeysScopeAliasesAndDocuments(t *testing.T) {
 		B: analysis.Side{Ref: "F2.v1", DocumentID: "d2", Value: "$310,000", Canon: "usd:310000", Entity: "Ostrowski"}}
 	other := []analysis.Alias{{Name: "Acme Corp", Aliases: []string{"Acme"}}}
 	own := append(slices.Clone(other), analysis.Alias{Name: "Lakeshore Trading LLC", Aliases: []string{"Ostrowski"}})
-	if ledgerKey(nil, x) != ledgerKey(other, x) || judgeKey("m", "matter:M-1", []string{"d1", "d2"}, nil, x) != judgeKey("m", "matter:M-1", []string{"d2", "d1"}, other, x) {
+	if ledgerKey(nil, x) != ledgerKey(other, x) || judgeKey("h", "m", "matter:M-1", []string{"d1", "d2"}, nil, x) != judgeKey("h", "m", "matter:M-1", []string{"d2", "d1"}, other, x) {
 		t.Error("an alias naming neither side, or the documents' order, changes a verdict's key")
 	}
-	if ledgerKey(nil, x) == ledgerKey(own, x) || judgeKey("m", "matter:M-1", []string{"d1", "d2"}, nil, x) == judgeKey("m", "matter:M-1", []string{"d1", "d2", "d3"}, nil, x) {
+	if ledgerKey(nil, x) == ledgerKey(own, x) || judgeKey("h", "m", "matter:M-1", []string{"d1", "d2"}, nil, x) == judgeKey("h", "m", "matter:M-1", []string{"d1", "d2", "d3"}, nil, x) {
 		t.Error("an alias naming a side, or another document set, keeps a verdict's key")
 	}
 	y := x

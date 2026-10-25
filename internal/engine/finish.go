@@ -33,7 +33,7 @@ func (e *Engine) finishTool(rt *agent.Runtime, r *run) agent.Tool { return finis
 // Spec is finish's spec with the calls one submit may spend: its meta call, plus the coverage pass
 // and the review of its redrafts (the shares kept for them), so a crash mid-finish loses no more.
 func (f finish) Spec() agent.Spec {
-	s, a := spec("finish"), Allocate(f.e.cfg.BudgetCalls, f.e.cfg.BudgetUSD)
+	s, a := f.r.sp().Spec("finish"), Allocate(f.e.cfg.BudgetCalls, f.e.cfg.BudgetUSD)
 	s.MaxTurns += a.Cover + a.Cycle
 	return s
 }
@@ -471,7 +471,7 @@ func (f finish) meta(ctx context.Context, b *agent.Budget) (string, error) {
 	facts := fmt.Sprintf("Findings: %d verified, %d quarantined. Committee cycles: %d; critic findings: %d, %d still open. Stop: %s.",
 		ok, len(all)-ok, len(cyc), len(crit), open, cmpStr(f.r.forced != "", f.r.forced, "finish accepted"))
 	resp, _, err := f.rt.ChatWithin(ctx, model.Request{Agent: "meta", Role: model.Lead, MaxTokens: 400,
-		Messages: []model.Message{{Role: "system", Content: prompt("meta")}, {Role: "user", Content: facts}}}, b)
+		Messages: []model.Message{{Role: "system", Content: prompt(ctx, "meta")}, {Role: "user", Content: facts}}}, b)
 	if err != nil {
 		return "", err
 	}

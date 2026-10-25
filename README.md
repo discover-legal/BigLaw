@@ -10,11 +10,11 @@ tables in which every factual statement cites a quote that the software has veri
 matter's own documents, with a lawyer approving every deliverable. It is one Go binary plus one
 PostgreSQL database. Licensed Apache-2.0 (`LICENSE`, `NOTICE`).
 
-## What exists today (PR 1: skeleton, config, store, CI; PR 2: model client; PR 3a: documents; PR 3b: model roles, embeddings, hybrid search; PR 3c: vision transcription; PR 11, pulled forward by owner decision 13: the UI and its recorded engine; PR 4a: the agent runtime and the deterministic memo tools; PR 4b: the memo workflow, durable runs and the REST API)
+## What exists today (PR 1: skeleton, config, store, CI; PR 2: model client; PR 3a: documents; PR 3b: model roles, embeddings, hybrid search; PR 3c: vision transcription; PR 11, pulled forward by owner decision 13: the UI and its recorded engine; PR 4a: the agent runtime and the deterministic memo tools; PR 4b: the memo workflow, durable runs and the REST API; Manage and skills)
 
 | Piece | Path | What it does |
 |---|---|---|
-| Command | `cmd/biglaw/main.go` | `biglaw serve [--allow-no-auth]` (migrates the database, then serves the API and the embedded UI and runs tasks) and `biglaw version [--config]` |
+| Command | `cmd/biglaw/main.go` | `biglaw serve [--allow-no-auth] [--admin-without-auth]` (migrates the database, then serves the API and the embedded UI and runs tasks) and `biglaw version [--config]` |
 | Configuration | `cmd/biglaw/config.go` | Declares all 18 runtime variables (`BIGLAW_MODELS` is the role map); validates the ones this build reads (all problems at once); vendor breakers ported from v1 |
 | Store | `internal/store/store.go` | Postgres via `database/sql` + `github.com/lib/pq`; DSN check that matches lib/pq's reading; transaction helper |
 | Migrations | `internal/store/migrate.go`, `internal/store/migrations/NNNN_*.sql` | Embedded SQL files applied in order under an advisory lock; each file and its `schema_migrations` row in one transaction. `store.Open` first creates the `vector` extension (pgvector), which is database-wide (§ Database) |
@@ -22,8 +22,9 @@ PostgreSQL database. Licensed Apache-2.0 (`LICENSE`, `NOTICE`).
 | Model client | `internal/model/` (`client.go`, `embed.go`, `errors.go`, `fake.go`, `pricing.go`, `prices.json`) | One OpenAI-compatible chat client with tool calls and image parts, an embeddings call (`Embed`) on the same transport, typed failures with their HTTP mapping, at most 3 attempts per call, cache-aware pricing of every call from a built-in table plus `BIGLAW_PRICES` (the host never makes a call free), watt-hour metering when `BIGLAW_LOCAL_WATTS` is set, and `model.Fake` for tests (§ Model client). `Embed`'s caller is documents (below); `Chat`'s is the agent loop (below), which the memo workflow drives. |
 | Documents | `internal/docs/` (`ingest.go`, `child.go` + `child_linux.go`/`child_other.go`, `pageindex.go`, `chunk.go`, `search.go`, `embed.go`, `verify.go`, `http.go`, `vision.go` + `vision_prompts.txt`, `scanpdf.go`, `jobs.go`) | Ingest of UTF-8 text (a plain-text e-mail whose headers say quoted-printable is stored decoded, headers verbatim: `TestEmailBodyDecodedFromQuotedPrintable`), `.docx` and PDF text layers (PDFs and `.docx` files parsed in a bounded child process); images and JPEG-scanned PDF pages transcribed by the `vision` role, each page read twice and the readings compared, with provenance on every document, chunk and citation, and a leased job that transcribes what was stored before a vision role was set (§ Vision transcription); the byte-exact section tree; search chunks; Postgres full-text search, fused with pgvector similarity when an `embed` role is set (chunk embedding at ingest, a startup backfill); the page reader (outline, paged sections); the quote-verification ladder; the upload and download routes. Every read is scoped to the caller's document ids (§ Documents) |
 | Agent runtime | `internal/agent/` (`tool.go`, `registry.go`, `schema.go`, `loop.go`, `budget.go`, `policy.go`, `bandit.go`) | The `Tool` interface and its single registry (definitions frozen at registration), JSON-schema validation of every tool input and output, one bounded loop for the lead and its subagents, the budget ledger, and the tool bandit (§ Agent runtime). The memo workflow drives it (below); a step log makes it resumable |
-| Engine | `internal/engine/` (+ `specs/`, `packs/`; migrations `0005_runs.sql`, `0006_figure_reads.sql`, `0007_figure_reads_scope.sql`) | The memo workflow: the lead agent and its 11 tools, the ledger, the evidence subagents with Go-side quote verification, the figure reader, the sweep, the three-critic committee, the policy, `finish` (lint, coverage, render), the human gates, grounding collapse, and durable runs (step log, lease and heartbeat, resume) (§ Memo workflow) |
-| API | `internal/api/` (+ `dist/`, the embedded UI) | The REST API (tasks, steps, SSE events, gates, cancel, cost, clients) over the engine and the document routes, and the web UI built into the binary (§ Memo workflow) |
+| Engine | `internal/engine/` (+ `specs/`, `packs/`; migrations `0005_runs.sql`, `0006_figure_reads.sql`, `0007_figure_reads_scope.sql`) | The memo workflow: the lead agent and its 12 tools, the ledger, the evidence subagents with Go-side quote verification, the figure reader, the sweep, the three-critic committee, the policy, `finish` (lint, coverage, render), the human gates, grounding collapse, and durable runs (step log, lease and heartbeat, resume) (§ Memo workflow) |
+| API | `internal/api/` (+ `dist/`, the embedded UI) | The REST API (tasks, steps, SSE events, gates, cancel, cost, clients, Manage: `manage.go`) over the engine and the document routes, and the web UI built into the binary (§ Memo workflow, § Manage) |
+| Manage | `internal/engine/specset.go`, `manage.go`, `diff.go`, `hooks.go`, `skills.go` (+ `skills/`, `specs/use_skill.json`; migration `0008_overrides.sql`), `internal/api/manage.go`, `ui/src/screens/Manage.tsx` | The catalogue of every agent, tool, pack, skill and hook a run uses, admins' versioned overrides in Postgres (strictly validated, compatibility-checked against what Go reads and writes), each task's snapshot of them, history, diffs, revert and a patch/zip export; skills and `use_skill` (§ Manage) |
 | Memo tools | `internal/analysis/` (+ `belo.json`, `specs/*.json`), `internal/docs/register.go` (+ `specs/*.json`) | Deterministic tools over verified findings: `numbers` (exact `calc`, figure handles, key-figures table), `join_discrepancies`, the coverage checks `finish{op:"check"}` will run, the value normalisers and BELO-lite; and the `retrieve` / `verify_quote` adapters over documents (§ Agent runtime) |
 | `.docx` reader | `internal/docs/ooxml/` | Opens a `.docx`'s text parts only (body, footnotes, endnotes; 128 MiB decompression cap) and reads its visible text in one linear XML pass. The writer, the XML escapers, the part-preserving re-zip and tracked-change parse/apply are planned (PR 3d) |
 | Evaluation | `eval/` (`run.py`, `proofrun/`, `lab/`, `tests/`, `tasks/`, `e4/embeddings.json`) | The five synthetic proof-run matters (documents + answer keys), copied from `feat/proof-runs-multi-practice`, with their driver, scorer and the v1 comparison (`run.py`), the Harvey LAB driver (`lab/run.py`), and the Go gates E1/E2 that run them through the engine on a scripted model (§ Memo workflow). `eval/e4/embeddings.json` is E4's embeddings tape: today the **self-test** tape of a hash embedder, not a real model's (§ Documents, gate E4) |
@@ -250,6 +251,14 @@ that way:
   exposes the container refuses to start.
 - **Render** is public by nature, so `render.yaml` is inert until PR 8: the service fails its
   start on purpose.
+- **Manage under `--allow-no-auth` is read-only.** Reaching the port is not proof of being an admin,
+  and an edit in Manage changes every later task of every matter, so with `--allow-no-auth` nobody may
+  edit there (403 `forbidden`; the screen says why). An operator who accepts that anyone who can reach
+  the server may change its agents, tools, packs and skills passes `serve --allow-no-auth
+  --admin-without-auth` (serve logs a warning; the screen shows a banner). Compose keeps
+  `["serve", "--allow-no-auth"]`: to edit in Manage under Compose, add `"--admin-without-auth"` to
+  the service's `command` in a local copy, knowing what it allows. A loopback server started without
+  either flag (local development) is an admin.
 
 Two browser guards hold until then, because a page the lawyer visits can reach a loopback port.
 Every `POST` (documents, tasks, cancel, gate decisions) from another site is refused 403
@@ -956,9 +965,9 @@ Limitations of this layer:
 
 `POST /tasks` with `workflowType: "memo"` (the only workflow built; `diligence` and
 `contract_review` are 400 until PRs 5 and 6) stores a task and wakes the runner. The lead agent
-(role `lead`, prompt `internal/engine/specs/lead.md`) sees 11 tools in a fixed order: `retrieve`,
+(role `lead`, prompt `internal/engine/specs/lead.md`) sees 12 tools in a fixed order: `retrieve`,
 `ledger`, `sweep`, `extract_facts`, `analyze_issue`, `check_deviation`, `numbers`,
-`join_discrepancies`, `draft_section`, `committee`, `finish`. Specs are data
+`join_discrepancies`, `draft_section`, `committee`, `finish`, `use_skill` (§ Manage, Skills). A task runs on its snapshot of these specs (§ Manage). Specs are data
 (`internal/engine/specs/*.json`, subagents `specs/agents/*.{json,md}`: the five above plus the
 critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with `model.Fake`.
 
@@ -1316,7 +1325,7 @@ kept cycle, then `finish` is forced from the reserve, open findings disclosed; `
 twice the call budget, at least 400),
 `awaiting_gate`, `cancelled` or `failed`. Tool-bandit statistics persist in `tool_stats`.
 
-**Packs** (`internal/engine/packs/{jurisdiction,practice}/*.md`, embedded): `us`, `us-ny`,
+**Packs: jurisdiction and practice guidance** (`internal/engine/packs/{jurisdiction,practice}/*.md`, embedded; an admin may override one, § Manage): `us`, `us-ny`,
 `litigation`, `corporate-ma`, front matter plus a checklist, all `candidate` (no named lawyer has
 reviewed them, which every deliverable's Limitations says). A task's jurisdiction selects packs by
 prefix (`US-NY` → `us`, `us-ny`). The full catalogue is PR 12's.
@@ -1339,6 +1348,12 @@ GET    /tasks/{id}/cost               per-step usage and USD (null when unpriced
 GET    /tasks/{id}/deliverable.md     the rendered memo
 POST   /tasks/{id}/cancel
 POST   /tasks/{id}/gates/{gateId}/approve      POST /tasks/{id}/gates/{gateId}/reject {"reason": "…"}
+GET    /me                            {id, name, admin, authEnabled}: until PR 8 the local user, an admin
+GET    /manage/items                  the catalogue (§ Manage)   GET /manage/items/{id}: with its files now and built in
+GET    /manage/items/{id}/history     its versions, each with its files    GET /manage/items/{id}/diff?from=&to= (a number or builtin)
+POST   /manage/items/{id}/versions    {base, files, note} → 201 (admin; 422 invalid with problems[], 409 stale base)
+POST   /manage/items/{id}/revert      {to, base, note} (admin; to 0: the built-in)   POST /manage/items/{id}/delete {base, note} (admin; skills)
+GET    /manage/changes?limit=         the change log    GET /manage/export?format=patch|zip&item=a,b (the overrides at their repo paths)
 GET    /                              the web UI (embedded by `make ui build`), or a notice in a build without it
 ```
 
@@ -1374,6 +1389,111 @@ lawyer, `findingGates`: 4, scale-limited figures), both ratchets),
 `TestProofRunsFabricator`
 (E2: every matter fails with a grounding alert) and `TestLabRunnerSmoke` (the LAB driver against an
 `httptest` server) run with no model.
+
+## Manage: agents, tools, packs, skills and hooks (`internal/engine` specset/manage/skills/hooks, `internal/api/manage.go`)
+
+Everything a run uses is a file built into the binary (go:embed), and an admin can see and change
+each one in Manage (`#/manage`) or the routes above, with no rebuild:
+
+- **Agents**: the lead's prompt (`specs/lead.md`), the meta and section-check prompts, the subagents
+  (`specs/agents/<name>.json` + `.md`: description, `maxTurns`, budget `class`, model `role`, `allowed`
+  tools, `in`/`out` schemas, prompt) and the engine's passes (`sweep`, `committee`, `cover`, `finish`,
+  `ledger` specs). **Tools**: the typed tool specs of `internal/analysis/specs`, `internal/docs/specs` and
+  `internal/engine/specs/{exact_calc,figure_context,use_skill}.json`; their code stays Go.
+  **Packs**: jurisdiction and practice guidance (§ Memo workflow). **Skills**: below. **Hooks**: the Go
+  around some tools and subagents (`hooked`, `sheets`, `aliasJoin` in `register.go`), view only: what
+  each does, the tool it wraps and its source, cut with `go/parser` from the engine files embedded
+  (`hooks.go`). Each item shows its contents, built-in or override (its version), what it calls and
+  who calls it (agents' allowed lists, the lead's list, and the Go callers), and its recent usage: lead
+  steps, model calls and USD over the last 20 tasks (`task_steps`; a fan-out's own calls count under it).
+- **Versions** (`spec_versions`, migration 0008): every save is a new version of the item holding all
+  its files, who (`author`), when, an optional note and the version it replaced; a revert (to any
+  version, or to the built-in: files NULL) and a skill's deletion (files `{}`, a tombstone) are versions
+  too, so the table is the history and the **change log**. A save names the version it was edited from
+  (`base`): a stale one is 409. Diffs are a line LCS (Go `diff.go` for the API and the export, the UI's
+  `components/diff.ts` for its views and unsaved edits).
+- **Snapshot.** `Submit` stores the overrides in effect (each item's latest version, unless it is the
+  built-in again) in `tasks.specs`, in the statement that stores the task. `execute` builds the run's
+  spec set from it (`newSpecs`: the built-ins with those files over them) on every claim, a resume after
+  a crash included, and carries it in the run (`run.specs`) and its context (`withSpecs`): every spec,
+  prompt, pack and skill a run reads goes through it (`spec(ctx, …)`, `prompt(ctx, …)`, `packsFor`), and
+  the registry is built from it (docs and analysis tools re-registered with their override's spec,
+  `respec`). A save reaches the next task only (`TestSnapshotAtStartAndResume`). A binary upgrade still
+  changes the built-ins under a resumed run, as it changes all Go code.
+- **Cache keys.** The figure reader's and judge's cached answers are keyed by the hash of their spec,
+  prompt and the spec of every tool their allowed list names, in the run's set (`Specs.agentHash`), so
+  an override of any of them, or a tool added to the list, reads and judges again
+  (`TestOverrideChangesCacheKeys`, `TestAgentHashCoversAllowedTools`); the built-ins hash as before,
+  so existing rows stay valid.
+- **Validation** (`validate`, every save and revert, all problems at once, 422 with `problems[]` by
+  file): UTF-8; a spec is one JSON object of `agent.Spec`'s fields (unknown fields refused), keeps its
+  name, kind and `final`, has `maxTurns` 1–32 (subagent) or 0–10000 (Go tool), a known class, its
+  schemas in `agent/schema.go`'s subset and strict-shaped; a prompt is 1 byte–64 KiB; a pack's front
+  matter is `code` (its file's), `status` candidate|reviewed (reviewed needs `reviewedBy`) and the
+  checklist; then the whole set as a task would load it: `newSpecs` and the runtime's own registration
+  (descriptions, examples, allowed tools are registered Go tools, roles, the 22/14 caps, the lead's
+  list). An item's files are exactly its own (no file added to or dropped from a built-in item). No
+  subagent's allowed list may name a tool that is the lead's own: a Final tool (`finish`: it ends the
+  run) or one with ops that must stand alone in a lead turn, except `ledger`, which refuses its writes
+  (`plan`, `resolve`) to a subagent in its own code and is in the built-ins' lists for its reads; the
+  fan-outs (`sweep`, `committee`, `cover`) are not Go tools, so the registry already refuses them. Class
+  `free` (no class share) is kept for the subagents built free (the figure reader and judge, metered
+  from their own shares); any other subagent must take a class with a share.
+- **Serial saves.** A save, revert or delete runs in one transaction under an advisory lock
+  (`locked`): it reads the set, validates the set it would make, and writes, so two saves of different
+  items can never make a set that does not load (`TestSavesAreSerial`).
+- **Compatibility** (`compatSpec`). Go code depends on schema shapes, so a schema save must keep, at
+  every path the built-in schema has (nested and in `items`), the property and its type list (Go
+  decodes or writes it by that shape: removing, renaming or retyping is refused naming the path, e.g.
+  `out.findings[].claim: Go reads or writes this field`); every enum keeps exactly the built-in's values
+  (Go branches on them: a critic's verdict, a gap's severity, an op; renaming, recasing, adding or
+  removing one is refused, `out.verdicts[].verdict: Go branches on this field's values`); a schema Go writes (a Go tool's output, the
+  input of a tool Go itself calls: `goWritten`, found from the engine's `rt.Invoke` calls) gains no
+  property (strict schemas require every property, and Go sends none); the built-in description's
+  examples and Go's own literal inputs (`goInputs`: finish's submit, `committee {}`, `cover {}`) must
+  still validate. **Limits:** it compares with the built-in, not with a list of the fields each Go
+  line reads, so a field Go never reads is protected too (an enum Go never branches on is frozen as
+  well); narrowing a bound (a length, an item count) on a value Go writes is caught only where an
+  example or a literal input shows it; a field added to a schema the
+  model writes is accepted and ignored by Go; semantics (what a field means) are not checked.
+- **The lawyer-review rule.** Everything in a pack or skill is its content: every file (a skill's
+  reference files too), every front matter field but `status` and `reviewedBy` (a skill's description
+  and tools, a pack's checklist) and the body. A save that changes any of it resets the status to
+  candidate and clears `reviewedBy`, unless the save names a reviewer who is not the one before; a new
+  item (a skill created, or created again after its deletion) is candidate unless it names its
+  reviewer. The response says so (`notes`). A status-only edit (a lawyer recording a review) is kept.
+- **Who.** OIDC is not built yet (`BIGLAW_OIDC_ISSUER` and the client variables are declared for PR 8; nothing reads them), so no
+  request carries a user. `api.Principal` is the seam: until PR 8 every request is the local user
+  (`api.LocalUser`). It is an admin on a server bound to loopback for local work (no
+  `--allow-no-auth`); under `--allow-no-auth` Manage is **read-only** (everyone may view it), unless
+  the operator also passes `serve --admin-without-auth`, which makes anyone who can reach the server
+  an admin: serve logs a warning and the Manage screen shows a banner saying so (owner decision,
+  review M3; § Exposure). Every write wears `docs.Guard` (cross-site 403) and the admin guard (403 `forbidden` for a
+  non-admin: `TestManageAdminGuard` drives it through the seam); reads are open to anyone who may use
+  BigLaw. PR 8 resolves the session there and sets `Admin`; no env var was added for it.
+- **Export** (`GET /manage/export`): the overridden items (all, or `?item=`) as one git-style patch
+  against the repository's paths (`git apply` or `patch -p1` at the root; new and deleted files as
+  `/dev/null`; `TestExportPatchApplies` applies it), or a zip of the files at their repo paths (with
+  `DELETED.txt` naming a deleted skill's files). The server holds no GitHub credentials: the owner
+  opens the pull request from the export, which then makes `ui/src/recorded/manage.json` stale
+  (re-record with `make demo-record`; `TestManageRecording` needs no database).
+
+**Skills** (`internal/engine/skills/<name>/SKILL.md`, embedded; created, edited and deleted in Manage
+too): a named bundle of instructions with a one-line description, a Markdown body, optional reference
+files (`.md`, `.json`, `.csv`, ≤ 16 of ≤ 64 KiB) and an optional `tools` list. Front matter: `name`,
+`description` (≤ 200 bytes), `status` (candidate until a named lawyer reviews it), `reviewedBy`,
+`tools`. Progressive disclosure: the lead's brief lists each skill's name, status and description only
+(≤ 40 skills in ≤ 4 KiB, refused at save); `use_skill {name, file, offset}` returns the body or a
+reference file one page at a time (`agent.TakeText`; `next` continues it), spends no model call, is a
+journaled step like any tool (so a crash resumes past it) and records the skill read in the ledger
+(kind `skill`) with the step. **Callers:** the lead (`MemoVisible`, now 12 tools; `use_skill` may run
+before a plan, P1); an admin may name it in a subagent's allowed tools. A skill grants no tool: its
+`tools` must be tools that use_skill's callers may already call (refused otherwise), and the answer
+says to call only tools the caller was offered. A deliverable that read a candidate skill names it in
+Limitations, as `candidates()` does for packs. **Starters** (all candidate): `deadlines`,
+`figure-conflicts` and `requirement-deviation`, process guidance taken from the lead's prompt and the
+numbers, join_discrepancies and check_deviation specs (no legal content of their own); `deadlines`
+carries `examples.json`, the numbers calls its spec gives as examples.
 
 ## Files
 
@@ -1461,6 +1581,8 @@ to BigLaw only through one interface (`ui/src/api/transport.ts`):
   fails on any `fetch`, `XMLHttpRequest`, `EventSource`, `WebSocket`, `sendBeacon`, worker, preload
   link or absolute URL (`scripts/offline-check.mjs`; the same check flags the live bundle, proving it bites). Two exact strings are
   allowed because they are displayed, never requested: `https://discover.legal/` (the banner's way back) and `http://127.0.0.1:3101` (a default on Settings).
+
+**Manage** (`screens/Manage.tsx`, § Manage): the sections Agents, Tools, Packs, Skills, Hooks and Change log; each item's contents, where it is used and its usage; for an admin an editor over structured fields (description, turn cap, class, role, allowed tools, schemas; a pack's or skill's status, reviewer, checklist or tools, and body) or the raw files, with problems shown beside their file, a preview of unsaved changes, history with a diff between any two versions or the built-in, revert, a new skill, delete, and export links. The recorded demo shows the built-in catalogue read-only (`ui/src/recorded/manage.json`, recorded by `eval/demo/manage_test.go`; no history, no export, every write refused).
 
 **Screens** (hash routes, so a static bundle works under any base path): **Matters** (matter cards,
 tasks, the new-task wizard), **Task** (run bar with status, step, stop reason, budget, Cancel; the
@@ -1706,16 +1828,16 @@ improvements (after the real Haiku LAB rerun; scripted the same way): `TestSweep
 
 | Budget | Ceiling | Today |
 |---|---:|---:|
-| Go production lines (physical lines, non-`_test.go`, test-support packages included) | reported, no limit (owner decision 17) | 15290 |
+| Go production lines (physical lines, non-`_test.go`, test-support packages included) | reported, no limit (owner decision 17) | 22361 |
 | Packages under `internal/`, test-support packages excluded | 12 | 8 (`agent`, `analysis`, `api`, `docs`, `docs/ooxml`, `engine`, `model`, `store`; `store/storetest` and `engine/figtest` are test support) |
 | Direct Go dependencies | 3 | 2 (`github.com/lib/pq`, `github.com/ledongthuc/pdf`) |
 | Runtime environment variables | 20 | 18 |
 | UI runtime dependencies | 2 | 2 (`react`, `react-dom`) |
-| UI source lines (`ui/src` `.ts`/`.tsx`/`.css`; tests, config and `recording.json` not counted) | 2,400 | 1,902 |
+| UI source lines (`ui/src` `.ts`/`.tsx`/`.css`; tests, config, `recording.json` and `manage.json` not counted) | 3,200 (raised from 2,400 for Manage, owner decision) | 2,448 |
 | Packages without a `_test.go` | 0 | 0 |
 | Lines in any one source file (`.go`, `.py`, `.sql`, `.sh`, `.js`, `.ts`, `.css`; tests included) | 2,000 | 968 (`internal/docs/vision_safety_test.go`) |
 
-**There is no total line ceiling (owner decision 17, 2026-10-23).** `scripts/loc.py` reports the Go production total (15290) and fails only on the budgets that bound bloat directly: no file over 2,000 lines, ≤ 3 direct deps, ≤ 20 env vars, ≤ 12 internal packages, ≤ 2,400 UI source lines, no untested package. Each PR still reports its lines against its DESIGN budget in its notes. (The ceiling's history, 14,000 → 17,500 through owner decisions 7–16, is in PLAN.) A **test-support package** is one
+**There is no total line ceiling (owner decision 17, 2026-10-23).** `scripts/loc.py` reports the Go production total (22361) and fails only on the budgets that bound bloat directly: no file over 2,000 lines, ≤ 3 direct deps, ≤ 20 env vars, ≤ 12 internal packages, ≤ 3,200 UI source lines, no untested package. Each PR still reports its lines against its DESIGN budget in its notes. (The ceiling's history, 14,000 → 17,500 through owner decisions 7–16, is in PLAN.) A **test-support package** is one
 whose directory name ends in `test` and that no production file outside it imports, such as
 `storetest`. Under the coordinator's ruling it is left out of the package count, but its lines
 count toward the reported Go total like any other non-`_test.go` file. A `*test` package that
@@ -1727,6 +1849,9 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
 
 ## Limitations
 
+- Manage has no per-person admin until PR 8's sign-in: the local user is an admin on loopback, read-only under `--allow-no-auth`, and anyone who can reach the server under `--admin-without-auth`; the change log's author is "Local user" until then (§ Manage, Who).
+- The engine's tests write their own skills: an export that deletes a starter skill only makes `ui/src/recorded/manage.json` stale (re-record it).
+- Manage edits the built-in items only (and creates skills): a new subagent, tool or pack is not created there; the compatibility check's limits are in § Manage.
 - The UI's Playbooks, Time & Billing and profile views have no live routes until PRs 6/8/9 (404);
   Clients shows matters derived from documents' matter numbers until PR 8's client roster.
 - **Memo workflow (PR 4b):**

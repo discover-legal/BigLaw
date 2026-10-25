@@ -12,7 +12,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"slices"
 	"strconv"
 	"strings"
@@ -42,28 +41,10 @@ import (
 // (its worst case reserved before the drafter runs, r5 L4), metered and journaled like any call, and
 // its complete answers are cached (figure_reads), so a run read again gets the same reading.
 
-// readerSpec is part of every cached reading's key: the hash of the reader's spec, prompt and tools'
-// specs, so an edit to any of them reads every figure again (lab-r4 r5 M3; derived, never bumped by
-// hand). The key also holds the model the reader runs on, the matter (and, for a drafted section, the
+// The reader's spec hash (Specs.agentHash of read_figures in the run's snapshot) is part of every cached
+// reading's key: the hash of the reader's spec, prompt and tools' specs, so an edit to any of them,
+// an admin's override included, reads every figure again (lab-r4 r5 M3; derived, never bumped by hand). The key also holds the model the reader runs on, the matter (and, for a drafted section, the
 // task) it read for, and exactly what it was sent.
-var readerSpec = specHash(specFS, readerSpecFiles)
-
-// readerSpecFiles are the files the reader's behaviour comes from.
-var readerSpecFiles = []string{"specs/agents/read_figures.json", "specs/agents/read_figures.md", "specs/figure_context.json", "specs/exact_calc.json"}
-
-// specHash is the hash of files (an agent's spec, prompt and tools' specs): part of its cache keys.
-func specHash(fsys fs.FS, files []string) string {
-	h := sha256.New()
-	for _, f := range files {
-		data, err := fs.ReadFile(fsys, f)
-		if err != nil {
-			panic("engine: " + err.Error())
-		}
-		fmt.Fprintf(h, "%s %d\n", f, len(data))
-		h.Write(data)
-	}
-	return hex.EncodeToString(h.Sum(nil))
-}
 
 // The bounds of one reader call (its answer is a label per span), below its input schema's: a call
 // holds at most maxReadItems parts of maxReadSpans spans and maxReadBytes of text in all, a part at
@@ -298,10 +279,11 @@ func findingReading(f Finding, quotes []analysis.Quote, vals []analysis.Value) *
 func (e *Engine) readFigures(ctx context.Context, rt *agent.Runtime, c agent.Call, b *agent.Budget, caller string, items []*reading) error {
 	model, models := "", []string(nil)
 	if rt != nil && rt.Chat != nil && rt.Reg != nil {
-		models = rt.Candidates(spec("read_figures").Role)
+		models = rt.Candidates(spec(ctx, "read_figures").Role)
 		model = rt.Bandit.PickModel(ctx, "read_figures", models)
 	}
 	models = append([]string{model}, slices.DeleteFunc(models, func(m string) bool { return m == model })...) // a reading any candidate model made is reused before another call
+	rh := specsOf(ctx).agentHash("read_figures")
 	scope, err := e.readScope(ctx, c.TaskID)
 	if err != nil {
 		return err
@@ -314,7 +296,7 @@ func (e *Engine) readFigures(ctx context.Context, rt *agent.Runtime, c agent.Cal
 	parts:
 		for _, pt := range it.parts() {
 			for _, m := range models {
-				labels, ok, err := e.cachedReading(ctx, readKey(m, scope, cmpStr(it.memo, c.TaskID, ""), it.parties, pt.in), m, scope != "")
+				labels, ok, err := e.cachedReading(ctx, readKey(rh, m, scope, cmpStr(it.memo, c.TaskID, ""), it.parties, pt.in), m, scope != "")
 				if err != nil {
 					return err
 				}
@@ -323,7 +305,7 @@ func (e *Engine) readFigures(ctx context.Context, rt *agent.Runtime, c agent.Cal
 					continue parts
 				}
 			}
-			pt.key = readKey(model, scope, cmpStr(it.memo, c.TaskID, ""), it.parties, pt.in)
+			pt.key = readKey(rh, model, scope, cmpStr(it.memo, c.TaskID, ""), it.parties, pt.in)
 			todo = append(todo, pt)
 		}
 	}
@@ -372,9 +354,9 @@ func readerReserve(ctx context.Context, rt *agent.Runtime) agent.Grant {
 	if rt == nil || rt.Chat == nil || rt.Reg == nil {
 		return agent.Grant{}
 	}
-	s := spec("read_figures")
+	s := spec(ctx, "read_figures")
 	s.MaxTurns = 1
-	return rt.WorstCase(s, prompt("agents/read_figures"), rt.Bandit.PickModel(ctx, "read_figures", rt.Candidates(s.Role)), maxReadBytes+maxReadSpans*(maxSpanText+32))
+	return rt.WorstCase(s, prompt(ctx, "agents/read_figures"), rt.Bandit.PickModel(ctx, "read_figures", rt.Candidates(s.Role)), maxReadBytes+maxReadSpans*(maxSpanText+32))
 }
 
 // readScope is the matter a task reads for ("" outside a task: nothing is cached); a task with no
@@ -396,8 +378,8 @@ func (e *Engine) readScope(ctx context.Context, taskID string) (string, error) {
 
 // readKey is a part's cache key: the reader's spec, the model, the matter (and a section's task), the
 // parties it was told and exactly what it was sent.
-func readKey(model, scope, task string, parties []string, in []passageIn) string {
-	data, _ := json.Marshal(map[string]any{"spec": readerSpec, "model": model, "scope": scope, "task": task, "parties": parties, "passages": in})
+func readKey(specHash, model, scope, task string, parties []string, in []passageIn) string {
+	data, _ := json.Marshal(map[string]any{"spec": specHash, "model": model, "scope": scope, "task": task, "parties": parties, "passages": in})
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
 }

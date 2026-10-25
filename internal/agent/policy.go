@@ -61,29 +61,40 @@ func (rt *Runtime) LoadSubagents(fsys fs.FS) ([]Tool, error) {
 	}
 	var out []Tool
 	for _, f := range files {
-		var s Spec
 		data, err := fs.ReadFile(fsys, f)
-		if err == nil {
-			d := json.NewDecoder(strings.NewReader(string(data)))
-			d.DisallowUnknownFields()
-			err = d.Decode(&s)
-		}
-		prompt, perr := fs.ReadFile(fsys, strings.TrimSuffix(f, ".json")+".md")
-		switch {
-		case err != nil:
+		if err != nil {
 			return nil, fmt.Errorf("agent: spec %s: %v", f, err)
-		case perr != nil || strings.TrimSpace(string(prompt)) == "":
-			return nil, fmt.Errorf("agent: spec %s: no prompt beside it", f)
-		case s.Name+".json" != path.Base(f) || s.Kind != "subagent":
-			return nil, fmt.Errorf("agent: spec %s: the name must match the file and the kind be subagent", f)
 		}
-		var schema bytes.Buffer // the model must see its output schema: the prompt alone can omit a required field
-		if err := json.Compact(&schema, s.Out); err != nil {
-			return nil, fmt.Errorf("agent: spec %s: output schema: %v", f, err)
+		prompt, _ := fs.ReadFile(fsys, strings.TrimSuffix(f, ".json")+".md")
+		t, err := rt.LoadSubagent(f, data, prompt)
+		if err != nil {
+			return nil, err
 		}
-		out = append(out, &Subagent{S: s, RT: rt, Prompt: string(prompt) + "\n\nYour answer is one JSON object valid " +
-			"against this JSON Schema. Every property a \"required\" list names must be present, even when empty; use null " +
-			"only where the type allows null, [] for an empty array:\n" + schema.String()})
+		out = append(out, t)
 	}
 	return out, nil
+}
+
+// LoadSubagent is one subagent from its spec file's bytes (file names it: <name>.json) and its
+// prompt's: the spec decoded strictly (no unknown field), the name the file's and the kind subagent.
+func (rt *Runtime) LoadSubagent(file string, spec, prompt []byte) (Tool, error) {
+	var s Spec
+	d := json.NewDecoder(strings.NewReader(string(spec)))
+	d.DisallowUnknownFields()
+	err := d.Decode(&s)
+	switch {
+	case err != nil:
+		return nil, fmt.Errorf("agent: spec %s: %v", file, err)
+	case strings.TrimSpace(string(prompt)) == "":
+		return nil, fmt.Errorf("agent: spec %s: no prompt beside it", file)
+	case s.Name+".json" != path.Base(file) || s.Kind != "subagent":
+		return nil, fmt.Errorf("agent: spec %s: the name must match the file and the kind be subagent", file)
+	}
+	var schema bytes.Buffer // the model must see its output schema: the prompt alone can omit a required field
+	if err := json.Compact(&schema, s.Out); err != nil {
+		return nil, fmt.Errorf("agent: spec %s: output schema: %v", file, err)
+	}
+	return &Subagent{S: s, RT: rt, Prompt: string(prompt) + "\n\nYour answer is one JSON object valid " +
+		"against this JSON Schema. Every property a \"required\" list names must be present, even when empty; use null " +
+		"only where the type allows null, [] for an empty array:\n" + schema.String()}, nil
 }

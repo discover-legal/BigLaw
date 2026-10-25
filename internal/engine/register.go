@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"slices"
 	"strings"
 
@@ -22,41 +21,14 @@ import (
 //go:embed specs
 var specFS embed.FS
 
-// specs holds every engine tool's and subagent's spec by name (JSON data beside the prompts).
-var specs = func() map[string]agent.Spec {
-	out := map[string]agent.Spec{}
-	for _, dir := range []string{"specs", "specs/agents"} {
-		files, _ := fs.Glob(specFS, dir+"/*.json")
-		for _, f := range files {
-			var s agent.Spec
-			data, err := specFS.ReadFile(f)
-			if err == nil {
-				err = json.Unmarshal(data, &s)
-			}
-			if err != nil {
-				panic("engine: " + f + ": " + err.Error())
-			}
-			out[s.Name] = s
-		}
-	}
-	for _, n := range []string{"retrieve", "verify_quote", "numbers", "join_discrepancies"} {
-		out[n] = agent.Spec{Name: n, Class: "free"}
-	}
-	return out
-}()
+// spec is a tool's or subagent's spec in ctx's spec set (the run's snapshot; specset.go).
+func spec(ctx context.Context, name string) agent.Spec { return specsOf(ctx).Spec(name) }
 
-func spec(name string) agent.Spec { return specs[name] }
+// prompt is specs/<name>.md in ctx's spec set.
+func prompt(ctx context.Context, name string) string { return specsOf(ctx).prompt(name) }
 
-func prompt(name string) string {
-	b, err := specFS.ReadFile("specs/" + name + ".md")
-	if err != nil {
-		panic("engine: " + err.Error())
-	}
-	return string(b)
-}
-
-// MemoVisible is the memo lead's tool list (README § Tools): 11 tools, in a fixed order.
-var MemoVisible = []string{"retrieve", "ledger", "sweep", "extract_facts", "analyze_issue", "check_deviation", "numbers", "join_discrepancies", "draft_section", "committee", "finish"}
+// MemoVisible is the memo lead's tool list (README § Tools): 12 tools, in a fixed order.
+var MemoVisible = []string{"retrieve", "ledger", "sweep", "extract_facts", "analyze_issue", "check_deviation", "numbers", "join_discrepancies", "draft_section", "committee", "finish", "use_skill"}
 
 // hookOut is what an evidence subagent returns to its caller once Go has verified its findings,
 // each kept value under the ref numbers takes ("F3.v1").
@@ -79,18 +51,25 @@ func admitted(f Finding) map[string]any {
 	return map[string]any{"fid": f.FID, "issueId": f.IssueID, "claim": f.Claim, "verified": f.Verified, "methods": methods, "values": values}
 }
 
-// runtime builds the run's registry and runtime: the docs and analysis tools, the engine's Go
-// tools, and the subagents from their specs; evidence subagents and draft_section behind Go hooks.
+// runtime builds the run's registry and runtime from its spec set (r.sp(): the snapshot of its
+// task): the docs and analysis tools, the engine's Go tools, and the subagents from their specs;
+// evidence subagents and draft_section behind Go hooks.
 func (e *Engine) runtime(r *run) (*agent.Runtime, error) {
+	sp := r.sp()
 	rt := &agent.Runtime{Chat: e.chat, Roles: e.roles, Prices: e.prices, Reg: agent.NewRegistry(), Policy: policy{r}, Journal: r, Log: e.log}
 	rt.Bandit = &agent.Bandit{Stats: stats{r}, Sig: agent.Signature(r.t.WorkflowType, "", r.t.Jurisdiction, r.t.LeadModel, len(r.t.DocumentIDs)),
 		BudgetCalls: e.cfg.BudgetCalls, Off: !r.t.ToolBandit}
-	tools := e.docs.Tools(rt)
+	var tools []agent.Tool
+	for _, t := range e.docs.Tools(rt) {
+		tools = append(tools, respec{t, sp.Spec(t.Spec().Name)})
+	}
 	an := analysis.Tools(judging{e, rt})
-	tools = append(tools, sheets{an[0], e}, aliasJoin{an[1], e}, e.ledgerTool(), e.sweepTool(rt, r), e.committeeTool(rt, r), e.finishTool(rt, r), e.coverTool(rt, r),
-		e.figureContextTool(), exactCalc{})
-	sub, _ := fs.Sub(specFS, "specs/agents")
-	subs, err := rt.LoadSubagents(sub)
+	for i := range an {
+		an[i] = respec{an[i], sp.Spec(an[i].Spec().Name)}
+	}
+	tools = append(tools, sheets{an[0], e}, aliasJoin{an[1], e}, e.ledgerTool(sp), e.sweepTool(rt, r), e.committeeTool(rt, r), e.finishTool(rt, r), e.coverTool(rt, r),
+		e.figureContextTool(sp), exactCalc{sp.Spec("exact_calc")}, e.skillTool(sp))
+	subs, err := sp.subagents(rt)
 	if err != nil {
 		return nil, err
 	}
@@ -259,7 +238,7 @@ func (h hooked) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 			}
 		}
 	case "analyze_issue":
-		for _, p := range SelectPacks(str("jurisdiction"), "") {
+		for _, p := range packsFor(ctx, str("jurisdiction"), "") {
 			in["packText"] = str("packText") + "\n\n" + p.Body
 		}
 	case "check_deviation":

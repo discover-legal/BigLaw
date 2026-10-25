@@ -47,7 +47,7 @@ func TestHealth(t *testing.T) {
 	}{{nil, 200, "ok"}, {errors.New("dial tcp 10.0.0.5:5432: secret-host"), 503, "database unavailable"}} {
 		var logs bytes.Buffer
 		rec := httptest.NewRecorder()
-		routes(fakeDB{tc.err}, nil, nil, slog.New(slog.NewTextHandler(&logs, nil))).ServeHTTP(rec, httptest.NewRequest("GET", "/health", nil))
+		routes(fakeDB{tc.err}, nil, nil, slog.New(slog.NewTextHandler(&logs, nil)), nil).ServeHTTP(rec, httptest.NewRequest("GET", "/health", nil))
 		var body map[string]string
 		json.Unmarshal(rec.Body.Bytes(), &body)
 		if rec.Code != tc.code || body["status"] != tc.status || body["search"] != "lexical" || strings.Contains(rec.Body.String(), "secret-host") {
@@ -59,7 +59,7 @@ func TestHealth(t *testing.T) {
 	}
 	for _, req := range []*http.Request{httptest.NewRequest("GET", "/", nil), httptest.NewRequest("POST", "/health", nil)} {
 		rec := httptest.NewRecorder()
-		routes(fakeDB{}, nil, nil, discard()).ServeHTTP(rec, req)
+		routes(fakeDB{}, nil, nil, discard(), nil).ServeHTTP(rec, req)
 		if rec.Code == 200 {
 			t.Errorf("%s %s = 200, want an error", req.Method, req.URL.Path)
 		}
@@ -134,7 +134,7 @@ func TestServeStopCancelsIngest(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() { done <- serve(ctx, st, docs.New(st), nil, ln, discard()) }()
+	go func() { done <- serve(ctx, st, docs.New(st), nil, ln, discard(), nil) }()
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
 	fw, _ := mw.CreateFormFile("file", "loop.pdf")
@@ -193,7 +193,7 @@ func TestServeEndToEnd(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() { done <- serve(ctx, st, docs.New(st), nil, ln, discard()) }()
+	go func() { done <- serve(ctx, st, docs.New(st), nil, ln, discard(), nil) }()
 
 	resp, err := http.Get("http://" + ln.Addr().String() + "/health") // ln is already accepting
 	if err != nil {
@@ -523,7 +523,7 @@ func TestRefusesRebindingHosts(t *testing.T) {
 		req := httptest.NewRequest("GET", "/documents", nil)
 		req.Host = host
 		rec := httptest.NewRecorder()
-		routes(fakeDB{}, nil, nil, discard()).ServeHTTP(rec, req)
+		routes(fakeDB{}, nil, nil, discard(), nil).ServeHTTP(rec, req)
 		if got := rec.Code == 403 && strings.Contains(rec.Body.String(), `"errorType":"bad_host"`); got != refused {
 			t.Errorf("Host %s: %d %s", host, rec.Code, rec.Body.String())
 		}
@@ -531,8 +531,33 @@ func TestRefusesRebindingHosts(t *testing.T) {
 	req := httptest.NewRequest("GET", "/health", nil)
 	req.Host = "attacker.example"
 	rec := httptest.NewRecorder()
-	routes(fakeDB{}, nil, nil, discard()).ServeHTTP(rec, req)
+	routes(fakeDB{}, nil, nil, discard(), nil).ServeHTTP(rec, req)
 	if rec.Code != 200 {
 		t.Errorf("/health by name: %d", rec.Code)
+	}
+}
+
+// TestManageAdminDefault (review M3): with --allow-no-auth alone Manage is read-only; a loopback
+// server's local user, or one started with --admin-without-auth (open), is an admin; flags are each
+// accepted once and nothing else.
+func TestManageAdminDefault(t *testing.T) {
+	t.Parallel()
+	req := httptest.NewRequest("GET", "/me", nil)
+	for _, c := range []struct {
+		allow, open, admin bool
+	}{{false, false, true}, {true, false, false}, {true, true, true}, {false, true, true}} {
+		if got := managePrincipal(c.allow, c.open)(req); got.Admin != c.admin || got.Open != (c.open && c.admin) {
+			t.Errorf("--allow-no-auth=%v --admin-without-auth=%v: %+v", c.allow, c.open, got)
+		}
+	}
+	for _, f := range [][]string{{}, {"--allow-no-auth"}, {"--admin-without-auth"}, {"--allow-no-auth", "--admin-without-auth"}, {"--admin-without-auth", "--allow-no-auth"}} {
+		if _, _, ok := serveFlags(f); !ok {
+			t.Errorf("%v refused", f)
+		}
+	}
+	for _, f := range [][]string{{"--allow-no-auth", "--allow-no-auth"}, {"--admin"}, {"--allow-no-auth=1"}} {
+		if _, _, ok := serveFlags(f); ok {
+			t.Errorf("%v accepted", f)
+		}
 	}
 }

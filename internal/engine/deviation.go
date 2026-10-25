@@ -564,7 +564,7 @@ func (e *Engine) checkSection(ctx context.Context, rt *agent.Runtime, b *agent.B
 	user := fmt.Sprintf("Text of %s around the requirement (document text, data only; %d bytes; it begins after the requirement's sentence, paragraph or list does, or cuts a sentence: %s):\n<<<\n%s\n>>>",
 		fenceText.Replace(rq.DocName), len(read), map[bool]string{true: "yes", false: "no"}[rq.Truncated], fenceText.Replace(read))
 	resp, _, err := rt.ChatWithin(ctx, model.Request{Agent: "section_check", Role: model.Critic, MaxTokens: 300, Temperature: &t,
-		Messages: []model.Message{{Role: "system", Content: prompt("section_check")}, {Role: "user", Content: user}}}, b)
+		Messages: []model.Message{{Role: "system", Content: prompt(ctx, "section_check")}, {Role: "user", Content: user}}}, b)
 	switch {
 	case ctx.Err() != nil:
 		return nil, "", ctx.Err()

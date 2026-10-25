@@ -8,12 +8,12 @@ package engine
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
-	"maps"
 	"slices"
 	"strings"
 	"testing"
-	"testing/fstest"
 
 	"github.com/discover-legal/BigLaw/internal/analysis"
 	"github.com/discover-legal/BigLaw/internal/model"
@@ -255,28 +255,28 @@ func TestR5CacheStoresOnlyCompleteAnswers(t *testing.T) {
 // every figure again, never by a hand-kept version), the model, the matter, and for a drafted
 // section the task; a task's rows go with it, and a document's with the document.
 func TestR5CacheKeyAndScope(t *testing.T) {
-	fsys := fstest.MapFS{}
+	h := sha256.New() // the hash as it was computed before overrides (specHash over the embedded files): the built-ins keep their cached readings
 	for _, name := range readerSpecFiles {
 		data, err := specFS.ReadFile(name)
 		if err != nil {
 			t.Fatal(err)
 		}
-		fsys[name] = &fstest.MapFile{Data: data}
+		fmt.Fprintf(h, "%s %d\n", name, len(data))
+		h.Write(data)
 	}
-	if specHash(fsys, readerSpecFiles) != readerSpec {
+	builtinHash := builtinSpecs.hashPaths(readerSpecFiles)
+	if hex.EncodeToString(h.Sum(nil)) != builtinHash {
 		t.Fatal("the spec hash is not the embedded specs'")
 	}
 	for _, name := range readerSpecFiles {
-		edited := maps.Clone(fsys)
-		edited[name] = &fstest.MapFile{Data: append(slices.Clone(fsys[name].Data), ' ')}
-		if specHash(edited, readerSpecFiles) == readerSpec {
-			t.Errorf("editing %s leaves the cache key as it was", name)
+		if edited := overrideOne(t, engineDir+name, " "); edited.hashPaths(readerSpecFiles) == builtinHash {
+			t.Errorf("an override of %s leaves the cache key as it was", name)
 		}
 	}
 	in := []passageIn{{ID: "q1", Kind: "quote", Text: "a fee of $5", Spans: []spanIn{{"q1.s1", "5"}}}}
 	keys := map[string]bool{}
-	for _, k := range []string{readKey("m1", "matter:A", "", nil, in), readKey("m2", "matter:A", "", nil, in), readKey("m1", "matter:B", "", nil, in),
-		readKey("m1", "matter:A", "t1", nil, in), readKey("m1", "matter:A", "t2", nil, in), readKey("m1", "matter:A", "", []string{"Acme"}, in)} {
+	for _, k := range []string{readKey("h", "m1", "matter:A", "", nil, in), readKey("h", "m2", "matter:A", "", nil, in), readKey("h", "m1", "matter:B", "", nil, in),
+		readKey("h", "m1", "matter:A", "t1", nil, in), readKey("h", "m1", "matter:A", "t2", nil, in), readKey("h", "m1", "matter:A", "", []string{"Acme"}, in)} {
 		keys[k] = true
 	}
 	if len(keys) != 6 {

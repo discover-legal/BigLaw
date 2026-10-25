@@ -9,6 +9,7 @@ import (
 	"embed"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"strings"
 
 	"github.com/discover-legal/BigLaw/internal/agent"
@@ -17,6 +18,10 @@ import (
 
 //go:embed specs/*.json
 var toolSpecs embed.FS
+
+// ToolSpecFS is retrieve's and verify_quote's spec files (specs/<name>.json), for the engine's spec
+// set: a run may register them with an admin's override (engine specset.go), never edited here.
+func ToolSpecFS() fs.FS { return toolSpecs }
 
 func toolSpec(name string) (s agent.Spec) {
 	data, err := toolSpecs.ReadFile("specs/" + name + ".json")

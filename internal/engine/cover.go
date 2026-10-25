@@ -119,7 +119,7 @@ const coverRevise = "Coverage pass: this section touched its issue without analy
 // are its share's calls, so its grant (what a crash charges as lost) is no more than its share.
 func (e *Engine) coverTool(rt *agent.Runtime, r *run) agent.Tool {
 	a := Allocate(e.cfg.BudgetCalls, e.cfg.BudgetUSD)
-	s := spec("cover")
+	s := r.sp().Spec("cover")
 	s.MaxTurns = a.Cover
 	return agent.GoTool{S: s, Fn: func(ctx context.Context, c agent.Call) (any, agent.Usage, error) {
 		// its share, or half of what the run has free beside the last review and the reserve when that

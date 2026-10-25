@@ -3,7 +3,7 @@
 //
 // The live transport: the Go API on the same origin (routes: README § REST API).
 import { ApiError, type Transport } from './transport.ts';
-import type { RunEvent, Step, Run } from './types.ts';
+import type { Problem, RunEvent, Step, Run } from './types.ts';
 
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
@@ -14,11 +14,13 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   });
   if (!res.ok) {
     let msg = `${res.status} ${res.statusText}`;
+    let problems: Problem[] = [];
     try {
-      const j = (await res.json()) as { error?: string };
+      const j = (await res.json()) as { error?: string; problems?: Problem[] };
       if (j.error) msg = j.error;
+      problems = j.problems ?? [];
     } catch { /* not JSON */ }
-    throw new ApiError(res.status, msg);
+    throw new ApiError(res.status, msg, problems);
   }
   return (await res.json()) as T;
 }
@@ -57,5 +59,14 @@ export function createTransport(): Transport {
     playbooks: () => call('GET', '/playbooks'),
     timeEntries: () => call('GET', '/time-entries'),
     profiles: () => call('GET', '/profiles'),
+    me: () => call('GET', '/me'),
+    manageItems: () => call('GET', '/manage/items'),
+    manageItem: (id) => call('GET', `/manage/items/${enc(id)}`),
+    manageHistory: (id) => call('GET', `/manage/items/${enc(id)}/history`),
+    manageChanges: () => call('GET', '/manage/changes'),
+    manageSave: (id, base, files, note) => call('POST', `/manage/items/${enc(id)}/versions`, { base, files, note }),
+    manageRevert: (id, to, base, note) => call('POST', `/manage/items/${enc(id)}/revert`, { to, base, note }),
+    manageDelete: (id, base, note) => call('POST', `/manage/items/${enc(id)}/delete`, { base, note }),
+    exportUrl: (format, item) => `/manage/export?format=${format}${item ? `&item=${enc(item)}` : ''}`,
   };
 }

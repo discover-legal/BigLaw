@@ -4,10 +4,11 @@
 // The recorded engine: replays recorded runs in the browser (README § UI, recorded demo). It makes
 // no network request of any kind; the recording is bundled. Provenance: recording.json's header.
 import recordingJson from '../recorded/recording.json' with { type: 'json' };
+import manageJson from '../recorded/manage.json' with { type: 'json' };
 import { nearest, rank } from './match.ts';
 import { ApiError, type Transport } from './transport.ts';
 import type {
-  Client, Doc, Finding, GateDecision, Hit, OutlineEntry, Playbook, Profile, RecordedSearch, Run, RunEvent, Setting, Step, Task, TaskCost, TimeEntry,
+  Client, Doc, Finding, GateDecision, Hit, ManageDetail, OutlineEntry, Playbook, Profile, RecordedSearch, Run, RunEvent, Setting, Step, Task, TaskCost, TimeEntry,
 } from './types.ts';
 
 /** The site the demo is published on (discover.legal/demo/biglaw/): the banner's way back. A link, not a request. */
@@ -50,7 +51,14 @@ export const plain = (s: string) => s.replace('by model.Fake (scripted) (', `by 
 
 const BUDGET_CALLS = 150; // BIGLAW_BUDGET_CALLS' default; the recording spends none
 
-export function createTransport(rec: Recording = recordingJson as unknown as Recording, clock: Clock = realClock): Transport {
+/** The Manage screen's recording (eval/demo/manage_test.go): this build's built-in catalogue, read-only. */
+export interface ManageRecording { provenance: string; items: ManageDetail[] }
+const READ_ONLY = 'The demo is read-only: it shows the built-in catalogue, and nothing can be saved.';
+
+export function createTransport(rec: Recording = recordingJson as unknown as Recording, clock: Clock = realClock,
+  manage: ManageRecording = manageJson as unknown as ManageRecording): Transport {
+  const items = manage.items.map((d) => ({ ...d, original: d.original ?? d.content })); // a built-in's original is its content
+  const refuse = async (): Promise<never> => { throw new ApiError(403, READ_ONLY); };
   const runs = new Map<string, Live>();
   let seq = 0;
   const docById = new Map(rec.documents.map((d) => [d.id, d]));
@@ -164,5 +172,12 @@ export function createTransport(rec: Recording = recordingJson as unknown as Rec
     timeEntries: async () => rec.timeEntries,
     profiles: async () => rec.profiles,
     settings: async () => rec.settings,
+    me: async () => ({ id: 'demo', name: 'Demo visitor', admin: false, authEnabled: false }),
+    manageItems: async () => items.map(({ content: _c, original: _o, hook: _h, callers: _k, ...i }) => i),
+    async manageItem(id) { const d = items.find((x) => x.id === id); if (!d) throw notFound('item'); return d; },
+    manageHistory: async () => [],
+    manageChanges: async () => [],
+    manageSave: refuse, manageRevert: refuse, manageDelete: refuse,
+    exportUrl: () => null,
   };
 }

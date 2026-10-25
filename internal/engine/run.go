@@ -20,9 +20,14 @@ import (
 // every step that was in flight when a process died is charged at its reserved grant ("lost") and
 // dropped, so it is issued again; the committed steps are replayed, never re-run.
 func (e *Engine) execute(ctx context.Context, r *run) error {
+	sp, err := newSpecs(r.t.Specs) // the task's snapshot: the same on every resume
+	if err != nil {
+		return e.fail(ctx, r, "", fmt.Errorf("engine: the task's spec snapshot does not load: %w", err))
+	}
+	r.specs, ctx = sp, withSpecs(ctx, sp)
 	var spent agent.Usage
 	var replay []agent.Step
-	err := e.st.InTx(ctx, func(tx *sql.Tx) error {
+	err = e.st.InTx(ctx, func(tx *sql.Tx) error {
 		var lost []byte
 		if err := tx.QueryRowContext(ctx, `SELECT lost FROM tasks WHERE id = $1 FOR UPDATE`, r.t.ID).Scan(&lost); err != nil {
 			return err
@@ -88,7 +93,7 @@ func (e *Engine) execute(ctx context.Context, r *run) error {
 	} else if err != nil {
 		return err
 	}
-	lead := agent.Agent{Name: "lead", Role: model.Lead, Model: r.t.LeadModel, Prompt: prompt("lead"), Visible: MemoVisible, MaxTurns: r.t.MaxSteps, Replay: replay}
+	lead := agent.Agent{Name: "lead", Role: model.Lead, Model: r.t.LeadModel, Prompt: prompt(ctx, "lead"), Visible: MemoVisible, MaxTurns: r.t.MaxSteps, Replay: replay}
 	call := agent.Call{TaskID: r.t.ID, DocumentIDs: r.t.DocumentIDs, Input: brief}
 	res, err := rt.Run(ctx, lead, call, r.b)
 	switch {
@@ -155,8 +160,11 @@ func (e *Engine) brief(ctx context.Context, t Task) (json.RawMessage, error) {
 		}
 		fmt.Fprintf(&b, "- %s: %s (%d sections)\n", d.ID, d.Name, d.Sections)
 	}
-	for _, p := range SelectPacks(t.Jurisdiction, "") {
+	for _, p := range packsFor(ctx, t.Jurisdiction, "") {
 		fmt.Fprintf(&b, "\nPack %s (%s):\n%s\nChecklist:\n- %s\n", p.Code, p.Status, p.Body, strings.Join(p.Checklist, "\n- "))
+	}
+	if idx := specsOf(ctx).skillIndex(); idx != "" { // names and descriptions only: use_skill reads one (progressive disclosure)
+		fmt.Fprintf(&b, "\nSkills (process guidance, not evidence; read one with use_skill when it fits the task):\n%s", truncate(idx, maxSkillIndex))
 	}
 	return json.Marshal(b.String())
 }
@@ -220,6 +228,7 @@ func ErrorType(err error) (int, string, string) {
 		{ErrBadTask, 400, "bad_request", ""},
 		{ErrNotFound, 404, "not_found", "not found"},
 		{ErrConflict, 409, "conflict", ""},
+		{ErrInvalid, 422, "invalid", ""},
 		{context.Canceled, 499, "cancelled", "the request was cancelled"},
 	} {
 		if errors.Is(err, c.err) {

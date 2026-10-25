@@ -270,8 +270,8 @@ func nextID(prefix string, n int) string { return prefix + strconv.Itoa(n+1) }
 // critics. A subagent may only read (plan and resolve are the lead's). Every list and a section's text
 // is one page of agent.PageBytes with next (bench4, SEC: 892 findings in full were 682 KB in one
 // result, past the lead's context; owner decision: bounded by type, never trimmed).
-func (e *Engine) ledgerTool() agent.Tool {
-	return agent.GoTool{S: spec("ledger"), Fn: func(ctx context.Context, c agent.Call) (any, agent.Usage, error) {
+func (e *Engine) ledgerTool(sp *Specs) agent.Tool {
+	return agent.GoTool{S: sp.Spec("ledger"), Fn: func(ctx context.Context, c agent.Call) (any, agent.Usage, error) {
 		var in struct {
 			Op, IssueID, FID, Detail, CriticID, Resolution, Note, Entity string
 			Issues                                                       []Issue

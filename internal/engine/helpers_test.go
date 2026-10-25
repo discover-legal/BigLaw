@@ -307,3 +307,26 @@ func stop(v TaskView) string {
 type docsEntry = docs.OutlineEntry
 
 func jsonDecode(s string, v any) { _ = json.Unmarshal([]byte(strings.TrimPrefix(s, "Request:\n")), v) }
+
+// overrideOne is the spec set with one built-in file's text followed by tail (an admin's override of
+// its item, version 1).
+func overrideOne(t *testing.T, file, tail string) *Specs {
+	t.Helper()
+	id := itemOf(file)
+	files := map[string]string{}
+	for _, f := range itemFiles(builtin, id) {
+		files[f] = string(builtin[f])
+	}
+	files[file] += tail
+	sp, err := newSpecs(Snapshot{id: {Version: 1, Files: files}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sp
+}
+
+// The files the reader's and judge's cache keys hashed before overrides (agentHash must give the same).
+var (
+	readerSpecFiles = []string{"specs/agents/read_figures.json", "specs/agents/read_figures.md", "specs/figure_context.json", "specs/exact_calc.json"}
+	judgeSpecFiles  = []string{"specs/agents/judge_figures.json", "specs/agents/judge_figures.md", "specs/figure_context.json"}
+)
