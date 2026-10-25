@@ -355,7 +355,7 @@ reviewer need. Move design into `docs/`, and move history to PR notes or a `docs
 | Files | 71 | Keep the bounds; move the memory measurements to `docs/documents.md` |
 | UI | 85 | Keep |
 | Test it | 173 | Keep the commands (about 20 lines). Move the "Named tests (PLAN.md PR n)" lists (about 150 lines) to `docs/history.md`; the tests themselves are the record |
-| Budgets | 23 | Keep (update its "Today" figures, § D) |
+| Budgets | 23 | Keep (its line counts now point to `scripts/loc.py`, § D) |
 | Limitations | 570 | Keep the limitations a user must know (about 200 lines). Move the per-PR "Line budget" paragraphs (about 100 lines, obsolete since owner decision 17) to `docs/history.md`. Fold the LAB round 3 and round 4 design notes into `docs/figures.md` |
 
 Expected effect: a README of about 1,000–1,200 lines, with no loss of information. The
@@ -367,8 +367,10 @@ pointer section, and the restructure is the owner's call.
 
 ## D. Where the docs and the code disagree today
 
-Found while writing `docs/`. None of these is fixed in this PR (docs PR only, README untouched
-except for the pointer). Each should be fixed in a follow-up.
+Found while writing `docs/`, at 29def72. Items 1–9 and 11 are fixed in this PR (README and
+CLAUDE.md text, code comments, and the no-UI notice's text, whose test pins only the substring
+"make build", which it keeps). Item 10 is a constant in a test's code, not a comment, so it is left
+as it is and recorded here.
 
 1. **Registry caps.** README § Agent runtime says the registry refuses "a 23rd tool" and that "at
    most 14 tools are visible to one agent". The code says 48 and 24 (`agent.MaxTools`,
@@ -402,9 +404,10 @@ except for the pointer). Each should be fixed in a follow-up.
    uses the tree only as a label.
 9. **The near join, in a comment.** The `claimSums` comment in `figures.go` says "the near join
    does" compare untyped sums. The near join was deleted in lab-r4 r7 (CLAUDE.md).
-10. **A stale test constant.** `TestRegistryToolCap` (`boundaries_test.go`) still plans the memo
-    lead at 11 visible tools. `MemoVisible` has 12 since `use_skill`. This is harmless, because it
-    only checks the cap.
+10. **A stale test constant (left as it is).** `TestRegistryToolCap` (`boundaries_test.go`) still
+    plans the memo lead at 11 visible tools (`"memo": 11`). `MemoVisible` has 12 since `use_skill`.
+    This is harmless, because the test only checks the planned lists against `agent.MaxVisible`
+    (24). Update the constant the next time that test is touched.
 11. **The G-code table is not in the repo.** The repo README uses G1–G11 and P1–P9 throughout,
     but their definitions live only in the planning contract outside the repo. `docs/glossary.md`
     now carries them.

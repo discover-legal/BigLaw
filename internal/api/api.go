@@ -233,7 +233,7 @@ func mustSub(f fs.FS, dir string) fs.FS {
 // noUI is "/" in a build without the UI embedded (a plain go build).
 const noUI = `<!doctype html><meta charset="utf-8"><title>BigLaw</title><body style="font-family:sans-serif;max-width:40em;margin:3em auto">
 <h1>BigLaw</h1><p>The API is running, but this binary was built without the web UI.</p>
-<p>Build it with <code>make build</code> (Node 22: it builds <code>ui/</code> and embeds it), or use the REST API and MCP directly.</p>`
+<p>Build the UI with <code>make ui</code> (Node 22), then <code>make build</code> embeds it (<code>make ui build</code> does both), or use the REST API directly.</p>`
 
 // uiHandler serves the built UI from ui, or the notice above when it holds no index.html.
 func uiHandler(ui fs.FS) http.Handler {
