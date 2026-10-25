@@ -87,20 +87,25 @@ type quoteDates struct {
 }
 
 // snippet is the words of quote around [start, end): about 24 bytes each side, cut where a token
-// ends (a space, a comma or a pipe), never inside one; in a table or CSV row, from the row's first
-// cell, so the party it is about stays (r11 L4: "Veltris Medical B.V.,Turnover,Netherlands,48").
+// ends (a space, a comma or a pipe), never inside one, and never past its own line; in a table or
+// CSV row, from the row's first cell, so the party it is about stays (r11 L4: "Veltris Medical
+// B.V.,Turnover,Netherlands,48").
 func snippet(quote string, start, end int) string {
 	if quote == "" || start < 0 || end > len(quote) || start > end {
 		return ""
 	}
 	cut := func(b byte) bool { return b == ' ' || b == ',' || b == '|' || b == '\n' || b == '\t' }
-	lo, hi := max(0, start-24), min(len(quote), end+24)
-	if row := strings.LastIndexByte(quote[:start], '\n') + 1; start-row <= 64 && isRow(quote[row:start]) {
+	row := strings.LastIndexByte(quote[:start], '\n') + 1 // a snippet stays on its own line
+	lo, hi := max(row, start-24), min(len(quote), end+24)
+	if i := strings.IndexByte(quote[end:hi], '\n'); i >= 0 {
+		hi = end + i
+	}
+	if start-row <= 64 && isRow(quote[row:start]) {
 		lo = row
-	} else if i := strings.IndexFunc(quote[lo:start], func(r rune) bool { return r < utf8.RuneSelf && cut(byte(r)) }); lo > 0 && i >= 0 {
+	} else if i := strings.IndexFunc(quote[lo:start], func(r rune) bool { return r < utf8.RuneSelf && cut(byte(r)) }); lo > row && i >= 0 {
 		lo += i + 1
 	}
-	if i := strings.LastIndexFunc(quote[end:hi], func(r rune) bool { return r < utf8.RuneSelf && cut(byte(r)) }); hi < len(quote) && i >= 0 {
+	if i := strings.LastIndexFunc(quote[end:hi], func(r rune) bool { return r < utf8.RuneSelf && cut(byte(r)) }); hi < len(quote) && quote[hi] != '\n' && i >= 0 {
 		hi = end + i
 	}
 	for lo > 0 && !utf8.RuneStart(quote[lo]) {
@@ -177,12 +182,25 @@ func memoValue(amount, unit string) string {
 
 // input is one worksheet input as the block writes it: whether it rests on a reader's words or label
 // (check), on words or a label that are not its unit (mismatch: its findings gated, why), and the
-// findings an input read at a scale rests on (scaled).
+// inputs read at a scale (scaled).
 type input struct {
 	text            string
 	check, mismatch bool
 	gate            []string
-	scaled          []string
+	scaled          []scaledIn
+}
+
+// scaledIn is an input read at a scale: its finding and its reading (the scale and its words).
+type scaledIn struct {
+	fid string
+	r   analysis.Reading
+}
+
+// dayCount reports whether a non-date input of fn with unit is a count of days: date_add and
+// business_days take a number with no unit as days (analysis.Calc), so it is a period whatever the
+// reader read it as (r12 M1).
+func dayCount(fn, unit string) bool {
+	return unit == "" && (fn == "date_add" || fn == "business_days")
 }
 
 // plainKind reports whether a reading is a count or a bare number with no unit words: the kind
@@ -228,9 +246,13 @@ func (cs computeSet) operand(fn string, st analysis.SheetStep, depth int) input 
 			in.check = true
 		}
 		if c.Scale != "" {
-			in.scaled = []string{c.fid}
+			in.scaled = []scaledIn{{c.fid, c.Reading}}
 		}
-		if c.Kind == analysis.KindDuration && unitWords(c.UnitFrom) != unitWords(unit) && !(unit == "days" && fn == "business_days") {
+		switch {
+		case dayCount(fn, unit) && c.Kind != analysis.KindDuration: // a count as date_add's days (r12 M1)
+			in.text += ": the figure reader read it as " + article(c.Kind) + ", not a period in days"
+			in.check, in.mismatch, in.gate = true, true, cs.holding(c.Reading)
+		case c.Kind == analysis.KindDuration && unitWords(c.UnitFrom) != unitWords(unit) && !(unit == "days" && fn == "business_days"):
 			in.text += ": the cited words “" + c.UnitFrom + "” are not its unit (" + unit + ")"
 			in.check, in.mismatch, in.gate = true, true, cs.holding(c.Reading)
 		}
@@ -256,9 +278,13 @@ func (cs computeSet) refOperand(fn, ref, val string) input {
 		return input{text: lit + " [" + fid + "]"}
 	}
 	in := input{text: memoValue(analysis.Decimal(g.Rat()), unit)}
-	if i := slices.IndexFunc(cs.src, func(c citedRead) bool {
-		return c.fid == fid && !c.Unclear && c.Kind == g.Kind && c.Amount == g.Amount && c.Scale == g.Scale
-	}); i >= 0 {
+	i := slices.IndexFunc(cs.src, func(c citedRead) bool { return c.fid == fid && g.Stated != "" && c.Span == g.Stated }) // where admission found it (r12 L4)
+	if i < 0 {
+		i = slices.IndexFunc(cs.src, func(c citedRead) bool {
+			return c.fid == fid && !c.Unclear && c.Kind == g.Kind && c.Amount == g.Amount && c.Scale == g.Scale
+		})
+	}
+	if i >= 0 {
 		in.text += " " + cs.src[i].at()
 	} else {
 		in.text += " [" + fid + "]"
@@ -268,12 +294,12 @@ func (cs computeSet) refOperand(fn, ref, val string) input {
 		in.check = true
 	}
 	if g.Scale != "" {
-		in.scaled = []string{fid}
+		in.scaled = []scaledIn{{fid, *g}}
 	}
-	period := unitKind(unit) == analysis.KindDuration
+	period := unitKind(unit) == analysis.KindDuration || dayCount(fn, unit)
 	switch {
-	case period && g.Kind != analysis.KindDuration: // a count used as a period: only the value's unit, never the reader, says it is days
-		in.text += ": the figure reader read it as " + article(g.Kind) + ", not a period in " + unit
+	case period && g.Kind != analysis.KindDuration: // a count used as a period: only the value's unit, or none, never the reader, says it is days
+		in.text += ": the figure reader read it as " + article(g.Kind) + ", not a period in " + cmpStr(unit == "", "days", unit)
 		in.check, in.mismatch, in.gate = true, true, []string{fid}
 	case period && unitWords(g.UnitFrom) != unitWords(unit) && !(unit == "days" && fn == "business_days"):
 		in.text += ": the cited words “" + g.UnitFrom + "” are not its unit (" + unit + ")"
@@ -369,17 +395,31 @@ func (cs computeSet) expr(w analysis.Worksheet, depth int) input {
 }
 
 // sheet is a worksheet's item, for the memo figures it is listed for (memo: G8 traces them only with
-// it) and the memo's figures at a scale that are its result (as). A memo figure written digit for
-// digit whose inputs are read at a scale is the cited figures' only by the reader's scale of their
-// words, as limitedScale's is (r11 H): ⚠, and the findings are gated.
-func (cs computeSet) sheet(w analysis.Worksheet, memo []untraced, as []string) computedFig {
+// it), the memo's figures at a scale that are its result (as), and whether the memo states it by its
+// handle. Inputs read at a scale gate their findings, ⚠, unless the memo writes the result at the
+// same scale from the same words (r11 H, r12 L1): written out digit for digit (by the drafter or, by
+// its handle, by Go), or at a scale from other words ("$8 million" over "$5 billion" read ×10⁶), the
+// result is the cited figures' only by the figure reader's scale of their words, as limitedScale's
+// is. A memo scale that agrees with every input's ("3,120 million" over "2810, EUR million") is the
+// reading at its word: listed, not gated.
+func (cs computeSet) sheet(w analysis.Worksheet, memo, as []untraced, handle bool) computedFig {
 	in := cs.expr(w, 0)
-	outScale := len(in.scaled) > 0 && slices.ContainsFunc(memo, func(u untraced) bool {
+	written := handle || slices.ContainsFunc(memo, func(u untraced) bool {
 		return u.read.Clear() && u.read.Scale == "" && u.read.Rat() != nil && u.read.Kind != analysis.KindDate && u.read.Kind != analysis.KindOther
 	})
+	other := slices.ContainsFunc(as, func(u untraced) bool {
+		return slices.ContainsFunc(in.scaled, func(x scaledIn) bool {
+			return x.r.Scale != u.read.Scale || unitWords(x.r.ScaleFrom) != unitWords(u.read.ScaleFrom)
+		})
+	})
+	outScale := len(in.scaled) > 0 && (written || other)
 	text := memoValue(w.Result, w.Unit) + " = " + in.text
 	if len(as) > 0 {
-		text += "; written in the memo as " + strings.Join(slices.Compact(slices.Sorted(slices.Values(as))), ", ") +
+		var forms []string
+		for _, u := range as {
+			forms = append(forms, u.figure)
+		}
+		text += "; written in the memo as " + strings.Join(slices.Compact(slices.Sorted(slices.Values(forms))), ", ") +
 			cmpStr(len(in.scaled) == 0, ", at a scale the cited inputs write out: the same figure only by the figure reader's scale of the memo's words", "")
 	}
 	gate := map[string]string{}
@@ -387,10 +427,15 @@ func (cs computeSet) sheet(w analysis.Worksheet, memo []untraced, as []string) c
 		gate[fid] = limitedUnit
 	}
 	if outScale {
-		text += ": the memo writes it digit for digit, and its inputs are the cited figures only by the figure reader's scale of their words; the findings are gated"
-		for _, fid := range in.scaled {
-			if gate[fid] == "" {
-				gate[fid] = limitedScale
+		var words []string
+		for _, x := range in.scaled {
+			words = append(words, "“"+x.r.ScaleFrom+"”")
+		}
+		text += ": the memo writes it " + cmpStr(written, "digit for digit", "at another scale's words") + ", and its inputs are the cited figures only by the figure reader's scale of " +
+			strings.Join(slices.Compact(slices.Sorted(slices.Values(words))), ", ") + "; the findings are gated"
+		for _, x := range in.scaled {
+			if gate[x.fid] == "" {
+				gate[x.fid] = limitedScale
 			}
 		}
 	}
@@ -460,7 +505,7 @@ func (b computedBlock) markdown() string {
 	var s strings.Builder
 	s.WriteString("\n### Computed figures\n\nEvery figure below is stated in the memo but traces only through a calculation Go made (over cited values or typed inputs, each as the figure reader read it), or only by the figure reader's label; each input names the finding and the quoted words it comes from.\n")
 	if len(b.Check) > 0 {
-		s.WriteString("\nCheck first (resting on words the figure reader cited for a unit, a multiple or a scale, on the days between two dates, or on a memo figure's label):\n\n")
+		s.WriteString("\nCheck first (resting on words the figure reader cited for a unit, a multiple or a scale, on a count or number's kind alone, on the days between two dates, or on a memo figure's label):\n\n")
 		for _, l := range b.Check {
 			s.WriteString("- " + mdSafe(l, true) + "\n")
 		}

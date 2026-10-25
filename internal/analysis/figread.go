@@ -114,6 +114,9 @@ type Reading struct {
 	RangeWith    string `json:"rangeWith,omitempty"`
 	Unclear      bool   `json:"unclear,omitempty"`
 	Why          string `json:"why,omitempty"` // what made it unclear
+	// Stated is, for a typed value's reading, the quote span admission matched it to ("q2.s1"; ""
+	// when none): where its quotes state it.
+	Stated string `json:"stated,omitempty"`
 }
 
 // Clear reports whether the reading is a quantity read with no doubt (money, a count, a percentage, a

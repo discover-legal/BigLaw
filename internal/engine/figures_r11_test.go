@@ -130,28 +130,61 @@ func refFinding(t *testing.T, quote string, quoteLabel func(analysis.Span) analy
 	return f, w
 }
 
-// H (one wrong scale): two values read ×10⁶ from "billion" summed by ref; the memo writes the total
-// out ("$8,000,000"). It traces only through the worksheet, whose inputs rest on the reader's scale:
-// ⚠, and the finding is gated, as limitedScale's would be.
+// H (one wrong scale): two values read ×10⁶ from "billion" summed by ref (r12 L3: their Figs as
+// ReadLabels gives them, the amounts shifted). However the memo states the total, written out
+// ("$8,000,000"), by its handle, or at another scale's words ("$8 million"), it traces only through
+// the worksheet, whose inputs rest on the reader's scale: ⚠, and the finding is gated, as
+// limitedScale's would be (r12 L1).
 func TestRefScaledSumWrittenOutGated(t *testing.T) {
 	quote := "The first instalment is $5 billion. The second instalment is $3 billion."
 	wrong := func(analysis.Span) analysis.Label {
 		return lab("", analysis.KindMoney, "USD", "1000000", "billion", "", "")
 	}
-	million := func(n string) *analysis.Reading {
-		return &analysis.Reading{Kind: analysis.KindMoney, Currency: "USD", Amount: n, Scale: "1000000", ScaleFrom: "billion", Text: n}
+	million := func(n, text string) *analysis.Reading {
+		return &analysis.Reading{Kind: analysis.KindMoney, Currency: "USD", Amount: n, Scale: "1000000", ScaleFrom: "billion", Text: text}
 	}
 	f1, w := refFinding(t, quote, wrong, "sum",
-		analysis.Value{Entity: "Company", Metric: "first instalment", Value: "$5 billion", Class: "Money", Fig: million("5")},
-		analysis.Value{Entity: "Company", Metric: "second instalment", Value: "$3 billion", Class: "Money", Fig: million("3")})
-	if w.LiteralOperands {
-		t.Fatal("a sum over refs has literal operands")
+		analysis.Value{Entity: "Company", Metric: "first instalment", Value: "$5 billion", Class: "Money", Fig: million("5000000", "5")},
+		analysis.Value{Entity: "Company", Metric: "second instalment", Value: "$3 billion", Class: "Money", Fig: million("3000000", "3")})
+	if w.LiteralOperands || w.Result != "8000000" {
+		t.Fatalf("a sum over refs: %+v", w)
 	}
-	sec := labelledSection("The instalments total $8,000,000 [F1].", func(analysis.Span) analysis.Label { return lab("", analysis.KindMoney, "USD", "1", "", "", "") })
-	lines, _, gate, computed := lintLimited("I1", sec, map[string]Finding{"F1": f1}, []analysis.Worksheet{w})
-	if len(lines) == 0 && (len(computed) != 1 || !computed[0].Mismatch || !strings.HasPrefix(computed[0].Text, "⚠ $8,000,000 = $5,000,000 [F1] “") ||
-		!strings.Contains(computed[0].Text, ", scaled by “billion”") || gate["F1"] != limitedScale) {
-		t.Errorf("$8,000,000 (the record: $8 billion) by a ref-only sum: lint %q, gate %v, computed %+v", lines, gate, computed)
+	scaled := func(analysis.Span) analysis.Label {
+		return lab("", analysis.KindMoney, "USD", "1000000", "million", "", "")
+	}
+	for _, c := range []struct {
+		sec  Section
+		want string
+	}{
+		{labelledSection("The instalments total $8,000,000 [F1].", func(analysis.Span) analysis.Label { return lab("", analysis.KindMoney, "USD", "1", "", "", "") }), "the memo writes it digit for digit"},
+		{readSection(Section{Markdown: "The instalments total {" + w.WID + "} [F1].", Handles: []Fig{{"{" + w.WID + "}", "", sheetValue(w.Result, w.Unit)}}}), "the memo writes it digit for digit"},
+		{labelledSection("The instalments total $8 million [F1].", scaled), "the memo writes it at another scale's words"},
+	} {
+		lines, _, gate, computed := lintLimited("I1", c.sec, map[string]Finding{"F1": f1}, []analysis.Worksheet{w})
+		if len(lines) != 0 || len(computed) != 1 || !computed[0].Mismatch || !strings.HasPrefix(computed[0].Text, "⚠ $8,000,000 = $5,000,000 [F1] “") ||
+			!strings.Contains(computed[0].Text, ", scaled by “billion”") || !strings.Contains(computed[0].Text, c.want) || gate["F1"] != limitedScale {
+			t.Errorf("%q: $8 million (the record: $8 billion) by a ref-only sum: lint %q, gate %v, computed %+v", c.sec.Markdown, lines, gate, computed)
+		}
+	}
+}
+
+// r12 L1: a memo scale that agrees with its scaled inputs' words ("3,120 million" over "2810" and
+// "310" read in millions from "EUR million") is the reading at its word: listed, not gated.
+func TestConsistentScaleListedNotGated(t *testing.T) {
+	quote := "Altamira Inc.,Turnover,Worldwide,2810,EUR million\nSorell B.V.,Turnover,Worldwide,310,EUR million"
+	eur := func(analysis.Span) analysis.Label {
+		return lab("", analysis.KindMoney, "EUR", "1000000", "million", "", "")
+	}
+	m := func(n, text string) *analysis.Reading {
+		return &analysis.Reading{Kind: analysis.KindMoney, Currency: "EUR", Amount: n, Scale: "1000000", ScaleFrom: "million", Text: text}
+	}
+	f1, w := refFinding(t, quote, eur, "sum",
+		analysis.Value{Entity: "Altamira", Metric: "turnover", Value: "2810", Unit: "EUR", Class: "Money", Fig: m("2810000000", "2810")},
+		analysis.Value{Entity: "Sorell", Metric: "turnover", Value: "310", Unit: "EUR", Class: "Money", Fig: m("310000000", "310")})
+	lines, _, gate, computed := lintLimited("I1", labelledSection("Combined worldwide turnover is EUR 3,120 million [F1].", eur), map[string]Finding{"F1": f1}, []analysis.Worksheet{w})
+	if len(lines) != 0 || len(gate) != 0 || len(computed) != 1 || computed[0].Mismatch || !computed[0].Check ||
+		!strings.Contains(computed[0].Text, "; written in the memo as 3,120 million") || !strings.Contains(computed[0].Text, "“Altamira Inc.,Turnover,Worldwide,2810,EUR million…”") {
+		t.Errorf("lint %q, gate %v, computed %+v", lines, gate, computed)
 	}
 }
 

@@ -565,6 +565,7 @@ func valueStated(v analysis.Value, j int, rs map[string]analysis.Reading, quotes
 		same, unclear := analysis.SameFigure(vr, q)
 		switch {
 		case same:
+			vr.Stated = q.Span
 			return &vr, true, false, ""
 		case unclear && soft == nil:
 			soft = &q
@@ -579,7 +580,7 @@ func valueStated(v analysis.Value, j int, rs map[string]analysis.Reading, quotes
 		if why == "" { // both clear, at two scales (lab-r4 r5 H1): the same figure only if a lawyer says so
 			why = "its quote states " + cmpStr(soft.ScaleFrom != "", soft.Text+" "+soft.ScaleFrom, soft.Text) + ", at another scale than the value"
 		}
-		vr.Unclear, vr.Why = true, why
+		vr.Unclear, vr.Why, vr.Stated = true, why, soft.Span
 		return &vr, true, true, ""
 	}
 	if vr.Unclear && why != "" {

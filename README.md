@@ -1835,9 +1835,13 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     $212,500,000”"). Items resting on a unit, multiple or scale the figure reader read from words, on
     a count or number's kind alone (no unit words: it may be a section number), or on the days
     between two cited dates come first ("Check first"); ⚠ marks, at the top, an input whose cited
-    words are not its unit, a value read as a count but used as a period, or a result the memo writes
-    out over inputs read at a scale, and gates the findings it rests on, as a memo figure's would be
-    (r11 H, L1). Arithmetic over money, percentages and dates the quotes write out follows
+    words are not its unit, a count used as a period (by its unit, or with none as `date_add`'s or
+    `business_days`' days, r12 M1), or a result over inputs read at a scale that the memo writes out
+    digit for digit, by its `{W…}` handle, or at a scale from other words ("$8 million" over "$5
+    billion" read ×10⁶), and gates the findings it rests on, as a memo figure's would be (r11 H, L1,
+    r12 L1); a memo scale whose words agree with every input's ("3,120 million" over "2810, EUR
+    million") is listed, not gated. A ref's quote is the span admission matched its value to
+    (`Reading.Stated`). Arithmetic over money, percentages and dates the quotes write out follows
     ("Arithmetic"). `numbers` keeps a value's "business days" (`date_add` refuses it; `business_days`
     counts it). So every figure that one wrong unit, scale or kind label could change is shown to the
     lawyer with the words it rests on; whether the label is right is the lawyer's check, since Go

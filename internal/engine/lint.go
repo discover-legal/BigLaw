@@ -349,8 +349,9 @@ func lintSection(issueID string, s Section, usable map[string]Finding, sheets []
 		return m
 	}
 	seen := map[string]bool{}
-	hit := map[string][]untraced{}  // the memo figures each worksheet is listed for (r10 H1: G8 itself decides, whatever form the figure is written in)
-	memoAs := map[string][]string{} // a scaled memo figure a worksheet computes, listed with it (r11 L5)
+	hit := map[string][]untraced{}    // the memo figures each worksheet is listed for (r10 H1: G8 itself decides, whatever form the figure is written in)
+	memoAs := map[string][]untraced{} // a scaled memo figure a worksheet computes, listed with it (r11 L5)
+	handled := map[string]bool{}      // the worksheets the section states by their handles
 	off := 0
 	for _, para := range strings.Split(body, "\n\n") {
 		at0 := off
@@ -412,7 +413,7 @@ func lintSection(issueID string, s Section, usable map[string]Finding, sheets []
 					})
 				}
 				if i >= 0 {
-					memoAs[sheets[i].WID] = append(memoAs[sheets[i].WID], n.figure)
+					memoAs[sheets[i].WID] = append(memoAs[sheets[i].WID], n)
 					if hit[sheets[i].WID] == nil {
 						hit[sheets[i].WID] = []untraced{}
 					}
@@ -455,13 +456,16 @@ func lintSection(issueID string, s Section, usable map[string]Finding, sheets []
 		return out, limited, gate, nil
 	}
 	for _, r := range regs { // a worksheet's handle: Go wrote its result, so the section states it (r10 L1: listed with the rest)
-		if w, sheet := byHandle[r.fig.Handle]; sheet && hit[w.WID] == nil {
-			hit[w.WID] = []untraced{}
+		if w, sheet := byHandle[r.fig.Handle]; sheet {
+			handled[w.WID] = true
+			if hit[w.WID] == nil {
+				hit[w.WID] = []untraced{}
+			}
 		}
 	}
 	for _, w := range sheets {
 		if memo, ok := hit[w.WID]; ok {
-			c := cs.sheet(w, memo, memoAs[w.WID])
+			c := cs.sheet(w, memo, memoAs[w.WID], handled[w.WID])
 			for fid, why := range c.Gate { // a ⚠ input: its findings gated, as a memo figure's would be (r11 H, L1)
 				if gate[fid] == "" {
 					gate[fid] = why
