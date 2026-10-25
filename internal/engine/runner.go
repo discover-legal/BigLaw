@@ -49,6 +49,8 @@ type Engine struct {
 	runs map[string]*run
 	wake chan struct{}
 
+	statMu sync.Mutex // the figure reader's ReaderStats, counted from parallel admissions
+
 	afterCommit func(taskID string, step int) // tests: runs after each committed step
 }
 

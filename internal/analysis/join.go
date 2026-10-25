@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"maps"
 	"math"
+	"math/big"
 	"slices"
 	"strings"
 	"unicode"
@@ -191,7 +192,7 @@ func rankPairs(findings []Finding) []Candidate {
 			b := sides[k]
 			ka, _, _ := strings.Cut(a.Canon, ":")
 			kb, _, _ := strings.Cut(b.Canon, ":")
-			if ka != kb || a.FID == b.FID || a.DocumentID == b.DocumentID || a.DocumentID == "" || b.DocumentID == "" || a.Canon == b.Canon {
+			if ka != kb || a.FID == b.FID || a.DocumentID == b.DocumentID || a.DocumentID == "" || b.DocumentID == "" || a.Canon == b.Canon || sameAmount(a.Canon, b.Canon) {
 				continue
 			}
 			kind, dist := "numeric", 0.0
@@ -251,6 +252,16 @@ func rankPairs(findings []Finding) []Candidate {
 		out[i] = p.c
 	}
 	return out
+}
+
+// sameAmount reports whether two canons are one amount however written: the same digits at another
+// precision ("45,000.00" and "45,000"), or one signed as a payment the other as a receipt ("-45000",
+// "45000"): two documents stating one figure, never a discrepancy (bench7: "$45,000.00" and "$45,000"
+// were judged one quantity stated differently).
+func sameAmount(a, b string) bool {
+	_, x, okx := CanonAmount(a)
+	_, y, oky := CanonAmount(b)
+	return okx && oky && new(big.Rat).Abs(x).Cmp(new(big.Rat).Abs(y)) == 0
 }
 
 // rankScore orders a value's counterparts: how alike their contexts are, plus a floor, times how close
@@ -333,6 +344,9 @@ func CheckVerdicts(cands []Candidate, raw []Verdict) (map[string]Verdict, []stri
 		if v.SameQuantity != "unclear" && !quoted(v.Reason, cands[i]) {
 			v.SameQuantity, v.Reason = "unclear", "the judge's reason quotes neither passage as written: "+v.Reason
 		}
+		if v.SameQuantity == "yes" && !namesValues(v.Reason, cands[i]) {
+			v.SameQuantity, v.Reason = "unclear", "the judge's reason does not name both figures as written beside its quotations: "+v.Reason
+		}
 		if _, twice := out[v.Pair]; twice {
 			v.SameQuantity, v.Reason = "unclear", "judged twice"
 		}
@@ -378,6 +392,53 @@ func quoted(reason string, c Candidate) bool {
 		return false
 	}
 	return quotes(c.A, flat(c.B)) && quotes(c.B, flat(c.A))
+}
+
+// namesValues reports whether a yes's reason, outside its quotations, writes each side's own figure as
+// written (its span's digits: "4,217" and "4,312"), digits at the edges whole (bench7: "both state the
+// same count of 2,614" for 2,614 against 5,776, "the same hurdle rate of 6%" for 6% against 20%: the
+// judge read the passages' shared figure, not the pair's two). A yes is that the two documents state
+// one quantity as two figures: its reason names both.
+func namesValues(reason string, c Candidate) bool {
+	var outside strings.Builder
+	in := false
+	for _, r := range reason {
+		switch {
+		case r == '"' || r == '“' || r == '”':
+			in = !in
+		case !in:
+			outside.WriteRune(r)
+		}
+	}
+	return writes(outside.String(), c.A) && writes(outside.String(), c.B)
+}
+
+// writes reports whether text writes a side's figure as written: its reading's span text, else its
+// value, with no digit (or a digit's decimal or group mark) glued to either end.
+func writes(text string, s Side) bool {
+	n := strings.TrimSpace(s.Fig.Text)
+	if n == "" {
+		n = strings.TrimSpace(s.Value)
+	}
+	if n == "" {
+		return false
+	}
+	for i := 0; i+len(n) <= len(text); {
+		k := strings.Index(text[i:], n)
+		if k < 0 {
+			return false
+		}
+		a, b := i+k, i+k+len(n)
+		i = a + 1
+		digit := func(at int) bool { return at >= 0 && at < len(text) && text[at] >= '0' && text[at] <= '9' }
+		mark := func(at int) bool { return at >= 0 && at < len(text) && (text[at] == ',' || text[at] == '.') }
+		left := digit(a-1) || mark(a-1) && digit(a-2) // "12,614" holds no 2,614
+		right := digit(b) || mark(b) && digit(b+1)    // "2,6140" or "2,614.5"
+		if !left && !right {
+			return true
+		}
+	}
+	return false
 }
 
 // Conflicts are the candidates the judge said are one quantity ("yes"), each with its reason; a pair

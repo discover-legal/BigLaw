@@ -126,36 +126,104 @@ func (e *Engine) saveSection(ctx context.Context, rt *agent.Runtime, c agent.Cal
 		return nil, err
 	}
 	s := Section{IssueID: d.issueID, Markdown: splitCites(a.Markdown), Summary: splitCites(a.Summary), Handles: d.figs, Version: version(secs) + 1}
-	body, regs := memoBody(s) // the figures the drafter wrote (not Go's handle values), read for G8 and the coverage pass
-	if spans := memoSpans(body, regs); len(spans) > 0 {
-		it := newReading(nil, []analysis.Passage{{ID: "m", Text: body, Spans: spans}}, []passageIn{{ID: "m", Kind: "memo", Text: body}})
-		it.memo = true
-		before := b.Spent().Calls
-		if err := e.readFigures(ctx, rt, c, b, "draft_section", []*reading{it}); err != nil {
+	before := b.Spent().Calls
+	if err := e.readSection(ctx, rt, c, b, &s); err != nil {
+		return nil, err
+	}
+	if n := b.Spent().Calls - before; n > 0 && ctx.Value(coverDraft{}) == nil { // the reader's calls are not the lead's drafter's: P4's draft share leaves them out (policy.go); a coverage redraft's are its finish step's
+		prior, err := load[int](ctx, e, taskID, kRead)
+		if err != nil {
 			return nil, err
 		}
-		if n := b.Spent().Calls - before; n > 0 && ctx.Value(coverDraft{}) == nil { // the reader's calls are not the lead's drafter's: P4's draft share leaves them out (policy.go); a coverage redraft's are its finish step's
-			prior, err := load[int](ctx, e, taskID, kRead)
-			if err != nil {
-				return nil, err
-			}
-			for _, p := range prior {
-				n += p
-			}
-			if err := e.write(ctx, taskID, kRead, "draft", n, true); err != nil {
-				return nil, err
-			}
+		for _, p := range prior {
+			n += p
 		}
-		rs, _ := it.readings()
-		s.Read = &SectionRead{Hash: textHash(body), Figs: ofPassage(rs, "m")}
-		if whys := slices.Sorted(maps.Values(it.unread)); len(whys) > 0 {
-			s.Read.Unread = fmt.Sprintf("%d of its %d figures were not read (%s)", len(it.unread), len(spans), strings.Join(slices.Compact(whys), "; "))
+		if err := e.write(ctx, taskID, kRead, "draft", n, true); err != nil {
+			return nil, err
 		}
 	}
 	if err := e.write(ctx, taskID, kSection, d.issueID, s, true); err != nil {
 		return nil, err
 	}
 	return map[string]any{"issueId": d.issueID, "version": s.Version, "words": len(strings.Fields(a.Markdown))}, nil
+}
+
+// readSection has the figure reader read a drafted section's own figures (the ones the drafter
+// wrote, not Go's handle values: G8 and the coverage pass read them) and, in the same calls, the
+// findings it cites that were never read (one with no typed value is read when first cited), out of
+// b; it sets the section's Read.
+func (e *Engine) readSection(ctx context.Context, rt *agent.Runtime, c agent.Call, b *agent.Budget, s *Section) error {
+	body, regs := memoBody(*s)
+	var cited []string
+	fs, err := load[Finding](ctx, e, c.TaskID, kFinding)
+	if err != nil {
+		return err
+	}
+	for _, m := range fidRe.FindAllStringSubmatch(s.Markdown, -1) {
+		if i := slices.IndexFunc(fs, func(f Finding) bool { return f.FID == m[1] }); i >= 0 && fs[i].Unread && fs[i].Verified && !slices.Contains(cited, m[1]) {
+			cited = append(cited, m[1])
+		}
+	}
+	spans := memoSpans(body, regs)
+	var it *reading
+	var with []*reading
+	if len(spans) > 0 {
+		it = newReading(nil, []analysis.Passage{{ID: "m", Text: body, Spans: spans}}, []passageIn{{ID: "m", Kind: "memo", Text: body}})
+		it.memo = true
+		with = append(with, it)
+	}
+	if len(with)+len(cited) > 0 {
+		if _, err := e.readFindings(ctx, rt, c, b, "draft_section", cited, with...); err != nil {
+			return err
+		}
+	}
+	if it != nil {
+		rs, _ := it.readings()
+		s.Read = &SectionRead{Hash: textHash(body), Figs: ofPassage(rs, "m")}
+		if whys := slices.Sorted(maps.Values(it.unread)); len(whys) > 0 {
+			s.Read.Unread = fmt.Sprintf("%d of its %d figures were not read (%s)", len(it.unread), len(spans), strings.Join(slices.Compact(whys), "; "))
+		}
+	}
+	return nil
+}
+
+// stale reports whether a section's reading is missing, of other text, or left figures unread for
+// want of budget, or it cites a finding never read: finish reads it again first (bench7).
+func (e *Engine) stale(s Section, fs []Finding) bool {
+	body, regs := memoBody(s)
+	if len(memoSpans(body, regs)) > 0 && (s.Read == nil || s.Read.Hash != textHash(body) || strings.Contains(s.Read.Unread, "the budget could not fund")) {
+		return true
+	}
+	for _, m := range fidRe.FindAllStringSubmatch(s.Markdown, -1) {
+		if i := slices.IndexFunc(fs, func(f Finding) bool { return f.FID == m[1] }); i >= 0 && fs[i].Unread && fs[i].Verified {
+			return true
+		}
+	}
+	return false
+}
+
+// readSections reads again every section whose reading is stale (stale), out of b, in plan order.
+func (e *Engine) readSections(ctx context.Context, rt *agent.Runtime, c agent.Call, b *agent.Budget) error {
+	secs, err := load[Section](ctx, e, c.TaskID, kSection)
+	if err != nil {
+		return err
+	}
+	for _, s := range secs {
+		fs, err := load[Finding](ctx, e, c.TaskID, kFinding)
+		if err != nil {
+			return err
+		}
+		if !e.stale(s, fs) {
+			continue
+		}
+		if err := e.readSection(ctx, rt, c, b, &s); err != nil {
+			return err
+		}
+		if err := e.write(ctx, c.TaskID, kSection, s.IssueID, s, true); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // citeGroup is a drafter's bracket of several finding ids or value refs ("[F304, F305]",

@@ -291,7 +291,7 @@ func (h hooked) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 		}
 		in = draft.request
 	}
-	if r := readerReserve(ctx, h.rt); goTurns(name) > 0 && c.Budget.Calls > r.Calls && (r.USD == 0 || c.Budget.USD > r.USD) { // the figure reader of its answer, held back from the subagent (lab-r4 r5 L4)
+	if r := readerReserve(ctx, h.rt); goTurns(name) > 0 && ctx.Value(readQueueKey{}) == nil && c.Budget.Calls > r.Calls && (r.USD == 0 || c.Budget.USD > r.USD) { // a sweep's visit reads nothing itself (readFindings) // the figure reader of its answer, held back from the subagent (lab-r4 r5 L4)
 		held, c.Budget = r, agent.Grant{Calls: c.Budget.Calls - r.Calls, USD: c.Budget.USD - r.USD}
 	}
 	c.Input, _ = json.Marshal(in)
@@ -446,8 +446,9 @@ func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 	var pend []pending
 	// the quotes' judges spend all but the figure reader's reserve (lab-r4 r5 L4: the reader is never
 	// what they left), unless no finding states a number, when the reader makes no call (r7 L4)
-	numbers := slices.ContainsFunc(drafts, func(d draftFinding) bool {
-		return len(findingReading(Finding{Finding: analysis.Finding{Claim: d.Claim, Entities: d.Entities}}, d.Quotes, d.Values).ps) > 0
+	queue, deferred := ctx.Value(readQueueKey{}).(*readQueue) // a sweep reads its findings together at its end
+	numbers := !deferred && slices.ContainsFunc(drafts, func(d draftFinding) bool {
+		return len(d.Values) > 0 && len(findingReading(Finding{Finding: analysis.Finding{Claim: d.Claim, Entities: d.Entities}}, d.Quotes, d.Values).ps) > 0
 	})
 	vb := b
 	if rc, ru := b.Remaining(); numbers && reserve.Calls > 0 && rc > reserve.Calls {
@@ -488,7 +489,7 @@ func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 	}
 	var items []*reading // one figure reading for the call's findings (cached by content), out of the call's grant
 	for _, p := range pend {
-		if len(p.text) > 0 {
+		if len(p.text) > 0 && !deferred && len(p.d.Values) > 0 { // a finding with no typed value is read when a section cites it
 			items = append(items, p.it)
 		}
 	}
@@ -497,29 +498,11 @@ func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 	}
 	for _, p := range pend {
 		f, d := p.f, p.d
-		rs, refused := p.it.readings()
-		for _, n := range refused {
-			f.ValueNotes = append(f.ValueNotes, "figure reader: "+n)
+		if len(p.text) > 0 && (deferred || len(d.Values) == 0) {
+			f.Values, f.Unread = d.Values, true // read later: by the sweep at its end, or when a section cites it
+		} else {
+			applyReading(&f, d.Values, p.it, p.text)
 		}
-		f.Figures = quoteReadings(rs) // what G8 traces a memo figure citing it to
-		for j, v := range d.Values {  // a value its quotes do not state is dropped, never silently (lab-r4 r3)
-			fig, ok, low, why := valueStated(v, j, rs, p.text)
-			if !ok {
-				note := fmt.Sprintf("value %q (%s) not admitted: %s", v.Value, cmpStr(v.Metric != "", v.Metric, "no metric"), why)
-				f.ValueNotes = append(f.ValueNotes, note) // into out.Notes with its finding's id, below
-				continue
-			}
-			v.Fig = fig
-			if fig != nil && fig.Kind == analysis.KindMoney && v.Unit == "" && fig.Currency != "USD" && fig.Currency != "" {
-				v.Unit = fig.Currency // the currency the reader read it in; "" is USD
-			}
-			if low { // admitted, gated for a lawyer: the reader could not read it with no doubt
-				f.Low = true
-				f.ValueNotes = append(f.ValueNotes, lowNote(v, fig))
-			}
-			f.Values = append(f.Values, v)
-		}
-		f.Values = append(f.Values, claimSums(f.Claim, rs, f.Values)...)
 		f.Relations, _ = analysis.Relations(d.Entities, d.Relations)
 		if i := slices.IndexFunc(all, func(x Finding) bool {
 			return x.Verified && f.Verified && restated(x, f)
@@ -546,6 +529,9 @@ func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 		}
 		f.FID = nextID("F", len(all))
 		all = append(all, f)
+		if deferred && f.Unread && len(f.Values) > 0 {
+			queue.add(f.FID)
+		}
 		if err := e.write(ctx, c.TaskID, kFinding, f.FID, f, false); err != nil {
 			return out, 0, err
 		}
@@ -564,6 +550,48 @@ func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 		return out, map[bool]float64{true: 1, false: 0}[len(drafts) == 0], nil
 	}
 	return out, float64(ok) / float64(quotes), nil
+}
+
+// applyReading sets a finding's readings from it (the reader's labels of its verified quotes, its
+// typed values and its claim; text is its verified quotes): Figures, what G8 traces a memo figure
+// citing it to; each of vals kept only when its quotes state it (valueStated: a value its quotes do
+// not state is dropped, never silently, lab-r4 r3), and its claim's sums.
+func applyReading(f *Finding, vals []analysis.Value, it *reading, text string) {
+	rs, refused := it.readings()
+	for _, n := range refused {
+		f.ValueNotes = append(f.ValueNotes, "figure reader: "+n)
+	}
+	f.Figures, f.Values, f.Unread = quoteReadings(rs), nil, false
+	for j, v := range vals {
+		fig, ok, low, why := valueStated(v, j, rs, text)
+		if !ok {
+			f.ValueNotes = append(f.ValueNotes, fmt.Sprintf("value %q (%s) not admitted: %s", v.Value, cmpStr(v.Metric != "", v.Metric, "no metric"), why))
+			continue
+		}
+		v.Fig = fig
+		if fig != nil && fig.Kind == analysis.KindMoney && v.Unit == "" && fig.Currency != "USD" && fig.Currency != "" {
+			v.Unit = fig.Currency // the currency the reader read it in; "" is USD
+		}
+		if low { // admitted, gated for a lawyer: the reader could not read it with no doubt
+			f.Low = true
+			f.ValueNotes = append(f.ValueNotes, lowNote(v, fig))
+		}
+		f.Values = append(f.Values, v)
+	}
+	f.Values = append(f.Values, claimSums(f.Claim, rs, f.Values)...)
+}
+
+// verifiedText is a finding's verified quotes (applyReading's text) and the quotes the reader reads.
+func verifiedText(f Finding) (string, []analysis.Quote) {
+	var text strings.Builder
+	var vq []analysis.Quote
+	for _, c := range f.Citations {
+		if c.Method != "none" {
+			text.WriteString(c.Quote + "\n")
+			vq = append(vq, analysis.Quote{DocumentID: c.DocumentID, Quote: c.Quote, Locator: c.Locator})
+		}
+	}
+	return text.String(), vq
 }
 
 // restated reports whether f is an exact duplicate of the admitted x (bench5: the referral's

@@ -71,8 +71,8 @@ func TestReasonBoilerplateQuotesNeither(t *testing.T) {
 	cands, _ := Candidates(fs, testLimit, nil)
 	id := cands[0].ID
 	for reason, want := range map[string]string{
-		`Both say "in accordance with the agreement", so they are the same.`:                                             "unclear",
-		`A says "the Adviser paid commissions of $291,400"; B says "a fee of $310,000 was invoiced for audit services".`: "yes",
+		`Both say "in accordance with the agreement", so they are the same.`:                                                                        "unclear",
+		`A says "the Adviser paid commissions of $291,400"; B says "a fee of $310,000 was invoiced for audit services": $291,400 against $310,000.`: "yes",
 	} {
 		if vs, _ := CheckVerdicts(cands, []Verdict{{Pair: id, SameQuantity: "yes", Reason: reason}}); vs[id].SameQuantity != want {
 			t.Errorf("%q: %s, want %s", reason, vs[id].SameQuantity, want)

@@ -199,6 +199,12 @@ func check(p Passage, s Span, l Label, known func(string) bool) Reading {
 	if l.UnitFrom != nil {
 		from = strings.TrimSpace(*l.UnitFrom)
 	}
+	if (r.Kind == KindCount || r.Kind == KindNumber) && slices.Contains(DurationUnits, u) && statesUnit(p.Text, s, from, false) {
+		// a count or a number the reader gave a period's unit, its words right after the digits ("21
+		// months"): the reader's own unit says it is a period, so it is read as one (bench7: "21 months"
+		// read as a count with unit months was unclear, and its values dropped)
+		r.Kind = KindDuration
+	}
 	switch { // a duration's unit and a multiple's sign are a number's meaning: cited words beside it, as a scale's (lab-r4 r9 H1)
 	case r.Kind == KindDuration && !slices.Contains(DurationUnits, u):
 		unclear("a duration with no unit")
@@ -210,6 +216,9 @@ func check(p Passage, s Span, l Label, known func(string) bool) Reading {
 			break
 		}
 		r.Unit, r.UnitFrom = map[bool]string{true: u}[r.Kind == KindDuration], from
+	case u != "" && (r.Kind == KindMoney || r.Kind == KindPercent):
+		// money or a rate the reader gave the unit of its period ("$2,800 per month"): the period is the
+		// reading's Period, never its amount, so the unit says nothing Go uses (bench7: unclear, dropped)
 	case u != "":
 		unclear("a unit on a figure that is no duration")
 	}
@@ -261,8 +270,14 @@ func check(p Passage, s Span, l Label, known func(string) bool) Reading {
 			}
 		}
 		if !statesScale(p.Text, s, end, from) { // never applied from nothing (lab-r4 r5 M2)
-			unclear("its scale is not stated by words of its own passage")
 			scale = one
+			if f := strings.TrimSpace(from); f != "" && strings.Contains(s.Text, f) && strings.Trim(f, ",.' 0") == "" && strings.Contains(f, "000") {
+				// the figure's own trailing zeros cited as its scale ("000" of "$8,238,000", read as the
+				// "($000)" of a header): the digits written out in full are the amount, at scale 1, and no
+				// word was read (bench7). Any other scale with no words of its passage is unclear (r5 M2).
+				break
+			}
+			unclear("its scale is not stated by words of its own passage")
 			break
 		}
 		r.Scale, r.ScaleFrom = exactDecimal(scale), from

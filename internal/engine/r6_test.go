@@ -158,7 +158,8 @@ func TestR6UnreadQuoteTracesAsWritten(t *testing.T) {
 	f := newFixture(t, "1. Issuance\nThe Company shall issue Two Million (2,000,000) shares of Common Stock to the Investor.\n")
 	d1 := f.docs[0].ID
 	e, fake := f.engine(f.with(map[string][]model.Reply{
-		"extract_facts": {facts(fd("The Company shall issue 2,000,000 shares to the Investor.", d1, "The Company shall issue Two Million (2,000,000) shares of Common Stock to the Investor"))},
+		"extract_facts": {facts(fd("The Company shall issue 2,000,000 shares to the Investor.", d1, "The Company shall issue Two Million (2,000,000) shares of Common Stock to the Investor",
+			val("Company", "shares issued", "2,000,000", "Count")))}, // a typed value, so admission reads the finding (bench7: one with none is read when a section cites it)
 		"draft_section": {section("The Investor paid $2,000,000 for its shares [F1].", "Paid [F1].")},
 	}), Config{})
 	fake.Respond = func(req model.Request) (model.Reply, bool) {

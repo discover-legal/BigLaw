@@ -394,8 +394,14 @@ func (e *Engine) sweepTool(rt *agent.Runtime, r *run) agent.Tool {
 		for _, i := range order(planned, qs) {
 			visits = append(visits, planned[i])
 		}
-		a, sw := Allocate(e.cfg.BudgetCalls, e.cfg.BudgetUSD), spent["sweep"]
-		b := agent.NewBudget(min(c.Budget.Calls, a.Sweep-sw.Calls), min(c.Budget.USD, a.dollars(a.Sweep)-sw.USD), 0)
+		// the visits spend the sweep's share; their findings are read at the end, together, from the
+		// reader's own share (bench7: read per visit, from the sweep's, the reader starved it): the
+		// reader's part of the grant is kept back from the visits
+		a, sw, rd := Allocate(e.cfg.BudgetCalls, e.cfg.BudgetUSD), spent["sweep"], spent["read"]
+		rc, ru := max(0, min(a.Read-rd.Calls, c.Budget.Calls/2)), max(0, min(a.ReadUSD-rd.USD, c.Budget.USD/2))
+		b := agent.NewBudget(max(0, min(c.Budget.Calls-rc, a.Sweep-sw.Calls)), max(0, min(c.Budget.USD-ru, a.SweepUSD-sw.USD)), 0)
+		queue := &readQueue{}
+		ctx = context.WithValue(ctx, readQueueKey{}, queue)
 		todo, was, why, src := make([]bool, len(visits)), make([]visitRec, len(visits)), make([]string, len(visits)), make([]int, len(visits))
 		var kept []Visit // the read (or to be read) visits so far, in reading order: what a later one may repeat
 		var keptAt []int // their indexes in visits
@@ -419,6 +425,16 @@ func (e *Engine) sweepTool(rt *agent.Runtime, r *run) agent.Tool {
 		runs, err := e.sweepVisits(ctx, rt, c, b, visits, todo, was, cur, r.t.Description)
 		if err != nil {
 			return nil, b.Spent(), err
+		}
+		used := b.Spent()
+		rb := agent.NewBudget(max(0, min(c.Budget.Calls-used.Calls, a.Read-rd.Calls)), max(0, min(c.Budget.USD-used.USD, a.ReadUSD-rd.USD)), 0)
+		readNotes, err := e.readFindings(ctx, rt, c, rb, "sweep", queue.fids)
+		spentAll := func() agent.Usage { u := b.Spent(); u.Add(rb.Spent()); return u }
+		if err == nil {
+			err = e.countRead(ctx, c.TaskID, 0, 0, "", false, rb.Spent()) // the reader's own share's spend (classSpend)
+		}
+		if err != nil {
+			return nil, spentAll(), err
 		}
 		fids, notes, uncovered, skipped, visited := []string{}, []string{}, []map[string]any{}, []map[string]any{}, 0
 		cov := map[string]*SweptDoc{}
@@ -448,6 +464,7 @@ func (e *Engine) sweepTool(rt *agent.Runtime, r *run) agent.Tool {
 				fids, notes = append(fids, x.ids...), append(notes, x.notes...)
 			}
 		}
+		notes = append(notes, readNotes...)
 		swept, unread := []SweptDoc{}, []map[string]any{}
 		for _, id := range docOrder {
 			d := *cov[id]
@@ -460,7 +477,7 @@ func (e *Engine) sweepTool(rt *agent.Runtime, r *run) agent.Tool {
 			}
 		}
 		if was, err := load[[]SweptDoc](ctx, e, c.TaskID, kSwept); err != nil {
-			return nil, b.Spent(), err
+			return nil, spentAll(), err
 		} else if len(was) > 0 { // a sweep over some documents keeps the others' coverage
 			for _, d := range was[0] {
 				if !slices.Contains(docOrder, d.DocumentID) {
@@ -469,7 +486,7 @@ func (e *Engine) sweepTool(rt *agent.Runtime, r *run) agent.Tool {
 			}
 		}
 		if err := e.write(ctx, c.TaskID, kSwept, "sweep", swept, true); err != nil {
-			return nil, b.Spent(), err
+			return nil, spentAll(), err
 		}
 		out := sweepPage(visited, fids, notes, uncovered, skipped, unread)
 		note := ""
@@ -492,12 +509,12 @@ func (e *Engine) sweepTool(rt *agent.Runtime, r *run) agent.Tool {
 			note += ". Facts and figures on those pages are not in the findings, so the cross-document comparison could not see them."
 		}
 		if err := e.write(ctx, c.TaskID, kNote, "sweep", note, true); err != nil {
-			return nil, b.Spent(), err
+			return nil, spentAll(), err
 		}
 		if err := e.write(ctx, c.TaskID, kNote, "sweep-skipped", skippedNote(swept), true); err != nil {
-			return nil, b.Spent(), err
+			return nil, spentAll(), err
 		}
-		return out, b.Spent(), nil
+		return out, spentAll(), nil
 	}}
 }
 

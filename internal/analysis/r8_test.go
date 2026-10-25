@@ -82,9 +82,10 @@ func TestVerdictReasonQuotesBothPassages(t *testing.T) {
 	cands, _ := Candidates(fs, testLimit, nil)
 	id := cands[0].ID
 	for reason, want := range map[string]string{
-		`A says "received undisclosed compensation payments totaling $92,600"; B says "Grand total of payments on behalf of Bellini".`: "yes",
-		`A says "the parties agreed a $5,000,000 cap in the side letter"; B says "see the side letter".`:                               "unclear",
-		`A says "received undisclosed compensation payments totaling $92,600"; B is the same figure.`:                                  "unclear",
+		`A says "received undisclosed compensation payments totaling $92,600"; B says "Grand total of payments on behalf of Bellini": $92,600 against $103,800.`: "yes",
+		`A says "received undisclosed compensation payments totaling $92,600"; B says "Grand total of payments on behalf of Bellini".`:                           "unclear", // bench7: neither figure named beside the quotations
+		`A says "the parties agreed a $5,000,000 cap in the side letter"; B says "see the side letter".`:                                                         "unclear",
+		`A says "received undisclosed compensation payments totaling $92,600"; B is the same figure.`:                                                            "unclear",
 		"": "unclear",
 	} {
 		if vs, _ := CheckVerdicts(cands, []Verdict{{Pair: id, SameQuantity: "yes", Reason: reason}}); vs[id].SameQuantity != want {

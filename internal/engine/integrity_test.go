@@ -432,7 +432,7 @@ func TestWarnCollapseDisclosedInDeliverable(t *testing.T) {
 	v := f.run(f.with(map[string][]model.Reply{
 		"extract_facts": {facts(found...)},
 		"draft_section": {section("Greystone claims damages of $644,910 for unpaid invoices [F1].", "Damages [F1].")},
-		"verify_quote":  {judgeNo, judgeNo},
+		"verify_quote":  {judgeNo, judgeNo, judgeNo, judgeNo, judgeNo, judgeNo, judgeNo}, // every invented quote judged: no reader reserve is held back from the judges, the findings state no value (bench7)
 	}), Config{BudgetCalls: 150, BudgetUSD: 5, CollapseThreshold: 0.5, CollapseAction: "warn"})
 	if stop(v) != "awaiting_gate/finished" || v.GroundingAlert == nil || v.Output == nil {
 		t.Fatalf("%s alert %v error %v", stop(v), v.GroundingAlert, v.Error)

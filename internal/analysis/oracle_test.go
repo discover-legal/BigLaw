@@ -153,7 +153,7 @@ func (s scripted) Judge(_ context.Context, _ agent.Call, cands []Candidate) (map
 	}
 	var raw []Verdict
 	for _, c := range cands {
-		v := Verdict{Pair: c.ID, SameQuantity: cmp.Or(s.answer, "no"), Reason: `A says "` + c.A.Quotes[0] + `"; B says "` + c.B.Quotes[0] + `".`}
+		v := Verdict{Pair: c.ID, SameQuantity: cmp.Or(s.answer, "no"), Reason: `A says "` + c.A.Quotes[0] + `"; B says "` + c.B.Quotes[0] + `": A's ` + c.A.Value + ` against B's ` + c.B.Value + `.`}
 		if slices.ContainsFunc(s.yes, func(p [2]string) bool {
 			return p == [2]string{c.A.Value, c.B.Value} || p == [2]string{c.B.Value, c.A.Value} || p == [2]string{c.A.Canon, c.B.Canon} || p == [2]string{c.B.Canon, c.A.Canon}
 		}) {

@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"math/big"
 	"regexp"
@@ -307,10 +308,9 @@ func lintSection(issueID string, s Section, usable map[string]Finding, sheets []
 				unreadBy[fid] = append(unreadBy[fid], analysis.Span{Text: r.Text})
 			}
 		}
-		if len(f.Figures) == 0 {
+		if len(f.Figures) == 0 { // never read: its quotes' numbers the reader is sent (never a locator's: quotePassage)
 			for _, c := range f.Citations {
-				_, ns := figures(c.Quote, true)
-				unreadBy[fid] = append(unreadBy[fid], ns...)
+				unreadBy[fid] = append(unreadBy[fid], quotePassage("q", c.Quote).Spans...)
 			}
 		}
 		unread = append(unread, unreadBy[fid]...)
@@ -349,9 +349,10 @@ func lintSection(issueID string, s Section, usable map[string]Finding, sheets []
 		return m
 	}
 	seen := map[string]bool{}
-	hit := map[string][]untraced{}    // the memo figures each worksheet is listed for (r10 H1: G8 itself decides, whatever form the figure is written in)
-	memoAs := map[string][]untraced{} // a scaled memo figure a worksheet computes, listed with it (r11 L5)
-	handled := map[string]bool{}      // the worksheets the section states by their handles
+	var memoUnread, memoUnreadBy []string // the section's figures the reader never read, and the findings stating them as written
+	hit := map[string][]untraced{}        // the memo figures each worksheet is listed for (r10 H1: G8 itself decides, whatever form the figure is written in)
+	memoAs := map[string][]untraced{}     // a scaled memo figure a worksheet computes, listed with it (r11 L5)
+	handled := map[string]bool{}          // the worksheets the section states by their handles
 	off := 0
 	for _, para := range strings.Split(body, "\n\n") {
 		at0 := off
@@ -393,6 +394,25 @@ func lintSection(issueID string, s Section, usable map[string]Finding, sheets []
 			}
 			seen[n.figure] = true
 			switch n.limited {
+			case limitedMemoUnread: // one check-first item for the section's unread figures (below), its findings gated
+				memoUnread = append(memoUnread, n.figure)
+				for _, fid := range fids {
+					f := usable[fid]
+					text, _ := verifiedText(f)
+					for _, v := range f.Values {
+						text += v.Value + "\n"
+					}
+					_, gn := figures(text, true)
+					if _, ss := analysis.Literal(n.figure); len(ss) > 0 && spanStated(ss[0], gn) {
+						if gate[fid] == "" {
+							gate[fid] = limitedMemoUnread
+						}
+						if !slices.Contains(memoUnreadBy, fid) {
+							memoUnreadBy = append(memoUnreadBy, fid)
+						}
+					}
+				}
+				continue
 			case limitedUnit, limitedOther: // a figure resting on a reader's label: the Computed figures block's first tier
 				computed = append(computed, cs.labelled(n))
 				if n.limited == limitedUnit {
@@ -451,6 +471,13 @@ func lintSection(issueID string, s Section, usable map[string]Finding, sheets []
 			out = append(out, issueID+": the figure "+n.figure+" is not traced (G8): "+cmpStr(n.unread != "", "the figure reader did not read it clearly ("+n.unread+"), so it is flagged, never traced; ", "")+
 				cmpStr(n.hint != "", n.hint, hint(n.figure, s.Handles, usable, cited)))
 		}
+	}
+	if len(memoUnread) > 0 {
+		limited[limitedMemoUnread] = memoUnread
+		computed = append(computed, computedFig{Key: "memo-unread:" + issueID, Check: true,
+			Text: fmt.Sprintf("%s in the memo %s not read by the figure reader (its call could not be funded or failed): %s only as written, digit for digit, to %s, whose findings are gated; check %s against the cited quotes",
+				strings.Join(memoUnread, ", "), plural(len(memoUnread), "was", "were"), plural(len(memoUnread), "it traces", "they trace"),
+				"["+strings.Join(memoUnreadBy, "] [")+"]", plural(len(memoUnread), "it", "each"))})
 	}
 	if !attribute {
 		return out, limited, gate, nil
@@ -519,6 +546,11 @@ const (
 	// cited reading of a quantity (money, a count, a percentage, a number, a period) states (r10 L5):
 	// traced, but listed for the lawyer to check first.
 	limitedOther = "other"
+	// limitedMemoUnread is a memo figure the figure reader never read (its call unfunded or failed:
+	// bench7), which the cited findings' quotes or values state as written: listed check-first and
+	// its findings gated, never traced by a reading (fail closed: a figure none states as written
+	// stays a blocking lint line).
+	limitedMemoUnread = "memo-unread"
 )
 
 // g8 traces one paragraph (its locators masked; it starts at at0 in the section's body): its dates
@@ -565,6 +597,8 @@ func g8In(para string, td []string, tn []analysis.Span, g traceGround, at0 int, 
 		}
 		r, ok := read[at]
 		switch {
+		case ok && strings.HasPrefix(r.Why, "not read") && spanStated(n, gn): // the reader never read it (unfunded, failed, not sent; bench7: every figure of an unfunded memo, years too, blocked finish)
+			out = append(out, untraced{figure: n.Text, limited: limitedMemoUnread, unread: r.Why, at: at}) // as written only: listed check-first, its findings gated
 		case !ok || r.Unclear || r.Kind == analysis.KindUnclear:
 			why := "it was not read"
 			if ok && r.Why != "" {

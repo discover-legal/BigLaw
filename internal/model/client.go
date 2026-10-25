@@ -331,8 +331,9 @@ func (c *Client) send(ctx context.Context, agent, endpoint string, body []byte) 
 	}
 }
 
-// answer reads a response: a 200's body, or the classified *Error and whether to retry. No
-// upstream text reaches the error (it may quote the request or the key).
+// answer reads a response: a 200's body, or the classified *Error and whether to retry. Of an error
+// body only the provider's error type and message reach the error (providerError: bounded, the key
+// and anything key-, token- or URL-shaped redacted), never the rest (it may quote the request).
 func (c *Client) answer(ctx context.Context, hresp *http.Response) (data []byte, retry bool, err error) {
 	defer hresp.Body.Close()
 	code := hresp.StatusCode
@@ -346,6 +347,9 @@ func (c *Client) answer(ctx context.Context, hresp *http.Response) (data []byte,
 		return data, false, nil
 	}
 	detail := "HTTP " + strconv.Itoa(code)
+	if why := providerError(hresp.Body, c.key); why != "" { // the provider's own error type and message, bounded and redacted (bench7: a 400 "credit balance is too low" showed only as "HTTP 400")
+		detail += " (" + why + ")"
+	}
 	switch {
 	case code == http.StatusTooManyRequests:
 		e := fail(ErrRateLimited, detail)
