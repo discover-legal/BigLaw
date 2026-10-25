@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/discover-legal/BigLaw/internal/api"
+	"github.com/discover-legal/BigLaw/internal/auth"
 	"github.com/discover-legal/BigLaw/internal/docs"
 	"github.com/discover-legal/BigLaw/internal/engine"
 	"github.com/discover-legal/BigLaw/internal/model"
@@ -35,11 +36,14 @@ const usage = `usage: biglaw <command>
 
   serve [--allow-no-auth] [--admin-without-auth]
                            run the server on BIGLAW_ADDR (migrates the database
-                           first). There is no authentication yet, so serve
-                           refuses a non-loopback BIGLAW_ADDR unless
+                           first). With sign-in configured (BIGLAW_OIDC_ISSUER)
+                           every request needs a session and BIGLAW_ADMINS names
+                           the admins; --allow-no-auth then has no effect and
+                           --admin-without-auth is refused. Without sign-in,
+                           serve refuses a non-loopback BIGLAW_ADDR unless
                            --allow-no-auth says something else (such as a
-                           loopback-only port publish) limits who can reach it.
-                           With --allow-no-auth, Manage is read-only unless
+                           loopback-only port publish) limits who can reach it;
+                           with it, Manage is read-only unless
                            --admin-without-auth lets anyone who can reach the
                            server change what its agents use.
   version [--config]       print the version; --config also prints the
@@ -85,21 +89,36 @@ func run(ctx context.Context, args []string, getenv func(string) string, environ
 			fmt.Fprintf(stderr, "biglaw: refusing to start:\n%v\n", err)
 			return 2
 		}
-		if !isLoopback(cfg.Addr) && !allowNoAuth {
-			fmt.Fprintf(stderr, "biglaw: refusing to start: BIGLAW_ADDR %s is not a loopback address and this build has no authentication "+
-				"(it lands in PR 8). Listen on 127.0.0.1, or pass --allow-no-auth if something else limits who can reach the port "+
+		signedIn := cfg.OIDC.Issuer != ""
+		if signedIn && adminWithoutAuth {
+			fmt.Fprint(stderr, "biglaw: refusing to start: --admin-without-auth is refused when sign-in is configured (BIGLAW_OIDC_ISSUER): "+
+				"admins are the accounts BIGLAW_ADMINS names. Remove the flag (README § Sign-in).\n")
+			return 2
+		}
+		if signedIn && allowNoAuth { // meaningless: every request but /health and the UI's files needs a session
+			log.Warn("--allow-no-auth has no effect: sign-in is configured, so every API request needs a session (README § Sign-in)")
+			allowNoAuth = false
+		}
+		if !isLoopback(cfg.Addr) && !allowNoAuth && !signedIn {
+			fmt.Fprintf(stderr, "biglaw: refusing to start: BIGLAW_ADDR %s is not a loopback address and sign-in is not configured "+
+				"(BIGLAW_OIDC_ISSUER, README § Sign-in). Listen on 127.0.0.1, configure sign-in, or pass --allow-no-auth if something else limits who can reach the port "+
 				"(docker-compose.yml publishes it on the host's loopback only). See README § Exposure.\n", shown("BIGLAW_ADDR", cfg.Addr))
 			return 2
 		}
-		if !isLoopback(cfg.Addr) {
+		if !isLoopback(cfg.Addr) && !signedIn {
 			log.Warn("serving WITHOUT authentication on a non-loopback address (--allow-no-auth)", "addr", shown("BIGLAW_ADDR", cfg.Addr))
 		}
 		who := managePrincipal(allowNoAuth, adminWithoutAuth)
 		switch {
+		case signedIn:
+			who = api.SessionUser
+			if len(cfg.OIDC.Admins) == 0 {
+				log.Warn("sign-in is on but BIGLAW_ADMINS names no one: everyone who signs in is a member and Manage is read-only (README § Sign-in)")
+			}
 		case adminWithoutAuth:
 			log.Warn("Manage is OPEN (--admin-without-auth): anyone who can reach this server can change the agents, tools, packs and skills every task uses (README § Exposure)")
 		case allowNoAuth:
-			log.Info("Manage is read-only (--allow-no-auth without --admin-without-auth): there is no sign-in yet to tell an admin (README § Exposure)")
+			log.Info("Manage is read-only (--allow-no-auth without --admin-without-auth): configure sign-in to tell an admin (README § Sign-in)")
 		}
 		if names := UnknownVars(environ); len(names) > 0 {
 			log.Warn("ignoring unknown BIGLAW_ variables (typo?)", "names", strings.Join(names, ","))
@@ -159,7 +178,22 @@ func run(ctx context.Context, args []string, getenv func(string) string, environ
 		if allowNoAuth || adminWithoutAuth {
 			log.Info("secrets and custom tools' outbound calls are off (--allow-no-auth or --admin-without-auth): they need a real admin (README § Exposure)")
 		}
-		if err := serve(ctx, st, d, e, ln, log, who); err != nil {
+		var signIn *auth.Service
+		if signedIn {
+			o := cfg.OIDC
+			if signIn, err = auth.New(st.DB(), auth.Config{Issuer: o.Issuer, ClientID: o.ClientID, ClientSecret: o.ClientSecret, PublicURL: o.PublicURL, Admins: o.Admins, Log: log}); err != nil {
+				fmt.Fprintf(stderr, "biglaw: %v\n", err)
+				return 2
+			}
+			go func() { // a probe only: an issuer down at startup is retried at each sign-in
+				if err := signIn.Discover(ctx); err != nil {
+					log.Warn("sign-in: the issuer could not be discovered yet; each sign-in tries again", "issuer", shown("BIGLAW_OIDC_ISSUER", o.Issuer), "err", err)
+				} else {
+					log.Info("sign-in on", "issuer", shown("BIGLAW_OIDC_ISSUER", o.Issuer), "publicURL", shown("BIGLAW_PUBLIC_URL", o.PublicURL), "admins", len(o.Admins))
+				}
+			}()
+		}
+		if err := serve(ctx, st, d, e, ln, log, who, signIn); err != nil {
 			fmt.Fprintf(stderr, "biglaw: %v\n", err)
 			return 1
 		}
@@ -175,14 +209,16 @@ func run(ctx context.Context, args []string, getenv func(string) string, environ
 
 type pinger interface{ Ping(context.Context) error }
 
-// remotePolicy is custom tools' policy: off unless the admin is a real one (the loopback user of a
-// plain serve), so with --allow-no-auth or --admin-without-auth no secret is set or sent and no
-// custom outbound call is made until PR 8's sign-in can tell an admin (README § Exposure).
+// remotePolicy is custom tools' policy: off unless the admin is a real one (a signed-in admin, or the
+// loopback user of a plain serve), so without sign-in, with --allow-no-auth or --admin-without-auth,
+// no secret is set or sent and no custom outbound call is made (README § Exposure). Under sign-in
+// serve passes neither flag here (one is ignored, the other refused) and the admin guard keeps
+// members from secrets, Discover, Import and Test.
 func remotePolicy(allowNoAuth, adminWithoutAuth bool) engine.RemotePolicy {
 	return engine.RemotePolicy{Off: allowNoAuth || adminWithoutAuth}
 }
 
-// managePrincipal is every request's principal until PR 8's sign-in (README § Exposure): the local
+// managePrincipal is every request's principal without sign-in (README § Exposure): the local
 // user is an admin on a loopback server (no --allow-no-auth) or with --admin-without-auth; under
 // --allow-no-auth alone Manage is read-only.
 func managePrincipal(allowNoAuth, adminWithoutAuth bool) api.Who {
@@ -209,7 +245,7 @@ func serveFlags(flags []string) (allowNoAuth, adminWithoutAuth, ok bool) {
 var shutdownGrace, jobEvery = 10 * time.Second, 15 * time.Minute
 
 // serve serves HTTP on ln, and runs the embedding backfill, until ctx ends; then it shuts down gracefully.
-func serve(ctx context.Context, st *store.Store, d *docs.Service, e *engine.Engine, ln net.Listener, log *slog.Logger, who api.Who) error {
+func serve(ctx context.Context, st *store.Store, d *docs.Service, e *engine.Engine, ln net.Listener, log *slog.Logger, who api.Who, signIn *auth.Service) error {
 	if n, err := d.SweepOrphanFiles(ctx); err != nil || n > 0 {
 		log.Warn("orphan files (uploads interrupted by a crash) swept", "files", n, "err", err)
 	}
@@ -247,7 +283,7 @@ func serve(ctx context.Context, st *store.Store, d *docs.Service, e *engine.Engi
 	defer stopRequests(nil)
 	srv := &http.Server{
 		BaseContext:       func(net.Listener) context.Context { return base },
-		Handler:           routes(st, d, e, log, who),
+		Handler:           routes(st, d, e, log, who, signIn),
 		ReadTimeout:       2 * time.Minute, // uploads set their own deadlines (docs)
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
@@ -279,9 +315,9 @@ func serve(ctx context.Context, st *store.Store, d *docs.Service, e *engine.Engi
 	return nil
 }
 
-// routes is GET /health and, with an engine, the REST API and the UI (api.Handler); with only d,
-// the document routes.
-func routes(db pinger, d *docs.Service, e *engine.Engine, log *slog.Logger, who api.Who) http.Handler {
+// routes is GET /health and, with an engine, the REST API and the UI (api.Handler), behind sign-in
+// when signIn is set (api.RequireSignIn); with only d, the document routes.
+func routes(db pinger, d *docs.Service, e *engine.Engine, log *slog.Logger, who api.Who, signIn *auth.Service) http.Handler {
 	mux := http.NewServeMux()
 	if e != nil {
 		if who == nil {
@@ -308,19 +344,30 @@ func routes(db pinger, d *docs.Service, e *engine.Engine, log *slog.Logger, who 
 		w.WriteHeader(code)
 		json.NewEncoder(w).Encode(map[string]string{"status": status, "version": version, "search": search})
 	})
+	h, named := http.Handler(mux), ""
+	if signIn != nil && e != nil {
+		h, named = api.RequireSignIn(mux, signIn, log), signIn.Host()
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// No authentication before PR 8: a request addressed to a DNS name (not localhost) is refused,
-		// or a page the lawyer visits could rebind its name to 127.0.0.1 and use BigLaw as its own origin.
-		host, _, err := net.SplitHostPort(r.Host)
-		if err != nil {
-			host = r.Host
-		}
-		if r.URL.Path != "/health" && !strings.EqualFold(host, "localhost") && net.ParseIP(strings.Trim(host, "[]")) == nil {
+		// A request addressed to a DNS name other than localhost (or, under sign-in, BIGLAW_PUBLIC_URL's
+		// host) is refused, or a page the lawyer visits could rebind its name to 127.0.0.1 and use
+		// BigLaw as its own origin.
+		if r.URL.Path != "/health" && !allowedHost(r.Host, named) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
-			io.WriteString(w, `{"error":"address BigLaw by IP or localhost: names are refused until authentication lands (PR 8)","errorType":"bad_host"}`+"\n")
+			io.WriteString(w, `{"error":"address BigLaw by IP, localhost or BIGLAW_PUBLIC_URL's host (with sign-in): other names are refused (DNS rebinding, README § Exposure)","errorType":"bad_host"}`+"\n")
 			return
 		}
-		mux.ServeHTTP(w, r)
+		h.ServeHTTP(w, r)
 	})
+}
+
+// allowedHost reports whether a request's Host is one BigLaw answers: an IP literal, localhost, or
+// named (BIGLAW_PUBLIC_URL's host under sign-in; "" without it), case-insensitively.
+func allowedHost(hostport, named string) bool {
+	host, _, err := net.SplitHostPort(hostport)
+	if err != nil {
+		host = hostport
+	}
+	return strings.EqualFold(host, "localhost") || net.ParseIP(strings.Trim(host, "[]")) != nil || named != "" && strings.EqualFold(host, named)
 }

@@ -53,6 +53,8 @@ export interface Transport {
   timeEntries(): Promise<TimeEntry[]>;
   profiles(): Promise<Profile[]>;
   me(): Promise<Me>;
+  /** Ends the session (live, with sign-in). */
+  signOut?(): Promise<void>;
   /** Manage: the catalogue, an item with its contents, its versions (each with its files), the change log. */
   manageItems(): Promise<ManageItem[]>;
   manageItem(id: string): Promise<ManageDetail>;

@@ -169,6 +169,15 @@ type Gate struct {
 	Decision  string          `json:"decision,omitempty"` // approved or rejected; "" while open
 	Reason    string          `json:"reason,omitempty"`
 	DecidedAt string          `json:"decidedAt,omitempty"`
+	DecidedBy *Person         `json:"decidedBy,omitempty"` // who decided it (sign-in's user, or the local user without sign-in)
+}
+
+// Person is who did something: a signed-in user's issuer subject, display name and email, or the
+// local user ({local, Local user}) on a server without sign-in.
+type Person struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Email string `json:"email,omitempty"`
 }
 
 type row struct {

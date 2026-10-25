@@ -20,6 +20,13 @@ import (
 // stored; and each accepted write is in the change log.
 func TestManageWriteRoutes(t *testing.T) {
 	t.Parallel()
+	manageWrites(t, manageServer(t, func(*http.Request) Principal { return Principal{ID: "v", Name: "Viewer"} }), manageServer(t, local))
+}
+
+// manageWrites drives every Manage write route as viewer (refused) and as s, an admin; it returns
+// the change log after the admin's writes.
+func manageWrites(t *testing.T, viewer, s *server) []engine.Version {
+	t.Helper()
 	skill := ""
 	for _, it := range engine.Builtins() {
 		if it.Section == "skills" {
@@ -29,16 +36,15 @@ func TestManageWriteRoutes(t *testing.T) {
 	}
 	if skill == "" {
 		t.Skip("no built-in skill ships in this build")
+		return nil
 	}
-	viewer := manageServer(t, func(*http.Request) Principal { return Principal{ID: "v", Name: "Viewer"} })
-	s := manageServer(t, local)
 	send := func(srv *server, path, body string, hdr ...string) (int, string) {
 		t.Helper()
 		req, _ := http.NewRequest("POST", srv.URL+path, strings.NewReader(body))
 		for i := 0; i+1 < len(hdr); i += 2 {
 			req.Header.Set(hdr[i], hdr[i+1])
 		}
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := srv.client().Do(req)
 		if err != nil {
 			t.Fatalf("POST %s: %v", path, err)
 		}
@@ -112,4 +118,5 @@ func TestManageWriteRoutes(t *testing.T) {
 			t.Errorf("the change log has no %s of %s: %s", action, item, body)
 		}
 	}
+	return vs
 }

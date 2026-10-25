@@ -193,7 +193,7 @@ func TestDeliverableGateBlocksCompletion(t *testing.T) {
 	if v = f.get(v.ID); v.Status != "awaiting_gate" {
 		t.Fatalf("%s", v.Status)
 	}
-	if v, err := f.e.Decide(context.Background(), v.ID, v.PendingGates[0].GateID, true, ""); err != nil || v.Status != "complete" {
+	if v, err := f.e.Decide(context.Background(), v.ID, v.PendingGates[0].GateID, true, "", lawyer); err != nil || v.Status != "complete" {
 		t.Fatalf("%v %s", err, v.Status)
 	}
 }

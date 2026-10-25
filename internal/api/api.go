@@ -163,7 +163,8 @@ func handler(d *docs.Service, e *engine.Engine, ui fs.FS, log *slog.Logger, who 
 		mux.HandleFunc("POST /tasks/{id}/gates/{gate}/"+op, docs.Guard(log, func(w http.ResponseWriter, r *http.Request) {
 			var in struct{ Reason string }
 			_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&in) // approve has no body
-			v, err := e.Decide(r.Context(), r.PathValue("id"), r.PathValue("gate"), op == "approve", in.Reason)
+			p := who(r)                                                             // a member or an admin under sign-in (lawyer review); the local user without it
+			v, err := e.Decide(r.Context(), r.PathValue("id"), r.PathValue("gate"), op == "approve", in.Reason, engine.Person{ID: p.ID, Name: p.Name, Email: p.Email})
 			reply(w, 200, v, err)
 		}))
 	}

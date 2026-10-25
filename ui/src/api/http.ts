@@ -12,6 +12,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
     body: body === undefined ? undefined : JSON.stringify(body),
     credentials: 'same-origin',
   });
+  if (res.status === 401 && path !== '/me') window.location.reload(); // the session ended: the shell shows sign-in
   if (!res.ok) {
     let msg = `${res.status} ${res.statusText}`;
     let problems: Problem[] = [];
@@ -60,6 +61,7 @@ export function createTransport(): Transport {
     timeEntries: () => call('GET', '/time-entries'),
     profiles: () => call('GET', '/profiles'),
     me: () => call('GET', '/me'),
+    signOut: async () => { await call('POST', '/auth/logout'); },
     manageItems: () => call('GET', '/manage/items'),
     manageItem: (id) => call('GET', `/manage/items/${enc(id)}`),
     manageHistory: (id) => call('GET', `/manage/items/${enc(id)}/history`),

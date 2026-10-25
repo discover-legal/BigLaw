@@ -100,8 +100,8 @@ func TestEnvVarTablesAgree(t *testing.T) {
 	// .env.example and render.yaml carry exactly the variables an operator
 	// sets by hand (README § Run it, § Exposure), no more and no fewer.
 	for file, want := range map[string][]string{
-		".env.example": {"BIGLAW_MODEL_URL", "BIGLAW_MODEL_KEY", "BIGLAW_MODELS", "BIGLAW_PUBLIC_URL", "BIGLAW_OIDC_ISSUER", "BIGLAW_OIDC_CLIENT_ID", "BIGLAW_OIDC_CLIENT_SECRET"},
-		"render.yaml":  {"BIGLAW_DATABASE_URL", "BIGLAW_ADDR", "BIGLAW_PUBLIC_URL", "BIGLAW_MODEL_URL", "BIGLAW_MODEL_KEY", "BIGLAW_MODELS", "BIGLAW_OIDC_ISSUER", "BIGLAW_OIDC_CLIENT_ID", "BIGLAW_OIDC_CLIENT_SECRET"},
+		".env.example": {"BIGLAW_MODEL_URL", "BIGLAW_MODEL_KEY", "BIGLAW_MODELS", "BIGLAW_PUBLIC_URL", "BIGLAW_OIDC_ISSUER", "BIGLAW_OIDC_CLIENT_ID", "BIGLAW_OIDC_CLIENT_SECRET", "BIGLAW_ADMINS"},
+		"render.yaml":  {"BIGLAW_DATABASE_URL", "BIGLAW_ADDR", "BIGLAW_PUBLIC_URL", "BIGLAW_MODEL_URL", "BIGLAW_MODEL_KEY", "BIGLAW_MODELS", "BIGLAW_OIDC_ISSUER", "BIGLAW_OIDC_CLIENT_ID", "BIGLAW_OIDC_CLIENT_SECRET", "BIGLAW_ADMINS"},
 	} {
 		got := regexp.MustCompile(`(?m)^(?:\s*- key: |)((?:BIGLAW|ALLOW)_[A-Z0-9_]+)(?:=|\s*$)`).FindAllStringSubmatch(readRepo(t, file), -1)
 		var names []string

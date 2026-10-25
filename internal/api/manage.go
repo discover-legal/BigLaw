@@ -21,17 +21,33 @@ import (
 	"github.com/discover-legal/BigLaw/internal/engine"
 )
 
-// Principal is who makes a request (README § Manage, who may change it). There is no sign-in yet:
-// BIGLAW_OIDC_* are declared for PR 8 and nothing reads them, so no request carries a user. Until
-// then every request is the local user (LocalUser), an admin only on a server bound to loopback
-// for local work, or one its operator started with --admin-without-auth (Open: anyone who can reach
-// it may change what its agents use); under --allow-no-auth alone Manage is read-only (owner
-// decision, review M3). PR 8 resolves the session here and sets Admin; nothing else in Manage changes.
+// Principal is who makes a request (README § Manage, Who). With sign-in (BIGLAW_OIDC_ISSUER,
+// RequireSignIn) it is the session's user: SignedIn, an admin when BIGLAW_ADMINS names them, a
+// member otherwise. Without it every request is the local user (LocalUser), an admin only on a
+// server bound to loopback for local work, or one its operator started with --admin-without-auth
+// (Open: anyone who can reach it may change what its agents use); under --allow-no-auth alone
+// Manage is read-only (owner decision, review M3).
 type Principal struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	Admin bool   `json:"admin"`
-	Open  bool   `json:"-"` // admin with no sign-in at all: the UI says so
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Email    string `json:"email,omitempty"`
+	Admin    bool   `json:"admin"`
+	Open     bool   `json:"-"` // admin with no sign-in at all: the UI says so
+	SignedIn bool   `json:"-"` // a session's user (sign-in is on)
+}
+
+// Label is who as the change log and every author field record it: the name, with the email when
+// it adds one, or the issuer's subject when there is no email.
+func (p Principal) Label() string {
+	switch {
+	case !p.SignedIn:
+		return p.Name
+	case p.Email != "" && p.Email != p.Name:
+		return p.Name + " <" + p.Email + ">"
+	case p.Email == "" && p.ID != p.Name:
+		return p.Name + " (" + p.ID + ")"
+	}
+	return p.Name
 }
 
 // Who resolves a request's principal.
@@ -40,8 +56,8 @@ type Who func(*http.Request) Principal
 // local is the local user of a loopback server (tests' default).
 func local(*http.Request) Principal { return Principal{ID: "local", Name: "Local user", Admin: true} }
 
-// LocalUser is every request's principal until PR 8: the local user, an admin or not; open marks
-// an admin by --admin-without-auth (anyone who can reach the server).
+// LocalUser is every request's principal without sign-in: the local user, an admin or not; open
+// marks an admin by --admin-without-auth (anyone who can reach the server).
 func LocalUser(admin, open bool) Who {
 	p := Principal{ID: "local", Name: "Local user", Admin: admin, Open: open && admin}
 	return func(*http.Request) Principal { return p }
@@ -53,7 +69,11 @@ func admin(log *slog.Logger, who Who, h func(http.ResponseWriter, *http.Request,
 	return docs.Guard(log, func(w http.ResponseWriter, r *http.Request) {
 		p := who(r)
 		if !p.Admin {
-			docs.WriteJSON(w, http.StatusForbidden, map[string]string{"error": "only an admin may change what BigLaw's agents use; everyone may view it. This server runs without sign-in (--allow-no-auth), so Manage is read-only unless its operator starts it with --admin-without-auth (README § Exposure)", "errorType": "forbidden"})
+			msg := "only an admin may change what BigLaw's agents use; everyone may view it. This server runs without sign-in (--allow-no-auth), so Manage is read-only unless its operator starts it with --admin-without-auth (README § Exposure)"
+			if p.SignedIn {
+				msg = "only an admin may change what BigLaw's agents use, set secrets or test custom tools; you are signed in as a member. Admins are the accounts BIGLAW_ADMINS names (README § Sign-in)"
+			}
+			docs.WriteJSON(w, http.StatusForbidden, map[string]string{"error": msg, "errorType": "forbidden"})
 			return
 		}
 		h(w, r, p)
@@ -76,7 +96,7 @@ func manageRoutes(mux *http.ServeMux, e *engine.Engine, who Who, log *slog.Logge
 	ws := writes{mux, log, who, answer}
 	mux.HandleFunc("GET /me", func(w http.ResponseWriter, r *http.Request) {
 		p := who(r)
-		reply(w, 200, map[string]any{"id": p.ID, "name": p.Name, "admin": p.Admin, "authEnabled": false, "adminWithoutAuth": p.Open}, nil)
+		reply(w, 200, map[string]any{"id": p.ID, "name": p.Name, "email": p.Email, "admin": p.Admin, "authEnabled": p.SignedIn, "adminWithoutAuth": p.Open}, nil)
 	})
 	get("GET /manage/items", func(r *http.Request) (any, error) { return e.Items(r.Context()) })
 	get("GET /manage/items/{id}", func(r *http.Request) (any, error) { return e.ItemDetail(r.Context(), r.PathValue("id")) })
@@ -90,21 +110,21 @@ func manageRoutes(mux *http.ServeMux, e *engine.Engine, who Who, log *slog.Logge
 		return e.Diff(r.Context(), r.PathValue("id"), from, to)
 	})
 	handle(ws, "POST /manage/items/{id}/versions", http.StatusCreated, func(r *http.Request, p Principal, in engine.SaveIn) (any, error) {
-		v, notes, err := e.Save(r.Context(), r.PathValue("id"), in, p.Name)
+		v, notes, err := e.Save(r.Context(), r.PathValue("id"), in, p.Label())
 		return map[string]any{"version": v, "notes": nonNil(notes)}, err
 	})
 	handle(ws, "POST /manage/items/{id}/revert", http.StatusCreated, func(r *http.Request, p Principal, in struct {
 		To, Base int
 		Note     string
 	}) (any, error) {
-		v, err := e.Revert(r.Context(), r.PathValue("id"), in.To, in.Base, in.Note, p.Name)
+		v, err := e.Revert(r.Context(), r.PathValue("id"), in.To, in.Base, in.Note, p.Label())
 		return map[string]any{"version": v, "notes": []string{}}, err
 	})
 	handle(ws, "POST /manage/items/{id}/delete", http.StatusCreated, func(r *http.Request, p Principal, in struct {
 		Base int
 		Note string
 	}) (any, error) {
-		v, err := e.Delete(r.Context(), r.PathValue("id"), in.Base, in.Note, p.Name)
+		v, err := e.Delete(r.Context(), r.PathValue("id"), in.Base, in.Note, p.Label())
 		return map[string]any{"version": v, "notes": []string{}}, err
 	})
 	mux.HandleFunc("GET /manage/changes", func(w http.ResponseWriter, r *http.Request) {
@@ -116,10 +136,10 @@ func manageRoutes(mux *http.ServeMux, e *engine.Engine, who Who, log *slog.Logge
 	// Custom tools: secrets (names only, ever), an MCP server's tools, and the Test call.
 	get("GET /manage/secrets", func(r *http.Request) (any, error) { return e.Secrets(r.Context()) })
 	handle(ws, "POST /manage/secrets", http.StatusCreated, func(r *http.Request, p Principal, in struct{ Name, Value, Origin string }) (any, error) {
-		return map[string]string{"name": in.Name}, e.SetSecret(r.Context(), in.Name, in.Value, in.Origin, p.Name) // never the value
+		return map[string]string{"name": in.Name}, e.SetSecret(r.Context(), in.Name, in.Value, in.Origin, p.Label()) // never the value
 	})
 	mux.HandleFunc("POST /manage/secrets/{name}/delete", admin(log, who, func(w http.ResponseWriter, r *http.Request, p Principal) {
-		err := e.DeleteSecret(r.Context(), r.PathValue("name"), p.Name)
+		err := e.DeleteSecret(r.Context(), r.PathValue("name"), p.Label())
 		answer(w, 200, map[string]string{"name": r.PathValue("name")}, err)
 	}))
 	mux.HandleFunc("POST /manage/items/{id}/discover", admin(log, who, func(w http.ResponseWriter, r *http.Request, p Principal) {
@@ -130,10 +150,10 @@ func manageRoutes(mux *http.ServeMux, e *engine.Engine, who Who, log *slog.Logge
 		Tools       []string
 		OfferToLead bool
 	}) (any, error) {
-		return e.Import(r.Context(), r.PathValue("id"), in.Tools, in.OfferToLead, p.Name)
+		return e.Import(r.Context(), r.PathValue("id"), in.Tools, in.OfferToLead, p.Label())
 	})
 	handle(ws, "POST /manage/items/{id}/test", 200, func(r *http.Request, p Principal, in engine.TestIn) (any, error) {
-		return e.TestCall(r.Context(), r.PathValue("id"), in, p.Name)
+		return e.TestCall(r.Context(), r.PathValue("id"), in, p.Label())
 	})
 }
 

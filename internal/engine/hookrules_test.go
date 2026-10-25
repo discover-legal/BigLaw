@@ -151,7 +151,7 @@ func TestHookApproveGatePausesAndResumes(t *testing.T) {
 	if v.Status != "awaiting_gate" || len(v.PendingGates) != 1 || v.PendingGates[0].Kind != "hook" || v.PendingGates[0].Subject != "extract_facts" || deref(v.Output) != "" {
 		t.Fatalf("paused: %s %+v %s", stop(v), v.PendingGates, f.steps(task.ID))
 	}
-	if _, err := e.Decide(ctx, task.ID, v.PendingGates[0].GateID, true, ""); err != nil {
+	if _, err := e.Decide(ctx, task.ID, v.PendingGates[0].GateID, true, "", lawyer); err != nil {
 		t.Fatal(err)
 	}
 	f.step(ctx)
@@ -418,7 +418,7 @@ func TestHookPauseSurvivesACrash(t *testing.T) {
 	if v.Status != "awaiting_gate" || strings.Count(f.steps(task.ID), "extract_facts:refused") != 1 || deref(v.Output) != "" || len(v.PendingGates) != 1 {
 		t.Fatalf("resumed: %s %s pending %+v", stop(v), f.steps(task.ID), v.PendingGates)
 	}
-	if _, err := f.e.Decide(ctx, task.ID, v.PendingGates[0].GateID, true, ""); err != nil {
+	if _, err := f.e.Decide(ctx, task.ID, v.PendingGates[0].GateID, true, "", lawyer); err != nil {
 		t.Fatal(err)
 	}
 	f.step(ctx)
@@ -511,10 +511,10 @@ func TestHookDecideNotesListNewDecisions(t *testing.T) {
 	}
 	gate("H-r-a-1")
 	gate("H-r-b-1")
-	e.Decide(ctx, task.ID, "H-r-a-1", true, "")
-	e.Decide(ctx, task.ID, "H-r-b-1", true, "")
+	e.Decide(ctx, task.ID, "H-r-a-1", true, "", lawyer)
+	e.Decide(ctx, task.ID, "H-r-b-1", true, "", lawyer)
 	gate("H-r-c-1")
-	e.Decide(ctx, task.ID, "H-r-c-1", false, "no")
+	e.Decide(ctx, task.ID, "H-r-c-1", false, "no", lawyer)
 	ns := notes()
 	if len(ns) != 2 || !strings.Contains(ns[0], "H-r-a-1") || !strings.Contains(ns[0], "H-r-b-1") || strings.Contains(ns[1], "H-r-a-1") || !strings.Contains(ns[1], "H-r-c-1") {
 		t.Fatalf("notes: %v", ns)

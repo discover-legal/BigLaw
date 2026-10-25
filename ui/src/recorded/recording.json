@@ -9129,6 +9129,11 @@
    "secret": true
   },
   {
+   "name": "BIGLAW_ADMINS",
+   "default": "",
+   "pr": 8
+  },
+  {
    "name": "BIGLAW_AI_RATE",
    "default": "",
    "pr": 9

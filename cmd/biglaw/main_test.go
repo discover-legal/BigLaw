@@ -17,6 +17,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,6 +29,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/discover-legal/BigLaw/internal/auth/authtest"
 	"github.com/discover-legal/BigLaw/internal/docs"
 	"github.com/discover-legal/BigLaw/internal/store"
 	"github.com/discover-legal/BigLaw/internal/store/storetest"
@@ -47,7 +49,7 @@ func TestHealth(t *testing.T) {
 	}{{nil, 200, "ok"}, {errors.New("dial tcp 10.0.0.5:5432: secret-host"), 503, "database unavailable"}} {
 		var logs bytes.Buffer
 		rec := httptest.NewRecorder()
-		routes(fakeDB{tc.err}, nil, nil, slog.New(slog.NewTextHandler(&logs, nil)), nil).ServeHTTP(rec, httptest.NewRequest("GET", "/health", nil))
+		routes(fakeDB{tc.err}, nil, nil, slog.New(slog.NewTextHandler(&logs, nil)), nil, nil).ServeHTTP(rec, httptest.NewRequest("GET", "/health", nil))
 		var body map[string]string
 		json.Unmarshal(rec.Body.Bytes(), &body)
 		if rec.Code != tc.code || body["status"] != tc.status || body["search"] != "lexical" || strings.Contains(rec.Body.String(), "secret-host") {
@@ -59,7 +61,7 @@ func TestHealth(t *testing.T) {
 	}
 	for _, req := range []*http.Request{httptest.NewRequest("GET", "/", nil), httptest.NewRequest("POST", "/health", nil)} {
 		rec := httptest.NewRecorder()
-		routes(fakeDB{}, nil, nil, discard(), nil).ServeHTTP(rec, req)
+		routes(fakeDB{}, nil, nil, discard(), nil, nil).ServeHTTP(rec, req)
 		if rec.Code == 200 {
 			t.Errorf("%s %s = 200, want an error", req.Method, req.URL.Path)
 		}
@@ -134,7 +136,7 @@ func TestServeStopCancelsIngest(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() { done <- serve(ctx, st, docs.New(st), nil, ln, discard(), nil) }()
+	go func() { done <- serve(ctx, st, docs.New(st), nil, ln, discard(), nil, nil) }()
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
 	fw, _ := mw.CreateFormFile("file", "loop.pdf")
@@ -193,7 +195,7 @@ func TestServeEndToEnd(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() { done <- serve(ctx, st, docs.New(st), nil, ln, discard(), nil) }()
+	go func() { done <- serve(ctx, st, docs.New(st), nil, ln, discard(), nil, nil) }()
 
 	resp, err := http.Get("http://" + ln.Addr().String() + "/health") // ln is already accepting
 	if err != nil {
@@ -523,15 +525,24 @@ func TestRefusesRebindingHosts(t *testing.T) {
 		req := httptest.NewRequest("GET", "/documents", nil)
 		req.Host = host
 		rec := httptest.NewRecorder()
-		routes(fakeDB{}, nil, nil, discard(), nil).ServeHTTP(rec, req)
+		routes(fakeDB{}, nil, nil, discard(), nil, nil).ServeHTTP(rec, req)
 		if got := rec.Code == 403 && strings.Contains(rec.Body.String(), `"errorType":"bad_host"`); got != refused {
 			t.Errorf("Host %s: %d %s", host, rec.Code, rec.Body.String())
+		}
+	}
+	for _, c := range []struct { // under sign-in, BIGLAW_PUBLIC_URL's host is answered too, and only it
+		host, named string
+		ok          bool
+	}{{"biglaw.firm.example", "biglaw.firm.example", true}, {"BIGLAW.firm.example:443", "biglaw.firm.example", true}, {"attacker.example", "biglaw.firm.example", false},
+		{"biglaw.firm.example", "", false}, {"10.0.0.1:3101", "biglaw.firm.example", true}} {
+		if allowedHost(c.host, c.named) != c.ok {
+			t.Errorf("allowedHost(%q, %q) != %v", c.host, c.named, c.ok)
 		}
 	}
 	req := httptest.NewRequest("GET", "/health", nil)
 	req.Host = "attacker.example"
 	rec := httptest.NewRecorder()
-	routes(fakeDB{}, nil, nil, discard(), nil).ServeHTTP(rec, req)
+	routes(fakeDB{}, nil, nil, discard(), nil, nil).ServeHTTP(rec, req)
 	if rec.Code != 200 {
 		t.Errorf("/health by name: %d", rec.Code)
 	}
@@ -564,3 +575,116 @@ func TestManageAdminDefault(t *testing.T) {
 		}
 	}
 }
+
+// TestServeWithSignIn (PR 8): with BIGLAW_OIDC_* set, serve listens on a non-loopback address
+// without --allow-no-auth, ignores --allow-no-auth (warned, as Compose passes it) and refuses
+// --admin-without-auth; the API needs a session; a signed-in admin may set a secret (custom calls are
+// on: RemotePolicy is not Off for a real admin), a member may not; the session survives no logout;
+// and neither the client secret nor a session cookie reaches the log.
+func TestServeWithSignIn(t *testing.T) {
+	idp := authtest.New(t)
+	unreachable := "postgres://u:p@127.0.0.1:1/x?sslmode=disable&connect_timeout=2"
+	oidc := []string{"BIGLAW_OIDC_ISSUER", idp.URL, "BIGLAW_OIDC_CLIENT_ID", idp.ClientID, "BIGLAW_OIDC_CLIENT_SECRET", idp.Secret, "BIGLAW_ADMINS", "ada@firm.example"}
+	var stdout, stderr bytes.Buffer
+	if code := run(t.Context(), []string{"serve", "--admin-without-auth"}, env(append(oidc, "BIGLAW_DATABASE_URL", unreachable)...), nil, &stdout, &stderr); code != 2 ||
+		!strings.Contains(stderr.String(), "--admin-without-auth is refused when sign-in is configured") {
+		t.Fatalf("--admin-without-auth with sign-in: %d %s", code, stderr.String())
+	}
+	stderr.Reset()
+	if code := run(t.Context(), []string{"serve"}, env(append(oidc, "BIGLAW_DATABASE_URL", unreachable, "BIGLAW_ADDR", "0.0.0.0:0")...), nil, &stdout, &stderr); code != 1 ||
+		strings.Contains(stderr.String(), "not a loopback") || strings.Contains(stderr.String(), "WITHOUT authentication") || !strings.Contains(stderr.String(), "store: connect") {
+		t.Fatalf("non-loopback with sign-in: %d %s", code, stderr.String())
+	}
+
+	dsn := storetest.DSN(t)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, port, _ := net.SplitHostPort(ln.Addr().String())
+	ln.Close()
+	base := "http://127.0.0.1:" + port
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan int, 1)
+	logs := &lockedBuf{}
+	go func() {
+		done <- run(ctx, []string{"serve", "--allow-no-auth"}, env(append(oidc, "BIGLAW_DATABASE_URL", dsn, "BIGLAW_ADDR", "0.0.0.0:"+port, "BIGLAW_PUBLIC_URL", base)...), nil, io.Discard, logs)
+	}()
+	for i := 0; i < 200; i++ {
+		if resp, err := http.Get(base + "/health"); err == nil {
+			resp.Body.Close()
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	get := func(c *http.Client, method, path, body string) (int, string) {
+		t.Helper()
+		req, _ := http.NewRequest(method, base+path, strings.NewReader(body))
+		resp, err := c.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b)
+	}
+	if code, body := get(http.DefaultClient, "GET", "/me", ""); code != 401 {
+		t.Fatalf("/me without a session: %d %s", code, body)
+	}
+	admin := authtest.Browser(t)
+	if resp := idp.SignIn(t, admin, base); resp.StatusCode != 303 {
+		t.Fatalf("sign-in: %d", resp.StatusCode)
+	}
+	if code, body := get(admin, "GET", "/me", ""); code != 200 || !strings.Contains(body, `"admin":true`) || !strings.Contains(body, `"authEnabled":true`) {
+		t.Fatalf("/me signed in: %d %s", code, body)
+	}
+	if code, body := get(admin, "POST", "/manage/secrets", `{"name":"k1","value":"a-long-value","origin":"https://api.example.com"}`); code != 201 {
+		t.Fatalf("an admin's secret under sign-in (remote policy on): %d %s", code, body)
+	}
+	idp.User = map[string]any{"sub": "u-bob", "email": "bob@firm.example", "email_verified": true, "name": "Bob"}
+	member := authtest.Browser(t)
+	idp.SignIn(t, member, base).Body.Close()
+	if code, body := get(member, "POST", "/manage/secrets", `{"name":"k2","value":"a-long-value","origin":"https://api.example.com"}`); code != 403 || !strings.Contains(body, "member") {
+		t.Fatalf("a member's secret: %d %s", code, body)
+	}
+	req, _ := http.NewRequest("GET", base+"/me", nil)
+	req.Host = "attacker.example"
+	if resp, err := admin.Do(req); err != nil || resp.StatusCode != 403 {
+		t.Fatalf("a rebinding host under sign-in: %v %v", err, resp)
+	}
+	cancel()
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Fatalf("serve exited %d:\n%s", code, logs.String())
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("serve did not stop")
+	}
+	out := logs.String()
+	if !strings.Contains(out, "--allow-no-auth has no effect") || strings.Contains(out, "secrets and custom tools' outbound calls are off") || strings.Contains(out, "Manage is read-only") {
+		t.Errorf("serve's sign-in log lines:\n%s", out)
+	}
+	for _, k := range admin.Jar.Cookies(mustURL(base)) {
+		if strings.Contains(out, k.Value) {
+			t.Errorf("a cookie reached the log")
+		}
+	}
+	if strings.Contains(out, idp.Secret) {
+		t.Error("the client secret reached the log")
+	}
+}
+
+type lockedBuf struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *lockedBuf) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+func (l *lockedBuf) String() string { l.mu.Lock(); defer l.mu.Unlock(); return l.b.String() }
+
+func mustURL(s string) *url.URL { u, _ := url.Parse(s); return u }

@@ -43,13 +43,15 @@ var allowedImports = map[string][]string{
 	"internal/docs/ooxml":      {},
 	"internal/model":           {},
 	"internal/store":           {},
+	"internal/auth":            {}, // sign-in: stdlib only, the database handed in
+	"internal/auth/authtest":   {}, // test support: the fake OpenID provider
 	"internal/store/storetest": {"internal/store"},
 	"internal/engine/figtest":  {"internal/analysis", "internal/model"},                                                                                                   // test support: the figure reader's stand-in
 	"internal/engine":          {"internal/agent", "internal/analysis", "internal/docs", "internal/docs/ooxml", "internal/contracts", "internal/store", "internal/model"}, // model: its types (Chatter, Roles, Prices) and error kinds, and the meta call through agent.Runtime.ChatWithin
 	"internal/contracts":       {"internal/agent", "internal/docs", "internal/docs/ooxml", "internal/store"},
 	"internal/billing":         {"internal/store"},
 	"internal/clients":         {"internal/store"},
-	"internal/api":             {"internal/agent", "internal/analysis", "internal/docs", "internal/docs/ooxml", "internal/engine", "internal/contracts", "internal/store", "internal/billing", "internal/clients"},
+	"internal/api":             {"internal/agent", "internal/analysis", "internal/docs", "internal/docs/ooxml", "internal/engine", "internal/contracts", "internal/store", "internal/billing", "internal/clients", "internal/auth"},
 }
 
 // Reading the files table, or documents/sections/chunks, belongs to docs and store alone (G1:
