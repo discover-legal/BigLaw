@@ -105,3 +105,29 @@ func TestNamesValuesReadsQuotationsByPassage(t *testing.T) {
 		t.Errorf("$103,800 does not name 103,800.00: %+v", vs[y.ID])
 	}
 }
+
+// TestNamesValuesQuotationsWhateverOpensThem (r2 L2): a run of four or more of a passage's words is
+// a quotation whether single quotes, curly quotes or nothing open it, so the bench7 false-yes shape
+// cannot pass by quoting 2,614 that way; the same pair named in the reason's own words still passes.
+func TestNamesValuesQuotationsWhateverOpensThem(t *testing.T) {
+	a := fh("5,776", "WCA executed 5,776 omnibus equity trades during the Review Period", "referral", "WCA", "total omnibus equity trades")
+	b := fh("2,614", "For 2,614 of the omnibus equity trades WCA kept no allocation record", "review", "WCA", "trades without allocation records")
+	x, ok := candidateOf(t, a, b)
+	if !ok {
+		t.Fatal("not proposed")
+	}
+	for _, reason := range []string{
+		`A says 'WCA executed 5,776 omnibus equity trades'; B says 'For 2,614 of the omnibus equity trades WCA kept no allocation record': both state the same count of 5,776 trades.`,
+		`A says ‘WCA executed 5,776 omnibus equity trades’; B says ‘For 2,614 of the omnibus equity trades WCA kept no allocation record’: both state the same count of 5,776 trades.`,
+		`A says WCA executed 5,776 omnibus equity trades; B says For 2,614 of the omnibus equity trades WCA kept no allocation record: the same count of 5,776.`,
+		`A says "WCA executed 5,776 omnibus equity trades"; B says "For 2,614 of the omnibus equity trades WCA kept no allocation record": both state the same count of 5,776 trades.`,
+	} {
+		if vs, _ := CheckVerdicts([]Candidate{x}, []Verdict{{Pair: x.ID, SameQuantity: "yes", Reason: reason}}); vs[x.ID].SameQuantity == "yes" {
+			t.Errorf("a yes naming only 5,776 outside its quotations passed: %.60s", reason)
+		}
+	}
+	reason := `A says 'WCA executed 5,776 omnibus equity trades'; B says 'For 2,614 of the omnibus equity trades WCA kept no allocation record': one count stated as 5,776 and as 2,614.`
+	if vs, _ := CheckVerdicts([]Candidate{x}, []Verdict{{Pair: x.ID, SameQuantity: "yes", Reason: reason}}); vs[x.ID].SameQuantity != "yes" {
+		t.Errorf("a yes naming both figures in its own words was refused: %+v", vs[x.ID])
+	}
+}

@@ -397,10 +397,12 @@ func quoted(reason string, c Candidate) bool {
 // namesValues reports whether a yes's reason, outside its quotations, writes each side's own figure
 // (bench7: "both state the same count of 2,614" for 2,614 against 5,776, "the same hurdle rate of 6%"
 // for 6% against 20%: the judge read the passages' shared figure, not the pair's two). Its quotations
-// are the runs of four or more of its words, opened by a quote mark, that either side's quotes or
-// claim hold (as quoted reads them), never what sits between the next two quote marks, which a quoted
-// passage's own quote marks would turn inside out (r1 LOW-3); a figure counts as named when a number written outside them reads as the
-// side's figure as written does ("$103,800" names "103,800.00").
+// are the runs of its words that either side's quotes or claim hold (as quoted reads them) with four
+// or more words that are not a figure's own, whatever opens them (a double, single or curly quote, or
+// none: r2 L2), never what sits between the next two quote marks, which a quoted passage's own quote
+// marks would turn inside out (r1 LOW-3), so a figure written as in its passage ("Mon, 15 Apr 2024
+// 09:23:47 -0400") is not a quotation of it; a figure counts as named when a number written outside
+// them reads as the side's figure as written does ("$103,800" names "103,800.00").
 func namesValues(reason string, c Candidate) bool {
 	ws := strings.Fields(reason)
 	key := func(w string) string {
@@ -422,12 +424,15 @@ func namesValues(reason string, c Candidate) bool {
 	for i, w := range ws {
 		keys[i] = key(w)
 	}
+	figure := map[string]bool{} // the words of the pair's two figures as written
+	for _, sd := range []Side{c.A, c.B} {
+		for _, w := range strings.Fields(sd.Fig.Text) {
+			figure[key(w)] = true
+		}
+	}
 	inside := make([]bool, len(ws))
 	for i := 0; i < len(ws); i++ {
-		if !strings.ContainsAny(ws[i][:min(len(ws[i]), 4)], "\"“«") { // a quotation opens with a quote mark; the reason's own words naming a figure do not
-			continue
-		}
-		best := 0
+		best, own := 0, 0
 		for j := i; j < len(ws); j++ { // the longest run from i that a passage holds
 			var run []string
 			for _, k := range keys[i : j+1] {
@@ -436,13 +441,14 @@ func namesValues(reason string, c Candidate) bool {
 				}
 			}
 			r := " " + strings.Join(run, " ") + " "
-			if slices.ContainsFunc(passages, func(p string) bool { return strings.Contains(p, r) }) {
-				best = j - i + 1
-			} else {
+			if !slices.ContainsFunc(passages, func(p string) bool { return strings.Contains(p, r) }) {
 				break
 			}
+			if best = j - i + 1; keys[j] != "" && !figure[keys[j]] {
+				own++
+			}
 		}
-		if best >= quoteRun {
+		if own >= quoteRun {
 			for k := i; k < i+best; k++ {
 				inside[k] = true
 			}

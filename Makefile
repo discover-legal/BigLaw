@@ -43,10 +43,10 @@ mod-check:
 # exists for reports PASS: a renamed test must not silently run nowhere (PR 3a r4 L1). It also
 # prints gate E4's verdict, and there requires a PASS or the "E4 GATE NOT JUDGED" skip (r1 L-6).
 NONRACE = TestChildBoundsItself TestChildNearTextCap TestIngestMemoryBounded
-# Database tests hold a few connections each (a store's pool and its schema's admin connection), and
-# go test runs -p packages at once with -parallel tests each, both GOMAXPROCS by default: on a many-core
-# machine that passes Postgres's default max_connections of 100 (lab-r4 r9 L5). Capped so the peak
-# stays near 50 whatever the cores; raise both on a server whose max_connections allows it.
+# Database connections are bounded in the tests themselves: a test store's pool is storetest.Pool (4)
+# and at most storetest.Slots (8) tests across all -p packages hold a database at once, so the peak
+# stays under 50 of Postgres's default max_connections of 100 whatever -p and -parallel are (PR 55 CI;
+# lab-r4 r9 L5). TEST_P and TEST_PARALLEL now bound only CPU (the race detector is slow on a loaded host).
 TEST_P ?= 4
 TEST_PARALLEL ?= 4
 test:

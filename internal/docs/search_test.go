@@ -18,7 +18,14 @@ import (
 
 func newService(t *testing.T) *Service {
 	t.Helper()
-	st, err := store.Open(t.Context(), storetest.DSN(t), nil)
+	return newServicePool(t, storetest.Pool)
+}
+
+// newServicePool is newService with a store pool of maxConns (store.MaxOpenConns
+// for a test of the production pool's upload bounds).
+func newServicePool(t *testing.T, maxConns int) *Service {
+	t.Helper()
+	st, err := store.OpenPool(t.Context(), storetest.DSN(t), nil, maxConns)
 	if err != nil {
 		t.Fatal(err)
 	}

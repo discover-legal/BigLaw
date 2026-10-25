@@ -57,3 +57,32 @@ func TestProviderErrorRedactsTypeCodeTailsAndHosts(t *testing.T) {
 		}
 	}
 }
+
+// TestRedactKeepsPathsHidesCredentials (r2 L1): a request-validation error keeps the path it names
+// ("messages.0.content", "tools.0.custom.input_schema") and model ids, while Basic-auth values, IP
+// addresses with ports, short key fragments and key= values are hidden.
+func TestRedactKeepsPathsHidesCredentials(t *testing.T) {
+	const key = "sk-ant-api03-AbCdEfGh0123456789_xyzXYZ-abcdefghijklmnop"
+	for _, c := range []struct{ msg, keep, leak string }{
+		{"messages.0.content: Field required", "messages.0.content: Field required", ""},
+		{"tools.0.custom.input_schema: JSON schema is invalid", "tools.0.custom.input_schema: JSON schema is invalid", ""},
+		{"max_tokens: 10000 > 8192, the maximum for claude-haiku-4-5-20251001", "max_tokens: 10000 > 8192, the maximum for claude-haiku-4-5-20251001", ""},
+		{"model: claude-3.5-sonnet", "model: claude-3.5-sonnet", ""},
+		{"The model gpt-4.1-mini does not exist, e.g. check your org.", "gpt-4.1-mini does not exist, e.g. check", ""},
+		{"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing.", "credit balance is too low", ""},
+		{"key " + key[:20] + "... rejected", "rejected", key[:12]},
+		{"key " + strings.ToUpper(key) + " rejected", "rejected", "ABCDEFGH"},
+		{"Authorization: Basic dXNlcjpwYXNzd29yZA== refused", "refused", "dXNlcjpwYXNzd29yZA"},
+		{"sent basic dXNlcjpwYXNzd29yZA== refused", "refused", "dXNlcjpwYXNzd29yZA"},
+		{"got Bearer abc123 (truncated)", "truncated", "abc123"},
+		{"x-api-key header is required; got key=AbCdEf012345 (truncated)", "x-api-key header is required", "AbCdEf012345"},
+		{"upstream 10.0.3.7:8443 refused", "refused", "10.0.3.7"},
+		{"upstream gpu-7.internal.corp:8443 refused", "refused", "internal.corp"},
+		{"see api.example.com for status", "for status", "example.com"},
+	} {
+		got := redact(c.msg, key)
+		if !strings.Contains(got, c.keep) || c.leak != "" && strings.Contains(got, c.leak) {
+			t.Errorf("redact(%q) = %q: want %q kept and %q hidden", c.msg, got, c.keep, c.leak)
+		}
+	}
+}

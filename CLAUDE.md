@@ -51,7 +51,10 @@ change. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`, not here.
   and busy readers spend no attempt) completes it later.
   `internal/docs/ooxml` — `.docx` reader (text parts only, linear XML pass).
 - `internal/store/storetest` — `storetest.DSN(t)` gives a test its own schema, creates the
-  `vector` extension once per database and puts its schema on the test's `search_path`.
+  `vector` extension once per database and puts its schema on the test's `search_path`; at most
+  `storetest.Slots` tests across all test processes hold one at once (a flock per slot). Test stores
+  open with `store.OpenPool(ctx, dsn, log, storetest.Pool)`; only a test of the production pool's
+  bounds uses `store.Open`/`store.MaxOpenConns`.
 - `internal/engine/figtest` — test support: `figtest.Reader`, the figure reader's stand-in (a
   `model.Fake` `Respond` hook labelling plain fixture texts), `figtest.With` for a test's right labels;
   engine, API and eval tests use it (test data, never a rule of the engine).
@@ -178,7 +181,8 @@ not yet judged (self-test tape).
   `internal/engine/specs/` and must validate (`TestSpecsLoadAndValidate`).
 - No model calls in `go test`: only `model.Fake` or an `httptest` server. Model errors carry
   BigLaw's own fixed text and, of an error answer, only the provider's error type (or code) and message (the
-  whole redacted by `redact`, the key and anything key-, token-, masked-key-, bearer-, URL- or host-shaped,
+  whole redacted by `redact`: the key and anything key-, token-, masked-key-, credential-, URL-, IP- or
+  host-shaped, but never a dotted validation path like `messages.0.content`,
   then bounded: `providerError`); never the URL, host, key,
   a header or the rest of what the endpoint sent, so never `err.Error()` of a transport error; map them
   with `model.HTTPStatus`.

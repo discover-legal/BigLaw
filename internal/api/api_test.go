@@ -44,7 +44,7 @@ type server struct {
 // newServer is the API over a fresh schema, an engine on scripts, and its runner.
 func newServer(t *testing.T, scripts func(docIDs []string) map[string][]model.Reply, roles model.Roles, texts ...string) (*server, []string) {
 	t.Helper()
-	st, err := store.Open(context.Background(), storetest.DSN(t), nil)
+	st, err := store.OpenPool(context.Background(), storetest.DSN(t), nil, storetest.Pool)
 	if err != nil {
 		t.Fatal(err)
 	}

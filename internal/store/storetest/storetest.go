@@ -12,6 +12,10 @@
 // set (CI sets it), in which case the missing database is a failure. A DSN
 // that is set but unreachable is always a failure.
 //
+// At most Slots tests across every test process hold a schema at once (DSN
+// waits for a slot), so the database's connections stay bounded whatever
+// go test's -p and -parallel are.
+//
 // It deliberately does not import package store, so store's own tests can use it.
 package storetest
 
@@ -40,9 +44,18 @@ type T interface {
 
 var _ T = testing.TB(nil)
 
+// Pool is the connection pool a test store opens with (store.OpenPool): small,
+// so the stores of the Slots tests running at once stay well inside the
+// server's max_connections. A test that exercises the production pool asks
+// for store.MaxOpenConns explicitly.
+const Pool = 4
+
 // DSN returns a DSN scoped to a new schema that is dropped after the test.
 func DSN(t testing.TB) string {
 	t.Helper()
+	if base := strings.TrimSpace(os.Getenv("BIGLAW_TEST_DSN")); base != "" {
+		hold(t, base) // registered first, so given back after the schema is dropped
+	}
 	return DSNFrom(t, os.Getenv)
 }
 
@@ -82,9 +95,12 @@ func DSNFrom(t T, getenv func(string) string) string {
 		t.Fatalf("storetest: create schema: %v", err)
 		return ""
 	}
+	admin.Close() // the test's own pools are its only connections until the drop
 	t.Cleanup(func() {
-		_, _ = admin.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
-		admin.Close()
+		if admin, err := sql.Open("postgres", base); err == nil {
+			_, _ = admin.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+			admin.Close()
+		}
 	})
 	return WithSearchPath(base, schema+","+extSchema)
 }

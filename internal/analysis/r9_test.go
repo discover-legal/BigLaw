@@ -11,7 +11,7 @@ import (
 // lab-r4 r9 verifier repros (critique/biglaw-lab-r4-r9-verifier.md M2, L1, L2, L3, residual a), kept
 // as regression tests.
 
-// M2: the ranking is a function of its input: bench6 SEC ranks the same way on 50 calls, and every
+// M2: the ranking is a function of its input: bench6 SEC ranks the same way on 50 calls (5 under -race), and every
 // cap's candidate set (what the judge is asked, and the cache keys it uses) with it.
 func TestRankPairsDeterministic(t *testing.T) {
 	fs := read(bench6Ledger(t, "sec"))
@@ -23,7 +23,11 @@ func TestRankPairsDeterministic(t *testing.T) {
 		return out
 	}
 	first := ids()
-	for i := range 50 {
+	repeats, again := 50, 10
+	if raceOn { // each ranking of the bench6 SEC ledger takes about 2 s under -race (r2 follow-up 6)
+		repeats, again = 5, 2
+	}
+	for i := range repeats {
 		if got := ids(); !slices.Equal(got, first) {
 			k := 0
 			for k < len(got) && got[k] == first[k] {
@@ -35,7 +39,7 @@ func TestRankPairsDeterministic(t *testing.T) {
 	for _, name := range []string{"trust", "gatea"} {
 		gs := read(bench6Ledger(t, name))
 		a, _ := Candidates(gs, 120, nil)
-		for range 10 {
+		for range again {
 			if b, _ := Candidates(gs, 120, nil); !slices.EqualFunc(a, b, func(x, y Candidate) bool { return x.ID == y.ID }) {
 				t.Fatalf("bench6 %s: the candidates at a cap of 120 vary", name)
 			}

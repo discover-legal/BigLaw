@@ -80,21 +80,49 @@ func providerError(body io.Reader, key string) string {
 	return out
 }
 
-// redact replaces in s the key, and anything shaped like a key, a token (a long run of key or base64
-// characters, a masked key's tail), a bearer value, a URL or a host name, with "[redacted]".
+// redact replaces in s the key, and anything shaped like a key, a token or a credential (a key
+// prefix and what follows it, a run of 32 or more key or base64 characters, a masked key's tail, a
+// bearer or basic value, a "key=…" or "Authorization: …" value), a URL, an IPv4 address and a host
+// name, with "[redacted]". A dotted path such as "messages.0.content" or "tools.1.input_schema" is
+// not a host name and is kept: it is what a request-validation error names (r2 L1).
 func redact(s, key string) string {
 	if key != "" {
 		s = strings.ReplaceAll(s, key, "[redacted]")
 	}
-	return secretish.ReplaceAllString(s, "[redacted]")
+	s = secretish.ReplaceAllString(s, "[redacted]")
+	return dotted.ReplaceAllStringFunc(s, func(m string) string {
+		if hostLike(m) {
+			return "[redacted]"
+		}
+		return m
+	})
+}
+
+// hostLike: dotted labels of letters, digits and hyphens, none all digits, ending in a top-level
+// domain shape (2 to 24 letters), with an optional port.
+func hostLike(m string) bool {
+	m, _, _ = strings.Cut(m, ":")
+	labels := strings.Split(m, ".")
+	for _, l := range labels {
+		if l == "" || strings.Trim(l, "0123456789") == "" || strings.ContainsRune(l, '_') {
+			return false
+		}
+	}
+	return tld.MatchString(labels[len(labels)-1])
 }
 
 var (
 	errType = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
-	// secretish is what an error message may hold that must never be logged: a URL, a bearer value, a
-	// masked key and its tail ("sk-…****wxyz"), any long run of key, token or base64 characters, and a
-	// host name with or without a scheme or port ("gpu-7.internal.corp:8443").
-	secretish = regexp.MustCompile(`(?i)https?://\S+|bearer\s+\S+|\b(?:sk|pk|rk|ak)-[A-Za-z0-9_*-]+|[A-Za-z0-9_-]*\*{3,}[A-Za-z0-9_*-]*|[A-Za-z0-9_+/=-]{32,}|\b(?:[a-z0-9-]+\.)+[a-z][a-z0-9-]+(?::\d+)?\b`)
+	// secretish is what an error message may hold that must never be logged: a URL, a bearer or
+	// basic value, a credential after "key=" or "Authorization:", a key prefix and its fragment
+	// ("sk-ant-…", "sk-…****wxyz"), a masked tail, any run of 32 or more key, token or base64
+	// characters, and an IPv4 address with its port.
+	secretish = regexp.MustCompile(`(?i)https?://\S+|\b(?:authorization|proxy-authorization)\s*:\s*(?:(?:basic|bearer|token)\s+)?\S+|` +
+		`\b(?:bearer|basic)\s+\S+|\b(?:x-api-key|api[_-]?key|key|token|secret|password|passwd)\s*[=:]\s*\S+|` +
+		`\b(?:sk|pk|rk|ak)-[A-Za-z0-9_*.-]+|[A-Za-z0-9_-]*\*{3,}[A-Za-z0-9_*-]*|[A-Za-z0-9_+/=-]{32,}|\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b`)
+	// dotted is a candidate host name (hostLike decides): two or more dotted labels, a port optional.
+	dotted = regexp.MustCompile(`[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+(?::\d+)?`)
+	tld    = regexp.MustCompile(`^[A-Za-z]{2,24}$`)
 )
 
 // HTTPStatus maps a model failure to its HTTP status (500 if none); the API (PR 4b) owns the rest.

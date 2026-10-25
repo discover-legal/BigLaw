@@ -891,9 +891,11 @@ The memo workflow (§ Memo workflow) drives these. What PR 4a ships, all tested 
   two kinds asserts nothing; a second verdict for one pair or an unknown answer is unclear, and so is a
   yes or no whose reason does not repeat, for each side, four words in a row of that side's quote or
   claim that the other side's texts do not hold: r8 L1, r9 L1; and a yes whose reason does not write both
-  figures beside its quotations, by amount ("$103,800" names "103,800.00"), its quotations the runs a quote
-  mark opens that a side's passages hold, so a passage's own quote marks never turn its figure into the
+  figures beside its quotations, by amount ("$103,800" names "103,800.00"), its quotations the runs a side's
+  passages hold with four or more words besides the figures' own, whatever quote mark opens them or
+  none, so neither a passage's own quote marks nor single or missing quotes turn its figure into the
   reason's words: bench7, `TestBench7FalseYesesAreNotConflicts`, `TestNamesValuesReadsQuotationsByPassage`,
+  `TestNamesValuesQuotationsWhateverOpensThem`,
   `TestBench7TrueTargetsReachAYes`). Only "yes" is a conflict (with its reason); "unclear" is a low-confidence Limitations line
   naming the pair; pairs the cap or an unfunded judge left out are counted in a Limitations line
   (`TestJoinAssertsOnlyTheJudgesYes`, `TestJoinRejectsVerdictsGoDidNotPropose`, `TestJoinScenarios`,
@@ -1281,10 +1283,12 @@ pass a model failure ends is still recorded as run, so a retry does not spend a 
   alert into the Evidence Note.
 - **Model failures** (G6) end the run `failed` with the kind's fixed text (`model_rate_limited`,
   …), never a finding; of the endpoint's words only an error answer's type (or code) and message, the
-  whole of it redacted (the key, and anything key-, token-, base64-, masked-key-, bearer-, URL- or
-  host-shaped) and then cut to 240 bytes ("the model endpoint failed: HTTP 400 (invalid_request_error:
+  whole of it redacted (the key; a key prefix and its fragment; any run of 32 or more key or base64
+  characters; a masked key's tail; a bearer, basic, `key=` or `Authorization:` value; a URL; an IPv4
+  address; a host name ending in a top-level-domain shape, never a dotted path such as
+  `messages.0.content`) and then cut to 240 bytes ("the model endpoint failed: HTTP 400 (invalid_request_error:
   Your credit balance is too low …)", bench7; `TestProviderErrorTypeAndMessage`,
-  `TestProviderErrorRedactsTypeCodeTailsAndHosts`).
+  `TestProviderErrorRedactsTypeCodeTailsAndHosts`, `TestRedactKeepsPathsHidesCredentials`).
 
 **Durable runs.** Each lead turn and tool call is a step in `task_steps`: recorded `started`
 (with its grant) before it runs and `committed`/`refused`/`failed` after, together with the
@@ -1539,9 +1543,10 @@ make ci                         # gofmt, vet, go mod verify/tidy, static build, 
                                 # fails unless TestChildBoundsItself, TestChildNearTextCap and
                                 # TestIngestMemoryBounded each report PASS there), make eval (E0/E3),
                                 # loc.py + its tests, docker compose config. Its race pass runs at
-                                # -p 4 -parallel 4 (TEST_P, TEST_PARALLEL): each DB test holds a few
-                                # connections, so the peak stays near 50 whatever the cores, under
-                                # Postgres's default max_connections of 100 (lab-r4 r9 L5)
+                                # -p 4 -parallel 4 (TEST_P, TEST_PARALLEL, for CPU); a test store's
+                                # pool is storetest.Pool (4) and at most storetest.Slots (8) DB tests
+                                # run at once across packages, so the peak stays under 50 of
+                                # Postgres's default max_connections of 100 at any -p (PR 55 CI)
 make ui build                   # the binary with the web UI embedded (ui/dist → internal/api/dist)
 make lint vuln                  # staticcheck and govulncheck (network needed; CI runs both)
 ```

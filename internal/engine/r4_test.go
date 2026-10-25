@@ -64,7 +64,7 @@ func (k *agentKill) Chat(ctx context.Context, req model.Request) (*model.Respons
 func TestKillDuringCommitteeChargesMeteredSpend(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := store.Open(ctx, storetest.DSN(t), nil)
+	st, err := store.OpenPool(ctx, storetest.DSN(t), nil, storetest.Pool)
 	if err != nil {
 		t.Fatal(err)
 	}
