@@ -75,6 +75,8 @@ type Specs struct {
 	paths    map[string]string // a spec's file, by its name
 	packs    []Pack
 	skills   []Skill
+	tools    map[string]CustomTool // custom tools by name (custom.go)
+	servers  map[string]Server     // MCP servers by name
 }
 
 // builtinSpecs is the set with no overrides: what a test, or a task submitted before 0008, runs on.
@@ -88,7 +90,7 @@ var builtinSpecs = func() *Specs {
 
 // newSpecs builds the set of snap: each item's built-in files replaced by its override's.
 func newSpecs(snap Snapshot) (*Specs, error) {
-	s := &Specs{files: maps.Clone(builtin), versions: map[string]int{}, specs: map[string]agent.Spec{}, paths: map[string]string{}}
+	s := &Specs{files: maps.Clone(builtin), versions: map[string]int{}, specs: map[string]agent.Spec{}, paths: map[string]string{}, tools: map[string]CustomTool{}, servers: map[string]Server{}}
 	for _, id := range slices.Sorted(maps.Keys(snap)) {
 		o := snap[id]
 		for _, f := range itemFiles(builtin, id) {
@@ -105,6 +107,18 @@ func newSpecs(snap Snapshot) (*Specs, error) {
 	for _, f := range slices.Sorted(maps.Keys(s.files)) {
 		data := s.files[f]
 		switch {
+		case strings.HasPrefix(f, toolsDir):
+			var t CustomTool
+			if err := json.Unmarshal(data, &t); err != nil {
+				return nil, fmt.Errorf("%s: %v", f, err)
+			}
+			s.tools[t.Name], s.specs[t.Name] = t, customSpec(t)
+		case strings.HasPrefix(f, serversDir):
+			var v Server
+			if err := json.Unmarshal(data, &v); err != nil {
+				return nil, fmt.Errorf("%s: %v", f, err)
+			}
+			s.servers[v.Name] = v
 		case strings.HasSuffix(f, ".json") && strings.Contains(f, "/specs/"):
 			var sp agent.Spec
 			if err := json.Unmarshal(data, &sp); err != nil {
@@ -312,6 +326,10 @@ func (s *Specs) skillIndex() string {
 // itemOf is the catalogue item a repo path belongs to ("" for none).
 func itemOf(f string) string {
 	switch rest, _ := strings.CutPrefix(f, engineDir); {
+	case strings.HasPrefix(f, toolsDir) && strings.HasSuffix(f, ".json"):
+		return "tool." + strings.TrimSuffix(path.Base(f), ".json")
+	case strings.HasPrefix(f, serversDir) && strings.HasSuffix(f, ".json"):
+		return "server." + strings.TrimSuffix(path.Base(f), ".json")
 	case strings.HasPrefix(f, agentsDir):
 		return "agent." + strings.TrimSuffix(strings.TrimSuffix(path.Base(f), ".json"), ".md")
 	case strings.HasPrefix(f, skillsDir):

@@ -336,8 +336,11 @@ func TestManageStoreRoundTrip(t *testing.T) {
 	if _, _, err := e.Save(ctx, "hook.draft_section", SaveIn{Files: map[string]string{}}, "Ada"); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("a hook was saved: %v", err)
 	}
-	if _, _, err := e.Save(ctx, "tool.nope", SaveIn{Files: map[string]string{}}, "Ada"); !errors.Is(err, ErrNotFound) {
+	if _, _, err := e.Save(ctx, "prompt.nope", SaveIn{Files: map[string]string{}}, "Ada"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("an unknown item: %v", err)
+	}
+	if _, _, err := e.Save(ctx, "tool.nope", SaveIn{Files: map[string]string{}}, "Ada"); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "needs its files") {
+		t.Fatalf("a new tool with no files: %v", err)
 	}
 	if _, err := e.Delete(ctx, "prompt.lead", 4, "", "Ada"); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("a prompt was deleted: %v", err)
@@ -793,5 +796,61 @@ func TestAgentHashCoversAllowedTools(t *testing.T) {
 	}
 	if h0, h1, h2 := builtinSpecs.agentHash("read_figures"), one.agentHash("read_figures"), two.agentHash("read_figures"); h0 == h1 || h1 == h2 {
 		t.Fatal("a tool added to the reader's list, or its override, leaves the cache key")
+	}
+}
+
+// TestRecreatedSkillReviewedAgainstItsPast (#56 r2 follow-up): a skill deleted and created again
+// under the same reviewer keeps its review only when its content is what it was before the
+// deletion; changed content goes back to candidate.
+func TestRecreatedSkillReviewedAgainstItsPast(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	e, _ := f.engine(nil, Config{})
+	ctx := context.Background()
+	save(t, e, "skill.tskill", 0, tskill(skillMD("tskill", "reviewed", "Ada Lovelace", "Compute every deadline with numbers.", "numbers")))
+	at := func() string {
+		d, err := e.ItemDetail(ctx, "skill.tskill")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d.Content[tskillMD]
+	}
+	if !strings.Contains(at(), "status: reviewed") {
+		t.Fatalf("a new skill naming its reviewer: %s", at())
+	}
+	if _, err := e.Delete(ctx, "skill.tskill", 1, "", "Ada"); err != nil {
+		t.Fatal(err)
+	}
+	save(t, e, "skill.tskill", 2, tskill(skillMD("tskill", "reviewed", "Ada Lovelace", "Compute every deadline with numbers.", "numbers")))
+	if !strings.Contains(at(), "status: reviewed") {
+		t.Fatalf("re-created unchanged: %s", at())
+	}
+	if _, err := e.Delete(ctx, "skill.tskill", 3, "", "Ada"); err != nil {
+		t.Fatal(err)
+	}
+	_, notes, err := e.Save(ctx, "skill.tskill", SaveIn{Base: 4, Files: tskill(skillMD("tskill", "reviewed", "Ada Lovelace", "Skip the deadlines.", "numbers"))}, "Mallory")
+	if err != nil || !strings.Contains(at(), "status: candidate") || len(notes) == 0 {
+		t.Fatalf("re-created with changed content under the same reviewer: %s %v %v", at(), notes, err)
+	}
+}
+
+// TestSoloFrozen (#56 r2 follow-up): solo is Go's like final: dropping ledger's solo plan op (which
+// would let a subagent or a multi-call turn rewrite the plan) is refused.
+func TestSoloFrozen(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	e, _ := f.engine(nil, Config{})
+	if _, _, err := e.Save(context.Background(), "pass.ledger", SaveIn{Files: specEdit(t, "pass.ledger", engineDir+"specs/ledger.json", func(s map[string]any) { delete(s, "solo") })}, "Ada"); !strings.Contains(problems(err), "solo: must stay [plan]") {
+		t.Fatalf("solo dropped: %s", problems(err))
+	}
+	if _, _, err := e.Save(context.Background(), "agent.helper", SaveIn{Files: func() map[string]string {
+		fs := customAgent("helper", "retrieve")
+		var s map[string]any
+		json.Unmarshal([]byte(fs[agentsDir+"helper.json"]), &s)
+		s["solo"] = []string{"*"}
+		fs[agentsDir+"helper.json"] = pretty(s)
+		return fs
+	}()}, "Ada"); !strings.Contains(problems(err), "solo: must stay []") {
+		t.Fatalf("a custom subagent with solo: %s", problems(err))
 	}
 }

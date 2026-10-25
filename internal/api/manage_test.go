@@ -161,6 +161,58 @@ func TestManageRoutes(t *testing.T) {
 	}
 }
 
+// TestManageSecretsNeverShown: a secret is set by an admin only, listed by name only (never its
+// value, in any route), and its change is in the change log; Discover, Import and Test are an
+// admin's (they connect out, or spend).
+func TestManageSecretsNeverShown(t *testing.T) {
+	t.Parallel()
+	const value = "sk-test-NEVER-SHOWN-1234"
+	viewer := manageServer(t, func(*http.Request) Principal { return Principal{ID: "v", Name: "Viewer"} })
+	for _, w := range []struct {
+		path string
+		body any
+	}{{"/manage/secrets", m{"name": "k1", "value": value}}, {"/manage/secrets/k1/delete", nil}, {"/manage/items/server.x/discover", nil},
+		{"/manage/items/server.x/import", m{"tools": nil, "offerToLead": false}}, {"/manage/items/tool.numbers/test", m{"documentIds": []string{"d"}, "input": m{}}}} {
+		if code, body := viewer.do("POST", w.path, w.body); code != 403 {
+			t.Errorf("POST %s as a viewer: %d %s", w.path, code, body)
+		}
+	}
+	s := manageServer(t, local)
+	if code, body := s.do("POST", "/manage/secrets", m{"name": "k1", "value": value}); code != 422 || !strings.Contains(body, "origin") {
+		t.Fatalf("a secret with no origin: %d %s", code, body)
+	}
+	code, body := s.do("POST", "/manage/secrets", m{"name": "k1", "value": value, "origin": "https://api.example.com"})
+	if code != 201 || strings.Contains(body, value) {
+		t.Fatalf("set: %d %s", code, body)
+	}
+	if code, body := s.do("POST", "/manage/secrets", m{"name": "Bad Name", "value": "x"}); code != 422 || strings.Contains(body, "x\"") {
+		t.Fatalf("a bad name: %d %s", code, body)
+	}
+	for _, path := range []string{"/manage/secrets", "/manage/changes", "/manage/items", "/manage/export"} {
+		code, body := s.do("GET", path, nil)
+		if code != 200 || strings.Contains(body, value) {
+			t.Errorf("GET %s: %d, value shown: %v", path, code, strings.Contains(body, value))
+		}
+	}
+	if _, body := s.do("GET", "/manage/secrets", nil); !strings.Contains(body, `"name":"k1"`) || !strings.Contains(body, `"updatedBy":"Local user"`) || !strings.Contains(body, `"origin":"https://api.example.com:443"`) {
+		t.Fatalf("list: %s", body)
+	}
+	if _, body := s.do("GET", "/manage/changes", nil); !strings.Contains(body, `"secret set"`) {
+		t.Fatalf("change log: %s", body)
+	}
+	if code, _ := s.do("POST", "/manage/secrets/k1/delete", nil); code != 200 {
+		t.Fatalf("delete: %d", code)
+	}
+	if code, _ := s.do("POST", "/manage/secrets/k1/delete", nil); code != 404 {
+		t.Fatalf("delete twice: %d", code)
+	}
+	// a server saved at a metadata address is refused at save (one text whatever the reason: no oracle)
+	srv := `{"name":"x","url":"https://169.254.169.254/mcp","enabled":true}`
+	if code, body := s.do("POST", "/manage/items/server.x/versions", m{"base": 0, "files": m{"internal/engine/specs/servers/x.json": srv}, "note": ""}); code != 422 || !strings.Contains(body, "not one BigLaw may reach") {
+		t.Fatalf("a metadata-address server: %d %s", code, body)
+	}
+}
+
 // TestManageAdminModes (review M3): a read-only server (--allow-no-auth) refuses every write and
 // says how to open it; an open one (--admin-without-auth) says so on /me for the UI's banner.
 func TestManageAdminModes(t *testing.T) {

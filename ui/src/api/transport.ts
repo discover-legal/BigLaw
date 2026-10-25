@@ -4,8 +4,8 @@
 // The transport seam: every screen talks to BigLaw through this interface only. http.ts is the
 // real API (same origin); recorded.ts replays a recorded engine in the browser with no network.
 import type {
-  Client, Doc, Hit, ManageDetail, ManageItem, Me, NewTask, OutlineEntry, Playbook, Problem, Profile, RecordedSearch, RunEvent, SaveResult, SectionPage,
-  Setting, SpecVersion, Task, TaskCost, TimeEntry,
+  Client, Discovery, Doc, Hit, ImportResult, ManageDetail, ManageItem, Me, NewTask, OutlineEntry, Playbook, Problem, Profile, RecordedSearch, RunEvent, SaveResult, SectionPage,
+  SecretView, Setting, SpecVersion, Task, TaskCost, TestResult, TimeEntry,
 } from './types.ts';
 
 /** What the recorded engine would replay for a prompt; live transports never match. */
@@ -62,6 +62,14 @@ export interface Transport {
   manageSave(id: string, base: number, files: Record<string, string>, note: string): Promise<SaveResult>;
   manageRevert(id: string, to: number, base: number, note: string): Promise<SaveResult>;
   manageDelete(id: string, base: number, note: string): Promise<SaveResult>;
+  /** Custom tools: secrets by name (never a value), an MCP server's tools and their import, and a Test call (admin). */
+  manageSecrets(): Promise<SecretView[]>;
+  /** origin: the https URL (scheme, host, port) of the only server the secret is ever sent to. */
+  manageSetSecret(name: string, value: string, origin: string): Promise<void>;
+  manageDeleteSecret(name: string): Promise<void>;
+  manageDiscover(id: string): Promise<Discovery>;
+  manageImport(id: string, tools: string[], offerToLead: boolean): Promise<ImportResult[]>;
+  manageTest(id: string, documentIds: string[], input: unknown): Promise<TestResult>;
   /** Where the overrides download (all, or one item's); null: the recorded engine has none. */
   exportUrl(format: 'patch' | 'zip', item?: string): string | null;
 }

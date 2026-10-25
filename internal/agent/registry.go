@@ -15,10 +15,11 @@ import (
 	"github.com/discover-legal/BigLaw/internal/model"
 )
 
-// Caps (README: ≤ 22 tools in the registry, ≤ 14 visible to any one agent).
+// Caps (README: ≤ 48 tools in the registry, ≤ 24 visible to any one agent; raised from 22/14 so an
+// admin's custom subagents and tools fit beside the built-ins, README § Manage).
 const (
-	MaxTools   = 22
-	MaxVisible = 14
+	MaxTools   = 48
+	MaxVisible = 24
 )
 
 // Registry is the single table of tools, addressed by name. A tool's definition is frozen when it

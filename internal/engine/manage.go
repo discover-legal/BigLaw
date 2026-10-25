@@ -10,11 +10,13 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/url"
 	"path"
 	"regexp"
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/discover-legal/BigLaw/internal/agent"
@@ -105,6 +107,7 @@ type Version struct {
 	Author    string            `json:"author"`
 	Note      string            `json:"note"`
 	CreatedAt time.Time         `json:"createdAt"`
+	Event     bool              `json:"event,omitempty"` // a change log entry that is not a version (a secret set or deleted, a Test call)
 }
 
 // SaveIn is a new version an admin saves: the item's files (all of them), the version it was
@@ -201,7 +204,7 @@ func catalog(sp *Specs, rows map[string]Override, use map[string]ItemUsage) []It
 }
 
 // sectionOf maps an item kind to its catalogue section.
-var sectionOf = map[string]string{"prompt": "agents", "agent": "agents", "pass": "agents", "tool": "tools", "pack": "packs", "skill": "skills", "hook": "hooks"}
+var sectionOf = map[string]string{"prompt": "agents", "agent": "agents", "pass": "agents", "tool": "tools", "server": "tools", "pack": "packs", "skill": "skills", "hook": "hooks"}
 
 // goCallers are the engine's own calls of a tool or subagent (rt.Invoke in Go, and the Go code a
 // prompt or pack feeds), shown as "where it is used" beside the agents whose allowed lists name it.
@@ -223,7 +226,7 @@ func describeItem(sp *Specs, id string, row Override, use map[string]ItemUsage) 
 	}
 	callers := func(tool string) []string {
 		var by []string
-		if slices.Contains(MemoVisible, tool) {
+		if slices.Contains(leadVisible(sp), tool) {
 			by = append(by, "lead")
 		}
 		for _, n := range slices.Sorted(maps.Keys(sp.specs)) {
@@ -240,12 +243,31 @@ func describeItem(sp *Specs, id string, row Override, use map[string]ItemUsage) 
 	case "prompt":
 		it.Summary = firstSentence(sp.prompt(name))
 		if name == "lead" {
-			it.Uses = append(it.Uses, MemoVisible...)
+			it.Uses = append(it.Uses, leadVisible(sp)...)
 		}
 		it.UsedBy = append(it.UsedBy, goCallers[name]...)
 	case "agent", "pass", "tool":
 		s := sp.Spec(name)
 		it.Summary, it.Uses, it.UsedBy = firstSentence(s.Description), append(it.Uses, s.Allowed...), callers(name)
+		if t, ok := sp.tools[name]; ok {
+			it.Kind, it.Status = t.Kind+" tool", map[bool]string{true: "enabled", false: "disabled"}[t.Enabled]
+			if t.MCP != nil {
+				it.Uses = append(it.Uses, "server."+t.MCP.Server)
+			}
+		} else if s.Name == "" && row.Version > 0 {
+			it.Deleted, it.Summary = true, "Deleted (revert to restore it)."
+		}
+	case "server":
+		if v, ok := sp.servers[name]; ok {
+			it.Kind, it.Status, it.Summary = "MCP server", map[bool]string{true: "enabled", false: "disabled"}[v.Enabled], "MCP server at "+hostOf(v.URL)+"."
+			for _, n := range slices.Sorted(maps.Keys(sp.tools)) {
+				if m := sp.tools[n].MCP; m != nil && m.Server == name {
+					it.UsedBy = append(it.UsedBy, n)
+				}
+			}
+		} else {
+			it.Kind, it.Deleted, it.Summary = "MCP server", true, "Deleted (revert to restore it)."
+		}
 	case "pack":
 		dir, code, _ := strings.Cut(name, ".")
 		for _, p := range sp.packs {
@@ -266,6 +288,13 @@ func describeItem(sp *Specs, id string, row Override, use map[string]ItemUsage) 
 		it.Summary, it.Uses, it.UsedBy = h.What, []string{h.Wraps}, callers(h.Wraps)
 	}
 	return it
+}
+
+func hostOf(raw string) string {
+	if u, err := url.Parse(raw); err == nil {
+		return u.Host
+	}
+	return "?"
 }
 
 func firstSentence(s string) string {
@@ -337,8 +366,8 @@ func fileMap(files map[string][]byte, id string) map[string]string {
 // tool its reader cannot call.
 func skillCallable(sp *Specs) []string {
 	set := map[string]bool{}
-	if slices.Contains(MemoVisible, "use_skill") {
-		for _, t := range MemoVisible {
+	if lv := leadVisible(sp); slices.Contains(lv, "use_skill") {
+		for _, t := range lv {
 			set[t] = true
 		}
 	}
@@ -357,9 +386,28 @@ func (e *Engine) History(ctx context.Context, id string) ([]Version, error) {
 	return e.versions(ctx, `WHERE item = $1 ORDER BY version DESC LIMIT 100`, true, id)
 }
 
-// Changes is the change log: every version of every item, newest first (at most limit), without files.
+// Changes is the change log, newest first (at most limit): every version of every item, without
+// files, and the changes that are not versions (a secret set or deleted, a test call: version 0).
 func (e *Engine) Changes(ctx context.Context, limit int) ([]Version, error) {
-	return e.versions(ctx, `ORDER BY created_at DESC, item, version DESC LIMIT $1`, false, min(max(limit, 1), 500))
+	limit = min(max(limit, 1), 500)
+	vs, err := e.versions(ctx, `ORDER BY created_at DESC, item, version DESC LIMIT $1`, false, limit)
+	if err != nil {
+		return nil, err
+	}
+	q, err := e.db.QueryContext(ctx, `SELECT item, action, author, note, created_at FROM manage_events ORDER BY created_at DESC LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer q.Close()
+	for q.Next() {
+		v := Version{Event: true}
+		if err := q.Scan(&v.Item, &v.Action, &v.Author, &v.Note, &v.CreatedAt); err != nil {
+			return nil, err
+		}
+		vs = append(vs, v)
+	}
+	slices.SortStableFunc(vs, func(a, b Version) int { return b.CreatedAt.Compare(a.CreatedAt) })
+	return vs[:min(len(vs), limit)], q.Err()
 }
 
 func (e *Engine) versions(ctx context.Context, where string, files bool, args ...any) ([]Version, error) {
@@ -530,7 +578,7 @@ func (e *Engine) save(ctx context.Context, tx *sql.Tx, id string, in SaveIn, aut
 	switch {
 	case kind == "hook":
 		return Version{}, nil, invalid("", "hooks are Go code: view only")
-	case !exists && kind != "skill":
+	case !exists && !slices.Contains([]string{"skill", "agent", "tool", "server"}, kind):
 		if _, ok := rows[id]; !ok && len(itemFiles(builtin, id)) == 0 {
 			return Version{}, nil, fmt.Errorf("%w: no item %s", ErrNotFound, id)
 		}
@@ -548,9 +596,21 @@ func (e *Engine) save(ctx context.Context, tx *sql.Tx, id string, in SaveIn, aut
 	if kind == "skill" && !exists && !skillName.MatchString(name) {
 		return Version{}, nil, invalid("", "a skill's name is 2–40 lower-case letters, digits and -, starting with a letter")
 	}
-	notes, err := reviewRule(kind, old, files)
+	prior := old
+	if !exists && rows[id].Version > 0 { // re-created after a deletion: reviewed against what it was before it
+		if prior, err = lastContent(ctx, tx, id); err != nil {
+			return Version{}, nil, err
+		}
+	}
+	notes, err := reviewRule(kind, prior, files)
 	if err != nil {
 		return Version{}, nil, err
+	}
+	if kind == "tool" {
+		notes = append(notes, acceptRule(old, files, author)...)
+	}
+	if action == "create" && len(files) == 0 {
+		return Version{}, nil, invalid("", "a new %s needs its files", kind)
 	}
 	if maps.Equal(old, files) {
 		return Version{}, nil, invalid("", "nothing changed: the files are the version new tasks already run on")
@@ -560,8 +620,105 @@ func (e *Engine) save(ctx context.Context, tx *sql.Tx, id string, in SaveIn, aut
 	if err := e.validate(next, id); err != nil {
 		return Version{}, nil, err
 	}
+	if err := secretOrigins(ctx, tx, files); err != nil {
+		return Version{}, nil, err
+	}
 	v, err := e.insertVersion(ctx, tx, id, in.Base+1, action, files, rows[id].Version, nil, author, in.Note)
 	return v, notes, err
+}
+
+// lastContent is an item's files at its latest version that is not a deletion (the built-in's when
+// that version restored it, none when it never had any): what a re-created skill is reviewed
+// against, so a deletion and a re-creation never carry a reviewer over to changed content.
+func lastContent(ctx context.Context, tx *sql.Tx, id string) (map[string]string, error) {
+	var raw []byte
+	err := tx.QueryRowContext(ctx, `SELECT files FROM spec_versions WHERE item = $1 AND (files IS NULL OR files <> '{}'::jsonb) ORDER BY version DESC LIMIT 1`, id).Scan(&raw)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return fileMap(builtin, id), nil
+	case err != nil:
+		return nil, err
+	case raw == nil:
+		return fileMap(builtin, id), nil
+	}
+	files := map[string]string{}
+	return files, json.Unmarshal(raw, &files)
+}
+
+// acceptRule: an imported tool's third-party text is accepted by the admin whose save names an
+// acceptor (that admin's name is recorded, whatever the file says); a save that changes the text
+// and names no new acceptor clears the acceptance and disables the tool (validate then refuses
+// enabling it until an admin accepts).
+func acceptRule(old, files map[string]string, author string) []string {
+	for f, text := range files {
+		var t, was CustomTool
+		if !strings.HasPrefix(f, toolsDir) || json.Unmarshal([]byte(text), &t) != nil || t.Imported == nil {
+			continue
+		}
+		_ = json.Unmarshal([]byte(old[f]), &was)
+		prev := cmpOr(was.Imported, &Imported{})
+		switch {
+		case t.Imported.AcceptedBy != "" && t.Imported.AcceptedBy != prev.AcceptedBy: // this save accepts the text it saves
+			if t.Imported.AcceptedBy == author {
+				continue
+			}
+			t.Imported.AcceptedBy = author
+		case t.Imported.AcceptedBy != "" && (t.Imported.Text != prev.Text || !jsonEqual(t.In, was.In)): // the server's text or schema changed
+			t.Imported.AcceptedBy, t.Enabled = "", false
+		default:
+			continue
+		}
+		b, _ := json.MarshalIndent(t, "", " ")
+		if files[f] = string(b) + "\n"; t.Imported.AcceptedBy == "" {
+			return []string{path.Base(f) + ": its server's text changed and this save accepts no new text, so it is disabled until an admin accepts it"}
+		}
+	}
+	return nil
+}
+
+func cmpOr[T any](p *T, def *T) *T {
+	if p != nil {
+		return p
+	}
+	return def
+}
+
+// secretOrigins refuses a tool or server whose URL is not the origin its named secret is set for:
+// a secret is never sent elsewhere, so moving a tool to another origin takes setting its secret
+// again (value and all) for the new one. A secret not set yet is the Secrets panel's to set.
+func secretOrigins(ctx context.Context, tx *sql.Tx, files map[string]string) error {
+	for _, f := range slices.Sorted(maps.Keys(files)) {
+		var a Auth
+		var u string
+		if strings.HasPrefix(f, toolsDir) {
+			var t CustomTool
+			if json.Unmarshal([]byte(files[f]), &t) != nil || t.HTTP == nil {
+				continue
+			}
+			a, u = t.HTTP.Auth, t.HTTP.URL
+		} else if strings.HasPrefix(f, serversDir) {
+			var v Server
+			if json.Unmarshal([]byte(files[f]), &v) != nil {
+				continue
+			}
+			a, u = v.Auth, v.URL
+		}
+		if a.Secret == "" {
+			continue
+		}
+		var origin string
+		err := tx.QueryRowContext(ctx, `SELECT origin FROM secrets WHERE name = $1`, a.Secret).Scan(&origin)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		} else if err != nil {
+			return err
+		}
+		if origin != originOf(u) {
+			return invalid(f, "secret: %q is set for %s, not for this URL's origin %s; it is never sent to another origin: set it again for this URL in Secrets (re-entering its value), or name another secret",
+				a.Secret, cmpStr(origin != "", origin, "no origin"), originOf(u))
+		}
+	}
+	return nil
 }
 
 // Revert stores a version that restores version to (0: the built-in; for a skill an admin
@@ -628,8 +785,14 @@ func (e *Engine) Delete(ctx context.Context, id string, base int, note, author s
 }
 
 func (e *Engine) delete(ctx context.Context, tx *sql.Tx, id string, base int, note, author string) (Version, error) {
-	if !strings.HasPrefix(id, "skill.") {
-		return Version{}, invalid("", "only skills can be deleted: the engine's agents, tools and packs are part of its workflow (edit or revert them instead)")
+	kind, name, _ := strings.Cut(id, ".")
+	switch {
+	case kind == "prompt" || kind == "pass" || kind == "pack" || kind == "hook":
+		return Version{}, invalid("", "%s is part of the engine's workflow: edit or revert it; it cannot be deleted", id)
+	case kind == "agent" || kind == "tool":
+		if why := goDepends(name); why != "" {
+			return Version{}, invalid("", "%s cannot be deleted or disabled: %s. Edit or revert it instead", id, why)
+		}
 	}
 	snap, rows, err := e.current(ctx, tx)
 	if err != nil {
@@ -642,6 +805,8 @@ func (e *Engine) delete(ctx context.Context, tx *sql.Tx, id string, base int, no
 	switch {
 	case len(itemFiles(sp.files, id)) == 0:
 		return Version{}, fmt.Errorf("%w: %s does not exist (already deleted?)", ErrNotFound, id)
+	case kind == "agent" && len(itemFiles(sp.files, id)) > 0 && !strings.HasPrefix(itemFiles(sp.files, id)[0], agentsDir):
+		return Version{}, invalid("", "%s is not a subagent", id)
 	case base != rows[id].Version:
 		return Version{}, fmt.Errorf("%w: %s changed since you opened it (version %d is now its latest): reload it", ErrConflict, id, rows[id].Version)
 	}
@@ -762,13 +927,31 @@ var skillFileName = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,59}\.(md|json|csv
 // whole set the way a task would load it (newSpecs, then the runtime's registry with the lead's
 // tool list), and every changed schema's compatibility with the built-in's (compat).
 func (e *Engine) validate(snap Snapshot, id string) error {
+	if e.remote == nil {
+		e.remote = newRemoteClient(RemotePolicy{})
+	}
 	var ps []Problem
 	bad := func(file, format string, a ...any) { ps = append(ps, Problem{file, fmt.Sprintf(format, a...)}) }
 	kind, name, _ := strings.Cut(id, ".")
 	files := snap[id].Files
 	want := itemFiles(builtin, id)
-	if kind != "skill" && files != nil && !slices.Equal(slices.Sorted(maps.Keys(files)), want) {
+	if kind != "skill" && len(want) > 0 && len(files) > 0 && !slices.Equal(slices.Sorted(maps.Keys(files)), want) {
 		bad("", "the files must be exactly the item's own: %s", strings.Join(want, ", "))
+	}
+	if len(want) == 0 && len(files) > 0 { // an item an admin creates: its files where the engine loads them
+		need := map[string][]string{"agent": {agentsDir + name + ".json", agentsDir + name + ".md"}, "tool": {toolsDir + name + ".json"}, "server": {serversDir + name + ".json"}}[kind]
+		if need != nil && !slices.Equal(slices.Sorted(maps.Keys(files)), need) {
+			bad("", "a new %s is exactly these files: %s", kind, strings.Join(need, ", "))
+		}
+		if kind != "skill" && kind != "server" && !toolNameRe.MatchString(name) {
+			bad("", "a name is 2–64 lower-case letters, digits and _, starting with a letter")
+		}
+		if slices.Contains(reservedNames, name) {
+			bad("", "%q is reserved (the lead, the Test call's caller, meta and the engine's passes): choose another name", name)
+		}
+		if kind == "server" && !secretName.MatchString(name) {
+			bad("", "a server's name is 2–40 lower-case letters, digits, _ and -, starting with a letter")
+		}
 	}
 	if _, ok := files[skillsDir+name+"/SKILL.md"]; kind == "skill" && len(files) > 0 && !ok {
 		bad("", "a skill needs its SKILL.md (front matter and instructions)")
@@ -789,6 +972,10 @@ func (e *Engine) validate(snap Snapshot, id string) error {
 		switch {
 		case kind == "skill":
 			validateSkillFile(f, name, text, bad)
+		case strings.HasPrefix(f, toolsDir):
+			e.validateCustomTool(f, text, bad)
+		case strings.HasPrefix(f, serversDir):
+			e.validateServer(f, text, bad)
 		case kind == "pack":
 			validatePack(f, text, bad)
 		case strings.HasSuffix(f, ".md"):
@@ -817,10 +1004,18 @@ func (e *Engine) validate(snap Snapshot, id string) error {
 	if n := len(sp.skillIndex()); n > maxSkillIndex {
 		bad("", "the skills' names and descriptions take %d bytes of the brief, over %d: shorten a description or delete a skill", n, maxSkillIndex)
 	}
+	for _, n := range slices.Sorted(maps.Keys(sp.tools)) {
+		if m := sp.tools[n].MCP; m != nil {
+			if _, ok := sp.servers[m.Server]; !ok {
+				bad(toolsDir+n+".json", "mcp.server: %q is not a saved MCP server (a tool needs its server)", m.Server)
+			}
+		}
+	}
 	for _, n := range slices.Sorted(maps.Keys(sp.specs)) { // a subagent never ends the run or acts as the lead
 		if s := sp.specs[n]; s.Kind == "subagent" {
 			for _, a := range s.Allowed {
-				if t := sp.specs[a]; t.Final || len(t.Solo) > 0 && !slices.Contains(subagentSafe, a) {
+				_, built := builtin[agentsDir+n+".json"]
+				if t := sp.specs[a]; t.Final || len(t.Solo) > 0 && (!built || !slices.Contains(subagentSafe, a)) {
 					bad(agentsDir+n+".json", "allowed: %q is the lead's own (it ends the run, or has calls that must stand alone in a lead turn); a subagent cannot be given it", a)
 				}
 			}
@@ -837,7 +1032,7 @@ func (e *Engine) validate(snap Snapshot, id string) error {
 	r := &run{e: e, specs: sp, t: Task{WorkflowType: "memo"}}
 	if rt, err := e.runtime(r); err != nil {
 		bad("", "%s", strings.TrimPrefix(err.Error(), "agent: "))
-	} else if _, err := rt.Reg.Defs(MemoVisible); err != nil {
+	} else if _, err := rt.Reg.Defs(leadVisible(sp)); err != nil {
 		bad("", "%s", strings.TrimPrefix(err.Error(), "agent: "))
 	}
 	if len(ps) > 0 {
@@ -855,7 +1050,9 @@ func validateSpec(f, text string, bad func(string, string, ...any)) {
 		return
 	}
 	var was agent.Spec
-	_ = json.Unmarshal(builtin[f], &was)
+	if json.Unmarshal(builtin[f], &was) != nil { // a subagent an admin creates
+		was = agent.Spec{Name: s.Name, Kind: "subagent"}
+	}
 	switch {
 	case s.Name != strings.TrimSuffix(path.Base(f), ".json"):
 		bad(f, "name: must stay %q (Go and the other specs call it by name)", strings.TrimSuffix(path.Base(f), ".json"))
@@ -863,6 +1060,8 @@ func validateSpec(f, text string, bad func(string, string, ...any)) {
 		bad(f, "kind: must stay %q (Go implements it as one)", was.Kind)
 	case s.Final != was.Final:
 		bad(f, "final: must stay %v (only finish may end the run)", was.Final)
+	case !slices.Equal(s.Solo, was.Solo):
+		bad(f, "solo: must stay %v (the ops that must stand alone in a lead turn are Go's: ledger's plan, finish)", was.Solo)
 	case s.Kind == "subagent" && (s.MaxTurns < 1 || s.MaxTurns > maxSubagentTurns):
 		bad(f, "maxTurns: a subagent's is 1 to %d", maxSubagentTurns)
 	case s.Kind != "subagent" && (s.MaxTurns < 0 || s.MaxTurns > maxToolTurns):
@@ -872,6 +1071,7 @@ func validateSpec(f, text string, bad func(string, string, ...any)) {
 	case s.Kind == "subagent" && s.Class == "free" && was.Class != "free":
 		bad(f, "class: free is the figure reader's and judge's only (Go meters them from their own shares); a subagent the lead or a fan-out calls takes a class with a share (evidence, draft, committee, cover or plan)")
 	}
+	validateDescription(f, s.Description, bad)
 	for _, sc := range []struct {
 		n   string
 		raw json.RawMessage
@@ -882,6 +1082,17 @@ func validateSpec(f, text string, bad func(string, string, ...any)) {
 		} else if why := c.Strict(sc.n); why != "" {
 			bad(f, "%s: not strict-shaped: %s", sc.n, why)
 		}
+	}
+}
+
+// validateDescription bounds any spec's description (a model reads it in every prompt that offers
+// the tool): at most maxDescBytes, no control or format characters but line breaks.
+func validateDescription(f, d string, bad func(string, string, ...any)) {
+	switch {
+	case len(d) > maxDescBytes:
+		bad(f, "description: %d bytes, over %d KiB (every prompt that offers it carries it)", len(d), maxDescBytes>>10)
+	case strings.ContainsFunc(d, func(r rune) bool { return r != '\n' && (unicode.IsControl(r) || unicode.Is(unicode.Cf, r)) }):
+		bad(f, "description: no control or format characters (bidi overrides, zero-width marks) but line breaks")
 	}
 }
 

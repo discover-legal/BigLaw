@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/discover-legal/BigLaw/internal/agent"
@@ -93,7 +94,17 @@ func (e *Engine) execute(ctx context.Context, r *run) error {
 	} else if err != nil {
 		return err
 	}
-	lead := agent.Agent{Name: "lead", Role: model.Lead, Model: r.t.LeadModel, Prompt: prompt(ctx, "lead"), Visible: MemoVisible, MaxTurns: r.t.MaxSteps, Replay: replay}
+	visible := leadVisible(r.sp())
+	if off := e.remoteOff(r.sp(), visible); len(off) > 0 { // no real admin: custom tools are not offered, and the deliverable says so
+		visible = slices.DeleteFunc(visible, func(n string) bool { return slices.Contains(off, n) })
+		if err := e.st.InTx(ctx, func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx, upsertSQL(true), r.t.ID, kNote, "custom-tools-off", mustJSON("Custom tools ("+strings.Join(off, ", ")+") were not offered: this server runs without a real admin, so it makes no custom outbound calls (README § Exposure)."), 0)
+			return err
+		}); err != nil {
+			return err
+		}
+	}
+	lead := agent.Agent{Name: "lead", Role: model.Lead, Model: r.t.LeadModel, Prompt: prompt(ctx, "lead"), Visible: visible, MaxTurns: r.t.MaxSteps, Replay: replay}
 	call := agent.Call{TaskID: r.t.ID, DocumentIDs: r.t.DocumentIDs, Input: brief}
 	res, err := rt.Run(ctx, lead, call, r.b)
 	switch {
@@ -228,6 +239,7 @@ func ErrorType(err error) (int, string, string) {
 		{ErrBadTask, 400, "bad_request", ""},
 		{ErrNotFound, 404, "not_found", "not found"},
 		{ErrConflict, 409, "conflict", ""},
+		{ErrForbidden, 403, "forbidden", ""},
 		{ErrInvalid, 422, "invalid", ""},
 		{context.Canceled, 499, "cancelled", "the request was cancelled"},
 	} {

@@ -67,6 +67,12 @@ export function createTransport(): Transport {
     manageSave: (id, base, files, note) => call('POST', `/manage/items/${enc(id)}/versions`, { base, files, note }),
     manageRevert: (id, to, base, note) => call('POST', `/manage/items/${enc(id)}/revert`, { to, base, note }),
     manageDelete: (id, base, note) => call('POST', `/manage/items/${enc(id)}/delete`, { base, note }),
+    manageSecrets: () => call('GET', '/manage/secrets'),
+    manageSetSecret: async (name, value, origin) => { await call('POST', '/manage/secrets', { name, value, origin }); },
+    manageDeleteSecret: async (name) => { await call('POST', `/manage/secrets/${enc(name)}/delete`); },
+    manageDiscover: (id) => call('POST', `/manage/items/${enc(id)}/discover`),
+    manageImport: (id, tools, offerToLead) => call('POST', `/manage/items/${enc(id)}/import`, { tools, offerToLead }),
+    manageTest: (id, documentIds, input) => call('POST', `/manage/items/${enc(id)}/test`, { documentIds, input }),
     exportUrl: (format, item) => `/manage/export?format=${format}${item ? `&item=${enc(item)}` : ''}`,
   };
 }

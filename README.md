@@ -24,7 +24,7 @@ PostgreSQL database. Licensed Apache-2.0 (`LICENSE`, `NOTICE`).
 | Agent runtime | `internal/agent/` (`tool.go`, `registry.go`, `schema.go`, `loop.go`, `budget.go`, `policy.go`, `bandit.go`) | The `Tool` interface and its single registry (definitions frozen at registration), JSON-schema validation of every tool input and output, one bounded loop for the lead and its subagents, the budget ledger, and the tool bandit (§ Agent runtime). The memo workflow drives it (below); a step log makes it resumable |
 | Engine | `internal/engine/` (+ `specs/`, `packs/`; migrations `0005_runs.sql`, `0006_figure_reads.sql`, `0007_figure_reads_scope.sql`) | The memo workflow: the lead agent and its 12 tools, the ledger, the evidence subagents with Go-side quote verification, the figure reader, the sweep, the three-critic committee, the policy, `finish` (lint, coverage, render), the human gates, grounding collapse, and durable runs (step log, lease and heartbeat, resume) (§ Memo workflow) |
 | API | `internal/api/` (+ `dist/`, the embedded UI) | The REST API (tasks, steps, SSE events, gates, cancel, cost, clients, Manage: `manage.go`) over the engine and the document routes, and the web UI built into the binary (§ Memo workflow, § Manage) |
-| Manage | `internal/engine/specset.go`, `manage.go`, `diff.go`, `hooks.go`, `skills.go` (+ `skills/`, `specs/use_skill.json`; migration `0008_overrides.sql`), `internal/api/manage.go`, `ui/src/screens/Manage.tsx` | The catalogue of every agent, tool, pack, skill and hook a run uses, admins' versioned overrides in Postgres (strictly validated, compatibility-checked against what Go reads and writes), each task's snapshot of them, history, diffs, revert and a patch/zip export; skills and `use_skill` (§ Manage) |
+| Manage | `internal/engine/specset.go`, `manage.go`, `diff.go`, `hooks.go`, `skills.go`, `custom.go`, `remote.go` (+ `skills/`, `specs/use_skill.json`; migrations `0008_overrides.sql`, `0009_custom_tools.sql`, `0010_secret_origin.sql`), `internal/api/manage.go`, `ui/src/screens/Manage.tsx` | The catalogue of every agent, tool, pack, skill and hook a run uses, admins' versioned overrides in Postgres (strictly validated, compatibility-checked against what Go reads and writes), each task's snapshot of them, history, diffs, revert and a patch/zip export; skills and `use_skill`; admins' own subagents and MCP/HTTP tools with SSRF-checked calls and server-side secrets, and a metered Test call (§ Manage) |
 | Memo tools | `internal/analysis/` (+ `belo.json`, `specs/*.json`), `internal/docs/register.go` (+ `specs/*.json`) | Deterministic tools over verified findings: `numbers` (exact `calc`, figure handles, key-figures table), `join_discrepancies`, the coverage checks `finish{op:"check"}` will run, the value normalisers and BELO-lite; and the `retrieve` / `verify_quote` adapters over documents (§ Agent runtime) |
 | `.docx` reader | `internal/docs/ooxml/` | Opens a `.docx`'s text parts only (body, footnotes, endnotes; 128 MiB decompression cap) and reads its visible text in one linear XML pass. The writer, the XML escapers, the part-preserving re-zip and tracked-change parse/apply are planned (PR 3d) |
 | Evaluation | `eval/` (`run.py`, `proofrun/`, `lab/`, `tests/`, `tasks/`, `e4/embeddings.json`) | The five synthetic proof-run matters (documents + answer keys), copied from `feat/proof-runs-multi-practice`, with their driver, scorer and the v1 comparison (`run.py`), the Harvey LAB driver (`lab/run.py`), and the Go gates E1/E2 that run them through the engine on a scripted model (§ Memo workflow). `eval/e4/embeddings.json` is E4's embeddings tape: today the **self-test** tape of a hash embedder, not a real model's (§ Documents, gate E4) |
@@ -1354,6 +1354,10 @@ GET    /manage/items/{id}/history     its versions, each with its files    GET /
 POST   /manage/items/{id}/versions    {base, files, note} → 201 (admin; 422 invalid with problems[], 409 stale base)
 POST   /manage/items/{id}/revert      {to, base, note} (admin; to 0: the built-in)   POST /manage/items/{id}/delete {base, note} (admin; skills)
 GET    /manage/changes?limit=         the change log    GET /manage/export?format=patch|zip&item=a,b (the overrides at their repo paths)
+GET    /manage/secrets                names, the origin each is sent to, who set them, when, used by (never a value)
+POST   /manage/secrets {name, value, origin}  (admin; 403 without a real admin)   POST /manage/secrets/{name}/delete (admin)
+POST   /manage/items/{server}/discover   (admin) an MCP server's tools   POST /manage/items/{server}/import {tools, offerToLead} (admin)
+POST   /manage/items/{id}/test        {documentIds, input} (admin): one call of a subagent or tool, metered
 GET    /                              the web UI (embedded by `make ui build`), or a notice in a build without it
 ```
 
@@ -1431,8 +1435,8 @@ each one in Manage (`#/manage`) or the routes above, with no rebuild:
   schemas in `agent/schema.go`'s subset and strict-shaped; a prompt is 1 byte–64 KiB; a pack's front
   matter is `code` (its file's), `status` candidate|reviewed (reviewed needs `reviewedBy`) and the
   checklist; then the whole set as a task would load it: `newSpecs` and the runtime's own registration
-  (descriptions, examples, allowed tools are registered Go tools, roles, the 22/14 caps, the lead's
-  list). An item's files are exactly its own (no file added to or dropped from a built-in item). No
+  (descriptions, examples, allowed tools are registered Go tools, roles, the 48/24 caps, the lead's
+  list). A description is at most 4 KiB with no control or format characters but line breaks. An item's files are exactly its own (no file added to or dropped from a built-in item). No
   subagent's allowed list may name a tool that is the lead's own: a Final tool (`finish`: it ends the
   run) or one with ops that must stand alone in a lead turn, except `ledger`, which refuses its writes
   (`plan`, `resolve`) to a subagent in its own code and is in the built-ins' lists for its reads; the
@@ -1477,6 +1481,88 @@ each one in Manage (`#/manage`) or the routes above, with no rebuild:
   `DELETED.txt` naming a deleted skill's files). The server holds no GitHub credentials: the owner
   opens the pull request from the export, which then makes `ui/src/recorded/manage.json` stale
   (re-record with `make demo-record`; `TestManageRecording` needs no database).
+
+**Custom agents and tools** (`custom.go`, `remote.go`; migration 0009). An admin creates, edits,
+tests, disables and deletes them in Manage; like every item they are versions and in each task's
+snapshot.
+- **Subagents** (`specs/agents/<name>.json` + `.md`, the built-ins' format): name, description, prompt,
+  class, `maxTurns`, role (the model it runs on), allowed tools, in/out schemas, all validated as the
+  built-ins are. The lead is offered every subagent Go does not run itself (`leadVisible`); it runs
+  through `Runtime.Invoke` with the same typed-schema enforcement, metering, journal and resume.
+  Subagents never call subagents (the runtime's rule), so "an agent's allowed list" can name custom
+  *tools*, not custom subagents. A custom subagent's list names no lead-only tool, `ledger` included
+  (only the built-ins keep its reads); `use_skill` it may name (decided: a skill is read-only guidance
+  an admin wrote, recorded as used, and the same for any agent the admin gives it to). The names
+  `lead`, `meta`, `manage_test` and every pass's are reserved.
+- **MCP tools** (`specs/servers/<name>.json`: the server's Streamable HTTP URL and a secret by name;
+  `specs/tools/<name>.json` kind `mcp`): **Import tools** connects (initialize with a session id,
+  `notifications/initialized`, `tools/list` with its cursor; an SSE or JSON answer), converts each
+  input schema to BigLaw's strict subset (`convertSchema`: optional fields nullable and sent only when
+  not null; `anyOf`/`$ref`/open objects refused with the reason) and saves each as a version. The
+  server must speak protocol 2025-06-18 or 2025-03-26; every session is ended (HTTP DELETE). A call is
+  one handshake plus `tools/call`, within one 30 s deadline for all of it (Discover/Import too).
+- **Imported descriptions and schemas are untrusted.** The converted input schema is third-party text
+  too: each property description is cleaned and capped at 200 characters, an enum value or property
+  name that is long or holds control or format characters is refused, and the schema is capped at
+  16 KiB; a re-import that changes it disables the tool until an admin accepts it again, with the diff.
+  The server's text for a tool is cleaned (control and format
+  characters and line breaks become spaces, so it can add no line of its own) and capped at 2 KB, kept
+  in the file's `imported.text`, and shown to the lead only quoted inside BigLaw's own sentences as
+  third-party text. An imported tool is disabled until an admin reads and accepts that text (Edit:
+  Accept and enable; the save records the saving admin as `acceptedBy`, whatever the file says), and is
+  disabled again whenever a re-import (or a hand edit) changes it; Import shows the change as a diff. A
+  tool whose name, description or schema holds the server's secret is not importable.
+- **HTTP tools** (kind `http`): a typed input to an https URL, as a JSON body (POST) or query
+  parameters (GET), with a secret in one header.
+- **Rules for both:** https only, on port 443 or 8443; no user info in a URL; a host that is never
+  public (localhost, `*.local`, `*.localdomain`, `*.internal`, a numeric spelling such as `2130706433`,
+  and any address the IANA special-purpose registries mark not globally reachable: private, loopback,
+  link-local, CGNAT, metadata, documentation, benchmarking, `::/96`, `::ffff:0:0:0/96`, NAT64
+  `64:ff9b::/96` and `64:ff9b:1::/48`, 6to4 over a denied IPv4, Teredo and the rest of `2001::/23`,
+  site-local `fec0::/10`) is refused when saved, and **every connection is checked when it is dialled**
+  (`dialCheck`, so a name that resolves to such an address, DNS rebinding included, is refused too); one
+  refusal text whatever the reason (no port or host oracle); redirects only to the same host, at most 3;
+  **no proxy: `HTTPS_PROXY` is ignored by design** (a proxy would connect past the check), so custom
+  tools need direct egress; 30 s for a whole call; a 1 MB answer cap (over it: refused) and 64 KB of
+  headers; per-tool
+  `enabled` (a disabled tool is not offered and a call fails closed) and `offerToLead`. The output is
+  `{source, untrusted: true, text, truncated, isError}`, one page (a remote call is never repeated to
+  page it). Each call is a journaled step (a crash after it commits replays it: the remote is not called
+  again) and a log line (tool, source host, status, bytes, ms; never a secret). **A running task keeps
+  its snapshot:** disabling or editing a tool reaches new tasks only; to stop a running task's calls,
+  delete the tool's secret (read at call time) or cancel the task.
+- **Secrets** (`secrets` table): set by an admin **for one origin** (`https://host:port`; migration
+  0010) and sent to no other: a save naming a secret for a URL of another origin is refused, a call to
+  one is refused, so moving a tool to another origin takes setting its secret again, value and all.
+  Listed by name, origin, setter and the items naming them; never returned by any route, logged, put in
+  an error, the snapshot or the export. **Only the bound origin ever receives the key.** What that
+  origin sends back is redacted of an exact echo of it before it reaches the API, `task_steps`, the
+  logs, the UI or a model: the key with and without its prefix, base64 in either alphabet (padded or
+  not), URL- and JSON-escaped, and a Basic pair and its password; so is every error built from remote
+  data (`secretRef.scrub`: a schema's property path, a call's failure), and the server's own protocol
+  version is never echoed. The check runs on what the server sent, whole, before anything is cleaned
+  or cut to its cap (a server name, a tool's or a property's description, a problem), so a key that
+  straddles a cap is caught too: a listed tool holding it is not importable. An origin that obfuscates its own key (splits, spaces or hex-encodes it) is
+  not stopped: it already holds the key. They are stored in
+  Postgres as everything is (back up and protect the database accordingly); a task resolves a secret
+  by name at call time, so a secret changed mid-run reaches the run's later calls.
+- **A real admin only:** until PR 8's sign-in, serving with `--allow-no-auth` or `--admin-without-auth`
+  turns secrets and custom outbound calls off (`RemotePolicy.Off`): setting a secret, Discover, Import
+  and a custom tool's Test are 403, custom tools are left out of the lead's list (a Limitations line
+  says so) and a custom tool's call in a run (a subagent's) fails closed. **So custom tools and secrets
+  are unavailable under Compose and every container deployment until sign-in (PR 8) lands: today they
+  work only for a native `biglaw serve` on loopback, with neither flag.**
+- **Test** (`TestCall`, admin): one call of a subagent or tool as new tasks would make it, over a
+  matter's documents, within 8 model calls and $0.25 (and never more than a task's budget); journaled
+  as the one step of a cancelled task named for the test (started at its grant, every model call metered
+  as it happens, settled to what it spent) and in the change log (`manage_events`), all written whatever
+  the request does, so a client that goes away or a crash still leaves the spend counted. Passes,
+  `finish` and the lead's own tools are tested only inside a task. The recorded demo has none of these
+  writes.
+- **Deleting** a custom agent, tool or server is a tombstone version (revertable). What Go depends on
+  (the memo lead's tools, the subagents and tools Go calls, the passes, prompts and packs) is refused
+  with the reason; so is a deletion that would break the set (a tool an allowed list names, a server a
+  tool uses). The registry's caps rose to 48 tools and 24 visible to one agent (from 22/14) to fit them.
 
 **Skills** (`internal/engine/skills/<name>/SKILL.md`, embedded; created, edited and deleted in Manage
 too): a named bundle of instructions with a one-line description, a Markdown body, optional reference
@@ -1828,16 +1914,16 @@ improvements (after the real Haiku LAB rerun; scripted the same way): `TestSweep
 
 | Budget | Ceiling | Today |
 |---|---:|---:|
-| Go production lines (physical lines, non-`_test.go`, test-support packages included) | reported, no limit (owner decision 17) | 22361 |
+| Go production lines (physical lines, non-`_test.go`, test-support packages included) | reported, no limit (owner decision 17) | 23667 |
 | Packages under `internal/`, test-support packages excluded | 12 | 8 (`agent`, `analysis`, `api`, `docs`, `docs/ooxml`, `engine`, `model`, `store`; `store/storetest` and `engine/figtest` are test support) |
 | Direct Go dependencies | 3 | 2 (`github.com/lib/pq`, `github.com/ledongthuc/pdf`) |
 | Runtime environment variables | 20 | 18 |
 | UI runtime dependencies | 2 | 2 (`react`, `react-dom`) |
-| UI source lines (`ui/src` `.ts`/`.tsx`/`.css`; tests, config, `recording.json` and `manage.json` not counted) | 3,200 (raised from 2,400 for Manage, owner decision) | 2,448 |
+| UI source lines (`ui/src` `.ts`/`.tsx`/`.css`; tests, config, `recording.json` and `manage.json` not counted) | 3,200 (raised from 2,400 for Manage, owner decision) | 2,638 |
 | Packages without a `_test.go` | 0 | 0 |
 | Lines in any one source file (`.go`, `.py`, `.sql`, `.sh`, `.js`, `.ts`, `.css`; tests included) | 2,000 | 968 (`internal/docs/vision_safety_test.go`) |
 
-**There is no total line ceiling (owner decision 17, 2026-10-23).** `scripts/loc.py` reports the Go production total (22361) and fails only on the budgets that bound bloat directly: no file over 2,000 lines, ≤ 3 direct deps, ≤ 20 env vars, ≤ 12 internal packages, ≤ 3,200 UI source lines, no untested package. Each PR still reports its lines against its DESIGN budget in its notes. (The ceiling's history, 14,000 → 17,500 through owner decisions 7–16, is in PLAN.) A **test-support package** is one
+**There is no total line ceiling (owner decision 17, 2026-10-23).** `scripts/loc.py` reports the Go production total (23667) and fails only on the budgets that bound bloat directly: no file over 2,000 lines, ≤ 3 direct deps, ≤ 20 env vars, ≤ 12 internal packages, ≤ 3,200 UI source lines, no untested package. Each PR still reports its lines against its DESIGN budget in its notes. (The ceiling's history, 14,000 → 17,500 through owner decisions 7–16, is in PLAN.) A **test-support package** is one
 whose directory name ends in `test` and that no production file outside it imports, such as
 `storetest`. Under the coordinator's ruling it is left out of the package count, but its lines
 count toward the reported Go total like any other non-`_test.go` file. A `*test` package that
@@ -1851,7 +1937,7 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
 
 - Manage has no per-person admin until PR 8's sign-in: the local user is an admin on loopback, read-only under `--allow-no-auth`, and anyone who can reach the server under `--admin-without-auth`; the change log's author is "Local user" until then (§ Manage, Who).
 - The engine's tests write their own skills: an export that deletes a starter skill only makes `ui/src/recorded/manage.json` stale (re-record it).
-- Manage edits the built-in items only (and creates skills): a new subagent, tool or pack is not created there; the compatibility check's limits are in § Manage.
+- Manage creates skills, subagents, MCP and HTTP tools and MCP servers, not packs; the compatibility check's limits are in § Manage. A remote call in flight when a process dies is made again on resume (its step had not committed): remote tools should be safe to repeat. MCP tools: text content only (other parts are noted, not shown), one session per call, no server-initiated requests; the HTTP and MCP answers are one page (truncated, never paged by a second call).
 - The UI's Playbooks, Time & Billing and profile views have no live routes until PRs 6/8/9 (404);
   Clients shows matters derived from documents' matter numbers until PR 8's client roster.
 - **Memo workflow (PR 4b):**

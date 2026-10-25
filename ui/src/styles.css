@@ -386,3 +386,4 @@ textarea[aria-invalid=true] { border-color: var(--bad); }
   .stats { grid-template-columns: 1fr 1fr; }
 }
 @media (max-width: 420px) { .tabs .count { display: none; } }
+blockquote.third-party { margin: 4px 0 8px; padding: 4px 10px; border-left: 3px solid var(--warn, #b7791f); white-space: pre-wrap; overflow-wrap: anywhere; }

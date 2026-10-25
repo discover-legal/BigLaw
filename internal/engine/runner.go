@@ -52,6 +52,8 @@ type Engine struct {
 
 	statMu sync.Mutex // the figure reader's ReaderStats, counted from parallel admissions
 
+	remote *remoteClient // custom tools' requests (remote.go)
+
 	afterCommit func(taskID string, step int) // tests: runs after each committed step
 }
 
@@ -68,7 +70,7 @@ func New(st *store.Store, d *docs.Service, chat model.Chatter, roles model.Roles
 	id := make([]byte, 8)
 	_, _ = rand.Read(id)
 	return &Engine{st: st, db: st.DB(), docs: d, chat: chat, roles: roles, prices: prices, cfg: cfg, log: cmp.Or(log, slog.New(slog.DiscardHandler)),
-		owner: hex.EncodeToString(id), runs: map[string]*run{}, wake: make(chan struct{}, 1)}
+		owner: hex.EncodeToString(id), runs: map[string]*run{}, wake: make(chan struct{}, 1), remote: newRemoteClient(RemotePolicy{})}
 }
 
 // Task is a task as stored: its request and its run's state.

@@ -178,6 +178,8 @@ export function createTransport(rec: Recording = recordingJson as unknown as Rec
     manageHistory: async () => [],
     manageChanges: async () => [],
     manageSave: refuse, manageRevert: refuse, manageDelete: refuse,
+    manageSecrets: async () => [],
+    manageSetSecret: refuse, manageDeleteSecret: refuse, manageDiscover: refuse, manageImport: refuse, manageTest: refuse,
     exportUrl: () => null,
   };
 }
