@@ -545,21 +545,34 @@ func (s *mcpSession) listTools(ctx context.Context) ([]RemoteTool, error) {
 			return nil, err
 		}
 		for _, t := range page.Tools {
-			rt := RemoteTool{Name: truncate(t.Name, 128), Description: untrustedText(t.Description, maxImportedBytes)}
-			if rt.Name != untrusted(t.Name) || rt.Name == "" {
-				rt.Name, rt.Problem = untrusted(t.Name), "its name is empty, over 128 characters or holds control or format characters"
-			} else if in, err := convertSchema(t.InputSchema); err != nil {
-				rt.Problem = err.Error()
-			} else {
-				rt.In = in
-			}
-			out = append(out, rt)
+			out = append(out, s.remoteTool(t.Name, t.Description, t.InputSchema))
 		}
 		if cursor = page.NextCursor; cursor == "" {
 			break
 		}
 	}
 	return out, nil
+}
+
+// secretProblem is the problem of a listed tool whose name, description or schema holds the key.
+const secretProblem = "its name, description or schema holds the server's secret (the server echoes what BigLaw sends): not importable"
+
+// remoteTool is one listed tool as BigLaw shows it: checked for the key on what the server sent,
+// whole, before anything is cleaned or cut (a key straddling a cut would match no form after it),
+// then redacted, cleaned and capped; its schema converted, or why not.
+func (s *mcpSession) remoteTool(name, desc string, in json.RawMessage) RemoteTool {
+	if s.sec.in(name) || s.sec.in(desc) || s.sec.in(string(in)) {
+		return RemoteTool{Name: untrusted(s.sec.redact(name)), Description: untrustedText(s.sec.redact(desc), maxImportedBytes), Problem: secretProblem}
+	}
+	rt := RemoteTool{Name: truncate(name, 128), Description: untrustedText(desc, maxImportedBytes)}
+	if rt.Name != untrusted(name) || rt.Name == "" {
+		rt.Name, rt.Problem = untrusted(name), "its name is empty, over 128 characters or holds control or format characters"
+	} else if c, err := convertSchema(in); err != nil {
+		rt.Problem = s.sec.redact(err.Error())
+	} else {
+		rt.In = c
+	}
+	return rt
 }
 
 // callTool is tools/call: the text of its content parts and whether the server marked it an error.
@@ -689,6 +702,11 @@ func strictify(v map[string]any, at string, required bool) (map[string]any, erro
 	if d, ok := v["description"].(string); ok && untrustedText(d, maxSchemaString) != "" { // third-party text: cleaned and capped
 		out["description"] = untrustedText(d, maxSchemaString)
 	}
+	if x, ok := v["enum"]; ok {
+		if e, ok := x.([]any); !ok || len(e) == 0 {
+			return nil, fmt.Errorf("%s has an enum that is not a list of values (empty, or not a list): nothing could be sent", at)
+		}
+	}
 	if e, ok := out["enum"].([]any); ok {
 		for _, x := range e {
 			if s, ok := x.(string); ok && s != untrustedText(s, maxSchemaString) {
@@ -754,7 +772,7 @@ func strictify(v map[string]any, at string, required bool) (map[string]any, erro
 // allowed, else a placeholder of the type (within its bounds).
 func exampleFor(s *agent.Schema) any {
 	switch {
-	case s.Enum != nil:
+	case len(s.Enum) > 0:
 		return s.Enum[0]
 	case slices.Contains(s.Type, "null"):
 		return nil

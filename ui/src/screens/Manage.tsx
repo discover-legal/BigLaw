@@ -591,7 +591,10 @@ function Changes() {
   );
 }
 
-const pretty = (v: unknown) => (v === undefined || v === null ? '' : JSON.stringify(v, null, 1));
+/** canon is v with every object's keys sorted, so a diff of two schemas shows changes, never a reordering. */
+const canon = (v: unknown): unknown => (Array.isArray(v) ? v.map(canon)
+  : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v as object).sort().map((k) => [k, canon((v as Record<string, unknown>)[k])])) : v);
+const pretty = (v: unknown) => (v === undefined || v === null ? '' : JSON.stringify(canon(v), null, 1));
 
 const sectionOf = (id: string) => ({ prompt: 'agents', agent: 'agents', pass: 'agents', tool: 'tools', server: 'tools', pack: 'packs', skill: 'skills', rule: 'hooks' } as Record<string, string>)[id.split('.')[0]] ?? 'agents';
 
