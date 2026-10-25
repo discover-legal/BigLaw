@@ -72,6 +72,7 @@ type Specs struct {
 	files    map[string][]byte
 	versions map[string]int // item id → its override's version (absent: the built-in)
 	specs    map[string]agent.Spec
+	paths    map[string]string // a spec's file, by its name
 	packs    []Pack
 	skills   []Skill
 }
@@ -87,7 +88,7 @@ var builtinSpecs = func() *Specs {
 
 // newSpecs builds the set of snap: each item's built-in files replaced by its override's.
 func newSpecs(snap Snapshot) (*Specs, error) {
-	s := &Specs{files: maps.Clone(builtin), versions: map[string]int{}, specs: map[string]agent.Spec{}}
+	s := &Specs{files: maps.Clone(builtin), versions: map[string]int{}, specs: map[string]agent.Spec{}, paths: map[string]string{}}
 	for _, id := range slices.Sorted(maps.Keys(snap)) {
 		o := snap[id]
 		for _, f := range itemFiles(builtin, id) {
@@ -109,7 +110,7 @@ func newSpecs(snap Snapshot) (*Specs, error) {
 			if err := json.Unmarshal(data, &sp); err != nil {
 				return nil, fmt.Errorf("%s: %v", f, err)
 			}
-			s.specs[sp.Name] = sp
+			s.specs[sp.Name], s.paths[sp.Name] = sp, f
 		case strings.HasPrefix(f, engineDir+"packs/"):
 			p, err := parsePack(f, string(data))
 			if err != nil {
@@ -168,12 +169,29 @@ func (s *Specs) prompt(name string) string {
 	return string(b)
 }
 
-// hash is the hash of files (engine-relative: an agent's spec, prompt and tools' specs), part of its
-// cache keys: an override of any of them changes it, so its cached answers are not reused.
-func (s *Specs) hash(files []string) string {
+// agentHash is the hash of a subagent's spec and prompt and of every tool its allowed list names
+// (their specs, in the list's order): what its cached answers are keyed by, so an override of any of
+// them, or a tool added to the list, reads again. For read_figures and judge_figures as built in it
+// is the hash of the same files as before overrides existed, so their cached rows stay valid.
+func (s *Specs) agentHash(name string) string {
+	files := []string{"specs/agents/" + name + ".json", "specs/agents/" + name + ".md"}
+	for _, t := range s.specs[name].Allowed {
+		if p, ok := s.paths[t]; ok {
+			files = append(files, strings.TrimPrefix(p, engineDir))
+		}
+	}
+	return s.hashPaths(files)
+}
+
+// hashPaths is hash over names relative to the engine (or repo paths outside it).
+func (s *Specs) hashPaths(files []string) string {
 	h := sha256.New()
 	for _, f := range files {
-		data, ok := s.files[engineDir+f]
+		p := f
+		if !strings.HasPrefix(f, "internal/") {
+			p = engineDir + f
+		}
+		data, ok := s.files[p]
 		if !ok {
 			panic("engine: no spec file " + f)
 		}

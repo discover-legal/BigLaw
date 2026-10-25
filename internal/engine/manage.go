@@ -116,8 +116,14 @@ type SaveIn struct {
 }
 
 // latest is every item's latest version row: its number and files (NULL: the built-in).
-func (e *Engine) latest(ctx context.Context) (map[string]Override, map[string]bool, error) {
-	q, err := e.db.QueryContext(ctx, `SELECT DISTINCT ON (item) item, version, files FROM spec_versions ORDER BY item, version DESC`)
+// querier is the database or a transaction (a save reads, validates and writes under one lock).
+type querier interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+func (e *Engine) latest(ctx context.Context, db querier) (map[string]Override, map[string]bool, error) {
+	q, err := db.QueryContext(ctx, `SELECT DISTINCT ON (item) item, version, files FROM spec_versions ORDER BY item, version DESC`)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -141,8 +147,8 @@ func (e *Engine) latest(ctx context.Context) (map[string]Override, map[string]bo
 }
 
 // current is the snapshot a task submitted now would take (snapshotSQL's), and each item's latest row.
-func (e *Engine) current(ctx context.Context) (Snapshot, map[string]Override, error) {
-	rows, nulls, err := e.latest(ctx)
+func (e *Engine) current(ctx context.Context, db querier) (Snapshot, map[string]Override, error) {
+	rows, nulls, err := e.latest(ctx, db)
 	snap := Snapshot{}
 	for id, o := range rows {
 		if !nulls[id] {
@@ -154,7 +160,7 @@ func (e *Engine) current(ctx context.Context) (Snapshot, map[string]Override, er
 
 // Items is the catalogue: every built-in item, every item an admin created, and deleted skills.
 func (e *Engine) Items(ctx context.Context) ([]Item, error) {
-	snap, rows, err := e.current(ctx)
+	snap, rows, err := e.current(ctx, e.db)
 	if err != nil {
 		return nil, err
 	}
@@ -302,7 +308,7 @@ func (e *Engine) ItemDetail(ctx context.Context, id string) (ItemDetail, error) 
 	if i < 0 {
 		return ItemDetail{}, fmt.Errorf("%w: no item %s", ErrNotFound, id)
 	}
-	snap, _, err := e.current(ctx)
+	snap, _, err := e.current(ctx, e.db)
 	if err != nil {
 		return ItemDetail{}, err
 	}
@@ -419,7 +425,7 @@ type FileDiff struct {
 // Diff is an item's diff from version from to version to (0: the built-in; to < 0: the current).
 func (e *Engine) Diff(ctx context.Context, id string, from, to int) ([]FileDiff, error) {
 	if to < 0 {
-		_, rows, err := e.current(ctx)
+		_, rows, err := e.current(ctx, e.db)
 		if err != nil {
 			return nil, err
 		}
@@ -463,7 +469,7 @@ func union(a, b map[string]string) map[string]bool {
 // as built in, by repo path: what a patch against the repository, or a zip of the tuned files, holds.
 // A deleted skill's files are absent from now; a created skill's from built.
 func (e *Engine) Export(ctx context.Context, ids []string) (now, built map[string]string, err error) {
-	snap, _, err := e.current(ctx)
+	snap, _, err := e.current(ctx, e.db)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -487,10 +493,30 @@ func Patch(now, built map[string]string) string {
 	return b.String()
 }
 
+// locked runs fn in one transaction under the Manage lock: saves, reverts and deletes are serial,
+// so each validates the set the others left (two saves of different items can never make a set that
+// does not load).
+func (e *Engine) locked(ctx context.Context, fn func(tx *sql.Tx) error) error {
+	return e.st.InTx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext('biglaw.spec_versions'))`); err != nil {
+			return err
+		}
+		return fn(tx)
+	})
+}
+
 // Save stores an admin's new version of an item after validate accepts it. A skill that does not
 // exist is created (base 0). notes say what Go changed (a pack's or skill's status reset to candidate).
-func (e *Engine) Save(ctx context.Context, id string, in SaveIn, author string) (Version, []string, error) {
-	snap, rows, err := e.current(ctx)
+func (e *Engine) Save(ctx context.Context, id string, in SaveIn, author string) (v Version, notes []string, err error) {
+	err = e.locked(ctx, func(tx *sql.Tx) error {
+		v, notes, err = e.save(ctx, tx, id, in, author)
+		return err
+	})
+	return v, notes, err
+}
+
+func (e *Engine) save(ctx context.Context, tx *sql.Tx, id string, in SaveIn, author string) (Version, []string, error) {
+	snap, rows, err := e.current(ctx, tx)
 	if err != nil {
 		return Version{}, nil, err
 	}
@@ -534,14 +560,22 @@ func (e *Engine) Save(ctx context.Context, id string, in SaveIn, author string) 
 	if err := e.validate(next, id); err != nil {
 		return Version{}, nil, err
 	}
-	v, err := e.insertVersion(ctx, id, in.Base+1, action, files, rows[id].Version, nil, author, in.Note)
+	v, err := e.insertVersion(ctx, tx, id, in.Base+1, action, files, rows[id].Version, nil, author, in.Note)
 	return v, notes, err
 }
 
 // Revert stores a version that restores version to (0: the built-in; for a skill an admin
 // created, its absence) after validate accepts the set it makes.
-func (e *Engine) Revert(ctx context.Context, id string, to, base int, note, author string) (Version, error) {
-	snap, rows, err := e.current(ctx)
+func (e *Engine) Revert(ctx context.Context, id string, to, base int, note, author string) (v Version, err error) {
+	err = e.locked(ctx, func(tx *sql.Tx) error {
+		v, err = e.revert(ctx, tx, id, to, base, note, author)
+		return err
+	})
+	return v, err
+}
+
+func (e *Engine) revert(ctx context.Context, tx *sql.Tx, id string, to, base int, note, author string) (Version, error) {
+	snap, rows, err := e.current(ctx, tx)
 	if err != nil {
 		return Version{}, err
 	}
@@ -557,7 +591,7 @@ func (e *Engine) Revert(ctx context.Context, id string, to, base int, note, auth
 	var files map[string]string // nil: the built-in again
 	if to > 0 {
 		var raw []byte
-		err := e.db.QueryRowContext(ctx, `SELECT files FROM spec_versions WHERE item = $1 AND version = $2`, id, to).Scan(&raw)
+		err := tx.QueryRowContext(ctx, `SELECT files FROM spec_versions WHERE item = $1 AND version = $2`, id, to).Scan(&raw)
 		if errors.Is(err, sql.ErrNoRows) {
 			return Version{}, fmt.Errorf("%w: %s has no version %d", ErrNotFound, id, to)
 		} else if err != nil {
@@ -581,15 +615,23 @@ func (e *Engine) Revert(ctx context.Context, id string, to, base int, note, auth
 	if err := e.validate(next, id); err != nil {
 		return Version{}, err
 	}
-	return e.insertVersion(ctx, id, base+1, "revert", files, base, &to, author, note)
+	return e.insertVersion(ctx, tx, id, base+1, "revert", files, base, &to, author, note)
 }
 
 // Delete deletes a skill (a tombstone version: revertable, like any other).
-func (e *Engine) Delete(ctx context.Context, id string, base int, note, author string) (Version, error) {
+func (e *Engine) Delete(ctx context.Context, id string, base int, note, author string) (v Version, err error) {
+	err = e.locked(ctx, func(tx *sql.Tx) error {
+		v, err = e.delete(ctx, tx, id, base, note, author)
+		return err
+	})
+	return v, err
+}
+
+func (e *Engine) delete(ctx context.Context, tx *sql.Tx, id string, base int, note, author string) (Version, error) {
 	if !strings.HasPrefix(id, "skill.") {
 		return Version{}, invalid("", "only skills can be deleted: the engine's agents, tools and packs are part of its workflow (edit or revert them instead)")
 	}
-	snap, rows, err := e.current(ctx)
+	snap, rows, err := e.current(ctx, tx)
 	if err != nil {
 		return Version{}, err
 	}
@@ -608,10 +650,10 @@ func (e *Engine) Delete(ctx context.Context, id string, base int, note, author s
 	if err := e.validate(next, id); err != nil {
 		return Version{}, err
 	}
-	return e.insertVersion(ctx, id, base+1, "delete", map[string]string{}, base, nil, author, note)
+	return e.insertVersion(ctx, tx, id, base+1, "delete", map[string]string{}, base, nil, author, note)
 }
 
-func (e *Engine) insertVersion(ctx context.Context, id string, n int, action string, files map[string]string, from int, restored *int, author, note string) (Version, error) {
+func (e *Engine) insertVersion(ctx context.Context, tx *sql.Tx, id string, n int, action string, files map[string]string, from int, restored *int, author, note string) (Version, error) {
 	var raw any
 	if files != nil {
 		b, _ := json.Marshal(files)
@@ -619,7 +661,7 @@ func (e *Engine) insertVersion(ctx context.Context, id string, n int, action str
 	}
 	v := Version{Item: id, Version: n, Action: action, From: from, Restored: restored, Author: author, Note: truncate(strings.TrimSpace(note), 2000),
 		Builtin: files == nil, Deleted: files != nil && len(files) == 0}
-	err := e.db.QueryRowContext(ctx, `INSERT INTO spec_versions (item, version, action, files, from_version, restored, author, note) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	err := tx.QueryRowContext(ctx, `INSERT INTO spec_versions (item, version, action, files, from_version, restored, author, note) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		RETURNING created_at`, id, n, action, raw, from, restored, author, v.Note).Scan(&v.CreatedAt)
 	var pe *pq.Error
 	if errors.As(err, &pe) && pe.Code == "23505" {
@@ -638,33 +680,54 @@ func invalid(file, format string, a ...any) error {
 
 var skillName = regexp.MustCompile(`^[a-z][a-z0-9-]{1,39}$`)
 
-// reviewRule keeps the lawyer-review rule (README § Packs, § Skills): an edit of a pack's or skill's
-// content (its body, or a pack's checklist) resets its status to candidate and clears reviewedBy,
-// unless the editor names a reviewer who is not the one before. It rewrites files' front matter.
+// reviewRule keeps the lawyer-review rule (README § Packs, § Skills): everything in a pack or skill
+// is its content (every file, every front matter field but status and reviewedBy, the body), so any
+// change to it resets its status to candidate and clears reviewedBy, unless the save names a reviewer
+// who is not the one before (a new item: unless it names one). It rewrites the front matter in files.
 func reviewRule(kind string, old, files map[string]string) ([]string, error) {
 	if kind != "pack" && kind != "skill" {
 		return nil, nil
 	}
-	var notes []string
-	for f, text := range files {
-		if kind == "skill" && path.Base(f) != "SKILL.md" {
-			continue
-		}
-		fields, lists, body, err := frontMatter(text)
-		if err != nil {
-			return nil, invalid(f, "%v", err)
-		}
-		of, ol, obody, _ := frontMatter(old[f])
-		changed := body != obody || !slices.Equal(lists["checklist"], ol["checklist"])
-		if _, had := old[f]; !had || !changed || fields["reviewedBy"] != "" && fields["reviewedBy"] != of["reviewedBy"] {
-			continue
-		}
-		if fields["status"] != "candidate" || fields["reviewedBy"] != "" {
-			files[f] = setFront(text, map[string]string{"status": "candidate", "reviewedBy": ""})
-			notes = append(notes, path.Base(path.Dir(f))+"/"+path.Base(f)+": its content changed and no new reviewer was named, so its status is candidate again")
+	head := ""
+	for f := range files {
+		if kind == "pack" || path.Base(f) == "SKILL.md" {
+			head = f
 		}
 	}
-	return notes, nil
+	if head == "" {
+		return nil, nil // a skill without its SKILL.md: validate refuses it
+	}
+	fields, _, _, err := frontMatter(files[head])
+	if err != nil {
+		return nil, invalid(head, "%v", err)
+	}
+	of, _, _, _ := frontMatter(old[head])
+	content := func(fs map[string]string) string { // the item less its review fields, in a fixed order
+		var b strings.Builder
+		for _, f := range slices.Sorted(maps.Keys(fs)) {
+			text := fs[f]
+			if f == head {
+				text = setFront(text, map[string]string{"status": "", "reviewedBy": ""})
+			}
+			fmt.Fprintf(&b, "%s\x00%s\x00", f, text)
+		}
+		return b.String()
+	}
+	if len(old) > 0 && content(old) == content(files) {
+		return nil, nil // a status or reviewer change only: a lawyer recording the review
+	}
+	if fields["reviewedBy"] != "" && fields["reviewedBy"] != of["reviewedBy"] {
+		return nil, nil // the save names the reviewer of what it saves
+	}
+	if fields["status"] == "candidate" && fields["reviewedBy"] == "" {
+		return nil, nil
+	}
+	files[head] = setFront(files[head], map[string]string{"status": "candidate", "reviewedBy": ""})
+	why := "its content changed and no new reviewer was named"
+	if len(old) == 0 {
+		why = "it is new and names no reviewer"
+	}
+	return []string{path.Base(path.Dir(head)) + "/" + path.Base(head) + ": " + why + ", so its status is candidate"}, nil
 }
 
 // setFront rewrites keys' values in text's front matter (each key's line in place).
@@ -754,6 +817,15 @@ func (e *Engine) validate(snap Snapshot, id string) error {
 	if n := len(sp.skillIndex()); n > maxSkillIndex {
 		bad("", "the skills' names and descriptions take %d bytes of the brief, over %d: shorten a description or delete a skill", n, maxSkillIndex)
 	}
+	for _, n := range slices.Sorted(maps.Keys(sp.specs)) { // a subagent never ends the run or acts as the lead
+		if s := sp.specs[n]; s.Kind == "subagent" {
+			for _, a := range s.Allowed {
+				if t := sp.specs[a]; t.Final || len(t.Solo) > 0 && !slices.Contains(subagentSafe, a) {
+					bad(agentsDir+n+".json", "allowed: %q is the lead's own (it ends the run, or has calls that must stand alone in a lead turn); a subagent cannot be given it", a)
+				}
+			}
+		}
+	}
 	callable := skillCallable(sp)
 	for _, k := range sp.skills {
 		for _, t := range k.Tools {
@@ -797,6 +869,8 @@ func validateSpec(f, text string, bad func(string, string, ...any)) {
 		bad(f, "maxTurns: a Go tool's is 0 to %d", maxToolTurns)
 	case s.Kind != "subagent" && (s.Role != "" || len(s.Allowed) > 0):
 		bad(f, "role and allowed are a subagent's only")
+	case s.Kind == "subagent" && s.Class == "free" && was.Class != "free":
+		bad(f, "class: free is the figure reader's and judge's only (Go meters them from their own shares); a subagent the lead or a fan-out calls takes a class with a share (evidence, draft, committee, cover or plan)")
 	}
 	for _, sc := range []struct {
 		n   string
@@ -934,12 +1008,20 @@ func compatSpec(old, cur []byte) []string {
 	return out
 }
 
+// subagentSafe are tools with lead-only ops that refuse those ops to a subagent in their own code
+// (ledger: plan and resolve at depth 1), so a subagent may be given them for their reads.
+var subagentSafe = []string{"ledger"}
+
 var exampleLine = regexp.MustCompile(`(?m)^Example: (\{.*\})\s*$`)
 
 func compatSchema(at string, a, b *agent.Schema, goWrites bool) []string {
 	var out []string
 	if !slices.Equal(slices.Sorted(slices.Values(a.Type)), slices.Sorted(slices.Values(b.Type))) {
 		return []string{fmt.Sprintf("%s: Go reads or writes this field as %s; it cannot be retyped (now %s)", at, typeList(a), typeList(b))}
+	}
+	if !slices.Equal(enumSet(a.Enum), enumSet(b.Enum)) { // Go branches on these values (a critic's verdict, a gap's severity, an op)
+		out = append(out, fmt.Sprintf("%s: Go branches on this field's values (%s); its enum cannot change (now %s): a renamed, recased, added or removed value would skip or misroute Go's handling of it",
+			at, strings.Join(enumSet(a.Enum), ", "), cmpStr(b.Enum == nil, "no enum", strings.Join(enumSet(b.Enum), ", "))))
 	}
 	for _, n := range slices.Sorted(maps.Keys(a.Properties)) {
 		p, ok := b.Properties[n]
@@ -963,6 +1045,20 @@ func compatSchema(at string, a, b *agent.Schema, goWrites bool) []string {
 		out = append(out, fmt.Sprintf("%s: Go reads or writes its items; they cannot be removed", at))
 	}
 	return out
+}
+
+// enumSet is an enum's values as a sorted set of their JSON forms (nil: no enum).
+func enumSet(e []any) []string {
+	if e == nil {
+		return nil
+	}
+	var out []string
+	for _, v := range e {
+		b, _ := json.Marshal(v)
+		out = append(out, string(b))
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 func typeList(s *agent.Schema) string {

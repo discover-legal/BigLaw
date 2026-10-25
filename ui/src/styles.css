@@ -184,6 +184,7 @@ a.num-tag { color: var(--accent-text); }
 .tabs button:hover { color: var(--ink); background: none; }
 .tabs button.on { color: var(--ink); border-bottom-color: var(--accent); }
 .count { font-size: 0.74rem; font-weight: 650; background: var(--sunken); color: var(--muted); border-radius: 999px; padding: 0 0.45rem; font-variant-numeric: tabular-nums; }
+.tabs.wrap { flex-wrap: wrap; overflow-x: visible; }
 .tabs button.on .count { background: var(--accent-soft); color: var(--accent-text); }
 
 /* Run log: a timeline */

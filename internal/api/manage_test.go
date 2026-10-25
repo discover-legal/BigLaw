@@ -160,3 +160,24 @@ func TestManageRoutes(t *testing.T) {
 		t.Fatalf("unknown format: %d", code)
 	}
 }
+
+// TestManageAdminModes (review M3): a read-only server (--allow-no-auth) refuses every write and
+// says how to open it; an open one (--admin-without-auth) says so on /me for the UI's banner.
+func TestManageAdminModes(t *testing.T) {
+	t.Parallel()
+	ro := manageServer(t, LocalUser(false, false))
+	if _, body := ro.do("GET", "/me", nil); !strings.Contains(body, `"admin":false`) || !strings.Contains(body, `"adminWithoutAuth":false`) {
+		t.Fatalf("read-only /me: %s", body)
+	}
+	code, body := ro.do("POST", "/manage/items/prompt.lead/versions", m{"base": 0, "files": leadFiles(t, ro, "\nx"), "note": ""})
+	if code != 403 || !strings.Contains(body, "--admin-without-auth") {
+		t.Fatalf("a read-only server's write: %d %s", code, body)
+	}
+	open := manageServer(t, LocalUser(true, true))
+	if _, body := open.do("GET", "/me", nil); !strings.Contains(body, `"admin":true`) || !strings.Contains(body, `"adminWithoutAuth":true`) {
+		t.Fatalf("open /me: %s", body)
+	}
+	if code, body := open.do("POST", "/manage/items/prompt.lead/versions", m{"base": 0, "files": leadFiles(t, open, "\nx"), "note": ""}); code != 201 {
+		t.Fatalf("an open server's write: %d %s", code, body)
+	}
+}

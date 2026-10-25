@@ -33,11 +33,15 @@ var version = "2.0.0-dev"
 
 const usage = `usage: biglaw <command>
 
-  serve [--allow-no-auth]  run the server on BIGLAW_ADDR (migrates the database
+  serve [--allow-no-auth] [--admin-without-auth]
+                           run the server on BIGLAW_ADDR (migrates the database
                            first). There is no authentication yet, so serve
                            refuses a non-loopback BIGLAW_ADDR unless
                            --allow-no-auth says something else (such as a
                            loopback-only port publish) limits who can reach it.
+                           With --allow-no-auth, Manage is read-only unless
+                           --admin-without-auth lets anyone who can reach the
+                           server change what its agents use.
   version [--config]       print the version; --config also prints the
                            configuration (secrets hidden) and checks it
 `
@@ -70,8 +74,8 @@ func run(ctx context.Context, args []string, getenv func(string) string, environ
 		}
 		return 0
 	case "serve":
-		allowNoAuth := len(flags) == 1 && flags[0] == "--allow-no-auth"
-		if len(flags) > 1 || len(flags) == 1 && !allowNoAuth {
+		allowNoAuth, adminWithoutAuth, ok := serveFlags(flags)
+		if !ok {
 			fmt.Fprint(stderr, usage)
 			return 2
 		}
@@ -89,6 +93,13 @@ func run(ctx context.Context, args []string, getenv func(string) string, environ
 		}
 		if !isLoopback(cfg.Addr) {
 			log.Warn("serving WITHOUT authentication on a non-loopback address (--allow-no-auth)", "addr", shown("BIGLAW_ADDR", cfg.Addr))
+		}
+		who := managePrincipal(allowNoAuth, adminWithoutAuth)
+		switch {
+		case adminWithoutAuth:
+			log.Warn("Manage is OPEN (--admin-without-auth): anyone who can reach this server can change the agents, tools, packs and skills every task uses (README § Exposure)")
+		case allowNoAuth:
+			log.Info("Manage is read-only (--allow-no-auth without --admin-without-auth): there is no sign-in yet to tell an admin (README § Exposure)")
 		}
 		if names := UnknownVars(environ); len(names) > 0 {
 			log.Warn("ignoring unknown BIGLAW_ variables (typo?)", "names", strings.Join(names, ","))
@@ -144,7 +155,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, environ
 			}
 		}
 		e := engine.New(st, d, chat, cfg.Roles, cfg.Prices, cfg.Engine, log)
-		if err := serve(ctx, st, d, e, ln, log); err != nil {
+		if err := serve(ctx, st, d, e, ln, log, who); err != nil {
 			fmt.Fprintf(stderr, "biglaw: %v\n", err)
 			return 1
 		}
@@ -160,12 +171,34 @@ func run(ctx context.Context, args []string, getenv func(string) string, environ
 
 type pinger interface{ Ping(context.Context) error }
 
+// managePrincipal is every request's principal until PR 8's sign-in (README § Exposure): the local
+// user is an admin on a loopback server (no --allow-no-auth) or with --admin-without-auth; under
+// --allow-no-auth alone Manage is read-only.
+func managePrincipal(allowNoAuth, adminWithoutAuth bool) api.Who {
+	return api.LocalUser(!allowNoAuth || adminWithoutAuth, adminWithoutAuth)
+}
+
+// serveFlags reads serve's flags: each of --allow-no-auth and --admin-without-auth at most once.
+func serveFlags(flags []string) (allowNoAuth, adminWithoutAuth, ok bool) {
+	for _, f := range flags {
+		switch {
+		case f == "--allow-no-auth" && !allowNoAuth:
+			allowNoAuth = true
+		case f == "--admin-without-auth" && !adminWithoutAuth:
+			adminWithoutAuth = true
+		default:
+			return false, false, false
+		}
+	}
+	return allowNoAuth, adminWithoutAuth, true
+}
+
 // shutdownGrace is how long a stop waits for requests in flight before cancelling them (an ingest
 // then removes its file and answers 503), and again for them to end before closing connections.
 var shutdownGrace, jobEvery = 10 * time.Second, 15 * time.Minute
 
 // serve serves HTTP on ln, and runs the embedding backfill, until ctx ends; then it shuts down gracefully.
-func serve(ctx context.Context, st *store.Store, d *docs.Service, e *engine.Engine, ln net.Listener, log *slog.Logger) error {
+func serve(ctx context.Context, st *store.Store, d *docs.Service, e *engine.Engine, ln net.Listener, log *slog.Logger, who api.Who) error {
 	if n, err := d.SweepOrphanFiles(ctx); err != nil || n > 0 {
 		log.Warn("orphan files (uploads interrupted by a crash) swept", "files", n, "err", err)
 	}
@@ -203,7 +236,7 @@ func serve(ctx context.Context, st *store.Store, d *docs.Service, e *engine.Engi
 	defer stopRequests(nil)
 	srv := &http.Server{
 		BaseContext:       func(net.Listener) context.Context { return base },
-		Handler:           routes(st, d, e, log),
+		Handler:           routes(st, d, e, log, who),
 		ReadTimeout:       2 * time.Minute, // uploads set their own deadlines (docs)
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
@@ -237,10 +270,13 @@ func serve(ctx context.Context, st *store.Store, d *docs.Service, e *engine.Engi
 
 // routes is GET /health and, with an engine, the REST API and the UI (api.Handler); with only d,
 // the document routes.
-func routes(db pinger, d *docs.Service, e *engine.Engine, log *slog.Logger) http.Handler {
+func routes(db pinger, d *docs.Service, e *engine.Engine, log *slog.Logger, who api.Who) http.Handler {
 	mux := http.NewServeMux()
 	if e != nil {
-		mux = api.Handler(d, e, nil, log)
+		if who == nil {
+			who = api.LocalUser(true, false)
+		}
+		mux = api.HandlerFor(d, e, nil, log, who)
 	} else if d != nil {
 		d.Routes(mux, log)
 	}

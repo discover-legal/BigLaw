@@ -14,7 +14,7 @@ PostgreSQL database. Licensed Apache-2.0 (`LICENSE`, `NOTICE`).
 
 | Piece | Path | What it does |
 |---|---|---|
-| Command | `cmd/biglaw/main.go` | `biglaw serve [--allow-no-auth]` (migrates the database, then serves the API and the embedded UI and runs tasks) and `biglaw version [--config]` |
+| Command | `cmd/biglaw/main.go` | `biglaw serve [--allow-no-auth] [--admin-without-auth]` (migrates the database, then serves the API and the embedded UI and runs tasks) and `biglaw version [--config]` |
 | Configuration | `cmd/biglaw/config.go` | Declares all 18 runtime variables (`BIGLAW_MODELS` is the role map); validates the ones this build reads (all problems at once); vendor breakers ported from v1 |
 | Store | `internal/store/store.go` | Postgres via `database/sql` + `github.com/lib/pq`; DSN check that matches lib/pq's reading; transaction helper |
 | Migrations | `internal/store/migrate.go`, `internal/store/migrations/NNNN_*.sql` | Embedded SQL files applied in order under an advisory lock; each file and its `schema_migrations` row in one transaction. `store.Open` first creates the `vector` extension (pgvector), which is database-wide (§ Database) |
@@ -251,6 +251,14 @@ that way:
   exposes the container refuses to start.
 - **Render** is public by nature, so `render.yaml` is inert until PR 8: the service fails its
   start on purpose.
+- **Manage under `--allow-no-auth` is read-only.** Reaching the port is not proof of being an admin,
+  and an edit in Manage changes every later task of every matter, so with `--allow-no-auth` nobody may
+  edit there (403 `forbidden`; the screen says why). An operator who accepts that anyone who can reach
+  the server may change its agents, tools, packs and skills passes `serve --allow-no-auth
+  --admin-without-auth` (serve logs a warning; the screen shows a banner). Compose keeps
+  `["serve", "--allow-no-auth"]`: to edit in Manage under Compose, add `"--admin-without-auth"` to
+  the service's `command` in a local copy, knowing what it allows. A loopback server started without
+  either flag (local development) is an admin.
 
 Two browser guards hold until then, because a page the lawyer visits can reach a loopback port.
 Every `POST` (documents, tasks, cancel, gate decisions) from another site is refused 403
@@ -1413,8 +1421,10 @@ each one in Manage (`#/manage`) or the routes above, with no rebuild:
   `respec`). A save reaches the next task only (`TestSnapshotAtStartAndResume`). A binary upgrade still
   changes the built-ins under a resumed run, as it changes all Go code.
 - **Cache keys.** The figure reader's and judge's cached answers are keyed by the hash of their spec,
-  prompt and tools' specs in the run's set (`Specs.hash`), so an override reads and judges again
-  (`TestOverrideChangesCacheKeys`); the built-ins hash as before, so existing rows stay valid.
+  prompt and the spec of every tool their allowed list names, in the run's set (`Specs.agentHash`), so
+  an override of any of them, or a tool added to the list, reads and judges again
+  (`TestOverrideChangesCacheKeys`, `TestAgentHashCoversAllowedTools`); the built-ins hash as before,
+  so existing rows stay valid.
 - **Validation** (`validate`, every save and revert, all problems at once, 422 with `problems[]` by
   file): UTF-8; a spec is one JSON object of `agent.Spec`'s fields (unknown fields refused), keeps its
   name, kind and `final`, has `maxTurns` 1–32 (subagent) or 0–10000 (Go tool), a known class, its
@@ -1422,25 +1432,43 @@ each one in Manage (`#/manage`) or the routes above, with no rebuild:
   matter is `code` (its file's), `status` candidate|reviewed (reviewed needs `reviewedBy`) and the
   checklist; then the whole set as a task would load it: `newSpecs` and the runtime's own registration
   (descriptions, examples, allowed tools are registered Go tools, roles, the 22/14 caps, the lead's
-  list). An item's files are exactly its own (no file added to or dropped from a built-in item).
+  list). An item's files are exactly its own (no file added to or dropped from a built-in item). No
+  subagent's allowed list may name a tool that is the lead's own: a Final tool (`finish`: it ends the
+  run) or one with ops that must stand alone in a lead turn, except `ledger`, which refuses its writes
+  (`plan`, `resolve`) to a subagent in its own code and is in the built-ins' lists for its reads; the
+  fan-outs (`sweep`, `committee`, `cover`) are not Go tools, so the registry already refuses them. Class
+  `free` (no class share) is kept for the subagents built free (the figure reader and judge, metered
+  from their own shares); any other subagent must take a class with a share.
+- **Serial saves.** A save, revert or delete runs in one transaction under an advisory lock
+  (`locked`): it reads the set, validates the set it would make, and writes, so two saves of different
+  items can never make a set that does not load (`TestSavesAreSerial`).
 - **Compatibility** (`compatSpec`). Go code depends on schema shapes, so a schema save must keep, at
   every path the built-in schema has (nested and in `items`), the property and its type list (Go
   decodes or writes it by that shape: removing, renaming or retyping is refused naming the path, e.g.
-  `out.findings[].claim: Go reads or writes this field`); a schema Go writes (a Go tool's output, the
+  `out.findings[].claim: Go reads or writes this field`); every enum keeps exactly the built-in's values
+  (Go branches on them: a critic's verdict, a gap's severity, an op; renaming, recasing, adding or
+  removing one is refused, `out.verdicts[].verdict: Go branches on this field's values`); a schema Go writes (a Go tool's output, the
   input of a tool Go itself calls: `goWritten`, found from the engine's `rt.Invoke` calls) gains no
   property (strict schemas require every property, and Go sends none); the built-in description's
   examples and Go's own literal inputs (`goInputs`: finish's submit, `committee {}`, `cover {}`) must
   still validate. **Limits:** it compares with the built-in, not with a list of the fields each Go
-  line reads, so a field Go never reads is protected too; narrowing an enum or a bound on a value Go
-  writes is caught only where an example or a literal input shows it; a field added to a schema the
+  line reads, so a field Go never reads is protected too (an enum Go never branches on is frozen as
+  well); narrowing a bound (a length, an item count) on a value Go writes is caught only where an
+  example or a literal input shows it; a field added to a schema the
   model writes is accepted and ignored by Go; semantics (what a field means) are not checked.
-- **The lawyer-review rule.** A save that changes a pack's or skill's content (its body, or a pack's
-  checklist) resets its status to candidate and clears `reviewedBy`, unless the editor names a new
-  reviewer; the response says so (`notes`). A status-only edit (a lawyer recording a review) is kept.
+- **The lawyer-review rule.** Everything in a pack or skill is its content: every file (a skill's
+  reference files too), every front matter field but `status` and `reviewedBy` (a skill's description
+  and tools, a pack's checklist) and the body. A save that changes any of it resets the status to
+  candidate and clears `reviewedBy`, unless the save names a reviewer who is not the one before; a new
+  item (a skill created, or created again after its deletion) is candidate unless it names its
+  reviewer. The response says so (`notes`). A status-only edit (a lawyer recording a review) is kept.
 - **Who.** OIDC is not built yet (`BIGLAW_OIDC_ISSUER` and the client variables are declared for PR 8; nothing reads them), so no
-  request carries a user. `api.Principal` is the seam: until PR 8 every request is the local user, an
-  admin (owner decision: with auth off the local user is an admin; § Exposure limits who reaches the
-  port). Every write wears `docs.Guard` (cross-site 403) and the admin guard (403 `forbidden` for a
+  request carries a user. `api.Principal` is the seam: until PR 8 every request is the local user
+  (`api.LocalUser`). It is an admin on a server bound to loopback for local work (no
+  `--allow-no-auth`); under `--allow-no-auth` Manage is **read-only** (everyone may view it), unless
+  the operator also passes `serve --admin-without-auth`, which makes anyone who can reach the server
+  an admin: serve logs a warning and the Manage screen shows a banner saying so (owner decision,
+  review M3; § Exposure). Every write wears `docs.Guard` (cross-site 403) and the admin guard (403 `forbidden` for a
   non-admin: `TestManageAdminGuard` drives it through the seam); reads are open to anyone who may use
   BigLaw. PR 8 resolves the session there and sets `Admin`; no env var was added for it.
 - **Export** (`GET /manage/export`): the overridden items (all, or `?item=`) as one git-style patch
@@ -1821,7 +1849,8 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
 
 ## Limitations
 
-- Manage's admin guard has no real non-admin until PR 8's sign-in: today every request is the local user, an admin (§ Manage, Who). Concurrent saves of two different items are each validated against the set without the other; the set a task snapshots is still loaded and checked again when it runs.
+- Manage has no per-person admin until PR 8's sign-in: the local user is an admin on loopback, read-only under `--allow-no-auth`, and anyone who can reach the server under `--admin-without-auth`; the change log's author is "Local user" until then (§ Manage, Who).
+- The engine's tests write their own skills: an export that deletes a starter skill only makes `ui/src/recorded/manage.json` stale (re-record it).
 - Manage edits the built-in items only (and creates skills): a new subagent, tool or pack is not created there; the compatibility check's limits are in § Manage.
 - The UI's Playbooks, Time & Billing and profile views have no live routes until PRs 6/8/9 (404);
   Clients shows matters derived from documents' matter numbers until PR 8's client roster.

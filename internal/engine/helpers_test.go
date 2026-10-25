@@ -324,3 +324,9 @@ func overrideOne(t *testing.T, file, tail string) *Specs {
 	}
 	return sp
 }
+
+// The files the reader's and judge's cache keys hashed before overrides (agentHash must give the same).
+var (
+	readerSpecFiles = []string{"specs/agents/read_figures.json", "specs/agents/read_figures.md", "specs/figure_context.json", "specs/exact_calc.json"}
+	judgeSpecFiles  = []string{"specs/agents/judge_figures.json", "specs/agents/judge_figures.md", "specs/figure_context.json"}
+)

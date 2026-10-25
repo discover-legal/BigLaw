@@ -55,7 +55,11 @@ func Handler(d *docs.Service, e *engine.Engine, ui fs.FS, log *slog.Logger) *htt
 	return handler(d, e, ui, log, local)
 }
 
-// handler is Handler with who resolving each request's principal (Manage's writes are an admin's).
+// HandlerFor is Handler with who resolving each request's principal (Manage's writes are an admin's).
+func HandlerFor(d *docs.Service, e *engine.Engine, ui fs.FS, log *slog.Logger, who Who) *http.ServeMux {
+	return handler(d, e, ui, log, who)
+}
+
 func handler(d *docs.Service, e *engine.Engine, ui fs.FS, log *slog.Logger, who Who) *http.ServeMux {
 	mux := http.NewServeMux()
 	d.Routes(mux, log)
