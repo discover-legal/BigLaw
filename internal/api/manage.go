@@ -74,73 +74,43 @@ func manageRoutes(mux *http.ServeMux, e *engine.Engine, who Who, log *slog.Logge
 		}
 		reply(w, code, v, err)
 	}
-	body := func(w http.ResponseWriter, r *http.Request, v any) error {
-		d := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20)) // an item's files: a skill's are at most 17 × 64 KiB
-		d.DisallowUnknownFields()
-		if err := d.Decode(v); err != nil {
-			return fmt.Errorf("%w: the body is not the expected JSON object: %v", engine.ErrBadTask, err)
-		}
-		return nil
+	get := func(route string, fn func(*http.Request) (any, error)) {
+		mux.HandleFunc(route, func(w http.ResponseWriter, r *http.Request) { v, err := fn(r); reply(w, 200, v, err) })
 	}
+	ws := writes{mux, log, who, answer}
 	mux.HandleFunc("GET /me", func(w http.ResponseWriter, r *http.Request) {
 		p := who(r)
 		reply(w, 200, map[string]any{"id": p.ID, "name": p.Name, "admin": p.Admin, "authEnabled": false, "adminWithoutAuth": p.Open}, nil)
 	})
-	mux.HandleFunc("GET /manage/items", func(w http.ResponseWriter, r *http.Request) {
-		items, err := e.Items(r.Context())
-		reply(w, 200, items, err)
-	})
-	mux.HandleFunc("GET /manage/items/{id}", func(w http.ResponseWriter, r *http.Request) {
-		d, err := e.ItemDetail(r.Context(), r.PathValue("id"))
-		reply(w, 200, d, err)
-	})
-	mux.HandleFunc("GET /manage/items/{id}/history", func(w http.ResponseWriter, r *http.Request) {
-		vs, err := e.History(r.Context(), r.PathValue("id"))
-		reply(w, 200, vs, err)
-	})
-	mux.HandleFunc("GET /manage/items/{id}/diff", func(w http.ResponseWriter, r *http.Request) {
+	get("GET /manage/items", func(r *http.Request) (any, error) { return e.Items(r.Context()) })
+	get("GET /manage/items/{id}", func(r *http.Request) (any, error) { return e.ItemDetail(r.Context(), r.PathValue("id")) })
+	get("GET /manage/items/{id}/history", func(r *http.Request) (any, error) { return e.History(r.Context(), r.PathValue("id")) })
+	get("GET /manage/items/{id}/diff", func(r *http.Request) (any, error) {
 		from, err := version(r, "from", 0)
 		to, terr := version(r, "to", -1)
-		var ds []engine.FileDiff
-		if err = cmp.Or(err, terr); err == nil {
-			ds, err = e.Diff(r.Context(), r.PathValue("id"), from, to)
+		if err = cmp.Or(err, terr); err != nil {
+			return nil, err
 		}
-		reply(w, 200, ds, err)
+		return e.Diff(r.Context(), r.PathValue("id"), from, to)
 	})
-	mux.HandleFunc("POST /manage/items/{id}/versions", admin(log, who, func(w http.ResponseWriter, r *http.Request, p Principal) {
-		var in engine.SaveIn
-		var v engine.Version
-		var notes []string
-		err := body(w, r, &in)
-		if err == nil {
-			v, notes, err = e.Save(r.Context(), r.PathValue("id"), in, p.Name)
-		}
-		answer(w, http.StatusCreated, map[string]any{"version": v, "notes": nonNil(notes)}, err)
-	}))
-	mux.HandleFunc("POST /manage/items/{id}/revert", admin(log, who, func(w http.ResponseWriter, r *http.Request, p Principal) {
-		var in struct {
-			To, Base int
-			Note     string
-		}
-		var v engine.Version
-		err := body(w, r, &in)
-		if err == nil {
-			v, err = e.Revert(r.Context(), r.PathValue("id"), in.To, in.Base, in.Note, p.Name)
-		}
-		answer(w, http.StatusCreated, map[string]any{"version": v, "notes": []string{}}, err)
-	}))
-	mux.HandleFunc("POST /manage/items/{id}/delete", admin(log, who, func(w http.ResponseWriter, r *http.Request, p Principal) {
-		var in struct {
-			Base int
-			Note string
-		}
-		var v engine.Version
-		err := body(w, r, &in)
-		if err == nil {
-			v, err = e.Delete(r.Context(), r.PathValue("id"), in.Base, in.Note, p.Name)
-		}
-		answer(w, http.StatusCreated, map[string]any{"version": v, "notes": []string{}}, err)
-	}))
+	handle(ws, "POST /manage/items/{id}/versions", http.StatusCreated, func(r *http.Request, p Principal, in engine.SaveIn) (any, error) {
+		v, notes, err := e.Save(r.Context(), r.PathValue("id"), in, p.Name)
+		return map[string]any{"version": v, "notes": nonNil(notes)}, err
+	})
+	handle(ws, "POST /manage/items/{id}/revert", http.StatusCreated, func(r *http.Request, p Principal, in struct {
+		To, Base int
+		Note     string
+	}) (any, error) {
+		v, err := e.Revert(r.Context(), r.PathValue("id"), in.To, in.Base, in.Note, p.Name)
+		return map[string]any{"version": v, "notes": []string{}}, err
+	})
+	handle(ws, "POST /manage/items/{id}/delete", http.StatusCreated, func(r *http.Request, p Principal, in struct {
+		Base int
+		Note string
+	}) (any, error) {
+		v, err := e.Delete(r.Context(), r.PathValue("id"), in.Base, in.Note, p.Name)
+		return map[string]any{"version": v, "notes": []string{}}, err
+	})
 	mux.HandleFunc("GET /manage/changes", func(w http.ResponseWriter, r *http.Request) {
 		n, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 		vs, err := e.Changes(r.Context(), cmp.Or(n, 200))
@@ -148,18 +118,10 @@ func manageRoutes(mux *http.ServeMux, e *engine.Engine, who Who, log *slog.Logge
 	})
 	mux.HandleFunc("GET /manage/export", func(w http.ResponseWriter, r *http.Request) { export(w, r, e, reply) })
 	// Custom tools: secrets (names only, ever), an MCP server's tools, and the Test call.
-	mux.HandleFunc("GET /manage/secrets", func(w http.ResponseWriter, r *http.Request) {
-		ss, err := e.Secrets(r.Context())
-		reply(w, 200, ss, err)
+	get("GET /manage/secrets", func(r *http.Request) (any, error) { return e.Secrets(r.Context()) })
+	handle(ws, "POST /manage/secrets", http.StatusCreated, func(r *http.Request, p Principal, in struct{ Name, Value, Origin string }) (any, error) {
+		return map[string]string{"name": in.Name}, e.SetSecret(r.Context(), in.Name, in.Value, in.Origin, p.Name) // never the value
 	})
-	mux.HandleFunc("POST /manage/secrets", admin(log, who, func(w http.ResponseWriter, r *http.Request, p Principal) {
-		var in struct{ Name, Value, Origin string }
-		err := body(w, r, &in)
-		if err == nil {
-			err = e.SetSecret(r.Context(), in.Name, in.Value, in.Origin, p.Name)
-		}
-		answer(w, http.StatusCreated, map[string]string{"name": in.Name}, err) // never the value
-	}))
 	mux.HandleFunc("POST /manage/secrets/{name}/delete", admin(log, who, func(w http.ResponseWriter, r *http.Request, p Principal) {
 		err := e.DeleteSecret(r.Context(), r.PathValue("name"), p.Name)
 		answer(w, 200, map[string]string{"name": r.PathValue("name")}, err)
@@ -168,26 +130,39 @@ func manageRoutes(mux *http.ServeMux, e *engine.Engine, who Who, log *slog.Logge
 		d, err := e.Discover(r.Context(), r.PathValue("id")) // it connects out: an admin's only
 		answer(w, 200, d, err)
 	}))
-	mux.HandleFunc("POST /manage/items/{id}/import", admin(log, who, func(w http.ResponseWriter, r *http.Request, p Principal) {
-		var in struct {
-			Tools       []string
-			OfferToLead bool
+	handle(ws, "POST /manage/items/{id}/import", http.StatusCreated, func(r *http.Request, p Principal, in struct {
+		Tools       []string
+		OfferToLead bool
+	}) (any, error) {
+		return e.Import(r.Context(), r.PathValue("id"), in.Tools, in.OfferToLead, p.Name)
+	})
+	handle(ws, "POST /manage/items/{id}/test", 200, func(r *http.Request, p Principal, in engine.TestIn) (any, error) {
+		return e.TestCall(r.Context(), r.PathValue("id"), in, p.Name)
+	})
+}
+
+// writes is what an admin's write route needs (handle).
+type writes struct {
+	mux    *http.ServeMux
+	log    *slog.Logger
+	who    Who
+	answer func(http.ResponseWriter, int, any, error)
+}
+
+// handle mounts an admin's write at route: its body decoded strictly into an In, fn's answer at code.
+func handle[In any](ws writes, route string, code int, fn func(*http.Request, Principal, In) (any, error)) {
+	ws.mux.HandleFunc(route, admin(ws.log, ws.who, func(w http.ResponseWriter, r *http.Request, p Principal) {
+		var in In
+		var out any
+		d := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20)) // an item's files: a skill's are at most 17 × 64 KiB
+		d.DisallowUnknownFields()
+		err := d.Decode(&in)
+		if err != nil {
+			err = fmt.Errorf("%w: the body is not the expected JSON object: %v", engine.ErrBadTask, err)
+		} else {
+			out, err = fn(r, p, in)
 		}
-		var out []engine.ImportResult
-		err := body(w, r, &in)
-		if err == nil {
-			out, err = e.Import(r.Context(), r.PathValue("id"), in.Tools, in.OfferToLead, p.Name)
-		}
-		answer(w, http.StatusCreated, out, err)
-	}))
-	mux.HandleFunc("POST /manage/items/{id}/test", admin(log, who, func(w http.ResponseWriter, r *http.Request, p Principal) {
-		var in engine.TestIn
-		var out engine.TestResult
-		err := body(w, r, &in)
-		if err == nil {
-			out, err = e.TestCall(r.Context(), r.PathValue("id"), in, p.Name)
-		}
-		answer(w, 200, out, err)
+		ws.answer(w, code, out, err)
 	}))
 }
 
