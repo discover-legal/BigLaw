@@ -153,7 +153,7 @@ func (r remoteTool) Call(ctx context.Context, c agent.Call) (agent.Result, error
 	case !r.t.Enabled:
 		return agent.Result{}, agent.Fail(r.t.Name + " is disabled by an admin: use another tool")
 	case r.e.remote.policy.Off:
-		return agent.Result{}, agent.Fail(r.t.Name + " is off: this server runs without sign-in, so it makes no custom outbound calls; use another tool")
+		return agent.Result{}, agent.Fail(r.t.Name + " is off: this server runs without a real admin, so it makes no custom outbound calls; use another tool")
 	}
 	var args any
 	if err := json.Unmarshal(c.Input, &args); err != nil {

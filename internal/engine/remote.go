@@ -43,7 +43,8 @@ import (
 // port), added as one header, and redacted from everything the remote end sends back (its value with
 // and without its prefix, base64, URL and JSON forms); they never reach the API, a log line, an
 // error, the snapshot, the export or a model. An answer is untrusted data from outside the matter,
-// labelled so in its output. With no signed-in admin (--allow-no-auth) all of it is off (Off).
+// labelled so in its output. With no real admin (--allow-no-auth, --admin-without-auth) all of it is
+// off (Off).
 
 // Remote call bounds.
 const (
@@ -68,7 +69,7 @@ var ErrForbidden = errors.New("engine: forbidden")
 
 // errRemoteOff is the refusal of every secret and custom outbound call when the server runs with
 // no signed-in admin (RemotePolicy.Off).
-var errRemoteOff = fmt.Errorf("%w: secrets and custom tools' outbound calls need a signed-in admin, and this server runs without sign-in (--allow-no-auth): until PR 8's sign-in they work only when BigLaw runs on loopback without that flag (README § Exposure)", ErrForbidden)
+var errRemoteOff = fmt.Errorf("%w: secrets and custom tools' outbound calls need a real admin, and this server runs without one (--allow-no-auth or --admin-without-auth): until PR 8's sign-in they work only when BigLaw serves on loopback with neither flag (README § Exposure)", ErrForbidden)
 
 // errRemoteDeadline is the cause of a call's own 30 s deadline (withRemoteDeadline).
 var errRemoteDeadline = errors.New("remote: no answer within 30 s (the whole call)")
@@ -82,7 +83,7 @@ func withRemoteDeadline(ctx context.Context) (context.Context, context.CancelFun
 // RemotePolicy is what remote calls may reach. The zero value is production's: public addresses
 // over https only. Tests (a local fake server) allow loopback and trust their server's certificate.
 type RemotePolicy struct {
-	Off           bool           // no signed-in admin (serve --allow-no-auth): no secret is set or sent and no custom call made
+	Off           bool           // no real admin (serve --allow-no-auth or --admin-without-auth): no secret is set or sent and no custom call made
 	AllowLoopback bool           // tests only: 127.0.0.0/8 and ::1 on any port (never set by cmd/biglaw)
 	RootCAs       *x509.CertPool // tests only: the httptest server's certificate
 }
