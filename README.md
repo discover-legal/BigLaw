@@ -24,7 +24,7 @@ PostgreSQL database. Licensed Apache-2.0 (`LICENSE`, `NOTICE`).
 | Agent runtime | `internal/agent/` (`tool.go`, `registry.go`, `schema.go`, `loop.go`, `budget.go`, `policy.go`, `bandit.go`) | The `Tool` interface and its single registry (definitions frozen at registration), JSON-schema validation of every tool input and output, one bounded loop for the lead and its subagents, the budget ledger, and the tool bandit (§ Agent runtime). The memo workflow drives it (below); a step log makes it resumable |
 | Engine | `internal/engine/` (+ `specs/`, `packs/`; migrations `0005_runs.sql`, `0006_figure_reads.sql`, `0007_figure_reads_scope.sql`) | The memo workflow: the lead agent and its 12 tools, the ledger, the evidence subagents with Go-side quote verification, the figure reader, the sweep, the three-critic committee, the policy, `finish` (lint, coverage, render), the human gates, grounding collapse, and durable runs (step log, lease and heartbeat, resume) (§ Memo workflow) |
 | API | `internal/api/` (+ `dist/`, the embedded UI) | The REST API (tasks, steps, SSE events, gates, cancel, cost, clients, Manage: `manage.go`) over the engine and the document routes, and the web UI built into the binary (§ Memo workflow, § Manage) |
-| Manage | `internal/engine/specset.go`, `manage.go`, `diff.go`, `hooks.go`, `skills.go`, `custom.go`, `remote.go` (+ `skills/`, `specs/use_skill.json`; migrations `0008_overrides.sql`, `0009_custom_tools.sql`, `0010_secret_origin.sql`), `internal/api/manage.go`, `ui/src/screens/Manage.tsx` | The catalogue of every agent, tool, pack, skill and hook a run uses, admins' versioned overrides in Postgres (strictly validated, compatibility-checked against what Go reads and writes), each task's snapshot of them, history, diffs, revert and a patch/zip export; skills and `use_skill`; admins' own subagents and MCP/HTTP tools with SSRF-checked calls and server-side secrets, and a metered Test call (§ Manage) |
+| Manage | `internal/engine/specset.go`, `manage.go`, `diff.go`, `hooks.go`, `skills.go`, `custom.go`, `remote.go`, `hookrules.go` (+ `skills/`, `specs/use_skill.json`; migrations `0008_overrides.sql`, `0009_custom_tools.sql`, `0010_secret_origin.sql`), `internal/api/manage.go`, `ui/src/screens/Manage.tsx` | The catalogue of every agent, tool, pack, skill and hook a run uses, admins' versioned overrides in Postgres (strictly validated, compatibility-checked against what Go reads and writes), each task's snapshot of them, history, diffs, revert and a patch/zip export; skills and `use_skill`; admins' own subagents and MCP/HTTP tools with SSRF-checked calls and server-side secrets, a metered Test call, and configurable hooks around calls, findings and finish (§ Manage) |
 | Memo tools | `internal/analysis/` (+ `belo.json`, `specs/*.json`), `internal/docs/register.go` (+ `specs/*.json`) | Deterministic tools over verified findings: `numbers` (exact `calc`, figure handles, key-figures table), `join_discrepancies`, the coverage checks `finish{op:"check"}` will run, the value normalisers and BELO-lite; and the `retrieve` / `verify_quote` adapters over documents (§ Agent runtime) |
 | `.docx` reader | `internal/docs/ooxml/` | Opens a `.docx`'s text parts only (body, footnotes, endnotes; 128 MiB decompression cap) and reads its visible text in one linear XML pass. The writer, the XML escapers, the part-preserving re-zip and tracked-change parse/apply are planned (PR 3d) |
 | Evaluation | `eval/` (`run.py`, `proofrun/`, `lab/`, `tests/`, `tasks/`, `e4/embeddings.json`) | The five synthetic proof-run matters (documents + answer keys), copied from `feat/proof-runs-multi-practice`, with their driver, scorer and the v1 comparison (`run.py`), the Harvey LAB driver (`lab/run.py`), and the Go gates E1/E2 that run them through the engine on a scripted model (§ Memo workflow). `eval/e4/embeddings.json` is E4's embeddings tape: today the **self-test** tape of a hash embedder, not a real model's (§ Documents, gate E4) |
@@ -1404,8 +1404,8 @@ each one in Manage (`#/manage`) or the routes above, with no rebuild:
   tools, `in`/`out` schemas, prompt) and the engine's passes (`sweep`, `committee`, `cover`, `finish`,
   `ledger` specs). **Tools**: the typed tool specs of `internal/analysis/specs`, `internal/docs/specs` and
   `internal/engine/specs/{exact_calc,figure_context,use_skill}.json`; their code stays Go.
-  **Packs**: jurisdiction and practice guidance (§ Memo workflow). **Skills**: below. **Hooks**: the Go
-  around some tools and subagents (`hooked`, `sheets`, `aliasJoin` in `register.go`), view only: what
+  **Packs**: jurisdiction and practice guidance (§ Memo workflow). **Skills**: below. **Hooks**:
+  configurable hooks (below), and the Go around some tools and subagents (`hooked`, `sheets`, `aliasJoin` in `register.go`), view only: what
   each does, the tool it wraps and its source, cut with `go/parser` from the engine files embedded
   (`hooks.go`). Each item shows its contents, built-in or override (its version), what it calls and
   who calls it (agents' allowed lists, the lead's list, and the Go callers), and its recent usage: lead
@@ -1567,6 +1567,42 @@ Limitations, as `candidates()` does for packs. **Starters** (all candidate): `de
 `figure-conflicts` and `requirement-deviation`, process guidance taken from the lead's prompt and the
 numbers, join_discrepancies and check_deviation specs (no legal content of their own); `deadlines`
 carries `examples.json`, the numbers calls its spec gives as examples.
+
+**Configurable hooks** (`internal/engine/hookrules.go`; items `rule.<name>`, files
+`internal/engine/specs/hooks/<name>.json`, created, edited, tested by a run and deleted in Manage like
+any item, in each task's snapshot). A rule is `{name, enabled, order, event, match, when, action,
+failure}`:
+- **Events:** `before_call` and `after_call` (every call `Runtime.Invoke` makes: the lead's, a
+  subagent's and Go's fan-out calls; `finish` itself is not one: its hook point is `task_finish`, so a
+  forced finish is never refused), `finding_admitted` (each new finding, after its quotes are verified,
+  before it is recorded) and `task_finish` (after finish's checks pass, before the deliverable renders).
+- **Matchers:** a tool or subagent name, a prefix ending in `*`, or `*`; `when` is an optional
+  condition on one field (`eq`, `ne`, `contains` (case-insensitive), `exists`, `absent`, `gt`, `lt`) of
+  the call's input (`after_call`: `input.*`, `output.*`), of the finding (`claim`, `issueId`,
+  `verified`, `low`, `documents`) or of the finish (`stop`).
+- **Actions:** `block` (a refusal the lead reads, with the message; `after_call`: the answer is
+  withheld, from the journal too; `finding_admitted`: the finding is quarantined, never in the memo;
+  `task_finish`: the submit is refused, or, on a forced finish, the refusal is a Limitations line);
+  `approve` (`before_call`: a hook gate opens with the call's input, the refused step commits and **the
+  run pauses at the gate** (`awaiting_gate`); the lawyer's decision resumes it with a note, and an
+  approved call goes through when the lead makes it again with the same input; `finding_admitted`: the
+  finding takes its own G7 gate); `check` (a named subagent whose input is `{event, subject, text}` and
+  whose output holds `verdict` (allow, block or annotate) and `reason`; its model calls spend from the
+  caller's budget and are metered with the call's step); `webhook` (an https POST of the event,
+  `{hook, event, taskId, subject, text, at}`, through the same SSRF-checked client, origin-bound secret
+  and off-without-a-real-admin rule as custom tools; `wait` blocks on a 2xx within 30 s, otherwise it is
+  sent in the background, at least once, its answer only logged); `limitation` (a Limitations line).
+- **Order:** rules run by `order`, then name; a block or a gate stops the rest for that event.
+- **Failure:** a rule that cannot run (a check unfunded, failed or answering no verdict, a waited
+  webhook that failed, a field it cannot compare) **fails closed** (blocks) or **open** (lets the event
+  through), as it says; a limitation or a webhook that does not wait never blocks.
+- **Journal:** every outcome (`allowed`, `blocked`, `gated`, `approved`, `annotated`, `noted`, `sent`,
+  `failed-open`, `failed-closed`) is a ledger row (kind `hookrun`, keyed by the lead step and its order
+  in it) written with the step, and a log line, so a crash and resume neither repeat nor lose one.
+- **Validation** at save: the event and action pair, the matcher and condition, that a named tool,
+  subagent or check agent exists with the check's schemas, the webhook URL and secret, a message of at
+  most 2,000 characters with no control or format characters, no Go hook's or reserved name; a
+  subagent a rule checks with cannot be deleted. A Test call runs the item alone, without the rules.
 
 ## Files
 

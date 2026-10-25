@@ -69,14 +69,15 @@ type Override struct {
 
 // Specs is a spec set: the built-in files with one snapshot's overrides over them, parsed.
 type Specs struct {
-	files    map[string][]byte
-	versions map[string]int // item id → its override's version (absent: the built-in)
-	specs    map[string]agent.Spec
-	paths    map[string]string // a spec's file, by its name
-	packs    []Pack
-	skills   []Skill
-	tools    map[string]CustomTool // custom tools by name (custom.go)
-	servers  map[string]Server     // MCP servers by name
+	files     map[string][]byte
+	versions  map[string]int // item id → its override's version (absent: the built-in)
+	specs     map[string]agent.Spec
+	paths     map[string]string // a spec's file, by its name
+	packs     []Pack
+	skills    []Skill
+	tools     map[string]CustomTool // custom tools by name (custom.go)
+	servers   map[string]Server     // MCP servers by name
+	hookRules map[string]HookRule   // configurable hooks by name (hookrules.go)
 }
 
 // builtinSpecs is the set with no overrides: what a test, or a task submitted before 0008, runs on.
@@ -90,7 +91,7 @@ var builtinSpecs = func() *Specs {
 
 // newSpecs builds the set of snap: each item's built-in files replaced by its override's.
 func newSpecs(snap Snapshot) (*Specs, error) {
-	s := &Specs{files: maps.Clone(builtin), versions: map[string]int{}, specs: map[string]agent.Spec{}, paths: map[string]string{}, tools: map[string]CustomTool{}, servers: map[string]Server{}}
+	s := &Specs{files: maps.Clone(builtin), versions: map[string]int{}, specs: map[string]agent.Spec{}, paths: map[string]string{}, tools: map[string]CustomTool{}, servers: map[string]Server{}, hookRules: map[string]HookRule{}}
 	for _, id := range slices.Sorted(maps.Keys(snap)) {
 		o := snap[id]
 		for _, f := range itemFiles(builtin, id) {
@@ -119,6 +120,12 @@ func newSpecs(snap Snapshot) (*Specs, error) {
 				return nil, fmt.Errorf("%s: %v", f, err)
 			}
 			s.servers[v.Name] = v
+		case strings.HasPrefix(f, hooksDir):
+			var h HookRule
+			if err := json.Unmarshal(data, &h); err != nil {
+				return nil, fmt.Errorf("%s: %v", f, err)
+			}
+			s.hookRules[h.Name] = h
 		case strings.HasSuffix(f, ".json") && strings.Contains(f, "/specs/"):
 			var sp agent.Spec
 			if err := json.Unmarshal(data, &sp); err != nil {
@@ -330,6 +337,8 @@ func itemOf(f string) string {
 		return "tool." + strings.TrimSuffix(path.Base(f), ".json")
 	case strings.HasPrefix(f, serversDir) && strings.HasSuffix(f, ".json"):
 		return "server." + strings.TrimSuffix(path.Base(f), ".json")
+	case strings.HasPrefix(f, hooksDir) && strings.HasSuffix(f, ".json"):
+		return "rule." + strings.TrimSuffix(path.Base(f), ".json")
 	case strings.HasPrefix(f, agentsDir):
 		return "agent." + strings.TrimSuffix(strings.TrimSuffix(path.Base(f), ".json"), ".md")
 	case strings.HasPrefix(f, skillsDir):

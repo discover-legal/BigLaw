@@ -103,6 +103,10 @@ func (e *Engine) execute(ctx context.Context, r *run) error {
 		return e.fail(ctx, r, r.collapse, errCollapse)
 	case ctx.Err() != nil || errors.Is(err, errLease):
 		return err // stopped, cancelled or taken over: the run's state is as committed
+	case errors.Is(err, errHeld): // a hook's approve opened a gate: the run waits for the lawyer (Decide resumes it)
+		_, err = e.db.ExecContext(ctx, `UPDATE tasks SET status = 'awaiting_gate', stop_reason = 'awaiting_gate', lease_owner = NULL, lease_until = NULL, updated_at = now()
+			WHERE id = $1 AND lease_owner = $2 AND status = 'running'`, r.t.ID, e.owner)
+		return err
 	case errors.Is(err, agent.ErrBudget), errors.Is(err, agent.ErrTurnCap), errors.Is(err, errMaxSteps):
 		r.forced = map[bool]string{true: "max_steps", false: "budget_exhausted"}[errors.Is(err, errMaxSteps) || errors.Is(err, agent.ErrTurnCap)]
 		var last int
@@ -185,7 +189,7 @@ func (e *Engine) finished(ctx context.Context, r *run) error {
 	}
 	stop := cmpStr(r.forced != "", r.forced, "finished")
 	for _, g := range gs {
-		if g.Kind == "finding" && g.Decision == "" {
+		if (g.Kind == "finding" || g.Kind == "hook") && g.Decision == "" {
 			stop = "awaiting_gate"
 		}
 	}

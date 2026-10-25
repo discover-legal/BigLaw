@@ -13,6 +13,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"sync/atomic"
 
 	"github.com/discover-legal/BigLaw/internal/agent"
 	"github.com/discover-legal/BigLaw/internal/analysis"
@@ -87,6 +88,9 @@ func (e *Engine) runtime(r *run) (*agent.Runtime, error) {
 		if err := rt.Reg.Register(t); err != nil {
 			return nil, err
 		}
+	}
+	if len(sp.hookRules) > 0 {
+		rt.Hooks = hookRunner{e: e, r: r, rt: rt, sp: sp, seq: &atomic.Int64{}}
 	}
 	return rt, nil
 }
@@ -509,6 +513,11 @@ func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 				out.Notes = append(out.Notes, all[i].FID+": "+n)
 			}
 			continue
+		}
+		if h, ok := rt.Hooks.(hookRunner); ok { // finding_admitted's rules: quarantine, gate or annotate it
+			if _, err := h.findingHooks(ctx, c, b, &f); err != nil {
+				return out, 0, err
+			}
 		}
 		f.FID = nextID("F", len(all))
 		all = append(all, f)

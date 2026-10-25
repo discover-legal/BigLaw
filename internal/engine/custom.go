@@ -635,7 +635,7 @@ func (e *Engine) TestCall(ctx context.Context, id string, in TestIn, author stri
 	if err != nil {
 		return TestResult{}, invalid("", "%s", strings.TrimPrefix(err.Error(), "agent: "))
 	}
-	rt.Policy, rt.Journal = nil, testJournal{e, t.ID}
+	rt.Policy, rt.Journal, rt.Hooks = nil, testJournal{e, t.ID}, nil // a Test call is the item alone: no configurable hooks
 	ctx, cancel := context.WithTimeout(withSpecs(ctx, sp), 2*time.Minute)
 	defer cancel()
 	start := time.Now()

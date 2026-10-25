@@ -381,20 +381,30 @@ func (e *Engine) Decide(ctx context.Context, id, gateID string, approve bool, re
 			if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM ledger WHERE task_id = $1 AND kind = $2 AND data->>'decision' IS NULL`, t.ID, kGate).Scan(&open); err != nil || open > 0 {
 				return err
 			}
-			rows, err := tx.QueryContext(ctx, `SELECT data FROM ledger WHERE task_id = $1 AND kind = $2 AND data->>'kind' = 'finding' ORDER BY seq`, t.ID, kGate)
+			rows, err := tx.QueryContext(ctx, `SELECT data FROM ledger WHERE task_id = $1 AND kind = $2 AND data->>'kind' IN ('finding', 'hook') ORDER BY seq`, t.ID, kGate)
 			if err != nil {
 				return err
 			}
-			note = "The lawyer decided the finding gates:"
+			note = "The lawyer decided the gates:"
+			hooked := false
 			for rows.Next() {
 				var x Gate
 				var d []byte
 				_ = rows.Scan(&d)
 				_ = json.Unmarshal(d, &x)
-				note += fmt.Sprintf("\n- %s %s%s", x.FindingID, x.Decision, map[bool]string{true: ": " + x.Reason, false: ""}[x.Reason != ""])
+				what := x.FindingID
+				if x.Kind == "hook" {
+					what, hooked = "the call of "+x.Subject+" held by hook "+x.Hook+" (gate "+x.GateID+")", true
+				}
+				note += fmt.Sprintf("\n- %s %s%s", what, x.Decision, map[bool]string{true: ": " + x.Reason, false: ""}[x.Reason != ""])
 			}
 			rows.Close()
-			note += "\nRejected findings are out of the memo: redraft what cited them, then call finish again."
+			if strings.Contains(note, "\n- F") {
+				note += "\nRejected findings are out of the memo: redraft what cited them, then call finish again."
+			}
+			if hooked {
+				note += " An approved call goes through when you make it again with the same input; a rejected one must not be made: do the work without it, or disclose what it would have found."
+			}
 		}
 		_, err = tx.ExecContext(ctx, `INSERT INTO task_steps (task_id, step, kind, tool, status, output)
 			SELECT $1, coalesce(max(step), 0) + 1, 'note', 'gate', 'committed', $2 FROM task_steps WHERE task_id = $1`, t.ID, mustJSON(map[string]string{"text": note}))

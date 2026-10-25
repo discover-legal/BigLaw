@@ -153,8 +153,11 @@ type Cycle struct {
 // Gate is a human gate: the deliverable, or one finding.
 type Gate struct {
 	GateID    string `json:"gateId"`
-	Kind      string `json:"kind"` // deliverable or finding
+	Kind      string `json:"kind"` // deliverable, finding or hook (a configurable hook's approve: a call waits for a lawyer)
 	FindingID string `json:"findingId,omitempty"`
+	Hook      string `json:"hook,omitempty"`     // a hook gate's rule
+	Subject   string `json:"subject,omitempty"`  // the tool or subagent its call is of
+	Detail    string `json:"detail,omitempty"`   // the rule's message and the call's input (bounded)
 	Decision  string `json:"decision,omitempty"` // approved or rejected; "" while open
 	Reason    string `json:"reason,omitempty"`
 	DecidedAt string `json:"decidedAt,omitempty"`

@@ -129,7 +129,11 @@ change. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`, not here.
   `ledger`) in a subagent's allowed list + class `free` only for subagents built free; saves are serial
   (`locked`: advisory lock, one tx); any change to a pack's or skill's content (every file, all front
   matter but status/reviewedBy) resets it to candidate unless the save names a new reviewer; the reader's and judge's cache keys hash the run's set (`Specs.agentHash`: spec, prompt and every allowed tool's spec).
-  Hooks are view only (source cut from embedded files). Skills: `skills/<name>/SKILL.md` + reference
+  Go hooks are view only (source cut from embedded files); configurable hooks (`hookrules.go`, items
+  `rule.<name>` in `specs/hooks/`) run through `Runtime.Hooks` (Before/After around every Invoke, their
+  usage in the step's), `admit` (`findingHooks`) and `finish` (`finishHooks`), every outcome a `hookrun`
+  ledger row written with its step; an `approve` gate pauses the run (`run.hold` → `errHeld` →
+  `awaiting_gate`) until `Decide` resumes it. Skills: `skills/<name>/SKILL.md` + reference
   files; the brief lists names and descriptions (≤ 40, ≤ 4 KiB); `use_skill` pages a body or file and
   records it (ledger kind `skill`); a candidate skill read is a Limitations line. `api.Principal` is the
   who-seam: until PR 8 every request is the local user (`api.LocalUser`): an admin on loopback, read-only
