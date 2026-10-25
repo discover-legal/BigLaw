@@ -109,27 +109,27 @@ func newSpecs(snap Snapshot) (*Specs, error) {
 		data := s.files[f]
 		switch {
 		case strings.HasPrefix(f, toolsDir):
-			var t CustomTool
-			if err := json.Unmarshal(data, &t); err != nil {
-				return nil, fmt.Errorf("%s: %v", f, err)
+			t, err := decodeFile[CustomTool](f, data)
+			if err != nil {
+				return nil, err
 			}
 			s.tools[t.Name], s.specs[t.Name] = t, customSpec(t)
 		case strings.HasPrefix(f, serversDir):
-			var v Server
-			if err := json.Unmarshal(data, &v); err != nil {
-				return nil, fmt.Errorf("%s: %v", f, err)
+			v, err := decodeFile[Server](f, data)
+			if err != nil {
+				return nil, err
 			}
 			s.servers[v.Name] = v
 		case strings.HasPrefix(f, hooksDir):
-			var h HookRule
-			if err := json.Unmarshal(data, &h); err != nil {
-				return nil, fmt.Errorf("%s: %v", f, err)
+			h, err := decodeFile[HookRule](f, data)
+			if err != nil {
+				return nil, err
 			}
 			s.hookRules[h.Name] = h
 		case strings.HasSuffix(f, ".json") && strings.Contains(f, "/specs/"):
-			var sp agent.Spec
-			if err := json.Unmarshal(data, &sp); err != nil {
-				return nil, fmt.Errorf("%s: %v", f, err)
+			sp, err := decodeFile[agent.Spec](f, data)
+			if err != nil {
+				return nil, err
 			}
 			s.specs[sp.Name], s.paths[sp.Name] = sp, f
 		case strings.HasPrefix(f, engineDir+"packs/"):
@@ -153,6 +153,15 @@ func newSpecs(snap Snapshot) (*Specs, error) {
 		}
 	}
 	return s, nil
+}
+
+// decodeFile is a set file's JSON as a T, its error naming the file.
+func decodeFile[T any](f string, data []byte) (T, error) {
+	var v T
+	if err := json.Unmarshal(data, &v); err != nil {
+		return v, fmt.Errorf("%s: %v", f, err)
+	}
+	return v, nil
 }
 
 type specsKey struct{}
@@ -334,13 +343,13 @@ func (s *Specs) skillIndex() string {
 func itemOf(f string) string {
 	switch rest, _ := strings.CutPrefix(f, engineDir); {
 	case strings.HasPrefix(f, toolsDir) && strings.HasSuffix(f, ".json"):
-		return "tool." + strings.TrimSuffix(path.Base(f), ".json")
+		return "tool." + fileStem(f)
 	case strings.HasPrefix(f, serversDir) && strings.HasSuffix(f, ".json"):
-		return "server." + strings.TrimSuffix(path.Base(f), ".json")
+		return "server." + fileStem(f)
 	case strings.HasPrefix(f, hooksDir) && strings.HasSuffix(f, ".json"):
-		return "rule." + strings.TrimSuffix(path.Base(f), ".json")
+		return "rule." + fileStem(f)
 	case strings.HasPrefix(f, agentsDir):
-		return "agent." + strings.TrimSuffix(strings.TrimSuffix(path.Base(f), ".json"), ".md")
+		return "agent." + strings.TrimSuffix(fileStem(f), ".md")
 	case strings.HasPrefix(f, skillsDir):
 		return "skill." + strings.SplitN(strings.TrimPrefix(f, skillsDir), "/", 2)[0]
 	case strings.HasPrefix(rest, "packs/") && strings.HasSuffix(f, ".md"):
@@ -348,7 +357,7 @@ func itemOf(f string) string {
 	case strings.HasPrefix(rest, "specs/") && strings.HasSuffix(f, ".md"):
 		return "prompt." + strings.TrimSuffix(path.Base(f), ".md")
 	case strings.HasSuffix(f, ".json") && strings.Contains(f, "/specs/"):
-		name := strings.TrimSuffix(path.Base(f), ".json")
+		name := fileStem(f)
 		if slices.Contains(passes, name) {
 			return "pass." + name
 		}

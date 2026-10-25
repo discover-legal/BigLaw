@@ -203,6 +203,8 @@ export interface SpecVersion {
   builtin: boolean; deleted: boolean; from: number; restored: number | null; author: string; note: string; createdAt: string;
   /** A change log entry that is not a version (a secret set or deleted, a Test call). */
   event?: boolean;
+  /** Why History will not revert to it (a deletion of what may not be deleted). */
+  unrevertable?: string;
 }
 export interface SaveResult { version: SpecVersion; notes: string[] }
 export interface Problem { file: string; message: string }

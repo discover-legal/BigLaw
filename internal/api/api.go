@@ -69,15 +69,10 @@ func handler(d *docs.Service, e *engine.Engine, ui fs.FS, log *slog.Logger, who 
 			if code == 500 {
 				log.Error("api: request failed", "err", err)
 			}
-			v = map[string]string{"error": msg, "errorType": kind}
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(code)
-			json.NewEncoder(w).Encode(v)
+			docs.WriteJSON(w, code, map[string]string{"error": msg, "errorType": kind})
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(code)
-		json.NewEncoder(w).Encode(v)
+		docs.WriteJSON(w, code, v)
 	}
 	mux.HandleFunc("GET /clients", func(w http.ResponseWriter, r *http.Request) {
 		ds, err := d.List(r.Context(), "") // until PR 8's clients: one entry, a matter per matter number

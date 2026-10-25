@@ -13,7 +13,6 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
-	"path"
 	"reflect"
 	"regexp"
 	"slices"
@@ -48,12 +47,15 @@ type CustomTool struct {
 	Class       string          `json:"class"`
 	Description string          `json:"description"`
 	In          json.RawMessage `json:"in"`
-	MCP         *struct {
-		Server string `json:"server"` // a server item's name
-		Tool   string `json:"tool"`   // the server's own name for it
-	} `json:"mcp,omitempty"`
-	HTTP     *HTTPTarget `json:"http,omitempty"`
-	Imported *Imported   `json:"imported,omitempty"`
+	MCP         *MCPTarget      `json:"mcp,omitempty"`
+	HTTP        *HTTPTarget     `json:"http,omitempty"`
+	Imported    *Imported       `json:"imported,omitempty"`
+}
+
+// MCPTarget is an MCP tool's server and the server's own name for the tool.
+type MCPTarget struct {
+	Server string `json:"server"` // a server item's name
+	Tool   string `json:"tool"`
 }
 
 // Imported is an imported tool's third-party text: the description its MCP server gave (cleaned,
@@ -196,7 +198,7 @@ func (r remoteTool) Call(ctx context.Context, c agent.Call) (agent.Result, error
 		if ctx.Err() != nil {
 			return agent.Result{}, ctx.Err()
 		}
-		return agent.Result{}, agent.Fail(r.t.Name + ": " + strings.TrimPrefix(err.Error(), "remote: "))
+		return agent.Result{}, agent.Fail(r.t.Name + ": " + remoteMsg(err))
 	}
 	pg := agent.NewPage()
 	page := agent.TakeText(pg, text)
@@ -298,11 +300,7 @@ type SecretView struct {
 
 // Secrets lists the secrets (names, who set them, when, and the items naming them).
 func (e *Engine) Secrets(ctx context.Context) ([]SecretView, error) {
-	snap, _, err := e.current(ctx, e.db)
-	if err != nil {
-		return nil, err
-	}
-	sp, err := newSpecs(snap)
+	sp, _, _, err := e.currentSpecs(ctx, e.db)
 	if err != nil {
 		return nil, err
 	}
@@ -351,7 +349,7 @@ func (e *Engine) SetSecret(ctx context.Context, name, value, origin, author stri
 		return invalid("", "origin: the https URL of the server the secret is for, scheme, host and port only (https://api.example.com or https://api.example.com:8443): it is sent nowhere else")
 	}
 	if err := e.remote.checkURL(origin); err != nil {
-		return invalid("", "origin: %s", strings.TrimPrefix(err.Error(), "remote: "))
+		return invalid("", "origin: %s", remoteMsg(err))
 	}
 	ctx = context.WithoutCancel(ctx) // the change log entry commits with the secret, whatever the request does
 	err := e.st.InTx(ctx, func(tx *sql.Tx) error {
@@ -407,10 +405,8 @@ func (e *Engine) Discover(ctx context.Context, id string) (Discovery, error) {
 		return Discovery{}, err
 	}
 	sec, err := e.secretValue(ctx, srv.Auth)
-	if errors.Is(err, ErrForbidden) {
-		return Discovery{}, err
-	} else if err != nil {
-		return Discovery{}, invalid("", "%s", strings.TrimPrefix(err.Error(), "remote: "))
+	if err != nil {
+		return Discovery{}, discoverErr(err)
 	}
 	cctx, cancel := withRemoteDeadline(ctx)
 	defer cancel()
@@ -420,12 +416,11 @@ func (e *Engine) Discover(ctx context.Context, id string) (Discovery, error) {
 		tools, err = s.listTools(cctx)
 		s.Close(cctx)
 	}
-	err = sec.scrub(err) // the one place Discover's errors pass: never the key, whatever the server sent
-	if errors.Is(err, ErrForbidden) {
-		return Discovery{}, err
-	} else if err != nil {
-		e.log.Info("remote: discover", "server", srv.Name, "status", err.Error())
-		return Discovery{}, invalid("", "%s", strings.TrimPrefix(err.Error(), "remote: "))
+	if err = sec.scrub(err); err != nil { // the one place Discover's errors pass: never the key, whatever the server sent
+		if !errors.Is(err, ErrForbidden) {
+			e.log.Info("remote: discover", "server", srv.Name, "status", err.Error())
+		}
+		return Discovery{}, discoverErr(err)
 	}
 	d := Discovery{Server: srv.Name, ServerName: untrusted(sec.redact(s.ServerName)), Protocol: s.Protocol, Tools: []RemoteTool{}}
 	for _, rt := range tools {
@@ -446,12 +441,17 @@ func (e *Engine) Discover(ctx context.Context, id string) (Discovery, error) {
 	return d, nil
 }
 
-func (e *Engine) serverOf(ctx context.Context, id string) (Server, *Specs, error) {
-	snap, _, err := e.current(ctx, e.db)
-	if err != nil {
-		return Server{}, nil, err
+// discoverErr is a Discover failure as the admin reads it: a refusal of who asks as it is, any other
+// a problem with the server (422).
+func discoverErr(err error) error {
+	if errors.Is(err, ErrForbidden) {
+		return err
 	}
-	sp, err := newSpecs(snap)
+	return invalid("", "%s", remoteMsg(err))
+}
+
+func (e *Engine) serverOf(ctx context.Context, id string) (Server, *Specs, error) {
+	sp, _, _, err := e.currentSpecs(ctx, e.db)
 	if err != nil {
 		return Server{}, nil, err
 	}
@@ -550,12 +550,7 @@ func (e *Engine) Import(ctx context.Context, id string, names []string, offer bo
 
 // importedTool is the custom tool an import makes of rt (disabled, its text not yet accepted).
 func importedTool(name, server string, rt RemoteTool, offer bool) CustomTool {
-	t := CustomTool{Name: name, Kind: "mcp", Enabled: false, OfferToLead: offer, Class: "free", In: rt.In, Imported: &Imported{Text: rt.Description}}
-	t.MCP = &struct {
-		Server string `json:"server"`
-		Tool   string `json:"tool"`
-	}{server, rt.Name}
-	return t
+	return CustomTool{Name: name, Kind: "mcp", Enabled: false, OfferToLead: offer, Class: "free", In: rt.In, MCP: &MCPTarget{server, rt.Name}, Imported: &Imported{Text: rt.Description}}
 }
 
 // exampleOf is an example input for a converted schema ({} when it does not compile).
@@ -655,11 +650,7 @@ func (e *Engine) TestCall(ctx context.Context, id string, in TestIn, author stri
 			return TestResult{}, invalid("", "document %s does not exist", d)
 		}
 	}
-	snap, _, err := e.current(ctx, e.db)
-	if err != nil {
-		return TestResult{}, err
-	}
-	sp, err := newSpecs(snap)
+	sp, _, _, err := e.currentSpecs(ctx, e.db)
 	if err != nil {
 		return TestResult{}, err
 	}
@@ -758,15 +749,13 @@ func (j testJournal) Record(ctx context.Context, s agent.Step) error {
 
 func (e *Engine) validateCustomTool(f, text string, bad func(string, string, ...any)) {
 	var t CustomTool
-	d := json.NewDecoder(strings.NewReader(text))
-	d.DisallowUnknownFields()
-	if err := d.Decode(&t); err != nil || d.More() {
-		bad(f, "not one well-formed custom tool (fields: name, kind, enabled, offerToLead, class, description, in, mcp or http, imported): %v", cmpErr(err, errors.New("more after the object")))
+	if err := strictDecode(text, &t); err != nil {
+		bad(f, "not one well-formed custom tool (fields: name, kind, enabled, offerToLead, class, description, in, mcp or http, imported): %v", err)
 		return
 	}
 	switch {
-	case t.Name != strings.TrimSuffix(path.Base(f), ".json"):
-		bad(f, "name: must be %q (the file's)", strings.TrimSuffix(path.Base(f), ".json"))
+	case t.Name != fileStem(f):
+		bad(f, "name: must be %q (the file's)", fileStem(f))
 	case t.Kind == "mcp" && (t.MCP == nil || t.HTTP != nil || t.MCP.Server == "" || t.MCP.Tool == ""):
 		bad(f, "an mcp tool names its server and the server's tool (mcp.server, mcp.tool) and has no http")
 	case t.Kind == "http" && (t.HTTP == nil || t.MCP != nil):
@@ -793,7 +782,7 @@ func (e *Engine) validateCustomTool(f, text string, bad func(string, string, ...
 	}
 	if t.HTTP != nil {
 		if err := e.remote.checkURL(t.HTTP.URL); err != nil {
-			bad(f, "http.url: %s", strings.TrimPrefix(err.Error(), "remote: "))
+			bad(f, "http.url: %s", remoteMsg(err))
 		}
 		if t.HTTP.Method != "GET" && t.HTTP.Method != "POST" {
 			bad(f, "http.method: GET or POST")
@@ -804,17 +793,15 @@ func (e *Engine) validateCustomTool(f, text string, bad func(string, string, ...
 
 func (e *Engine) validateServer(f, text string, bad func(string, string, ...any)) {
 	var v Server
-	d := json.NewDecoder(strings.NewReader(text))
-	d.DisallowUnknownFields()
-	if err := d.Decode(&v); err != nil || d.More() {
-		bad(f, "not one well-formed MCP server (fields: name, url, enabled, secret, header, prefix): %v", cmpErr(err, errors.New("more after the object")))
+	if err := strictDecode(text, &v); err != nil {
+		bad(f, "not one well-formed MCP server (fields: name, url, enabled, secret, header, prefix): %v", err)
 		return
 	}
-	if v.Name != strings.TrimSuffix(path.Base(f), ".json") {
-		bad(f, "name: must be %q (the file's)", strings.TrimSuffix(path.Base(f), ".json"))
+	if v.Name != fileStem(f) {
+		bad(f, "name: must be %q (the file's)", fileStem(f))
 	}
 	if err := e.remote.checkURL(v.URL); err != nil {
-		bad(f, "url: %s", strings.TrimPrefix(err.Error(), "remote: "))
+		bad(f, "url: %s", remoteMsg(err))
 	}
 	validateAuth(f, "", v.Auth, bad)
 }

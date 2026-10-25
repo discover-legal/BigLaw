@@ -23,15 +23,13 @@ import (
 func (e *Engine) execute(ctx context.Context, r *run) error {
 	sp, err := newSpecs(r.t.Specs) // the task's snapshot: the same on every resume
 	if err != nil {
-		return e.fail(ctx, r, "", fmt.Errorf("engine: the task's spec snapshot does not load: %w", err))
+		return e.fail(ctx, r, "", invalid("", "the task's spec snapshot does not load: %s", strings.TrimPrefix(brokenSet(r.t.Specs, "", err).Error(), "engine: ")))
 	}
 	r.specs, ctx = sp, withSpecs(ctx, sp)
 	if gs, err := load[Gate](ctx, e, r.t.ID, kGate); err != nil { // a hook gate still undecided (a crash between its step and the pause): pause again (#58 r1 M2)
 		return err
 	} else if slices.ContainsFunc(gs, func(g Gate) bool { return g.Kind == "hook" && g.Decision == "" }) {
-		_, err = e.db.ExecContext(ctx, `UPDATE tasks SET status = 'awaiting_gate', stop_reason = 'awaiting_gate', lease_owner = NULL, lease_until = NULL, updated_at = now()
-			WHERE id = $1 AND lease_owner = $2 AND status = 'running'`, r.t.ID, e.owner)
-		return err
+		return e.pauseForGate(ctx, r)
 	}
 	var spent agent.Usage
 	var replay []agent.Step
@@ -122,9 +120,7 @@ func (e *Engine) execute(ctx context.Context, r *run) error {
 	case ctx.Err() != nil || errors.Is(err, errLease):
 		return err // stopped, cancelled or taken over: the run's state is as committed
 	case errors.Is(err, errHeld): // a hook's approve opened a gate: the run waits for the lawyer (Decide resumes it)
-		_, err = e.db.ExecContext(ctx, `UPDATE tasks SET status = 'awaiting_gate', stop_reason = 'awaiting_gate', lease_owner = NULL, lease_until = NULL, updated_at = now()
-			WHERE id = $1 AND lease_owner = $2 AND status = 'running'`, r.t.ID, e.owner)
-		return err
+		return e.pauseForGate(ctx, r)
 	case errors.Is(err, agent.ErrBudget), errors.Is(err, agent.ErrTurnCap), errors.Is(err, errMaxSteps):
 		r.forced = map[bool]string{true: "max_steps", false: "budget_exhausted"}[errors.Is(err, errMaxSteps) || errors.Is(err, agent.ErrTurnCap)]
 		var last int
@@ -265,4 +261,11 @@ func ErrorType(err error) (int, string, string) {
 		}
 	}
 	return 500, "internal", "internal error (logged)"
+}
+
+// pauseForGate parks a run a hook's gate holds (awaiting_gate, lease released) until Decide resumes it.
+func (e *Engine) pauseForGate(ctx context.Context, r *run) error {
+	_, err := e.db.ExecContext(ctx, `UPDATE tasks SET status = 'awaiting_gate', stop_reason = 'awaiting_gate', lease_owner = NULL, lease_until = NULL, updated_at = now()
+		WHERE id = $1 AND lease_owner = $2 AND status = 'running'`, r.t.ID, e.owner)
+	return err
 }

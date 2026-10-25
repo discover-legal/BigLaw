@@ -99,10 +99,9 @@ function Detail(props: { id: string; tab: string; admin: boolean; changed: () =>
   if (!d.data) return <Loading label="Loading the item" />;
   const it = d.data;
   const live = api.mode === 'live';
-  const tabs: [string, string][] = [['contents', 'Contents'], ...(it.editable && props.admin && !it.deleted ? [['edit', 'Edit'] as [string, string]] : []),
-    ...(it.editable && live ? [['history', 'History'] as [string, string]] : []),
-    ...(props.admin && live && !it.deleted && (it.kind === 'subagent' || it.section === 'tools' && it.kind !== 'MCP server') ? [['test', 'Test'] as [string, string]] : []),
-    ...(props.admin && live && !it.deleted && it.kind === 'MCP server' ? [['import', 'Import tools'] as [string, string]] : [])];
+  const can = props.admin && live && !it.deleted;
+  const tabs = ([['contents', 'Contents', true], ['edit', 'Edit', it.editable && props.admin && !it.deleted], ['history', 'History', it.editable && live],
+    ['test', 'Test', can && (it.kind === 'subagent' || it.section === 'tools' && it.kind !== 'MCP server')], ['import', 'Import tools', can && it.kind === 'MCP server']] as const).filter((t) => t[2]);
   const tab = tabs.some(([t]) => t === props.tab) ? props.tab : 'contents';
   const url = (f: 'patch' | 'zip') => api.exportUrl(f, it.id);
   return (
@@ -143,6 +142,14 @@ function Contents(props: { item: ManageDetail }) {
   return <>{Object.entries(it.content).map(([path, text]) => <Code key={path} title={<code>{path}</code>} text={text} />)}</>;
 }
 
+/** useRun is an action's busy flag and error: run(p, then) shows p's failure, or clears it and calls then. */
+function useRun() {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const run = <T,>(p: Promise<T>, then: (v: T) => void, fail?: (e: Error) => void) => { setBusy(true); p.then((v) => { setError(null); then(v); }, (e: Error) => { setError(e.message); fail?.(e); }).finally(() => setBusy(false)); };
+  return { busy, error, setError, run };
+}
+
 function Code(props: { title: ReactNode; text: string }) {
   return <figure className="code"><figcaption>{props.title}</figcaption><pre>{props.text}</pre></figure>;
 }
@@ -156,17 +163,13 @@ function Editor(props: { item: ManageDetail; saved: () => void; create?: string 
   const [note, setNote] = useState('');
   const [show, setShow] = useState(false);
   const [problems, setProblems] = useState<Problem[]>([]);
-  const [error, setError] = useState<string | null>(null);
   const [notes, setNotes] = useState<string[]>([]);
-  const [busy, setBusy] = useState(false);
+  const { busy, error, setError, run } = useRun();
   const tools = useLoad(() => api.manageItems().then((xs) => xs.filter((x) => x.section === 'tools' && x.kind !== 'MCP server' || x.id === 'pass.ledger' && it.builtin).map((x) => x.name).sort()), []);
   const set = (path: string, text: string) => setFiles((f) => ({ ...f, [path]: text }));
   const id = props.create ?? it.id;
-  const save = () => {
-    setBusy(true);
-    api.manageSave(id, it.latest, files, note).then((r) => { setProblems([]); setError(null); setNotes(r.notes); props.saved(); },
-      (e: Error) => { setError(e.message); setProblems(e instanceof ApiError ? e.problems : []); }).finally(() => setBusy(false));
-  };
+  const save = () => run(api.manageSave(id, it.latest, files, note), (r) => { setProblems([]); setNotes(r.notes); props.saved(); },
+    (e) => setProblems(e instanceof ApiError ? e.problems : []));
   const at = (path: string) => problems.filter((p) => p.file === path);
   const skillDir = it.section === 'skills' ? (Object.keys(files).find((p) => p.endsWith('/SKILL.md')) ?? '').replace(/SKILL\.md$/, '') : '';
   return (
@@ -344,9 +347,8 @@ function RemoteFields(props: { text: string; set: (text: string) => void }) {
       )}
       {!v.mcp && (
         <div className="row">
-          <label>Secret (its name) <input value={auth.secret ?? ''} onChange={(e) => putAuth({ secret: e.target.value })} placeholder="court_key" /></label>
-          <label>Header <input value={auth.header ?? ''} onChange={(e) => putAuth({ header: e.target.value })} placeholder="Authorization" /></label>
-          <label>Prefix <input value={auth.prefix ?? ''} onChange={(e) => putAuth({ prefix: e.target.value })} placeholder="Bearer " /></label>
+          {([['secret', 'Secret (its name)', 'court_key'], ['header', 'Header', 'Authorization'], ['prefix', 'Prefix', 'Bearer ']] as const).map(([k, label, hint]) => (
+            <label key={k}>{label} <input value={auth[k] ?? ''} onChange={(e) => putAuth({ [k]: e.target.value })} placeholder={hint} /></label>))}
         </div>
       )}
       {'description' in v && <label className="block">Description (the model reads it: 3+ sentences, a "Do not use" line, 1–3 Example lines)
@@ -428,10 +430,10 @@ function Secrets(props: { admin: boolean }) {
   const [name, setName] = useState('');
   const [value, setValue] = useState('');
   const [origin, setOrigin] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const act = (p: Promise<void>) => p.then(() => { setError(null); setValue(''); setN(n + 1); }, (e: Error) => setError(e.message));
+  const { error, run } = useRun();
+  const act = (p: Promise<void>) => run(p, () => { setValue(''); setN(n + 1); });
   const del = (s: string, used: string[]) => {
-    if (window.confirm(`Delete the secret ${s}?${used.length ? ` ${used.join(', ')} will fail until it is set again, in running tasks too.` : ''}`)) void act(api.manageDeleteSecret(s));
+    if (window.confirm(`Delete the secret ${s}?${used.length ? ` ${used.join(', ')} will fail until it is set again, in running tasks too.` : ''}`)) act(api.manageDeleteSecret(s));
   };
   return (
     <div className="panel">
@@ -447,7 +449,7 @@ function Secrets(props: { admin: boolean }) {
           ))}</tbody></table></div>
       )}
       {props.admin && (
-        <form className="row" onSubmit={(e) => { e.preventDefault(); void act(api.manageSetSecret(name.trim(), value, origin.trim())); }}>
+        <form className="row" onSubmit={(e) => { e.preventDefault(); act(api.manageSetSecret(name.trim(), value, origin.trim())); }}>
           <label>Name <input value={name} onChange={(e) => setName(e.target.value)} placeholder="court_key" /></label>
           <label>For (https origin) <input size={30} value={origin} onChange={(e) => setOrigin(e.target.value)} placeholder="the tool's origin (https, host, port)" /></label>
           <label>Value <input type="password" autoComplete="off" value={value} onChange={(e) => setValue(e.target.value)} /></label>
@@ -464,10 +466,8 @@ function Import(props: { item: ManageDetail; imported: () => void }) {
   const [d, setD] = useState<Discovery | null>(null);
   const [pick, setPick] = useState<string[]>([]);
   const [offer, setOffer] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<string[]>([]);
-  const run = <T,>(p: Promise<T>, then: (v: T) => void) => { setBusy(true); p.then((v) => { setError(null); then(v); }, (e: Error) => setError(e.message)).finally(() => setBusy(false)); };
+  const { busy, error, run } = useRun();
   return (
     <>
       <p className="small">Connecting runs the MCP handshake (initialize, tools/list) from the server, over https, to a public address only.</p>
@@ -507,14 +507,12 @@ function TestCall(props: { item: ManageDetail }) {
   const spec = Object.entries(props.item.content).find(([p]) => p.endsWith('.json'))?.[1] ?? '';
   const [input, setInput] = useState(() => /^Example: (\{.*\})\s*$/m.exec((JSON.parse(spec || '{}') as { description?: string }).description ?? '')?.[1] ?? '{}');
   const [res, setRes] = useState<TestResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const { busy, error, setError, run } = useRun();
   const docs = matters.find((m) => m.number === matter)?.documentIds ?? [];
-  const run = () => {
+  const test = () => {
     let v: unknown;
     try { v = JSON.parse(input); } catch { setError('The input is not JSON.'); return; }
-    setBusy(true);
-    api.manageTest(props.item.id, docs, v).then((r) => { setError(null); setRes(r); }, (e: Error) => setError(e.message)).finally(() => setBusy(false));
+    run(api.manageTest(props.item.id, docs, v), setRes);
   };
   return (
     <>
@@ -522,7 +520,7 @@ function TestCall(props: { item: ManageDetail }) {
       <div className="row"><label>Matter <select value={matter} onChange={(e) => setMatter(e.target.value)}><option value="">Choose…</option>
         {matters.map((m) => <option key={m.number} value={m.number}>{m.number}: {m.title}</option>)}</select></label></div>
       <label className="block">Input<textarea rows={6} className="mono" value={input} onChange={(e) => setInput(e.target.value)} /></label>
-      <button className="primary" disabled={busy || docs.length === 0} onClick={run}>{busy ? 'Running…' : 'Run test'}</button>
+      <button className="primary" disabled={busy || docs.length === 0} onClick={test}>{busy ? 'Running…' : 'Run test'}</button>
       <Failure error={error ?? (res?.error || null)} />
       {res && <>
         <p className="small muted">{plural(res.usage.calls, 'model call')}, ${res.usage.usd.toFixed(4)}{res.usage.unpriced ? ` + ${res.usage.unpriced} unpriced` : ''}, {res.millis} ms.</p>
@@ -539,15 +537,14 @@ function History(props: { item: ManageDetail; admin: boolean; reverted: () => vo
   const h = useLoad(() => api.manageHistory(it.id), [it.id, it.latest]);
   const [a, setA] = useState(0);
   const [b, setB] = useState(-1);
-  const [error, setError] = useState<string | null>(null);
+  const { error, run } = useRun();
   if (h.error) return <Failure error={h.error} />;
   if (!h.data) return <Loading label="Loading the history" />;
   const vs = h.data;
   const filesOf = (n: number) => (n === 0 ? (it.original ?? {}) : n < 0 ? (vs[0]?.files ?? it.content) : (vs.find((v) => v.version === n)?.files ?? {}));
   const to = b < 0 ? (vs[0]?.version ?? 0) : b;
-  const revert = (n: number) => api.manageRevert(it.id, n, it.latest, n === 0 ? 'revert to the built-in' : `revert to version ${n}`)
-    .then(() => { setError(null); props.reverted(); }, (e: Error) => setError(e.message));
-  const del = () => api.manageDelete(it.id, it.latest, 'deleted').then(() => { setError(null); props.reverted(); }, (e: Error) => setError(e.message));
+  const revert = (n: number) => run(api.manageRevert(it.id, n, it.latest, n === 0 ? 'revert to the built-in' : `revert to version ${n}`), props.reverted);
+  const del = () => run(api.manageDelete(it.id, it.latest, 'deleted'), props.reverted);
   const rows: (SpecVersion | null)[] = [...vs, null]; // null: the built-in
   return (
     <>
@@ -564,12 +561,13 @@ function History(props: { item: ManageDetail; admin: boolean; reverted: () => vo
               <td>{v?.author ?? ''}</td><td className="nowrap">{v ? new Date(v.createdAt).toLocaleString() : ''}</td>
               <td><input type="radio" name="from" checked={a === n} onChange={() => setA(n)} aria-label={`diff from ${n || 'built-in'}`} /></td>
               <td><input type="radio" name="to" checked={to === n} onChange={() => setB(n)} aria-label={`diff to ${n || 'built-in'}`} /></td>
-              {props.admin && <td>{(v ? n !== it.latest : vs.length > 0 && it.version !== 0) && <button className="small" onClick={() => void revert(n)}>Revert to this</button>}</td>}
+              {props.admin && <td>{(v ? n !== it.latest : vs.length > 0 && it.version !== 0) && (v?.unrevertable ? <span className="muted small">{v.unrevertable}</span>
+                : <button className="small" onClick={() => revert(n)}>Revert to this</button>)}</td>}
             </tr>
           );
         })}</tbody>
       </table></div>
-      {props.admin && (it.section === 'skills' || !it.builtin) && !it.deleted && <p><button className="danger" onClick={() => void del()}>Delete</button> <span className="muted small">A deletion is a version too: revert restores it. Built-ins Go depends on cannot be deleted.</span></p>}
+      {props.admin && (it.section === 'skills' || !it.builtin) && !it.deleted && <p><button className="danger" onClick={del}>Delete</button> <span className="muted small">A deletion is a version too: revert restores it. Built-ins Go depends on cannot be deleted.</span></p>}
       <h3>{a ? `v${a}` : 'Built-in'} → {to ? `v${to}` : 'built-in'}</h3>
       <DiffView files={[...new Set([...Object.keys(filesOf(a)), ...Object.keys(filesOf(to))])].sort().map((p) => ({ path: p, a: filesOf(a)[p] ?? '', b: filesOf(to)[p] ?? '' }))} />
     </>
