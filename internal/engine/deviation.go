@@ -64,8 +64,9 @@ type devInput struct {
 }
 
 // reqText is a verified requirement: the document it is quoted from, its parts as that document
-// has them, where they lie, and the context it is read in (contextOf: the heading path and the
-// section that holds it, Truncated when the section was cut to its bound).
+// has them, where they lie, and the context it is read in (contextOf: the window of text around it,
+// its heading path as a label, Truncated when the window starts after the requirement's sentence,
+// paragraph or list does, or an edge cuts a sentence).
 type reqText struct {
 	DocID, DocName, Text string
 	Spans                [][2]int

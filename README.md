@@ -46,6 +46,24 @@ MCP (PR 7), clients/conflicts and OIDC/session/token auth (PR 8), time and billi
 the full jurisdiction and practice pack catalogue (PR 12; four candidate packs ship with PR 4b), v1 import and docs (PR 13). The
 discover.legal intake module is **not** part of v2 (owner decision; it moves to a separate repo).
 
+## Architecture and patterns
+
+This README is the contract. The design is described in `docs/`:
+- [`docs/architecture.md`](docs/architecture.md): the packages and the import rules the tests
+  enforce, a task's lifecycle from submission to the rendered memo, the budget, meter and journal,
+  the spec set and snapshot, the figure pipeline, hooks, and custom tools. Each part links to the
+  code that implements it.
+- [`docs/patterns.md`](docs/patterns.md): the recurring patterns (typed tool specs, Go checking
+  model output, fail closed or disclose, unclear gates, journaled steps, budget shares, content-hash
+  caches, versioned overrides, admin-guarded writes, untrusted-text labelling) and the test
+  patterns. For each: why it exists, and how to apply it.
+- [`docs/glossary.md`](docs/glossary.md): the project's vocabulary and the ledger kinds. The G1–G11,
+  P1–P9 and E0–E4 codes this README uses throughout are defined in its
+  [Codes table](docs/glossary.md#codes).
+- [`docs/consolidation-proposals.md`](docs/consolidation-proposals.md): normalisation and
+  consolidation opportunities for the owner to decide on, a proposed README restructure, and the
+  places where the docs and the code disagree today.
+
 ## Configuration
 
 Environment variables only. All 18 are declared in `cmd/biglaw/config.go` (20 until PR 3b, whose
@@ -295,7 +313,7 @@ e.g. the `postgresql-16-pgvector` package, or pgvector built from source; § Dat
 
 ```bash
 createdb biglaw
-make build                      # static binary: CGO_ENABLED=0, version stamped (no UI yet)
+make build                      # static binary: CGO_ENABLED=0, version stamped (embeds ui/dist if built: make ui build)
 BIGLAW_DATABASE_URL='postgres:///biglaw?sslmode=disable' ./biglaw serve
 # hybrid search: an embedding model on any OpenAI-compatible endpoint, e.g. Ollama's
 BIGLAW_MODEL_URL=http://localhost:11434/v1 BIGLAW_MODELS=embed=nomic-embed-text \
@@ -798,13 +816,13 @@ The memo workflow (§ Memo workflow) drives these. What PR 4a ships, all tested 
   description, input and output JSON Schemas, a budget class, a turn cap, allowed tools for a
   subagent, ops that must be called alone, `Final` for `finish`) and `Call(ctx, Call) (Result,
   error)`; a `Call` carries the task's document ids (G1), the input, a grant and the depth. The
-  registry refuses a duplicate name, a 23rd tool, a schema that is not strict-shaped (every object
+  registry refuses a duplicate name, a 49th tool (`agent.MaxTools`, 48), a schema that is not strict-shaped (every object
   `additionalProperties: false`, every field required, optional fields nullable; in and out), a
   description under three sentences or without a "Do not use" line, and 1–3 `Example: {…}` lines
   that do not validate. Definitions are frozen when registered: the same bytes reach the model on
   every turn (prompt cache), and no matter data can reach a schema. The definition sent leaves out
-  `minLength`/`maxLength` (strict mode refuses them); Go enforces them before a tool runs. At most 14 tools are visible to
-  one agent. Specs are data: `internal/docs/specs/*.json`, `internal/analysis/specs/*.json`.
+  `minLength`/`maxLength` (strict mode refuses them); Go enforces them before a tool runs. At most 24 tools are visible to
+  one agent (`agent.MaxVisible`; both caps raised from 22/14 for custom agents and tools, § Manage). Specs are data: `internal/docs/specs/*.json`, `internal/analysis/specs/*.json`.
 - **One loop, two depths** (`Runtime.Run`). The lead (depth 0) and a subagent (depth 1, the
   `Subagent` tool: its own prompt, allowed tools, turn cap, grant and output schema; its transcript
   is discarded) run the same loop. Every tool call goes through `Runtime.Invoke`, in this order:
@@ -1195,7 +1213,8 @@ critics `prosecute`, `reproduce`, `audit_gaps`). Everything below is tested with
 - **`committee`**: three context-free critics in parallel, each on its own explicit grant (the
   cycle's 8/8/4 calls, the last taking the USD remainder): `prosecute` gets the claims and their
   quotes, `reproduce` gets the issue questions only (never the draft) and its answers are compared
-  with the draft, `audit_gaps` gets the draft. Their findings are HIGH/MEDIUM/LOW, open until the
+  with the draft, `audit_gaps` gets the plan, the drafted headings (not their text) and the packs'
+  checklist. Their findings are HIGH/MEDIUM/LOW, open until the
   lead resolves them; a `prosecute` verdict credits or debits the arm that produced the finding
   (delayed credit, ±0.5). A critic that fails leaves a MEDIUM "did not run" finding.
 - **Policy** (`policy.go`): P1 nothing but `retrieve`/`ledger` before a plan, and if the lead has
@@ -1286,8 +1305,11 @@ pass a model failure ends is still recorded as run, so a retry does not spend a 
   documents and models is neutralised where the memo prints it (`mdSafe`): one-line slots (Sources,
   headings, list items) collapse white space; sections and the note keep their lines with `#`/`##`
   demoted to `###`; `<` and fence openers are backslash-escaped. A quote cannot open a section.
-- **Gates** (G7): every deliverable opens a gate (`G-deliverable-N`); a finding resting only on
-  low-confidence transcript pages gets its own (`G-<fid>`). The run stops `awaiting_gate`; approving
+- **Gates** (G7): every deliverable opens a gate (`G-deliverable-N`); a cited finding gets its own
+  (`G-<fid>`) when it rests only on low-confidence transcript pages, when it was admitted at low
+  confidence (`Finding.Low`: an unclear figure reading, a deviation its section check could not
+  confirm, a limited memo figure or ⚠ worksheet input, a `finding_admitted` approve rule), or when
+  an open HIGH `prosecute` finding says it is unsupported (`finish.gates`, `gated`). The run stops `awaiting_gate`; approving
   the deliverable completes the task; rejecting it (a reason is required) puts the reason in the
   lead's log as a note step and the run resumes. Once all finding gates are decided the run resumes
   with the decisions; a rejected finding leaves the memo.
@@ -2002,16 +2024,16 @@ improvements (after the real Haiku LAB rerun; scripted the same way): `TestSweep
 
 | Budget | Ceiling | Today |
 |---|---:|---:|
-| Go production lines (physical lines, non-`_test.go`, test-support packages included) | reported, no limit (owner decision 17) | 23667 |
+| Go production lines (physical lines, non-`_test.go`, test-support packages included) | reported, no limit (owner decision 17) | printed by `python3 scripts/loc.py` |
 | Packages under `internal/`, test-support packages excluded | 12 | 8 (`agent`, `analysis`, `api`, `docs`, `docs/ooxml`, `engine`, `model`, `store`; `store/storetest` and `engine/figtest` are test support) |
 | Direct Go dependencies | 3 | 2 (`github.com/lib/pq`, `github.com/ledongthuc/pdf`) |
 | Runtime environment variables | 20 | 18 |
 | UI runtime dependencies | 2 | 2 (`react`, `react-dom`) |
-| UI source lines (`ui/src` `.ts`/`.tsx`/`.css`; tests, config, `recording.json` and `manage.json` not counted) | 3,200 (raised from 2,400 for Manage, owner decision) | 2,638 |
+| UI source lines (`ui/src` `.ts`/`.tsx`/`.css`; tests, config, `recording.json` and `manage.json` not counted) | 3,200 (raised from 2,400 for Manage, owner decision) | printed by `python3 scripts/loc.py` |
 | Packages without a `_test.go` | 0 | 0 |
 | Lines in any one source file (`.go`, `.py`, `.sql`, `.sh`, `.js`, `.ts`, `.css`; tests included) | 2,000 | 968 (`internal/docs/vision_safety_test.go`) |
 
-**There is no total line ceiling (owner decision 17, 2026-10-23).** `scripts/loc.py` reports the Go production total (23667) and fails only on the budgets that bound bloat directly: no file over 2,000 lines, ≤ 3 direct deps, ≤ 20 env vars, ≤ 12 internal packages, ≤ 3,200 UI source lines, no untested package. Each PR still reports its lines against its DESIGN budget in its notes. (The ceiling's history, 14,000 → 17,500 through owner decisions 7–16, is in PLAN.) A **test-support package** is one
+**There is no total line ceiling (owner decision 17, 2026-10-23).** `scripts/loc.py` reports the Go production total (run it for today's figure; a number written here goes stale) and fails only on the budgets that bound bloat directly: no file over 2,000 lines, ≤ 3 direct deps, ≤ 20 env vars, ≤ 12 internal packages, ≤ 3,200 UI source lines, no untested package. Each PR still reports its lines against its DESIGN budget in its notes. (The ceiling's history, 14,000 → 17,500 through owner decisions 7–16, is in PLAN.) A **test-support package** is one
 whose directory name ends in `test` and that no production file outside it imports, such as
 `storetest`. Under the coordinator's ruling it is left out of the package count, but its lines
 count toward the reported Go total like any other non-`_test.go` file. A `*test` package that
@@ -2029,7 +2051,9 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
 - The UI's Playbooks, Time & Billing and profile views have no live routes until PRs 6/8/9 (404);
   Clients shows matters derived from documents' matter numbers until PR 8's client roster.
 - **Memo workflow (PR 4b):**
-  - No model has run it: every test scripts the model. Whether it meets gate A (v1's criteria on
+  - Every test scripts the model (`model.Fake`); real models have run it only in the owner's bench
+    and Harvey LAB runs (bench5–bench7, the Haiku LAB reruns: their logged behaviour is scripted into
+    the tests named for them). Whether it meets gate A (v1's criteria on
     `litigation` and `ma-diligence`) is the owner's measurement (§ Memo workflow, run it).
   - The deliverable is Markdown only (`GET /tasks/{id}/deliverable.md`); the `.docx` export waits for
     PR 3d's writer.
@@ -2224,7 +2248,7 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
   - The coverage pass judges "analysed" by the issue's class (Conduct and Requirement need an
     analysis); an analysis is the model's reasoning, not a verified quote: its facts still cite
     verified findings, and its rules are flagged as external authorities when the record lacks them.
-    It runs once, one analysis and one redraft per touched issue, within its 6% share; issues it does
+    It runs once, one analysis and one redraft per touched issue, within its 10% share (`Allocation.Cover`); issues it does
     not reach are disclosed, not analysed.
   - An omission is confirmed absent by the paraphrase judge on the reviewed document's closest
     passage: a provision stated far from where its words cluster can be judged absent wrongly (the
@@ -2539,10 +2563,9 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     the quote move's figure-separator edges 0): plan **15,581–15,611**, headroom 39–69; PR 3e must
     stay at or under 39 lines.
 - **Model client (PR 2):**
-  - Only `Embed` has a caller yet (documents); `Chat`'s first caller is the agent loop (PR 4a),
-    so no real endpoint has been exercised: every test uses `httptest` or
-    `model.Fake`. Behaviour against real Ollama, vLLM or vendor endpoints is unproven until the
-    owner's gates run.
+  - Every test uses `httptest` or `model.Fake`. `Chat`'s caller is the agent loop and `Embed`'s is
+    documents; the only real endpoints exercised are the owner's bench and LAB runs. Behaviour against
+    other real endpoints (Ollama, vLLM, other vendors) is unproven until the owner's gates run them.
   - **Every call is charged, including on your own GPU** (owner decision). An Ollama model under
     an open-weights family name (`qwen2.5:14b`, `mistral-nemo`, `deepseek-r1:14b`) is charged at
     that family's hosted rate, so the USD cap counts money not spent unless you set the model to
