@@ -128,7 +128,9 @@ func (r HookRule) summary() string {
 }
 
 // exact is whether the rule matches one tool or subagent by name.
-func (r HookRule) exact() bool { return r.Match != "" && r.Match != "*" && !strings.HasSuffix(r.Match, "*") }
+func (r HookRule) exact() bool {
+	return r.Match != "" && r.Match != "*" && !strings.HasSuffix(r.Match, "*")
+}
 
 func (r HookRule) matches(name string) bool {
 	switch m := r.Match; {
@@ -586,11 +588,11 @@ func (h hookRunner) findingHooks(ctx context.Context, c agent.Call, b *agent.Bud
 	if len(rules) == 0 {
 		return agent.Usage{}, nil
 	}
-	var docs []string
+	docs := []any{} // never nil: exists holds of no documents too
 	for _, q := range f.Quotes {
 		docs = append(docs, q.DocumentID)
 	}
-	doc := map[string]any{"claim": f.Claim, "issueId": f.IssueID, "verified": f.Verified, "low": f.Low, "documents": toAny(docs)}
+	doc := map[string]any{"claim": f.Claim, "issueId": f.IssueID, "verified": f.Verified, "low": f.Low, "documents": docs}
 	text, _ := json.Marshal(map[string]any{"claim": f.Claim, "issueId": f.IssueID, "quotes": f.Quotes})
 	v, err := h.run(ctx, event{name: "finding_admitted", subject: f.Arm.Tool, doc: doc, text: truncate(string(text), 8000), docIDs: c.DocumentIDs}, rules, b, c.TaskID)
 	if err != nil {
@@ -605,14 +607,6 @@ func (h hookRunner) findingHooks(ctx context.Context, c agent.Call, b *agent.Bud
 		f.ValueNotes = append(f.ValueNotes, "a lawyer must approve it: "+v.gated)
 	}
 	return v.usage, nil
-}
-
-func toAny(s []string) []any {
-	out := []any{}
-	for _, x := range s {
-		out = append(out, x)
-	}
-	return out
 }
 
 // finishHooks runs task_finish's rules before the deliverable is rendered: block refuses the submit

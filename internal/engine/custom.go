@@ -405,10 +405,8 @@ func (e *Engine) Discover(ctx context.Context, id string) (Discovery, error) {
 		return Discovery{}, err
 	}
 	sec, err := e.secretValue(ctx, srv.Auth)
-	if errors.Is(err, ErrForbidden) {
-		return Discovery{}, err
-	} else if err != nil {
-		return Discovery{}, invalid("", "%s", remoteMsg(err))
+	if err != nil {
+		return Discovery{}, discoverErr(err)
 	}
 	cctx, cancel := withRemoteDeadline(ctx)
 	defer cancel()
@@ -418,12 +416,11 @@ func (e *Engine) Discover(ctx context.Context, id string) (Discovery, error) {
 		tools, err = s.listTools(cctx)
 		s.Close(cctx)
 	}
-	err = sec.scrub(err) // the one place Discover's errors pass: never the key, whatever the server sent
-	if errors.Is(err, ErrForbidden) {
-		return Discovery{}, err
-	} else if err != nil {
-		e.log.Info("remote: discover", "server", srv.Name, "status", err.Error())
-		return Discovery{}, invalid("", "%s", remoteMsg(err))
+	if err = sec.scrub(err); err != nil { // the one place Discover's errors pass: never the key, whatever the server sent
+		if !errors.Is(err, ErrForbidden) {
+			e.log.Info("remote: discover", "server", srv.Name, "status", err.Error())
+		}
+		return Discovery{}, discoverErr(err)
 	}
 	d := Discovery{Server: srv.Name, ServerName: untrusted(sec.redact(s.ServerName)), Protocol: s.Protocol, Tools: []RemoteTool{}}
 	for _, rt := range tools {
@@ -442,6 +439,15 @@ func (e *Engine) Discover(ctx context.Context, id string) (Discovery, error) {
 		d.Tools = append(d.Tools, rt)
 	}
 	return d, nil
+}
+
+// discoverErr is a Discover failure as the admin reads it: a refusal of who asks as it is, any other
+// a problem with the server (422).
+func discoverErr(err error) error {
+	if errors.Is(err, ErrForbidden) {
+		return err
+	}
+	return invalid("", "%s", remoteMsg(err))
 }
 
 func (e *Engine) serverOf(ctx context.Context, id string) (Server, *Specs, error) {

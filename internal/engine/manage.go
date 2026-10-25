@@ -460,10 +460,10 @@ func (e *Engine) versions(ctx context.Context, where string, files bool, args ..
 			_ = json.Unmarshal(raw, &v.Files)
 			v.Deleted = len(v.Files) == 0
 		}
-		if !files || v.Builtin {
+		switch {
+		case !files:
 			v.Files = nil
-		}
-		if v.Builtin && files {
+		case v.Builtin:
 			v.Files = fileMap(builtin, v.Item)
 		}
 		out = append(out, v)
@@ -530,24 +530,14 @@ func (e *Engine) Diff(ctx context.Context, id string, from, to int) ([]FileDiff,
 }
 
 func diffFiles(a, b map[string]string) []FileDiff {
-	out := []FileDiff{}
-	for _, p := range slices.Sorted(maps.Keys(union(a, b))) {
+	out, paths := []FileDiff{}, maps.Clone(a)
+	maps.Copy(paths, b)
+	for _, p := range slices.Sorted(maps.Keys(paths)) {
 		x, inA := a[p]
 		y, inB := b[p]
 		if d := filePatch(p, x, y, inA, inB); d != "" {
 			out = append(out, FileDiff{p, d})
 		}
-	}
-	return out
-}
-
-func union(a, b map[string]string) map[string]bool {
-	out := map[string]bool{}
-	for k := range a {
-		out[k] = true
-	}
-	for k := range b {
-		out[k] = true
 	}
 	return out
 }
@@ -816,7 +806,7 @@ func (e *Engine) delete(ctx context.Context, tx *sql.Tx, id string, base int, no
 	switch {
 	case len(itemFiles(sp.files, id)) == 0:
 		return Version{}, fmt.Errorf("%w: %s does not exist (already deleted?)", ErrNotFound, id)
-	case kind == "agent" && len(itemFiles(sp.files, id)) > 0 && !strings.HasPrefix(itemFiles(sp.files, id)[0], agentsDir):
+	case kind == "agent" && !strings.HasPrefix(itemFiles(sp.files, id)[0], agentsDir): // the case above: it has files
 		return Version{}, invalid("", "%s is not a subagent", id)
 	case base != rows[id].Version:
 		return Version{}, fmt.Errorf("%w: %s changed since you opened it (version %d is now its latest): reload it", ErrConflict, id, rows[id].Version)

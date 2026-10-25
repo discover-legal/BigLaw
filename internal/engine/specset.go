@@ -109,27 +109,27 @@ func newSpecs(snap Snapshot) (*Specs, error) {
 		data := s.files[f]
 		switch {
 		case strings.HasPrefix(f, toolsDir):
-			var t CustomTool
-			if err := json.Unmarshal(data, &t); err != nil {
-				return nil, fmt.Errorf("%s: %v", f, err)
+			t, err := decodeFile[CustomTool](f, data)
+			if err != nil {
+				return nil, err
 			}
 			s.tools[t.Name], s.specs[t.Name] = t, customSpec(t)
 		case strings.HasPrefix(f, serversDir):
-			var v Server
-			if err := json.Unmarshal(data, &v); err != nil {
-				return nil, fmt.Errorf("%s: %v", f, err)
+			v, err := decodeFile[Server](f, data)
+			if err != nil {
+				return nil, err
 			}
 			s.servers[v.Name] = v
 		case strings.HasPrefix(f, hooksDir):
-			var h HookRule
-			if err := json.Unmarshal(data, &h); err != nil {
-				return nil, fmt.Errorf("%s: %v", f, err)
+			h, err := decodeFile[HookRule](f, data)
+			if err != nil {
+				return nil, err
 			}
 			s.hookRules[h.Name] = h
 		case strings.HasSuffix(f, ".json") && strings.Contains(f, "/specs/"):
-			var sp agent.Spec
-			if err := json.Unmarshal(data, &sp); err != nil {
-				return nil, fmt.Errorf("%s: %v", f, err)
+			sp, err := decodeFile[agent.Spec](f, data)
+			if err != nil {
+				return nil, err
 			}
 			s.specs[sp.Name], s.paths[sp.Name] = sp, f
 		case strings.HasPrefix(f, engineDir+"packs/"):
@@ -153,6 +153,15 @@ func newSpecs(snap Snapshot) (*Specs, error) {
 		}
 	}
 	return s, nil
+}
+
+// decodeFile is a set file's JSON as a T, its error naming the file.
+func decodeFile[T any](f string, data []byte) (T, error) {
+	var v T
+	if err := json.Unmarshal(data, &v); err != nil {
+		return v, fmt.Errorf("%s: %v", f, err)
+	}
+	return v, nil
 }
 
 type specsKey struct{}
