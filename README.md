@@ -1602,7 +1602,9 @@ failure}`:
   caller's budget and are metered with the call's step); `webhook` (an https POST of the event,
   `{hook, event, taskId, subject, text, at}`, through the same SSRF-checked client, origin-bound secret
   and off-without-a-real-admin rule as custom tools; `wait` blocks on a 2xx within 30 s, otherwise it is
-  sent in the background, at least once, its answer only logged); `limitation` (a Limitations line).
+  sent in the background, at least once, its answer only logged; with no real admin (`RemotePolicy.Off`)
+  a webhook cannot be sent, so a waited one fails as its rule says: closed blocks every call it
+  matches); `limitation` (a Limitations line).
 - **Order:** rules run by `order`, then name; a block or a gate stops the rest for that event.
 - **Failure:** a rule that cannot run (a check unfunded, failed or answering no verdict, a waited
   webhook that failed, a field it cannot compare) **fails closed** (blocks) or **open** (lets the event

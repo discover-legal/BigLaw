@@ -583,7 +583,7 @@ function Changes() {
         <tr key={i}>
           <td className="nowrap">{new Date(v.createdAt).toLocaleString()}</td>
           <td>{v.item.startsWith('secret.') ? <code>{v.item}</code> : <a href={`#/manage?section=${sectionOf(v.item)}&item=${encodeURIComponent(v.item)}&tab=history`}>{v.item}</a>}</td>
-          <td data-label="Change">{v.event ? v.action : <>{v.action}: {v.from ? `v${v.from}` : 'built-in'} → {v.builtin ? 'built-in' : `v${v.version}`}{v.deleted ? ' (deleted)' : ''}</>}</td>
+          <td data-label="Change">{v.event ? v.action : <>{v.action}: {v.from ? `v${v.from}` : v.action === 'create' ? 'new' : 'built-in'} → {v.builtin ? 'built-in' : `v${v.version}`}{v.deleted ? ' (deleted)' : ''}</>}</td>
           <td data-label="Who">{v.author}</td><td className="wide">{v.note}</td>
         </tr>
       ))}</tbody>
@@ -593,7 +593,7 @@ function Changes() {
 
 const pretty = (v: unknown) => (v === undefined || v === null ? '' : JSON.stringify(v, null, 1));
 
-const sectionOf = (id: string) => ({ prompt: 'agents', agent: 'agents', pass: 'agents', tool: 'tools', server: 'tools', pack: 'packs', skill: 'skills' } as Record<string, string>)[id.split('.')[0]] ?? 'agents';
+const sectionOf = (id: string) => ({ prompt: 'agents', agent: 'agents', pass: 'agents', tool: 'tools', server: 'tools', pack: 'packs', skill: 'skills', rule: 'hooks' } as Record<string, string>)[id.split('.')[0]] ?? 'agents';
 
 /** Accept shows an imported tool's third-party text and lets an admin accept it (the save records who). */
 function Accept(props: { imported: { text: string; acceptedBy: string }; accept: (by: string) => void }) {

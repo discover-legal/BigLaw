@@ -38,7 +38,7 @@ type Runtime struct {
 // own grants and returns what it spent, which the call's step records with the tool's own usage.
 type Hooks interface {
 	Before(ctx context.Context, p Pending) (*Refusal, Usage)
-	After(ctx context.Context, p Pending, res Result, err error) (error, Usage)
+	After(ctx context.Context, p Pending, res Result, err error) (Usage, error)
 }
 
 // subagentMaxTokens bounds a subagent's answer: a critic's verdicts on up to 80 claims do not fit
@@ -580,7 +580,7 @@ func (rt *Runtime) Invoke(ctx context.Context, a Agent, c Call, name string, inp
 	if rt.Hooks != nil {
 		var u Usage
 		was := err
-		err, u = rt.Hooks.After(ctx, Pending{c.TaskID, a.Name, c.Depth, e.spec, input, b}, res, err)
+		u, err = rt.Hooks.After(ctx, Pending{c.TaskID, a.Name, c.Depth, e.spec, input, b}, res, err)
 		if err != nil && was == nil { // withheld: the answer reaches neither the caller nor the journal
 			res.Output, res.Final = nil, false
 		}

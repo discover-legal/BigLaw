@@ -409,9 +409,9 @@ func (h hookRunner) Before(ctx context.Context, p agent.Pending) (*agent.Refusal
 }
 
 // After is the runtime's hook after a call: block or a failing-closed check withholds its answer.
-func (h hookRunner) After(ctx context.Context, p agent.Pending, res agent.Result, err error) (error, agent.Usage) {
+func (h hookRunner) After(ctx context.Context, p agent.Pending, res agent.Result, err error) (agent.Usage, error) {
 	if err != nil || p.Spec.Final {
-		return err, agent.Usage{}
+		return agent.Usage{}, err
 	}
 	var in, out any
 	_ = json.Unmarshal(p.Input, &in)
@@ -420,11 +420,11 @@ func (h hookRunner) After(ctx context.Context, p agent.Pending, res agent.Result
 	v, herr := h.run(ctx, event{"after_call", p.Spec.Name, doc, truncate(string(res.Output), 8000), h.r.t.DocumentIDs}, h.sp.rules("after_call"), p.Budget, p.TaskID)
 	switch {
 	case herr != nil:
-		return herr, v.usage
+		return v.usage, herr
 	case v.blocked != "":
-		return agent.Fail(p.Spec.Name + "'s answer was withheld: " + v.blocked), v.usage
+		return v.usage, agent.Fail(p.Spec.Name + "'s answer was withheld: " + v.blocked)
 	}
-	return nil, v.usage
+	return v.usage, nil
 }
 
 // findingHooks runs finding_admitted's rules on a finding about to be recorded: block quarantines
