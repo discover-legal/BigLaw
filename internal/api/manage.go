@@ -153,6 +153,9 @@ func handle[In any](ws writes, route string, code int, fn func(*http.Request, Pr
 		d := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20)) // an item's files: a skill's are at most 17 × 64 KiB
 		d.DisallowUnknownFields()
 		err := d.Decode(&in)
+		if err == nil && d.More() {
+			err = errors.New("more after the object")
+		}
 		if err != nil {
 			err = fmt.Errorf("%w: the body is not the expected JSON object: %v", engine.ErrBadTask, err)
 		} else {

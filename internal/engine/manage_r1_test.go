@@ -5,6 +5,8 @@ package engine
 
 import (
 	"context"
+	"errors"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -66,3 +68,94 @@ func TestManageJSONNullFiles(t *testing.T) {
 }
 
 const leadFile = engineDir + "specs/lead.md"
+
+// TestManageSaveNeverDeletes: a save with no files would delete its item; it is refused for the
+// engine's workflow and what Go needs with Delete's own reasons, and for every other built-in (a
+// built-in skill is deleted with Delete). Before, {"base":0} deleted the lead's prompt and every
+// Manage read then panicked.
+func TestManageSaveNeverDeletes(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	e, _ := f.engine(nil, Config{})
+	ctx := context.Background()
+	for id, want := range map[string]string{
+		"prompt.lead":          "prompt.lead is part of the engine's workflow: edit or revert it; it cannot be deleted",
+		"pack.jurisdiction.us": "is part of the engine's workflow",
+		"tool.retrieve":        "tool.retrieve cannot be deleted or disabled: it is one of the memo lead's tools",
+		"agent.extract_facts":  "cannot be deleted or disabled",
+		"skill." + aSkill(t):   "is built in: a save keeps its files",
+	} {
+		for _, in := range []SaveIn{{}, {Files: map[string]string{}}} {
+			if _, _, err := e.Save(ctx, id, in, "Ada"); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), want) {
+				t.Errorf("save of %s with no files: %v", id, err)
+			}
+		}
+	}
+	if vs, err := e.Changes(ctx, 10); err != nil || len(vs) != 0 {
+		t.Fatalf("a refused save was stored: %v %v", vs, err)
+	}
+}
+
+// TestManageSurvivesAMissingPrompt: a prompt whose file a version deleted (rows saved before saves
+// kept built-ins' files) is listed as deleted, its detail opens, and a revert restores it: no panic.
+func TestManageSurvivesAMissingPrompt(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	e, _ := f.engine(nil, Config{})
+	ctx := context.Background()
+	if _, err := e.db.ExecContext(ctx, `INSERT INTO spec_versions (item, version, action, files, from_version, author) VALUES ('prompt.lead', 1, 'save', '{}'::jsonb, 0, 't')`); err != nil {
+		t.Fatal(err)
+	}
+	items, err := e.Items(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(items, func(x Item) bool { return x.ID == "prompt.lead" })
+	if i < 0 || !items[i].Deleted || items[i].Summary != deletedSummary {
+		t.Fatalf("the missing prompt's item: %+v", items[i])
+	}
+	if d, err := e.ItemDetail(ctx, "prompt.lead"); err != nil || len(d.Content) != 0 || d.Original[leadFile] == "" {
+		t.Fatalf("detail: %+v %v", d, err)
+	}
+	if _, err := e.Revert(ctx, "prompt.lead", 0, 1, "", "Ada"); err != nil {
+		t.Fatal(err)
+	}
+	if d, err := e.ItemDetail(ctx, "prompt.lead"); err != nil || d.Deleted || d.Content[leadFile] == "" {
+		t.Fatalf("after the revert: %+v %v", d.Item, err)
+	}
+}
+
+// TestManageSurvivesABrokenVersion: a stored version that no longer loads (edited in the database,
+// or saved under an older parser) is listed as broken with why, its detail shows what is stored,
+// every other item is still listed, and a revert repairs it.
+func TestManageSurvivesABrokenVersion(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	e, _ := f.engine(nil, Config{})
+	ctx := context.Background()
+	const rf = agentsDir + "reproduce.json"
+	if _, err := e.db.ExecContext(ctx, `INSERT INTO spec_versions (item, version, action, files, from_version, author) VALUES ('agent.reproduce', 1, 'save', $1::jsonb, 0, 't')`,
+		`{"`+rf+`": "{", "`+agentsDir+`reproduce.md": "x"}`); err != nil {
+		t.Fatal(err)
+	}
+	items, err := e.Items(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(items, func(x Item) bool { return x.ID == "agent.reproduce" })
+	if i < 0 || items[i].Status != "broken" || !strings.Contains(items[i].Summary, "does not load") || len(items) != len(Builtins()) {
+		t.Fatalf("the broken item (%d items): %+v", len(items), items[i])
+	}
+	if d, err := e.ItemDetail(ctx, "agent.reproduce"); err != nil || d.Content[rf] != "{" {
+		t.Fatalf("detail: %+v %v", d.Content, err)
+	}
+	if _, err := e.ItemDetail(ctx, "prompt.lead"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Revert(ctx, "agent.reproduce", 0, 1, "", "Ada"); err != nil {
+		t.Fatal(err)
+	}
+	if d, err := e.ItemDetail(ctx, "agent.reproduce"); err != nil || d.Status == "broken" {
+		t.Fatalf("after the revert: %+v %v", d.Item, err)
+	}
+}

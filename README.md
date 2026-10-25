@@ -1418,7 +1418,11 @@ each one in Manage (`#/manage`) or the routes above, with no rebuild:
   its files, who (`author`), when, an optional note and the version it replaced; a revert (to any
   version, or to the built-in: files NULL) and a skill's deletion (files `{}`, a tombstone) are versions
   too, so the table is the history and the **change log**. A save names the version it was edited from
-  (`base`): a stale one is 409. Diffs are a line LCS (Go `diff.go` for the API and the export, the UI's
+  (`base`): a stale one is 409. A save holds files: one with none, which would delete the item, is
+  refused for every built-in (with Delete's reason where Delete refuses too), and a request body is
+  exactly one JSON object (400 otherwise). A stored version that no longer loads is listed as broken
+  (why, and what is stored) and reverts like any other; a prompt whose file a version removed is listed
+  as deleted. Diffs are a line LCS (Go `diff.go` for the API and the export, the UI's
   `components/diff.ts` for its views and unsaved edits).
 - **Snapshot.** `Submit` stores the overrides in effect (each item's latest version, unless it is the
   built-in again) in `tasks.specs`, in the statement that stores the task. `execute` builds the run's

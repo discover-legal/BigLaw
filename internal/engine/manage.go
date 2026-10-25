@@ -170,20 +170,51 @@ func (e *Engine) currentSpecs(ctx context.Context, db querier) (*Specs, Snapshot
 
 // Items is the catalogue: every built-in item, every item an admin created, and deleted skills.
 func (e *Engine) Items(ctx context.Context) ([]Item, error) {
-	items, _, err := e.items(ctx)
+	items, _, _, err := e.items(ctx)
 	return items, err
 }
 
-func (e *Engine) items(ctx context.Context) ([]Item, *Specs, error) {
-	sp, _, rows, err := e.currentSpecs(ctx, e.db)
+func (e *Engine) items(ctx context.Context) ([]Item, *Specs, Snapshot, error) {
+	snap, rows, err := e.current(ctx, e.db)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
+	sp, broken := loadable(snap)
 	use, err := e.usage(ctx)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return catalog(sp, rows, use), sp, nil
+	items := catalog(sp, rows, use)
+	for i, it := range items {
+		if why, ok := broken[it.ID]; ok {
+			items[i].Status, items[i].Summary = "broken", "Its latest version does not load ("+truncate(why, 300)+"): new tasks cannot start until it is reverted."
+		}
+	}
+	return items, sp, snap, nil
+}
+
+// loadable is snap's set without the overrides that do not load (each with why), so the catalogue
+// still lists every item when a stored version no longer parses; a set that loads is snap's own.
+func loadable(snap Snapshot) (*Specs, map[string]string) {
+	sp, err := newSpecs(snap)
+	if err == nil {
+		return sp, nil
+	}
+	good, broken := Snapshot{}, map[string]string{}
+	for id, o := range snap {
+		if _, err := newSpecs(Snapshot{id: o}); err != nil {
+			broken[id] = err.Error()
+		} else {
+			good[id] = o
+		}
+	}
+	if sp, err = newSpecs(good); err != nil { // only the whole set fails: every override is suspect
+		for id := range good {
+			broken[id] = err.Error()
+		}
+		return builtinSpecs, broken
+	}
+	return sp, broken
 }
 
 // catalog lists sp's items (rows: each item's latest version; use: recent usage by tool name).
@@ -249,7 +280,11 @@ func describeItem(sp *Specs, id string, row Override, use map[string]ItemUsage) 
 	}
 	switch kind {
 	case "prompt":
-		it.Summary = firstSentence(sp.prompt(name))
+		if b, ok := sp.files[engineDir+"specs/"+name+".md"]; ok {
+			it.Summary = firstSentence(string(b))
+		} else { // its file deleted (a save before saves kept built-ins' files): shown, revertable, never a panic
+			it.Deleted, it.Summary = true, deletedSummary
+		}
 		if name == "lead" {
 			it.Uses = append(it.Uses, leadVisible(sp)...)
 		}
@@ -356,7 +391,7 @@ func (e *Engine) usage(ctx context.Context) (map[string]ItemUsage, error) {
 
 // ItemDetail is one item with its contents.
 func (e *Engine) ItemDetail(ctx context.Context, id string) (ItemDetail, error) {
-	items, sp, err := e.items(ctx)
+	items, sp, snap, err := e.items(ctx)
 	if err != nil {
 		return ItemDetail{}, err
 	}
@@ -364,7 +399,11 @@ func (e *Engine) ItemDetail(ctx context.Context, id string) (ItemDetail, error) 
 	if i < 0 {
 		return ItemDetail{}, fmt.Errorf("%w: no item %s", ErrNotFound, id)
 	}
-	return detail(sp, items[i]), nil
+	d := detail(sp, items[i])
+	if items[i].Status == "broken" { // what is stored, for the admin to see what does not load
+		d.Content = maps.Clone(snap[id].Files)
+	}
+	return d, nil
 }
 
 // detail is it with its contents in sp.
@@ -620,6 +659,14 @@ func (e *Engine) save(ctx context.Context, tx *sql.Tx, id string, in SaveIn, aut
 	if files == nil {
 		files = map[string]string{}
 	}
+	if len(files) == 0 && exists { // a save of no files would delete the item: only Delete may, and never what Go needs
+		if err := undeletable(id); err != nil {
+			return Version{}, nil, err
+		}
+		if len(itemFiles(builtin, id)) > 0 {
+			return Version{}, nil, invalid("", "%s is built in: a save keeps its files (edit or revert it; a skill is deleted with Delete)", id)
+		}
+	}
 	old := fileMap(before.files, id)
 	if kind == "skill" && !exists && !skillName.MatchString(name) {
 		return Version{}, nil, invalid("", "a skill's name is 2–40 lower-case letters, digits and -, starting with a letter")
@@ -796,14 +843,9 @@ func (e *Engine) Delete(ctx context.Context, id string, base int, note, author s
 }
 
 func (e *Engine) delete(ctx context.Context, tx *sql.Tx, id string, base int, note, author string) (Version, error) {
-	kind, name, _ := strings.Cut(id, ".")
-	switch {
-	case kind == "prompt" || kind == "pass" || kind == "pack" || kind == "hook":
-		return Version{}, invalid("", "%s is part of the engine's workflow: edit or revert it; it cannot be deleted", id)
-	case kind == "agent" || kind == "tool":
-		if why := goDepends(name); why != "" {
-			return Version{}, invalid("", "%s cannot be deleted or disabled: %s. Edit or revert it instead", id, why)
-		}
+	kind, _, _ := strings.Cut(id, ".")
+	if err := undeletable(id); err != nil {
+		return Version{}, err
 	}
 	sp, snap, rows, err := e.currentSpecs(ctx, tx)
 	if err != nil {
@@ -823,6 +865,20 @@ func (e *Engine) delete(ctx context.Context, tx *sql.Tx, id string, base int, no
 		return Version{}, err
 	}
 	return e.insertVersion(ctx, tx, id, base+1, "delete", map[string]string{}, base, nil, author, note)
+}
+
+// undeletable is why id may never be deleted (nil when it may): the engine's workflow, or what Go needs.
+func undeletable(id string) error {
+	kind, name, _ := strings.Cut(id, ".")
+	switch {
+	case kind == "prompt" || kind == "pass" || kind == "pack" || kind == "hook":
+		return invalid("", "%s is part of the engine's workflow: edit or revert it; it cannot be deleted", id)
+	case kind == "agent" || kind == "tool":
+		if why := goDepends(name); why != "" {
+			return invalid("", "%s cannot be deleted or disabled: %s. Edit or revert it instead", id, why)
+		}
+	}
+	return nil
 }
 
 func (e *Engine) insertVersion(ctx context.Context, tx *sql.Tx, id string, n int, action string, files map[string]string, from int, restored *int, author, note string) (Version, error) {
