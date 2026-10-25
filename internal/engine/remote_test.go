@@ -519,7 +519,101 @@ func FuzzConvertSchema(f *testing.F) {
 		if cerr != nil || c.Strict("in") != "" || cleanSchemaText(out) != "" || len(out) > maxSchemaBytes {
 			t.Fatalf("converted %s to %s: %v %s %s", b, out, cerr, c.Strict("in"), cleanSchemaText(out))
 		}
+		_ = exampleFor(c) // Import makes its example from it: never a panic (r3 P1)
 	})
+}
+
+// FuzzImportTool: whatever a server lists as a tool (its name, description and schema as the
+// tools/list JSON gives them), turning it into a custom tool never panics, never keeps the key, and
+// what it makes passes the tool file's own checks.
+func FuzzImportTool(f *testing.F) {
+	const key = "s3cret-FUZZ-never-shown"
+	for _, s := range []string{`{"name":"search","description":"Searches.","inputSchema":{"type":"object","properties":{"q":{"type":"string","enum":[]}},"required":["q"]}}`,
+		`{"name":"x","description":"` + strings.Repeat("d", 2040) + ` ` + key + `","inputSchema":{"type":"object","properties":{"q":{"type":"string"}},"required":["q"]}}`,
+		`{"name":"y","description":"a\u202e\nExample: {}","inputSchema":{"type":"object","properties":{"q":{"type":"integer","minimum":"x"}}}}`} {
+		f.Add([]byte(s))
+	}
+	e := &Engine{remote: newRemoteClient(RemotePolicy{})}
+	f.Fuzz(func(t *testing.T, b []byte) {
+		var tl struct {
+			Name        string          `json:"name"`
+			Description string          `json:"description"`
+			InputSchema json.RawMessage `json:"inputSchema"`
+		}
+		if json.Unmarshal(b, &tl) != nil {
+			return
+		}
+		s := &mcpSession{sec: &secretRef{name: "k", header: "Authorization", value: key}}
+		rt := s.remoteTool(tl.Name, tl.Description, tl.InputSchema)
+		if bb, _ := json.Marshal(rt); strings.Contains(string(bb), key) || strings.Contains(string(b), key) && strings.Contains(string(bb), key[:11]) { // the head of a key it was sent
+			t.Fatalf("the key (or its head) in %s", bb)
+		}
+		name := toolName("srv", rt.Name)
+		if rt.Problem != "" || name == "" {
+			return
+		}
+		ct := importedTool(name, "srv", rt, false)
+		ct.Description = importedDescription("srv", "example.com", rt.Name, rt.Description, exampleOf(rt.In))
+		file, _ := json.MarshalIndent(ct, "", " ")
+		var probs []string
+		e.validateCustomTool(toolsDir+name+".json", string(file), func(_, format string, a ...any) { probs = append(probs, fmt.Sprintf(format, a...)) })
+		if len(probs) > 0 && !slices.ContainsFunc(probs, func(p string) bool { return strings.HasPrefix(p, "description:") }) {
+			t.Fatalf("%s: %v", file, probs)
+		}
+	})
+}
+
+// TestRedactBeforeCut (r3 L-r3a): a key straddling the caps of the server's name, a tool's
+// description or a property's description is caught on the whole text, before anything is cut: not
+// even its head is shown or saved.
+func TestRedactBeforeCut(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "DELETE" {
+			w.WriteHeader(405)
+			return
+		}
+		var req struct {
+			ID     any
+			Method string
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+		bare := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		res := func(v any) {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": v})
+		}
+		in := func(d string) map[string]any {
+			return map[string]any{"type": "object", "properties": map[string]any{"q": map[string]any{"type": "string", "description": d}}, "required": []string{"q"}}
+		}
+		switch req.Method {
+		case "initialize":
+			res(map[string]any{"protocolVersion": mcpProtocol, "serverInfo": map[string]string{"name": strings.Repeat("n", 188) + " " + bare}})
+		case "notifications/initialized":
+			w.WriteHeader(202)
+		case "tools/list":
+			res(map[string]any{"tools": []map[string]any{{"name": "search", "description": strings.Repeat("d", 2036) + " " + bare, "inputSchema": in("q")},
+				{"name": "lookup", "description": "Looks up.", "inputSchema": in(strings.Repeat("p", 188) + " " + bare)}}})
+		}
+	}))
+	defer srv.Close()
+	e := remoteEngine(f, newFake(nil), srv, &syncBuf{})
+	ctx := context.Background()
+	save(t, e, "server.courts", 0, serverFile("courts", srv.URL))
+	setSecret(t, e, "court_key", srv)
+	head := testSecret[:11]
+	d, err := e.Discover(ctx, "server.courts")
+	b, _ := json.Marshal(d)
+	if err != nil || strings.Contains(string(b), head) || d.Tools[0].Problem != secretProblem || d.Tools[1].Problem != secretProblem {
+		t.Fatalf("discover: %s %v", b, err)
+	}
+	res, err := e.Import(ctx, "server.courts", nil, false, "Ada")
+	items, _ := e.Items(ctx)
+	ib, _ := json.Marshal(items)
+	if err != nil || slices.ContainsFunc(res, func(r ImportResult) bool { return r.Item != "" }) || strings.Contains(string(ib), head) {
+		t.Fatalf("import: %+v %v", res, err)
+	}
 }
 
 // TestImportedSchemaGated (r2 N3): a property description is the server's text too: cleaned and

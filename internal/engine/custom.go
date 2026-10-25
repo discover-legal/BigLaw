@@ -421,11 +421,11 @@ func (e *Engine) Discover(ctx context.Context, id string) (Discovery, error) {
 		e.log.Info("remote: discover", "server", srv.Name, "status", err.Error())
 		return Discovery{}, invalid("", "%s", strings.TrimPrefix(err.Error(), "remote: "))
 	}
-	d := Discovery{Server: srv.Name, ServerName: sec.redact(untrusted(s.ServerName)), Protocol: s.Protocol, Tools: []RemoteTool{}}
+	d := Discovery{Server: srv.Name, ServerName: untrusted(sec.redact(s.ServerName)), Protocol: s.Protocol, Tools: []RemoteTool{}}
 	for _, rt := range tools {
 		if sec.in(rt.Name) || sec.in(rt.Description) || sec.in(string(rt.In)) || sec.in(rt.Problem) {
 			rt = RemoteTool{Name: sec.redact(rt.Name), Description: sec.redact(rt.Description),
-				Problem: "its name, description or schema holds the server's secret (the server echoes what BigLaw sends): not importable"}
+				Problem: secretProblem}
 		}
 		for _, n := range slices.Sorted(maps.Keys(sp.tools)) {
 			if t := sp.tools[n]; t.MCP != nil && t.MCP.Server == srv.Name && t.MCP.Tool == rt.Name {
@@ -507,13 +507,7 @@ func (e *Engine) Import(ctx context.Context, id string, names []string, offer bo
 		case exists && rt.Item == "":
 			res.Problem = "a tool named " + name + " already exists (not one imported from " + srv.Name + ")"
 		default:
-			sch, _ := agent.Compile(rt.In)
-			ex, _ := json.Marshal(exampleFor(sch))
-			t := CustomTool{Name: name, Kind: "mcp", Enabled: false, OfferToLead: offer, Class: "free", In: rt.In, Imported: &Imported{Text: rt.Description}}
-			t.MCP = &struct {
-				Server string `json:"server"`
-				Tool   string `json:"tool"`
-			}{srv.Name, rt.Name}
+			t := importedTool(name, srv.Name, rt, offer)
 			action := "created"
 			if exists {
 				action = "updated"
@@ -522,7 +516,7 @@ func (e *Engine) Import(ctx context.Context, id string, names []string, offer bo
 					t.Enabled, t.Imported.AcceptedBy = old.Enabled, old.Imported.AcceptedBy
 				}
 			}
-			t.Description = importedDescription(srv.Name, host, rt.Name, rt.Description, ex)
+			t.Description = importedDescription(srv.Name, host, rt.Name, rt.Description, exampleOf(rt.In))
 			b, _ := json.MarshalIndent(t, "", " ")
 			files := map[string]string{toolsDir + name + ".json": string(b) + "\n"}
 			base := sp.versions["tool."+name]
@@ -546,6 +540,26 @@ func (e *Engine) Import(ctx context.Context, id string, names []string, offer bo
 		out = append(out, res)
 	}
 	return out, nil
+}
+
+// importedTool is the custom tool an import makes of rt (disabled, its text not yet accepted).
+func importedTool(name, server string, rt RemoteTool, offer bool) CustomTool {
+	t := CustomTool{Name: name, Kind: "mcp", Enabled: false, OfferToLead: offer, Class: "free", In: rt.In, Imported: &Imported{Text: rt.Description}}
+	t.MCP = &struct {
+		Server string `json:"server"`
+		Tool   string `json:"tool"`
+	}{server, rt.Name}
+	return t
+}
+
+// exampleOf is an example input for a converted schema ({} when it does not compile).
+func exampleOf(in json.RawMessage) []byte {
+	sch, err := agent.Compile(in)
+	if err != nil {
+		return []byte("{}")
+	}
+	ex, _ := json.Marshal(exampleFor(sch))
+	return ex
 }
 
 // jsonEqual reports whether two JSON documents hold the same value (key order and spacing aside).

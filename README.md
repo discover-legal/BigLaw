@@ -1540,7 +1540,9 @@ snapshot.
   logs, the UI or a model: the key with and without its prefix, base64 in either alphabet (padded or
   not), URL- and JSON-escaped, and a Basic pair and its password; so is every error built from remote
   data (`secretRef.scrub`: a schema's property path, a call's failure), and the server's own protocol
-  version is never echoed. An origin that obfuscates its own key (splits, spaces or hex-encodes it) is
+  version is never echoed. The check runs on what the server sent, whole, before anything is cleaned
+  or cut to its cap (a server name, a tool's or a property's description, a problem), so a key that
+  straddles a cap is caught too: a listed tool holding it is not importable. An origin that obfuscates its own key (splits, spaces or hex-encodes it) is
   not stopped: it already holds the key. They are stored in
   Postgres as everything is (back up and protect the database accordingly); a task resolves a secret
   by name at call time, so a secret changed mid-run reaches the run's later calls.
