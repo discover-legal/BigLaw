@@ -42,6 +42,13 @@ func newFakeMCP(t *testing.T) *fakeMCP {
 			w.WriteHeader(401)
 			return
 		}
+		if r.Method == "DELETE" { // the session's end
+			f.mu.Lock()
+			f.calls = append(f.calls, "DELETE "+r.Header.Get("Mcp-Session-Id"))
+			f.mu.Unlock()
+			w.WriteHeader(204)
+			return
+		}
 		var req struct {
 			ID     any
 			Method string
@@ -116,6 +123,33 @@ func remoteEngine(f *fixture, chat model.Chatter, srv *httptest.Server, logs io.
 	return f.e
 }
 
+// setSecret sets name for srv's origin.
+func setSecret(t *testing.T, e *Engine, name string, srv *httptest.Server) {
+	t.Helper()
+	if err := e.SetSecret(context.Background(), name, testSecret, srv.URL, "Ada"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// accept is an admin accepting an imported tool's server text and enabling it.
+func accept(t *testing.T, e *Engine, name string) {
+	t.Helper()
+	ctx := context.Background()
+	d, err := e.ItemDetail(ctx, "tool."+name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ct CustomTool
+	f := toolsDir + name + ".json"
+	if err := json.Unmarshal([]byte(d.Content[f]), &ct); err != nil {
+		t.Fatal(err)
+	}
+	ct.Enabled, ct.Imported.AcceptedBy = true, "whoever the file says"
+	b, _ := json.MarshalIndent(ct, "", " ")
+	if _, _, err := e.Save(ctx, "tool."+name, SaveIn{Base: d.Latest, Files: map[string]string{f: string(b)}}, "Ada"); err != nil {
+		t.Fatalf("accept %s: %s", name, problems(err))
+	}
+}
 
 func serverFile(name, url string) map[string]string {
 	b, _ := json.Marshal(Server{Name: name, URL: url, Enabled: true, Auth: Auth{Secret: "court_key", Header: "Authorization", Prefix: "Bearer "}})
@@ -173,17 +207,17 @@ func TestRemoteRefusesNonPublicTargets(t *testing.T) {
 	}))
 	defer srv.Close()
 	ctx := context.Background()
-	if _, err := c.do(ctx, "GET", strings.Replace(srv.URL, "127.0.0.1", "localhost", 1)+"/ok", nil, nil, "", ""); err == nil {
+	if _, err := c.do(ctx, "GET", strings.Replace(srv.URL, "127.0.0.1", "localhost", 1)+"/ok", nil, nil, nil); err == nil {
 		t.Error("production policy reached a loopback server")
 	}
 	tc := newRemoteClient(RemotePolicy{AllowLoopback: true, RootCAs: srv.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs})
-	if a, err := tc.do(ctx, "GET", srv.URL+"/here", nil, nil, "", ""); err != nil || string(a.body) != "ok" {
+	if a, err := tc.do(ctx, "GET", srv.URL+"/here", nil, nil, nil); err != nil || string(a.body) != "ok" {
 		t.Errorf("a same-host redirect: %v", err)
 	}
-	if _, err := tc.do(ctx, "GET", srv.URL+"/away", nil, nil, "Authorization", testSecret); err == nil || !strings.Contains(err.Error(), "redirect was refused") {
+	if _, err := tc.do(ctx, "GET", srv.URL+"/away", nil, nil, &secretRef{name: "k", header: "Authorization", value: testSecret, origin: originOf(srv.URL)}); err == nil || !strings.Contains(err.Error(), "redirect was refused") {
 		t.Errorf("a redirect to another host: %v", err)
 	}
-	if _, err := tc.do(ctx, "GET", srv.URL+"/big", nil, nil, "", ""); err == nil || !strings.Contains(err.Error(), "over 1 MB") {
+	if _, err := tc.do(ctx, "GET", srv.URL+"/big", nil, nil, nil); err == nil || !strings.Contains(err.Error(), "over 1 MB") {
 		t.Errorf("an answer over 1 MB: %v", err)
 	}
 }
@@ -239,9 +273,7 @@ func TestMCPImportAndCall(t *testing.T) {
 	if _, err := e.Discover(ctx, "server.courts"); err == nil || strings.Contains(err.Error(), testSecret) || !strings.Contains(err.Error(), `secret "court_key" is not set`) {
 		t.Fatalf("discover with its secret unset: %v", err)
 	}
-	if err := e.SetSecret(ctx, "court_key", testSecret, "Ada"); err != nil {
-		t.Fatal(err)
-	}
+	setSecret(t, e, "court_key", mcp.Server)
 	d, err := e.Discover(ctx, "server.courts")
 	if err != nil || d.ServerName != "Fake Court Records" || len(d.Tools) != 2 || d.Tools[1].Problem == "" || !strings.Contains(d.Tools[1].Problem, "anyOf") {
 		t.Fatalf("discover: %+v %v", d, err)
@@ -250,6 +282,10 @@ func TestMCPImportAndCall(t *testing.T) {
 	if err != nil || len(res) != 2 || res[0].Item != "tool.courts_search" || res[1].Problem == "" {
 		t.Fatalf("import: %+v %v", res, err)
 	}
+	if n := mcp.count("DELETE sess-1"); n != 2 { // Discover's session and Import's
+		t.Fatalf("the MCP sessions were ended %d times", n)
+	}
+	accept(t, e, "courts_search")
 	snap, _, _ := e.current(ctx, e.db)
 	sp, _ := newSpecs(snap)
 	if !slices.Contains(leadVisible(sp), "courts_search") {
@@ -333,11 +369,11 @@ func TestHTTPToolTestCallAndDisable(t *testing.T) {
 		b, _ := json.MarshalIndent(t, "", " ")
 		return map[string]string{toolsDir + "rates.json": string(b)}
 	}
-	if _, _, err := e.Save(ctx, "tool.rates", SaveIn{Files: tool("https://10.0.0.7/rates", true)}, "Ada"); !strings.Contains(problems(err), "http.url: 10.0.0.7 is private") {
+	if _, _, err := e.Save(ctx, "tool.rates", SaveIn{Files: tool("https://10.0.0.7/rates", true)}, "Ada"); !strings.Contains(problems(err), "http.url: "+errRemoteAddr.Error()) {
 		t.Fatalf("a private URL: %s", problems(err))
 	}
 	save(t, e, "tool.rates", 0, tool(srv.URL+"/rates", true))
-	e.SetSecret(ctx, "rates_key", testSecret, "Ada")
+	setSecret(t, e, "rates_key", srv)
 	res, err := e.TestCall(ctx, "tool.rates", TestIn{DocumentIDs: f.ids(), Input: json.RawMessage(`{"state":"NY"}`)}, "Ada")
 	if err != nil || res.Error != "" || !strings.Contains(string(res.Output), `\"rate\":\"9%\"`) || !strings.Contains(string(res.Output), `"source":"http:`) {
 		t.Fatalf("test call: %+v %v", res, err)
@@ -443,7 +479,7 @@ func TestDeleteRefusedWhileReferenced(t *testing.T) {
 	e := remoteEngine(f, newFake(nil), mcp.Server, &syncBuf{})
 	ctx := context.Background()
 	save(t, e, "server.courts", 0, serverFile("courts", mcp.URL))
-	e.SetSecret(ctx, "court_key", testSecret, "Ada")
+	setSecret(t, e, "court_key", mcp.Server)
 	if _, err := e.Import(ctx, "server.courts", []string{"search"}, false, "Ada"); err != nil {
 		t.Fatal(err)
 	}

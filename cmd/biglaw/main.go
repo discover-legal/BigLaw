@@ -155,6 +155,10 @@ func run(ctx context.Context, args []string, getenv func(string) string, environ
 			}
 		}
 		e := engine.New(st, d, chat, cfg.Roles, cfg.Prices, cfg.Engine, log)
+		e.SetRemotePolicy(remotePolicy(allowNoAuth, adminWithoutAuth))
+		if allowNoAuth || adminWithoutAuth {
+			log.Info("secrets and custom tools' outbound calls are off (--allow-no-auth or --admin-without-auth): they need a real admin (README § Exposure)")
+		}
 		if err := serve(ctx, st, d, e, ln, log, who); err != nil {
 			fmt.Fprintf(stderr, "biglaw: %v\n", err)
 			return 1
@@ -170,6 +174,13 @@ func run(ctx context.Context, args []string, getenv func(string) string, environ
 }
 
 type pinger interface{ Ping(context.Context) error }
+
+// remotePolicy is custom tools' policy: off unless the admin is a real one (the loopback user of a
+// plain serve), so with --allow-no-auth or --admin-without-auth no secret is set or sent and no
+// custom outbound call is made until PR 8's sign-in can tell an admin (README § Exposure).
+func remotePolicy(allowNoAuth, adminWithoutAuth bool) engine.RemotePolicy {
+	return engine.RemotePolicy{Off: allowNoAuth || adminWithoutAuth}
+}
 
 // managePrincipal is every request's principal until PR 8's sign-in (README § Exposure): the local
 // user is an admin on a loopback server (no --allow-no-auth) or with --admin-without-auth; under

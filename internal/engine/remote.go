@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,11 +19,14 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/discover-legal/BigLaw/internal/agent"
 )
@@ -32,23 +36,54 @@ import (
 // endpoint. Every request goes through remoteClient: https only, no credentials in the URL, every
 // address it connects to checked when it connects (so a name that resolves, or a redirect that
 // leads, to a private, loopback, link-local or metadata address is refused: DNS rebinding included),
-// at most 3 redirects, a 30 s timeout, a 1 MB answer cap, no proxy (a proxy would connect for it,
-// past the address check). Secrets live server-side (secrets table) and are added as one header;
-// they never reach the API, a log line, an error, the snapshot or the export. An answer is untrusted
-// data from outside the matter, labelled so in its output.
+// at most 3 redirects, ports 443 and 8443 only, 30 s for the whole call (every request of it; also
+// a Discover/Import), a 1 MB answer cap and 64 KB of headers, no proxy (a proxy would connect for it,
+// past the address check; HTTPS_PROXY is ignored by design). Secrets live server-side (secrets
+// table), each bound to the origin it was set for (secretRef: never sent to another scheme, host or
+// port), added as one header, and redacted from everything the remote end sends back (its value with
+// and without its prefix, base64, URL and JSON forms); they never reach the API, a log line, an
+// error, the snapshot, the export or a model. An answer is untrusted data from outside the matter,
+// labelled so in its output. With no signed-in admin (--allow-no-auth) all of it is off (Off).
 
 // Remote call bounds.
 const (
 	remoteTimeout   = 30 * time.Second
 	remoteMaxBytes  = 1 << 20
+	remoteMaxHeader = 64 << 10
 	remoteRedirects = 3
 	mcpProtocol     = "2025-06-18"
 )
 
+// mcpProtocols are the MCP protocol versions BigLaw speaks (the server's initialize answer must
+// name one of them: its requests and answers are then the shapes remote.go reads).
+var mcpProtocols = []string{"2025-06-18", "2025-03-26"}
+
+// remotePorts are the ports a custom tool or server may use (L4: a port policy, so a custom tool is
+// never a port scanner; the refusal's words are the same whatever the reason).
+var remotePorts = []string{"443", "8443"}
+
+// ErrForbidden is a refusal of who is asking, not of what (403): custom outbound calls and secrets
+// with no signed-in admin.
+var ErrForbidden = errors.New("engine: forbidden")
+
+// errRemoteOff is the refusal of every secret and custom outbound call when the server runs with
+// no signed-in admin (RemotePolicy.Off).
+var errRemoteOff = fmt.Errorf("%w: secrets and custom tools' outbound calls need a signed-in admin, and this server runs without sign-in (--allow-no-auth): until PR 8's sign-in they work only when BigLaw runs on loopback without that flag (README § Exposure)", ErrForbidden)
+
+// errRemoteDeadline is the cause of a call's own 30 s deadline (withRemoteDeadline).
+var errRemoteDeadline = errors.New("remote: no answer within 30 s (the whole call)")
+
+// withRemoteDeadline is ctx bounded by one call's 30 s (every request of an MCP call or of a
+// Discover/Import shares it).
+func withRemoteDeadline(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeoutCause(ctx, remoteTimeout, errRemoteDeadline)
+}
+
 // RemotePolicy is what remote calls may reach. The zero value is production's: public addresses
 // over https only. Tests (a local fake server) allow loopback and trust their server's certificate.
 type RemotePolicy struct {
-	AllowLoopback bool           // tests only: 127.0.0.0/8 and ::1 (never set by cmd/biglaw)
+	Off           bool           // no signed-in admin (serve --allow-no-auth): no secret is set or sent and no custom call made
+	AllowLoopback bool           // tests only: 127.0.0.0/8 and ::1 on any port (never set by cmd/biglaw)
 	RootCAs       *x509.CertPool // tests only: the httptest server's certificate
 }
 
@@ -66,7 +101,7 @@ func newRemoteClient(p RemotePolicy) *remoteClient {
 	c.http = &http.Client{
 		Timeout: remoteTimeout,
 		Transport: &http.Transport{Proxy: nil, DialContext: d.DialContext, TLSClientConfig: &tls.Config{RootCAs: p.RootCAs, MinVersion: tls.VersionTLS12},
-			TLSHandshakeTimeout: 10 * time.Second, ResponseHeaderTimeout: remoteTimeout, MaxIdleConns: 8, IdleConnTimeout: 30 * time.Second},
+			TLSHandshakeTimeout: 10 * time.Second, ResponseHeaderTimeout: remoteTimeout, MaxResponseHeaderBytes: remoteMaxHeader, MaxIdleConns: 8, IdleConnTimeout: 30 * time.Second},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error { // the same host only: a secret is for the host it was configured for
 			if len(via) >= remoteRedirects || req.URL.Host != via[0].URL.Host {
 				return errors.New("remote: redirect refused")
@@ -84,20 +119,34 @@ func (c *remoteClient) dialCheck(address string) error {
 		return err
 	}
 	ip, err := netip.ParseAddr(host)
-	if err != nil {
+	if err != nil || c.deniedAddr(ip) != "" {
 		return fmt.Errorf("remote: %w", errRemoteAddr)
-	}
-	if why := c.deniedAddr(ip); why != "" {
-		return fmt.Errorf("remote: %w (%s)", errRemoteAddr, why)
 	}
 	return nil
 }
 
-var errRemoteAddr = errors.New("the address is not a public one (private, loopback, link-local, metadata or reserved)")
+// errRemoteAddr is every refusal of where a request would go (a host, an address or a port): one
+// text whatever the reason, so the refusals tell nothing about a host's ports (L4). The reason is
+// for the server's own log only (deniedAddr).
+var errRemoteAddr = errors.New("the URL is not one BigLaw may reach (https to a public host on port 443 or 8443)")
 
-// deniedAddr is why ip may not be reached ("" when it may).
+// deniedAddr is why ip may not be reached ("" when it may): loopback, private, link-local, any
+// address of the IANA special-purpose registries that is not globally reachable, and IPv6 forms that
+// carry an IPv4 address (mapped, translated, compatible, NAT64, 6to4, Teredo) when it is denied or
+// the form is one BigLaw has no reason to dial.
 func (c *remoteClient) deniedAddr(ip netip.Addr) string {
-	ip = ip.Unmap()
+	ip = ip.WithZone("")
+	if ip.Is4In6() { // ::ffff:a.b.c.d is a.b.c.d on the wire
+		ip = ip.Unmap()
+	}
+	if ip.Is6() {
+		b := ip.As16()
+		if p := netip.PrefixFrom(ip, 16); p.Masked().Addr() == netip.MustParseAddr("2002::") { // 6to4: the IPv4 in bits 16–48
+			if why := c.deniedAddr(netip.AddrFrom4([4]byte(b[2:6]))); why != "" {
+				return "6to4 over " + why
+			}
+		}
+	}
 	switch {
 	case ip.IsLoopback():
 		if c.policy.AllowLoopback {
@@ -119,9 +168,27 @@ func (c *remoteClient) deniedAddr(ip netip.Addr) string {
 	return ""
 }
 
+// reserved are the special-purpose blocks (IANA's IPv4 and IPv6 Special-Purpose Address Registries,
+// RFC 6890 and updates) that are not globally reachable, plus the IPv6 forms that embed an IPv4
+// address and the deprecated site-local block; loopback, private (RFC 1918, fc00::/7), link-local and
+// multicast are refused by kind above.
 var reserved = func() (out []netip.Prefix) {
-	for _, s := range []string{"0.0.0.0/8", "100.64.0.0/10", "192.0.0.0/24", "192.0.2.0/24", "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24", "240.0.0.0/4",
-		"255.255.255.255/32", "64:ff9b::/96", "100::/64", "2001:db8::/32", "fd00:ec2::254/128"} {
+	for _, s := range []string{
+		"0.0.0.0/8", "100.64.0.0/10", "192.0.0.0/24", "192.0.2.0/24", "192.88.99.0/24", "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24",
+		"240.0.0.0/4", "255.255.255.255/32",
+		"::/96",             // IPv4-compatible (deprecated): ::a.b.c.d
+		"::ffff:0:0:0/96",   // IPv4-translated (SIIT): ::ffff:0:a.b.c.d
+		"64:ff9b::/96",      // NAT64 well-known prefix
+		"64:ff9b:1::/48",    // NAT64 local-use prefix
+		"100::/64",          // discard-only
+		"100:0:0:1::/64",    // dummy prefix
+		"2001::/23",         // IETF protocol assignments: Teredo 2001::/32, benchmarking, ORCHID
+		"2001:db8::/32",     // documentation
+		"3fff::/20",         // documentation
+		"5f00::/16",         // SRv6 SIDs
+		"fec0::/10",         // site-local (deprecated)
+		"fd00:ec2::254/128", // a cloud metadata address (inside fc00::/7, named for the log)
+	} {
 		out = append(out, netip.MustParsePrefix(s))
 	}
 	return out
@@ -143,20 +210,96 @@ func (c *remoteClient) checkURL(raw string) error {
 		return errors.New("remote: a URL needs a host and no fragment")
 	}
 	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
-	if host == "localhost" || strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".internal") || host == "metadata.google.internal" {
-		return errors.New("remote: " + host + " is not a public host")
+	labels := strings.Split(host, ".")
+	ip, ipErr := netip.ParseAddr(host)
+	loop := ipErr == nil && ip.IsLoopback() && c.policy.AllowLoopback
+	switch {
+	case host == "localhost" || strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".internal") || strings.HasSuffix(host, ".local") ||
+		strings.HasSuffix(host, ".localdomain") || strings.HasPrefix(host, "ip6-"):
+	case ipErr == nil && c.deniedAddr(ip) != "":
+	case ipErr != nil && numericLabel.MatchString(labels[len(labels)-1]): // 2130706433, 0x7f.1, 127.1: an address, not a name
+	case !loop && !slices.Contains(remotePorts, cmpStr(u.Port() != "", u.Port(), "443")):
+	default:
+		return nil
 	}
-	if ip, err := netip.ParseAddr(host); err == nil {
-		if why := c.deniedAddr(ip); why != "" {
-			return fmt.Errorf("remote: %s is %s, never reachable from BigLaw", host, why)
+	return fmt.Errorf("remote: %w", errRemoteAddr)
+}
+
+// untrusted is third-party text (an MCP server's tool description, name or protocol) fit to show:
+// control and format characters (bidi overrides, zero-width marks) and line breaks become spaces, so
+// it cannot open a line of its own in a description (no smuggled "Example:" or instruction line),
+// runs of space fold to one, and it is cut to at most max characters.
+func untrustedText(s string, max int) string {
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == '\u2028' || r == '\u2029' || r == utf8.RuneError {
+			return ' '
+		}
+		return r
+	}, s)
+	return truncate(strings.Join(strings.Fields(s), " "), max)
+}
+
+func untrusted(s string) string { return untrustedText(s, 200) }
+
+var numericLabel = regexp.MustCompile(`^(0x[0-9a-f]*|[0-9]+)$`)
+
+// originOf is a URL's origin as a secret is bound to it: https://host:port, the host lower-cased
+// and the port explicit ("" when raw is not an absolute URL).
+func originOf(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || !u.IsAbs() || u.Hostname() == "" {
+		return ""
+	}
+	return strings.ToLower(u.Scheme) + "://" + net.JoinHostPort(strings.TrimSuffix(strings.ToLower(u.Hostname()), "."), cmpStr(u.Port() != "", u.Port(), "443"))
+}
+
+// secretRef is a secret as a call sends it: the header, its value (prefix + secret), the secret's
+// name (for messages) and the origin it is bound to.
+type secretRef struct {
+	name, header, prefix, value, origin string
+}
+
+// forms are the ways the secret may come back in an answer: the header value, the bare secret,
+// and each in base64 (standard and URL alphabets, padded or not), URL-escaped and JSON-escaped; a
+// bare secret that is itself base64 of user:password adds the decoded pair and its password.
+func (s *secretRef) forms() []string {
+	if s == nil {
+		return nil
+	}
+	bare := strings.TrimPrefix(s.value, s.prefix)
+	base := []string{s.value, bare}
+	if dec, err := base64.StdEncoding.DecodeString(bare); err == nil && utf8.Valid(dec) {
+		if u, pw, ok := strings.Cut(string(dec), ":"); ok && u != "" {
+			base = append(base, string(dec))
+			if len(pw) >= 6 {
+				base = append(base, pw)
+			}
 		}
 	}
-	if p := u.Port(); p != "" {
-		if n, err := strconv.Atoi(p); err != nil || n < 1 || n > 65535 {
-			return errors.New("remote: bad port")
+	var out []string
+	for _, v := range base {
+		j, _ := json.Marshal(v)
+		out = append(out, v, base64.StdEncoding.EncodeToString([]byte(v)), base64.RawStdEncoding.EncodeToString([]byte(v)),
+			base64.URLEncoding.EncodeToString([]byte(v)), base64.RawURLEncoding.EncodeToString([]byte(v)),
+			url.QueryEscape(v), url.PathEscape(v), string(j[1:len(j)-1]))
+	}
+	slices.SortFunc(out, func(a, b string) int { return len(b) - len(a) }) // longest first: a form inside another goes with it
+	return slices.Compact(out)
+}
+
+// redact is text with every form of the secret replaced (a remote end that echoes its request).
+func (s *secretRef) redact(text string) string {
+	for _, f := range s.forms() {
+		if len(f) >= 6 {
+			text = strings.ReplaceAll(text, f, "[secret redacted]")
 		}
 	}
-	return nil
+	return text
+}
+
+// in says whether text holds any form of the secret.
+func (s *secretRef) in(text string) bool {
+	return s.redact(text) != text
 }
 
 // remoteAnswer is what one remote request returned.
@@ -167,11 +310,17 @@ type remoteAnswer struct {
 	elapsed time.Duration
 }
 
-// do sends one request, the secret (if any) as header: value. Errors are BigLaw's words only (the
-// URL, the secret and the answer's body are never in them).
-func (c *remoteClient) do(ctx context.Context, method, rawURL string, header http.Header, body []byte, secretHeader, secret string) (remoteAnswer, error) {
+// do sends one request, the secret (if any) as its header, only to the secret's own origin. Errors
+// are BigLaw's words only (the URL, the secret and the answer's body are never in them).
+func (c *remoteClient) do(ctx context.Context, method, rawURL string, header http.Header, body []byte, sec *secretRef) (remoteAnswer, error) {
+	if c.policy.Off {
+		return remoteAnswer{}, errRemoteOff
+	}
 	if err := c.checkURL(rawURL); err != nil {
 		return remoteAnswer{}, err
+	}
+	if sec != nil && (sec.origin == "" || originOf(rawURL) != sec.origin) {
+		return remoteAnswer{}, fmt.Errorf("remote: the secret %q was set for another origin (scheme, host and port), so it is not sent here: an admin sets it again for this URL in Manage", sec.name)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, rawURL, bytes.NewReader(body))
 	if err != nil {
@@ -179,28 +328,30 @@ func (c *remoteClient) do(ctx context.Context, method, rawURL string, header htt
 	}
 	maps.Copy(req.Header, header)
 	req.Header.Set("User-Agent", "BigLaw")
-	if secretHeader != "" && secret != "" {
-		req.Header.Set(secretHeader, secret)
+	if sec != nil {
+		req.Header.Set(sec.header, sec.value)
 	}
 	start := time.Now()
 	resp, err := c.http.Do(req)
 	if err != nil {
 		var ue *url.Error
 		switch {
+		case errors.Is(context.Cause(ctx), errRemoteDeadline):
+			return remoteAnswer{}, errRemoteDeadline
 		case ctx.Err() != nil:
 			return remoteAnswer{}, ctx.Err()
 		case errors.Is(err, errRemoteAddr):
 			return remoteAnswer{}, fmt.Errorf("remote: %w", errRemoteAddr)
-		case errors.As(err, &ue) && ue.Timeout():
-			return remoteAnswer{}, errors.New("remote: no answer within 30 s")
 		case errors.As(err, &ue) && strings.Contains(ue.Err.Error(), "redirect"):
 			return remoteAnswer{}, errors.New("remote: a redirect was refused (to another host, too many, or to a URL BigLaw may not reach)")
 		}
-		return remoteAnswer{}, errors.New("remote: the server could not be reached")
+		return remoteAnswer{}, errors.New("remote: the server could not be reached, or did not answer in time") // one text: no port or timing oracle
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, remoteMaxBytes+1))
-	if err != nil {
+	if errors.Is(context.Cause(ctx), errRemoteDeadline) {
+		return remoteAnswer{}, errRemoteDeadline
+	} else if err != nil {
 		return remoteAnswer{}, errors.New("remote: the answer could not be read")
 	}
 	if len(data) > remoteMaxBytes {
@@ -212,15 +363,17 @@ func (c *remoteClient) do(ctx context.Context, method, rawURL string, header htt
 // mcpSession is one MCP connection: initialize, then requests on its session id.
 type mcpSession struct {
 	c                    *remoteClient
-	url, header, secret  string
+	url                  string
+	sec                  *secretRef
 	id                   string
 	next                 int
 	ServerName, Protocol string
 }
 
-// openMCP is the initialize handshake (and the initialized notification) with a server.
-func (c *remoteClient) openMCP(ctx context.Context, rawURL, secretHeader, secret string) (*mcpSession, error) {
-	s := &mcpSession{c: c, url: rawURL, header: secretHeader, secret: secret}
+// openMCP is the initialize handshake (and the initialized notification) with a server; the server
+// must speak a protocol version BigLaw does (mcpProtocols). Close it when done.
+func (c *remoteClient) openMCP(ctx context.Context, rawURL string, sec *secretRef) (*mcpSession, error) {
+	s := &mcpSession{c: c, url: rawURL, sec: sec}
 	var init struct {
 		ProtocolVersion string `json:"protocolVersion"`
 		ServerInfo      struct {
@@ -232,10 +385,27 @@ func (c *remoteClient) openMCP(ctx context.Context, rawURL, secretHeader, secret
 		return nil, err
 	}
 	s.ServerName, s.Protocol = init.ServerInfo.Name, init.ProtocolVersion
+	if !slices.Contains(mcpProtocols, s.Protocol) {
+		s.Close(ctx)
+		return nil, fmt.Errorf("remote: the MCP server speaks protocol version %q; BigLaw speaks %s", truncate(untrusted(s.Protocol), 40), strings.Join(mcpProtocols, " or "))
+	}
 	if err := s.notify(ctx, "notifications/initialized"); err != nil {
+		s.Close(ctx)
 		return nil, err
 	}
 	return s, nil
+}
+
+// Close ends the session on the server (HTTP DELETE with its session id; Streamable HTTP), at most
+// 5 s, whatever ctx's state: a failure or a 405 (the server keeps no sessions) changes nothing.
+func (s *mcpSession) Close(ctx context.Context) {
+	if s == nil || s.id == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	_, _ = s.c.do(ctx, "DELETE", s.url, s.headers(), nil, s.sec) // best effort: the session times out on the server anyway
+	s.id = ""
 }
 
 func (s *mcpSession) headers() http.Header {
@@ -251,7 +421,7 @@ func (s *mcpSession) headers() http.Header {
 
 func (s *mcpSession) notify(ctx context.Context, method string) error {
 	body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "method": method})
-	a, err := s.c.do(ctx, "POST", s.url, s.headers(), body, s.header, s.secret)
+	a, err := s.c.do(ctx, "POST", s.url, s.headers(), body, s.sec)
 	if err == nil && a.status/100 != 2 {
 		err = fmt.Errorf("remote: the MCP server answered %s with HTTP %d", method, a.status)
 	}
@@ -264,7 +434,7 @@ func (s *mcpSession) call(ctx context.Context, method string, params any, out an
 	s.next++
 	id := s.next
 	body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params})
-	a, err := s.c.do(ctx, "POST", s.url, s.headers(), body, s.header, s.secret)
+	a, err := s.c.do(ctx, "POST", s.url, s.headers(), body, s.sec)
 	if err != nil {
 		return err
 	}
@@ -319,12 +489,16 @@ func (s *mcpSession) call(ctx context.Context, method string, params any, out an
 }
 
 // RemoteTool is one tool an MCP server lists, its input schema converted to BigLaw's subset
-// (convertSchema) or why it could not be.
+// (convertSchema) or why it could not be; its description is third-party text, cleaned and capped
+// (untrustedText). Item and Previous are a tool already imported from it and the text an admin
+// accepted for it (Discover).
 type RemoteTool struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
 	In          json.RawMessage `json:"in,omitempty"`
 	Problem     string          `json:"problem,omitempty"`
+	Item        string          `json:"item,omitempty"`
+	Previous    string          `json:"previous,omitempty"`
 }
 
 // listTools is a server's tools (tools/list, following its cursor, at most 10 pages).
@@ -348,8 +522,10 @@ func (s *mcpSession) listTools(ctx context.Context) ([]RemoteTool, error) {
 			return nil, err
 		}
 		for _, t := range page.Tools {
-			rt := RemoteTool{Name: truncate(t.Name, 128), Description: truncate(t.Description, 4000)}
-			if in, err := convertSchema(t.InputSchema); err != nil {
+			rt := RemoteTool{Name: truncate(t.Name, 128), Description: untrustedText(t.Description, maxImportedBytes)}
+			if rt.Name != untrusted(t.Name) || rt.Name == "" {
+				rt.Name, rt.Problem = untrusted(t.Name), "its name is empty, over 128 characters or holds control or format characters"
+			} else if in, err := convertSchema(t.InputSchema); err != nil {
 				rt.Problem = err.Error()
 			} else {
 				rt.In = in

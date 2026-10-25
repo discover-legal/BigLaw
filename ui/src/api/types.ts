@@ -195,16 +195,19 @@ export interface ManageDetail extends ManageItem {
 export interface SpecVersion {
   item: string; version: number; action: 'save' | 'revert' | 'create' | 'delete' | 'secret set' | 'secret deleted' | 'test'; files?: Record<string, string>;
   builtin: boolean; deleted: boolean; from: number; restored: number | null; author: string; note: string; createdAt: string;
+  /** A change log entry that is not a version (a secret set or deleted, a Test call). */
+  event?: boolean;
 }
 export interface SaveResult { version: SpecVersion; notes: string[] }
 export interface Problem { file: string; message: string }
 /** GET /me: who is asking; until sign-in (PR 8) the local user, an admin. */
 export interface Me { id: string; name: string; admin: boolean; authEnabled: boolean; adminWithoutAuth?: boolean }
 /** A secret as the API shows it: never its value. */
-export interface SecretView { name: string; updatedBy: string; updatedAt: string; usedBy: string[] }
-export interface RemoteTool { name: string; description: string; in?: unknown; problem?: string }
+export interface SecretView { name: string; origin: string; updatedBy: string; updatedAt: string; usedBy: string[] }
+/** One tool a server lists: its description is the server's (third-party) text; item and previous: already imported, and the text an admin accepted. */
+export interface RemoteTool { name: string; description: string; in?: unknown; problem?: string; item?: string; previous?: string }
 export interface Discovery { server: string; serverName: string; protocol: string; tools: RemoteTool[] }
-export interface ImportResult { remote: string; item?: string; problem?: string }
+export interface ImportResult { remote: string; item?: string; action?: 'created' | 'updated' | 'unchanged'; previous: string; text: string; problem?: string }
 export interface TestResult {
   taskId: string; output: unknown; error: string; millis: number;
   usage: { calls: number; inputTokens: number; outputTokens: number; usd: number; unpriced: number };

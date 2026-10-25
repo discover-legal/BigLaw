@@ -228,6 +228,7 @@ func ErrorType(err error) (int, string, string) {
 		{ErrBadTask, 400, "bad_request", ""},
 		{ErrNotFound, 404, "not_found", "not found"},
 		{ErrConflict, 409, "conflict", ""},
+		{ErrForbidden, 403, "forbidden", ""},
 		{ErrInvalid, 422, "invalid", ""},
 		{context.Canceled, 499, "cancelled", "the request was cancelled"},
 	} {

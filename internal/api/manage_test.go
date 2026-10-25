@@ -178,7 +178,10 @@ func TestManageSecretsNeverShown(t *testing.T) {
 		}
 	}
 	s := manageServer(t, local)
-	code, body := s.do("POST", "/manage/secrets", m{"name": "k1", "value": value})
+	if code, body := s.do("POST", "/manage/secrets", m{"name": "k1", "value": value}); code != 422 || !strings.Contains(body, "origin") {
+		t.Fatalf("a secret with no origin: %d %s", code, body)
+	}
+	code, body := s.do("POST", "/manage/secrets", m{"name": "k1", "value": value, "origin": "https://api.example.com"})
 	if code != 201 || strings.Contains(body, value) {
 		t.Fatalf("set: %d %s", code, body)
 	}
@@ -191,7 +194,7 @@ func TestManageSecretsNeverShown(t *testing.T) {
 			t.Errorf("GET %s: %d, value shown: %v", path, code, strings.Contains(body, value))
 		}
 	}
-	if _, body := s.do("GET", "/manage/secrets", nil); !strings.Contains(body, `"name":"k1"`) || !strings.Contains(body, `"updatedBy":"Local user"`) {
+	if _, body := s.do("GET", "/manage/secrets", nil); !strings.Contains(body, `"name":"k1"`) || !strings.Contains(body, `"updatedBy":"Local user"`) || !strings.Contains(body, `"origin":"https://api.example.com:443"`) {
 		t.Fatalf("list: %s", body)
 	}
 	if _, body := s.do("GET", "/manage/changes", nil); !strings.Contains(body, `"secret set"`) {
@@ -203,9 +206,9 @@ func TestManageSecretsNeverShown(t *testing.T) {
 	if code, _ := s.do("POST", "/manage/secrets/k1/delete", nil); code != 404 {
 		t.Fatalf("delete twice: %d", code)
 	}
-	// a server saved at a private address is refused at save, naming why
+	// a server saved at a metadata address is refused at save (one text whatever the reason: no oracle)
 	srv := `{"name":"x","url":"https://169.254.169.254/mcp","enabled":true}`
-	if code, body := s.do("POST", "/manage/items/server.x/versions", m{"base": 0, "files": m{"internal/engine/specs/servers/x.json": srv}, "note": ""}); code != 422 || !strings.Contains(body, "link-local") {
+	if code, body := s.do("POST", "/manage/items/server.x/versions", m{"base": 0, "files": m{"internal/engine/specs/servers/x.json": srv}, "note": ""}); code != 422 || !strings.Contains(body, "not one BigLaw may reach") {
 		t.Fatalf("a metadata-address server: %d %s", code, body)
 	}
 }

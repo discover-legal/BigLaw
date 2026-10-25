@@ -158,7 +158,7 @@ function Editor(props: { item: ManageDetail; saved: () => void; create?: string 
   const [error, setError] = useState<string | null>(null);
   const [notes, setNotes] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
-  const tools = useLoad(() => api.manageItems().then((xs) => xs.filter((x) => x.section === 'tools' || x.id === 'pass.ledger').map((x) => x.name).sort()), []);
+  const tools = useLoad(() => api.manageItems().then((xs) => xs.filter((x) => x.section === 'tools' && x.kind !== 'MCP server' || x.id === 'pass.ledger').map((x) => x.name).sort()), []);
   const set = (path: string, text: string) => setFiles((f) => ({ ...f, [path]: text }));
   const id = props.create ?? it.id;
   const save = () => {
@@ -315,7 +315,7 @@ function NewItem(props: { kind: string; saved: (id: string) => void }) {
   );
 }
 
-interface Remote { enabled?: boolean; offerToLead?: boolean; description?: string; url?: string; in?: unknown; http?: { url: string; method: string; secret?: string; header?: string; prefix?: string }; secret?: string; header?: string; prefix?: string; mcp?: { server: string; tool: string } }
+interface Remote { enabled?: boolean; offerToLead?: boolean; description?: string; url?: string; in?: unknown; http?: { url: string; method: string; secret?: string; header?: string; prefix?: string }; secret?: string; header?: string; prefix?: string; mcp?: { server: string; tool: string }; imported?: { text: string; acceptedBy: string } }
 
 /** RemoteFields edits a custom tool's or an MCP server's file: on/off, the lead, the target and its secret. */
 function RemoteFields(props: { text: string; set: (text: string) => void }) {
@@ -326,8 +326,9 @@ function RemoteFields(props: { text: string; set: (text: string) => void }) {
   const putAuth = (patch: Record<string, string>) => (v.http ? put({ http: { ...v.http, ...patch } }) : put(patch));
   return (
     <div className="fields">
+      {v.imported && <Accept imported={v.imported} accept={(by) => put({ enabled: true, imported: { ...v.imported!, acceptedBy: by } })} />}
       <div className="row">
-        <label><input type="checkbox" checked={v.enabled ?? false} onChange={(e) => put({ enabled: e.target.checked })} /> Enabled</label>
+        <label><input type="checkbox" checked={v.enabled ?? false} disabled={!!v.imported && !v.imported.acceptedBy} onChange={(e) => put({ enabled: e.target.checked })} /> Enabled</label>
         {'offerToLead' in v && <label><input type="checkbox" checked={v.offerToLead ?? false} onChange={(e) => put({ offerToLead: e.target.checked })} /> Offered to the lead</label>}
       </div>
       {v.mcp && <p className="small">Runs <code>{v.mcp.tool}</code> on the MCP server <code>{v.mcp.server}</code>.</p>}
@@ -358,26 +359,31 @@ function Secrets(props: { admin: boolean }) {
   const r = useLoad(() => api.manageSecrets(), [n]);
   const [name, setName] = useState('');
   const [value, setValue] = useState('');
+  const [origin, setOrigin] = useState('');
   const [error, setError] = useState<string | null>(null);
   const act = (p: Promise<void>) => p.then(() => { setError(null); setValue(''); setN(n + 1); }, (e: Error) => setError(e.message));
+  const del = (s: string, used: string[]) => {
+    if (window.confirm(`Delete the secret ${s}?${used.length ? ` ${used.join(', ')} will fail until it is set again, in running tasks too.` : ''}`)) void act(api.manageDeleteSecret(s));
+  };
   return (
     <div className="panel">
       <h2>Secrets</h2>
-      <p className="muted small">Keys custom tools send as a header. Stored on the server; no screen, route, log or export shows a value.</p>
+      <p className="muted small">Keys custom tools send as a header, each only to the origin (https, host and port) it is set for: a tool moved to another origin needs its secret set again. Stored on the server; no screen, route, log, export or model sees a value, and it is redacted from what the remote end answers.</p>
       <Failure error={r.error ?? error} />
       {r.data && r.data.length === 0 && <p className="muted small">No secrets yet.</p>}
       {r.data && r.data.length > 0 && (
-        <div className="table-wrap"><table className="grid"><thead><tr><th>Name</th><th>Set by</th><th>When</th><th>Used by</th>{props.admin && <th />}</tr></thead>
+        <div className="table-wrap"><table className="grid"><thead><tr><th>Name</th><th>Sent only to</th><th>Set by</th><th>When</th><th>Used by</th>{props.admin && <th />}</tr></thead>
           <tbody>{r.data.map((s) => (
-            <tr key={s.name}><td><code>{s.name}</code></td><td>{s.updatedBy}</td><td className="nowrap">{new Date(s.updatedAt).toLocaleString()}</td>
-              <td>{s.usedBy.map((u) => <code key={u}>{u}</code>)}</td>{props.admin && <td><button className="danger small" onClick={() => void act(api.manageDeleteSecret(s.name))}>Delete</button></td>}</tr>
+            <tr key={s.name}><td><code>{s.name}</code></td><td><code>{s.origin || 'nowhere: set it again'}</code></td><td>{s.updatedBy}</td><td className="nowrap">{new Date(s.updatedAt).toLocaleString()}</td>
+              <td>{s.usedBy.map((u) => <code key={u}>{u}</code>)}</td>{props.admin && <td><button className="danger small" onClick={() => del(s.name, s.usedBy)}>Delete</button></td>}</tr>
           ))}</tbody></table></div>
       )}
       {props.admin && (
-        <form className="row" onSubmit={(e) => { e.preventDefault(); void act(api.manageSetSecret(name.trim(), value)); }}>
+        <form className="row" onSubmit={(e) => { e.preventDefault(); void act(api.manageSetSecret(name.trim(), value, origin.trim())); }}>
           <label>Name <input value={name} onChange={(e) => setName(e.target.value)} placeholder="court_key" /></label>
+          <label>For (https origin) <input size={30} value={origin} onChange={(e) => setOrigin(e.target.value)} placeholder="the tool's origin (https, host, port)" /></label>
           <label>Value <input type="password" autoComplete="off" value={value} onChange={(e) => setValue(e.target.value)} /></label>
-          <button disabled={!name.trim() || !value}>Set secret</button>
+          <button disabled={!name.trim() || !value || !origin.trim()}>Set secret</button>
         </form>
       )}
     </div>
@@ -402,13 +408,19 @@ function Import(props: { item: ManageDetail; imported: () => void }) {
       {d && (
         <>
           <p className="small">{d.serverName || d.server} (protocol {d.protocol}) lists {plural(d.tools.length, 'tool')}.</p>
+          <p className="muted small">Descriptions are the server's own text: untrusted. An imported tool stays disabled until an admin reads and accepts its text (Edit), and again whenever a re-import changes it.</p>
           <fieldset className="checks">{d.tools.map((t) => (
-            <label key={t.name} title={t.problem ?? t.description}><input type="checkbox" disabled={!!t.problem} checked={pick.includes(t.name)}
-              onChange={(e) => setPick(e.target.checked ? [...pick, t.name] : pick.filter((x) => x !== t.name))} /> {t.name}{t.problem && <span className="bad-text small"> ({t.problem})</span>}</label>
+            <div key={t.name}>
+              <label><input type="checkbox" disabled={!!t.problem} checked={pick.includes(t.name)}
+                onChange={(e) => setPick(e.target.checked ? [...pick, t.name] : pick.filter((x) => x !== t.name))} /> {t.name}{t.item && <span className="muted small"> (imported as {t.item})</span>}{t.problem && <span className="bad-text small"> ({t.problem})</span>}</label>
+              {!t.problem && (t.item && t.previous !== t.description
+                ? <DiffView files={[{ path: `${t.name}: the server's text, accepted → now`, a: t.previous ?? '', b: t.description }]} />
+                : <blockquote className="small third-party">{t.description || 'no description'}</blockquote>)}
+            </div>
           ))}</fieldset>
           <label className="row"><input type="checkbox" checked={offer} onChange={(e) => setOffer(e.target.checked)} /> Offer the imported tools to the lead</label>
           <button className="primary" disabled={busy || pick.length === 0} onClick={() => run(api.manageImport(props.item.id, pick, offer), (rs) => {
-            setResult(rs.map((x) => (x.item ? `${x.remote}: imported as ${x.item}` : `${x.remote}: ${x.problem}`))); props.imported();
+            setResult(rs.map((x) => (x.problem ? `${x.remote}: ${x.problem}` : `${x.remote}: ${x.action} ${x.item}${x.action !== 'unchanged' && x.previous !== x.text ? ' (disabled until an admin accepts its text)' : ''}`))); props.imported();
           })}>Import {plural(pick.length, 'tool')}</button>
         </>
       )}
@@ -504,11 +516,11 @@ function Changes() {
   return (
     <div className="table-wrap"><table className="grid stack">
       <thead><tr><th>When</th><th>Item</th><th>Change</th><th>Who</th><th>Note</th></tr></thead>
-      <tbody>{r.data.map((v) => (
-        <tr key={`${v.item}-${v.version}`}>
+      <tbody>{r.data.map((v, i) => (
+        <tr key={i}>
           <td className="nowrap">{new Date(v.createdAt).toLocaleString()}</td>
-          <td><a href={`#/manage?section=${sectionOf(v.item)}&item=${encodeURIComponent(v.item)}&tab=history`}>{v.item}</a></td>
-          <td data-label="Change">{v.action}: {v.from ? `v${v.from}` : 'built-in'} → {v.builtin ? 'built-in' : `v${v.version}`}{v.deleted ? ' (deleted)' : ''}</td>
+          <td>{v.item.startsWith('secret.') ? <code>{v.item}</code> : <a href={`#/manage?section=${sectionOf(v.item)}&item=${encodeURIComponent(v.item)}&tab=history`}>{v.item}</a>}</td>
+          <td data-label="Change">{v.event ? v.action : <>{v.action}: {v.from ? `v${v.from}` : 'built-in'} → {v.builtin ? 'built-in' : `v${v.version}`}{v.deleted ? ' (deleted)' : ''}</>}</td>
           <td data-label="Who">{v.author}</td><td className="wide">{v.note}</td>
         </tr>
       ))}</tbody>
@@ -516,4 +528,18 @@ function Changes() {
   );
 }
 
-const sectionOf = (id: string) => ({ prompt: 'agents', agent: 'agents', pass: 'agents', tool: 'tools', pack: 'packs', skill: 'skills' } as Record<string, string>)[id.split('.')[0]] ?? 'agents';
+const sectionOf = (id: string) => ({ prompt: 'agents', agent: 'agents', pass: 'agents', tool: 'tools', server: 'tools', pack: 'packs', skill: 'skills' } as Record<string, string>)[id.split('.')[0]] ?? 'agents';
+
+/** Accept shows an imported tool's third-party text and lets an admin accept it (the save records who). */
+function Accept(props: { imported: { text: string; acceptedBy: string }; accept: (by: string) => void }) {
+  const api = useApi();
+  const me = useLoad(() => api.me(), []);
+  return (
+    <div className="notice small">
+      <p>The MCP server's own description of this tool (third-party text, untrusted; the lead sees it quoted as such):</p>
+      <blockquote className="third-party">{props.imported.text || 'no description'}</blockquote>
+      {props.imported.acceptedBy ? <p>Accepted by {props.imported.acceptedBy}.</p>
+        : <p>Not accepted: the tool cannot be enabled until an admin reads it. <button className="small" disabled={!me.data} onClick={() => props.accept(me.data?.name ?? '')}>Accept and enable</button> (then Save)</p>}
+    </div>
+  );
+}

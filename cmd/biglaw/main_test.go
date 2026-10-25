@@ -549,6 +549,9 @@ func TestManageAdminDefault(t *testing.T) {
 		if got := managePrincipal(c.allow, c.open)(req); got.Admin != c.admin || got.Open != (c.open && c.admin) {
 			t.Errorf("--allow-no-auth=%v --admin-without-auth=%v: %+v", c.allow, c.open, got)
 		}
+		if off := remotePolicy(c.allow, c.open).Off; off != (c.allow || c.open) { // secrets and custom calls: a real admin's only
+			t.Errorf("--allow-no-auth=%v --admin-without-auth=%v: custom outbound calls off=%v", c.allow, c.open, off)
+		}
 	}
 	for _, f := range [][]string{{}, {"--allow-no-auth"}, {"--admin-without-auth"}, {"--allow-no-auth", "--admin-without-auth"}, {"--admin-without-auth", "--allow-no-auth"}} {
 		if _, _, ok := serveFlags(f); !ok {

@@ -140,9 +140,13 @@ change. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`, not here.
   Custom agents and tools (`custom.go`, `remote.go`, migration 0009): admin-created subagents
   (`specs/agents/`), MCP servers (`specs/servers/`) and MCP/HTTP tools (`specs/tools/`); the lead sees
   `leadVisible(sp)`, never `MemoVisible` alone. Every remote request goes through `remoteClient` (https,
-  `checkURL` at save, `dialCheck` at connect, same-host redirects, no proxy, 30 s, 1 MB); secrets are read
-  only by `secretValue` and never written to a response, log, error, snapshot or export; a tool's answer
-  is labelled untrusted. `goDepends` refuses deleting what Go needs. Tests reach a local fake server only
+  `checkURL` at save, `dialCheck` at connect, ports 443/8443, one refusal text, same-host redirects, no
+  proxy, 30 s per whole call (`withRemoteDeadline`), 1 MB, 64 KB headers); secrets are read only by
+  `secretValue`, bound to their origin (`secretRef`, migration 0010; `do` sends one nowhere else),
+  redacted from every answer (`redact`) and never written to a response, log, error, snapshot or export;
+  `RemotePolicy.Off` (serve with `--allow-no-auth`/`--admin-without-auth`) turns secrets and custom calls
+  off; an imported description is third-party text (`untrustedText`, `importedDescription`) and its tool
+  stays disabled until an admin accepts it (`acceptRule`); a tool's answer is labelled untrusted. `goDepends` refuses deleting what Go needs. Tests reach a local fake server only
   through `SetRemotePolicy` (never set by `cmd/biglaw`).
 - `internal/api` (PR 4b) — the REST surface (tasks, steps, SSE, gates, cancel, cost, clients) over
   the engine plus `docs.Routes`; request bodies validated by the agent's schema subset.

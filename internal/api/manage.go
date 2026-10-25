@@ -153,10 +153,10 @@ func manageRoutes(mux *http.ServeMux, e *engine.Engine, who Who, log *slog.Logge
 		reply(w, 200, ss, err)
 	})
 	mux.HandleFunc("POST /manage/secrets", admin(log, who, func(w http.ResponseWriter, r *http.Request, p Principal) {
-		var in struct{ Name, Value string }
+		var in struct{ Name, Value, Origin string }
 		err := body(w, r, &in)
 		if err == nil {
-			err = e.SetSecret(r.Context(), in.Name, in.Value, p.Name)
+			err = e.SetSecret(r.Context(), in.Name, in.Value, in.Origin, p.Name)
 		}
 		answer(w, http.StatusCreated, map[string]string{"name": in.Name}, err) // never the value
 	}))

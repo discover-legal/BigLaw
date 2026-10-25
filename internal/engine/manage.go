@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/discover-legal/BigLaw/internal/agent"
@@ -106,6 +107,7 @@ type Version struct {
 	Author    string            `json:"author"`
 	Note      string            `json:"note"`
 	CreatedAt time.Time         `json:"createdAt"`
+	Event     bool              `json:"event,omitempty"` // a change log entry that is not a version (a secret set or deleted, a Test call)
 }
 
 // SaveIn is a new version an admin saves: the item's files (all of them), the version it was
@@ -398,7 +400,7 @@ func (e *Engine) Changes(ctx context.Context, limit int) ([]Version, error) {
 	}
 	defer q.Close()
 	for q.Next() {
-		var v Version
+		v := Version{Event: true}
 		if err := q.Scan(&v.Item, &v.Action, &v.Author, &v.Note, &v.CreatedAt); err != nil {
 			return nil, err
 		}
@@ -598,6 +600,9 @@ func (e *Engine) save(ctx context.Context, tx *sql.Tx, id string, in SaveIn, aut
 	if err != nil {
 		return Version{}, nil, err
 	}
+	if kind == "tool" {
+		notes = append(notes, acceptRule(old, files, author)...)
+	}
 	if action == "create" && len(files) == 0 {
 		return Version{}, nil, invalid("", "a new %s needs its files", kind)
 	}
@@ -609,8 +614,87 @@ func (e *Engine) save(ctx context.Context, tx *sql.Tx, id string, in SaveIn, aut
 	if err := e.validate(next, id); err != nil {
 		return Version{}, nil, err
 	}
+	if err := secretOrigins(ctx, tx, files); err != nil {
+		return Version{}, nil, err
+	}
 	v, err := e.insertVersion(ctx, tx, id, in.Base+1, action, files, rows[id].Version, nil, author, in.Note)
 	return v, notes, err
+}
+
+// acceptRule: an imported tool's third-party text is accepted by the admin whose save names an
+// acceptor (that admin's name is recorded, whatever the file says); a save that changes the text
+// and names no new acceptor clears the acceptance and disables the tool (validate then refuses
+// enabling it until an admin accepts).
+func acceptRule(old, files map[string]string, author string) []string {
+	for f, text := range files {
+		var t, was CustomTool
+		if !strings.HasPrefix(f, toolsDir) || json.Unmarshal([]byte(text), &t) != nil || t.Imported == nil {
+			continue
+		}
+		_ = json.Unmarshal([]byte(old[f]), &was)
+		prev := cmpOr(was.Imported, &Imported{})
+		switch {
+		case t.Imported.AcceptedBy != "" && t.Imported.AcceptedBy != prev.AcceptedBy: // this save accepts the text it saves
+			if t.Imported.AcceptedBy == author {
+				continue
+			}
+			t.Imported.AcceptedBy = author
+		case t.Imported.AcceptedBy != "" && t.Imported.Text != prev.Text:
+			t.Imported.AcceptedBy, t.Enabled = "", false
+		default:
+			continue
+		}
+		b, _ := json.MarshalIndent(t, "", " ")
+		if files[f] = string(b) + "\n"; t.Imported.AcceptedBy == "" {
+			return []string{path.Base(f) + ": its server's text changed and this save accepts no new text, so it is disabled until an admin accepts it"}
+		}
+	}
+	return nil
+}
+
+func cmpOr[T any](p *T, def *T) *T {
+	if p != nil {
+		return p
+	}
+	return def
+}
+
+// secretOrigins refuses a tool or server whose URL is not the origin its named secret is set for:
+// a secret is never sent elsewhere, so moving a tool to another origin takes setting its secret
+// again (value and all) for the new one. A secret not set yet is the Secrets panel's to set.
+func secretOrigins(ctx context.Context, tx *sql.Tx, files map[string]string) error {
+	for _, f := range slices.Sorted(maps.Keys(files)) {
+		var a Auth
+		var u string
+		if strings.HasPrefix(f, toolsDir) {
+			var t CustomTool
+			if json.Unmarshal([]byte(files[f]), &t) != nil || t.HTTP == nil {
+				continue
+			}
+			a, u = t.HTTP.Auth, t.HTTP.URL
+		} else if strings.HasPrefix(f, serversDir) {
+			var v Server
+			if json.Unmarshal([]byte(files[f]), &v) != nil {
+				continue
+			}
+			a, u = v.Auth, v.URL
+		}
+		if a.Secret == "" {
+			continue
+		}
+		var origin string
+		err := tx.QueryRowContext(ctx, `SELECT origin FROM secrets WHERE name = $1`, a.Secret).Scan(&origin)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		} else if err != nil {
+			return err
+		}
+		if origin != originOf(u) {
+			return invalid(f, "secret: %q is set for %s, not for this URL's origin %s; it is never sent to another origin: set it again for this URL in Secrets (re-entering its value), or name another secret",
+				a.Secret, cmpStr(origin != "", origin, "no origin"), originOf(u))
+		}
+	}
+	return nil
 }
 
 // Revert stores a version that restores version to (0: the built-in; for a skill an admin
@@ -838,6 +922,9 @@ func (e *Engine) validate(snap Snapshot, id string) error {
 		if kind != "skill" && kind != "server" && !toolNameRe.MatchString(name) {
 			bad("", "a name is 2–64 lower-case letters, digits and _, starting with a letter")
 		}
+		if slices.Contains(reservedNames, name) {
+			bad("", "%q is reserved (the lead, the Test call's caller, meta and the engine's passes): choose another name", name)
+		}
 		if kind == "server" && !secretName.MatchString(name) {
 			bad("", "a server's name is 2–40 lower-case letters, digits, _ and -, starting with a letter")
 		}
@@ -903,7 +990,8 @@ func (e *Engine) validate(snap Snapshot, id string) error {
 	for _, n := range slices.Sorted(maps.Keys(sp.specs)) { // a subagent never ends the run or acts as the lead
 		if s := sp.specs[n]; s.Kind == "subagent" {
 			for _, a := range s.Allowed {
-				if t := sp.specs[a]; t.Final || len(t.Solo) > 0 && !slices.Contains(subagentSafe, a) {
+				_, built := builtin[agentsDir+n+".json"]
+				if t := sp.specs[a]; t.Final || len(t.Solo) > 0 && (!built || !slices.Contains(subagentSafe, a)) {
 					bad(agentsDir+n+".json", "allowed: %q is the lead's own (it ends the run, or has calls that must stand alone in a lead turn); a subagent cannot be given it", a)
 				}
 			}
@@ -957,6 +1045,7 @@ func validateSpec(f, text string, bad func(string, string, ...any)) {
 	case s.Kind == "subagent" && s.Class == "free" && was.Class != "free":
 		bad(f, "class: free is the figure reader's and judge's only (Go meters them from their own shares); a subagent the lead or a fan-out calls takes a class with a share (evidence, draft, committee, cover or plan)")
 	}
+	validateDescription(f, s.Description, bad)
 	for _, sc := range []struct {
 		n   string
 		raw json.RawMessage
@@ -967,6 +1056,17 @@ func validateSpec(f, text string, bad func(string, string, ...any)) {
 		} else if why := c.Strict(sc.n); why != "" {
 			bad(f, "%s: not strict-shaped: %s", sc.n, why)
 		}
+	}
+}
+
+// validateDescription bounds any spec's description (a model reads it in every prompt that offers
+// the tool): at most maxDescBytes, no control or format characters but line breaks.
+func validateDescription(f, d string, bad func(string, string, ...any)) {
+	switch {
+	case len(d) > maxDescBytes:
+		bad(f, "description: %d bytes, over %d KiB (every prompt that offers it carries it)", len(d), maxDescBytes>>10)
+	case strings.ContainsFunc(d, func(r rune) bool { return r != '\n' && (unicode.IsControl(r) || unicode.Is(unicode.Cf, r)) }):
+		bad(f, "description: no control or format characters (bidi overrides, zero-width marks) but line breaks")
 	}
 }
 

@@ -64,7 +64,8 @@ export interface Transport {
   manageDelete(id: string, base: number, note: string): Promise<SaveResult>;
   /** Custom tools: secrets by name (never a value), an MCP server's tools and their import, and a Test call (admin). */
   manageSecrets(): Promise<SecretView[]>;
-  manageSetSecret(name: string, value: string): Promise<void>;
+  /** origin: the https URL (scheme, host, port) of the only server the secret is ever sent to. */
+  manageSetSecret(name: string, value: string, origin: string): Promise<void>;
   manageDeleteSecret(name: string): Promise<void>;
   manageDiscover(id: string): Promise<Discovery>;
   manageImport(id: string, tools: string[], offerToLead: boolean): Promise<ImportResult[]>;
