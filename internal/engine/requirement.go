@@ -13,13 +13,15 @@ import (
 	"github.com/discover-legal/BigLaw/internal/docs"
 )
 
-// A requirement is verified where the document has it (requirementParts), then read in its section
-// (contextOf): the leaf section of the document's own section tree (docs.Parse, byte-exact) that holds
-// it, whole, with the heading path of the sections that enclose it. Structure is the tree's, never a
-// guess at layout (lab-r3 r3 verifier: walking lines upward missed blank-line lists, read a name as a
-// heading, trimmed around the wrong quote, never saw an override below the requirement). Whether the
-// section, read as a whole, imposes the requirement as a verdict states it (a negation, an override)
-// is a question for a model, not for code: check_deviation asks it (deviation.go checkSection).
+// A requirement is verified where the document has it (requirementParts), then read in a bounded
+// window of the text around it (contextOf: about ctxSide bytes before and after, edges at sentence or
+// line ends, at most ctxMax), never in a section of docs.Parse's tree, whose heading guesses are not
+// reliable enough for a safety check (lab-r3 r4, coordinator decision); the tree's heading path is a
+// label only (headingPath). No layout walk either (lab-r3 r3 verifier: walking lines upward missed
+// blank-line lists, read a name as a heading, trimmed around the wrong quote, never saw an override
+// below the requirement). Whether the window imposes the requirement as a verdict states it (a
+// negation, an override) is a question for a model, not for code: check_deviation asks it
+// (deviation.go checkSection).
 // Parts joined from several passages must still be one passage in the document's order: stitching
 // across a heading, a list's introduction or a section stays refused.
 const (

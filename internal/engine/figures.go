@@ -652,7 +652,7 @@ func describe(r analysis.Reading) string {
 // claimSums are the sums of money a claim states and its verified quotes state too, which no typed
 // value carries (bench5 SEC F388: "payments totaling $103,800.00", the figure in its own quote, typed
 // nowhere, so the $92,600 vs $103,800 conflict had nothing to pair). Each is kept untyped: no entity,
-// no metric (so the label join never compares it; the near join does, by its quotes' words), with
+// no metric (the join compares it only by its reading, as analysis.Candidates does any clear value), with
 // the claim's reading of it (its party included). A sum is kept only when the figure reader read
 // the claim's span and a quote span as the same money, clearly: a share count never stands for
 // dollars, a bare "3" ("Section 3") never for "$3 million" (lab-r4 verifier H1, r4 H1).
