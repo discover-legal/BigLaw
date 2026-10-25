@@ -367,6 +367,27 @@ type hookResult struct {
 	Notes    []string         `json:"notes"`
 }
 
+// recordFinding is the one way a new finding enters the ledger (admit's evidence findings,
+// check_deviation's deviations): finding_admitted's rules run on it first (quarantine, gate, check,
+// webhook, limitation), then it is written with the step. TestFindingWritesGoThroughRecord keeps every
+// other write of a finding an update of one already recorded.
+func (e *Engine) recordFinding(ctx context.Context, rt *agent.Runtime, c agent.Call, b *agent.Budget, f *Finding) error {
+	if h, ok := hooksOf(rt); ok {
+		if _, err := h.findingHooks(ctx, c, b, f); err != nil {
+			return err
+		}
+	}
+	return e.write(ctx, c.TaskID, kFinding, f.FID, *f, false)
+}
+
+func hooksOf(rt *agent.Runtime) (hookRunner, bool) {
+	if rt == nil {
+		return hookRunner{}, false
+	}
+	h, ok := rt.Hooks.(hookRunner)
+	return h, ok
+}
+
 // verify runs the ladder on one quote: exact and tolerant in Go, then (while the grant has calls)
 // the registered verify_quote tool with its paraphrase judge. A judge failure is an error (G6).
 func (e *Engine) verify(ctx context.Context, rt *agent.Runtime, c agent.Call, b *agent.Budget, caller string, q analysis.Quote) (Citation, error) {
@@ -528,18 +549,13 @@ func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 			}
 			continue
 		}
-		if h, ok := rt.Hooks.(hookRunner); ok { // finding_admitted's rules: quarantine, gate or annotate it
-			if _, err := h.findingHooks(ctx, c, b, &f); err != nil {
-				return out, 0, err
-			}
-		}
 		f.FID = nextID("F", len(all))
-		all = append(all, f)
-		if deferred && f.Unread && len(f.Values) > 0 {
-			queue.add(f.FID)
-		}
-		if err := e.write(ctx, c.TaskID, kFinding, f.FID, f, false); err != nil {
+		if err := e.recordFinding(ctx, rt, c, b, &f); err != nil { // finding_admitted's rules, then the ledger
 			return out, 0, err
+		}
+		all = append(all, f)
+		if deferred && f.Unread && len(f.Values) > 0 && f.HookBlocked == "" {
+			queue.add(f.FID)
 		}
 		out.Findings = append(out.Findings, admitted(f))
 		for _, n := range f.ValueNotes {

@@ -816,7 +816,7 @@ func (e *Engine) readFindings(ctx context.Context, rt *agent.Runtime, c agent.Ca
 	items := slices.Clone(with) // read in the same calls (a drafted section's own reading)
 	for _, fid := range fids {
 		i := slices.IndexFunc(all, func(f Finding) bool { return f.FID == fid })
-		if i < 0 || !all[i].Unread {
+		if i < 0 || !all[i].Unread || all[i].HookBlocked != "" { // a hook's quarantine is read by nothing, the figure reader included
 			continue
 		}
 		text, vq := verifiedText(all[i])

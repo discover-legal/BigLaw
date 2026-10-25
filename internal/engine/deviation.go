@@ -512,10 +512,10 @@ func (e *Engine) deviations(ctx context.Context, rt *agent.Runtime, c agent.Call
 		}
 		f.Verified = true
 		f.FID = nextID("F", len(all))
-		all = append(all, f)
-		if err := e.write(ctx, c.TaskID, kFinding, f.FID, f, false); err != nil {
+		if err := e.recordFinding(ctx, rt, c, b, &f); err != nil { // finding_admitted's rules, as admit's findings (#58 r3 R8)
 			return out, 0, err
 		}
+		all = append(all, f)
 		out.Findings = append(out.Findings, admitted(f))
 	}
 	if checked == 0 {

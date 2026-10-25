@@ -678,6 +678,10 @@ func (e *Engine) validateHookRule(f, text string, bad func(string, string, ...an
 	}
 }
 
+// forcedSteps are the lead's tools a forced finish runs as the lead's own steps (committee, the
+// coverage pass): an approve rule there would pause a run that must end, so it is refused at save.
+var forcedSteps = []string{"committee", "cover"}
+
 // ledgerWriters are the tools whose calls write the matter's ledger as they run (an answer withheld
 // after them would leave what they wrote): an after_call block or check may not name them. The
 // hooked evidence and drafting subagents are not here: their rules run before Go records anything.
@@ -700,6 +704,8 @@ func validateHookRefs(sp *Specs, bad func(string, string, ...any)) {
 			}
 		}
 		switch {
+		case calls && r.Action.Type == "approve" && slices.Contains(forcedSteps, m):
+			bad(f, "action: approve cannot hold %s: a forced finish (budget or steps spent) runs it as the lead's own step, where a gate would pause the run instead of ending it; use block or a check", m)
 		case calls && r.Action.Type == "approve" && (!exact || !slices.Contains(leadVisible(sp), m)):
 			bad(f, "action: approve names one tool the lead calls (one of %s): only a call the lead makes can be held for a lawyer and made again once approved; Go's and subagents' calls cannot", strings.Join(leadVisible(sp), ", "))
 		case r.Event == "after_call" && (r.Action.Type == "block" || r.Action.Type == "check") && !exact:

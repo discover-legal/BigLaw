@@ -1592,7 +1592,9 @@ failure}`:
 - **Events:** `before_call` and `after_call` (every call `Runtime.Invoke` makes: the lead's, a
   subagent's and Go's fan-out calls; no rule applies to `finish`, whose hook point is `task_finish`, so
   a forced finish is never refused, nor to `verify_quote`, the engine's own quote check),
-  `finding_admitted` (each new finding, after its quotes are verified, before it is recorded) and
+  `finding_admitted` (each new finding, after its quotes are verified, before it is recorded: admit's
+  evidence findings and check_deviation's deviations alike, through the one path that records a new
+  finding, `recordFinding`; `TestFindingWritesGoThroughRecord` fails on any other) and
   `task_finish` (after finish's checks pass, before the deliverable renders).
 - **Matchers:** a tool or subagent name, a prefix ending in `*`, or `*`; `when` is an optional
   condition on one field (`eq`, `ne`, `contains` (case-insensitive), `exists`, `absent`, `gt`, `lt`) of
@@ -1607,12 +1609,14 @@ failure}`:
   ledger as it runs (`ledger`, `sweep`, `committee`, `cover`, `numbers`, `join_discrepancies`,
   `use_skill`, the figure reader and judge) or a subagent allowed one (use `before_call` for those).
   `finding_admitted`: the finding is **quarantined by the hook** (`hookBlocked`: never in the memo, a
-  drafter's or a subagent's read, nor `numbers`' or `join_discrepancies`' (`Engine.Findings`), disclosed in its own Limitations line with the count by rule, and
+  drafter's or a subagent's read, nor `numbers`', `join_discrepancies`' (`Engine.Findings`) or the figure reader's, disclosed in its own Limitations line with the count by rule, and
   never counted as a quote that failed verification: G4 and the Evidence Note leave it out; a check that
   fails closed there quarantines the same way). `task_finish`: the submit is refused with the reason;
   the lead can only finish by a forced finish (its budget or max steps), so an unconditional block
   spends the rest of the task's budget and then delivers with the refusal as a Limitations line.
-- **`approve`:** names one tool the lead calls (saved otherwise refused). Only the lead's own calls
+- **`approve`:** names one tool the lead calls (saved otherwise refused), never `committee` or
+  `cover`, which a forced finish runs as the lead's own steps (a gate there would pause a run that must
+  end). Only the lead's own calls
   of it can be approved, so **every other call of it fails closed**: a sweep's visits, the coverage
   pass's or the committee's calls and a subagent's calls are blocked (`blocked (needs lead approval)`),
   the caller gets the usual refusal, and the deliverable's Limitations count them by rule; the save's

@@ -6,9 +6,13 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -454,6 +458,7 @@ func TestHookRefusalsAndDefaults(t *testing.T) {
 		{rule("r1", 0, "after_call", "finish", nil, HookAction{Type: "limitation", Message: "m"}, "open"), "no rule applies to finish"},
 		{rule("r1", 0, "after_call", "*", nil, HookAction{Type: "block", Message: "m"}, "closed"), "names one tool"},
 		{rule("r1", 0, "after_call", "ledger", nil, HookAction{Type: "block", Message: "m"}, "closed"), "writes the matter's ledger"},
+		{rule("r1", 0, "before_call", "committee", nil, HookAction{Type: "approve", Message: "m"}, "closed"), "approve cannot hold committee"},
 	} {
 		if _, _, err := e.Save(ctx, "rule.r1", SaveIn{Files: ruleFile(c.r)}, "Ada"); !strings.Contains(problems(err), c.want) {
 			t.Errorf("%+v: %s (want %q)", c.r, problems(err), c.want)
@@ -565,5 +570,84 @@ func TestHookQuarantinedFindingNotInNumbers(t *testing.T) {
 	fs, _ := load[Finding](context.Background(), e, task.ID, kFinding)
 	if len(outs) != 1 || strings.Contains(outs[0], "644,910") || len(fs) != 1 || fs[0].HookBlocked != "privileged" {
 		t.Fatalf("numbers: %v; findings %+v", outs, fs)
+	}
+}
+
+// TestHookDeviationFindingsGoThroughFindingHooks (#58 r3 R8, TestMHV8): check_deviation's
+// findings are admitted through the same path as admit's, so finding_admitted's rules apply to them.
+func TestHookDeviationFindingsGoThroughFindingHooks(t *testing.T) {
+	t.Parallel()
+	d := newDev(t)
+	call := tc("check_deviation", m{"requirement": devMemoText[strings.Index(devMemoText, "The residuary") : strings.Index(devMemoText, "(25%).")+6], "requirementDocId": d.memo,
+		"controllingDocIds": []string{d.memo}, "reviewedDocIds": []string{d.trust, d.will}, "issueId": "I1"})
+	sc := d.with(map[string][]model.Reply{
+		"lead":            {calls(plan(issue("I1", "Does the draft follow the memo?", "Requirement"))), calls(call)},
+		"check_deviation": {text(m{"verdicts": []m{d.verdict("Sophia's residuary share", "deviate", d.trust, qSophiaMemo, qSophiaTrust, "Change Sophia's share.")}})},
+		"verify_quote":    {judged(false), judged(false), judged(false), judged(false)},
+	})
+	e, _ := d.engine(sc, Config{})
+	save(t, e, "rule.privileged", 0, ruleFile(rule("privileged", 0, "finding_admitted", "*", nil, HookAction{Type: "block", Message: "Quarantined."}, "closed")))
+	task := d.submit(0)
+	d.step(context.Background())
+	v := d.get(task.ID)
+	if len(v.Findings) == 0 || !slices.Contains(outcomes(t, e, task.ID), "privileged:blocked") {
+		t.Fatalf("findings %+v, outcomes %v", v.Findings, outcomes(t, e, task.ID))
+	}
+	for _, f := range v.Findings {
+		if f.Status != "quarantined by hook privileged" {
+			t.Errorf("%s: %s", f.FID, f.Status)
+		}
+	}
+}
+
+// TestFindingWritesGoThroughRecord (#58 r3 R8): the engine's source has one way to record a new
+// finding, recordFinding, which runs finding_admitted's rules; every other ledger write of a finding
+// is an update of one already recorded, in the functions named here. A new path that writes a
+// finding fails this test until it goes through recordFinding (or is added here as an update).
+func TestFindingWritesGoThroughRecord(t *testing.T) {
+	t.Parallel()
+	updates := map[string]bool{"admit": true, "check": true, "readFindings": true, "uncheck": true} // merges, gating, readings, notes
+	files, _ := filepath.Glob("*.go")
+	fset := token.NewFileSet()
+	found := 0
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		af, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, d := range af.Decls {
+			fn, ok := d.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok || len(call.Args) != 6 {
+					return true
+				}
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok || sel.Sel.Name != "write" {
+					return true
+				}
+				if id, ok := call.Args[2].(*ast.Ident); !ok || id.Name != "kFinding" {
+					return true
+				}
+				found++
+				upd, _ := call.Args[5].(*ast.Ident)
+				switch {
+				case fn.Name.Name == "recordFinding":
+				case upd != nil && upd.Name == "true" && updates[fn.Name.Name]:
+				default:
+					t.Errorf("%s: %s writes a finding outside recordFinding (finding_admitted's rules would not run on it)", fset.Position(call.Pos()), fn.Name.Name)
+				}
+				return true
+			})
+		}
+	}
+	if found < 5 {
+		t.Fatalf("found %d finding writes: the scan is broken", found)
 	}
 }
