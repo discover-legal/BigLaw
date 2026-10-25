@@ -1501,7 +1501,11 @@ snapshot.
   not null; `anyOf`/`$ref`/open objects refused with the reason) and saves each as a version. The
   server must speak protocol 2025-06-18 or 2025-03-26; every session is ended (HTTP DELETE). A call is
   one handshake plus `tools/call`, within one 30 s deadline for all of it (Discover/Import too).
-- **Imported descriptions are untrusted.** The server's text for a tool is cleaned (control and format
+- **Imported descriptions and schemas are untrusted.** The converted input schema is third-party text
+  too: each property description is cleaned and capped at 200 characters, an enum value or property
+  name that is long or holds control or format characters is refused, and the schema is capped at
+  16 KiB; a re-import that changes it disables the tool until an admin accepts it again, with the diff.
+  The server's text for a tool is cleaned (control and format
   characters and line breaks become spaces, so it can add no line of its own) and capped at 2 KB, kept
   in the file's `imported.text`, and shown to the lead only quoted inside BigLaw's own sentences as
   third-party text. An imported tool is disabled until an admin reads and accepts that text (Edit:
@@ -1531,14 +1535,21 @@ snapshot.
   0010) and sent to no other: a save naming a secret for a URL of another origin is refused, a call to
   one is refused, so moving a tool to another origin takes setting its secret again, value and all.
   Listed by name, origin, setter and the items naming them; never returned by any route, logged, put in
-  an error, the snapshot or the export; every form of it (with and without its prefix, base64 in either
-  alphabet, URL- and JSON-escaped, a Basic pair and its password) is redacted from what a remote end
-  answers before it reaches the API, `task_steps`, the logs, the UI or a model. They are stored in
+  an error, the snapshot or the export. **Only the bound origin ever receives the key.** What that
+  origin sends back is redacted of an exact echo of it before it reaches the API, `task_steps`, the
+  logs, the UI or a model: the key with and without its prefix, base64 in either alphabet (padded or
+  not), URL- and JSON-escaped, and a Basic pair and its password; so is every error built from remote
+  data (`secretRef.scrub`: a schema's property path, a call's failure), and the server's own protocol
+  version is never echoed. An origin that obfuscates its own key (splits, spaces or hex-encodes it) is
+  not stopped: it already holds the key. They are stored in
   Postgres as everything is (back up and protect the database accordingly); a task resolves a secret
   by name at call time, so a secret changed mid-run reaches the run's later calls.
 - **A real admin only:** until PR 8's sign-in, serving with `--allow-no-auth` or `--admin-without-auth`
   turns secrets and custom outbound calls off (`RemotePolicy.Off`): setting a secret, Discover, Import
-  and a custom tool's Test are 403 and a custom tool's call in a run fails closed.
+  and a custom tool's Test are 403, custom tools are left out of the lead's list (a Limitations line
+  says so) and a custom tool's call in a run (a subagent's) fails closed. **So custom tools and secrets
+  are unavailable under Compose and every container deployment until sign-in (PR 8) lands: today they
+  work only for a native `biglaw serve` on loopback, with neither flag.**
 - **Test** (`TestCall`, admin): one call of a subagent or tool as new tasks would make it, over a
   matter's documents, within 8 model calls and $0.25 (and never more than a task's budget); journaled
   as the one step of a cancelled task named for the test (started at its grant, every model call metered

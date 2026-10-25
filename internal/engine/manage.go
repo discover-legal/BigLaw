@@ -596,7 +596,13 @@ func (e *Engine) save(ctx context.Context, tx *sql.Tx, id string, in SaveIn, aut
 	if kind == "skill" && !exists && !skillName.MatchString(name) {
 		return Version{}, nil, invalid("", "a skill's name is 2–40 lower-case letters, digits and -, starting with a letter")
 	}
-	notes, err := reviewRule(kind, old, files)
+	prior := old
+	if !exists && rows[id].Version > 0 { // re-created after a deletion: reviewed against what it was before it
+		if prior, err = lastContent(ctx, tx, id); err != nil {
+			return Version{}, nil, err
+		}
+	}
+	notes, err := reviewRule(kind, prior, files)
 	if err != nil {
 		return Version{}, nil, err
 	}
@@ -621,6 +627,24 @@ func (e *Engine) save(ctx context.Context, tx *sql.Tx, id string, in SaveIn, aut
 	return v, notes, err
 }
 
+// lastContent is an item's files at its latest version that is not a deletion (the built-in's when
+// that version restored it, none when it never had any): what a re-created skill is reviewed
+// against, so a deletion and a re-creation never carry a reviewer over to changed content.
+func lastContent(ctx context.Context, tx *sql.Tx, id string) (map[string]string, error) {
+	var raw []byte
+	err := tx.QueryRowContext(ctx, `SELECT files FROM spec_versions WHERE item = $1 AND (files IS NULL OR files <> '{}'::jsonb) ORDER BY version DESC LIMIT 1`, id).Scan(&raw)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return fileMap(builtin, id), nil
+	case err != nil:
+		return nil, err
+	case raw == nil:
+		return fileMap(builtin, id), nil
+	}
+	files := map[string]string{}
+	return files, json.Unmarshal(raw, &files)
+}
+
 // acceptRule: an imported tool's third-party text is accepted by the admin whose save names an
 // acceptor (that admin's name is recorded, whatever the file says); a save that changes the text
 // and names no new acceptor clears the acceptance and disables the tool (validate then refuses
@@ -639,7 +663,7 @@ func acceptRule(old, files map[string]string, author string) []string {
 				continue
 			}
 			t.Imported.AcceptedBy = author
-		case t.Imported.AcceptedBy != "" && t.Imported.Text != prev.Text:
+		case t.Imported.AcceptedBy != "" && (t.Imported.Text != prev.Text || !jsonEqual(t.In, was.In)): // the server's text or schema changed
 			t.Imported.AcceptedBy, t.Enabled = "", false
 		default:
 			continue
@@ -1036,6 +1060,8 @@ func validateSpec(f, text string, bad func(string, string, ...any)) {
 		bad(f, "kind: must stay %q (Go implements it as one)", was.Kind)
 	case s.Final != was.Final:
 		bad(f, "final: must stay %v (only finish may end the run)", was.Final)
+	case !slices.Equal(s.Solo, was.Solo):
+		bad(f, "solo: must stay %v (the ops that must stand alone in a lead turn are Go's: ledger's plan, finish)", was.Solo)
 	case s.Kind == "subagent" && (s.MaxTurns < 1 || s.MaxTurns > maxSubagentTurns):
 		bad(f, "maxTurns: a subagent's is 1 to %d", maxSubagentTurns)
 	case s.Kind != "subagent" && (s.MaxTurns < 0 || s.MaxTurns > maxToolTurns):

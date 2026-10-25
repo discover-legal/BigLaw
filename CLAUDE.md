@@ -143,7 +143,7 @@ change. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`, not here.
   `checkURL` at save, `dialCheck` at connect, ports 443/8443, one refusal text, same-host redirects, no
   proxy, 30 s per whole call (`withRemoteDeadline`), 1 MB, 64 KB headers); secrets are read only by
   `secretValue`, bound to their origin (`secretRef`, migration 0010; `do` sends one nowhere else),
-  redacted from every answer (`redact`) and never written to a response, log, error, snapshot or export;
+  redacted of exact echoes in every answer (`redact`) and every error from remote data (`scrub`), never written to a response, log, error, snapshot or export;
   `RemotePolicy.Off` (serve with `--allow-no-auth`/`--admin-without-auth`) turns secrets and custom calls
   off; an imported description is third-party text (`untrustedText`, `importedDescription`) and its tool
   stays disabled until an admin accepts it (`acceptRule`); a tool's answer is labelled untrusted. `goDepends` refuses deleting what Go needs. Tests reach a local fake server only

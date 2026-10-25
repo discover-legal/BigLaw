@@ -40,7 +40,7 @@ import (
 // a Discover/Import), a 1 MB answer cap and 64 KB of headers, no proxy (a proxy would connect for it,
 // past the address check; HTTPS_PROXY is ignored by design). Secrets live server-side (secrets
 // table), each bound to the origin it was set for (secretRef: never sent to another scheme, host or
-// port), added as one header, and redacted from everything the remote end sends back (its value with
+// port), added as one header, and exact echoes of it redacted from what the remote end sends back (its value with
 // and without its prefix, base64, URL and JSON forms); they never reach the API, a log line, an
 // error, the snapshot, the export or a model. An answer is untrusted data from outside the matter,
 // labelled so in its output. With no real admin (--allow-no-auth, --admin-without-auth) all of it is
@@ -288,6 +288,27 @@ func (s *secretRef) forms() []string {
 	return slices.Compact(out)
 }
 
+// scrub is err with every form of the secret redacted from its text (errors.Is still sees what it
+// wraps): the one place an error built from remote data (a schema's property path, a check's
+// message) passes on its way to a response, a log line, task_steps or a model.
+func (s *secretRef) scrub(err error) error {
+	if err == nil || s == nil {
+		return err
+	}
+	if m := s.redact(err.Error()); m != err.Error() {
+		return scrubbedErr{m, err}
+	}
+	return err
+}
+
+type scrubbedErr struct {
+	msg string
+	err error
+}
+
+func (e scrubbedErr) Error() string { return e.msg }
+func (e scrubbedErr) Unwrap() error { return e.err }
+
 // redact is text with every form of the secret replaced (a remote end that echoes its request).
 func (s *secretRef) redact(text string) string {
 	for _, f := range s.forms() {
@@ -388,7 +409,7 @@ func (c *remoteClient) openMCP(ctx context.Context, rawURL string, sec *secretRe
 	s.ServerName, s.Protocol = init.ServerInfo.Name, init.ProtocolVersion
 	if !slices.Contains(mcpProtocols, s.Protocol) {
 		s.Close(ctx)
-		return nil, fmt.Errorf("remote: the MCP server speaks protocol version %q; BigLaw speaks %s", truncate(untrusted(s.Protocol), 40), strings.Join(mcpProtocols, " or "))
+		return nil, fmt.Errorf("remote: the MCP server speaks a protocol version BigLaw does not (BigLaw speaks %s)", strings.Join(mcpProtocols, " or ")) // never its own words
 	}
 	if err := s.notify(ctx, "notifications/initialized"); err != nil {
 		s.Close(ctx)
@@ -500,6 +521,7 @@ type RemoteTool struct {
 	Problem     string          `json:"problem,omitempty"`
 	Item        string          `json:"item,omitempty"`
 	Previous    string          `json:"previous,omitempty"`
+	PreviousIn  json.RawMessage `json:"previousIn,omitempty"` // the input schema an admin accepted
 }
 
 // listTools is a server's tools (tools/list, following its cursor, at most 10 pages).
@@ -578,10 +600,61 @@ func convertSchema(raw json.RawMessage) (json.RawMessage, error) {
 		return nil, err
 	}
 	b, _ := json.Marshal(out)
-	if c, err := agent.Compile(b); err != nil || c.Strict("in") != "" {
-		return nil, fmt.Errorf("its input schema does not fit BigLaw's subset (%v)", cmpErr(err, errors.New(c.Strict("in"))))
+	c, err := agent.Compile(b)
+	switch {
+	case err != nil:
+		return nil, fmt.Errorf("its input schema does not fit BigLaw's subset (%v)", err)
+	case c.Strict("in") != "":
+		return nil, fmt.Errorf("its input schema does not fit BigLaw's subset (%s)", c.Strict("in"))
+	case len(b) > maxSchemaBytes:
+		return nil, fmt.Errorf("its input schema is %d bytes converted, over %d KiB (every prompt that offers the tool carries it)", len(b), maxSchemaBytes>>10)
 	}
 	return b, nil
+}
+
+// Imported schema bounds: the converted schema is third-party text the lead reads with the tool, so
+// it is capped as a whole, each description is cleaned and capped like the tool's own text, and an
+// enum value or a property name that is long or holds control or format characters is refused.
+const (
+	maxSchemaBytes  = 16 << 10
+	maxSchemaString = 200
+)
+
+// cleanSchemaText says why a schema's strings are not clean third-party text ("" when they are):
+// every description and enum string as untrustedText leaves it, every property name short and plain.
+func cleanSchemaText(raw json.RawMessage) string {
+	var v any
+	if json.Unmarshal(raw, &v) != nil {
+		return "not JSON"
+	}
+	var walk func(v any) string
+	walk = func(v any) string {
+		m, ok := v.(map[string]any)
+		if !ok {
+			return ""
+		}
+		if d, ok := m["description"].(string); ok && d != untrustedText(d, maxSchemaString) {
+			return "a description is over 200 characters or holds line breaks, control or format characters"
+		}
+		if e, ok := m["enum"].([]any); ok {
+			for _, x := range e {
+				if s, ok := x.(string); ok && s != untrustedText(s, maxSchemaString) {
+					return "an enum value is over 200 characters or holds line breaks, control or format characters"
+				}
+			}
+		}
+		props, _ := m["properties"].(map[string]any)
+		for n, p := range props {
+			if n != untrustedText(n, 64) || strings.Contains(n, " ") {
+				return "a property name is over 64 characters or holds spaces, control or format characters"
+			}
+			if why := walk(p); why != "" {
+				return why
+			}
+		}
+		return walk(m["items"])
+	}
+	return walk(v)
 }
 
 func strictify(v map[string]any, at string, required bool) (map[string]any, error) {
@@ -608,9 +681,19 @@ func strictify(v map[string]any, at string, required bool) (map[string]any, erro
 			return nil, fmt.Errorf("%s has no type", at)
 		}
 	}
-	for _, k := range []string{"description", "enum", "minimum", "maximum", "minLength", "maxLength", "minItems", "maxItems"} {
+	for _, k := range []string{"enum", "minimum", "maximum", "minLength", "maxLength", "minItems", "maxItems"} {
 		if x, ok := v[k]; ok {
 			out[k] = x
+		}
+	}
+	if d, ok := v["description"].(string); ok && untrustedText(d, maxSchemaString) != "" { // third-party text: cleaned and capped
+		out["description"] = untrustedText(d, maxSchemaString)
+	}
+	if e, ok := out["enum"].([]any); ok {
+		for _, x := range e {
+			if s, ok := x.(string); ok && s != untrustedText(s, maxSchemaString) {
+				return nil, fmt.Errorf("%s has an enum value over %d characters or with line breaks, control or format characters", at, maxSchemaString)
+			}
 		}
 	}
 	if slices.Contains(types, "object") {
@@ -629,6 +712,9 @@ func strictify(v map[string]any, at string, required bool) (map[string]any, erro
 		ps := map[string]any{}
 		names := slices.Sorted(maps.Keys(props))
 		for _, n := range names {
+			if n != untrustedText(n, 64) || strings.Contains(n, " ") || n == "" {
+				return nil, fmt.Errorf("%s has a property name over 64 characters or with spaces, control or format characters", at)
+			}
 			p, ok := props[n].(map[string]any)
 			if !ok {
 				return nil, fmt.Errorf("%s.%s is not a schema", at, n)
