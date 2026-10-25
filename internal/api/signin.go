@@ -87,7 +87,7 @@ func RequireSignIn(mux *http.ServeMux, s *auth.Service, log *slog.Logger) http.H
 		if !u.Verified {
 			p.Email = "" // an address the issuer did not verify is no identity
 		}
-		ctx := context.WithValue(context.WithValue(r.Context(), principalKey{}, p), liveKey{}, func() bool { _, ok, err := s.User(r); return ok || err != nil })
+		ctx := context.WithValue(context.WithValue(r.Context(), principalKey{}, p), liveKey{}, func() bool { ok, err := s.Alive(r); return ok || err != nil })
 		mux.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

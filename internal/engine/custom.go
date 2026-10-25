@@ -666,7 +666,7 @@ func (e *Engine) TestCall(ctx context.Context, id string, in TestIn, author stri
 	lead, _ := e.roles.Model(model.Lead)
 	row := e.db.QueryRowContext(ctx, `INSERT INTO tasks (description, workflow_type, jurisdiction, matter_number, document_ids, max_steps, tool_bandit, lead_model, specs, status, stop_reason)
 		VALUES ($1, 'memo', '', '', $2, 1, false, $3, `+snapshotSQL+`, 'cancelled', 'cancelled') RETURNING `+taskCols,
-		truncate("Manage test of "+id+" by "+author, 500), pq.Array(in.DocumentIDs), lead)
+		truncate("Manage test of "+id+" by "+DisplayName(author), 500), pq.Array(in.DocumentIDs), lead)
 	t, err := scanTask(row)
 	if err != nil {
 		return TestResult{}, fmt.Errorf("engine: test: %w", err)

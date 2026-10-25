@@ -141,7 +141,7 @@ func manageRoutes(mux *http.ServeMux, e *engine.Engine, who Who, log *slog.Logge
 		ss, err := e.Secrets(r.Context())
 		if p := who(r); p.SignedIn && !p.Admin {
 			for i := range ss {
-				ss[i].UpdatedBy = shortLabel(ss[i].UpdatedBy)
+				ss[i].UpdatedBy = engine.DisplayName(ss[i].UpdatedBy)
 			}
 		}
 		return ss, err
@@ -270,21 +270,11 @@ func nonNil(s []string) []string {
 	return s
 }
 
-// shortLabel is an author as a member sees it: the display name without the admin's email or sub.
-func shortLabel(s string) string {
-	for _, open := range []string{" <", " ("} {
-		if i := strings.LastIndex(s, open); i > 0 && strings.HasSuffix(s, map[string]string{" <": ">", " (": ")"}[open]) {
-			return s[:i]
-		}
-	}
-	return s
-}
-
 // authors is vs as p may see them: under sign-in a member sees authors' display names only.
 func authors(p Principal, vs []engine.Version) []engine.Version {
 	if p.SignedIn && !p.Admin {
 		for i := range vs {
-			vs[i].Author = shortLabel(vs[i].Author)
+			vs[i].Author = engine.DisplayName(vs[i].Author)
 		}
 	}
 	return vs

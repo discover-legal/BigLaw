@@ -5,16 +5,18 @@ package auth
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"database/sql"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -29,8 +31,8 @@ import (
 const (
 	IdleTimeout = 8 * time.Hour
 	MaxAge      = 7 * 24 * time.Hour
-	loginTTL    = 10 * time.Minute
-	touchEvery  = time.Minute // a request moves seen_at at most this often (one write a minute per session)
+	loginTTL    = 10 * time.Minute // inside the sealed login cookie
+	touchEvery  = time.Minute      // a request moves seen_at at most this often (one write a minute per session)
 )
 
 // Config is sign-in's configuration (cmd/biglaw config.go validates it).
@@ -53,17 +55,12 @@ type Service struct {
 	secure                bool
 	cookie, loginCookie   string
 	idle, maxAge, loginIn time.Duration
-	swept                 atomic.Int64 // unix seconds of the last sweep of ended sign-ins and sessions
+	swept                 atomic.Int64 // unix seconds of the last sweep of ended sessions
+	logged                atomic.Int64 // unix seconds of the last refused-sign-in log line (logFail)
+	aead                  cipher.AEAD  // seals the login cookie; its key is made at New, so a restart ends sign-ins in flight
 }
 
-// Bounds on sign-ins in flight (an anonymous GET /auth/login stores one): at most maxPending in all
-// and maxPendingPerClient per client address (behind a reverse proxy every client shares the proxy's
-// address, so it is a second global cap there); beyond, 429. next is at most maxNext bytes.
-var (
-	maxPending          = 2000
-	maxPendingPerClient = 100
-)
-
+// maxNext bounds next (it rides in the login cookie).
 const maxNext = 512
 
 // User is a signed-in person: the issuer's sub, their email (Verified as the issuer says), a
@@ -104,6 +101,10 @@ func New(db *sql.DB, c Config) (*Service, error) {
 	if s.secure { // __Host-: Secure, Path=/, no Domain, so no other host or path can set or shadow it
 		s.cookie, s.loginCookie = "__Host-biglaw_session", "__Host-biglaw_login"
 	}
+	key := make([]byte, 32)
+	rand.Read(key)
+	block, _ := aes.NewCipher(key) // a 32-byte key never fails
+	s.aead, _ = cipher.NewGCM(block)
 	return s, nil
 }
 
@@ -191,7 +192,16 @@ func (s *Service) setCookie(w http.ResponseWriter, name, value string, maxAge ti
 
 // User is the request's signed-in user: its cookie names a session that has neither idled out nor
 // passed its absolute age (an ended one is deleted). An error is the database's (503, never 401).
-func (s *Service) User(r *http.Request) (User, bool, error) {
+func (s *Service) User(r *http.Request) (User, bool, error) { return s.lookup(r, true) }
+
+// Alive is User without counting as activity (seen_at is not moved): an open event stream asks it,
+// so an idle tab's session still ends after IdleTimeout.
+func (s *Service) Alive(r *http.Request) (bool, error) {
+	_, ok, err := s.lookup(r, false)
+	return ok, err
+}
+
+func (s *Service) lookup(r *http.Request, touch bool) (User, bool, error) {
 	c, err := r.Cookie(s.cookie)
 	if err != nil || len(c.Value) != 43 {
 		return User{}, false, nil
@@ -211,7 +221,7 @@ func (s *Service) User(r *http.Request) (User, bool, error) {
 		_, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE id_hash = $1`, id)
 		return User{}, false, err
 	}
-	if now.Sub(seen) >= touchEvery {
+	if touch && now.Sub(seen) >= touchEvery {
 		if _, err := s.db.ExecContext(ctx, `UPDATE sessions SET seen_at = $2 WHERE id_hash = $1`, id, now); err != nil {
 			return User{}, false, fmt.Errorf("auth: session touch: %w", err)
 		}
@@ -237,59 +247,76 @@ func next(v string) string {
 	return v
 }
 
+// pending is a sign-in in flight, sealed (AES-GCM, sealKey) into the login cookie: the state the
+// callback must name, the nonce and PKCE verifier, where to return, and when it began. No server
+// state: anonymous sign-ins cost no row, and no number of them can refuse another browser's.
+type pending struct {
+	State    string `json:"s"`
+	Nonce    string `json:"n"`
+	Verifier string `json:"v"`
+	Next     string `json:"x"`
+	At       int64  `json:"t"` // unix seconds
+}
+
+const sealAAD = "biglaw login v1"
+
+func (s *Service) seal(p pending) string {
+	b, _ := json.Marshal(p)
+	n := make([]byte, s.aead.NonceSize())
+	rand.Read(n)
+	return base64.RawURLEncoding.EncodeToString(s.aead.Seal(n, n, b, []byte(sealAAD)))
+}
+
+// open is the sealed sign-in, if c was sealed by this process (a restart's new key refuses it) and
+// has not been tampered with.
+func (s *Service) open(c string) (pending, bool) {
+	var p pending
+	b, err := base64.RawURLEncoding.DecodeString(c)
+	ns := s.aead.NonceSize()
+	if err != nil || len(b) < ns {
+		return p, false
+	}
+	plain, err := s.aead.Open(nil, b[:ns], b[ns:], []byte(sealAAD))
+	return p, err == nil && json.Unmarshal(plain, &p) == nil
+}
+
 func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 	m, err := s.p.discover(r.Context())
 	if err != nil {
 		s.fail(w, http.StatusBadGateway, err)
 		return
 	}
-	state, nonce, verifier, now := random(), random(), random(), s.p.now()
+	now := s.p.now()
 	s.sweep(r.Context(), now)
-	client, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		client = r.RemoteAddr
-	}
-	var all, mine int
-	if err = s.db.QueryRowContext(r.Context(), `SELECT count(*), count(*) FILTER (WHERE client = $2) FROM auth_logins WHERE created_at >= $1`,
-		now.Add(-s.loginIn), client).Scan(&all, &mine); err == nil && (all >= maxPending || mine >= maxPendingPerClient) {
-		s.log.Warn("auth: sign-in refused: too many sign-ins in progress", "pending", all, "fromClient", mine)
-		w.Header().Set("Retry-After", "60")
-		s.fail(w, http.StatusTooManyRequests, errors.New("auth: too many sign-ins are in progress; try again in a few minutes"))
-		return
-	}
-	if err == nil {
-		_, err = s.db.ExecContext(r.Context(), `INSERT INTO auth_logins (state_hash, nonce, verifier, next, client, created_at) VALUES ($1, $2, $3, $4, $5, $6)`,
-			hash(state), nonce, verifier, next(r.URL.Query().Get("next")), client, now)
-	}
-	if err != nil {
-		s.fail(w, http.StatusServiceUnavailable, fmt.Errorf("auth: sign-in could not be stored: %w", err))
-		return
-	}
-	s.setCookie(w, s.loginCookie, state, s.loginIn) // binds the sign-in to this browser (login CSRF)
+	p := pending{State: random(), Nonce: random(), Verifier: random(), Next: next(r.URL.Query().Get("next")), At: now.Unix()}
+	s.setCookie(w, s.loginCookie, s.seal(p), s.loginIn) // binds the sign-in to this browser (login CSRF)
 	w.Header().Set("Cache-Control", "no-store")
-	http.Redirect(w, r, s.p.authURL(m, s.redirect, state, nonce, verifier), http.StatusFound)
+	http.Redirect(w, r, s.p.authURL(m, s.redirect, p.State, p.Nonce, p.Verifier), http.StatusFound)
 }
 
+// callback finishes a sign-in. The login cookie is cleared at once (single use in this browser);
+// a replay elsewhere would also need that cookie, and then still fails at the issuer: the code is
+// single use and bound to the PKCE verifier, and the ID token to the nonce (README § Sign-in).
 func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
 	q, ctx := r.URL.Query(), r.Context()
 	w.Header().Set("Cache-Control", "no-store")
 	s.setCookie(w, s.loginCookie, "", -1)
 	state := q.Get("state")
 	c, cerr := r.Cookie(s.loginCookie)
-	if state == "" || cerr != nil || subtle.ConstantTimeCompare([]byte(c.Value), []byte(state)) != 1 {
-		s.fail(w, http.StatusBadRequest, errors.New("auth: this sign-in was not started in this browser (state mismatch)"))
+	var p pending
+	ok := cerr == nil
+	if ok {
+		p, ok = s.open(c.Value)
+	}
+	if state == "" || !ok || subtle.ConstantTimeCompare([]byte(p.State), []byte(state)) != 1 {
+		s.fail(w, http.StatusBadRequest, errors.New("auth: this sign-in was not started in this browser, or BigLaw restarted since (state mismatch)"))
 		return
 	}
-	var nonce, verifier, to string
-	var at time.Time
-	err := s.db.QueryRowContext(ctx, `DELETE FROM auth_logins WHERE state_hash = $1 RETURNING nonce, verifier, next, created_at`, hash(state)).Scan(&nonce, &verifier, &to, &at)
-	if errors.Is(err, sql.ErrNoRows) || err == nil && (s.p.now().Sub(at) > s.loginIn || verifier == "") {
-		s.fail(w, http.StatusBadRequest, errors.New("auth: this sign-in has expired or was already used"))
-		return
-	} else if err != nil {
-		s.fail(w, http.StatusServiceUnavailable, fmt.Errorf("auth: sign-in lookup: %w", err))
+	if age := s.p.now().Sub(time.Unix(p.At, 0)); age > s.loginIn || age < -clockSkew || p.Verifier == "" || p.Nonce == "" {
+		s.fail(w, http.StatusBadRequest, errors.New("auth: this sign-in has expired; start again"))
 		return
 	}
+	nonce, verifier, to := p.Nonce, p.Verifier, next(p.Next)
 	if e := q.Get("error"); e != "" {
 		s.fail(w, http.StatusUnauthorized, fmt.Errorf("auth: the identity provider did not sign you in (%s)", oauthCode(e)))
 		return
@@ -342,13 +369,10 @@ func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, to, http.StatusSeeOther)
 }
 
-// sweep deletes ended sign-ins and sessions, at most once a minute (both by indexed times).
+// sweep deletes ended sessions, at most once a minute (so at most one log line a minute too).
 func (s *Service) sweep(ctx context.Context, now time.Time) {
 	if last := s.swept.Load(); now.Unix()-last < 60 || !s.swept.CompareAndSwap(last, now.Unix()) {
 		return
-	}
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM auth_logins WHERE created_at < $1`, now.Add(-s.loginIn)); err != nil {
-		s.log.Warn("auth: sweep of ended sign-ins failed", "err", err)
 	}
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE expires_at <= $1 OR seen_at <= $2`, now, now.Add(-s.idle)); err != nil {
 		s.log.Warn("auth: sweep of ended sessions failed", "err", err)
@@ -399,10 +423,13 @@ func (s *Service) logout(w http.ResponseWriter, r *http.Request) {
 // fail answers a sign-in that did not complete with a small page in BigLaw's words (never a token,
 // a code or the issuer's own text) and logs why.
 func (s *Service) fail(w http.ResponseWriter, code int, err error) {
-	if code >= 500 {
-		s.log.Warn("auth: sign-in failed", "err", err)
-	} else {
-		s.log.Info("auth: sign-in refused", "err", err)
+	// anonymous requests reach here: at most one line a second, so a flood cannot flood the log
+	if now := time.Now().Unix(); s.logged.Load() != now && s.logged.Swap(now) != now {
+		if code >= 500 {
+			s.log.Warn("auth: sign-in failed (one line a second at most)", "err", err)
+		} else {
+			s.log.Info("auth: sign-in refused (one line a second at most)", "err", err)
+		}
 	}
 	msg := strings.TrimPrefix(err.Error(), "auth: ")
 	if code >= 500 && !strings.Contains(msg, "issuer") {

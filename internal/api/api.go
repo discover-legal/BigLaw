@@ -126,15 +126,15 @@ func handler(d *docs.Service, e *engine.Engine, ui fs.FS, log *slog.Logger, who 
 		if err == nil {
 			v, err = e.Get(r.Context(), t.ID)
 		}
-		reply(w, http.StatusCreated, v, err)
+		reply(w, http.StatusCreated, names(who(r), v), err)
 	}))
 	mux.HandleFunc("GET /tasks", func(w http.ResponseWriter, r *http.Request) {
 		ts, err := e.List(r.Context())
-		reply(w, 200, ts, err)
+		reply(w, 200, names(who(r), ts), err)
 	})
 	mux.HandleFunc("GET /tasks/{id}", func(w http.ResponseWriter, r *http.Request) {
 		v, err := e.Get(r.Context(), r.PathValue("id"))
-		reply(w, 200, v, err)
+		reply(w, 200, names(who(r), v), err)
 	})
 	mux.HandleFunc("GET /tasks/{id}/steps", func(w http.ResponseWriter, r *http.Request) {
 		after, _ := strconv.Atoi(r.URL.Query().Get("after"))
@@ -159,7 +159,7 @@ func handler(d *docs.Service, e *engine.Engine, ui fs.FS, log *slog.Logger, who 
 	})
 	mux.HandleFunc("POST /tasks/{id}/cancel", docs.Guard(log, func(w http.ResponseWriter, r *http.Request) {
 		v, err := e.Cancel(r.Context(), r.PathValue("id"))
-		reply(w, 200, v, err)
+		reply(w, 200, names(who(r), v), err)
 	}))
 	for _, op := range []string{"approve", "reject"} {
 		mux.HandleFunc("POST /tasks/{id}/gates/{gate}/"+op, docs.Guard(log, func(w http.ResponseWriter, r *http.Request) {
@@ -167,7 +167,7 @@ func handler(d *docs.Service, e *engine.Engine, ui fs.FS, log *slog.Logger, who 
 			_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&in) // approve has no body
 			p := who(r)                                                             // a member or an admin under sign-in (lawyer review); the local user without it
 			v, err := e.Decide(r.Context(), r.PathValue("id"), r.PathValue("gate"), op == "approve", in.Reason, engine.Person{ID: p.ID, Name: p.Name, Email: p.Email})
-			reply(w, 200, v, err)
+			reply(w, 200, names(who(r), v), err)
 		}))
 	}
 	manageRoutes(mux, e, who, log, reply)
@@ -262,4 +262,33 @@ func uiHandler(ui fs.FS) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		files.ServeHTTP(w, r)
 	})
+}
+
+// names is a task as p may see it: under sign-in a member sees who submitted it and who decided
+// its gates by display name only, never another person's email (README § Sign-in).
+func names[T engine.TaskView | []engine.TaskView](p Principal, v T) T {
+	if !p.SignedIn || p.Admin {
+		return v
+	}
+	hide := func(t *engine.TaskView) {
+		if t.SubmittedBy != nil {
+			x := *t.SubmittedBy
+			x.Email, t.SubmittedBy = "", &x
+		}
+		for i, g := range t.DecidedGates {
+			if g.DecidedBy != nil {
+				x := *g.DecidedBy
+				x.Email, t.DecidedGates[i].DecidedBy = "", &x
+			}
+		}
+	}
+	switch x := any(&v).(type) {
+	case *engine.TaskView:
+		hide(x)
+	case *[]engine.TaskView:
+		for i := range *x {
+			hide(&(*x)[i])
+		}
+	}
+	return v
 }

@@ -311,12 +311,17 @@ confidential client) turns on sign-in with OpenID Connect: the authorization cod
 service, a corporate directory). It is built on the Go standard library alone (no OIDC or JOSE library).
 - **Flow.** `GET /auth/login[?next=/#/…]` reads the issuer's `/.well-known/openid-configuration`
   (once; its `issuer` must equal `BIGLAW_OIDC_ISSUER` exactly, its endpoints be https, and S256 be
-  among its PKCE methods when it lists any), stores a sign-in in flight (`auth_logins`: the SHA-256
-  of a random `state`, a random `nonce` and PKCE verifier, where to return) for 10 minutes, sets a
-  short-lived login cookie holding the state (so a callback is honoured only in the browser that
-  started it: login CSRF), and redirects to the issuer with scope `openid email profile`.
-  `GET /auth/callback` checks the state against that cookie and the stored sign-in (used once),
-  trades the code with the verifier and the client's credentials (`client_secret_basic`, or
+  among its PKCE methods when it lists any), seals the sign-in in flight (a random `state`, a random
+  `nonce` and PKCE verifier, where to return, and when it began) into the login cookie with AES-GCM
+  (`__Host-biglaw_login` over https, 10 minutes, the age checked inside the sealed payload too), and
+  redirects to the issuer with scope `openid email profile`. **Nothing is stored on the server** until
+  a sign-in completes, so anonymous sign-ins cost no row and no number of them can refuse anyone
+  else's (`TestUnfinishedSignInsNeverLockAnyoneOut`). The sealing key is made at process start:
+  a restart ends the sign-ins in flight (their user clicks Sign in again).
+  `GET /auth/callback` clears the login cookie at once (single use in that browser), opens it (a
+  cookie this process did not seal, or one tampered with, is refused), requires the callback's
+  `state` to be the sealed one (a callback is honoured only in the browser that started it: login
+  CSRF), and then trades the code with the verifier and the client's credentials (`client_secret_basic`, or
   `_post` when the issuer offers only that) and verifies the ID token: signature by the issuer's
   JWKS (RS256, RS384, RS512, ES256, ES384; `none`, `HS*` and any other alg refused before a key is
   looked up, a key used only for its own type and curve and its JWKS `alg`, `oct` keys never
@@ -332,11 +337,10 @@ service, a corporate directory). It is built on the Go standard library alone (n
   from memory for 5 s), so a slow or down issuer neither queues sign-ins nor is flooded.
   `next` is a path on this server only, at most 512 bytes (longer: `/`). Redirects from the
   issuer's endpoints are not followed and answers are capped at 1 MiB.
-- **Sign-ins in flight are bounded** (`GET /auth/login` is anonymous): at most 2,000 in all and 100
-  per client address within their 10 minutes, beyond which it answers 429 (behind a reverse proxy
-  every client shares the proxy's address, so the second cap is global there too); they are counted
-  and swept (at most once a minute, with ended sessions) through `created_at`'s index, so a flood
-  can neither grow the table nor make the next sign-in dearer (`TestLoginsBounded`).
+- **Replay without server state.** A replayed callback needs that browser's login cookie as well as
+  the URL, and still fails at the issuer: the code is single use and bound to the PKCE verifier,
+  and the ID token to the sealed nonce (`TestCallbackRefusals` replays one). A refused sign-in is
+  logged at most once a second, so a flood of bad callbacks cannot flood the log.
 - **Sessions** (migration `0011_sessions.sql`). A sign-in creates a server-side session row; the
   cookie holds only its random 256-bit id (opaque, `HttpOnly`, `SameSite=Lax`, `Path=/`; `Secure`
   and named `__Host-biglaw_session` when `BIGLAW_PUBLIC_URL` is https, `biglaw_session` on loopback
@@ -376,8 +380,11 @@ service, a corporate directory). It is built on the Go standard library alone (n
   members out). Change-log entries, secrets' "set by", an accepted tool's `acceptedBy`, Test calls
   and gate decisions record the user (`Name <email>`, or `Name (sub)`), never "Local user", and
   every task records who submitted it (`submittedBy`, migration `0012_task_submitter.sql`; the Task
-  screen shows the name, with the email on hover). Members see the change log's, history's and
-  secrets' authors by display name only (an admin's email is shown to admins). Display names are the
+  screen shows the name, with the email on hover to admins). **A member never sees another person's
+  email**: tasks' `submittedBy` and gates' `decidedBy`, the change log's and history's authors and
+  secrets' setters are names only in every response a member reads, and an accepted tool's file
+  (`acceptedBy`, shown in Manage and the export) and a Test call's task record the name alone
+  (`TestMembersNeverSeeAnEmail`); admins see the emails. Display names are the
   issuer's `name` claim, which a user may be able to edit there: the stored sub and email are what
   identify them.
 - **Who may sign in is the issuer's decision**: BigLaw admits every account the issuer

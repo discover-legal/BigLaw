@@ -672,11 +672,24 @@ func lastContent(ctx context.Context, tx *sql.Tx, id string) (map[string]string,
 	return files, err
 }
 
+// DisplayName is an author label (api's Principal.Label: "Name <email>" or "Name (sub)") as everyone
+// may see it: the name without the email or subject.
+func DisplayName(label string) string {
+	for open, end := range map[string]string{" <": ">", " (": ")"} {
+		if i := strings.LastIndex(label, open); i > 0 && strings.HasSuffix(label, end) {
+			return label[:i]
+		}
+	}
+	return label
+}
+
 // acceptRule: an imported tool's third-party text is accepted by the admin whose save names an
 // acceptor (that admin's name is recorded, whatever the file says); a save that changes the text
 // and names no new acceptor clears the acceptance and disables the tool (validate then refuses
 // enabling it until an admin accepts).
 func acceptRule(old, files map[string]string, author string) []string {
+	author = DisplayName(author) // the file is readable by every user (and exported): the name only, the version row keeps who
+
 	for f, text := range files {
 		var t, was CustomTool
 		if !strings.HasPrefix(f, toolsDir) || json.Unmarshal([]byte(text), &t) != nil || t.Imported == nil {

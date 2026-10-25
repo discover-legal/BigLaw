@@ -164,14 +164,16 @@ change. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`, not here.
   `decodeClaims`: never `json.Unmarshal` claims into a struct, its case-insensitive matching lets
   `"Email"` override `"email"`; fetches coalesced by `shared`, no lock across network I/O),
   server-side sessions (`session.go`, migration 0011: only SHA-256 of the cookie id stored, idle 8 h /
-  absolute 7 d, rotated at sign-in, logout deletes, `Revoke`; sign-ins in flight capped 2,000 / 100
-  per client → 429, `next` ≤ 512 bytes, swept by index), `IsAdmin` (sub exactly, or a verified plain-ASCII
+  absolute 7 d, rotated at sign-in, logout deletes, `Revoke`, `Alive` for SSE (never moves seen_at);
+  a sign-in in flight is AES-GCM sealed in the login cookie with a key made at startup: no row, no cap,
+  never add server state an anonymous request can fill; `next` ≤ 512 bytes), `IsAdmin` (sub exactly, or a verified plain-ASCII
   email byte-exact after ASCII lowercasing: never Unicode folding or a cleaned address). Stdlib only;
   never log or return a token, code, verifier, state, cookie or the client secret.
   `internal/api/signin.go` `RequireSignIn` puts every route but the exact patterns in `api.public`
   (`GET /`, `/health`, the three `/auth` routes) behind a session (401 `unauthenticated`), `docs.Guard`
   on every unsafe method, mounts `POST /manage/sessions/revoke` (admin) and gives SSE streams a
-  liveness check (`liveKey`). Tasks record `submittedBy` (migration 0012). Under sign-in `--allow-no-auth` is ignored (warned), `--admin-without-auth` refused, the remote
+  liveness check (`liveKey`). Tasks record `submittedBy` (migration 0012). A member never sees
+  another person's email (`api.names`, `authors`, `engine.DisplayName` in files): keep it so. Under sign-in `--allow-no-auth` is ignored (warned), `--admin-without-auth` refused, the remote
   policy is on, and `bad_host` also admits `BIGLAW_PUBLIC_URL`'s host. Gate decisions record
   `Gate.DecidedBy` (`engine.Person`). `internal/auth/authtest` is the fake OpenID provider for tests.
 - `internal/api` (PR 4b) — the REST surface (tasks, steps, SSE, gates, cancel, cost, clients) over

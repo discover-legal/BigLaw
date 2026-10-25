@@ -146,7 +146,7 @@ func accept(t *testing.T, e *Engine, name string) {
 	}
 	ct.Enabled, ct.Imported.AcceptedBy = true, "whoever the file says"
 	b, _ := json.MarshalIndent(ct, "", " ")
-	if _, _, err := e.Save(ctx, "tool."+name, SaveIn{Base: d.Latest, Files: map[string]string{f: string(b)}}, "Ada"); err != nil {
+	if _, _, err := e.Save(ctx, "tool."+name, SaveIn{Base: d.Latest, Files: map[string]string{f: string(b)}}, "Ada <ada@firm.example>"); err != nil { // the file records the name only (r2 L-7)
 		t.Fatalf("accept %s: %s", name, problems(err))
 	}
 }

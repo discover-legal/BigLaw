@@ -86,6 +86,11 @@ func newRig(t *testing.T, admins ...string) *rig {
 		}
 		json.NewEncoder(w).Encode(u)
 	})
+	mux.HandleFunc("GET /alive", func(w http.ResponseWriter, req *http.Request) {
+		if ok, _ := r.s.Alive(req); !ok {
+			w.WriteHeader(401)
+		}
+	})
 	r.srv.Config.Handler = mux
 	return r
 }
@@ -316,6 +321,24 @@ func TestUnknownKidRefetch(t *testing.T) {
 	}
 }
 
+// loginCookie is c's sealed login cookie ("" when there is none).
+func (r *rig) loginCookie(t *testing.T, c *http.Client) string {
+	t.Helper()
+	for _, k := range c.Jar.Cookies(mustURL(r.srv.URL)) {
+		if k.Name == "biglaw_login" {
+			return k.Value
+		}
+	}
+	return ""
+}
+
+func (r *rig) setLogin(t *testing.T, c *http.Client, v string) {
+	t.Helper()
+	c.Jar.SetCookies(mustURL(r.srv.URL), []*http.Cookie{{Name: "biglaw_login", Value: v, Path: "/"}})
+}
+
+func mustURL(s string) *url.URL { u, _ := url.Parse(s); return u }
+
 // callbackWith starts a sign-in in c and returns the provider's redirect back to BigLaw (unvisited).
 func (r *rig) callbackWith(t *testing.T, c *http.Client) *url.URL {
 	t.Helper()
@@ -361,31 +384,54 @@ func TestCallbackRefusals(t *testing.T) {
 		t.Fatalf("forged state: %d %s", code, body)
 	}
 	cb = r.callbackWith(t, a)
+	sealed := r.loginCookie(t, a)
 	if code, _ := r.get(t, a, cb.String()); code != 303 {
 		t.Fatalf("valid callback: %d", code)
 	}
-	u, _ := url.Parse(r.srv.URL)
-	a.Jar.SetCookies(u, []*http.Cookie{{Name: "biglaw_login", Value: cb.Query().Get("state"), Path: "/"}})
-	if code, body := r.get(t, a, cb.String()); code != 400 || !strings.Contains(body, "already used") { // replay: the same state, its cookie put back
+	if r.loginCookie(t, a) != "" {
+		t.Fatal("the login cookie outlived its callback")
+	}
+	r.setLogin(t, a, sealed) // replay: the same callback with its cookie put back fails at the issuer (code used, PKCE)
+	if code, body := r.get(t, a, cb.String()); code != 401 || !strings.Contains(body, "refused the code (400 invalid_grant)") {
 		t.Fatalf("replayed callback: %d %s", code, body)
 	}
 	for _, c := range []struct {
-		name, sql, want string
-		code            int
+		name string
+		edit func(*pending)
+		want string
+		code int
 	}{
-		{"missing verifier", `UPDATE auth_logins SET verifier = ''`, "already used", 400},
-		{"wrong verifier", `UPDATE auth_logins SET verifier = 'x' || verifier`, "refused the code (400 invalid_grant)", 401},
-		{"old sign-in", `UPDATE auth_logins SET created_at = created_at - interval '11 minutes'`, "expired", 400},
+		{"missing verifier", func(p *pending) { p.Verifier = "" }, "expired", 400},
+		{"wrong verifier", func(p *pending) { p.Verifier = "x" + p.Verifier }, "refused the code (400 invalid_grant)", 401},
+		{"old sign-in", func(p *pending) { p.At -= 11 * 60 }, "expired", 400},
+		{"from the future", func(p *pending) { p.At += 5 * 60 }, "expired", 400},
 	} {
 		c1 := authtest.Browser(t)
 		cb := r.callbackWith(t, c1)
-		if _, err := r.db.Exec(c.sql); err != nil {
-			t.Fatal(err)
+		p, ok := r.s.open(r.loginCookie(t, c1))
+		if !ok {
+			t.Fatal("the login cookie does not open")
 		}
+		c.edit(&p)
+		r.setLogin(t, c1, r.s.seal(p))
 		if code, body := r.get(t, c1, cb.String()); code != c.code || !strings.Contains(body, c.want) || sessionCookie(t, c1, r.srv.URL) != nil {
 			t.Errorf("%s: %d %s", c.name, code, body)
 		}
-		r.db.Exec(`DELETE FROM auth_logins`)
+	}
+	for name, v := range map[string]func(string) string{ // a cookie this process did not seal is refused
+		"tampered": func(v string) string { b := []byte(v); b[len(b)/2] ^= 1; return string(b) },
+		"restarted": func(string) string {
+			other, _ := New(nil, Config{Issuer: r.idp.URL, ClientID: "c", PublicURL: r.srv.URL})
+			return other.seal(pending{State: "s"})
+		},
+		"plain state": func(v string) string { return cb.Query().Get("state") },
+	} {
+		c1 := authtest.Browser(t)
+		cb := r.callbackWith(t, c1)
+		r.setLogin(t, c1, v(r.loginCookie(t, c1)))
+		if code, body := r.get(t, c1, cb.String()); code != 400 || !strings.Contains(body, "state mismatch") {
+			t.Errorf("%s login cookie: %d %s", name, code, body)
+		}
 	}
 	tokens := len(r.idp.Tokens)
 	for _, c := range []struct{ name, query, want string }{{"issuer error", "error=access_denied&error_description=<script>", "access_denied"}, {"no code", "", "no code"}} {
@@ -542,13 +588,16 @@ func TestSignInNeverLogsSecrets(t *testing.T) {
 	r.idp.Raw = nil
 	b := authtest.Browser(t)
 	cb := r.callbackWith(t, b)
-	r.db.Exec(`UPDATE auth_logins SET verifier = 'x' || verifier`)
+	p, _ := r.s.open(r.loginCookie(t, b))
+	login := r.loginCookie(t, b)
+	p.Verifier = "x" + p.Verifier
+	r.setLogin(t, b, r.s.seal(p))
 	r.get(t, b, cb.String()) // the issuer's error_description quotes the code: never repeated
 	secrets := append([]string{r.idp.Secret, cookie}, tokens...)
 	for _, f := range r.idp.Tokens {
 		secrets = append(secrets, f.Get("code"), f.Get("code_verifier"))
 	}
-	secrets = append(secrets, cb.Query().Get("state"))
+	secrets = append(secrets, cb.Query().Get("state"), login)
 	out := r.logs.String() + strings.Join(r.seen, "\n")
 	if !strings.Contains(r.logs.String(), "signed in") || !strings.Contains(r.logs.String(), "sign-in refused") {
 		t.Fatalf("the logs miss the sign-ins: %s", r.logs.String())
@@ -654,74 +703,54 @@ func TestNbfChecked(t *testing.T) {
 	}
 }
 
-// TestLoginsBounded (review r1 M-1, its repro): anonymous sign-ins cannot load the database: next
-// over 512 bytes is stored as "/", pending sign-ins are capped per client and in all (429), ended
-// ones are swept by created_at's index, and the count and sweep read that index.
-func TestLoginsBounded(t *testing.T) {
+// TestUnfinishedSignInsNeverLockAnyoneOut (review r2 M-3, its lockout repro; r1 M-1's intent): a
+// sign-in in flight is sealed in its own browser's cookie, so a flood of unfinished ones from one
+// address (behind a proxy: everyone's) stores nothing and refuses nobody, then or nine minutes on;
+// next over 512 bytes returns to "/".
+func TestUnfinishedSignInsNeverLockAnyoneOut(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
 	c := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	login := func() int {
-		t.Helper()
+	for range 3000 {
 		resp, err := c.Get(r.srv.URL + "/auth/login?next=/" + strings.Repeat("x", 2000))
 		if err != nil {
 			t.Fatal(err)
 		}
 		io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
-		return resp.StatusCode
+		if resp.StatusCode != 302 {
+			t.Fatalf("an anonymous sign-in: %d", resp.StatusCode)
+		}
+		if n := len(resp.Header.Get("Set-Cookie")); n > 1024 {
+			t.Fatalf("a %d-byte login cookie: next is not bounded", n)
+		}
 	}
-	if code := login(); code != 302 {
-		t.Fatalf("login: %d", code)
+	var tables int
+	r.db.QueryRow(`SELECT count(*) FROM information_schema.tables WHERE table_name = 'auth_logins'`).Scan(&tables)
+	if tables != 0 {
+		t.Fatal("sign-ins in flight have a table")
 	}
-	var next string
-	r.db.QueryRow(`SELECT next FROM auth_logins`).Scan(&next)
-	if next != "/" {
-		t.Fatalf("a 2 KB next was stored (%d bytes)", len(next))
-	}
-	fill := func(n int, client string, at time.Time) {
-		t.Helper()
-		if _, err := r.db.Exec(`INSERT INTO auth_logins (state_hash, nonce, verifier, next, client, created_at)
-			SELECT sha256((g::text || $2)::bytea), 'n', 'v', '/', $2, $3 FROM generate_series(1, $1) g`, n, client, at); err != nil {
+	for _, wait := range []time.Duration{0, 9 * time.Minute} {
+		r.clk.add(wait)
+		b := authtest.Browser(t)
+		resp, err := b.Get(r.srv.URL + "/auth/login?next=/" + strings.Repeat("y", 600))
+		if err != nil {
 			t.Fatal(err)
 		}
-	}
-	fill(maxPendingPerClient, "127.0.0.1", r.clk.now())
-	if code := login(); code != 429 {
-		t.Fatalf("past the per-client cap: %d", code)
-	}
-	r.db.Exec(`DELETE FROM auth_logins`)
-	fill(maxPending, "192.0.2.1", r.clk.now())
-	if code := login(); code != 429 {
-		t.Fatalf("past the global cap: %d", code)
-	}
-	r.db.Exec(`UPDATE auth_logins SET created_at = created_at - interval '11 minutes'`) // ended: they no longer count
-	r.clk.add(2 * time.Minute)                                                          // and the next login sweeps them
-	if code := login(); code != 302 {
-		t.Fatalf("after the window: %d", code)
-	}
-	var n int
-	r.db.QueryRow(`SELECT count(*) FROM auth_logins`).Scan(&n)
-	if n != 1 {
-		t.Fatalf("%d sign-ins left after the sweep, want 1", n)
-	}
-	var plan string
-	r.db.Exec(`ANALYZE auth_logins`)
-	r.db.QueryRow(`EXPLAIN (COSTS OFF) DELETE FROM auth_logins WHERE created_at < now()`).Scan(&plan)
-	tx, _ := r.db.Begin()
-	defer tx.Rollback()
-	tx.Exec(`SET LOCAL enable_seqscan = off`)
-	tx.QueryRow(`EXPLAIN (COSTS OFF) DELETE FROM auth_logins WHERE created_at < now()`).Scan(&plan)
-	if !strings.Contains(plan, "auth_logins_created") && !strings.Contains(plan, "Index") {
-		rows, _ := tx.Query(`EXPLAIN (COSTS OFF) DELETE FROM auth_logins WHERE created_at < now()`)
-		for rows.Next() {
-			var l string
-			rows.Scan(&l)
-			plan += "\n" + l
+		resp.Body.Close()
+		if resp.StatusCode != 302 {
+			t.Fatalf("a real user after the flood (+%s): %d", wait, resp.StatusCode)
 		}
-		if !strings.Contains(plan, "auth_logins_created") {
-			t.Fatalf("the sweep does not use created_at's index: %s", plan)
+		resp, _ = b.Get(resp.Header.Get("Location"))
+		resp.Body.Close()
+		resp, _ = b.Get(resp.Header.Get("Location"))
+		resp.Body.Close()
+		if resp.StatusCode != 303 || resp.Header.Get("Location") != "/" {
+			t.Fatalf("a real user's sign-in after the flood (+%s): %d %s", wait, resp.StatusCode, resp.Header.Get("Location"))
 		}
+	}
+	if n := r.sessions(t); n != 2 {
+		t.Fatalf("%d sessions, want the two real ones", n)
 	}
 }
 
@@ -757,5 +786,33 @@ func TestIssuerFetchesCoalesced(t *testing.T) {
 	}
 	if s.p.discErr == nil {
 		t.Fatal("the failure is not remembered")
+	}
+}
+
+// TestAliveIsNotActivity (review r2): an open event stream's session check does not move seen_at,
+// so a tab left open still idles out.
+func TestAliveIsNotActivity(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	r.s.SetLifetimes(time.Hour, 24*time.Hour)
+	c := authtest.Browser(t)
+	r.signIn(t, c)
+	alive := func() bool {
+		resp, err := c.Get(r.srv.URL + "/alive")
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode == 200
+	}
+	for range 5 { // 50 minutes of a stream checking every 10 minutes
+		r.clk.add(10 * time.Minute)
+		if !alive() {
+			t.Fatal("ended early")
+		}
+	}
+	r.clk.add(11 * time.Minute)
+	if alive() {
+		t.Fatal("the stream's checks kept an idle session alive")
 	}
 }

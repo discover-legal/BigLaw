@@ -209,7 +209,7 @@ func TestGateDecisionRecordsUser(t *testing.T) {
 	if code, body := admin.do("POST", "/tasks/"+v.ID+"/gates/"+v.PendingGates[0].GateID+"/approve", nil); code != 200 {
 		t.Fatalf("an admin's approval: %d %s", code, body)
 	}
-	_, body = member.do("GET", "/tasks/"+v.ID, nil)
+	_, body = admin.do("GET", "/tasks/"+v.ID, nil) // an admin sees the emails; a member only names (TestMembersNeverSeeAnEmail)
 	json.Unmarshal([]byte(body), &v)
 	if len(v.DecidedGates) != 2 {
 		t.Fatalf("decided gates: %s", body)
@@ -293,7 +293,7 @@ func TestRevokeSessions(t *testing.T) {
 	}
 	code, body := member.do("POST", "/tasks", m{"description": "What is claimed?", "workflowType": "memo", "documentIds": ids})
 	var v engine.TaskView
-	if json.Unmarshal([]byte(body), &v); code != 201 || v.SubmittedBy == nil || *v.SubmittedBy != (engine.Person{ID: "u-bob", Name: "Bob Member", Email: "bob@firm.example"}) {
+	if json.Unmarshal([]byte(body), &v); code != 201 || v.SubmittedBy == nil || *v.SubmittedBy != (engine.Person{ID: "u-bob", Name: "Bob Member"}) { // a member sees names only
 		t.Fatalf("a member's task records its submitter: %d %s", code, body)
 	}
 	member.waitFor(v.ID, func(v engine.TaskView) bool { return v.Status == "awaiting_gate" })
@@ -331,21 +331,48 @@ func TestRevokeSessions(t *testing.T) {
 	}
 }
 
-// TestMembersSeeAuthorsByName (review r1 Info): admins' emails in the change log, history and
-// secrets' updatedBy are shown to admins only; a member sees the display name.
-func TestMembersSeeAuthorsByName(t *testing.T) {
+// TestMembersNeverSeeAnEmail (review r1 Info, r2 L-7): every response a member can read, after an
+// admin and another member have submitted, decided, saved and set a secret, holds no email but the
+// member's own: submitters, deciders, authors, secrets' setters and accepted tools are names; an
+// admin still sees the emails.
+func TestMembersNeverSeeAnEmail(t *testing.T) {
 	t.Parallel()
-	s, _ := signedServer(t, nil)
-	member, admin := s.browser(t, bob), s.browser(t, ada)
+	s, ids := signedServer(t, memo, doc1)
+	admin, member := s.browser(t, ada), s.browser(t, bob)
+	carol := s.browser(t, map[string]any{"sub": "u-carol", "email": "carol@firm.example", "email_verified": true, "name": "Carol Member"})
+	code, body := member.do("POST", "/tasks", m{"description": "What is claimed?", "workflowType": "memo", "documentIds": ids})
+	var v engine.TaskView
+	if json.Unmarshal([]byte(body), &v); code != 201 {
+		t.Fatalf("submit: %d %s", code, body)
+	}
+	v = member.waitFor(v.ID, func(v engine.TaskView) bool { return v.Status == "awaiting_gate" })
+	if code, body := admin.do("POST", "/tasks/"+v.ID+"/gates/"+v.PendingGates[0].GateID+"/reject", m{"reason": "Cite the dates."}); code != 200 {
+		t.Fatalf("decide: %d %s", code, body)
+	}
+	member.waitFor(v.ID, func(v engine.TaskView) bool { return v.Status == "awaiting_gate" && len(v.DecidedGates) == 1 })
 	if code, body := admin.do("POST", "/manage/secrets", m{"name": "k1", "value": "a-long-value", "origin": "https://api.example.com"}); code != 201 {
 		t.Fatalf("secret: %d %s", code, body)
 	}
-	for _, p := range []string{"/manage/secrets", "/manage/changes"} {
-		if _, body := admin.do("GET", p, nil); !strings.Contains(body, `"Ada Lovelace \u003cada@firm.example\u003e"`) {
-			t.Errorf("an admin's %s lacks the full author: %s", p, body)
+	if code, body := admin.do("POST", "/manage/items/prompt.lead/versions", m{"base": 0, "files": leadFiles(t, admin, "\nNames."), "note": "n"}); code != 201 {
+		t.Fatalf("save: %d %s", code, body)
+	}
+	paths := []string{"/me", "/tasks", "/tasks/" + v.ID, "/tasks/" + v.ID + "/steps", "/tasks/" + v.ID + "/cost", "/tasks/" + v.ID + "/deliverable.md",
+		"/manage/items", "/manage/items/prompt.lead", "/manage/items/prompt.lead/history", "/manage/items/prompt.lead/diff", "/manage/changes",
+		"/manage/export?format=patch", "/manage/secrets", "/clients", "/documents", "/documents/" + ids[0]}
+	for _, p := range paths {
+		_, body := carol.do("GET", p, nil)
+		for _, e := range []string{"ada@firm.example", "bob@firm.example"} {
+			if strings.Contains(body, e) {
+				t.Errorf("a member's GET %s shows %s: %.300s", p, e, body)
+			}
 		}
-		if _, body := member.do("GET", p, nil); strings.Contains(body, "ada@firm.example") || !strings.Contains(body, "Ada Lovelace") {
-			t.Errorf("a member's %s: %s", p, body)
+	}
+	if _, body := carol.do("GET", "/tasks/"+v.ID, nil); !strings.Contains(body, `"name":"Bob Member"`) || !strings.Contains(body, `"name":"Ada Lovelace"`) {
+		t.Errorf("a member does not see the names: %s", body)
+	}
+	for _, p := range []string{"/tasks/" + v.ID, "/manage/secrets", "/manage/changes"} {
+		if _, body := admin.do("GET", p, nil); !strings.Contains(body, "@firm.example") {
+			t.Errorf("an admin's GET %s lacks the emails", p)
 		}
 	}
 }
