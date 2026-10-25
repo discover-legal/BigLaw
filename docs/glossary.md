@@ -78,7 +78,10 @@ described in [architecture.md](architecture.md), and the design reasons in [patt
   most relevant first, with duplicates and boilerplate skipped
   ([`sweep.go`](../internal/engine/sweep.go)).
 - **Visit**: one sweep unit: a page of a section, or a batch of short sections (`through`).
-- **Admission**: Go's check of an evidence subagent's answer before anything is recorded (`admit`).
+- **Admission**: Go's check of an evidence subagent's answer before anything is recorded. Two
+  paths: `admit` (extract_facts, analyze_issue: unverified findings are quarantined and counted by
+  G4) and `deviations` (check_deviation: a verdict that does not verify is dropped with a note, not
+  quarantined). A change to admission must cover both.
 - **Figure reader**: the `read_figures` subagent (critic role), which labels number spans.
 - **Figure judge**: the `judge_figures` subagent, which decides candidate pairs.
 - **Committee**: three context-free critics run in parallel: `prosecute` (claims against
@@ -131,8 +134,9 @@ described in [architecture.md](architecture.md), and the design reasons in [patt
 - **Grant**: what one call may spend, carved from its caller's budget and closed when it returns.
 - **Worst case (bound)**: a model call's held cost: request bytes as tokens, plus 1,000, as a
   cache write, plus `MaxTokens` of output.
-- **Class**: a tool's budget class: `plan`, `evidence`, `draft`, `committee`, `cover` or `free`.
-  It decides its share and its level.
+- **Class**: a tool's budget class: `evidence`, `draft`, `committee`, `cover` or `free`. It decides
+  its share and its level. (The registry also accepts `plan`, which no built-in spec uses; the plan
+  share is P1's budget across all classes before a plan exists.)
 - **Level**: evidence < work < review < final. A grant never takes what a higher level keeps.
 - **Share**: the most a class may spend, in calls and USD (`Allocate`).
 - **Keep**: what the root holds back for later phases: the reserve and meta for finish, one

@@ -178,11 +178,15 @@ share could not reach is reported and disclosed.
 ### Extract and admit
 Four subagents are wrapped by Go (`hooked` in [`register.go`](../internal/engine/register.go)).
 Go completes their requests: section text, the plan's issues, packs, the requirement's context, or
-the drafter's whole request. Go then checks their answers before anything is recorded. For
-`extract_facts`, `analyze_issue` and `check_deviation`, `Engine.admit`:
+the drafter's whole request. Go then checks their answers before anything is recorded. There are **two admission paths**, and
+a change to admission (G2/G3/G4, value admission, duplicates) must cover both.
+
+**`Engine.admit`** ([`register.go`](../internal/engine/register.go)) serves `extract_facts` and
+`analyze_issue`. It:
 - puts every quote through the ladder (`verify`: `docs.VerifyQuote` exact and tolerant, then the
   `verify_quote` tool's paraphrase judge while the grant has calls). A finding is `Verified` only
-  when every quote verifies (G2). Otherwise it is stored quarantined and never drafted from (G3);
+  when every quote verifies (G2). Otherwise it is stored quarantined and never drafted from (G3),
+  and G4 counts it;
 - has the figure reader read the findings' numbers (§ 5) and keeps a typed value only when its own
   quote states it as read (`valueStated`). A dropped value becomes a `ValueNotes` entry, never a
   silent drop;
@@ -190,15 +194,29 @@ the drafter's whole request. Go then checks their answers before anything is rec
 - records each new finding through the one path, `recordFinding`, which runs `finding_admitted`
   hooks first (`TestFindingWritesGoThroughRecord`).
 
-`check_deviation` has extra steps first ([`deviation.go`](../internal/engine/deviation.go),
-[`requirement.go`](../internal/engine/requirement.go)):
-1. it verifies the requirement verbatim in the controlling document (`placeRequirement`);
-2. it reads the requirement in a bounded window of text around it (`contextOf`, about 3 KB each
+**`Engine.deviations`** ([`deviation.go`](../internal/engine/deviation.go)) serves
+`check_deviation`. Before the subagent runs, `hooked.Call`:
+1. verifies the requirement verbatim in the controlling document (`quotedRequirement`,
+   `placeRequirement` in [`requirement.go`](../internal/engine/requirement.go));
+2. reads the requirement in a bounded window of text around it (`contextOf`, about 3 KB each
    side, at most 8 KB);
-3. it hands the subagent the reviewed documents' nearest passages;
-4. one critic call (`checkSection`) asks whether the document imposes the requirement as quoted.
-   "no" fails the call. "unclear", a truncated window or a missing check admits the finding at low
-   confidence (`Finding.Low`, gated).
+3. hands the subagent the reviewed documents' nearest passages (`reviewedPassages`);
+4. makes one critic call (`checkSection`) asking whether the document imposes the requirement as
+   quoted. "no" fails the call.
+
+After the subagent answers, `deviations` turns each verdict into a finding. It differs from
+`admit`:
+- a verdict whose controlling quote is not in the window (`within`; a quote that restates the
+  requirement stands on the requirement, `restates`), whose quotes do not verify through the
+  ladder, or (an omission) whose provision is present in the reviewed document (`present`) is
+  **dropped with a note**. It is not stored quarantined, so G4 never counts it;
+- a finding it keeps is stored `Verified`. It quotes the window verbatim, with the analyst's part
+  and correction labelled as not quotations, and a correction stating a figure the quotes do not
+  (`Untraced`) is withheld;
+- it reads no figures and runs no `valueStated` or `restated` merge;
+- "unclear", a truncated window or a missing check admits the finding at low confidence
+  (`Finding.Low`, gated);
+- it records through `recordFinding`, as `admit` does.
 
 ### Analyse
 `analyze_issue` returns a rule, an application and a conclusion. Go keeps them for the issue's
@@ -290,8 +308,8 @@ are decided, it opens the deliverable gate (`G-deliverable-N`). The run stops `a
 flowchart LR
   root[root Budget: calls + USD caps] -- Keep by level --> keeps[reserve+meta: Final / cycle+cover: Review / draft: Work]
   root -- Grant(maxTurns, all free USD, level) --> tool[a tool's grant]
-  tool -- ChatWithin: hold worst case, charge spend --> call[model call]
-  call -- meter.note --> step[(task_steps 'started' row: grant = spent + in-flight worst cases)]
+  tool -- ChatWithin: hold worst case, charge spend --> mcall[model call]
+  mcall -- meter.note --> step[(task_steps 'started' row: grant = spent + in-flight worst cases)]
 ```
 
 - **`agent.Budget`** ([`budget.go`](../internal/agent/budget.go)) is a tree. A grant holds calls
@@ -326,8 +344,9 @@ flowchart LR
 - **Journal** ([`steps.go`](../internal/engine/steps.go) `run.Record`). Every lead turn and lead
   tool call is a step. It is inserted `started` with its grant, then committed, refused or failed
   in one transaction with the ledger rows and bandit statistics the step buffered (`e.write`
-  appends to `run.buf`; `e.rows` reads the buffer too). Every write checks the lease. A step past
-  `maxSteps` is refused, and so is the next step after a hook gate opened (`errHeld`).
+  appends to `run.buf`; `e.rows` reads the buffer too). Every write checks the lease. Recording a step past
+  `maxSteps` returns `errMaxSteps`, which ends the lead's run and forces the finish; recording the
+  next step after a hook gate opened returns `errHeld`, which pauses the run.
 - **Meter**. A journaled tool step carries a `meter` on its context. Every model call inside it
   (subagent turns, judges, sweep visits, critics) records the step again before it is sent, with
   the spend so far plus the in-flight worst cases, and again when it returns. `agent.Meter`
@@ -446,8 +465,10 @@ flowchart LR
 - **The judge join** ([`analysis/join.go`](../internal/analysis/join.go),
   [`engine/judge.go`](../internal/engine/judge.go)). `Candidates` proposes pairs, ranked by
   `rankPairs` and capped at the judge's budget (`CandidateLimit`). `judge_figures` answers yes, no
-  or unclear with a reason. `CheckVerdicts` makes a verdict unclear unless its pair was proposed and
-  its reason quotes both passages; a yes must also name both figures (`namesValues`). Verdicts are
+  or unclear with a reason. `CheckVerdicts` rejects, with a note, a verdict for a pair Go did not
+  propose. It makes a verdict unclear when its answer is not yes, no or unclear, when a second verdict
+  names the same pair, when its reason does not quote both passages (`quoted`), or when a yes does not
+  name both figures (`namesValues`). Verdicts are
   kept in ledger `verdict`.
 - **Caches** (`figure_reads`, migrations 0006 and 0007). Complete reader answers and yes/no
   verdicts are keyed by `Specs.agentHash` (the agent's spec, its prompt and its allowed tools'
@@ -469,9 +490,11 @@ Two kinds:
     `finish` and `verify_quote`: `unhooked`), `finding_admitted` (`recordFinding`) and
     `task_finish` (in `finish`, before render).
   - Actions: `block`, `approve`, `check`, `webhook` and `limitation`.
-  - An `approve` opens a hook gate keyed by a 128-bit hash of the canonical input (`approveID`).
-    The run pauses (`run.hold` → `errHeld` → `awaiting_gate`) until `Decide`. Only the lead's own
-    calls can be approved; other callers of that tool fail closed.
+  - A `before_call` `approve` opens a hook gate keyed by the rule, the tool and a 128-bit hash of
+    the call's canonical input (`approveID`). The run pauses (`run.hold` → `errHeld` →
+    `awaiting_gate`) until `Decide`. Only the lead's own calls can be approved; other callers of that
+    tool fail closed. A `finding_admitted` `approve` opens no hook gate: it marks the finding `Low`,
+    so the finding's own G7 gate opens at finish.
   - `after_call` rules on the four hooked subagents run on the subagent's answer before Go records
     anything (`afterHooked`).
   - A `finding_admitted` block sets `Finding.HookBlocked`. That is never `Verified=false`, so G4

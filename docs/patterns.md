@@ -22,8 +22,8 @@ defines the terms.
 `agent.Tool` with a `Spec`. The spec is JSON data: a name, a kind, a class, a turn cap, a
 description, and `in`/`out` JSON Schemas. The schemas are in BigLaw's subset
 ([`internal/agent/schema.go`](../internal/agent/schema.go)): `type`, `properties`, `required`,
-`additionalProperties:false`, `enum`, `items` and min/max bounds. Any other keyword is a compile
-error. Schemas must also be strict-shaped (`Schema.Strict`): every object closed, every property
+`additionalProperties:false`, `enum`, `items`, min/max bounds and `description`. Any other keyword
+is a compile error. Schemas must also be strict-shaped (`Schema.Strict`): every object closed, every property
 required, and optional fields nullable rather than absent. The registry
 ([`registry.go`](../internal/agent/registry.go)) checks each spec at registration:
 - the schemas compile and are strict;
@@ -90,10 +90,10 @@ meaning with a word list, only form and position:
 
 | Model output | Go's check | Code |
 |---|---|---|
-| A finding's quotes | The ladder: exact, then tolerant, then the paraphrase judge, then a 3-vote ensemble. A finding is verified only when every quote is (G2) | `docs.VerifyQuote`, `engine.verify`, `admit` |
+| A finding's quotes | The ladder: exact, then tolerant, then the paraphrase judge, then a 3-vote ensemble. A finding is verified only when every quote is (G2) | `docs.VerifyQuote`, `engine.verify`, `admit` (extract_facts, analyze_issue), `deviations` (check_deviation) |
 | A typed value | A span of its own quote read as the same kind, currency, amount and scale | `valueStated` |
 | A figure label | Unknown span ids rejected; a scale only from adjacent source words in the span's own passage; a unit only from the words right after the digits; a decimal mark that fits; the amount is the written digits shifted | `analysis.ReadLabels`, `statesScale`, `statesUnit` |
-| A judge's verdict | Only for a pair Go proposed; one per pair; the reason must quote both passages (runs of four words); a yes must name both figures as written | `analysis.CheckVerdicts`, `quoted`, `namesValues` |
+| A judge's verdict | A verdict for a pair Go did not propose is rejected; a second one for a pair, an unknown answer, or one failing the next checks is unclear; the reason must quote both passages (runs of four words); a yes must name both figures as written | `analysis.CheckVerdicts`, `quoted`, `namesValues` |
 | A requirement | The controlling document's own words, in order, as one passage | `placeRequirement` |
 | A deviation's controlling quote | It must lie in the requirement's context window | `within` |
 | The section check's answer | Exactly one strict JSON object `{answer}` | `checkAnswer` |
@@ -302,8 +302,10 @@ who-seam. Secrets and custom outbound calls need a *real* admin (`RemotePolicy.O
   redaction, and "off without a real admin".
 - #59: one admin-write path.
 
-**How to apply.** Mount a new write route with `handle[In](ws, …)`, which wraps `admin` and decodes
-the body strictly, never with `mux.HandleFunc` directly, and add it to `TestManageWriteRoutes`. Sign-in (PR 8) changes only how
+**How to apply.** Mount a new write route through `admin`: with `handle[In](ws, …)`, which wraps
+`admin` and decodes the body strictly, or, for a route that needs its own body handling (as two
+routes in `manage.go` do), with `mux.HandleFunc(route, admin(…))`. Never mount a write without
+`admin`, and add it to `TestManageWriteRoutes`. Sign-in (PR 8) changes only how
 `Principal` is resolved.
 
 ## 11. Untrusted-text labelling

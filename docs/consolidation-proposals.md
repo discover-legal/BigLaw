@@ -215,7 +215,8 @@ For scale: Go production code is 25,536 lines (`scripts/loc.py` at 29def72), of 
   remain the only "hooks".
 - **Saves.** About 120 Go lines (`hooks.go`), the embeds, and about 30–40 UI lines.
 - **At risk.** `TestCatalogueAndHooks`, `manage.json` and the Hooks section of the Manage screen.
-  Nothing in a run reads them.
+  Nothing in a run reads them, but rule validation does: `validateHookRule` refuses a rule named
+  after a Go hook (it reads `hooks`), so that check must move or go.
 - **Effort.** S–M. **Visible.** Yes: this removes a Manage feature, the view-only Go hook items.
 
 ### B4. One "typed verdict" mechanism for critics, check rules and the judge
@@ -298,8 +299,8 @@ For scale: Go production code is 25,536 lines (`scripts/loc.py` at 29def72), of 
     `isTableRow` (two or more tabs);
   - **sentence ends**: four definitions (`quality.go`, `requirement.go`, `analysis/figread.go`,
     `docs/verify.go`);
-  - **folding**: `norm` in two packages with different semantics (one lower-cases), `fold` in two
-    packages, `unitWords` and `scaleWords`;
+  - **folding**: `norm` in two packages with different semantics (one lower-cases), `fold` in four places (engine `sweeporder.go`, analysis `join.go`,
+    docs `vision.go`, and `figtest`), `unitWords` and `scaleWords`;
   - **control and format character cleaning**: seven sites (`untrustedText`, the description and
     message validators, `store` names, section titles, the ladder's normaliser, `foldCf`);
   - **stop-word lists**: `sweepStop` and `deviation.go` `stopWord`.
@@ -343,7 +344,7 @@ reviewer need. Move design into `docs/`, and move history to PR notes or a `docs
 
 | Section today | Lines | Proposal |
 |---|---:|---|
-| What exists today (the table) | 47 | Keep; trim the heading's PR list |
+| What exists today (the table, plus the preamble) | 36 + 11 | Keep; trim the heading's PR list |
 | Configuration | 70 | Keep (`TestEnvVarTablesAgree` reads its table). Not touched here: sign-in is editing it |
 | Model client | 113 | Keep the contract (requests, failures table, pricing rule, `model.Fake`). Move the retry and caching details into `docs/architecture.md` § model |
 | Exposure | 45 | Keep. Sign-in is editing it |
@@ -401,7 +402,10 @@ as it is and recorded here.
    says a requirement is read "in its section … the leaf section of the document's own section tree
    … never a guess at layout", and `reqText`'s comment in `deviation.go` speaks of "the section that
    holds it". Since lab-r3 r4 (coordinator decision), `contextOf` reads a bounded byte window and
-   uses the tree only as a label.
+   uses the tree only as a label. Fixed for those two comments. **Still stale (not fixed here):**
+   in `deviations`, the dropped-verdict reason string (model-visible, so it waits for a code PR)
+   says "the section that holds the requirement, as the subagent was sent it", and the `shown`
+   comment beside it says "the requirement's section and heading path".
 9. **The near join, in a comment.** The `claimSums` comment in `figures.go` says "the near join
    does" compare untyped sums. The near join was deleted in lab-r4 r7 (CLAUDE.md).
 10. **A stale test constant (left as it is).** `TestRegistryToolCap` (`boundaries_test.go`) still
