@@ -37,7 +37,7 @@ type Runtime struct {
 // by returning an error in its place. Each spends from the caller's budget (p.Budget) through its
 // own grants and returns what it spent, which the call's step records with the tool's own usage.
 type Hooks interface {
-	Before(ctx context.Context, p Pending) (*Refusal, Usage)
+	Before(ctx context.Context, p Pending) (*Refusal, Usage, error)
 	After(ctx context.Context, p Pending, res Result, err error) (Usage, error)
 }
 
@@ -539,8 +539,12 @@ func (rt *Runtime) Invoke(ctx context.Context, a Agent, c Call, name string, inp
 	}
 	var hooked Usage // what the hooks spent: the step records it beside the tool's own
 	if rt.Hooks != nil {
-		r, u := rt.Hooks.Before(ctx, Pending{c.TaskID, a.Name, c.Depth, e.spec, input, b})
-		if hooked = u; r != nil {
+		r, u, herr := rt.Hooks.Before(ctx, Pending{c.TaskID, a.Name, c.Depth, e.spec, input, b})
+		if hooked = u; herr != nil { // a hook that could not record or was stopped fails the call, never lets it through
+			res.Usage = hooked
+			return res, herr
+		}
+		if r != nil {
 			res.Usage = hooked
 			return res, r
 		}

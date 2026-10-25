@@ -304,6 +304,11 @@ func (f finish) check(ctx context.Context, limits []limitation) (report, error) 
 			rep.limits = append(rep.limits, s)
 		}
 	}
+	if all, err := load[Finding](ctx, e, id, kFinding); err != nil {
+		return report{}, err
+	} else if l := hookQuarantined(all); l != "" {
+		rep.limits = append(rep.limits, l)
+	}
 	if l, err := e.staleLine(ctx, id, issues); err != nil {
 		return report{}, err
 	} else if l != "" {
@@ -484,7 +489,7 @@ func (f finish) meta(ctx context.Context, b *agent.Budget) (string, error) {
 	}
 	ok, open := 0, 0
 	for _, x := range all {
-		ok += btoi(x.Verified)
+		ok += btoi(x.ok())
 	}
 	for _, x := range crit {
 		open += btoi(x.Status == "open")

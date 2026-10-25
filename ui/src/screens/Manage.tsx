@@ -359,7 +359,7 @@ function RemoteFields(props: { text: string; set: (text: string) => void }) {
 interface Rule {
   enabled?: boolean; order?: number; event?: string; match?: string; failure?: string;
   when?: { field: string; op: string; value: unknown } | null;
-  action?: { type: string; message: string; agent?: string; webhook?: { url: string; wait: boolean; secret?: string; header?: string; prefix?: string } };
+  action?: { type: string; message: string; agent?: string; webhook?: { url: string; wait: boolean; sendContent?: boolean; secret?: string; header?: string; prefix?: string } };
 }
 
 const HOOK_ACTIONS: Record<string, string[]> = { before_call: ['block', 'approve', 'check', 'webhook', 'limitation'], after_call: ['block', 'check', 'webhook', 'limitation'],
@@ -405,10 +405,15 @@ function RuleFields(props: { text: string; set: (text: string) => void }) {
         <div className="row">
           <label>Webhook URL (https, public) <input size={40} value={act.webhook.url} onChange={(e) => putAct({ webhook: { ...act.webhook!, url: e.target.value } })} /></label>
           <label><input type="checkbox" checked={act.webhook.wait} onChange={(e) => putAct({ webhook: { ...act.webhook!, wait: e.target.checked } })} /> Wait for a 2xx</label>
+          <label><input type="checkbox" checked={act.webhook.sendContent ?? false} onChange={(e) => putAct({ webhook: { ...act.webhook!, sendContent: e.target.checked } })} /> Send matter content</label>
           <label>Secret <input value={act.webhook.secret ?? ''} onChange={(e) => putAct({ webhook: { ...act.webhook!, secret: e.target.value } })} /></label>
           <label>Header <input value={act.webhook.header ?? ''} onChange={(e) => putAct({ webhook: { ...act.webhook!, header: e.target.value } })} /></label>
         </div>
       )}
+      {act.webhook && <p className={`small ${act.webhook.sendContent ? 'error' : 'muted'}`}>{act.webhook.sendContent
+        ? 'Matter content leaves BigLaw: every matching event sends this host the call\'s input or answer, the finding\'s claim and quotes, or the draft\'s text (up to 8,000 characters), for every client and matter.'
+        : 'The body is metadata only: the rule, event, task, tool or finding and sizes. Tick "Send matter content" only for a host the firm trusts with privileged text.'}</p>}
+      {act.type === 'approve' && <p className="small muted">Approve holds one tool the lead calls: the run pauses until a lawyer decides, and an approval covers exactly that input, once.</p>}
       <label className="block">Message (the refusal, gate or Limitations line)<textarea rows={3} value={act.message} onChange={(e) => putAct({ message: e.target.value })} /></label>
     </div>
   );

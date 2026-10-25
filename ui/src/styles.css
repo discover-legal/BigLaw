@@ -389,3 +389,7 @@ textarea[aria-invalid=true] { border-color: var(--bad); }
 blockquote.third-party { margin: 4px 0 8px; padding: 4px 10px; border-left: 3px solid var(--warn, #b7791f); white-space: pre-wrap; overflow-wrap: anywhere; }
 .gate .held { border-top: 1px solid var(--rule); padding-top: 0.5rem; margin-top: 0.5rem; }
 .gate .held pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 10rem; overflow: auto; }
+.manage .doclist button { grid-template-columns: minmax(0, 1fr); }
+.manage .doclist .dl-meta { grid-column: 1; display: flex; flex-wrap: wrap; gap: 0.25rem; align-items: center; }
+.gate .held details pre { max-height: 24rem; }
+.warn-text { color: var(--warn); }

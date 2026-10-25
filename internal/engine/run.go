@@ -26,6 +26,13 @@ func (e *Engine) execute(ctx context.Context, r *run) error {
 		return e.fail(ctx, r, "", fmt.Errorf("engine: the task's spec snapshot does not load: %w", err))
 	}
 	r.specs, ctx = sp, withSpecs(ctx, sp)
+	if gs, err := load[Gate](ctx, e, r.t.ID, kGate); err != nil { // a hook gate still undecided (a crash between its step and the pause): pause again (#58 r1 M2)
+		return err
+	} else if slices.ContainsFunc(gs, func(g Gate) bool { return g.Kind == "hook" && g.Decision == "" }) {
+		_, err = e.db.ExecContext(ctx, `UPDATE tasks SET status = 'awaiting_gate', stop_reason = 'awaiting_gate', lease_owner = NULL, lease_until = NULL, updated_at = now()
+			WHERE id = $1 AND lease_owner = $2 AND status = 'running'`, r.t.ID, e.owner)
+		return err
+	}
 	var spent agent.Usage
 	var replay []agent.Step
 	err = e.st.InTx(ctx, func(tx *sql.Tx) error {

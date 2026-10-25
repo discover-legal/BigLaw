@@ -259,6 +259,10 @@ that way:
   `["serve", "--allow-no-auth"]`: to edit in Manage under Compose, add `"--admin-without-auth"` to
   the service's `command` in a local copy, knowing what it allows. A loopback server started without
   either flag (local development) is an admin.
+- **Gates have no identity yet.** Anyone who can reach the API can approve or reject a gate: the
+  deliverable's, a finding's, or a configurable hook's approval. Until PR 8 records who decided (and
+  can require a role per rule), an approve rule ("a partner approves") is a pause for a person, not a
+  check of who that person is.
 
 Two browser guards hold until then, because a page the lawyer visits can reach a loopback port.
 Every `POST` (documents, tasks, cancel, gate decisions) from another site is refused 403
@@ -1586,38 +1590,67 @@ carries `examples.json`, the numbers calls its spec gives as examples.
 any item, in each task's snapshot). A rule is `{name, enabled, order, event, match, when, action,
 failure}`:
 - **Events:** `before_call` and `after_call` (every call `Runtime.Invoke` makes: the lead's, a
-  subagent's and Go's fan-out calls; `finish` itself is not one: its hook point is `task_finish`, so a
-  forced finish is never refused), `finding_admitted` (each new finding, after its quotes are verified,
-  before it is recorded) and `task_finish` (after finish's checks pass, before the deliverable renders).
+  subagent's and Go's fan-out calls; no rule applies to `finish`, whose hook point is `task_finish`, so
+  a forced finish is never refused, nor to `verify_quote`, the engine's own quote check),
+  `finding_admitted` (each new finding, after its quotes are verified, before it is recorded) and
+  `task_finish` (after finish's checks pass, before the deliverable renders).
 - **Matchers:** a tool or subagent name, a prefix ending in `*`, or `*`; `when` is an optional
   condition on one field (`eq`, `ne`, `contains` (case-insensitive), `exists`, `absent`, `gt`, `lt`) of
   the call's input (`after_call`: `input.*`, `output.*`), of the finding (`claim`, `issueId`,
-  `verified`, `low`, `documents`) or of the finish (`stop`).
-- **Actions:** `block` (a refusal the lead reads, with the message; `after_call`: the answer is
-  withheld, from the journal too; `finding_admitted`: the finding is quarantined, never in the memo;
-  `task_finish`: the submit is refused, or, on a forced finish, the refusal is a Limitations line);
-  `approve` (`before_call`: a hook gate opens with the call's input, the refused step commits and **the
-  run pauses at the gate** (`awaiting_gate`); the lawyer's decision resumes it with a note, and an
-  approved call goes through when the lead makes it again with the same input; `finding_admitted`: the
-  finding takes its own G7 gate); `check` (a named subagent whose input is `{event, subject, text}` and
-  whose output holds `verdict` (allow, block or annotate) and `reason`; its model calls spend from the
-  caller's budget and are metered with the call's step); `webhook` (an https POST of the event,
-  `{hook, event, taskId, subject, text, at}`, through the same SSRF-checked client, origin-bound secret
-  and off-without-a-real-admin rule as custom tools; `wait` blocks on a 2xx within 30 s, otherwise it is
-  sent in the background, at least once, its answer only logged; with no real admin (`RemotePolicy.Off`)
-  a webhook cannot be sent, so a waited one fails as its rule says: closed blocks every call it
-  matches); `limitation` (a Limitations line).
+  `verified`, `low`, `documents`) or of the finish (`stop`). A condition is a trigger, not a control:
+  the lead writes what it reads.
+- **`block`:** `before_call`: a refusal the lead reads, and the call does nothing. `after_call`: the
+  answer is withheld, and so is every effect: for the evidence and drafting subagents (`extract_facts`,
+  `analyze_issue`, `check_deviation`, `draft_section`) the rule runs on the subagent's own answer before
+  Go admits a finding or saves a section, so nothing is recorded (a sweep's visit is still done, with
+  nothing admitted); an after_call `block` or `check` must name one tool, never a tool that writes the
+  ledger as it runs (`ledger`, `sweep`, `committee`, `cover`, `numbers`, `join_discrepancies`,
+  `use_skill`, the figure reader and judge) or a subagent allowed one (use `before_call` for those).
+  `finding_admitted`: the finding is **quarantined by the hook** (`hookBlocked`: never in the memo, a
+  drafter's or a subagent's read, disclosed in its own Limitations line with the count by rule, and
+  never counted as a quote that failed verification: G4 and the Evidence Note leave it out; a check that
+  fails closed there quarantines the same way). `task_finish`: the submit is refused with the reason;
+  the lead can only finish by a forced finish (its budget or max steps), so an unconditional block
+  spends the rest of the task's budget and then delivers with the refusal as a Limitations line.
+- **`approve`:** names one tool the lead calls (saved otherwise refused: Go's and subagents' calls
+  cannot be made again once approved). A hook gate opens with the call's **whole input**, the refused
+  step commits and **the run pauses at the gate** (`awaiting_gate`; a crash before the pause pauses on
+  resume, as an open hook gate does). The gate is keyed by a 128-bit hash of the canonical input, and
+  an approval covers **exactly that input, once**: the lead makes the call again with the same input and
+  it goes through; any other input, or the same one again, opens a new gate. A rejection refuses that
+  one attempt. `finding_admitted`: the finding takes its own G7 gate. Each note to the lead lists only
+  the gates decided since the last. **Until sign-in (PR 8), anyone who can reach the API can decide a
+  gate, hook approvals included**: an approve rule has no identity behind it yet.
+- **`check`:** a named subagent whose input is `{event, subject, text}` and whose output holds
+  `verdict` (allow, block or annotate) and `reason`; its model calls spend from the caller's budget and
+  are metered with the call's step. A check agent is never offered to the lead. Its own tool calls are
+  hooked like any call, but a `check` rule on them is skipped (no check checks a check).
+- **`webhook`:** an https POST through the same SSRF-checked client, origin-bound secret and
+  off-without-a-real-admin rule as custom tools. The body is **metadata only** by default (`{hook,
+  event, taskId, subject, textBytes, at}`); a rule opts in with `sendContent`, and then **matter content
+  leaves BigLaw** (the call's input or answer, the finding's claim and quotes, or the draft's text, up to
+  8,000 characters, for every matching event of every client and matter; the editor warns). `wait`
+  blocks on a 2xx within 30 s (at least once: a step re-run after a crash sends it again); otherwise it
+  is sent in the background (at most 8 in flight; beyond, it is dropped and the outcome says so), its
+  answer only logged. With no real admin a webhook cannot be sent, so a waited one fails as its rule
+  says: closed blocks every call it matches.
+- **`limitation`:** a Limitations line.
 - **Order:** rules run by `order`, then name; a block or a gate stops the rest for that event.
-- **Failure:** a rule that cannot run (a check unfunded, failed or answering no verdict, a waited
-  webhook that failed, a field it cannot compare) **fails closed** (blocks) or **open** (lets the event
-  through), as it says; a limitation or a webhook that does not wait never blocks.
+- **Failure:** a rule that cannot do its action (a check unfunded, failed or answering no verdict, a
+  waited webhook that failed, a field it cannot compare) **fails closed** (blocks) or **open** (lets the
+  event through), as it says; a limitation or a webhook that does not wait never blocks. Any other error
+  (a record that could not be written, a panic, a stopped run) fails the call, whatever the policy. A
+  rule that blocks everything does not wedge a run (it ends), but a running task keeps its snapshot:
+  cancel it and submit again.
 - **Journal:** every outcome (`allowed`, `blocked`, `gated`, `approved`, `annotated`, `noted`, `sent`,
-  `failed-open`, `failed-closed`) is a ledger row (kind `hookrun`, keyed by the lead step and its order
-  in it) written with the step, and a log line, so a crash and resume neither repeat nor lose one.
+  `dropped`, `skipped`, `failed-open`, `failed-closed`) is a ledger row (kind `hookrun`, keyed by the
+  lead step and its order in it) written with the step, and a log line, so a crash and resume neither
+  repeat nor lose one.
 - **Validation** at save: the event and action pair, the matcher and condition, that a named tool,
-  subagent or check agent exists with the check's schemas, the webhook URL and secret, a message of at
-  most 2,000 characters with no control or format characters, no Go hook's or reserved name; a
-  subagent a rule checks with cannot be deleted. A Test call runs the item alone, without the rules.
+  subagent or check agent exists with the check's schemas, the approve and after_call limits above, the
+  webhook URL and secret, a message of at most 2,000 characters with no control or format characters, no
+  Go hook's or reserved name; a subagent a rule checks with cannot be deleted. A Test call runs the item
+  alone, without the rules.
 
 ## Files
 

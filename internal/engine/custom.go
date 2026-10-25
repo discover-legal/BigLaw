@@ -109,8 +109,14 @@ func customSpec(t CustomTool) agent.Spec {
 // (an admin's), then the enabled custom tools offered to the lead.
 func leadVisible(sp *Specs) []string {
 	out := slices.Clone(MemoVisible)
+	checks := map[string]bool{} // a hook's check agent is the hook's, never offered to the lead
+	for _, r := range sp.hookRules {
+		if r.Action.Type == "check" {
+			checks[r.Action.Agent] = true
+		}
+	}
 	for _, n := range slices.Sorted(maps.Keys(sp.specs)) {
-		if s := sp.specs[n]; s.Kind == "subagent" && !slices.Contains(out, n) && goCallers[n] == nil {
+		if s := sp.specs[n]; s.Kind == "subagent" && !slices.Contains(out, n) && goCallers[n] == nil && !checks[n] {
 			out = append(out, n)
 		}
 	}

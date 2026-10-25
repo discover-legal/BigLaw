@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -72,6 +73,10 @@ type Finding struct {
 	// ValueNotes are the typed values admission dropped, and why (valueStated): the committee and
 	// coverage see them (lab-r4 r3: a dropped value is never silent).
 	ValueNotes []string `json:"valueNotes,omitempty"`
+	// HookBlocked is the configurable hook that quarantined it (finding_admitted block, or a check
+	// failing closed): never in the memo nor a drafter's or subagent's read, disclosed in Limitations,
+	// and never counted as a quote that failed verification (G4 counts only Verified).
+	HookBlocked string `json:"hookBlocked,omitempty"`
 	// Figures are its verified quotes' numbers as the figure reader read them (figures.go): what G8
 	// traces a memo figure that cites it to.
 	Figures []analysis.Reading `json:"figures,omitempty"`
@@ -152,15 +157,18 @@ type Cycle struct {
 
 // Gate is a human gate: the deliverable, or one finding.
 type Gate struct {
-	GateID    string `json:"gateId"`
-	Kind      string `json:"kind"` // deliverable, finding or hook (a configurable hook's approve: a call waits for a lawyer)
-	FindingID string `json:"findingId,omitempty"`
-	Hook      string `json:"hook,omitempty"`     // a hook gate's rule
-	Subject   string `json:"subject,omitempty"`  // the tool or subagent its call is of
-	Detail    string `json:"detail,omitempty"`   // the rule's message and the call's input (bounded)
-	Decision  string `json:"decision,omitempty"` // approved or rejected; "" while open
-	Reason    string `json:"reason,omitempty"`
-	DecidedAt string `json:"decidedAt,omitempty"`
+	GateID    string          `json:"gateId"`
+	Kind      string          `json:"kind"` // deliverable, finding or hook (a configurable hook's approve: a call waits for a lawyer)
+	FindingID string          `json:"findingId,omitempty"`
+	Hook      string          `json:"hook,omitempty"`     // a hook gate's rule
+	Subject   string          `json:"subject,omitempty"`  // the tool or subagent its call is of
+	Detail    string          `json:"detail,omitempty"`   // the rule's message
+	Input     json.RawMessage `json:"input,omitempty"`    // the call's whole input: what the lawyer approves, exactly
+	Used      bool            `json:"used,omitempty"`     // a decided hook gate that decided its one execution
+	Noted     bool            `json:"noted,omitempty"`    // its decision was in a note to the lead
+	Decision  string          `json:"decision,omitempty"` // approved or rejected; "" while open
+	Reason    string          `json:"reason,omitempty"`
+	DecidedAt string          `json:"decidedAt,omitempty"`
 }
 
 type row struct {
@@ -254,8 +262,32 @@ func (e *Engine) usable(ctx context.Context, taskID string) ([]Finding, error) {
 	fs, err := load[Finding](ctx, e, taskID, kFinding)
 	gs, gerr := load[Gate](ctx, e, taskID, kGate)
 	return slices.DeleteFunc(fs, func(f Finding) bool {
-		return !f.Verified || slices.ContainsFunc(gs, func(g Gate) bool { return g.FindingID == f.FID && g.Decision == "rejected" })
+		return !f.ok() || slices.ContainsFunc(gs, func(g Gate) bool { return g.FindingID == f.FID && g.Decision == "rejected" })
 	}), cmpErr(err, gerr)
+}
+
+// ok is whether a finding may reach a drafter, a read or the memo: its quotes verified (G3) and no
+// configurable hook quarantined it.
+func (f Finding) ok() bool { return f.Verified && f.HookBlocked == "" }
+
+// hookQuarantined is the Limitations line for findings hooks quarantined: how many, by which rules.
+func hookQuarantined(fs []Finding) string {
+	by := map[string]int{}
+	for _, f := range fs {
+		if f.HookBlocked != "" {
+			by[f.HookBlocked]++
+		}
+	}
+	if len(by) == 0 {
+		return ""
+	}
+	var parts []string
+	n := 0
+	for _, r := range slices.Sorted(maps.Keys(by)) {
+		parts, n = append(parts, fmt.Sprintf("%s: %d", r, by[r])), n+by[r]
+	}
+	return fmt.Sprintf("%d %s quarantined by configurable hooks (%s) and kept out of this memo; %s quotes verified.", n, plural(n, "finding was", "findings were"),
+		strings.Join(parts, ", "), map[bool]string{true: "its", false: "their"}[n == 1])
 }
 
 func cmpErr(errs ...error) error {
@@ -297,7 +329,7 @@ func (e *Engine) ledgerTool(sp *Specs) agent.Tool {
 			return nil, agent.Usage{}, err
 		}
 		if c.Depth > 0 { // G3: subagents never see quarantined findings
-			fs = slices.DeleteFunc(fs, func(f Finding) bool { return !f.Verified })
+			fs = slices.DeleteFunc(fs, func(f Finding) bool { return !f.ok() })
 		}
 		brief := func(f Finding) any { // the spec's closed shape; full adds citations and value refs
 			b := map[string]any{"fid": f.FID, "issueId": f.IssueID, "claim": f.Claim, "verified": f.Verified, "citations": nil, "values": nil}
@@ -390,7 +422,7 @@ func (e *Engine) ledgerTool(sp *Specs) agent.Tool {
 			for _, f := range fs {
 				kept, _ := analysis.Relations(f.Entities, f.Relations)
 				for _, r := range kept {
-					if f.Verified && (strings.EqualFold(r.Subject, in.Entity) || strings.EqualFold(r.Object, in.Entity)) {
+					if f.ok() && (strings.EqualFold(r.Subject, in.Entity) || strings.EqualFold(r.Object, in.Entity)) {
 						rels = append(rels, map[string]string{"subject": r.Subject, "predicate": r.Predicate, "object": r.Object, "fid": f.FID})
 					}
 				}

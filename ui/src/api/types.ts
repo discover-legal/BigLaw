@@ -121,6 +121,8 @@ export interface Gate {
   hook?: string;
   subject?: string;
   detail?: string;
+  /** a hook gate's call input, whole: what an approval covers, exactly and once */
+  input?: unknown;
 }
 
 /** A closed gate: who decided is PR 8's (auth); a rejection always carries its (non-empty) reason. */

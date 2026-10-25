@@ -161,7 +161,7 @@ func (e *Engine) view(ctx context.Context, t Task) (TaskView, error) {
 			q = issues[i].Question
 		}
 		v.Findings = append(v.Findings, FindingView{f.FID, f.IssueID, q, f.Claim, cmpStr(f.Severity != "", f.Severity, "medium"),
-			map[bool]string{true: "verified", false: "quarantined"}[f.Verified], append([]Citation{}, f.Citations...), append([]string{}, f.ValueNotes...)})
+			cmpStr(f.HookBlocked != "", "quarantined by hook "+f.HookBlocked, map[bool]string{true: "verified", false: "quarantined"}[f.Verified]), append([]Citation{}, f.Citations...), append([]string{}, f.ValueNotes...)})
 	}
 	return v, nil
 }
@@ -381,7 +381,7 @@ func (e *Engine) Decide(ctx context.Context, id, gateID string, approve bool, re
 			if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM ledger WHERE task_id = $1 AND kind = $2 AND data->>'decision' IS NULL`, t.ID, kGate).Scan(&open); err != nil || open > 0 {
 				return err
 			}
-			rows, err := tx.QueryContext(ctx, `SELECT data FROM ledger WHERE task_id = $1 AND kind = $2 AND data->>'kind' IN ('finding', 'hook') ORDER BY seq`, t.ID, kGate)
+			rows, err := tx.QueryContext(ctx, `SELECT data FROM ledger WHERE task_id = $1 AND kind = $2 AND data->>'kind' IN ('finding', 'hook') AND data->>'noted' IS NULL ORDER BY seq`, t.ID, kGate)
 			if err != nil {
 				return err
 			}
@@ -399,11 +399,15 @@ func (e *Engine) Decide(ctx context.Context, id, gateID string, approve bool, re
 				note += fmt.Sprintf("\n- %s %s%s", what, x.Decision, map[bool]string{true: ": " + x.Reason, false: ""}[x.Reason != ""])
 			}
 			rows.Close()
+			// each decision goes to the lead once: a later note lists only the gates decided since
+			if _, err := tx.ExecContext(ctx, `UPDATE ledger SET data = jsonb_set(data, '{noted}', 'true') WHERE task_id = $1 AND kind = $2 AND data->>'kind' IN ('finding', 'hook') AND data->>'noted' IS NULL`, t.ID, kGate); err != nil {
+				return err
+			}
 			if strings.Contains(note, "\n- F") {
 				note += "\nRejected findings are out of the memo: redraft what cited them, then call finish again."
 			}
 			if hooked {
-				note += " An approved call goes through when you make it again with the same input; a rejected one must not be made: do the work without it, or disclose what it would have found."
+				note += " An approved call goes through once, when you make it again with exactly the same input; a rejected one must not be made: do the work without it, or disclose what it would have found."
 			}
 		}
 		_, err = tx.ExecContext(ctx, `INSERT INTO task_steps (task_id, step, kind, tool, status, output)

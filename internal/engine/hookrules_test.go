@@ -12,8 +12,10 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
+	"github.com/discover-legal/BigLaw/internal/agent"
 	"github.com/discover-legal/BigLaw/internal/model"
 )
 
@@ -265,5 +267,251 @@ func TestHookRuleValidation(t *testing.T) {
 	}
 	if v, err := e.Delete(ctx, "rule.ok", 1, "", "Ada"); err != nil || !v.Deleted {
 		t.Fatalf("delete a rule: %+v %v", v, err)
+	}
+}
+
+// TestHookAfterCallBlockWithholdsEffects (#58 r1 H1, TestMHV1): an after_call block on an evidence
+// subagent runs on its answer before anything is admitted: no finding is recorded, the memo never
+// states what it found, and the call answers that it was withheld.
+func TestHookAfterCallBlockWithholdsEffects(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	sc := f.happy()
+	sc["lead"] = sc["lead"][:2] // plan, then the extraction: nothing to draft from once it is withheld
+	e, _ := f.engine(sc, Config{})
+	save(t, e, "rule.withhold", 0, ruleFile(rule("withhold", 0, "after_call", "extract_facts", nil,
+		HookAction{Type: "block", Message: "Extraction answers are withheld pending privilege review."}, "closed")))
+	task := f.submit(0)
+	ctx := context.Background()
+	f.step(ctx)
+	v := f.get(task.ID)
+	fs, _ := load[Finding](ctx, e, task.ID, kFinding)
+	out := f.outputs(task.ID, "extract_facts")
+	if len(fs) != 0 || strings.Contains(deref(v.Output), "644,910") || len(out) != 1 || !strings.Contains(out[0], "withheld, nothing admitted") || strings.Contains(out[0], "644,910") {
+		t.Fatalf("withheld: %d findings %v; output %v; memo %q", len(fs), fs, out, deref(v.Output))
+	}
+	if got := outcomes(t, e, task.ID); !slices.Contains(got, "withhold:blocked") {
+		t.Fatalf("outcomes: %v", got)
+	}
+}
+
+// TestHookQuarantineIsNotAVerificationFailure (#58 r1 H2, TestMHV2): findings a hook quarantines
+// keep their verification, never reach the memo, are disclosed in their own Limitations line, and
+// are never counted by G4 as quotes that failed: quarantining half of 8 findings does not fail the task.
+func TestHookQuarantineIsNotAVerificationFailure(t *testing.T) {
+	t.Parallel()
+	text := "1. Background\nAlpha signed the lease with Beta in the spring.\nBeta delivered the goods to the warehouse late.\nAlpha refused the shipment at the loading dock.\n" +
+		"Beta sent a written notice of breach to Alpha.\nAlpha disputed the notice in a letter to Beta.\nBeta withheld the final installment from Alpha.\n" +
+		"Alpha retained outside counsel for the dispute.\nBeta proposed a mediation session with Alpha.\n"
+	f := newFixture(t, text)
+	d := f.docs[0].ID
+	q := []string{"Alpha signed the lease with Beta", "Beta delivered the goods to the warehouse late", "Alpha refused the shipment at the loading dock",
+		"Beta sent a written notice of breach to Alpha", "Alpha disputed the notice in a letter to Beta", "Beta withheld the final installment from Alpha",
+		"Alpha retained outside counsel for the dispute", "Beta proposed a mediation session with Alpha"}
+	var fds []m
+	for i, s := range q {
+		claim := s + "."
+		if i%2 == 1 {
+			claim = "Settlement-privileged: " + claim
+		}
+		fds = append(fds, fd(claim, d, s))
+	}
+	sc := f.with(map[string][]model.Reply{
+		"lead":          {calls(plan(issue("I1", "What happened?", "Conduct"))), calls(extract(d, "events", "I1")), calls(draft("I1", "F1")), calls(committee()), calls(finishCall("submit"))},
+		"extract_facts": {facts(fds...)},
+		"draft_section": {section("Alpha signed the lease with Beta [F1].", "Lease [F1].")},
+	})
+	e, _ := f.engine(sc, Config{})
+	save(t, e, "rule.privileged", 0, ruleFile(rule("privileged", 0, "finding_admitted", "*", &Cond{"claim", "contains", "privileged"},
+		HookAction{Type: "block", Message: "Privileged findings stay out of the memo."}, "closed")))
+	task := f.submit(0)
+	f.step(context.Background())
+	v := f.get(task.ID)
+	if v.Status == "failed" || v.GroundingAlert != nil {
+		t.Fatalf("a hook quarantine counted as a verification failure: %s %s", stop(v), deref(v.Error))
+	}
+	fs, _ := load[Finding](context.Background(), e, task.ID, kFinding)
+	held := 0
+	for _, x := range fs {
+		if x.HookBlocked == "privileged" && x.Verified {
+			held++
+		}
+	}
+	us, _ := e.usable(context.Background(), task.ID)
+	if held != 4 || len(us) != 4 || !strings.Contains(deref(v.Output), "4 findings were quarantined by configurable hooks (privileged: 4)") ||
+		strings.Contains(deref(v.Output), "Settlement-privileged") || !strings.Contains(deref(v.Output), "0 were quarantined because their quotes did not verify") {
+		t.Fatalf("held %d, usable %d; memo:\n%s", held, len(us), deref(v.Output))
+	}
+}
+
+// TestHookApprovalIsOfExactlyOneInput (#58 r1 M1, TestMHV3): the gate is keyed by a 128-bit hash of
+// the whole canonical input, so a call that differs past any cut opens its own gate; the lawyer is
+// given the whole input; and an approval covers one execution: the same call again opens a new gate.
+func TestHookApprovalIsOfExactlyOneInput(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	e, _ := f.engine(f.happy(), Config{})
+	task := f.submit(0)
+	ctx := context.Background()
+	h := hookRunner{e: e, r: &run{}, seq: &atomic.Int64{}}
+	r := rule("partner_ok", 0, "before_call", "send_wire", nil, HookAction{Type: "approve", Message: "A partner approves."}, "closed")
+	pad := strings.Repeat("Routine background text. ", 400)
+	inA := json.RawMessage(`{"body":"` + pad + ` Pay the vendor $1,000."}`)
+	inB := json.RawMessage(`{"body":"` + pad + ` Pay the vendor $1,000,000 to account 99."}`)
+	ev := func(in json.RawMessage) event {
+		return event{name: "before_call", subject: "send_wire", text: truncate(string(in), 8000), input: in, lead: true}
+	}
+	var va hookVerdict
+	if out, _, err := h.approve(ctx, r, ev(inA), task.ID, &va, "A partner approves."); err != nil || out != "gated" {
+		t.Fatalf("A: %s %v", out, err)
+	}
+	gs, _ := load[Gate](ctx, e, task.ID, kGate)
+	if len(gs) != 1 || !jsonEqual(gs[0].Input, inA) || len(strings.TrimPrefix(gs[0].GateID, "H-partner_ok-")) != 34 {
+		t.Fatalf("the gate: %+v", gs)
+	}
+	g := gs[0]
+	g.Decision = "approved"
+	e.write(ctx, task.ID, kGate, g.GateID, g, true)
+	var vb hookVerdict
+	if out, id, _ := h.approve(ctx, r, ev(inB), task.ID, &vb, "A partner approves."); out != "gated" || id == g.GateID {
+		t.Fatalf("B, unseen, passed on A's approval: %s %s", out, id)
+	}
+	reordered := json.RawMessage(`{ "body" : ` + string(mustJSON(pad+" Pay the vendor $1,000.")) + `}`)
+	var v1, v2 hookVerdict
+	if out, id, _ := h.approve(ctx, r, ev(reordered), task.ID, &v1, ""); out != "approved" || id != g.GateID {
+		t.Fatalf("A again (spacing aside): %s %s", out, id)
+	}
+	if out, id, _ := h.approve(ctx, r, ev(inA), task.ID, &v2, ""); out != "gated" || id == g.GateID {
+		t.Fatalf("A a third time: one approval covers one execution: %s %s", out, id)
+	}
+}
+
+// TestHookPauseSurvivesACrash (#58 r1 M2, TestMHV4): a crash after the gated step commits and
+// before the run is marked awaiting_gate: the resumed run pauses at the open gate before anything else.
+func TestHookPauseSurvivesACrash(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	sc := f.happy()
+	sc["lead"] = slices.Insert(sc["lead"], 1, calls(extract(f.docs[0].ID, "damages", "I1")))
+	k := &killer{Fake: newFake(sc)}
+	e := remoteEngine(f, k, nil, &syncBuf{})
+	save(t, e, "rule.partner_ok", 0, ruleFile(rule("partner_ok", 0, "before_call", "extract_facts", nil, HookAction{Type: "approve", Message: "A partner approves extraction."}, "closed")))
+	task := f.submit(0)
+	e.afterCommit = func(id string, n int) {
+		if s := f.steps(id); strings.HasSuffix(s, "tool_call:extract_facts:refused") {
+			e.active(id).cancel()
+		}
+	}
+	ctx := context.Background()
+	f.step(ctx)
+	if v := f.get(task.ID); v.Status != "running" {
+		t.Fatalf("the crash: %s", stop(v))
+	}
+	remoteEngine(f, k, nil, &syncBuf{})
+	f.stale(task.ID)
+	f.step(ctx)
+	v := f.get(task.ID)
+	if v.Status != "awaiting_gate" || strings.Count(f.steps(task.ID), "extract_facts:refused") != 1 || deref(v.Output) != "" || len(v.PendingGates) != 1 {
+		t.Fatalf("resumed: %s %s pending %+v", stop(v), f.steps(task.ID), v.PendingGates)
+	}
+	if _, err := f.e.Decide(ctx, task.ID, v.PendingGates[0].GateID, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	f.step(ctx)
+	if v := f.get(task.ID); stop(v) != "awaiting_gate/finished" || !strings.Contains(f.steps(task.ID), "extract_facts:committed") {
+		t.Fatalf("after the approval: %s %s", stop(v), f.steps(task.ID))
+	}
+}
+
+// TestHookRefusalsAndDefaults (#58 r1 M3, M4, LOW): approve names one tool the lead calls;
+// after_call block or check names one tool that writes nothing it cannot withhold; no rule names
+// verify_quote or finish; a check agent is not offered to the lead; a webhook is sent metadata only
+// unless the rule opts in; a stopped run never passes a fail-open rule.
+func TestHookRefusalsAndDefaults(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	var mu sync.Mutex
+	var got []map[string]any
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var ev map[string]any
+		json.NewDecoder(r.Body).Decode(&ev)
+		mu.Lock()
+		got = append(got, ev)
+		mu.Unlock()
+		w.WriteHeader(204)
+	}))
+	defer srv.Close()
+	e := remoteEngine(f, newFake(f.happy()), srv, &syncBuf{})
+	ctx := context.Background()
+	save(t, e, "agent.screen", 0, screenAgent())
+	for _, c := range []struct {
+		r    HookRule
+		want string
+	}{
+		{rule("r1", 0, "before_call", "*", nil, HookAction{Type: "approve", Message: "m"}, "closed"), "approve names one tool the lead calls"},
+		{rule("r1", 0, "before_call", "read_figures", nil, HookAction{Type: "approve", Message: "m"}, "closed"), "approve names one tool the lead calls"},
+		{rule("r1", 0, "before_call", "verify_quote", nil, HookAction{Type: "block", Message: "m"}, "closed"), "no rule applies to verify_quote"},
+		{rule("r1", 0, "after_call", "finish", nil, HookAction{Type: "limitation", Message: "m"}, "open"), "no rule applies to finish"},
+		{rule("r1", 0, "after_call", "*", nil, HookAction{Type: "block", Message: "m"}, "closed"), "names one tool"},
+		{rule("r1", 0, "after_call", "ledger", nil, HookAction{Type: "block", Message: "m"}, "closed"), "writes the matter's ledger"},
+	} {
+		if _, _, err := e.Save(ctx, "rule.r1", SaveIn{Files: ruleFile(c.r)}, "Ada"); !strings.Contains(problems(err), c.want) {
+			t.Errorf("%+v: %s (want %q)", c.r, problems(err), c.want)
+		}
+	}
+	save(t, e, "rule.screen_all", 0, ruleFile(rule("screen_all", 0, "after_call", "retrieve", nil, HookAction{Type: "check", Agent: "screen", Message: "m"}, "open")))
+	save(t, e, "rule.tell", 0, ruleFile(rule("tell", 0, "after_call", "draft_section", nil, HookAction{Type: "webhook", Message: "m", Webhook: &Webhook{URL: srv.URL + "/h", Wait: true}}, "open")))
+	save(t, e, "rule.tell_all", 0, ruleFile(rule("tell_all", 1, "after_call", "draft_section", nil, HookAction{Type: "webhook", Message: "m", Webhook: &Webhook{URL: srv.URL + "/c", Wait: true, SendContent: true}}, "open")))
+	snap, _, _ := e.current(ctx, e.db)
+	sp, _ := newSpecs(snap)
+	if slices.Contains(leadVisible(sp), "screen") {
+		t.Error("a check agent is offered to the lead")
+	}
+	task := f.submit(0)
+	f.step(ctx)
+	mu.Lock()
+	if len(got) != 2 || got[0]["text"] != nil || got[0]["textBytes"] == nil || got[1]["text"] == nil {
+		t.Errorf("webhook bodies: %v", got)
+	}
+	mu.Unlock()
+	h := hookRunner{e: e, r: &run{t: Task{ID: task.ID}}, rt: nil, sp: sp, seq: &atomic.Int64{}}
+	cctx, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := h.run(cctx, event{name: "after_call", subject: "draft_section"}, sp.rules("after_call"), agent.NewBudget(1, 1, 0), task.ID); err == nil {
+		t.Error("a stopped run passed fail-open rules")
+	}
+}
+
+// TestHookDecideNotesListNewDecisions (#58 r1 LOW): each note to the lead lists only the gates
+// decided since the last one.
+func TestHookDecideNotesListNewDecisions(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	e, _ := f.engine(nil, Config{})
+	ctx := context.Background()
+	task := f.submit(0)
+	gate := func(id string) {
+		e.write(ctx, task.ID, kGate, id, Gate{GateID: id, Kind: "hook", Hook: "r", Subject: "extract_facts"}, false)
+		f.st.DB().Exec(`UPDATE tasks SET status = 'awaiting_gate' WHERE id = $1`, task.ID)
+	}
+	notes := func() []string {
+		ss, _ := e.Steps(ctx, task.ID, 0)
+		var out []string
+		for _, s := range ss {
+			if s.Kind == "note" {
+				out = append(out, string(s.Output))
+			}
+		}
+		return out
+	}
+	gate("H-r-a-1")
+	gate("H-r-b-1")
+	e.Decide(ctx, task.ID, "H-r-a-1", true, "")
+	e.Decide(ctx, task.ID, "H-r-b-1", true, "")
+	gate("H-r-c-1")
+	e.Decide(ctx, task.ID, "H-r-c-1", false, "no")
+	ns := notes()
+	if len(ns) != 2 || !strings.Contains(ns[0], "H-r-a-1") || !strings.Contains(ns[0], "H-r-b-1") || strings.Contains(ns[1], "H-r-a-1") || !strings.Contains(ns[1], "H-r-c-1") {
+		t.Fatalf("notes: %v", ns)
 	}
 }

@@ -163,13 +163,15 @@ func (r *run) checkCollapse(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	bad := 0
+	bad, total := 0, 0
 	for _, f := range fs {
-		if !f.Verified {
-			bad++
+		if f.HookBlocked != "" { // a policy quarantine, not a quote that failed verification
+			continue
 		}
+		total++
+		bad += btoi(!f.Verified)
 	}
-	alert, fail := Collapse(len(fs)-bad, len(fs), r.e.cfg.CollapseThreshold, r.e.cfg.CollapseAction)
+	alert, fail := Collapse(total-bad, total, r.e.cfg.CollapseThreshold, r.e.cfg.CollapseAction)
 	if alert == "" {
 		return nil
 	}

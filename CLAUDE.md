@@ -132,8 +132,12 @@ change. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`, not here.
   Go hooks are view only (source cut from embedded files); configurable hooks (`hookrules.go`, items
   `rule.<name>` in `specs/hooks/`) run through `Runtime.Hooks` (Before/After around every Invoke, their
   usage in the step's), `admit` (`findingHooks`) and `finish` (`finishHooks`), every outcome a `hookrun`
-  ledger row written with its step; an `approve` gate pauses the run (`run.hold` → `errHeld` →
-  `awaiting_gate`) until `Decide` resumes it. Skills: `skills/<name>/SKILL.md` + reference
+  ledger row written with its step; an `approve` gate (lead calls only, keyed by a 128-bit hash of the
+  canonical input, single use) pauses the run (`run.hold` → `errHeld` → `awaiting_gate`; `execute`
+  pauses again on resume while one is open) until `Decide` resumes it; after_call rules on the hooked
+  subagents run before Go records anything (`afterHooked`); a hook quarantine is `Finding.HookBlocked`
+  (`f.ok()`), never `Verified=false`, so G4 never counts it; only a `ruleFailure` follows a rule's
+  failure policy, any other error fails the call. Skills: `skills/<name>/SKILL.md` + reference
   files; the brief lists names and descriptions (≤ 40, ≤ 4 KiB); `use_skill` pages a body or file and
   records it (ledger kind `skill`); a candidate skill read is a Limitations line. `api.Principal` is the
   who-seam: until PR 8 every request is the local user (`api.LocalUser`): an admin on loopback, read-only

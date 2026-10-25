@@ -123,7 +123,9 @@ function HeldGates(props: { gates: Gate[]; open: boolean; decide: (id: string, a
         {props.gates.map((g) => (
           <div key={g.gateId} className="held">
             <p>{g.kind === 'hook' ? <>Hook <code>{g.hook}</code> holds a call of <code>{g.subject}</code> for a lawyer's approval.</> : <>Finding <code>{g.findingId}</code> is cited at low confidence or was marked unsupported.</>}</p>
-            {g.detail && <pre className="small">{g.detail}</pre>}
+            {g.detail && <p className="small">{g.detail}</p>}
+            {g.input !== undefined && <details open={JSON.stringify(g.input).length < 1500}><summary className="small">The call's whole input ({JSON.stringify(g.input).length} characters): an approval covers exactly this, once</summary>
+              <pre className="small">{JSON.stringify(g.input, null, 1)}</pre></details>}
             {props.open && <div className="row">
               <button className="primary small" onClick={() => void props.decide(g.gateId, true)}>Approve</button>
               <input aria-label={`reason for ${g.gateId}`} placeholder="Reason (needed to reject)" value={reasons[g.gateId] ?? ''} onChange={(e) => setReasons({ ...reasons, [g.gateId]: e.target.value })} />

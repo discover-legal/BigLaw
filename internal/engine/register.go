@@ -205,6 +205,7 @@ func (h hooked) Spec() agent.Spec {
 
 func (h hooked) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 	name := h.Tool.Spec().Name
+	orig := c.Input // what the caller sent (after_call's rules read it)
 	var in map[string]any
 	_ = json.Unmarshal(c.Input, &in)
 	str := func(k string) string { s, _ := in[k].(string); return s }
@@ -291,6 +292,19 @@ func (h hooked) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 		return res, err
 	}
 	b := agent.NewBudget(c.Budget.Calls-res.Usage.Calls+preUse.Calls+held.Calls, c.Budget.USD-res.Usage.USD+preUse.USD+held.USD, 0) // c.Budget is already net of preUse and held
+	// after_call's rules on the subagent's own answer, before Go records anything from it (#58 r1 H1):
+	// blocked, nothing is admitted or saved and the answer is withheld; a sweep's visit is still done
+	if v, err := afterHooked(ctx, h.rt, c, name, orig, res.Output, b); err != nil {
+		res.Usage.Add(b.Spent())
+		return res, err
+	} else if v.blocked != "" {
+		res.Usage.Add(b.Spent())
+		if name == "draft_section" {
+			return agent.Result{Usage: res.Usage, Model: res.Model}, agent.Fail("draft_section's draft was withheld and not saved: " + v.blocked)
+		}
+		out, _ := json.Marshal(hookResult{Findings: []map[string]any{}, Notes: []string{"withheld, nothing admitted: " + v.blocked}})
+		return agent.Result{Output: out, Usage: res.Usage, Model: res.Model}, nil
+	}
 	var out any
 	var reward float64
 	switch name {
@@ -492,7 +506,7 @@ func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 		}
 		f.Relations, _ = analysis.Relations(d.Entities, d.Relations)
 		if i := slices.IndexFunc(all, func(x Finding) bool {
-			return x.Verified && f.Verified && restated(x, f)
+			return x.ok() && f.ok() && restated(x, f)
 		}); i >= 0 {
 			for _, c := range f.Citations {
 				if !slices.ContainsFunc(all[i].Citations, func(x Citation) bool { return x.DocumentID == c.DocumentID && x.Quote == c.Quote }) {

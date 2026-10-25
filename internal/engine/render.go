@@ -160,7 +160,7 @@ func (e *Engine) readSection(ctx context.Context, rt *agent.Runtime, c agent.Cal
 		return err
 	}
 	for _, m := range fidRe.FindAllStringSubmatch(s.Markdown, -1) {
-		if i := slices.IndexFunc(fs, func(f Finding) bool { return f.FID == m[1] }); i >= 0 && fs[i].Unread && fs[i].Verified && !slices.Contains(cited, m[1]) {
+		if i := slices.IndexFunc(fs, func(f Finding) bool { return f.FID == m[1] }); i >= 0 && fs[i].Unread && fs[i].ok() && !slices.Contains(cited, m[1]) {
 			cited = append(cited, m[1])
 		}
 	}
@@ -195,7 +195,7 @@ func (e *Engine) stale(s Section, fs []Finding) bool {
 		return true
 	}
 	for _, m := range fidRe.FindAllStringSubmatch(s.Markdown, -1) {
-		if i := slices.IndexFunc(fs, func(f Finding) bool { return f.FID == m[1] }); i >= 0 && fs[i].Unread && fs[i].Verified {
+		if i := slices.IndexFunc(fs, func(f Finding) bool { return f.FID == m[1] }); i >= 0 && fs[i].Unread && fs[i].ok() {
 			return true
 		}
 	}
@@ -343,11 +343,12 @@ func (e *Engine) render(ctx context.Context, t Task, limits []string, computed c
 		b.WriteString("- " + mdSafe(l, true) + "\n")
 	}
 	b.WriteString(computed.markdown()) // the figures computed over typed inputs, with their sources (lab-r4 r10)
-	verified := 0
+	verified, held := 0, 0
 	for _, f := range all {
-		verified += btoi(f.Verified)
+		verified += btoi(f.ok())
+		held += btoi(f.HookBlocked != "")
 	}
-	q := len(all) - verified
+	q := len(all) - verified - held // a hook's quarantine is not a verification failure (its own Limitations line)
 	fmt.Fprintf(&b, "\n## Evidence Note\n\n%d %s verified against the matter's documents and %d %s quarantined because their quotes did not verify; quarantined findings were kept out of this memo.",
 		verified, plural(verified, "finding was", "findings were"), q, plural(q, "was", "were"))
 	if r := verified - len(use); r > 0 {
