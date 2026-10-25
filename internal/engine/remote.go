@@ -74,6 +74,9 @@ var errRemoteOff = fmt.Errorf("%w: secrets and custom tools' outbound calls need
 // errRemoteDeadline is the cause of a call's own 30 s deadline (withRemoteDeadline).
 var errRemoteDeadline = errors.New("remote: no answer within 30 s (the whole call)")
 
+// remoteMsg is a remote error's text without its "remote: " prefix (an admin or the model reads it).
+func remoteMsg(err error) string { return strings.TrimPrefix(err.Error(), "remote: ") }
+
 // withRemoteDeadline is ctx bounded by one call's 30 s (every request of an MCP call or of a
 // Discover/Import shares it).
 func withRemoteDeadline(ctx context.Context) (context.Context, context.CancelFunc) {

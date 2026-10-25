@@ -83,6 +83,7 @@ var (
 		"finding_admitted": {"block", "approve", "check", "webhook", "limitation"}, "task_finish": {"block", "check", "webhook", "limitation"}}
 	condOps   = []string{"eq", "ne", "contains", "exists", "absent", "gt", "lt"}
 	fieldPath = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$`)
+	matchRe   = regexp.MustCompile(`^[a-z][a-z0-9_]*\*?$`)
 )
 
 // checkIn is what a check subagent is sent; its answer must hold verdict and reason.
@@ -125,6 +126,9 @@ func (r HookRule) summary() string {
 	}
 	return fmt.Sprintf("Order %d: %s %s%s; fails %s.", r.Order, what, on, cond, r.Failure)
 }
+
+// exact is whether the rule matches one tool or subagent by name.
+func (r HookRule) exact() bool { return r.Match != "" && r.Match != "*" && !strings.HasSuffix(r.Match, "*") }
 
 func (r HookRule) matches(name string) bool {
 	switch m := r.Match; {
@@ -280,7 +284,7 @@ func (h hookRunner) run(ctx context.Context, ev event, rules []HookRule, b *agen
 			blocking := rule.Action.Type != "limitation" && !(rule.Action.Type == "webhook" && (rule.Action.Webhook == nil || !rule.Action.Webhook.Wait))
 			if rule.Failure == "closed" && blocking {
 				outcome, note = "failed-closed", err.Error()
-				v.blocked, v.blockedBy = fmt.Sprintf("hook %s could not run and fails closed (%s)", rule.Name, strings.TrimPrefix(err.Error(), "remote: ")), rule.Name
+				v.blocked, v.blockedBy = fmt.Sprintf("hook %s could not run and fails closed (%s)", rule.Name, remoteMsg(err)), rule.Name
 			} else {
 				outcome, note = "failed-open", err.Error()
 			}
@@ -659,9 +663,9 @@ func (e *Engine) validateHookRule(f, text string, bad func(string, string, ...an
 		bad(f, "action.webhook: its url (and secret, header, prefix, wait)")
 	case r.Action.Type != "webhook" && r.Action.Webhook != nil || r.Action.Type != "check" && r.Action.Agent != "":
 		bad(f, "action: agent is a check's, webhook a webhook's")
-	case (r.Event == "finding_admitted" || r.Event == "task_finish") && r.Match != "" && r.Match != "*" && r.Event == "task_finish":
+	case r.Event == "task_finish" && r.Match != "" && r.Match != "*":
 		bad(f, "match: task_finish matches nothing (use \"*\")")
-	case r.Match != "" && r.Match != "*" && !regexp.MustCompile(`^[a-z][a-z0-9_]*\*?$`).MatchString(r.Match):
+	case r.Match != "" && r.Match != "*" && !matchRe.MatchString(r.Match):
 		bad(f, "match: a tool or subagent name, a prefix ending in *, or *")
 	}
 	if r.When != nil && (!fieldPath.MatchString(r.When.Field) || !slices.Contains(condOps, r.When.Op)) {
@@ -669,7 +673,7 @@ func (e *Engine) validateHookRule(f, text string, bad func(string, string, ...an
 	}
 	if w := r.Action.Webhook; w != nil {
 		if err := e.remote.checkURL(w.URL); err != nil {
-			bad(f, "action.webhook.url: %s", strings.TrimPrefix(err.Error(), "remote: "))
+			bad(f, "action.webhook.url: %s", remoteMsg(err))
 		}
 		validateAuth(f, "action.webhook.", w.Auth, bad)
 	}
@@ -690,9 +694,9 @@ var ledgerWriters = []string{"ledger", "sweep", "committee", "cover", "finish", 
 func validateHookRefs(sp *Specs, bad func(string, string, ...any)) {
 	for _, n := range slices.Sorted(maps.Keys(sp.hookRules)) {
 		r, f := sp.hookRules[n], hooksDir+n+".json"
-		m := r.Match
-		exact := m != "" && m != "*" && !strings.HasSuffix(m, "*")
+		m, exact := r.Match, r.exact()
 		calls := r.Event == "before_call" || r.Event == "after_call"
+		withholds := r.Event == "after_call" && (r.Action.Type == "block" || r.Action.Type == "check")
 		if exact && r.Event != "task_finish" {
 			if _, ok := sp.specs[m]; !ok {
 				bad(f, "match: %q is not a tool or subagent of this set", m)
@@ -705,11 +709,11 @@ func validateHookRefs(sp *Specs, bad func(string, string, ...any)) {
 			bad(f, "action: approve cannot hold %s: a forced finish (budget or steps spent) runs it as the lead's own step, where a gate would pause the run instead of ending it; use block or a check", m)
 		case calls && r.Action.Type == "approve" && (!exact || !slices.Contains(leadVisible(sp), m)):
 			bad(f, "action: approve names one tool the lead calls (one of %s): only a call the lead makes can be held for a lawyer and made again once approved; Go's and subagents' calls cannot", strings.Join(leadVisible(sp), ", "))
-		case r.Event == "after_call" && (r.Action.Type == "block" || r.Action.Type == "check") && !exact:
+		case withholds && !exact:
 			bad(f, "match: an after_call block or check names one tool: what a call already did cannot be undone, so each tool it may withhold is checked (use before_call for a wider rule)")
-		case r.Event == "after_call" && (r.Action.Type == "block" || r.Action.Type == "check") && slices.Contains(ledgerWriters, m):
+		case withholds && slices.Contains(ledgerWriters, m):
 			bad(f, "match: %s writes the matter's ledger as it runs, so withholding its answer after it cannot withhold what it did: use before_call", m)
-		case r.Event == "after_call" && (r.Action.Type == "block" || r.Action.Type == "check") && sp.specs[m].Kind == "subagent" && !slices.Contains(hookedTools, m) &&
+		case withholds && sp.specs[m].Kind == "subagent" && !slices.Contains(hookedTools, m) &&
 			slices.ContainsFunc(sp.specs[m].Allowed, func(t string) bool { return slices.Contains(ledgerWriters, t) }):
 			bad(f, "match: %s may call a tool that writes the ledger, which withholding its answer cannot undo: use before_call", m)
 		}

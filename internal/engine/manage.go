@@ -301,7 +301,7 @@ func describeItem(sp *Specs, id string, row Override, use map[string]ItemUsage) 
 		it.Kind = "configurable hook"
 		if r, ok := sp.hookRules[name]; ok {
 			it.Status, it.Summary = onOff(r.Enabled), strings.Join(append([]string{r.summary()}, approveCallers(sp, name)...), " Note: ")
-			if r.Match != "" && r.Match != "*" && !strings.HasSuffix(r.Match, "*") && r.Event != "task_finish" {
+			if r.exact() && r.Event != "task_finish" {
 				it.Uses = append(it.Uses, r.Match)
 			}
 			if r.Action.Agent != "" {
