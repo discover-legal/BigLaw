@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -121,6 +122,21 @@ func leadVisible(sp *Specs) []string {
 	return out
 }
 
+// remoteOff are the custom remote tools in visible that a server with no real admin does not offer
+// (RemotePolicy.Off: they would only fail closed, a wasted turn each).
+func (e *Engine) remoteOff(sp *Specs, visible []string) []string {
+	var out []string
+	if e.remote == nil || !e.remote.policy.Off {
+		return nil
+	}
+	for _, n := range visible {
+		if _, ok := sp.tools[n]; ok {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
 // goDepends is why Go code depends on the tool or subagent name ("" when nothing does): it may then
 // be edited and reverted, never deleted or disabled.
 func goDepends(name string) string {
@@ -185,6 +201,8 @@ func (r remoteTool) Call(ctx context.Context, c agent.Call) (agent.Result, error
 // call sends the request: text is the answer with every form of the secret redacted, source names
 // where it came from (never a secret).
 func (r remoteTool) call(ctx context.Context, body []byte, args any) (text string, isErr bool, source string, err error) {
+	var sec *secretRef
+	defer func() { err = sec.scrub(err) }() // an error built from what the server sent (its schema, its version) never carries the key
 	switch r.t.Kind {
 	case "mcp":
 		srv, ok := r.sp.servers[r.t.MCP.Server]
@@ -192,8 +210,8 @@ func (r remoteTool) call(ctx context.Context, body []byte, args any) (text strin
 		if !ok || !srv.Enabled {
 			return "", false, source, errors.New("remote: its MCP server is missing or disabled")
 		}
-		sec, err := r.e.secretValue(ctx, srv.Auth)
-		if err != nil {
+		var err error
+		if sec, err = r.e.secretValue(ctx, srv.Auth); err != nil {
 			return "", false, source, err
 		}
 		s, err := r.e.remote.openMCP(ctx, srv.URL, sec)
@@ -207,8 +225,8 @@ func (r remoteTool) call(ctx context.Context, body []byte, args any) (text strin
 		h := r.t.HTTP
 		u, _ := url.Parse(h.URL)
 		source = "http:" + u.Host
-		sec, err := r.e.secretValue(ctx, h.Auth)
-		if err != nil {
+		var err error
+		if sec, err = r.e.secretValue(ctx, h.Auth); err != nil {
 			return "", false, source, err
 		}
 		target, payload, hdr := h.URL, body, http.Header{"Accept": {"application/json, text/plain"}}
@@ -396,6 +414,7 @@ func (e *Engine) Discover(ctx context.Context, id string) (Discovery, error) {
 		tools, err = s.listTools(cctx)
 		s.Close(cctx)
 	}
+	err = sec.scrub(err) // the one place Discover's errors pass: never the key, whatever the server sent
 	if errors.Is(err, ErrForbidden) {
 		return Discovery{}, err
 	} else if err != nil {
@@ -404,7 +423,7 @@ func (e *Engine) Discover(ctx context.Context, id string) (Discovery, error) {
 	}
 	d := Discovery{Server: srv.Name, ServerName: sec.redact(untrusted(s.ServerName)), Protocol: s.Protocol, Tools: []RemoteTool{}}
 	for _, rt := range tools {
-		if sec.in(rt.Name) || sec.in(rt.Description) || sec.in(string(rt.In)) {
+		if sec.in(rt.Name) || sec.in(rt.Description) || sec.in(string(rt.In)) || sec.in(rt.Problem) {
 			rt = RemoteTool{Name: sec.redact(rt.Name), Description: sec.redact(rt.Description),
 				Problem: "its name, description or schema holds the server's secret (the server echoes what BigLaw sends): not importable"}
 		}
@@ -412,7 +431,7 @@ func (e *Engine) Discover(ctx context.Context, id string) (Discovery, error) {
 			if t := sp.tools[n]; t.MCP != nil && t.MCP.Server == srv.Name && t.MCP.Tool == rt.Name {
 				rt.Item = "tool." + n
 				if t.Imported != nil {
-					rt.Previous = t.Imported.Text
+					rt.Previous, rt.PreviousIn = t.Imported.Text, t.In
 				}
 			}
 		}
@@ -440,12 +459,14 @@ func (e *Engine) serverOf(ctx context.Context, id string) (Server, *Specs, error
 // ImportResult is one remote tool's import: the item made or updated (with the third-party text
 // before and after, for the change an admin must accept), or why it was not.
 type ImportResult struct {
-	Remote   string `json:"remote"`
-	Item     string `json:"item,omitempty"`
-	Action   string `json:"action,omitempty"` // created, updated or unchanged
-	Previous string `json:"previous"`         // the text before ("" when new)
-	Text     string `json:"text"`             // the server's text now
-	Problem  string `json:"problem,omitempty"`
+	Remote     string          `json:"remote"`
+	Item       string          `json:"item,omitempty"`
+	Action     string          `json:"action,omitempty"`     // created, updated or unchanged
+	Previous   string          `json:"previous"`             // the text before ("" when new)
+	Text       string          `json:"text"`                 // the server's text now
+	PreviousIn json.RawMessage `json:"previousIn,omitempty"` // the input schema before (its descriptions are the server's text too)
+	In         json.RawMessage `json:"in,omitempty"`         // the input schema now
+	Problem    string          `json:"problem,omitempty"`
 }
 
 // Import makes a custom tool of each named remote tool of a server (all, when names is empty), or a
@@ -472,7 +493,7 @@ func (e *Engine) Import(ctx context.Context, id string, names []string, offer bo
 		if len(names) > 0 && !slices.Contains(names, rt.Name) {
 			continue
 		}
-		res := ImportResult{Remote: rt.Name, Previous: rt.Previous, Text: rt.Description}
+		res := ImportResult{Remote: rt.Name, Previous: rt.Previous, Text: rt.Description, PreviousIn: rt.PreviousIn, In: rt.In}
 		name := toolName(srv.Name, rt.Name)
 		if rt.Item != "" {
 			name = strings.TrimPrefix(rt.Item, "tool.")
@@ -497,7 +518,7 @@ func (e *Engine) Import(ctx context.Context, id string, names []string, offer bo
 			if exists {
 				action = "updated"
 				t.OfferToLead, t.Class = old.OfferToLead, old.Class
-				if old.Imported != nil && old.Imported.Text == rt.Description { // the text an admin accepted, unchanged
+				if old.Imported != nil && old.Imported.Text == rt.Description && jsonEqual(old.In, rt.In) { // what an admin accepted (text and schema), unchanged
 					t.Enabled, t.Imported.AcceptedBy = old.Enabled, old.Imported.AcceptedBy
 				}
 			}
@@ -525,6 +546,15 @@ func (e *Engine) Import(ctx context.Context, id string, names []string, offer bo
 		out = append(out, res)
 	}
 	return out, nil
+}
+
+// jsonEqual reports whether two JSON documents hold the same value (key order and spacing aside).
+func jsonEqual(a, b json.RawMessage) bool {
+	var x, y any
+	if json.Unmarshal(a, &x) != nil || json.Unmarshal(b, &y) != nil {
+		return false
+	}
+	return reflect.DeepEqual(x, y)
 }
 
 // importedDescription is an imported tool's description: BigLaw's own sentences (what it is, that
@@ -725,7 +755,13 @@ func (e *Engine) validateCustomTool(f, text string, bad func(string, string, ...
 		bad(f, "kind: mcp or http")
 	}
 	validateDescription(f, t.Description, bad)
+	if len(t.In) > maxSchemaBytes {
+		bad(f, "in: %d bytes, over %d KiB (every prompt that offers it carries it)", len(t.In), maxSchemaBytes>>10)
+	}
 	if im := t.Imported; im != nil {
+		if why := cleanSchemaText(t.In); why != "" {
+			bad(f, "in: an imported schema is its server's text too: %s", why)
+		}
 		switch {
 		case t.Kind != "mcp":
 			bad(f, "imported: only an MCP tool's (its server's own text for it)")

@@ -209,9 +209,9 @@ export interface Me { id: string; name: string; admin: boolean; authEnabled: boo
 /** A secret as the API shows it: never its value. */
 export interface SecretView { name: string; origin: string; updatedBy: string; updatedAt: string; usedBy: string[] }
 /** One tool a server lists: its description is the server's (third-party) text; item and previous: already imported, and the text an admin accepted. */
-export interface RemoteTool { name: string; description: string; in?: unknown; problem?: string; item?: string; previous?: string }
+export interface RemoteTool { name: string; description: string; in?: unknown; problem?: string; item?: string; previous?: string; previousIn?: unknown }
 export interface Discovery { server: string; serverName: string; protocol: string; tools: RemoteTool[] }
-export interface ImportResult { remote: string; item?: string; action?: 'created' | 'updated' | 'unchanged'; previous: string; text: string; problem?: string }
+export interface ImportResult { remote: string; item?: string; action?: 'created' | 'updated' | 'unchanged'; previous: string; text: string; previousIn?: unknown; in?: unknown; problem?: string }
 export interface TestResult {
   taskId: string; output: unknown; error: string; millis: number;
   usage: { calls: number; inputTokens: number; outputTokens: number; usd: number; unpriced: number };

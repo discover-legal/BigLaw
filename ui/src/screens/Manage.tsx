@@ -159,7 +159,7 @@ function Editor(props: { item: ManageDetail; saved: () => void; create?: string 
   const [error, setError] = useState<string | null>(null);
   const [notes, setNotes] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
-  const tools = useLoad(() => api.manageItems().then((xs) => xs.filter((x) => x.section === 'tools' && x.kind !== 'MCP server' || x.id === 'pass.ledger').map((x) => x.name).sort()), []);
+  const tools = useLoad(() => api.manageItems().then((xs) => xs.filter((x) => x.section === 'tools' && x.kind !== 'MCP server' || x.id === 'pass.ledger' && it.builtin).map((x) => x.name).sort()), []);
   const set = (path: string, text: string) => setFiles((f) => ({ ...f, [path]: text }));
   const id = props.create ?? it.id;
   const save = () => {
@@ -475,8 +475,9 @@ function Import(props: { item: ManageDetail; imported: () => void }) {
             <div key={t.name}>
               <label><input type="checkbox" disabled={!!t.problem} checked={pick.includes(t.name)}
                 onChange={(e) => setPick(e.target.checked ? [...pick, t.name] : pick.filter((x) => x !== t.name))} /> {t.name}{t.item && <span className="muted small"> (imported as {t.item})</span>}{t.problem && <span className="bad-text small"> ({t.problem})</span>}</label>
-              {!t.problem && (t.item && t.previous !== t.description
-                ? <DiffView files={[{ path: `${t.name}: the server's text, accepted → now`, a: t.previous ?? '', b: t.description }]} />
+              {!t.problem && (t.item && (t.previous !== t.description || pretty(t.previousIn) !== pretty(t.in))
+                ? <DiffView files={[{ path: `${t.name}: the server's text, accepted → now`, a: t.previous ?? '', b: t.description },
+                  { path: `${t.name}: its input schema (descriptions are the server's text too), accepted → now`, a: pretty(t.previousIn), b: pretty(t.in) }]} />
                 : <blockquote className="small third-party">{t.description || 'no description'}</blockquote>)}
             </div>
           ))}</fieldset>
@@ -589,6 +590,8 @@ function Changes() {
     </table></div>
   );
 }
+
+const pretty = (v: unknown) => (v === undefined || v === null ? '' : JSON.stringify(v, null, 1));
 
 const sectionOf = (id: string) => ({ prompt: 'agents', agent: 'agents', pass: 'agents', tool: 'tools', server: 'tools', pack: 'packs', skill: 'skills' } as Record<string, string>)[id.split('.')[0]] ?? 'agents';
 
