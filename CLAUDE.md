@@ -68,7 +68,7 @@ change. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`, not here.
   `Fake` (scripts keyed by agent name; unscripted or exhausted is an error; `Fake.Vectors` answers
   `Embed`).
 - `internal/agent` (PR 4a) — the runtime: `Tool`/`Spec`/`Call`/`Result`, `Registry` (frozen,
-  strict-shaped definitions; ≤ 22 tools, ≤ 14 visible; descriptions ≥ 3 sentences + "Do not use" + 1–3
+  strict-shaped definitions; ≤ 48 tools, ≤ 24 visible (raised from 22/14 for custom agents and tools); descriptions ≥ 3 sentences + "Do not use" + 1–3
   validating `Example: {…}` lines), `Schema` (the subset: unknown keywords are errors), `Runtime.Run`
   (one loop, lead depth 0 / `Subagent` depth 1) and `Runtime.Invoke` (the single dispatch path:
   offered → no nesting → alone → input schema → `Policy` → grant), `Budget` (holds and charges; a
@@ -133,6 +133,13 @@ change. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`, not here.
   who-seam: until PR 8 every request is the local user, an admin; writes wear `docs.Guard` + `admin`.
   A new editable file must map to an item (`itemOf`; `TestCatalogueAndHooks`), and a change to any of
   them makes `ui/src/recorded/manage.json` stale (`make demo-record`; `TestManageRecording`, no DB).
+  Custom agents and tools (`custom.go`, `remote.go`, migration 0009): admin-created subagents
+  (`specs/agents/`), MCP servers (`specs/servers/`) and MCP/HTTP tools (`specs/tools/`); the lead sees
+  `leadVisible(sp)`, never `MemoVisible` alone. Every remote request goes through `remoteClient` (https,
+  `checkURL` at save, `dialCheck` at connect, same-host redirects, no proxy, 30 s, 1 MB); secrets are read
+  only by `secretValue` and never written to a response, log, error, snapshot or export; a tool's answer
+  is labelled untrusted. `goDepends` refuses deleting what Go needs. Tests reach a local fake server only
+  through `SetRemotePolicy` (never set by `cmd/biglaw`).
 - `internal/api` (PR 4b) — the REST surface (tasks, steps, SSE, gates, cancel, cost, clients) over
   the engine plus `docs.Routes`; request bodies validated by the agent's schema subset.
 - `eval/` (PR 4b) — `run.py` (validate/selftest/score/compare/drive), `proofrun/`, `lab/` (Harvey LAB
@@ -222,6 +229,6 @@ make demo-bundle # ui/dist-recorded for discover.legal/demo/biglaw/; make demo-r
 # DB tests: BIGLAW_TEST_DSN=postgres://…?sslmode=disable BIGLAW_REQUIRE_DB=1 (Postgres with pgvector)
 make e4-record EMBED_MODEL=…   # owner-run: record the E4 tape at the model's own length (make e4-live: no tape)
 ```
-Budgets: Go prod LOC reported with no limit (owner decision 17: the total ceiling is dropped; 22361 used; each PR reports its lines vs its DESIGN budget; test-support packages such as `storetest` count), internal
+Budgets: Go prod LOC reported with no limit (owner decision 17: the total ceiling is dropped; 23667 used; each PR reports its lines vs its DESIGN budget; test-support packages such as `storetest` count), internal
 packages ≤ 12 (8 used; test-support packages do not count), direct deps ≤ 3, env vars ≤ 20 (18 used), UI runtime
 deps ≤ 2 (2 used), UI source lines (`ui/src`) ≤ 3,200 (raised from 2,400 for Manage), untested packages 0, longest source file ≤ 2,000 lines.

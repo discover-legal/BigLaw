@@ -193,10 +193,19 @@ export interface ManageDetail extends ManageItem {
   callers: string[]; // what a skill's tools list may name
 }
 export interface SpecVersion {
-  item: string; version: number; action: 'save' | 'revert' | 'create' | 'delete'; files?: Record<string, string>;
+  item: string; version: number; action: 'save' | 'revert' | 'create' | 'delete' | 'secret set' | 'secret deleted' | 'test'; files?: Record<string, string>;
   builtin: boolean; deleted: boolean; from: number; restored: number | null; author: string; note: string; createdAt: string;
 }
 export interface SaveResult { version: SpecVersion; notes: string[] }
 export interface Problem { file: string; message: string }
 /** GET /me: who is asking; until sign-in (PR 8) the local user, an admin. */
 export interface Me { id: string; name: string; admin: boolean; authEnabled: boolean }
+/** A secret as the API shows it: never its value. */
+export interface SecretView { name: string; updatedBy: string; updatedAt: string; usedBy: string[] }
+export interface RemoteTool { name: string; description: string; in?: unknown; problem?: string }
+export interface Discovery { server: string; serverName: string; protocol: string; tools: RemoteTool[] }
+export interface ImportResult { remote: string; item?: string; problem?: string }
+export interface TestResult {
+  taskId: string; output: unknown; error: string; millis: number;
+  usage: { calls: number; inputTokens: number; outputTokens: number; usd: number; unpriced: number };
+}

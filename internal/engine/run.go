@@ -93,7 +93,7 @@ func (e *Engine) execute(ctx context.Context, r *run) error {
 	} else if err != nil {
 		return err
 	}
-	lead := agent.Agent{Name: "lead", Role: model.Lead, Model: r.t.LeadModel, Prompt: prompt(ctx, "lead"), Visible: MemoVisible, MaxTurns: r.t.MaxSteps, Replay: replay}
+	lead := agent.Agent{Name: "lead", Role: model.Lead, Model: r.t.LeadModel, Prompt: prompt(ctx, "lead"), Visible: leadVisible(r.sp()), MaxTurns: r.t.MaxSteps, Replay: replay}
 	call := agent.Call{TaskID: r.t.ID, DocumentIDs: r.t.DocumentIDs, Input: brief}
 	res, err := rt.Run(ctx, lead, call, r.b)
 	switch {

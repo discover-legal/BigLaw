@@ -71,7 +71,10 @@ test('the recorded demo shows the catalogue read-only', async () => {
   assert.ok(hook.hook && hook.hook.source.every((s) => s.text.includes('func ')));
   assert.equal(t.exportUrl('patch'), null);
   assert.deepEqual(await t.manageChanges(), []);
-  for (const write of [() => t.manageSave('prompt.lead', 0, {}, ''), () => t.manageRevert('prompt.lead', 0, 0, ''), () => t.manageDelete('skill.deadlines', 0, '')]) {
+  assert.deepEqual(await t.manageSecrets(), []);
+  for (const write of [() => t.manageSave('prompt.lead', 0, {}, ''), () => t.manageRevert('prompt.lead', 0, 0, ''), () => t.manageDelete('skill.deadlines', 0, ''),
+    () => t.manageSetSecret('k', 'v'), () => t.manageDeleteSecret('k'), () => t.manageDiscover('server.x'), () => t.manageImport('server.x', [], false),
+    () => t.manageTest('tool.numbers', ['d'], {})]) {
     await assert.rejects(write(), (e: ApiError) => e.status === 403 && /read-only/.test(e.message));
   }
   await assert.rejects(t.manageItem('nope'), /not found/);
@@ -89,10 +92,14 @@ test('the http transport calls Manage\'s routes and keeps a refusal\'s problems'
     const t = http();
     await t.me(); await t.manageItems(); await t.manageItem('agent.read_figures'); await t.manageHistory('pack.jurisdiction.us'); await t.manageChanges();
     await t.manageRevert('prompt.lead', 2, 3, 'n'); await t.manageDelete('skill.x', 1, '');
+    await t.manageSecrets(); await t.manageSetSecret('k1', 'v1'); await t.manageDeleteSecret('k1');
+    await t.manageDiscover('server.courts'); await t.manageImport('server.courts', ['search'], true); await t.manageTest('tool.numbers', ['d1'], { op: 'table' });
     await assert.rejects(t.manageSave('prompt.lead', 0, { a: 'b' }, ''), (e: ApiError) => e.status === 422 && e.problems[0].message === 'm');
   } finally { globalThis.fetch = orig; }
   assert.deepEqual(calls, ['GET /me', 'GET /manage/items', 'GET /manage/items/agent.read_figures', 'GET /manage/items/pack.jurisdiction.us/history', 'GET /manage/changes',
     'POST /manage/items/prompt.lead/revert {"to":2,"base":3,"note":"n"}', 'POST /manage/items/skill.x/delete {"base":1,"note":""}',
+    'GET /manage/secrets', 'POST /manage/secrets {"name":"k1","value":"v1"}', 'POST /manage/secrets/k1/delete', 'POST /manage/items/server.courts/discover',
+    'POST /manage/items/server.courts/import {"tools":["search"],"offerToLead":true}', 'POST /manage/items/tool.numbers/test {"documentIds":["d1"],"input":{"op":"table"}}',
     'POST /manage/items/prompt.lead/versions {"base":0,"files":{"a":"b"},"note":""}']);
   assert.equal(http().exportUrl('zip', 'skill.a b'), '/manage/export?format=zip&item=skill.a%20b');
 });

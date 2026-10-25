@@ -138,6 +138,48 @@ func manageRoutes(mux *http.ServeMux, e *engine.Engine, who Who, log *slog.Logge
 		reply(w, 200, vs, err)
 	})
 	mux.HandleFunc("GET /manage/export", func(w http.ResponseWriter, r *http.Request) { export(w, r, e, reply) })
+	// Custom tools: secrets (names only, ever), an MCP server's tools, and the Test call.
+	mux.HandleFunc("GET /manage/secrets", func(w http.ResponseWriter, r *http.Request) {
+		ss, err := e.Secrets(r.Context())
+		reply(w, 200, ss, err)
+	})
+	mux.HandleFunc("POST /manage/secrets", admin(log, who, func(w http.ResponseWriter, r *http.Request, p Principal) {
+		var in struct{ Name, Value string }
+		err := body(w, r, &in)
+		if err == nil {
+			err = e.SetSecret(r.Context(), in.Name, in.Value, p.Name)
+		}
+		answer(w, http.StatusCreated, map[string]string{"name": in.Name}, err) // never the value
+	}))
+	mux.HandleFunc("POST /manage/secrets/{name}/delete", admin(log, who, func(w http.ResponseWriter, r *http.Request, p Principal) {
+		err := e.DeleteSecret(r.Context(), r.PathValue("name"), p.Name)
+		answer(w, 200, map[string]string{"name": r.PathValue("name")}, err)
+	}))
+	mux.HandleFunc("POST /manage/items/{id}/discover", admin(log, who, func(w http.ResponseWriter, r *http.Request, p Principal) {
+		d, err := e.Discover(r.Context(), r.PathValue("id")) // it connects out: an admin's only
+		answer(w, 200, d, err)
+	}))
+	mux.HandleFunc("POST /manage/items/{id}/import", admin(log, who, func(w http.ResponseWriter, r *http.Request, p Principal) {
+		var in struct {
+			Tools       []string
+			OfferToLead bool
+		}
+		var out []engine.ImportResult
+		err := body(w, r, &in)
+		if err == nil {
+			out, err = e.Import(r.Context(), r.PathValue("id"), in.Tools, in.OfferToLead, p.Name)
+		}
+		answer(w, http.StatusCreated, out, err)
+	}))
+	mux.HandleFunc("POST /manage/items/{id}/test", admin(log, who, func(w http.ResponseWriter, r *http.Request, p Principal) {
+		var in engine.TestIn
+		var out engine.TestResult
+		err := body(w, r, &in)
+		if err == nil {
+			out, err = e.TestCall(r.Context(), r.PathValue("id"), in, p.Name)
+		}
+		answer(w, 200, out, err)
+	}))
 }
 
 // export downloads the overridden files (all, or ?item=a,b) as a patch against the repository

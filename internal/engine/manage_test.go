@@ -265,8 +265,11 @@ func TestManageStoreRoundTrip(t *testing.T) {
 	if _, _, err := e.Save(ctx, "hook.draft_section", SaveIn{Files: map[string]string{}}, "Ada"); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("a hook was saved: %v", err)
 	}
-	if _, _, err := e.Save(ctx, "tool.nope", SaveIn{Files: map[string]string{}}, "Ada"); !errors.Is(err, ErrNotFound) {
+	if _, _, err := e.Save(ctx, "prompt.nope", SaveIn{Files: map[string]string{}}, "Ada"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("an unknown item: %v", err)
+	}
+	if _, _, err := e.Save(ctx, "tool.nope", SaveIn{Files: map[string]string{}}, "Ada"); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "needs its files") {
+		t.Fatalf("a new tool with no files: %v", err)
 	}
 	if _, err := e.Delete(ctx, "prompt.lead", 4, "", "Ada"); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("a prompt was deleted: %v", err)

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/url"
 	"path"
 	"regexp"
 	"slices"
@@ -195,7 +196,7 @@ func catalog(sp *Specs, rows map[string]Override, use map[string]ItemUsage) []It
 }
 
 // sectionOf maps an item kind to its catalogue section.
-var sectionOf = map[string]string{"prompt": "agents", "agent": "agents", "pass": "agents", "tool": "tools", "pack": "packs", "skill": "skills", "hook": "hooks"}
+var sectionOf = map[string]string{"prompt": "agents", "agent": "agents", "pass": "agents", "tool": "tools", "server": "tools", "pack": "packs", "skill": "skills", "hook": "hooks"}
 
 // goCallers are the engine's own calls of a tool or subagent (rt.Invoke in Go, and the Go code a
 // prompt or pack feeds), shown as "where it is used" beside the agents whose allowed lists name it.
@@ -217,7 +218,7 @@ func describeItem(sp *Specs, id string, row Override, use map[string]ItemUsage) 
 	}
 	callers := func(tool string) []string {
 		var by []string
-		if slices.Contains(MemoVisible, tool) {
+		if slices.Contains(leadVisible(sp), tool) {
 			by = append(by, "lead")
 		}
 		for _, n := range slices.Sorted(maps.Keys(sp.specs)) {
@@ -234,12 +235,31 @@ func describeItem(sp *Specs, id string, row Override, use map[string]ItemUsage) 
 	case "prompt":
 		it.Summary = firstSentence(sp.prompt(name))
 		if name == "lead" {
-			it.Uses = append(it.Uses, MemoVisible...)
+			it.Uses = append(it.Uses, leadVisible(sp)...)
 		}
 		it.UsedBy = append(it.UsedBy, goCallers[name]...)
 	case "agent", "pass", "tool":
 		s := sp.Spec(name)
 		it.Summary, it.Uses, it.UsedBy = firstSentence(s.Description), append(it.Uses, s.Allowed...), callers(name)
+		if t, ok := sp.tools[name]; ok {
+			it.Kind, it.Status = t.Kind+" tool", map[bool]string{true: "enabled", false: "disabled"}[t.Enabled]
+			if t.MCP != nil {
+				it.Uses = append(it.Uses, "server."+t.MCP.Server)
+			}
+		} else if s.Name == "" && row.Version > 0 {
+			it.Deleted, it.Summary = true, "Deleted (revert to restore it)."
+		}
+	case "server":
+		if v, ok := sp.servers[name]; ok {
+			it.Kind, it.Status, it.Summary = "MCP server", map[bool]string{true: "enabled", false: "disabled"}[v.Enabled], "MCP server at "+hostOf(v.URL)+"."
+			for _, n := range slices.Sorted(maps.Keys(sp.tools)) {
+				if m := sp.tools[n].MCP; m != nil && m.Server == name {
+					it.UsedBy = append(it.UsedBy, n)
+				}
+			}
+		} else {
+			it.Kind, it.Deleted, it.Summary = "MCP server", true, "Deleted (revert to restore it)."
+		}
 	case "pack":
 		dir, code, _ := strings.Cut(name, ".")
 		for _, p := range sp.packs {
@@ -260,6 +280,13 @@ func describeItem(sp *Specs, id string, row Override, use map[string]ItemUsage) 
 		it.Summary, it.Uses, it.UsedBy = h.What, []string{h.Wraps}, callers(h.Wraps)
 	}
 	return it
+}
+
+func hostOf(raw string) string {
+	if u, err := url.Parse(raw); err == nil {
+		return u.Host
+	}
+	return "?"
 }
 
 func firstSentence(s string) string {
@@ -331,8 +358,8 @@ func fileMap(files map[string][]byte, id string) map[string]string {
 // tool its reader cannot call.
 func skillCallable(sp *Specs) []string {
 	set := map[string]bool{}
-	if slices.Contains(MemoVisible, "use_skill") {
-		for _, t := range MemoVisible {
+	if lv := leadVisible(sp); slices.Contains(lv, "use_skill") {
+		for _, t := range lv {
 			set[t] = true
 		}
 	}
@@ -351,9 +378,28 @@ func (e *Engine) History(ctx context.Context, id string) ([]Version, error) {
 	return e.versions(ctx, `WHERE item = $1 ORDER BY version DESC LIMIT 100`, true, id)
 }
 
-// Changes is the change log: every version of every item, newest first (at most limit), without files.
+// Changes is the change log, newest first (at most limit): every version of every item, without
+// files, and the changes that are not versions (a secret set or deleted, a test call: version 0).
 func (e *Engine) Changes(ctx context.Context, limit int) ([]Version, error) {
-	return e.versions(ctx, `ORDER BY created_at DESC, item, version DESC LIMIT $1`, false, min(max(limit, 1), 500))
+	limit = min(max(limit, 1), 500)
+	vs, err := e.versions(ctx, `ORDER BY created_at DESC, item, version DESC LIMIT $1`, false, limit)
+	if err != nil {
+		return nil, err
+	}
+	q, err := e.db.QueryContext(ctx, `SELECT item, action, author, note, created_at FROM manage_events ORDER BY created_at DESC LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer q.Close()
+	for q.Next() {
+		var v Version
+		if err := q.Scan(&v.Item, &v.Action, &v.Author, &v.Note, &v.CreatedAt); err != nil {
+			return nil, err
+		}
+		vs = append(vs, v)
+	}
+	slices.SortStableFunc(vs, func(a, b Version) int { return b.CreatedAt.Compare(a.CreatedAt) })
+	return vs[:min(len(vs), limit)], q.Err()
 }
 
 func (e *Engine) versions(ctx context.Context, where string, files bool, args ...any) ([]Version, error) {
@@ -504,7 +550,7 @@ func (e *Engine) Save(ctx context.Context, id string, in SaveIn, author string) 
 	switch {
 	case kind == "hook":
 		return Version{}, nil, invalid("", "hooks are Go code: view only")
-	case !exists && kind != "skill":
+	case !exists && !slices.Contains([]string{"skill", "agent", "tool", "server"}, kind):
 		if _, ok := rows[id]; !ok && len(itemFiles(builtin, id)) == 0 {
 			return Version{}, nil, fmt.Errorf("%w: no item %s", ErrNotFound, id)
 		}
@@ -525,6 +571,9 @@ func (e *Engine) Save(ctx context.Context, id string, in SaveIn, author string) 
 	notes, err := reviewRule(kind, old, files)
 	if err != nil {
 		return Version{}, nil, err
+	}
+	if action == "create" && len(files) == 0 {
+		return Version{}, nil, invalid("", "a new %s needs its files", kind)
 	}
 	if maps.Equal(old, files) {
 		return Version{}, nil, invalid("", "nothing changed: the files are the version new tasks already run on")
@@ -586,8 +635,14 @@ func (e *Engine) Revert(ctx context.Context, id string, to, base int, note, auth
 
 // Delete deletes a skill (a tombstone version: revertable, like any other).
 func (e *Engine) Delete(ctx context.Context, id string, base int, note, author string) (Version, error) {
-	if !strings.HasPrefix(id, "skill.") {
-		return Version{}, invalid("", "only skills can be deleted: the engine's agents, tools and packs are part of its workflow (edit or revert them instead)")
+	kind, name, _ := strings.Cut(id, ".")
+	switch {
+	case kind == "prompt" || kind == "pass" || kind == "pack" || kind == "hook":
+		return Version{}, invalid("", "%s is part of the engine's workflow: edit or revert it; it cannot be deleted", id)
+	case kind == "agent" || kind == "tool":
+		if why := goDepends(name); why != "" {
+			return Version{}, invalid("", "%s cannot be deleted or disabled: %s. Edit or revert it instead", id, why)
+		}
 	}
 	snap, rows, err := e.current(ctx)
 	if err != nil {
@@ -600,6 +655,8 @@ func (e *Engine) Delete(ctx context.Context, id string, base int, note, author s
 	switch {
 	case len(itemFiles(sp.files, id)) == 0:
 		return Version{}, fmt.Errorf("%w: %s does not exist (already deleted?)", ErrNotFound, id)
+	case kind == "agent" && len(itemFiles(sp.files, id)) > 0 && !strings.HasPrefix(itemFiles(sp.files, id)[0], agentsDir):
+		return Version{}, invalid("", "%s is not a subagent", id)
 	case base != rows[id].Version:
 		return Version{}, fmt.Errorf("%w: %s changed since you opened it (version %d is now its latest): reload it", ErrConflict, id, rows[id].Version)
 	}
@@ -699,13 +756,28 @@ var skillFileName = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,59}\.(md|json|csv
 // whole set the way a task would load it (newSpecs, then the runtime's registry with the lead's
 // tool list), and every changed schema's compatibility with the built-in's (compat).
 func (e *Engine) validate(snap Snapshot, id string) error {
+	if e.remote == nil {
+		e.remote = newRemoteClient(RemotePolicy{})
+	}
 	var ps []Problem
 	bad := func(file, format string, a ...any) { ps = append(ps, Problem{file, fmt.Sprintf(format, a...)}) }
 	kind, name, _ := strings.Cut(id, ".")
 	files := snap[id].Files
 	want := itemFiles(builtin, id)
-	if kind != "skill" && files != nil && !slices.Equal(slices.Sorted(maps.Keys(files)), want) {
+	if kind != "skill" && len(want) > 0 && len(files) > 0 && !slices.Equal(slices.Sorted(maps.Keys(files)), want) {
 		bad("", "the files must be exactly the item's own: %s", strings.Join(want, ", "))
+	}
+	if len(want) == 0 && len(files) > 0 { // an item an admin creates: its files where the engine loads them
+		need := map[string][]string{"agent": {agentsDir + name + ".json", agentsDir + name + ".md"}, "tool": {toolsDir + name + ".json"}, "server": {serversDir + name + ".json"}}[kind]
+		if need != nil && !slices.Equal(slices.Sorted(maps.Keys(files)), need) {
+			bad("", "a new %s is exactly these files: %s", kind, strings.Join(need, ", "))
+		}
+		if kind != "skill" && kind != "server" && !toolNameRe.MatchString(name) {
+			bad("", "a name is 2–64 lower-case letters, digits and _, starting with a letter")
+		}
+		if kind == "server" && !secretName.MatchString(name) {
+			bad("", "a server's name is 2–40 lower-case letters, digits, _ and -, starting with a letter")
+		}
 	}
 	if _, ok := files[skillsDir+name+"/SKILL.md"]; kind == "skill" && len(files) > 0 && !ok {
 		bad("", "a skill needs its SKILL.md (front matter and instructions)")
@@ -726,6 +798,10 @@ func (e *Engine) validate(snap Snapshot, id string) error {
 		switch {
 		case kind == "skill":
 			validateSkillFile(f, name, text, bad)
+		case strings.HasPrefix(f, toolsDir):
+			e.validateCustomTool(f, text, bad)
+		case strings.HasPrefix(f, serversDir):
+			e.validateServer(f, text, bad)
 		case kind == "pack":
 			validatePack(f, text, bad)
 		case strings.HasSuffix(f, ".md"):
@@ -754,6 +830,13 @@ func (e *Engine) validate(snap Snapshot, id string) error {
 	if n := len(sp.skillIndex()); n > maxSkillIndex {
 		bad("", "the skills' names and descriptions take %d bytes of the brief, over %d: shorten a description or delete a skill", n, maxSkillIndex)
 	}
+	for _, n := range slices.Sorted(maps.Keys(sp.tools)) {
+		if m := sp.tools[n].MCP; m != nil {
+			if _, ok := sp.servers[m.Server]; !ok {
+				bad(toolsDir+n+".json", "mcp.server: %q is not a saved MCP server (a tool needs its server)", m.Server)
+			}
+		}
+	}
 	callable := skillCallable(sp)
 	for _, k := range sp.skills {
 		for _, t := range k.Tools {
@@ -765,7 +848,7 @@ func (e *Engine) validate(snap Snapshot, id string) error {
 	r := &run{e: e, specs: sp, t: Task{WorkflowType: "memo"}}
 	if rt, err := e.runtime(r); err != nil {
 		bad("", "%s", strings.TrimPrefix(err.Error(), "agent: "))
-	} else if _, err := rt.Reg.Defs(MemoVisible); err != nil {
+	} else if _, err := rt.Reg.Defs(leadVisible(sp)); err != nil {
 		bad("", "%s", strings.TrimPrefix(err.Error(), "agent: "))
 	}
 	if len(ps) > 0 {
@@ -783,7 +866,9 @@ func validateSpec(f, text string, bad func(string, string, ...any)) {
 		return
 	}
 	var was agent.Spec
-	_ = json.Unmarshal(builtin[f], &was)
+	if json.Unmarshal(builtin[f], &was) != nil { // a subagent an admin creates
+		was = agent.Spec{Name: s.Name, Kind: "subagent"}
+	}
 	switch {
 	case s.Name != strings.TrimSuffix(path.Base(f), ".json"):
 		bad(f, "name: must stay %q (Go and the other specs call it by name)", strings.TrimSuffix(path.Base(f), ".json"))

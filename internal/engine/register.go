@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -69,6 +70,9 @@ func (e *Engine) runtime(r *run) (*agent.Runtime, error) {
 	}
 	tools = append(tools, sheets{an[0], e}, aliasJoin{an[1], e}, e.ledgerTool(sp), e.sweepTool(rt, r), e.committeeTool(rt, r), e.finishTool(rt, r), e.coverTool(rt, r),
 		e.figureContextTool(sp), exactCalc{sp.Spec("exact_calc")}, e.skillTool(sp))
+	for _, n := range slices.Sorted(maps.Keys(sp.tools)) { // before the subagents: their allowed lists may name them
+		tools = append(tools, remoteTool{e, sp, sp.tools[n]})
+	}
 	subs, err := sp.subagents(rt)
 	if err != nil {
 		return nil, err
