@@ -117,7 +117,7 @@ change. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`, not here.
   collapse G4, packs (`packs/*/*.md`, embedded, all candidate), and durable runs (`task_steps` +
   ledger + `tool_stats` in one tx per step, lease/heartbeat, resume by replay, lost grants charged (a graceful stop settles an in-flight tool's grant to its spend; every model call inside a journaled tool step is journaled as it happens, `agent` `meter` (query embeddings too, `agent.Meter`; a Go-side search uses `docs.SearchMetered`), so a hard crash charges the recorded spend plus the in-flight calls' worst cases);
   migration 0005). `views.go` is what the API shows (DESIGN § UI contract).
-- Manage (`internal/engine/specset.go`, `manage.go`, `diff.go`, `hooks.go`, `skills.go`; migration 0008;
+- Manage (`internal/engine/specset.go`, `manage.go` (+ `manage_validate.go`), `diff.go`, `hooks.go`, `skills.go`; migration 0008;
   `internal/api/manage.go`; `ui/src/screens/Manage.tsx`) — every agent, tool, pack and skill is a built-in
   file an admin may override with a version in `spec_versions` (save, revert, a skill created or deleted;
   the table is the history and the change log); `Submit` snapshots the overrides into `tasks.specs` and
