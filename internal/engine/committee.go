@@ -57,7 +57,7 @@ func claims(sections []Section) []map[string]any {
 // committeeTool runs the three critics in parallel, each context-free and on its own explicitly
 // sized grant (a tool grant would otherwise take all free USD), and records their findings.
 func (e *Engine) committeeTool(rt *agent.Runtime, r *run) agent.Tool {
-	return agent.GoTool{S: spec("committee"), Fn: func(ctx context.Context, c agent.Call) (any, agent.Usage, error) {
+	return agent.GoTool{S: r.sp().Spec("committee"), Fn: func(ctx context.Context, c agent.Call) (any, agent.Usage, error) {
 		id := c.TaskID
 		issues, err := load[Issue](ctx, e, id, kIssue)
 		secs, serr := load[Section](ctx, e, id, kSection)
@@ -76,7 +76,7 @@ func (e *Engine) committeeTool(rt *agent.Runtime, r *run) agent.Tool {
 			}
 		}
 		inputs := []any{map[string]any{"claims": claims(secs)}, map[string]any{"questions": qs},
-			map[string]any{"plan": plan, "headings": append([]string{}, heads...), "checklist": append([]string{}, Checklist(r.t.Jurisdiction, practiceOf(issues))...)}}
+			map[string]any{"plan": plan, "headings": append([]string{}, heads...), "checklist": append([]string{}, checklistOf(packsFor(ctx, r.t.Jurisdiction, practiceOf(issues)))...)}}
 		a := Allocate(e.cfg.BudgetCalls, e.cfg.BudgetUSD)
 		limit := min(c.Budget.USD, a.CycleUSD) // a cycle's share, never the whole free USD (DESIGN § Budgets)
 		b := agent.NewBudget(c.Budget.Calls, limit, 0)

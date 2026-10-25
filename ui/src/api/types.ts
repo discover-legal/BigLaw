@@ -177,3 +177,26 @@ export interface Setting { name: string; default: string; pr: number; secret?: b
 export interface RecordedSearch { matterNumber: string; query: string; hits: Hit[] }
 export interface Playbook { id: string; name: string; scope: 'client' | 'matter' | 'personal' | 'firm'; clauses: number }
 export interface TimeEntry { id: string; date: string; matterNumber: string; hours: number; narrative: string; timekeeper: string }
+
+// Manage (README § Manage; GET /manage/…): what a run uses, by section, with admins' versioned overrides.
+export type ManageSection = 'agents' | 'tools' | 'packs' | 'skills' | 'hooks';
+export interface ItemUsage { tasks: number; steps: number; calls: number; usd: number; unpriced: number }
+export interface ManageItem {
+  id: string; section: ManageSection; kind: string; name: string; summary: string;
+  editable: boolean; builtin: boolean; version: number; latest: number; deleted: boolean; status?: string;
+  files: string[]; uses: string[]; usedBy: string[]; usage: ItemUsage | null;
+}
+export interface HookSource { file: string; func: string; text: string }
+export interface Hook { name: string; wraps: string; what: string; source: HookSource[] }
+export interface ManageDetail extends ManageItem {
+  content: Record<string, string>; original: Record<string, string> | null; hook?: Hook;
+  callers: string[]; // what a skill's tools list may name
+}
+export interface SpecVersion {
+  item: string; version: number; action: 'save' | 'revert' | 'create' | 'delete'; files?: Record<string, string>;
+  builtin: boolean; deleted: boolean; from: number; restored: number | null; author: string; note: string; createdAt: string;
+}
+export interface SaveResult { version: SpecVersion; notes: string[] }
+export interface Problem { file: string; message: string }
+/** GET /me: who is asking; until sign-in (PR 8) the local user, an admin. */
+export interface Me { id: string; name: string; admin: boolean; authEnabled: boolean }

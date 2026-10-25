@@ -4,7 +4,8 @@
 // The transport seam: every screen talks to BigLaw through this interface only. http.ts is the
 // real API (same origin); recorded.ts replays a recorded engine in the browser with no network.
 import type {
-  Client, Doc, Hit, NewTask, OutlineEntry, Playbook, Profile, RecordedSearch, RunEvent, SectionPage, Setting, Task, TaskCost, TimeEntry,
+  Client, Doc, Hit, ManageDetail, ManageItem, Me, NewTask, OutlineEntry, Playbook, Problem, Profile, RecordedSearch, RunEvent, SaveResult, SectionPage,
+  Setting, SpecVersion, Task, TaskCost, TimeEntry,
 } from './types.ts';
 
 /** What the recorded engine would replay for a prompt; live transports never match. */
@@ -51,13 +52,28 @@ export interface Transport {
   playbooks(): Promise<Playbook[]>;
   timeEntries(): Promise<TimeEntry[]>;
   profiles(): Promise<Profile[]>;
+  me(): Promise<Me>;
+  /** Manage: the catalogue, an item with its contents, its versions (each with its files), the change log. */
+  manageItems(): Promise<ManageItem[]>;
+  manageItem(id: string): Promise<ManageDetail>;
+  manageHistory(id: string): Promise<SpecVersion[]>;
+  manageChanges(): Promise<SpecVersion[]>;
+  /** Admin only. base: the item's latest version when it was loaded (a stale one is a 409). */
+  manageSave(id: string, base: number, files: Record<string, string>, note: string): Promise<SaveResult>;
+  manageRevert(id: string, to: number, base: number, note: string): Promise<SaveResult>;
+  manageDelete(id: string, base: number, note: string): Promise<SaveResult>;
+  /** Where the overrides download (all, or one item's); null: the recorded engine has none. */
+  exportUrl(format: 'patch' | 'zip', item?: string): string | null;
 }
 
 /** A refusal carries BigLaw's reason and what to do next (README: actionable errors). */
 export class ApiError extends Error {
   readonly status: number;
-  constructor(status: number, message: string) {
+  /** A refused Manage save: every problem, by file. */
+  readonly problems: Problem[];
+  constructor(status: number, message: string, problems: Problem[] = []) {
     super(message);
     this.status = status;
+    this.problems = problems;
   }
 }

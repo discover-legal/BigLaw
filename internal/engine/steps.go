@@ -50,6 +50,7 @@ type run struct {
 	forced   string       // finish from the reserve: budget_exhausted or max_steps
 	collapse string       // the G4 alert that failed the run (strict)
 	step     atomic.Int64 // the lead step that is running (the logs' step of a call inside it)
+	specs    *Specs       // the spec set of its task's snapshot (nil: the built-ins)
 }
 
 // stepOf is the lead step running in a task's run (0: none here), for a log line.

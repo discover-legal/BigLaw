@@ -12,6 +12,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -80,6 +81,7 @@ type Task struct {
 	DocumentIDs    []string  `json:"documentIds"`
 	MaxSteps       int       `json:"maxSteps"`
 	ToolBandit     bool      `json:"toolBandit"`
+	Specs          Snapshot  `json:"-"` // the overrides in effect when it was submitted (tasks.specs)
 	LeadModel      string    `json:"-"`
 	Status         string    `json:"status"`
 	StopReason     *string   `json:"-"`
@@ -90,19 +92,28 @@ type Task struct {
 }
 
 const taskCols = `id, description, workflow_type, jurisdiction, matter_number, document_ids, max_steps, tool_bandit, lead_model, status, stop_reason, output,
-	coalesce(grounding_alert, ''), coalesce(error, ''), created_at`
+	coalesce(grounding_alert, ''), coalesce(error, ''), created_at, specs`
 
 func scanTask(s interface{ Scan(...any) error }) (Task, error) {
 	var t Task
+	var specs []byte
 	err := s.Scan(&t.ID, &t.Description, &t.WorkflowType, &t.Jurisdiction, &t.MatterNumber, pq.Array(&t.DocumentIDs), &t.MaxSteps, &t.ToolBandit, &t.LeadModel,
-		&t.Status, &t.StopReason, &t.Output, &t.GroundingAlert, &t.Error, &t.CreatedAt)
+		&t.Status, &t.StopReason, &t.Output, &t.GroundingAlert, &t.Error, &t.CreatedAt, &specs)
+	if err == nil {
+		err = json.Unmarshal(specs, &t.Specs)
+	}
 	return t, err
 }
 
 // ErrBadTask (400) is a task request BigLaw refuses; its text says why.
 var ErrBadTask = errors.New("engine: bad task")
 
-// Submit stores a task (status queued) and wakes the runner.
+// snapshotSQL is the overrides in effect now (each item's latest version, unless it is the built-in
+// again): a task's snapshot, taken in the statement that stores it.
+const snapshotSQL = `(SELECT coalesce(jsonb_object_agg(item, jsonb_build_object('version', version, 'files', files)), '{}')
+	FROM (SELECT DISTINCT ON (item) item, version, files FROM spec_versions ORDER BY item, version DESC) cur WHERE files IS NOT NULL)`
+
+// Submit stores a task (status queued) with its snapshot of the spec set, and wakes the runner.
 func (e *Engine) Submit(ctx context.Context, t Task) (Task, error) {
 	lead, err := e.roles.Model(model.Lead)
 	switch {
@@ -119,8 +130,8 @@ func (e *Engine) Submit(ctx context.Context, t Task) (Task, error) {
 		}
 	}
 	t.MaxSteps = cmp.Or(t.MaxSteps, max(400, 2*e.cfg.BudgetCalls)) // steps count Go tools too, which spend no call
-	row := e.db.QueryRowContext(ctx, `INSERT INTO tasks (description, workflow_type, jurisdiction, matter_number, document_ids, max_steps, tool_bandit, lead_model)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING `+taskCols, t.Description, t.WorkflowType, t.Jurisdiction, t.MatterNumber, pq.Array(t.DocumentIDs), t.MaxSteps, t.ToolBandit, lead)
+	row := e.db.QueryRowContext(ctx, `INSERT INTO tasks (description, workflow_type, jurisdiction, matter_number, document_ids, max_steps, tool_bandit, lead_model, specs)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, `+snapshotSQL+`) RETURNING `+taskCols, t.Description, t.WorkflowType, t.Jurisdiction, t.MatterNumber, pq.Array(t.DocumentIDs), t.MaxSteps, t.ToolBandit, lead)
 	if t, err = scanTask(row); err != nil {
 		return Task{}, fmt.Errorf("engine: submit: %w", err)
 	}

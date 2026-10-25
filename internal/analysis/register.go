@@ -7,6 +7,7 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"io/fs"
 	"slices"
 	"strings"
 
@@ -69,6 +70,10 @@ type Unswept interface {
 
 //go:embed specs/*.json
 var specs embed.FS
+
+// SpecFS is the tools' spec files (specs/<name>.json), for the engine's spec set: a run may register
+// them with an admin's override (engine specset.go), never edited here.
+func SpecFS() fs.FS { return specs }
 
 func spec(name string) agent.Spec {
 	var s agent.Spec

@@ -65,7 +65,7 @@ class TestLocBudget(unittest.TestCase):
             "direct_go_deps": lambda r: write(r, "go.mod", "module x\n\ngo 1.25\n\nrequire (\n\ta.example/a v1.0.0\n\tb.example/b v1.0.0\n\tc.example/c v1.0.0 // indirect\n\td.example/d v1.0.0\n)\n\nrequire e.example/e v1.0.0\n"),
             "env_vars": env_vars,
             "ui_runtime_deps": lambda r: write(r, "ui/package.json", '{"dependencies":{"react":"18","react-dom":"18","left-pad":"1"}}'),
-            "ui_loc": lambda r: [write(r, f"ui/src/f{i}.tsx", "x\n" * 1201) for i in range(2)],  # 2,402 lines
+            "ui_loc": lambda r: [write(r, f"ui/src/f{i}.tsx", "x\n" * 1601) for i in range(2)],  # 3,202 lines
             "untested_packages": lambda r: write(r, "internal/b/b.go", HEADER + "package b\n"),
             "non-literal": lambda r: write(r, "internal/a/dyn.go", HEADER + 'package a\n\nimport "os"\n\nfunc g(n string) string { return os.Getenv(n) }\n'),
             # r2 prosecutor F6: a concatenation of literals hid BIGLAW_SNEAK.
@@ -90,11 +90,11 @@ class TestLocBudget(unittest.TestCase):
         root = self.base()
         write(root, "ui/dist-recorded/assets/a.js", "x\n" * 3000)
         write(root, "ui/dist/assets/a.js", "x\n" * 3000)
-        write(root, "ui/src/a.tsx", "x\n" * 1200)
-        write(root, "ui/src/b.css", "x\n" * 1200)
+        write(root, "ui/src/a.tsx", "x\n" * 1600)
+        write(root, "ui/src/b.css", "x\n" * 1600)
         code, out = run(root)
         self.assertEqual(code, 0, out)
-        self.assertIn("ui_loc                 2400 / 2400", out)
+        self.assertIn("ui_loc                 3200 / 3200", out)
 
     def test_go_lines_reported_not_limited(self):
         """Owner decision 17 (2026-10-23): the total Go ceiling is dropped. 17,501 lines pass

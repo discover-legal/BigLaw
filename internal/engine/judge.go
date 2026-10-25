@@ -37,7 +37,7 @@ const (
 	maxJudgeQuote = 4_000 // a quote over it is sent cut around its value
 )
 
-var judgeSpec = specHash(specFS, []string{"specs/agents/judge_figures.json", "specs/agents/judge_figures.md", "specs/figure_context.json"})
+var judgeSpecFiles = []string{"specs/agents/judge_figures.json", "specs/agents/judge_figures.md", "specs/figure_context.json"}
 
 // judgeSide is one figure of a pair as the judge is sent it (no fid: the cache is across runs).
 type judgeSide struct {
@@ -132,7 +132,7 @@ func pairIn(c analysis.Candidate) judgePair {
 // quote a document only that set holds: lab-r4 r8 L2), the aliases that name either side (r8 L4: an
 // alias of another party judges nothing again) and the pair's content (both sides without their
 // refs, in a fixed order), so a pair restated by other findings is the same question.
-func judgeKey(model, scope string, docs []string, aliases []analysis.Alias, x analysis.Candidate) string {
+func judgeKey(specHash, model, scope string, docs []string, aliases []analysis.Alias, x analysis.Candidate) string {
 	p := pairIn(x)
 	a, b := p.A, p.B
 	a.Ref, b.Ref = "", ""
@@ -142,7 +142,7 @@ func judgeKey(model, scope string, docs []string, aliases []analysis.Alias, x an
 		ja, jb = jb, ja
 	}
 	docs = slices.Sorted(slices.Values(docs))
-	data, _ := json.Marshal(map[string]any{"spec": judgeSpec, "model": model, "scope": scope, "docs": docs, "aliases": pairAliases(aliases, x), "kind": p.Kind,
+	data, _ := json.Marshal(map[string]any{"spec": specHash, "model": model, "scope": scope, "docs": docs, "aliases": pairAliases(aliases, x), "kind": p.Kind,
 		"a": json.RawMessage(ja), "b": json.RawMessage(jb)})
 	sum := sha256.Sum256(data)
 	return "judge:" + hex.EncodeToString(sum[:])
@@ -234,10 +234,11 @@ func (e *Engine) judge(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 	}
 	model, models := "", []string(nil)
 	if rt != nil && rt.Chat != nil && rt.Reg != nil {
-		models = rt.Candidates(spec("judge_figures").Role)
+		models = rt.Candidates(spec(ctx, "judge_figures").Role)
 		model = rt.Bandit.PickModel(ctx, "judge_figures", models)
 	}
 	models = append([]string{model}, slices.DeleteFunc(models, func(m string) bool { return m == model })...)
+	jh := specsOf(ctx).hash(judgeSpecFiles)
 	keep := func(x analysis.Candidate, v analysis.Verdict) error {
 		v.Pair = x.ID
 		out[x.ID] = v
@@ -250,7 +251,7 @@ next:
 			continue
 		}
 		for _, m := range models {
-			v, ok, err := e.cachedVerdict(ctx, judgeKey(m, scope, c.DocumentIDs, aliases, x), m, scope != "")
+			v, ok, err := e.cachedVerdict(ctx, judgeKey(jh, m, scope, c.DocumentIDs, aliases, x), m, scope != "")
 			if err != nil {
 				return nil, err
 			}
@@ -289,7 +290,7 @@ next:
 				return nil, err
 			}
 			if v.SameQuantity != "unclear" && scope != "" {
-				if err := e.cacheVerdict(ctx, judgeKey(model, scope, c.DocumentIDs, aliases, x), c.TaskID, scope, model, x, v); err != nil {
+				if err := e.cacheVerdict(ctx, judgeKey(jh, model, scope, c.DocumentIDs, aliases, x), c.TaskID, scope, model, x, v); err != nil {
 					return nil, err
 				}
 			}

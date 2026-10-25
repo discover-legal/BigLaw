@@ -306,6 +306,33 @@ a.num-tag { color: var(--accent-text); }
 mark { background: var(--hl); color: inherit; padding: 0.05rem 0; border-radius: 2px; }
 mark.cited { box-shadow: 0 0 0 2px var(--hl); scroll-margin: 6rem; }
 
+/* Manage: the catalogue, an item's contents and editor, diffs */
+.manage .detail { margin: 0; min-width: 0; }
+.detail h2 { margin: 0 0 0.3rem; overflow-wrap: anywhere; }
+.detail h2 code { font-weight: 450; }
+.detail .meta { margin: 0 0 0.6rem; padding: 0; }
+.uses { display: grid; gap: 0.35rem; margin: 0.75rem 0; font-size: 0.88rem; }
+.uses div { display: grid; grid-template-columns: 7.5rem minmax(0, 1fr); gap: 0.5rem; }
+.uses dt { color: var(--muted); font-weight: 550; }
+.uses dd { margin: 0; display: flex; flex-wrap: wrap; gap: 0.3rem; }
+figure.code, figure.diff { margin: 0 0 1rem; border: 1px solid var(--rule); border-radius: var(--r-sm); overflow: hidden; }
+figure.code figcaption, figure.diff figcaption { padding: 0.4rem 0.7rem; background: var(--sunken); font-size: 0.82rem; overflow-wrap: anywhere; }
+figure.code pre, figure.diff pre { margin: 0; padding: 0.7rem; max-height: 32rem; overflow: auto; font: 0.8rem/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.d-add { display: block; background: var(--ok-bg); color: var(--ok); }
+.d-del { display: block; background: var(--bad-bg); color: var(--bad); }
+.d-gap { display: block; color: var(--muted); font-style: italic; }
+fieldset.file { border: 1px solid var(--rule); border-radius: var(--r-sm); margin: 0 0 1rem; padding: 0.6rem 0.9rem 0.9rem; min-width: 0; }
+fieldset.file legend { display: flex; gap: 0.6rem; align-items: baseline; padding: 0 0.3rem; font-size: 0.84rem; overflow-wrap: anywhere; }
+.fields { display: grid; gap: 0.6rem; }
+label.block { display: grid; gap: 0.3rem; font-size: 0.88rem; font-weight: 550; margin: 0.6rem 0; }
+label.block input { width: 100%; font-weight: 400; }
+label.block textarea { font-weight: 400; }
+.checks { border: 0; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 0.3rem 1rem; font-size: 0.88rem; }
+.checks legend { font-weight: 550; margin-bottom: 0.3rem; padding: 0; }
+.checks label { display: inline-flex; gap: 0.35rem; align-items: center; }
+textarea.mono { font: 0.82rem/1.5 var(--mono); }
+textarea[aria-invalid=true] { border-color: var(--bad); }
+
 @media (prefers-reduced-motion: reduce) {
   .tl, .tl-pending .tl-node, .pill-running i, .sk { animation: none; }
   button, a.button { transition: none; }

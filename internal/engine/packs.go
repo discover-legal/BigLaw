@@ -5,9 +5,8 @@ package engine
 
 import (
 	"cmp"
+	"context"
 	"embed"
-	"io/fs"
-	"path"
 	"slices"
 	"strings"
 )
@@ -15,45 +14,26 @@ import (
 //go:embed packs
 var packFS embed.FS
 
-// Pack is a jurisdiction or practice pack: short Markdown built into the binary, with a front
-// matter of code, status (candidate until a named lawyer reviews it), reviewedBy and checklist.
+// Pack is a jurisdiction or practice pack (jurisdiction and practice guidance; skills are skills.go's):
+// short Markdown built into the binary, with a front matter of code, status (candidate until a named
+// lawyer reviews it), reviewedBy and checklist. An admin may override one (specset.go).
 type Pack struct {
 	Code, Status, ReviewedBy, Body string
 	Practice                       bool
 	Checklist                      []string
 }
 
-var packs = func() (out []Pack) {
-	files, _ := fs.Glob(packFS, "packs/*/*.md")
-	for _, f := range files {
-		data, _ := packFS.ReadFile(f)
-		_, rest, _ := strings.Cut(string(data), "---\n")
-		head, body, _ := strings.Cut(rest, "\n---\n")
-		p := Pack{Body: strings.TrimSpace(body), Practice: path.Base(path.Dir(f)) == "practice"}
-		for _, ln := range strings.Split(head, "\n") {
-			k, v, _ := strings.Cut(ln, ":")
-			switch k = strings.TrimSpace(k); {
-			case strings.HasPrefix(ln, "- "):
-				p.Checklist = append(p.Checklist, strings.TrimPrefix(ln, "- "))
-			case k == "code":
-				p.Code = strings.TrimSpace(v)
-			case k == "status":
-				p.Status = strings.TrimSpace(v)
-			case k == "reviewedBy":
-				p.ReviewedBy = strings.TrimSpace(v)
-			}
-		}
-		out = append(out, p)
-	}
-	return out
-}()
-
 // SelectPacks is the packs for a task: jurisdiction packs by prefix (US-NY loads us and us-ny),
 // then the practice pack named.
 func SelectPacks(jurisdiction, practice string) []Pack {
+	return builtinSpecs.selectPacks(jurisdiction, practice)
+}
+
+// selectPacks is SelectPacks over the set's packs (a run's: packsFor).
+func (s *Specs) selectPacks(jurisdiction, practice string) []Pack {
 	j := strings.ToLower(jurisdiction)
 	var out []Pack
-	for _, p := range packs {
+	for _, p := range s.packs {
 		if !p.Practice && (j == p.Code || strings.HasPrefix(j, p.Code+"-")) || p.Practice && p.Code == strings.ToLower(practice) {
 			out = append(out, p)
 		}
@@ -66,8 +46,17 @@ func SelectPacks(jurisdiction, practice string) []Pack {
 
 // Checklist is the selected packs' checklists, in order.
 func Checklist(jurisdiction, practice string) []string {
+	return checklistOf(SelectPacks(jurisdiction, practice))
+}
+
+// packsFor is the packs of ctx's spec set (a run's snapshot) for a task.
+func packsFor(ctx context.Context, jurisdiction, practice string) []Pack {
+	return specsOf(ctx).selectPacks(jurisdiction, practice)
+}
+
+func checklistOf(ps []Pack) []string {
 	var out []string
-	for _, p := range SelectPacks(jurisdiction, practice) {
+	for _, p := range ps {
 		out = append(out, p.Checklist...)
 	}
 	return out

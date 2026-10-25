@@ -2,7 +2,8 @@
 // Copyright (C) 2026 Discover Legal
 
 // Package api is BigLaw's REST surface over net/http: the document routes (docs), the matter
-// list, tasks with their run, steps (and an SSE stream), gates, cancel and cost, and the embedded
+// list, tasks with their run, steps (and an SSE stream), gates, cancel and cost, Manage (manage.go:
+// the agents, tools, packs, skills and hooks a run uses, admins' versioned overrides), and the embedded
 // UI. JSON throughout; lists are never null; errors are {error, errorType} with a typed status.
 package api
 
@@ -51,6 +52,11 @@ func mustSchema(s string) *agent.Schema {
 
 // Handler is the whole API, with ui (nil: the embedded dist) served at "/".
 func Handler(d *docs.Service, e *engine.Engine, ui fs.FS, log *slog.Logger) *http.ServeMux {
+	return handler(d, e, ui, log, local)
+}
+
+// handler is Handler with who resolving each request's principal (Manage's writes are an admin's).
+func handler(d *docs.Service, e *engine.Engine, ui fs.FS, log *slog.Logger, who Who) *http.ServeMux {
 	mux := http.NewServeMux()
 	d.Routes(mux, log)
 	reply := func(w http.ResponseWriter, code int, v any, err error) {
@@ -162,6 +168,7 @@ func Handler(d *docs.Service, e *engine.Engine, ui fs.FS, log *slog.Logger) *htt
 			reply(w, 200, v, err)
 		}))
 	}
+	manageRoutes(mux, e, who, log, reply)
 	mux.HandleFunc("GET /tasks/{id}/events", func(w http.ResponseWriter, r *http.Request) { events(w, r, e, reply) })
 	mux.Handle("GET /", uiHandler(cmp.Or[fs.FS](ui, mustSub(dist, "dist"))))
 	return mux

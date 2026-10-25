@@ -1,0 +1,93 @@
+{
+ "name": "use_skill",
+ "kind": "go",
+ "class": "free",
+ "maxTurns": 0,
+ "description": "Reads one of the skills the brief lists: its instructions (name alone) or one of its reference files (name and file), one page of about 12 KB at a time. A skill is process guidance written for BigLaw, not evidence: never cite it, and quote the matter only from its documents. The answer names the tools the skill expects; it grants none, so call only tools you were offered. When the answer says truncated, call again with offset set to next for the rest. Do not use it to look for facts about the matter: use retrieve or extract_facts.\nExample: {\"name\": \"deadlines\", \"file\": null, \"offset\": null}\nExample: {\"name\": \"deadlines\", \"file\": \"examples.json\", \"offset\": null}",
+ "in": {
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+   "name",
+   "file",
+   "offset"
+  ],
+  "properties": {
+   "name": {
+    "type": "string",
+    "minLength": 1,
+    "maxLength": 40
+   },
+   "file": {
+    "type": [
+     "string",
+     "null"
+    ],
+    "maxLength": 64
+   },
+   "offset": {
+    "type": [
+     "integer",
+     "null"
+    ],
+    "minimum": 0
+   }
+  }
+ },
+ "out": {
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+   "name",
+   "description",
+   "status",
+   "tools",
+   "files",
+   "file",
+   "text",
+   "truncated",
+   "next"
+  ],
+  "properties": {
+   "name": {
+    "type": "string"
+   },
+   "description": {
+    "type": "string"
+   },
+   "status": {
+    "type": "string"
+   },
+   "tools": {
+    "type": "array",
+    "items": {
+     "type": "string"
+    }
+   },
+   "files": {
+    "type": "array",
+    "items": {
+     "type": "string"
+    }
+   },
+   "file": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "text": {
+    "type": "string"
+   },
+   "truncated": {
+    "type": "boolean"
+   },
+   "next": {
+    "type": [
+     "integer",
+     "null"
+    ]
+   }
+  }
+ }
+}

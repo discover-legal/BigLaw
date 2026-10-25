@@ -12,8 +12,9 @@ Fails (exit 1) when any budget is exceeded:
   direct Go deps        <= 3       go.mod requires not marked // indirect
   runtime env vars      <= 20      distinct names read by production Go code
   UI runtime deps       <= 2       ui/package.json "dependencies"
-  UI source lines       <= 2,400   lines of ui/src .ts/.tsx/.css (DESIGN: UI ~2,400; tests,
-                                   config and the generated recording.json not counted)
+  UI source lines       <= 3,200   lines of ui/src .ts/.tsx/.css (DESIGN: UI ~2,400, raised to 3,200
+                                   for the Manage screen by owner decision; tests, config and the
+                                   generated recording.json/manage.json not counted)
   packages without tests == 0      every Go package directory has a *_test.go
   longest source file   <= 2,000   lines of any .go/.py/.sql/.sh/.js/.ts/.tsx/.css file (owner rule)
 It also fails when LICENSE or NOTICE is missing, or a .go/.py file lacks the
@@ -47,7 +48,7 @@ BUDGETS = {
     "direct_go_deps": 3,
     "env_vars": 20,
     "ui_runtime_deps": 2,
-    "ui_loc": 2400,
+    "ui_loc": 3200,
     "untested_packages": 0,
     "longest_source_file": 2000,
 }

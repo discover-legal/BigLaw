@@ -223,7 +223,7 @@ func TestR4V4ReaderToolsAreItsOwn(t *testing.T) {
 	if slices.Contains(MemoVisible, "read_figures") || slices.Contains(MemoVisible, "figure_context") || slices.Contains(MemoVisible, "exact_calc") {
 		t.Fatal("the lead is offered the figure reader or its tools")
 	}
-	s := spec("read_figures")
+	s := spec(context.Background(), "read_figures")
 	if s.Role != model.Critic || !slices.Equal(s.Allowed, []string{"figure_context", "exact_calc"}) {
 		t.Fatalf("read_figures spec %+v", s)
 	}
@@ -232,7 +232,7 @@ func TestR4V4ReaderToolsAreItsOwn(t *testing.T) {
 	if !strings.Contains(string(data), `"id":"q1.s1","text":"5"`) || !strings.Contains(string(data), `"id":"q1.s2","text":"3"`) || !strings.Contains(string(data), `"id":"c.s1"`) {
 		t.Fatalf("request passages %s", data)
 	}
-	calc := exactCalc{}
+	calc := exactCalc{builtinSpecs.Spec("exact_calc")}
 	for _, c := range []struct{ op, a, b, want string }{{"mul", "4217", "1000", "4217000"}, {"add", "0.1", "0.2", "0.3"}, {"div", "1", "3", "1/3"}, {"cmp", "92600", "103800.00", "-1"}, {"sub", "-1250.50", "1", "-1251.5"}} {
 		in, _ := json.Marshal(m{"op": c.op, "a": c.a, "b": c.b})
 		res, err := calc.Call(context.Background(), agentCall(in))
@@ -254,7 +254,7 @@ func TestR4V4FigureContextReadsAroundTheQuote(t *testing.T) {
 	head := "Statement of operations (in thousands, except per share data)\n"
 	f := newFixture(t, head+strings.Repeat("Line item\t1,000\n", 200)+"Revenue\t4,000\n"+"Note: amounts are unaudited.\n")
 	f.engine(nil, Config{})
-	tool := f.e.figureContextTool()
+	tool := f.e.figureContextTool(builtinSpecs)
 	call := func(quote, side string, off *int) (string, *int, error) {
 		in, _ := json.Marshal(m{"documentId": f.docs[0].ID, "quote": quote, "side": side, "offset": off})
 		res, err := tool.Call(context.Background(), agent.Call{DocumentIDs: f.ids(), Input: in})

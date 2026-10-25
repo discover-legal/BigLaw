@@ -88,7 +88,7 @@ demo-bundle:
 	cd ui && $(NPM) ci && $(NPM) run demo-bundle
 
 demo-record:
-	BIGLAW_REQUIRE_DB=1 DEMO_RECORD=1 $(GO) test -count=1 -run '^TestDemoRecording$$' ./eval/demo
+	BIGLAW_REQUIRE_DB=1 DEMO_RECORD=1 $(GO) test -count=1 -run '^(TestDemoRecording|TestManageRecording)$$' ./eval/demo
 
 loc:
 	python3 scripts/loc.py

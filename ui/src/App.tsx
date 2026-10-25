@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Discover Legal
 //
-// The shell: the seven screens (README § UI screens), hash routes so a static bundle works under
+// The shell: the seven screens and Manage (README § UI screens), hash routes so a static bundle works under
 // any base path, and the demo banner when the engine is recorded.
 import { useEffect, useState } from 'react';
 import type { Transport } from './api/transport.ts';
@@ -11,10 +11,11 @@ import { Matters } from './screens/Matters.tsx';
 import { TaskScreen } from './screens/Task.tsx';
 import { Documents } from './screens/Documents.tsx';
 import { Billing, Clients, Playbooks, Settings } from './screens/Others.tsx';
+import { Manage } from './screens/Manage.tsx';
 
 const NAV: [string, string][] = [
   ['matters', 'Matters'], ['documents', 'Documents'], ['playbooks', 'Playbooks'],
-  ['clients', 'Clients & Conflicts'], ['billing', 'Time & Billing'], ['settings', 'Settings'],
+  ['clients', 'Clients & Conflicts'], ['billing', 'Time & Billing'], ['manage', 'Manage'], ['settings', 'Settings'],
 ];
 
 export function App(props: { api: Transport }) {
@@ -35,6 +36,7 @@ export function App(props: { api: Transport }) {
     case 'clients': body = <Clients />; break;
     case 'billing': body = <Billing />; break;
     case 'settings': body = <Settings />; break;
+    case 'manage': body = <Manage section={route.q.get('section') ?? 'agents'} item={route.q.get('item') ?? ''} tab={route.q.get('tab') ?? 'contents'} />; break;
     default: body = <Matters matter={route.q.get('matter') ?? ''} />;
   }
   return (

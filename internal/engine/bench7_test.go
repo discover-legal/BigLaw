@@ -196,7 +196,7 @@ func TestFigureContextFindsATolerantQuote(t *testing.T) {
 	f := newFixture(t, "Schedule (in thousands)\nThe “Base Fee”  is\npayable in full: 4,000.\nEnd of schedule.\n")
 	f.engine(nil, Config{})
 	in, _ := json.Marshal(m{"documentId": f.docs[0].ID, "quote": `The "Base Fee" is payable in full: 4,000.`, "side": "before", "offset": nil})
-	res, err := f.e.figureContextTool().Call(context.Background(), agent.Call{DocumentIDs: f.ids(), Input: in})
+	res, err := f.e.figureContextTool(builtinSpecs).Call(context.Background(), agent.Call{DocumentIDs: f.ids(), Input: in})
 	if err != nil || !strings.Contains(string(res.Output), "in thousands") {
 		t.Errorf("%s %v", res.Output, err)
 	}

@@ -7,6 +7,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/discover-legal/BigLaw/internal/agent"
 	"github.com/discover-legal/BigLaw/internal/analysis"
@@ -139,9 +140,9 @@ func (p policy) Allow(ctx context.Context, x agent.Pending) *agent.Refusal {
 	}
 	p.r.keep(a, spent, covered)
 	issues, err := load[Issue](ctx, e, id, kIssue)
-	if err == nil && len(issues) == 0 && x.Spec.Name != "retrieve" && x.Spec.Name != "ledger" && x.Spec.Name != "finish" {
+	if err == nil && len(issues) == 0 && !slices.Contains([]string{"retrieve", "ledger", "use_skill", "finish"}, x.Spec.Name) {
 		if spent["*"].Calls < a.Plan {
-			return &agent.Refusal{Kind: agent.ErrPolicy, Reason: "no plan is recorded yet: until it is, only retrieve and ledger run",
+			return &agent.Refusal{Kind: agent.ErrPolicy, Reason: "no plan is recorded yet: until it is, only retrieve, ledger and use_skill run",
 				Next: `call ledger {"op":"plan","issues":[{"id":"I1","question":"…","class":"Conduct","practice":"litigation"}, …]} with the questions the deliverable must answer`}
 		}
 		if err := p.r.fallbackPlan(ctx); err != nil {
@@ -195,7 +196,7 @@ func (e *Engine) classSpend(ctx context.Context, taskID string) (map[string]agen
 			return nil, err
 		}
 		out[costliest+tool] = agent.Usage{USD: most}
-		keys := []string{specs[tool].Class, "*"}
+		keys := []string{spec(ctx, tool).Class, "*"}
 		if tool == "sweep" {
 			keys = append(keys, "sweep")
 		}
@@ -229,7 +230,7 @@ func (e *Engine) classSpend(ctx context.Context, taskID string) (map[string]agen
 
 // fallbackPlan records the packs' checklist as the plan and says so in Limitations (P1).
 func (r *run) fallbackPlan(ctx context.Context) error {
-	items := Checklist(r.t.Jurisdiction, "")
+	items := checklistOf(packsFor(ctx, r.t.Jurisdiction, ""))
 	if len(items) == 0 {
 		items = []string{r.t.Description}
 	}

@@ -17,6 +17,6 @@ export default defineConfig({
       : [],
   },
   build: { modulePreload: false, sourcemap: false, chunkSizeWarningLimit: 1200 },
-  server: { proxy: Object.fromEntries(['/health', '/documents', '/tasks', '/clients', '/playbooks', '/time-entries', '/profiles', '/me', '/auth']
+  server: { proxy: Object.fromEntries(['/health', '/documents', '/tasks', '/clients', '/playbooks', '/time-entries', '/profiles', '/me', '/auth', '/manage']
     .map((p) => [p, process.env.UI_API || 'http://127.0.0.1:3101'])) },
 });

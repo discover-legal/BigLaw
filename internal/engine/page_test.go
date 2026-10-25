@@ -18,7 +18,7 @@ import (
 func pageOK(t *testing.T, tool string, out any) {
 	t.Helper()
 	b, _ := json.Marshal(out)
-	sch, err := agent.Compile(spec(tool).Out)
+	sch, err := agent.Compile(spec(context.Background(), tool).Out)
 	var p struct{ Truncated bool }
 	if err != nil || sch.Validate(b) != nil || len(b) > agent.PageBytes || json.Unmarshal(b, &p) != nil || !p.Truncated {
 		t.Errorf("%s: %d bytes (page %d), truncated %v, schema %v", tool, len(b), agent.PageBytes, p.Truncated, cmpErr(err, sch.Validate(b)))
@@ -76,13 +76,13 @@ func TestLedgerPagesByType(t *testing.T) {
 	if err := f.e.write(ctx, task.ID, kSection, "I1", Section{IssueID: "I1", Markdown: md}, true); err != nil {
 		t.Fatal(err)
 	}
-	sch, _ := agent.Compile(spec("ledger").Out)
+	sch, _ := agent.Compile(spec(context.Background(), "ledger").Out)
 	for _, op := range []string{"relations", "critics", "draft_get"} {
 		var items, pages int
 		var text strings.Builder
 		for off := 0; ; pages++ {
 			in, _ := json.Marshal(m{"op": op, "issues": nil, "issueId": "I1", "fid": nil, "detail": nil, "criticId": nil, "resolution": nil, "note": nil, "entity": "Gerald Whitmore", "offset": off})
-			res, err := f.e.ledgerTool().Call(ctx, agent.Call{TaskID: task.ID, Input: in})
+			res, err := f.e.ledgerTool(builtinSpecs).Call(ctx, agent.Call{TaskID: task.ID, Input: in})
 			var out struct {
 				Relations, Critics []json.RawMessage
 				Markdown           *string

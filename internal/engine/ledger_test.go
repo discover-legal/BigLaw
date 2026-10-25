@@ -33,11 +33,11 @@ func TestSpecsLoadAndValidate(t *testing.T) {
 	}
 	names := rt.Reg.Names()
 	want := []string{"analyze_issue", "audit_gaps", "check_deviation", "committee", "cover", "draft_section", "exact_calc", "extract_facts", "figure_context", "finish", "join_discrepancies", "judge_figures",
-		"ledger", "numbers", "prosecute", "read_figures", "reproduce", "retrieve", "sweep", "verify_quote"}
+		"ledger", "numbers", "prosecute", "read_figures", "reproduce", "retrieve", "sweep", "use_skill", "verify_quote"}
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("registry %v", names)
 	}
-	if _, err := rt.Reg.Defs(MemoVisible); err != nil || len(MemoVisible) != 11 {
+	if _, err := rt.Reg.Defs(MemoVisible); err != nil || len(MemoVisible) != 12 {
 		t.Fatalf("memo list: %v", err)
 	}
 	files, _ := fs.Glob(specFS, "specs/agents/*.json")
@@ -47,7 +47,7 @@ func TestSpecsLoadAndValidate(t *testing.T) {
 		}
 	}
 	for _, n := range []string{"lead", "meta"} {
-		if strings.TrimSpace(prompt(n)) == "" {
+		if strings.TrimSpace(prompt(context.Background(), n)) == "" {
 			t.Errorf("no %s prompt", n)
 		}
 	}
