@@ -121,7 +121,9 @@ func resolve(findings []Finding, o Operand) (operand, error) {
 	if o.Ref != nil && ClassOf(v) == "Money" && v.Fig != nil && v.Fig.Currency != "" {
 		unit = v.Fig.Currency // the currency the figure reader read the value in
 	}
-	switch { // "calendar days", "day", "year": a period's unit
+	switch { // "calendar days", "day", "year": a period's unit; business days stay business days (lab-r4 r11 H)
+	case strings.Contains(unit, "business"):
+		unit = "business days"
 	case strings.Contains(unit, "day"):
 		unit = "days"
 	case strings.Contains(unit, "week"):
@@ -213,6 +215,7 @@ func Calc(findings []Finding, fn string, ops []Operand, holidays []string) (Work
 	}
 	whole := len(xs) == 2 && xs[1].num != nil && xs[1].num.IsInt() && xs[1].num.Num().IsInt64() && abs(xs[1].num.Num().Int64()) <= 10000
 	days := whole && (xs[1].unit == "" || xs[1].unit == "days")
+	bdays := days || whole && xs[1].unit == "business days"                                               // business_days' count; date_add takes no business days
 	period := whole && (days || xs[1].unit == "weeks" || xs[1].unit == "months" || xs[1].unit == "years") // date_add's offset (lab-r4 r8 H1)
 	var curs []string                                                                                     // the operands' currencies: a product has at most one amount of money, a ratio is in one currency (exact arithmetic, r7 M4)
 	for _, x := range xs {
@@ -222,9 +225,12 @@ func Calc(findings []Finding, fn string, ops []Operand, holidays []string) (Work
 	}
 	if !map[string]bool{"sum": same && len(shape) >= 2 && !strings.Contains(shape, "d"), "diff": same && shape == "nn", "ratio": shape == "nn" && len(slices.Compact(slices.Clone(curs))) <= 1, "pct": shape == "nn",
 		"product":  len(shape) >= 2 && !strings.Contains(shape, "d") && len(curs) <= 1,
-		"date_add": shape == "dn" && period, "date_diff": shape == "dd", "business_days": shape == "dd" || shape == "dn" && days}[fn] {
+		"date_add": shape == "dn" && period, "date_diff": shape == "dd", "business_days": shape == "dd" || shape == "dn" && bdays}[fn] {
 		if takes[fn] == "" {
 			return Worksheet{}, fmt.Errorf("unknown fn %q", fn)
+		}
+		if fn == "date_add" && len(xs) == 2 && xs[1].unit == "business days" {
+			return Worksheet{}, errors.New("date_add counts calendar days, and this period is in business days: count it with fn business_days (the date, then the number of business days)")
 		}
 		got := strings.NewReplacer("d", " a date,", "n", " a number,").Replace(shape)
 		return Worksheet{}, fmt.Errorf("%s takes %s; it got%s so send, e.g., %s", fn, takes[fn], strings.TrimSuffix(cmp.Or(got, " no operands,"), ","),

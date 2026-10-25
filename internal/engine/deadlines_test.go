@@ -104,8 +104,9 @@ func TestDeadlinesMeetTheAnswerKey(t *testing.T) {
 	if fin := f.outputs(v.ID, "finish"); stop(v) != "awaiting_gate/finished" || len(fin) != 1 || !strings.Contains(fin[0], `"lint":[]`) {
 		t.Fatalf("%s %q\n%s\n%q", stop(v), fin, f.steps(v.ID), f.outputs(v.ID, "numbers"))
 	}
-	if !strings.Contains(out, "- November 12, 2026 = 10/21/2026 [F1] + 21 days [F8] “…serve an answer within 21 days after being…”, read in days from “days”, rolled past a weekend or holiday (I1)") ||
-		!strings.Contains(out, "- November 25, 2026 = December 3, 2026 [F2] − 7 days [F2]") {
+	if !strings.Contains(out, "- November 12, 2026 = October 21, 2026 [F1] “served on 10/21/2026 via its registered…” + 21 days [F8] “…serve an answer within 21 days after being…”, rolled past a weekend or holiday (I1)") ||
+		!strings.Contains(out, "- November 25, 2026 = December 3, 2026 [F2] “…status hearing set for December 3, 2026 at 9:30 a.m. in…” − 7 days [F2]") ||
+		!strings.Contains(out, "- 14 days = days from September 25, 2026 [F4] “…Notice of Dispute, September 25, 2026” to October 9, 2026 [F3] “Date Filed: 10/09/2026” (I1)") {
 		t.Errorf("a calculation over typed inputs is not disclosed")
 	}
 	var key struct {

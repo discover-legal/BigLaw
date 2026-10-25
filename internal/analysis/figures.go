@@ -281,3 +281,6 @@ func dateSpans(text string) (keys []string, spans [][]int) {
 	}
 	return keys, spans
 }
+
+// DateSpans is the dates text states as G8 reads them (Literal's), each with where it is written.
+func DateSpans(text string) (keys []string, spans [][]int) { return dateSpans(text) }

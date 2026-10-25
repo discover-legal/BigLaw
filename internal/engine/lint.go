@@ -86,15 +86,20 @@ func Untraced(text, ground string, derived bool) []string {
 	return out
 }
 
-// dayOf reports whether n is the day of a date para writes without its year ("to November 25"):
+// dayIn reports whether n is the day of a date para writes without its year ("to November 25"):
 // the month's name right before it, and a ground date of that month and day.
-func dayOf(para string, n analysis.Span, ds []string) bool {
+func dayIn(para string, n analysis.Span, ds []analysis.Date) bool {
 	words := strings.Fields(para[:n.Start])
 	if len(words) == 0 {
 		return false
 	}
 	d, ok := analysis.ParseDate(words[len(words)-1] + " " + n.Text + ", 2000")
-	return ok && d.Day != 0 && slices.ContainsFunc(ds, func(g string) bool { x, _ := analysis.ParseDate(g); return x.Month == d.Month && x.Day == d.Day })
+	return ok && d.Day != 0 && slices.ContainsFunc(ds, func(x analysis.Date) bool { return x.Month == d.Month && x.Day == d.Day })
+}
+
+// yearIn is yearOf over parsed dates.
+func yearIn(n analysis.Span, ds []analysis.Date) bool {
+	return slices.ContainsFunc(ds, func(d analysis.Date) bool { return n.Text == strconv.Itoa(d.Year) })
 }
 
 // yearOf reports whether n is the year of one of the dates ds ("in 2024" beside "March 3, 2024").
@@ -120,20 +125,22 @@ func derivable(want float64, vals []float64) bool {
 }
 
 // covered reports whether ground states every date and number in value as written (at least one).
-func covered(value, ground string) bool {
+func covered(value, ground string) bool { return coveredIn(value, groundOf(ground)) }
+
+// coveredIn is covered over a ground parsed once.
+func coveredIn(value string, g traceGround) bool {
 	vd, vn := figures(value, true)
-	gd, gn := figures(ground, true)
 	if len(vd)+len(vn) == 0 {
 		return false
 	}
 	for _, d := range vd {
 		x, _ := analysis.ParseDate(d)
-		if !slices.ContainsFunc(gd, func(g string) bool { y, _ := analysis.ParseDate(g); return y.Compatible(x) }) {
+		if !slices.ContainsFunc(g.dates, func(y analysis.Date) bool { return y.Compatible(x) }) {
 			return false
 		}
 	}
 	for _, n := range vn {
-		if !spanStated(n, gn) && !yearOf(n, gd) {
+		if !spanStated(n, g.nums) && !yearIn(n, g.dates) {
 			return false
 		}
 	}
@@ -178,7 +185,7 @@ func substituteOutsideQuotes(text string, figs []Fig) string {
 // values, its handle, or a calc worksheet (its result or its inputs). A rule or section number is
 // a locator, not a figure. Each untraced figure says how to fix it (hint).
 func lint(issueID string, s Section, usable map[string]Finding, sheets []analysis.Worksheet) []string {
-	out, _, _, _ := lintLimited(issueID, s, usable, sheets)
+	out, _, _, _ := lintSection(issueID, s, usable, sheets, false)
 	return out
 }
 
@@ -188,6 +195,12 @@ func lint(issueID string, s Section, usable map[string]Finding, sheets []analysi
 // a limited figure at the other scale (lab-r4 r5 H2, r6 M2, r7 M4: a figure no clear reading verifies
 // is flagged, or limited and gated, never silently traced).
 func lintLimited(issueID string, s Section, usable map[string]Finding, sheets []analysis.Worksheet) (out []string, limited map[string][]string, gate map[string]string, computed []computedFig) {
+	return lintSection(issueID, s, usable, sheets, true)
+}
+
+// lintSection is lintLimited; attribute also finds what each figure rests on (the Computed figures
+// block, and the gates its ⚠ inputs set), which lint (the redraft check) skips (lab-r4 r11 M).
+func lintSection(issueID string, s Section, usable map[string]Finding, sheets []analysis.Worksheet, attribute bool) (out []string, limited map[string][]string, gate map[string]string, computed []computedFig) {
 	limited, gate = map[string][]string{}, map[string]string{}
 	cited := map[string]bool{}
 	for _, m := range fidRe.FindAllStringSubmatch(s.Markdown, -1) {
@@ -233,35 +246,42 @@ func lintLimited(issueID string, s Section, usable map[string]Finding, sheets []
 	for _, w := range sheets {
 		byHandle["{"+w.WID+"}"] = w
 	}
-	typed := func(w analysis.Worksheet) bool { return w.LiteralOperands }
-	// groundWith is what the section's figures trace to with the traced worksheets keep keeps: the
-	// cited quotes and values, the handles Go wrote for them and for those worksheets, and those
-	// worksheets' results and steps (a raw date before its roll only beside the rolled one, below)
-	groundWith := func(keep func(analysis.Worksheet) bool) string {
-		g := cg
-		for _, f := range s.Handles {
-			ds, _ := figures(f.Value, true)
-			w, sheet := byHandle[f.Handle]
-			if _, raw := rolled[strings.Join(ds, "")]; f.FID == "" && sheet && keep(w) && !raw || cited[f.FID] {
-				g += f.Value + "\n"
-			}
+	// The grounds G8 traces against, each parsed once (lab-r4 r11 M): base is what the section cites
+	// (its quotes and values, and the handles Go wrote for them); each traced worksheet adds its result
+	// and steps and the handles Go wrote for it (a raw date before its roll only beside the rolled one,
+	// below). G8 traces each paragraph with every worksheet, then without any: a figure that traces
+	// only with them rests on a worksheet, whatever its operands are (r11 H: a ref's value is the
+	// figure reader's reading of it, its scale and kind), and is listed with its inputs.
+	var bt strings.Builder
+	bt.WriteString(cg)
+	for _, f := range s.Handles {
+		if cited[f.FID] {
+			bt.WriteString(f.Value + "\n")
 		}
-		for _, w := range sheets {
-			if !keep(w) {
-				continue
-			}
-			if _, raw := rolled[w.Result]; !raw || w.Unit != "date" {
-				g += w.Result + "\n"
-			}
-			for _, st := range w.Steps {
-				if _, raw := rolled[strings.Fields(st.Value + " x")[0]]; st.Step != "raw date" && !raw {
-					g += st.Value + "\n"
-				}
-			}
-		}
-		return g
 	}
+	base := groundOf(bt.String())
+	extra := make([]string, len(sheets))
+	for i, w := range sheets {
+		var b strings.Builder
+		for _, f := range s.Handles {
+			if x, sheet := byHandle[f.Handle]; sheet && f.FID == "" && x.WID == w.WID && !rawDate(f.Value, rolled) {
+				b.WriteString(f.Value + "\n")
+			}
+		}
+		if _, raw := rolled[w.Result]; !raw || w.Unit != "date" {
+			b.WriteString(w.Result + "\n")
+		}
+		for _, st := range w.Steps {
+			if _, raw := rolled[strings.Fields(st.Value + " x")[0]]; st.Step != "raw date" && !raw {
+				b.WriteString(st.Value + "\n")
+			}
+		}
+		extra[i] = b.String()
+	}
+	gAll := base.plus(strings.Join(extra, ""))
+	only := map[int]traceGround{} // base and one worksheet's, built when a paragraph needs it
 	body, regs := memoBody(s)
+	const all, none = -2, -1                                        // which worksheets a trace keeps: all, none, or the one at that index
 	regsWith := func(keep func(analysis.Worksheet) bool) []region { // what Go wrote for a handle traces by construction: a cited finding's value, or a kept traced worksheet's result
 		out := slices.Clone(regs)
 		for i, r := range out {
@@ -270,7 +290,6 @@ func lintLimited(issueID string, s Section, usable map[string]Finding, sheets []
 		}
 		return out
 	}
-	all := func(analysis.Worksheet) bool { return true }
 	read := map[int]analysis.Reading{} // the figure reader's readings of the section's own figures, when it read this text
 	if s.Read != nil && s.Read.Hash == textHash(body) {
 		for _, r := range s.Read.Figs {
@@ -301,52 +320,73 @@ func lintLimited(issueID string, s Section, usable map[string]Finding, sheets []
 			}
 		}
 	}
-	cs := computeSet{src: src, ground: cg, spans: daySpans(cg), sheets: sheets, usable: usable, fids: fids}
-	trace := func(para string, at0 int, keep func(analysis.Worksheet) bool) []untraced { // G8 over one paragraph, with the traced worksheets keep keeps
-		g := groundWith(keep)
-		pd, _ := figures(para, true)
+	cs := computeSet{src: src, ground: groundOf(cg), dates: map[string]quoteDates{}, sheets: sheets, usable: usable, fids: fids}
+	trace := func(para string, td []string, tn []analysis.Span, pd []string, at0, which int) []untraced { // G8 over one paragraph (its locators masked), with the worksheets which keeps
+		keep := func(w analysis.Worksheet) bool { return which == all || which >= 0 && w.WID == sheets[which].WID }
+		g, ws := base, []analysis.Worksheet(nil)
+		switch {
+		case which == all:
+			g, ws = gAll, sheets
+		case which >= 0:
+			if _, ok := only[which]; !ok {
+				only[which] = base.plus(extra[which])
+			}
+			g, ws = only[which], sheets[which:which+1]
+		}
+		raws := ""
 		for raw, w := range rolled { // a paragraph that states a rolled deadline may name its raw date
 			if slices.Contains(pd, w.Result) && keep(w) {
-				g += raw + "\n"
+				raws += raw + "\n"
 			}
 		}
-		return g8(analysis.MaskLocators(para), g, at0, regsWith(keep), read, known, unread, slices.DeleteFunc(slices.Clone(sheets), func(w analysis.Worksheet) bool { return !keep(w) }), cited, rolled)
+		return g8In(para, td, tn, g.plus(raws), at0, regsWith(keep), read, known, unread, ws, cited, rolled)
 	}
-	figs := func(us []untraced) map[string]bool {
+	keys := func(us []untraced) map[string]bool {
 		m := map[string]bool{}
 		for _, u := range us {
-			m[u.figure] = true
+			m[u.key()] = true
 		}
 		return m
 	}
 	seen := map[string]bool{}
-	hit := map[string]bool{} // the typed worksheets a figure of the section traces only through (lab-r4 r10 H1: G8 itself decides, whatever form the figure is written in)
+	hit := map[string][]untraced{}  // the memo figures each worksheet is listed for (r10 H1: G8 itself decides, whatever form the figure is written in)
+	memoAs := map[string][]string{} // a scaled memo figure a worksheet computes, listed with it (r11 L5)
 	off := 0
 	for _, para := range strings.Split(body, "\n\n") {
 		at0 := off
 		off += len(para) + 2
-		base := trace(para, at0, all)
-		if slices.ContainsFunc(sheets, typed) {
-			with := figs(base)
-			for _, n := range trace(para, at0, func(w analysis.Worksheet) bool { return !typed(w) }) {
-				if with[n.figure] {
-					continue
+		pd, _ := figures(para, true)
+		masked := analysis.MaskLocators(para)
+		td, tn := figures(masked, true)
+		tr := func(which int) []untraced { return trace(masked, td, tn, pd, at0, which) }
+		traced := tr(all)
+		if attribute && len(sheets) > 0 {
+			with := keys(traced)
+			var missing []untraced // traced with the worksheets, not without them
+			for _, n := range tr(none) {
+				if !with[n.key()] {
+					missing = append(missing, n)
 				}
-				found := false
-				for _, w := range sheets { // the typed worksheet it traces through
-					if typed(w) && !figs(trace(para, at0, func(x analysis.Worksheet) bool { return !typed(x) || x.WID == w.WID }))[n.figure] {
-						hit[w.WID], found = true, true
-						break
+			}
+			found := map[string]bool{}
+			for i := 0; i < len(sheets) && len(found) < len(missing); i++ { // one pass: the first worksheet each traces through alone
+				got := keys(tr(i))
+				for _, n := range missing {
+					if !found[n.key()] && !got[n.key()] {
+						found[n.key()] = true
+						hit[sheets[i].WID] = append(hit[sheets[i].WID], n)
 					}
 				}
-				for _, w := range sheets { // traced only through several together: all of them
-					if !found && typed(w) {
-						hit[w.WID] = true
+			}
+			for _, n := range missing { // traced only through several together: all of them
+				for _, w := range sheets {
+					if !found[n.key()] {
+						hit[w.WID] = append(hit[w.WID], n)
 					}
 				}
 			}
 		}
-		for _, n := range base {
+		for _, n := range traced {
 			if seen[n.figure] {
 				continue
 			}
@@ -364,7 +404,21 @@ func lintLimited(issueID string, s Section, usable map[string]Finding, sheets []
 				continue
 			case "":
 			default:
-				limited[n.limited] = append(limited[n.limited], n.figure)
+				i := -1
+				if n.limited == limitedScale && attribute { // a worksheet's result written at a scale: listed with the worksheet, once (r11 L5)
+					i = slices.IndexFunc(sheets, func(w analysis.Worksheet) bool {
+						x := sheetAmount(w)
+						return x != nil && x.Cmp(n.read.Rat()) == 0 && sheetKind(w, n.read)
+					})
+				}
+				if i >= 0 {
+					memoAs[sheets[i].WID] = append(memoAs[sheets[i].WID], n.figure)
+					if hit[sheets[i].WID] == nil {
+						hit[sheets[i].WID] = []untraced{}
+					}
+				} else {
+					limited[n.limited] = append(limited[n.limited], n.figure)
+				}
 				if n.limited == limitedUnread { // the cited findings whose unread quotes state it: gated for a lawyer (r6 M2)
 					for fid, ns := range unreadBy {
 						if _, ss := analysis.Literal(n.figure); len(ss) > 0 && spanStated(ss[0], ns) && gate[fid] == "" {
@@ -397,14 +451,23 @@ func lintLimited(issueID string, s Section, usable map[string]Finding, sheets []
 				cmpStr(n.hint != "", n.hint, hint(n.figure, s.Handles, usable, cited)))
 		}
 	}
-	for _, r := range regs { // a typed worksheet's handle: Go wrote its result, so the section states it (r10 L1: listed with the rest)
-		if w, sheet := byHandle[r.fig.Handle]; sheet && typed(w) {
-			hit[w.WID] = true
+	if !attribute {
+		return out, limited, gate, nil
+	}
+	for _, r := range regs { // a worksheet's handle: Go wrote its result, so the section states it (r10 L1: listed with the rest)
+		if w, sheet := byHandle[r.fig.Handle]; sheet && hit[w.WID] == nil {
+			hit[w.WID] = []untraced{}
 		}
 	}
 	for _, w := range sheets {
-		if hit[w.WID] {
-			computed = append(computed, cs.sheet(w))
+		if memo, ok := hit[w.WID]; ok {
+			c := cs.sheet(w, memo, memoAs[w.WID])
+			for fid, why := range c.Gate { // a ⚠ input: its findings gated, as a memo figure's would be (r11 H, L1)
+				if gate[fid] == "" {
+					gate[fid] = why
+				}
+			}
+			computed = append(computed, c)
 		}
 	}
 	return out, limited, gate, computed
@@ -417,6 +480,15 @@ type untraced struct {
 	limited              string           // why it is limited, not flagged: limitedUnread, limitedScale, limitedUnit or limitedOther ("" flagged)
 	read                 analysis.Reading // a limited figure's reading (its cited findings are gated by it)
 	known                analysis.Reading // the cited reading a limitedUnit or limitedOther figure rests on
+	at                   int              // where a number is in the section's body (-1 for a date: its key is figure)
+}
+
+// key is which memo figure an untraced entry is, whatever G8 named it.
+func (u untraced) key() string {
+	if u.at < 0 {
+		return "d:" + u.figure
+	}
+	return "n:" + strconv.Itoa(u.at)
 }
 
 // scaledBeside reports whether a memo figure r and a cited reading k are one amount of one kind and
@@ -461,13 +533,19 @@ const (
 // disclosed in Limitations; a cited figure read at a scale never traces one written at another (r5
 // H1: a "$500" read "in thousands" is flagged beside a memo's "$500,000").
 func g8(para, ground string, at0 int, regs []region, read map[int]analysis.Reading, known []analysis.Reading, unread []analysis.Span, sheets []analysis.Worksheet, cited map[string]bool, rolled map[string]analysis.Worksheet) []untraced {
-	gd, gn := figures(ground, true)
 	td, tn := figures(para, true)
+	return g8In(para, td, tn, groundOf(ground), at0, regs, read, known, unread, sheets, cited, rolled)
+}
+
+// g8In is g8 over a paragraph's figures (td, tn: figures(para, true)) and a ground, each parsed once
+// (lab-r4 r11 M: lintLimited traces each paragraph against several grounds).
+func g8In(para string, td []string, tn []analysis.Span, g traceGround, at0 int, regs []region, read map[int]analysis.Reading, known []analysis.Reading, unread []analysis.Span, sheets []analysis.Worksheet, cited map[string]bool, rolled map[string]analysis.Worksheet) []untraced {
+	gd, gn := g.dates, g.nums
 	var out []untraced
 	for _, k := range td {
 		d, _ := analysis.ParseDate(k)
-		if !slices.ContainsFunc(gd, func(g string) bool { x, _ := analysis.ParseDate(g); return x.Compatible(d) }) {
-			out = append(out, untraced{figure: k})
+		if !slices.ContainsFunc(gd, func(x analysis.Date) bool { return x.Compatible(d) }) {
+			out = append(out, untraced{figure: k, at: -1})
 		}
 	}
 	for _, n := range tn {
@@ -477,7 +555,7 @@ func g8(para, ground string, at0 int, regs []region, read map[int]analysis.Readi
 				continue
 			}
 			if !spanStated(n, gn) { // an uncited finding's handle: its value as written in what is cited
-				out = append(out, untraced{figure: decimalOf(n)})
+				out = append(out, untraced{figure: decimalOf(n), at: at})
 			}
 			continue
 		}
@@ -488,7 +566,7 @@ func g8(para, ground string, at0 int, regs []region, read map[int]analysis.Readi
 			if ok && r.Why != "" {
 				why = r.Why
 			}
-			out = append(out, untraced{figure: decimalOf(n), unread: why})
+			out = append(out, untraced{figure: decimalOf(n), unread: why, at: at})
 		case r.Clear():
 			if slices.ContainsFunc(known, func(k analysis.Reading) bool { same, _ := analysis.SameFigure(r, k); return same }) ||
 				r.Scale == "" && slices.ContainsFunc(sheets, func(w analysis.Worksheet) bool {
@@ -498,7 +576,7 @@ func g8(para, ground string, at0 int, regs []region, read map[int]analysis.Readi
 				continue
 			}
 			if spanStated(n, unread) && !slices.ContainsFunc(known, func(k analysis.Reading) bool { return k.Text == n.Text && !k.Unclear }) {
-				out = append(out, untraced{figure: n.Text, limited: limitedUnread}) // only as written: limited, disclosed
+				out = append(out, untraced{figure: n.Text, limited: limitedUnread, at: at}) // only as written: limited, disclosed
 				continue
 			}
 			if slices.ContainsFunc(known, func(k analysis.Reading) bool { return scaledBeside(r, k) }) || // the drafter's "$5M" for a cited "$5,000,000", or its "$5,000,000" for a cited "$5M" (r7 M4)
@@ -506,7 +584,7 @@ func g8(para, ground string, at0 int, regs []region, read map[int]analysis.Readi
 					x := sheetAmount(w)
 					return x != nil && x.Cmp(r.Rat()) == 0 && sheetKind(w, r)
 				}) {
-				out = append(out, untraced{figure: written(para, analysis.Reading{Start: n.Start, End: n.End, ScaleFrom: r.ScaleFrom}), limited: limitedScale, read: r})
+				out = append(out, untraced{figure: written(para, analysis.Reading{Start: n.Start, End: n.End, ScaleFrom: r.ScaleFrom}), limited: limitedScale, read: r, at: at})
 				continue
 			}
 			h := ""
@@ -514,23 +592,23 @@ func g8(para, ground string, at0 int, regs []region, read map[int]analysis.Readi
 				h = "the cited findings state " + r.Amount + " only as " + article(known[k].Kind) + cmpStr(known[k].Currency != "", " in "+known[k].Currency, "") +
 					cmpStr(known[k].Scale != r.Scale, " at another scale", "") + " (the figure reader's reading), not as the " + describe(r) + " this sentence states: state what they state, or remove it"
 			}
-			out = append(out, untraced{figure: r.Amount, hint: h})
+			out = append(out, untraced{figure: r.Amount, hint: h, read: r, at: at})
 		case r.Kind == analysis.KindDuration: // a period: only a cited period in its unit, or the days between two cited dates (lab-r4 r9 H2: never a section number's digits)
-			switch ok, k := durationStated(r, known, ground, sheets); {
+			switch ok, k := durationStated(r, known, g.spans, sheets); {
 			case !ok:
 				out = append(out, untraced{figure: decimalOf(n) + " " + r.Unit, hint: "the cited findings state no period of " + decimalOf(n) + " " + r.Unit +
-					" (a duration in that unit, or the days between two dates they state): state the period they state, compute it with numbers op calc fn date_diff, or remove it"})
+					" (a duration in that unit, or the days between two dates they state): state the period they state, compute it with numbers op calc fn date_diff, or remove it", read: r, at: at})
 			case k != nil: // the cited period's words differ from the memo's: only the reader's unit label makes them one
-				out = append(out, untraced{figure: decimalOf(n) + " " + r.Unit, limited: limitedUnit, read: r, known: *k})
+				out = append(out, untraced{figure: decimalOf(n) + " " + r.Unit, limited: limitedUnit, read: r, known: *k, at: at})
 			}
-		case r.Kind == analysis.KindDate && (yearOf(n, gd) || dayOf(para, n, gd)):
+		case r.Kind == analysis.KindDate && (yearIn(n, gd) || dayIn(para, n, gd)):
 		case !slices.ContainsFunc(gn, func(g analysis.Span) bool { return unsigned(g.Text) == unsigned(n.Text) }): // an identifier or a date's part: as written
-			out = append(out, untraced{figure: n.Text})
+			out = append(out, untraced{figure: n.Text, at: at})
 		case ok && r.Kind == analysis.KindOther: // as written; listed when a cited quantity states the same digits (r10 L5)
 			if i := slices.IndexFunc(known, func(k analysis.Reading) bool {
 				return !k.Unclear && k.Kind != analysis.KindOther && k.Kind != analysis.KindDate && k.Kind != analysis.KindUnclear && k.Rat() != nil && r.Rat() != nil && new(big.Rat).Abs(k.Rat()).Cmp(new(big.Rat).Abs(r.Rat())) == 0
 			}); i >= 0 {
-				out = append(out, untraced{figure: n.Text, limited: limitedOther, read: r, known: known[i]})
+				out = append(out, untraced{figure: n.Text, limited: limitedOther, read: r, known: known[i], at: at})
 			}
 		}
 	}
@@ -542,7 +620,7 @@ func g8(para, ground string, at0 int, regs []region, read map[int]analysis.Readi
 // (date_diff, business_days), or, in days, the days between two dates ground states. A cited duration
 // whose words differ from the memo's as written (case, punctuation and a plural aside) is returned as
 // k: the memo's period is the record's only by the reader's unit label (lab-r4 r10 M1).
-func durationStated(r analysis.Reading, known []analysis.Reading, ground string, sheets []analysis.Worksheet) (ok bool, k *analysis.Reading) {
+func durationStated(r analysis.Reading, known []analysis.Reading, spans []int64, sheets []analysis.Worksheet) (ok bool, k *analysis.Reading) {
 	x := r.Rat()
 	if x == nil {
 		return false, nil
@@ -562,7 +640,7 @@ func durationStated(r analysis.Reading, known []analysis.Reading, ground string,
 	if slices.ContainsFunc(sheets, func(w analysis.Worksheet) bool {
 		y, ok := new(big.Rat).SetString(w.Result)
 		return ok && w.Unit == r.Unit && same(y)
-	}) || r.Unit == "days" && x.IsInt() && slices.Contains(daySpans(ground), x.Num().Int64()) {
+	}) || r.Unit == "days" && x.IsInt() && slices.Contains(spans, x.Num().Int64()) {
 		return true, nil
 	}
 	return other != nil, other
@@ -595,7 +673,7 @@ func unsigned(s string) string { return strings.TrimLeft(s, "-−–—") }
 // the record does not state so ("sum 9000000000 and 0", "9000000000 days", "2,000,000 USD" from a
 // share count) computes nothing from the evidence and traces nothing.
 func tracedSheets(sheets []analysis.Worksheet, ground string, cited map[string]bool, quoted []analysis.Reading) []analysis.Worksheet {
-	spans := daySpans(ground)
+	g := groundOf(ground)
 	var out []analysis.Worksheet
 	for changed := true; changed; {
 		changed = false
@@ -617,7 +695,7 @@ func tracedSheets(sheets []analysis.Worksheet, ground string, cited map[string]b
 					ok = ok && cited[strings.SplitN(ref, ".", 2)[0]]
 					continue
 				}
-				ok = ok && literalTraced(fn, st.Value, ground, quoted, spans, out)
+				ok = ok && literalTraced(fn, st.Value, g, quoted, out)
 			}
 			if ok {
 				out, changed = append(out, w), true
@@ -627,25 +705,43 @@ func tracedSheets(sheets []analysis.Worksheet, ground string, cited map[string]b
 	return out
 }
 
-// daySpans are the days between two full dates ground states.
-func daySpans(ground string) []int64 {
-	gd, _ := figures(ground, true)
-	var spans []int64
-	for i, a := range gd {
-		x, okx := analysis.ParseDate(a)
-		for _, b := range gd[i+1:] {
-			if y, oky := analysis.ParseDate(b); okx && oky && x.Day != 0 && y.Day != 0 {
+// ground is what a section's figures trace to, parsed once: its text, its dates (parsed), its
+// numbers and the days between its full dates (lab-r4 r11 M).
+type traceGround struct {
+	text  string
+	dates []analysis.Date
+	nums  []analysis.Span
+	spans []int64
+}
+
+func groundOf(text string) traceGround { return traceGround{}.plus(text) }
+
+// plus is g with text added: only text is parsed, and the day spans between its dates and g's added.
+func (g traceGround) plus(text string) traceGround {
+	if text == "" {
+		return g
+	}
+	ks, ns := figures(text, true)
+	var ds []analysis.Date
+	for _, k := range ks {
+		d, _ := analysis.ParseDate(k)
+		ds = append(ds, d)
+	}
+	spans := slices.Clone(g.spans)
+	for i, y := range ds { // from the date written first to the one written after it
+		for _, x := range slices.Concat(g.dates, ds[:i]) {
+			if x.Day != 0 && y.Day != 0 {
 				spans = append(spans, analysis.DaysBetween(x, y))
 			}
 		}
 	}
-	return spans
+	return traceGround{g.text + text, slices.Concat(g.dates, ds), slices.Concat(g.nums, ns), spans}
 }
 
 // literalTraced reports whether a worksheet's literal operand (its step's value: the literal as
 // typed, then its unit) of a calc fn is stated by the evidence as its unit says it is (tracedSheets).
-func literalTraced(fn, step, ground string, quoted []analysis.Reading, spans []int64, traced []analysis.Worksheet) bool {
-	o := literalOrigin(fn, step, ground, quoted, spans, traced)
+func literalTraced(fn, step string, g traceGround, quoted []analysis.Reading, traced []analysis.Worksheet) bool {
+	o := literalOrigin(fn, step, g, quoted, traced)
 	return o.ok
 }
 
@@ -660,11 +756,11 @@ type origin struct {
 
 // literalOrigin is literalTraced with what states the literal (lab-r4 r9 H1: a duration or a number
 // reading counts only with the words beside it the reader cites, checked by ReadLabels).
-func literalOrigin(fn, step, ground string, quoted []analysis.Reading, spans []int64, traced []analysis.Worksheet) origin {
+func literalOrigin(fn, step string, g traceGround, quoted []analysis.Reading, traced []analysis.Worksheet) origin {
 	none := origin{read: -1}
 	lit, unit := sheetOperand(step)
 	if unit == "date" {
-		return origin{ok: covered(lit, ground), read: -1}
+		return origin{ok: coveredIn(lit, g), read: -1}
 	}
 	_, ss := analysis.Literal(lit)
 	if len(ss) != 1 || len(ss[0].Readings()) != 1 {
@@ -706,7 +802,7 @@ func literalOrigin(fn, step, ground string, quoted []analysis.Reading, spans []i
 	switch {
 	case i >= 0: // a cited period first: the block names its words
 		return origin{ok: true, read: i}
-	case kind == analysis.KindDuration && unit == "days" && fn != "business_days" && n.IsInt() && slices.ContainsFunc(spans, func(d int64) bool { return n.Num().IsInt64() && n.Num().Int64() == d }):
+	case kind == analysis.KindDuration && unit == "days" && fn != "business_days" && n.IsInt() && slices.ContainsFunc(g.spans, func(d int64) bool { return n.Num().IsInt64() && n.Num().Int64() == d }):
 		return origin{ok: true, read: -1, days: true}
 	}
 	return none
@@ -716,7 +812,7 @@ func literalOrigin(fn, step, ground string, quoted []analysis.Reading, spans []i
 // its unit) into the literal and the unit: "date", a period's ("days", "weeks", "months", "years"),
 // "%", a currency code, or "" for a plain number (a unit that is none of those: "shares").
 func sheetOperand(step string) (lit, unit string) {
-	for _, u := range []string{" date", " days", " weeks", " months", " years", " %"} {
+	for _, u := range []string{" date", " business days", " days", " weeks", " months", " years", " %"} {
 		if strings.HasSuffix(step, u) {
 			return strings.TrimSuffix(step, u), u[1:]
 		}

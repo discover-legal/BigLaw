@@ -71,7 +71,7 @@ func TestComputedFigureDisclosedWithItsWords(t *testing.T) {
 		sec := readSection(Section{Markdown: memo, Handles: []Fig{{"{" + w.WID + "}", "", sheetValue(w.Result, w.Unit)}}})
 		lines, _, _, computed := lintLimited("I1", sec, use, []analysis.Worksheet{w})
 		if len(lines) == 0 && (len(computed) != 1 || !computed[0].Mismatch || !strings.HasPrefix(computed[0].Text, "⚠ March 22, 2024 = March 1, 2024 [F1] “") || !strings.Contains(computed[0].Text, "” + 21 days [F1] “…2024. An answer is due within 21 business days.”") ||
-			!strings.HasSuffix(computed[0].Text, ", read in days from “business days”: the cited words “business days” are not its unit (days)")) {
+			!strings.HasSuffix(computed[0].Text, ", read in days from “business days”: the cited words “business days” are not its unit (days); the findings are gated") || computed[0].Gate["F1"] != limitedUnit) {
 			t.Errorf("%q: traced, but not disclosed with its words: %+v", memo, computed)
 		}
 	}
@@ -148,7 +148,7 @@ func TestMislabelledSectionDeadlineNotDelivered(t *testing.T) {
 			"Under Section 30 of the Agreement, the complaint was served on March 1, 2024. An answer is due within 21 days"))},
 		"draft_section": {section("The answer is due March 31, 2024 [F1].", "Due [F1].")},
 	}), Config{})
-	if out, fin := deref(v.Output), strings.Join(f.outputs(v.ID, "finish"), "\n"); strings.Contains(out, "March 31, 2024") && !strings.Contains(fin, "not traced") && !strings.Contains(out, "computed from typed inputs") {
+	if out, fin := deref(v.Output), strings.Join(f.outputs(v.ID, "finish"), "\n"); strings.Contains(out, "March 31, 2024") && !strings.Contains(fin, "not traced") && !strings.Contains(out, "### Computed figures") {
 		t.Errorf("\"March 31, 2024\" delivered traced and undisclosed; stop %s", stop(v))
 	}
 }

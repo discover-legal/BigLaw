@@ -1189,7 +1189,7 @@ to one followed by a noun or unit or after a "," or ";" once "and"/"or" closed t
   untraced figure says how to fix it: the handle to write and the finding to cite, the uncited
   finding that states it, or the `numbers` call that computes it (`TestLintSaysHowToFix`); no
   unknown handle, and none inside a quotation (Go never substitutes there, so the quote would show
-  `{Heron}`). A memo stating a figure a worksheet with typed inputs (a period, a rate) computes, by
+  `{Heron}`). A memo stating a figure a worksheet computes (over cited values or typed inputs), by
   its `{W…}` handle or written out, lists it in Limitations' Computed figures block, with what it
   computes from what. After two `finish` calls that reported lint problems, the next discloses them in
   Limitations ("Delivered with an unresolved check after 2 rounds of fixes") instead of refusing,
@@ -1820,18 +1820,28 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     worksheet's period, or the days between two cited dates, never to a section number's digits (r9
     H2); a cited period whose words differ ("days" against "business days" or "of") makes it limited:
     listed first in the block below and its findings gated (r10 M1).
-  - The Computed figures block (`computed.go`, r10): one block at the end of Limitations lists, once
-    each with the sections that state it, every figure a section states that traces only through a
-    worksheet over typed literals, whatever form it is written in (G8 decides: the section is traced a
-    second time without those worksheets, and a figure that then fails is listed; a `{W…}` handle's
-    worksheet is listed too), and every memo figure that traces only by a reader's label (a period
-    whose words differ from the record's, an identifier with a cited quantity's digits, r10 L5). Each
-    input is written as the memo writes figures with its finding and a short quote ("$212,500,000
-    [F1] “…purchase price of $212,500,000”"). Items resting on a unit, multiple or scale the figure
-    reader read from words, or on the days between two cited dates, come first ("Check first"), a unit
-    whose cited words are not its name marked ⚠ at the top; plain sums and products of figures the
-    quotes write out follow ("Arithmetic"). So every figure one wrong unit label could change is
-    shown to the lawyer with the words it rests on.
+  - The Computed figures block (`computed.go`, r10, r11): one block at the end of Limitations lists,
+    once each with the sections that state it, every figure a section states that traces only
+    through a worksheet, whatever its operands (a ref's value is the figure reader's reading of it,
+    its scale and kind; a literal is a cited reading) and whatever form the figure is written in (G8
+    decides: each paragraph is traced a second time without the worksheets, and a figure that then
+    fails is listed with the worksheet it traces through alone; a `{W…}` handle's worksheet is listed
+    too), and every memo figure that traces only by a reader's label (a period whose words differ
+    from the record's, an identifier with a cited quantity's digits, r10 L5). A worksheet result the
+    memo writes at a scale ("$228.5 million") is that worksheet's item ("written in the memo as …"),
+    not a separate scale line (r11 L5). Each input is written as the memo writes figures with its
+    finding and a short quote, cut at a space, comma or pipe, a table or CSV row's from its first
+    cell, a date's wherever the quote writes it ("$212,500,000 [F1] “…purchase price of
+    $212,500,000”"). Items resting on a unit, multiple or scale the figure reader read from words, on
+    a count or number's kind alone (no unit words: it may be a section number), or on the days
+    between two cited dates come first ("Check first"); ⚠ marks, at the top, an input whose cited
+    words are not its unit, a value read as a count but used as a period, or a result the memo writes
+    out over inputs read at a scale, and gates the findings it rests on, as a memo figure's would be
+    (r11 H, L1). Arithmetic over money, percentages and dates the quotes write out follows
+    ("Arithmetic"). `numbers` keeps a value's "business days" (`date_add` refuses it; `business_days`
+    counts it). So every figure that one wrong unit, scale or kind label could change is shown to the
+    lawyer with the words it rests on; whether the label is right is the lawyer's check, since Go
+    never decides what words mean.
   - A figure written at one scale beside a cited one at another (the memo's "$5M" for a cited
     "$5,000,000", or its "$5,000,000" for a cited "$5 million", or "$5 per share" scaled from "per
     share") is limited, not traced: disclosed in Limitations and its citing findings gated for a
