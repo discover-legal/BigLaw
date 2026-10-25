@@ -273,12 +273,12 @@ func names[T engine.TaskView | []engine.TaskView](p Principal, v T) T {
 	hide := func(t *engine.TaskView) {
 		if t.SubmittedBy != nil {
 			x := *t.SubmittedBy
-			x.Email, t.SubmittedBy = "", &x
+			x.Email, x.Name, t.SubmittedBy = "", engine.DisplayName(x.Name), &x
 		}
 		for i, g := range t.DecidedGates {
 			if g.DecidedBy != nil {
 				x := *g.DecidedBy
-				x.Email, t.DecidedGates[i].DecidedBy = "", &x
+				x.Email, x.Name, t.DecidedGates[i].DecidedBy = "", engine.DisplayName(x.Name), &x
 			}
 		}
 	}

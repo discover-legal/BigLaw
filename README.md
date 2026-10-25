@@ -317,7 +317,9 @@ service, a corporate directory). It is built on the Go standard library alone (n
   redirects to the issuer with scope `openid email profile`. **Nothing is stored on the server** until
   a sign-in completes, so anonymous sign-ins cost no row and no number of them can refuse anyone
   else's (`TestUnfinishedSignInsNeverLockAnyoneOut`). The sealing key is made at process start:
-  a restart ends the sign-ins in flight (their user clicks Sign in again).
+  a restart or a deploy ends the sign-ins in flight (their user clicks Sign in again), and several
+  replicas behind one name need sticky routing (a callback must reach the process that sealed its
+  cookie; sessions themselves are in Postgres and work on any replica).
   `GET /auth/callback` clears the login cookie at once (single use in that browser), opens it (a
   cookie this process did not seal, or one tampered with, is refused), requires the callback's
   `state` to be the sealed one (a callback is honoured only in the browser that started it: login
@@ -384,7 +386,9 @@ service, a corporate directory). It is built on the Go standard library alone (n
   email**: tasks' `submittedBy` and gates' `decidedBy`, the change log's and history's authors and
   secrets' setters are names only in every response a member reads, and an accepted tool's file
   (`acceptedBy`, shown in Manage and the export) and a Test call's task record the name alone
-  (`TestMembersNeverSeeAnEmail`); admins see the emails. Display names are the
+  (`TestMembersNeverSeeAnEmail`); admins see the emails. **A display name is never an email**: the
+  issuer's `name`, else `preferred_username`, unless either holds an `@`, else the email's local
+  part, else "Admin" or "Member"; a stored email-shaped name is shown to members as its local part. Display names are the
   issuer's `name` claim, which a user may be able to edit there: the stored sub and email are what
   identify them.
 - **Who may sign in is the issuer's decision**: BigLaw admits every account the issuer

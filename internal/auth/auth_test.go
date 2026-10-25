@@ -816,3 +816,16 @@ func TestAliveIsNotActivity(t *testing.T) {
 		t.Fatal("the stream's checks kept an idle session alive")
 	}
 }
+
+// TestSafeName (review r3 L-8): a display name is never email-shaped.
+func TestSafeName(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ name, preferred, email, want string }{
+		{"Ada Lovelace", "ada", "ada@firm.example", "Ada Lovelace"}, {"", "ada", "ada@firm.example", "ada"},
+		{"ada@firm.example", "ada@firm.example", "ada@firm.example", "ada"}, {"", "", "", ""}, {"x@y", "", "", ""},
+	} {
+		if got := safeName(c.name, c.preferred, c.email); got != c.want {
+			t.Errorf("safeName(%q, %q, %q) = %q, want %q", c.name, c.preferred, c.email, got, c.want)
+		}
+	}
+}

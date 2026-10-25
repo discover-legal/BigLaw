@@ -491,3 +491,15 @@ func TestDeleteRefusedWhileReferenced(t *testing.T) {
 		t.Fatalf("a server a tool uses was deleted: %s", problems(err))
 	}
 }
+
+// TestDisplayName (review r2 L-7, r3 L-8): an author label as everyone may see it: no email, no
+// subject, and a stored email-shaped name as its local part.
+func TestDisplayName(t *testing.T) {
+	t.Parallel()
+	for in, want := range map[string]string{"Ada Lovelace <ada@firm.example>": "Ada Lovelace", "Member (u-x)": "Member", "Local user": "Local user",
+		"ada@firm.example <ada@firm.example>": "ada", "ada@firm.example": "ada", "@firm.example": "a user"} {
+		if got := DisplayName(in); got != want {
+			t.Errorf("DisplayName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

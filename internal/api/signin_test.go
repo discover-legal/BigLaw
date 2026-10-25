@@ -340,6 +340,12 @@ func TestMembersNeverSeeAnEmail(t *testing.T) {
 	s, ids := signedServer(t, memo, doc1)
 	admin, member := s.browser(t, ada), s.browser(t, bob)
 	carol := s.browser(t, map[string]any{"sub": "u-carol", "email": "carol@firm.example", "email_verified": true, "name": "Carol Member"})
+	// issuers that send no name, or an email-shaped preferred_username (review r3 L-8): they act too
+	nameless := s.browser(t, map[string]any{"sub": "u-dan", "email": "dan@firm.example", "email_verified": true})
+	emailish := s.browser(t, map[string]any{"sub": "u-eva", "email": "eva@firm.example", "email_verified": true, "preferred_username": "eva@firm.example", "name": "eva@firm.example"})
+	if _, body := nameless.do("GET", "/me", nil); !strings.Contains(body, `"name":"dan"`) {
+		t.Errorf("no name: the email's local part, never the email: %s", body)
+	}
 	code, body := member.do("POST", "/tasks", m{"description": "What is claimed?", "workflowType": "memo", "documentIds": ids})
 	var v engine.TaskView
 	if json.Unmarshal([]byte(body), &v); code != 201 {
@@ -350,6 +356,11 @@ func TestMembersNeverSeeAnEmail(t *testing.T) {
 		t.Fatalf("decide: %d %s", code, body)
 	}
 	member.waitFor(v.ID, func(v engine.TaskView) bool { return v.Status == "awaiting_gate" && len(v.DecidedGates) == 1 })
+	for _, b := range []*server{nameless, emailish} { // after the scripted run: their tasks need no model to list their submitter
+		if code, body := b.do("POST", "/tasks", m{"description": "Who?", "workflowType": "memo", "documentIds": ids}); code != 201 {
+			t.Fatalf("submit: %d %s", code, body)
+		}
+	}
 	if code, body := admin.do("POST", "/manage/secrets", m{"name": "k1", "value": "a-long-value", "origin": "https://api.example.com"}); code != 201 {
 		t.Fatalf("secret: %d %s", code, body)
 	}
@@ -361,7 +372,7 @@ func TestMembersNeverSeeAnEmail(t *testing.T) {
 		"/manage/export?format=patch", "/manage/secrets", "/clients", "/documents", "/documents/" + ids[0]}
 	for _, p := range paths {
 		_, body := carol.do("GET", p, nil)
-		for _, e := range []string{"ada@firm.example", "bob@firm.example"} {
+		for _, e := range []string{"ada@firm.example", "bob@firm.example", "dan@firm.example", "eva@firm.example"} {
 			if strings.Contains(body, e) {
 				t.Errorf("a member's GET %s shows %s: %.300s", p, e, body)
 			}
@@ -373,6 +384,25 @@ func TestMembersNeverSeeAnEmail(t *testing.T) {
 	for _, p := range []string{"/tasks/" + v.ID, "/manage/secrets", "/manage/changes"} {
 		if _, body := admin.do("GET", p, nil); !strings.Contains(body, "@firm.example") {
 			t.Errorf("an admin's GET %s lacks the emails", p)
+		}
+	}
+}
+
+// TestNameIsNeverAnEmail (review r3 L-8, its repro): an admin whose issuer sends no name acts (a task,
+// a secret); a member sees the email's local part, never the address.
+func TestNameIsNeverAnEmail(t *testing.T) {
+	t.Parallel()
+	s, ids := signedServer(t, memo, doc1)
+	admin, member := s.browser(t, map[string]any{"sub": "u-ada", "email": "ada@firm.example", "email_verified": true}), s.browser(t, bob)
+	if code, body := admin.do("POST", "/tasks", m{"description": "What is claimed?", "workflowType": "memo", "documentIds": ids}); code != 201 {
+		t.Fatalf("submit %d %s", code, body)
+	}
+	if code, body := admin.do("POST", "/manage/secrets", m{"name": "k1", "value": "a-long-value", "origin": "https://api.example.com"}); code != 201 {
+		t.Fatalf("secret %d %s", code, body)
+	}
+	for _, p := range []string{"/tasks", "/manage/secrets", "/manage/changes"} {
+		if _, b := member.do("GET", p, nil); strings.Contains(b, "ada@firm.example") || !strings.Contains(b, `"ada`) {
+			t.Errorf("a member's GET %s: %s", p, b)
 		}
 	}
 }

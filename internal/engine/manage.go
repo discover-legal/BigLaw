@@ -4,6 +4,7 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -674,11 +675,17 @@ func lastContent(ctx context.Context, tx *sql.Tx, id string) (map[string]string,
 
 // DisplayName is an author label (api's Principal.Label: "Name <email>" or "Name (sub)") as everyone
 // may see it: the name without the email or subject.
+// A name that is itself email-shaped (holds an @: a row stored before sign-in's naming rule) is
+// shown as its local part, or "a user"; a display name is never an email address.
 func DisplayName(label string) string {
 	for open, end := range map[string]string{" <": ">", " (": ")"} {
 		if i := strings.LastIndex(label, open); i > 0 && strings.HasSuffix(label, end) {
-			return label[:i]
+			label = label[:i]
+			break
 		}
+	}
+	if local, _, at := strings.Cut(label, "@"); at {
+		return cmp.Or(strings.TrimSpace(local), "a user")
 	}
 	return label
 }

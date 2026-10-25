@@ -157,6 +157,19 @@ func asciiLower(s string) string {
 	return string(b)
 }
 
+// safeName is the display name everyone may see (review r3 L-8): the issuer's name, else its
+// preferred_username, unless email-shaped (it holds an @), else the email's local part; "" when
+// none is left. A display name is never an email address.
+func safeName(name, preferred, email string) string {
+	for _, n := range []string{name, preferred} {
+		if n = clean(n); n != "" && !strings.Contains(n, "@") {
+			return n
+		}
+	}
+	local, _, _ := strings.Cut(clean(email), "@")
+	return local
+}
+
 func random() string {
 	b := make([]byte, 32)
 	rand.Read(b) // never fails (crypto/rand)
@@ -227,6 +240,9 @@ func (s *Service) lookup(r *http.Request, touch bool) (User, bool, error) {
 		}
 	}
 	u.Admin = IsAdmin(s.admins, u.Sub, u.Email, u.Verified)
+	if u.Name = safeName(u.Name, "", u.Email); u.Name == "" { // a row stored before this rule is safe too
+		u.Name = map[bool]string{true: "Admin", false: "Member"}[u.Admin]
+	}
 	return u, true, nil
 }
 
@@ -339,12 +355,7 @@ func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, http.StatusUnauthorized, err)
 		return
 	}
-	name := clean(cl.Name)
-	for _, alt := range []string{cl.PreferredUsername, cl.Email, cl.Sub} {
-		if name == "" {
-			name = clean(alt)
-		}
-	}
+	name := safeName(cl.Name, cl.PreferredUsername, cl.Email)             // "" when none: lookup names them Admin or Member
 	email, verified := cl.Email, cl.EmailVerified && plainEmail(cl.Email) // an address with anything but plain ASCII is shown, never matched
 	if !plainEmail(email) {
 		email = clean(email)
