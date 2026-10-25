@@ -23,7 +23,7 @@ import (
 func (e *Engine) execute(ctx context.Context, r *run) error {
 	sp, err := newSpecs(r.t.Specs) // the task's snapshot: the same on every resume
 	if err != nil {
-		return e.fail(ctx, r, "", fmt.Errorf("engine: the task's spec snapshot does not load: %w", err))
+		return e.fail(ctx, r, "", invalid("", "the task's spec snapshot does not load: %s", strings.TrimPrefix(brokenSet(r.t.Specs, "", err).Error(), "engine: ")))
 	}
 	r.specs, ctx = sp, withSpecs(ctx, sp)
 	if gs, err := load[Gate](ctx, e, r.t.ID, kGate); err != nil { // a hook gate still undecided (a crash between its step and the pause): pause again (#58 r1 M2)

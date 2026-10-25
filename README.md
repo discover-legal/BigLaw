@@ -1420,8 +1420,10 @@ each one in Manage (`#/manage`) or the routes above, with no rebuild:
   too, so the table is the history and the **change log**. A save names the version it was edited from
   (`base`): a stale one is 409. A save holds files: one with none, which would delete the item, is
   refused for every built-in (with Delete's reason where Delete refuses too), and a request body is
-  exactly one JSON object (400 otherwise). A stored version that no longer loads is listed as broken
-  (why, and what is stored) and reverts like any other; a prompt whose file a version removed is listed
+  exactly one JSON object (400 otherwise); a revert to a version that deleted such an item is refused
+  the same way (History marks it unrevertable, with why). A stored version that no longer loads is listed
+  as broken (why, and what is stored) and reverts like any other; until it is reverted every other write
+  is a 422 naming it and every new task fails naming it. A prompt whose file a version removed is listed
   as deleted. Diffs are a line LCS (Go `diff.go` for the API and the export, the UI's
   `components/diff.ts` for its views and unsaved edits).
 - **Snapshot.** `Submit` stores the overrides in effect (each item's latest version, unless it is the

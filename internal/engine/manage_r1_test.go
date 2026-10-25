@@ -159,3 +159,96 @@ func TestManageSurvivesABrokenVersion(t *testing.T) {
 		t.Fatalf("after the revert: %+v %v", d.Item, err)
 	}
 }
+
+// seedVersions stores rows as an earlier build (or a database edit) left them.
+func seedVersions(t *testing.T, e *Engine, rows ...string) {
+	t.Helper()
+	for _, r := range rows {
+		if _, err := e.db.ExecContext(context.Background(), `INSERT INTO spec_versions (item, version, action, files, from_version, author) VALUES `+r); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestManageRevertNeverDeletes: a revert to a tombstone (a version the old Save bug wrote) of what
+// may never be deleted is refused with Delete's reason, nothing stored, and History marks that
+// version unrevertable; a built-in skill's tombstone still reverts (skills are deletable). PR #59 r2-1.
+func TestManageRevertNeverDeletes(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	e, _ := f.engine(nil, Config{})
+	ctx := context.Background()
+	seedVersions(t, e, `('prompt.lead', 1, 'save', '{}'::jsonb, 0, 't')`, `('prompt.lead', 2, 'revert', NULL, 1, 't')`,
+		`('tool.retrieve', 1, 'save', '{}'::jsonb, 0, 't')`, `('tool.retrieve', 2, 'revert', NULL, 1, 't')`)
+	for id, want := range map[string]string{"prompt.lead": "prompt.lead is part of the engine's workflow", "tool.retrieve": "tool.retrieve cannot be deleted or disabled"} {
+		if _, err := e.Revert(ctx, id, 1, 2, "", "Ada"); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), want) {
+			t.Errorf("revert of %s to its tombstone: %v", id, err)
+		}
+		vs, err := e.History(ctx, id)
+		if err != nil || len(vs) != 2 || vs[0].Unrevertable != "" || !strings.Contains(vs[1].Unrevertable, want) {
+			t.Fatalf("%s's history: %+v %v", id, vs, err)
+		}
+	}
+	if d, err := e.ItemDetail(ctx, "prompt.lead"); err != nil || d.Deleted || d.Latest != 2 {
+		t.Fatalf("a refused revert changed the lead: %+v %v", d.Item, err)
+	}
+	k := "skill." + aSkill(t)
+	if _, err := e.Delete(ctx, k, 0, "", "Ada"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Revert(ctx, k, 0, 1, "", "Ada"); err != nil {
+		t.Fatal(err)
+	}
+	if vs, _ := e.History(ctx, k); vs[1].Unrevertable != "" {
+		t.Fatalf("a skill's tombstone is revertable: %+v", vs[1])
+	}
+	if _, err := e.Revert(ctx, k, 1, 2, "", "Ada"); err != nil {
+		t.Fatalf("revert of a built-in skill to its deletion: %v", err)
+	}
+}
+
+// TestManageBrokenVersionNamed: while a stored version does not load, every other write is a 422
+// naming it and saying to revert it (it was a 500 "internal error"), the catalogue says so, a task
+// fails naming it, and its revert still works. PR #59 r2-2.
+func TestManageBrokenVersionNamed(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, "The notice period is thirty days.")
+	e, _ := f.engine(nil, Config{})
+	ctx := context.Background()
+	lead := fileMap(builtin, "prompt.lead")
+	lead[leadFile] += "\nBe brief.\n"
+	if _, _, err := e.Save(ctx, "prompt.lead", SaveIn{Files: lead}, "Ada"); err != nil {
+		t.Fatal(err)
+	}
+	seedVersions(t, e, `('agent.reproduce', 1, 'save', '{"`+agentsDir+`reproduce.json": "{", "`+agentsDir+`reproduce.md": "x"}'::jsonb, 0, 't')`)
+	const want = "the latest version of agent.reproduce does not load"
+	lead[leadFile] += "More.\n"
+	for what, err := range map[string]error{
+		"save":   func() error { _, _, err := e.Save(ctx, "prompt.lead", SaveIn{Base: 1, Files: lead}, "Ada"); return err }(),
+		"revert": func() error { _, err := e.Revert(ctx, "prompt.lead", 0, 1, "", "Ada"); return err }(),
+		"delete": func() error { _, err := e.Delete(ctx, "skill."+aSkill(t), 0, "", "Ada"); return err }(),
+	} {
+		code, _, msg := ErrorType(err)
+		if code != 422 || !strings.Contains(msg, want) || !strings.Contains(msg, "revert it in Manage") {
+			t.Errorf("%s while agent.reproduce is broken: %d %s", what, code, msg)
+		}
+	}
+	items, err := e.Items(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if i := slices.IndexFunc(items, func(x Item) bool { return x.ID == "agent.reproduce" }); !strings.Contains(items[i].Summary, "every new task fails") {
+		t.Fatalf("the catalogue's line: %s", items[i].Summary)
+	}
+	task := f.submit(5)
+	f.step(ctx)
+	if v := f.get(task.ID); v.Status != "failed" || v.Error == nil || !strings.Contains(*v.Error, "invalid: the task's spec snapshot does not load: "+want) {
+		t.Fatalf("the task on the broken set: %s %v", v.Status, *v.Error)
+	}
+	if _, err := e.Revert(ctx, "agent.reproduce", 0, 1, "", "Ada"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := e.Save(ctx, "prompt.lead", SaveIn{Base: 1, Files: lead}, "Ada"); err != nil {
+		t.Fatalf("a save after the revert: %v", err)
+	}
+}

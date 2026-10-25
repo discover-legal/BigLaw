@@ -109,7 +109,7 @@ func (e *Engine) validate(snap Snapshot, id string) error {
 	}
 	sp, err := newSpecs(snap)
 	if err != nil {
-		return invalid("", "%v", err)
+		return brokenSet(snap, id, err)
 	}
 	if len(sp.skills) > maxSkills {
 		bad("", "at most %d skills: the brief lists every one", maxSkills)

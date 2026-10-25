@@ -105,6 +105,8 @@ type Version struct {
 	Note      string            `json:"note"`
 	CreatedAt time.Time         `json:"createdAt"`
 	Event     bool              `json:"event,omitempty"` // a change log entry that is not a version (a secret set or deleted, a Test call)
+	// Unrevertable is why History will not revert to this version (a deletion of what may not be deleted).
+	Unrevertable string `json:"unrevertable,omitempty"`
 }
 
 // SaveIn is a new version an admin saves: the item's files (all of them), the version it was
@@ -165,7 +167,23 @@ func (e *Engine) currentSpecs(ctx context.Context, db querier) (*Specs, Snapshot
 		return nil, nil, nil, err
 	}
 	sp, err := newSpecs(snap)
-	return sp, snap, rows, err
+	if err != nil {
+		return nil, nil, nil, brokenSet(snap, "", err)
+	}
+	return sp, snap, rows, nil
+}
+
+// brokenSet is why snap's set does not load, as an admin reads it (422): the items other than id
+// whose latest versions do not load, to revert first ("" for all); err's text when none is.
+func brokenSet(snap Snapshot, id string, err error) error {
+	_, broken := loadable(snap)
+	delete(broken, id)
+	if len(broken) == 0 {
+		return invalid("", "%v", err)
+	}
+	ids := slices.Sorted(maps.Keys(broken))
+	return invalid("", "the latest version of %s does not load (%s): revert %s in Manage (History) first; until then no task can run and no other change is saved",
+		strings.Join(ids, ", "), truncate(broken[ids[0]], 300), plural(len(ids), "it", "them"))
 }
 
 // Items is the catalogue: every built-in item, every item an admin created, and deleted skills.
@@ -187,7 +205,7 @@ func (e *Engine) items(ctx context.Context) ([]Item, *Specs, Snapshot, error) {
 	items := catalog(sp, rows, use)
 	for i, it := range items {
 		if why, ok := broken[it.ID]; ok {
-			items[i].Status, items[i].Summary = "broken", "Its latest version does not load ("+truncate(why, 300)+"): new tasks cannot start until it is reverted."
+			items[i].Status, items[i].Summary = "broken", "Its latest version does not load ("+truncate(why, 300)+"): until it is reverted, every new task fails and no other change is saved."
 		}
 	}
 	return items, sp, snap, nil
@@ -446,7 +464,13 @@ func skillCallable(sp *Specs) []string {
 
 // History is an item's versions, newest first (at most 100), each with its files.
 func (e *Engine) History(ctx context.Context, id string) ([]Version, error) {
-	return e.versions(ctx, `WHERE item = $1 ORDER BY version DESC LIMIT 100`, true, id)
+	vs, err := e.versions(ctx, `WHERE item = $1 ORDER BY version DESC LIMIT 100`, true, id)
+	for i, v := range vs {
+		if err := revertRefused(id, v.Files); err != nil {
+			vs[i].Unrevertable = strings.TrimPrefix(err.Error(), "engine: ")
+		}
+	}
+	return vs, err
 }
 
 // Changes is the change log, newest first (at most limit): every version of every item, without
@@ -757,6 +781,9 @@ func (e *Engine) revert(ctx context.Context, tx *sql.Tx, id string, to, base int
 	if files == nil && len(itemFiles(builtin, id)) == 0 {
 		files = map[string]string{} // a created skill has no built-in: back to none
 	}
+	if err := revertRefused(id, files); err != nil { // a tombstone (an old save's deletion) deletes again
+		return Version{}, err
+	}
 	next := maps.Clone(snap)
 	delete(next, id)
 	if files != nil {
@@ -797,6 +824,22 @@ func (e *Engine) delete(ctx context.Context, tx *sql.Tx, id string, base int, no
 		return Version{}, err
 	}
 	return e.insertVersion(ctx, tx, id, base+1, "delete", map[string]string{}, base, nil, author, note)
+}
+
+// revertRefused is why a revert to files may not be made (nil when it may): files none (a version
+// that deleted the item) of an item that may never be deleted, by Delete's rule, or of a built-in
+// other than a skill (built-in skills are deletable).
+func revertRefused(id string, files map[string]string) error {
+	if files == nil || len(files) > 0 {
+		return nil
+	}
+	if err := undeletable(id); err != nil {
+		return err
+	}
+	if !strings.HasPrefix(id, "skill.") && len(itemFiles(builtin, id)) > 0 {
+		return invalid("", "%s is built in: it cannot be deleted; revert it to a version that has its files", id)
+	}
+	return nil
 }
 
 // undeletable is why id may never be deleted (nil when it may): the engine's workflow, or what Go needs.

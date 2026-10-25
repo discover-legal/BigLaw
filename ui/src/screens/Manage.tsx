@@ -561,7 +561,8 @@ function History(props: { item: ManageDetail; admin: boolean; reverted: () => vo
               <td>{v?.author ?? ''}</td><td className="nowrap">{v ? new Date(v.createdAt).toLocaleString() : ''}</td>
               <td><input type="radio" name="from" checked={a === n} onChange={() => setA(n)} aria-label={`diff from ${n || 'built-in'}`} /></td>
               <td><input type="radio" name="to" checked={to === n} onChange={() => setB(n)} aria-label={`diff to ${n || 'built-in'}`} /></td>
-              {props.admin && <td>{(v ? n !== it.latest : vs.length > 0 && it.version !== 0) && <button className="small" onClick={() => revert(n)}>Revert to this</button>}</td>}
+              {props.admin && <td>{(v ? n !== it.latest : vs.length > 0 && it.version !== 0) && (v?.unrevertable ? <span className="muted small">{v.unrevertable}</span>
+                : <button className="small" onClick={() => revert(n)}>Revert to this</button>)}</td>}
             </tr>
           );
         })}</tbody>
