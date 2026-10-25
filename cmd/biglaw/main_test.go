@@ -120,7 +120,7 @@ func loopPDF() []byte {
 // cancels it after the grace period: serve returns nil, the client gets 503 "stopping" (not an
 // empty reply), and the stored upload is removed, not left for the orphan sweep.
 func TestServeStopCancelsIngest(t *testing.T) {
-	st, err := store.Open(t.Context(), storetest.DSN(t), nil)
+	st, err := store.OpenPool(t.Context(), storetest.DSN(t), nil, storetest.Pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +177,7 @@ func TestServeStopCancelsIngest(t *testing.T) {
 }
 
 func TestServeEndToEnd(t *testing.T) {
-	st, err := store.Open(t.Context(), storetest.DSN(t), nil)
+	st, err := store.OpenPool(t.Context(), storetest.DSN(t), nil, storetest.Pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +223,7 @@ func TestServeEndToEnd(t *testing.T) {
 // calls, says "hybrid" on /health, and stops cleanly with its backfill.
 func TestServeHybridEndToEnd(t *testing.T) {
 	dsn := storetest.DSN(t)
-	st, err := store.Open(t.Context(), dsn, nil)
+	st, err := store.OpenPool(t.Context(), dsn, nil, storetest.Pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +306,7 @@ func TestServeHybridEndToEnd(t *testing.T) {
 // and the port is not open until migrations are done.
 func TestServeStopsCleanlyWhileWaitingForLock(t *testing.T) {
 	db := storetest.DSN(t)
-	holder, err := store.Open(t.Context(), db, nil) // migrated; now hold the lock
+	holder, err := store.OpenPool(t.Context(), db, nil, storetest.Pool) // migrated; now hold the lock
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -493,7 +493,7 @@ func TestServeNeverSendsImagesToTheLead(t *testing.T) {
 		t.Fatalf("an image was sent to the model endpoint with no vision role: %v", models)
 	}
 	mu.Unlock()
-	st, err := store.Open(t.Context(), dsn, nil)
+	st, err := store.OpenPool(t.Context(), dsn, nil, storetest.Pool)
 	if err != nil {
 		t.Fatal(err)
 	}

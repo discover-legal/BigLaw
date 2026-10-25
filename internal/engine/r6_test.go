@@ -8,6 +8,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
@@ -150,9 +151,10 @@ func TestR6LiteralWorksheetLaundersAFigure(t *testing.T) {
 	}
 }
 
-// R6 M2: the admission's reader call fails, the section's succeeds: the memo's clear "$2,000,000 paid"
-// traces only as written to a quote's unread "2,000,000 shares": disclosed in Limitations, and the
-// finding it cites is gated for a lawyer (G-F1), though it has no typed value.
+// R6 M2: the cited finding's quote is never read (it states no typed value, so it is read with the
+// section that cites it, and the reader's answer labels the memo's span but not the quote's), the
+// section's own figure is: the memo's clear "$2,000,000 paid" traces only as written to the quote's
+// unread "2,000,000 shares": disclosed in Limitations, and the finding is gated for a lawyer (G-F1).
 func TestR6UnreadQuoteTracesAsWritten(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, "1. Issuance\nThe Company shall issue Two Million (2,000,000) shares of Common Stock to the Investor.\n")
@@ -165,12 +167,25 @@ func TestR6UnreadQuoteTracesAsWritten(t *testing.T) {
 		if req.Agent != "read_figures" {
 			return model.Reply{}, false
 		}
+		r, ok := readerOracle(req)
 		var in readRequest
 		requestOf(req, &in)
-		if len(in.Findings) > 0 && in.Findings[0].Passages[0].Kind != "memo" {
-			return model.Reply{Text: "not json"}, true // the admission's reading fails
+		memo := map[string]bool{}
+		for _, f := range in.Findings {
+			for _, p := range f.Passages {
+				for _, s := range p.Spans {
+					memo[s.ID] = p.Kind == "memo"
+				}
+			}
 		}
-		return readerOracle(req)
+		var out struct {
+			Labels []analysis.Label `json:"labels"`
+		}
+		_ = json.Unmarshal([]byte(r.Text), &out)
+		out.Labels = slices.DeleteFunc(out.Labels, func(l analysis.Label) bool { return !memo[l.Span] }) // the quote's spans left unlabelled
+		data, _ := json.Marshal(out)
+		r.Text = string(data)
+		return r, ok
 	}
 	_ = e
 	task := f.submit(0)

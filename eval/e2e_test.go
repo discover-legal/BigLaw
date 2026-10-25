@@ -42,10 +42,11 @@ func TestE2EServe(t *testing.T) {
 	if addr == "" {
 		t.Skip("E2E_ADDR is not set")
 	}
-	st, err := store.Open(context.Background(), storetest.DSN(t), nil)
+	st, err := store.OpenPool(context.Background(), storetest.DSN(t), nil, storetest.Pool)
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { st.Close() })
 	d := docs.New(st)
 	for name, text := range map[string]string{
 		"complaint.md": "1. Parties\nGreystone Packaging Co. sued Talbot Fresh Foods, Inc. on October 9, 2026.\n\n2. Damages\nGreystone claims damages of $644,910 for unpaid invoices.\n",

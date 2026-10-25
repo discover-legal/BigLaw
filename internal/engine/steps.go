@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"maps"
 	"sync"
+	"sync/atomic"
 
 	"github.com/discover-legal/BigLaw/internal/agent"
 )
@@ -46,8 +47,17 @@ type run struct {
 	b        *agent.Budget // the task's budget (root)
 	cycleUSD float64       // what the root keeps for one committee cycle (keep: Allocation.cycleKeep)
 	cancel   context.CancelFunc
-	forced   string // finish from the reserve: budget_exhausted or max_steps
-	collapse string // the G4 alert that failed the run (strict)
+	forced   string       // finish from the reserve: budget_exhausted or max_steps
+	collapse string       // the G4 alert that failed the run (strict)
+	step     atomic.Int64 // the lead step that is running (the logs' step of a call inside it)
+}
+
+// stepOf is the lead step running in a task's run (0: none here), for a log line.
+func (e *Engine) stepOf(taskID string) int64 {
+	if r := e.active(taskID); r != nil {
+		return r.step.Load()
+	}
+	return 0
 }
 
 func (e *Engine) active(taskID string) *run {
@@ -62,6 +72,9 @@ func (e *Engine) active(taskID string) *run {
 func (r *run) Record(ctx context.Context, s agent.Step) error {
 	if s.Status == "started" && s.N > r.t.MaxSteps && r.forced == "" {
 		return errMaxSteps
+	}
+	if s.Status == "started" {
+		r.step.Store(int64(s.N))
 	}
 	grant, _ := json.Marshal(s.Grant)
 	usage, _ := json.Marshal(s.Usage)

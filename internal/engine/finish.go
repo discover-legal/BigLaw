@@ -73,13 +73,34 @@ type limitation struct {
 }
 
 func (f finish) Call(ctx context.Context, c agent.Call) (res agent.Result, err error) {
-	// the join's pairs not yet judged are judged first, so check and submit report every conflict
-	// the judge finds; what it spends comes out of the grant before anything else
-	jb := agent.NewBudget(judgeCalls(c.Budget.Calls), judgeShare*c.Budget.USD, 0) // a quarter of its calls and USD (judge.go, lab-r4 r8 L3)
-	if err := f.e.judgeJoin(ctx, f.rt, c, jb, "finish"); err != nil {
-		return agent.Result{Usage: jb.Spent()}, err
+	// the memo's own figures are read first, from the grant before anything else (bench7: the judge
+	// spent the whole grant, every memo figure was then unread and the lead stripped them in redraft
+	// after redraft); then the join's pairs not yet judged, so check and submit report every
+	// conflict the judge finds, from what is left beside the drafting share the lead may still use
+	rb := agent.NewBudget(c.Budget.Calls, c.Budget.USD, 0)
+	if err := f.e.readSections(ctx, f.rt, c, rb); err != nil {
+		return agent.Result{Usage: rb.Spent()}, err
 	}
-	pre := jb.Spent()
+	pre := rb.Spent()
+	keep, err := f.e.draftLeft(ctx, c.TaskID)
+	if err != nil {
+		return agent.Result{Usage: pre}, err
+	}
+	jg := judgeGrant(agent.Grant{Calls: c.Budget.Calls - pre.Calls, USD: c.Budget.USD - pre.USD}, keep)
+	jb := agent.NewBudget(jg.Calls, jg.USD, 0)                    // a quarter of its calls and USD (judge.go, lab-r4 r8 L3)
+	if fids, err := f.e.claimsUnread(ctx, c.TaskID); err != nil { // the join's sums come from claims too: a valueless finding's claim is read first, from the judge's share (r1 MEDIUM-3)
+		return agent.Result{Usage: pre}, err
+	} else if _, err := f.e.readFindings(ctx, f.rt, c, jb, "finish", fids); err != nil {
+		u := jb.Spent()
+		u.Add(pre)
+		return agent.Result{Usage: u}, err
+	}
+	if err := f.e.judgeJoin(ctx, f.rt, c, jb, "finish"); err != nil {
+		u := jb.Spent()
+		u.Add(pre)
+		return agent.Result{Usage: u}, err
+	}
+	pre.Add(jb.Spent())
 	c.Budget.Calls, c.Budget.USD = c.Budget.Calls-pre.Calls, max(0, c.Budget.USD-pre.USD)
 	defer func() { res.Usage.Add(pre) }()
 	f.held = max(0, c.Budget.Calls-1) // its grant holds the coverage pass's and the review's calls too
@@ -157,6 +178,47 @@ func (f finish) Call(ctx context.Context, c agent.Call) (res agent.Result, err e
 	}
 	spent.Add(b.Spent())
 	return out(rep, spent, true)
+}
+
+// judgeGrant is finish's judge's grant out of what is left after its reads: a quarter of its calls
+// and USD beside the drafting share the lead may still use (keep), and when the root is below that
+// keep, a quarter of its floor, judgeFloor calls, of what is left (r1 LOW-5: it was 0, every pair
+// unjudged); what it leaves unjudged is disclosed (joined.lines).
+func judgeGrant(left agent.Grant, keep agent.Usage) agent.Grant {
+	calls, usd := max(0, left.Calls-keep.Calls), max(0, left.USD-keep.USD)
+	if calls < judgeFloor {
+		calls, usd = min(judgeFloor, max(0, left.Calls)), max(0, left.USD)
+	}
+	return agent.Grant{Calls: judgeCalls(calls), USD: judgeShare * usd}
+}
+
+// judgeFloor is the calls finish's judge is given at least, when the root is below the drafting
+// share's keep (judgeCalls of it: one call).
+const judgeFloor = 4
+
+// claimsUnread are the usable findings never read whose claims state a number: the join reads their
+// claims' sums (claimSums), so finish reads them before it judges.
+func (e *Engine) claimsUnread(ctx context.Context, taskID string) ([]string, error) {
+	use, err := e.usable(ctx, taskID)
+	var out []string
+	for _, f := range use {
+		if f.Unread && len(analysis.PassageOf("c", f.Claim).Spans) > 0 {
+			out = append(out, f.FID)
+		}
+	}
+	return out, err
+}
+
+// draftLeft is what the drafting share has left (Allocate's Draft less what the drafters spent):
+// the judge leaves it to the lead's redrafts.
+func (e *Engine) draftLeft(ctx context.Context, taskID string) (agent.Usage, error) {
+	a := Allocate(e.cfg.BudgetCalls, e.cfg.BudgetUSD)
+	spent, err := e.classSpend(ctx, taskID)
+	if err != nil {
+		return agent.Usage{}, err
+	}
+	d := spent["draft"]
+	return agent.Usage{Calls: max(0, a.Draft-d.Calls), USD: max(0, a.dollars(a.Draft)-d.USD)}, nil
 }
 
 // cover runs the coverage pass inside a submit, from the share kept for it, and, when it redrafted
@@ -249,8 +311,9 @@ func (f finish) check(ctx context.Context, limits []limitation) (report, error) 
 				if x := byFID[fid]; !x.Low {
 					x.Low = true
 					x.ValueNotes = append(x.ValueNotes, map[string]string{limitedUnread: "gated for a lawyer: a memo figure traces only as written to this finding's quotes, which the figure reader never read",
-						limitedUnit:  "gated for a lawyer: a memo period is this finding's only by the figure reader's unit label: the memo's unit words differ from the words it read here",
-						limitedScale: "gated for a lawyer: a memo figure states this finding's figure at another scale (one side written out, the other read at a scale from its words), the same figure only by the figure reader's reading of those words"}[gate[fid]])
+						limitedUnit:       "gated for a lawyer: a memo period is this finding's only by the figure reader's unit label: the memo's unit words differ from the words it read here",
+						limitedMemoUnread: "gated for a lawyer: a memo figure the figure reader never read (its call unfunded or failed) traces to this finding only as written",
+						limitedScale:      "gated for a lawyer: a memo figure states this finding's figure at another scale (one side written out, the other read at a scale from its words), the same figure only by the figure reader's reading of those words"}[gate[fid]])
 					byFID[fid] = x
 					if err := e.write(ctx, id, kFinding, fid, x, true); err != nil {
 						return report{}, err
@@ -266,13 +329,19 @@ func (f finish) check(ctx context.Context, limits []limitation) (report, error) 
 					is.ID, strings.Join(l, ", "), plural(len(l), "is", "are"), plural(len(l), "it", "them"), plural(len(l), "it is", "they are"), plural(len(l), "it", "them")))
 			}
 			if r := secs[k].Read; r != nil && r.Unread != "" { // lab-r4 r5 L4: a section G8 could not trace by its readings
-				rep.limits = append(rep.limits, fmt.Sprintf("Figures: in the section on %s, %s: G8 traces only figures the figure reader read clearly, so each of them that the drafter wrote out (not as a handle) was flagged as not traced rather than checked.", is.ID, r.Unread))
+				rep.limits = append(rep.limits, fmt.Sprintf("Figures: in the section on %s, %s: G8 traces only figures the figure reader read clearly, so each of them that the drafter wrote out (not as a handle) and the reader's call never read traces only as written to the cited findings whose own quotes or values state it (listed under Computed figures, those findings gated for a lawyer), and any other was flagged as not traced.", is.ID, r.Unread))
 			}
 			met = slices.ContainsFunc(fidRe.FindAllStringSubmatch(secs[k].Markdown, -1), func(m []string) bool { _, ok := byFID[m[1]]; return ok })
 		}
 		if !met && !disclosed[is.ID] {
 			bad("criterion_unmet", is.ID+" has no drafted section citing a verified finding: draft it from verified findings, or disclose it in limitations with its issueId")
 		}
+	}
+	if fids, err := e.claimsUnread(ctx, id); err != nil {
+		return report{}, err
+	} else if len(fids) > 0 { // r1 MEDIUM-3: what the budget left unread is counted, never silent
+		rep.limits = append(rep.limits, fmt.Sprintf("Figures: %d %s whose %s a figure %s never read (the figure reader was unfunded or its call failed), so the cross-document comparison could not see %s sums: %s.",
+			len(fids), plural(len(fids), "finding", "findings"), plural(len(fids), "claim states", "claims state"), plural(len(fids), "was", "were"), plural(len(fids), "its claim's", "their claims'"), strings.Join(fids[:min(len(fids), 20)], ", ")))
 	}
 	if j, err := e.joined(ctx, id); err != nil { // every figure conflict is stated in the memo (bench r3)
 		return report{}, err

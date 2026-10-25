@@ -280,7 +280,7 @@ func TestSweepFallsBackToSerialWhenAShareCannotFundACall(t *testing.T) {
 		"lead":          {calls(plan(issue("I1", "Deliveries?", "Requirement"))), calls(tc("sweep", m{"over": "sections", "documentIds": nil}))},
 		"extract_facts": ex,
 	})
-	f.e = New(f.st, f.d, newFake(scripts), testRoles, prices, Config{BudgetCalls: 150, BudgetUSD: 1, CollapseThreshold: 0.5, CollapseAction: "strict"}, nil)
+	f.e = New(f.st, f.d, newFake(scripts), testRoles, prices, Config{BudgetCalls: 150, BudgetUSD: 1.5, CollapseThreshold: 0.5, CollapseAction: "strict"}, nil) // the sweep's $0.30 (its reader's share beside it)
 	task := f.submit(0)
 	f.step(context.Background())
 	sw := strings.Join(f.outputs(task.ID, "sweep"), "")

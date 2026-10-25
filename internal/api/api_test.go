@@ -44,7 +44,7 @@ type server struct {
 // newServer is the API over a fresh schema, an engine on scripts, and its runner.
 func newServer(t *testing.T, scripts func(docIDs []string) map[string][]model.Reply, roles model.Roles, texts ...string) (*server, []string) {
 	t.Helper()
-	st, err := store.Open(context.Background(), storetest.DSN(t), nil)
+	st, err := store.OpenPool(context.Background(), storetest.DSN(t), nil, storetest.Pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,8 @@ func (s *server) waitFor(id string, ok func(engine.TaskView) bool) engine.TaskVi
 
 // TestRunProgressAPI: POST /tasks, then GET /tasks/{id} carries run {status, step, stopReason,
 // budget, openFindings}, gates and findings; /steps?after=N pages the log; gates decide; cost. The
-// run's 13 calls include the figure reader's two (its finding's, its section's: figtest.Reader).
+// run's 12 calls include the figure reader's one (its section's, with the finding it cites: a finding
+// stating no typed value is read when a section first cites it, bench7; figtest.Reader).
 func TestRunProgressAPI(t *testing.T) {
 	t.Parallel()
 	s, ids := newServer(t, memo, roles, doc1)
@@ -151,7 +152,7 @@ func TestRunProgressAPI(t *testing.T) {
 		t.Fatalf("%d %s", code, body)
 	}
 	v = s.waitFor(v.ID, func(v engine.TaskView) bool { return v.Status == "awaiting_gate" })
-	if v.Run.StopReason == nil || *v.Run.StopReason != "finished" || v.Run.Step != 10 || v.Run.Budget.Calls != 13 || v.Run.Budget.USD != nil || len(v.Findings) != 1 || v.Output == nil {
+	if v.Run.StopReason == nil || *v.Run.StopReason != "finished" || v.Run.Step != 10 || v.Run.Budget.Calls != 12 || v.Run.Budget.USD != nil || len(v.Findings) != 1 || v.Output == nil {
 		t.Fatalf("%+v", v)
 	}
 	_, body = s.do("GET", "/tasks/"+v.ID+"/steps?after=8", nil)
@@ -179,7 +180,7 @@ func TestRunProgressAPI(t *testing.T) {
 	}
 	_, body = s.do("GET", "/tasks/"+v.ID+"/cost", nil)
 	var c engine.Cost
-	if json.Unmarshal([]byte(body), &c); c.Summary.Calls != 15 || c.Summary.UnpricedCalls != 13 || c.Summary.USD != nil || len(c.Entries) == 0 {
+	if json.Unmarshal([]byte(body), &c); c.Summary.Calls != 14 || c.Summary.UnpricedCalls != 13 || c.Summary.USD != nil || len(c.Entries) == 0 || c.Reader == nil || c.Reader.Calls != 1 || c.Reader.FailureRate != 0 { // the figure reader's line (bench7: its failures were invisible)
 		t.Fatalf("cost %s", body)
 	}
 	if code, body := s.do("GET", "/tasks/"+v.ID+"/deliverable.md", nil); code != 200 || !strings.Contains(body, "$644,910 [F1]") {

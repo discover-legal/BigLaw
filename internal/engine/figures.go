@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode"
 	"unicode/utf8"
 
@@ -70,11 +71,15 @@ func specHash(fsys fs.FS, files []string) string {
 // spans split between parts); a span over maxSpanText characters or a passage over maxReadBytes is
 // not sent at all (it stays unread, unclear), so one oversized item never sinks the others (r5 L1).
 const (
-	maxReadSpans    = 80
+	maxReadSpans    = 60
 	maxReadBytes    = 32_000
 	maxReadItems    = 40
 	maxReadPassages = 60
 	maxSpanText     = 64
+	// maxCallSpans is the most spans one call labels: its answer (a label of 16 fields, about 90
+	// tokens, per span) must fit the subagent's answer cap, agent's 8,192 tokens (bench7: calls of 106
+	// and 123 spans were cut off at the cap, failed and dropped every value they held).
+	maxCallSpans = 60
 )
 
 type spanIn struct {
@@ -134,6 +139,15 @@ func newReading(parties []string, ps []analysis.Passage, in []passageIn) *readin
 		}
 	}
 	return r
+}
+
+// size is how many spans an item sends.
+func (r *reading) size() int {
+	n := 0
+	for _, p := range r.in {
+		n += len(p.Spans)
+	}
+	return n
 }
 
 // part is one call's share of an item: some of its passages, each with some of its spans.
@@ -230,6 +244,16 @@ func (r *reading) readings() (map[string]analysis.Reading, []string) {
 	return rs, notes
 }
 
+// quotePassage is a quote's passage as the reader is sent it: its number spans, less those inside a
+// locator ("Section 14.2", "Rule 206(4)-7", "page 3"), which G8 masks in a memo too (lint.go), so no
+// reading of them is ever used (bench7: a section number was a span to label in nearly every quote).
+func quotePassage(id, quote string) analysis.Passage {
+	p := analysis.PassageOf(id, quote)
+	masked := analysis.MaskLocators(quote)
+	p.Spans = slices.DeleteFunc(p.Spans, func(s analysis.Span) bool { return masked[s.Start:s.End] != quote[s.Start:s.End] })
+	return p
+}
+
 // findingReading is the reader's item for one finding: its verified quotes, its typed values (a
 // date's every number, so its party can be read) and its claim, with the parties it names.
 func findingReading(f Finding, quotes []analysis.Quote, vals []analysis.Value) *reading {
@@ -243,13 +267,14 @@ func findingReading(f Finding, quotes []analysis.Quote, vals []analysis.Value) *
 	}
 	for i, q := range quotes {
 		id := "q" + strconv.Itoa(i+1)
-		add(analysis.PassageOf(id, q.Quote), passageIn{ID: id, Kind: "quote", DocumentID: strp(q.DocumentID), Text: q.Quote})
+		add(quotePassage(id, q.Quote), passageIn{ID: id, Kind: "quote", DocumentID: strp(q.DocumentID), Text: q.Quote})
 	}
 	for j, v := range vals {
 		id := "v" + strconv.Itoa(j+1)
 		p := analysis.PassageOf(id, v.Value)
-		if analysis.ParseClass(v.Class) == "Date" { // its numbers are the date's: read for its party
+		if analysis.ParseClass(v.Class) == "Date" { // a date is read for its party only: one of its numbers says it (bench7: its year and day were two spans more)
 			p.Spans = slices.DeleteFunc(analysis.Spans(v.Value), func(s analysis.Span) bool { return len(s.Readings()) == 0 })
+			p.Spans = p.Spans[:min(1, len(p.Spans))]
 		}
 		add(p, passageIn{ID: id, Kind: "value", Text: v.Value, Class: strp(v.Class), Unit: strp(v.Unit), Entity: strp(v.Entity), Metric: strp(v.Metric)})
 		if e := norm(v.Entity); e != "" && !slices.Contains(parties, e) {
@@ -282,6 +307,8 @@ func (e *Engine) readFigures(ctx context.Context, rt *agent.Runtime, c agent.Cal
 		return err
 	}
 	var todo []*part
+	items = slices.Clone(items) // the smallest first: what a grant funds reads whole findings first (a long schedule's quote reads last)
+	slices.SortStableFunc(items, func(a, b *reading) int { return cmp.Compare(a.size(), b.size()) })
 	for _, it := range items {
 		it.read = true
 	parts:
@@ -301,9 +328,9 @@ func (e *Engine) readFigures(ctx context.Context, rt *agent.Runtime, c agent.Cal
 		}
 	}
 	for len(todo) > 0 {
-		k, bytes := 0, 0
-		for k < len(todo) && k < maxReadItems && (k == 0 || bytes+todo[k].bytes <= maxReadBytes) {
-			k, bytes = k+1, bytes+todo[k].bytes
+		k, bytes, spans := 0, 0, 0
+		for k < len(todo) && k < maxReadItems && (k == 0 || bytes+todo[k].bytes <= maxReadBytes && spans+len(todo[k].ids) <= maxCallSpans) {
+			k, bytes, spans = k+1, bytes+todo[k].bytes, spans+len(todo[k].ids)
 		}
 		chunk := todo[:k]
 		todo = todo[k:]
@@ -311,10 +338,23 @@ func (e *Engine) readFigures(ctx context.Context, rt *agent.Runtime, c agent.Cal
 		if err != nil {
 			return err
 		}
-		if why == "" {
-			continue
+		failed := []*part(nil)
+		if why != "" {
+			failed = chunk
 		}
-		for _, pt := range chunk {
+		if why != "" && why != whyUnfunded && why != whyNoModel && len(chunk) > 1 { // a batch that failed is read again in halves, once (r1 LOW-2: one failure dropped 40 findings)
+			failed = nil
+			for _, half := range [][]*part{chunk[:len(chunk)/2], chunk[len(chunk)/2:]} {
+				hw, err := e.readChunk(ctx, rt, c, b, caller, model, scope, half)
+				if err != nil {
+					return err
+				}
+				if hw != "" {
+					failed, why = append(failed, half...), hw
+				}
+			}
+		}
+		for _, pt := range failed {
 			pt.it.read, pt.it.why = false, why
 			for _, id := range pt.ids {
 				pt.it.unread[id] = why
@@ -366,7 +406,7 @@ func readKey(model, scope, task string, parties []string, in []passageIn) string
 // part's answer is used as given (an unlabelled span stays unclear) and cached only when complete.
 func (e *Engine) readChunk(ctx context.Context, rt *agent.Runtime, c agent.Call, b *agent.Budget, caller, model, scope string, chunk []*part) (string, error) {
 	if model == "" {
-		return "no model was available for it", nil
+		return whyNoModel, nil
 	}
 	var findings []map[string]any
 	for i, pt := range chunk {
@@ -383,20 +423,39 @@ func (e *Engine) readChunk(ctx context.Context, rt *agent.Runtime, c agent.Call,
 		findings = append(findings, map[string]any{"id": strconv.Itoa(i + 1), "parties": append([]string{}, pt.it.parties...), "passages": ps})
 	}
 	input, _ := json.Marshal(map[string]any{"findings": findings})
+	spans := 0
+	for _, pt := range chunk {
+		spans += len(pt.ids)
+	}
 	res, err := rt.Invoke(ctx, agent.Agent{Name: caller, Visible: []string{"read_figures"}}, agent.Call{TaskID: c.TaskID, DocumentIDs: c.DocumentIDs, Model: model}, "read_figures", input, b, false, 0)
+	failed := func(why string, unfunded bool) (string, error) { // logged with its step and counted (bench7: 28 of 110 calls failed, none logged)
+		e.log.Warn("figure reader failed", "task", c.TaskID, "step", e.stepOf(c.TaskID), "caller", caller, "spans", spans, "parts", len(chunk), "why", why, "err", err)
+		return why, e.countRead(ctx, c.TaskID, spans, spans, why, unfunded, agent.Usage{})
+	}
 	switch {
 	case ctx.Err() != nil:
 		return "", ctx.Err()
 	case errors.Is(err, agent.ErrJournal):
 		return "", err
 	case errors.Is(err, agent.ErrBudget):
-		return "the budget could not fund the figure reader", nil
+		return failed(whyUnfunded, true)
+	case errors.Is(err, agent.ErrToolOutput):
+		return failed(whyCutOff, false)
+	case errors.Is(err, agent.ErrTurnCap):
+		return failed(whyTurns, false)
 	case err != nil:
-		return "the figure reader's call failed", nil
+		return failed(whyFailed, false)
 	}
 	var out struct{ Labels []analysis.Label }
 	if json.Unmarshal(res.Output, &out) != nil {
-		return "the figure reader's answer was malformed", nil
+		return failed(whyMalformed, false)
+	}
+	labelled := map[string]bool{}
+	for _, l := range out.Labels {
+		labelled[l.Span] = true
+	}
+	if err := e.countRead(ctx, c.TaskID, spans, max(0, spans-len(labelled)), "", false, agent.Usage{}); err != nil {
+		return "", err
 	}
 	by := make([][]analysis.Label, len(chunk))
 	for _, l := range out.Labels {
@@ -547,15 +606,18 @@ func valueStated(v analysis.Value, j int, rs map[string]analysis.Reading, quotes
 	}
 	vr := own[0]
 	if len(own) > 1 {
-		k := slices.IndexFunc(own, func(r analysis.Reading) bool { return r.Kind == want })
-		if k < 0 || slices.ContainsFunc(own[k+1:], func(r analysis.Reading) bool { return r.Kind == want }) {
+		kind := func(r analysis.Reading) bool {
+			return r.Kind == want || want == analysis.KindCount && r.Kind == analysis.KindDuration
+		}
+		k := slices.IndexFunc(own, kind)
+		if k < 0 || slices.ContainsFunc(own[k+1:], kind) {
 			return nil, false, false, "it is not one figure"
 		}
 		vr = own[k]
 	}
-	if vr.Kind != want && vr.Kind != analysis.KindUnclear {
+	if vr.Kind != want && vr.Kind != analysis.KindUnclear && !(want == analysis.KindCount && vr.Kind == analysis.KindDuration) {
 		return nil, false, false, "the figure reader read it as " + article(vr.Kind)
-	}
+	} // a count the reader read as a period ("18 months", "30" calendar days) is that period: its quotes must state it in its unit (bench7: 15 such values dropped)
 	if vr.Amount == "" {
 		return nil, false, false, "the figure reader could not read it (" + vr.Why + ")"
 	}
@@ -563,6 +625,10 @@ func valueStated(v analysis.Value, j int, rs map[string]analysis.Reading, quotes
 	var soft *analysis.Reading
 	for _, q := range quoteReadings(rs) {
 		same, unclear := analysis.SameFigure(vr, q)
+		if vr.Kind == analysis.KindDuration { // a period (SameFigure compares quantities): one cited in its unit, both read with no doubt
+			x, y := vr.Rat(), q.Rat()
+			same, unclear = !vr.Unclear && !q.Unclear && q.Kind == analysis.KindDuration && q.Unit == vr.Unit && x != nil && y != nil && x.Cmp(y) == 0, false
+		}
 		switch {
 		case same:
 			vr.Stated = q.Span
@@ -659,4 +725,138 @@ func lowNote(v analysis.Value, fig *analysis.Reading) string {
 		why = fig.Why
 	}
 	return fmt.Sprintf("value %q (%s) admitted at low confidence, gated for a lawyer: the figure reader's reading is unclear (%s)", v.Value, cmpStr(v.Metric != "", v.Metric, "no metric"), why)
+}
+
+// ReaderStats is the figure reader's record for a task (kReadStat): its calls (invocations), those
+// that failed and why (an answer cut off or off its schema, a turn cap, an unfunded grant), the spans
+// it was sent and those left unread, and what the sweep's reader spent (its own share, policy.go).
+type ReaderStats struct {
+	Calls    int            `json:"calls"`
+	Failed   int            `json:"failed"`
+	Unfunded int            `json:"unfunded"`
+	Reasons  map[string]int `json:"reasons,omitempty"`
+	Spans    int            `json:"spans"`
+	Unread   int            `json:"unread"`
+	Sweep    agent.Usage    `json:"sweep"`
+}
+
+// readerStats is the task's ReaderStats.
+func (e *Engine) readerStats(ctx context.Context, taskID string) (ReaderStats, error) {
+	rs, err := load[ReaderStats](ctx, e, taskID, kReadStat)
+	if err != nil || len(rs) == 0 {
+		return ReaderStats{}, err
+	}
+	return rs[0], nil
+}
+
+// countRead adds a reader call's outcome to the task's ReaderStats (why "": it answered).
+func (e *Engine) countRead(ctx context.Context, taskID string, spans, unread int, why string, unfunded bool, sweep agent.Usage) error {
+	if taskID == "" || e.db == nil {
+		return nil
+	}
+	e.statMu.Lock()
+	defer e.statMu.Unlock()
+	st, err := e.readerStats(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	if spans > 0 || why != "" {
+		st.Calls++
+	}
+	st.Spans, st.Unread = st.Spans+spans, st.Unread+unread
+	switch {
+	case unfunded:
+		st.Unfunded++
+	case why != "":
+		st.Failed++
+	}
+	if why != "" {
+		if st.Reasons == nil {
+			st.Reasons = map[string]int{}
+		}
+		st.Reasons[why]++
+	}
+	st.Sweep.Add(sweep)
+	return e.write(ctx, taskID, kReadStat, "reader", st, true)
+}
+
+// Why a reader call read nothing: it never ran (no model, no budget) or failed. A span its answer left
+// unlabelled, or one not sent, is not among them (MEDIUM-1: unclear, blocking, never a call failure).
+const (
+	whyUnfunded  = "the budget could not fund the figure reader"
+	whyCutOff    = "the figure reader's answer was cut off or off its schema"
+	whyTurns     = "the figure reader used its turns without answering"
+	whyFailed    = "the figure reader's call failed"
+	whyMalformed = "the figure reader's answer was malformed"
+	whyNoModel   = "no model was available for it"
+)
+
+// neverRead reports whether a reading's why is a reader call that never ran or failed.
+func neverRead(why string) bool {
+	r, ok := strings.CutPrefix(why, "not read: ")
+	return ok && slices.Contains([]string{whyUnfunded, whyCutOff, whyTurns, whyFailed, whyMalformed, whyNoModel}, r)
+}
+
+// readQueueKey carries a sweep's readQueue: its visits' admissions leave their findings unread, and
+// the sweep reads them all together at its end (readPending), so one reader call holds many pages'
+// findings (bench7: a call per page took 164 of the sweep's 268 calls and ran it out of its share).
+type readQueueKey struct{}
+
+// readQueue is the fids a sweep's visits admitted unread, in admission order (visits admit in
+// reading order, one at a time: awaitTurn).
+type readQueue struct {
+	mu   sync.Mutex
+	fids []string
+}
+
+func (q *readQueue) add(fid string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.fids = append(q.fids, fid)
+}
+
+// readFindings reads unread findings (their verified quotes, typed values and claims) in as few
+// reader calls as the call bounds allow, out of b, and records each one's readings (applyReading):
+// what the reader did not read stays unread, its values dropped with why; with are other items read
+// in the same calls. It returns the notes the readings left (a dropped value, by fid).
+func (e *Engine) readFindings(ctx context.Context, rt *agent.Runtime, c agent.Call, b *agent.Budget, caller string, fids []string, with ...*reading) ([]string, error) {
+	all, err := load[Finding](ctx, e, c.TaskID, kFinding)
+	if err != nil {
+		return nil, err
+	}
+	type job struct {
+		f    Finding
+		vals []analysis.Value
+		text string
+		it   *reading
+	}
+	var jobs []job
+	items := slices.Clone(with) // read in the same calls (a drafted section's own reading)
+	for _, fid := range fids {
+		i := slices.IndexFunc(all, func(f Finding) bool { return f.FID == fid })
+		if i < 0 || !all[i].Unread {
+			continue
+		}
+		text, vq := verifiedText(all[i])
+		j := job{all[i], all[i].Values, text, findingReading(all[i], vq, all[i].Values)}
+		jobs = append(jobs, j)
+		if text != "" {
+			items = append(items, j.it)
+		}
+	}
+	if err := e.readFigures(ctx, rt, c, b, caller, items); err != nil {
+		return nil, err
+	}
+	var notes []string
+	for _, j := range jobs {
+		before := len(j.f.ValueNotes)
+		applyReading(&j.f, j.vals, j.it, j.text)
+		for _, n := range j.f.ValueNotes[before:] {
+			notes = append(notes, j.f.FID+": "+n)
+		}
+		if err := e.write(ctx, c.TaskID, kFinding, j.f.FID, j.f, true); err != nil {
+			return nil, err
+		}
+	}
+	return notes, nil
 }

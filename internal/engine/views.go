@@ -268,6 +268,15 @@ type Cost struct {
 		UnpricedCalls int      `json:"unpricedCalls"`
 	} `json:"summary"`
 	Entries []CostEntry `json:"entries"`
+	// Reader is the figure reader's record (ReaderStats): its calls, how many failed (and why) or
+	// went unfunded, and the failure rate, so a run's unread figures are never a mystery (bench7).
+	Reader *ReaderCost `json:"reader,omitempty"`
+}
+
+// ReaderCost is the figure reader's line of a task's cost.
+type ReaderCost struct {
+	ReaderStats
+	FailureRate float64 `json:"failureRate"` // failed and unfunded calls over all its calls
 }
 
 // Cost is a task's cost ledger: every step that spent, and the grants lost to crashes.
@@ -299,6 +308,11 @@ func (e *Engine) Cost(ctx context.Context, id string) (Cost, error) {
 		c.Entries = append(c.Entries, en)
 	}
 	c.Summary.Calls, c.Summary.InputTokens, c.Summary.OutputTokens, c.Summary.UnpricedCalls = all.Calls, all.InputTokens, all.OutputTokens, all.Unpriced
+	if st, err := e.readerStats(ctx, t.ID); err != nil {
+		return Cost{}, err
+	} else if st.Calls > 0 {
+		c.Reader = &ReaderCost{ReaderStats: st, FailureRate: float64(st.Failed+st.Unfunded) / float64(st.Calls)}
+	}
 	if all.Unpriced == 0 {
 		c.Summary.USD = &all.USD
 	}

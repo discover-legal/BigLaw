@@ -353,7 +353,7 @@ func Judge(decide func(a, b JudgeSide) string) func(model.Request) (model.Reply,
 				}
 			}
 			verdicts = append(verdicts, map[string]string{"pair": p.ID, "sameQuantity": ans,
-				"reason": "A says \"" + first(p.A.Quotes) + "\"; B says \"" + first(p.B.Quotes) + "\"."})
+				"reason": "A says \"" + first(p.A.Quotes) + "\"; B says \"" + first(p.B.Quotes) + "\": A's " + p.A.Value + " against B's " + p.B.Value + "."})
 		}
 		data, _ := json.Marshal(map[string]any{"verdicts": verdicts})
 		return model.Reply{Text: string(data), Usage: model.Usage{InputTokens: 10, OutputTokens: 5, CostUSD: &Cost}}, true

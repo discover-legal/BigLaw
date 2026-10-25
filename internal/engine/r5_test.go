@@ -164,7 +164,9 @@ func TestR5EmptyAnswerCachedForever(t *testing.T) {
 }
 
 // L4: with the figure reader failing, every typed quantity is dropped (noted), the memo's figures are
-// flagged, never traced (G8 fails closed), and Limitations says the section's figures were not read.
+// never traced by a reading (G8 fails closed): one its cited quote states as written is listed
+// check-first and its finding gated (bench7: a blocking lint line drove figure-stripping redrafts),
+// and Limitations says the section's figures were not read.
 func TestR5NoReaderBudget(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
@@ -178,16 +180,17 @@ func TestR5NoReaderBudget(t *testing.T) {
 	if len(fs) != 1 || len(fs[0].Values) != 0 || !strings.Contains(strings.Join(fs[0].ValueNotes, " "), "the figure reader's call failed") {
 		t.Fatalf("reader failing: %+v", fs)
 	}
-	fin := strings.Join(f.outputs(v.ID, "finish"), "\n")
-	if !strings.Contains(fin, "the figure 644910 is not traced (G8): the figure reader did not read it clearly") {
-		t.Errorf("the memo's unread figure was not flagged: %s", fin)
+	out0 := deref(v.Output)
+	if !strings.Contains(out0, "- 644,910 in the memo was not read by the figure reader (the figure reader's call failed): it traces only as written, digit for digit, to [F1], whose findings are gated") ||
+		!slices.ContainsFunc(v.PendingGates, func(g Gate) bool { return g.GateID == "G-F1" }) && !slices.ContainsFunc(v.DecidedGates, func(g Gate) bool { return g.GateID == "G-F1" }) {
+		t.Errorf("the memo's unread figure is not listed and gated (%s):\n%s", stop(v), out0)
 	}
 	secs, err := load[Section](context.Background(), f.e, v.ID, kSection)
 	if err != nil || len(secs) != 1 || secs[0].Read == nil || !strings.Contains(secs[0].Read.Unread, "1 of its 1 figures were not read (the figure reader's call failed)") {
 		t.Fatalf("section read %+v %v", secs, err)
 	}
 	out := deref(v.Output)
-	if !strings.Contains(out, "Figures: in the section on I1, 1 of its 1 figures were not read") || !strings.Contains(out, "Delivered with an unresolved check") {
+	if !strings.Contains(out, "Figures: in the section on I1, 1 of its 1 figures were not read") || strings.Contains(out, "Delivered with an unresolved check") {
 		t.Errorf("Limitations does not disclose the unread section (%s):\n%s", stop(v), out)
 	}
 }
@@ -368,8 +371,14 @@ func TestR5OversizeInputIsSplit(t *testing.T) {
 		if len(fs) != 2 {
 			t.Fatalf("%d findings (%s)\n%s\n%q", len(fs), stop(v), f.steps(v.ID), f.outputs(v.ID, "extract_facts"))
 		}
-		if len(fs[1].Values) != 1 || len(fs[0].Figures) != 300 || slices.ContainsFunc(fs[0].Figures, func(r analysis.Reading) bool { return strings.HasPrefix(r.Why, "not read") }) {
-			t.Fatalf("an oversized finding sank its call: %d findings, values %v, %d figures", len(fs), fs[min(1, len(fs)-1)].Values, len(fs[0].Figures))
+		// the long schedule states no typed value: admission reads only the damages finding, never
+		// sunk by it; the section citing the schedule reads it in calls of at most maxCallSpans spans,
+		// and what its grant cannot fund stays unread with why (bench7)
+		unfunded := !slices.ContainsFunc(fs[0].Figures, func(r analysis.Reading) bool {
+			return strings.HasPrefix(r.Why, "not read") && r.Why != "not read: the budget could not fund the figure reader"
+		})
+		if len(fs[1].Values) != 1 || fs[1].Unread || fs[0].Unread || len(fs[0].Figures) != 300 || !unfunded {
+			t.Fatalf("an oversized finding sank its call: %d findings, values %v, %d figures; notes %q %q", len(fs), fs[min(1, len(fs)-1)].Values, len(fs[0].Figures), fs[0].ValueNotes, fs[1].ValueNotes)
 		}
 	})
 }

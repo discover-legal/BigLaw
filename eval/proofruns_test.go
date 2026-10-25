@@ -181,7 +181,7 @@ func fabricator(mt matter, ids map[string]string) map[string][]model.Reply {
 	return map[string][]model.Reply{
 		"lead":          {{ToolCalls: []model.ToolCall{plan}}, {ToolCalls: []model.ToolCall{call("extract_facts", m{"question": "q", "documentId": nil, "sectionId": nil, "through": nil, "offset": nil, "query": "consent", "issueId": "I1"})}}},
 		"extract_facts": {reply(m{"findings": fs, "gaps": []string{}})},
-		"verify_quote":  {no, no},
+		"verify_quote":  {no, no, no, no, no, no, no, no}, // every quote judged: findings stating no value hold no reader reserve back from the judges (bench7)
 	}
 }
 
@@ -194,7 +194,7 @@ func firstDoc(mt matter) string {
 
 // drive runs one matter through the engine on scripts and writes a run dir the scorer reads.
 func drive(t *testing.T, mt matter, scripts func(matter, map[string]string) map[string][]model.Reply) (engine.TaskView, string, []string) {
-	st, err := store.Open(context.Background(), storetest.DSN(t), nil)
+	st, err := store.OpenPool(context.Background(), storetest.DSN(t), nil, storetest.Pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -413,7 +413,7 @@ func TestLabRunnerSmoke(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 is not installed")
 	}
-	st, err := store.Open(context.Background(), storetest.DSN(t), nil)
+	st, err := store.OpenPool(context.Background(), storetest.DSN(t), nil, storetest.Pool)
 	if err != nil {
 		t.Fatal(err)
 	}

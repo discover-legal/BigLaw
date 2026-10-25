@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/discover-legal/BigLaw/internal/agent"
+	"github.com/discover-legal/BigLaw/internal/docs"
 )
 
 // The figure reader's own tools (read_figures, figures.go): figure_context reads the document around
@@ -43,10 +44,11 @@ func (t figureContext) Call(ctx context.Context, c agent.Call) (agent.Result, er
 	if err != nil {
 		return agent.Result{}, agent.Fail("figure_context: " + in.DocumentID + " is not one of this task's documents")
 	}
-	i := strings.Index(d.Text, in.Quote)
+	i, n := locate(ctx, d.Text, in.Quote)
 	if i < 0 {
 		return agent.Result{}, agent.Fail("figure_context: the quote is not in the document as written: pass the quote exactly as you were given it")
 	}
+	in.Quote = d.Text[i : i+n] // the document's own words where it states the quote
 	off := 0
 	if in.Offset != nil {
 		off = *in.Offset
@@ -78,6 +80,30 @@ func (t figureContext) Call(ctx context.Context, c agent.Call) (agent.Result, er
 	}
 	out, _ := json.Marshal(map[string]any{"text": text, "next": next})
 	return agent.Result{Output: out}, nil
+}
+
+// locate is where the document states a quote and its length there: as written, else as the ladder
+// matches it tolerantly (straightened quotes, white space, a table row's cells: docs.Verify without a
+// judge), else its first 120 bytes so (bench7: 219 of 469 figure_context calls failed on quotes that
+// had verified tolerantly, each a reader's turn spent; the reader was cut off at its turn cap).
+func locate(ctx context.Context, text, quote string) (int, int) {
+	for _, q := range []string{quote, headOf(quote, 120)} {
+		if v, err := docs.Verify(ctx, text, q, nil); err == nil && v.Verified && v.End > v.Start {
+			return v.Start, v.End - v.Start
+		}
+	}
+	return -1, 0
+}
+
+// headOf is s's first n bytes at most, cut at a rune boundary.
+func headOf(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
 }
 
 type exactCalc struct{}

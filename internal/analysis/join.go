@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"maps"
 	"math"
+	"math/big"
 	"slices"
 	"strings"
 	"unicode"
@@ -191,7 +192,7 @@ func rankPairs(findings []Finding) []Candidate {
 			b := sides[k]
 			ka, _, _ := strings.Cut(a.Canon, ":")
 			kb, _, _ := strings.Cut(b.Canon, ":")
-			if ka != kb || a.FID == b.FID || a.DocumentID == b.DocumentID || a.DocumentID == "" || b.DocumentID == "" || a.Canon == b.Canon {
+			if ka != kb || a.FID == b.FID || a.DocumentID == b.DocumentID || a.DocumentID == "" || b.DocumentID == "" || a.Canon == b.Canon || sameAmount(a.Canon, b.Canon) {
 				continue
 			}
 			kind, dist := "numeric", 0.0
@@ -251,6 +252,16 @@ func rankPairs(findings []Finding) []Candidate {
 		out[i] = p.c
 	}
 	return out
+}
+
+// sameAmount reports whether two canons are one amount however written: the same digits at another
+// precision ("45,000.00" and "45,000"), or one signed as a payment the other as a receipt ("-45000",
+// "45000"): two documents stating one figure, never a discrepancy (bench7: "$45,000.00" and "$45,000"
+// were judged one quantity stated differently).
+func sameAmount(a, b string) bool {
+	_, x, okx := CanonAmount(a)
+	_, y, oky := CanonAmount(b)
+	return okx && oky && new(big.Rat).Abs(x).Cmp(new(big.Rat).Abs(y)) == 0
 }
 
 // rankScore orders a value's counterparts: how alike their contexts are, plus a floor, times how close
@@ -333,6 +344,9 @@ func CheckVerdicts(cands []Candidate, raw []Verdict) (map[string]Verdict, []stri
 		if v.SameQuantity != "unclear" && !quoted(v.Reason, cands[i]) {
 			v.SameQuantity, v.Reason = "unclear", "the judge's reason quotes neither passage as written: "+v.Reason
 		}
+		if v.SameQuantity == "yes" && !namesValues(v.Reason, cands[i]) {
+			v.SameQuantity, v.Reason = "unclear", "the judge's reason does not name both figures as written beside its quotations: "+v.Reason
+		}
 		if _, twice := out[v.Pair]; twice {
 			v.SameQuantity, v.Reason = "unclear", "judged twice"
 		}
@@ -378,6 +392,95 @@ func quoted(reason string, c Candidate) bool {
 		return false
 	}
 	return quotes(c.A, flat(c.B)) && quotes(c.B, flat(c.A))
+}
+
+// namesValues reports whether a yes's reason, outside its quotations, writes each side's own figure
+// (bench7: "both state the same count of 2,614" for 2,614 against 5,776, "the same hurdle rate of 6%"
+// for 6% against 20%: the judge read the passages' shared figure, not the pair's two). Its quotations
+// are the runs of its words that either side's quotes or claim hold (as quoted reads them) with four
+// or more words that are not a figure's own, whatever opens them (a double, single or curly quote, or
+// none: r2 L2), never what sits between the next two quote marks, which a quoted passage's own quote
+// marks would turn inside out (r1 LOW-3), so a figure written as in its passage ("Mon, 15 Apr 2024
+// 09:23:47 -0400") is not a quotation of it; a figure counts as named when a number written outside
+// them reads as the side's figure as written does ("$103,800" names "103,800.00").
+func namesValues(reason string, c Candidate) bool {
+	ws := strings.Fields(reason)
+	key := func(w string) string {
+		return strings.ToLower(strings.TrimFunc(w, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) }))
+	}
+	var passages []string
+	for _, sd := range []Side{c.A, c.B} {
+		for _, t := range append(slices.Clone(sd.Quotes), sd.Claim) {
+			var ks []string
+			for _, w := range strings.Fields(t) {
+				if k := key(w); k != "" {
+					ks = append(ks, k)
+				}
+			}
+			passages = append(passages, " "+strings.Join(ks, " ")+" ")
+		}
+	}
+	keys := make([]string, len(ws))
+	for i, w := range ws {
+		keys[i] = key(w)
+	}
+	figure := map[string]bool{} // the words of the pair's two figures as written
+	for _, sd := range []Side{c.A, c.B} {
+		for _, w := range strings.Fields(sd.Fig.Text) {
+			figure[key(w)] = true
+		}
+	}
+	inside := make([]bool, len(ws))
+	for i := 0; i < len(ws); i++ {
+		best, own := 0, 0
+		for j := i; j < len(ws); j++ { // the longest run from i that a passage holds
+			var run []string
+			for _, k := range keys[i : j+1] {
+				if k != "" {
+					run = append(run, k)
+				}
+			}
+			r := " " + strings.Join(run, " ") + " "
+			if !slices.ContainsFunc(passages, func(p string) bool { return strings.Contains(p, r) }) {
+				break
+			}
+			if best = j - i + 1; keys[j] != "" && !figure[keys[j]] {
+				own++
+			}
+		}
+		if own >= quoteRun {
+			for k := i; k < i+best; k++ {
+				inside[k] = true
+			}
+			i += best - 1
+		}
+	}
+	var outside []string
+	for i, w := range ws {
+		if !inside[i] {
+			outside = append(outside, w)
+		}
+	}
+	saidDates, said := Literal(strings.Join(outside, " "))
+	names := func(sd Side) bool {
+		if k, ok := strings.CutPrefix(sd.Canon, "date:"); ok { // a date is named by any form of it ("Mon, 15 Apr 2024" by "April 15, 2024")
+			d, _ := ParseDate(k)
+			return slices.ContainsFunc(saidDates, func(x string) bool { y, _ := ParseDate(x); return y.Compatible(d) && y.Day == d.Day })
+		}
+		text := strings.TrimSpace(sd.Fig.Text)
+		if text == "" {
+			text = sd.Value
+		}
+		_, own := Literal(text)
+		return slices.ContainsFunc(own, func(o Span) bool {
+			return slices.ContainsFunc(said, func(x Span) bool {
+				return slices.ContainsFunc(o.Readings(), func(a *big.Rat) bool {
+					return slices.ContainsFunc(x.Readings(), func(b *big.Rat) bool { return new(big.Rat).Abs(a).Cmp(new(big.Rat).Abs(b)) == 0 })
+				})
+			})
+		})
+	}
+	return names(c.A) && names(c.B)
 }
 
 // Conflicts are the candidates the judge said are one quantity ("yes"), each with its reason; a pair

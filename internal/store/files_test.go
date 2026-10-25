@@ -22,7 +22,14 @@ import (
 
 func openStore(t *testing.T, dsn string) *Store {
 	t.Helper()
-	s, err := Open(t.Context(), dsn, nil)
+	return openStorePool(t, dsn, storetest.Pool)
+}
+
+// openStorePool opens a store with a pool of maxConns (MaxOpenConns for a test
+// of the production pool's bounds).
+func openStorePool(t *testing.T, dsn string, maxConns int) *Store {
+	t.Helper()
+	s, err := OpenPool(t.Context(), dsn, nil, maxConns)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,7 +251,7 @@ func (r *stallReader) Read(p []byte) (int, error) {
 // (r2 reproducer: 20 stalled uploads took the whole pool).
 func TestSlowUploadsLeaveConnections(t *testing.T) {
 	t.Parallel()
-	s := openStore(t, storetest.DSN(t))
+	s := openStorePool(t, storetest.DSN(t), MaxOpenConns) // every connection of the production pool
 	ctx := t.Context()
 	small, err := s.PutFile(ctx, "small.txt", "text/plain", strings.NewReader("ok"))
 	if err != nil {

@@ -35,6 +35,7 @@ const (
 	kSwept    = "swept"    // key: "sweep"; []SweptDoc, each document's sweep coverage (the latest sweep's)
 	kAlias    = "alias"    // key: a party's folded name; analysis.Alias, the names join_discrepancies was told it goes by
 	kRead     = "figread"  // key: "draft"; the calls drafted sections' figure readers made (not the drafters')
+	kReadStat = "figstats" // key: "reader"; ReaderStats, the figure reader's calls, failures and the sweep's reader spend
 	kVerdict  = "verdict"  // key: judgeKey of a candidate pair's content and the run's aliases; analysis.Verdict, the figure judge's (judge.go)
 )
 
@@ -74,6 +75,11 @@ type Finding struct {
 	// Figures are its verified quotes' numbers as the figure reader read them (figures.go): what G8
 	// traces a memo figure that cites it to.
 	Figures []analysis.Reading `json:"figures,omitempty"`
+	// Unread marks a finding whose figures the reader has not read yet: one that states no typed
+	// value is read only when a drafted section first cites it (saveSection), and a sweep's findings
+	// are read together at the sweep's end (readPending). Until then its quotes' numbers are unread
+	// to G8: a memo figure traces to them only as written, limited and gated (lab-r4 r6 M2).
+	Unread bool `json:"figuresUnread,omitempty"`
 }
 
 // Analysis is analyze_issue's answer on one issue (rule, application, conclusion): it goes to the

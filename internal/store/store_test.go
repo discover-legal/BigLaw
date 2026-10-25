@@ -217,7 +217,7 @@ func TestOpenNeedsVector(t *testing.T) {
 		return u.String()
 	}
 	noext := url.UserPassword(role, pw)
-	_, err = Open(t.Context(), dsnFor(without, noext), nil)
+	_, err = OpenPool(t.Context(), dsnFor(without, noext), nil, storetest.Pool)
 	if err == nil || !strings.Contains(err.Error(), "the pgvector extension (vector) is missing and could not be created") ||
 		!strings.Contains(err.Error(), "CREATE EXTENSION vector") || strings.Contains(err.Error(), pw) {
 		t.Fatalf("Open without the extension or the right to create it: %v", err)
@@ -231,7 +231,7 @@ func TestOpenNeedsVector(t *testing.T) {
 		t.Fatal(err)
 	}
 	other.Close()
-	st, err := Open(t.Context(), dsnFor(with, noext), nil)
+	st, err := OpenPool(t.Context(), dsnFor(with, noext), nil, storetest.Pool)
 	if err != nil {
 		t.Fatalf("Open where the extension exists, without the right to create one: %v", err)
 	}
@@ -243,7 +243,7 @@ func TestOpenNeedsVector(t *testing.T) {
 	errs := make(chan error, 8)
 	for range 8 {
 		go func() {
-			st, err := Open(t.Context(), dsnFor(fresh, nil), nil)
+			st, err := OpenPool(t.Context(), dsnFor(fresh, nil), nil, 2) // 8 stores under one storetest slot
 			if err == nil {
 				st.Close()
 			}

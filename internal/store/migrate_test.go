@@ -105,7 +105,7 @@ func tableExists(t *testing.T, db *sql.DB, name string) bool {
 func TestMigrateIdempotent(t *testing.T) {
 	t.Parallel()
 	dsn := storetest.DSN(t)
-	s, err := Open(t.Context(), dsn, nil)
+	s, err := OpenPool(t.Context(), dsn, nil, storetest.Pool)
 	if err != nil {
 		t.Fatal(err)
 	}

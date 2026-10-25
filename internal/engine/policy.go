@@ -17,6 +17,7 @@ import (
 // committee cycle, whose critics read the whole draft, which may spend a fifth of the USD.
 type Allocation struct {
 	Plan, Evidence, Sweep, Draft int // the most each class may spend (plan: before a plan exists)
+	Read                         int // the sweep's figure reader, its own share beside the sweep's (both of the evidence class)
 	Cover                        int // the coverage pass's part of the evidence share, kept back for it
 	Cycle                        int // one committee cycle: prosecute + reproduce + audit_gaps
 	Critics                      [3]int
@@ -24,6 +25,7 @@ type Allocation struct {
 	FixMin                       int     // calls a fix stretch needs, beside a cycle, to count as funded
 	Calls                        int     // the task's caps
 	USD, CycleUSD                float64 // CycleUSD: what one committee cycle may spend
+	SweepUSD, ReadUSD            float64 // the sweep's and its reader's USD
 }
 
 // Allocate splits a budget: plan ≤ 7% (min 3), evidence ≤ 45% of which sweep ≤ 30% and the
@@ -39,13 +41,34 @@ type Allocation struct {
 // 60-finding request is about $0.17: 10% ($1.10) analyses a six-issue plan's law issues and places.
 // A committee cycle cost $0.30–0.48 (4.3% at most), where the run kept 20% for one until the end
 // (keep: once a cycle has run, the keep is 1.5 times the costliest so far, never more than CycleUSD).
+//
+// The sweep's figure reader has a share of its own (bench7 SEC: charged to the sweep, it took 164 of
+// the sweep's 268 calls and the sweep read 103 of 142 pages): 6% of the calls and 10% of the USD, out
+// of the sweep's 30%. Read together at the sweep's end, a page's findings are a part of one call
+// (readFindings), so a call is larger than a visit: replaying bench7's 491 SEC findings (100 visits)
+// through admission takes 17 reader calls (87 at one call a visit), each about 19 KB in and 15 KB
+// out, about $0.026 on a $1/$5 per million model (twice the run's $0.012 a call at $11/900), so its
+// USD share is a larger part of the USD than its calls' of the calls.
 func Allocate(calls int, usd float64) Allocation {
-	a := Allocation{Plan: max(3, calls*7/100), Evidence: calls * 45 / 100, Sweep: calls * 30 / 100, Cover: calls * 10 / 100, Draft: calls * 15 / 100,
+	a := Allocation{Plan: max(3, calls*7/100), Evidence: calls * 45 / 100, Sweep: calls * 24 / 100, Read: calls * 6 / 100, Cover: calls * 10 / 100, Draft: calls * 15 / 100,
 		Cycle: min(20, calls/5), Reserve: 5, Meta: 3, FixMin: 3, Calls: calls, USD: usd, CycleUSD: usd / 5}
+	a.ReadUSD = usd * readUSDShare
+	a.SweepUSD = max(0, a.dollars(a.Sweep+a.Read)-a.ReadUSD)
 	a.Critics[0] = a.Cycle * 2 / 5
 	a.Critics[1] = a.Critics[0]
 	a.Critics[2] = a.Cycle - 2*a.Critics[0]
 	return a
+}
+
+// readUSDShare is the sweep reader's part of the task's USD (Allocate).
+const readUSDShare = 0.10
+
+// usdShare is the USD of a class's share (share): its calls' fraction of the USD, but the sweep's own.
+func (a Allocation) usdShare(tool string, n int) float64 {
+	if tool == "sweep" {
+		return a.SweepUSD
+	}
+	return a.dollars(n)
 }
 
 // maxCycles caps the committee cycles the lead may run (bench6 SEC: nine cycles, $4.16, while the
@@ -135,9 +158,9 @@ func (p policy) Allow(ctx context.Context, x agent.Pending) *agent.Refusal {
 	}
 	if sh := a.share(x.Spec.Name, x.Spec.Class); sh > 0 {
 		used := spent[cmpStr(x.Spec.Name == "sweep", "sweep", x.Spec.Class)]
-		if x.Spec.Kind == "subagent" && used.Calls+x.Spec.MaxTurns-goTurns(x.Spec.Name) > sh || used.Calls >= sh || a.USD > 0 && used.USD >= a.dollars(sh) {
+		if x.Spec.Kind == "subagent" && used.Calls+x.Spec.MaxTurns-goTurns(x.Spec.Name) > sh || used.Calls >= sh || a.USD > 0 && used.USD >= a.usdShare(x.Spec.Name, sh) {
 			return &agent.Refusal{Kind: agent.ErrPolicy, Reason: fmt.Sprintf("%s's budget class (%s) has spent %d of its %d calls ($%.2f of $%.2f)", x.Spec.Name,
-				cmpStr(x.Spec.Name == "sweep", "sweep", x.Spec.Class), used.Calls, sh, used.USD, a.dollars(sh)), Next: "work with what the ledger holds: draft, run committee, or finish"}
+				cmpStr(x.Spec.Name == "sweep", "sweep", x.Spec.Class), used.Calls, sh, used.USD, a.usdShare(x.Spec.Name, sh)), Next: "work with what the ledger holds: draft, run committee, or finish"}
 		}
 	}
 	return nil
@@ -189,6 +212,13 @@ func (e *Engine) classSpend(ctx context.Context, taskID string) (map[string]agen
 	if err != nil {
 		return nil, err
 	}
+	st, err := e.readerStats(ctx, taskID) // the sweep's figure reader is its own share's, not the sweep's
+	if err != nil {
+		return nil, err
+	}
+	sw := out["sweep"]
+	sw.Calls, sw.USD = max(0, sw.Calls-st.Sweep.Calls), max(0, sw.USD-st.Sweep.USD)
+	out["sweep"], out["read"] = sw, st.Sweep
 	for _, n := range read {
 		d := out["draft"]
 		d.Calls = max(0, d.Calls-n)

@@ -409,7 +409,7 @@ var fidRe = regexp.MustCompile(`\[(F\d+)\]`)
 
 func TestDemoRecording(t *testing.T) {
 	t.Parallel()
-	st, err := store.Open(t.Context(), storetest.DSN(t), nil)
+	st, err := store.OpenPool(t.Context(), storetest.DSN(t), nil, storetest.Pool)
 	if err != nil {
 		t.Fatal(err)
 	}

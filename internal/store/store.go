@@ -48,8 +48,20 @@ type Store struct {
 
 // Open checks dsn (CheckDSN), connects, and applies every pending embedded
 // migration under an advisory lock (MigrateFS). The returned error never
-// contains the DSN's password, so it is safe to log. log may be nil.
+// contains the DSN's password, so it is safe to log. log may be nil. The pool
+// holds up to MaxOpenConns connections.
 func Open(ctx context.Context, dsn string, log *slog.Logger) (*Store, error) {
+	return OpenPool(ctx, dsn, log, MaxOpenConns)
+}
+
+// OpenPool is Open with a pool of at most maxConns connections (minimum 2).
+// Tests use a small pool (storetest.Pool) so many stores open at once stay
+// inside the server's max_connections. Uploads get all but min(4, maxConns/2)
+// of the connections (MaxConcurrentUploads at MaxOpenConns), so a stalled
+// upload never starves /health; reads stay bounded by MaxConcurrentReads.
+func OpenPool(ctx context.Context, dsn string, log *slog.Logger, maxConns int) (*Store, error) {
+	maxConns = max(maxConns, 2)
+	spare := min(4, maxConns/2)
 	if err := CheckDSN(dsn); err != nil {
 		return nil, fmt.Errorf("store: database URL %w", err)
 	}
@@ -57,7 +69,7 @@ func Open(ctx context.Context, dsn string, log *slog.Logger) (*Store, error) {
 	if err != nil {
 		return nil, errors.New("store: invalid database URL")
 	}
-	db.SetMaxOpenConns(MaxOpenConns)
+	db.SetMaxOpenConns(maxConns)
 	db.SetConnMaxIdleTime(5 * time.Minute)
 	pctx, cancel := context.WithTimeout(ctx, ConnectTimeout)
 	err = db.PingContext(pctx)
@@ -78,7 +90,7 @@ func Open(ctx context.Context, dsn string, log *slog.Logger) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	return &Store{db: db, uploads: make(chan struct{}, MaxConcurrentUploads), reads: make(chan struct{}, MaxConcurrentReads)}, nil
+	return &Store{db: db, uploads: make(chan struct{}, maxConns-spare), reads: make(chan struct{}, MaxConcurrentReads)}, nil
 }
 
 // CheckDSN reports whether lib/pq will read dsn the way it looks, without

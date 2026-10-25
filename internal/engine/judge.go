@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/discover-legal/BigLaw/internal/agent"
@@ -43,6 +44,7 @@ type judgeSide struct {
 	Ref        string      `json:"ref"`
 	DocumentID string      `json:"documentId"`
 	Value      string      `json:"value"`
+	ValueText  string      `json:"valueText"` // the figure's digits as its quote writes them, marked there ⟦…⟧ (bench7)
 	Entity     *string     `json:"entity"`
 	Metric     *string     `json:"metric"`
 	Claim      string      `json:"claim"`
@@ -71,13 +73,35 @@ type judgePair struct {
 
 func sideIn(s analysis.Side) judgeSide {
 	qs := []string{}
-	for _, q := range s.Quotes[:min(len(s.Quotes), 12)] {
-		qs = append(qs, cutAround(q, s.Value, maxJudgeQuote))
+	for i, q := range s.Quotes[:min(len(s.Quotes), 12)] {
+		at := s.Value
+		if m := markSpan(q, i, s.Fig.Stated); m != q { // the value's own span marked, so the judge reads that figure, not the passage's other one
+			q, at = m, "⟦"
+		}
+		qs = append(qs, cutAround(q, at, maxJudgeQuote))
 	}
 	r := s.Fig
-	return judgeSide{Ref: s.Ref, DocumentID: s.DocumentID, Value: s.Value, Entity: strp(s.Entity), Metric: strp(s.Metric), Claim: cutAround(s.Claim, s.Value, maxJudgeQuote), Quotes: qs,
+	return judgeSide{Ref: s.Ref, DocumentID: s.DocumentID, Value: s.Value, ValueText: r.Text, Entity: strp(s.Entity), Metric: strp(s.Metric), Claim: cutAround(s.Claim, s.Value, maxJudgeQuote), Quotes: qs,
 		Reading: judgeReader{Kind: r.Kind, Currency: r.Currency, Amount: r.Amount, Scale: cmpStr(r.Scale == "", "1", r.Scale), Party: strp(r.Party), Counterparty: strp(r.Counterparty),
 			Measures: strp(r.Measures), Period: strp(r.Period), TypedEntity: strp(r.TypedEntity)}}
+}
+
+// markSpan is the i-th quote of a side with the span admission matched its value to (stated, "q2.s1":
+// the second verified quote's first span the reader is sent, quotePassage) marked ⟦…⟧; the quote as
+// it is when the span is in another quote or unknown.
+func markSpan(quote string, i int, stated string) string {
+	q, sp, ok := strings.Cut(strings.TrimPrefix(stated, "q"), ".s")
+	n, err1 := strconv.Atoi(q)
+	k, err2 := strconv.Atoi(sp)
+	if !ok || err1 != nil || err2 != nil || n != i+1 {
+		return quote
+	}
+	spans := quotePassage("q", quote).Spans
+	if k < 1 || k > len(spans) {
+		return quote
+	}
+	x := spans[k-1]
+	return quote[:x.Start] + "⟦" + quote[x.Start:x.End] + "⟧" + quote[x.End:]
 }
 
 // cutAround is s, or at most n bytes of it around value's first occurrence (else its start), cut at

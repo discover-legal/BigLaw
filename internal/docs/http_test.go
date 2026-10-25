@@ -70,7 +70,7 @@ func count(t *testing.T, s *Service, table string) int {
 // upload succeeds, no file row persists, and the stalled clients were answered 408.
 func TestUploadReadDeadline(t *testing.T) { // not parallel: it shortens the package's upload bounds
 	shorten(t, 500*time.Millisecond, 64<<10, 30*time.Second)
-	s := newService(t)
+	s := newServicePool(t, store.MaxOpenConns) // every upload slot of the production pool
 	srv := serveDocs(t, s)
 	if resp, _ := upload(t, srv.URL, "warm.txt", []byte("warm up the pool")); resp.StatusCode != 201 {
 		t.Fatalf("warm-up upload: %d", resp.StatusCode)

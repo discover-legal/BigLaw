@@ -226,6 +226,9 @@ func ErrorType(err error) (int, string, string) {
 			if c.msg == "" {
 				return c.code, c.kind, strings.TrimPrefix(err.Error(), "engine: ")
 			}
+			if me := (*model.Error)(nil); errors.As(err, &me) && strings.Contains(me.Detail, "(") { // the provider's error type and message, redacted (model.providerError: bench7's "credit balance is too low" was only "HTTP 400")
+				return c.code, c.kind, c.msg + ": " + me.Detail
+			}
 			return c.code, c.kind, c.msg
 		}
 	}
