@@ -188,7 +188,7 @@ function Editor(props: { item: ManageDetail; saved: () => void; create?: string 
         </fieldset>
       ))}
       {skillDir && <AddFile add={(name) => set(skillDir + name, '')} />}
-      {at('').map((p, k) => <p key={k} className="error small" role="alert">{p.message}</p>)}
+      {problems.filter((p) => !p.file).map((p, k) => <p key={k} className="error small" role="alert">{p.message}</p>)}
       {error && problems.length === 0 && <Failure error={error} />}
       {notes.map((x) => <p key={x} className="notice small">{x}</p>)}
       <label className="block">Note (optional)<input value={note} onChange={(e) => setNote(e.target.value)} maxLength={2000} placeholder="Why this change" /></label>

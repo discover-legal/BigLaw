@@ -474,30 +474,38 @@ func (e *Engine) filesAt(ctx context.Context, id string, n int) (map[string]stri
 	if n == 0 {
 		return fileMap(builtin, id), nil
 	}
-	files, err := versionFiles(ctx, e.db, id, n)
-	if err == nil && files == nil {
+	files, null, err := rowFiles(e.db.QueryRowContext(ctx, `SELECT files FROM spec_versions WHERE item = $1 AND version = $2`, id, n))
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil, noVersion(id, n)
+	case err == nil && null:
 		return fileMap(builtin, id), nil
 	}
 	return files, err
 }
 
+func noVersion(id string, n int) error {
+	return fmt.Errorf("%w: %s has no version %d", ErrNotFound, id, n)
+}
+
 // versionFiles is version n's files (nil: the built-in's, its files column NULL).
 func versionFiles(ctx context.Context, q querier, id string, n int) (map[string]string, error) {
-	files, err := rowFiles(q.QueryRowContext(ctx, `SELECT files FROM spec_versions WHERE item = $1 AND version = $2`, id, n))
+	files, _, err := rowFiles(q.QueryRowContext(ctx, `SELECT files FROM spec_versions WHERE item = $1 AND version = $2`, id, n))
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("%w: %s has no version %d", ErrNotFound, id, n)
+		return nil, noVersion(id, n)
 	}
 	return files, err
 }
 
-// rowFiles is a spec_versions row's files (nil: NULL, the built-in's).
-func rowFiles(row *sql.Row) (map[string]string, error) {
+// rowFiles is a spec_versions row's files; null: the column is SQL NULL (the built-in's). A jsonb
+// null decodes to nil files with null false, as before rowFiles existed.
+func rowFiles(row *sql.Row) (files map[string]string, null bool, err error) {
 	var raw []byte
 	if err := row.Scan(&raw); err != nil || raw == nil {
-		return nil, err
+		return nil, err == nil, err
 	}
-	files := map[string]string{}
-	return files, json.Unmarshal(raw, &files)
+	files = map[string]string{}
+	return files, false, json.Unmarshal(raw, &files)
 }
 
 // FileDiff is one file's unified diff between two versions of an item.
@@ -527,7 +535,8 @@ func (e *Engine) Diff(ctx context.Context, id string, from, to int) ([]FileDiff,
 }
 
 func diffFiles(a, b map[string]string) []FileDiff {
-	out, paths := []FileDiff{}, maps.Clone(a)
+	out, paths := []FileDiff{}, map[string]string{} // either side may be nil (Patch's built)
+	maps.Copy(paths, a)
 	maps.Copy(paths, b)
 	for _, p := range slices.Sorted(maps.Keys(paths)) {
 		x, inA := a[p]
@@ -653,8 +662,8 @@ func (e *Engine) save(ctx context.Context, tx *sql.Tx, id string, in SaveIn, aut
 // that version restored it, none when it never had any): what a re-created skill is reviewed
 // against, so a deletion and a re-creation never carry a reviewer over to changed content.
 func lastContent(ctx context.Context, tx *sql.Tx, id string) (map[string]string, error) {
-	files, err := rowFiles(tx.QueryRowContext(ctx, `SELECT files FROM spec_versions WHERE item = $1 AND (files IS NULL OR files <> '{}'::jsonb) ORDER BY version DESC LIMIT 1`, id))
-	if errors.Is(err, sql.ErrNoRows) || err == nil && files == nil {
+	files, null, err := rowFiles(tx.QueryRowContext(ctx, `SELECT files FROM spec_versions WHERE item = $1 AND (files IS NULL OR files <> '{}'::jsonb) ORDER BY version DESC LIMIT 1`, id))
+	if errors.Is(err, sql.ErrNoRows) || null {
 		return fileMap(builtin, id), nil
 	}
 	return files, err
