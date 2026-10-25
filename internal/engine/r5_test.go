@@ -264,12 +264,12 @@ func TestR5CacheKeyAndScope(t *testing.T) {
 		fmt.Fprintf(h, "%s %d\n", name, len(data))
 		h.Write(data)
 	}
-	builtinHash := builtinSpecs.hash(readerSpecFiles)
+	builtinHash := builtinSpecs.hashPaths(readerSpecFiles)
 	if hex.EncodeToString(h.Sum(nil)) != builtinHash {
 		t.Fatal("the spec hash is not the embedded specs'")
 	}
 	for _, name := range readerSpecFiles {
-		if edited := overrideOne(t, engineDir+name, " "); edited.hash(readerSpecFiles) == builtinHash {
+		if edited := overrideOne(t, engineDir+name, " "); edited.hashPaths(readerSpecFiles) == builtinHash {
 			t.Errorf("an override of %s leaves the cache key as it was", name)
 		}
 	}

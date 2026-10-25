@@ -116,12 +116,6 @@ func remoteEngine(f *fixture, chat model.Chatter, srv *httptest.Server, logs io.
 	return f.e
 }
 
-func save(t *testing.T, e *Engine, id string, base int, files map[string]string) {
-	t.Helper()
-	if _, _, err := e.Save(context.Background(), id, SaveIn{Base: base, Files: files}, "Ada"); err != nil {
-		t.Fatalf("save %s: %s", id, problems(err))
-	}
-}
 
 func serverFile(name, url string) map[string]string {
 	b, _ := json.Marshal(Server{Name: name, URL: url, Enabled: true, Auth: Auth{Secret: "court_key", Header: "Authorization", Prefix: "Bearer "}})
@@ -256,7 +250,7 @@ func TestMCPImportAndCall(t *testing.T) {
 	if err != nil || len(res) != 2 || res[0].Item != "tool.courts_search" || res[1].Problem == "" {
 		t.Fatalf("import: %+v %v", res, err)
 	}
-	snap, _, _ := e.current(ctx)
+	snap, _, _ := e.current(ctx, e.db)
 	sp, _ := newSpecs(snap)
 	if !slices.Contains(leadVisible(sp), "courts_search") {
 		t.Fatal("an imported tool offered to the lead is not in its list")
@@ -361,7 +355,7 @@ func TestHTTPToolTestCallAndDisable(t *testing.T) {
 		t.Fatal("the test call is not in the change log")
 	}
 	save(t, e, "tool.rates", 1, tool(srv.URL+"/rates", false))
-	snap, _, _ := e.current(ctx)
+	snap, _, _ := e.current(ctx, e.db)
 	sp, _ := newSpecs(snap)
 	if slices.Contains(leadVisible(sp), "rates") {
 		t.Fatal("a disabled tool is offered to the lead")

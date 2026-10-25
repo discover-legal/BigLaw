@@ -23,20 +23,29 @@ import (
 
 // Principal is who makes a request (README § Manage, who may change it). There is no sign-in yet:
 // BIGLAW_OIDC_* are declared for PR 8 and nothing reads them, so no request carries a user. Until
-// then every request is the local user, an admin (owner decision: with auth off the local user is
-// an admin; the exposure rule, README § Exposure, limits who can reach the port). PR 8 resolves
-// the session here and sets Admin from it; nothing else in Manage changes.
+// then every request is the local user (LocalUser), an admin only on a server bound to loopback
+// for local work, or one its operator started with --admin-without-auth (Open: anyone who can reach
+// it may change what its agents use); under --allow-no-auth alone Manage is read-only (owner
+// decision, review M3). PR 8 resolves the session here and sets Admin; nothing else in Manage changes.
 type Principal struct {
 	ID    string `json:"id"`
 	Name  string `json:"name"`
 	Admin bool   `json:"admin"`
+	Open  bool   `json:"-"` // admin with no sign-in at all: the UI says so
 }
 
 // Who resolves a request's principal.
 type Who func(*http.Request) Principal
 
-// local is every request's principal until PR 8.
+// local is the local user of a loopback server (tests' default).
 func local(*http.Request) Principal { return Principal{ID: "local", Name: "Local user", Admin: true} }
+
+// LocalUser is every request's principal until PR 8: the local user, an admin or not; open marks
+// an admin by --admin-without-auth (anyone who can reach the server).
+func LocalUser(admin, open bool) Who {
+	p := Principal{ID: "local", Name: "Local user", Admin: admin, Open: open && admin}
+	return func(*http.Request) Principal { return p }
+}
 
 // admin guards a write: 403 forbidden unless the principal is an admin (after docs.Guard's
 // cross-origin refusal, as every POST).
@@ -46,7 +55,7 @@ func admin(log *slog.Logger, who Who, h func(http.ResponseWriter, *http.Request,
 		if !p.Admin {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
-			json.NewEncoder(w).Encode(map[string]string{"error": "only an admin may change what BigLaw's agents use; everyone signed in may view it", "errorType": "forbidden"})
+			json.NewEncoder(w).Encode(map[string]string{"error": "only an admin may change what BigLaw's agents use; everyone may view it. This server runs without sign-in (--allow-no-auth), so Manage is read-only unless its operator starts it with --admin-without-auth (README § Exposure)", "errorType": "forbidden"})
 			return
 		}
 		h(w, r, p)
@@ -75,7 +84,7 @@ func manageRoutes(mux *http.ServeMux, e *engine.Engine, who Who, log *slog.Logge
 	}
 	mux.HandleFunc("GET /me", func(w http.ResponseWriter, r *http.Request) {
 		p := who(r)
-		reply(w, 200, map[string]any{"id": p.ID, "name": p.Name, "admin": p.Admin, "authEnabled": false}, nil)
+		reply(w, 200, map[string]any{"id": p.ID, "name": p.Name, "admin": p.Admin, "authEnabled": false, "adminWithoutAuth": p.Open}, nil)
 	})
 	mux.HandleFunc("GET /manage/items", func(w http.ResponseWriter, r *http.Request) {
 		items, err := e.Items(r.Context())

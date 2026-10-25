@@ -23,7 +23,9 @@ services:
     # No auth exists before PR 8, and serve refuses a non-loopback address
     # without --allow-no-auth. That is safe here only because the port below is
     # published on the host's loopback; do not change it to 0.0.0.0 or a LAN IP
-    # (README § Exposure).
+    # (README § Exposure). Under --allow-no-auth, Manage is read-only; to edit there,
+    # add "--admin-without-auth" to this command, which lets anyone who can reach the
+    # port change what every task's agents use.
     command: ["serve", "--allow-no-auth"]
     depends_on:
       postgres:

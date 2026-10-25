@@ -5,7 +5,7 @@ PostgreSQL only. `README.md` is the contract for what is on disk; keep it true i
 change. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`, not here.
 
 ## Built so far
-- `cmd/biglaw` — `serve [--allow-no-auth]`, `version [--config]`; `config.go` holds the complete
+- `cmd/biglaw` — `serve [--allow-no-auth] [--admin-without-auth]`, `version [--config]`; `config.go` holds the complete
   env-var table (18 vars, each tagged with the PR that first reads it; `BIGLAW_MODELS` is the role
   map `role=id,…`, ids refused if they hold `://`, `user:pw@`, white space, control or invisible
   characters or `? = &`, are over 200 bytes or look like a key)
@@ -124,13 +124,17 @@ change. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`, not here.
   `execute` builds the run's `Specs` from it on every claim (resume too): read specs, prompts, packs and
   skills only through `spec(ctx, …)`/`prompt(ctx, …)`/`packsFor`/`r.sp()`, never a package global;
   `validate` = strict per-file checks + the whole set through `e.runtime` + `compatSpec` (no property the
-  built-in schema has may be removed or retyped; Go-written schemas, `goWritten`, gain none; built-in
-  examples and `goInputs` must validate); packs' and skills' content edits reset status to candidate
-  unless a new reviewer is named; the reader's and judge's cache keys hash the run's set (`Specs.hash`).
+  built-in schema has may be removed or retyped, no enum changed; Go-written schemas, `goWritten`, gain
+  none; built-in examples and `goInputs` must validate) + no lead-only tool (Final, Solo ops but
+  `ledger`) in a subagent's allowed list + class `free` only for subagents built free; saves are serial
+  (`locked`: advisory lock, one tx); any change to a pack's or skill's content (every file, all front
+  matter but status/reviewedBy) resets it to candidate unless the save names a new reviewer; the reader's and judge's cache keys hash the run's set (`Specs.agentHash`: spec, prompt and every allowed tool's spec).
   Hooks are view only (source cut from embedded files). Skills: `skills/<name>/SKILL.md` + reference
   files; the brief lists names and descriptions (≤ 40, ≤ 4 KiB); `use_skill` pages a body or file and
   records it (ledger kind `skill`); a candidate skill read is a Limitations line. `api.Principal` is the
-  who-seam: until PR 8 every request is the local user, an admin; writes wear `docs.Guard` + `admin`.
+  who-seam: until PR 8 every request is the local user (`api.LocalUser`): an admin on loopback, read-only
+  under `--allow-no-auth`, an admin for anyone under `--admin-without-auth` (warned, bannered); writes
+  wear `docs.Guard` + `admin`.
   A new editable file must map to an item (`itemOf`; `TestCatalogueAndHooks`), and a change to any of
   them makes `ui/src/recorded/manage.json` stale (`make demo-record`; `TestManageRecording`, no DB).
   Custom agents and tools (`custom.go`, `remote.go`, migration 0009): admin-created subagents

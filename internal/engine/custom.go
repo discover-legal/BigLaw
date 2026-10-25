@@ -244,7 +244,7 @@ type SecretView struct {
 
 // Secrets lists the secrets (names, who set them, when, and the items naming them).
 func (e *Engine) Secrets(ctx context.Context) ([]SecretView, error) {
-	snap, _, err := e.current(ctx)
+	snap, _, err := e.current(ctx, e.db)
 	if err != nil {
 		return nil, err
 	}
@@ -351,7 +351,7 @@ func (e *Engine) Discover(ctx context.Context, id string) (Discovery, error) {
 }
 
 func (e *Engine) serverOf(ctx context.Context, id string) (Server, error) {
-	snap, _, err := e.current(ctx)
+	snap, _, err := e.current(ctx, e.db)
 	if err != nil {
 		return Server{}, err
 	}
@@ -490,7 +490,7 @@ func (e *Engine) TestCall(ctx context.Context, id string, in TestIn, author stri
 			return TestResult{}, invalid("", "document %s does not exist", d)
 		}
 	}
-	snap, _, err := e.current(ctx)
+	snap, _, err := e.current(ctx, e.db)
 	if err != nil {
 		return TestResult{}, err
 	}

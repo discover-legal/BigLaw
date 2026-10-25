@@ -75,10 +75,36 @@ func errString(err error) string {
 }
 
 const (
-	leadMD     = engineDir + "specs/lead.md"
-	usPack     = engineDir + "packs/jurisdiction/us.md"
-	deadlineMD = skillsDir + "deadlines/SKILL.md"
+	leadMD   = engineDir + "specs/lead.md"
+	usPack   = engineDir + "packs/jurisdiction/us.md"
+	tskillMD = skillsDir + "tskill/SKILL.md" // a skill the tests write: an export may delete any starter
 )
+
+// skillMD is a skill's SKILL.md (tests' own, so no test depends on a starter that ships).
+func skillMD(name, status, reviewer, body string, tools ...string) string {
+	t := ""
+	for _, x := range tools {
+		t += "\n- " + x
+	}
+	return "---\nname: " + name + "\ndescription: A skill the tests write.\nstatus: " + status + "\nreviewedBy:" + strings.TrimRight(" "+reviewer, " ") + "\ntools:" + t + "\n---\n" + body + "\n"
+}
+
+// tskill is the tests' skill's files: its SKILL.md (tools numbers, draft_section) and a reference file.
+func tskill(md string) map[string]string {
+	if md == "" {
+		md = skillMD("tskill", "candidate", "", "Compute every deadline with numbers.", "numbers", "draft_section")
+	}
+	return map[string]string{tskillMD: md, skillsDir + "tskill/examples.json": `{"op": "calc"}`}
+}
+
+// aSkill is the name of a skill that ships (whichever does); a test about built-in skills skips without one.
+func aSkill(t *testing.T) string {
+	t.Helper()
+	if len(builtinSpecs.skills) == 0 {
+		t.Skip("no built-in skill ships in this build")
+	}
+	return builtinSpecs.skills[0].Name
+}
 
 // TestManageValidationRefuses: every save is checked strictly before it is stored: well-formed
 // JSON and front matter, the schema subset strict-shaped, real allowed tools, turn caps and classes
@@ -125,6 +151,20 @@ func TestManageValidationRefuses(t *testing.T) {
 			out["required"] = append(out["required"].([]any), "note")
 		}), "out.note: Go writes this object"},
 		{"built-in example", "tool.numbers", specEdit(t, "tool.numbers", nb, func(m map[string]any) { at(m, "in", "op")["enum"] = []string{"calc", "table"} }), "the built-in example"},
+		{"H1: a verdict Go branches on renamed", "agent.prosecute", specEdit(t, "agent.prosecute", agentsDir+"prosecute.json", func(m map[string]any) {
+			at(m, "out", "verdicts", "[]", "verdict")["enum"] = []string{"supported", "overstated", "not_supported"}
+		}), `out.verdicts[].verdict: Go branches on this field's values ("overstated", "supported", "unsupported"); its enum cannot change`},
+		{"H1: a severity recased", "agent.audit_gaps", specEdit(t, "agent.audit_gaps", agentsDir+"audit_gaps.json", func(m map[string]any) {
+			at(m, "out", "gaps", "[]", "severity")["enum"] = []string{"High", "Medium", "Low"}
+		}), "out.gaps[].severity: Go branches on this field's values"},
+		{"H1: an enum value added", "tool.numbers", specEdit(t, "tool.numbers", nb, func(m map[string]any) {
+			at(m, "in", "op")["enum"] = []string{"calc", "handles", "table", "guess"}
+		}), "in.op: Go branches on this field's values"},
+		{"M1: a subagent given finish", "agent.analyze_issue", specEdit(t, "agent.analyze_issue", agentsDir+"analyze_issue.json", func(m map[string]any) {
+			m["allowed"] = append(m["allowed"].([]any), "finish")
+		}), `allowed: "finish" is the lead's own`},
+		{"L4: a subagent moved to class free", "agent.extract_facts", specEdit(t, "agent.extract_facts", ef, func(m map[string]any) { m["class"] = "free" }),
+			"class: free is the figure reader's and judge's only"},
 		{"empty prompt", "prompt.lead", edited("prompt.lead", leadMD, func(string) string { return "  \n" }), "a prompt is 1 byte"},
 		{"extra file", "prompt.lead", func() map[string]string {
 			f := fileMap(builtin, "prompt.lead")
@@ -135,18 +175,20 @@ func TestManageValidationRefuses(t *testing.T) {
 		{"pack code", "pack.jurisdiction.us", edited("pack.jurisdiction.us", usPack, func(s string) string { return strings.Replace(s, "code: us", "code: uk", 1) }), `code: must stay "us"`},
 		{"pack reviewed by nobody", "pack.jurisdiction.us", edited("pack.jurisdiction.us", usPack, func(s string) string { return strings.Replace(s, "status: candidate", "status: reviewed", 1) }), "status reviewed needs reviewedBy"},
 		{"pack key", "pack.jurisdiction.us", edited("pack.jurisdiction.us", usPack, func(s string) string { return strings.Replace(s, "code: us", "code: us\nowner: me", 1) }), `unknown key "owner"`},
-		{"skill disallowed tool", "skill.deadlines", edited("skill.deadlines", deadlineMD, func(s string) string { return strings.Replace(s, "- numbers", "- read_figures", 1) }), `tools: "read_figures" is not a tool use_skill's callers may call`},
-		{"skill unknown tool", "skill.deadlines", edited("skill.deadlines", deadlineMD, func(s string) string { return strings.Replace(s, "- numbers", "- web_search", 1) }), `"web_search" is not a tool`},
-		{"skill name", "skill.deadlines", edited("skill.deadlines", deadlineMD, func(s string) string { return strings.Replace(s, "name: deadlines", "name: other", 1) }), `name: must be "deadlines"`},
-		{"skill description", "skill.deadlines", edited("skill.deadlines", deadlineMD, func(s string) string {
-			return strings.Replace(s, "description: Compute", "description: "+strings.Repeat("x", 200), 1)
-		}), "description: one line of 1 to 200 bytes"},
-		{"skill file name", "skill.deadlines", func() map[string]string {
-			f := fileMap(builtin, "skill.deadlines")
-			f[skillsDir+"deadlines/run.sh"] = "rm -rf /"
+		{"skill disallowed tool", "skill.tskill", tskill(skillMD("tskill", "candidate", "", "Body.", "read_figures")), `tools: "read_figures" is not a tool use_skill's callers may call`},
+		{"skill unknown tool", "skill.tskill", tskill(skillMD("tskill", "candidate", "", "Body.", "web_search")), `"web_search" is not a tool`},
+		{"skill name", "skill.tskill", tskill(skillMD("other", "candidate", "", "Body.")), `name: must be "tskill"`},
+		{"skill description", "skill.tskill", tskill(strings.Replace(skillMD("tskill", "candidate", "", "Body."), "description: A skill", "description: "+strings.Repeat("x", 200), 1)), "description: one line of 1 to 200 bytes"},
+		{"skill file name", "skill.tskill", func() map[string]string {
+			f := tskill("")
+			f[skillsDir+"tskill/run.sh"] = "rm -rf /"
 			return f
 		}(), "a reference file is named"},
-		{"skill JSON file", "skill.deadlines", edited("skill.deadlines", skillsDir+"deadlines/examples.json", func(s string) string { return s + "}" }), "not well-formed JSON"},
+		{"skill JSON file", "skill.tskill", func() map[string]string {
+			f := tskill("")
+			f[skillsDir+"tskill/examples.json"] = "{"
+			return f
+		}(), "not well-formed JSON"},
 		{"skill without SKILL.md", "skill.notes", map[string]string{skillsDir + "notes/a.md": "x"}, "a skill needs its SKILL.md"},
 	}
 	for _, c := range cases {
@@ -163,9 +205,13 @@ func TestManageValidationRefuses(t *testing.T) {
 			at(m, "in", "questions")["maxItems"] = 20                                           // narrowing a bound the model writes
 			at(m, "out", "answers", "[]", "question")["description"] = "the question, verbatim" // a description in the schema
 		}),
+		"agent.extract_facts": specEdit(t, "agent.extract_facts", ef, func(m map[string]any) { // ledger refuses its writes to a subagent itself
+			m["allowed"] = append(m["allowed"].([]any), "ledger")
+		}),
+		"agent.read_figures":   specEdit(t, "agent.read_figures", agentsDir+"read_figures.json", func(m map[string]any) { m["maxTurns"] = 3 }), // free as built
 		"prompt.lead":          edited("prompt.lead", leadMD, func(s string) string { return s + "\nBe brief." }),
 		"pack.jurisdiction.us": edited("pack.jurisdiction.us", usPack, func(s string) string { return s + "\nOne more line." }),
-		"skill.deadlines":      edited("skill.deadlines", deadlineMD, func(s string) string { return strings.Replace(s, "- draft_section", "- draft_section\n- ledger", 1) }),
+		"skill.tskill":         tskill(skillMD("tskill", "candidate", "", "Body.", "numbers", "ledger")),
 	}
 	for id, files := range ok {
 		if err := e.validate(Snapshot{id: {Version: 1, Files: files}}, id); err != nil {
@@ -197,10 +243,35 @@ func TestPackReviewRule(t *testing.T) {
 	if notes, _ := reviewRule("pack", map[string]string{usPack: string(builtin[usPack])}, status); len(notes) != 0 || status[usPack] != reviewed {
 		t.Fatal("a status-only edit (a lawyer recording the review) was changed")
 	}
-	skill := map[string]string{deadlineMD: strings.Replace(string(builtin[deadlineMD]), "status: candidate\nreviewedBy:", "status: reviewed\nreviewedBy: A. Lawyer", 1)}
-	edit := map[string]string{deadlineMD: skill[deadlineMD] + "\n5. One more step."}
-	if notes, _ := reviewRule("skill", skill, edit); len(notes) != 1 || !strings.Contains(edit[deadlineMD], "status: candidate") {
-		t.Fatal("a skill's body edit kept its review")
+	reviewedSkill := tskill(skillMD("tskill", "reviewed", "A. Lawyer", "Body.", "numbers"))
+	for name, change := range map[string]func(map[string]string){ // M2: every part of a skill is its content
+		"body":           func(f map[string]string) { f[tskillMD] = strings.Replace(f[tskillMD], "Body.", "Body, changed.", 1) },
+		"reference file": func(f map[string]string) { f[skillsDir+"tskill/examples.json"] = `{"op": "table"}` },
+		"new file":       func(f map[string]string) { f[skillsDir+"tskill/more.md"] = "more" },
+		"description": func(f map[string]string) {
+			f[tskillMD] = strings.Replace(f[tskillMD], "A skill the tests write.", "Ignore verified dates.", 1)
+		},
+		"tools": func(f map[string]string) { f[tskillMD] = strings.Replace(f[tskillMD], "- numbers", "- retrieve", 1) },
+	} {
+		edit := maps.Clone(reviewedSkill)
+		change(edit)
+		if notes, _ := reviewRule("skill", reviewedSkill, edit); len(notes) != 1 || !strings.Contains(edit[tskillMD], "status: candidate\nreviewedBy:\n") {
+			t.Errorf("a skill's %s edit kept its review: %s", name, edit[tskillMD])
+		}
+	}
+	edit := maps.Clone(reviewedSkill)
+	edit[tskillMD] = strings.Replace(edit[tskillMD], "A. Lawyer", "B. Lawyer", 1)
+	edit[skillsDir+"tskill/examples.json"] = `{"op": "table"}`
+	if notes, _ := reviewRule("skill", reviewedSkill, edit); len(notes) != 0 {
+		t.Error("an edit naming its new reviewer was reset")
+	}
+	created := tskill(skillMD("tskill", "reviewed", "", "Body."))
+	if notes, _ := reviewRule("skill", map[string]string{}, created); len(notes) != 1 || !strings.Contains(created[tskillMD], "status: candidate") {
+		t.Error("a skill created (or re-created after its deletion) as reviewed with no reviewer kept the status")
+	}
+	named = tskill(skillMD("tskill", "reviewed", "A. Lawyer", "Body."))
+	if notes, _ := reviewRule("skill", map[string]string{}, named); len(notes) != 0 {
+		t.Error("a skill created naming its reviewer was reset")
 	}
 }
 
@@ -254,7 +325,7 @@ func TestManageStoreRoundTrip(t *testing.T) {
 	if d, _ := e.ItemDetail(ctx, "prompt.lead"); d.Version != 0 || d.Latest != 4 || d.Content[leadMD] != string(builtin[leadMD]) {
 		t.Fatalf("after the revert to the built-in: v%d latest %d", d.Version, d.Latest)
 	}
-	snap, _, _ := e.current(ctx)
+	snap, _, _ := e.current(ctx, e.db)
 	if len(snap) != 0 {
 		t.Fatalf("the snapshot still holds %v", slices.Collect(maps.Keys(snap)))
 	}
@@ -297,7 +368,7 @@ func TestSkillCreateDeleteRevert(t *testing.T) {
 	if i < 0 || items[i].Builtin || items[i].Deleted || !slices.Equal(items[i].Uses, []string{"ledger"}) || !slices.Contains(items[i].UsedBy, "lead") {
 		t.Fatalf("catalogue: %+v", items)
 	}
-	snap, _, _ := e.current(ctx)
+	snap, _, _ := e.current(ctx, e.db)
 	sp, _ := newSpecs(snap)
 	brief, err := e.brief(withSpecs(ctx, sp), Task{DocumentIDs: f.ids()})
 	if err != nil || !strings.Contains(string(brief), "chronology (candidate): Build a dated chronology") || strings.Contains(string(brief), "List each event") {
@@ -322,12 +393,13 @@ func TestSkillCreateDeleteRevert(t *testing.T) {
 	if v, err := e.Revert(ctx, "skill.chronology", 0, 3, "", "Ada"); err != nil || !v.Deleted {
 		t.Fatalf("a created skill's revert to the built-in is its absence: %+v %v", v, err)
 	}
-	if v, err := e.Delete(ctx, "skill.deadlines", 0, "", "Ada"); err != nil || !v.Deleted { // a built-in skill
+	starter := aSkill(t)
+	if v, err := e.Delete(ctx, "skill."+starter, 0, "", "Ada"); err != nil || !v.Deleted { // a built-in skill
 		t.Fatalf("delete a built-in skill: %+v %v", v, err)
 	}
-	snap, _, _ = e.current(ctx)
+	snap, _, _ = e.current(ctx, e.db)
 	sp, _ = newSpecs(snap)
-	if _, ok := sp.skill("deadlines"); ok || len(itemFiles(sp.files, "skill.deadlines")) != 0 {
+	if _, ok := sp.skill(starter); ok || len(itemFiles(sp.files, "skill."+starter)) != 0 {
 		t.Fatal("a deleted built-in skill is still in the set")
 	}
 }
@@ -356,8 +428,11 @@ func TestSkillCatalogueBounds(t *testing.T) {
 func TestUseSkillPagesAndRecords(t *testing.T) {
 	t.Parallel()
 	long := strings.Repeat("Step: compute it with numbers. ✓\n", 1200) // ~40 KB: several pages
-	sp := overrideOne(t, deadlineMD, long)
-	k, _ := sp.skill("deadlines")
+	sp, err := newSpecs(Snapshot{"skill.tskill": {Version: 1, Files: tskill(skillMD("tskill", "candidate", "", long, "numbers"))}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	k, _ := sp.skill("tskill")
 	e := &Engine{docs: &docs.Service{}, runs: map[string]*run{}}
 	r := &run{e: e, specs: sp}
 	e.runs["t"] = r // its writes go to the step buffer
@@ -367,7 +442,7 @@ func TestUseSkillPagesAndRecords(t *testing.T) {
 	var next any
 	pages := 0
 	for {
-		in, _ := json.Marshal(map[string]any{"name": "deadlines", "file": nil, "offset": next})
+		in, _ := json.Marshal(map[string]any{"name": "tskill", "file": nil, "offset": next})
 		res, err := tool.Call(ctx, agent.Call{TaskID: "t", Input: in})
 		if err != nil {
 			t.Fatal(err)
@@ -392,13 +467,13 @@ func TestUseSkillPagesAndRecords(t *testing.T) {
 	if got.String() != k.Body || pages < 3 {
 		t.Fatalf("%d pages did not rebuild the body (%d of %d bytes)", pages, got.Len(), len(k.Body))
 	}
-	in, _ := json.Marshal(map[string]any{"name": "deadlines", "file": "examples.json", "offset": nil})
+	in, _ := json.Marshal(map[string]any{"name": "tskill", "file": "examples.json", "offset": nil})
 	res, err := tool.Call(ctx, agent.Call{TaskID: "t", Input: in})
-	if err != nil || !strings.Contains(string(res.Output), "date_add") {
+	if err != nil || !strings.Contains(string(res.Output), `"file":"examples.json"`) || !strings.Contains(string(res.Output), `\"op\": \"calc\"`) {
 		t.Fatalf("reference file: %s %v", res.Output, err)
 	}
-	for _, bad := range []map[string]any{{"name": "nope", "file": nil, "offset": nil}, {"name": "deadlines", "file": "../lead.md", "offset": nil},
-		{"name": "deadlines", "file": nil, "offset": 1 << 30}} {
+	for _, bad := range []map[string]any{{"name": "nope", "file": nil, "offset": nil}, {"name": "tskill", "file": "../lead.md", "offset": nil},
+		{"name": "tskill", "file": nil, "offset": 1 << 30}} {
 		in, _ := json.Marshal(bad)
 		var fail *agent.Failure
 		if _, err := tool.Call(ctx, agent.Call{TaskID: "t", Input: in}); !errors.As(err, &fail) {
@@ -407,7 +482,7 @@ func TestUseSkillPagesAndRecords(t *testing.T) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if len(r.buf) == 0 || r.buf[0].kind != kSkill || r.buf[0].key != "deadlines" || !strings.Contains(string(r.buf[0].data), `"version":1`) {
+	if len(r.buf) == 0 || r.buf[0].kind != kSkill || r.buf[0].key != "tskill" || !strings.Contains(string(r.buf[0].data), `"version":1`) {
 		t.Fatalf("not recorded in the step's writes: %+v", r.buf)
 	}
 }
@@ -479,15 +554,15 @@ func TestSnapshotAtStartAndResume(t *testing.T) {
 func TestOverrideChangesCacheKeys(t *testing.T) {
 	t.Parallel()
 	for _, files := range [][]string{readerSpecFiles, judgeSpecFiles} {
-		base := builtinSpecs.hash(files)
+		base := builtinSpecs.hashPaths(files)
 		for _, name := range files {
-			if overrideOne(t, engineDir+name, "\n").hash(files) == base {
+			if overrideOne(t, engineDir+name, "\n").hashPaths(files) == base {
 				t.Errorf("an override of %s leaves the cache key", name)
 			}
 		}
 	}
 	sp := overrideOne(t, agentsDir+"read_figures.md", "\nRead carefully.")
-	if specsOf(withSpecs(context.Background(), sp)).hash(readerSpecFiles) == specsOf(context.Background()).hash(readerSpecFiles) {
+	if specsOf(withSpecs(context.Background(), sp)).hashPaths(readerSpecFiles) == specsOf(context.Background()).hashPaths(readerSpecFiles) {
 		t.Fatal("a run's context does not carry its set's hash")
 	}
 }
@@ -498,9 +573,10 @@ func TestSkillRunAndLimitations(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
 	sc := f.happy()
-	sc["lead"] = append([]model.Reply{calls(tc("use_skill", m{"name": "deadlines", "file": nil, "offset": nil}))}, sc["lead"]...)
+	sc["lead"] = append([]model.Reply{calls(tc("use_skill", m{"name": "tskill", "file": nil, "offset": nil}))}, sc["lead"]...)
 	k := &killer{Fake: newFake(sc)}
 	e := f.reopen(k, nil)
+	save(t, e, "skill.tskill", 0, tskill(""))
 	task := f.submit(0)
 	e.afterCommit = func(id string, n int) {
 		if n == 2 { // right after use_skill's step commits
@@ -515,7 +591,7 @@ func TestSkillRunAndLimitations(t *testing.T) {
 	f.stale(task.ID)
 	f.step(context.Background())
 	v := f.get(task.ID)
-	if stop(v) != "awaiting_gate/finished" || v.Output == nil || !strings.Contains(*v.Output, "candidate skills (deadlines)") {
+	if stop(v) != "awaiting_gate/finished" || v.Output == nil || !strings.Contains(*v.Output, "candidate skills (tskill)") {
 		t.Fatalf("%s\n%s", stop(v), deref(v.Output))
 	}
 	ss, _ := f.e.Steps(context.Background(), task.ID, 0)
@@ -545,7 +621,8 @@ func TestExportPatchApplies(t *testing.T) {
 	if _, _, err := e.Save(ctx, "skill.notes", SaveIn{Files: map[string]string{skillsDir + "notes/SKILL.md": md}}, "Ada"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.Delete(ctx, "skill.figure-conflicts", 0, "", "Ada"); err != nil {
+	starter := aSkill(t)
+	if _, err := e.Delete(ctx, "skill."+starter, 0, "", "Ada"); err != nil {
 		t.Fatal(err)
 	}
 	now, built, err := e.Export(ctx, nil)
@@ -555,7 +632,7 @@ func TestExportPatchApplies(t *testing.T) {
 	p := Patch(now, built)
 	for _, want := range []string{"--- a/" + leadMD + "\n+++ b/" + leadMD, "-What usually works, in order:", "+What usually works, in this order:",
 		"new file mode 100644\n--- /dev/null\n+++ b/" + skillsDir + "notes/SKILL.md", "\\ No newline at end of file",
-		"deleted file mode 100644\n--- a/" + skillsDir + "figure-conflicts/SKILL.md\n+++ /dev/null"} {
+		"deleted file mode 100644\n--- a/" + skillsDir + starter + "/SKILL.md\n+++ /dev/null"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("the patch lacks %q:\n%s", want, p)
 		}
@@ -584,7 +661,7 @@ func TestExportPatchApplies(t *testing.T) {
 			t.Errorf("%s after the patch differs", path)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(dir, skillsDir, "figure-conflicts/SKILL.md")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(dir, skillsDir, starter+"/SKILL.md")); !os.IsNotExist(err) {
 		t.Error("the deleted skill's file is still there")
 	}
 }
@@ -609,7 +686,7 @@ func TestCatalogueAndHooks(t *testing.T) {
 		by[it.ID] = it
 	}
 	for id, sec := range map[string]string{"prompt.lead": "agents", "agent.read_figures": "agents", "pass.sweep": "agents", "tool.numbers": "tools",
-		"tool.use_skill": "tools", "pack.jurisdiction.us": "packs", "skill.deadlines": "skills", "hook.draft_section": "hooks"} {
+		"tool.use_skill": "tools", "pack.jurisdiction.us": "packs", "skill." + aSkill(t): "skills", "hook.draft_section": "hooks"} {
 		if by[id].Section != sec {
 			t.Errorf("%s: section %q, want %s", id, by[id].Section, sec)
 		}
@@ -642,4 +719,82 @@ func TestCatalogueAndHooks(t *testing.T) {
 func pretty(v any) string {
 	b, _ := json.MarshalIndent(v, "", " ")
 	return string(b) + "\n"
+}
+
+func save(t *testing.T, e *Engine, id string, base int, files map[string]string) {
+	t.Helper()
+	if _, _, err := e.Save(context.Background(), id, SaveIn{Base: base, Files: files}, "Ada"); err != nil {
+		t.Fatalf("save %s: %s", id, problems(err))
+	}
+}
+
+// TestEnumRenameRefusedEndToEnd (review H1): renaming the verdict Go turns into a HIGH critic finding
+// is refused at save, so the committee's gate cannot be skipped by an edit.
+func TestEnumRenameRefusedEndToEnd(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	e, _ := f.engine(nil, Config{})
+	files := specEdit(t, "agent.prosecute", agentsDir+"prosecute.json", func(m map[string]any) {
+		at(m, "out", "verdicts", "[]", "verdict")["enum"] = []string{"supported", "overstated", "not_supported"}
+	})
+	if _, _, err := e.Save(context.Background(), "agent.prosecute", SaveIn{Files: files}, "Ada"); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "Go branches on") {
+		t.Fatalf("the rename was saved: %v", err)
+	}
+	if items, _ := e.Items(context.Background()); slices.ContainsFunc(items, func(i Item) bool { return i.ID == "agent.prosecute" && i.Version > 0 }) {
+		t.Fatal("a refused save left a version")
+	}
+}
+
+// TestSavesAreSerial (review L1): two saves of different items that are each valid alone but break
+// the set together cannot both land: they validate one after the other.
+func TestSavesAreSerial(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	e, _ := f.engine(nil, Config{})
+	ctx := context.Background()
+	rf := agentsDir + "reproduce.json"
+	withSkill := specEdit(t, "agent.reproduce", rf, func(m map[string]any) { m["allowed"] = []string{"retrieve", "numbers", "use_skill", "exact_calc"} })
+	save(t, e, "agent.reproduce", 0, withSkill) // exact_calc is now a tool use_skill's callers may call
+	without := specEdit(t, "agent.reproduce", rf, func(m map[string]any) { m["allowed"] = []string{"retrieve", "numbers", "use_skill"} })
+	skill := tskill(skillMD("tskill", "candidate", "", "Body.", "exact_calc"))
+	errs := make(chan error, 2)
+	go func() {
+		_, _, err := e.Save(ctx, "agent.reproduce", SaveIn{Base: 1, Files: without}, "Ada")
+		errs <- err
+	}()
+	go func() { _, _, err := e.Save(ctx, "skill.tskill", SaveIn{Files: skill}, "Bo"); errs <- err }()
+	if a, b := <-errs, <-errs; a == nil && b == nil {
+		t.Fatal("both saves landed: the set they make does not load")
+	}
+	snap, _, _ := e.current(ctx, e.db)
+	if err := e.validate(snap, "agent.reproduce"); err != nil {
+		t.Fatalf("the stored set does not validate: %s", problems(err))
+	}
+}
+
+// TestAgentHashCoversAllowedTools (review L2): the reader's cache key hashes every tool its allowed
+// list names, by name, so a tool added there, or that tool's override, reads again; as built in it
+// is the hash it always was.
+func TestAgentHashCoversAllowedTools(t *testing.T) {
+	t.Parallel()
+	if builtinSpecs.agentHash("read_figures") != builtinSpecs.hashPaths(readerSpecFiles) || builtinSpecs.agentHash("judge_figures") != builtinSpecs.hashPaths(judgeSpecFiles) {
+		t.Fatal("the built-in reader's or judge's hash changed: their cached readings would all be read again")
+	}
+	rfj := agentsDir + "read_figures.json"
+	added := specEdit(t, "agent.read_figures", rfj, func(m map[string]any) { m["allowed"] = []string{"figure_context", "exact_calc", "retrieve"} })
+	one, err := newSpecs(Snapshot{"agent.read_figures": {1, added}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	retr := fileMap(builtin, "tool.retrieve")
+	for k := range retr {
+		retr[k] = strings.Replace(retr[k], "Reads the matter", "Reads, only, the matter", 1)
+	}
+	two, err := newSpecs(Snapshot{"agent.read_figures": {1, added}, "tool.retrieve": {1, retr}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h0, h1, h2 := builtinSpecs.agentHash("read_figures"), one.agentHash("read_figures"), two.agentHash("read_figures"); h0 == h1 || h1 == h2 {
+		t.Fatal("a tool added to the reader's list, or its override, leaves the cache key")
+	}
 }

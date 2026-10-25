@@ -37,8 +37,6 @@ const (
 	maxJudgeQuote = 4_000 // a quote over it is sent cut around its value
 )
 
-var judgeSpecFiles = []string{"specs/agents/judge_figures.json", "specs/agents/judge_figures.md", "specs/figure_context.json"}
-
 // judgeSide is one figure of a pair as the judge is sent it (no fid: the cache is across runs).
 type judgeSide struct {
 	Ref        string      `json:"ref"`
@@ -238,7 +236,7 @@ func (e *Engine) judge(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 		model = rt.Bandit.PickModel(ctx, "judge_figures", models)
 	}
 	models = append([]string{model}, slices.DeleteFunc(models, func(m string) bool { return m == model })...)
-	jh := specsOf(ctx).hash(judgeSpecFiles)
+	jh := specsOf(ctx).agentHash("judge_figures")
 	keep := func(x analysis.Candidate, v analysis.Verdict) error {
 		v.Pair = x.ID
 		out[x.ID] = v

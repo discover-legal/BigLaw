@@ -41,12 +41,10 @@ import (
 // (its worst case reserved before the drafter runs, r5 L4), metered and journaled like any call, and
 // its complete answers are cached (figure_reads), so a run read again gets the same reading.
 
-// The reader's spec hash (Specs.hash of readerSpecFiles, the run's snapshot) is part of every cached
+// The reader's spec hash (Specs.agentHash of read_figures in the run's snapshot) is part of every cached
 // reading's key: the hash of the reader's spec, prompt and tools' specs, so an edit to any of them,
 // an admin's override included, reads every figure again (lab-r4 r5 M3; derived, never bumped by hand). The key also holds the model the reader runs on, the matter (and, for a drafted section, the
 // task) it read for, and exactly what it was sent.
-// readerSpecFiles are the files the reader's behaviour comes from.
-var readerSpecFiles = []string{"specs/agents/read_figures.json", "specs/agents/read_figures.md", "specs/figure_context.json", "specs/exact_calc.json"}
 
 // The bounds of one reader call (its answer is a label per span), below its input schema's: a call
 // holds at most maxReadItems parts of maxReadSpans spans and maxReadBytes of text in all, a part at
@@ -285,7 +283,7 @@ func (e *Engine) readFigures(ctx context.Context, rt *agent.Runtime, c agent.Cal
 		model = rt.Bandit.PickModel(ctx, "read_figures", models)
 	}
 	models = append([]string{model}, slices.DeleteFunc(models, func(m string) bool { return m == model })...) // a reading any candidate model made is reused before another call
-	rh := specsOf(ctx).hash(readerSpecFiles)
+	rh := specsOf(ctx).agentHash("read_figures")
 	scope, err := e.readScope(ctx, c.TaskID)
 	if err != nil {
 		return err

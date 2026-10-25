@@ -199,7 +199,7 @@ export interface SpecVersion {
 export interface SaveResult { version: SpecVersion; notes: string[] }
 export interface Problem { file: string; message: string }
 /** GET /me: who is asking; until sign-in (PR 8) the local user, an admin. */
-export interface Me { id: string; name: string; admin: boolean; authEnabled: boolean }
+export interface Me { id: string; name: string; admin: boolean; authEnabled: boolean; adminWithoutAuth?: boolean }
 /** A secret as the API shows it: never its value. */
 export interface SecretView { name: string; updatedBy: string; updatedAt: string; usedBy: string[] }
 export interface RemoteTool { name: string; description: string; in?: unknown; problem?: string }

@@ -37,9 +37,12 @@ export function Manage(props: { section: string; item: string; tab: string }) {
       <p className="lede">What BigLaw's agents use, and where. An admin's change is a new version that the next task runs on; a running task keeps
         the versions it started with, also when it resumes.</p>
       {api.mode === 'recorded' && <p className="sample small">Read-only in the demo: this build's built-in catalogue, recorded from its files. Nothing can be saved, and no usage is recorded.</p>}
-      {me.data && !admin && api.mode === 'live' && <p className="notice small">You can view everything here; only an admin can change it.</p>}
+      {me.data && !admin && api.mode === 'live' && <p className="notice small">You can view everything here; only an admin can change it. This server runs without sign-in
+        (<code>--allow-no-auth</code>), so Manage is read-only unless its operator starts it with <code>--admin-without-auth</code>.</p>}
+      {me.data?.adminWithoutAuth && <p className="error small" role="alert"><strong>Open to anyone:</strong> this server runs with <code>--admin-without-auth</code> and no sign-in,
+        so anyone who can reach it can change what every task's agents use.</p>}
       <Failure error={list.error ?? me.error} />
-      <div className="tabs" role="tablist" aria-label="Sections">
+      <div className="tabs wrap" role="tablist" aria-label="Sections">
         {SECTIONS.map(([id, label]) => (
           <button key={id} role="tab" aria-selected={section === id} className={section === id ? 'on' : ''} onClick={() => go('manage', { section: id })}>
             {label}{id !== 'changes' && list.data && <span className="count">{list.data.filter((i) => i.section === id).length}</span>}
@@ -218,7 +221,8 @@ function SpecFields(props: { text: string; tools: string[]; set: (text: string) 
         <textarea rows={6} value={spec.description ?? ''} onChange={(e) => put({ description: e.target.value })} /></label>
       <div className="row">
         <label>Max turns <input type="number" min={sub ? 1 : 0} max={sub ? 32 : 10000} value={spec.maxTurns ?? 0} onChange={(e) => put({ maxTurns: Number(e.target.value) })} /></label>
-        <label>Budget class <select value={spec.class} onChange={(e) => put({ class: e.target.value })}>{CLASSES.map((c) => <option key={c}>{c}</option>)}</select></label>
+        <label>Budget class <select value={spec.class} onChange={(e) => put({ class: e.target.value })}>
+          {CLASSES.filter((c) => c !== 'free' || !sub || spec.class === 'free').map((c) => <option key={c}>{c}</option>)}</select></label>
         {sub && <label>Model role <select value={spec.role} onChange={(e) => put({ role: e.target.value })}><option>specialist</option><option>critic</option></select></label>}
       </div>
       {sub && (
