@@ -46,6 +46,23 @@ MCP (PR 7), clients/conflicts and OIDC/session/token auth (PR 8), time and billi
 the full jurisdiction and practice pack catalogue (PR 12; four candidate packs ship with PR 4b), v1 import and docs (PR 13). The
 discover.legal intake module is **not** part of v2 (owner decision; it moves to a separate repo).
 
+## Architecture and patterns
+
+This README is the contract. The design is described in `docs/`:
+- [`docs/architecture.md`](docs/architecture.md): the packages and the import rules the tests
+  enforce, a task's lifecycle from submission to the rendered memo, the budget, meter and journal,
+  the spec set and snapshot, the figure pipeline, hooks, and custom tools. Each part links to the
+  code that implements it.
+- [`docs/patterns.md`](docs/patterns.md): the recurring patterns (typed tool specs, Go checking
+  model output, fail closed or disclose, unclear gates, journaled steps, budget shares, content-hash
+  caches, versioned overrides, admin-guarded writes, untrusted-text labelling) and the test
+  patterns. For each: why it exists, and how to apply it.
+- [`docs/glossary.md`](docs/glossary.md): the project's vocabulary, the G and P codes, and the
+  ledger kinds.
+- [`docs/consolidation-proposals.md`](docs/consolidation-proposals.md): normalisation and
+  consolidation opportunities for the owner to decide on, a proposed README restructure, and the
+  places where the docs and the code disagree today.
+
 ## Configuration
 
 Environment variables only. All 18 are declared in `cmd/biglaw/config.go` (20 until PR 3b, whose
