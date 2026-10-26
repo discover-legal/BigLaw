@@ -7,50 +7,48 @@ The README is still the contract for behaviour and bounds, and each section belo
 code that implements it. [patterns.md](patterns.md) explains *why* the code is shaped this way,
 and [glossary.md](glossary.md) defines the vocabulary.
 
-Every statement here was checked against the code at `v2` 29def72. If a statement and the code
-disagree, the code is right. Fix this page in the same change.
+If a statement here and the code disagree, the code is right: fix this page in the same change.
 
 ## 1. Packages and boundaries
 
-One Go module, one binary, one PostgreSQL database. Eight production packages live under
-`internal/`, plus two test-support packages and the command:
+One Go module, one binary, one PostgreSQL database. Nine production packages live under
+`internal/`, plus three test-support packages and the command (`python3 scripts/loc.py` prints the
+current list and line counts; no page carries them):
 
-| Package | Owns | Lines (prod, approx.) |
-|---|---|---:|
-| [`cmd/biglaw`](../cmd/biglaw) | `serve` and `version`, the env-var table (`config.go`), the vendor breakers, the startup wiring, the `bad_host` guard, graceful stop | 680 |
-| [`internal/store`](../internal/store) | `Open` (DSN check, pgvector, migrations), `InTx`, chunked `bytea` files with SHA-256, the migration runner, name and id policy | 660 |
-| [`internal/model`](../internal/model) | The only code that talks to a model: the OpenAI-compatible chat and embeddings client, typed errors and their HTTP mapping, `Roles`, the price table, `model.Fake` | 1,000 |
-| [`internal/docs`](../internal/docs) (+ [`ooxml`](../internal/docs/ooxml)) | Documents, sections and chunks: ingest (PDF and `.docx` in a bounded child process), vision transcription, the section tree, lexical and hybrid search, the page reader, the verification ladder, the document routes, and the `retrieve` and `verify_quote` tools | 3,250 |
-| [`internal/agent`](../internal/agent) | The runtime: `Tool`/`Spec`/`Call`/`Result`, the registry, the schema subset, the one loop (`Runtime.Run`), the one dispatch path (`Runtime.Invoke`), `Budget`, the meter, `Journal`/`Step`, the bandit | 1,700 |
-| [`internal/analysis`](../internal/analysis) | Pure functions over findings: figure spans (`figures.go`), label checking (`figread.go`), the cross-document join (`join.go`), exact calculation and handles (`numbers.go`), normalisers, coverage, BELO-lite, locators, and the `numbers` and `join_discrepancies` tools | 2,600 |
-| [`internal/engine`](../internal/engine) | The memo workflow: the lead, the ledger, admission, sweep, figure reader and judge, deviation checks, drafting, committee, coverage pass, finish (lint, render, gates), durable runs, Manage (spec set, overrides, validation, diff and export), skills, packs, configurable hooks, custom tools | 14,500 |
-| [`internal/api`](../internal/api) | The REST surface over the engine and docs, SSE, the Manage routes, the `Principal` seam, the embedded UI | 500 |
-| [`internal/store/storetest`](../internal/store/storetest), [`internal/engine/figtest`](../internal/engine/figtest) | Test support: a schema per DB test, and the figure reader's stand-in | 650 |
-
-The line counts are rounded from `wc -l`. `scripts/loc.py` prints the exact budget figures, and
-the README's Budgets table is the place for those.
+| Package | Owns |
+|---|---|
+| [`cmd/biglaw`](../cmd/biglaw) | `serve` and `version`, the env-var table (`config.go`), the vendor breakers, the startup wiring, the `bad_host` guard, graceful stop |
+| [`internal/store`](../internal/store) | `Open` (DSN check, pgvector, migrations), `InTx`, chunked `bytea` files with SHA-256, the migration runner, name and id policy |
+| [`internal/model`](../internal/model) | The only code that talks to a model: the OpenAI-compatible chat and embeddings client, typed errors, `Roles`, the price table, `model.Fake` |
+| [`internal/docs`](../internal/docs) (+ [`ooxml`](../internal/docs/ooxml)) | Documents, sections and chunks: ingest (PDF and `.docx` in a bounded child process), vision transcription, the section tree, lexical and hybrid search, the page reader, the verification ladder, the document routes, and the `retrieve` and `verify_quote` tools |
+| [`internal/agent`](../internal/agent) | The runtime: `Tool`/`Spec`/`Call`/`Result`, the registry, the schema subset, the one loop (`Runtime.Run`), the one dispatch path (`Runtime.Invoke`), `Budget`, the meter, `Journal`/`Step`, the bandit |
+| [`internal/analysis`](../internal/analysis) | Pure functions over findings: figure spans (`figures.go`), label checking (`figread.go`), the cross-document join (`join.go`), exact calculation and handles (`numbers.go`), normalisers, coverage, BELO-lite, locators, and the `numbers` and `join_discrepancies` tools |
+| [`internal/engine`](../internal/engine) | The memo workflow: the lead, the ledger, admission, sweep, figure reader and judge, deviation checks, drafting, committee, coverage pass, finish (lint, render, gates), durable runs, Manage (spec set, overrides, validation, diff and export), skills, packs, configurable hooks, custom tools |
+| [`internal/auth`](../internal/auth) | Sign-in: the OIDC code flow with PKCE, ID-token verification on the standard library, server-side sessions, `IsAdmin` (README § Sign-in) |
+| [`internal/api`](../internal/api) | The REST surface over the engine and docs, SSE, the Manage routes, the `Principal` seam, `RequireSignIn`, the embedded UI |
+| [`internal/store/storetest`](../internal/store/storetest), [`internal/engine/figtest`](../internal/engine/figtest), [`internal/auth/authtest`](../internal/auth/authtest) | Test support: a schema per DB test, the figure reader's stand-in, and a fake OpenID provider |
 
 ### The import rules the tests enforce
 
 `TestImportBoundaries` ([`internal/agent/boundaries_test.go`](../internal/agent/boundaries_test.go))
 runs `go list` and fails on any internal import that is not in its table. A new package must add
-a row. The edges as built (the table also allows a few that no code uses yet, such as
-`engine → docs/ooxml` and `api → analysis`):
+a row. The edges as built (the table also allows `engine → docs/ooxml`, for the planned `.docx`
+writer):
 
 ```mermaid
 flowchart TD
-  cmd[cmd/biglaw] --> api & engine & docs & model & store
-  api[internal/api] --> engine & docs & agent
+  cmd[cmd/biglaw] --> api & engine & docs & model & store & auth
+  api[internal/api] --> engine & docs & agent & auth
   engine[internal/engine] --> agent & analysis & docs & store & model
   analysis[internal/analysis] --> agent
   docs[internal/docs] --> agent & model & store & ooxml[docs/ooxml]
   agent[internal/agent] --> model
+  auth[internal/auth]
   model[internal/model]
   store[internal/store]
 ```
 
-The table also has rows for planned packages (`internal/contracts`, `internal/billing`,
-`internal/clients`) that do not exist yet. The same test scans every production file outside
+The same test scans every production file outside
 `internal/docs` and `internal/store` for SQL on `documents`, `chunks`, `sections` or `files`, and
 for calls to `GetFile`/`PutFile`/`ReadFile`. Those tables are read only through `docs`, which
 always takes a scope (G1).
@@ -58,13 +56,15 @@ always takes a scope (G1).
 Other structural guards:
 - `agent` imports only `model`. `analysis` imports only `agent`, so it never touches the database
   or a model directly: the engine supplies its findings through the `analysis.Source` interface and
-  the judge through `analysis.Judge`.
+  the judge through `analysis.Judge`. `auth` imports nothing internal (the database is handed in).
 - Only `model` sends HTTP to a model. `docs` (embeddings, vision) and `agent` (chat) call it.
 - `TestToolSchemasContainNoMatterData`: a definition is frozen at registration, so no matter data
   reaches a schema.
 - `scripts/loc.py` (run by `make ci`) fails on a file over 2,000 lines, more than 12 internal
   packages, more than 3 direct dependencies, more than 20 env vars, a package without a
   `_test.go`, or a dynamic `os.Getenv`.
+- `TestDocsCiteRealTests` (`cmd/biglaw/repo_test.go`) fails when README.md, CLAUDE.md or a page
+  here cites a `Test…` name the code does not define.
 
 ### The UI and eval
 
@@ -547,3 +547,4 @@ Two kinds:
 | `figure_reads` | the figure reader and judge | A cross-run cache, by content key |
 | `spec_versions`, `manage_events` | Manage | Append-only history and the change log |
 | `secrets` | Manage | Values bound to an origin |
+| `sessions` | `auth` | Only the SHA-256 of each session cookie's id, with its idle and absolute end |

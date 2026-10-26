@@ -75,7 +75,9 @@ fix this page in the same change.
   `model_not_configured`.
 - **Watt-hours.** With `BIGLAW_LOCAL_WATTS` set, every call (successful or billed-but-refused)
   records `BIGLAW_LOCAL_WATTS` × its duration (all attempts) as watt-hours, beside its price. They
-  report the energy of your own hardware; they never change the cost. Unset, none are recorded.
+  report the energy of your own hardware; they never change the cost. A task's total is
+  `summary.wattHours` in `GET /tasks/{id}/cost`, shown as estimated energy on the Task screen's Cost
+  tab. Unset, none are recorded.
 
 ## Agent runtime and memo tools
 

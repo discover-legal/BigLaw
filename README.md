@@ -5,6 +5,11 @@
 > BigLaw 1 (the DyTopo platform) is frozen on the branch `archive/v1-final` (a branch, because
 > tag pushes are blocked in the build environment).
 
+**Start here.** To use BigLaw (install it, add a matter's documents, ask a question, review and
+download the memo), read the [user guide](docs/user-guide.md): plain words, no programming. To
+work on BigLaw, read on: this README is the contract for what is on disk, `docs/` holds the design
+(§ Architecture and patterns), and [CLAUDE.md](CLAUDE.md) holds the rules every change follows.
+
 BigLaw 2 will be a legal AI workbench for small firms: memos, contract review and diligence
 tables in which every factual statement cites a quote that the software has verified against the
 matter's own documents, with a lawyer approving every deliverable. It is one Go binary plus one
@@ -38,7 +43,7 @@ Linux, Docker reaches an Ollama on the host only if Ollama listens beyond 127.0.
 | Store | `internal/store/store.go` | Postgres via `database/sql` + `github.com/lib/pq`; DSN check that matches lib/pq's reading; transaction helper |
 | Migrations | `internal/store/migrate.go`, `internal/store/migrations/NNNN_*.sql` | Embedded SQL files applied in order under an advisory lock; each file and its `schema_migrations` row in one transaction. `store.Open` first creates the `vector` extension (pgvector), which is database-wide (§ Database) |
 | Files | `internal/store/files.go` | Binary files (uploads, generated `.docx`) stored in 1 MiB `bytea` chunks, streamed in and out, with size and SHA-256 checked on every read |
-| Model client | `internal/model/` (`client.go`, `embed.go`, `errors.go`, `fake.go`, `pricing.go`, `prices.json`) | One OpenAI-compatible chat client with tool calls and image parts, an embeddings call (`Embed`) on the same transport, typed failures with their HTTP mapping, at most 3 attempts per call, cache-aware pricing of every call from a built-in table plus `BIGLAW_PRICES` (the host never makes a call free), watt-hour metering when `BIGLAW_LOCAL_WATTS` is set, and `model.Fake` for tests (§ Model client). `Embed`'s caller is documents (below); `Chat`'s is the agent loop (below), which the memo workflow drives. |
+| Model client | `internal/model/` (`client.go`, `embed.go`, `errors.go`, `fake.go`, `pricing.go`, `prices.json`) | One OpenAI-compatible chat client with tool calls and image parts, an embeddings call (`Embed`) on the same transport, typed failures, at most 3 attempts per call, cache-aware pricing of every call from a built-in table plus `BIGLAW_PRICES` (the host never makes a call free), watt-hour metering when `BIGLAW_LOCAL_WATTS` is set, and `model.Fake` for tests (§ Model client). `Embed`'s caller is documents (below); `Chat`'s is the agent loop (below), which the memo workflow drives. |
 | Documents | `internal/docs/` (`ingest.go`, `child.go` + `child_linux.go`/`child_other.go`, `pageindex.go`, `chunk.go`, `search.go`, `embed.go`, `verify.go`, `http.go`, `vision.go` + `vision_prompts.txt`, `scanpdf.go`, `jobs.go`) | Ingest of UTF-8 text (a plain-text e-mail whose headers say quoted-printable is stored decoded, headers verbatim: `TestEmailBodyDecodedFromQuotedPrintable`), `.docx` and PDF text layers (PDFs and `.docx` files parsed in a bounded child process); images and JPEG-scanned PDF pages transcribed by the `vision` role, each page read twice and the readings compared, with provenance on every document, chunk and citation, and a leased job that transcribes what was stored before a vision role was set (§ Vision transcription); the byte-exact section tree; search chunks; Postgres full-text search, fused with pgvector similarity when an `embed` role is set (chunk embedding at ingest, a startup backfill); the page reader (outline, paged sections); the quote-verification ladder; the upload and download routes. Every read is scoped to the caller's document ids (§ Documents) |
 | Agent runtime | `internal/agent/` (`tool.go`, `registry.go`, `schema.go`, `loop.go`, `budget.go`, `policy.go`, `bandit.go`) | The `Tool` interface and its single registry (definitions frozen at registration), JSON-schema validation of every tool input and output, one bounded loop for the lead and its subagents, the budget ledger, and the tool bandit (§ Agent runtime). The memo workflow drives it (below); a step log makes it resumable |
 | Engine | `internal/engine/` (+ `specs/`, `packs/`; migrations `0005_runs.sql`, `0006_figure_reads.sql`, `0007_figure_reads_scope.sql`) | The memo workflow: the lead agent and its 12 tools, the ledger, the evidence subagents with Go-side quote verification, the figure reader, the sweep, the three-critic committee, the policy, `finish` (lint, coverage, render), the human gates, grounding collapse, and durable runs (step log, lease and heartbeat, resume) (§ Memo workflow) |
@@ -46,7 +51,7 @@ Linux, Docker reaches an Ollama on the host only if Ollama listens beyond 127.0.
 | Manage | `internal/engine/specset.go`, `manage.go`, `manage_validate.go`, `diff.go`, `skills.go`, `custom.go`, `remote.go`, `hookrules.go` (+ `skills/`, `specs/use_skill.json`; migrations `0008_overrides.sql`, `0009_custom_tools.sql`, `0010_secret_origin.sql`), `internal/api/manage.go`, `ui/src/screens/Manage.tsx` | The catalogue of every agent, tool, pack, skill and hook a run uses, admins' versioned overrides in Postgres (strictly validated, compatibility-checked against what Go reads and writes), each task's snapshot of them, history, diffs, revert and a patch/zip export; skills and `use_skill`; admins' own subagents and MCP/HTTP tools with SSRF-checked calls and server-side secrets, a metered Test call, and configurable hooks around calls, findings and finish (§ Manage) |
 | Memo tools | `internal/analysis/` (+ `belo.json`, `specs/*.json`), `internal/docs/register.go` (+ `specs/*.json`) | Deterministic tools over verified findings: `numbers` (exact `calc`, figure handles, key-figures table), `join_discrepancies`, the coverage checks `finish{op:"check"}` will run, the value normalisers and BELO-lite; and the `retrieve` / `verify_quote` adapters over documents (§ Agent runtime) |
 | `.docx` reader | `internal/docs/ooxml/` | Opens a `.docx`'s text parts only (body, footnotes, endnotes; 128 MiB decompression cap) and reads its visible text in one linear XML pass. The writer, the XML escapers, the part-preserving re-zip and tracked-change parse/apply are planned (PR 3d) |
-| Evaluation | `eval/` (`run.py`, `proofrun/`, `lab/`, `tests/`, `tasks/`, `e4/embeddings.json`) | The five synthetic proof-run matters (documents + answer keys), copied from `feat/proof-runs-multi-practice`, with their driver, scorer and the v1 comparison (`run.py`), the Harvey LAB driver (`lab/run.py`), and the Go gates E1/E2 that run them through the engine on a scripted model (§ Memo workflow). `eval/e4/embeddings.json` is E4's embeddings tape: today the **self-test** tape of a hash embedder, not a real model's (§ Documents, gate E4) |
+| Evaluation | `eval/` (`run.py`, `proofrun/`, `lab/`, `tests/`, `tasks/`, `e4/embeddings.json`) | The five synthetic proof-run matters (documents + answer keys), copied from `feat/proof-runs-multi-practice`, with their driver and scorer (`run.py`), the Harvey LAB driver (`lab/run.py`), and the Go gates E1/E2 that run them through the engine on a scripted model (§ Memo workflow). `eval/e4/embeddings.json` is E4's embeddings tape: today the **self-test** tape of a hash embedder, not a real model's (§ Documents, gate E4) |
 | UI | `ui/` (React 19 + Vite + TypeScript strict; runtime deps `react`, `react-dom` only) | Matters, Documents, Task and Manage (§ UI) behind one transport seam, `ui/src/api/transport.ts`: `http.ts` talks to the Go API on the same origin (tasks, steps, findings, gates, cost and documents are served since PR 4b), `recorded.ts` replays a recorded engine in the browser with no network at all |
 | Recorded demo | `ui/src/recorded/recording.json`, `eval/demo/record_test.go` | Three synthetic matters (13 documents plus one scanned exhibit, `ui/src/recorded/06-affidavit-of-service-scan.jpg`, drawn by `eval/demo/make_scan.py`) and seven recorded memo tasks (48 findings, 79 citations); documents, outlines, sections, chunks, the scan's transcript (v2's vision path with a scripted reader), run-log and offered search hits and every quote's verification computed by v2's `internal/docs`; claims from the answer keys; the default call budget read from `cmd/biglaw/config.go` (§ UI, provenance). `TestDemoRecording` fails when the committed recording no longer matches what v2's code computes |
 | Sign-in | `internal/auth/` (`oidc.go`, `session.go`; migration `0011_sessions.sql`), `internal/api/signin.go`; `0012_task_submitter.sql` | OpenID Connect code flow with PKCE against one issuer, ID tokens verified with the standard library (discovery, JWKS, RS/ES signatures, claims), server-side sessions behind an opaque cookie, admins by `BIGLAW_ADMINS`, and the API behind a session (§ Sign-in) |
@@ -64,7 +69,7 @@ is 404/405. With sign-in configured (§ Sign-in) every route but `/health`, the 
 
 **Planned** (not built): the `.docx` writer and tracked-change parse/apply (PR 3d); diligence (PR 5), contract review (PR 6),
 MCP (PR 7), clients/conflicts and API tokens (the rest of PR 8; OIDC sign-in and sessions are built, § Sign-in), time and billing (PR 9), the
-the full jurisdiction and practice pack catalogue (PR 12; four candidate packs ship with PR 4b), v1 import and docs (PR 13). The
+full jurisdiction and practice pack catalogue (PR 12; four candidate packs ship with PR 4b), v1 import and docs (PR 13). The
 discover.legal intake module is **not** part of v2 (owner decision; it moves to a separate repo).
 
 ## Architecture and patterns
@@ -82,14 +87,16 @@ This README is the contract. The design is described in `docs/`:
   P1–P9 and E0–E4 codes this README uses throughout are defined in its
   [Codes table](docs/glossary.md#codes).
 - [`docs/documents.md`](docs/documents.md), [`docs/figures.md`](docs/figures.md) and
-  [`docs/reference.md`](docs/reference.md): the design detail this README leaves out (the section
-  tree, search, hybrid search and vision transcription in depth; the figure rules; the agent runtime,
-  the memo workflow's passes, Manage's validation and hooks), moved here verbatim from the README.
-  [`docs/history.md`](docs/history.md): each PR's named tests and the line-budget history.
+  [`docs/reference.md`](docs/reference.md): the design detail this README leaves out (documents,
+  search and vision transcription; the figure rules; the model client, agent runtime, memo workflow,
+  Manage and hooks in depth).
 - [`docs/benchmarks.md`](docs/benchmarks.md): the pinned benchmark suite (`make bench`), its results schema, `compare.py` and the baselines.
-- [`docs/consolidation-proposals.md`](docs/consolidation-proposals.md): normalisation and
-  consolidation opportunities for the owner to decide on, a proposed README restructure, and the
-  places where the docs and the code disagree today.
+- [`docs/user-guide.md`](docs/user-guide.md): BigLaw for a lawyer, in plain words.
+- [`docs/consolidation-proposals.md`](docs/consolidation-proposals.md): the consolidation items
+  still open for the owner's decision.
+
+`TestDocsCiteRealTests` fails when this README, CLAUDE.md or a page in `docs/` names a `Test…`
+that the code does not define.
 
 ## Configuration
 
@@ -129,7 +136,7 @@ whatever does not parse into a shape known to be safe is not shown.
 | `BIGLAW_MODELS` | — | Model id per role, as the endpoint names it: comma-separated `role=id`, roles `lead`, `specialist`, `critic`, `vision`, `embed`, each at most once (e.g. `lead=qwen2.5:14b,critic=glm-4.5-air,embed=nomic-embed-text`). Unset `specialist` or `critic` use the lead's; setting either without the lead is refused. `vision` and `embed` have **no** fallback: with no `embed` role search is lexical only (`/health` says `"search":"lexical"`); `vision` names the model images and scanned pages are sent to; without it they are stored as `needs_transcription` (503 `vision_not_configured`) and never sent to another role's model (§ Vision transcription). An unknown role, a repeated one, an empty id, an id over 200 bytes, or an id holding `://`, `user:password@`, white space, a control or invisible (format) character, `?` `=` `&`, or a key's shape (`sk-`, `sk_`, `AKIA`, `ASIA`, `AIza`, `xox?-`, `gh?_` prefixes, or 24 letters and digits in a row) is a startup error that does not echo the value. A wrong id fails at its first call with 404 → `model_not_configured`; with no lead, chat calls fail with 503 `model_not_configured`. |
 | `BIGLAW_BUDGET_CALLS` | `400` | Model calls per task, lead turns included (at the first bench's $0.012–0.020 a call, 400 calls cost $4.80–8.00, so the default $5 usually binds first; every share holds on both) |
 | `BIGLAW_BUDGET_USD` | `5` | Dollar cap per task |
-| `BIGLAW_LOCAL_WATTS` | — | Power draw of the machine running the model; when set (above 0) every call records watts × duration as watt-hours, for reporting only (never a price). A number from 0 to 100000 |
+| `BIGLAW_LOCAL_WATTS` | — | Power draw of the machine running the model; when set (above 0) every call records watts × duration as watt-hours, an estimate shown in the Task screen's Cost tab (never a price). A number from 0 to 100000 |
 | `BIGLAW_PRICES` | built-in | Model rates overriding the built-in table: the JSON itself (a value starting with `{`) or a path to a regular file of at most 1 MiB holding it (§ Model client) |
 | `BIGLAW_COLLAPSE_THRESHOLD` / `_ACTION` | `0.5` / `strict` | Grounding-collapse policy |
 | `BIGLAW_OIDC_ISSUER` | — | Turns sign-in on: the issuer's https URL exactly as its discovery document states it (`https://idp.example.com/realms/biglaw`), no query; plain http only on loopback (§ Sign-in) |
@@ -165,16 +172,12 @@ protocol with native tool calls, so one client serves Ollama, LM Studio, vLLM, G
 OpenRouter, LiteLLM or a cloud vendor's compatible endpoint. No test calls a real model: every
 caller is tested against `model.Fake` or an `httptest` server.
 
-- **Requests and answers.** A request names its `Agent` (`lead` or the subagent tool's name), its
-  `Role` (resolved through `model.Roles`, fed by `BIGLAW_MODELS`) or an explicit `Model`, the messages
-  (text, and images only as base64 `data:` URLs, so the endpoint never fetches a URL on BigLaw's
-  behalf) and the tools. The same request encodes to identical bytes every call, so a fixed tool list
-  keeps the provider's prompt-cache prefix. An answer is text and/or typed tool calls, a `Truncated`
-  flag and usage; a malformed tool call fails the call (`ErrUnavailable`), and a 200 the provider
-  billed but BigLaw refuses still reports its usage and cost on the error. Redirects are never
-  followed. Both in full: [docs/reference.md § Model client](docs/reference.md#model-client).
-- **Failures** are typed (README G6 of the v2 contract); `model.HTTPStatus` is the one status
-  mapping (the API sets `errorType` and the message from the kind, PR 4b):
+- **Requests and answers**: text and images (base64 `data:` URLs only, so the endpoint never fetches
+  a URL on BigLaw's behalf) in, text and/or typed tool calls out; a malformed tool call fails the
+  call, a refused-but-billed answer still reports its usage, and redirects are never followed:
+  [docs/reference.md § Model client](docs/reference.md#model-client).
+- **Failures** are typed (G6); the API sets the status, `errorType` and BigLaw's fixed message from
+  the kind (`engine.ErrorType`; the document routes: `docs.writeError`):
 
   | Kind | When | HTTP | `errorType` |
   |---|---|---:|---|
@@ -201,22 +204,16 @@ caller is tested against `model.Fake` or an `httptest` server.
   `Retry-After` over 30 s (however large: values past int64 too), or a wait that would outlast
   the caller's deadline, ends the call at once with the last error. Network errors are not retried (the request may already have been
   billed).
-- **Pricing.** Every call is priced from the price table, whatever the endpoint's host: a local
-  endpoint is not free and open weights are no reason for $0 either (owner decision).
-  `internal/model/prices.json` is the built-in table and `BIGLAW_PRICES` the operator's, in one format
-  read by one parser: a model id (case-insensitive; a trailing `*` makes it a prefix) mapped to
-  `{"in": USD, "out": USD}` per million tokens, or to `null` for a model that is known but has no
-  price. The operator's table is tried first; in each an exact id beats the longest prefix. Cost =
-  (input × in + output × out + cache writes × in × 1.25 + cache reads × in × 0.10) / 10⁶. A model with
-  no row or a `null` row has an **unknown** cost (nil), never $0. **A model you really run for free**
-  is set to zero explicitly: `BIGLAW_PRICES='{"qwen2.5:14b": {"in": 0, "out": 0}}'`. `serve` logs
-  each role's price once at startup. The matching rules and the built-in rows in full:
-  [docs/reference.md § Model client](docs/reference.md#model-client).
-- **Embeddings and watt-hours.** `Embed` sends up to 256 texts a call on the `embed` role's model,
-  with the same retries, redirect rule and typed failures as a chat call, and is priced like every
-  call (no `usage`: an unknown cost, never $0); no `embed` role is 503 `model_not_configured`. With
-  `BIGLAW_LOCAL_WATTS` set every call records watt-hours beside its price, never changing it (an estimate, watts × duration; a task's total is `summary.wattHours` in `GET /tasks/{id}/cost`, absent when none was recorded). The
-  vector checks and the embedding models' rates: [docs/reference.md § Model client](docs/reference.md#model-client).
+- **Pricing.** Every call is priced from the price table (`internal/model/prices.json`, overridden
+  by `BIGLAW_PRICES`), whatever the endpoint's host: a local endpoint is not free (owner decision). A
+  model with no row or a `null` row has an **unknown** cost (nil), never $0. **A model you really run
+  for free** is set to zero explicitly: `BIGLAW_PRICES='{"qwen2.5:14b": {"in": 0, "out": 0}}'`.
+  `serve` logs each role's price once at startup. The format, the matching rules and the built-in
+  rows: [docs/reference.md § Model client](docs/reference.md#model-client).
+- **Embeddings and watt-hours.** `Embed` (up to 256 texts a call on the `embed` role's model) has the
+  chat call's retries, redirect rule, typed failures and pricing; no `embed` role is 503
+  `model_not_configured`. With `BIGLAW_LOCAL_WATTS` set every call also records estimated
+  watt-hours, never changing its price: [docs/reference.md § Model client](docs/reference.md#model-client).
 - **`model.Fake`** answers from scripts keyed by agent name, in order. A call for an agent with
   no script, or past the end of its script, is an error, never a default reply; an empty reply is
   `ErrNoContent` and a malformed tool call `ErrUnavailable`, as from the real client; tool-call ids
@@ -490,37 +487,29 @@ PDFs and `.docx` files are parsed in a bounded **child process** of the same bin
 so it never holds the server's secrets; killed when its request ends, after 2 minutes, or with its
 parent; on Linux a hard 1 GiB data cap), so a hostile file cannot take the server down
 (`TestHostilePDFContained`, `TestChildBoundsItself`). A document's text is capped at **16 MiB**
-(`maxText`; the file at 64 MiB): more is 422 `unreadable`. Two extractions run at once
-(`ingestSlots`); an upload waits at most 10 minutes for a slot, then is 503 `busy`. `.docx` text is
-read in one linear XML pass (body, footnotes and endnotes; hidden and deleted text left out). The
-child's bounds and the `.docx` reader's rules: [docs/documents.md § Ingest](docs/documents.md#ingest).
+(`maxText`; the file at 64 MiB): more is 422 `unreadable`. Two extractions run at once; an upload
+waits at most 10 minutes for a slot, then is 503 `busy`. The child's bounds and the `.docx` reader's
+rules: [docs/documents.md § Ingest](docs/documents.md#ingest).
 
 All extracted text, uploaded text included, has invalid UTF-8 replaced and control characters
 other than tab, newline, CR and form feed turned into spaces, so it can be stored.
 
-**Section tree, chunks and search** ([docs/documents.md](docs/documents.md) has the bounds, the
-rules and the cost measurements). A document is parsed into a byte-exact section tree (v1's page
-index, rewritten and bounded) and cut into search chunks of at most 400 tokens; a table's rows are
-grouped, never one chunk a row. Search is Postgres full text, ranked deterministically and scoped
-to the caller's documents. With an `embed` role in `BIGLAW_MODELS` it is hybrid: chunks are embedded
-at ingest (a failure leaves the document lexical, with a note) and by a startup backfill, and the
-lexical ranking is fused with an **exact** cosine ranking of the scope's embedded chunks (reciprocal
-rank fusion; no approximate index, which breaks scoped recall), so each query reads every embedded
-chunk in its scope.
-
-**Gate E4 (`TestHybridRecallProofRuns`): not yet judged.** The committed tape
-(`eval/e4/embeddings.json`) is the offline self-test of a hash embedder, on which the gate skips
-with "E4 GATE NOT JUDGED"; never present its numbers as the gate. Lexical search alone measured
-0.882. The owner records a real tape with `make e4-record EMBED_MODEL=…` (docs/documents.md § Gate E4).
+**Section tree, chunks and search.** A document is parsed into a byte-exact section tree and cut
+into search chunks of at most 400 tokens (a table's rows grouped). Search is Postgres full text,
+ranked deterministically and scoped to the caller's documents; with an `embed` role it is hybrid,
+fused with an **exact** cosine ranking of the scope's embedded chunks (no approximate index, which
+breaks scoped recall). The bounds, the rules and the cost measurements:
+[docs/documents.md](docs/documents.md). **Gate E4 (`TestHybridRecallProofRuns`) is not yet
+judged**: the committed tape is a hash embedder's offline self-test, on which the gate skips; lexical
+search alone measured 0.882 (docs/documents.md § Gate E4).
 
 **Vision transcription (PR 3c).** Images and PDF pages with no text layer, or only a stamp, are
-transcribed by the `vision` role only, never another role's model. Each page is read twice, by two
-prompts: agreement under 0.75 refuses the upload (422 `transcription_unreliable`), under 0.9 marks
-the page low confidence, and so does any page whose readings differ on what matters; `[illegible]`
-is never filled; a mixed PDF keeps its text layer. Every transcribed document, chunk and citation
-carries its provenance, and a citation into a transcript is marked `@transcript` and capped at 0.85.
-With no vision role an image is stored waiting (503 `vision_not_configured`, the original kept). The
-reading rules, the scanned-PDF bounds and the reading slots: docs/documents.md § Vision transcription.
+transcribed by the `vision` role only, each page read twice by two prompts: agreement under 0.75
+refuses the upload (422 `transcription_unreliable`), under 0.9 marks the page low confidence;
+`[illegible]` is never filled; a mixed PDF keeps its text layer. A citation into a transcript is
+marked `@transcript` and capped at 0.85. With no vision role an image is stored waiting (503
+`vision_not_configured`, the original kept). The reading rules, bounds and slots:
+[docs/documents.md § Vision transcription](docs/documents.md#section-tree-chunks-search-and-vision-transcription).
 
 - **Transcription jobs** (`jobs.go`). With a vision role set, `serve` transcribes waiting
   documents at startup and every 15 minutes, oldest first, one at a time, each under a 40-minute
@@ -617,32 +606,17 @@ after another 10 s are closed (`TestServeStopCancelsIngest`).
 
 ## Agent runtime and memo tools (`internal/agent`, `internal/analysis`; PR 4a)
 
-The memo workflow (§ Memo workflow) drives these. Everything here is tested with `model.Fake` or no
-model; the full description, with its bounds, the paging rule and this layer's limitations, is
-[docs/reference.md § Agent runtime](docs/reference.md#agent-runtime-and-memo-tools).
-
-- **Tools and the registry.** A `Tool` has a `Spec` (name, kind `go`/`subagent`/`fanout`, strict-shaped
-  input and output JSON Schemas, a budget class, a turn cap, a subagent's allowed tools); a description
-  needs three sentences, a "Do not use" line and 1–3 `Example: {…}` lines that validate. At most 48
-  tools are registered (`agent.MaxTools`) and 24 visible to one agent (`agent.MaxVisible`). Definitions
-  are frozen when registered, so the same bytes reach the model every turn and no matter data reaches
-  a schema. Specs are data (`internal/docs/specs`, `internal/analysis/specs`, `internal/engine/specs`).
-- **One loop, two depths** (`Runtime.Run`): the lead and its subagents. Every call goes through
-  `Runtime.Invoke`: offered to that agent, no nesting, alone when it must be, input schema, the task's
-  `Policy`, then a grant. At most 8 tool calls run a turn. **Tool outputs are bounded by type and never
-  trimmed**: a list or long text is one page of `agent.PageBytes` (12 KB) with `next` or `truncated`,
-  and a result over 100 KB reaches the model as the typed refusal `result_too_large`. A tool that
-  panics fails only its task. Text in tool results is labelled untrusted matter data.
-- **Budget** (`Budget`): calls and USD per task. A model call holds its worst-case cost and is charged
-  what it spent (a refused-but-billed answer too); the task keeps back what later phases need, so
-  only `finish` spends the reserve.
-- **Tool bandit** (`Bandit`): per task signature, one hint line before a lead turn and a subagent's
-  model pick; it never hides or refuses a tool.
-- **Memo tools**: `retrieve` (search, outline, section; `k` ≤ 8), `verify_quote` (the ladder; its
-  judge on the `critic` role, at most 4 calls from the caller's grant), `numbers` (exact `calc`,
-  `{Codename}` handles, a key-figures table, all over verified values), `join_discrepancies`
-  (cross-document conflicts the figure judge decides: [docs/figures.md](docs/figures.md#the-cross-document-join)),
-  coverage (`CheckCoverage`) and BELO-lite (`belo.json`).
+The memo workflow (§ Memo workflow) drives these; everything here is tested with `model.Fake` or no
+model. Every tool is registered once with a strict-shaped typed spec (at most 48 registered,
+`agent.MaxTools`, and 24 visible to one agent, `agent.MaxVisible`; specs are data in each package's
+`specs/`), and every call goes through `Runtime.Invoke` in the one loop (`Runtime.Run`, the lead and
+its subagents). Tool outputs are bounded by type and never trimmed (one page of `agent.PageBytes`,
+12 KB, with `next` or `truncated`; a result over 100 KB is the typed refusal `result_too_large`); a
+model call holds its worst-case cost from the task's budget; the tool bandit only hints. The memo
+tools are `retrieve`, `verify_quote`, `numbers`, `join_discrepancies`, coverage and BELO-lite. In
+full, with the bounds, the paging rule and this layer's limitations:
+[docs/reference.md § Agent runtime](docs/reference.md#agent-runtime-and-memo-tools); the join:
+[docs/figures.md](docs/figures.md#the-cross-document-join).
 
 ## Memo workflow, durable runs and the REST API (`internal/engine`, `internal/api`; PR 4b)
 
@@ -658,30 +632,14 @@ How a run works, in order (each pass's full rules, with the tests that pin them:
 [docs/reference.md § Memo workflow](docs/reference.md#memo-workflow); the figure rules:
 [docs/figures.md](docs/figures.md)):
 
-- **The ledger** (`ledger`; one Postgres table, a JSON row per kind and key): the plan's issues, the
-  findings, resolutions, drafted sections, relations and the committee's findings, each paged. A
-  subagent may only read, and never sees a quarantined finding (G3).
-- **Evidence** (`extract_facts`, `analyze_issue`, `check_deviation`; `specialist` role). Go completes
-  each request and checks each answer before anything reaches the ledger: every quote goes through
-  the ladder; a finding is verified only when every quote is (G2), else it is stored quarantined and
-  never drafted from (G3); a typed value is kept only when its own quotes state it as the figure
-  reader reads it, and a dropped one is noted, never silent. What a number means is read by a model
-  (`read_figures`), never decided by a word list in Go. A requirement is checked verbatim in its
-  controlling document before a deviation is judged.
-- **`sweep`** reads every page of the task's documents once, most relevant first, up to 4 visits at
-  once, admitting in reading order; exact copies and boilerplate are skipped and disclosed.
-- **Drafting** (`draft_section`, one issue a call) from a request Go builds: the issue's verified
-  findings with their quotes, `{Codename}` and `{W…}` handles, earlier sections' summaries, and on a
-  redraft the checks it fails.
-- **`committee`**: three context-free critics in parallel on explicit grants (`prosecute` the claims,
-  `reproduce` the questions, `audit_gaps` the plan and headings); their HIGH/MEDIUM/LOW findings stay
-  open until the lead resolves them. At most three cycles (`maxCycles`).
-- **Policy** (`policy.go`): P1 a plan first (the packs' checklist becomes the plan, disclosed, if the
-  plan share runs out); P4 class shares on calls and USD; the coverage pass's kept share.
-- **`finish`** (`op: "check"` is a dry run of `submit`): lint (every `[F-id]` names a usable finding;
-  every figure traces to a cited quote, value, handle or worksheet, G8; external authorities flagged,
-  G5), coverage, P6/P7, then the render (Markdown: Limitations, the Computed figures block, the
-  Evidence Note, Sources) and the gates.
+- **The passes**: the ledger (one table, a JSON row per kind and key; a subagent may only read it and
+  never sees a quarantined finding, G3); evidence (`extract_facts`, `analyze_issue`,
+  `check_deviation`, on the `specialist` role, every answer checked by Go before it reaches the ledger:
+  a finding is verified only when every quote is, G2, else quarantined and never drafted from, G3);
+  `sweep` (every page once, most relevant first); drafting (`draft_section`, one issue a call);
+  `committee` (three context-free critics, at most `maxCycles`, 3); policy (P1, P4); and `finish`
+  (lint G5/G8, coverage, P6/P7, then the render: Markdown with Limitations, the Computed figures
+  block, the Evidence Note and Sources, and the gates).
 - **Gates** (G7): every deliverable opens a gate (`G-deliverable-N`); a cited finding gets its own
   (`G-<fid>`) when it rests only on low-confidence transcript pages, when it was admitted at low
   confidence (`Finding.Low`: an unclear figure reading, a deviation its section check could not
@@ -702,17 +660,14 @@ How a run works, in order (each pass's full rules, with the tests that pin them:
   Your credit balance is too low …)", bench7; `TestProviderErrorTypeAndMessage`,
   `TestProviderErrorRedactsTypeCodeTailsAndHosts`, `TestRedactKeepsPathsHidesCredentials`).
 
-**Durable runs.** Each lead turn and tool call is a step in `task_steps`: recorded `started` (with
-its grant) before it runs and `committed`/`refused`/`failed` after, in one transaction with the
-ledger rows and bandit statistics it wrote. A process claims a task with a lease (30 s, renewed every
-10 s; `FOR UPDATE SKIP LOCKED`) and runs at most 4 at once; a stale lease is taken over. On resume
-the committed steps are replayed from the log (no model call repeated) and a step that was in flight
-is charged (`lost`, shown in the cost ledger) and issued again: after a graceful stop what it spent,
-after a hard crash what its journaled model calls spent plus the worst case of those in flight. A
-run stops `finished` (gate open), `budget_exhausted` or `max_steps` (a draft changed since its last
-review gets one committee from the kept cycle, then `finish` is forced from the reserve, open
-findings disclosed; `maxSteps` defaults to twice the call budget, at least 400), `awaiting_gate`,
-`cancelled` or `failed`. In full: [docs/reference.md § Durable runs](docs/reference.md#durable-runs).
+**Durable runs.** Each lead turn and tool call is a journaled step in `task_steps`, committed in one
+transaction with the ledger rows and bandit statistics it wrote. A process claims a task with a lease
+(30 s, renewed every 10 s) and runs at most 4 at once; on resume the committed steps are replayed (no
+model call repeated) and a step in flight is charged (`lost`, shown in the cost ledger) and issued
+again. A run stops `finished` (gate open), `budget_exhausted` or `max_steps` (then `finish` is forced
+from the reserve, open findings disclosed; `maxSteps` defaults to twice the call budget, at least
+400), `awaiting_gate`, `cancelled` or `failed`. In full:
+[docs/reference.md § Durable runs](docs/reference.md#durable-runs).
 
 **Packs: jurisdiction and practice guidance** (`internal/engine/packs/{jurisdiction,practice}/*.md`, embedded; an admin may override one, § Manage): `us`, `us-ny`,
 `litigation`, `corporate-ma`, front matter plus a checklist, all `candidate` (no named lawyer has
@@ -771,19 +726,12 @@ python3 eval/lab/run.py --labs-dir ~/harvey-labs --api http://127.0.0.1:3101 --m
 `eval/` (Python 3, stdlib only): `run.py` (`list`, `validate`, `selftest`, `score`,
 `drive`), `proofrun/` (driver, scorer, mock), `lab/` (the Harvey LAB driver over this API),
 `tests/`. `make eval` runs E0 and E3 (fixtures, scorer tests, scorer self-test; no backend). In
-`go test ./eval`, `TestProofRunsOracle` (E1: an oracle `model.Fake` per matter through the real
-engine and API, scored by the Python scorer: 1.0, verified rate 1.0; its drafter cites another item's
-finding or a document line (sharing the memo's words) that states a figure as the memo reads it, and
-computes the rest only from cited figures with their units (sums, differences, products of up to three
-with one money factor, percentages, days between cited dates, a cited date shifted by a cited period,
-rolled past a cited holiday); the lawyer approves each gate. A figure it can neither cite nor compute is
-flagged by G8 and, after its rounds, delivered as an unresolved check, pinned per matter as a ratchet
-(`unresolvedG8`: 4 across the five matters, from 26 at the r7 review and 5 at r8: two bare figures the
-stand-in reads as counts, two code sections written without "Section"; and the findings it gates for the
-lawyer, `findingGates`: 4, scale-limited figures), both ratchets),
-`TestProofRunsFabricator`
-(E2: every matter fails with a grounding alert) and `TestLabRunnerSmoke` (the LAB driver against an
-`httptest` server) run with no model.
+`go test ./eval`, with no model: `TestProofRunsOracle` (E1: an oracle `model.Fake` per matter through
+the real engine and API, scored by the Python scorer: 1.0, verified rate 1.0; a figure its drafter
+can neither cite nor compute is delivered as an unresolved check, pinned per matter as a ratchet,
+`unresolvedG8` and `findingGates`: docs/patterns.md § Ratchet pins), `TestProofRunsFabricator` (E2:
+every matter fails with a grounding alert) and `TestLabRunnerSmoke` (the LAB driver against an
+`httptest` server).
 
 ## Manage: agents, tools, packs, skills and hooks (`internal/engine` specset/manage/skills/hookrules, `internal/api/manage.go`)
 
@@ -801,19 +749,13 @@ each one in Manage (`#/manage`) or the routes above, with no rebuild:
   `goContract` row, are listed on that tool's own page, view only. Each item shows its contents, built-in or override (its version), what it calls and
   who calls it (agents' allowed lists, the lead's list, and the Go callers), and its recent usage: lead
   steps, model calls and USD over the last 20 tasks (`task_steps`; a fan-out's own calls count under it).
-- **Versions and snapshot** (`spec_versions`, migration 0008): every save, revert and skill deletion
-  is a new version of the item holding all its files, with its author, time and note, so the table is
-  the history and the **change log**. A save names the version it was edited from (`base`): a stale
-  one is 409. `Submit` stores the overrides in effect in `tasks.specs`; a run, a resume included,
-  reads every spec, prompt, pack and skill from that snapshot, so a save reaches the next task only.
-  In full: [docs/reference.md § Manage](docs/reference.md#manage).
-- **Validation and compatibility** (every save and revert; all problems at once, 422 with `problems[]`
-  by file): each file strictly (unknown fields refused, schemas in the agent subset and strict-shaped),
-  then the whole set as a task would build it, then `compatSpec`: no property a built-in schema has may
-  be removed or retyped, no enum changed, and a schema Go writes gains none. Saves are serial (an
-  advisory lock, one transaction). The figure reader's and judge's cache keys hash their spec, prompt
-  and allowed tools' specs, so an override reads again. Any change to a pack's or skill's content
-  resets it to `candidate` unless the save names a new reviewer. The full rules:
+- **Versions, snapshot and validation** (`spec_versions`, migration 0008): every save, revert and
+  skill deletion is a new version of the item (author, time, note), so the table is the history and
+  the **change log**; a save names its `base` (stale: 409). `Submit` stores the overrides in effect in
+  `tasks.specs`, so a save reaches the next task only. Every save and revert is validated strictly,
+  all problems at once (422 with `problems[]` by file), and checked for compatibility with what Go
+  reads and writes (`compatSpec`); any change to a pack's or skill's content resets it to `candidate`
+  unless the save names a new reviewer. The full rules:
   [docs/reference.md § Manage](docs/reference.md#manage).
 - **Who.** `api.Principal` is the seam. With sign-in (§ Sign-in) it is the session's user
   (`api.SessionUser`, put on the request by `api.RequireSignIn`): an admin when `BIGLAW_ADMINS` names
@@ -1098,8 +1040,7 @@ make ui build                   # the binary with the web UI embedded (ui/dist �
 make lint vuln                  # staticcheck and govulncheck (network needed; CI runs both)
 ```
 
-The tests are their own record. Each PR's named tests, and those its review rounds added, are listed
-in [docs/history.md](docs/history.md#named-tests).
+The tests are their own record; git history and the PR notes say which PR added which.
 
 ## Budgets (`scripts/loc.py`, run in CI)
 
@@ -1112,7 +1053,7 @@ in [docs/history.md](docs/history.md#named-tests).
 | UI runtime dependencies | 2 | 2 (`react`, `react-dom`) |
 | UI source lines (`ui/src` `.ts`/`.tsx`/`.css`; tests, config, `recording.json` and `manage.json` not counted) | 3,200 (raised from 2,400 for Manage, owner decision) | printed by `python3 scripts/loc.py` |
 | Packages without a `_test.go` | 0 | 0 |
-| Lines in any one source file (`.go`, `.py`, `.sql`, `.sh`, `.js`, `.ts`, `.css`; tests included) | 2,000 | 968 (`internal/docs/vision_safety_test.go`) |
+| Lines in any one source file (`.go`, `.py`, `.sql`, `.sh`, `.js`, `.ts`, `.css`; tests included) | 2,000 | printed by `python3 scripts/loc.py` |
 
 **There is no total line ceiling (owner decision 17, 2026-10-23).** `scripts/loc.py` reports the Go production total (run it for today's figure; a number written here goes stale) and fails only on the budgets that bound bloat directly: no file over 2,000 lines, ≤ 3 direct deps, ≤ 20 env vars, ≤ 12 internal packages, ≤ 3,200 UI source lines, no untested package. Each PR still reports its lines against its DESIGN budget in its notes. (The ceiling's history, 14,000 → 17,500 through owner decisions 7–16, is in PLAN.) A **test-support package** is one
 whose directory name ends in `test` and that no production file outside it imports, such as
@@ -1167,7 +1108,7 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
   from a scripted reader, not a vision model; it has no `judge`/`ensemble` badges (model calls); a
   query other than the offered searches is ranked in the browser, approximately; a rejected
   deliverable ends the replay (there is no revised run).
-- Only the memo workflow exists; diligence, contract review, MCP, billing and auth are planned.
+- Only the memo workflow exists; diligence, contract review, the MCP server, billing and API tokens are planned.
   Without sign-in the exposure rule above is the only protection: anyone who can reach the port can
   upload, list and read every document, and run, approve or cancel tasks. The cross-origin check stops a web page from uploading through the lawyer's browser,
   and the `bad_host` rule stops DNS rebinding; sign-in's sessions (§ Sign-in) close the rest. Scripts
