@@ -55,16 +55,6 @@ func foldCf(s string) string {
 
 func isCf(r rune) bool { return unicode.Is(unicode.Cf, r) }
 
-// requirementParts verifies a requirement in a document's text and returns the document's words for
-// it, part by part (placeRequirement).
-func requirementParts(ctx context.Context, text, req string) (parts []string, bad string, err error) {
-	spans, bad, err := placeRequirement(ctx, text, req)
-	for _, s := range spans {
-		parts = append(parts, text[s[0]:s[1]])
-	}
-	return parts, bad, err
-}
-
 // placeRequirement verifies a requirement in a document's text and returns where the document has
 // it: the whole, as sent or with its JSON escapes undone, else part by part (bench: a heading
 // joined to its list, "Successor Trustees: … First Successor Trustee: …"; two sentences of one

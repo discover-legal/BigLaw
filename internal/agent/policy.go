@@ -8,7 +8,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/fs"
 	"path"
 	"strings"
 )
@@ -50,29 +49,6 @@ type Step struct {
 // Journal records the lead's steps (Postgres in engine). A Record error stops the run (ErrJournal).
 type Journal interface {
 	Record(ctx context.Context, s Step) error
-}
-
-// LoadSubagents reads subagent specs from fsys: <name>.json (a Spec) beside <name>.md (its prompt),
-// the owner's "JSON spec + Markdown prompt" agent format. Register the Go tools they use first.
-func (rt *Runtime) LoadSubagents(fsys fs.FS) ([]Tool, error) {
-	files, err := fs.Glob(fsys, "*.json")
-	if err != nil {
-		return nil, err
-	}
-	var out []Tool
-	for _, f := range files {
-		data, err := fs.ReadFile(fsys, f)
-		if err != nil {
-			return nil, fmt.Errorf("agent: spec %s: %v", f, err)
-		}
-		prompt, _ := fs.ReadFile(fsys, strings.TrimSuffix(f, ".json")+".md")
-		t, err := rt.LoadSubagent(f, data, prompt)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, t)
-	}
-	return out, nil
 }
 
 // LoadSubagent is one subagent from its spec file's bytes (file names it: <name>.json) and its

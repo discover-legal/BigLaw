@@ -67,11 +67,7 @@ Talbot was served on 10/21/2026 via its registered agent. The answer period is 2
 func newFixture(t *testing.T, texts ...string) *fixture {
 	t.Helper()
 	dsn := storetest.DSN(t)
-	st, err := store.OpenPool(context.Background(), dsn, nil, storetest.Pool)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
+	st := storetest.Open(t, store.OpenPool, dsn)
 	f := &fixture{t: t, st: st, d: docs.New(st)}
 	if len(texts) == 0 {
 		texts = []string{complaintText, docketText}
@@ -330,3 +326,19 @@ var (
 	readerSpecFiles = []string{"specs/agents/read_figures.json", "specs/agents/read_figures.md", "specs/figure_context.json", "specs/exact_calc.json"}
 	judgeSpecFiles  = []string{"specs/agents/judge_figures.json", "specs/agents/judge_figures.md", "specs/figure_context.json"}
 )
+
+// g8 is g8In over a paragraph and a ground parsed here.
+func g8(para, ground string, at0 int, regs []region, read map[int]analysis.Reading, known []analysis.Reading, unread []analysis.Span, sheets []analysis.Worksheet, cited map[string]bool, rolled map[string]analysis.Worksheet) []untraced {
+	td, tn := figures(para, true)
+	return g8In(para, td, tn, groundOf(ground), at0, regs, read, known, unread, sheets, cited, rolled)
+}
+
+// testPrices prices the test models at $1/$5 per million tokens in and out.
+func testPrices(t *testing.T) *model.Prices {
+	t.Helper()
+	prices, err := model.LoadPrices(`{"lead-m": {"in": 1, "out": 5}, "spec-m": {"in": 1, "out": 5}, "crit-m": {"in": 1, "out": 5}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return prices
+}

@@ -42,11 +42,7 @@ func TestE2EServe(t *testing.T) {
 	if addr == "" {
 		t.Skip("E2E_ADDR is not set")
 	}
-	st, err := store.OpenPool(context.Background(), storetest.DSN(t), nil, storetest.Pool)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
+	st := storetest.Open(t, store.OpenPool)
 	d := docs.New(st)
 	for name, text := range map[string]string{
 		"complaint.md": "1. Parties\nGreystone Packaging Co. sued Talbot Fresh Foods, Inc. on October 9, 2026.\n\n2. Damages\nGreystone claims damages of $644,910 for unpaid invoices.\n",
@@ -80,7 +76,7 @@ func TestE2EServe(t *testing.T) {
 		sc[k] = v
 	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	e := engine.New(st, d, slow{readerFake(sc)}, model.Roles{Lead: "fake-lead"}, nil, engine.Config{BudgetCalls: 150, BudgetUSD: 5, CollapseThreshold: 0.5, CollapseAction: "strict"}, log)
+	e := engine.New(st, d, slow{readerFake(sc)}, model.Roles{Lead: "fake-lead"}, nil, evalConfig, log)
 	mux := api.Handler(d, e, os.DirFS("../ui/dist"), log)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`{"status":"ok"}`)) })
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)

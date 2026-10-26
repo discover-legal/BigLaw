@@ -5,7 +5,6 @@ package api
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -62,11 +61,7 @@ func newServer(t *testing.T, scripts func(docIDs []string) map[string][]model.Re
 // newServerWith is newServer with the handler made by wrap (nil: Handler) once the server's URL is known.
 func newServerWith(t *testing.T, wrap func(url string, st *store.Store, d *docs.Service, e *engine.Engine) http.Handler, scripts func(docIDs []string) map[string][]model.Reply, roles model.Roles, texts ...string) (*server, []string) {
 	t.Helper()
-	st, err := store.OpenPool(context.Background(), storetest.DSN(t), nil, storetest.Pool)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
+	st := storetest.Open(t, store.OpenPool)
 	d := docs.New(st)
 	var ids []string
 	for i, x := range texts {
@@ -97,15 +92,23 @@ func newServerWith(t *testing.T, wrap func(url string, st *store.Store, d *docs.
 
 func (s *server) do(method, path string, body any) (int, string) {
 	s.t.Helper()
-	var r io.Reader
+	var b []byte
 	if body != nil {
-		b, _ := json.Marshal(body)
-		r = bytes.NewReader(b)
+		b, _ = json.Marshal(body)
 	}
-	req, _ := http.NewRequest(method, s.URL+path, r)
+	return s.send(method, path, string(b))
+}
+
+// send is a request with body as written and headers hdr (name, value, …).
+func (s *server) send(method, path, body string, hdr ...string) (int, string) {
+	s.t.Helper()
+	req, _ := http.NewRequest(method, s.URL+path, strings.NewReader(body))
+	for i := 0; i+1 < len(hdr); i += 2 {
+		req.Header.Set(hdr[i], hdr[i+1])
+	}
 	resp, err := s.client().Do(req)
 	if err != nil {
-		s.t.Fatal(err)
+		s.t.Fatalf("%s %s: %v", method, path, err)
 	}
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
@@ -429,18 +432,7 @@ func TestWritesRefuseCrossOrigin(t *testing.T) {
 	s, ids := newServer(t, memo, roles, doc1)
 	send := func(method, path string, body any, h ...string) (int, string) {
 		b, _ := json.Marshal(body)
-		req, _ := http.NewRequest(method, s.URL+path, bytes.NewReader(b))
-		req.Header.Set("Content-Type", "text/plain") // a "simple" request: no CORS preflight
-		for i := 0; i < len(h); i += 2 {
-			req.Header.Set(h[i], h[i+1])
-		}
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-		out, _ := io.ReadAll(resp.Body)
-		return resp.StatusCode, string(out)
+		return s.send(method, path, string(b), append([]string{"Content-Type", "text/plain"}, h...)...) // a "simple" request: no CORS preflight
 	}
 	hostile := [][]string{{"Origin", "https://evil.example"}, {"Origin", "null"}, {"Sec-Fetch-Site", "cross-site"}, {"Sec-Fetch-Site", "same-site"}}
 	task := m{"description": "x", "workflowType": "memo", "documentIds": ids}

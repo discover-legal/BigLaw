@@ -383,10 +383,7 @@ func TestPhaseSharesHoldInUSD(t *testing.T) {
 		fmt.Fprintf(&doc, "%d. Clause %d\nThe supplier shall deliver lot %d on time.\n%s\n\n", i, i, i, filler)
 	}
 	f := newFixture(t, doc.String())
-	prices, err := model.LoadPrices(`{"lead-m": {"in": 1, "out": 5}, "spec-m": {"in": 1, "out": 5}, "crit-m": {"in": 1, "out": 5}}`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	prices := testPrices(t)
 	d1 := f.docs[0].ID
 	ex := []model.Reply{costly(facts(on("I1", fd("The supplier shall deliver lot 1 on time.", d1, "The supplier shall deliver lot 1 on time"))), 0.1)}
 	for range 29 {

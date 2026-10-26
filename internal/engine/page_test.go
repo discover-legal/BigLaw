@@ -4,6 +4,7 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/discover-legal/BigLaw/internal/agent"
 	"github.com/discover-legal/BigLaw/internal/analysis"
+	"github.com/discover-legal/BigLaw/internal/model"
 )
 
 // pageOK checks out is one valid page of tool: its output schema, at most agent.PageBytes, truncated.
@@ -21,7 +23,7 @@ func pageOK(t *testing.T, tool string, out any) {
 	sch, err := agent.Compile(spec(context.Background(), tool).Out)
 	var p struct{ Truncated bool }
 	if err != nil || sch.Validate(b) != nil || len(b) > agent.PageBytes || json.Unmarshal(b, &p) != nil || !p.Truncated {
-		t.Errorf("%s: %d bytes (page %d), truncated %v, schema %v", tool, len(b), agent.PageBytes, p.Truncated, cmpErr(err, sch.Validate(b)))
+		t.Errorf("%s: %d bytes (page %d), truncated %v, schema %v", tool, len(b), agent.PageBytes, p.Truncated, cmp.Or(err, sch.Validate(b)))
 	}
 }
 
@@ -68,7 +70,7 @@ func TestLedgerPagesByType(t *testing.T) {
 			Entities:  []analysis.Entity{{Name: fmt.Sprint("Scheme ", i, " ", long), Class: "Conduct"}, {Name: "Gerald Whitmore", Class: "Person"}},
 			Relations: []analysis.Relation{{Subject: fmt.Sprint("Scheme ", i, " ", long), Predicate: "committed by", Object: "Gerald Whitmore"}}}}
 		c := Critic{ID: fmt.Sprint("C", i+1), Cycle: 1, Critic: "audit_gaps", Severity: "LOW", Text: long, Status: "open"}
-		if err := cmpErr(f.e.write(ctx, task.ID, kFinding, x.FID, x, true), f.e.write(ctx, task.ID, kCritic, c.ID, c, true)); err != nil {
+		if err := cmp.Or(f.e.write(ctx, task.ID, kFinding, x.FID, x, true), f.e.write(ctx, task.ID, kCritic, c.ID, c, true)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -103,5 +105,29 @@ func TestLedgerPagesByType(t *testing.T) {
 		if pages < 2 || op != "draft_get" && items != 300 || op == "draft_get" && text.String() != md {
 			t.Errorf("%s: %d items over %d pages; text joins: %v", op, items, pages+1, text.String() == md)
 		}
+	}
+}
+
+// TestTablePageKeepsARowEach: on a table page each row is a fact (a trade, a payment), so the cap is
+// one finding per row when the page has more rows than maxFactsPerCall.
+func TestTablePageKeepsARowEach(t *testing.T) {
+	t.Parallel()
+	var doc strings.Builder
+	doc.WriteString("Trades\nTrade\tDate\tShares\tPrice\n")
+	for i := range 20 {
+		fmt.Fprintf(&doc, "T-%d\t2023-01-%02d\t%d00\t%d.50\n", i, i+1, i+1, 40+i)
+	}
+	f := newFixture(t, doc.String())
+	d1 := f.docs[0].ID
+	var rows []m
+	for i := range 20 {
+		rows = append(rows, on("I1", fd(fmt.Sprintf("Trade T-%d was allocated.", i), d1, fmt.Sprintf("T-%d\t2023-01-%02d\t%d00\t%d.50", i, i+1, i+1, 40+i))))
+	}
+	v := f.run(f.with(map[string][]model.Reply{
+		"lead":          {calls(plan(issue("I1", "Which trades were allocated?", "RedFlag"))), calls(tc("sweep", m{"over": "sections", "documentIds": nil}))},
+		"extract_facts": {facts(rows...)},
+	}), Config{})
+	if fs := ledgerFindings(t, f, v.ID); len(fs) != 20 {
+		t.Fatalf("%d findings of a 20-row page", len(fs))
 	}
 }

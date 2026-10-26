@@ -4,9 +4,9 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"regexp"
 	"slices"
@@ -14,17 +14,7 @@ import (
 	"sync"
 
 	"github.com/discover-legal/BigLaw/internal/agent"
-	"github.com/discover-legal/BigLaw/internal/model"
 )
-
-func modelFailed(err error) bool {
-	for _, k := range []error{model.ErrNotConfigured, model.ErrRateLimited, model.ErrUnavailable, model.ErrTimeout, model.ErrNoContent, context.Canceled, context.DeadlineExceeded} {
-		if errors.Is(err, k) {
-			return true
-		}
-	}
-	return false
-}
 
 var fidRe = regexp.MustCompile(`\[(F\d+)\]`)
 
@@ -61,7 +51,7 @@ func (e *Engine) committeeTool(rt *agent.Runtime, r *run) agent.Tool {
 		secs, serr := load[Section](ctx, e, id, kSection)
 		cycles, cerr := load[Cycle](ctx, e, id, kCycle)
 		old, oerr := load[Critic](ctx, e, id, kCritic)
-		if err = cmpErr(err, serr, cerr, oerr); err != nil {
+		if err = cmp.Or(err, serr, cerr, oerr); err != nil {
 			return nil, agent.Usage{}, err
 		} else if len(secs) == 0 {
 			return nil, agent.Usage{}, agent.Fail("committee: nothing is drafted yet; draft the plan's issues with draft_section first")
@@ -100,7 +90,7 @@ func (e *Engine) committeeTool(rt *agent.Runtime, r *run) agent.Tool {
 		}
 		wg.Wait()
 		for _, err := range errs {
-			if modelOrJournal(err) {
+			if agent.EndsRun(err) {
 				return nil, b.Spent(), err
 			}
 		}

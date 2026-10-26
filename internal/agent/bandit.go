@@ -7,7 +7,6 @@ import (
 	"cmp"
 	"context"
 	"fmt"
-	"maps"
 	"math"
 	"slices"
 	"strings"
@@ -43,10 +42,6 @@ func Signature(workflow, practice, jurisdiction, leadModel string, docs int) str
 	return strings.Join([]string{workflow, practice, jur, leadModel, bucket}, "|")
 }
 
-// Pinned are always listed first in the hint, in this order; ranked are the rest. verify_quote is
-// outside the bandit (Go also runs it on every subagent quote).
-var Pinned = []string{"retrieve", "ledger", "committee", "finish"}
-
 const (
 	failPenalty = 0.5 // β: per unit of failure rate
 	costWeight  = 1.0 // γ: per share of the task's call budget one call of the tool spends
@@ -60,6 +55,8 @@ type Bandit struct {
 	Sig         string
 	BudgetCalls int
 	Off         bool
+	Pinned      []string // always listed first in the hint, in this order; ranked are the rest
+	Skip        []string // outside the bandit, never ranked or recorded (verify_quote: Go also runs it on every quote)
 
 	mu       sync.Mutex
 	promoted map[Arm]bool // untried arms already offered first once
@@ -119,13 +116,13 @@ func (b *Bandit) Hint(ctx context.Context, visible []string) string {
 	}
 	var pinned []string
 	var arms []Arm
-	for _, p := range Pinned {
+	for _, p := range b.Pinned {
 		if slices.Contains(visible, p) {
 			pinned = append(pinned, p)
 		}
 	}
 	for _, t := range visible {
-		if !slices.Contains(Pinned, t) && t != "verify_quote" {
+		if !slices.Contains(b.Pinned, t) && !slices.Contains(b.Skip, t) {
 			arms = append(arms, Arm{Tool: t})
 		}
 	}
@@ -165,34 +162,9 @@ func (b *Bandit) PickModel(ctx context.Context, tool string, candidates []string
 
 // Record adds one tool result: reward 0–1 (a refused or failed call scores 0) and what it spent.
 func (b *Bandit) Record(ctx context.Context, a Arm, reward float64, failed bool, u Usage) error {
-	if b == nil || a.Tool == "verify_quote" {
+	if b == nil || slices.Contains(b.Skip, a.Tool) {
 		return nil
 	}
 	f := map[bool]float64{true: 1}[failed]
 	return b.Stats.Add(ctx, b.Sig, a, Stat{1, reward, reward * reward, f, float64(u.Calls), float64(u.InputTokens + u.OutputTokens)})
-}
-
-// MemStats is an in-memory Stats.
-type MemStats struct {
-	mu sync.Mutex
-	m  map[string]map[Arm]Stat
-}
-
-func (m *MemStats) Load(_ context.Context, sig string) (map[Arm]Stat, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return maps.Clone(m.m[sig]), nil // nil reads as empty
-}
-
-func (m *MemStats) Add(_ context.Context, sig string, a Arm, d Stat) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.m == nil {
-		m.m = map[string]map[Arm]Stat{}
-	}
-	if m.m[sig] == nil {
-		m.m[sig] = map[Arm]Stat{}
-	}
-	m.m[sig][a] = m.m[sig][a].plus(d)
-	return nil
 }

@@ -235,14 +235,14 @@ func TestEveryRouteNeedsASession(t *testing.T) {
 		"GET /clients", "POST /tasks", "GET /tasks", "GET /tasks/x", "GET /tasks/x/steps", "GET /tasks/x/cost", "GET /tasks/x/deliverable.md",
 		"POST /tasks/x/cancel", "POST /tasks/x/gates/g/approve", "POST /tasks/x/gates/g/reject", "GET /tasks/x/events",
 		"GET /me", "GET /manage/items", "GET /manage/items/prompt.lead", "GET /manage/items/prompt.lead/history", "GET /manage/items/prompt.lead/diff",
-		"POST /manage/items/prompt.lead/versions", "POST /manage/items/prompt.lead/revert", "POST /manage/items/prompt.lead/delete",
-		"GET /manage/changes", "GET /manage/export", "GET /manage/export?format=zip", "GET /manage/secrets", "POST /manage/secrets",
-		"POST /manage/secrets/k/delete", "POST /manage/items/server.x/discover", "POST /manage/items/server.x/import", "POST /manage/items/tool.x/test",
-		"POST /manage/sessions/revoke", "POST /documents", "GET /documents", "GET /documents/" + d, "GET /documents/" + d + "/outline",
+		"GET /manage/changes", "GET /manage/export", "GET /manage/export?format=zip", "GET /manage/secrets", "POST /manage/sessions/revoke", "POST /documents", "GET /documents", "GET /documents/" + d, "GET /documents/" + d + "/outline",
 		"GET /documents/" + d + "/sections/s1", "GET /documents/search?q=x", "DELETE /documents/" + d, "POST /documents/upload", "GET /documents/" + d + "/file",
 		"HEAD /tasks", "HEAD /documents/" + d + "/file", "PUT /tasks", "PATCH /documents/" + d, "OPTIONS /tasks", "get /tasks",
 		"GET /x/../tasks", "GET /./documents", "GET //tasks", "GET /tasks/x/../../documents", "GET /documents/" + d + "%2Ffile",
 		"GET /Tasks", "GET /manage/secrets/", "GET /auth/../manage/secrets", "GET /auth/%2e%2e/manage/secrets", "GET /auth/other",
+	}
+	for _, w := range manageWriteRoutes {
+		routes = append(routes, "POST "+strings.ReplaceAll(w.path, "{skill}", "prompt.lead"))
 	}
 	for _, rt := range routes {
 		method, path, _ := strings.Cut(rt, " ")

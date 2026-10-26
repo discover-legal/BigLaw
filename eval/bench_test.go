@@ -62,24 +62,29 @@ func (refusing) Chat(context.Context, model.Request) (*model.Response, error) {
 	return nil, &model.Error{Kind: model.ErrNotConfigured, Detail: "HTTP 401 (authentication_error: invalid x-api-key): check BIGLAW_MODEL_KEY"}
 }
 
-// suiteAPI serves the real API and engine over chat on a test server, like serve does.
-func suiteAPI(t *testing.T, chat model.Chatter) (string, string) {
-	dsn := storetest.DSN(t)
-	st, err := store.OpenPool(context.Background(), dsn, nil, storetest.Pool)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
-	d := docs.New(st)
-	e := engine.New(st, d, chat, model.Roles{Lead: "lead-m"}, nil, engine.Config{BudgetCalls: 150, BudgetUSD: 5, CollapseThreshold: 0.5, CollapseAction: "strict"}, slog.New(slog.DiscardHandler))
+// evalConfig is the engine configuration the eval tests run with (serve's defaults at a smaller call budget).
+var evalConfig = engine.Config{BudgetCalls: 150, BudgetUSD: 5, CollapseThreshold: 0.5, CollapseAction: "strict"}
+
+// serveAPI serves the real API over d and e on a test server, like serve does, with GET /health
+// answering health, and runs the engine until the test ends.
+func serveAPI(t *testing.T, d *docs.Service, e *engine.Engine, health string) string {
 	mux := api.Handler(d, e, nil, slog.New(slog.DiscardHandler))
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`{"status":"ok","search":"lexical"}`)) })
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(health)) })
 	srv := httptest.NewServer(mux)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { defer close(done); e.Start(ctx) }()
 	t.Cleanup(func() { cancel(); <-done; srv.Close() })
-	return srv.URL, dsn
+	return srv.URL
+}
+
+// suiteAPI serves the real API and engine over chat on a test server.
+func suiteAPI(t *testing.T, chat model.Chatter) (string, string) {
+	dsn := storetest.DSN(t)
+	st := storetest.Open(t, store.OpenPool, dsn)
+	d := docs.New(st)
+	e := engine.New(st, d, chat, model.Roles{Lead: "lead-m"}, nil, evalConfig, slog.New(slog.DiscardHandler))
+	return serveAPI(t, d, e, `{"status":"ok","search":"lexical"}`), dsn
 }
 
 func dummySecret() string {

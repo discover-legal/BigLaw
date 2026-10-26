@@ -76,11 +76,7 @@ func (l ledger) Findings(context.Context, string) ([]analysis.Finding, error) { 
 // and G1 holds remotely: a document outside the call's scope is not found.
 func TestToolsTransportAgnostic(t *testing.T) {
 	t.Parallel()
-	st, err := store.OpenPool(t.Context(), storetest.DSN(t), nil, storetest.Pool)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
+	st := storetest.Open(t, store.OpenPool)
 	svc := docs.New(st)
 	in, err := svc.IngestText(t.Context(), "msa.txt", "1. Liability\nThe Supplier's aggregate liability shall not exceed the fees paid in the twelve months.\n2. Term\nThe term is three years.")
 	if err != nil {

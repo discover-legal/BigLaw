@@ -75,35 +75,6 @@ func ParseDate(s string) (Date, bool) {
 	return Date{}, false
 }
 
-// DateToken is a date found in running text.
-type DateToken struct {
-	Raw  string
-	Date Date
-}
-
-var reDateIn = regexp.MustCompile(`(?i)\bQ([1-4])\s+((?:19|20)\d\d)\b|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?(?:\s+\d{1,2},)?\s+(?:19|20)\d\d\b|(?:§\s*|\bU\.S\.C\.\s*)?\b(?:19|20)\d\d\b`)
-
-// DatesIn lists the dates in text: quarters (at their last month), months, full dates and bare
-// years; a statute number ("28 U.S.C. § 2462") is not a year.
-func DatesIn(text string) []DateToken {
-	var out []DateToken
-	for _, m := range reDateIn.FindAllStringSubmatch(text, -1) {
-		raw := m[0]
-		switch {
-		case m[1] != "":
-			q, _ := strconv.Atoi(m[1])
-			y, _ := strconv.Atoi(m[2])
-			out = append(out, DateToken{raw, Date{y, q * 3, 0}})
-		case strings.ContainsAny(raw, "§") || strings.Contains(strings.ToUpper(raw), "U.S.C"):
-		default:
-			if d, ok := ParseDate(raw); ok {
-				out = append(out, DateToken{raw, d})
-			}
-		}
-	}
-	return out
-}
-
 // Decimal prints r exactly when it has at most 6 decimal places, else rounded to 6.
 func Decimal(r *big.Rat) string {
 	s := r.FloatString(6)

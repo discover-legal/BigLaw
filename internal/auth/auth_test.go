@@ -58,15 +58,12 @@ func (s *syncBuf) String() string              { s.mu.Lock(); defer s.mu.Unlock(
 
 func newRig(t *testing.T, admins ...string) *rig {
 	t.Helper()
-	st, err := store.OpenPool(context.Background(), storetest.DSN(t), nil, storetest.Pool)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
+	st := storetest.Open(t, store.OpenPool)
 	r := &rig{idp: authtest.New(t), db: st.DB(), clk: &clock{t: time.Now()}, logs: &syncBuf{}}
 	r.idp.Now = r.clk.now
 	r.srv = httptest.NewServer(nil)
 	t.Cleanup(r.srv.Close)
+	var err error
 	r.s, err = New(r.db, Config{Issuer: r.idp.URL, ClientID: r.idp.ClientID, ClientSecret: r.idp.Secret, PublicURL: r.srv.URL, Admins: admins,
 		Now: r.clk.now, Log: slog.New(slog.NewTextHandler(r.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))})
 	if err != nil {

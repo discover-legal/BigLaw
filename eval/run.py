@@ -8,7 +8,6 @@
     python run.py selftest                     # score synthetic oracle/degraded/empty runs (no backend)
     python run.py drive [--matter ID ...] --model-dir biglaw-haiku   # live backend: run + score
     python run.py score --matter ID RUN_DIR    # (re)score an existing run dir
-    python run.py compare BASELINE RESULTS_DIR [--slack N] [--min-verified R]   # gate A/B check vs v1
 
 Results land in results/<task>/<model-dir>/<timestamp>/ (override --results-dir). drive talks to a
 running BigLaw v2 (`biglaw serve`, http://127.0.0.1:3101) whose model is configured by its env.
@@ -115,48 +114,6 @@ def cmd_drive(a) -> int:
     return 1 if any("error" in s for s in results) else 0
 
 
-def latest_scores(results: Path, matter) -> dict | None:
-    """The newest scores.json of a matter under results (any model dir), or None."""
-    runs = sorted((results / matter.id).glob("*/*/scores.json"), key=lambda p: p.parent.name)
-    return json.loads(runs[-1].read_text(encoding="utf-8")) if runs else None
-
-
-def compare(baseline: dict, results: Path, slack: int, min_verified: float) -> tuple[list[str], list[str]]:
-    """Per-matter deltas against a v1 baseline ({"matters": {id or slug: {n_passed, citation_verified_rate,
-    cost_usd}}}); a matter fails when v2 passes fewer than v1's n_passed − slack criteria, verifies under
-    min_verified of its citations, or has no scored run; a baseline naming no registered matter fails.
-    Returns (lines, failures)."""
-    lines, bad = [], []
-    if not any((baseline.get("matters") or {}).get(k) is not None for m in load_all() for k in (m.id, m.entry.get("slug"))):
-        bad.append("the baseline names no registered matter: nothing was compared")
-    for m in load_all():
-        base = baseline.get("matters", {}).get(m.id) or baseline.get("matters", {}).get(m.entry.get("slug"))
-        if base is None:
-            continue
-        s = latest_scores(results, m)
-        if s is None:
-            bad.append(f"{m.id}: no scored run under {results}")
-            continue
-        rate = (s.get("grounding") or {}).get("citation_verified_rate")
-        delta = s["n_passed"] - base["n_passed"]
-        lines.append(f"{m.id}: n_passed {s['n_passed']} vs v1 {base['n_passed']} ({delta:+d}); citations verified {rate}; "
-                     f"cost {(s.get('run_status') or {}).get('cost_usd')} vs v1 {base.get('cost_usd')}")
-        if delta < -slack:
-            bad.append(f"{m.id}: {s['n_passed']} criteria passed, below v1's {base['n_passed']} - {slack}")
-        if rate is None or rate < min_verified:
-            bad.append(f"{m.id}: citation_verified_rate {rate} below {min_verified}")
-    return lines, bad
-
-
-def cmd_compare(a) -> int:
-    baseline = json.loads(Path(a.baseline).read_text(encoding="utf-8"))
-    lines, bad = compare(baseline, Path(a.results).resolve(), a.slack, a.min_verified)
-    for line in lines + [f"BELOW GATE {b}" for b in bad]:
-        print(line)
-    print("compare:", "FAIL" if bad else "ok")
-    return 1 if bad else 0
-
-
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description="BigLaw multi-practice proof runs")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -172,13 +129,6 @@ def main(argv=None) -> int:
     sp.set_defaults(fn=cmd_selftest)
     sp = sub.add_parser("score"); matter_arg(sp, required=True)
     sp.add_argument("run_dir"); sp.add_argument("--json", action="store_true"); sp.set_defaults(fn=cmd_score)
-
-    sp = sub.add_parser("compare")
-    sp.add_argument("baseline", help="v1 baseline JSON (eval/baselines/v1.json)")
-    sp.add_argument("results", help="results directory written by drive")
-    sp.add_argument("--slack", type=int, default=0, help="criteria v2 may trail v1 by per matter (gate A: 0 for model C, 2 for qwen)")
-    sp.add_argument("--min-verified", type=float, default=0.94, help="minimum citation_verified_rate (gate A: 0.94 C, 0.85 qwen)")
-    sp.set_defaults(fn=cmd_compare)
 
     for name, fn in (("drive", cmd_drive),):
         sp = sub.add_parser(name); matter_arg(sp)

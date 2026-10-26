@@ -35,43 +35,64 @@ type fakeMCP struct {
 	args  []json.RawMessage // tools/call arguments
 }
 
-func newFakeMCP(t *testing.T) *fakeMCP {
-	f := &fakeMCP{}
-	f.Server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer "+testSecret {
-			w.WriteHeader(401)
-			return
+// mcpReq is one JSON-RPC request to an mcpStub ("DELETE" for a session's end).
+type mcpReq struct {
+	ID     any
+	Method string
+	Params json.RawMessage
+}
+
+// mcpStub is a fake MCP server (TLS, closed with the test): it decodes each JSON-RPC request and
+// calls handle with it and a writer of its result; what handle leaves (false) is answered as an MCP
+// server would: DELETE 405, notifications/initialized 202, anything else an empty 200.
+func mcpStub(t *testing.T, handle func(w http.ResponseWriter, r *http.Request, q mcpReq, res func(any)) bool) *httptest.Server {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var q mcpReq
+		if r.Method == "DELETE" {
+			q.Method = "DELETE"
+		} else {
+			json.NewDecoder(r.Body).Decode(&q)
 		}
-		if r.Method == "DELETE" { // the session's end
-			f.mu.Lock()
-			f.calls = append(f.calls, "DELETE "+r.Header.Get("Mcp-Session-Id"))
-			f.mu.Unlock()
-			w.WriteHeader(204)
-			return
-		}
-		var req struct {
-			ID     any
-			Method string
-			Params json.RawMessage
-		}
-		json.NewDecoder(r.Body).Decode(&req)
-		f.mu.Lock()
-		f.calls = append(f.calls, req.Method)
-		f.mu.Unlock()
 		res := func(v any) {
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": v})
+			json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": q.ID, "result": v})
 		}
-		switch req.Method {
+		if handle(w, r, q, res) {
+			return
+		}
+		switch q.Method {
+		case "DELETE":
+			w.WriteHeader(405)
+		case "notifications/initialized":
+			w.WriteHeader(202)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func newFakeMCP(t *testing.T) *fakeMCP {
+	f := &fakeMCP{}
+	f.Server = mcpStub(t, func(w http.ResponseWriter, r *http.Request, q mcpReq, res func(any)) bool {
+		if r.Header.Get("Authorization") != "Bearer "+testSecret {
+			w.WriteHeader(401)
+			return true
+		}
+		f.mu.Lock()
+		f.calls = append(f.calls, cmpStr(q.Method == "DELETE", "DELETE "+r.Header.Get("Mcp-Session-Id"), q.Method))
+		f.mu.Unlock()
+		switch q.Method {
+		case "DELETE": // the session's end
+			w.WriteHeader(204)
 		case "initialize":
 			w.Header().Set("Mcp-Session-Id", "sess-1")
 			res(map[string]any{"protocolVersion": mcpProtocol, "serverInfo": map[string]string{"name": "Fake Court Records"}, "capabilities": map[string]any{}})
 		case "notifications/initialized":
-			w.WriteHeader(202)
+			return false
 		case "tools/list":
 			if r.Header.Get("Mcp-Session-Id") != "sess-1" {
 				w.WriteHeader(400)
-				return
+				return true
 			}
 			res(map[string]any{"tools": []map[string]any{
 				{"name": "search", "description": "Searches court records by party name", "inputSchema": map[string]any{"type": "object",
@@ -80,18 +101,18 @@ func newFakeMCP(t *testing.T) *fakeMCP {
 			}})
 		case "tools/call":
 			var p struct{ Arguments json.RawMessage }
-			json.Unmarshal(req.Params, &p)
+			json.Unmarshal(q.Params, &p)
 			f.mu.Lock()
 			f.args = append(f.args, p.Arguments)
 			f.mu.Unlock()
 			w.Header().Set("Content-Type", "text/event-stream")
-			b, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"content": []map[string]string{{"type": "text", "text": "Docket 1:26-cv-09184 found for " + string(p.Arguments)}}}})
+			b, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": q.ID, "result": map[string]any{"content": []map[string]string{{"type": "text", "text": "Docket 1:26-cv-09184 found for " + string(p.Arguments)}}}})
 			fmt.Fprintf(w, "event: message\ndata: %s\n\n", b)
 		default:
 			w.WriteHeader(404)
 		}
-	}))
-	t.Cleanup(f.Close)
+		return true
+	})
 	return f
 }
 

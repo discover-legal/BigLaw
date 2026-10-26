@@ -4,6 +4,7 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -132,7 +133,7 @@ func (f finish) Call(ctx context.Context, c agent.Call) (res agent.Result, err e
 	if f.r.forced == "" { // the coverage pass, once, before a deliverable (a forced finish ran it as a step)
 		done, err := f.e.covered(ctx, c.TaskID)
 		due, derr := f.e.coverDue(ctx, c.TaskID)
-		if err = cmpErr(err, derr); err != nil {
+		if err = cmp.Or(err, derr); err != nil {
 			return agent.Result{}, err
 		}
 		if !done && due {
@@ -248,14 +249,14 @@ func (f finish) cover(ctx context.Context, c agent.Call) (agent.Usage, error) {
 	if err != nil {
 		return b.Spent(), err
 	}
-	if _, err := f.rt.Invoke(ctx, me, call, "cover", json.RawMessage(`{}`), b, false, 0); modelOrJournal(err) {
+	if _, err := f.rt.Invoke(ctx, me, call, "cover", json.RawMessage(`{}`), b, false, 0); agent.EndsRun(err) {
 		return b.Spent(), err
 	}
 	after, err := load[Section](ctx, f.e, c.TaskID, kSection)
 	if err != nil || version(after) == version(before) { // nothing redrafted: the last review still holds
 		return b.Spent(), err
 	}
-	if _, err := f.rt.Invoke(ctx, me, call, "committee", json.RawMessage(`{}`), b, false, 0); modelOrJournal(err) {
+	if _, err := f.rt.Invoke(ctx, me, call, "committee", json.RawMessage(`{}`), b, false, 0); agent.EndsRun(err) {
 		return b.Spent(), err
 	}
 	return b.Spent(), nil
@@ -272,13 +273,18 @@ func (f finish) check(ctx context.Context, limits []limitation) (report, error) 
 	sheets, herr := e.worksheets(ctx, id)
 	notes, nerr := e.rows(ctx, id, kNote)
 	rounds, lerr := e.lintRounds(ctx, id)
-	if err = cmpErr(err, serr, uerr, cerr, rerr, herr, nerr, lerr); err != nil {
+	if err = cmp.Or(err, serr, uerr, cerr, rerr, herr, nerr, lerr); err != nil {
 		return report{}, err
 	}
 	rep := report{Errors: []finishErr{}, Lint: []string{}, OpenPreconditions: []string{}}
 	bad := func(code, detail string) {
 		rep.Errors = append(rep.Errors, finishErr{code, detail})
 		rep.OpenPreconditions = append(rep.OpenPreconditions, detail)
+	}
+	limit := func(l string) { // a Limitations line, when there is one
+		if l != "" {
+			rep.limits = append(rep.limits, l)
+		}
 	}
 	byFID := map[string]Finding{}
 	var an []analysis.Finding
@@ -302,18 +308,18 @@ func (f finish) check(ctx context.Context, limits []limitation) (report, error) 
 	}
 	if all, err := load[Finding](ctx, e, id, kFinding); err != nil {
 		return report{}, err
-	} else if l := hookQuarantined(all); l != "" {
-		rep.limits = append(rep.limits, l)
+	} else {
+		limit(hookQuarantined(all))
 	}
 	if os, err := load[HookOutcome](ctx, e, id, kHookRun); err != nil {
 		return report{}, err
-	} else if l := leadOnlyLine(os); l != "" {
-		rep.limits = append(rep.limits, l)
+	} else {
+		limit(leadOnlyLine(os))
 	}
 	if l, err := e.staleLine(ctx, id, issues); err != nil {
 		return report{}, err
-	} else if l != "" {
-		rep.limits = append(rep.limits, l)
+	} else {
+		limit(l)
 	}
 	if len(issues) == 0 {
 		bad("no_plan", "no plan is recorded: record one with ledger op plan")
@@ -392,7 +398,7 @@ func (f finish) check(ctx context.Context, limits []limitation) (report, error) 
 	}
 	pass, err := e.coverRow(ctx, id)
 	left, lerr := e.touched(ctx, id)
-	if err = cmpErr(err, lerr); err != nil {
+	if err = cmp.Or(err, lerr); err != nil {
 		return report{}, err
 	}
 	for _, is := range left { // after the coverage pass (or from the reserve): what it could not analyse
@@ -406,26 +412,20 @@ func (f finish) check(ctx context.Context, limits []limitation) (report, error) 
 			return report{}, err
 		} else if len(lo) > 0 {
 			var ids []string
-			for _, x := range lo[:min(maxPlaced, len(lo))] {
+			for _, x := range lo {
 				ids = append(ids, x.FID)
 			}
-			rep.limits = append(rep.limits, fmt.Sprintf("Coverage: %d verified %s a deviation, omission, violation or salient figure never reached the memo: %s%s.",
-				len(lo), plural(len(lo), "finding that states", "findings that state"), strings.Join(ids, ", "), cmpStr(len(lo) > maxPlaced, fmt.Sprintf(" and %d more", len(lo)-maxPlaced), "")))
+			rep.limits = append(rep.limits, fmt.Sprintf("Coverage: %d verified %s a deviation, omission, violation or salient figure never reached the memo: %s.",
+				len(lo), plural(len(lo), "finding that states", "findings that state"), firstN(ids, maxPlaced, ", ")))
 		}
 	}
 	if pass != nil { // the coverage pass's list of usable findings with a dropped typed value (lab-r4 r3 M7): one line
-		if line := unadmittedLine(pass.Unadmitted, byFID); line != "" {
-			rep.limits = append(rep.limits, line)
-		}
+		limit(unadmittedLine(pass.Unadmitted, byFID))
 	}
 	cov := analysis.CheckCoverage(ais, texts, an, nil)
 	rep.MissingIssues, rep.UncoveredParties, rep.MissingFigures = cov.MissingIssues, cov.UncoveredParties, cov.MissingFigures
-	if line := partyLine(cov.UncoveredParties); line != "" { // one line each, not one per party (bench5 SEC: 101 "Coverage:" lines)
-		rep.limits = append(rep.limits, line)
-	}
-	if line := figureLine(cov.MissingFigures); line != "" {
-		rep.limits = append(rep.limits, line)
-	}
+	limit(partyLine(cov.UncoveredParties)) // one line each, not one per party (bench5 SEC: 101 "Coverage:" lines)
+	limit(figureLine(cov.MissingFigures))
 	funded := f.funded()
 	switch {
 	case len(cyc) == 0 && len(secs) > 0:
@@ -480,7 +480,7 @@ func (f finish) escalate(ctx context.Context) (*finishErr, error) {
 	cyc, err := load[Cycle](ctx, e, id, kCycle)
 	crit, cerr := load[Critic](ctx, e, id, kCritic)
 	spent, serr := e.classSpend(ctx, id)
-	if err = cmpErr(err, cerr, serr); err != nil || len(cyc) == 0 || f.r.forced != "" {
+	if err = cmp.Or(err, cerr, serr); err != nil || len(cyc) == 0 || f.r.forced != "" {
 		return nil, err
 	}
 	last := cyc[len(cyc)-1]
@@ -502,7 +502,7 @@ func (f finish) meta(ctx context.Context, b *agent.Budget) (string, error) {
 	all, err := load[Finding](ctx, e, id, kFinding)
 	crit, cerr := load[Critic](ctx, e, id, kCritic)
 	cyc, yerr := load[Cycle](ctx, e, id, kCycle)
-	if err = cmpErr(err, cerr, yerr); err != nil {
+	if err = cmp.Or(err, cerr, yerr); err != nil {
 		return "", err
 	}
 	ok, open := 0, 0
@@ -531,7 +531,7 @@ func (f finish) gates(ctx context.Context, md string) error {
 	use, err := e.usable(ctx, id)
 	crit, cerr := load[Critic](ctx, e, id, kCritic)
 	gs, gerr := load[Gate](ctx, e, id, kGate)
-	if err = cmpErr(err, cerr, gerr); err != nil {
+	if err = cmp.Or(err, cerr, gerr); err != nil {
 		return err
 	}
 	pending := false
@@ -583,9 +583,8 @@ func unadmittedLine(fids []string, use map[string]Finding) string {
 	if len(ids) == 0 {
 		return ""
 	}
-	return fmt.Sprintf("Evidence: %d verified %s a typed value that admission dropped because %s quotes did not state it as typed (each finding's value notes say why): %s%s.",
-		len(ids), plural(len(ids), "finding had", "findings had"), plural(len(ids), "its", "their"), strings.Join(ids[:min(maxListed, len(ids))], ", "),
-		cmpStr(len(ids) > maxListed, fmt.Sprintf(" and %d more", len(ids)-maxListed), ""))
+	return fmt.Sprintf("Evidence: %d verified %s a typed value that admission dropped because %s quotes did not state it as typed (each finding's value notes say why): %s.",
+		len(ids), plural(len(ids), "finding had", "findings had"), plural(len(ids), "its", "their"), firstN(ids, maxListed, ", "))
 }
 
 // unreviewedFixes names the critic findings resolved "fixed" after the committee's last cycle (or
@@ -614,11 +613,11 @@ func partyLine(ps []analysis.PartyGap) string {
 		return ""
 	}
 	var names []string
-	for _, p := range ps[:min(maxListed, len(ps))] {
+	for _, p := range ps {
 		names = append(names, fmt.Sprintf("%s (%s)", p.Name, strings.Join(p.FIDs[:min(3, len(p.FIDs))], ", ")))
 	}
-	return fmt.Sprintf("Coverage: %d %s named in verified findings never %s in the memo: %s%s.", len(ps), plural(len(ps), "party", "parties"), plural(len(ps), "appears", "appear"),
-		strings.Join(names, "; "), cmpStr(len(ps) > maxListed, fmt.Sprintf(" and %d more", len(ps)-maxListed), ""))
+	return fmt.Sprintf("Coverage: %d %s named in verified findings never %s in the memo: %s.", len(ps), plural(len(ps), "party", "parties"), plural(len(ps), "appears", "appear"),
+		firstN(names, maxListed, "; "))
 }
 
 // figureLine is the Limitations line for the salient figures that never reach the memo.
@@ -627,9 +626,9 @@ func figureLine(hs []analysis.Handle) string {
 		return ""
 	}
 	var figs []string
-	for _, h := range hs[:min(maxListed, len(hs))] {
+	for _, h := range hs {
 		figs = append(figs, fmt.Sprintf("%s (%s)", h.Value, strings.Join(slices.DeleteFunc([]string{h.Label, h.FID}, func(s string) bool { return s == "" }), ", ")))
 	}
-	return fmt.Sprintf("Coverage: %d salient %s never %s in the memo: %s%s.", len(hs), plural(len(hs), "figure", "figures"), plural(len(hs), "appears", "appear"),
-		strings.Join(figs, "; "), cmpStr(len(hs) > maxListed, fmt.Sprintf(" and %d more", len(hs)-maxListed), ""))
+	return fmt.Sprintf("Coverage: %d salient %s never %s in the memo: %s.", len(hs), plural(len(hs), "figure", "figures"), plural(len(hs), "appears", "appear"),
+		firstN(figs, maxListed, "; "))
 }

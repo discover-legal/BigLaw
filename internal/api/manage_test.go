@@ -6,7 +6,6 @@ package api
 import (
 	"archive/zip"
 	"bytes"
-	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -24,11 +23,7 @@ import (
 // manageServer is the API over a fresh schema with who deciding each request's principal.
 func manageServer(t *testing.T, who Who) *server {
 	t.Helper()
-	st, err := store.OpenPool(context.Background(), storetest.DSN(t), nil, storetest.Pool)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
+	st := storetest.Open(t, store.OpenPool)
 	d := docs.New(st)
 	e := engine.New(st, d, nil, roles, nil, engine.Config{BudgetCalls: 150, BudgetUSD: 5, CollapseThreshold: 0.5, CollapseAction: "strict"}, slog.New(slog.DiscardHandler))
 	srv := httptest.NewServer(handler(d, e, nil, slog.New(slog.DiscardHandler), who))

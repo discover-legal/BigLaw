@@ -222,6 +222,24 @@ func sheetKind(w analysis.Worksheet, r analysis.Reading) bool {
 	}
 }
 
+// sheetComputes reports whether a worksheet's result is the memo reading's amount, of its kind.
+func sheetComputes(w analysis.Worksheet, r analysis.Reading) bool {
+	x := sheetAmount(w)
+	return x != nil && x.Cmp(r.Rat()) == 0 && sheetKind(w, r)
+}
+
+// figuresOf is what a finding's quotes and values were read as: its quotes' readings, then each
+// value's.
+func figuresOf(f Finding) []analysis.Reading {
+	out := slices.Clone(f.Figures)
+	for _, v := range f.Values {
+		if v.Fig != nil {
+			out = append(out, *v.Fig)
+		}
+	}
+	return out
+}
+
 var refRe = regexp.MustCompile(`^F\d+\.v\d+$`)
 
 // rawDate reports whether a handle's value is a deadline's raw date (rolledDates).
@@ -395,7 +413,7 @@ func (e *Engine) worksheets(ctx context.Context, taskID string) ([]analysis.Work
 func (e *Engine) handleSet(ctx context.Context, taskID string, use []Finding) ([]analysis.Handle, error) {
 	kept, err := load[Fig](ctx, e, taskID, kHandle)
 	ws, werr := e.worksheets(ctx, taskID)
-	if err = cmpErr(err, werr); err != nil {
+	if err = cmp.Or(err, werr); err != nil {
 		return nil, err
 	}
 	an := make([]analysis.Finding, 0, len(use))

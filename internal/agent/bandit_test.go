@@ -52,16 +52,16 @@ func TestBanditRewardsChangeRanking(t *testing.T) {
 
 // Trap: pinned tools come first, in order, whatever their record; verify_quote is never ranked.
 func TestBanditNeverStarvesPinnedTools(t *testing.T) {
-	st := &MemStats{}
-	for _, p := range Pinned {
+	st, pinned, skip := &MemStats{}, []string{"retrieve", "ledger", "committee", "finish"}, []string{"verify_quote"}
+	for _, p := range pinned {
 		seed(st, "s", p, make([]float64, 50)...)
 	}
 	seed(st, "s", "sweep", 1, 1, 1)
-	h := (&Bandit{Stats: st, Sig: "s", BudgetCalls: 150}).Hint(ctx, []string{"sweep", "finish", "verify_quote", "committee", "ledger", "retrieve"})
+	h := (&Bandit{Stats: st, Sig: "s", BudgetCalls: 150, Pinned: pinned, Skip: skip}).Hint(ctx, []string{"sweep", "finish", "verify_quote", "committee", "ledger", "retrieve"})
 	if !strings.Contains(h, ": retrieve, ledger, committee, finish; then sweep") || strings.Contains(h, "verify_quote") || !slices.Equal(order(h), []string{"sweep"}) {
 		t.Fatalf("hint: %q", h)
 	}
-	_ = (&Bandit{Stats: st, Sig: "s"}).Record(ctx, Arm{Tool: "verify_quote"}, 0, true, Usage{})
+	_ = (&Bandit{Stats: st, Sig: "s", Skip: skip}).Record(ctx, Arm{Tool: "verify_quote"}, 0, true, Usage{})
 	if rows, _ := st.Load(ctx, "s"); rows[Arm{Tool: "verify_quote"}].N != 0 {
 		t.Fatal("verify_quote was recorded")
 	}
