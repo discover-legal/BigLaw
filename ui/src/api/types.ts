@@ -184,7 +184,7 @@ export type RunEvent = { type: 'step'; step: Step } | { type: 'task' | 'done'; r
 
 export interface Profile { id: string; name: string; role: string }
 /** One row of the configuration table (cmd/biglaw/config.go): read-only, as `biglaw version --config` prints it. */
-export interface Setting { name: string; default: string; pr: number; secret?: boolean }
+export interface Setting { name: string; default: string; secret?: boolean }
 /** A search the recorded engine offers, with the hits v2's own Search returned for it. */
 export interface RecordedSearch { matterNumber: string; query: string; hits: Hit[] }
 export interface Playbook { id: string; name: string; scope: 'client' | 'matter' | 'personal' | 'firm'; clauses: number }
