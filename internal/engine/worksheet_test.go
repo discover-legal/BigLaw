@@ -140,7 +140,7 @@ func TestEarlierSentenceScaleNotApplied(t *testing.T) {
 	if r := rs["q1.s2"]; r.Scale != "" || !r.Unclear {
 		t.Errorf("another sentence's scale applied: %+v", r)
 	}
-	if _, ok, low, _ := valueStated(mv3("$500 thousand", "Money"), 0, rs, q); ok && !low {
+	if _, ok, low, _ := valueStated(mv("$500 thousand", "Money"), 0, rs, q); ok && !low {
 		t.Errorf("typed \"$500 thousand\" verified from %q", q)
 	}
 }
@@ -173,7 +173,7 @@ func TestDollarSignIsNoScaleSource(t *testing.T) {
 		lab("q1.s1", analysis.KindMoney, "USD", "1000", "$", "", ""),
 		lab("v1.s1", analysis.KindMoney, "USD", "1000", "$", "", ""),
 	})
-	if fig, ok, low, _ := valueStated(mv3("$500", "Money"), 0, rs, q); ok && !low && fig != nil && fig.Amount == "500000" {
+	if fig, ok, low, _ := valueStated(mv("$500", "Money"), 0, rs, q); ok && !low && fig != nil && fig.Amount == "500000" {
 		t.Errorf("typed \"$500\" verified as %s (scale from %q)", fig.Amount, fig.ScaleFrom)
 	}
 	rs, _ = analysis.ReadLabels([]analysis.Passage{analysis.PassageOf("q1", "Revenue ($000)\nTotal\t4,200\nOther\t300")}, []analysis.Label{lab("q1.s2", analysis.KindMoney, "USD", "1000", "($000)", "", "")})

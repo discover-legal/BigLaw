@@ -238,7 +238,8 @@ not yet judged (self-test tape).
   (`TestToolSchemasContainNoMatterData`), including description examples.
 - No source file over 2,000 lines (`scripts/loc.py`). Every `.go`/`.py` file starts with the
   SPDX header.
-- Every package has a `_test.go`; DB tests use `storetest.DSN(t)` and `t.Parallel()`.
+- Every package has a `_test.go`; DB tests use `storetest.DSN(t)` (or `storetest.Open`) and `t.Parallel()`. Tests are filed by
+  subject (the code they pin), never in a file named after a review round; the round goes in the comment.
 - Images and scans go only to the `vision` role (`docs.UseVision`); never wire another role's
   model there (`TestTextModelNeverSentImages`, `TestServeNeverSendsImagesToTheLead`). Text a model
   transcribed is evidence of a lower class: keep its provenance and the `@transcript` cap.

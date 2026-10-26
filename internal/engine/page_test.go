@@ -13,6 +13,7 @@ import (
 
 	"github.com/discover-legal/BigLaw/internal/agent"
 	"github.com/discover-legal/BigLaw/internal/analysis"
+	"github.com/discover-legal/BigLaw/internal/model"
 )
 
 // pageOK checks out is one valid page of tool: its output schema, at most agent.PageBytes, truncated.
@@ -104,5 +105,29 @@ func TestLedgerPagesByType(t *testing.T) {
 		if pages < 2 || op != "draft_get" && items != 300 || op == "draft_get" && text.String() != md {
 			t.Errorf("%s: %d items over %d pages; text joins: %v", op, items, pages+1, text.String() == md)
 		}
+	}
+}
+
+// TestTablePageKeepsARowEach: on a table page each row is a fact (a trade, a payment), so the cap is
+// one finding per row when the page has more rows than maxFactsPerCall.
+func TestTablePageKeepsARowEach(t *testing.T) {
+	t.Parallel()
+	var doc strings.Builder
+	doc.WriteString("Trades\nTrade\tDate\tShares\tPrice\n")
+	for i := range 20 {
+		fmt.Fprintf(&doc, "T-%d\t2023-01-%02d\t%d00\t%d.50\n", i, i+1, i+1, 40+i)
+	}
+	f := newFixture(t, doc.String())
+	d1 := f.docs[0].ID
+	var rows []m
+	for i := range 20 {
+		rows = append(rows, on("I1", fd(fmt.Sprintf("Trade T-%d was allocated.", i), d1, fmt.Sprintf("T-%d\t2023-01-%02d\t%d00\t%d.50", i, i+1, i+1, 40+i))))
+	}
+	v := f.run(f.with(map[string][]model.Reply{
+		"lead":          {calls(plan(issue("I1", "Which trades were allocated?", "RedFlag"))), calls(tc("sweep", m{"over": "sections", "documentIds": nil}))},
+		"extract_facts": {facts(rows...)},
+	}), Config{})
+	if fs := ledgerFindings(t, f, v.ID); len(fs) != 20 {
+		t.Fatalf("%d findings of a 20-row page", len(fs))
 	}
 }

@@ -7,10 +7,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/discover-legal/BigLaw/internal/agent"
+	"github.com/discover-legal/BigLaw/internal/analysis"
 	"github.com/discover-legal/BigLaw/internal/model"
 )
 
@@ -211,5 +213,106 @@ func TestCoverageDraftsLeftOutEvidence(t *testing.T) {
 	}
 	if strings.Contains(out, "never reached the memo") {
 		t.Fatalf("a placed finding was disclosed as left out:\n%s", out)
+	}
+}
+
+// TestCoverageLinesSummarised (bench5 SEC: 101 "Coverage:" lines in Limitations, one per party and
+// figure): the parties the memo never names are one line and the missing figures another, each
+// listing at most maxListed and counting the rest.
+func TestCoverageLinesSummarised(t *testing.T) {
+	var ps []analysis.PartyGap
+	var hs []analysis.Handle
+	for i := range 30 {
+		ps = append(ps, analysis.PartyGap{Name: fmt.Sprintf("Party %d", i), FIDs: []string{fmt.Sprintf("F%d", i), "F99", "F100", "F101"}})
+		hs = append(hs, analysis.Handle{FID: fmt.Sprintf("F%d", i), Label: "fee", Value: fmt.Sprintf("$%d,000", i+1)})
+	}
+	p, h := partyLine(ps), figureLine(hs)
+	if !strings.HasPrefix(p, "Coverage: 30 parties named in verified findings never appear in the memo: Party 0 (F0, F99, F100); ") || !strings.HasSuffix(p, " and 18 more.") ||
+		!strings.HasPrefix(h, "Coverage: 30 salient figures never appear in the memo: $1,000 (fee, F0); ") || !strings.HasSuffix(h, " and 18 more.") ||
+		partyLine(nil) != "" || figureLine(nil) != "" {
+		t.Fatalf("%q\n%q", p, h)
+	}
+}
+
+// TestPlacementsStrongestFirst: the coverage pass places an issue with a figure conflict, then the
+// issues by their strongest left-out finding, not in plan order, so a pass whose share runs out has
+// placed the most salient evidence. (The conflict is the figure judge's verdict, which join_discrepancies
+// asks for.)
+func TestPlacementsStrongestFirst(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, "1. Fees\nThe Firm failed to disclose the fee. The fee was $291,400 in 2023.\n", "Schedule\nThe fee was $310,000 in 2023.\n")
+	d1, d2 := f.docs[0].ID, f.docs[1].ID
+	v := f.run(f.with(map[string][]model.Reply{
+		"lead": {calls(plan(issue("I1", "Was the fee disclosed?", "RedFlag"), issue("I2", "What was the fee?", "RedFlag"))),
+			calls(extract(d1, "disclose", "I1")), calls(extract(d1, "fee", "I2")), calls(extract(d2, "fee", "I2")), calls(tc("join_discrepancies", m{"fids": nil, "aliases": nil}))},
+		"extract_facts": {facts(fd("The Firm failed to disclose the fee.", d1, "The Firm failed to disclose the fee")),
+			facts(fd("The fee was $291,400.", d1, "The fee was $291,400 in 2023", val("Firm", "fee", "$291,400", "Money"))),
+			facts(fd("The fee was $310,000.", d2, "The fee was $310,000 in 2023", val("Firm", "fee", "$310,000", "Money")))},
+	}), Config{})
+	order, place, err := f.e.placements(context.Background(), v.ID)
+	if err != nil || strings.Join(order, ",") != "I2,I1" || len(place["I2"].Conflicts) != 1 || !slices.Contains(place["I1"].FIDs, "F1") {
+		t.Fatalf("order %v, %+v, %v", order, place, err)
+	}
+}
+
+// lab-r4 r4 verifier repros (critique/biglaw-lab-r4-r4-verifier.md): the mechanical LOWs (L7 the
+// committee cap's disclosure, L8 the placement request's cap, L9 a merged duplicate's value notes).
+
+// L9: an exact duplicate's dropped values were noted only in the call's notes, never on the kept finding.
+func TestR4V4DuplicateKeepsValueNotes(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, "1. Damages\nGreystone claims damages of $644,910 for unpaid invoices.\n")
+	d1 := f.docs[0].ID
+	q := "Greystone claims damages of $644,910 for unpaid invoices"
+	first := fd("Greystone claims damages of $644,910.", d1, q, val("Greystone", "damages", "$644,910", "Money"))
+	again := fd("Greystone claims damages of $644,910.", d1, q, val("Greystone", "damages", "$644,910", "Money"), val("Greystone", "interest", "$99,000", "Money"))
+	v := f.run(f.with(map[string][]model.Reply{"extract_facts": {facts(first, again)}}), Config{})
+	fs := ledgerFindings(t, f, v.ID)
+	if len(fs) != 1 || !slices.ContainsFunc(fs[0].ValueNotes, func(n string) bool { return strings.Contains(n, "$99,000") }) {
+		t.Errorf("the merged duplicate's dropped value is not on the kept finding: %+v", fs)
+	}
+}
+
+// L8: a placement redraft's request cut a large section's own citations at maxDraftFIDs.
+func TestR4V4PlacementKeepsCitations(t *testing.T) {
+	var cites, left []string
+	for i := range 95 {
+		cites = append(cites, fmt.Sprintf("F%d", i+1))
+	}
+	for i := range 16 {
+		left = append(left, fmt.Sprintf("F%d", 200+i))
+	}
+	p := &placement{FIDs: left, Conflicts: []analysis.Conflict{{Values: []analysis.ConflictVal{{FID: "F300"}, {FID: "F3"}}}}}
+	fids, ok := placeFIDs(p, cites)
+	if !ok || len(fids) != maxDraftFIDs || !slices.Contains(fids, "F300") || !slices.Contains(fids, "F200") || slices.Contains(fids, "F215") {
+		t.Errorf("placement request %v (%v)", fids, ok)
+	}
+	for _, c := range cites {
+		if !slices.Contains(fids, c) {
+			t.Fatalf("the section's citation %s was cut from the request", c)
+		}
+	}
+	for i := range 10 {
+		cites = append(cites, fmt.Sprintf("F%d", 400+i))
+	}
+	if _, ok := placeFIDs(p, cites); ok {
+		t.Errorf("a section citing more than the request holds was redrafted from fewer")
+	}
+}
+
+// L7: after the committee's cap, fixes resolved after its last cycle were disclosed only generically.
+func TestR4V4UnreviewedFixesNamed(t *testing.T) {
+	crit := []Critic{
+		{ID: "C1", Cycle: 1, Critic: "prosecute", Severity: "HIGH", Text: "reviewed fix", Status: "fixed", Resolved: 1},
+		{ID: "C7", Cycle: 3, Critic: "reproduce", Severity: "HIGH", Text: "the deadline is wrong", Status: "fixed", Resolved: 3},
+		{ID: "C2", Cycle: 2, Critic: "audit_gaps", Severity: "MEDIUM", Text: "late fix", Status: "fixed", Resolved: 3},
+		{ID: "C8", Cycle: 3, Critic: "audit_gaps", Severity: "LOW", Text: "disclosed", Status: "disclosed", Resolved: 3},
+	}
+	got := unreviewedFixes(crit, 3)
+	if !strings.Contains(got, "C7 (HIGH, reproduce): the deadline is wrong") || !strings.Contains(got, "C2 (MEDIUM") || strings.Contains(got, "C1") || strings.Contains(got, "C8") {
+		t.Errorf("unreviewed fixes: %q", got)
+	}
+	if unreviewedFixes(crit[:1], 3) != "" {
+		t.Errorf("a fix the committee reviewed was named")
 	}
 }

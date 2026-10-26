@@ -5,6 +5,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/discover-legal/BigLaw/internal/agent"
+	"github.com/discover-legal/BigLaw/internal/analysis"
 	"github.com/discover-legal/BigLaw/internal/model"
 )
 
@@ -552,5 +554,67 @@ func TestExtractFactsRefusesABadThrough(t *testing.T) {
 	}
 	if out := strings.Join(f.outputs(v.ID, "extract_facts"), ""); !strings.Contains(out, "through") {
 		t.Fatalf("extract_facts %s", out)
+	}
+}
+
+// The lab-r3 verifier's repros (H1–H3, M1–M3), kept as regression tests: each failed on 1814a6a.
+
+// TestLedgerFindingsPage (bench4, SEC: ledger op findings detail full returned all 892 findings,
+// 682 KB, in one result, which overflowed the lead's context): the list comes a page at a time
+// (ledgerPage bytes), next names the offset of the following page, and the pages hold every
+// finding once, by issue too.
+func TestLedgerFindingsPage(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, "1. Terms\nThe Seller shall deliver the goods.\n")
+	f.engine(map[string][]model.Reply{}, Config{})
+	task := f.submit(0)
+	quote := strings.Repeat("The Seller shall deliver the goods on time and in full under the Agreement. ", 8)
+	for i := range 900 {
+		x := Finding{Finding: analysis.Finding{FID: fmt.Sprintf("F%d", i+1), IssueID: fmt.Sprintf("I%d", i%3+1), Claim: "The Seller must deliver.", Verified: true}}
+		x.Citations = []Citation{{DocumentID: f.docs[0].ID, Quote: quote, Method: "exact", Confidence: 1}}
+		if err := f.e.write(context.Background(), task.ID, kFinding, x.FID, x, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page := func(issue any, offset any) (fids []string, next *int, size int) {
+		in, _ := json.Marshal(m{"op": "findings", "issues": nil, "issueId": issue, "fid": nil, "detail": "full", "criticId": nil, "resolution": nil, "note": nil, "entity": nil, "offset": offset})
+		res, err := f.e.ledgerTool(builtinSpecs).Call(context.Background(), agent.Call{TaskID: task.ID, Input: in})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out struct {
+			Findings []struct{ FID string }
+			Next     *int
+		}
+		_ = json.Unmarshal(res.Output, &out)
+		for _, x := range out.Findings {
+			fids = append(fids, x.FID)
+		}
+		return fids, out.Next, len(res.Output)
+	}
+	for _, issue := range []any{nil, "I2"} {
+		seen, pages := map[string]int{}, 0
+		var off any
+		for {
+			fids, next, size := page(issue, off)
+			if pages++; size > agent.ShrunkResult-1000 || len(fids) == 0 || pages > 100 {
+				t.Fatalf("issue %v page %d: %d bytes, %d findings", issue, pages, size, len(fids))
+			}
+			for _, x := range fids {
+				seen[x]++
+			}
+			if next == nil {
+				break
+			}
+			off = *next
+		}
+		if want := map[bool]int{true: 900, false: 300}[issue == nil]; len(seen) != want || pages < 2 {
+			t.Errorf("issue %v: %d findings over %d pages, want %d over several", issue, len(seen), pages, want)
+		}
+		for x, n := range seen {
+			if n != 1 {
+				t.Errorf("%s listed %d times", x, n)
+			}
+		}
 	}
 }

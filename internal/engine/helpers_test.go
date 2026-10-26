@@ -332,3 +332,13 @@ func g8(para, ground string, at0 int, regs []region, read map[int]analysis.Readi
 	td, tn := figures(para, true)
 	return g8In(para, td, tn, groundOf(ground), at0, regs, read, known, unread, sheets, cited, rolled)
 }
+
+// testPrices prices the test models at $1/$5 per million tokens in and out.
+func testPrices(t *testing.T) *model.Prices {
+	t.Helper()
+	prices, err := model.LoadPrices(`{"lead-m": {"in": 1, "out": 5}, "spec-m": {"in": 1, "out": 5}, "crit-m": {"in": 1, "out": 5}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return prices
+}
