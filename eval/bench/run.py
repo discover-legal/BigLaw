@@ -4,17 +4,19 @@
 """BigLaw benchmark suite (docs/benchmarks.md).
 
     python3 eval/bench/run.py run [--labs-dir ~/harvey-labs]   # the pinned suite (make bench): needs ANTHROPIC_API_KEY
+    python3 eval/bench/run.py preflight [--labs-dir DIR]       # everything run starts, up to /health; no task, no model call
     python3 eval/bench/run.py smoke --api URL --out DIR        # offline: what eval/bench_test.go runs (no key, no credit)
     python3 eval/bench/run.py check [SUMMARY ...]              # configs, baselines and summaries against their schemas
     python3 eval/bench/run.py pin [--config PATH]              # re-pin a deliberately edited config (new hash)
 
-`run` reads eval/bench/config.json and nothing else: it refuses a config whose hash does not match,
-any OPENAI_* variable, a dirty checkout (unless --allow-dirty, recorded) and a harvey-labs checkout
-at another commit; starts Postgres (a pgvector container, or BIGLAW_DATABASE_URL, which must hold no
-tasks); builds the binary at HEAD; starts `biglaw serve` with exactly the config's settings; runs each
-task, judges it, enforces the spend cap; and writes eval/bench/results/<date>-<sha7>/summary.json.
-The key comes only from ANTHROPIC_API_KEY or the file ANTHROPIC_API_KEY_FILE names; it is never
-printed, logged or written to results.
+`run` reads eval/bench/config.json and nothing else. It refuses a config whose hash does not match,
+any OPENAI_* or other vendor opt-in variable, a checkout that differs from its commit (unless
+--allow-dirty: NOT COMPARABLE) and a harvey-labs checkout at another commit; starts Postgres (a
+pgvector container, or a new database in BIGLAW_DATABASE_URL's server); builds the binary at HEAD;
+starts `biglaw serve` with exactly the config's environment; runs each task, judges it, enforces the
+spend cap; and writes eval/bench/results/<date>-<sha7>/summary.json. SIGINT, SIGTERM and SIGHUP
+cancel the running task and stop serve and the database. The key comes only from ANTHROPIC_API_KEY or
+the file ANTHROPIC_API_KEY_FILE names; it is never printed, logged or written to results.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,8 +33,9 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 from benchlib import config as bconfig  # noqa: E402
-from benchlib.infra import InfraError, Postgres, Serve, build, git_state, harness_commit  # noqa: E402
-from benchlib.suite import check_summary, run_suite, write_summary  # noqa: E402
+from benchlib.infra import (InfraError, Postgres, Serve, build, build_state, go_version, harness_commit,  # noqa: E402
+                            pandoc_version, yardstick)
+from benchlib.suite import cancel_active, check_summary, run_suite, write_summary  # noqa: E402
 
 RESULTS = HERE / "results"
 
@@ -78,74 +82,126 @@ def print_table(summary: dict) -> None:
         print(f"STOPPED: {summary['stopped']['reason']}: {summary['stopped']['detail']}")
 
 
+def _exit_on_signal(signum, _frame):
+    raise SystemExit(128 + signum)  # unwinds through every finally: the task is cancelled, serve and the database stopped
+
+
+def refusals(a, cfg_kind: str = "real") -> tuple[dict, str]:
+    """The config and the key, or ConfigError: nothing has started yet."""
+    cfg = bconfig.load(Path(a.config))
+    if cfg["mode"] != cfg_kind:
+        raise bconfig.ConfigError(f"{a.config} is a {cfg['mode']} config: `{a.cmd}` takes the {cfg_kind} one (smoke: `run.py smoke`)")
+    env_errs = bconfig.refuse_env(os.environ)
+    if env_errs:
+        raise bconfig.ConfigError("; ".join(env_errs))
+    return cfg, bconfig.load_key(os.environ)
+
+
+def check_harness(cfg: dict, labs: Path) -> tuple[str | None, bool | None]:
+    commit, dirty = harness_commit(labs)
+    want = cfg["harness"]["commit"]
+    if any(t["kind"] == "lab" for t in cfg["tasks"]):
+        if commit is None or not commit.startswith(want):
+            raise bconfig.ConfigError(f"{labs} is not a harvey-labs checkout at {want} (found {commit and commit[:7]}): "
+                                      f"git -C {labs} checkout {want}")
+        if dirty:
+            raise bconfig.ConfigError(f"{labs} has modified tracked files: the harness must be {want} as committed")
+    return commit, dirty
+
+
+def start_backend(cfg: dict, key: str, out: Path, log, redact, keep: list):
+    """Postgres (always an empty database), the binary at HEAD, and serve with exactly the config's
+    environment, checked at /health. Everything started is appended to keep, for the caller to stop."""
+    db = Postgres(os.environ.get("BIGLAW_DATABASE_URL") or None, cfg["postgres_image"], log)
+    keep.append(db)
+    n = db.table_count()
+    if n is None:
+        raise InfraError("cannot read the suite's database (psql missing or the query failed)")
+    if n:
+        raise InfraError(f"the suite's database already holds {n} tables: it must start empty")
+    sha = build_state()["sha"]
+    version = f"bench-{(sha or 'nogit')[:7]}"
+    binary = build(out / "build" / "biglaw", version, log)
+    serve = Serve(binary, bconfig.serve_env(cfg, db.dsn, key, db.serve_env), out / "logs" / "serve.log", redact)
+    keep.append(serve)
+    h = serve.health()
+    if h.get("version") != version or h.get("search") != cfg["search"]:
+        raise InfraError(f"serve answers version {h.get('version')!r} search {h.get('search')!r}; expected {version!r} {cfg['search']!r}")
+    log(f"serve {serve.url}: {h}")
+    return db, serve, {"fresh": True, **db.versions(), "image": None if os.environ.get("BIGLAW_DATABASE_URL") else cfg["postgres_image"]}
+
+
+def stop_all(keep: list, log) -> None:
+    cancel_active(log)
+    for x in reversed(keep):
+        try:
+            x.stop() if isinstance(x, Serve) else x.close()
+        except Exception as e:  # noqa: BLE001 - keep stopping the rest
+            log(f"cleanup: {e}")
+
+
 def cmd_run(a) -> int:
     try:
-        cfg = bconfig.load(Path(a.config))
-        if cfg["mode"] != "real":
-            raise bconfig.ConfigError(f"{a.config} is a {cfg['mode']} config: `run` takes the real one (smoke: `run.py smoke`)")
-        env_errs = bconfig.refuse_env(os.environ)
-        if env_errs:
-            raise bconfig.ConfigError("; ".join(env_errs))
-        key = bconfig.load_key(os.environ)
+        cfg, key = refusals(a)
+        labs = Path(a.labs_dir).expanduser().resolve()
+        commit, labs_dirty = check_harness(cfg, labs)
     except bconfig.ConfigError as e:
         print(f"refused: {e}", file=sys.stderr)
         return 2
     if os.environ.get("ANTHROPIC_BASE_URL"):
         print("note: ANTHROPIC_BASE_URL is set in this shell; the bench unsets it for serve and the judge")
     redact = bconfig.Redactor(key, os.environ.get("BIGLAW_DATABASE_URL", ""))
-    labs = Path(a.labs_dir).expanduser().resolve()
-    commit, labs_dirty = harness_commit(labs)
-    want = cfg["harness"]["commit"]
-    if any(t["kind"] == "lab" for t in cfg["tasks"]):
-        if commit is None or not commit.startswith(want):
-            print(f"refused: {labs} is not a harvey-labs checkout at {want} (found {commit and commit[:7]}): "
-                  f"git -C {labs} checkout {want}", file=sys.stderr)
-            return 2
-        if labs_dirty:
-            print(f"refused: {labs} has modified tracked files: the harness must be {want} as committed", file=sys.stderr)
-            return 2
-    sha, dirty = git_state()
-    if dirty and not a.allow_dirty:
-        print("refused: the checkout has uncommitted changes; commit them (a result names one commit) or pass --allow-dirty "
-              "(recorded as build.dirty, which compare.py reports)", file=sys.stderr)
+    bs = build_state()
+    if bs["dirty"] and not a.allow_dirty:
+        print("refused: the checkout differs from its commit (modified tracked files, or untracked files under "
+              f"{', '.join(('internal', 'cmd', 'eval', 'ui', 'go.mod', 'go.sum'))}: {', '.join(bs['untracked'][:10]) or 'see git status'}); "
+              "commit or remove them (a result names one commit) or pass --allow-dirty (the run is then NOT COMPARABLE)",
+              file=sys.stderr)
         return 2
-    out = out_dir(Path(a.results_root), sha)
+    out = out_dir(Path(a.results_root), bs["sha"])
     log = logger(out, redact)
-    log(f"bench {out.name}: config {cfg['config_hash']}, build {sha}{' (dirty)' if dirty else ''}, harness {commit}")
-    db = serve = None
+    log(f"bench {out.name}: config {cfg['config_hash']}, build {bs['sha']}{' (dirty)' if bs['dirty'] else ''}, harness {commit}")
+    keep: list = []
     try:
-        db = Postgres(os.environ.get("BIGLAW_DATABASE_URL") or None, cfg["postgres_image"], log)
-        n = db.task_count()
-        if n is None:
-            raise InfraError("cannot read the database (psql missing or the query failed)")
-        if n and not a.reuse_db:
-            raise InfraError(f"the database already holds {n} tasks: a run needs a fresh one (cross-run caches would make it "
-                             "incomparable); point BIGLAW_DATABASE_URL at an empty database or pass --reuse-db (recorded)")
-        version = f"bench-{(sha or 'nogit')[:7]}"
-        binary = build(out / "build" / "biglaw", version, log)
-        serve = Serve(binary, {"BIGLAW_DATABASE_URL": db.dsn, **db.serve_env, "BIGLAW_MODEL_URL": cfg["model_url"], "BIGLAW_MODEL_KEY": key,
-                               "BIGLAW_MODELS": bconfig.models_env(cfg), "BIGLAW_BUDGET_USD": str(cfg["budget"]["usd"]),
-                               "BIGLAW_BUDGET_CALLS": str(cfg["budget"]["calls"])}, out / "logs" / "serve.log", redact)
-        h = serve.health()
-        if h.get("version") != version or h.get("search") != cfg["search"]:
-            raise InfraError(f"serve answers version {h.get('version')!r} search {h.get('search')!r}; expected {version!r} {cfg['search']!r}")
-        log(f"serve {serve.url}: {h}")
+        db, serve, database = start_backend(cfg, key, out, log, redact, keep)
         summary = run_suite(cfg, api=serve.url, lab_root=lab_root_for(out, labs / "tasks"), out=out, db=db, harness=labs, key=key,
-                            redact=redact, log=log, build={"sha": sha, "dirty": dirty},
-                            harness_info={"name": cfg["harness"]["name"], "commit": commit, "dirty": labs_dirty},
-                            fresh_db=not n, config_hash=cfg["config_hash"])
+                            redact=redact, log=log, build={**bs, "go": go_version()},
+                            harness_info={"name": cfg["harness"]["name"], "commit": commit, "dirty": labs_dirty, "pandoc": pandoc_version()},
+                            database=database, yardstick=yardstick(), config_hash=cfg["config_hash"])
     except InfraError as e:
         log(f"error: {e}")
         return 1
     finally:
-        if serve:
-            serve.stop()
-        if db:
-            db.close()
+        stop_all(keep, log)
     path = write_summary(summary, out)
     print_table(summary)
     print(f"summary: {path}")
     return 3 if summary["stopped"] and summary["stopped"]["reason"] == "provider_error" else 0
+
+
+def cmd_preflight(a) -> int:
+    """Everything `run` does up to serve answering /health, then stop: no task, no model call."""
+    try:
+        cfg, key = refusals(a)
+        if a.labs_dir:
+            check_harness(cfg, Path(a.labs_dir).expanduser().resolve())
+    except bconfig.ConfigError as e:
+        print(f"refused: {e}", file=sys.stderr)
+        return 2
+    redact = bconfig.Redactor(key, os.environ.get("BIGLAW_DATABASE_URL", ""))
+    out = Path(a.out).resolve() if a.out else out_dir(Path(a.results_root), build_state()["sha"])
+    (out / "logs").mkdir(parents=True, exist_ok=True)
+    log = logger(out, redact)
+    keep: list = []
+    try:
+        _, _, database = start_backend(cfg, key, out, log, redact, keep)
+        log(f"preflight ok: database {database}")
+    except InfraError as e:
+        log(f"preflight failed: {e}")
+        return 1
+    finally:
+        stop_all(keep, log)
+    return 0
 
 
 def cmd_smoke(a) -> int:
@@ -153,23 +209,26 @@ def cmd_smoke(a) -> int:
     if cfg["mode"] != "smoke":
         print(f"refused: {a.config} is not a smoke config", file=sys.stderr)
         return 2
-    sha, dirty = git_state()
+    bs = build_state()
     out = Path(a.out).resolve()
     (out / "logs").mkdir(parents=True, exist_ok=True)
-    key = os.environ.get("BENCH_SMOKE_SECRET", "")  # the smoke test's dummy secret: proves nothing writes it
+    key = os.environ.get("BENCH_SMOKE_SECRET", "")  # the smoke's dummy secret: given to the judge, never written
     redact = bconfig.Redactor(key)
     log = logger(out, redact)
     dsn = os.environ.get("BIGLAW_DATABASE_URL") or None
-    db = Postgres(dsn, cfg["postgres_image"], log) if dsn else None
-    n = db.task_count() if db else None
-    summary = run_suite(cfg, api=a.api, lab_root=lab_root_for(out, HERE / "smoke" / "tasks"), out=out, db=db, harness=HERE / "smoke",
-                        key=key, redact=redact, log=log, build={"sha": sha, "dirty": dirty},
-                        harness_info={"name": cfg["harness"]["name"], "commit": None, "dirty": None},
-                        fresh_db=None if n is None else not n, config_hash=cfg["config_hash"])
+    db = Postgres(dsn, cfg["postgres_image"], log, fresh=False) if dsn else None
+    database = {"fresh": None, **(db.versions() if db else {"server": None, "vector": None}), "image": None}
+    try:
+        summary = run_suite(cfg, api=a.api, lab_root=lab_root_for(out, HERE / "smoke" / "tasks"), out=out, db=db, harness=HERE / "smoke",
+                            key=key, redact=redact, log=log, build={**bs, "go": None},
+                            harness_info={"name": cfg["harness"]["name"], "commit": None, "dirty": None, "pandoc": pandoc_version()},
+                            database=database, yardstick=yardstick(), config_hash=cfg["config_hash"])
+    finally:
+        cancel_active(log)
     path = write_summary(summary, out)
     print_table(summary)
     print(f"summary: {path}")
-    return 0
+    return 3 if summary["stopped"] and summary["stopped"]["reason"] == "provider_error" else 0
 
 
 def cmd_check(a) -> int:
@@ -202,9 +261,14 @@ def main(argv=None) -> int:
     sp.add_argument("--config", default=str(bconfig.CONFIG))
     sp.add_argument("--labs-dir", default="~/harvey-labs", help="harvey-labs checkout at the config's commit")
     sp.add_argument("--results-root", default=str(RESULTS))
-    sp.add_argument("--allow-dirty", action="store_true", help="run an uncommitted checkout (recorded as build.dirty)")
-    sp.add_argument("--reuse-db", action="store_true", help="run on a database that already holds tasks (recorded as fresh_db false)")
+    sp.add_argument("--allow-dirty", action="store_true", help="run an uncommitted checkout (recorded; compare reports it NOT COMPARABLE)")
     sp.set_defaults(fn=cmd_run)
+    sp = sub.add_parser("preflight", help="start everything `run` starts, check /health, stop: no task, no model call")
+    sp.add_argument("--config", default=str(bconfig.CONFIG))
+    sp.add_argument("--labs-dir", help="also check the harvey-labs checkout")
+    sp.add_argument("--results-root", default=str(RESULTS))
+    sp.add_argument("--out", help="write logs here instead of a new results directory")
+    sp.set_defaults(fn=cmd_preflight)
     sp = sub.add_parser("smoke", help="the offline pipeline smoke over a scripted API (eval/bench_test.go)")
     sp.add_argument("--config", default=str(bconfig.SMOKE_CONFIG))
     sp.add_argument("--api", required=True)
@@ -217,6 +281,8 @@ def main(argv=None) -> int:
     sp.add_argument("--config", default=str(bconfig.CONFIG))
     sp.set_defaults(fn=cmd_pin)
     a = p.parse_args(argv)
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, _exit_on_signal)
     return a.fn(a)
 
 

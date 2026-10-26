@@ -6,14 +6,22 @@
   "source": "v1 scores.json record: the v1 platform (main), Haiku, judged by claude-sonnet-4-6 (single judge). Only the totals were recorded; per-criterion results, cost, calls and the run settings are unknown (null).",
   "build": {
     "sha": null,
-    "dirty": null
+    "dirty": null,
+    "patch": null,
+    "untracked": [],
+    "go": null
   },
   "config_hash": null,
   "config": null,
+  "reconstructed_config": null,
+  "reconstructed_config_hash": null,
+  "provenance": null,
+  "yardstick": null,
   "harness": {
     "name": "harvey-labs",
     "commit": null,
-    "dirty": null
+    "dirty": null,
+    "pandoc": null
   },
   "judge": {
     "models": [
@@ -21,6 +29,8 @@
     ],
     "runner": "harvey-labs"
   },
+  "database": null,
+  "models_served": null,
   "runner": {
     "host": null,
     "date": null,
@@ -30,7 +40,8 @@
   "spend": {
     "cap_usd": null,
     "charged_usd": null,
-    "actual_usd": null
+    "biglaw_usd": null,
+    "judge_usd_estimated": null
   },
   "stopped": null,
   "tasks": [
@@ -57,6 +68,8 @@
       "conflicts": null,
       "computed_figures": null,
       "finding_gates": null,
+      "judge_cost": null,
+      "models_served": null,
       "charged_usd": null,
       "run_dir": null,
       "error": null,
@@ -87,6 +100,8 @@
       "conflicts": null,
       "computed_figures": null,
       "finding_gates": null,
+      "judge_cost": null,
+      "models_served": null,
       "charged_usd": null,
       "run_dir": null,
       "error": null,

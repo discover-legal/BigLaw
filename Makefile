@@ -16,7 +16,7 @@ NPM ?= npm
 
 # The benchmark suite (docs/benchmarks.md): `make bench` runs eval/bench/config.json against the real
 # model (owner-run: ANTHROPIC_API_KEY or ANTHROPIC_API_KEY_FILE, a harvey-labs checkout at LABS_DIR, docker
-# or BIGLAW_DATABASE_URL); `make bench-smoke` is its offline smoke (TestBenchSmoke, also part of make test).
+# or BIGLAW_DATABASE_URL); `make bench-smoke` runs its offline tests (TestBench*, also part of make test).
 LABS_DIR ?= ~/harvey-labs
 
 .PHONY: bench bench-smoke eval ui-embed ui demo-bundle demo-record e4-record e4-live build static-check test fmt-check vet mod-check loc compose-check lint vuln ci clean
@@ -95,7 +95,7 @@ bench:
 
 bench-smoke:
 	python3 eval/bench/run.py check
-	$(GO) test -count=1 -v -run '^TestBenchSmoke$$' ./eval
+	$(GO) test -count=1 -v -run '^TestBench' ./eval
 
 demo-bundle:
 	cd ui && $(NPM) ci && $(NPM) run demo-bundle

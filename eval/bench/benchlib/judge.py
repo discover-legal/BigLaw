@@ -6,14 +6,60 @@ single judge), or in smoke mode stubjudge.py, a stand-in with the same command l
 from __future__ import annotations
 
 import json
+import math
+import re
+import shutil
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 from .collect import fatal_provider_error
 from .infra import child_env
 
 BENCH = Path(__file__).resolve().parent.parent
+
+
+TEMPLATE = Path("lab_core/evaluation/prompts/rubric_criterion.txt")  # the judge's per-criterion prompt in harvey-labs
+TEMPLATE_FALLBACK_CHARS = 2000
+
+
+def deliverable_text(path: Path) -> str:
+    """A deliverable roughly as the judge reads it: a .docx through pandoc when installed (as harvey-labs
+    reads it), else its document.xml's text; anything else as UTF-8 text."""
+    if path.suffix.lower() == ".docx":
+        if shutil.which("pandoc"):
+            r = subprocess.run(["pandoc", "-t", "markdown", str(path)], capture_output=True, text=True)
+            if r.returncode == 0:
+                return r.stdout
+        try:
+            with zipfile.ZipFile(path) as z:
+                return re.sub(r"<[^>]+>", " ", z.read("word/document.xml").decode("utf-8", "replace"))
+        except (OSError, KeyError, zipfile.BadZipFile):
+            return ""
+    return path.read_text(encoding="utf-8", errors="replace")
+
+
+def estimate(cfg: dict, task_cfg: dict, output_dir: Path, harness: Path) -> dict:
+    """What harvey-labs' judge will cost on this run: one call per criterion, each carrying the prompt
+    template, the task's instructions, the criterion and the text of its deliverables (all of them when
+    it names none), at chars_per_token, plus output_tokens_per_criterion out, at the pinned price. An
+    estimate (harvey-labs reports no judge usage), recorded as one; retries are not in it."""
+    j = cfg["judge"]
+    tpl = harness / TEMPLATE
+    overhead = (len(tpl.read_text(encoding="utf-8")) if tpl.is_file() else TEMPLATE_FALLBACK_CHARS) + len(str(task_cfg.get("instructions", "")))
+    files = {f.name: len(deliverable_text(f)) for f in sorted(output_dir.glob("*")) if f.is_file()} if output_dir.is_dir() else {}
+    total = sum(files.values())
+    crits = task_cfg.get("criteria") or []
+    chars = 0
+    for c in crits:
+        named = [files[n] for n in c.get("deliverables") or [] if n in files]
+        chars += overhead + len(json.dumps(c)) + (sum(named) if named else total)
+    tin = math.ceil(chars / float(j["chars_per_token"]))
+    tout = len(crits) * int(j["output_tokens_per_criterion"])
+    usd = tin * j["price_per_mtok"]["in"] / 1e6 + tout * j["price_per_mtok"]["out"] / 1e6
+    return {"usd": round(usd, 4), "basis": "estimate", "criteria": len(crits), "input_tokens": tin, "output_tokens": tout,
+            "deliverable_chars": total}
 
 
 def command(cfg: dict, run_id: str, task: str) -> list[str]:
@@ -36,8 +82,8 @@ def run_judge(cfg: dict, harness: Path, lab_root: Path, run_id: str, task: str, 
     ANTHROPIC_BASE_URL is never set. A key or credit refusal raises JudgeError with the provider's
     error type."""
     env = child_env({"LAB_ROOT": str(lab_root)})
-    if cfg["judge"]["runner"] == "harvey-labs":
-        env["ANTHROPIC_API_KEY"] = key
+    if key:
+        env["ANTHROPIC_API_KEY"] = key  # the stub gets the smoke's dummy secret too, so its log's redaction is tested
     r = subprocess.run(command(cfg, run_id, task), cwd=harness, env=env, capture_output=True, text=True)
     text = redact((r.stdout or "") + "\n" + (r.stderr or ""))
     log_path.parent.mkdir(parents=True, exist_ok=True)

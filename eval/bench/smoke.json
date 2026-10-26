@@ -8,6 +8,7 @@
     "critic": null
   },
   "model_url": "http://127.0.0.1/unused-in-smoke",
+  "vendor_opt_in": [],
   "budget": {
     "usd": 5,
     "calls": 150
@@ -23,8 +24,13 @@
     "models": [
       "stub-judge"
     ],
-    "reserve_usd": 1,
-    "parallel": 1
+    "parallel": 1,
+    "price_per_mtok": {
+      "in": 3,
+      "out": 15
+    },
+    "output_tokens_per_criterion": 1000,
+    "chars_per_token": 3.5
   },
   "spend_cap_usd": 12,
   "driver": {
@@ -42,7 +48,8 @@
       "task": "smoke/deadline",
       "jurisdiction": "US",
       "split_mode": "markers",
-      "matter": "LAB"
+      "matter": "LAB",
+      "judge_reserve_usd": 1
     },
     {
       "id": "gate-a-litigation",
@@ -50,7 +57,8 @@
       "task": "litigation/greystone-v-talbot-defense",
       "jurisdiction": "US",
       "split_mode": "markers",
-      "matter": "litigation"
+      "matter": "litigation",
+      "judge_reserve_usd": 0
     },
     {
       "id": "cap-probe",
@@ -58,8 +66,9 @@
       "task": "corporate-ma/kestrel-buyside-diligence",
       "jurisdiction": "US",
       "split_mode": "markers",
-      "matter": "ma-diligence"
+      "matter": "ma-diligence",
+      "judge_reserve_usd": 0
     }
   ],
-  "config_hash": "sha256:5ac6664433d2a4bec3bb626d0073aa528c6d65e802c291b6849e70a2ec4d823d"
+  "config_hash": "sha256:c321bc129fc3337d2c9b0840336d89aa600e99d601552f09debe0be429bb2d77"
 }

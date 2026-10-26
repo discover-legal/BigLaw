@@ -12,6 +12,7 @@ import importlib.util
 import io
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -23,7 +24,9 @@ sys.path.insert(0, str(BENCH))
 
 from benchlib import collect, suite  # noqa: E402
 from benchlib import config as bconfig  # noqa: E402
+from benchlib import infra  # noqa: E402
 from benchlib.infra import pg_env  # noqa: E402
+from benchlib.judge import estimate  # noqa: E402
 from benchlib.jsonschema import SchemaError, validate  # noqa: E402
 
 
@@ -60,10 +63,18 @@ class ConfigTests(unittest.TestCase):
         c = bconfig.load(bconfig.CONFIG)
         self.assertEqual(c["models"], {"lead": "claude-haiku-4-5", "specialist": "claude-haiku-4-5", "critic": "claude-haiku-4-5"})
         self.assertEqual(c["model_url"], "https://api.anthropic.com/v1")
-        self.assertEqual((c["budget"]["usd"], c["budget"]["calls"], c["search"], c["spend_cap_usd"]), (11, 900, "lexical", 40))
+        self.assertEqual((c["budget"]["usd"], c["budget"]["calls"], c["search"], c["spend_cap_usd"]), (11, 900, "lexical", 60))
         self.assertEqual((c["harness"]["commit"], c["judge"]["models"]), ("81d6a31", ["claude-sonnet-4-6"]))
         self.assertEqual([t["id"] for t in c["tasks"]], ["sec", "trust", "gate-a-litigation"])
         self.assertEqual(bconfig.models_env(c), "lead=claude-haiku-4-5,specialist=claude-haiku-4-5,critic=claude-haiku-4-5")
+        self.assertEqual([(t["id"], t["judge_reserve_usd"]) for t in c["tasks"]], [("sec", 12), ("trust", 8), ("gate-a-litigation", 0)])
+
+    def test_serve_env_is_the_config(self):
+        """serve's whole environment (PR 63 r1 B1: without ALLOW_ANTHROPIC=1 serve refuses the endpoint)."""
+        env = bconfig.serve_env(bconfig.load(bconfig.CONFIG), "postgres://u@h/db", "k", {"PGPASSWORD": "p"})
+        self.assertEqual(env, {"BIGLAW_DATABASE_URL": "postgres://u@h/db", "BIGLAW_MODEL_URL": "https://api.anthropic.com/v1",
+                               "BIGLAW_MODEL_KEY": "k", "BIGLAW_MODELS": "lead=claude-haiku-4-5,specialist=claude-haiku-4-5,critic=claude-haiku-4-5",
+                               "BIGLAW_BUDGET_USD": "11", "BIGLAW_BUDGET_CALLS": "900", "PGPASSWORD": "p", "ALLOW_ANTHROPIC": "1"})
 
     def test_hand_edit_without_repin_is_refused(self):
         c = real_config()
@@ -78,6 +89,9 @@ class ConfigTests(unittest.TestCase):
         c2 = copy.deepcopy(c)
         c2["tasks"][0]["jurisdiction"] = "UK"
         self.assertNotEqual(bconfig.config_hash(c2), bconfig.config_hash(c))
+        c3 = copy.deepcopy(c)
+        c3["name"], c3["description"], c3["budget"]["usd"], c3["spend_cap_usd"] = "renamed", "reworded", 11.0, 60.0
+        self.assertEqual(bconfig.config_hash(c3), bconfig.config_hash(c), "labels and 11 vs 11.0 must not change the hash")
 
     def test_real_mode_rules(self):
         cases = {
@@ -88,12 +102,20 @@ class ConfigTests(unittest.TestCase):
             "cannot fund": lambda c: c.__setitem__("spend_cap_usd", 5),
             "repeat": lambda c: c["tasks"].append(copy.deepcopy(c["tasks"][0])),
             "judged by harvey-labs": lambda c: c["judge"].__setitem__("runner", "stub"),
+            "judge model 'gpt-5.5'": lambda c: c["judge"].__setitem__("models", ["gpt-5.5"]),
+            "vendor_opt_in [] must be exactly ['ALLOW_ANTHROPIC']": lambda c: c.__setitem__("vendor_opt_in", []),
+            "must be the matter's slug": lambda c: c["tasks"][2].__setitem__("matter", "LAB"),
+            "has no judge": lambda c: c["tasks"][2].__setitem__("judge_reserve_usd", 1),
+            "not a matter": lambda c: c["tasks"][2].__setitem__("task", "litigation/nope"),
         }
         for want, edit in cases.items():
             c = real_config()
             edit(c)
             errs = bconfig.check(repin(c))
             self.assertTrue(any(want in e for e in errs), f"{want}: {errs}")
+        c = real_config()
+        c["vendor_opt_in"] = ["ALLOW_AWS"]
+        self.assertTrue(any("is not one of ['ALLOW_ANTHROPIC']" in e for e in bconfig.check(repin(c))))
 
     def test_schema_refuses_unknown_and_missing_keys(self):
         c = real_config()
@@ -115,7 +137,7 @@ class ConfigTests(unittest.TestCase):
 
     def test_reserve(self):
         c = real_config()
-        self.assertEqual([bconfig.task_reserve(c, t) for t in c["tasks"]], [13.0, 13.0, 11.0])
+        self.assertEqual([bconfig.task_reserve(c, t) for t in c["tasks"]], [23.0, 19.0, 11.0])
 
 
 class KeyTests(unittest.TestCase):
@@ -143,7 +165,10 @@ class KeyTests(unittest.TestCase):
         self.assertIn("OPENAI_API_KEY", errs[0])
         self.assertIn("OPENAI_BASE_URL", errs[0])
         self.assertNotIn("sk-secret-value", errs[0])
-        self.assertEqual(bconfig.refuse_env({"PATH": "/bin"}), [])
+        self.assertEqual(bconfig.refuse_env({"PATH": "/bin", "ALLOW_ANTHROPIC": "1"}), [])
+        errs = bconfig.refuse_env({"ALLOW_AWS": "1"})
+        self.assertEqual(len(errs), 1)
+        self.assertIn("ALLOW_AWS", errs[0])
 
     def test_redactor(self):
         r = bconfig.Redactor(self.KEY, "")
@@ -184,24 +209,33 @@ class KeyTests(unittest.TestCase):
 
 
 class CapTests(unittest.TestCase):
-    """run_suite's cap over a stand-in task runner: the order of charges and stops, not BigLaw."""
+    """run_suite's cap over a stand-in task runner that charges as run_task does (BigLaw's cost, its
+    budget when unknown, then the judge's estimate): the order of charges and stops, not BigLaw."""
 
-    def suite(self, cfg: dict, costs: dict, stops: dict | None = None) -> dict:
+    def suite(self, cfg: dict, costs: dict, stops: dict | None = None, judge: dict | None = None) -> dict:
         ran = []
+        judge = judge or {"sec": 9.7, "trust": 5.8}
 
-        def fake_run_task(cfg, t, *a, **k):
+        def fake_run_task(cfg, t, cap, *a, **k):
             ran.append(t["id"])
             rec = suite.empty_task(t, "scored")
             rec["cost_usd"] = costs[t["id"]]
+            spent = costs[t["id"]] if costs[t["id"]] is not None else cfg["budget"]["usd"]
+            cap.charge(spent)
             if t["kind"] == "lab":
-                rec["judged"] = True
+                rec["judge_cost"] = {"usd": judge[t["id"]], "basis": "estimate", "criteria": 1, "input_tokens": 1, "output_tokens": 1, "deliverable_chars": 1}
+                cap.charge(judge[t["id"]])
+                spent += judge[t["id"]]
+            rec["charged_usd"] = spent
             return rec, (stops or {}).get(t["id"])
 
         with mock.patch.object(suite, "run_task", fake_run_task), tempfile.TemporaryDirectory() as d:
             s = suite.run_suite(cfg, api="http://x", lab_root=Path(d), out=Path(d) / "20261026-abcdef0", db=None, harness=Path(d), key="",
-                                redact=bconfig.Redactor(), log=lambda m: None, build={"sha": "abcdef0", "dirty": False},
-                                harness_info={"name": "harvey-labs", "commit": "81d6a31", "dirty": False}, fresh_db=True,
-                                config_hash=cfg["config_hash"])
+                                redact=bconfig.Redactor(), log=lambda m: None,
+                                build={"sha": "abcdef0", "dirty": False, "patch": None, "untracked": [], "go": None},
+                                harness_info={"name": "harvey-labs", "commit": "81d6a31", "dirty": False, "pandoc": "3.1.3"},
+                                database={"fresh": True, "server": "16", "vector": "0.8.6", "image": None},
+                                yardstick=infra.yardstick(), config_hash=cfg["config_hash"])
         self.assertEqual(suite.check_summary(s), [])
         s["ran"] = ran
         return s
@@ -214,28 +248,129 @@ class CapTests(unittest.TestCase):
         self.assertFalse(cap.admits(12.51))
 
     def test_pinned_suite_fits_its_cap(self):
+        """Bench6's BigLaw spend with the judge's estimates on bench6's deliverables: about $44 of the $60 cap."""
         s = self.suite(real_config(), {"sec": 10.27, "trust": 8.57, "gate-a-litigation": 9.6})
         self.assertEqual(s["ran"], ["sec", "trust", "gate-a-litigation"])
         self.assertIsNone(s["stopped"])
-        self.assertAlmostEqual(s["spend"]["charged_usd"], 10.27 + 2 + 8.57 + 2 + 9.6)
-        self.assertAlmostEqual(s["spend"]["actual_usd"], 10.27 + 8.57 + 9.6)
+        self.assertAlmostEqual(s["spend"]["charged_usd"], 10.27 + 9.7 + 8.57 + 5.8 + 9.6)
+        self.assertAlmostEqual(s["spend"]["biglaw_usd"], 10.27 + 8.57 + 9.6)
+        self.assertAlmostEqual(s["spend"]["judge_usd_estimated"], 9.7 + 5.8)
+
+    def test_worst_case_fits_the_cap(self):
+        """Every task at its budget and every judge at its reserve still fits: the cap never stops the pinned suite."""
+        c = real_config()
+        s = self.suite(c, {"sec": 11, "trust": 11, "gate-a-litigation": 11}, judge={"sec": 12, "trust": 8})
+        self.assertEqual(s["ran"], ["sec", "trust", "gate-a-litigation"])
+        self.assertLessEqual(s["spend"]["charged_usd"], c["spend_cap_usd"])
 
     def test_stops_before_a_task_that_would_exceed(self):
         c = real_config()
         c["spend_cap_usd"] = 30
-        s = self.suite(repin(c), {"sec": 10.0, "trust": None, "gate-a-litigation": 1.0})
-        # sec: 10 + 2 judge = 12; trust's cost unknown: charged its $11 budget + 2 = 25; litigation reserves 11 > 5 left
-        self.assertEqual(s["ran"], ["sec", "trust"])
-        self.assertEqual([t["status"] for t in s["tasks"]], ["scored", "scored", "skipped_cap"])
-        self.assertEqual(s["tasks"][1]["charged_usd"], 13.0)
+        s = self.suite(repin(c), {"sec": None, "trust": 1.0, "gate-a-litigation": 1.0})
+        # sec reserves 23 (fits); its cost unknown: charged its $11 budget + the $9.70 estimate = 20.70; trust reserves 19 > 9.30 left
+        self.assertEqual(s["ran"], ["sec"])
+        self.assertEqual([t["status"] for t in s["tasks"]], ["scored", "skipped_cap", "not_run"])
+        self.assertAlmostEqual(s["tasks"][0]["charged_usd"], 20.7)
         self.assertEqual(s["stopped"]["reason"], "spend_cap")
-        self.assertIsNone(s["spend"]["actual_usd"])
+        self.assertIsNone(s["spend"]["biglaw_usd"])
 
     def test_provider_refusal_stops_at_once(self):
         s = self.suite(real_config(), {"sec": 0.01, "trust": 0, "gate-a-litigation": 0}, {"sec": "authentication_error (HTTP 401)"})
         self.assertEqual(s["ran"], ["sec"])
         self.assertEqual([t["status"] for t in s["tasks"]], ["scored", "not_run", "not_run"])
         self.assertEqual(s["stopped"]["provider_error_type"], "authentication_error (HTTP 401)")
+
+
+class JudgeEstimateTests(unittest.TestCase):
+    def test_estimate(self):
+        cfg = real_config()
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "output"
+            out.mkdir()
+            (out / "memo.md").write_text("x" * 3500)
+            (out / "table.md").write_text("y" * 700)
+            crits = [{"id": "C-001", "deliverables": ["memo.md"]}, {"id": "C-002"}]
+            task = {"instructions": "i" * 100, "criteria": crits}
+            e = estimate(cfg, task, out, Path(d))  # no harness template there: 2000 chars assumed
+            per = 2000 + 100
+            chars = (per + len(json.dumps(crits[0])) + 3500) + (per + len(json.dumps(crits[1])) + 4200)
+            tin = -(-chars * 2 // 7)  # ceil(chars / 3.5)
+            self.assertEqual((e["input_tokens"], e["output_tokens"], e["criteria"], e["basis"]), (tin, 2000, 2, "estimate"))
+            self.assertAlmostEqual(e["usd"], round(tin * 3 / 1e6 + 2000 * 15 / 1e6, 4))
+
+    def test_bench6_sized_deliverables(self):
+        """SEC's 170k-character deliverable over 60 criteria and trust's 280k over 23, at the pinned price:
+        what docs/benchmarks.md states (about $9.7 and $5.8), under the reserves."""
+        cfg = real_config()
+        harvey_template = 531
+        for chars, n, reserve, want in ((169599, 60, 12, 9.7), (279800, 23, 8, 5.8)):
+            with tempfile.TemporaryDirectory() as d:
+                out = Path(d) / "output"
+                out.mkdir()
+                (out / "d.md").write_text("x" * chars)
+                (Path(d) / "lab_core/evaluation/prompts").mkdir(parents=True)
+                (Path(d) / "lab_core/evaluation/prompts/rubric_criterion.txt").write_text("t" * harvey_template)
+                crit = {"id": "C-000", "title": "t" * 60, "deliverables": ["d.md"], "match_criteria": "m" * 400}
+                e = estimate(cfg, {"instructions": "i" * 2500, "criteria": [crit] * n}, out, Path(d))
+                self.assertAlmostEqual(e["usd"], want, delta=0.3)
+                self.assertLess(e["usd"], reserve)
+
+
+class BuildStateTests(unittest.TestCase):
+    def repo(self, d: str) -> Path:
+        r = Path(d)
+        run = lambda *a: subprocess.run(["git", "-C", d, *a], check=True, capture_output=True)  # noqa: E731
+        run("init", "-q")
+        (r / "internal").mkdir()
+        (r / "internal/a.go").write_text("package a\n")
+        (r / "docs").mkdir()
+        run("add", ".")
+        run("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "c")
+        return r
+
+    def test_untracked_build_files_are_dirty(self):
+        """PR 63 r1 H2: go build compiles an untracked .go file, so it must not pass as clean."""
+        with tempfile.TemporaryDirectory() as d:
+            r = self.repo(d)
+            self.assertFalse(infra.build_state(r)["dirty"])
+            (r / "docs/notes.md").write_text("n")
+            self.assertFalse(infra.build_state(r)["dirty"], "an untracked file outside the build paths")
+            (r / "internal/zz_probe.go").write_text("package a\n")
+            st = infra.build_state(r)
+            self.assertTrue(st["dirty"])
+            self.assertEqual(st["untracked"], ["internal/zz_probe.go"])
+            self.assertRegex(st["patch"], r"^sha256:[0-9a-f]{64}$")
+            (r / "internal/zz_probe.go").write_text("package a // changed\n")
+            self.assertNotEqual(infra.build_state(r)["patch"], st["patch"])
+
+    def test_tree_hash(self):
+        with tempfile.TemporaryDirectory() as d:
+            r = Path(d)
+            (r / "p").mkdir()
+            (r / "p/x.py").write_text("1")
+            h = infra.tree_hash(("p",), r)
+            (r / "p/__pycache__").mkdir()
+            (r / "p/__pycache__/x.cpython.pyc").write_text("junk")
+            self.assertEqual(infra.tree_hash(("p",), r), h)
+            (r / "p/x.py").write_text("2")
+            self.assertNotEqual(infra.tree_hash(("p",), r), h)
+        self.assertEqual(set(infra.yardstick()), {"proofrun", "labdriver", "bench"})
+
+
+class PostgresCleanupTests(unittest.TestCase):
+    def test_container_removed_when_it_never_becomes_ready(self):
+        """PR 63 r1 M1: a container started is removed whatever stops the start (here: never ready)."""
+        calls = []
+
+        def fake_run(cmd, **k):
+            calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 1 if "pg_isready" in cmd else 0, "", "")
+
+        with mock.patch.object(infra.shutil, "which", lambda name: "/usr/bin/" + name), \
+                mock.patch.object(infra.subprocess, "run", fake_run), mock.patch.object(infra.time, "sleep", lambda s: None):
+            with self.assertRaises(infra.InfraError):
+                infra.Postgres(None, "img", lambda m: None)
+        self.assertEqual(calls[-1][:3], ["docker", "rm", "-f"])
 
 
 class SchemaTests(unittest.TestCase):
@@ -321,7 +456,10 @@ class CompareTests(unittest.TestCase):
         s = copy.deepcopy(baseline("v2-bench6.json"))
         s.update(kind="run", mode="real", label=f"run-{cost}", source=None, config_hash=cfg["config_hash"],
                  config={k: v for k, v in cfg.items() if k != "config_hash"}, fresh_db=True,
-                 harness={"name": "harvey-labs", "commit": "81d6a31", "dirty": False}, build={"sha": f"{int(cost * 100):07x}", "dirty": False})
+                 reconstructed_config=None, reconstructed_config_hash=None, provenance=None, yardstick=infra.yardstick(),
+                 database={"fresh": True, "server": "16.15", "vector": "0.8.6", "image": None}, models_served=["claude-haiku-4-5-20251001"],
+                 harness={"name": "harvey-labs", "commit": "81d6a31", "dirty": False, "pandoc": "3.1.3"},
+                 build={"sha": f"{int(cost * 100):07x}", "dirty": False, "patch": None, "untracked": [], "go": "go1.26.10"})
         t = s["tasks"][0]
         t.update(criteria=criteria, score={"passed": sum(v == "pass" for v in criteria.values()), "total": len(criteria)}, cost_usd=cost, calls=500, flips=None)
         self.assertEqual(suite.check_summary(s), [])
@@ -357,7 +495,10 @@ class CompareTests(unittest.TestCase):
         a = self.run_summary({"C-001": "pass"}, 1.0)
         for edit, want in ((lambda s: s.__setitem__("config_hash", None), "no config hash"),
                            (lambda s: s["judge"].__setitem__("models", ["claude-opus-4-8"]), "judges differ"),
-                           (lambda s: s.__setitem__("fresh_db", False), "already held tasks"),
+                           (lambda s: s.__setitem__("fresh_db", False), "already held data"),
+                           (lambda s: s["build"].__setitem__("dirty", True), "differs from its commit"),
+                           (lambda s: s["yardstick"].__setitem__("labdriver", "sha256:" + "0" * 64), "LAB driver"),
+                           (lambda s: s["yardstick"].__setitem__("bench", "sha256:" + "0" * 64), "bench harness"),
                            (lambda s: s.__setitem__("mode", "smoke"), "modes differ"),
                            (lambda s: s["harness"].__setitem__("commit", "1234567"), "harness commits differ")):
             b = copy.deepcopy(a)
@@ -366,6 +507,47 @@ class CompareTests(unittest.TestCase):
             c = compare.compare(a, b)
             self.assertFalse(c["comparable"], want)
             self.assertTrue(any(want in w for w in c["not_comparable_because"]), (want, c["not_comparable_because"]))
+
+    def test_proofrun_yardstick_only_its_tasks(self):
+        """PR 63 r1 H3: a changed proof-run scorer or rubric makes gate A not comparable, the LAB tasks still are."""
+        a = self.run_summary({"C-001": "pass"}, 1.0)
+        b = copy.deepcopy(a)
+        b["label"] = "b"
+        b["yardstick"]["proofrun"] = "sha256:" + "1" * 64
+        c = compare.compare(a, b)
+        rows = {r["id"]: r for r in c["tasks"]}
+        self.assertEqual(c["state"], "comparable")
+        self.assertFalse(c["comparable"])
+        self.assertEqual(rows["sec"]["not_comparable_because"], [])
+        self.assertIn("proof-run scorer", rows["gate-a-litigation"]["not_comparable_because"][0])
+        self.assertIn("gate-a-litigation: NOT COMPARABLE", compare.render(c))
+        self.assertTrue(compare.compare(a, a)["comparable"])
+
+    def test_reconstructed_baseline_with_caveats(self):
+        """bench6's reconstructed config hashes to the pinned one: COMPARABLE WITH CAVEATS, never plain comparable."""
+        b6 = baseline("v2-bench6.json")
+        self.assertIsNone(b6["config_hash"])
+        self.assertEqual(b6["reconstructed_config_hash"], bconfig.config_hash(b6["reconstructed_config"]))
+        self.assertEqual(b6["reconstructed_config_hash"], real_config()["config_hash"])
+        run = self.run_summary({"C-002": "pass", "C-015": "pass"}, 9.0)
+        c = compare.compare(b6, run)
+        self.assertEqual(c["state"], "caveats")
+        self.assertFalse(c["comparable"])
+        self.assertTrue(c["comparable_with_caveats"])
+        text = compare.render(c)
+        self.assertIn("COMPARABLE WITH CAVEATS (reconstructed baseline)", text)
+        for key in ("budget.usd (inferred)", "models.lead (inferred)", "fresh_db (unknown)", "tool_stats (unknown)",
+                    "tasks[gate-a-litigation].task (unknown)"):
+            self.assertIn(key, c["caveats"][0])
+        self.assertNotIn("budget.calls", c["caveats"][0], "verified keys are not caveats")
+        prov = b6["provenance"]
+        self.assertTrue(prov["budget.calls"].startswith("verified"))
+        self.assertTrue(prov["harness.commit"].startswith("verified"))
+        self.assertIn("20261024-053155", b6["source"])
+        cfg = real_config()
+        cfg["budget"]["calls"] = 901
+        c2 = compare.compare(b6, self.run_summary({"C-001": "pass"}, 2.0, repin(cfg)))
+        self.assertEqual(c2["state"], "not_comparable")
 
     def test_baselines_compare_as_recorded(self):
         c = compare.compare(baseline("v1-record.json"), baseline("v2-bench6.json"))

@@ -5,6 +5,7 @@ started from the config alone, and read-only queries of the suite's database."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import secrets
@@ -36,6 +37,79 @@ def git_state(repo: Path = REPO) -> tuple[str | None, bool | None]:
     return sha, bool(st.strip())
 
 
+BUILD_PATHS = ("internal", "cmd", "eval", "ui", "go.mod", "go.sum")  # what the binary or the suite's Python is made of
+
+
+def build_state(repo: Path = REPO) -> dict:
+    """The checkout as it will be built and run: HEAD's sha, and dirty when any tracked file differs
+    from it or any untracked file sits where it would be compiled or imported (BUILD_PATHS; go build
+    compiles every .go file of a package directory, the suite imports eval/ from the worktree).
+    Ignored files (ui/dist, node_modules) and eval/bench/results do not count. patch is a sha256 of
+    the differences when dirty, so two dirty runs can at least be told apart."""
+    sha, _ = git_state(repo)
+    if sha is None:
+        return {"sha": None, "dirty": None, "patch": None, "untracked": []}
+    excl = ":(exclude)eval/bench/results"
+    st = subprocess.run(["git", "-C", str(repo), "status", "--porcelain", "--untracked-files=all", "--", ".", excl],
+                        capture_output=True, text=True, check=True).stdout.splitlines()
+    tracked = [line for line in st if not line.startswith("??")]
+    untracked = sorted(line[3:] for line in st if line.startswith("??") and line[3:].split("/")[0] in BUILD_PATHS)
+    dirty = bool(tracked or untracked)
+    patch = None
+    if dirty:
+        h = hashlib.sha256(subprocess.run(["git", "-C", str(repo), "diff", "HEAD", "--binary", "--", ".", excl],
+                                          capture_output=True, check=True).stdout)
+        for rel in untracked:
+            h.update(rel.encode() + b"\0" + (repo / rel).read_bytes())
+        patch = "sha256:" + h.hexdigest()
+    return {"sha": sha, "dirty": dirty, "patch": patch, "untracked": untracked[:50]}
+
+
+# The in-repo yardstick: code and data that score or drive a task but change with the build under test.
+# A difference between two runs makes the tasks it touches not comparable (compare.py).
+YARDSTICK = {
+    "proofrun": ("eval/proofrun", "eval/tasks", "eval/matters.json"),       # gate A's rubric, oracle and scorer
+    "labdriver": ("eval/lab",),                                             # task description, conversion, rendering
+    "bench": ("eval/bench/benchlib", "eval/bench/run.py", "eval/bench/stubjudge.py", "eval/bench/schema"),
+}
+
+
+def tree_hash(paths: tuple, repo: Path = REPO) -> str:
+    """sha256 over the files under paths as they are on disk (what this run executes), by relative path."""
+    h = hashlib.sha256()
+    files = []
+    for p in paths:
+        root = repo / p
+        files += [root] if root.is_file() else [f for f in root.rglob("*") if f.is_file()]
+    for f in sorted(files):
+        rel = f.relative_to(repo).as_posix()
+        if "__pycache__" in rel or rel.endswith(".pyc"):
+            continue
+        h.update(rel.encode() + b"\0" + hashlib.sha256(f.read_bytes()).digest())
+    return "sha256:" + h.hexdigest()
+
+
+def yardstick(repo: Path = REPO) -> dict:
+    return {k: tree_hash(v, repo) for k, v in YARDSTICK.items()}
+
+
+def go_version() -> str | None:
+    try:
+        return subprocess.run(["go", "version"], cwd=REPO, env=_base_env(), capture_output=True, text=True, check=True).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
+
+def pandoc_version() -> str | None:
+    """The pandoc harvey-labs converts .docx deliverables with: it shapes the text the judge reads."""
+    try:
+        out = subprocess.run(["pandoc", "--version"], capture_output=True, text=True, check=True).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    first = out.splitlines()[0] if out else ""
+    return first.split()[-1] if first else None
+
+
 def harness_commit(labs: Path) -> tuple[str | None, bool | None]:
     """The harvey-labs checkout's HEAD and whether its tracked files are modified."""
     return git_state(labs) if (labs / ".git").exists() else (None, None)
@@ -51,7 +125,7 @@ def build(out: Path, version: str, log) -> Path:
     """The static binary of the checkout as it is, versioned so /health proves which one serves."""
     out.parent.mkdir(parents=True, exist_ok=True)
     env = {**_base_env(), "CGO_ENABLED": "0"}
-    for k in ("GOPATH", "GOCACHE", "GOMODCACHE", "GOFLAGS", "GOTOOLCHAIN"):
+    for k in ("GOPATH", "GOCACHE", "GOMODCACHE"):  # caches only: GOFLAGS (tags) and GOTOOLCHAIN would change what is built
         if k in os.environ:
             env[k] = os.environ[k]
     r = subprocess.run(["go", "build", "-trimpath", f"-ldflags=-s -w -X main.version={version}", "-o", str(out), "./cmd/biglaw"],
@@ -98,30 +172,50 @@ def pg_env(dsn: str) -> dict:
 
 
 class Postgres:
-    """The suite's database: BIGLAW_DATABASE_URL when given, else a throwaway pgvector container
-    (config postgres_image) on a loopback port, removed at the end."""
+    """The suite's database, always empty when the suite starts: a throwaway pgvector container
+    (config postgres_image) on a loopback port, or, with BIGLAW_DATABASE_URL, a new database the suite
+    creates in that server (and drops at the end). fresh=False uses the DSN as it is (the smoke: the
+    test's own schema)."""
 
-    def __init__(self, dsn: str | None, image: str, log):
-        self.log, self.container, self.password = log, None, ""
+    def __init__(self, dsn: str | None, image: str, log, fresh: bool = True):
+        self.log, self.container, self.password, self.created = log, None, "", None
         self.dsn, self.serve_env = dsn, {}
         if dsn is None:
             if not shutil.which("docker"):
                 raise InfraError("no BIGLAW_DATABASE_URL and no docker to start a Postgres: set BIGLAW_DATABASE_URL "
-                                 "to a fresh database with pgvector available")
+                                 "to a server where the suite may create a database (pgvector available)")
             self.password = secrets.token_hex(16)
             port = free_port()
             name = f"biglaw-bench-{secrets.token_hex(4)}"
-            r = subprocess.run(["docker", "run", "-d", "--rm", "--name", name, "-p", f"127.0.0.1:{port}:5432",
-                                "-e", "POSTGRES_PASSWORD", "-e", "POSTGRES_USER=biglaw", "-e", "POSTGRES_DB=biglaw", image],
-                               env={**os.environ, "POSTGRES_PASSWORD": self.password}, capture_output=True, text=True)
-            if r.returncode != 0:
-                raise InfraError(f"docker run {image} failed: {r.stderr.strip()[-500:]}")
-            self.container = name
-            log(f"postgres: container {name} ({image}) on 127.0.0.1:{port}")
-            self.dsn = f"postgres://biglaw@127.0.0.1:{port}/biglaw?sslmode=disable"
-            self.serve_env = {"PGPASSWORD": self.password}
-            self._wait()
+            self.container = name  # registered before it exists: any failure from here removes it
+            try:
+                r = subprocess.run(["docker", "run", "-d", "--rm", "--name", name, "-p", f"127.0.0.1:{port}:5432",
+                                    "-e", "POSTGRES_PASSWORD", "-e", "POSTGRES_USER=biglaw", "-e", "POSTGRES_DB=biglaw", image],
+                                   env={**os.environ, "POSTGRES_PASSWORD": self.password}, capture_output=True, text=True)
+                if r.returncode != 0:
+                    raise InfraError(f"docker run {image} failed: {r.stderr.strip()[-500:]}")
+                log(f"postgres: container {name} ({image}) on 127.0.0.1:{port}")
+                self.dsn = f"postgres://biglaw@127.0.0.1:{port}/biglaw?sslmode=disable"
+                self.serve_env = {"PGPASSWORD": self.password}
+                self._wait()
+            except BaseException:
+                self.close()
+                raise
         self.env = {**pg_env(self.dsn), **({"PGPASSWORD": self.password} if self.password else {})}
+        if dsn is not None and fresh:
+            self._create()
+
+    def _create(self) -> None:
+        name = f"biglaw_bench_{secrets.token_hex(6)}"
+        if self.query(f"CREATE DATABASE {name}") is None:
+            raise InfraError("cannot create the suite's database in BIGLAW_DATABASE_URL's server (the role needs CREATEDB): "
+                             "the suite always runs on an empty database")
+        self.created = (dict(self.env), name)
+        u = urlparse(self.dsn)
+        q = "&".join(f"{k}={v[-1]}" for k, v in parse_qs(u.query).items() if k != "search_path")
+        self.dsn = u._replace(path="/" + name, query=q).geturl()
+        self.env = {**pg_env(self.dsn), **({"PGPASSWORD": self.env["PGPASSWORD"]} if "PGPASSWORD" in self.env else {})}
+        self.log(f"postgres: created database {name}")
 
     def _wait(self) -> None:
         for _ in range(120):
@@ -132,10 +226,10 @@ class Postgres:
             time.sleep(1)
         raise InfraError("the Postgres container did not become ready in 120 s")
 
-    def query(self, sql: str) -> list[list[str]] | None:
-        """Rows of a read-only query (psql -At, | separated), or None when no psql can run it."""
+    def query(self, sql: str, env: dict | None = None) -> list[list[str]] | None:
+        """Rows of a query (psql -At, | separated), or None when no psql can run it."""
         if shutil.which("psql"):
-            cmd, env = ["psql", "-X", "-At", "-v", "ON_ERROR_STOP=1", "-c", sql], {**_base_env(), **self.env}
+            cmd, env = ["psql", "-X", "-At", "-v", "ON_ERROR_STOP=1", "-c", sql], {**_base_env(), **(env or self.env)}
         elif self.container:
             cmd = ["docker", "exec", "-e", "PGPASSWORD", self.container, "psql", "-X", "-At", "-v", "ON_ERROR_STOP=1",
                    "-h", "127.0.0.1", "-U", "biglaw", "-d", "biglaw", "-c", sql]
@@ -148,15 +242,14 @@ class Postgres:
             return None
         return [line.split("|") for line in r.stdout.splitlines() if line]
 
-    def task_count(self) -> int | None:
-        """Tasks already in the database (0 before serve has migrated it); None when it cannot be read."""
-        exists = self.query("SELECT to_regclass('tasks') IS NOT NULL")  # the count would fail to plan without the table
-        if not exists:
-            return None
-        if exists[0][0] != "t":
-            return 0
-        rows = self.query("SELECT count(*) FROM tasks")
+    def table_count(self) -> int | None:
+        """Tables in the schema serve will use (0: a database nothing has migrated); None when unreadable."""
+        rows = self.query("SELECT count(*) FROM pg_tables WHERE schemaname = ANY (current_schemas(false))")
         return int(rows[0][0]) if rows else None
+
+    def versions(self) -> dict:
+        rows = self.query("SELECT current_setting('server_version'), coalesce((SELECT extversion FROM pg_extension WHERE extname = 'vector'), '')")
+        return {"server": rows[0][0], "vector": rows[0][1] or None} if rows else {"server": None, "vector": None}
 
     def tool_calls(self) -> dict | None:
         rows = self.query("SELECT tool, sum(calls) FROM tool_stats GROUP BY tool")
@@ -170,6 +263,11 @@ class Postgres:
         return None if rows is None else {r[0]: int(r[1]) for r in rows}
 
     def close(self) -> None:
+        if self.created:
+            env, name = self.created
+            self.created = None
+            self.query(f"DROP DATABASE IF EXISTS {name} WITH (FORCE)", env)
+            self.log(f"postgres: dropped database {name}")
         if self.container:
             subprocess.run(["docker", "rm", "-f", self.container], capture_output=True)
             self.log(f"postgres: container {self.container} removed")

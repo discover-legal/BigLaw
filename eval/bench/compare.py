@@ -6,9 +6,18 @@
     python3 eval/bench/compare.py BASE NEW [--json] [--require-comparable]
 
 Prints, per task both hold: the score delta, the criteria that flipped (gained: fail → pass, lost:
-pass → fail), and the cost, call and duration deltas. Two runs are comparable only when both record
-the same config hash, mode, harness commit and judge; otherwise the comparison is printed under a
-NOT COMPARABLE banner naming every differing config key, and --require-comparable exits 1.
+pass → fail), and the cost, call and duration deltas, under one of three verdicts:
+
+- COMPARABLE: the same config hash, mode, harness commit, judge and in-repo yardstick, clean builds
+  and fresh databases.
+- COMPARABLE WITH CAVEATS (reconstructed baseline): one side is a baseline whose reconstructed config
+  hashes to the other's config, and nothing else differs; the keys it only inferred or does not know
+  are listed. Still not comparable for --require-comparable.
+- NOT COMPARABLE: with every reason and every differing config key. A difference in the proof-run
+  scorer or rubric makes the proof-run tasks not comparable; one in the LAB driver or the bench
+  harness, every task.
+
+--require-comparable exits 1 unless the verdict is COMPARABLE for every task.
 """
 
 from __future__ import annotations
@@ -52,32 +61,77 @@ def config_diff(a: dict | None, b: dict | None) -> list[str]:
     return out
 
 
-def comparability(a: dict, b: dict) -> tuple[list[str], list[str]]:
-    """(reasons the two are not comparable, warnings that do not by themselves break comparability)."""
-    why, warn = [], []
-    for s in (a, b):
-        if s["config_hash"] is None:
-            why.append(f"{s['label']} records no config hash (its settings were not pinned)")
-    if a["config_hash"] and b["config_hash"] and a["config_hash"] != b["config_hash"]:
-        why.append(f"config hashes differ ({a['config_hash'][:15]}… vs {b['config_hash'][:15]}…)")
-    if a["mode"] != b["mode"]:
+def effective(s: dict) -> tuple[str | None, dict | None, bool]:
+    """(hash, config, reconstructed?) a summary compares by: its pinned config, else a baseline's
+    reconstructed one, else nothing."""
+    if s["config_hash"]:
+        return s["config_hash"], s["config"], False
+    if s.get("reconstructed_config_hash"):
+        return s["reconstructed_config_hash"], s["reconstructed_config"], True
+    return None, None, False
+
+
+def caveat_keys(s: dict) -> list[str]:
+    """A reconstructed baseline's keys known only by inference, or not at all."""
+    return sorted(f"{k} ({v.split(':', 1)[0]})" for k, v in (s.get("provenance") or {}).items()
+                  if v.startswith(("inferred", "unknown")))
+
+
+def comparability(a: dict, b: dict) -> tuple[list[str], list[str], list[str]]:
+    """(reasons the two are not comparable, caveats of a reconstructed baseline, warnings)."""
+    why, cav, warn = [], [], []
+    (ha, _, ra), (hb, _, rb) = effective(a), effective(b)
+    recon = ra or rb
+    for s, h in ((a, ha), (b, hb)):
+        if h is None:
+            why.append(f"{s['label']} records no config hash (its settings were neither pinned nor reconstructed)")
+    if ha and hb and ha != hb:
+        why.append(f"config hashes differ ({ha[:15]}… vs {hb[:15]}…)")
+    if a["mode"] and b["mode"] and a["mode"] != b["mode"]:
         why.append(f"modes differ ({a['mode']} vs {b['mode']})")
-    ha, hb = (a["harness"] or {}).get("commit"), (b["harness"] or {}).get("commit")
-    if ha != hb:
-        (why if ha and hb else warn).append(f"harness commits differ ({ha} vs {hb})")
+    for field, name in (("commit", "harness commits"), ("pandoc", "pandoc versions")):
+        va, vb = (a["harness"] or {}).get(field), (b["harness"] or {}).get(field)
+        if va and vb and va != vb:
+            (why if field == "commit" else warn).append(f"{name} differ ({va} vs {vb})")
+        elif (va is None) != (vb is None) and not recon:
+            warn.append(f"{name}: unknown on one side ({va} vs {vb})")
     ja, jb = (a["judge"] or {}).get("models"), (b["judge"] or {}).get("models")
     if ja != jb:
         why.append(f"judges differ ({ja} vs {jb})")
     for s in (a, b):
         if s["fresh_db"] is False:
-            why.append(f"{s['label']} ran on a database that already held tasks (cross-run caches)")
+            why.append(f"{s['label']} ran on a database that already held data (cross-run caches, bandit priors)")
         if s["build"]["dirty"]:
-            warn.append(f"{s['label']} was built from a checkout with uncommitted changes")
+            why.append(f"{s['label']} was built from a checkout that differs from its commit (--allow-dirty): its sha does not name the code")
         if s["stopped"]:
             warn.append(f"{s['label']} stopped early ({s['stopped']['reason']}): tasks it did not run are not compared")
-    if (a["build"]["sha"] or "")[:7] == (b["build"]["sha"] or "")[:7] and a["build"]["sha"]:
+    ya, yb = a.get("yardstick"), b.get("yardstick")
+    for part in ("labdriver", "bench"):
+        va, vb = (ya or {}).get(part), (yb or {}).get(part)
+        if va and vb and va != vb:
+            why.append(f"the {'LAB driver (eval/lab)' if part == 'labdriver' else 'bench harness (eval/bench)'} differs between the runs: "
+                       "every task's input or measurement may differ")
+    if recon and not why:
+        side = a if ra else b
+        cav.append(f"{side['label']}'s settings are reconstructed, not pinned; inferred or unknown: {', '.join(caveat_keys(side))}")
+        cav.append("its database freshness, bandit priors and in-repo yardstick are unknown: deltas within about ±3 criteria "
+                   "on SEC are within plausible run-to-run variance")
+    ma, mb = a.get("models_served"), b.get("models_served")
+    if ma and mb and ma != mb:
+        warn.append(f"the models served differ ({ma} vs {mb}): an alias may have moved")
+    if a["build"]["sha"] and (a["build"]["sha"] or "")[:7] == (b["build"]["sha"] or "")[:7]:
         warn.append(f"both are builds of {a['build']['sha'][:7]}: the deltas are run-to-run variance")
-    return why, warn
+    return why, cav, warn
+
+
+def task_why(a: dict, b: dict, x: dict) -> list[str]:
+    """Reasons one task is not comparable beyond the run-wide ones: the proof-run scorer or rubric."""
+    if x["kind"] != "proofrun":
+        return []
+    va, vb = (a.get("yardstick") or {}).get("proofrun"), (b.get("yardstick") or {}).get("proofrun")
+    if va and vb and va != vb:
+        return ["the proof-run scorer, rubric or matter (eval/proofrun, eval/tasks, eval/matters.json) differs between the runs"]
+    return []
 
 
 def delta(x, y, fmt="{:+d}"):
@@ -94,7 +148,7 @@ def task_rows(a: dict, b: dict) -> list[dict]:
         if x is None or y is None:
             rows.append({"id": tid, "only_in": a["label"] if y is None else b["label"]})
             continue
-        r = {"id": tid, "score": [x["score"]["passed"], y["score"]["passed"]], "total": [x["score"]["total"], y["score"]["total"]],
+        r = {"id": tid, "not_comparable_because": task_why(a, b, x), "score": [x["score"]["passed"], y["score"]["passed"]], "total": [x["score"]["total"], y["score"]["total"]],
              "score_delta": None if None in (x["score"]["passed"], y["score"]["passed"]) else y["score"]["passed"] - x["score"]["passed"],
              "cost": [x["cost_usd"], y["cost_usd"]], "calls": [x["calls"], y["calls"]], "duration_s": [x["duration_s"], y["duration_s"]],
              "stop_reason": [x["stop_reason"], y["stop_reason"]], "status": [x["status"], y["status"]]}
@@ -114,9 +168,14 @@ def task_rows(a: dict, b: dict) -> list[dict]:
 
 
 def compare(a: dict, b: dict) -> dict:
-    why, warn = comparability(a, b)
-    return {"base": a["label"], "new": b["label"], "comparable": not why, "not_comparable_because": why, "warnings": warn,
-            "config_diff": config_diff(a["config"], b["config"]), "tasks": task_rows(a, b)}
+    why, cav, warn = comparability(a, b)
+    rows = task_rows(a, b)
+    state = "not_comparable" if why else ("caveats" if cav else "comparable")
+    task_ok = all(not r.get("not_comparable_because") for r in rows)
+    (_, ca, _), (_, cb, _) = effective(a), effective(b)
+    return {"base": a["label"], "new": b["label"], "state": state, "comparable": state == "comparable" and task_ok,
+            "comparable_with_caveats": state == "caveats", "not_comparable_because": why, "caveats": cav, "warnings": warn,
+            "config_diff": config_diff(ca, cb), "tasks": rows}
 
 
 def money(v):
@@ -125,8 +184,13 @@ def money(v):
 
 def render(c: dict) -> str:
     out = [f"compare {c['base']} → {c['new']}"]
-    if not c["comparable"]:
+    if c["state"] == "not_comparable":
         out.append("NOT COMPARABLE: " + "; ".join(c["not_comparable_because"]))
+    elif c["state"] == "caveats":
+        out.append("COMPARABLE WITH CAVEATS (reconstructed baseline):")
+        out += [f"  caveat: {x}" for x in c["caveats"]]
+    elif c["comparable"]:
+        out.append("COMPARABLE")
     for d in c["config_diff"]:
         out.append(f"  config differs: {d}")
     for w in c["warnings"]:
@@ -136,6 +200,8 @@ def render(c: dict) -> str:
             out.append(f"{r['id']}: only in {r['only_in']}")
             continue
         sa, sb = r["score"]
+        if r["not_comparable_because"]:
+            out.append(f"{r['id']}: NOT COMPARABLE: " + "; ".join(r["not_comparable_because"]))
         sd = "unknown" if r["score_delta"] is None else f"{r['score_delta']:+d}"
         out.append(f"{r['id']}: score {sa}/{r['total'][0]} → {sb}/{r['total'][1]} ({sd}); cost {money(r['cost'][0])} → {money(r['cost'][1])} "
                    f"({delta(r['cost'][0], r['cost'][1], '{:+.2f}')}); calls {r['calls'][0]} → {r['calls'][1]} ({delta(r['calls'][0], r['calls'][1])}); "

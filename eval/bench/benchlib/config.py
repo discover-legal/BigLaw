@@ -31,9 +31,27 @@ class ConfigError(ValueError):
     pass
 
 
+UNHASHED = ("config_hash", "name", "description")  # labels: renaming or rewording a config keeps its runs comparable
+ALLOWED_OPT_INS = ("ALLOW_ANTHROPIC",)            # serve's vendor breakers this suite may open; any other is refused
+
+
+def _normal(v):
+    """Numbers by value (11 and 11.0 hash alike), recursively."""
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, float) and v.is_integer():
+        return int(v)
+    if isinstance(v, dict):
+        return {k: _normal(x) for k, x in v.items()}
+    if isinstance(v, list):
+        return [_normal(x) for x in v]
+    return v
+
+
 def canonical(cfg: dict) -> str:
-    """The config as hashed: every key but config_hash, sorted, no white space."""
-    body = {k: v for k, v in cfg.items() if k != "config_hash"}
+    """The config as hashed: every setting (not config_hash, name or description), numbers by value,
+    keys sorted, no white space."""
+    body = {k: _normal(v) for k, v in cfg.items() if k not in UNHASHED}
     return json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
@@ -66,6 +84,22 @@ def check(cfg: dict) -> list[str]:
     ids = [t["id"] for t in cfg["tasks"]]
     if len(set(ids)) != len(ids):
         errs.append(f"task ids repeat: {ids}")
+    for t in cfg["tasks"]:
+        if t["kind"] == "proofrun":
+            if t["judge_reserve_usd"]:
+                errs.append(f"task {t['id']}: a proof run has no judge, so judge_reserve_usd must be 0")
+            entry = next((m for m in _matters() if m["id"] == t["task"]), None)
+            if entry is None:
+                errs.append(f"task {t['id']}: {t['task']} is not a matter in eval/matters.json")
+            elif t["matter"] != entry.get("slug"):
+                errs.append(f"task {t['id']}: matter {t['matter']!r} must be the matter's slug {entry.get('slug')!r} "
+                            "(the proof-run driver files its documents under the slug)")
+    opt = cfg["vendor_opt_in"]
+    host = (urlparse(cfg["model_url"]).hostname or "").lower()
+    needs = ["ALLOW_ANTHROPIC"] if cfg["mode"] == "real" and (host == "anthropic.com" or host.endswith(".anthropic.com")) else []
+    if sorted(opt) != needs:
+        errs.append(f"vendor_opt_in {opt} must be exactly {needs} for model_url {cfg['model_url']!r} "
+                    "(serve's vendor breaker opens only for the pinned endpoint's vendor)")
     per_task = [task_reserve(cfg, t) for t in cfg["tasks"]]
     if cfg["spend_cap_usd"] < min(per_task, default=0):
         errs.append(f"spend_cap_usd {cfg['spend_cap_usd']} cannot fund even one task (each reserves {min(per_task)})")
@@ -78,6 +112,9 @@ def check(cfg: dict) -> list[str]:
         for role, mid in roles.items():
             if mid is not None and not mid.startswith("claude-"):
                 errs.append(f"models.{role} {mid!r} is not a claude- model id (no OpenAI models in this suite)")
+        for jm in cfg["judge"]["models"]:
+            if not jm.startswith("claude-"):
+                errs.append(f"judge model {jm!r} is not a claude- model id (no OpenAI models in this suite)")
         if cfg["judge"]["runner"] != "harvey-labs":
             errs.append("a real run is judged by harvey-labs (judge.runner)")
         if any(t["kind"] == "lab" for t in cfg["tasks"]) and not re.fullmatch(r"[0-9a-f]{7,40}", cfg["harness"]["commit"] or ""):
@@ -105,10 +142,25 @@ def pin(path: Path) -> str:
     return cfg["config_hash"]
 
 
+def _matters() -> list[dict]:
+    return json.loads((BENCH.parent / "matters.json").read_text(encoding="utf-8"))["matters"]
+
+
 def task_reserve(cfg: dict, task: dict) -> float:
-    """What a task may spend at most: BigLaw's per-task USD budget, plus the judge's reserve for a LAB
-    task (harvey-labs reports no judge cost, so the reserve is charged whatever the judge spends)."""
-    return float(cfg["budget"]["usd"]) + (float(cfg["judge"]["reserve_usd"]) if task["kind"] == "lab" else 0.0)
+    """What a task needs free under the cap before it starts: BigLaw's per-task USD budget (its spend
+    cannot pass it) plus the task's judge reserve (a LAB task: the most its judge is expected to cost,
+    sized from the judge estimate of the task's deliverable; 0 for a proof run)."""
+    return float(cfg["budget"]["usd"]) + float(task["judge_reserve_usd"])
+
+
+def serve_env(cfg: dict, dsn: str, key: str, extra: dict | None = None) -> dict:
+    """serve's whole environment, from the config alone (plus the database and the key)."""
+    env = {"BIGLAW_DATABASE_URL": dsn, "BIGLAW_MODEL_URL": cfg["model_url"], "BIGLAW_MODEL_KEY": key,
+           "BIGLAW_MODELS": models_env(cfg), "BIGLAW_BUDGET_USD": str(cfg["budget"]["usd"]),
+           "BIGLAW_BUDGET_CALLS": str(cfg["budget"]["calls"]), **(extra or {})}
+    for name in cfg["vendor_opt_in"]:
+        env[name] = "1"
+    return env
 
 
 def models_env(cfg: dict) -> str:
@@ -118,9 +170,17 @@ def models_env(cfg: dict) -> str:
 
 
 def refuse_env(env: dict) -> list[str]:
-    """Problems with the caller's environment for a real run: any OPENAI_* setting (names only)."""
+    """Problems with the caller's environment for a real run: any OPENAI_* setting, and any vendor
+    opt-in (ALLOW_*) but ALLOW_ANTHROPIC (names only; serve gets its opt-ins from the config, never
+    from the shell)."""
+    errs = []
     bad = sorted(k for k in env if k.upper().startswith("OPENAI_"))
-    return [f"OPENAI_* settings are refused (this suite runs no OpenAI): unset {', '.join(bad)}"] if bad else []
+    if bad:
+        errs.append(f"OPENAI_* settings are refused (this suite runs no OpenAI): unset {', '.join(bad)}")
+    other = sorted(k for k in env if k.upper().startswith("ALLOW_") and k not in ALLOWED_OPT_INS)
+    if other:
+        errs.append(f"vendor opt-ins other than {', '.join(ALLOWED_OPT_INS)} are refused: unset {', '.join(other)}")
+    return errs
 
 
 def load_key(env: dict) -> str:

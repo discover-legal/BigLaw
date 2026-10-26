@@ -5,143 +5,728 @@
   "description": "One benchmark run (kind run, written by run.py) or a recorded baseline (kind baseline). Every key is always present; null means unknown or not measured, never zero.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "kind", "mode", "label", "source", "build", "config_hash", "config", "harness", "judge", "runner", "fresh_db", "spend", "stopped", "tasks"],
+  "required": [
+    "schema_version",
+    "kind",
+    "mode",
+    "label",
+    "source",
+    "build",
+    "config_hash",
+    "config",
+    "reconstructed_config",
+    "reconstructed_config_hash",
+    "provenance",
+    "yardstick",
+    "harness",
+    "judge",
+    "database",
+    "models_served",
+    "runner",
+    "fresh_db",
+    "spend",
+    "stopped",
+    "tasks"
+  ],
   "properties": {
-    "schema_version": {"const": 1},
-    "kind": {"enum": ["run", "baseline"]},
-    "mode": {"enum": ["real", "smoke", null]},
-    "label": {"type": "string", "minLength": 1},
-    "source": {"type": ["string", "null"], "description": "where a baseline's numbers come from"},
+    "schema_version": {
+      "const": 1
+    },
+    "kind": {
+      "enum": [
+        "run",
+        "baseline"
+      ]
+    },
+    "mode": {
+      "enum": [
+        "real",
+        "smoke",
+        null
+      ]
+    },
+    "label": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "where a baseline's numbers come from"
+    },
     "build": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["sha", "dirty"],
+      "required": [
+        "sha",
+        "dirty",
+        "patch",
+        "untracked",
+        "go"
+      ],
       "properties": {
-        "sha": {"type": ["string", "null"], "pattern": "^[0-9a-f]{7,40}$"},
-        "dirty": {"type": ["boolean", "null"]}
+        "sha": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9a-f]{7,40}$"
+        },
+        "dirty": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "patch": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "untracked": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "go": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
       }
     },
-    "config_hash": {"type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$"},
-    "config": {"type": ["object", "null"], "description": "the config as run (every key but config_hash); a baseline's known settings, null where unknown"},
-    "harness": {
-      "type": ["object", "null"],
+    "config_hash": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "config": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "the config as run (every key but config_hash); a baseline's known settings, null where unknown"
+    },
+    "reconstructed_config": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "a baseline only: the settings it is believed to have run under, every key of a config (provenance says how each is known)"
+    },
+    "reconstructed_config_hash": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "description": "config_hash of reconstructed_config: compare's COMPARABLE WITH CAVEATS when it equals a run's config_hash"
+    },
+    "provenance": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^(verified|inferred|unknown|not applicable): "
+      },
+      "description": "a baseline only: dotted key of reconstructed_config \u2192 'verified: \u2026', 'inferred: \u2026', 'unknown: \u2026' or 'not applicable: \u2026'"
+    },
+    "yardstick": {
+      "type": [
+        "object",
+        "null"
+      ],
       "additionalProperties": false,
-      "required": ["name", "commit", "dirty"],
+      "required": [
+        "proofrun",
+        "labdriver",
+        "bench"
+      ],
+      "description": "content hashes of the in-repo code and data that score or drive tasks (benchlib/infra.YARDSTICK)",
       "properties": {
-        "name": {"type": "string"},
-        "commit": {"type": ["string", "null"]},
-        "dirty": {"type": ["boolean", "null"]}
+        "proofrun": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "labdriver": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "bench": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "harness": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "commit",
+        "dirty",
+        "pandoc"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "commit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dirty": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "pandoc": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
       }
     },
     "judge": {
-      "type": ["object", "null"],
+      "type": [
+        "object",
+        "null"
+      ],
       "additionalProperties": false,
-      "required": ["models", "runner"],
+      "required": [
+        "models",
+        "runner"
+      ],
       "properties": {
-        "models": {"type": "array", "items": {"type": "string"}},
-        "runner": {"type": ["string", "null"]}
+        "models": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "runner": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
       }
+    },
+    "database": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "required": [
+        "fresh",
+        "server",
+        "vector",
+        "image"
+      ],
+      "properties": {
+        "fresh": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "server": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vector": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "image": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "models_served": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      },
+      "description": "model ids BigLaw's cost ledger records for the run's calls"
     },
     "runner": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["host", "date", "python"],
+      "required": [
+        "host",
+        "date",
+        "python"
+      ],
       "properties": {
-        "host": {"type": ["string", "null"]},
-        "date": {"type": ["string", "null"]},
-        "python": {"type": ["string", "null"]}
+        "host": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "date": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "python": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
       }
     },
-    "fresh_db": {"type": ["boolean", "null"]},
+    "fresh_db": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
     "spend": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["cap_usd", "charged_usd", "actual_usd"],
+      "required": [
+        "cap_usd",
+        "charged_usd",
+        "biglaw_usd",
+        "judge_usd_estimated"
+      ],
       "properties": {
-        "cap_usd": {"type": ["number", "null"]},
-        "charged_usd": {"type": ["number", "null"]},
-        "actual_usd": {"type": ["number", "null"]}
+        "cap_usd": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "charged_usd": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "what the cap charged: BigLaw's metered cost (its budget when unknown) plus the judge estimates"
+        },
+        "biglaw_usd": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "BigLaw's metered cost of the tasks that ran (null when any is unknown)"
+        },
+        "judge_usd_estimated": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "the judge's estimated cost (harvey-labs reports none): an estimate, never a meter"
+        }
       }
     },
     "stopped": {
-      "type": ["object", "null"],
+      "type": [
+        "object",
+        "null"
+      ],
       "additionalProperties": false,
-      "required": ["reason", "detail", "provider_error_type"],
+      "required": [
+        "reason",
+        "detail",
+        "provider_error_type"
+      ],
       "properties": {
-        "reason": {"enum": ["spend_cap", "provider_error", "error"]},
-        "detail": {"type": ["string", "null"]},
-        "provider_error_type": {"type": ["string", "null"]}
+        "reason": {
+          "enum": [
+            "spend_cap",
+            "provider_error",
+            "error"
+          ]
+        },
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider_error_type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
       }
     },
-    "tasks": {"type": "array", "items": {"$ref": "#/$defs/task"}}
+    "tasks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/task"
+      }
+    }
   },
   "$defs": {
-    "count": {"type": ["integer", "null"], "minimum": 0},
-    "usd": {"type": ["number", "null"], "minimum": 0},
+    "count": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "usd": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "minimum": 0
+    },
     "task": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "kind", "task", "status", "score", "criteria", "flips", "cost_usd", "calls", "stop_reason", "duration_s",
-                   "stage_spend", "stage_calls", "reader", "judge", "failures", "conflicts", "computed_figures", "finding_gates",
-                   "charged_usd", "run_dir", "error", "notes"],
+      "required": [
+        "id",
+        "kind",
+        "task",
+        "status",
+        "score",
+        "criteria",
+        "flips",
+        "cost_usd",
+        "calls",
+        "stop_reason",
+        "duration_s",
+        "stage_spend",
+        "stage_calls",
+        "reader",
+        "judge",
+        "failures",
+        "conflicts",
+        "computed_figures",
+        "finding_gates",
+        "judge_cost",
+        "models_served",
+        "charged_usd",
+        "run_dir",
+        "error",
+        "notes"
+      ],
       "properties": {
-        "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
-        "kind": {"enum": ["lab", "proofrun"]},
-        "task": {"type": "string"},
-        "status": {"enum": ["scored", "failed", "provider_error", "skipped_cap", "not_run", "recorded"]},
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        },
+        "kind": {
+          "enum": [
+            "lab",
+            "proofrun"
+          ]
+        },
+        "task": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "scored",
+            "failed",
+            "judge_skipped_cap",
+            "provider_error",
+            "skipped_cap",
+            "not_run",
+            "recorded"
+          ]
+        },
         "score": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["passed", "total"],
-          "properties": {"passed": {"$ref": "#/$defs/count"}, "total": {"$ref": "#/$defs/count"}}
-        },
-        "criteria": {"type": ["object", "null"], "additionalProperties": {"enum": ["pass", "fail", "error", "skipped", null]}},
-        "flips": {
-          "type": ["object", "null"],
-          "additionalProperties": false,
-          "required": ["vs", "gained", "lost"],
+          "required": [
+            "passed",
+            "total"
+          ],
           "properties": {
-            "vs": {"type": "string"},
-            "gained": {"type": "array", "items": {"type": "string"}},
-            "lost": {"type": "array", "items": {"type": "string"}}
+            "passed": {
+              "$ref": "#/$defs/count"
+            },
+            "total": {
+              "$ref": "#/$defs/count"
+            }
           }
         },
-        "cost_usd": {"$ref": "#/$defs/usd"},
-        "calls": {"$ref": "#/$defs/count"},
-        "stop_reason": {"enum": ["finished", "budget_exhausted", "max_steps", "awaiting_gate", "cancelled", "failed", null]},
-        "duration_s": {"$ref": "#/$defs/usd"},
-        "stage_spend": {"type": ["object", "null"], "additionalProperties": {"$ref": "#/$defs/usd"}},
-        "stage_calls": {"type": ["object", "null"], "additionalProperties": {"$ref": "#/$defs/count"}},
-        "reader": {
-          "type": ["object", "null"],
+        "criteria": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "enum": [
+              "pass",
+              "fail",
+              "error",
+              "skipped",
+              null
+            ]
+          }
+        },
+        "flips": {
+          "type": [
+            "object",
+            "null"
+          ],
           "additionalProperties": false,
-          "required": ["calls", "failed", "unfunded"],
-          "properties": {"calls": {"$ref": "#/$defs/count"}, "failed": {"$ref": "#/$defs/count"}, "unfunded": {"$ref": "#/$defs/count"}}
+          "required": [
+            "vs",
+            "gained",
+            "lost"
+          ],
+          "properties": {
+            "vs": {
+              "type": "string"
+            },
+            "gained": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "lost": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "cost_usd": {
+          "$ref": "#/$defs/usd"
+        },
+        "calls": {
+          "$ref": "#/$defs/count"
+        },
+        "stop_reason": {
+          "enum": [
+            "finished",
+            "budget_exhausted",
+            "max_steps",
+            "awaiting_gate",
+            "cancelled",
+            "failed",
+            null
+          ]
+        },
+        "duration_s": {
+          "$ref": "#/$defs/usd"
+        },
+        "stage_spend": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/usd"
+          }
+        },
+        "stage_calls": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/count"
+          }
+        },
+        "reader": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "required": [
+            "calls",
+            "failed",
+            "unfunded"
+          ],
+          "properties": {
+            "calls": {
+              "$ref": "#/$defs/count"
+            },
+            "failed": {
+              "$ref": "#/$defs/count"
+            },
+            "unfunded": {
+              "$ref": "#/$defs/count"
+            }
+          }
         },
         "judge": {
-          "type": ["object", "null"],
+          "type": [
+            "object",
+            "null"
+          ],
           "additionalProperties": false,
-          "required": ["calls", "pairs"],
-          "properties": {"calls": {"$ref": "#/$defs/count"}, "pairs": {"$ref": "#/$defs/count"}}
+          "required": [
+            "calls",
+            "pairs"
+          ],
+          "properties": {
+            "calls": {
+              "$ref": "#/$defs/count"
+            },
+            "pairs": {
+              "$ref": "#/$defs/count"
+            }
+          }
         },
         "failures": {
-          "type": ["object", "null"],
+          "type": [
+            "object",
+            "null"
+          ],
           "additionalProperties": false,
-          "required": ["steps_failed", "steps_refused", "grading_errors"],
-          "properties": {"steps_failed": {"$ref": "#/$defs/count"}, "steps_refused": {"$ref": "#/$defs/count"}, "grading_errors": {"$ref": "#/$defs/count"}}
+          "required": [
+            "steps_failed",
+            "steps_refused",
+            "grading_errors"
+          ],
+          "properties": {
+            "steps_failed": {
+              "$ref": "#/$defs/count"
+            },
+            "steps_refused": {
+              "$ref": "#/$defs/count"
+            },
+            "grading_errors": {
+              "$ref": "#/$defs/count"
+            }
+          }
         },
-        "conflicts": {"$ref": "#/$defs/count"},
+        "conflicts": {
+          "$ref": "#/$defs/count"
+        },
         "computed_figures": {
-          "type": ["object", "null"],
+          "type": [
+            "object",
+            "null"
+          ],
           "additionalProperties": false,
-          "required": ["check_first", "arithmetic"],
-          "properties": {"check_first": {"$ref": "#/$defs/count"}, "arithmetic": {"$ref": "#/$defs/count"}}
+          "required": [
+            "check_first",
+            "arithmetic"
+          ],
+          "properties": {
+            "check_first": {
+              "$ref": "#/$defs/count"
+            },
+            "arithmetic": {
+              "$ref": "#/$defs/count"
+            }
+          }
         },
-        "finding_gates": {"$ref": "#/$defs/count"},
-        "charged_usd": {"$ref": "#/$defs/usd"},
-        "run_dir": {"type": ["string", "null"]},
-        "error": {"type": ["string", "null"]},
-        "notes": {"type": "array", "items": {"type": "string"}}
+        "finding_gates": {
+          "$ref": "#/$defs/count"
+        },
+        "charged_usd": {
+          "$ref": "#/$defs/usd"
+        },
+        "run_dir": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "judge_cost": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "required": [
+            "usd",
+            "basis",
+            "criteria",
+            "input_tokens",
+            "output_tokens",
+            "deliverable_chars"
+          ],
+          "description": "the LAB judge's cost: an estimate (basis) from the deliverable's size, the criteria and the pinned price",
+          "properties": {
+            "usd": {
+              "$ref": "#/$defs/usd"
+            },
+            "basis": {
+              "enum": [
+                "estimate"
+              ]
+            },
+            "criteria": {
+              "$ref": "#/$defs/count"
+            },
+            "input_tokens": {
+              "$ref": "#/$defs/count"
+            },
+            "output_tokens": {
+              "$ref": "#/$defs/count"
+            },
+            "deliverable_chars": {
+              "$ref": "#/$defs/count"
+            }
+          }
+        },
+        "models_served": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        }
       }
     }
   }

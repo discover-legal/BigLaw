@@ -3,17 +3,150 @@
   "kind": "baseline",
   "mode": null,
   "label": "v2-bench6",
-  "source": "bench6: build 091bcfc, Harvey LAB run-ids .../v2-haiku45-b11-r4-091bcfc/20261024-074818 (SEC) and .../20261024-090112 (trust), judged by claude-sonnet-4-6 (single judge); per-criterion verdicts copied from those runs' scores.json, flips vs bench5 as recorded by the owner; gate A litigation from the owner's record (per-criterion unknown). Run settings were set by hand and not recorded as a config, so config is null and compare reports any comparison with this baseline as not comparable.",
+  "source": "bench6: build 091bcfc, harvey-labs run-ids .../v2-haiku45-b11-r4-091bcfc/20261024-074818 (SEC) and .../20261024-090112 (trust), judged by claude-sonnet-4-6 (single judge, pandoc 3.1.3); per-criterion verdicts copied from those runs' scores.json; flips against bench5 (build 4d6ac3c: .../v2-haiku45-b11-r6-4d6ac3c/20261024-041012 SEC, .../20261024-053155 trust, the 05:31 run), as the owner recorded them and recomputed from both runs' scores.json; gate A litigation from the owner's record (per-criterion unknown). Its settings were set by hand: config_hash is null, and reconstructed_config holds them as believed with provenance per key.",
   "build": {
     "sha": "091bcfc",
-    "dirty": null
+    "dirty": null,
+    "patch": null,
+    "untracked": [],
+    "go": null
   },
   "config_hash": null,
   "config": null,
+  "reconstructed_config": {
+    "name": "bench6 (reconstructed)",
+    "description": "The settings bench6 (build 091bcfc) is believed to have run under; provenance says how each is known.",
+    "mode": "real",
+    "models": {
+      "lead": "claude-haiku-4-5",
+      "specialist": "claude-haiku-4-5",
+      "critic": "claude-haiku-4-5"
+    },
+    "model_url": "https://api.anthropic.com/v1",
+    "vendor_opt_in": [
+      "ALLOW_ANTHROPIC"
+    ],
+    "budget": {
+      "usd": 11,
+      "calls": 900
+    },
+    "search": "lexical",
+    "postgres_image": "pgvector/pgvector:0.8.6-pg16",
+    "harness": {
+      "name": "harvey-labs",
+      "commit": "81d6a31"
+    },
+    "judge": {
+      "runner": "harvey-labs",
+      "models": [
+        "claude-sonnet-4-6"
+      ],
+      "parallel": 6,
+      "price_per_mtok": {
+        "in": 3,
+        "out": 15
+      },
+      "output_tokens_per_criterion": 1000,
+      "chars_per_token": 3.5
+    },
+    "spend_cap_usd": 60,
+    "driver": {
+      "workflow": "memo",
+      "tool_bandit": "on",
+      "gate_policy": "approve",
+      "max_steps": null,
+      "poll_seconds": 10,
+      "timeout_seconds": 14400
+    },
+    "tasks": [
+      {
+        "id": "sec",
+        "kind": "lab",
+        "task": "white-collar-defense-investigations/extract-key-allegations-from-sec-enforcement-referral-notice",
+        "jurisdiction": "US",
+        "split_mode": "markers",
+        "matter": "LAB",
+        "judge_reserve_usd": 12
+      },
+      {
+        "id": "trust",
+        "kind": "lab",
+        "task": "trusts-estates-private-client/compare-trust-documents-against-client-instructions",
+        "jurisdiction": "US",
+        "split_mode": "markers",
+        "matter": "LAB",
+        "judge_reserve_usd": 8
+      },
+      {
+        "id": "gate-a-litigation",
+        "kind": "proofrun",
+        "task": "litigation/greystone-v-talbot-defense",
+        "jurisdiction": "US",
+        "split_mode": "markers",
+        "matter": "litigation",
+        "judge_reserve_usd": 0
+      }
+    ]
+  },
+  "reconstructed_config_hash": "sha256:4fc1ad33d559dd5e627696ab780c6a370289b60c9d62d425e4242209e6829717",
+  "provenance": {
+    "name": "not applicable: a label",
+    "description": "not applicable: a label",
+    "mode": "verified: real model runs",
+    "models.lead": "inferred: the run-ids' haiku45 (the exact id or alias served was not recorded)",
+    "models.specialist": "inferred: the run-ids' haiku45 (the exact id or alias served was not recorded)",
+    "models.critic": "inferred: the run-ids' haiku45 (the exact id or alias served was not recorded)",
+    "model_url": "inferred: Anthropic's API (Haiku-priced calls); the endpoint was not recorded",
+    "vendor_opt_in": "inferred: Anthropic's API (Haiku-priced calls); the endpoint was not recorded",
+    "budget.usd": "inferred: the run-ids' b11, consistent with SEC stopping budget_exhausted at $10.27",
+    "budget.calls": "verified: biglaw_tasks.json run.budget, calls used plus remaining (566 + 334, 443 + 457)",
+    "search": "inferred: no embed role recorded",
+    "postgres_image": "unknown: the database was not recorded",
+    "harness.name": "verified: the harvey-labs checkout's reflog shows one clone at 81d6a31 (2026-10-23), before bench6",
+    "harness.commit": "verified: the harvey-labs checkout's reflog shows one clone at 81d6a31 (2026-10-23), before bench6",
+    "judge.runner": "verified: scores.json judge_model claude-sonnet-4-6, single judge",
+    "judge.models": "verified: scores.json judge_model claude-sonnet-4-6, single judge",
+    "judge.parallel": "inferred: run_eval's default (not recorded; it does not change verdicts)",
+    "judge.price_per_mtok.in": "not applicable: the suite's judge cost estimate, set to the pinned value",
+    "judge.price_per_mtok.out": "not applicable: the suite's judge cost estimate, set to the pinned value",
+    "judge.output_tokens_per_criterion": "not applicable: the suite's judge cost estimate, set to the pinned value",
+    "judge.chars_per_token": "not applicable: the suite's judge cost estimate, set to the pinned value",
+    "spend_cap_usd": "not applicable: no suite cap existed; set to the pinned value",
+    "driver.workflow": "verified: each run's config.json",
+    "driver.tool_bandit": "verified: each run's metrics.json",
+    "driver.gate_policy": "verified: each run's config.json",
+    "driver.max_steps": "inferred: the driver default (not recorded)",
+    "driver.poll_seconds": "inferred: the SEC run took 4091 s, so its timeout was above it; neither affects a score",
+    "driver.timeout_seconds": "inferred: the SEC run took 4091 s, so its timeout was above it; neither affects a score",
+    "tasks[sec].kind": "verified: the run-id (harvey-labs results/white-collar-defense-investigations/extract-key-allegations-from-sec-enforcement-referral-notice/v2-haiku45-b11-r4-091bcfc/20261024-074818)",
+    "tasks[sec].task": "verified: the run-id (harvey-labs results/white-collar-defense-investigations/extract-key-allegations-from-sec-enforcement-referral-notice/v2-haiku45-b11-r4-091bcfc/20261024-074818)",
+    "tasks[sec].jurisdiction": "verified: the run's config.json (harvey-labs results/white-collar-defense-investigations/extract-key-allegations-from-sec-enforcement-referral-notice/v2-haiku45-b11-r4-091bcfc/20261024-074818)",
+    "tasks[sec].split_mode": "verified: the run's config.json (harvey-labs results/white-collar-defense-investigations/extract-key-allegations-from-sec-enforcement-referral-notice/v2-haiku45-b11-r4-091bcfc/20261024-074818)",
+    "tasks[sec].matter": "inferred: the LAB driver's default matter number (not recorded)",
+    "tasks[sec].judge_reserve_usd": "not applicable: a suite-level cap reserve that did not exist; set to the pinned value",
+    "tasks[trust].kind": "verified: the run-id (harvey-labs results/trusts-estates-private-client/compare-trust-documents-against-client-instructions/v2-haiku45-b11-r4-091bcfc/20261024-090112)",
+    "tasks[trust].task": "verified: the run-id (harvey-labs results/trusts-estates-private-client/compare-trust-documents-against-client-instructions/v2-haiku45-b11-r4-091bcfc/20261024-090112)",
+    "tasks[trust].jurisdiction": "verified: the run's config.json (harvey-labs results/trusts-estates-private-client/compare-trust-documents-against-client-instructions/v2-haiku45-b11-r4-091bcfc/20261024-090112)",
+    "tasks[trust].split_mode": "verified: the run's config.json (harvey-labs results/trusts-estates-private-client/compare-trust-documents-against-client-instructions/v2-haiku45-b11-r4-091bcfc/20261024-090112)",
+    "tasks[trust].matter": "inferred: the LAB driver's default matter number (not recorded)",
+    "tasks[trust].judge_reserve_usd": "not applicable: a suite-level cap reserve that did not exist; set to the pinned value",
+    "tasks[gate-a-litigation].kind": "unknown: gate A's run settings were not recorded (only its totals, from the owner)",
+    "tasks[gate-a-litigation].task": "unknown: gate A's run settings were not recorded (only its totals, from the owner)",
+    "tasks[gate-a-litigation].jurisdiction": "unknown: gate A's run settings were not recorded (only its totals, from the owner)",
+    "tasks[gate-a-litigation].split_mode": "unknown: gate A's run settings were not recorded (only its totals, from the owner)",
+    "tasks[gate-a-litigation].matter": "unknown: gate A's run settings were not recorded (only its totals, from the owner)",
+    "tasks[gate-a-litigation].judge_reserve_usd": "not applicable: a suite-level cap reserve that did not exist; set to the pinned value",
+    "fresh_db": "unknown: whether the database was fresh was not recorded (earlier runs shared servers and probably databases)",
+    "tool_stats": "unknown: the tool bandit's priors (shared tool_stats) the runs started from",
+    "yardstick": "unknown: the in-repo scorer and driver were not hashed",
+    "harness.pandoc": "verified: scores.json pandoc_version 3.1.3"
+  },
+  "yardstick": null,
   "harness": {
     "name": "harvey-labs",
-    "commit": null,
-    "dirty": null
+    "commit": "81d6a31",
+    "dirty": null,
+    "pandoc": "3.1.3"
   },
   "judge": {
     "models": [
@@ -21,6 +154,8 @@
     ],
     "runner": "harvey-labs"
   },
+  "database": null,
+  "models_served": null,
   "runner": {
     "host": null,
     "date": null,
@@ -30,7 +165,8 @@
   "spend": {
     "cap_usd": null,
     "charged_usd": null,
-    "actual_usd": null
+    "biglaw_usd": null,
+    "judge_usd_estimated": null
   },
   "stopped": null,
   "tasks": [
@@ -140,6 +276,8 @@
       "conflicts": null,
       "computed_figures": null,
       "finding_gates": 1,
+      "judge_cost": null,
+      "models_served": null,
       "charged_usd": null,
       "run_dir": null,
       "error": null,
@@ -207,6 +345,8 @@
       "conflicts": null,
       "computed_figures": null,
       "finding_gates": 3,
+      "judge_cost": null,
+      "models_served": null,
       "charged_usd": null,
       "run_dir": null,
       "error": null,
@@ -235,6 +375,8 @@
       "conflicts": null,
       "computed_figures": null,
       "finding_gates": null,
+      "judge_cost": null,
+      "models_served": null,
       "charged_usd": null,
       "run_dir": null,
       "error": null,

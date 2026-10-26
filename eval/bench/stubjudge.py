@@ -4,7 +4,8 @@
 """The bench smoke's stand-in for harvey-labs' run_eval: the same arguments (--run-id, --task,
 --judges), LAB_ROOT the same way, and a scores.json of the same shape. A criterion passes when its
 `stub_contains` phrase appears in the deliverables (case-insensitive). It calls no model and is used
-only by smoke.json; its scores measure the pipeline, never BigLaw."""
+only by smoke.json; its scores measure the pipeline, never BigLaw. It prints the key it was given, as a leaky harness
+might, so the smoke proves the suite redacts its judge log."""
 
 from __future__ import annotations
 
@@ -35,6 +36,8 @@ def main(argv=None) -> int:
               "scored_at": datetime.now(timezone.utc).isoformat()}
     (run_dir / "scores.json").write_text(json.dumps(scores, indent=2), encoding="utf-8")
     print(scores["summary"])
+    # A careless harness that echoes its key: the smoke checks the suite's log of this run is redacted.
+    print(f"stub: ANTHROPIC_API_KEY={os.environ.get('ANTHROPIC_API_KEY', '')}")
     return 0
 
 
