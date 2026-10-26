@@ -75,10 +75,3 @@ func candidates(ps []Pack) string {
 	}
 	return "This deliverable used candidate practice or jurisdiction packs (" + strings.Join(names, ", ") + ") that no named lawyer has reviewed yet."
 }
-
-func btoi(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
-}

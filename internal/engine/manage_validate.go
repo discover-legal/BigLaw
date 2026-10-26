@@ -54,7 +54,7 @@ func (e *Engine) validate(snap Snapshot, id string) error {
 		if need != nil && !slices.Equal(slices.Sorted(maps.Keys(files)), need) {
 			bad("", "a new %s is exactly these files: %s", kind, strings.Join(need, ", "))
 		}
-		if kind != "skill" && kind != "server" && !toolNameRe.MatchString(name) {
+		if kind != "skill" && kind != "server" && !agent.ToolNameRe.MatchString(name) {
 			bad("", "a name is 2–64 lower-case letters, digits and _, starting with a letter")
 		}
 		if slices.Contains(reservedNames, name) {
@@ -332,7 +332,7 @@ func compatSpec(old, cur []byte) []string {
 	if err != nil {
 		return out
 	}
-	for _, m := range exampleLine.FindAllStringSubmatch(was.Description, -1) {
+	for _, m := range agent.ExampleRe.FindAllStringSubmatch(was.Description, -1) {
 		if err := in.Validate(json.RawMessage(m[1])); err != nil {
 			out = append(out, fmt.Sprintf("in: the built-in example %s no longer validates (%v)", m[1], err))
 		}
@@ -348,8 +348,6 @@ func compatSpec(old, cur []byte) []string {
 // subagentSafe are tools with lead-only ops that refuse those ops to a subagent in their own code
 // (ledger: plan and resolve at depth 1), so a subagent may be given them for their reads.
 var subagentSafe = []string{"ledger"}
-
-var exampleLine = regexp.MustCompile(`(?m)^Example: (\{.*\})\s*$`)
 
 func compatSchema(at string, a, b *agent.Schema, goWrites bool) []string {
 	var out []string

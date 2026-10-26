@@ -39,11 +39,22 @@ type entry struct {
 func NewRegistry() *Registry { return &Registry{tools: map[string]*entry{}} }
 
 var (
-	toolNameRe = regexp.MustCompile(`^[a-z][a-z0-9_]{1,63}$`)
+	// ToolNameRe is a tool's name: 2–64 lower-case letters, digits and _; ExampleRe a description's
+	// example call (its input m[1]); Fence keeps untrusted text inside a prompt's <<< >>> fences.
+	ToolNameRe = regexp.MustCompile(`^[a-z][a-z0-9_]{1,63}$`)
 	sentenceRe = regexp.MustCompile(`[.!?](\s|$)`)
-	exampleRe  = regexp.MustCompile(`(?m)^Example: (\{.*\})\s*$`)
+	ExampleRe  = regexp.MustCompile(`(?m)^Example: (\{.*\})\s*$`)
 	lengthKw   = regexp.MustCompile(`,"m(?:in|ax)Length":\d+|"m(?:in|ax)Length":\d+,`) // in compacted JSON; a string's quotes are escaped
+	Fence      = strings.NewReplacer("<<<", "‹‹‹", ">>>", "›››")
 )
+
+// Btoi is 1 for true, 0 for false.
+func Btoi(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
 
 // Register adds t after checking its spec: a unique name, compilable strict-shaped schemas, a
 // description of at least three sentences with a "Do not use" line and 1–3 example calls that
@@ -61,9 +72,9 @@ func (r *Registry) Register(t Tool) error {
 	if e.out, err = Compile(s.Out); err != nil {
 		return bad("output schema: %v", err)
 	}
-	examples := exampleRe.FindAllStringSubmatch(s.Description, -1)
+	examples := ExampleRe.FindAllStringSubmatch(s.Description, -1)
 	switch {
-	case !toolNameRe.MatchString(s.Name):
+	case !ToolNameRe.MatchString(s.Name):
 		return bad("the name is not 2–64 lower-case letters, digits and _")
 	case !slices.Contains([]string{"go", "subagent", "fanout"}, s.Kind):
 		return bad("kind is go, subagent or fanout")
@@ -71,7 +82,7 @@ func (r *Registry) Register(t Tool) error {
 		return bad("class is plan, evidence, draft, committee, cover or free")
 	case e.in.Strict("in") != "" || e.out.Strict("out") != "":
 		return bad("schema not strict-shaped: %s%s", e.in.Strict("in"), e.out.Strict("out"))
-	case len(sentenceRe.FindAllString(exampleRe.ReplaceAllString(s.Description, ""), -1)) < 3:
+	case len(sentenceRe.FindAllString(ExampleRe.ReplaceAllString(s.Description, ""), -1)) < 3:
 		return bad("the description needs at least three sentences")
 	case !strings.Contains(strings.ToLower(s.Description), "do not use"):
 		return bad("the description must say when not to use it (a \"Do not use\" line)")

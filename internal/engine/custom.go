@@ -593,13 +593,11 @@ func toolName(server, remote string) string {
 	if len(n) > 64 {
 		n = strings.TrimRight(n[:64], "_")
 	}
-	if !toolNameRe.MatchString(n) || slices.Contains(reservedNames, n) {
+	if !agent.ToolNameRe.MatchString(n) || slices.Contains(reservedNames, n) {
 		return ""
 	}
 	return n
 }
-
-var toolNameRe = regexp.MustCompile(`^[a-z][a-z0-9_]{1,63}$`)
 
 // reservedNames are names no admin's subagent or tool may take: the lead, the Test call's caller,
 // "meta", and the engine's passes (L1).
