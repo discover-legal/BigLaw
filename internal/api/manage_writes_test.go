@@ -5,7 +5,6 @@ package api
 
 import (
 	"encoding/json"
-	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -21,6 +20,17 @@ import (
 func TestManageWriteRoutes(t *testing.T) {
 	t.Parallel()
 	manageWrites(t, manageServer(t, func(*http.Request) Principal { return Principal{ID: "v", Name: "Viewer"} }), manageServer(t, local))
+}
+
+// manageWriteRoutes are the Manage write routes ({skill}: a built-in skill's id), every one POST; body:
+// it decodes a body. TestEveryRouteNeedsASession probes them too.
+var manageWriteRoutes = []struct {
+	path string
+	body bool
+}{
+	{"/manage/items/prompt.lead/versions", true}, {"/manage/items/prompt.lead/revert", true}, {"/manage/items/{skill}/delete", true},
+	{"/manage/secrets", true}, {"/manage/items/server.x/import", true}, {"/manage/items/tool.x/test", true},
+	{"/manage/secrets/x/delete", false}, {"/manage/items/server.x/discover", false},
 }
 
 // manageWrites drives every Manage write route as viewer (refused) and as s, an admin; it returns
@@ -40,27 +50,10 @@ func manageWrites(t *testing.T, viewer, s *server) []engine.Version {
 	}
 	send := func(srv *server, path, body string, hdr ...string) (int, string) {
 		t.Helper()
-		req, _ := http.NewRequest("POST", srv.URL+path, strings.NewReader(body))
-		for i := 0; i+1 < len(hdr); i += 2 {
-			req.Header.Set(hdr[i], hdr[i+1])
-		}
-		resp, err := srv.client().Do(req)
-		if err != nil {
-			t.Fatalf("POST %s: %v", path, err)
-		}
-		defer resp.Body.Close()
-		b, _ := io.ReadAll(resp.Body)
-		return resp.StatusCode, string(b)
+		return srv.send("POST", path, body, hdr...)
 	}
-	routes := []struct {
-		path string
-		body bool // the route decodes a body
-	}{
-		{"/manage/items/prompt.lead/versions", true}, {"/manage/items/prompt.lead/revert", true}, {"/manage/items/" + skill + "/delete", true},
-		{"/manage/secrets", true}, {"/manage/items/server.x/import", true}, {"/manage/items/tool.x/test", true},
-		{"/manage/secrets/x/delete", false}, {"/manage/items/server.x/discover", false},
-	}
-	for _, r := range routes {
+	for _, r := range manageWriteRoutes {
+		r.path = strings.ReplaceAll(r.path, "{skill}", skill)
 		if code, body := send(viewer, r.path, `{}`); code != 403 || !strings.Contains(body, `"errorType":"forbidden"`) {
 			t.Errorf("%s as a viewer: %d %s", r.path, code, body)
 		}
