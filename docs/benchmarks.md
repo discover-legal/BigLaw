@@ -257,10 +257,21 @@ with `kind: "baseline"`, and they hold only recorded numbers. Anything not recor
 
 | Baseline | Build | SEC | trust | gate A litigation | Compares |
 |---|---|---|---|---|---|
-| `v1-record` | v1 (`main`), Haiku | 49/60 | 14/23 | — | Never: another platform; settings unknown. |
-| `v2-bench6` | `091bcfc` | 38/60, $10.27, 566 calls, `budget_exhausted` | 11/23, $8.57, 443 calls, `finished` | 20/20, $9.60, 444 calls, `budget_exhausted` | With caveats: reconstructed config. |
+| `v1-record` | v1 (`main`), Haiku | 50/60, $11.52, 92 min | 14/23, $10.52, 75 min | — | Never: another platform; settings unknown. |
+| `v2-bench6` | `091bcfc` | 38/60, $10.27, 68 min, 566 calls, `budget_exhausted` | 11/23, $8.57, 42 min, 443 calls, `finished` | 20/20, $9.60, 444 calls, `budget_exhausted` | With caveats: reconstructed config. |
 
-Both were judged by `claude-sonnet-4-6` as a single judge.
+Both were judged by `claude-sonnet-4-6` as a single judge. Times are the harness's wall clock for
+one run (`duration_s`, harvey-labs `metrics.json`); costs are BigLaw's own spend, not the judge's.
+
+**v1-record** is v1's best Haiku runs, committed on `main` under `benchmarks/runs/`: SEC
+`haiku-v5b/20260707-144125` (50/60; it matches `haiku-rounds3/20260706-003200`, whose analysis round
+had starved, with every round healthy; an earlier version of this baseline said 49, the
+`biglaw-fixwave-haiku` run) and trust `haiku-devport/20260705-213721` (14/23). Score, per-criterion
+verdicts, cost and duration are copied from those runs' `scores.json` and `metrics.json`; the harness
+commit, calls and settings were never recorded, so it still never compares. Its criteria are the
+same rubric as bench6's: the same 60 and 23 ids with the same titles, except that v1's Windows runs
+mis-decoded `—`, `–` and `§` in 12 of them. `compare.py` lists its per-criterion flips against bench6
+(SEC: 2 gained, 14 lost; trust: 3 lost) for reading, not as a verdict.
 
 **v2-bench6** has:
 
