@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import signal
 import re
 import shutil
 import subprocess
@@ -70,6 +72,36 @@ def command(cfg: dict, run_id: str, task: str) -> list[str]:
             "--judges", *j["models"], "--parallel", str(j["parallel"])]
 
 
+def run_group(cmd: list[str], **kw) -> subprocess.CompletedProcess:
+    """Run cmd in its own process group and, if the wait is interrupted (a signal, an error), stop the
+    whole group: `uv run` does not pass a kill on to its python child, which would otherwise go on
+    judging, and spending, with no one watching (PR 63 r2 MEDIUM-1)."""
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True, **kw)
+    try:
+        out, err = p.communicate()
+    except BaseException:
+        kill_group(p)
+        raise
+    return subprocess.CompletedProcess(cmd, p.returncode, out, err)
+
+
+def kill_group(p: subprocess.Popen, grace: float = 5.0) -> None:
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(p.pid, sig)
+        except ProcessLookupError:
+            return
+        try:
+            p.wait(grace)
+            if sig == signal.SIGTERM:
+                os.killpg(p.pid, signal.SIGKILL)  # the leader is gone; take any child it left in the group
+            return
+        except subprocess.TimeoutExpired:
+            continue
+        except ProcessLookupError:
+            return
+
+
 class JudgeError(RuntimeError):
     def __init__(self, msg: str, provider_error: str | None = None):
         super().__init__(msg)
@@ -84,7 +116,7 @@ def run_judge(cfg: dict, harness: Path, lab_root: Path, run_id: str, task: str, 
     env = child_env({"LAB_ROOT": str(lab_root)})
     if key:
         env["ANTHROPIC_API_KEY"] = key  # the stub gets the smoke's dummy secret too, so its log's redaction is tested
-    r = subprocess.run(command(cfg, run_id, task), cwd=harness, env=env, capture_output=True, text=True)
+    r = run_group(command(cfg, run_id, task), cwd=harness, env=env)
     text = redact((r.stdout or "") + "\n" + (r.stderr or ""))
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_path.write_text(text, encoding="utf-8")

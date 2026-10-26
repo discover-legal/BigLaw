@@ -137,7 +137,7 @@
       ],
       "additionalProperties": {
         "type": "string",
-        "pattern": "^(verified|inferred|unknown|not applicable): "
+        "pattern": "^(verified|inferred|unknown|not applicable)( \\([^)]*\\))?: "
       },
       "description": "a baseline only: dotted key of reconstructed_config \u2192 'verified: \u2026', 'inferred: \u2026', 'unknown: \u2026' or 'not applicable: \u2026'"
     },

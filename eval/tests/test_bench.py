@@ -342,6 +342,8 @@ class BuildStateTests(unittest.TestCase):
             self.assertRegex(st["patch"], r"^sha256:[0-9a-f]{64}$")
             (r / "internal/zz_probe.go").write_text("package a // changed\n")
             self.assertNotEqual(infra.build_state(r)["patch"], st["patch"])
+            (r / "internal/z ü.go").write_text("package a\n")  # a name git would quote without -z
+            self.assertIn("internal/z ü.go", infra.build_state(r)["untracked"])
 
     def test_tree_hash(self):
         with tempfile.TemporaryDirectory() as d:
@@ -371,6 +373,79 @@ class PostgresCleanupTests(unittest.TestCase):
             with self.assertRaises(infra.InfraError):
                 infra.Postgres(None, "img", lambda m: None)
         self.assertEqual(calls[-1][:3], ["docker", "rm", "-f"])
+
+
+HELPER = """
+import signal, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import importlib.util
+spec = importlib.util.spec_from_file_location("bench_run", Path(sys.argv[1]) / "run.py")
+run = importlib.util.module_from_spec(spec); spec.loader.exec_module(run)
+from benchlib import config, judge
+signal.signal(signal.SIGTERM, run._exit_on_signal)
+cfg = config.load(config.SMOKE_CONFIG)
+lab = Path(sys.argv[2])
+judge.run_judge(cfg, Path(sys.argv[1]) / "smoke", lab, "r", "smoke/deadline", "", lab / "judge.log", config.Redactor())
+"""
+
+
+def alive(pid: int) -> bool:
+    try:
+        state = Path(f"/proc/{pid}/status").read_text()
+    except OSError:
+        return False
+    return "\nState:\tZ" not in state
+
+
+class SignalTests(unittest.TestCase):
+    @unittest.skipUnless(Path("/proc").is_dir(), "needs /proc")
+    def test_sigterm_during_judge_leaves_no_judge(self):
+        """PR 63 r2 MEDIUM-1: a SIGTERM while the judge runs stops the judge and every process it started
+        (the stub judge holds a child, as `uv run` holds python), not only the process the suite started."""
+        import time
+        with tempfile.TemporaryDirectory() as d:
+            lab = Path(d)
+            (lab / "tasks").symlink_to(BENCH / "smoke" / "tasks")
+            (lab / "results" / "r" / "output").mkdir(parents=True)
+            hold = lab / "stubjudge.hold"
+            hold.write_text("")
+            (lab / "helper.py").write_text(HELPER)
+            p = subprocess.Popen([sys.executable, str(lab / "helper.py"), str(BENCH), str(lab)])
+            deadline = time.monotonic() + 30
+            while not hold.read_text().strip() and time.monotonic() < deadline:
+                time.sleep(0.1)
+            pids = [int(x) for x in hold.read_text().split()]
+            self.assertEqual(len(pids), 2, "the stub judge did not start")
+            p.send_signal(subprocess.signal.SIGTERM)
+            self.assertEqual(p.wait(30), 128 + 15)
+            deadline = time.monotonic() + 15
+            while any(alive(x) for x in pids) and time.monotonic() < deadline:
+                time.sleep(0.1)
+            self.assertEqual([x for x in pids if alive(x)], [], "a judge process survived the stop")
+
+    def test_cleanup_runs_every_step_and_ignores_signals(self):
+        """PR 63 r2 MEDIUM-2: a second signal, or a failing step, cannot cut cleanup short."""
+        import signal
+        seen = []
+
+        class Item:
+            def __init__(self, name, fail=None):
+                self.name, self.fail = name, fail
+
+            def close(self):
+                seen.append((self.name, signal.getsignal(signal.SIGTERM) == signal.SIG_IGN))
+                os.kill(os.getpid(), signal.SIGTERM)  # a second stop request mid-cleanup: ignored
+                if self.fail:
+                    raise self.fail
+
+        before = signal.getsignal(signal.SIGTERM)
+        logged = []
+        with mock.patch.object(benchrun, "cancel_active", mock.Mock(side_effect=KeyboardInterrupt)):
+            benchrun.stop_all([Item("db", SystemExit(143)), Item("serve", KeyboardInterrupt())], logged.append)
+        self.assertEqual(seen, [("serve", True), ("db", True)])
+        self.assertEqual(signal.getsignal(signal.SIGTERM), before)
+        self.assertEqual(len(logged), 3, logged)
 
 
 class SchemaTests(unittest.TestCase):

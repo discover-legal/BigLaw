@@ -50,8 +50,15 @@ def build_state(repo: Path = REPO) -> dict:
     if sha is None:
         return {"sha": None, "dirty": None, "patch": None, "untracked": []}
     excl = ":(exclude)eval/bench/results"
-    st = subprocess.run(["git", "-C", str(repo), "status", "--porcelain", "--untracked-files=all", "--", ".", excl],
-                        capture_output=True, text=True, check=True).stdout.splitlines()
+    raw = subprocess.run(["git", "-C", str(repo), "status", "--porcelain", "-z", "--untracked-files=all", "--", ".", excl],
+                         capture_output=True, text=True, check=True).stdout
+    st, items = [], raw.split("\0")
+    while items:  # -z: no quoting; a rename's entry is followed by its source path, which is skipped
+        item = items.pop(0)
+        if item:
+            st.append(item)
+            if item[:1] in "RC":
+                items.pop(0)
     tracked = [line for line in st if not line.startswith("??")]
     untracked = sorted(line[3:] for line in st if line.startswith("??") and line[3:].split("/")[0] in BUILD_PATHS)
     dirty = bool(tracked or untracked)

@@ -20,7 +20,10 @@ make bench                          # = python3 eval/bench/run.py run --labs-dir
 make bench LABS_DIR=/elsewhere/harvey-labs
 ```
 
-**Expected cost of a full run: about $44, and never more than $53 charged under the $60 cap.**
+**Expected cost of a full run: about $44.** The cap is $60, and the suite never charges more. The
+worst case is $53 while each judge estimate stays within its task's reserve. A judge whose estimate
+exceeds its reserve still runs when the estimate fits under the cap, so the charged total can reach
+$60. Real spend can also exceed what is charged, by the estimate's error and the judge's retries.
 
 - BigLaw is metered. Bench6's three tasks spent $10.27 + $8.57 + $9.60 = $28.44, and each task can
   spend at most its $11 budget, so BigLaw costs at most $33.
@@ -29,7 +32,8 @@ make bench LABS_DIR=/elsewhere/harvey-labs
   bench6-sized deliverables that is about $9.70 for SEC (170k characters × 60 criteria) and about
   $5.80 for trust (280k × 23). The judge reserves are $12 and $8.
 - Judge retries (harvey-labs retries transient errors up to 6 times) are not in the estimate.
-  The cap's $7 above the $53 worst case is the margin for them.
+  The cap's $7 above the $53 worst case is the margin for them, and for a judge that needs more
+  than its reserve.
 
 The command needs Go, Python 3, `uv` (for the harvey-labs judge), `psql`, and either Docker or
 `BIGLAW_DATABASE_URL`. In order, it:
@@ -85,6 +89,11 @@ The command needs Go, Python 3, `uv` (for the harvey-labs judge), `psql`, and ei
      error type (never its message) and exits with code 3.
 8. **Stops cleanly on SIGINT, SIGTERM or SIGHUP:** it cancels the running task, then stops serve and
    the database. A container that never became ready is removed too.
+   - The judge runs in its own process group, and the whole group is stopped. `uv run` does not
+     pass a kill on to its python child, which would otherwise go on judging, and spending,
+     unattended.
+   - While cleanup runs, further signals are ignored, and each step runs whatever the one before it
+     raised. A second Ctrl-C cannot leave the database or the container behind.
 9. **Writes `eval/bench/results/<UTC date>-<sha7>/summary.json`**, validated against the schema,
    and prints a table of the results.
 
@@ -115,7 +124,7 @@ make bench-smoke                                       # the offline tests (belo
 | `harness` | harvey-labs `81d6a31` | The judge's prompts and parsing are part of the score. The pandoc that converts `.docx` deliverables is recorded too. |
 | `judge` | `claude-sonnet-4-6`, single judge; $3/$15 per million tokens, 1,000 output tokens per criterion, 3.5 characters per token | The judge of the v1 record and of bench6, and the parameters of its cost estimate. |
 | `tasks[].judge_reserve_usd` | SEC $12, trust $8, gate A $0 | What each task's judge may need: above the estimate on bench6's deliverables. |
-| `spend_cap_usd` | `$60` per suite | The worst case is $53: three tasks at $11 plus the $20 of judge reserves. The rest is the margin for judge retries. |
+| `spend_cap_usd` | `$60` per suite | The worst case is $53 while judge estimates stay within their reserves: three tasks at $11 plus the $20 of judge reserves. The rest is the margin for judge retries and for a judge over its reserve. Nothing is charged past $60. |
 | `driver` | memo workflow, tool bandit on, finding gates approved, BigLaw's default `maxSteps`, 4 h timeout | The drivers' defaults, with a timeout long enough for bench6's 68-minute SEC run. |
 | `tasks` | `sec`, `trust`, `gate-a-litigation` | The three tasks earlier runs used (below). |
 | `postgres_image` | `pgvector/pgvector:0.8.6-pg16` | As Compose runs. The server and pgvector versions are recorded either way. |
@@ -272,10 +281,10 @@ believed, and `provenance` says how each key is known:
   harness 81d6a31 (the checkout's reflog); the single `claude-sonnet-4-6` judge and pandoc 3.1.3
   (`scores.json`).
 - **Inferred:** $11 (`b11`); every role on Haiku 4.5 (`haiku45`; the exact id was not recorded);
-  the Anthropic endpoint; lexical search; the LAB matter number, `maxSteps` and timeouts (driver
-  defaults).
+  the Anthropic endpoint; lexical search; the LAB matter number, `maxSteps` and the poll interval
+  (driver defaults).
 - **Unknown:** whether the database was fresh; the tool bandit's priors; the in-repo yardstick; the
-  database image; all of gate A's settings.
+  database image; the timeout (at least 4091 s); all of gate A's settings.
 - **Not applicable:** the suite-level cap, reserves and judge-estimate parameters, which did not
   exist then. They are set to the pinned values so that the reconstruction hashes to the pinned
   config.
@@ -311,7 +320,9 @@ seconds; they need the test database). `make bench-smoke` runs them alone.
   environment from `config.json`: the Anthropic endpoint and its opt-in, the budgets, the roles, a
   dummy key and a new database. It runs up to `/health`, then stops. Any startup refusal, such as the
   vendor breaker, fails it. Outbound HTTPS goes to a loopback proxy that refuses everything and must
-  see nothing, and the created database must be dropped.
+  see nothing, and the created database must be dropped. Like the real suite, it creates a database,
+  so `BIGLAW_TEST_DSN`'s role needs CREATEDB (CI's `postgres` superuser has it). Without it, the
+  test skips and says why.
 
 [`eval/tests/test_bench.py`](../eval/tests/test_bench.py) (in `make eval`) unit-tests the following:
 
@@ -325,6 +336,8 @@ seconds; they need the test database). `make bench-smoke` runs them alone.
 - untracked build files counting as dirty;
 - the yardstick hashes;
 - container cleanup when the container never becomes ready;
+- a SIGTERM during the judge leaving no judge process, the stub judge's child included;
+- cleanup that runs every step through a second signal or a failing step;
 - schema validation of good and bad summaries;
 - provider-error detection (types only, rate limits ignored);
 - compare's deltas, flips and three verdicts.

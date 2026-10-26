@@ -12,6 +12,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -22,6 +24,11 @@ def main(argv=None) -> int:
     p.add_argument("--task", required=True)
     p.add_argument("--judges", nargs="+", required=True)
     a = p.parse_args(argv)
+    hold = Path(os.environ["LAB_ROOT"]) / "stubjudge.hold"  # tests only: hang with a child, as `uv run` holds python
+    if hold.exists():
+        child = subprocess.Popen(["sleep", "300"])
+        hold.write_text(f"{os.getpid()} {child.pid}")
+        time.sleep(300)
     root = Path(os.environ["LAB_ROOT"])
     task = json.loads((root / "tasks" / a.task / "task.json").read_text(encoding="utf-8"))
     run_dir = root / "results" / a.run_id

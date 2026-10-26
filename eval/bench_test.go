@@ -265,7 +265,8 @@ func TestBenchSmokeProviderRefusal(t *testing.T) {
 // real suite gives it (config.json: the Anthropic endpoint, its vendor opt-in, the budgets, the
 // roles), a dummy key and a new database, up to /health, then stops: any startup refusal (PR 63 r1
 // B1: the vendor breaker) fails it. Outbound HTTPS goes to a loopback proxy that refuses everything
-// and must see nothing: startup makes no model call.
+// and must see nothing: startup makes no model call. The suite creates its own database, so the test
+// role needs CREATEDB (CI's postgres superuser has it); without it the test skips and says why.
 func TestBenchPreflight(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 is not installed")
@@ -278,6 +279,9 @@ func TestBenchPreflight(t *testing.T) {
 	if base == "" {
 		storetest.DSN(t) // skips, or fails under BIGLAW_REQUIRE_DB
 		return
+	}
+	if out, err := exec.Command("psql", base, "-XAtc", "SELECT rolcreatedb OR rolsuper FROM pg_roles WHERE rolname = current_user").Output(); err != nil || strings.TrimSpace(string(out)) != "t" {
+		t.Skip("BIGLAW_TEST_DSN's role cannot create databases (CREATEDB): the suite always creates its own, so this test cannot run here")
 	}
 	var connects atomic.Int32
 	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

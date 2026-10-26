@@ -131,13 +131,23 @@ def start_backend(cfg: dict, key: str, out: Path, log, redact, keep: list):
     return db, serve, {"fresh": True, **db.versions(), "image": None if os.environ.get("BIGLAW_DATABASE_URL") else cfg["postgres_image"]}
 
 
+STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+
+
 def stop_all(keep: list, log) -> None:
-    cancel_active(log)
-    for x in reversed(keep):
-        try:
-            x.stop() if isinstance(x, Serve) else x.close()
-        except Exception as e:  # noqa: BLE001 - keep stopping the rest
-            log(f"cleanup: {e}")
+    """Cancel the running task, stop serve, drop the database and remove the container: every step
+    runs whatever the one before raised, and a second Ctrl-C or SIGTERM cannot cut it short (PR 63 r2
+    MEDIUM-2: the signals are ignored until cleanup ends, then restored)."""
+    old = {s: signal.signal(s, signal.SIG_IGN) for s in STOP_SIGNALS}
+    try:
+        for step in [lambda: cancel_active(log)] + [(x.stop if isinstance(x, Serve) else x.close) for x in reversed(keep)]:
+            try:
+                step()
+            except BaseException as e:  # noqa: BLE001 - keep stopping the rest
+                log(f"cleanup: {type(e).__name__}: {e}")
+    finally:
+        for s, h in old.items():
+            signal.signal(s, h)
 
 
 def cmd_run(a) -> int:
