@@ -4,6 +4,7 @@
 package engine
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -202,7 +203,7 @@ func strictDecode(text string, v any) error {
 	d := json.NewDecoder(strings.NewReader(text))
 	d.DisallowUnknownFields()
 	if err := d.Decode(v); err != nil || d.More() {
-		return cmpErr(err, errors.New("more after the object"))
+		return cmp.Or(err, errors.New("more after the object"))
 	}
 	return nil
 }

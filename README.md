@@ -93,11 +93,9 @@ This README is the contract. The design is described in `docs/`:
 
 ## Configuration
 
-Environment variables only. All 19 are declared in `cmd/biglaw/config.go` (20 until PR 3b, whose
-`BIGLAW_MODELS` replaced the three role variables; PR 8 added `BIGLAW_ADMINS`); each is validated by
-the PR that first reads it ("Read from"). `biglaw version --config` prints every value and exits
-nonzero if what this build reads is invalid. `biglaw serve` warns about a variable that is set
-but not read yet, and about any unknown `BIGLAW_*` name (likely a typo).
+Environment variables only. All 18 are declared in `cmd/biglaw/config.go`, each in the PR that
+first reads it. `biglaw version --config` prints every value and exits nonzero if what this build
+reads is invalid. `biglaw serve` warns about any unknown `BIGLAW_*` name (likely a typo).
 
 What may be printed follows one rule, used by `version --config` and by every startup error:
 whatever does not parse into a shape known to be safe is not shown.
@@ -121,25 +119,24 @@ whatever does not parse into a shape known to be safe is not shown.
   disguise an output line), unless it contains `://` (then treated as a URL) or has the
   `user:password@` shape (then not shown).
 
-| Variable | Default | Meaning | Read from |
-|---|---|---|---|
-| `BIGLAW_DATABASE_URL` | — (required) | Postgres DSN: `postgres://user:password@host:5432/db?sslmode=disable`, or libpq `key=value` form. The scheme must be lowercase, and reserved characters in the password percent-encoded (`/`→`%2F`, `?`→`%3F`, `#`→`%23`, `%`→`%25`, `@`→`%40`). An `@` after the host (in the database name or a query value such as `application_name=ops@corp`) is refused too, because it cannot be told apart from a broken password; write `%40`. Anything else is refused with a message that never shows the password. lib/pq defaults to `sslmode=require`. | PR 1 |
-| `BIGLAW_ADDR` | `127.0.0.1:3101` | Listen address. Non-loopback needs `serve --allow-no-auth` (§ Exposure). | PR 1 |
-| `BIGLAW_PUBLIC_URL` | `http://127.0.0.1:3101` | How browsers reach BigLaw, `https://host[:port]` with no path: the redirect URI is `<it>/auth/callback`, https makes the cookies `Secure` and `__Host-`, and its host is the one DNS name served under sign-in. Read only with sign-in, which refuses plain http except on loopback | PR 8 |
-| `BIGLAW_MODEL_URL` | — | OpenAI-compatible API base, ending in its version (`http://localhost:11434/v1`); calls go to `<URL>/chat/completions` and `<URL>/embeddings`. http(s), a plain ASCII host with at least one letter or digit, a port up to 65535, no `@` anywhere (no credentials in the URL; write any other `@` as `%40`). Required when the key or a role is set. | PR 1 |
-| `BIGLAW_MODEL_KEY` | — | API key for that URL, sent as `Authorization: Bearer`; no white space or control characters. `serve` warns if it would go over plain `http`. | PR 2 |
-| `BIGLAW_MODELS` | — | Model id per role, as the endpoint names it: comma-separated `role=id`, roles `lead`, `specialist`, `critic`, `vision`, `embed`, each at most once (e.g. `lead=qwen2.5:14b,critic=glm-4.5-air,embed=nomic-embed-text`). Unset `specialist` or `critic` use the lead's; setting either without the lead is refused. `vision` and `embed` have **no** fallback: with no `embed` role search is lexical only (`/health` says `"search":"lexical"`); `vision` names the model images and scanned pages are sent to; without it they are stored as `needs_transcription` (503 `vision_not_configured`) and never sent to another role's model (§ Vision transcription). An unknown role, a repeated one, an empty id, an id over 200 bytes, or an id holding `://`, `user:password@`, white space, a control or invisible (format) character, `?` `=` `&`, or a key's shape (`sk-`, `sk_`, `AKIA`, `ASIA`, `AIza`, `xox?-`, `gh?_` prefixes, or 24 letters and digits in a row) is a startup error that does not echo the value. A wrong id fails at its first call with 404 → `model_not_configured`; with no lead, chat calls fail with 503 `model_not_configured`. | PR 3 |
-| `BIGLAW_BUDGET_CALLS` | `400` | Model calls per task, lead turns included (at the first bench's $0.012–0.020 a call, 400 calls cost $4.80–8.00, so the default $5 usually binds first; every share holds on both) | PR 4 |
-| `BIGLAW_BUDGET_USD` | `5` | Dollar cap per task | PR 4 |
-| `BIGLAW_LOCAL_WATTS` | — | Power draw of the machine running the model; when set (above 0) every call records watts × duration as watt-hours, for reporting only (never a price). A number from 0 to 100000 | PR 2 |
-| `BIGLAW_PRICES` | built-in | Model rates overriding the built-in table: the JSON itself (a value starting with `{`) or a path to a regular file of at most 1 MiB holding it (§ Model client) | PR 2 |
-| `BIGLAW_COLLAPSE_THRESHOLD` / `_ACTION` | `0.5` / `strict` | Grounding-collapse policy | PR 4 |
-| `BIGLAW_OIDC_ISSUER` | — | Turns sign-in on: the issuer's https URL exactly as its discovery document states it (`https://idp.example.com/realms/biglaw`), no query; plain http only on loopback (§ Sign-in) | PR 8 |
-| `BIGLAW_OIDC_CLIENT_ID` / `_CLIENT_SECRET` | — | The OIDC client, set with the issuer (the secret is optional: a public client uses PKCE alone); no white space | PR 8 |
-| `BIGLAW_ADMINS` | — | Sign-in's admins: comma-separated entries, each a verified email (has an `@`, case-insensitive, matched only when the ID token's `email_verified` is true) or an issuer subject (`sub`, exact). Everyone else who signs in is a member. Refused without sign-in | PR 8 |
-| `BIGLAW_AI_RATE` | — | AI timekeeper hourly rate; unset = non-billable | PR 9 |
-| `ALLOW_ANTHROPIC` | off | Opt in to a direct `anthropic.com` model endpoint (vendor breaker) | PR 1 |
-| `ALLOW_AWS` | off | Opt in to a direct AWS/Bedrock model endpoint (vendor breaker) | PR 1 |
+| Variable | Default | Meaning |
+|---|---|---|
+| `BIGLAW_DATABASE_URL` | — (required) | Postgres DSN: `postgres://user:password@host:5432/db?sslmode=disable`, or libpq `key=value` form. The scheme must be lowercase, and reserved characters in the password percent-encoded (`/`→`%2F`, `?`→`%3F`, `#`→`%23`, `%`→`%25`, `@`→`%40`). An `@` after the host (in the database name or a query value such as `application_name=ops@corp`) is refused too, because it cannot be told apart from a broken password; write `%40`. Anything else is refused with a message that never shows the password. lib/pq defaults to `sslmode=require`. |
+| `BIGLAW_ADDR` | `127.0.0.1:3101` | Listen address. Non-loopback needs `serve --allow-no-auth` (§ Exposure). |
+| `BIGLAW_PUBLIC_URL` | `http://127.0.0.1:3101` | How browsers reach BigLaw, `https://host[:port]` with no path: the redirect URI is `<it>/auth/callback`, https makes the cookies `Secure` and `__Host-`, and its host is the one DNS name served under sign-in. Read only with sign-in, which refuses plain http except on loopback |
+| `BIGLAW_MODEL_URL` | — | OpenAI-compatible API base, ending in its version (`http://localhost:11434/v1`); calls go to `<URL>/chat/completions` and `<URL>/embeddings`. http(s), a plain ASCII host with at least one letter or digit, a port up to 65535, no `@` anywhere (no credentials in the URL; write any other `@` as `%40`). Required when the key or a role is set. |
+| `BIGLAW_MODEL_KEY` | — | API key for that URL, sent as `Authorization: Bearer`; no white space or control characters. `serve` warns if it would go over plain `http`. |
+| `BIGLAW_MODELS` | — | Model id per role, as the endpoint names it: comma-separated `role=id`, roles `lead`, `specialist`, `critic`, `vision`, `embed`, each at most once (e.g. `lead=qwen2.5:14b,critic=glm-4.5-air,embed=nomic-embed-text`). Unset `specialist` or `critic` use the lead's; setting either without the lead is refused. `vision` and `embed` have **no** fallback: with no `embed` role search is lexical only (`/health` says `"search":"lexical"`); `vision` names the model images and scanned pages are sent to; without it they are stored as `needs_transcription` (503 `vision_not_configured`) and never sent to another role's model (§ Vision transcription). An unknown role, a repeated one, an empty id, an id over 200 bytes, or an id holding `://`, `user:password@`, white space, a control or invisible (format) character, `?` `=` `&`, or a key's shape (`sk-`, `sk_`, `AKIA`, `ASIA`, `AIza`, `xox?-`, `gh?_` prefixes, or 24 letters and digits in a row) is a startup error that does not echo the value. A wrong id fails at its first call with 404 → `model_not_configured`; with no lead, chat calls fail with 503 `model_not_configured`. |
+| `BIGLAW_BUDGET_CALLS` | `400` | Model calls per task, lead turns included (at the first bench's $0.012–0.020 a call, 400 calls cost $4.80–8.00, so the default $5 usually binds first; every share holds on both) |
+| `BIGLAW_BUDGET_USD` | `5` | Dollar cap per task |
+| `BIGLAW_LOCAL_WATTS` | — | Power draw of the machine running the model; when set (above 0) every call records watts × duration as watt-hours, for reporting only (never a price). A number from 0 to 100000 |
+| `BIGLAW_PRICES` | built-in | Model rates overriding the built-in table: the JSON itself (a value starting with `{`) or a path to a regular file of at most 1 MiB holding it (§ Model client) |
+| `BIGLAW_COLLAPSE_THRESHOLD` / `_ACTION` | `0.5` / `strict` | Grounding-collapse policy |
+| `BIGLAW_OIDC_ISSUER` | — | Turns sign-in on: the issuer's https URL exactly as its discovery document states it (`https://idp.example.com/realms/biglaw`), no query; plain http only on loopback (§ Sign-in) |
+| `BIGLAW_OIDC_CLIENT_ID` / `_CLIENT_SECRET` | — | The OIDC client, set with the issuer (the secret is optional: a public client uses PKCE alone); no white space |
+| `BIGLAW_ADMINS` | — | Sign-in's admins: comma-separated entries, each a verified email (has an `@`, case-insensitive, matched only when the ID token's `email_verified` is true) or an issuer subject (`sub`, exact). Everyone else who signs in is a member. Refused without sign-in |
+| `ALLOW_ANTHROPIC` | off | Opt in to a direct `anthropic.com` model endpoint (vendor breaker) |
+| `ALLOW_AWS` | off | Opt in to a direct AWS/Bedrock model endpoint (vendor breaker) |
 
 Tests use two more: `BIGLAW_TEST_DSN` and `BIGLAW_REQUIRE_DB` (turns a skipped DB test into a
 failure). `TestEnvVarTablesAgree` fails if this table or `docker-compose.yml` lacks a variable
@@ -150,7 +147,7 @@ of these files names a variable `config.go` does not declare.
 **libpq variables.** lib/pq also reads the standard libpq `PG*` variables (`PGHOST`, `PGPORT`,
 `PGUSER`, `PGPASSWORD`, `PGSSLMODE`, `PGPASSFILE`, …) as defaults for anything the DSN leaves
 out, and refuses to start if one it does not support (such as `PGGSSENCMODE`) is set. They are
-outside the 19-variable surface; `version --config` lists the names it sees, never their values.
+outside the 18-variable surface; `version --config` lists the names it sees, never their values.
 Compose uses `PGPASSWORD` on purpose (§ Run it).
 
 **Vendor breakers.** Ported from v1 `biglaw-go/internal/config/guard.go`: a `BIGLAW_MODEL_URL`
@@ -767,12 +764,11 @@ session 401 `unauthenticated` (§ Sign-in).
 BIGLAW_DATABASE_URL=… BIGLAW_MODEL_URL=https://…/v1 BIGLAW_MODEL_KEY=… BIGLAW_MODELS='lead=<C>' \
   ./biglaw serve                                    # loopback :3101; make ui build first to embed the UI
 python3 eval/run.py drive --api http://127.0.0.1:3101 --model-dir v2-<C> --matter litigation --matter ma-diligence
-python3 eval/run.py compare eval/baselines/v1.json eval/results   # gate A (needs gate 0's baseline)
 python3 eval/lab/run.py --labs-dir ~/harvey-labs --api http://127.0.0.1:3101 --model-dir v2-<C> \
   --task corporate-ma/review-data-room-red-flag-review [--tool-bandit on|off]
 ```
 
-`eval/` (Python 3, stdlib only): `run.py` (`list`, `validate`, `selftest`, `score`, `compare`,
+`eval/` (Python 3, stdlib only): `run.py` (`list`, `validate`, `selftest`, `score`,
 `drive`), `proofrun/` (driver, scorer, mock), `lab/` (the Harvey LAB driver over this API),
 `tests/`. `make eval` runs E0 and E3 (fixtures, scorer tests, scorer self-test; no backend). In
 `go test ./eval`, `TestProofRunsOracle` (E1: an oracle `model.Fake` per matter through the real
@@ -1116,7 +1112,7 @@ in [docs/history.md](docs/history.md#named-tests).
 | Go production lines (physical lines, non-`_test.go`, test-support packages included) | reported, no limit (owner decision 17) | printed by `python3 scripts/loc.py` |
 | Packages under `internal/`, test-support packages excluded | 12 | 9 (`agent`, `analysis`, `api`, `auth`, `docs`, `docs/ooxml`, `engine`, `model`, `store`; `store/storetest`, `engine/figtest` and `auth/authtest` are test support) |
 | Direct Go dependencies | 3 | 2 (`github.com/lib/pq`, `github.com/ledongthuc/pdf`) |
-| Runtime environment variables | 20 | 19 |
+| Runtime environment variables | 20 | 18 |
 | UI runtime dependencies | 2 | 2 (`react`, `react-dom`) |
 | UI source lines (`ui/src` `.ts`/`.tsx`/`.css`; tests, config, `recording.json` and `manage.json` not counted) | 3,200 (raised from 2,400 for Manage, owner decision) | printed by `python3 scripts/loc.py` |
 | Packages without a `_test.go` | 0 | 0 |

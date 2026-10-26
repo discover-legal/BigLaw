@@ -689,7 +689,7 @@ func acceptRule(old, files map[string]string, author string) []string {
 			continue
 		}
 		_ = json.Unmarshal([]byte(old[f]), &was)
-		prev := cmpOr(was.Imported, &Imported{})
+		prev := cmp.Or(was.Imported, &Imported{})
 		switch {
 		case t.Imported.AcceptedBy != "" && t.Imported.AcceptedBy != prev.AcceptedBy: // this save accepts the text it saves
 			if t.Imported.AcceptedBy == author {
@@ -707,13 +707,6 @@ func acceptRule(old, files map[string]string, author string) []string {
 		}
 	}
 	return nil
-}
-
-func cmpOr[T any](p *T, def *T) *T {
-	if p != nil {
-		return p
-	}
-	return def
 }
 
 // secretOrigins refuses a tool or server whose URL is not the origin its named secret is set for:

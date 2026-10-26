@@ -131,7 +131,7 @@ The memo workflow (§ Memo workflow) drives these. What PR 4a ships, all tested 
   work (lead turns, drafting, free tools) < review (the committee) < final): a grant never takes what
   a higher level keeps, so only `finish` spends the reserve + meta. Query embeddings are charged
   in USD and tokens; an unpriced model counts as a call of unknown cost.
-- **Tool bandit** (`Bandit`, `Stats`; `MemStats` here, Postgres in 4b). Per task signature
+- **Tool bandit** (`Bandit`, `Stats`: Postgres in the engine; `MemStats` in tests). Per task signature
   (workflow, practice, jurisdiction prefix, lead model, documents 1–3/4–9/10+), each tool's and each
   subagent model binding's calls, reward, failures and spend; a reliability-aware UCB1 score; an
   untried tool ranks first once. It adds one hint line to the latest tool result before a lead turn

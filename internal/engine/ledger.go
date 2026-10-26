@@ -4,6 +4,7 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -260,7 +261,7 @@ func (e *Engine) usable(ctx context.Context, taskID string) ([]Finding, error) {
 	gs, gerr := load[Gate](ctx, e, taskID, kGate)
 	return slices.DeleteFunc(fs, func(f Finding) bool {
 		return !f.ok() || slices.ContainsFunc(gs, func(g Gate) bool { return g.FindingID == f.FID && g.Decision == "rejected" })
-	}), cmpErr(err, gerr)
+	}), cmp.Or(err, gerr)
 }
 
 // ok is whether a finding may reach a drafter, a read or the memo: its quotes verified (G3) and no
@@ -285,15 +286,6 @@ func hookQuarantined(fs []Finding) string {
 	}
 	return fmt.Sprintf("%d %s quarantined by configurable hooks (%s) and kept out of this memo; %s quotes verified.", n, plural(n, "finding was", "findings were"),
 		strings.Join(parts, ", "), map[bool]string{true: "its", false: "their"}[n == 1])
-}
-
-func cmpErr(errs ...error) error {
-	for _, err := range errs {
-		if err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func nextID(prefix string, n int) string { return prefix + strconv.Itoa(n+1) }

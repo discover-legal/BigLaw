@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 )
@@ -30,11 +29,9 @@ func readRepo(t *testing.T, name string) string {
 	return string(b)
 }
 
-// readmeConfigTable returns variable → "Read from" PR for every row of
-// README § Configuration. A row may name several variables:
-// "`BIGLAW_OIDC_CLIENT_ID` / `_CLIENT_SECRET`" expands each suffix
-// against the first name.
-func readmeConfigTable(t *testing.T) map[string]int {
+// readmeConfigTable returns the variables README § Configuration's table lists. A row may name
+// several: "`BIGLAW_OIDC_CLIENT_ID` / `_CLIENT_SECRET`" expands each suffix against the first name.
+func readmeConfigTable(t *testing.T) map[string]bool {
 	readme := readRepo(t, "README.md")
 	start := strings.Index(readme, "\n## Configuration")
 	if start < 0 {
@@ -44,24 +41,19 @@ func readmeConfigTable(t *testing.T) map[string]int {
 	if end := strings.Index(section, "\n## "); end > 0 {
 		section = section[:end]
 	}
-	rows := map[string]int{}
+	rows := map[string]bool{}
 	for _, line := range strings.Split(section, "\n") {
 		if !strings.HasPrefix(line, "| `") {
 			continue
 		}
-		cells := strings.Split(line, "|")
-		pr, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(cells[len(cells)-2]), "PR")))
-		if err != nil {
-			t.Fatalf("README row %q: last column is not \"PR n\"", line)
-		}
-		names := strings.Split(strings.ReplaceAll(cells[1], "`", ""), "/")
+		names := strings.Split(strings.ReplaceAll(strings.Split(line, "|")[1], "`", ""), "/")
 		first := strings.TrimSpace(names[0])
-		rows[first] = pr
+		rows[first] = true
 		for _, suffix := range names[1:] {
 			suffix = strings.TrimSpace(suffix)
 			parts := strings.Split(first, "_")
 			keep := len(parts) - strings.Count(suffix, "_")
-			rows[strings.Join(parts[:keep], "_")+suffix] = pr
+			rows[strings.Join(parts[:keep], "_")+suffix] = true
 		}
 	}
 	return rows
@@ -70,14 +62,14 @@ func readmeConfigTable(t *testing.T) map[string]int {
 var varName = regexp.MustCompile(`\b((?:BIGLAW|ALLOW)_[A-Z0-9_]+)\b`)
 
 func TestEnvVarTablesAgree(t *testing.T) {
-	declared := map[string]int{}
+	declared := map[string]bool{}
 	for _, e := range envVars {
-		declared[e.name] = e.pr
+		declared[e.name] = true
 	}
 	readme := readmeConfigTable(t)
-	for name, pr := range declared {
-		if got, ok := readme[name]; !ok || got != pr {
-			t.Errorf("README § Configuration: %s has PR %d (present %v); config.go says PR %d", name, got, ok, pr)
+	for name := range declared {
+		if !readme[name] {
+			t.Errorf("README § Configuration does not list %s, which config.go declares", name)
 		}
 	}
 	for name := range readme {

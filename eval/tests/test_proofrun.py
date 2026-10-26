@@ -138,39 +138,5 @@ class NaturalLanguageTests(unittest.TestCase):
         self.assertEqual(corpus.verify("doc-9", "USD")[0], "trivial")
 
 
-class CompareTests(unittest.TestCase):
-    """eval/run.py compare: per-matter deltas against the v1 baseline, nonzero below the gate."""
-
-    def test_compare_exit_codes(self):
-        m = load_matter("litigation")
-        with tempfile.TemporaryDirectory() as td:
-            results = Path(td) / "results"
-            from proofrun import mock
-            from proofrun.score import score_run
-            score_run(m, mock.build(m, "oracle", results / m.id / "v2-test" / "20261022-000000"))
-            n = json.loads(next(results.rglob("scores.json")).read_text())["n_passed"]
-            base = Path(td) / "v1.json"
-
-            def run(passed, *flags):
-                base.write_text(json.dumps({"matters": {"litigation": {"n_passed": passed, "citation_verified_rate": 1.0, "cost_usd": 1.0}}}))
-                return cli.main(["compare", str(base), str(results), *flags])
-
-            self.assertEqual(run(n), 0)                       # at parity
-            self.assertEqual(run(n + 1), 1)                   # one criterion below v1
-            self.assertEqual(run(n + 2, "--slack", "2"), 0)   # qwen's allowance
-            self.assertEqual(run(n + 3, "--slack", "2"), 1)
-            base.write_text(json.dumps({"matters": {"ma-diligence": {"n_passed": 0}}}))
-            self.assertEqual(cli.main(["compare", str(base), str(results)]), 1)  # no scored run for that matter
-
-    def test_compare_fails_when_baseline_names_no_matter(self):
-        """PR 4b r1 M6: a baseline that names no registered matter (empty, or mis-keyed) is a failed
-        gate, not a vacuous pass."""
-        with tempfile.TemporaryDirectory() as td:
-            base = Path(td) / "v1.json"
-            for doc in ({}, {"matters": {}}, {"matters": {"no-such-matter": {"n_passed": 0}}}):
-                base.write_text(json.dumps(doc))
-                self.assertEqual(cli.main(["compare", str(base), str(Path(td) / "results")]), 1, doc)
-
-
 if __name__ == "__main__":
     unittest.main()

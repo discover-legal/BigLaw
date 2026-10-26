@@ -9053,100 +9053,77 @@
   {
    "name": "BIGLAW_DATABASE_URL",
    "default": "",
-   "pr": 1,
    "secret": true
   },
   {
    "name": "BIGLAW_ADDR",
-   "default": "127.0.0.1:3101",
-   "pr": 1
+   "default": "127.0.0.1:3101"
   },
   {
    "name": "BIGLAW_PUBLIC_URL",
-   "default": "http://127.0.0.1:3101",
-   "pr": 8
+   "default": "http://127.0.0.1:3101"
   },
   {
    "name": "BIGLAW_MODEL_URL",
-   "default": "",
-   "pr": 1
+   "default": ""
   },
   {
    "name": "BIGLAW_MODEL_KEY",
    "default": "",
-   "pr": 2,
    "secret": true
   },
   {
    "name": "BIGLAW_MODELS",
-   "default": "",
-   "pr": 3
+   "default": ""
   },
   {
    "name": "BIGLAW_BUDGET_CALLS",
-   "default": "400",
-   "pr": 4
+   "default": "400"
   },
   {
    "name": "BIGLAW_BUDGET_USD",
-   "default": "5",
-   "pr": 4
+   "default": "5"
   },
   {
    "name": "BIGLAW_LOCAL_WATTS",
-   "default": "",
-   "pr": 2
+   "default": ""
   },
   {
    "name": "BIGLAW_PRICES",
-   "default": "",
-   "pr": 2
+   "default": ""
   },
   {
    "name": "BIGLAW_COLLAPSE_THRESHOLD",
-   "default": "0.5",
-   "pr": 4
+   "default": "0.5"
   },
   {
    "name": "BIGLAW_COLLAPSE_ACTION",
-   "default": "strict",
-   "pr": 4
+   "default": "strict"
   },
   {
    "name": "BIGLAW_OIDC_ISSUER",
-   "default": "",
-   "pr": 8
+   "default": ""
   },
   {
    "name": "BIGLAW_OIDC_CLIENT_ID",
-   "default": "",
-   "pr": 8
+   "default": ""
   },
   {
    "name": "BIGLAW_OIDC_CLIENT_SECRET",
    "default": "",
-   "pr": 8,
    "secret": true
   },
   {
    "name": "BIGLAW_ADMINS",
-   "default": "",
-   "pr": 8
-  },
-  {
-   "name": "BIGLAW_AI_RATE",
-   "default": "",
-   "pr": 9
+   "default": ""
   },
   {
    "name": "ALLOW_ANTHROPIC",
-   "default": "",
-   "pr": 1
+   "default": ""
   },
   {
    "name": "ALLOW_AWS",
-   "default": "",
-   "pr": 1
+   "default": ""
   }
  ]
 }

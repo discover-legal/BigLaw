@@ -21,38 +21,33 @@ import (
 	"github.com/discover-legal/BigLaw/internal/store"
 )
 
-// builtPR is the last build PR whose variables this build reads.
-const builtPR = 8
-
 // envVar is one runtime environment variable; envVars is the complete surface (README § Configuration,
-// loc.py caps it at 20; 19 since PR 8's BIGLAW_ADMINS). A variable is validated by the PR that first reads it (pr), warned about before.
+// loc.py caps it at 20). A variable is declared in the PR that first reads it.
 type envVar struct {
 	name, def string
 	secret    bool // never printed by `biglaw version --config`
 	url       bool // printed only as an http(s) URL with its credentials masked
-	pr        int  // the build PR that first reads it
 }
 
 var envVars = []envVar{
-	{name: "BIGLAW_DATABASE_URL", secret: true, pr: 1}, // password inside; printed redacted
-	{name: "BIGLAW_ADDR", def: "127.0.0.1:3101", pr: 1},
-	{name: "BIGLAW_PUBLIC_URL", def: "http://127.0.0.1:3101", url: true, pr: 8},
-	{name: "BIGLAW_MODEL_URL", url: true, pr: 1}, // the vendor breaker (PR 1) and the model client (PR 2)
-	{name: "BIGLAW_MODEL_KEY", secret: true, pr: 2},
-	{name: "BIGLAW_MODELS", pr: 3}, // role=model id pairs: lead, specialist, critic, vision, embed
-	{name: "BIGLAW_BUDGET_CALLS", def: "400", pr: 4},
-	{name: "BIGLAW_BUDGET_USD", def: "5", pr: 4},
-	{name: "BIGLAW_LOCAL_WATTS", pr: 2},
-	{name: "BIGLAW_PRICES", pr: 2},
-	{name: "BIGLAW_COLLAPSE_THRESHOLD", def: "0.5", pr: 4},
-	{name: "BIGLAW_COLLAPSE_ACTION", def: "strict", pr: 4},
-	{name: "BIGLAW_OIDC_ISSUER", url: true, pr: 8}, // the issuer URL exactly as its discovery document states it
-	{name: "BIGLAW_OIDC_CLIENT_ID", pr: 8},
-	{name: "BIGLAW_OIDC_CLIENT_SECRET", secret: true, pr: 8},
-	{name: "BIGLAW_ADMINS", pr: 8}, // comma-separated verified emails or subs: sign-in's admins
-	{name: "BIGLAW_AI_RATE", pr: 9},
-	{name: "ALLOW_ANTHROPIC", pr: 1},
-	{name: "ALLOW_AWS", pr: 1},
+	{name: "BIGLAW_DATABASE_URL", secret: true}, // password inside; printed redacted
+	{name: "BIGLAW_ADDR", def: "127.0.0.1:3101"},
+	{name: "BIGLAW_PUBLIC_URL", def: "http://127.0.0.1:3101", url: true},
+	{name: "BIGLAW_MODEL_URL", url: true}, // the vendor breaker (PR 1) and the model client (PR 2)
+	{name: "BIGLAW_MODEL_KEY", secret: true},
+	{name: "BIGLAW_MODELS"}, // role=model id pairs: lead, specialist, critic, vision, embed
+	{name: "BIGLAW_BUDGET_CALLS", def: "400"},
+	{name: "BIGLAW_BUDGET_USD", def: "5"},
+	{name: "BIGLAW_LOCAL_WATTS"},
+	{name: "BIGLAW_PRICES"},
+	{name: "BIGLAW_COLLAPSE_THRESHOLD", def: "0.5"},
+	{name: "BIGLAW_COLLAPSE_ACTION", def: "strict"},
+	{name: "BIGLAW_OIDC_ISSUER", url: true}, // the issuer URL exactly as its discovery document states it
+	{name: "BIGLAW_OIDC_CLIENT_ID"},
+	{name: "BIGLAW_OIDC_CLIENT_SECRET", secret: true},
+	{name: "BIGLAW_ADMINS"}, // comma-separated verified emails or subs: sign-in's admins
+	{name: "ALLOW_ANTHROPIC"},
+	{name: "ALLOW_AWS"},
 }
 
 // Config is the configuration this build reads. Variables first read by a
@@ -306,17 +301,6 @@ func UnknownVars(environ []string) []string {
 	return out
 }
 
-// NotYetRead lists declared variables that are set but first read by a later PR (warned about).
-func NotYetRead(getenv func(string) string) []string {
-	var out []string
-	for _, e := range envVars {
-		if e.pr > builtPR && strings.TrimSpace(getenv(e.name)) != "" {
-			out = append(out, e.name)
-		}
-	}
-	return out
-}
-
 // Describe renders the configuration for `biglaw version --config`: every value through shown, and
 // the PG* variables lib/pq also reads by name only.
 func Describe(getenv func(string) string, environ []string) string {
@@ -331,9 +315,6 @@ func Describe(getenv func(string) string, environ []string) string {
 			val, src = "(unset)", ""
 		} else {
 			val = shown(e.name, val)
-		}
-		if e.pr > builtPR {
-			src = strings.TrimPrefix(src+", ", ", ") + "read from PR " + strconv.Itoa(e.pr)
 		}
 		fmt.Fprintf(&b, "%-26s %s", e.name, val)
 		if src != "" {

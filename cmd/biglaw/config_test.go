@@ -34,8 +34,8 @@ func TestConfigDefaults(t *testing.T) {
 	if c.Addr != "127.0.0.1:3101" || c.ModelURL != "" || c.AllowAnthropic || c.AllowAWS {
 		t.Fatalf("defaults differ from README: %+v", c)
 	}
-	if len(envVars) != 19 {
-		t.Fatalf("%d runtime variables, README promises 19 (BIGLAW_MODELS replaced three; PR 8 added BIGLAW_ADMINS)", len(envVars))
+	if len(envVars) != 18 {
+		t.Fatalf("%d runtime variables, README promises 18 (BIGLAW_MODELS replaced three; PR 8 added BIGLAW_ADMINS)", len(envVars))
 	}
 	// Variables read by later PRs still show their README defaults.
 	out := Describe(env("BIGLAW_DATABASE_URL", dsn), nil)
@@ -96,10 +96,6 @@ func TestConfigRejectsBadValues(t *testing.T) {
 		if _, err := Load(env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_MODEL_URL", u)); err != nil {
 			t.Errorf("BIGLAW_MODEL_URL=%q refused: %v", u, err)
 		}
-	}
-	// Variables a later PR reads are not validated yet (that PR validates them).
-	if _, err := Load(env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_AI_RATE", "abc")); err != nil {
-		t.Errorf("a variable this build does not read was validated: %v", err)
 	}
 }
 
@@ -275,14 +271,10 @@ func TestNonLoopbackRefusedWithoutAuth(t *testing.T) {
 	}
 }
 
-func TestUnknownAndNotYetReadVars(t *testing.T) {
+func TestUnknownVars(t *testing.T) {
 	got := UnknownVars([]string{"BIGLAW_DATABASE_URI=x", "BIGLAW_ADDR=y", "PATH=/bin", "BIGLAW_TEST_DSN=z", "BIGLAW_MODEL_LEAD=q"})
 	if strings.Join(got, ",") != "BIGLAW_DATABASE_URI,BIGLAW_MODEL_LEAD" {
 		t.Fatalf("UnknownVars = %v", got)
-	}
-	got = NotYetRead(env("BIGLAW_ADDR", "x", "BIGLAW_MODEL_KEY", "k", "BIGLAW_LOCAL_WATTS", "9", "BIGLAW_BUDGET_CALLS", "5", "BIGLAW_AI_RATE", "100", "ALLOW_AWS", "1"))
-	if strings.Join(got, ",") != "BIGLAW_AI_RATE" {
-		t.Fatalf("NotYetRead = %v", got)
 	}
 }
 
