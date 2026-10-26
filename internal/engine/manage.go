@@ -264,16 +264,6 @@ func catalog(sp *Specs, rows map[string]Override, use map[string]ItemUsage) []It
 // sectionOf maps an item kind to its catalogue section.
 var sectionOf = map[string]string{"prompt": "agents", "agent": "agents", "pass": "agents", "tool": "tools", "server": "tools", "pack": "packs", "skill": "skills", "hook": "hooks", "rule": "hooks"}
 
-// goCallers are the engine's own calls of a tool or subagent (rt.Invoke in Go, and the Go code a
-// prompt or pack feeds), shown as "where it is used" beside the agents whose allowed lists name it.
-var goCallers = map[string][]string{
-	"verify_quote": {"Go: admit (every quote's paraphrase judge)"}, "read_figures": {"Go: admission and drafted sections (figures.go)"},
-	"judge_figures": {"Go: join_discrepancies, finish (judge.go)"}, "extract_facts": {"sweep"}, "analyze_issue": {"cover"}, "draft_section": {"cover"},
-	"prosecute": {"committee"}, "reproduce": {"committee"}, "audit_gaps": {"committee"}, "committee": {"Go: finish, a stopped run's review"},
-	"cover": {"Go: finish, a stopped run"}, "finish": {"Go: a stopped run's forced finish"}, "meta": {"Go: finish (the process note)"},
-	"section_check": {"Go: check_deviation's requirement check"}, "figure_context": {}, "exact_calc": {},
-}
-
 func describeItem(sp *Specs, id string, row Override, use map[string]ItemUsage) Item {
 	kind, name, _ := strings.Cut(id, ".")
 	it := Item{ID: id, Kind: kind, Section: sectionOf[kind], Name: name, Editable: kind != "hook", Version: sp.versions[id], Latest: row.Version,
@@ -292,7 +282,7 @@ func describeItem(sp *Specs, id string, row Override, use map[string]ItemUsage) 
 				by = append(by, n)
 			}
 		}
-		return append(by, goCallers[tool]...)
+		return append(by, goCallers(tool)...)
 	}
 	if u, ok := use[cmpStr(id == "prompt.lead", "lead", name)]; ok {
 		it.Usage = &u
@@ -307,7 +297,7 @@ func describeItem(sp *Specs, id string, row Override, use map[string]ItemUsage) 
 		if name == "lead" {
 			it.Uses = append(it.Uses, leadVisible(sp)...)
 		}
-		it.UsedBy = append(it.UsedBy, goCallers[name]...)
+		it.UsedBy = append(it.UsedBy, goCallers(name)...)
 	case "agent", "pass", "tool":
 		s := sp.Spec(name)
 		it.Summary, it.Uses, it.UsedBy = firstSentence(s.Description), append(it.Uses, s.Allowed...), callers(name)
