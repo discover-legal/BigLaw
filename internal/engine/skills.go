@@ -82,14 +82,5 @@ func (e *Engine) skillTool(sp *Specs) agent.Tool {
 
 // skillCandidates is the Limitations line for skills the run read that no named lawyer has reviewed.
 func skillCandidates(used []SkillUse) string {
-	var names []string
-	for _, u := range used {
-		if u.Status != "reviewed" {
-			names = append(names, u.Name)
-		}
-	}
-	if len(names) == 0 {
-		return ""
-	}
-	return "This deliverable used candidate skills (" + strings.Join(names, ", ") + ") that no named lawyer has reviewed yet."
+	return candidateLine("skills", used, func(u SkillUse) (string, string) { return u.Name, u.Status })
 }

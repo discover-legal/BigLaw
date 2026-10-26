@@ -62,16 +62,22 @@ func checklistOf(ps []Pack) []string {
 	return out
 }
 
-// candidates is the Limitations line for packs no lawyer has reviewed.
-func candidates(ps []Pack) string {
+// candidateLine is the Limitations line for the guidance a deliverable used (packs, skills) that no
+// named lawyer has reviewed: what it is, and each item's name and status; "" when all are reviewed.
+func candidateLine[T any](what string, xs []T, item func(T) (name, status string)) string {
 	var names []string
-	for _, p := range ps {
-		if p.Status != "reviewed" {
-			names = append(names, p.Code)
+	for _, x := range xs {
+		if name, status := item(x); status != "reviewed" {
+			names = append(names, name)
 		}
 	}
 	if len(names) == 0 {
 		return ""
 	}
-	return "This deliverable used candidate practice or jurisdiction packs (" + strings.Join(names, ", ") + ") that no named lawyer has reviewed yet."
+	return "This deliverable used candidate " + what + " (" + strings.Join(names, ", ") + ") that no named lawyer has reviewed yet."
+}
+
+// candidates is the Limitations line for packs no lawyer has reviewed.
+func candidates(ps []Pack) string {
+	return candidateLine("practice or jurisdiction packs", ps, func(p Pack) (string, string) { return p.Code, p.Status })
 }
