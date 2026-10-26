@@ -7,7 +7,10 @@ import (
 	"maps"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
+
+	"github.com/discover-legal/BigLaw/internal/analysis"
 )
 
 // TestGoContractReproducesTheLists pins every list of what Go needs from a tool name as it was
@@ -85,4 +88,29 @@ func TestGoContractReproducesTheLists(t *testing.T) {
 		"section_check": "Go calls it (Go: check_deviation's requirement check)", "figure_context": "the figure reader calls it", "exact_calc": "the figure reader calls it",
 	})
 	eq("leadVisible(builtin)", leadVisible(builtinSpecs), MemoVisible)
+}
+
+// TestWrappedToolsDeclareChecks keeps goContract's checks honest: every tool Go wraps (hooked's
+// subagents, and the numbers and join_discrepancies tools runtime puts behind sheets and aliasJoin)
+// declares at least one, each a non-empty line, and only finish (its lint) declares checks without
+// being wrapped.
+func TestWrappedToolsDeclareChecks(t *testing.T) {
+	an := analysis.Tools(nil)
+	wrapped := append(named(hookedSub), an[0].Spec().Name, an[1].Spec().Name) // runtime: sheets{an[0]}, aliasJoin{an[1]}
+	if !slices.Contains(wrapped, "numbers") || !slices.Contains(wrapped, "join_discrepancies") {
+		t.Fatalf("runtime's wrapped analysis tools moved: %v", wrapped)
+	}
+	for _, c := range goContract {
+		if slices.Contains(wrapped, c.name) != (len(c.checks) > 0) && c.name != "finish" {
+			t.Errorf("%s: wrapped %v, %d checks", c.name, slices.Contains(wrapped, c.name), len(c.checks))
+		}
+		for _, l := range c.checks {
+			if strings.TrimSpace(l) == "" || !strings.HasSuffix(l, ".") {
+				t.Errorf("%s: check %q is not a sentence", c.name, l)
+			}
+		}
+	}
+	if len(goChecks("finish")) == 0 {
+		t.Error("finish declares no checks (its lint)")
+	}
 }

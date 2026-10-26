@@ -291,13 +291,24 @@ func drive(t *testing.T, mt matter, scripts func(matter, map[string]string) map[
 	if err != nil {
 		t.Fatal(err)
 	}
-	var v engine.TaskView
-	for range 400 {
-		if v, _ = e.Get(ctx, task.ID); v.Status != "queued" && v.Status != "running" {
-			break
+	settle := func() engine.TaskView { // waits for the run to stop or pause: a run still going at the limit fails the test, never asserted on half done
+		t.Helper()
+		limit := time.Now().Add(2 * time.Minute)
+		for {
+			v, err := e.Get(ctx, task.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if v.Status != "queued" && v.Status != "running" {
+				return v
+			}
+			if time.Now().After(limit) {
+				t.Fatalf("%s: the run is still %s after 2 minutes", mt.Slug, v.Status)
+			}
+			time.Sleep(20 * time.Millisecond)
 		}
-		time.Sleep(20 * time.Millisecond)
 	}
+	v := settle()
 	if ss, _ := e.Steps(ctx, task.ID, 0); v.Status == "failed" {
 		for _, s := range ss {
 			if s.Tool == "finish" {
@@ -312,14 +323,10 @@ func drive(t *testing.T, mt matter, scripts func(matter, map[string]string) map[
 		}
 		g := v.PendingGates[0]
 		gates = append(gates, g.Kind+":"+cmp.Or(g.FindingID, g.GateID))
-		v, _ = e.Decide(ctx, task.ID, g.GateID, true, "", engine.Person{ID: "lawyer", Name: "Lawyer"})
-		for range 400 {
-			if v.Status != "queued" && v.Status != "running" {
-				break
-			}
-			time.Sleep(20 * time.Millisecond)
-			v, _ = e.Get(ctx, task.ID)
+		if _, err := e.Decide(ctx, task.ID, g.GateID, true, "", engine.Person{ID: "lawyer", Name: "Lawyer"}); err != nil {
+			t.Fatal(err)
 		}
+		v = settle()
 	}
 	dir, err := os.MkdirTemp(runsDir, mt.Slug+"-") // shared: it outlives the test that drove it (sharedRun)
 	if err != nil {

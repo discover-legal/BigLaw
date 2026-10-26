@@ -24,7 +24,7 @@ PostgreSQL database. Licensed Apache-2.0 (`LICENSE`, `NOTICE`).
 | Agent runtime | `internal/agent/` (`tool.go`, `registry.go`, `schema.go`, `loop.go`, `budget.go`, `policy.go`, `bandit.go`) | The `Tool` interface and its single registry (definitions frozen at registration), JSON-schema validation of every tool input and output, one bounded loop for the lead and its subagents, the budget ledger, and the tool bandit (§ Agent runtime). The memo workflow drives it (below); a step log makes it resumable |
 | Engine | `internal/engine/` (+ `specs/`, `packs/`; migrations `0005_runs.sql`, `0006_figure_reads.sql`, `0007_figure_reads_scope.sql`) | The memo workflow: the lead agent and its 12 tools, the ledger, the evidence subagents with Go-side quote verification, the figure reader, the sweep, the three-critic committee, the policy, `finish` (lint, coverage, render), the human gates, grounding collapse, and durable runs (step log, lease and heartbeat, resume) (§ Memo workflow) |
 | API | `internal/api/` (+ `dist/`, the embedded UI) | The REST API (tasks, steps, SSE events, gates, cancel, cost, clients, Manage: `manage.go`) over the engine and the document routes, and the web UI built into the binary (§ Memo workflow, § Manage) |
-| Manage | `internal/engine/specset.go`, `manage.go`, `manage_validate.go`, `diff.go`, `hooks.go`, `skills.go`, `custom.go`, `remote.go`, `hookrules.go` (+ `skills/`, `specs/use_skill.json`; migrations `0008_overrides.sql`, `0009_custom_tools.sql`, `0010_secret_origin.sql`), `internal/api/manage.go`, `ui/src/screens/Manage.tsx` | The catalogue of every agent, tool, pack, skill and hook a run uses, admins' versioned overrides in Postgres (strictly validated, compatibility-checked against what Go reads and writes), each task's snapshot of them, history, diffs, revert and a patch/zip export; skills and `use_skill`; admins' own subagents and MCP/HTTP tools with SSRF-checked calls and server-side secrets, a metered Test call, and configurable hooks around calls, findings and finish (§ Manage) |
+| Manage | `internal/engine/specset.go`, `manage.go`, `manage_validate.go`, `diff.go`, `skills.go`, `custom.go`, `remote.go`, `hookrules.go` (+ `skills/`, `specs/use_skill.json`; migrations `0008_overrides.sql`, `0009_custom_tools.sql`, `0010_secret_origin.sql`), `internal/api/manage.go`, `ui/src/screens/Manage.tsx` | The catalogue of every agent, tool, pack, skill and hook a run uses, admins' versioned overrides in Postgres (strictly validated, compatibility-checked against what Go reads and writes), each task's snapshot of them, history, diffs, revert and a patch/zip export; skills and `use_skill`; admins' own subagents and MCP/HTTP tools with SSRF-checked calls and server-side secrets, a metered Test call, and configurable hooks around calls, findings and finish (§ Manage) |
 | Memo tools | `internal/analysis/` (+ `belo.json`, `specs/*.json`), `internal/docs/register.go` (+ `specs/*.json`) | Deterministic tools over verified findings: `numbers` (exact `calc`, figure handles, key-figures table), `join_discrepancies`, the coverage checks `finish{op:"check"}` will run, the value normalisers and BELO-lite; and the `retrieve` / `verify_quote` adapters over documents (§ Agent runtime) |
 | `.docx` reader | `internal/docs/ooxml/` | Opens a `.docx`'s text parts only (body, footnotes, endnotes; 128 MiB decompression cap) and reads its visible text in one linear XML pass. The writer, the XML escapers, the part-preserving re-zip and tracked-change parse/apply are planned (PR 3d) |
 | Evaluation | `eval/` (`run.py`, `proofrun/`, `lab/`, `tests/`, `tasks/`, `e4/embeddings.json`) | The five synthetic proof-run matters (documents + answer keys), copied from `feat/proof-runs-multi-practice`, with their driver, scorer and the v1 comparison (`run.py`), the Harvey LAB driver (`lab/run.py`), and the Go gates E1/E2 that run them through the engine on a scripted model (§ Memo workflow). `eval/e4/embeddings.json` is E4's embeddings tape: today the **self-test** tape of a hash embedder, not a real model's (§ Documents, gate E4) |
@@ -768,7 +768,7 @@ lawyer, `findingGates`: 4, scale-limited figures), both ratchets),
 (E2: every matter fails with a grounding alert) and `TestLabRunnerSmoke` (the LAB driver against an
 `httptest` server) run with no model.
 
-## Manage: agents, tools, packs, skills and hooks (`internal/engine` specset/manage/skills/hooks, `internal/api/manage.go`)
+## Manage: agents, tools, packs, skills and hooks (`internal/engine` specset/manage/skills/hookrules, `internal/api/manage.go`)
 
 Everything a run uses is a file built into the binary (go:embed), and an admin can see and change
 each one in Manage (`#/manage`) or the routes above, with no rebuild:
@@ -779,9 +779,9 @@ each one in Manage (`#/manage`) or the routes above, with no rebuild:
   `ledger` specs). **Tools**: the typed tool specs of `internal/analysis/specs`, `internal/docs/specs` and
   `internal/engine/specs/{exact_calc,figure_context,use_skill}.json`; their code stays Go.
   **Packs**: jurisdiction and practice guidance (§ Memo workflow). **Skills**: below. **Hooks**:
-  configurable hooks (below), and the Go around some tools and subagents (`hooked`, `sheets`, `aliasJoin` in `register.go`), view only: what
-  each does, the tool it wraps and its source, cut with `go/parser` from the engine files embedded
-  (`hooks.go`). Each item shows its contents, built-in or override (its version), what it calls and
+  configurable hooks (below). The Go around some tools and subagents (`hooked`, `sheets`, `aliasJoin`
+  in `register.go`, `finish`'s lint) is not an item: its checks, in plain words from the tool's
+  `goContract` row, are listed on that tool's own page, view only. Each item shows its contents, built-in or override (its version), what it calls and
   who calls it (agents' allowed lists, the lead's list, and the Go callers), and its recent usage: lead
   steps, model calls and USD over the last 20 tasks (`task_steps`; a fan-out's own calls count under it).
 - **Versions and snapshot** (`spec_versions`, migration 0008): every save, revert and skill deletion

@@ -53,21 +53,20 @@ func (e *InvalidError) Unwrap() error { return ErrInvalid }
 
 // Item is one entry of the catalogue.
 type Item struct {
-	ID       string     `json:"id"`      // kind.name: agent.read_figures, prompt.lead, pass.sweep, tool.numbers, pack.jurisdiction.us, skill.deadlines, hook.draft_section
-	Section  string     `json:"section"` // agents, tools, packs, skills or hooks
-	Kind     string     `json:"kind"`    // prompt, subagent, pass, tool, pack, skill or hook
-	Name     string     `json:"name"`
-	Summary  string     `json:"summary"`
-	Editable bool       `json:"editable"`
-	Builtin  bool       `json:"builtin"` // it ships in the binary (a skill an admin created does not)
-	Version  int        `json:"version"` // the version new tasks run on (0: the built-in)
-	Latest   int        `json:"latest"`  // the item's latest version row (a save's base)
-	Deleted  bool       `json:"deleted"` // a deleted skill (its tombstone is the latest version)
-	Status   string     `json:"status,omitempty"`
-	Files    []string   `json:"files"`  // repo paths
-	Uses     []string   `json:"uses"`   // the tools an agent may call, a skill's tools, the agent a hook wraps
-	UsedBy   []string   `json:"usedBy"` // who calls it ("Go: …" for engine code)
-	Usage    *ItemUsage `json:"usage"`  // recent tasks' steps (nil: none)
+	ID      string     `json:"id"`      // kind.name: agent.read_figures, prompt.lead, pass.sweep, tool.numbers, pack.jurisdiction.us, skill.deadlines, rule.privileged
+	Section string     `json:"section"` // agents, tools, packs, skills or hooks
+	Kind    string     `json:"kind"`    // prompt, subagent, pass, tool, pack, skill or rule
+	Name    string     `json:"name"`
+	Summary string     `json:"summary"`
+	Builtin bool       `json:"builtin"` // it ships in the binary (a skill an admin created does not)
+	Version int        `json:"version"` // the version new tasks run on (0: the built-in)
+	Latest  int        `json:"latest"`  // the item's latest version row (a save's base)
+	Deleted bool       `json:"deleted"` // a deleted skill (its tombstone is the latest version)
+	Status  string     `json:"status,omitempty"`
+	Files   []string   `json:"files"`  // repo paths
+	Uses    []string   `json:"uses"`   // the tools an agent may call, a skill's tools, what a rule matches or asks
+	UsedBy  []string   `json:"usedBy"` // who calls it ("Go: …" for engine code)
+	Usage   *ItemUsage `json:"usage"`  // recent tasks' steps (nil: none)
 }
 
 // ItemUsage is an item's lead steps over the most recent usageTasks tasks (task_steps): a call a
@@ -86,9 +85,9 @@ const usageTasks = 20
 type ItemDetail struct {
 	Item
 	Content  map[string]string `json:"content"`
-	Original map[string]string `json:"original"` // the built-in files ({} for a skill an admin created)
-	Hook     *Hook             `json:"hook,omitempty"`
-	Callers  []string          `json:"callers"` // tools a skill's tools list may name (what use_skill's callers may call)
+	Original map[string]string `json:"original"`         // the built-in files ({} for a skill an admin created)
+	Checks   []string          `json:"checks,omitempty"` // what Go checks around a tool or subagent (goContract's rows), built in
+	Callers  []string          `json:"callers"`          // tools a skill's tools list may name (what use_skill's callers may call)
 }
 
 // Version is one version of an item: a save, a revert (restored: the version it restored, 0 the
@@ -248,9 +247,6 @@ func catalog(sp *Specs, rows map[string]Override, use map[string]ItemUsage) []It
 	for id := range rows {
 		ids[id] = true
 	}
-	for _, h := range hooks {
-		ids["hook."+h.Name] = true
-	}
 	delete(ids, "")
 	var out []Item
 	for _, id := range slices.Sorted(maps.Keys(ids)) {
@@ -262,13 +258,13 @@ func catalog(sp *Specs, rows map[string]Override, use map[string]ItemUsage) []It
 }
 
 // sectionOf maps an item kind to its catalogue section.
-var sectionOf = map[string]string{"prompt": "agents", "agent": "agents", "pass": "agents", "tool": "tools", "server": "tools", "pack": "packs", "skill": "skills", "hook": "hooks", "rule": "hooks"}
+var sectionOf = map[string]string{"prompt": "agents", "agent": "agents", "pass": "agents", "tool": "tools", "server": "tools", "pack": "packs", "skill": "skills", "rule": "hooks"}
 
 func describeItem(sp *Specs, id string, row Override, use map[string]ItemUsage) Item {
 	kind, name, _ := strings.Cut(id, ".")
-	it := Item{ID: id, Kind: kind, Section: sectionOf[kind], Name: name, Editable: kind != "hook", Version: sp.versions[id], Latest: row.Version,
+	it := Item{ID: id, Kind: kind, Section: sectionOf[kind], Name: name, Version: sp.versions[id], Latest: row.Version,
 		Files: itemFiles(sp.files, id), Uses: []string{}, UsedBy: []string{}}
-	it.Builtin = len(itemFiles(builtin, id)) > 0 || kind == "hook"
+	it.Builtin = len(itemFiles(builtin, id)) > 0
 	if kind == "agent" {
 		it.Kind = "subagent"
 	}
@@ -335,9 +331,6 @@ func describeItem(sp *Specs, id string, row Override, use map[string]ItemUsage) 
 			it.Deleted, it.Summary = true, deletedSummary
 		}
 		it.UsedBy = callers("use_skill")
-	case "hook":
-		h := hookNamed(name)
-		it.Summary, it.Uses, it.UsedBy = h.What, []string{h.Wraps}, callers(h.Wraps)
 	case "rule":
 		it.Kind = "configurable hook"
 		if r, ok := sp.hookRules[name]; ok {
@@ -418,9 +411,8 @@ func (e *Engine) ItemDetail(ctx context.Context, id string) (ItemDetail, error) 
 // detail is it with its contents in sp.
 func detail(sp *Specs, it Item) ItemDetail {
 	d := ItemDetail{Item: it, Content: fileMap(sp.files, it.ID), Original: fileMap(builtin, it.ID), Callers: skillCallable(sp)}
-	if it.Kind == "hook" {
-		h := hookNamed(it.Name)
-		d.Hook = &h
+	if strings.HasPrefix(it.ID, "agent.") || strings.HasPrefix(it.ID, "tool.") || strings.HasPrefix(it.ID, "pass.") {
+		d.Checks = goChecks(it.Name)
 	}
 	return d
 }
@@ -590,8 +582,6 @@ func (e *Engine) save(ctx context.Context, tx *sql.Tx, id string, in SaveIn, aut
 	exists := len(itemFiles(before.files, id)) > 0
 	action := "save"
 	switch {
-	case kind == "hook":
-		return Version{}, nil, invalid("", "hooks are Go code: view only")
 	case !exists && !slices.Contains([]string{"skill", "agent", "tool", "server", "rule"}, kind):
 		if _, ok := rows[id]; !ok && len(itemFiles(builtin, id)) == 0 {
 			return Version{}, nil, fmt.Errorf("%w: no item %s", ErrNotFound, id)
@@ -779,9 +769,6 @@ func (e *Engine) revert(ctx context.Context, tx *sql.Tx, id string, to, base int
 	if err != nil {
 		return Version{}, err
 	}
-	if strings.HasPrefix(id, "hook.") {
-		return Version{}, invalid("", "hooks are Go code: view only")
-	}
 	if _, ok := rows[id]; !ok {
 		return Version{}, fmt.Errorf("%w: %s has no versions to revert (it is the built-in)", ErrNotFound, id)
 	}
@@ -862,7 +849,7 @@ func revertRefused(id string, files map[string]string) error {
 func undeletable(id string) error {
 	kind, name, _ := strings.Cut(id, ".")
 	switch {
-	case kind == "prompt" || kind == "pass" || kind == "pack" || kind == "hook":
+	case kind == "prompt" || kind == "pass" || kind == "pack":
 		return invalid("", "%s is part of the engine's workflow: edit or revert it; it cannot be deleted", id)
 	case kind == "agent" || kind == "tool":
 		if why := goDepends(name); why != "" {
