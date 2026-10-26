@@ -420,7 +420,7 @@ func TestReaderFailuresCounted(t *testing.T) {
 		"draft_section": {section("Greystone claims damages of $644,910 for unpaid invoices [F1].", "Damages [F1].")},
 	}), Config{})
 	c, err := f.e.Cost(context.Background(), v.ID)
-	if err != nil || c.Reader == nil || c.Reader.Calls < 2 || c.Reader.Failed != c.Reader.Calls || c.Reader.FailureRate != 1 || c.Reader.Reasons["the figure reader's call failed"] != c.Reader.Calls {
+	if err != nil || c.Reader == nil || c.Reader.Calls < 2 || c.Reader.Failed != c.Reader.Calls || c.Reader.FailureRate != 1 || c.Reader.Reasons["the figure check's call failed"] != c.Reader.Calls {
 		data, _ := json.Marshal(c.Reader)
 		t.Errorf("reader line %s (%v)", data, err)
 	}
@@ -442,7 +442,7 @@ func TestFinishReadsAStaleSectionFirst(t *testing.T) {
 		t.Fatalf("%+v %v", secs, err)
 	}
 	s := secs[0]
-	s.Read.Figs, s.Read.Unread = nil, "1 of its 1 figures were not read (the budget could not fund the figure reader)"
+	s.Read.Figs, s.Read.Unread = nil, "1 of its 1 figures were not read (the budget could not fund the figure check)"
 	if err := f.e.write(ctx, v.ID, kSection, s.IssueID, s, true); err != nil {
 		t.Fatal(err)
 	}
@@ -948,7 +948,7 @@ func TestUnreadClaimsDisclosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := strings.Join(rep.limits, "\n")
-	if !strings.Contains(out, "Figures: 2 findings whose claims state a figure were never read (the figure reader was unfunded or its call failed), so the cross-document comparison could not see their claims' sums: F1, F2.") {
+	if !strings.Contains(out, "Figures: 2 findings whose claims state a figure were never read (the figure check ran out of budget or failed), so the cross-document comparison could not see their claims' sums: F1, F2.") {
 		t.Errorf("the unread claim is not disclosed (%s):\n%s", stop(v), out)
 	}
 }

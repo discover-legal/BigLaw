@@ -6,9 +6,8 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
-export const NETWORK = /\bfetch\s*\(|XMLHttpRequest|EventSource|WebSocket|sendBeacon|importScripts|\bnew\s+Worker\b|<link[^>]+rel=["']?(?:modulepreload|prefetch|preconnect|dns-prefetch)|https?:\/\/(?!www\.w3\.org\/|reactjs\.org\/|react\.dev\/|discover\.legal\/["'`]|127\.0\.0\.1:3101["'`])/;
-// Two exact strings are allowed: discover.legal/ (the site root) is the banner's way back, a link the visitor clicks;
-// 127.0.0.1:3101 is BIGLAW_PUBLIC_URL's default as Settings displays it. Neither is ever requested.
+export const NETWORK = /\bfetch\s*\(|XMLHttpRequest|EventSource|WebSocket|sendBeacon|importScripts|\bnew\s+Worker\b|<link[^>]+rel=["']?(?:modulepreload|prefetch|preconnect|dns-prefetch)|https?:\/\/(?!www\.w3\.org\/|reactjs\.org\/|react\.dev\/|discover\.legal\/["'`])/;
+// One exact string is allowed: discover.legal/ (the site root) is the banner's way back, a link the visitor clicks, never requested.
 
 export function scan(dir) {
   const bad = [];

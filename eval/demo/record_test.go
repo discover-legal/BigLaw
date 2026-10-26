@@ -22,6 +22,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -46,8 +47,7 @@ const provenance = "Recorded run, not live. No model was called to make this rec
 	"agent workflow exists yet (PR 4), and no real model run on these matters was ever recorded. A few quotes and one finding were written for " +
 	"the demo to exercise the ladder (a quote typed with curly quotes, two quotes from the scan, and a misquoted figure that fails verification " +
 	"and is quarantined); the memo's Limitations name them. Steps marked 'scripted' stand for model calls; steps marked 'computed' ran v2 code. " +
-	"Playbooks, time entries and profiles are sample records written for the demo; Settings lists this build's configuration defaults, read " +
-	"from cmd/biglaw/config.go. Costs are $0 because no model was called."
+	"Costs are $0 because no model was called."
 
 // demoQuotes are quotes written for the demo (not in the answer keys) to exercise the ladder's
 // other rungs; each is verified by VerifyQuote like any other. Key: answer-key fact id.
@@ -240,35 +240,6 @@ type rHit struct {
 	Transcribed bool    `json:"transcribed,omitempty"`
 }
 
-// Sample records (written for the demo) in the contract's shapes (ui/src/api/types.ts).
-type rProfile struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	Role string `json:"role"`
-}
-
-type rPlaybook struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Scope   string `json:"scope"`
-	Clauses int    `json:"clauses"`
-}
-
-type rTimeEntry struct {
-	ID           string  `json:"id"`
-	Date         string  `json:"date"`
-	MatterNumber string  `json:"matterNumber"`
-	Hours        float64 `json:"hours"`
-	Narrative    string  `json:"narrative"`
-	Timekeeper   string  `json:"timekeeper"`
-}
-
-type rSetting struct {
-	Name    string `json:"name"`
-	Default string `json:"default"`
-	Secret  bool   `json:"secret,omitempty"`
-}
-
 type rDocument struct {
 	docs.Document
 	MatterNumber string              `json:"matterNumber"`
@@ -290,17 +261,14 @@ type rClient struct {
 }
 
 type recording struct {
-	Schema      int          `json:"schema"`
-	Provenance  string       `json:"provenance"`
-	Generator   string       `json:"generator"`
-	Clients     []rClient    `json:"clients"`
-	Documents   []rDocument  `json:"documents"`
-	Tasks       []rTask      `json:"tasks"`
-	Searches    []rSearch    `json:"searches"`
-	Profiles    []rProfile   `json:"profiles"`
-	Playbooks   []rPlaybook  `json:"playbooks"`
-	TimeEntries []rTimeEntry `json:"timeEntries"`
-	Settings    []rSetting   `json:"settings"`
+	Schema      int         `json:"schema"`
+	Provenance  string      `json:"provenance"`
+	Generator   string      `json:"generator"`
+	Clients     []rClient   `json:"clients"`
+	Documents   []rDocument `json:"documents"`
+	Tasks       []rTask     `json:"tasks"`
+	Searches    []rSearch   `json:"searches"`
+	BudgetCalls int         `json:"budgetCalls"` // BIGLAW_BUDGET_CALLS' default, what a replay's budget shows
 }
 
 type answerKey struct {
@@ -344,54 +312,19 @@ func transcriptPages(tr *docs.Transcript) []docs.PageRead {
 	return tr.Pages
 }
 
-var configRow = regexp.MustCompile(`\{name: "([A-Z_]+)"(?:, (secret): true)?(?:, def: "([^"]*)")?[^}]*\}`)
-
-// configDefaults is this build's configuration table (cmd/biglaw/config.go envVars), read from its
-// source when the recording is made, for the read-only Settings screen.
-func configDefaults(t *testing.T) []rSetting {
+// budgetCalls is BIGLAW_BUDGET_CALLS' default in this build's configuration table (cmd/biglaw/config.go envVars), read from its source.
+func budgetCalls(t *testing.T) int {
 	t.Helper()
 	src, err := os.ReadFile("../../cmd/biglaw/config.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	out := []rSetting{}
-	for _, m := range configRow.FindAllStringSubmatch(string(src), -1) {
-		out = append(out, rSetting{Name: m[1], Default: m[3], Secret: m[2] != ""})
+	m := regexp.MustCompile(`\{name: "BIGLAW_BUDGET_CALLS", def: "(\d+)"`).FindSubmatch(src)
+	if m == nil {
+		t.Fatal("no BIGLAW_BUDGET_CALLS default in cmd/biglaw/config.go; its table format changed")
 	}
-	if len(out) < 18 {
-		t.Fatalf("read %d config rows from cmd/biglaw/config.go; its table format changed", len(out))
-	}
-	return out
-}
-
-// Sample records written for the demo (fictional people), consistent with the three matters.
-var sampleProfiles = []rProfile{
-	{"prof-okafor", "Maya Okafor", "partner"},
-	{"prof-brennan", "Daniel Brennan", "lawyer"},
-	{"prof-hartwig", "Lena Hartwig", "lawyer"},
-	{"prof-sato", "Kenji Sato", "lawyer"},
-}
-
-var samplePlaybooks = []rPlaybook{
-	{"pb-fernhill-ip", "Fernhill Robotics: inbound patent and software licenses", "client", 18},
-	{"pb-altamira-ma", "Altamira Health: signing-to-closing covenants", "client", 11},
-	{"pb-demo-ip-1", "DEMO-IP-1: Quillon license negotiation positions", "matter", 9},
-	{"pb-hartwig", "Lena Hartwig: license drafting preferences", "personal", 6},
-	{"pb-firm-supply", "Firm standard: supply and services agreements", "firm", 24},
-	{"pb-firm-license", "Firm standard: IP licenses (licensee side)", "firm", 21},
-}
-
-var sampleTime = []rTimeEntry{
-	{"te-01", "2025-09-10", "DEMO-REG-1", 2.4, "Review deal summary and turnover data; outline HSR and EUMR jurisdiction analysis.", "Kenji Sato"},
-	{"te-02", "2025-09-12", "DEMO-REG-1", 1.6, "Size-of-transaction and size-of-person tests; aggregate existing 8% stake.", "Kenji Sato"},
-	{"te-03", "2025-09-15", "DEMO-REG-1", 0.8, "Call with client GC re filing timetable and pre-closing conduct (gun-jumping).", "Maya Okafor"},
-	{"te-04", "2026-10-09", "DEMO-IP-1", 1.9, "Compare Quillon draft license against signed term sheet; list departures.", "Lena Hartwig"},
-	{"te-05", "2026-10-13", "DEMO-IP-1", 1.2, "Schedule A patent status review (lapsed P-3, unrecorded P-4 assignment).", "Lena Hartwig"},
-	{"te-06", "2026-10-14", "DEMO-IP-1", 0.6, "Schedule B open-source review: GPL-3.0 component statically linked.", "Daniel Brennan"},
-	{"te-07", "2026-10-22", "DEMO-LIT-1", 1.5, "Review complaint, supply agreement and correspondence; intake call with client.", "Maya Okafor"},
-	{"te-08", "2026-10-23", "DEMO-LIT-1", 2.2, "Draft chronology from correspondence and docket.", "Daniel Brennan"},
-	{"te-09", "2026-10-26", "DEMO-LIT-1", 1.4, "Compute answer, status report and Rule 7.1 deadlines; calendar them.", "Daniel Brennan"},
-	{"te-10", "2026-10-26", "DEMO-LIT-1", 0.9, "Issues list: contractual limitations, shortfall fee cap, lost-profits exclusion.", "Maya Okafor"},
+	n, _ := strconv.Atoi(string(m[1]))
+	return n
 }
 
 // stableID is a UUID-shaped id derived from the name, so the recording is byte-stable.
@@ -416,8 +349,8 @@ func TestDemoRecording(t *testing.T) {
 	zero := 0.0
 	read := []model.Reply{{Text: string(text), Usage: model.Usage{CostUSD: &zero}}}
 	svc.UseVision(model.NewFake(map[string][]model.Reply{"transcribe-a": read, "transcribe-b": read}), scanReader, "", nil)
-	rec := recording{Schema: 2, Provenance: provenance, Generator: "eval/demo/record_test.go (make demo-record)", Clients: []rClient{}, Documents: []rDocument{},
-		Tasks: []rTask{}, Searches: []rSearch{}, Profiles: sampleProfiles, Playbooks: samplePlaybooks, TimeEntries: sampleTime, Settings: configDefaults(t)}
+	rec := recording{Schema: 3, Provenance: provenance, Generator: "eval/demo/record_test.go (make demo-record)", Clients: []rClient{}, Documents: []rDocument{},
+		Tasks: []rTask{}, Searches: []rSearch{}, BudgetCalls: budgetCalls(t)}
 	for _, m := range matters {
 		realIDs := map[string]string{} // file name → stored id
 		stable := map[string]string{}  // stored id → recording id

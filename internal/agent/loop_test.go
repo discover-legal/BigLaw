@@ -388,6 +388,13 @@ func TestBilledFailureCharged(t *testing.T) {
 	if u := ModelUsage(&model.Error{Kind: model.ErrUnavailable, Status: 200}, nil); u.Calls != 1 || u.Unpriced != 1 {
 		t.Fatalf("unreadable 200: %+v", u)
 	}
+	// A local call's metered energy rides along and sums; a cloud call has none.
+	wh := 0.5
+	u := ModelUsage(nil, &model.Response{Usage: model.Usage{WattHours: &wh}})
+	u.Add(ModelUsage(nil, &model.Response{}))
+	if u.WattHours != 0.5 || u.Calls != 2 {
+		t.Fatalf("watt-hours: %+v", u)
+	}
 }
 
 func TestToolDefinitionsStaticAcrossTurns(t *testing.T) {

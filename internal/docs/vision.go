@@ -44,7 +44,7 @@ var (
 	readPrompts            = strings.Split(strings.TrimSpace(prompts), "\n") // two independent readings; a figure token keeps its separators (1.250 is not 1,250), a hyphenated word its hyphen (third-party, also broken at a line end)
 	markRe, tokenRe, figRe = regexp.MustCompile(`(?i)\[(illegible|blank|unclear)\b[^\]]{0,200}\]|\((illegible|unclear)\)`), regexp.MustCompile(`(?i)\[(?:illegible|blank|unclear)\]|\p{L}+(?:-(?:[ \t]*\r?\n[ \t]*)?\p{L}+)+|[\p{L}\p{N}]+(?:[.,]\p{N}+)*`), regexp.MustCompile(`\p{N}+(?:[.,]\p{N}+)+|[\p{L}\p{N}]+`)
 	fold                   = strings.NewReplacer("ﬁ", "fi", "ﬂ", "fl", "ﬀ", "ff", "ﬃ", "ffi", "ﬄ", "ffl", " ", "", "\t", "", "\r", "", "\n", "") // a token as compared (never the text stored)
-	ErrVisionNotConfigured = errors.New("docs: no vision model is configured (set vision=<model id> in BIGLAW_MODELS): the original is stored with status needs_transcription and is transcribed once one is")
+	ErrVisionNotConfigured = errors.New("docs: saved, but no AI model that reads scans is set up yet, so this one waits to be transcribed (status needs_transcription): ask whoever set up BigLaw to add one (vision=<model id> in BIGLAW_MODELS)")
 	ErrUnreliable          = errors.New("docs: transcription unreliable")
 	ErrNoContent           = errors.New("docs: no content: the vision model found no readable text")
 	ErrScanEncoding        = errors.New("docs: scan encoding unsupported (or the scan's image data is damaged): BigLaw sends PNG, JPEG, GIF, WebP and PDFs whose pages are JPEG scans; export the scan as JPEG or as a PDF from a phone scanner app")

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Discover Legal
 //
-// Shared by every screen: the transport context, hash routes and the load hook.
+// Shared by every screen: the transport context, hash routes, and the load and action hooks.
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { Icon } from './components/icons.tsx';
 import type { Transport } from './api/transport.ts';
@@ -33,6 +33,14 @@ export function useLoad<T>(fn: () => Promise<T>, deps: unknown[]): { data: T | n
     return () => { live = false; };
   }, [...deps, n]);
   return { data, error, reload: () => setN((x) => x + 1) };
+}
+
+/** useAction is an action's busy flag and error: run(p, then) shows p's failure, or clears it and calls then. */
+export function useAction() {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const run = <T,>(p: Promise<T>, then: (v: T) => void, fail?: (e: Error) => void) => { setBusy(true); p.then((v) => { setError(null); then(v); }, (e: Error) => { setError(e.message); fail?.(e); }).finally(() => setBusy(false)); };
+  return { busy, error, setError, run };
 }
 
 /** plural: "1 task", "2 tasks". */

@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Discover Legal
 //
-// Documents: the library, a document's outline, the section reader (with a cited quote
-// highlighted) and search within a matter's documents.
+// Documents: upload and file to a matter, the library, a document's outline, the section reader
+// (with a cited quote highlighted) and search within a matter's documents.
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { snippet } from '../api/match.ts';
 import type { Doc, Hit } from '../api/types.ts';
-import { Empty, Failure, go, Loading, plural, useApi, useLoad } from '../lib.tsx';
+import { Empty, Failure, go, Loading, plural, useAction, useApi, useLoad } from '../lib.tsx';
 import { Icon } from '../components/icons.tsx';
 import { plainText } from '../components/quote.ts';
 
@@ -39,8 +39,8 @@ export function Documents(props: { q: URLSearchParams }) {
             {matters.map((m) => <option key={m} value={m}>{m}{title(m) ? ` · ${title(m)}` : ''}</option>)}
           </select></label>
         )}
-        {api.mode === 'live' && <span className="muted">Upload: POST /documents/upload (multipart), or POST /documents with text.</span>}
       </div>
+      {api.mode === 'live' && <Upload matter={matter} matters={matters} done={(m) => { docs.reload(); go('documents', { matter: m }); }} />}
       <Search key={matter} matter={matter} ids={inMatter.map((d) => d.id)} docs={inMatter}
         onOpen={(h, hl) => nav({ doc: h.documentId, section: h.sectionId, hl })} />
       <div className={`reader ${docId ? 'open' : ''}`}>
@@ -62,18 +62,49 @@ export function Documents(props: { q: URLSearchParams }) {
   );
 }
 
+/** Upload stores each file and files it under the matter (a new number starts a matter), one at a time, saying how each went. */
+function Upload(props: { matter: string; matters: string[]; done: (matter: string) => void }) {
+  const api = useApi();
+  const [matter, setMatter] = useState(props.matter);
+  const [files, setFiles] = useState<File[]>([]);
+  const [log, setLog] = useState<string[]>([]);
+  const [n, setN] = useState(0); // a new key clears the file input
+  const { busy, run } = useAction();
+  const send = async (m: string) => {
+    const out: string[] = [];
+    for (const f of files) {
+      setLog([...out, `${f.name}: uploading…`]);
+      out.push(await api.upload(f, m).then(() => `${f.name}: filed to ${m}.`, (e: Error) => `${f.name}: ${e.message}`));
+    }
+    setLog(out);
+  };
+  return (
+    <form className="panel upload" onSubmit={(e) => { e.preventDefault(); const m = matter.trim(); run(send(m), () => { setFiles([]); setN(n + 1); props.done(m); }); }}>
+      <h2>Add documents</h2>
+      <div className="row">
+        <label>Files <input key={n} type="file" multiple onChange={(e) => setFiles([...(e.target.files ?? [])])} /></label>
+        <label>Matter <input list="matter-numbers" value={matter} onChange={(e) => setMatter(e.target.value)} placeholder="e.g. 2026-014" size={14} maxLength={64} /></label>
+        <datalist id="matter-numbers">{props.matters.map((m) => <option key={m} value={m} />)}</datalist>
+        <button className="primary push" disabled={busy || files.length === 0 || !matter.trim()}>{busy ? 'Uploading…' : `Upload ${plural(files.length, 'file')}`}</button>
+      </div>
+      <p className="muted small">PDF, Word (.docx), plain text, or a scanned image (PNG, JPEG, GIF, WebP). A new matter number starts a new matter.</p>
+      {log.length > 0 && <ul className="plain small" role="status">{log.map((l, i) => <li key={i}>{l}</li>)}</ul>}
+    </form>
+  );
+}
+
 function Search(props: { matter: string; ids: string[]; docs: Doc[]; onOpen: (h: Hit, hl: string) => void }) {
   const api = useApi();
   const [q, setQ] = useState('');
   const [ran, setRan] = useState('');
   const [hits, setHits] = useState<Hit[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { error, run: act } = useAction();
   const name = (id: string) => props.docs.find((d) => d.id === id)?.name ?? id;
   const recorded = api.recordedSearches?.(props.matter) ?? [];
   const replayed = recorded.some((s) => s.query === ran.trim());
   const run = (query: string) => {
-    setQ(query); setError(null);
-    api.search(query, props.ids).then((h) => { setHits(h); setRan(query); }, (er: Error) => setError(er.message));
+    setQ(query);
+    act(api.search(query, props.ids), (h) => { setHits(h); setRan(query); });
   };
   return (
     <form className="search" role="search" onSubmit={(e) => { e.preventDefault(); if (q.trim()) run(q); }}>

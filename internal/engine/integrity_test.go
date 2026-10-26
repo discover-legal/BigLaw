@@ -135,7 +135,7 @@ func TestGroundingCollapseFail(t *testing.T) {
 }
 
 func TestGroundingCollapseWarnKeepsGoing(t *testing.T) {
-	if alert, fail := Collapse(5, 50, 0.5, "warn"); fail || !strings.Contains(alert, "warn mode") || !strings.Contains(alert, "quarantined") {
+	if alert, fail := Collapse(5, 50, 0.5, "warn"); fail || !strings.Contains(alert, "warn setting") || !strings.Contains(alert, "quarantined") {
 		t.Fatalf("%q %v", alert, fail)
 	}
 }
@@ -555,7 +555,8 @@ func TestFigureLintIsBounded(t *testing.T) {
 	v, _ := e.Get(context.Background(), task.ID)
 	fin := f.outputs(v.ID, "finish")
 	if len(fin) != 3 || !strings.Contains(fin[1], `"code":"lint"`) || !strings.Contains(fin[2], `"accepted":true`) || stop(v) != "awaiting_gate/finished" ||
-		!strings.Contains(deref(v.Output), "Delivered with an unresolved check after 2 rounds of fixes: I1: the figure 68.6 is not traced (G8)") {
+		!strings.Contains(deref(v.Output), "Delivered with an unresolved check after 2 rounds of fixes: I1: the figure 68.6 could not be traced to a cited quote") ||
+		strings.Contains(deref(v.Output), "(G8)") || strings.Contains(deref(v.Output), "numbers op calc") { // the memo says what is wrong, not the lead's fix (P12)
 		t.Fatalf("%s %q\n%s", stop(v), fin, deref(v.Output))
 	}
 	var reqs []string
@@ -624,5 +625,34 @@ func TestFigureLintTracesCountAfterLocatorList(t *testing.T) {
 		if got := Untraced(analysis.MaskLocators(text), ground, false); len(got) != 1 || got[0] != want {
 			t.Errorf("%q: untraced %q, want %s (masked: %q)", text, got, want, analysis.MaskLocators(text))
 		}
+	}
+}
+
+// TestPlainCheckDropsTheLeadsFix (P12): a lint or critic line Limitations discloses says what is
+// wrong in the lawyer's words, with its reason and a rolled deadline's date, never the fix it asks the
+// lead for (tool names, handles, ledger ops, check codes).
+func TestPlainCheckDropsTheLeadsFix(t *testing.T) {
+	t.Parallel()
+	for l, want := range map[string]string{
+		"I1: the figure 280 is not traced (G8): no cited finding, handle or worksheet states it: if it is computed (a total), compute it with numbers op calc over the findings' value refs and write the {W…} handle it returns; otherwise remove it":              "I1: the figure 280 could not be traced",
+		"I1: the figure 9 is not traced (G8): the figure reader did not read it clearly (the figure check's call failed), so it is flagged, never traced; no cited finding states it":                                                                               "(the figure check did not read it clearly: the figure check's call failed)",
+		"I2: the date March 3, 2026 is a deadline's raw date, before Rule 6(a)'s roll past a weekend or holiday (G8): the deadline is {W0123456789} (March 5, 2026): write that handle, and state the raw date only in the sentence that gives the rolled deadline": "the deadline after the roll is March 5, 2026",
+		"I3: unknown figure handle {Heron}: it names no verified figure or worksheet":                                                                                 "names no verified figure",
+		"I4: {Heron} is inside a quotation, where Go never substitutes it: quote the document's own words there, or move the handle outside the quotation marks":      "inside a quotation is shown as written",
+		"memo: the documents state the fee differently ([F1] $5 vs [F2] $7), and the memo does not state both: redraft the section it bears on to state both figures": "and the memo does not state both",
+		"3 cited findings have typed values admission dropped (F1, F2, F3): F1: x (and 2 more notes: ledger op get)":                                                  "(and 2 more notes on the findings themselves)",
+	} {
+		got := plainCheck(l)
+		if !strings.Contains(got, want) {
+			t.Errorf("%q: got %q, want it to say %q", l, got, want)
+		}
+		for _, jargon := range []string{"(G8)", "op calc", "handle", "{W", "Go ", "redraft", "lead", "ledger", "figure reader"} {
+			if strings.Contains(got, jargon) {
+				t.Errorf("%q keeps %q", got, jargon)
+			}
+		}
+	}
+	if l := "I5: [F9] is not a verified finding of this task"; plainCheck(l) != l {
+		t.Errorf("a plain line changed: %q", plainCheck(l))
 	}
 }

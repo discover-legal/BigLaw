@@ -110,7 +110,8 @@ a.num-tag { color: var(--accent-text); }
 .card-title { font-size: 1.04rem; font-weight: 650; color: var(--ink); line-height: 1.35; }
 .meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem 0.9rem; font-size: 0.84rem; color: var(--muted); margin-top: auto; padding-top: 0.4rem; }
 .meta > span { display: inline-flex; align-items: center; gap: 0.3rem; }
-.wizard { margin-top: 1.25rem; }
+.wizard, .upload { margin-top: 1.25rem; }
+.upload h2 { margin: 0 0 0.6rem; }
 .wizard h2 { margin: 0; }
 .wizard-for { margin: 0.1rem 0 0.9rem; }
 .wizard > label { display: block; margin-bottom: 0.45rem; font-weight: 550; }
@@ -126,7 +127,6 @@ a.num-tag { color: var(--accent-text); }
 .notice button { margin-top: 0.2rem; }
 .sample { color: var(--warn); background: var(--warn-bg); display: inline-block; padding: 0.3rem 0.7rem; border-radius: var(--r-sm); margin: -0.4rem 0 1rem; }
 .plain { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.5rem; }
-.client li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.2rem 0.7rem; }
 
 /* Empty and loading */
 .empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 0.4rem; padding: 2.5rem 1.25rem; margin: 0.5rem 0;
@@ -159,7 +159,6 @@ a.num-tag { color: var(--accent-text); }
 .pill-awaiting_gate { background: var(--warn-bg); color: var(--warn); }
 .pill-complete { background: var(--ok-bg); color: var(--ok); }
 .pill-failed, .pill-rejected { background: var(--bad-bg); color: var(--bad); }
-.pill.tier-client, .pill.tier-matter, .pill.tier-personal, .pill.tier-firm, .pill[class*=role-] { background: var(--sunken); color: var(--text); font-weight: 550; }
 
 /* Task: header, run bar, gate, tabs */
 .crumbs { margin: 0 0 0.4rem; font-size: 0.86rem; }
@@ -398,3 +397,8 @@ blockquote.third-party { margin: 4px 0 8px; padding: 4px 10px; border-left: 3px 
 .manage .doclist .dl-meta { grid-column: 1; display: flex; flex-wrap: wrap; gap: 0.25rem; align-items: center; }
 .gate .held details pre { max-height: 24rem; }
 .warn-text { color: var(--warn); }
+/* Print the memo alone (Task: Print), under the demo banner when recorded */
+@media print {
+  .top, .crumbs, .runbar, .gate, .tabs, .memo-actions, .error, .notice { display: none; }
+  body { background: #fff; color: #000; }
+}

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Discover Legal
 //
-// The shell: the seven screens and Manage (README § UI screens), hash routes so a static bundle works under
+// The shell: Matters, Documents, Task and Manage (README § UI screens), hash routes so a static bundle works under
 // any base path, the demo banner when the engine is recorded, and with sign-in (README § Sign-in) a
 // sign-in page until there is a session, then the user and Sign out in the header.
 import { useEffect, useState } from 'react';
@@ -12,13 +12,9 @@ import { Icon } from './components/icons.tsx';
 import { Matters } from './screens/Matters.tsx';
 import { TaskScreen } from './screens/Task.tsx';
 import { Documents } from './screens/Documents.tsx';
-import { Billing, Clients, Playbooks, Settings } from './screens/Others.tsx';
 import { Manage } from './screens/Manage.tsx';
 
-const NAV: [string, string][] = [
-  ['matters', 'Matters'], ['documents', 'Documents'], ['playbooks', 'Playbooks'],
-  ['clients', 'Clients & Conflicts'], ['billing', 'Time & Billing'], ['manage', 'Manage'], ['settings', 'Settings'],
-];
+const NAV: [string, string][] = [['matters', 'Matters'], ['documents', 'Documents'], ['manage', 'Manage']];
 
 const logo = <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><rect width="24" height="24" rx="6" fill="currentColor" /><path d="M7 7v10h5.5a3 3 0 0 0 0-6H7m0 0h4.5a2 2 0 0 0 0-4H7" fill="none" stroke="var(--accent-ink)" strokeWidth="2" strokeLinejoin="round" /></svg>;
 
@@ -54,12 +50,8 @@ export function App(props: { api: Transport }) {
   switch (screen) {
     case 'task': body = <TaskScreen id={arg ?? ''} tab={route.q.get('tab') ?? 'run'} />; break;
     case 'documents': body = <Documents q={route.q} />; break;
-    case 'playbooks': body = <Playbooks />; break;
-    case 'clients': body = <Clients />; break;
-    case 'billing': body = <Billing />; break;
-    case 'settings': body = <Settings />; break;
     case 'manage': body = <Manage section={route.q.get('section') ?? 'agents'} item={route.q.get('item') ?? ''} tab={route.q.get('tab') ?? 'contents'} />; break;
-    default: body = <Matters matter={route.q.get('matter') ?? ''} />;
+    default: body = <Matters matter={route.q.get('matter') ?? ''} ready={me?.model !== false} />;
   }
   return (
     <Api.Provider value={props.api}>

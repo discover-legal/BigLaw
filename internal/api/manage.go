@@ -96,7 +96,7 @@ func manageRoutes(mux *http.ServeMux, e *engine.Engine, who Who, log *slog.Logge
 	ws := writes{mux, log, who, answer}
 	mux.HandleFunc("GET /me", func(w http.ResponseWriter, r *http.Request) {
 		p := who(r)
-		reply(w, 200, map[string]any{"id": p.ID, "name": p.Name, "email": p.Email, "admin": p.Admin, "authEnabled": p.SignedIn, "adminWithoutAuth": p.Open}, nil)
+		reply(w, 200, map[string]any{"id": p.ID, "name": p.Name, "email": p.Email, "admin": p.Admin, "authEnabled": p.SignedIn, "adminWithoutAuth": p.Open, "model": e.Ready()}, nil)
 	})
 	get("GET /manage/items", func(r *http.Request) (any, error) { return e.Items(r.Context()) })
 	get("GET /manage/items/{id}", func(r *http.Request) (any, error) { return e.ItemDetail(r.Context(), r.PathValue("id")) })

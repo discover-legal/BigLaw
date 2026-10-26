@@ -4,8 +4,8 @@
 // The transport seam: every screen talks to BigLaw through this interface only. http.ts is the
 // real API (same origin); recorded.ts replays a recorded engine in the browser with no network.
 import type {
-  Client, Discovery, Doc, Hit, ImportResult, ManageDetail, ManageItem, Me, NewTask, OutlineEntry, Playbook, Problem, Profile, RecordedSearch, RunEvent, SaveResult, SectionPage,
-  SecretView, Setting, SpecVersion, Task, TaskCost, TestResult, TimeEntry,
+  Client, Discovery, Doc, Hit, ImportResult, ManageDetail, ManageItem, Me, NewTask, OutlineEntry, Problem, RecordedSearch, RunEvent, SaveResult, SectionPage,
+  SecretView, SpecVersion, Task, TaskCost, TestResult,
 } from './types.ts';
 
 /** What the recorded engine would replay for a prompt; live transports never match. */
@@ -30,6 +30,8 @@ export interface Transport {
   section(docId: string, sectionId: string, offset?: number): Promise<SectionPage>;
   /** Where the document's original file opens (a scan, to check its transcript against); null: none. */
   fileUrl(docId: string): string | null;
+  /** Stores a file and files it under matter (POST /documents/upload?matter=); a scan waiting for vision is a 503 that says so. */
+  upload(file: File, matter: string): Promise<Doc>;
   search(q: string, ids: string[]): Promise<Hit[]>;
   tasks(): Promise<Task[]>;
   task(id: string): Promise<Task>;
@@ -47,11 +49,6 @@ export interface Transport {
   fastForward?(id: string): void;
   /** Recorded engine only: searches whose hits v2's own Search computed when the run was recorded. */
   recordedSearches?(matterNumber: string): RecordedSearch[];
-  /** Recorded engine only: this build's configuration defaults (read-only). */
-  settings?(): Promise<Setting[]>;
-  playbooks(): Promise<Playbook[]>;
-  timeEntries(): Promise<TimeEntry[]>;
-  profiles(): Promise<Profile[]>;
   me(): Promise<Me>;
   /** Ends the session (live, with sign-in). */
   signOut?(): Promise<void>;

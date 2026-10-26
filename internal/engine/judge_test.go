@@ -85,7 +85,7 @@ func TestJoinRejectsVerdictsGoDidNotPropose(t *testing.T) {
 	}
 	f, v, _ := feeRun(t, nil, map[string][]model.Reply{"judge_figures": {bogus(yes("F1.v1|F1.v1", "same"), yes("F1.s1|F2.s1", "spans"), yes("F1.v1|F9.v1", "made up"))}})
 	j, err := f.e.joined(context.Background(), v.ID)
-	if err != nil || len(j.all) != 0 || j.unjudged != 1 || !strings.Contains(strings.Join(j.lines(), ""), "1 pair of figures that two documents state differently, among those the join puts to the figure judge first (each figure's most alike and closest counterparts), was not judged") {
+	if err != nil || len(j.all) != 0 || j.unjudged != 1 || !strings.Contains(strings.Join(j.lines(), ""), "1 pair of figures that two documents state differently, among those put to the figure judge first (each figure's most alike and closest counterparts), was not judged") {
 		t.Fatalf("joined %+v (%q), %v", j, j.lines(), err)
 	}
 	f, v, _ = feeRun(t, nil, map[string][]model.Reply{"judge_figures": {bogus(yes("F1.v1|F2.v1", " "))}})

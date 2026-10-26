@@ -153,6 +153,7 @@ export interface Task {
   findings: Finding[];
   output: string | null;
   groundingAlert: string | null;
+  error: string | null; // why the run failed (live: "kind: message", or the grounding alert)
   replay?: { key: string; title: string; prompt: string }; // recorded engine only
 }
 
@@ -167,7 +168,7 @@ export interface CostEntry {
 
 export interface TaskCost {
   taskId: string;
-  summary: { calls: number; inputTokens: number; outputTokens: number; usd: number | null; unpricedCalls: number };
+  summary: { calls: number; inputTokens: number; outputTokens: number; usd: number | null; unpricedCalls: number; wattHours?: number };
   entries: CostEntry[];
 }
 
@@ -182,13 +183,8 @@ export interface NewTask {
 // SSE on GET /tasks/{id}/events: `step` (data: Step), `task` (data: Run), `done` (data: Run).
 export type RunEvent = { type: 'step'; step: Step } | { type: 'task' | 'done'; run: Run };
 
-export interface Profile { id: string; name: string; role: string }
-/** One row of the configuration table (cmd/biglaw/config.go): read-only, as `biglaw version --config` prints it. */
-export interface Setting { name: string; default: string; secret?: boolean }
 /** A search the recorded engine offers, with the hits v2's own Search returned for it. */
 export interface RecordedSearch { matterNumber: string; query: string; hits: Hit[] }
-export interface Playbook { id: string; name: string; scope: 'client' | 'matter' | 'personal' | 'firm'; clauses: number }
-export interface TimeEntry { id: string; date: string; matterNumber: string; hours: number; narrative: string; timekeeper: string }
 
 // Manage (README § Manage; GET /manage/…): what a run uses, by section, with admins' versioned overrides.
 export type ManageSection = 'agents' | 'tools' | 'packs' | 'skills' | 'hooks';
@@ -214,7 +210,7 @@ export interface SpecVersion {
 export interface SaveResult { version: SpecVersion; notes: string[] }
 export interface Problem { file: string; message: string }
 /** GET /me: who is asking: the signed-in user (authEnabled), or without sign-in the local user. */
-export interface Me { id: string; name: string; email?: string; admin: boolean; authEnabled: boolean; adminWithoutAuth?: boolean }
+export interface Me { id: string; name: string; email?: string; admin: boolean; authEnabled: boolean; adminWithoutAuth?: boolean; model?: boolean /* false: no lead model set up */ }
 /** A secret as the API shows it: never its value. */
 export interface SecretView { name: string; origin: string; updatedBy: string; updatedAt: string; usedBy: string[] }
 /** One tool a server lists: its description is the server's (third-party) text; item and previous: already imported, and the text an admin accepted. */

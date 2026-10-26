@@ -397,7 +397,7 @@ func (j joined) lines() []string {
 			firstN(ps, 20, "; ")))
 	}
 	if j.unjudged > 0 {
-		out = append(out, fmt.Sprintf("Figures: %d %s of figures that two documents state differently, among those the join puts to the figure judge first (each figure's most alike and closest counterparts), %s not judged (the budget could not fund the judge, or its answer was unusable), so a conflict among them may be missing.",
+		out = append(out, fmt.Sprintf("Figures: %d %s of figures that two documents state differently, among those put to the figure judge first (each figure's most alike and closest counterparts), %s not judged (the budget could not fund the judge, or its answer was unusable), so a conflict among them may be missing.",
 			j.unjudged, plural(j.unjudged, "pair", "pairs"), plural(j.unjudged, "was", "were")))
 	}
 	if j.uncovered > 0 { // lab-r4 r9 residual a: the figures left out, not the pairs

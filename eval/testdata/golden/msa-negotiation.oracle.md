@@ -83,15 +83,15 @@ C-14 (Deletion of lost profits from the consequential-damages exclusion): REJECT
 
 ## Limitations
 
-- Figures: in the section on I12, $2M, $5M are written at another scale than the cited findings state them (one written out digit for digit, the other read at a scale from its words): they are the same figure only by the figure reader's reading of those words, and the findings are gated; confirm them against the cited quotes.
+- Figures: in the section on I12, $2M, $5M are written at another scale than the cited findings state them (one written out digit for digit, the other read at a scale from its words): they are the same figure only by the figure check's reading of those words, and the findings are gated; confirm them against the cited quotes.
 - This deliverable used candidate practice or jurisdiction packs (us) that no named lawyer has reviewed yet.
 - External authorities (cases, statutes) are flagged, not verified: BigLaw has no live citator.
 
 ### Computed figures
 
-Every figure below is stated in the memo but traces only through a calculation Go made (over cited values or typed inputs, each as the figure reader read it), or only by the figure reader's label; each input names the finding and the quoted words it comes from.
+Every figure below is stated in the memo but traces only through a calculation BigLaw made (over cited values or typed inputs, each as the figure check read it), or only by the figure check's label; each input names the finding and the quoted words it comes from.
 
-Check first (resting on words the figure reader cited for a unit, a multiple or a scale, on a count or number's kind alone, on the days between two dates, or on a memo figure's label):
+Check first (resting on words the figure check cited for a unit, a multiple or a scale, on a count or number's kind alone, on the days between two dates, or on a memo figure's label):
 
 - 90 = 45 [F3] “Net 45 is acceptable.”, read as a count figure − (−45) [F3] “…forty-five (45)]] days after the…”, read as a count figure (I1)
 - 8 = 10.1 [F6] “10.1 EXCEPT FOR A PARTY'S…”, read as a count figure − 2.1 [F6] “2.1 Provider shall make…”, read as a count figure (I6)

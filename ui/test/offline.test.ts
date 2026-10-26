@@ -30,8 +30,8 @@ test('the check catches the live bundle, which does use the network', async () =
   try { assert.ok(scan(out).length > 0); } finally { rmSync(out, { recursive: true, force: true }); }
 });
 
-test('the check allows only the two displayed strings, exactly', () => {
-  for (const ok of ['`https://discover.legal/`', '"http://127.0.0.1:3101"']) assert.doesNotMatch(ok, NETWORK, ok);
+test('the check allows only the one displayed string, exactly', () => {
+  for (const ok of ['`https://discover.legal/`']) assert.doesNotMatch(ok, NETWORK, ok);
   for (const bad of ['"https://discover.legal/api"', '"https://discover.legal.evil/"', '"http://127.0.0.1:3101/tasks"', 'fetch(x)']) assert.match(bad, NETWORK, bad);
 });
 

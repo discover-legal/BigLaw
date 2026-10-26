@@ -172,6 +172,9 @@ func (s *server) waitFor(id string, ok func(engine.TaskView) bool) engine.TaskVi
 func TestRunProgressAPI(t *testing.T) {
 	t.Parallel()
 	s, ids := newServer(t, memo, roles, doc1)
+	if _, body := s.do("GET", "/me", nil); !strings.Contains(body, `"model":true`) { // a lead model is set up: no first-run card
+		t.Fatalf("/me: %s", body)
+	}
 	code, body := s.do("POST", "/tasks", m{"description": "What is claimed?", "workflowType": "memo", "jurisdiction": "US", "matterNumber": "M-1", "documentIds": ids, "unknownField": 1})
 	var v engine.TaskView
 	if json.Unmarshal([]byte(body), &v); code != 201 || v.ID == "" || v.Run.Budget.Remaining != 150 {

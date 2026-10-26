@@ -47,8 +47,8 @@ Linux, Docker reaches an Ollama on the host only if Ollama listens beyond 127.0.
 | Memo tools | `internal/analysis/` (+ `belo.json`, `specs/*.json`), `internal/docs/register.go` (+ `specs/*.json`) | Deterministic tools over verified findings: `numbers` (exact `calc`, figure handles, key-figures table), `join_discrepancies`, the coverage checks `finish{op:"check"}` will run, the value normalisers and BELO-lite; and the `retrieve` / `verify_quote` adapters over documents (§ Agent runtime) |
 | `.docx` reader | `internal/docs/ooxml/` | Opens a `.docx`'s text parts only (body, footnotes, endnotes; 128 MiB decompression cap) and reads its visible text in one linear XML pass. The writer, the XML escapers, the part-preserving re-zip and tracked-change parse/apply are planned (PR 3d) |
 | Evaluation | `eval/` (`run.py`, `proofrun/`, `lab/`, `tests/`, `tasks/`, `e4/embeddings.json`) | The five synthetic proof-run matters (documents + answer keys), copied from `feat/proof-runs-multi-practice`, with their driver, scorer and the v1 comparison (`run.py`), the Harvey LAB driver (`lab/run.py`), and the Go gates E1/E2 that run them through the engine on a scripted model (§ Memo workflow). `eval/e4/embeddings.json` is E4's embeddings tape: today the **self-test** tape of a hash embedder, not a real model's (§ Documents, gate E4) |
-| UI | `ui/` (React 19 + Vite + TypeScript strict; runtime deps `react`, `react-dom` only) | The seven screens (§ UI) behind one transport seam, `ui/src/api/transport.ts`: `http.ts` talks to the Go API on the same origin (tasks, steps, findings, gates, cost and documents are served since PR 4b; playbooks, time and profiles are PRs 6/8/9), `recorded.ts` replays a recorded engine in the browser with no network at all |
-| Recorded demo | `ui/src/recorded/recording.json`, `eval/demo/record_test.go` | Three synthetic matters (13 documents plus one scanned exhibit, `ui/src/recorded/06-affidavit-of-service-scan.jpg`, drawn by `eval/demo/make_scan.py`) and seven recorded memo tasks (48 findings, 79 citations); documents, outlines, sections, chunks, the scan's transcript (v2's vision path with a scripted reader), run-log and offered search hits and every quote's verification computed by v2's `internal/docs`; claims from the answer keys; sample playbooks, time entries and profiles, and the configuration table read from `cmd/biglaw/config.go` (§ UI, provenance). `TestDemoRecording` fails when the committed recording no longer matches what v2's code computes |
+| UI | `ui/` (React 19 + Vite + TypeScript strict; runtime deps `react`, `react-dom` only) | Matters, Documents, Task and Manage (§ UI) behind one transport seam, `ui/src/api/transport.ts`: `http.ts` talks to the Go API on the same origin (tasks, steps, findings, gates, cost and documents are served since PR 4b), `recorded.ts` replays a recorded engine in the browser with no network at all |
+| Recorded demo | `ui/src/recorded/recording.json`, `eval/demo/record_test.go` | Three synthetic matters (13 documents plus one scanned exhibit, `ui/src/recorded/06-affidavit-of-service-scan.jpg`, drawn by `eval/demo/make_scan.py`) and seven recorded memo tasks (48 findings, 79 citations); documents, outlines, sections, chunks, the scan's transcript (v2's vision path with a scripted reader), run-log and offered search hits and every quote's verification computed by v2's `internal/docs`; claims from the answer keys; the default call budget read from `cmd/biglaw/config.go` (§ UI, provenance). `TestDemoRecording` fails when the committed recording no longer matches what v2's code computes |
 | Sign-in | `internal/auth/` (`oidc.go`, `session.go`; migration `0011_sessions.sql`), `internal/api/signin.go`; `0012_task_submitter.sql` | OpenID Connect code flow with PKCE against one issuer, ID tokens verified with the standard library (discovery, JWKS, RS/ES signatures, claims), server-side sessions behind an opaque cookie, admins by `BIGLAW_ADMINS`, and the API behind a session (§ Sign-in) |
 | Test helper | `internal/auth/authtest/` | A local OpenID provider (httptest: discovery, JWKS, PKCE-checking token endpoint, RSA and EC keys, key rotation) and the helpers to craft refused tokens and walk a browser through sign-in |
 | Test helper | `internal/store/storetest/` | Gives each DB test its own schema; skips without a DSN, fails if `BIGLAW_REQUIRE_DB` is set |
@@ -215,7 +215,7 @@ caller is tested against `model.Fake` or an `httptest` server.
 - **Embeddings and watt-hours.** `Embed` sends up to 256 texts a call on the `embed` role's model,
   with the same retries, redirect rule and typed failures as a chat call, and is priced like every
   call (no `usage`: an unknown cost, never $0); no `embed` role is 503 `model_not_configured`. With
-  `BIGLAW_LOCAL_WATTS` set every call records watt-hours beside its price, never changing it. The
+  `BIGLAW_LOCAL_WATTS` set every call records watt-hours beside its price, never changing it (an estimate, watts × duration; a task's total is `summary.wattHours` in `GET /tasks/{id}/cost`, absent when none was recorded). The
   vector checks and the embedding models' rates: [docs/reference.md § Model client](docs/reference.md#model-client).
 - **`model.Fake`** answers from scripts keyed by agent name, in order. A call for an agent with
   no script, or past the end of its script, is an error, never a default reply; an empty reply is
@@ -327,7 +327,7 @@ service, a corporate directory). It is built on the Go standard library alone (n
   http) and the table only that id's SHA-256. A session ends after 8 hours without a request or 7
   days after sign-in, whichever is first; `POST /auth/logout` deletes the row, so a copied cookie
   dies with it. Every sign-in issues a new id and deletes the browser's previous session (no
-  fixation). `GET /me` is the session's user `{id: sub, name, email, admin, authEnabled: true}`.
+  fixation). `GET /me` is the session's user `{id: sub, name, email, admin, authEnabled: true, model}` (`model`: a lead model is set up).
   **The issuer is not asked again during a session**: disabling an account there ends its BigLaw
   sessions only at their idle or absolute end. To end them now, an admin calls
   `POST /manage/sessions/revoke {"user": "<sub or email>"}` (every session of that sub, or of that
@@ -569,8 +569,8 @@ the majority (changed from v1, G6: `TestCitationJudgeFailureIsAnError`). `Verify
 section holding the match. `Resolve` maps a model's citation by file name (any case, directory or
 extension) to the one document in scope with that name; an ambiguous name resolves to nothing.
 
-**Upload and download.** `POST /documents/upload` takes `multipart/form-data` with one part named
-`file`, streams it into the files table and ingests it: 201 with the document (`id`, `name`,
+**Upload and download.** `POST /documents/upload[?matter=N]` takes `multipart/form-data` with one part named
+`file`, streams it into the files table, ingests it and files it under matter `N` (also a scan left waiting for vision; `N` is refused 400 before anything is read when over 64 bytes or holding what a file name may not, as `POST /documents`' `matterNumber` is): 201 with the document (`id`, `name`,
 `contentType` (detected), `fileId`, `method` `text`|`text_layer`|`vision`, `noText`, `status`
 (`ready`|`needs_transcription`|`failed`), `transcript` (when anything was transcribed), `pages`, `notes`,
 `sections`, `chunks`, `createdAt`). A part with no file name is 400 `bad_request`; the declared
@@ -727,13 +727,13 @@ GET    /health
 POST   /documents                     {name, text, matterNumber?} → Document (text only; files: /documents/upload)
 GET    /documents[?matter=N]          GET /documents/{id}   DELETE /documents/{id}
 GET    /documents/{id}/outline        GET /documents/{id}/sections/{sectionId}?offset=&limit=
-GET    /documents/search?q=&ids=a,b   POST /documents/upload   GET /documents/{id}/file
+GET    /documents/search?q=&ids=a,b   POST /documents/upload[?matter=N]   GET /documents/{id}/file
 GET    /clients                       matters derived from documents' matter numbers (clients: PR 8)
 POST   /tasks                         {description, workflowType, documentIds[], jurisdiction?, matterNumber?, maxSteps?, toolBandit?: on|off} → 201 Task
 GET    /tasks   GET /tasks/{id}       Task with run {status, step, stopReason, budget, openFindings}, gates, findings, output
 GET    /tasks/{id}/steps?after=N      the step log, paged
 GET    /tasks/{id}/events             SSE: step (each once, in order), task (run changed), done
-GET    /tasks/{id}/cost               per-step usage and USD (null when unpriced), lost grants
+GET    /tasks/{id}/cost               per-step usage and USD (null when unpriced), lost grants, estimated wattHours when recorded
 GET    /tasks/{id}/deliverable.md     the rendered memo
 POST   /tasks/{id}/cancel
 POST   /tasks/{id}/gates/{gateId}/approve      POST /tasks/{id}/gates/{gateId}/reject {"reason": "…"}
@@ -1003,26 +1003,23 @@ to BigLaw only through one interface (`ui/src/api/transport.ts`):
 - `http.ts` — the REST API on the same origin (README contract routes; the shapes the contract left
   open are fixed in DESIGN § UI contract, PR 11, and typed in `ui/src/api/types.ts`). PR 4b serves the task, step, gate, cost, client and
   document routes; `biglaw serve` serves the built UI at `/` (`make ui build` embeds `ui/dist`; a
-  build without it shows a notice there). Playbooks, time entries and profiles are 404 until PRs 6/8/9. `npm run dev` proxies the API paths to `UI_API` (default `http://127.0.0.1:3101`).
+  build without it shows a notice there). `npm run dev` proxies the API paths to `UI_API` (default `http://127.0.0.1:3101`).
 - `recorded.ts` — replays recorded runs in the browser. A build with `VITE_ENGINE=recorded` aliases
   the transport to it, so the bundle contains no HTTP code: `test/offline.test.ts` builds it and
   fails on any `fetch`, `XMLHttpRequest`, `EventSource`, `WebSocket`, `sendBeacon`, worker, preload
-  link or absolute URL (`scripts/offline-check.mjs`; the same check flags the live bundle, proving it bites). Two exact strings are
-  allowed because they are displayed, never requested: `https://discover.legal/` (the banner's way back) and `http://127.0.0.1:3101` (a default on Settings).
+  link or absolute URL (`scripts/offline-check.mjs`; the same check flags the live bundle, proving it bites). One exact string is
+  allowed because it is displayed, never requested: `https://discover.legal/` (the banner's way back).
 
 **Manage** (`screens/Manage.tsx`, § Manage): the sections Agents, Tools, Packs, Skills, Hooks and Change log; each item's contents, where it is used and its usage; for an admin an editor over structured fields (description, turn cap, class, role, allowed tools, schemas; a pack's or skill's status, reviewer, checklist or tools, and body) or the raw files, with problems shown beside their file, a preview of unsaved changes, history with a diff between any two versions or the built-in, revert, a new skill, delete, and export links. The recorded demo shows the built-in catalogue read-only (`ui/src/recorded/manage.json`, recorded by `eval/demo/manage_test.go`; no history, no export, every write refused).
 
 **Screens** (hash routes, so a static bundle works under any base path): **Matters** (matter cards,
-tasks, the new-task wizard), **Task** (run bar with status, step, stop reason, budget, Cancel; the
-deliverable gate with Approve/Reject; tabs Run log (the steps, streamed), Findings (claims,
+tasks, the new-task wizard; a "No AI model set up yet" card while `GET /me`'s `model` is false), **Task** (run bar with status, step, stop reason, budget, Cancel;
+why a failed run failed (`error`, `groundingAlert`); the deliverable gate with Approve/Reject, and a finding gate showing its finding; tabs Run log (the steps, streamed), Findings (claims,
 severity, each citation with its verification badge: `exact`, `tolerant`, `judge`, `ensemble`,
 `… @transcript`, `excluded`; a verified quote links to its section with the matched text
-highlighted), Deliverable (the memo with `[F-id]` links, Limitations and Evidence Note) and Cost),
-**Documents** (library, outline, section reader with highlight, search), **Playbooks**, **Clients &
-Conflicts**, **Time & Billing**, **Settings**. The last four are read views over PR 6/8/9 routes;
-in the recorded demo Clients shows the sample matters, Playbooks, Time & Billing and Settings'
-profiles show sample records written for the demo (labelled so on screen), and Settings also lists
-this build's configuration table, read-only. Rejecting the deliverable asks for a reason (sent as
+highlighted), Deliverable (the memo with `[F-id]` links, Limitations and Evidence Note; Download .md, Copy, Print) and Cost),
+**Documents** (upload and file to a matter, live only; library, outline, section reader with highlight, search).
+Playbooks, clients and time screens come back with the PRs that build their routes (6, 8, 9). Rejecting the deliverable asks for a reason (sent as
 `{"reason"}` to `POST /tasks/{id}/gates/{gateId}/reject`, as v1's reject did) and closes the gate:
 the decision is kept in `decidedGates`; live, the lead resumes with the reason (the task goes back to
 `running` and the Task screen opens the event stream again, which the server ends with `done` at every gate (`ui/src/api/follow.ts`); the recorded demo has no revised run, so there it stays `rejected`). The Task screen's Table and
@@ -1065,8 +1062,7 @@ and verified like the rest: of 79 citations across 48 findings, 74 are `exact`, 
 the scan, capped at 0.85), and 1 is excluded: finding F5 of the deadlines task misquotes the rule's
 figure ("20 days"; the excerpt says 21), fails `VerifyQuote`, is quarantined, left out of the memo
 and named in its Evidence Note. The memo's Limitations name each of these. No judge or ensemble rung
-ran (they are model calls), and no committee step is recorded. Playbooks, time entries and profiles
-are sample records (fictional people). Costs are $0 because no call was made; the Cost tab quotes
+ran (they are model calls), and no committee step is recorded. Costs are $0 because no call was made; the Cost tab quotes
 v1's best Haiku LAB run ($11.52, 8.3 M tokens) for scale.
 
 ```bash
@@ -1133,8 +1129,7 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
 - Without sign-in Manage has no per-person admin: the local user is an admin on loopback, read-only under `--allow-no-auth`, and anyone who can reach the server under `--admin-without-auth`; the change log's author is "Local user" (§ Manage, Who). Sign-in has two roles only (admin, member); every signed-in user sees every matter (per-matter access, an approve rule's role, API tokens for scripts and the clients roster are not built), and the issuer is not asked again during a session (removing an account there ends its BigLaw sessions at their idle or absolute end; an admin ends them now with `POST /manage/sessions/revoke`, which has no screen yet). There is no member allowlist on BigLaw's side: who may sign in is the issuer's decision (§ Sign-in).
 - The engine's tests write their own skills: an export that deletes a starter skill only makes `ui/src/recorded/manage.json` stale (re-record it).
 - Manage creates skills, subagents, MCP and HTTP tools and MCP servers, not packs; the compatibility check's limits are in docs/reference.md § Manage. A remote call in flight when a process dies is made again on resume (its step had not committed): remote tools should be safe to repeat. MCP tools: text content only (other parts are noted, not shown), one session per call, no server-initiated requests; the HTTP and MCP answers are one page (truncated, never paged by a second call).
-- The UI's Playbooks, Time & Billing and profile views have no live routes until PRs 6/8/9 (404);
-  Clients shows matters derived from documents' matter numbers until PR 8's client roster.
+- Matters are derived from documents' matter numbers until PR 8's client roster.
 - **Memo workflow (PR 4b):**
   - Every test scripts the model (`model.Fake`); real models have run it only in the owner's bench
     and Harvey LAB runs (bench5–bench7, the Haiku LAB reruns: their logged behaviour is scripted into

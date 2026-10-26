@@ -73,6 +73,9 @@ func New(st *store.Store, d *docs.Service, chat model.Chatter, roles model.Roles
 		owner: hex.EncodeToString(id), runs: map[string]*run{}, wake: make(chan struct{}, 1), remote: newRemoteClient(RemotePolicy{})}
 }
 
+// Ready reports whether a lead model is set up, so a task can run (GET /me's "model": the UI's first-run card).
+func (e *Engine) Ready() bool { return e.chat != nil && e.roles.Lead != "" }
+
 // Task is a task as stored: its request and its run's state.
 type Task struct {
 	ID             string    `json:"id"`

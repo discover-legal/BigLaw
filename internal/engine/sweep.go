@@ -545,7 +545,7 @@ func (e *Engine) uncheck(ctx context.Context, taskID string, fids []string) erro
 			continue
 		}
 		for _, v := range f.Values {
-			f.ValueNotes = append(f.ValueNotes, fmt.Sprintf("value %q (%s) not admitted: the sweep stopped before the figure reader read it", v.Value, cmpStr(v.Metric != "", v.Metric, "no metric")))
+			f.ValueNotes = append(f.ValueNotes, fmt.Sprintf("value %q (%s) not admitted: the sweep stopped before the figure check read it", v.Value, cmpStr(v.Metric != "", v.Metric, "no metric")))
 		}
 		f.Values = nil
 		if err := e.write(ctx, taskID, kFinding, f.FID, f, true); err != nil {

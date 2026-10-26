@@ -72,7 +72,7 @@ func TestManageAdminGuard(t *testing.T) {
 	}
 
 	s := manageServer(t, local)
-	if _, body := s.do("GET", "/me", nil); !strings.Contains(body, `"id":"local"`) || !strings.Contains(body, `"admin":true`) || !strings.Contains(body, `"authEnabled":false`) {
+	if _, body := s.do("GET", "/me", nil); !strings.Contains(body, `"id":"local"`) || !strings.Contains(body, `"admin":true`) || !strings.Contains(body, `"authEnabled":false`) || !strings.Contains(body, `"model":false`) {
 		t.Fatalf("with auth off the local user is an admin: %s", body)
 	}
 	req, _ := http.NewRequest("POST", s.URL+"/manage/items/prompt.lead/versions", strings.NewReader(`{"base":0,"files":{},"note":""}`))
