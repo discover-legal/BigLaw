@@ -63,12 +63,13 @@ test('the recorded demo shows the catalogue read-only', async () => {
   const t = recorded();
   assert.equal((await t.me()).admin, false);
   const items = await t.manageItems();
-  for (const s of ['agents', 'tools', 'packs', 'skills', 'hooks']) assert.ok(items.some((i) => i.section === s), s);
+  for (const s of ['agents', 'tools', 'packs', 'skills']) assert.ok(items.some((i) => i.section === s), s);
   assert.ok(items.every((i) => !('content' in i)));
   const lead = await t.manageItem('prompt.lead');
   assert.deepEqual(lead.original, lead.content);
-  const hook = await t.manageItem('hook.draft_section');
-  assert.ok(hook.hook && hook.hook.source.every((s) => s.text.includes('func ')));
+  const drafter = await t.manageItem('agent.draft_section');
+  assert.ok(drafter.checks && drafter.checks.length > 0 && drafter.checks.every((c) => c.trim() !== ''));
+  assert.ok(!items.some((i) => i.id.startsWith('hook.')));
   assert.equal(t.exportUrl('patch'), null);
   assert.deepEqual(await t.manageChanges(), []);
   assert.deepEqual(await t.manageSecrets(), []);

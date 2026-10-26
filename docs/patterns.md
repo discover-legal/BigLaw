@@ -283,7 +283,9 @@ added:
 **How to apply.**
 - Read specs, prompts, packs and skills only through `spec(ctx, …)`, `prompt(ctx, …)`,
   `packsFor(ctx, …)` and `r.sp()`.
-- A new editable file must map to an item (`itemOf`, `TestCatalogueAndHooks`).
+- A new editable file must map to an item (`itemOf`, `TestCatalogue`).
+- A new Go check around a tool is a line in its `goContract` row (`checks`), in plain words;
+  wrapping a new tool without one fails `TestWrappedToolsDeclareChecks`.
 - A new field Go reads is automatically frozen by `compatSpec`. A new literal input Go sends goes
   in its tool's `goContract` row (`sent`).
 - Re-record `ui/src/recorded/manage.json` after changing a built-in (`make demo-record`).
@@ -384,7 +386,7 @@ Some invariants are checked by reading the repository rather than running the co
   `render.yaml`;
 - `TestGoVersionPinnedEverywhere`;
 - `TestDeployFilesFollowExposureRule`;
-- `TestCatalogueAndHooks`: every editable file maps to an item;
+- `TestCatalogue`: every editable file maps to an item;
 - `scripts/loc.py`: budgets and dynamic `os.Getenv`;
 - `TestDemoRecording` and `TestManageRecording`: the committed recordings match what the code
   computes.

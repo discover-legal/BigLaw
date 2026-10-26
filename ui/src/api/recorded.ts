@@ -173,7 +173,7 @@ export function createTransport(rec: Recording = recordingJson as unknown as Rec
     profiles: async () => rec.profiles,
     settings: async () => rec.settings,
     me: async () => ({ id: 'demo', name: 'Demo visitor', admin: false, authEnabled: false }),
-    manageItems: async () => items.map(({ content: _c, original: _o, hook: _h, callers: _k, ...i }) => i),
+    manageItems: async () => items.map(({ content: _c, original: _o, checks: _h, callers: _k, ...i }) => i),
     async manageItem(id) { const d = items.find((x) => x.id === id); if (!d) throw notFound('item'); return d; },
     manageHistory: async () => [],
     manageChanges: async () => [],

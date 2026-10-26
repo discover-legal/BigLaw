@@ -333,8 +333,8 @@ func TestManageStoreRoundTrip(t *testing.T) {
 	if err != nil || len(log) != 4 || log[0].Action != "revert" || log[0].From != 3 || log[0].Files != nil {
 		t.Fatalf("change log: %+v %v", log, err)
 	}
-	if _, _, err := e.Save(ctx, "hook.draft_section", SaveIn{Files: map[string]string{}}, "Ada"); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("a hook was saved: %v", err)
+	if _, _, err := e.Save(ctx, "hook.draft_section", SaveIn{Files: map[string]string{}}, "Ada"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a Go check was saved as an item: %v", err)
 	}
 	if _, _, err := e.Save(ctx, "prompt.nope", SaveIn{Files: map[string]string{}}, "Ada"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("an unknown item: %v", err)
@@ -666,9 +666,9 @@ func TestExportPatchApplies(t *testing.T) {
 	}
 }
 
-// TestCatalogueAndHooks: every built-in file is one item's; the catalogue's sections, where each
-// item is used, recent usage from the step log, and the hooks with their Go source (view only).
-func TestCatalogueAndHooks(t *testing.T) {
+// TestCatalogue: every built-in file is one item's; the catalogue's sections, where each item is
+// used, recent usage from the step log, and the checks Go runs around a tool on that tool's detail.
+func TestCatalogue(t *testing.T) {
 	t.Parallel()
 	for f := range builtin {
 		if itemOf(f) == "" {
@@ -686,7 +686,7 @@ func TestCatalogueAndHooks(t *testing.T) {
 		by[it.ID] = it
 	}
 	for id, sec := range map[string]string{"prompt.lead": "agents", "agent.read_figures": "agents", "pass.sweep": "agents", "tool.numbers": "tools",
-		"tool.use_skill": "tools", "pack.jurisdiction.us": "packs", "skill." + aSkill(t): "skills", "hook.draft_section": "hooks"} {
+		"tool.use_skill": "tools", "pack.jurisdiction.us": "packs", "skill." + aSkill(t): "skills"} {
 		if by[id].Section != sec {
 			t.Errorf("%s: section %q, want %s", id, by[id].Section, sec)
 		}
@@ -700,18 +700,17 @@ func TestCatalogueAndHooks(t *testing.T) {
 	if u := by["agent.draft_section"].Usage; u == nil || u.Steps != 1 {
 		t.Errorf("draft_section's usage: %+v", u)
 	}
-	h := by["hook.check_deviation"]
-	if h.Editable || !slices.Equal(h.Uses, []string{"check_deviation"}) {
-		t.Errorf("hook: %+v", h)
-	}
-	d, err := f.e.ItemDetail(context.Background(), "hook.check_deviation")
-	if err != nil || d.Hook == nil || len(d.Hook.Source) != 4 {
-		t.Fatalf("hook detail: %+v %v", d.Hook, err)
-	}
-	for _, s := range d.Hook.Source {
-		if !strings.Contains(s.Text, "func ") || !strings.HasPrefix(s.File, engineDir) {
-			t.Errorf("%s: no source", s.Func)
+	for id, want := range map[string]bool{"agent.check_deviation": true, "tool.numbers": true, "pass.finish": true, "tool.retrieve": false, "prompt.lead": false} {
+		if _, ok := by[id]; !ok {
+			t.Fatalf("no item %s", id)
 		}
+		d, err := f.e.ItemDetail(context.Background(), id)
+		if err != nil || (len(d.Checks) > 0) != want || want && !slices.Equal(d.Checks, goChecks(d.Name)) {
+			t.Errorf("%s's checks: %v %v", id, d.Checks, err)
+		}
+	}
+	if slices.ContainsFunc(items, func(it Item) bool { return strings.HasPrefix(it.ID, "hook.") }) {
+		t.Error("a Go hook is still an item")
 	}
 }
 

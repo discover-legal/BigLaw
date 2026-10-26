@@ -233,7 +233,7 @@ func TestHookRunsCrashSafe(t *testing.T) {
 }
 
 // TestHookRuleValidation: a rule's event, action, match, condition, check agent, webhook and
-// message are checked at save; names of Go hooks and reserved names are refused.
+// message are checked at save; reserved names are refused.
 func TestHookRuleValidation(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
@@ -254,7 +254,6 @@ func TestHookRuleValidation(t *testing.T) {
 		{rule("r1", 0, "before_call", "*", nil, HookAction{Type: "webhook", Message: "m", Webhook: &Webhook{URL: "https://10.0.0.1/x"}}, "closed"), errRemoteAddr.Error()},
 		{rule("r1", 0, "before_call", "*", nil, HookAction{Type: "block", Message: "a\u202eb"}, "closed"), "format characters"},
 		{rule("r1", 0, "before_call", "*", nil, good, "sometimes"), "failure: closed"},
-		{rule("draft_section", 0, "before_call", "*", nil, good, "closed"), "Go hook's"},
 		{rule("lead", 0, "before_call", "*", nil, good, "closed"), "is reserved"},
 	} {
 		if _, _, err := e.Save(ctx, "rule."+c.r.Name, SaveIn{Files: ruleFile(c.r)}, "Ada"); !strings.Contains(problems(err), c.want) {
@@ -263,7 +262,7 @@ func TestHookRuleValidation(t *testing.T) {
 	}
 	save(t, e, "rule.ok", 0, ruleFile(rule("ok", 0, "before_call", "*", nil, HookAction{Type: "check", Agent: "screen", Message: "m"}, "open")))
 	items, _ := e.Items(ctx)
-	if i := slices.IndexFunc(items, func(x Item) bool { return x.ID == "rule.ok" }); i < 0 || items[i].Section != "hooks" || !items[i].Editable || !slices.Contains(items[i].Uses, "screen") {
+	if i := slices.IndexFunc(items, func(x Item) bool { return x.ID == "rule.ok" }); i < 0 || items[i].Section != "hooks" || !slices.Contains(items[i].Uses, "screen") {
 		t.Fatalf("catalogue: %+v", items)
 	}
 	if _, err := e.Delete(ctx, "agent.screen", 1, "", "Ada"); !strings.Contains(problems(err), "screen") {

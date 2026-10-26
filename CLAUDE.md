@@ -120,7 +120,7 @@ budgets in `docs/history.md`. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`
   collapse G4, packs (`packs/*/*.md`, embedded, all candidate), and durable runs (`task_steps` +
   ledger + `tool_stats` in one tx per step, lease/heartbeat, resume by replay, lost grants charged (a graceful stop settles an in-flight tool's grant to its spend; every model call inside a journaled tool step is journaled as it happens, `agent` `meter` (query embeddings too, `agent.Meter`; a Go-side search uses `docs.SearchMetered`), so a hard crash charges the recorded spend plus the in-flight calls' worst cases);
   migration 0005). `views.go` is what the API shows (DESIGN § UI contract).
-- Manage (`internal/engine/specset.go`, `manage.go` (+ `manage_validate.go`), `diff.go`, `hooks.go`, `skills.go`; migration 0008;
+- Manage (`internal/engine/specset.go`, `manage.go` (+ `manage_validate.go`), `diff.go`, `skills.go`; migration 0008;
   `internal/api/manage.go`; `ui/src/screens/Manage.tsx`) — every agent, tool, pack and skill is a built-in
   file an admin may override with a version in `spec_versions` (save, revert, a skill created or deleted;
   the table is the history and the change log); `Submit` snapshots the overrides into `tasks.specs` and
@@ -132,7 +132,8 @@ budgets in `docs/history.md`. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`
   `ledger`) in a subagent's allowed list + class `free` only for subagents built free; saves are serial
   (`locked`: advisory lock, one tx); any change to a pack's or skill's content (every file, all front
   matter but status/reviewedBy) resets it to candidate unless the save names a new reviewer; the reader's and judge's cache keys hash the run's set (`Specs.agentHash`: spec, prompt and every allowed tool's spec).
-  Go hooks are view only (source cut from embedded files); configurable hooks (`hookrules.go`, items
+  Go's checks around a tool are its `goContract` row's `checks` lines (shown on its Manage page, view only;
+  `TestWrappedToolsDeclareChecks`); configurable hooks (`hookrules.go`, items
   `rule.<name>` in `specs/hooks/`) run through `Runtime.Hooks` (Before/After around every Invoke, their
   usage in the step's), `admit` (`findingHooks`) and `finish` (`finishHooks`), every outcome a `hookrun`
   ledger row written with its step; an `approve` gate (lead calls only, keyed by a 128-bit hash of the
@@ -147,7 +148,7 @@ budgets in `docs/history.md`. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`
   them, else a member; author fields record `Principal.Label()`); without it every request is the local
   user (`api.LocalUser`): an admin on loopback, read-only under `--allow-no-auth`, an admin for anyone
   under `--admin-without-auth` (warned, bannered); writes wear `docs.Guard` + `admin`.
-  A new editable file must map to an item (`itemOf`; `TestCatalogueAndHooks`), and a change to any of
+  A new editable file must map to an item (`itemOf`; `TestCatalogue`), and a change to any of
   them makes `ui/src/recorded/manage.json` stale (`make demo-record`; `TestManageRecording`, no DB).
   Custom agents and tools (`custom.go`, `remote.go`, migration 0009): admin-created subagents
   (`specs/agents/`), MCP servers (`specs/servers/`) and MCP/HTTP tools (`specs/tools/`); the lead sees

@@ -195,13 +195,12 @@ export type ManageSection = 'agents' | 'tools' | 'packs' | 'skills' | 'hooks';
 export interface ItemUsage { tasks: number; steps: number; calls: number; usd: number; unpriced: number }
 export interface ManageItem {
   id: string; section: ManageSection; kind: string; name: string; summary: string;
-  editable: boolean; builtin: boolean; version: number; latest: number; deleted: boolean; status?: string;
+  builtin: boolean; version: number; latest: number; deleted: boolean; status?: string;
   files: string[]; uses: string[]; usedBy: string[]; usage: ItemUsage | null;
 }
-export interface HookSource { file: string; func: string; text: string }
-export interface Hook { name: string; wraps: string; what: string; source: HookSource[] }
 export interface ManageDetail extends ManageItem {
-  content: Record<string, string>; original: Record<string, string> | null; hook?: Hook;
+  content: Record<string, string>; original: Record<string, string> | null;
+  checks?: string[]; // what Go checks around this tool or subagent, built in (not editable)
   callers: string[]; // what a skill's tools list may name
 }
 export interface SpecVersion {

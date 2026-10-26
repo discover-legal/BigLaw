@@ -24,7 +24,7 @@ import (
 )
 
 // Configurable hooks (README § Manage, Configurable hooks): an admin's declarative rules around
-// what a run does, beside the Go hooks (view only, hooks.go). A rule (specs/hooks/<name>.json) names
+// what a run does, beside the checks Go runs around some tools (goContract's checks, view only). A rule (specs/hooks/<name>.json) names
 // an event (before a tool or subagent call, after it, a finding admitted, the task's finish), what it
 // matches (a tool or subagent by name, or a prefix ending in *, and an optional condition on a field)
 // and one bounded action: block (with a message), approve (a lawyer's gate, the existing mechanism),
@@ -634,8 +634,6 @@ func (e *Engine) validateHookRule(f, text string, bad func(string, string, ...an
 	switch {
 	case r.Name != name:
 		bad(f, "name: must be %q (the file's)", name)
-	case slices.ContainsFunc(hooks, func(h Hook) bool { return h.Name == name }):
-		bad(f, "name: %q is a Go hook's; pick another", name)
 	case !slices.Contains(hookEvents, r.Event):
 		bad(f, "event: one of %s", strings.Join(hookEvents, ", "))
 	case !slices.Contains(hookActions[r.Event], r.Action.Type):
