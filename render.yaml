@@ -1,0 +1,48 @@
+# Render Blueprint: the Docker web service plus a Render Postgres.
+# Set the model and OIDC variables in the dashboard (sync: false).
+#
+# INERT UNTIL SIGN-IN IS SET (by design): a Render web service is public, so the
+# image's default `serve` refuses to listen on 0.0.0.0 until BIGLAW_OIDC_ISSUER
+# and BIGLAW_OIDC_CLIENT_ID (and _SECRET) are set; then every request needs a
+# session (README § Sign-in). Set BIGLAW_PUBLIC_URL to the service's https URL
+# and BIGLAW_ADMINS with them: left at its loopback default, the service starts
+# but no sign-in can complete. Do not add --allow-no-auth here (README § Exposure). It has never
+# been deployed and its instance plans are not pinned (README § Limitations).
+services:
+  - type: web
+    name: biglaw
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: BIGLAW_DATABASE_URL
+        fromDatabase:
+          name: biglaw-db
+          property: connectionString
+      - key: BIGLAW_ADDR
+        value: 0.0.0.0:3101
+      - key: PORT          # tells Render which port the service listens on
+        value: "3101"
+      - key: BIGLAW_PUBLIC_URL
+        sync: false
+      - key: BIGLAW_MODEL_URL
+        sync: false
+      - key: BIGLAW_MODEL_KEY
+        sync: false
+      - key: BIGLAW_MODELS
+        sync: false
+      - key: BIGLAW_OIDC_ISSUER
+        sync: false
+      - key: BIGLAW_OIDC_CLIENT_ID
+        sync: false
+      - key: BIGLAW_OIDC_CLIENT_SECRET
+        sync: false
+      - key: BIGLAW_ADMINS
+        sync: false
+
+databases:
+  - name: biglaw-db
+    databaseName: biglaw
+    user: biglaw
+    postgresMajorVersion: "16"
+    ipAllowList: []   # no external connections; the web service uses the internal URL

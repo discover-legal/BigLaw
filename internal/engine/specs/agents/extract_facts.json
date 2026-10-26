@@ -1,0 +1,261 @@
+{
+ "name": "extract_facts",
+ "kind": "subagent",
+ "class": "evidence",
+ "maxTurns": 3,
+ "role": "specialist",
+ "allowed": [
+  "retrieve"
+ ],
+ "description": "Reads one section page (documentId and sectionId, from offset; with through, the run of consecutive top-level sections from sectionId to through, as sweep batches short sections) or the passages a query finds, and returns every fact relevant to the question as findings: a claim, its verbatim quotes with their documentId, typed values (each must appear in its own quote), typed entities and relations. Go verifies every quote against the document before a finding enters the ledger; an unverified finding is quarantined and never drafted from. It returns the findings' ids (F1, F2, …) and whether each verified. Do not use it to analyse the law (analyze_issue) or to compare documents (check_deviation), and prefer sweep for reading every section.\nExample: {\"question\": \"What notice period does the termination clause set?\", \"documentId\": \"3f6c2a9e-0b1d-4c2e-9a7f-5d8e1b2c4a6f\", \"sectionId\": \"s7\", \"through\": null, \"offset\": null, \"query\": null, \"issueId\": \"I2\"}",
+ "in": {
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+   "question",
+   "documentId",
+   "sectionId",
+   "through",
+   "offset",
+   "query",
+   "issueId"
+  ],
+  "properties": {
+   "question": {
+    "type": "string",
+    "maxLength": 2000,
+    "minLength": 1
+   },
+   "documentId": {
+    "type": [
+     "string",
+     "null"
+    ],
+    "maxLength": 64
+   },
+   "sectionId": {
+    "type": [
+     "string",
+     "null"
+    ],
+    "maxLength": 16
+   },
+   "through": {
+    "type": [
+     "string",
+     "null"
+    ],
+    "maxLength": 16
+   },
+   "offset": {
+    "type": [
+     "integer",
+     "null"
+    ],
+    "minimum": 0
+   },
+   "query": {
+    "type": [
+     "string",
+     "null"
+    ],
+    "maxLength": 1024
+   },
+   "issueId": {
+    "type": [
+     "string",
+     "null"
+    ],
+    "maxLength": 16
+   }
+  }
+ },
+ "out": {
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+   "findings",
+   "gaps"
+  ],
+  "properties": {
+   "findings": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "additionalProperties": false,
+     "required": [
+      "issueId",
+      "claim",
+      "quotes",
+      "values",
+      "entities",
+      "relations",
+      "confidence"
+     ],
+     "properties": {
+      "issueId": {
+       "type": [
+        "string",
+        "null"
+       ],
+       "maxLength": 16
+      },
+      "claim": {
+       "type": "string",
+       "maxLength": 4000,
+       "minLength": 1
+      },
+      "quotes": {
+       "type": "array",
+       "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+         "documentId",
+         "quote",
+         "locator"
+        ],
+        "properties": {
+         "documentId": {
+          "type": "string",
+          "maxLength": 64
+         },
+         "quote": {
+          "type": "string",
+          "maxLength": 4000,
+          "minLength": 1
+         },
+         "locator": {
+          "type": [
+           "string",
+           "null"
+          ],
+          "maxLength": 200
+         }
+        }
+       },
+       "maxItems": 8
+      },
+      "values": {
+       "type": "array",
+       "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+         "entity",
+         "metric",
+         "value",
+         "unit",
+         "date",
+         "class"
+        ],
+        "properties": {
+         "entity": {
+          "type": "string",
+          "maxLength": 200
+         },
+         "metric": {
+          "type": "string",
+          "maxLength": 200
+         },
+         "value": {
+          "type": "string",
+          "maxLength": 200
+         },
+         "unit": {
+          "type": [
+           "string",
+           "null"
+          ],
+          "maxLength": 40
+         },
+         "date": {
+          "type": [
+           "string",
+           "null"
+          ],
+          "maxLength": 40
+         },
+         "class": {
+          "type": [
+           "string",
+           "null"
+          ],
+          "maxLength": 40
+         }
+        }
+       },
+       "maxItems": 20
+      },
+      "entities": {
+       "type": "array",
+       "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+         "name",
+         "class"
+        ],
+        "properties": {
+         "name": {
+          "type": "string",
+          "maxLength": 200
+         },
+         "class": {
+          "type": [
+           "string",
+           "null"
+          ],
+          "maxLength": 40
+         }
+        }
+       },
+       "maxItems": 20
+      },
+      "relations": {
+       "type": "array",
+       "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+         "subject",
+         "predicate",
+         "object"
+        ],
+        "properties": {
+         "subject": {
+          "type": "string",
+          "maxLength": 200
+         },
+         "predicate": {
+          "type": "string",
+          "maxLength": 80
+         },
+         "object": {
+          "type": "string",
+          "maxLength": 200
+         }
+        }
+       },
+       "maxItems": 20
+      },
+      "confidence": {
+       "type": "number",
+       "minimum": 0,
+       "maximum": 1
+      }
+     }
+    },
+    "maxItems": 40
+   },
+   "gaps": {
+    "type": "array",
+    "items": {
+     "type": "string",
+     "maxLength": 1000
+    },
+    "maxItems": 20
+   }
+  }
+ }
+}

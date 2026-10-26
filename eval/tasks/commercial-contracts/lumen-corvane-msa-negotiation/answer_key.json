@@ -1,0 +1,385 @@
+{
+  "matter": "commercial-contracts/lumen-corvane-msa-negotiation",
+  "version": 1,
+  "as_of": "2026-10-15",
+  "notes": "Synthetic negotiation. Ground truth = the disposition the playbook (03) dictates for each numbered change in the markup (02), plus the counter-position numbers where the disposition is COUNTER. One change (s.9.1 warranty 90 -> 180 days) is deliberately left unmarked in the markup.",
+  "dispositions": [
+    {
+      "id": "C-01",
+      "title": "Payment terms Net 30 -> Net 45",
+      "expected": "ACCEPT",
+      "documents": [
+        "02-corvane-redline-of-msa.md",
+        "03-lumen-negotiation-playbook.md"
+      ],
+      "evidence": [
+        "[[DEL: thirty (30)]][[INS: forty-five (45)]] days after the invoice date",
+        "Net 45 is acceptable."
+      ],
+      "model_answer": "Net 45 is within playbook fallback P-1."
+    },
+    {
+      "id": "C-02",
+      "title": "Deletion of 1.5% monthly late-payment interest",
+      "expected": "COUNTER",
+      "documents": [
+        "02-corvane-redline-of-msa.md",
+        "03-lumen-negotiation-playbook.md"
+      ],
+      "evidence": [
+        "Never delete late-payment interest entirely.",
+        "Late-payment interest may be reduced to 1.0% per month."
+      ],
+      "position_title": "reinstate interest at 1.0% per month",
+      "position": {
+        "all": [
+          [
+            "$pct:1",
+            "1.0%",
+            "one percent"
+          ]
+        ]
+      },
+      "model_answer": "Reinstate s.4.2 at a reduced 1.0% per month (P-2)."
+    },
+    {
+      "id": "C-03",
+      "title": "General liability cap 12 -> 36 months' fees",
+      "expected": "COUNTER",
+      "documents": [
+        "02-corvane-redline-of-msa.md",
+        "03-lumen-negotiation-playbook.md"
+      ],
+      "evidence": [
+        "[[DEL: TWELVE (12)]][[INS: THIRTY-SIX (36)]]",
+        "The general liability cap may be increased to 24 months' fees."
+      ],
+      "position_title": "cap at 24 months' fees",
+      "position": {
+        "all": [
+          [
+            "24 months",
+            "twenty-four (24)",
+            "24-month",
+            "twenty-four months"
+          ]
+        ]
+      },
+      "model_answer": "Offer a 24 months' fees cap (P-3); 36 months exceeds the walk-away."
+    },
+    {
+      "id": "C-04",
+      "title": "Uncapped liability for Provider's breach of s.8 (Data Security)",
+      "expected": "COUNTER",
+      "documents": [
+        "02-corvane-redline-of-msa.md",
+        "03-lumen-negotiation-playbook.md"
+      ],
+      "evidence": [
+        "PROVIDER'S BREACH OF SECTION 8 (DATA SECURITY)",
+        "Offer a separate super-cap for data-security breaches equal to 3x the annual Fees."
+      ],
+      "position_title": "super-cap of 3x annual fees",
+      "position": {
+        "all": [
+          [
+            "3x",
+            "three times",
+            "3 times",
+            "300%"
+          ],
+          [
+            "super-cap",
+            "super cap",
+            "supercap",
+            "separate cap",
+            "annual fees"
+          ]
+        ]
+      },
+      "model_answer": "Replace the uncapped carve-out with a separate super-cap of 3x the annual Fees (P-4)."
+    },
+    {
+      "id": "C-05",
+      "title": "New s.4.4 most-favored-customer pricing",
+      "expected": "REJECT",
+      "documents": [
+        "02-corvane-redline-of-msa.md",
+        "03-lumen-negotiation-playbook.md"
+      ],
+      "evidence": [
+        "Always reject most-favored-customer or price-parity clauses."
+      ],
+      "model_answer": "MFN pricing is a P-5 walk-away; strike s.4.4."
+    },
+    {
+      "id": "C-06",
+      "title": "Customer termination for convenience at any time on 30 days' notice",
+      "expected": "COUNTER",
+      "documents": [
+        "02-corvane-redline-of-msa.md",
+        "03-lumen-negotiation-playbook.md"
+      ],
+      "evidence": [
+        "Customer may terminate this Agreement for convenience at any time upon thirty (30) days' written notice",
+        "Termination for convenience is acceptable only after the first 12 months of the Subscription Term, on at least 90 days' notice, with an early termination fee of 50% of the remaining Fees."
+      ],
+      "position_title": "only after 12 months, 90 days' notice, 50% early termination fee",
+      "position": {
+        "all": [
+          [
+            "12 months",
+            "twelve (12) months",
+            "first year",
+            "twelve months"
+          ],
+          [
+            "90 days",
+            "ninety (90)",
+            "90-day",
+            "ninety days"
+          ],
+          [
+            "$pct:50",
+            "half"
+          ]
+        ]
+      },
+      "model_answer": "Allow termination for convenience only after the first 12 months, on 90 days' notice, with an early termination fee of 50% of remaining Fees (P-6)."
+    },
+    {
+      "id": "C-07",
+      "title": "Governing law Delaware -> New York",
+      "expected": "ACCEPT",
+      "documents": [
+        "02-corvane-redline-of-msa.md",
+        "03-lumen-negotiation-playbook.md"
+      ],
+      "evidence": [
+        "[[DEL: Delaware]][[INS: New York]]",
+        "New York law is an acceptable alternative."
+      ],
+      "model_answer": "New York law is an acceptable alternative under P-7."
+    },
+    {
+      "id": "C-08",
+      "title": "SLA service-credit cap 10% -> 25%",
+      "expected": "COUNTER",
+      "documents": [
+        "02-corvane-redline-of-msa.md",
+        "03-lumen-negotiation-playbook.md"
+      ],
+      "evidence": [
+        "[[DEL: ten percent (10%)]][[INS: twenty-five percent (25%)]]",
+        "Service credits may be capped at up to 15% of monthly Fees."
+      ],
+      "position_title": "cap credits at 15%",
+      "position": {
+        "all": [
+          [
+            "$pct:15",
+            "fifteen percent"
+          ]
+        ]
+      },
+      "model_answer": "Counter at a 15% service-credit cap (P-8)."
+    },
+    {
+      "id": "C-09",
+      "title": "On-site audit at any time on 10 business days' notice",
+      "expected": "COUNTER",
+      "documents": [
+        "02-corvane-redline-of-msa.md",
+        "03-lumen-negotiation-playbook.md"
+      ],
+      "evidence": [
+        "may conduct an on-site audit of Provider's facilities, systems and records relating to Customer Data at any time upon ten (10) business days' notice",
+        "On-site audits only once per 12 months, on 30 days' notice, and only following a confirmed Security Incident affecting Customer Data."
+      ],
+      "position_title": "once per 12 months, 30 days' notice, only after a Security Incident",
+      "position": {
+        "all": [
+          [
+            "30 days",
+            "thirty (30)",
+            "30-day",
+            "thirty days"
+          ],
+          [
+            "security incident",
+            "incident",
+            "breach"
+          ]
+        ]
+      },
+      "model_answer": "Keep SOC 2 + questionnaire; allow on-site audits once per 12 months on 30 days' notice only after a confirmed Security Incident (P-9)."
+    },
+    {
+      "id": "C-10",
+      "title": "Cyber insurance $2M -> $5M per claim",
+      "expected": "ACCEPT",
+      "documents": [
+        "02-corvane-redline-of-msa.md",
+        "03-lumen-negotiation-playbook.md"
+      ],
+      "evidence": [
+        "[[DEL: $2,000,000]][[INS: $5,000,000]] per claim",
+        "Cyber insurance limits of up to $5,000,000 per claim are acceptable."
+      ],
+      "model_answer": "$5,000,000 is within P-10."
+    },
+    {
+      "id": "C-11",
+      "title": "Customer may assign to any third party without consent",
+      "expected": "REJECT",
+      "documents": [
+        "02-corvane-redline-of-msa.md",
+        "03-lumen-negotiation-playbook.md"
+      ],
+      "evidence": [
+        "Customer may assign this Agreement, in whole or in part, to any third party without Provider's consent",
+        "Unilateral free assignment by Customer."
+      ],
+      "model_answer": "Unilateral free assignment is a P-11 walk-away; keep mutual s.13.1."
+    },
+    {
+      "id": "C-12",
+      "title": "Non-renewal notice 60 -> 90 days",
+      "expected": "ACCEPT",
+      "documents": [
+        "02-corvane-redline-of-msa.md",
+        "03-lumen-negotiation-playbook.md"
+      ],
+      "evidence": [
+        "[[DEL: sixty (60)]][[INS: ninety (90)]] days before the end of the then-current term",
+        "A non-renewal notice period of up to 90 days is acceptable."
+      ],
+      "model_answer": "Up to 90 days is acceptable under P-12."
+    },
+    {
+      "id": "C-14",
+      "title": "Deletion of lost profits from the consequential-damages exclusion",
+      "expected": "REJECT",
+      "documents": [
+        "02-corvane-redline-of-msa.md",
+        "03-lumen-negotiation-playbook.md"
+      ],
+      "evidence": [
+        "[[DEL: , OR LOST PROFITS]]",
+        "Never remove lost profits from the mutual consequential-damages exclusion."
+      ],
+      "model_answer": "Removing lost profits from the exclusion is a P-13 walk-away; reinstate."
+    }
+  ],
+  "facts": [
+    {
+      "id": "NEG-01",
+      "title": "Unmarked change: s.9.1 warranty period silently extended from 90 to 180 days",
+      "question": "What warranty period does the counterparty's latest draft of the MSA provide?",
+      "category": "integrity",
+      "severity": "high",
+      "documents": [
+        "02-corvane-redline-of-msa.md",
+        "01-msa-lumen-form-as-sent.md",
+        "03-lumen-negotiation-playbook.md"
+      ],
+      "evidence": [
+        "for a period of one hundred eighty (180) days after each release is made available to Customer",
+        "for a period of ninety (90) days after each release is made available to Customer"
+      ],
+      "detect": {
+        "all": [
+          [
+            "180",
+            "one hundred eighty"
+          ],
+          [
+            "unmarked",
+            "not marked",
+            "without marking",
+            "silent",
+            "untracked",
+            "not tracked",
+            "not shown",
+            "not redlined",
+            "without redline",
+            "undisclosed",
+            "hidden",
+            "not flagged",
+            "not identified"
+          ]
+        ]
+      },
+      "model_answer": "Section 9.1's warranty period was changed from 90 to 180 days but the change is unmarked in Corvane's markup; it must be called out, reversed to 90 days (P-14) and escalated."
+    },
+    {
+      "id": "NEG-02",
+      "title": "Unmarked change must be reversed to 90 days and escalated per the playbook integrity rule",
+      "question": "What does the playbook require when the counterparty makes a change without marking it?",
+      "category": "integrity",
+      "severity": "medium",
+      "documents": [
+        "03-lumen-negotiation-playbook.md"
+      ],
+      "evidence": [
+        "Any change the counterparty did not mark must be called out to the counterparty in writing as an unmarked change, reversed, and escalated to the deal lead"
+      ],
+      "detect": {
+        "all": [
+          [
+            "90 days",
+            "ninety (90)",
+            "90-day",
+            "ninety days"
+          ],
+          [
+            "warranty"
+          ],
+          [
+            "revers",
+            "reinstat",
+            "restor",
+            "revert"
+          ]
+        ]
+      },
+      "model_answer": "Reverse the warranty period to ninety (90) days and escalate the unmarked change to the deal lead."
+    }
+  ],
+  "traps": [
+    {
+      "id": "TRAP-NEG-01",
+      "title": "Corvane's numbering skips C-13 — a disposition for a non-existent C-13 means the response was not built from the markup",
+      "documents": [
+        "02-corvane-redline-of-msa.md"
+      ],
+      "evidence": [
+        "numbered C-01 through C-14 for ease of reference"
+      ],
+      "forbid": {
+        "all": [
+          [
+            "re:\\bc-?0*13\\b"
+          ],
+          [
+            "re:\\b(accept|counter|reject)"
+          ]
+        ]
+      },
+      "unless": [
+        "does not exist",
+        "no c-13",
+        "skip",
+        "not used",
+        "omitted",
+        "no change",
+        "not present",
+        "does not appear",
+        "not appear",
+        "no such",
+        "missing"
+      ],
+      "model_violation": "| C-13 | Warranty | REJECT | Reinstate 90 days |"
+    }
+  ]
+}

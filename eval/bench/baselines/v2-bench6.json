@@ -1,0 +1,386 @@
+{
+  "schema_version": 1,
+  "kind": "baseline",
+  "mode": null,
+  "label": "v2-bench6",
+  "source": "bench6: build 091bcfc, harvey-labs run-ids .../v2-haiku45-b11-r4-091bcfc/20261024-074818 (SEC) and .../20261024-090112 (trust), judged by claude-sonnet-4-6 (single judge, pandoc 3.1.3); per-criterion verdicts copied from those runs' scores.json; flips against bench5 (build 4d6ac3c: .../v2-haiku45-b11-r6-4d6ac3c/20261024-041012 SEC, .../20261024-053155 trust, the 05:31 run), as the owner recorded them and recomputed from both runs' scores.json; gate A litigation from the owner's record (per-criterion unknown). Its settings were set by hand: config_hash is null, and reconstructed_config holds them as believed with provenance per key.",
+  "build": {
+    "sha": "091bcfc",
+    "dirty": null,
+    "patch": null,
+    "untracked": [],
+    "go": null
+  },
+  "config_hash": null,
+  "config": null,
+  "reconstructed_config": {
+    "name": "bench6 (reconstructed)",
+    "description": "The settings bench6 (build 091bcfc) is believed to have run under; provenance says how each is known.",
+    "mode": "real",
+    "models": {
+      "lead": "claude-haiku-4-5",
+      "specialist": "claude-haiku-4-5",
+      "critic": "claude-haiku-4-5"
+    },
+    "model_url": "https://api.anthropic.com/v1",
+    "vendor_opt_in": [
+      "ALLOW_ANTHROPIC"
+    ],
+    "budget": {
+      "usd": 11,
+      "calls": 900
+    },
+    "search": "lexical",
+    "postgres_image": "pgvector/pgvector:0.8.6-pg16",
+    "harness": {
+      "name": "harvey-labs",
+      "commit": "81d6a31"
+    },
+    "judge": {
+      "runner": "harvey-labs",
+      "models": [
+        "claude-sonnet-4-6"
+      ],
+      "parallel": 6,
+      "price_per_mtok": {
+        "in": 3,
+        "out": 15
+      },
+      "output_tokens_per_criterion": 1000,
+      "chars_per_token": 3.5
+    },
+    "spend_cap_usd": 60,
+    "driver": {
+      "workflow": "memo",
+      "tool_bandit": "on",
+      "gate_policy": "approve",
+      "max_steps": null,
+      "poll_seconds": 10,
+      "timeout_seconds": 14400
+    },
+    "tasks": [
+      {
+        "id": "sec",
+        "kind": "lab",
+        "task": "white-collar-defense-investigations/extract-key-allegations-from-sec-enforcement-referral-notice",
+        "jurisdiction": "US",
+        "split_mode": "markers",
+        "matter": "LAB",
+        "judge_reserve_usd": 12
+      },
+      {
+        "id": "trust",
+        "kind": "lab",
+        "task": "trusts-estates-private-client/compare-trust-documents-against-client-instructions",
+        "jurisdiction": "US",
+        "split_mode": "markers",
+        "matter": "LAB",
+        "judge_reserve_usd": 8
+      },
+      {
+        "id": "gate-a-litigation",
+        "kind": "proofrun",
+        "task": "litigation/greystone-v-talbot-defense",
+        "jurisdiction": "US",
+        "split_mode": "markers",
+        "matter": "litigation",
+        "judge_reserve_usd": 0
+      }
+    ]
+  },
+  "reconstructed_config_hash": "sha256:4fc1ad33d559dd5e627696ab780c6a370289b60c9d62d425e4242209e6829717",
+  "provenance": {
+    "name": "not applicable: a label",
+    "description": "not applicable: a label",
+    "mode": "verified: real model runs",
+    "models.lead": "inferred: the run-ids' haiku45 (the exact id or alias served was not recorded)",
+    "models.specialist": "inferred: the run-ids' haiku45 (the exact id or alias served was not recorded)",
+    "models.critic": "inferred: the run-ids' haiku45 (the exact id or alias served was not recorded)",
+    "model_url": "inferred: Anthropic's API (Haiku-priced calls); the endpoint was not recorded",
+    "vendor_opt_in": "inferred: Anthropic's API (Haiku-priced calls); the endpoint was not recorded",
+    "budget.usd": "inferred: the run-ids' b11, consistent with SEC stopping budget_exhausted at $10.27",
+    "budget.calls": "verified: biglaw_tasks.json run.budget, calls used plus remaining (566 + 334, 443 + 457)",
+    "search": "inferred: no embed role recorded",
+    "postgres_image": "unknown: the database was not recorded",
+    "harness.name": "verified: the harvey-labs checkout's reflog shows one clone at 81d6a31 (2026-10-23), before bench6",
+    "harness.commit": "verified: the harvey-labs checkout's reflog shows one clone at 81d6a31 (2026-10-23), before bench6",
+    "judge.runner": "verified: scores.json judge_model claude-sonnet-4-6, single judge",
+    "judge.models": "verified: scores.json judge_model claude-sonnet-4-6, single judge",
+    "judge.parallel": "inferred: run_eval's default (not recorded; it does not change verdicts)",
+    "judge.price_per_mtok.in": "not applicable: the suite's judge cost estimate, set to the pinned value",
+    "judge.price_per_mtok.out": "not applicable: the suite's judge cost estimate, set to the pinned value",
+    "judge.output_tokens_per_criterion": "not applicable: the suite's judge cost estimate, set to the pinned value",
+    "judge.chars_per_token": "not applicable: the suite's judge cost estimate, set to the pinned value",
+    "spend_cap_usd": "not applicable: no suite cap existed; set to the pinned value",
+    "driver.workflow": "verified: each run's config.json",
+    "driver.tool_bandit": "verified: each run's metrics.json",
+    "driver.gate_policy": "verified: each run's config.json",
+    "driver.max_steps": "inferred: the driver default (not recorded)",
+    "driver.poll_seconds": "inferred: the drivers' default poll interval of 10 s (not recorded); it does not affect a score",
+    "driver.timeout_seconds": "unknown (\u2265 4091 s): the SEC run took 4091 s, so the timeout was above the LAB CLI's 3600 s default; it does not affect a score",
+    "tasks[sec].kind": "verified: the run-id (harvey-labs results/white-collar-defense-investigations/extract-key-allegations-from-sec-enforcement-referral-notice/v2-haiku45-b11-r4-091bcfc/20261024-074818)",
+    "tasks[sec].task": "verified: the run-id (harvey-labs results/white-collar-defense-investigations/extract-key-allegations-from-sec-enforcement-referral-notice/v2-haiku45-b11-r4-091bcfc/20261024-074818)",
+    "tasks[sec].jurisdiction": "verified: the run's config.json (harvey-labs results/white-collar-defense-investigations/extract-key-allegations-from-sec-enforcement-referral-notice/v2-haiku45-b11-r4-091bcfc/20261024-074818)",
+    "tasks[sec].split_mode": "verified: the run's config.json (harvey-labs results/white-collar-defense-investigations/extract-key-allegations-from-sec-enforcement-referral-notice/v2-haiku45-b11-r4-091bcfc/20261024-074818)",
+    "tasks[sec].matter": "inferred: the LAB driver's default matter number (not recorded)",
+    "tasks[sec].judge_reserve_usd": "not applicable: a suite-level cap reserve that did not exist; set to the pinned value",
+    "tasks[trust].kind": "verified: the run-id (harvey-labs results/trusts-estates-private-client/compare-trust-documents-against-client-instructions/v2-haiku45-b11-r4-091bcfc/20261024-090112)",
+    "tasks[trust].task": "verified: the run-id (harvey-labs results/trusts-estates-private-client/compare-trust-documents-against-client-instructions/v2-haiku45-b11-r4-091bcfc/20261024-090112)",
+    "tasks[trust].jurisdiction": "verified: the run's config.json (harvey-labs results/trusts-estates-private-client/compare-trust-documents-against-client-instructions/v2-haiku45-b11-r4-091bcfc/20261024-090112)",
+    "tasks[trust].split_mode": "verified: the run's config.json (harvey-labs results/trusts-estates-private-client/compare-trust-documents-against-client-instructions/v2-haiku45-b11-r4-091bcfc/20261024-090112)",
+    "tasks[trust].matter": "inferred: the LAB driver's default matter number (not recorded)",
+    "tasks[trust].judge_reserve_usd": "not applicable: a suite-level cap reserve that did not exist; set to the pinned value",
+    "tasks[gate-a-litigation].kind": "unknown: gate A's run settings were not recorded (only its totals, from the owner)",
+    "tasks[gate-a-litigation].task": "unknown: gate A's run settings were not recorded (only its totals, from the owner)",
+    "tasks[gate-a-litigation].jurisdiction": "unknown: gate A's run settings were not recorded (only its totals, from the owner)",
+    "tasks[gate-a-litigation].split_mode": "unknown: gate A's run settings were not recorded (only its totals, from the owner)",
+    "tasks[gate-a-litigation].matter": "unknown: gate A's run settings were not recorded (only its totals, from the owner)",
+    "tasks[gate-a-litigation].judge_reserve_usd": "not applicable: a suite-level cap reserve that did not exist; set to the pinned value",
+    "fresh_db": "unknown: whether the database was fresh was not recorded (earlier runs shared servers and probably databases)",
+    "tool_stats": "unknown: the tool bandit's priors (shared tool_stats) the runs started from",
+    "yardstick": "unknown: the in-repo scorer and driver were not hashed",
+    "harness.pandoc": "verified: scores.json pandoc_version 3.1.3"
+  },
+  "yardstick": null,
+  "harness": {
+    "name": "harvey-labs",
+    "commit": "81d6a31",
+    "dirty": null,
+    "pandoc": "3.1.3"
+  },
+  "judge": {
+    "models": [
+      "claude-sonnet-4-6"
+    ],
+    "runner": "harvey-labs"
+  },
+  "database": null,
+  "models_served": null,
+  "runner": {
+    "host": null,
+    "date": null,
+    "python": null
+  },
+  "fresh_db": null,
+  "spend": {
+    "cap_usd": null,
+    "charged_usd": null,
+    "biglaw_usd": null,
+    "judge_usd_estimated": null
+  },
+  "stopped": null,
+  "tasks": [
+    {
+      "id": "sec",
+      "kind": "lab",
+      "task": "white-collar-defense-investigations/extract-key-allegations-from-sec-enforcement-referral-notice",
+      "status": "recorded",
+      "score": {
+        "passed": 38,
+        "total": 60
+      },
+      "criteria": {
+        "C-001": "pass",
+        "C-002": "pass",
+        "C-003": "pass",
+        "C-004": "pass",
+        "C-005": "pass",
+        "C-006": "pass",
+        "C-007": "pass",
+        "C-008": "pass",
+        "C-009": "pass",
+        "C-010": "pass",
+        "C-011": "pass",
+        "C-012": "pass",
+        "C-013": "pass",
+        "C-014": "pass",
+        "C-015": "fail",
+        "C-016": "pass",
+        "C-017": "pass",
+        "C-018": "pass",
+        "C-019": "pass",
+        "C-020": "pass",
+        "C-021": "pass",
+        "C-022": "pass",
+        "C-023": "fail",
+        "C-024": "fail",
+        "C-025": "fail",
+        "C-026": "fail",
+        "C-027": "pass",
+        "C-028": "fail",
+        "C-029": "pass",
+        "C-030": "pass",
+        "C-031": "pass",
+        "C-032": "fail",
+        "C-033": "pass",
+        "C-034": "fail",
+        "C-035": "fail",
+        "C-036": "fail",
+        "C-037": "fail",
+        "C-038": "fail",
+        "C-039": "fail",
+        "C-040": "fail",
+        "C-041": "fail",
+        "C-042": "fail",
+        "C-043": "fail",
+        "C-044": "pass",
+        "C-045": "pass",
+        "C-046": "fail",
+        "C-047": "pass",
+        "C-048": "pass",
+        "C-049": "pass",
+        "C-050": "pass",
+        "C-051": "pass",
+        "C-052": "fail",
+        "C-053": "fail",
+        "C-054": "pass",
+        "C-055": "pass",
+        "C-056": "pass",
+        "C-057": "pass",
+        "C-058": "pass",
+        "C-059": "fail",
+        "C-060": "fail"
+      },
+      "flips": {
+        "vs": "bench5",
+        "gained": [
+          "C-002",
+          "C-044",
+          "C-047",
+          "C-056"
+        ],
+        "lost": [
+          "C-015",
+          "C-023",
+          "C-024",
+          "C-025",
+          "C-026",
+          "C-028",
+          "C-052",
+          "C-059"
+        ]
+      },
+      "cost_usd": 10.27,
+      "calls": 566,
+      "stop_reason": "budget_exhausted",
+      "duration_s": 4091.2,
+      "stage_spend": null,
+      "stage_calls": null,
+      "reader": null,
+      "judge": null,
+      "failures": {
+        "steps_failed": null,
+        "steps_refused": null,
+        "grading_errors": 0
+      },
+      "conflicts": null,
+      "computed_figures": null,
+      "finding_gates": 1,
+      "judge_cost": null,
+      "models_served": null,
+      "charged_usd": null,
+      "run_dir": null,
+      "error": null,
+      "notes": []
+    },
+    {
+      "id": "trust",
+      "kind": "lab",
+      "task": "trusts-estates-private-client/compare-trust-documents-against-client-instructions",
+      "status": "recorded",
+      "score": {
+        "passed": 11,
+        "total": 23
+      },
+      "criteria": {
+        "C-001": "pass",
+        "C-002": "pass",
+        "C-003": "pass",
+        "C-004": "pass",
+        "C-005": "pass",
+        "C-006": "fail",
+        "C-007": "fail",
+        "C-008": "pass",
+        "C-009": "pass",
+        "C-010": "fail",
+        "C-011": "fail",
+        "C-012": "fail",
+        "C-013": "pass",
+        "C-014": "fail",
+        "C-015": "fail",
+        "C-016": "fail",
+        "C-017": "fail",
+        "C-018": "pass",
+        "C-019": "fail",
+        "C-020": "pass",
+        "C-021": "pass",
+        "C-022": "fail",
+        "C-023": "fail"
+      },
+      "flips": {
+        "vs": "bench5",
+        "gained": [
+          "C-013",
+          "C-018"
+        ],
+        "lost": [
+          "C-010",
+          "C-011",
+          "C-016"
+        ]
+      },
+      "cost_usd": 8.57,
+      "calls": 443,
+      "stop_reason": "finished",
+      "duration_s": 2500.8,
+      "stage_spend": null,
+      "stage_calls": null,
+      "reader": null,
+      "judge": null,
+      "failures": {
+        "steps_failed": null,
+        "steps_refused": null,
+        "grading_errors": 0
+      },
+      "conflicts": null,
+      "computed_figures": null,
+      "finding_gates": 3,
+      "judge_cost": null,
+      "models_served": null,
+      "charged_usd": null,
+      "run_dir": null,
+      "error": null,
+      "notes": []
+    },
+    {
+      "id": "gate-a-litigation",
+      "kind": "proofrun",
+      "task": "litigation/greystone-v-talbot-defense",
+      "status": "recorded",
+      "score": {
+        "passed": 20,
+        "total": 20
+      },
+      "criteria": null,
+      "flips": null,
+      "cost_usd": 9.6,
+      "calls": 444,
+      "stop_reason": "budget_exhausted",
+      "duration_s": null,
+      "stage_spend": null,
+      "stage_calls": null,
+      "reader": null,
+      "judge": null,
+      "failures": null,
+      "conflicts": null,
+      "computed_figures": null,
+      "finding_gates": null,
+      "judge_cost": null,
+      "models_served": null,
+      "charged_usd": null,
+      "run_dir": null,
+      "error": null,
+      "notes": []
+    }
+  ]
+}

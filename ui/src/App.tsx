@@ -1,299 +1,97 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
-import { api, streamTask } from "./api";
-import type { Task, Health, AgentSummary, LawyerProfile, Me, Notify, NotifyTone } from "./types";
-import { MODE_ACCENT, MODE_LABEL } from "./types";
-import { SubmitModal } from "./SubmitModal";
-import { AuditRail } from "./AuditRail";
-import { Login } from "./Login";
-import { ErrorBoundary } from "./pages/ErrorBoundary";
-import { HomePage } from "./pages/HomePage";
-import { MattersPage } from "./pages/MattersPage";
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (C) 2026 Discover Legal
+//
+// The shell: the seven screens and Manage (README § UI screens), hash routes so a static bundle works under
+// any base path, the demo banner when the engine is recorded, and with sign-in (README § Sign-in) a
+// sign-in page until there is a session, then the user and Sign out in the header.
+import { useEffect, useState } from 'react';
+import { ApiError, type Transport } from './api/transport.ts';
+import type { Me } from './api/types.ts';
+import { Api, parseRoute } from './lib.tsx';
+import { Icon } from './components/icons.tsx';
+import { Matters } from './screens/Matters.tsx';
+import { TaskScreen } from './screens/Task.tsx';
+import { Documents } from './screens/Documents.tsx';
+import { Billing, Clients, Playbooks, Settings } from './screens/Others.tsx';
+import { Manage } from './screens/Manage.tsx';
 
-/** Toast status dot — reuses the task-status dot palette. */
-const TOAST_DOT: Record<NotifyTone, string> = { ok: "complete", warn: "interrupted", error: "failed" };
-
-const LibraryPage = lazy(() => import("./Library").then((m) => ({ default: m.LibraryPage })));
-const ClientsPanel = lazy(() => import("./ClientsPanel").then((m) => ({ default: m.ClientsPanel })));
-const BillingPage = lazy(() => import("./pages/BillingPage").then((m) => ({ default: m.BillingPage })));
-const BudgetsPage = lazy(() => import("./pages/BudgetsPage").then((m) => ({ default: m.BudgetsPage })));
-const WatchtowerPage = lazy(() => import("./pages/WatchtowerPage").then((m) => ({ default: m.WatchtowerPage })));
-const DraftingPage = lazy(() => import("./pages/DraftingPage").then((m) => ({ default: m.DraftingPage })));
-const ReviewsPage = lazy(() => import("./pages/ReviewsPage").then((m) => ({ default: m.ReviewsPage })));
-const AnalyticsPage = lazy(() => import("./pages/AnalyticsPage").then((m) => ({ default: m.AnalyticsPage })));
-const AdminPanel = lazy(() => import("./AdminPanel").then((m) => ({ default: m.AdminPanel })));
-
-type Section =
-  | "home" | "matters" | "library" | "clients" | "billing" | "budgets"
-  | "watchtower" | "drafting" | "reviews" | "analytics" | "admin";
-
-const NAV: Array<{ id: Section; glyph: string; label: string }> = [
-  { id: "home",       glyph: "⌂", label: "Home" },
-  { id: "matters",    glyph: "⚖", label: "Matters" },
-  { id: "library",    glyph: "⊞", label: "Library" },
-  { id: "clients",    glyph: "☷", label: "Clients" },
-  { id: "billing",    glyph: "⏱", label: "Billing & Time" },
-  { id: "budgets",    glyph: "◔", label: "Budgets & Deadlines" },
-  { id: "watchtower", glyph: "◉", label: "Watchtower" },
-  { id: "drafting",   glyph: "✎", label: "Drafting" },
-  { id: "reviews",    glyph: "▦", label: "Reviews" },
-  { id: "analytics",  glyph: "∿", label: "Analytics" },
-  { id: "admin",      glyph: "⚙", label: "Admin" },
+const NAV: [string, string][] = [
+  ['matters', 'Matters'], ['documents', 'Documents'], ['playbooks', 'Playbooks'],
+  ['clients', 'Clients & Conflicts'], ['billing', 'Time & Billing'], ['manage', 'Manage'], ['settings', 'Settings'],
 ];
 
-export default function App() {
-  const [section, setSection] = useState<Section>("home");
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [task, setTask] = useState<Task | null>(null);
-  const [health, setHealth] = useState<Health | null>(null);
-  const [agents, setAgents] = useState<AgentSummary[]>([]);
-  const [me, setMe] = useState<Me | null>(null);
-	const [authReady, setAuthReady] = useState(false);
-  const [profiles, setProfiles] = useState<LawyerProfile[]>([]);
-  const loadProfiles = useCallback(() => { api.listProfiles().then(setProfiles).catch(() => {}); }, []);
-  const [libraryTab, setLibraryTab] = useState<"documents" | "upload" | "search" | undefined>(undefined);
-  const [submitOpen, setSubmitOpen] = useState(false);
-  const [auditOpen, setAuditOpen] = useState(false);
-  const [toast, setToast] = useState<{ msg: string; tone: NotifyTone } | null>(null);
-  const toastTimer = useRef<number | undefined>(undefined);
+const logo = <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><rect width="24" height="24" rx="6" fill="currentColor" /><path d="M7 7v10h5.5a3 3 0 0 0 0-6H7m0 0h4.5a2 2 0 0 0 0-4H7" fill="none" stroke="var(--accent-ink)" strokeWidth="2" strokeLinejoin="round" /></svg>;
 
-  const notify = useCallback<Notify>((msg, tone = "ok") => {
-    setToast({ msg, tone });
-    window.clearTimeout(toastTimer.current);
-    toastTimer.current = window.setTimeout(() => setToast(null), 3200);
-  }, []);
-
-  // Poll task list + health.
-  useEffect(() => {
-	if (!authReady || (me?.authEnabled && !me.user)) return;
-    const load = () => api.listTasks().then((t) => {
-      setTasks(t);
-      setSelectedId((cur) => cur ?? (t.length ? t[0].id : null));
-    }).catch(() => {});
-    load();
-    const iv = window.setInterval(load, 4000);
-    return () => window.clearInterval(iv);
-  }, [authReady, me?.authEnabled, me?.user]);
-
-  useEffect(() => {
-	if (!authReady || (me?.authEnabled && !me.user)) return;
-    const load = () => api.health().then(setHealth).catch(() => setHealth(null));
-    load();
-    const iv = window.setInterval(load, 8000);
-    return () => window.clearInterval(iv);
-  }, [authReady, me?.authEnabled, me?.user]);
-
-  // The agent registry is effectively static for a session — fetch once and
-  // build an id→registered-name map so the Rounds view can label every agent
-  // (including those that activated but produced no finding).
-  useEffect(() => {
-	api.me().then(setMe).catch(() => setMe(null)).finally(() => setAuthReady(true));
-	const unauthorized = () => {
-	  setTasks([]); setTask(null); setProfiles([]); setSelectedId(null);
-	  setMe((current) => current ? { ...current, user: null } : current);
-	};
-	window.addEventListener("biglaw:unauthorized", unauthorized);
-	return () => window.removeEventListener("biglaw:unauthorized", unauthorized);
-  }, []);
-  useEffect(() => {
-	if (!authReady || (me?.authEnabled && !me.user)) return;
-	api.listAgents().then(setAgents).catch(() => {});
-	loadProfiles();
-  }, [authReady, me?.authEnabled, me?.user, loadProfiles]);
-
-  const isPartner = me?.user?.role === "partner";
-
-  // Inject --accent CSS vars whenever the user's mode changes.
-  useEffect(() => {
-    const root = document.documentElement.style;
-    const mode = me?.mode ?? "admin";
-    const hex = MODE_ACCENT[mode];
-    root.setProperty("--accent", hex);
-    root.setProperty("--accent-bright", mode === "admin" ? "#F3CB73" : hex);
-    root.setProperty("--accent-soft", `color-mix(in srgb, ${hex} 13%, transparent)`);
-    root.setProperty("--accent-border", `color-mix(in srgb, ${hex} 38%, transparent)`);
-  }, [me?.mode]);
-
-  const onDeleted = useCallback((id: string) => {
-    setTasks((prev) => prev.filter((t) => t.id !== id));
-    setSelectedId((cur) => (cur === id ? null : cur));
-    api.listTasks().then(setTasks).catch(() => {});
-  }, []);
-
-  const agentNames = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const a of agents) m.set(a.id, a.name);
-    return m;
-  }, [agents]);
-
-  // Live-track the selected task: snapshot + stream-triggered refetch.
-  useEffect(() => {
-	if (!authReady || (me?.authEnabled && !me.user)) return;
-    if (!selectedId) { setTask(null); return; }
-    let alive = true;
-    const refetch = () => api.getTask(selectedId).then((t) => { if (alive) setTask(t); }).catch(() => {});
-    refetch();
-    const stop = streamTask(selectedId, {
-      onSnapshot: (t) => { if (alive) setTask(t); },
-      onPing: refetch,
-    });
-    return () => { alive = false; stop(); };
-  }, [selectedId, authReady, me?.authEnabled, me?.user]);
-
-  const refetchSelected = useCallback(() => {
-    if (selectedId) api.getTask(selectedId).then(setTask).catch(() => {});
-    api.listTasks().then(setTasks).catch(() => {});
-  }, [selectedId]);
-
-  function onCreated(t: Task) {
-    setSubmitOpen(false);
-    setTasks((prev) => [t, ...prev.filter((p) => p.id !== t.id)]);
-    setSelectedId(t.id);
-    setSection("matters");
-  }
-
-  // Which sections this principal can see. Partner-only workspaces are hidden
-  // rather than rendered as a wall of 403s.
-  const caps = me?.capabilities;
-  const visible = useMemo(() => {
-    const out = new Set<Section>(["home", "matters", "library", "drafting", "reviews", "budgets"]);
-    if (isPartner && caps?.clientRoster !== false) out.add("clients");
-    if (caps?.timeTracking !== false) out.add("billing");
-    if (isPartner) out.add("watchtower");
-    if (isPartner && caps?.matterAnalytics !== false) out.add("analytics");
-    if (caps?.adminSettings !== false) out.add("admin");
-    return out;
-  }, [isPartner, caps]);
-
-  // If capabilities shrink (e.g. logout/login as lawyer), fall back to Matters.
-  useEffect(() => {
-    if (!visible.has(section)) setSection("matters");
-  }, [visible, section]);
-
-  // A Home deep-link can preselect a Library tab; once consumed (Library has
-  // mounted and read it as its initial tab), clear it so a later direct visit
-  // opens on Documents rather than re-forcing the deep-linked tab.
-  useEffect(() => {
-    if (section === "library" && libraryTab) setLibraryTab(undefined);
-  }, [section, libraryTab]);
-
-  // Production with auth on, but no session → show the login screen.
-  if (!authReady) return <div className="app-loading" role="status">Loading workspace…</div>;
-  if (me?.authEnabled && !me.user) return <Login />;
-
+/** SignIn is the whole page when sign-in is on and there is no session (GET /me is 401). */
+function SignIn() {
   return (
-    <div className="app">
-      <aside className="sidebar">
-        <div className="brand">
-          <div className="brand-mark">
-            <span className="big">Big</span><span className="michael">Law</span><span className="dot">.</span>
+    <main className="signin">
+      <div className="panel">
+        <p className="brand">{logo}BigLaw<sup>2</sup></p>
+        <h1>Sign in</h1>
+        <p className="muted">This server signs you in with your firm's identity provider. Everyone signed in can run tasks and decide gates; admins also change what its agents use.</p>
+        <a className="button primary" href={`/auth/login?next=${encodeURIComponent('/' + window.location.hash)}`}>Sign in with your firm account</a>
+      </div>
+    </main>
+  );
+}
+
+export function App(props: { api: Transport }) {
+  const [route, setRoute] = useState(() => parseRoute(window.location.hash));
+  const [about, setAbout] = useState(false);
+  const [me, setMe] = useState<Me | 'signin' | null>(); // undefined until /me answers: no screen asks the API before
+  useEffect(() => { props.api.me().then(setMe, (e: unknown) => setMe(e instanceof ApiError && e.status === 401 ? 'signin' : null)); }, [props.api]);
+  useEffect(() => {
+    const on = () => { setRoute(parseRoute(window.location.hash)); window.scrollTo(0, 0); };
+    window.addEventListener('hashchange', on);
+    return () => window.removeEventListener('hashchange', on);
+  }, []);
+  const [screen = 'matters', arg] = route.path;
+  const active = screen === 'task' || !NAV.some(([id]) => id === screen) ? 'matters' : screen;
+  if (me === 'signin') return <SignIn />;
+  if (me === undefined) return null;
+  let body;
+  switch (screen) {
+    case 'task': body = <TaskScreen id={arg ?? ''} tab={route.q.get('tab') ?? 'run'} />; break;
+    case 'documents': body = <Documents q={route.q} />; break;
+    case 'playbooks': body = <Playbooks />; break;
+    case 'clients': body = <Clients />; break;
+    case 'billing': body = <Billing />; break;
+    case 'settings': body = <Settings />; break;
+    case 'manage': body = <Manage section={route.q.get('section') ?? 'agents'} item={route.q.get('item') ?? ''} tab={route.q.get('tab') ?? 'contents'} />; break;
+    default: body = <Matters matter={route.q.get('matter') ?? ''} />;
+  }
+  return (
+    <Api.Provider value={props.api}>
+      {props.api.provenance && (
+        <div className="demo-banner" role="note">
+          <div className="demo-line">
+            {props.api.home && <a className="home" href={props.api.home}><Icon name="back" size={13} />discover.legal</a>}
+            <span><span className="rec-dot" aria-hidden="true" /><strong>Recorded run; not live.</strong> No model is called and nothing is saved. Fictional matters; not legal advice.</span>
+            <button className="link" onClick={() => setAbout(!about)} aria-expanded={about} aria-controls="how">{about ? 'Hide' : 'How this demo works'}</button>
           </div>
-          <div className="brand-sub">the biglaw tool stack · open &amp; free</div>
+          {about && <p id="how" className="provenance">{props.api.provenance}</p>}
         </div>
-
-        <div className="rail-actions">
-          <button className="btn primary full" onClick={() => setSubmitOpen(true)}>＋ New matter</button>
+      )}
+      <header className="top">
+        <div className="top-in">
+          <a className="brand" href="#/matters" aria-label="BigLaw 2, Matters">
+            {logo}BigLaw<sup>2</sup>
+          </a>
+          <nav aria-label="Screens">
+            {NAV.map(([id, label]) => (
+              <a key={id} href={`#/${id}`} className={active === id ? 'on' : ''} aria-current={active === id ? 'page' : undefined}>{label}</a>
+            ))}
+          </nav>
+          {me?.authEnabled && (
+            <div className="user">
+              <span title={me.email}>{me.name}</span><span className="badge">{me.admin ? 'admin' : 'member'}</span>
+              <button className="small" onClick={() => void props.api.signOut?.().finally(() => window.location.reload())}>Sign out</button>
+            </div>
+          )}
         </div>
-
-        <nav className="nav">
-          {NAV.filter((n) => visible.has(n.id)).map((n) => (
-            <button
-              key={n.id}
-              className={`nav-item ${section === n.id ? "active" : ""}`}
-              onClick={() => setSection(n.id)}
-            >
-              <span className="nav-glyph">{n.glyph}</span>
-              <span className="nav-label">{n.label}</span>
-              {n.id === "matters" && tasks.some((t) => t.pendingGates?.some((g) => g.status === "pending")) && (
-                <span className="nav-badge" title="Findings awaiting review">⚖</span>
-              )}
-            </button>
-          ))}
-        </nav>
-
-        <div className="sidebar-foot">
-          <span className="sidebar-foot-line">Big Michael convenes the bench</span>
-        </div>
-      </aside>
-
-      <main className="main">
-        <div className="topbar">
-          <div className="health">
-            <span className={`dot ${health ? "complete" : "failed"}`} />
-            {health ? <>API v{health.version} · up {Math.floor(health.uptime / 60)}m</> : "API offline"}
-          </div>
-          <div className="health">
-			{health && <>
-			  <span>{health.tasks.queued} queued</span>
-			  <span>{health.tasks.running} running</span>
-              <span style={{ color: "var(--amber)" }}>{health.tasks.awaiting_gate} gated</span>
-              <span style={{ color: "var(--green)" }}>{health.tasks.complete} done</span>
-            </>}
-            {me?.user && (
-              <span className="whoami" title={`${me.user.email} · ${me.user.role}`}>
-                {me.user.name}
-                {me.user.role === "partner" && <span className="pill sm gold">partner</span>}
-                {me.mode && <span className="mode-chip" data-mode={me.mode}>{MODE_LABEL[me.mode]}</span>}
-                {me.authEnabled && <button className="logout" onClick={() => api.logout().then(() => location.reload())}>sign out</button>}
-              </span>
-            )}
-          </div>
-        </div>
-
-        <div className="workspace">
-          <ErrorBoundary key={section}>
-            <Suspense fallback={<div className="empty" role="status">Loading workspace…</div>}>
-            {section === "home" && (
-              <HomePage
-                tasks={tasks} health={health} me={me} isPartner={isPartner}
-                onOpenMatter={(id) => { setSelectedId(id); setSection("matters"); }}
-                onGo={(s) => setSection(s as Section)}
-                onGoLibrary={(tab) => { setLibraryTab(tab); setSection("library"); }}
-                onNew={() => setSubmitOpen(true)} notify={notify}
-              />
-            )}
-            {section === "matters" && (
-              <MattersPage
-                tasks={tasks} selectedId={selectedId} onSelect={setSelectedId}
-                task={task} agentNames={agentNames} profiles={profiles}
-                isPartner={isPartner} onChange={refetchSelected} onDeleted={onDeleted}
-                notify={notify} onNew={() => setSubmitOpen(true)} offline={!health}
-              />
-            )}
-            {section === "library" && <LibraryPage notify={notify} initialMode={libraryTab} />}
-            {section === "clients" && <ClientsPanel notify={notify} />}
-            {section === "billing" && <BillingPage notify={notify} isPartner={isPartner} />}
-            {section === "budgets" && <BudgetsPage notify={notify} isPartner={isPartner} />}
-            {section === "watchtower" && <WatchtowerPage notify={notify} />}
-            {section === "drafting" && <DraftingPage notify={notify} isPartner={isPartner} />}
-            {section === "reviews" && <ReviewsPage notify={notify} />}
-            {section === "analytics" && <AnalyticsPage notify={notify} />}
-            {section === "admin" && (
-              <AdminPanel
-                notify={notify} isPartner={isPartner} profiles={profiles}
-                onProfilesChange={loadProfiles} me={me?.user}
-              />
-            )}
-            </Suspense>
-          </ErrorBoundary>
-        </div>
-      </main>
-
-      <AuditRail open={auditOpen} onToggle={() => setAuditOpen((o) => !o)} profileId={me?.user?.profileId} />
-
-      <AnimatePresence>
-        {submitOpen && <SubmitModal onClose={() => setSubmitOpen(false)} onCreated={onCreated} notify={notify} />}
-      </AnimatePresence>
-
-      <AnimatePresence>
-        {toast && (
-          <motion.div className={`toast ${toast.tone}`} role={toast.tone === "error" ? "alert" : "status"}
-            initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 20 }}>
-            <span className={`dot ${TOAST_DOT[toast.tone]}`} />{toast.msg}
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
+      </header>
+      <main className="shell">{body}</main>
+    </Api.Provider>
   );
 }

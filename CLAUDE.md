@@ -1,906 +1,284 @@
-# BigLaw
+# BigLaw 2 — guide for AI assistants
 
-Multi-agent legal AI orchestration platform — the BigLaw tool stack, open and free for
-solos, boutiques, and small firms. Runs DyTopo rounds of granular epistemic/conceptual/writing
-agents over an in-process vector agent registry, with a debate + verification protocol on every
-finding before final synthesis.
+This is the `v2` rewrite: one Go module at the repo root (`github.com/discover-legal/BigLaw`),
+PostgreSQL only. `README.md` is the contract for what is on disk; keep it true in the same
+change. Design detail lives in `docs/` (`architecture.md`, `patterns.md`, `glossary.md`, and
+`documents.md`, `figures.md`, `reference.md` moved from the README); per-PR named tests and line
+budgets in `docs/history.md`. v2 is `main`; v1 (Go under `biglaw-go/`, DyTopo) is frozen on the branch
+`archive/v1-final`, not here.
 
-**Big Michael** is the channel agent: lives in Teams and Slack, @-mentionable in any channel,
-dispatches tasks to BigLaw's bench, and posts results back. See `biglaw-go/internal/bots/`
-for the implementation.
+## Built so far
+- `cmd/biglaw` — `serve [--allow-no-auth] [--admin-without-auth]`, `version [--config]`; `config.go` holds the complete
+  env-var table (19 vars, each tagged with the PR that first reads it; sign-in's are `BIGLAW_OIDC_ISSUER`,
+  `_CLIENT_ID`, `_CLIENT_SECRET`, `BIGLAW_PUBLIC_URL` and `BIGLAW_ADMINS` (PR 8), validated together by `signIn`; `BIGLAW_MODELS` is the role
+  map `role=id,…`, ids refused if they hold `://`, `user:pw@`, white space, control or invisible
+  characters or `? = &`, are over 200 bytes or look like a key)
+  and the vendor breakers. `serve` gives `docs` the embedder when an `embed` role is set and runs
+  the embedding backfill at startup, and the vision model when a `vision` role is set and runs the
+  transcription jobs at startup and every 15 minutes.
+- `internal/store` — `Open` (check DSN, connect, migrate), `CheckDSN`, `InTx`, `DB`, files (chunked
+  `bytea`, `PutFile` from an `io.Reader` under 16 upload slots, `GetFile`/`ReadFile` (streams
+  one chunk at a time) under 4 read slots,
+  `ValidName` = the file-name policy, `ValidID`), migration runner. `Open` creates the pgvector
+  extension (`CREATE EXTENSION IF NOT EXISTS vector`, under an advisory lock) before migrating.
+- `internal/docs` (PR 3a) — owns `documents`/`sections`/`chunks` (migration 0002). `Ingest`/
+  `IngestText`, `Extract` (type from content; a quoted-printable plain-text e-mail stored decoded, headers verbatim; PDFs and `.docx` in a bounded child process:
+  `child.go`), `Parse` (byte-exact, bounded section tree), `Chunkify`, `Search`, `Outline`,
+  `Section` (paged; a table in whole rows, `TablePageRows`, with its header row by reference), `Verify`/`VerifyQuote` (the ladder; a `|`-separated table row is matched as cells, tolerant at 0.9; the judge is a caller-supplied func),
+  `Resolve`, `WriteFile` (streams a document's original), `Delete`, `SweepOrphanFiles` (serve runs
+  it at startup), and `Routes` (`POST /documents/upload` with the read deadline,
+  `GET /documents/{id}/file` streamed under a write deadline). Every read takes a scope (the
+  task's document ids). Bounds to keep: document text ≤ 16 MiB (`maxText`), table chunks grouped
+  (no per-row copy of the header), ≤ 32 query terms and a 10 s search timeout, chunks inserted by
+  `COPY`. PR 3b (`embed.go`): `UseEmbedder` turns on hybrid search (RRF of the lexical ranking and
+  an exact cosine ranking of the scope's embedded chunks; a lexical-only document's chunk counts
+  its lexical rank twice; no ANN index, it breaks scoped recall; the query is embedded only after the
+  word check and only when the scope has vectors),
+  chunks embedded 64 per call at ingest outside the ingest slot (a failure leaves the document
+  lexical only with `EmbedNote`, never fails the ingest), `Backfill`; a document is in the vector
+  leg only when `embed_model` (cleared first, set after all its chunks at one length) is the current model.
+  PR 3c (`vision.go`, `scanpdf.go`, `jobs.go`): `UseVision` (the `vision` role only; never a text
+  role) transcribes images and PDF pages with no text layer, or only a stamp (< 80 chars; kept after the
+  transcript); a page with 80–399 chars over a page image is MIXED (`mixedMax`: read, the text layer stored
+  verbatim after only the reading's lines it lacks, `beyond`: a line is subtracted only when its joined letters/digits (figures keep separators) start and end on the layer's word boundaries in the layer's joined words; when in doubt kept; VerifyQuote prefers an exact whole-word copy outside the transcript; never held or refused: no role or a failed read →
+  text layer + unread-image note); ≥ 400 chars over any image is text (no call, noted), whose images are whole JPEG streams (found by offset in the child, sent as they
+  are, re-checked in the server, header dimensions capped); two readings per page by two prompts
+  (`vision_prompts.txt`), agreement < 0.75 refuses (422 `transcription_unreliable`), < 0.9 is
+  `lowConfidence`, and so is any page whose readings differ on what matters (`compare`: a mark, a
+  figure, a negation/modal, ≥ 5 words, word order; `PageRead.Disputed`); `[illegible]` is never
+  filled (the kept reading is masked, by position via the LCS `align` with a mark as a one-word wildcard and two tie-breaks, ambiguity masked, where the other has a mark; readings stored as returned, folded only to compare); a mixed PDF's text-layer pages
+  are never touched and its failed pages only noted; `Transcript` provenance on the document (byte
+  spans per page, usage whenever a call was made, SQL NULL otherwise), `chunks.transcribed`,
+  citations `…@transcript` capped at `TranscriptCap` 0.85; a 4xx refusal is 422 (a waiting doc: one attempt, run ends); a damaged image in a doc with text is noted, never refusing it; vision calls run
+  in 2 reader slots outside the ingest slots; no vision role → stored `needs_transcription` + 503,
+  and `TranscribePending` (leased, serve: startup + every 15 min; stops, config errors, rate limits
+  and busy readers spend no attempt) completes it later.
+  `internal/docs/ooxml` — `.docx` reader (text parts only, linear XML pass).
+- `internal/store/storetest` — `storetest.DSN(t)` gives a test its own schema, creates the
+  `vector` extension once per database and puts its schema on the test's `search_path`; at most
+  `storetest.Slots` tests across all test processes hold one at once (a flock per slot). Test stores
+  open with `store.OpenPool(ctx, dsn, log, storetest.Pool)`; only a test of the production pool's
+  bounds uses `store.Open`/`store.MaxOpenConns`.
+- `internal/engine/figtest` — test support: `figtest.Reader`, the figure reader's stand-in (a
+  `model.Fake` `Respond` hook labelling plain fixture texts), `figtest.With` for a test's right labels;
+  engine, API and eval tests use it (test data, never a rule of the engine).
+- `internal/model` — `Client` (OpenAI-compatible chat + tool calls + image parts, typed errors,
+  ≤ 3 attempts; a refused-but-billed 200 carries `Usage` on `*model.Error`), `HTTPStatus` (the one
+  failure→status mapping), `Roles` (the one role accessor: lead/specialist/critic fall back to the
+  lead, vision/embed never), `Embed` (`embed.go`: `/embeddings`, ≤ 256 inputs, vectors of one length with a sane norm,
+  priced like chat, no usage = unknown cost), `Prices`/`LoadPrices`/`ParsePrices`
+  (embedded `prices.json` + `BIGLAW_PRICES`, one parser; every call priced from the table whatever
+  the host, no row = unknown cost, never $0; `BIGLAW_LOCAL_WATTS` only adds watt-hours),
+  `Fake` (scripts keyed by agent name; unscripted or exhausted is an error; `Fake.Vectors` answers
+  `Embed`).
+- `internal/agent` (PR 4a) — the runtime: `Tool`/`Spec`/`Call`/`Result`, `Registry` (frozen,
+  strict-shaped definitions; ≤ 48 tools, ≤ 24 visible (raised from 22/14 for custom agents and tools); descriptions ≥ 3 sentences + "Do not use" + 1–3
+  validating `Example: {…}` lines), `Schema` (the subset: unknown keywords are errors), `Runtime.Run`
+  (one loop, lead depth 0 / `Subagent` depth 1) and `Runtime.Invoke` (the single dispatch path:
+  offered → no nesting → alone → input schema → `Policy` → grant), `Budget` (holds and charges; a
+  model call holds its worst-case cost, also a Go tool's through `Runtime.ChatWithin`; the root's floor only for `Final` tools), `Bandit` (hint line +
+  subagent model pick; never refuses), `Journal`/`Step`, `LoadSubagents` (JSON spec + `.md` prompt).
+  `internal/analysis` (PR 4a) — pure functions over `Finding`s: `Calc`, `Handles`/`Substitute`
+  (`{Codename}`), `KeyFigures`, `Join`, `CheckCoverage`, normalisers, BELO-lite (`belo.json`), and the
+  `numbers`/`join_discrepancies` tools over a `Source`. `docs.Service.Tools(rt)` — `retrieve` and
+  `verify_quote` (judge on the critic role, within the grant via `rt.ChatWithin`; quote and passage fenced). Tool specs are JSON in `specs/` beside each package.
+- Gate E4: `eval/e4/embeddings.json` is replayed by `TestHybridRecallProofRuns`; the committed
+  tape is the offline self-test (hash embedder, model `biglaw-selftest-hash`) and the gate SKIPS
+  on it. Never present its numbers as the gate. The owner records a real one with `make e4-record`.
+  A chunker or fixture change makes the tape stale (`TestE4TapeReplays` fails): re-record the
+  self-test tape with `make e4-record EMBED_MODEL=biglaw-selftest-hash` and say so in the PR.
+- `ui/` (PR 11, pulled forward by owner decision 13) — React 19 + Vite + TS strict, the seven
+  screens behind `ui/src/api/transport.ts`: `http.ts` (same-origin REST, routes planned from PR 4)
+  and `recorded.ts` (replays `ui/src/recorded/recording.json` in the browser). `VITE_ENGINE=recorded`
+  aliases the transport (vite.config.ts), so the recorded bundle has no network code
+  (`test/offline.test.ts`). The recording is made by `eval/demo/record_test.go` (test-only, no Go
+  prod lines) from v2's `internal/docs` over three `eval/tasks` matters; claims come from the answer
+  keys, plus a scanned exhibit (`ui/src/recorded/*.jpg`, drawn by `eval/demo/make_scan.py`) read through the
+  vision path by a scripted `model.Fake`, and a few quotes/one finding written for the demo (`demoQuotes`,
+  `demoFacts`) so every ladder rung but the judge's shows; sample playbooks/time/profiles are labelled as such.
+  `TestDemoRecording` (DB) fails when the committed recording is stale: `make demo-record`.
+  `internal/api` embeds `ui/dist` (`make ui build` copies it into `internal/api/dist`; a build without
+  it serves a notice at `/`).
+- `internal/engine` (PR 4b) — the memo workflow: lead (`specs/lead.md`) over 12 tools (`MemoVisible`, `use_skill` last),
+  the ledger (one `ledger` table, JSON rows by kind/key, writes buffered in the running step),
+  evidence subagents whose findings Go verifies before admitting them (`register.go` `admit`: G2/G3,
+  values must be in their quote (`valueStated`: number meaning is a model's, never a word list in Go (owner decision, lab-r4 r4): `internal/analysis/figures.go` only finds spans and reads their digits as written (literal corpus, property and fuzz tests), the figure reader `read_figures` (critic role; its own tools `figure_context` and `exact_calc`, `figtools.go`) labels each span by id (kind, currency, power-of-ten scale and the exact words of its own passage that state it (adjacent: right after the figure or its currency code, earlier in its sentence, or the passage's first line when it is a header over a table row, `headerLine`/`tableRow`; a letter or a "000", never a bare "$"), decimal mark, party, counterparty, range, sign, what it measures, its period stated absolutely with its year or "none", what a typed value's entity is to it, or unclear), `analysis.ReadLabels` checks every label mechanically (unknown span ids rejected, a scale with no source in its own passage not applied, an amount always the written digits shifted), and consumers only compare readings: a typed value needs a quote span read as the same kind, currency, amount and scale (from equivalent words), an unclear match admits it gated (`Finding.Low`), a value's reading is `Value.Fig` (what `Canon`, the joins, `Calc` and `Salience` read; none: never compared), G8 traces a drafter's figure only by a clear reading of the section (`Section.Read`) matching a clear cited one and fails closed otherwise (flagged, or, when the cited quote was never read or one side is at a scale the other writes out, limited: disclosed and its citing finding gated, `lintLimited`), worksheets trace only from operands the cited quotes state as their units say (a ref, a literal read as that kind and currency, a period read as a duration in its unit or two cited dates' difference; a plain operand only a count or a bare number/multiple, never kind other, an identifier: `tracedSheets`; kinds `duration` with `Unit` and `number`, each with `UnitFrom`, the words beside the span that state its unit or multiple, checked by position and shape, `statesUnit`) and trace only a memo figure of their kind (`sheetKind`); every figure a section states that traces only through a worksheet, refs or literals alike (G8 run again without the worksheets decides, any written form, `{W…}` handles too), or only by a reader's label is in Limitations' one Computed figures block (`computed.go`: check-first and arithmetic tiers, each input with its [F#] and quote; ⚠ inputs, a unit's words or a count used as a period (unitless too, as `date_add`'s days) or a result over scaled inputs written out, by handle or at other scale words, gate their findings); `numbers` keeps "business days" (`date_add` refuses it); a memo duration traces only to a cited duration whose unit words agree as written, a worksheet's period or two cited dates' difference (`durationStated`; differing words: limited and gated); `date_add` by months/years clamps to the target month's last day; and the cross-document join is Go's candidates (`analysis.Candidates`: two clear readings of one kind and currency from two findings in two documents, values different, judged pairs first, then each value's nearest by context and closeness, `rankPairs`, capped at the judge's budget, `CandidateLimit`) decided by the `judge_figures` subagent (`judge.go`: yes/no/unclear per pair with a reason that must quote both passages and, for a yes, name both figures as written beside its quotations (`namesValues`), each side's figure marked ⟦…⟧ in its quote (`Reading.Stated`), one amount at two precisions or signs never proposed (`sameAmount`), checked by `CheckVerdicts`, batched, metered, verdicts in the ledger kind `verdict` (keyed by the two values in their documents) and yes/no cached in `figure_reads` keyed also by the task's documents and the aliases naming the pair (no-matter tasks: per task); only yes is a conflict, unclear a LOW Limitations line, unjudged pairs counted) (no Go rule decides whose figure, what measure, which period or which counterparty: `oneQuantity`/`periodOf` are gone, as are `sameMetric`/`partOf`/`onePair` and the near join); the reader in calls of at most 60 spans (`maxCallSpans`: its answer must fit the answer cap) and 32 KB, smallest items first: a sweep's findings read together at its end from the reader's own share (`Allocation.Read`/`ReadUSD`, `readFindings`, `readQueue`), a finding with no typed value read when a section first cites it (`Finding.Unread`), the lead's own admissions and each drafted section at once (its call held back from the subagent's grant and the quotes' judges, `goTurns`), finish reading stale or unfunded sections before its judge (`readSections`), quote spans inside a locator never sent (`quotePassage`), every failed call logged with its step and counted (`figstats`, the cost's reader line) and a failed batch read again in halves once, a finding whose read failed left `Unread`; finish also reads unread findings whose claims state a figure before its judge (`claimsUnread`, counted in Limitations when unfunded); a memo figure the reader's call never read (`neverRead`: unfunded, failed, cut off, malformed, no model; never an unlabelled span) that a cited finding's own quotes or values state as written is `limitedMemoUnread` (listed check-first naming those findings, gated), not a blocking lint line; one only a worksheet or handle states stays flagged, complete answers (not all unclear) cached in `figure_reads` (migrations 0006, 0007) under a key of the reader's spec hash, model, matter (a section's task) and what was sent, deleted with the task or document; never add a semantic number rule in Go; a dropped value is noted on its finding, `ValueNotes`, shown in the finding view, the sweep's notes, one LOW committee line per run and one Limitations line, never silent), only exact duplicates merged (`restated`: one issue, the same normalised quotes in the same documents, the same values with entity and metric; never a similarity merge); an `extract_facts` call with no issueId is sent the plan's issues and admits only findings naming one, no per-call cap; a claim's money sums kept only when the reader read the claim's span and a quote's as the same money, `claimSums`), `sweep` (answer-sized
+  pages, `sweepTokens`; read most relevant first, `sweeporder.go`: BM25 of the plan's questions, taken in
+  turn across issues; a visit's record (`visitRec`) holds the plan's issues it was read for: a page is read again for issues `op plan` added since, only those (`issuesKey`), and a page never read again for them is a Limitations line (`staleLine`); exact-duplicate and boilerplate pages skipped, reported and disclosed in Limitations (a copy of an unread page is unread; a table row is never boilerplate); each visit a single call on
+  its page, `agent.Call.NoTools`; each document's coverage in the ledger, kind `swept`; up to `sweepWorkers`
+  visits at once with timing-free grants and admission in reading order: a visit's `extract_facts` waits
+  for its turn via `awaitTurn`; a visit a worker's share cannot fund is read again serially), `check_deviation` (the requirement
+  is verified in `requirementDocId` before the subagent runs, JSON escapes undone and a joined requirement
+  part by part, `placeRequirement` (`requirement.go`: the document's words, in order, one passage), then read in a bounded window of the text around it (`contextOf`: ~3 KB before and after, edges at sentence/line ends, ≤ 8 KB whatever `docs.Parse` says, the heading path a label only, never a boundary; `Truncated` when the requirement's sentence or paragraph (a blank line, or a line break after a sentence end before a capital/marker: `.docx` paragraphs) starts before the window, its first line is a list item, or an edge cuts a sentence): the subagent judges against it, its controlling quote must lie in it, the finding quotes it; before the subagent runs, out of the call's grant first, one critic call (`checkSection`, `rt.ChatWithin`, the window fenced and nothing else: never the verdict, its correction or a reviewed document; answer from one strict JSON object, `checkAnswer`) answers yes/no/unclear whether the document imposes the requirement as quoted: no fails the call, unclear or truncated admits `Low` (gated), a check not had (unfunded, failed, malformed) admits `Low` (gated), never drops; whether a draft complies is the subagent's question; an override > ~3 KB away or in another clause is not seen (README); never add word-list refusals or layout walks; a refusal quotes the nearest exact passage, bounded and fenced;
+  omissions confirmed by the judge), the
+  coverage pass (`cover.go`: touched issues get one `analyze_issue` + redraft from `Allocation.Cover`, then
+  salient verified findings no section cites and figure conflicts the memo does not state get one redraft
+  per issue, `placements`, strongest first, from the `placeShare` (40%) of the pass's USD its analyses leave; inside a passing submit or as a step before the forced finish's review;
+  an unaddressed conflict is a finish lint line), `committee`
+  (3 context-free critics in parallel on explicit grants, delayed credit; the lead runs at most `maxCycles` (3), the
+  coverage pass's re-review beyond it, and the pass then places left-out findings from half of what is free), `policy.go` (P1, P4,
+  `Allocate`), `finish` (check = dry run; lint G5/G8, coverage, P6/P7; render; gates G7), grounding
+  collapse G4, packs (`packs/*/*.md`, embedded, all candidate), and durable runs (`task_steps` +
+  ledger + `tool_stats` in one tx per step, lease/heartbeat, resume by replay, lost grants charged (a graceful stop settles an in-flight tool's grant to its spend; every model call inside a journaled tool step is journaled as it happens, `agent` `meter` (query embeddings too, `agent.Meter`; a Go-side search uses `docs.SearchMetered`), so a hard crash charges the recorded spend plus the in-flight calls' worst cases);
+  migration 0005). `views.go` is what the API shows (DESIGN § UI contract).
+- Manage (`internal/engine/specset.go`, `manage.go` (+ `manage_validate.go`), `diff.go`, `skills.go`; migration 0008;
+  `internal/api/manage.go`; `ui/src/screens/Manage.tsx`) — every agent, tool, pack and skill is a built-in
+  file an admin may override with a version in `spec_versions` (save, revert, a skill created or deleted;
+  the table is the history and the change log); `Submit` snapshots the overrides into `tasks.specs` and
+  `execute` builds the run's `Specs` from it on every claim (resume too): read specs, prompts, packs and
+  skills only through `spec(ctx, …)`/`prompt(ctx, …)`/`packsFor`/`r.sp()`, never a package global;
+  `validate` = strict per-file checks + the whole set through `e.runtime` + `compatSpec` (no property the
+  built-in schema has may be removed or retyped, no enum changed; Go-written schemas (`goContract`'s `goWrites`) gain
+  none; built-in examples and each `goContract` row's `sent` input must validate) + no lead-only tool (Final, Solo ops but
+  `ledger`) in a subagent's allowed list + class `free` only for subagents built free; saves are serial
+  (`locked`: advisory lock, one tx); any change to a pack's or skill's content (every file, all front
+  matter but status/reviewedBy) resets it to candidate unless the save names a new reviewer; the reader's and judge's cache keys hash the run's set (`Specs.agentHash`: spec, prompt and every allowed tool's spec).
+  Go's checks around a tool are its `goContract` row's `checks` lines (shown on its Manage page, view only;
+  `TestWrappedToolsDeclareChecks`); configurable hooks (`hookrules.go`, items
+  `rule.<name>` in `specs/hooks/`) run through `Runtime.Hooks` (Before/After around every Invoke, their
+  usage in the step's), `admit` (`findingHooks`) and `finish` (`finishHooks`), every outcome a `hookrun`
+  ledger row written with its step; an `approve` gate (lead calls only, keyed by a 128-bit hash of the
+  canonical input, single use) pauses the run (`run.hold` → `errHeld` → `awaiting_gate`; `execute`
+  pauses again on resume while one is open) until `Decide` resumes it; after_call rules on the hooked
+  subagents run before Go records anything (`afterHooked`); a hook quarantine is `Finding.HookBlocked`
+  (`f.ok()`), never `Verified=false`, so G4 never counts it; only a `ruleFailure` follows a rule's
+  failure policy, any other error fails the call. Skills: `skills/<name>/SKILL.md` + reference
+  files; the brief lists names and descriptions (≤ 40, ≤ 4 KiB); `use_skill` pages a body or file and
+  records it (ledger kind `skill`); a candidate skill read is a Limitations line. `api.Principal` is the
+  who-seam: with sign-in it is the session's user (`api.SessionUser`; admin when `BIGLAW_ADMINS` names
+  them, else a member; author fields record `Principal.Label()`); without it every request is the local
+  user (`api.LocalUser`): an admin on loopback, read-only under `--allow-no-auth`, an admin for anyone
+  under `--admin-without-auth` (warned, bannered); writes wear `docs.Guard` + `admin`.
+  A new editable file must map to an item (`itemOf`; `TestCatalogue`), and a change to any of
+  them makes `ui/src/recorded/manage.json` stale (`make demo-record`; `TestManageRecording`, no DB).
+  Custom agents and tools (`custom.go`, `remote.go`, migration 0009): admin-created subagents
+  (`specs/agents/`), MCP servers (`specs/servers/`) and MCP/HTTP tools (`specs/tools/`); the lead sees
+  `leadVisible(sp)`, never `MemoVisible` alone. Every remote request goes through `remoteClient` (https,
+  `checkURL` at save, `dialCheck` at connect, ports 443/8443, one refusal text, same-host redirects, no
+  proxy, 30 s per whole call (`withRemoteDeadline`), 1 MB, 64 KB headers); secrets are read only by
+  `secretValue`, bound to their origin (`secretRef`, migration 0010; `do` sends one nowhere else),
+  redacted of exact echoes in every answer (`redact`) and every error from remote data (`scrub`), never written to a response, log, error, snapshot or export;
+  `RemotePolicy.Off` (serve with `--allow-no-auth`/`--admin-without-auth`) turns secrets and custom calls
+  off; an imported description is third-party text (`untrustedText`, `importedDescription`) and its tool
+  stays disabled until an admin accepts it (`acceptRule`); a tool's answer is labelled untrusted. `goDepends` refuses deleting what Go needs. Tests reach a local fake server only
+  through `SetRemotePolicy` (never set by `cmd/biglaw`).
+- `internal/auth` (PR 8) — sign-in: OIDC code flow + PKCE S256 (`oidc.go`: discovery, JWKS cache with a
+  rate-limited refetch for an unknown kid, ID-token verification RS256/384/512 + ES256/384 with `none`/`HS*`
+  refused before key lookup, iss/aud/azp/exp/iat/nbf/nonce; claims decoded by exact name only,
+  `decodeClaims`: never `json.Unmarshal` claims into a struct, its case-insensitive matching lets
+  `"Email"` override `"email"`; fetches coalesced by `shared`, no lock across network I/O),
+  server-side sessions (`session.go`, migration 0011: only SHA-256 of the cookie id stored, idle 8 h /
+  absolute 7 d, rotated at sign-in, logout deletes, `Revoke`, `Alive` for SSE (never moves seen_at);
+  a sign-in in flight is AES-GCM sealed in the login cookie with a key made at startup: no row, no cap,
+  never add server state an anonymous request can fill; `next` ≤ 512 bytes), `IsAdmin` (sub exactly, or a verified plain-ASCII
+  email byte-exact after ASCII lowercasing: never Unicode folding or a cleaned address). Stdlib only;
+  never log or return a token, code, verifier, state, cookie or the client secret.
+  `internal/api/signin.go` `RequireSignIn` puts every route but the exact patterns in `api.public`
+  (`GET /`, `/health`, the three `/auth` routes) behind a session (401 `unauthenticated`), `docs.Guard`
+  on every unsafe method, mounts `POST /manage/sessions/revoke` (admin) and gives SSE streams a
+  liveness check (`liveKey`). Tasks record `submittedBy` (migration 0012). A member never sees
+  another person's email (`api.names`, `authors`, `engine.DisplayName` in files): keep it so. Under sign-in `--allow-no-auth` is ignored (warned), `--admin-without-auth` refused, the remote
+  policy is on, and `bad_host` also admits `BIGLAW_PUBLIC_URL`'s host. Gate decisions record
+  `Gate.DecidedBy` (`engine.Person`). `internal/auth/authtest` is the fake OpenID provider for tests.
+- `internal/api` (PR 4b) — the REST surface (tasks, steps, SSE, gates, cancel, cost, clients) over
+  the engine plus `docs.Routes`; request bodies validated by the agent's schema subset.
+- `eval/` (PR 4b) — `run.py` (validate/selftest/score/compare/drive), `proofrun/`, `lab/` (Harvey LAB
+  driver), `tests/`; Go gates `TestProofRunsOracle` (E1), `TestProofRunsFabricator` (E2),
+  `TestLabRunnerSmoke`; `TestE2EServe` serves a scripted run for the browser when `E2E_ADDR` is set.
+  `eval/bench/` (docs/benchmarks.md): the pinned suite (`config.json`, hash-checked; `make bench`, owner-run), the
+  results schema, `compare.py` (yardstick hashes, three verdicts), baselines; `TestBench*` run it offline (smoke, a 401, serve
+  preflight with the exact env). A setting change is `run.py pin` + commit; serve gets only the config's env.
 
-**Version 1.0.0** — the Go platform replaces TypeScript on `main` (TS preserved at the
-`typescript-final` tag). 139 agent definitions (incl. a dedicated family-law bench), Teams/Slack channel bots (Big Michael),
-hub-and-spoke client briefing swarm (Chalkboard pattern), SharePoint + Teams search, email
-search (Graph + Gmail), playbook-aware contract redlining, headnote generator, precedent
-generator, four-tier playbook cascade, lawyer voice fingerprinting, per-call cost tracking,
-Q-learning agent recruitment, TopoFlow (AgensFlow bandit over DyTopo), LPM status-report
-spine, billing (pre-bills, LEDES, invoice validation, OCG checks), docket/regulatory/budget
-monitors, two-wave DyTopo with intra-round whiteboard + inter-round memory rollup, billable
-time tracking, and NOSLEGAL v4 taxonomy.
+Everything else in README is marked planned (next: PR 3d the `.docx` writer and tracked changes, PR 3e, PR 5 diligence;
+contract v1's `content`/202/`capabilities` for vision intake are PR 8's). Lexical search alone measured E4 0.882; the hybrid gate is
+not yet judged (self-test tape).
 
-**License: Apache-2.0** — a clean-room reimplementation of the document-production/tabular
-tools (spec: `docs/clean-room-spec-document-tools.md`) removed the last copyleft dependency;
-LICENSE/NOTICE/SPDX headers all swapped.
+## Rules
+- Dependencies: `github.com/lib/pq` and `github.com/ledongthuc/pdf` (budget 3). No ORM, no web
+  framework (stdlib `net/http`), no OIDC/JOSE library.
+- Never parse an uploaded PDF or `.docx` in the server's process: `docs.Extract` runs them in a
+  bounded child (`ledongthuc/pdf` can die of a fatal stack overflow; the child has a deadline, dies
+  with its parent and has a hard memory cap on Linux). `main` and the `TestMain` of every package
+  whose tests ingest a PDF or `.docx` call `docs.MaybeRunChild()` first (forgetting it is an error,
+  `errNoChild`). Tests that start a child must never leave one running (kill it in `t.Cleanup`).
+  The child has no environment, except that a race-detector test build passes `GORACE=atexit_sleep_ms=0`
+  (`child_race.go`: no one-second exit sleep per PDF/.docx read under `-race`).
+  The child's output is a JSON header line plus raw text, read through `readChild`'s bounds; it is
+  `/proc/self/exe` on Linux. A server stop cancels in-flight requests after `shutdownGrace`
+  (`docs.ErrStopping`, 503).
+- Every `docs` read takes the caller's scope; never read `documents`/`chunks`/`files` around it.
+- New env var = add it to `envVars` in `cmd/biglaw/config.go` (with its PR), README's table and
+  docker-compose; `TestEnvVarTablesAgree` fails otherwise. Validate a variable in the PR that
+  first reads it, not before. Read env only through that table (literal names; `scripts/loc.py`
+  rejects dynamic `os.Getenv`).
+- Migrations: a new `internal/store/migrations/NNNN_name.sql` (next number, lowercase name).
+  Never edit an applied one (checksums are checked). Pre-release exception: until v2's first
+  release, `0001_init.sql` may still be rewritten; say so in the PR and tell reviewers to
+  recreate dev databases (README § Database). They are forward-only and each runs in a
+  transaction: no `COMMIT`/`ROLLBACK`, no `CREATE INDEX CONCURRENTLY`. Extensions are
+  database-wide, which schema-per-test isolation cannot handle: an extension is created once
+  outside the numbered migrations (`store.Open` and `storetest`, as `vector` is) before any
+  migration uses one.
+- UI: runtime deps `react` + `react-dom` only (exact versions; dev deps exact too); every screen
+  talks through the `Transport` interface, never `fetch` directly; nothing in `recorded.ts` (or
+  what it imports) may use the network; tests are `node:test` over `.ts` (Node ≥ 22.18 strips
+  types; imports carry their `.ts` extension; a component a test renders is plain `.ts` with
+  `createElement`, like `badge.ts`). Never present the recording as a model's output: keep its provenance header,
+  the banner and the step `source` marks true. A change to `internal/docs` output or `eval/tasks`
+  makes the recording stale: re-record (`make demo-record`) and say so in the PR.
+- Agent runtime: every tool is registered (never called around `Runtime.Invoke`), its spec is data
+  (`specs/*.json`) and its schemas strict-shaped; tool outputs are bounded by type and never trimmed: a
+  list or long text is one page of `agent.PageBytes` (`agent.Page`/`Take`/`TakeText`) with `next` or
+  `truncated` in its output schema, and a test that fills it past the page; the runtime refuses a result
+  over its cap with the typed `TooLarge` error (`agent.ErrorSchema`), never cuts one; a tool panic is
+  `ErrPanic` and fails only its task; a tool reports its usage in `Result` even when it fails;
+  errors the model may read are `agent.Fail(...)` in BigLaw's words (anything else shows as "internal
+  error"). `analysis` imports only `agent`; the allowed import table is `internal/agent/boundaries_test.go`
+  (`TestImportBoundaries`): add a row for a new package. No matter data in any schema
+  (`TestToolSchemasContainNoMatterData`), including description examples.
+- No source file over 2,000 lines (`scripts/loc.py`). Every `.go`/`.py` file starts with the
+  SPDX header.
+- Every package has a `_test.go`; DB tests use `storetest.DSN(t)` and `t.Parallel()`.
+- Images and scans go only to the `vision` role (`docs.UseVision`); never wire another role's
+  model there (`TestTextModelNeverSentImages`, `TestServeNeverSendsImagesToTheLead`). Text a model
+  transcribed is evidence of a lower class: keep its provenance and the `@transcript` cap.
+- Engine: a lead step's ledger writes and bandit stats go through `e.write`/the step buffer and commit
+  with the step (never write the ledger around it); every run change checks the lease (`lease_owner`)
+  and status. The deliverable is rendered only by `finish`; findings that did not verify never reach
+  a drafter, a subagent's ledger read, or the memo (G3). A new tool or subagent spec goes in
+  `internal/engine/specs/` and must validate (`TestSpecsLoadAndValidate`); what Go needs from a built-in tool or subagent name
+  (the lead's list, Go's callers and inputs, ledger writers, hooked, passes…) is its one row in `goContract`
+  (`register.go`), never a new hand-kept list.
+- No model calls in `go test`: only `model.Fake` or an `httptest` server. Model errors carry
+  BigLaw's own fixed text and, of an error answer, only the provider's error type (or code) and message (the
+  whole redacted by `redact`: the key and anything key-, token-, masked-key-, credential-, URL-, IP- or
+  host-shaped, but never a dotted validation path like `messages.0.content`,
+  then bounded: `providerError`); never the URL, host, key,
+  a header or the rest of what the endpoint sent, so never `err.Error()` of a transport error; map them
+  with `model.HTTPStatus`.
+- Errors and logs must never contain the database password or any key. Run user-supplied DSNs
+  through `store.CheckDSN` before anything else sees them; print config values only through
+  `shown` in `cmd/biglaw/config.go` (DSNs via `store.DescribeDSN`), never raw.
+- Without sign-in there is no auth: only Compose (loopback-published) may pass `--allow-no-auth`, and
+  every Compose port must name a loopback IP (`TestDeployFilesFollowExposureRule`); keep the no-sign-in
+  behaviour exactly as it is when changing sign-in.
+  Every POST route wears `docs.Guard` (cross-site writes 403 `cross_origin`); `routes` refuses
+  requests by DNS name other than `localhost` (and, with sign-in, `BIGLAW_PUBLIC_URL`'s host: 403
+  `bad_host`, DNS rebinding); the UI forbids framing. A new API route is behind the session
+  automatically; a route that must be public goes in `api.public` with a reason.
+- One Go version (1.26.10): go.mod's `go`/`toolchain` lines, the Dockerfile `FROM`, CI's
+  `go-version` and the README move together (`TestGoVersionPinnedEverywhere`).
 
-**Evidence integrity + matter isolation (latest):** all retrieval tools are confined to the
-task's `documentIds` (cross-matter leakage pinned by regression tests), the RAG chunk store
-survives restarts, mechanically-unverified findings trip grounding-collapse detection
-(default: the task FAILS rather than deliver fabricated evidence) and are quarantined from
-synthesis with a disclosed Evidence Note, the human gate is budgeted/calibrated, local
-(watt-metered) calls always price $0, and the writer dedups findings/folds tiny sections.
-Proven on two end-to-end matter drives (family + employment): local qwen2.5:7b went from
-10% to 84% grounded with zero fabrication; see `docs/operations/evidence-integrity.md`.
-
-**Negotiation intelligence + reviews:** counter-redline loop
-(`respond_to_redline` — parse opposing tracked changes, judge vs the playbook cascade, emit
-countered redlines + rationale cards), judge memory across rounds with standoff escalation,
-Redtime (`register_document_version`/`get_redline_timeline`, `GET /documents/:id/timeline` —
-per-clause negotiation timelines, silent-edit detection, playbook drift), Integrity Check
-(`check_document_integrity` — Unicode obfuscation + unmarked changes), persisted tabular
-reviews with a citation-verification ladder (exact → tolerant → paraphrase judge → ensemble;
-`GET /reviews/:id` + `/reviews/:id/table.csv`, landscape docx export), reviews + Redtime
-workbench views, `biglaw demo` (one-command end-to-end tour, ~$0.03), and BELO
-(`internal/ontology/` — epistemic ontology, graph-discovered section spine).
-
-**Client entry point + CRM (latest):** the platform now has a **module registry**
-(`internal/modules/` — slim always-on core, every optional subsystem is a named module
-toggled with `BIGLAW_MODULE_<NAME>=on|off`, states at `GET /modules`), a **neurosymbolic
-client CRM** (`internal/crm/` — typed facts with provenance under **bidirectional
-consent**: client-proposed facts await a lawyer, lawyer-proposed facts await the client;
-approval fires supersedence, adverse-party conflict checks, and advocacy sync into
-ClientVoice; embedded facts answer semantic profile queries via `POST /crm/profiles/:id/query`),
-and a **client intake channel** (`internal/intake/` — the affidavit-maker portal at
-discover.legal submits draft documents over an HMAC-signed `/intake/*` API; every
-submission is conflict-checked in both directions first — a hit puts it on
-`conflict_hold` with nothing ingested until a partner acknowledges (with a reason) or
-declines; clear submissions admit the prospect to the roster, open a matter classified by
-BigLaw's own practice-area/NOSLEGAL vocabulary, ingest the draft, and queue for a lawyer).
-Contract: `docs/integration/affidavit-intake.md` + JSON Schemas in
-`docs/integration/schemas/intake/v1/` (the integration surface; pinned by
-`internal/intake/contract_test.go`). intake/crm are a self-contained optional module pair:
-the core API never imports them — `cmd/biglaw` mounts them through the
-`modules.HTTPModule` seam (`api.Server.Mount`) only when enabled.
-
-## Modules
-
-The always-on core is the orchestrator, agents, DyTopo, documents/knowledge, and the
-REST API. Everything else is a registered module (`internal/modules/`), resolved at boot
-from config defaults and overridable per-module:
-
-| Module | Default | What it gates |
-|---|---|---|
-| `intake` | on when `INTAKE_HMAC_SECRET` set | Client-portal intake API (`/intake/*`) |
-| `crm` | follows `intake` | Neurosymbolic client profiles + consent queue (`/crm/*`) |
-| `clientvoice` | on | Remy/CRM advocacy briefs + matter notifications (`/matters/:mn/client-voice`) |
-| `lpm` | `LPM_ENABLED` | Status reports, email intake, drafting (`/lpm/*`) |
-| `billing` | on | Pre-bills, LEDES, invoices, OCG routes |
-| `bots` | on when Teams/Slack creds set | Big Michael channel agent (`/bots/*`) |
-| `briefing` | on | Client-intelligence briefing (`/clients/:id/briefing`) |
-| `monitor-budget` / `monitor-dockets` / `monitor-regulatory` | their env flags | Background monitors |
-
-`BIGLAW_MODULE_BILLING=off` removes the billing routes entirely (404, as if not
-compiled in). `GET /modules` (partner) reports every module, its state, and why.
-
-## Client intake + CRM (affidavit-maker integration)
-
-The affidavit-maker app (discover.legal) doubles as the firm's client entry point. In
-firm mode it submits client drafts over `/intake/*` (HMAC-SHA256 request signing,
-`INTAKE_HMAC_SECRET`); standalone it stays a pure self-rep product. Full wire contract
-(signing scheme, endpoints, fact vocabulary, consent semantics):
-`docs/integration/affidavit-intake.md` (mirrored in the affidavit-maker repo).
-
-Conflict holds: `POST /intake/submissions/:id/conflict` (partner;
-`{decision: acknowledge|decline, conflictReason}`) is the only way out of `conflict_hold`;
-the portal only ever sees `hasConflict`, never who the conflict is with. Holds are keyed to
-the portal *identity* (every name and adverse party it has ever supplied is checked; an
-open or declined hold holds its later submissions too — a declined identity is re-held
-each time, never auto-admitted); acknowledging re-runs the check (`409` + new detail on a
-new hit); held submissions, prospect CRM profiles and conflict detail are partner/assignee
-only (Rule 1.18 screening). Name matching (`clients.NormalizeName`/`NamesMatch`) folds
-accents, punctuation, hidden characters, surname-first and initials.
-
-Firm-side loop: `GET /intake/queue` → `POST /intake/submissions/:id/claim` →
-`POST /intake/submissions/:id/task` (spin an orchestrator review over the ingested
-draft) → `PATCH /intake/submissions/:id` (`in_review`/`ready`/`rejected` — statuses the
-client sees in the portal). CRM consent loop: `GET /crm/proposals` (client-proposed facts
-awaiting the firm) → `POST /crm/proposals/:id/decision`; lawyer proposals via
-`POST /crm/profiles/:id/facts` go out to the client for approval. Approved
-`goal|concern|constraint|preference` facts compile into the per-matter ClientVoice brief
-the orchestrator surfaces at human gates — the client advocacy engine runs off the CRM.
-
-## Quick start
-
-**The platform is Go** (`biglaw-go/` — single static binary, runs on a Raspberry Pi 4GB or
-fully on local models). The retired TypeScript implementation is preserved at the git tag
-`typescript-final`; `src/*.ts` paths in older docs map to `biglaw-go/internal/*`.
-
-**Easiest — one command (needs git + Docker):**
-
+## Gates
 ```bash
-curl -fsSL https://raw.githubusercontent.com/discover-legal/BigLaw/main/setup.sh | bash
+make ci     # gofmt, vet, mod verify/tidy, static build, go test -race -shuffle, make eval, loc.py + tests, compose config -q
+make ui build    # the binary with the web UI embedded (ui/dist → internal/api/dist)
+make lint vuln   # staticcheck, govulncheck (CI lint job)
+make ui          # cd ui && npm ci && npm run build && npm test (CI ui job, Node 22)
+make demo-bundle # ui/dist-recorded for discover.legal/demo/biglaw/; make demo-record re-records it
+# DB tests: BIGLAW_TEST_DSN=postgres://…?sslmode=disable BIGLAW_REQUIRE_DB=1 (Postgres with pgvector)
+make e4-record EMBED_MODEL=…   # owner-run: record the E4 tape at the model's own length (make e4-live: no tape)
 ```
-
-**Already have the repo cloned:**
-
-```bash
-bash setup.sh                                        # docker compose stack → :3102
-# or natively (Go 1.25+, run from the repo root so templates/ + deadlines/rules/ resolve):
-go run ./biglaw-go/cmd/biglaw                        # REST API on :3101
-# tests:
-cd biglaw-go && go test ./...
-```
-
-The Docker stack is three containers: TypeDB → conflict-graph sidecar (Unix-socket IPC) →
-BigLaw core. REST API at `http://localhost:3102` (Docker) or `:3101` (native).
-MCP server on stdio (activated when stdin is not a TTY — i.e. from Claude Code).
-
-**Web workbench:** `cd ui && BIG_MICHAEL_API=http://localhost:3102 npm run dev` → :5173.
-
-**Run modes** (`BIG_MICHAEL_MODE`): one process owns a data dir (`RUVECTOR_DATA_DIR`,
-default `./data` — ALL state: DB, JSON state files, attachments, ledgers, vector stores),
-enforced by an OS lock on `<data dir>/biglaw.lock` that also records the owner's PID + REST URL;
-every other process is a thin MCP client of the owner's REST API.
-- `auto` (default) — take the lock if free and own DB + REST (+ MCP on stdio when stdin is a
-  pipe); if the lock is held, attach as an MCP thin client to the URL the owner advertises
-- `backend` — own DB + REST, never MCP (what the Docker stack runs); refuses a held lock
-- `mcp` — MCP thin client only: no DB, no monitors, no vector store; every tool is a REST call
-  to `BIG_MICHAEL_API` (default `http://<API_HOST>:<API_PORT>`), bearer
-  `BIG_MICHAEL_API_TOKEN` (falls back to `API_KEY`); answers `initialize` at once and reports
-  an unreachable/misconfigured backend in every tool result; never follows redirects
-- `standalone` — single process (own DB + REST + MCP on stdio); refuses a held lock
-`BIGLAW_LOCK=off` makes the lock best-effort (a held lock, or a lock record naming a live PID,
-still refuses). One implementation:
-`backend.Local.As(principal)` (`biglaw-go/internal/backend`) holds the MCP operations AND their
-access rules; the REST handlers for those routes and the in-process MCP server both call it,
-`backend.Remote` calls those routes, and `internal/mcp/contract_test.go` requires identical
-results in-process vs over REST (partner and lawyer). State defaults all derive from the data
-dir; legacy locations (CWD dotfiles, `./data/*` when the data dir is elsewhere) are moved in
-once at startup — env values equal to an old default count as unset — and anything unmovable
-stops startup. Stop old-version processes before upgrading (they take no lock).
-
-## Using from Claude Code
-
-`.mcp.json` at the project root registers BigLaw as an MCP server.
-When Claude Code opens this directory, it can call all tools directly:
-
-```
-submit_task          — start a multi-agent legal task (supports jurisdiction= param)
-get_task             — poll status + findings
-list_tasks           — list all tasks
-approve_gate / reject_gate  — human review of flagged findings
-submit_from_template — run a pre-built workflow (eu-competition-brief etc.)
-list_templates       — see available workflow templates
-get_round            — inspect a specific DyTopo round
-ingest_document      — add a document to the knowledge store
-search_knowledge     — semantic search across documents
-list_agents          — browse the agent registry
-query_memory         — query inter-round memory
-get_audit            — retrieve the structured audit log
-list_plugins         — list loaded external plugins
-get_time_entries     — billable time entries (profileId/taskId/matterNumber/from/to filters)
-```
-
-Claude Code actuates Lavern agent configs (from `agents/lavern/*.json`)
-and any JSON plugin adapters (from `adapters/external/*.json`).
-
-### Example Claude Code sessions
-
-```
-# US federal antitrust matter
-Use BigLaw to research whether our planned acquisition of Acme Inc
-triggers HSR pre-merger notification. Jurisdiction: US. Run a full_bench workflow.
-
-# UK employment matter
-Review the attached settlement agreement under English employment law.
-Submit as a review workflow with jurisdiction UK.
-```
-
-Claude Code will call `submit_task`, poll `get_task`, approve any human
-gates via `approve_gate`, and surface the final synthesis.
-
-## Architecture
-
-```
-T0  Root Orchestrator (1)
-    ↓ issues RoundGoals each phase
-T1  Domain Managers (4)       — research / analysis / drafting / compliance
-    ↓ DyTopo: Need/Offer matching → directed comm graph
-T2  Epistemic agents (26)     — reason within a specific practice area
-T2  Conceptual agents (8)     — own a cross-domain legal concept
-T2  Writing agents (13)       — produce a specific document type
-    ↓ tool_use agentic loop (allowedTools enforcement)
-T3  Tool agents (6)           — web_search, doc retrieval, extraction,
-                                translation, citation check, e-signing
-    +
-    32 connector tools        — CourtListener, Westlaw, Everlaw, Trellis,
-                                Descrybe, Ironclad, iManage, Definely,
-                                DocuSign CLM, Solve Intelligence, Slack,
-                                Google Drive, Box, Lawve AI, TopCounsel
-```
-
-Each DyTopo round:
-1. Every agent generates a Need/Offer descriptor (Haiku, ~10 tokens)
-2. Engine cosine-matches Needs → Offers to build a directed comm graph
-3. **Jurisdiction filter**: agents tagged `jurisdictions: ["US"]` are excluded from EU/UK/AU tasks
-4. Matched agents receive routed messages from their Need partners
-5. Agents run full agentic loops with routed messages + inter-round memory → Findings
-6. Findings written to intra-round whiteboard
-7. Findings pass through CitationGate → Debate (Opus) → Verification (Haiku ×10)
-8. Low-confidence or challenged Findings go to human gate before final output
-9. Haiku synthesises whiteboard into round digest → written to inter-round memory store
-
-## Key files
-
-> The table below predates the Go port: `src/foo.ts` paths describe the architecture and
-> map to `biglaw-go/internal/foo/` (e.g. `src/dytopo/engine.ts` → `internal/dytopo/engine.go`,
-> `src/mcp/server.ts` → `internal/api/server.go` + `internal/mcp/server.go`). The TS sources
-> live at the `typescript-final` tag. Go-only additions: `internal/topoflow/` (AgensFlow
-> bandit over DyTopo), `internal/lpm/` (daily status-report spine), `internal/clientvoice/`
-> (Remy advocacy briefs), `cmd/biglaw/monitors.go` (firm-wide budget/docket/regulatory monitors).
->
-> **Grounding stack (Go-only):** `internal/rag/` (section-chunk hybrid retrieval — dense + doc2query
-> + BM25 fused by RRF; `search_chunks`/`get_outline`/`read_section`), `internal/bm25/` (pure-Go Okapi
-> BM25), `internal/pageindex/` (legal section-tree parser), `internal/tokenizer/` (pure-Go Qwen BPE),
-> and `internal/writer/` (scoped multi-pass synthesis: findings → cluster → tight agentic drafters via
-> `search_findings` → hierarchical stitch). Staged extraction lives in `internal/agents/base.go`
-> (`runAgenticLoop` retrieves; `extractEvidenceBatch` transcribes verbatim under a substring-lock;
-> `analyseEvidence` writes conclusions per locked quote). Synthesis routes through
-> `internal/orchestrator/orchestrator.go` `synthesise()` → `writeDeliverable()` when findings exceed
-> a single call's budget. These took local-model verbatim citation grounding from ~0% to ~94%.
-> Harvey LAB criteria (verified vs scores.json history, post fix-wave July 5 2026): Haiku +
-> fix-wave pipeline **49/60** (all-time high; raw Haiku in Harvey's own harness 41; June-26
-> pipeline 37; dead-spine release build 34); **local qwen2.5:14b + fix-wave 36/60** (local
-> record; prior verified peak 28). The fix wave closed the extraction transcription funnel
-> (full-text evidence ingest, context-aware caps, saturation section-walk), added cross-doc
-> numeric/date discrepancy joins, defense-lens analytics, and memo-grade authorship. Trust-
-> compare task (compare mode): Haiku 6 → 9 → **14/23** (pre-wave → fix-wave → deviation-path
-> port e9b95f9), beating the deviation-tuned local qwen record of 12/23. A climb, not a pass.
-> (The earlier "30/60" was a two-run union coverage measure; single-run history is as above.)
->
-> **Negotiation stack (Go-only):** `internal/tools/negotiate.go` (`respond_to_redline` —
-> counter-redlining with playbook judgment, judge memory + standoff escalation, rationale cards),
-> `internal/redtime/` + `internal/tools/redtime.go` (document version lineage, per-clause
-> timelines, silent-edit detection, playbook drift), `internal/tools/integrity.go`
-> (`check_document_integrity` — Unicode obfuscation + unmarked-change detection), and the
-> tabular-review citation-verification ladder (exact → tolerant → paraphrase judge → ensemble,
-> method + confidence per citation). Reviews persist through the store seam (sqlite/postgres);
-> `internal/ontology/` is BELO, the epistemic ontology behind the graph-discovered spine.
-
-| Path | What it does |
-|---|---|
-| `src/index.ts` | Entry point — loads dotenv → Infisical → starts server |
-| `src/config.ts` | All configuration, read from environment |
-| `src/orchestrator.ts` | Task lifecycle, phase sequencing, synthesis |
-| `src/dytopo/engine.ts` | Need/Offer matching, comm graph, round execution |
-| `src/dytopo/jurisdiction.ts` | `jurisdictionMatch()` — agent/task jurisdiction filter |
-| `src/agents/definitions.ts` | All 128 agent definitions (58 native + 70 Claude for Legal) |
-| `src/agents/registry.ts` | RuVector HNSW agent registry — semantic search, upsert, persist to `./data/agents.rvdb` |
-| `src/agents/base.ts` | Agent class — agentic loop, tool dispatch, prompt caching |
-| `src/protocols/index.ts` | CitationGate, DebateProtocol, VerificationPipeline |
-| `src/routing/model.ts` | Haiku/Sonnet/Opus/Ollama/Local routing; `shouldUseThinking()` |
-| `src/providers/anthropic.ts` | Anthropic provider: prompt caching, extended thinking, base URL |
-| `src/providers/` | Anthropic + Ollama/LM-Studio provider abstraction |
-| `src/tools/index.ts` | All tool implementations + ToolRegistry (extensible via register()) |
-| `src/tools/connectors.ts` | 32 legal connector tools across 15 providers |
-| `src/tools/pdf.ts` | PyMuPDF/Camelot/Tesseract tools (via python subprocess) |
-| `src/tools/docuseal.ts` | DocuSeal e-signature tools |
-| `src/adapters/plugin.ts` | Generic `LegalToolPlugin` / `LegalToolAdapter` + PluginRegistry |
-| `src/adapters/lavern.ts` | Lavern agent + workflow adapters; external configs |
-| `src/adapters/index.ts` | Adapter re-exports (`AgentHarness`, `mergeAgents`, plugin types) |
-| `src/audit/index.ts` | Append-only JSONL audit log + SSE stream |
-| `src/time/index.ts` | Automatic billable time tracking — open/close entries, 6-min billing units, CSV export |
-| `src/secrets/index.ts` | Infisical REST API loader |
-| `src/auth/index.ts` | Lawyer profiles (practiceAreas, bio, role), RLS access control |
-| `src/clients/index.ts` | Client roster, matter sub-lists, conflict-of-interest checks |
-| `src/services/classifier.ts` | Haiku-based practice area, client, and NOSLEGAL tag detection on ingest/submit |
-| `src/services/toneAnalyzer.ts` | Chunked recursive Haiku tone analysis (MapReduce, O(log n) depth) |
-| `src/linkedin/parser.ts` | RFC 4180 CSV + minimal ZIP parser for LinkedIn data exports |
-| `src/cost/index.ts` | CostStore: per-call cost + power tracking, JSONL persistence, cache-aware pricing |
-| `src/integrations/clio.ts` | ClioClient — OAuth 2.0, token persistence, auto-refresh, 7 API methods, 4-region routing |
-| `src/tools/clio.ts` | 7 Clio tool definitions (list/get matters, documents, activities, notes, contacts) |
-| `src/mcp/server.ts` | MCP stdio server + Fastify REST API |
-| `src/backend/index.ts` | `LegalBackend` seam — `LocalBackend` (owns DB) / `RemoteBackend` (thin HTTP client) so MCP can run as a client of a separate owner (Go: `internal/backend/`) |
-| `src/index.ts` | Entry point — also resolves the run mode (`BIG_MICHAEL_MODE`: auto/backend/mcp/standalone) |
-| `src/bots/teams.ts` | Big Michael — Teams Outgoing Webhook receiver + Incoming Webhook sender + matter-link management |
-| `src/bots/slack.ts` | Big Michael — Slack Events API receiver + Web API sender + matter-link management |
-| `src/bots/dispatcher.ts` | Shared @BigMichael command parser (status/briefing/search/task/run/help) |
-| `src/integrations/graph.ts` | Microsoft Graph client — SharePoint search, Teams message search, posting |
-| `src/email/client.ts` | Email search — Microsoft Graph (O365/Exchange) + Gmail service-account |
-| `src/briefing/index.ts` | Hub-and-spoke client briefing swarm (Chalkboard pattern, 10 parallel spokes) |
-| `src/playbook/index.ts` | Four-tier playbook cascade: `client (3) > matter (2) > personal (1) > firm (0)` |
-| `src/citations/engine.ts` | Citation engine — CourtListener-backed KeyCite/Shepard's replacement |
-| `src/redline/engine.ts` | Playbook-aware contract redlining — Definely / Kira replacement |
-| `src/headnotes/engine.ts` | Headnote extraction — Westlaw Key Numbers / LexisNexis headnote replacement |
-| `src/precedent/generator.ts` | Precedent document generation — Practical Law Standard Docs / PSL replacement |
-| `src/templates/*.json` | Task templates (due-diligence, dispute-resolution, etc.) |
-| `src/types.ts` | All types: AgentDefinition (jurisdictions), Task (jurisdiction), NosLegalTags |
-| `src/learning/index.ts` | RuVector Q-learning layer — LearningEngine + FastAgentDB for agent recruitment |
-| `scripts/pdf_tools.py` | Python PDF backend — called by tools/pdf.ts |
-| `docker-compose.yml` | DocuSeal for local dev (no Qdrant — vector DB is in-process) |
-
-## Model routing
-
-| Condition | Model |
-|---|---|
-| T0 root orchestrator | Opus |
-| debate / synthesis / high complexity | Opus |
-| synthesis on Opus/Sonnet | Extended thinking (interleaved-thinking-2025-05-14) |
-| T1 managers, T2 specialists, drafting | Sonnet |
-| T3 tool agents, descriptors, extraction | Haiku |
-| `OLLAMA_TIERS=3` + `OLLAMA_ENABLED=true` | T3 → local Ollama |
-| `LOCAL_INFERENCE_TIERS=all` | Everything → LM Studio / vLLM / Jan |
-
-**Prompt caching** is enabled on all system prompts (Anthropic cache_control).
-**Extended thinking** activates for synthesis, debate, and T0 reasoning calls.
-**Base URL override** (enterprise/proxy routing) via `ANTHROPIC_BASE_URL`.
-
-## Connectors
-
-BigLaw ships 32 connector tools across 15 providers:
-
-### Legal Research & Courts
-| Provider | Tools | Activation |
-|---|---|---|
-| CourtListener | `court_listener_search`, `_opinion`, `_docket` | Always on (optional `COURT_LISTENER_API_KEY` for higher rate limits) |
-| Westlaw / CoCounsel | `westlaw_research`, `_check_citation` | `WESTLAW_API_KEY` |
-| Everlaw | `everlaw_search_documents`, `_get_review_set` | `EVERLAW_API_KEY` |
-| Trellis | `trellis_search_cases`, `_get_docket`, `_judge_analytics` | `TRELLIS_API_KEY` |
-| Descrybe | `descrybe_search_cases`, `_check_citation` | `DESCRYBE_API_KEY` |
-| Solve Intelligence | `solve_intelligence_search_patents`, `_draft_claims` | `SOLVE_INTELLIGENCE_API_KEY` |
-
-### Contract & Document Management
-| Provider | Tools | Activation |
-|---|---|---|
-| Ironclad | `ironclad_search_contracts`, `_get_contract` | `IRONCLAD_API_KEY` |
-| DocuSign CLM | `docusign_search_contracts`, `_get_envelope` | `DOCUSIGN_API_KEY` |
-| iManage | `imanage_search`, `_get_document` | `IMANAGE_API_KEY` |
-| Definely | `definely_analyze_structure`, `_resolve_definition` | `DEFINELY_API_KEY` |
-| Lawve AI | `lawve_review_contract`, `_search_clauses` | `LAWVE_API_KEY` |
-
-### VDR & Productivity
-| Provider | Tools | Activation |
-|---|---|---|
-| Google Drive | `google_drive_search`, `_get_file` | `GOOGLE_DRIVE_API_KEY` |
-| Box | `box_search`, `_get_file` | `BOX_API_KEY` |
-| Slack | `slack_search`, `_send_message` | `SLACK_API_KEY` |
-
-### Outside Counsel
-| Provider | Tools | Activation |
-|---|---|---|
-| TopCounsel | `topcounsel_route_matter`, `_get_panel` | `TOPCOUNSEL_API_KEY` |
-
-All connectors use Streamable HTTP MCP (JSON-RPC 2.0). Unconfigured connectors
-return a structured `{ error: "not configured" }` object — they never throw, so
-they are always safe to register in agent allowedTools.
-
-Security: endpoint URLs are SSRF-validated at startup; response bodies are capped
-at 1 MB; requests timeout at 30 s; API keys never appear in logs or error messages.
-
-## Flavours (practice-area presets)
-
-A flavour trims the platform to a practice area — a family-law solo doesn't need the
-contract playbook stack, and every unseated agent saves a Need/Offer descriptor call per
-DyTopo round. Flavours are data, not forks: JSON presets in `flavours/`, activated with
-`FLAVOUR=<name>` (empty or `full` = complete platform). Switching back is a restart.
-
-```bash
-FLAVOUR=family-law   # → flavours/family-law.json; seats 77 of 198 agents, 8 of 25 templates
-```
-
-A preset declares `agents.includeSkills` (Tier-2 agents must match ≥1; trailing `*` =
-prefix match), `agents.includeAgents` / `excludeAgents` (explicit IDs), and `templates`
-(IDs to expose; empty = all). The T0/T1 orchestration spine and T3 tool agents are always
-seated. The filter runs once at startup in `cmd/biglaw/main.go`, after plugin and Lavern
-agents load (so external agents are filtered too — use `includeAgents` to force-seat one);
-per-task recruitment (semantic search + jurisdiction + Q-rerank) still narrows further at
-runtime. Implementation: `internal/flavour/`. Shipped presets: `family-law`. A flavour
-file is also the place to *add* practice-specific agents later via `adapters/external/`.
-
-## Jurisdiction routing
-
-Specify `jurisdiction` when submitting a task to filter out jurisdiction-specific agents:
-
-```bash
-# Via MCP tool
-submit_task(description="...", workflowType="roundtable", jurisdiction="UK")
-
-# Via REST API
-POST /tasks { "description": "...", "workflowType": "roundtable", "jurisdiction": "US-NY" }
-```
-
-Jurisdiction codes use BCP-47-style region tags: `US`, `US-NY`, `EU`, `UK`, `AU`, `SG`, `HK`, `IN`, `CA`, etc.
-
-Filtering rule: an agent tagged `jurisdictions: ["US"]` is excluded from `EU`, `UK`, `AU`, etc. tasks.
-Prefix-match: agent `["US"]` is included for task `"US-NY"`, `"US-CA"`. Jurisdiction-neutral agents
-(most native agents) are always included regardless.
-
-## Generic plugin adapter
-
-Any external legal tool can be integrated without code changes. Drop a JSON file
-in `adapters/external/` and it will be loaded at startup:
-
-```json
-{
-  "id": "my-legal-tool",
-  "name": "My Legal Tool",
-  "version": "1.0.0",
-  "description": "Brief description",
-  "auth": {
-    "type": "api-key",
-    "apiKeyEnvVar": "MY_TOOL_API_KEY",
-    "endpointEnvVar": "MY_TOOL_MCP_URL"
-  },
-  "tools": [
-    {
-      "name": "my_tool_search",
-      "description": "Search for legal documents",
-      "inputSchema": {
-        "type": "object",
-        "properties": { "query": { "type": "string" } },
-        "required": ["query"]
-      },
-      "remoteName": "search",
-      "requiresAuth": true
-    }
-  ],
-  "agents": [
-    {
-      "id": "my-tool-specialist",
-      "name": "My Tool Specialist",
-      "tier": 2,
-      "domain": "research",
-      "description": "Specialist using My Legal Tool",
-      "systemPrompt": "You are the My Tool Specialist...",
-      "allowedTools": ["my_tool_search"]
-    }
-  ],
-  "workflows": [
-    {
-      "id": "my-workflow",
-      "name": "My Research Workflow",
-      "description": "End-to-end research using My Legal Tool",
-      "workflowType": "roundtable",
-      "promptTemplate": "Research {{description}} using My Legal Tool."
-    }
-  ]
-}
-```
-
-See `adapters/external/example.json` for a complete template.
-
-For TypeScript adapters (custom executors), implement `LegalToolAdapter` from
-`src/adapters/plugin.ts` and call `pluginRegistry.register(adapter)` at startup.
-
-## NOSLEGAL taxonomy
-
-Both documents and tasks carry NOSLEGAL v4 multi-faceted taxonomy tags.
-Tags on tasks are auto-detected from the task description at submission time
-(Haiku call in `detectNosLegal()`); tags on documents are set on ingest.
-
-```typescript
-task.noslegal = {
-  areaOfLaw: "Corporate Finance",      // NOSLEGAL Areas of law facet
-  workType:  "Transactional",          // Work types facet
-  sector:    "Financial Services",     // Sectors facet
-  assetType: "Agreement",              // Information assets facet
-};
-```
-
-These complement (not replace) the canonical `practiceArea` and `documentType`
-fields. Use them for interoperability with NOSLEGAL-compatible legal platforms.
-See https://github.com/noslegal/taxonomy for the controlled vocabulary.
-
-Aggregate NOSLEGAL breakdowns across all tasks are available via
-`GET /analytics/noslegal` (partner only).
-
-## Lawyer tone profiles
-
-Every lawyer profile can carry an optional `ToneProfile` derived from their LinkedIn
-writing history. Drafting agents and the final Opus synthesis call use the profile to
-match the lawyer's voice.
-
-### Getting a LinkedIn export
-
-1. On LinkedIn: **Settings → Data privacy → Get a copy of your data** → select
-   "Posts" (and optionally "Messages"). LinkedIn emails a ZIP within 24 h.
-2. Upload via the REST endpoint or the Admin → Profiles → Tone tab in the UI:
-
-```bash
-curl -X POST /profiles/:id/tone/linkedin-import \
-  -F "file=@linkedin_export.zip"   # ZIP or raw CSV both accepted
-```
-
-The endpoint accepts multipart uploads of either the full LinkedIn ZIP or a bare
-`Shares.csv` / `Posts.csv` file. A 60-second per-profile rate limit prevents
-accidental double-submission.
-
-### ToneProfile shape
-
-```typescript
-interface ToneProfile {
-  generatedAt:      string;          // ISO timestamp
-  sourceType:       "linkedin";
-  sampleCount:      number;          // posts analysed (max MAX_POSTS=500)
-  formality:        string;          // e.g. "formal", "semi-formal"
-  sentenceStyle:    string;          // e.g. "concise declarative"
-  vocabulary:       string;          // e.g. "technical legal, avoids jargon"
-  rhetoricalStyle:  string;          // e.g. "Socratic, evidence-first"
-  signaturePatterns: string[];       // recurring phrases / structural habits
-  injectionSnippet: string;          // pre-built prompt fragment for injection
-}
-```
-
-Profile fields added: `toneProfile?: ToneProfile`, `linkedinProfileUrl?: string`.
-
-### How tone injection works
-
-| Site | Behaviour |
-|---|---|
-| `src/agents/base.ts` | All agents with `domain: "drafting"` receive an `ASSIGNED LAWYER TONE PROFILE` block prepended to their system prompt (uses sanitized `injectionSnippet`) |
-| `src/orchestrator.ts` synthesise() | The Opus synthesis call receives `injectionSnippet` injected into its system prompt |
-| `src/dytopo/engine.ts` runRound() | Accepts optional `lawyerTone?: ToneProfile`; threads it into every agent `process()` call |
-
-### Analysis pipeline (`src/services/toneAnalyzer.ts`)
-
-Chunked MapReduce with O(log n) Haiku call depth:
-
-| Constant | Value | Purpose |
-|---|---|---|
-| `POST_CHUNK_SIZE` | 8 | posts per `analyzeChunk` call |
-| `NOTE_CHUNK_SIZE` | 6 | notes per `rollupNotes` call |
-| `MAX_POSTS` | 500 | cap on posts consumed |
-
-Three Haiku call types: `analyzeChunk` (posts → prose note), `rollupNotes`
-(notes → merged note), `buildProfile` (final note → JSON `ToneProfile`).
-
-`sanitizeForHaiku()` strips `FINDING:`, `END_FINDING`, `NO_FINDINGS`,
-`NO_CHALLENGE` markers and control characters from user-supplied content before
-it enters any prompt. The same guard (`sanitizePromptContent`) is applied in
-`src/agents/base.ts` before the `injectionSnippet` is prepended.
-
-### Parser (`src/linkedin/parser.ts`)
-
-Pure Node.js — no new runtime dependencies. RFC 4180 CSV parser handles quoted
-fields and embedded newlines. ZIP reader uses Node's built-in `inflateRawSync`;
-zip-bomb guard rejects archives whose decompressed output exceeds **50 MB**.
-`parseLinkedInExport(buf)` is the single public API; it never throws — malformed
-input returns an empty post list.
-
----
-
-## Cost tracking
-
-`src/cost/index.ts` records a `CostEntry` for every model call and exposes
-aggregated summaries via REST.
-
-### CostEntry fields
-
-```typescript
-interface CostEntry {
-  id:               string;
-  timestamp:        string;          // ISO
-  model:            string;          // e.g. "claude-haiku-4-5"
-  context:          CostContext;
-  taskId?:          string;
-  profileId?:       string;
-  inputTokens:      number;
-  outputTokens:     number;
-  cacheWriteTokens: number;
-  cacheReadTokens:  number;
-  costUsd:          number;
-  wattHours?:       number;          // local inference only
-}
-```
-
-Entries persist to `./data/costs.jsonl` (append-only) and reload on restart.
-
-### CostContext values
-
-| Context | Where recorded |
-|---|---|
-| `task` | Every `callModel()` / `runAgenticLoop()` iteration in `agents/base.ts` |
-| `descriptor` | Need/Offer descriptor Haiku calls in `agents/base.ts` |
-| `synthesis` | Opus synthesis call in `orchestrator.ts` |
-| `tabulate` | Tabulate call in `orchestrator.ts` |
-| `round_goal` | Round-goal generation in `orchestrator.ts` |
-| `protocol_debate` | DebateProtocol Opus call in `protocols/index.ts` |
-| `protocol_verify` | VerificationPipeline Haiku ×10 in `protocols/index.ts` |
-| `tone_analysis` | Every Haiku call in `services/toneAnalyzer.ts` (attributed to `profileId`) |
-| `classification` | `detectPracticeArea` / `detectClient` / `detectNosLegal` in `services/classifier.ts` |
-
-### Cache-aware pricing
-
-```
-cost = (inputTokens        × 1.00 × inputRate)
-     + (cacheWriteTokens   × 1.25 × inputRate)
-     + (cacheReadTokens    × 0.10 × inputRate)
-     + (outputTokens       × outputRate)
-```
-
-Built-in rates (per million tokens):
-
-| Model | Input | Output |
-|---|---|---|
-| Haiku | $1 | $5 |
-| Sonnet | $3 | $15 |
-| Opus | $15 | $75 |
-
-Override any rate at startup via env vars:
-
-```bash
-COST_HAIKU_IN=1.00    COST_HAIKU_OUT=5.00
-COST_SONNET_IN=3.00   COST_SONNET_OUT=15.00
-COST_OPUS_IN=15.00    COST_OPUS_OUT=75.00
-```
-
-### Local inference power metering
-
-`calcWattHours(watts, durationMs)` records estimated energy use for Ollama /
-LM-Studio calls. Default power draw:
-
-```bash
-LOCAL_INFERENCE_WATTS=250   # default; set to your GPU's TDP
-```
-
-`wattHours` is `null` for cloud Anthropic calls.
-
-### Querying costs
-
-```
-GET /cost/summary                   # CostSummary totals (partner only)
-GET /tasks/:id/cost                 # per-task { taskId, summary, entries }
-GET /profiles/:id/cost              # per-profile { profileId, summary, entries }
-```
-
-The **Admin → Cost** tab (partner only) shows stat cards, a stacked token
-breakdown bar, cost-by-model bar chart, cost-by-context bar chart, and a
-per-model detail table.
-
----
-
-## Adding a new agent
-
-1. Add an `AgentDefinition` object to `src/agents/definitions.ts`
-2. Add it to the `ALL_AGENT_DEFINITIONS` export
-3. Set `tier` (0–3), `type`, `domain`, `systemPrompt`, `allowedTools`, `skills`
-4. Optional: set `jurisdictions: ["US"]` if the agent is US-specific
-5. Run `npm run smoke-test` — the `Total agents >= 40` and `No duplicate IDs` checks will catch issues
-
-## Adding a task template
-
-1. Create `src/templates/<id>.json` with:
-   ```json
-   {
-     "id": "my-template",
-     "name": "Human-readable name",
-     "description": "What this workflow does",
-     "workflowType": "roundtable",
-     "promptTemplate": "Analyse {{company}} for {{issue}} under EU law.",
-     "substitutions": { "company": "...", "issue": "..." }
-   }
-   ```
-2. TemplateStore auto-loads all `*.json` files from `src/templates/` on startup
-
-## Adding Lavern agents and workflows
-
-- **Agents**: Place Lavern agent config JSON files in `agents/laverne/`. Auto-loaded via `LavernAdapter`.
-- **Workflows**: Place Lavern workflow JSON files in `workflows/laverne/`. Auto-loaded via `LavernWorkflowAdapter`.
-
-Lavern workflow types (`adversarial`, `counsel`, `full-bench`, `legal-design`, `pre-engagement`,
-`review`, `roundtable`, `tabulate`, `verification`) are mapped to BigLaw's WorkflowType.
-
-Lavern `promptOnly` entries (the `lavern:orchestrator-<workflow>` personas) are not seated as
-bench agents. Instead they load as **workflow personas**: for a task of the matching workflow
-type, the persona is appended to the root orchestrator's system prompt on round-goal and
-synthesis calls (BigLaw's output-format contract stays authoritative). See
-`LoadLavernOrchestratorPrompts` in `internal/adapters` and `rootSystemPrompt` in
-`internal/orchestrator`.
-
-## Local inference (LM Studio / Jan / Ollama)
-
-> **Model floor: qwen2.5:14b (or equivalent) for finding-producing agents.** A 7B model,
-> tested on a real matter, fabricated evidence wholesale — invented parties, figures, and
-> verbatim-looking "quotes" that exist in no source document (9/87 findings survived
-> mechanical citation verification, vs ~94-96% on 14B/cloud models). The safety net for
-> that failure mode is grounding-collapse detection (`GROUNDING_COLLAPSE_THRESHOLD`,
-> default 0.5 unverified rate → the task FAILS with an explicit error rather than
-> delivering a fabricated memo; `GROUNDING_COLLAPSE_ACTION=strict|warn` to degrade
-> instead). Synthesis additionally quarantines unverified findings from the deliverable
-> (`WRITER_UNVERIFIED=exclude`, default) and disclosures the count in an Evidence Note.
-> Smaller models remain fine for the T3 tool tier (`OLLAMA_TIERS=3`).
-
-```bash
-# LM Studio — all tiers local
-LOCAL_INFERENCE_URL=http://localhost:1234/v1
-LOCAL_INFERENCE_MODEL=llama-3.2-3b-instruct
-LOCAL_INFERENCE_TIERS=all
-
-# Ollama — T3 tool agents only
-OLLAMA_ENABLED=true
-OLLAMA_MODEL=llama3.2
-OLLAMA_TIERS=3
-
-# GoFetch — memory-plane daemon (github.com/hordruma/gofetch): BigLaw asks it to
-# make the target GGUF VRAM-resident before each local chat call, then routes
-# inference through its OpenAI passthrough. Residency failures fail open.
-GOFETCH_URL=http://localhost:8080
-LOCAL_INFERENCE_MODEL=qwen2.5-7b-instruct-q4   # must match a gofetch model id
-LOCAL_INFERENCE_TIERS=all
-```
-
-## Secrets (Infisical)
-
-Only these vars need to be in `.env`; everything else lives in Infisical:
-
-```bash
-INFISICAL_CLIENT_ID=...
-INFISICAL_CLIENT_SECRET=...
-INFISICAL_PROJECT_ID=...
-```
-
-Self-host: `docker compose -f docker-compose.prod.yml up -d` from the Infisical repo.
-
-## REST API endpoints
-
-> This list documents the route contract as designed in the TypeScript implementation;
-> the Go API on `main` now covers it (browser OAuth uses static
-> `/auth/{google,microsoft,linkedin}/{login,callback}` paths rather than `:provider`
-> params). The Go API also adds routes the list below predates: playbooks, citations,
-> deadlines, matters (health/budget), dockets, regulatory, pre-bills/invoices/OCG, LPM
-> reports, client-voice, and `GET /time-entries/export.ledes`. The authoritative Go route
-> map is `biglaw-go/internal/api/` (one file per domain group); the people-facing reference
-> is `docs/integration/rest-api.md` and reflects it.
-
-```
-POST   /tasks                       submit task (accepts jurisdiction, clientNumber, matterNumber)
-GET    /tasks                       list tasks (access-filtered)
-GET    /tasks/:id                   get task (403→404 if not permitted)
-DELETE /tasks/:id                   delete a matter
-POST   /tasks/:id/assign            assign lawyer(s)        [partner only]
-GET    /tasks/:id/stream            SSE live progress
-GET    /tasks/:id/table.csv         download tabulate output as CSV
-POST   /tasks/from-template         submit from template
-GET    /tasks/:taskId/rounds/:round get round state
-POST   /tasks/:taskId/gates/:gateId/approve
-POST   /tasks/:taskId/gates/:gateId/reject
-POST   /documents                   ingest document (text) → returns practiceArea + detectedClient + suggestedLawyers
-POST   /documents/upload            upload a PDF / text file → extract + ingest + classify
-GET    /documents/search            semantic search (owner-scoped)
-GET    /agents                      list agents
-GET    /templates                   list templates
-GET    /plugins                     list loaded external plugins [partner only]
-GET    /settings                    read admin settings
-PUT    /settings                    update admin settings (live)
-GET    /me                          current principal + authEnabled
-GET    /profiles                    lawyer roster (includes practiceAreas, bio)
-GET    /profiles/:id                single profile
-POST   /profiles                    create lawyer             [partner only]
-PATCH  /profiles/:id                update profile            [partner, or profile owner (no role change)]
-DELETE /profiles/:id                remove lawyer             [partner only]
-POST   /profiles/:id/tone/linkedin-import  upload LinkedIn ZIP or CSV → build ToneProfile  [partner or self, 60s rate limit]
-DELETE /profiles/:id/tone           clear tone profile        [partner or self]
-GET    /clients                     client roster             [partner only]
-POST   /clients                     create client             [partner only]
-PATCH  /clients/:id                 update client             [partner only]
-DELETE /clients/:id                 delete client             [partner only]
-POST   /clients/:id/matters         add matter to client      [partner only]
-DELETE /clients/:id/matters/:num    remove matter             [partner only]
-POST   /clients/check-conflict      check name against adversary lists  [partner only]
-GET    /time-entries                billable time entries (lawyers: own only; partners: all)
-                                    query: profileId, taskId, matterNumber, from, to
-GET    /time-entries/export.json    full time entry export as JSON  [partner only]
-GET    /time-entries/export.csv     full time entry export as CSV   [partner only]
-GET    /analytics/noslegal          NOSLEGAL facet breakdown across visible tasks  [partner only]
-GET    /cost/summary                aggregate CostSummary across all calls        [partner only]
-GET    /tasks/:id/cost              { taskId, summary, entries } (same access as task)
-GET    /profiles/:id/cost           { profileId, summary, entries }               [partner or self]
-GET    /auth/providers              which OAuth providers are configured
-GET    /auth/:provider/login        start OAuth login (google|microsoft|linkedin)
-GET    /auth/:provider/callback     OAuth callback → session cookie
-POST   /auth/logout                 clear session
-GET    /auth/clio/status            Clio connection status { connected, firmName, connectedAt }
-GET    /auth/clio/connect           begin Clio OAuth flow                         [partner only]
-GET    /auth/clio/callback          Clio OAuth callback → store tokens
-DELETE /auth/clio/disconnect        revoke stored Clio tokens                     [partner only]
-POST   /tasks/from-clio-matter      import Clio matter → ingest docs → submit task [partner only]
-POST   /time-entries/sync-to-clio   push BigLaw time entries to Clio activities [partner only]
-GET    /audit                       query audit log (access-filtered)
-GET    /audit/stream                SSE live audit stream (access-filtered)
-GET    /health                      health check
-POST   /bots/teams/webhook          Big Michael Teams Outgoing Webhook receiver
-POST   /bots/teams/notify           Internal: post message to a Teams channel
-POST   /bots/teams/matter-link      Link a matter to a Teams Incoming Webhook URL
-GET    /bots/teams/matter-link/:mn  Get the Teams webhook URL for a matter
-DELETE /bots/teams/matter-link/:mn  Remove a matter→channel link
-POST   /bots/slack/events           Big Michael Slack Events API receiver
-POST   /bots/slack/notify           Internal: post message to a Slack channel
-POST   /bots/slack/matter-link      Link a matter to a Slack channel ID
-GET    /bots/slack/matter-link/:mn  Get the Slack channel for a matter
-DELETE /bots/slack/matter-link/:mn  Remove a matter→channel link
-POST   /redline                     Playbook-aware contract redline
-POST   /headnotes/generate          Headnote extraction from case opinions
-POST   /precedents/generate         Precedent document generation
-```
-
-## Big Michael — channel agent
-
-Big Michael is the name of the agent embedded in Teams and Slack. He is a thin command
-dispatcher on top of BigLaw's orchestrator — not a separate system.
-
-**Commands** (all prefixed `@BigMichael`):
-- `status [matter]` — matter health score + active tasks + top risks
-- `briefing [client]` — full hub-and-spoke client intelligence briefing (all systems)
-- `search [query]` — semantic search across the knowledge store
-- `task [description]` — submit a new roundtable task
-- `run [template-id]` — run a named workflow template
-- `help` — list available commands
-
-**Environment variables:**
-```bash
-# Teams
-TEAMS_WEBHOOK_SECRET=…           # HMAC-SHA256 signing token from Outgoing Webhook setup
-TEAMS_INCOMING_WEBHOOK_URL=…     # default channel to post async results + proactive notifications
-TEAMS_MATTER_WEBHOOKS='{"M-001":"https://…","M-002":"https://…"}'  # per-matter overrides
-
-# Slack
-SLACK_BOT_TOKEN=…                # Bot User OAuth Token (xoxb-…)
-SLACK_SIGNING_SECRET=…           # App signing secret for HMAC verification
-SLACK_DEFAULT_CHANNEL=…          # fallback channel ID for notifications
-SLACK_MATTER_CHANNELS='{"M-001":"C0123ABCD"}'  # per-matter channel map
-```
-
-**Proactive notifications** — when any matter task completes, Big Michael automatically posts
-to the linked channel (Teams Incoming Webhook or Slack channel). Wire up at startup with
-`attachTeamsTaskNotifier(orch)` and `attachSlackTaskNotifier(orch)` — already done in
-`src/mcp/server.ts`.
-
-**Client intelligence briefing** — launched by `@BigMichael briefing [client]`. Spawns
-10 parallel spokes (12 s timeout each via `Promise.allSettled`):
-
-| Spoke | Source |
-|---|---|
-| `clio` | Matter list, contacts, notes from Clio |
-| `imanage` | Document search from iManage |
-| `slack` | Channel mentions via Slack search API |
-| `teams_chat` | Chat message search via Microsoft Graph |
-| `sharepoint` | File search via Microsoft Graph (entityTypes: driveItem) |
-| `google_drive` | File search via Google Drive API |
-| `box` | File search via Box API |
-| `email_graph` | Exchange/O365 mail search via Microsoft Graph |
-| `email_gmail` | Gmail search via Gmail API (service-account) |
-| `knowledge_store` | Semantic search across ingested documents |
-| `internal_tasks` | BigLaw task list, matter health scores |
-| `internal_time` | Billable time entries per matter |
-
-### Access control
-
-When `AUTH_ENABLED=true`, identity comes from OAuth (Google/Microsoft/LinkedIn)
-and every request carries a `SessionUser` from the signed session cookie. A
-**partner** sees all matters and manages assignment; a **lawyer** sees only
-matters assigned to them. Locally (`AUTH_ENABLED=false`) every request is a
-single local partner. See `src/auth/` and `docs/operations/access-control.md`.
-Access rules are unit-tested (`npm test`).
-
-### Practice area classification
-
-`src/services/classifier.ts` runs two Haiku calls on every document ingest:
-
-1. **`detectPracticeArea(title, content)`** — classifies into one of 15 canonical practice areas. The canonical list lives in `src/types.ts` as `PRACTICE_AREAS` and is mirrored in `ui/src/types.ts`.
-2. **`detectClient(title, content, clients)`** — matches the document against the known client roster by client number and name.
-
-Both results are stored in the Qdrant document payload (`practiceArea`, `detectedClientNumber`) and returned from the REST API alongside `suggestedLawyers` — profiles whose `practiceAreas` include the detected area.
-
-### Conflict of interest
-
-`ClientStore.CheckConflict` matches names with `clients.NamesMatch` (normalised: case, diacritics, punctuation and corporate suffixes folded; token order and middle initials ignored; containment either way) between the incoming client name and every existing client's `adversaries` array (and the new client's adversaries against existing client names). It runs automatically on `POST /clients` and on a `PATCH /clients/:id` that changes the name or adverse parties (for the hits the change introduces), over every adverse party (max 1000): any hit returns **409** listing every conflict with an `id` and changes nothing; re-submitting with `acknowledgedConflictIds` (exactly the ids shown) and a non-empty `conflictReason` proceeds and audits the override (`client.conflict_overridden`: who, reason, every hit). Partners can also call `POST /clients/check-conflict` standalone.
-
-## Known limitations
-
-- **Vector storage**: all three stores (agent registry, memory, knowledge) use RuVector's native
-  in-process HNSW — no external service required. Data persists to `./data/` and reloads on restart.
-- **Python required**: PDF tools require Python 3.11+ and the packages in
-  `requirements.txt`. Install with `pip install -r requirements.txt`.
-- **Tesseract required** for OCR: `apt install tesseract-ocr` or `brew install tesseract`.
-- **Connectors**: all 8 connectors require external subscriptions except CourtListener
-  (free, public API). Unconfigured connectors return structured errors — they never crash the server.
+Budgets: Go prod LOC reported with no limit (owner decision 17: the total ceiling is dropped; `python3 scripts/loc.py` prints today's figure, never write it here; each PR reports its lines vs its DESIGN budget; test-support packages such as `storetest` count), internal
+packages ≤ 12 (9 used; test-support packages do not count), direct deps ≤ 3, env vars ≤ 20 (19 used), UI runtime
+deps ≤ 2 (2 used), UI source lines (`ui/src`) ≤ 3,200 (raised from 2,400 for Manage), untested packages 0, longest source file ≤ 2,000 lines.

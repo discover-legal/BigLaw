@@ -1,0 +1,65 @@
+{
+ "name": "reproduce",
+ "kind": "subagent",
+ "class": "committee",
+ "maxTurns": 8,
+ "role": "critic",
+ "allowed": [
+  "retrieve",
+  "numbers"
+ ],
+ "description": "Answers the plan's questions from the documents alone, without seeing the draft, with the value and a verbatim quote for each. Go compares each verified answer with the draft: a value the draft never states becomes a MEDIUM critic finding. It is a critic with no context beyond its questions. Do not use it directly; committee runs it.\nExample: {\"questions\": [\"When is the answer to the complaint due?\"]}",
+ "in": {
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+   "questions"
+  ],
+  "properties": {
+   "questions": {
+    "type": "array",
+    "items": {
+     "type": "string",
+     "maxLength": 2000
+    },
+    "maxItems": 40
+   }
+  }
+ },
+ "out": {
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+   "answers"
+  ],
+  "properties": {
+   "answers": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "additionalProperties": false,
+     "required": [
+      "question",
+      "value",
+      "documentId",
+      "quote"
+     ],
+     "properties": {
+      "question": {
+       "type": "string"
+      },
+      "value": {
+       "type": "string"
+      },
+      "documentId": {
+       "type": "string"
+      },
+      "quote": {
+       "type": "string"
+      }
+     }
+    }
+   }
+  }
+ }
+}

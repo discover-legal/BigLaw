@@ -1,0 +1,8 @@
+stop: awaiting_gate/finished
+
+## Limitations
+
+- Coverage: I1 (What does Greystone claim?) was not analysed: its section states facts without an analysis of the issue (rule, application, conclusion).
+- This deliverable used candidate practice or jurisdiction packs (us, litigation) that no named lawyer has reviewed yet.
+- This deliverable used candidate skills (tskill) that no named lawyer has reviewed yet.
+- External authorities (cases, statutes) are flagged, not verified: BigLaw has no live citator.

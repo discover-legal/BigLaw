@@ -1,0 +1,228 @@
+{
+  "matter": "corporate-ma/kestrel-buyside-diligence",
+  "version": 1,
+  "as_of": "2026-10-15",
+  "notes": "Synthetic data room. All parties, numbers and documents are fictional. Every planted fact's evidence string occurs verbatim in the named document (checked by `run.py validate`).",
+  "facts": [
+    {
+      "id": "DD-01",
+      "title": "Common stock count in SPA s.3.4 (6,250,000) contradicts cap table (6,412,500)",
+      "question": "How many shares of common stock are outstanding?",
+      "category": "capitalization",
+      "severity": "high",
+      "documents": ["01-stock-purchase-agreement-draft.md", "07-cap-table.csv"],
+      "evidence": ["6,250,000 shares of Common Stock and 1,200,000 shares of Series A Preferred Stock are issued and outstanding", "Total Common Stock outstanding,Common Stock,6412500"],
+      "detect": {"all": [["$num:6250000"], ["$num:6412500"]]},
+      "model_answer": "SPA Section 3.4 represents 6,250,000 shares of Common Stock outstanding, but the cap table shows 6,412,500 shares of Common Stock outstanding — a 162,500-share discrepancy."
+    },
+    {
+      "id": "DD-02",
+      "title": "Options outstanding: SPA says 450,000, cap table shows 610,000",
+      "question": "How many stock options are outstanding?",
+      "category": "capitalization",
+      "severity": "high",
+      "documents": ["01-stock-purchase-agreement-draft.md", "07-cap-table.csv"],
+      "evidence": ["options to purchase 450,000 shares of Common Stock are outstanding", "2021 Equity Incentive Plan - options outstanding,Options,610000"],
+      "detect": {"all": [["$num:450000"], ["$num:610000"]]},
+      "model_answer": "The SPA states options over 450,000 shares are outstanding under the 2021 Plan; the cap table shows 610,000 options outstanding."
+    },
+    {
+      "id": "DD-03",
+      "title": "Undisclosed Lakeside Venture Debt warrant for 85,000 shares contradicts the SPA's 'no warrants' rep",
+      "question": "Are there any warrants or other rights to acquire the Company's shares?",
+      "category": "capitalization",
+      "severity": "high",
+      "documents": ["07-cap-table.csv", "01-stock-purchase-agreement-draft.md"],
+      "evidence": ["Lakeside Venture Debt LLC,Warrant to purchase Common Stock,85000", "there are no outstanding options, warrants, convertible securities, or other rights to acquire any capital stock of the Company"],
+      "detect": {"all": [["warrant"], ["lakeside", "$num:85000"]]},
+      "model_answer": "The cap table discloses a warrant held by Lakeside Venture Debt LLC to purchase 85,000 shares of Common Stock, which Section 3.4's no-warrants representation omits."
+    },
+    {
+      "id": "DD-04",
+      "title": "Series A protective provision: sale of >50% is a Deemed Liquidation Event requiring 60% Series A consent",
+      "question": "Does the Series A have protective provisions or consent rights over a sale of the Company?",
+      "category": "charter",
+      "severity": "high",
+      "documents": ["02-certificate-of-incorporation.md"],
+      "evidence": ["without the written consent or affirmative vote of the holders of at least sixty percent (60%) of the then outstanding shares of Series A Preferred Stock"],
+      "detect": {"all": [["series a"], ["$pct:60", "sixty percent"], ["consent", "approv", "vote"]]},
+      "model_answer": "The share sale is a Deemed Liquidation Event and requires the written consent of holders of at least 60% of the Series A Preferred Stock under Article V, Section 4."
+    },
+    {
+      "id": "DD-05",
+      "title": "Series A liquidation preference is 1.5x participating = $9,000,000 before common",
+      "question": "What liquidation preference do the Series A Preferred holders have?",
+      "category": "charter",
+      "severity": "medium",
+      "documents": ["02-certificate-of-incorporation.md", "07-cap-table.csv"],
+      "evidence": ["one and one-half times (1.5x) the Series A Original Issue Price of $5.00 per share", "so that the Series A Preferred Stock participates fully with the Common Stock"],
+      "detect": {"all": [["$money:9000000"], ["preference", "liquidation"]]},
+      "model_answer": "The Series A carries a 1.5x participating liquidation preference: 1,200,000 shares x $5.00 x 1.5 = $9,000,000 paid ahead of common, after which Series A also participates."
+    },
+    {
+      "id": "DD-06",
+      "title": "Charter right of first refusal on all stock transfers must be waived (board + Series A director)",
+      "question": "Do the charter or bylaws restrict transfers of the Company's stock?",
+      "category": "charter",
+      "severity": "medium",
+      "documents": ["02-certificate-of-incorporation.md"],
+      "evidence": ["The right of first refusal in Section 6.1 may be waived only by a resolution of the Board of Directors adopted with the approval of the director designated by the holders of Series A Preferred Stock"],
+      "detect": {"all": [["right of first refusal", "rofr"], ["waive", "waiver"]]},
+      "model_answer": "Article VI gives the Company a right of first refusal over any stock transfer; it must be waived by board resolution approved by the Series A director, or the transfer is void."
+    },
+    {
+      "id": "DD-07",
+      "title": "Norrland (sole-source supplier): change of control lets Supplier terminate on 30 days' notice within 90 days",
+      "question": "What happens to the Norrland supply agreement on a change of control?",
+      "category": "change_of_control",
+      "severity": "high",
+      "documents": ["03-supply-agreement-norrland.md"],
+      "evidence": ["Upon a Change of Control of Buyer, Supplier may terminate this Agreement upon thirty (30) days' written notice given within ninety (90) days after receiving notice of the Change of Control"],
+      "detect": {"all": [["norrland"], ["terminat"], ["30 days", "thirty (30)", "thirty days", "30-day", "90 days", "ninety (90)", "90-day"]]},
+      "model_answer": "Norrland, the sole qualified source of MEMS die, may terminate the Supply Agreement on 30 days' notice given within 90 days after notice of the change of control (Section 12.2)."
+    },
+    {
+      "id": "DD-08",
+      "title": "Norrland take-or-pay minimum commitment of $2,400,000 per Contract Year",
+      "question": "Does the Norrland supply agreement contain a minimum purchase commitment?",
+      "category": "commercial",
+      "severity": "medium",
+      "documents": ["03-supply-agreement-norrland.md"],
+      "evidence": ["Buyer shall purchase Products having an aggregate invoice value of not less than $2,400,000 in each Contract Year"],
+      "detect": {"all": [["$money:2400000"], ["minimum", "shortfall", "take-or-pay", "take or pay"]]},
+      "model_answer": "The Norrland agreement imposes a $2,400,000 annual minimum purchase commitment with a take-or-pay Shortfall Payment."
+    },
+    {
+      "id": "DD-09",
+      "title": "Arcadia (31% customer) names Halberd as a Competitor: immediate termination + refund of $1,150,000 prepaid fees",
+      "question": "What rights does Arcadia have if the Company is acquired?",
+      "category": "change_of_control",
+      "severity": "high",
+      "documents": ["04-customer-msa-arcadia.md"],
+      "evidence": ["and expressly includes Halberd Industrial Holdings, Inc. and its Affiliates", "Vendor shall refund all Prepaid Fees attributable to Services not yet rendered as of the termination date"],
+      "detect": {"all": [["arcadia"], ["competitor"], ["halberd", "buyer"]]},
+      "model_answer": "Arcadia's MSA defines 'Competitor of Customer' to expressly include Halberd Industrial Holdings and its Affiliates; on closing Arcadia may terminate immediately and claw back unearned Prepaid Fees (up to $1,150,000)."
+    },
+    {
+      "id": "DD-10",
+      "title": "Arcadia MSA requires prior written consent to a change of control (>40% threshold)",
+      "question": "Does the Arcadia MSA require consent to a change of control?",
+      "category": "change_of_control",
+      "severity": "high",
+      "documents": ["04-customer-msa-arcadia.md"],
+      "evidence": ["including by merger, operation of law or Change of Control, without the prior written consent of Customer"],
+      "detect": {"all": [["arcadia"], ["consent"], ["change of control", "change-of-control", "change in control"]]},
+      "model_answer": "Arcadia's prior written consent is required for any change of control of Brightwater (Section 13.1; threshold 40% of voting equity)."
+    },
+    {
+      "id": "DD-11",
+      "title": "Cobalt license: assignment by merger/change of control without consent is void and permits immediate termination",
+      "question": "Can the Cobalt license be assigned or transferred in a merger or change of control?",
+      "category": "change_of_control",
+      "severity": "high",
+      "documents": ["05-software-license-cobalt.md"],
+      "evidence": ["whether voluntarily, by operation of law, merger, change of control or otherwise, without Licensor's prior written consent"],
+      "detect": {"all": [["cobalt"], ["consent", "void", "terminat"]]},
+      "model_answer": "The Cobalt license cannot transfer by merger or change of control without Cobalt's prior written consent; a violating transfer is void and lets Cobalt terminate immediately — and the Licensed Software is the core of HydroSense Cloud."
+    },
+    {
+      "id": "DD-12",
+      "title": "Lease: transfer of >49% of Tenant's stock is a deemed assignment requiring landlord consent",
+      "question": "Does a sale of the Tenant's stock require the landlord's consent under the lease?",
+      "category": "change_of_control",
+      "severity": "medium",
+      "documents": ["08-office-lease.md"],
+      "evidence": ["of more than forty-nine percent (49%) of the voting stock of Tenant shall be deemed an assignment of this Lease"],
+      "detect": {"all": [["lease", "landlord", "corrigan"], ["$pct:49", "forty-nine"]]},
+      "model_answer": "The Corrigan Park lease treats a transfer of more than 49% of Tenant's voting stock as an assignment requiring Landlord consent (not to be unreasonably withheld)."
+    },
+    {
+      "id": "DD-13",
+      "title": "Lease renewal option lapsed: exercise deadline was September 30, 2026; lease expires June 30, 2027",
+      "question": "When does the lease expire, and is a renewal option still exercisable?",
+      "category": "deadline",
+      "severity": "high",
+      "documents": ["08-office-lease.md"],
+      "evidence": ["no later than September 30, 2026", "the option shall lapse and be of no further force or effect"],
+      "detect": {"all": [["$date:2026-09-30"], ["option", "renew", "extend", "extension"]]},
+      "model_answer": "The option to extend had to be exercised by September 30, 2026; absent evidence of a notice, it has lapsed and the lease expires June 30, 2027."
+    },
+    {
+      "id": "DD-14",
+      "title": "CEO single-trigger Change in Control Payment of $770,000 (2.0x $385,000)",
+      "question": "What change in control payment is the CEO entitled to?",
+      "category": "employment",
+      "severity": "high",
+      "documents": ["06-ceo-employment-agreement.md"],
+      "evidence": ["equal to two times (2.0x) Executive's then-current Base Salary", "whether or not Executive's employment is terminated", "an annual base salary of $385,000"],
+      "detect": {"all": [["$money:770000"]]},
+      "model_answer": "Daniel Okafor is owed a single-trigger Change in Control Payment of $770,000 (2.0x his $385,000 base salary), payable whether or not his employment ends."
+    },
+    {
+      "id": "DD-15",
+      "title": "CEO 100% single-trigger equity acceleration and no 280G cutback",
+      "question": "What happens to the CEO's equity awards on a change in control, and is there a 280G provision?",
+      "category": "employment",
+      "severity": "medium",
+      "documents": ["06-ceo-employment-agreement.md"],
+      "evidence": ["one hundred percent (100%) of Executive's then-unvested equity awards shall immediately vest", "Executive shall receive the full amount of such payments and the Company shall have no obligation to reduce them"],
+      "detect": {"all": [["accelerat", "vest"], ["$pct:100", "single-trigger", "single trigger", "full"]]},
+      "model_answer": "All of the CEO's unvested equity accelerates on the change in control (single trigger, 100%), and there is no 280G cutback."
+    },
+    {
+      "id": "DD-16",
+      "title": "CEO 24-month non-compete governed by California law is likely unenforceable",
+      "question": "Is the CEO's non-compete enforceable?",
+      "category": "employment",
+      "severity": "medium",
+      "documents": ["06-ceo-employment-agreement.md"],
+      "evidence": ["This Agreement shall be governed by the laws of the State of California", "for twenty-four (24) months thereafter, Executive shall not, anywhere in North America"],
+      "detect": {"all": [["non-compet", "noncompet", "non compet"], ["california", "16600"]]},
+      "model_answer": "The 24-month North America non-compete is governed by California law and is likely void under Cal. Bus. & Prof. Code s.16600; Buyer should not price in its protection."
+    },
+    {
+      "id": "DD-17",
+      "title": "SPA s.6.5: third-party consents are not a closing condition",
+      "question": "Are third-party consents a condition to closing under the SPA?",
+      "category": "spa_gap",
+      "severity": "high",
+      "documents": ["01-stock-purchase-agreement-draft.md"],
+      "evidence": ["obtaining such consents shall not be a condition to Closing"],
+      "detect": {"all": [["consent"], ["condition"], ["6.5", "not a condition", "closing condition"]]},
+      "model_answer": "Under SPA Section 6.5 obtaining third-party consents is expressly not a condition to Closing; Buyer should add a closing condition for the Norrland, Arcadia and Cobalt consents."
+    },
+    {
+      "id": "DD-18",
+      "title": "Schedule 3.6 lists only the lease consent — omits Norrland, Arcadia and Cobalt",
+      "question": "Which consents does the disclosure schedule list?",
+      "category": "spa_gap",
+      "severity": "high",
+      "documents": ["01-stock-purchase-agreement-draft.md"],
+      "evidence": ["| 1 | Office and Light Industrial Lease dated April 1, 2022 | Corrigan Park Properties LLC | Yes — landlord consent |"],
+      "detect": {"all": [["schedule 3.6"], ["omit", "only", "incomplete", "does not list", "fails to list", "missing", "not listed"]]},
+      "model_answer": "Schedule 3.6 lists only the Corrigan Park lease as requiring consent and omits the Norrland, Arcadia and Cobalt change-of-control consents."
+    },
+    {
+      "id": "DD-19",
+      "title": "SPA s.8.4: 10% cap ($8.4M) applies even to Fundamental Representations; 12-month survival",
+      "question": "What cap and survival period apply to indemnification under the SPA?",
+      "category": "spa_gap",
+      "severity": "medium",
+      "documents": ["01-stock-purchase-agreement-draft.md"],
+      "evidence": ["including with respect to Fundamental Representations"],
+      "detect": {"all": [["fundamental"], ["cap", "$pct:10", "$money:8400000", "limit"]]},
+      "model_answer": "Section 8.4 caps Sellers' liability at 10% of the Purchase Price ($8,400,000) including for Fundamental Representations such as capitalization; fundamental reps should be capped at the Purchase Price with longer survival."
+    }
+  ],
+  "traps": [
+    {
+      "id": "TRAP-DD-01",
+      "title": "Meridian logistics agreement must NOT be reported as requiring change-of-control consent",
+      "documents": ["09-logistics-agreement-meridian.md"],
+      "evidence": ["shall not constitute an assignment of this Agreement and shall not require the consent of the other party"],
+      "forbid": {"all": [["meridian"], ["consent required", "requires consent", "require consent", "requires the consent", "consent is required", "triggers"]]},
+      "unless": ["not require", "no consent", "does not", "not trigger", "not constitute", "shall not", "no change-of-control", "no change of control", "not an assignment", "carve", "expressly", "excluded"],
+      "model_violation": "The Meridian logistics agreement requires consent on a change of control."
+    }
+  ]
+}

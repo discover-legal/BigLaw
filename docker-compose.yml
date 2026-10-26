@@ -1,82 +1,73 @@
-# Big Michael dev stack
-#
-# Included services:
-#   docuseal      — self-hosted e-signature (http://localhost:3000)
-#
-# Optional audit services (opt-in via --profile audit):
-#   opensearch    — self-hosted audit log indexer (http://localhost:9200)
-#   opensearch-dashboards — visualise audit logs (http://localhost:5601)
-#
-# Vector storage is handled by RuVector's native in-process HNSW — no Docker
-# service needed. Data persists to the ./data/ directory on the host.
-#
-# Quick start (core only):
-#   docker compose up -d
-#
-# Quick start (with audit backend):
-#   docker compose --profile audit up -d
-#   Then set AUDIT_OPENSEARCH_URL=http://localhost:9200 in .env
-
+# BigLaw 2: Postgres 16 with pgvector + biglaw. All state lives in the pgdata volume.
+# Values come from the shell or from .env (copy .env.example).
 services:
-  docuseal:
-    image: docuseal/docuseal:latest
-    container_name: big-michael-docuseal
-    ports:
-      - "127.0.0.1:3000:3000"
-    volumes:
-      - docuseal_data:/data
+  postgres:
+    image: pgvector/pgvector:0.8.6-pg16 # Postgres 16 with the vector extension (hybrid search)
     environment:
-      # Change this in production — used to sign session tokens
-      SECRET_KEY_BASE: "changeme-use-openssl-rand-hex-64-in-production"
-      # Default admin credentials for first login — change immediately
-      DOCUSEAL_ADMIN_EMAIL: "admin@localhost"
-      DOCUSEAL_ADMIN_PASSWORD: "admin123"
-    restart: unless-stopped
+      POSTGRES_USER: biglaw
+      POSTGRES_DB: biglaw
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (e.g. openssl rand -hex 24)}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:3000/health || exit 1"]
-      interval: 15s
+      test: ["CMD-SHELL", "pg_isready -U biglaw -d biglaw"]
+      interval: 2s
       timeout: 5s
-      retries: 5
-
-  # ── Audit backend (opt-in: docker compose --profile audit up -d) ─────────────
-  # OpenSearch stores audit events in monthly indices (big-michael-audit-YYYY.MM).
-  # No auth by default — suitable for local dev only. In production, enable
-  # OpenSearch Security (set OPENSEARCH_SECURITY_ENABLED=true and configure users).
-  opensearch:
-    image: opensearchproject/opensearch:2.13.0
-    container_name: big-michael-opensearch
-    profiles: [audit]
-    environment:
-      - discovery.type=single-node
-      - DISABLE_INSTALL_DEMO_CONFIG=true
-      - DISABLE_SECURITY_PLUGIN=true
-      - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
-    ports:
-      - "127.0.0.1:9200:9200"
-    volumes:
-      - opensearch_data:/usr/share/opensearch/data
+      retries: 30
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
-      interval: 20s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
+    # No ports: Postgres is reachable only from the biglaw container.
 
-  opensearch-dashboards:
-    image: opensearchproject/opensearch-dashboards:2.13.0
-    container_name: big-michael-opensearch-dashboards
-    profiles: [audit]
+  biglaw:
+    build: .
+    image: biglaw:local
+    # Without sign-in, serve refuses a non-loopback address without
+    # --allow-no-auth. That is safe here only because the port below is
+    # published on the host's loopback; do not change it to 0.0.0.0 or a LAN IP
+    # (README § Exposure). Under --allow-no-auth, Manage is read-only; to edit there,
+    # add "--admin-without-auth" to this command, which lets anyone who can reach the
+    # port change what every task's agents use.
+    #
+    # Sign-in (README § Sign-in): set these in .env and every request needs a
+    # session; --allow-no-auth then has no effect (serve says so) and admins are
+    # BIGLAW_ADMINS, with secrets and custom tools on for them. For example, with
+    # a generic OIDC issuer and a TLS reverse proxy on the host that forwards
+    # https://biglaw.example.com to 127.0.0.1:3101 keeping the Host header:
+    #   BIGLAW_PUBLIC_URL=https://biglaw.example.com
+    #   BIGLAW_OIDC_ISSUER=https://idp.example.com/realms/biglaw
+    #   BIGLAW_OIDC_CLIENT_ID=biglaw
+    #   BIGLAW_OIDC_CLIENT_SECRET=<the client's secret>
+    #   BIGLAW_ADMINS=ada@example.com
+    # Do not add --admin-without-auth with sign-in: serve refuses it.
+    command: ["serve", "--allow-no-auth"]
     depends_on:
-      opensearch:
+      postgres:
         condition: service_healthy
     environment:
-      - OPENSEARCH_HOSTS=["http://opensearch:9200"]
-      - DISABLE_SECURITY_DASHBOARDS_PLUGIN=true
+      # The password travels in PGPASSWORD (read by lib/pq), not in the URL,
+      # so any character in POSTGRES_PASSWORD works without percent-encoding.
+      BIGLAW_DATABASE_URL: postgres://biglaw@postgres:5432/biglaw?sslmode=disable
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      BIGLAW_ADDR: 0.0.0.0:3101
+      BIGLAW_PUBLIC_URL: ${BIGLAW_PUBLIC_URL:-}
+      BIGLAW_MODEL_URL: ${BIGLAW_MODEL_URL:-}
+      BIGLAW_MODEL_KEY: ${BIGLAW_MODEL_KEY:-}
+      BIGLAW_MODELS: ${BIGLAW_MODELS:-}
+      BIGLAW_BUDGET_CALLS: ${BIGLAW_BUDGET_CALLS:-}
+      BIGLAW_BUDGET_USD: ${BIGLAW_BUDGET_USD:-}
+      BIGLAW_LOCAL_WATTS: ${BIGLAW_LOCAL_WATTS:-}
+      BIGLAW_PRICES: ${BIGLAW_PRICES:-}
+      BIGLAW_COLLAPSE_THRESHOLD: ${BIGLAW_COLLAPSE_THRESHOLD:-}
+      BIGLAW_COLLAPSE_ACTION: ${BIGLAW_COLLAPSE_ACTION:-}
+      BIGLAW_OIDC_ISSUER: ${BIGLAW_OIDC_ISSUER:-}
+      BIGLAW_OIDC_CLIENT_ID: ${BIGLAW_OIDC_CLIENT_ID:-}
+      BIGLAW_OIDC_CLIENT_SECRET: ${BIGLAW_OIDC_CLIENT_SECRET:-}
+      BIGLAW_ADMINS: ${BIGLAW_ADMINS:-}
+      BIGLAW_AI_RATE: ${BIGLAW_AI_RATE:-}
+      ALLOW_ANTHROPIC: ${ALLOW_ANTHROPIC:-}
+      ALLOW_AWS: ${ALLOW_AWS:-}
     ports:
-      - "127.0.0.1:5601:5601"
+      - "127.0.0.1:3101:3101"   # loopback only on the host: the --allow-no-auth precondition (with sign-in, a TLS proxy on the host fronts it)
     restart: unless-stopped
 
 volumes:
-  docuseal_data:
-  opensearch_data:
+  pgdata:

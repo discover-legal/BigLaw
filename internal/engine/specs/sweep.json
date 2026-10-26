@@ -1,0 +1,154 @@
+{
+ "name": "sweep",
+ "kind": "fanout",
+ "class": "evidence",
+ "maxTurns": 1000,
+ "description": "Reads every section of every document of the task once, running extract_facts on each page, most relevant to the plan's issues first, and records the verified findings in the ledger. It is the retrieval floor: recall does not depend on which passages you think to search for. A page that only repeats another, or holds no text (a table of contents), is skipped and listed as skipped. Calling it again skips sections it already read and returns their findings, so it never spends twice. If the budget runs out before every page is read it says incomplete, lists the uncovered pages (a batch of short sections from sectionId through its last) and the documents left partly unread, which go into Limitations. Its notes say what admission did to the findings: a typed value its quotes do not state is dropped (noted with the finding's id), an exact duplicate merged. The result is one page of about 12 KB: when it says truncated, its lists hold their first items (all the findings are in the ledger, op findings; a later sweep reads the uncovered pages). Do not use it to look up one fact (use retrieve or extract_facts with a query) and do not call it before a plan is recorded.\nExample: {\"over\": \"sections\", \"documentIds\": null}",
+ "in": {
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+   "over",
+   "documentIds"
+  ],
+  "properties": {
+   "over": {
+    "type": "string",
+    "enum": [
+     "sections"
+    ]
+   },
+   "documentIds": {
+    "type": [
+     "array",
+     "null"
+    ],
+    "items": {
+     "type": "string",
+     "maxLength": 64
+    },
+    "maxItems": 200
+   }
+  }
+ },
+ "out": {
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+   "visited",
+   "findings",
+   "incomplete",
+   "uncovered",
+   "skipped",
+   "notes",
+   "unreadDocuments",
+   "truncated"
+  ],
+  "properties": {
+   "visited": {
+    "type": "integer"
+   },
+   "findings": {
+    "type": "array",
+    "items": {
+     "type": "string"
+    }
+   },
+   "incomplete": {
+    "type": "boolean"
+   },
+   "uncovered": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "additionalProperties": false,
+     "required": [
+      "documentId",
+      "sectionId",
+      "through"
+     ],
+     "properties": {
+      "documentId": {
+       "type": "string"
+      },
+      "sectionId": {
+       "type": "string"
+      },
+      "through": {
+       "type": [
+        "string",
+        "null"
+       ]
+      }
+     }
+    }
+   },
+   "skipped": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "additionalProperties": false,
+     "required": [
+      "documentId",
+      "sectionId",
+      "through",
+      "reason"
+     ],
+     "properties": {
+      "documentId": {
+       "type": "string"
+      },
+      "sectionId": {
+       "type": "string"
+      },
+      "through": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "reason": {
+       "type": "string",
+       "enum": [
+        "duplicate",
+        "boilerplate"
+       ]
+      }
+     }
+    }
+   },
+   "unreadDocuments": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "additionalProperties": false,
+     "required": [
+      "documentId",
+      "read",
+      "planned"
+     ],
+     "properties": {
+      "documentId": {
+       "type": "string"
+      },
+      "read": {
+       "type": "integer"
+      },
+      "planned": {
+       "type": "integer"
+      }
+     }
+    }
+   },
+   "truncated": {
+    "type": "boolean"
+   },
+   "notes": {
+    "type": "array",
+    "items": {
+     "type": "string"
+    }
+   }
+  }
+ }
+}

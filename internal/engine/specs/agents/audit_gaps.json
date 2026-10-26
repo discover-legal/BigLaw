@@ -1,0 +1,84 @@
+{
+ "name": "audit_gaps",
+ "kind": "subagent",
+ "class": "committee",
+ "maxTurns": 4,
+ "role": "critic",
+ "allowed": [
+  "ledger",
+  "retrieve"
+ ],
+ "description": "Lists what a specialist in this practice area would expect the deliverable to cover and cannot find, driven by the plan, the section headings and the practice packs' checklist: each gap with a severity (HIGH, MEDIUM or LOW) and why. It is a critic with no context beyond that request. Do not use it directly; committee runs it.\nExample: {\"plan\": [\"I1: When is the answer due?\"], \"headings\": [\"When is the answer due?\"], \"checklist\": [\"Limitation periods for every claim\"]}",
+ "in": {
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+   "plan",
+   "headings",
+   "checklist"
+  ],
+  "properties": {
+   "plan": {
+    "type": "array",
+    "items": {
+     "type": "string",
+     "maxLength": 2000
+    },
+    "maxItems": 40
+   },
+   "headings": {
+    "type": "array",
+    "items": {
+     "type": "string",
+     "maxLength": 2000
+    },
+    "maxItems": 40
+   },
+   "checklist": {
+    "type": "array",
+    "items": {
+     "type": "string",
+     "maxLength": 2000
+    },
+    "maxItems": 60
+   }
+  }
+ },
+ "out": {
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+   "gaps"
+  ],
+  "properties": {
+   "gaps": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "additionalProperties": false,
+     "required": [
+      "item",
+      "severity",
+      "why"
+     ],
+     "properties": {
+      "item": {
+       "type": "string"
+      },
+      "severity": {
+       "type": "string",
+       "enum": [
+        "HIGH",
+        "MEDIUM",
+        "LOW"
+       ]
+      },
+      "why": {
+       "type": "string"
+      }
+     }
+    }
+   }
+  }
+ }
+}

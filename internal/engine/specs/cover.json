@@ -1,0 +1,35 @@
+{
+ "name": "cover",
+ "kind": "fanout",
+ "class": "cover",
+ "maxTurns": 1000,
+ "description": "Runs the coverage pass before the deliverable: for each plan issue that was only touched (no drafted section citing a verified finding, or a Conduct or Requirement issue answered without an analysis), in plan order, it runs analyze_issue and then redrafts the issue's section from its verified findings and that analysis. It spends only the share of the evidence budget kept back for it, and runs once per run. It returns which touched issues are now analysed and which are still missing; finish discloses the missing ones in Limitations. Do not use it as the lead's tool: Go runs it (finish, or the finish from the reserve) and the lead analyses its issues itself with analyze_issue.\nExample: {}",
+ "in": {
+  "type": "object",
+  "additionalProperties": false,
+  "required": [],
+  "properties": {}
+ },
+ "out": {
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+   "analysed",
+   "missing"
+  ],
+  "properties": {
+   "analysed": {
+    "type": "array",
+    "items": {
+     "type": "string"
+    }
+   },
+   "missing": {
+    "type": "array",
+    "items": {
+     "type": "string"
+    }
+   }
+  }
+ }
+}

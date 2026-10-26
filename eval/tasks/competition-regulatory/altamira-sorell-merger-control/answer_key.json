@@ -1,0 +1,182 @@
+{
+  "matter": "competition-regulatory/altamira-sorell-merger-control",
+  "version": 1,
+  "as_of": "2025-09-15",
+  "notes": "Synthetic deal. Thresholds are the figures in the matter's own reference sheet (04), so the expected answers are fixed by the fixtures; the reference sheet reproduces the 2025 HSR adjustments and the EUMR Article 1 text. Expected computations: HSR value = $212.5M + $16.0M held = $228.5M; fee tier $105,000; 30-day period from Oct 6, 2025 ends Nov 5, 2025; foreign-issuer exemption lost because Sorell's US sales ($138.0M) exceed $126.4M. EUMR: combined worldwide EUR 3,120M (< 5,000M, > 2,500M); Art. 1(3) met through DE (472), FR (331), NL (138) — Italy fails the EUR 25M per-party limb (Sorell 9); Sorell EU-wide 164 > 100; two-thirds rule not triggered.",
+  "facts": [
+    {
+      "id": "REG-01",
+      "title": "HSR value aggregates the 8% stake already held: $212.5M + $16.0M = $228.5M",
+      "question": "What is the value of the transaction for HSR purposes?",
+      "category": "hsr",
+      "severity": "high",
+      "documents": ["01-deal-summary.md", "04-threshold-reference-sheet.md"],
+      "evidence": ["for a cash purchase price of $212,500,000", "values that existing 8% stake at $16,000,000 as of today", "Voting securities of the same issuer already held by the acquiring person are aggregated with those being acquired"],
+      "detect": {"all": [["$money:228500000"]]},
+      "model_answer": "As a result of the acquisition Altamira will hold voting securities valued at $228.5 million: the $212.5 million Purchase Price plus the $16.0 million value of the 8% stake it already holds (aggregated under 801.13)."
+    },
+    {
+      "id": "REG-02",
+      "title": "Value exceeds $126.4M but not $505.8M, so the size-of-person test applies",
+      "question": "Which HSR size-of-transaction thresholds apply to this deal?",
+      "category": "hsr",
+      "severity": "medium",
+      "documents": ["04-threshold-reference-sheet.md"],
+      "evidence": ["For transactions valued above $126.4 million but not more than $505.8 million, the size-of-person test must also be met"],
+      "detect": {"all": [["size-of-person", "size of person", "size-of-the-person"], ["$money:505800000", "$money:252900000", "$money:25300000"]]},
+      "model_answer": "Because $228.5 million is above $126.4 million but not more than $505.8 million, the size-of-person test applies."
+    },
+    {
+      "id": "REG-03",
+      "title": "Size-of-person met: Altamira $3.1bn sales (>= $252.9M); Sorell $337M sales (>= $25.3M)",
+      "question": "What are the annual net sales of Altamira and of Sorell for the HSR size-of-person test?",
+      "category": "hsr",
+      "severity": "medium",
+      "documents": ["02-financial-and-turnover-data.csv", "04-threshold-reference-sheet.md"],
+      "evidence": ["Altamira Health Technologies Inc.,Annual net sales,Worldwide (consolidated),3100000000,USD", "Sorell Diagnostics B.V.,Annual net sales,Worldwide (consolidated),337000000,USD"],
+      "detect": {"all": [["size-of-person", "size of person"], ["$money:3100000000", "$money:337000000", "satisfied", "is met", "are met"]]},
+      "model_answer": "The size-of-person test is satisfied: Altamira's annual net sales of $3.1 billion exceed $252.9 million and Sorell's annual net sales of $337 million exceed $25.3 million."
+    },
+    {
+      "id": "REG-04",
+      "title": "Foreign issuer exemption (802.51) unavailable: Sorell's US sales $138.0M exceed $126.4M",
+      "question": "Is the foreign issuer exemption available for the acquisition of Sorell?",
+      "category": "hsr",
+      "severity": "high",
+      "documents": ["02-financial-and-turnover-data.csv", "04-threshold-reference-sheet.md"],
+      "evidence": ["Sorell Diagnostics B.V.,Sales in or into the United States,United States,138000000,USD", "made aggregate sales in or into the United States of over $126.4 million in its most recent fiscal year"],
+      "detect": {"all": [["802.51", "foreign issuer"], ["$money:138000000"]]},
+      "model_answer": "The foreign issuer exemption in 802.51 is not available because Sorell made sales in or into the United States of $138.0 million in its most recent fiscal year, above the $126.4 million limit (its $22.0 million of US assets is below the limit, but either prong defeats the exemption)."
+    },
+    {
+      "id": "REG-05",
+      "title": "HSR filing fee is $105,000 ($179.4M-$555.5M tier)",
+      "question": "What HSR filing fee is payable for this transaction?",
+      "category": "hsr",
+      "severity": "medium",
+      "documents": ["04-threshold-reference-sheet.md"],
+      "evidence": ["| $179.4 million or more but less than $555.5 million | $105,000 |"],
+      "detect": {"all": [["$money:105000"]]},
+      "model_answer": "An HSR filing is required and the filing fee is $105,000 (transaction value of $179.4 million or more but less than $555.5 million)."
+    },
+    {
+      "id": "REG-06",
+      "title": "Initial 30-day waiting period from an Oct 6, 2025 filing expires November 5, 2025",
+      "question": "When does the HSR waiting period expire?",
+      "category": "hsr",
+      "severity": "medium",
+      "documents": ["01-deal-summary.md", "04-threshold-reference-sheet.md"],
+      "evidence": ["Altamira intends to submit any required United States premerger notification on October 6, 2025", "The initial waiting period is 30 days from filing"],
+      "detect": {"all": [["$date:2025-11-05"]]},
+      "model_answer": "If filed on October 6, 2025, the initial 30-day waiting period would expire on November 5, 2025 (a Wednesday), absent early termination or a Second Request."
+    },
+    {
+      "id": "REG-07",
+      "title": "Gun-jumping: Altamira to control Sorell's US pricing and sales reps from signing",
+      "question": "What pre-closing conduct or integration steps does the deal allow Altamira before clearance?",
+      "category": "conduct",
+      "severity": "high",
+      "documents": ["01-deal-summary.md", "04-threshold-reference-sheet.md"],
+      "evidence": ["Altamira's commercial team will assume responsibility for Sorell's US pricing decisions from signing"],
+      "detect": {"all": [["gun-jump", "gun jump", "premature integration", "beneficial ownership", "operational control", "standstill", "article 7"], ["pricing", "sales rep", "sales team", "integration"]]},
+      "model_answer": "The plan for Altamira's commercial team to take over Sorell's US pricing decisions and sales representatives from signing is gun-jumping: it transfers operational control before the HSR waiting period expires and breaches the EUMR Article 7 standstill. It must be stopped."
+    },
+    {
+      "id": "REG-08",
+      "title": "EUMR Art. 1(2) not met: combined worldwide turnover EUR 3,120M is below EUR 5,000M",
+      "question": "What is the parties' combined worldwide turnover under the EU Merger Regulation?",
+      "category": "eumr",
+      "severity": "medium",
+      "documents": ["02-financial-and-turnover-data.csv", "04-threshold-reference-sheet.md"],
+      "evidence": ["Altamira Health Technologies Inc.,Turnover,Worldwide,2810,EUR million", "Sorell Diagnostics B.V.,Turnover,Worldwide,310,EUR million"],
+      "detect": {"all": [["3,120", "3120", "3.12 billion", "3.12bn", "3.12 bn", "eur 3.1", "3.1 billion", "3.1bn"], ["1(2)", "5,000", "5 billion", "5bn", "5000"]]},
+      "model_answer": "Article 1(2) is not met: combined worldwide turnover is EUR 3,120 million (2,810 + 310), below EUR 5,000 million."
+    },
+    {
+      "id": "REG-09",
+      "title": "EUMR Art. 1(3) met via Germany, France and the Netherlands",
+      "question": "In which Member States do both parties exceed the turnover thresholds?",
+      "category": "eumr",
+      "severity": "high",
+      "documents": ["02-financial-and-turnover-data.csv", "04-threshold-reference-sheet.md"],
+      "evidence": ["Sorell Diagnostics B.V.,Turnover,Netherlands,48,EUR million", "Altamira Health Technologies Inc.,Turnover,Netherlands,90,EUR million", "in each of at least three Member States, the combined aggregate turnover of all the undertakings concerned is more than EUR 100 million"],
+      "detect": {"all": [["1(3)"], ["germany"], ["france"], ["netherlands"]]},
+      "model_answer": "Article 1(3) is met: combined worldwide turnover exceeds EUR 2,500 million, and in Germany (EUR 472 million), France (EUR 331 million) and the Netherlands (EUR 138 million) combined turnover exceeds EUR 100 million with each party above EUR 25 million."
+    },
+    {
+      "id": "REG-10",
+      "title": "Italy does not count: Sorell's Italian turnover (EUR 9M) is below the EUR 25M per-party limb",
+      "question": "What is Sorell's turnover in Italy?",
+      "category": "eumr",
+      "severity": "medium",
+      "documents": ["02-financial-and-turnover-data.csv"],
+      "evidence": ["Sorell Diagnostics B.V.,Turnover,Italy,9,EUR million"],
+      "detect": {"all": [["italy", "italian"], ["re:(?<![\\d.])9(?:\\.0)?\\s?(?:m\\b|million|mn\\b)|eur 9\\b|€9\\b|25 million|eur 25|€25"]]},
+      "model_answer": "Italy does not count toward Article 1(3)(c): although combined Italian turnover is EUR 159 million, Sorell's Italian turnover is only EUR 9 million, below EUR 25 million."
+    },
+    {
+      "id": "REG-11",
+      "title": "Sorell EU-wide turnover EUR 164M (> EUR 100M); two-thirds rule not triggered",
+      "question": "What is Sorell's EU-wide turnover, and does either party achieve more than two-thirds of its EU turnover in one Member State?",
+      "category": "eumr",
+      "severity": "medium",
+      "documents": ["02-financial-and-turnover-data.csv"],
+      "evidence": ["Sorell Diagnostics B.V.,Turnover,EU total,164,EUR million"],
+      "detect": {"all": [["164"], ["two-thirds", "two thirds", "2/3", "100 million", "eur 100", "1(3)(d)"]]},
+      "model_answer": "Sorell's EU-wide turnover of EUR 164 million and Altamira's EUR 1,200 million both exceed EUR 100 million, and neither achieves more than two-thirds of its EU turnover in one Member State, so the two-thirds rule does not apply."
+    },
+    {
+      "id": "REG-12",
+      "title": "EU dimension: mandatory Commission notification, Art. 7 standstill, Phase I 25 working days",
+      "question": "Must the transaction be notified to the European Commission, and what standstill and review timetable applies?",
+      "category": "eumr",
+      "severity": "high",
+      "documents": ["04-threshold-reference-sheet.md"],
+      "evidence": ["may not be implemented before it has been declared compatible with the internal market (Article 7(1) standstill)", "Phase I review lasts 25 working days from notification"],
+      "detect": {"all": [["commission"], ["notif", "standstill", "article 7", "art. 7"], ["25 working days", "twenty-five working days", "phase i", "phase 1", "standstill", "may not be implemented", "cannot close", "may not close"]]},
+      "model_answer": "The concentration has an EU dimension and must be notified to the European Commission; it may not be implemented before clearance (Article 7(1) standstill), and Phase I review takes 25 working days from notification."
+    },
+    {
+      "id": "REG-13",
+      "title": "Combined EEA share of POC coagulation analyzers = 41% (24% + 17%), market leader",
+      "question": "What are the parties' market shares in point-of-care coagulation analyzers in the EEA?",
+      "category": "substantive",
+      "severity": "high",
+      "documents": ["03-market-share-data.md"],
+      "evidence": ["| EEA | 24% | 17% | Veltris Medical 28% | Hoxton Biosystems 14% | 17% |"],
+      "detect": {"all": [["$pct:41"], ["eea", "europe", "analyz", "analys"]]},
+      "model_answer": "The parties' combined EEA share of point-of-care coagulation analyzers is 41% (24% + 17%), making them the largest supplier ahead of Veltris Medical (28%) — a likely Phase I focus."
+    },
+    {
+      "id": "REG-14",
+      "title": "Netherlands combined share 47% (Sorell 38% + Altamira 9%)",
+      "question": "What are the parties' market shares in the Netherlands?",
+      "category": "substantive",
+      "severity": "medium",
+      "documents": ["03-market-share-data.md"],
+      "evidence": ["| Netherlands | 9% | 38% | Veltris Medical 25% | Hoxton Biosystems 11% | 17% |"],
+      "detect": {"all": [["$pct:47"], ["netherlands", "dutch"]]},
+      "model_answer": "In the Netherlands the combined analyzer share would be 47% (Sorell 38% + Altamira 9%)."
+    }
+  ],
+  "traps": [
+    {
+      "id": "TRAP-REG-01",
+      "title": "Must not conclude the foreign issuer exemption applies (Sorell's US sales exceed the limit)",
+      "documents": ["02-financial-and-turnover-data.csv"],
+      "evidence": ["Sorell Diagnostics B.V.,Sales in or into the United States,United States,138000000,USD"],
+      "forbid": {"all": [["802.51", "foreign issuer"], ["exemption applies", "is exempt", "transaction is exempt", "acquisition is exempt", "qualifies for the", "exempt from filing", "no hsr filing", "no filing is required"]]},
+      "unless": ["not exempt", "not available", "unavailable", "does not apply", "is not exempt", "does not qualify", "would not", "inapplicable", "cannot rely", "fails"],
+      "model_violation": "Because Sorell is a foreign issuer, the acquisition is exempt under 802.51 and no HSR filing is required."
+    },
+    {
+      "id": "TRAP-REG-02",
+      "title": "Must not conclude there is no EU dimension because turnover is below EUR 5bn",
+      "documents": ["04-threshold-reference-sheet.md"],
+      "evidence": ["A concentration that does not meet Article 1(2) has an EU dimension where"],
+      "forbid": {"all": [["eu dimension", "commission", "eumr", "eu merger regulation"], ["no eu dimension", "does not have an eu dimension", "lacks an eu dimension", "no notification to the commission", "not notifiable", "no eumr filing", "no eu filing", "falls outside the eumr", "below the eumr thresholds"]]},
+      "unless": ["article 1(2)", "art. 1(2)", "1(2) is not", "under 1(2)", "however", "but article 1(3)", "1(3) is met", "1(3) is satisfied"],
+      "model_violation": "With combined worldwide turnover below EUR 5 billion, the deal has no EU dimension and no EUMR filing is needed."
+    }
+  ]
+}

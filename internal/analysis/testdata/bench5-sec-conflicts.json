@@ -1,0 +1,766 @@
+{
+ "note": "bench5 SEC ledger rows (pg_dump of the run), verbatim, except: F388 verified (its table-row quote now verifies: docs TestTableRowQuotedWithPipesVerifies) with the $103,800.00 its claim and quote state recovered as an untyped value (engine claimSums); F934 verified (its e-mail body quote now verifies: docs TestEmailBodyDecodedFromQuotedPrintable).",
+ "findings": [
+  {
+   "fid": "F80",
+   "issueId": "",
+   "claim": "The Division's Office of Quantitative Research analyzed 4,217 equity trades executed through an omnibus account during a review period, selecting these trades based on availability of complete allocation records including execution price, shares allocated to each client account, and security closing prices.",
+   "verified": true,
+   "quotes": [
+    {
+     "quote": "The Division's Office of Quantitative Research (\"OQR\") analyzed 4,217 equity trades executed through the omnibus account during the Review Period. These 4,217 trades were selected for analysis based on the availability of complete allocation records, including the execution price, the number of shares allocated to each client account, and the closing price of the relevant security on the date of allocation.",
+     "locator": "s24",
+     "documentId": "44f1eb40-75f1-47ae-aafe-be91cda07d07"
+    }
+   ],
+   "values": [
+    {
+     "date": "",
+     "unit": "count",
+     "class": "Count",
+     "value": "4,217",
+     "entity": "Office of Quantitative Research",
+     "metric": "trades analyzed"
+    }
+   ],
+   "entities": [
+    {
+     "name": "Office of Quantitative Research",
+     "class": "Authority"
+    }
+   ],
+   "relations": null
+  },
+  {
+   "fid": "F904",
+   "issueId": "I2",
+   "claim": "The Division's Office of Quantitative Research analyzed 4,217 equity trades executed through the omnibus account during the Review Period based on availability of complete allocation records.",
+   "verified": true,
+   "quotes": [
+    {
+     "quote": "The Division's Office of Quantitative Research (\"OQR\") analyzed 4,217 equity trades executed through the omnibus account during the Review Period. These 4,217 trades were selected for analysis based on the availability of complete allocation records, including the execution price, the number of shares allocated to each client account, and the closing price of the relevant security on the date of allocation.",
+     "locator": "s11, paragraph 17",
+     "documentId": "44f1eb40-75f1-47ae-aafe-be91cda07d07"
+    }
+   ],
+   "values": [
+    {
+     "date": "",
+     "unit": "trades",
+     "class": "Count",
+     "value": "4,217",
+     "entity": "Division's Office of Quantitative Research",
+     "metric": "equity trades analyzed"
+    }
+   ],
+   "entities": [
+    {
+     "name": "Division's Office of Quantitative Research",
+     "class": "Authority"
+    }
+   ],
+   "relations": null
+  },
+  {
+   "fid": "F170",
+   "issueId": "",
+   "claim": "A total of 4,312 omnibus equity trades were analyzed during the review period, comprising approximately 78% of the total 7,412 equity trades executed.",
+   "verified": true,
+   "quotes": [
+    {
+     "quote": "Total Omnibus Equity Trades Analyzed\t4,312\tTrades executed through WCA omnibus account at Meridian Clearing Corp. during Review Period",
+     "locator": "Summary sheet",
+     "documentId": "0ba7459a-5355-4bc9-ae9b-3fafd1e83354"
+    },
+    {
+     "quote": "Total Equity Trades (All Execution Methods)\t7,412\tIncludes omnibus, direct, and other execution channels",
+     "locator": "Summary sheet",
+     "documentId": "0ba7459a-5355-4bc9-ae9b-3fafd1e83354"
+    },
+    {
+     "quote": "Omnibus Trades as % of Total Equity Trading Volume\tApproximately 78%\t5,776 omnibus trades out of total equity trading volume",
+     "locator": "Summary sheet",
+     "documentId": "0ba7459a-5355-4bc9-ae9b-3fafd1e83354"
+    }
+   ],
+   "values": [
+    {
+     "date": "",
+     "unit": "",
+     "class": "Count",
+     "value": "4,312",
+     "entity": "Omnibus Equity Trades",
+     "metric": "Total Count"
+    },
+    {
+     "date": "",
+     "unit": "",
+     "class": "Count",
+     "value": "7,412",
+     "entity": "All Equity Trades",
+     "metric": "Total Count"
+    },
+    {
+     "date": "",
+     "unit": "%",
+     "class": "Percentage",
+     "value": "78",
+     "entity": "Omnibus Trades",
+     "metric": "Percentage of Total"
+    }
+   ],
+   "entities": [],
+   "relations": null
+  },
+  {
+   "fid": "F344",
+   "issueId": "",
+   "claim": "A total of 4,312 omnibus equity trades were identified from Meridian Clearing Corp. transaction records and WCA's order management system logs, representing approximately 78% of WCA's total equity trading volume during the Review Period.",
+   "verified": true,
+   "quotes": [
+    {
+     "quote": "A total of 4,312 omnibus equity trades were identified from Meridian Clearing Corp. transaction records and WCA's order management system logs. These 5,776 omnibus trades represented approximately 78% of WCA's total equity trading volume during the Review Period.",
+     "locator": "s4",
+     "documentId": "0ba7459a-5355-4bc9-ae9b-3fafd1e83354"
+    }
+   ],
+   "values": [
+    {
+     "date": "",
+     "unit": "trades",
+     "class": "Count",
+     "value": "4312",
+     "entity": "WCA omnibus equity trades",
+     "metric": "count"
+    },
+    {
+     "date": "",
+     "unit": "%",
+     "class": "Percentage",
+     "value": "78",
+     "entity": "WCA omnibus equity trades",
+     "metric": "percentage of total equity trading volume"
+    }
+   ],
+   "entities": [
+    {
+     "name": "Whitmore Capital Advisors LLC",
+     "class": "Firm"
+    },
+    {
+     "name": "Meridian Clearing Corp.",
+     "class": "Firm"
+    }
+   ],
+   "relations": [
+    {
+     "object": "4,312 trades representing 78% of total equity trading volume",
+     "subject": "omnibus equity trades",
+     "predicate": "quantifiedAs"
+    }
+   ]
+  },
+  {
+   "fid": "F266",
+   "issueId": "",
+   "claim": "The omnibus trade dataset contains 4,312 unique trade events, with a total number of individual allocations across all accounts exceeding this figure because a single omnibus fill may be allocated to multiple accounts simultaneously.",
+   "verified": true,
+   "quotes": [
+    {
+     "quote": "The omnibus trade dataset contains 4,312 unique trade events. Note that the total number of individual allocations across all accounts exceeds this figure because a single omnibus fill may be allocated to multiple accounts simultaneously",
+     "locator": "s11",
+     "documentId": "0ba7459a-5355-4bc9-ae9b-3fafd1e83354"
+    }
+   ],
+   "values": [
+    {
+     "date": "",
+     "unit": "count",
+     "class": "Count",
+     "value": "4,312",
+     "entity": "omnibus trade dataset",
+     "metric": "unique trade events"
+    }
+   ],
+   "entities": [],
+   "relations": null
+  },
+  {
+   "fid": "F795",
+   "issueId": "",
+   "claim": "Overall omnibus trade profitability across all accounts was 42.7% for the period 2021 through 2023, with 1,843 profitable trades out of 4,312 total trades.",
+   "verified": true,
+   "quotes": [
+    {
+     "quote": "GRAND TOTAL\t2021–2023\t4,312\t1,843\t42.7%",
+     "locator": "s3",
+     "documentId": "0ba7459a-5355-4bc9-ae9b-3fafd1e83354"
+    }
+   ],
+   "values": [
+    {
+     "date": "2021-2023",
+     "unit": "%",
+     "class": "Percentage",
+     "value": "42.7%",
+     "entity": "Total Omnibus Trades",
+     "metric": "Overall Profitable Rate"
+    },
+    {
+     "date": "2021-2023",
+     "unit": "",
+     "class": "Count",
+     "value": "4312",
+     "entity": "Total Omnibus Trades",
+     "metric": "Total Trades"
+    },
+    {
+     "date": "2021-2023",
+     "unit": "",
+     "class": "Count",
+     "value": "1843",
+     "entity": "Total Omnibus Trades",
+     "metric": "Profitable Trades"
+    }
+   ],
+   "entities": [
+    {
+     "name": "Total Omnibus Trades",
+     "class": "Event"
+    }
+   ],
+   "relations": null
+  },
+  {
+   "fid": "F752",
+   "issueId": "",
+   "claim": "Bellini received undisclosed compensation from Ostrowski totaling approximately $92,600 in connection with a directed brokerage arrangement with Lakeshore Trading.",
+   "verified": true,
+   "quotes": [
+    {
+     "quote": "The Division alleges that Bellini received undisclosed compensation from Ostrowski in connection with the directed brokerage arrangement.",
+     "locator": "s63, paragraph 56",
+     "documentId": "44f1eb40-75f1-47ae-aafe-be91cda07d07"
+    },
+    {
+     "quote": "The total undisclosed compensation received by Bellini, in the form of payments made by Ostrowski to Bayshore Palms Golf & Country Club for Bellini's benefit, was approximately $92,600 ($45,000 initiation fee + $47,600 in monthly dues = $92,600).",
+     "locator": "s63, paragraph 56",
+     "documentId": "44f1eb40-75f1-47ae-aafe-be91cda07d07"
+    }
+   ],
+   "values": [
+    {
+     "date": "",
+     "unit": "USD",
+     "class": "Money",
+     "value": "$92,600",
+     "entity": "Bellini",
+     "metric": "total undisclosed compensation"
+    },
+    {
+     "date": "May 2022",
+     "unit": "USD",
+     "class": "Money",
+     "value": "$45,000",
+     "entity": "Ostrowski",
+     "metric": "initiation fee payment"
+    },
+    {
+     "date": "",
+     "unit": "USD",
+     "class": "Money",
+     "value": "$47,600",
+     "entity": "Ostrowski",
+     "metric": "total monthly dues for period"
+    }
+   ],
+   "entities": [
+    {
+     "name": "Bellini",
+     "class": "Person"
+    },
+    {
+     "name": "Ostrowski",
+     "class": "Person"
+    },
+    {
+     "name": "Bayshore Palms Golf & Country Club",
+     "class": "Instrument"
+    },
+    {
+     "name": "Lakeshore Trading",
+     "class": "Firm"
+    },
+    {
+     "name": "WCA",
+     "class": "Firm"
+    }
+   ],
+   "relations": [
+    {
+     "object": "Bellini",
+     "subject": "Ostrowski",
+     "predicate": "receivedFrom"
+    },
+    {
+     "object": "Ostrowski",
+     "subject": "Bellini",
+     "predicate": "receivedFrom"
+    },
+    {
+     "object": "$92,600",
+     "subject": "payments to Bayshore Palms Golf & Country Club",
+     "predicate": "quantifiedAs"
+    },
+    {
+     "object": "undisclosed compensation",
+     "subject": "directed brokerage arrangement",
+     "predicate": "prohibits"
+    }
+   ]
+  },
+  {
+   "fid": "F797",
+   "issueId": "",
+   "claim": "Bellini received undisclosed compensation from Ostrowski consisting of a $45,000 initiation fee and $47,600 in monthly dues for 17 months, totaling $92,600.",
+   "verified": true,
+   "quotes": [
+    {
+     "quote": "Undisclosed compensation received by Bellini from Ostrowski ($45,000 initiation fee + $47,600 in monthly dues for 17 months)\t$92,600",
+     "locator": "s103",
+     "documentId": "44f1eb40-75f1-47ae-aafe-be91cda07d07"
+    }
+   ],
+   "values": [
+    {
+     "date": "",
+     "unit": "USD",
+     "class": "Money",
+     "value": "$45,000",
+     "entity": "Bellini",
+     "metric": "undisclosed initiation fee"
+    },
+    {
+     "date": "17 months",
+     "unit": "USD",
+     "class": "Money",
+     "value": "$47,600",
+     "entity": "Bellini",
+     "metric": "undisclosed monthly dues"
+    },
+    {
+     "date": "",
+     "unit": "USD",
+     "class": "Money",
+     "value": "$92,600",
+     "entity": "Bellini",
+     "metric": "total undisclosed compensation"
+    }
+   ],
+   "entities": [
+    {
+     "name": "Bellini",
+     "class": "Person"
+    },
+    {
+     "name": "Ostrowski",
+     "class": "Person"
+    }
+   ],
+   "relations": [
+    {
+     "object": "Ostrowski",
+     "subject": "Bellini",
+     "predicate": "receivedFrom"
+    },
+    {
+     "object": "disclosure requirements",
+     "subject": "undisclosed compensation",
+     "predicate": "violates"
+    }
+   ]
+  },
+  {
+   "fid": "F754",
+   "issueId": "",
+   "claim": "Ostrowski made monthly membership dues payments of $2,800 per month for 17 months to Bayshore Palms Golf & Country Club on behalf of Bellini, totaling $47,600.",
+   "verified": true,
+   "quotes": [
+    {
+     "quote": "Monthly membership dues of $2,800 per month for a period of 17 months, totaling $47,600 in dues ($2,800 × 17 = $47,600).",
+     "locator": "s63, paragraph 56(b)",
+     "documentId": "44f1eb40-75f1-47ae-aafe-be91cda07d07"
+    }
+   ],
+   "values": [
+    {
+     "date": "",
+     "unit": "USD per month",
+     "class": "Money",
+     "value": "$2,800",
+     "entity": "Ostrowski",
+     "metric": "monthly membership dues"
+    },
+    {
+     "date": "",
+     "unit": "months",
+     "class": "Count",
+     "value": "17",
+     "entity": "Ostrowski",
+     "metric": "duration of dues payments"
+    },
+    {
+     "date": "",
+     "unit": "USD",
+     "class": "Money",
+     "value": "$47,600",
+     "entity": "Ostrowski",
+     "metric": "total dues amount"
+    }
+   ],
+   "entities": [
+    {
+     "name": "Ostrowski",
+     "class": "Person"
+    },
+    {
+     "name": "Bellini",
+     "class": "Person"
+    },
+    {
+     "name": "Bayshore Palms Golf & Country Club",
+     "class": "Instrument"
+    }
+   ],
+   "relations": [
+    {
+     "object": "$2,800 per month",
+     "subject": "monthly membership dues",
+     "predicate": "quantifiedAs"
+    },
+    {
+     "object": "$47,600",
+     "subject": "total dues payments",
+     "predicate": "quantifiedAs"
+    }
+   ]
+  },
+  {
+   "fid": "F388",
+   "issueId": "",
+   "claim": "Kevin Ostrowski's personal checking account at Coastal Commerce Bank was used to make payments totaling $103,800.00 to Bayshore Palms Golf & Country Club on behalf of Marcus T. Bellini between May 3, 2022 and January 2, 2024.",
+   "verified": true,
+   "quotes": [
+    {
+     "quote": "Account Holder: Kevin Ostrowski | Account Type: Personal Checking | Financial Institution: Coastal Commerce Bank, N.A. | Account No. ending: -6194",
+     "locator": "Sheet: Summary, EXHIBIT ANNOTATION row 1",
+     "documentId": "fbcca583-0633-42fa-a144-8dbe444d7caf"
+    },
+    {
+     "quote": "Beneficiary of Payments: Marcus T. Bellini (CRD No. 5098321) | Payee: Bayshore Palms Golf & Country Club | Payment Period: May 3, 2022 through January 2, 2024",
+     "locator": "Sheet: Summary, EXHIBIT ANNOTATION row 2",
+     "documentId": "fbcca583-0633-42fa-a144-8dbe444d7caf"
+    },
+    {
+     "quote": "Total of all payments from Ostrowski personal account to Bayshore Palms Golf & Country Club on behalf of Marcus T. Bellini | 05/03/2022 – 01/02/2024 | 22 | | $103,800.00",
+     "locator": "Sheet: Summary, GRAND TOTAL row",
+     "documentId": "fbcca583-0633-42fa-a144-8dbe444d7caf"
+    }
+   ],
+   "values": [
+    {
+     "date": "",
+     "unit": "",
+     "class": "Identifier",
+     "value": "5098321",
+     "entity": "Marcus T. Bellini",
+     "metric": "CRD Number"
+    },
+    {
+     "date": "",
+     "unit": "payments",
+     "class": "Count",
+     "value": "22",
+     "entity": "payments from Ostrowski",
+     "metric": "count"
+    },
+    {
+     "date": "",
+     "unit": "payments",
+     "class": "Count",
+     "value": "21",
+     "entity": "monthly dues payments",
+     "metric": "count"
+    },
+    {
+     "entity": "",
+     "metric": "",
+     "value": "$103,800.00",
+     "unit": "",
+     "date": "",
+     "class": "Money"
+    }
+   ],
+   "entities": [
+    {
+     "name": "Kevin Ostrowski",
+     "class": "Person"
+    },
+    {
+     "name": "Marcus T. Bellini",
+     "class": "Person"
+    },
+    {
+     "name": "Coastal Commerce Bank, N.A.",
+     "class": "Firm"
+    },
+    {
+     "name": "Bayshore Palms Golf & Country Club",
+     "class": "Firm"
+    },
+    {
+     "name": "Whitmore Capital Advisors LLC",
+     "class": "Firm"
+    },
+    {
+     "name": "SEC Division of Enforcement",
+     "class": "Authority"
+    }
+   ],
+   "relations": [
+    {
+     "object": "personal checking account at Coastal Commerce Bank",
+     "subject": "Kevin Ostrowski",
+     "predicate": "ownsStakeIn"
+    }
+   ]
+  },
+  {
+   "fid": "F96",
+   "issueId": "",
+   "claim": "On April 22, 2024, during an active SEC examination of WCA that commenced on March 11, 2024, Whitmore instructed WCA's IT Administrator Tomás Delgado to delete folders containing trade allocation spreadsheets from 2021 and early 2022.",
+   "verified": true,
+   "quotes": [
+    {
+     "quote": "On or about April 22, 2024, during the pendency of the SEC examination of WCA (which had commenced on March 11, 2024), Whitmore instructed WCA's IT Administrator, Tomás Delgado (\"Delgado\"), to \"clean up the shared drive\" by deleting certain folders on the Firm's internal network server that contained trade allocation spreadsheets from 2021 and early 2022.",
+     "locator": "s70, ¶62",
+     "documentId": "44f1eb40-75f1-47ae-aafe-be91cda07d07"
+    }
+   ],
+   "values": [
+    {
+     "date": "2024-04-22",
+     "unit": "",
+     "class": "Date",
+     "value": "April 22, 2024",
+     "entity": "Whitmore",
+     "metric": "instruction date"
+    },
+    {
+     "date": "2024-03-11",
+     "unit": "",
+     "class": "Date",
+     "value": "March 11, 2024",
+     "entity": "SEC examination",
+     "metric": "commencement date"
+    },
+    {
+     "date": "",
+     "unit": "",
+     "class": "Date",
+     "value": "2021 and early 2022",
+     "entity": "deleted records",
+     "metric": "period covered"
+    }
+   ],
+   "entities": [
+    {
+     "name": "Whitmore",
+     "class": "Person"
+    },
+    {
+     "name": "Tomás Delgado",
+     "class": "Person"
+    },
+    {
+     "name": "WCA",
+     "class": "Firm"
+    }
+   ],
+   "relations": [
+    {
+     "object": "Whitmore",
+     "subject": "instruction to delete trade allocation records",
+     "predicate": "committedBy"
+    },
+    {
+     "object": "Whitmore's deletion instruction",
+     "subject": "Tomás Delgado",
+     "predicate": "receivedFrom"
+    }
+   ]
+  },
+  {
+   "fid": "F99",
+   "issueId": "",
+   "claim": "By April 22, 2024, the SEC examination staff had issued multiple document request lists to WCA, including specific requests for trade allocation records covering the entire Review Period, and these document requests had been acknowledged by WCA personnel.",
+   "verified": true,
+   "quotes": [
+    {
+     "quote": "By April 22, 2024, the examination staff had already issued multiple document request lists to WCA, including specific requests for trade allocation records covering the entire Review Period (January 1, 2021, through December 31, 2023). These document requests had been served on WCA and acknowledged by the Firm's personnel.",
+     "locator": "s70, ¶63",
+     "documentId": "44f1eb40-75f1-47ae-aafe-be91cda07d07"
+    }
+   ],
+   "values": [
+    {
+     "date": "2024-04-22",
+     "unit": "",
+     "class": "Date",
+     "value": "April 22, 2024",
+     "entity": "document requests",
+     "metric": "issuance date"
+    }
+   ],
+   "entities": [
+    {
+     "name": "WCA",
+     "class": "Firm"
+    },
+    {
+     "name": "SEC examination staff",
+     "class": "Authority"
+    }
+   ],
+   "relations": [
+    {
+     "object": "multiple document requests for trade allocation records",
+     "subject": "WCA",
+     "predicate": "receivedFrom"
+    }
+   ]
+  },
+  {
+   "fid": "F805",
+   "issueId": "",
+   "claim": "The email was sent on April 15, 2024 from Gerald R. Whitmore's corporate email address.",
+   "verified": true,
+   "quotes": [
+    {
+     "quote": "Date: Mon, 15 Apr 2024 09:23:47 -0400",
+     "locator": "s0",
+     "documentId": "8f838636-4f94-44c9-9f7b-67a8eb0abdff"
+    },
+    {
+     "quote": "From: Gerald R. Whitmore <gwhitmore@whitmorecapital.com>",
+     "locator": "s0",
+     "documentId": "8f838636-4f94-44c9-9f7b-67a8eb0abdff"
+    }
+   ],
+   "values": [
+    {
+     "date": "2024-04-15",
+     "unit": "",
+     "class": "Date",
+     "value": "15 Apr 2024",
+     "entity": "Email",
+     "metric": "date sent"
+    }
+   ],
+   "entities": [
+    {
+     "name": "Gerald R. Whitmore",
+     "class": "Person"
+    }
+   ],
+   "relations": null
+  },
+  {
+   "fid": "F934",
+   "issueId": "I5",
+   "claim": "On April 15, 2024, Whitmore sent an email to IT Administrator Tomás Delgado instructing him to clean up legacy files on the shared drive, specifically requesting removal of old allocation folders from 2021 through early 2022.",
+   "verified": true,
+   "quotes": [
+    {
+     "quote": "Date: Mon, 15 Apr 2024 09:23:47 -0400",
+     "locator": "s0",
+     "documentId": "8f838636-4f94-44c9-9f7b-67a8eb0abdff"
+    },
+    {
+     "quote": "When you get a chance, I'd like you to do a clean up of legacy files on the shared drive. Specifically, the old allocation folders under Trading Ops — the trade allocation spreadsheets from 2021 and early 2022 are still sitting out there and cluttering things up. Go ahead and clear those out.",
+     "locator": "s0",
+     "documentId": "8f838636-4f94-44c9-9f7b-67a8eb0abdff"
+    }
+   ],
+   "values": [
+    {
+     "date": "2024-04-15",
+     "unit": "",
+     "class": "Date",
+     "value": "15 Apr 2024",
+     "entity": "Whitmore",
+     "metric": "email date"
+    }
+   ],
+   "entities": [
+    {
+     "name": "Gerald R. Whitmore",
+     "class": "Person"
+    },
+    {
+     "name": "Tomás Delgado",
+     "class": "Person"
+    },
+    {
+     "name": "Whitmore Capital Advisors LLC",
+     "class": "Firm"
+    }
+   ],
+   "relations": null
+  },
+  {
+   "fid": "F936",
+   "issueId": "I5",
+   "claim": "The SEC examination commenced on March 11, 2024, and by the time of the email on April 15, 2024 (and the instruction described on April 22, 2024), the examination staff had already issued multiple document request lists specifically requesting trade allocation records covering the entire Review Period from January 1, 2021 through December 31, 2023.",
+   "verified": true,
+   "quotes": [
+    {
+     "quote": "The SEC examination commenced on March 11, 2024. By April 22, 2024, the examination staff had already issued multiple document request lists to WCA, including specific requests for trade allocation records covering the entire Review Period (January 1, 2021, through December 31, 2023). These document requests had been served on WCA and acknowledged by the Firm's personnel.",
+     "locator": "s72",
+     "documentId": "44f1eb40-75f1-47ae-aafe-be91cda07d07"
+    }
+   ],
+   "values": [
+    {
+     "date": "2024-03-11",
+     "unit": "",
+     "class": "Date",
+     "value": "March 11, 2024",
+     "entity": "SEC examination",
+     "metric": "commencement date"
+    },
+    {
+     "date": "",
+     "unit": "",
+     "class": "Date",
+     "value": "January 1, 2021 through December 31, 2023",
+     "entity": "document requests",
+     "metric": "coverage period"
+    }
+   ],
+   "entities": [
+    {
+     "name": "WCA",
+     "class": "Firm"
+    }
+   ],
+   "relations": [
+    {
+     "object": "Review Period January 1, 2021 through December 31, 2023",
+     "subject": "examination",
+     "predicate": "occurredDuring"
+    }
+   ]
+  }
+ ]
+}

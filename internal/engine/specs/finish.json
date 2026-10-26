@@ -1,0 +1,173 @@
+{
+ "name": "finish",
+ "kind": "go",
+ "class": "free",
+ "maxTurns": 1,
+ "final": true,
+ "solo": [
+  "*"
+ ],
+ "description": "Ends the run: op \"check\" is a dry run that reports the lint (every [F-id] must name a verified finding, every number must be a figure handle, a calc worksheet result or part of a cited quote, no unknown handle), the coverage gaps (plan issues with no section, parties the draft never names, salient figures that never land) and every open precondition, and changes nothing. op \"submit\" runs the same checks and, when they pass, renders the deliverable with its Sources, Limitations and Evidence Note, and opens the lawyer's gate. Each plan issue must have a drafted section citing a verified finding, or be disclosed in limitations with its issueId; a committee must have run on the current draft and its HIGH and MEDIUM findings be resolved while the budget can fund another fix. Before its first deliverable, a passing submit runs the coverage pass once: each plan issue only touched (no section citing a verified finding, or a Conduct or Requirement issue drafted without an analysis) gets one analyze_issue and a redraft from the share kept for it, the committee reviews the change, and what is still missing goes into Limitations. A refused submit lists errors to fix and the run goes on. The result is one page of about 12 KB: when it says truncated, each list holds its first items; fix those and check again for the rest. Do not use it to save a draft (draft_section does) and call it alone in its turn.\nExample: {\"op\": \"check\", \"limitations\": null}\nExample: {\"op\": \"submit\", \"limitations\": [{\"issueId\": \"I3\", \"text\": \"The record holds no evidence of the notice date.\"}]}",
+ "in": {
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+   "op",
+   "limitations"
+  ],
+  "properties": {
+   "op": {
+    "type": "string",
+    "enum": [
+     "check",
+     "submit"
+    ]
+   },
+   "limitations": {
+    "type": [
+     "array",
+     "null"
+    ],
+    "items": {
+     "type": "object",
+     "additionalProperties": false,
+     "required": [
+      "issueId",
+      "text"
+     ],
+     "properties": {
+      "issueId": {
+       "type": [
+        "string",
+        "null"
+       ],
+       "maxLength": 16
+      },
+      "text": {
+       "type": "string",
+       "maxLength": 2000,
+       "minLength": 1
+      }
+     }
+    },
+    "maxItems": 40
+   }
+  }
+ },
+ "out": {
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+   "ready",
+   "accepted",
+   "errors",
+   "lint",
+   "missingIssues",
+   "uncoveredParties",
+   "missingFigures",
+   "openPreconditions",
+   "truncated"
+  ],
+  "properties": {
+   "ready": {
+    "type": "boolean"
+   },
+   "accepted": {
+    "type": "boolean"
+   },
+   "errors": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "additionalProperties": false,
+     "required": [
+      "code",
+      "detail"
+     ],
+     "properties": {
+      "code": {
+       "type": "string"
+      },
+      "detail": {
+       "type": "string"
+      }
+     }
+    }
+   },
+   "lint": {
+    "type": "array",
+    "items": {
+     "type": "string"
+    }
+   },
+   "missingIssues": {
+    "type": "array",
+    "items": {
+     "type": "string"
+    }
+   },
+   "uncoveredParties": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "additionalProperties": false,
+     "required": [
+      "name",
+      "fids",
+      "note"
+     ],
+     "properties": {
+      "name": {
+       "type": "string"
+      },
+      "fids": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       }
+      },
+      "note": {
+       "type": "string"
+      }
+     }
+    }
+   },
+   "missingFigures": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "additionalProperties": false,
+     "required": [
+      "handle",
+      "fid",
+      "ref",
+      "label"
+     ],
+     "properties": {
+      "handle": {
+       "type": "string"
+      },
+      "fid": {
+       "type": "string"
+      },
+      "ref": {
+       "type": "string"
+      },
+      "label": {
+       "type": "string"
+      }
+     }
+    }
+   },
+   "openPreconditions": {
+    "type": "array",
+    "items": {
+     "type": "string"
+    }
+   },
+   "truncated": {
+    "type": "boolean"
+   }
+  }
+ }
+}

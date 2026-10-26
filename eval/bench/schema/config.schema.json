@@ -1,0 +1,310 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/discover-legal/BigLaw/eval/bench/schema/config.schema.json",
+  "title": "BigLaw bench config",
+  "description": "Every setting a benchmark run depends on. run.py starts serve and the judge from this file alone; config_hash pins it (benchlib/config.py).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "name",
+    "description",
+    "mode",
+    "models",
+    "model_url",
+    "vendor_opt_in",
+    "budget",
+    "search",
+    "postgres_image",
+    "harness",
+    "judge",
+    "spend_cap_usd",
+    "driver",
+    "tasks",
+    "config_hash"
+  ],
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "a label: not part of config_hash"
+    },
+    "description": {
+      "type": "string",
+      "description": "a label: not part of config_hash"
+    },
+    "mode": {
+      "enum": [
+        "real",
+        "smoke"
+      ]
+    },
+    "models": {
+      "type": "object",
+      "required": [
+        "lead",
+        "specialist",
+        "critic"
+      ],
+      "additionalProperties": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "properties": {
+        "lead": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "specialist": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "critic": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        }
+      }
+    },
+    "model_url": {
+      "type": "string",
+      "minLength": 1
+    },
+    "vendor_opt_in": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "ALLOW_ANTHROPIC"
+        ]
+      },
+      "description": "serve's vendor breakers opened for model_url (set to 1 in serve's env); must be exactly what model_url's host needs"
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "usd",
+        "calls"
+      ],
+      "properties": {
+        "usd": {
+          "type": "number",
+          "minimum": 0.01
+        },
+        "calls": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "search": {
+      "enum": [
+        "lexical"
+      ]
+    },
+    "postgres_image": {
+      "type": "string",
+      "minLength": 1
+    },
+    "harness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "commit"
+      ],
+      "properties": {
+        "name": {
+          "enum": [
+            "harvey-labs",
+            "bench-smoke"
+          ]
+        },
+        "commit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "judge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runner",
+        "models",
+        "parallel",
+        "price_per_mtok",
+        "output_tokens_per_criterion",
+        "chars_per_token"
+      ],
+      "properties": {
+        "runner": {
+          "enum": [
+            "harvey-labs",
+            "stub"
+          ]
+        },
+        "models": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "parallel": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "price_per_mtok": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "in",
+            "out"
+          ],
+          "description": "the judge model's USD per million input and output tokens, for the judge cost estimate",
+          "properties": {
+            "in": {
+              "type": "number",
+              "minimum": 0
+            },
+            "out": {
+              "type": "number",
+              "minimum": 0
+            }
+          }
+        },
+        "output_tokens_per_criterion": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "output tokens the estimate assumes per criterion (one judge call each)"
+        },
+        "chars_per_token": {
+          "type": "number",
+          "minimum": 1,
+          "description": "characters per input token the estimate assumes (lower is more conservative)"
+        }
+      }
+    },
+    "spend_cap_usd": {
+      "type": "number",
+      "minimum": 0.01
+    },
+    "driver": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "workflow",
+        "tool_bandit",
+        "gate_policy",
+        "max_steps",
+        "poll_seconds",
+        "timeout_seconds"
+      ],
+      "properties": {
+        "workflow": {
+          "enum": [
+            "memo"
+          ]
+        },
+        "tool_bandit": {
+          "enum": [
+            "on",
+            "off"
+          ]
+        },
+        "gate_policy": {
+          "enum": [
+            "approve",
+            "reject"
+          ]
+        },
+        "max_steps": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "poll_seconds": {
+          "type": "number",
+          "minimum": 0.01
+        },
+        "timeout_seconds": {
+          "type": "number",
+          "minimum": 1
+        }
+      }
+    },
+    "tasks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "kind",
+          "task",
+          "jurisdiction",
+          "split_mode",
+          "matter",
+          "judge_reserve_usd"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*$"
+          },
+          "kind": {
+            "enum": [
+              "lab",
+              "proofrun"
+            ]
+          },
+          "task": {
+            "type": "string",
+            "minLength": 1
+          },
+          "jurisdiction": {
+            "type": "string"
+          },
+          "split_mode": {
+            "enum": [
+              "markers",
+              "per-task",
+              "duplicate"
+            ]
+          },
+          "matter": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "judge_reserve_usd": {
+            "type": "number",
+            "minimum": 0,
+            "description": "held under the cap before the task starts for its judge (LAB); 0 for a proof run"
+          }
+        }
+      }
+    },
+    "config_hash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

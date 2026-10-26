@@ -1,0 +1,272 @@
+{
+ "name": "read_figures",
+ "kind": "subagent",
+ "class": "free",
+ "maxTurns": 2,
+ "role": "critic",
+ "allowed": [
+  "figure_context",
+  "exact_calc"
+ ],
+ "description": "Reads what each number in a set of passages measures: for every span id Go found (the digits exactly as written), whether it is money, a count, a percentage, a date, a duration (with its unit), a bare number or multiple, or something else, its currency, the scale stated for it and where, which mark is its decimal point, its sign, whether it is one end of a range, the party it belongs to and its other party (a payer, a landlord, a recipient), what it measures and the period it is for. Go runs it on each finding's verified quotes, typed values and claim, and on each drafted section, and checks every label it gives: a label for a span it was not given is rejected, a scale must come from words of the span's own passage, and a duration's unit or a multiple's sign from the words beside the span (else the label is unclear), and unclear means low confidence, gated for a lawyer (a label off its words, such as an unknown kind or unit, reads as unclear: it never sinks the other labels). It may read more of a quote's document around it and do exact decimal arithmetic. Do not use it to decide whether a figure is true or to add figures: it labels only the spans it was given.\nExample: {\"findings\": [{\"id\": \"1\", \"parties\": [\"Buyer\", \"Seller\"], \"passages\": [{\"id\": \"1.q1\", \"kind\": \"quote\", \"documentId\": \"3f6c2a9e-0b1d-4c2e-9a7f-5d8e1b2c4a6f\", \"text\": \"The Buyer shall pay a deposit of $250,000 (in thousands: 250).\", \"class\": null, \"unit\": null, \"entity\": null, \"metric\": null, \"spans\": [{\"id\": \"1.q1.s1\", \"text\": \"250,000\"}, {\"id\": \"1.q1.s2\", \"text\": \"250\"}]}, {\"id\": \"1.v1\", \"kind\": \"value\", \"documentId\": null, \"text\": \"$250,000\", \"class\": \"Money\", \"unit\": null, \"entity\": \"Buyer\", \"metric\": \"deposit\", \"spans\": [{\"id\": \"1.v1.s1\", \"text\": \"250,000\"}]}]}]}",
+ "in": {
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+   "findings"
+  ],
+  "properties": {
+   "findings": {
+    "type": "array",
+    "minItems": 1,
+    "maxItems": 40,
+    "items": {
+     "type": "object",
+     "additionalProperties": false,
+     "required": [
+      "id",
+      "parties",
+      "passages"
+     ],
+     "properties": {
+      "id": {
+       "type": "string",
+       "maxLength": 8
+      },
+      "parties": {
+       "type": "array",
+       "maxItems": 40,
+       "items": {
+        "type": "string",
+        "maxLength": 300
+       }
+      },
+      "passages": {
+       "type": "array",
+       "minItems": 1,
+       "maxItems": 60,
+       "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+         "id",
+         "kind",
+         "documentId",
+         "text",
+         "class",
+         "unit",
+         "entity",
+         "metric",
+         "spans"
+        ],
+        "properties": {
+         "id": {
+          "type": "string",
+          "maxLength": 24
+         },
+         "kind": {
+          "type": "string",
+          "enum": [
+           "quote",
+           "value",
+           "claim",
+           "memo"
+          ]
+         },
+         "documentId": {
+          "type": [
+           "string",
+           "null"
+          ],
+          "maxLength": 64
+         },
+         "text": {
+          "type": "string",
+          "maxLength": 64000
+         },
+         "class": {
+          "type": [
+           "string",
+           "null"
+          ],
+          "maxLength": 40
+         },
+         "unit": {
+          "type": [
+           "string",
+           "null"
+          ],
+          "maxLength": 64
+         },
+         "entity": {
+          "type": [
+           "string",
+           "null"
+          ],
+          "maxLength": 300
+         },
+         "metric": {
+          "type": [
+           "string",
+           "null"
+          ],
+          "maxLength": 300
+         },
+         "spans": {
+          "type": "array",
+          "maxItems": 400,
+          "items": {
+           "type": "object",
+           "additionalProperties": false,
+           "required": [
+            "id",
+            "text"
+           ],
+           "properties": {
+            "id": {
+             "type": "string",
+             "maxLength": 32
+            },
+            "text": {
+             "type": "string",
+             "maxLength": 64
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ "out": {
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+   "labels"
+  ],
+  "properties": {
+   "labels": {
+    "type": "array",
+    "maxItems": 400,
+    "items": {
+     "type": "object",
+     "additionalProperties": false,
+     "required": [
+      "span",
+      "kind",
+      "currency",
+      "scale",
+      "scaleFrom",
+      "decimal",
+      "party",
+      "isRange",
+      "rangeWith",
+      "sign",
+      "measures",
+      "period",
+      "typedEntity",
+      "counterparty",
+      "unit",
+      "unitFrom"
+     ],
+     "properties": {
+      "span": {
+       "type": "string",
+       "maxLength": 32
+      },
+      "kind": {
+       "type": "string",
+       "maxLength": 16
+      },
+      "currency": {
+       "type": "string",
+       "maxLength": 8
+      },
+      "scale": {
+       "type": "string",
+       "maxLength": 24
+      },
+      "scaleFrom": {
+       "type": [
+        "string",
+        "null"
+       ],
+       "maxLength": 80
+      },
+      "decimal": {
+       "type": "string",
+       "maxLength": 8
+      },
+      "party": {
+       "type": [
+        "string",
+        "null"
+       ],
+       "maxLength": 300
+      },
+      "isRange": {
+       "type": "boolean"
+      },
+      "rangeWith": {
+       "type": [
+        "string",
+        "null"
+       ],
+       "maxLength": 32
+      },
+      "sign": {
+       "type": "string",
+       "maxLength": 16
+      },
+      "measures": {
+       "type": [
+        "string",
+        "null"
+       ],
+       "maxLength": 120
+      },
+      "period": {
+       "type": [
+        "string",
+        "null"
+       ],
+       "maxLength": 80
+      },
+      "typedEntity": {
+       "type": [
+        "string",
+        "null"
+       ],
+       "maxLength": 16
+      },
+      "counterparty": {
+       "type": [
+        "string",
+        "null"
+       ],
+       "maxLength": 300
+      },
+      "unit": {
+       "type": [
+        "string",
+        "null"
+       ],
+       "maxLength": 24
+      },
+      "unitFrom": {
+       "type": [
+        "string",
+        "null"
+       ],
+       "maxLength": 40
+      }
+     }
+    }
+   }
+  }
+ }
+}

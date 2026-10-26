@@ -1,0 +1,11 @@
+{
+  "title": "Bench smoke: service date",
+  "work_type": "analyze",
+  "instructions": "Bench smoke task: when was Talbot served?",
+  "deliverables": ["memo.md"],
+  "criteria": [
+    {"id": "C-001", "title": "States the service date", "deliverables": ["memo.md"], "match_criteria": "PASS if the memo states that Talbot was served on 10/21/2026.", "stub_contains": "served on 10/21/2026"},
+    {"id": "C-002", "title": "Names the registered agent", "deliverables": ["memo.md"], "match_criteria": "PASS if the memo says service was through the registered agent.", "stub_contains": "registered agent"},
+    {"id": "C-003", "title": "Computes the answer deadline", "deliverables": ["memo.md"], "match_criteria": "PASS if the memo computes the answer deadline (the scripted run does not: this criterion fails).", "stub_contains": "answer is due on"}
+  ]
+}
