@@ -77,13 +77,6 @@ type reqText struct {
 	CheckWhy             string
 }
 
-// newReq is the requirement at spans of text, read in its section.
-func newReq(text string, spans [][2]int) reqText {
-	r := reqText{Text: text, Spans: spans}
-	r.Ctx, r.Path, r.Truncated = contextOf(text, spans)
-	return r
-}
-
 // Joined is the requirement as the subagent is sent it: its parts joined by partJoin.
 func (r reqText) Joined() string {
 	var ps []string

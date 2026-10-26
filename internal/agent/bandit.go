@@ -7,7 +7,6 @@ import (
 	"cmp"
 	"context"
 	"fmt"
-	"maps"
 	"math"
 	"slices"
 	"strings"
@@ -170,29 +169,4 @@ func (b *Bandit) Record(ctx context.Context, a Arm, reward float64, failed bool,
 	}
 	f := map[bool]float64{true: 1}[failed]
 	return b.Stats.Add(ctx, b.Sig, a, Stat{1, reward, reward * reward, f, float64(u.Calls), float64(u.InputTokens + u.OutputTokens)})
-}
-
-// MemStats is an in-memory Stats.
-type MemStats struct {
-	mu sync.Mutex
-	m  map[string]map[Arm]Stat
-}
-
-func (m *MemStats) Load(_ context.Context, sig string) (map[Arm]Stat, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return maps.Clone(m.m[sig]), nil // nil reads as empty
-}
-
-func (m *MemStats) Add(_ context.Context, sig string, a Arm, d Stat) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.m == nil {
-		m.m = map[string]map[Arm]Stat{}
-	}
-	if m.m[sig] == nil {
-		m.m[sig] = map[Arm]Stat{}
-	}
-	m.m[sig][a] = m.m[sig][a].plus(d)
-	return nil
 }

@@ -451,7 +451,7 @@ flowchart LR
 - **Admission** (`applyReading`, `valueStated`). A typed value needs a quote span read as the same
   kind, currency, amount and scale. An unclear match admits it as `Low` (gated). `Value.Fig` is the
   reading that `Canon`, the join, `Calc` and `Salience` use.
-- **G8** ([`lint.go`](../internal/engine/lint.go) `g8`, `lintLimited`). Every figure a section
+- **G8** ([`lint.go`](../internal/engine/lint.go) `g8In`, `lintLimited`). Every figure a section
   states must trace:
   - a handle's value, by construction;
   - a drafter-written figure, only by a clear reading of the section matching a clear cited

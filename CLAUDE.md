@@ -77,7 +77,7 @@ budgets in `docs/history.md`. v2 is `main`; v1 (Go under `biglaw-go/`, DyTopo) i
   (one loop, lead depth 0 / `Subagent` depth 1) and `Runtime.Invoke` (the single dispatch path:
   offered → no nesting → alone → input schema → `Policy` → grant), `Budget` (holds and charges; a
   model call holds its worst-case cost, also a Go tool's through `Runtime.ChatWithin`; the root's floor only for `Final` tools), `Bandit` (hint line +
-  subagent model pick; never refuses), `Journal`/`Step`, `LoadSubagents` (JSON spec + `.md` prompt).
+  subagent model pick; never refuses), `Journal`/`Step`, `LoadSubagent` (JSON spec + `.md` prompt).
   `internal/analysis` (PR 4a) — pure functions over `Finding`s: `Calc`, `Handles`/`Substitute`
   (`{Codename}`), `KeyFigures`, `Join`, `CheckCoverage`, normalisers, BELO-lite (`belo.json`), and the
   `numbers`/`join_discrepancies` tools over a `Source`. `docs.Service.Tools(rt)` — `retrieve` and

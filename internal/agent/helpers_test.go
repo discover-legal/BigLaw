@@ -6,6 +6,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"sync"
 	"testing"
 
@@ -119,4 +120,29 @@ func newFinish() *finisher {
 	s := goSpec("finish")
 	s.Final, s.MaxTurns = true, 3
 	return &finisher{counter{s: s}}
+}
+
+// MemStats is an in-memory Stats.
+type MemStats struct {
+	mu sync.Mutex
+	m  map[string]map[Arm]Stat
+}
+
+func (m *MemStats) Load(_ context.Context, sig string) (map[Arm]Stat, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return maps.Clone(m.m[sig]), nil // nil reads as empty
+}
+
+func (m *MemStats) Add(_ context.Context, sig string, a Arm, d Stat) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.m == nil {
+		m.m = map[string]map[Arm]Stat{}
+	}
+	if m.m[sig] == nil {
+		m.m[sig] = map[Arm]Stat{}
+	}
+	m.m[sig][a] = m.m[sig][a].plus(d)
+	return nil
 }

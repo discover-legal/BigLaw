@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-	"testing/fstest"
 
 	"github.com/discover-legal/BigLaw/internal/model"
 )
@@ -453,22 +452,25 @@ func TestBanditUpdatedFromEveryToolResult(t *testing.T) {
 func TestLoadSubagents(t *testing.T) {
 	spec, _ := json.Marshal(subSpec("extract_facts", "retrieve"))
 	rt, _ := rig(t, nil, &counter{s: goSpec("retrieve")})
-	tools, err := rt.LoadSubagents(fstest.MapFS{"extract_facts.json": {Data: spec}, "extract_facts.md": {Data: []byte("You extract facts.")}})
-	if err != nil || len(tools) != 1 || rt.Reg.Register(tools[0]) != nil {
+	tool, err := rt.LoadSubagent("extract_facts.json", spec, []byte("You extract facts."))
+	if err != nil || rt.Reg.Register(tool) != nil {
 		t.Fatalf("load: %v", err)
 	}
 	// A real model sees only the prompt: it must carry the output schema, or the model omits required fields.
 	var out bytes.Buffer
 	_ = json.Compact(&out, subSpec("extract_facts", "retrieve").Out)
-	if p := tools[0].(*Subagent).Prompt; !strings.HasPrefix(p, "You extract facts.") || !strings.Contains(p, out.String()) {
+	if p := tool.(*Subagent).Prompt; !strings.HasPrefix(p, "You extract facts.") || !strings.Contains(p, out.String()) {
 		t.Fatalf("prompt lacks the output schema: %q", p)
 	}
-	for name, fs := range map[string]fstest.MapFS{
-		"no prompt":     {"extract_facts.json": {Data: spec}},
-		"name mismatch": {"other.json": {Data: spec}, "other.md": {Data: []byte("x")}},
-		"unknown field": {"extract_facts.json": {Data: []byte(`{"name":"extract_facts","kind":"subagent","bogus":1}`)}, "extract_facts.md": {Data: []byte("x")}},
+	for name, c := range map[string]struct {
+		file         string
+		spec, prompt []byte
+	}{
+		"no prompt":     {"extract_facts.json", spec, nil},
+		"name mismatch": {"other.json", spec, []byte("x")},
+		"unknown field": {"extract_facts.json", []byte(`{"name":"extract_facts","kind":"subagent","bogus":1}`), []byte("x")},
 	} {
-		if _, err := rt.LoadSubagents(fs); err == nil {
+		if _, err := rt.LoadSubagent(c.file, c.spec, c.prompt); err == nil {
 			t.Errorf("%s: loaded", name)
 		}
 	}

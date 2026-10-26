@@ -97,7 +97,7 @@ meaning with a word list, only form and position:
 | A requirement | The controlling document's own words, in order, as one passage | `placeRequirement` |
 | A deviation's controlling quote | It must lie in the requirement's context window | `within` |
 | The section check's answer | Exactly one strict JSON object `{answer}` | `checkAnswer` |
-| A drafter's figures | Traced by G8 to a cited reading, a handle or a worksheet | `lint`, `g8` |
+| A drafter's figures | Traced by G8 to a cited reading, a handle or a worksheet | `lint`, `g8In` |
 | A subagent's answer | Its output schema, with one repair turn | `agent.answer` |
 
 **Why.**

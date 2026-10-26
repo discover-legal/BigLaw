@@ -234,3 +234,20 @@ func TestOnePartFragmentReadInContext(t *testing.T) {
 		}
 	}
 }
+
+// requirementParts verifies a requirement in a document's text and returns the document's words for
+// it, part by part (placeRequirement).
+func requirementParts(ctx context.Context, text, req string) (parts []string, bad string, err error) {
+	spans, bad, err := placeRequirement(ctx, text, req)
+	for _, s := range spans {
+		parts = append(parts, text[s[0]:s[1]])
+	}
+	return parts, bad, err
+}
+
+// newReq is the requirement at spans of text, read in its section.
+func newReq(text string, spans [][2]int) reqText {
+	r := reqText{Text: text, Spans: spans}
+	r.Ctx, r.Path, r.Truncated = contextOf(text, spans)
+	return r
+}

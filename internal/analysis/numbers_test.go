@@ -187,30 +187,6 @@ func TestKeyFiguresTableOnlyVerified(t *testing.T) {
 	}
 }
 
-// Carried normaliser vectors.
-func TestParseRecDates(t *testing.T) {
-	toks := DatesIn("deletions in Q1 2021, amended in March 2022, and again in early 2023")
-	if len(toks) != 3 {
-		t.Fatalf("want 3 dates, got %+v", toks)
-	}
-	byRaw := map[string]Date{}
-	for _, tk := range toks {
-		byRaw[tk.Raw] = tk.Date
-	}
-	if d := byRaw["Q1 2021"]; d.Year != 2021 || d.Month != 3 {
-		t.Errorf("Q1 2021 parsed as %+v (want quarter-end March 2021)", d)
-	}
-	if d := byRaw["March 2022"]; d.Year != 2022 || d.Month != 3 {
-		t.Errorf("March 2022 parsed as %+v", d)
-	}
-	if d := byRaw["2023"]; d.Year != 2023 || d.Month != 0 {
-		t.Errorf("bare year parsed as %+v", d)
-	}
-	if got := DatesIn("18 U.S.C. § 1519 and 28 U.S.C. § 2462, under § 2012"); len(got) != 0 {
-		t.Errorf("statute numbers parsed as dates: %+v", got)
-	}
-}
-
 func TestCanonReadsMoney(t *testing.T) {
 	for in, want := range map[string]string{"$7,800,000": "usd:7800000", "$438,000.00": "usd:438000", "$22.2 million": "usd:22200000", "$1,234.56": "usd:1234.56"} {
 		if _, got, _, ok := Canon(withFig(Value{Value: in, Class: "Money"})); !ok || got != want { // the figure reader's reading (its stand-in here)

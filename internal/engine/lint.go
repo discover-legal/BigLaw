@@ -558,28 +558,23 @@ const (
 	limitedMemoUnread = "memo-unread"
 )
 
-// g8 traces one paragraph (its locators masked; it starts at at0 in the section's body): its dates
-// literally against ground's; each number Go wrote for a handle whose value is ground (a cited
-// finding's, a worksheet's) by construction; each number the drafter wrote by the figure reader's
-// reading of it. A number it read clearly as money, a count or a percentage traces only to a cited
-// finding's quote span or value it read clearly as the same kind, currency, scale and amount, or
-// (at scale 1) to a worksheet's result: never to digits read as something else, read unclearly or
-// not read (lab-r4 r4: "$2,000,000" never traces to a share count; r5 M1). A number it read clearly as
-// a date's part or an identifier traces only as written, digit for digit, in ground. A number it did
-// not read clearly, or did not read at all (the reader unfunded, failed or unsure), is flagged: G8
-// fails closed, it never traces a figure it cannot read (r5 H2: "$9 billion" beside a "$9,000"). A
-// clear figure whose cited quote the reader never read (unread: its admission's call unfunded or
-// failed) is limited when that quote states it as written, and so is a figure the drafter wrote at a
-// scale beside a cited one read at scale 1 (or a worksheet's result) with the same amount: kept, and
-// disclosed in Limitations; a cited figure read at a scale never traces one written at another (r5
-// H1: a "$500" read "in thousands" is flagged beside a memo's "$500,000").
-func g8(para, ground string, at0 int, regs []region, read map[int]analysis.Reading, known []analysis.Reading, unread []analysis.Span, sheets []analysis.Worksheet, cited map[string]bool, rolled map[string]analysis.Worksheet) []untraced {
-	td, tn := figures(para, true)
-	return g8In(para, td, tn, groundOf(ground), at0, regs, read, known, unread, sheets, cited, rolled)
-}
-
-// g8In is g8 over a paragraph's figures (td, tn: figures(para, true)) and a ground, each parsed once
-// (lab-r4 r11 M: lintLimited traces each paragraph against several grounds).
+// g8In traces one paragraph (its locators masked; it starts at at0 in the section's body; td, tn:
+// figures(para, true), and g its ground, each parsed once: lab-r4 r11 M, lintLimited traces each
+// paragraph against several grounds): its dates literally against ground's; each number Go wrote
+// for a handle whose value is ground (a cited finding's, a worksheet's) by construction; each
+// number the drafter wrote by the figure reader's reading of it. A number it read clearly as money,
+// a count or a percentage traces only to a cited finding's quote span or value it read clearly as
+// the same kind, currency, scale and amount, or (at scale 1) to a worksheet's result: never to
+// digits read as something else, read unclearly or not read (lab-r4 r4: "$2,000,000" never traces
+// to a share count; r5 M1). A number it read clearly as a date's part or an identifier traces only
+// as written, digit for digit, in ground. A number it did not read clearly, or did not read at all
+// (the reader unfunded, failed or unsure), is flagged: G8 fails closed, it never traces a figure it
+// cannot read (r5 H2: "$9 billion" beside a "$9,000"). A clear figure whose cited quote the reader
+// never read (unread: its admission's call unfunded or failed) is limited when that quote states it
+// as written, and so is a figure the drafter wrote at a scale beside a cited one read at scale 1
+// (or a worksheet's result) with the same amount: kept, and disclosed in Limitations; a cited
+// figure read at a scale never traces one written at another (r5 H1: a "$500" read "in thousands"
+// is flagged beside a memo's "$500,000").
 func g8In(para string, td []string, tn []analysis.Span, g traceGround, at0 int, regs []region, read map[int]analysis.Reading, known []analysis.Reading, unread []analysis.Span, sheets []analysis.Worksheet, cited map[string]bool, rolled map[string]analysis.Worksheet) []untraced {
 	gd, gn := g.dates, g.nums
 	var out []untraced
