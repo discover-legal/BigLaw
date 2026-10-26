@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"reflect"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/discover-legal/BigLaw/internal/agent"
@@ -176,6 +177,10 @@ func handler(d *docs.Service, e *engine.Engine, ui fs.FS, log *slog.Logger, who 
 	return mux
 }
 
+// streamGap, when a test sets it, runs between an event stream's two reads of each poll (with the
+// task id): it widens the window a run can finish in, so the order of the reads is tested.
+var streamGap atomic.Value
+
 // events streams a run (SSE): each finished step once, in order (`step`), the run whenever it
 // changes (`task`), and `done` with the run when it stops; then the stream ends.
 func events(w http.ResponseWriter, r *http.Request, e *engine.Engine, reply func(http.ResponseWriter, int, any, error)) {
@@ -193,8 +198,14 @@ func events(w http.ResponseWriter, r *http.Request, e *engine.Engine, reply func
 	}
 	after, last, polls := 0, engine.Run{}, 0
 	for {
-		steps, err := e.Steps(r.Context(), id, after)
+		// The run first, then its steps: a run's last step commits before its status leaves running,
+		// so steps read after a stopped run's status hold all of them. The other order could read the
+		// steps, then a run that finished in between, and send done without its last step.
 		v, gerr := e.Get(r.Context(), id)
+		if h, _ := streamGap.Load().(func(string)); h != nil {
+			h(id)
+		}
+		steps, err := e.Steps(r.Context(), id, after)
 		if err != nil || gerr != nil {
 			return
 		}

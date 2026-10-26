@@ -17,6 +17,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -243,6 +244,35 @@ func TestEventsStream(t *testing.T) {
 	}
 	if resp.Header.Get("Content-Type") != "text/event-stream" || last != 10 || events[len(events)-1] != "done" || !strings.Contains(strings.Join(events, ","), "task") {
 		t.Fatalf("events %v last %d", events, last)
+	}
+}
+
+// TestEventsStreamSendsTheLastStep (CI #61, PG14, shuffle 1792973692437222411: "last 9"): the
+// stream's run finishing between its two reads of a poll still sends every step before done. The gap
+// waits there until the run has stopped, deterministically; with the reads in the other order (the
+// steps, then the run) the stream sends done without the steps committed in the gap.
+func TestEventsStreamSendsTheLastStep(t *testing.T) {
+	s, ids := newServer(t, memo, roles, doc1)
+	_, body := s.do("POST", "/tasks", m{"description": "What is claimed?", "workflowType": "memo", "documentIds": ids})
+	var v engine.TaskView
+	json.Unmarshal([]byte(body), &v)
+	var once sync.Once
+	streamGap.Store(func(id string) {
+		if id != v.ID {
+			return
+		}
+		once.Do(func() { s.waitFor(v.ID, func(v engine.TaskView) bool { return v.Status == "awaiting_gate" }) })
+	})
+	t.Cleanup(func() { streamGap.Store(func(string) {}) })
+	resp, err := http.Get(s.URL + "/tasks/" + v.ID + "/events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	steps := strings.Count(string(b), "event: step\n")
+	if steps != 10 || !strings.HasSuffix(strings.TrimSpace(string(b)), `"openFindings":0}`) || !strings.Contains(string(b), "event: done") {
+		t.Fatalf("%d steps before done, want 10:\n%s", steps, b)
 	}
 }
 
