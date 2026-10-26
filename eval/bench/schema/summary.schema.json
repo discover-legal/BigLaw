@@ -1,0 +1,148 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/discover-legal/BigLaw/eval/bench/schema/summary.schema.json",
+  "title": "BigLaw bench summary",
+  "description": "One benchmark run (kind run, written by run.py) or a recorded baseline (kind baseline). Every key is always present; null means unknown or not measured, never zero.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "kind", "mode", "label", "source", "build", "config_hash", "config", "harness", "judge", "runner", "fresh_db", "spend", "stopped", "tasks"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"enum": ["run", "baseline"]},
+    "mode": {"enum": ["real", "smoke", null]},
+    "label": {"type": "string", "minLength": 1},
+    "source": {"type": ["string", "null"], "description": "where a baseline's numbers come from"},
+    "build": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sha", "dirty"],
+      "properties": {
+        "sha": {"type": ["string", "null"], "pattern": "^[0-9a-f]{7,40}$"},
+        "dirty": {"type": ["boolean", "null"]}
+      }
+    },
+    "config_hash": {"type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$"},
+    "config": {"type": ["object", "null"], "description": "the config as run (every key but config_hash); a baseline's known settings, null where unknown"},
+    "harness": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["name", "commit", "dirty"],
+      "properties": {
+        "name": {"type": "string"},
+        "commit": {"type": ["string", "null"]},
+        "dirty": {"type": ["boolean", "null"]}
+      }
+    },
+    "judge": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["models", "runner"],
+      "properties": {
+        "models": {"type": "array", "items": {"type": "string"}},
+        "runner": {"type": ["string", "null"]}
+      }
+    },
+    "runner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["host", "date", "python"],
+      "properties": {
+        "host": {"type": ["string", "null"]},
+        "date": {"type": ["string", "null"]},
+        "python": {"type": ["string", "null"]}
+      }
+    },
+    "fresh_db": {"type": ["boolean", "null"]},
+    "spend": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cap_usd", "charged_usd", "actual_usd"],
+      "properties": {
+        "cap_usd": {"type": ["number", "null"]},
+        "charged_usd": {"type": ["number", "null"]},
+        "actual_usd": {"type": ["number", "null"]}
+      }
+    },
+    "stopped": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["reason", "detail", "provider_error_type"],
+      "properties": {
+        "reason": {"enum": ["spend_cap", "provider_error", "error"]},
+        "detail": {"type": ["string", "null"]},
+        "provider_error_type": {"type": ["string", "null"]}
+      }
+    },
+    "tasks": {"type": "array", "items": {"$ref": "#/$defs/task"}}
+  },
+  "$defs": {
+    "count": {"type": ["integer", "null"], "minimum": 0},
+    "usd": {"type": ["number", "null"], "minimum": 0},
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "task", "status", "score", "criteria", "flips", "cost_usd", "calls", "stop_reason", "duration_s",
+                   "stage_spend", "stage_calls", "reader", "judge", "failures", "conflicts", "computed_figures", "finding_gates",
+                   "charged_usd", "run_dir", "error", "notes"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
+        "kind": {"enum": ["lab", "proofrun"]},
+        "task": {"type": "string"},
+        "status": {"enum": ["scored", "failed", "provider_error", "skipped_cap", "not_run", "recorded"]},
+        "score": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["passed", "total"],
+          "properties": {"passed": {"$ref": "#/$defs/count"}, "total": {"$ref": "#/$defs/count"}}
+        },
+        "criteria": {"type": ["object", "null"], "additionalProperties": {"enum": ["pass", "fail", "error", "skipped", null]}},
+        "flips": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["vs", "gained", "lost"],
+          "properties": {
+            "vs": {"type": "string"},
+            "gained": {"type": "array", "items": {"type": "string"}},
+            "lost": {"type": "array", "items": {"type": "string"}}
+          }
+        },
+        "cost_usd": {"$ref": "#/$defs/usd"},
+        "calls": {"$ref": "#/$defs/count"},
+        "stop_reason": {"enum": ["finished", "budget_exhausted", "max_steps", "awaiting_gate", "cancelled", "failed", null]},
+        "duration_s": {"$ref": "#/$defs/usd"},
+        "stage_spend": {"type": ["object", "null"], "additionalProperties": {"$ref": "#/$defs/usd"}},
+        "stage_calls": {"type": ["object", "null"], "additionalProperties": {"$ref": "#/$defs/count"}},
+        "reader": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["calls", "failed", "unfunded"],
+          "properties": {"calls": {"$ref": "#/$defs/count"}, "failed": {"$ref": "#/$defs/count"}, "unfunded": {"$ref": "#/$defs/count"}}
+        },
+        "judge": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["calls", "pairs"],
+          "properties": {"calls": {"$ref": "#/$defs/count"}, "pairs": {"$ref": "#/$defs/count"}}
+        },
+        "failures": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["steps_failed", "steps_refused", "grading_errors"],
+          "properties": {"steps_failed": {"$ref": "#/$defs/count"}, "steps_refused": {"$ref": "#/$defs/count"}, "grading_errors": {"$ref": "#/$defs/count"}}
+        },
+        "conflicts": {"$ref": "#/$defs/count"},
+        "computed_figures": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["check_first", "arithmetic"],
+          "properties": {"check_first": {"$ref": "#/$defs/count"}, "arithmetic": {"$ref": "#/$defs/count"}}
+        },
+        "finding_gates": {"$ref": "#/$defs/count"},
+        "charged_usd": {"$ref": "#/$defs/usd"},
+        "run_dir": {"type": ["string", "null"]},
+        "error": {"type": ["string", "null"]},
+        "notes": {"type": "array", "items": {"type": "string"}}
+      }
+    }
+  }
+}

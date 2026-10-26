@@ -62,6 +62,7 @@ This README is the contract. The design is described in `docs/`:
 - [`docs/glossary.md`](docs/glossary.md): the project's vocabulary and the ledger kinds. The G1–G11,
   P1–P9 and E0–E4 codes this README uses throughout are defined in its
   [Codes table](docs/glossary.md#codes).
+- [`docs/benchmarks.md`](docs/benchmarks.md): the pinned benchmark suite (`make bench`), its results schema, `compare.py` and the baselines.
 - [`docs/consolidation-proposals.md`](docs/consolidation-proposals.md): normalisation and
   consolidation opportunities for the owner to decide on, a proposed README restructure, and the
   places where the docs and the code disagree today.

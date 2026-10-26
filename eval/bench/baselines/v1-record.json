@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "kind": "baseline",
+  "mode": null,
+  "label": "v1-record",
+  "source": "v1 scores.json record: the v1 platform (main), Haiku, judged by claude-sonnet-4-6 (single judge). Only the totals were recorded; per-criterion results, cost, calls and the run settings are unknown (null).",
+  "build": {
+    "sha": null,
+    "dirty": null
+  },
+  "config_hash": null,
+  "config": null,
+  "harness": {
+    "name": "harvey-labs",
+    "commit": null,
+    "dirty": null
+  },
+  "judge": {
+    "models": [
+      "claude-sonnet-4-6"
+    ],
+    "runner": "harvey-labs"
+  },
+  "runner": {
+    "host": null,
+    "date": null,
+    "python": null
+  },
+  "fresh_db": null,
+  "spend": {
+    "cap_usd": null,
+    "charged_usd": null,
+    "actual_usd": null
+  },
+  "stopped": null,
+  "tasks": [
+    {
+      "id": "sec",
+      "kind": "lab",
+      "task": "white-collar-defense-investigations/extract-key-allegations-from-sec-enforcement-referral-notice",
+      "status": "recorded",
+      "score": {
+        "passed": 49,
+        "total": 60
+      },
+      "criteria": null,
+      "flips": null,
+      "cost_usd": null,
+      "calls": null,
+      "stop_reason": null,
+      "duration_s": null,
+      "stage_spend": null,
+      "stage_calls": null,
+      "reader": null,
+      "judge": null,
+      "failures": null,
+      "conflicts": null,
+      "computed_figures": null,
+      "finding_gates": null,
+      "charged_usd": null,
+      "run_dir": null,
+      "error": null,
+      "notes": [
+        "v1 scores.json record; model: Haiku (exact model id not recorded)"
+      ]
+    },
+    {
+      "id": "trust",
+      "kind": "lab",
+      "task": "trusts-estates-private-client/compare-trust-documents-against-client-instructions",
+      "status": "recorded",
+      "score": {
+        "passed": 14,
+        "total": 23
+      },
+      "criteria": null,
+      "flips": null,
+      "cost_usd": null,
+      "calls": null,
+      "stop_reason": null,
+      "duration_s": null,
+      "stage_spend": null,
+      "stage_calls": null,
+      "reader": null,
+      "judge": null,
+      "failures": null,
+      "conflicts": null,
+      "computed_figures": null,
+      "finding_gates": null,
+      "charged_usd": null,
+      "run_dir": null,
+      "error": null,
+      "notes": [
+        "v1 scores.json record; model: Haiku (exact model id not recorded)"
+      ]
+    }
+  ]
+}

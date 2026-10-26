@@ -1,0 +1,65 @@
+{
+  "name": "biglaw-v2-bench-smoke",
+  "description": "Offline smoke of the bench pipeline (no key, no credit): eval/bench_test.go serves the real API and engine over scripted models (model.Fake, the proof-run oracle) and runs this suite through run.py smoke. A LAB-shaped task judged by stubjudge.py, the litigation proof run scored by eval/proofrun, and a third task the spend cap must stop. Its numbers measure the pipeline, never BigLaw.",
+  "mode": "smoke",
+  "models": {
+    "lead": "lead-m",
+    "specialist": null,
+    "critic": null
+  },
+  "model_url": "http://127.0.0.1/unused-in-smoke",
+  "budget": {
+    "usd": 5,
+    "calls": 150
+  },
+  "search": "lexical",
+  "postgres_image": "pgvector/pgvector:0.8.6-pg16",
+  "harness": {
+    "name": "bench-smoke",
+    "commit": null
+  },
+  "judge": {
+    "runner": "stub",
+    "models": [
+      "stub-judge"
+    ],
+    "reserve_usd": 1,
+    "parallel": 1
+  },
+  "spend_cap_usd": 12,
+  "driver": {
+    "workflow": "memo",
+    "tool_bandit": "on",
+    "gate_policy": "approve",
+    "max_steps": null,
+    "poll_seconds": 0.05,
+    "timeout_seconds": 120
+  },
+  "tasks": [
+    {
+      "id": "lab-smoke",
+      "kind": "lab",
+      "task": "smoke/deadline",
+      "jurisdiction": "US",
+      "split_mode": "markers",
+      "matter": "LAB"
+    },
+    {
+      "id": "gate-a-litigation",
+      "kind": "proofrun",
+      "task": "litigation/greystone-v-talbot-defense",
+      "jurisdiction": "US",
+      "split_mode": "markers",
+      "matter": "litigation"
+    },
+    {
+      "id": "cap-probe",
+      "kind": "proofrun",
+      "task": "corporate-ma/kestrel-buyside-diligence",
+      "jurisdiction": "US",
+      "split_mode": "markers",
+      "matter": "ma-diligence"
+    }
+  ],
+  "config_hash": "sha256:5ac6664433d2a4bec3bb626d0073aa528c6d65e802c291b6849e70a2ec4d823d"
+}

@@ -1,0 +1,244 @@
+{
+  "schema_version": 1,
+  "kind": "baseline",
+  "mode": null,
+  "label": "v2-bench6",
+  "source": "bench6: build 091bcfc, Harvey LAB run-ids .../v2-haiku45-b11-r4-091bcfc/20261024-074818 (SEC) and .../20261024-090112 (trust), judged by claude-sonnet-4-6 (single judge); per-criterion verdicts copied from those runs' scores.json, flips vs bench5 as recorded by the owner; gate A litigation from the owner's record (per-criterion unknown). Run settings were set by hand and not recorded as a config, so config is null and compare reports any comparison with this baseline as not comparable.",
+  "build": {
+    "sha": "091bcfc",
+    "dirty": null
+  },
+  "config_hash": null,
+  "config": null,
+  "harness": {
+    "name": "harvey-labs",
+    "commit": null,
+    "dirty": null
+  },
+  "judge": {
+    "models": [
+      "claude-sonnet-4-6"
+    ],
+    "runner": "harvey-labs"
+  },
+  "runner": {
+    "host": null,
+    "date": null,
+    "python": null
+  },
+  "fresh_db": null,
+  "spend": {
+    "cap_usd": null,
+    "charged_usd": null,
+    "actual_usd": null
+  },
+  "stopped": null,
+  "tasks": [
+    {
+      "id": "sec",
+      "kind": "lab",
+      "task": "white-collar-defense-investigations/extract-key-allegations-from-sec-enforcement-referral-notice",
+      "status": "recorded",
+      "score": {
+        "passed": 38,
+        "total": 60
+      },
+      "criteria": {
+        "C-001": "pass",
+        "C-002": "pass",
+        "C-003": "pass",
+        "C-004": "pass",
+        "C-005": "pass",
+        "C-006": "pass",
+        "C-007": "pass",
+        "C-008": "pass",
+        "C-009": "pass",
+        "C-010": "pass",
+        "C-011": "pass",
+        "C-012": "pass",
+        "C-013": "pass",
+        "C-014": "pass",
+        "C-015": "fail",
+        "C-016": "pass",
+        "C-017": "pass",
+        "C-018": "pass",
+        "C-019": "pass",
+        "C-020": "pass",
+        "C-021": "pass",
+        "C-022": "pass",
+        "C-023": "fail",
+        "C-024": "fail",
+        "C-025": "fail",
+        "C-026": "fail",
+        "C-027": "pass",
+        "C-028": "fail",
+        "C-029": "pass",
+        "C-030": "pass",
+        "C-031": "pass",
+        "C-032": "fail",
+        "C-033": "pass",
+        "C-034": "fail",
+        "C-035": "fail",
+        "C-036": "fail",
+        "C-037": "fail",
+        "C-038": "fail",
+        "C-039": "fail",
+        "C-040": "fail",
+        "C-041": "fail",
+        "C-042": "fail",
+        "C-043": "fail",
+        "C-044": "pass",
+        "C-045": "pass",
+        "C-046": "fail",
+        "C-047": "pass",
+        "C-048": "pass",
+        "C-049": "pass",
+        "C-050": "pass",
+        "C-051": "pass",
+        "C-052": "fail",
+        "C-053": "fail",
+        "C-054": "pass",
+        "C-055": "pass",
+        "C-056": "pass",
+        "C-057": "pass",
+        "C-058": "pass",
+        "C-059": "fail",
+        "C-060": "fail"
+      },
+      "flips": {
+        "vs": "bench5",
+        "gained": [
+          "C-002",
+          "C-044",
+          "C-047",
+          "C-056"
+        ],
+        "lost": [
+          "C-015",
+          "C-023",
+          "C-024",
+          "C-025",
+          "C-026",
+          "C-028",
+          "C-052",
+          "C-059"
+        ]
+      },
+      "cost_usd": 10.27,
+      "calls": 566,
+      "stop_reason": "budget_exhausted",
+      "duration_s": 4091.2,
+      "stage_spend": null,
+      "stage_calls": null,
+      "reader": null,
+      "judge": null,
+      "failures": {
+        "steps_failed": null,
+        "steps_refused": null,
+        "grading_errors": 0
+      },
+      "conflicts": null,
+      "computed_figures": null,
+      "finding_gates": 1,
+      "charged_usd": null,
+      "run_dir": null,
+      "error": null,
+      "notes": []
+    },
+    {
+      "id": "trust",
+      "kind": "lab",
+      "task": "trusts-estates-private-client/compare-trust-documents-against-client-instructions",
+      "status": "recorded",
+      "score": {
+        "passed": 11,
+        "total": 23
+      },
+      "criteria": {
+        "C-001": "pass",
+        "C-002": "pass",
+        "C-003": "pass",
+        "C-004": "pass",
+        "C-005": "pass",
+        "C-006": "fail",
+        "C-007": "fail",
+        "C-008": "pass",
+        "C-009": "pass",
+        "C-010": "fail",
+        "C-011": "fail",
+        "C-012": "fail",
+        "C-013": "pass",
+        "C-014": "fail",
+        "C-015": "fail",
+        "C-016": "fail",
+        "C-017": "fail",
+        "C-018": "pass",
+        "C-019": "fail",
+        "C-020": "pass",
+        "C-021": "pass",
+        "C-022": "fail",
+        "C-023": "fail"
+      },
+      "flips": {
+        "vs": "bench5",
+        "gained": [
+          "C-013",
+          "C-018"
+        ],
+        "lost": [
+          "C-010",
+          "C-011",
+          "C-016"
+        ]
+      },
+      "cost_usd": 8.57,
+      "calls": 443,
+      "stop_reason": "finished",
+      "duration_s": 2500.8,
+      "stage_spend": null,
+      "stage_calls": null,
+      "reader": null,
+      "judge": null,
+      "failures": {
+        "steps_failed": null,
+        "steps_refused": null,
+        "grading_errors": 0
+      },
+      "conflicts": null,
+      "computed_figures": null,
+      "finding_gates": 3,
+      "charged_usd": null,
+      "run_dir": null,
+      "error": null,
+      "notes": []
+    },
+    {
+      "id": "gate-a-litigation",
+      "kind": "proofrun",
+      "task": "litigation/greystone-v-talbot-defense",
+      "status": "recorded",
+      "score": {
+        "passed": 20,
+        "total": 20
+      },
+      "criteria": null,
+      "flips": null,
+      "cost_usd": 9.6,
+      "calls": 444,
+      "stop_reason": "budget_exhausted",
+      "duration_s": null,
+      "stage_spend": null,
+      "stage_calls": null,
+      "reader": null,
+      "judge": null,
+      "failures": null,
+      "conflicts": null,
+      "computed_figures": null,
+      "finding_gates": null,
+      "charged_usd": null,
+      "run_dir": null,
+      "error": null,
+      "notes": []
+    }
+  ]
+}

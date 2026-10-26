@@ -14,7 +14,12 @@ TOOLCHAIN = $(shell sed -n 's/^toolchain //p' go.mod)
 # demo under /demo/biglaw/ (ui/dist-recorded); `make demo-record` re-records it (needs BIGLAW_TEST_DSN).
 NPM ?= npm
 
-.PHONY: eval ui-embed ui demo-bundle demo-record e4-record e4-live build static-check test fmt-check vet mod-check loc compose-check lint vuln ci clean
+# The benchmark suite (docs/benchmarks.md): `make bench` runs eval/bench/config.json against the real
+# model (owner-run: ANTHROPIC_API_KEY or ANTHROPIC_API_KEY_FILE, a harvey-labs checkout at LABS_DIR, docker
+# or BIGLAW_DATABASE_URL); `make bench-smoke` is its offline smoke (TestBenchSmoke, also part of make test).
+LABS_DIR ?= ~/harvey-labs
+
+.PHONY: bench bench-smoke eval ui-embed ui demo-bundle demo-record e4-record e4-live build static-check test fmt-check vet mod-check loc compose-check lint vuln ci clean
 
 # A static binary: no cgo, so no libc to match on the target (Pi, distroless). It embeds the web
 # UI when one is built (`make ui build`): ui/dist is copied into internal/api/dist first; without
@@ -83,6 +88,14 @@ eval:
 	python3 eval/run.py validate
 	python3 -m unittest discover -s eval/tests
 	python3 eval/run.py selftest
+	python3 eval/bench/run.py check
+
+bench:
+	python3 eval/bench/run.py run --labs-dir $(LABS_DIR)
+
+bench-smoke:
+	python3 eval/bench/run.py check
+	$(GO) test -count=1 -v -run '^TestBenchSmoke$$' ./eval
 
 demo-bundle:
 	cd ui && $(NPM) ci && $(NPM) run demo-bundle

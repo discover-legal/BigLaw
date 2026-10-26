@@ -181,6 +181,8 @@ change. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`, not here.
 - `eval/` (PR 4b) — `run.py` (validate/selftest/score/compare/drive), `proofrun/`, `lab/` (Harvey LAB
   driver), `tests/`; Go gates `TestProofRunsOracle` (E1), `TestProofRunsFabricator` (E2),
   `TestLabRunnerSmoke`; `TestE2EServe` serves a scripted run for the browser when `E2E_ADDR` is set.
+  `eval/bench/` (docs/benchmarks.md): the pinned suite (`config.json`, hash-checked; `make bench`, owner-run), the
+  results schema, `compare.py`, baselines; `TestBenchSmoke` runs it offline. A setting change is `run.py pin` + commit.
 
 Everything else in README is marked planned (next: PR 3d the `.docx` writer and tracked changes, PR 3e, PR 5 diligence;
 contract v1's `content`/202/`capabilities` for vision intake are PR 8's). Lexical search alone measured E4 0.882; the hybrid gate is
