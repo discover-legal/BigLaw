@@ -53,29 +53,44 @@ func TestMain(m *testing.M) {
 // script, so whichever asks first drives it and the other reads it: each run is made once, not
 // twice, which halves this package's engine work. Its files live in runsDir until the package ends.
 type sharedRun struct {
-	once  sync.Once
-	ok    bool   // drive returned: false when the run failed the test that drove it
-	by    string // the test that drove it
-	v     engine.TaskView
-	dir   string
-	gates []string
+	once    sync.Once
+	ok      bool   // drive returned: false when the run failed (or skipped) the test that drove it
+	skipped bool   // the test that drove it skipped (no database): the others skip too
+	by      string // the test that drove it
+	seen    map[string]bool
+	v       engine.TaskView
+	dir     string
+	gates   []string
 }
 
 var (
-	runs    sync.Map // matter slug + "/" + script name → *sharedRun
-	runsDir string   // the shared runs' files (TestMain)
+	runsMu  sync.Mutex
+	runs    = map[string]*sharedRun{} // matter slug + "/" + script name → the current run
+	runsDir string                    // the shared runs' files (TestMain)
 )
 
-// driveShared is drive, once per matter and script for the whole package (sharedRun).
+// driveShared is drive, once per matter and script (sharedRun). A test asking again for a run it
+// already read is a new -count iteration, so it starts a fresh run: -count=N still drives N runs.
 func driveShared(t *testing.T, mt matter, name string, scripts func(matter, map[string]string) map[string][]model.Reply) (engine.TaskView, string, []string) {
 	t.Helper()
-	r, _ := runs.LoadOrStore(mt.Slug+"/"+name, &sharedRun{})
-	s := r.(*sharedRun)
-	s.once.Do(func() { // a Fatal in drive still ends the Once: s.ok stays false
+	key := mt.Slug + "/" + name
+	runsMu.Lock()
+	s := runs[key]
+	if s == nil || s.seen[t.Name()] {
+		s = &sharedRun{seen: map[string]bool{}}
+		runs[key] = s
+	}
+	s.seen[t.Name()] = true
+	runsMu.Unlock()
+	s.once.Do(func() { // a Fatal or Skip in drive still ends the Once: s.ok stays false
 		s.by = t.Name()
+		defer func() { s.skipped = t.Skipped() }()
 		s.v, s.dir, s.gates = drive(t, mt, scripts)
 		s.ok = true
 	})
+	if s.skipped {
+		t.Skipf("the %s run of %s was skipped in %s", name, mt.Slug, s.by)
+	}
 	if !s.ok {
 		t.Fatalf("the %s run of %s failed in %s, which drove it for this test too", name, mt.Slug, s.by)
 	}
