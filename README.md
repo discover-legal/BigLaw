@@ -1,9 +1,9 @@
 # BigLaw 2
 
-> **Status: under construction on branch `v2`.** This README describes only what is on disk.
+> **Status: under construction.** This README describes only what is on disk.
 > Everything marked **planned** is specified in the v2 build plan and does not exist yet.
-> BigLaw 1 (the DyTopo platform) remains on `main`; its frozen copy will be the branch
-> `archive/v1-final` (a branch, because tag pushes are blocked in the build environment).
+> BigLaw 1 (the DyTopo platform) is frozen on the branch `archive/v1-final` (a branch, because
+> tag pushes are blocked in the build environment).
 
 BigLaw 2 will be a legal AI workbench for small firms: memos, contract review and diligence
 tables in which every factual statement cites a quote that the software has verified against the

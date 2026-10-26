@@ -4,7 +4,8 @@ This is the `v2` rewrite: one Go module at the repo root (`github.com/discover-l
 PostgreSQL only. `README.md` is the contract for what is on disk; keep it true in the same
 change. Design detail lives in `docs/` (`architecture.md`, `patterns.md`, `glossary.md`, and
 `documents.md`, `figures.md`, `reference.md` moved from the README); per-PR named tests and line
-budgets in `docs/history.md`. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`, not here.
+budgets in `docs/history.md`. v2 is `main`; v1 (Go under `biglaw-go/`, DyTopo) is frozen on the branch
+`archive/v1-final`, not here.
 
 ## Built so far
 - `cmd/biglaw` — `serve [--allow-no-auth] [--admin-without-auth]`, `version [--config]`; `config.go` holds the complete

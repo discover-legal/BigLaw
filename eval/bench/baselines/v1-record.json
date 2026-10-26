@@ -3,7 +3,7 @@
   "kind": "baseline",
   "mode": null,
   "label": "v1-record",
-  "source": "v1's best Haiku LAB runs, committed on main under benchmarks/runs/: SEC haiku-v5b/20260707-144125 (50/60; it matches haiku-rounds3/20260706-003200 with every round healthy, benchmarks/runs/README.md) and trust haiku-devport/20260705-213721 (14/23), judged by claude-sonnet-4-6 (single judge). Score, per-criterion verdicts, BigLaw cost and wall-clock duration are copied from each run's scores.json and metrics.json; the harness commit, calls and run settings were not recorded (null).",
+  "source": "v1's best Haiku LAB runs, committed on archive/v1-final under benchmarks/runs/: SEC haiku-v5b/20260707-144125 (50/60; it matches haiku-rounds3/20260706-003200 with every round healthy, benchmarks/runs/README.md) and trust haiku-devport/20260705-213721 (14/23), judged by claude-sonnet-4-6 (single judge). Score, per-criterion verdicts, BigLaw cost and wall-clock duration are copied from each run's scores.json and metrics.json; the harness commit, calls and run settings were not recorded (null).",
   "build": {
     "sha": null,
     "dirty": null,
@@ -135,7 +135,7 @@
       "run_dir": null,
       "error": null,
       "notes": [
-        "main:benchmarks/runs/white-collar-defense-investigations/extract-key-allegations-from-sec-enforcement-referral-notice/haiku-v5b/20260707-144125 (model claude-haiku-4-5 for haiku-v5b; Haiku, exact id not recorded, for haiku-devport)"
+        "archive/v1-final:benchmarks/runs/white-collar-defense-investigations/extract-key-allegations-from-sec-enforcement-referral-notice/haiku-v5b/20260707-144125 (model claude-haiku-4-5 for haiku-v5b; Haiku, exact id not recorded, for haiku-devport)"
       ]
     },
     {
@@ -191,7 +191,7 @@
       "run_dir": null,
       "error": null,
       "notes": [
-        "main:benchmarks/runs/compare-trust-documents-against-client-instructions/haiku-devport/20260705-213721 (model claude-haiku-4-5 for haiku-v5b; Haiku, exact id not recorded, for haiku-devport)"
+        "archive/v1-final:benchmarks/runs/compare-trust-documents-against-client-instructions/haiku-devport/20260705-213721 (model claude-haiku-4-5 for haiku-v5b; Haiku, exact id not recorded, for haiku-devport)"
       ]
     }
   ]
