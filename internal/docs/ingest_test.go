@@ -367,7 +367,7 @@ func TestResolvesByTitle(t *testing.T) {
 // by the child) and as an uploaded text file. Peak live heap above the start, sampled every
 // millisecond; README § Memory states these figures and the whole-ingest bound.
 func TestIngestMemoryBounded(t *testing.T) {
-	if testing.Short() || raceOn { // make test runs it in its non-race pass (7 × 16 MiB under -race: ~4 min)
+	if testing.Short() || RaceEnabled { // make test runs it in its non-race pass (7 × 16 MiB under -race: ~4 min)
 		t.Skip("ingests 7 inputs of up to 16 MiB; run without -race and -short")
 	}
 	s := newService(t)

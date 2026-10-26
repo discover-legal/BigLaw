@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/discover-legal/BigLaw/internal/analysis"
+	"github.com/discover-legal/BigLaw/internal/docs"
 	"github.com/discover-legal/BigLaw/internal/model"
 )
 
@@ -400,7 +401,7 @@ func TestDoubleTraceLargeSection(t *testing.T) {
 	if len(computed) == 0 {
 		t.Error("no computed deadline listed")
 	}
-	if !raceOn && el > 2300*time.Millisecond {
+	if !docs.RaceEnabled && el > 2300*time.Millisecond {
 		t.Errorf("80 paragraphs × 80 worksheets took %v (60c5bc8: 2.3 s)", el)
 	}
 }

@@ -10,3 +10,7 @@ package docs
 // a race-built copy of the test binary, does not sleep ThreadSanitizer's atexit_sleep_ms (a second)
 // as it exits after every PDF or .docx it reads. It holds no secret and changes nothing it reads.
 var childEnv = []string{"GORACE=atexit_sleep_ms=0"}
+
+// RaceEnabled reports a race-detector build (tests only): its shadow memory and slowdown distort
+// memory and timing tests, which read it to skip or relax themselves.
+const RaceEnabled = true

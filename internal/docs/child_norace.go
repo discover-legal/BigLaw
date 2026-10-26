@@ -8,3 +8,6 @@ package docs
 // childEnv is the reader child's whole environment: none, so it never holds the server's secrets
 // (child_race.go: what a race-detector test build passes instead).
 var childEnv = []string{}
+
+// RaceEnabled reports a race-detector build (child_race.go).
+const RaceEnabled = false

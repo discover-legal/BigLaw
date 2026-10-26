@@ -6,6 +6,8 @@ package analysis
 import (
 	"slices"
 	"testing"
+
+	"github.com/discover-legal/BigLaw/internal/docs"
 )
 
 // lab-r4 r9 verifier repros (critique/biglaw-lab-r4-r9-verifier.md M2, L1, L2, L3, residual a), kept
@@ -24,7 +26,7 @@ func TestRankPairsDeterministic(t *testing.T) {
 	}
 	first := ids()
 	repeats, again := 50, 10
-	if raceOn { // each ranking of the bench6 SEC ledger takes about 2 s under -race (r2 follow-up 6)
+	if docs.RaceEnabled { // each ranking of the bench6 SEC ledger takes about 2 s under -race (r2 follow-up 6)
 		repeats, again = 5, 2
 	}
 	for i := range repeats {
