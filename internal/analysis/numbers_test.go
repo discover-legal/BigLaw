@@ -4,6 +4,11 @@
 package analysis
 
 import (
+	"compress/gzip"
+	"encoding/json"
+	"io"
+	"os"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -356,3 +361,82 @@ func TestCalcProductsAndRatiosOfOneCurrency(t *testing.T) {
 		}
 	}
 }
+
+// lab-r4 r8 verifier repros (critique/biglaw-lab-r4-r8-verifier.md) for the join, the labels and the
+// calc, kept as regression tests.
+
+// H1 (E1's one-year check): date_add takes a period in weeks, months or years.
+func TestDateAddPeriods(t *testing.T) {
+	lit := func(x, unit string) Operand { return Operand{Literal: &x, Unit: &unit} }
+	for _, c := range []struct{ n, unit, want string }{{"1", "years", "2026-03-31"}, {"1", "year", "2026-03-31"}, {"2", "months", "2025-05-31"}, {"-2", "weeks", "2025-03-17"}, {"21", "days", "2025-04-21"},
+		{"1", "months", "2025-04-30"}, {"-1", "months", "2025-02-28"}, {"11", "months", "2026-02-28"}, {"-13", "months", "2024-02-29"}} {
+		w, err := Calc(nil, "date_add", []Operand{lit("2025-03-31", "date"), lit(c.n, c.unit)}, nil)
+		if err != nil || w.Result != c.want {
+			t.Errorf("%s %s: %s (%v), want %s", c.n, c.unit, w.Result, err, c.want)
+		}
+	}
+	if _, err := Calc(nil, "business_days", []Operand{lit("2025-03-31", "date"), lit("1", "years")}, nil); err == nil {
+		t.Error("business_days of years")
+	}
+}
+
+// r9 M1: a month or year on from a day the target month lacks is that month's last day, never an
+// overflow into the next (Go's AddDate gave March 2 for a month on from January 31, 2024).
+func TestDateAddClampsToMonthEnd(t *testing.T) {
+	lit := func(x, unit string) Operand { return Operand{Literal: &x, Unit: &unit} }
+	for _, c := range []struct{ from, n, unit, want string }{
+		{"2024-01-31", "1", "months", "2024-02-29"}, {"2023-01-31", "1", "months", "2023-02-28"}, {"2024-02-29", "1", "years", "2025-02-28"},
+		{"2024-02-29", "4", "years", "2028-02-29"}, {"2024-03-31", "-1", "months", "2024-02-29"}, {"2024-01-15", "1", "months", "2024-02-15"}, {"2024-12-31", "2", "months", "2025-02-28"},
+	} {
+		if w, err := Calc(nil, "date_add", []Operand{lit(c.from, "date"), lit(c.n, c.unit)}, nil); err != nil || w.Result != c.want {
+			t.Errorf("%s + %s %s: %s (%v), want %s", c.from, c.n, c.unit, w.Result, err, c.want)
+		}
+	}
+}
+
+// bench6Ledger is a bench6 run's findings, verbatim from the run's database (biglaw-bench6.pgdump:
+// the task's ledger rows of kind finding, gzipped).
+func bench6Ledger(t *testing.T, name string) []Finding {
+	t.Helper()
+	fh, err := os.Open("testdata/bench6-" + name + "-ledger.json.gz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fh.Close()
+	z, err := gzip.NewReader(fh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := io.ReadAll(z)
+	var fs []Finding
+	if err == nil {
+		err = json.Unmarshal(b, &fs)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fs
+}
+
+func pairs(cs []Conflict) []string {
+	var out []string
+	for _, c := range cs {
+		ids := []string{c.Values[0].FID, c.Values[1].FID}
+		slices.Sort(ids)
+		out = append(out, strings.Join(ids, "/"))
+	}
+	slices.Sort(out)
+	return out
+}
+
+// bench6SECLabels are the SEC pairs' values as the figure reader reads them (the right labels): whose
+// figure, what it measures, and what the typed entity is to it ("OQR", "Email transmission", "deletion
+// instruction", "total equity trades": no party; Kevin Ostrowski: the payer of Bellini's compensation,
+// another party).
+var bench6SECLabels = func() map[string]relabel {
+	wca, bellini, whitmore := "Whitmore Capital Advisors LLC", "Marcus T. Bellini", "Gerald R. Whitmore"
+	trades, all, comp, instr := "omnibus equity trades analysed", "equity trades during the review period", "undisclosed compensation paid for Bellini", "instruction to clean up the shared drive"
+	return map[string]relabel{"F178/4,217": {wca, trades, "", "none"}, "F246/4,312": {wca, trades, "", "party"},
+		"F83/7,912": {wca, all, "", "none"}, "F246/7,412": {wca, all, "", "party"}, "F269/$103,800.00": {bellini, comp, "", "other"},
+		"F539/$92,600": {bellini, comp, "", "party"}, "F144/April 22, 2024": {whitmore, instr, "", "none"}, "F547/15 Apr 2024 09:23:47": {whitmore, instr, "", "none"}}
+}()
