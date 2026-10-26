@@ -67,6 +67,7 @@ This README is the contract. The design is described in `docs/`:
   tree, search, hybrid search and vision transcription in depth; the figure rules; the agent runtime,
   the memo workflow's passes, Manage's validation and hooks), moved here verbatim from the README.
   [`docs/history.md`](docs/history.md): each PR's named tests and the line-budget history.
+- [`docs/benchmarks.md`](docs/benchmarks.md): the pinned benchmark suite (`make bench`), its results schema, `compare.py` and the baselines.
 - [`docs/consolidation-proposals.md`](docs/consolidation-proposals.md): normalisation and
   consolidation opportunities for the owner to decide on, a proposed README restructure, and the
   places where the docs and the code disagree today.

@@ -1,0 +1,76 @@
+{
+  "name": "biglaw-v2-bench",
+  "description": "The v2 benchmark suite: SEC referral and trust compare (Harvey LAB, judged by harvey-labs) and gate A litigation (proof run, scored by eval/proofrun). Every role on the lead model; lexical search; $11 and 900 calls per task; judge reserves $12 (SEC) and $8 (trust); $60 per suite.",
+  "mode": "real",
+  "models": {
+    "lead": "claude-haiku-4-5",
+    "specialist": "claude-haiku-4-5",
+    "critic": "claude-haiku-4-5"
+  },
+  "model_url": "https://api.anthropic.com/v1",
+  "vendor_opt_in": [
+    "ALLOW_ANTHROPIC"
+  ],
+  "budget": {
+    "usd": 11,
+    "calls": 900
+  },
+  "search": "lexical",
+  "postgres_image": "pgvector/pgvector:0.8.6-pg16",
+  "harness": {
+    "name": "harvey-labs",
+    "commit": "81d6a31"
+  },
+  "judge": {
+    "runner": "harvey-labs",
+    "models": [
+      "claude-sonnet-4-6"
+    ],
+    "parallel": 6,
+    "price_per_mtok": {
+      "in": 3,
+      "out": 15
+    },
+    "output_tokens_per_criterion": 1000,
+    "chars_per_token": 3.5
+  },
+  "spend_cap_usd": 60,
+  "driver": {
+    "workflow": "memo",
+    "tool_bandit": "on",
+    "gate_policy": "approve",
+    "max_steps": null,
+    "poll_seconds": 10,
+    "timeout_seconds": 14400
+  },
+  "tasks": [
+    {
+      "id": "sec",
+      "kind": "lab",
+      "task": "white-collar-defense-investigations/extract-key-allegations-from-sec-enforcement-referral-notice",
+      "jurisdiction": "US",
+      "split_mode": "markers",
+      "matter": "LAB",
+      "judge_reserve_usd": 12
+    },
+    {
+      "id": "trust",
+      "kind": "lab",
+      "task": "trusts-estates-private-client/compare-trust-documents-against-client-instructions",
+      "jurisdiction": "US",
+      "split_mode": "markers",
+      "matter": "LAB",
+      "judge_reserve_usd": 8
+    },
+    {
+      "id": "gate-a-litigation",
+      "kind": "proofrun",
+      "task": "litigation/greystone-v-talbot-defense",
+      "jurisdiction": "US",
+      "split_mode": "markers",
+      "matter": "litigation",
+      "judge_reserve_usd": 0
+    }
+  ],
+  "config_hash": "sha256:4fc1ad33d559dd5e627696ab780c6a370289b60c9d62d425e4242209e6829717"
+}
