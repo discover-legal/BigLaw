@@ -264,7 +264,6 @@ func (e *Engine) sweepVisits(ctx context.Context, rt *agent.Runtime, c agent.Cal
 			stop = true
 		}
 	}
-	q, _ := json.Marshal(question)
 	launch := func(i int, v Visit, serial bool) error {
 		var calls int
 		var usd float64
@@ -288,13 +287,19 @@ func (e *Engine) sweepVisits(ctx context.Context, rt *agent.Runtime, c agent.Cal
 		if err != nil {
 			return err
 		}
-		through := []byte("null")
+		var through *string // null when the visit reads one section
 		if v.Through != "" {
-			through, _ = json.Marshal(v.Through)
+			through = &v.Through
 		}
-		doc, _ := json.Marshal(v.DocumentID)
-		sec, _ := json.Marshal(v.SectionID)
-		in := fmt.Sprintf(`{"question":%s,"documentId":%s,"sectionId":%s,"through":%s,"offset":%d,"query":null,"issueId":null}`, q, doc, sec, through, v.Offset)
+		in, _ := json.Marshal(struct { // field order is the input's byte order (journaled, replayed)
+			Question   string  `json:"question"`
+			DocumentID string  `json:"documentId"`
+			SectionID  string  `json:"sectionId"`
+			Through    *string `json:"through"`
+			Offset     int     `json:"offset"`
+			Query      *string `json:"query"`
+			IssueID    *string `json:"issueId"`
+		}{question, v.DocumentID, v.SectionID, through, v.Offset, nil, nil})
 		next, tail := make(chan struct{}), calls < turns || usd < share || serial
 		inflight++
 		vctx, read := context.WithValue(cctx, turnKey{}, prev), cur
