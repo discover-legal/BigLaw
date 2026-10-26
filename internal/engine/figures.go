@@ -277,12 +277,7 @@ func findingReading(f Finding, quotes []analysis.Quote, vals []analysis.Value) *
 // off its schema) keeps why, for the spans it was not read for; only a stop or a journal or database
 // failure is an error.
 func (e *Engine) readFigures(ctx context.Context, rt *agent.Runtime, c agent.Call, b *agent.Budget, caller string, items []*reading) error {
-	model, models := "", []string(nil)
-	if rt != nil && rt.Chat != nil && rt.Reg != nil {
-		models = rt.Candidates(spec(ctx, "read_figures").Role)
-		model = rt.Bandit.PickModel(ctx, "read_figures", models)
-	}
-	models = append([]string{model}, slices.DeleteFunc(models, func(m string) bool { return m == model })...) // a reading any candidate model made is reused before another call
+	model, models := labelModels(ctx, rt, "read_figures")
 	rh := specsOf(ctx).agentHash("read_figures")
 	scope, err := e.readScope(ctx, c.TaskID)
 	if err != nil {
@@ -293,19 +288,17 @@ func (e *Engine) readFigures(ctx context.Context, rt *agent.Runtime, c agent.Cal
 	slices.SortStableFunc(items, func(a, b *reading) int { return cmp.Compare(a.size(), b.size()) })
 	for _, it := range items {
 		it.read = true
-	parts:
 		for _, pt := range it.parts() {
-			for _, m := range models {
-				labels, ok, err := e.cachedReading(ctx, readKey(rh, m, scope, cmpStr(it.memo, c.TaskID, ""), it.parties, pt.in), m, scope != "")
-				if err != nil {
-					return err
-				}
-				if ok {
-					it.labels = append(it.labels, labels...)
-					continue parts
-				}
+			key := func(m string) string { return readKey(rh, m, scope, cmpStr(it.memo, c.TaskID, ""), it.parties, pt.in) }
+			labels, ok, err := cachedAnswer(ctx, e, models, scope != "", key, func([]analysis.Label) bool { return true })
+			if err != nil {
+				return err
 			}
-			pt.key = readKey(rh, model, scope, cmpStr(it.memo, c.TaskID, ""), it.parties, pt.in)
+			if ok {
+				it.labels = append(it.labels, labels...)
+				continue
+			}
+			pt.key = key(model)
 			todo = append(todo, pt)
 		}
 	}
@@ -409,24 +402,16 @@ func (e *Engine) readChunk(ctx context.Context, rt *agent.Runtime, c agent.Call,
 	for _, pt := range chunk {
 		spans += len(pt.ids)
 	}
-	res, err := rt.Invoke(ctx, agent.Agent{Name: caller, Visible: []string{"read_figures"}}, agent.Call{TaskID: c.TaskID, DocumentIDs: c.DocumentIDs, Model: model}, "read_figures", input, b, false, 0)
+	res, err := labelCall(ctx, rt, c, b, caller, "read_figures", model, input)
 	failed := func(why string, unfunded bool) (string, error) { // logged with its step and counted (bench7: 28 of 110 calls failed, none logged)
 		e.log.Warn("figure reader failed", "task", c.TaskID, "step", e.stepOf(c.TaskID), "caller", caller, "spans", spans, "parts", len(chunk), "why", why, "err", err)
 		return why, e.countRead(ctx, c.TaskID, spans, spans, why, unfunded, agent.Usage{})
 	}
-	switch {
-	case ctx.Err() != nil:
-		return "", ctx.Err()
-	case errors.Is(err, agent.ErrJournal):
-		return "", err
-	case errors.Is(err, agent.ErrBudget):
-		return failed(whyUnfunded, true)
-	case errors.Is(err, agent.ErrToolOutput):
-		return failed(whyCutOff, false)
-	case errors.Is(err, agent.ErrTurnCap):
-		return failed(whyTurns, false)
-	case err != nil:
-		return failed(whyFailed, false)
+	if why, fatal := labelFailed(ctx, err); fatal != nil || why != "" {
+		if fatal != nil {
+			return "", fatal
+		}
+		return failed(why, why == whyUnfunded)
 	}
 	var out struct{ Labels []analysis.Label }
 	if json.Unmarshal(res.Output, &out) != nil {
@@ -465,55 +450,96 @@ func (e *Engine) readChunk(ctx context.Context, rt *agent.Runtime, c agent.Call,
 			}
 			continue
 		}
-		if scope != "" {
-			if err := e.cacheReading(ctx, pt, c.TaskID, scope, model, by[i]); err != nil {
-				return "", err
+		docs := []string{}
+		for _, p := range pt.in {
+			if p.DocumentID != nil && !slices.Contains(docs, *p.DocumentID) {
+				docs = append(docs, *p.DocumentID)
 			}
+		}
+		if err := e.storeRead(ctx, scope != "", pt.key, by[i], model, c.TaskID, scope, docs); err != nil {
+			return "", err
 		}
 	}
 	return "", nil
 }
 
-// cachedReading is the reader's stored answer for key (figure_reads), when caching is on.
-func (e *Engine) cachedReading(ctx context.Context, key, model string, on bool) ([]analysis.Label, bool, error) {
-	if !on || model == "" {
-		return nil, false, nil
+// The figure reader and the figure judge are one kind of labeller: one model per run of batches,
+// picked by the bandit before any call (labelModels; it is part of every cache key), a cached answer
+// reused from figure_reads under any candidate model (cachedAnswer), batches invoked out of the
+// caller's grant (labelCall, labelFailed), and only complete or decided answers stored (storeRead).
+
+// labelModels is the model name's calls run on, and every candidate model, it first: an answer any
+// of them made is reused before another call. No runtime or model: "" (nothing is called or cached).
+func labelModels(ctx context.Context, rt *agent.Runtime, name string) (string, []string) {
+	model, models := "", []string(nil)
+	if rt != nil && rt.Chat != nil && rt.Reg != nil {
+		models = rt.Candidates(spec(ctx, name).Role)
+		model = rt.Bandit.PickModel(ctx, name, models)
 	}
-	var data []byte
-	err := e.db.QueryRowContext(ctx, `SELECT labels FROM figure_reads WHERE key = $1`, key).Scan(&data)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, false, nil
-	} else if err != nil {
-		return nil, false, err
-	}
-	var labels []analysis.Label
-	if json.Unmarshal(data, &labels) != nil {
-		return nil, false, nil
-	}
-	return labels, true, nil
+	return model, append([]string{model}, slices.DeleteFunc(models, func(m string) bool { return m == model })...)
 }
 
-// cacheReading stores a part's complete answer, under the task that read it (deleted with it) and
-// the documents its quotes are from (deleted with any of them).
-func (e *Engine) cacheReading(ctx context.Context, pt *part, taskID, scope, model string, labels []analysis.Label) error {
-	docs := []string{}
-	for _, p := range pt.in {
-		if p.DocumentID != nil && store.ValidID(*p.DocumentID) && !slices.Contains(docs, *p.DocumentID) {
-			docs = append(docs, *p.DocumentID)
+// cachedAnswer is the first stored answer (figure_reads) under key(m) for a model of models that
+// decodes and is valid, when caching is on.
+func cachedAnswer[T any](ctx context.Context, e *Engine, models []string, on bool, key func(model string) string, valid func(T) bool) (T, bool, error) {
+	var none T
+	for _, m := range models {
+		if !on || m == "" {
+			continue
+		}
+		var data []byte
+		err := e.db.QueryRowContext(ctx, `SELECT labels FROM figure_reads WHERE key = $1`, key(m)).Scan(&data)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		} else if err != nil {
+			return none, false, err
+		}
+		var v T
+		if json.Unmarshal(data, &v) == nil && valid(v) {
+			return v, true, nil
 		}
 	}
-	data, err := json.Marshal(labels)
+	return none, false, nil
+}
+
+// labelCall is one call of the labeller name on model, out of b, for caller.
+func labelCall(ctx context.Context, rt *agent.Runtime, c agent.Call, b *agent.Budget, caller, name, model string, input []byte) (agent.Result, error) {
+	return rt.Invoke(ctx, agent.Agent{Name: caller, Visible: []string{name}}, agent.Call{TaskID: c.TaskID, DocumentIDs: c.DocumentIDs, Model: model}, name, input, b, false, 0)
+}
+
+// labelFailed is why a labeller's call read nothing ("" when it answered), or the error that ends
+// its caller: a stop or a journal failure.
+func labelFailed(ctx context.Context, err error) (string, error) {
+	switch {
+	case ctx.Err() != nil:
+		return "", ctx.Err()
+	case errors.Is(err, agent.ErrJournal):
+		return "", err
+	case errors.Is(err, agent.ErrBudget):
+		return whyUnfunded, nil
+	case errors.Is(err, agent.ErrToolOutput):
+		return whyCutOff, nil
+	case errors.Is(err, agent.ErrTurnCap):
+		return whyTurns, nil
+	case err != nil:
+		return whyFailed, nil
+	}
+	return "", nil
+}
+
+// storeRead stores one answer (figure_reads), when caching is on, under the task that asked and the
+// documents it read (deleted with the task or any of them): a reading's labels, or a verdict under a
+// "judge:…" key.
+func (e *Engine) storeRead(ctx context.Context, on bool, key string, v any, model, taskID, scope string, docs []string) error {
+	if !on {
+		return nil
+	}
+	data, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
-	return e.storeRead(ctx, pt.key, data, model, taskID, scope, docs)
-}
-
-// storeRead stores one cached answer (figure_reads) under the task that asked and the documents it
-// read (deleted with the task or any of them).
-func (e *Engine) storeRead(ctx context.Context, key string, data []byte, model, taskID, scope string, docs []string) error {
 	docs = slices.DeleteFunc(slices.Clone(docs), func(d string) bool { return !store.ValidID(d) })
-	_, err := e.db.ExecContext(ctx, `INSERT INTO figure_reads (key, labels, model, task_id, matter_number, document_ids) VALUES ($1, $2, $3, $4, $5, $6)
+	_, err = e.db.ExecContext(ctx, `INSERT INTO figure_reads (key, labels, model, task_id, matter_number, document_ids) VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT (key) DO NOTHING`, key, data, model, taskID, strings.TrimPrefix(scope, "matter:"), pq.Array(docs))
 	return err
 }
