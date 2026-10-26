@@ -639,12 +639,16 @@ func TestUploadFilesToMatter(t *testing.T) {
 	if code, out := post("/documents/upload?matter=M-2026%2F001", "letter.png", pngOf(3)); code != 503 || out["document"].(map[string]any)["matterNumber"] != "M-2026/001" {
 		t.Errorf("a scan waiting for vision is filed too: %d %v", code, out)
 	}
+	wide := strings.Repeat("é", 64) // 64 characters, 128 bytes: a task's matterNumber (maxLength 64) can name it
+	if code, out := post("/documents/upload?matter="+url.QueryEscape(wide), "w.txt", []byte("w")); code != 201 || out["matterNumber"] != wide {
+		t.Errorf("a 64-character matter number: %d %v", code, out)
+	}
 	ds, err := s.List(t.Context(), "M-2026/001")
 	if err != nil || len(ds) != 2 {
 		t.Fatalf("the matter lists %d documents (%v), want 2", len(ds), err)
 	}
 	before := count(t, s, "files") + count(t, s, "documents")
-	for _, m := range []string{strings.Repeat("M", 65), "M-1\n", "M-1\u200b", " M-1", "M--\u202e1"} {
+	for _, m := range []string{strings.Repeat("M", 65), strings.Repeat("é", 65), "M-1\n", "M-1\u200b", " M-1", "M--\u202e1"} {
 		if code, out := post("/documents/upload?matter="+url.QueryEscape(m), "x.txt", []byte("x")); code != 400 || out["errorType"] != "bad_request" {
 			t.Errorf("upload to matter %q: %d %v, want 400", m, code, out)
 		}

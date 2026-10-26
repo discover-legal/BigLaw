@@ -397,8 +397,8 @@ blockquote.third-party { margin: 4px 0 8px; padding: 4px 10px; border-left: 3px 
 .manage .doclist .dl-meta { grid-column: 1; display: flex; flex-wrap: wrap; gap: 0.25rem; align-items: center; }
 .gate .held details pre { max-height: 24rem; }
 .warn-text { color: var(--warn); }
-/* Print the memo alone (Task: Print) */
+/* Print the memo alone (Task: Print), under the demo banner when recorded */
 @media print {
-  .demo-banner, .top, .crumbs, .runbar, .gate, .tabs, .memo-actions, .error, .notice { display: none; }
+  .top, .crumbs, .runbar, .gate, .tabs, .memo-actions, .error, .notice { display: none; }
   body { background: #fff; color: #000; }
 }

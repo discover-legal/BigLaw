@@ -438,11 +438,11 @@ func (f finish) check(ctx context.Context, limits []limitation) (report, error) 
 	for _, x := range crit {
 		switch {
 		case x.Status == "disclosed":
-			rep.limits = append(rep.limits, fmt.Sprintf("Critic finding %s (%s, %s) disclosed: %s. %s", x.ID, x.Severity, x.Critic, x.Text, x.Note))
+			rep.limits = append(rep.limits, fmt.Sprintf("Critic finding %s (%s, %s) disclosed: %s. %s", x.ID, x.Severity, x.Critic, plainCheck(x.Text), x.Note))
 		case x.Status == "open" && (x.Severity == "HIGH" || x.Severity == "MEDIUM") && funded:
 			bad("open_findings", fmt.Sprintf("critic finding %s (%s) is open: fix it and resolve it as fixed, or resolve it as disclosed: %s", x.ID, x.Severity, x.Text))
 		case x.Status == "open" && (x.Severity == "HIGH" || x.Severity == "MEDIUM"):
-			rep.limits = append(rep.limits, fmt.Sprintf("Open critic finding %s (%s, %s), left open because the budget could not fund another fix and review: %s", x.ID, x.Severity, x.Critic, x.Text))
+			rep.limits = append(rep.limits, fmt.Sprintf("Open critic finding %s (%s, %s), left open because the budget could not fund another fix and review: %s", x.ID, x.Severity, x.Critic, plainCheck(x.Text)))
 		}
 	}
 	if f.r.forced != "" {
@@ -453,12 +453,26 @@ func (f finish) check(ctx context.Context, limits []limitation) (report, error) 
 	return rep, nil
 }
 
-// plainCheck is a lint line as Limitations discloses it: what is wrong, without the fix the line asks
-// the lead to make (its tool names, handles and check codes), which no lawyer can act on.
+// plainCheck is a lint line (or a critic's) as Limitations discloses it: what is wrong, and why or
+// the rolled deadline when the line says, without the fix it asks the lead to make (its tool names,
+// handles, ledger ops and check codes), which no lawyer can act on.
 func plainCheck(l string) string {
+	l = strings.NewReplacer(": ledger op get)", " on the findings themselves)", "; ledger op get lists the notes)", "; each finding lists its notes)").Replace(l)
+	if head, rest, ok := strings.Cut(l, " is not traced (G8): "); ok {
+		why := ""
+		if r, ok := strings.CutPrefix(rest, "the figure reader did not read it clearly ("); ok {
+			if r, _, ok = strings.Cut(r, "), so it is flagged, never traced"); ok {
+				why = " (the figure check did not read it clearly: " + r + ")"
+			}
+		}
+		return head + " could not be traced to a cited quote, or to a calculation over the cited findings" + why + "; check it against the documents"
+	}
+	if head, rest, ok := strings.Cut(l, " (G8): the deadline is {"); ok {
+		_, v, _ := strings.Cut(rest, "} (")
+		v, _, _ = strings.Cut(v, "): ")
+		return head + "; the deadline after the roll is " + v + "; check it against the documents"
+	}
 	for _, c := range [][2]string{
-		{" is not traced (G8)", " could not be traced to a cited quote, or to a calculation over the cited findings; check it against the documents"},
-		{" (G8): ", "; check the deadline against the documents"},
 		{": unknown figure handle ", ": a figure placeholder in this section names no verified figure and is shown as written; check that figure against the documents"},
 		{" is inside a quotation, where Go never substitutes it", ": a figure placeholder inside a quotation is shown as written; check the quotation against the documents"},
 		{", and the memo does not state both: ", ", and the memo does not state both"},

@@ -6,6 +6,7 @@ import recordingJson from '../src/recorded/recording.json' with { type: 'json' }
 import { createTransport as recorded, type Clock, type Recording } from '../src/api/recorded.ts';
 import { createTransport as http } from '../src/api/http.ts';
 import { rank } from '../src/api/match.ts';
+import { memoExport } from '../src/components/memo.ts';
 import type { RunEvent } from '../src/api/types.ts';
 
 const rec = recordingJson as unknown as Recording;
@@ -183,4 +184,15 @@ test('visitors never see the scripted reader\'s Go name', async () => {
   const cites = (await t.task(task.id)).findings.flatMap((f) => f.citations.map((c) => c.note ?? ''));
   for (const s of [...notes, ...cites]) assert.doesNotMatch(s, /model\.Fake|\.go\b/, s);
   assert.ok(notes.some((n) => n.includes('a scripted stand-in for the vision reader (demo only; ')), notes.join(' / '));
+});
+
+test('a recorded memo downloads and copies with the recording\'s provenance first; a live one as it is', async () => {
+  const t = recorded(rec, fakeClock().clock);
+  const task = await t.submit(newTask(''), 'lit-deadlines');
+  t.fastForward!(task.id);
+  const out = (await t.task(task.id)).output!;
+  const text = memoExport(out, t.provenance);
+  assert.ok(text.startsWith(`> ${rec.provenance}\n\n`) && text.endsWith(out));
+  assert.match(text.split('\n')[0], /not live/);
+  assert.equal(memoExport(out, http().provenance), out);
 });

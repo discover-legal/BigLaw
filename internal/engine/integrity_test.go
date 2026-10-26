@@ -628,22 +628,25 @@ func TestFigureLintTracesCountAfterLocatorList(t *testing.T) {
 	}
 }
 
-// TestPlainCheckDropsTheLeadsFix (P12): a lint line Limitations discloses says what is wrong in the
-// lawyer's words, never the fix it asks the lead for (tool names, handles, check codes).
+// TestPlainCheckDropsTheLeadsFix (P12): a lint or critic line Limitations discloses says what is
+// wrong in the lawyer's words, with its reason and a rolled deadline's date, never the fix it asks the
+// lead for (tool names, handles, ledger ops, check codes).
 func TestPlainCheckDropsTheLeadsFix(t *testing.T) {
 	t.Parallel()
-	for _, l := range []string{
-		"I1: the figure 280 is not traced (G8): no cited finding, handle or worksheet states it: if it is computed (a total), compute it with numbers op calc over the findings' value refs and write the {W…} handle it returns; otherwise remove it",
-		"I2: the date March 3, 2026 is a deadline's raw date, before Rule 6(a)'s roll past a weekend or holiday (G8): the deadline is {W0123456789} (March 5, 2026): write that handle",
-		"I3: unknown figure handle {Heron}: it names no verified figure or worksheet",
-		"I4: {Heron} is inside a quotation, where Go never substitutes it: quote the document's own words there, or move the handle outside the quotation marks",
-		"memo: the documents state the fee differently ([F1] $5 vs [F2] $7), and the memo does not state both: redraft the section it bears on to state both figures",
+	for l, want := range map[string]string{
+		"I1: the figure 280 is not traced (G8): no cited finding, handle or worksheet states it: if it is computed (a total), compute it with numbers op calc over the findings' value refs and write the {W…} handle it returns; otherwise remove it":              "I1: the figure 280 could not be traced",
+		"I1: the figure 9 is not traced (G8): the figure reader did not read it clearly (the figure check's call failed), so it is flagged, never traced; no cited finding states it":                                                                               "(the figure check did not read it clearly: the figure check's call failed)",
+		"I2: the date March 3, 2026 is a deadline's raw date, before Rule 6(a)'s roll past a weekend or holiday (G8): the deadline is {W0123456789} (March 5, 2026): write that handle, and state the raw date only in the sentence that gives the rolled deadline": "the deadline after the roll is March 5, 2026",
+		"I3: unknown figure handle {Heron}: it names no verified figure or worksheet":                                                                                 "names no verified figure",
+		"I4: {Heron} is inside a quotation, where Go never substitutes it: quote the document's own words there, or move the handle outside the quotation marks":      "inside a quotation is shown as written",
+		"memo: the documents state the fee differently ([F1] $5 vs [F2] $7), and the memo does not state both: redraft the section it bears on to state both figures": "and the memo does not state both",
+		"3 cited findings have typed values admission dropped (F1, F2, F3): F1: x (and 2 more notes: ledger op get)":                                                  "(and 2 more notes on the findings themselves)",
 	} {
 		got := plainCheck(l)
-		if got == l || !strings.HasPrefix(got, l[:3]) {
-			t.Errorf("%q: not rewritten: %q", l, got)
+		if !strings.Contains(got, want) {
+			t.Errorf("%q: got %q, want it to say %q", l, got, want)
 		}
-		for _, jargon := range []string{"(G8)", "op calc", "handle", "{W", "Go ", "redraft", "lead"} {
+		for _, jargon := range []string{"(G8)", "op calc", "handle", "{W", "Go ", "redraft", "lead", "ledger", "figure reader"} {
 			if strings.Contains(got, jargon) {
 				t.Errorf("%q keeps %q", got, jargon)
 			}

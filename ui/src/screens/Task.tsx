@@ -10,6 +10,7 @@ import { Badge, badgeFor } from '../components/badge.ts';
 import { Icon, stepIcon } from '../components/icons.tsx';
 import { quoteCells } from '../components/quote.ts';
 import { Markdown } from '../components/Markdown.tsx';
+import { memoExport } from '../components/memo.ts';
 import { Empty, Failure, go, Loading, plural, useAction, useApi, useLoad } from '../lib.tsx';
 import { StatusPill } from './Matters.tsx';
 
@@ -112,7 +113,7 @@ export function TaskScreen(props: { id: string; tab: string }) {
       {props.tab === 'run' && <RunLog steps={steps} running={task.status === 'running'} />}
       {props.tab === 'findings' && <Findings findings={task.findings} docs={docs.data ?? []} focus={focus} running={task.status === 'running'} />}
       {props.tab === 'memo' && (task.output
-        ? <><MemoActions text={task.output} name={task.matterNumber || 'memo'} />
+        ? <><MemoActions text={memoExport(task.output, api.provenance)} name={task.matterNumber || 'memo'} />
           <article className="memo"><Markdown text={task.output} onFid={(f) => { setFocus(f); tab('findings'); }} /></article></>
         : <Empty icon="draft_section" title="No deliverable yet">The memo appears here when the run finishes; every factual sentence in it cites a verified finding.</Empty>)}
       {props.tab === 'cost' && <Cost id={task.id} budget={task.run.budget.calls + task.run.budget.remaining} />}
@@ -323,7 +324,7 @@ function Cost(props: { id: string; budget: number }) {
         <div><b>{s.inputTokens.toLocaleString()}</b><span>input tokens</span></div>
         <div><b>{s.outputTokens.toLocaleString()}</b><span>output tokens</span></div>
         <div><b>{s.usd === null ? 'unknown' : `$${s.usd.toFixed(4)}`}</b><span>cost{s.unpricedCalls ? ` (${s.unpricedCalls} unpriced)` : ''}</span></div>
-        {s.wattHours ? <div><b>{s.wattHours.toFixed(2)} Wh</b><span>energy (local models, metered)</span></div> : null}
+        {s.wattHours ? <div><b>{s.wattHours.toFixed(2)} Wh</b><span>estimated energy (local models)</span></div> : null}
       </div>
       {api.mode === 'recorded' && (
         <p className="muted prose">This recording made no model calls, so it cost nothing. A live run charges every call (lead, subagents,

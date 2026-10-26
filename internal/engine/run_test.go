@@ -65,8 +65,8 @@ func TestRunAccountsEveryStep(t *testing.T) {
 	}
 }
 
-// TestCostShowsMeteredWattHours: the cost summary totals the watt-hours local calls metered
-// (BIGLAW_LOCAL_WATTS), and has none when no call metered any (cloud calls, or the variable unset).
+// TestCostShowsMeteredWattHours: the cost summary totals the estimated watt-hours calls recorded
+// (BIGLAW_LOCAL_WATTS), and has none when no call recorded any (the variable unset).
 func TestCostShowsMeteredWattHours(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)

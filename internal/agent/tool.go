@@ -67,7 +67,7 @@ type Usage struct {
 	OutputTokens int     `json:"outputTokens"`
 	USD          float64 `json:"usd"`
 	Unpriced     int     `json:"unpriced"`
-	WattHours    float64 `json:"wattHours,omitempty"` // local calls' energy when BIGLAW_LOCAL_WATTS is set (model.Usage); cloud calls have none
+	WattHours    float64 `json:"wattHours,omitempty"` // estimated energy (BIGLAW_LOCAL_WATTS × call duration, model.Usage) when that is set; 0 otherwise
 }
 
 func (u *Usage) Add(v Usage) {

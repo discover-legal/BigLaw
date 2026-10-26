@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/discover-legal/BigLaw/internal/model"
 	"github.com/discover-legal/BigLaw/internal/store"
@@ -132,10 +133,10 @@ func windowEnd(end time.Time) time.Time {
 	return end
 }
 
-// checkMatter refuses a matter number a task could not name (over 64 bytes) or that holds what a
+// checkMatter refuses a matter number a task could not name (over 64 characters, as its schema counts) or that holds what a
 // file name may not (control or invisible characters, edge or doubled spaces); "" files nowhere.
 func checkMatter(m string) error {
-	if m != "" && (len(m) > 64 || !store.ValidName(strings.ReplaceAll(m, "/", "-"))) {
+	if m != "" && (utf8.RuneCountInString(m) > 64 || !store.ValidName(strings.ReplaceAll(m, "/", "-"))) {
 		return fmt.Errorf("%w: a matter number is at most 64 characters, with no control or invisible characters", ErrBadInput)
 	}
 	return nil
