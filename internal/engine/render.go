@@ -422,6 +422,11 @@ func mdSafe(s string, inline bool) string {
 // plural is one when n is 1, else many.
 func plural(n int, one, many string) string { return cmpStr(n == 1, one, many) }
 
+// firstN joins the first n of xs by sep, then says how many more there are.
+func firstN(xs []string, n int, sep string) string {
+	return strings.Join(xs[:min(n, len(xs))], sep) + cmpStr(len(xs) > n, fmt.Sprintf(" and %d more", len(xs)-n), "")
+}
+
 func allCitations(f Finding, ok func(Citation) bool) bool {
 	return len(f.Citations) > 0 && !slices.ContainsFunc(f.Citations, func(c Citation) bool { return !ok(c) })
 }

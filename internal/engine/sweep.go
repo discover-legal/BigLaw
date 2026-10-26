@@ -512,8 +512,7 @@ func (e *Engine) sweepTool(rt *agent.Runtime, r *run) agent.Tool {
 					}
 				}
 				if len(pages) > 0 {
-					more := cmpStr(len(pages) > 8, fmt.Sprintf(" and %d more", len(pages)-8), "")
-					note += cmpStr(k > 0, "; ", "") + fmt.Sprintf("%s, %d of %d pages (%s%s)", cmpStr(d.Name != "", d.Name, d.DocumentID), len(pages), d.Planned, strings.Join(pages[:min(8, len(pages))], ", "), more)
+					note += cmpStr(k > 0, "; ", "") + fmt.Sprintf("%s, %d of %d pages (%s)", cmpStr(d.Name != "", d.Name, d.DocumentID), len(pages), d.Planned, firstN(pages, 8, ", "))
 					k++
 				}
 			}

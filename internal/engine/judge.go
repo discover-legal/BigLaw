@@ -389,12 +389,12 @@ func (j joined) lines() []string {
 	var out []string
 	if len(j.unclear) > 0 {
 		var ps []string
-		for _, x := range j.unclear[:min(len(j.unclear), 20)] {
+		for _, x := range j.unclear {
 			ps = append(ps, fmt.Sprintf("[%s] %s vs [%s] %s", x.A.FID, x.A.Value, x.B.FID, x.B.Value))
 		}
-		out = append(out, fmt.Sprintf("Figures (low confidence): the figure judge could not tell whether %d %s two documents state differently %s one quantity, so %s not reported as %s: %s%s; a lawyer should compare them.",
+		out = append(out, fmt.Sprintf("Figures (low confidence): the figure judge could not tell whether %d %s two documents state differently %s one quantity, so %s not reported as %s: %s; a lawyer should compare them.",
 			len(j.unclear), plural(len(j.unclear), "pair of figures", "pairs of figures"), plural(len(j.unclear), "is", "are"), plural(len(j.unclear), "it is", "they are"), plural(len(j.unclear), "a conflict", "conflicts"),
-			strings.Join(ps, "; "), cmpStr(len(j.unclear) > 20, fmt.Sprintf(" and %d more", len(j.unclear)-20), "")))
+			firstN(ps, 20, "; ")))
 	}
 	if j.unjudged > 0 {
 		out = append(out, fmt.Sprintf("Figures: %d %s of figures that two documents state differently, among those the join puts to the figure judge first (each figure's most alike and closest counterparts), %s not judged (the budget could not fund the judge, or its answer was unusable), so a conflict among them may be missing.",

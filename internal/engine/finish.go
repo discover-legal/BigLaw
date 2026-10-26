@@ -281,6 +281,11 @@ func (f finish) check(ctx context.Context, limits []limitation) (report, error) 
 		rep.Errors = append(rep.Errors, finishErr{code, detail})
 		rep.OpenPreconditions = append(rep.OpenPreconditions, detail)
 	}
+	limit := func(l string) { // a Limitations line, when there is one
+		if l != "" {
+			rep.limits = append(rep.limits, l)
+		}
+	}
 	byFID := map[string]Finding{}
 	var an []analysis.Finding
 	for _, x := range use {
@@ -303,18 +308,18 @@ func (f finish) check(ctx context.Context, limits []limitation) (report, error) 
 	}
 	if all, err := load[Finding](ctx, e, id, kFinding); err != nil {
 		return report{}, err
-	} else if l := hookQuarantined(all); l != "" {
-		rep.limits = append(rep.limits, l)
+	} else {
+		limit(hookQuarantined(all))
 	}
 	if os, err := load[HookOutcome](ctx, e, id, kHookRun); err != nil {
 		return report{}, err
-	} else if l := leadOnlyLine(os); l != "" {
-		rep.limits = append(rep.limits, l)
+	} else {
+		limit(leadOnlyLine(os))
 	}
 	if l, err := e.staleLine(ctx, id, issues); err != nil {
 		return report{}, err
-	} else if l != "" {
-		rep.limits = append(rep.limits, l)
+	} else {
+		limit(l)
 	}
 	if len(issues) == 0 {
 		bad("no_plan", "no plan is recorded: record one with ledger op plan")
@@ -407,26 +412,20 @@ func (f finish) check(ctx context.Context, limits []limitation) (report, error) 
 			return report{}, err
 		} else if len(lo) > 0 {
 			var ids []string
-			for _, x := range lo[:min(maxPlaced, len(lo))] {
+			for _, x := range lo {
 				ids = append(ids, x.FID)
 			}
-			rep.limits = append(rep.limits, fmt.Sprintf("Coverage: %d verified %s a deviation, omission, violation or salient figure never reached the memo: %s%s.",
-				len(lo), plural(len(lo), "finding that states", "findings that state"), strings.Join(ids, ", "), cmpStr(len(lo) > maxPlaced, fmt.Sprintf(" and %d more", len(lo)-maxPlaced), "")))
+			rep.limits = append(rep.limits, fmt.Sprintf("Coverage: %d verified %s a deviation, omission, violation or salient figure never reached the memo: %s.",
+				len(lo), plural(len(lo), "finding that states", "findings that state"), firstN(ids, maxPlaced, ", ")))
 		}
 	}
 	if pass != nil { // the coverage pass's list of usable findings with a dropped typed value (lab-r4 r3 M7): one line
-		if line := unadmittedLine(pass.Unadmitted, byFID); line != "" {
-			rep.limits = append(rep.limits, line)
-		}
+		limit(unadmittedLine(pass.Unadmitted, byFID))
 	}
 	cov := analysis.CheckCoverage(ais, texts, an, nil)
 	rep.MissingIssues, rep.UncoveredParties, rep.MissingFigures = cov.MissingIssues, cov.UncoveredParties, cov.MissingFigures
-	if line := partyLine(cov.UncoveredParties); line != "" { // one line each, not one per party (bench5 SEC: 101 "Coverage:" lines)
-		rep.limits = append(rep.limits, line)
-	}
-	if line := figureLine(cov.MissingFigures); line != "" {
-		rep.limits = append(rep.limits, line)
-	}
+	limit(partyLine(cov.UncoveredParties)) // one line each, not one per party (bench5 SEC: 101 "Coverage:" lines)
+	limit(figureLine(cov.MissingFigures))
 	funded := f.funded()
 	switch {
 	case len(cyc) == 0 && len(secs) > 0:
@@ -567,9 +566,8 @@ func unadmittedLine(fids []string, use map[string]Finding) string {
 	if len(ids) == 0 {
 		return ""
 	}
-	return fmt.Sprintf("Evidence: %d verified %s a typed value that admission dropped because %s quotes did not state it as typed (each finding's value notes say why): %s%s.",
-		len(ids), plural(len(ids), "finding had", "findings had"), plural(len(ids), "its", "their"), strings.Join(ids[:min(maxListed, len(ids))], ", "),
-		cmpStr(len(ids) > maxListed, fmt.Sprintf(" and %d more", len(ids)-maxListed), ""))
+	return fmt.Sprintf("Evidence: %d verified %s a typed value that admission dropped because %s quotes did not state it as typed (each finding's value notes say why): %s.",
+		len(ids), plural(len(ids), "finding had", "findings had"), plural(len(ids), "its", "their"), firstN(ids, maxListed, ", "))
 }
 
 // unreviewedFixes names the critic findings resolved "fixed" after the committee's last cycle (or
@@ -598,11 +596,11 @@ func partyLine(ps []analysis.PartyGap) string {
 		return ""
 	}
 	var names []string
-	for _, p := range ps[:min(maxListed, len(ps))] {
+	for _, p := range ps {
 		names = append(names, fmt.Sprintf("%s (%s)", p.Name, strings.Join(p.FIDs[:min(3, len(p.FIDs))], ", ")))
 	}
-	return fmt.Sprintf("Coverage: %d %s named in verified findings never %s in the memo: %s%s.", len(ps), plural(len(ps), "party", "parties"), plural(len(ps), "appears", "appear"),
-		strings.Join(names, "; "), cmpStr(len(ps) > maxListed, fmt.Sprintf(" and %d more", len(ps)-maxListed), ""))
+	return fmt.Sprintf("Coverage: %d %s named in verified findings never %s in the memo: %s.", len(ps), plural(len(ps), "party", "parties"), plural(len(ps), "appears", "appear"),
+		firstN(names, maxListed, "; "))
 }
 
 // figureLine is the Limitations line for the salient figures that never reach the memo.
@@ -611,9 +609,9 @@ func figureLine(hs []analysis.Handle) string {
 		return ""
 	}
 	var figs []string
-	for _, h := range hs[:min(maxListed, len(hs))] {
+	for _, h := range hs {
 		figs = append(figs, fmt.Sprintf("%s (%s)", h.Value, strings.Join(slices.DeleteFunc([]string{h.Label, h.FID}, func(s string) bool { return s == "" }), ", ")))
 	}
-	return fmt.Sprintf("Coverage: %d salient %s never %s in the memo: %s%s.", len(hs), plural(len(hs), "figure", "figures"), plural(len(hs), "appears", "appear"),
-		strings.Join(figs, "; "), cmpStr(len(hs) > maxListed, fmt.Sprintf(" and %d more", len(hs)-maxListed), ""))
+	return fmt.Sprintf("Coverage: %d salient %s never %s in the memo: %s.", len(hs), plural(len(hs), "figure", "figures"), plural(len(hs), "appears", "appear"),
+		firstN(figs, maxListed, "; "))
 }

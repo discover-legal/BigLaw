@@ -197,6 +197,11 @@ func lintLimited(issueID string, s Section, usable map[string]Finding, sheets []
 // block, and the gates its ⚠ inputs set), which lint (the redraft check) skips (lab-r4 r11 M).
 func lintSection(issueID string, s Section, usable map[string]Finding, sheets []analysis.Worksheet, attribute bool) (out []string, limited map[string][]string, gate map[string]string, computed []computedFig) {
 	limited, gate = map[string][]string{}, map[string]string{}
+	gateOnce := func(fid, why string) { // a finding is gated for its first reason only
+		if gate[fid] == "" {
+			gate[fid] = why
+		}
+	}
 	cited := map[string]bool{}
 	for _, m := range fidRe.FindAllStringSubmatch(s.Markdown, -1) {
 		if _, ok := usable[m[1]]; !ok && !cited[m[1]] {
@@ -296,7 +301,7 @@ func lintSection(issueID string, s Section, usable map[string]Finding, sheets []
 	unreadBy := map[string][]analysis.Span{}
 	for _, fid := range fids {
 		f := usable[fid]
-		known = append(known, f.Figures...)
+		known = append(known, figuresOf(f)...)
 		for _, r := range f.Figures {
 			if r.Kind == analysis.KindUnclear && strings.HasPrefix(r.Why, "not read") {
 				unreadBy[fid] = append(unreadBy[fid], analysis.Span{Text: r.Text})
@@ -308,11 +313,6 @@ func lintSection(issueID string, s Section, usable map[string]Finding, sheets []
 			}
 		}
 		unread = append(unread, unreadBy[fid]...)
-		for _, v := range f.Values {
-			if v.Fig != nil {
-				known = append(known, *v.Fig)
-			}
-		}
 	}
 	cs := computeSet{src: src, ground: groundOf(cg), dates: map[string]quoteDates{}, sheets: sheets, usable: usable, fids: fids}
 	trace := func(para string, td []string, tn []analysis.Span, pd []string, at0, which int) []untraced { // G8 over one paragraph (its locators masked), with the worksheets which keeps
@@ -410,9 +410,7 @@ func lintSection(issueID string, s Section, usable map[string]Finding, sheets []
 					memoWhy = append(memoWhy, why)
 				}
 				for _, fid := range by {
-					if gate[fid] == "" {
-						gate[fid] = limitedMemoUnread
-					}
+					gateOnce(fid, limitedMemoUnread)
 					if !slices.Contains(memoUnreadBy, fid) {
 						memoUnreadBy = append(memoUnreadBy, fid)
 					}
@@ -422,9 +420,7 @@ func lintSection(issueID string, s Section, usable map[string]Finding, sheets []
 				computed = append(computed, cs.labelled(n))
 				if n.limited == limitedUnit {
 					for _, fid := range cs.holding(n.known) {
-						if gate[fid] == "" {
-							gate[fid] = limitedUnit
-						}
+						gateOnce(fid, limitedUnit)
 					}
 				}
 				continue
@@ -432,10 +428,7 @@ func lintSection(issueID string, s Section, usable map[string]Finding, sheets []
 			default:
 				i := -1
 				if n.limited == limitedScale && attribute { // a worksheet's result written at a scale: listed with the worksheet, once (r11 L5)
-					i = slices.IndexFunc(sheets, func(w analysis.Worksheet) bool {
-						x := sheetAmount(w)
-						return x != nil && x.Cmp(n.read.Rat()) == 0 && sheetKind(w, n.read)
-					})
+					i = slices.IndexFunc(sheets, func(w analysis.Worksheet) bool { return sheetComputes(w, n.read) })
 				}
 				if i >= 0 {
 					memoAs[sheets[i].WID] = append(memoAs[sheets[i].WID], n)
@@ -447,22 +440,15 @@ func lintSection(issueID string, s Section, usable map[string]Finding, sheets []
 				}
 				if n.limited == limitedUnread { // the cited findings whose unread quotes state it: gated for a lawyer (r6 M2)
 					for fid, ns := range unreadBy {
-						if _, ss := analysis.Literal(n.figure); len(ss) > 0 && spanStated(ss[0], ns) && gate[fid] == "" {
-							gate[fid] = limitedUnread
+						if _, ss := analysis.Literal(n.figure); len(ss) > 0 && spanStated(ss[0], ns) {
+							gateOnce(fid, limitedUnread)
 						}
 					}
 				}
 				if n.limited == limitedScale { // the cited findings that state it at the other scale: gated too (r7 M4, L2)
 					for _, fid := range fids {
-						f := usable[fid]
-						figs := slices.Clone(f.Figures)
-						for _, v := range f.Values {
-							if v.Fig != nil {
-								figs = append(figs, *v.Fig)
-							}
-						}
-						if slices.ContainsFunc(figs, func(k analysis.Reading) bool { return scaledBeside(n.read, k) }) && gate[fid] == "" {
-							gate[fid] = limitedScale
+						if slices.ContainsFunc(figuresOf(usable[fid]), func(k analysis.Reading) bool { return scaledBeside(n.read, k) }) {
+							gateOnce(fid, limitedScale)
 						}
 					}
 				}
@@ -499,9 +485,7 @@ func lintSection(issueID string, s Section, usable map[string]Finding, sheets []
 		if memo, ok := hit[w.WID]; ok {
 			c := cs.sheet(w, memo, memoAs[w.WID], handled[w.WID])
 			for fid, why := range c.Gate { // a ⚠ input: its findings gated, as a memo figure's would be (r11 H, L1)
-				if gate[fid] == "" {
-					gate[fid] = why
-				}
+				gateOnce(fid, why)
 			}
 			computed = append(computed, c)
 		}
@@ -607,10 +591,7 @@ func g8In(para string, td []string, tn []analysis.Span, g traceGround, at0 int, 
 			out = append(out, untraced{figure: decimalOf(n), unread: why, at: at})
 		case r.Clear():
 			if slices.ContainsFunc(known, func(k analysis.Reading) bool { same, _ := analysis.SameFigure(r, k); return same }) ||
-				r.Scale == "" && slices.ContainsFunc(sheets, func(w analysis.Worksheet) bool {
-					x := sheetAmount(w)
-					return x != nil && x.Cmp(r.Rat()) == 0 && sheetKind(w, r)
-				}) {
+				r.Scale == "" && slices.ContainsFunc(sheets, func(w analysis.Worksheet) bool { return sheetComputes(w, r) }) {
 				continue
 			}
 			if spanStated(n, unread) && !slices.ContainsFunc(known, func(k analysis.Reading) bool { return k.Text == n.Text && !k.Unclear }) {
@@ -618,10 +599,7 @@ func g8In(para string, td []string, tn []analysis.Span, g traceGround, at0 int, 
 				continue
 			}
 			if slices.ContainsFunc(known, func(k analysis.Reading) bool { return scaledBeside(r, k) }) || // the drafter's "$5M" for a cited "$5,000,000", or its "$5,000,000" for a cited "$5M" (r7 M4)
-				r.Scale != "" && slices.ContainsFunc(sheets, func(w analysis.Worksheet) bool {
-					x := sheetAmount(w)
-					return x != nil && x.Cmp(r.Rat()) == 0 && sheetKind(w, r)
-				}) {
+				r.Scale != "" && slices.ContainsFunc(sheets, func(w analysis.Worksheet) bool { return sheetComputes(w, r) }) {
 				out = append(out, untraced{figure: written(para, analysis.Reading{Start: n.Start, End: n.End, ScaleFrom: r.ScaleFrom}), limited: limitedScale, read: r, at: at})
 				continue
 			}
