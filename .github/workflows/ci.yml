@@ -3,12 +3,14 @@ name: CI
 # Adapted from v1's .github/workflows/ci.yml (fix/ci-and-citation-parse):
 # the Go module is now the repo root, Postgres (with pgvector) runs as a service
 # container, and BIGLAW_REQUIRE_DB=1 turns any skipped database test into a failure.
-# Four jobs run in parallel: go (make ci), lint (staticcheck + govulncheck),
-# docker (image build + Compose smoke test) and ui (npm ci, build, test).
+# Four jobs run in parallel: go (make ci), lint (staticcheck, shellcheck, govulncheck),
+# docker (image build + Compose smoke test) and ui (npm ci, build, test); after all four
+# pass on a push to main or a v* tag, publish pushes the image setup.sh pulls.
 on:
   pull_request:
   push:
     branches: [main, v2]
+    tags: ["v*"]
 
 permissions:
   contents: read
@@ -119,9 +121,28 @@ jobs:
       - name: the image alone refuses to serve without auth on 0.0.0.0
         run: |
           set +e
-          docker run --rm --user 54321:54321 -e BIGLAW_DATABASE_URL=postgres://u@db/x biglaw:local 2>err.txt; code=$?
+          docker run --rm --user 54321:54321 -e BIGLAW_DATABASE_URL=postgres://u@db/x ghcr.io/discover-legal/biglaw:latest 2>err.txt; code=$?
           cat err.txt
           test "$code" = 2 && grep -q -- '--allow-no-auth' err.txt
       - name: logs
         if: always()
         run: docker compose logs; docker compose down -v
+
+  publish:
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    needs: [go, lint, ui, docker]
+    runs-on: ubuntu-latest
+    concurrency: { group: "publish-${{ github.ref }}", cancel-in-progress: false } # an older build never lands last
+    permissions:
+      contents: read
+      packages: write # this job only: push ghcr.io/discover-legal/biglaw
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: push the image (main → :latest, tag vX.Y.Z → :X.Y.Z)
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          img=ghcr.io/discover-legal/biglaw; tag=latest; ver=2.0.0-dev+${GITHUB_SHA::12}
+          if [ "$GITHUB_REF_TYPE" = tag ]; then tag=${GITHUB_REF_NAME#v}; ver=$tag; fi
+          echo "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker build --build-arg VERSION="$ver" --label org.opencontainers.image.source=https://github.com/discover-legal/BigLaw -t "$img:$tag" . && docker push "$img:$tag"

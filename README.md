@@ -10,6 +10,25 @@ tables in which every factual statement cites a quote that the software has veri
 matter's own documents, with a lawyer approving every deliverable. It is one Go binary plus one
 PostgreSQL database. Licensed Apache-2.0 (`LICENSE`, `NOTICE`).
 
+## Install (one command)
+
+For running BigLaw on your own computer. Install [Docker Desktop](https://docs.docker.com/get-docker/)
+and start it, then paste this into a terminal (macOS Terminal, Linux, or WSL on Windows):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/discover-legal/BigLaw/main/setup.sh | bash
+```
+
+It asks one question: your [OpenRouter](https://openrouter.ai/keys) API key, or Enter to use
+[Ollama](https://ollama.com) on this computer (`ollama pull qwen2.5:14b` and `nomic-embed-text`
+first). It then starts BigLaw, reachable only from this computer, at **http://127.0.0.1:3101**.
+Its files are in `./biglaw`: the settings (`.env`, readable by you alone; edit it to change
+models, § Configuration) and the Compose file. Run the same command again to update; your
+settings and documents are kept. [`setup.sh`](setup.sh) is about 60 lines (read it first if you
+like; `SETUP_REF=<branch or tag>` downloads the Compose file and `.env.example` from there). On
+Linux, Docker reaches an Ollama on the host only if Ollama listens beyond 127.0.0.1 (e.g.
+`OLLAMA_HOST=172.17.0.1`, Docker's bridge).
+
 ## What exists today
 
 | Piece | Path | What it does |
@@ -35,8 +54,8 @@ PostgreSQL database. Licensed Apache-2.0 (`LICENSE`, `NOTICE`).
 | Test helper | `internal/store/storetest/` | Gives each DB test its own schema; skips without a DSN, fails if `BIGLAW_REQUIRE_DB` is set |
 | Test helper | `internal/engine/figtest/` | The figure reader's stand-in for tests (`figtest.Reader`, a `model.Fake` `Respond` hook): labels plain fixture texts so tests not about figure reading run unscripted (engine, API and eval tests) |
 | Budgets | `scripts/loc.py` (+ `scripts/test_loc.py`) | Fails CI if a size budget is exceeded (below) |
-| Build/deploy | `Makefile`, `Dockerfile`, `docker-compose.yml`, `render.yaml`, `.env.example` | `make ci` (and the owner-run `make e4-record` / `make e4-live`); `pgvector/pgvector:0.8.6-pg16` + biglaw under Compose; Render blueprint (inert until sign-in is configured, see § Exposure) |
-| CI | `.github/workflows/ci.yml` | `make ci` against `pgvector/pgvector:0.8.6-pg14` and `:0.8.6-pg16` service containers (pinned by digest) with `BIGLAW_REQUIRE_DB=1`; staticcheck + govulncheck; image build + Compose smoke test |
+| Build/deploy | `Makefile`, `Dockerfile`, `docker-compose.yml`, `render.yaml`, `.env.example`, `setup.sh` | the one-command installer (§ Install; `TestSetupScriptMatchesRepo`); `make ci` (and the owner-run `make e4-record` / `make e4-live`); `pgvector/pgvector:0.8.6-pg16` + biglaw under Compose; Render blueprint (inert until sign-in is configured, see § Exposure) |
+| CI | `.github/workflows/ci.yml` | `make ci` against `pgvector/pgvector:0.8.6-pg14` and `:0.8.6-pg16` service containers (pinned by digest) with `BIGLAW_REQUIRE_DB=1`; staticcheck, shellcheck + govulncheck; image build + Compose smoke test; on a push to `main` (`:latest`) or a `v*` tag (`:X.Y.Z`), once all jobs pass, the image is pushed to `ghcr.io/discover-legal/biglaw` |
 
 HTTP surface today: the REST API of § Memo workflow, the embedded UI at `/`, and `GET /health`, which returns `{"status":"ok","version":"…","search":"hybrid"}` (200;
 `"search":"lexical"` when `BIGLAW_MODELS` has no `embed` role) or
@@ -382,9 +401,11 @@ https for anything real.
 
 ## Run it
 
+For developers, from a checkout (to just use BigLaw, see § Install):
+
 ```bash
 test -e .env || sed "s/^POSTGRES_PASSWORD=\$/POSTGRES_PASSWORD=$(openssl rand -hex 24)/" .env.example > .env
-docker compose up -d            # Postgres 16 with pgvector + biglaw; host port 127.0.0.1:3101 only
+docker compose up -d --build    # Postgres 16 with pgvector + biglaw built from this checkout; host port 127.0.0.1:3101 only
 curl -s http://127.0.0.1:3101/health
 ```
 
