@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"reflect"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/discover-legal/BigLaw/internal/agent"
@@ -115,6 +116,8 @@ func handler(d *docs.Service, e *engine.Engine, ui fs.FS, log *slog.Logger, who 
 		if err == nil {
 			err = json.Unmarshal(body, &in)
 			in.Task.ToolBandit = in.ToolBandit == nil || *in.ToolBandit == "on"
+			p := who(r)
+			in.Task.SubmittedBy = &engine.Person{ID: p.ID, Name: p.Name, Email: p.Email}
 		}
 		var t engine.Task
 		if err == nil {
@@ -124,15 +127,15 @@ func handler(d *docs.Service, e *engine.Engine, ui fs.FS, log *slog.Logger, who 
 		if err == nil {
 			v, err = e.Get(r.Context(), t.ID)
 		}
-		reply(w, http.StatusCreated, v, err)
+		reply(w, http.StatusCreated, names(who(r), v), err)
 	}))
 	mux.HandleFunc("GET /tasks", func(w http.ResponseWriter, r *http.Request) {
 		ts, err := e.List(r.Context())
-		reply(w, 200, ts, err)
+		reply(w, 200, names(who(r), ts), err)
 	})
 	mux.HandleFunc("GET /tasks/{id}", func(w http.ResponseWriter, r *http.Request) {
 		v, err := e.Get(r.Context(), r.PathValue("id"))
-		reply(w, 200, v, err)
+		reply(w, 200, names(who(r), v), err)
 	})
 	mux.HandleFunc("GET /tasks/{id}/steps", func(w http.ResponseWriter, r *http.Request) {
 		after, _ := strconv.Atoi(r.URL.Query().Get("after"))
@@ -157,14 +160,15 @@ func handler(d *docs.Service, e *engine.Engine, ui fs.FS, log *slog.Logger, who 
 	})
 	mux.HandleFunc("POST /tasks/{id}/cancel", docs.Guard(log, func(w http.ResponseWriter, r *http.Request) {
 		v, err := e.Cancel(r.Context(), r.PathValue("id"))
-		reply(w, 200, v, err)
+		reply(w, 200, names(who(r), v), err)
 	}))
 	for _, op := range []string{"approve", "reject"} {
 		mux.HandleFunc("POST /tasks/{id}/gates/{gate}/"+op, docs.Guard(log, func(w http.ResponseWriter, r *http.Request) {
 			var in struct{ Reason string }
 			_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&in) // approve has no body
-			v, err := e.Decide(r.Context(), r.PathValue("id"), r.PathValue("gate"), op == "approve", in.Reason)
-			reply(w, 200, v, err)
+			p := who(r)                                                             // a member or an admin under sign-in (lawyer review); the local user without it
+			v, err := e.Decide(r.Context(), r.PathValue("id"), r.PathValue("gate"), op == "approve", in.Reason, engine.Person{ID: p.ID, Name: p.Name, Email: p.Email})
+			reply(w, 200, names(who(r), v), err)
 		}))
 	}
 	manageRoutes(mux, e, who, log, reply)
@@ -172,6 +176,10 @@ func handler(d *docs.Service, e *engine.Engine, ui fs.FS, log *slog.Logger, who 
 	mux.Handle("GET /", uiHandler(cmp.Or[fs.FS](ui, mustSub(dist, "dist"))))
 	return mux
 }
+
+// streamGap, when a test sets it, runs between an event stream's two reads of each poll (with the
+// task id): it widens the window a run can finish in, so the order of the reads is tested.
+var streamGap atomic.Value
 
 // events streams a run (SSE): each finished step once, in order (`step`), the run whenever it
 // changes (`task`), and `done` with the run when it stops; then the stream ends.
@@ -188,10 +196,16 @@ func events(w http.ResponseWriter, r *http.Request, e *engine.Engine, reply func
 		data, _ := json.Marshal(v)
 		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data)
 	}
-	after, last := 0, engine.Run{}
+	after, last, polls := 0, engine.Run{}, 0
 	for {
-		steps, err := e.Steps(r.Context(), id, after)
+		// The run first, then its steps: a run's last step commits before its status leaves running,
+		// so steps read after a stopped run's status hold all of them. The other order could read the
+		// steps, then a run that finished in between, and send done without its last step.
 		v, gerr := e.Get(r.Context(), id)
+		if h, _ := streamGap.Load().(func(string)); h != nil {
+			h(id)
+		}
+		steps, err := e.Steps(r.Context(), id, after)
 		if err != nil || gerr != nil {
 			return
 		}
@@ -211,6 +225,12 @@ func events(w http.ResponseWriter, r *http.Request, e *engine.Engine, reply func
 			rc.Flush()
 			return
 		}
+		if live, ok := r.Context().Value(liveKey{}).(func() bool); ok && polls%10 == 9 && !live() { // the session ended (logout, revoke, expiry): so does the stream
+			send("signedOut", map[string]bool{"signedOut": true})
+			rc.Flush()
+			return
+		}
+		polls++
 		if rc.Flush() != nil {
 			return
 		}
@@ -253,4 +273,33 @@ func uiHandler(ui fs.FS) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		files.ServeHTTP(w, r)
 	})
+}
+
+// names is a task as p may see it: under sign-in a member sees who submitted it and who decided
+// its gates by display name only, never another person's email or subject (README § Sign-in).
+func names[T engine.TaskView | []engine.TaskView](p Principal, v T) T {
+	if !p.SignedIn || p.Admin {
+		return v
+	}
+	hide := func(t *engine.TaskView) {
+		if t.SubmittedBy != nil {
+			x := *t.SubmittedBy
+			x.ID, x.Email, x.Name, t.SubmittedBy = "", "", engine.DisplayName(x.Name), &x // an issuer's sub may be an email (r4 L-9)
+		}
+		for i, g := range t.DecidedGates {
+			if g.DecidedBy != nil {
+				x := *g.DecidedBy
+				x.ID, x.Email, x.Name, t.DecidedGates[i].DecidedBy = "", "", engine.DisplayName(x.Name), &x
+			}
+		}
+	}
+	switch x := any(&v).(type) {
+	case *engine.TaskView:
+		hide(x)
+	case *[]engine.TaskView:
+		for i := range *x {
+			hide(&(*x)[i])
+		}
+	}
+	return v
 }

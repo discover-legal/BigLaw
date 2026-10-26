@@ -6,7 +6,8 @@ change. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`, not here.
 
 ## Built so far
 - `cmd/biglaw` — `serve [--allow-no-auth] [--admin-without-auth]`, `version [--config]`; `config.go` holds the complete
-  env-var table (18 vars, each tagged with the PR that first reads it; `BIGLAW_MODELS` is the role
+  env-var table (19 vars, each tagged with the PR that first reads it; sign-in's are `BIGLAW_OIDC_ISSUER`,
+  `_CLIENT_ID`, `_CLIENT_SECRET`, `BIGLAW_PUBLIC_URL` and `BIGLAW_ADMINS` (PR 8), validated together by `signIn`; `BIGLAW_MODELS` is the role
   map `role=id,…`, ids refused if they hold `://`, `user:pw@`, white space, control or invisible
   characters or `? = &`, are over 200 bytes or look like a key)
   and the vendor breakers. `serve` gives `docs` the embedder when an `embed` role is set and runs
@@ -140,9 +141,10 @@ change. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`, not here.
   failure policy, any other error fails the call. Skills: `skills/<name>/SKILL.md` + reference
   files; the brief lists names and descriptions (≤ 40, ≤ 4 KiB); `use_skill` pages a body or file and
   records it (ledger kind `skill`); a candidate skill read is a Limitations line. `api.Principal` is the
-  who-seam: until PR 8 every request is the local user (`api.LocalUser`): an admin on loopback, read-only
-  under `--allow-no-auth`, an admin for anyone under `--admin-without-auth` (warned, bannered); writes
-  wear `docs.Guard` + `admin`.
+  who-seam: with sign-in it is the session's user (`api.SessionUser`; admin when `BIGLAW_ADMINS` names
+  them, else a member; author fields record `Principal.Label()`); without it every request is the local
+  user (`api.LocalUser`): an admin on loopback, read-only under `--allow-no-auth`, an admin for anyone
+  under `--admin-without-auth` (warned, bannered); writes wear `docs.Guard` + `admin`.
   A new editable file must map to an item (`itemOf`; `TestCatalogueAndHooks`), and a change to any of
   them makes `ui/src/recorded/manage.json` stale (`make demo-record`; `TestManageRecording`, no DB).
   Custom agents and tools (`custom.go`, `remote.go`, migration 0009): admin-created subagents
@@ -156,6 +158,24 @@ change. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`, not here.
   off; an imported description is third-party text (`untrustedText`, `importedDescription`) and its tool
   stays disabled until an admin accepts it (`acceptRule`); a tool's answer is labelled untrusted. `goDepends` refuses deleting what Go needs. Tests reach a local fake server only
   through `SetRemotePolicy` (never set by `cmd/biglaw`).
+- `internal/auth` (PR 8) — sign-in: OIDC code flow + PKCE S256 (`oidc.go`: discovery, JWKS cache with a
+  rate-limited refetch for an unknown kid, ID-token verification RS256/384/512 + ES256/384 with `none`/`HS*`
+  refused before key lookup, iss/aud/azp/exp/iat/nbf/nonce; claims decoded by exact name only,
+  `decodeClaims`: never `json.Unmarshal` claims into a struct, its case-insensitive matching lets
+  `"Email"` override `"email"`; fetches coalesced by `shared`, no lock across network I/O),
+  server-side sessions (`session.go`, migration 0011: only SHA-256 of the cookie id stored, idle 8 h /
+  absolute 7 d, rotated at sign-in, logout deletes, `Revoke`, `Alive` for SSE (never moves seen_at);
+  a sign-in in flight is AES-GCM sealed in the login cookie with a key made at startup: no row, no cap,
+  never add server state an anonymous request can fill; `next` ≤ 512 bytes), `IsAdmin` (sub exactly, or a verified plain-ASCII
+  email byte-exact after ASCII lowercasing: never Unicode folding or a cleaned address). Stdlib only;
+  never log or return a token, code, verifier, state, cookie or the client secret.
+  `internal/api/signin.go` `RequireSignIn` puts every route but the exact patterns in `api.public`
+  (`GET /`, `/health`, the three `/auth` routes) behind a session (401 `unauthenticated`), `docs.Guard`
+  on every unsafe method, mounts `POST /manage/sessions/revoke` (admin) and gives SSE streams a
+  liveness check (`liveKey`). Tasks record `submittedBy` (migration 0012). A member never sees
+  another person's email (`api.names`, `authors`, `engine.DisplayName` in files): keep it so. Under sign-in `--allow-no-auth` is ignored (warned), `--admin-without-auth` refused, the remote
+  policy is on, and `bad_host` also admits `BIGLAW_PUBLIC_URL`'s host. Gate decisions record
+  `Gate.DecidedBy` (`engine.Person`). `internal/auth/authtest` is the fake OpenID provider for tests.
 - `internal/api` (PR 4b) — the REST surface (tasks, steps, SSE, gates, cancel, cost, clients) over
   the engine plus `docs.Routes`; request bodies validated by the agent's schema subset.
 - `eval/` (PR 4b) — `run.py` (validate/selftest/score/compare/drive), `proofrun/`, `lab/` (Harvey LAB
@@ -228,10 +248,13 @@ not yet judged (self-test tape).
 - Errors and logs must never contain the database password or any key. Run user-supplied DSNs
   through `store.CheckDSN` before anything else sees them; print config values only through
   `shown` in `cmd/biglaw/config.go` (DSNs via `store.DescribeDSN`), never raw.
-- Until PR 8 there is no auth: only Compose (loopback-published) may pass `--allow-no-auth`, and
-  every Compose port must name a loopback IP (`TestDeployFilesFollowExposureRule`).
+- Without sign-in there is no auth: only Compose (loopback-published) may pass `--allow-no-auth`, and
+  every Compose port must name a loopback IP (`TestDeployFilesFollowExposureRule`); keep the no-sign-in
+  behaviour exactly as it is when changing sign-in.
   Every POST route wears `docs.Guard` (cross-site writes 403 `cross_origin`); `routes` refuses
-  requests by DNS name other than `localhost` (403 `bad_host`, DNS rebinding); the UI forbids framing.
+  requests by DNS name other than `localhost` (and, with sign-in, `BIGLAW_PUBLIC_URL`'s host: 403
+  `bad_host`, DNS rebinding); the UI forbids framing. A new API route is behind the session
+  automatically; a route that must be public goes in `api.public` with a reason.
 - One Go version (1.26.10): go.mod's `go`/`toolchain` lines, the Dockerfile `FROM`, CI's
   `go-version` and the README move together (`TestGoVersionPinnedEverywhere`).
 
@@ -246,5 +269,5 @@ make demo-bundle # ui/dist-recorded for discover.legal/demo/biglaw/; make demo-r
 make e4-record EMBED_MODEL=…   # owner-run: record the E4 tape at the model's own length (make e4-live: no tape)
 ```
 Budgets: Go prod LOC reported with no limit (owner decision 17: the total ceiling is dropped; `python3 scripts/loc.py` prints today's figure, never write it here; each PR reports its lines vs its DESIGN budget; test-support packages such as `storetest` count), internal
-packages ≤ 12 (8 used; test-support packages do not count), direct deps ≤ 3, env vars ≤ 20 (18 used), UI runtime
+packages ≤ 12 (9 used; test-support packages do not count), direct deps ≤ 3, env vars ≤ 20 (19 used), UI runtime
 deps ≤ 2 (2 used), UI source lines (`ui/src`) ≤ 3,200 (raised from 2,400 for Manage), untested packages 0, longest source file ≤ 2,000 lines.

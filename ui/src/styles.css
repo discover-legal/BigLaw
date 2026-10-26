@@ -44,7 +44,7 @@ button, a.button {
 }
 button:hover, a.button:hover { border-color: var(--muted); background: var(--sunken); }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
-button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+button.primary, a.button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 button.primary:hover:not(:disabled) { background: var(--accent-text); border-color: var(--accent-text); }
 @media (prefers-color-scheme: dark) { button.primary:hover:not(:disabled) { background: #2563eb; border-color: #2563eb; } }
 button.danger { color: var(--bad); }
@@ -91,6 +91,10 @@ a.num-tag { color: var(--accent-text); }
 .top nav a:hover { color: var(--ink); }
 .top nav a.on { color: var(--ink); border-bottom-color: var(--accent); }
 .top nav a:focus-visible { outline-offset: -2px; }
+.top .user { margin-left: auto; display: flex; align-items: center; gap: 0.6rem; font-size: 0.9rem; }
+.top .user .badge { background: var(--sunken); color: var(--muted); }
+.signin { max-width: 30rem; margin: 12vh auto; padding: 0 16px; }
+.signin .brand { padding: 0; }
 .shell { display: block; max-width: 76rem; margin: 0 auto; padding: 1.75rem 16px 5rem; }
 
 /* Surfaces */
@@ -359,6 +363,7 @@ textarea[aria-invalid=true] { border-color: var(--bad); }
   .top nav { flex-wrap: wrap; gap: 0.25rem; padding: 0.35rem 12px 0.6rem; }
   .top nav a { padding: 0.3rem 0.6rem; border: 0; margin: 0; border-radius: 999px; font-size: 0.9rem; }
   .top nav a.on { background: var(--accent-soft); color: var(--accent-text); }
+  .top .user { margin: 0; padding: 0 16px 0.6rem; }
   .tabs::-webkit-scrollbar { display: none; }
   .tabs button { padding: 0.6rem 0.5rem; }
   .panel, .finding, .verify, .gate { padding: 0.95rem 1rem; }

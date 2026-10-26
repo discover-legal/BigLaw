@@ -62,6 +62,7 @@ export function TaskScreen(props: { id: string; tab: string }) {
       <div className="runbar" aria-live="polite">
         <dl className="runstats">
           <div><dt>Status</dt><dd><StatusPill status={task.status} /></dd></div>
+          {task.submittedBy && <div><dt>Submitted by</dt><dd title={task.submittedBy.email ?? task.submittedBy.id}>{task.submittedBy.name}</dd></div>}
           <div><dt>Step</dt><dd>{task.run.step}</dd></div>
           {task.run.stopReason && <div><dt>Stopped</dt><dd>{task.run.stopReason.replace('_', ' ')}</dd></div>}
           <div><dt>Budget spent</dt><dd>{plural(task.run.budget.calls, 'call')}, ${(task.run.budget.usd ?? 0).toFixed(2)}{task.run.budget.usd === null ? ' + unpriced' : ''}</dd></div>
@@ -78,15 +79,15 @@ export function TaskScreen(props: { id: string; tab: string }) {
       {gate && <GatePanel gate={gate} read={() => tab('memo')} decide={(approve, reason) => act(api.decideGate(task.id, gate.gateId, approve, reason))} />}
       {held.length > 0 && <HeldGates gates={held} open={task.status === 'awaiting_gate'} decide={(id, approve, reason) => act(api.decideGate(task.id, id, approve, reason))} />}
       {task.decidedGates.filter((d) => d.kind !== 'deliverable').map((d) => (
-        <p key={d.gateId} className="small muted">{d.kind === 'hook' ? `The call of ${d.subject} held by hook ${d.hook}` : `Finding ${d.findingId}`}: {d.decision}{d.reason ? ` (“${d.reason}”)` : ''}.</p>
+        <p key={d.gateId} className="small muted">{d.kind === 'hook' ? `The call of ${d.subject} held by hook ${d.hook}` : `Finding ${d.findingId}`}: {d.decision}{d.decidedBy ? ` by ${d.decidedBy.name}` : ''}{d.reason ? ` (“${d.reason}”)` : ''}.</p>
       ))}
       {task.decidedGates.filter((d) => d.kind === 'deliverable').map((d) => (
         <div key={d.gateId} className={`gate decided ${d.decision}`} role="status">
           <span className="gate-icon"><Icon name={d.decision === 'approved' ? 'check' : 'x'} size={18} /></span>
           {d.decision === 'approved'
-            ? <div><p><strong>Deliverable approved.</strong> The task is complete.</p></div>
+            ? <div><p><strong>Deliverable approved{d.decidedBy ? ` by ${d.decidedBy.name}` : ''}.</strong> The task is complete.</p></div>
             : <div>
-              <p><strong>Deliverable rejected.</strong> Reason: “{d.reason}”</p>
+              <p><strong>Deliverable rejected{d.decidedBy ? ` by ${d.decidedBy.name}` : ''}.</strong> Reason: “{d.reason}”</p>
               <p className="muted">{api.mode === 'recorded'
                 ? 'A live run sends your reason back to the lead, which revises the deliverable and returns to this gate. The recording has no revised run, so the replay ends here; start the task again from its matter to see the other branch.'
                 : 'The lead has your reason and is revising the deliverable; it comes back to this gate.'}</p>

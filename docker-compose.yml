@@ -20,12 +20,24 @@ services:
   biglaw:
     build: .
     image: biglaw:local
-    # No auth exists before PR 8, and serve refuses a non-loopback address
-    # without --allow-no-auth. That is safe here only because the port below is
+    # Without sign-in, serve refuses a non-loopback address without
+    # --allow-no-auth. That is safe here only because the port below is
     # published on the host's loopback; do not change it to 0.0.0.0 or a LAN IP
     # (README § Exposure). Under --allow-no-auth, Manage is read-only; to edit there,
     # add "--admin-without-auth" to this command, which lets anyone who can reach the
     # port change what every task's agents use.
+    #
+    # Sign-in (README § Sign-in): set these in .env and every request needs a
+    # session; --allow-no-auth then has no effect (serve says so) and admins are
+    # BIGLAW_ADMINS, with secrets and custom tools on for them. For example, with
+    # a generic OIDC issuer and a TLS reverse proxy on the host that forwards
+    # https://biglaw.example.com to 127.0.0.1:3101 keeping the Host header:
+    #   BIGLAW_PUBLIC_URL=https://biglaw.example.com
+    #   BIGLAW_OIDC_ISSUER=https://idp.example.com/realms/biglaw
+    #   BIGLAW_OIDC_CLIENT_ID=biglaw
+    #   BIGLAW_OIDC_CLIENT_SECRET=<the client's secret>
+    #   BIGLAW_ADMINS=ada@example.com
+    # Do not add --admin-without-auth with sign-in: serve refuses it.
     command: ["serve", "--allow-no-auth"]
     depends_on:
       postgres:
@@ -49,11 +61,12 @@ services:
       BIGLAW_OIDC_ISSUER: ${BIGLAW_OIDC_ISSUER:-}
       BIGLAW_OIDC_CLIENT_ID: ${BIGLAW_OIDC_CLIENT_ID:-}
       BIGLAW_OIDC_CLIENT_SECRET: ${BIGLAW_OIDC_CLIENT_SECRET:-}
+      BIGLAW_ADMINS: ${BIGLAW_ADMINS:-}
       BIGLAW_AI_RATE: ${BIGLAW_AI_RATE:-}
       ALLOW_ANTHROPIC: ${ALLOW_ANTHROPIC:-}
       ALLOW_AWS: ${ALLOW_AWS:-}
     ports:
-      - "127.0.0.1:3101:3101"   # loopback only on the host: the --allow-no-auth precondition
+      - "127.0.0.1:3101:3101"   # loopback only on the host: the --allow-no-auth precondition (with sign-in, a TLS proxy on the host fronts it)
     restart: unless-stopped
 
 volumes:

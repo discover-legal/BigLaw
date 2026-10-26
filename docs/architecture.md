@@ -527,9 +527,10 @@ Two kinds:
 - **Admin and exposure**. `api.Principal` is the who-seam ([`internal/api/manage.go`](../internal/api/manage.go)).
   Every POST wears `docs.Guard`, which refuses cross-site writes with 403 `cross_origin`. Manage
   writes also wear `admin` (`TestManageWriteRoutes` lists every write route). `cmd/biglaw` refuses
-  requests by DNS name with 403 `bad_host` and decides who is an admin from the serve flags. Sign-in
-  (PR 8) is being built on a separate branch and will change this part; the README's Exposure
-  section is the contract until then.
+  requests by DNS name with 403 `bad_host` (under sign-in, `BIGLAW_PUBLIC_URL`'s host is admitted).
+  With sign-in (`internal/auth`, `internal/api/signin.go` `RequireSignIn`) the principal is the
+  session's user and `BIGLAW_ADMINS` names the admins; without it the serve flags decide. The
+  README's Exposure and Sign-in sections are the contract.
 
 ## 8. Storage at a glance
 

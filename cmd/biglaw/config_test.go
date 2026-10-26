@@ -34,14 +34,14 @@ func TestConfigDefaults(t *testing.T) {
 	if c.Addr != "127.0.0.1:3101" || c.ModelURL != "" || c.AllowAnthropic || c.AllowAWS {
 		t.Fatalf("defaults differ from README: %+v", c)
 	}
-	if len(envVars) != 18 {
-		t.Fatalf("%d runtime variables, README promises 18 (BIGLAW_MODELS replaced three)", len(envVars))
+	if len(envVars) != 19 {
+		t.Fatalf("%d runtime variables, README promises 19 (BIGLAW_MODELS replaced three; PR 8 added BIGLAW_ADMINS)", len(envVars))
 	}
 	// Variables read by later PRs still show their README defaults.
 	out := Describe(env("BIGLAW_DATABASE_URL", dsn), nil)
 	for _, want := range []string{
 		"BIGLAW_ADDR                127.0.0.1:3101  [default]",
-		"BIGLAW_PUBLIC_URL          http://127.0.0.1:3101  [default, read from PR 8]",
+		"BIGLAW_PUBLIC_URL          http://127.0.0.1:3101  [default]",
 		"BIGLAW_BUDGET_CALLS        400  [default]",
 		"BIGLAW_BUDGET_USD          5  [default]",
 		"BIGLAW_LOCAL_WATTS         (unset)\n",
@@ -98,7 +98,7 @@ func TestConfigRejectsBadValues(t *testing.T) {
 		}
 	}
 	// Variables a later PR reads are not validated yet (that PR validates them).
-	if _, err := Load(env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_AI_RATE", "abc", "BIGLAW_OIDC_ISSUER", "okta")); err != nil {
+	if _, err := Load(env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_AI_RATE", "abc")); err != nil {
 		t.Errorf("a variable this build does not read was validated: %v", err)
 	}
 }
@@ -220,7 +220,7 @@ func TestDescribeRedactsSecrets(t *testing.T) {
 			}
 		}
 	}
-	out := Describe(env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_MODEL_KEY", "k", "BIGLAW_OIDC_ISSUER", "microsoft:contoso.onmicrosoft.com",
+	out := Describe(env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_MODEL_KEY", "k", "BIGLAW_OIDC_ISSUER", "https://idp.example/realms/firm?x=SECRET",
 		"BIGLAW_MODEL_URL", "https://gw.example/v1/chat?key=k&b=2#f", "BIGLAW_PUBLIC_URL", "HTTPS://Biglaw.Example:8443",
 		"BIGLAW_PRICES", "https://K@prices.example/p.json"), []string{"PGPASSWORD=x", "PGHOST=db", "PATH=/bin"})
 	for _, want := range []string{
@@ -228,8 +228,8 @@ func TestDescribeRedactsSecrets(t *testing.T) {
 		`BIGLAW_DATABASE_URL        host="db" port=5432 user="biglaw" dbname="biglaw" sslmode="disable" password=(set, hidden)  [env]`,
 		"BIGLAW_MODEL_URL           https://gw.example  [env]", // host only: never path, query or fragment
 		"BIGLAW_PRICES              (set, not shown: not an http(s) URL with a plain host and no @)  [env]",
-		"BIGLAW_PUBLIC_URL          https://Biglaw.Example:8443  [env, read from PR 8]",
-		"BIGLAW_OIDC_ISSUER         microsoft:contoso.onmicrosoft.com  [env, read from PR 8]",
+		"BIGLAW_PUBLIC_URL          https://Biglaw.Example:8443  [env]",
+		"BIGLAW_OIDC_ISSUER         https://idp.example  [env]", // host only, as every URL
 		"lib/pq also reads these libpq variables (values not shown): PGHOST, PGPASSWORD",
 	} {
 		if !strings.Contains(out, want) {
@@ -478,5 +478,59 @@ func TestConfigEngineVars(t *testing.T) {
 				t.Errorf("%s=%q: err = %v, want an error naming it", name, v, err)
 			}
 		}
+	}
+}
+
+// TestConfigSignInVars (PR 8): sign-in needs the issuer and client id together, an https issuer
+// with no query and an https public URL with no path (plain http on loopback only), and
+// BIGLAW_ADMINS only with sign-in, as emails or subjects; no message shows the client secret.
+func TestConfigSignInVars(t *testing.T) {
+	on := []string{"BIGLAW_DATABASE_URL", dsn, "BIGLAW_OIDC_ISSUER", "https://idp.example/realms/firm", "BIGLAW_OIDC_CLIENT_ID", "biglaw",
+		"BIGLAW_OIDC_CLIENT_SECRET", "s3cret-VALUE", "BIGLAW_PUBLIC_URL", "https://biglaw.firm.example/", "BIGLAW_ADMINS", " ada@firm.example , u-root ,"}
+	c, err := Load(env(on...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.OIDC.Issuer != "https://idp.example/realms/firm" || c.OIDC.ClientSecret != "s3cret-VALUE" || strings.Join(c.OIDC.Admins, "|") != "ada@firm.example|u-root" {
+		t.Fatalf("sign-in config: %+v", c.OIDC)
+	}
+	if c, err := Load(env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_OIDC_ISSUER", "http://127.0.0.1:8080/realms/dev", "BIGLAW_OIDC_CLIENT_ID", "dev")); err != nil || c.OIDC.PublicURL != "http://127.0.0.1:3101" {
+		t.Fatalf("loopback development: %v %+v", err, c.OIDC)
+	}
+	with := func(kv ...string) func(string) string {
+		m := map[string]string{}
+		for i := 0; i < len(on); i += 2 {
+			m[on[i]] = on[i+1]
+		}
+		for i := 0; i < len(kv); i += 2 {
+			m[kv[i]] = kv[i+1]
+		}
+		return func(k string) string { return m[k] }
+	}
+	for _, c := range []struct {
+		name string
+		env  func(string) string
+		want string
+	}{
+		{"no client id", with("BIGLAW_OIDC_CLIENT_ID", ""), "both needed"},
+		{"a secret alone", env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_OIDC_CLIENT_SECRET", "s3cret-VALUE"), "both needed"},
+		{"plain http issuer", with("BIGLAW_OIDC_ISSUER", "http://idp.example"), "BIGLAW_OIDC_ISSUER"},
+		{"issuer query", with("BIGLAW_OIDC_ISSUER", "https://idp.example/?x=1"), "BIGLAW_OIDC_ISSUER"},
+		{"a bare name", with("BIGLAW_OIDC_ISSUER", "idp"), "BIGLAW_OIDC_ISSUER"},
+		{"plain http public URL", with("BIGLAW_PUBLIC_URL", "http://biglaw.firm.example"), "BIGLAW_PUBLIC_URL"},
+		{"public URL path", with("BIGLAW_PUBLIC_URL", "https://firm.example/biglaw"), "BIGLAW_PUBLIC_URL"},
+		{"default public URL off loopback", with("BIGLAW_PUBLIC_URL", "http://0.0.0.0:3101"), "BIGLAW_PUBLIC_URL"},
+		{"admins without sign-in", env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_ADMINS", "ada@firm.example"), "needs sign-in"},
+		{"admin with a space", with("BIGLAW_ADMINS", "ada lovelace"), "entry 1"},
+		{"admin email not ASCII", with("BIGLAW_ADMINS", "u-root,\u212Aate@firm.example"), "entry 2"},
+		{"secret with a space", with("BIGLAW_OIDC_CLIENT_SECRET", "s3cret VALUE"), "white space"},
+	} {
+		_, err := Load(c.env)
+		if err == nil || !strings.Contains(err.Error(), c.want) || strings.Contains(err.Error(), "VALUE") {
+			t.Errorf("%s: %v", c.name, err)
+		}
+	}
+	if got := Describe(with(), nil); strings.Contains(got, "s3cret") || !strings.Contains(got, "BIGLAW_ADMINS              ada@firm.example , u-root ,  [env]") {
+		t.Errorf("Describe: %s", got)
 	}
 }

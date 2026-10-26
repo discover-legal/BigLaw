@@ -322,7 +322,7 @@ func TestAwaitingGatePausesAndResumes(t *testing.T) {
 	if stop(v) != "awaiting_gate/awaiting_gate" || len(v.PendingGates) != 1 || v.PendingGates[0].GateID != "G-F1" {
 		t.Fatalf("paused: %s %+v %v %s", stop(v), v.PendingGates, deref(v.Error), f.steps(task.ID))
 	}
-	if v, err := f.e.Decide(ctx, task.ID, "G-F1", true, ""); err != nil || v.Status != "running" {
+	if v, err := f.e.Decide(ctx, task.ID, "G-F1", true, "", lawyer); err != nil || v.Status != "running" {
 		t.Fatalf("decide: %v %s", err, v.Status)
 	}
 	f.step(ctx)
@@ -330,10 +330,10 @@ func TestAwaitingGatePausesAndResumes(t *testing.T) {
 	if stop(v) != "awaiting_gate/finished" || len(v.PendingGates) != 1 || v.PendingGates[0].Kind != "deliverable" || !strings.Contains(f.steps(task.ID), "note:gate") {
 		t.Fatalf("resumed: %s %+v %s", stop(v), v.PendingGates, f.steps(task.ID))
 	}
-	if _, err := f.e.Decide(ctx, task.ID, v.PendingGates[0].GateID, false, ""); err == nil {
+	if _, err := f.e.Decide(ctx, task.ID, v.PendingGates[0].GateID, false, "", lawyer); err == nil {
 		t.Fatal("a rejection without a reason was accepted")
 	}
-	if _, err := f.e.Decide(ctx, task.ID, v.PendingGates[0].GateID, false, "Add the answer deadline."); err != nil {
+	if _, err := f.e.Decide(ctx, task.ID, v.PendingGates[0].GateID, false, "Add the answer deadline.", lawyer); err != nil {
 		t.Fatal(err)
 	}
 	f.step(ctx)
@@ -344,10 +344,10 @@ func TestAwaitingGatePausesAndResumes(t *testing.T) {
 	if stop(v) != "awaiting_gate/budget_exhausted" || v.PendingGates[0].GateID != "G-deliverable-2" || len(v.DecidedGates) != 2 || !strings.Contains(ss[len(ss)-3].Summary, "Add the answer deadline.") {
 		t.Fatalf("after rejection: %s %+v %+v", stop(v), v.PendingGates, v.DecidedGates)
 	}
-	if v, err := f.e.Decide(ctx, task.ID, "G-deliverable-2", true, ""); err != nil || v.Status != "complete" {
+	if v, err := f.e.Decide(ctx, task.ID, "G-deliverable-2", true, "", lawyer); err != nil || v.Status != "complete" {
 		t.Fatalf("approve: %v %s", err, v.Status)
 	}
-	if _, err := f.e.Decide(ctx, task.ID, "G-deliverable-2", true, ""); err == nil {
+	if _, err := f.e.Decide(ctx, task.ID, "G-deliverable-2", true, "", lawyer); err == nil {
 		t.Fatal("a decided gate was decided again")
 	}
 }
@@ -454,7 +454,7 @@ func TestRejectedFindingStaysOutOfForcedDeliverable(t *testing.T) {
 	if v := f.get(task.ID); stop(v) != "awaiting_gate/awaiting_gate" || len(v.PendingGates) != 1 || v.PendingGates[0].GateID != "G-F1" {
 		t.Fatalf("paused: %s %+v %v %s", stop(v), v.PendingGates, deref(v.Error), f.steps(task.ID))
 	}
-	if _, err := f.e.Decide(ctx, task.ID, "G-F1", false, "The invoices are disputed."); err != nil {
+	if _, err := f.e.Decide(ctx, task.ID, "G-F1", false, "The invoices are disputed.", lawyer); err != nil {
 		t.Fatal(err)
 	}
 	f.step(ctx)
@@ -508,7 +508,7 @@ func TestRejectedFindingCiteAfterStop(t *testing.T) {
 	task := f.submit(0)
 	ctx := context.Background()
 	f.step(ctx)
-	if _, err := f.e.Decide(ctx, task.ID, "G-F1", false, "The invoices are disputed."); err != nil {
+	if _, err := f.e.Decide(ctx, task.ID, "G-F1", false, "The invoices are disputed.", lawyer); err != nil {
 		t.Fatal(err)
 	}
 	f.step(ctx)
@@ -518,3 +518,6 @@ func TestRejectedFindingCiteAfterStop(t *testing.T) {
 		t.Fatalf("the rejected finding's claim is in the memo body, uncited:\n%s", out)
 	}
 }
+
+// lawyer is who decides the tests' gates.
+var lawyer = Person{ID: "u-lawyer", Name: "Test Lawyer", Email: "lawyer@firm.example"}

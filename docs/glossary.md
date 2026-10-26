@@ -180,7 +180,8 @@ described in [architecture.md](architecture.md), and the design reasons in [patt
   ([`remote.go`](../internal/engine/remote.go)).
 - **Secret / origin**: a value set by an admin and bound to one `https://host:port`, the only
   origin it is ever sent to. It is redacted from answers and errors.
-- **Principal**: who makes a request (`api.Principal`). Until sign-in, every request is the local
+- **Principal**: who makes a request (`api.Principal`). With sign-in it is the session's user (an
+  admin when `BIGLAW_ADMINS` names them, else a member); without it every request is the local
   user, an admin or not depending on the serve flags.
 
 ## Codes

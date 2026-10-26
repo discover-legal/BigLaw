@@ -69,7 +69,7 @@ var ErrForbidden = errors.New("engine: forbidden")
 
 // errRemoteOff is the refusal of every secret and custom outbound call when the server runs with
 // no signed-in admin (RemotePolicy.Off).
-var errRemoteOff = fmt.Errorf("%w: secrets and custom tools' outbound calls need a real admin, and this server runs without one (--allow-no-auth or --admin-without-auth): until PR 8's sign-in they work only when BigLaw serves on loopback with neither flag (README § Exposure)", ErrForbidden)
+var errRemoteOff = fmt.Errorf("%w: secrets and custom tools' outbound calls need a real admin, and this server runs without one (--allow-no-auth or --admin-without-auth): they work for a signed-in admin (BIGLAW_OIDC_ISSUER, BIGLAW_ADMINS), or when BigLaw serves on loopback with neither flag (README § Sign-in)", ErrForbidden)
 
 // errRemoteDeadline is the cause of a call's own 30 s deadline (withRemoteDeadline).
 var errRemoteDeadline = errors.New("remote: no answer within 30 s (the whole call)")

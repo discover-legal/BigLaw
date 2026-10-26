@@ -126,10 +126,14 @@ export interface Gate {
 }
 
 /** A closed gate: who decided is PR 8's (auth); a rejection always carries its (non-empty) reason. */
+/** Who did something: the issuer's subject, a display name and (shown on hover) the email. */
+export interface Person { id: string; name: string; email?: string }
+
 export interface GateDecision extends Gate {
   decision: 'approved' | 'rejected';
   reason?: string;
   decidedAt: string;
+  decidedBy?: Person;
 }
 
 export interface Task {
@@ -141,6 +145,8 @@ export interface Task {
   documentIds: string[];
   status: TaskStatus;
   createdAt: string;
+  /** Who submitted it (live: the signed-in user, or the local user). */
+  submittedBy?: Person;
   run: Run;
   pendingGates: Gate[];
   decidedGates: GateDecision[];
@@ -208,8 +214,8 @@ export interface SpecVersion {
 }
 export interface SaveResult { version: SpecVersion; notes: string[] }
 export interface Problem { file: string; message: string }
-/** GET /me: who is asking; until sign-in (PR 8) the local user, an admin. */
-export interface Me { id: string; name: string; admin: boolean; authEnabled: boolean; adminWithoutAuth?: boolean }
+/** GET /me: who is asking: the signed-in user (authEnabled), or without sign-in the local user. */
+export interface Me { id: string; name: string; email?: string; admin: boolean; authEnabled: boolean; adminWithoutAuth?: boolean }
 /** A secret as the API shows it: never its value. */
 export interface SecretView { name: string; origin: string; updatedBy: string; updatedAt: string; usedBy: string[] }
 /** One tool a server lists: its description is the server's (third-party) text; item and previous: already imported, and the text an admin accepted. */

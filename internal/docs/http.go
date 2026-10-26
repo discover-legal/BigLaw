@@ -34,9 +34,9 @@ var (
 // Routes mounts the document routes on mux: POST /documents (JSON {name, text, matterNumber}),
 // POST /documents/upload (multipart, one part named "file"), GET /documents (?matter=), GET
 // /documents/{id}, /outline, /sections/{sectionId} (?offset=&limit=), /file (the original, with a
-// safe download name), GET /documents/search (?q=&ids=a,b) and DELETE /documents/{id}. There is no
-// authentication before PR 8; the caller is the single local partner, so the scope is the
-// requested documents.
+// safe download name), GET /documents/search (?q=&ids=a,b) and DELETE /documents/{id}. Sign-in, when
+// configured, sits in front (api.RequireSignIn); every user sees every matter (per-matter access is
+// planned), so the scope is the requested documents.
 func (s *Service) Routes(mux *http.ServeMux, log *slog.Logger) {
 	reply := func(w http.ResponseWriter, code int, v any, err error) {
 		if err != nil {

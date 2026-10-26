@@ -91,18 +91,22 @@ type Task struct {
 	GroundingAlert string    `json:"-"`
 	Error          string    `json:"-"`
 	CreatedAt      time.Time `json:"createdAt"`
+	SubmittedBy    *Person   `json:"submittedBy,omitempty"` // who submitted it (the API sets it; nil before migration 0012)
 }
 
 const taskCols = `id, description, workflow_type, jurisdiction, matter_number, document_ids, max_steps, tool_bandit, lead_model, status, stop_reason, output,
-	coalesce(grounding_alert, ''), coalesce(error, ''), created_at, specs`
+	coalesce(grounding_alert, ''), coalesce(error, ''), created_at, specs, submitted_by`
 
 func scanTask(s interface{ Scan(...any) error }) (Task, error) {
 	var t Task
-	var specs []byte
+	var specs, by []byte
 	err := s.Scan(&t.ID, &t.Description, &t.WorkflowType, &t.Jurisdiction, &t.MatterNumber, pq.Array(&t.DocumentIDs), &t.MaxSteps, &t.ToolBandit, &t.LeadModel,
-		&t.Status, &t.StopReason, &t.Output, &t.GroundingAlert, &t.Error, &t.CreatedAt, &specs)
+		&t.Status, &t.StopReason, &t.Output, &t.GroundingAlert, &t.Error, &t.CreatedAt, &specs, &by)
 	if err == nil {
 		err = json.Unmarshal(specs, &t.Specs)
+	}
+	if err == nil && by != nil {
+		err = json.Unmarshal(by, &t.SubmittedBy)
 	}
 	return t, err
 }
@@ -132,8 +136,12 @@ func (e *Engine) Submit(ctx context.Context, t Task) (Task, error) {
 		}
 	}
 	t.MaxSteps = cmp.Or(t.MaxSteps, max(400, 2*e.cfg.BudgetCalls)) // steps count Go tools too, which spend no call
-	row := e.db.QueryRowContext(ctx, `INSERT INTO tasks (description, workflow_type, jurisdiction, matter_number, document_ids, max_steps, tool_bandit, lead_model, specs)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, `+snapshotSQL+`) RETURNING `+taskCols, t.Description, t.WorkflowType, t.Jurisdiction, t.MatterNumber, pq.Array(t.DocumentIDs), t.MaxSteps, t.ToolBandit, lead)
+	var by any                                                     // NULL unless the caller says who
+	if t.SubmittedBy != nil {
+		by = mustJSON(t.SubmittedBy)
+	}
+	row := e.db.QueryRowContext(ctx, `INSERT INTO tasks (description, workflow_type, jurisdiction, matter_number, document_ids, max_steps, tool_bandit, lead_model, submitted_by, specs)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, `+snapshotSQL+`) RETURNING `+taskCols, t.Description, t.WorkflowType, t.Jurisdiction, t.MatterNumber, pq.Array(t.DocumentIDs), t.MaxSteps, t.ToolBandit, lead, by)
 	if t, err = scanTask(row); err != nil {
 		return Task{}, fmt.Errorf("engine: submit: %w", err)
 	}

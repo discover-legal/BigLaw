@@ -255,7 +255,7 @@ func drive(t *testing.T, mt matter, scripts func(matter, map[string]string) map[
 		}
 		g := v.PendingGates[0]
 		gates = append(gates, g.Kind+":"+cmp.Or(g.FindingID, g.GateID))
-		v, _ = e.Decide(ctx, task.ID, g.GateID, true, "")
+		v, _ = e.Decide(ctx, task.ID, g.GateID, true, "", engine.Person{ID: "lawyer", Name: "Lawyer"})
 		for range 400 {
 			if v.Status != "queued" && v.Status != "running" {
 				break

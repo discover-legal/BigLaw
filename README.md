@@ -10,7 +10,7 @@ tables in which every factual statement cites a quote that the software has veri
 matter's own documents, with a lawyer approving every deliverable. It is one Go binary plus one
 PostgreSQL database. Licensed Apache-2.0 (`LICENSE`, `NOTICE`).
 
-## What exists today (PR 1: skeleton, config, store, CI; PR 2: model client; PR 3a: documents; PR 3b: model roles, embeddings, hybrid search; PR 3c: vision transcription; PR 11, pulled forward by owner decision 13: the UI and its recorded engine; PR 4a: the agent runtime and the deterministic memo tools; PR 4b: the memo workflow, durable runs and the REST API; Manage and skills)
+## What exists today (PR 1: skeleton, config, store, CI; PR 2: model client; PR 3a: documents; PR 3b: model roles, embeddings, hybrid search; PR 3c: vision transcription; PR 11, pulled forward by owner decision 13: the UI and its recorded engine; PR 4a: the agent runtime and the deterministic memo tools; PR 4b: the memo workflow, durable runs and the REST API; Manage and skills; PR 8: sign-in)
 
 | Piece | Path | What it does |
 |---|---|---|
@@ -30,19 +30,21 @@ PostgreSQL database. Licensed Apache-2.0 (`LICENSE`, `NOTICE`).
 | Evaluation | `eval/` (`run.py`, `proofrun/`, `lab/`, `tests/`, `tasks/`, `e4/embeddings.json`) | The five synthetic proof-run matters (documents + answer keys), copied from `feat/proof-runs-multi-practice`, with their driver, scorer and the v1 comparison (`run.py`), the Harvey LAB driver (`lab/run.py`), and the Go gates E1/E2 that run them through the engine on a scripted model (§ Memo workflow). `eval/e4/embeddings.json` is E4's embeddings tape: today the **self-test** tape of a hash embedder, not a real model's (§ Documents, gate E4) |
 | UI | `ui/` (React 19 + Vite + TypeScript strict; runtime deps `react`, `react-dom` only) | The seven screens (§ UI) behind one transport seam, `ui/src/api/transport.ts`: `http.ts` talks to the Go API on the same origin (tasks, steps, findings, gates, cost and documents are served since PR 4b; playbooks, time and profiles are PRs 6/8/9), `recorded.ts` replays a recorded engine in the browser with no network at all |
 | Recorded demo | `ui/src/recorded/recording.json`, `eval/demo/record_test.go` | Three synthetic matters (13 documents plus one scanned exhibit, `ui/src/recorded/06-affidavit-of-service-scan.jpg`, drawn by `eval/demo/make_scan.py`) and seven recorded memo tasks (48 findings, 79 citations); documents, outlines, sections, chunks, the scan's transcript (v2's vision path with a scripted reader), run-log and offered search hits and every quote's verification computed by v2's `internal/docs`; claims from the answer keys; sample playbooks, time entries and profiles, and the configuration table read from `cmd/biglaw/config.go` (§ UI, provenance). `TestDemoRecording` fails when the committed recording no longer matches what v2's code computes |
+| Sign-in | `internal/auth/` (`oidc.go`, `session.go`; migration `0011_sessions.sql`), `internal/api/signin.go`; `0012_task_submitter.sql` | OpenID Connect code flow with PKCE against one issuer, ID tokens verified with the standard library (discovery, JWKS, RS/ES signatures, claims), server-side sessions behind an opaque cookie, admins by `BIGLAW_ADMINS`, and the API behind a session (§ Sign-in) |
+| Test helper | `internal/auth/authtest/` | A local OpenID provider (httptest: discovery, JWKS, PKCE-checking token endpoint, RSA and EC keys, key rotation) and the helpers to craft refused tokens and walk a browser through sign-in |
 | Test helper | `internal/store/storetest/` | Gives each DB test its own schema; skips without a DSN, fails if `BIGLAW_REQUIRE_DB` is set |
 | Test helper | `internal/engine/figtest/` | The figure reader's stand-in for tests (`figtest.Reader`, a `model.Fake` `Respond` hook): labels plain fixture texts so tests not about figure reading run unscripted (engine, API and eval tests) |
 | Budgets | `scripts/loc.py` (+ `scripts/test_loc.py`) | Fails CI if a size budget is exceeded (below) |
-| Build/deploy | `Makefile`, `Dockerfile`, `docker-compose.yml`, `render.yaml`, `.env.example` | `make ci` (and the owner-run `make e4-record` / `make e4-live`); `pgvector/pgvector:0.8.6-pg16` + biglaw under Compose; Render blueprint (inert until PR 8, see § Exposure) |
+| Build/deploy | `Makefile`, `Dockerfile`, `docker-compose.yml`, `render.yaml`, `.env.example` | `make ci` (and the owner-run `make e4-record` / `make e4-live`); `pgvector/pgvector:0.8.6-pg16` + biglaw under Compose; Render blueprint (inert until sign-in is configured, see § Exposure) |
 | CI | `.github/workflows/ci.yml` | `make ci` against `pgvector/pgvector:0.8.6-pg14` and `:0.8.6-pg16` service containers (pinned by digest) with `BIGLAW_REQUIRE_DB=1`; staticcheck + govulncheck; image build + Compose smoke test |
 
 HTTP surface today: the REST API of § Memo workflow, the embedded UI at `/`, and `GET /health`, which returns `{"status":"ok","version":"…","search":"hybrid"}` (200;
 `"search":"lexical"` when `BIGLAW_MODELS` has no `embed` role) or
 `{"status":"database unavailable",…}` (503; the cause is logged, not returned). Every other path
-is 404/405. There is no authentication yet (§ Exposure).
+is 404/405. With sign-in configured (§ Sign-in) every route but `/health`, the UI's files and `/auth/*` needs a session; without it there is no authentication (§ Exposure).
 
 **Planned** (not built): the `.docx` writer and tracked-change parse/apply (PR 3d); diligence (PR 5), contract review (PR 6),
-MCP (PR 7), clients/conflicts and OIDC/session/token auth (PR 8), time and billing (PR 9), the
+MCP (PR 7), clients/conflicts and API tokens (the rest of PR 8; OIDC sign-in and sessions are built, § Sign-in), time and billing (PR 9), the
 the full jurisdiction and practice pack catalogue (PR 12; four candidate packs ship with PR 4b), v1 import and docs (PR 13). The
 discover.legal intake module is **not** part of v2 (owner decision; it moves to a separate repo).
 
@@ -66,8 +68,8 @@ This README is the contract. The design is described in `docs/`:
 
 ## Configuration
 
-Environment variables only. All 18 are declared in `cmd/biglaw/config.go` (20 until PR 3b, whose
-`BIGLAW_MODELS` replaced the three role variables); each is validated by
+Environment variables only. All 19 are declared in `cmd/biglaw/config.go` (20 until PR 3b, whose
+`BIGLAW_MODELS` replaced the three role variables; PR 8 added `BIGLAW_ADMINS`); each is validated by
 the PR that first reads it ("Read from"). `biglaw version --config` prints every value and exits
 nonzero if what this build reads is invalid. `biglaw serve` warns about a variable that is set
 but not read yet, and about any unknown `BIGLAW_*` name (likely a typo).
@@ -85,8 +87,7 @@ whatever does not parse into a shape known to be safe is not shown.
   a typo such as `https:/`, user info, an IPv6 zone id) prints as "(set, not shown …)". The `@`
   rule matters because an unescaped `/`, `?` or `#` in user info makes Go read part of the
   credential as the host and the rest as the path. The host is shown, so never put a key there.
-  A Compose service name with `_` is a plain host. An OIDC preset (`google`,
-  `microsoft:<tenant>`) is shown as is.
+  A Compose service name with `_` is a plain host.
 - `BIGLAW_MODELS`: shown as set only if every entry parses as `role=<model id>` with a safe id
   (below); otherwise "(set, not shown …)". A value that does not parse is never shown; a
   well-formed id is shown and logged as written, so ids shaped like a key are refused (below).
@@ -99,7 +100,7 @@ whatever does not parse into a shape known to be safe is not shown.
 |---|---|---|---|
 | `BIGLAW_DATABASE_URL` | — (required) | Postgres DSN: `postgres://user:password@host:5432/db?sslmode=disable`, or libpq `key=value` form. The scheme must be lowercase, and reserved characters in the password percent-encoded (`/`→`%2F`, `?`→`%3F`, `#`→`%23`, `%`→`%25`, `@`→`%40`). An `@` after the host (in the database name or a query value such as `application_name=ops@corp`) is refused too, because it cannot be told apart from a broken password; write `%40`. Anything else is refused with a message that never shows the password. lib/pq defaults to `sslmode=require`. | PR 1 |
 | `BIGLAW_ADDR` | `127.0.0.1:3101` | Listen address. Non-loopback needs `serve --allow-no-auth` (§ Exposure). | PR 1 |
-| `BIGLAW_PUBLIC_URL` | `http://127.0.0.1:3101` | External base URL (OIDC redirect, cookie `Secure`) | PR 8 |
+| `BIGLAW_PUBLIC_URL` | `http://127.0.0.1:3101` | How browsers reach BigLaw, `https://host[:port]` with no path: the redirect URI is `<it>/auth/callback`, https makes the cookies `Secure` and `__Host-`, and its host is the one DNS name served under sign-in. Read only with sign-in, which refuses plain http except on loopback | PR 8 |
 | `BIGLAW_MODEL_URL` | — | OpenAI-compatible API base, ending in its version (`http://localhost:11434/v1`); calls go to `<URL>/chat/completions` and `<URL>/embeddings`. http(s), a plain ASCII host with at least one letter or digit, a port up to 65535, no `@` anywhere (no credentials in the URL; write any other `@` as `%40`). Required when the key or a role is set. | PR 1 |
 | `BIGLAW_MODEL_KEY` | — | API key for that URL, sent as `Authorization: Bearer`; no white space or control characters. `serve` warns if it would go over plain `http`. | PR 2 |
 | `BIGLAW_MODELS` | — | Model id per role, as the endpoint names it: comma-separated `role=id`, roles `lead`, `specialist`, `critic`, `vision`, `embed`, each at most once (e.g. `lead=qwen2.5:14b,critic=glm-4.5-air,embed=nomic-embed-text`). Unset `specialist` or `critic` use the lead's; setting either without the lead is refused. `vision` and `embed` have **no** fallback: with no `embed` role search is lexical only (`/health` says `"search":"lexical"`); `vision` names the model images and scanned pages are sent to; without it they are stored as `needs_transcription` (503 `vision_not_configured`) and never sent to another role's model (§ Vision transcription). An unknown role, a repeated one, an empty id, an id over 200 bytes, or an id holding `://`, `user:password@`, white space, a control or invisible (format) character, `?` `=` `&`, or a key's shape (`sk-`, `sk_`, `AKIA`, `ASIA`, `AIza`, `xox?-`, `gh?_` prefixes, or 24 letters and digits in a row) is a startup error that does not echo the value. A wrong id fails at its first call with 404 → `model_not_configured`; with no lead, chat calls fail with 503 `model_not_configured`. | PR 3 |
@@ -108,8 +109,9 @@ whatever does not parse into a shape known to be safe is not shown.
 | `BIGLAW_LOCAL_WATTS` | — | Power draw of the machine running the model; when set (above 0) every call records watts × duration as watt-hours, for reporting only (never a price). A number from 0 to 100000 | PR 2 |
 | `BIGLAW_PRICES` | built-in | Model rates overriding the built-in table: the JSON itself (a value starting with `{`) or a path to a regular file of at most 1 MiB holding it (§ Model client) | PR 2 |
 | `BIGLAW_COLLAPSE_THRESHOLD` / `_ACTION` | `0.5` / `strict` | Grounding-collapse policy | PR 4 |
-| `BIGLAW_OIDC_ISSUER` | — | `google`, `microsoft:<tenant-id>` or an https issuer URL | PR 8 |
-| `BIGLAW_OIDC_CLIENT_ID` / `_CLIENT_SECRET` | — | The OIDC client | PR 8 |
+| `BIGLAW_OIDC_ISSUER` | — | Turns sign-in on: the issuer's https URL exactly as its discovery document states it (`https://idp.example.com/realms/biglaw`), no query; plain http only on loopback (§ Sign-in) | PR 8 |
+| `BIGLAW_OIDC_CLIENT_ID` / `_CLIENT_SECRET` | — | The OIDC client, set with the issuer (the secret is optional: a public client uses PKCE alone); no white space | PR 8 |
+| `BIGLAW_ADMINS` | — | Sign-in's admins: comma-separated entries, each a verified email (has an `@`, case-insensitive, matched only when the ID token's `email_verified` is true) or an issuer subject (`sub`, exact). Everyone else who signs in is a member. Refused without sign-in | PR 8 |
 | `BIGLAW_AI_RATE` | — | AI timekeeper hourly rate; unset = non-billable | PR 9 |
 | `ALLOW_ANTHROPIC` | off | Opt in to a direct `anthropic.com` model endpoint (vendor breaker) | PR 1 |
 | `ALLOW_AWS` | off | Opt in to a direct AWS/Bedrock model endpoint (vendor breaker) | PR 1 |
@@ -117,13 +119,13 @@ whatever does not parse into a shape known to be safe is not shown.
 Tests use two more: `BIGLAW_TEST_DSN` and `BIGLAW_REQUIRE_DB` (turns a skipped DB test into a
 failure). `TestEnvVarTablesAgree` fails if this table or `docker-compose.yml` lacks a variable
 `config.go` declares, if `.env.example` or `render.yaml` sets other than its fixed list (the
-model URL/key/models and the OIDC variables; Render adds the database URL and address), or if any
+model URL/key/models, the OIDC variables and `BIGLAW_ADMINS`; Render adds the database URL and address), or if any
 of these files names a variable `config.go` does not declare.
 
 **libpq variables.** lib/pq also reads the standard libpq `PG*` variables (`PGHOST`, `PGPORT`,
 `PGUSER`, `PGPASSWORD`, `PGSSLMODE`, `PGPASSFILE`, …) as defaults for anything the DSN leaves
 out, and refuses to start if one it does not support (such as `PGGSSENCMODE`) is set. They are
-outside the 18-variable surface; `version --config` lists the names it sees, never their values.
+outside the 19-variable surface; `version --config` lists the names it sees, never their values.
 Compose uses `PGPASSWORD` on purpose (§ Run it).
 
 **Vendor breakers.** Ported from v1 `biglaw-go/internal/config/guard.go`: a `BIGLAW_MODEL_URL`
@@ -247,15 +249,19 @@ caller is tested against `model.Fake` or an `httptest` server.
   the script a request is answered from (by what it holds), so calls that arrive in any order (a
   parallel sweep's visits) get their own replies (`TestFakeRouteAnswersByContent`).
 
-## Exposure (there is no authentication yet)
+## Exposure
 
-Auth lands in PR 8. Until then `biglaw serve` refuses to listen on a non-loopback `BIGLAW_ADDR`
-(anything but `127.0.0.0/8`, `::1` or `localhost`) unless it is started as
-`biglaw serve --allow-no-auth`. That flag means: something outside BigLaw limits who can reach
-the port. The deploy files follow the rule, and `TestDeployFilesFollowExposureRule` keeps them
-that way:
+Without sign-in there is no authentication, so `biglaw serve` refuses to listen on a non-loopback
+`BIGLAW_ADDR` (anything but `127.0.0.0/8`, `::1` or `localhost`) unless sign-in is configured
+(§ Sign-in) or it is started as `biglaw serve --allow-no-auth`. That flag means: something outside
+BigLaw limits who can reach the port. **With sign-in configured, `--allow-no-auth` has no effect**
+(serve logs that it is ignored, so Compose's command works unchanged) and **`--admin-without-auth`
+is refused** at startup (admins are `BIGLAW_ADMINS`; a flag that made everyone an admin cannot
+coexist with sign-in). Without sign-in both behave exactly as before. The deploy files follow the
+rule, and `TestDeployFilesFollowExposureRule` keeps them that way:
 - **Compose** listens on `0.0.0.0` inside the container, publishes the port on the host's
   `127.0.0.1` only, and passes `--allow-no-auth`. Do not publish it on `0.0.0.0` or a LAN address.
+  With sign-in, put a TLS reverse proxy on the host in front of `127.0.0.1:3101` (§ Sign-in).
   The test reads every published port and `network_mode` of every service, in every profile,
   from what `docker compose --profile '*' config --no-interpolate` resolves at the repo root (as
   `docker compose up` would, override files included). Each port must name a loopback IP; an
@@ -266,31 +272,154 @@ that way:
   `TestComposeExposureCheckCatchesBypasses` runs it on the spellings the review committee used to
   get past earlier checks.
 - **The image's default command** is plain `serve`, so `docker run -p …` or any platform that
-  exposes the container refuses to start.
-- **Render** is public by nature, so `render.yaml` is inert until PR 8: the service fails its
-  start on purpose.
-- **Manage under `--allow-no-auth` is read-only.** Reaching the port is not proof of being an admin,
+  exposes the container refuses to start unless sign-in is configured.
+- **Render** is public by nature, so `render.yaml` is inert until its OIDC variables are set in
+  the dashboard: until then the service fails its start on purpose. Set `BIGLAW_PUBLIC_URL` to the
+  service's https URL with them: with it left at its loopback default the service starts, but no
+  sign-in can complete (it fails closed).
+- **Manage under `--allow-no-auth` is read-only** (without sign-in). Reaching the port is not proof of being an admin,
   and an edit in Manage changes every later task of every matter, so with `--allow-no-auth` nobody may
   edit there (403 `forbidden`; the screen says why). An operator who accepts that anyone who can reach
   the server may change its agents, tools, packs and skills passes `serve --allow-no-auth
   --admin-without-auth` (serve logs a warning; the screen shows a banner). Compose keeps
-  `["serve", "--allow-no-auth"]`: to edit in Manage under Compose, add `"--admin-without-auth"` to
-  the service's `command` in a local copy, knowing what it allows. A loopback server started without
+  `["serve", "--allow-no-auth"]`: to edit in Manage under Compose, configure sign-in, or add
+  `"--admin-without-auth"` to the service's `command` in a local copy, knowing what it allows. A loopback server started without
   either flag (local development) is an admin.
-- **Gates have no identity yet.** Anyone who can reach the API can approve or reject a gate: the
-  deliverable's, a finding's, or a configurable hook's approval. Until PR 8 records who decided (and
-  can require a role per rule), an approve rule ("a partner approves") is a pause for a person, not a
-  check of who that person is.
+- **Gates without sign-in have no identity.** Anyone who can reach the API can approve or reject a
+  gate: the deliverable's, a finding's, or a configurable hook's approval, and the decision records
+  the local user. With sign-in every decision records the signed-in user (`decidedBy`: sub, name,
+  email). An approve rule cannot yet require a role ("a partner approves" is a pause for any
+  signed-in person, member or admin).
 
-Two browser guards hold until then, because a page the lawyer visits can reach a loopback port.
-Every `POST` (documents, tasks, cancel, gate decisions) from another site is refused 403
+Two browser guards hold in every mode, because a page the lawyer visits can reach a loopback port.
+Every `POST` (documents, tasks, cancel, gate decisions, Manage, logout) from another site is refused 403
 `cross_origin` (`Origin` other than the request's own host, or `Sec-Fetch-Site` other than
 `same-origin`/`none`; `text/plain` and `multipart/form-data` need no CORS preflight), so no site
-can spend the budget or decide a human gate (`TestWritesRefuseCrossOrigin`). Every request but
-`GET /health` addressed to a DNS name other than `localhost` is refused 403 `bad_host` (DNS
-rebinding would otherwise make another site BigLaw's own origin): address BigLaw by IP or
-`localhost` (`TestRefusesRebindingHosts`). The UI cannot be framed (`X-Frame-Options: DENY`,
-`frame-ancestors 'none'`: `TestUIRefusesFraming`).
+can spend the budget or decide a human gate (`TestWritesRefuseCrossOrigin`); under sign-in the same
+check runs on every unsafe method (`DELETE` too) before the session is read, so the session cookie
+never carries a cross-site write (`TestSignInGuardsTheAPI`). Every request but
+`GET /health` addressed to a DNS name other than `localhost` (and, under sign-in, `BIGLAW_PUBLIC_URL`'s
+host) is refused 403 `bad_host` (DNS rebinding would otherwise make another site BigLaw's own
+origin): address BigLaw by IP, `localhost` or its public name (`TestRefusesRebindingHosts`). The UI
+cannot be framed (`X-Frame-Options: DENY`, `frame-ancestors 'none'`: `TestUIRefusesFraming`).
+
+## Sign-in (`internal/auth`; PR 8)
+
+Setting `BIGLAW_OIDC_ISSUER` and `BIGLAW_OIDC_CLIENT_ID` (and `BIGLAW_OIDC_CLIENT_SECRET` for a
+confidential client) turns on sign-in with OpenID Connect: the authorization code flow with PKCE
+(S256), against any standards-compliant issuer (a self-hosted identity server, a hosted identity
+service, a corporate directory). It is built on the Go standard library alone (no OIDC or JOSE library).
+- **Flow.** `GET /auth/login[?next=/#/…]` reads the issuer's `/.well-known/openid-configuration`
+  (once; its `issuer` must equal `BIGLAW_OIDC_ISSUER` exactly, its endpoints be https, and S256 be
+  among its PKCE methods when it lists any), seals the sign-in in flight (a random `state`, a random
+  `nonce` and PKCE verifier, where to return, and when it began) into the login cookie with AES-GCM
+  (`__Host-biglaw_login` over https, 10 minutes, the age checked inside the sealed payload too), and
+  redirects to the issuer with scope `openid email profile`. **Nothing is stored on the server** until
+  a sign-in completes, so anonymous sign-ins cost no row and no number of them can refuse anyone
+  else's (`TestUnfinishedSignInsNeverLockAnyoneOut`). The sealing key is made at process start:
+  a restart or a deploy ends the sign-ins in flight (their user clicks Sign in again), and several
+  replicas behind one name need sticky routing (a callback must reach the process that sealed its
+  cookie; sessions themselves are in Postgres and work on any replica).
+  `GET /auth/callback` clears the login cookie at once (single use in that browser), opens it (a
+  cookie this process did not seal, or one tampered with, is refused), requires the callback's
+  `state` to be the sealed one (a callback is honoured only in the browser that started it: login
+  CSRF), and then trades the code with the verifier and the client's credentials (`client_secret_basic`, or
+  `_post` when the issuer offers only that) and verifies the ID token: signature by the issuer's
+  JWKS (RS256, RS384, RS512, ES256, ES384; `none`, `HS*` and any other alg refused before a key is
+  looked up, a key used only for its own type and curve and its JWKS `alg`, `oct` keys never
+  loaded, RSA keys of at least 2048 bits), `iss`, `aud` (with `azp`: present, it must be the client;
+  several audiences need it), `exp`, `iat` and `nbf` (when present) within 60 s of skew, the
+  sign-in's `nonce`, a `sub`. **Claims are decoded strictly**, by their exact names: a token that
+  repeats a claim, holds a claim named like one BigLaw reads in other case (`Email`,
+  `EMAIL_VERIFIED`, `SUB`: Go's JSON decoder would otherwise let it override the real one) or one of
+  the wrong JSON type is refused; `email_verified` counts only as the JSON boolean `true`.
+  The JWKS is cached and fetched again for a `kid` it lacks (key rotation), at most once a minute
+  (a failed fetch too). Discovery and JWKS fetches are shared by every caller waiting for them
+  (one request at a time per kind, 10 s, no lock held across it; a failed discovery is answered
+  from memory for 5 s), so a slow or down issuer neither queues sign-ins nor is flooded.
+  `next` is a path on this server only, at most 512 bytes (longer: `/`). Redirects from the
+  issuer's endpoints are not followed and answers are capped at 1 MiB.
+- **Replay without server state.** A replayed callback needs that browser's login cookie as well as
+  the URL, and still fails at the issuer: the code is single use and bound to the PKCE verifier,
+  and the ID token to the sealed nonce (`TestCallbackRefusals` replays one). A refused sign-in is
+  logged at most once a second, so a flood of bad callbacks cannot flood the log.
+- **Sessions** (migration `0011_sessions.sql`). A sign-in creates a server-side session row; the
+  cookie holds only its random 256-bit id (opaque, `HttpOnly`, `SameSite=Lax`, `Path=/`; `Secure`
+  and named `__Host-biglaw_session` when `BIGLAW_PUBLIC_URL` is https, `biglaw_session` on loopback
+  http) and the table only that id's SHA-256. A session ends after 8 hours without a request or 7
+  days after sign-in, whichever is first; `POST /auth/logout` deletes the row, so a copied cookie
+  dies with it. Every sign-in issues a new id and deletes the browser's previous session (no
+  fixation). `GET /me` is the session's user `{id: sub, name, email, admin, authEnabled: true}`.
+  **The issuer is not asked again during a session**: disabling an account there ends its BigLaw
+  sessions only at their idle or absolute end. To end them now, an admin calls
+  `POST /manage/sessions/revoke {"user": "<sub or email>"}` (every session of that sub, or of that
+  email case-insensitively; `{"revoked": n}`); an open event stream (`/tasks/{id}/events`) checks its
+  session every 10 polls (about 5 s) and ends with `event: signedOut` once it is gone (logout,
+  revoke or expiry).
+- **Every API route needs a session**: without one it is 401 `unauthenticated`; only `GET /health`,
+  the UI's own files (so it can show its sign-in page) and the three sign-in routes are open, by
+  exact pattern (`api.public`: a new route, under `/auth/` or not, is behind the session unless it
+  is added there). `serve` puts whatever it mounts behind sign-in when sign-in is configured. A
+  database failure reading a session is 503, never a sign-out (`TestEveryRouteNeedsASession` sends
+  every route and spelling raw).
+- **Roles.** **Admins** are the accounts `BIGLAW_ADMINS` names (a verified email, or a `sub`); they
+  edit Manage, set secrets, import and enable custom tools and webhooks, press Test and revoke
+  sessions. Everyone else the issuer signs in to this client is a **member**: they submit tasks,
+  read everything, and decide gates (lawyer review); every Manage write is 403 `forbidden` for them.
+  An email entry matches only the address the issuer signed, as it signed it: `email_verified` the
+  JSON boolean `true`, the address plain printable ASCII (one with a space, a control or format
+  character such as a soft hyphen or zero-width space, or any non-ASCII character never matches, and
+  `BIGLAW_ADMINS` refuses such an entry), compared byte for byte after ASCII-only lowercasing (no
+  Unicode folding: KELVIN SIGN is not `k`). An unverified claim of an admin's address is a member,
+  and its address is not shown. Admin is decided on each request from the session's identity, so a
+  restart with a shorter list demotes at once. Chosen over a configurable claim because it needs no
+  issuer-side group or role mapping and works the same with every issuer. **Prefer `sub` entries**
+  where the issuer lets users, or an upstream provider it brokers, set an email it then marks
+  verified: a `sub` is the issuer's own identifier for the account, an email only as trustworthy as
+  the issuer's verification of it.
+- **Turned on with it:** Manage is writable by admins, and secrets, custom MCP/HTTP tools and
+  webhooks work for them under Compose and in containers (`RemotePolicy` is on; the admin guard keeps
+  members out). Change-log entries, secrets' "set by", an accepted tool's `acceptedBy`, Test calls
+  and gate decisions record the user (`Name <email>`, or `Name (sub)`), never "Local user", and
+  every task records who submitted it (`submittedBy`, migration `0012_task_submitter.sql`; the Task
+  screen shows the name, with the email on hover to admins). **A member never sees another person's
+  email**: tasks' `submittedBy` and gates' `decidedBy`, the change log's and history's authors and
+  secrets' setters are names only in every response a member reads, and an accepted tool's file
+  (`acceptedBy`, shown in Manage and the export) and a Test call's task record the name alone
+  (`TestMembersNeverSeeAnEmail`); admins see the emails. **A display name is never an email**: the
+  issuer's `name`, else `preferred_username`, unless either holds an `@`, else the email's local
+  part, else "Admin" or "Member" (`＠`, `﹫` and `%40` count as `@`); a stored email-shaped name is
+  shown to members as its local part, and members get no `id` (sub) in `submittedBy` or `decidedBy`,
+  since some issuers use the email as the subject. Display names are the
+  issuer's `name` claim, which a user may be able to edit there: the stored sub and email are what
+  identify them.
+- **Who may sign in is the issuer's decision**: BigLaw admits every account the issuer
+  authenticates for this client id as a member. Use an issuer (a realm, an application) whose
+  sign-in is limited to your firm; a consumer or multi-tenant issuer would let anyone in.
+- **Never logged or returned:** tokens, codes, PKCE verifiers, state, cookies and the client secret
+  (`TestSignInNeverLogsSecrets`, `TestServeWithSignIn`); an issuer's error is shown only as its OAuth
+  error code. Sign-ins are logged with sub, email and whether they are an admin.
+
+**Worked example** (Compose, a generic issuer at `https://idp.example.com/realms/biglaw`, BigLaw at
+`https://biglaw.example.com`):
+1. At the issuer, create a confidential OpenID Connect client `biglaw` with the standard (code)
+   flow, PKCE S256 if it can require it, and the redirect URI
+   `https://biglaw.example.com/auth/callback`; note its secret. Limit who may sign in to it.
+2. In `.env`: `BIGLAW_PUBLIC_URL=https://biglaw.example.com`,
+   `BIGLAW_OIDC_ISSUER=https://idp.example.com/realms/biglaw`, `BIGLAW_OIDC_CLIENT_ID=biglaw`,
+   `BIGLAW_OIDC_CLIENT_SECRET=…`, `BIGLAW_ADMINS=ada@example.com`.
+3. Run a TLS reverse proxy on the host for `biglaw.example.com` that forwards to `127.0.0.1:3101`
+   and keeps the `Host` header (BigLaw compares `Origin` with it, and answers only that name).
+4. `docker compose up -d`; serve logs `sign-in on` once it has read the issuer's discovery document.
+   Open `https://biglaw.example.com`: the UI shows a sign-in page, the header shows the user and
+   Sign out.
+
+Locally, an issuer on loopback (`BIGLAW_OIDC_ISSUER=http://127.0.0.1:8080/realms/dev`) and the
+default `BIGLAW_PUBLIC_URL` work over plain http, with cookies that are not `Secure` and have no
+`__Host-` prefix. Browsers do not separate cookies by port, so **every other service on
+`localhost:*` / `127.0.0.1:*` receives BigLaw's loopback session cookie** and can set its login
+cookie: use loopback sign-in for development only, never with other untrusted local services, and
+https for anything real.
 
 ## Run it
 
@@ -335,7 +464,7 @@ connection to the port is answered as soon as it is accepted.
   with pgvector (the pgvector/pgvector images) or have a superuser run CREATE EXTENSION vector in
   this database". An extension that already exists needs no privilege (`TestOpenNeedsVector`).
   Compose's `pgvector/pgvector` image and CI's carry it; whether Render's managed Postgres offers
-  `vector` is not verified here (`render.yaml` is inert until PR 8). The `vector` type
+  `vector` is not verified here (`render.yaml` is inert until sign-in is set). The `vector` type
   must be on the connection's `search_path` (it is when the extension sits in `public`, the
   default).
 - Migrations run on every start. A process that finds another holding the migration lock logs
@@ -1374,7 +1503,9 @@ GET    /tasks/{id}/cost               per-step usage and USD (null when unpriced
 GET    /tasks/{id}/deliverable.md     the rendered memo
 POST   /tasks/{id}/cancel
 POST   /tasks/{id}/gates/{gateId}/approve      POST /tasks/{id}/gates/{gateId}/reject {"reason": "…"}
-GET    /me                            {id, name, admin, authEnabled}: until PR 8 the local user, an admin
+GET    /me                            {id, name, email, admin, authEnabled}: the signed-in user, or without sign-in the local user
+GET    /auth/login?next=   GET /auth/callback   POST /auth/logout     sign-in (§ Sign-in; only with BIGLAW_OIDC_ISSUER)
+POST   /manage/sessions/revoke {user}   (admin, sign-in only) end every session of a sub or an email → {revoked}
 GET    /manage/items                  the catalogue (§ Manage)   GET /manage/items/{id}: with its files now and built in
 GET    /manage/items/{id}/history     its versions, each with its files    GET /manage/items/{id}/diff?from=&to= (a number or builtin)
 POST   /manage/items/{id}/versions    {base, files, note} → 201 (admin; 422 invalid with problems[], 409 stale base)
@@ -1390,7 +1521,8 @@ GET    /                              the web UI (embedded by `make ui build`), 
 Model failures map to `model_not_configured` (503), `model_rate_limited` (503), `model_timeout`
 (504), `no_content` (422), `model_unavailable` (502), a cancelled request to 499; a grounding
 collapse is 422 `grounding_collapse`; an unknown task 404, a gate that is not open 409; a
-cross-site write 403 `cross_origin`, a request by DNS name 403 `bad_host` (§ Exposure).
+cross-site write 403 `cross_origin`, a request by DNS name 403 `bad_host` (§ Exposure); under sign-in, no
+session 401 `unauthenticated` (§ Sign-in).
 
 **Run it against a model** (owner; no key exists in the build environment):
 
@@ -1498,15 +1630,18 @@ each one in Manage (`#/manage`) or the routes above, with no rebuild:
   candidate and clears `reviewedBy`, unless the save names a reviewer who is not the one before; a new
   item (a skill created, or created again after its deletion) is candidate unless it names its
   reviewer. The response says so (`notes`). A status-only edit (a lawyer recording a review) is kept.
-- **Who.** OIDC is not built yet (`BIGLAW_OIDC_ISSUER` and the client variables are declared for PR 8; nothing reads them), so no
-  request carries a user. `api.Principal` is the seam: until PR 8 every request is the local user
-  (`api.LocalUser`). It is an admin on a server bound to loopback for local work (no
-  `--allow-no-auth`); under `--allow-no-auth` Manage is **read-only** (everyone may view it), unless
-  the operator also passes `serve --admin-without-auth`, which makes anyone who can reach the server
-  an admin: serve logs a warning and the Manage screen shows a banner saying so (owner decision,
-  review M3; § Exposure). Every write wears `docs.Guard` (cross-site 403) and the admin guard (403 `forbidden` for a
-  non-admin: `TestManageAdminGuard` drives it through the seam); reads are open to anyone who may use
-  BigLaw. PR 8 resolves the session there and sets `Admin`; no env var was added for it.
+- **Who.** `api.Principal` is the seam. With sign-in (§ Sign-in) it is the session's user
+  (`api.SessionUser`, put on the request by `api.RequireSignIn`): an admin when `BIGLAW_ADMINS` names
+  them, a member otherwise, and every author field records them (`Principal.Label`: `Name <email>`).
+  Without sign-in every request is the local user (`api.LocalUser`, recorded as "Local user"). It is
+  an admin on a server bound to loopback for local work (no `--allow-no-auth`); under
+  `--allow-no-auth` Manage is **read-only** (everyone may view it), unless the operator also passes
+  `serve --admin-without-auth`, which makes anyone who can reach the server an admin: serve logs a
+  warning and the Manage screen shows a banner saying so (owner decision, review M3; § Exposure).
+  Every write wears `docs.Guard` (cross-site 403) and the admin guard (403 `forbidden` for a
+  non-admin, telling a member they are one: `TestManageAdminGuard` drives it through the seam,
+  `TestSignedInManageRoles` with real sessions over every write route); reads are open to anyone
+  who may use BigLaw (under sign-in: anyone signed in).
 - **Export** (`GET /manage/export`): the overridden items (all, or `?item=`) as one git-style patch
   against the repository's paths (`git apply` or `patch -p1` at the root; new and deleted files as
   `/dev/null`; `TestExportPatchApplies` applies it), or a zip of the files at their repo paths (with
@@ -1578,12 +1713,13 @@ snapshot.
   not stopped: it already holds the key. They are stored in
   Postgres as everything is (back up and protect the database accordingly); a task resolves a secret
   by name at call time, so a secret changed mid-run reaches the run's later calls.
-- **A real admin only:** until PR 8's sign-in, serving with `--allow-no-auth` or `--admin-without-auth`
+- **A real admin only:** without sign-in, serving with `--allow-no-auth` or `--admin-without-auth`
   turns secrets and custom outbound calls off (`RemotePolicy.Off`): setting a secret, Discover, Import
   and a custom tool's Test are 403, custom tools are left out of the lead's list (a Limitations line
-  says so) and a custom tool's call in a run (a subagent's) fails closed. **So custom tools and secrets
-  are unavailable under Compose and every container deployment until sign-in (PR 8) lands: today they
-  work only for a native `biglaw serve` on loopback, with neither flag.**
+  says so) and a custom tool's call in a run (a subagent's) fails closed. **So without sign-in, custom
+  tools and secrets work only for a native `biglaw serve` on loopback, with neither flag. With
+  sign-in they work for signed-in admins under Compose and in containers too** (the policy is on;
+  members are refused by the admin guard: `TestSignedInRemotePolicy`, `TestServeWithSignIn`).
 - **Test** (`TestCall`, admin): one call of a subagent or tool as new tasks would make it, over a
   matter's documents, within 8 model calls and $0.25 (and never more than a task's budget); journaled
   as the one step of a cancelled task named for the test (started at its grant, every model call metered
@@ -1654,8 +1790,9 @@ failure}`:
   an approval covers **exactly that input, once**: the lead makes the call again with the same input and
   it goes through; any other input, or the same one again, opens a new gate. A rejection refuses that
   one attempt. `finding_admitted`: the finding takes its own G7 gate. Each note to the lead lists only
-  the gates decided since the last. **Until sign-in (PR 8), anyone who can reach the API can decide a
-  gate, hook approvals included**: an approve rule has no identity behind it yet.
+  the gates decided since the last. **Without sign-in, anyone who can reach the API can decide a
+  gate, hook approvals included**; with it any signed-in user can (member or admin), and the gate
+  records who (`decidedBy`). An approve rule cannot yet require a role.
 - **`check`:** a named subagent whose input is `{event, subject, text}` and whose output holds
   `verdict` (allow, block or annotate) and `reason`; its model calls spend from the caller's budget and
   are metered with the call's step. A check agent is never offered to the lead. Its own tool calls are
@@ -1795,7 +1932,8 @@ this build's configuration table, read-only. Rejecting the deliverable asks for 
 the decision is kept in `decidedGates`; live, the lead resumes with the reason (the task goes back to
 `running`; the recorded demo has no revised run, so there it stays `rejected`). The Task screen's Table and
 Redline tabs (diligence, contract review) are **planned** with PRs 5 and 6, the Documents version
-timeline with PR 6, sign-in with PR 8.
+timeline with PR 6. With sign-in the shell shows a sign-in page until there is a session, then the
+user and Sign out in the header; members see no admin-only controls in Manage.
 
 **The recorded demo.** A visitor picks one of three sample matters (Greystone v. Talbot litigation
 defense, Altamira/Sorell merger control, Quillon/Fernhill license review), types a prompt or picks
@@ -2025,9 +2163,9 @@ improvements (after the real Haiku LAB rerun; scripted the same way): `TestSweep
 | Budget | Ceiling | Today |
 |---|---:|---:|
 | Go production lines (physical lines, non-`_test.go`, test-support packages included) | reported, no limit (owner decision 17) | printed by `python3 scripts/loc.py` |
-| Packages under `internal/`, test-support packages excluded | 12 | 8 (`agent`, `analysis`, `api`, `docs`, `docs/ooxml`, `engine`, `model`, `store`; `store/storetest` and `engine/figtest` are test support) |
+| Packages under `internal/`, test-support packages excluded | 12 | 9 (`agent`, `analysis`, `api`, `auth`, `docs`, `docs/ooxml`, `engine`, `model`, `store`; `store/storetest`, `engine/figtest` and `auth/authtest` are test support) |
 | Direct Go dependencies | 3 | 2 (`github.com/lib/pq`, `github.com/ledongthuc/pdf`) |
-| Runtime environment variables | 20 | 18 |
+| Runtime environment variables | 20 | 19 |
 | UI runtime dependencies | 2 | 2 (`react`, `react-dom`) |
 | UI source lines (`ui/src` `.ts`/`.tsx`/`.css`; tests, config, `recording.json` and `manage.json` not counted) | 3,200 (raised from 2,400 for Manage, owner decision) | printed by `python3 scripts/loc.py` |
 | Packages without a `_test.go` | 0 | 0 |
@@ -2045,7 +2183,7 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
 
 ## Limitations
 
-- Manage has no per-person admin until PR 8's sign-in: the local user is an admin on loopback, read-only under `--allow-no-auth`, and anyone who can reach the server under `--admin-without-auth`; the change log's author is "Local user" until then (§ Manage, Who).
+- Without sign-in Manage has no per-person admin: the local user is an admin on loopback, read-only under `--allow-no-auth`, and anyone who can reach the server under `--admin-without-auth`; the change log's author is "Local user" (§ Manage, Who). Sign-in has two roles only (admin, member); every signed-in user sees every matter (per-matter access, an approve rule's role, API tokens for scripts and the clients roster are not built), and the issuer is not asked again during a session (removing an account there ends its BigLaw sessions at their idle or absolute end; an admin ends them now with `POST /manage/sessions/revoke`, which has no screen yet). There is no member allowlist on BigLaw's side: who may sign in is the issuer's decision (§ Sign-in).
 - The engine's tests write their own skills: an export that deletes a starter skill only makes `ui/src/recorded/manage.json` stale (re-record it).
 - Manage creates skills, subagents, MCP and HTTP tools and MCP servers, not packs; the compatibility check's limits are in § Manage. A remote call in flight when a process dies is made again on resume (its step had not committed): remote tools should be safe to repeat. MCP tools: text content only (other parts are noted, not shown), one session per call, no server-initiated requests; the HTTP and MCP answers are one page (truncated, never paged by a second call).
 - The UI's Playbooks, Time & Billing and profile views have no live routes until PRs 6/8/9 (404);
@@ -2073,8 +2211,8 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     quarantined) is removed and counted in Limitations (a citation after the full stop goes with the
     sentence before it), the rest stands as drafted. An abbreviation mid-sentence (`Smith v.`) splits
     the sentence, leaving a fragment, and a table row citing one is blanked, which ends the table.
-  - Until PR 8, BigLaw answers only requests addressed by IP or `localhost` (§ Exposure): a LAN or
-    proxy hostname gets 403 `bad_host`.
+  - BigLaw answers only requests addressed by IP, `localhost` or (with sign-in) `BIGLAW_PUBLIC_URL`'s
+    host (§ Exposure): any other LAN or proxy hostname gets 403 `bad_host`.
   - Tool-bandit statistics are per signature across all matters; a run's practice is not yet part of
     its signature (empty), so memo runs in one jurisdiction with the same lead model and document-count band share
     one bandit row per tool.
@@ -2093,19 +2231,18 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
   query other than the offered searches is ranked in the browser, approximately; a rejected
   deliverable ends the replay (there is no revised run).
 - Only the memo workflow exists; diligence, contract review, MCP, billing and auth are planned.
-  The exposure rule above is the only protection until PR 8: anyone who can reach the port can
+  Without sign-in the exposure rule above is the only protection: anyone who can reach the port can
   upload, list and read every document, and run, approve or cancel tasks. The cross-origin check stops a web page from uploading through the lawyer's browser,
-  but not DNS rebinding (a page on a name that resolves to 127.0.0.1 is "same origin"); PR 8's
-  sessions and tokens close that.
+  and the `bad_host` rule stops DNS rebinding; sign-in's sessions (§ Sign-in) close the rest. Scripts
+  (`eval/run.py drive`) have no API tokens yet, so they need a server without sign-in.
 - The env-var budget is a static heuristic: code that reads the environment another way
   (`syscall.Getenv`, scanning `os.Environ()`, importing `os` under another name) would evade
   it. Review is the backstop.
 - The vendor breakers key on names: an IP literal of a vendor's API is not recognised. They are
   a self-imposed policy, not a security boundary. The substring match fails closed: a gateway
   URL that merely contains `anthropic.com` or `bedrock` is refused too and needs the opt-in.
-- `render.yaml` has never been deployed and is inert until PR 8 (§ Exposure). Render's internal
-  connection string may need an explicit `sslmode`, and the instance plans are not pinned; PR 8
-  settles both.
+- `render.yaml` has never been deployed and is inert until its sign-in variables are set (§ Exposure). Render's internal
+  connection string may need an explicit `sslmode`, and the instance plans are not pinned.
 - The image build and the Compose smoke test run only in CI's `docker` job (green on GitHub
   since PR 2, including the `COPY LICENSE NOTICE` line); the build sandbox has no Docker
   daemon, so they are not run locally. No `linux/arm64`
@@ -2411,7 +2548,7 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     The embed role uses the same `BIGLAW_MODEL_URL` (and vendor breaker) as chat: embeddings
     cannot go to a local endpoint while chat goes to a hosted one. Run a local embedder (Ollama's
     `nomic-embed-text`) to keep the text on the machine.
-  - Until PR 8 there is no auth or quota: anyone who can reach the port can upload documents and
+  - There is no quota, and without sign-in no auth: anyone who can reach the port (with sign-in, anyone signed in) can upload documents and
     make the server pay to embed them (16 MiB of text is about 4.2M tokens at 4 bytes a token: $0.08 at
     `text-embedding-3-small`'s rate, $0.55 at `-large`'s), and every search makes one call.
   - A matter's own documents can steer the vector leg: a chunk written to sit near many queries
@@ -2513,7 +2650,7 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     takes only documents with no text layer; its note says to upload it again.
   - **Images leave the machine** with a hosted vision model, as chat prompts will. Setting a vision
     role for the first time also sends every waiting document to it (the startup job run).
-  - Until PR 8 there is no auth or quota: anyone who can reach the port can make the server pay for
+  - There is no quota, and without sign-in no auth: anyone who can reach the port (with sign-in, anyone signed in) can make the server pay for
     up to 40 vision calls per upload (20 pages × 2 readings), each up to 4,096 output tokens plus
     its image: at most 163,840 output tokens, $1.05 at `qwen-vl-max`'s output rate ($6.40/M), $1.64
     at `gpt-4o`'s ($10/M), before image input.

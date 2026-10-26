@@ -339,8 +339,8 @@ func (e *Engine) Cancel(ctx context.Context, id string) (TaskView, error) {
 
 // Decide approves or rejects an open gate (G7). Approving the deliverable completes the task;
 // rejecting it (a reason is required) sends the lead back to work with the reason; once every
-// finding gate is decided, the run resumes with the decisions.
-func (e *Engine) Decide(ctx context.Context, id, gateID string, approve bool, reason string) (TaskView, error) {
+// finding gate is decided, the run resumes with the decisions. by is who decided (recorded on the gate).
+func (e *Engine) Decide(ctx context.Context, id, gateID string, approve bool, reason string, by Person) (TaskView, error) {
 	t, err := e.task(ctx, id)
 	if err != nil {
 		return TaskView{}, err
@@ -366,6 +366,7 @@ func (e *Engine) Decide(ctx context.Context, id, gateID string, approve bool, re
 			return fmt.Errorf("%w: gate %s is not open", ErrConflict, gateID)
 		}
 		g.Decision, g.Reason, g.DecidedAt = map[bool]string{true: "approved", false: "rejected"}[approve], strings.TrimSpace(reason), time.Now().UTC().Format(time.RFC3339)
+		g.DecidedBy = &by
 		if _, err := tx.ExecContext(ctx, upsertSQL(true), t.ID, kGate, gateID, mustJSON(g), 0); err != nil {
 			return err
 		}

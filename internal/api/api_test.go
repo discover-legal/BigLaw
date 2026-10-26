@@ -17,6 +17,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -37,12 +38,29 @@ func TestMain(m *testing.M) {
 
 type server struct {
 	*httptest.Server
-	t *testing.T
-	e *engine.Engine
+	t  *testing.T
+	e  *engine.Engine
+	c  *http.Client // the browser requests go from (nil: http.DefaultClient)
+	st *store.Store
+}
+
+// as is s with requests from browser c (a signed-in user's cookie jar).
+func (s *server) as(c *http.Client) *server { x := *s; x.c = c; return &x }
+
+func (s *server) client() *http.Client {
+	if s.c != nil {
+		return s.c
+	}
+	return http.DefaultClient
 }
 
 // newServer is the API over a fresh schema, an engine on scripts, and its runner.
 func newServer(t *testing.T, scripts func(docIDs []string) map[string][]model.Reply, roles model.Roles, texts ...string) (*server, []string) {
+	return newServerWith(t, nil, scripts, roles, texts...)
+}
+
+// newServerWith is newServer with the handler made by wrap (nil: Handler) once the server's URL is known.
+func newServerWith(t *testing.T, wrap func(url string, st *store.Store, d *docs.Service, e *engine.Engine) http.Handler, scripts func(docIDs []string) map[string][]model.Reply, roles model.Roles, texts ...string) (*server, []string) {
 	t.Helper()
 	st, err := store.OpenPool(context.Background(), storetest.DSN(t), nil, storetest.Pool)
 	if err != nil {
@@ -67,9 +85,14 @@ func newServer(t *testing.T, scripts func(docIDs []string) map[string][]model.Re
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { defer close(done); e.Start(ctx) }()
-	srv := httptest.NewServer(Handler(d, e, nil, slog.New(slog.DiscardHandler)))
+	srv := httptest.NewServer(nil)
+	if wrap == nil {
+		srv.Config.Handler = Handler(d, e, nil, slog.New(slog.DiscardHandler))
+	} else {
+		srv.Config.Handler = wrap(srv.URL, st, d, e)
+	}
 	t.Cleanup(func() { srv.Close(); cancel(); <-done })
-	return &server{srv, t, e}, ids
+	return &server{srv, t, e, nil, st}, ids
 }
 
 func (s *server) do(method, path string, body any) (int, string) {
@@ -80,7 +103,7 @@ func (s *server) do(method, path string, body any) (int, string) {
 		r = bytes.NewReader(b)
 	}
 	req, _ := http.NewRequest(method, s.URL+path, r)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := s.client().Do(req)
 	if err != nil {
 		s.t.Fatal(err)
 	}
@@ -167,7 +190,7 @@ func TestRunProgressAPI(t *testing.T) {
 		t.Fatalf("unknown gate: %d", code)
 	}
 	code, body = s.do("POST", "/tasks/"+v.ID+"/gates/"+v.PendingGates[0].GateID+"/reject", m{"reason": "Cite the invoice dates."})
-	if code != 200 || !strings.Contains(body, `"decision":"rejected"`) {
+	if code != 200 || !strings.Contains(body, `"decision":"rejected"`) || !strings.Contains(body, `"decidedBy":{"id":"local","name":"Local user"}`) { // no sign-in: the local user decided
 		t.Fatalf("%d %s", code, body)
 	}
 	v = s.waitFor(v.ID, func(v engine.TaskView) bool { return v.Status == "awaiting_gate" && len(v.DecidedGates) == 1 })
@@ -221,6 +244,35 @@ func TestEventsStream(t *testing.T) {
 	}
 	if resp.Header.Get("Content-Type") != "text/event-stream" || last != 10 || events[len(events)-1] != "done" || !strings.Contains(strings.Join(events, ","), "task") {
 		t.Fatalf("events %v last %d", events, last)
+	}
+}
+
+// TestEventsStreamSendsTheLastStep (CI #61, PG14, shuffle 1792973692437222411: "last 9"): the
+// stream's run finishing between its two reads of a poll still sends every step before done. The gap
+// waits there until the run has stopped, deterministically; with the reads in the other order (the
+// steps, then the run) the stream sends done without the steps committed in the gap.
+func TestEventsStreamSendsTheLastStep(t *testing.T) {
+	s, ids := newServer(t, memo, roles, doc1)
+	_, body := s.do("POST", "/tasks", m{"description": "What is claimed?", "workflowType": "memo", "documentIds": ids})
+	var v engine.TaskView
+	json.Unmarshal([]byte(body), &v)
+	var once sync.Once
+	streamGap.Store(func(id string) {
+		if id != v.ID {
+			return
+		}
+		once.Do(func() { s.waitFor(v.ID, func(v engine.TaskView) bool { return v.Status == "awaiting_gate" }) })
+	})
+	t.Cleanup(func() { streamGap.Store(func(string) {}) })
+	resp, err := http.Get(s.URL + "/tasks/" + v.ID + "/events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	steps := strings.Count(string(b), "event: step\n")
+	if steps != 10 || !strings.HasSuffix(strings.TrimSpace(string(b)), `"openFindings":0}`) || !strings.Contains(string(b), "event: done") {
+		t.Fatalf("%d steps before done, want 10:\n%s", steps, b)
 	}
 }
 

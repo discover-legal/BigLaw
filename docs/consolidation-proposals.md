@@ -345,9 +345,9 @@ reviewer need. Move design into `docs/`, and move history to PR notes or a `docs
 | Section today | Lines | Proposal |
 |---|---:|---|
 | What exists today (the table, plus the preamble) | 36 + 11 | Keep; trim the heading's PR list |
-| Configuration | 70 | Keep (`TestEnvVarTablesAgree` reads its table). Not touched here: sign-in is editing it |
+| Configuration | 70 | Keep (`TestEnvVarTablesAgree` reads its table). Not touched here: sign-in (PR 8) owns it |
 | Model client | 113 | Keep the contract (requests, failures table, pricing rule, `model.Fake`). Move the retry and caching details into `docs/architecture.md` § model |
-| Exposure | 45 | Keep. Sign-in is editing it |
+| Exposure | 45 | Keep. Sign-in (PR 8) owns it |
 | Run it, Database | 67 | Keep |
 | Documents | 449 | Keep the contract: types, the scope rule, limits, error codes, the routes. Move the section-tree bounds, the search cost measurements, the vision readings' rules and the memory measurements into a new `docs/documents.md` |
 | Agent runtime and memo tools | 175 | Move to `docs/architecture.md` (runtime) and `docs/patterns.md` (paging, budget). Keep a short list of tools and their caps |

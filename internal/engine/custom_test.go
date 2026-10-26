@@ -146,7 +146,7 @@ func accept(t *testing.T, e *Engine, name string) {
 	}
 	ct.Enabled, ct.Imported.AcceptedBy = true, "whoever the file says"
 	b, _ := json.MarshalIndent(ct, "", " ")
-	if _, _, err := e.Save(ctx, "tool."+name, SaveIn{Base: d.Latest, Files: map[string]string{f: string(b)}}, "Ada"); err != nil {
+	if _, _, err := e.Save(ctx, "tool."+name, SaveIn{Base: d.Latest, Files: map[string]string{f: string(b)}}, "Ada <ada@firm.example>"); err != nil { // the file records the name only (r2 L-7)
 		t.Fatalf("accept %s: %s", name, problems(err))
 	}
 }
@@ -489,5 +489,18 @@ func TestDeleteRefusedWhileReferenced(t *testing.T) {
 	}
 	if _, err := e.Delete(ctx, "server.courts", 1, "", "Ada"); !strings.Contains(problems(err), "server") {
 		t.Fatalf("a server a tool uses was deleted: %s", problems(err))
+	}
+}
+
+// TestDisplayName (review r2 L-7, r3 L-8): an author label as everyone may see it: no email, no
+// subject, and a stored email-shaped name as its local part.
+func TestDisplayName(t *testing.T) {
+	t.Parallel()
+	for in, want := range map[string]string{"Ada Lovelace <ada@firm.example>": "Ada Lovelace", "Member (u-x)": "Member", "Local user": "Local user",
+		"ada@firm.example <ada@firm.example>": "ada", "ada@firm.example": "ada", "@firm.example": "a user",
+		"ada\uff20firm.example": "ada", "ada\ufe6bfirm.example": "ada", "ada%40firm.example": "ada", "Ada (ada@firm.example)": "Ada"} {
+		if got := DisplayName(in); got != want {
+			t.Errorf("DisplayName(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

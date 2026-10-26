@@ -37,8 +37,8 @@ export function Manage(props: { section: string; item: string; tab: string }) {
       <p className="lede">What BigLaw's agents use, and where. An admin's change is a new version that the next task runs on; a running task keeps
         the versions it started with, also when it resumes.</p>
       {api.mode === 'recorded' && <p className="sample small">Read-only in the demo: this build's built-in catalogue, recorded from its files. Nothing can be saved, and no usage is recorded.</p>}
-      {me.data && !admin && api.mode === 'live' && <p className="notice small">You can view everything here; only an admin can change it. This server runs without sign-in
-        (<code>--allow-no-auth</code>), so Manage is read-only unless its operator starts it with <code>--admin-without-auth</code>.</p>}
+      {me.data && !admin && api.mode === 'live' && <p className="notice small">You can view everything here; only an admin can change it. {me.data.authEnabled
+        ? 'You are signed in as a member.' : <>This server runs without sign-in (<code>--allow-no-auth</code>), so Manage is read-only unless its operator starts it with <code>--admin-without-auth</code>.</>}</p>}
       {me.data?.adminWithoutAuth && <p className="error small" role="alert"><strong>Open to anyone:</strong> this server runs with <code>--admin-without-auth</code> and no sign-in,
         so anyone who can reach it can change what every task's agents use.</p>}
       <Failure error={list.error ?? me.error} />

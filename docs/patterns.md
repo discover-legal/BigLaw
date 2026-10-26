@@ -304,9 +304,9 @@ who-seam. Secrets and custom outbound calls need a *real* admin (`RemotePolicy.O
 
 **How to apply.** Mount a new write route through `admin`: with `handle[In](ws, …)`, which wraps
 `admin` and decodes the body strictly, or, for a route that needs its own body handling (as two
-routes in `manage.go` do), with `mux.HandleFunc(route, admin(…))`. Never mount a write without
+routes in `manage.go` and the session revoke in `signin.go` do), with `mux.HandleFunc(route, admin(…))`. Never mount a write without
 `admin`, and add it to `TestManageWriteRoutes`. Sign-in (PR 8) changes only how
-`Principal` is resolved.
+`Principal` is resolved (`api.SessionUser`).
 
 ## 11. Untrusted-text labelling
 

@@ -22,10 +22,10 @@ import (
 )
 
 // builtPR is the last build PR whose variables this build reads.
-const builtPR = 4
+const builtPR = 8
 
 // envVar is one runtime environment variable; envVars is the complete surface (README § Configuration,
-// loc.py caps it at 20; 18 since PR 3's role map). A variable is validated by the PR that first reads it (pr), warned about before.
+// loc.py caps it at 20; 19 since PR 8's BIGLAW_ADMINS). A variable is validated by the PR that first reads it (pr), warned about before.
 type envVar struct {
 	name, def string
 	secret    bool // never printed by `biglaw version --config`
@@ -46,9 +46,10 @@ var envVars = []envVar{
 	{name: "BIGLAW_PRICES", pr: 2},
 	{name: "BIGLAW_COLLAPSE_THRESHOLD", def: "0.5", pr: 4},
 	{name: "BIGLAW_COLLAPSE_ACTION", def: "strict", pr: 4},
-	{name: "BIGLAW_OIDC_ISSUER", url: true, pr: 8}, // or a preset: google, microsoft:<tenant>
+	{name: "BIGLAW_OIDC_ISSUER", url: true, pr: 8}, // the issuer URL exactly as its discovery document states it
 	{name: "BIGLAW_OIDC_CLIENT_ID", pr: 8},
 	{name: "BIGLAW_OIDC_CLIENT_SECRET", secret: true, pr: 8},
+	{name: "BIGLAW_ADMINS", pr: 8}, // comma-separated verified emails or subs: sign-in's admins
 	{name: "BIGLAW_AI_RATE", pr: 9},
 	{name: "ALLOW_ANTHROPIC", pr: 1},
 	{name: "ALLOW_AWS", pr: 1},
@@ -67,6 +68,13 @@ type Config struct {
 	Engine         engine.Config // BIGLAW_BUDGET_CALLS/_USD, BIGLAW_COLLAPSE_THRESHOLD/_ACTION
 	AllowAnthropic bool
 	AllowAWS       bool
+	OIDC           OIDC // sign-in: on when Issuer is set
+}
+
+// OIDC is sign-in's configuration (internal/auth): BIGLAW_OIDC_*, BIGLAW_PUBLIC_URL and BIGLAW_ADMINS.
+type OIDC struct {
+	Issuer, ClientID, ClientSecret, PublicURL string
+	Admins                                    []string
 }
 
 // Load resolves and validates the configuration from getenv, reporting all problems at once; the
@@ -130,10 +138,63 @@ func Load(getenv func(string) string) (Config, error) {
 	if c.Engine.CollapseAction = get("BIGLAW_COLLAPSE_ACTION"); c.Engine.CollapseAction != "strict" && c.Engine.CollapseAction != "warn" {
 		bad("BIGLAW_COLLAPSE_ACTION", "%s is not strict (the task fails) or warn (it goes on, alerted)", shown("BIGLAW_COLLAPSE_ACTION", c.Engine.CollapseAction))
 	}
+	var oidcErrs []error
+	c.OIDC, oidcErrs = signIn(get)
+	errs = append(errs, oidcErrs...)
 	if err := errors.Join(errs...); err != nil {
 		return c, err
 	}
 	return c, GuardVendors(c)
+}
+
+// signIn reads sign-in's variables (README § Sign-in): the issuer and client id together (the secret
+// too for a confidential client), an https issuer and public URL (plain http only on loopback, for
+// local work: the session cookie must not cross a network in the clear), and BIGLAW_ADMINS only with
+// sign-in, as comma-separated emails or subjects without white space.
+func signIn(get func(string) string) (OIDC, []error) {
+	o := OIDC{Issuer: get("BIGLAW_OIDC_ISSUER"), ClientID: get("BIGLAW_OIDC_CLIENT_ID"), ClientSecret: get("BIGLAW_OIDC_CLIENT_SECRET"), PublicURL: get("BIGLAW_PUBLIC_URL")}
+	var errs []error
+	bad := func(name, format string, a ...any) {
+		errs = append(errs, fmt.Errorf("%s: "+format, append([]any{name}, a...)...))
+	}
+	plain := func(v string) bool {
+		return !strings.ContainsFunc(v, func(r rune) bool { return unicode.IsSpace(r) || !unicode.IsGraphic(r) })
+	}
+	secure := func(u *url.URL) bool {
+		return u.Scheme == "https" || isLoopback(net.JoinHostPort(strings.Trim(u.Hostname(), "[]"), "1"))
+	}
+	if o.Issuer != "" || o.ClientID != "" || o.ClientSecret != "" {
+		if o.Issuer == "" || o.ClientID == "" {
+			bad("BIGLAW_OIDC_ISSUER", "and BIGLAW_OIDC_CLIENT_ID are both needed for sign-in (and BIGLAW_OIDC_CLIENT_SECRET for a confidential client); set them all, or none")
+		}
+		if u := httpURL(o.Issuer); o.Issuer != "" && (u == nil || u.RawQuery != "" || u.Fragment != "" || !secure(u)) {
+			bad("BIGLAW_OIDC_ISSUER", "%s must be the issuer's https URL as its discovery document states it, with no query (plain http only on loopback)", shown("BIGLAW_OIDC_ISSUER", o.Issuer))
+		}
+		if u := httpURL(o.PublicURL); u == nil || strings.Trim(u.Path, "/") != "" || u.RawQuery != "" || u.Fragment != "" || !secure(u) {
+			bad("BIGLAW_PUBLIC_URL", "%s must be https://host[:port], how browsers reach BigLaw, with no path, when sign-in is on (plain http only on loopback: the session cookie must not travel in the clear)", shown("BIGLAW_PUBLIC_URL", o.PublicURL))
+		}
+		if !plain(o.ClientID) || len(o.ClientID) > 255 {
+			bad("BIGLAW_OIDC_CLIENT_ID", "has white space or a control character, or is over 255 bytes")
+		}
+		if !plain(o.ClientSecret) {
+			bad("BIGLAW_OIDC_CLIENT_SECRET", "has white space or a control character (value not shown)")
+		}
+	}
+	if v := get("BIGLAW_ADMINS"); v != "" {
+		if o.Issuer == "" {
+			bad("BIGLAW_ADMINS", "needs sign-in (BIGLAW_OIDC_ISSUER): without it no request carries a user to name")
+		}
+		for _, a := range strings.Split(v, ",") {
+			if a = strings.TrimSpace(a); a == "" {
+				continue
+			} else if !plain(a) || len(a) > 255 || strings.Contains(a, "@") && strings.ContainsFunc(a, func(r rune) bool { return r > 0x7e }) {
+				bad("BIGLAW_ADMINS", "entry %d is not an email or a subject (white space, a control character, over 255 bytes, or an email that is not plain ASCII)", len(o.Admins)+1)
+			} else {
+				o.Admins = append(o.Admins, a)
+			}
+		}
+	}
+	return o, errs
 }
 
 // plainDecimal is a plain decimal number: no sign, exponent, hex or infinity.
@@ -307,8 +368,6 @@ func shown(name, val string) string {
 		return "(set, hidden)"
 	case name == "BIGLAW_DATABASE_URL":
 		return store.DescribeDSN(val)
-	case name == "BIGLAW_OIDC_ISSUER" && oidcPreset.MatchString(val):
-		return val
 	case name == "BIGLAW_MODELS":
 		if _, errs := roles(func(string) string { return val }); errs != nil {
 			return "(set, not shown: not lead=<model id>,… with safe ids)"
@@ -328,7 +387,6 @@ func shown(name, val string) string {
 }
 
 var (
-	oidcPreset    = regexp.MustCompile(`^(google|microsoft:[A-Za-z0-9.-]+)$`)
 	userinfoShape = regexp.MustCompile(`:[^@]*@`)
 	keyShape      = regexp.MustCompile(`^(sk-|sk_|AKIA|ASIA|AIza|xox[abpr]-|gh[pousr]_)|[A-Za-z0-9]{24}`) // a pasted API key
 	plainHost     = regexp.MustCompile(`^([A-Za-z0-9._-]+|\[[0-9A-Fa-f:.]+\])(:[0-9]+)?$`)

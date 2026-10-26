@@ -2,9 +2,11 @@
 // Copyright (C) 2026 Discover Legal
 //
 // The shell: the seven screens and Manage (README § UI screens), hash routes so a static bundle works under
-// any base path, and the demo banner when the engine is recorded.
+// any base path, the demo banner when the engine is recorded, and with sign-in (README § Sign-in) a
+// sign-in page until there is a session, then the user and Sign out in the header.
 import { useEffect, useState } from 'react';
-import type { Transport } from './api/transport.ts';
+import { ApiError, type Transport } from './api/transport.ts';
+import type { Me } from './api/types.ts';
 import { Api, parseRoute } from './lib.tsx';
 import { Icon } from './components/icons.tsx';
 import { Matters } from './screens/Matters.tsx';
@@ -18,9 +20,27 @@ const NAV: [string, string][] = [
   ['clients', 'Clients & Conflicts'], ['billing', 'Time & Billing'], ['manage', 'Manage'], ['settings', 'Settings'],
 ];
 
+const logo = <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><rect width="24" height="24" rx="6" fill="currentColor" /><path d="M7 7v10h5.5a3 3 0 0 0 0-6H7m0 0h4.5a2 2 0 0 0 0-4H7" fill="none" stroke="var(--accent-ink)" strokeWidth="2" strokeLinejoin="round" /></svg>;
+
+/** SignIn is the whole page when sign-in is on and there is no session (GET /me is 401). */
+function SignIn() {
+  return (
+    <main className="signin">
+      <div className="panel">
+        <p className="brand">{logo}BigLaw<sup>2</sup></p>
+        <h1>Sign in</h1>
+        <p className="muted">This server signs you in with your firm's identity provider. Everyone signed in can run tasks and decide gates; admins also change what its agents use.</p>
+        <a className="button primary" href={`/auth/login?next=${encodeURIComponent('/' + window.location.hash)}`}>Sign in with your firm account</a>
+      </div>
+    </main>
+  );
+}
+
 export function App(props: { api: Transport }) {
   const [route, setRoute] = useState(() => parseRoute(window.location.hash));
   const [about, setAbout] = useState(false);
+  const [me, setMe] = useState<Me | 'signin' | null>(); // undefined until /me answers: no screen asks the API before
+  useEffect(() => { props.api.me().then(setMe, (e: unknown) => setMe(e instanceof ApiError && e.status === 401 ? 'signin' : null)); }, [props.api]);
   useEffect(() => {
     const on = () => { setRoute(parseRoute(window.location.hash)); window.scrollTo(0, 0); };
     window.addEventListener('hashchange', on);
@@ -28,6 +48,8 @@ export function App(props: { api: Transport }) {
   }, []);
   const [screen = 'matters', arg] = route.path;
   const active = screen === 'task' || !NAV.some(([id]) => id === screen) ? 'matters' : screen;
+  if (me === 'signin') return <SignIn />;
+  if (me === undefined) return null;
   let body;
   switch (screen) {
     case 'task': body = <TaskScreen id={arg ?? ''} tab={route.q.get('tab') ?? 'run'} />; break;
@@ -54,14 +76,19 @@ export function App(props: { api: Transport }) {
       <header className="top">
         <div className="top-in">
           <a className="brand" href="#/matters" aria-label="BigLaw 2, Matters">
-            <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><rect width="24" height="24" rx="6" fill="currentColor" /><path d="M7 7v10h5.5a3 3 0 0 0 0-6H7m0 0h4.5a2 2 0 0 0 0-4H7" fill="none" stroke="var(--accent-ink)" strokeWidth="2" strokeLinejoin="round" /></svg>
-            BigLaw<sup>2</sup>
+            {logo}BigLaw<sup>2</sup>
           </a>
           <nav aria-label="Screens">
             {NAV.map(([id, label]) => (
               <a key={id} href={`#/${id}`} className={active === id ? 'on' : ''} aria-current={active === id ? 'page' : undefined}>{label}</a>
             ))}
           </nav>
+          {me?.authEnabled && (
+            <div className="user">
+              <span title={me.email}>{me.name}</span><span className="badge">{me.admin ? 'admin' : 'member'}</span>
+              <button className="small" onClick={() => void props.api.signOut?.().finally(() => window.location.reload())}>Sign out</button>
+            </div>
+          )}
         </div>
       </header>
       <main className="shell">{body}</main>
