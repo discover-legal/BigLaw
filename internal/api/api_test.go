@@ -62,11 +62,7 @@ func newServer(t *testing.T, scripts func(docIDs []string) map[string][]model.Re
 // newServerWith is newServer with the handler made by wrap (nil: Handler) once the server's URL is known.
 func newServerWith(t *testing.T, wrap func(url string, st *store.Store, d *docs.Service, e *engine.Engine) http.Handler, scripts func(docIDs []string) map[string][]model.Reply, roles model.Roles, texts ...string) (*server, []string) {
 	t.Helper()
-	st, err := store.OpenPool(context.Background(), storetest.DSN(t), nil, storetest.Pool)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
+	st := storetest.Open(t, store.OpenPool)
 	d := docs.New(st)
 	var ids []string
 	for i, x := range texts {

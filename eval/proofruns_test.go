@@ -251,11 +251,7 @@ func firstDoc(mt matter) string {
 
 // drive runs one matter through the engine on scripts and writes a run dir the scorer reads.
 func drive(t *testing.T, mt matter, scripts func(matter, map[string]string) map[string][]model.Reply) (engine.TaskView, string, []string) {
-	st, err := store.OpenPool(context.Background(), storetest.DSN(t), nil, storetest.Pool)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
+	st := storetest.Open(t, store.OpenPool)
 	d := docs.New(st)
 	ids, names := map[string]string{}, map[string]string{}
 	var docIDs []string
@@ -480,11 +476,7 @@ func TestLabRunnerSmoke(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 is not installed")
 	}
-	st, err := store.OpenPool(context.Background(), storetest.DSN(t), nil, storetest.Pool)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
+	st := storetest.Open(t, store.OpenPool)
 	d := docs.New(st)
 	labs := t.TempDir()
 	task := filepath.Join(labs, "tasks", "smoke", "deadline")

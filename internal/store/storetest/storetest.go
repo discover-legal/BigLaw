@@ -24,6 +24,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"log/slog"
 	"net/url"
 	"os"
 	"strings"
@@ -49,6 +50,22 @@ var _ T = testing.TB(nil)
 // server's max_connections. A test that exercises the production pool asks
 // for store.MaxOpenConns explicitly.
 const Pool = 4
+
+// Open opens a test store with open (store.OpenPool; storetest cannot import store, whose own tests
+// import it) on the test's own schema (DSN), or on dsn when one is given, with the test pool, and
+// closes it when the test ends: st := storetest.Open(t, store.OpenPool).
+func Open[S interface{ Close() error }](t testing.TB, open func(context.Context, string, *slog.Logger, int) (S, error), dsn ...string) S {
+	t.Helper()
+	if len(dsn) == 0 {
+		dsn = []string{DSN(t)}
+	}
+	st, err := open(context.Background(), dsn[0], nil, Pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	return st
+}
 
 // DSN returns a DSN scoped to a new schema that is dropped after the test.
 func DSN(t testing.TB) string {

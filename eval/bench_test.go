@@ -65,11 +65,7 @@ func (refusing) Chat(context.Context, model.Request) (*model.Response, error) {
 // suiteAPI serves the real API and engine over chat on a test server, like serve does.
 func suiteAPI(t *testing.T, chat model.Chatter) (string, string) {
 	dsn := storetest.DSN(t)
-	st, err := store.OpenPool(context.Background(), dsn, nil, storetest.Pool)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
+	st := storetest.Open(t, store.OpenPool, dsn)
 	d := docs.New(st)
 	e := engine.New(st, d, chat, model.Roles{Lead: "lead-m"}, nil, engine.Config{BudgetCalls: 150, BudgetUSD: 5, CollapseThreshold: 0.5, CollapseAction: "strict"}, slog.New(slog.DiscardHandler))
 	mux := api.Handler(d, e, nil, slog.New(slog.DiscardHandler))

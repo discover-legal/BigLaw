@@ -57,7 +57,7 @@ budgets in `docs/history.md`. v2 is `main`; v1 (Go under `biglaw-go/`, DyTopo) i
 - `internal/store/storetest` — `storetest.DSN(t)` gives a test its own schema, creates the
   `vector` extension once per database and puts its schema on the test's `search_path`; at most
   `storetest.Slots` tests across all test processes hold one at once (a flock per slot). Test stores
-  open with `store.OpenPool(ctx, dsn, log, storetest.Pool)`; only a test of the production pool's
+  open with `storetest.Open(t, store.OpenPool)` (the test pool, `storetest.Pool`, closed with the test); only a test of the production pool's
   bounds uses `store.Open`/`store.MaxOpenConns`.
 - `internal/engine/figtest` — test support: `figtest.Reader`, the figure reader's stand-in (a
   `model.Fake` `Respond` hook labelling plain fixture texts), `figtest.With` for a test's right labels;

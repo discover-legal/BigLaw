@@ -64,11 +64,7 @@ func (k *agentKill) Chat(ctx context.Context, req model.Request) (*model.Respons
 func TestKillDuringCommitteeChargesMeteredSpend(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := store.OpenPool(ctx, storetest.DSN(t), nil, storetest.Pool)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
+	st := storetest.Open(t, store.OpenPool)
 	f := &fixture{t: t, st: st, d: docs.New(st)}
 	f.d.UseEmbedder(pricedEmbedder{0.05}, "emb-m")
 	for _, x := range []string{complaintText, docketText} {

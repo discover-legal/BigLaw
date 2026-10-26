@@ -67,11 +67,7 @@ Talbot was served on 10/21/2026 via its registered agent. The answer period is 2
 func newFixture(t *testing.T, texts ...string) *fixture {
 	t.Helper()
 	dsn := storetest.DSN(t)
-	st, err := store.OpenPool(context.Background(), dsn, nil, storetest.Pool)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
+	st := storetest.Open(t, store.OpenPool, dsn)
 	f := &fixture{t: t, st: st, d: docs.New(st)}
 	if len(texts) == 0 {
 		texts = []string{complaintText, docketText}

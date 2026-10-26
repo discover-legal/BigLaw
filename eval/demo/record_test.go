@@ -406,11 +406,7 @@ var fidRe = regexp.MustCompile(`\[(F\d+)\]`)
 
 func TestDemoRecording(t *testing.T) {
 	t.Parallel()
-	st, err := store.OpenPool(t.Context(), storetest.DSN(t), nil, storetest.Pool)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
+	st := storetest.Open(t, store.OpenPool)
 	svc := docs.New(st)
 	// The scan's reader is scripted: both readings are the text the image was drawn from (make_scan.py).
 	text, err := os.ReadFile(scanText)
