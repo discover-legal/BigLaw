@@ -339,10 +339,6 @@ func joinCands(use []Finding, limit int, judged func(analysis.Candidate) bool) (
 	return analysis.CandidatesCover(an, limit, judged)
 }
 
-// judgeShare is the part of finish's grant, and of the coverage pass's share, its own join may spend
-// on the figure judge, in calls and USD alike (lab-r4 r8 L3): what it leaves unjudged is disclosed.
-const judgeShare = 0.25
-
 // judgeCalls are the calls a grant of calls gives the figure judge (at least one when it has two).
 func judgeCalls(calls int) int { return min(max(calls-1, 0), max(1, int(judgeShare*float64(calls)))) }
 
