@@ -455,8 +455,11 @@ class SchemaTests(unittest.TestCase):
 
     def test_baselines_hold_only_recorded_numbers(self):
         v1 = {t["id"]: t for t in baseline("v1-record.json")["tasks"]}
-        self.assertEqual((v1["sec"]["score"], v1["trust"]["score"]), ({"passed": 49, "total": 60}, {"passed": 14, "total": 23}))
-        self.assertTrue(all(t["criteria"] is None and t["cost_usd"] is None for t in v1.values()))
+        self.assertEqual([(t["score"]["passed"], t["score"]["total"], t["cost_usd"], t["duration_s"]) for t in v1.values()],
+                         [(50, 60, 11.52, 5516.6), (14, 23, 10.52, 4529.0)])
+        for t in v1.values():
+            self.assertEqual(sum(v == "pass" for v in t["criteria"].values()), t["score"]["passed"])
+            self.assertTrue(t["calls"] is None and t["stop_reason"] is None)
         b6 = baseline("v2-bench6.json")
         self.assertEqual(b6["build"]["sha"], "091bcfc")
         t6 = {t["id"]: t for t in b6["tasks"]}
@@ -628,8 +631,8 @@ class CompareTests(unittest.TestCase):
         c = compare.compare(baseline("v1-record.json"), baseline("v2-bench6.json"))
         self.assertFalse(c["comparable"])
         rows = {r["id"]: r for r in c["tasks"]}
-        self.assertEqual(rows["sec"]["score_delta"], -11)
-        self.assertIsNone(rows["sec"]["flips"])
+        self.assertEqual(rows["sec"]["score_delta"], -12)
+        self.assertEqual((rows["sec"]["flips"]["gained"], len(rows["sec"]["flips"]["lost"])), (["C-033", "C-045"], 14))
         self.assertEqual(rows["gate-a-litigation"]["only_in"], "v2-bench6")
 
     def test_cli_exit_codes(self):
