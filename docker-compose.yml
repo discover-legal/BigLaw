@@ -18,8 +18,10 @@ services:
     # No ports: Postgres is reachable only from the biglaw container.
 
   biglaw:
+    # The published image (CI pushes it from main); `docker compose up -d --build` builds this
+    # checkout instead. setup.sh pulls the image and never builds.
     build: .
-    image: biglaw:local
+    image: ghcr.io/discover-legal/biglaw:latest
     # Without sign-in, serve refuses a non-loopback address without
     # --allow-no-auth. That is safe here only because the port below is
     # published on the host's loopback; do not change it to 0.0.0.0 or a LAN IP
@@ -65,7 +67,7 @@ services:
       ALLOW_ANTHROPIC: ${ALLOW_ANTHROPIC:-}
       ALLOW_AWS: ${ALLOW_AWS:-}
     extra_hosts:
-      - "host.docker.internal:host-gateway" # outbound only: a model server on the host (Ollama) as http://host.docker.internal:11434/v1
+      - "host.docker.internal:host-gateway"   # Ollama on this computer: BIGLAW_MODEL_URL=http://host.docker.internal:11434/v1
     ports:
       - "127.0.0.1:3101:3101"   # loopback only on the host: the --allow-no-auth precondition (with sign-in, a TLS proxy on the host fronts it)
     restart: unless-stopped

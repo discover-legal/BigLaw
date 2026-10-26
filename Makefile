@@ -1,5 +1,5 @@
 # BigLaw 2 — `make ci` is what GitHub CI runs (.github/workflows/ci.yml); the
-# CI lint job adds `make lint vuln`, and the docker job builds the image.
+# CI lint job adds `make lint vuln` (staticcheck, shellcheck, govulncheck), and the docker job builds the image.
 # Database tests need BIGLAW_TEST_DSN; set BIGLAW_REQUIRE_DB=1 to make a
 # missing database a failure instead of a skip (CI does).
 GO ?= go
@@ -115,8 +115,12 @@ compose-check:
 	elif [ -n "$$CI" ]; then echo "compose-check: docker is required when CI is set"; exit 1; \
 	else echo "SKIP compose-check: docker not installed (CI fails here instead)"; fi
 
+# shellcheck (setup.sh) comes with GitHub's runners; elsewhere a missing one is a SKIP.
 lint:
 	GOTOOLCHAIN=$(TOOLCHAIN) $(GO) run $(STATICCHECK) ./...
+	@if command -v shellcheck >/dev/null 2>&1; then shellcheck setup.sh && echo "setup.sh: shellcheck clean"; \
+	elif [ -n "$$CI" ]; then echo "lint: shellcheck is required when CI is set"; exit 1; \
+	else echo "SKIP shellcheck: not installed (CI fails here instead)"; fi
 
 vuln:
 	GOTOOLCHAIN=$(TOOLCHAIN) $(GO) run $(GOVULNCHECK) ./...
