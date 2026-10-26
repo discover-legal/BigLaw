@@ -524,7 +524,7 @@ twice the call budget, at least 400),
 - **Validation** at save: the event and action pair, the matcher and condition, that a named tool,
   subagent or check agent exists with the check's schemas, the approve and after_call limits above, the
   webhook URL and secret, a message of at most 2,000 characters with no control or format characters, no
-  Go hook's or reserved name; a subagent a rule checks with cannot be deleted. A Test call runs the item
+  reserved name; a subagent a rule checks with cannot be deleted. A Test call runs the item
   alone, without the rules.
 
 ## Limitations (LAB rounds 3 and 4)

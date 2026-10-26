@@ -17,7 +17,7 @@ const SECTIONS: [ManageSection | 'changes', string, string][] = [
   ['tools', 'Tools', 'The typed tools agents call: built-in Go tools (their specs are editable), and an admin\'s MCP and HTTP tools, whose answers are untrusted data from outside the matter.'],
   ['packs', 'Packs', 'Packs: jurisdiction and practice guidance the lead, analyze_issue and the committee read. Candidate until a named lawyer reviews one.'],
   ['skills', 'Skills', 'Process guidance the lead reads with use_skill: the brief lists names and descriptions only. A skill points at tools; it never grants one.'],
-  ['hooks', 'Hooks', 'Configurable hooks an admin writes (before or after a call, on an admitted finding, at finish: block, a lawyer\'s approval, a checking subagent, a webhook or a Limitations line, in order, failing closed or open), and the Go code around some tools and subagents (quote verification, the figure reader, the section check: view only).'],
+  ['hooks', 'Hooks', 'Configurable hooks an admin writes (before or after a call, on an admitted finding, at finish: block, a lawyer\'s approval, a checking subagent, a webhook or a Limitations line, in order, failing closed or open). The checks Go runs around a tool (quote verification, the figure reader, the section check) are on that tool\'s own page.'],
   ['changes', 'Change log', 'Every change, newest first: who, when, and from which version to which.'],
 ];
 const CLASSES = ['plan', 'evidence', 'draft', 'committee', 'cover', 'free'];
@@ -100,7 +100,7 @@ function Detail(props: { id: string; tab: string; admin: boolean; changed: () =>
   const it = d.data;
   const live = api.mode === 'live';
   const can = props.admin && live && !it.deleted;
-  const tabs = ([['contents', 'Contents', true], ['edit', 'Edit', it.editable && props.admin && !it.deleted], ['history', 'History', it.editable && live],
+  const tabs = ([['contents', 'Contents', true], ['edit', 'Edit', props.admin && !it.deleted], ['history', 'History', live],
     ['test', 'Test', can && (it.kind === 'subagent' || it.section === 'tools' && it.kind !== 'MCP server')], ['import', 'Import tools', can && it.kind === 'MCP server']] as const).filter((t) => t[2]);
   const tab = tabs.some(([t]) => t === props.tab) ? props.tab : 'contents';
   const url = (f: 'patch' | 'zip') => api.exportUrl(f, it.id);
@@ -110,7 +110,7 @@ function Detail(props: { id: string; tab: string; admin: boolean; changed: () =>
       <p className="meta"><ItemBadges item={it} />{it.latest > 0 && <span>latest version {it.latest}</span>}</p>
       <p>{it.summary}</p>
       <dl className="uses">
-        {it.uses.length > 0 && <div><dt>{it.kind === 'hook' ? 'Wraps' : it.section === 'skills' ? 'Points at' : 'Calls'}</dt><dd>{it.uses.map((u) => <code key={u}>{u}</code>)}</dd></div>}
+        {it.uses.length > 0 && <div><dt>{it.section === 'skills' ? 'Points at' : 'Calls'}</dt><dd>{it.uses.map((u) => <code key={u}>{u}</code>)}</dd></div>}
         {it.usedBy.length > 0 && <div><dt>Used by</dt><dd>{it.usedBy.map((u) => <code key={u}>{u}</code>)}</dd></div>}
         <div><dt>Recent usage</dt><dd>{it.usage ? `${plural(it.usage.steps, 'step')} in ${plural(it.usage.tasks, 'task')} of the last 20: ${plural(it.usage.calls, 'model call')}, $${it.usage.usd.toFixed(2)}${it.usage.unpriced ? ` + ${it.usage.unpriced} unpriced` : ''}`
           : <span className="muted">none in the last 20 tasks (a fan-out's own calls count under it)</span>}</dd></div>
@@ -130,16 +130,19 @@ function Detail(props: { id: string; tab: string; admin: boolean; changed: () =>
 
 function Contents(props: { item: ManageDetail }) {
   const it = props.item;
-  if (it.hook) {
-    return (
-      <>
-        <p>{it.hook.what}</p>
-        {it.hook.source.map((s) => <Code key={s.func} title={<><code>{s.func}</code> in <code>{s.file}</code></>} text={s.text} />)}
-      </>
-    );
-  }
   if (it.deleted) return <p className="muted">Deleted: new tasks do not have it. Its History has every earlier version to restore.</p>;
-  return <>{Object.entries(it.content).map(([path, text]) => <Code key={path} title={<code>{path}</code>} text={text} />)}</>;
+  return (
+    <>
+      {it.checks && (
+        <section>
+          <h3>Checks (built in)</h3>
+          <p className="small muted">Go code around this {it.kind}: an override of its files never changes them.</p>
+          <ul>{it.checks.map((c) => <li key={c}>{c}</li>)}</ul>
+        </section>
+      )}
+      {Object.entries(it.content).map(([path, text]) => <Code key={path} title={<code>{path}</code>} text={text} />)}
+    </>
+  );
 }
 
 /** useRun is an action's busy flag and error: run(p, then) shows p's failure, or clears it and calls then. */
@@ -314,7 +317,7 @@ function NewItem(props: { kind: string; saved: (id: string) => void }) {
   if (!t) return <Failure error="Nothing of that kind can be created." />;
   const ok = props.kind === 'skill' || props.kind === 'server' ? /^[a-z][a-z0-9-_]{1,39}$/.test(name) : /^[a-z][a-z0-9_]{1,63}$/.test(name);
   const id = `${props.kind}.${name}`;
-  const blank: ManageDetail = { id, section: t.section, kind: props.kind, name, summary: '', editable: true, builtin: false, version: 0, latest: 0, deleted: false,
+  const blank: ManageDetail = { id, section: t.section, kind: props.kind, name, summary: '', builtin: false, version: 0, latest: 0, deleted: false,
     files: [], uses: [], usedBy: [], usage: null, content: ok ? t.files(name) : {}, original: {}, callers: ref.data?.callers ?? [] };
   return (
     <article className="panel detail">

@@ -10,9 +10,10 @@ cut (−19 Go lines).
 disclosures builder), A4 (`agent.Fence`, `ToolNameRe`, `ExampleRe`, `Btoi`), A5 (the named
 fractions in one block in `policy.go`) and § C (the README restructure: `docs/documents.md`,
 `figures.md`, `reference.md`, `history.md`). Not done: A6 (three of the five `Finding.Low` sites
-are Go-hook source Manage shows, and the note wording differs by site) and A7 (it needs a
+were Go-hook source Manage showed, and the note wording differs by site) and A7 (it needs a
 migration and a fallback for runs in flight across the upgrade, which keeps today's code). Part B
-is the owner's.
+is the owner's. B3 is done (branch `v2-toolchecks`): the Go hook items and `hooks.go` are gone, and each
+wrapped tool's `goContract` row declares its checks in plain words, shown on its Manage page.
 
 Each item gives:
 - **Unify**: what would be unified, and into what;

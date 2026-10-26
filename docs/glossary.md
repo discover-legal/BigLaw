@@ -149,7 +149,7 @@ described in [architecture.md](architecture.md), and the design reasons in [patt
 - **Strict-shaped**: every object closed, every property required, optional fields nullable.
 - **Spec set**: the built-in files with one snapshot's overrides over them (`engine.Specs`).
 - **Item**: one editable unit in Manage: `agent.`, `prompt.`, `pass.`, `tool.`, `server.`,
-  `rule.`, `pack.` or `skill.` plus a name; Go hooks are kind `hook`, view only (`itemOf`).
+  `rule.`, `pack.` or `skill.` plus a name (`itemOf`).
 - **Override / version**: an admin's saved copy of an item's files, as a row in `spec_versions`.
   `NULL` files mean the built-in again, and `{}` is a tombstone.
 - **Snapshot**: the overrides in effect when a task was submitted (`tasks.specs`). The run uses it
@@ -164,8 +164,8 @@ described in [architecture.md](architecture.md), and the design reasons in [patt
   ([`skills.go`](../internal/engine/skills.go)).
 - **Candidate / reviewed**: a pack's or skill's status. Any content change resets it to candidate
   unless the save names a new reviewer. A deliverable using a candidate says so.
-- **Go hook**: engine code around a tool (`hooked`, `sheets`, `aliasJoin`), shown read-only in
-  Manage ([`hooks.go`](../internal/engine/hooks.go)).
+- **Go checks**: engine code around a tool (`hooked`, `sheets`, `aliasJoin`, `finish`'s lint),
+  declared as plain-English lines on its `goContract` row and shown read-only on its Manage page.
 - **Rule (configurable hook)**: an admin's `{event, match, when, action, failure}` file. Events are
   `before_call`, `after_call`, `finding_admitted` and `task_finish`. Actions are `block`,
   `approve`, `check`, `webhook` and `limitation` ([`hookrules.go`](../internal/engine/hookrules.go)).

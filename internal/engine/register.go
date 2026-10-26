@@ -45,33 +45,68 @@ const (
 )
 
 // goRow is a name's needs, the Go code that calls it (callers: Manage's "where it is used" and
-// goDepends' reason; empty, not nil, when only the figure reader does) and an input Go sends as
-// written in run.go, finish.go or cover.go (sent: compatSpec checks it still validates).
+// goDepends' reason; empty, not nil, when only the figure reader does), an input Go sends as
+// written in run.go, finish.go or cover.go (sent: compatSpec checks it still validates), and the
+// checks Go runs around it, in plain words (Manage shows them on the tool's page; the checks
+// themselves are the Go code that wraps it: hooked, sheets, aliasJoin, finish's lint).
 type goRow struct {
 	name    string
 	needs   goNeeds
 	callers []string
 	sent    string
+	checks  []string
+}
+
+// evidenceChecks are what Go checks of an evidence subagent's findings (admit) before any reaches the ledger.
+var evidenceChecks = []string{
+	"Admits a finding as verified only when every quote passes the ladder (exact, tolerant, then the paraphrase judge); the rest are quarantined, out of the deliverable (G2, G3).",
+	"Keeps a typed value only when its own quote states it as the figure reader reads it; a value no quote states is dropped, with a note.",
+	"Merges an exact duplicate of an admitted finding (the same issue, quotes and values) into the first.",
+	"Runs after_call rules on the subagent's answer before Go records anything: a block withholds it and admits nothing.",
+	"Runs finding_admitted rules on each new finding: a block quarantines it.",
 }
 
 // goContract is every built-in name Go depends on, one row each: a new one is one row here.
 // Row order is read, not cosmetic: MemoVisible (the memo lead's tool list, as the lead is sent it)
 // and critics (the committee's critics, in the order they run and report) are this table's rows in
 // table order, so moving a row reorders them (TestGoContractReproducesTheLists pins both orders).
+// Every tool Go wraps declares its checks (TestWrappedToolsDeclareChecks).
 var goContract = []goRow{
-	{"retrieve", leadTool, nil, ""}, {"ledger", leadTool | enginePass | writesLedger | subagentOK, nil, ""}, {"sweep", leadTool | enginePass | writesLedger, nil, ""},
-	{"extract_facts", leadTool | goWrites | hookedSub, []string{"sweep"}, ""}, {"analyze_issue", leadTool | goWrites | hookedSub, []string{"cover"}, ""},
-	{"check_deviation", leadTool | hookedSub, nil, ""}, {"numbers", leadTool | writesLedger, nil, ""}, {"join_discrepancies", leadTool | writesLedger, nil, ""},
-	{"draft_section", leadTool | goWrites | hookedSub, []string{"cover"}, ""},
-	{"committee", leadTool | goWrites | enginePass | writesLedger | forcedStep, []string{"Go: finish, a stopped run's review"}, `{}`},
-	{"finish", leadTool | goWrites | enginePass | writesLedger, []string{"Go: a stopped run's forced finish"}, `{"op":"submit","limitations":null}`},
-	{"use_skill", leadTool | writesLedger, nil, ""}, {"cover", goWrites | enginePass | writesLedger | forcedStep, []string{"Go: finish, a stopped run"}, `{}`},
-	{"verify_quote", goWrites | unhookable, []string{"Go: admit (every quote's paraphrase judge)"}, ""},
-	{"read_figures", goWrites | writesLedger, []string{"Go: admission and drafted sections (figures.go)"}, ""},
-	{"judge_figures", goWrites | writesLedger, []string{"Go: join_discrepancies, finish (judge.go)"}, ""},
-	{"prosecute", goWrites | critic, []string{"committee"}, ""}, {"reproduce", goWrites | critic, []string{"committee"}, ""}, {"audit_gaps", goWrites | critic, []string{"committee"}, ""},
-	{"meta", 0, []string{"Go: finish (the process note)"}, ""}, {"section_check", 0, []string{"Go: check_deviation's requirement check"}, ""},
-	{"figure_context", 0, []string{}, ""}, {"exact_calc", 0, []string{}, ""},
+	{"retrieve", leadTool, nil, "", nil}, {"ledger", leadTool | enginePass | writesLedger | subagentOK, nil, "", nil}, {"sweep", leadTool | enginePass | writesLedger, nil, "", nil},
+	{"extract_facts", leadTool | goWrites | hookedSub, []string{"sweep"}, "", append([]string{
+		"Sends the subagent the text it reads (a page, or a run of top-level sections) and, when the call names no issue, the plan's issues, then admits only findings that name one.",
+		"Refuses a through that is not a top-level section at or after sectionId, or a run longer than a section's token cap."}, evidenceChecks...)},
+	{"analyze_issue", leadTool | goWrites | hookedSub, []string{"cover"}, "", append([]string{
+		"Appends the packs for the call's jurisdiction to packText.",
+		"Notes each authority the subagent marks as not in the record, and keeps its analysis (rule, application, conclusion) for the issue's drafter."}, evidenceChecks...)},
+	{"check_deviation", leadTool | hookedSub, nil, "", []string{
+		"Refuses a requirementDocId that is not one of controllingDocIds, and a requirement that is not verbatim (exact or tolerant) in it, naming the nearest exact passage to copy.",
+		"Asks one critic call, before the subagent runs, whether the document imposes the requirement as quoted (not negated or overridden): a no fails the call.",
+		"Admits a verdict only when its quotes verify and its controlling quote lies in the requirement's context; a correction keeps its values only when the quotes state them.",
+		"When that critic call answers unclear, had no answer or read a cut-off passage, admits the verdicts at low confidence and gates them for a lawyer, never drops them.",
+		"Runs finding_admitted rules on each new finding: a block quarantines it."}},
+	{"numbers", leadTool | writesLedger, nil, "", []string{
+		"Keeps every calc worksheet in the ledger, so the deliverable's totals and computed dates trace to one (G8).",
+		"Answers op handles from the run's kept codenames, so the lead and the drafters see one codename per figure."}},
+	{"join_discrepancies", leadTool | writesLedger, nil, "", []string{
+		"Keeps the aliases the lead passes for the run, so finish's own join unifies the same parties."}},
+	{"draft_section", leadTool | goWrites | hookedSub, []string{"cover"}, "", []string{
+		"Builds the drafter's whole request from the ledger: the issue's verified findings only (G3), their handles, the worksheets, its analysis and, on a redraft, the checks the current version fails.",
+		"Runs after_call rules on the draft before it is saved: a block withholds it.",
+		"Saves the section and has the figure reader read its own figures, so finish can flag a figure no cited quote states (G8)."}},
+	{"committee", leadTool | goWrites | enginePass | writesLedger | forcedStep, []string{"Go: finish, a stopped run's review"}, `{}`, nil},
+	{"finish", leadTool | goWrites | enginePass | writesLedger, []string{"Go: a stopped run's forced finish"}, `{"op":"submit","limitations":null}`, []string{
+		"Refuses to submit while a section cites an unusable finding or an unknown handle, or states a figure no cited quote, value, handle or worksheet traces (G5, G8); after a few such rounds it discloses them in Limitations instead.",
+		"Refuses to submit with no plan, nothing drafted, or a plan issue with no section citing a verified finding and no disclosure in Limitations.",
+		"Refuses to submit while the documents state a figure differently and the memo does not state both.",
+		"Runs task_finish rules on the deliverable before it is rendered: a block refuses it (disclosed instead on a forced finish)."}},
+	{"use_skill", leadTool | writesLedger, nil, "", nil}, {"cover", goWrites | enginePass | writesLedger | forcedStep, []string{"Go: finish, a stopped run"}, `{}`, nil},
+	{"verify_quote", goWrites | unhookable, []string{"Go: admit (every quote's paraphrase judge)"}, "", nil},
+	{"read_figures", goWrites | writesLedger, []string{"Go: admission and drafted sections (figures.go)"}, "", nil},
+	{"judge_figures", goWrites | writesLedger, []string{"Go: join_discrepancies, finish (judge.go)"}, "", nil},
+	{"prosecute", goWrites | critic, []string{"committee"}, "", nil}, {"reproduce", goWrites | critic, []string{"committee"}, "", nil}, {"audit_gaps", goWrites | critic, []string{"committee"}, "", nil},
+	{"meta", 0, []string{"Go: finish (the process note)"}, "", nil}, {"section_check", 0, []string{"Go: check_deviation's requirement check"}, "", nil},
+	{"figure_context", 0, []string{}, "", nil}, {"exact_calc", 0, []string{}, "", nil},
 }
 
 // MemoVisible is the memo lead's tool list (README § Tools), critics the committee's, in table order.
@@ -90,13 +125,16 @@ func named(n goNeeds) (out []string) {
 func needs(name string, n goNeeds) bool { return slices.Contains(named(n), name) }
 
 // goCallers is the Go code that calls name (goRow.callers), nil when none does.
-func goCallers(name string) []string {
-	for _, c := range goContract {
-		if c.name == name {
-			return slices.Clone(c.callers)
-		}
+func goCallers(name string) []string { return slices.Clone(contractRow(name).callers) }
+
+// goChecks are the checks Go runs around name (goRow.checks), nil when none.
+func goChecks(name string) []string { return slices.Clone(contractRow(name).checks) }
+
+func contractRow(name string) goRow {
+	if i := slices.IndexFunc(goContract, func(c goRow) bool { return c.name == name }); i >= 0 {
+		return goContract[i]
 	}
-	return nil
+	return goRow{}
 }
 
 // hookOut is what an evidence subagent returns to its caller once Go has verified its findings,
@@ -122,7 +160,7 @@ func admitted(f Finding) map[string]any {
 
 // runtime builds the run's registry and runtime from its spec set (r.sp(): the snapshot of its
 // task): the docs and analysis tools, the engine's Go tools, and the subagents from their specs;
-// evidence subagents and draft_section behind Go hooks.
+// evidence subagents and draft_section behind Go (hooked; their checks are goContract's).
 func (e *Engine) runtime(r *run) (*agent.Runtime, error) {
 	sp := r.sp()
 	rt := &agent.Runtime{Chat: e.chat, Roles: e.roles, Prices: e.prices, Reg: agent.NewRegistry(), Policy: policy{r}, Journal: r, Log: e.log}

@@ -380,7 +380,8 @@ An item is the unit an admin edits, and `itemOf` maps every path to one. Item ki
 | `pack.<group>.<code>` | `packs/` |
 | `skill.<name>` | `skills/<name>/` |
 
-Go hooks are shown as kind `hook` (view only).
+A tool's or subagent's detail also lists the checks Go runs around it (`checks`, from its
+`goContract` row; view only).
 
 - **Overrides** ([`manage.go`](../internal/engine/manage.go), migration `0008_overrides.sql`).
   `spec_versions` is append-only. Each save, revert or skill create/delete is a new version holding
@@ -479,11 +480,12 @@ flowchart LR
 
 Two kinds:
 
-- **Go hooks** ([`hooks.go`](../internal/engine/hooks.go)) are the engine code around some tools:
-  `hooked` (`extract_facts`, `analyze_issue`, `check_deviation`, `draft_section`), `sheets`
-  (`numbers`) and `aliasJoin` (`join_discrepancies`) in `register.go`. Manage shows them read-only,
-  with their source cut by `go/parser` from embedded copies of `register.go`, `deviation.go` and
-  `render.go`.
+- **Go checks** are the engine code around some tools: `hooked` (`extract_facts`,
+  `analyze_issue`, `check_deviation`, `draft_section`), `sheets` (`numbers`) and `aliasJoin`
+  (`join_discrepancies`) in `register.go`, and `finish`'s lint. Each tool's `goContract` row
+  declares them as plain-English `checks` lines, which Manage shows on that tool's page
+  (`TestWrappedToolsDeclareChecks`: every wrapped tool declares at least one). They are compiled
+  code, never items, prompts or rules.
 - **Configurable rules** ([`hookrules.go`](../internal/engine/hookrules.go), items `rule.<name>`).
   An admin writes JSON `{name, enabled, order, event, match, when, action, failure}`.
   - Events: `before_call` and `after_call` (through `Runtime.Hooks` around every `Invoke`, except
