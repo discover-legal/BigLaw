@@ -53,6 +53,7 @@ type run struct {
 	step     atomic.Int64 // the lead step that is running (the logs' step of a call inside it)
 	specs    *Specs       // the spec set of its task's snapshot (nil: the built-ins)
 	held     string       // a hook gate this run opened: its next step pauses the run there (hookrules.go approve)
+	rowCache rowCache     // its decoded ledger rows (load)
 }
 
 // hold pauses the run at gate id once the step that opened it commits (Record refuses the next).

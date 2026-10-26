@@ -220,20 +220,6 @@ func (e *Engine) rows(ctx context.Context, taskID, kind string) ([]row, error) {
 	return out, nil
 }
 
-// load decodes one kind of rows into T.
-func load[T any](ctx context.Context, e *Engine, taskID, kind string) ([]T, error) {
-	rs, err := e.rows(ctx, taskID, kind)
-	out := make([]T, 0, len(rs))
-	for _, r := range rs {
-		var v T
-		if err == nil {
-			err = json.Unmarshal(r.Data, &v)
-		}
-		out = append(out, v)
-	}
-	return out, err
-}
-
 // write records a ledger row: buffered in the running step (committed with it), or at once when
 // no step runs (a gate decision). update replaces an existing row; otherwise the first write wins.
 func (e *Engine) write(ctx context.Context, taskID, kind, key string, v any, update bool) error {
