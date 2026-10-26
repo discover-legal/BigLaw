@@ -36,8 +36,9 @@ const (
 // ErrBadInput (400): a search or section request outside its bounds.
 var ErrBadInput = errors.New("docs: bad request")
 
-// searchTimeout bounds one search statement (a variable for tests).
-var searchTimeout = 10 * time.Second
+// searchTimeout bounds one search statement: a Service's default (Service.searchTimeout, which a
+// test of the bound shortens on its own service, never the package's).
+const searchTimeout = 10 * time.Second
 
 // Hit is one search result: a verbatim chunk and where it is (Title is the section path).
 type Hit struct {
@@ -63,7 +64,7 @@ func (s *Service) Search(ctx context.Context, scope []string, query string, k, o
 		return nil, fmt.Errorf("%w: k is 1 to %d, offset 0 to 10000, the query at most %d bytes of UTF-8", ErrBadInput, MaxK, MaxQuery)
 	}
 	ids := pq.Array(validIDs(scope))
-	pctx, cancel := context.WithTimeout(ctx, searchTimeout)
+	pctx, cancel := context.WithTimeout(ctx, s.searchTimeout)
 	defer cancel()
 	var terms int
 	var vectors bool // the scope holds a document the embed model embedded
@@ -83,7 +84,7 @@ func (s *Service) Search(ctx context.Context, scope []string, query string, k, o
 		}
 		qvec = vectorText(e.Vectors[0])
 	}
-	ctx, cancel = context.WithTimeout(ctx, searchTimeout)
+	ctx, cancel = context.WithTimeout(ctx, s.searchTimeout)
 	defer cancel()
 	rows, err := s.db.QueryContext(ctx, searchSQL, ids, query, k, offset, qvec, s.embedModel)
 	if err != nil {
@@ -109,7 +110,7 @@ func (s *Service) Search(ctx context.Context, scope []string, query string, k, o
 
 func (s *Service) searchError(ctx context.Context, err error) error {
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return fmt.Errorf("%w: the search took longer than %s; search fewer documents, or use fewer or rarer words", ErrBadInput, searchTimeout)
+		return fmt.Errorf("%w: the search took longer than %s; search fewer documents, or use fewer or rarer words", ErrBadInput, s.searchTimeout)
 	}
 	return fmt.Errorf("docs: search: %w", err)
 }
