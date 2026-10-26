@@ -337,10 +337,10 @@ flowchart LR
   | meta | 3 | |
 
   The policy refuses a lead call whose class share is spent (`classSpend` reads `task_steps`).
-  Other fractions live beside the code that uses them: `judgeShare` (25%) in
-  [`judge.go`](../internal/engine/judge.go), `placeShare` (40%) in `cover.go`, the critics'
-  2/5, 2/5, 1/5 split in `Allocate`, a sweep visit's quarter of the sweep's USD in `sweep.go`, and
-  `readerReserve` in [`figures.go`](../internal/engine/figures.go).
+  The other named fractions sit in one block beside `Allocate`: `readUSDShare` (10%),
+  `judgeShare` (25%), `judgeFloor` (4 calls) and `placeShare` (40%). Those used once stay inline
+  beside their use: the critics' 2/5, 2/5, 1/5 split in `Allocate`, a sweep visit's quarter of the
+  sweep's USD in `sweep.go`, and `readerReserve` in [`figures.go`](../internal/engine/figures.go).
 - **Journal** ([`steps.go`](../internal/engine/steps.go) `run.Record`). Every lead turn and lead
   tool call is a step. It is inserted `started` with its grant, then committed, refused or failed
   in one transaction with the ledger rows and bandit statistics the step buffered (`e.write`

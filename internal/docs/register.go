@@ -83,9 +83,6 @@ func failure(err error) error {
 	return err
 }
 
-// fence keeps untrusted text inside the judge's <<< >>> fences: it cannot close one.
-var fence = strings.NewReplacer("<<<", "‹‹‹", ">>>", "›››")
-
 // Tools are retrieve and verify_quote over this service, always within the call's DocumentIDs
 // (G1). verify_quote's judge runs on the critic role through rt, held and charged within the
 // call's grant (no rt: no judge).
@@ -160,7 +157,7 @@ func (s *Service) Tools(rt *agent.Runtime) []agent.Tool {
 				err := agent.ErrBudget
 				if rt != nil && rt.Chat != nil {
 					resp, _, err = rt.ChatWithin(ctx, model.Request{Agent: "verify_quote", Role: model.Critic, MaxTokens: 100, Temperature: &t,
-						Messages: []model.Message{{Role: "system", Content: judgePrompt}, {Role: "user", Content: "Quote:\n<<<\n" + fence.Replace(quote) + "\n>>>\n\nPassage:\n<<<\n" + fence.Replace(passage) + "\n>>>"}}}, b)
+						Messages: []model.Message{{Role: "system", Content: judgePrompt}, {Role: "user", Content: "Quote:\n<<<\n" + agent.Fence.Replace(quote) + "\n>>>\n\nPassage:\n<<<\n" + agent.Fence.Replace(passage) + "\n>>>"}}}, b)
 				}
 				if errors.Is(err, agent.ErrBudget) {
 					return false, 0, agent.Fail("verify_quote: the quote is not in the document word for word, and no paraphrase judge is available (no model calls or budget left in this grant)")

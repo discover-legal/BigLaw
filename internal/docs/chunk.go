@@ -7,6 +7,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/discover-legal/BigLaw/internal/agent"
 )
 
 // ChunkTokens caps one search chunk, so a long section is found by its parts, not by its start.
@@ -210,7 +212,7 @@ func tablePage(text string, max int) (string, bool) {
 		if !whole || runes+n > max {
 			break
 		}
-		runes, rows, end = runes+n, rows+btoi(isTableRow(text[end:next])), next
+		runes, rows, end = runes+n, rows+agent.Btoi(isTableRow(text[end:next])), next
 	}
 	return text[:end], end > 0
 }
@@ -240,13 +242,6 @@ func tableHeader(text string) (row string, at int, ok, bounded bool) {
 		first = false
 	}
 	return row, at, ok, bounded
-}
-
-func btoi(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
 }
 
 // headerCells is the header row's first maxColumns cells, split without a slice of every tab.

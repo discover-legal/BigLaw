@@ -118,7 +118,7 @@ func leadVisible(sp *Specs) []string {
 		}
 	}
 	for _, n := range slices.Sorted(maps.Keys(sp.specs)) {
-		if s := sp.specs[n]; s.Kind == "subagent" && !slices.Contains(out, n) && goCallers[n] == nil && !checks[n] {
+		if s := sp.specs[n]; s.Kind == "subagent" && !slices.Contains(out, n) && goCallers(n) == nil && !checks[n] {
 			out = append(out, n)
 		}
 	}
@@ -149,15 +149,15 @@ func (e *Engine) remoteOff(sp *Specs, visible []string) []string {
 // be edited and reverted, never deleted or disabled.
 func goDepends(name string) string {
 	switch {
-	case slices.Contains(MemoVisible, name):
+	case needs(name, leadTool):
 		return "it is one of the memo lead's tools"
-	case len(goCallers[name]) > 0:
-		return "Go calls it (" + strings.Join(goCallers[name], "; ") + ")"
-	case goCallers[name] != nil:
+	case len(goCallers(name)) > 0:
+		return "Go calls it (" + strings.Join(goCallers(name), "; ") + ")"
+	case goCallers(name) != nil:
 		return "the figure reader calls it"
-	case slices.Contains(passes, name):
+	case needs(name, enginePass):
 		return "it is one of the engine's passes"
-	case slices.Contains(goWritten, name):
+	case needs(name, goWrites):
 		return "Go calls it"
 	}
 	return ""
@@ -593,17 +593,15 @@ func toolName(server, remote string) string {
 	if len(n) > 64 {
 		n = strings.TrimRight(n[:64], "_")
 	}
-	if !toolNameRe.MatchString(n) || slices.Contains(reservedNames, n) {
+	if !agent.ToolNameRe.MatchString(n) || slices.Contains(reservedNames, n) {
 		return ""
 	}
 	return n
 }
 
-var toolNameRe = regexp.MustCompile(`^[a-z][a-z0-9_]{1,63}$`)
-
 // reservedNames are names no admin's subagent or tool may take: the lead, the Test call's caller,
 // "meta", and the engine's passes (L1).
-var reservedNames = append([]string{"lead", "meta", "manage_test"}, passes...)
+var reservedNames = append([]string{"lead", "meta", "manage_test"}, named(enginePass)...)
 
 // TestIn is a Test call: one call of an agent or tool over a matter's documents.
 type TestIn struct {
@@ -658,7 +656,7 @@ func (e *Engine) TestCall(ctx context.Context, id string, in TestIn, author stri
 	switch {
 	case !ok:
 		return TestResult{}, fmt.Errorf("%w: no tool or subagent %s", ErrNotFound, name)
-	case s.Final || len(s.Solo) > 0 || slices.Contains(passes, name):
+	case s.Final || len(s.Solo) > 0 || needs(name, enginePass):
 		return TestResult{}, invalid("", "%s runs only inside a task (it is a pass, ends the run, or acts as the lead)", name)
 	case sp.tools[name].Name != "" && e.remote.policy.Off:
 		return TestResult{}, errRemoteOff

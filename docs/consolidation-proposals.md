@@ -2,7 +2,17 @@
 
 This is an audit of v2 at 29def72 for **design-level** normalisation and consolidation. It is not
 a list of line-level tidy-ups: the refactor pass in PR #59 looked for those and found little to
-cut (−19 Go lines). Nothing here is implemented.
+cut (−19 Go lines).
+
+**Status (branch `v2-consolidate`).** Done, with no behaviour change: A1 (`labelModels`,
+`cachedAnswer`, `labelCall`/`labelFailed`, `storeRead` in `figures.go`), A2 (`goContract` in
+`register.go`), A3's merge of `candidates`/`skillCandidates` (`candidateLine`; not the single
+disclosures builder), A4 (`agent.Fence`, `ToolNameRe`, `ExampleRe`, `Btoi`), A5 (the named
+fractions in one block in `policy.go`) and § C (the README restructure: `docs/documents.md`,
+`figures.md`, `reference.md`, `history.md`). Not done: A6 (three of the five `Finding.Low` sites
+are Go-hook source Manage shows, and the note wording differs by site) and A7 (it needs a
+migration and a fallback for runs in flight across the upgrade, which keeps today's code). Part B
+is the owner's.
 
 Each item gives:
 - **Unify**: what would be unified, and into what;

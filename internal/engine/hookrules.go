@@ -247,12 +247,7 @@ func ruleFailed(format string, a ...any) error { return ruleFailure{fmt.Errorf(f
 // unhooked are the calls no rule applies to: finish (task_finish is its hook point, so a forced
 // finish is never refused) and verify_quote (the engine's own quote check, G2: a rule there could only
 // turn verified evidence into "failed verification").
-func unhooked(s agent.Spec) bool { return s.Final || s.Name == "verify_quote" }
-
-// hookedTools are the evidence and drafting subagents whose effects (admitted findings, a saved
-// section) Go makes after the subagent answers: their after_call rules run on the subagent's answer
-// before any of it is recorded (hooked.Call), so a block withholds every effect, not only the answer.
-var hookedTools = []string{"extract_facts", "analyze_issue", "check_deviation", "draft_section"}
+func unhooked(s agent.Spec) bool { return s.Final || needs(s.Name, unhookable) }
 
 // run applies the event's rules in order, spending checks from b. Inside a check (a check agent's
 // own calls) the rules apply too, but a check action is skipped: no check ever checks a check.
@@ -394,7 +389,7 @@ func approveCallers(sp *Specs, name string) []string {
 	if !ok || r.Action.Type != "approve" || r.Event != "before_call" {
 		return nil
 	}
-	by := slices.Clone(goCallers[r.Match])
+	by := slices.Clone(goCallers(r.Match))
 	for _, n := range slices.Sorted(maps.Keys(sp.specs)) {
 		if slices.Contains(sp.specs[n].Allowed, r.Match) {
 			by = append(by, "subagent "+n)
@@ -548,7 +543,7 @@ func (h hookRunner) Before(ctx context.Context, p agent.Pending) (*agent.Refusal
 // After is the runtime's hook after a call: block or a failing-closed check withholds its answer.
 // The hooked subagents' rules ran on their answers before Go recorded anything (afterHooked).
 func (h hookRunner) After(ctx context.Context, p agent.Pending, res agent.Result, err error) (agent.Usage, error) {
-	if err != nil || unhooked(p.Spec) || slices.Contains(hookedTools, p.Spec.Name) {
+	if err != nil || unhooked(p.Spec) || needs(p.Spec.Name, hookedSub) {
 		return agent.Usage{}, err
 	}
 	v, herr := h.afterRun(ctx, p.TaskID, p.Spec.Name, p.Input, res.Output, p.Budget)
@@ -673,15 +668,6 @@ func (e *Engine) validateHookRule(f, text string, bad func(string, string, ...an
 	}
 }
 
-// forcedSteps are the lead's tools a forced finish runs as the lead's own steps (committee, the
-// coverage pass): an approve rule there would pause a run that must end, so it is refused at save.
-var forcedSteps = []string{"committee", "cover"}
-
-// ledgerWriters are the tools whose calls write the matter's ledger as they run (an answer withheld
-// after them would leave what they wrote): an after_call block or check may not name them. The
-// hooked evidence and drafting subagents are not here: their rules run before Go records anything.
-var ledgerWriters = []string{"ledger", "sweep", "committee", "cover", "finish", "numbers", "join_discrepancies", "use_skill", "read_figures", "judge_figures"}
-
 // validateHookRefs checks what rules name exists in the set: an exact match a tool or subagent, a
 // check's subagent one whose input takes {event, subject, text} and whose output holds verdict and
 // reason.
@@ -699,16 +685,16 @@ func validateHookRefs(sp *Specs, bad func(string, string, ...any)) {
 			}
 		}
 		switch {
-		case calls && r.Action.Type == "approve" && slices.Contains(forcedSteps, m):
+		case calls && r.Action.Type == "approve" && needs(m, forcedStep):
 			bad(f, "action: approve cannot hold %s: a forced finish (budget or steps spent) runs it as the lead's own step, where a gate would pause the run instead of ending it; use block or a check", m)
 		case calls && r.Action.Type == "approve" && (!exact || !slices.Contains(leadVisible(sp), m)):
 			bad(f, "action: approve names one tool the lead calls (one of %s): only a call the lead makes can be held for a lawyer and made again once approved; Go's and subagents' calls cannot", strings.Join(leadVisible(sp), ", "))
 		case withholds && !exact:
 			bad(f, "match: an after_call block or check names one tool: what a call already did cannot be undone, so each tool it may withhold is checked (use before_call for a wider rule)")
-		case withholds && slices.Contains(ledgerWriters, m):
+		case withholds && needs(m, writesLedger):
 			bad(f, "match: %s writes the matter's ledger as it runs, so withholding its answer after it cannot withhold what it did: use before_call", m)
-		case withholds && sp.specs[m].Kind == "subagent" && !slices.Contains(hookedTools, m) &&
-			slices.ContainsFunc(sp.specs[m].Allowed, func(t string) bool { return slices.Contains(ledgerWriters, t) }):
+		case withholds && sp.specs[m].Kind == "subagent" && !needs(m, hookedSub) &&
+			slices.ContainsFunc(sp.specs[m].Allowed, func(t string) bool { return needs(t, writesLedger) }):
 			bad(f, "match: %s may call a tool that writes the ledger, which withholding its answer cannot undo: use before_call", m)
 		}
 		if r.Action.Type != "check" {

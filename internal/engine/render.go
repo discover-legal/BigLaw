@@ -323,15 +323,14 @@ func (e *Engine) render(ctx context.Context, t Task, limits []string, computed c
 		transcriptOnly += btoi(allCitations(f, func(c Citation) bool { return strings.HasSuffix(c.Method, "@transcript") }))
 		lowOnly += btoi(allCitations(f, func(c Citation) bool { return c.Low }))
 	}
-	if s := candidates(packsFor(ctx, t.Jurisdiction, practiceOf(issues))); s != "" {
-		limits = append(limits, s)
-	}
 	used, err := load[SkillUse](ctx, e, t.ID, kSkill)
 	if err != nil {
 		return deliverable{}, err
 	}
-	if s := skillCandidates(used); s != "" {
-		limits = append(limits, s)
+	for _, s := range []string{candidates(packsFor(ctx, t.Jurisdiction, practiceOf(issues))), skillCandidates(used)} { // packs, then skills
+		if s != "" {
+			limits = append(limits, s)
+		}
 	}
 	if len(external) > 0 {
 		limits = append(limits, fmt.Sprintf("%d external %s cited above %s not verified (no citator): see Authorities Requiring Verification.", len(external),
