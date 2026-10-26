@@ -341,7 +341,7 @@ func unescape(s string) string {
 		case 't':
 			return "\t"
 		case 'u':
-			if r, err := strconv.ParseUint(m[2:], 16, 32); err == nil {
+			if r, err := strconv.ParseUint(m[2:], 16, 16); err == nil {
 				return string(rune(r))
 			}
 			return m

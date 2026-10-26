@@ -267,7 +267,8 @@ func (h hookRunner) run(ctx context.Context, ev event, rules []HookRule, b *agen
 		if cerr == nil && !ok {
 			continue
 		}
-		outcome, note, err := "allowed", "", error(nil)
+		outcome, note := "allowed", ""
+		var err error
 		if cerr != nil {
 			err = ruleFailure{cerr}
 		} else {

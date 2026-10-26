@@ -288,11 +288,13 @@ func (e *Engine) sweepVisits(ctx context.Context, rt *agent.Runtime, c agent.Cal
 		if err != nil {
 			return err
 		}
-		through := "null"
+		through := []byte("null")
 		if v.Through != "" {
-			through = fmt.Sprintf("%q", v.Through)
+			through, _ = json.Marshal(v.Through)
 		}
-		in := fmt.Sprintf(`{"question":%s,"documentId":%q,"sectionId":%q,"through":%s,"offset":%d,"query":null,"issueId":null}`, q, v.DocumentID, v.SectionID, through, v.Offset)
+		doc, _ := json.Marshal(v.DocumentID)
+		sec, _ := json.Marshal(v.SectionID)
+		in := fmt.Sprintf(`{"question":%s,"documentId":%s,"sectionId":%s,"through":%s,"offset":%d,"query":null,"issueId":null}`, q, doc, sec, through, v.Offset)
 		next, tail := make(chan struct{}), calls < turns || usd < share || serial
 		inflight++
 		vctx, read := context.WithValue(cctx, turnKey{}, prev), cur

@@ -90,10 +90,15 @@ def os_call_args(src):
         yield src[m.end():i - 1]
 
 
+def read_text(path, errors="strict"):
+    with open(path, encoding="utf-8", errors=errors) as f:
+        return f.read()
+
+
 def module_path(root):
     path = os.path.join(root, "go.mod")
     if os.path.exists(path):
-        for line in open(path, encoding="utf-8"):
+        for line in read_text(path).split("\n"):
             if line.startswith("module "):
                 return line.split()[1]
     return ""
@@ -104,7 +109,7 @@ def test_support(root, pkgs):
     mod, imported = module_path(root), set()
     for rel, files in pkgs.items():
         for path in files["prod"]:
-            for imp in IMPORT.findall(open(path, encoding="utf-8", errors="replace").read()):
+            for imp in IMPORT.findall(read_text(path, errors="replace")):
                 if mod and imp.startswith(mod + "/") and imp[len(mod) + 1:] != rel.replace(os.sep, "/"):
                     imported.add(imp[len(mod) + 1:])
     return {r for r in pkgs if os.path.basename(r).endswith("test") and r.replace(os.sep, "/") not in imported}
@@ -115,7 +120,7 @@ def direct_deps(root):
     if not os.path.exists(path):
         return []
     deps, in_block = [], False
-    for line in open(path, encoding="utf-8"):
+    for line in read_text(path).split("\n"):
         s = line.strip()
         if s.startswith("require ("):
             in_block = True
@@ -136,7 +141,7 @@ def ui_deps(root):
     path = os.path.join(root, "ui", "package.json")
     if not os.path.exists(path):
         return []
-    return sorted(json.load(open(path, encoding="utf-8")).get("dependencies", {}))
+    return sorted(json.loads(read_text(path)).get("dependencies", {}))
 
 
 def source_files(root):
@@ -156,7 +161,7 @@ def measure(root):
     loc, env, problems, longest, ui_loc = 0, set(), [], 0, 0
     ui_src = os.path.join("ui", "src") + os.sep
     for path in source_files(root):
-        src = open(path, encoding="utf-8", errors="replace").read()
+        src = read_text(path, errors="replace")
         n, rel = lines(src), os.path.relpath(path, root)
         longest = max(longest, n)
         if rel.startswith(ui_src) and rel.endswith((".ts", ".tsx", ".css")):
@@ -170,7 +175,7 @@ def measure(root):
             problems.append(f"{name} is missing at the repository root")
     for rel, files in pkgs.items():
         for path in files["prod"]:
-            src = open(path, encoding="utf-8", errors="replace").read()
+            src = read_text(path, errors="replace")
             loc += lines(src)
             read = set(CALL_LITERAL.findall(src)) | set(TABLE_NAME.findall(src))
             names = read | set(SHAPED.findall(src))

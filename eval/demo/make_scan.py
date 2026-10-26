@@ -27,7 +27,8 @@ def font(name, size):
 
 
 def main():
-    lines = open(TEXT, encoding="utf-8").read().rstrip("\n").split("\n")
+    with open(TEXT, encoding="utf-8") as f:
+        lines = f.read().rstrip("\n").split("\n")
     rnd = random.Random(26)
     w, h = 1275, 1650  # US Letter at 150 dpi
     page = Image.new("L", (w, h), 246)

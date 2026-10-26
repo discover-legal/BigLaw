@@ -241,8 +241,9 @@ func (c *Client) Chat(ctx context.Context, req Request) (*Response, error) {
 	if err := req.check(); err != nil {
 		return nil, err
 	}
-	model, err := req.Model, error(nil)
+	model := req.Model
 	if model == "" {
+		var err error
 		if model, err = c.roles.Model(req.Role); err != nil {
 			return nil, err
 		}

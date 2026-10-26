@@ -51,7 +51,7 @@ type Prices struct {
 // is the JSON; anything else names a regular file. Errors never echo the value or the file.
 func LoadPrices(value string) (*Prices, error) {
 	p := &Prices{builtin: builtinPrices}
-	data, src, err := []byte(strings.TrimSpace(value)), "the JSON value", error(nil)
+	data, src := []byte(strings.TrimSpace(value)), "the JSON value"
 	if len(data) == 0 {
 		return p, nil
 	}
@@ -68,6 +68,7 @@ func LoadPrices(value string) (*Prices, error) {
 			return nil, errors.New("cannot read the file it names, or it is over 1 MiB")
 		}
 	}
+	var err error
 	if p.operator, err = ParsePrices(data); err != nil {
 		return nil, fmt.Errorf("%s: %w", src, err)
 	}

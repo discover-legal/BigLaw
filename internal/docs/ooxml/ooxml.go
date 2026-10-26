@@ -136,7 +136,7 @@ func text(b *strings.Builder, src string) error {
 					run.WriteString(map[string]string{"tab": "\t", "br": "\n", "cr": "\n", "noBreakHyphen": "\u2011"}[t.Name.Local])
 				}
 			case "sym": // a symbol-font character: kept when it is a Unicode character, not a private-use code
-				if c, err := strconv.ParseUint(attr(t, "char"), 16, 32); inRun && err == nil && utf8.ValidRune(rune(c)) && !unicode.Is(unicode.Co, rune(c)) && c >= 0x20 {
+				if c, err := strconv.ParseUint(attr(t, "char"), 16, 31); inRun && err == nil && utf8.ValidRune(rune(c)) && !unicode.Is(unicode.Co, rune(c)) && c >= 0x20 {
 					run.WriteRune(rune(c))
 				}
 			case "vanish":

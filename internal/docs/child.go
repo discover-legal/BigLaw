@@ -53,7 +53,7 @@ func MaybeRunChild() {
 	var arg [3]uint64
 	for i := range arg {
 		var err error
-		if arg[i], err = strconv.ParseUint(os.Args[min(i+2, len(os.Args)-1)], 10, 64); err != nil || len(os.Args) != 5 {
+		if arg[i], err = strconv.ParseUint(os.Args[min(i+2, len(os.Args)-1)], 10, 63); err != nil || len(os.Args) != 5 {
 			os.Exit(2)
 		}
 	}

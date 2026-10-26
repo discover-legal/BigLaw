@@ -16,8 +16,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
-from unittest import mock
 
 BENCH = Path(__file__).resolve().parent.parent / "bench"
 sys.path.insert(0, str(BENCH))
@@ -176,7 +176,7 @@ class KeyTests(unittest.TestCase):
 
     def run_cli(self, env: dict, *args: str) -> tuple[int, str]:
         err = io.StringIO()
-        with mock.patch.dict(os.environ, env, clear=True), contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+        with unittest.mock.patch.dict(os.environ, env, clear=True), contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
             code = benchrun.main(["run", *args])
         return code, err.getvalue()
 
@@ -229,7 +229,7 @@ class CapTests(unittest.TestCase):
             rec["charged_usd"] = spent
             return rec, (stops or {}).get(t["id"])
 
-        with mock.patch.object(suite, "run_task", fake_run_task), tempfile.TemporaryDirectory() as d:
+        with unittest.mock.patch.object(suite, "run_task", fake_run_task), tempfile.TemporaryDirectory() as d:
             s = suite.run_suite(cfg, api="http://x", lab_root=Path(d), out=Path(d) / "20261026-abcdef0", db=None, harness=Path(d), key="",
                                 redact=bconfig.Redactor(), log=lambda m: None,
                                 build={"sha": "abcdef0", "dirty": False, "patch": None, "untracked": [], "go": None},
@@ -368,8 +368,8 @@ class PostgresCleanupTests(unittest.TestCase):
             calls.append(cmd)
             return subprocess.CompletedProcess(cmd, 1 if "pg_isready" in cmd else 0, "", "")
 
-        with mock.patch.object(infra.shutil, "which", lambda name: "/usr/bin/" + name), \
-                mock.patch.object(infra.subprocess, "run", fake_run), mock.patch.object(infra.time, "sleep", lambda s: None):
+        with unittest.mock.patch.object(infra.shutil, "which", lambda name: "/usr/bin/" + name), \
+                unittest.mock.patch.object(infra.subprocess, "run", fake_run), unittest.mock.patch.object(infra.time, "sleep", lambda s: None):
             with self.assertRaises(infra.InfraError):
                 infra.Postgres(None, "img", lambda m: None)
         self.assertEqual(calls[-1][:3], ["docker", "rm", "-f"])
@@ -441,7 +441,7 @@ class SignalTests(unittest.TestCase):
 
         before = signal.getsignal(signal.SIGTERM)
         logged = []
-        with mock.patch.object(benchrun, "cancel_active", mock.Mock(side_effect=KeyboardInterrupt)):
+        with unittest.mock.patch.object(benchrun, "cancel_active", unittest.mock.Mock(side_effect=KeyboardInterrupt)):
             benchrun.stop_all([Item("db", SystemExit(143)), Item("serve", KeyboardInterrupt())], logged.append)
         self.assertEqual(seen, [("serve", True), ("db", True)])
         self.assertEqual(signal.getsignal(signal.SIGTERM), before)
