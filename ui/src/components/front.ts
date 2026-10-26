@@ -38,6 +38,28 @@ export function setField(f: Front, k: string, v: string | string[]): Front {
     : { ...f, keys, fields: { ...f.fields, [k]: v.replace(/\s+/g, ' ').trim() }, lists: { ...f.lists, [k]: [] } };
 }
 
+/** A part of the file a field edits: a front-matter value, a list (one item a line) or the body. */
+export type Part = 'field' | 'list' | 'body';
+const stored = (f: Front, part: Part, k: string) => (part === 'body' ? f.body : part === 'list' ? (f.lists[k] ?? []).join('\n') : f.fields[k] ?? '');
+const put = (f: Front, part: Part, k: string, v: string) => (part === 'body' ? { ...f, body: v.trim() } : setField(f, k, part === 'list' ? v.split('\n') : v));
+
+/**
+ * typing is what each field shows and the file a keystroke writes. The file is written trimmed, as it
+ * is saved (setField, the body trimmed); a field shows what was typed while that still writes as the
+ * file's value, so a trailing space or a new empty line survives the keystroke, else the file's value.
+ */
+export function typing(text: string, typed: Record<string, string>) {
+  const f = parseFront(text) as Front;
+  return {
+    f,
+    value(part: Part, k = '') {
+      const t = typed[`${part}:${k}`], now = stored(f, part, k);
+      return t !== undefined && stored(put(f, part, k, t), part, k) === now ? t : now;
+    },
+    write: (part: Part, k: string, v: string) => ({ typed: { ...typed, [`${part}:${k}`]: v }, text: writeFront(put(f, part, k, v)) }),
+  };
+}
+
 /** writeJSON is v in text's own indent (its second line's), so an edit changes only what it edits. */
 export function writeJSON(text: string, v: unknown): string {
   const indent = /^\{\n( +)/.exec(text)?.[1].length ?? 1;

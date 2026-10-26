@@ -9,7 +9,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { ApiError } from '../api/transport.ts';
 import type { Discovery, ManageDetail, ManageItem, ManageSection, Problem, SpecVersion, TestResult } from '../api/types.ts';
 import { DiffView } from '../components/diff.ts';
-import { isSpec, parseFront, setField, writeFront, writeJSON, type Front } from '../components/front.ts';
+import { isSpec, parseFront, setField, typing, writeFront, writeJSON, type Part } from '../components/front.ts';
 import { Empty, Failure, go, Loading, plural, useApi, useLoad } from '../lib.tsx';
 
 const SECTIONS: [ManageSection | 'changes', string, string][] = [
@@ -260,14 +260,19 @@ function SchemaField(props: { label: string; value: unknown; set: (v: unknown) =
 
 /** FrontFields edits a pack's or skill's front matter and body. */
 function FrontFields(props: { text: string; skill: boolean; callers: string[]; set: (text: string) => void }) {
-  const f = parseFront(props.text) as Front;
+  const [typed, setTyped] = useState<Record<string, string>>({});
+  const ed = typing(props.text, typed), f = ed.f;
   const put = (k: string, v: string | string[]) => props.set(writeFront(setField(f, k, v)));
+  const type = (part: Part, k = '') => ({
+    value: ed.value(part, k),
+    onChange: (e: { target: { value: string } }) => { const w = ed.write(part, k, e.target.value); setTyped(w.typed); props.set(w.text); },
+  });
   return (
     <div className="fields">
-      {props.skill && <label className="block">Description (one line; the brief lists it)<input value={f.fields.description ?? ''} onChange={(e) => put('description', e.target.value)} maxLength={200} /></label>}
+      {props.skill && <label className="block">Description (one line; the brief lists it)<input {...type('field', 'description')} maxLength={200} /></label>}
       <div className="row">
         <label>Status <select value={f.fields.status} onChange={(e) => put('status', e.target.value)}><option>candidate</option><option>reviewed</option></select></label>
-        <label>Reviewed by <input value={f.fields.reviewedBy ?? ''} onChange={(e) => put('reviewedBy', e.target.value)} placeholder="the reviewing lawyer" /></label>
+        <label>Reviewed by <input {...type('field', 'reviewedBy')} placeholder="the reviewing lawyer" /></label>
       </div>
       <p className="muted small">Changing the content resets the status to candidate unless you name a new reviewer.</p>
       {props.skill ? (
@@ -276,9 +281,9 @@ function FrontFields(props: { text: string; skill: boolean; callers: string[]; s
             onChange={(e) => put('tools', e.target.checked ? [...(f.lists.tools ?? []), t] : (f.lists.tools ?? []).filter((x) => x !== t))} /> {t}</label>)}
         </fieldset>
       ) : (
-        <label className="block">Checklist (one item a line)<textarea rows={5} value={(f.lists.checklist ?? []).join('\n')} onChange={(e) => put('checklist', e.target.value.split('\n'))} /></label>
+        <label className="block">Checklist (one item a line)<textarea rows={5} {...type('list', 'checklist')} /></label>
       )}
-      <label className="block">{props.skill ? 'Instructions' : 'Body'}<textarea rows={12} value={f.body} onChange={(e) => props.set(writeFront({ ...f, body: e.target.value.trim() }))} /></label>
+      <label className="block">{props.skill ? 'Instructions' : 'Body'}<textarea rows={12} {...type('body')} /></label>
     </div>
   );
 }

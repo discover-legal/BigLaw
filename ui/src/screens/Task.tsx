@@ -3,7 +3,8 @@
 //
 // Task: the live loop log (steps + SSE), findings with verification badges, the deliverable with
 // its Limitations and Evidence Note, the deliverable gate, and the cost ledger.
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { follow, type Follow } from '../api/follow.ts';
 import type { Doc, Finding, Gate, Step, Task, TaskCost } from '../api/types.ts';
 import { Badge, badgeFor } from '../components/badge.ts';
 import { Icon, stepIcon } from '../components/icons.tsx';
@@ -23,18 +24,19 @@ export function TaskScreen(props: { id: string; tab: string }) {
   const [focus, setFocus] = useState<string | null>(null);
   const docs = useLoad(() => (task ? api.documents(task.matterNumber) : Promise.resolve([] as Doc[])), [task?.matterNumber]);
 
+  const stream = useRef<Follow | null>(null);
   useEffect(() => {
     let live = true;
     setSteps([]);
     const refresh = () => api.task(props.id).then((t) => { if (live) setTask(t); }, (e: Error) => live && setError(e.message));
     void refresh();
-    const stop = api.events(props.id, (e) => {
-      if (!live) return;
+    const f = stream.current = follow(api, props.id, (e) => {
       if (e.type === 'step') setSteps((s) => (s.some((x) => x.step === e.step.step) ? s : [...s, e.step]));
       else void refresh();
     });
-    return () => { live = false; stop(); };
+    return () => { live = false; f.close(); };
   }, [api, props.id]);
+  useEffect(() => { if (task?.id === props.id) stream.current?.status(task.status); }, [task, props.id]); // a decided gate resumes the run: stream it again
 
   if (error && !task) {
     return (

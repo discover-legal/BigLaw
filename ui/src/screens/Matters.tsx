@@ -26,7 +26,7 @@ export function Matters(props: { matter: string }) {
         : 'Pick a matter to start a task on its documents.'}</p>
       <Failure error={clients.error ?? tasks.error} />
       {!clients.data && !clients.error && <Loading label="Loading matters" />}
-      {clients.data && all.length === 0 && <Empty icon="doc" title="No matters yet">Matters come from Clients (PR 8).</Empty>}
+      {clients.data && all.length === 0 && <Empty icon="doc" title="No matters yet">A matter appears here once a document is filed to it.</Empty>}
       <div className="cards">
         {all.map((m) => (
           <button key={m.number} className={`card matter ${picked?.number === m.number ? 'on' : ''}`} aria-pressed={picked?.number === m.number} onClick={() => go('matters', { matter: m.number })}>

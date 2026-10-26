@@ -276,6 +276,57 @@ func TestEventsStreamSendsTheLastStep(t *testing.T) {
 	}
 }
 
+// TestEventsStreamReopensAfterAGate: a stream ends with done when the run pauses at a gate; once the
+// gate is decided the run resumes, and a stream opened again (as the Task screen does) sends every
+// step from the first once, in order, the ones after the pause too, then done when the run stops again.
+func TestEventsStreamReopensAfterAGate(t *testing.T) {
+	t.Parallel()
+	s, ids := newServer(t, memo, roles, doc1)
+	_, body := s.do("POST", "/tasks", m{"description": "What is claimed?", "workflowType": "memo", "documentIds": ids})
+	var v engine.TaskView
+	json.Unmarshal([]byte(body), &v)
+	read := func() (steps []int, done *engine.Run) {
+		resp, err := http.Get(s.URL + "/tasks/" + v.ID + "/events")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		sc := bufio.NewScanner(resp.Body)
+		for ev := ""; sc.Scan(); {
+			line, data := sc.Text(), []byte(strings.TrimPrefix(sc.Text(), "data: "))
+			switch {
+			case strings.HasPrefix(line, "event: "):
+				ev = strings.TrimPrefix(line, "event: ")
+			case ev == "step" && strings.HasPrefix(line, "data: "):
+				var st engine.StepView
+				json.Unmarshal(data, &st)
+				steps = append(steps, st.Step)
+			case ev == "done" && strings.HasPrefix(line, "data: "):
+				done = &engine.Run{}
+				json.Unmarshal(data, done)
+			}
+		}
+		return steps, done
+	}
+	first, done := read()
+	if done == nil || done.Status != "awaiting_gate" || len(first) != 10 {
+		t.Fatalf("first stream: steps %v, done %+v", first, done)
+	}
+	v = s.waitFor(v.ID, func(v engine.TaskView) bool { return len(v.PendingGates) == 1 })
+	if code, body := s.do("POST", "/tasks/"+v.ID+"/gates/"+v.PendingGates[0].GateID+"/reject", m{"reason": "Cite the invoice dates."}); code != 200 || !strings.Contains(body, `"status":"running"`) {
+		t.Fatalf("%d %s", code, body)
+	}
+	again, done := read()
+	for i, n := range again {
+		if n != i+1 {
+			t.Fatalf("reopened stream: steps %v", again)
+		}
+	}
+	if done == nil || done.Status != "awaiting_gate" || len(again) <= len(first) || done.Step != len(again) {
+		t.Fatalf("reopened stream: steps %v, done %+v", again, done)
+	}
+}
+
 // TestModelErrorsAsJSON: each model failure kind maps to its status, errorType and a fixed message
 // (nothing of the endpoint's own text); a cancelled request is 499.
 func TestModelErrorsAsJSON(t *testing.T) {
