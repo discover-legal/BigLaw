@@ -37,7 +37,7 @@ else
   else
     case "$key" in *[!A-Za-z0-9_-]*) fail "that does not look like an API key; nothing was saved." ;; esac
     murl=https://openrouter.ai/api/v1
-    models=lead=anthropic/claude-haiku-4.5,embed=openai/text-embedding-3-small,vision=anthropic/claude-haiku-4.5
+    models=lead=anthropic/claude-haiku-4.5,vision=anthropic/claude-haiku-4.5 # no embed role: lexical search
   fi
   umask 077 # .env holds the key and the database password: readable by you alone
   PW="$(od -An -tx1 -N24 /dev/urandom | tr -d ' \n')" KEY="$key" MURL="$murl" MODELS="$models" awk '
