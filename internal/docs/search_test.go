@@ -318,6 +318,7 @@ func TestLexicalRecallProofRuns(t *testing.T) {
 // MaxTerms and the statement at searchTimeout. On a 4 MiB scope of short clauses this prints the
 // times README § Documents quotes; 33 distinct words and a statement past the timeout are refused.
 func TestSearchCost(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("ingests 4 MiB")
 	}
@@ -365,10 +366,8 @@ func TestSearchCost(t *testing.T) {
 			t.Errorf("hybrid %q: %d hits, %v", q, len(hits), err)
 		}
 	}
-	old := searchTimeout
-	searchTimeout = time.Millisecond
+	s.searchTimeout = time.Millisecond // this service's bound only, so the test runs beside others
 	_, err := s.Search(t.Context(), scope, "supplier invoice", 8, 0)
-	searchTimeout = old
 	if !errors.Is(err, ErrBadInput) || !strings.Contains(err.Error(), "took longer") {
 		t.Errorf("a search past its timeout: %v", err)
 	}

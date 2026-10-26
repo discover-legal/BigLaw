@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"unicode"
 
 	"github.com/discover-legal/BigLaw/internal/model"
 	"github.com/lib/pq"
@@ -175,7 +176,9 @@ func decodeVector(s string) ([]float32, error) {
 func hashVector(text string, dims int) []float32 {
 	v := make([]float32, dims)
 	v[0] = 1e-3 // never the zero vector
-	for _, w := range regexp.MustCompile(`[\p{L}\p{N}]+`).FindAllString(strings.ToLower(text), -1) {
+	// the words are the maximal runs of letters and digits ([\p{L}\p{N}]+), split without a regexp:
+	// TestSearchCost embeds 12k chunks, and compiling and running one per text dominated it under -race
+	for _, w := range strings.FieldsFunc(strings.ToLower(text), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsNumber(r) }) {
 		h := fnv.New32a()
 		h.Write([]byte(w))
 		x := h.Sum32()

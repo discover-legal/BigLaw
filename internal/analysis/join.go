@@ -117,7 +117,12 @@ func Candidates(findings []Finding, limit int, judged func(Candidate) bool) (can
 // findings state it) that have a counterpart to compare with have none among the candidates: the
 // figures whose conflicts a join this size cannot find (lab-r4 r9 residual a).
 func CandidatesCover(findings []Finding, limit int, judged func(Candidate) bool) (cands []Candidate, dropped, uncovered int) {
-	ranked := rankPairs(findings)
+	return coverFrom(rankPairs(findings), limit, judged)
+}
+
+// coverFrom is CandidatesCover over the findings' ranked pairs (rankPairs), which it only reads, so
+// a test that asks many limits of one ledger ranks it once.
+func coverFrom(ranked []Candidate, limit int, judged func(Candidate) bool) (cands []Candidate, dropped, uncovered int) {
 	var rest []Candidate
 	for _, c := range ranked {
 		if judged != nil && judged(c) {

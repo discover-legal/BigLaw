@@ -91,10 +91,12 @@ type Service struct {
 	visionModel, visionKey string
 	log                    *slog.Logger
 	readers                chan struct{} // documents reading scans with the vision model, outside the ingest slots
+	searchTimeout          time.Duration // bounds one search statement (searchTimeout)
 }
 
 func New(st *store.Store) *Service {
-	return &Service{st: st, db: st.DB(), slots: make(chan struct{}, ingestSlots), readers: make(chan struct{}, ingestSlots), log: slog.New(slog.DiscardHandler)}
+	return &Service{st: st, db: st.DB(), slots: make(chan struct{}, ingestSlots), readers: make(chan struct{}, ingestSlots), log: slog.New(slog.DiscardHandler),
+		searchTimeout: searchTimeout}
 }
 
 // Extraction is what Extract read from a file. Blank lists the pages with no text layer, or a stamp

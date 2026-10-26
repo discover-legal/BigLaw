@@ -208,12 +208,12 @@ func skipWhy(v Visit, earlier []Visit) (why string, src int) {
 		return "boilerplate", -1
 	}
 	folded, words, rows := fold(v.text), len(strings.Fields(v.text)), sortedLines(lines)
+	table := slices.ContainsFunc(lines, tableRow) // v's own: read once, not once per earlier visit
 	for i, x := range earlier {
 		if x.DocumentID != v.DocumentID && words < 40 {
 			continue
 		}
-		if xl := strings.FieldsFunc(x.text, func(r rune) bool { return r == '\n' }); fold(x.text) == folded ||
-			slices.ContainsFunc(lines, tableRow) && slices.Equal(sortedLines(xl), rows) {
+		if fold(x.text) == folded || table && slices.Equal(sortedLines(strings.FieldsFunc(x.text, func(r rune) bool { return r == '\n' })), rows) {
 			return "duplicate", i
 		}
 	}

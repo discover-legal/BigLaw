@@ -114,8 +114,23 @@ func TestEnvVarTablesAgree(t *testing.T) {
 			t.Errorf("%s sets %v, want %v", file, names, want)
 		}
 	}
-	// No file names a variable the code does not declare.
-	for _, file := range []string{"docker-compose.yml", ".env.example", "render.yaml", "README.md", "CLAUDE.md"} {
+	// No file names a variable the code does not declare: the deploy files, README, CLAUDE.md and
+	// every page under docs/ (documents.md, figures.md, reference.md and history.md hold what moved
+	// out of the README, so they must stay as true as it is).
+	files := []string{"docker-compose.yml", ".env.example", "render.yaml", "README.md", "CLAUDE.md"}
+	pages, err := filepath.Glob("../../docs/*.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range pages {
+		files = append(files, "docs/"+filepath.Base(p))
+	}
+	for _, must := range []string{"docs/documents.md", "docs/figures.md", "docs/reference.md", "docs/history.md"} {
+		if !slices.Contains(files, must) { // a renamed page must not silently leave the scan
+			t.Errorf("%s is missing: the env-var scan covers docs/*.md and expects it there", must)
+		}
+	}
+	for _, file := range files {
 		for _, m := range varName.FindAllString(readRepo(t, file), -1) {
 			if _, ok := declared[m]; !ok && m != "BIGLAW_TEST_DSN" && m != "BIGLAW_REQUIRE_DB" {
 				t.Errorf("%s names %s, which config.go does not declare", file, m)

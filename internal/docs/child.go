@@ -114,11 +114,11 @@ func readChild(r io.Reader) (out childOutput, ok bool) {
 }
 
 // childCommand is the reader child for this process: no environment (it never holds the
-// server's secrets), killed with its parent on Linux (Pdeathsig) and when ctx ends.
+// server's secrets; childEnv), killed with its parent on Linux (Pdeathsig) and when ctx ends.
 func childCommand(ctx context.Context, exe string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, exe, childArg, strconv.Itoa(os.Getpid()), strconv.FormatInt(childTimeout.Milliseconds(), 10),
 		strconv.FormatUint(childMemory, 10))
-	cmd.Env, cmd.SysProcAttr = []string{}, childAttr()
+	cmd.Env, cmd.SysProcAttr = append([]string{}, childEnv...), childAttr()
 	return cmd
 }
 

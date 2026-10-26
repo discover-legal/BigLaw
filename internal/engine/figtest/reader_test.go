@@ -5,6 +5,7 @@ package figtest
 
 import (
 	"encoding/json"
+	"math/rand/v2"
 	"strings"
 	"testing"
 
@@ -35,5 +36,27 @@ func TestReaderLabelsEverySpanItWasGiven(t *testing.T) {
 	r, _ = With(map[string]string{"3": "Talbot"}, nil, map[string]string{"644,910": "damages claimed"})(req)
 	if !strings.Contains(r.Text, `"party":"Talbot"`) || !strings.Contains(r.Text, `"measures":"damages claimed"`) {
 		t.Errorf("overrides: %s", r.Text)
+	}
+}
+
+// The windows oracleRef and oracleMonth match on (refWindow, monthWindow) answer as the whole text
+// does, on texts built from the pieces either pattern reads: month and reference words, their
+// case-folded letters (ſ, the Kelvin sign), digits, dots, commas, white space and other runes.
+func TestWindowsMatchAsTheWholeText(t *testing.T) {
+	pieces := []string{"Jan", "jan", "MARCH", "Sep", "ſep", "dec", "uary", "x", "K", "ſ", "Section", "ſection", "§", "no.", "No.", "#", "item", "Paragraph",
+		"para", "graph", " ", "  ", "\t", "\n", ".", ",", "1", "12", "123", "2026", "$", "(", "é", "\xff", "\xc3", "a", "q", "-", ":", "ARTICLE", "ticle"}
+	r := rand.New(rand.NewPCG(3, 4))
+	for range 10000 {
+		var b strings.Builder
+		for range r.IntN(12) {
+			b.WriteString(pieces[r.IntN(len(pieces))])
+		}
+		s := b.String()
+		if got, want := oracleRef.MatchString(refWindow(s)), oracleRef.MatchString(s); got != want {
+			t.Fatalf("oracleRef on %q: window %q says %v, the whole text %v", s, refWindow(s), got, want)
+		}
+		if got, want := oracleMonth.MatchString(monthWindow(s)), oracleMonth.MatchString(s); got != want {
+			t.Fatalf("oracleMonth on %q: window %q says %v, the whole text %v", s, monthWindow(s), got, want)
+		}
 	}
 }

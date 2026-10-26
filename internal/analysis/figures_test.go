@@ -229,9 +229,11 @@ func TestLiteralCorpus(t *testing.T) {
 // literalProperties are Literal's and Spans' invariants over any text: no panic, spans in bounds,
 // in order and never overlapping, each span's text exactly the text's bytes there, and every reading
 // round-trips: written plainly, it reads back to itself.
-func literalProperties(t *testing.T, s string) {
+// literalProperties checks Spans' and Literal's spans of s and returns Spans', which it checked.
+func literalProperties(t *testing.T, s string) []Span {
 	t.Helper()
-	for _, ss := range [][]Span{Spans(s), func() []Span { _, x := Literal(s); return x }()} {
+	spans := Spans(s)
+	for _, ss := range [][]Span{spans, func() []Span { _, x := Literal(s); return x }()} {
 		for i, x := range ss {
 			if x.Start < 0 || x.End > len(s) || x.Start >= x.End || s[x.Start:x.End] != x.Text {
 				t.Fatalf("bad span %+v in %q", x, s)
@@ -247,6 +249,7 @@ func literalProperties(t *testing.T, s string) {
 			}
 		}
 	}
+	return spans
 }
 
 // TestLiteralPropertyGenerated: 100,000 numbers written plain, US-grouped, continental, with
@@ -290,8 +293,7 @@ func TestLiteralPropertyGenerated(t *testing.T) {
 		}
 		ctx := []string{"The Purchaser shall pay $%s on Closing.", "Total:\t%s", "%s", "Net: %s.", "fee of EUR %s", "%s shares", "%s%%", "(%s)", "CHF %s per seat"}[r.IntN(9)]
 		line := fmt.Sprintf(ctx, num)
-		literalProperties(t, line)
-		ss := Spans(line)
+		ss := literalProperties(t, line) // Spans(line), checked
 		if len(ss) != 1 || ss[0].Text != num || !slices.ContainsFunc(ss[0].Readings(), func(x *big.Rat) bool { return x.Cmp(want) == 0 }) {
 			if bad++; bad <= 20 {
 				t.Errorf("%q reads %+v, want %q = %s", line, ss, num, want.RatString())
@@ -308,5 +310,5 @@ func FuzzFigureProperties(f *testing.F) {
 	for _, c := range literalCorpus {
 		f.Add(c.in)
 	}
-	f.Fuzz(literalProperties)
+	f.Fuzz(func(t *testing.T, s string) { literalProperties(t, s) })
 }

@@ -13,8 +13,10 @@ import (
 // TestGoContractReproducesTheLists pins every list of what Go needs from a tool name as it was
 // written by hand before the one table (goContract): membership, order where order is read, the
 // figure reader's empty caller lists, and goDepends' user-visible reason for every built-in name.
-// The lists are now queries on goContract (named, needs, goCallers, goRowOf); the values are as
-// they were.
+// The lists are now queries on goContract (named, needs, goCallers, and its rows' sent inputs); the
+// values are as they were. Order is read for two of them: MemoVisible and critics are goContract's
+// rows in table order, so their exact slices below pin the table's row order too (moving a row in
+// goContract fails this test).
 func TestGoContractReproducesTheLists(t *testing.T) {
 	eq := func(what string, got, want any) {
 		t.Helper()

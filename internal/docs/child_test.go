@@ -95,7 +95,11 @@ func TestChildBoundsItself(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmd := childCommand(t.Context(), exe)
-	if cmd.Env == nil || len(cmd.Env) != 0 || cmd.Args[1] != childArg || cmd.Args[2] != strconv.Itoa(os.Getpid()) {
+	env := []string{} // none; a race build's child only skips ThreadSanitizer's exit sleep (child_race.go)
+	if raceBuild() {
+		env = []string{"GORACE=atexit_sleep_ms=0"}
+	}
+	if cmd.Env == nil || !slices.Equal(cmd.Env, env) || cmd.Args[1] != childArg || cmd.Args[2] != strconv.Itoa(os.Getpid()) {
 		t.Errorf("child command: env %q args %q", cmd.Env, cmd.Args)
 	}
 	if runtime.GOOS == "linux" && (cmd.SysProcAttr == nil || cmd.SysProcAttr.Pdeathsig != syscall.SIGKILL) {

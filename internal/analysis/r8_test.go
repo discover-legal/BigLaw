@@ -17,10 +17,10 @@ import (
 // M1: what real ledgers put to the judge at a few budgets, and how many pairs past them are dropped.
 func TestJoinBenchCandidateCounts(t *testing.T) {
 	for _, name := range []string{"sec", "trust", "gatea"} {
-		fs := read(bench6Ledger(t, name))
-		all := len(rankPairs(fs))
+		ranked := rankPairs(read(bench6Ledger(t, name))) // ranked once: Candidates is coverFrom(rankPairs(fs))
+		all := len(ranked)
 		for _, calls := range []int{6, 16} {
-			cands, dropped := Candidates(fs, CandidateLimit(calls), nil)
+			cands, dropped, _ := coverFrom(ranked, CandidateLimit(calls), nil)
 			if len(cands)+dropped != all || len(cands) != min(all, CandidateLimit(calls)) {
 				t.Errorf("bench6 %s, %d calls: %d candidates + %d dropped, of %d pairs", name, calls, len(cands), dropped, all)
 			}

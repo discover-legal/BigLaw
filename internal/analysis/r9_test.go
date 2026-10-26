@@ -101,17 +101,17 @@ func TestCaptionOverProseWithCommas(t *testing.T) {
 // Residual a: the values a join this size leaves without any counterpart judged are counted (what the
 // Limitations line leads with), and fall as the budget grows.
 func TestJoinCountsUncoveredValues(t *testing.T) {
-	fs := read(bench6Ledger(t, "sec"))
+	ranked := rankPairs(read(bench6Ledger(t, "sec"))) // ranked once: CandidatesCover is coverFrom(rankPairs(fs))
 	last := -1
 	for _, calls := range []int{2, 6, 15, 16} {
-		cands, dropped, uncovered := CandidatesCover(fs, CandidateLimit(calls), nil)
+		cands, dropped, uncovered := coverFrom(ranked, CandidateLimit(calls), nil)
 		t.Logf("bench6 sec, %d judge calls: %d candidates, %d dropped, %d values with no counterpart judged", calls, len(cands), dropped, uncovered)
 		if last >= 0 && uncovered > last || uncovered == 0 {
 			t.Errorf("%d calls: %d uncovered values (before: %d)", calls, uncovered, last)
 		}
 		last = uncovered
 	}
-	if _, _, u := CandidatesCover(fs, len(rankPairs(fs)), nil); u != 0 {
+	if _, _, u := coverFrom(ranked, len(ranked), nil); u != 0 {
 		t.Errorf("every pair asked, %d values uncovered", u)
 	}
 }
@@ -129,7 +129,7 @@ func TestPendingSizedGrantAsksAllPending(t *testing.T) {
 		}
 		judged := func(c Candidate) bool { return done[c.ID] }
 		jcalls := 10
-		cands, _ := Candidates(fs, CandidateLimit(jcalls), judged)
+		cands, _, _ := coverFrom(ranked, CandidateLimit(jcalls), judged) // Candidates(fs, …), ranked once
 		n := 0
 		for _, c := range cands {
 			if !judged(c) {
@@ -137,7 +137,7 @@ func TestPendingSizedGrantAsksAllPending(t *testing.T) {
 			}
 		}
 		grant := min(jcalls, (n+JudgePairs-1)/JudgePairs)
-		got, _ := Candidates(fs, CandidateLimit(grant), judged)
+		got, _, _ := coverFrom(ranked, CandidateLimit(grant), judged)
 		asked := 0
 		for _, c := range got {
 			if !judged(c) {

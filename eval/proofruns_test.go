@@ -21,6 +21,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode"
@@ -37,7 +38,63 @@ import (
 
 func TestMain(m *testing.M) {
 	docs.MaybeRunChild()
-	os.Exit(m.Run())
+	var err error
+	if runsDir, err = os.MkdirTemp("", "biglaw-proofruns-"); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	code := m.Run()
+	os.RemoveAll(runsDir)
+	os.Exit(code)
+}
+
+// sharedRun is one proof run of a matter under one script. TestProofRunsGolden and
+// TestProofRunsOracle (and …Fabricator) assert on the same run, the same matter under the same
+// script, so whichever asks first drives it and the other reads it: each run is made once, not
+// twice, which halves this package's engine work. Its files live in runsDir until the package ends.
+type sharedRun struct {
+	once    sync.Once
+	ok      bool   // drive returned: false when the run failed (or skipped) the test that drove it
+	skipped bool   // the test that drove it skipped (no database): the others skip too
+	by      string // the test that drove it
+	seen    map[string]bool
+	v       engine.TaskView
+	dir     string
+	gates   []string
+}
+
+var (
+	runsMu  sync.Mutex
+	runs    = map[string]*sharedRun{} // matter slug + "/" + script name → the current run
+	runsDir string                    // the shared runs' files (TestMain)
+)
+
+// driveShared is drive, once per matter and script (sharedRun). A test asking again for a run it
+// already read is a new -count iteration, so it starts a fresh run: -count=N still drives N runs.
+func driveShared(t *testing.T, mt matter, name string, scripts func(matter, map[string]string) map[string][]model.Reply) (engine.TaskView, string, []string) {
+	t.Helper()
+	key := mt.Slug + "/" + name
+	runsMu.Lock()
+	s := runs[key]
+	if s == nil || s.seen[t.Name()] {
+		s = &sharedRun{seen: map[string]bool{}}
+		runs[key] = s
+	}
+	s.seen[t.Name()] = true
+	runsMu.Unlock()
+	s.once.Do(func() { // a Fatal or Skip in drive still ends the Once: s.ok stays false
+		s.by = t.Name()
+		defer func() { s.skipped = t.Skipped() }()
+		s.v, s.dir, s.gates = drive(t, mt, scripts)
+		s.ok = true
+	})
+	if s.skipped {
+		t.Skipf("the %s run of %s was skipped in %s", name, mt.Slug, s.by)
+	}
+	if !s.ok {
+		t.Fatalf("the %s run of %s failed in %s, which drove it for this test too", name, mt.Slug, s.by)
+	}
+	return s.v, s.dir, s.gates
 }
 
 type item struct {
@@ -264,7 +321,10 @@ func drive(t *testing.T, mt matter, scripts func(matter, map[string]string) map[
 			v, _ = e.Get(ctx, task.ID)
 		}
 	}
-	dir := t.TempDir()
+	dir, err := os.MkdirTemp(runsDir, mt.Slug+"-") // shared: it outlives the test that drove it (sharedRun)
+	if err != nil {
+		t.Fatal(err)
+	}
 	os.MkdirAll(filepath.Join(dir, "output"), 0o755)
 	for i, name := range mt.Task.Deliverables {
 		out := ""
@@ -325,7 +385,7 @@ func TestProofRunsOracle(t *testing.T) {
 	for _, mt := range loadMatters(t) {
 		t.Run(mt.Slug, func(t *testing.T) {
 			t.Parallel()
-			v, dir, gates := drive(t, mt, oracle)
+			v, dir, gates := driveShared(t, mt, "oracle", oracle)
 			if v.Status != "complete" {
 				t.Fatalf("%s %s", v.Status, deref(v.Error))
 			}
@@ -388,7 +448,7 @@ func TestProofRunsFabricator(t *testing.T) {
 	for _, mt := range loadMatters(t) {
 		t.Run(mt.Slug, func(t *testing.T) {
 			t.Parallel()
-			v, dir, _ := drive(t, mt, fabricator)
+			v, dir, _ := driveShared(t, mt, "fabricator", fabricator)
 			if v.Status != "failed" || v.GroundingAlert == nil || v.Output != nil {
 				t.Fatalf("%s alert %v", v.Status, v.GroundingAlert)
 			}
