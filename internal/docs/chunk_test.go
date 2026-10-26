@@ -130,7 +130,6 @@ func TestChunksCoverEveryWordOnce(t *testing.T) {
 // into every chunk (3,284× and 168 s for the first shape); r1's table rows copied the whole header
 // (10,002× and 3 GB for a 120 KB table).
 func TestSectionTreeBounded(t *testing.T) {
-	t.Parallel() // it changes no package bound; its shapes stay in one sequence, each timed alone
 	const bound = 3 // × the input: every chunk column (locator, body, search text, context)
 	var chain strings.Builder
 	for n := "1"; chain.Len() < 1<<20; n += ".1" {
