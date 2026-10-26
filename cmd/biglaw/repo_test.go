@@ -107,8 +107,8 @@ func TestEnvVarTablesAgree(t *testing.T) {
 		}
 	}
 	// No file names a variable the code does not declare: the deploy files, README, CLAUDE.md and
-	// every page under docs/ (documents.md, figures.md, reference.md and history.md hold what moved
-	// out of the README, so they must stay as true as it is).
+	// every page under docs/ (documents.md, figures.md and reference.md hold what moved out of the
+	// README, so they must stay as true as it is).
 	files := []string{"docker-compose.yml", ".env.example", "render.yaml", "README.md", "CLAUDE.md"}
 	pages, err := filepath.Glob("../../docs/*.md")
 	if err != nil {
@@ -117,7 +117,7 @@ func TestEnvVarTablesAgree(t *testing.T) {
 	for _, p := range pages {
 		files = append(files, "docs/"+filepath.Base(p))
 	}
-	for _, must := range []string{"docs/documents.md", "docs/figures.md", "docs/reference.md", "docs/history.md"} {
+	for _, must := range []string{"docs/documents.md", "docs/figures.md", "docs/reference.md"} {
 		if !slices.Contains(files, must) { // a renamed page must not silently leave the scan
 			t.Errorf("%s is missing: the env-var scan covers docs/*.md and expects it there", must)
 		}
@@ -126,6 +126,57 @@ func TestEnvVarTablesAgree(t *testing.T) {
 		for _, m := range varName.FindAllString(readRepo(t, file), -1) {
 			if _, ok := declared[m]; !ok && m != "BIGLAW_TEST_DSN" && m != "BIGLAW_REQUIRE_DB" {
 				t.Errorf("%s names %s, which config.go does not declare", file, m)
+			}
+		}
+	}
+}
+
+// TestDocsCiteRealTests: every Test… or Fuzz… name README.md, CLAUDE.md and docs/*.md cite is a
+// function or method in the repository's Go code, so a renamed or deleted test cannot linger in the
+// prose. A name written with a trailing * or … ("TestBench*") is a prefix that must match one.
+func TestDocsCiteRealTests(t *testing.T) {
+	defined := map[string]bool{}
+	def := regexp.MustCompile(`(?m)^func (?:\([^)]*\) )?((?:Test|Fuzz)\w+)`)
+	err := filepath.WalkDir("../..", func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() && (strings.HasPrefix(d.Name(), ".") && path != "../.." || d.Name() == "node_modules") {
+			return filepath.SkipDir
+		}
+		if strings.HasSuffix(path, ".go") {
+			b, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			for _, m := range def.FindAllStringSubmatch(string(b), -1) {
+				defined[m[1]] = true
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := []string{"README.md", "CLAUDE.md"}
+	pages, err := filepath.Glob("../../docs/*.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range pages {
+		files = append(files, "docs/"+filepath.Base(p))
+	}
+	cited := regexp.MustCompile(`\b(?:Test|Fuzz)[A-Z0-9_]\w*(?:\*|…)?`)
+	for _, file := range files {
+		for _, name := range cited.FindAllString(readRepo(t, file), -1) {
+			prefix, ok := strings.CutSuffix(strings.TrimSuffix(name, "*"), "…")
+			ok = ok || strings.HasSuffix(name, "*")
+			found := defined[prefix]
+			for d := range defined {
+				found = found || ok && strings.HasPrefix(d, prefix)
+			}
+			if !found {
+				t.Errorf("%s cites %s, which no Go test or function defines", file, name)
 			}
 		}
 	}

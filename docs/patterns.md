@@ -340,7 +340,8 @@ test that fails if a second appears:
 - `Runtime.Invoke` is the only dispatch;
 - `recordFinding` is the only way a new finding enters the ledger, so `finding_admitted` hooks see
   them all (`TestFindingWritesGoThroughRecord` parses the engine's source);
-- `model.HTTPStatus` and `engine.ErrorType` are the only failure mappings;
+- `engine.ErrorType` maps every failure the API answers (the document routes: `docs.writeError`),
+  each with BigLaw's fixed text;
 - `docs` is the only reader of document tables (`TestImportBoundaries`);
 - `shown` in `cmd/biglaw/config.go` is the only printer of config values;
 - `secretValue` is the only reader of secrets.
