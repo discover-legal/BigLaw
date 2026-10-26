@@ -132,6 +132,7 @@ jobs:
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     needs: [go, lint, ui, docker]
     runs-on: ubuntu-latest
+    concurrency: { group: "publish-${{ github.ref }}", cancel-in-progress: false } # an older build never lands last
     permissions:
       contents: read
       packages: write # this job only: push ghcr.io/discover-legal/biglaw
