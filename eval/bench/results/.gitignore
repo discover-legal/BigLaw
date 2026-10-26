@@ -1,0 +1,11 @@
+# Bench results (docs/benchmarks.md § Results): one directory per run, <UTC date>-<sha7>[-n]/.
+# Only each run's summary.json is committed; everything else a run writes is large or local:
+#   logs/      bench.log, serve.log, judge-<task>.log (redacted; still not committed)
+#   lab/       the suite's LAB_ROOT: tasks/ (a link to the harness's tasks) and results/<run-id>/ (deliverables,
+#              biglaw_tasks.json, scores.json, report.html)
+#   proofrun/  proof-run run dirs (deliverables, task records, scores.json)
+#   build/     the binary the run served
+*
+!.gitignore
+!*/
+!*/summary.json

@@ -139,7 +139,9 @@ def _run_biglaw(client, task_cfg, args, deliverables, workflow, multi, doc_ids, 
             outputs[name] = (sections.get(name, strip_markers(synthesis)), table)
 
 
-def run_task(args: argparse.Namespace) -> Path:
+def run_task(args: argparse.Namespace, client: BigLawClient | None = None) -> Path:
+    """Run one LAB task; client (default: a BigLawClient on args.api) lets a caller such as the bench
+    suite watch every poll (eval/bench: it stops on a provider's 401 or credit error)."""
     labs_dir = Path(args.labs_dir).expanduser().resolve()
     task_dir = labs_dir / "tasks" / args.task
     task_json = task_dir / "task.json"
@@ -165,7 +167,7 @@ def run_task(args: argparse.Namespace) -> Path:
             f.write(json.dumps(record) + "\n")
         print(f"[{kind}] {payload}")
 
-    client = BigLawClient(args.api)
+    client = client or BigLawClient(args.api)
     client.health()  # fail fast with a clear error if the backend is down
 
     started = time.monotonic()
