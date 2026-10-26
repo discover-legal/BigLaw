@@ -55,6 +55,9 @@ type goRow struct {
 }
 
 // goContract is every built-in name Go depends on, one row each: a new one is one row here.
+// Row order is read, not cosmetic: MemoVisible (the memo lead's tool list, as the lead is sent it)
+// and critics (the committee's critics, in the order they run and report) are this table's rows in
+// table order, so moving a row reorders them (TestGoContractReproducesTheLists pins both orders).
 var goContract = []goRow{
 	{"retrieve", leadTool, nil, ""}, {"ledger", leadTool | enginePass | writesLedger | subagentOK, nil, ""}, {"sweep", leadTool | enginePass | writesLedger, nil, ""},
 	{"extract_facts", leadTool | goWrites | hookedSub, []string{"sweep"}, ""}, {"analyze_issue", leadTool | goWrites | hookedSub, []string{"cover"}, ""},
