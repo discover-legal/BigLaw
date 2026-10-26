@@ -9,7 +9,7 @@ budgets in `docs/history.md`. v2 is `main`; v1 (Go under `biglaw-go/`, DyTopo) i
 
 ## Built so far
 - `cmd/biglaw` — `serve [--allow-no-auth] [--admin-without-auth]`, `version [--config]`; `config.go` holds the complete
-  env-var table (19 vars, each tagged with the PR that first reads it; sign-in's are `BIGLAW_OIDC_ISSUER`,
+  env-var table (18 vars, each declared in the PR that first reads it; sign-in's are `BIGLAW_OIDC_ISSUER`,
   `_CLIENT_ID`, `_CLIENT_SECRET`, `BIGLAW_PUBLIC_URL` and `BIGLAW_ADMINS` (PR 8), validated together by `signIn`; `BIGLAW_MODELS` is the role
   map `role=id,…`, ids refused if they hold `://`, `user:pw@`, white space, control or invisible
   characters or `? = &`, are over 200 bytes or look like a key)
@@ -207,8 +207,8 @@ not yet judged (self-test tape).
   `/proc/self/exe` on Linux. A server stop cancels in-flight requests after `shutdownGrace`
   (`docs.ErrStopping`, 503).
 - Every `docs` read takes the caller's scope; never read `documents`/`chunks`/`files` around it.
-- New env var = add it to `envVars` in `cmd/biglaw/config.go` (with its PR), README's table and
-  docker-compose; `TestEnvVarTablesAgree` fails otherwise. Validate a variable in the PR that
+- New env var = add it to `envVars` in `cmd/biglaw/config.go`, README's table and
+  docker-compose; `TestEnvVarTablesAgree` fails otherwise. Declare a variable in the PR that
   first reads it, not before. Read env only through that table (literal names; `scripts/loc.py`
   rejects dynamic `os.Getenv`).
 - Migrations: a new `internal/store/migrations/NNNN_name.sql` (next number, lowercase name).
@@ -280,5 +280,5 @@ make demo-bundle # ui/dist-recorded for discover.legal/demo/biglaw/; make demo-r
 make e4-record EMBED_MODEL=…   # owner-run: record the E4 tape at the model's own length (make e4-live: no tape)
 ```
 Budgets: Go prod LOC reported with no limit (owner decision 17: the total ceiling is dropped; `python3 scripts/loc.py` prints today's figure, never write it here; each PR reports its lines vs its DESIGN budget; test-support packages such as `storetest` count), internal
-packages ≤ 12 (9 used; test-support packages do not count), direct deps ≤ 3, env vars ≤ 20 (19 used), UI runtime
+packages ≤ 12 (9 used; test-support packages do not count), direct deps ≤ 3, env vars ≤ 20 (18 used), UI runtime
 deps ≤ 2 (2 used), UI source lines (`ui/src`) ≤ 3,200 (raised from 2,400 for Manage), untested packages 0, longest source file ≤ 2,000 lines.
