@@ -57,6 +57,9 @@ func TestGoContractReproducesTheLists(t *testing.T) {
 	eq("forcedSteps", set(named(forcedStep)), set([]string{"committee", "cover"}))
 	eq("subagentSafe", set(named(subagentOK)), []string{"ledger"})
 	eq("critics", critics, []string{"prosecute", "reproduce", "audit_gaps"})
+	eq("banditPinned", named(pinned), []string{"retrieve", "ledger", "committee", "finish"})
+	eq("banditSkip", named(unhookable), []string{"verify_quote"})
+	eq("checkTurn", named(checkTurn), []string{"check_deviation"})
 
 	names := slices.Sorted(maps.Keys(builtinSpecs.specs))
 	for _, n := range []string{"meta", "section_check", "no_such_tool"} {

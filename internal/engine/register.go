@@ -41,7 +41,10 @@ const (
 	forcedStep                       // a forced finish runs it as the lead's step: no approve rule may hold it
 	subagentOK                       // its lead-only ops refuse a subagent in its own code (ledger at depth 1)
 	critic                           // a committee critic (critics, in goContract's order)
-	unhookable                       // no rule applies to it: verify_quote is the engine's own quote check, G2
+	unhookable                       // no rule applies to it, nor the bandit (agent.Bandit.Skip): verify_quote is the engine's own quote check, G2
+	pinned                           // listed first in the bandit's hint, in goContract's order (agent.Bandit.Pinned)
+	readerTurn                       // its grant holds the figure reader's call on its answer (goTurns)
+	checkTurn                        // its grant holds the requirement's critic check beside its own turns (check_deviation)
 )
 
 // goRow is a name's needs, the Go code that calls it (callers: Manage's "where it is used" and
@@ -72,14 +75,14 @@ var evidenceChecks = []string{
 // table order, so moving a row reorders them (TestGoContractReproducesTheLists pins both orders).
 // Every tool Go wraps declares its checks (TestWrappedToolsDeclareChecks).
 var goContract = []goRow{
-	{"retrieve", leadTool, nil, "", nil}, {"ledger", leadTool | enginePass | writesLedger | subagentOK, nil, "", nil}, {"sweep", leadTool | enginePass | writesLedger, nil, "", nil},
-	{"extract_facts", leadTool | goWrites | hookedSub, []string{"sweep"}, "", append([]string{
+	{"retrieve", leadTool | pinned, nil, "", nil}, {"ledger", leadTool | enginePass | writesLedger | subagentOK | pinned, nil, "", nil}, {"sweep", leadTool | enginePass | writesLedger, nil, "", nil},
+	{"extract_facts", leadTool | goWrites | hookedSub | readerTurn, []string{"sweep"}, "", append([]string{
 		"Sends the subagent the text it reads (a page, or a run of top-level sections) and, when the call names no issue, the plan's issues, then admits only findings that name one.",
 		"Refuses a through that is not a top-level section at or after sectionId, or a run longer than a section's token cap."}, evidenceChecks...)},
-	{"analyze_issue", leadTool | goWrites | hookedSub, []string{"cover"}, "", append([]string{
+	{"analyze_issue", leadTool | goWrites | hookedSub | readerTurn, []string{"cover"}, "", append([]string{
 		"Appends the packs for the call's jurisdiction to packText.",
 		"Notes each authority the subagent marks as not in the record, and keeps its analysis (rule, application, conclusion) for the issue's drafter."}, evidenceChecks...)},
-	{"check_deviation", leadTool | hookedSub, nil, "", []string{
+	{"check_deviation", leadTool | hookedSub | checkTurn, nil, "", []string{
 		"Refuses a requirementDocId that is not one of controllingDocIds, and a requirement that is not verbatim (exact or tolerant) in it, naming the nearest exact passage to copy.",
 		"Asks one critic call, before the subagent runs, whether the document imposes the requirement as quoted (not negated or overridden): a no fails the call.",
 		"Admits a verdict only when its quotes verify and its controlling quote lies in the requirement's context; a correction keeps its values only when the quotes state them.",
@@ -90,12 +93,12 @@ var goContract = []goRow{
 		"Answers op handles from the run's kept codenames, so the lead and the drafters see one codename per figure."}},
 	{"join_discrepancies", leadTool | writesLedger, nil, "", []string{
 		"Keeps the aliases the lead passes for the run, so finish's own join unifies the same parties."}},
-	{"draft_section", leadTool | goWrites | hookedSub, []string{"cover"}, "", []string{
+	{"draft_section", leadTool | goWrites | hookedSub | readerTurn, []string{"cover"}, "", []string{
 		"Builds the drafter's whole request from the ledger: the issue's verified findings only (G3), their handles, the worksheets, its analysis and, on a redraft, the checks the current version fails.",
 		"Runs after_call rules on the draft before it is saved: a block withholds it.",
 		"Saves the section and has the figure reader read its own figures, so finish can flag a figure no cited quote states (G8)."}},
-	{"committee", leadTool | goWrites | enginePass | writesLedger | forcedStep, []string{"Go: finish, a stopped run's review"}, `{}`, nil},
-	{"finish", leadTool | goWrites | enginePass | writesLedger, []string{"Go: a stopped run's forced finish"}, `{"op":"submit","limitations":null}`, []string{
+	{"committee", leadTool | goWrites | enginePass | writesLedger | forcedStep | pinned, []string{"Go: finish, a stopped run's review"}, `{}`, nil},
+	{"finish", leadTool | goWrites | enginePass | writesLedger | pinned, []string{"Go: a stopped run's forced finish"}, `{"op":"submit","limitations":null}`, []string{
 		"Refuses to submit while a section cites an unusable finding or an unknown handle, or states a figure no cited quote, value, handle or worksheet traces (G5, G8); after a few such rounds it discloses them in Limitations instead.",
 		"Refuses to submit with no plan, nothing drafted, or a plan issue with no section citing a verified finding and no disclosure in Limitations.",
 		"Refuses to submit while the documents state a figure differently and the memo does not state both.",
@@ -165,7 +168,7 @@ func (e *Engine) runtime(r *run) (*agent.Runtime, error) {
 	sp := r.sp()
 	rt := &agent.Runtime{Chat: e.chat, Roles: e.roles, Prices: e.prices, Reg: agent.NewRegistry(), Policy: policy{r}, Journal: r, Log: e.log}
 	rt.Bandit = &agent.Bandit{Stats: stats{r}, Sig: agent.Signature(r.t.WorkflowType, "", r.t.Jurisdiction, r.t.LeadModel, len(r.t.DocumentIDs)),
-		BudgetCalls: e.cfg.BudgetCalls, Off: !r.t.ToolBandit}
+		BudgetCalls: e.cfg.BudgetCalls, Off: !r.t.ToolBandit, Pinned: named(pinned), Skip: named(unhookable)}
 	var tools []agent.Tool
 	for _, t := range e.docs.Tools(rt) {
 		tools = append(tools, respec{t, sp.Spec(t.Spec().Name)})
@@ -287,16 +290,11 @@ type hooked struct {
 // figure reader of a drafted section or of an evidence call's findings (lab-r4 r5 L4: reserved before
 // the subagent runs, and from the quotes' judges, never what they left). They are not the
 // subagent's turns: P4's class share does not count them against the subagent.
-func goTurns(name string) int {
-	if name == "draft_section" || name == "extract_facts" || name == "analyze_issue" {
-		return 1
-	}
-	return 0
-}
+func goTurns(name string) int { return map[bool]int{true: 1}[needs(name, readerTurn)] }
 
 func (h hooked) Spec() agent.Spec {
 	s := h.Tool.Spec()
-	if s.Name == "check_deviation" { // its grant holds the requirement's check beside the subagent's own turns
+	if needs(s.Name, checkTurn) { // its grant holds the requirement's check beside the subagent's own turns
 		s.MaxTurns++
 	}
 	s.MaxTurns += goTurns(s.Name)
