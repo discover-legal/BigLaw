@@ -265,7 +265,7 @@ func uiHandler(ui fs.FS) http.Handler {
 }
 
 // names is a task as p may see it: under sign-in a member sees who submitted it and who decided
-// its gates by display name only, never another person's email (README § Sign-in).
+// its gates by display name only, never another person's email or subject (README § Sign-in).
 func names[T engine.TaskView | []engine.TaskView](p Principal, v T) T {
 	if !p.SignedIn || p.Admin {
 		return v
@@ -273,12 +273,12 @@ func names[T engine.TaskView | []engine.TaskView](p Principal, v T) T {
 	hide := func(t *engine.TaskView) {
 		if t.SubmittedBy != nil {
 			x := *t.SubmittedBy
-			x.Email, x.Name, t.SubmittedBy = "", engine.DisplayName(x.Name), &x
+			x.ID, x.Email, x.Name, t.SubmittedBy = "", "", engine.DisplayName(x.Name), &x // an issuer's sub may be an email (r4 L-9)
 		}
 		for i, g := range t.DecidedGates {
 			if g.DecidedBy != nil {
 				x := *g.DecidedBy
-				x.Email, x.Name, t.DecidedGates[i].DecidedBy = "", engine.DisplayName(x.Name), &x
+				x.ID, x.Email, x.Name, t.DecidedGates[i].DecidedBy = "", "", engine.DisplayName(x.Name), &x
 			}
 		}
 	}

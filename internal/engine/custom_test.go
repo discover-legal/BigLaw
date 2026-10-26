@@ -497,7 +497,8 @@ func TestDeleteRefusedWhileReferenced(t *testing.T) {
 func TestDisplayName(t *testing.T) {
 	t.Parallel()
 	for in, want := range map[string]string{"Ada Lovelace <ada@firm.example>": "Ada Lovelace", "Member (u-x)": "Member", "Local user": "Local user",
-		"ada@firm.example <ada@firm.example>": "ada", "ada@firm.example": "ada", "@firm.example": "a user"} {
+		"ada@firm.example <ada@firm.example>": "ada", "ada@firm.example": "ada", "@firm.example": "a user",
+		"ada\uff20firm.example": "ada", "ada\ufe6bfirm.example": "ada", "ada%40firm.example": "ada", "Ada (ada@firm.example)": "Ada"} {
 		if got := DisplayName(in); got != want {
 			t.Errorf("DisplayName(%q) = %q, want %q", in, got, want)
 		}

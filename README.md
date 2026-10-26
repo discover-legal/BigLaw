@@ -388,7 +388,9 @@ service, a corporate directory). It is built on the Go standard library alone (n
   (`acceptedBy`, shown in Manage and the export) and a Test call's task record the name alone
   (`TestMembersNeverSeeAnEmail`); admins see the emails. **A display name is never an email**: the
   issuer's `name`, else `preferred_username`, unless either holds an `@`, else the email's local
-  part, else "Admin" or "Member"; a stored email-shaped name is shown to members as its local part. Display names are the
+  part, else "Admin" or "Member" (`＠`, `﹫` and `%40` count as `@`); a stored email-shaped name is
+  shown to members as its local part, and members get no `id` (sub) in `submittedBy` or `decidedBy`,
+  since some issuers use the email as the subject. Display names are the
   issuer's `name` claim, which a user may be able to edit there: the stored sub and email are what
   identify them.
 - **Who may sign in is the issuer's decision**: BigLaw admits every account the issuer

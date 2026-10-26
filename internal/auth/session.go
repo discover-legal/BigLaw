@@ -162,12 +162,17 @@ func asciiLower(s string) string {
 // none is left. A display name is never an email address.
 func safeName(name, preferred, email string) string {
 	for _, n := range []string{name, preferred} {
-		if n = clean(n); n != "" && !strings.Contains(n, "@") {
+		if n = clean(n); n != "" && !atShaped(n) {
 			return n
 		}
 	}
 	local, _, _ := strings.Cut(clean(email), "@")
 	return local
+}
+
+// atShaped reports whether s holds an @ or something that reads as one (fullwidth ＠, small ﹫, %40).
+func atShaped(s string) bool {
+	return strings.ContainsAny(s, "@\uff20\ufe6b") || strings.Contains(s, "%40")
 }
 
 func random() string {

@@ -684,8 +684,14 @@ func DisplayName(label string) string {
 			break
 		}
 	}
-	if local, _, at := strings.Cut(label, "@"); at {
-		return cmp.Or(strings.TrimSpace(local), "a user")
+	cut := -1
+	for _, at := range []string{"@", "\uff20", "\ufe6b", "%40"} { // @ and what reads as one: fullwidth, small, URL-escaped
+		if i := strings.Index(label, at); i >= 0 && (cut < 0 || i < cut) {
+			cut = i
+		}
+	}
+	if cut >= 0 {
+		return cmp.Or(strings.TrimSpace(label[:cut]), "a user")
 	}
 	return label
 }

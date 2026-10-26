@@ -823,6 +823,7 @@ func TestSafeName(t *testing.T) {
 	for _, c := range []struct{ name, preferred, email, want string }{
 		{"Ada Lovelace", "ada", "ada@firm.example", "Ada Lovelace"}, {"", "ada", "ada@firm.example", "ada"},
 		{"ada@firm.example", "ada@firm.example", "ada@firm.example", "ada"}, {"", "", "", ""}, {"x@y", "", "", ""},
+		{"ada\uff20firm.example", "ada\ufe6bfirm.example", "ada@firm.example", "ada"}, {"ada%40firm.example", "Ada", "", "Ada"},
 	} {
 		if got := safeName(c.name, c.preferred, c.email); got != c.want {
 			t.Errorf("safeName(%q, %q, %q) = %q, want %q", c.name, c.preferred, c.email, got, c.want)

@@ -293,7 +293,7 @@ func TestRevokeSessions(t *testing.T) {
 	}
 	code, body := member.do("POST", "/tasks", m{"description": "What is claimed?", "workflowType": "memo", "documentIds": ids})
 	var v engine.TaskView
-	if json.Unmarshal([]byte(body), &v); code != 201 || v.SubmittedBy == nil || *v.SubmittedBy != (engine.Person{ID: "u-bob", Name: "Bob Member"}) { // a member sees names only
+	if json.Unmarshal([]byte(body), &v); code != 201 || v.SubmittedBy == nil || *v.SubmittedBy != (engine.Person{Name: "Bob Member"}) { // a member sees names only
 		t.Fatalf("a member's task records its submitter: %d %s", code, body)
 	}
 	member.waitFor(v.ID, func(v engine.TaskView) bool { return v.Status == "awaiting_gate" })
@@ -403,6 +403,51 @@ func TestNameIsNeverAnEmail(t *testing.T) {
 	for _, p := range []string{"/tasks", "/manage/secrets", "/manage/changes"} {
 		if _, b := member.do("GET", p, nil); strings.Contains(b, "ada@firm.example") || !strings.Contains(b, `"ada`) {
 			t.Errorf("a member's GET %s: %s", p, b)
+		}
+	}
+}
+
+// TestNameVariantsShowNoEmail (review r4, its repro TestSIV4_NameVariants, plus a sub that is the
+// email, L-9): whatever an issuer puts in name, preferred_username or sub, a member's views of the
+// admin's task, secret and change log hold no email and no @-like name; submittedBy has no id.
+func TestNameVariantsShowNoEmail(t *testing.T) {
+	t.Parallel()
+	for _, v := range []struct {
+		label  string
+		claims map[string]any
+	}{
+		{"angle-bracket email in name", map[string]any{"sub": "u-ada", "email": "ada@firm.example", "email_verified": true, "name": "Eve <ada@firm.example>"}},
+		{"fullwidth at in name", map[string]any{"sub": "u-ada", "email": "ada@firm.example", "email_verified": true, "name": "ada\uff20firm.example"}},
+		{"small at in name", map[string]any{"sub": "u-ada", "email": "ada@firm.example", "email_verified": true, "name": "ada\ufe6bfirm.example"}},
+		{"escaped at in name", map[string]any{"sub": "u-ada", "email": "ada@firm.example", "email_verified": true, "name": "ada%40firm.example"}},
+		{"whitespace-only name", map[string]any{"sub": "u-ada", "email": "ada@firm.example", "email_verified": true, "name": "  \u3000 ", "preferred_username": "ada@firm.example"}},
+		{"zero-width-only name", map[string]any{"sub": "u-ada", "email": "ada@firm.example", "email_verified": true, "name": "\u200b\u200d"}},
+		{"no name at all", map[string]any{"sub": "u-ada", "email": "ada@firm.example", "email_verified": true}},
+		{"sub is the email", map[string]any{"sub": "ada@firm.example", "email": "ada@firm.example", "email_verified": true, "name": "Ada"}},
+		{"sub is an email, no email claim", map[string]any{"sub": "ada@firm.example", "name": "Ada"}},
+	} {
+		s, ids := signedServer(t, memo, doc1)
+		admin, member := s.browser(t, v.claims), s.browser(t, bob)
+		code, body := admin.do("POST", "/tasks", m{"description": "What is claimed?", "workflowType": "memo", "documentIds": ids})
+		var tv engine.TaskView
+		if json.Unmarshal([]byte(body), &tv); code != 201 {
+			t.Fatalf("%s: submit %d %s", v.label, code, body)
+		}
+		admin.do("POST", "/manage/secrets", m{"name": "k1", "value": "a-long-value", "origin": "https://api.example.com"})
+		for _, p := range []string{"/tasks/" + tv.ID, "/tasks", "/manage/secrets", "/manage/changes", "/manage/items/prompt.lead/history"} {
+			_, b := member.do("GET", p, nil)
+			for _, bad := range []string{"ada@firm.example", "firm.example", "\uff20", "\ufe6b", "%40"} {
+				if strings.Contains(b, bad) {
+					t.Errorf("%s: a member's GET %s holds %q: %.300s", v.label, p, bad, b)
+				}
+			}
+			if p == "/tasks/"+tv.ID {
+				var x engine.TaskView
+				json.Unmarshal([]byte(b), &x)
+				if x.SubmittedBy == nil || x.SubmittedBy.ID != "" || x.SubmittedBy.Name == "" {
+					t.Errorf("%s: submittedBy as a member sees it: %+v", v.label, x.SubmittedBy)
+				}
+			}
 		}
 	}
 }
