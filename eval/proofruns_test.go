@@ -13,8 +13,6 @@ import (
 	"fmt"
 	"log/slog"
 	"math/big"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,7 +25,6 @@ import (
 	"unicode"
 
 	"github.com/discover-legal/BigLaw/internal/analysis"
-	"github.com/discover-legal/BigLaw/internal/api"
 	"github.com/discover-legal/BigLaw/internal/docs"
 	"github.com/discover-legal/BigLaw/internal/engine"
 	"github.com/discover-legal/BigLaw/internal/engine/figtest"
@@ -277,8 +274,7 @@ func drive(t *testing.T, mt matter, scripts func(matter, map[string]string) map[
 			}
 		}
 	})
-	e := engine.New(st, d, fake, model.Roles{Lead: "lead-m"}, nil,
-		engine.Config{BudgetCalls: 150, BudgetUSD: 5, CollapseThreshold: 0.5, CollapseAction: "strict"}, slog.New(slog.NewTextHandler(tlog{t}, nil)))
+	e := engine.New(st, d, fake, model.Roles{Lead: "lead-m"}, nil, evalConfig, slog.New(slog.NewTextHandler(tlog{t}, nil)))
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { defer close(done); e.Start(ctx) }()
@@ -495,17 +491,10 @@ func TestLabRunnerSmoke(t *testing.T) {
 	for k, v := range critics {
 		sc[k] = v
 	}
-	e := engine.New(st, d, readerFake(sc), model.Roles{Lead: "lead-m"}, nil, engine.Config{BudgetCalls: 150, BudgetUSD: 5, CollapseThreshold: 0.5, CollapseAction: "strict"}, slog.New(slog.DiscardHandler))
-	mux := api.Handler(d, e, nil, slog.New(slog.DiscardHandler))
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`{"status":"ok"}`)) })
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() { defer close(done); e.Start(ctx) }()
-	defer func() { cancel(); <-done }()
+	e := engine.New(st, d, readerFake(sc), model.Roles{Lead: "lead-m"}, nil, evalConfig, slog.New(slog.DiscardHandler))
+	url := serveAPI(t, d, e, `{"status":"ok"}`)
 	results := filepath.Join(labs, "results")
-	out, err := exec.Command("python3", "lab/run.py", "--labs-dir", labs, "--task", "smoke/deadline", "--api", srv.URL, "--model-dir", "smoke", "--results-dir", results, "--poll", "0.05", "--timeout", "60").CombinedOutput()
+	out, err := exec.Command("python3", "lab/run.py", "--labs-dir", labs, "--task", "smoke/deadline", "--api", url, "--model-dir", "smoke", "--results-dir", results, "--poll", "0.05", "--timeout", "60").CombinedOutput()
 	if err != nil {
 		t.Fatalf("lab/run.py: %v\n%s", err, out)
 	}
