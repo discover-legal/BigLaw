@@ -98,7 +98,7 @@ func handler(d *docs.Service, e *engine.Engine, ui fs.FS, log *slog.Logger, who 
 		}
 		out := []any{}
 		if len(ms) > 0 {
-			out = append(out, map[string]any{"id": "matters", "name": "Matters (filed with documents; clients arrive in PR 8)", "matters": ms})
+			out = append(out, map[string]any{"id": "matters", "name": "Matters with filed documents", "matters": ms})
 		}
 		reply(w, 200, out, err)
 	})

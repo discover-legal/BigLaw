@@ -1930,7 +1930,7 @@ profiles show sample records written for the demo (labelled so on screen), and S
 this build's configuration table, read-only. Rejecting the deliverable asks for a reason (sent as
 `{"reason"}` to `POST /tasks/{id}/gates/{gateId}/reject`, as v1's reject did) and closes the gate:
 the decision is kept in `decidedGates`; live, the lead resumes with the reason (the task goes back to
-`running`; the recorded demo has no revised run, so there it stays `rejected`). The Task screen's Table and
+`running` and the Task screen opens the event stream again, which the server ends with `done` at every gate (`ui/src/api/follow.ts`); the recorded demo has no revised run, so there it stays `rejected`). The Task screen's Table and
 Redline tabs (diligence, contract review) are **planned** with PRs 5 and 6, the Documents version
 timeline with PR 6. With sign-in the shell shows a sign-in page until there is a session, then the
 user and Sign out in the header; members see no admin-only controls in Manage.

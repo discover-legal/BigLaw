@@ -9,7 +9,7 @@ import { createTransport as recorded, type ManageRecording } from '../src/api/re
 import { createTransport as http } from '../src/api/http.ts';
 import { ApiError } from '../src/api/transport.ts';
 import { DiffView, diffLines, hunks } from '../src/components/diff.ts';
-import { isSpec, parseFront, setField, writeFront, writeJSON } from '../src/components/front.ts';
+import { isSpec, parseFront, setField, typing, writeFront, writeJSON, type Part } from '../src/components/front.ts';
 
 const manage = manageJson as unknown as ManageRecording;
 const files = manage.items.flatMap((d) => Object.entries(d.content));
@@ -102,4 +102,26 @@ test('the http transport calls Manage\'s routes and keeps a refusal\'s problems'
     'POST /manage/items/server.courts/import {"tools":["search"],"offerToLead":true}', 'POST /manage/items/tool.numbers/test {"documentIds":["d1"],"input":{"op":"table"}}',
     'POST /manage/items/prompt.lead/versions {"base":0,"files":{"a":"b"},"note":""}']);
   assert.equal(http().exportUrl('zip', 'skill.a b'), '/manage/export?format=zip&item=skill.a%20b');
+});
+
+test('typing into the pack and skill fields keeps each space, and the file is written as it was saved before', () => {
+  const skill = files.find(([p]) => p.endsWith('/SKILL.md'))![1];
+  const pack = files.find(([p]) => p.endsWith('jurisdiction/us.md'))![1];
+  const cases: [string, Part, string, string, string][] = [
+    [skill, 'field', 'description', 'Check every computed deadline ', 'Check every computed deadline'],
+    [skill, 'field', 'reviewedBy', 'A. Lawyer ', 'A. Lawyer'],
+    [skill, 'body', '', 'Check every computed deadline.\n\nThen cite the rule. ', 'Check every computed deadline.\n\nThen cite the rule.'],
+    [pack, 'list', 'checklist', 'Name the court \nCite the rule\n', 'Name the court\nCite the rule'],
+  ];
+  for (const [text, part, k, final, saved] of cases) {
+    let { typed, text: file } = typing(text, {}).write(part, k, ''); // the user clears the field, then types
+    for (const ch of final) {
+      const was = typing(file, typed).value(part, k);
+      ({ typed, text: file } = typing(file, typed).write(part, k, was + ch));
+      assert.equal(typing(file, typed).value(part, k), was + ch, `${k || part} after ${JSON.stringify(was + ch)}`);
+    }
+    const f = parseFront(text)!; // what the editor wrote before for the same final text
+    assert.equal(file, part === 'body' ? writeFront({ ...f, body: final.trim() }) : writeFront(setField(f, k, part === 'list' ? final.split('\n') : final)), k || part);
+    assert.equal(typing(file, {}).value(part, k), saved, `${k || part}: a reload shows the saved text`);
+  }
 });
