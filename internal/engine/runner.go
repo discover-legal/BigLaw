@@ -214,14 +214,17 @@ func (e *Engine) claim(ctx context.Context) (*run, error) {
 
 // drive runs a claimed task, renewing its lease, and releases it.
 func (e *Engine) drive(ctx context.Context, r *run) {
+	beating := make(chan struct{})
 	defer func() {
 		r.cancel()
+		<-beating // a renewal in flight must land before the release, never after it (a stopped run's lease would outlive it)
 		e.mu.Lock()
 		delete(e.runs, r.t.ID)
 		e.mu.Unlock()
 		_, _ = e.db.Exec(`UPDATE tasks SET lease_owner = NULL, lease_until = NULL WHERE id = $1 AND lease_owner = $2 AND status <> 'running'`, r.t.ID, e.owner)
 	}()
 	go func() {
+		defer close(beating)
 		for {
 			select {
 			case <-ctx.Done():
