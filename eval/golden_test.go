@@ -31,7 +31,7 @@ func TestProofRunsGolden(t *testing.T) {
 		}{{"oracle", oracle}, {"fabricator", fabricator}} {
 			t.Run(mt.Slug+"/"+run.name, func(t *testing.T) {
 				t.Parallel()
-				v, _, gates := drive(t, mt, run.scripts)
+				v, _, gates := driveShared(t, mt, run.name, run.scripts) // the run TestProofRunsOracle (or …Fabricator) asserts on too
 				got := "status: " + v.Status + "\ngates: " + strings.Join(gates, " ") + "\n\n"
 				if v.Output != nil {
 					got += *v.Output

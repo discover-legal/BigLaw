@@ -21,6 +21,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode"
@@ -37,7 +38,48 @@ import (
 
 func TestMain(m *testing.M) {
 	docs.MaybeRunChild()
-	os.Exit(m.Run())
+	var err error
+	if runsDir, err = os.MkdirTemp("", "biglaw-proofruns-"); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	code := m.Run()
+	os.RemoveAll(runsDir)
+	os.Exit(code)
+}
+
+// sharedRun is one proof run of a matter under one script. TestProofRunsGolden and
+// TestProofRunsOracle (and …Fabricator) assert on the same run, the same matter under the same
+// script, so whichever asks first drives it and the other reads it: each run is made once, not
+// twice, which halves this package's engine work. Its files live in runsDir until the package ends.
+type sharedRun struct {
+	once  sync.Once
+	ok    bool   // drive returned: false when the run failed the test that drove it
+	by    string // the test that drove it
+	v     engine.TaskView
+	dir   string
+	gates []string
+}
+
+var (
+	runs    sync.Map // matter slug + "/" + script name → *sharedRun
+	runsDir string   // the shared runs' files (TestMain)
+)
+
+// driveShared is drive, once per matter and script for the whole package (sharedRun).
+func driveShared(t *testing.T, mt matter, name string, scripts func(matter, map[string]string) map[string][]model.Reply) (engine.TaskView, string, []string) {
+	t.Helper()
+	r, _ := runs.LoadOrStore(mt.Slug+"/"+name, &sharedRun{})
+	s := r.(*sharedRun)
+	s.once.Do(func() { // a Fatal in drive still ends the Once: s.ok stays false
+		s.by = t.Name()
+		s.v, s.dir, s.gates = drive(t, mt, scripts)
+		s.ok = true
+	})
+	if !s.ok {
+		t.Fatalf("the %s run of %s failed in %s, which drove it for this test too", name, mt.Slug, s.by)
+	}
+	return s.v, s.dir, s.gates
 }
 
 type item struct {
@@ -264,7 +306,10 @@ func drive(t *testing.T, mt matter, scripts func(matter, map[string]string) map[
 			v, _ = e.Get(ctx, task.ID)
 		}
 	}
-	dir := t.TempDir()
+	dir, err := os.MkdirTemp(runsDir, mt.Slug+"-") // shared: it outlives the test that drove it (sharedRun)
+	if err != nil {
+		t.Fatal(err)
+	}
 	os.MkdirAll(filepath.Join(dir, "output"), 0o755)
 	for i, name := range mt.Task.Deliverables {
 		out := ""
@@ -325,7 +370,7 @@ func TestProofRunsOracle(t *testing.T) {
 	for _, mt := range loadMatters(t) {
 		t.Run(mt.Slug, func(t *testing.T) {
 			t.Parallel()
-			v, dir, gates := drive(t, mt, oracle)
+			v, dir, gates := driveShared(t, mt, "oracle", oracle)
 			if v.Status != "complete" {
 				t.Fatalf("%s %s", v.Status, deref(v.Error))
 			}
@@ -388,7 +433,7 @@ func TestProofRunsFabricator(t *testing.T) {
 	for _, mt := range loadMatters(t) {
 		t.Run(mt.Slug, func(t *testing.T) {
 			t.Parallel()
-			v, dir, _ := drive(t, mt, fabricator)
+			v, dir, _ := driveShared(t, mt, "fabricator", fabricator)
 			if v.Status != "failed" || v.GroundingAlert == nil || v.Output != nil {
 				t.Fatalf("%s alert %v", v.Status, v.GroundingAlert)
 			}
