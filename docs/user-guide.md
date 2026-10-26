@@ -17,12 +17,14 @@ developers; you do not need it.
 3. It asks one question: paste an [OpenRouter](https://openrouter.ai/keys) API key (the AI model
    runs at OpenRouter and is billed there), or press Enter to use [Ollama](https://ollama.com) on
    this computer (free to run, but needs a strong computer; first run
-   `ollama pull qwen2.5:14b` and `ollama pull nomic-embed-text`).
+   `ollama pull qwen2.5:14b` and `ollama pull nomic-embed-text`; on Linux, Ollama must also listen
+   beyond 127.0.0.1 so Docker can reach it: README § Install).
 4. When it says "BigLaw is running", open **http://127.0.0.1:3101** in your browser.
 
-BigLaw is reachable only from this computer. Its settings and the database live in a folder named
-`biglaw` where you ran the command. To update, run the same command again: your settings and
-documents are kept.
+BigLaw is reachable only from this computer. Its settings are in `biglaw/.env`, in the folder where
+you ran the command; the database (your matters and documents) is kept in Docker's own storage, not
+in that folder, so copying or deleting the folder neither backs it up nor erases it (README
+§ Database). To update, run the same command again: your settings and documents are kept.
 
 If the Matters screen shows **No AI model set up yet**, BigLaw can store and search documents but
 cannot run a task: whoever installed it adds a model in `biglaw/.env` and restarts it.
@@ -104,8 +106,10 @@ Every task has a spending limit (by default 400 AI calls and $5). The task page 
 spent** and **Calls left**; the **Cost** tab lists every AI call with its tokens and dollar cost. A
 model BigLaw has no price for is shown as "unpriced" (an unknown cost, never $0). With a local model
 the cost tab can also show **estimated energy** in watt-hours, if whoever installed BigLaw set the
-computer's power draw. With Ollama, calls are still priced at that model's hosted rate unless whoever
-installed BigLaw sets its price to zero (README § Model client, Pricing). A task that reaches its
+computer's power draw. With Ollama, the chat model's calls are priced from the price table's
+general `qwen` row (an estimate, not what the computer costs to run), and the search model has no
+row so its calls show as "unpriced", unless whoever installed BigLaw sets their prices (README
+§ Model client, Pricing). A task that reaches its
 limit finishes its memo from a reserve it kept back, and says what was left open.
 
 ## 7. Good to know

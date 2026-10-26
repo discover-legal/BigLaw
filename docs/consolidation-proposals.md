@@ -1,7 +1,7 @@
 # Consolidation proposals (open items, for the owner's decision)
 
 Design-level normalisation and consolidation still open after the audit of v2 at 29def72. The items
-already done (A1–A5, B3, the README restructure and the doc fixes) were removed from this page; git
+already done (A1, A2, A4, A5, the `candidateLine` part of A3, B3, the README restructure and the doc fixes) were removed from this page; git
 history and their PR notes are the record.
 
 Each item gives:
@@ -23,6 +23,29 @@ consolidation** changes behaviour, removes a feature, or changes stored data (th
 Status: not done. A6: three of the five `Finding.Low` sites were Go-hook source Manage used to show,
 and the note wording differs by site. A7: it needs a migration and a fallback for runs in flight
 across the upgrade.
+
+### A3. One disclosure path for Limitations lines
+- **Unify.** Limitations lines are produced five ways today:
+  1. ledger `note` rows written during the run (plan fallback, sweep, sweep-skipped,
+     custom-tools-off, `hook:<rule>`);
+  2. lines `finish.check` computes from ledger state (23 `rep.limits = append` sites, plus helpers
+     `partyLine`, `figureLine`, `unadmittedLine`, `unreviewedFixes`, `hookQuarantined`,
+     `leadOnlyLine`, `staleLine` and `joined.lines`);
+  3. lines `render` adds (candidate packs and skills, external authorities, dropped sentences,
+     flagged lint: 6 sites);
+  4. lines the lead passes in `finish{limitations}`;
+  5. the Computed figures block.
+
+  The proposal is one `disclosures` builder (`engine/disclose.go`). Each source registers a
+  `func(ctx, taskID) ([]string, error)` with a fixed rank; `check` and `render` both call the one
+  builder, and the ledger `note` kind keeps only the lines that must be written at run time.
+  (Done already: `candidates` and `skillCandidates` folded into `candidateLine`.)
+- **Saves.** About 40–60 lines, plus one ordering contract.
+- **At risk.** The *order* and the exact wording of the lines, both user-visible in the memo, and
+  the rule that `check` and `submit` report the same lines (`TestFinishCheckIsDryRun`,
+  `TestFinishSubmitRunsSameChecks`). Add a golden test of one scripted run's Limitations section
+  before refactoring, so the order cannot drift silently.
+- **Effort.** M. **Visible.** No, provided the golden order is kept.
 
 ### A6. One "mark low" helper
 - **Unify.** `Finding.Low` is set in five places (`applyReading`, `deviations` twice,

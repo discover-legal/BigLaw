@@ -22,7 +22,8 @@ record of what each PR did. v1 (Go under `biglaw-go/`, DyTopo) is frozen on the 
 - `internal/model` — the only model client (chat, tool calls, images, `Embed`), typed errors,
   `Roles`, prices, `model.Fake`. README § Model client; docs/reference.md § Model client.
 - `internal/agent` — the runtime: registry, schema subset, `Runtime.Run`/`Invoke`, `Budget`, the
-  meter, `Journal`, the bandit, `LoadSubagent`. docs/reference.md § Agent runtime.
+  meter, `Journal`, the bandit, `LoadSubagent`. docs/reference.md § Agent runtime; the schema
+  subset (unknown keywords are errors) docs/patterns.md § 1.
 - `internal/analysis` — pure functions over findings: figure spans, label checks, the join,
   `numbers`, coverage, normalisers, BELO-lite. docs/figures.md.
 - `internal/engine` — the memo workflow (lead, ledger, admission, sweep, figure reader and judge,
@@ -31,8 +32,8 @@ record of what each PR did. v1 (Go under `biglaw-go/`, DyTopo) is frozen on the 
   README § Memo workflow, § Manage; docs/architecture.md §§ 2–7; docs/figures.md; docs/reference.md.
 - `internal/auth` — sign-in: OIDC code flow + PKCE, ID-token verification, sessions, `IsAdmin`.
   README § Sign-in.
-- `internal/api` — the REST surface, SSE, Manage routes, `Principal`, `RequireSignIn`, the embedded
-  UI. README § Memo workflow (REST API), § Sign-in.
+- `internal/api` — the REST surface (request bodies validated by the agent's schema subset), SSE,
+  Manage routes, `Principal`, `RequireSignIn`, the embedded UI. README § Memo workflow (REST API), § Sign-in.
 - Test support: `internal/store/storetest` (a schema per DB test, slots), `internal/engine/figtest`
   (the figure reader's stand-in), `internal/auth/authtest` (a fake OpenID provider).
   docs/patterns.md § Test patterns.
@@ -132,7 +133,7 @@ changes, PR 5 diligence). Lexical search alone measured E4 0.882; the hybrid gat
   finding `Low` (gated), never drops it. docs/figures.md has the rules in full.
 - Manage: read specs, prompts, packs and skills only through `spec(ctx, …)`/`prompt(ctx, …)`/
   `packsFor`/`r.sp()` (the task's snapshot), never a package global. The lead sees `leadVisible(sp)`,
-  never `MemoVisible` alone. A new editable file must map to an item (`itemOf`; `TestCatalogue`), and
+  never `MemoVisible` alone. Deleting an item Go needs is refused (`goDepends`). A new editable file must map to an item (`itemOf`; `TestCatalogue`), and
   a change to any of them makes `ui/src/recorded/manage.json` stale (`make demo-record`;
   `TestManageRecording`, no DB). Any change to a pack's or skill's content resets it to candidate
   unless the save names a new reviewer. A hook quarantine is `Finding.HookBlocked` (`f.ok()`), never
