@@ -4,6 +4,7 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -36,7 +37,7 @@ func (e *Engine) draftRequest(ctx context.Context, taskID string, scope []string
 	issues, err := load[Issue](ctx, e, taskID, kIssue)
 	secs, serr := load[Section](ctx, e, taskID, kSection)
 	use, uerr := e.usable(ctx, taskID)
-	if err = cmpErr(err, serr, uerr); err != nil {
+	if err = cmp.Or(err, serr, uerr); err != nil {
 		return draftReq{}, err
 	}
 	i := slices.IndexFunc(issues, func(is Issue) bool { return is.ID == issueID })
@@ -260,7 +261,7 @@ func (e *Engine) render(ctx context.Context, t Task, limits []string, computed c
 	secs, serr := load[Section](ctx, e, t.ID, kSection)
 	all, ferr := load[Finding](ctx, e, t.ID, kFinding)
 	use, uerr := e.usable(ctx, t.ID)
-	if err = cmpErr(err, serr, ferr, uerr); err != nil {
+	if err = cmp.Or(err, serr, ferr, uerr); err != nil {
 		return deliverable{}, err
 	}
 	var b strings.Builder

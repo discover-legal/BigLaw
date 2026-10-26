@@ -4,6 +4,7 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -21,7 +22,7 @@ func pageOK(t *testing.T, tool string, out any) {
 	sch, err := agent.Compile(spec(context.Background(), tool).Out)
 	var p struct{ Truncated bool }
 	if err != nil || sch.Validate(b) != nil || len(b) > agent.PageBytes || json.Unmarshal(b, &p) != nil || !p.Truncated {
-		t.Errorf("%s: %d bytes (page %d), truncated %v, schema %v", tool, len(b), agent.PageBytes, p.Truncated, cmpErr(err, sch.Validate(b)))
+		t.Errorf("%s: %d bytes (page %d), truncated %v, schema %v", tool, len(b), agent.PageBytes, p.Truncated, cmp.Or(err, sch.Validate(b)))
 	}
 }
 
@@ -68,7 +69,7 @@ func TestLedgerPagesByType(t *testing.T) {
 			Entities:  []analysis.Entity{{Name: fmt.Sprint("Scheme ", i, " ", long), Class: "Conduct"}, {Name: "Gerald Whitmore", Class: "Person"}},
 			Relations: []analysis.Relation{{Subject: fmt.Sprint("Scheme ", i, " ", long), Predicate: "committed by", Object: "Gerald Whitmore"}}}}
 		c := Critic{ID: fmt.Sprint("C", i+1), Cycle: 1, Critic: "audit_gaps", Severity: "LOW", Text: long, Status: "open"}
-		if err := cmpErr(f.e.write(ctx, task.ID, kFinding, x.FID, x, true), f.e.write(ctx, task.ID, kCritic, c.ID, c, true)); err != nil {
+		if err := cmp.Or(f.e.write(ctx, task.ID, kFinding, x.FID, x, true), f.e.write(ctx, task.ID, kCritic, c.ID, c, true)); err != nil {
 			t.Fatal(err)
 		}
 	}

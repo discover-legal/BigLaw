@@ -4,6 +4,7 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -254,7 +255,7 @@ func (e *Engine) sweepVisits(ctx context.Context, rt *agent.Runtime, c agent.Cal
 		inflight--
 		switch r := out[i]; {
 		case errors.Is(r.err, context.Canceled) && ctx.Err() == nil: // cancelled by a failure settled before it
-		case modelOrJournal(r.err):
+		case agent.EndsRun(r.err):
 			if failed < 0 || i < failed {
 				failed = i
 			}
@@ -385,7 +386,7 @@ func (e *Engine) sweepTool(rt *agent.Runtime, r *run) agent.Tool {
 		done, err := e.rows(ctx, c.TaskID, kVisit)
 		issues, ierr := load[Issue](ctx, e, c.TaskID, kIssue)
 		spent, serr := e.classSpend(ctx, c.TaskID)
-		if err = cmpErr(err, ierr, serr); err != nil {
+		if err = cmp.Or(err, ierr, serr); err != nil {
 			return nil, agent.Usage{}, err
 		}
 		qs, cur := []string{}, []string{}
@@ -627,11 +628,6 @@ func (e *Engine) unswept(ctx context.Context, taskID string) ([]SweptDoc, error)
 		}
 	}
 	return out, err
-}
-
-// modelOrJournal: errors that end the run, never "no finding" (G6) or a lost step.
-func modelOrJournal(err error) bool {
-	return err != nil && (errors.Is(err, agent.ErrJournal) || errors.Is(err, agent.ErrPanic) || modelFailed(err))
 }
 
 // Unread is the documents a sweep left partly unread (analysis.Unswept, for join_discrepancies).

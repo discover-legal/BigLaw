@@ -4,6 +4,7 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -144,7 +145,7 @@ func (e *Engine) execute(ctx context.Context, r *run) error {
 		if ctx.Err() != nil || errors.Is(err, errLease) {
 			return err
 		}
-		return e.fail(ctx, r, "", cmpErr(err, errors.New("engine: the forced finish was not accepted")))
+		return e.fail(ctx, r, "", cmp.Or(err, errors.New("engine: the forced finish was not accepted")))
 	}
 	return e.fail(ctx, r, "", err)
 }
@@ -155,12 +156,12 @@ func (e *Engine) execute(ctx context.Context, r *run) error {
 func (e *Engine) review(ctx context.Context, rt *agent.Runtime, lead agent.Agent, call agent.Call, r *run, last int) (int, error) {
 	secs, err := load[Section](ctx, e, r.t.ID, kSection)
 	cyc, cerr := load[Cycle](ctx, e, r.t.ID, kCycle)
-	if err = cmpErr(err, cerr); err != nil || len(secs) == 0 || len(cyc) > 0 && cyc[len(cyc)-1].Version == version(secs) {
+	if err = cmp.Or(err, cerr); err != nil || len(secs) == 0 || len(cyc) > 0 && cyc[len(cyc)-1].Version == version(secs) {
 		return last, err
 	}
 	_, err = rt.Invoke(ctx, lead, call, "committee", json.RawMessage(`{}`), r.b, false, last+1)
-	if ctx.Err() != nil || errors.Is(err, errLease) || modelOrJournal(err) {
-		return last, cmpErr(ctx.Err(), err)
+	if ctx.Err() != nil || errors.Is(err, errLease) || agent.EndsRun(err) {
+		return last, cmp.Or(ctx.Err(), err)
 	}
 	return last + 1, nil // a refused or failed committee is in the step log; finish discloses the unreviewed draft
 }

@@ -4,6 +4,7 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -130,7 +131,7 @@ func (e *Engine) view(ctx context.Context, t Task) (TaskView, error) {
 	fs, ferr := load[Finding](ctx, e, t.ID, kFinding)
 	gs, gerr := load[Gate](ctx, e, t.ID, kGate)
 	crit, cerr := load[Critic](ctx, e, t.ID, kCritic)
-	if err = cmpErr(err, ierr, ferr, gerr, cerr); err != nil {
+	if err = cmp.Or(err, ierr, ferr, gerr, cerr); err != nil {
 		return v, err
 	}
 	var u agent.Usage

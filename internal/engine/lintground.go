@@ -395,7 +395,7 @@ func (e *Engine) worksheets(ctx context.Context, taskID string) ([]analysis.Work
 func (e *Engine) handleSet(ctx context.Context, taskID string, use []Finding) ([]analysis.Handle, error) {
 	kept, err := load[Fig](ctx, e, taskID, kHandle)
 	ws, werr := e.worksheets(ctx, taskID)
-	if err = cmpErr(err, werr); err != nil {
+	if err = cmp.Or(err, werr); err != nil {
 		return nil, err
 	}
 	an := make([]analysis.Finding, 0, len(use))

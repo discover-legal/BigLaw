@@ -4,6 +4,7 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -182,7 +183,7 @@ func ledgerKey(aliases []analysis.Alias, x analysis.Candidate) string {
 func (e *Engine) verdictSet(ctx context.Context, taskID string) (map[string]analysis.Verdict, []analysis.Alias, error) {
 	aliases, err := load[analysis.Alias](ctx, e, taskID, kAlias)
 	rows, rerr := e.rows(ctx, taskID, kVerdict)
-	if err = cmpErr(err, rerr); err != nil {
+	if err = cmp.Or(err, rerr); err != nil {
 		return nil, nil, err
 	}
 	have := map[string]analysis.Verdict{}
@@ -225,7 +226,7 @@ func (e *Engine) judge(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 	out, err := e.verdicts(ctx, c.TaskID, cands)
 	aliases, aerr := load[analysis.Alias](ctx, e, c.TaskID, kAlias)
 	scope, serr := e.readScope(ctx, c.TaskID)
-	if err = cmpErr(err, aerr, serr); err != nil {
+	if err = cmp.Or(err, aerr, serr); err != nil {
 		return nil, err
 	}
 	model, models := labelModels(ctx, rt, "judge_figures")
@@ -354,7 +355,7 @@ func (e *Engine) judgeLimit() int {
 func (e *Engine) judgeJoin(ctx context.Context, rt *agent.Runtime, c agent.Call, b *agent.Budget, caller string) error {
 	use, err := e.usable(ctx, c.TaskID)
 	judged, jerr := e.judgedSet(ctx, c.TaskID)
-	if err = cmpErr(err, jerr); err != nil {
+	if err = cmp.Or(err, jerr); err != nil {
 		return err
 	}
 	calls, _ := b.Remaining()
@@ -369,7 +370,7 @@ func (e *Engine) judgeJoin(ctx context.Context, rt *agent.Runtime, c agent.Call,
 func (e *Engine) pendingPairs(ctx context.Context, taskID string, limit int) (int, error) {
 	use, err := e.usable(ctx, taskID)
 	judged, jerr := e.judgedSet(ctx, taskID)
-	if err = cmpErr(err, jerr); err != nil {
+	if err = cmp.Or(err, jerr); err != nil {
 		return 0, err
 	}
 	cands, _, _ := joinCands(use, limit, judged)

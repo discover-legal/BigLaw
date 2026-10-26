@@ -646,3 +646,15 @@ func TestOversizedResultRefusedAndShrunk(t *testing.T) {
 		t.Errorf("the second retry holds a %d-byte newest result, want the typed refusal: %.300q", len(r), r)
 	}
 }
+
+// EndsRun is the one list of errors that end a run (the loop's and the engine's).
+func TestEndsRun(t *testing.T) {
+	for _, k := range []error{model.ErrNotConfigured, model.ErrRateLimited, model.ErrUnavailable, model.ErrTimeout, model.ErrNoContent, context.Canceled, context.DeadlineExceeded, ErrJournal, ErrPanic} {
+		if !EndsRun(fmt.Errorf("wrapped: %w", k)) {
+			t.Errorf("%v does not end the run", k)
+		}
+	}
+	if EndsRun(nil) || EndsRun(Fail("no finding")) || EndsRun(errors.New("other")) {
+		t.Error("an ordinary failure ends the run")
+	}
+}

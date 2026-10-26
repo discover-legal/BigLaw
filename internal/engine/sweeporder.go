@@ -4,6 +4,7 @@
 package engine
 
 import (
+	"cmp"
 	"math"
 	"math/big"
 	"regexp"
@@ -99,7 +100,7 @@ func order(visits []Visit, questions []string) []int {
 				r = append(r, i)
 			}
 		}
-		slices.SortStableFunc(r, func(a, b int) int { return cmpFloat(sc[b], sc[a]) })
+		slices.SortStableFunc(r, func(a, b int) int { return cmp.Compare(sc[b], sc[a]) })
 		ranked = append(ranked, r)
 	}
 	taken, out := make([]bool, len(visits)), make([]int, 0, len(visits))
@@ -123,16 +124,6 @@ func order(visits []Visit, questions []string) []int {
 		}
 	}
 	return out
-}
-
-func cmpFloat(a, b float64) int {
-	switch {
-	case a < b:
-		return -1
-	case a > b:
-		return 1
-	}
-	return 0
 }
 
 // tocEntry is a table-of-contents line: a title, then dot leaders, a tab or a run of spaces, then a

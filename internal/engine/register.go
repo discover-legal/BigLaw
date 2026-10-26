@@ -217,7 +217,7 @@ func (s sheets) Call(ctx context.Context, c agent.Call) (agent.Result, error) {
 	if json.Unmarshal(c.Input, &in) == nil && in.Op == "handles" {
 		use, err := s.e.usable(ctx, c.TaskID)
 		hs, herr := s.e.handleSet(ctx, c.TaskID, use)
-		if err = cmpErr(err, herr); err != nil {
+		if err = cmp.Or(err, herr); err != nil {
 			return agent.Result{}, err
 		}
 		hs = slices.DeleteFunc(hs, func(h analysis.Handle) bool {

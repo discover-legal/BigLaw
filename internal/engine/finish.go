@@ -4,6 +4,7 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -132,7 +133,7 @@ func (f finish) Call(ctx context.Context, c agent.Call) (res agent.Result, err e
 	if f.r.forced == "" { // the coverage pass, once, before a deliverable (a forced finish ran it as a step)
 		done, err := f.e.covered(ctx, c.TaskID)
 		due, derr := f.e.coverDue(ctx, c.TaskID)
-		if err = cmpErr(err, derr); err != nil {
+		if err = cmp.Or(err, derr); err != nil {
 			return agent.Result{}, err
 		}
 		if !done && due {
@@ -248,14 +249,14 @@ func (f finish) cover(ctx context.Context, c agent.Call) (agent.Usage, error) {
 	if err != nil {
 		return b.Spent(), err
 	}
-	if _, err := f.rt.Invoke(ctx, me, call, "cover", json.RawMessage(`{}`), b, false, 0); modelOrJournal(err) {
+	if _, err := f.rt.Invoke(ctx, me, call, "cover", json.RawMessage(`{}`), b, false, 0); agent.EndsRun(err) {
 		return b.Spent(), err
 	}
 	after, err := load[Section](ctx, f.e, c.TaskID, kSection)
 	if err != nil || version(after) == version(before) { // nothing redrafted: the last review still holds
 		return b.Spent(), err
 	}
-	if _, err := f.rt.Invoke(ctx, me, call, "committee", json.RawMessage(`{}`), b, false, 0); modelOrJournal(err) {
+	if _, err := f.rt.Invoke(ctx, me, call, "committee", json.RawMessage(`{}`), b, false, 0); agent.EndsRun(err) {
 		return b.Spent(), err
 	}
 	return b.Spent(), nil
@@ -272,7 +273,7 @@ func (f finish) check(ctx context.Context, limits []limitation) (report, error) 
 	sheets, herr := e.worksheets(ctx, id)
 	notes, nerr := e.rows(ctx, id, kNote)
 	rounds, lerr := e.lintRounds(ctx, id)
-	if err = cmpErr(err, serr, uerr, cerr, rerr, herr, nerr, lerr); err != nil {
+	if err = cmp.Or(err, serr, uerr, cerr, rerr, herr, nerr, lerr); err != nil {
 		return report{}, err
 	}
 	rep := report{Errors: []finishErr{}, Lint: []string{}, OpenPreconditions: []string{}}
@@ -392,7 +393,7 @@ func (f finish) check(ctx context.Context, limits []limitation) (report, error) 
 	}
 	pass, err := e.coverRow(ctx, id)
 	left, lerr := e.touched(ctx, id)
-	if err = cmpErr(err, lerr); err != nil {
+	if err = cmp.Or(err, lerr); err != nil {
 		return report{}, err
 	}
 	for _, is := range left { // after the coverage pass (or from the reserve): what it could not analyse
@@ -463,7 +464,7 @@ func (f finish) escalate(ctx context.Context) (*finishErr, error) {
 	cyc, err := load[Cycle](ctx, e, id, kCycle)
 	crit, cerr := load[Critic](ctx, e, id, kCritic)
 	spent, serr := e.classSpend(ctx, id)
-	if err = cmpErr(err, cerr, serr); err != nil || len(cyc) == 0 || f.r.forced != "" {
+	if err = cmp.Or(err, cerr, serr); err != nil || len(cyc) == 0 || f.r.forced != "" {
 		return nil, err
 	}
 	last := cyc[len(cyc)-1]
@@ -485,7 +486,7 @@ func (f finish) meta(ctx context.Context, b *agent.Budget) (string, error) {
 	all, err := load[Finding](ctx, e, id, kFinding)
 	crit, cerr := load[Critic](ctx, e, id, kCritic)
 	cyc, yerr := load[Cycle](ctx, e, id, kCycle)
-	if err = cmpErr(err, cerr, yerr); err != nil {
+	if err = cmp.Or(err, cerr, yerr); err != nil {
 		return "", err
 	}
 	ok, open := 0, 0
@@ -514,7 +515,7 @@ func (f finish) gates(ctx context.Context, md string) error {
 	use, err := e.usable(ctx, id)
 	crit, cerr := load[Critic](ctx, e, id, kCritic)
 	gs, gerr := load[Gate](ctx, e, id, kGate)
-	if err = cmpErr(err, cerr, gerr); err != nil {
+	if err = cmp.Or(err, cerr, gerr); err != nil {
 		return err
 	}
 	pending := false
