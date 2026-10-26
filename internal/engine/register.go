@@ -63,6 +63,7 @@ var evidenceChecks = []string{
 	"Keeps a typed value only when its own quote states it as the figure reader reads it; a value no quote states is dropped, with a note.",
 	"Merges an exact duplicate of an admitted finding (the same issue, quotes and values) into the first.",
 	"Runs after_call rules on the subagent's answer before Go records anything: a block withholds it and admits nothing.",
+	"Runs finding_admitted rules on each new finding: a block quarantines it.",
 }
 
 // goContract is every built-in name Go depends on, one row each: a new one is one row here.
@@ -73,16 +74,17 @@ var evidenceChecks = []string{
 var goContract = []goRow{
 	{"retrieve", leadTool, nil, "", nil}, {"ledger", leadTool | enginePass | writesLedger | subagentOK, nil, "", nil}, {"sweep", leadTool | enginePass | writesLedger, nil, "", nil},
 	{"extract_facts", leadTool | goWrites | hookedSub, []string{"sweep"}, "", append([]string{
-		"Sends the subagent the text it reads (a page, or a run of top-level sections) and, when the call names no issue, the plan's issues.",
+		"Sends the subagent the text it reads (a page, or a run of top-level sections) and, when the call names no issue, the plan's issues, then admits only findings that name one.",
 		"Refuses a through that is not a top-level section at or after sectionId, or a run longer than a section's token cap."}, evidenceChecks...)},
 	{"analyze_issue", leadTool | goWrites | hookedSub, []string{"cover"}, "", append([]string{
-		"Appends the task's jurisdiction packs to packText.",
+		"Appends the packs for the call's jurisdiction to packText.",
 		"Notes each authority the subagent marks as not in the record, and keeps its analysis (rule, application, conclusion) for the issue's drafter."}, evidenceChecks...)},
 	{"check_deviation", leadTool | hookedSub, nil, "", []string{
-		"Refuses a requirement that is not verbatim (exact or tolerant) in requirementDocId, naming the nearest exact passage to copy.",
+		"Refuses a requirementDocId that is not one of controllingDocIds, and a requirement that is not verbatim (exact or tolerant) in it, naming the nearest exact passage to copy.",
 		"Asks one critic call, before the subagent runs, whether the document imposes the requirement as quoted (not negated or overridden): a no fails the call.",
 		"Admits a verdict only when its quotes verify and its controlling quote lies in the requirement's context; a correction keeps its values only when the quotes state them.",
-		"When that critic call had no answer, admits the verdicts at low confidence and gates them for a lawyer, never drops them."}},
+		"When that critic call answers unclear, had no answer or read a cut-off passage, admits the verdicts at low confidence and gates them for a lawyer, never drops them.",
+		"Runs finding_admitted rules on each new finding: a block quarantines it."}},
 	{"numbers", leadTool | writesLedger, nil, "", []string{
 		"Keeps every calc worksheet in the ledger, so the deliverable's totals and computed dates trace to one (G8).",
 		"Answers op handles from the run's kept codenames, so the lead and the drafters see one codename per figure."}},
@@ -91,10 +93,13 @@ var goContract = []goRow{
 	{"draft_section", leadTool | goWrites | hookedSub, []string{"cover"}, "", []string{
 		"Builds the drafter's whole request from the ledger: the issue's verified findings only (G3), their handles, the worksheets, its analysis and, on a redraft, the checks the current version fails.",
 		"Runs after_call rules on the draft before it is saved: a block withholds it.",
-		"Has the figure reader read the section's own figures before saving it, so a figure no cited quote states is flagged (G8)."}},
+		"Saves the section and has the figure reader read its own figures, so finish can flag a figure no cited quote states (G8)."}},
 	{"committee", leadTool | goWrites | enginePass | writesLedger | forcedStep, []string{"Go: finish, a stopped run's review"}, `{}`, nil},
 	{"finish", leadTool | goWrites | enginePass | writesLedger, []string{"Go: a stopped run's forced finish"}, `{"op":"submit","limitations":null}`, []string{
-		"Refuses to submit while a section cites an unusable finding or an unknown handle, or states a figure no cited quote, value, handle or worksheet traces (G5, G8); after a few such rounds it discloses them in Limitations instead."}},
+		"Refuses to submit while a section cites an unusable finding or an unknown handle, or states a figure no cited quote, value, handle or worksheet traces (G5, G8); after a few such rounds it discloses them in Limitations instead.",
+		"Refuses to submit with no plan, nothing drafted, or a plan issue with no section citing a verified finding and no disclosure in Limitations.",
+		"Refuses to submit while the documents state a figure differently and the memo does not state both.",
+		"Runs task_finish rules on the deliverable before it is rendered: a block refuses it (disclosed instead on a forced finish)."}},
 	{"use_skill", leadTool | writesLedger, nil, "", nil}, {"cover", goWrites | enginePass | writesLedger | forcedStep, []string{"Go: finish, a stopped run"}, `{}`, nil},
 	{"verify_quote", goWrites | unhookable, []string{"Go: admit (every quote's paraphrase judge)"}, "", nil},
 	{"read_figures", goWrites | writesLedger, []string{"Go: admission and drafted sections (figures.go)"}, "", nil},
