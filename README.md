@@ -743,12 +743,11 @@ session 401 `unauthenticated` (§ Sign-in).
 BIGLAW_DATABASE_URL=… BIGLAW_MODEL_URL=https://…/v1 BIGLAW_MODEL_KEY=… BIGLAW_MODELS='lead=<C>' \
   ./biglaw serve                                    # loopback :3101; make ui build first to embed the UI
 python3 eval/run.py drive --api http://127.0.0.1:3101 --model-dir v2-<C> --matter litigation --matter ma-diligence
-python3 eval/run.py compare eval/baselines/v1.json eval/results   # gate A (needs gate 0's baseline)
 python3 eval/lab/run.py --labs-dir ~/harvey-labs --api http://127.0.0.1:3101 --model-dir v2-<C> \
   --task corporate-ma/review-data-room-red-flag-review [--tool-bandit on|off]
 ```
 
-`eval/` (Python 3, stdlib only): `run.py` (`list`, `validate`, `selftest`, `score`, `compare`,
+`eval/` (Python 3, stdlib only): `run.py` (`list`, `validate`, `selftest`, `score`,
 `drive`), `proofrun/` (driver, scorer, mock), `lab/` (the Harvey LAB driver over this API),
 `tests/`. `make eval` runs E0 and E3 (fixtures, scorer tests, scorer self-test; no backend). In
 `go test ./eval`, `TestProofRunsOracle` (E1: an oracle `model.Fake` per matter through the real
