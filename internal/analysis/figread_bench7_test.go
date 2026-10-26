@@ -8,7 +8,6 @@ import "testing"
 // bench7: three label checks misfired on a real reader's answers, each making a plain figure unclear
 // (its values dropped or gated).
 func TestBench7LabelChecks(t *testing.T) {
-	t.Parallel()
 	str := func(s string) *string { return &s }
 	label := func(span, kind, cur, scale string) Label {
 		return Label{Span: span, Kind: kind, Currency: cur, Scale: scale, Decimal: "none", Sign: "positive"}

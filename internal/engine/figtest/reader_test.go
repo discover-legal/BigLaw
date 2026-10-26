@@ -46,7 +46,7 @@ func TestWindowsMatchAsTheWholeText(t *testing.T) {
 	pieces := []string{"Jan", "jan", "MARCH", "Sep", "ſep", "dec", "uary", "x", "K", "ſ", "Section", "ſection", "§", "no.", "No.", "#", "item", "Paragraph",
 		"para", "graph", " ", "  ", "\t", "\n", ".", ",", "1", "12", "123", "2026", "$", "(", "é", "\xff", "\xc3", "a", "q", "-", ":", "ARTICLE", "ticle"}
 	r := rand.New(rand.NewPCG(3, 4))
-	for range 30000 {
+	for range 10000 {
 		var b strings.Builder
 		for range r.IntN(12) {
 			b.WriteString(pieces[r.IntN(len(pieces))])

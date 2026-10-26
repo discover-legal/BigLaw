@@ -53,7 +53,6 @@ var bench5Labels = func() map[string]relabel {
 // naming one side's findings still finds the conflict with the other side's, and only conflicts
 // holding a named finding are reported.
 func TestJoinDiscrepanciesFidsDoNotScopeTheJoin(t *testing.T) {
-	t.Parallel()
 	fs := readAs(bench5Findings(t), bench5Labels)
 	rt := &agent.Runtime{Reg: agent.NewRegistry()}
 	for _, tool := range Tools(judgingSource{memSource(fs), scripted{yes: [][2]string{{"4,217", "4,312"}}}}) {

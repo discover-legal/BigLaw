@@ -233,7 +233,6 @@ func TestJoinCandidatesCappedAndOrdered(t *testing.T) {
 // reported. Pairs are named by their canons (one question per two values in two documents: which
 // findings' refs stand for it is the ranking's).
 func TestJoinBenchLedgers(t *testing.T) {
-	t.Parallel()
 	bench6 := func(name string, ls map[string]relabel) []Finding { return readAs(bench6Ledger(t, name), ls) }
 	prompted := maps.Clone(bench6SECLabels) // a prompt-faithful reader: counterparties from each passage, a period on one side
 	prompted["F269/$103,800.00"] = relabel{"Marcus T. Bellini", "undisclosed compensation paid for Bellini", "2022-05-03/2024-01-02", "other"}
@@ -257,22 +256,19 @@ func TestJoinBenchLedgers(t *testing.T) {
 			[][2]string{{"pct:35", "pct:30"}, {"date:2040-10-08", "date:2035-10-08"}}},
 		"bench6 trust, the stand-in's labels": {read(bench6Ledger(t, "trust")), [][2]string{{"date:2040-10-08", "date:2035-10-08"}}},
 	} {
-		t.Run(name, func(t *testing.T) { // each ledger on its own: they share nothing
-			t.Parallel()
-			cands, dropped := Candidates(c.fs, testLimit, nil)
-			t.Logf("%s: %d candidates, %d dropped", name, len(cands), dropped)
-			for _, p := range c.same {
-				if !slices.ContainsFunc(cands, func(x Candidate) bool {
-					return x.A.Canon == p[0] && x.B.Canon == p[1] || x.A.Canon == p[1] && x.B.Canon == p[0]
-				}) {
-					t.Errorf("%s: %s vs %s not put to the judge (%d candidates, %d dropped)", name, p[0], p[1], len(cands), dropped)
-				}
+		cands, dropped := Candidates(c.fs, testLimit, nil)
+		t.Logf("%s: %d candidates, %d dropped", name, len(cands), dropped)
+		for _, p := range c.same {
+			if !slices.ContainsFunc(cands, func(x Candidate) bool {
+				return x.A.Canon == p[0] && x.B.Canon == p[1] || x.A.Canon == p[1] && x.B.Canon == p[0]
+			}) {
+				t.Errorf("%s: %s vs %s not put to the judge (%d candidates, %d dropped)", name, p[0], p[1], len(cands), dropped)
 			}
-			cs, _, _, _, _ := Join(context.Background(), testCall, c.fs, scripted{yes: c.same})
-			if len(cs) < len(c.same) {
-				t.Errorf("%s: %d conflicts judged, want %d: %v", name, len(cs), len(c.same), pairs(cs))
-			}
-		})
+		}
+		cs, _, _, _, _ := Join(context.Background(), testCall, c.fs, scripted{yes: c.same})
+		if len(cs) < len(c.same) {
+			t.Errorf("%s: %d conflicts judged, want %d: %v", name, len(cs), len(c.same), pairs(cs))
+		}
 	}
 	for _, name := range []string{"gatea"} { // gate A: whatever is put to the judge, "no" asserts nothing
 		if cs, _, _, _, _ := Join(context.Background(), testCall, read(bench6Ledger(t, name)), scripted{}); len(cs) > 0 {
@@ -287,7 +283,6 @@ func TestJoinBenchLedgers(t *testing.T) {
 // counterparty, one side's counterparty unknown) leave every pair put to the judge, so the true finds
 // stay found on its yes and the role-name pairs stay out on its no.
 func TestJoinLabelsAreContextNotKeys(t *testing.T) {
-	t.Parallel()
 	set := func(fs []Finding, fid, value string, g func(r *Reading)) {
 		for i := range fs {
 			for j, v := range fs[i].Values {

@@ -16,12 +16,11 @@ import (
 
 // M1: what real ledgers put to the judge at a few budgets, and how many pairs past them are dropped.
 func TestJoinBenchCandidateCounts(t *testing.T) {
-	t.Parallel()
 	for _, name := range []string{"sec", "trust", "gatea"} {
-		fs := read(bench6Ledger(t, name))
-		all := len(rankPairs(fs))
+		ranked := rankPairs(read(bench6Ledger(t, name))) // ranked once: Candidates is coverFrom(rankPairs(fs))
+		all := len(ranked)
 		for _, calls := range []int{6, 16} {
-			cands, dropped := Candidates(fs, CandidateLimit(calls), nil)
+			cands, dropped, _ := coverFrom(ranked, CandidateLimit(calls), nil)
 			if len(cands)+dropped != all || len(cands) != min(all, CandidateLimit(calls)) {
 				t.Errorf("bench6 %s, %d calls: %d candidates + %d dropped, of %d pairs", name, calls, len(cands), dropped, all)
 			}
@@ -98,7 +97,6 @@ func TestVerdictReasonQuotesBothPassages(t *testing.T) {
 // M2: a passage's first line gives the rows below it their scale only when it is a header (no
 // sentence, no figure of its own the words scale) and the figure sits in a table row.
 func TestHeaderScaleOnlyOverTableRows(t *testing.T) {
-	t.Parallel()
 	read := func(text, from string, span int) Reading {
 		rs, _ := ReadLabels([]Passage{PassageOf("q1", text)}, []Label{lbl(fmt.Sprintf("q1.s%d", span), KindMoney, "USD", "1000000", str(from), ".", "positive")})
 		return rs[fmt.Sprintf("q1.s%d", span)]
@@ -126,7 +124,6 @@ func TestHeaderScaleOnlyOverTableRows(t *testing.T) {
 // it that state them; a duration with no unit, a unit on another kind, or a unit or sign no adjacent
 // words state ("Section 30" read as 30 days, "Section 12" as a multiple) is unclear.
 func TestDurationAndNumberLabels(t *testing.T) {
-	t.Parallel()
 	ps := []Passage{PassageOf("q1", "within 21 days, at 1.5x, under Section 30, thirty (30) days, a 21-day period, x 2")}
 	label := func(span, kind, unit, from string) Label {
 		l := lbl(span, kind, "none", "1", nil, map[bool]string{true: ".", false: "none"}[span == "q1.s2"], "positive")
@@ -166,7 +163,6 @@ func TestDurationAndNumberLabels(t *testing.T) {
 
 // H1 (E1's one-year check): date_add takes a period in weeks, months or years.
 func TestDateAddPeriods(t *testing.T) {
-	t.Parallel()
 	lit := func(x, unit string) Operand { return Operand{Literal: &x, Unit: &unit} }
 	for _, c := range []struct{ n, unit, want string }{{"1", "years", "2026-03-31"}, {"1", "year", "2026-03-31"}, {"2", "months", "2025-05-31"}, {"-2", "weeks", "2025-03-17"}, {"21", "days", "2025-04-21"},
 		{"1", "months", "2025-04-30"}, {"-1", "months", "2025-02-28"}, {"11", "months", "2026-02-28"}, {"-13", "months", "2024-02-29"}} {
@@ -183,7 +179,6 @@ func TestDateAddPeriods(t *testing.T) {
 // r9 M1: a month or year on from a day the target month lacks is that month's last day, never an
 // overflow into the next (Go's AddDate gave March 2 for a month on from January 31, 2024).
 func TestDateAddClampsToMonthEnd(t *testing.T) {
-	t.Parallel()
 	lit := func(x, unit string) Operand { return Operand{Literal: &x, Unit: &unit} }
 	for _, c := range []struct{ from, n, unit, want string }{
 		{"2024-01-31", "1", "months", "2024-02-29"}, {"2023-01-31", "1", "months", "2023-02-28"}, {"2024-02-29", "1", "years", "2025-02-28"},

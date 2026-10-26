@@ -14,7 +14,6 @@ import (
 // after its digits, and a clear match at a scale needs equivalent words on both sides (folded: case,
 // punctuation, a plural); "fee" never matches "thousand", "(In Millions)" matches "million".
 func TestR6ScaleWordsAndPlace(t *testing.T) {
-	t.Parallel()
 	read := func(text, from, scale string) Reading {
 		rs, _ := ReadLabels([]Passage{PassageOf("q1", text)}, []Label{lbl("q1.s1", KindMoney, "USD", scale, str(from), ".", "positive")})
 		return rs["q1.s1"]

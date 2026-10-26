@@ -10,7 +10,6 @@ import (
 // Carried from v1 ontology_test.go (5 vectors), against BELO-lite.
 
 func TestSubclass(t *testing.T) {
-	t.Parallel()
 	if !Class("Person").IsA("Party") {
 		t.Error("Person should be a Party")
 	}
@@ -26,7 +25,6 @@ func TestSubclass(t *testing.T) {
 }
 
 func TestLookupAliasAndSubstring(t *testing.T) {
-	t.Parallel()
 	if p, ok := Lookup("violates"); !ok || p.Name != "violates" {
 		t.Errorf("canonical lookup failed: %v %v", p, ok)
 	}
@@ -39,7 +37,6 @@ func TestLookupAliasAndSubstring(t *testing.T) {
 }
 
 func TestNormalizeDirectionFix(t *testing.T) {
-	t.Parallel()
 	s, _, p, o, _, ok := Normalize("Section 206 of the Advisers Act", "Authority", "violates", "Cherry-Picking Scheme", "Conduct")
 	if !ok || p != "violates" || s != "Cherry-Picking Scheme" || o != "Section 206 of the Advisers Act" {
 		t.Errorf("direction not fixed: s=%q o=%q ok=%v", s, o, ok)
@@ -57,7 +54,6 @@ func TestNormalizeDirectionFix(t *testing.T) {
 // issues (they moved to packs), so the vocabulary check is that every plan issue class is declared
 // in belo.json and is an Issue, and that every predicate's domain and range are declared classes.
 func TestIssueKindsDeclaredInSpec(t *testing.T) {
-	t.Parallel()
 	want := []Class{"Conduct", "Requirement", "Clause", "RedFlag"}
 	got := IssueClasses()
 	if len(got) != len(want) {
@@ -78,7 +74,6 @@ func TestIssueKindsDeclaredInSpec(t *testing.T) {
 }
 
 func TestClassifyLiteral(t *testing.T) {
-	t.Parallel()
 	for in, want := range map[string]Class{
 		"$438,000":                  "", // what a number measures is the figure reader's (Value.Fig), never guessed from its text
 		"81.6%":                     "",
@@ -94,7 +89,6 @@ func TestClassifyLiteral(t *testing.T) {
 }
 
 func TestRelationReorientedByDomainRange(t *testing.T) {
-	t.Parallel()
 	ents := []Entity{{"Cherry-picking scheme", "Conduct"}, {"Section 206", "Authority"}, {"Gerald Whitmore", "Person"}}
 	kept, dropped := Relations(ents, []Relation{
 		{"Section 206", "in violation of", "Cherry-picking scheme"},
@@ -109,7 +103,6 @@ func TestRelationReorientedByDomainRange(t *testing.T) {
 
 // Trap: "Section 206 committedBy Firm" fits neither way; it is dropped, never stored.
 func TestIllTypedRelationDropped(t *testing.T) {
-	t.Parallel()
 	kept, dropped := Relations([]Entity{{"Whitmore Capital Advisors LLC", "Firm"}}, []Relation{
 		{"Section 206", "committedBy", "Whitmore Capital Advisors LLC"},
 		{"Whitmore Capital Advisors LLC", "reviewed", "the brochure"},
