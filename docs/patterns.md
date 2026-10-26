@@ -285,7 +285,7 @@ added:
   `packsFor(ctx, …)` and `r.sp()`.
 - A new editable file must map to an item (`itemOf`, `TestCatalogueAndHooks`).
 - A new field Go reads is automatically frozen by `compatSpec`. A new literal input Go sends goes
-  in `goInputs`.
+  in its tool's `goContract` row (`sent`).
 - Re-record `ui/src/recorded/manage.json` after changing a built-in (`make demo-record`).
 
 ## 10. Admin-guarded writes

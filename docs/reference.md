@@ -435,9 +435,9 @@ twice the call budget, at least 400),
   `out.findings[].claim: Go reads or writes this field`); every enum keeps exactly the built-in's values
   (Go branches on them: a critic's verdict, a gap's severity, an op; renaming, recasing, adding or
   removing one is refused, `out.verdicts[].verdict: Go branches on this field's values`); a schema Go writes (a Go tool's output, the
-  input of a tool Go itself calls: `goWritten`, found from the engine's `rt.Invoke` calls) gains no
+  input of a tool Go itself calls: `goContract`'s `goWrites`, found from the engine's `rt.Invoke` calls) gains no
   property (strict schemas require every property, and Go sends none); the built-in description's
-  examples and Go's own literal inputs (`goInputs`: finish's submit, `committee {}`, `cover {}`) must
+  examples and Go's own literal inputs (`goContract`'s `sent`: finish's submit, `committee {}`, `cover {}`) must
   still validate. **Limits:** it compares with the built-in, not with a list of the fields each Go
   line reads, so a field Go never reads is protected too (an enum Go never branches on is frozen as
   well); narrowing a bound (a length, an item count) on a value Go writes is caught only where an

@@ -127,8 +127,8 @@ budgets in `docs/history.md`. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`
   `execute` builds the run's `Specs` from it on every claim (resume too): read specs, prompts, packs and
   skills only through `spec(ctx, …)`/`prompt(ctx, …)`/`packsFor`/`r.sp()`, never a package global;
   `validate` = strict per-file checks + the whole set through `e.runtime` + `compatSpec` (no property the
-  built-in schema has may be removed or retyped, no enum changed; Go-written schemas, `goWritten`, gain
-  none; built-in examples and `goInputs` must validate) + no lead-only tool (Final, Solo ops but
+  built-in schema has may be removed or retyped, no enum changed; Go-written schemas (`goContract`'s `goWrites`) gain
+  none; built-in examples and each `goContract` row's `sent` input must validate) + no lead-only tool (Final, Solo ops but
   `ledger`) in a subagent's allowed list + class `free` only for subagents built free; saves are serial
   (`locked`: advisory lock, one tx); any change to a pack's or skill's content (every file, all front
   matter but status/reviewedBy) resets it to candidate unless the save names a new reviewer; the reader's and judge's cache keys hash the run's set (`Specs.agentHash`: spec, prompt and every allowed tool's spec).
@@ -239,7 +239,9 @@ not yet judged (self-test tape).
   with the step (never write the ledger around it); every run change checks the lease (`lease_owner`)
   and status. The deliverable is rendered only by `finish`; findings that did not verify never reach
   a drafter, a subagent's ledger read, or the memo (G3). A new tool or subagent spec goes in
-  `internal/engine/specs/` and must validate (`TestSpecsLoadAndValidate`).
+  `internal/engine/specs/` and must validate (`TestSpecsLoadAndValidate`); what Go needs from a built-in tool or subagent name
+  (the lead's list, Go's callers and inputs, ledger writers, hooked, passes…) is its one row in `goContract`
+  (`register.go`), never a new hand-kept list.
 - No model calls in `go test`: only `model.Fake` or an `httptest` server. Model errors carry
   BigLaw's own fixed text and, of an error answer, only the provider's error type (or code) and message (the
   whole redacted by `redact`: the key and anything key-, token-, masked-key-, credential-, URL-, IP- or
