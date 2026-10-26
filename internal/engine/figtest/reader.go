@@ -14,6 +14,8 @@ import (
 	"encoding/json"
 	"regexp"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/discover-legal/BigLaw/internal/analysis"
 	"github.com/discover-legal/BigLaw/internal/model"
@@ -129,16 +131,17 @@ func RequestOf(req model.Request, v any) bool {
 }
 
 var (
-	oracleCode  = regexp.MustCompile(`(?:^|[^A-Za-z])(USD|EUR|GBP|CHF|CAD|JPY|INR|AUD)\s?$`)
-	oracleAfter = regexp.MustCompile(`^[\s,\t]?(USD|EUR|GBP|CHF|CAD|JPY|INR|AUD|dollars?|euros?)\b`)
-	oracleScale = regexp.MustCompile(`(?i)^\s?(million|billion|thousand|mm|m|bn|k)\b`)
-	oracleNoun  = regexp.MustCompile(`(?i)^\)?\s?(?:[a-z-]+\s){0,2}?(shares?|units?|trades?|employees?|people|persons?|transactions?|accounts?|votes?|options?|items?|copies|pages?|instalments?|installments?)\b`)
-	oracleTime  = regexp.MustCompile(`(?i)^\)?[\s-]?(calendar\s|business\s)?(days?|weeks?|months?|years?|hours?)\b`)
-	oracleMult  = regexp.MustCompile(`(?i)^\)?\s?(?:x\b|×|times\b)`) // a multiple: "1.5x", "2.0 times"
-	oracleTimes = regexp.MustCompile(`(?:\s|^)[x×]\s?$`)             // a factor after a times sign: "shares x 1.5"
-	oracleMonth = regexp.MustCompile(`(?i)(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s*\d{0,2},?\s*$`)
-	oracleYear  = regexp.MustCompile(`^(19|20)\d\d$`)
-	oracleRef   = regexp.MustCompile(`(?i)(section|rule|clause|paragraph|item|exhibit|schedule|article|§|no\.|#)\s*$`)
+	oracleCode    = regexp.MustCompile(`(?:^|[^A-Za-z])(USD|EUR|GBP|CHF|CAD|JPY|INR|AUD)\s?$`)
+	oracleAfter   = regexp.MustCompile(`^[\s,\t]?(USD|EUR|GBP|CHF|CAD|JPY|INR|AUD|dollars?|euros?)\b`)
+	oracleScale   = regexp.MustCompile(`(?i)^\s?(million|billion|thousand|mm|m|bn|k)\b`)
+	oracleNoun    = regexp.MustCompile(`(?i)^\)?\s?(?:[a-z-]+\s){0,2}?(shares?|units?|trades?|employees?|people|persons?|transactions?|accounts?|votes?|options?|items?|copies|pages?|instalments?|installments?)\b`)
+	oracleTime    = regexp.MustCompile(`(?i)^\)?[\s-]?(calendar\s|business\s)?(days?|weeks?|months?|years?|hours?)\b`)
+	oracleMult    = regexp.MustCompile(`(?i)^\)?\s?(?:x\b|×|times\b)`) // a multiple: "1.5x", "2.0 times"
+	oracleTimes   = regexp.MustCompile(`(?:\s|^)[x×]\s?$`)             // a factor after a times sign: "shares x 1.5"
+	oracleMonth   = regexp.MustCompile(`(?i)(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s*\d{0,2},?\s*$`)
+	oracleYear    = regexp.MustCompile(`^(19|20)\d\d$`)
+	oracleRef     = regexp.MustCompile(`(?i)(section|rule|clause|paragraph|item|exhibit|schedule|article|§|no\.|#)\s*$`)
+	oraclePercent = regexp.MustCompile(`(?i)^\)?\s?per\s?cent`)
 )
 
 // Labels labels one Passage's spans (matched to the spans it was given by their text, in order).
@@ -177,7 +180,7 @@ func oracleLabel(p Passage, s analysis.Span, all []Passage, parties []string) an
 		p.Kind == "value" && (strings.HasPrefix(strings.TrimSpace(p.Text), "-") || strings.HasPrefix(strings.TrimSpace(p.Text), "−")) {
 		l.Sign = "negative"
 	}
-	if strings.HasPrefix(strings.TrimLeft(after, ")"), "%") || regexp.MustCompile(`(?i)^\)?\s?per\s?cent`).MatchString(after) {
+	if strings.HasPrefix(strings.TrimLeft(after, ")"), "%") || oraclePercent.MatchString(after) {
 		l.Kind = analysis.KindPercent
 	}
 	cur := ""
@@ -231,9 +234,9 @@ func oracleLabel(p Passage, s analysis.Span, all []Passage, parties []string) an
 		l.Kind, l.UnitFrom = analysis.KindNumber, &from
 	case oracleNoun.MatchString(after):
 		l.Kind = analysis.KindCount
-	case oracleMonth.MatchString(before) || oracleYear.MatchString(s.Text) && !strings.HasSuffix(before, "$"):
+	case oracleMonth.MatchString(monthWindow(before)) || oracleYear.MatchString(s.Text) && !strings.HasSuffix(before, "$"):
 		l.Kind = analysis.KindDate
-	case oracleRef.MatchString(before):
+	case oracleRef.MatchString(refWindow(before)):
 		l.Kind = analysis.KindOther
 	case p.Kind == "value":
 		switch deref(p.Class) {
@@ -291,6 +294,46 @@ func oracleLabel(p Passage, s analysis.Span, all []Passage, parties []string) an
 		}
 	}
 	return l
+}
+
+// The end-anchored patterns over before (the whole text ahead of a span) are matched on the only
+// part of it a match can lie in, which keeps the long replayed runs fast: neither pattern has ^ or
+// \b, so text ahead of that part cannot change the answer (TestWindowsMatchAsTheWholeText).
+// (?i)[a-z] is the ASCII letters, ſ and the Kelvin sign; \s and \d are ASCII.
+func caseLetter(r rune) bool {
+	return r < utf8.RuneSelf && unicode.IsLetter(r) || r == 'ſ' || r == '\u212a'
+}
+
+// refWindow is the text an oracleRef match can lie in: its keyword (at most nine letters) before
+// the trailing white space.
+func refWindow(before string) string {
+	i := len(strings.TrimRight(before, " \t\n\f\r"))
+	for k := 0; k < 9 && i > 0; k++ {
+		_, n := utf8.DecodeLastRuneInString(before[:i])
+		i -= n
+	}
+	return before[i:]
+}
+
+// monthWindow is the text an oracleMonth match can lie in: the run of letters (month and the rest
+// of its word) before a tail of dots, white space, digits and commas, which holds no letter.
+func monthWindow(before string) string {
+	i := len(before)
+	for i > 0 {
+		r, n := utf8.DecodeLastRuneInString(before[:i])
+		if !strings.ContainsRune(". \t\n\f\r,0123456789", r) {
+			break
+		}
+		i -= n
+	}
+	for i > 0 {
+		r, n := utf8.DecodeLastRuneInString(before[:i])
+		if !caseLetter(r) {
+			break
+		}
+		i -= n
+	}
+	return before[i:]
 }
 
 // oracleDecimal is the decimal mark a US-style fixture writes: a "." unless it groups.
