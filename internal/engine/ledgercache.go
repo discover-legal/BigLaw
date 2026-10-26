@@ -161,10 +161,14 @@ func hasRefs(t reflect.Type) bool {
 		b = hasRefs(t.Elem())
 	case reflect.Struct:
 		for i := range t.NumField() {
-			if f := t.Field(i); f.IsExported() && hasRefs(f.Type) {
-				b = true
-				break
+			f := t.Field(i)
+			if !hasRefs(f.Type) {
+				continue
 			}
+			if !f.IsExported() { // deepCopy cannot reach it (an embedded unexported struct, an UnmarshalJSON's own state): a shared copy, never silent
+				panic("ledger cache: " + t.String() + "." + f.Name + " is unexported and holds references")
+			}
+			b = true
 		}
 	}
 	refTypes.Store(t, b)

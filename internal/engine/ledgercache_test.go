@@ -186,14 +186,23 @@ func TestDeepCopy(t *testing.T) {
 		P          *inner
 		A          [2]inner
 		Raw        json.RawMessage
+		L          []inner
 	}
-	in := outer{Empty: []string{}, M: map[string]any{"k": []any{"x"}}, P: &inner{S: []int{1}}, A: [2]inner{{S: []int{2}}}, Raw: json.RawMessage(`{}`)}
+	in := outer{L: []inner{{S: []int{3}}}, Empty: []string{}, M: map[string]any{"k": []any{"x"}}, P: &inner{S: []int{1}}, A: [2]inner{{S: []int{2}}}, Raw: json.RawMessage(`{}`)}
 	out := deepCopy(reflect.ValueOf(in)).Interface().(outer)
 	if !reflect.DeepEqual(in, out) || string(mustJSON(in)) != string(mustJSON(out)) || out.Nil != nil || out.Empty == nil {
 		t.Fatalf("copy %+v", out)
 	}
-	out.M["k"].([]any)[0], out.P.S[0], out.A[0].S[0], out.Raw[0] = "y", 9, 9, '['
-	if in.M["k"].([]any)[0] != "x" || in.P.S[0] != 1 || in.A[0].S[0] != 2 || in.Raw[0] != '{' {
+	out.M["k"].([]any)[0], out.P.S[0], out.A[0].S[0], out.Raw[0], out.L[0].S[0] = "y", 9, 9, '[', 9
+	if in.M["k"].([]any)[0] != "x" || in.P.S[0] != 1 || in.A[0].S[0] != 2 || in.Raw[0] != '{' || in.L[0].S[0] != 3 {
 		t.Fatalf("shared: %+v", in)
 	}
+	type hidden struct{ S []int }
+	type exposed struct{ hidden }
+	defer func() {
+		if recover() == nil {
+			t.Fatal("an unexported field holding references was copied as shared, not refused")
+		}
+	}()
+	hasRefs(reflect.TypeOf(exposed{}))
 }
