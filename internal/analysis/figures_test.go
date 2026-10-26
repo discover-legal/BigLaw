@@ -9,6 +9,7 @@ import (
 	"math/rand/v2"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -216,6 +217,7 @@ var literalCorpus = []struct {
 }
 
 func TestLiteralCorpus(t *testing.T) {
+	t.Parallel()
 	for _, c := range literalCorpus {
 		if got := literal(c.in); !slices.Equal(got, c.want) {
 			t.Errorf("%q: got %q, want %q", c.in, got, c.want)
@@ -229,9 +231,11 @@ func TestLiteralCorpus(t *testing.T) {
 // literalProperties are Literal's and Spans' invariants over any text: no panic, spans in bounds,
 // in order and never overlapping, each span's text exactly the text's bytes there, and every reading
 // round-trips: written plainly, it reads back to itself.
-func literalProperties(t *testing.T, s string) {
+// literalProperties checks Spans' and Literal's spans of s and returns Spans', which it checked.
+func literalProperties(t *testing.T, s string) []Span {
 	t.Helper()
-	for _, ss := range [][]Span{Spans(s), func() []Span { _, x := Literal(s); return x }()} {
+	spans := Spans(s)
+	for _, ss := range [][]Span{spans, func() []Span { _, x := Literal(s); return x }()} {
 		for i, x := range ss {
 			if x.Start < 0 || x.End > len(s) || x.Start >= x.End || s[x.Start:x.End] != x.Text {
 				t.Fatalf("bad span %+v in %q", x, s)
@@ -247,6 +251,7 @@ func literalProperties(t *testing.T, s string) {
 			}
 		}
 	}
+	return spans
 }
 
 // TestLiteralPropertyGenerated: 100,000 numbers written plain, US-grouped, continental, with
@@ -254,6 +259,7 @@ func literalProperties(t *testing.T, s string) {
 // signs and nouns: each is found as exactly one span with its text and its value among its readings,
 // and the properties hold.
 func TestLiteralPropertyGenerated(t *testing.T) {
+	t.Parallel()
 	r := rand.New(rand.NewPCG(1, 2))
 	n := 100000
 	if testing.Short() {
@@ -265,7 +271,13 @@ func TestLiteralPropertyGenerated(t *testing.T) {
 		}
 		return digits
 	}
-	bad := 0
+	// The cases are generated in one sequence from the seed, then checked in parallel chunks (every
+	// case is checked; only the checking is spread over the cores, which under -race is most of it).
+	type generated struct {
+		line, num string
+		want      *big.Rat
+	}
+	cases := make([]generated, 0, n)
 	for range n {
 		ip := int64(r.IntN(10))*[]int64{1, 10, 100, 1000, 10000, 1000000, 1}[r.IntN(7)] + int64(r.IntN(999))
 		digits := fmt.Sprint(ip)
@@ -289,17 +301,28 @@ func TestLiteralPropertyGenerated(t *testing.T) {
 			num, want = "-"+num, want.Neg(want)
 		}
 		ctx := []string{"The Purchaser shall pay $%s on Closing.", "Total:\t%s", "%s", "Net: %s.", "fee of EUR %s", "%s shares", "%s%%", "(%s)", "CHF %s per seat"}[r.IntN(9)]
-		line := fmt.Sprintf(ctx, num)
-		literalProperties(t, line)
-		ss := Spans(line)
-		if len(ss) != 1 || ss[0].Text != num || !slices.ContainsFunc(ss[0].Readings(), func(x *big.Rat) bool { return x.Cmp(want) == 0 }) {
-			if bad++; bad <= 20 {
-				t.Errorf("%q reads %+v, want %q = %s", line, ss, num, want.RatString())
-			}
-		}
+		cases = append(cases, generated{fmt.Sprintf(ctx, num), num, want})
 	}
-	if bad > 0 {
-		t.Errorf("%d of %d generated numbers misread", bad, n)
+	var bad atomic.Int64
+	t.Run("check", func(t *testing.T) {
+		const chunks = 8
+		for k := range chunks {
+			part := cases[k*len(cases)/chunks : (k+1)*len(cases)/chunks]
+			t.Run(fmt.Sprint(k), func(t *testing.T) {
+				t.Parallel()
+				for _, c := range part {
+					ss := literalProperties(t, c.line) // Spans(c.line), checked
+					if len(ss) != 1 || ss[0].Text != c.num || !slices.ContainsFunc(ss[0].Readings(), func(x *big.Rat) bool { return x.Cmp(c.want) == 0 }) {
+						if bad.Add(1) <= 20 {
+							t.Errorf("%q reads %+v, want %q = %s", c.line, ss, c.num, c.want.RatString())
+						}
+					}
+				}
+			})
+		}
+	})
+	if bad.Load() > 0 {
+		t.Errorf("%d of %d generated numbers misread", bad.Load(), n)
 	}
 }
 
@@ -308,5 +331,5 @@ func FuzzFigureProperties(f *testing.F) {
 	for _, c := range literalCorpus {
 		f.Add(c.in)
 	}
-	f.Fuzz(literalProperties)
+	f.Fuzz(func(t *testing.T, s string) { literalProperties(t, s) })
 }

@@ -12,6 +12,7 @@ import (
 func party(name string, class Class) Entity { return Entity{name, class} }
 
 func TestCoverageReportsMissingIssue(t *testing.T) {
+	t.Parallel()
 	c := CheckCoverage([]Issue{{"I1", "Was there cherry-picking?", "Conduct"}, {"I2", "Disclosure?", "Requirement"}},
 		map[string]string{"I1": "Yes.", "I2": "  "}, nil, nil)
 	if !slices.Equal(c.MissingIssues, []string{"I2"}) {
@@ -20,6 +21,7 @@ func TestCoverageReportsMissingIssue(t *testing.T) {
 }
 
 func TestCoverageReportsUncoveredParty(t *testing.T) {
+	t.Parallel()
 	chao, bellini := party("Diana L. Chao", "Person"), party("Marcus T. Bellini", "Person")
 	fs := []Finding{
 		{FID: "F1", Verified: true, Entities: []Entity{chao, bellini}},
@@ -35,6 +37,7 @@ func TestCoverageReportsUncoveredParty(t *testing.T) {
 
 // Carried from v1 writer/authorship_test.go: a firm name does not cover a person.
 func TestNameCovered_FirmMentionDoesNotCoverPerson(t *testing.T) {
+	t.Parallel()
 	if NameCovered("Whitmore Capital Advisors LLC faces exposure.", "Gerald R. Whitmore", "Person") {
 		t.Error("the firm name wrongly counted as covering the person")
 	}
@@ -52,6 +55,7 @@ func TestNameCovered_FirmMentionDoesNotCoverPerson(t *testing.T) {
 // Carried from v1 (roster enforcement): one entry per named respondent; the missing one gets an
 // explicit gap note, never silence. v2 reports it from the check instead of writing a section.
 func TestEnforceRoster_GapNoteForMissingRespondent(t *testing.T) {
+	t.Parallel()
 	fs := []Finding{
 		{FID: "F1", Verified: true, Entities: []Entity{party("Gerald R. Whitmore", "Person")}},
 		{FID: "F2", Verified: true, Entities: []Entity{party("Diana L. Chao", "Person")}},
@@ -71,6 +75,7 @@ func TestEnforceRoster_GapNoteForMissingRespondent(t *testing.T) {
 
 // A Conduct issue's actor must be covered even when it appears in one finding.
 func TestCoverageConductNeedsActor(t *testing.T) {
+	t.Parallel()
 	fs := []Finding{{FID: "F1", IssueID: "I1", Verified: true,
 		Entities:  []Entity{party("Cherry-picking scheme", "Conduct"), party("Gerald Whitmore", "Person")},
 		Relations: []Relation{{"Cherry-picking scheme", "committed by", "Gerald Whitmore"}}}}
@@ -89,6 +94,7 @@ func TestCoverageConductNeedsActor(t *testing.T) {
 }
 
 func TestCoverageSalientFigureMissing(t *testing.T) {
+	t.Parallel()
 	fs := read([]Finding{{FID: "F1", Verified: true, Values: []Value{{Metric: "profit", Value: "$8,238,000"}, {Metric: "loss", Value: "$1,200,000"}, {Metric: "fee", Value: "$40"}}}})
 	hs := Handles(fs, nil, 0)
 	c := CheckCoverage([]Issue{{"I1", "q", "Conduct"}}, map[string]string{"I1": "Profits were $8,238,000; see also " + hs[1].Handle + "."}, fs, nil)

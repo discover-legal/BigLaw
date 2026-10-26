@@ -18,6 +18,7 @@ import (
 // trimmed): numbers handles and table and join_discrepancies, filled past their budget, return one
 // valid page of at most agent.PageBytes (whole items, whole table rows) that says truncated.
 func TestAnalysisToolsPageByType(t *testing.T) {
+	t.Parallel()
 	var fs []Finding
 	for i := range 300 {
 		for _, d := range []struct{ doc, v string }{{"a", fmt.Sprintf("$%d,000", 100+i)}, {"b", fmt.Sprintf("$%d,500", 600+i)}} {

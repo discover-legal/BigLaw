@@ -19,6 +19,7 @@ func str(s string) *string { return &s }
 // ten; its decimal mark must fit the digits as written; a sign it gives may not contradict a written
 // minus. What it cannot be held to is unclear (gated), and an amount is always the written digits.
 func TestReadLabelsChecksEveryLabel(t *testing.T) {
+	t.Parallel()
 	q := PassageOf("q1", "Revenue (in thousands)\t4,000 and a fee of $500 and -1,250 and 1,200")
 	if len(q.Spans) != 4 {
 		t.Fatalf("spans %+v", q.Spans)
@@ -79,6 +80,7 @@ func TestReadLabelsChecksEveryLabel(t *testing.T) {
 // unclear reading agreeing on what can be read is an unclear match (a lawyer confirms it), never a
 // clear one; a count never states a sum.
 func TestSameFigure(t *testing.T) {
+	t.Parallel()
 	money := Reading{Kind: KindMoney, Currency: "USD", Amount: "2000000"}
 	for name, c := range map[string]struct {
 		b              Reading
@@ -102,6 +104,7 @@ func TestSameFigure(t *testing.T) {
 // TestCanonNeedsAClearReading: a value is a comparable quantity only by its figure reader's clear
 // reading of its class; with none, an unclear one, or a kind other than its class, it is not compared.
 func TestCanonNeedsAClearReading(t *testing.T) {
+	t.Parallel()
 	v := Value{Value: "$2,000,000", Class: "Money"}
 	for _, f := range []*Reading{nil, {Kind: KindMoney, Currency: "USD", Amount: "2000000", Unclear: true}, {Kind: KindCount, Amount: "2000000"}} {
 		v.Fig = f

@@ -38,6 +38,7 @@ func invoke(t *testing.T, name, input string) (agent.Result, error) {
 
 // Trap: op calc without its fields is an actionable error naming them.
 func TestNumbersOpFieldsChecked(t *testing.T) {
+	t.Parallel()
 	_, err := invoke(t, "numbers", `{"op":"calc","fn":"sum","operands":null,"holidays":null,"fids":null,"salientTop":null}`)
 	var f *agent.Failure
 	if !errors.As(err, &f) || !strings.Contains(err.Error(), "operands[]") || !strings.Contains(err.Error(), "call again") {
@@ -60,6 +61,7 @@ func TestNumbersOpFieldsChecked(t *testing.T) {
 }
 
 func TestJoinRefusesUnverifiedInputs(t *testing.T) {
+	t.Parallel()
 	if _, err := invoke(t, "join_discrepancies", `{"fids":["F1","F3"],"aliases":null}`); err == nil || !strings.Contains(err.Error(), "F3 is not a verified finding") {
 		t.Fatalf("a quarantined finding was joined: %v", err)
 	}

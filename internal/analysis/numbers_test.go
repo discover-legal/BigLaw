@@ -20,6 +20,7 @@ func ledger() []Finding {
 }
 
 func TestCalculateDecimalExact(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		fn, want, unit string
 		ops            []string
@@ -45,6 +46,7 @@ func TestCalculateDecimalExact(t *testing.T) {
 }
 
 func TestCalculateBusinessDays(t *testing.T) {
+	t.Parallel()
 	date, days := ref("date"), ref("days")
 	// 2026-11-12 is a Thursday; 10 business days later, skipping Thanksgiving (Nov 26): Nov 27.
 	w, err := Calc(ledger(), "business_days", []Operand{{Ref: ref("F4.v1")}, {Literal: ref("10"), Unit: days}}, []string{"2026-11-26"})
@@ -69,6 +71,7 @@ func TestCalculateBusinessDays(t *testing.T) {
 }
 
 func TestCalculateWorksheetReproducible(t *testing.T) {
+	t.Parallel()
 	ops := []Operand{{Ref: ref("F1.v1")}, {Ref: ref("F2.v1")}}
 	a, _ := Calc(ledger(), "sum", ops, nil)
 	b, _ := Calc(ledger(), "sum", ops, nil)
@@ -85,6 +88,7 @@ func TestCalculateWorksheetReproducible(t *testing.T) {
 
 // Trap: a quarantined or unknown finding is refused, never treated as 0.
 func TestCalculateOperandsMustBeVerified(t *testing.T) {
+	t.Parallel()
 	for r, want := range map[string]string{"F3.v1": "F3 is quarantined", "F9.v1": "no finding F9", "F1.v7": "F1 has 2 values", "F1": "not a value reference"} {
 		_, err := Calc(ledger(), "sum", []Operand{{Ref: ref("F1.v1")}, {Ref: ref(r)}}, nil)
 		if err == nil || !strings.Contains(err.Error(), want) {
@@ -95,6 +99,7 @@ func TestCalculateOperandsMustBeVerified(t *testing.T) {
 
 // Carried from v1 writer tests (4 handle vectors), against {Codename} handles.
 func TestResolveFigureHandles_CurrencyNotEaten(t *testing.T) {
+	t.Parallel()
 	hs := []Handle{{Handle: "{Zephyr}", Value: "$7,800,000"}, {Handle: "{Quasar}", Value: "$1,234.56"}, {Handle: "{Nimbus}", Value: "81.6%"}}
 	for in, want := range map[string]string{
 		"The scheme generated approximately {Zephyr} in excess profits.": "approximately $7,800,000 in excess profits",
@@ -111,6 +116,7 @@ func TestResolveFigureHandles_CurrencyNotEaten(t *testing.T) {
 }
 
 func TestResolveFigureHandles_KeepsParagraphBreaks(t *testing.T) {
+	t.Parallel()
 	out, err := Substitute("First paragraph about {Zephyr}.\n\nSecond paragraph.", []Handle{{Handle: "{Zephyr}", Value: "$7,800,000"}})
 	if err != nil || !strings.Contains(out, "\n\n") || !strings.Contains(out, "$7,800,000.") {
 		t.Errorf("%q %v", out, err)
@@ -118,6 +124,7 @@ func TestResolveFigureHandles_KeepsParagraphBreaks(t *testing.T) {
 }
 
 func TestAssignHandles_CarriesCitationsIntact(t *testing.T) {
+	t.Parallel()
 	hs := Handles(ledger(), []string{"F4"}, 0)
 	var cite Handle
 	for _, h := range hs {
@@ -133,6 +140,7 @@ func TestAssignHandles_CarriesCitationsIntact(t *testing.T) {
 
 // v1's salience floor: headline figures keep their handles, bare noise falls off under the cap.
 func TestAssignHandlesSurfacesSalient(t *testing.T) {
+	t.Parallel()
 	var vals []Value
 	for _, v := range []string{"3", "62%", "2", "1.5%", "81.6%", "$2.3", "$185", "$92", "$40", "20%", "6%", "15%", "5%", "$87,655.90", "$8,238,000", "$3.1", "$438,000", "12%", "1", "4,217"} {
 		vals = append(vals, Value{Metric: "figure", Value: v})
@@ -152,6 +160,7 @@ func TestAssignHandlesSurfacesSalient(t *testing.T) {
 }
 
 func TestFigureHandlesSubstituteExactValue(t *testing.T) {
+	t.Parallel()
 	hs := Handles(ledger(), nil, 0)
 	if len(hs) == 0 || hs[0].Value != "$7,800,000" || hs[0].Handle != "{Zephyr}" || hs[0].Ref != "F1.v1" {
 		t.Fatalf("handles %+v", hs)
@@ -168,6 +177,7 @@ func TestFigureHandlesSubstituteExactValue(t *testing.T) {
 
 // Trap: a codename with no figure is a lint error, never guessed.
 func TestUnknownHandleRejected(t *testing.T) {
+	t.Parallel()
 	_, err := Substitute("The loss was {Vireo} and {Zephyr}.", []Handle{{Handle: "{Zephyr}", Value: "$1"}})
 	if err == nil || !strings.Contains(err.Error(), "{Vireo}") {
 		t.Fatalf("unknown handle: %v", err)
@@ -178,6 +188,7 @@ func TestUnknownHandleRejected(t *testing.T) {
 }
 
 func TestKeyFiguresTableOnlyVerified(t *testing.T) {
+	t.Parallel()
 	tab := KeyFigures(ledger(), nil)
 	if !strings.Contains(tab, "| Oceanic Fund I LP excess profits | $7,800,000 | [F1] |") || strings.Contains(tab, "9,999,999") || strings.Contains(tab, "[F3]") {
 		t.Fatalf("table:\n%s", tab)
@@ -189,6 +200,7 @@ func TestKeyFiguresTableOnlyVerified(t *testing.T) {
 
 // Carried normaliser vectors.
 func TestParseRecDates(t *testing.T) {
+	t.Parallel()
 	toks := DatesIn("deletions in Q1 2021, amended in March 2022, and again in early 2023")
 	if len(toks) != 3 {
 		t.Fatalf("want 3 dates, got %+v", toks)
@@ -212,6 +224,7 @@ func TestParseRecDates(t *testing.T) {
 }
 
 func TestCanonReadsMoney(t *testing.T) {
+	t.Parallel()
 	for in, want := range map[string]string{"$7,800,000": "usd:7800000", "$438,000.00": "usd:438000", "$22.2 million": "usd:22200000", "$1,234.56": "usd:1234.56"} {
 		if _, got, _, ok := Canon(withFig(Value{Value: in, Class: "Money"})); !ok || got != want { // the figure reader's reading (its stand-in here)
 			t.Errorf("Canon(%q) = %s,%v want %s", in, got, ok, want)
@@ -220,6 +233,7 @@ func TestCanonReadsMoney(t *testing.T) {
 }
 
 func TestFigureSalienceRanking(t *testing.T) {
+	t.Parallel()
 	for _, c := range [][2]string{{"$8,238,000", "$185"}, {"4,217", "3"}, {"$438,000", "12%"}, {"81.6%", "3"}, {"$92,290.00", "$40"}} {
 		if Salience(withFig(Value{Value: c[0]})) <= Salience(withFig(Value{Value: c[1]})) {
 			t.Errorf("salience(%q) should exceed salience(%q)", c[0], c[1])
@@ -230,6 +244,7 @@ func TestFigureSalienceRanking(t *testing.T) {
 // r1: a money value in another currency is not dollars: it keeps its unit, so a sum across
 // currencies is refused instead of being labelled USD.
 func TestCalculateKeepsCurrency(t *testing.T) {
+	t.Parallel()
 	fs := append(ledger(), read([]Finding{{FID: "F5", Verified: true, Values: []Value{{Metric: "deposit", Value: "500,000", Unit: "GBP", Class: "Money"}}}})...)
 	if w, err := Calc(fs, "sum", []Operand{{Ref: ref("F5.v1")}, {Ref: ref("F2.v1")}}, nil); err == nil {
 		t.Fatalf("GBP + USD = %s %s", w.Result, w.Unit)
@@ -241,6 +256,7 @@ func TestCalculateKeepsCurrency(t *testing.T) {
 
 // r1: a date difference over centuries (a 999-year lease) is exact, not a saturated duration.
 func TestCalculateDateDiffLongSpan(t *testing.T) {
+	t.Parallel()
 	w, err := Calc(nil, "date_diff", []Operand{{Literal: ref("1990-01-01"), Unit: ref("date")}, {Literal: ref("2989-01-01"), Unit: ref("date")}}, nil)
 	if err != nil || w.Result != "364878" {
 		t.Fatalf("date_diff = %q (%v), want 364878", w.Result, err)
@@ -250,6 +266,7 @@ func TestCalculateDateDiffLongSpan(t *testing.T) {
 // r1: a figure's codename does not depend on which findings a call named: {Zephyr} in one draft
 // section names the same figure as {Zephyr} in another.
 func TestHandlesStableAcrossCalls(t *testing.T) {
+	t.Parallel()
 	all := map[string]string{}
 	for _, h := range Handles(ledger(), nil, 0) {
 		all[h.Ref] = h.Handle
@@ -265,6 +282,7 @@ func TestHandlesStableAcrossCalls(t *testing.T) {
 
 // r2 verifier N2: business_days with the dates reversed is refused (it once counted 0 days).
 func TestCalculateBusinessDaysRefusesReversedDates(t *testing.T) {
+	t.Parallel()
 	date := ref("date")
 	_, err := Calc(ledger(), "business_days", []Operand{{Literal: ref("2026-11-27"), Unit: date}, {Literal: ref("2026-11-12"), Unit: date}}, nil)
 	if err == nil || !strings.Contains(err.Error(), "earlier date first") {
@@ -277,6 +295,7 @@ func TestCalculateBusinessDaysRefusesReversedDates(t *testing.T) {
 // are read, a court deadline rolls off weekends and holidays (forward after an event, back before
 // one), "35% of" multiplies, and what cannot be read says how to send it.
 func TestCalcAcceptsWhatModelsSend(t *testing.T) {
+	t.Parallel()
 	fs := read([]Finding{
 		{FID: "F30", Verified: true, Values: []Value{{Metric: "served", Value: "10/21/2026"}}},
 		{FID: "F31", Verified: true, Values: []Value{{Metric: "hearing", Value: "December 3, 2026"}, {Metric: "report lead time", Value: "7 days", Fig: fig(KindOther, "", "7", "")}}},
@@ -342,6 +361,7 @@ func containsAll(s string, subs []string) bool {
 // currency), exact: shares × price × multiple is money, two amounts of money multiplied or two
 // currencies divided are refused, and an amount over a count is per unit.
 func TestCalcProductsAndRatiosOfOneCurrency(t *testing.T) {
+	t.Parallel()
 	lit := func(x, unit string) Operand {
 		o := Operand{Literal: &x}
 		if unit != "" {

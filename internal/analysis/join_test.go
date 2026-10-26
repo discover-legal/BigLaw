@@ -67,6 +67,7 @@ func fourPlanted() []Finding {
 }
 
 func TestParseCrossDocDate(t *testing.T) {
+	t.Parallel()
 	for in, want := range map[string]string{
 		"Mon, 15 Apr 2024 09:23:47 -0400": "2024-04-15", "April 22, 2024": "2024-04-22", "on or about April 22, 2024": "2024-04-22",
 		"15 Apr 2024": "2024-04-15", "2024-04-15": "2024-04-15", "04/22/2024": "2024-04-22", "May 2022": "2022-05", "05/2022": "2022-05",

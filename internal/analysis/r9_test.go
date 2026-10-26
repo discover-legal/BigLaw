@@ -4,7 +4,9 @@
 package analysis
 
 import (
+	"fmt"
 	"slices"
+	"sync"
 	"testing"
 )
 
@@ -14,6 +16,7 @@ import (
 // M2: the ranking is a function of its input: bench6 SEC ranks the same way on 50 calls (5 under -race), and every
 // cap's candidate set (what the judge is asked, and the cache keys it uses) with it.
 func TestRankPairsDeterministic(t *testing.T) {
+	t.Parallel()
 	fs := read(bench6Ledger(t, "sec"))
 	ids := func() []string {
 		var out []string
@@ -27,8 +30,14 @@ func TestRankPairsDeterministic(t *testing.T) {
 	if raceOn { // each ranking of the bench6 SEC ledger takes about 2 s under -race (r2 follow-up 6)
 		repeats, again = 5, 2
 	}
+	runs := make([][]string, repeats) // the repeats run at once: none may see another's state either
+	var wg sync.WaitGroup
 	for i := range repeats {
-		if got := ids(); !slices.Equal(got, first) {
+		wg.Go(func() { runs[i] = ids() })
+	}
+	wg.Wait()
+	for i, got := range runs {
+		if !slices.Equal(got, first) {
 			k := 0
 			for k < len(got) && got[k] == first[k] {
 				k++
@@ -39,8 +48,14 @@ func TestRankPairsDeterministic(t *testing.T) {
 	for _, name := range []string{"trust", "gatea"} {
 		gs := read(bench6Ledger(t, name))
 		a, _ := Candidates(gs, 120, nil)
-		for range again {
-			if b, _ := Candidates(gs, 120, nil); !slices.EqualFunc(a, b, func(x, y Candidate) bool { return x.ID == y.ID }) {
+		bs := make([][]Candidate, again)
+		var wg sync.WaitGroup
+		for k := range again {
+			wg.Go(func() { bs[k], _ = Candidates(gs, 120, nil) })
+		}
+		wg.Wait()
+		for _, b := range bs {
+			if !slices.EqualFunc(a, b, func(x, y Candidate) bool { return x.ID == y.ID }) {
 				t.Fatalf("bench6 %s: the candidates at a cap of 120 vary", name)
 			}
 		}
@@ -87,6 +102,7 @@ func TestReasonBoilerplateQuotesNeither(t *testing.T) {
 // L3: a caption over a prose line, commas or not, is no table header: the fee keeps scale 1 (the
 // reader's scale from the caption is unclear).
 func TestCaptionOverProseWithCommas(t *testing.T) {
+	t.Parallel()
 	for _, text := range []string{
 		"Amounts in millions\nThe filing fee, payable on filing, is $500 per application.",
 		"Amounts in millions\nThe filing fee payable on filing is $500 per application.",
@@ -101,17 +117,31 @@ func TestCaptionOverProseWithCommas(t *testing.T) {
 // Residual a: the values a join this size leaves without any counterpart judged are counted (what the
 // Limitations line leads with), and fall as the budget grows.
 func TestJoinCountsUncoveredValues(t *testing.T) {
+	t.Parallel()
 	fs := read(bench6Ledger(t, "sec"))
+	// the covers are computed at once (each is a pure function of fs and its cap), then checked in order
+	type cover struct{ cands, dropped, uncovered int }
+	caps := []int{2, 6, 15, 16}
+	got, every := make([]cover, len(caps)), 0
+	var wg sync.WaitGroup
+	for i, calls := range caps {
+		wg.Go(func() {
+			cands, dropped, uncovered := CandidatesCover(fs, CandidateLimit(calls), nil)
+			got[i] = cover{len(cands), dropped, uncovered}
+		})
+	}
+	wg.Go(func() { _, _, every = CandidatesCover(fs, len(rankPairs(fs)), nil) })
+	wg.Wait()
 	last := -1
-	for _, calls := range []int{2, 6, 15, 16} {
-		cands, dropped, uncovered := CandidatesCover(fs, CandidateLimit(calls), nil)
-		t.Logf("bench6 sec, %d judge calls: %d candidates, %d dropped, %d values with no counterpart judged", calls, len(cands), dropped, uncovered)
+	for i, calls := range caps {
+		cands, dropped, uncovered := got[i].cands, got[i].dropped, got[i].uncovered
+		t.Logf("bench6 sec, %d judge calls: %d candidates, %d dropped, %d values with no counterpart judged", calls, cands, dropped, uncovered)
 		if last >= 0 && uncovered > last || uncovered == 0 {
 			t.Errorf("%d calls: %d uncovered values (before: %d)", calls, uncovered, last)
 		}
 		last = uncovered
 	}
-	if _, _, u := CandidatesCover(fs, len(rankPairs(fs)), nil); u != 0 {
+	if u := every; u != 0 {
 		t.Errorf("every pair asked, %d values uncovered", u)
 	}
 }
@@ -120,32 +150,36 @@ func TestJoinCountsUncoveredValues(t *testing.T) {
 // already: the limit counts the pairs to judge, not the judged ones kept ahead of it (bench6 SEC, as
 // the coverage pass sizes its judge grant: pending among CandidateLimit(jcalls), then ceil(n/20)).
 func TestPendingSizedGrantAsksAllPending(t *testing.T) {
+	t.Parallel()
 	fs := read(bench6Ledger(t, "sec"))
 	ranked := rankPairs(fs)
 	for _, j := range []int{0, 10, 20, 40, 100} {
-		done := map[string]bool{}
-		for _, c := range ranked[:j] {
-			done[c.ID] = true
-		}
-		judged := func(c Candidate) bool { return done[c.ID] }
-		jcalls := 10
-		cands, _ := Candidates(fs, CandidateLimit(jcalls), judged)
-		n := 0
-		for _, c := range cands {
-			if !judged(c) {
-				n++
+		t.Run(fmt.Sprint(j), func(t *testing.T) { // each judged prefix on its own: ranked is only read
+			t.Parallel()
+			done := map[string]bool{}
+			for _, c := range ranked[:j] {
+				done[c.ID] = true
 			}
-		}
-		grant := min(jcalls, (n+JudgePairs-1)/JudgePairs)
-		got, _ := Candidates(fs, CandidateLimit(grant), judged)
-		asked := 0
-		for _, c := range got {
-			if !judged(c) {
-				asked++
+			judged := func(c Candidate) bool { return done[c.ID] }
+			jcalls := 10
+			cands, _ := Candidates(fs, CandidateLimit(jcalls), judged)
+			n := 0
+			for _, c := range cands {
+				if !judged(c) {
+					n++
+				}
 			}
-		}
-		if asked < n {
-			t.Errorf("judged %d: %d of %d pending pairs the grant was sized for are never asked", j, n-asked, n)
-		}
+			grant := min(jcalls, (n+JudgePairs-1)/JudgePairs)
+			got, _ := Candidates(fs, CandidateLimit(grant), judged)
+			asked := 0
+			for _, c := range got {
+				if !judged(c) {
+					asked++
+				}
+			}
+			if asked < n {
+				t.Errorf("judged %d: %d of %d pending pairs the grant was sized for are never asked", j, n-asked, n)
+			}
+		})
 	}
 }

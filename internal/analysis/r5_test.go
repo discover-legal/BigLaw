@@ -15,6 +15,7 @@ import (
 // at scale 1, unclear). A sourced scale is applied, but a scaled figure states another clearly only
 // when that one is read at the same scale.
 func TestR5ScaleSourceIsItsOwnWords(t *testing.T) {
+	t.Parallel()
 	q := "The filing fee is $500 per application."
 	ps := []Passage{PassageOf("q1", q), PassageOf("v1", "$500,000"), PassageOf("q2", "Amounts in thousands.")}
 	typed := Reading{Kind: KindMoney, Currency: "USD", Amount: "500000"}
@@ -56,6 +57,7 @@ func TestR5ScaleSourceIsItsOwnWords(t *testing.T) {
 // The measure, period and typed-entity labels are kept as given (folded): context the join's judge
 // reads, never a key. A range's other end must be a span of the same passage.
 func TestLabelsCarryMeasureAndPeriod(t *testing.T) {
+	t.Parallel()
 	ps := []Passage{PassageOf("q1", "between 3 and 5 per cent for fiscal 2024"), PassageOf("q2", "7")}
 	l := lbl("q1.s1", KindPercent, "none", "1", nil, "none", "positive")
 	l.Measures, l.Period, l.TypedEntity, l.RangeWith = str("  management   fee "), str("fiscal 2024"), str("party"), str("q2.s1")
