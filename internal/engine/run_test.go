@@ -64,3 +64,25 @@ func TestRunAccountsEveryStep(t *testing.T) {
 		t.Fatalf("run %+v, cost %+v (%d entries), %v", v.Run, c.Summary, len(c.Entries), err)
 	}
 }
+
+// TestCostShowsMeteredWattHours: the cost summary totals the watt-hours local calls metered
+// (BIGLAW_LOCAL_WATTS), and has none when no call metered any (cloud calls, or the variable unset).
+func TestCostShowsMeteredWattHours(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.engine(nil, Config{})
+	metered, cloud := f.submit(0), f.submit(0)
+	for id, usage := range map[string]string{metered.ID: `{"calls": 1, "usd": 0, "wattHours": 0.25}`, cloud.ID: `{"calls": 1, "usd": 0.01}`} {
+		if _, err := f.st.DB().Exec(`INSERT INTO task_steps (task_id, step, kind, tool, status, usage)
+			SELECT $1, g, 'tool_call', 'retrieve', 'committed', $2 FROM generate_series(1, 3) g`, id, usage); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c, err := f.e.Cost(context.Background(), metered.ID)
+	if err != nil || c.Summary.WattHours == nil || *c.Summary.WattHours != 0.75 {
+		t.Fatalf("metered: %+v %v", c.Summary, err)
+	}
+	if c, err := f.e.Cost(context.Background(), cloud.ID); err != nil || c.Summary.WattHours != nil {
+		t.Fatalf("cloud calls have no watt-hours: %+v %v", c.Summary, err)
+	}
+}

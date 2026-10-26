@@ -103,16 +103,16 @@ Section 8.4 caps Sellers' liability at 10% of the Purchase Price ($8,400,000) in
 
 ## Limitations
 
-- Delivered with an unresolved check after 2 rounds of fixes: I15: the figure 280 is not traced (G8): no cited finding, handle or worksheet states it: if it is computed (a total, a difference, a percentage of a figure), compute it with numbers op calc over the findings' value refs (e.g. fn product of F3.v1 and a literal 35 with unit %) and write the {W…} handle it returns; otherwise remove it
-- Delivered with an unresolved check after 2 rounds of fixes: I16: the figure 16600 is not traced (G8): no cited finding, handle or worksheet states it: if it is computed (a total, a difference, a percentage of a figure), compute it with numbers op calc over the findings' value refs (e.g. fn product of F3.v1 and a literal 35 with unit %) and write the {W…} handle it returns; otherwise remove it
+- Delivered with an unresolved check after 2 rounds of fixes: I15: the figure 280 could not be traced to a cited quote, or to a calculation over the cited findings; check it against the documents
+- Delivered with an unresolved check after 2 rounds of fixes: I16: the figure 16600 could not be traced to a cited quote, or to a calculation over the cited findings; check it against the documents
 - This deliverable used candidate practice or jurisdiction packs (us) that no named lawyer has reviewed yet.
 - External authorities (cases, statutes) are flagged, not verified: BigLaw has no live citator.
 
 ### Computed figures
 
-Every figure below is stated in the memo but traces only through a calculation Go made (over cited values or typed inputs, each as the figure reader read it), or only by the figure reader's label; each input names the finding and the quoted words it comes from.
+Every figure below is stated in the memo but traces only through a calculation BigLaw made (over cited values or typed inputs, each as the figure check read it), or only by the figure check's label; each input names the finding and the quoted words it comes from.
 
-Check first (resting on words the figure reader cited for a unit, a multiple or a scale, on a count or number's kind alone, on the days between two dates, or on a memo figure's label):
+Check first (resting on words the figure check cited for a unit, a multiple or a scale, on a count or number's kind alone, on the days between two dates, or on a memo figure's label):
 
 - 162,500 = 6,412,500 [F1] “Total Common Stock outstanding,Common Stock,6412500”, read as a count figure − 6,250,000 [F1] “6,250,000 shares of Common Stock…”, read as a count figure (I1)
 - $9,000,000 = 1.5 [F5] “one and one-half times (1.5x) the Series A…”, a multiple by “x” × $5 [F5] “…Issue Price of $5.00 per share” × 1,200,000 [F1] “…of Common Stock and 1,200,000 shares of Series A…”, read as a count figure (I5)

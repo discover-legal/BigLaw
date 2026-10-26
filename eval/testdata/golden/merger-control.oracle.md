@@ -78,21 +78,21 @@ In the Netherlands the combined analyzer share would be 47% (Sorell 38% + Altami
 
 ## Limitations
 
-- Figures: in the section on I1, $212.5 million, $16.0 million are written at another scale than the cited findings state them (one written out digit for digit, the other read at a scale from its words): they are the same figure only by the figure reader's reading of those words, and the findings are gated; confirm them against the cited quotes.
-- Figures: in the section on I3, $3.1 billion, $337 million are written at another scale than the cited findings state them (one written out digit for digit, the other read at a scale from its words): they are the same figure only by the figure reader's reading of those words, and the findings are gated; confirm them against the cited quotes.
-- Figures: in the section on I4, $138.0 million, $22.0 million are written at another scale than the cited findings state them (one written out digit for digit, the other read at a scale from its words): they are the same figure only by the figure reader's reading of those words, and the findings are gated; confirm them against the cited quotes.
-- Delivered with an unresolved check after 3 rounds of fixes: I8: the figure 2810 is not traced (G8): no cited finding, handle or worksheet states it: if it is computed (a total, a difference, a percentage of a figure), compute it with numbers op calc over the findings' value refs (e.g. fn product of F3.v1 and a literal 35 with unit %) and write the {W…} handle it returns; otherwise remove it
-- Delivered with an unresolved check after 3 rounds of fixes: I8: the figure 310 is not traced (G8): no cited finding, handle or worksheet states it: if it is computed (a total, a difference, a percentage of a figure), compute it with numbers op calc over the findings' value refs (e.g. fn product of F3.v1 and a literal 35 with unit %) and write the {W…} handle it returns; otherwise remove it
+- Figures: in the section on I1, $212.5 million, $16.0 million are written at another scale than the cited findings state them (one written out digit for digit, the other read at a scale from its words): they are the same figure only by the figure check's reading of those words, and the findings are gated; confirm them against the cited quotes.
+- Figures: in the section on I3, $3.1 billion, $337 million are written at another scale than the cited findings state them (one written out digit for digit, the other read at a scale from its words): they are the same figure only by the figure check's reading of those words, and the findings are gated; confirm them against the cited quotes.
+- Figures: in the section on I4, $138.0 million, $22.0 million are written at another scale than the cited findings state them (one written out digit for digit, the other read at a scale from its words): they are the same figure only by the figure check's reading of those words, and the findings are gated; confirm them against the cited quotes.
+- Delivered with an unresolved check after 3 rounds of fixes: I8: the figure 2810 could not be traced to a cited quote, or to a calculation over the cited findings; check it against the documents
+- Delivered with an unresolved check after 3 rounds of fixes: I8: the figure 310 could not be traced to a cited quote, or to a calculation over the cited findings; check it against the documents
 - This deliverable used candidate practice or jurisdiction packs (us) that no named lawyer has reviewed yet.
 - External authorities (cases, statutes) are flagged, not verified: BigLaw has no live citator.
 
 ### Computed figures
 
-Every figure below is stated in the memo but traces only through a calculation Go made (over cited values or typed inputs, each as the figure reader read it), or only by the figure reader's label; each input names the finding and the quoted words it comes from.
+Every figure below is stated in the memo but traces only through a calculation BigLaw made (over cited values or typed inputs, each as the figure check read it), or only by the figure check's label; each input names the finding and the quoted words it comes from.
 
-Check first (resting on words the figure reader cited for a unit, a multiple or a scale, on a count or number's kind alone, on the days between two dates, or on a memo figure's label):
+Check first (resting on words the figure check cited for a unit, a multiple or a scale, on a count or number's kind alone, on the days between two dates, or on a memo figure's label):
 
-- $228,500,000 = $212,500,000 [F1] “…purchase price of $212,500,000” + $16,000,000 [F1] “…existing 8% stake at $16,000,000 as of today”; written in the memo as $228.5 million, at a scale the cited inputs write out: the same figure only by the figure reader's scale of the memo's words (I1, I2)
+- $228,500,000 = $212,500,000 [F1] “…purchase price of $212,500,000” + $16,000,000 [F1] “…existing 8% stake at $16,000,000 as of today”; written in the memo as $228.5 million, at a scale the cited inputs write out: the same figure only by the figure check's scale of the memo's words (I1, I2)
 - November 5, 2025 = October 6, 2025 [F6] “…notification on October 6, 2025” + 30 days [F6] “…waiting period is 30 days from filing” (I6)
 - EUR 3,120,000,000 = EUR 2,810,000,000 [F8] “Altamira Health Technologies Inc.,Turnover,Worldwide,2810,EUR million”, scaled by “million” + EUR 310,000,000 [F8] “Sorell Diagnostics B.V.,Turnover,Worldwide,310,EUR million”, scaled by “million”; written in the memo as 3,120 million (I8)
 - EUR 472,000,000 = EUR 410,000,000 [F9] “Altamira Health Technologies Inc.,Turnover,Germany,410,EUR million”, scaled by “million” + EUR 62,000,000 [F9] “Sorell Diagnostics B.V.,Turnover,Germany,62,EUR million”, scaled by “million”; written in the memo as 472 million (I9)

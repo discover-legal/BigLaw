@@ -5,14 +5,14 @@
 import { useEffect, useRef, useState } from 'react';
 import type { PromptMatch } from '../api/transport.ts';
 import type { Client, Matter, Task } from '../api/types.ts';
-import { Empty, Failure, go, Loading, plural, useApi, useLoad } from '../lib.tsx';
+import { Empty, Failure, go, Loading, plural, useAction, useApi, useLoad } from '../lib.tsx';
 import { Icon } from '../components/icons.tsx';
 
 export function StatusPill(props: { status: string }) {
   return <span className={`pill pill-${props.status}`}><i aria-hidden="true" />{props.status.replace('_', ' ')}</span>;
 }
 
-export function Matters(props: { matter: string }) {
+export function Matters(props: { matter: string; ready: boolean }) {
   const api = useApi();
   const clients = useLoad(() => api.clients(), []);
   const tasks = useLoad(() => api.tasks(), []);
@@ -24,9 +24,13 @@ export function Matters(props: { matter: string }) {
       <p className="lede">{api.mode === 'recorded'
         ? 'Three fictional sample matters. Pick one, then ask a question or replay one of its recorded tasks.'
         : 'Pick a matter to start a task on its documents.'}</p>
+      {!props.ready && (
+        <Empty icon="gate" title="No AI model set up yet">BigLaw can store and search documents now, but it needs an AI model to run a task. Whoever installed it adds one
+          in its <code>.env</code> file (<code>.env.example</code> has a recipe per provider) and restarts it.</Empty>
+      )}
       <Failure error={clients.error ?? tasks.error} />
       {!clients.data && !clients.error && <Loading label="Loading matters" />}
-      {clients.data && all.length === 0 && <Empty icon="doc" title="No matters yet">A matter appears here once a document is filed to it.</Empty>}
+      {clients.data && all.length === 0 && <Empty icon="doc" title="No matters yet" action={<a className="button" href="#/documents">Add documents</a>}>A matter appears here once a document is filed to it.</Empty>}
       <div className="cards">
         {all.map((m) => (
           <button key={m.number} className={`card matter ${picked?.number === m.number ? 'on' : ''}`} aria-pressed={picked?.number === m.number} onClick={() => go('matters', { matter: m.number })}>
@@ -39,7 +43,7 @@ export function Matters(props: { matter: string }) {
           </button>
         ))}
       </div>
-      {picked && <NewTask key={picked.number} matter={picked} />}
+      {picked && <NewTask key={picked.number} matter={picked} ready={props.ready} />}
       <h2>Tasks</h2>
       {tasks.data && tasks.data.length === 0 && <Empty icon="ledger" title="No tasks yet">{picked ? 'Ask a question above to start one.' : 'Pick a matter above to start one.'}</Empty>}
       <TaskList tasks={tasks.data ?? []} />
@@ -66,37 +70,29 @@ function TaskList(props: { tasks: Task[] }) {
   );
 }
 
-function NewTask(props: { matter: Matter & { client: string } }) {
+function NewTask(props: { matter: Matter & { client: string }; ready: boolean }) {
   const api = useApi();
   const [prompt, setPrompt] = useState('');
   const [jurisdiction, setJurisdiction] = useState('US');
   const [offScript, setOffScript] = useState<PromptMatch | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const { busy, error, setError, run } = useAction();
   const suggestions = api.suggestions?.(props.matter.number) ?? [];
   const form = useRef<HTMLFormElement>(null);
   useEffect(() => { form.current?.scrollIntoView({ block: 'nearest' }); }, []); // on a phone the form opens below the cards
 
-  async function start(replayKey?: string) {
+  function start(replayKey?: string) {
     setError(null);
     if (!replayKey && api.mode === 'recorded') {
       const m = api.match(prompt, props.matter.number);
       if (!m || !m.onScript) { setOffScript(m); return; }
       replayKey = m.key;
     }
-    setBusy(true);
-    try {
-      const t = await api.submit({ description: prompt, workflowType: 'memo', jurisdiction, matterNumber: props.matter.number, documentIds: props.matter.documentIds }, replayKey);
-      go(`task/${encodeURIComponent(t.id)}`);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
+    run(api.submit({ description: prompt, workflowType: 'memo', jurisdiction, matterNumber: props.matter.number, documentIds: props.matter.documentIds }, replayKey),
+      (t) => go(`task/${encodeURIComponent(t.id)}`));
   }
 
   return (
-    <form ref={form} className="panel wizard" onSubmit={(e) => { e.preventDefault(); void start(); }}>
+    <form ref={form} className="panel wizard" onSubmit={(e) => { e.preventDefault(); start(); }}>
       <h2>New task</h2>
       <p className="muted small wizard-for">{props.matter.title}</p>
       <label htmlFor="prompt">What should BigLaw answer from this matter's {plural(props.matter.documentIds.length, 'document')}?</label>
@@ -109,15 +105,14 @@ function NewTask(props: { matter: Matter & { client: string } }) {
         </div>
       )}
       <div className="row">
-        <label>Workflow <select value="memo" disabled><option value="memo">memo</option></select></label>
         <label>Jurisdiction <input value={jurisdiction} onChange={(e) => setJurisdiction(e.target.value)} size={6} /></label>
-        <button className="primary push" disabled={busy || prompt.trim() === ''}>{busy ? 'Starting…' : 'Start task'}</button>
+        <button className="primary push" disabled={busy || !props.ready || prompt.trim() === ''}>{busy ? 'Starting…' : 'Start task'}</button>
       </div>
       {offScript !== undefined && offScript !== null && !offScript.onScript && (
         <div className="notice" role="status">
           <p><strong>Off script.</strong> This demo replays recorded runs only, and none of them answers that prompt
             (closest match {Math.round(offScript.score * 100)}%). The nearest recorded task is “{offScript.title}”.</p>
-          <button type="button" onClick={() => void start(offScript.key)}>Replay “{offScript.title}” instead</button>
+          <button type="button" onClick={() => start(offScript.key)}>Replay “{offScript.title}” instead</button>
         </div>
       )}
       <Failure error={error} />

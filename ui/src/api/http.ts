@@ -6,10 +6,11 @@ import { ApiError, type Transport } from './transport.ts';
 import type { Problem, RunEvent, Step, Run } from './types.ts';
 
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const raw = body === undefined || body instanceof FormData; // FormData: the browser writes the multipart type
   const res = await fetch(path, {
     method,
-    headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    headers: raw ? {} : { 'Content-Type': 'application/json' },
+    body: raw ? body : JSON.stringify(body),
     credentials: 'same-origin',
   });
   if (res.status === 401 && path !== '/me') window.location.reload(); // the session ended: the shell shows sign-in
@@ -37,6 +38,7 @@ export function createTransport(): Transport {
     outline: (id) => call('GET', `/documents/${enc(id)}/outline`),
     section: (id, sid, offset = 0) => call('GET', `/documents/${enc(id)}/sections/${enc(sid)}?offset=${offset}`),
     fileUrl: (id) => `/documents/${enc(id)}/file`,
+    upload(file, matter) { const f = new FormData(); f.append('file', file); return call('POST', `/documents/upload?matter=${enc(matter)}`, f); },
     search: (q, ids) => call('GET', `/documents/search?q=${enc(q)}&ids=${ids.map(enc).join(',')}`),
     tasks: () => call('GET', '/tasks'),
     task: (id) => call('GET', `/tasks/${enc(id)}`),
@@ -58,9 +60,6 @@ export function createTransport(): Transport {
       es.addEventListener('signedOut', () => { es.close(); window.location.reload(); }); // the session ended: the shell shows sign-in
       return () => es.close();
     },
-    playbooks: () => call('GET', '/playbooks'),
-    timeEntries: () => call('GET', '/time-entries'),
-    profiles: () => call('GET', '/profiles'),
     me: () => call('GET', '/me'),
     signOut: async () => { await call('POST', '/auth/logout'); },
     manageItems: () => call('GET', '/manage/items'),

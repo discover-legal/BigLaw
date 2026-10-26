@@ -337,10 +337,10 @@ func (f finish) check(ctx context.Context, limits []limitation) (report, error) 
 			for _, fid := range slices.Sorted(maps.Keys(gate)) { // a memo figure traced only as written to its never-read quote, or at another scale: a lawyer confirms it (r6 M2, r7 M4)
 				if x := byFID[fid]; !x.Low {
 					x.Low = true
-					x.ValueNotes = append(x.ValueNotes, map[string]string{limitedUnread: "gated for a lawyer: a memo figure traces only as written to this finding's quotes, which the figure reader never read",
-						limitedUnit:       "gated for a lawyer: a memo period is this finding's only by the figure reader's unit label: the memo's unit words differ from the words it read here",
-						limitedMemoUnread: "gated for a lawyer: a memo figure the figure reader never read (its call unfunded or failed) traces to this finding only as written",
-						limitedScale:      "gated for a lawyer: a memo figure states this finding's figure at another scale (one side written out, the other read at a scale from its words), the same figure only by the figure reader's reading of those words"}[gate[fid]])
+					x.ValueNotes = append(x.ValueNotes, map[string]string{limitedUnread: "gated for a lawyer: a memo figure traces only as written to this finding's quotes, which the figure check never read",
+						limitedUnit:       "gated for a lawyer: a memo period is this finding's only by the figure check's unit label: the memo's unit words differ from the words it read here",
+						limitedMemoUnread: "gated for a lawyer: a memo figure the figure check never read (it ran out of budget or failed) traces to this finding only as written",
+						limitedScale:      "gated for a lawyer: a memo figure states this finding's figure at another scale (one side written out, the other read at a scale from its words), the same figure only by the figure check's reading of those words"}[gate[fid]])
 					byFID[fid] = x
 					if err := e.write(ctx, id, kFinding, fid, x, true); err != nil {
 						return report{}, err
@@ -348,15 +348,15 @@ func (f finish) check(ctx context.Context, limits []limitation) (report, error) 
 				}
 			}
 			if l := limited[limitedUnread]; len(l) > 0 {
-				rep.limits = append(rep.limits, fmt.Sprintf("Figures: in the section on %s, %s %s traced only as written: the figure reader never read the cited quotes that state %s (its call was unfunded or failed), so what %s is unchecked.",
+				rep.limits = append(rep.limits, fmt.Sprintf("Figures: in the section on %s, %s %s traced only as written: the figure check never read the cited quotes that state %s (it ran out of budget or failed), so what %s is unchecked.",
 					is.ID, strings.Join(l, ", "), plural(len(l), "is", "are"), plural(len(l), "it", "them"), plural(len(l), "it means", "they mean")))
 			}
 			if l := limited[limitedScale]; len(l) > 0 {
-				rep.limits = append(rep.limits, fmt.Sprintf("Figures: in the section on %s, %s %s written at another scale than the cited findings state %s (one written out digit for digit, the other read at a scale from its words): %s the same figure only by the figure reader's reading of those words, and the findings are gated; confirm %s against the cited quotes.",
+				rep.limits = append(rep.limits, fmt.Sprintf("Figures: in the section on %s, %s %s written at another scale than the cited findings state %s (one written out digit for digit, the other read at a scale from its words): %s the same figure only by the figure check's reading of those words, and the findings are gated; confirm %s against the cited quotes.",
 					is.ID, strings.Join(l, ", "), plural(len(l), "is", "are"), plural(len(l), "it", "them"), plural(len(l), "it is", "they are"), plural(len(l), "it", "them")))
 			}
 			if r := secs[k].Read; r != nil && r.Unread != "" { // lab-r4 r5 L4: a section G8 could not trace by its readings
-				rep.limits = append(rep.limits, fmt.Sprintf("Figures: in the section on %s, %s: G8 traces only figures the figure reader read clearly, so each of them that the drafter wrote out (not as a handle) and the reader's call never read traces only as written to the cited findings whose own quotes or values state it (listed under Computed figures, those findings gated for a lawyer), and any other was flagged as not traced.", is.ID, r.Unread))
+				rep.limits = append(rep.limits, fmt.Sprintf("Figures: in the section on %s, %s: the memo's figures are checked only against figures the figure check read clearly, so each figure this section writes out that the check never read is matched only as written to the cited findings whose own quotes or values state it (listed under Computed figures, those findings gated for a lawyer), and any other was flagged as not traced.", is.ID, r.Unread))
 			}
 			met = slices.ContainsFunc(fidRe.FindAllStringSubmatch(secs[k].Markdown, -1), func(m []string) bool { _, ok := byFID[m[1]]; return ok })
 		}
@@ -367,7 +367,7 @@ func (f finish) check(ctx context.Context, limits []limitation) (report, error) 
 	if fids, err := e.claimsUnread(ctx, id); err != nil {
 		return report{}, err
 	} else if len(fids) > 0 { // r1 MEDIUM-3: what the budget left unread is counted, never silent
-		rep.limits = append(rep.limits, fmt.Sprintf("Figures: %d %s whose %s a figure %s never read (the figure reader was unfunded or its call failed), so the cross-document comparison could not see %s sums: %s.",
+		rep.limits = append(rep.limits, fmt.Sprintf("Figures: %d %s whose %s a figure %s never read (the figure check ran out of budget or failed), so the cross-document comparison could not see %s sums: %s.",
 			len(fids), plural(len(fids), "finding", "findings"), plural(len(fids), "claim states", "claims state"), plural(len(fids), "was", "were"), plural(len(fids), "its claim's", "their claims'"), strings.Join(fids[:min(len(fids), 20)], ", ")))
 	}
 	if j, err := e.joined(ctx, id); err != nil { // every figure conflict is stated in the memo (bench r3)
@@ -385,7 +385,7 @@ func (f finish) check(ctx context.Context, limits []limitation) (report, error) 
 	}
 	for _, l := range rep.Lint { // after maxLintRounds reports, disclosed: redrafting for the lint is bounded
 		if rounds >= maxLintRounds {
-			rep.limits = append(rep.limits, fmt.Sprintf("Delivered with an unresolved check after %d rounds of fixes: %s", rounds, l))
+			rep.limits = append(rep.limits, fmt.Sprintf("Delivered with an unresolved check after %d rounds of fixes: %s", rounds, plainCheck(l)))
 		} else {
 			bad("lint", l)
 		}
@@ -447,10 +447,27 @@ func (f finish) check(ctx context.Context, limits []limitation) (report, error) 
 	}
 	if f.r.forced != "" {
 		rep.limits = append(rep.limits, map[string]string{"budget_exhausted": "The run's budget ran out, so it finished from its reserve: the open items above were not worked through.",
-			"max_steps": "The run reached its step limit (maxSteps), so it finished from its reserve: the open items above were not worked through."}[f.r.forced])
+			"max_steps": "The run reached its step limit, so it finished from its reserve: the open items above were not worked through."}[f.r.forced])
 	}
 	rep.Ready = len(rep.Errors) == 0
 	return rep, nil
+}
+
+// plainCheck is a lint line as Limitations discloses it: what is wrong, without the fix the line asks
+// the lead to make (its tool names, handles and check codes), which no lawyer can act on.
+func plainCheck(l string) string {
+	for _, c := range [][2]string{
+		{" is not traced (G8)", " could not be traced to a cited quote, or to a calculation over the cited findings; check it against the documents"},
+		{" (G8): ", "; check the deadline against the documents"},
+		{": unknown figure handle ", ": a figure placeholder in this section names no verified figure and is shown as written; check that figure against the documents"},
+		{" is inside a quotation, where Go never substitutes it", ": a figure placeholder inside a quotation is shown as written; check the quotation against the documents"},
+		{", and the memo does not state both: ", ", and the memo does not state both"},
+	} {
+		if i := strings.Index(l, c[0]); i >= 0 {
+			return l[:i] + c[1]
+		}
+	}
+	return l
 }
 
 // funded is the run's funded (P6, P7) as if this finish call held only its own call.

@@ -111,9 +111,9 @@ func newReading(parties []string, ps []analysis.Passage, in []passageIn) *readin
 			id := analysis.SpanID(ps[i].ID, k)
 			switch {
 			case len(in[i].Text) > maxReadBytes:
-				r.unread[id] = "its passage is too long for the figure reader"
+				r.unread[id] = "its passage is too long for the figure check"
 			case len(s.Text) > maxSpanText:
-				r.unread[id] = "it is too long for the figure reader (an identifier)"
+				r.unread[id] = "it is too long for the figure check (an identifier)"
 			default:
 				in[i].Spans = append(in[i].Spans, spanIn{id, s.Text})
 			}
@@ -445,7 +445,7 @@ func (e *Engine) readChunk(ctx context.Context, rt *agent.Runtime, c agent.Call,
 		if !pt.complete(by[i]) { // an empty, partial or refused answer is this run's only: never cached
 			for _, id := range pt.ids {
 				if !slices.ContainsFunc(by[i], func(l analysis.Label) bool { return l.Span == id }) {
-					pt.it.unread[id] = "the figure reader gave it no label"
+					pt.it.unread[id] = "the figure check gave it no label"
 				}
 			}
 			continue
@@ -624,10 +624,10 @@ func valueStated(v analysis.Value, j int, rs map[string]analysis.Reading, quotes
 		vr = own[k]
 	}
 	if vr.Kind != want && vr.Kind != analysis.KindUnclear && !(want == analysis.KindCount && vr.Kind == analysis.KindDuration) {
-		return nil, false, false, "the figure reader read it as " + article(vr.Kind)
+		return nil, false, false, "the figure check read it as " + article(vr.Kind)
 	} // a count the reader read as a period ("18 months", "30" calendar days) is that period: its quotes must state it in its unit (bench7: 15 such values dropped)
 	if vr.Amount == "" {
-		return nil, false, false, "the figure reader could not read it (" + vr.Why + ")"
+		return nil, false, false, "the figure check could not read it (" + vr.Why + ")"
 	}
 	why = "no span of its quotes reads as " + describe(vr)
 	var soft *analysis.Reading
@@ -732,7 +732,7 @@ func lowNote(v analysis.Value, fig *analysis.Reading) string {
 	if fig != nil && fig.Why != "" {
 		why = fig.Why
 	}
-	return fmt.Sprintf("value %q (%s) admitted at low confidence, gated for a lawyer: the figure reader's reading is unclear (%s)", v.Value, cmpStr(v.Metric != "", v.Metric, "no metric"), why)
+	return fmt.Sprintf("value %q (%s) admitted at low confidence, gated for a lawyer: the figure check's reading is unclear (%s)", v.Value, cmpStr(v.Metric != "", v.Metric, "no metric"), why)
 }
 
 // ReaderStats is the figure reader's record for a task (kReadStat): its calls (invocations), those
@@ -791,11 +791,11 @@ func (e *Engine) countRead(ctx context.Context, taskID string, spans, unread int
 // Why a reader call read nothing: it never ran (no model, no budget) or failed. A span its answer left
 // unlabelled, or one not sent, is not among them (MEDIUM-1: unclear, blocking, never a call failure).
 const (
-	whyUnfunded  = "the budget could not fund the figure reader"
-	whyCutOff    = "the figure reader's answer was cut off or off its schema"
-	whyTurns     = "the figure reader used its turns without answering"
-	whyFailed    = "the figure reader's call failed"
-	whyMalformed = "the figure reader's answer was malformed"
+	whyUnfunded  = "the budget could not fund the figure check"
+	whyCutOff    = "the figure check's answer was cut off or unusable"
+	whyTurns     = "the figure check ran out of turns without answering"
+	whyFailed    = "the figure check's call failed"
+	whyMalformed = "the figure check's answer was malformed"
 	whyNoModel   = "no model was available for it"
 )
 

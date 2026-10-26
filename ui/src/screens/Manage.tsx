@@ -10,7 +10,7 @@ import { ApiError } from '../api/transport.ts';
 import type { Discovery, ManageDetail, ManageItem, ManageSection, Problem, SpecVersion, TestResult } from '../api/types.ts';
 import { DiffView } from '../components/diff.ts';
 import { isSpec, parseFront, setField, typing, writeFront, writeJSON, type Part } from '../components/front.ts';
-import { Empty, Failure, go, Loading, plural, useApi, useLoad } from '../lib.tsx';
+import { Empty, Failure, go, Loading, plural, useAction, useApi, useLoad } from '../lib.tsx';
 
 const SECTIONS: [ManageSection | 'changes', string, string][] = [
   ['agents', 'Agents', 'The lead and meta prompts, the subagents (built in, or an admin\'s) and the engine\'s passes: prompts, turn caps, budget class, role, allowed tools and typed schemas.'],
@@ -145,14 +145,6 @@ function Contents(props: { item: ManageDetail }) {
   );
 }
 
-/** useRun is an action's busy flag and error: run(p, then) shows p's failure, or clears it and calls then. */
-function useRun() {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const run = <T,>(p: Promise<T>, then: (v: T) => void, fail?: (e: Error) => void) => { setBusy(true); p.then((v) => { setError(null); then(v); }, (e: Error) => { setError(e.message); fail?.(e); }).finally(() => setBusy(false)); };
-  return { busy, error, setError, run };
-}
-
 function Code(props: { title: ReactNode; text: string }) {
   return <figure className="code"><figcaption>{props.title}</figcaption><pre>{props.text}</pre></figure>;
 }
@@ -167,7 +159,7 @@ function Editor(props: { item: ManageDetail; saved: () => void; create?: string 
   const [show, setShow] = useState(false);
   const [problems, setProblems] = useState<Problem[]>([]);
   const [notes, setNotes] = useState<string[]>([]);
-  const { busy, error, setError, run } = useRun();
+  const { busy, error, setError, run } = useAction();
   const tools = useLoad(() => api.manageItems().then((xs) => xs.filter((x) => x.section === 'tools' && x.kind !== 'MCP server' || x.id === 'pass.ledger' && it.builtin).map((x) => x.name).sort()), []);
   const set = (path: string, text: string) => setFiles((f) => ({ ...f, [path]: text }));
   const id = props.create ?? it.id;
@@ -438,7 +430,7 @@ function Secrets(props: { admin: boolean }) {
   const [name, setName] = useState('');
   const [value, setValue] = useState('');
   const [origin, setOrigin] = useState('');
-  const { error, run } = useRun();
+  const { error, run } = useAction();
   const act = (p: Promise<void>) => run(p, () => { setValue(''); setN(n + 1); });
   const del = (s: string, used: string[]) => {
     if (window.confirm(`Delete the secret ${s}?${used.length ? ` ${used.join(', ')} will fail until it is set again, in running tasks too.` : ''}`)) act(api.manageDeleteSecret(s));
@@ -475,7 +467,7 @@ function Import(props: { item: ManageDetail; imported: () => void }) {
   const [pick, setPick] = useState<string[]>([]);
   const [offer, setOffer] = useState(false);
   const [result, setResult] = useState<string[]>([]);
-  const { busy, error, run } = useRun();
+  const { busy, error, run } = useAction();
   return (
     <>
       <p className="small">Connecting runs the MCP handshake (initialize, tools/list) from the server, over https, to a public address only.</p>
@@ -515,7 +507,7 @@ function TestCall(props: { item: ManageDetail }) {
   const spec = Object.entries(props.item.content).find(([p]) => p.endsWith('.json'))?.[1] ?? '';
   const [input, setInput] = useState(() => /^Example: (\{.*\})\s*$/m.exec((JSON.parse(spec || '{}') as { description?: string }).description ?? '')?.[1] ?? '{}');
   const [res, setRes] = useState<TestResult | null>(null);
-  const { busy, error, setError, run } = useRun();
+  const { busy, error, setError, run } = useAction();
   const docs = matters.find((m) => m.number === matter)?.documentIds ?? [];
   const test = () => {
     let v: unknown;
@@ -545,7 +537,7 @@ function History(props: { item: ManageDetail; admin: boolean; reverted: () => vo
   const h = useLoad(() => api.manageHistory(it.id), [it.id, it.latest]);
   const [a, setA] = useState(0);
   const [b, setB] = useState(-1);
-  const { error, run } = useRun();
+  const { error, run } = useAction();
   if (h.error) return <Failure error={h.error} />;
   if (!h.data) return <Loading label="Loading the history" />;
   const vs = h.data;

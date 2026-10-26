@@ -549,7 +549,7 @@ func TestHookApproveBlocksCallsTheLeadDidNotMake(t *testing.T) {
 		t.Fatalf("findings %d, outcomes %v", len(fs), got)
 	}
 	os, _ := load[HookOutcome](context.Background(), e, task.ID, kHookRun)
-	if l := leadOnlyLine(os); !strings.Contains(l, "blocked by approve rules") || !strings.Contains(l, "partner_ok on extract_facts") {
+	if l := leadOnlyLine(os); !strings.Contains(l, "blocked by approval rules") || !strings.Contains(l, "partner_ok on extract_facts") {
 		t.Fatalf("the Limitations line: %q", l)
 	}
 }

@@ -266,6 +266,7 @@ type Cost struct {
 		OutputTokens  int      `json:"outputTokens"`
 		USD           *float64 `json:"usd"`
 		UnpricedCalls int      `json:"unpricedCalls"`
+		WattHours     *float64 `json:"wattHours,omitempty"` // local models' metered energy (BIGLAW_LOCAL_WATTS); absent when none was metered
 	} `json:"summary"`
 	Entries []CostEntry `json:"entries"`
 	// Reader is the figure reader's record (ReaderStats): its calls, how many failed (and why) or
@@ -315,6 +316,9 @@ func (e *Engine) Cost(ctx context.Context, id string) (Cost, error) {
 	}
 	if all.Unpriced == 0 {
 		c.Summary.USD = &all.USD
+	}
+	if all.WattHours > 0 {
+		c.Summary.WattHours = &all.WattHours
 	}
 	return c, nil
 }

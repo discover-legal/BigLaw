@@ -250,7 +250,7 @@ func (cs computeSet) operand(fn string, st analysis.SheetStep, depth int) input 
 		}
 		switch {
 		case dayCount(fn, unit) && c.Kind != analysis.KindDuration: // a count as date_add's days (r12 M1)
-			in.text += ": the figure reader read it as " + article(c.Kind) + ", not a period in days"
+			in.text += ": the figure check read it as " + article(c.Kind) + ", not a period in days"
 			in.check, in.mismatch, in.gate = true, true, cs.holding(c.Reading)
 		case c.Kind == analysis.KindDuration && unitWords(c.UnitFrom) != unitWords(unit) && !(unit == "days" && fn == "business_days"):
 			in.text += ": the cited words “" + c.UnitFrom + "” are not its unit (" + unit + ")"
@@ -299,7 +299,7 @@ func (cs computeSet) refOperand(fn, ref, val string) input {
 	period := unitKind(unit) == analysis.KindDuration || dayCount(fn, unit)
 	switch {
 	case period && g.Kind != analysis.KindDuration: // a count used as a period: only the value's unit, or none, never the reader, says it is days
-		in.text += ": the figure reader read it as " + article(g.Kind) + ", not a period in " + cmpStr(unit == "", "days", unit)
+		in.text += ": the figure check read it as " + article(g.Kind) + ", not a period in " + cmpStr(unit == "", "days", unit)
 		in.check, in.mismatch, in.gate = true, true, []string{fid}
 	case period && unitWords(g.UnitFrom) != unitWords(unit) && !(unit == "days" && fn == "business_days"):
 		in.text += ": the cited words “" + g.UnitFrom + "” are not its unit (" + unit + ")"
@@ -420,7 +420,7 @@ func (cs computeSet) sheet(w analysis.Worksheet, memo, as []untraced, handle boo
 			forms = append(forms, u.figure)
 		}
 		text += "; written in the memo as " + strings.Join(slices.Compact(slices.Sorted(slices.Values(forms))), ", ") +
-			cmpStr(len(in.scaled) == 0, ", at a scale the cited inputs write out: the same figure only by the figure reader's scale of the memo's words", "")
+			cmpStr(len(in.scaled) == 0, ", at a scale the cited inputs write out: the same figure only by the figure check's scale of the memo's words", "")
 	}
 	gate := map[string]string{}
 	for _, fid := range in.gate {
@@ -431,7 +431,7 @@ func (cs computeSet) sheet(w analysis.Worksheet, memo, as []untraced, handle boo
 		for _, x := range in.scaled {
 			words = append(words, "“"+x.r.ScaleFrom+"”")
 		}
-		text += ": the memo writes it " + cmpStr(written, "digit for digit", "at another scale's words") + ", and its inputs are the cited figures only by the figure reader's scale of " +
+		text += ": the memo writes it " + cmpStr(written, "digit for digit", "at another scale's words") + ", and its inputs are the cited figures only by the figure check's scale of " +
 			strings.Join(slices.Compact(slices.Sorted(slices.Values(words))), ", ") + "; the findings are gated"
 		for _, x := range in.scaled {
 			if gate[x.fid] == "" {
@@ -455,7 +455,7 @@ func (cs computeSet) labelled(n untraced) computedFig {
 	}
 	if n.limited == limitedUnit {
 		return computedFig{Key: "unit:" + n.figure + "|" + n.known.UnitFrom, Check: true, Mismatch: true,
-			Text: fmt.Sprintf("⚠ %s in the memo (its words “%s”) is the cited period %s only by the figure reader's unit label: the cited words are “%s”; the citing findings are gated",
+			Text: fmt.Sprintf("⚠ %s in the memo (its words “%s”) is the cited period %s only by the figure check's unit label: the cited words are “%s”; the citing findings are gated",
 				n.figure, n.read.UnitFrom, where, n.known.UnitFrom)}
 	}
 	return computedFig{Key: "other:" + n.figure + "|" + n.known.Kind, Check: true,
@@ -503,9 +503,9 @@ func (b computedBlock) markdown() string {
 		return ""
 	}
 	var s strings.Builder
-	s.WriteString("\n### Computed figures\n\nEvery figure below is stated in the memo but traces only through a calculation Go made (over cited values or typed inputs, each as the figure reader read it), or only by the figure reader's label; each input names the finding and the quoted words it comes from.\n")
+	s.WriteString("\n### Computed figures\n\nEvery figure below is stated in the memo but traces only through a calculation BigLaw made (over cited values or typed inputs, each as the figure check read it), or only by the figure check's label; each input names the finding and the quoted words it comes from.\n")
 	if len(b.Check) > 0 {
-		s.WriteString("\nCheck first (resting on words the figure reader cited for a unit, a multiple or a scale, on a count or number's kind alone, on the days between two dates, or on a memo figure's label):\n\n")
+		s.WriteString("\nCheck first (resting on words the figure check cited for a unit, a multiple or a scale, on a count or number's kind alone, on the days between two dates, or on a memo figure's label):\n\n")
 		for _, l := range b.Check {
 			s.WriteString("- " + mdSafe(l, true) + "\n")
 		}

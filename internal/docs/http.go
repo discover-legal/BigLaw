@@ -32,7 +32,7 @@ var (
 )
 
 // Routes mounts the document routes on mux: POST /documents (JSON {name, text, matterNumber}),
-// POST /documents/upload (multipart, one part named "file"), GET /documents (?matter=), GET
+// POST /documents/upload (multipart, one part named "file"; ?matter= files it), GET /documents (?matter=), GET
 // /documents/{id}, /outline, /sections/{sectionId} (?offset=&limit=), /file (the original, with a
 // safe download name), GET /documents/search (?q=&ids=a,b) and DELETE /documents/{id}. Sign-in, when
 // configured, sits in front (api.RequireSignIn); every user sees every matter (per-matter access is
@@ -51,11 +51,11 @@ func (s *Service) Routes(mux *http.ServeMux, log *slog.Logger) {
 			writeError(w, log, fmt.Errorf("%w: send JSON {\"name\": …, \"text\": …, \"matterNumber\": …} (text at most %d MiB)", ErrBadInput, maxText>>20))
 			return
 		}
-		d, err := s.IngestText(r.Context(), in.Name, in.Text)
-		if err == nil && in.MatterNumber != "" {
-			d.MatterNumber, err = in.MatterNumber, s.File(r.Context(), d.ID, in.MatterNumber)
+		d, err := Document{}, checkMatter(in.MatterNumber)
+		if err == nil {
+			d, err = s.IngestText(r.Context(), in.Name, in.Text)
 		}
-		reply(w, http.StatusCreated, d, err)
+		reply(w, http.StatusCreated, d, s.fileTo(r.Context(), &d, in.MatterNumber, err))
 	}))
 	mux.HandleFunc("GET /documents", func(w http.ResponseWriter, r *http.Request) {
 		ds, err := s.List(r.Context(), r.URL.Query().Get("matter"))
@@ -132,7 +132,33 @@ func windowEnd(end time.Time) time.Time {
 	return end
 }
 
+// checkMatter refuses a matter number a task could not name (over 64 bytes) or that holds what a
+// file name may not (control or invisible characters, edge or doubled spaces); "" files nowhere.
+func checkMatter(m string) error {
+	if m != "" && (len(m) > 64 || !store.ValidName(strings.ReplaceAll(m, "/", "-"))) {
+		return fmt.Errorf("%w: a matter number is at most 64 characters, with no control or invisible characters", ErrBadInput)
+	}
+	return nil
+}
+
+// fileTo files a stored document under matter when ingest left it stored (err nil, or a scan waiting for vision).
+func (s *Service) fileTo(ctx context.Context, d *Document, matter string, err error) error {
+	if matter == "" || d.ID == "" || err != nil && !errors.Is(err, ErrVisionNotConfigured) {
+		return err
+	}
+	if ferr := s.File(ctx, d.ID, matter); ferr != nil {
+		return ferr
+	}
+	d.MatterNumber = matter
+	return err
+}
+
 func (s *Service) upload(w http.ResponseWriter, r *http.Request, log *slog.Logger) {
+	matter := r.URL.Query().Get("matter")
+	if err := checkMatter(matter); err != nil {
+		writeError(w, log, err)
+		return
+	}
 	rc := http.NewResponseController(w)
 	pr := &progressReader{r: r.Body, rc: rc, end: time.Now().Add(uploadTotal)}
 	if err := rc.SetReadDeadline(windowEnd(pr.end)); err != nil { // fail closed: never an upload without a deadline
@@ -163,6 +189,7 @@ func (s *Service) upload(w http.ResponseWriter, r *http.Request, log *slog.Logge
 			ct = "application/octet-stream"
 		}
 		d, err := s.Ingest(r.Context(), p.FileName(), ct, p)
+		err = s.fileTo(r.Context(), &d, matter, err)
 		if errors.Is(context.Cause(r.Context()), ErrStopping) {
 			err = ErrStopping
 		}
@@ -249,7 +276,7 @@ var errTimeout = fmt.Errorf("docs: the upload was too slow: send at least %d KiB
 // writeError answers with {error, errorType} and the status for err's kind. Unclassified errors are
 // logged and answered with a fixed text (they may hold database detail).
 func writeError(w http.ResponseWriter, log *slog.Logger, err error) {
-	code, kind, msg := http.StatusInternalServerError, "internal", "internal error (logged)"
+	code, kind, msg := http.StatusInternalServerError, "internal", "internal error: something went wrong inside BigLaw (logged for whoever runs it)"
 	for _, c := range []struct {
 		err        error
 		code       int

@@ -198,9 +198,9 @@ func Collapse(verified, total int, threshold float64, action string) (alert stri
 	rate := 100 * float64(total-verified) / float64(total)
 	alert = fmt.Sprintf("grounding collapse: %d of %d findings (%.0f%%) failed quote verification", total-verified, total, rate)
 	if action == "warn" {
-		return alert + "; warn mode: the run went on, and every unverified finding stays quarantined", false
+		return alert + "; the run went on (the warn setting), and every unverified finding stays quarantined, out of the memo", false
 	}
-	return alert + "; the task fails rather than deliver (BIGLAW_COLLAPSE_ACTION=strict)", true
+	return alert + "; the task failed rather than deliver a memo on unchecked evidence (the strict setting, BIGLAW_COLLAPSE_ACTION)", true
 }
 
 // stats is the bandit's record in Postgres (tool_stats), shared by every task: a run's additions

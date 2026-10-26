@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/textproto"
+	"net/url"
 	"runtime"
 	"runtime/metrics"
 	"slices"
@@ -608,5 +609,51 @@ func TestIngestSlotWaitBounded(t *testing.T) { // not parallel: it shortens slot
 	resp, body := upload(t, serveDocs(t, s).URL, "a.txt", []byte("waiting"))
 	if resp.StatusCode != 503 || body["errorType"] != "busy" || count(t, s, "files") != 0 || time.Since(start) > 5*time.Second {
 		t.Errorf("an upload with every slot taken: %d %v after %s, %d files", resp.StatusCode, body, time.Since(start), count(t, s, "files"))
+	}
+}
+
+// TestUploadFilesToMatter: ?matter= files an upload (a scan waiting for vision too) like the JSON
+// route's matterNumber; a matter number a task could not name is refused by both before anything is stored.
+func TestUploadFilesToMatter(t *testing.T) {
+	t.Parallel()
+	s := newService(t)
+	srv := serveDocs(t, s)
+	post := func(path, name string, data []byte) (int, map[string]any) {
+		var body bytes.Buffer
+		mw := multipart.NewWriter(&body)
+		fw, _ := mw.CreateFormFile("file", name)
+		fw.Write(data)
+		mw.Close()
+		resp, err := http.Post(srv.URL+path, mw.FormDataContentType(), &body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var out map[string]any
+		json.NewDecoder(resp.Body).Decode(&out)
+		return resp.StatusCode, out
+	}
+	if code, out := post("/documents/upload?matter=M-2026%2F001", "notes.txt", []byte("matter notes")); code != 201 || out["matterNumber"] != "M-2026/001" {
+		t.Errorf("upload to a matter: %d %v", code, out)
+	}
+	if code, out := post("/documents/upload?matter=M-2026%2F001", "letter.png", pngOf(3)); code != 503 || out["document"].(map[string]any)["matterNumber"] != "M-2026/001" {
+		t.Errorf("a scan waiting for vision is filed too: %d %v", code, out)
+	}
+	ds, err := s.List(t.Context(), "M-2026/001")
+	if err != nil || len(ds) != 2 {
+		t.Fatalf("the matter lists %d documents (%v), want 2", len(ds), err)
+	}
+	before := count(t, s, "files") + count(t, s, "documents")
+	for _, m := range []string{strings.Repeat("M", 65), "M-1\n", "M-1\u200b", " M-1", "M--\u202e1"} {
+		if code, out := post("/documents/upload?matter="+url.QueryEscape(m), "x.txt", []byte("x")); code != 400 || out["errorType"] != "bad_request" {
+			t.Errorf("upload to matter %q: %d %v, want 400", m, code, out)
+		}
+		mj, _ := json.Marshal(map[string]string{"name": "x.txt", "text": "x", "matterNumber": m})
+		if resp, err := http.Post(srv.URL+"/documents", "application/json", bytes.NewReader(mj)); err != nil || resp.StatusCode != 400 {
+			t.Errorf("JSON to matter %q: %v %v, want 400", m, resp.StatusCode, err)
+		}
+	}
+	if n := count(t, s, "files") + count(t, s, "documents"); n != before {
+		t.Errorf("refused uploads left %d rows", n-before)
 	}
 }

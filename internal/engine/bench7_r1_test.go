@@ -505,7 +505,7 @@ func TestUnreadClaimsDisclosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := strings.Join(rep.limits, "\n")
-	if !strings.Contains(out, "Figures: 2 findings whose claims state a figure were never read (the figure reader was unfunded or its call failed), so the cross-document comparison could not see their claims' sums: F1, F2.") {
+	if !strings.Contains(out, "Figures: 2 findings whose claims state a figure were never read (the figure check ran out of budget or failed), so the cross-document comparison could not see their claims' sums: F1, F2.") {
 		t.Errorf("the unread claim is not disclosed (%s):\n%s", stop(v), out)
 	}
 }

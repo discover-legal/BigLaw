@@ -216,7 +216,7 @@ func TestRefCountUsedAsPeriodGated(t *testing.T) {
 		analysis.Value{Entity: "Defendant", Metric: "answer period", Value: "21", Unit: "days", Class: "Count", Fig: &analysis.Reading{Kind: analysis.KindCount, Amount: "21", Text: "21"}})
 	lines, _, gate, computed := lintLimited("I1", labelledSection("The answer is due March 22, 2024 [F1].", asDate), map[string]Finding{"F1": f1}, []analysis.Worksheet{w})
 	if len(lines) == 0 && (len(computed) != 1 || !computed[0].Mismatch || !strings.Contains(computed[0].Text, "21 days [F1] “") ||
-		!strings.Contains(computed[0].Text, ": the figure reader read it as a count figure, not a period in days") || gate["F1"] != limitedUnit) {
+		!strings.Contains(computed[0].Text, ": the figure check read it as a count figure, not a period in days") || gate["F1"] != limitedUnit) {
 		t.Errorf("lint %q, gate %v, computed %+v", lines, gate, computed)
 	}
 }

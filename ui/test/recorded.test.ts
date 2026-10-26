@@ -21,7 +21,7 @@ const lit = rec.clients.flatMap((c) => c.matters).find((m) => m.number === 'DEMO
 const newTask = (description: string) => ({ description, workflowType: 'memo' as const, jurisdiction: 'US', matterNumber: lit.number, documentIds: lit.documentIds });
 
 test('both transports implement the same seam', () => {
-  const required = ['clients', 'documents', 'outline', 'section', 'search', 'tasks', 'task', 'match', 'submit', 'cancel', 'decideGate', 'cost', 'events', 'playbooks', 'timeEntries', 'profiles', 'fileUrl'];
+  const required = ['clients', 'documents', 'outline', 'section', 'search', 'tasks', 'task', 'match', 'submit', 'cancel', 'decideGate', 'cost', 'events', 'fileUrl', 'upload'];
   for (const t of [http(), recorded(rec)]) for (const k of required) assert.equal(typeof (t as unknown as Record<string, unknown>)[k], 'function', k);
   assert.equal(http().mode, 'live');
   assert.equal(recorded(rec).mode, 'recorded');
@@ -33,14 +33,24 @@ test('both transports implement the same seam', () => {
 test('the http transport calls the contract routes on the same origin', async () => {
   const calls: string[] = [];
   const orig = globalThis.fetch;
-  globalThis.fetch = (async (url: string, init?: RequestInit) => { calls.push(`${init?.method} ${url}${init?.method === 'POST' && init.body && !String(url).endsWith('/tasks') ? ` ${init.body}` : ''}`); return new Response('[]', { status: 200 }); }) as typeof fetch;
+  let sent: RequestInit | undefined;
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    calls.push(`${init?.method} ${url}${init?.method === 'POST' && typeof init.body === 'string' && !String(url).endsWith('/tasks') ? ` ${init.body}` : ''}`);
+    if (String(url).startsWith('/documents/upload')) sent = init;
+    return new Response('[]', { status: 200 });
+  }) as typeof fetch;
   try {
     const t = http();
     await t.tasks(); await t.search('fee cap', ['a', 'b']); await t.section('d1', 's3'); await t.cost('t1');
     await t.decideGate('t1', 'g1', true); await t.decideGate('t1', 'g2', false, 'cite the order'); await t.submit(newTask('x'));
+    await t.upload(new File(['lease text'], 'lease.txt'), 'M-2026/1');
   } finally { globalThis.fetch = orig; }
   assert.deepEqual(calls, ['GET /tasks', 'GET /documents/search?q=fee%20cap&ids=a,b', 'GET /documents/d1/sections/s3?offset=0',
-    'GET /tasks/t1/cost', 'POST /tasks/t1/gates/g1/approve', 'POST /tasks/t1/gates/g2/reject {"reason":"cite the order"}', 'POST /tasks']);
+    'GET /tasks/t1/cost', 'POST /tasks/t1/gates/g1/approve', 'POST /tasks/t1/gates/g2/reject {"reason":"cite the order"}', 'POST /tasks',
+    'POST /documents/upload?matter=M-2026%2F1']);
+  // the file goes as multipart (the browser writes its boundary), never as JSON
+  assert.ok(sent?.body instanceof FormData && (sent.body.get('file') as File).name === 'lease.txt');
+  assert.deepEqual(sent.headers, {});
   assert.equal(http().fileUrl('d 1'), '/documents/d%201/file');
 });
 
@@ -114,13 +124,13 @@ test('recorded searches replay v2\'s hits; other queries rank like the server at
   }
 });
 
-test('the other screens have sample records', async () => {
-  const t = recorded(rec);
-  assert.ok((await t.playbooks()).length > 0);
-  assert.ok((await t.profiles()).length > 0);
-  assert.ok((await t.settings!()).some((s) => s.name === 'BIGLAW_BUDGET_CALLS' && s.default === '400'));
-  const matters = new Set(rec.clients.flatMap((c) => c.matters.map((m) => m.number)));
-  for (const e of await t.timeEntries()) assert.ok(matters.has(e.matterNumber), e.id);
+test('a replay runs on the build\'s default budget, and the demo uploads nothing', async () => {
+  const t = recorded(rec, fakeClock().clock);
+  assert.equal(rec.budgetCalls, 400); // BIGLAW_BUDGET_CALLS' default, read from cmd/biglaw/config.go when recorded
+  const task = await t.submit(newTask('When is our answer due?'));
+  assert.deepEqual(task.run.budget, { calls: 0, usd: 0, remaining: 400 });
+  assert.equal(task.error, null);
+  await assert.rejects(t.upload(new File(['x'], 'x.txt'), lit.number), /read-only/);
 });
 
 test('an off-script prompt is refused, not answered', async () => {

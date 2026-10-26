@@ -480,7 +480,7 @@ func lintSection(issueID string, s Section, usable map[string]Finding, sheets []
 	if len(memoUnread) > 0 {
 		limited[limitedMemoUnread] = memoUnread
 		computed = append(computed, computedFig{Key: "memo-unread:" + issueID, Check: true,
-			Text: fmt.Sprintf("%s in the memo %s not read by the figure reader (%s): %s only as written, digit for digit, to %s, whose findings are gated; check %s against the cited quotes",
+			Text: fmt.Sprintf("%s in the memo %s not read by the figure check (%s): %s only as written, digit for digit, to %s, whose findings are gated; check %s against the cited quotes",
 				strings.Join(memoUnread, ", "), plural(len(memoUnread), "was", "were"), strings.Join(memoWhy, "; "), plural(len(memoUnread), "it traces", "they trace"),
 				"["+strings.Join(memoUnreadBy, "] [")+"]", plural(len(memoUnread), "it", "each"))})
 	}

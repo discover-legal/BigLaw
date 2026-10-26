@@ -67,11 +67,12 @@ type Usage struct {
 	OutputTokens int     `json:"outputTokens"`
 	USD          float64 `json:"usd"`
 	Unpriced     int     `json:"unpriced"`
+	WattHours    float64 `json:"wattHours,omitempty"` // local calls' energy when BIGLAW_LOCAL_WATTS is set (model.Usage); cloud calls have none
 }
 
 func (u *Usage) Add(v Usage) {
 	u.Calls, u.InputTokens, u.OutputTokens = u.Calls+v.Calls, u.InputTokens+v.InputTokens, u.OutputTokens+v.OutputTokens
-	u.USD, u.Unpriced = u.USD+v.USD, u.Unpriced+v.Unpriced
+	u.USD, u.Unpriced, u.WattHours = u.USD+v.USD, u.Unpriced+v.Unpriced, u.WattHours+v.WattHours
 }
 
 // ModelUsage is one model call's usage, from its answer or its failure.
@@ -91,6 +92,9 @@ func ModelUsage(err error, r *model.Response) Usage {
 		return Usage{}
 	}
 	u := Usage{Calls: 1, InputTokens: mu.InputTokens + mu.CacheReadTokens + mu.CacheWriteTokens, OutputTokens: mu.OutputTokens}
+	if mu.WattHours != nil {
+		u.WattHours = *mu.WattHours
+	}
 	if mu.CostUSD == nil {
 		u.Unpriced = 1
 	} else {

@@ -103,9 +103,9 @@ October 21, 2026 — Talbot served with summons and complaint through its regist
 
 ### Computed figures
 
-Every figure below is stated in the memo but traces only through a calculation Go made (over cited values or typed inputs, each as the figure reader read it), or only by the figure reader's label; each input names the finding and the quoted words it comes from.
+Every figure below is stated in the memo but traces only through a calculation BigLaw made (over cited values or typed inputs, each as the figure check read it), or only by the figure check's label; each input names the finding and the quoted words it comes from.
 
-Check first (resting on words the figure reader cited for a unit, a multiple or a scale, on a count or number's kind alone, on the days between two dates, or on a memo figure's label):
+Check first (resting on words the figure check cited for a unit, a multiple or a scale, on a count or number's kind alone, on the days between two dates, or on a memo figure's label):
 
 - November 12, 2026 = October 21, 2026 [F1] “served on 10/21/2026 via its registered…” + 21 days [F1] “…serve an answer within 21 days after being…”, rolled past a weekend or holiday (I1)
 - November 25, 2026 = December 3, 2026 [F2] “10/13/2026 | 4 | ORDER: Initial status hearing set for December 3, 2026 at 9:30 a.m. in…” − 7 days [F2] “…no later than seven (7) days before the…”, rolled past a weekend or holiday (I2)

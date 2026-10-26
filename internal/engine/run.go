@@ -237,12 +237,12 @@ func ErrorType(err error) (int, string, string) {
 		code      int
 		kind, msg string
 	}{
-		{model.ErrNotConfigured, 503, "model_not_configured", "no model is configured for this role (set BIGLAW_MODEL_URL and BIGLAW_MODELS)"},
+		{model.ErrNotConfigured, 503, "model_not_configured", "no AI model is set up for this step yet: ask whoever set up BigLaw to add one (BIGLAW_MODEL_URL and BIGLAW_MODELS)"},
 		{model.ErrRateLimited, 503, "model_rate_limited", "the model endpoint is rate limiting BigLaw; try again later"},
 		{model.ErrTimeout, 504, "model_timeout", "the model endpoint did not answer in time"},
 		{model.ErrNoContent, 422, "no_content", "the model returned no usable answer"},
 		{model.ErrUnavailable, 502, "model_unavailable", "the model endpoint failed"},
-		{errCollapse, 422, "grounding_collapse", "too many findings failed quote verification, so the task failed rather than deliver (G4)"},
+		{errCollapse, 422, "grounding_collapse", "too many findings failed quote verification, so the task failed rather than deliver a memo on unchecked evidence"},
 		{ErrBadTask, 400, "bad_request", ""},
 		{ErrNotFound, 404, "not_found", "not found"},
 		{ErrConflict, 409, "conflict", ""},
@@ -260,7 +260,7 @@ func ErrorType(err error) (int, string, string) {
 			return c.code, c.kind, c.msg
 		}
 	}
-	return 500, "internal", "internal error (logged)"
+	return 500, "internal", "internal error: something went wrong inside BigLaw (logged for whoever runs it)"
 }
 
 // pauseForGate parks a run a hook's gate holds (awaiting_gate, lease released) until Decide resumes it.

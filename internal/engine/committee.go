@@ -221,10 +221,10 @@ func admissionLine(claims []map[string]any, fs []Finding, old []Critic) (string,
 		line, shown = line+cmpStr(shown == 0, ": ", "; ")+n, shown+1
 	}
 	if shown < len(notes) {
-		line += fmt.Sprintf(" (and %d more %s: ledger op get)", len(notes)-shown, plural(len(notes)-shown, "note", "notes"))
+		line += fmt.Sprintf(" (and %d more %s on the findings themselves)", len(notes)-shown, plural(len(notes)-shown, "note", "notes"))
 	}
 	if len(line) > maxAdmissionLine+200 { // very many ids: count them only
-		line = fmt.Sprintf("%d cited findings have typed values admission dropped (first %s; ledger op get lists the notes)", len(fids), strings.Join(fids[:min(maxListed, len(fids))], ", "))
+		line = fmt.Sprintf("%d cited findings have typed values admission dropped (first %s; each finding lists its notes)", len(fids), strings.Join(fids[:min(maxListed, len(fids))], ", "))
 	}
 	return line, fids
 }

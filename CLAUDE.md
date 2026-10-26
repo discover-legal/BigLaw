@@ -87,15 +87,15 @@ budgets in `docs/history.md`. v2 is `main`; v1 (Go under `biglaw-go/`, DyTopo) i
   on it. Never present its numbers as the gate. The owner records a real one with `make e4-record`.
   A chunker or fixture change makes the tape stale (`TestE4TapeReplays` fails): re-record the
   self-test tape with `make e4-record EMBED_MODEL=biglaw-selftest-hash` and say so in the PR.
-- `ui/` (PR 11, pulled forward by owner decision 13) — React 19 + Vite + TS strict, the seven
-  screens behind `ui/src/api/transport.ts`: `http.ts` (same-origin REST, routes planned from PR 4)
+- `ui/` (PR 11, pulled forward by owner decision 13) — React 19 + Vite + TS strict, Matters, Documents, Task and Manage
+  behind `ui/src/api/transport.ts`: `http.ts` (same-origin REST, routes planned from PR 4)
   and `recorded.ts` (replays `ui/src/recorded/recording.json` in the browser). `VITE_ENGINE=recorded`
   aliases the transport (vite.config.ts), so the recorded bundle has no network code
   (`test/offline.test.ts`). The recording is made by `eval/demo/record_test.go` (test-only, no Go
   prod lines) from v2's `internal/docs` over three `eval/tasks` matters; claims come from the answer
   keys, plus a scanned exhibit (`ui/src/recorded/*.jpg`, drawn by `eval/demo/make_scan.py`) read through the
   vision path by a scripted `model.Fake`, and a few quotes/one finding written for the demo (`demoQuotes`,
-  `demoFacts`) so every ladder rung but the judge's shows; sample playbooks/time/profiles are labelled as such.
+  `demoFacts`) so every ladder rung but the judge's shows.
   `TestDemoRecording` (DB) fails when the committed recording is stale: `make demo-record`.
   `internal/api` embeds `ui/dist` (`make ui build` copies it into `internal/api/dist`; a build without
   it serves a notice at `/`).

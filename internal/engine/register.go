@@ -686,7 +686,7 @@ func (e *Engine) admit(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 func applyReading(f *Finding, vals []analysis.Value, it *reading, text string) {
 	rs, refused := it.readings()
 	for _, n := range refused {
-		f.ValueNotes = append(f.ValueNotes, "figure reader: "+n)
+		f.ValueNotes = append(f.ValueNotes, "figure check: "+n)
 	}
 	f.Figures, f.Values, f.Unread = quoteReadings(rs), nil, !it.read // a call that failed or went unfunded leaves it unread: read again when funded, counted until then (r1 MEDIUM-3)
 	for j, v := range vals {

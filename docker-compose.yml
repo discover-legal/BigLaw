@@ -65,6 +65,8 @@ services:
       BIGLAW_AI_RATE: ${BIGLAW_AI_RATE:-}
       ALLOW_ANTHROPIC: ${ALLOW_ANTHROPIC:-}
       ALLOW_AWS: ${ALLOW_AWS:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway" # outbound only: a model server on the host (Ollama) as http://host.docker.internal:11434/v1
     ports:
       - "127.0.0.1:3101:3101"   # loopback only on the host: the --allow-no-auth precondition (with sign-in, a TLS proxy on the host fronts it)
     restart: unless-stopped

@@ -140,9 +140,9 @@ func TestSignedInMe(t *testing.T) {
 		who  map[string]any
 		want string
 	}{
-		{ada, `{"admin":true,"adminWithoutAuth":false,"authEnabled":true,"email":"ada@firm.example","id":"u-ada","name":"Ada Lovelace"}`},
-		{bob, `{"admin":false,"adminWithoutAuth":false,"authEnabled":true,"email":"bob@firm.example","id":"u-bob","name":"Bob Member"}`},
-		{eve, `{"admin":false,"adminWithoutAuth":false,"authEnabled":true,"email":"","id":"u-eve","name":"Eve"}`},
+		{ada, `{"admin":true,"adminWithoutAuth":false,"authEnabled":true,"email":"ada@firm.example","id":"u-ada","model":true,"name":"Ada Lovelace"}`},
+		{bob, `{"admin":false,"adminWithoutAuth":false,"authEnabled":true,"email":"bob@firm.example","id":"u-bob","model":true,"name":"Bob Member"}`},
+		{eve, `{"admin":false,"adminWithoutAuth":false,"authEnabled":true,"email":"","id":"u-eve","model":true,"name":"Eve"}`},
 	} {
 		if _, body := s.browser(t, c.who).do("GET", "/me", nil); strings.TrimSpace(body) != c.want {
 			t.Errorf("/me: %s, want %s", body, c.want)

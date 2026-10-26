@@ -379,7 +379,7 @@ func leadOnlyLine(os []HookOutcome) string {
 	for _, k := range slices.Sorted(maps.Keys(by)) {
 		parts, n = append(parts, fmt.Sprintf("%s: %d", k, by[k])), n+by[k]
 	}
-	return fmt.Sprintf("%d %s that Go or a subagent made (not the lead) %s blocked by approve rules, which only the lead's own calls can pass (%s); what %s would have found is not in this memo.",
+	return fmt.Sprintf("%d %s that BigLaw made inside its automatic steps (not the lead agent's own calls) %s blocked by approval rules, which only the lead agent's own calls can pass (%s); what %s would have found is not in this memo.",
 		n, plural(n, "call", "calls"), plural(n, "was", "were"), strings.Join(parts, ", "), plural(n, "it", "they"))
 }
 

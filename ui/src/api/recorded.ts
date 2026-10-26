@@ -8,7 +8,7 @@ import manageJson from '../recorded/manage.json' with { type: 'json' };
 import { nearest, rank } from './match.ts';
 import { ApiError, type Transport } from './transport.ts';
 import type {
-  Client, Doc, Finding, GateDecision, Hit, ManageDetail, OutlineEntry, Playbook, Profile, RecordedSearch, Run, RunEvent, Setting, Step, Task, TaskCost, TimeEntry,
+  Client, Doc, Finding, GateDecision, Hit, ManageDetail, OutlineEntry, RecordedSearch, Run, RunEvent, Step, Task, TaskCost,
 } from './types.ts';
 
 /** The site the demo is published on (discover.legal/demo/biglaw/): the banner's way back. A link, not a request. */
@@ -30,7 +30,7 @@ export interface RecDoc extends Doc {
 }
 export interface Recording {
   provenance: string; clients: Client[]; documents: RecDoc[]; tasks: RecTask[]; searches: RecordedSearch[];
-  profiles: Profile[]; playbooks: Playbook[]; timeEntries: TimeEntry[]; settings: Setting[];
+  budgetCalls: number; // BIGLAW_BUDGET_CALLS' default (cmd/biglaw/config.go) when recorded; the recording spends none
 }
 
 export interface Clock {
@@ -48,8 +48,6 @@ interface Live { id: string; rec: RecTask; description: string; started: number;
 const READER = 'a scripted stand-in for the vision reader';
 export const plain = (s: string) => s.replace('by model.Fake (scripted) (', `by ${READER} (demo only; `)
   .replace('(model.Fake (scripted))', `(${READER}, demo only)`).replaceAll('model.Fake (scripted)', `${READER} (demo only)`);
-
-const BUDGET_CALLS = 150; // BIGLAW_BUDGET_CALLS' default; the recording spends none
 
 /** The Manage screen's recording (eval/demo/manage_test.go): this build's built-in catalogue, read-only. */
 export interface ManageRecording { provenance: string; items: ManageDetail[] }
@@ -73,7 +71,7 @@ export function createTransport(rec: Recording = recordingJson as unknown as Rec
     return {
       status, step: n,
       stopReason: status === 'cancelled' ? 'cancelled' : finished(l) ? 'finished' : null,
-      budget: { calls: 0, usd: 0, remaining: BUDGET_CALLS },
+      budget: { calls: 0, usd: 0, remaining: rec.budgetCalls },
       openFindings: 0,
     };
   }
@@ -87,7 +85,7 @@ export function createTransport(rec: Recording = recordingJson as unknown as Rec
       decidedGates: l.decision ? [l.decision] : [],
       findings: l.rec.findings.filter((f) => f.atStep <= run.step).map(strip),
       output: finished(l) ? l.rec.output : null,
-      groundingAlert: null,
+      groundingAlert: null, error: null,
       replay: { key: l.rec.key, title: l.rec.title, prompt: l.rec.prompt },
     };
   }
@@ -112,6 +110,7 @@ export function createTransport(rec: Recording = recordingJson as unknown as Rec
       return { sectionId: sid, number: o.number, title: o.title, text, offset: 0, total: [...text].length, truncated: false };
     },
     fileUrl: (id) => (docById.get(id)?.contentType.startsWith('image/') ? SCAN : null),
+    upload: refuse,
     async search(q, ids) {
       const scope = new Set(ids);
       const replay = rec.searches.find((s) => s.query === q.trim() && s.hits.every((h) => scope.has(h.documentId)));
@@ -168,10 +167,6 @@ export function createTransport(rec: Recording = recordingJson as unknown as Rec
       .map((t) => ({ key: t.key, title: t.title, prompt: t.prompt, score: 1, onScript: true, jurisdiction: t.jurisdiction })),
     recordedSearches: (matter) => rec.searches.filter((s) => s.matterNumber === matter),
     fastForward(id) { const l = get(id); if (l.cut === undefined) l.started = clock.now() - l.rec.durationMs; },
-    playbooks: async () => rec.playbooks,
-    timeEntries: async () => rec.timeEntries,
-    profiles: async () => rec.profiles,
-    settings: async () => rec.settings,
     me: async () => ({ id: 'demo', name: 'Demo visitor', admin: false, authEnabled: false }),
     manageItems: async () => items.map(({ content: _c, original: _o, checks: _h, callers: _k, ...i }) => i),
     async manageItem(id) { const d = items.find((x) => x.id === id); if (!d) throw notFound('item'); return d; },

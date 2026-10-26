@@ -177,16 +177,16 @@ func TestR5NoReaderBudget(t *testing.T) {
 		"draft_section": {section("Greystone claims damages of $644,910 for unpaid invoices [F1].", "Damages [F1].")},
 	}), Config{})
 	fs := ledgerFindings(t, f, v.ID)
-	if len(fs) != 1 || len(fs[0].Values) != 0 || !strings.Contains(strings.Join(fs[0].ValueNotes, " "), "the figure reader's call failed") {
+	if len(fs) != 1 || len(fs[0].Values) != 0 || !strings.Contains(strings.Join(fs[0].ValueNotes, " "), "the figure check's call failed") {
 		t.Fatalf("reader failing: %+v", fs)
 	}
 	out0 := deref(v.Output)
-	if !strings.Contains(out0, "- 644,910 in the memo was not read by the figure reader (the figure reader's call failed): it traces only as written, digit for digit, to [F1], whose findings are gated") ||
+	if !strings.Contains(out0, "- 644,910 in the memo was not read by the figure check (the figure check's call failed): it traces only as written, digit for digit, to [F1], whose findings are gated") ||
 		!slices.ContainsFunc(v.PendingGates, func(g Gate) bool { return g.GateID == "G-F1" }) && !slices.ContainsFunc(v.DecidedGates, func(g Gate) bool { return g.GateID == "G-F1" }) {
 		t.Errorf("the memo's unread figure is not listed and gated (%s):\n%s", stop(v), out0)
 	}
 	secs, err := load[Section](context.Background(), f.e, v.ID, kSection)
-	if err != nil || len(secs) != 1 || secs[0].Read == nil || !strings.Contains(secs[0].Read.Unread, "1 of its 1 figures were not read (the figure reader's call failed)") {
+	if err != nil || len(secs) != 1 || secs[0].Read == nil || !strings.Contains(secs[0].Read.Unread, "1 of its 1 figures were not read (the figure check's call failed)") {
 		t.Fatalf("section read %+v %v", secs, err)
 	}
 	out := deref(v.Output)
@@ -354,7 +354,7 @@ func TestR5OversizeInputIsSplit(t *testing.T) {
 		t.Errorf("%d parts holding %d spans", len(parts), n)
 	}
 	rs, _ := it.readings()
-	if r := rs["q2.s1"]; !strings.Contains(r.Why, "too long for the figure reader") || !r.Unclear {
+	if r := rs["q2.s1"]; !strings.Contains(r.Why, "too long for the figure check") || !r.Unclear {
 		t.Errorf("the long reference: %+v", r)
 	}
 	if r := rs["q3.s1"]; !strings.Contains(r.Why, "passage is too long") {
@@ -375,7 +375,7 @@ func TestR5OversizeInputIsSplit(t *testing.T) {
 		// sunk by it; the section citing the schedule reads it in calls of at most maxCallSpans spans,
 		// and what its grant cannot fund stays unread with why (bench7)
 		unfunded := !slices.ContainsFunc(fs[0].Figures, func(r analysis.Reading) bool {
-			return strings.HasPrefix(r.Why, "not read") && r.Why != "not read: the budget could not fund the figure reader"
+			return strings.HasPrefix(r.Why, "not read") && r.Why != "not read: the budget could not fund the figure check"
 		})
 		if len(fs[1].Values) != 1 || fs[1].Unread || fs[0].Unread || len(fs[0].Figures) != 300 || !unfunded {
 			t.Fatalf("an oversized finding sank its call: %d findings, values %v, %d figures; notes %q %q", len(fs), fs[min(1, len(fs)-1)].Values, len(fs[0].Figures), fs[0].ValueNotes, fs[1].ValueNotes)
