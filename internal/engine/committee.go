@@ -17,8 +17,6 @@ import (
 	"github.com/discover-legal/BigLaw/internal/model"
 )
 
-var critics = []string{"prosecute", "reproduce", "audit_gaps"}
-
 func modelFailed(err error) bool {
 	for _, k := range []error{model.ErrNotConfigured, model.ErrRateLimited, model.ErrUnavailable, model.ErrTimeout, model.ErrNoContent, context.Canceled, context.DeadlineExceeded} {
 		if errors.Is(err, k) {

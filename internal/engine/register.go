@@ -29,8 +29,72 @@ func spec(ctx context.Context, name string) agent.Spec { return specsOf(ctx).Spe
 // prompt is specs/<name>.md in ctx's spec set.
 func prompt(ctx context.Context, name string) string { return specsOf(ctx).prompt(name) }
 
-// MemoVisible is the memo lead's tool list (README § Tools): 12 tools, in a fixed order.
-var MemoVisible = []string{"retrieve", "ledger", "sweep", "extract_facts", "analyze_issue", "check_deviation", "numbers", "join_discrepancies", "draft_section", "committee", "finish", "use_skill"}
+// goNeeds is what Go needs from a built-in tool or subagent name (goContract), one flag per fact.
+type goNeeds uint16
+
+const (
+	leadTool     goNeeds = 1 << iota // the memo lead's (MemoVisible, README § Tools: 12, in goContract's order)
+	goWrites                         // Go writes its input: compatSpec lets its input schema gain no property
+	enginePass                       // one of the engine's passes: item kind pass, a reserved name, no Test call
+	writesLedger                     // writes the ledger as it runs: no after_call block or check can withhold that
+	hookedSub                        // wrapped by hooked: its after_call rules run before Go records anything
+	forcedStep                       // a forced finish runs it as the lead's step: no approve rule may hold it
+	subagentOK                       // its lead-only ops refuse a subagent in its own code (ledger at depth 1)
+	critic                           // a committee critic (critics, in goContract's order)
+	unhookable                       // no rule applies to it: verify_quote is the engine's own quote check, G2
+)
+
+// goRow is a name's needs, the Go code that calls it (callers: Manage's "where it is used" and
+// goDepends' reason; empty, not nil, when only the figure reader does) and an input Go sends as
+// written in run.go, finish.go or cover.go (sent: compatSpec checks it still validates).
+type goRow struct {
+	name    string
+	needs   goNeeds
+	callers []string
+	sent    string
+}
+
+// goContract is every built-in name Go depends on, one row each: a new one is one row here.
+var goContract = []goRow{
+	{"retrieve", leadTool, nil, ""}, {"ledger", leadTool | enginePass | writesLedger | subagentOK, nil, ""}, {"sweep", leadTool | enginePass | writesLedger, nil, ""},
+	{"extract_facts", leadTool | goWrites | hookedSub, []string{"sweep"}, ""}, {"analyze_issue", leadTool | goWrites | hookedSub, []string{"cover"}, ""},
+	{"check_deviation", leadTool | hookedSub, nil, ""}, {"numbers", leadTool | writesLedger, nil, ""}, {"join_discrepancies", leadTool | writesLedger, nil, ""},
+	{"draft_section", leadTool | goWrites | hookedSub, []string{"cover"}, ""},
+	{"committee", leadTool | goWrites | enginePass | writesLedger | forcedStep, []string{"Go: finish, a stopped run's review"}, `{}`},
+	{"finish", leadTool | goWrites | enginePass | writesLedger, []string{"Go: a stopped run's forced finish"}, `{"op":"submit","limitations":null}`},
+	{"use_skill", leadTool | writesLedger, nil, ""}, {"cover", goWrites | enginePass | writesLedger | forcedStep, []string{"Go: finish, a stopped run"}, `{}`},
+	{"verify_quote", goWrites | unhookable, []string{"Go: admit (every quote's paraphrase judge)"}, ""},
+	{"read_figures", goWrites | writesLedger, []string{"Go: admission and drafted sections (figures.go)"}, ""},
+	{"judge_figures", goWrites | writesLedger, []string{"Go: join_discrepancies, finish (judge.go)"}, ""},
+	{"prosecute", goWrites | critic, []string{"committee"}, ""}, {"reproduce", goWrites | critic, []string{"committee"}, ""}, {"audit_gaps", goWrites | critic, []string{"committee"}, ""},
+	{"meta", 0, []string{"Go: finish (the process note)"}, ""}, {"section_check", 0, []string{"Go: check_deviation's requirement check"}, ""},
+	{"figure_context", 0, []string{}, ""}, {"exact_calc", 0, []string{}, ""},
+}
+
+// MemoVisible is the memo lead's tool list (README § Tools), critics the committee's, in table order.
+var MemoVisible, critics = named(leadTool), named(critic)
+
+// named are goContract's names with any of n, in its order; needs reports whether name has one.
+func named(n goNeeds) (out []string) {
+	for _, c := range goContract {
+		if c.needs&n != 0 {
+			out = append(out, c.name)
+		}
+	}
+	return out
+}
+
+func needs(name string, n goNeeds) bool { return slices.Contains(named(n), name) }
+
+// goCallers is the Go code that calls name (goRow.callers), nil when none does.
+func goCallers(name string) []string {
+	for _, c := range goContract {
+		if c.name == name {
+			return slices.Clone(c.callers)
+		}
+	}
+	return nil
+}
 
 // hookOut is what an evidence subagent returns to its caller once Go has verified its findings,
 // each kept value under the ref numbers takes ("F3.v1").
@@ -79,7 +143,7 @@ func (e *Engine) runtime(r *run) (*agent.Runtime, error) {
 		return nil, err
 	}
 	for _, s := range subs {
-		if n := s.Spec().Name; n == "extract_facts" || n == "analyze_issue" || n == "check_deviation" || n == "draft_section" {
+		if needs(s.Spec().Name, hookedSub) {
 			s = hooked{s, e, rt}
 		}
 		tools = append(tools, s)

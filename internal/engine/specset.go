@@ -358,16 +358,13 @@ func itemOf(f string) string {
 		return "prompt." + strings.TrimSuffix(path.Base(f), ".md")
 	case strings.HasSuffix(f, ".json") && strings.Contains(f, "/specs/"):
 		name := fileStem(f)
-		if slices.Contains(passes, name) {
+		if needs(name, enginePass) {
 			return "pass." + name
 		}
 		return "tool." + name
 	}
 	return ""
 }
-
-// passes are the engine's own passes over the run (Go tools whose specs the lead or Go calls).
-var passes = []string{"sweep", "committee", "cover", "finish", "ledger"}
 
 // itemFiles are an item's files in files, sorted.
 func itemFiles(files map[string][]byte, id string) []string {

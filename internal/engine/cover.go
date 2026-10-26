@@ -348,11 +348,6 @@ func salientFinding(f Finding) bool {
 	return slices.ContainsFunc(f.Values, func(v analysis.Value) bool { return analysis.Salience(v) >= 55 })
 }
 
-// placeShare is the part of the coverage pass's USD its analyses leave for placing left-out evidence,
-// when there is some: bench5's analyses cost about $0.15 an issue and a placement redraft about $0.03–0.05,
-// with a worst case near $0.17 that must fit before it is sent.
-const placeShare = 0.4
-
 // maxPlaced bounds the left-out findings the pass places in one round and lists; one issue's
 // redraft takes at most maxPlacedPerIssue of them.
 // placeRounds is how many redrafts per issue the pass may spend placing (each round recomputes what

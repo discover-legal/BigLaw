@@ -61,8 +61,24 @@ func Allocate(calls int, usd float64) Allocation {
 	return a
 }
 
-// readUSDShare is the sweep reader's part of the task's USD (Allocate).
-const readUSDShare = 0.10
+// The budget's fractions beside Allocate's class shares (audit A5: one place for them). Others stay
+// inline beside their one use: a sweep visit's quarter of the sweep's USD (sweep.go), the coverage
+// pass's half of what is free beyond the committee cap (cover.go), the critics' 2/5, 2/5, 1/5 split
+// (Allocate), readerReserve's worst case (figures.go) and the Test call's 8 calls and $0.25 (custom.go).
+const (
+	// readUSDShare is the sweep reader's part of the task's USD (Allocate).
+	readUSDShare = 0.10
+	// judgeShare is the part of finish's grant, and of the coverage pass's share, its own join may spend
+	// on the figure judge, in calls and USD alike (lab-r4 r8 L3): what it leaves unjudged is disclosed.
+	judgeShare = 0.25
+	// judgeFloor is the calls finish's judge is given at least, when the root is below the drafting
+	// share's keep (judgeCalls of it: one call).
+	judgeFloor = 4
+	// placeShare is the part of the coverage pass's USD its analyses leave for placing left-out evidence,
+	// when there is some: bench5's analyses cost about $0.15 an issue and a placement redraft about
+	// $0.03–0.05, with a worst case near $0.17 that must fit before it is sent.
+	placeShare = 0.4
+)
 
 // usdShare is the USD of a class's share (share): its calls' fraction of the USD, but the sweep's own.
 func (a Allocation) usdShare(tool string, n int) float64 {

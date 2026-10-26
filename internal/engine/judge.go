@@ -6,10 +6,8 @@ package engine
 import (
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -230,12 +228,7 @@ func (e *Engine) judge(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 	if err = cmpErr(err, aerr, serr); err != nil {
 		return nil, err
 	}
-	model, models := "", []string(nil)
-	if rt != nil && rt.Chat != nil && rt.Reg != nil {
-		models = rt.Candidates(spec(ctx, "judge_figures").Role)
-		model = rt.Bandit.PickModel(ctx, "judge_figures", models)
-	}
-	models = append([]string{model}, slices.DeleteFunc(models, func(m string) bool { return m == model })...)
+	model, models := labelModels(ctx, rt, "judge_figures")
 	jh := specsOf(ctx).agentHash("judge_figures")
 	keep := func(x analysis.Candidate, v analysis.Verdict) error {
 		v.Pair = x.ID
@@ -243,24 +236,20 @@ func (e *Engine) judge(ctx context.Context, rt *agent.Runtime, c agent.Call, b *
 		return e.write(ctx, c.TaskID, kVerdict, ledgerKey(aliases, x), v, true)
 	}
 	var todo []analysis.Candidate
-next:
 	for _, x := range cands {
 		if _, ok := out[x.ID]; ok {
 			continue
 		}
-		for _, m := range models {
-			v, ok, err := e.cachedVerdict(ctx, judgeKey(jh, m, scope, c.DocumentIDs, aliases, x), m, scope != "")
-			if err != nil {
-				return nil, err
-			}
-			if ok {
-				if err := keep(x, v); err != nil {
-					return nil, err
-				}
-				continue next
-			}
+		key := func(m string) string { return judgeKey(jh, m, scope, c.DocumentIDs, aliases, x) }
+		v, ok, err := cachedAnswer(ctx, e, models, scope != "", key, func(v analysis.Verdict) bool { return v.SameQuantity == "yes" || v.SameQuantity == "no" })
+		if err != nil {
+			return nil, err
 		}
-		todo = append(todo, x)
+		if !ok {
+			todo = append(todo, x)
+		} else if err := keep(x, v); err != nil {
+			return nil, err
+		}
 	}
 	if model == "" {
 		return out, nil
@@ -287,8 +276,8 @@ next:
 			if err := keep(x, v); err != nil {
 				return nil, err
 			}
-			if v.SameQuantity != "unclear" && scope != "" {
-				if err := e.cacheVerdict(ctx, judgeKey(jh, model, scope, c.DocumentIDs, aliases, x), c.TaskID, scope, model, x, v); err != nil {
+			if v.Pair = ""; v.SameQuantity != "unclear" { // a yes or no, without the run's pair id
+				if err := e.storeRead(ctx, scope != "", judgeKey(jh, model, scope, c.DocumentIDs, aliases, x), v, model, c.TaskID, scope, []string{x.A.DocumentID, x.B.DocumentID}); err != nil {
 					return nil, err
 				}
 			}
@@ -308,15 +297,13 @@ func (e *Engine) judgeChunk(ctx context.Context, rt *agent.Runtime, c agent.Call
 		ps[i] = pairIn(x)
 	}
 	input, _ := json.Marshal(map[string]any{"pairs": ps, "aliases": pairAliases(aliases, chunk...)})
-	res, err := rt.Invoke(ctx, agent.Agent{Name: caller, Visible: []string{"judge_figures"}}, agent.Call{TaskID: c.TaskID, DocumentIDs: c.DocumentIDs, Model: model}, "judge_figures", input, b, false, 0)
-	switch {
-	case ctx.Err() != nil:
-		return nil, true, ctx.Err()
-	case errors.Is(err, agent.ErrJournal):
-		return nil, true, err
-	case errors.Is(err, agent.ErrBudget):
+	res, err := labelCall(ctx, rt, c, b, caller, "judge_figures", model, input)
+	switch why, fatal := labelFailed(ctx, err); {
+	case fatal != nil:
+		return nil, true, fatal
+	case why == whyUnfunded:
 		return nil, true, nil
-	case err != nil:
+	case why != "":
 		e.log.Warn("figure judge failed", "task", c.TaskID, "err", err)
 		return nil, false, nil
 	}
@@ -329,37 +316,6 @@ func (e *Engine) judgeChunk(ctx context.Context, rt *agent.Runtime, c agent.Call
 		e.log.Warn("figure judge", "task", c.TaskID, "note", n)
 	}
 	return vs, false, nil
-}
-
-// cachedVerdict is the judge's stored verdict for key (figure_reads), when caching is on.
-func (e *Engine) cachedVerdict(ctx context.Context, key, model string, on bool) (analysis.Verdict, bool, error) {
-	var v analysis.Verdict
-	if !on || model == "" {
-		return v, false, nil
-	}
-	var data []byte
-	err := e.db.QueryRowContext(ctx, `SELECT labels FROM figure_reads WHERE key = $1`, key).Scan(&data)
-	if errors.Is(err, sql.ErrNoRows) {
-		return v, false, nil
-	} else if err != nil {
-		return v, false, err
-	}
-	if json.Unmarshal(data, &v) != nil || v.SameQuantity != "yes" && v.SameQuantity != "no" {
-		return v, false, nil
-	}
-	return v, true, nil
-}
-
-// cacheVerdict stores a yes or no verdict (figure_reads, the reader's table: a verdict's row is keyed
-// "judge:…" and holds the verdict where a reading holds labels), under the task that asked and both
-// sides' documents.
-func (e *Engine) cacheVerdict(ctx context.Context, key, taskID, scope, model string, x analysis.Candidate, v analysis.Verdict) error {
-	v.Pair = ""
-	data, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-	return e.storeRead(ctx, key, data, model, taskID, scope, []string{x.A.DocumentID, x.B.DocumentID})
 }
 
 // joined is the cross-document join as the task's verdicts decide it: the conflicts ("yes"), the
@@ -382,10 +338,6 @@ func joinCands(use []Finding, limit int, judged func(analysis.Candidate) bool) (
 	}
 	return analysis.CandidatesCover(an, limit, judged)
 }
-
-// judgeShare is the part of finish's grant, and of the coverage pass's share, its own join may spend
-// on the figure judge, in calls and USD alike (lab-r4 r8 L3): what it leaves unjudged is disclosed.
-const judgeShare = 0.25
 
 // judgeCalls are the calls a grant of calls gives the figure judge (at least one when it has two).
 func judgeCalls(calls int) int { return min(max(calls-1, 0), max(1, int(judgeShare*float64(calls)))) }

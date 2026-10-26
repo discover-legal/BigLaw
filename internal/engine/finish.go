@@ -213,10 +213,6 @@ func judgeGrant(left agent.Grant, keep agent.Usage) agent.Grant {
 	return agent.Grant{Calls: judgeCalls(calls), USD: judgeShare * usd}
 }
 
-// judgeFloor is the calls finish's judge is given at least, when the root is below the drafting
-// share's keep (judgeCalls of it: one call).
-const judgeFloor = 4
-
 // claimsUnread are the usable findings never read whose claims state a number: the join reads their
 // claims' sums (claimSums), so finish reads them before it judges.
 func (e *Engine) claimsUnread(ctx context.Context, taskID string) ([]string, error) {

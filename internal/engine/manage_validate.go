@@ -54,7 +54,7 @@ func (e *Engine) validate(snap Snapshot, id string) error {
 		if need != nil && !slices.Equal(slices.Sorted(maps.Keys(files)), need) {
 			bad("", "a new %s is exactly these files: %s", kind, strings.Join(need, ", "))
 		}
-		if kind != "skill" && kind != "server" && !toolNameRe.MatchString(name) {
+		if kind != "skill" && kind != "server" && !agent.ToolNameRe.MatchString(name) {
 			bad("", "a name is 2–64 lower-case letters, digits and _, starting with a letter")
 		}
 		if slices.Contains(reservedNames, name) {
@@ -128,7 +128,7 @@ func (e *Engine) validate(snap Snapshot, id string) error {
 		if s := sp.specs[n]; s.Kind == "subagent" {
 			for _, a := range s.Allowed {
 				_, built := builtin[agentsDir+n+".json"]
-				if t := sp.specs[a]; t.Final || len(t.Solo) > 0 && (!built || !slices.Contains(subagentSafe, a)) {
+				if t := sp.specs[a]; t.Final || len(t.Solo) > 0 && (!built || !needs(a, subagentOK)) {
 					bad(agentsDir+n+".json", "allowed: %q is the lead's own (it ends the run, or has calls that must stand alone in a lead turn); a subagent cannot be given it", a)
 				}
 			}
@@ -295,15 +295,6 @@ func validateSkillFile(f, name, text string, bad func(string, string, ...any)) {
 	}
 }
 
-// goWritten are the tools whose input Go itself writes (rt.Invoke in engine code): a field added to
-// their input schema is one Go never sends, and every property of a strict schema is required.
-var goWritten = []string{"verify_quote", "read_figures", "judge_figures", "extract_facts", "analyze_issue", "draft_section", "prosecute", "reproduce", "audit_gaps",
-	"committee", "cover", "finish"}
-
-// goInputs are inputs Go sends as written in its code (run.go, finish.go, cover.go): each must still
-// validate against its tool's input schema.
-var goInputs = map[string][]string{"finish": {`{"op":"submit","limitations":null}`}, "committee": {`{}`}, "cover": {`{}`}}
-
 // compatSpec is why a saved spec's schemas break what Go reads or writes (README § Manage,
 // compatibility): every property the built-in schema has keeps its place and type (Go decodes or
 // writes it by that shape: removing, renaming or retyping it is refused, nested ones too); a schema
@@ -320,7 +311,7 @@ func compatSpec(old, cur []byte) []string {
 		n             string
 		a, b          json.RawMessage
 		goWrites, out bool
-	}{{"in", was.In, now.In, slices.Contains(goWritten, was.Name), false}, {"out", was.Out, now.Out, was.Kind != "subagent", true}} {
+	}{{"in", was.In, now.In, needs(was.Name, goWrites), false}, {"out", was.Out, now.Out, was.Kind != "subagent", true}} {
 		a, errA := agent.Compile(sc.a)
 		b, errB := agent.Compile(sc.b)
 		if errA != nil || errB != nil {
@@ -332,24 +323,19 @@ func compatSpec(old, cur []byte) []string {
 	if err != nil {
 		return out
 	}
-	for _, m := range exampleLine.FindAllStringSubmatch(was.Description, -1) {
+	for _, m := range agent.ExampleRe.FindAllStringSubmatch(was.Description, -1) {
 		if err := in.Validate(json.RawMessage(m[1])); err != nil {
 			out = append(out, fmt.Sprintf("in: the built-in example %s no longer validates (%v)", m[1], err))
 		}
 	}
-	for _, x := range goInputs[was.Name] {
+	if i := slices.IndexFunc(goContract, func(c goRow) bool { return c.name == was.Name && c.sent != "" }); i >= 0 {
+		x := goContract[i].sent
 		if err := in.Validate(json.RawMessage(x)); err != nil {
 			out = append(out, fmt.Sprintf("in: Go calls %s with %s, which no longer validates (%v)", was.Name, x, err))
 		}
 	}
 	return out
 }
-
-// subagentSafe are tools with lead-only ops that refuse those ops to a subagent in their own code
-// (ledger: plan and resolve at depth 1), so a subagent may be given them for their reads.
-var subagentSafe = []string{"ledger"}
-
-var exampleLine = regexp.MustCompile(`(?m)^Example: (\{.*\})\s*$`)
 
 func compatSchema(at string, a, b *agent.Schema, goWrites bool) []string {
 	var out []string

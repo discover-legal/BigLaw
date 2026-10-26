@@ -52,7 +52,7 @@ func absent(requirement, doc string) bool {
 	}
 	text, n := strings.ToLower(doc), 0
 	for w := range words {
-		n += btoi(strings.Contains(text, w))
+		n += agent.Btoi(strings.Contains(text, w))
 	}
 	return len(words) == 0 || float64(n) < 0.5*float64(len(words))
 }
@@ -321,7 +321,8 @@ const reviewedMax = 16_000
 // nearestMax bounds the passage a refusal quotes: enough to copy a clause, never a page.
 const nearestMax = 300
 
-var fenceText = strings.NewReplacer("<<<", "‹‹‹", ">>>", "›››")
+// fenceText and btoi are agent's helpers under the engine's names.
+var fenceText, btoi = agent.Fence, agent.Btoi
 
 // partJoin joins the verified parts of a multi-part requirement (an ellipsis, as a lawyer quotes).
 const partJoin = " … "
