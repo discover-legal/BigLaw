@@ -391,6 +391,21 @@ Some invariants are checked by reading the repository rather than running the co
 
 When a rule can be broken by adding a file or a call site, prefer one of these to a comment.
 
+### Fast tests under `-race`
+`make test` runs every package under the race detector at once (`-p 4`), so the suite is CPU-bound
+and a package's time is mostly its share of four cores. Measured on v2 (the fast-tests PR):
+- Cut work, not wall: running a CPU-heavy package's tests in parallel under `-race` took 2.4× the CPU
+  for 1.4× less wall (contention inside the race runtime), which the other packages then lose. Add
+  `t.Parallel()` to DB tests that mostly wait (CLAUDE.md asks for it), not to long pure computations.
+- Compute a shared input once: rank a ledger once and ask many limits of it (`coverFrom`), drive one
+  proof run per matter and script for every test that asserts on it (`driveShared`).
+- A race-built process sleeps a second as it exits (ThreadSanitizer's `atexit_sleep_ms`); a child
+  that is a copy of the test binary pays it per run unless it gets `GORACE=atexit_sleep_ms=0`.
+- A package-level knob a test shortens makes that test serial, and serial tests run before any
+  parallel one: prefer a per-instance field (`Service.searchTimeout`).
+- Wall-time bounds (`TestSectionTreeBounded`: 30 s per shape) need their test to run alone in its
+  package; under full-suite load they already come within a few seconds of the bound.
+
 ### Tests that can fail
 Each named test must be shown to fail against a deliberately broken version. PR 4b reports 65
 deliberate breaks, all caught. Real-model behaviour is scripted from logged bench behaviour

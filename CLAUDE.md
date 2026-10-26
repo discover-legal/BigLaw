@@ -199,6 +199,8 @@ not yet judged (self-test tape).
   with its parent and has a hard memory cap on Linux). `main` and the `TestMain` of every package
   whose tests ingest a PDF or `.docx` call `docs.MaybeRunChild()` first (forgetting it is an error,
   `errNoChild`). Tests that start a child must never leave one running (kill it in `t.Cleanup`).
+  The child has no environment, except that a race-detector test build passes `GORACE=atexit_sleep_ms=0`
+  (`child_race.go`: no one-second exit sleep per PDF/.docx read under `-race`).
   The child's output is a JSON header line plus raw text, read through `readChild`'s bounds; it is
   `/proc/self/exe` on Linux. A server stop cancels in-flight requests after `shutdownGrace`
   (`docs.ErrStopping`, 503).
