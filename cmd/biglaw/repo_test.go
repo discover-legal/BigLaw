@@ -359,3 +359,50 @@ func TestImageShipsLicenseAndNotice(t *testing.T) {
 		}
 	}
 }
+
+// TestSetupScriptMatchesRepo keeps setup.sh (README § Install) honest without
+// network or Docker: the files it downloads exist here, the .env lines it fills
+// are .env.example's empty ones that Compose reads, it waits on the port Compose
+// publishes, it pulls the image CI publishes and never builds, its model presets
+// pass Load, and the README's one-liner is the script's own.
+func TestSetupScriptMatchesRepo(t *testing.T) {
+	sh, compose, example := readRepo(t, "setup.sh"), readRepo(t, "docker-compose.yml"), readRepo(t, ".env.example")
+	files := regexp.MustCompile(`(?m)^for f in ([^;]+); do$`).FindStringSubmatch(sh)
+	if files == nil {
+		t.Fatal("setup.sh: no `for f in …; do` download loop")
+	}
+	for _, f := range strings.Fields(files[1]) {
+		readRepo(t, f)
+	}
+	for _, m := range regexp.MustCompile(`/\^([A-Z_]+)=\$/`).FindAllStringSubmatch(sh, -1) {
+		if !regexp.MustCompile(`(?m)^`+m[1]+`=$`).MatchString(example) || !strings.Contains(compose, "${"+m[1]) {
+			t.Errorf("setup.sh fills %s, which is not an empty line of .env.example that docker-compose.yml reads", m[1])
+		}
+	}
+	port := regexp.MustCompile(`(?m)^url="http://127\.0\.0\.1:(\d+)"`).FindStringSubmatch(sh)
+	if port == nil || !strings.Contains(compose, `"127.0.0.1:`+port[1]+`:3101"`) {
+		t.Errorf("setup.sh waits on %v; docker-compose.yml publishes biglaw elsewhere", port)
+	}
+	if !strings.Contains(compose, "image: ghcr.io/discover-legal/biglaw:latest") || !strings.Contains(readRepo(t, ".github/workflows/ci.yml"), "img=ghcr.io/discover-legal/biglaw; tag=latest") {
+		t.Error("docker-compose.yml's biglaw image must be the one CI publishes (ghcr.io/discover-legal/biglaw:latest)")
+	}
+	for _, want := range []string{"docker compose pull\n", "docker compose up -d --no-build\n", "umask 077", "chmod 600 .env\n", "read -rs key </dev/tty"} {
+		if !strings.Contains(sh, want) {
+			t.Errorf("setup.sh lacks %q", want)
+		}
+	}
+	presets := regexp.MustCompile(`murl=(\S+)\n\s*models=(\S+)`).FindAllStringSubmatch(sh, -1)
+	if len(presets) != 2 {
+		t.Fatalf("setup.sh: want 2 model presets (OpenRouter, Ollama), found %d", len(presets))
+	}
+	for _, p := range presets {
+		env := map[string]string{"BIGLAW_DATABASE_URL": "postgres://biglaw@postgres:5432/biglaw?sslmode=disable", "BIGLAW_MODEL_URL": p[1], "BIGLAW_MODELS": p[2], "BIGLAW_MODEL_KEY": "sk-or-v1-0123"}
+		if _, err := Load(func(k string) string { return env[k] }); err != nil {
+			t.Errorf("setup.sh preset %s: %v", p[1], err)
+		}
+	}
+	oneLiner := regexp.MustCompile(`curl -fsSL \S+/setup\.sh \| bash`).FindString(sh)
+	if oneLiner == "" || !strings.Contains(readRepo(t, "README.md"), oneLiner) {
+		t.Errorf("README.md lacks setup.sh's one-liner %q", oneLiner)
+	}
+}
