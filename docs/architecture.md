@@ -344,7 +344,7 @@ flowchart LR
 - **Journal** ([`steps.go`](../internal/engine/steps.go) `run.Record`). Every lead turn and lead
   tool call is a step. It is inserted `started` with its grant, then committed, refused or failed
   in one transaction with the ledger rows and bandit statistics the step buffered (`e.write`
-  appends to `run.buf`; `e.rows` reads the buffer too). Every write checks the lease. Recording a step past
+  appends to `run.buf`; `e.rows` reads the buffer too; `load` decodes a row again only when its bytes changed, `rowCache`). Every write checks the lease. Recording a step past
   `maxSteps` returns `errMaxSteps`, which ends the lead's run and forces the finish; recording the
   next step after a hook gate opened returns `errHeld`, which pauses the run.
 - **Meter**. A journaled tool step carries a `meter` on its context. Every model call inside it

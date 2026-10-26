@@ -399,6 +399,10 @@ and a package's time is mostly its share of four cores. Measured on v2 (the fast
   `t.Parallel()` to DB tests that mostly wait (CLAUDE.md asks for it), not to long pure computations.
 - Compute a shared input once: rank a ledger once and ask many limits of it (`coverFrom`), drive one
   proof run per matter and script for every test that asserts on it (`driveShared`).
+- Decode a ledger row once per run: `load` reuses a row's decoded value while its bytes are unchanged
+  (`rowCache` on the run, [`ledgercache.go`](../internal/engine/ledgercache.go)). It still reads every
+  row, so no write path needs to invalidate it, and returns deep copies, so callers may change rows.
+  The SEC-shaped proof run fell from 123 s to 81 s alone.
 - A race-built process sleeps a second as it exits (ThreadSanitizer's `atexit_sleep_ms`); a child
   that is a copy of the test binary pays it per run unless it gets `GORACE=atexit_sleep_ms=0`.
 - A package-level knob a test shortens makes that test serial, and serial tests run before any
