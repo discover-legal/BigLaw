@@ -4,6 +4,7 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -63,7 +64,7 @@ func (e *Engine) touched(ctx context.Context, taskID string) ([]Issue, error) {
 	secs, serr := load[Section](ctx, e, taskID, kSection)
 	use, uerr := e.usable(ctx, taskID)
 	as, aerr := e.analyses(ctx, taskID)
-	if err = cmpErr(err, serr, uerr, aerr); err != nil {
+	if err = cmp.Or(err, serr, uerr, aerr); err != nil {
 		return nil, err
 	}
 	usable := map[string]bool{}
@@ -88,7 +89,7 @@ func (e *Engine) touched(ctx context.Context, taskID string) ([]Issue, error) {
 func (e *Engine) coverFIDs(ctx context.Context, taskID, issueID string) ([]string, error) {
 	secs, err := load[Section](ctx, e, taskID, kSection)
 	use, uerr := e.usable(ctx, taskID)
-	if err = cmpErr(err, uerr); err != nil {
+	if err = cmp.Or(err, uerr); err != nil {
 		return nil, err
 	}
 	var out []string
@@ -172,7 +173,7 @@ func (e *Engine) coverTool(rt *agent.Runtime, r *run) agent.Tool {
 			}
 			in, _ := json.Marshal(map[string]any{"issueId": is.ID, "question": is.Question, "jurisdiction": r.t.Jurisdiction, "packs": nil})
 			_, err := rt.Invoke(ctx, me, call, "analyze_issue", in, b, false, 0)
-			if modelOrJournal(err) {
+			if agent.EndsRun(err) {
 				failed = err
 				break
 			} else if errors.Is(err, agent.ErrBudget) {
@@ -188,7 +189,7 @@ func (e *Engine) coverTool(rt *agent.Runtime, r *run) agent.Tool {
 				continue
 			}
 			in, _ = json.Marshal(map[string]any{"issueId": is.ID, "fids": fids, "revise": coverRevise})
-			if _, err := rt.Invoke(context.WithValue(ctx, coverDraft{}, true), me, call, "draft_section", in, b, false, 0); modelOrJournal(err) {
+			if _, err := rt.Invoke(context.WithValue(ctx, coverDraft{}, true), me, call, "draft_section", in, b, false, 0); agent.EndsRun(err) {
 				failed = err
 				break
 			}
@@ -223,7 +224,7 @@ func (e *Engine) coverTool(rt *agent.Runtime, r *run) agent.Tool {
 					continue
 				}
 				in, _ := json.Marshal(map[string]any{"issueId": id, "fids": fids, "revise": placeRevise(place[id])})
-				if _, err := rt.Invoke(context.WithValue(ctx, coverDraft{}, true), me, call, "draft_section", in, b, false, 0); modelOrJournal(err) {
+				if _, err := rt.Invoke(context.WithValue(ctx, coverDraft{}, true), me, call, "draft_section", in, b, false, 0); agent.EndsRun(err) {
 					failed = err
 					break
 				} else if errors.Is(err, agent.ErrBudget) {
@@ -274,7 +275,7 @@ func (e *Engine) coverTool(rt *agent.Runtime, r *run) agent.Tool {
 			}
 		}
 		if err := e.write(ctx, c.TaskID, kCover, "pass", res, false); err != nil || failed != nil {
-			return nil, b.Spent(), cmpErr(failed, err)
+			return nil, b.Spent(), cmp.Or(failed, err)
 		}
 		return map[string]any{"analysed": res.Analysed, "missing": res.Missing}, b.Spent(), nil
 	}}
@@ -290,7 +291,7 @@ type coverDraft struct{}
 func (e *Engine) coverPass(ctx context.Context, rt *agent.Runtime, call agent.Call, r *run, last int) (int, error) {
 	done, err := e.covered(ctx, r.t.ID)
 	due, derr := e.coverDue(ctx, r.t.ID)
-	if err = cmpErr(err, derr); err != nil || done || !due {
+	if err = cmp.Or(err, derr); err != nil || done || !due {
 		return last, err
 	}
 	b, a := r.b, Allocate(e.cfg.BudgetCalls, e.cfg.BudgetUSD) // its grant is its share, not all the review level's free budget
@@ -301,8 +302,8 @@ func (e *Engine) coverPass(ctx context.Context, rt *agent.Runtime, call agent.Ca
 		}
 	}
 	_, err = rt.Invoke(ctx, agent.Agent{Name: "cover", Visible: []string{"cover"}}, call, "cover", json.RawMessage(`{}`), b, false, last+1)
-	if ctx.Err() != nil || errors.Is(err, errLease) || modelOrJournal(err) {
-		return last, cmpErr(ctx.Err(), err)
+	if ctx.Err() != nil || errors.Is(err, errLease) || agent.EndsRun(err) {
+		return last, cmp.Or(ctx.Err(), err)
 	}
 	return last + 1, nil
 }
@@ -320,7 +321,7 @@ func (e *Engine) coverPass(ctx context.Context, rt *agent.Runtime, call agent.Ca
 func (e *Engine) coverDue(ctx context.Context, taskID string) (bool, error) {
 	todo, err := e.touched(ctx, taskID)
 	ids, _, perr := e.placements(ctx, taskID)
-	return len(todo) > 0 || len(ids) > 0, cmpErr(err, perr)
+	return len(todo) > 0 || len(ids) > 0, cmp.Or(err, perr)
 }
 
 // placement is the evidence one issue's redraft must carry.
@@ -457,7 +458,7 @@ func (e *Engine) discrepancies(ctx context.Context, taskID string) (all, open []
 func (e *Engine) joined(ctx context.Context, taskID string) (joined, error) {
 	use, err := e.usable(ctx, taskID)
 	secs, serr := load[Section](ctx, e, taskID, kSection)
-	if err = cmpErr(err, serr); err != nil {
+	if err = cmp.Or(err, serr); err != nil {
 		return joined{}, err
 	}
 	judged, err := e.judgedSet(ctx, taskID)
@@ -492,7 +493,7 @@ func (e *Engine) joined(ctx context.Context, taskID string) (joined, error) {
 func (e *Engine) leftOut(ctx context.Context, taskID string) ([]Finding, error) {
 	use, err := e.usable(ctx, taskID)
 	secs, serr := load[Section](ctx, e, taskID, kSection)
-	if err = cmpErr(err, serr); err != nil {
+	if err = cmp.Or(err, serr); err != nil {
 		return nil, err
 	}
 	cited := map[string]bool{}
@@ -523,7 +524,7 @@ func (e *Engine) placements(ctx context.Context, taskID string) ([]string, map[s
 	left, lerr := e.leftOut(ctx, taskID)
 	_, open, oerr := e.discrepancies(ctx, taskID)
 	use, uerr := e.usable(ctx, taskID)
-	if err = cmpErr(err, serr, lerr, oerr, uerr); err != nil || len(issues) == 0 {
+	if err = cmp.Or(err, serr, lerr, oerr, uerr); err != nil || len(issues) == 0 {
 		return nil, nil, err
 	}
 	qs := make([][]string, len(issues))

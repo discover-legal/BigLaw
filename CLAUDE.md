@@ -9,7 +9,7 @@ budgets in `docs/history.md`. v2 is `main`; v1 (Go under `biglaw-go/`, DyTopo) i
 
 ## Built so far
 - `cmd/biglaw` — `serve [--allow-no-auth] [--admin-without-auth]`, `version [--config]`; `config.go` holds the complete
-  env-var table (19 vars, each tagged with the PR that first reads it; sign-in's are `BIGLAW_OIDC_ISSUER`,
+  env-var table (18 vars, each declared in the PR that first reads it; sign-in's are `BIGLAW_OIDC_ISSUER`,
   `_CLIENT_ID`, `_CLIENT_SECRET`, `BIGLAW_PUBLIC_URL` and `BIGLAW_ADMINS` (PR 8), validated together by `signIn`; `BIGLAW_MODELS` is the role
   map `role=id,…`, ids refused if they hold `://`, `user:pw@`, white space, control or invisible
   characters or `? = &`, are over 200 bytes or look like a key)
@@ -57,7 +57,7 @@ budgets in `docs/history.md`. v2 is `main`; v1 (Go under `biglaw-go/`, DyTopo) i
 - `internal/store/storetest` — `storetest.DSN(t)` gives a test its own schema, creates the
   `vector` extension once per database and puts its schema on the test's `search_path`; at most
   `storetest.Slots` tests across all test processes hold one at once (a flock per slot). Test stores
-  open with `store.OpenPool(ctx, dsn, log, storetest.Pool)`; only a test of the production pool's
+  open with `storetest.Open(t, store.OpenPool)` (the test pool, `storetest.Pool`, closed with the test); only a test of the production pool's
   bounds uses `store.Open`/`store.MaxOpenConns`.
 - `internal/engine/figtest` — test support: `figtest.Reader`, the figure reader's stand-in (a
   `model.Fake` `Respond` hook labelling plain fixture texts), `figtest.With` for a test's right labels;
@@ -77,7 +77,7 @@ budgets in `docs/history.md`. v2 is `main`; v1 (Go under `biglaw-go/`, DyTopo) i
   (one loop, lead depth 0 / `Subagent` depth 1) and `Runtime.Invoke` (the single dispatch path:
   offered → no nesting → alone → input schema → `Policy` → grant), `Budget` (holds and charges; a
   model call holds its worst-case cost, also a Go tool's through `Runtime.ChatWithin`; the root's floor only for `Final` tools), `Bandit` (hint line +
-  subagent model pick; never refuses), `Journal`/`Step`, `LoadSubagents` (JSON spec + `.md` prompt).
+  subagent model pick; never refuses), `Journal`/`Step`, `LoadSubagent` (JSON spec + `.md` prompt).
   `internal/analysis` (PR 4a) — pure functions over `Finding`s: `Calc`, `Handles`/`Substitute`
   (`{Codename}`), `KeyFigures`, `Join`, `CheckCoverage`, normalisers, BELO-lite (`belo.json`), and the
   `numbers`/`join_discrepancies` tools over a `Source`. `docs.Service.Tools(rt)` — `retrieve` and
@@ -207,8 +207,8 @@ not yet judged (self-test tape).
   `/proc/self/exe` on Linux. A server stop cancels in-flight requests after `shutdownGrace`
   (`docs.ErrStopping`, 503).
 - Every `docs` read takes the caller's scope; never read `documents`/`chunks`/`files` around it.
-- New env var = add it to `envVars` in `cmd/biglaw/config.go` (with its PR), README's table and
-  docker-compose; `TestEnvVarTablesAgree` fails otherwise. Validate a variable in the PR that
+- New env var = add it to `envVars` in `cmd/biglaw/config.go`, README's table and
+  docker-compose; `TestEnvVarTablesAgree` fails otherwise. Declare a variable in the PR that
   first reads it, not before. Read env only through that table (literal names; `scripts/loc.py`
   rejects dynamic `os.Getenv`).
 - Migrations: a new `internal/store/migrations/NNNN_name.sql` (next number, lowercase name).
@@ -238,7 +238,8 @@ not yet judged (self-test tape).
   (`TestToolSchemasContainNoMatterData`), including description examples.
 - No source file over 2,000 lines (`scripts/loc.py`). Every `.go`/`.py` file starts with the
   SPDX header.
-- Every package has a `_test.go`; DB tests use `storetest.DSN(t)` and `t.Parallel()`.
+- Every package has a `_test.go`; DB tests use `storetest.DSN(t)` (or `storetest.Open`) and `t.Parallel()`. Tests are filed by
+  subject (the code they pin), never in a file named after a review round; the round goes in the comment.
 - Images and scans go only to the `vision` role (`docs.UseVision`); never wire another role's
   model there (`TestTextModelNeverSentImages`, `TestServeNeverSendsImagesToTheLead`). Text a model
   transcribed is evidence of a lower class: keep its provenance and the `@transcript` cap.
@@ -280,5 +281,5 @@ make demo-bundle # ui/dist-recorded for discover.legal/demo/biglaw/; make demo-r
 make e4-record EMBED_MODEL=…   # owner-run: record the E4 tape at the model's own length (make e4-live: no tape)
 ```
 Budgets: Go prod LOC reported with no limit (owner decision 17: the total ceiling is dropped; `python3 scripts/loc.py` prints today's figure, never write it here; each PR reports its lines vs its DESIGN budget; test-support packages such as `storetest` count), internal
-packages ≤ 12 (9 used; test-support packages do not count), direct deps ≤ 3, env vars ≤ 20 (19 used), UI runtime
+packages ≤ 12 (9 used; test-support packages do not count), direct deps ≤ 3, env vars ≤ 20 (18 used), UI runtime
 deps ≤ 2 (2 used), UI source lines (`ui/src`) ≤ 3,200 (raised from 2,400 for Manage), untested packages 0, longest source file ≤ 2,000 lines.

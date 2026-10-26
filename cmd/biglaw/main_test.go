@@ -123,11 +123,7 @@ func loopPDF() []byte {
 // cancels it after the grace period: serve returns nil, the client gets 503 "stopping" (not an
 // empty reply), and the stored upload is removed, not left for the orphan sweep.
 func TestServeStopCancelsIngest(t *testing.T) {
-	st, err := store.OpenPool(t.Context(), storetest.DSN(t), nil, storetest.Pool)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
+	st := storetest.Open(t, store.OpenPool)
 	old := shutdownGrace
 	shutdownGrace = 2 * time.Second // the cancelled handler's cleanup (kill the child, delete the file, answer) must fit in it on a loaded machine (r1 reproducer L1)
 	t.Cleanup(func() { shutdownGrace = old })
@@ -180,11 +176,7 @@ func TestServeStopCancelsIngest(t *testing.T) {
 }
 
 func TestServeEndToEnd(t *testing.T) {
-	st, err := store.OpenPool(t.Context(), storetest.DSN(t), nil, storetest.Pool)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
+	st := storetest.Open(t, store.OpenPool)
 	orphan, err := st.PutFile(t.Context(), "crashed.pdf", "application/pdf", strings.NewReader("%PDF-")) // an ingest a crash interrupted
 	if err != nil {
 		t.Fatal(err)
@@ -226,11 +218,7 @@ func TestServeEndToEnd(t *testing.T) {
 // calls, says "hybrid" on /health, and stops cleanly with its backfill.
 func TestServeHybridEndToEnd(t *testing.T) {
 	dsn := storetest.DSN(t)
-	st, err := store.OpenPool(t.Context(), dsn, nil, storetest.Pool)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
+	st := storetest.Open(t, store.OpenPool, dsn)
 	old, err := docs.New(st).IngestText(t.Context(), "old.txt", "Clause 1. The Supplier shall deliver.")
 	if err != nil {
 		t.Fatal(err)
@@ -496,11 +484,7 @@ func TestServeNeverSendsImagesToTheLead(t *testing.T) {
 		t.Fatalf("an image was sent to the model endpoint with no vision role: %v", models)
 	}
 	mu.Unlock()
-	st, err := store.OpenPool(t.Context(), dsn, nil, storetest.Pool)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
+	st := storetest.Open(t, store.OpenPool, dsn)
 	var status, text string
 	log := serveWith("lead=text-model,vision=qwen2.5vl:7b", func(string) {
 		for i := 0; i < 100 && status != "ready"; i++ {

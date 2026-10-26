@@ -22,7 +22,6 @@ import (
 	"regexp"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -267,7 +266,6 @@ type rTimeEntry struct {
 type rSetting struct {
 	Name    string `json:"name"`
 	Default string `json:"default"`
-	PR      int    `json:"pr"`
 	Secret  bool   `json:"secret,omitempty"`
 }
 
@@ -346,7 +344,7 @@ func transcriptPages(tr *docs.Transcript) []docs.PageRead {
 	return tr.Pages
 }
 
-var configRow = regexp.MustCompile(`\{name: "([A-Z_]+)"(?:, (secret): true)?(?:, def: "([^"]*)")?[^}]*?pr: (\d+)\}`)
+var configRow = regexp.MustCompile(`\{name: "([A-Z_]+)"(?:, (secret): true)?(?:, def: "([^"]*)")?[^}]*\}`)
 
 // configDefaults is this build's configuration table (cmd/biglaw/config.go envVars), read from its
 // source when the recording is made, for the read-only Settings screen.
@@ -358,8 +356,7 @@ func configDefaults(t *testing.T) []rSetting {
 	}
 	out := []rSetting{}
 	for _, m := range configRow.FindAllStringSubmatch(string(src), -1) {
-		pr, _ := strconv.Atoi(m[4])
-		out = append(out, rSetting{Name: m[1], Default: m[3], PR: pr, Secret: m[2] != ""})
+		out = append(out, rSetting{Name: m[1], Default: m[3], Secret: m[2] != ""})
 	}
 	if len(out) < 18 {
 		t.Fatalf("read %d config rows from cmd/biglaw/config.go; its table format changed", len(out))
@@ -409,11 +406,7 @@ var fidRe = regexp.MustCompile(`\[(F\d+)\]`)
 
 func TestDemoRecording(t *testing.T) {
 	t.Parallel()
-	st, err := store.OpenPool(t.Context(), storetest.DSN(t), nil, storetest.Pool)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
+	st := storetest.Open(t, store.OpenPool)
 	svc := docs.New(st)
 	// The scan's reader is scripted: both readings are the text the image was drawn from (make_scan.py).
 	text, err := os.ReadFile(scanText)

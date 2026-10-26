@@ -148,8 +148,8 @@ func TestJoinNeverProposes(t *testing.T) {
 			fh("45 days", "Annual holdings reports were due within 45 days of the fiscal year end.", "referral", "access persons", "holdings report deadline")},
 		"money and a share count": {fh("$9,000,000", "The stake is worth $9,000,000.", "a", "Fund", "stake"),
 			{FID: "Fs", Verified: true, Quotes: []Quote{{DocumentID: "b", Quote: "The stake is 9,000,000 shares."}}, Values: []Value{{Entity: "Fund", Metric: "stake", Value: "9,100,000", Unit: "shares"}}}},
-		"a figure whose scale nothing states": {r2vF("F3", "table", "Purchase price\t92", Value{Entity: "Buyer", Metric: "purchase price", Value: "92", Class: "Money"}),
-			r2vF("F4", "board", "The Board approved a Purchase Price of $95 million payable by Buyer.", Value{Entity: "Buyer", Metric: "purchase price", Value: "$95 million", Class: "Money"})},
+		"a figure whose scale nothing states": {fnd("F3", "table", "Purchase price\t92", nil, Value{Entity: "Buyer", Metric: "purchase price", Value: "92", Class: "Money"}),
+			fnd("F4", "board", "The Board approved a Purchase Price of $95 million payable by Buyer.", nil, Value{Entity: "Buyer", Metric: "purchase price", Value: "$95 million", Class: "Money"})},
 		"one document": {fh("$50,000", "A deposit of $50,000; a second deposit of $60,000.", "spa", "Buyer", "deposit"), fh("$60,000", "A deposit of $50,000; a second deposit of $60,000.", "spa", "Buyer", "deposit")},
 	} {
 		if cands, _ := Candidates(read(fs), testLimit, nil); len(cands) > 0 {

@@ -291,7 +291,7 @@ For scale: Go production code is 25,536 lines (`scripts/loc.py` at 29def72), of 
 
 ### B8. One date finder
 - **Unify.** There are two date grammars:
-  - `analysis.DatesIn`/`ParseDate` (`normalize.go`: quarters, months, full dates, bare years,
+  - `analysis.ParseDate` (`normalize.go`: one date string; full dates, months, bare years,
     hedges, e-mail headers);
   - `analysis.dateSpans`/`Literal` (`figures.go`: G8's dates, with continental `d.m.y`).
 

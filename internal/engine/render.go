@@ -4,6 +4,7 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -36,7 +37,7 @@ func (e *Engine) draftRequest(ctx context.Context, taskID string, scope []string
 	issues, err := load[Issue](ctx, e, taskID, kIssue)
 	secs, serr := load[Section](ctx, e, taskID, kSection)
 	use, uerr := e.usable(ctx, taskID)
-	if err = cmpErr(err, serr, uerr); err != nil {
+	if err = cmp.Or(err, serr, uerr); err != nil {
 		return draftReq{}, err
 	}
 	i := slices.IndexFunc(issues, func(is Issue) bool { return is.ID == issueID })
@@ -260,7 +261,7 @@ func (e *Engine) render(ctx context.Context, t Task, limits []string, computed c
 	secs, serr := load[Section](ctx, e, t.ID, kSection)
 	all, ferr := load[Finding](ctx, e, t.ID, kFinding)
 	use, uerr := e.usable(ctx, t.ID)
-	if err = cmpErr(err, serr, ferr, uerr); err != nil {
+	if err = cmp.Or(err, serr, ferr, uerr); err != nil {
 		return deliverable{}, err
 	}
 	var b strings.Builder
@@ -420,6 +421,11 @@ func mdSafe(s string, inline bool) string {
 
 // plural is one when n is 1, else many.
 func plural(n int, one, many string) string { return cmpStr(n == 1, one, many) }
+
+// firstN joins the first n of xs by sep, then says how many more there are.
+func firstN(xs []string, n int, sep string) string {
+	return strings.Join(xs[:min(n, len(xs))], sep) + cmpStr(len(xs) > n, fmt.Sprintf(" and %d more", len(xs)-n), "")
+}
 
 func allCitations(f Finding, ok func(Citation) bool) bool {
 	return len(f.Citations) > 0 && !slices.ContainsFunc(f.Citations, func(c Citation) bool { return !ok(c) })
