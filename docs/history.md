@@ -7,7 +7,7 @@ today's figures); they are kept as the record of what each PR cost against its p
 
 ## What was built, by PR
 
-PR 1: skeleton, config, store, CI; PR 2: model client; PR 3a: documents; PR 3b: model roles, embeddings, hybrid search; PR 3c: vision transcription; PR 11, pulled forward by owner decision 13: the UI and its recorded engine; PR 4a: the agent runtime and the deterministic memo tools; PR 4b: the memo workflow, durable runs and the REST API; Manage and skills; PR 8: sign-in.
+PR 1: skeleton, config, store, CI; PR 2: model client; PR 3a: documents; PR 3b: model roles, embeddings, hybrid search; PR 3c: vision transcription; PR 11, pulled forward by owner decision 13: the UI and its recorded engine; PR 4a: the agent runtime and the deterministic memo tools; PR 4b: the memo workflow, durable runs and the REST API; Manage and skills; PR 8: sign-in; PR 3d: Word track changes (the `.docx` writer, change sets, the `change_set_rendered` hook event).
 
 ## Named tests
 
@@ -162,7 +162,32 @@ improvements (after the real Haiku LAB rerun; scripted the same way): `TestSweep
 `TestFigureLintSkipsLocatorLists`, `TestCoveragePassFromTheReserve`, `TestCoveragePassOnSubmit`,
 `TestFakeRouteAnswersByContent`.
 
+Named tests (PR 3d, track changes): the writer `TestRoundTripPreservesPartsAndOrder`,
+`TestWalkVisitsEveryRunInOrder`, `TestWriterTextEqualsReaderText`, `TestReplaceInsideRunKeepsProps`,
+`TestReplaceAcrossRunsAttachesInsertToLast`, `TestNoNestedRevisions`, `TestRevisionIDsAboveExisting`,
+`TestInsertParagraphCopiesPPr`, `TestDeleteParagraphMarksParagraphMark`, `TestCommentCreatesThreeParts`,
+`TestRevisionsParseInsDelAndParagraphMarks`, `TestAcceptRejectEquivalence`, `TestFieldsAndSdtSkipped`,
+`TestEscapesAndPreservesSpace`, `TestRenderDeterministic`, `TestTrackRevisionsSetOnRender`,
+`TestWalkRefusals`, `TestLibreOfficeOriginRoundTrip`, `TestRenderedFilesOpenInLibreOffice` (where
+soffice is installed; `make validate-docx`); the service `TestLocateExactTolerantContextAmbiguous`,
+`TestCompareWordLevelRoundTrip`, `TestApplyEditsOutcomes`, `TestTextDriftRefused`,
+`TestDocxChildContract`, `TestDocxChildBoundsItself`, and against Postgres `TestChangeSetRows`,
+`TestChangeSetsPage`; the API `TestChangeSetRoutes`, `TestCompareRoute` (and the new routes in
+`TestEveryRouteNeedsASession`); the engine `TestChangeSetRenderedEventFiresWebhook`.
+
 ## Line budgets
+
+From README § Track changes (PR 3d):
+
+  - **Line budget:** PR 3d adds about 2,800 production lines (27,298 → 30,098 as `scripts/loc.py`
+    reports: `ooxml` scan, write, revisions and comments; `docs` changes, locate and childdocx; the
+    API's changes.go; the engine's event), against no DESIGN line budget (owner decision 17: the
+    total ceiling is dropped). No package, dependency or environment variable was added
+    (packages 9 of 12). AC-19, `BenchmarkApply150Edits` (not gated): 150 edits over a 200,000-paragraph
+    `word/document.xml` of about 31 MB render in-process in 3.4 s with 2.2 GB allocated in all
+    (the scan's tokens and the one output copy; the splices are applied in one builder pass, never a
+    copy per edit) on a desktop core, under the child's 2-minute deadline and 1 GiB cap.
+
 
 From README § Agent runtime (PR 4a):
 

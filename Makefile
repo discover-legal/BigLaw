@@ -103,6 +103,11 @@ demo-bundle:
 demo-record:
 	BIGLAW_REQUIRE_DB=1 DEMO_RECORD=1 $(GO) test -count=1 -run '^(TestDemoRecording|TestManageRecording)$$' ./eval/demo
 
+# Every rendered track-changes fixture must convert with LibreOffice headless (README § Track
+# changes); needs soffice on PATH (the CI docx job installs it).
+validate-docx:
+	BIGLAW_REQUIRE_SOFFICE=1 $(GO) test -count=1 -run '^TestRenderedFilesOpenInLibreOffice$$' ./internal/docs/ooxml
+
 loc:
 	python3 scripts/loc.py
 	python3 -m unittest discover -s scripts -p 'test_*.py'

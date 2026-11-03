@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Discover Legal
 
-// Package ooxml reads the subset of ECMA-376 WordprocessingML that BigLaw needs: a .docx is a ZIP
-// whose word/document.xml holds the text, with footnotes and endnotes beside it. (Ported from v1
-// internal/ooxml; the writer, the XML escapers and the byte-for-byte re-zip land with their
-// vectors in PR 3d.)
+// Package ooxml reads and writes the subset of ECMA-376 WordprocessingML that BigLaw needs: a
+// .docx is a ZIP whose word/document.xml holds the text, with footnotes and endnotes beside it.
+// Open and Text are the reader (ingest); OpenAll, Walk, Revisions, Decide and Bytes are the
+// track-changes writer (write.go, scan.go, revisions.go, comments.go; ported from v1
+// internal/ooxml and reshaped around a per-run visitor, PR 3d).
 package ooxml
 
 import (
@@ -27,8 +28,14 @@ var maxDecompressed int64 = 128 << 20
 // textParts are the parts Text reads; Open decompresses nothing else.
 var textParts = map[string]string{"word/document.xml": "", "word/footnotes.xml": "Footnotes", "word/endnotes.xml": "Endnotes"}
 
-// Document is an opened .docx: the XML of its text parts, by part name.
-type Document struct{ parts map[string]string }
+// Document is an opened .docx: the XML of its text parts, by part name; from OpenAll also every
+// part as read (raw, for Bytes), the parts the writer changed and the ones it added.
+type Document struct {
+	parts   map[string]string
+	raw     []part
+	changed map[string]string
+	added   []string
+}
 
 // ErrNotDocx means the bytes are not a ZIP with a word/document.xml part.
 var ErrNotDocx = errors.New("ooxml: not a .docx (a ZIP archive with word/document.xml)")

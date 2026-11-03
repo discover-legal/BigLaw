@@ -3,8 +3,9 @@ name: CI
 # Adapted from v1's .github/workflows/ci.yml (fix/ci-and-citation-parse):
 # the Go module is now the repo root, Postgres (with pgvector) runs as a service
 # container, and BIGLAW_REQUIRE_DB=1 turns any skipped database test into a failure.
-# Four jobs run in parallel: go (make ci), lint (staticcheck + govulncheck),
-# docker (image build + Compose smoke test) and ui (npm ci, build, test).
+# Five jobs run in parallel: go (make ci), lint (staticcheck + govulncheck),
+# docker (image build + Compose smoke test), docx (rendered .docx fixtures open in LibreOffice)
+# and ui (npm ci, build, test).
 on:
   pull_request:
   push:
@@ -79,6 +80,21 @@ jobs:
         run: make lint
       - name: govulncheck
         run: make vuln
+
+  docx:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.10"
+          cache-dependency-path: go.sum
+      - name: install LibreOffice Writer
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libreoffice-writer
+      # every rendered track-changes fixture opens in LibreOffice (README § Track changes)
+      - name: make validate-docx
+        run: make validate-docx
 
   ui:
     runs-on: ubuntu-latest

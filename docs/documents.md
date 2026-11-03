@@ -42,6 +42,51 @@ footnotes and endnotes appended after the body as `[id] text` under a `Footnotes
 line (`TestTextFidelity`). Entities are never expanded. Text hidden only by formatting (white on
 white, a 1-point font) is read like any other text.
 
+## Track changes
+
+The writer (README § Track changes) runs in the same child under a second private argument
+(`__biglaw-docx`): the server sends one JSON line (`docxRequest`: the verb, the author and date,
+the document's stored text, the edits or the revision ids) and then the file; the child answers
+one JSON line (`docxOutput`: an outcome per edit, or the file's revisions, or a refusal, and the
+length of what follows) and then the output `.docx`, which the server reads through hard bounds
+(a header of at most 16 MiB, exactly the stated length up to the 64 MiB file cap, nothing after:
+`readDocxChild`, `TestDocxChildContract`). The verbs are `edits` and `compare` (the same: apply the
+edits), `accept`, `reject` and `revisions`. The child opens every part (`ooxml.OpenAll`, the
+reader's 128 MiB decompression cap over the whole archive), checks that the file's text still equals
+the stored text (otherwise every edit fails `text_drift` and nothing renders), locates every edit
+again in that text (the POST's offsets are advisory), plans them over the runs (`applyEdits`: an
+edit over several runs is a deletion in each with the insertion and the comment on the last; an
+insertion point lands in the run holding it, after the run when it ends there; a paragraph edit
+anchors on any run of its line; a run the writer cannot edit fails the edit with the reason), walks
+the document once and re-zips.
+
+The scan (`ooxml/scan.go`) is one pass of the XML decoder over `word/document.xml`, the reader's
+rules deciding what is text, with the byte span of every `<w:r>`, every `<w:p>` (its properties, its
+mark's `w:ins`/`w:del`), and every `<w:ins>`/`<w:del>` a run sits in; `w:fldChar` begin to end,
+`w:fldSimple`, `w:sdt`, `w:moveFrom`/`w:moveTo`, `w:vanish` and children the writer cannot
+reproduce (drawings, pictures, symbols, references, instruction text, alternate content) mark the
+run skipped with the reason. Ops are collected per run and applied **last run first**, each as one
+splice of the part (two that overlap refuse the walk; nothing is written then), with a second pass
+for paragraph marks (a join takes the next paragraph's properties). A run inside another author's
+`w:ins` or `w:del` has BigLaw's `w:del`/`w:ins` written outside it (the element closed before and
+reopened after, an empty reopening dropped), so no revision nests in another and the other
+author's stay byte-for-byte. New revision ids start above the highest `w:id` in the document (any
+element: bookmarks and comment ranges too); a comment's id comes from the same counter, so it never
+collides with an existing comment. A deleted paragraph is rewritten run by run (its own runs as
+`w:delText`, another author's insertions deleted inside their element, their deletions as they
+stand) and loses what sat between its runs (bookmarks, proofing marks). The inserted paragraph's
+properties are the anchor's without its section break, its properties revision and its mark's
+revisions. Text is rendered back with tabs, line breaks and non-breaking hyphens as their elements
+and `xml:space="preserve"` on every `w:t`/`w:delText`; the markup characters are escaped
+(`Escape`), quotes only in attributes. The zip is written with no timestamps, parts in their
+original order (a part the writer added last), so two renders of one change set are the same bytes.
+
+The locator (`locate.go`) and the compare (`compareTexts`) are pure functions over the stored text
+and run in the server at POST: the rungs, the statuses and the paragraph pairing are in README §
+Track changes. Bounds: 500 edits, 8,000 bytes a text, 200 a context, 2,000 a comment, 1,000
+occurrences considered for one find, 80 bytes of slack between contexts, 20,000 word tokens a side
+for the diff (beyond, a paragraph is one replacement).
+
 ## Section tree, chunks, search and vision transcription
 
 **Section tree and chunks.** v1's page index, rewritten: articles, sections (`Section 1`, `§ 1`),

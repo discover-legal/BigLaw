@@ -43,7 +43,7 @@ type HookRule struct {
 	Name    string     `json:"name"`
 	Enabled bool       `json:"enabled"`
 	Order   int        `json:"order"`
-	Event   string     `json:"event"` // before_call, after_call, finding_admitted, task_finish
+	Event   string     `json:"event"` // before_call, after_call, finding_admitted, task_finish, change_set_rendered
 	Match   string     `json:"match"` // a tool or subagent name, a prefix ending in *, or * (before/after_call only)
 	When    *Cond      `json:"when"`  // null: always
 	Action  HookAction `json:"action"`
@@ -51,8 +51,9 @@ type HookRule struct {
 }
 
 // Cond is a condition on one field: of the call's input (before_call; after_call also output.*),
-// of the finding (finding_admitted: claim, issueId, verified, low, documents), or of the finish
-// (task_finish: stop, the stop reason).
+// of the finding (finding_admitted: claim, issueId, verified, low, documents), of the finish
+// (task_finish: stop, the stop reason), or of a rendered change set (change_set_rendered: kind,
+// author, applied, failed, documentId, changeSetId).
 type Cond struct {
 	Field string `json:"field"`
 	Op    string `json:"op"` // eq, ne, contains, exists, absent, gt, lt
@@ -78,9 +79,9 @@ type Webhook struct {
 }
 
 var (
-	hookEvents  = []string{"before_call", "after_call", "finding_admitted", "task_finish"}
+	hookEvents  = []string{"before_call", "after_call", "finding_admitted", "task_finish", eventChangeSet}
 	hookActions = map[string][]string{"before_call": {"block", "approve", "check", "webhook", "limitation"}, "after_call": {"block", "check", "webhook", "limitation"},
-		"finding_admitted": {"block", "approve", "check", "webhook", "limitation"}, "task_finish": {"block", "check", "webhook", "limitation"}}
+		"finding_admitted": {"block", "approve", "check", "webhook", "limitation"}, "task_finish": {"block", "check", "webhook", "limitation"}, eventChangeSet: {"webhook", "limitation"}}
 	condOps   = []string{"eq", "ne", "contains", "exists", "absent", "gt", "lt"}
 	fieldPath = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$`)
 	matchRe   = regexp.MustCompile(`^[a-z][a-z0-9_]*\*?$`)
@@ -119,7 +120,7 @@ func (r HookRule) summary() string {
 	what := map[string]string{"block": "blocks", "approve": "asks a lawyer to approve", "check": "has " + r.Action.Agent + " check", "webhook": "posts to a webhook on",
 		"limitation": "adds a Limitations line on"}[r.Action.Type]
 	on := map[string]string{"before_call": "each call of " + cmpStr(r.Match == "", "*", r.Match) + " before it runs", "after_call": "each answer of " + cmpStr(r.Match == "", "*", r.Match),
-		"finding_admitted": "each admitted finding", "task_finish": "the deliverable before it is rendered"}[r.Event]
+		"finding_admitted": "each admitted finding", "task_finish": "the deliverable before it is rendered", eventChangeSet: "each change set rendered as a .docx"}[r.Event]
 	cond := ""
 	if r.When != nil {
 		cond = fmt.Sprintf(" when %s %s %v", r.When.Field, r.When.Op, r.When.Value)
@@ -650,8 +651,8 @@ func (e *Engine) validateHookRule(f, text string, bad func(string, string, ...an
 		bad(f, "action.webhook: its url (and secret, header, prefix, wait)")
 	case r.Action.Type != "webhook" && r.Action.Webhook != nil || r.Action.Type != "check" && r.Action.Agent != "":
 		bad(f, "action: agent is a check's, webhook a webhook's")
-	case r.Event == "task_finish" && r.Match != "" && r.Match != "*":
-		bad(f, "match: task_finish matches nothing (use \"*\")")
+	case (r.Event == "task_finish" || r.Event == eventChangeSet) && r.Match != "" && r.Match != "*":
+		bad(f, "match: %s matches nothing (use \"*\")", r.Event)
 	case r.Match != "" && r.Match != "*" && !matchRe.MatchString(r.Match):
 		bad(f, "match: a tool or subagent name, a prefix ending in *, or *")
 	}
@@ -713,4 +714,69 @@ func validateHookRefs(sp *Specs, bad func(string, string, ...any)) {
 			bad(f, "action.agent: %s's output schema must hold verdict (allow, block or annotate) and reason", r.Action.Agent)
 		}
 	}
+}
+
+// eventChangeSet is the track-changes hook event (README § Track changes): a change set's .docx
+// was rendered for a download. The file is already on its way, so the event is informational:
+// its actions are webhook and limitation; a rule's failure can only be recorded.
+const eventChangeSet = "change_set_rendered"
+
+// ChangeSetEvent is what the API reports after a render.
+type ChangeSetEvent struct {
+	ChangeSetID, DocumentID, Kind, Author string
+	Applied, Failed                       int
+	SHA256                                string // of the bytes sent
+}
+
+// ChangeSetRendered runs the task's change_set_rendered rules (from its snapshot) on ev: a webhook
+// is posted (metadata only: the event's fields; sendContent adds nothing, there is no matter
+// text), a limitation is a note row. Every outcome is a hookrun ledger row keyed by the change set
+// (no run step is involved: a download is not a step of the run). Rule failures are outcomes, never
+// errors: nothing is refused after the fact.
+func (e *Engine) ChangeSetRendered(ctx context.Context, taskID string, ev ChangeSetEvent) error {
+	t, err := e.task(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	sp, _ := loadable(t.Specs)
+	rules := sp.rules(eventChangeSet)
+	if len(rules) == 0 {
+		return nil
+	}
+	doc := map[string]any{"kind": ev.Kind, "author": ev.Author, "applied": ev.Applied, "failed": ev.Failed, "documentId": ev.DocumentID, "changeSetId": ev.ChangeSetID, "sha256": ev.SHA256}
+	text, _ := json.Marshal(doc)
+	h := hookRunner{e: e, sp: sp, seq: &atomic.Int64{}}
+	x := event{name: eventChangeSet, subject: "change_set", doc: doc, text: string(text), docIDs: t.DocumentIDs}
+	for _, rule := range rules {
+		ok, cerr := rule.When.holds(doc)
+		if cerr == nil && !ok {
+			continue
+		}
+		outcome, note := "allowed", ""
+		var v hookVerdict
+		switch {
+		case cerr != nil:
+			err = ruleFailure{cerr}
+		case rule.Action.Type == "webhook":
+			outcome, note, err = h.webhook(ctx, rule, x, taskID)
+		default:
+			outcome, note, err = h.act(ctx, rule, x, nil, taskID, &v)
+		}
+		if err != nil {
+			var rf ruleFailure
+			if !errors.As(err, &rf) {
+				return err
+			}
+			outcome, note = "failed-open", err.Error()
+			if rule.Failure == "closed" {
+				outcome = "failed-closed" // recorded: the file was already sent
+			}
+		}
+		o := HookOutcome{Rule: rule.Name, Event: eventChangeSet, Subject: ev.ChangeSetID, Outcome: outcome, Note: truncate(note, 500), At: time.Now().UTC().Format(time.RFC3339)}
+		e.log.Info("hook", "task", taskID, "rule", o.Rule, "event", o.Event, "subject", o.Subject, "outcome", o.Outcome, "note", o.Note)
+		if werr := e.write(ctx, taskID, kHookRun, fmt.Sprintf("changeset|%s|%s", ev.ChangeSetID, rule.Name), o, false); werr != nil {
+			return werr
+		}
+	}
+	return nil
 }

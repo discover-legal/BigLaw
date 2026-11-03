@@ -36,7 +36,8 @@ var (
 	errNoChild   = errors.New("docs: this binary cannot read PDFs or .docx files: its main (or a test package's TestMain) must call docs.MaybeRunChild first")
 )
 
-// MaybeRunChild turns this process into a file reader and exits, when it was started as one
+// MaybeRunChild turns this process into a file reader (or, under docxArg, the track-changes
+// writer) and exits, when it was started as one
 // (argv: childArg, the parent's pid, a deadline in ms, a memory cap in bytes): it reads a PDF or
 // .docx on stdin and writes one JSON line {X: Extraction without its text, Err: refusal, Len}
 // and then the text's Len raw bytes (no escaping, so the parent reads exactly that much). No parser of an uploaded
@@ -46,7 +47,7 @@ var (
 // past the cap is a fatal out-of-memory (the parent reports the file unreadable). main, and the
 // TestMain of every package whose tests ingest a PDF or .docx, call this first.
 func MaybeRunChild() {
-	if len(os.Args) < 2 || os.Args[1] != childArg {
+	if len(os.Args) < 2 || os.Args[1] != childArg && os.Args[1] != docxArg {
 		childReady = true
 		return
 	}
@@ -70,6 +71,9 @@ func MaybeRunChild() {
 	}
 	debug.SetMaxStack(64 << 20)
 	debug.SetMemoryLimit(int64(arg[2] / 2))
+	if os.Args[1] == docxArg { // the track-changes writer, under the same bounds (childdocx.go)
+		runDocxChild()
+	}
 	data, err := io.ReadAll(io.LimitReader(os.Stdin, store.MaxFileSize+1))
 	if err != nil {
 		os.Exit(2)

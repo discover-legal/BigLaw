@@ -246,6 +246,10 @@ var errCrossOrigin = errors.New("docs: cross-origin write refused: send it from 
 var errTimeout = fmt.Errorf("docs: the upload was too slow: send at least %d KiB every %s and the whole file within %s",
 	uploadMinBytes>>10, uploadWindow, uploadTotal)
 
+// WriteError answers with {error, errorType} and the status for err's kind (the document routes'
+// mapping, for routes outside this package that call the service: the track-changes routes).
+func WriteError(w http.ResponseWriter, log *slog.Logger, err error) { writeError(w, log, err) }
+
 // writeError answers with {error, errorType} and the status for err's kind. Unclassified errors are
 // logged and answered with a fixed text (they may hold database detail).
 func writeError(w http.ResponseWriter, log *slog.Logger, err error) {
@@ -261,6 +265,7 @@ func writeError(w http.ResponseWriter, log *slog.Logger, err error) {
 		{errTimeout, 408, "upload_timeout", true}, {errCrossOrigin, 403, "cross_origin", true}, {ErrUnsupported, 415, "unsupported_type", true}, {ErrUnreadable, 422, "unreadable", true},
 		{ErrBusy, 503, "busy", true}, {ErrStopping, 503, "stopping", true}, {ErrUnreliable, 422, "transcription_unreliable", true},
 		{ErrNoContent, 422, "no_content", true}, {ErrScanEncoding, 422, "scan_encoding_unsupported", true}, {ErrTooManyPages, 413, "too_many_pages", true},
+		{ErrNotDocx, 422, "not_docx", true},
 		{model.ErrNotConfigured, 503, "model_not_configured", true}, {model.ErrRateLimited, 503, "model_rate_limited", true}, // G6: fixed text only
 		{model.ErrUnavailable, 502, "model_unavailable", true}, {model.ErrTimeout, 504, "model_timeout", true}, {model.ErrNoContent, 422, "no_content", true},
 	} {

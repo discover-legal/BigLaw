@@ -52,7 +52,18 @@ budgets in `docs/history.md`. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`
   in 2 reader slots outside the ingest slots; no vision role → stored `needs_transcription` + 503,
   and `TranscribePending` (leased, serve: startup + every 15 min; stops, config errors, rate limits
   and busy readers spend no attempt) completes it later.
-  `internal/docs/ooxml` — `.docx` reader (text parts only, linear XML pass).
+  `internal/docs/ooxml` — `.docx` reader (text parts only, linear XML pass) and, PR 3d, the
+  track-changes writer: `OpenAll` (every part), `Walk` (a visitor called once per run; ops Replace,
+  Delete, InsertBefore/After, Comment, Accept/Reject, AcceptMark/RejectMark, InsertParagraphAfter/Before,
+  DeleteParagraph, applied last run first, no revision ever nested in another), `Revisions`, `Decide`,
+  `Runs`, `Bytes` (untouched parts byte-identical, no timestamps); the scan (`scan.go`) is the one
+  reading both reader and writer share. Track changes in `docs` (PR 3d): `CreateChangeSet` (locate every
+  edit in the stored text: exact, tolerant, context; compare = paragraph pairing + word Myers),
+  `ChangeSets`/`ChangeSet`, `RenderChangeSet` (the child's `__biglaw-docx` verb, `childdocx.go`;
+  re-locates against the file's text, `text_drift` otherwise; deterministic), `Revisions`; migration
+  0013 `change_sets`; the API's `internal/api/changes.go` (task-rooted routes, strict `changeIn`
+  schema, author = `Principal.Name`); the engine's `change_set_rendered` hook event
+  (`ChangeSetRendered`: webhook and limitation only, outcomes keyed by the change set). No model.
 - `internal/store/storetest` — `storetest.DSN(t)` gives a test its own schema, creates the
   `vector` extension once per database and puts its schema on the test's `search_path`; at most
   `storetest.Slots` tests across all test processes hold one at once (a flock per slot). Test stores
@@ -188,7 +199,7 @@ budgets in `docs/history.md`. v1 (Go under `biglaw-go/`, DyTopo) lives on `main`
   results schema, `compare.py` (yardstick hashes, three verdicts), baselines; `TestBench*` run it offline (smoke, a 401, serve
   preflight with the exact env). A setting change is `run.py pin` + commit; serve gets only the config's env.
 
-Everything else in README is marked planned (next: PR 3d the `.docx` writer and tracked changes, PR 3e, PR 5 diligence;
+Everything else in README is marked planned (next: PR 3e, PR 5 diligence; the memo's own `.docx` export is not built;
 contract v1's `content`/202/`capabilities` for vision intake are PR 8's). Lexical search alone measured E4 0.882; the hybrid gate is
 not yet judged (self-test tape).
 
@@ -206,6 +217,10 @@ not yet judged (self-test tape).
   `/proc/self/exe` on Linux. A server stop cancels in-flight requests after `shutdownGrace`
   (`docs.ErrStopping`, 503).
 - Every `docs` read takes the caller's scope; never read `documents`/`chunks`/`files` around it.
+- The `.docx` writer runs only in the child too (`docxInChild`, the `__biglaw-docx` verb): the
+  server never opens the archive; a change set is located in the stored text at POST and again
+  in the child at render. The writer's text must stay the reader's (`TestWriterTextEqualsReaderText`):
+  a change to what the reader treats as text changes `scan` the same way.
 - New env var = add it to `envVars` in `cmd/biglaw/config.go` (with its PR), README's table and
   docker-compose; `TestEnvVarTablesAgree` fails otherwise. Validate a variable in the PR that
   first reads it, not before. Read env only through that table (literal names; `scripts/loc.py`

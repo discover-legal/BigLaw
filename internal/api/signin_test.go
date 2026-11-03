@@ -234,6 +234,7 @@ func TestEveryRouteNeedsASession(t *testing.T) {
 	routes := []string{
 		"GET /clients", "POST /tasks", "GET /tasks", "GET /tasks/x", "GET /tasks/x/steps", "GET /tasks/x/cost", "GET /tasks/x/deliverable.md",
 		"POST /tasks/x/cancel", "POST /tasks/x/gates/g/approve", "POST /tasks/x/gates/g/reject", "GET /tasks/x/events",
+		"POST /tasks/x/changes", "GET /tasks/x/changes", "GET /tasks/x/changes/c", "GET /tasks/x/changes/c/file", "GET /tasks/x/documents/" + d + "/revisions",
 		"GET /me", "GET /manage/items", "GET /manage/items/prompt.lead", "GET /manage/items/prompt.lead/history", "GET /manage/items/prompt.lead/diff",
 		"POST /manage/items/prompt.lead/versions", "POST /manage/items/prompt.lead/revert", "POST /manage/items/prompt.lead/delete",
 		"GET /manage/changes", "GET /manage/export", "GET /manage/export?format=zip", "GET /manage/secrets", "POST /manage/secrets",
