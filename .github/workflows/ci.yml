@@ -146,3 +146,5 @@ jobs:
           if [ "$GITHUB_REF_TYPE" = tag ]; then tag=${GITHUB_REF_NAME#v}; ver=$tag; fi
           echo "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           docker build --build-arg VERSION="$ver" --label org.opencontainers.image.source=https://github.com/discover-legal/BigLaw -t "$img:$tag" . && docker push "$img:$tag"
+          # setup.sh pulls this image with no login: a package that is not public fails here, not on a user's machine.
+          docker logout ghcr.io && docker rmi "$img:$tag" && docker pull "$img:$tag"
