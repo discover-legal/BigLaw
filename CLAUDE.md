@@ -174,7 +174,7 @@ changes, PR 5 diligence). Lexical search alone measured E4 0.882; the hybrid gat
   requests by DNS name other than `localhost` (and, with sign-in, `BIGLAW_PUBLIC_URL`'s host: 403
   `bad_host`, DNS rebinding); the UI forbids framing. A new API route is behind the session
   automatically; a route that must be public goes in `api.public` with a reason.
-- One Go version (1.26.10): go.mod's `go`/`toolchain` lines, the Dockerfile `FROM`, CI's
+- One Go version (1.26.11): go.mod's `go`/`toolchain` lines, the Dockerfile `FROM`, CI's
   `go-version` and the README move together (`TestGoVersionPinnedEverywhere`).
 
 ## Gates
