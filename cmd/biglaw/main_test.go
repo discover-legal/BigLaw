@@ -249,10 +249,10 @@ func TestServeHybridEndToEnd(t *testing.T) {
 	ln.Close()
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan int, 1)
-	var stderr bytes.Buffer
+	stderr := &lockedBuf{} // read while serve still writes to it
 	go func() {
 		done <- run(ctx, []string{"serve"}, env("BIGLAW_DATABASE_URL", dsn, "BIGLAW_ADDR", addr, "BIGLAW_MODEL_URL", emb.URL+"/v1",
-			"BIGLAW_MODELS", "embed=text-embedding-3-small"), nil, io.Discard, &stderr)
+			"BIGLAW_MODELS", "embed=text-embedding-3-small"), nil, io.Discard, stderr)
 	}()
 	var body []byte
 	for i := 0; i < 100; i++ {
@@ -274,6 +274,11 @@ func TestServeHybridEndToEnd(t *testing.T) {
 	}
 	if model.String != "text-embedding-3-small" || !cost.Valid || math.Abs(cost.Float64-10*0.02/1e6) > 1e-18 || calls.Load() == 0 {
 		t.Fatalf("backfill: model %v, cost %v, %d calls\n%s", model, cost, calls.Load(), stderr.String())
+	}
+	// The backfill embeds old.txt first, then fails on poison.txt and counts what stays lexical.
+	// Stopping as soon as old.txt is embedded cancelled that count (main CI, 12 Nov 2026): wait for it.
+	for i := 0; i < 200 && !strings.Contains(stderr.String(), "documents searched lexically only"); i++ {
+		time.Sleep(50 * time.Millisecond)
 	}
 	cancel()
 	select {
