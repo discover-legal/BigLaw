@@ -20,13 +20,13 @@ PostgreSQL database. Licensed Apache-2.0 (`LICENSE`, `NOTICE`).
 | Migrations | `internal/store/migrate.go`, `internal/store/migrations/NNNN_*.sql` | Embedded SQL files applied in order under an advisory lock; each file and its `schema_migrations` row in one transaction. `store.Open` first creates the `vector` extension (pgvector), which is database-wide (§ Database) |
 | Files | `internal/store/files.go` | Binary files (uploads, generated `.docx`) stored in 1 MiB `bytea` chunks, streamed in and out, with size and SHA-256 checked on every read |
 | Model client | `internal/model/` (`client.go`, `embed.go`, `errors.go`, `fake.go`, `pricing.go`, `prices.json`) | One OpenAI-compatible chat client with tool calls and image parts, an embeddings call (`Embed`) on the same transport, typed failures with their HTTP mapping, at most 3 attempts per call, cache-aware pricing of every call from a built-in table plus `BIGLAW_PRICES` (the host never makes a call free), watt-hour metering when `BIGLAW_LOCAL_WATTS` is set, and `model.Fake` for tests (§ Model client). `Embed`'s caller is documents (below); `Chat`'s is the agent loop (below), which the memo workflow drives. |
-| Documents | `internal/docs/` (`ingest.go`, `child.go` + `child_linux.go`/`child_other.go`, `pageindex.go`, `chunk.go`, `search.go`, `embed.go`, `verify.go`, `http.go`, `vision.go` + `vision_prompts.txt`, `scanpdf.go`, `jobs.go`) | Ingest of UTF-8 text (a plain-text e-mail whose headers say quoted-printable is stored decoded, headers verbatim: `TestEmailBodyDecodedFromQuotedPrintable`), `.docx` and PDF text layers (PDFs and `.docx` files parsed in a bounded child process); images and JPEG-scanned PDF pages transcribed by the `vision` role, each page read twice and the readings compared, with provenance on every document, chunk and citation, and a leased job that transcribes what was stored before a vision role was set (§ Vision transcription); the byte-exact section tree; search chunks; Postgres full-text search, fused with pgvector similarity when an `embed` role is set (chunk embedding at ingest, a startup backfill); the page reader (outline, paged sections); the quote-verification ladder; the upload and download routes. Every read is scoped to the caller's document ids (§ Documents) |
+| Documents | `internal/docs/` (`ingest.go`, `child.go` + `child_linux.go`/`child_other.go`, `pageindex.go`, `chunk.go`, `search.go`, `embed.go`, `verify.go`, `http.go`, `vision.go` + `vision_prompts.txt`, `scanpdf.go`, `jobs.go`; track changes: `changes.go`, `locate.go`, `childdocx.go`) | Ingest of UTF-8 text (a plain-text e-mail whose headers say quoted-printable is stored decoded, headers verbatim: `TestEmailBodyDecodedFromQuotedPrintable`), `.docx` and PDF text layers (PDFs and `.docx` files parsed in a bounded child process); images and JPEG-scanned PDF pages transcribed by the `vision` role, each page read twice and the readings compared, with provenance on every document, chunk and citation, and a leased job that transcribes what was stored before a vision role was set (§ Vision transcription); the byte-exact section tree; search chunks; Postgres full-text search, fused with pgvector similarity when an `embed` role is set (chunk embedding at ingest, a startup backfill); the page reader (outline, paged sections); the quote-verification ladder; the upload and download routes; and track changes: change sets posted against a task's `.docx`, located in the stored text, rendered on download in the same child (§ Track changes). Every read is scoped to the caller's document ids (§ Documents) |
 | Agent runtime | `internal/agent/` (`tool.go`, `registry.go`, `schema.go`, `loop.go`, `budget.go`, `policy.go`, `bandit.go`) | The `Tool` interface and its single registry (definitions frozen at registration), JSON-schema validation of every tool input and output, one bounded loop for the lead and its subagents, the budget ledger, and the tool bandit (§ Agent runtime). The memo workflow drives it (below); a step log makes it resumable |
 | Engine | `internal/engine/` (+ `specs/`, `packs/`; migrations `0005_runs.sql`, `0006_figure_reads.sql`, `0007_figure_reads_scope.sql`) | The memo workflow: the lead agent and its 12 tools, the ledger, the evidence subagents with Go-side quote verification, the figure reader, the sweep, the three-critic committee, the policy, `finish` (lint, coverage, render), the human gates, grounding collapse, and durable runs (step log, lease and heartbeat, resume) (§ Memo workflow) |
-| API | `internal/api/` (+ `dist/`, the embedded UI) | The REST API (tasks, steps, SSE events, gates, cancel, cost, clients, Manage: `manage.go`) over the engine and the document routes, and the web UI built into the binary (§ Memo workflow, § Manage) |
-| Manage | `internal/engine/specset.go`, `manage.go`, `manage_validate.go`, `diff.go`, `skills.go`, `custom.go`, `remote.go`, `hookrules.go` (+ `skills/`, `specs/use_skill.json`; migrations `0008_overrides.sql`, `0009_custom_tools.sql`, `0010_secret_origin.sql`), `internal/api/manage.go`, `ui/src/screens/Manage.tsx` | The catalogue of every agent, tool, pack, skill and hook a run uses, admins' versioned overrides in Postgres (strictly validated, compatibility-checked against what Go reads and writes), each task's snapshot of them, history, diffs, revert and a patch/zip export; skills and `use_skill`; admins' own subagents and MCP/HTTP tools with SSRF-checked calls and server-side secrets, a metered Test call, and configurable hooks around calls, findings and finish (§ Manage) |
+| API | `internal/api/` (+ `dist/`, the embedded UI) | The REST API (tasks, steps, SSE events, gates, cancel, cost, clients, Manage: `manage.go`, track changes: `changes.go`) over the engine and the document routes, and the web UI built into the binary (§ Memo workflow, § Manage, § Track changes) |
+| Manage | `internal/engine/specset.go`, `manage.go`, `manage_validate.go`, `diff.go`, `skills.go`, `custom.go`, `remote.go`, `hookrules.go` (+ `skills/`, `specs/use_skill.json`; migrations `0008_overrides.sql`, `0009_custom_tools.sql`, `0010_secret_origin.sql`), `internal/api/manage.go`, `ui/src/screens/Manage.tsx` | The catalogue of every agent, tool, pack, skill and hook a run uses, admins' versioned overrides in Postgres (strictly validated, compatibility-checked against what Go reads and writes), each task's snapshot of them, history, diffs, revert and a patch/zip export; skills and `use_skill`; admins' own subagents and MCP/HTTP tools with SSRF-checked calls and server-side secrets, a metered Test call, and configurable hooks around calls, findings, finish and rendered change sets (§ Manage) |
 | Memo tools | `internal/analysis/` (+ `belo.json`, `specs/*.json`), `internal/docs/register.go` (+ `specs/*.json`) | Deterministic tools over verified findings: `numbers` (exact `calc`, figure handles, key-figures table), `join_discrepancies`, the coverage checks `finish{op:"check"}` will run, the value normalisers and BELO-lite; and the `retrieve` / `verify_quote` adapters over documents (§ Agent runtime) |
-| `.docx` reader | `internal/docs/ooxml/` | Opens a `.docx`'s text parts only (body, footnotes, endnotes; 128 MiB decompression cap) and reads its visible text in one linear XML pass. The writer, the XML escapers, the part-preserving re-zip and tracked-change parse/apply are planned (PR 3d) |
+| `.docx` reader and writer | `internal/docs/ooxml/` (`ooxml.go`, `scan.go`, `write.go`, `revisions.go`, `comments.go`) | The reader opens a `.docx`'s text parts only (body, footnotes, endnotes; 128 MiB decompression cap) and reads its visible text in one linear XML pass. The writer (PR 3d) keeps every part, walks `word/document.xml` with a visitor called once per run, writes the ops it returns as Word tracked changes (`w:ins`/`w:del` with the run's formatting, comments, paragraphs inserted or deleted, revisions accepted or rejected), parses the tracked changes already there, switches Track Changes on and re-zips with every untouched part byte-identical (§ Track changes) |
 | Evaluation | `eval/` (`run.py`, `proofrun/`, `lab/`, `tests/`, `tasks/`, `e4/embeddings.json`) | The five synthetic proof-run matters (documents + answer keys), copied from `feat/proof-runs-multi-practice`, with their driver, scorer and the v1 comparison (`run.py`), the Harvey LAB driver (`lab/run.py`), and the Go gates E1/E2 that run them through the engine on a scripted model (§ Memo workflow). `eval/e4/embeddings.json` is E4's embeddings tape: today the **self-test** tape of a hash embedder, not a real model's (§ Documents, gate E4) |
 | UI | `ui/` (React 19 + Vite + TypeScript strict; runtime deps `react`, `react-dom` only) | The seven screens (§ UI) behind one transport seam, `ui/src/api/transport.ts`: `http.ts` talks to the Go API on the same origin (tasks, steps, findings, gates, cost and documents are served since PR 4b; playbooks, time and profiles are PRs 6/8/9), `recorded.ts` replays a recorded engine in the browser with no network at all |
 | Recorded demo | `ui/src/recorded/recording.json`, `eval/demo/record_test.go` | Three synthetic matters (13 documents plus one scanned exhibit, `ui/src/recorded/06-affidavit-of-service-scan.jpg`, drawn by `eval/demo/make_scan.py`) and seven recorded memo tasks (48 findings, 79 citations); documents, outlines, sections, chunks, the scan's transcript (v2's vision path with a scripted reader), run-log and offered search hits and every quote's verification computed by v2's `internal/docs`; claims from the answer keys; sample playbooks, time entries and profiles, and the configuration table read from `cmd/biglaw/config.go` (§ UI, provenance). `TestDemoRecording` fails when the committed recording no longer matches what v2's code computes |
@@ -43,7 +43,7 @@ HTTP surface today: the REST API of § Memo workflow, the embedded UI at `/`, an
 `{"status":"database unavailable",…}` (503; the cause is logged, not returned). Every other path
 is 404/405. With sign-in configured (§ Sign-in) every route but `/health`, the UI's files and `/auth/*` needs a session; without it there is no authentication (§ Exposure).
 
-**Planned** (not built): the `.docx` writer and tracked-change parse/apply (PR 3d); diligence (PR 5), contract review (PR 6),
+**Planned** (not built): the memo's own `.docx` export (the writer is built, § Track changes; a memo-to-`.docx` renderer is not); diligence (PR 5), contract review (PR 6),
 MCP (PR 7), clients/conflicts and API tokens (the rest of PR 8; OIDC sign-in and sessions are built, § Sign-in), time and billing (PR 9), the
 the full jurisdiction and practice pack catalogue (PR 12; four candidate packs ship with PR 4b), v1 import and docs (PR 13). The
 discover.legal intake module is **not** part of v2 (owner decision; it moves to a separate repo).
@@ -597,6 +597,102 @@ no live upload is that old (15 minutes to upload + 10 to wait for a slot + 2 to 
 503 `stopping` and removes its file, `serve` exits 0 with a warning, and connections still open
 after another 10 s are closed (`TestServeStopCancelsIngest`).
 
+## Track changes (`internal/docs` `changes.go`, `locate.go`, `childdocx.go`; `internal/docs/ooxml` `scan.go`, `write.go`, `revisions.go`, `comments.go`; migration `0013_change_sets.sql`; PR 3d)
+
+Word track changes as a tool: **no model and no subagent chooses a change**. A REST caller posts a
+**change set** against one of a task's `.docx` documents and BigLaw writes it into the file as
+tracked changes by the signed-in user (without sign-in, the local user), each download rendering
+the file afresh. Four kinds: `edits` (find/replace pairs with context, each optionally with a Word
+comment), `compare` (the document against a newer version of it, written as the tracked changes
+that turn one into the other), `accept` and `reject` (of the tracked changes already in the file,
+all or by id). Owner decisions (3 Nov 2026): the writer is a **visitor called once per run**; a
+pure REST tool; a new table with the edits and outcomes as JSON; the writer runs in the bounded
+child; rendering on demand at download; the author is the signed-in user's name; one PR; the
+document must be in the task's document set (G1); Track Changes switched on in the output; the
+`change_set_rendered` hook event; no UI in this PR.
+
+**Routes** (task-rooted; `{id}` is the task, and a document outside its set is 404):
+
+```
+POST   /tasks/{id}/changes                  {documentId, kind: edits|compare|accept|reject, edits?: [Edit], againstDocumentId?, revisionIds?: [int]} → 201 ChangeSet
+GET    /tasks/{id}/changes[?offset=]        {changeSets: [ChangeSet], next}, newest first, 50 a page
+GET    /tasks/{id}/changes/{cid}            the ChangeSet with its latest outcomes
+GET    /tasks/{id}/changes/{cid}/file       the rendered .docx (<name>.changes.docx; 422 unreadable when the child fails; 503 busy)
+GET    /tasks/{id}/documents/{doc}/revisions[?offset=]   the tracked changes already in the file: {revisions: [Revision], next}, 200 a page
+```
+
+An `Edit` is `{kind?, find?, replace?, before?, after?, paragraph?, comment?}`: kind `""` substitutes
+`find` by `replace` (an insertion when `find` is empty, a deletion when `replace` is), placed by
+`before` and `after` (about 40 characters each) when `find` recurs and inside `paragraph` when
+given; `insert_paragraph` puts `replace` as a new paragraph after `paragraph`,
+`insert_paragraph_before` before it, `delete_paragraph` deletes it. The body is strict (an unknown
+or misspelt field is 400 `bad_request`), at most 500 edits, 8,000 bytes a text, 200 a context,
+2,000 a comment, no paragraph break inside `find` or `replace`; `author` is never a field. A
+`ChangeSet` is `{id, taskId, documentId, againstDocumentId?, kind, author, createdBy {id, name},
+edits, revisionIds, outcomes, createdAt}`; an `Outcome` per edit is `{status, method, start, end,
+reason}`.
+
+**POST locates, GET renders.** A POST opens no file: every edit is located in the document's
+**stored text** at once, exact occurrences scored by context, then tolerant (quotes straightened,
+white space collapsed, case folded: `Verify`'s rung), then the span between `before` and `after`
+alone (`locate`, `TestLocateExactTolerantContextAmbiguous`): `located` with its method and byte
+offsets, `not_found`, `ambiguous` (two candidates score alike: send context that picks one),
+`crosses_paragraph` (one edit per paragraph, or a paragraph edit), `overlaps` (an earlier edit of the
+set has the span). A compare's edits are computed from the two stored texts: paragraphs are
+matched first (an unmatched old paragraph is a `delete_paragraph`, an unmatched new one an
+`insert_paragraph` after the old paragraph before it, an old and a new paragraph sharing half their
+words are a pair), then each pair word by word, every hunk a substitution naming its paragraph with
+40 bytes of context (`compareTexts`, Myers over word tokens, bounded at 20,000 tokens a side;
+`TestCompareWordLevelRoundTrip`: accepted it reads as the newer text, rejected as the older). The
+row stores the edits **as posted** (never offsets) and the outcomes. A download reads the file
+through the store's integrity check, runs the writer in the **child** (`__biglaw-docx`: the same
+deadline, memory cap, stack cap, no environment and parent-death kill as the reader; its stdin a
+JSON line then the file, its stdout a JSON line then the output, read through hard bounds:
+`TestDocxChildContract`, `TestDocxChildBoundsItself`), locates every edit again against the file's
+own text (which must equal the stored text, or every edit fails `text_drift` and nothing renders:
+`TestTextDriftRefused`), applies them, streams the result and updates the row's outcomes to
+`applied` or `failed` with the reason (`TestChangeSetRows`, `TestChangeSetRoutes`). Two downloads
+of one change set are **byte-identical** (the date is the row's `createdAt`, revision ids start above
+the file's highest, the zip carries no timestamps: `TestRenderDeterministic`). The render holds an
+ingest slot, so at most two run at once (503 `busy` after 10 minutes). Nothing rendered is stored.
+
+**The writer.** `ooxml.OpenAll` keeps every part; `Walk(visitor, revisions)` scans
+`word/document.xml` once (the reader's rules decide what is text, so the writer's text is the
+stored text by construction: `TestWriterTextEqualsReaderText`) and calls the visitor per run with its
+text, offset, formatting, the tracked change it sits in and why it cannot be edited (`field`, `sdt`,
+`move`, `complex`, `hidden`, `deleted`); the ops it returns are applied last run first: `Replace`
+and `Delete` become `w:del` + `w:ins` carrying the run's `w:rPr` (a span over several runs: a
+deletion in each, the insertion after the last: `TestReplaceAcrossRunsAttachesInsertToLast`),
+`InsertBefore`/`InsertAfter`, `Comment` (`word/comments.xml` created with its relationship and
+content type on first use, extended after: `TestCommentCreatesThreeParts`), `Accept`/`Reject` of a
+run's change and `AcceptMark`/`RejectMark` of a paragraph mark's (a joined paragraph keeps the next
+one's properties, as Word does), `InsertParagraphAfter`/`Before` (the anchor's numbering and
+indentation, never its section break) and `DeleteParagraph`. A change inside another author's
+insertion closes and reopens it, so **no revision ever nests in another** and theirs are untouched
+(`TestNoNestedRevisions`); a run in a field, a content control, a tracked move or holding a drawing,
+symbol or reference is left alone and the edit fails with that reason (`TestFieldsAndSdtSkipped`,
+`TestApplyEditsOutcomes`). `Revisions()` lists the file's tracked changes in order, a deletion
+beside an insertion by one author as one substitution, a deleted paragraph with its mark as one
+deletion, each with 40 characters of context and every element id it covers
+(`TestRevisionsParseInsDelAndParagraphMarks`); `Decide(accept, ids)` is the visitor that accepts or
+rejects them (`TestAcceptRejectEquivalence`). Every render sets `w:trackRevisions` in
+`word/settings.xml` (added if absent, left alone if present: `TestTrackRevisionsSetOnRender`), and
+every untouched part comes back byte-identical in its original order
+(`TestRoundTripPreservesPartsAndOrder`, `TestLibreOfficeOriginRoundTrip` on a file LibreOffice
+made). Every rendered fixture converts with LibreOffice headless where it is installed (`make
+validate-docx`, the CI `docx` job; a malformed part fails the conversion as Word would ask to
+repair it: `TestRenderedFilesOpenInLibreOffice`).
+
+**Hook event.** After a successful download the task's `change_set_rendered` rules run: `webhook`
+(metadata only: the task, change set, kind, author, counts of applied and failed edits and the
+output's SHA-256; `sendContent` adds nothing) and `limitation` (a note row); `block`, `approve` and
+`check` are refused at save, as is a match other than `*`, because the file is already on its way.
+Every outcome is a `hookrun` ledger row keyed by the change set (`TestChangeSetRenderedEventFiresWebhook`).
+
+**Out of scope:** headers, footers, footnotes and endnotes (left as they are; a compare ignores the
+notes), formatting-only revisions (`w:rPrChange`, `w:pPrChange`), tracked moves, comment replies,
+`.doc` and `.odt`, any UI (PR 6's Documents screen may list change sets), MCP (PR 7).
+
 ## Agent runtime and memo tools (`internal/agent`, `internal/analysis`; PR 4a)
 
 The memo workflow (§ Memo workflow) drives these. Everything here is tested with `model.Fake` or no
@@ -719,6 +815,9 @@ GET    /tasks/{id}/cost               per-step usage and USD (null when unpriced
 GET    /tasks/{id}/deliverable.md     the rendered memo
 POST   /tasks/{id}/cancel
 POST   /tasks/{id}/gates/{gateId}/approve      POST /tasks/{id}/gates/{gateId}/reject {"reason": "…"}
+POST   /tasks/{id}/changes            {documentId, kind, edits?, againstDocumentId?, revisionIds?} → 201 ChangeSet (§ Track changes)
+GET    /tasks/{id}/changes[?offset=]  GET /tasks/{id}/changes/{cid}   GET /tasks/{id}/changes/{cid}/file (the rendered .docx)
+GET    /tasks/{id}/documents/{doc}/revisions[?offset=]   the tracked changes already in a document's file
 GET    /me                            {id, name, email, admin, authEnabled}: the signed-in user, or without sign-in the local user
 GET    /auth/login?next=   GET /auth/callback   POST /auth/logout     sign-in (§ Sign-in; only with BIGLAW_OIDC_ISSUER)
 POST   /manage/sessions/revoke {user}   (admin, sign-in only) end every session of a sub or an email → {revoked}
@@ -923,9 +1022,10 @@ any item, in each task's snapshot). A rule is `{name, enabled, order, event, mat
 failure}`:
 
 Events `before_call` and `after_call` (every `Runtime.Invoke` but `finish` and `verify_quote`),
-`finding_admitted` and `task_finish`; actions `block`, `approve` (a lawyer's gate on one call the lead
+`finding_admitted`, `task_finish` and `change_set_rendered` (a change set's `.docx` downloaded, § Track
+changes: `webhook` and `limitation` only); actions `block`, `approve` (a lawyer's gate on one call the lead
 makes, single use), `check` (a named subagent's verdict), `webhook` and `limitation`; every outcome is a
-ledger `hookrun` row written with its step. Matchers, each action's effect, order, the failure policy
+ledger `hookrun` row written with its step (a rendered change set's keyed by the change set). Matchers, each action's effect, order, the failure policy
 and the checks at save: [docs/reference.md § Configurable hooks](docs/reference.md#configurable-hooks).
 
 ## Files
@@ -1123,8 +1223,21 @@ concatenation such as `"BIGLAW_" + x`, a raw string) fails the check.
     and Harvey LAB runs (bench5–bench7, the Haiku LAB reruns: their logged behaviour is scripted into
     the tests named for them). Whether it meets gate A (v1's criteria on
     `litigation` and `ma-diligence`) is the owner's measurement (§ Memo workflow, run it).
-  - The deliverable is Markdown only (`GET /tasks/{id}/deliverable.md`); the `.docx` export waits for
-    PR 3d's writer.
+  - The deliverable is Markdown only (`GET /tasks/{id}/deliverable.md`); the memo's `.docx` export is
+    not built (the track-changes writer exists; a memo-to-`.docx` renderer does not).
+- **Track changes (PR 3d):** a change set's edits are located in the stored text at POST and again
+  at every download; an edit whose words are not in the document (a paraphrase, a different
+  spelling) is `not_found`, never approximated, and one across a paragraph break is refused (send
+  one per paragraph). A run in a Word field, a content control, a tracked move, or holding a
+  drawing, symbol or reference is never edited (the edit fails with the reason); a deleted
+  paragraph loses its bookmarks and proofing marks; a comment is one paragraph per line, no reply
+  threads; formatting-only revisions and tracked moves are neither listed nor decided; headers,
+  footers and notes are untouched and a compare ignores the notes. The locator sees text, not
+  layout: a `find` that recurs needs context, and identical paragraphs make a paragraph edit
+  ambiguous. The compare pairs paragraphs by shared words (half or more) and diffs words, so a
+  rewritten paragraph is one deletion and one insertion rather than a word-by-word markup. Two
+  downloads of one change set are identical, but a change set rendered after the document is filed
+  again (a new document id) must be posted again against it. No UI lists change sets yet.
   - Quote verification proves a quote is in the document, not that the claim follows from it:
     `prosecute` checks that, and a lawyer approves every deliverable. The G8 lint traces figures (a figure the drafter wrote by the figure reader's reading of it, to a cited span or value read clearly as the same kind, currency, scale and amount, never to one read unclearly or as another kind; a date's part or an identifier as written, digit for digit; a handle's value by construction; a figure the reader read unclearly, or left unlabelled in an answer, is flagged, never traced; one its call never read (no model, unfunded, failed, cut off or malformed: bench7) that a cited finding's own verified quotes or values state as written is listed check-first in the Computed figures block, naming those findings and why, traced only as written, and those findings gated, never a blocking lint line that strips figures from a redraft (one that only a worksheet or a handle states, or none, is still flagged: `TestUnreadMemoScaledSumNeverUngated`, `TestUnreadMemoWorksheetOnlyIsFlagged`, `TestUnlabelledMemoSpanIsNoCallFailure`), and the section disclosed in Limitations; a clear figure whose cited quote the reader never read (its admission's call unfunded or failed) is traced only as written, disclosed, and its finding gated for a lawyer (`TestR6UnreadQuoteTracesAsWritten`); one the drafter wrote at a sourced scale where the cited figure states every digit ("$5M" for "$5,000,000") is disclosed, since only the reader's scale makes it the same figure; a cited figure read at a scale never traces one written without it or from other words; a worksheet traces only when its operands are cited values, literals the cited quotes state, traced worksheets' results or counts of days (`tracedSheets`, `TestR6LiteralWorksheetLaundersAFigure`): lab-r4 r5 H1, H2, M1, r6 H1, M2, M3, `TestR5G8SkipsUnreadSingleDigit`, `TestR5UnclearQuoteTracesUngated`, `TestR5NoReaderBudget`), not
     words: a wrong party or a wrong verb with correct figures passes it.

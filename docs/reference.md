@@ -457,8 +457,14 @@ twice the call budget, at least 400),
   a forced finish is never refused, nor to `verify_quote`, the engine's own quote check),
   `finding_admitted` (each new finding, after its quotes are verified, before it is recorded: admit's
   evidence findings and check_deviation's deviations alike, through the one path that records a new
-  finding, `recordFinding`; `TestFindingWritesGoThroughRecord` fails on any other) and
-  `task_finish` (after finish's checks pass, before the deliverable renders).
+  finding, `recordFinding`; `TestFindingWritesGoThroughRecord` fails on any other),
+  `task_finish` (after finish's checks pass, before the deliverable renders) and
+  `change_set_rendered` (a change set's `.docx` was downloaded, README § Track changes: the task's
+  rules from its snapshot, outside any run step; `webhook` and `limitation` only, since the file is
+  already on its way; a condition reads `kind`, `author`, `applied`, `failed`, `documentId`,
+  `changeSetId`; the webhook body is metadata only and `sendContent` adds nothing; a rule that
+  cannot send is recorded as `failed-closed` or `failed-open`, never refuses the download; outcomes
+  are `hookrun` rows keyed by the change set).
 - **Matchers:** a tool or subagent name, a prefix ending in `*`, or `*`; `when` is an optional
   condition on one field (`eq`, `ne`, `contains` (case-insensitive), `exists`, `absent`, `gt`, `lt`) of
   the call's input (`after_call`: `input.*`, `output.*`), of the finding (`claim`, `issueId`,

@@ -43,6 +43,19 @@ var taskIn = mustSchema(`{"type":"object","required":["description","workflowTyp
  "maxSteps":{"type":["integer","null"],"minimum":1,"maximum":10000},
  "toolBandit":{"type":["string","null"],"enum":["on","off",null]}}}`)
 
+// changeIn is POST /tasks/{id}/changes's body (README § Track changes): strict, so a misspelt field is
+// 400 rather than a silently ignored edit.
+var changeIn = mustSchema(`{"type":"object","additionalProperties":false,"required":["documentId","kind"],"properties":{
+ "documentId":{"type":"string","maxLength":64},
+ "kind":{"type":"string","enum":["edits","compare","accept","reject"]},
+ "againstDocumentId":{"type":["string","null"],"maxLength":64},
+ "edits":{"type":["array","null"],"maxItems":500,"items":{"type":"object","additionalProperties":false,"properties":{
+   "kind":{"type":["string","null"],"enum":["","insert_paragraph","insert_paragraph_before","delete_paragraph",null]},
+   "find":{"type":["string","null"],"maxLength":8000},"replace":{"type":["string","null"],"maxLength":8000},
+   "before":{"type":["string","null"],"maxLength":200},"after":{"type":["string","null"],"maxLength":200},
+   "paragraph":{"type":["string","null"],"maxLength":8000},"comment":{"type":["string","null"],"maxLength":2000}}}},
+ "revisionIds":{"type":["array","null"],"maxItems":500,"items":{"type":"integer","minimum":0}}}}`)
+
 func mustSchema(s string) *agent.Schema {
 	sc, err := agent.Compile(json.RawMessage(s))
 	if err != nil {
@@ -172,6 +185,7 @@ func handler(d *docs.Service, e *engine.Engine, ui fs.FS, log *slog.Logger, who 
 		}))
 	}
 	manageRoutes(mux, e, who, log, reply)
+	changeRoutes(mux, d, e, who, log, reply)
 	mux.HandleFunc("GET /tasks/{id}/events", func(w http.ResponseWriter, r *http.Request) { events(w, r, e, reply) })
 	mux.Handle("GET /", uiHandler(cmp.Or[fs.FS](ui, mustSub(dist, "dist"))))
 	return mux
